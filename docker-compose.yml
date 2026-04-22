@@ -1,0 +1,31 @@
+version: '3.8'
+
+services:
+  chroma:
+    image: chromadb/chroma:latest
+    ports:
+      - "8001:8000"
+    volumes:
+      - chroma_data:/chroma/chroma
+    environment:
+      - ALLOW_RESET=TRUE
+
+  app:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.openai.com}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-sk-fake}
+      - LLM_MODEL=${LLM_MODEL:-gpt-4o}
+      - EMBED_MODEL=${EMBED_MODEL:-text-embedding-ada-002}
+      - CHROMA_HOST=chroma
+      - CHROMA_PORT=8000
+      - DATA_DIR=/app/data
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      - chroma
+
+volumes:
+  chroma_data:

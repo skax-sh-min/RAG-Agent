@@ -1,0 +1,91 @@
+RAG Agent — Spring AI / Java 21
+Copyright 2025 The RAG Agent Authors
+
+This product includes software developed by the following third parties,
+each licensed under the Apache License, Version 2.0
+(http://www.apache.org/licenses/LICENSE-2.0):
+
+--------------------------------------------------------------------
+Spring Boot (https://spring.io/projects/spring-boot)
+Copyright © 2012–2024 Broadcom. All Rights Reserved.
+The term "Broadcom" refers to Broadcom Inc. and/or its subsidiaries.
+--------------------------------------------------------------------
+
+--------------------------------------------------------------------
+Spring AI (https://spring.io/projects/spring-ai)
+Copyright © 2023–2024 Broadcom. All Rights Reserved.
+The term "Broadcom" refers to Broadcom Inc. and/or its subsidiaries.
+--------------------------------------------------------------------
+
+--------------------------------------------------------------------
+Spring Framework (https://spring.io/projects/spring-framework)
+Copyright © 2002–2024 Broadcom. All Rights Reserved.
+--------------------------------------------------------------------
+
+--------------------------------------------------------------------
+Apache POI (https://poi.apache.org)
+Copyright © 2003–2024 The Apache Software Foundation
+--------------------------------------------------------------------
+
+--------------------------------------------------------------------
+Apache PDFBox (https://pdfbox.apache.org)
+Copyright © 2002–2024 The Apache Software Foundation
+--------------------------------------------------------------------
+
+--------------------------------------------------------------------
+Apache Commons FileUpload (https://commons.apache.org/proper/commons-fileupload)
+Copyright © 2002–2023 The Apache Software Foundation
+--------------------------------------------------------------------
+
+--------------------------------------------------------------------
+Apache Commons Codec, IO, Lang, Collections
+(https://commons.apache.org)
+Copyright © The Apache Software Foundation
+--------------------------------------------------------------------
+
+--------------------------------------------------------------------
+Jackson (https://github.com/FasterXML/jackson)
+Copyright © 2007–2024 Tatu Saloranta and contributors
+--------------------------------------------------------------------
+
+
+The following components are licensed under the MIT License:
+
+--------------------------------------------------------------------
+SLF4J (https://www.slf4j.org)
+Copyright © 2004–2023 QOS.ch
+--------------------------------------------------------------------
+
+
+The following components are licensed under the Eclipse Public License 1.0
+and the GNU Lesser General Public License 2.1 (dual-license):
+
+--------------------------------------------------------------------
+Logback (https://logback.qos.ch)
+Copyright © 1999–2024 QOS.ch
+--------------------------------------------------------------------
+
+
+The following components are included only in test scope
+and are NOT distributed with the production binary:
+
+--------------------------------------------------------------------
+JUnit 5 (https://junit.org/junit5) — Eclipse Public License 2.0
+Mockito (https://site.mockito.org) — MIT License
+--------------------------------------------------------------------
+
+
+A copy of the Apache License, Version 2.0 is available at:
+  https://www.apache.org/licenses/LICENSE-2.0
+
+A copy of the MIT License is available at:
+  https://opensource.org/licenses/MIT
+
+A copy of the Eclipse Public License 1.0 is available at:
+  https://www.eclipse.org/legal/epl-v10.html
+
+A copy of the Eclipse Public License 2.0 is available at:
+  https://www.eclipse.org/legal/epl-2.0/
+
+A copy of the GNU Lesser General Public License 2.1 is available at:
+  https://www.gnu.org/licenses/lgpl-2.1.html
