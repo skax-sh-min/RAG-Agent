@@ -54,19 +54,36 @@ rag_java/
 
 `.env.example`을 복사해 `.env`를 만들고 값을 채웁니다.
 
+**macOS / Linux**:
 ```bash
 cp .env.example .env
 ```
+**Windows CMD**:
+```cmd
+copy .env.example .env
+```
+
+#### 연결 / 인증
 
 | 변수 | 필수 | 예시 | 설명 |
 |------|------|------|------|
 | `OPENAI_API_KEY` | ✅ | `sk-...` 또는 `lm-studio` | API 키 |
-| `OPENAI_BASE_URL` | ✅ | `http://localhost:1234/v1` | OpenAI 호환 엔드포인트 |
+| `OPENAI_BASE_URL` | — | `http://localhost:1234/v1` | OpenAI 호환 엔드포인트 |
 | `LLM_MODEL` | — | `gpt-4o` | 채팅 LLM 모델명 |
 | `EMBED_MODEL` | — | `text-embedding-ada-002` | 임베딩 모델명 |
 | `CHROMA_HOST` | — | `localhost` | Chroma 호스트 |
 | `CHROMA_PORT` | — | `8001` | Chroma 포트 |
 | `DATA_DIR` | — | `./data` | 문서·레지스트리·대화DB(`memory.db`) 저장 경로 |
+
+#### RAG 튜닝
+
+| 변수 | 기본값 | 권장 범위 | 설명 |
+|------|--------|-----------|------|
+| `CHUNK_SIZE` | `800` | 300 ~ 2000 | 문서 청크 크기 (문자 수) — 작을수록 정밀, 클수록 맥락 보존 |
+| `CHUNK_OVERLAP` | `100` | 0 ~ CHUNK_SIZE × 0.25 | 청크 간 중복 문자 수 — 경계 문장 단절 방지 |
+| `SEARCH_TOP_K` | `6` | 2 ~ 15 | 벡터 검색 반환 문서 수 — 늘릴수록 recall ↑, 토큰 소비 ↑ |
+| `MAX_RETRY_COUNT` | `2` | 0 ~ 4 | 증거 부족 시 재검색 최대 횟수 |
+| `MAX_CONVERSATION_CHARS` | `7000` | 1000 ~ 20000 | 멀티턴 대화 이력 최대 문자 수 |
 
 **로컬 LLM 예시 (LM Studio)**:
 ```env
@@ -76,6 +93,11 @@ LLM_MODEL=google/gemma-3-27b-it
 EMBED_MODEL=text-embedding-nomic-embed-text-v1.5
 CHROMA_HOST=localhost
 CHROMA_PORT=8001
+CHUNK_SIZE=800
+CHUNK_OVERLAP=100
+SEARCH_TOP_K=6
+MAX_RETRY_COUNT=2
+MAX_CONVERSATION_CHARS=7000
 ```
 
 **표준 OpenAI 예시**:
@@ -86,6 +108,11 @@ LLM_MODEL=gpt-4o
 EMBED_MODEL=text-embedding-3-large
 CHROMA_HOST=localhost
 CHROMA_PORT=8001
+CHUNK_SIZE=800
+CHUNK_OVERLAP=100
+SEARCH_TOP_K=6
+MAX_RETRY_COUNT=2
+MAX_CONVERSATION_CHARS=7000
 ```
 
 ---
@@ -119,6 +146,8 @@ docker-compose down
 
 ### 4.2 로컬 실행
 
+#### macOS
+
 ```bash
 # 1. Chroma 서버 실행 (별도 터미널)
 docker run --rm -p 8001:8000 chromadb/chroma:latest
@@ -126,13 +155,54 @@ docker run --rm -p 8001:8000 chromadb/chroma:latest
 # 2. 환경변수 로드
 export $(grep -v '^#' .env | xargs)
 
-# 3. 애플리케이션 빌드 및 실행
+# 3. 애플리케이션 실행
 mvn spring-boot:run
 
 # 또는 JAR 빌드 후 실행
 mvn package -DskipTests
 java -jar target/rag-agent-*.jar
 ```
+
+#### Ubuntu (Linux)
+
+```bash
+# 1. Chroma 서버 실행 (별도 터미널)
+docker run --rm -p 8001:8000 chromadb/chroma:latest
+
+# 2. 환경변수 로드
+set -a && source .env && set +a
+
+# 3. 애플리케이션 실행
+mvn spring-boot:run
+
+# 또는 JAR 빌드 후 실행
+mvn package -DskipTests
+java -jar target/rag-agent-*.jar
+```
+
+#### Windows (CMD)
+
+```cmd
+REM 1. Chroma 서버 실행 (별도 CMD 창)
+docker run --rm -p 8001:8000 chromadb/chroma:latest
+
+REM 2. 환경변수 로드 (.env 파일의 각 줄을 수동으로 SET)
+for /f "usebackq tokens=1,* delims==" %A in (`findstr /v "^#" .env`) do SET %A=%B
+
+REM 3. 애플리케이션 실행
+mvn spring-boot:run
+
+REM 또는 JAR 빌드 후 실행
+mvn package -DskipTests
+java -jar target\rag-agent-0.0.1-SNAPSHOT.jar
+```
+
+> **Windows 팁**: `.env` 파일의 환경변수가 많을 경우 PowerShell을 사용하면 더 편리합니다.
+> ```powershell
+> Get-Content .env | Where-Object { $_ -notmatch '^#' -and $_ -match '=' } |
+>   ForEach-Object { $k,$v = $_ -split '=',2; [System.Environment]::SetEnvironmentVariable($k,$v,'Process') }
+> mvn spring-boot:run
+> ```
 
 ### 4.3 접속 확인
 
@@ -344,7 +414,7 @@ curl -X POST http://localhost:8080/api/chat \
         └─ 삭제 파일 → Chroma에서 제거 → 레지스트리 삭제
 ```
 
-- **청크 크기**: 800자, 오버랩 100자 (character 기준)
+- **청크 크기**: `CHUNK_SIZE`(기본 800자) / 오버랩 `CHUNK_OVERLAP`(기본 100자) — character 기준, `.env`로 조정 가능
 - **메타데이터**: `doc_id`, `filename`, `version`, `doc_type`, `source_type`, `page_or_slide`, `sha256`, `collected_at`
 - **컬렉션 분리**: 버전별로 `manual_{version}` 컬렉션 사용 (예: `manual_latest`, `manual_1_0`)
 
@@ -358,7 +428,7 @@ curl -X POST http://localhost:8080/api/chat \
 애플리케이션을 재시작해도 이전 대화 이력이 유지됩니다.
 
 - WAL(Write-Ahead Logging) 모드로 동작해 읽기/쓰기 경합 최소화
-- `thread_id`별 최근 50턴 이내에서 `max_conversation_chars` 글자까지 컨텍스트 주입
+- `thread_id`별 최근 50턴 이내에서 `MAX_CONVERSATION_CHARS`(기본 7000자)까지 컨텍스트 주입
 - `MemoryRepository` 인터페이스로 추상화되어 있어 Redis 등으로 교체 시 구현체만 추가하면 됩니다
 
 ### 7.2 문서 버전 관리

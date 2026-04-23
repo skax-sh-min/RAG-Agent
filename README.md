@@ -102,15 +102,27 @@ mvn spring-boot:run
 
 ## 환경 변수
 
+### 연결 / 인증
+
 | 변수 | 필수 | 기본값 | 설명 |
 |------|------|--------|------|
 | `OPENAI_API_KEY` | ✅ | — | OpenAI 또는 로컬 LLM API 키 |
-| `OPENAI_BASE_URL` | ✅ | `https://api.openai.com` | OpenAI 호환 엔드포인트 URL |
+| `OPENAI_BASE_URL` | — | `https://api.openai.com` | OpenAI 호환 엔드포인트 URL |
 | `LLM_MODEL` | — | `gpt-4o` | 채팅 모델명 |
 | `EMBED_MODEL` | — | `text-embedding-ada-002` | 임베딩 모델명 |
 | `CHROMA_HOST` | — | `localhost` | Chroma 서버 호스트 |
 | `CHROMA_PORT` | — | `8001` | Chroma 서버 포트 |
 | `DATA_DIR` | — | `./data` | 문서·레지스트리·SQLite DB 저장 경로 |
+
+### RAG 튜닝
+
+| 변수 | 기본값 | 권장 범위 | 설명 |
+|------|--------|-----------|------|
+| `CHUNK_SIZE` | `800` | 300 ~ 2000 | 문서 청크 크기 (문자 수) |
+| `CHUNK_OVERLAP` | `100` | 0 ~ CHUNK_SIZE × 0.25 | 청크 간 중복 문자 수 |
+| `SEARCH_TOP_K` | `6` | 2 ~ 15 | 벡터 검색 반환 문서 수 |
+| `MAX_RETRY_COUNT` | `2` | 0 ~ 4 | 증거 부족 시 재검색 최대 횟수 |
+| `MAX_CONVERSATION_CHARS` | `7000` | 1000 ~ 20000 | 멀티턴 대화 이력 최대 문자 수 |
 
 로컬 LLM (LM Studio, Ollama 등) 사용 시:
 ```env

@@ -22,6 +22,11 @@ services:
       - CHROMA_HOST=chroma
       - CHROMA_PORT=8000
       - DATA_DIR=/app/data
+      - CHUNK_SIZE=${CHUNK_SIZE:-800}
+      - CHUNK_OVERLAP=${CHUNK_OVERLAP:-100}
+      - SEARCH_TOP_K=${SEARCH_TOP_K:-6}
+      - MAX_RETRY_COUNT=${MAX_RETRY_COUNT:-2}
+      - MAX_CONVERSATION_CHARS=${MAX_CONVERSATION_CHARS:-7000}
     volumes:
       - ./data:/app/data
     depends_on:
