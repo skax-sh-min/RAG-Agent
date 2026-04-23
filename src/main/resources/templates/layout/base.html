@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org"
+      xmlns:layout="http://www.ultraq.net.nz/thymeleaf/layout"
+      lang="ko">
+<head>
+    <meta charset="UTF-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1"/>
+    <title layout:title-pattern="$CONTENT_TITLE - 문서 Q&A">문서 기반 지식 Q&amp;A</title>
+
+    <link rel="stylesheet" th:href="@{/webjars/bootstrap/css/bootstrap.min.css}"/>
+    <link rel="stylesheet" th:href="@{/webjars/bootstrap-icons/font/bootstrap-icons.min.css}"/>
+    <link rel="stylesheet" th:href="@{/css/app.css}"/>
+</head>
+<body>
+
+<!-- ── Navbar ─────────────────────────────────────────────────────────── -->
+<nav class="navbar navbar-expand-md navbar-dark bg-dark px-3 py-2">
+    <a class="navbar-brand fw-semibold" th:href="@{/}">
+        <i class="bi bi-chat-dots-fill me-1"></i>문서 기반 지식 Q&amp;A
+    </a>
+
+    <button class="navbar-toggler" type="button"
+            data-bs-toggle="collapse" data-bs-target="#navbarContent">
+        <span class="navbar-toggler-icon"></span>
+    </button>
+
+    <div class="collapse navbar-collapse" id="navbarContent">
+        <ul class="navbar-nav me-auto mb-0">
+            <li class="nav-item">
+                <a class="nav-link"
+                   th:href="@{/}"
+                   th:classappend="${#request.requestURI == '/' or #strings.startsWith(#request.requestURI, '/chat')} ? ' active'">
+                    <i class="bi bi-chat me-1"></i>채팅
+                </a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link"
+                   th:href="@{/documents}"
+                   th:classappend="${#strings.startsWith(#request.requestURI, '/documents')} ? ' active'">
+                    <i class="bi bi-file-earmark-text me-1"></i>문서 관리
+                </a>
+            </li>
+        </ul>
+
+        <div class="d-flex align-items-center gap-3">
+            <!-- API health indicator -->
+            <span id="api-status" class="small text-secondary">
+                <span id="api-dot" class="status-dot dot-unknown"></span>
+                <span id="api-label">확인 중</span>
+            </span>
+            <!-- User placeholder — replaced by Spring Security login menu in future -->
+            <span class="text-secondary small">
+                <i class="bi bi-person-circle me-1"></i>Guest
+            </span>
+        </div>
+    </div>
+</nav>
+
+<!-- ── Page content ───────────────────────────────────────────────────── -->
+<main>
+    <th:block layout:fragment="content">
+        <!-- child page content goes here -->
+    </th:block>
+</main>
+
+<!-- ── Toast container (global, fixed bottom-right) ─────────────────── -->
+<div id="toast-container"
+     class="toast-container position-fixed bottom-0 end-0 p-3"
+     style="z-index: 1100;">
+</div>
+
+<!-- ── Scripts ────────────────────────────────────────────────────────── -->
+<script th:src="@{/webjars/bootstrap/js/bootstrap.bundle.min.js}"></script>
+<script th:src="@{/webjars/htmx.org/dist/htmx.min.js}"></script>
+<script th:src="@{/webjars/marked/marked.min.js}"></script>
+
+<script>
+    /* API health check on every page load */
+    (function () {
+        const dot   = document.getElementById('api-dot');
+        const label = document.getElementById('api-label');
+        fetch('/api/health')
+            .then(r => r.ok ? r.json() : Promise.reject())
+            .then(d => {
+                if (d.status === 'ok') {
+                    dot.className   = 'status-dot dot-ok';
+                    label.textContent = 'API 정상';
+                } else {
+                    throw new Error();
+                }
+            })
+            .catch(() => {
+                dot.className   = 'status-dot dot-error';
+                label.textContent = 'API 오류';
+            });
+    })();
+
+    /* Global toast helper — called by child pages */
+    function showToast(message, type) {
+        type = type || 'info';
+        const bgMap = { success: 'text-bg-success', danger: 'text-bg-danger',
+                        warning: 'text-bg-warning',  info:    'text-bg-secondary' };
+        const el = document.createElement('div');
+        el.className = 'toast align-items-center border-0 ' + (bgMap[type] || bgMap.info);
+        el.setAttribute('role', 'alert');
+        el.innerHTML = `
+            <div class="d-flex">
+                <div class="toast-body">${message}</div>
+                <button type="button" class="btn-close btn-close-white me-2 m-auto"
+                        data-bs-dismiss="toast"></button>
+            </div>`;
+        document.getElementById('toast-container').appendChild(el);
+        new bootstrap.Toast(el, { delay: 4000 }).show();
+        el.addEventListener('hidden.bs.toast', () => el.remove());
+    }
+</script>
+
+<!-- optional per-page scripts -->
+<th:block layout:fragment="scripts"></th:block>
+
+</body>
+</html>

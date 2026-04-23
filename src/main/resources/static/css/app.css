@@ -1,0 +1,106 @@
+/* ── Chat container ──────────────────────────────────────────────────── */
+#chat-messages {
+    height: calc(100vh - 180px);
+    overflow-y: auto;
+    scroll-behavior: smooth;
+}
+
+/* ── Message bubbles ─────────────────────────────────────────────────── */
+.bubble-user {
+    background: #0d6efd;
+    color: white;
+    border-radius: 1rem 1rem 0 1rem;
+    max-width: 75%;
+}
+.bubble-assistant {
+    background: #ffffff;
+    border: 1px solid #dee2e6;
+    border-radius: 1rem 1rem 1rem 0;
+    max-width: 85%;
+}
+
+/* ── Typing indicator ────────────────────────────────────────────────── */
+.typing-dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #aaa;
+    animation: blink 1.2s infinite;
+}
+.typing-dot:nth-child(2) { animation-delay: 0.2s; }
+.typing-dot:nth-child(3) { animation-delay: 0.4s; }
+@keyframes blink {
+    0%, 80%, 100% { opacity: 0.2; transform: scale(0.9); }
+    40%            { opacity: 1;   transform: scale(1.1); }
+}
+
+/* ── Question-type badges ────────────────────────────────────────────── */
+.badge-concept { background: #0d6efd; }
+.badge-usage   { background: #198754; }
+.badge-error   { background: #dc3545; }
+.badge-version { background: #ffc107; color: #000; }
+.badge-meta    { background: #6c757d; }
+
+/* ── Sidebar thread list ─────────────────────────────────────────────── */
+.thread-item {
+    cursor: pointer;
+    border-radius: 6px;
+    padding: 8px 10px;
+    user-select: none;
+}
+.thread-item:hover  { background: #f0f4ff; }
+.thread-item.active { background: #e7f0ff; font-weight: 600; }
+
+/* ── Drag-and-drop zone ──────────────────────────────────────────────── */
+.drop-zone {
+    border: 2px dashed #ced4da;
+    border-radius: 8px;
+    transition: all 0.2s;
+    cursor: pointer;
+}
+.drop-zone.dragover {
+    border-color: #0d6efd;
+    background: #e7f1ff;
+}
+
+/* ── Upload progress bar ─────────────────────────────────────────────── */
+.upload-progress {
+    height: 6px;
+    border-radius: 3px;
+    transition: width 0.3s;
+}
+
+/* ── API status dot ──────────────────────────────────────────────────── */
+.status-dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    margin-right: 4px;
+    vertical-align: middle;
+}
+.dot-ok      { background: #198754; }
+.dot-error   { background: #dc3545; }
+.dot-unknown { background: #6c757d; }
+
+/* ── Markdown content in assistant bubble ────────────────────────────── */
+.md-content h2 { font-size: 1rem; font-weight: 600; margin-top: 0.75rem; }
+.md-content h3 { font-size: 0.95rem; font-weight: 600; }
+.md-content pre {
+    background: #f8f9fa;
+    border: 1px solid #e9ecef;
+    border-radius: 6px;
+    padding: 0.75rem;
+    font-size: 0.85rem;
+    overflow-x: auto;
+}
+.md-content code { font-size: 0.875em; }
+.md-content p:last-child { margin-bottom: 0; }
+
+/* ── Sidebar layout ──────────────────────────────────────────────────── */
+.sidebar { width: 280px; min-width: 280px; }
+
+/* ── HTMX request indicator (dimming effect) ─────────────────────────── */
+.htmx-request .htmx-indicator,
+.htmx-request.htmx-indicator { opacity: 1 !important; }
