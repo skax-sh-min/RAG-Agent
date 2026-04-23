@@ -49,7 +49,8 @@
 
                 <!-- Controls -->
                 <div class="d-flex align-items-center gap-2">
-                    <input id="version-input" type="text" class="form-control form-control-sm"
+                    <input id="version-input" name="version" type="text"
+                           class="form-control form-control-sm"
                            style="width: 120px;" value="latest" placeholder="버전"/>
                     <button id="upload-btn" class="btn btn-sm btn-primary" disabled>
                         <i class="bi bi-upload me-1"></i>업로드 &amp; 인덱싱
@@ -57,9 +58,9 @@
                     <button id="sync-btn" class="btn btn-sm btn-outline-secondary"
                             hx-post="/ui/documents/sync"
                             hx-include="#version-input"
-                            hx-vals='{"version": ""}'
                             hx-target="#toast-container"
-                            hx-swap="afterbegin">
+                            hx-swap="afterbegin"
+                            hx-on::after-request="htmx.ajax('GET','/ui/documents/list',{target:'#doc-table-body',swap:'outerHTML'})">
                         <i class="bi bi-arrow-repeat me-1"></i>폴더 동기화
                     </button>
                 </div>

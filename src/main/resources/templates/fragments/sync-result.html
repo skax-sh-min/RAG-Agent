@@ -8,8 +8,19 @@
         <div class="d-flex">
             <div class="toast-body">
                 <i class="bi bi-check-circle me-1"></i>
-                동기화 완료 ·
-                인덱싱 <span th:text="${#lists.size(indexed)}"></span>건
+                동기화 완료
+                <span th:if="${!#lists.isEmpty(indexed)}">
+                    · 신규 <span th:text="${#lists.size(indexed)}"></span>건
+                </span>
+                <span th:if="${updated != null and !#lists.isEmpty(updated)}">
+                    · 업데이트 <span th:text="${#lists.size(updated)}"></span>건
+                </span>
+                <span th:if="${deleted != null and !#lists.isEmpty(deleted)}">
+                    · 삭제 <span th:text="${#lists.size(deleted)}"></span>건
+                </span>
+                <span th:if="${#lists.isEmpty(indexed) and (updated == null or #lists.isEmpty(updated)) and (deleted == null or #lists.isEmpty(deleted))}">
+                    · 변경 없음
+                </span>
             </div>
             <button type="button" class="btn-close btn-close-white me-2 m-auto"
                     data-bs-dismiss="toast"></button>

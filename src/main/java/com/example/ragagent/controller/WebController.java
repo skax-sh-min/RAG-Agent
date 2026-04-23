@@ -140,24 +140,40 @@ public class WebController {
         return ResponseEntity.badRequest().build();
     }
 
-    /** Full implementation in step 7. */
     @PostMapping("/ui/documents/sync")
     public String syncDocuments(
             @RequestParam(defaultValue = "latest") String version,
             Model model) {
-        model.addAttribute("success", false);
-        model.addAttribute("message", "준비 중");
-        model.addAttribute("indexed", List.of());
+        try {
+            SyncResult result = ragService.syncDirectory(version);
+            model.addAttribute("success", true);
+            model.addAttribute("message", "동기화 완료");
+            model.addAttribute("indexed", result.indexed());
+            model.addAttribute("updated", result.updated());
+            model.addAttribute("deleted", result.deleted());
+        } catch (Exception e) {
+            log.error("Sync error", e);
+            model.addAttribute("success", false);
+            model.addAttribute("message", "동기화 실패: " + e.getMessage());
+            model.addAttribute("indexed", List.of());
+            model.addAttribute("updated", List.of());
+            model.addAttribute("deleted", List.of());
+        }
         return "fragments/sync-result :: result";
     }
 
-    /** Full implementation in step 7. */
     @DeleteMapping("/ui/documents/{docId}")
     @ResponseBody
     public ResponseEntity<Void> deleteDocument(
             @PathVariable String docId,
             @RequestParam(defaultValue = "latest") String version) {
-        return ResponseEntity.noContent().build();
+        try {
+            ragService.deleteDocument(docId, version);
+            return ResponseEntity.noContent().build();
+        } catch (Exception e) {
+            log.error("Document delete error", e);
+            return ResponseEntity.internalServerError().build();
+        }
     }
 
     @GetMapping("/ui/documents/list")
