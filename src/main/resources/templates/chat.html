@@ -52,15 +52,15 @@
             </div>
 
             <!-- Messages -->
-            <div id="chat-messages" class="flex-grow-1 p-3">
-                <!-- Typing indicator (hidden by default) -->
-                <div id="typing-indicator" class="d-none d-flex align-items-center gap-2 mb-3 htmx-indicator">
-                    <i class="bi bi-robot fs-5 text-secondary"></i>
-                    <div class="bubble-assistant px-3 py-2">
-                        <span class="typing-dot"></span>
-                        <span class="typing-dot"></span>
-                        <span class="typing-dot"></span>
-                    </div>
+            <div id="chat-messages" class="flex-grow-1 p-3"></div>
+
+            <!-- Typing indicator (outside scroll area, shown during request) -->
+            <div id="typing-indicator" class="d-none align-items-center gap-2 px-3 pb-1">
+                <i class="bi bi-robot fs-5 text-secondary"></i>
+                <div class="bubble-assistant px-3 py-2">
+                    <span class="typing-dot"></span>
+                    <span class="typing-dot"></span>
+                    <span class="typing-dot"></span>
                 </div>
             </div>
 
@@ -69,9 +69,7 @@
                 <form id="chat-form"
                       hx-post="/ui/chat"
                       hx-target="#chat-messages"
-                      hx-swap="beforeend"
-                      hx-indicator="#typing-indicator"
-                      hx-on::after-request="this.reset(); adjustTextarea();">
+                      hx-swap="beforeend">
                     <input type="hidden" name="threadId" th:value="${threadId}"/>
                     <input type="hidden" id="form-version" name="version" th:value="${version}"/>
                     <div class="input-group">
@@ -92,38 +90,68 @@
 
 <th:block layout:fragment="scripts">
 <script>
+    const chatMessages    = document.getElementById('chat-messages');
+    const typingIndicator = document.getElementById('typing-indicator');
+    const chatForm        = document.getElementById('chat-form');
+    const questionInput   = document.getElementById('question-input');
+    const sendBtn         = document.getElementById('send-btn');
+
     /* Sync version input → hidden form field */
-    document.getElementById('version-input')
-        .addEventListener('change', function () {
-            document.getElementById('form-version').value = this.value;
-        });
+    document.getElementById('version-input').addEventListener('change', function () {
+        document.getElementById('form-version').value = this.value;
+    });
 
     /* Auto-expand textarea (max 6 lines) */
     function adjustTextarea() {
-        const ta = document.getElementById('question-input');
-        if (!ta) return;
-        ta.style.height = 'auto';
-        const lineHeight = parseInt(getComputedStyle(ta).lineHeight);
-        ta.style.height = Math.min(ta.scrollHeight, lineHeight * 6) + 'px';
+        questionInput.style.height = 'auto';
+        const lineH = parseInt(getComputedStyle(questionInput).lineHeight);
+        questionInput.style.height = Math.min(questionInput.scrollHeight, lineH * 6) + 'px';
     }
-    document.getElementById('question-input').addEventListener('input', adjustTextarea);
+    questionInput.addEventListener('input', adjustTextarea);
 
     /* Enter → submit, Shift+Enter → newline */
-    document.getElementById('question-input').addEventListener('keydown', function (e) {
+    questionInput.addEventListener('keydown', function (e) {
         if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
-            if (this.value.trim()) document.getElementById('chat-form').requestSubmit();
+            if (this.value.trim()) chatForm.requestSubmit();
         }
     });
 
-    /* Disable send button while HTMX request is in flight */
-    document.getElementById('chat-form').addEventListener('htmx:beforeRequest', function () {
-        document.getElementById('send-btn').disabled = true;
+    function scrollToBottom() {
+        chatMessages.scrollTop = chatMessages.scrollHeight;
+    }
+
+    function escHtml(s) {
+        return String(s)
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    /* Before request: optimistic user bubble + clear input */
+    chatForm.addEventListener('htmx:beforeRequest', function () {
+        const q = questionInput.value.trim();
+        if (q) {
+            const bubble = document.createElement('div');
+            bubble.className = 'd-flex justify-content-end mb-3';
+            bubble.innerHTML =
+                `<div class="bubble-user p-3">${escHtml(q)}</div>` +
+                `<i class="bi bi-person-circle fs-5 text-secondary ms-2 mt-1 flex-shrink-0"></i>`;
+            chatMessages.appendChild(bubble);
+        }
+        questionInput.value = '';
+        questionInput.style.height = 'auto';
+        sendBtn.disabled = true;
+        typingIndicator.classList.remove('d-none');
+        typingIndicator.classList.add('d-flex');
+        scrollToBottom();
     });
-    document.getElementById('chat-form').addEventListener('htmx:afterRequest', function () {
-        document.getElementById('send-btn').disabled = false;
-        document.getElementById('chat-messages').scrollTo(
-            0, document.getElementById('chat-messages').scrollHeight);
+
+    /* After request: hide indicator, scroll, re-enable send */
+    chatForm.addEventListener('htmx:afterRequest', function () {
+        typingIndicator.classList.add('d-none');
+        typingIndicator.classList.remove('d-flex');
+        sendBtn.disabled = false;
+        scrollToBottom();
     });
 </script>
 </th:block>
