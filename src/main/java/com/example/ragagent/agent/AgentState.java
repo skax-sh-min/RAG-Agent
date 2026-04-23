@@ -20,7 +20,10 @@ public record AgentState(
         String answer,
         int retryCount,
         boolean needsRetry,
-        String conversationHistory
+        String conversationHistory,
+        int totalInputTokens,
+        int totalOutputTokens,
+        int llmCallCount
 ) {
     // Defensive copy — guarantees List fields are always unmodifiable
     public AgentState {
@@ -34,48 +37,65 @@ public record AgentState(
                 question, version, threadId,
                 null, List.of(), List.of(), List.of(),
                 null, 0, false,
-                conversationHistory);
+                conversationHistory,
+                0, 0, 0);
     }
 
     public AgentState withQuestionType(String questionType) {
         return new AgentState(question, version, threadId, questionType,
                 retrievedDocs, sources, retrievalWarnings,
-                answer, retryCount, needsRetry, conversationHistory);
+                answer, retryCount, needsRetry, conversationHistory,
+                totalInputTokens, totalOutputTokens, llmCallCount);
     }
 
     public AgentState withRetrievedDocs(List<Document> retrievedDocs) {
         return new AgentState(question, version, threadId, questionType,
                 retrievedDocs, sources, retrievalWarnings,
-                answer, retryCount, needsRetry, conversationHistory);
+                answer, retryCount, needsRetry, conversationHistory,
+                totalInputTokens, totalOutputTokens, llmCallCount);
     }
 
     public AgentState withSources(List<String> sources) {
         return new AgentState(question, version, threadId, questionType,
                 retrievedDocs, sources, retrievalWarnings,
-                answer, retryCount, needsRetry, conversationHistory);
+                answer, retryCount, needsRetry, conversationHistory,
+                totalInputTokens, totalOutputTokens, llmCallCount);
     }
 
     public AgentState withRetrievalWarnings(List<String> retrievalWarnings) {
         return new AgentState(question, version, threadId, questionType,
                 retrievedDocs, sources, retrievalWarnings,
-                answer, retryCount, needsRetry, conversationHistory);
+                answer, retryCount, needsRetry, conversationHistory,
+                totalInputTokens, totalOutputTokens, llmCallCount);
     }
 
     public AgentState withAnswer(String answer) {
         return new AgentState(question, version, threadId, questionType,
                 retrievedDocs, sources, retrievalWarnings,
-                answer, retryCount, needsRetry, conversationHistory);
+                answer, retryCount, needsRetry, conversationHistory,
+                totalInputTokens, totalOutputTokens, llmCallCount);
     }
 
     public AgentState withNeedsRetry(boolean needsRetry) {
         return new AgentState(question, version, threadId, questionType,
                 retrievedDocs, sources, retrievalWarnings,
-                answer, retryCount, needsRetry, conversationHistory);
+                answer, retryCount, needsRetry, conversationHistory,
+                totalInputTokens, totalOutputTokens, llmCallCount);
     }
 
     public AgentState withRetryCountIncremented() {
         return new AgentState(question, version, threadId, questionType,
                 retrievedDocs, sources, retrievalWarnings,
-                answer, retryCount + 1, needsRetry, conversationHistory);
+                answer, retryCount + 1, needsRetry, conversationHistory,
+                totalInputTokens, totalOutputTokens, llmCallCount);
+    }
+
+    public AgentState withTokensAccumulated(int inputTokens, int outputTokens) {
+        return new AgentState(question, version, threadId, questionType,
+                retrievedDocs, sources, retrievalWarnings,
+                answer, retryCount, needsRetry, conversationHistory,
+                totalInputTokens + inputTokens,
+                totalOutputTokens + outputTokens,
+                llmCallCount + 1);
     }
 }

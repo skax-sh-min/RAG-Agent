@@ -5,6 +5,7 @@ import com.example.ragagent.config.AppProperties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.converter.BeanOutputConverter;
 import org.springframework.ai.document.Document;
 import org.springframework.stereotype.Service;
@@ -49,7 +50,22 @@ public class RetrievalService {
     }
 
     public AgentState execute(AgentState state) {
-        String query = generateQuery(state);
+        String query;
+        try {
+            ChatResponse chatResponse = chatClient.prompt()
+                    .system(QUERY_GEN_PROMPT)
+                    .user(state.question() + "\n\n" + queryConverter.getFormat())
+                    .call()
+                    .chatResponse();
+            state = accumulateTokens(state, chatResponse);
+            QueryOutput qo = queryConverter.convert(chatResponse.getResult().getOutput().getText());
+            query = (qo == null || qo.query() == null || qo.query().isBlank())
+                    ? state.question() : qo.query();
+        } catch (Exception e) {
+            log.warn("Query generation failed, falling back to original question: {}", e.getMessage());
+            query = state.question();
+        }
+
         List<Document> docs = ragService.search(query, state.version(), defaultTopK);
         List<Document> unique = deduplicate(docs);
 
@@ -72,21 +88,6 @@ public class RetrievalService {
                 .withNeedsRetry(false);
     }
 
-    private String generateQuery(AgentState state) {
-        try {
-            String response = chatClient.prompt()
-                    .system(QUERY_GEN_PROMPT)
-                    .user(state.question() + "\n\n" + queryConverter.getFormat())
-                    .call()
-                    .content();
-            String query = queryConverter.convert(response).query();
-            return (query == null || query.isBlank()) ? state.question() : query;
-        } catch (Exception e) {
-            log.warn("Query generation failed, falling back to original question: {}", e.getMessage());
-            return state.question();
-        }
-    }
-
     private List<Document> deduplicate(List<Document> docs) {
         Set<String> seen = new LinkedHashSet<>();
         List<Document> result = new ArrayList<>();
@@ -106,5 +107,12 @@ public class RetrievalService {
         String version  = String.valueOf(meta.getOrDefault("version", "latest"));
         Object page     = meta.getOrDefault("page_or_slide", "?");
         return "%s | v%s | p.%s".formatted(filename, version, page);
+    }
+
+    private static AgentState accumulateTokens(AgentState state, ChatResponse resp) {
+        var usage = resp.getMetadata().getUsage();
+        int in  = (usage != null && usage.getPromptTokens()     != null) ? usage.getPromptTokens()     : 0;
+        int out = (usage != null && usage.getCompletionTokens() != null) ? usage.getCompletionTokens() : 0;
+        return state.withTokensAccumulated(in, out);
     }
 }

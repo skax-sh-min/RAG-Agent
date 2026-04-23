@@ -2,6 +2,7 @@ package com.example.ragagent.service;
 
 import com.example.ragagent.agent.AgentState;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.stereotype.Service;
 
 /**
@@ -30,12 +31,20 @@ public class DirectAnswerService {
                 ? state.question()
                 : "[이전 대화]\n%s\n\n[현재 질문]\n%s".formatted(history, state.question());
 
-        String answer = chatClient.prompt()
+        ChatResponse chatResponse = chatClient.prompt()
                 .system(SYSTEM_PROMPT)
                 .user(userPrompt)
                 .call()
-                .content();
+                .chatResponse();
 
-        return state.withAnswer(answer);
+        state = accumulateTokens(state, chatResponse);
+        return state.withAnswer(chatResponse.getResult().getOutput().getText());
+    }
+
+    private static AgentState accumulateTokens(AgentState state, ChatResponse resp) {
+        var usage = resp.getMetadata().getUsage();
+        int in  = (usage != null && usage.getPromptTokens()     != null) ? usage.getPromptTokens()     : 0;
+        int out = (usage != null && usage.getCompletionTokens() != null) ? usage.getCompletionTokens() : 0;
+        return state.withTokensAccumulated(in, out);
     }
 }

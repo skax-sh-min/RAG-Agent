@@ -5,6 +5,7 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.converter.BeanOutputConverter;
 import org.springframework.stereotype.Service;
 
@@ -44,13 +45,14 @@ public class ClassifierService {
     }
 
     public AgentState execute(AgentState state) {
-        String response = chatClient.prompt()
+        ChatResponse chatResponse = chatClient.prompt()
                 .system(SYSTEM_PROMPT)
                 .user(state.question() + "\n\n" + converter.getFormat())
                 .call()
-                .content();
+                .chatResponse();
 
-        return state.withQuestionType(parseType(response));
+        state = accumulateTokens(state, chatResponse);
+        return state.withQuestionType(parseType(chatResponse.getResult().getOutput().getText()));
     }
 
     private String parseType(String response) {
@@ -61,5 +63,12 @@ public class ClassifierService {
             log.warn("Classifier output parse failed, defaulting to 'concept': {}", e.getMessage());
             return "concept";
         }
+    }
+
+    private static AgentState accumulateTokens(AgentState state, ChatResponse resp) {
+        var usage = resp.getMetadata().getUsage();
+        int in  = (usage != null && usage.getPromptTokens()     != null) ? usage.getPromptTokens()     : 0;
+        int out = (usage != null && usage.getCompletionTokens() != null) ? usage.getCompletionTokens() : 0;
+        return state.withTokensAccumulated(in, out);
     }
 }

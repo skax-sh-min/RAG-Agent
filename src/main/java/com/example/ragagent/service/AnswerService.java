@@ -4,8 +4,8 @@ import com.example.ragagent.agent.AgentState;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.converter.BeanOutputConverter;
-import org.springframework.ai.document.Document;
 import org.springframework.stereotype.Service;
 
 import java.util.stream.Collectors;
@@ -64,16 +64,37 @@ public class AnswerService {
 
     public AgentState execute(AgentState state) {
         // Call 1: generate pure prose answer — no JSON instructions mixed in
-        String answer = chatClient.prompt()
+        ChatResponse answerResponse = chatClient.prompt()
                 .system(ANSWER_SYSTEM_PROMPT)
                 .user(buildAnswerPrompt(state))
                 .call()
-                .content();
+                .chatResponse();
+        state = accumulateTokens(state, answerResponse);
+        String answer = answerResponse.getResult().getOutput().getText();
 
         // Call 2: dedicated sufficiency check — simple JSON only
-        boolean needsRetry = !checkSufficiency(state.question(), answer);
+        return checkSufficiency(state.withAnswer(answer), answer);
+    }
 
-        return state.withAnswer(answer).withNeedsRetry(needsRetry);
+    private AgentState checkSufficiency(AgentState state, String answer) {
+        try {
+            String evalPrompt = "[질문]\n%s\n\n[답변]\n%s\n\n%s"
+                    .formatted(state.question(), answer, sufficiencyConverter.getFormat());
+
+            ChatResponse sufficiencyResponse = chatClient.prompt()
+                    .system(SUFFICIENCY_SYSTEM_PROMPT)
+                    .user(evalPrompt)
+                    .call()
+                    .chatResponse();
+            state = accumulateTokens(state, sufficiencyResponse);
+            boolean sufficient = sufficiencyConverter
+                    .convert(sufficiencyResponse.getResult().getOutput().getText())
+                    .sufficient();
+            return state.withNeedsRetry(!sufficient);
+        } catch (Exception e) {
+            log.warn("Sufficiency check parse failed, treating as sufficient: {}", e.getMessage());
+            return state.withNeedsRetry(false);
+        }
     }
 
     private String buildAnswerPrompt(AgentState state) {
@@ -104,21 +125,10 @@ public class AnswerService {
         return sb.toString();
     }
 
-    private boolean checkSufficiency(String question, String answer) {
-        try {
-            String evalPrompt = "[질문]\n%s\n\n[답변]\n%s\n\n%s"
-                    .formatted(question, answer, sufficiencyConverter.getFormat());
-
-            String response = chatClient.prompt()
-                    .system(SUFFICIENCY_SYSTEM_PROMPT)
-                    .user(evalPrompt)
-                    .call()
-                    .content();
-
-            return sufficiencyConverter.convert(response).sufficient();
-        } catch (Exception e) {
-            log.warn("Sufficiency check parse failed, treating as sufficient: {}", e.getMessage());
-            return true;
-        }
+    private static AgentState accumulateTokens(AgentState state, ChatResponse resp) {
+        var usage = resp.getMetadata().getUsage();
+        int in  = (usage != null && usage.getPromptTokens()     != null) ? usage.getPromptTokens()     : 0;
+        int out = (usage != null && usage.getCompletionTokens() != null) ? usage.getCompletionTokens() : 0;
+        return state.withTokensAccumulated(in, out);
     }
 }
