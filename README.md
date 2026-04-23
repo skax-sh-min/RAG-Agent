@@ -1,7 +1,6 @@
 # RAG Agent — Spring AI / Java 21
 
-Spring AI + Spring Boot 3.3 + Java 21 기반의 프레임워크 매뉴얼 Q&A 에이전트입니다.  
-Python/LangGraph 버전(`homework3/`)을 Java로 변환한 프로젝트입니다.
+Spring AI + Spring Boot 3.3 + Java 21 기반의 문서 기반 지식 Q&A 에이전트입니다.
 
 ## 구성
 
@@ -12,25 +11,28 @@ rag_java/
 ├── .env.example
 └── src/main/java/com/example/ragagent/
     ├── agent/
-    │   ├── AgentState.java            # 에이전트 실행 상태 (LangGraph TypedDict 대응)
-    │   └── AgentGraph.java            # 그래프 실행 엔진 (StateGraph 대응)
+    │   ├── AgentState.java            # 불변 record — 노드 간 파이프라인 상태
+    │   └── AgentGraph.java            # 그래프 실행 엔진 (switch expression)
     ├── config/
     │   ├── AppProperties.java         # @ConfigurationProperties
     │   └── WebConfig.java             # ChatClient 빈 + CORS
     ├── controller/
-    │   └── ApiController.java         # REST API (FastAPI 대응)
-    ├── model/                         # Java 21 record (Pydantic 대응)
+    │   └── ApiController.java         # REST API
+    ├── model/                         # Java 21 record
     │   └── ChatRequest/Response/DocumentInfo/SyncResult.java
+    ├── repository/
+    │   ├── MemoryRepository.java      # 대화 메모리 추상 인터페이스
+    │   └── SqliteMemoryRepository.java # SQLite WAL 기반 구현 (Redis 교체 가능)
     └── service/
-        ├── AgentService.java          # run_agent() 진입점
+        ├── AgentService.java          # 에이전트 파이프라인 진입점
         ├── ClassifierService.java     # 질문 유형 분류 노드
         ├── DirectAnswerService.java   # meta 질문 직접 응답 노드
         ├── RetrievalService.java      # 벡터 검색 노드
-        ├── AnswerService.java         # 답변 생성 + ReAct 재검색 판단
+        ├── AnswerService.java         # 답변 생성(Call 1) + 증거 충분성 검증(Call 2)
         ├── CriticService.java         # 근거 검증 노드
         ├── FinalizeService.java       # 대화 메모리 저장 노드
-        ├── MemoryService.java         # 멀티턴 메모리 (MemorySaver 대응)
-        ├── RagService.java            # 문서 인덱싱 + 검색 (rag.py 대응)
+        ├── MemoryService.java         # 멀티턴 메모리 — SQLite 영속
+        ├── RagService.java            # 문서 인덱싱 + 검색
         ├── DocumentLoaderService.java # PDF/PPTX/DOCX/TXT/MD 로더
         └── VectorStoreRegistry.java   # 버전별 ChromaVectorStore 관리
 ```
@@ -55,25 +57,11 @@ rag_java/
 - **벡터 검색** — LLM이 최적 검색 쿼리를 생성한 뒤 Chroma 유사도 검색
 - **ReAct 재검색** — 증거 부족 시 최대 2회 자동 재검색
 - **Critic 검증** — 생성된 답변이 문서에 근거하는지 LLM이 이중 검증
-- **멀티턴 대화** — `thread_id` 기반 대화 이력 유지 (`ConcurrentHashMap`)
+- **멀티턴 대화** — `thread_id` 기반 대화 이력 유지 (SQLite WAL, 재시작 후에도 영속)
 - **문서 버전 관리** — 버전별 Chroma 컬렉션 분리 (`manual_{version}`)
 - **증분 인덱싱** — SHA-256 기반 변경 감지, `doc_registry.json` 영속
 - **다양한 문서 형식** — PDF, PPTX, DOCX, TXT, MD
 - **Java 21 Virtual Threads** — LLM I/O 요청에 경량 스레드 적용
-
-## Python ↔ Java 매핑
-
-| Python (homework3) | Java (rag_java) |
-|---|---|
-| `LangGraph StateGraph` | `AgentGraph` (switch expression) |
-| `MemorySaver` | `MemoryService` (ConcurrentHashMap) |
-| `AzureChatOpenAI / ChatOpenAI` | Spring AI `ChatClient` (base-url 설정) |
-| `ChromaDB HTTP` | `ChromaVectorStore` + `VectorStoreRegistry` |
-| `CharacterTextSplitter` | `RagService.splitDocuments()` |
-| `FastAPI` | Spring `@RestController` |
-| `Pydantic` 모델 | Java 21 `record` |
-| `bind_tools` 검색 | LLM이 쿼리 생성 후 직접 호출 (단순화) |
-| `PyMuPDF / unstructured` | `PagePdfDocumentReader` + Apache POI |
 
 ## API 엔드포인트
 
@@ -122,7 +110,7 @@ mvn spring-boot:run
 | `EMBED_MODEL` | — | `text-embedding-ada-002` | 임베딩 모델명 |
 | `CHROMA_HOST` | — | `localhost` | Chroma 서버 호스트 |
 | `CHROMA_PORT` | — | `8001` | Chroma 서버 포트 |
-| `DATA_DIR` | — | `./data` | 문서·레지스트리 저장 경로 |
+| `DATA_DIR` | — | `./data` | 문서·레지스트리·SQLite DB 저장 경로 |
 
 로컬 LLM (LM Studio, Ollama 등) 사용 시:
 ```env

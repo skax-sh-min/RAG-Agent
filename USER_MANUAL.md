@@ -1,6 +1,6 @@
 # USER MANUAL
 
-Framework Manual Q&A Agent (Spring AI / Java 21) 사용자 매뉴얼입니다.
+문서 기반 지식 Q&A 에이전트 (Spring AI / Java 21) 사용자 매뉴얼입니다.
 
 ## 1. 개요
 
@@ -12,7 +12,7 @@ Framework Manual Q&A Agent (Spring AI / Java 21) 사용자 매뉴얼입니다.
 - **벡터 검색** — LLM이 최적 쿼리를 생성해 Chroma에서 유사 문서 검색
 - **ReAct 재검색** — 증거 부족 시 자동 재검색 (최대 2회)
 - **Critic 검증** — 답변이 문서에 근거하는지 이중 검증
-- **멀티턴 대화** — `thread_id`로 대화 이력 유지
+- **멀티턴 대화** — `thread_id`로 대화 이력 유지 (SQLite 영속, 재시작 후에도 유지)
 - **증분 인덱싱** — SHA-256 기반 변경 감지, `doc_registry.json` 영속
 - **문서 버전 관리** — 버전별 독립된 Chroma 컬렉션
 
@@ -66,7 +66,7 @@ cp .env.example .env
 | `EMBED_MODEL` | — | `text-embedding-ada-002` | 임베딩 모델명 |
 | `CHROMA_HOST` | — | `localhost` | Chroma 호스트 |
 | `CHROMA_PORT` | — | `8001` | Chroma 포트 |
-| `DATA_DIR` | — | `./data` | 문서·레지스트리 저장 경로 |
+| `DATA_DIR` | — | `./data` | 문서·레지스트리·대화DB(`memory.db`) 저장 경로 |
 
 **로컬 LLM 예시 (LM Studio)**:
 ```env
@@ -354,9 +354,12 @@ curl -X POST http://localhost:8080/api/chat \
 
 ### 7.1 대화 메모리
 
-`MemoryService`는 **프로세스 로컬 메모리**(`ConcurrentHashMap`)에 저장합니다.  
-애플리케이션 재시작 시 대화 이력이 초기화됩니다.  
-영속 메모리가 필요하면 Redis 또는 DB 기반으로 `MemoryService`를 교체하세요.
+`MemoryService`는 **SQLite**(`DATA_DIR/memory.db`)에 대화 이력을 영속합니다.  
+애플리케이션을 재시작해도 이전 대화 이력이 유지됩니다.
+
+- WAL(Write-Ahead Logging) 모드로 동작해 읽기/쓰기 경합 최소화
+- `thread_id`별 최근 50턴 이내에서 `max_conversation_chars` 글자까지 컨텍스트 주입
+- `MemoryRepository` 인터페이스로 추상화되어 있어 Redis 등으로 교체 시 구현체만 추가하면 됩니다
 
 ### 7.2 문서 버전 관리
 
@@ -380,7 +383,7 @@ curl -X POST http://localhost:8080/api/chat \
 | 문서 원본 | `DATA_DIR/documents/` |
 | 인덱스 레지스트리 | `DATA_DIR/doc_registry.json` |
 | 벡터 임베딩 | Chroma 서버 (Docker: `chroma_data` 볼륨) |
-| 대화 이력 | 메모리 (재시작 시 초기화) |
+| 대화 이력 | `DATA_DIR/memory.db` (SQLite, 재시작 후에도 영속) |
 
 ### 7.4 성능
 

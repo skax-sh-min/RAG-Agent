@@ -24,7 +24,7 @@ public class AnswerService {
     private static final Logger log = LoggerFactory.getLogger(AnswerService.class);
 
     private static final String ANSWER_SYSTEM_PROMPT = """
-            당신은 프레임워크 매뉴얼 전문 Q&A 어시스턴트입니다.
+            당신은 문서 기반 지식 Q&A 어시스턴트입니다.
             아래 검색된 문서를 바탕으로 질문에 답변하세요.
 
             답변 형식 (마크다운):

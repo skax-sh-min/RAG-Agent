@@ -12,7 +12,7 @@ import org.springframework.stereotype.Service;
 public class DirectAnswerService {
 
     private static final String SYSTEM_PROMPT = """
-            당신은 프레임워크 매뉴얼 Q&A 도우미입니다.
+            당신은 문서 기반 지식 Q&A 도우미입니다.
             사용자의 인사나 서비스 관련 문의에 짧고 친절하게 답변하세요.
             문서 검색 없이 직접 답변합니다.
             답변은 2-3문장 이내로 간결하게 작성하세요.

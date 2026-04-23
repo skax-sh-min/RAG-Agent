@@ -23,7 +23,7 @@ public class ClassifierService {
     private static final Set<String> VALID_TYPES = Set.of("concept", "usage", "error", "version", "meta");
 
     private static final String SYSTEM_PROMPT = """
-            당신은 프레임워크 매뉴얼 Q&A 시스템의 질문 분류기입니다.
+            당신은 문서 기반 지식 Q&A 시스템의 질문 분류기입니다.
             사용자의 질문을 다음 중 하나로 분류하세요:
 
             - concept : 개념/이론/원리 설명 요청 (예: "~이 무엇인가요?", "~의 차이는?")
