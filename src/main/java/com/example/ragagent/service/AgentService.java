@@ -30,12 +30,18 @@ public class AgentService {
                 request.threadId(),
                 memoryService.getHistory(request.threadId()));
 
+        long startNano = System.nanoTime();
         AgentState result = agentGraph.run(initial);
+        double elapsedSeconds = (System.nanoTime() - startNano) / 1_000_000_000.0;
 
         return new ChatResponse(
                 result.answer(),
                 result.questionType(),
-                result.sources()
+                result.sources(),
+                result.totalInputTokens(),
+                result.totalOutputTokens(),
+                result.llmCallCount(),
+                elapsedSeconds
         );
     }
 }
