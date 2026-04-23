@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" lang="ko">
+<body>
+<div th:fragment="message" class="d-flex align-items-start mb-3">
+    <i class="bi bi-robot fs-5 text-secondary me-2 mt-1 flex-shrink-0"></i>
+    <div class="bubble-assistant p-3 flex-grow-1">
+        <!-- Question-type badge -->
+        <span th:if="${questionType != null and !#strings.isEmpty(questionType)}"
+              class="badge mb-2"
+              th:classappend="'badge-' + ${questionType}"
+              th:text="${questionType}"></span>
+
+        <!-- Answer (markdown rendered by JS) -->
+        <div class="md-content"
+             th:attr="data-md=${answer}"></div>
+
+        <!-- Sources accordion -->
+        <details th:if="${sources != null and !#lists.isEmpty(sources)}" class="mt-2">
+            <summary class="small text-muted" style="cursor:pointer;">
+                출처 (<span th:text="${#lists.size(sources)}"></span>건)
+            </summary>
+            <ul class="mt-1 mb-0 small">
+                <li th:each="src : ${sources}" th:text="${src}"></li>
+            </ul>
+        </details>
+
+        <!-- Metadata -->
+        <div class="mt-2 text-muted" style="font-size: 0.72rem;">
+            <span>⏱ <span th:text="${#numbers.formatDecimal(elapsedSeconds,1,1)}"></span>초</span>
+            &nbsp;·&nbsp;
+            <span>📥 <span th:text="${totalInputTokens}"></span> 토큰</span>
+            &nbsp;·&nbsp;
+            <span>📤 <span th:text="${totalOutputTokens}"></span> 토큰</span>
+            &nbsp;·&nbsp;
+            <span>합계 <span th:text="${totalInputTokens + totalOutputTokens}"></span></span>
+            &nbsp;·&nbsp;
+            <span>🔄 LLM <span th:text="${llmCallCount}"></span>회</span>
+        </div>
+    </div>
+</div>
+
+<script>
+    /* Render all un-rendered md-content blocks */
+    document.querySelectorAll('.md-content[data-md]').forEach(function(el) {
+        el.innerHTML = marked.parse(el.dataset.md);
+        delete el.dataset.md;
+    });
+</script>
+</body>
+</html>

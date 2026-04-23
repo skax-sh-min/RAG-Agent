@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org"
+      xmlns:layout="http://www.ultraq.net.nz/thymeleaf/layout"
+      layout:decorate="~{layout/base}"
+      lang="ko">
+<head>
+    <title>문서 관리</title>
+</head>
+<body>
+
+<div layout:fragment="content">
+    <div class="container-fluid py-4" style="max-width: 960px;">
+
+        <!-- ── Upload card ───────────────────────────────────────────── -->
+        <div class="card mb-4">
+            <div class="card-header fw-semibold">
+                <i class="bi bi-cloud-upload me-1"></i>문서 업로드
+            </div>
+            <div class="card-body">
+
+                <!-- Drop zone -->
+                <div id="drop-zone" class="drop-zone text-center py-5 mb-3">
+                    <i class="bi bi-folder2-open fs-2 text-secondary d-block mb-2"></i>
+                    <span class="text-muted">파일을 드래그하거나 클릭해서 선택하세요</span><br/>
+                    <small class="text-muted">지원 형식: PDF, PPTX, DOCX, TXT, MD · 최대 100 MB</small>
+                    <input id="file-input" type="file"
+                           accept=".pdf,.pptx,.docx,.txt,.md"
+                           multiple class="d-none"/>
+                </div>
+
+                <!-- Selected file list (populated by JS) -->
+                <div id="file-list" class="d-none mb-3">
+                    <table class="table table-sm mb-2">
+                        <thead><tr>
+                            <th>파일명</th><th>크기</th><th>상태</th><th></th>
+                        </tr></thead>
+                        <tbody id="file-list-body"></tbody>
+                    </table>
+                    <!-- Overall progress -->
+                    <div id="overall-progress" class="d-none">
+                        <div class="d-flex justify-content-between small text-muted mb-1">
+                            <span id="overall-label">완료 0 / 전체 0</span>
+                        </div>
+                        <div class="progress" style="height: 6px;">
+                            <div id="overall-bar" class="progress-bar" style="width: 0%;"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Controls -->
+                <div class="d-flex align-items-center gap-2">
+                    <input id="version-input" type="text" class="form-control form-control-sm"
+                           style="width: 120px;" value="latest" placeholder="버전"/>
+                    <button id="upload-btn" class="btn btn-sm btn-primary" disabled>
+                        <i class="bi bi-upload me-1"></i>업로드 &amp; 인덱싱
+                    </button>
+                    <button id="sync-btn" class="btn btn-sm btn-outline-secondary"
+                            hx-post="/ui/documents/sync"
+                            hx-include="#version-input"
+                            hx-vals='{"version": ""}'
+                            hx-target="#toast-container"
+                            hx-swap="afterbegin">
+                        <i class="bi bi-arrow-repeat me-1"></i>폴더 동기화
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- ── Document list ─────────────────────────────────────────── -->
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span class="fw-semibold">
+                    <i class="bi bi-file-earmark-text me-1"></i>인덱싱된 문서
+                </span>
+                <button class="btn btn-sm btn-outline-secondary"
+                        hx-get="/ui/documents/list"
+                        hx-target="#doc-table-body"
+                        hx-swap="outerHTML">
+                    <i class="bi bi-arrow-clockwise me-1"></i>새로고침
+                </button>
+            </div>
+            <div class="card-body p-0">
+                <table class="table table-hover mb-0">
+                    <thead class="table-light">
+                    <tr>
+                        <th>파일명</th>
+                        <th>버전</th>
+                        <th>청크</th>
+                        <th>인덱싱 시각</th>
+                        <th></th>
+                    </tr>
+                    </thead>
+                    <div th:replace="~{fragments/doc-table-body :: body}"></div>
+                </table>
+            </div>
+        </div>
+
+    </div>
+</div>
+
+<th:block layout:fragment="scripts">
+<script>
+    /* Drop zone interaction */
+    const dropZone  = document.getElementById('drop-zone');
+    const fileInput = document.getElementById('file-input');
+    let selectedFiles = [];
+
+    dropZone.addEventListener('click', () => fileInput.click());
+    dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('dragover'); });
+    dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+    dropZone.addEventListener('drop', e => {
+        e.preventDefault();
+        dropZone.classList.remove('dragover');
+        handleFiles(Array.from(e.dataTransfer.files));
+    });
+    fileInput.addEventListener('change', () => handleFiles(Array.from(fileInput.files)));
+
+    function handleFiles(files) {
+        selectedFiles = files.filter(f => f.size <= 100 * 1024 * 1024);
+        if (selectedFiles.length === 0) return;
+        renderFileList();
+        document.getElementById('upload-btn').disabled = false;
+    }
+
+    function renderFileList() {
+        const tbody = document.getElementById('file-list-body');
+        tbody.innerHTML = selectedFiles.map((f, i) => `
+            <tr id="file-row-${i}">
+                <td class="text-truncate" style="max-width:300px;">${f.name}</td>
+                <td>${(f.size / 1024 / 1024).toFixed(1)} MB</td>
+                <td id="file-status-${i}"><span class="text-muted">⏳ 대기 중</span></td>
+                <td><button class="btn btn-sm btn-link text-danger p-0"
+                            onclick="removeFile(${i})">✕</button></td>
+            </tr>`).join('');
+        document.getElementById('file-list').classList.remove('d-none');
+    }
+
+    function removeFile(i) {
+        selectedFiles.splice(i, 1);
+        if (selectedFiles.length === 0) {
+            document.getElementById('file-list').classList.add('d-none');
+            document.getElementById('upload-btn').disabled = true;
+        } else {
+            renderFileList();
+        }
+    }
+
+    /* Upload button — step 8 wires this to uploadFiles() */
+    document.getElementById('upload-btn').addEventListener('click', () => {
+        const version = document.getElementById('version-input').value || 'latest';
+        showToast('업로드 기능은 8단계에서 구현됩니다.', 'info');
+    });
+
+    /* Sync button version sync */
+    document.getElementById('sync-btn').addEventListener('htmx:configRequest', function(e) {
+        e.detail.parameters['version'] = document.getElementById('version-input').value || 'latest';
+    });
+</script>
+</th:block>
+
+</body>
+</html>

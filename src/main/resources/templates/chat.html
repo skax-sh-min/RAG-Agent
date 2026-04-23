@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org"
+      xmlns:layout="http://www.ultraq.net.nz/thymeleaf/layout"
+      layout:decorate="~{layout/base}"
+      lang="ko">
+<head>
+    <title>채팅</title>
+</head>
+<body>
+
+<div layout:fragment="content">
+    <div class="d-flex" style="height: calc(100vh - 56px);">
+
+        <!-- ── Sidebar ──────────────────────────────────────────────── -->
+        <div class="sidebar border-end bg-light d-flex flex-column p-3">
+
+            <!-- New chat + version -->
+            <div class="d-flex align-items-center gap-2 mb-3">
+                <form th:action="@{/ui/chat/new}" method="post" class="flex-grow-1">
+                    <button type="submit" class="btn btn-sm btn-primary w-100">
+                        <i class="bi bi-plus-lg me-1"></i>새 대화
+                    </button>
+                </form>
+                <input id="version-input" type="text" class="form-control form-control-sm"
+                       style="width: 80px;"
+                       th:value="${version}" placeholder="latest"/>
+            </div>
+
+            <!-- Thread list -->
+            <div class="overflow-auto flex-grow-1">
+                <div th:replace="~{fragments/thread-list :: list}"></div>
+            </div>
+
+            <!-- Current thread info -->
+            <div th:if="${meta != null}" class="border-top pt-2 mt-2 small text-muted">
+                <div class="fw-semibold text-dark text-truncate" th:text="${meta.title}"></div>
+                <div class="font-monospace mt-1"
+                     th:text="${#strings.substring(meta.threadId, 0, 8)}"></div>
+            </div>
+        </div>
+
+        <!-- ── Chat area ─────────────────────────────────────────────── -->
+        <div class="flex-grow-1 d-flex flex-column overflow-hidden">
+
+            <!-- Previous thread resume banner -->
+            <div th:if="${meta != null and historyCount != null and historyCount > 0}"
+                 class="alert alert-info rounded-0 mb-0 py-2 small">
+                <i class="bi bi-chat-left-dots me-1"></i>
+                <strong th:text="${meta.title}"></strong> 대화를 이어합니다 ·
+                이전 질문 <span th:text="${historyCount}"></span>건 ·
+                아래 입력창에 이어서 질문하세요.
+            </div>
+
+            <!-- Messages -->
+            <div id="chat-messages" class="flex-grow-1 p-3">
+                <!-- Typing indicator (hidden by default) -->
+                <div id="typing-indicator" class="d-none d-flex align-items-center gap-2 mb-3 htmx-indicator">
+                    <i class="bi bi-robot fs-5 text-secondary"></i>
+                    <div class="bubble-assistant px-3 py-2">
+                        <span class="typing-dot"></span>
+                        <span class="typing-dot"></span>
+                        <span class="typing-dot"></span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Input form -->
+            <div class="border-top p-3">
+                <form id="chat-form"
+                      hx-post="/ui/chat"
+                      hx-target="#chat-messages"
+                      hx-swap="beforeend"
+                      hx-indicator="#typing-indicator"
+                      hx-on::after-request="this.reset(); adjustTextarea();">
+                    <input type="hidden" name="threadId" th:value="${threadId}"/>
+                    <input type="hidden" id="form-version" name="version" th:value="${version}"/>
+                    <div class="input-group">
+                        <textarea id="question-input" name="question"
+                                  class="form-control"
+                                  placeholder="질문을 입력하세요 (Enter 전송, Shift+Enter 줄바꿈)"
+                                  rows="1"
+                                  style="resize: none; overflow-y: hidden;"></textarea>
+                        <button id="send-btn" type="submit" class="btn btn-primary">
+                            <i class="bi bi-send-fill"></i>
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+<th:block layout:fragment="scripts">
+<script>
+    /* Sync version input → hidden form field */
+    document.getElementById('version-input')
+        .addEventListener('change', function () {
+            document.getElementById('form-version').value = this.value;
+        });
+
+    /* Auto-expand textarea (max 6 lines) */
+    function adjustTextarea() {
+        const ta = document.getElementById('question-input');
+        if (!ta) return;
+        ta.style.height = 'auto';
+        const lineHeight = parseInt(getComputedStyle(ta).lineHeight);
+        ta.style.height = Math.min(ta.scrollHeight, lineHeight * 6) + 'px';
+    }
+    document.getElementById('question-input').addEventListener('input', adjustTextarea);
+
+    /* Enter → submit, Shift+Enter → newline */
+    document.getElementById('question-input').addEventListener('keydown', function (e) {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            if (this.value.trim()) document.getElementById('chat-form').requestSubmit();
+        }
+    });
+
+    /* Disable send button while HTMX request is in flight */
+    document.getElementById('chat-form').addEventListener('htmx:beforeRequest', function () {
+        document.getElementById('send-btn').disabled = true;
+    });
+    document.getElementById('chat-form').addEventListener('htmx:afterRequest', function () {
+        document.getElementById('send-btn').disabled = false;
+        document.getElementById('chat-messages').scrollTo(
+            0, document.getElementById('chat-messages').scrollHeight);
+    });
+</script>
+</th:block>
+
+</body>
+</html>

@@ -1,0 +1,12 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" lang="ko">
+<body>
+<div th:fragment="message" class="d-flex align-items-start mb-3">
+    <i class="bi bi-robot fs-5 text-danger me-2 mt-1 flex-shrink-0"></i>
+    <div class="bubble-assistant p-3 border-danger text-danger">
+        <i class="bi bi-exclamation-triangle me-1"></i>
+        <span th:text="${errorMessage} ?: '오류가 발생했습니다. 다시 시도해 주세요.'"></span>
+    </div>
+</div>
+</body>
+</html>
