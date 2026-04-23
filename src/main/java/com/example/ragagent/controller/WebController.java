@@ -11,6 +11,8 @@ import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
 import java.util.UUID;
 
@@ -131,13 +133,29 @@ public class WebController {
 
     // ── Document actions ──────────────────────────────────────────────────
 
-    /** Full implementation in step 8. */
     @PostMapping("/ui/documents/upload")
     @ResponseBody
     public ResponseEntity<DocumentInfo> uploadDocument(
             @RequestParam MultipartFile file,
             @RequestParam(defaultValue = "latest") String version) {
-        return ResponseEntity.badRequest().build();
+        if (file.isEmpty()) {
+            return ResponseEntity.badRequest().build();
+        }
+        try {
+            String originalFilename = file.getOriginalFilename() != null
+                    ? file.getOriginalFilename() : "upload";
+            Path tmp = Files.createTempFile("rag-upload-", "-" + originalFilename);
+            try {
+                file.transferTo(tmp);
+                DocumentInfo info = ragService.indexDocument(tmp, version);
+                return ResponseEntity.ok(info);
+            } finally {
+                Files.deleteIfExists(tmp);
+            }
+        } catch (Exception e) {
+            log.error("Upload error", e);
+            return ResponseEntity.internalServerError().build();
+        }
     }
 
     @PostMapping("/ui/documents/sync")
