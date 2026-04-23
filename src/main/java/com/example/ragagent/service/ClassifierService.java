@@ -1,9 +1,11 @@
 package com.example.ragagent.service;
 
 import com.example.ragagent.agent.AgentState;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.annotation.JsonProperty;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.converter.BeanOutputConverter;
 import org.springframework.stereotype.Service;
 
 import java.util.Set;
@@ -17,6 +19,7 @@ import java.util.Set;
 @Service
 public class ClassifierService {
 
+    private static final Logger log = LoggerFactory.getLogger(ClassifierService.class);
     private static final Set<String> VALID_TYPES = Set.of("concept", "usage", "error", "version", "meta");
 
     private static final String SYSTEM_PROMPT = """
@@ -28,19 +31,13 @@ public class ClassifierService {
             - error   : 오류/버그/트러블슈팅 요청 (예: "에러가 납니다", "왜 안 되나요?")
             - version : 버전/변경사항/업데이트 관련 (예: "버전별 차이는?", "최신 변경사항은?")
             - meta    : 인사/서비스 소개/잡담 등 (예: "안녕", "뭘 도와줘?", "감사합니다")
-
-            반드시 JSON만 반환하세요: {"question_type": "..."}
-
-            예시:
-            - "Spring Security를 어떻게 설정하나요?" → {"question_type": "usage"}
-            - "NullPointerException이 계속 납니다" → {"question_type": "error"}
-            - "안녕하세요, 무엇을 도와줄 수 있나요?" → {"question_type": "meta"}
-            - "JPA와 MyBatis의 차이점은?" → {"question_type": "concept"}
-            - "3.0에서 바뀐 점이 있나요?" → {"question_type": "version"}
             """;
 
+    private record ClassifierOutput(@JsonProperty("question_type") String questionType) {}
+
     private final ChatClient chatClient;
-    private final ObjectMapper mapper = new ObjectMapper();
+    private final BeanOutputConverter<ClassifierOutput> converter =
+            new BeanOutputConverter<>(ClassifierOutput.class);
 
     public ClassifierService(ChatClient chatClient) {
         this.chatClient = chatClient;
@@ -49,27 +46,20 @@ public class ClassifierService {
     public void execute(AgentState state) {
         String response = chatClient.prompt()
                 .system(SYSTEM_PROMPT)
-                .user(state.getQuestion())
+                .user(state.getQuestion() + "\n\n" + converter.getFormat())
                 .call()
                 .content();
 
-        state.setQuestionType(extractQuestionType(response));
+        state.setQuestionType(parseType(response));
     }
 
-    private String extractQuestionType(String response) {
+    private String parseType(String response) {
         try {
-            String json = extractJson(response);
-            JsonNode node = mapper.readTree(json);
-            String type = node.path("question_type").asText("concept").toLowerCase();
-            if (VALID_TYPES.contains(type)) return type;
-        } catch (Exception ignored) {}
-        return "concept";
-    }
-
-    private String extractJson(String text) {
-        int start = text.indexOf('{');
-        int end = text.lastIndexOf('}');
-        if (start >= 0 && end > start) return text.substring(start, end + 1);
-        return "{}";
+            String type = converter.convert(response).questionType().toLowerCase();
+            return VALID_TYPES.contains(type) ? type : "concept";
+        } catch (Exception e) {
+            log.warn("Classifier output parse failed, defaulting to 'concept': {}", e.getMessage());
+            return "concept";
+        }
     }
 }

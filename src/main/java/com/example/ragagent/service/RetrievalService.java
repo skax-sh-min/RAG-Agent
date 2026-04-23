@@ -2,11 +2,10 @@ package com.example.ragagent.service;
 
 import com.example.ragagent.agent.AgentState;
 import com.example.ragagent.config.AppProperties;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.converter.BeanOutputConverter;
 import org.springframework.ai.document.Document;
 import org.springframework.stereotype.Service;
 
@@ -27,19 +26,21 @@ public class RetrievalService {
 
     private static final String QUERY_GEN_PROMPT = """
             사용자의 질문에서 벡터 검색에 최적화된 키워드 중심의 검색 쿼리를 생성하세요.
-            JSON으로만 응답하세요: {"query": "검색 쿼리", "k": 숫자(3-10)}
 
             예시:
             - 질문: "Spring Security에서 JWT 토큰 검증 오류가 납니다"
-              → {"query": "Spring Security JWT 토큰 검증 오류 해결", "k": 6}
+              → query: "Spring Security JWT 토큰 검증 오류 해결"
             - 질문: "JPA N+1 문제란?"
-              → {"query": "JPA N+1 문제 개념 원인", "k": 4}
+              → query: "JPA N+1 문제 개념 원인"
             """;
+
+    private record QueryOutput(String query) {}
 
     private final ChatClient chatClient;
     private final RagService ragService;
     private final int defaultTopK;
-    private final ObjectMapper mapper = new ObjectMapper();
+    private final BeanOutputConverter<QueryOutput> queryConverter =
+            new BeanOutputConverter<>(QueryOutput.class);
 
     public RetrievalService(ChatClient chatClient, RagService ragService, AppProperties props) {
         this.chatClient = chatClient;
@@ -49,14 +50,9 @@ public class RetrievalService {
 
     public void execute(AgentState state) {
         String query = generateQuery(state);
-        int topK = defaultTopK;
-
-        List<Document> docs = ragService.search(query, state.getVersion(), topK);
-
-        // Deduplicate by (filename, page_or_slide, content prefix)
+        List<Document> docs = ragService.search(query, state.getVersion(), defaultTopK);
         List<Document> unique = deduplicate(docs);
 
-        // Collect sources and warnings
         List<String> sources = unique.stream()
                 .map(this::formatSource)
                 .distinct()
@@ -79,13 +75,11 @@ public class RetrievalService {
         try {
             String response = chatClient.prompt()
                     .system(QUERY_GEN_PROMPT)
-                    .user(state.getQuestion())
+                    .user(state.getQuestion() + "\n\n" + queryConverter.getFormat())
                     .call()
                     .content();
-            String json = extractJson(response);
-            JsonNode node = mapper.readTree(json);
-            String query = node.path("query").asText(state.getQuestion());
-            return query.isBlank() ? state.getQuestion() : query;
+            String query = queryConverter.convert(response).query();
+            return (query == null || query.isBlank()) ? state.getQuestion() : query;
         } catch (Exception e) {
             log.warn("Query generation failed, falling back to original question: {}", e.getMessage());
             return state.getQuestion();
@@ -108,15 +102,8 @@ public class RetrievalService {
     private String formatSource(Document doc) {
         Map<String, Object> meta = doc.getMetadata();
         String filename = String.valueOf(meta.getOrDefault("filename", "unknown"));
-        String version = String.valueOf(meta.getOrDefault("version", "latest"));
-        Object page = meta.getOrDefault("page_or_slide", "?");
+        String version  = String.valueOf(meta.getOrDefault("version", "latest"));
+        Object page     = meta.getOrDefault("page_or_slide", "?");
         return "%s | v%s | p.%s".formatted(filename, version, page);
-    }
-
-    private String extractJson(String text) {
-        int start = text.indexOf('{');
-        int end = text.lastIndexOf('}');
-        if (start >= 0 && end > start) return text.substring(start, end + 1);
-        return "{}";
     }
 }
