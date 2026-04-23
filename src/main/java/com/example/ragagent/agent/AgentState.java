@@ -2,67 +2,80 @@ package com.example.ragagent.agent;
 
 import org.springframework.ai.document.Document;
 
-import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Mutable state passed through all agent graph nodes.
+ * Immutable state record passed through all agent graph nodes.
+ * Each node returns a new instance via withXxx() — no shared mutable state.
  * Equivalent to LangGraph's TypedDict AgentState in the Python version.
  */
-public class AgentState {
+public record AgentState(
+        String question,
+        String version,
+        String threadId,
+        String questionType,
+        List<Document> retrievedDocs,
+        List<String> sources,
+        List<String> retrievalWarnings,
+        String answer,
+        int retryCount,
+        boolean needsRetry,
+        String conversationHistory
+) {
+    // Defensive copy — guarantees List fields are always unmodifiable
+    public AgentState {
+        retrievedDocs     = retrievedDocs     == null ? List.of() : List.copyOf(retrievedDocs);
+        sources           = sources           == null ? List.of() : List.copyOf(sources);
+        retrievalWarnings = retrievalWarnings == null ? List.of() : List.copyOf(retrievalWarnings);
+    }
 
-    private String question;
-    private String version = "latest";
-    private String threadId = "default";
+    public static AgentState of(String question, String version, String threadId, String conversationHistory) {
+        return new AgentState(
+                question, version, threadId,
+                null, List.of(), List.of(), List.of(),
+                null, 0, false,
+                conversationHistory);
+    }
 
-    // Classifier output: concept | usage | error | version | meta
-    private String questionType;
+    public AgentState withQuestionType(String questionType) {
+        return new AgentState(question, version, threadId, questionType,
+                retrievedDocs, sources, retrievalWarnings,
+                answer, retryCount, needsRetry, conversationHistory);
+    }
 
-    // Retrieval output
-    private List<Document> retrievedDocs = new ArrayList<>();
-    private List<String> sources = new ArrayList<>();
-    private List<String> retrievalWarnings = new ArrayList<>();
+    public AgentState withRetrievedDocs(List<Document> retrievedDocs) {
+        return new AgentState(question, version, threadId, questionType,
+                retrievedDocs, sources, retrievalWarnings,
+                answer, retryCount, needsRetry, conversationHistory);
+    }
 
-    // Answer output
-    private String answer;
+    public AgentState withSources(List<String> sources) {
+        return new AgentState(question, version, threadId, questionType,
+                retrievedDocs, sources, retrievalWarnings,
+                answer, retryCount, needsRetry, conversationHistory);
+    }
 
-    // ReAct / Critic loop control
-    private int retryCount = 0;
-    private boolean needsRetry = false;
+    public AgentState withRetrievalWarnings(List<String> retrievalWarnings) {
+        return new AgentState(question, version, threadId, questionType,
+                retrievedDocs, sources, retrievalWarnings,
+                answer, retryCount, needsRetry, conversationHistory);
+    }
 
-    // Prior conversation injected as context (max maxConversationChars)
-    private String conversationHistory = "";
+    public AgentState withAnswer(String answer) {
+        return new AgentState(question, version, threadId, questionType,
+                retrievedDocs, sources, retrievalWarnings,
+                answer, retryCount, needsRetry, conversationHistory);
+    }
 
-    public String getQuestion() { return question; }
-    public void setQuestion(String question) { this.question = question; }
+    public AgentState withNeedsRetry(boolean needsRetry) {
+        return new AgentState(question, version, threadId, questionType,
+                retrievedDocs, sources, retrievalWarnings,
+                answer, retryCount, needsRetry, conversationHistory);
+    }
 
-    public String getVersion() { return version; }
-    public void setVersion(String version) { this.version = version; }
-
-    public String getThreadId() { return threadId; }
-    public void setThreadId(String threadId) { this.threadId = threadId; }
-
-    public String getQuestionType() { return questionType; }
-    public void setQuestionType(String questionType) { this.questionType = questionType; }
-
-    public List<Document> getRetrievedDocs() { return retrievedDocs; }
-    public void setRetrievedDocs(List<Document> retrievedDocs) { this.retrievedDocs = retrievedDocs; }
-
-    public List<String> getSources() { return sources; }
-    public void setSources(List<String> sources) { this.sources = sources; }
-
-    public List<String> getRetrievalWarnings() { return retrievalWarnings; }
-    public void setRetrievalWarnings(List<String> retrievalWarnings) { this.retrievalWarnings = retrievalWarnings; }
-
-    public String getAnswer() { return answer; }
-    public void setAnswer(String answer) { this.answer = answer; }
-
-    public int getRetryCount() { return retryCount; }
-    public void incrementRetryCount() { this.retryCount++; }
-
-    public boolean isNeedsRetry() { return needsRetry; }
-    public void setNeedsRetry(boolean needsRetry) { this.needsRetry = needsRetry; }
-
-    public String getConversationHistory() { return conversationHistory; }
-    public void setConversationHistory(String conversationHistory) { this.conversationHistory = conversationHistory; }
+    public AgentState withRetryCountIncremented() {
+        return new AgentState(question, version, threadId, questionType,
+                retrievedDocs, sources, retrievalWarnings,
+                answer, retryCount + 1, needsRetry, conversationHistory);
+    }
 }

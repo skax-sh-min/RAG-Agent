@@ -24,18 +24,18 @@ public class AgentService {
     }
 
     public ChatResponse chat(ChatRequest request) {
-        AgentState state = new AgentState();
-        state.setQuestion(request.question());
-        state.setVersion(request.version());
-        state.setThreadId(request.threadId());
-        state.setConversationHistory(memoryService.getHistory(request.threadId()));
+        AgentState initial = AgentState.of(
+                request.question(),
+                request.version(),
+                request.threadId(),
+                memoryService.getHistory(request.threadId()));
 
-        agentGraph.run(state);
+        AgentState result = agentGraph.run(initial);
 
         return new ChatResponse(
-                state.getAnswer(),
-                state.getQuestionType(),
-                state.getSources()
+                result.answer(),
+                result.questionType(),
+                result.sources()
         );
     }
 }

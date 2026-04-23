@@ -40,13 +40,12 @@ public class CriticService {
         this.chatClient = chatClient;
     }
 
-    public void execute(AgentState state) {
-        if (state.getRetrievedDocs().isEmpty()) {
-            state.setNeedsRetry(false);
-            return;
+    public AgentState execute(AgentState state) {
+        if (state.retrievedDocs().isEmpty()) {
+            return state.withNeedsRetry(false);
         }
 
-        String excerpts = state.getRetrievedDocs().stream()
+        String excerpts = state.retrievedDocs().stream()
                 .limit(5)
                 .map(Document::getText)
                 .collect(Collectors.joining("\n---\n"));
@@ -59,7 +58,7 @@ public class CriticService {
                 %s
 
                 %s
-                """.formatted(excerpts, state.getAnswer(), converter.getFormat());
+                """.formatted(excerpts, state.answer(), converter.getFormat());
 
         String response = chatClient.prompt()
                 .system(SYSTEM_PROMPT)
@@ -67,7 +66,7 @@ public class CriticService {
                 .call()
                 .content();
 
-        state.setNeedsRetry(!parseGrounded(response));
+        return state.withNeedsRetry(!parseGrounded(response));
     }
 
     private boolean parseGrounded(String response) {

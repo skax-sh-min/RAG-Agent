@@ -46,40 +46,41 @@ public class AgentGraph {
         this.maxRetryCount = appProperties.maxRetryCount();
     }
 
-    public AgentState run(AgentState state) {
+    public AgentState run(AgentState initialState) {
         Node current = Node.CLASSIFIER;
+        AgentState state = initialState;
 
         while (current != Node.END) {
             current = switch (current) {
                 case CLASSIFIER -> {
-                    classifierService.execute(state);
-                    yield "meta".equals(state.getQuestionType()) ? Node.DIRECT_ANSWER : Node.RETRIEVAL;
+                    state = classifierService.execute(state);
+                    yield "meta".equals(state.questionType()) ? Node.DIRECT_ANSWER : Node.RETRIEVAL;
                 }
                 case DIRECT_ANSWER -> {
-                    directAnswerService.execute(state);
+                    state = directAnswerService.execute(state);
                     yield Node.FINALIZE;
                 }
                 case RETRIEVAL -> {
-                    state.incrementRetryCount();
-                    retrievalService.execute(state);
+                    state = state.withRetryCountIncremented();
+                    state = retrievalService.execute(state);
                     yield Node.ANSWER;
                 }
                 case ANSWER -> {
-                    answerService.execute(state);
-                    if (state.isNeedsRetry() && state.getRetryCount() < maxRetryCount) {
+                    state = answerService.execute(state);
+                    if (state.needsRetry() && state.retryCount() < maxRetryCount) {
                         yield Node.RETRIEVAL;
                     }
                     yield Node.CRITIC;
                 }
                 case CRITIC -> {
-                    criticService.execute(state);
-                    if (state.isNeedsRetry() && state.getRetryCount() < maxRetryCount) {
+                    state = criticService.execute(state);
+                    if (state.needsRetry() && state.retryCount() < maxRetryCount) {
                         yield Node.RETRIEVAL;
                     }
                     yield Node.FINALIZE;
                 }
                 case FINALIZE -> {
-                    finalizeService.execute(state);
+                    state = finalizeService.execute(state);
                     yield Node.END;
                 }
                 case END -> Node.END;

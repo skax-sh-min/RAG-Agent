@@ -43,14 +43,14 @@ public class ClassifierService {
         this.chatClient = chatClient;
     }
 
-    public void execute(AgentState state) {
+    public AgentState execute(AgentState state) {
         String response = chatClient.prompt()
                 .system(SYSTEM_PROMPT)
-                .user(state.getQuestion() + "\n\n" + converter.getFormat())
+                .user(state.question() + "\n\n" + converter.getFormat())
                 .call()
                 .content();
 
-        state.setQuestionType(parseType(response));
+        return state.withQuestionType(parseType(response));
     }
 
     private String parseType(String response) {

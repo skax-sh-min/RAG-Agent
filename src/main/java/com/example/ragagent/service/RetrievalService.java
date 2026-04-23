@@ -48,9 +48,9 @@ public class RetrievalService {
         this.defaultTopK = props.searchTopK();
     }
 
-    public void execute(AgentState state) {
+    public AgentState execute(AgentState state) {
         String query = generateQuery(state);
-        List<Document> docs = ragService.search(query, state.getVersion(), defaultTopK);
+        List<Document> docs = ragService.search(query, state.version(), defaultTopK);
         List<Document> unique = deduplicate(docs);
 
         List<String> sources = unique.stream()
@@ -58,31 +58,32 @@ public class RetrievalService {
                 .distinct()
                 .toList();
 
-        List<String> warnings = new ArrayList<>(state.getRetrievalWarnings());
+        List<String> warnings = new ArrayList<>(state.retrievalWarnings());
         boolean hasOcr = unique.stream()
                 .anyMatch(d -> "ocr".equals(d.getMetadata().get("source_type")));
         if (hasOcr) {
             warnings.add("⚠️ 이 답변에는 OCR로 처리된 스캔 문서가 포함되어 있습니다. 내용이 부정확할 수 있습니다.");
         }
 
-        state.setRetrievedDocs(unique);
-        state.setSources(sources);
-        state.setRetrievalWarnings(warnings);
-        state.setNeedsRetry(false);
+        return state
+                .withRetrievedDocs(unique)
+                .withSources(sources)
+                .withRetrievalWarnings(warnings)
+                .withNeedsRetry(false);
     }
 
     private String generateQuery(AgentState state) {
         try {
             String response = chatClient.prompt()
                     .system(QUERY_GEN_PROMPT)
-                    .user(state.getQuestion() + "\n\n" + queryConverter.getFormat())
+                    .user(state.question() + "\n\n" + queryConverter.getFormat())
                     .call()
                     .content();
             String query = queryConverter.convert(response).query();
-            return (query == null || query.isBlank()) ? state.getQuestion() : query;
+            return (query == null || query.isBlank()) ? state.question() : query;
         } catch (Exception e) {
             log.warn("Query generation failed, falling back to original question: {}", e.getMessage());
-            return state.getQuestion();
+            return state.question();
         }
     }
 

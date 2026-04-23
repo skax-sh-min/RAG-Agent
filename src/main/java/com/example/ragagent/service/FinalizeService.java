@@ -16,9 +16,10 @@ public class FinalizeService {
         this.memoryService = memoryService;
     }
 
-    public void execute(AgentState state) {
-        if (state.getAnswer() != null && !state.getAnswer().isBlank()) {
-            memoryService.addTurn(state.getThreadId(), state.getQuestion(), state.getAnswer());
+    public AgentState execute(AgentState state) {
+        if (state.answer() != null && !state.answer().isBlank()) {
+            memoryService.addTurn(state.threadId(), state.question(), state.answer());
         }
+        return state;
     }
 }

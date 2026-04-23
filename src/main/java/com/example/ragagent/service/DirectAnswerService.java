@@ -24,11 +24,11 @@ public class DirectAnswerService {
         this.chatClient = chatClient;
     }
 
-    public void execute(AgentState state) {
-        String history = state.getConversationHistory();
+    public AgentState execute(AgentState state) {
+        String history = state.conversationHistory();
         String userPrompt = history.isBlank()
-                ? state.getQuestion()
-                : "[이전 대화]\n%s\n\n[현재 질문]\n%s".formatted(history, state.getQuestion());
+                ? state.question()
+                : "[이전 대화]\n%s\n\n[현재 질문]\n%s".formatted(history, state.question());
 
         String answer = chatClient.prompt()
                 .system(SYSTEM_PROMPT)
@@ -36,6 +36,6 @@ public class DirectAnswerService {
                 .call()
                 .content();
 
-        state.setAnswer(answer);
+        return state.withAnswer(answer);
     }
 }

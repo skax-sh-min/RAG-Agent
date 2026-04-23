@@ -62,7 +62,7 @@ public class AnswerService {
         this.chatClient = chatClient;
     }
 
-    public void execute(AgentState state) {
+    public AgentState execute(AgentState state) {
         // Call 1: generate pure prose answer — no JSON instructions mixed in
         String answer = chatClient.prompt()
                 .system(ANSWER_SYSTEM_PROMPT)
@@ -70,19 +70,19 @@ public class AnswerService {
                 .call()
                 .content();
 
-        state.setAnswer(answer);
-
         // Call 2: dedicated sufficiency check — simple JSON only
-        state.setNeedsRetry(!checkSufficiency(state.getQuestion(), answer));
+        boolean needsRetry = !checkSufficiency(state.question(), answer);
+
+        return state.withAnswer(answer).withNeedsRetry(needsRetry);
     }
 
     private String buildAnswerPrompt(AgentState state) {
         StringBuilder sb = new StringBuilder();
-        if (!state.getConversationHistory().isBlank()) {
-            sb.append("[이전 대화]\n").append(state.getConversationHistory()).append("\n\n");
+        if (!state.conversationHistory().isBlank()) {
+            sb.append("[이전 대화]\n").append(state.conversationHistory()).append("\n\n");
         }
 
-        String docsContext = state.getRetrievedDocs().stream()
+        String docsContext = state.retrievedDocs().stream()
                 .map(doc -> {
                     String filename = String.valueOf(doc.getMetadata().getOrDefault("filename", "unknown"));
                     String page     = String.valueOf(doc.getMetadata().getOrDefault("page_or_slide", "?"));
@@ -96,11 +96,11 @@ public class AnswerService {
             sb.append("[검색된 문서]\n문서를 찾을 수 없습니다.\n\n");
         }
 
-        if (!state.getRetrievalWarnings().isEmpty()) {
-            sb.append("[경고]\n").append(String.join("\n", state.getRetrievalWarnings())).append("\n\n");
+        if (!state.retrievalWarnings().isEmpty()) {
+            sb.append("[경고]\n").append(String.join("\n", state.retrievalWarnings())).append("\n\n");
         }
 
-        sb.append("[질문]\n").append(state.getQuestion());
+        sb.append("[질문]\n").append(state.question());
         return sb.toString();
     }
 
