@@ -93,7 +93,7 @@
                         <th></th>
                     </tr>
                     </thead>
-                    <div th:replace="~{fragments/doc-table-body :: body}"></div>
+                    <th:block th:replace="~{fragments/doc-table-body :: body}"></th:block>
                 </table>
             </div>
         </div>
@@ -132,7 +132,7 @@
         const tbody = document.getElementById('file-list-body');
         tbody.innerHTML = selectedFiles.map((f, i) => `
             <tr id="file-row-${i}">
-                <td class="text-truncate" style="max-width:300px;">${f.name}</td>
+                <td class="text-truncate" style="max-width:300px;">${escHtml(f.name)}</td>
                 <td>${(f.size / 1024 / 1024).toFixed(1)} MB</td>
                 <td id="file-status-${i}"><span class="text-muted">⏳ 대기 중</span></td>
                 <td><button class="btn btn-sm btn-link text-danger p-0"
@@ -153,7 +153,7 @@
 
     document.getElementById('upload-btn').addEventListener('click', () => {
         const version = document.getElementById('version-input').value || 'latest';
-        uploadFiles(selectedFiles, version);
+        uploadFiles([...selectedFiles], version);
     });
 
     async function uploadFiles(files, version) {

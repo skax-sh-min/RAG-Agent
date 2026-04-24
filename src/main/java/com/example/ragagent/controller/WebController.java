@@ -173,7 +173,7 @@ public class WebController {
         } catch (Exception e) {
             log.error("Sync error", e);
             model.addAttribute("success", false);
-            model.addAttribute("message", "동기화 실패: " + e.getMessage());
+            model.addAttribute("message", "동기화 실패. 서버 로그를 확인하세요.");
             model.addAttribute("indexed", List.of());
             model.addAttribute("updated", List.of());
             model.addAttribute("deleted", List.of());
@@ -188,7 +188,7 @@ public class WebController {
             @RequestParam(defaultValue = "latest") String version) {
         try {
             ragService.deleteDocument(docId, version);
-            return ResponseEntity.noContent().build();
+            return ResponseEntity.ok().build();
         } catch (Exception e) {
             log.error("Document delete error", e);
             return ResponseEntity.internalServerError().build();

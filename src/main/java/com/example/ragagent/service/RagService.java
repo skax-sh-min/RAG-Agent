@@ -19,6 +19,7 @@ import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -32,6 +33,7 @@ import java.util.stream.Stream;
 public class RagService {
 
     private static final String REGISTRY_FILE = "doc_registry.json";
+    private static final Pattern SAFE_VERSION = Pattern.compile("^[a-zA-Z0-9._\\-]{1,50}$");
 
     private final AppProperties props;
     private final DocumentLoaderService loaderService;
@@ -134,9 +136,18 @@ public class RagService {
                     .anyMatch(r -> r.sha256().equals(sha256) && r.version().equals(version));
 
             if (!alreadyIndexed) {
+                // Remove stale entry for same filename+version (content changed → new sha256)
+                String staleDocId = registry.keySet().stream()
+                        .filter(k -> k.startsWith(filename + "_") && !k.equals(docId)
+                                  && version.equals(registry.get(k).version()))
+                        .findFirst().orElse(null);
+                boolean isUpdate = staleDocId != null;
+                if (isUpdate) {
+                    deleteByDocId(staleDocId, version);
+                    registry.remove(staleDocId);
+                }
+
                 indexDocument(filePath, version);
-                boolean isUpdate = registry.keySet().stream()
-                        .anyMatch(k -> k.startsWith(filename + "_") && !k.equals(docId));
                 if (isUpdate) updated.add(filename); else indexed.add(filename);
             }
         }
@@ -176,11 +187,12 @@ public class RagService {
     }
 
     public List<Document> search(String query, String version, int topK) {
-        VectorStore store = vectorStoreRegistry.getStore(version);
+        String safeVersion = (version != null && SAFE_VERSION.matcher(version).matches()) ? version : "latest";
+        VectorStore store = vectorStoreRegistry.getStore(safeVersion);
         SearchRequest request = SearchRequest.builder()
                 .query(query)
                 .topK(topK)
-                .filterExpression("version == '" + version + "'")
+                .filterExpression("version == '" + safeVersion + "'")
                 .build();
         return store.similaritySearch(request);
     }

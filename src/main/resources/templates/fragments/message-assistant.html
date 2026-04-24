@@ -44,6 +44,7 @@
     /* Render all un-rendered md-content blocks with XSS sanitization */
     document.querySelectorAll('.md-content[data-md]').forEach(function (el) {
         const raw = el.dataset.md || '';
+        if (typeof marked === 'undefined') { el.textContent = raw; delete el.dataset.md; return; }
         const html = marked.parse(raw);
         el.innerHTML = typeof DOMPurify !== 'undefined'
             ? DOMPurify.sanitize(html)
