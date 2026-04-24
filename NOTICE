@@ -1,18 +1,22 @@
 RAG Agent — Spring AI / Java 21
 Copyright 2025 The RAG Agent Authors
 
-This product includes software developed by the following third parties,
-each licensed under the Apache License, Version 2.0
-(http://www.apache.org/licenses/LICENSE-2.0):
+This product includes software developed by the following third parties.
+
+
+====================================================================
+Apache License, Version 2.0
+http://www.apache.org/licenses/LICENSE-2.0
+====================================================================
 
 --------------------------------------------------------------------
-Spring Boot (https://spring.io/projects/spring-boot)
+Spring Boot 3.3.5 (https://spring.io/projects/spring-boot)
 Copyright © 2012–2024 Broadcom. All Rights Reserved.
 The term "Broadcom" refers to Broadcom Inc. and/or its subsidiaries.
 --------------------------------------------------------------------
 
 --------------------------------------------------------------------
-Spring AI (https://spring.io/projects/spring-ai)
+Spring AI 1.0.0 (https://spring.io/projects/spring-ai)
 Copyright © 2023–2024 Broadcom. All Rights Reserved.
 The term "Broadcom" refers to Broadcom Inc. and/or its subsidiaries.
 --------------------------------------------------------------------
@@ -23,7 +27,7 @@ Copyright © 2002–2024 Broadcom. All Rights Reserved.
 --------------------------------------------------------------------
 
 --------------------------------------------------------------------
-Apache POI (https://poi.apache.org)
+Apache POI 5.3.0 (https://poi.apache.org)
 Copyright © 2003–2024 The Apache Software Foundation
 --------------------------------------------------------------------
 
@@ -33,7 +37,8 @@ Copyright © 2002–2024 The Apache Software Foundation
 --------------------------------------------------------------------
 
 --------------------------------------------------------------------
-Apache Commons FileUpload (https://commons.apache.org/proper/commons-fileupload)
+Apache Commons FileUpload 1.5
+(https://commons.apache.org/proper/commons-fileupload)
 Copyright © 2002–2023 The Apache Software Foundation
 --------------------------------------------------------------------
 
@@ -44,21 +49,87 @@ Copyright © The Apache Software Foundation
 --------------------------------------------------------------------
 
 --------------------------------------------------------------------
-Jackson (https://github.com/FasterXML/jackson)
+Jackson 2.x (https://github.com/FasterXML/jackson)
 Copyright © 2007–2024 Tatu Saloranta and contributors
 --------------------------------------------------------------------
 
+--------------------------------------------------------------------
+SQLite JDBC 3.45.3.0 (https://github.com/xerial/sqlite-jdbc)
+Copyright © 2006–2024 Taro L. Saito and contributors
+--------------------------------------------------------------------
 
-The following components are licensed under the MIT License:
+--------------------------------------------------------------------
+Thymeleaf (https://www.thymeleaf.org)
+Copyright © 2011–2024 The Thymeleaf Team
+--------------------------------------------------------------------
+
+--------------------------------------------------------------------
+Thymeleaf Layout Dialect (https://github.com/ultraq/thymeleaf-layout-dialect)
+Copyright © 2012–2024 Emanuel Rabina
+--------------------------------------------------------------------
+
+
+====================================================================
+MIT License
+https://opensource.org/licenses/MIT
+====================================================================
 
 --------------------------------------------------------------------
 SLF4J (https://www.slf4j.org)
 Copyright © 2004–2023 QOS.ch
 --------------------------------------------------------------------
 
+--------------------------------------------------------------------
+Bootstrap 5.3.3 (https://getbootstrap.com)
+Copyright © 2011–2024 The Bootstrap Authors
+--------------------------------------------------------------------
 
-The following components are licensed under the Eclipse Public License 1.0
-and the GNU Lesser General Public License 2.1 (dual-license):
+--------------------------------------------------------------------
+Bootstrap Icons 1.11.3 (https://icons.getbootstrap.com)
+Copyright © 2019–2024 The Bootstrap Authors
+--------------------------------------------------------------------
+
+--------------------------------------------------------------------
+marked 9.1.4 (https://marked.js.org)
+Copyright © 2018–2024 MarkedJS contributors
+Copyright © 2011–2018 Christopher Jeffrey
+--------------------------------------------------------------------
+
+--------------------------------------------------------------------
+WebJars Locator Core (https://www.webjars.org)
+Copyright © 2012–2024 James Ward
+--------------------------------------------------------------------
+
+
+====================================================================
+Apache License, Version 2.0 OR Mozilla Public License, Version 2.0
+https://www.apache.org/licenses/LICENSE-2.0
+https://www.mozilla.org/en-US/MPL/2.0/
+====================================================================
+
+--------------------------------------------------------------------
+DOMPurify 3.1.6 (https://github.com/cure53/DOMPurify)
+Copyright © 2015–2024 Mario Heiderich and contributors
+--------------------------------------------------------------------
+
+
+====================================================================
+BSD Zero Clause License (0BSD)
+https://opensource.org/licenses/0BSD
+====================================================================
+
+--------------------------------------------------------------------
+htmx 2.0.4 (https://htmx.org)
+Copyright © 2020–2024 Big Sky Software
+--------------------------------------------------------------------
+
+
+====================================================================
+Eclipse Public License 1.0 + GNU Lesser General Public License 2.1
+(dual-license)
+https://www.eclipse.org/legal/epl-v10.html
+https://www.gnu.org/licenses/lgpl-2.1.html
+====================================================================
 
 --------------------------------------------------------------------
 Logback (https://logback.qos.ch)
@@ -66,8 +137,9 @@ Copyright © 1999–2024 QOS.ch
 --------------------------------------------------------------------
 
 
-The following components are included only in test scope
-and are NOT distributed with the production binary:
+====================================================================
+Test scope only — NOT distributed with the production binary
+====================================================================
 
 --------------------------------------------------------------------
 JUnit 5 (https://junit.org/junit5) — Eclipse Public License 2.0
@@ -75,17 +147,27 @@ Mockito (https://site.mockito.org) — MIT License
 --------------------------------------------------------------------
 
 
-A copy of the Apache License, Version 2.0 is available at:
+====================================================================
+License texts
+====================================================================
+
+Apache License, Version 2.0:
   https://www.apache.org/licenses/LICENSE-2.0
 
-A copy of the MIT License is available at:
+MIT License:
   https://opensource.org/licenses/MIT
 
-A copy of the Eclipse Public License 1.0 is available at:
+Mozilla Public License, Version 2.0:
+  https://www.mozilla.org/en-US/MPL/2.0/
+
+BSD Zero Clause License (0BSD):
+  https://opensource.org/licenses/0BSD
+
+Eclipse Public License 1.0:
   https://www.eclipse.org/legal/epl-v10.html
 
-A copy of the Eclipse Public License 2.0 is available at:
+Eclipse Public License 2.0:
   https://www.eclipse.org/legal/epl-2.0/
 
-A copy of the GNU Lesser General Public License 2.1 is available at:
+GNU Lesser General Public License 2.1:
   https://www.gnu.org/licenses/lgpl-2.1.html
