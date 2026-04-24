@@ -36,11 +36,11 @@
 }
 
 /* ── Question-type badges ────────────────────────────────────────────── */
-.badge-concept { background: #0d6efd; }
-.badge-usage   { background: #198754; }
-.badge-error   { background: #dc3545; }
+.badge-concept { background: #0d6efd; color: #fff; }
+.badge-usage   { background: #198754; color: #fff; }
+.badge-error   { background: #dc3545; color: #fff; }
 .badge-version { background: #ffc107; color: #000; }
-.badge-meta    { background: #6c757d; }
+.badge-meta    { background: #6c757d; color: #fff; }
 
 /* ── Sidebar thread list ─────────────────────────────────────────────── */
 .thread-item {
@@ -85,8 +85,12 @@
 .dot-unknown { background: #6c757d; }
 
 /* ── Markdown content in assistant bubble ────────────────────────────── */
-.md-content h2 { font-size: 1rem; font-weight: 600; margin-top: 0.75rem; }
-.md-content h3 { font-size: 0.95rem; font-weight: 600; }
+.md-content h1 { font-size: 1.1rem;  font-weight: 700; margin-top: 0.75rem; }
+.md-content h2 { font-size: 1rem;    font-weight: 600; margin-top: 0.75rem; }
+.md-content h3 { font-size: 0.95rem; font-weight: 600; margin-top: 0.5rem; }
+.md-content h4,
+.md-content h5,
+.md-content h6 { font-size: 0.9rem;  font-weight: 600; }
 .md-content pre {
     background: #f8f9fa;
     border: 1px solid #e9ecef;
@@ -95,7 +99,22 @@
     font-size: 0.85rem;
     overflow-x: auto;
 }
-.md-content code { font-size: 0.875em; }
+.md-content code       { font-size: 0.875em; }
+.md-content ul,
+.md-content ol         { padding-left: 1.25rem; margin-bottom: 0.5rem; }
+.md-content li         { margin-bottom: 0.2rem; }
+.md-content blockquote {
+    border-left: 3px solid #dee2e6;
+    margin: 0.5rem 0;
+    padding: 0.25rem 0.75rem;
+    color: #6c757d;
+}
+.md-content table      { width: 100%; border-collapse: collapse; font-size: 0.9rem; margin: 0.5rem 0; }
+.md-content th,
+.md-content td         { border: 1px solid #dee2e6; padding: 0.35rem 0.6rem; text-align: left; }
+.md-content th         { background: #f8f9fa; font-weight: 600; }
+.md-content hr         { margin: 0.75rem 0; border-color: #dee2e6; }
+.md-content a          { color: #0d6efd; }
 .md-content p:last-child { margin-bottom: 0; }
 
 /* ── Sidebar layout ──────────────────────────────────────────────────── */

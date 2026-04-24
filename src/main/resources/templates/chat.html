@@ -172,12 +172,12 @@
         scrollToBottom();
     });
 
-    /* After request: hide indicator, scroll, re-enable send */
+    /* After request: hide indicator, re-enable send, scroll after paint */
     chatForm.addEventListener('htmx:afterRequest', function () {
         typingIndicator.classList.add('d-none');
         typingIndicator.classList.remove('d-flex');
         sendBtn.disabled = false;
-        scrollToBottom();
+        requestAnimationFrame(scrollToBottom);
     });
 
     /* ── Relative date formatting ──────────────────────────────────── */

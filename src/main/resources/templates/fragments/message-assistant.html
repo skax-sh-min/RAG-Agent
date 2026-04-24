@@ -4,22 +4,23 @@
 <div th:fragment="message" class="d-flex align-items-start mb-3">
     <i class="bi bi-robot fs-5 text-secondary me-2 mt-1 flex-shrink-0"></i>
     <div class="bubble-assistant p-3 flex-grow-1">
+
         <!-- Question-type badge -->
         <span th:if="${questionType != null and !#strings.isEmpty(questionType)}"
               class="badge mb-2"
               th:classappend="'badge-' + ${questionType}"
               th:text="${questionType}"></span>
 
-        <!-- Answer (markdown rendered by JS) -->
+        <!-- Answer (markdown → DOMPurify sanitized HTML) -->
         <div class="md-content"
              th:attr="data-md=${answer}"></div>
 
         <!-- Sources accordion -->
         <details th:if="${sources != null and !#lists.isEmpty(sources)}" class="mt-2">
             <summary class="small text-muted" style="cursor:pointer;">
-                출처 (<span th:text="${#lists.size(sources)}"></span>건)
+                ▶ 출처 (<span th:text="${#lists.size(sources)}"></span>건)
             </summary>
-            <ul class="mt-1 mb-0 small">
+            <ul class="mt-1 mb-0 small ps-3">
                 <li th:each="src : ${sources}" th:text="${src}"></li>
             </ul>
         </details>
@@ -40,9 +41,13 @@
 </div>
 
 <script>
-    /* Render all un-rendered md-content blocks */
-    document.querySelectorAll('.md-content[data-md]').forEach(function(el) {
-        el.innerHTML = marked.parse(el.dataset.md);
+    /* Render all un-rendered md-content blocks with XSS sanitization */
+    document.querySelectorAll('.md-content[data-md]').forEach(function (el) {
+        const raw = el.dataset.md || '';
+        const html = marked.parse(raw);
+        el.innerHTML = typeof DOMPurify !== 'undefined'
+            ? DOMPurify.sanitize(html)
+            : html;
         delete el.dataset.md;
     });
 </script>
