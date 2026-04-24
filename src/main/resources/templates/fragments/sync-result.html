@@ -8,19 +8,21 @@
         <div class="d-flex">
             <div class="toast-body">
                 <i class="bi bi-check-circle me-1"></i>
-                동기화 완료
+                <span th:text="#{toast.sync.done}">Sync complete</span>
                 <span th:if="${!#lists.isEmpty(indexed)}">
-                    · 신규 <span th:text="${#lists.size(indexed)}"></span>건
+                    · <span th:text="#{toast.sync.new}">new</span>
+                    <span th:text="${#lists.size(indexed)}"></span>
                 </span>
                 <span th:if="${updated != null and !#lists.isEmpty(updated)}">
-                    · 업데이트 <span th:text="${#lists.size(updated)}"></span>건
+                    · <span th:text="#{toast.sync.updated}">updated</span>
+                    <span th:text="${#lists.size(updated)}"></span>
                 </span>
                 <span th:if="${deleted != null and !#lists.isEmpty(deleted)}">
-                    · 삭제 <span th:text="${#lists.size(deleted)}"></span>건
+                    · <span th:text="#{toast.sync.deleted}">deleted</span>
+                    <span th:text="${#lists.size(deleted)}"></span>
                 </span>
-                <span th:if="${#lists.isEmpty(indexed) and (updated == null or #lists.isEmpty(updated)) and (deleted == null or #lists.isEmpty(deleted))}">
-                    · 변경 없음
-                </span>
+                <span th:if="${#lists.isEmpty(indexed) and (updated == null or #lists.isEmpty(updated)) and (deleted == null or #lists.isEmpty(deleted))}"
+                      th:text="#{toast.sync.no_changes}">· No changes</span>
             </div>
             <button type="button" class="btn-close btn-close-white me-2 m-auto"
                     data-bs-dismiss="toast"></button>
@@ -32,7 +34,7 @@
         <div class="d-flex">
             <div class="toast-body">
                 <i class="bi bi-exclamation-triangle me-1"></i>
-                <span th:text="${message} ?: '동기화 실패'"></span>
+                <span th:text="${message} ?: #{toast.sync.fail}">Sync failed.</span>
             </div>
             <button type="button" class="btn-close btn-close-white me-2 m-auto"
                     data-bs-dismiss="toast"></button>

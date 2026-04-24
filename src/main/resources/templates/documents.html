@@ -4,7 +4,7 @@
       layout:decorate="~{layout/base}"
       lang="ko">
 <head>
-    <title>문서 관리</title>
+    <title th:text="#{nav.documents}">Documents</title>
 </head>
 <body>
 
@@ -14,15 +14,16 @@
         <!-- ── Upload card ───────────────────────────────────────────── -->
         <div class="card mb-4">
             <div class="card-header fw-semibold">
-                <i class="bi bi-cloud-upload me-1"></i>문서 업로드
+                <i class="bi bi-cloud-upload me-1"></i>
+                <span th:text="#{doc.upload.title}">Document Upload</span>
             </div>
             <div class="card-body">
 
                 <!-- Drop zone -->
                 <div id="drop-zone" class="drop-zone text-center py-5 mb-3">
                     <i class="bi bi-folder2-open fs-2 text-secondary d-block mb-2"></i>
-                    <span class="text-muted">파일을 드래그하거나 클릭해서 선택하세요</span><br/>
-                    <small class="text-muted">지원 형식: PDF, PPTX, DOCX, TXT, MD · 최대 100 MB</small>
+                    <span class="text-muted" th:text="#{doc.drop.hint}">Drag files here or click to select</span><br/>
+                    <small class="text-muted" th:text="#{doc.drop.formats}">Supported: PDF, PPTX, DOCX, TXT, MD · Max 100 MB</small>
                     <input id="file-input" type="file"
                            accept=".pdf,.pptx,.docx,.txt,.md"
                            multiple class="d-none"/>
@@ -32,14 +33,17 @@
                 <div id="file-list" class="d-none mb-3">
                     <table class="table table-sm mb-2">
                         <thead><tr>
-                            <th>파일명</th><th>크기</th><th>상태</th><th></th>
+                            <th th:text="#{doc.col.name}">Filename</th>
+                            <th th:text="#{doc.col.size}">Size</th>
+                            <th th:text="#{doc.col.status}">Status</th>
+                            <th></th>
                         </tr></thead>
                         <tbody id="file-list-body"></tbody>
                     </table>
                     <!-- Overall progress -->
                     <div id="overall-progress" class="d-none">
                         <div class="d-flex justify-content-between small text-muted mb-1">
-                            <span id="overall-label">완료 0 / 전체 0</span>
+                            <span id="overall-label"></span>
                         </div>
                         <div class="progress" style="height: 6px;">
                             <div id="overall-bar" class="progress-bar" style="width: 0%;"></div>
@@ -51,9 +55,11 @@
                 <div class="d-flex align-items-center gap-2">
                     <input id="version-input" name="version" type="text"
                            class="form-control form-control-sm"
-                           style="width: 120px;" value="latest" placeholder="버전"/>
+                           style="width: 120px;" value="latest"
+                           th:placeholder="#{doc.version.label}"/>
                     <button id="upload-btn" class="btn btn-sm btn-primary" disabled>
-                        <i class="bi bi-upload me-1"></i>업로드 &amp; 인덱싱
+                        <i class="bi bi-upload me-1"></i>
+                        <span th:text="#{doc.btn.upload}">Upload &amp; Index</span>
                     </button>
                     <button id="sync-btn" class="btn btn-sm btn-outline-secondary"
                             hx-post="/ui/documents/sync"
@@ -62,7 +68,8 @@
                             hx-swap="afterbegin"
                             hx-on::after-request="htmx.ajax('GET','/ui/documents/list',{target:'#doc-table-body',swap:'outerHTML'})">
                         <span class="htmx-indicator spinner-border spinner-border-sm me-1" role="status"></span>
-                        <i class="bi bi-arrow-repeat me-1"></i>폴더 동기화
+                        <i class="bi bi-arrow-repeat me-1"></i>
+                        <span th:text="#{doc.btn.sync}">Sync Folder</span>
                     </button>
                 </div>
             </div>
@@ -72,24 +79,26 @@
         <div class="card">
             <div class="card-header d-flex justify-content-between align-items-center">
                 <span class="fw-semibold">
-                    <i class="bi bi-file-earmark-text me-1"></i>인덱싱된 문서
+                    <i class="bi bi-file-earmark-text me-1"></i>
+                    <span th:text="#{doc.list.title}">Indexed Documents</span>
                 </span>
                 <button class="btn btn-sm btn-outline-secondary"
                         hx-get="/ui/documents/list"
                         hx-target="#doc-table-body"
                         hx-swap="outerHTML">
                     <span class="htmx-indicator spinner-border spinner-border-sm me-1" role="status"></span>
-                    <i class="bi bi-arrow-clockwise me-1"></i>새로고침
+                    <i class="bi bi-arrow-clockwise me-1"></i>
+                    <span th:text="#{doc.btn.refresh}">Refresh</span>
                 </button>
             </div>
             <div class="card-body p-0">
                 <table class="table table-hover mb-0">
                     <thead class="table-light">
                     <tr>
-                        <th>파일명</th>
-                        <th>버전</th>
-                        <th>청크</th>
-                        <th>인덱싱 시각</th>
+                        <th th:text="#{doc.col.name}">Filename</th>
+                        <th th:text="#{doc.col.version}">Version</th>
+                        <th th:text="#{doc.col.chunks}">Chunks</th>
+                        <th th:text="#{doc.col.indexed_at}">Indexed At</th>
                         <th></th>
                     </tr>
                     </thead>
@@ -102,6 +111,13 @@
 </div>
 
 <th:block layout:fragment="scripts">
+<script th:inline="javascript">
+    /* Page-level i18n (complements global I18N from base.html) */
+    const PAGE_I18N = {
+        statusDone:   /*[[#{status.done}]]*/ 'Done',
+        chunks:       /*[[#{toast.upload.chunks}]]*/ 'chunks'
+    };
+</script>
 <script>
     /* Drop zone interaction */
     const dropZone  = document.getElementById('drop-zone');
@@ -121,7 +137,7 @@
     function handleFiles(files) {
         const limit = 100 * 1024 * 1024;
         files.filter(f => f.size > limit).forEach(f =>
-            showToast(`${f.name}: 100 MB 초과 파일은 업로드할 수 없습니다.`, 'warning'));
+            showToast(`${escHtml(f.name)}: ${I18N.fileTooBig}`, 'warning'));
         selectedFiles = files.filter(f => f.size <= limit);
         if (selectedFiles.length === 0) return;
         renderFileList();
@@ -134,7 +150,7 @@
             <tr id="file-row-${i}">
                 <td class="text-truncate" style="max-width:300px;">${escHtml(f.name)}</td>
                 <td>${(f.size / 1024 / 1024).toFixed(1)} MB</td>
-                <td id="file-status-${i}"><span class="text-muted">⏳ 대기 중</span></td>
+                <td id="file-status-${i}"><span class="text-muted">⏳ ${I18N.statusWaiting}</span></td>
                 <td><button class="btn btn-sm btn-link text-danger p-0"
                             onclick="removeFile(${i})">✕</button></td>
             </tr>`).join('');
@@ -160,9 +176,9 @@
         const btn = document.getElementById('upload-btn');
         btn.disabled = true;
 
-        const overallEl = document.getElementById('overall-progress');
+        const overallEl    = document.getElementById('overall-progress');
         const overallLabel = document.getElementById('overall-label');
-        const overallBar = document.getElementById('overall-bar');
+        const overallBar   = document.getElementById('overall-bar');
         overallEl.classList.remove('d-none');
 
         let doneCount = 0;
@@ -177,13 +193,13 @@
                 });
                 setFileStatus(i, 'done', result.chunks);
                 appendDocRow(result);
-                showToast(`${result.filename} 업로드 완료 (${result.chunks} 청크)`, 'success');
+                showToast(`${escHtml(result.filename)} ${I18N.uploadSuccess} (${result.chunks} ${I18N.uploadChunks})`, 'success');
             } catch (err) {
                 setFileStatus(i, 'error', err.message);
-                showToast(`${files[i].name} 오류: ${err.message}`, 'danger');
+                showToast(`${escHtml(files[i].name)} ${I18N.uploadError}: ${err.message}`, 'danger');
             }
             doneCount++;
-            overallLabel.textContent = `완료 ${doneCount} / 전체 ${total}`;
+            overallLabel.textContent = `${doneCount} / ${total}`;
             overallBar.style.width = `${(doneCount / total) * 100}%`;
         }
 
@@ -192,7 +208,7 @@
 
     function uploadWithProgress(file, version, onProgress) {
         return new Promise((resolve, reject) => {
-            const xhr = new XMLHttpRequest();
+            const xhr  = new XMLHttpRequest();
             const form = new FormData();
             form.append('file', file);
             form.append('version', version);
@@ -206,11 +222,11 @@
                 if (xhr.status >= 200 && xhr.status < 300) {
                     resolve(JSON.parse(xhr.responseText));
                 } else {
-                    reject(new Error(xhr.status === 400 ? '파일이 비어 있음' : `서버 오류 (${xhr.status})`));
+                    reject(new Error(xhr.status === 400 ? I18N.fileEmpty : `${I18N.serverError} (${xhr.status})`));
                 }
             });
-            xhr.addEventListener('error', () => reject(new Error('네트워크 오류')));
-            xhr.addEventListener('abort', () => reject(new Error('취소됨')));
+            xhr.addEventListener('error', () => reject(new Error(I18N.networkError)));
+            xhr.addEventListener('abort', () => reject(new Error(I18N.cancelled)));
 
             xhr.open('POST', '/ui/documents/upload');
             xhr.send(form);
@@ -221,9 +237,9 @@
         const el = document.getElementById(`file-status-${i}`);
         if (!el) return;
         const statusMap = {
-            uploading: `<span class="text-primary">🔄 업로드 중...</span><div id="file-prog-${i}" class="progress mt-1" style="height:4px;"><div class="progress-bar" style="width:0%;transition:width 0.2s;"></div></div>`,
-            indexing:  `<span class="text-info">⚙️ 인덱싱 중...</span>`,
-            done:      `<span class="text-success">✅ 완료 (${extra} 청크)</span>`,
+            uploading: `<span class="text-primary">🔄 ${I18N.statusUploading}</span><div id="file-prog-${i}" class="progress mt-1" style="height:4px;"><div class="progress-bar" style="width:0%;transition:width 0.2s;"></div></div>`,
+            indexing:  `<span class="text-info">⚙️ ${I18N.statusIndexing}</span>`,
+            done:      `<span class="text-success">✅ ${PAGE_I18N.statusDone} (${extra} ${PAGE_I18N.chunks})</span>`,
             error:     `<span class="text-danger">❌ ${extra}</span>`,
         };
         el.innerHTML = statusMap[status] ?? el.innerHTML;
@@ -249,7 +265,7 @@
             <td><button class="btn btn-sm btn-outline-danger"
                         hx-delete="/ui/documents/${encodeURIComponent(doc.doc_id)}?version=${encodeURIComponent(doc.version)}"
                         hx-target="closest tr" hx-swap="outerHTML swap:0.3s"
-                        hx-confirm="정말 삭제하시겠습니까?">삭제</button></td>`;
+                        hx-confirm="${I18N.deleteConfirmDoc}">${I18N.deleteBtnLabel}</button></td>`;
         tbody.appendChild(tr);
         htmx.process(tr);
     }

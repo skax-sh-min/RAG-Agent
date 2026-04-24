@@ -18,7 +18,8 @@
         <!-- Sources accordion -->
         <details th:if="${sources != null and !#lists.isEmpty(sources)}" class="mt-2">
             <summary class="small text-muted" style="cursor:pointer;">
-                ▶ 출처 (<span th:text="${#lists.size(sources)}"></span>건)
+                ▶ <span th:text="#{sources.label}">Sources</span>
+                (<span th:text="${#lists.size(sources)}"></span>)
             </summary>
             <ul class="mt-1 mb-0 small ps-3">
                 <li th:each="src : ${sources}" th:text="${src}"></li>
@@ -27,15 +28,20 @@
 
         <!-- Metadata -->
         <div class="mt-2 text-muted" style="font-size: 0.72rem;">
-            <span>⏱ <span th:text="${#numbers.formatDecimal(elapsedSeconds,1,1)}"></span>초</span>
+            <span>⏱ <span th:text="${#numbers.formatDecimal(elapsedSeconds,1,1)}"></span>
+                  <span th:text="#{meta.elapsed}">sec</span></span>
             &nbsp;·&nbsp;
-            <span>📥 <span th:text="${totalInputTokens}"></span> 토큰</span>
+            <span>📥 <span th:text="${totalInputTokens}"></span>
+                  <span th:text="#{meta.input.tokens}">tokens in</span></span>
             &nbsp;·&nbsp;
-            <span>📤 <span th:text="${totalOutputTokens}"></span> 토큰</span>
+            <span>📤 <span th:text="${totalOutputTokens}"></span>
+                  <span th:text="#{meta.output.tokens}">tokens out</span></span>
             &nbsp;·&nbsp;
-            <span>합계 <span th:text="${totalInputTokens + totalOutputTokens}"></span></span>
+            <span><span th:text="#{meta.total}">total</span>
+                  <span th:text="${totalInputTokens + totalOutputTokens}"></span></span>
             &nbsp;·&nbsp;
-            <span>🔄 LLM <span th:text="${llmCallCount}"></span>회</span>
+            <span>🔄 <span th:text="#{meta.llm.calls}">LLM calls</span>
+                  <span th:text="${llmCallCount}"></span></span>
         </div>
     </div>
 </div>

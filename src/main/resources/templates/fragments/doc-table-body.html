@@ -3,9 +3,8 @@
 <body>
 <tbody th:fragment="body" id="doc-table-body">
     <tr th:if="${#lists.isEmpty(documents)}">
-        <td colspan="5" class="text-center text-muted py-4">
-            인덱싱된 문서가 없습니다.
-        </td>
+        <td colspan="5" class="text-center text-muted py-4"
+            th:text="#{doc.list.empty}">No documents indexed.</td>
     </tr>
     <tr th:each="doc : ${documents}"
         th:classappend="${doc.errors != null and !#lists.isEmpty(doc.errors)} ? 'table-warning'">
@@ -25,10 +24,10 @@
         <td th:text="${doc.indexedAt}">시각</td>
         <td>
             <button class="btn btn-sm btn-outline-danger"
-                    th:attr="hx-delete=@{/ui/documents/{id}(id=${doc.docId},version=${doc.version})}"
+                    th:attr="hx-delete=@{/ui/documents/{id}(id=${doc.docId},version=${doc.version})},hx-confirm=#{confirm.delete.doc}"
                     hx-target="closest tr"
                     hx-swap="outerHTML swap:0.3s"
-                    hx-confirm="정말 삭제하시겠습니까?">삭제</button>
+                    th:text="#{doc.btn.delete}">Delete</button>
         </td>
     </tr>
 </tbody>

@@ -99,7 +99,6 @@ public class WebController {
             model.addAttribute("elapsedSeconds", resp.elapsedSeconds());
         } catch (Exception e) {
             log.error("Chat error", e);
-            model.addAttribute("errorMessage", "답변 생성 중 오류가 발생했습니다.");
             return "fragments/message-error :: message";
         }
         response.setHeader("HX-Trigger", "refreshThreadList");
@@ -166,14 +165,12 @@ public class WebController {
         try {
             SyncResult result = ragService.syncDirectory(version);
             model.addAttribute("success", true);
-            model.addAttribute("message", "동기화 완료");
             model.addAttribute("indexed", result.indexed());
             model.addAttribute("updated", result.updated());
             model.addAttribute("deleted", result.deleted());
         } catch (Exception e) {
             log.error("Sync error", e);
             model.addAttribute("success", false);
-            model.addAttribute("message", "동기화 실패. 서버 로그를 확인하세요.");
             model.addAttribute("indexed", List.of());
             model.addAttribute("updated", List.of());
             model.addAttribute("deleted", List.of());

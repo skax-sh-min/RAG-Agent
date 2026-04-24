@@ -4,7 +4,7 @@
       layout:decorate="~{layout/base}"
       lang="ko">
 <head>
-    <title>채팅</title>
+    <title th:text="#{nav.chat}">Chat</title>
 </head>
 <body>
 
@@ -18,12 +18,14 @@
             <div class="d-flex align-items-center gap-2 mb-3">
                 <form th:action="@{/ui/chat/new}" method="post" class="flex-grow-1">
                     <button type="submit" class="btn btn-sm btn-primary w-100">
-                        <i class="bi bi-plus-lg me-1"></i>새 대화
+                        <i class="bi bi-plus-lg me-1"></i>
+                        <span th:text="#{chat.new}">New Chat</span>
                     </button>
                 </form>
                 <input id="version-input" type="text" class="form-control form-control-sm"
                        style="width: 80px;"
-                       th:value="${version}" placeholder="latest"/>
+                       th:value="${version}"
+                       th:placeholder="#{chat.version.placeholder}"/>
             </div>
 
             <!-- Thread list (HTMX auto-refresh on refreshThreadList event) -->
@@ -45,7 +47,7 @@
                 <div class="d-flex align-items-center gap-1 mb-2 text-muted font-monospace">
                     <span th:text="${#strings.substring(meta.threadId, 0, 8)}"></span>
                     <button class="btn btn-link btn-sm p-0 text-muted lh-1"
-                            title="복사"
+                            th:title="#{chat.copy}"
                             th:onclick="'copyThreadId(this, \'' + ${meta.threadId} + '\')'" >
                         <i class="bi bi-clipboard" style="font-size:0.75rem;"></i>
                     </button>
@@ -54,11 +56,12 @@
                 <div class="d-flex gap-1">
                     <button class="btn btn-outline-secondary btn-sm flex-grow-1"
                             th:onclick="'startTitleEdit(\'' + ${meta.threadId} + '\')'" >
-                        <i class="bi bi-pencil me-1"></i>수정
+                        <i class="bi bi-pencil me-1"></i>
+                        <span th:text="#{chat.edit}">Edit</span>
                     </button>
                     <button class="btn btn-outline-danger btn-sm"
                             th:onclick="'deleteCurrentThread(\'' + ${meta.threadId} + '\')'"
-                            title="삭제">
+                            th:title="#{chat.delete}">
                         <i class="bi bi-trash"></i>
                     </button>
                 </div>
@@ -72,9 +75,11 @@
             <div th:if="${meta != null and historyCount != null and historyCount > 0}"
                  class="alert alert-info rounded-0 mb-0 py-2 small">
                 <i class="bi bi-chat-left-dots me-1"></i>
-                <strong th:text="${meta.title}"></strong> 대화를 이어합니다 ·
-                이전 질문 <span th:text="${historyCount}"></span>건 ·
-                아래 입력창에 이어서 질문하세요.
+                <strong th:text="${meta.title}"></strong>
+                <span th:text="#{chat.resume.label}">Continuing conversation</span> ·
+                <span th:text="${historyCount}"></span>
+                <span th:text="#{chat.resume.prev}">previous messages</span> ·
+                <span th:text="#{chat.resume.hint}">Continue typing below.</span>
             </div>
 
             <!-- Messages -->
@@ -101,7 +106,7 @@
                     <div class="input-group">
                         <textarea id="question-input" name="question"
                                   class="form-control"
-                                  placeholder="질문을 입력하세요 (Enter 전송, Shift+Enter 줄바꿈)"
+                                  th:placeholder="#{chat.input.placeholder}"
                                   rows="1"
                                   style="resize: none; overflow-y: hidden;"></textarea>
                         <button id="send-btn" type="submit" class="btn btn-primary">
@@ -190,8 +195,8 @@
         const dStart = new Date(d);
         dStart.setHours(0, 0, 0, 0);
         const diff = Math.round((todayStart - dStart) / 86400000);
-        if (diff === 0) return '오늘';
-        if (diff === 1) return '어제';
+        if (diff === 0) return /*[[#{date.today}]]*/ 'Today';
+        if (diff === 1) return /*[[#{date.yesterday}]]*/ 'Yesterday';
         return String(d.getMonth() + 1).padStart(2, '0') + '/' + String(d.getDate()).padStart(2, '0');
     }
 
@@ -261,10 +266,10 @@
 
     /* ── Delete current thread ─────────────────────────────────────── */
     function deleteCurrentThread(threadId) {
-        if (!confirm('이 대화를 삭제하시겠습니까?')) return;
+        if (!confirm(I18N.deleteConfirmThread)) return;
         fetch(`/ui/threads/${threadId}`, { method: 'DELETE' })
             .then(r => { if (r.ok) window.location.href = '/'; })
-            .catch(() => alert('삭제 중 오류가 발생했습니다.'));
+            .catch(() => showToast(I18N.requestFailed, 'danger'));
     }
 
     /* ── 5초 지연 2차 갱신 (LLM 비동기 제목 반영) ───────────────────── */

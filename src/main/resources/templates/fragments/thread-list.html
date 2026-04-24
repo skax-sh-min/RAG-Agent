@@ -3,7 +3,8 @@
 <body>
 <div th:fragment="list" id="thread-list">
     <p th:if="${#lists.isEmpty(threads)}"
-       class="text-muted small px-1">대화 기록이 없습니다.</p>
+       class="text-muted small px-1"
+       th:text="#{chat.threads.empty}">No conversations.</p>
     <div th:each="thread : ${threads}"
          th:id="'thread-' + ${thread.threadId}"
          class="thread-item"

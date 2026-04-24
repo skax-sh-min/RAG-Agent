@@ -1,11 +1,11 @@
 <!DOCTYPE html>
 <html xmlns:th="http://www.thymeleaf.org"
       xmlns:layout="http://www.ultraq.net.nz/thymeleaf/layout"
-      lang="ko">
+      th:lang="${#locale.language}">
 <head>
     <meta charset="UTF-8"/>
     <meta name="viewport" content="width=device-width, initial-scale=1"/>
-    <title layout:title-pattern="$CONTENT_TITLE - 문서 Q&A">문서 기반 지식 Q&amp;A</title>
+    <title layout:title-pattern="$CONTENT_TITLE - RAG Q&A" th:text="#{nav.title}">Document Q&amp;A</title>
 
     <link rel="stylesheet" th:href="@{/webjars/bootstrap/css/bootstrap.min.css}"/>
     <link rel="stylesheet" th:href="@{/webjars/bootstrap-icons/font/bootstrap-icons.min.css}"/>
@@ -16,7 +16,8 @@
 <!-- ── Navbar ─────────────────────────────────────────────────────────── -->
 <nav class="navbar navbar-expand-md navbar-dark bg-dark px-3 py-2">
     <a class="navbar-brand fw-semibold" th:href="@{/}">
-        <i class="bi bi-chat-dots-fill me-1"></i>문서 기반 지식 Q&amp;A
+        <i class="bi bi-chat-dots-fill me-1"></i>
+        <span th:text="#{nav.title}">Document Q&amp;A</span>
     </a>
 
     <button class="navbar-toggler" type="button"
@@ -30,14 +31,16 @@
                 <a class="nav-link"
                    th:href="@{/}"
                    th:classappend="${#request.requestURI == '/' or #strings.startsWith(#request.requestURI, '/chat')} ? ' active'">
-                    <i class="bi bi-chat me-1"></i>채팅
+                    <i class="bi bi-chat me-1"></i>
+                    <span th:text="#{nav.chat}">Chat</span>
                 </a>
             </li>
             <li class="nav-item">
                 <a class="nav-link"
                    th:href="@{/documents}"
                    th:classappend="${#strings.startsWith(#request.requestURI, '/documents')} ? ' active'">
-                    <i class="bi bi-file-earmark-text me-1"></i>문서 관리
+                    <i class="bi bi-file-earmark-text me-1"></i>
+                    <span th:text="#{nav.documents}">Documents</span>
                 </a>
             </li>
         </ul>
@@ -46,11 +49,24 @@
             <!-- API health indicator -->
             <span id="api-status" class="small text-secondary">
                 <span id="api-dot" class="status-dot dot-unknown"></span>
-                <span id="api-label">확인 중</span>
+                <span id="api-label" th:text="#{nav.api.checking}">Checking</span>
             </span>
-            <!-- User placeholder — replaced by Spring Security login menu in future -->
+
+            <!-- Language switcher -->
+            <div class="d-flex align-items-center gap-1 small">
+                <a th:href="@{''(lang=ko)}"
+                   th:classappend="${#locale.language == 'ko'} ? ' fw-bold text-white' : ' text-secondary'"
+                   class="text-decoration-none">KO</a>
+                <span class="text-secondary">|</span>
+                <a th:href="@{''(lang=en)}"
+                   th:classappend="${#locale.language != 'ko'} ? ' fw-bold text-white' : ' text-secondary'"
+                   class="text-decoration-none">EN</a>
+            </div>
+
+            <!-- User placeholder -->
             <span class="text-secondary small">
-                <i class="bi bi-person-circle me-1"></i>Guest
+                <i class="bi bi-person-circle me-1"></i>
+                <span th:text="#{nav.guest}">Guest</span>
             </span>
         </div>
     </div>
@@ -59,7 +75,7 @@
 <!-- ── Network error banner (shown on htmx:sendError) ────────────────── -->
 <div id="network-banner" class="alert alert-danger rounded-0 mb-0 d-none" role="alert">
     <i class="bi bi-wifi-off me-2"></i>
-    <span id="network-banner-msg">서버에 연결할 수 없습니다. 잠시 후 다시 시도하세요.</span>
+    <span id="network-banner-msg" th:text="#{banner.network}">Cannot connect to server.</span>
     <button type="button" class="btn-close float-end"
             onclick="document.getElementById('network-banner').classList.add('d-none')"></button>
 </div>
@@ -83,6 +99,29 @@
 <script th:src="@{/webjars/marked/marked.min.js}"></script>
 <script th:src="@{/webjars/dompurify/dist/purify.min.js}"></script>
 
+<!-- Global i18n strings injected server-side -->
+<script th:inline="javascript">
+const I18N = {
+    apiOk:           /*[[#{nav.api.ok}]]*/ 'API OK',
+    apiError:        /*[[#{nav.api.error}]]*/ 'API Error',
+    fileTooBig:      /*[[#{toast.upload.too_large}]]*/ 'File exceeds 100 MB limit',
+    uploadSuccess:   /*[[#{toast.upload.success}]]*/ 'uploaded successfully',
+    uploadChunks:    /*[[#{toast.upload.chunks}]]*/ 'chunks',
+    uploadError:     /*[[#{toast.upload.error}]]*/ 'error',
+    networkError:    /*[[#{error.network.short}]]*/ 'Network error',
+    cancelled:       /*[[#{error.cancelled}]]*/ 'Cancelled',
+    serverError:     /*[[#{error.server}]]*/ 'Server error',
+    fileEmpty:       /*[[#{error.file.empty}]]*/ 'File is empty',
+    requestFailed:   /*[[#{toast.request.failed}]]*/ 'Request failed',
+    deleteConfirmDoc:    /*[[#{confirm.delete.doc}]]*/ 'Delete this document?',
+    deleteConfirmThread: /*[[#{confirm.delete.thread}]]*/ 'Delete this conversation?',
+    statusWaiting:   /*[[#{status.waiting}]]*/ 'Waiting',
+    statusUploading: /*[[#{status.uploading}]]*/ 'Uploading...',
+    statusIndexing:  /*[[#{status.indexing}]]*/ 'Indexing...',
+    deleteBtnLabel:  /*[[#{doc.btn.delete}]]*/ 'Delete'
+};
+</script>
+
 <script>
     /* Global HTMX error handlers */
     document.body.addEventListener('htmx:sendError', function () {
@@ -90,7 +129,7 @@
     });
     document.body.addEventListener('htmx:responseError', function (e) {
         const status = e.detail.xhr ? e.detail.xhr.status : '';
-        showToast('요청 실패' + (status ? ' (' + status + ')' : ''), 'danger');
+        showToast(I18N.requestFailed + (status ? ' (' + status + ')' : ''), 'danger');
     });
 
     /* Auto-initialize Bootstrap toasts injected by HTMX fragments (e.g. sync-result) */
@@ -110,15 +149,15 @@
             .then(r => r.ok ? r.json() : Promise.reject())
             .then(d => {
                 if (d.status === 'ok') {
-                    dot.className   = 'status-dot dot-ok';
-                    label.textContent = 'API 정상';
+                    dot.className     = 'status-dot dot-ok';
+                    label.textContent = I18N.apiOk;
                 } else {
                     throw new Error();
                 }
             })
             .catch(() => {
-                dot.className   = 'status-dot dot-error';
-                label.textContent = 'API 오류';
+                dot.className     = 'status-dot dot-error';
+                label.textContent = I18N.apiError;
             });
     })();
 
