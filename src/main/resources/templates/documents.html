@@ -61,6 +61,7 @@
                             hx-target="#toast-container"
                             hx-swap="afterbegin"
                             hx-on::after-request="htmx.ajax('GET','/ui/documents/list',{target:'#doc-table-body',swap:'outerHTML'})">
+                        <span class="htmx-indicator spinner-border spinner-border-sm me-1" role="status"></span>
                         <i class="bi bi-arrow-repeat me-1"></i>폴더 동기화
                     </button>
                 </div>
@@ -77,6 +78,7 @@
                         hx-get="/ui/documents/list"
                         hx-target="#doc-table-body"
                         hx-swap="outerHTML">
+                    <span class="htmx-indicator spinner-border spinner-border-sm me-1" role="status"></span>
                     <i class="bi bi-arrow-clockwise me-1"></i>새로고침
                 </button>
             </div>
@@ -117,7 +119,10 @@
     fileInput.addEventListener('change', () => handleFiles(Array.from(fileInput.files)));
 
     function handleFiles(files) {
-        selectedFiles = files.filter(f => f.size <= 100 * 1024 * 1024);
+        const limit = 100 * 1024 * 1024;
+        files.filter(f => f.size > limit).forEach(f =>
+            showToast(`${f.name}: 100 MB 초과 파일은 업로드할 수 없습니다.`, 'warning'));
+        selectedFiles = files.filter(f => f.size <= limit);
         if (selectedFiles.length === 0) return;
         renderFileList();
         document.getElementById('upload-btn').disabled = false;

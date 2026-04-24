@@ -120,6 +120,11 @@
 /* ── Sidebar layout ──────────────────────────────────────────────────── */
 .sidebar { width: 280px; min-width: 280px; }
 
-/* ── HTMX request indicator (dimming effect) ─────────────────────────── */
+/* ── HTMX loading indicators ─────────────────────────────────────────── */
+.htmx-indicator               { opacity: 0; transition: opacity 150ms ease-in; }
 .htmx-request .htmx-indicator,
-.htmx-request.htmx-indicator { opacity: 1 !important; }
+.htmx-request.htmx-indicator  { opacity: 1; }
+
+/* ── Message bubble word-wrap ─────────────────────────────────────────── */
+.bubble-user,
+.bubble-assistant { word-break: break-word; }

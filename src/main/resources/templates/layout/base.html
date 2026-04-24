@@ -56,6 +56,14 @@
     </div>
 </nav>
 
+<!-- ── Network error banner (shown on htmx:sendError) ────────────────── -->
+<div id="network-banner" class="alert alert-danger rounded-0 mb-0 d-none" role="alert">
+    <i class="bi bi-wifi-off me-2"></i>
+    <span id="network-banner-msg">서버에 연결할 수 없습니다. 잠시 후 다시 시도하세요.</span>
+    <button type="button" class="btn-close float-end"
+            onclick="document.getElementById('network-banner').classList.add('d-none')"></button>
+</div>
+
 <!-- ── Page content ───────────────────────────────────────────────────── -->
 <main>
     <th:block layout:fragment="content">
@@ -76,6 +84,24 @@
 <script th:src="@{/webjars/dompurify/dist/purify.min.js}"></script>
 
 <script>
+    /* Global HTMX error handlers */
+    document.body.addEventListener('htmx:sendError', function () {
+        document.getElementById('network-banner').classList.remove('d-none');
+    });
+    document.body.addEventListener('htmx:responseError', function (e) {
+        const status = e.detail.xhr ? e.detail.xhr.status : '';
+        showToast('요청 실패' + (status ? ' (' + status + ')' : ''), 'danger');
+    });
+
+    /* Auto-initialize Bootstrap toasts injected by HTMX fragments (e.g. sync-result) */
+    document.body.addEventListener('htmx:afterSettle', function (e) {
+        (e.detail.target || document).querySelectorAll('.toast:not([data-bs-inited])').forEach(function (el) {
+            el.setAttribute('data-bs-inited', '');
+            new bootstrap.Toast(el, { delay: 4000 }).show();
+            el.addEventListener('hidden.bs.toast', function () { el.remove(); });
+        });
+    });
+
     /* API health check on every page load */
     (function () {
         const dot   = document.getElementById('api-dot');
