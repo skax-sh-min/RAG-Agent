@@ -26,16 +26,42 @@
                        th:value="${version}" placeholder="latest"/>
             </div>
 
-            <!-- Thread list -->
-            <div class="overflow-auto flex-grow-1">
+            <!-- Thread list (HTMX auto-refresh on refreshThreadList event) -->
+            <div id="thread-list-wrapper"
+                 class="overflow-auto flex-grow-1"
+                 th:attr="hx-get=@{/ui/threads(activeThreadId=${threadId})}"
+                 hx-trigger="refreshThreadList from:body, refreshThreadListDelayed"
+                 hx-target="#thread-list"
+                 hx-swap="outerHTML">
                 <div th:replace="~{fragments/thread-list :: list}"></div>
             </div>
 
             <!-- Current thread info -->
-            <div th:if="${meta != null}" class="border-top pt-2 mt-2 small text-muted">
-                <div class="fw-semibold text-dark text-truncate" th:text="${meta.title}"></div>
-                <div class="font-monospace mt-1"
-                     th:text="${#strings.substring(meta.threadId, 0, 8)}"></div>
+            <div th:if="${meta != null}" class="border-top pt-2 mt-2 small">
+                <!-- Title -->
+                <div id="current-thread-title" class="fw-semibold text-dark text-truncate mb-1"
+                     th:text="${meta.title}"></div>
+                <!-- Thread ID + copy -->
+                <div class="d-flex align-items-center gap-1 mb-2 text-muted font-monospace">
+                    <span th:text="${#strings.substring(meta.threadId, 0, 8)}"></span>
+                    <button class="btn btn-link btn-sm p-0 text-muted lh-1"
+                            title="복사"
+                            th:onclick="'copyThreadId(this, \'' + ${meta.threadId} + '\')'" >
+                        <i class="bi bi-clipboard" style="font-size:0.75rem;"></i>
+                    </button>
+                </div>
+                <!-- Actions -->
+                <div class="d-flex gap-1">
+                    <button class="btn btn-outline-secondary btn-sm flex-grow-1"
+                            th:onclick="'startTitleEdit(\'' + ${meta.threadId} + '\')'" >
+                        <i class="bi bi-pencil me-1"></i>수정
+                    </button>
+                    <button class="btn btn-outline-danger btn-sm"
+                            th:onclick="'deleteCurrentThread(\'' + ${meta.threadId} + '\')'"
+                            title="삭제">
+                        <i class="bi bi-trash"></i>
+                    </button>
+                </div>
             </div>
         </div>
 
@@ -152,6 +178,99 @@
         typingIndicator.classList.remove('d-flex');
         sendBtn.disabled = false;
         scrollToBottom();
+    });
+
+    /* ── Relative date formatting ──────────────────────────────────── */
+    function formatRelativeDate(dateStr) {
+        if (!dateStr) return '';
+        const d = new Date(dateStr.replace(' ', 'T'));
+        if (isNaN(d)) return dateStr;
+        const todayStart = new Date();
+        todayStart.setHours(0, 0, 0, 0);
+        const dStart = new Date(d);
+        dStart.setHours(0, 0, 0, 0);
+        const diff = Math.round((todayStart - dStart) / 86400000);
+        if (diff === 0) return '오늘';
+        if (diff === 1) return '어제';
+        return String(d.getMonth() + 1).padStart(2, '0') + '/' + String(d.getDate()).padStart(2, '0');
+    }
+
+    function applyRelativeDates() {
+        document.querySelectorAll('.thread-date[data-date]').forEach(el => {
+            el.textContent = formatRelativeDate(el.getAttribute('data-date'));
+        });
+    }
+    applyRelativeDates();
+    document.body.addEventListener('htmx:afterSettle', applyRelativeDates);
+
+    /* ── Thread ID copy ────────────────────────────────────────────── */
+    function copyThreadId(btn, id) {
+        navigator.clipboard.writeText(id).then(() => {
+            const icon = btn.querySelector('i');
+            if (icon) {
+                icon.className = 'bi bi-check';
+                setTimeout(() => { icon.className = 'bi bi-clipboard'; }, 1500);
+            }
+        });
+    }
+
+    /* ── Inline title edit ─────────────────────────────────────────── */
+    function startTitleEdit(threadId) {
+        const titleEl = document.getElementById('current-thread-title');
+        if (!titleEl || titleEl.tagName === 'INPUT') return;
+        const current = titleEl.textContent.trim();
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.value = current;
+        input.className = 'form-control form-control-sm mb-1';
+        titleEl.replaceWith(input);
+        input.focus();
+        input.select();
+        let done = false;
+
+        function commit(save) {
+            if (done) return;
+            done = true;
+            const newTitle = save ? (input.value.trim() || current) : current;
+            const el = document.createElement('div');
+            el.id = 'current-thread-title';
+            el.className = 'fw-semibold text-dark text-truncate mb-1';
+            el.textContent = newTitle;
+            input.replaceWith(el);
+            if (save && newTitle !== current) {
+                fetch(`/ui/threads/${threadId}/title`, {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                    body: 'title=' + encodeURIComponent(newTitle)
+                }).then(() => {
+                    const item = document.getElementById('thread-' + threadId);
+                    if (item) {
+                        const t = item.querySelector('.text-truncate');
+                        if (t) t.textContent = newTitle;
+                    }
+                });
+            }
+        }
+
+        input.addEventListener('blur', () => commit(true));
+        input.addEventListener('keydown', e => {
+            if (e.key === 'Enter') { e.preventDefault(); commit(true); }
+            if (e.key === 'Escape') { e.preventDefault(); commit(false); }
+        });
+    }
+
+    /* ── Delete current thread ─────────────────────────────────────── */
+    function deleteCurrentThread(threadId) {
+        if (!confirm('이 대화를 삭제하시겠습니까?')) return;
+        fetch(`/ui/threads/${threadId}`, { method: 'DELETE' })
+            .then(r => { if (r.ok) window.location.href = '/'; })
+            .catch(() => alert('삭제 중 오류가 발생했습니다.'));
+    }
+
+    /* ── 5초 지연 2차 갱신 (LLM 비동기 제목 반영) ───────────────────── */
+    document.body.addEventListener('refreshThreadList', function () {
+        const wrapper = document.getElementById('thread-list-wrapper');
+        if (wrapper) setTimeout(() => htmx.trigger(wrapper, 'refreshThreadListDelayed'), 5000);
     });
 </script>
 </th:block>

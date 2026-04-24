@@ -2,6 +2,7 @@ package com.example.ragagent.controller;
 
 import com.example.ragagent.model.*;
 import com.example.ragagent.service.*;
+import jakarta.servlet.http.HttpServletResponse;
 import jakarta.servlet.http.HttpSession;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -75,9 +76,8 @@ public class WebController {
         return "redirect:/chat/" + threadId;
     }
 
-    /** Full implementation in step 9. */
     @PostMapping("/ui/chat")
-    public String postChat(@ModelAttribute ChatForm form, Model model) {
+    public String postChat(@ModelAttribute ChatForm form, Model model, HttpServletResponse response) {
         if (form.question() == null || form.question().isBlank()) {
             return "fragments/message-error :: message";
         }
@@ -102,6 +102,7 @@ public class WebController {
             model.addAttribute("errorMessage", "답변 생성 중 오류가 발생했습니다.");
             return "fragments/message-error :: message";
         }
+        response.setHeader("HX-Trigger", "refreshThreadList");
         return "fragments/message-assistant :: message";
     }
 

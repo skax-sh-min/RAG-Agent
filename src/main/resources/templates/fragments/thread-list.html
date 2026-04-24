@@ -5,11 +5,14 @@
     <p th:if="${#lists.isEmpty(threads)}"
        class="text-muted small px-1">대화 기록이 없습니다.</p>
     <div th:each="thread : ${threads}"
+         th:id="'thread-' + ${thread.threadId}"
          class="thread-item"
          th:classappend="${thread.threadId == activeThreadId} ? ' active'"
          th:onclick="|window.location.href='/chat/${thread.threadId}'|">
         <div class="text-truncate small" th:text="${thread.title}">제목</div>
-        <div class="text-muted" style="font-size: 0.72rem;" th:text="${thread.updatedAt}"></div>
+        <div class="thread-date text-muted" style="font-size: 0.72rem;"
+             th:attr="data-date=${thread.updatedAt}"
+             th:text="${thread.updatedAt}"></div>
     </div>
 </div>
 </body>

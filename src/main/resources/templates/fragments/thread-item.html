@@ -2,12 +2,15 @@
 <html xmlns:th="http://www.thymeleaf.org" lang="ko">
 <body>
 <div th:fragment="item"
-     class="thread-item"
      th:if="${thread != null}"
+     th:id="'thread-' + ${thread.threadId}"
+     class="thread-item"
      th:classappend="${thread.threadId == activeThreadId} ? ' active'"
      th:onclick="|window.location.href='/chat/${thread.threadId}'|">
     <div class="text-truncate small" th:text="${thread.title}">제목</div>
-    <div class="text-muted" style="font-size: 0.72rem;" th:text="${thread.updatedAt}"></div>
+    <div class="thread-date text-muted" style="font-size: 0.72rem;"
+         th:attr="data-date=${thread.updatedAt}"
+         th:text="${thread.updatedAt}"></div>
 </div>
 </body>
 </html>
