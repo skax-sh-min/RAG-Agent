@@ -12,17 +12,46 @@ cp .env.example .env   # 환경변수 설정
 docker-compose up --build
 ```
 
-### 로컬 실행
+### 로컬 빌드
 
 ```bash
-# 1. Chroma 서버
-docker run --rm -p 8001:8000 chromadb/chroma:latest
+# 테스트 포함 빌드
+mvn clean package
+
+# 테스트 생략 빌드 (빠름)
+mvn clean package -DskipTests
+```
+
+빌드 완료 후 `target/rag-agent-*.jar` 파일이 생성됩니다.
+
+### 로컬 실행
+
+#### 개발 모드 (소스 직접 실행)
+
+```bash
+# 1. Chroma 서버 (별도 터미널)
+docker run --rm -p 8001:8000 \
+  -v "$(pwd)/data/chroma:/chroma/chroma" \
+  chromadb/chroma:latest
 
 # 2. 환경변수 설정
 cp .env.example .env
 
 # 3. 애플리케이션 실행
 mvn spring-boot:run
+```
+
+#### JAR 실행 (빌드 후)
+
+```bash
+# 1. Chroma 서버 (별도 터미널)
+docker run --rm -p 8001:8000 \
+  -v "$(pwd)/data/chroma:/chroma/chroma" \
+  chromadb/chroma:latest
+
+# 2. 환경변수 로드 후 JAR 실행
+export $(grep -v '^#' .env | xargs)
+java -jar target/rag-agent-*.jar
 ```
 
 접속: http://localhost:8080
@@ -39,7 +68,7 @@ mvn spring-boot:run
 | `OPENAI_BASE_URL` | — | `https://api.openai.com` | OpenAI 호환 엔드포인트 URL |
 | `LLM_MODEL` | — | `gpt-4o` | 채팅 모델명 |
 | `EMBED_MODEL` | — | `text-embedding-ada-002` | 임베딩 모델명 |
-| `CHROMA_HOST` | — | `localhost` | Chroma 서버 호스트 |
+| `CHROMA_HOST` | — | `http://localhost` | Chroma 서버 호스트 (프로토콜 포함) |
 | `CHROMA_PORT` | — | `8001` | Chroma 서버 포트 |
 | `DATA_DIR` | — | `./data` | 문서·레지스트리·SQLite DB 저장 경로 |
 
@@ -57,7 +86,7 @@ mvn spring-boot:run
 ```env
 OPENAI_BASE_URL=http://localhost:1234/v1
 OPENAI_API_KEY=lm-studio
-LLM_MODEL=google/gemma-3-27b-it
+LLM_MODEL=google/gemma-4-e4b
 EMBED_MODEL=text-embedding-nomic-embed-text-v1.5
 ```
 

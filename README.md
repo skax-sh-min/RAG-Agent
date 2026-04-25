@@ -12,17 +12,68 @@ cp .env.example .env   # configure environment variables
 docker-compose up --build
 ```
 
-### Local Run
+### Local Build
 
 ```bash
-# 1. Start Chroma
-docker run --rm -p 8001:8000 chromadb/chroma:latest
+# Build with tests
+mvn clean package
+
+# Build without tests (faster)
+mvn clean package -DskipTests
+```
+
+The built JAR is generated at `target/rag-agent-*.jar`.
+
+### Local Run
+
+#### Development mode (run from source)
+
+```bash
+# 1. Start Chroma (separate terminal)
+docker run --rm -p 8001:8000 \
+  -v "$(pwd)/data/chroma:/chroma/chroma" \
+  chromadb/chroma:latest
 
 # 2. Configure environment variables
 cp .env.example .env
 
 # 3. Run the application
 mvn spring-boot:run
+```
+
+#### JAR execution (after build)
+
+```bash
+# 1. Start Chroma (separate terminal)
+docker run --rm -p 8001:8000 \
+  -v "$(pwd)/data/chroma:/chroma/chroma" \
+  chromadb/chroma:latest
+
+# 2. Load env vars and run JAR
+export $(grep -v '^#' .env | xargs)
+java -jar target/rag-agent-*.jar
+```
+
+#### macOS — Apple Container (Apple Silicon alternative)
+
+```bash
+# 0. Install (one-time): download .pkg from https://github.com/apple/container/releases
+
+# 1. Start the container system (once after install or reboot)
+container system start
+
+# 2. Start Chroma (separate terminal)
+container run --rm -p 8001:8000 \
+  -v "$(pwd)/data/chroma:/chroma/chroma" \
+  chromadb/chroma:latest
+
+# 3. Load env vars and run
+export $(grep -v '^#' .env | xargs)
+mvn spring-boot:run
+
+# Shutdown
+container stop <CONTAINER_ID>
+container system stop
 ```
 
 Open: http://localhost:8080
@@ -39,7 +90,7 @@ See [USER_MANUAL.md](USER_MANUAL.md) for detailed usage instructions.
 | `OPENAI_BASE_URL` | — | `https://api.openai.com` | OpenAI-compatible endpoint URL |
 | `LLM_MODEL` | — | `gpt-4o` | Chat model name |
 | `EMBED_MODEL` | — | `text-embedding-ada-002` | Embedding model name |
-| `CHROMA_HOST` | — | `localhost` | Chroma server host |
+| `CHROMA_HOST` | — | `http://localhost` | Chroma server host (include protocol) |
 | `CHROMA_PORT` | — | `8001` | Chroma server port |
 | `DATA_DIR` | — | `./data` | Storage path for documents, registry, and SQLite DB |
 
@@ -57,7 +108,7 @@ Local LLM (LM Studio, Ollama, etc.):
 ```env
 OPENAI_BASE_URL=http://localhost:1234/v1
 OPENAI_API_KEY=lm-studio
-LLM_MODEL=google/gemma-3-27b-it
+LLM_MODEL=google/gemma-4-e4b
 EMBED_MODEL=text-embedding-nomic-embed-text-v1.5
 ```
 

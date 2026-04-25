@@ -59,7 +59,11 @@ rag_java/
 |-----------|------|------|
 | Java JDK | 21 이상 | 애플리케이션 실행 |
 | Maven | 3.9 이상 | 빌드 |
-| Docker | 20 이상 | Chroma 벡터 DB 실행 |
+| Docker | 20 이상 | Chroma 벡터 DB 실행 (Linux / Windows / macOS) |
+| Apple Container | 최신 | Chroma 벡터 DB 실행 (macOS Apple Silicon 대안) |
+
+> **macOS Apple Silicon** 환경에서는 Docker Desktop 대신 [Apple Container](https://github.com/apple/container)를 사용할 수 있습니다.  
+> 설치: GitHub Releases에서 패키지 다운로드.
 
 ### 3.2 환경변수 설정
 
@@ -82,7 +86,7 @@ copy .env.example .env
 | `OPENAI_BASE_URL` | — | `http://localhost:1234/v1` | OpenAI 호환 엔드포인트 |
 | `LLM_MODEL` | — | `gpt-4o` | 채팅 LLM 모델명 |
 | `EMBED_MODEL` | — | `text-embedding-ada-002` | 임베딩 모델명 |
-| `CHROMA_HOST` | — | `localhost` | Chroma 호스트 |
+| `CHROMA_HOST` | — | `http://localhost` | Chroma 호스트 (프로토콜 포함) |
 | `CHROMA_PORT` | — | `8001` | Chroma 포트 |
 | `DATA_DIR` | — | `./data` | 문서·레지스트리·대화DB 저장 경로 |
 
@@ -100,9 +104,9 @@ copy .env.example .env
 ```env
 OPENAI_BASE_URL=http://localhost:1234/v1
 OPENAI_API_KEY=lm-studio
-LLM_MODEL=google/gemma-3-27b-it
+LLM_MODEL=google/gemma-4-e4b
 EMBED_MODEL=text-embedding-nomic-embed-text-v1.5
-CHROMA_HOST=localhost
+CHROMA_HOST=http://localhost
 CHROMA_PORT=8001
 CHUNK_SIZE=800
 CHUNK_OVERLAP=100
@@ -117,7 +121,7 @@ OPENAI_BASE_URL=https://api.openai.com
 OPENAI_API_KEY=sk-proj-...
 LLM_MODEL=gpt-4o
 EMBED_MODEL=text-embedding-3-large
-CHROMA_HOST=localhost
+CHROMA_HOST=http://localhost
 CHROMA_PORT=8001
 CHUNK_SIZE=800
 CHUNK_OVERLAP=100
@@ -153,11 +157,13 @@ docker-compose down
 
 ### 4.2 로컬 실행
 
-#### macOS
+#### macOS — Docker 사용
 
 ```bash
-# 1. Chroma 서버 실행 (별도 터미널)
-docker run --rm -p 8001:8000 chromadb/chroma:latest
+# 1. Chroma 서버 실행 (별도 터미널, 데이터 로컬 저장)
+docker run --rm -p 8001:8000 \
+  -v "$(pwd)/data/chroma:/chroma/chroma" \
+  chromadb/chroma:latest
 
 # 2. 환경변수 로드
 export $(grep -v '^#' .env | xargs)
@@ -166,10 +172,50 @@ export $(grep -v '^#' .env | xargs)
 mvn spring-boot:run
 ```
 
+#### macOS — Apple Container 사용 (Apple Silicon 권장)
+
+Docker Desktop 없이 Apple의 네이티브 컨테이너 런타임을 사용합니다.
+
+```bash
+# 0. Apple Container 설치 (최초 1회)
+# https://github.com/apple/container/releases 에서 최신 .pkg 다운로드 후 실행
+
+# 1. container 시스템 시작 (설치 후 최초 1회 또는 재부팅 후)
+container system start
+
+# 2. Chroma 서버 실행 (별도 터미널, 데이터 로컬 저장)
+container run --rm -p 8001:8000 \
+  -v "$(pwd)/data/chroma:/chroma/chroma" \
+  chromadb/chroma:latest
+
+# 3. 환경변수 로드
+export $(grep -v '^#' .env | xargs)
+
+# 4. 애플리케이션 실행
+mvn spring-boot:run
+```
+
+**종료 순서**:
+```bash
+# 1. 실행 중인 컨테이너 확인
+container ps
+
+# 2. Chroma 컨테이너 중지 (--rm 옵션으로 실행했으면 자동 삭제됨)
+container stop <CONTAINER_ID>
+
+# 3. container 시스템 종료
+container system stop
+```
+
+> `container` CLI는 Docker CLI와 거의 동일한 문법을 사용합니다.  
+> 이미지 관리: `container images`, `container ps`, `container stop` 등.
+
 #### Ubuntu (Linux)
 
 ```bash
-docker run --rm -p 8001:8000 chromadb/chroma:latest
+docker run --rm -p 8001:8000 \
+  -v "$(pwd)/data/chroma:/chroma/chroma" \
+  chromadb/chroma:latest
 set -a && source .env && set +a
 mvn spring-boot:run
 ```
@@ -177,8 +223,8 @@ mvn spring-boot:run
 #### Windows (CMD)
 
 ```cmd
-REM 1. Chroma 서버 (별도 CMD 창)
-docker run --rm -p 8001:8000 chromadb/chroma:latest
+REM 1. Chroma 서버 (별도 CMD 창, 데이터 로컬 저장)
+docker run --rm -p 8001:8000 -v "%cd%\data\chroma:/chroma/chroma" chromadb/chroma:latest
 
 REM 2. 환경변수 로드
 for /f "usebackq tokens=1,* delims==" %A in (`findstr /v "^#" .env`) do SET %A=%B
@@ -386,7 +432,7 @@ Web UI에서는 채팅 사이드바 상단의 **version** 입력창에 버전을
 |--------|----------|
 | 문서 원본 | `DATA_DIR/documents/` |
 | 인덱스 레지스트리 | `DATA_DIR/doc_registry.json` |
-| 벡터 임베딩 | Chroma 서버 (Docker: `chroma_data` 볼륨) |
+| 벡터 임베딩 | Chroma 서버 (로컬 실행: `data/chroma/`, Docker Compose: `chroma_data` 볼륨) |
 | 대화 이력 | `DATA_DIR/memory.db` (SQLite) |
 
 ### 8.4 성능
@@ -405,7 +451,7 @@ curl http://localhost:8001/api/v1/heartbeat
 ```
 
 - **`OPENAI_API_KEY` 미설정** → `.env` 확인 및 환경변수 로드
-- **Chroma 연결 실패** → `docker run --rm -p 8001:8000 chromadb/chroma:latest` 실행
+- **Chroma 연결 실패** → `docker run --rm -p 8001:8000 -v "$(pwd)/data/chroma:/chroma/chroma" chromadb/chroma:latest` 실행 (Apple Container: `container run` 동일 옵션)
 - **포트 충돌** → `lsof -i :8080` 으로 점유 프로세스 확인
 
 ### 질문에 답변이 없거나 "문서에서 확인되지 않음"
