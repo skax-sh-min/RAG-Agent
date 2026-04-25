@@ -104,6 +104,8 @@ See [USER_MANUAL.md](USER_MANUAL.md) for detailed usage instructions.
 | `MAX_RETRY_COUNT` | `2` | 0 ~ 4 | Maximum re-retrieval attempts when evidence is insufficient |
 | `MAX_CONVERSATION_CHARS` | `7000` | 1000 ~ 20000 | Maximum characters of conversation history injected as context |
 
+> Per-format splitting strategy → [USER_MANUAL.md §7.1](USER_MANUAL.md#71-형식별-청크-분할-전략)
+
 Local LLM (LM Studio, Ollama, etc.):
 ```env
 OPENAI_BASE_URL=http://localhost:1234/v1

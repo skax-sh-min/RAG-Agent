@@ -78,27 +78,7 @@ cp .env.example .env
 copy .env.example .env
 ```
 
-#### 연결 / 인증
-
-| 변수 | 필수 | 예시 | 설명 |
-|------|------|------|------|
-| `OPENAI_API_KEY` | ✅ | `sk-...` 또는 `lm-studio` | API 키 |
-| `OPENAI_BASE_URL` | — | `http://localhost:1234/v1` | OpenAI 호환 엔드포인트 |
-| `LLM_MODEL` | — | `gpt-4o` | 채팅 LLM 모델명 |
-| `EMBED_MODEL` | — | `text-embedding-ada-002` | 임베딩 모델명 |
-| `CHROMA_HOST` | — | `http://localhost` | Chroma 호스트 (프로토콜 포함) |
-| `CHROMA_PORT` | — | `8001` | Chroma 포트 |
-| `DATA_DIR` | — | `./data` | 문서·레지스트리·대화DB 저장 경로 |
-
-#### RAG 튜닝
-
-| 변수 | 기본값 | 권장 범위 | 설명 |
-|------|--------|-----------|------|
-| `CHUNK_SIZE` | `800` | 300 ~ 2000 | 문서 청크 크기 (문자 수) |
-| `CHUNK_OVERLAP` | `100` | 0 ~ CHUNK_SIZE × 0.25 | 청크 간 중복 문자 수 |
-| `SEARCH_TOP_K` | `6` | 2 ~ 15 | 벡터 검색 반환 문서 수 |
-| `MAX_RETRY_COUNT` | `2` | 0 ~ 4 | 증거 부족 시 재검색 최대 횟수 |
-| `MAX_CONVERSATION_CHARS` | `7000` | 1000 ~ 20000 | 멀티턴 대화 이력 최대 문자 수 |
+변수별 설명 및 권장 범위는 [README.kr.md](README.kr.md)의 **환경 변수** 섹션을 참고하세요.
 
 **로컬 LLM 예시 (LM Studio)**:
 ```env
@@ -198,7 +178,7 @@ mvn spring-boot:run
 **종료 순서**:
 ```bash
 # 1. 실행 중인 컨테이너 확인
-container ps
+container ls
 
 # 2. Chroma 컨테이너 중지 (--rm 옵션으로 실행했으면 자동 삭제됨)
 container stop <CONTAINER_ID>
@@ -395,8 +375,26 @@ curl -X POST http://localhost:8080/api/chat \
         └─ 삭제 파일 → Chroma에서 제거 → 레지스트리 삭제
 ```
 
-- **청크 크기**: `CHUNK_SIZE`(기본 800자) / 오버랩 `CHUNK_OVERLAP`(기본 100자)
-- **메타데이터**: `doc_id`, `filename`, `version`, `doc_type`, `source_type`, `page_or_slide`, `sha256`, `collected_at`
+### 7.1 형식별 청크 분할 전략
+
+파일 형식에 따라 의미 단위를 최대한 보존하는 방식으로 분할합니다.
+
+| 형식 | 로드 단위 | 분할 전략 |
+|------|----------|----------|
+| `.md` | `#` / `##` / `###` 헤더 단위 섹션 | 섹션이 `CHUNK_SIZE` 초과 시만 슬라이딩 윈도우 적용 |
+| `.docx` | Word `Heading1` / `Heading2` 스타일 단위 섹션 | 섹션이 `CHUNK_SIZE` 초과 시만 슬라이딩 윈도우 적용 |
+| `.pptx` | 슬라이드 1장 = 청크 1개 | 추가 분할 없음 |
+| `.pdf` | 페이지 1장 = 문서 1개 | 슬라이딩 윈도우 (`CHUNK_SIZE` / `CHUNK_OVERLAP`) |
+| `.txt` | 전체 파일 = 문서 1개 | 슬라이딩 윈도우 (`CHUNK_SIZE` / `CHUNK_OVERLAP`) |
+
+> **슬라이딩 윈도우**: 청크 끝이 텍스트 중간이면 가장 가까운 줄바꿈(`\n`) 위치로 경계를 조정합니다.  
+> `.docx` 헤딩이 없는 경우에는 전체 텍스트를 단일 문서로 처리한 뒤 슬라이딩 윈도우를 적용합니다.
+
+### 7.2 메타데이터
+
+- **공통**: `doc_id`, `filename`, `version`, `doc_type`, `source_type`, `sha256`, `collected_at`
+- **페이지/슬라이드**: `page_or_slide` (PDF·PPTX)
+- **섹션 기반** (MD·DOCX): `section` (섹션 번호), `heading` (해당 헤더 텍스트)
 - **컬렉션 분리**: 버전별로 `manual_{version}` 컬렉션 사용 (예: `manual_latest`, `manual_1_0`)
 
 ---

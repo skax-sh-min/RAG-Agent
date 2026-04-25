@@ -4,8 +4,8 @@ import org.apache.poi.sl.usermodel.TextShape;
 import org.apache.poi.xslf.usermodel.XMLSlideShow;
 import org.apache.poi.xslf.usermodel.XSLFShape;
 import org.apache.poi.xslf.usermodel.XSLFSlide;
-import org.apache.poi.xwpf.extractor.XWPFWordExtractor;
 import org.apache.poi.xwpf.usermodel.XWPFDocument;
+import org.apache.poi.xwpf.usermodel.XWPFParagraph;
 import org.springframework.ai.document.Document;
 import org.springframework.ai.reader.pdf.PagePdfDocumentReader;
 import org.springframework.ai.reader.pdf.config.PdfDocumentReaderConfig;
@@ -20,6 +20,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 /**
  * Loads documents from various file formats into Spring AI Document objects.
@@ -84,15 +85,75 @@ public class DocumentLoaderService {
     }
 
     private List<Document> loadDocx(Path filePath) throws IOException {
-        try (XWPFDocument docx = new XWPFDocument(new FileInputStream(filePath.toFile()));
-             XWPFWordExtractor extractor = new XWPFWordExtractor(docx)) {
-            String text = extractor.getText();
-            return List.of(new Document(text, Map.of("source_type", "file")));
+        try (XWPFDocument docx = new XWPFDocument(new FileInputStream(filePath.toFile()))) {
+            List<Document> sections = new ArrayList<>();
+            StringBuilder current = new StringBuilder();
+            String currentHeading = "";
+            int sectionNum = 0;
+
+            for (XWPFParagraph para : docx.getParagraphs()) {
+                String style = para.getStyle();
+                boolean isHeading = style != null && style.toLowerCase().startsWith("heading");
+                String text = para.getText();
+
+                if (isHeading && !current.isEmpty()) {
+                    sections.add(new Document(current.toString().strip(), Map.of(
+                            "source_type", "file", "section", sectionNum, "heading", currentHeading)));
+                    current = new StringBuilder();
+                    sectionNum++;
+                }
+                if (isHeading) currentHeading = text != null ? text : "";
+                if (text != null && !text.isBlank()) current.append(text).append("\n");
+            }
+            if (!current.isEmpty()) {
+                sections.add(new Document(current.toString().strip(), Map.of(
+                        "source_type", "file", "section", sectionNum, "heading", currentHeading)));
+            }
+
+            // No headings found → return as single flat document
+            if (sections.isEmpty()) {
+                String flat = docx.getParagraphs().stream()
+                        .map(XWPFParagraph::getText)
+                        .filter(t -> t != null && !t.isBlank())
+                        .collect(Collectors.joining("\n"));
+                return flat.isBlank() ? List.of()
+                        : List.of(new Document(flat, Map.of("source_type", "file")));
+            }
+            return sections;
         }
     }
 
     private List<Document> loadText(Path filePath) throws IOException {
         String content = Files.readString(filePath);
-        return List.of(new Document(content, Map.of("source_type", "file")));
+        String lower = filePath.getFileName().toString().toLowerCase();
+        return lower.endsWith(".md") ? splitMarkdownBySections(content)
+                : List.of(new Document(content, Map.of("source_type", "file")));
+    }
+
+    private List<Document> splitMarkdownBySections(String content) {
+        List<Document> sections = new ArrayList<>();
+        StringBuilder current = new StringBuilder();
+        String currentHeading = "";
+        int sectionNum = 0;
+
+        for (String line : content.split("\n", -1)) {
+            if (line.startsWith("#")) {
+                if (!current.isEmpty()) {
+                    sections.add(new Document(current.toString().strip(), Map.of(
+                            "source_type", "file", "section", sectionNum, "heading", currentHeading)));
+                    current = new StringBuilder();
+                    sectionNum++;
+                }
+                currentHeading = line.replaceFirst("^#+\\s*", "");
+            }
+            current.append(line).append("\n");
+        }
+        if (!current.isEmpty()) {
+            sections.add(new Document(current.toString().strip(), Map.of(
+                    "source_type", "file", "section", sectionNum, "heading", currentHeading)));
+        }
+        return sections.isEmpty()
+                ? List.of(new Document(content, Map.of("source_type", "file")))
+                : sections;
     }
 }

@@ -20,7 +20,6 @@ import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Pattern;
-import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 /**
@@ -76,7 +75,7 @@ public class RagService {
 
         // Load & split
         List<Document> rawDocs = loaderService.load(filePath);
-        List<Document> chunks = splitDocuments(rawDocs, props.chunkSize(), props.chunkOverlap());
+        List<Document> chunks = splitDocuments(rawDocs, filename, props.chunkSize(), props.chunkOverlap());
 
         // Tag metadata
         List<Document> tagged = new ArrayList<>();
@@ -208,25 +207,53 @@ public class RagService {
         store.delete(existing.springDocIds());
     }
 
-    private List<Document> splitDocuments(List<Document> docs, int chunkSize, int overlap) {
+    private List<Document> splitDocuments(List<Document> docs, String filename, int chunkSize, int overlap) {
+        String lower = filename.toLowerCase();
+
+        if (lower.endsWith(".pptx")) {
+            // Already one Document per slide — no further splitting
+            return new ArrayList<>(docs);
+        }
+
+        if (lower.endsWith(".md") || lower.endsWith(".docx")) {
+            // Loader already produced section-level Documents.
+            // Apply sliding window only when a section exceeds chunkSize.
+            List<Document> result = new ArrayList<>();
+            for (Document doc : docs) {
+                if (doc.getText() == null || doc.getText().isBlank()) continue;
+                if (doc.getText().length() <= chunkSize) {
+                    result.add(doc);
+                } else {
+                    result.addAll(slidingWindow(doc, chunkSize, overlap));
+                }
+            }
+            return result;
+        }
+
+        // PDF, TXT: sliding window on every document
         List<Document> result = new ArrayList<>();
         for (Document doc : docs) {
-            String text = doc.getText();
-            if (text == null || text.isBlank()) continue;
-            int start = 0;
-            while (start < text.length()) {
-                int end = Math.min(start + chunkSize, text.length());
-                // Prefer breaking at newline
-                if (end < text.length()) {
-                    int lastNl = text.lastIndexOf('\n', end);
-                    if (lastNl > start + overlap) end = lastNl + 1;
-                }
-                String chunk = text.substring(start, end).strip();
-                if (!chunk.isBlank()) {
-                    result.add(new Document(chunk, new HashMap<>(doc.getMetadata())));
-                }
-                start = Math.max(start + 1, end - overlap);
+            result.addAll(slidingWindow(doc, chunkSize, overlap));
+        }
+        return result;
+    }
+
+    private List<Document> slidingWindow(Document doc, int chunkSize, int overlap) {
+        List<Document> result = new ArrayList<>();
+        String text = doc.getText();
+        if (text == null || text.isBlank()) return result;
+        int start = 0;
+        while (start < text.length()) {
+            int end = Math.min(start + chunkSize, text.length());
+            if (end < text.length()) {
+                int lastNl = text.lastIndexOf('\n', end);
+                if (lastNl > start + overlap) end = lastNl + 1;
             }
+            String chunk = text.substring(start, end).strip();
+            if (!chunk.isBlank()) {
+                result.add(new Document(chunk, new HashMap<>(doc.getMetadata())));
+            }
+            start = Math.max(start + 1, end - overlap);
         }
         return result;
     }
