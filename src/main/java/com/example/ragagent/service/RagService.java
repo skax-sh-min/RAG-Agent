@@ -6,9 +6,12 @@ import com.example.ragagent.model.SyncResult;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
+import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.document.Document;
+import org.springframework.ai.model.transformer.KeywordMetadataEnricher;
 import org.springframework.ai.vectorstore.SearchRequest;
 import org.springframework.ai.vectorstore.VectorStore;
+import org.springframework.ai.vectorstore.filter.FilterExpressionBuilder;
 import org.springframework.stereotype.Service;
 
 import jakarta.annotation.PostConstruct;
@@ -38,6 +41,7 @@ public class RagService {
     private final DocumentLoaderService loaderService;
     private final VectorStoreRegistry vectorStoreRegistry;
     private final ObjectMapper mapper;
+    private final KeywordMetadataEnricher keywordEnricher;
 
     // doc_id -> DocRegistryEntry (persisted to JSON)
     private final ConcurrentHashMap<String, DocRegistryEntry> registry = new ConcurrentHashMap<>();
@@ -47,11 +51,12 @@ public class RagService {
     private Path registryPath;
 
     public RagService(AppProperties props, DocumentLoaderService loaderService,
-                      VectorStoreRegistry vectorStoreRegistry) {
+                      VectorStoreRegistry vectorStoreRegistry, ChatModel chatModel) {
         this.props = props;
         this.loaderService = loaderService;
         this.vectorStoreRegistry = vectorStoreRegistry;
         this.mapper = new ObjectMapper().enable(SerializationFeature.INDENT_OUTPUT);
+        this.keywordEnricher = new KeywordMetadataEnricher(chatModel, 5);
     }
 
     @PostConstruct
@@ -96,11 +101,14 @@ public class RagService {
         // Delete old chunks for same doc_id if already indexed
         deleteByDocId(docId, version);
 
+        // Enrich chunks with LLM-extracted keywords (adds excerpt_keywords metadata)
+        List<Document> enriched = keywordEnricher.apply(tagged);
+
         // Add to vector store
         VectorStore store = vectorStoreRegistry.getStore(version);
-        store.add(tagged);
+        store.add(enriched);
 
-        List<String> docIds = tagged.stream().map(Document::getId).toList();
+        List<String> docIds = enriched.stream().map(Document::getId).toList();
         DocRegistryEntry entry = new DocRegistryEntry(sha256, version,
                 Instant.now().toString(), tagged.size(), docIds, List.of());
         registry.put(docId, entry);
@@ -188,10 +196,11 @@ public class RagService {
     public List<Document> search(String query, String version, int topK) {
         String safeVersion = (version != null && SAFE_VERSION.matcher(version).matches()) ? version : "latest";
         VectorStore store = vectorStoreRegistry.getStore(safeVersion);
+        FilterExpressionBuilder b = new FilterExpressionBuilder();
         SearchRequest request = SearchRequest.builder()
                 .query(query)
                 .topK(topK)
-                .filterExpression("version == '" + safeVersion + "'")
+                .filterExpression(b.eq("version", safeVersion).build())
                 .build();
         return store.similaritySearch(request);
     }

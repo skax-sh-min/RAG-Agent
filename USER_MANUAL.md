@@ -12,11 +12,11 @@
 
 핵심 기능:
 - **질문 유형 분류** — concept / usage / error / version / meta 5종 자동 분류
-- **벡터 검색** — LLM이 최적 쿼리를 생성해 Chroma에서 유사 문서 검색
+- **멀티 쿼리 검색** — 원본 질문 + LLM이 생성한 의미 변형 쿼리 2개(총 3개)로 병렬 검색 후 중복 제거 (`MultiQueryExpander`)
 - **ReAct 재검색** — 증거 부족 시 자동 재검색 (최대 2회)
 - **Critic 검증** — 답변이 문서에 근거하는지 이중 검증
 - **멀티턴 대화** — 스레드 단위 대화 이력 유지 (SQLite 영속, 재시작 후에도 유지)
-- **증분 인덱싱** — SHA-256 기반 변경 감지, `doc_registry.json` 영속
+- **증분 인덱싱** — SHA-256 기반 변경 감지, 청크별 키워드 메타데이터 자동 추출 (`KeywordMetadataEnricher`)
 - **문서 버전 관리** — 버전별 독립된 Chroma 컬렉션
 
 ---
@@ -370,10 +370,14 @@ curl -X POST http://localhost:8080/api/chat \
 ```
 파일 업로드 or Sync Folder
   └─▶ SHA-256 계산 → doc_registry.json 과 비교
-        ├─ 신규 파일 → 로드 → 청크 분할 → 메타데이터 태깅 → Chroma 추가
-        ├─ 변경 파일 → 기존 청크 삭제 → 재인덱싱
-        └─ 삭제 파일 → Chroma에서 제거 → 레지스트리 삭제
+        ├─ 신규 파일 → 로드 → 청크 분할 → 메타데이터 태깅
+        │               └─▶ 키워드 추출 (KeywordMetadataEnricher, LLM 호출)
+        │                     └─▶ Chroma 추가 → doc_registry.json 저장
+        ├─ 변경 파일 → 기존 청크 삭제 → 재인덱싱 (신규 파일과 동일 흐름)
+        └─ 삭제 파일 → Chroma에서 제거 → doc_registry.json 삭제
 ```
+
+> **키워드 추출**: 인덱싱 시 청크당 LLM을 호출해 핵심 키워드 5개를 `excerpt_keywords` 메타데이터로 저장합니다. 검색 품질이 높아지는 대신 인덱싱 시간이 늘어납니다.
 
 ### 7.1 형식별 청크 분할 전략
 
@@ -395,6 +399,7 @@ curl -X POST http://localhost:8080/api/chat \
 - **공통**: `doc_id`, `filename`, `version`, `doc_type`, `source_type`, `sha256`, `collected_at`
 - **페이지/슬라이드**: `page_or_slide` (PDF·PPTX)
 - **섹션 기반** (MD·DOCX): `section` (섹션 번호), `heading` (해당 헤더 텍스트)
+- **키워드**: `excerpt_keywords` — 인덱싱 시 LLM이 추출한 핵심 키워드 5개 (검색 품질 향상)
 - **컬렉션 분리**: 버전별로 `manual_{version}` 컬렉션 사용 (예: `manual_latest`, `manual_1_0`)
 
 ---

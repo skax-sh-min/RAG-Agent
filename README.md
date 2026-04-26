@@ -1,6 +1,6 @@
 # RAG Agent — Spring AI / Java 21
 
-A document-based knowledge Q&A agent built on Spring AI + Spring Boot 3.3 + Java 21.  
+A document-based knowledge Q&A agent built on Spring AI + Spring Boot 3.5 + Java 21.  
 Provides both a REST API and a Web UI powered by Thymeleaf + HTMX.
 
 ## Getting Started

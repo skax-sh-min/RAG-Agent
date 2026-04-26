@@ -23,12 +23,15 @@
 hs_err_pid*
 replay_pid*
 
+.DS_Store
+
 .env
 
 target/
 
 data/
 chroma/
+ref/
 
 .claude/
 .vscode/

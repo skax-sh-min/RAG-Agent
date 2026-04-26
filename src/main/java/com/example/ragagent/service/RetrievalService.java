@@ -5,9 +5,10 @@ import com.example.ragagent.config.AppProperties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.ai.chat.model.ChatResponse;
-import org.springframework.ai.converter.BeanOutputConverter;
+import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.document.Document;
+import org.springframework.ai.rag.Query;
+import org.springframework.ai.rag.preretrieval.query.expansion.MultiQueryExpander;
 import org.springframework.stereotype.Service;
 
 import java.util.*;
@@ -15,59 +16,41 @@ import java.util.*;
 /**
  * Retrieves relevant documents from the vector store.
  *
- * Strategy: ask the LLM to generate the optimal search query, then execute
- * similarity search. Falls back to the original question if LLM fails.
- *
- * Equivalent to retrieval_node in agents.py.
+ * Uses MultiQueryExpander to generate semantically diverse query variants from the
+ * original question, then merges and deduplicates results for higher recall.
  */
 @Service
 public class RetrievalService {
 
     private static final Logger log = LoggerFactory.getLogger(RetrievalService.class);
 
-    private static final String QUERY_GEN_PROMPT = """
-            사용자의 질문에서 벡터 검색에 최적화된 키워드 중심의 검색 쿼리를 생성하세요.
-
-            예시:
-            - 질문: "Spring Security에서 JWT 토큰 검증 오류가 납니다"
-              → query: "Spring Security JWT 토큰 검증 오류 해결"
-            - 질문: "JPA N+1 문제란?"
-              → query: "JPA N+1 문제 개념 원인"
-            """;
-
-    private record QueryOutput(String query) {}
-
-    private final ChatClient chatClient;
     private final RagService ragService;
+    private final MultiQueryExpander multiQueryExpander;
     private final int defaultTopK;
-    private final BeanOutputConverter<QueryOutput> queryConverter =
-            new BeanOutputConverter<>(QueryOutput.class);
 
-    public RetrievalService(ChatClient chatClient, RagService ragService, AppProperties props) {
-        this.chatClient = chatClient;
+    public RetrievalService(ChatModel chatModel, RagService ragService, AppProperties props) {
         this.ragService = ragService;
         this.defaultTopK = props.searchTopK();
+        this.multiQueryExpander = MultiQueryExpander.builder()
+                .chatClientBuilder(ChatClient.builder(chatModel))
+                .includeOriginal(true)
+                .numberOfQueries(2)
+                .build();
     }
 
     public AgentState execute(AgentState state) {
-        String query;
+        List<Document> allDocs = new ArrayList<>();
         try {
-            ChatResponse chatResponse = chatClient.prompt()
-                    .system(QUERY_GEN_PROMPT)
-                    .user(state.question() + "\n\n" + queryConverter.getFormat())
-                    .call()
-                    .chatResponse();
-            state = accumulateTokens(state, chatResponse);
-            QueryOutput qo = queryConverter.convert(chatResponse.getResult().getOutput().getText());
-            query = (qo == null || qo.query() == null || qo.query().isBlank())
-                    ? state.question() : qo.query();
+            List<Query> queries = multiQueryExpander.expand(new Query(state.question()));
+            for (Query q : queries) {
+                allDocs.addAll(ragService.search(q.text(), state.version(), defaultTopK));
+            }
         } catch (Exception e) {
-            log.warn("Query generation failed, falling back to original question: {}", e.getMessage());
-            query = state.question();
+            log.warn("Multi-query expansion failed, falling back to original question: {}", e.getMessage());
+            allDocs.addAll(ragService.search(state.question(), state.version(), defaultTopK));
         }
 
-        List<Document> docs = ragService.search(query, state.version(), defaultTopK);
-        List<Document> unique = deduplicate(docs);
+        List<Document> unique = deduplicate(allDocs);
 
         List<String> sources = unique.stream()
                 .map(this::formatSource)
@@ -92,6 +75,7 @@ public class RetrievalService {
         Set<String> seen = new LinkedHashSet<>();
         List<Document> result = new ArrayList<>();
         for (Document doc : docs) {
+            if (result.size() >= defaultTopK) break;
             String filename = String.valueOf(doc.getMetadata().getOrDefault("filename", ""));
             String page = String.valueOf(doc.getMetadata().getOrDefault("page_or_slide", ""));
             String preview = doc.getText() == null ? "" : doc.getText().substring(0, Math.min(50, doc.getText().length()));
@@ -107,12 +91,5 @@ public class RetrievalService {
         String version  = String.valueOf(meta.getOrDefault("version", "latest"));
         Object page     = meta.getOrDefault("page_or_slide", "?");
         return "%s | v%s | p.%s".formatted(filename, version, page);
-    }
-
-    private static AgentState accumulateTokens(AgentState state, ChatResponse resp) {
-        var usage = resp.getMetadata().getUsage();
-        int in  = (usage != null && usage.getPromptTokens()     != null) ? usage.getPromptTokens()     : 0;
-        int out = (usage != null && usage.getCompletionTokens() != null) ? usage.getCompletionTokens() : 0;
-        return state.withTokensAccumulated(in, out);
     }
 }
