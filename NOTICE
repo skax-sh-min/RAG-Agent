@@ -1,5 +1,5 @@
 RAG Agent — Spring AI / Java 21
-Copyright 2025 The RAG Agent Authors
+Copyright 2026 The RAG Agent Authors
 
 This product includes software developed by the following third parties.
 
@@ -10,14 +10,14 @@ http://www.apache.org/licenses/LICENSE-2.0
 ====================================================================
 
 --------------------------------------------------------------------
-Spring Boot 3.3.5 (https://spring.io/projects/spring-boot)
-Copyright © 2012–2024 Broadcom. All Rights Reserved.
+Spring Boot 3.5.8 (https://spring.io/projects/spring-boot)
+Copyright © 2012–2025 Broadcom. All Rights Reserved.
 The term "Broadcom" refers to Broadcom Inc. and/or its subsidiaries.
 --------------------------------------------------------------------
 
 --------------------------------------------------------------------
-Spring AI 1.0.0 (https://spring.io/projects/spring-ai)
-Copyright © 2023–2024 Broadcom. All Rights Reserved.
+Spring AI 1.1.4 (https://spring.io/projects/spring-ai)
+Copyright © 2023–2025 Broadcom. All Rights Reserved.
 The term "Broadcom" refers to Broadcom Inc. and/or its subsidiaries.
 --------------------------------------------------------------------
 
@@ -100,6 +100,11 @@ WebJars Locator Core (https://www.webjars.org)
 Copyright © 2012–2024 James Ward
 --------------------------------------------------------------------
 
+--------------------------------------------------------------------
+Chart.js 4.4.3 (https://www.chartjs.org)
+Copyright © 2014–2025 Chart.js Contributors
+--------------------------------------------------------------------
+
 
 ====================================================================
 Apache License, Version 2.0 OR Mozilla Public License, Version 2.0
@@ -121,6 +126,17 @@ https://opensource.org/licenses/0BSD
 --------------------------------------------------------------------
 htmx 2.0.4 (https://htmx.org)
 Copyright © 2020–2024 Big Sky Software
+--------------------------------------------------------------------
+
+
+====================================================================
+BSD 3-Clause License
+https://opensource.org/licenses/BSD-3-Clause
+====================================================================
+
+--------------------------------------------------------------------
+highlight.js 11.11.1 (https://highlightjs.org)
+Copyright © 2006–2025 Ivan Sagalaev and contributors
 --------------------------------------------------------------------
 
 
@@ -171,3 +187,6 @@ Eclipse Public License 2.0:
 
 GNU Lesser General Public License 2.1:
   https://www.gnu.org/licenses/lgpl-2.1.html
+
+BSD 3-Clause License:
+  https://opensource.org/licenses/BSD-3-Clause
