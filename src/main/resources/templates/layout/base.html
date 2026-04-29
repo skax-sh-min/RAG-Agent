@@ -11,6 +11,8 @@
     <link rel="stylesheet" th:href="@{/webjars/bootstrap-icons/font/bootstrap-icons.min.css}"/>
     <link rel="stylesheet" th:href="@{/css/theme.css}"/>
     <link rel="stylesheet" th:href="@{/css/app.css}"/>
+    <link rel="stylesheet" id="hljs-style"
+          th:href="@{/webjars/highlight.js/styles/github.min.css}"/>
     <!-- FOUC prevention: set data-theme before body renders -->
     <script>
     (function(){
@@ -121,6 +123,7 @@
 <script th:src="@{/webjars/htmx.org/dist/htmx.min.js}"></script>
 <script th:src="@{/webjars/marked/marked.min.js}"></script>
 <script th:src="@{/webjars/dompurify/dist/purify.min.js}"></script>
+<script th:src="@{/webjars/highlight.js/highlight.min.js}"></script>
 
 <!-- Global i18n strings injected server-side -->
 <script th:inline="javascript">
@@ -165,6 +168,17 @@ const I18N = {
             applyTheme(next);
         });
     })();
+
+    /* highlight.js theme sync */
+    function syncHljsTheme() {
+        const dark = document.documentElement.getAttribute('data-theme') === 'dark';
+        const el = document.getElementById('hljs-style');
+        if (el) el.href = dark
+            ? '/webjars/highlight.js/styles/github-dark.min.css'
+            : '/webjars/highlight.js/styles/github.min.css';
+    }
+    document.addEventListener('themechange', syncHljsTheme);
+    syncHljsTheme();
 
     /* Global HTMX error handlers */
     document.body.addEventListener('htmx:sendError', function () {

@@ -292,12 +292,15 @@
         if (wrapper) setTimeout(() => htmx.trigger(wrapper, 'refreshThreadListDelayed'), 5000);
     });
 
-    /* ── 서버 렌더 이전 turn 마크다운 처리 + 초기 스크롤 ──────────────── */
+    /* ── 서버 렌더 이전 turn 마크다운 처리 + syntax highlight + 초기 스크롤 ── */
     document.querySelectorAll('.md-content[data-md]').forEach(function (el) {
         const raw = el.dataset.md || '';
         if (typeof marked === 'undefined') { el.textContent = raw; delete el.dataset.md; return; }
         const html = marked.parse(raw);
         el.innerHTML = typeof DOMPurify !== 'undefined' ? DOMPurify.sanitize(html) : html;
+        if (typeof hljs !== 'undefined') {
+            el.querySelectorAll('pre code').forEach(block => hljs.highlightElement(block));
+        }
         delete el.dataset.md;
     });
     scrollToBottom();

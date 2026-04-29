@@ -47,7 +47,7 @@
 </div>
 
 <script>
-    /* Render all un-rendered md-content blocks with XSS sanitization */
+    /* Render all un-rendered md-content blocks with XSS sanitization + syntax highlight */
     document.querySelectorAll('.md-content[data-md]').forEach(function (el) {
         const raw = el.dataset.md || '';
         if (typeof marked === 'undefined') { el.textContent = raw; delete el.dataset.md; return; }
@@ -55,6 +55,9 @@
         el.innerHTML = typeof DOMPurify !== 'undefined'
             ? DOMPurify.sanitize(html)
             : html;
+        if (typeof hljs !== 'undefined') {
+            el.querySelectorAll('pre code').forEach(block => hljs.highlightElement(block));
+        }
         delete el.dataset.md;
     });
 </script>
