@@ -118,7 +118,7 @@ EMBED_MODEL=text-embedding-nomic-embed-text-v1.5
 
 ```
 rag_java/
-├── pom.xml                            # Spring Boot 3.3 + Spring AI 1.0.0
+├── pom.xml                            # Spring Boot 3.5 + Spring AI 1.1.4
 ├── Dockerfile / docker-compose.yml
 ├── .env.example
 └── src/main/
@@ -127,16 +127,19 @@ rag_java/
     │   │   ├── AgentState.java        # Immutable record — inter-node pipeline state
     │   │   └── AgentGraph.java        # Graph execution engine (switch expression)
     │   ├── config/
-    │   │   ├── AppProperties.java     # @ConfigurationProperties
+    │   │   ├── AppProperties.java     # @ConfigurationProperties (includes LlmConfig)
     │   │   └── WebConfig.java         # ChatClient bean + CORS + i18n (CookieLocaleResolver)
     │   ├── controller/
     │   │   ├── ApiController.java     # REST API (/api/*)
-    │   │   └── WebController.java     # Web UI HTMX handler (/ui/*, /chat/*, /documents)
+    │   │   └── WebController.java     # Web UI HTMX handler (/ui/*, /chat/*, /llm-usage)
+    │   ├── llm/
+    │   │   └── CircuitBreaker.java    # In-memory LLM provider circuit breaker
     │   ├── model/                     # Java 21 records
-    │   │   └── ChatRequest/Response/DocumentInfo/SyncResult/ThreadMeta/ChatForm.java
+    │   │   └── ChatRequest/Response/SourceRef/DocumentInfo/SyncResult/ThreadMeta/ChatForm/LlmProviderReport.java
     │   ├── repository/
-    │   │   ├── MemoryRepository.java          # Conversation memory interface
-    │   │   └── SqliteMemoryRepository.java    # SQLite WAL-based implementation
+    │   │   ├── MemoryRepository.java          # Conversation memory interface (includes getTurns)
+    │   │   ├── SqliteMemoryRepository.java    # SQLite WAL-based implementation
+    │   │   └── LlmUsageRepository.java        # LLM token usage SQLite repository
     │   └── service/
     │       ├── AgentService.java          # Agent pipeline entry point
     │       ├── ClassifierService.java     # Question type classification node
@@ -154,16 +157,23 @@ rag_java/
         ├── application.properties
         ├── messages.properties            # UI strings — English (default)
         ├── messages_ko.properties         # UI strings — Korean
-        ├── static/css/app.css
+        ├── static/
+        │   └── css/
+        │       ├── app.css                # Custom styles (bubbles, animations, upload progress, etc.)
+        │       └── theme.css              # Light/dark CSS variables + Bootstrap dark mode overrides
         └── templates/
             ├── layout/base.html           # Shared layout (Thymeleaf Layout Dialect)
-            ├── chat.html                  # Chat page
+            ├── chat.html                  # Chat page (server-renders previous turns)
             ├── documents.html             # Document management page
+            ├── llm-usage.html             # LLM usage statistics page
             └── fragments/
+                ├── llm-usage-cards.html   # Provider cards (HTMX 30s auto-refresh)
                 ├── thread-list.html       # HTMX thread list fragment
                 ├── thread-item.html       # HTMX thread item fragment
-                ├── doc-table-body.html    # HTMX document table fragment
-                ├── message-assistant.html # HTMX assistant bubble fragment
+                ├── doc-row.html           # HTMX document table row fragment
+                ├── doc-table-body.html    # HTMX document table tbody fragment
+                ├── message-user.html      # User message bubble fragment
+                ├── message-assistant.html # HTMX assistant bubble (includes source hover preview)
                 ├── message-error.html     # HTMX error bubble fragment
                 └── sync-result.html       # HTMX sync result toast fragment
 ```
@@ -184,12 +194,18 @@ User question
 
 ## Features
 
-- **Web UI** — Thymeleaf + HTMX chat and document management interface with KO/EN language switcher
+- **Web UI** — Thymeleaf + HTMX chat, document management, and LLM usage interface with KO/EN language switcher
+- **Dark mode** — CSS variable–based light/dark toggle, auto-detects `prefers-color-scheme` with `localStorage` user override
 - **Question classification + routing** — meta (greetings/small talk) answered directly without RAG; all others go through the full pipeline
 - **Vector search** — LLM generates an optimized search query, then performs Chroma similarity search
 - **ReAct re-retrieval** — automatic re-retrieval up to 2 times when evidence is insufficient
 - **Critic verification** — LLM double-checks whether the generated answer is grounded in documents
 - **Multi-turn conversation** — thread-based history persistence (SQLite WAL, survives restarts)
+- **Message bubble restore** — re-entering `/chat/{threadId}` server-renders all previous turn bubbles
+- **Source hover preview** — `SourceRef` record with Bootstrap Popover shows a 200-char chunk text preview on hover
+- **Code syntax highlighting** — highlight.js applied after DOMPurify sanitize, synced with dark mode
+- **LLM usage dashboard** — per-provider daily/weekly/monthly token stats, Chart.js daily history chart
+- **Circuit Breaker** — automatic provider blocking on HTTP 429/errors, priority-based failover
 - **Document versioning** — separate Chroma collection per version (`manual_{version}`)
 - **Incremental indexing** — SHA-256 change detection, `doc_registry.json` persistence
 - **Multiple document formats** — PDF, PPTX, DOCX, TXT, MD
@@ -202,8 +218,9 @@ User question
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/` | Chat home (creates a new thread) |
-| `GET` | `/chat/{threadId}` | Resume an existing thread |
+| `GET` | `/chat/{threadId}` | Resume an existing thread (restores previous message bubbles) |
 | `GET` | `/documents` | Document management page |
+| `GET` | `/llm-usage` | LLM usage statistics page |
 
 ### REST API
 
@@ -215,3 +232,5 @@ User question
 | `POST` | `/api/documents/sync` | Incremental folder sync |
 | `GET` | `/api/documents` | List indexed documents |
 | `DELETE` | `/api/documents/{docId}` | Delete a document |
+| `GET` | `/api/llm/usage` | Per-provider token usage + Circuit Breaker status |
+| `GET` | `/api/llm/usage/history` | Daily token history (`?days=7\|30\|90`) |

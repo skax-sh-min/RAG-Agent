@@ -96,7 +96,7 @@ EMBED_MODEL=text-embedding-nomic-embed-text-v1.5
 
 ```
 rag_java/
-├── pom.xml                            # Spring Boot 3.3 + Spring AI 1.0.0
+├── pom.xml                            # Spring Boot 3.5 + Spring AI 1.1.4
 ├── Dockerfile / docker-compose.yml
 ├── .env.example
 └── src/main/
@@ -105,16 +105,19 @@ rag_java/
     │   │   ├── AgentState.java        # 불변 record — 노드 간 파이프라인 상태
     │   │   └── AgentGraph.java        # 그래프 실행 엔진 (switch expression)
     │   ├── config/
-    │   │   ├── AppProperties.java     # @ConfigurationProperties
+    │   │   ├── AppProperties.java     # @ConfigurationProperties (LlmConfig 포함)
     │   │   └── WebConfig.java         # ChatClient 빈 + CORS + i18n (CookieLocaleResolver)
     │   ├── controller/
     │   │   ├── ApiController.java     # REST API (/api/*)
-    │   │   └── WebController.java     # Web UI HTMX 핸들러 (/ui/*, /chat/*, /documents)
+    │   │   └── WebController.java     # Web UI HTMX 핸들러 (/ui/*, /chat/*, /llm-usage)
+    │   ├── llm/
+    │   │   └── CircuitBreaker.java    # LLM 프로바이더 인메모리 차단 관리
     │   ├── model/                     # Java 21 record
-    │   │   └── ChatRequest/Response/DocumentInfo/SyncResult/ThreadMeta/ChatForm.java
+    │   │   └── ChatRequest/Response/SourceRef/DocumentInfo/SyncResult/ThreadMeta/ChatForm/LlmProviderReport.java
     │   ├── repository/
-    │   │   ├── MemoryRepository.java          # 대화 메모리 추상 인터페이스
-    │   │   └── SqliteMemoryRepository.java    # SQLite WAL 기반 구현
+    │   │   ├── MemoryRepository.java          # 대화 메모리 추상 인터페이스 (getTurns 포함)
+    │   │   ├── SqliteMemoryRepository.java    # SQLite WAL 기반 구현
+    │   │   └── LlmUsageRepository.java        # LLM 토큰 사용량 SQLite 저장소
     │   └── service/
     │       ├── AgentService.java          # 에이전트 파이프라인 진입점
     │       ├── ClassifierService.java     # 질문 유형 분류 노드
@@ -132,16 +135,23 @@ rag_java/
         ├── application.properties
         ├── messages.properties            # UI 문자열 — English (기본)
         ├── messages_ko.properties         # UI 문자열 — 한국어
-        ├── static/css/app.css
+        ├── static/
+        │   └── css/
+        │       ├── app.css                # 커스텀 스타일 (버블·애니메이션·업로드 진행바 등)
+        │       └── theme.css              # 라이트/다크 CSS 변수 + Bootstrap 다크 모드 오버라이드
         └── templates/
             ├── layout/base.html           # 공통 레이아웃 (Thymeleaf Layout Dialect)
-            ├── chat.html                  # 채팅 페이지
+            ├── chat.html                  # 채팅 페이지 (이전 turn 서버 렌더 포함)
             ├── documents.html             # 문서 관리 페이지
+            ├── llm-usage.html             # LLM 사용량 통계 페이지
             └── fragments/
+                ├── llm-usage-cards.html   # 프로바이더 카드 (HTMX 30초 자동 갱신)
                 ├── thread-list.html       # HTMX 스레드 목록 fragment
                 ├── thread-item.html       # HTMX 스레드 아이템 fragment
-                ├── doc-table-body.html    # HTMX 문서 테이블 fragment
-                ├── message-assistant.html # HTMX 답변 버블 fragment
+                ├── doc-row.html           # HTMX 문서 테이블 행 fragment
+                ├── doc-table-body.html    # HTMX 문서 테이블 tbody fragment
+                ├── message-user.html      # 사용자 메시지 버블 fragment
+                ├── message-assistant.html # HTMX 답변 버블 (출처 hover preview 포함)
                 ├── message-error.html     # HTMX 에러 버블 fragment
                 └── sync-result.html       # HTMX 동기화 결과 toast fragment
 ```
@@ -162,12 +172,18 @@ rag_java/
 
 ## 주요 기능
 
-- **Web UI** — Thymeleaf + HTMX 기반 채팅·문서 관리 화면, KO/EN 언어 전환
+- **Web UI** — Thymeleaf + HTMX 기반 채팅·문서 관리·LLM 사용량 화면, KO/EN 언어 전환
+- **다크 모드** — CSS 변수 기반 라이트/다크 전환, `prefers-color-scheme` 자동 감지 + `localStorage` 사용자 override
 - **질문 분류 + 라우팅** — meta(인사·잡담)는 RAG 없이 직접 응답, 나머지는 풀 파이프라인
 - **벡터 검색** — LLM이 최적 검색 쿼리를 생성한 뒤 Chroma 유사도 검색
 - **ReAct 재검색** — 증거 부족 시 최대 2회 자동 재검색
 - **Critic 검증** — 생성된 답변이 문서에 근거하는지 LLM이 이중 검증
 - **멀티턴 대화** — `thread_id` 기반 대화 이력 유지 (SQLite WAL, 재시작 후에도 영속)
+- **메시지 버블 복원** — `/chat/{threadId}` 재진입 시 이전 turn 메시지 버블 서버 렌더링
+- **출처 hover 미리보기** — `SourceRef` 구조체 기반 Bootstrap Popover, 출처 hover 시 청크 텍스트 200자 미리보기
+- **코드 syntax highlight** — DOMPurify sanitize 후 highlight.js 적용, 다크 모드 연동
+- **LLM 사용량 대시보드** — 프로바이더별 일간·주간·월간 토큰 사용량, Chart.js 일별 히스토리 차트
+- **Circuit Breaker** — HTTP 429/오류 시 프로바이더 자동 차단, 우선순위 기반 failover
 - **문서 버전 관리** — 버전별 Chroma 컬렉션 분리 (`manual_{version}`)
 - **증분 인덱싱** — SHA-256 기반 변경 감지, `doc_registry.json` 영속
 - **다양한 문서 형식** — PDF, PPTX, DOCX, TXT, MD
@@ -180,8 +196,9 @@ rag_java/
 | Method | Path | 설명 |
 |--------|------|------|
 | `GET` | `/` | 채팅 홈 (새 스레드 생성) |
-| `GET` | `/chat/{threadId}` | 기존 스레드 채팅 화면 |
+| `GET` | `/chat/{threadId}` | 기존 스레드 채팅 화면 (이전 메시지 버블 복원) |
 | `GET` | `/documents` | 문서 관리 화면 |
+| `GET` | `/llm-usage` | LLM 사용량 통계 페이지 |
 
 ### REST API
 
@@ -193,3 +210,5 @@ rag_java/
 | `POST` | `/api/documents/sync` | 증분 동기화 |
 | `GET` | `/api/documents` | 인덱싱된 문서 목록 |
 | `DELETE` | `/api/documents/{docId}` | 문서 삭제 |
+| `GET` | `/api/llm/usage` | 프로바이더별 토큰 사용량 + Circuit Breaker 상태 |
+| `GET` | `/api/llm/usage/history` | 일별 토큰 히스토리 (`?days=7\|30\|90`) |

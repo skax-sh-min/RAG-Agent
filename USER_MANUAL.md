@@ -18,6 +18,9 @@
 - **멀티턴 대화** — 스레드 단위 대화 이력 유지 (SQLite 영속, 재시작 후에도 유지)
 - **증분 인덱싱** — SHA-256 기반 변경 감지, 청크별 키워드 메타데이터 자동 추출 (`KeywordMetadataEnricher`)
 - **문서 버전 관리** — 버전별 독립된 Chroma 컬렉션
+- **다크 모드** — CSS 변수 기반 라이트/다크 전환, 시스템 설정 자동 감지 + 사용자 override 저장
+- **출처 hover 미리보기** — 답변 출처 항목에 마우스를 올리면 관련 청크 텍스트 200자 미리보기
+- **코드 syntax highlight** — 답변 내 코드 블록에 언어별 하이라이트 적용 (다크 모드 연동)
 
 ---
 
@@ -34,9 +37,15 @@ rag_java/
 ├── data/                          # 런타임 생성 (DATA_DIR)
 │   ├── documents/                 # 업로드된 문서 원본 (Sync 대상)
 │   ├── doc_registry.json          # 인덱싱 레지스트리
-│   └── memory.db                  # 대화 이력 (SQLite)
+│   └── memory.db                  # 대화 이력 + LLM 사용량 (SQLite)
 └── src/main/
-    ├── java/…                     # 애플리케이션 소스
+    ├── java/com/example/ragagent/
+    │   ├── llm/
+    │   │   └── CircuitBreaker.java        # LLM 프로바이더 인메모리 차단 관리
+    │   ├── model/
+    │   │   └── LlmProviderReport.java     # LLM 사용량 뷰 모델
+    │   └── repository/
+    │       └── LlmUsageRepository.java    # SQLite llm_usage 테이블 CRUD
     └── resources/
         ├── application.properties
         ├── messages.properties    # UI 문자열 — English (기본)
@@ -44,9 +53,12 @@ rag_java/
         ├── static/css/app.css
         └── templates/
             ├── layout/base.html   # 공통 레이아웃
-            ├── chat.html          # 채팅 페이지
+            ├── chat.html          # 채팅 페이지 (이전 turn 서버 렌더 포함)
             ├── documents.html     # 문서 관리 페이지
-            └── fragments/        # HTMX partial fragments
+            ├── llm-usage.html     # LLM 사용량 통계 페이지
+            └── fragments/
+                ├── llm-usage-cards.html   # 프로바이더 카드 (HTMX 30초 자동 갱신)
+                └── …              # 기타 HTMX partial fragments
 ```
 
 ---
@@ -241,11 +253,16 @@ Navbar 우측 상단 **KO | EN** 링크를 클릭하면 즉시 언어가 전환�
 3. 좌측 상단 **version** 입력창에 검색할 문서 버전 입력 (기본: `latest`)
 4. 하단 입력창에 질문 입력 후 **Enter** (줄바꿈: **Shift+Enter**)
 5. 답변 버블에서 출처(Sources)·소요 시간·토큰 수 확인 가능
+   - 출처 항목에 마우스를 올리면 관련 문서 청크 텍스트 미리보기 팝오버 표시
 
 **스레드 관리**:
-- 사이드바에서 이전 대화 클릭 → 이어서 질문 가능
+- 사이드바에서 이전 대화 클릭 → 이전 메시지 버블 복원 + 이어서 질문 가능
 - 연필 아이콘 → 대화 제목 인라인 편집
 - 휴지통 아이콘 → 대화 삭제
+
+> **메시지 버블 복원**: `/chat/{threadId}` 진입 시 `conversation_turns` 테이블에서  
+> 이전 turn을 모두 불러와 사용자/어시스턴트 버블로 서버 렌더링합니다.  
+> 단, 이전 turn의 토큰 수·출처 메타데이터는 DB에 저장되지 않으므로 새 turn에서만 표시됩니다.
 
 ### 5.3 문서 관리
 
@@ -261,6 +278,19 @@ Navbar 우측 상단 **KO | EN** 링크를 클릭하면 즉시 언어가 전환�
 - 지원 형식: PDF, PPTX, DOCX, TXT, MD / 최대 100 MB
 - 업로드 중 파일별 진행 바 + 전체 진행 표시
 - Sync 결과(신규/업데이트/삭제 건수)는 우측 하단 toast로 표시
+
+### 5.4 LLM 사용량 통계
+
+`/llm-usage` 접속 후:
+
+| 영역 | 설명 |
+|------|------|
+| **프로바이더 카드** | 설정된 LLM 프로바이더별 상태 카드 — 정상(초록) / 차단 중(빨강 + 남은 시간 카운트다운) |
+| **일별 차트** | Chart.js 누적 막대 차트 — 7일 / 30일 / 90일 기간 선택, 프로바이더별 색상 구분 |
+| **기간별 테이블** | 오늘 / 이번 주 / 이번 달 탭 전환 — 프로바이더별 입력/출력/합계 토큰 및 호출 수 |
+
+- 카드 영역은 30초마다 자동 갱신 (HTMX)
+- Circuit Breaker 차단 중인 프로바이더는 카드 테두리 빨강 강조 + 차단 해제까지 MM:SS 카운트다운
 
 ---
 
@@ -349,7 +379,18 @@ curl -X POST http://localhost:8080/api/chat \
 {
   "answer": "## 요약\n...",
   "question_type": "usage",
-  "sources": ["spring-security-guide.pdf | vlatest | p.12"]
+  "sources": [
+    {
+      "label": "spring-security-guide.pdf | vlatest | p.12",
+      "preview": "Spring Security에서 JWT 인증 필터를 구성하려면...",
+      "doc_id": "spring-security-guide.pdf_a1b2c3d4",
+      "page_or_slide": 12
+    }
+  ],
+  "total_input_tokens": 1248,
+  "total_output_tokens": 512,
+  "llm_call_count": 4,
+  "elapsed_seconds": 3.2
 }
 ```
 
@@ -362,6 +403,37 @@ curl -X POST http://localhost:8080/api/chat \
 | `error` | 오류·트러블슈팅 |
 | `version` | 버전·변경사항 |
 | `meta` | 인사·잡담 (RAG 미사용) |
+
+### 6.7 LLM 사용량 조회
+
+프로바이더별 토큰 사용량과 Circuit Breaker 상태를 조회합니다.
+
+```bash
+# 일간·주간·월간 집계 + Circuit Breaker 상태
+curl http://localhost:8080/api/llm/usage
+```
+
+응답:
+```json
+[
+  {
+    "provider": "local",
+    "type": "LIGHT_BOTH",
+    "model": "gpt-4o",
+    "daily":   { "inputTokens": 1200, "outputTokens": 340, "callCount": 5 },
+    "weekly":  { "inputTokens": 8400, "outputTokens": 2100, "callCount": 32 },
+    "monthly": { "inputTokens": 32000, "outputTokens": 8500, "callCount": 120 },
+    "blockedUntil": null
+  }
+]
+```
+
+```bash
+# 일별 히스토리 (Chart.js 데이터, days=7|30|90)
+curl "http://localhost:8080/api/llm/usage/history?days=30"
+```
+
+응답: `{ "local": [{ "date": "2026-04-01", "inputTokens": 500, "outputTokens": 120, "callCount": 3 }, …] }`
 
 ---
 
@@ -411,7 +483,8 @@ curl -X POST http://localhost:8080/api/chat \
 `MemoryService`는 **SQLite**(`DATA_DIR/memory.db`)에 대화 이력을 영속합니다.
 
 - WAL 모드로 읽기/쓰기 경합 최소화
-- 스레드별 최근 50턴 이내에서 `MAX_CONVERSATION_CHARS`까지 컨텍스트 주입
+- 스레드별 최근 50턴 이내에서 `MAX_CONVERSATION_CHARS`까지 LLM 컨텍스트 주입
+- `/chat/{threadId}` 재진입 시 모든 이전 turn을 시간순으로 불러와 메시지 버블 복원 (`getTurns()`)
 - `MemoryRepository` 인터페이스로 추상화 — Redis 등으로 교체 시 구현체만 추가
 
 ### 8.2 문서 버전 관리
@@ -441,6 +514,25 @@ Web UI에서는 채팅 사이드바 상단의 **version** 입력창에 버전을
 ### 8.4 성능
 
 Java 21 Virtual Threads(`spring.threads.virtual.enabled=true`)가 활성화되어 LLM I/O 동시 요청을 효율적으로 처리합니다.
+
+### 8.5 LLM 프로바이더 및 Circuit Breaker
+
+`application.properties`에 복수 LLM 프로바이더를 설정할 수 있습니다.
+
+```properties
+app.llm.circuit-breaker-minutes=2          # 에러/429 발생 시 차단 지속 시간 (분)
+app.llm.providers[0].name=local
+app.llm.providers[0].base-url=http://localhost:1234/v1
+app.llm.providers[0].api-key=lm-studio
+app.llm.providers[0].model=gpt-4o
+app.llm.providers[0].type=LIGHT_BOTH       # LIGHT_BOTH | BOTH | TEXT | EMBED
+app.llm.providers[0].priority=0            # 낮을수록 우선 선택 (0 = 최우선)
+```
+
+- HTTP 429 / 402 응답 → `Retry-After` 헤더 파싱 후 해당 프로바이더 일시 차단
+- 기타 5xx / 네트워크 오류 → 30초 임시 차단 후 다음 우선순위 프로바이더로 자동 전환
+- 모든 프로바이더 소진 시 → `priority=0` local LLM 최종 fallback
+- 차단 상태는 인메모리(`ConcurrentHashMap`) 유지 — 서버 재시작 시 초기화
 
 ---
 
@@ -500,6 +592,8 @@ docker-compose logs app
 - [ ] 문서 목록에 업로드 문서 표시 확인
 - [ ] 샘플 질문 응답 성공 + Sources 포함 확인
 - [ ] 후속 질문 시 이전 맥락 반영 (멀티턴 확인)
+- [ ] 대화 재진입 시 이전 메시지 버블 복원 확인 (`/chat/{threadId}`)
+- [ ] LLM 사용량 페이지 확인 (`/llm-usage` — 프로바이더 카드·차트·기간별 테이블)
 - [ ] KO/EN 언어 전환 동작 확인
 
 이상 없으면 서비스 정상입니다.
