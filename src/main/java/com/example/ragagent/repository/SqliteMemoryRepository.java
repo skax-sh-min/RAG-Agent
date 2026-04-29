@@ -70,4 +70,16 @@ public class SqliteMemoryRepository implements MemoryRepository {
     public void clearHistory(String threadId) {
         jdbc.update("DELETE FROM conversation_turns WHERE thread_id = ?", threadId);
     }
+
+    @Override
+    public List<Turn> getTurns(String threadId) {
+        return jdbc.query(
+                "SELECT question, answer, created_at FROM conversation_turns " +
+                "WHERE thread_id = ? ORDER BY id ASC",
+                (rs, n) -> new Turn(
+                        rs.getString("question"),
+                        rs.getString("answer"),
+                        rs.getString("created_at")),
+                threadId);
+    }
 }

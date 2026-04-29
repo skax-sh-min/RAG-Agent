@@ -4,6 +4,8 @@ import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.repository.MemoryRepository;
 import org.springframework.stereotype.Service;
 
+import java.util.List;
+
 /**
  * Multi-turn conversation memory keyed by thread_id.
  * Equivalent to LangGraph MemorySaver in the Python version.
@@ -30,5 +32,9 @@ public class MemoryService {
 
     public void clearHistory(String threadId) {
         repository.clearHistory(threadId);
+    }
+
+    public List<MemoryRepository.Turn> getTurns(String threadId) {
+        return repository.getTurns(threadId);
     }
 }

@@ -70,6 +70,7 @@ public class WebController {
         populateChatModel(model, threadId, version, meta);
         if (meta != null) {
             model.addAttribute("historyCount", threadMetaService.countTurns(threadId));
+            model.addAttribute("turns", memoryService.getTurns(threadId));
         }
         return "chat";
     }
