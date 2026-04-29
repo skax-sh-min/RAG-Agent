@@ -7,14 +7,14 @@
 
 /* ── Message bubbles ─────────────────────────────────────────────────── */
 .bubble-user {
-    background: #0d6efd;
+    background: var(--bg-bubble-user);
     color: white;
     border-radius: 1rem 1rem 0 1rem;
     max-width: 75%;
 }
 .bubble-assistant {
-    background: #ffffff;
-    border: 1px solid #dee2e6;
+    background: var(--bg-bubble-bot);
+    border: 1px solid var(--border-default);
     border-radius: 1rem 1rem 1rem 0;
     max-width: 85%;
 }
@@ -25,7 +25,7 @@
     width: 8px;
     height: 8px;
     border-radius: 50%;
-    background: #aaa;
+    background: var(--fg-muted);
     animation: blink 1.2s infinite;
 }
 .typing-dot:nth-child(2) { animation-delay: 0.2s; }
@@ -49,19 +49,19 @@
     padding: 8px 10px;
     user-select: none;
 }
-.thread-item:hover  { background: #f0f4ff; }
-.thread-item.active { background: #e7f0ff; font-weight: 600; }
+.thread-item:hover  { background: var(--thread-hover); }
+.thread-item.active { background: var(--thread-active); font-weight: 600; }
 
 /* ── Drag-and-drop zone ──────────────────────────────────────────────── */
 .drop-zone {
-    border: 2px dashed #ced4da;
+    border: 2px dashed var(--border-default);
     border-radius: 8px;
     transition: all 0.2s;
     cursor: pointer;
 }
 .drop-zone.dragover {
     border-color: #0d6efd;
-    background: #e7f1ff;
+    background: var(--dropzone-hover);
 }
 
 /* ── Upload progress bar ─────────────────────────────────────────────── */
@@ -92,8 +92,8 @@
 .md-content h5,
 .md-content h6 { font-size: 0.9rem;  font-weight: 600; }
 .md-content pre {
-    background: #f8f9fa;
-    border: 1px solid #e9ecef;
+    background: var(--code-bg);
+    border: 1px solid var(--border-default);
     border-radius: 6px;
     padding: 0.75rem;
     font-size: 0.85rem;
@@ -104,16 +104,16 @@
 .md-content ol         { padding-left: 1.25rem; margin-bottom: 0.5rem; }
 .md-content li         { margin-bottom: 0.2rem; }
 .md-content blockquote {
-    border-left: 3px solid #dee2e6;
+    border-left: 3px solid var(--border-default);
     margin: 0.5rem 0;
     padding: 0.25rem 0.75rem;
-    color: #6c757d;
+    color: var(--fg-muted);
 }
 .md-content table      { width: 100%; border-collapse: collapse; font-size: 0.9rem; margin: 0.5rem 0; }
 .md-content th,
-.md-content td         { border: 1px solid #dee2e6; padding: 0.35rem 0.6rem; text-align: left; }
-.md-content th         { background: #f8f9fa; font-weight: 600; }
-.md-content hr         { margin: 0.75rem 0; border-color: #dee2e6; }
+.md-content td         { border: 1px solid var(--border-default); padding: 0.35rem 0.6rem; text-align: left; }
+.md-content th         { background: var(--bg-elevated); font-weight: 600; }
+.md-content hr         { margin: 0.75rem 0; border-color: var(--border-default); }
 .md-content a          { color: #0d6efd; }
 .md-content p:last-child { margin-bottom: 0; }
 

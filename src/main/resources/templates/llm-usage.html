@@ -93,6 +93,18 @@
 
     let chartInstance = null;
 
+    function syncChartDefaults() {
+        const dark = document.documentElement.getAttribute('data-theme') === 'dark';
+        Chart.defaults.color       = dark ? '#8b949e' : '#666666';
+        Chart.defaults.borderColor = dark ? '#30363d' : '#dee2e6';
+    }
+
+    document.addEventListener('themechange', function () {
+        syncChartDefaults();
+        const activeDaysBtn = document.querySelector('[data-days].active');
+        loadChart(activeDaysBtn ? parseInt(activeDaysBtn.dataset.days) : 30);
+    });
+
     // ── Chart ─────────────────────────────────────────────────────────────
     async function loadChart(days) {
         const res  = await fetch('/api/llm/usage/history?days=' + days);
@@ -219,6 +231,7 @@
     document.addEventListener('htmx:afterSettle', initCountdowns);
 
     // ── Initial load ──────────────────────────────────────────────────────
+    syncChartDefaults();
     loadChart(30);
     loadTable('daily');
     initCountdowns();
