@@ -1,5 +1,6 @@
 package com.example.ragagent.agent;
 
+import com.example.ragagent.model.SourceRef;
 import org.springframework.ai.document.Document;
 
 import java.util.List;
@@ -15,7 +16,7 @@ public record AgentState(
         String threadId,
         String questionType,
         List<Document> retrievedDocs,
-        List<String> sources,
+        List<SourceRef> sources,
         List<String> retrievalWarnings,
         String answer,
         int retryCount,
@@ -55,7 +56,7 @@ public record AgentState(
                 totalInputTokens, totalOutputTokens, llmCallCount);
     }
 
-    public AgentState withSources(List<String> sources) {
+    public AgentState withSources(List<SourceRef> sources) {
         return new AgentState(question, version, threadId, questionType,
                 retrievedDocs, sources, retrievalWarnings,
                 answer, retryCount, needsRetry, conversationHistory,

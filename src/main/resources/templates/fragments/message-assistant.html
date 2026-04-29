@@ -22,7 +22,14 @@
                 (<span th:text="${#lists.size(sources)}"></span>)
             </summary>
             <ul class="mt-1 mb-0 small ps-3">
-                <li th:each="src : ${sources}" th:text="${src}"></li>
+                <li th:each="src : ${sources}">
+                    <a href="#" class="source-ref text-decoration-none"
+                       th:text="${src.label}"
+                       th:attr="data-bs-toggle='popover',
+                                data-bs-trigger='hover focus',
+                                data-bs-placement='left',
+                                data-bs-content=${src.preview}"></a>
+                </li>
             </ul>
         </details>
 
@@ -47,6 +54,11 @@
 </div>
 
 <script>
+    /* Initialize Bootstrap Popovers on source refs in this fragment */
+    document.querySelectorAll('.source-ref[data-bs-toggle="popover"]').forEach(function (el) {
+        new bootstrap.Popover(el);
+    });
+
     /* Render all un-rendered md-content blocks with XSS sanitization + syntax highlight */
     document.querySelectorAll('.md-content[data-md]').forEach(function (el) {
         const raw = el.dataset.md || '';

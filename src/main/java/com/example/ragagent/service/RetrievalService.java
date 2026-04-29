@@ -2,6 +2,7 @@ package com.example.ragagent.service;
 
 import com.example.ragagent.agent.AgentState;
 import com.example.ragagent.config.AppProperties;
+import com.example.ragagent.model.SourceRef;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
@@ -52,8 +53,12 @@ public class RetrievalService {
 
         List<Document> unique = deduplicate(allDocs);
 
-        List<String> sources = unique.stream()
-                .map(this::formatSource)
+        List<SourceRef> sources = unique.stream()
+                .map(d -> new SourceRef(
+                        formatSource(d),
+                        truncate(d.getText(), 200),
+                        String.valueOf(d.getMetadata().getOrDefault("doc_id", "")),
+                        d.getMetadata().getOrDefault("page_or_slide", "?")))
                 .distinct()
                 .toList();
 
@@ -91,5 +96,11 @@ public class RetrievalService {
         String version  = String.valueOf(meta.getOrDefault("version", "latest"));
         Object page     = meta.getOrDefault("page_or_slide", "?");
         return "%s | v%s | p.%s".formatted(filename, version, page);
+    }
+
+    private static String truncate(String text, int max) {
+        if (text == null) return "";
+        String stripped = text.strip();
+        return stripped.length() <= max ? stripped : stripped.substring(0, max) + "…";
     }
 }

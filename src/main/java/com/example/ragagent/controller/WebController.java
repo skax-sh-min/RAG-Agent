@@ -107,7 +107,6 @@ public class WebController {
             ChatRequest req = new ChatRequest(form.question(), form.version(), form.threadId());
             com.example.ragagent.model.ChatResponse resp = agentService.chat(req);
 
-            memoryService.addTurn(form.threadId(), form.question(), resp.answer());
             threadMetaService.generateTitleAsync(form.threadId(), form.version(), form.question());
 
             model.addAttribute("answer", resp.answer());
