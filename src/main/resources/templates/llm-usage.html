@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org"
+      xmlns:layout="http://www.ultraq.net.nz/thymeleaf/layout"
+      layout:decorate="~{layout/base}"
+      th:lang="${#locale.language}">
+<head>
+    <title th:text="#{nav.llm_usage}">LLM Usage</title>
+</head>
+<body>
+
+<section layout:fragment="content" class="container-fluid py-4 px-4">
+
+    <h5 class="fw-semibold mb-4">
+        <i class="bi bi-bar-chart-line me-2"></i>
+        <span th:text="#{llm.usage.title}">LLM Usage Statistics</span>
+    </h5>
+
+    <!-- ── Provider status cards (HTMX auto-refresh every 30 s) ────────── -->
+    <div id="llm-cards-target"
+         hx-get="/ui/llm-usage/cards"
+         hx-trigger="every 30s"
+         hx-swap="innerHTML"
+         th:insert="~{fragments/llm-usage-cards :: cards}">
+    </div>
+
+    <!-- ── Daily token usage chart ──────────────────────────────────────── -->
+    <div class="card mt-4">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <span th:text="#{llm.chart.title}">Daily Token Usage</span>
+            <div class="btn-group btn-group-sm" role="group">
+                <button type="button" class="btn btn-outline-secondary" data-days="7">7d</button>
+                <button type="button" class="btn btn-outline-secondary active" data-days="30">30d</button>
+                <button type="button" class="btn btn-outline-secondary" data-days="90">90d</button>
+            </div>
+        </div>
+        <div class="card-body">
+            <canvas id="usageChart" style="max-height:280px;"></canvas>
+        </div>
+    </div>
+
+    <!-- ── Period detail table ──────────────────────────────────────────── -->
+    <div class="card mt-4 mb-4">
+        <div class="card-header pb-0">
+            <ul class="nav nav-tabs card-header-tabs">
+                <li class="nav-item">
+                    <button class="nav-link active" data-period="daily"
+                            th:text="#{llm.period.today}">Today</button>
+                </li>
+                <li class="nav-item">
+                    <button class="nav-link" data-period="weekly"
+                            th:text="#{llm.period.week}">This Week</button>
+                </li>
+                <li class="nav-item">
+                    <button class="nav-link" data-period="monthly"
+                            th:text="#{llm.period.month}">This Month</button>
+                </li>
+            </ul>
+        </div>
+        <div class="card-body p-0">
+            <div class="table-responsive">
+                <table class="table table-sm mb-0">
+                    <thead class="table-light">
+                    <tr>
+                        <th class="ps-3" th:text="#{llm.col.provider}">Provider</th>
+                        <th th:text="#{llm.col.type}">Type</th>
+                        <th class="text-end" th:text="#{llm.col.input}">Input</th>
+                        <th class="text-end" th:text="#{llm.col.output}">Output</th>
+                        <th class="text-end" th:text="#{llm.col.total}">Total</th>
+                        <th class="text-end pe-3" th:text="#{llm.col.calls}">Calls</th>
+                        <th th:text="#{llm.col.status}">Status</th>
+                    </tr>
+                    </thead>
+                    <tbody id="usage-table-body">
+                    <tr>
+                        <td colspan="7" class="text-center py-3">
+                            <div class="spinner-border spinner-border-sm text-secondary" role="status"></div>
+                        </td>
+                    </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+</section>
+
+<!-- ── Page scripts ──────────────────────────────────────────────────────── -->
+<th:block layout:fragment="scripts">
+    <script th:src="@{/webjars/chart.js/dist/chart.umd.min.js}"></script>
+    <script>
+    // ── Colors (by provider index) ────────────────────────────────────────
+    const CHART_COLORS = ['#198754','#0d6efd','#0dcaf0','#6f42c1','#fd7e14','#dc3545'];
+
+    let chartInstance = null;
+
+    // ── Chart ─────────────────────────────────────────────────────────────
+    async function loadChart(days) {
+        const res  = await fetch('/api/llm/usage/history?days=' + days);
+        const data = await res.json();
+
+        // Build a full date axis (gaps filled with 0)
+        const today = new Date();
+        const dates = [];
+        for (let i = days - 1; i >= 0; i--) {
+            const d = new Date(today);
+            d.setDate(d.getDate() - i);
+            dates.push(d.toISOString().slice(0, 10));
+        }
+
+        const providers = Object.keys(data);
+        const datasets  = providers.map((name, idx) => ({
+            label: name,
+            data: dates.map(d => {
+                const row = (data[name] || []).find(r => r.date === d);
+                return row ? row.inputTokens + row.outputTokens : 0;
+            }),
+            backgroundColor: CHART_COLORS[idx % CHART_COLORS.length],
+            stack: 'tokens'
+        }));
+
+        if (chartInstance) chartInstance.destroy();
+        chartInstance = new Chart(document.getElementById('usageChart'), {
+            type: 'bar',
+            data: { labels: dates, datasets },
+            options: {
+                responsive: true,
+                scales: {
+                    y: { stacked: true, beginAtZero: true,
+                         ticks: { callback: v => v.toLocaleString() } },
+                    x: { stacked: true, ticks: { maxTicksLimit: 14 } }
+                },
+                plugins: {
+                    legend: { position: 'top' },
+                    tooltip: {
+                        callbacks: {
+                            label: ctx => ctx.dataset.label + ': ' + ctx.parsed.y.toLocaleString()
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    // ── Period table ──────────────────────────────────────────────────────
+    async function loadTable(period) {
+        const res     = await fetch('/api/llm/usage');
+        const reports = await res.json();
+        const tbody   = document.getElementById('usage-table-body');
+
+        if (!reports || reports.length === 0) {
+            tbody.innerHTML = `<tr><td colspan="7" class="text-center text-muted py-3">${I18N.llmNoProviders}</td></tr>`;
+            return;
+        }
+
+        let totalIn = 0, totalOut = 0, totalCalls = 0;
+        const rows = reports.map(r => {
+            const s = r[period];
+            totalIn    += s.inputTokens;
+            totalOut   += s.outputTokens;
+            totalCalls += s.callCount;
+            const badge = r.blockedUntil
+                ? `<span class="badge bg-danger"><i class="bi bi-x-circle me-1"></i>${I18N.llmStatusBlocked}</span>`
+                : `<span class="badge bg-success"><i class="bi bi-check-circle me-1"></i>${I18N.llmStatusNormal}</span>`;
+            return `<tr>
+                <td class="ps-3 fw-semibold">${r.provider}</td>
+                <td><span class="badge bg-secondary">${r.type}</span></td>
+                <td class="text-end">${s.inputTokens.toLocaleString()}</td>
+                <td class="text-end">${s.outputTokens.toLocaleString()}</td>
+                <td class="text-end">${(s.inputTokens + s.outputTokens).toLocaleString()}</td>
+                <td class="text-end pe-3">${s.callCount.toLocaleString()}</td>
+                <td>${badge}</td>
+            </tr>`;
+        });
+        rows.push(`<tr class="table-light fw-semibold border-top">
+            <td class="ps-3" colspan="2">${I18N.llmTableTotal}</td>
+            <td class="text-end">${totalIn.toLocaleString()}</td>
+            <td class="text-end">${totalOut.toLocaleString()}</td>
+            <td class="text-end">${(totalIn + totalOut).toLocaleString()}</td>
+            <td class="text-end pe-3">${totalCalls.toLocaleString()}</td>
+            <td></td>
+        </tr>`);
+        tbody.innerHTML = rows.join('');
+    }
+
+    // ── Blocked countdown ─────────────────────────────────────────────────
+    function initCountdowns() {
+        document.querySelectorAll('[data-blocked-until]').forEach(el => {
+            const until = new Date(el.dataset.blockedUntil).getTime();
+            function tick() {
+                const remaining = Math.max(0, Math.floor((until - Date.now()) / 1000));
+                const mm  = String(Math.floor(remaining / 60)).padStart(2, '0');
+                const ss  = String(remaining % 60).padStart(2, '0');
+                const span = el.querySelector('.blocked-countdown');
+                if (span) span.textContent = mm + ':' + ss;
+                if (remaining > 0) setTimeout(tick, 1000);
+            }
+            tick();
+        });
+    }
+
+    // ── Event wiring ──────────────────────────────────────────────────────
+    document.querySelectorAll('[data-period]').forEach(btn => {
+        btn.addEventListener('click', e => {
+            document.querySelectorAll('[data-period]').forEach(b => b.classList.remove('active'));
+            e.currentTarget.classList.add('active');
+            loadTable(e.currentTarget.dataset.period);
+        });
+    });
+
+    document.querySelectorAll('[data-days]').forEach(btn => {
+        btn.addEventListener('click', e => {
+            document.querySelectorAll('[data-days]').forEach(b => b.classList.remove('active'));
+            e.currentTarget.classList.add('active');
+            loadChart(parseInt(e.currentTarget.dataset.days));
+        });
+    });
+
+    // Re-run countdowns after HTMX card refresh
+    document.addEventListener('htmx:afterSettle', initCountdowns);
+
+    // ── Initial load ──────────────────────────────────────────────────────
+    loadChart(30);
+    loadTable('daily');
+    initCountdowns();
+    </script>
+</th:block>
+
+</body>
+</html>

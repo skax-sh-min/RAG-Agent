@@ -1,6 +1,9 @@
 package com.example.ragagent.controller;
 
+import com.example.ragagent.config.AppProperties;
+import com.example.ragagent.llm.CircuitBreaker;
 import com.example.ragagent.model.*;
+import com.example.ragagent.repository.LlmUsageRepository;
 import com.example.ragagent.service.*;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.servlet.http.HttpSession;
@@ -14,7 +17,9 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -30,13 +35,21 @@ public class WebController {
     private final RagService ragService;
     private final ThreadMetaService threadMetaService;
     private final MemoryService memoryService;
+    private final AppProperties props;
+    private final LlmUsageRepository usageRepo;
+    private final CircuitBreaker circuitBreaker;
 
     public WebController(AgentService agentService, RagService ragService,
-                         ThreadMetaService threadMetaService, MemoryService memoryService) {
+                         ThreadMetaService threadMetaService, MemoryService memoryService,
+                         AppProperties props, LlmUsageRepository usageRepo,
+                         CircuitBreaker circuitBreaker) {
         this.agentService = agentService;
         this.ragService = ragService;
         this.threadMetaService = threadMetaService;
         this.memoryService = memoryService;
+        this.props = props;
+        this.usageRepo = usageRepo;
+        this.circuitBreaker = circuitBreaker;
     }
 
     // ── Page routes ───────────────────────────────────────────────────────
@@ -65,6 +78,12 @@ public class WebController {
     public String documents(Model model) {
         model.addAttribute("documents", ragService.listDocuments());
         return "documents";
+    }
+
+    @GetMapping("/llm-usage")
+    public String llmUsage(Model model) {
+        model.addAttribute("reports", buildProviderReports());
+        return "llm-usage";
     }
 
     // ── Chat actions ──────────────────────────────────────────────────────
@@ -198,6 +217,15 @@ public class WebController {
         return "fragments/doc-table-body :: body";
     }
 
+    // ── LLM usage ─────────────────────────────────────────────────────────
+
+    /** HTMX fragment — auto-refreshed every 30 s from the llm-usage page. */
+    @GetMapping("/ui/llm-usage/cards")
+    public String llmUsageCards(Model model) {
+        model.addAttribute("reports", buildProviderReports());
+        return "fragments/llm-usage-cards :: cards";
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────
 
     private void populateChatModel(Model model, String threadId, String version, ThreadMeta meta) {
@@ -206,5 +234,20 @@ public class WebController {
         model.addAttribute("meta", meta);
         model.addAttribute("threads", threadMetaService.getAll());
         model.addAttribute("activeThreadId", threadId);
+    }
+
+    private List<LlmProviderReport> buildProviderReports() {
+        Map<String, Instant> blocked = circuitBreaker.getBlockedProviders();
+        return props.llmSafe().providers().stream()
+                .map(cfg -> new LlmProviderReport(
+                        cfg.name(),
+                        cfg.type(),
+                        cfg.model(),
+                        usageRepo.getDaily(cfg.name()),
+                        usageRepo.getWeekly(cfg.name()),
+                        usageRepo.getMonthly(cfg.name()),
+                        blocked.get(cfg.name())
+                ))
+                .toList();
     }
 }
