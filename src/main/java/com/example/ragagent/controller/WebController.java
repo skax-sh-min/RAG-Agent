@@ -104,7 +104,7 @@ public class WebController {
         try {
             threadMetaService.getOrCreate(form.threadId(), form.version());
 
-            ChatRequest req = new ChatRequest(form.question(), form.version(), form.threadId());
+            ChatRequest req = new ChatRequest(form.question(), form.version(), form.threadId(), null);
             com.example.ragagent.model.ChatResponse resp = agentService.chat(req);
 
             threadMetaService.generateTitleAsync(form.threadId(), form.version(), form.question());

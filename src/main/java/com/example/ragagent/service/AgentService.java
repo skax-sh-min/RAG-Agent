@@ -28,7 +28,8 @@ public class AgentService {
                 request.question(),
                 request.version(),
                 request.threadId(),
-                memoryService.getHistory(request.threadId()));
+                memoryService.getHistory(request.threadId()),
+                request.routingMode());
 
         long startNano = System.nanoTime();
         AgentState result = agentGraph.run(initial);
