@@ -5,5 +5,6 @@ public record ThreadMeta(
         String title,
         String version,
         String createdAt,
-        String updatedAt
+        String updatedAt,
+        String routingMode
 ) {}

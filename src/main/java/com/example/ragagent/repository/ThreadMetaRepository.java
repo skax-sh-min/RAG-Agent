@@ -25,57 +25,72 @@ public class ThreadMetaRepository {
     void init() {
         jdbc.execute("""
                 CREATE TABLE IF NOT EXISTS thread_meta (
-                    thread_id   TEXT PRIMARY KEY,
-                    title       TEXT NOT NULL DEFAULT '새 대화',
-                    version     TEXT NOT NULL DEFAULT 'latest',
-                    created_at  TEXT NOT NULL,
-                    updated_at  TEXT NOT NULL
+                    thread_id    TEXT PRIMARY KEY,
+                    title        TEXT NOT NULL DEFAULT '새 대화',
+                    version      TEXT NOT NULL DEFAULT 'latest',
+                    created_at   TEXT NOT NULL,
+                    updated_at   TEXT NOT NULL,
+                    routing_mode TEXT NOT NULL DEFAULT 'COST_FIRST'
                 )
                 """);
+        // Migration: add routing_mode for existing databases
+        var cols = jdbc.queryForList("PRAGMA table_info(thread_meta)");
+        boolean hasRoutingMode = cols.stream().anyMatch(c -> "routing_mode".equals(c.get("name")));
+        if (!hasRoutingMode) {
+            jdbc.execute("ALTER TABLE thread_meta ADD COLUMN routing_mode TEXT NOT NULL DEFAULT 'COST_FIRST'");
+        }
     }
 
     public Optional<ThreadMeta> findById(String threadId) {
         List<ThreadMeta> rows = jdbc.query(
-                "SELECT thread_id, title, version, created_at, updated_at FROM thread_meta WHERE thread_id = ?",
+                "SELECT thread_id, title, version, created_at, updated_at, routing_mode FROM thread_meta WHERE thread_id = ?",
                 (rs, n) -> new ThreadMeta(
                         rs.getString("thread_id"),
                         rs.getString("title"),
                         rs.getString("version"),
                         rs.getString("created_at"),
-                        rs.getString("updated_at")),
+                        rs.getString("updated_at"),
+                        rs.getString("routing_mode")),
                 threadId);
         return rows.isEmpty() ? Optional.empty() : Optional.of(rows.get(0));
     }
 
     public List<ThreadMeta> findAllRecent(int limit) {
         return jdbc.query(
-                "SELECT thread_id, title, version, created_at, updated_at FROM thread_meta ORDER BY updated_at DESC LIMIT ?",
+                "SELECT thread_id, title, version, created_at, updated_at, routing_mode FROM thread_meta ORDER BY updated_at DESC LIMIT ?",
                 (rs, n) -> new ThreadMeta(
                         rs.getString("thread_id"),
                         rs.getString("title"),
                         rs.getString("version"),
                         rs.getString("created_at"),
-                        rs.getString("updated_at")),
+                        rs.getString("updated_at"),
+                        rs.getString("routing_mode")),
                 limit);
     }
 
     public void save(ThreadMeta meta) {
         jdbc.update("""
-                INSERT INTO thread_meta (thread_id, title, version, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO thread_meta (thread_id, title, version, created_at, updated_at, routing_mode)
+                VALUES (?, ?, ?, ?, ?, ?)
                 ON CONFLICT(thread_id) DO UPDATE SET
                     title      = excluded.title,
                     version    = excluded.version,
                     updated_at = excluded.updated_at
                 """,
                 meta.threadId(), meta.title(), meta.version(),
-                meta.createdAt(), meta.updatedAt());
+                meta.createdAt(), meta.updatedAt(), meta.routingMode());
     }
 
     public void updateTitle(String threadId, String title) {
         jdbc.update(
                 "UPDATE thread_meta SET title = ?, updated_at = ? WHERE thread_id = ?",
                 title, now(), threadId);
+    }
+
+    public void updateRoutingMode(String threadId, String routingMode) {
+        jdbc.update(
+                "UPDATE thread_meta SET routing_mode = ? WHERE thread_id = ?",
+                routingMode, threadId);
     }
 
     public void delete(String threadId) {

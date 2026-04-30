@@ -2,6 +2,8 @@ package com.example.ragagent.controller;
 
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.llm.CircuitBreaker;
+import com.example.ragagent.llm.LlmRouter;
+import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.model.*;
 import com.example.ragagent.repository.LlmUsageRepository;
 import com.example.ragagent.service.*;
@@ -9,8 +11,10 @@ import jakarta.servlet.http.HttpServletResponse;
 import jakarta.servlet.http.HttpSession;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Controller;
+import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
@@ -38,11 +42,12 @@ public class WebController {
     private final AppProperties props;
     private final LlmUsageRepository usageRepo;
     private final CircuitBreaker circuitBreaker;
+    private final LlmRouter llmRouter;
 
     public WebController(AgentService agentService, RagService ragService,
                          ThreadMetaService threadMetaService, MemoryService memoryService,
                          AppProperties props, LlmUsageRepository usageRepo,
-                         CircuitBreaker circuitBreaker) {
+                         CircuitBreaker circuitBreaker, LlmRouter llmRouter) {
         this.agentService = agentService;
         this.ragService = ragService;
         this.threadMetaService = threadMetaService;
@@ -50,6 +55,7 @@ public class WebController {
         this.props = props;
         this.usageRepo = usageRepo;
         this.circuitBreaker = circuitBreaker;
+        this.llmRouter = llmRouter;
     }
 
     // ── Page routes ───────────────────────────────────────────────────────
@@ -104,7 +110,11 @@ public class WebController {
         try {
             threadMetaService.getOrCreate(form.threadId(), form.version());
 
-            ChatRequest req = new ChatRequest(form.question(), form.version(), form.threadId(), null);
+            RoutingMode rm = null;
+            if (form.routingMode() != null && !form.routingMode().isBlank()) {
+                try { rm = RoutingMode.valueOf(form.routingMode()); } catch (IllegalArgumentException ignored) {}
+            }
+            ChatRequest req = new ChatRequest(form.question(), form.version(), form.threadId(), rm);
             com.example.ragagent.model.ChatResponse resp = agentService.chat(req);
 
             threadMetaService.generateTitleAsync(form.threadId(), form.version(), form.question());
@@ -125,6 +135,13 @@ public class WebController {
     }
 
     // ── Thread management ─────────────────────────────────────────────────
+
+    @PatchMapping("/ui/threads/{threadId}/routing-mode")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void updateRoutingMode(@PathVariable String threadId,
+                                   @RequestParam String routingMode) {
+        threadMetaService.updateRoutingMode(threadId, routingMode);
+    }
 
     @PatchMapping("/ui/threads/{threadId}/title")
     public String updateTitle(@PathVariable String threadId,
@@ -234,6 +251,8 @@ public class WebController {
         model.addAttribute("meta", meta);
         model.addAttribute("threads", threadMetaService.getAll());
         model.addAttribute("activeThreadId", threadId);
+        model.addAttribute("hasLocalProvider", llmRouter.hasLocalProvider());
+        model.addAttribute("routingMode", meta != null ? meta.routingMode() : "COST_FIRST");
     }
 
     private List<LlmProviderReport> buildProviderReports() {

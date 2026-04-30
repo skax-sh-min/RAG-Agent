@@ -45,7 +45,8 @@ public class ThreadMetaService {
                     threadId,
                     "[%s] 새 대화".formatted(version),
                     version,
-                    now, now);
+                    now, now,
+                    "COST_FIRST");
             repository.save(meta);
             return meta;
         });
@@ -53,6 +54,10 @@ public class ThreadMetaService {
 
     public void updateTitle(String threadId, String title) {
         repository.updateTitle(threadId, title);
+    }
+
+    public void updateRoutingMode(String threadId, String routingMode) {
+        repository.updateRoutingMode(threadId, routingMode);
     }
 
     public void delete(String threadId) {
