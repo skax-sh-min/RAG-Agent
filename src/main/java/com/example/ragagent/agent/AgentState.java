@@ -30,7 +30,8 @@ public record AgentState(
         String usedProvider,
         String premiumUpgraded,   // PROGRESSIVE: PREMIUM 프로바이더명 (null=미적용)
         String dualLocalAnswer,   // DUAL: LOCAL 모델 답변
-        String dualLocalProvider  // DUAL: LOCAL 프로바이더명
+        String dualLocalProvider, // DUAL: LOCAL 프로바이더명
+        Boolean grounded          // CRITIC 결과 (null=CRITIC 미실행)
 ) {
     public AgentState {
         retrievedDocs     = retrievedDocs     == null ? List.of() : List.copyOf(retrievedDocs);
@@ -47,7 +48,7 @@ public record AgentState(
                 null, 0, false,
                 conversationHistory,
                 0, 0, 0,
-                routingMode, null, null, null, null);
+                routingMode, null, null, null, null, null);
     }
 
     public boolean isDualMode()  { return routingMode == RoutingMode.DUAL; }
@@ -58,7 +59,7 @@ public record AgentState(
                 retrievedDocs, sources, retrievalWarnings,
                 answer, retryCount, needsRetry, conversationHistory,
                 totalInputTokens, totalOutputTokens, llmCallCount,
-                routingMode, usedProvider, premiumUpgraded, dualLocalAnswer, dualLocalProvider);
+                routingMode, usedProvider, premiumUpgraded, dualLocalAnswer, dualLocalProvider, grounded);
     }
 
     public AgentState withRetrievedDocs(List<Document> retrievedDocs) {
@@ -66,7 +67,7 @@ public record AgentState(
                 retrievedDocs, sources, retrievalWarnings,
                 answer, retryCount, needsRetry, conversationHistory,
                 totalInputTokens, totalOutputTokens, llmCallCount,
-                routingMode, usedProvider, premiumUpgraded, dualLocalAnswer, dualLocalProvider);
+                routingMode, usedProvider, premiumUpgraded, dualLocalAnswer, dualLocalProvider, grounded);
     }
 
     public AgentState withSources(List<SourceRef> sources) {
@@ -74,7 +75,7 @@ public record AgentState(
                 retrievedDocs, sources, retrievalWarnings,
                 answer, retryCount, needsRetry, conversationHistory,
                 totalInputTokens, totalOutputTokens, llmCallCount,
-                routingMode, usedProvider, premiumUpgraded, dualLocalAnswer, dualLocalProvider);
+                routingMode, usedProvider, premiumUpgraded, dualLocalAnswer, dualLocalProvider, grounded);
     }
 
     public AgentState withRetrievalWarnings(List<String> retrievalWarnings) {
@@ -82,7 +83,7 @@ public record AgentState(
                 retrievedDocs, sources, retrievalWarnings,
                 answer, retryCount, needsRetry, conversationHistory,
                 totalInputTokens, totalOutputTokens, llmCallCount,
-                routingMode, usedProvider, premiumUpgraded, dualLocalAnswer, dualLocalProvider);
+                routingMode, usedProvider, premiumUpgraded, dualLocalAnswer, dualLocalProvider, grounded);
     }
 
     public AgentState withAnswer(String answer) {
@@ -90,7 +91,7 @@ public record AgentState(
                 retrievedDocs, sources, retrievalWarnings,
                 answer, retryCount, needsRetry, conversationHistory,
                 totalInputTokens, totalOutputTokens, llmCallCount,
-                routingMode, usedProvider, premiumUpgraded, dualLocalAnswer, dualLocalProvider);
+                routingMode, usedProvider, premiumUpgraded, dualLocalAnswer, dualLocalProvider, grounded);
     }
 
     public AgentState withNeedsRetry(boolean needsRetry) {
@@ -98,7 +99,7 @@ public record AgentState(
                 retrievedDocs, sources, retrievalWarnings,
                 answer, retryCount, needsRetry, conversationHistory,
                 totalInputTokens, totalOutputTokens, llmCallCount,
-                routingMode, usedProvider, premiumUpgraded, dualLocalAnswer, dualLocalProvider);
+                routingMode, usedProvider, premiumUpgraded, dualLocalAnswer, dualLocalProvider, grounded);
     }
 
     public AgentState withRetryCountIncremented() {
@@ -106,7 +107,7 @@ public record AgentState(
                 retrievedDocs, sources, retrievalWarnings,
                 answer, retryCount + 1, needsRetry, conversationHistory,
                 totalInputTokens, totalOutputTokens, llmCallCount,
-                routingMode, usedProvider, premiumUpgraded, dualLocalAnswer, dualLocalProvider);
+                routingMode, usedProvider, premiumUpgraded, dualLocalAnswer, dualLocalProvider, grounded);
     }
 
     public AgentState withTokensAccumulated(int inputTokens, int outputTokens) {
@@ -116,7 +117,7 @@ public record AgentState(
                 totalInputTokens + inputTokens,
                 totalOutputTokens + outputTokens,
                 llmCallCount + 1,
-                routingMode, usedProvider, premiumUpgraded, dualLocalAnswer, dualLocalProvider);
+                routingMode, usedProvider, premiumUpgraded, dualLocalAnswer, dualLocalProvider, grounded);
     }
 
     public AgentState withUsedProvider(String usedProvider) {
@@ -124,7 +125,7 @@ public record AgentState(
                 retrievedDocs, sources, retrievalWarnings,
                 answer, retryCount, needsRetry, conversationHistory,
                 totalInputTokens, totalOutputTokens, llmCallCount,
-                routingMode, usedProvider, premiumUpgraded, dualLocalAnswer, dualLocalProvider);
+                routingMode, usedProvider, premiumUpgraded, dualLocalAnswer, dualLocalProvider, grounded);
     }
 
     public AgentState withPremiumUpgraded(String premiumUpgraded) {
@@ -132,7 +133,7 @@ public record AgentState(
                 retrievedDocs, sources, retrievalWarnings,
                 answer, retryCount, needsRetry, conversationHistory,
                 totalInputTokens, totalOutputTokens, llmCallCount,
-                routingMode, usedProvider, premiumUpgraded, dualLocalAnswer, dualLocalProvider);
+                routingMode, usedProvider, premiumUpgraded, dualLocalAnswer, dualLocalProvider, grounded);
     }
 
     public AgentState withDualResult(String dualLocalAnswer, String dualLocalProvider) {
@@ -140,6 +141,14 @@ public record AgentState(
                 retrievedDocs, sources, retrievalWarnings,
                 answer, retryCount, needsRetry, conversationHistory,
                 totalInputTokens, totalOutputTokens, llmCallCount,
-                routingMode, usedProvider, premiumUpgraded, dualLocalAnswer, dualLocalProvider);
+                routingMode, usedProvider, premiumUpgraded, dualLocalAnswer, dualLocalProvider, grounded);
+    }
+
+    public AgentState withGrounded(Boolean grounded) {
+        return new AgentState(question, version, threadId, questionType,
+                retrievedDocs, sources, retrievalWarnings,
+                answer, retryCount, needsRetry, conversationHistory,
+                totalInputTokens, totalOutputTokens, llmCallCount,
+                routingMode, usedProvider, premiumUpgraded, dualLocalAnswer, dualLocalProvider, grounded);
     }
 }

@@ -68,7 +68,8 @@ public class CriticService {
                 .chatResponse();
 
         state = accumulateTokens(state, chatResponse);
-        return state.withNeedsRetry(!parseGrounded(chatResponse.getResult().getOutput().getText()));
+        boolean grounded = parseGrounded(chatResponse.getResult().getOutput().getText());
+        return state.withGrounded(grounded).withNeedsRetry(!grounded);
     }
 
     private boolean parseGrounded(String response) {

@@ -172,7 +172,7 @@ public class StreamingAgentService {
         m.put("elapsedMs",         elapsedMs);
         m.put("premiumUpgraded",   result.premiumUpgraded());
         m.put("questionType",      result.questionType());
-        m.put("grounded",          null);   // Phase 2 will populate from AgentState
+        m.put("grounded",          result.grounded());
         m.put("refreshThreadList", true);
         return m;
     }

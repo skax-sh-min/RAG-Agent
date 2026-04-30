@@ -124,6 +124,8 @@
             const qt = data.questionType;
             const parts = [];
             if (qt)                       parts.push(`<span class="badge badge-${escHtml(qt)} me-1">${escHtml(qt)}</span>`);
+            if (data.grounded === true)   parts.push(`<span class="badge bg-success me-1">검증됨</span>`);
+            else if (data.grounded === false) parts.push(`<span class="badge bg-warning text-dark me-1">미검증</span>`);
             if (data.premiumUpgraded)     parts.push(`<span class="badge-upgraded ms-1">⬆ ${escHtml(data.premiumUpgraded)}</span>`);
             if (data.usedProvider)        parts.push(escHtml(data.usedProvider));
             if (data.elapsedMs != null)   parts.push(`${(data.elapsedMs / 1000).toFixed(1)}s`);
