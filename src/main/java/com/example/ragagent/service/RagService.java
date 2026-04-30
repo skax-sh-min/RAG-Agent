@@ -6,6 +6,8 @@ import com.example.ragagent.model.SyncResult;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.document.Document;
 import org.springframework.ai.model.transformer.KeywordMetadataEnricher;
@@ -21,7 +23,7 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.*;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
@@ -34,6 +36,7 @@ import java.util.stream.Stream;
 @Service
 public class RagService {
 
+    private static final Logger log = LoggerFactory.getLogger(RagService.class);
     private static final String REGISTRY_FILE = "doc_registry.json";
     private static final Pattern SAFE_VERSION = Pattern.compile("^[a-zA-Z0-9._\\-]{1,50}$");
 
@@ -119,11 +122,7 @@ public class RagService {
     }
 
     public SyncResult syncDirectory(String version) throws IOException {
-        List<String> indexed = new ArrayList<>();
-        List<String> updated = new ArrayList<>();
-        List<String> deleted = new ArrayList<>();
-
-        // Collect current files on disk
+        // Phase 1 (single thread): collect files on disk and detect what needs indexing
         Map<String, Path> filesOnDisk = new HashMap<>();
         if (Files.exists(documentsDir)) {
             try (Stream<Path> stream = Files.list(documentsDir)) {
@@ -132,34 +131,53 @@ public class RagService {
             }
         }
 
-        // Detect new / changed files
-        for (Map.Entry<String, Path> entry : filesOnDisk.entrySet()) {
-            String filename = entry.getKey();
-            Path filePath = entry.getValue();
+        record FileEntry(Path path, boolean isUpdate) {}
+        Map<String, FileEntry> filesToIndex = new HashMap<>();
+
+        for (Map.Entry<String, Path> e : filesOnDisk.entrySet()) {
+            String filename = e.getKey();
+            Path filePath = e.getValue();
             String sha256 = computeSha256(filePath);
             String docId = filename + "_" + sha256.substring(0, 8);
 
             boolean alreadyIndexed = registry.values().stream()
                     .anyMatch(r -> r.sha256().equals(sha256) && r.version().equals(version));
+            if (alreadyIndexed) continue;
 
-            if (!alreadyIndexed) {
-                // Remove stale entry for same filename+version (content changed → new sha256)
-                String staleDocId = registry.keySet().stream()
-                        .filter(k -> k.startsWith(filename + "_") && !k.equals(docId)
-                                  && version.equals(registry.get(k).version()))
-                        .findFirst().orElse(null);
-                boolean isUpdate = staleDocId != null;
-                if (isUpdate) {
-                    deleteByDocId(staleDocId, version);
-                    registry.remove(staleDocId);
-                }
-
-                indexDocument(filePath, version);
-                if (isUpdate) updated.add(filename); else indexed.add(filename);
+            String staleDocId = registry.keySet().stream()
+                    .filter(k -> k.startsWith(filename + "_") && !k.equals(docId)
+                              && version.equals(registry.get(k).version()))
+                    .findFirst().orElse(null);
+            if (staleDocId != null) {
+                deleteByDocId(staleDocId, version);
+                registry.remove(staleDocId);
             }
+            filesToIndex.put(filename, new FileEntry(filePath, staleDocId != null));
         }
 
-        // Detect deleted files
+        // Phase 2 (parallel): index each file
+        int fileConcurrency = props.indexingSafe().maxConcurrentFiles();
+        Semaphore llmGate = new Semaphore(props.indexingSafe().maxConcurrentLlmCalls());
+        List<String> indexed = new CopyOnWriteArrayList<>();
+        List<String> updated = new CopyOnWriteArrayList<>();
+
+        try (ExecutorService filePool = Executors.newFixedThreadPool(
+                fileConcurrency, Thread.ofVirtual().factory())) {
+            List<CompletableFuture<Void>> futures = filesToIndex.entrySet().stream()
+                .map(e -> CompletableFuture.runAsync(() -> {
+                    try {
+                        indexDocumentParallel(e.getValue().path(), version, llmGate);
+                        (e.getValue().isUpdate() ? updated : indexed).add(e.getKey());
+                    } catch (Exception ex) {
+                        log.error("Parallel index failed: {}", e.getKey(), ex);
+                    }
+                }, filePool))
+                .toList();
+            CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
+        }
+
+        // Phase 3 (single thread): detect deleted files
+        List<String> deleted = new ArrayList<>();
         for (String docId : new HashSet<>(registry.keySet())) {
             DocRegistryEntry entry = registry.get(docId);
             if (!version.equals(entry.version())) continue;
@@ -171,8 +189,8 @@ public class RagService {
             }
         }
 
-        if (!deleted.isEmpty()) saveRegistry();
-        return new SyncResult(indexed, updated, deleted);
+        saveRegistry();
+        return new SyncResult(List.copyOf(indexed), List.copyOf(updated), deleted);
     }
 
     public void deleteDocument(String docId, String version) throws IOException {
@@ -208,6 +226,61 @@ public class RagService {
     // ──────────────────────────────────────────────────────────────────────
     // Internal helpers
     // ──────────────────────────────────────────────────────────────────────
+
+    private void indexDocumentParallel(Path filePath, String version, Semaphore llmGate) throws IOException {
+        String filename = filePath.getFileName().toString();
+        String sha256 = computeSha256(filePath);
+        String docId = filename + "_" + sha256.substring(0, 8);
+        String docType = inferDocType(filename);
+
+        List<Document> rawDocs = loaderService.load(filePath);
+        List<Document> chunks = splitDocuments(rawDocs, filename, props.chunkSize(), props.chunkOverlap());
+
+        List<Document> tagged = new ArrayList<>();
+        for (int i = 0; i < chunks.size(); i++) {
+            Document chunk = chunks.get(i);
+            Map<String, Object> meta = new HashMap<>(chunk.getMetadata());
+            meta.put("doc_id", docId);
+            meta.put("filename", filename);
+            meta.put("version", version);
+            meta.put("doc_type", docType);
+            meta.put("sha256", sha256);
+            meta.put("collected_at", Instant.now().toString());
+            meta.putIfAbsent("source_type", "file");
+            meta.putIfAbsent("page_or_slide", i + 1);
+            tagged.add(new Document(chunk.getText(), meta));
+        }
+
+        deleteByDocId(docId, version);
+
+        List<Document> enriched = enrichParallel(tagged, llmGate);
+
+        VectorStore store = vectorStoreRegistry.getStore(version);
+        store.add(enriched);
+
+        List<String> docIds = enriched.stream().map(Document::getId).toList();
+        registry.put(docId, new DocRegistryEntry(sha256, version,
+                Instant.now().toString(), tagged.size(), docIds, List.of()));
+        // saveRegistry() intentionally omitted — called once after all parallel work completes
+    }
+
+    private List<Document> enrichParallel(List<Document> chunks, Semaphore llmGate) {
+        try (var exec = Executors.newVirtualThreadPerTaskExecutor()) {
+            return chunks.stream()
+                .map(chunk -> CompletableFuture.supplyAsync(() -> {
+                    llmGate.acquireUninterruptibly();
+                    try {
+                        return keywordEnricher.apply(List.of(chunk)).get(0);
+                    } finally {
+                        llmGate.release();
+                    }
+                }, exec))
+                .toList()
+                .stream()
+                .map(CompletableFuture::join)
+                .toList();
+        }
+    }
 
     private void deleteByDocId(String docId, String version) {
         DocRegistryEntry existing = registry.get(docId);

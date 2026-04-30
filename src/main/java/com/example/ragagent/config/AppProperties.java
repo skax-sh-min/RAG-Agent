@@ -12,7 +12,8 @@ public record AppProperties(
         int chunkSize,
         int chunkOverlap,
         int searchTopK,
-        LlmConfig llm
+        LlmConfig llm,
+        IndexingConfig indexing
 ) {
     public record LlmConfig(
             List<ProviderConfig> providers,
@@ -30,6 +31,18 @@ public record AppProperties(
             String role,
             int priority
     ) {}
+
+    public record IndexingConfig(
+            int maxConcurrentFiles,
+            int maxConcurrentLlmCalls
+    ) {}
+
+    public IndexingConfig indexingSafe() {
+        if (indexing == null) return new IndexingConfig(4, 8);
+        int files = indexing.maxConcurrentFiles() > 0 ? indexing.maxConcurrentFiles() : 4;
+        int llm   = indexing.maxConcurrentLlmCalls() > 0 ? indexing.maxConcurrentLlmCalls() : 8;
+        return new IndexingConfig(files, llm);
+    }
 
     /** Null-safe accessor — returns an empty LlmConfig when app.llm is not configured. */
     public LlmConfig llmSafe() {
