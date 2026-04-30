@@ -11,6 +11,7 @@ import java.time.Instant;
 public record LlmProviderReport(
         String name,
         String type,
+        String role,           // LOCAL | NORMAL | PREMIUM
         String model,
         LlmUsageRepository.PeriodSummary daily,
         LlmUsageRepository.PeriodSummary weekly,

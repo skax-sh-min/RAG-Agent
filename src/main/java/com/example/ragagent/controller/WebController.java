@@ -271,6 +271,7 @@ public class WebController {
                 .map(cfg -> new LlmProviderReport(
                         cfg.name(),
                         cfg.type(),
+                        cfg.role(),
                         cfg.model(),
                         usageRepo.getDaily(cfg.name()),
                         usageRepo.getWeekly(cfg.name()),
