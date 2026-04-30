@@ -101,6 +101,7 @@ public class AnswerService {
                 .chatResponse();
         state = accumulateTokens(state, answerResponse);
         String answer = answerResponse.getResult().getOutput().getText();
+        state = state.withUsedProvider(llmRouter.findProviderName(TaskType.TEXT, state.routingMode()));
 
         // Call 2: dedicated sufficiency check — simple JSON only
         AgentState resultState = checkSufficiency(state.withAnswer(answer), answer);
@@ -121,6 +122,7 @@ public class AnswerService {
             );
             return resultState
                     .withAnswer(premiumAnswer)
+                    .withUsedProvider(providerName)
                     .withPremiumUpgraded(providerName)
                     .withNeedsRetry(false);
         }

@@ -40,6 +40,8 @@
 
         <!-- Metadata -->
         <div class="mt-2 text-muted" style="font-size: 0.72rem;">
+            <span th:if="${usedProvider != null}">🤖 <span th:text="${usedProvider}"></span>
+                  &nbsp;·&nbsp;</span>
             <span>⏱ <span th:text="${#numbers.formatDecimal(elapsedSeconds,1,1)}"></span>
                   <span th:text="#{meta.elapsed}">sec</span></span>
             &nbsp;·&nbsp;

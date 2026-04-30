@@ -127,6 +127,7 @@ public class WebController {
             model.addAttribute("llmCallCount", resp.llmCallCount());
             model.addAttribute("elapsedSeconds", resp.elapsedSeconds());
             model.addAttribute("premiumUpgraded", resp.premiumUpgraded());
+            model.addAttribute("usedProvider", resp.usedProvider());
             if (resp.dualLocalAnswer() != null) {
                 model.addAttribute("dualLocalAnswer", resp.dualLocalAnswer());
                 model.addAttribute("dualLocalProvider", resp.dualLocalProvider());
