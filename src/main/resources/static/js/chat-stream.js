@@ -9,6 +9,9 @@
 (function () {
     'use strict';
 
+    // ── Per-bubble answer stage counter (tracks RETRIEVAL retries) ──────────
+    const answerCountMap = new Map();
+
     // ── Stage label map ──────────────────────────────────────────────────────
     const STAGE_LABELS = {
         classifier: '질문 분류 중...',
@@ -73,6 +76,15 @@
         if (data.id === 'upgrade') {
             const contentEl = document.getElementById(`stream-content-${bubbleId}`);
             if (contentEl) contentEl.textContent = '';
+        }
+        // RETRIEVAL retry: 2nd+ answer stage means prior content was insufficient — clear and re-fill
+        if (data.id === 'answer') {
+            const count = (answerCountMap.get(bubbleId) || 0) + 1;
+            answerCountMap.set(bubbleId, count);
+            if (count > 1) {
+                const contentEl = document.getElementById(`stream-content-${bubbleId}`);
+                if (contentEl) contentEl.textContent = '';
+            }
         }
     }
 
@@ -145,10 +157,12 @@
             htmx.trigger(document.body, 'refreshThreadList');
         }
 
+        answerCountMap.delete(bubbleId);
         scrollToBottom();
     }
 
     function onError(bubbleId, message) {
+        answerCountMap.delete(bubbleId);
         const bubble = document.getElementById(`bubble-${bubbleId}`);
         if (bubble) {
             bubble.outerHTML =
