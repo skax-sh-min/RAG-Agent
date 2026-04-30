@@ -114,7 +114,7 @@ public class AnswerService {
         String answer;
         if (listener != null) {
             // Streaming path: token counts unavailable from most providers — accept 0
-            answer = streamAnswer(state, listener::onToken);
+            answer = streamAnswer(state, state.routingMode(), listener::onToken);
             state = state.withUsedProvider(llmRouter.findProviderName(TaskType.TEXT, state.routingMode()));
         } else {
             // Blocking path (existing)
@@ -131,22 +131,26 @@ public class AnswerService {
         // Call 2: sufficiency check (always blocking)
         AgentState resultState = checkSufficiency(state.withAnswer(answer), answer);
 
-        // PROGRESSIVE upgrade: always blocking in Phase 1.
-        // Phase 3 will add re-streaming of the premium answer.
+        // PROGRESSIVE upgrade: re-stream when listener present, otherwise blocking.
         if (state.routingMode() == RoutingMode.PROGRESSIVE
                 && resultState.needsRetry()
                 && state.retryCount() >= maxRetryCount) {
 
             String providerName = llmRouter.findProviderName(TaskType.TEXT, RoutingMode.QUALITY_FIRST);
-            String answerPrompt  = buildAnswerPrompt(state);
             if (listener != null) listener.onUpgrade(providerName);
-            String premiumAnswer = llmRouter.executeWithTracking(
-                    TaskType.TEXT, RoutingMode.QUALITY_FIRST,
-                    model -> model.call(new Prompt(List.of(
-                            new SystemMessage(ANSWER_SYSTEM_PROMPT),
-                            new UserMessage(answerPrompt)
-                    )))
-            );
+            String premiumAnswer;
+            if (listener != null) {
+                premiumAnswer = streamAnswer(state, RoutingMode.QUALITY_FIRST, listener::onToken);
+            } else {
+                String answerPrompt = buildAnswerPrompt(state);
+                premiumAnswer = llmRouter.executeWithTracking(
+                        TaskType.TEXT, RoutingMode.QUALITY_FIRST,
+                        model -> model.call(new Prompt(List.of(
+                                new SystemMessage(ANSWER_SYSTEM_PROMPT),
+                                new UserMessage(answerPrompt)
+                        )))
+                );
+            }
             return resultState
                     .withAnswer(premiumAnswer)
                     .withUsedProvider(providerName)
@@ -161,8 +165,8 @@ public class AnswerService {
      * Streams the answer from the LLM, pushing each token to tokenSink.
      * blockLast() is safe inside a Virtual Thread.
      */
-    private String streamAnswer(AgentState state, Consumer<String> tokenSink) {
-        ChatModel model = llmRouter.route(TaskType.TEXT, state.routingMode());
+    private String streamAnswer(AgentState state, RoutingMode routingMode, Consumer<String> tokenSink) {
+        ChatModel model = llmRouter.route(TaskType.TEXT, routingMode);
         StringBuilder full = new StringBuilder();
         ChatClient.builder(model).build()
                 .prompt()

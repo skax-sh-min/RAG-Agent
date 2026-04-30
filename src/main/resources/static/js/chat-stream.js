@@ -69,6 +69,11 @@
     function onStage(bubbleId, data) {
         const el = document.getElementById(`stream-stage-text-${bubbleId}`);
         if (el) el.textContent = data.text || STAGE_LABELS[data.id] || data.id;
+        // PROGRESSIVE upgrade: clear accumulated content so premium answer re-fills
+        if (data.id === 'upgrade') {
+            const contentEl = document.getElementById(`stream-content-${bubbleId}`);
+            if (contentEl) contentEl.textContent = '';
+        }
     }
 
     function onSources(bubbleId, sources) {
