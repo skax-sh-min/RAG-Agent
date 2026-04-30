@@ -75,6 +75,13 @@ public class LlmRouter {
                 .anyMatch(p -> p.role() == LOCAL && !circuitBreaker.isBlocked(p.name()));
     }
 
+    /** Returns the name of the first available provider for the given routing, or "unknown". */
+    public String findProviderName(TaskType taskType, RoutingMode mode) {
+        return findFirst(taskType, roleOrder(mode), Set.of())
+                .map(LlmProvider::name)
+                .orElse("unknown");
+    }
+
     public RoutingMode getDefaultMode() { return defaultMode; }
     public double getProgressiveThreshold() { return progressiveThreshold; }
 

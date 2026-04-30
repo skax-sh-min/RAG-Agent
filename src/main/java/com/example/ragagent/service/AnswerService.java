@@ -1,13 +1,21 @@
 package com.example.ragagent.service;
 
 import com.example.ragagent.agent.AgentState;
+import com.example.ragagent.config.AppProperties;
+import com.example.ragagent.llm.LlmRouter;
+import com.example.ragagent.llm.RoutingMode;
+import com.example.ragagent.llm.TaskType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.messages.SystemMessage;
+import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatResponse;
+import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.converter.BeanOutputConverter;
 import org.springframework.stereotype.Service;
 
+import java.util.List;
 import java.util.stream.Collectors;
 
 /**
@@ -55,11 +63,15 @@ public class AnswerService {
     private record SufficiencyOutput(boolean sufficient) {}
 
     private final ChatClient chatClient;
+    private final LlmRouter llmRouter;
+    private final int maxRetryCount;
     private final BeanOutputConverter<SufficiencyOutput> sufficiencyConverter =
             new BeanOutputConverter<>(SufficiencyOutput.class);
 
-    public AnswerService(ChatClient chatClient) {
+    public AnswerService(ChatClient chatClient, LlmRouter llmRouter, AppProperties appProperties) {
         this.chatClient = chatClient;
+        this.llmRouter = llmRouter;
+        this.maxRetryCount = appProperties.maxRetryCount();
     }
 
     public AgentState execute(AgentState state) {
@@ -73,7 +85,29 @@ public class AnswerService {
         String answer = answerResponse.getResult().getOutput().getText();
 
         // Call 2: dedicated sufficiency check — simple JSON only
-        return checkSufficiency(state.withAnswer(answer), answer);
+        AgentState resultState = checkSufficiency(state.withAnswer(answer), answer);
+
+        // PROGRESSIVE: insufficient at last retry → re-run with QUALITY_FIRST provider
+        if (state.routingMode() == RoutingMode.PROGRESSIVE
+                && resultState.needsRetry()
+                && state.retryCount() >= maxRetryCount) {
+
+            String providerName = llmRouter.findProviderName(TaskType.TEXT, RoutingMode.QUALITY_FIRST);
+            String answerPrompt = buildAnswerPrompt(state);
+            String premiumAnswer = llmRouter.executeWithTracking(
+                    TaskType.TEXT, RoutingMode.QUALITY_FIRST,
+                    model -> model.call(new Prompt(List.of(
+                            new SystemMessage(ANSWER_SYSTEM_PROMPT),
+                            new UserMessage(answerPrompt)
+                    )))
+            );
+            return resultState
+                    .withAnswer(premiumAnswer)
+                    .withPremiumUpgraded(providerName)
+                    .withNeedsRetry(false);
+        }
+
+        return resultState;
     }
 
     private AgentState checkSufficiency(AgentState state, String answer) {

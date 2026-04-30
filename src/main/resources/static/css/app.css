@@ -42,6 +42,18 @@
 .badge-version { background: #ffc107; color: #000; }
 .badge-meta    { background: #6c757d; color: #fff; }
 
+/* ── PROGRESSIVE upgrade badge ───────────────────────────────────────── */
+.badge-upgraded {
+    display: inline-block;
+    font-size: 0.72rem;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 12px;
+    background: linear-gradient(90deg, #6f42c1, #0d6efd);
+    color: #fff;
+    vertical-align: middle;
+}
+
 /* ── Sidebar thread list ─────────────────────────────────────────────── */
 .thread-item {
     cursor: pointer;

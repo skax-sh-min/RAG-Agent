@@ -126,6 +126,7 @@ public class WebController {
             model.addAttribute("totalOutputTokens", resp.totalOutputTokens());
             model.addAttribute("llmCallCount", resp.llmCallCount());
             model.addAttribute("elapsedSeconds", resp.elapsedSeconds());
+            model.addAttribute("premiumUpgraded", resp.premiumUpgraded());
         } catch (Exception e) {
             log.error("Chat error", e);
             return "fragments/message-error :: message";

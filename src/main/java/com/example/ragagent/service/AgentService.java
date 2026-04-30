@@ -42,7 +42,8 @@ public class AgentService {
                 result.totalInputTokens(),
                 result.totalOutputTokens(),
                 result.llmCallCount(),
-                elapsedSeconds
+                elapsedSeconds,
+                result.premiumUpgraded()
         );
     }
 }

@@ -11,6 +11,11 @@
               th:classappend="'badge-' + ${questionType}"
               th:text="${questionType}"></span>
 
+        <!-- PROGRESSIVE upgrade badge -->
+        <span th:if="${premiumUpgraded != null}" class="badge-upgraded ms-1">
+            ⬆ 고추론 재분석 → <span th:text="${premiumUpgraded}"></span>
+        </span>
+
         <!-- Answer (markdown → DOMPurify sanitized HTML) -->
         <div class="md-content"
              th:attr="data-md=${answer}"></div>

@@ -10,5 +10,6 @@ public record ChatResponse(
         @JsonProperty("total_input_tokens") int totalInputTokens,
         @JsonProperty("total_output_tokens") int totalOutputTokens,
         @JsonProperty("llm_call_count") int llmCallCount,
-        @JsonProperty("elapsed_seconds") double elapsedSeconds
+        @JsonProperty("elapsed_seconds") double elapsedSeconds,
+        @JsonProperty("premium_upgraded") String premiumUpgraded
 ) {}
