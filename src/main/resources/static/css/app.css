@@ -145,3 +145,20 @@
 /* ── Message bubble word-wrap ─────────────────────────────────────────── */
 .bubble-user,
 .bubble-assistant { word-break: break-word; }
+
+/* ── SSE streaming ────────────────────────────────────────────────────── */
+.stream-stage {
+    display: flex;
+    align-items: center;
+    min-height: 1.4rem;
+}
+/* Blinking cursor appended after streamed raw text */
+.stream-cursor::after {
+    content: '▋';
+    display: inline;
+    animation: stream-cursor-blink 0.75s step-start infinite;
+}
+@keyframes stream-cursor-blink {
+    0%, 100% { opacity: 1; }
+    50%       { opacity: 0; }
+}

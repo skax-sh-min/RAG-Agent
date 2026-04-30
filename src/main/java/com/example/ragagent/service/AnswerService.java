@@ -11,21 +11,22 @@ import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.UserMessage;
+import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.converter.BeanOutputConverter;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
+import java.util.function.Consumer;
 import java.util.stream.Collectors;
 
 /**
  * Generates a structured answer from retrieved documents (Call 1),
  * then evaluates evidence sufficiency via a separate LLM call (Call 2).
  *
- * Splitting the two concerns eliminates fragile "JSON embedded in prose" parsing.
- *
- * Equivalent to answer_node in agents.py.
+ * execute()          — existing blocking path (used by non-streaming flow)
+ * executeStreaming()  — streams Call 1 tokens via GraphListener, Call 2 stays blocking
  */
 @Service
 public class AnswerService {
@@ -75,8 +76,24 @@ public class AnswerService {
         this.maxRetryCount = appProperties.maxRetryCount();
     }
 
+    /** Existing blocking path — unchanged. */
     public AgentState execute(AgentState state) {
-        // DUAL: run LOCAL + external in parallel, skip sufficiency/retry loop
+        return executeInternal(state, null);
+    }
+
+    /**
+     * Streaming path: Call 1 tokens are pushed via listener.onToken().
+     * Call 2 (sufficiency) and PROGRESSIVE upgrade remain blocking.
+     * DUAL falls back to the blocking path (Phase 5 will add DUAL streaming).
+     */
+    public AgentState executeStreaming(AgentState state, GraphListener listener) {
+        return executeInternal(state, listener);
+    }
+
+    // ── Internal ──────────────────────────────────────────────────────────────
+
+    private AgentState executeInternal(AgentState state, GraphListener listener) {
+        // DUAL: blocking path unchanged (Phase 5 adds streaming)
         if (state.isDualMode()) {
             String answerPrompt = buildAnswerPrompt(state);
             DualResult dual = llmRouter.executeDual(
@@ -93,26 +110,36 @@ public class AnswerService {
                     .withNeedsRetry(false);
         }
 
-        // Call 1: generate pure prose answer — no JSON instructions mixed in
-        ChatResponse answerResponse = chatClient.prompt()
-                .system(ANSWER_SYSTEM_PROMPT)
-                .user(buildAnswerPrompt(state))
-                .call()
-                .chatResponse();
-        state = accumulateTokens(state, answerResponse);
-        String answer = answerResponse.getResult().getOutput().getText();
-        state = state.withUsedProvider(llmRouter.findProviderName(TaskType.TEXT, state.routingMode()));
+        // Call 1: answer generation
+        String answer;
+        if (listener != null) {
+            // Streaming path: token counts unavailable from most providers — accept 0
+            answer = streamAnswer(state, listener::onToken);
+            state = state.withUsedProvider(llmRouter.findProviderName(TaskType.TEXT, state.routingMode()));
+        } else {
+            // Blocking path (existing)
+            ChatResponse answerResponse = chatClient.prompt()
+                    .system(ANSWER_SYSTEM_PROMPT)
+                    .user(buildAnswerPrompt(state))
+                    .call()
+                    .chatResponse();
+            state = accumulateTokens(state, answerResponse);
+            answer = answerResponse.getResult().getOutput().getText();
+            state = state.withUsedProvider(llmRouter.findProviderName(TaskType.TEXT, state.routingMode()));
+        }
 
-        // Call 2: dedicated sufficiency check — simple JSON only
+        // Call 2: sufficiency check (always blocking)
         AgentState resultState = checkSufficiency(state.withAnswer(answer), answer);
 
-        // PROGRESSIVE: insufficient at last retry → re-run with QUALITY_FIRST provider
+        // PROGRESSIVE upgrade: always blocking in Phase 1.
+        // Phase 3 will add re-streaming of the premium answer.
         if (state.routingMode() == RoutingMode.PROGRESSIVE
                 && resultState.needsRetry()
                 && state.retryCount() >= maxRetryCount) {
 
             String providerName = llmRouter.findProviderName(TaskType.TEXT, RoutingMode.QUALITY_FIRST);
-            String answerPrompt = buildAnswerPrompt(state);
+            String answerPrompt  = buildAnswerPrompt(state);
+            if (listener != null) listener.onUpgrade(providerName);
             String premiumAnswer = llmRouter.executeWithTracking(
                     TaskType.TEXT, RoutingMode.QUALITY_FIRST,
                     model -> model.call(new Prompt(List.of(
@@ -128,6 +155,27 @@ public class AnswerService {
         }
 
         return resultState;
+    }
+
+    /**
+     * Streams the answer from the LLM, pushing each token to tokenSink.
+     * blockLast() is safe inside a Virtual Thread.
+     */
+    private String streamAnswer(AgentState state, Consumer<String> tokenSink) {
+        ChatModel model = llmRouter.route(TaskType.TEXT, state.routingMode());
+        StringBuilder full = new StringBuilder();
+        ChatClient.builder(model).build()
+                .prompt()
+                .system(ANSWER_SYSTEM_PROMPT)
+                .user(buildAnswerPrompt(state))
+                .stream()
+                .content()
+                .doOnNext(t -> {
+                    tokenSink.accept(t);
+                    full.append(t);
+                })
+                .blockLast();
+        return full.toString();
     }
 
     private AgentState checkSufficiency(AgentState state, String answer) {

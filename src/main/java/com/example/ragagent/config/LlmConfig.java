@@ -28,12 +28,14 @@ public class LlmConfig {
                             .apiKey(cfg.apiKey() != null && !cfg.apiKey().isBlank()
                                     ? cfg.apiKey() : "no-key")
                             .build();
-                    ChatModel model = new OpenAiChatModel(api,
-                            OpenAiChatOptions.builder()
+                    ChatModel model = OpenAiChatModel.builder()
+                            .openAiApi(api)
+                            .defaultOptions(OpenAiChatOptions.builder()
                                     .model(cfg.model())
                                     .temperature(0.0)
                                     .maxTokens(6000)
-                                    .build());
+                                    .build())
+                            .build();
                     String roleStr = cfg.role() != null ? cfg.role().toUpperCase() : "NORMAL";
                     String typeStr = cfg.type() != null ? cfg.type().toUpperCase() : "BOTH";
                     return new LlmProvider(

@@ -46,13 +46,26 @@ public class AgentGraph {
         this.maxRetryCount = appProperties.maxRetryCount();
     }
 
+    /** Existing blocking path — no listener overhead. */
     public AgentState run(AgentState initialState) {
+        return runInternal(initialState, GraphListener.NOOP);
+    }
+
+    /** Streaming path — GraphListener receives node/token/sources events. */
+    public AgentState runStreaming(AgentState initialState, GraphListener listener) {
+        return runInternal(initialState, listener);
+    }
+
+    // ── Internal ──────────────────────────────────────────────────────────────
+
+    private AgentState runInternal(AgentState initialState, GraphListener listener) {
         Node current = Node.CLASSIFIER;
         AgentState state = initialState;
 
         while (current != Node.END) {
             current = switch (current) {
                 case CLASSIFIER -> {
+                    listener.onNodeEnter("classifier");
                     if (state.questionType() != null) {
                         yield "meta".equals(state.questionType()) ? Node.DIRECT_ANSWER : Node.RETRIEVAL;
                     }
@@ -64,12 +77,17 @@ public class AgentGraph {
                     yield Node.FINALIZE;
                 }
                 case RETRIEVAL -> {
+                    listener.onNodeEnter("retrieval");
                     state = state.withRetryCountIncremented();
                     state = retrievalService.execute(state);
+                    listener.onSourcesReady(state.sources());
                     yield Node.ANSWER;
                 }
                 case ANSWER -> {
-                    state = answerService.execute(state);
+                    listener.onNodeEnter("answer");
+                    state = (listener == GraphListener.NOOP)
+                            ? answerService.execute(state)
+                            : answerService.executeStreaming(state, listener);
                     if (state.isDualMode()) yield Node.FINALIZE;
                     if (state.needsRetry() && state.retryCount() < maxRetryCount) {
                         yield Node.RETRIEVAL;
@@ -77,6 +95,7 @@ public class AgentGraph {
                     yield Node.CRITIC;
                 }
                 case CRITIC -> {
+                    listener.onNodeEnter("critic");
                     state = criticService.execute(state);
                     if (state.needsRetry() && state.retryCount() < maxRetryCount) {
                         yield Node.RETRIEVAL;

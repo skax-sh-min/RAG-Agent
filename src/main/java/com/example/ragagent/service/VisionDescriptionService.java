@@ -8,6 +8,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.core.io.ByteArrayResource;
 import org.springframework.stereotype.Service;
 import org.springframework.util.MimeTypeUtils;
 
@@ -33,7 +34,7 @@ public class VisionDescriptionService {
             return ChatClient.builder(visionModel).build()
                     .prompt()
                     .user(u -> u.text("이 이미지를 한국어로 간결하게 설명하세요. 최대 3문장.")
-                                .media(MimeTypeUtils.parseMimeType(mimeType), imageBytes))
+                                .media(MimeTypeUtils.parseMimeType(mimeType), new ByteArrayResource(imageBytes)))
                     .call()
                     .content();
         } catch (LlmProviderExhaustedException e) {

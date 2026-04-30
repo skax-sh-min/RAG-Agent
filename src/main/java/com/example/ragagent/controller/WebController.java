@@ -12,11 +12,13 @@ import jakarta.servlet.http.HttpSession;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Controller;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.nio.file.Files;
@@ -36,6 +38,7 @@ public class WebController {
     private static final Logger log = LoggerFactory.getLogger(WebController.class);
 
     private final AgentService agentService;
+    private final StreamingAgentService streamingAgentService;
     private final RagService ragService;
     private final ThreadMetaService threadMetaService;
     private final MemoryService memoryService;
@@ -44,11 +47,14 @@ public class WebController {
     private final CircuitBreaker circuitBreaker;
     private final LlmRouter llmRouter;
 
-    public WebController(AgentService agentService, RagService ragService,
+    public WebController(AgentService agentService,
+                         StreamingAgentService streamingAgentService,
+                         RagService ragService,
                          ThreadMetaService threadMetaService, MemoryService memoryService,
                          AppProperties props, LlmUsageRepository usageRepo,
                          CircuitBreaker circuitBreaker, LlmRouter llmRouter) {
         this.agentService = agentService;
+        this.streamingAgentService = streamingAgentService;
         this.ragService = ragService;
         this.threadMetaService = threadMetaService;
         this.memoryService = memoryService;
@@ -100,6 +106,18 @@ public class WebController {
         String threadId = UUID.randomUUID().toString();
         session.setAttribute("threadId", threadId);
         return "redirect:/chat/" + threadId;
+    }
+
+    @PostMapping(value = "/ui/chat/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public SseEmitter streamChat(@ModelAttribute ChatForm form) {
+        SseEmitter emitter = new SseEmitter(180_000L);
+        if (form.question() == null || form.question().isBlank()) {
+            emitter.completeWithError(new IllegalArgumentException("question is blank"));
+            return emitter;
+        }
+        threadMetaService.getOrCreate(form.threadId(), form.version());
+        Thread.ofVirtual().start(() -> streamingAgentService.run(form, emitter));
+        return emitter;
     }
 
     @PostMapping("/ui/chat")
