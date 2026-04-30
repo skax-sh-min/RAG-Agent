@@ -13,6 +13,8 @@ import org.springframework.ai.rag.preretrieval.query.expansion.MultiQueryExpande
 import org.springframework.stereotype.Service;
 
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executors;
 
 /**
  * Retrieves relevant documents from the vector store.
@@ -43,8 +45,12 @@ public class RetrievalService {
         List<Document> allDocs = new ArrayList<>();
         try {
             List<Query> queries = multiQueryExpander.expand(new Query(state.question()));
-            for (Query q : queries) {
-                allDocs.addAll(ragService.search(q.text(), state.version(), defaultTopK));
+            try (var exec = Executors.newVirtualThreadPerTaskExecutor()) {
+                queries.stream()
+                    .map(q -> CompletableFuture.supplyAsync(
+                        () -> ragService.search(q.text(), state.version(), defaultTopK), exec))
+                    .toList()
+                    .forEach(f -> allDocs.addAll(f.join()));
             }
         } catch (Exception e) {
             log.warn("Multi-query expansion failed, falling back to original question: {}", e.getMessage());
