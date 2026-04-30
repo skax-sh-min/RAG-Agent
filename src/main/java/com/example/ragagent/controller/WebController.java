@@ -127,6 +127,14 @@ public class WebController {
             model.addAttribute("llmCallCount", resp.llmCallCount());
             model.addAttribute("elapsedSeconds", resp.elapsedSeconds());
             model.addAttribute("premiumUpgraded", resp.premiumUpgraded());
+            if (resp.dualLocalAnswer() != null) {
+                model.addAttribute("dualLocalAnswer", resp.dualLocalAnswer());
+                model.addAttribute("dualLocalProvider", resp.dualLocalProvider());
+                model.addAttribute("usedProvider", resp.usedProvider());
+                model.addAttribute("tabId", UUID.randomUUID().toString().replace("-", "").substring(0, 8));
+                response.setHeader("HX-Trigger", "refreshThreadList");
+                return "fragments/message-assistant-dual :: message";
+            }
         } catch (Exception e) {
             log.error("Chat error", e);
             return "fragments/message-error :: message";

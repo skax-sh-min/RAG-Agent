@@ -67,6 +67,7 @@ public class AgentGraph {
                 }
                 case ANSWER -> {
                     state = answerService.execute(state);
+                    if (state.isDualMode()) yield Node.FINALIZE;
                     if (state.needsRetry() && state.retryCount() < maxRetryCount) {
                         yield Node.RETRIEVAL;
                     }

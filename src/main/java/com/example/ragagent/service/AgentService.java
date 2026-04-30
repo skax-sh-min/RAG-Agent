@@ -43,7 +43,10 @@ public class AgentService {
                 result.totalOutputTokens(),
                 result.llmCallCount(),
                 elapsedSeconds,
-                result.premiumUpgraded()
+                result.premiumUpgraded(),
+                result.usedProvider(),
+                result.dualLocalAnswer(),
+                result.dualLocalProvider()
         );
     }
 }

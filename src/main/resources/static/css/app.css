@@ -137,6 +137,11 @@
 .htmx-request .htmx-indicator,
 .htmx-request.htmx-indicator  { opacity: 1; }
 
+/* ── DUAL bubble tabs ────────────────────────────────────────────────── */
+.dual-bubble .nav-tabs              { border-bottom: 1px solid var(--border-default); }
+.dual-bubble .nav-link              { color: var(--fg-muted); font-size: 0.8rem; padding: 4px 10px; }
+.dual-bubble .nav-link.active       { font-weight: 600; }
+
 /* ── Message bubble word-wrap ─────────────────────────────────────────── */
 .bubble-user,
 .bubble-assistant { word-break: break-word; }

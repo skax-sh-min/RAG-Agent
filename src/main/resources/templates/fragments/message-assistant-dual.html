@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" lang="ko">
+<body>
+<div th:fragment="message" class="d-flex align-items-start mb-3">
+    <i class="bi bi-robot fs-5 text-secondary me-2 mt-1 flex-shrink-0"></i>
+    <div class="bubble-assistant dual-bubble p-3 flex-grow-1">
+
+        <!-- DUAL mode badge -->
+        <span class="badge bg-secondary mb-2">⚡ DUAL 비교</span>
+
+        <!-- Bootstrap tabs: external first (primary answer), local second -->
+        <ul class="nav nav-tabs mb-2" role="tablist">
+            <li class="nav-item">
+                <button class="nav-link active small py-1 px-2"
+                        data-bs-toggle="tab"
+                        th:attr="data-bs-target='#tab-ext-' + ${tabId}"
+                        type="button" role="tab">
+                    외부 답변
+                    <span class="badge bg-primary ms-1" style="font-size:0.7rem;"
+                          th:text="${usedProvider}"></span>
+                </button>
+            </li>
+            <li class="nav-item">
+                <button class="nav-link small py-1 px-2"
+                        data-bs-toggle="tab"
+                        th:attr="data-bs-target='#tab-loc-' + ${tabId}"
+                        type="button" role="tab">
+                    로컬 답변
+                    <span class="badge bg-secondary ms-1" style="font-size:0.7rem;"
+                          th:text="${dualLocalProvider}"></span>
+                </button>
+            </li>
+        </ul>
+
+        <div class="tab-content">
+            <div class="tab-pane fade show active"
+                 th:id="'tab-ext-' + ${tabId}" role="tabpanel">
+                <div class="md-content" th:attr="data-md=${answer}"></div>
+            </div>
+            <div class="tab-pane fade"
+                 th:id="'tab-loc-' + ${tabId}" role="tabpanel">
+                <div class="md-content" th:attr="data-md=${dualLocalAnswer}"></div>
+            </div>
+        </div>
+
+        <!-- Sources accordion -->
+        <details th:if="${sources != null and !#lists.isEmpty(sources)}" class="mt-2">
+            <summary class="small text-muted" style="cursor:pointer;">
+                ▶ <span th:text="#{sources.label}">Sources</span>
+                (<span th:text="${#lists.size(sources)}"></span>)
+            </summary>
+            <ul class="mt-1 mb-0 small ps-3">
+                <li th:each="src : ${sources}">
+                    <a href="#" class="source-ref text-decoration-none"
+                       th:text="${src.label}"
+                       th:attr="data-bs-toggle='popover',
+                                data-bs-trigger='hover focus',
+                                data-bs-placement='left',
+                                data-bs-content=${src.preview}"></a>
+                </li>
+            </ul>
+        </details>
+
+        <!-- Metadata -->
+        <div class="mt-2 text-muted" style="font-size: 0.72rem;">
+            <span>⏱ <span th:text="${#numbers.formatDecimal(elapsedSeconds,1,1)}"></span>
+                  <span th:text="#{meta.elapsed}">sec</span></span>
+            &nbsp;·&nbsp;
+            <span>📥 <span th:text="${totalInputTokens}"></span>
+                  <span th:text="#{meta.input.tokens}">tokens in</span></span>
+            &nbsp;·&nbsp;
+            <span>📤 <span th:text="${totalOutputTokens}"></span>
+                  <span th:text="#{meta.output.tokens}">tokens out</span></span>
+            &nbsp;·&nbsp;
+            <span><span th:text="#{meta.total}">total</span>
+                  <span th:text="${totalInputTokens + totalOutputTokens}"></span></span>
+            &nbsp;·&nbsp;
+            <span>🔄 <span th:text="#{meta.llm.calls}">LLM calls</span>
+                  <span th:text="${llmCallCount}"></span></span>
+        </div>
+    </div>
+</div>
+
+<script>
+    document.querySelectorAll('.source-ref[data-bs-toggle="popover"]').forEach(function (el) {
+        new bootstrap.Popover(el);
+    });
+
+    document.querySelectorAll('.md-content[data-md]').forEach(function (el) {
+        const raw = el.dataset.md || '';
+        if (typeof marked === 'undefined') { el.textContent = raw; delete el.dataset.md; return; }
+        const html = marked.parse(raw);
+        el.innerHTML = typeof DOMPurify !== 'undefined'
+            ? DOMPurify.sanitize(html)
+            : html;
+        if (typeof hljs !== 'undefined') {
+            el.querySelectorAll('pre code').forEach(block => hljs.highlightElement(block));
+        }
+        delete el.dataset.md;
+    });
+</script>
+</body>
+</html>

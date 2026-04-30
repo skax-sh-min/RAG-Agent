@@ -2,6 +2,7 @@ package com.example.ragagent.service;
 
 import com.example.ragagent.agent.AgentState;
 import com.example.ragagent.config.AppProperties;
+import com.example.ragagent.llm.DualResult;
 import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.llm.TaskType;
@@ -75,6 +76,23 @@ public class AnswerService {
     }
 
     public AgentState execute(AgentState state) {
+        // DUAL: run LOCAL + external in parallel, skip sufficiency/retry loop
+        if (state.isDualMode()) {
+            String answerPrompt = buildAnswerPrompt(state);
+            DualResult dual = llmRouter.executeDual(
+                    TaskType.TEXT,
+                    model -> model.call(new Prompt(List.of(
+                            new SystemMessage(ANSWER_SYSTEM_PROMPT),
+                            new UserMessage(answerPrompt)
+                    )))
+            );
+            return state
+                    .withAnswer(dual.externalAnswer())
+                    .withUsedProvider(dual.externalProvider())
+                    .withDualResult(dual.localAnswer(), dual.localProvider())
+                    .withNeedsRetry(false);
+        }
+
         // Call 1: generate pure prose answer — no JSON instructions mixed in
         ChatResponse answerResponse = chatClient.prompt()
                 .system(ANSWER_SYSTEM_PROMPT)
