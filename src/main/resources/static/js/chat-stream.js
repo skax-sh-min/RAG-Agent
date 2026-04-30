@@ -61,6 +61,20 @@
                     <span id="stream-stage-text-${bubbleId}">질문 분석 중...</span>
                 </div>
                 <div id="stream-content-${bubbleId}" class="md-content stream-content stream-cursor"></div>
+                <div id="stream-dual-${bubbleId}" class="dual-bubble d-none">
+                    <ul class="nav nav-tabs mb-2" role="tablist">
+                        <li class="nav-item" role="presentation">
+                            <button class="nav-link active" data-bs-target="#stream-ext-${bubbleId}" data-bs-toggle="tab" type="button">외부 답변</button>
+                        </li>
+                        <li class="nav-item" role="presentation">
+                            <button class="nav-link" data-bs-target="#stream-loc-${bubbleId}" data-bs-toggle="tab" type="button">로컬 답변</button>
+                        </li>
+                    </ul>
+                    <div class="tab-content">
+                        <div class="tab-pane fade show active md-content stream-cursor" id="stream-ext-${bubbleId}"></div>
+                        <div class="tab-pane fade md-content stream-cursor" id="stream-loc-${bubbleId}"></div>
+                    </div>
+                </div>
                 <div id="stream-sources-${bubbleId}"></div>
                 <div id="stream-meta-${bubbleId}" class="mt-2 text-muted" style="font-size:0.72rem;"></div>
             </div>`;
@@ -105,32 +119,57 @@
             .forEach(el => new bootstrap.Popover(el));
     }
 
-    function onToken(bubbleId, text) {
-        const el = document.getElementById(`stream-content-${bubbleId}`);
-        if (el) el.textContent += text;
+    function renderMarkdown(el) {
+        if (!el) return;
+        const raw = el.textContent || '';
+        if (typeof marked !== 'undefined') {
+            const html = marked.parse(raw);
+            el.innerHTML = typeof DOMPurify !== 'undefined' ? DOMPurify.sanitize(html) : html;
+            if (typeof hljs !== 'undefined') {
+                el.querySelectorAll('pre code').forEach(block => hljs.highlightElement(block));
+            }
+        }
+    }
+
+    function onToken(bubbleId, tab, text) {
+        if (tab) {
+            // DUAL mode: first token activates tab layout
+            const dualEl = document.getElementById(`stream-dual-${bubbleId}`);
+            if (dualEl && dualEl.classList.contains('d-none')) {
+                dualEl.classList.remove('d-none');
+                const contentEl = document.getElementById(`stream-content-${bubbleId}`);
+                if (contentEl) { contentEl.classList.remove('stream-cursor'); contentEl.classList.add('d-none'); }
+            }
+            const targetId = tab === 'local' ? `stream-loc-${bubbleId}` : `stream-ext-${bubbleId}`;
+            const el = document.getElementById(targetId);
+            if (el) el.textContent += text;
+        } else {
+            const el = document.getElementById(`stream-content-${bubbleId}`);
+            if (el) el.textContent += text;
+        }
         scrollToBottom();
     }
 
     function onDone(bubbleId, data) {
         const contentEl = document.getElementById(`stream-content-${bubbleId}`);
+        const dualEl    = document.getElementById(`stream-dual-${bubbleId}`);
         const stageEl   = document.getElementById(`stream-stage-${bubbleId}`);
         const metaEl    = document.getElementById(`stream-meta-${bubbleId}`);
+        const isDual    = dualEl && !dualEl.classList.contains('d-none');
 
-        // 1. Remove streaming cursor
+        // 1. Remove streaming cursors
         if (contentEl) contentEl.classList.remove('stream-cursor');
+        if (isDual) {
+            document.getElementById(`stream-ext-${bubbleId}`)?.classList.remove('stream-cursor');
+            document.getElementById(`stream-loc-${bubbleId}`)?.classList.remove('stream-cursor');
+        }
 
         // 2. Render markdown
-        if (contentEl) {
-            const raw = contentEl.textContent || '';
-            if (typeof marked !== 'undefined') {
-                const html = marked.parse(raw);
-                contentEl.innerHTML = typeof DOMPurify !== 'undefined'
-                    ? DOMPurify.sanitize(html) : html;
-                if (typeof hljs !== 'undefined') {
-                    contentEl.querySelectorAll('pre code')
-                        .forEach(block => hljs.highlightElement(block));
-                }
-            }
+        if (isDual) {
+            renderMarkdown(document.getElementById(`stream-ext-${bubbleId}`));
+            renderMarkdown(document.getElementById(`stream-loc-${bubbleId}`));
+        } else {
+            renderMarkdown(contentEl);
         }
 
         // 3. Hide stage spinner
@@ -249,7 +288,7 @@
         switch (name) {
             case 'stage':   onStage(bubbleId, data);          break;
             case 'sources': onSources(bubbleId, data);        break;
-            case 'token':   onToken(bubbleId, data.text);     break;
+            case 'token':   onToken(bubbleId, data.tab, data.text);  break;
             case 'done':    onDone(bubbleId, data);           break;
             case 'error':   onError(bubbleId, data.message);  break;
         }

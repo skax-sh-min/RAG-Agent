@@ -10,6 +10,8 @@ import org.springframework.web.client.HttpClientErrorException;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
+import java.util.function.BiConsumer;
+import java.util.function.Consumer;
 import java.util.function.Function;
 
 import static com.example.ragagent.llm.ProviderRole.*;
@@ -68,6 +70,34 @@ public class LlmRouter {
                     CompletableFuture.supplyAsync(() -> executeSingleTracked(external, call), exec);
             return new DualResult(localF.join(), local.name(), externalF.join(), external.name());
         }
+    }
+
+    /** Provider names returned by executeDualStream. */
+    public record DualProviders(String localProvider, String externalProvider) {}
+
+    /**
+     * DUAL 스트리밍: LOCAL과 외부 프로바이더를 Virtual Thread로 병렬 실행.
+     * streamFn은 (model, tokenSink) → void 형태로, 호출자가 프롬프트를 포함한 스트리밍 로직을 제공.
+     */
+    public DualProviders executeDualStream(TaskType taskType,
+                                            BiConsumer<ChatModel, Consumer<String>> streamFn,
+                                            Consumer<String> localTokenSink,
+                                            Consumer<String> externalTokenSink) {
+        LlmProvider local = findFirst(taskType, List.of(LOCAL), Set.of())
+                .orElseThrow(() -> new LlmProviderExhaustedException(
+                        "DUAL requires a LOCAL provider. Register a LOCAL provider or switch mode."));
+        LlmProvider external = findFirst(taskType, List.of(NORMAL, PREMIUM), Set.of())
+                .orElseThrow(() -> new LlmProviderExhaustedException(
+                        "DUAL requires at least one external provider (NORMAL or PREMIUM)."));
+
+        try (var exec = Executors.newVirtualThreadPerTaskExecutor()) {
+            CompletableFuture<Void> localF = CompletableFuture.runAsync(
+                    () -> streamFn.accept(local.chatModel(), localTokenSink), exec);
+            CompletableFuture<Void> externalF = CompletableFuture.runAsync(
+                    () -> streamFn.accept(external.chatModel(), externalTokenSink), exec);
+            CompletableFuture.allOf(localF, externalF).join();
+        }
+        return new DualProviders(local.name(), external.name());
     }
 
     public boolean hasLocalProvider() {

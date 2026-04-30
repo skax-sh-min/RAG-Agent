@@ -18,6 +18,7 @@ import org.springframework.ai.converter.BeanOutputConverter;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
+import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
 
@@ -93,8 +94,24 @@ public class AnswerService {
     // ── Internal ──────────────────────────────────────────────────────────────
 
     private AgentState executeInternal(AgentState state, GraphListener listener) {
-        // DUAL: blocking path unchanged (Phase 5 adds streaming)
+        // DUAL: streaming when listener present, blocking otherwise
         if (state.isDualMode()) {
+            if (listener != null) {
+                AgentState capturedState = state;
+                StringBuilder localBuf = new StringBuilder(), extBuf = new StringBuilder();
+                BiConsumer<ChatModel, Consumer<String>> streamFn =
+                        (model, sink) -> streamInto(model, capturedState, sink);
+                LlmRouter.DualProviders dp = llmRouter.executeDualStream(
+                        TaskType.TEXT,
+                        streamFn,
+                        t -> { localBuf.append(t); listener.onToken("local", t); },
+                        t -> { extBuf.append(t);   listener.onToken("external", t); }
+                );
+                return state.withAnswer(extBuf.toString())
+                            .withUsedProvider(dp.externalProvider())
+                            .withDualResult(localBuf.toString(), dp.localProvider())
+                            .withNeedsRetry(false);
+            }
             String answerPrompt = buildAnswerPrompt(state);
             DualResult dual = llmRouter.executeDual(
                     TaskType.TEXT,
@@ -168,18 +185,19 @@ public class AnswerService {
     private String streamAnswer(AgentState state, RoutingMode routingMode, Consumer<String> tokenSink) {
         ChatModel model = llmRouter.route(TaskType.TEXT, routingMode);
         StringBuilder full = new StringBuilder();
+        streamInto(model, state, t -> { tokenSink.accept(t); full.append(t); });
+        return full.toString();
+    }
+
+    private void streamInto(ChatModel model, AgentState state, Consumer<String> tokenSink) {
         ChatClient.builder(model).build()
                 .prompt()
                 .system(ANSWER_SYSTEM_PROMPT)
                 .user(buildAnswerPrompt(state))
                 .stream()
                 .content()
-                .doOnNext(t -> {
-                    tokenSink.accept(t);
-                    full.append(t);
-                })
+                .doOnNext(tokenSink)
                 .blockLast();
-        return full.toString();
     }
 
     private AgentState checkSufficiency(AgentState state, String answer) {
