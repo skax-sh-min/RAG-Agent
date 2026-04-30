@@ -53,6 +53,9 @@ public class AgentGraph {
         while (current != Node.END) {
             current = switch (current) {
                 case CLASSIFIER -> {
+                    if (state.questionType() != null) {
+                        yield "meta".equals(state.questionType()) ? Node.DIRECT_ANSWER : Node.RETRIEVAL;
+                    }
                     state = classifierService.execute(state);
                     yield "meta".equals(state.questionType()) ? Node.DIRECT_ANSWER : Node.RETRIEVAL;
                 }

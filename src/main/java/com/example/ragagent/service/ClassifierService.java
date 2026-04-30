@@ -44,6 +44,15 @@ public class ClassifierService {
         this.chatClient = chatClient;
     }
 
+    public String classifyOnly(String question) {
+        String raw = chatClient.prompt()
+                .system(SYSTEM_PROMPT)
+                .user(question + "\n\n" + converter.getFormat())
+                .call()
+                .content();
+        return parseType(raw);
+    }
+
     public AgentState execute(AgentState state) {
         ChatResponse chatResponse = chatClient.prompt()
                 .system(SYSTEM_PROMPT)
