@@ -1,5 +1,7 @@
 # IMAGE_PROCESS — 이미지 처리 전략
 
+> **구현 현황**: `VisionDescriptionService`(5절)만 구현 완료. 나머지 파이프라인(ImageExtractorService, 포맷별 Extractor, LazyVisionService 등)은 미구현 상태이며 이 문서가 구현 계획입니다.
+
 문서 포맷별 이미지 처리 방식과 검색 결과 연동 전략을 아키텍트 및 개발자 관점에서 정의합니다.
 
 ---
@@ -303,42 +305,23 @@ content = content.replaceAll("\\[([^\\]]+)]\\([^)]*\\)", "$1");
 
 ### 5.1 VisionDescriptionService 설계
 
+> **구현 완료** — `service/VisionDescriptionService.java`. 아래는 현재 구현과의 차이점 포함한 참조용 명세.
+
+현재 구현 (`service/VisionDescriptionService.java`):
+- `describe(byte[] imageBytes, String mimeType)` 단일 메서드
+- `@ConditionalOnProperty` 없음 — 항상 빈으로 등록, Vision 프로바이더 미등록 시 fallback 문자열 반환
+- `LlmProviderExhaustedException` catch → `"[이미지 설명 불가: Vision 프로바이더 미등록]"` 반환
+
+이미지 파일 경로에서 직접 호출이 필요한 경우 (`ImageExtractorService` 연동 시 추가 예정):
 ```java
-@Service
-@ConditionalOnProperty("app.image-description.enabled")
-public class VisionDescriptionService {
-
-    private final LlmRouter llmRouter;
-
-    public VisionDescriptionService(LlmRouter llmRouter) {
-        this.llmRouter = llmRouter;
-    }
-
-    public String describe(Path imagePath) {
-        return describe(Files.readAllBytes(imagePath), detectMimeType(imagePath));
-    }
-
-    public String describe(byte[] imageBytes, String mimeType) {
-        // TaskType.VISION → gemma4(LIGHT_BOTH, priority=0) 우선 선택
-        // gemma4 다운 또는 Circuit Breaker 차단 시 gemini-1(BOTH)로 자동 fallback
-        ChatModel visionModel = llmRouter.route(TaskType.VISION);
-        return ChatClient.builder(visionModel).build()
-                .prompt()
-                .user(u -> u
-                    .text("이 이미지를 한국어로 간결하게 설명하세요. " +
-                          "다이어그램이면 구성 요소와 관계를, 표면 텍스트가 있으면 포함하세요. " +
-                          "최대 3문장.")
-                    .media(MimeTypeUtils.parseMimeType(mimeType), imageBytes))
-                .call()
-                .content();
-    }
+public String describe(Path imagePath) {
+    return describe(Files.readAllBytes(imagePath), detectMimeType(imagePath));
 }
 ```
 
 **라우팅 동작**:
-- `TaskType.VISION` → `gemma4(LIGHT_BOTH, priority=0)` 최우선 선택 (다국어·이미지·다이어그램 지원)
-- gemma4 미응답·Circuit Breaker 차단 시 → `gemini-1(BOTH)` fallback
-- 모든 프로바이더 불가 시 `LlmProviderExhaustedException` → 호출자에서 catch 후 L1 fallback
+- `LlmRouter.route(TaskType.VISION, RoutingMode.COST_FIRST)` → `local-vision(VISION)` → `local(LIGHT_BOTH)` → `NORMAL(BOTH)` 순 fallback
+- 모든 프로바이더 불가 시 `LlmProviderExhaustedException` → catch 후 L1 fallback 문자열 반환
 
 ### 5.2 배치 처리
 
@@ -612,6 +595,7 @@ public record AppProperties(
 
 | 우선순위 | 항목 | 변경 파일 | 난이도 | 효과 |
 |---------|------|-----------|-------|------|
+| ✅ | VisionDescriptionService | `service/VisionDescriptionService.java` | — | 구현 완료 |
 | 1 | MD 이미지 정제 (L1) | `DocumentLoaderService` | 낮음 | 즉시 노이즈 제거 |
 | 2 | 이미지 추출 저장 (경로만, 설명 없음) | `ImageExtractorService` + `RagService` | 중간 | 검색 결과 이미지 연동 기반 |
 | 3 | AgentState·ChatResponse 확장 | `AgentState`, `ChatResponse`, `RetrievalService`, `AgentService` | 낮음 | API 응답에 imageRefs 포함 |
@@ -829,7 +813,7 @@ public class ImageTypeClassifier {
 
     public String classify(byte[] bytes, String mimeType) {
         try {
-            ChatModel m = router.route(TaskType.VISION);
+            ChatModel m = router.route(TaskType.VISION, RoutingMode.COST_FIRST);
             String raw = ChatClient.builder(m).build().prompt()
                 .user(u -> u.text(CLASSIFY_PROMPT)
                             .media(MimeTypeUtils.parseMimeType(mimeType), bytes))
