@@ -20,6 +20,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
@@ -29,6 +30,14 @@ import java.util.stream.Collectors;
  */
 @Service
 public class DocumentLoaderService {
+
+    private static final Pattern IMAGE_PATH_MARKER = Pattern.compile("\\[이미지: ([^\\]]+?)]");
+
+    private final DocxToMarkdownConverter converter;
+
+    public DocumentLoaderService(DocxToMarkdownConverter converter) {
+        this.converter = converter;
+    }
 
     public List<Document> load(Path filePath) throws IOException {
         String name = filePath.getFileName().toString().toLowerCase();
@@ -83,6 +92,32 @@ public class DocumentLoaderService {
             }
         }
         return docs;
+    }
+
+    /**
+     * Image-aware DOCX loader: converts via DocxToMarkdownConverter,
+     * then splits by headings and extracts [이미지: ...] paths into image_paths metadata.
+     * Called from RagService when docId and imagesDir are available.
+     */
+    public List<Document> loadDocx(Path filePath, String docId, Path imagesDir) throws IOException {
+        String md = converter.convert(filePath, docId, imagesDir);
+        return splitMarkdownBySections(md).stream()
+                .map(doc -> {
+                    List<String> imgs = extractImagePaths(doc.getText());
+                    if (imgs.isEmpty()) return doc;
+                    Map<String, Object> meta = new HashMap<>(doc.getMetadata());
+                    meta.put("image_paths", String.join(",", imgs));
+                    return new Document(doc.getText(), meta);
+                })
+                .toList();
+    }
+
+    private List<String> extractImagePaths(String text) {
+        if (text == null) return List.of();
+        List<String> paths = new ArrayList<>();
+        Matcher m = IMAGE_PATH_MARKER.matcher(text);
+        while (m.find()) paths.add(m.group(1));
+        return paths;
     }
 
     private List<Document> loadDocx(Path filePath) throws IOException {

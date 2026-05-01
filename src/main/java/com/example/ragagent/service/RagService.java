@@ -42,6 +42,7 @@ public class RagService {
 
     private final AppProperties props;
     private final DocumentLoaderService loaderService;
+    private final ImageExtractorService imageExtractorService;
     private final VectorStoreRegistry vectorStoreRegistry;
     private final ObjectMapper mapper;
     private final KeywordMetadataEnricher keywordEnricher;
@@ -54,9 +55,11 @@ public class RagService {
     private Path registryPath;
 
     public RagService(AppProperties props, DocumentLoaderService loaderService,
+                      ImageExtractorService imageExtractorService,
                       VectorStoreRegistry vectorStoreRegistry, ChatModel chatModel) {
         this.props = props;
         this.loaderService = loaderService;
+        this.imageExtractorService = imageExtractorService;
         this.vectorStoreRegistry = vectorStoreRegistry;
         this.mapper = new ObjectMapper().enable(SerializationFeature.INDENT_OUTPUT);
         this.keywordEnricher = new KeywordMetadataEnricher(chatModel, 5);
@@ -80,9 +83,19 @@ public class RagService {
         String sha256 = computeSha256(filePath);
         String docId = filename + "_" + sha256.substring(0, 8);
         String docType = inferDocType(filename);
+        Path imagesDir = dataDir.resolve("images").resolve(docId);
 
-        // Load & split
-        List<Document> rawDocs = loaderService.load(filePath);
+        // Load & split (DOCX: converter-based with image extraction; PPTX/PDF: extract separately)
+        List<Document> rawDocs;
+        String lower = filename.toLowerCase();
+        if (lower.endsWith(".docx")) {
+            rawDocs = loaderService.loadDocx(filePath, docId, imagesDir);
+        } else {
+            rawDocs = loaderService.load(filePath);
+            if (lower.endsWith(".pptx") || lower.endsWith(".pdf")) {
+                rawDocs = injectImagePaths(rawDocs, imageExtractorService.extract(filePath, docId, imagesDir));
+            }
+        }
         List<Document> chunks = splitDocuments(rawDocs, filename, props.chunkSize(), props.chunkOverlap());
 
         // Tag metadata
@@ -232,8 +245,18 @@ public class RagService {
         String sha256 = computeSha256(filePath);
         String docId = filename + "_" + sha256.substring(0, 8);
         String docType = inferDocType(filename);
+        Path imagesDir = dataDir.resolve("images").resolve(docId);
 
-        List<Document> rawDocs = loaderService.load(filePath);
+        List<Document> rawDocs;
+        String lower = filename.toLowerCase();
+        if (lower.endsWith(".docx")) {
+            rawDocs = loaderService.loadDocx(filePath, docId, imagesDir);
+        } else {
+            rawDocs = loaderService.load(filePath);
+            if (lower.endsWith(".pptx") || lower.endsWith(".pdf")) {
+                rawDocs = injectImagePaths(rawDocs, imageExtractorService.extract(filePath, docId, imagesDir));
+            }
+        }
         List<Document> chunks = splitDocuments(rawDocs, filename, props.chunkSize(), props.chunkOverlap());
 
         List<Document> tagged = new ArrayList<>();
@@ -287,6 +310,35 @@ public class RagService {
         if (existing == null || existing.springDocIds().isEmpty()) return;
         VectorStore store = vectorStoreRegistry.getStore(version);
         store.delete(existing.springDocIds());
+        deleteImagesQuietly(dataDir.resolve("images").resolve(docId));
+    }
+
+    private void deleteImagesQuietly(Path dir) {
+        if (!Files.exists(dir)) return;
+        try (Stream<Path> walk = Files.walk(dir)) {
+            walk.sorted(Comparator.reverseOrder()).forEach(p -> {
+                try { Files.delete(p); } catch (IOException ignored) {}
+            });
+        } catch (IOException e) {
+            log.warn("Image directory cleanup failed {}: {}", dir, e.getMessage());
+        }
+    }
+
+    private List<Document> injectImagePaths(List<Document> docs, Map<Integer, List<String>> imageMap) {
+        if (imageMap.isEmpty()) return docs;
+        List<Document> result = new ArrayList<>(docs.size());
+        for (int i = 0; i < docs.size(); i++) {
+            Document doc = docs.get(i);
+            List<String> imgs = imageMap.getOrDefault(i + 1, List.of());
+            if (imgs.isEmpty()) {
+                result.add(doc);
+            } else {
+                Map<String, Object> meta = new HashMap<>(doc.getMetadata());
+                meta.put("image_paths", String.join(",", imgs));
+                result.add(new Document(doc.getText(), meta));
+            }
+        }
+        return result;
     }
 
     private List<Document> splitDocuments(List<Document> docs, String filename, int chunkSize, int overlap) {

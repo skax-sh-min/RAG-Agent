@@ -8,6 +8,9 @@ import com.example.ragagent.service.AgentService;
 import com.example.ragagent.service.RagService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.core.io.FileSystemResource;
+import org.springframework.core.io.Resource;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
@@ -132,6 +135,36 @@ public class ApiController {
             return ResponseEntity.noContent().build();
         } catch (IOException e) {
             log.error("Delete error", e);
+            return ResponseEntity.internalServerError().build();
+        }
+    }
+
+    // ── Image Serving ────────────────────────────────────────────────────────
+
+    /**
+     * Serves extracted images stored under data/images/{docId}/{filename}.
+     * Rejects path traversal attempts (.. or / in either segment).
+     */
+    @GetMapping("/images/{docId}/{filename}")
+    public ResponseEntity<Resource> getImage(
+            @PathVariable String docId,
+            @PathVariable String filename) {
+        if (docId.contains("..") || docId.contains("/") || docId.contains("\\")
+                || filename.contains("..") || filename.contains("/") || filename.contains("\\")) {
+            return ResponseEntity.badRequest().build();
+        }
+        Path imgPath = Path.of(props.dataDir()).resolve("images").resolve(docId).resolve(filename);
+        if (!Files.exists(imgPath) || !Files.isRegularFile(imgPath)) {
+            return ResponseEntity.notFound().build();
+        }
+        try {
+            String contentType = Files.probeContentType(imgPath);
+            if (contentType == null) contentType = "application/octet-stream";
+            return ResponseEntity.ok()
+                    .contentType(MediaType.parseMediaType(contentType))
+                    .body(new FileSystemResource(imgPath));
+        } catch (IOException e) {
+            log.error("Image serve error", e);
             return ResponseEntity.internalServerError().build();
         }
     }
