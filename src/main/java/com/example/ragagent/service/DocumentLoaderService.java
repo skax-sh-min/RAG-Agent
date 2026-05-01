@@ -20,6 +20,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 /**
@@ -123,11 +124,25 @@ public class DocumentLoaderService {
         }
     }
 
+    // MD image/link preprocessing patterns
+    private static final Pattern MD_URL_IMAGE   = Pattern.compile("!\\[([^\\]]*)]\\(https?://[^)]*\\)");
+    private static final Pattern MD_LOCAL_IMAGE = Pattern.compile("!\\[([^\\]]*)]\\([^)]+\\)");
+    private static final Pattern MD_FILE_LINK   = Pattern.compile("\\[([^\\]]*)]\\([^)]*\\.(?:pdf|docx|xlsx|pptx|doc|xls)[^)]*\\)",
+            Pattern.CASE_INSENSITIVE);
+
     private List<Document> loadText(Path filePath) throws IOException {
         String content = Files.readString(filePath);
         String lower = filePath.getFileName().toString().toLowerCase();
-        return lower.endsWith(".md") ? splitMarkdownBySections(content)
+        return lower.endsWith(".md") ? splitMarkdownBySections(preprocessMarkdown(content))
                 : List.of(new Document(content, Map.of("source_type", "file")));
+    }
+
+    /** Strips MD image/link syntax from markdown before indexing. */
+    private String preprocessMarkdown(String content) {
+        content = MD_URL_IMAGE.matcher(content).replaceAll("$1");         // ![alt](http://...) → alt
+        content = MD_LOCAL_IMAGE.matcher(content).replaceAll("[이미지: $1]"); // ![alt](local) → [이미지: alt]
+        content = MD_FILE_LINK.matcher(content).replaceAll("$1");          // [text](file.pdf) → text
+        return content;
     }
 
     private List<Document> splitMarkdownBySections(String content) {
