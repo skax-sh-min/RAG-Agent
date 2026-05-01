@@ -1,5 +1,6 @@
 package com.example.ragagent.service;
 
+import com.example.ragagent.config.AppProperties;
 import org.apache.poi.xwpf.usermodel.*;
 import org.springframework.stereotype.Component;
 
@@ -7,18 +8,32 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Optional;
 
 /**
  * Converts a DOCX to Markdown, extracting embedded images to imagesDir.
  *
  * Heading styles → #/##/###  |  bold/italic runs → ** / _
  * Tables → pipe-table  |  image runs → [이미지: relPath] markers
- * WMF/EMF → saved as-is with [이미지(변환불가): relPath] marker (Phase F handles conversion).
+ * EMF: EmfToPngConverter (Batik) when docx-emf-convert=true, else [이미지(변환불가): ...]
+ * WMF: LibreOfficeConverter when docx-wmf-convert=true, else [이미지(변환불가): ...]
  *
  * Thread-safe: opens a new XWPFDocument per call (no shared state).
  */
 @Component
 public class DocxToMarkdownConverter {
+
+    private final Optional<EmfToPngConverter> emfConverter;
+    private final Optional<LibreOfficeConverter> wmfConverter;
+    private final AppProperties props;
+
+    public DocxToMarkdownConverter(Optional<EmfToPngConverter> emfConverter,
+                                   Optional<LibreOfficeConverter> wmfConverter,
+                                   AppProperties props) {
+        this.emfConverter = emfConverter;
+        this.wmfConverter = wmfConverter;
+        this.props = props;
+    }
 
     /**
      * @param docxPath  source DOCX file
@@ -56,17 +71,43 @@ public class DocxToMarkdownConverter {
             return;
         }
 
+        boolean emfConvert = props.imageDescriptionSafe().docxEmfConvert();
+        boolean wmfConvert = props.imageDescriptionSafe().docxWmfConvert();
+
         StringBuilder line = new StringBuilder();
         for (XWPFRun run : para.getRuns()) {
             for (XWPFPicture pic : run.getEmbeddedPictures()) {
                 XWPFPictureData pd = pic.getPictureData();
                 String ext = pd.suggestFileExtension();
                 imgCounter[0]++;
-                String fileName = "d" + paraIdx + "_img" + imgCounter[0] + "." + ext;
-                Files.write(imagesDir.resolve(fileName), pd.getData());
+
+                boolean isEmf = "emf".equalsIgnoreCase(ext);
+                boolean isWmf = "wmf".equalsIgnoreCase(ext);
+                byte[] imageBytes = pd.getData();
+                String savedExt = ext;
+                boolean converted = false;
+
+                if (isEmf && emfConvert && emfConverter.isPresent()) {
+                    Optional<byte[]> png = emfConverter.get().convert(imageBytes);
+                    if (png.isPresent()) {
+                        imageBytes = png.get();
+                        savedExt = "png";
+                        converted = true;
+                    }
+                } else if (isWmf && wmfConvert && wmfConverter.isPresent()) {
+                    Optional<byte[]> png = wmfConverter.get().convert(imageBytes, ext);
+                    if (png.isPresent()) {
+                        imageBytes = png.get();
+                        savedExt = "png";
+                        converted = true;
+                    }
+                }
+
+                String fileName = "d" + paraIdx + "_img" + imgCounter[0] + "." + savedExt;
+                Files.write(imagesDir.resolve(fileName), imageBytes);
                 String relPath = "images/" + docId + "/" + fileName;
-                boolean isVector = "wmf".equalsIgnoreCase(ext) || "emf".equalsIgnoreCase(ext);
-                line.append(isVector
+                boolean unconvertable = (isEmf || isWmf) && !converted;
+                line.append(unconvertable
                         ? "[이미지(변환불가): " + relPath + "]"
                         : "[이미지: " + relPath + "]");
             }
