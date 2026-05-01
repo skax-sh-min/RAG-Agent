@@ -140,6 +140,7 @@ public class WebController {
             model.addAttribute("answer", resp.answer());
             model.addAttribute("questionType", resp.questionType());
             model.addAttribute("sources", resp.sources());
+            model.addAttribute("imageRefs", resp.imageRefs());
             model.addAttribute("totalInputTokens", resp.totalInputTokens());
             model.addAttribute("totalOutputTokens", resp.totalOutputTokens());
             model.addAttribute("llmCallCount", resp.llmCallCount());

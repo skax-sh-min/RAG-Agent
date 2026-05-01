@@ -68,6 +68,15 @@ public class RetrievalService {
                 .distinct()
                 .toList();
 
+        List<String> imageRefs = unique.stream()
+                .map(d -> (String) d.getMetadata().get("image_paths"))
+                .filter(p -> p != null && !p.isBlank())
+                .flatMap(p -> Arrays.stream(p.split(",")))
+                .map(String::strip)
+                .filter(p -> !p.isBlank())
+                .distinct()
+                .toList();
+
         List<String> warnings = new ArrayList<>(state.retrievalWarnings());
         boolean hasOcr = unique.stream()
                 .anyMatch(d -> "ocr".equals(d.getMetadata().get("source_type")));
@@ -79,6 +88,7 @@ public class RetrievalService {
                 .withRetrievedDocs(unique)
                 .withSources(sources)
                 .withRetrievalWarnings(warnings)
+                .withImageRefs(imageRefs)
                 .withNeedsRetry(false);
     }
 

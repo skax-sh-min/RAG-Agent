@@ -20,6 +20,18 @@
         <div class="md-content"
              th:attr="data-md=${answer}"></div>
 
+        <!-- Image thumbnails -->
+        <div th:if="${imageRefs != null and !#lists.isEmpty(imageRefs)}" class="mt-2 d-flex flex-wrap gap-2">
+            <a th:each="ref : ${imageRefs}"
+               th:href="@{/api/{ref}(ref=${ref})}"
+               target="_blank" rel="noopener">
+                <img th:src="@{/api/{ref}(ref=${ref})}"
+                     alt="참조 이미지"
+                     style="max-height:120px; max-width:180px; object-fit:contain; border:1px solid #dee2e6; border-radius:4px;"
+                     loading="lazy" />
+            </a>
+        </div>
+
         <!-- Sources accordion -->
         <details th:if="${sources != null and !#lists.isEmpty(sources)}" class="mt-2">
             <summary class="small text-muted" style="cursor:pointer;">

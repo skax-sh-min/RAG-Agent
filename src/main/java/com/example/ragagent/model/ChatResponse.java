@@ -7,6 +7,7 @@ public record ChatResponse(
         String answer,
         @JsonProperty("question_type") String questionType,
         List<SourceRef> sources,
+        @JsonProperty("image_refs") List<String> imageRefs,
         @JsonProperty("total_input_tokens") int totalInputTokens,
         @JsonProperty("total_output_tokens") int totalOutputTokens,
         @JsonProperty("llm_call_count") int llmCallCount,

@@ -53,6 +53,7 @@ public class AgentService {
                 result.answer(),
                 result.questionType(),
                 result.sources(),
+                result.imageRefs(),
                 result.totalInputTokens(),
                 result.totalOutputTokens(),
                 result.llmCallCount(),
