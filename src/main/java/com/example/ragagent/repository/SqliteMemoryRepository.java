@@ -34,6 +34,15 @@ public class SqliteMemoryRepository implements MemoryRepository {
                 """);
         jdbc.execute(
                 "CREATE INDEX IF NOT EXISTS idx_thread_id ON conversation_turns(thread_id)");
+        jdbc.execute("""
+                CREATE TABLE IF NOT EXISTS image_descriptions (
+                    image_path  TEXT    PRIMARY KEY,
+                    description TEXT    NOT NULL,
+                    image_type  TEXT,
+                    provider    TEXT,
+                    created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+                )
+                """);
     }
 
     @Override

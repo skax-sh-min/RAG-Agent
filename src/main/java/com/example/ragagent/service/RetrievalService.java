@@ -30,10 +30,13 @@ public class RetrievalService {
     private final RagService ragService;
     private final MultiQueryExpander multiQueryExpander;
     private final int defaultTopK;
+    private final LazyVisionService lazyVisionService; // null when disabled
 
-    public RetrievalService(ChatModel chatModel, RagService ragService, AppProperties props) {
+    public RetrievalService(ChatModel chatModel, RagService ragService, AppProperties props,
+                            Optional<LazyVisionService> lazyVisionOpt) {
         this.ragService = ragService;
         this.defaultTopK = props.searchTopK();
+        this.lazyVisionService = lazyVisionOpt.orElse(null);
         this.multiQueryExpander = MultiQueryExpander.builder()
                 .chatClientBuilder(ChatClient.builder(chatModel))
                 .includeOriginal(true)
@@ -77,6 +80,12 @@ public class RetrievalService {
                 .distinct()
                 .toList();
 
+        List<Document> contextDocs = unique;
+        if (!imageRefs.isEmpty() && lazyVisionService != null) {
+            Map<String, String> descs = lazyVisionService.describeIfNeeded(imageRefs);
+            if (!descs.isEmpty()) contextDocs = augmentWithDescriptions(unique, descs);
+        }
+
         List<String> warnings = new ArrayList<>(state.retrievalWarnings());
         boolean hasOcr = unique.stream()
                 .anyMatch(d -> "ocr".equals(d.getMetadata().get("source_type")));
@@ -85,11 +94,43 @@ public class RetrievalService {
         }
 
         return state
-                .withRetrievedDocs(unique)
+                .withRetrievedDocs(contextDocs)
                 .withSources(sources)
                 .withRetrievalWarnings(warnings)
                 .withImageRefs(imageRefs)
                 .withNeedsRetry(false);
+    }
+
+    private List<Document> augmentWithDescriptions(List<Document> docs, Map<String, String> descriptions) {
+        return docs.stream().map(doc -> {
+            String text = doc.getText();
+            if (text == null) return doc;
+
+            String augmented = text;
+            // Inline marker replacement (DOCX)
+            for (Map.Entry<String, String> e : descriptions.entrySet()) {
+                String marker = "[이미지: " + e.getKey() + "]";
+                if (augmented.contains(marker)) {
+                    augmented = augmented.replace(marker, marker + "\n설명: " + e.getValue());
+                }
+            }
+
+            // Append for docs without inline markers (PPTX/PDF)
+            String imgPathsMeta = (String) doc.getMetadata().get("image_paths");
+            if (imgPathsMeta != null && !imgPathsMeta.isBlank()) {
+                StringBuilder appendix = new StringBuilder();
+                for (String p : imgPathsMeta.split(",")) {
+                    p = p.strip();
+                    String desc = descriptions.get(p);
+                    if (desc != null && !augmented.contains("[이미지: " + p + "]")) {
+                        appendix.append("\n[이미지 설명: ").append(desc).append("]");
+                    }
+                }
+                if (!appendix.isEmpty()) augmented = augmented + appendix;
+            }
+
+            return augmented.equals(text) ? doc : new Document(augmented, doc.getMetadata());
+        }).toList();
     }
 
     private List<Document> deduplicate(List<Document> docs) {

@@ -13,7 +13,8 @@ public record AppProperties(
         int chunkOverlap,
         int searchTopK,
         LlmConfig llm,
-        IndexingConfig indexing
+        IndexingConfig indexing,
+        ImageDescriptionProperties imageDescription
 ) {
     public record LlmConfig(
             List<ProviderConfig> providers,
@@ -36,6 +37,24 @@ public record AppProperties(
             int maxConcurrentFiles,
             int maxConcurrentLlmCalls
     ) {}
+
+    public record ImageDescriptionProperties(
+            String mode,
+            boolean enabled,
+            boolean ocrEnabled,
+            String tessdataPath,
+            int minImageBytes,
+            boolean lazy,
+            boolean classifyType,
+            boolean docxEmfConvert,
+            boolean docxWmfConvert
+    ) {}
+
+    public ImageDescriptionProperties imageDescriptionSafe() {
+        if (imageDescription == null)
+            return new ImageDescriptionProperties("strip", false, false, null, 1_000, true, false, false, false);
+        return imageDescription;
+    }
 
     public IndexingConfig indexingSafe() {
         if (indexing == null) return new IndexingConfig(4, 8);
