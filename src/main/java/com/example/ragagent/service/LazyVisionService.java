@@ -19,6 +19,8 @@ import java.util.concurrent.Semaphore;
 
 /**
  * Checks the image_descriptions cache; calls VisionDescriptionService only for misses.
+ * When app.image-description.classify-type=true, first classifies each image via
+ * ImageTypeClassifier, then uses the type-specific prompt for Vision description.
  * Active only when app.image-description.enabled=true.
  */
 @Service
@@ -29,19 +31,24 @@ public class LazyVisionService {
 
     private final VisionDescriptionService visionService;
     private final ImageDescriptionRepository descRepo;
+    private final ImageTypeClassifier imageTypeClassifier;
     private final AppProperties props;
 
     public LazyVisionService(VisionDescriptionService visionService,
                              ImageDescriptionRepository descRepo,
+                             ImageTypeClassifier imageTypeClassifier,
                              AppProperties props) {
         this.visionService = visionService;
         this.descRepo = descRepo;
+        this.imageTypeClassifier = imageTypeClassifier;
         this.props = props;
     }
 
     /**
      * Returns descriptions for all given image paths.
      * Cache hits are returned instantly; misses are described in parallel and persisted.
+     * When classifyType is enabled, each image is classified first and a type-specific
+     * prompt is used for Vision description; the type is stored in image_descriptions.
      */
     public Map<String, String> describeIfNeeded(List<String> imagePaths) {
         if (imagePaths.isEmpty()) return Map.of();
@@ -53,6 +60,7 @@ public class LazyVisionService {
 
         if (misses.isEmpty()) return cached;
 
+        boolean classifyTypeEnabled = props.imageDescriptionSafe().classifyType();
         int maxLlm = props.indexingSafe().maxConcurrentLlmCalls();
         Semaphore semaphore = new Semaphore(maxLlm);
         Path dataDir = Path.of(props.dataDir());
@@ -68,9 +76,20 @@ public class LazyVisionService {
                                 if (!Files.exists(fullPath)) return;
                                 byte[] bytes = Files.readAllBytes(fullPath);
                                 String mime = detectMime(imgPath);
-                                String desc = visionService.describe(bytes, mime);
+
+                                String imageType = null;
+                                String desc;
+                                if (classifyTypeEnabled) {
+                                    imageType = imageTypeClassifier.classify(bytes, mime);
+                                    String prompt = VisionDescriptionService.PROMPTS.getOrDefault(
+                                            imageType, VisionDescriptionService.PROMPTS.get("other"));
+                                    desc = visionService.describe(bytes, mime, prompt);
+                                } else {
+                                    desc = visionService.describe(bytes, mime);
+                                }
+
                                 newDescs.put(imgPath, desc);
-                                descRepo.save(imgPath, desc, null, null);
+                                descRepo.save(imgPath, desc, imageType, null);
                             } finally {
                                 semaphore.release();
                             }
