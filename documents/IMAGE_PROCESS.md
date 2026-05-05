@@ -1,6 +1,6 @@
 # IMAGE_PROCESS — 이미지 처리 전략
 
-> **구현 현황**: `VisionDescriptionService`(5절)만 구현 완료. 나머지 파이프라인(ImageExtractorService, 포맷별 Extractor, LazyVisionService 등)은 미구현 상태이며 이 문서가 구현 계획입니다.
+> **구현 현황**: 전체 파이프라인 구현 완료. ImageExtractorService·PdfImageExtractor·PptxImageExtractor·DocxToMarkdownConverter(DOCX 이미지)·OcrService·EmfToPngConverter·LibreOfficeConverter·LazyVisionService·ImageTypeClassifier·ImageDescriptionRepository·VisionDescriptionService 모두 구현됨.
 
 문서 포맷별 이미지 처리 방식과 검색 결과 연동 전략을 아키텍트 및 개발자 관점에서 정의합니다.
 
@@ -80,17 +80,21 @@
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-### 3.2 신규 컴포넌트
+### 3.2 구현된 컴포넌트
 
-| 컴포넌트 | 역할 |
-|---------|------|
-| `ImageExtractorService` | 포맷별 이미지 추출 + 디스크 저장 조율 |
-| `PdfImageExtractor` | PDFBox `PDImageXObject` 기반 PDF 이미지 추출 |
-| `PptxImageExtractor` | POI `XSLFPictureShape` 기반 PPTX 이미지 추출 |
-| `DocxImageExtractor` | POI `XWPFPictureData` 기반 DOCX 이미지 추출 |
-| `MarkdownImageExtractor` | 로컬 경로 해석 및 URL 이미지 처리 |
-| `VisionDescriptionService` | 멀티모달 LLM 호출 → 이미지 설명 텍스트 생성 (L2) |
-| `OcrService` | Tesseract 호출 → 이미지 내 텍스트 추출 (L3) |
+| 컴포넌트 | 역할 | 조건 |
+|---------|------|------|
+| `ImageExtractorService` | 포맷별 이미지 추출 + 디스크 저장 조율 | 항상 활성 |
+| `PdfImageExtractor` | PDFBox `PDImageXObject` 기반 PDF 이미지 추출 | 항상 활성 |
+| `PptxImageExtractor` | POI `XSLFPictureShape` 기반 PPTX 이미지 추출 | 항상 활성 |
+| `DocxToMarkdownConverter` | DOCX → Markdown 변환 + 인라인 이미지 추출 (EMF/WMF 변환 포함) | 항상 활성 |
+| `VisionDescriptionService` | 멀티모달 LLM 호출 → 이미지 설명 텍스트 생성 (L2); 유형별 프롬프트 내장 | 항상 활성 |
+| `LazyVisionService` | 검색 시점 Vision 설명 생성 + SQLite 캐시 | `enabled=true` |
+| `ImageDescriptionRepository` | `image_descriptions` 테이블 CRUD | 항상 활성 |
+| `ImageTypeClassifier` | 이미지 유형 분류 → 전용 프롬프트 선택 | `enabled=true` |
+| `OcrService` | Tesseract 호출 → 이미지 내 텍스트 추출 (L3) | `ocr-enabled=true` |
+| `EmfToPngConverter` | Batik `WMFTranscoder` → SVG → `PNGTranscoder` 파이프라인 | `docx-emf-convert=true` |
+| `LibreOfficeConverter` | `soffice --headless` 기반 WMF→PNG 변환 (20s 타임아웃) | `docx-wmf-convert=true` |
 
 ### 3.3 저장 구조
 
@@ -305,19 +309,22 @@ content = content.replaceAll("\\[([^\\]]+)]\\([^)]*\\)", "$1");
 
 ### 5.1 VisionDescriptionService 설계
 
-> **구현 완료** — `service/VisionDescriptionService.java`. 아래는 현재 구현과의 차이점 포함한 참조용 명세.
+> **구현 완료** — `service/VisionDescriptionService.java`.
 
-현재 구현 (`service/VisionDescriptionService.java`):
-- `describe(byte[] imageBytes, String mimeType)` 단일 메서드
-- `@ConditionalOnProperty` 없음 — 항상 빈으로 등록, Vision 프로바이더 미등록 시 fallback 문자열 반환
+현재 구현:
+- `describe(byte[] imageBytes, String mimeType): String` — 기본 프롬프트("other" 유형) 사용
+- `describe(byte[] imageBytes, String mimeType, String prompt): String` — `ImageTypeClassifier`가 선택한 유형별 전용 프롬프트 사용
+- `@ConditionalOnProperty` 없음 — 항상 빈으로 등록; Vision 프로바이더 미등록 시 fallback 문자열 반환
 - `LlmProviderExhaustedException` catch → `"[이미지 설명 불가: Vision 프로바이더 미등록]"` 반환
 
-이미지 파일 경로에서 직접 호출이 필요한 경우 (`ImageExtractorService` 연동 시 추가 예정):
-```java
-public String describe(Path imagePath) {
-    return describe(Files.readAllBytes(imagePath), detectMimeType(imagePath));
-}
-```
+내장 유형별 프롬프트 (`PROMPTS` 맵):
+| image_type | 프롬프트 핵심 |
+|-----------|-------------|
+| `diagram` | 구성 요소·관계·흐름 방향 |
+| `screenshot` | UI 요소 위치·화면 텍스트, 코드면 언어·핵심 로직 |
+| `chart` | 축·범례·관찰 트렌드 |
+| `photo` | 피사체·상황 1문장 |
+| `other` | 일반 설명 3문장 이내 |
 
 **라우팅 동작**:
 - `LlmRouter.route(TaskType.VISION, RoutingMode.COST_FIRST)` → `local-vision(VISION)` → `local(LIGHT_BOTH)` → `NORMAL(BOTH)` 순 fallback
@@ -334,12 +341,13 @@ public String describe(Path imagePath) {
 
 ## 6. OCR 처리 (L3)
 
+> **구현 완료** — `service/OcrService.java`, `pom.xml` tess4j:5.11.0 추가.
+
 스캔 PDF 또는 텍스트 위주 스크린샷에 적용.
 
-### 6.1 의존성 추가 (pom.xml)
+### 6.1 의존성
 
 ```xml
-<!-- Tesseract OCR -->
 <dependency>
     <groupId>net.sourceforge.tess4j</groupId>
     <artifactId>tess4j</artifactId>
@@ -347,37 +355,43 @@ public String describe(Path imagePath) {
 </dependency>
 ```
 
-### 6.2 OcrService 설계
+### 6.2 OcrService 구현
 
 ```java
 @Service
-@ConditionalOnProperty("app.image-description.ocr-enabled")
+@ConditionalOnProperty(name = "app.image-description.ocr-enabled", havingValue = "true")
 public class OcrService {
 
-    private final Tesseract tesseract;
-
-    public OcrService(@Value("${app.image-description.tessdata-path:/usr/share/tesseract-ocr/5/tessdata}")
-                      String tessdataPath) {
-        this.tesseract = new Tesseract();
-        tesseract.setDatapath(tessdataPath);
-        tesseract.setLanguage("kor+eng");
-    }
+    private final String tessdataPath;  // AppProperties에서 주입
 
     public String extractText(BufferedImage image) {
-        return tesseract.doOCR(image).strip();
+        Tesseract tesseract = new Tesseract();  // 호출마다 새 인스턴스 (thread-safe 아님)
+        if (tessdataPath != null && !tessdataPath.isBlank()) {
+            tesseract.setDatapath(tessdataPath);
+        }
+        tesseract.setLanguage("kor+eng");
+        return tesseract.doOCR(image);
     }
 }
 ```
 
-**스캔 PDF 처리 연동**: `DocumentLoaderService.loadPdf()`에서 `source_type=ocr` 판정 시 페이지를 이미지로 렌더링(PDFBox `PDFRenderer`) → `OcrService.extractText()` 호출 → 텍스트로 대체.
+> **주의**: `Tesseract` 인스턴스는 thread-safe하지 않으므로 호출마다 new 생성. `tessdataPath`가 blank면 `TESSDATA_PREFIX` 환경변수 또는 시스템 기본 경로를 사용.
+
+**스캔 PDF 처리 연동** (`DocumentLoaderService.loadPdf()`):
+1. `PagePdfDocumentReader`로 텍스트 추출 → 페이지의 50% 이상이 50자 미만이면 "스캔 PDF" 판정
+2. `ocrService != null`이면 `ocrWithPdfRenderer()` 호출
+3. `PDFRenderer.renderImageWithDPI(page, 300, ImageType.RGB)` → `BufferedImage` → `OcrService.extractText()`
+4. 추출된 텍스트로 새 `Document` 생성, `source_type=ocr` 태깅
 
 ---
 
 ## 7. 이미지 서빙 및 검색 결과 연동
 
+> **구현 완료** — AgentState·ChatResponse imageRefs, RetrievalService 수집, ApiController 서빙, message-assistant.html 썸네일 모두 구현됨.
+
 ### 7.1 이미지 서빙 엔드포인트
 
-`ApiController`에 추가:
+`ApiController`에 구현됨:
 
 ```java
 // GET /api/images/{docId}/{filename}
@@ -507,7 +521,9 @@ REST API 응답 예시:
 
 ## 8. 문서 삭제 시 이미지 정리
 
-`RagService.deleteByDocId()` 에 이미지 디렉터리 삭제 추가:
+> **구현 완료** — `RagService.deleteByDocId()`에서 `deleteImagesQuietly()` 호출로 `data/images/{docId}/` 전체 삭제.
+
+`RagService.deleteByDocId()` 구현:
 
 ```java
 private void deleteByDocId(String docId, String version) {
@@ -535,27 +551,31 @@ private void deleteByDocId(String docId, String version) {
 `application.properties` 추가:
 
 ```properties
-# 이미지 처리 레벨 (none | strip | vision | ocr)
+# 이미지 처리 모드 (strip | describe)
 app.image-description.mode=strip
 
-# Vision/OCR 활성화 여부 (mode=vision 또는 ocr 일 때 true)
+# Vision 파이프라인 활성화 (LazyVisionService, ImageTypeClassifier)
 app.image-description.enabled=false
+
+# PDF OCR 활성화 (OcrService)
 app.image-description.ocr-enabled=false
 
-# Tesseract tessdata 경로 (L3 사용 시)
-app.image-description.tessdata-path=/usr/share/tesseract-ocr/5/tessdata
+# Tesseract tessdata 경로 — 미설정 시 TESSDATA_PREFIX 환경변수 또는 시스템 기본 경로 사용
+# app.image-description.tessdata-path=/usr/share/tesseract-ocr/5/tessdata
 
 # 이미지 크기 필터 — 이 값 미만(bytes) 이미지는 L0(무시)
-app.image-description.min-image-bytes=5120
+app.image-description.min-image-bytes=1000
 
-# Lazy Vision (12절): true=검색 시점 생성+캐시, false=인덱싱 시점 동기 생성
+# Lazy Vision: true=검색 시점 생성+캐시, false=인덱싱 시점 동기 생성
 app.image-description.lazy=true
 
-# 이미지 유형 분류기 (13절) 활성화 여부 — 비전 호출 2회로 증가하므로 옵션
+# 이미지 유형 분류기 활성화 여부 — Vision 호출이 2회로 증가하므로 기본 비활성
 app.image-description.classify-type=false
 
-# DOCX EMF/WMF 변환 (14절)
-app.image-description.docx-emf-convert=true
+# DOCX EMF→PNG 변환 (Batik)
+app.image-description.docx-emf-convert=false
+
+# DOCX WMF→PNG 변환 (LibreOffice headless 필요)
 app.image-description.docx-wmf-convert=false
 ```
 
@@ -588,27 +608,26 @@ public record AppProperties(
 
 ---
 
-## 10. 구현 로드맵
+## 10. 구현 완료 현황
 
-> 5절 동기 L2와 12절 Lazy L2는 같은 컴포넌트(`VisionDescriptionService`)를 공유합니다.
-> 본 로드맵은 **Lazy를 기본 동작으로 채택**한 순서이며, `app.image-description.lazy=false`로 두면 5절 동기 L2 동작합니다.
+> 모든 항목 구현 완료. Lazy Vision이 기본 동작(`app.image-description.lazy=true`).
 
-| 우선순위 | 항목 | 변경 파일 | 난이도 | 효과 |
-|---------|------|-----------|-------|------|
-| ✅ | VisionDescriptionService | `service/VisionDescriptionService.java` | — | 구현 완료 |
-| 1 | MD 이미지 정제 (L1) | `DocumentLoaderService` | 낮음 | 즉시 노이즈 제거 |
-| 2 | 이미지 추출 저장 (경로만, 설명 없음) | `ImageExtractorService` + `RagService` | 중간 | 검색 결과 이미지 연동 기반 |
-| 3 | AgentState·ChatResponse 확장 | `AgentState`, `ChatResponse`, `RetrievalService`, `AgentService` | 낮음 | API 응답에 imageRefs 포함 |
-| 4 | 이미지 서빙 엔드포인트 | `ApiController` | 낮음 | 이미지 직접 접근 |
-| 5 | `image_descriptions` 캐시 테이블 + Repository | `SqliteMemoryRepository` (DDL), `ImageDescriptionRepository` | 낮음 | Lazy 캐시 기반 |
-| 6 | `LazyVisionService` + RetrievalService 통합 | `LazyVisionService`, `RetrievalService` | 중간 | **검색 시점 설명 생성** |
-| 7 | `ImageTypeClassifier` + 유형별 프롬프트 | `ImageTypeClassifier`, `VisionDescriptionService` | 중간 | 설명 품질 향상 |
-| 8 | PPTX Vision 설명 (Lazy) | `PptxImageExtractor` | 중간 | 슬라이드 검색 품질 향상 |
-| 9 | DOCX Vision 설명 (Lazy) + EMF 변환 | `DocxImageExtractor`, `EmfToPngConverter` | 중간 | 기술 문서 검색 품질 향상 |
-| 10 | PDF 스캔 OCR (L3) | `OcrService`, `DocumentLoaderService` | 높음 | 스캔 PDF 완전 지원 |
-| 11 | Web UI 이미지 표시 | `message-assistant.html` | 낮음 | 답변 화면 근거 이미지 표시 |
-| 12 | PDF 일반 이미지 (Lazy) | `PdfImageExtractor` | 높음 | 도표 검색 품질 향상 |
-| 13 | DOCX WMF 변환 (LibreOffice fallback) | `LibreOfficeConverter` | 높음 | 레거시 DOCX 호환 |
+| 항목 | 구현 파일 | 상태 |
+|------|-----------|------|
+| VisionDescriptionService | `service/VisionDescriptionService.java` | ✅ |
+| MD 이미지 정제 (L1) | `DocumentLoaderService.preprocessMarkdown()` | ✅ |
+| 이미지 추출 저장 | `ImageExtractorService`, `PdfImageExtractor`, `PptxImageExtractor`, `DocxToMarkdownConverter` | ✅ |
+| AgentState·ChatResponse 확장 | `AgentState.imageRefs`, `ChatResponse.imageRefs`, `RetrievalService`, `AgentService` | ✅ |
+| 이미지 서빙 엔드포인트 | `ApiController GET /api/images/{docId}/{filename}` | ✅ |
+| `image_descriptions` 캐시 | `ImageDescriptionRepository`, SQLite `image_descriptions` 테이블 | ✅ |
+| LazyVisionService + RetrievalService 통합 | `LazyVisionService`, `RetrievalService.augmentWithDescriptions()` | ✅ |
+| ImageTypeClassifier + 유형별 프롬프트 | `ImageTypeClassifier`, `VisionDescriptionService.PROMPTS` | ✅ |
+| PPTX 이미지 추출 (Lazy Vision 연동) | `PptxImageExtractor` | ✅ |
+| DOCX Vision 설명 (Lazy) + EMF 변환 | `DocxToMarkdownConverter`, `EmfToPngConverter` | ✅ |
+| PDF 스캔 OCR (L3) | `OcrService`, `DocumentLoaderService.ocrWithPdfRenderer()` | ✅ |
+| Web UI 이미지 썸네일 | `message-assistant.html` 이미지 그리드 | ✅ |
+| PDF 일반 이미지 (Lazy) | `PdfImageExtractor` | ✅ |
+| DOCX WMF 변환 (LibreOffice fallback) | `LibreOfficeConverter` | ✅ |
 
 ---
 
@@ -624,16 +643,13 @@ public record AppProperties(
 
 ## 12. Lazy Vision — 검색 시점 설명 생성
 
+> **구현 완료** — `LazyVisionService`, `ImageDescriptionRepository`, `RetrievalService.augmentWithDescriptions()`.
+
 ### 12.1 동기 L2 vs Lazy L2
 
 5절(L2)의 기본 설계는 **인덱싱 시점에 모든 이미지를 즉시 LLM으로 설명**합니다.
-이는 인덱싱이 끝난 시점에 모든 청크가 풍부한 텍스트를 갖게 되어 검색 품질에 도움이 되지만,
-대량 문서 동기화 시 LLM 호출이 폭주합니다.
-
-**현재 코드 베이스 진단**: 이미지 처리 관련 코드(`ImageExtractorService`, `VisionDescriptionService`)가
-아직 구현되지 않았으므로 처음부터 Lazy 전략으로 설계하는 것이 자유롭습니다.
-또한 `RagService.indexDocument()`는 SHA-256 기반으로 이미 변경 감지를 수행하므로
-이미지 추출·저장만 동기로 두고 설명만 지연시키는 분기가 자연스럽게 들어갑니다.
+대량 문서 동기화 시 LLM 호출이 폭주하는 단점이 있어 **Lazy를 기본 동작**으로 채택.
+`app.image-description.lazy=false`로 두면 인덱싱 시점 동기 L2로 전환.
 
 | 구분 | 동기 L2 (5절 기본) | Lazy L2 (본 절) |
 |------|---------------------|-----------------|
@@ -680,7 +696,7 @@ CREATE TABLE IF NOT EXISTS image_descriptions (
 
 ```java
 @Service
-@ConditionalOnProperty("app.image-description.enabled")
+@ConditionalOnProperty(name = "app.image-description.enabled", havingValue = "true")
 public class LazyVisionService {
 
     private final VisionDescriptionService visionService;
@@ -768,6 +784,8 @@ if (!imagePaths.isEmpty() && lazyVision != null) {
 
 ## 13. 이미지 유형 분류기
 
+> **구현 완료** — `ImageTypeClassifier` (`enabled=true` 조건), `VisionDescriptionService.PROMPTS` 맵.
+
 ### 13.1 동기
 
 이미지를 모두 동일 프롬프트로 설명하면 다이어그램·사진·코드 스크린샷 등 유형별 특성이 사라집니다.
@@ -798,33 +816,18 @@ LazyVisionService.describeIfNeeded(imagePath) — 캐시 미스 시:
 
 ```java
 @Service
-@ConditionalOnProperty("app.image-description.enabled")
+@ConditionalOnProperty(name = "app.image-description.enabled", havingValue = "true")
 public class ImageTypeClassifier {
-
-    private static final List<String> TYPES =
-        List.of("diagram", "screenshot", "chart", "photo", "other");
-
-    private static final String CLASSIFY_PROMPT = """
-        이 이미지의 유형을 다음 중 하나로 분류하세요. 단어 하나만 출력:
-        diagram, screenshot, chart, photo, other
-        """;
-
-    private final LlmRouter router;
-
-    public String classify(byte[] bytes, String mimeType) {
-        try {
-            ChatModel m = router.route(TaskType.VISION, RoutingMode.COST_FIRST);
-            String raw = ChatClient.builder(m).build().prompt()
-                .user(u -> u.text(CLASSIFY_PROMPT)
-                            .media(MimeTypeUtils.parseMimeType(mimeType), bytes))
-                .call().content().strip().toLowerCase();
-            return TYPES.contains(raw) ? raw : "other";
-        } catch (Exception e) {
-            return "other";
-        }
-    }
+    // LlmRouter.route(TaskType.LIGHT_BOTH, RoutingMode.COST_FIRST) 사용
+    // (VISION 전용 모델이 아닌 범용 멀티모달 모델로 분류 — 빠르고 저비용)
+    public String classify(byte[] imageBytes, String mimeType): String
+    // 응답값: "diagram" | "screenshot" | "chart" | "photo" | "other"
+    // LLM 응답이 VALID_TYPES 외 단어면 "other" fallback
+    // 예외 발생 시 "other" 반환 (운영 안정성)
 }
 ```
+
+> **주의**: 설계 문서(13.4)에서는 `TaskType.VISION`으로 명시했으나 실제 구현은 `TaskType.LIGHT_BOTH`를 사용함. 분류 작업은 정밀 Vision 모델보다 저비용 멀티모달 모델로도 충분.
 
 ### 13.5 유형별 프롬프트
 
@@ -852,6 +855,9 @@ private static final Map<String, String> PROMPTS = Map.of(
 ---
 
 ## 14. WMF/EMF 변환 (DOCX 한정)
+
+> **구현 완료** — `EmfToPngConverter` (Batik, `docx-emf-convert=true`), `LibreOfficeConverter` (`docx-wmf-convert=true`), `DocxToMarkdownConverter`에 통합.
+
 
 ### 14.1 문제
 

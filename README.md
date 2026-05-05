@@ -133,34 +133,52 @@ rag_java/
     │   │   ├── ApiController.java     # REST API (/api/*)
     │   │   └── WebController.java     # Web UI HTMX handler (/ui/*, /chat/*, /llm-usage)
     │   ├── llm/
-    │   │   └── CircuitBreaker.java    # In-memory LLM provider circuit breaker
+    │   │   ├── LlmRouter.java         # Multi-provider routing: TaskType × RoutingMode
+    │   │   ├── RoutingMode.java       # COST_FIRST|QUALITY_FIRST|PROGRESSIVE|DUAL|LOCAL_ONLY
+    │   │   └── CircuitBreaker.java    # In-memory per-provider circuit breaker (Retry-After aware)
     │   ├── model/                     # Java 21 records
     │   │   └── ChatRequest/Response/SourceRef/DocumentInfo/SyncResult/ThreadMeta/ChatForm/LlmProviderReport.java
     │   ├── repository/
-    │   │   ├── MemoryRepository.java          # Conversation memory interface (includes getTurns)
-    │   │   ├── SqliteMemoryRepository.java    # SQLite WAL-based implementation
-    │   │   └── LlmUsageRepository.java        # LLM token usage SQLite repository
+    │   │   ├── MemoryRepository.java              # Conversation memory interface (includes getTurns)
+    │   │   ├── SqliteMemoryRepository.java        # SQLite WAL-based implementation
+    │   │   ├── LlmUsageRepository.java            # LLM token usage SQLite repository
+    │   │   └── ImageDescriptionRepository.java    # image_descriptions table CRUD (Vision cache)
     │   └── service/
-    │       ├── AgentService.java          # Agent pipeline entry point
-    │       ├── ClassifierService.java     # Question type classification node
-    │       ├── DirectAnswerService.java   # Direct response node for meta questions
-    │       ├── RetrievalService.java      # Vector search node
-    │       ├── AnswerService.java         # Answer generation + evidence sufficiency check
-    │       ├── CriticService.java         # Evidence verification node
-    │       ├── FinalizeService.java       # Conversation memory save node
-    │       ├── MemoryService.java         # Multi-turn memory — SQLite persistence
-    │       ├── RagService.java            # Document indexing + search
-    │       ├── DocumentLoaderService.java # PDF/PPTX/DOCX/TXT/MD loader
-    │       ├── ThreadMetaService.java     # Conversation thread metadata management
-    │       └── VectorStoreRegistry.java   # Per-version ChromaVectorStore management
+    │       ├── AgentService.java              # Agent pipeline entry point
+    │       ├── StreamingAgentService.java     # SSE streaming pipeline orchestrator
+    │       ├── GraphListener.java             # Hook interface for node/token/source events
+    │       ├── ClassifierService.java         # Question type classification node
+    │       ├── DirectAnswerService.java       # Direct response node for meta questions
+    │       ├── RetrievalService.java          # Vector search node + LazyVision augmentation
+    │       ├── AnswerService.java             # Answer generation + streaming + evidence check
+    │       ├── CriticService.java             # Evidence verification node
+    │       ├── FinalizeService.java           # Conversation memory save node
+    │       ├── MemoryService.java             # Multi-turn memory — SQLite persistence
+    │       ├── RagService.java                # Document indexing + sync + image cleanup
+    │       ├── DocumentLoaderService.java     # PDF/PPTX/DOCX/TXT/MD loader; scanned PDF OCR
+    │       ├── DocxToMarkdownConverter.java   # DOCX → Markdown with inline image extraction
+    │       ├── ImageExtractorService.java     # Image extraction orchestrator (PDF/PPTX/DOCX)
+    │       ├── PdfImageExtractor.java         # PDFBox PDImageXObject-based PDF image extractor
+    │       ├── PptxImageExtractor.java        # POI XSLFPictureShape-based PPTX image extractor
+    │       ├── VisionDescriptionService.java  # Image → Korean description via LLM (Vision task)
+    │       ├── LazyVisionService.java         # On-demand Vision description + SQLite cache
+    │       ├── ImageTypeClassifier.java       # Image type classification for prompt selection
+    │       ├── OcrService.java                # Tesseract OCR for scanned PDFs (kor+eng)
+    │       ├── EmfToPngConverter.java         # Batik WMFTranscoder→SVG→PNGTranscoder pipeline
+    │       ├── LibreOfficeConverter.java      # LibreOffice headless WMF→PNG (20s timeout)
+    │       ├── KeywordMetadataEnricher.java   # LLM-based keyword extraction per chunk
+    │       ├── ThreadMetaService.java         # Conversation thread metadata management
+    │       └── VectorStoreRegistry.java       # Per-version ChromaVectorStore management
     └── resources/
         ├── application.properties
         ├── messages.properties            # UI strings — English (default)
         ├── messages_ko.properties         # UI strings — Korean
         ├── static/
-        │   └── css/
-        │       ├── app.css                # Custom styles (bubbles, animations, upload progress, etc.)
-        │       └── theme.css              # Light/dark CSS variables + Bootstrap dark mode overrides
+        │   ├── css/
+        │   │   ├── app.css                # Custom styles (bubbles, animations, upload progress, etc.)
+        │   │   └── theme.css              # Light/dark CSS variables + Bootstrap dark mode overrides
+        │   └── js/
+        │       └── chat-stream.js         # SSE streaming client (fetch + ReadableStream)
         └── templates/
             ├── layout/base.html           # Shared layout (Thymeleaf Layout Dialect)
             ├── chat.html                  # Chat page (server-renders previous turns)
@@ -195,21 +213,29 @@ User question
 ## Features
 
 - **Web UI** — Thymeleaf + HTMX chat, document management, and LLM usage interface with KO/EN language switcher
+- **SSE real-time streaming** — per-node stage badges (classifier → retrieval → answer → critic), token-level streaming via `chat-stream.js` (fetch + ReadableStream); DUAL mode streams both tabs simultaneously
 - **Dark mode** — CSS variable–based light/dark toggle, auto-detects `prefers-color-scheme` with `localStorage` user override
 - **Question classification + routing** — meta (greetings/small talk) answered directly without RAG; all others go through the full pipeline
-- **Vector search** — LLM generates an optimized search query, then performs Chroma similarity search
+- **Multi-LLM routing** — `LlmRouter` selects providers by `TaskType × RoutingMode`; COST_FIRST / QUALITY_FIRST / PROGRESSIVE / DUAL (parallel local + external) / LOCAL_ONLY
+- **Circuit Breaker** — automatic provider blocking on HTTP 429/errors (Retry-After aware), priority-based failover, status visible in LLM usage dashboard
+- **Vector search** — LLM generates an optimized search query (`MultiQueryExpander`, 3 parallel queries), then performs Chroma similarity search
 - **ReAct re-retrieval** — automatic re-retrieval up to 2 times when evidence is insufficient
 - **Critic verification** — LLM double-checks whether the generated answer is grounded in documents
+- **PROGRESSIVE mode** — starts with COST_FIRST; if quality score < threshold, re-runs Answer with PREMIUM provider and marks response with upgrade badge
+- **DUAL mode** — runs local and external LLM in parallel, displays results in side-by-side tabs
+- **Image processing pipeline** — PDF/PPTX/DOCX image extraction → stored under `data/images/{docId}/`; Lazy Vision description on first retrieval (cached in SQLite); image thumbnails shown in answer bubble
+- **Image type classification** — pre-classifies images (diagram / screenshot / chart / photo / other) and uses type-specific Vision prompts for better descriptions
+- **Scanned PDF OCR** — Tesseract OCR (kor+eng) for pages with insufficient text; activated via `app.image-description.ocr-enabled=true`
+- **EMF/WMF conversion** — DOCX Windows Metafile images converted to PNG via Batik (EMF) or LibreOffice headless (WMF)
 - **Multi-turn conversation** — thread-based history persistence (SQLite WAL, survives restarts)
 - **Message bubble restore** — re-entering `/chat/{threadId}` server-renders all previous turn bubbles
 - **Source hover preview** — `SourceRef` record with Bootstrap Popover shows a 200-char chunk text preview on hover
 - **Code syntax highlighting** — highlight.js applied after DOMPurify sanitize, synced with dark mode
-- **LLM usage dashboard** — per-provider daily/weekly/monthly token stats, Chart.js daily history chart
-- **Circuit Breaker** — automatic provider blocking on HTTP 429/errors, priority-based failover
+- **LLM usage dashboard** — per-provider daily/weekly/monthly token stats, Chart.js daily history chart, circuit breaker countdown
 - **Document versioning** — separate Chroma collection per version (`manual_{version}`)
 - **Incremental indexing** — SHA-256 change detection, `doc_registry.json` persistence
 - **Multiple document formats** — PDF, PPTX, DOCX, TXT, MD
-- **Java 21 Virtual Threads** — lightweight threads for LLM I/O requests
+- **Java 21 Virtual Threads** — lightweight threads for all LLM I/O and parallel indexing
 
 ## Endpoints
 
@@ -232,5 +258,6 @@ User question
 | `POST` | `/api/documents/sync` | Incremental folder sync |
 | `GET` | `/api/documents` | List indexed documents |
 | `DELETE` | `/api/documents/{docId}` | Delete a document |
+| `GET` | `/api/images/{docId}/{filename}` | Serve an extracted image file |
 | `GET` | `/api/llm/usage` | Per-provider token usage + Circuit Breaker status |
 | `GET` | `/api/llm/usage/history` | Daily token history (`?days=7\|30\|90`) |

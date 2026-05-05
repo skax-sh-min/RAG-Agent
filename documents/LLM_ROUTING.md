@@ -43,6 +43,7 @@
 │    CriticService            → TEXT                                   │
 │    DirectAnswerService      → LIGHT_TEXT                             │
 │    VisionDescriptionService → VISION                                 │
+│    ImageTypeClassifier      → LIGHT_BOTH  (분류는 범용 멀티모달로)   │
 │    KeywordMetadataEnricher  → LIGHT_TEXT                             │
 └──────────────────────────────────────────────────────────────────────┘
 ```

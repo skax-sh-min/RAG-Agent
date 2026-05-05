@@ -37,6 +37,17 @@ Copyright © 2002–2024 The Apache Software Foundation
 --------------------------------------------------------------------
 
 --------------------------------------------------------------------
+Apache Batik 1.17 (https://xmlgraphics.apache.org/batik)
+Copyright © 2000–2024 The Apache Software Foundation
+--------------------------------------------------------------------
+
+--------------------------------------------------------------------
+Tess4j 5.11.0 (https://github.com/nguyenq/tess4j)
+Copyright © 2012–2024 Quan Nguyen and contributors
+(Java wrapper for Tesseract OCR — Apache License, Version 2.0)
+--------------------------------------------------------------------
+
+--------------------------------------------------------------------
 Apache Commons FileUpload 1.5
 (https://commons.apache.org/proper/commons-fileupload)
 Copyright © 2002–2023 The Apache Software Foundation

@@ -111,34 +111,52 @@ rag_java/
     │   │   ├── ApiController.java     # REST API (/api/*)
     │   │   └── WebController.java     # Web UI HTMX 핸들러 (/ui/*, /chat/*, /llm-usage)
     │   ├── llm/
-    │   │   └── CircuitBreaker.java    # LLM 프로바이더 인메모리 차단 관리
-    │   ├── model/                     # Java 21 record
+    │   │   ├── LlmRouter.java             # 멀티 프로바이더 라우팅: TaskType × RoutingMode
+    │   │   ├── RoutingMode.java           # COST_FIRST|QUALITY_FIRST|PROGRESSIVE|DUAL|LOCAL_ONLY
+    │   │   └── CircuitBreaker.java        # LLM 프로바이더 인메모리 차단 관리 (Retry-After 지원)
+    │   ├── model/                         # Java 21 record
     │   │   └── ChatRequest/Response/SourceRef/DocumentInfo/SyncResult/ThreadMeta/ChatForm/LlmProviderReport.java
     │   ├── repository/
-    │   │   ├── MemoryRepository.java          # 대화 메모리 추상 인터페이스 (getTurns 포함)
-    │   │   ├── SqliteMemoryRepository.java    # SQLite WAL 기반 구현
-    │   │   └── LlmUsageRepository.java        # LLM 토큰 사용량 SQLite 저장소
+    │   │   ├── MemoryRepository.java              # 대화 메모리 추상 인터페이스 (getTurns 포함)
+    │   │   ├── SqliteMemoryRepository.java        # SQLite WAL 기반 구현
+    │   │   ├── LlmUsageRepository.java            # LLM 토큰 사용량 SQLite 저장소
+    │   │   └── ImageDescriptionRepository.java    # image_descriptions 테이블 CRUD (Vision 캐시)
     │   └── service/
-    │       ├── AgentService.java          # 에이전트 파이프라인 진입점
-    │       ├── ClassifierService.java     # 질문 유형 분류 노드
-    │       ├── DirectAnswerService.java   # meta 질문 직접 응답 노드
-    │       ├── RetrievalService.java      # 벡터 검색 노드
-    │       ├── AnswerService.java         # 답변 생성 + 증거 충분성 검증
-    │       ├── CriticService.java         # 근거 검증 노드
-    │       ├── FinalizeService.java       # 대화 메모리 저장 노드
-    │       ├── MemoryService.java         # 멀티턴 메모리 — SQLite 영속
-    │       ├── RagService.java            # 문서 인덱싱 + 검색
-    │       ├── DocumentLoaderService.java # PDF/PPTX/DOCX/TXT/MD 로더
-    │       ├── ThreadMetaService.java     # 대화 스레드 메타 관리
-    │       └── VectorStoreRegistry.java   # 버전별 ChromaVectorStore 관리
+    │       ├── AgentService.java              # 에이전트 파이프라인 진입점
+    │       ├── StreamingAgentService.java     # SSE 스트리밍 파이프라인 오케스트레이터
+    │       ├── GraphListener.java             # 노드/토큰/출처 이벤트 hook 인터페이스
+    │       ├── ClassifierService.java         # 질문 유형 분류 노드
+    │       ├── DirectAnswerService.java       # meta 질문 직접 응답 노드
+    │       ├── RetrievalService.java          # 벡터 검색 노드 + LazyVision 보강
+    │       ├── AnswerService.java             # 답변 생성 + 스트리밍 + 증거 충분성 검증
+    │       ├── CriticService.java             # 근거 검증 노드
+    │       ├── FinalizeService.java           # 대화 메모리 저장 노드
+    │       ├── MemoryService.java             # 멀티턴 메모리 — SQLite 영속
+    │       ├── RagService.java                # 문서 인덱싱 + 동기화 + 이미지 정리
+    │       ├── DocumentLoaderService.java     # PDF/PPTX/DOCX/TXT/MD 로더; 스캔 PDF OCR
+    │       ├── DocxToMarkdownConverter.java   # DOCX → Markdown + 인라인 이미지 추출
+    │       ├── ImageExtractorService.java     # 이미지 추출 오케스트레이터 (PDF/PPTX/DOCX)
+    │       ├── PdfImageExtractor.java         # PDFBox PDImageXObject 기반 PDF 이미지 추출
+    │       ├── PptxImageExtractor.java        # POI XSLFPictureShape 기반 PPTX 이미지 추출
+    │       ├── VisionDescriptionService.java  # 이미지 → 한국어 설명 (Vision LLM)
+    │       ├── LazyVisionService.java         # 검색 시점 Vision 설명 생성 + SQLite 캐시
+    │       ├── ImageTypeClassifier.java       # 이미지 유형 분류 → 전용 프롬프트 선택
+    │       ├── OcrService.java                # Tesseract OCR — 스캔 PDF (kor+eng)
+    │       ├── EmfToPngConverter.java         # Batik WMFTranscoder→SVG→PNGTranscoder 파이프라인
+    │       ├── LibreOfficeConverter.java      # LibreOffice headless WMF→PNG (20s 타임아웃)
+    │       ├── KeywordMetadataEnricher.java   # 청크별 LLM 키워드 추출
+    │       ├── ThreadMetaService.java         # 대화 스레드 메타 관리
+    │       └── VectorStoreRegistry.java       # 버전별 ChromaVectorStore 관리
     └── resources/
         ├── application.properties
         ├── messages.properties            # UI 문자열 — English (기본)
         ├── messages_ko.properties         # UI 문자열 — 한국어
         ├── static/
-        │   └── css/
-        │       ├── app.css                # 커스텀 스타일 (버블·애니메이션·업로드 진행바 등)
-        │       └── theme.css              # 라이트/다크 CSS 변수 + Bootstrap 다크 모드 오버라이드
+        │   ├── css/
+        │   │   ├── app.css                # 커스텀 스타일 (버블·애니메이션·업로드 진행바 등)
+        │   │   └── theme.css              # 라이트/다크 CSS 변수 + Bootstrap 다크 모드 오버라이드
+        │   └── js/
+        │       └── chat-stream.js         # SSE 스트리밍 클라이언트 (fetch + ReadableStream)
         └── templates/
             ├── layout/base.html           # 공통 레이아웃 (Thymeleaf Layout Dialect)
             ├── chat.html                  # 채팅 페이지 (이전 turn 서버 렌더 포함)
@@ -173,21 +191,29 @@ rag_java/
 ## 주요 기능
 
 - **Web UI** — Thymeleaf + HTMX 기반 채팅·문서 관리·LLM 사용량 화면, KO/EN 언어 전환
+- **SSE 실시간 스트리밍** — 노드별 단계 배지(classifier→retrieval→answer→critic) + 토큰 실시간 표시; DUAL 모드는 두 탭 동시 스트리밍 (`chat-stream.js`, fetch + ReadableStream)
 - **다크 모드** — CSS 변수 기반 라이트/다크 전환, `prefers-color-scheme` 자동 감지 + `localStorage` 사용자 override
 - **질문 분류 + 라우팅** — meta(인사·잡담)는 RAG 없이 직접 응답, 나머지는 풀 파이프라인
-- **벡터 검색** — LLM이 최적 검색 쿼리를 생성한 뒤 Chroma 유사도 검색
+- **멀티 LLM 라우팅** — `LlmRouter`가 `TaskType × RoutingMode` 기준으로 프로바이더 선택: COST_FIRST / QUALITY_FIRST / PROGRESSIVE / DUAL (로컬+외부 병렬) / LOCAL_ONLY
+- **Circuit Breaker** — HTTP 429/오류 시 프로바이더 자동 차단 (Retry-After 지원), 우선순위 기반 failover; LLM 사용량 대시보드에서 차단 상태 확인
+- **벡터 검색** — `MultiQueryExpander`(3쿼리 병렬)로 최적 검색 후 Chroma 유사도 검색
 - **ReAct 재검색** — 증거 부족 시 최대 2회 자동 재검색
 - **Critic 검증** — 생성된 답변이 문서에 근거하는지 LLM이 이중 검증
+- **PROGRESSIVE 모드** — COST_FIRST로 시작 → 품질 임계값 미달 시 PREMIUM 프로바이더로 재실행 + 업그레이드 배지 표시
+- **DUAL 모드** — 로컬·외부 LLM 병렬 실행, 두 답변을 탭으로 비교
+- **이미지 처리 파이프라인** — PDF/PPTX/DOCX 이미지 추출 → `data/images/{docId}/` 저장; 검색 시점 Lazy Vision 설명 생성 (SQLite 캐시); 답변 버블에 이미지 썸네일 표시
+- **이미지 유형 분류** — diagram / screenshot / chart / photo / other 분류 후 유형별 전용 Vision 프롬프트 적용
+- **스캔 PDF OCR** — Tesseract OCR (kor+eng)로 텍스트 없는 페이지 처리 (`app.image-description.ocr-enabled=true`)
+- **EMF/WMF 변환** — DOCX Windows Metafile 이미지를 Batik(EMF) 또는 LibreOffice headless(WMF)로 PNG 변환
 - **멀티턴 대화** — `thread_id` 기반 대화 이력 유지 (SQLite WAL, 재시작 후에도 영속)
 - **메시지 버블 복원** — `/chat/{threadId}` 재진입 시 이전 turn 메시지 버블 서버 렌더링
 - **출처 hover 미리보기** — `SourceRef` 구조체 기반 Bootstrap Popover, 출처 hover 시 청크 텍스트 200자 미리보기
 - **코드 syntax highlight** — DOMPurify sanitize 후 highlight.js 적용, 다크 모드 연동
-- **LLM 사용량 대시보드** — 프로바이더별 일간·주간·월간 토큰 사용량, Chart.js 일별 히스토리 차트
-- **Circuit Breaker** — HTTP 429/오류 시 프로바이더 자동 차단, 우선순위 기반 failover
+- **LLM 사용량 대시보드** — 프로바이더별 일간·주간·월간 토큰 사용량, Chart.js 일별 히스토리 차트, Circuit Breaker 카운트다운
 - **문서 버전 관리** — 버전별 Chroma 컬렉션 분리 (`manual_{version}`)
 - **증분 인덱싱** — SHA-256 기반 변경 감지, `doc_registry.json` 영속
 - **다양한 문서 형식** — PDF, PPTX, DOCX, TXT, MD
-- **Java 21 Virtual Threads** — LLM I/O 요청에 경량 스레드 적용
+- **Java 21 Virtual Threads** — LLM I/O 및 병렬 인덱싱 전체에 경량 스레드 적용
 
 ## 엔드포인트
 
@@ -210,5 +236,6 @@ rag_java/
 | `POST` | `/api/documents/sync` | 증분 동기화 |
 | `GET` | `/api/documents` | 인덱싱된 문서 목록 |
 | `DELETE` | `/api/documents/{docId}` | 문서 삭제 |
+| `GET` | `/api/images/{docId}/{filename}` | 추출된 이미지 파일 서빙 |
 | `GET` | `/api/llm/usage` | 프로바이더별 토큰 사용량 + Circuit Breaker 상태 |
 | `GET` | `/api/llm/usage/history` | 일별 토큰 히스토리 (`?days=7\|30\|90`) |

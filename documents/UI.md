@@ -40,7 +40,8 @@ src/main/resources/
 └── static/
     ├── css/app.css                        # 버블·배지·DUAL 탭·타이핑 인디케이터 스타일
     ├── css/theme.css                      # light/dark CSS 변수
-    └── js/command-palette.js             # Cmd+K 인터랙션
+    └── js/
+        └── chat-stream.js                # SSE 스트리밍 클라이언트 (fetch + ReadableStream)
 ```
 
 ---
@@ -51,7 +52,8 @@ src/main/resources/
 |--------|------|------|------|
 | GET | `/` | `chat.html` | 새 대화 |
 | GET | `/chat/{threadId}` | `chat.html` | 기존 대화 이어하기 (이전 turn 서버 렌더) |
-| POST | `/ui/chat` | `fragments/message-assistant` 또는 `message-assistant-dual` | 질문 전송 |
+| POST | `/ui/chat` | `fragments/message-assistant` 또는 `message-assistant-dual` | 질문 전송 (동기 fallback) |
+| POST | `/ui/chat/stream` | `text/event-stream` (SseEmitter) | SSE 스트리밍 응답 — `chat-stream.js`가 사용 |
 | POST | `/ui/chat/new` | redirect `/chat/{newId}` | 새 대화 생성 |
 | PATCH | `/ui/threads/{threadId}/title` | `fragments/thread-item` | 대화 제목 수정 |
 | PATCH | `/ui/threads/{threadId}/routing-mode` | `204` | 대화별 라우팅 모드 저장 |
@@ -111,7 +113,16 @@ PROGRESSIVE 업그레이드 시 `🔝 고추론 재분석 → {premiumProvider}`
 ## 5. HTMX 인터랙션 흐름
 
 ```
-[채팅 전송]  hx-post="/ui/chat" → hx-swap="beforeend" #chat-messages
+[채팅 전송]  chat-stream.js가 form submit을 capture 단계에서 가로챔
+              → fetch POST /ui/chat/stream (text/event-stream)
+              → ReadableStream으로 SSE 이벤트 파싱
+              → stage 이벤트: 단계 배지 교체 (classifier/retrieval/answer/critic/upgrade)
+              → sources 이벤트: Bootstrap Popover 출처 배지 삽입
+              → token 이벤트: 텍스트 실시간 누적 (DUAL: tab 라우팅)
+              → done 이벤트: marked.js 마크다운 렌더 + 메타데이터 footer 표시
+                             + htmx.trigger(body, "refreshThreadList")
+              → error 이벤트: 오류 버블 교체
+              hx-post="/ui/chat" 속성은 JS 비활성 시 fallback으로 유지
               → DUAL: message-assistant-dual / 단일: message-assistant
               → HX-Trigger: "refreshThreadList" (사이드바 자동 갱신)
 
@@ -158,10 +169,37 @@ PROGRESSIVE 업그레이드 시 `🔝 고추론 재분석 → {premiumProvider}`
 
 ---
 
-## 8. 미구현 — SSE 스트리밍
+## 8. SSE 스트리밍
 
-현재 `AgentGraph`는 동기 멀티 노드 구조(CLASSIFIER→RETRIEVAL→ANSWER→CRITIC→FINALIZE)이므로
-Answer 노드만 스트리밍해도 후속 Critic이 완성 텍스트를 필요로 합니다.
-구현 옵션:
-- CRITIC 비활성 단순 스트리밍 모드 (품질 체크 포기)
-- 노드별 SSE 이벤트 전송 (클라이언트에서 단계별 진행 표시)
+`POST /ui/chat/stream` → `SseEmitter(180s)` → Virtual Thread에서 `StreamingAgentService.run()` 실행.
+
+```
+stage(classifier) → stage(retrieval) → sources → stage(answer) → token × N
+→ stage(critic) → [stage(answer) × retry] → done
+```
+
+### SSE 이벤트 스펙
+
+| event | data | 설명 |
+|-------|------|------|
+| `stage` | `{"id":"retrieval","text":"관련 문서 검색 중..."}` | 노드 진입 시 배지 교체 |
+| `sources` | `[{"label":"...","preview":"..."}]` JSON 배열 | RETRIEVAL 완료 후 출처 배지 삽입 |
+| `token` | `{"tab":null,"text":"텍스트 조각"}` | ANSWER 스트리밍 토큰; DUAL은 tab="local"/"external" |
+| `done` | 메타데이터 JSON (`usedProvider`, `inputTokens`, `elapsedMs` 등) | 완료 시 마크다운 렌더 |
+| `error` | `{"message":"오류 설명"}` | 오류 버블로 교체 |
+
+### 컴포넌트
+
+| 파일 | 역할 |
+|------|------|
+| `service/StreamingAgentService.java` | SSE 파이프라인 오케스트레이터; `AgentGraph.runStreaming()` 호출 |
+| `service/GraphListener.java` | 노드/토큰/출처 이벤트 hook 인터페이스 (`NOOP` 상수로 동기 경로 오버헤드 0) |
+| `agent/AgentGraph.java` | `runStreaming(state, listener)` 메서드 — `AnswerService.executeStreaming()` 호출 |
+| `service/AnswerService.java` | `executeStreaming(state, listener)` — `ChatClient.stream()` Flux 구독 → `listener.onToken()` |
+| `static/js/chat-stream.js` | 클라이언트 SSE 파서; form submit capture, 버블 DOM 생성, 이벤트별 핸들러 |
+
+### PROGRESSIVE / DUAL / 재시도 처리
+
+- **PROGRESSIVE 업그레이드**: `listener.onUpgrade(provider)` → `stage(id=upgrade)` 이벤트, 콘텐츠 div 초기화 후 premium 답변 재채움
+- **DUAL 모드**: `onToken(tab, text)` → `stream-ext-{id}` / `stream-loc-{id}` 탭 div로 분리 라우팅
+- **재시도**: ANSWER 노드 2회 이상 진입 → 콘텐츠 div 초기화 → 새 답변으로 채움
