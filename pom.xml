@@ -72,6 +72,13 @@
             <version>5.3.0</version>
         </dependency>
 
+        <!-- Tess4j for OCR — scanned PDF support (Phase G) -->
+        <dependency>
+            <groupId>net.sourceforge.tess4j</groupId>
+            <artifactId>tess4j</artifactId>
+            <version>5.11.0</version>
+        </dependency>
+
         <!-- Batik for EMF/WMF → PNG conversion (Phase F) -->
         <dependency>
             <groupId>org.apache.xmlgraphics</groupId>

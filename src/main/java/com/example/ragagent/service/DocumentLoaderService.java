@@ -1,5 +1,9 @@
 package com.example.ragagent.service;
 
+import org.apache.pdfbox.Loader;
+import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.pdfbox.rendering.ImageType;
+import org.apache.pdfbox.rendering.PDFRenderer;
 import org.apache.poi.sl.usermodel.TextShape;
 import org.apache.poi.xslf.usermodel.XMLSlideShow;
 import org.apache.poi.xslf.usermodel.XSLFShape;
@@ -12,6 +16,7 @@ import org.springframework.ai.reader.pdf.config.PdfDocumentReaderConfig;
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.stereotype.Service;
 
+import java.awt.image.BufferedImage;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -20,6 +25,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -34,9 +40,12 @@ public class DocumentLoaderService {
     private static final Pattern IMAGE_PATH_MARKER = Pattern.compile("\\[이미지: ([^\\]]+?)]");
 
     private final DocxToMarkdownConverter converter;
+    private final OcrService ocrService; // null when disabled
 
-    public DocumentLoaderService(DocxToMarkdownConverter converter) {
+    public DocumentLoaderService(DocxToMarkdownConverter converter,
+                                 Optional<OcrService> ocrServiceOpt) {
         this.converter = converter;
+        this.ocrService = ocrServiceOpt.orElse(null);
     }
 
     public List<Document> load(Path filePath) throws IOException {
@@ -48,7 +57,7 @@ public class DocumentLoaderService {
         throw new IllegalArgumentException("Unsupported file type: " + name);
     }
 
-    private List<Document> loadPdf(Path filePath) {
+    private List<Document> loadPdf(Path filePath) throws IOException {
         var config = PdfDocumentReaderConfig.builder()
                 .withPagesPerDocument(1)
                 .build();
@@ -59,13 +68,37 @@ public class DocumentLoaderService {
         long emptyPages = docs.stream()
                 .filter(d -> d.getText() == null || d.getText().trim().length() < 50)
                 .count();
-        String sourceType = (emptyPages > docs.size() * 0.5) ? "ocr" : "file";
+        boolean isScanned = emptyPages > docs.size() * 0.5;
 
+        if (isScanned && ocrService != null) {
+            return ocrWithPdfRenderer(filePath, docs);
+        }
+
+        String sourceType = isScanned ? "ocr" : "file";
         return docs.stream().map(d -> {
             Map<String, Object> meta = new HashMap<>(d.getMetadata());
             meta.put("source_type", sourceType);
             return new Document(d.getText(), meta);
         }).toList();
+    }
+
+    private List<Document> ocrWithPdfRenderer(Path filePath, List<Document> originalDocs) throws IOException {
+        List<Document> result = new ArrayList<>();
+        try (PDDocument pdDoc = Loader.loadPDF(filePath.toFile())) {
+            PDFRenderer renderer = new PDFRenderer(pdDoc);
+            int pageCount = pdDoc.getNumberOfPages();
+            for (int i = 0; i < pageCount; i++) {
+                BufferedImage img = renderer.renderImageWithDPI(i, 300, ImageType.RGB);
+                String text = ocrService.extractText(img);
+                if (text == null || text.isBlank()) continue;
+                Map<String, Object> meta = i < originalDocs.size()
+                        ? new HashMap<>(originalDocs.get(i).getMetadata())
+                        : new HashMap<>();
+                meta.put("source_type", "ocr");
+                result.add(new Document(text.trim(), meta));
+            }
+        }
+        return result;
     }
 
     private List<Document> loadPptx(Path filePath) throws IOException {
