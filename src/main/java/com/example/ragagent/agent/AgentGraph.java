@@ -78,7 +78,6 @@ public class AgentGraph {
                 }
                 case RETRIEVAL -> {
                     listener.onNodeEnter("retrieval");
-                    state = state.withRetryCountIncremented();
                     state = retrievalService.execute(state);
                     listener.onSourcesReady(state.sources());
                     yield Node.ANSWER;
@@ -90,6 +89,7 @@ public class AgentGraph {
                             : answerService.executeStreaming(state, listener);
                     if (state.isDualMode()) yield Node.FINALIZE;
                     if (state.needsRetry() && state.retryCount() < maxRetryCount) {
+                        state = state.withRetryCountIncremented();
                         yield Node.RETRIEVAL;
                     }
                     yield Node.CRITIC;
@@ -98,6 +98,7 @@ public class AgentGraph {
                     listener.onNodeEnter("critic");
                     state = criticService.execute(state);
                     if (state.needsRetry() && state.retryCount() < maxRetryCount) {
+                        state = state.withRetryCountIncremented();
                         yield Node.RETRIEVAL;
                     }
                     yield Node.FINALIZE;
