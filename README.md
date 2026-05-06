@@ -78,7 +78,7 @@ container system stop
 
 Open: http://localhost:8080
 
-See [USER_MANUAL.md](USER_MANUAL.md) for detailed usage instructions.
+See [USER_MANUAL.md](USER_MANUAL.md) for usage instructions and [OPERATOR_MANUAL.md](OPERATOR_MANUAL.md) for deployment and LLM configuration.
 
 ## Environment Variables
 
@@ -104,7 +104,7 @@ See [USER_MANUAL.md](USER_MANUAL.md) for detailed usage instructions.
 | `MAX_RETRY_COUNT` | `2` | 0 ~ 4 | Maximum re-retrieval attempts when evidence is insufficient |
 | `MAX_CONVERSATION_CHARS` | `7000` | 1000 ~ 20000 | Maximum characters of conversation history injected as context |
 
-> Per-format splitting strategy → [USER_MANUAL.md §7.1](USER_MANUAL.md#71-형식별-청크-분할-전략)
+> Per-format splitting strategy → [USER_MANUAL.md §4.1](USER_MANUAL.md#41-형식별-청크-분할-전략)
 
 Local LLM (LM Studio, Ollama, etc.):
 ```env

@@ -56,7 +56,7 @@ java -jar target/rag-agent-*.jar
 
 접속: http://localhost:8080
 
-자세한 사용법은 [USER_MANUAL.md](USER_MANUAL.md)를 참고하세요.
+자세한 사용법은 [USER_MANUAL.md](USER_MANUAL.md)를, 배포·LLM 설정은 [OPERATOR_MANUAL.md](OPERATOR_MANUAL.md)를 참고하세요.
 
 ## 환경 변수
 
@@ -82,7 +82,7 @@ java -jar target/rag-agent-*.jar
 | `MAX_RETRY_COUNT` | `2` | 0 ~ 4 | 증거 부족 시 재검색 최대 횟수 |
 | `MAX_CONVERSATION_CHARS` | `7000` | 1000 ~ 20000 | 멀티턴 대화 이력 최대 문자 수 |
 
-> 형식별 분할 전략 상세 → [USER_MANUAL.md §7.1](USER_MANUAL.md#71-형식별-청크-분할-전략)
+> 형식별 분할 전략 상세 → [USER_MANUAL.md §4.1](USER_MANUAL.md#41-형식별-청크-분할-전략)
 
 로컬 LLM (LM Studio, Ollama 등) 사용 시:
 ```env
