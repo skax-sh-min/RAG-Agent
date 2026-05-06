@@ -18,19 +18,24 @@ services:
     ports:
       - "8080:8080"
     environment:
+      # Spring AI global (embedding + fallback)
       - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.openai.com}
-      - OPENAI_API_KEY=${OPENAI_API_KEY:-key-fake}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-sk-fake}
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
       - LLM_MODEL=${LLM_MODEL:-gpt-4o}
       - EMBED_MODEL=${EMBED_MODEL:-text-embedding-ada-002}
+      # Local LLM provider (providers[0]) — separate from OPENAI_* above
+      - LOCAL_LLM_URL=${LOCAL_LLM_URL:-http://localhost:1234/v1}
+      - LOCAL_LLM_KEY=${LOCAL_LLM_KEY:-lm-studio}
+      - LOCAL_LLM_MODEL=${LOCAL_LLM_MODEL:-gemma-4-27b-it}
       - CHROMA_HOST=chroma
       - CHROMA_PORT=8000
       - DATA_DIR=/app/data
       - CHUNK_SIZE=${CHUNK_SIZE:-800}
       - CHUNK_OVERLAP=${CHUNK_OVERLAP:-100}
-      - SEARCH_TOP_K=${SEARCH_TOP_K:-6}
+      - SEARCH_TOP_K=${SEARCH_TOP_K:-7}
       - MAX_RETRY_COUNT=${MAX_RETRY_COUNT:-2}
-      - MAX_CONVERSATION_CHARS=${MAX_CONVERSATION_CHARS:-7000}
+      - MAX_CONVERSATION_CHARS=${MAX_CONVERSATION_CHARS:-8000}
     volumes:
       - ./data:/app/data
     restart: unless-stopped
