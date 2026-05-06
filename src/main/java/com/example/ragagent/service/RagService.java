@@ -144,7 +144,7 @@ public class RagService {
             }
         }
 
-        record FileEntry(Path path, boolean isUpdate) {}
+        record FileEntry(Path path, String staleDocId) {}
         Map<String, FileEntry> filesToIndex = new HashMap<>();
 
         for (Map.Entry<String, Path> e : filesOnDisk.entrySet()) {
@@ -161,11 +161,8 @@ public class RagService {
                     .filter(k -> k.startsWith(filename + "_") && !k.equals(docId)
                               && version.equals(registry.get(k).version()))
                     .findFirst().orElse(null);
-            if (staleDocId != null) {
-                deleteByDocId(staleDocId, version);
-                registry.remove(staleDocId);
-            }
-            filesToIndex.put(filename, new FileEntry(filePath, staleDocId != null));
+            // staleDocId deletion deferred to Phase 2 — only removed after successful re-indexing
+            filesToIndex.put(filename, new FileEntry(filePath, staleDocId));
         }
 
         // Phase 2 (parallel): index each file
@@ -179,8 +176,8 @@ public class RagService {
             List<CompletableFuture<Void>> futures = filesToIndex.entrySet().stream()
                 .map(e -> CompletableFuture.runAsync(() -> {
                     try {
-                        indexDocumentParallel(e.getValue().path(), version, llmGate);
-                        (e.getValue().isUpdate() ? updated : indexed).add(e.getKey());
+                        indexDocumentParallel(e.getValue().path(), version, llmGate, e.getValue().staleDocId());
+                        (e.getValue().staleDocId() != null ? updated : indexed).add(e.getKey());
                     } catch (Exception ex) {
                         log.error("Parallel index failed: {}", e.getKey(), ex);
                     }
@@ -240,7 +237,7 @@ public class RagService {
     // Internal helpers
     // ──────────────────────────────────────────────────────────────────────
 
-    private void indexDocumentParallel(Path filePath, String version, Semaphore llmGate) throws IOException {
+    private void indexDocumentParallel(Path filePath, String version, Semaphore llmGate, String staleDocId) throws IOException {
         String filename = filePath.getFileName().toString();
         String sha256 = computeSha256(filePath);
         String docId = filename + "_" + sha256.substring(0, 8);
@@ -284,6 +281,12 @@ public class RagService {
         List<String> docIds = enriched.stream().map(Document::getId).toList();
         registry.put(docId, new DocRegistryEntry(sha256, version,
                 Instant.now().toString(), tagged.size(), docIds, List.of()));
+
+        // Delete stale version only after new indexing succeeds — prevents data loss on failure
+        if (staleDocId != null) {
+            deleteByDocId(staleDocId, version);
+            registry.remove(staleDocId);
+        }
         // saveRegistry() intentionally omitted — called once after all parallel work completes
     }
 
