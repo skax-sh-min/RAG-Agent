@@ -151,8 +151,8 @@ app.llm.providers[4].role=PREMIUM
 app.llm.providers[4].priority=4
 
 # ── 병렬 인덱싱 제어 ──────────────────────────────────────────────
-app.indexing.max-concurrent-files=${INDEXING_MAX_FILES:4}
-app.indexing.max-concurrent-llm-calls=${INDEXING_MAX_LLM:8}
+app.indexing.max-concurrent-files=${INDEXING_MAX_FILES:3}
+app.indexing.max-concurrent-llm-calls=${INDEXING_MAX_LLM:4}
 ```
 
 ---

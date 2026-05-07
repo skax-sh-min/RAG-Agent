@@ -606,6 +606,51 @@ public record AppProperties(
 }
 ```
 
+### 9.1 옵션 상세
+
+| 옵션 | 기본값 | 설명 |
+|------|--------|------|
+| `mode` | `strip` | 이미지 참조 처리 방식. `strip`: 이미지 마커 제거(L0). `describe`: Vision 설명 포함(L2). 현재 코드에서 실질적 분기는 `enabled` 플래그가 담당하므로 이 값은 참고용 |
+| `enabled` | `false` | `true`로 설정해야 `LazyVisionService`와 `ImageTypeClassifier` 빈이 등록됨. `false`이면 이미지는 추출·저장되지만 검색 시 Vision 설명이 프롬프트에 합성되지 않음 |
+| `ocr-enabled` | `false` | `true`로 설정해야 `OcrService` 빈이 등록됨. 스캔 PDF 판정(페이지 텍스트 50자 미만) 시 Tesseract OCR로 텍스트를 추출하여 청크에 `source_type=ocr` 태깅. Tesseract(`tesseract-ocr`, `tesseract-ocr-data-kor`)가 시스템에 설치되어 있어야 함 |
+| `tessdata-path` | _(없음)_ | Tesseract tessdata 디렉터리 절대 경로. 미설정 시 `TESSDATA_PREFIX` 환경변수 → 시스템 기본 경로(`/usr/share/tesseract-ocr/…`) 순으로 탐색. Docker 이미지에서는 `apk add tesseract-ocr-data-kor` 설치 후 미설정해도 동작 |
+| `min-image-bytes` | `1000` | 이 크기(bytes) 미만 이미지는 아이콘·구분선으로 간주하여 L0(무시) 처리. Vision 호출 낭비 방지. 값을 높이면 더 많은 이미지가 무시되고, `0`으로 설정하면 모든 이미지를 처리 |
+| `lazy` | `true` | `true`: 검색 시점에 Vision 설명 생성(Lazy Vision, 12절). 인덱싱 시 LLM 호출 없이 이미지만 저장, 첫 검색 시 캐시 미스 이미지만 Vision 호출 후 SQLite 캐시. `false`: 인덱싱 시점에 모든 이미지를 즉시 Vision으로 설명(동기 L2). 대량 문서 인덱싱 시 LLM 호출이 폭주하므로 기본 `true` 유지 권장 |
+| `classify-type` | `false` | `true`: 이미지를 Vision으로 먼저 분류(`diagram`·`screenshot`·`chart`·`photo`·`other`) 후 유형별 전용 프롬프트로 설명 생성(13절). 이미지당 LLM 호출이 2회로 증가하므로 기본 `false`. 설명 품질보다 비용이 중요한 환경에서는 비활성 유지 |
+| `docx-emf-convert` | `false` | `true`: DOCX 내 EMF(Enhanced Metafile) 이미지를 Apache Batik으로 PNG 변환 후 저장. 변환 실패 시 원본 `.emf` 보존. Batik 의존성은 `pom.xml`에 이미 포함되어 있어 별도 설치 불필요 |
+| `docx-wmf-convert` | `false` | `true`: DOCX 내 WMF(Windows Metafile) 이미지를 LibreOffice headless로 PNG 변환(14절). `soffice` 명령이 PATH에 있어야 하며 변환 타임아웃은 20s. LibreOffice 미설치 환경에서는 `false`로 유지하면 WMF 원본만 저장되고 Vision 설명은 건너뜀 |
+
+### 9.2 권장 설정 시나리오
+
+**기본 (이미지 무시, 빠른 인덱싱)**
+```properties
+app.image-description.enabled=false
+app.image-description.ocr-enabled=false
+```
+
+**Vision 설명 활성화 (Lazy, 비용 최소)**
+```properties
+app.image-description.enabled=true
+app.image-description.lazy=true
+app.image-description.min-image-bytes=1000
+app.image-description.classify-type=false
+```
+> Vision 프로바이더(`VISION` 또는 `BOTH` type) 가 `app.llm.providers`에 등록되어 있어야 함.
+
+**OCR 포함 (스캔 PDF 지원)**
+```properties
+app.image-description.enabled=true
+app.image-description.ocr-enabled=true
+# app.image-description.tessdata-path=/usr/share/tesseract-ocr/5/tessdata
+```
+
+**DOCX 메타파일 변환 포함 (완전 처리)**
+```properties
+app.image-description.enabled=true
+app.image-description.docx-emf-convert=true   # Batik — 추가 설치 불필요
+app.image-description.docx-wmf-convert=true   # LibreOffice 설치 필요
+```
+
 ---
 
 ## 10. 구현 완료 현황
