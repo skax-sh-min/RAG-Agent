@@ -1,5 +1,6 @@
 package com.example.ragagent.config;
 
+import org.springframework.ai.document.MetadataMode;
 import org.springframework.ai.embedding.EmbeddingModel;
 import org.springframework.ai.openai.OpenAiEmbeddingModel;
 import org.springframework.ai.openai.OpenAiEmbeddingOptions;
@@ -23,11 +24,12 @@ public class EmbeddingBeanConfig {
                 .baseUrl(cfg.baseUrl())
                 .apiKey(cfg.apiKey() != null && !cfg.apiKey().isBlank() ? cfg.apiKey() : "no-key")
                 .build();
-        return OpenAiEmbeddingModel.builder()
-                .openAiApi(api)
-                .defaultOptions(OpenAiEmbeddingOptions.builder()
+        return new OpenAiEmbeddingModel(
+                api,
+                MetadataMode.EMBED,
+                OpenAiEmbeddingOptions.builder()
                         .model(cfg.model() != null ? cfg.model() : "text-embedding-ada-002")
-                        .build())
-                .build();
+                        .build()
+        );
     }
 }
