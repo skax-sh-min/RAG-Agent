@@ -120,11 +120,13 @@ copy .env.example .env
 
 | 변수 | 필수 | 기본값 | 설명 |
 |------|------|--------|------|
-| `OPENAI_API_KEY` | ✅ | — | Spring AI 전역 키 (임베딩·OpenAI providers) |
-| `GEMINI_API_KEY` | — | — | Gemini 프로바이더 사용 시 필요 |
-| `OPENAI_BASE_URL` | — | `https://api.openai.com` | Spring AI 전역 엔드포인트 (임베딩 서버) |
-| `LLM_MODEL` | — | `gpt-4o` | Spring AI 전역 채팅 모델명 |
+| `EMBED_BASE_URL` | ✅ | — | 임베딩 전용 엔드포인트 (예: `https://api.openai.com`, `http://localhost:11434/v1`) |
+| `EMBED_API_KEY` | — | `OPENAI_API_KEY` | 임베딩 전용 API 키. 미설정 시 `OPENAI_API_KEY` 사용 |
 | `EMBED_MODEL` | — | `text-embedding-ada-002` | 임베딩 모델명 |
+| `OPENAI_API_KEY` | — | — | OpenAI providers 사용 시 필요. 임베딩에 `EMBED_API_KEY` 미설정 시 폴백으로 사용 |
+| `GEMINI_API_KEY` | — | — | Gemini 프로바이더 사용 시 필요 |
+| `OPENAI_BASE_URL` | — | `https://api.openai.com` | Spring AI 전역 엔드포인트 (providers fallback) |
+| `LLM_MODEL` | — | `gpt-4o` | Spring AI 전역 채팅 모델명 |
 | `LOCAL_LLM_URL` | — | `http://localhost:1234/v1` | `providers[0]` LOCAL 엔드포인트 |
 | `LOCAL_LLM_KEY` | — | `lm-studio` | `providers[0]` API 키. **비우면 LOCAL 비활성화** |
 | `LOCAL_LLM_MODEL` | — | `gemma-4-27b-it` | `providers[0]` 모델명 |
@@ -153,8 +155,8 @@ copy .env.example .env
 
 **로컬 LLM 전용 (LM Studio)**:
 ```env
-OPENAI_API_KEY=sk-fake
-EMBED_MODEL=text-embedding-nomic-embed-text-v1.5
+EMBED_BASE_URL=http://localhost:1234/v1
+EMBED_MODEL=nomic-embed-text
 LOCAL_LLM_URL=http://localhost:1234/v1
 LOCAL_LLM_KEY=lm-studio
 LOCAL_LLM_MODEL=gemma-4-27b-it
@@ -163,8 +165,9 @@ LOCAL_LLM_MODEL=gemma-4-27b-it
 **OpenAI 전용 (로컬 LLM 없음)**:
 ```env
 OPENAI_API_KEY=sk-proj-...
-LLM_MODEL=gpt-4o
+EMBED_BASE_URL=https://api.openai.com
 EMBED_MODEL=text-embedding-3-large
+LLM_MODEL=gpt-4o
 LOCAL_LLM_KEY=                     # 비워서 LOCAL providers[0] 비활성화
 ```
 
@@ -286,11 +289,11 @@ LLM 호출은 두 레이어가 담당합니다.
 
 | 레이어 | 용도 | 제어 방법 |
 |--------|------|----------|
-| Spring AI 전역 | 임베딩 (`EMBED_MODEL`) + 자동 구성 빈 | `OPENAI_*` 환경변수 |
-| LlmRouter (providers) | 실제 질의응답·분류·검증 LLM 호출 | `application.properties` providers 블록 |
+| `app.embedding.*` | 문서 인덱싱·벡터 검색 임베딩 | `EMBED_BASE_URL` / `EMBED_API_KEY` / `EMBED_MODEL` |
+| LlmRouter (providers) | 질의응답·분류·검증 LLM 호출 | `application.properties` providers 블록 |
+| Spring AI 전역 | auto-configured 빈 폴백 | `OPENAI_*` 환경변수 |
 
-> 질의응답에 사용되는 LLM은 `LlmRouter`가 선택합니다.  
-> Spring AI 전역 설정(`OPENAI_*`)은 임베딩 서버 지정에 주로 사용됩니다.
+> 임베딩과 추론은 완전히 분리되어 있습니다. 로컬 임베딩 모델(Ollama 등)과 외부 추론 모델을 독립적으로 조합할 수 있습니다.
 
 기본값으로 `providers[0]` (LOCAL) 하나만 등록되어 있습니다.  
 멀티 프로바이더를 사용하려면 `application.properties`에 providers 블록을 추가하세요.
@@ -372,11 +375,11 @@ Web UI 채팅 화면 드롭다운에서 대화별로 변경 가능.
 
 `.env`:
 ```env
+EMBED_BASE_URL=http://localhost:1234/v1
+EMBED_MODEL=nomic-embed-text
 LOCAL_LLM_URL=http://localhost:1234/v1
 LOCAL_LLM_KEY=lm-studio
 LOCAL_LLM_MODEL=gemma-4-27b-it
-OPENAI_API_KEY=sk-fake
-EMBED_MODEL=text-embedding-nomic-embed-text-v1.5
 ```
 
 외부 API 호출을 완전히 차단하려면 `application.properties`에 추가:
@@ -393,6 +396,7 @@ app.llm.default-routing-mode=LOCAL_ONLY
 `.env`:
 ```env
 OPENAI_API_KEY=sk-proj-...
+EMBED_BASE_URL=https://api.openai.com
 EMBED_MODEL=text-embedding-3-large
 LOCAL_LLM_KEY=                     # 비워서 LOCAL 비활성화
 ```
@@ -428,6 +432,7 @@ COST_FIRST 흐름: `gpt-4o-mini(NORMAL)` → (429/오류 시) `gpt-4o(PREMIUM)`
 ```env
 OPENAI_API_KEY=sk-proj-...
 GEMINI_API_KEY=AIza...
+EMBED_BASE_URL=https://api.openai.com
 EMBED_MODEL=text-embedding-3-large
 LOCAL_LLM_KEY=                     # 로컬 없으면 비활성화
 ```
@@ -466,6 +471,7 @@ COST_FIRST 흐름: `gemini-flash` → (429 시) `gpt-4o`
 ```env
 OPENAI_API_KEY=sk-proj-...
 GEMINI_API_KEY=AIza...
+EMBED_BASE_URL=https://api.openai.com
 EMBED_MODEL=text-embedding-3-large
 LOCAL_LLM_URL=http://localhost:1234/v1
 LOCAL_LLM_KEY=lm-studio

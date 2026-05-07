@@ -14,7 +14,8 @@ public record AppProperties(
         int searchTopK,
         LlmConfig llm,
         IndexingConfig indexing,
-        ImageDescriptionProperties imageDescription
+        ImageDescriptionProperties imageDescription,
+        EmbeddingConfig embedding
 ) {
     public record LlmConfig(
             List<ProviderConfig> providers,
@@ -36,6 +37,13 @@ public record AppProperties(
     public record IndexingConfig(
             int maxConcurrentFiles,
             int maxConcurrentLlmCalls
+    ) {}
+
+    public record EmbeddingConfig(
+            String baseUrl,
+            String apiKey,
+            String model,
+            Integer dimensions
     ) {}
 
     public record ImageDescriptionProperties(
