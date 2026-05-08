@@ -25,12 +25,17 @@ public class LlmConfig {
                                 CircuitBreaker circuitBreaker) {
         AppProperties.LlmConfig llmCfg = props.llmSafe();
 
+        llmCfg.providers().stream()
+                .filter(cfg -> cfg.apiKey() == null || cfg.apiKey().isBlank())
+                .forEach(cfg -> log.warn(
+                        "Provider [{}] disabled — api-key is empty (set the corresponding env var)", cfg.name()));
+
         List<LlmProvider> providers = llmCfg.providers().stream()
+                .filter(cfg -> cfg.apiKey() != null && !cfg.apiKey().isBlank())
                 .map(cfg -> {
                     OpenAiApi api = OpenAiApi.builder()
                             .baseUrl(cfg.baseUrl() != null ? cfg.baseUrl() : "https://api.openai.com")
-                            .apiKey(cfg.apiKey() != null && !cfg.apiKey().isBlank()
-                                    ? cfg.apiKey() : "no-key")
+                            .apiKey(cfg.apiKey())
                             .build();
                     ChatModel model = OpenAiChatModel.builder()
                             .openAiApi(api)
