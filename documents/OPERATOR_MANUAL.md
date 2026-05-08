@@ -208,10 +208,14 @@ docker-compose down
 
 ```bash
 # 1. Chroma 서버 실행 (별도 터미널)
-docker run --rm -p 8001:8000 \
+docker run -d --name chroma-server -p 8001:8000 \
   -v "$(pwd)/data/chroma:/chroma/chroma" \
   chromadb/chroma:latest
 
+# 2. 로그 확인
+docker logs -f chroma-server
+```
+```bash
 # 2. 환경변수 로드
 export $(grep -v '^#' .env | xargs)
 
@@ -229,7 +233,7 @@ mvn spring-boot:run
 container system start
 
 # 2. Chroma 서버 실행 (별도 터미널)
-container run --rm -p 8001:8000 \
+container run -d --name chroma-server -p 8001:8000 \
   -v "$(pwd)/data/chroma:/chroma/chroma" \
   chromadb/chroma:latest
 
@@ -245,7 +249,7 @@ container system stop
 #### Ubuntu (Linux)
 
 ```bash
-docker run --rm -p 8001:8000 \
+docker run -d --name chroma-server -p 8001:8000 \
   -v "$(pwd)/data/chroma:/chroma/chroma" \
   chromadb/chroma:latest &
 set -a && source .env && set +a
@@ -256,7 +260,7 @@ mvn spring-boot:run
 
 ```cmd
 REM 1. Chroma 서버 (별도 CMD 창)
-docker run --rm -p 8001:8000 -v "%cd%\data\chroma:/chroma/chroma" chromadb/chroma:latest
+docker run -d --name chroma-server -p 8001:8000 -v "%cd%\data\chroma:/chroma/chroma" chromadb/chroma:latest
 
 REM 2. 환경변수 로드
 for /f "usebackq tokens=1,* delims==" %A in (`findstr /v "^#" .env`) do SET %A=%B
