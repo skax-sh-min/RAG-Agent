@@ -86,10 +86,14 @@ See [USER_MANUAL.md](USER_MANUAL.md) for usage instructions and [OPERATOR_MANUAL
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `OPENAI_API_KEY` | ✅ | — | OpenAI or local LLM API key |
-| `OPENAI_BASE_URL` | — | `https://api.openai.com` | OpenAI-compatible endpoint URL |
-| `LLM_MODEL` | — | `gpt-4o` | Chat model name |
-| `EMBED_MODEL` | — | `text-embedding-ada-002` | Embedding model name |
+| `LOCAL_LLM_URL` | — | `http://localhost:1234/v1` | LOCAL provider endpoint (also used as embedding fallback) |
+| `LOCAL_LLM_KEY` | — | `lm-studio` | LOCAL provider API key. Empty value disables LOCAL provider |
+| `LOCAL_LLM_MODEL` | — | `google/gemma-4-e4b` | LOCAL provider model name |
+| `OPENAI_API_KEY` | — | — | Required for OpenAI providers. Providers auto-disabled at startup if unset |
+| `GEMINI_API_KEY` | — | — | Required for Gemini providers. Providers auto-disabled at startup if unset |
+| `EMBED_BASE_URL` | — | `LOCAL_LLM_URL` | Embedding endpoint. Falls back to `LOCAL_LLM_URL` if unset |
+| `EMBED_API_KEY` | — | `LOCAL_LLM_KEY` | Embedding API key. Falls back to `LOCAL_LLM_KEY` if unset |
+| `EMBED_MODEL` | — | `text-embedding-nomic-embed-text-v1.5` | Embedding model name |
 | `CHROMA_HOST` | — | `http://localhost` | Chroma server host (include protocol) |
 | `CHROMA_PORT` | — | `8001` | Chroma server port |
 | `DATA_DIR` | — | `./data` | Storage path for documents, registry, and SQLite DB |
@@ -100,19 +104,22 @@ See [USER_MANUAL.md](USER_MANUAL.md) for usage instructions and [OPERATOR_MANUAL
 |----------|---------|-------------------|-------------|
 | `CHUNK_SIZE` | `800` | 300 ~ 2000 | Document chunk size (characters) |
 | `CHUNK_OVERLAP` | `100` | 0 ~ CHUNK_SIZE × 0.25 | Overlap between chunks (characters) |
-| `SEARCH_TOP_K` | `6` | 2 ~ 15 | Number of documents returned by vector search |
+| `SEARCH_TOP_K` | `7` | 2 ~ 15 | Number of documents returned by vector search |
 | `MAX_RETRY_COUNT` | `2` | 0 ~ 4 | Maximum re-retrieval attempts when evidence is insufficient |
-| `MAX_CONVERSATION_CHARS` | `7000` | 1000 ~ 20000 | Maximum characters of conversation history injected as context |
+| `MAX_CONVERSATION_CHARS` | `8000` | 1000 ~ 20000 | Maximum characters of conversation history injected as context |
 
 > Per-format splitting strategy → [USER_MANUAL.md §4.1](USER_MANUAL.md#41-형식별-청크-분할-전략)
 
 Local LLM (LM Studio, Ollama, etc.):
 ```env
-OPENAI_BASE_URL=http://localhost:1234/v1
-OPENAI_API_KEY=lm-studio
-LLM_MODEL=google/gemma-4-e4b
+EMBED_BASE_URL=http://localhost:1234/v1
 EMBED_MODEL=text-embedding-nomic-embed-text-v1.5
+LOCAL_LLM_URL=http://localhost:1234/v1
+LOCAL_LLM_KEY=lm-studio
+LOCAL_LLM_MODEL=google/gemma-4-e4b
 ```
+
+See [OPERATOR_MANUAL.md §5](documents/OPERATOR_MANUAL.md#5-llm-프로바이더-설정) for multi-provider configuration (Gemini, OpenAI, local + external hybrid).
 
 ## Project Structure
 

@@ -115,36 +115,40 @@ app.llm.providers[0].priority=0
 # app.llm.providers[5].priority=0
 
 # ── [NORMAL] Gemini Flash ─────────────────────────────────────────
+# GEMINI_API_KEY 미설정 시 시작 시 warn 로그 후 자동 비활성화
 app.llm.providers[1].name=gemini-flash
-app.llm.providers[1].base-url=https://generativelanguage.googleapis.com/v1beta/openai/
-app.llm.providers[1].api-key=${GEMINI_API_KEY}
+app.llm.providers[1].base-url=${GEMINI_BASE_URL:https://generativelanguage.googleapis.com/v1beta/openai/}
+app.llm.providers[1].api-key=${GEMINI_API_KEY:}
 app.llm.providers[1].model=gemini-2.5-flash
 app.llm.providers[1].type=BOTH
 app.llm.providers[1].role=NORMAL
 app.llm.providers[1].priority=1
 
 # ── [NORMAL] OpenAI Mini (fallback) ──────────────────────────────
+# OPENAI_API_KEY 미설정 시 시작 시 warn 로그 후 자동 비활성화
 app.llm.providers[2].name=openai-mini
-app.llm.providers[2].base-url=https://api.openai.com
-app.llm.providers[2].api-key=${OPENAI_API_KEY}
+app.llm.providers[2].base-url=${OPENAI_BASE_URL:https://api.openai.com}
+app.llm.providers[2].api-key=${OPENAI_API_KEY:}
 app.llm.providers[2].model=gpt-4o-mini
 app.llm.providers[2].type=BOTH
 app.llm.providers[2].role=NORMAL
 app.llm.providers[2].priority=2
 
 # ── [PREMIUM] Gemini Pro ──────────────────────────────────────────
+# GEMINI_API_KEY 미설정 시 시작 시 warn 로그 후 자동 비활성화
 app.llm.providers[3].name=gemini-pro
-app.llm.providers[3].base-url=https://generativelanguage.googleapis.com/v1beta/openai/
-app.llm.providers[3].api-key=${GEMINI_API_KEY}
+app.llm.providers[3].base-url=${GEMINI_BASE_URL:https://generativelanguage.googleapis.com/v1beta/openai/}
+app.llm.providers[3].api-key=${GEMINI_API_KEY:}
 app.llm.providers[3].model=gemini-2.5-pro
 app.llm.providers[3].type=BOTH
 app.llm.providers[3].role=PREMIUM
 app.llm.providers[3].priority=3
 
 # ── [PREMIUM] OpenAI GPT-4o (fallback) ───────────────────────────
+# OPENAI_API_KEY 미설정 시 시작 시 warn 로그 후 자동 비활성화
 app.llm.providers[4].name=openai
-app.llm.providers[4].base-url=https://api.openai.com
-app.llm.providers[4].api-key=${OPENAI_API_KEY}
+app.llm.providers[4].base-url=${OPENAI_BASE_URL:https://api.openai.com}
+app.llm.providers[4].api-key=${OPENAI_API_KEY:}
 app.llm.providers[4].model=gpt-4o
 app.llm.providers[4].type=BOTH
 app.llm.providers[4].role=PREMIUM
@@ -208,6 +212,7 @@ CREATE TABLE IF NOT EXISTS llm_usage (
 
 ## 7. 제약 및 주의사항
 
+- **프로바이더 자동 비활성화**: `api-key`가 비어있으면 (`${GEMINI_API_KEY:}` 등 빈 기본값) 시작 시 warn 로그 출력 후 해당 프로바이더를 제외. 키 미설정만으로 providers 블록을 남겨둔 채 비활성화 가능
 - **DUAL 활성 조건**: LOCAL 미등록 → UI에서 드롭다운 `disabled` + "로컬 LLM이 필요합니다" 툴팁
 - **LOCAL_ONLY**: LOCAL 미연결·차단 시 외부 API fallback 없이 즉시 exhausted — UI에서 오류 안내 필요
 - **같은 Gemini API 키 공유**: Flash(NORMAL)와 Pro(PREMIUM) 429가 동시 발생 가능 → OpenAI를 PREMIUM fallback으로 유지 권장

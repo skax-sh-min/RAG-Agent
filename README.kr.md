@@ -64,10 +64,14 @@ java -jar target/rag-agent-*.jar
 
 | 변수 | 필수 | 기본값 | 설명 |
 |------|------|--------|------|
-| `OPENAI_API_KEY` | ✅ | — | OpenAI 또는 로컬 LLM API 키 |
-| `OPENAI_BASE_URL` | — | `https://api.openai.com` | OpenAI 호환 엔드포인트 URL |
-| `LLM_MODEL` | — | `gpt-4o` | 채팅 모델명 |
-| `EMBED_MODEL` | — | `text-embedding-ada-002` | 임베딩 모델명 |
+| `LOCAL_LLM_URL` | — | `http://localhost:1234/v1` | LOCAL provider 엔드포인트 (임베딩 폴백으로도 사용) |
+| `LOCAL_LLM_KEY` | — | `lm-studio` | LOCAL provider API 키. 비우면 LOCAL 비활성화 |
+| `LOCAL_LLM_MODEL` | — | `google/gemma-4-e4b` | LOCAL provider 모델명 |
+| `OPENAI_API_KEY` | — | — | OpenAI providers 사용 시 필요. 미설정 시 해당 providers 자동 비활성화 |
+| `GEMINI_API_KEY` | — | — | Gemini providers 사용 시 필요. 미설정 시 해당 providers 자동 비활성화 |
+| `EMBED_BASE_URL` | — | `LOCAL_LLM_URL` | 임베딩 전용 엔드포인트. 미설정 시 `LOCAL_LLM_URL` 사용 |
+| `EMBED_API_KEY` | — | `LOCAL_LLM_KEY` | 임베딩 API 키. 미설정 시 `LOCAL_LLM_KEY` 사용 |
+| `EMBED_MODEL` | — | `text-embedding-nomic-embed-text-v1.5` | 임베딩 모델명 |
 | `CHROMA_HOST` | — | `http://localhost` | Chroma 서버 호스트 (프로토콜 포함) |
 | `CHROMA_PORT` | — | `8001` | Chroma 서버 포트 |
 | `DATA_DIR` | — | `./data` | 문서·레지스트리·SQLite DB 저장 경로 |
@@ -78,17 +82,17 @@ java -jar target/rag-agent-*.jar
 |------|--------|-----------|------|
 | `CHUNK_SIZE` | `800` | 300 ~ 2000 | 문서 청크 크기 (문자 수) |
 | `CHUNK_OVERLAP` | `100` | 0 ~ CHUNK_SIZE × 0.25 | 청크 간 중복 문자 수 |
-| `SEARCH_TOP_K` | `6` | 2 ~ 15 | 벡터 검색 반환 문서 수 |
+| `SEARCH_TOP_K` | `7` | 2 ~ 15 | 벡터 검색 반환 문서 수 |
 | `MAX_RETRY_COUNT` | `2` | 0 ~ 4 | 증거 부족 시 재검색 최대 횟수 |
-| `MAX_CONVERSATION_CHARS` | `7000` | 1000 ~ 20000 | 멀티턴 대화 이력 최대 문자 수 |
+| `MAX_CONVERSATION_CHARS` | `8000` | 1000 ~ 20000 | 멀티턴 대화 이력 최대 문자 수 |
 
 > 형식별 분할 전략 상세 → [USER_MANUAL.md §4.1](USER_MANUAL.md#41-형식별-청크-분할-전략)
 
-로컬 LLM (LM Studio, Ollama 등) 사용 시:
+로컬 LLM (LM Studio, Ollama 등) 사용 시 — `.env`만 설정하면 됩니다:
 ```env
-OPENAI_BASE_URL=http://localhost:1234/v1
-OPENAI_API_KEY=lm-studio
-LLM_MODEL=google/gemma-4-e4b
+LOCAL_LLM_URL=http://localhost:1234/v1
+LOCAL_LLM_KEY=lm-studio
+LOCAL_LLM_MODEL=google/gemma-4-e4b
 EMBED_MODEL=text-embedding-nomic-embed-text-v1.5
 ```
 

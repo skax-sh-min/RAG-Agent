@@ -120,16 +120,14 @@ copy .env.example .env
 
 | 변수 | 필수 | 기본값 | 설명 |
 |------|------|--------|------|
-| `EMBED_BASE_URL` | ✅ | — | 임베딩 전용 엔드포인트 (예: `https://api.openai.com`, `http://localhost:11434/v1`) |
-| `EMBED_API_KEY` | — | `OPENAI_API_KEY` | 임베딩 전용 API 키. 미설정 시 `OPENAI_API_KEY` 사용 |
-| `EMBED_MODEL` | — | `text-embedding-ada-002` | 임베딩 모델명 |
-| `OPENAI_API_KEY` | — | — | OpenAI providers 사용 시 필요. 임베딩에 `EMBED_API_KEY` 미설정 시 폴백으로 사용 |
-| `GEMINI_API_KEY` | — | — | Gemini 프로바이더 사용 시 필요 |
-| `OPENAI_BASE_URL` | — | `https://api.openai.com` | Spring AI 전역 엔드포인트 (providers fallback) |
-| `LLM_MODEL` | — | `gpt-4o` | Spring AI 전역 채팅 모델명 |
-| `LOCAL_LLM_URL` | — | `http://localhost:1234/v1` | `providers[0]` LOCAL 엔드포인트 |
+| `LOCAL_LLM_URL` | — | `http://localhost:1234/v1` | `providers[0]` LOCAL 엔드포인트. 임베딩 폴백으로도 사용 |
 | `LOCAL_LLM_KEY` | — | `lm-studio` | `providers[0]` API 키. **비우면 LOCAL 비활성화** |
-| `LOCAL_LLM_MODEL` | — | `gemma-4-27b-it` | `providers[0]` 모델명 |
+| `LOCAL_LLM_MODEL` | — | `google/gemma-4-e4b` | `providers[0]` 모델명 |
+| `OPENAI_API_KEY` | — | — | OpenAI providers 사용 시 필요. 미설정 시 해당 providers 자동 비활성화 |
+| `GEMINI_API_KEY` | — | — | Gemini providers 사용 시 필요. 미설정 시 해당 providers 자동 비활성화 |
+| `EMBED_BASE_URL` | — | `LOCAL_LLM_URL` | 임베딩 전용 엔드포인트. 미설정 시 `LOCAL_LLM_URL` 사용 |
+| `EMBED_API_KEY` | — | `LOCAL_LLM_KEY` | 임베딩 전용 API 키. 미설정 시 `LOCAL_LLM_KEY` 사용 |
+| `EMBED_MODEL` | — | `text-embedding-nomic-embed-text-v1.5` | 임베딩 모델명 |
 | `CHROMA_HOST` | — | `http://localhost` | Chroma 서버 호스트 (프로토콜 포함) |
 | `CHROMA_PORT` | — | `8001` | Chroma 서버 포트 |
 | `DATA_DIR` | — | `./data` | 문서·레지스트리·SQLite DB 저장 경로 |
@@ -148,18 +146,18 @@ copy .env.example .env
 
 | 변수 | 기본값 | 권장 범위 | 설명 |
 |------|--------|----------|------|
-| `INDEXING_MAX_FILES` | `4` | 1 ~ 8 | 파일 병렬 인덱싱 워커 수 |
-| `INDEXING_MAX_LLM` | `8` | 1 ~ 16 | 인덱싱 중 LLM 병렬 호출 수 (키워드 추출) |
+| `INDEXING_MAX_FILES` | `3` | 1 ~ 8 | 파일 병렬 인덱싱 워커 수 |
+| `INDEXING_MAX_LLM` | `4` | 1 ~ 16 | 인덱싱 중 LLM 병렬 호출 수 (키워드 추출) |
 
 #### 설정 예시
 
 **로컬 LLM 전용 (LM Studio)**:
 ```env
-EMBED_BASE_URL=http://localhost:1234/v1
-EMBED_MODEL=nomic-embed-text
 LOCAL_LLM_URL=http://localhost:1234/v1
 LOCAL_LLM_KEY=lm-studio
-LOCAL_LLM_MODEL=gemma-4-27b-it
+LOCAL_LLM_MODEL=google/gemma-4-e4b
+EMBED_MODEL=text-embedding-nomic-embed-text-v1.5
+# EMBED_BASE_URL, EMBED_API_KEY 미설정 시 LOCAL_LLM_URL/KEY 자동 사용
 ```
 
 **OpenAI 전용 (로컬 LLM 없음)**:
@@ -167,7 +165,6 @@ LOCAL_LLM_MODEL=gemma-4-27b-it
 OPENAI_API_KEY=sk-proj-...
 EMBED_BASE_URL=https://api.openai.com
 EMBED_MODEL=text-embedding-3-large
-LLM_MODEL=gpt-4o
 LOCAL_LLM_KEY=                     # 비워서 LOCAL providers[0] 비활성화
 ```
 
@@ -313,7 +310,7 @@ Gemini도 `https://generativelanguage.googleapis.com/v1beta/openai/` 엔드포�
 |------|---------|------|
 | `name` | `local`, `gemini-flash` | 대시보드·로그 식별자 |
 | `base-url` | `https://api.openai.com` | OpenAI 호환 엔드포인트 |
-| `api-key` | `${OPENAI_API_KEY}` | API 키. **비워두면(`=`) 해당 프로바이더 비활성화** |
+| `api-key` | `${OPENAI_API_KEY:}` | API 키. **비워두면(`=`) 해당 프로바이더 비활성화** — 시작 시 warn 로그 출력 |
 | `model` | `gpt-4o`, `gemini-2.5-flash` | API에 전달되는 모델 식별자 |
 | `role` | `LOCAL` \| `NORMAL` \| `PREMIUM` | 라우팅 우선순위 그룹 |
 | `type` | `LIGHT_BOTH` \| `BOTH` \| … | 처리 가능한 태스크 유형 (아래 표 참조) |
@@ -629,7 +626,7 @@ curl http://localhost:8001/api/v1/heartbeat
 
 | 원인 | 조치 |
 |------|------|
-| `OPENAI_API_KEY` 미설정 | `.env` 확인 및 `export $(grep -v '^#' .env | xargs)` 재실행 |
+| 환경변수 미로드 | `export $(grep -v '^#' .env | xargs)` 재실행 |
 | Chroma 연결 실패 | Chroma 컨테이너 실행 확인 (`docker ps` 또는 `container ls`) |
 | 포트 충돌 | `lsof -i :8080`으로 점유 프로세스 확인 후 종료 |
 | JDK 버전 | `java -version` → 21 이상인지 확인 |
@@ -639,8 +636,8 @@ curl http://localhost:8001/api/v1/heartbeat
 ### LLM 호출 오류 (500)
 
 ```bash
-# 임베딩 서버 (Spring AI 전역) 확인
-curl $OPENAI_BASE_URL/models -H "Authorization: Bearer $OPENAI_API_KEY"
+# 임베딩 서버 확인
+curl ${EMBED_BASE_URL:-$LOCAL_LLM_URL}/models -H "Authorization: Bearer ${EMBED_API_KEY:-$LOCAL_LLM_KEY}"
 
 # LOCAL 프로바이더 확인
 curl $LOCAL_LLM_URL/models -H "Authorization: Bearer $LOCAL_LLM_KEY"

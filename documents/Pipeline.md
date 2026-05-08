@@ -114,12 +114,16 @@ COST_FIRST와 동일하되,
 ## 5. 재시도 조건
 
 ```
-ANSWER sufficient=false   AND retryCount < max  →  RETRIEVAL 재시도
-CRITIC grounded=false     AND retryCount < max  →  RETRIEVAL 재시도
+ANSWER sufficient=false   AND retryCount < max  →  retryCount 증가 후 RETRIEVAL 재시도
+CRITIC grounded=false     AND retryCount < max  →  retryCount 증가 후 RETRIEVAL 재시도
 
 PROGRESSIVE 모드 AND sufficient=false AND retryCount >= max
   →  PREMIUM 모델(⑦)로 단발 업그레이드 후 CRITIC 진행
 ```
+
+> `retryCount`는 최초 RETRIEVAL 진입 시 증가하지 않습니다.  
+> ANSWER 또는 CRITIC이 재시도를 결정할 때만 증가합니다.  
+> `MAX_RETRY_COUNT=2`(기본)이면 최대 **2회 재검색**이 허용됩니다.
 
 ---
 
@@ -178,9 +182,10 @@ Phase 1  변경 감지 (단일 스레드)
 Phase 2  병렬 인덱싱 (Virtual Thread)
   최대 maxConcurrentFiles(기본 4)개 파일 동시 처리
   LLM 키워드 추출은 maxConcurrentLlmCalls(기본 8) Semaphore 제한
+  변경 파일: 신규 인덱싱 성공 후 구 버전 삭제 (실패 시 구 버전 보존)
 
 Phase 3  삭제 처리 (단일 스레드)
-  파일 없는 레지스트리 항목 → ChromaDB + 레지스트리 제거
+  디렉터리에서 제거된 파일 → ChromaDB + 레지스트리 제거
   레지스트리 저장은 Phase 3 완료 후 1회만 실행
   → SyncResult(indexed, updated, deleted) 반환
 ```
