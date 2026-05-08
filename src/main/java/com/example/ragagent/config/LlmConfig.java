@@ -2,6 +2,8 @@ package com.example.ragagent.config;
 
 import com.example.ragagent.llm.*;
 import com.example.ragagent.repository.LlmUsageRepository;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.openai.OpenAiChatModel;
 import org.springframework.ai.openai.OpenAiChatOptions;
@@ -15,6 +17,8 @@ import java.util.List;
 
 @Configuration
 public class LlmConfig {
+
+    private static final Logger log = LoggerFactory.getLogger(LlmConfig.class);
 
     @Bean
     public LlmRouter llmRouter(AppProperties props, LlmUsageRepository usageRepo,
@@ -60,6 +64,10 @@ public class LlmConfig {
 
         double threshold = llmCfg.progressiveThreshold() > 0
                 ? llmCfg.progressiveThreshold() : 0.6;
+
+        log.info("LLM providers registered: {}", providers.stream()
+                .map(p -> "%s(%s/%s/p%d)".formatted(p.name(), p.role(), p.type(), p.priority()))
+                .toList());
 
         return new LlmRouter(providers, usageRepo, circuitBreaker, defaultMode, threshold);
     }
