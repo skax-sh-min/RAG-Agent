@@ -72,7 +72,7 @@ public class RetrievalService {
                 .toList();
 
         List<String> imageRefs = unique.stream()
-                .map(d -> (String) d.getMetadata().get("image_paths"))
+                .map(d -> imagePathsMeta(d.getMetadata()))
                 .filter(p -> p != null && !p.isBlank())
                 .flatMap(p -> Arrays.stream(p.split(",")))
                 .map(String::strip)
@@ -116,7 +116,7 @@ public class RetrievalService {
             }
 
             // Append for docs without inline markers (PPTX/PDF)
-            String imgPathsMeta = (String) doc.getMetadata().get("image_paths");
+            String imgPathsMeta = imagePathsMeta(doc.getMetadata());
             if (imgPathsMeta != null && !imgPathsMeta.isBlank()) {
                 StringBuilder appendix = new StringBuilder();
                 for (String p : imgPathsMeta.split(",")) {
@@ -153,6 +153,23 @@ public class RetrievalService {
         String version  = String.valueOf(meta.getOrDefault("version", "latest"));
         Object page     = meta.getOrDefault("page_or_slide", "?");
         return "%s | v%s | p.%s".formatted(filename, version, page);
+    }
+
+    /**
+     * Safely extracts the "image_paths" metadata value. Chroma may deserialize
+     * comma-joined paths as either a String or a List depending on writer/version;
+     * a blind (String) cast crashes the entire retrieval on the latter.
+     */
+    private static String imagePathsMeta(Map<String, Object> meta) {
+        Object raw = meta.get("image_paths");
+        if (raw instanceof String s) return s;
+        if (raw instanceof Collection<?> c) {
+            return c.stream()
+                    .filter(Objects::nonNull)
+                    .map(Object::toString)
+                    .collect(java.util.stream.Collectors.joining(","));
+        }
+        return null;
     }
 
     private static String truncate(String text, int max) {
