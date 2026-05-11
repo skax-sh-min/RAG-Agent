@@ -64,17 +64,19 @@ public class CircuitBreaker {
 
     private Duration parseRetryAfter(@Nullable String header) {
         if (header == null || header.isBlank()) return defaultBlockDuration;
+        Duration parsed;
         try {
-            return Duration.ofSeconds(Long.parseLong(header.trim()));
+            parsed = Duration.ofSeconds(Long.parseLong(header.trim()));
         } catch (NumberFormatException e) {
             try {
                 Instant retryAt = Instant.from(
                         DateTimeFormatter.RFC_1123_DATE_TIME.parse(header.trim()));
-                long seconds = Math.max(1, Instant.now().until(retryAt, ChronoUnit.SECONDS));
-                return Duration.ofSeconds(seconds);
+                parsed = Duration.ofSeconds(Instant.now().until(retryAt, ChronoUnit.SECONDS));
             } catch (Exception ex) {
                 return defaultBlockDuration;
             }
         }
+        // Negative/zero (malformed value or past HTTP-Date) must not bypass the block.
+        return (parsed.isNegative() || parsed.isZero()) ? defaultBlockDuration : parsed;
     }
 }
