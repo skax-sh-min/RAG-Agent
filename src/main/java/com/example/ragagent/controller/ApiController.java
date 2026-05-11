@@ -95,12 +95,27 @@ public class ApiController {
 
         if (file.isEmpty()) return ResponseEntity.badRequest().build();
 
+        String filename;
+        Path savedPath;
         try {
+            filename = sanitizeFilename(file.getOriginalFilename());
             Files.createDirectories(documentsDir);
-            String filename = sanitizeFilename(file.getOriginalFilename());
-            Path savedPath = documentsDir.resolve(filename);
-            file.transferTo(savedPath);
+            Path base = documentsDir.toAbsolutePath().normalize();
+            savedPath = base.resolve(filename).normalize();
+            if (!savedPath.startsWith(base)) {
+                log.warn("Rejected upload: path escapes documentsDir ({})", filename);
+                return ResponseEntity.badRequest().build();
+            }
+        } catch (IllegalArgumentException e) {
+            log.warn("Rejected upload: {}", e.getMessage());
+            return ResponseEntity.badRequest().build();
+        } catch (IOException e) {
+            log.error("Document upload error (mkdir)", e);
+            return ResponseEntity.internalServerError().build();
+        }
 
+        try {
+            file.transferTo(savedPath);
             DocumentInfo info = ragService.indexDocument(savedPath, version);
             return ResponseEntity.ok(info);
         } catch (IOException e) {
@@ -220,9 +235,20 @@ public class ApiController {
 
     // ── Internal helpers ────────────────────────────────────────────────────
 
+    /**
+     * Strips any directory components and replaces disallowed characters with '_'.
+     * Rejects names that are blank, dot-only ('.', '..', '...'), or start with a dot
+     * (hidden files / leading-dot traversal-like names) by throwing IllegalArgumentException.
+     */
     private String sanitizeFilename(String original) {
-        if (original == null) return "upload_" + Instant.now().toEpochMilli();
-        return Path.of(original).getFileName().toString()
+        if (original == null || original.isBlank()) {
+            return "upload_" + Instant.now().toEpochMilli();
+        }
+        String base = Path.of(original).getFileName().toString()
                 .replaceAll("[^a-zA-Z0-9._\\-가-힣]", "_");
+        if (base.isBlank() || base.startsWith(".") || base.chars().allMatch(c -> c == '.')) {
+            throw new IllegalArgumentException("invalid filename: " + original);
+        }
+        return base;
     }
 }
