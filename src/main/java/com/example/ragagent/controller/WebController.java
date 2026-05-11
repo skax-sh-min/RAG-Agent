@@ -206,9 +206,13 @@ public class WebController {
         if (file.isEmpty()) {
             return ResponseEntity.badRequest().build();
         }
+        String originalFilename = file.getOriginalFilename() != null
+                ? Path.of(file.getOriginalFilename()).getFileName().toString() : "upload";
+        if (!RagService.isSupportedExtension(originalFilename)) {
+            log.warn("Rejected upload: unsupported extension ({})", originalFilename);
+            return ResponseEntity.unprocessableEntity().build();
+        }
         try {
-            String originalFilename = file.getOriginalFilename() != null
-                    ? Path.of(file.getOriginalFilename()).getFileName().toString() : "upload";
             Path tmp = Files.createTempFile("rag-upload-", "-" + originalFilename);
             try {
                 file.transferTo(tmp);

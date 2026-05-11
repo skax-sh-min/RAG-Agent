@@ -147,7 +147,7 @@ public class RagService {
         Map<String, Path> filesOnDisk = new HashMap<>();
         if (Files.exists(documentsDir)) {
             try (Stream<Path> stream = Files.list(documentsDir)) {
-                stream.filter(p -> isSupportedExtension(p.getFileName().toString()))
+                stream.filter(p -> RagService.isSupportedExtension(p.getFileName().toString()))
                       .forEach(p -> filesOnDisk.put(p.getFileName().toString(), p));
             }
         }
@@ -420,10 +420,12 @@ public class RagService {
         return "manual";
     }
 
-    private boolean isSupportedExtension(String filename) {
+    public static final List<String> SUPPORTED_EXTENSIONS = List.of(".pdf", ".pptx", ".docx", ".txt", ".md");
+
+    public static boolean isSupportedExtension(String filename) {
+        if (filename == null) return false;
         String lower = filename.toLowerCase();
-        return lower.endsWith(".pdf") || lower.endsWith(".pptx")
-                || lower.endsWith(".docx") || lower.endsWith(".txt") || lower.endsWith(".md");
+        return SUPPORTED_EXTENSIONS.stream().anyMatch(lower::endsWith);
     }
 
     private void loadRegistry() throws IOException {

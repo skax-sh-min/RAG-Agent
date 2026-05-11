@@ -99,6 +99,10 @@ public class ApiController {
         Path savedPath;
         try {
             filename = sanitizeFilename(file.getOriginalFilename());
+            if (!RagService.isSupportedExtension(filename)) {
+                log.warn("Rejected upload: unsupported extension ({})", filename);
+                return ResponseEntity.unprocessableEntity().build();
+            }
             Files.createDirectories(documentsDir);
             Path base = documentsDir.toAbsolutePath().normalize();
             savedPath = base.resolve(filename).normalize();
