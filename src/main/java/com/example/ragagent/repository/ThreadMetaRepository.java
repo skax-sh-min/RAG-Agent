@@ -73,9 +73,10 @@ public class ThreadMetaRepository {
                 INSERT INTO thread_meta (thread_id, title, version, created_at, updated_at, routing_mode)
                 VALUES (?, ?, ?, ?, ?, ?)
                 ON CONFLICT(thread_id) DO UPDATE SET
-                    title      = excluded.title,
-                    version    = excluded.version,
-                    updated_at = excluded.updated_at
+                    title        = excluded.title,
+                    version      = excluded.version,
+                    updated_at   = excluded.updated_at,
+                    routing_mode = excluded.routing_mode
                 """,
                 meta.threadId(), meta.title(), meta.version(),
                 meta.createdAt(), meta.updatedAt(), meta.routingMode());
