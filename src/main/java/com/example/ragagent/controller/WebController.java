@@ -208,11 +208,11 @@ public class WebController {
         }
         try {
             String originalFilename = file.getOriginalFilename() != null
-                    ? file.getOriginalFilename() : "upload";
+                    ? Path.of(file.getOriginalFilename()).getFileName().toString() : "upload";
             Path tmp = Files.createTempFile("rag-upload-", "-" + originalFilename);
             try {
                 file.transferTo(tmp);
-                DocumentInfo info = ragService.indexDocument(tmp, version);
+                DocumentInfo info = ragService.indexDocument(tmp, originalFilename, version);
                 return ResponseEntity.ok(info);
             } finally {
                 Files.deleteIfExists(tmp);

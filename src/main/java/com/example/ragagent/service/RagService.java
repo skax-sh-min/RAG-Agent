@@ -79,7 +79,15 @@ public class RagService {
     // ──────────────────────────────────────────────────────────────────────
 
     public DocumentInfo indexDocument(Path filePath, String version) throws IOException {
-        String filename = filePath.getFileName().toString();
+        return indexDocument(filePath, filePath.getFileName().toString(), version);
+    }
+
+    /**
+     * Indexes a file using an explicit logical {@code filename} for metadata/registry,
+     * decoupled from the on-disk path. Used by upload endpoints where the file is staged
+     * to a temporary path but must be tracked under the user's original filename.
+     */
+    public DocumentInfo indexDocument(Path filePath, String filename, String version) throws IOException {
         String sha256 = computeSha256(filePath);
         String docId = filename + "_" + sha256.substring(0, 8);
         String docType = inferDocType(filename);
