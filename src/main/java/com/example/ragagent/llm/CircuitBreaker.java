@@ -35,13 +35,11 @@ public class CircuitBreaker {
     }
 
     public boolean isBlocked(String providerName) {
-        Instant until = blockedUntil.get(providerName);
-        if (until == null) return false;
-        if (Instant.now().isAfter(until)) {
-            blockedUntil.remove(providerName);
-            return false;
-        }
-        return true;
+        // Atomic check-and-evict: prevents a concurrent block() from being
+        // clobbered by a stale isBlocked() observing an already-expired entry.
+        Instant until = blockedUntil.computeIfPresent(providerName,
+                (k, v) -> Instant.now().isAfter(v) ? null : v);
+        return until != null;
     }
 
     /**
