@@ -58,7 +58,7 @@ public class StreamingAgentService {
             AgentState initial;
             RoutingMode rm = parseRoutingMode(form.routingMode());
 
-            if (form.directMode()) {
+            if (form.isDirectMode()) {
                 // directMode: classifier 생략, history만 로드
                 String history = memoryService.getHistory(form.threadId());
                 initial = AgentState.of(form.question(), form.version(), form.threadId(),

@@ -5,5 +5,9 @@ public record ChatForm(
         String threadId,
         String version,
         String routingMode,
-        boolean directMode
-) {}
+        Boolean directMode
+) {
+    public boolean isDirectMode() {
+        return Boolean.TRUE.equals(directMode);
+    }
+}
