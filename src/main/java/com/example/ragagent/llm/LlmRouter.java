@@ -64,10 +64,19 @@ public class LlmRouter {
                         "DUAL requires at least one external provider (NORMAL or PREMIUM)."));
 
         try (var exec = Executors.newVirtualThreadPerTaskExecutor()) {
-            CompletableFuture<String> localF =
-                    CompletableFuture.supplyAsync(() -> executeSingleTracked(local, taskType, call), exec);
-            CompletableFuture<String> externalF =
-                    CompletableFuture.supplyAsync(() -> executeSingleTracked(external, taskType, call), exec);
+            // B-21: exceptionally() ensures one side's failure never cancels the other via exec.close()
+            CompletableFuture<String> localF = CompletableFuture
+                    .supplyAsync(() -> executeSingleTracked(local, taskType, call), exec)
+                    .exceptionally(t -> {
+                        log.warn("[DUAL] LOCAL call failed ({}): {}", local.name(), t.getMessage());
+                        return "";
+                    });
+            CompletableFuture<String> externalF = CompletableFuture
+                    .supplyAsync(() -> executeSingleTracked(external, taskType, call), exec)
+                    .exceptionally(t -> {
+                        log.warn("[DUAL] external call failed ({}): {}", external.name(), t.getMessage());
+                        return "";
+                    });
             return new DualResult(localF.join(), local.name(), externalF.join(), external.name());
         }
     }
@@ -91,10 +100,19 @@ public class LlmRouter {
                         "DUAL requires at least one external provider (NORMAL or PREMIUM)."));
 
         try (var exec = Executors.newVirtualThreadPerTaskExecutor()) {
-            CompletableFuture<Void> localF = CompletableFuture.runAsync(
-                    () -> streamFn.accept(local.chatModel(), localTokenSink), exec);
-            CompletableFuture<Void> externalF = CompletableFuture.runAsync(
-                    () -> streamFn.accept(external.chatModel(), externalTokenSink), exec);
+            // B-21: exceptionally() ensures one side's failure never cancels the other via exec.close()
+            CompletableFuture<Void> localF = CompletableFuture
+                    .runAsync(() -> streamFn.accept(local.chatModel(), localTokenSink), exec)
+                    .exceptionally(t -> {
+                        log.warn("[DUAL] LOCAL stream failed ({}): {}", local.name(), t.getMessage());
+                        return null;
+                    });
+            CompletableFuture<Void> externalF = CompletableFuture
+                    .runAsync(() -> streamFn.accept(external.chatModel(), externalTokenSink), exec)
+                    .exceptionally(t -> {
+                        log.warn("[DUAL] external stream failed ({}): {}", external.name(), t.getMessage());
+                        return null;
+                    });
             CompletableFuture.allOf(localF, externalF).join();
         }
         return new DualProviders(local.name(), external.name());
