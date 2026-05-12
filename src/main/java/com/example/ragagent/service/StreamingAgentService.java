@@ -88,7 +88,16 @@ public class StreamingAgentService {
             threadMetaService.generateTitleAsync(form.threadId(), form.version(), form.question());
 
         } catch (Exception e) {
-            log.error("SSE streaming error", e);
+            // B-20: interrupt signals client disconnect / SSE timeout — not an error
+            boolean interrupted = e instanceof InterruptedException
+                    || e.getCause() instanceof InterruptedException
+                    || Thread.currentThread().isInterrupted();
+            if (interrupted) {
+                log.debug("SSE worker cancelled (timeout/disconnect) thread={}", form.threadId());
+                Thread.currentThread().interrupt();
+            } else {
+                log.error("SSE streaming error", e);
+            }
             // B-13: persist whatever answer was streamed so subsequent turns have context
             if (listener != null) {
                 String partial = listener.getAccumulatedAnswer();
