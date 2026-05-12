@@ -4,5 +4,6 @@ public record ChatForm(
         String question,
         String threadId,
         String version,
-        String routingMode
+        String routingMode,
+        boolean directMode
 ) {}

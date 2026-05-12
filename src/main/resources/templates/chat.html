@@ -149,12 +149,28 @@
                     <input type="hidden" name="threadId" th:value="${threadId}"/>
                     <input type="hidden" id="form-version" name="version" th:value="${version}"/>
                     <input type="hidden" id="form-routing-mode" name="routingMode" th:value="${routingMode}"/>
+                    <input type="hidden" id="form-direct-mode" name="directMode" value="false"/>
                     <div class="input-group">
                         <textarea id="question-input" name="question"
                                   class="form-control"
                                   th:placeholder="#{chat.input.placeholder}"
                                   rows="1"
                                   style="resize: none; overflow-y: hidden;"></textarea>
+                        <!-- RAG / Direct LLM 토글 -->
+                        <span class="input-group-text bg-body border-start-0 px-2"
+                              id="direct-mode-wrapper"
+                              th:title="#{chat.direct.tooltip}">
+                            <div class="form-check form-switch mb-0 d-flex align-items-center gap-1">
+                                <input class="form-check-input mt-0" type="checkbox"
+                                       id="direct-mode-toggle" role="switch"
+                                       style="cursor:pointer;"/>
+                                <label class="form-check-label small text-muted mb-0"
+                                       for="direct-mode-toggle"
+                                       id="direct-mode-label"
+                                       style="cursor:pointer; white-space:nowrap;"
+                                       th:text="#{chat.direct.label.rag}">RAG</label>
+                            </div>
+                        </span>
                         <button id="send-btn" type="submit" class="btn btn-primary">
                             <i class="bi bi-send-fill"></i>
                         </button>
@@ -173,6 +189,20 @@
     const chatForm        = document.getElementById('chat-form');
     const questionInput   = document.getElementById('question-input');
     const sendBtn         = document.getElementById('send-btn');
+    const directToggle    = document.getElementById('direct-mode-toggle');
+    const directLabel     = document.getElementById('direct-mode-label');
+    const directModeInput = document.getElementById('form-direct-mode');
+
+    /* RAG ↔ Direct LLM 토글 */
+    const labelRag    = /*[[#{chat.direct.label.rag}]]*/ 'RAG';
+    const labelDirect = /*[[#{chat.direct.label.direct}]]*/ 'Direct';
+    directToggle.addEventListener('change', function () {
+        const isDirect = this.checked;
+        directModeInput.value = isDirect ? 'true' : 'false';
+        directLabel.textContent = isDirect ? labelDirect : labelRag;
+        directLabel.classList.toggle('text-primary', isDirect);
+        directLabel.classList.toggle('text-muted', !isDirect);
+    });
 
     /* Sync version input → hidden form field */
     document.getElementById('version-input').addEventListener('change', function () {

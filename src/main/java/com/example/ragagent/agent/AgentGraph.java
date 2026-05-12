@@ -59,7 +59,8 @@ public class AgentGraph {
     // ── Internal ──────────────────────────────────────────────────────────────
 
     private AgentState runInternal(AgentState initialState, GraphListener listener) {
-        Node current = Node.CLASSIFIER;
+        // directMode: RAG 없이 LLM 직접 호출 → CLASSIFIER/RETRIEVAL/CRITIC 생략
+        Node current = initialState.directMode() ? Node.DIRECT_ANSWER : Node.CLASSIFIER;
         AgentState state = initialState;
 
         while (current != Node.END) {

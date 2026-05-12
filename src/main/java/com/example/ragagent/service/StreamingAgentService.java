@@ -55,18 +55,26 @@ public class StreamingAgentService {
     public void run(ChatForm form, SseEmitter emitter) {
         long startNs = System.nanoTime();
         try {
-            // Parallel: load history + classify (mirrors AgentService)
             AgentState initial;
-            try (var exec = Executors.newVirtualThreadPerTaskExecutor()) {
-                CompletableFuture<String> historyF = CompletableFuture.supplyAsync(
-                        () -> memoryService.getHistory(form.threadId()), exec);
-                CompletableFuture<String> typeF = CompletableFuture.supplyAsync(
-                        () -> classifierService.classifyOnly(form.question()), exec);
+            RoutingMode rm = parseRoutingMode(form.routingMode());
 
-                RoutingMode rm = parseRoutingMode(form.routingMode());
+            if (form.directMode()) {
+                // directMode: classifier 생략, history만 로드
+                String history = memoryService.getHistory(form.threadId());
                 initial = AgentState.of(form.question(), form.version(), form.threadId(),
-                                historyF.join(), rm)
-                        .withQuestionType(typeF.join());
+                        history, rm, true);
+            } else {
+                // 일반 RAG 모드: history 로드 + 분류 병렬 실행
+                try (var exec = Executors.newVirtualThreadPerTaskExecutor()) {
+                    CompletableFuture<String> historyF = CompletableFuture.supplyAsync(
+                            () -> memoryService.getHistory(form.threadId()), exec);
+                    CompletableFuture<String> typeF = CompletableFuture.supplyAsync(
+                            () -> classifierService.classifyOnly(form.question()), exec);
+
+                    initial = AgentState.of(form.question(), form.version(), form.threadId(),
+                                    historyF.join(), rm)
+                            .withQuestionType(typeF.join());
+                }
             }
 
             SseGraphListener listener = new SseGraphListener(emitter);
