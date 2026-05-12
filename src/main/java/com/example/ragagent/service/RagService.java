@@ -506,8 +506,11 @@ public class RagService {
     private String computeSha256(Path filePath) {
         try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            byte[] hash = digest.digest(Files.readAllBytes(filePath));
-            return HexFormat.of().formatHex(hash);
+            try (var in = new java.security.DigestInputStream(Files.newInputStream(filePath), digest)) {
+                byte[] buf = new byte[8192];
+                while (in.read(buf) != -1) { /* drain */ }
+            }
+            return HexFormat.of().formatHex(digest.digest());
         } catch (NoSuchAlgorithmException | IOException e) {
             throw new RuntimeException("SHA-256 computation failed", e);
         }
