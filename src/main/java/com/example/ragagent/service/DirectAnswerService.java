@@ -49,7 +49,7 @@ public class DirectAnswerService {
                 .call()
                 .chatResponse();
 
-        String answer = chatResponse.getResult().getOutput().getText();
+        String answer = ChatResponses.safeText(chatResponse);
         log.debug("[DirectAnswer] answer length={}", answer == null ? -1 : answer.length());
         state = accumulateTokens(state, chatResponse);
         return state.withAnswer(answer);

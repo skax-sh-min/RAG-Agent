@@ -107,9 +107,11 @@ public class AnswerService {
                         t -> { localBuf.append(t); listener.onToken("local", t); },
                         t -> { extBuf.append(t);   listener.onToken("external", t); }
                 );
+                String localAnswer = localBuf.toString();
                 return state.withAnswer(extBuf.toString())
                             .withUsedProvider(dp.externalProvider())
-                            .withDualResult(localBuf.toString(), dp.localProvider())
+                            .withDualResult(localAnswer,
+                                    localAnswer.isBlank() ? null : dp.localProvider())
                             .withNeedsRetry(false);
             }
             String answerPrompt = buildAnswerPrompt(state);
@@ -123,7 +125,8 @@ public class AnswerService {
             return state
                     .withAnswer(dual.externalAnswer())
                     .withUsedProvider(dual.externalProvider())
-                    .withDualResult(dual.localAnswer(), dual.localProvider())
+                    .withDualResult(dual.localAnswer(),
+                            dual.localAnswer().isBlank() ? null : dual.localProvider())
                     .withNeedsRetry(false);
         }
 
@@ -141,7 +144,7 @@ public class AnswerService {
                     .call()
                     .chatResponse();
             state = accumulateTokens(state, answerResponse);
-            answer = answerResponse.getResult().getOutput().getText();
+            answer = ChatResponses.safeText(answerResponse);
             state = state.withUsedProvider(llmRouter.findProviderName(TaskType.TEXT, state.routingMode()));
         }
 
@@ -212,7 +215,7 @@ public class AnswerService {
                     .chatResponse();
             state = accumulateTokens(state, sufficiencyResponse);
             boolean sufficient = sufficiencyConverter
-                    .convert(sufficiencyResponse.getResult().getOutput().getText())
+                    .convert(ChatResponses.safeText(sufficiencyResponse))
                     .sufficient();
             return state.withNeedsRetry(!sufficient);
         } catch (Exception e) {

@@ -61,7 +61,7 @@ public class ClassifierService {
                 .chatResponse();
 
         state = accumulateTokens(state, chatResponse);
-        return state.withQuestionType(parseType(chatResponse.getResult().getOutput().getText()));
+        return state.withQuestionType(parseType(ChatResponses.safeText(chatResponse)));
     }
 
     private String parseType(String response) {
