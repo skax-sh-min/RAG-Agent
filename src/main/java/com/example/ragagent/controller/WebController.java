@@ -110,7 +110,7 @@ public class WebController {
 
     @PostMapping(value = "/ui/chat/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter streamChat(@ModelAttribute ChatForm form) {
-        SseEmitter emitter = new SseEmitter(180_000L);
+        SseEmitter emitter = new SseEmitter(props.sseTimeoutMs());
         if (form.question() == null || form.question().isBlank()) {
             emitter.completeWithError(new IllegalArgumentException("question is blank"));
             return emitter;

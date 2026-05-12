@@ -17,7 +17,11 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
 import java.nio.file.*;
+import java.security.DigestInputStream;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -119,9 +123,24 @@ public class ApiController {
         }
 
         try {
-            file.transferTo(savedPath);
-            DocumentInfo info = ragService.indexDocument(savedPath, version);
-            return ResponseEntity.ok(info);
+            Path dest = savedPath;
+            if (Files.exists(dest)) {
+                Path tmp = Files.createTempFile("rag-sha-", "-" + filename);
+                try {
+                    file.transferTo(tmp);
+                    if (computeSha256(tmp).equals(computeSha256(dest))) {
+                        log.debug("Upload no-op: identical content for {}", filename);
+                        return ResponseEntity.ok(ragService.indexDocument(dest, version));
+                    }
+                    dest = versionedPath(dest);
+                    Files.copy(tmp, dest, StandardCopyOption.REPLACE_EXISTING);
+                } finally {
+                    Files.deleteIfExists(tmp);
+                }
+            } else {
+                file.transferTo(dest);
+            }
+            return ResponseEntity.ok(ragService.indexDocument(dest, version));
         } catch (IOException e) {
             log.error("Document upload error", e);
             return ResponseEntity.internalServerError().build();
@@ -244,6 +263,32 @@ public class ApiController {
      * Rejects names that are blank, dot-only ('.', '..', '...'), or start with a dot
      * (hidden files / leading-dot traversal-like names) by throwing IllegalArgumentException.
      */
+    private static String computeSha256(Path path) throws IOException {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            try (var in = new DigestInputStream(Files.newInputStream(path), digest)) {
+                byte[] buf = new byte[8192];
+                while (in.read(buf) != -1) { /* drain */ }
+            }
+            return HexFormat.of().formatHex(digest.digest());
+        } catch (NoSuchAlgorithmException e) {
+            throw new RuntimeException("SHA-256 not available", e);
+        }
+    }
+
+    private static Path versionedPath(Path base) {
+        String name = base.getFileName().toString();
+        int dot = name.lastIndexOf('.');
+        String stem = dot > 0 ? name.substring(0, dot) : name;
+        String ext  = dot > 0 ? name.substring(dot)    : "";
+        Path dir = base.getParent();
+        for (int v = 2; v <= 99; v++) {
+            Path candidate = dir.resolve(stem + "_v" + v + ext);
+            if (!Files.exists(candidate)) return candidate;
+        }
+        return dir.resolve(stem + "_v" + Instant.now().toEpochMilli() + ext);
+    }
+
     private String sanitizeFilename(String original) {
         if (original == null || original.isBlank()) {
             return "upload_" + Instant.now().toEpochMilli();

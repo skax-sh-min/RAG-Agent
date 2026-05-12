@@ -19,6 +19,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 
 /**
  * SSE streaming pipeline orchestrator.
@@ -29,6 +32,12 @@ import java.util.concurrent.Executors;
 public class StreamingAgentService {
 
     private static final Logger log = LoggerFactory.getLogger(StreamingAgentService.class);
+
+    private final ScheduledExecutorService heartbeatScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
+        Thread t = new Thread(r, "sse-heartbeat");
+        t.setDaemon(true);
+        return t;
+    });
 
     private final AgentGraph agentGraph;
     private final MemoryService memoryService;
@@ -55,6 +64,10 @@ public class StreamingAgentService {
     public void run(ChatForm form, SseEmitter emitter) {
         long startNs = System.nanoTime();
         SseGraphListener listener = null;
+        ScheduledFuture<?> heartbeat = heartbeatScheduler.scheduleAtFixedRate(() -> {
+            try { emitter.send(SseEmitter.event().comment("heartbeat")); }
+            catch (Exception ignored) {}
+        }, 15, 15, TimeUnit.SECONDS);
         try {
             AgentState initial;
             RoutingMode rm = parseRoutingMode(form.routingMode());
@@ -114,6 +127,8 @@ public class StreamingAgentService {
             }
             trySendError(emitter, e.getMessage());
             emitter.completeWithError(e);
+        } finally {
+            heartbeat.cancel(false);
         }
     }
 

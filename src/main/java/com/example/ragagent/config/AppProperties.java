@@ -12,6 +12,7 @@ public record AppProperties(
         int chunkSize,
         int chunkOverlap,
         int searchTopK,
+        Integer sseTimeoutSeconds,
         LlmConfig llm,
         IndexingConfig indexing,
         ImageDescriptionProperties imageDescription,
@@ -63,6 +64,11 @@ public record AppProperties(
         if (imageDescription == null)
             return new ImageDescriptionProperties("strip", false, false, null, 1_000, true, false, false, false);
         return imageDescription;
+    }
+
+    public long sseTimeoutMs() {
+        return (sseTimeoutSeconds != null && sseTimeoutSeconds > 0)
+                ? sseTimeoutSeconds * 1000L : 300_000L;
     }
 
     public IndexingConfig indexingSafe() {

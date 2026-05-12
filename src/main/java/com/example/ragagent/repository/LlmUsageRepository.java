@@ -5,6 +5,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 
 import java.time.LocalDate;
+import java.time.ZoneOffset;
 import java.util.List;
 
 /**
@@ -39,7 +40,7 @@ public class LlmUsageRepository {
     // ── Write ──────────────────────────────────────────────────────────────
 
     public void record(String provider, long inputTokens, long outputTokens) {
-        String today = LocalDate.now().toString();
+        String today = LocalDate.now(ZoneOffset.UTC).toString();
         jdbc.update("""
                 INSERT INTO llm_usage (provider_name, usage_date, input_tokens, output_tokens, call_count)
                 VALUES (?, ?, ?, ?, 1)
@@ -65,23 +66,23 @@ public class LlmUsageRepository {
     }
 
     public PeriodSummary getDaily(String provider) {
-        return getByPeriod(provider, LocalDate.now(), LocalDate.now());
+        return getByPeriod(provider, LocalDate.now(ZoneOffset.UTC), LocalDate.now(ZoneOffset.UTC));
     }
 
     public PeriodSummary getWeekly(String provider) {
-        LocalDate today = LocalDate.now();
+        LocalDate today = LocalDate.now(ZoneOffset.UTC);
         return getByPeriod(provider, today.minusDays(6), today);
     }
 
     public PeriodSummary getMonthly(String provider) {
-        LocalDate today = LocalDate.now();
+        LocalDate today = LocalDate.now(ZoneOffset.UTC);
         return getByPeriod(provider, today.withDayOfMonth(1), today);
     }
 
     // ── Daily history (for Chart.js) ───────────────────────────────────────
 
     public List<DailyRow> getDailyHistory(String provider, int days) {
-        String from = LocalDate.now().minusDays(days - 1).toString();
+        String from = LocalDate.now(ZoneOffset.UTC).minusDays(days - 1).toString();
         return jdbc.query("""
                 SELECT usage_date, input_tokens, output_tokens, call_count
                 FROM llm_usage

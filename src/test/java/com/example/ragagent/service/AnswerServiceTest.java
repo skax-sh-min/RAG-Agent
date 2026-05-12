@@ -51,7 +51,7 @@ class AnswerServiceTest {
         llmRouter = mock(LlmRouter.class);
         AppProperties props = new AppProperties(
                 "./data", MAX_RETRY, 8000, 800, 100, 7,
-                null, null, null, null);
+                null, null, null, null, null);
         service = new AnswerService(chatClient, llmRouter, props);
     }
 

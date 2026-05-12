@@ -230,6 +230,7 @@ class WebControllerHtmxTest {
     @Test
     @DisplayName("POST /ui/chat/stream — directMode 누락 시 SSE 정상 시작 (B-26 회귀)")
     void streamChat_missingDirectMode_doesNotReturn400() throws Exception {
+        when(props.sseTimeoutMs()).thenReturn(300_000L);
         mvc.perform(post("/ui/chat/stream")
                         .param("question", "테스트")
                         .param("threadId", "t1")
