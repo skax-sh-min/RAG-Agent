@@ -80,6 +80,18 @@ public class LlmConfig {
     @Bean
     @Primary
     public ChatModel primaryChatModel(LlmRouter router) {
-        return router.route(TaskType.TEXT, RoutingMode.COST_FIRST);
+        // TEXT for NORMAL/PREMIUM providers.
+        // Fall back to LIGHT_TEXT so LIGHT_BOTH local-only setups (no cloud key) also work.
+        for (TaskType taskType : List.of(TaskType.TEXT, TaskType.LIGHT_TEXT)) {
+            try {
+                ChatModel m = router.route(taskType, RoutingMode.COST_FIRST);
+                log.info("primaryChatModel resolved via TaskType.{}", taskType);
+                return m;
+            } catch (LlmProviderExhaustedException ignored) {
+                // try next
+            }
+        }
+        throw new IllegalStateException(
+                "No LLM provider available. Set LOCAL_LLM_KEY or OPENAI_API_KEY / GEMINI_API_KEY.");
     }
 }

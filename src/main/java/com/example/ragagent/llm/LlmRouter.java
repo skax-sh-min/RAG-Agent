@@ -65,9 +65,9 @@ public class LlmRouter {
 
         try (var exec = Executors.newVirtualThreadPerTaskExecutor()) {
             CompletableFuture<String> localF =
-                    CompletableFuture.supplyAsync(() -> executeSingleTracked(local, call), exec);
+                    CompletableFuture.supplyAsync(() -> executeSingleTracked(local, taskType, call), exec);
             CompletableFuture<String> externalF =
-                    CompletableFuture.supplyAsync(() -> executeSingleTracked(external, call), exec);
+                    CompletableFuture.supplyAsync(() -> executeSingleTracked(external, taskType, call), exec);
             return new DualResult(localF.join(), local.name(), externalF.join(), external.name());
         }
     }
@@ -150,7 +150,7 @@ public class LlmRouter {
                         "All providers exhausted for task=" + taskType));
         tried.add(provider.name());
         try {
-            return executeSingleTracked(provider, call);
+            return executeSingleTracked(provider, taskType, call);
         } catch (HttpClientErrorException e) {
             int status = e.getStatusCode().value();
             if (status == 429 || status == 402) {
@@ -170,13 +170,22 @@ public class LlmRouter {
         }
     }
 
-    private String executeSingleTracked(LlmProvider provider,
+    private String executeSingleTracked(LlmProvider provider, TaskType taskType,
                                         Function<ChatModel, ChatResponse> call) {
+        log.debug("[LLM →] provider={} task={}", provider.name(), taskType);
+        long t0 = System.currentTimeMillis();
         ChatResponse response = call.apply(provider.chatModel());
+        long elapsed = System.currentTimeMillis() - t0;
         var usage = response.getMetadata().getUsage();
         int in  = (usage != null && usage.getPromptTokens()     != null) ? usage.getPromptTokens()     : 0;
         int out = (usage != null && usage.getCompletionTokens() != null) ? usage.getCompletionTokens() : 0;
         usageRepo.record(provider.name(), in, out);
-        return response.getResult().getOutput().getText();
+        String text = response.getResult().getOutput().getText();
+        if (log.isDebugEnabled()) {
+            String preview = (text != null && text.length() > 80) ? text.substring(0, 80) + "…" : text;
+            log.debug("[LLM ←] provider={} task={} in={} out={} {}ms | {}",
+                    provider.name(), taskType, in, out, elapsed, preview);
+        }
+        return text;
     }
 }

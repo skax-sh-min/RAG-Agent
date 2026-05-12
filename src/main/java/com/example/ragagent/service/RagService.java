@@ -137,12 +137,9 @@ public class RagService {
         deleteByDocId(docId, version);
 
         // Enrich chunks with LLM-extracted keywords (adds excerpt_keywords metadata)
-        log.debug("[INDEX] {} 키워드 추출 중 ({}개 청크)...", filename, tagged.size());
-        List<Document> enriched = new ArrayList<>(tagged.size());
-        for (int i = 0; i < tagged.size(); i++) {
-            log.debug("[INDEX] {} 키워드 추출 [{}/{}]", filename, i + 1, tagged.size());
-            enriched.add(enrichKeywords(tagged.get(i)));
-        }
+        log.debug("[INDEX] {} 키워드 추출 중 ({}개 청크, 병렬)...", filename, tagged.size());
+        Semaphore llmGate = new Semaphore(props.indexingSafe().maxConcurrentLlmCalls());
+        List<Document> enriched = enrichParallel(tagged, llmGate);
 
         // Add to vector store
         log.debug("[INDEX] {} 벡터 스토어 저장 중 ({}개 청크)...", filename, enriched.size());
@@ -363,18 +360,61 @@ public class RagService {
                 키워드만 반환하고 다른 설명은 하지 마세요.
 
                 """ + chunk.getText();
+        int timeoutSec = props.indexingSafe().keywordTimeoutSeconds();
         try {
-            String keywords = llmRouter.executeWithTracking(
-                    TaskType.LIGHT_TEXT, RoutingMode.COST_FIRST,
-                    model -> model.call(new Prompt(prompt)));
+            String keywords = CompletableFuture
+                    .supplyAsync(() -> llmRouter.executeWithTracking(
+                            TaskType.LIGHT_TEXT, RoutingMode.COST_FIRST,
+                            model -> model.call(new Prompt(prompt))))
+                    .orTimeout(timeoutSec, TimeUnit.SECONDS)
+                    .join();
             Map<String, Object> meta = new HashMap<>(chunk.getMetadata());
             meta.put("excerpt_keywords", keywords);
             return new Document(chunk.getText(), meta);
         } catch (Exception e) {
-            log.warn("Keyword enrichment failed for chunk, skipping: {}", e.getMessage());
-            return chunk;
+            log.debug("LLM keyword extraction failed (timeout={}s), falling back to TF: {}", timeoutSec, e.getMessage());
+            String keywords = extractKeywordsTf(chunk.getText(), 5);
+            Map<String, Object> meta = new HashMap<>(chunk.getMetadata());
+            meta.put("excerpt_keywords", keywords);
+            return new Document(chunk.getText(), meta);
         }
     }
+
+    /** LLM 폴백: 불용어 제거 후 TF(단어 빈도) 기준 상위 N개 키워드 반환 (외부 라이브러리 불필요). */
+    private static String extractKeywordsTf(String text, int topN) {
+        if (text == null || text.isBlank()) return "";
+        // 한글(2자+) 및 영문(3자+) 토큰만 허용, 나머지 구두점/숫자 제거
+        String[] tokens = text.split("[\\s\\p{Punct}\\d]+");
+        Map<String, Long> freq = Arrays.stream(tokens)
+                .map(String::toLowerCase)
+                .filter(t -> {
+                    if (t.length() < 2) return false;
+                    // 영문은 3자 이상
+                    if (t.chars().allMatch(c -> c < 128)) return t.length() >= 3;
+                    return true;
+                })
+                .filter(t -> !STOP_WORDS.contains(t))
+                .collect(java.util.stream.Collectors.groupingBy(t -> t, java.util.stream.Collectors.counting()));
+        return freq.entrySet().stream()
+                .sorted(Map.Entry.<String, Long>comparingByValue().reversed())
+                .limit(topN)
+                .map(Map.Entry::getKey)
+                .collect(java.util.stream.Collectors.joining(", "));
+    }
+
+    private static final Set<String> STOP_WORDS = Set.of(
+            // 한국어 불용어
+            "이", "그", "저", "것", "수", "등", "및", "또", "또는", "그리고", "하지만",
+            "그러나", "따라서", "때문", "위해", "통해", "대해", "관련", "경우", "있는",
+            "있다", "없다", "하다", "된다", "한다", "있습니다", "합니다", "됩니다",
+            "입니다", "대한", "하여", "으로", "에서", "에게",
+            "부터", "까지", "에도", "로서", "이며", "이고", "이나",
+            // 영어 불용어
+            "the", "and", "for", "are", "but", "not", "you", "all", "can",
+            "has", "her", "was", "one", "our", "out", "day", "get", "use",
+            "with", "this", "that", "from", "they", "will", "have", "been",
+            "more", "also", "into", "than", "then", "its", "when", "there"
+    );
 
     private void deleteByDocId(String docId, String version) {
         DocRegistryEntry existing = registry.get(docId);
