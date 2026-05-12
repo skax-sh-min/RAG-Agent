@@ -33,6 +33,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.request;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.view;
 
@@ -208,5 +209,32 @@ class WebControllerHtmxTest {
         mvc.perform(post("/ui/documents/sync").param("version", "latest"))
                 .andExpect(status().isOk())
                 .andExpect(view().name("fragments/sync-result :: result"));
+    }
+
+    // ── B-26 회귀: directMode 파라미터 누락 시 400 방지 ────────────────────────
+
+    @Test
+    @DisplayName("POST /ui/chat — directMode 누락 시 400 아닌 정상 응답 (B-26 회귀)")
+    void postChat_missingDirectMode_doesNotReturn400() throws Exception {
+        when(agentService.chat(any())).thenReturn(sampleResponse());
+        when(circuitBreaker.getBlockedProviders()).thenReturn(Map.of());
+
+        mvc.perform(post("/ui/chat")
+                        .param("question", "테스트")
+                        .param("threadId", "t1")
+                        .param("version", "latest"))
+                .andExpect(status().isOk())
+                .andExpect(view().name("fragments/message-assistant :: message"));
+    }
+
+    @Test
+    @DisplayName("POST /ui/chat/stream — directMode 누락 시 SSE 정상 시작 (B-26 회귀)")
+    void streamChat_missingDirectMode_doesNotReturn400() throws Exception {
+        mvc.perform(post("/ui/chat/stream")
+                        .param("question", "테스트")
+                        .param("threadId", "t1")
+                        .param("version", "latest"))
+                .andExpect(status().isOk())
+                .andExpect(request().asyncStarted());
     }
 }

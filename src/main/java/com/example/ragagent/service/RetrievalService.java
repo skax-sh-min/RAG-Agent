@@ -45,22 +45,22 @@ public class RetrievalService {
     }
 
     public AgentState execute(AgentState state) {
-        List<Document> allDocs = new ArrayList<>();
+        List<Document> unique;
         try {
             List<Query> queries = multiQueryExpander.expand(new Query(state.question()));
+            List<List<Document>> ranked;
             try (var exec = Executors.newVirtualThreadPerTaskExecutor()) {
-                queries.stream()
-                    .map(q -> CompletableFuture.supplyAsync(
-                        () -> ragService.search(q.text(), state.version(), defaultTopK), exec))
-                    .toList()
-                    .forEach(f -> allDocs.addAll(f.join()));
+                List<CompletableFuture<List<Document>>> futures = queries.stream()
+                        .map(q -> CompletableFuture.supplyAsync(
+                                () -> ragService.search(q.text(), state.version(), defaultTopK), exec))
+                        .toList();
+                ranked = futures.stream().map(CompletableFuture::join).toList();
             }
+            unique = mergeRrf(ranked, defaultTopK);
         } catch (Exception e) {
             log.warn("Multi-query expansion failed, falling back to original question: {}", e.getMessage());
-            allDocs.addAll(ragService.search(state.question(), state.version(), defaultTopK));
+            unique = ragService.search(state.question(), state.version(), defaultTopK);
         }
-
-        List<Document> unique = deduplicate(allDocs);
 
         List<SourceRef> sources = unique.stream()
                 .map(d -> new SourceRef(
@@ -133,18 +133,35 @@ public class RetrievalService {
         }).toList();
     }
 
-    private List<Document> deduplicate(List<Document> docs) {
-        Set<String> seen = new LinkedHashSet<>();
-        List<Document> result = new ArrayList<>();
-        for (Document doc : docs) {
-            if (result.size() >= defaultTopK) break;
-            String filename = String.valueOf(doc.getMetadata().getOrDefault("filename", ""));
-            String page = String.valueOf(doc.getMetadata().getOrDefault("page_or_slide", ""));
-            String preview = doc.getText() == null ? "" : doc.getText().substring(0, Math.min(50, doc.getText().length()));
-            String key = filename + "|" + page + "|" + preview;
-            if (seen.add(key)) result.add(doc);
+    /**
+     * Reciprocal Rank Fusion — score(d) = Σ 1/(rank_i + 1 + k) across all query lists where d appears.
+     * k=60 is the standard constant from the original RRF paper.
+     * Package-private for unit testing.
+     */
+    static List<Document> mergeRrf(List<List<Document>> ranked, int topK) {
+        int k = 60;
+        Map<String, Double> scores = new LinkedHashMap<>();
+        Map<String, Document> byKey = new LinkedHashMap<>();
+        for (List<Document> list : ranked) {
+            for (int i = 0; i < list.size(); i++) {
+                Document doc = list.get(i);
+                String key = docKey(doc);
+                scores.merge(key, 1.0 / (i + 1 + k), Double::sum);
+                byKey.putIfAbsent(key, doc);
+            }
         }
-        return result;
+        return scores.entrySet().stream()
+                .sorted(Map.Entry.<String, Double>comparingByValue().reversed())
+                .limit(topK)
+                .map(e -> byKey.get(e.getKey()))
+                .toList();
+    }
+
+    private static String docKey(Document doc) {
+        String filename = String.valueOf(doc.getMetadata().getOrDefault("filename", ""));
+        String page = String.valueOf(doc.getMetadata().getOrDefault("page_or_slide", ""));
+        String preview = doc.getText() == null ? "" : doc.getText().substring(0, Math.min(50, doc.getText().length()));
+        return filename + "|" + page + "|" + preview;
     }
 
     private String formatSource(Document doc) {
