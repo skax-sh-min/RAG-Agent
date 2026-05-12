@@ -90,14 +90,19 @@ public class RagService {
      * to a temporary path but must be tracked under the user's original filename.
      */
     public DocumentInfo indexDocument(Path filePath, String filename, String version) throws IOException {
+        log.info("[INDEX] 시작: {} (version={})", filename, version);
+        long t0 = System.currentTimeMillis();
+
         String sha256 = computeSha256(filePath);
         String docId = filename + "_" + sha256.substring(0, 8);
         String docType = inferDocType(filename);
         Path imagesDir = dataDir.resolve("images").resolve(docId);
+        log.debug("[INDEX] docId={}, type={}, sha256={}", docId, docType, sha256);
 
         // Load & split (DOCX: converter-based with image extraction; PPTX/PDF: extract separately)
         List<Document> rawDocs;
         String lower = filename.toLowerCase();
+        log.debug("[INDEX] {} 문서 로드 중...", filename);
         if (lower.endsWith(".docx")) {
             rawDocs = loaderService.loadDocx(filePath, docId, imagesDir);
         } else {
@@ -106,7 +111,11 @@ public class RagService {
                 rawDocs = injectImagePaths(rawDocs, imageExtractorService.extract(filePath, docId, imagesDir));
             }
         }
+        log.debug("[INDEX] {} 로드 완료 → 원본 섹션 {}개", filename, rawDocs.size());
+
         List<Document> chunks = splitDocuments(rawDocs, filename, props.chunkSize(), props.chunkOverlap());
+        log.debug("[INDEX] {} 청크 분할 완료 → {}개 (chunkSize={}, overlap={})",
+                filename, chunks.size(), props.chunkSize(), props.chunkOverlap());
 
         // Tag metadata
         List<Document> tagged = new ArrayList<>();
@@ -128,9 +137,15 @@ public class RagService {
         deleteByDocId(docId, version);
 
         // Enrich chunks with LLM-extracted keywords (adds excerpt_keywords metadata)
-        List<Document> enriched = tagged.stream().map(this::enrichKeywords).toList();
+        log.debug("[INDEX] {} 키워드 추출 중 ({}개 청크)...", filename, tagged.size());
+        List<Document> enriched = new ArrayList<>(tagged.size());
+        for (int i = 0; i < tagged.size(); i++) {
+            log.debug("[INDEX] {} 키워드 추출 [{}/{}]", filename, i + 1, tagged.size());
+            enriched.add(enrichKeywords(tagged.get(i)));
+        }
 
         // Add to vector store
+        log.debug("[INDEX] {} 벡터 스토어 저장 중 ({}개 청크)...", filename, enriched.size());
         VectorStore store = vectorStoreRegistry.getStore(version);
         store.add(enriched);
 
@@ -140,11 +155,15 @@ public class RagService {
         registry.put(docId, entry);
         saveRegistry();
 
+        log.info("[INDEX] 완료: {} → {}개 청크, {}ms", filename, tagged.size(), System.currentTimeMillis() - t0);
         return new DocumentInfo(docId, filename, version, tagged.size(),
                 entry.indexedAt(), sha256, List.of());
     }
 
     public SyncResult syncDirectory(String version) throws IOException {
+        log.info("[SYNC] 디렉터리 동기화 시작 (version={})", version);
+        long t0 = System.currentTimeMillis();
+
         // Phase 1 (single thread): collect files on disk and detect what needs indexing
         Map<String, Path> filesOnDisk = new HashMap<>();
         if (Files.exists(documentsDir)) {
@@ -174,6 +193,10 @@ public class RagService {
             // staleDocId deletion deferred to Phase 2 — only removed after successful re-indexing
             filesToIndex.put(filename, new FileEntry(filePath, staleDocId));
         }
+        log.info("[SYNC] Phase1 완료: 전체 {}개, 인덱싱 필요 {}개, 스킵 {}개",
+                filesOnDisk.size(), filesToIndex.size(), filesOnDisk.size() - filesToIndex.size());
+        filesToIndex.forEach((name, fe) ->
+                log.debug("[SYNC]   대상: {} (stale={})", name, fe.staleDocId()));
 
         // Phase 2 (parallel): index each file
         int fileConcurrency = props.indexingSafe().maxConcurrentFiles();
@@ -189,7 +212,7 @@ public class RagService {
                         indexDocumentParallel(e.getValue().path(), version, llmGate, e.getValue().staleDocId());
                         (e.getValue().staleDocId() != null ? updated : indexed).add(e.getKey());
                     } catch (Exception ex) {
-                        log.error("Parallel index failed: {}", e.getKey(), ex);
+                        log.error("[SYNC] 병렬 인덱싱 실패: {}", e.getKey(), ex);
                     }
                 }, filePool))
                 .toList();
@@ -203,6 +226,7 @@ public class RagService {
             if (!version.equals(entry.version())) continue;
             String filename = docId.substring(0, docId.lastIndexOf('_'));
             if (!filesOnDisk.containsKey(filename)) {
+                log.debug("[SYNC] 삭제 감지: {}", filename);
                 deleteByDocId(docId, version);
                 registry.remove(docId);
                 deleted.add(filename);
@@ -210,6 +234,8 @@ public class RagService {
         }
 
         saveRegistry();
+        log.info("[SYNC] 동기화 완료: 신규={}, 갱신={}, 삭제={}, 총 {}ms",
+                indexed.size(), updated.size(), deleted.size(), System.currentTimeMillis() - t0);
         return new SyncResult(List.copyOf(indexed), List.copyOf(updated), deleted);
     }
 
@@ -249,13 +275,18 @@ public class RagService {
 
     private void indexDocumentParallel(Path filePath, String version, Semaphore llmGate, String staleDocId) throws IOException {
         String filename = filePath.getFileName().toString();
+        log.info("[SYNC] 인덱싱 시작: {} (version={})", filename, version);
+        long t0 = System.currentTimeMillis();
+
         String sha256 = computeSha256(filePath);
         String docId = filename + "_" + sha256.substring(0, 8);
         String docType = inferDocType(filename);
         Path imagesDir = dataDir.resolve("images").resolve(docId);
+        log.debug("[SYNC] docId={}, type={}", docId, docType);
 
         List<Document> rawDocs;
         String lower = filename.toLowerCase();
+        log.debug("[SYNC] {} 문서 로드 중...", filename);
         if (lower.endsWith(".docx")) {
             rawDocs = loaderService.loadDocx(filePath, docId, imagesDir);
         } else {
@@ -264,7 +295,10 @@ public class RagService {
                 rawDocs = injectImagePaths(rawDocs, imageExtractorService.extract(filePath, docId, imagesDir));
             }
         }
+        log.debug("[SYNC] {} 로드 완료 → 원본 섹션 {}개", filename, rawDocs.size());
+
         List<Document> chunks = splitDocuments(rawDocs, filename, props.chunkSize(), props.chunkOverlap());
+        log.debug("[SYNC] {} 청크 분할 완료 → {}개", filename, chunks.size());
 
         List<Document> tagged = new ArrayList<>();
         for (int i = 0; i < chunks.size(); i++) {
@@ -283,8 +317,11 @@ public class RagService {
 
         deleteByDocId(docId, version);
 
+        log.debug("[SYNC] {} 키워드 추출 중 ({}개 청크, llmGate 대기 가능)...", filename, tagged.size());
         List<Document> enriched = enrichParallel(tagged, llmGate);
+        log.debug("[SYNC] {} 키워드 추출 완료", filename);
 
+        log.debug("[SYNC] {} 벡터 스토어 저장 중...", filename);
         VectorStore store = vectorStoreRegistry.getStore(version);
         store.add(enriched);
 
@@ -294,9 +331,11 @@ public class RagService {
 
         // Delete stale version only after new indexing succeeds — prevents data loss on failure
         if (staleDocId != null) {
+            log.debug("[SYNC] {} 구버전 삭제: {}", filename, staleDocId);
             deleteByDocId(staleDocId, version);
             registry.remove(staleDocId);
         }
+        log.info("[SYNC] 완료: {} → {}개 청크, {}ms", filename, tagged.size(), System.currentTimeMillis() - t0);
         // saveRegistry() intentionally omitted — called once after all parallel work completes
     }
 

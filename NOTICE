@@ -13,6 +13,7 @@ http://www.apache.org/licenses/LICENSE-2.0
 Spring Boot 3.5.8 (https://spring.io/projects/spring-boot)
 Copyright © 2012–2025 Broadcom. All Rights Reserved.
 The term "Broadcom" refers to Broadcom Inc. and/or its subsidiaries.
+Includes: spring-boot-starter-actuator (runtime log-level management)
 --------------------------------------------------------------------
 
 --------------------------------------------------------------------

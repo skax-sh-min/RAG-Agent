@@ -104,6 +104,12 @@
             <version>1.5</version>
         </dependency>
 
+        <!-- Actuator: runtime log-level change via POST /actuator/loggers/{name} -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+
         <!-- SQLite persistence for conversation memory -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
