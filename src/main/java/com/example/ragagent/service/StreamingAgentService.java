@@ -54,6 +54,7 @@ public class StreamingAgentService {
      */
     public void run(ChatForm form, SseEmitter emitter) {
         long startNs = System.nanoTime();
+        SseGraphListener listener = null;
         try {
             AgentState initial;
             RoutingMode rm = parseRoutingMode(form.routingMode());
@@ -77,7 +78,7 @@ public class StreamingAgentService {
                 }
             }
 
-            SseGraphListener listener = new SseGraphListener(emitter);
+            listener = new SseGraphListener(emitter);
             AgentState result = agentGraph.runStreaming(initial, listener);
 
             long elapsedMs = (System.nanoTime() - startNs) / 1_000_000;
@@ -88,6 +89,20 @@ public class StreamingAgentService {
 
         } catch (Exception e) {
             log.error("SSE streaming error", e);
+            // B-13: persist whatever answer was streamed so subsequent turns have context
+            if (listener != null) {
+                String partial = listener.getAccumulatedAnswer();
+                if (!partial.isBlank()) {
+                    try {
+                        memoryService.addTurn(form.threadId(), form.question(),
+                                partial + "\n[오류로 중단됨]");
+                        log.debug("[B-13] partial answer persisted ({} chars) thread={}",
+                                partial.length(), form.threadId());
+                    } catch (Exception persistEx) {
+                        log.warn("Failed to persist partial answer on streaming error", persistEx);
+                    }
+                }
+            }
             trySendError(emitter, e.getMessage());
             emitter.completeWithError(e);
         }
@@ -98,10 +113,13 @@ public class StreamingAgentService {
     private class SseGraphListener implements GraphListener {
 
         private final SseEmitter emitter;
+        private final StringBuilder accumulated = new StringBuilder();
 
         SseGraphListener(SseEmitter emitter) {
             this.emitter = emitter;
         }
+
+        String getAccumulatedAnswer() { return accumulated.toString(); }
 
         @Override
         public void onNodeEnter(String nodeName) {
@@ -111,6 +129,7 @@ public class StreamingAgentService {
 
         @Override
         public void onToken(String text) {
+            accumulated.append(text);
             Map<String, Object> payload = new HashMap<>();
             payload.put("text", text);
             payload.put("tab", null);
@@ -119,6 +138,7 @@ public class StreamingAgentService {
 
         @Override
         public void onToken(String tab, String text) {
+            accumulated.append(text);
             Map<String, Object> payload = new HashMap<>();
             payload.put("text", text);
             payload.put("tab", tab);
