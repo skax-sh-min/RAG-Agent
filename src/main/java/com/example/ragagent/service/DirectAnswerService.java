@@ -1,6 +1,8 @@
 package com.example.ragagent.service;
 
 import com.example.ragagent.agent.AgentState;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.stereotype.Service;
@@ -12,6 +14,8 @@ import org.springframework.stereotype.Service;
  */
 @Service
 public class DirectAnswerService {
+
+    private static final Logger log = LoggerFactory.getLogger(DirectAnswerService.class);
 
     private static final String SYSTEM_PROMPT = """
             당신은 문서 기반 지식 Q&A 도우미입니다.
@@ -35,10 +39,9 @@ public class DirectAnswerService {
 
     public AgentState execute(AgentState state) {
         String systemPrompt = state.directMode() ? DIRECT_SYSTEM_PROMPT : SYSTEM_PROMPT;
-        String history = state.conversationHistory();
-        String userPrompt = history.isBlank()
-                ? state.question()
-                : "[이전 대화]\n%s\n\n[현재 질문]\n%s".formatted(history, state.question());
+        log.debug("[DirectAnswer] directMode={} historyLen={}", state.directMode(),
+                state.conversationHistory().length());
+        String userPrompt = buildUserPrompt(state);
 
         ChatResponse chatResponse = chatClient.prompt()
                 .system(systemPrompt)
@@ -46,8 +49,38 @@ public class DirectAnswerService {
                 .call()
                 .chatResponse();
 
+        String answer = chatResponse.getResult().getOutput().getText();
+        log.debug("[DirectAnswer] answer length={}", answer == null ? -1 : answer.length());
         state = accumulateTokens(state, chatResponse);
-        return state.withAnswer(chatResponse.getResult().getOutput().getText());
+        return state.withAnswer(answer);
+    }
+
+    /** Streaming variant — pushes tokens via listener.onToken() instead of blocking. */
+    public AgentState executeStreaming(AgentState state, GraphListener listener) {
+        String systemPrompt = state.directMode() ? DIRECT_SYSTEM_PROMPT : SYSTEM_PROMPT;
+        log.debug("[DirectAnswer] streaming directMode={} historyLen={}", state.directMode(),
+                state.conversationHistory().length());
+        String userPrompt = buildUserPrompt(state);
+
+        StringBuilder full = new StringBuilder();
+        chatClient.prompt()
+                .system(systemPrompt)
+                .user(userPrompt)
+                .stream()
+                .content()
+                .doOnNext(token -> { listener.onToken(token); full.append(token); })
+                .blockLast();
+
+        String answer = full.toString();
+        log.debug("[DirectAnswer] streaming answer length={}", answer.length());
+        return state.withAnswer(answer).withTokensAccumulated(0, 0);
+    }
+
+    private static String buildUserPrompt(AgentState state) {
+        String history = state.conversationHistory();
+        return history.isBlank()
+                ? state.question()
+                : "[이전 대화]\n%s\n\n[현재 질문]\n%s".formatted(history, state.question());
     }
 
     private static AgentState accumulateTokens(AgentState state, ChatResponse resp) {

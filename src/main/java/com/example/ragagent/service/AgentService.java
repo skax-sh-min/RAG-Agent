@@ -4,6 +4,8 @@ import com.example.ragagent.agent.AgentGraph;
 import com.example.ragagent.agent.AgentState;
 import com.example.ragagent.model.ChatRequest;
 import com.example.ragagent.model.ChatResponse;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.util.concurrent.CompletableFuture;
@@ -18,6 +20,8 @@ import java.util.concurrent.Executors;
 @Service
 public class AgentService {
 
+    private static final Logger log = LoggerFactory.getLogger(AgentService.class);
+
     private final AgentGraph agentGraph;
     private final MemoryService memoryService;
     private final ClassifierService classifierService;
@@ -30,19 +34,27 @@ public class AgentService {
     }
 
     public ChatResponse chat(ChatRequest request) {
+        log.debug("[AgentService] chat start — directMode={} routingMode={} thread={}",
+                request.directMode(), request.routingMode(), request.threadId());
         AgentState initial;
-        try (var exec = Executors.newVirtualThreadPerTaskExecutor()) {
-            CompletableFuture<String> historyF = CompletableFuture.supplyAsync(
-                    () -> memoryService.getHistory(request.threadId()), exec);
-            CompletableFuture<String> typeF = CompletableFuture.supplyAsync(
-                    () -> classifierService.classifyOnly(request.question()), exec);
-            initial = AgentState.of(
-                    request.question(),
-                    request.version(),
-                    request.threadId(),
-                    historyF.join(),
-                    request.routingMode())
-                .withQuestionType(typeF.join());
+        if (request.directMode()) {
+            String history = memoryService.getHistory(request.threadId());
+            initial = AgentState.of(request.question(), request.version(), request.threadId(),
+                    history, request.routingMode(), true);
+        } else {
+            try (var exec = Executors.newVirtualThreadPerTaskExecutor()) {
+                CompletableFuture<String> historyF = CompletableFuture.supplyAsync(
+                        () -> memoryService.getHistory(request.threadId()), exec);
+                CompletableFuture<String> typeF = CompletableFuture.supplyAsync(
+                        () -> classifierService.classifyOnly(request.question()), exec);
+                initial = AgentState.of(
+                        request.question(),
+                        request.version(),
+                        request.threadId(),
+                        historyF.join(),
+                        request.routingMode())
+                    .withQuestionType(typeF.join());
+            }
         }
 
         long startNano = System.nanoTime();

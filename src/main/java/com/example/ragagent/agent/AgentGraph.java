@@ -2,6 +2,8 @@ package com.example.ragagent.agent;
 
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.service.*;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 /**
@@ -18,6 +20,8 @@ import org.springframework.stereotype.Component;
  */
 @Component
 public class AgentGraph {
+
+    private static final Logger log = LoggerFactory.getLogger(AgentGraph.class);
 
     private enum Node { CLASSIFIER, DIRECT_ANSWER, RETRIEVAL, ANSWER, CRITIC, FINALIZE, END }
 
@@ -61,6 +65,8 @@ public class AgentGraph {
     private AgentState runInternal(AgentState initialState, GraphListener listener) {
         // directMode: RAG 없이 LLM 직접 호출 → CLASSIFIER/RETRIEVAL/CRITIC 생략
         Node current = initialState.directMode() ? Node.DIRECT_ANSWER : Node.CLASSIFIER;
+        log.debug("[AgentGraph] start node={} directMode={} routingMode={}",
+                current, initialState.directMode(), initialState.routingMode());
         AgentState state = initialState;
 
         while (current != Node.END) {
@@ -74,7 +80,9 @@ public class AgentGraph {
                     yield "meta".equals(state.questionType()) ? Node.DIRECT_ANSWER : Node.RETRIEVAL;
                 }
                 case DIRECT_ANSWER -> {
-                    state = directAnswerService.execute(state);
+                    state = (listener == GraphListener.NOOP)
+                            ? directAnswerService.execute(state)
+                            : directAnswerService.executeStreaming(state, listener);
                     yield Node.FINALIZE;
                 }
                 case RETRIEVAL -> {

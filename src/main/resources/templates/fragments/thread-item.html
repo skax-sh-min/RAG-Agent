@@ -6,7 +6,8 @@
      th:id="'thread-' + ${thread.threadId}"
      class="thread-item"
      th:classappend="${thread.threadId == activeThreadId} ? ' active'"
-     th:onclick="|window.location.href='/chat/${thread.threadId}'|">
+     th:attr="data-href=@{/chat/{id}(id=${thread.threadId})}"
+     onclick="window.location.href=this.dataset.href">
     <div class="text-truncate small" th:text="${thread.title}">제목</div>
     <div class="thread-date text-muted" style="font-size: 0.72rem;"
          th:attr="data-date=${thread.updatedAt}"

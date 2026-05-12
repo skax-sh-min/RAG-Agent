@@ -79,19 +79,22 @@
                     <span th:text="${#strings.substring(meta.threadId, 0, 8)}"></span>
                     <button class="btn btn-link btn-sm p-0 text-muted lh-1"
                             th:title="#{chat.copy}"
-                            th:onclick="'copyThreadId(this, \'' + ${meta.threadId} + '\')'" >
+                            th:attr="data-thread-id=${meta.threadId}"
+                            onclick="copyThreadId(this, this.dataset.threadId)" >
                         <i class="bi bi-clipboard" style="font-size:0.75rem;"></i>
                     </button>
                 </div>
                 <!-- Actions -->
                 <div class="d-flex gap-1">
                     <button class="btn btn-outline-secondary btn-sm flex-grow-1"
-                            th:onclick="'startTitleEdit(\'' + ${meta.threadId} + '\')'" >
+                            th:attr="data-thread-id=${meta.threadId}"
+                            onclick="startTitleEdit(this.dataset.threadId)" >
                         <i class="bi bi-pencil me-1"></i>
                         <span th:text="#{chat.edit}">Edit</span>
                     </button>
                     <button class="btn btn-outline-danger btn-sm"
-                            th:onclick="'deleteCurrentThread(\'' + ${meta.threadId} + '\')'"
+                            th:attr="data-thread-id=${meta.threadId}"
+                            onclick="deleteCurrentThread(this.dataset.threadId)"
                             th:title="#{chat.delete}">
                         <i class="bi bi-trash"></i>
                     </button>

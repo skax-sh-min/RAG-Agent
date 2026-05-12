@@ -132,8 +132,12 @@ public class WebController {
             if (form.routingMode() != null && !form.routingMode().isBlank()) {
                 try { rm = RoutingMode.valueOf(form.routingMode()); } catch (IllegalArgumentException ignored) {}
             }
-            ChatRequest req = new ChatRequest(form.question(), form.version(), form.threadId(), rm);
+            log.debug("[postChat] threadId={} directMode={} routingMode={} question={}",
+                    form.threadId(), form.directMode(), rm, form.question());
+            ChatRequest req = new ChatRequest(form.question(), form.version(), form.threadId(), rm, form.directMode());
             com.example.ragagent.model.ChatResponse resp = agentService.chat(req);
+            log.debug("[postChat] done — provider={} tokens={}/{} directMode={}",
+                    resp.usedProvider(), resp.totalInputTokens(), resp.totalOutputTokens(), form.directMode());
 
             threadMetaService.generateTitleAsync(form.threadId(), form.version(), form.question());
 
