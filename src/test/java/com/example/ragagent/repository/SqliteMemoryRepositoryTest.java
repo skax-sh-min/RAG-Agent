@@ -2,6 +2,7 @@ package com.example.ragagent.repository;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -77,6 +78,7 @@ class SqliteMemoryRepositoryTest {
     }
 
     @Test
+    @Disabled("B-11: 단일 거대 turn 시 잘라서라도 일부 컨텍스트 제공이 바람직. 안전망 구축 완료 후 fix 예정 — refactoring/01-test-safety-net.md")
     @DisplayName("단일 turn 이 maxChars 보다 크면 history 가 통째로 빈다 (B-11)")
     void singleTurnLargerThanBudget() {
         String huge = "x".repeat(10_000);

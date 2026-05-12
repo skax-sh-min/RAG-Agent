@@ -1,0 +1,30 @@
+{
+  "name": "progressive_upgrade_q1",
+  "question": "복잡한 멀티-홉 질의 — PROGRESSIVE 업그레이드 시나리오",
+  "routing_mode": "PROGRESSIVE",
+  "version": "latest",
+  "given": {
+    "answer": "## 요약\nPREMIUM 모델로 재분석된 결과입니다.\n\n## 상세 설명\n초기 답변이 충분하지 않아 QUALITY_FIRST 로 업그레이드.\n\n## 참고\nLLM_ROUTING.md",
+    "question_type": "manual",
+    "sources_count": 4,
+    "image_refs_count": 0,
+    "input_tokens": 350,
+    "output_tokens": 200,
+    "llm_call_count": 5,
+    "premium_upgraded": "gemini-pro",
+    "dual_local_answer": null,
+    "dual_local_provider": null,
+    "used_provider": "gemini-pro"
+  },
+  "expected": {
+    "hasAnswer": true,
+    "sectionsInAnswer": ["요약", "상세 설명", "참고"],
+    "sourcesCount": 4,
+    "imageRefsCount": 0,
+    "tokensRecorded": true,
+    "llmCallCount": 5,
+    "questionType": "manual",
+    "premiumUpgraded": true,
+    "dualPresent": false
+  }
+}

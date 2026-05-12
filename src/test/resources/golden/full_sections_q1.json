@@ -1,0 +1,30 @@
+{
+  "name": "full_sections_q1",
+  "question": "전체 5개 섹션을 모두 가진 응답 케이스",
+  "routing_mode": "COST_FIRST",
+  "version": "latest",
+  "given": {
+    "answer": "## 요약\n핵심 요약\n\n## 상세 설명\n상세 답변\n\n## 예시/코드\n```java\nSystem.out.println(\"hi\");\n```\n\n## 설정/주의사항\nXYZ 설정 필요\n\n## 참고\nFLOW.md p.3",
+    "question_type": "manual",
+    "sources_count": 5,
+    "image_refs_count": 1,
+    "input_tokens": 400,
+    "output_tokens": 250,
+    "llm_call_count": 3,
+    "premium_upgraded": null,
+    "dual_local_answer": null,
+    "dual_local_provider": null,
+    "used_provider": "gemini-flash"
+  },
+  "expected": {
+    "hasAnswer": true,
+    "sectionsInAnswer": ["요약", "상세 설명", "예시/코드", "설정/주의사항", "참고"],
+    "sourcesCount": 5,
+    "imageRefsCount": 1,
+    "tokensRecorded": true,
+    "llmCallCount": 3,
+    "questionType": "manual",
+    "premiumUpgraded": false,
+    "dualPresent": false
+  }
+}

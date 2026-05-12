@@ -1,0 +1,30 @@
+{
+  "name": "manual_q3_with_images",
+  "question": "업로드 흐름 다이어그램을 보여주세요",
+  "routing_mode": "COST_FIRST",
+  "version": "latest",
+  "given": {
+    "answer": "## 요약\n업로드 흐름은 3단계입니다.\n\n## 상세 설명\n검증 → 인덱싱 → 레지스트리 갱신.",
+    "question_type": "manual",
+    "sources_count": 2,
+    "image_refs_count": 2,
+    "input_tokens": 180,
+    "output_tokens": 90,
+    "llm_call_count": 2,
+    "premium_upgraded": null,
+    "dual_local_answer": null,
+    "dual_local_provider": null,
+    "used_provider": "gemini-flash"
+  },
+  "expected": {
+    "hasAnswer": true,
+    "sectionsInAnswer": ["요약", "상세 설명"],
+    "sourcesCount": 2,
+    "imageRefsCount": 2,
+    "tokensRecorded": true,
+    "llmCallCount": 2,
+    "questionType": "manual",
+    "premiumUpgraded": false,
+    "dualPresent": false
+  }
+}

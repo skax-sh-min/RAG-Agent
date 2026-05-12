@@ -1,0 +1,30 @@
+{
+  "name": "empty_search_q1",
+  "question": "검색 결과가 0건인 경우 (edge case)",
+  "routing_mode": "COST_FIRST",
+  "version": "v0",
+  "given": {
+    "answer": "## 요약\n관련 문서를 찾을 수 없음.",
+    "question_type": "manual",
+    "sources_count": 0,
+    "image_refs_count": 0,
+    "input_tokens": 100,
+    "output_tokens": 25,
+    "llm_call_count": 2,
+    "premium_upgraded": null,
+    "dual_local_answer": null,
+    "dual_local_provider": null,
+    "used_provider": "gemini-flash"
+  },
+  "expected": {
+    "hasAnswer": true,
+    "sectionsInAnswer": ["요약"],
+    "sourcesCount": 0,
+    "imageRefsCount": 0,
+    "tokensRecorded": true,
+    "llmCallCount": 2,
+    "questionType": "manual",
+    "premiumUpgraded": false,
+    "dualPresent": false
+  }
+}

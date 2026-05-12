@@ -1,0 +1,30 @@
+{
+  "name": "error_q2_with_retry",
+  "question": "TaskType 라우팅 시 503 에러",
+  "routing_mode": "COST_FIRST",
+  "version": "latest",
+  "given": {
+    "answer": "## 요약\n프로바이더 차단 상태 가능성.\n\n## 상세 설명\nCircuitBreaker 로그를 확인하세요.",
+    "question_type": "error",
+    "sources_count": 1,
+    "image_refs_count": 0,
+    "input_tokens": 240,
+    "output_tokens": 100,
+    "llm_call_count": 5,
+    "premium_upgraded": null,
+    "dual_local_answer": null,
+    "dual_local_provider": null,
+    "used_provider": "gemini-flash"
+  },
+  "expected": {
+    "hasAnswer": true,
+    "sectionsInAnswer": ["요약", "상세 설명"],
+    "sourcesCount": 1,
+    "imageRefsCount": 0,
+    "tokensRecorded": true,
+    "llmCallCount": 5,
+    "questionType": "error",
+    "premiumUpgraded": false,
+    "dualPresent": false
+  }
+}

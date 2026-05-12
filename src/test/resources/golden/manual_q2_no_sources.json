@@ -1,0 +1,30 @@
+{
+  "name": "manual_q2_no_sources",
+  "question": "이 시스템과 무관한 외부 질문입니다",
+  "routing_mode": "COST_FIRST",
+  "version": "latest",
+  "given": {
+    "answer": "## 요약\n문서에서 확인되지 않음.",
+    "question_type": "manual",
+    "sources_count": 0,
+    "image_refs_count": 0,
+    "input_tokens": 120,
+    "output_tokens": 30,
+    "llm_call_count": 2,
+    "premium_upgraded": null,
+    "dual_local_answer": null,
+    "dual_local_provider": null,
+    "used_provider": "gemini-flash"
+  },
+  "expected": {
+    "hasAnswer": true,
+    "sectionsInAnswer": ["요약"],
+    "sourcesCount": 0,
+    "imageRefsCount": 0,
+    "tokensRecorded": true,
+    "llmCallCount": 2,
+    "questionType": "manual",
+    "premiumUpgraded": false,
+    "dualPresent": false
+  }
+}

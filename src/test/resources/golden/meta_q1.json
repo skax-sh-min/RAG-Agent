@@ -1,0 +1,30 @@
+{
+  "name": "meta_q1",
+  "question": "이 시스템은 무엇인가요?",
+  "routing_mode": "COST_FIRST",
+  "version": "latest",
+  "given": {
+    "answer": "## 요약\n문서 기반 Q&A 어시스턴트입니다.",
+    "question_type": "meta",
+    "sources_count": 0,
+    "image_refs_count": 0,
+    "input_tokens": 50,
+    "output_tokens": 20,
+    "llm_call_count": 1,
+    "premium_upgraded": null,
+    "dual_local_answer": null,
+    "dual_local_provider": null,
+    "used_provider": "gemini-flash"
+  },
+  "expected": {
+    "hasAnswer": true,
+    "sectionsInAnswer": ["요약"],
+    "sourcesCount": 0,
+    "imageRefsCount": 0,
+    "tokensRecorded": true,
+    "llmCallCount": 1,
+    "questionType": "meta",
+    "premiumUpgraded": false,
+    "dualPresent": false
+  }
+}
