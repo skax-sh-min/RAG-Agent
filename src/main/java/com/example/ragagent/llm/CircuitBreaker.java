@@ -10,7 +10,6 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
-import java.util.Collections;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -57,7 +56,7 @@ public class CircuitBreaker {
     public Map<String, Instant> getBlockedProviders() {
         Instant now = Instant.now();
         blockedUntil.entrySet().removeIf(e -> now.isAfter(e.getValue()));
-        return Collections.unmodifiableMap(blockedUntil);
+        return Map.copyOf(blockedUntil);
     }
 
     private Duration parseRetryAfter(@Nullable String header) {
