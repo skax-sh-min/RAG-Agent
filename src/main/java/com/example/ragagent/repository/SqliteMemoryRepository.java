@@ -65,6 +65,12 @@ public class SqliteMemoryRepository implements MemoryRepository {
             if (sb.length() + entry.length() > maxChars) break;
             sb.insert(0, entry + "\n\n");
         }
+        // B-11: single turn larger than budget → include it truncated rather than returning empty
+        if (sb.isEmpty() && !entries.isEmpty()) {
+            String newest = entries.get(entries.size() - 1);
+            sb.append(newest, 0, Math.min(newest.length(), maxChars))
+              .append("\n[이전 대화 일부 생략]");
+        }
         return sb.toString().strip();
     }
 
