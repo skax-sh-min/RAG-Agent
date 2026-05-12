@@ -221,7 +221,7 @@ public class RagService {
         for (String docId : new HashSet<>(registry.keySet())) {
             DocRegistryEntry entry = registry.get(docId);
             if (!version.equals(entry.version())) continue;
-            String filename = docId.substring(0, docId.lastIndexOf('_'));
+            String filename = filenameFromDocId(docId);
             if (!filesOnDisk.containsKey(filename)) {
                 log.debug("[SYNC] 삭제 감지: {}", filename);
                 deleteByDocId(docId, version);
@@ -246,7 +246,7 @@ public class RagService {
         return registry.entrySet().stream()
                 .map(e -> {
                     DocRegistryEntry r = e.getValue();
-                    String filename = e.getKey().substring(0, e.getKey().lastIndexOf('_'));
+                    String filename = filenameFromDocId(e.getKey());
                     return new DocumentInfo(e.getKey(), filename, r.version(),
                             r.chunks(), r.indexedAt(), r.sha256(), r.errors());
                 })
@@ -511,6 +511,11 @@ public class RagService {
         } catch (NoSuchAlgorithmException | IOException e) {
             throw new RuntimeException("SHA-256 computation failed", e);
         }
+    }
+
+    private static String filenameFromDocId(String docId) {
+        int idx = docId.lastIndexOf('_');
+        return idx > 0 ? docId.substring(0, idx) : docId;
     }
 
     private String inferDocType(String filename) {
