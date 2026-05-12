@@ -45,14 +45,16 @@
                             th:selected="${routingMode == 'PROGRESSIVE'}"
                             th:text="#{routing.progressive}">Progressive</option>
                     <option value="DUAL"
+                            th:with="reqLocal=#{routing.requires_local}"
                             th:selected="${routingMode == 'DUAL'}"
                             th:disabled="${!hasLocalProvider}"
-                            th:title="${!hasLocalProvider ? #{routing.requires_local} : ''}"
+                            th:title="${!hasLocalProvider ? reqLocal : ''}"
                             th:text="#{routing.dual}">Parallel Compare</option>
                     <option value="LOCAL_ONLY"
+                            th:with="reqLocal=#{routing.requires_local}"
                             th:selected="${routingMode == 'LOCAL_ONLY'}"
                             th:disabled="${!hasLocalProvider}"
-                            th:title="${!hasLocalProvider ? #{routing.requires_local} : ''}"
+                            th:title="${!hasLocalProvider ? reqLocal : ''}"
                             th:text="#{routing.local_only}">Local Only</option>
                 </select>
             </div>
