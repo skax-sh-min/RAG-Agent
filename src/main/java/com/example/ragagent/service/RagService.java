@@ -52,6 +52,13 @@ public class RagService {
     // doc_id -> DocRegistryEntry (persisted to JSON)
     private final ConcurrentHashMap<String, DocRegistryEntry> registry = new ConcurrentHashMap<>();
 
+    // B-24/B-25: single daemon thread used only to schedule interrupt signals for keyword timeout
+    private final ScheduledExecutorService timeoutScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
+        Thread t = new Thread(r, "kw-timeout");
+        t.setDaemon(true);
+        return t;
+    });
+
     private Path dataDir;
     private Path documentsDir;
     private Path registryPath;
@@ -361,13 +368,14 @@ public class RagService {
 
                 """ + chunk.getText();
         int timeoutSec = props.indexingSafe().keywordTimeoutSeconds();
+        // B-24: called inside a VT from enrichParallel — invoke directly, no ForkJoinPool
+        // B-25: interrupt this thread on timeout so the blocking HTTP call is actually cancelled
+        Thread self = Thread.currentThread();
+        ScheduledFuture<?> killer = timeoutScheduler.schedule(self::interrupt, timeoutSec, TimeUnit.SECONDS);
         try {
-            String keywords = CompletableFuture
-                    .supplyAsync(() -> llmRouter.executeWithTracking(
-                            TaskType.LIGHT_TEXT, RoutingMode.COST_FIRST,
-                            model -> model.call(new Prompt(prompt))))
-                    .orTimeout(timeoutSec, TimeUnit.SECONDS)
-                    .join();
+            String keywords = llmRouter.executeWithTracking(
+                    TaskType.LIGHT_TEXT, RoutingMode.COST_FIRST,
+                    model -> model.call(new Prompt(prompt)));
             Map<String, Object> meta = new HashMap<>(chunk.getMetadata());
             meta.put("excerpt_keywords", keywords);
             return new Document(chunk.getText(), meta);
@@ -377,6 +385,9 @@ public class RagService {
             Map<String, Object> meta = new HashMap<>(chunk.getMetadata());
             meta.put("excerpt_keywords", keywords);
             return new Document(chunk.getText(), meta);
+        } finally {
+            killer.cancel(false);
+            Thread.interrupted(); // clear interrupt flag so the calling VT is unaffected
         }
     }
 
