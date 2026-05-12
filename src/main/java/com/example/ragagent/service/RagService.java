@@ -1,6 +1,9 @@
 package com.example.ragagent.service;
 
 import com.example.ragagent.config.AppProperties;
+import com.example.ragagent.llm.LlmRouter;
+import com.example.ragagent.llm.RoutingMode;
+import com.example.ragagent.llm.TaskType;
 import com.example.ragagent.model.DocumentInfo;
 import com.example.ragagent.model.SyncResult;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -8,9 +11,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.document.Document;
-import org.springframework.ai.model.transformer.KeywordMetadataEnricher;
 import org.springframework.ai.vectorstore.SearchRequest;
 import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.ai.vectorstore.filter.FilterExpressionBuilder;
@@ -45,7 +47,7 @@ public class RagService {
     private final ImageExtractorService imageExtractorService;
     private final VectorStoreRegistry vectorStoreRegistry;
     private final ObjectMapper mapper;
-    private final KeywordMetadataEnricher keywordEnricher;
+    private final LlmRouter llmRouter;
 
     // doc_id -> DocRegistryEntry (persisted to JSON)
     private final ConcurrentHashMap<String, DocRegistryEntry> registry = new ConcurrentHashMap<>();
@@ -56,13 +58,13 @@ public class RagService {
 
     public RagService(AppProperties props, DocumentLoaderService loaderService,
                       ImageExtractorService imageExtractorService,
-                      VectorStoreRegistry vectorStoreRegistry, ChatModel chatModel) {
+                      VectorStoreRegistry vectorStoreRegistry, LlmRouter llmRouter) {
         this.props = props;
         this.loaderService = loaderService;
         this.imageExtractorService = imageExtractorService;
         this.vectorStoreRegistry = vectorStoreRegistry;
         this.mapper = new ObjectMapper().enable(SerializationFeature.INDENT_OUTPUT);
-        this.keywordEnricher = new KeywordMetadataEnricher(chatModel, 5);
+        this.llmRouter = llmRouter;
     }
 
     @PostConstruct
@@ -126,7 +128,7 @@ public class RagService {
         deleteByDocId(docId, version);
 
         // Enrich chunks with LLM-extracted keywords (adds excerpt_keywords metadata)
-        List<Document> enriched = keywordEnricher.apply(tagged);
+        List<Document> enriched = tagged.stream().map(this::enrichKeywords).toList();
 
         // Add to vector store
         VectorStore store = vectorStoreRegistry.getStore(version);
@@ -304,7 +306,7 @@ public class RagService {
                 .map(chunk -> CompletableFuture.supplyAsync(() -> {
                     llmGate.acquireUninterruptibly();
                     try {
-                        return keywordEnricher.apply(List.of(chunk)).get(0);
+                        return enrichKeywords(chunk);
                     } finally {
                         llmGate.release();
                     }
@@ -313,6 +315,25 @@ public class RagService {
                 .stream()
                 .map(CompletableFuture::join)
                 .toList();
+        }
+    }
+
+    private Document enrichKeywords(Document chunk) {
+        String prompt = """
+                다음 텍스트에서 핵심 키워드 5개를 추출하여 쉼표로 구분해서 반환하세요.
+                키워드만 반환하고 다른 설명은 하지 마세요.
+
+                """ + chunk.getText();
+        try {
+            String keywords = llmRouter.executeWithTracking(
+                    TaskType.LIGHT_TEXT, RoutingMode.COST_FIRST,
+                    model -> model.call(new Prompt(prompt)));
+            Map<String, Object> meta = new HashMap<>(chunk.getMetadata());
+            meta.put("excerpt_keywords", keywords);
+            return new Document(chunk.getText(), meta);
+        } catch (Exception e) {
+            log.warn("Keyword enrichment failed for chunk, skipping: {}", e.getMessage());
+            return chunk;
         }
     }
 
