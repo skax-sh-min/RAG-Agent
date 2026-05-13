@@ -27,7 +27,11 @@ RAG Agent 시스템 배포·설정·운영 가이드입니다.
    - 6.3 [데이터 영속성](#63-데이터-영속성)
    - 6.4 [성능](#64-성능)
 7. [문제 해결](#7-문제-해결)
-8. [운영 체크리스트](#8-운영-체크리스트)
+8. [보안 설정](#8-보안-설정)
+   - 8.1 [git 훅 설치](#81-git-훅-설치)
+   - 8.2 [입력 검증 동작](#82-입력-검증-동작)
+   - 8.3 [응답 크기 제한](#83-응답-크기-제한)
+9. [운영 체크리스트](#9-운영-체크리스트)
 
 ---
 
@@ -62,6 +66,10 @@ rag_java/
 ├── Dockerfile
 ├── docker-compose.yml
 ├── .env.example
+├── scripts/
+│   ├── install-hooks.sh        # 클론 후 1회 실행: sh scripts/install-hooks.sh
+│   └── hooks/
+│       └── pre-commit          # .env 우발 커밋 방지
 ├── data/                       # 런타임 생성 (DATA_DIR)
 │   ├── documents/              # 업로드된 문서 원본 (Sync 대상)
 │   ├── images/                 # 추출된 이미지 ({docId}/ 하위)
@@ -71,10 +79,11 @@ rag_java/
     ├── java/com/example/ragagent/
     │   ├── agent/              # AgentGraph (상태 머신), AgentState (불변 레코드)
     │   ├── config/             # AppProperties, LlmConfig, WebConfig
-    │   ├── controller/         # ApiController (REST), WebController (HTMX)
+    │   ├── controller/         # ApiController (REST), WebController (HTMX), GlobalExceptionHandler
     │   ├── llm/                # LlmRouter, RoutingMode, CircuitBreaker
-    │   ├── model/              # Java 21 레코드 (ChatRequest/Response 등)
+    │   ├── model/              # Java 21 레코드 (MetaKey 상수, ChatRequest/Response 등)
     │   ├── repository/         # SQLite CRUD (MemoryRepository, LlmUsageRepository 등)
+    │   ├── security/           # FileTypeDetector (매직바이트), PromptInjectionGuard
     │   └── service/            # 에이전트 노드 서비스 + 문서 처리 파이프라인
     └── resources/
         ├── application.properties
@@ -674,9 +683,46 @@ docker-compose logs app
 
 ---
 
-## 8. 운영 체크리스트
+## 8. 보안 설정
+
+### 8.1 git 훅 설치
+
+`.env` 파일이 실수로 커밋되지 않도록 pre-commit 훅을 설치하세요.
+
+```bash
+sh scripts/install-hooks.sh
+```
+
+팀원 각자가 클론 후 1회 실행합니다.
+
+### 8.2 입력 검증 동작
+
+| 항목 | 제한 | 응답 |
+|------|------|------|
+| 질문 길이 | 최대 2,000자 | 400 Bad Request |
+| 파일 업로드 크기 | 최대 100 MB (기본) | 413 Payload Too Large |
+| 파일 형식 불일치 (매직바이트) | 확장자와 실제 내용이 다른 경우 | 422 Unprocessable Entity |
+
+업로드 허용 형식과 매직바이트 매핑:
+
+| 확장자 | 검증 기준 |
+|--------|----------|
+| `.pdf` | `%PDF` 서명 (4바이트) |
+| `.docx`, `.pptx` | ZIP/PK 서명 `50 4B 03 04` (4바이트) |
+| `.txt`, `.md` | 첫 8바이트에 NUL 문자 없음 |
+
+### 8.3 응답 크기 제한
+
+LLM 응답이 20,000자를 초과하면 자동으로 잘리고 말줄임 메시지가 추가됩니다.
+
+---
+
+## 9. 운영 체크리스트
 
 배포 후 순서대로 확인하세요.
+
+**초기 설정**:
+- [ ] `sh scripts/install-hooks.sh` — pre-commit 훅 설치 (팀원 각자 1회)
 
 **기본 동작**:
 - [ ] `GET /api/health` → `{"status":"ok"}` 응답
@@ -687,6 +733,10 @@ docker-compose logs app
 - [ ] 후속 질문 시 이전 맥락 반영 (멀티턴)
 - [ ] 대화 재진입 시 이전 메시지 버블 복원 (`/chat/{threadId}`)
 - [ ] KO/EN 언어 전환 동작 확인
+
+**보안**:
+- [ ] 확장자 불일치 파일 업로드 → 422 응답 확인
+- [ ] 2,001자 이상 질문 → 400 응답 확인
 
 **LLM 및 운영**:
 - [ ] `/llm-usage` — 프로바이더 카드 정상(초록) 확인

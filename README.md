@@ -15,6 +15,9 @@ docker-compose up --build
 ### Local Build
 
 ```bash
+# Install git hooks (run once after cloning)
+sh scripts/install-hooks.sh
+
 # Build with tests
 mvn clean package
 
@@ -128,6 +131,10 @@ rag_java/
 ├── pom.xml                            # Spring Boot 3.5 + Spring AI 1.1.4
 ├── Dockerfile / docker-compose.yml
 ├── .env.example
+├── scripts/
+│   ├── install-hooks.sh               # Run once after cloning to activate git hooks
+│   └── hooks/
+│       └── pre-commit                 # Blocks accidental .env commits
 └── src/main/
     ├── java/com/example/ragagent/
     │   ├── agent/
@@ -137,14 +144,19 @@ rag_java/
     │   │   ├── AppProperties.java     # @ConfigurationProperties (includes LlmConfig)
     │   │   └── WebConfig.java         # ChatClient bean + CORS + i18n (CookieLocaleResolver)
     │   ├── controller/
-    │   │   ├── ApiController.java     # REST API (/api/*)
-    │   │   └── WebController.java     # Web UI HTMX handler (/ui/*, /chat/*, /llm-usage)
+    │   │   ├── ApiController.java     # REST API (/api/*); magic-byte upload validation
+    │   │   ├── WebController.java     # Web UI HTMX handler (/ui/*, /chat/*, /llm-usage)
+    │   │   └── GlobalExceptionHandler.java  # RFC 9457 ProblemDetail; 400/413 handling
     │   ├── llm/
     │   │   ├── LlmRouter.java         # Multi-provider routing: TaskType × RoutingMode
     │   │   ├── RoutingMode.java       # COST_FIRST|QUALITY_FIRST|PROGRESSIVE|DUAL|LOCAL_ONLY
     │   │   └── CircuitBreaker.java    # In-memory per-provider circuit breaker (Retry-After aware)
     │   ├── model/                     # Java 21 records
+    │   │   ├── MetaKey.java           # Vector store metadata key constants
     │   │   └── ChatRequest/Response/SourceRef/DocumentInfo/SyncResult/ThreadMeta/ChatForm/LlmProviderReport.java
+    │   ├── security/
+    │   │   ├── FileTypeDetector.java  # Magic-byte validation (PDF, DOCX/PPTX, TXT/MD)
+    │   │   └── PromptInjectionGuard.java  # Input validation + API key masking
     │   ├── repository/
     │   │   ├── MemoryRepository.java              # Conversation memory interface (includes getTurns)
     │   │   ├── SqliteMemoryRepository.java        # SQLite WAL-based implementation

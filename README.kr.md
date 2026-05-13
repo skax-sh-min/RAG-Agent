@@ -15,6 +15,9 @@ docker-compose up --build
 ### 로컬 빌드
 
 ```bash
+# git 훅 설치 (클론 후 1회 실행)
+sh scripts/install-hooks.sh
+
 # 테스트 포함 빌드
 mvn clean package
 
@@ -103,6 +106,10 @@ rag_java/
 ├── pom.xml                            # Spring Boot 3.5 + Spring AI 1.1.4
 ├── Dockerfile / docker-compose.yml
 ├── .env.example
+├── scripts/
+│   ├── install-hooks.sh               # 클론 후 1회 실행으로 git 훅 활성화
+│   └── hooks/
+│       └── pre-commit                 # .env 우발 커밋 방지
 └── src/main/
     ├── java/com/example/ragagent/
     │   ├── agent/
@@ -112,14 +119,19 @@ rag_java/
     │   │   ├── AppProperties.java     # @ConfigurationProperties (LlmConfig 포함)
     │   │   └── WebConfig.java         # ChatClient 빈 + CORS + i18n (CookieLocaleResolver)
     │   ├── controller/
-    │   │   ├── ApiController.java     # REST API (/api/*)
-    │   │   └── WebController.java     # Web UI HTMX 핸들러 (/ui/*, /chat/*, /llm-usage)
+    │   │   ├── ApiController.java     # REST API (/api/*); 매직바이트 업로드 검증
+    │   │   ├── WebController.java     # Web UI HTMX 핸들러 (/ui/*, /chat/*, /llm-usage)
+    │   │   └── GlobalExceptionHandler.java  # RFC 9457 ProblemDetail; 400/413 처리
     │   ├── llm/
     │   │   ├── LlmRouter.java             # 멀티 프로바이더 라우팅: TaskType × RoutingMode
     │   │   ├── RoutingMode.java           # COST_FIRST|QUALITY_FIRST|PROGRESSIVE|DUAL|LOCAL_ONLY
     │   │   └── CircuitBreaker.java        # LLM 프로바이더 인메모리 차단 관리 (Retry-After 지원)
     │   ├── model/                         # Java 21 record
+    │   │   ├── MetaKey.java               # 벡터 스토어 메타데이터 키 상수
     │   │   └── ChatRequest/Response/SourceRef/DocumentInfo/SyncResult/ThreadMeta/ChatForm/LlmProviderReport.java
+    │   ├── security/
+    │   │   ├── FileTypeDetector.java      # 매직바이트 검증 (PDF, DOCX/PPTX, TXT/MD)
+    │   │   └── PromptInjectionGuard.java  # 입력 검증 + API 키 마스킹
     │   ├── repository/
     │   │   ├── MemoryRepository.java              # 대화 메모리 추상 인터페이스 (getTurns 포함)
     │   │   ├── SqliteMemoryRepository.java        # SQLite WAL 기반 구현
