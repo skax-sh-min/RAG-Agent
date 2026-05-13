@@ -6,6 +6,7 @@ import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.model.*;
 import com.example.ragagent.repository.LlmUsageRepository;
+import com.example.ragagent.security.FileTypeDetector;
 import com.example.ragagent.service.*;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.servlet.http.HttpSession;
@@ -224,6 +225,13 @@ public class WebController {
             Path tmp = Files.createTempFile("rag-upload-", "-" + originalFilename);
             try {
                 file.transferTo(tmp);
+                String ext = originalFilename.contains(".")
+                        ? originalFilename.substring(originalFilename.lastIndexOf('.'))
+                        : "";
+                if (!FileTypeDetector.matches(tmp, ext)) {
+                    log.warn("Magic-byte mismatch for {}", originalFilename);
+                    return ResponseEntity.unprocessableEntity().build();
+                }
                 DocumentInfo info = ragService.indexDocument(tmp, originalFilename, version);
                 return ResponseEntity.ok(info);
             } finally {

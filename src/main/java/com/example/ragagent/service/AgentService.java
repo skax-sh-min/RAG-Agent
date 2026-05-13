@@ -4,6 +4,7 @@ import com.example.ragagent.agent.AgentGraph;
 import com.example.ragagent.agent.AgentState;
 import com.example.ragagent.model.ChatRequest;
 import com.example.ragagent.model.ChatResponse;
+import com.example.ragagent.security.PromptInjectionGuard;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -34,6 +35,7 @@ public class AgentService {
     }
 
     public ChatResponse chat(ChatRequest request) {
+        PromptInjectionGuard.validate(request.question());
         log.debug("[AgentService] chat start — directMode={} routingMode={} thread={}",
                 request.directMode(), request.routingMode(), request.threadId());
         AgentState initial;

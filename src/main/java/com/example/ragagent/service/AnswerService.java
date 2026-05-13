@@ -35,6 +35,8 @@ public class AnswerService {
 
     private static final Logger log = LoggerFactory.getLogger(AnswerService.class);
 
+    private static final int MAX_ANSWER_LEN = 20_000;
+
     private static final String ANSWER_SYSTEM_PROMPT = """
             당신은 문서 기반 지식 Q&A 어시스턴트입니다.
             아래 검색된 문서를 바탕으로 질문에 답변하세요.
@@ -108,8 +110,9 @@ public class AnswerService {
                         t -> { localBuf.append(t); listener.onToken("local", t); },
                         t -> { extBuf.append(t);   listener.onToken("external", t); }
                 );
-                String localAnswer = localBuf.toString();
-                return state.withAnswer(extBuf.toString())
+                String localAnswer = truncate(localBuf.toString());
+                String extAnswer   = truncate(extBuf.toString());
+                return state.withAnswer(extAnswer)
                             .withUsedProvider(dp.externalProvider())
                             .withDualResult(localAnswer,
                                     localAnswer.isBlank() ? null : dp.localProvider())
@@ -123,11 +126,13 @@ public class AnswerService {
                             new UserMessage(answerPrompt)
                     )))
             );
+            String extAnswer   = truncate(dual.externalAnswer());
+            String localAnswer = truncate(dual.localAnswer());
             return state
-                    .withAnswer(dual.externalAnswer())
+                    .withAnswer(extAnswer)
                     .withUsedProvider(dual.externalProvider())
-                    .withDualResult(dual.localAnswer(),
-                            dual.localAnswer().isBlank() ? null : dual.localProvider())
+                    .withDualResult(localAnswer,
+                            localAnswer.isBlank() ? null : dual.localProvider())
                     .withNeedsRetry(false);
         }
 
@@ -149,6 +154,7 @@ public class AnswerService {
             state = state.withUsedProvider(llmRouter.findProviderName(TaskType.TEXT, state.routingMode()));
         }
 
+        answer = truncate(answer);
         // Call 2: sufficiency check (always blocking)
         AgentState resultState = checkSufficiency(state.withAnswer(answer), answer);
 
@@ -173,7 +179,7 @@ public class AnswerService {
                 );
             }
             return resultState
-                    .withAnswer(premiumAnswer)
+                    .withAnswer(truncate(premiumAnswer))
                     .withUsedProvider(providerName)
                     .withPremiumUpgraded(providerName)
                     .withNeedsRetry(false);
@@ -251,6 +257,11 @@ public class AnswerService {
 
         sb.append("[질문]\n").append(state.question());
         return sb.toString();
+    }
+
+    private static String truncate(String answer) {
+        if (answer == null || answer.length() <= MAX_ANSWER_LEN) return answer;
+        return answer.substring(0, MAX_ANSWER_LEN) + "\n\n…(응답이 너무 길어 잘렸습니다)";
     }
 
     private static AgentState accumulateTokens(AgentState state, ChatResponse resp) {

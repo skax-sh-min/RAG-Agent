@@ -4,16 +4,20 @@ import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.llm.CircuitBreaker;
 import com.example.ragagent.model.*;
 import com.example.ragagent.repository.LlmUsageRepository;
+import com.example.ragagent.security.FileTypeDetector;
 import com.example.ragagent.service.AgentService;
 import com.example.ragagent.service.RagService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.core.io.Resource;
+import org.springframework.http.CacheControl;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
+
+import java.time.Duration;
 
 import java.io.IOException;
 import java.nio.file.*;
@@ -84,6 +88,8 @@ public class ApiController {
         try {
             ChatResponse response = agentService.chat(request);
             return ResponseEntity.ok(response);
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().build();
         } catch (Exception e) {
             log.error("Chat error", e);
             return ResponseEntity.internalServerError().build();
@@ -122,12 +128,17 @@ public class ApiController {
             return ResponseEntity.internalServerError().build();
         }
 
+        String ext = filename.contains(".") ? filename.substring(filename.lastIndexOf('.')) : "";
         try {
             Path dest = savedPath;
             if (Files.exists(dest)) {
                 Path tmp = Files.createTempFile("rag-sha-", "-" + filename);
                 try {
                     file.transferTo(tmp);
+                    if (!FileTypeDetector.matches(tmp, ext)) {
+                        log.warn("Magic-byte mismatch for {}", filename);
+                        return ResponseEntity.unprocessableEntity().build();
+                    }
                     if (computeSha256(tmp).equals(computeSha256(dest))) {
                         log.debug("Upload no-op: identical content for {}", filename);
                         return ResponseEntity.ok(ragService.indexDocument(dest, version));
@@ -139,6 +150,11 @@ public class ApiController {
                 }
             } else {
                 file.transferTo(dest);
+                if (!FileTypeDetector.matches(dest, ext)) {
+                    log.warn("Magic-byte mismatch for {}", filename);
+                    Files.deleteIfExists(dest);
+                    return ResponseEntity.unprocessableEntity().build();
+                }
             }
             return ResponseEntity.ok(ragService.indexDocument(dest, version));
         } catch (IOException e) {
@@ -200,6 +216,8 @@ public class ApiController {
             if (contentType == null) contentType = "application/octet-stream";
             return ResponseEntity.ok()
                     .contentType(MediaType.parseMediaType(contentType))
+                    .cacheControl(CacheControl.maxAge(Duration.ofMinutes(5)).cachePrivate())
+                    .header("X-Robots-Tag", "noindex, nofollow")
                     .body(new FileSystemResource(imgPath));
         } catch (IOException e) {
             log.error("Image serve error", e);

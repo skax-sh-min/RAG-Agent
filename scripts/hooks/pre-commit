@@ -1,0 +1,6 @@
+#!/bin/sh
+# Prevent accidental .env commit
+if git diff --cached --name-only | grep -qE "^\.env$"; then
+    echo "❌ .env 파일을 커밋하지 마세요 (API 키 유출 위험)"
+    exit 1
+fi
