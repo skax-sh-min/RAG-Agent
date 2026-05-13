@@ -10,6 +10,7 @@ import org.apache.poi.xslf.usermodel.XSLFShape;
 import org.apache.poi.xslf.usermodel.XSLFSlide;
 import org.apache.poi.xwpf.usermodel.XWPFDocument;
 import org.apache.poi.xwpf.usermodel.XWPFParagraph;
+import com.example.ragagent.model.MetaKey;
 import org.springframework.ai.document.Document;
 import org.springframework.ai.reader.pdf.PagePdfDocumentReader;
 import org.springframework.ai.reader.pdf.config.PdfDocumentReaderConfig;
@@ -77,7 +78,7 @@ public class DocumentLoaderService {
         String sourceType = isScanned ? "ocr" : "file";
         return docs.stream().map(d -> {
             Map<String, Object> meta = new HashMap<>(d.getMetadata());
-            meta.put("source_type", sourceType);
+            meta.put(MetaKey.SOURCE_TYPE, sourceType);
             return new Document(d.getText(), meta);
         }).toList();
     }
@@ -94,7 +95,7 @@ public class DocumentLoaderService {
                 Map<String, Object> meta = i < originalDocs.size()
                         ? new HashMap<>(originalDocs.get(i).getMetadata())
                         : new HashMap<>();
-                meta.put("source_type", "ocr");
+                meta.put(MetaKey.SOURCE_TYPE, "ocr");
                 result.add(new Document(text.trim(), meta));
             }
         }
@@ -118,8 +119,8 @@ public class DocumentLoaderService {
                 }
                 if (!text.isEmpty()) {
                     docs.add(new Document(text.toString(), Map.of(
-                            "source_type", "ppt",
-                            "page_or_slide", slideNum
+                            MetaKey.SOURCE_TYPE, "ppt",
+                            MetaKey.PAGE_OR_SLIDE, slideNum
                     )));
                 }
             }
@@ -139,7 +140,7 @@ public class DocumentLoaderService {
                     List<String> imgs = extractImagePaths(doc.getText());
                     if (imgs.isEmpty()) return doc;
                     Map<String, Object> meta = new HashMap<>(doc.getMetadata());
-                    meta.put("image_paths", String.join(",", imgs));
+                    meta.put(MetaKey.IMAGE_PATHS, String.join(",", imgs));
                     return new Document(doc.getText(), meta);
                 })
                 .toList();
@@ -167,7 +168,7 @@ public class DocumentLoaderService {
 
                 if (isHeading && !current.isEmpty()) {
                     sections.add(new Document(current.toString().strip(), Map.of(
-                            "source_type", "file", "section", sectionNum, "heading", currentHeading)));
+                            MetaKey.SOURCE_TYPE, "file", "section", sectionNum, "heading", currentHeading)));
                     current = new StringBuilder();
                     sectionNum++;
                 }
@@ -176,7 +177,7 @@ public class DocumentLoaderService {
             }
             if (!current.isEmpty()) {
                 sections.add(new Document(current.toString().strip(), Map.of(
-                        "source_type", "file", "section", sectionNum, "heading", currentHeading)));
+                        MetaKey.SOURCE_TYPE, "file", "section", sectionNum, "heading", currentHeading)));
             }
 
             // No headings found → return as single flat document
@@ -186,7 +187,7 @@ public class DocumentLoaderService {
                         .filter(t -> t != null && !t.isBlank())
                         .collect(Collectors.joining("\n"));
                 return flat.isBlank() ? List.of()
-                        : List.of(new Document(flat, Map.of("source_type", "file")));
+                        : List.of(new Document(flat, Map.of(MetaKey.SOURCE_TYPE, "file")));
             }
             return sections;
         }
@@ -202,7 +203,7 @@ public class DocumentLoaderService {
         String content = Files.readString(filePath);
         String lower = filePath.getFileName().toString().toLowerCase();
         return lower.endsWith(".md") ? splitMarkdownBySections(preprocessMarkdown(content))
-                : List.of(new Document(content, Map.of("source_type", "file")));
+                : List.of(new Document(content, Map.of(MetaKey.SOURCE_TYPE, "file")));
     }
 
     /** Strips MD image/link syntax from markdown before indexing. */
@@ -223,7 +224,7 @@ public class DocumentLoaderService {
             if (line.startsWith("#")) {
                 if (!current.isEmpty()) {
                     sections.add(new Document(current.toString().strip(), Map.of(
-                            "source_type", "file", "section", sectionNum, "heading", currentHeading)));
+                            MetaKey.SOURCE_TYPE, "file", "section", sectionNum, "heading", currentHeading)));
                     current = new StringBuilder();
                     sectionNum++;
                 }
@@ -233,10 +234,10 @@ public class DocumentLoaderService {
         }
         if (!current.isEmpty()) {
             sections.add(new Document(current.toString().strip(), Map.of(
-                    "source_type", "file", "section", sectionNum, "heading", currentHeading)));
+                    MetaKey.SOURCE_TYPE, "file", "section", sectionNum, "heading", currentHeading)));
         }
         return sections.isEmpty()
-                ? List.of(new Document(content, Map.of("source_type", "file")))
+                ? List.of(new Document(content, Map.of(MetaKey.SOURCE_TYPE, "file")))
                 : sections;
     }
 }

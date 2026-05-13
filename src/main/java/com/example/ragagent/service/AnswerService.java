@@ -2,6 +2,7 @@ package com.example.ragagent.service;
 
 import com.example.ragagent.agent.AgentState;
 import com.example.ragagent.config.AppProperties;
+import com.example.ragagent.model.MetaKey;
 import com.example.ragagent.llm.DualResult;
 import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.RoutingMode;
@@ -232,8 +233,8 @@ public class AnswerService {
 
         String docsContext = state.retrievedDocs().stream()
                 .map(doc -> {
-                    String filename = String.valueOf(doc.getMetadata().getOrDefault("filename", "unknown"));
-                    String page     = String.valueOf(doc.getMetadata().getOrDefault("page_or_slide", "?"));
+                    String filename = String.valueOf(doc.getMetadata().getOrDefault(MetaKey.FILENAME, "unknown"));
+                    String page     = String.valueOf(doc.getMetadata().getOrDefault(MetaKey.PAGE_OR_SLIDE, "?"));
                     return "[%s | p.%s]\n%s".formatted(filename, page, doc.getText());
                 })
                 .collect(Collectors.joining("\n\n---\n\n"));

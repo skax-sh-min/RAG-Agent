@@ -2,6 +2,7 @@ package com.example.ragagent.service;
 
 import com.example.ragagent.agent.AgentState;
 import com.example.ragagent.config.AppProperties;
+import com.example.ragagent.model.MetaKey;
 import com.example.ragagent.model.SourceRef;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -66,8 +67,8 @@ public class RetrievalService {
                 .map(d -> new SourceRef(
                         formatSource(d),
                         truncate(d.getText(), 200),
-                        String.valueOf(d.getMetadata().getOrDefault("doc_id", "")),
-                        d.getMetadata().getOrDefault("page_or_slide", "?")))
+                        String.valueOf(d.getMetadata().getOrDefault(MetaKey.DOC_ID, "")),
+                        d.getMetadata().getOrDefault(MetaKey.PAGE_OR_SLIDE, "?")))
                 .distinct()
                 .toList();
 
@@ -88,7 +89,7 @@ public class RetrievalService {
 
         List<String> warnings = new ArrayList<>(state.retrievalWarnings());
         boolean hasOcr = unique.stream()
-                .anyMatch(d -> "ocr".equals(d.getMetadata().get("source_type")));
+                .anyMatch(d -> "ocr".equals(d.getMetadata().get(MetaKey.SOURCE_TYPE)));
         if (hasOcr) {
             warnings.add("⚠️ 이 답변에는 OCR로 처리된 스캔 문서가 포함되어 있습니다. 내용이 부정확할 수 있습니다.");
         }
@@ -158,17 +159,17 @@ public class RetrievalService {
     }
 
     private static String docKey(Document doc) {
-        String filename = String.valueOf(doc.getMetadata().getOrDefault("filename", ""));
-        String page = String.valueOf(doc.getMetadata().getOrDefault("page_or_slide", ""));
+        String filename = String.valueOf(doc.getMetadata().getOrDefault(MetaKey.FILENAME, ""));
+        String page = String.valueOf(doc.getMetadata().getOrDefault(MetaKey.PAGE_OR_SLIDE, ""));
         String preview = doc.getText() == null ? "" : doc.getText().substring(0, Math.min(50, doc.getText().length()));
         return filename + "|" + page + "|" + preview;
     }
 
     private String formatSource(Document doc) {
         Map<String, Object> meta = doc.getMetadata();
-        String filename = String.valueOf(meta.getOrDefault("filename", "unknown"));
-        String version  = String.valueOf(meta.getOrDefault("version", "latest"));
-        Object page     = meta.getOrDefault("page_or_slide", "?");
+        String filename = String.valueOf(meta.getOrDefault(MetaKey.FILENAME, "unknown"));
+        String version  = String.valueOf(meta.getOrDefault(MetaKey.VERSION, "latest"));
+        Object page     = meta.getOrDefault(MetaKey.PAGE_OR_SLIDE, "?");
         return "%s | v%s | p.%s".formatted(filename, version, page);
     }
 
@@ -178,7 +179,7 @@ public class RetrievalService {
      * a blind (String) cast crashes the entire retrieval on the latter.
      */
     private static String imagePathsMeta(Map<String, Object> meta) {
-        Object raw = meta.get("image_paths");
+        Object raw = meta.get(MetaKey.IMAGE_PATHS);
         if (raw instanceof String s) return s;
         if (raw instanceof Collection<?> c) {
             return c.stream()

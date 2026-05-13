@@ -5,6 +5,7 @@ import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.llm.TaskType;
 import com.example.ragagent.model.DocumentInfo;
+import com.example.ragagent.model.MetaKey;
 import com.example.ragagent.model.SyncResult;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -129,14 +130,16 @@ public class RagService {
         for (int i = 0; i < chunks.size(); i++) {
             Document chunk = chunks.get(i);
             Map<String, Object> meta = new HashMap<>(chunk.getMetadata());
-            meta.put("doc_id", docId);
-            meta.put("filename", filename);
-            meta.put("version", version);
-            meta.put("doc_type", docType);
-            meta.put("sha256", sha256);
-            meta.put("collected_at", Instant.now().toString());
-            meta.putIfAbsent("source_type", "file");
-            meta.putIfAbsent("page_or_slide", i + 1);
+            meta.put(MetaKey.DOC_ID, docId);
+            meta.put(MetaKey.FILENAME, filename);
+            meta.put(MetaKey.VERSION, version);
+            meta.put(MetaKey.DOC_TYPE, docType);
+            meta.put(MetaKey.SHA256, sha256);
+            meta.put(MetaKey.COLLECTED_AT, Instant.now().toString());
+            meta.putIfAbsent(MetaKey.SOURCE_TYPE, "file");
+            meta.putIfAbsent(MetaKey.PAGE_OR_SLIDE, i + 1);
+            meta.put(MetaKey.OWNER_ID, "anonymous");
+            meta.putIfAbsent(MetaKey.VISIBILITY, "private");
             tagged.add(new Document(chunk.getText(), meta));
         }
 
@@ -268,7 +271,7 @@ public class RagService {
         SearchRequest request = SearchRequest.builder()
                 .query(query)
                 .topK(topK)
-                .filterExpression(b.eq("version", safeVersion).build())
+                .filterExpression(b.eq(MetaKey.VERSION, safeVersion).build())
                 .build();
         return store.similaritySearch(request);
     }
@@ -308,14 +311,16 @@ public class RagService {
         for (int i = 0; i < chunks.size(); i++) {
             Document chunk = chunks.get(i);
             Map<String, Object> meta = new HashMap<>(chunk.getMetadata());
-            meta.put("doc_id", docId);
-            meta.put("filename", filename);
-            meta.put("version", version);
-            meta.put("doc_type", docType);
-            meta.put("sha256", sha256);
-            meta.put("collected_at", Instant.now().toString());
-            meta.putIfAbsent("source_type", "file");
-            meta.putIfAbsent("page_or_slide", i + 1);
+            meta.put(MetaKey.DOC_ID, docId);
+            meta.put(MetaKey.FILENAME, filename);
+            meta.put(MetaKey.VERSION, version);
+            meta.put(MetaKey.DOC_TYPE, docType);
+            meta.put(MetaKey.SHA256, sha256);
+            meta.put(MetaKey.COLLECTED_AT, Instant.now().toString());
+            meta.putIfAbsent(MetaKey.SOURCE_TYPE, "file");
+            meta.putIfAbsent(MetaKey.PAGE_OR_SLIDE, i + 1);
+            meta.put(MetaKey.OWNER_ID, "anonymous");
+            meta.putIfAbsent(MetaKey.VISIBILITY, "private");
             tagged.add(new Document(chunk.getText(), meta));
         }
 
@@ -456,7 +461,7 @@ public class RagService {
                 result.add(doc);
             } else {
                 Map<String, Object> meta = new HashMap<>(doc.getMetadata());
-                meta.put("image_paths", String.join(",", imgs));
+                meta.put(MetaKey.IMAGE_PATHS, String.join(",", imgs));
                 result.add(new Document(doc.getText(), meta));
             }
         }
