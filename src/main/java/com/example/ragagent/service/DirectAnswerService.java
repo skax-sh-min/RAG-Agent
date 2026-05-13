@@ -1,6 +1,9 @@
 package com.example.ragagent.service;
 
 import com.example.ragagent.agent.AgentState;
+import com.example.ragagent.llm.LlmRouter;
+import com.example.ragagent.llm.RoutingMode;
+import com.example.ragagent.llm.TaskType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
@@ -31,19 +34,20 @@ public class DirectAnswerService {
             문서 검색 없이 학습된 지식을 바탕으로 직접 답변합니다.
             """;
 
-    private final ChatClient chatClient;
+    private final LlmRouter llmRouter;
 
-    public DirectAnswerService(ChatClient chatClient) {
-        this.chatClient = chatClient;
+    public DirectAnswerService(LlmRouter llmRouter) {
+        this.llmRouter = llmRouter;
     }
 
     public AgentState execute(AgentState state) {
         String systemPrompt = state.directMode() ? DIRECT_SYSTEM_PROMPT : SYSTEM_PROMPT;
-        log.debug("[DirectAnswer] directMode={} historyLen={}", state.directMode(),
-                state.conversationHistory().length());
+        log.debug("[DirectAnswer] directMode={} routingMode={} historyLen={}", state.directMode(),
+                state.routingMode(), state.conversationHistory().length());
         String userPrompt = buildUserPrompt(state);
 
-        ChatResponse chatResponse = chatClient.prompt()
+        ChatClient client = buildClient(state.routingMode());
+        ChatResponse chatResponse = client.prompt()
                 .system(systemPrompt)
                 .user(userPrompt)
                 .call()
@@ -58,12 +62,12 @@ public class DirectAnswerService {
     /** Streaming variant — pushes tokens via listener.onToken() instead of blocking. */
     public AgentState executeStreaming(AgentState state, GraphListener listener) {
         String systemPrompt = state.directMode() ? DIRECT_SYSTEM_PROMPT : SYSTEM_PROMPT;
-        log.debug("[DirectAnswer] streaming directMode={} historyLen={}", state.directMode(),
-                state.conversationHistory().length());
+        log.debug("[DirectAnswer] streaming directMode={} routingMode={} historyLen={}", state.directMode(),
+                state.routingMode(), state.conversationHistory().length());
         String userPrompt = buildUserPrompt(state);
 
         StringBuilder full = new StringBuilder();
-        chatClient.prompt()
+        buildClient(state.routingMode()).prompt()
                 .system(systemPrompt)
                 .user(userPrompt)
                 .stream()
@@ -74,6 +78,12 @@ public class DirectAnswerService {
         String answer = full.toString();
         log.debug("[DirectAnswer] streaming answer length={}", answer.length());
         return state.withAnswer(answer).withTokensAccumulated(0, 0);
+    }
+
+    private ChatClient buildClient(RoutingMode mode) {
+        // DUAL is not implemented in DirectAnswer; fall back to COST_FIRST (LOCAL preferred)
+        RoutingMode effective = (mode == RoutingMode.DUAL) ? RoutingMode.COST_FIRST : mode;
+        return ChatClient.builder(llmRouter.route(TaskType.TEXT, effective)).build();
     }
 
     private static String buildUserPrompt(AgentState state) {

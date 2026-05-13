@@ -38,10 +38,12 @@ public class LlmRouter {
 
     /** 라우팅 모드에 맞는 첫 번째 사용 가능 ChatModel 반환. */
     public ChatModel route(TaskType taskType, RoutingMode mode) {
-        return findFirst(taskType, roleOrder(mode), Set.of())
-                .map(LlmProvider::chatModel)
+        LlmProvider p = findFirst(taskType, roleOrder(mode), Set.of())
                 .orElseThrow(() -> new LlmProviderExhaustedException(
                         "No available provider for task=" + taskType + " mode=" + mode));
+        log.debug("[LLM route] provider={} task={} mode={} endpoint={}/chat/completions model={}",
+                p.name(), taskType, mode, p.baseUrl(), p.model());
+        return p.chatModel();
     }
 
     /** 실행 + 토큰 기록 + Circuit Breaker 자동 전환. */
@@ -190,7 +192,7 @@ public class LlmRouter {
 
     private String executeSingleTracked(LlmProvider provider, TaskType taskType,
                                         Function<ChatModel, ChatResponse> call) {
-        log.debug("[LLM →] provider={} task={}", provider.name(), taskType);
+        log.debug("[LLM →] provider={} task={} endpoint={}/chat/completions model={}", provider.name(), taskType, provider.baseUrl(), provider.model());
         long t0 = System.currentTimeMillis();
         ChatResponse response = call.apply(provider.chatModel());
         long elapsed = System.currentTimeMillis() - t0;

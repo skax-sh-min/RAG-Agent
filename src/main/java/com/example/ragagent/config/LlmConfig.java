@@ -37,7 +37,7 @@ public class LlmConfig {
                             .baseUrl(cfg.baseUrl() != null ? cfg.baseUrl() : "https://api.openai.com")
                             .apiKey(cfg.apiKey())
                             .build();
-                    ChatModel model = OpenAiChatModel.builder()
+                    ChatModel rawModel = OpenAiChatModel.builder()
                             .openAiApi(api)
                             .defaultOptions(OpenAiChatOptions.builder()
                                     .model(cfg.model())
@@ -45,14 +45,20 @@ public class LlmConfig {
                                     .maxTokens(6000)
                                     .build())
                             .build();
+                    ChatModel model = new LoggingChatModel(rawModel, cfg.name(),
+                            cfg.baseUrl() != null ? cfg.baseUrl() : "https://api.openai.com",
+                            cfg.apiKey(), cfg.model());
                     String roleStr = cfg.role() != null ? cfg.role().toUpperCase() : "NORMAL";
                     String typeStr = cfg.type() != null ? cfg.type().toUpperCase() : "BOTH";
+                    String resolvedUrl = cfg.baseUrl() != null ? cfg.baseUrl() : "https://api.openai.com";
                     return new LlmProvider(
                             cfg.name(),
                             TaskType.valueOf(typeStr),
                             ProviderRole.valueOf(roleStr),
                             cfg.priority(),
                             cfg.apiKey(),
+                            resolvedUrl,
+                            cfg.model(),
                             model);
                 })
                 .sorted(Comparator.comparingInt(LlmProvider::priority))
@@ -71,7 +77,7 @@ public class LlmConfig {
                 ? llmCfg.progressiveThreshold() : 0.6;
 
         log.info("LLM providers registered: {}", providers.stream()
-                .map(p -> "%s(%s/%s/p%d)".formatted(p.name(), p.role(), p.type(), p.priority()))
+                .map(p -> "%s(%s/%s/p%d) → %s [%s]".formatted(p.name(), p.role(), p.type(), p.priority(), p.baseUrl(), p.model()))
                 .toList());
 
         return new LlmRouter(providers, usageRepo, circuitBreaker, defaultMode, threshold);

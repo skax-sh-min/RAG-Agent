@@ -10,6 +10,8 @@ public record LlmProvider(
         ProviderRole role,
         int priority,
         String apiKey,
+        String baseUrl,
+        String model,
         ChatModel chatModel
 ) {
     public boolean supports(TaskType req) {

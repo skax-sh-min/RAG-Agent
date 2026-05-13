@@ -6,8 +6,11 @@ import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
 import org.springframework.web.bind.annotation.ExceptionHandler;
+import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.context.request.async.AsyncRequestTimeoutException;
 import org.springframework.web.multipart.MaxUploadSizeExceededException;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 /**
  * Catches exceptions that escape controller try-catch blocks and returns
@@ -30,6 +33,20 @@ public class GlobalExceptionHandler {
     public ProblemDetail handleBadRequest(IllegalArgumentException ex) {
         ProblemDetail pd = ProblemDetail.forStatus(HttpStatus.BAD_REQUEST);
         pd.setTitle("Bad Request");
+        pd.setDetail(ex.getMessage());
+        return pd;
+    }
+
+    @ResponseStatus(HttpStatus.SERVICE_UNAVAILABLE)
+    @ExceptionHandler(AsyncRequestTimeoutException.class)
+    public void handleAsyncTimeout() {
+        // SSE connection timed out — expected behaviour, suppress ERROR log
+    }
+
+    @ExceptionHandler(NoResourceFoundException.class)
+    public ProblemDetail handleNoResource(NoResourceFoundException ex) {
+        ProblemDetail pd = ProblemDetail.forStatus(HttpStatus.NOT_FOUND);
+        pd.setTitle("Not Found");
         pd.setDetail(ex.getMessage());
         return pd;
     }
