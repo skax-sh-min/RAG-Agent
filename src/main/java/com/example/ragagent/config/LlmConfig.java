@@ -33,8 +33,15 @@ public class LlmConfig {
         List<LlmProvider> providers = llmCfg.providers().stream()
                 .filter(cfg -> cfg.apiKey() != null && !cfg.apiKey().isBlank())
                 .map(cfg -> {
+                    String roleStr = cfg.role() != null ? cfg.role().toUpperCase() : "NORMAL";
+                    String typeStr = cfg.type() != null ? cfg.type().toUpperCase() : "BOTH";
+                    String resolvedUrl = cfg.baseUrl() != null ? cfg.baseUrl() : "https://api.openai.com";
+                    boolean providerStream = !Boolean.FALSE.equals(cfg.stream()); // default: true
+                    // Keep provider base URL as configured. Some OpenAI-compatible servers
+                    // are mounted under /v1 and fail when /v1 is stripped.
+                    String apiBase = resolvedUrl;
                     OpenAiApi api = OpenAiApi.builder()
-                            .baseUrl(cfg.baseUrl() != null ? cfg.baseUrl() : "https://api.openai.com")
+                            .baseUrl(apiBase)
                             .apiKey(cfg.apiKey())
                             .build();
                     ChatModel rawModel = OpenAiChatModel.builder()
@@ -46,12 +53,7 @@ public class LlmConfig {
                                     .build())
                             .build();
                     ChatModel model = new LoggingChatModel(rawModel, cfg.name(),
-                            cfg.baseUrl() != null ? cfg.baseUrl() : "https://api.openai.com",
-                            cfg.apiKey(), cfg.model());
-                    String roleStr = cfg.role() != null ? cfg.role().toUpperCase() : "NORMAL";
-                    String typeStr = cfg.type() != null ? cfg.type().toUpperCase() : "BOTH";
-                    String resolvedUrl = cfg.baseUrl() != null ? cfg.baseUrl() : "https://api.openai.com";
-                    boolean providerStream = !Boolean.FALSE.equals(cfg.stream()); // default: true
+                            resolvedUrl, cfg.apiKey(), cfg.model());
                     return new LlmProvider(
                             cfg.name(),
                             TaskType.valueOf(typeStr),

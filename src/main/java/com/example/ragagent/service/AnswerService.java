@@ -185,12 +185,17 @@ public class AnswerService {
                     .doOnNext(tokenSink)
                     .blockLast();
         } else {
-            String text = client.prompt()
+            // stream=false: still use streaming HTTP to stay compatible with local LLM servers
+            // that do not support stream:false. Buffer all tokens and deliver as one chunk.
+            StringBuilder buf = new StringBuilder();
+            client.prompt()
                     .system(systemPrompt)
                     .user(buildAnswerPrompt(state))
-                    .call()
-                    .content();
-            if (text != null) tokenSink.accept(text);
+                    .stream()
+                    .content()
+                    .doOnNext(buf::append)
+                    .blockLast();
+            if (!buf.isEmpty()) tokenSink.accept(buf.toString());
         }
     }
 

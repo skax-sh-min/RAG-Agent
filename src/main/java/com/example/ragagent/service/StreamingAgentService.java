@@ -110,7 +110,8 @@ public class StreamingAgentService {
                     || e.getCause() instanceof InterruptedException
                     || Thread.currentThread().isInterrupted();
             if (interrupted) {
-                log.debug("SSE worker cancelled (timeout/disconnect) thread={}", form.threadId());
+                log.debug("SSE worker cancelled (timeout/disconnect) thread={} causeType={} causeMsg={}",
+                        form.threadId(), e.getClass().getSimpleName(), e.getMessage());
                 Thread.currentThread().interrupt();
             } else {
                 log.error("SSE streaming error", e);

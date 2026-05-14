@@ -119,9 +119,20 @@ public class WebController {
         threadMetaService.getOrCreate(form.threadId(), form.version());
         Thread worker = Thread.ofVirtual().start(() -> streamingAgentService.run(form, emitter));
         // B-20: cancel the LLM worker when the SSE connection ends (timeout, error, or normal close)
-        emitter.onTimeout(worker::interrupt);
-        emitter.onError(t -> worker.interrupt());
-        emitter.onCompletion(worker::interrupt);
+        emitter.onTimeout(() -> {
+            log.warn("[SSE] timeout thread={} timeoutMs={}", form.threadId(), props.sseTimeoutMs());
+            worker.interrupt();
+        });
+        emitter.onError(t -> {
+            log.warn("[SSE] emitter error thread={} type={} msg={}", form.threadId(),
+                    t == null ? "null" : t.getClass().getSimpleName(),
+                    t == null ? "null" : t.getMessage());
+            worker.interrupt();
+        });
+        emitter.onCompletion(() -> {
+            log.debug("[SSE] completed thread={}", form.threadId());
+            worker.interrupt();
+        });
         return emitter;
     }
 

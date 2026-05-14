@@ -54,28 +54,17 @@ public class DirectAnswerService {
         String systemPrompt = resolveSystemPrompt(state);
         log.debug("[DirectAnswer] streaming directMode={} routingMode={} historyLen={}", state.directMode(),
                 state.routingMode(), state.conversationHistory().length());
-        String userPrompt = buildUserPrompt(state);
 
         RoutingMode effective = (state.routingMode() == RoutingMode.DUAL) ? RoutingMode.COST_FIRST : state.routingMode();
         LlmProvider provider = llmRouter.routeProvider(TaskType.TEXT, effective);
-        ChatClient client = ChatClient.builder(provider.chatModel()).build();
 
         StringBuilder full = new StringBuilder();
-        if (provider.stream()) {
-            client.prompt()
-                    .system(systemPrompt)
-                    .user(userPrompt)
-                    .stream()
-                    .content()
-                    .doOnNext(token -> { listener.onToken(token); full.append(token); })
-                    .blockLast();
-        } else {
-            String text = client.prompt().system(systemPrompt).user(userPrompt).call().content();
-            if (text != null) { full.append(text); listener.onToken(text); }
-        }
+        callOrStream(provider, state, systemPrompt,
+                t -> { listener.onToken(t); full.append(t); });
 
         String answer = full.toString();
         log.debug("[DirectAnswer] streaming answer length={}", answer.length());
+        // Note: streaming mode cannot capture usage metadata for token tracking (no ChatResponse)
         return state.withAnswer(answer).withTokensAccumulated(0, 0);
     }
 
@@ -102,5 +91,45 @@ public class DirectAnswerService {
         int in  = (usage != null && usage.getPromptTokens()     != null) ? usage.getPromptTokens()     : 0;
         int out = (usage != null && usage.getCompletionTokens() != null) ? usage.getCompletionTokens() : 0;
         return state.withTokensAccumulated(in, out);
+    }
+
+    /**
+     * Unified streaming handler for both provider.stream()=true/false.
+     * Applies consistent error handling and token collection patterns.
+     */
+    private void callOrStream(LlmProvider provider, AgentState state,
+                              String systemPrompt, java.util.function.Consumer<String> tokenSink) {
+        ChatClient client = ChatClient.builder(provider.chatModel()).build();
+        if (provider.stream()) {
+            // Provider supports streaming: stream tokens directly
+            client.prompt()
+                    .system(systemPrompt)
+                    .user(buildUserPrompt(state))
+                    .stream()
+                    .content()
+                .doOnCancel(() -> log.warn("[DirectAnswer] Stream cancelled provider={} thread={} route={}",
+                    provider.name(), state.threadId(), state.routingMode()))
+                    .doOnError(e -> log.error("[DirectAnswer] Stream error", e))
+                .doFinally(signal -> log.debug("[DirectAnswer] Stream finished signal={} provider={} thread={}",
+                    signal, provider.name(), state.threadId()))
+                    .doOnNext(tokenSink)
+                    .blockLast();
+        } else {
+            // Provider does not support streaming: buffer and deliver as single chunk
+            StringBuilder buf = new StringBuilder();
+            client.prompt()
+                    .system(systemPrompt)
+                    .user(buildUserPrompt(state))
+                    .stream()
+                    .content()
+                        .doOnCancel(() -> log.warn("[DirectAnswer] Buffered stream cancelled provider={} thread={} route={}",
+                            provider.name(), state.threadId(), state.routingMode()))
+                    .doOnError(e -> log.error("[DirectAnswer] Stream error", e))
+                        .doFinally(signal -> log.debug("[DirectAnswer] Buffered stream finished signal={} provider={} thread={}",
+                            signal, provider.name(), state.threadId()))
+                    .doOnNext(buf::append)
+                    .blockLast();
+            if (!buf.isEmpty()) tokenSink.accept(buf.toString());
+        }
     }
 }
