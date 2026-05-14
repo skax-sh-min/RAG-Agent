@@ -10,20 +10,21 @@ http://www.apache.org/licenses/LICENSE-2.0
 ====================================================================
 
 --------------------------------------------------------------------
-Spring Boot 3.5.8 (https://spring.io/projects/spring-boot)
+Spring Boot 3.5.14 (https://spring.io/projects/spring-boot)
 Copyright © 2012–2025 Broadcom. All Rights Reserved.
 The term "Broadcom" refers to Broadcom Inc. and/or its subsidiaries.
 Includes: spring-boot-starter-actuator (runtime log-level management)
 --------------------------------------------------------------------
 
 --------------------------------------------------------------------
-Spring AI 1.1.4 (https://spring.io/projects/spring-ai)
+Spring AI 1.1.6 (https://spring.io/projects/spring-ai)
 Copyright © 2023–2025 Broadcom. All Rights Reserved.
 The term "Broadcom" refers to Broadcom Inc. and/or its subsidiaries.
+Includes: spring-ai-openai, spring-ai-rag, spring-ai-chroma-store
 --------------------------------------------------------------------
 
 --------------------------------------------------------------------
-Spring Framework (https://spring.io/projects/spring-framework)
+Spring Framework 6.2.18 (https://spring.io/projects/spring-framework)
 Copyright © 2002–2024 Broadcom. All Rights Reserved.
 --------------------------------------------------------------------
 
@@ -55,13 +56,14 @@ Copyright © 2002–2023 The Apache Software Foundation
 --------------------------------------------------------------------
 
 --------------------------------------------------------------------
-Apache Commons Codec, IO, Lang, Collections
+Apache Commons Codec 1.18.0, Commons IO 2.16.1,
+Commons Lang 3.17.0, Commons Collections4 4.4
 (https://commons.apache.org)
 Copyright © The Apache Software Foundation
 --------------------------------------------------------------------
 
 --------------------------------------------------------------------
-Jackson 2.x (https://github.com/FasterXML/jackson)
+Jackson Databind 2.21.2 (https://github.com/FasterXML/jackson)
 Copyright © 2007–2024 Tatu Saloranta and contributors
 --------------------------------------------------------------------
 
@@ -71,12 +73,12 @@ Copyright © 2006–2024 Taro L. Saito and contributors
 --------------------------------------------------------------------
 
 --------------------------------------------------------------------
-Thymeleaf (https://www.thymeleaf.org)
+Thymeleaf 3.1.5.RELEASE (https://www.thymeleaf.org)
 Copyright © 2011–2024 The Thymeleaf Team
 --------------------------------------------------------------------
 
 --------------------------------------------------------------------
-Thymeleaf Layout Dialect (https://github.com/ultraq/thymeleaf-layout-dialect)
+Thymeleaf Layout Dialect 3.4.0 (https://github.com/ultraq/thymeleaf-layout-dialect)
 Copyright © 2012–2024 Emanuel Rabina
 --------------------------------------------------------------------
 
@@ -87,7 +89,7 @@ https://opensource.org/licenses/MIT
 ====================================================================
 
 --------------------------------------------------------------------
-SLF4J (https://www.slf4j.org)
+SLF4J 2.0.17 (https://www.slf4j.org)
 Copyright © 2004–2023 QOS.ch
 --------------------------------------------------------------------
 
@@ -108,7 +110,7 @@ Copyright © 2011–2018 Christopher Jeffrey
 --------------------------------------------------------------------
 
 --------------------------------------------------------------------
-WebJars Locator Core (https://www.webjars.org)
+WebJars Locator Core 0.59 (https://www.webjars.org)
 Copyright © 2012–2024 James Ward
 --------------------------------------------------------------------
 
@@ -160,7 +162,7 @@ https://www.gnu.org/licenses/lgpl-2.1.html
 ====================================================================
 
 --------------------------------------------------------------------
-Logback (https://logback.qos.ch)
+Logback 1.5.32 (https://logback.qos.ch)
 Copyright © 1999–2024 QOS.ch
 --------------------------------------------------------------------
 
@@ -170,8 +172,8 @@ Test scope only — NOT distributed with the production binary
 ====================================================================
 
 --------------------------------------------------------------------
-JUnit 5 (https://junit.org/junit5) — Eclipse Public License 2.0
-Mockito (https://site.mockito.org) — MIT License
+JUnit 5.12.2 (https://junit.org/junit5) — Eclipse Public License 2.0
+Mockito 5.17.0 (https://site.mockito.org) — MIT License
 --------------------------------------------------------------------
 
 
