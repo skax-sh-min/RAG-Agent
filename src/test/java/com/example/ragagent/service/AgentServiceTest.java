@@ -16,6 +16,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -60,7 +61,7 @@ class AgentServiceTest {
     @DisplayName("chat() 은 history+classifier 를 병렬 호출하고 결과를 AgentState 에 주입")
     void chat_parallelJoin_setsHistoryAndQuestionType() {
         when(memoryService.getHistory("t1")).thenReturn("이전 대화");
-        when(classifierService.classifyOnly("질문")).thenReturn("manual");
+        when(classifierService.classifyOnly(anyString(), any())).thenReturn("manual");
         when(agentGraph.run(any())).thenReturn(fullResult());
 
         service.chat(new ChatRequest("질문", "v1", "t1", RoutingMode.COST_FIRST));
@@ -77,14 +78,14 @@ class AgentServiceTest {
         assertThat(initial.routingMode()).isEqualTo(RoutingMode.COST_FIRST);
 
         verify(memoryService, times(1)).getHistory("t1");
-        verify(classifierService, times(1)).classifyOnly("질문");
+        verify(classifierService, times(1)).classifyOnly(anyString(), any());
     }
 
     @Test
     @DisplayName("ChatResponse 매핑 — AgentState 모든 필드가 응답에 정확히 전이")
     void chat_mapsAgentStateToChatResponse() {
         when(memoryService.getHistory(any())).thenReturn("");
-        when(classifierService.classifyOnly(any())).thenReturn("manual");
+        when(classifierService.classifyOnly(any(), any())).thenReturn("manual");
         when(agentGraph.run(any())).thenReturn(fullResult());
 
         ChatResponse resp = service.chat(new ChatRequest("질문", "v1", "t1", RoutingMode.COST_FIRST));
@@ -110,7 +111,7 @@ class AgentServiceTest {
                 .withDualResult("로컬 답변", "local");
 
         when(memoryService.getHistory(any())).thenReturn("");
-        when(classifierService.classifyOnly(any())).thenReturn("manual");
+        when(classifierService.classifyOnly(any(), any())).thenReturn("manual");
         when(agentGraph.run(any())).thenReturn(dualResult);
 
         ChatResponse resp = service.chat(new ChatRequest("질문", "v1", "t1", RoutingMode.DUAL));
@@ -126,7 +127,7 @@ class AgentServiceTest {
         AgentState upgradedResult = fullResult().withPremiumUpgraded("gemini-pro");
 
         when(memoryService.getHistory(any())).thenReturn("");
-        when(classifierService.classifyOnly(any())).thenReturn("manual");
+        when(classifierService.classifyOnly(any(), any())).thenReturn("manual");
         when(agentGraph.run(any())).thenReturn(upgradedResult);
 
         ChatResponse resp = service.chat(new ChatRequest("질문", "v1", "t1", RoutingMode.PROGRESSIVE));
@@ -141,7 +142,7 @@ class AgentServiceTest {
             Thread.sleep(200);
             return "";
         });
-        when(classifierService.classifyOnly(any())).thenAnswer(inv -> {
+        when(classifierService.classifyOnly(any(), any())).thenAnswer(inv -> {
             Thread.sleep(200);
             return "manual";
         });
@@ -161,7 +162,7 @@ class AgentServiceTest {
     @DisplayName("classifyOnly 가 questionType=null 반환해도 OK (AgentGraph 의 CLASSIFIER 가 처리)")
     void chat_classifyReturnsNull_propagatesToGraph() {
         when(memoryService.getHistory(any())).thenReturn("");
-        when(classifierService.classifyOnly(any())).thenReturn(null);
+        when(classifierService.classifyOnly(any(), any())).thenReturn(null);
         when(agentGraph.run(any())).thenReturn(fullResult());
 
         service.chat(new ChatRequest("질문", "v1", "t1", RoutingMode.COST_FIRST));
@@ -175,7 +176,7 @@ class AgentServiceTest {
     @DisplayName("chat() 호출마다 AgentGraph.run 정확히 1회")
     void chat_invokesGraphOnce() {
         when(memoryService.getHistory(any())).thenReturn("");
-        when(classifierService.classifyOnly(any())).thenReturn("manual");
+        when(classifierService.classifyOnly(any(), any())).thenReturn("manual");
         when(agentGraph.run(any())).thenReturn(fullResult());
 
         AtomicInteger callCount = new AtomicInteger();

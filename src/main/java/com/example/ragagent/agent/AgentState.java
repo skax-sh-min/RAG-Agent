@@ -5,6 +5,7 @@ import com.example.ragagent.model.SourceRef;
 import org.springframework.ai.document.Document;
 
 import java.util.List;
+import java.util.Locale;
 
 /**
  * Immutable state record passed through all agent graph nodes.
@@ -33,7 +34,8 @@ public record AgentState(
         String dualLocalAnswer,   // DUAL: LOCAL 모델 답변
         String dualLocalProvider, // DUAL: LOCAL 프로바이더명
         Boolean grounded,         // CRITIC 결과 (null=CRITIC 미실행)
-        boolean directMode        // RAG 없이 LLM 직접 호출
+        boolean directMode,       // RAG 없이 LLM 직접 호출
+        Locale locale             // UI 언어 설정 — LLM 시스템 프롬프트 언어 선택에 사용
 ) {
     public AgentState {
         retrievedDocs     = retrievedDocs     == null ? List.of() : List.copyOf(retrievedDocs);
@@ -41,16 +43,25 @@ public record AgentState(
         retrievalWarnings = retrievalWarnings == null ? List.of() : List.copyOf(retrievalWarnings);
         imageRefs         = imageRefs         == null ? List.of() : List.copyOf(imageRefs);
         if (routingMode == null) routingMode = RoutingMode.COST_FIRST;
+        if (locale      == null) locale      = Locale.KOREAN;
     }
+
+    // ── Factory ──────────────────────────────────────────────────────────────
 
     public static AgentState of(String question, String version, String threadId,
                                  String conversationHistory, RoutingMode routingMode) {
-        return of(question, version, threadId, conversationHistory, routingMode, false);
+        return of(question, version, threadId, conversationHistory, routingMode, false, Locale.KOREAN);
     }
 
     public static AgentState of(String question, String version, String threadId,
                                  String conversationHistory, RoutingMode routingMode,
                                  boolean directMode) {
+        return of(question, version, threadId, conversationHistory, routingMode, directMode, Locale.KOREAN);
+    }
+
+    public static AgentState of(String question, String version, String threadId,
+                                 String conversationHistory, RoutingMode routingMode,
+                                 boolean directMode, Locale locale) {
         return new AgentState(
                 question, version, threadId,
                 null, List.of(), List.of(), List.of(), List.of(),
@@ -58,11 +69,15 @@ public record AgentState(
                 conversationHistory,
                 0, 0, 0,
                 routingMode, null, null, null, null, null,
-                directMode);
+                directMode, locale);
     }
+
+    // ── Helpers ──────────────────────────────────────────────────────────────
 
     public boolean isDualMode()  { return routingMode == RoutingMode.DUAL; }
     public boolean wasUpgraded() { return premiumUpgraded != null; }
+
+    // ── Withers ──────────────────────────────────────────────────────────────
 
     public AgentState withQuestionType(String questionType) {
         return new AgentState(question, version, threadId, questionType,
@@ -70,7 +85,7 @@ public record AgentState(
                 answer, retryCount, needsRetry, conversationHistory,
                 totalInputTokens, totalOutputTokens, llmCallCount,
                 routingMode, usedProvider, premiumUpgraded, dualLocalAnswer, dualLocalProvider, grounded,
-                directMode);
+                directMode, locale);
     }
 
     public AgentState withRetrievedDocs(List<Document> retrievedDocs) {
@@ -79,7 +94,7 @@ public record AgentState(
                 answer, retryCount, needsRetry, conversationHistory,
                 totalInputTokens, totalOutputTokens, llmCallCount,
                 routingMode, usedProvider, premiumUpgraded, dualLocalAnswer, dualLocalProvider, grounded,
-                directMode);
+                directMode, locale);
     }
 
     public AgentState withSources(List<SourceRef> sources) {
@@ -88,7 +103,7 @@ public record AgentState(
                 answer, retryCount, needsRetry, conversationHistory,
                 totalInputTokens, totalOutputTokens, llmCallCount,
                 routingMode, usedProvider, premiumUpgraded, dualLocalAnswer, dualLocalProvider, grounded,
-                directMode);
+                directMode, locale);
     }
 
     public AgentState withRetrievalWarnings(List<String> retrievalWarnings) {
@@ -97,7 +112,7 @@ public record AgentState(
                 answer, retryCount, needsRetry, conversationHistory,
                 totalInputTokens, totalOutputTokens, llmCallCount,
                 routingMode, usedProvider, premiumUpgraded, dualLocalAnswer, dualLocalProvider, grounded,
-                directMode);
+                directMode, locale);
     }
 
     public AgentState withImageRefs(List<String> imageRefs) {
@@ -106,7 +121,7 @@ public record AgentState(
                 answer, retryCount, needsRetry, conversationHistory,
                 totalInputTokens, totalOutputTokens, llmCallCount,
                 routingMode, usedProvider, premiumUpgraded, dualLocalAnswer, dualLocalProvider, grounded,
-                directMode);
+                directMode, locale);
     }
 
     public AgentState withAnswer(String answer) {
@@ -115,7 +130,7 @@ public record AgentState(
                 answer, retryCount, needsRetry, conversationHistory,
                 totalInputTokens, totalOutputTokens, llmCallCount,
                 routingMode, usedProvider, premiumUpgraded, dualLocalAnswer, dualLocalProvider, grounded,
-                directMode);
+                directMode, locale);
     }
 
     public AgentState withNeedsRetry(boolean needsRetry) {
@@ -124,7 +139,7 @@ public record AgentState(
                 answer, retryCount, needsRetry, conversationHistory,
                 totalInputTokens, totalOutputTokens, llmCallCount,
                 routingMode, usedProvider, premiumUpgraded, dualLocalAnswer, dualLocalProvider, grounded,
-                directMode);
+                directMode, locale);
     }
 
     public AgentState withRetryCountIncremented() {
@@ -133,7 +148,7 @@ public record AgentState(
                 answer, retryCount + 1, needsRetry, conversationHistory,
                 totalInputTokens, totalOutputTokens, llmCallCount,
                 routingMode, usedProvider, premiumUpgraded, dualLocalAnswer, dualLocalProvider, grounded,
-                directMode);
+                directMode, locale);
     }
 
     public AgentState withTokensAccumulated(int inputTokens, int outputTokens) {
@@ -144,7 +159,7 @@ public record AgentState(
                 totalOutputTokens + outputTokens,
                 llmCallCount + 1,
                 routingMode, usedProvider, premiumUpgraded, dualLocalAnswer, dualLocalProvider, grounded,
-                directMode);
+                directMode, locale);
     }
 
     public AgentState withUsedProvider(String usedProvider) {
@@ -153,7 +168,7 @@ public record AgentState(
                 answer, retryCount, needsRetry, conversationHistory,
                 totalInputTokens, totalOutputTokens, llmCallCount,
                 routingMode, usedProvider, premiumUpgraded, dualLocalAnswer, dualLocalProvider, grounded,
-                directMode);
+                directMode, locale);
     }
 
     public AgentState withPremiumUpgraded(String premiumUpgraded) {
@@ -162,7 +177,7 @@ public record AgentState(
                 answer, retryCount, needsRetry, conversationHistory,
                 totalInputTokens, totalOutputTokens, llmCallCount,
                 routingMode, usedProvider, premiumUpgraded, dualLocalAnswer, dualLocalProvider, grounded,
-                directMode);
+                directMode, locale);
     }
 
     public AgentState withDualResult(String dualLocalAnswer, String dualLocalProvider) {
@@ -171,7 +186,7 @@ public record AgentState(
                 answer, retryCount, needsRetry, conversationHistory,
                 totalInputTokens, totalOutputTokens, llmCallCount,
                 routingMode, usedProvider, premiumUpgraded, dualLocalAnswer, dualLocalProvider, grounded,
-                directMode);
+                directMode, locale);
     }
 
     public AgentState withGrounded(Boolean grounded) {
@@ -180,6 +195,6 @@ public record AgentState(
                 answer, retryCount, needsRetry, conversationHistory,
                 totalInputTokens, totalOutputTokens, llmCallCount,
                 routingMode, usedProvider, premiumUpgraded, dualLocalAnswer, dualLocalProvider, grounded,
-                directMode);
+                directMode, locale);
     }
 }

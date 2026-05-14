@@ -7,8 +7,10 @@ import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.converter.BeanOutputConverter;
+import org.springframework.context.MessageSource;
 import org.springframework.stereotype.Service;
 
+import java.util.Locale;
 import java.util.Set;
 
 /**
@@ -23,30 +25,22 @@ public class ClassifierService {
     private static final Logger log = LoggerFactory.getLogger(ClassifierService.class);
     private static final Set<String> VALID_TYPES = Set.of("concept", "usage", "error", "version", "meta");
 
-    private static final String SYSTEM_PROMPT = """
-            당신은 문서 기반 지식 Q&A 시스템의 질문 분류기입니다.
-            사용자의 질문을 다음 중 하나로 분류하세요:
-
-            - concept : 개념/이론/원리 설명 요청 (예: "~이 무엇인가요?", "~의 차이는?")
-            - usage   : 사용법/코드 예시/설정 방법 요청 (예: "어떻게 사용하나요?", "설정 방법은?")
-            - error   : 오류/버그/트러블슈팅 요청 (예: "에러가 납니다", "왜 안 되나요?")
-            - version : 버전/변경사항/업데이트 관련 (예: "버전별 차이는?", "최신 변경사항은?")
-            - meta    : 인사/서비스 소개/잡담 등 (예: "안녕", "뭘 도와줘?", "감사합니다")
-            """;
-
     private record ClassifierOutput(@JsonProperty("question_type") String questionType) {}
 
     private final ChatClient chatClient;
+    private final MessageSource messageSource;
     private final BeanOutputConverter<ClassifierOutput> converter =
             new BeanOutputConverter<>(ClassifierOutput.class);
 
-    public ClassifierService(ChatClient chatClient) {
+    public ClassifierService(ChatClient chatClient, MessageSource messageSource) {
         this.chatClient = chatClient;
+        this.messageSource = messageSource;
     }
 
-    public String classifyOnly(String question) {
+    public String classifyOnly(String question, Locale locale) {
+        String prompt = messageSource.getMessage("prompt.classifier.system", null, locale);
         String raw = chatClient.prompt()
-                .system(SYSTEM_PROMPT)
+                .system(prompt)
                 .user(question + "\n\n" + converter.getFormat())
                 .call()
                 .content();
@@ -54,8 +48,9 @@ public class ClassifierService {
     }
 
     public AgentState execute(AgentState state) {
+        String prompt = messageSource.getMessage("prompt.classifier.system", null, state.locale());
         ChatResponse chatResponse = chatClient.prompt()
-                .system(SYSTEM_PROMPT)
+                .system(prompt)
                 .user(state.question() + "\n\n" + converter.getFormat())
                 .call()
                 .chatResponse();

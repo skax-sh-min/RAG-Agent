@@ -8,6 +8,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.model.ChatResponse;
+import org.springframework.context.MessageSource;
 import org.springframework.stereotype.Service;
 
 /**
@@ -20,28 +21,16 @@ public class DirectAnswerService {
 
     private static final Logger log = LoggerFactory.getLogger(DirectAnswerService.class);
 
-    private static final String SYSTEM_PROMPT = """
-            당신은 문서 기반 지식 Q&A 도우미입니다.
-            사용자의 인사나 서비스 관련 문의에 짧고 친절하게 답변하세요.
-            문서 검색 없이 직접 답변합니다.
-            답변은 2-3문장 이내로 간결하게 작성하세요.
-            """;
-
-    private static final String DIRECT_SYSTEM_PROMPT = """
-            당신은 유능한 AI 어시스턴트입니다.
-            사용자의 질문에 정확하고 도움이 되는 답변을 제공하세요.
-            답변은 마크다운 형식으로 작성하세요.
-            문서 검색 없이 학습된 지식을 바탕으로 직접 답변합니다.
-            """;
-
     private final LlmRouter llmRouter;
+    private final MessageSource messageSource;
 
-    public DirectAnswerService(LlmRouter llmRouter) {
+    public DirectAnswerService(LlmRouter llmRouter, MessageSource messageSource) {
         this.llmRouter = llmRouter;
+        this.messageSource = messageSource;
     }
 
     public AgentState execute(AgentState state) {
-        String systemPrompt = state.directMode() ? DIRECT_SYSTEM_PROMPT : SYSTEM_PROMPT;
+        String systemPrompt = resolveSystemPrompt(state);
         log.debug("[DirectAnswer] directMode={} routingMode={} historyLen={}", state.directMode(),
                 state.routingMode(), state.conversationHistory().length());
         String userPrompt = buildUserPrompt(state);
@@ -61,7 +50,7 @@ public class DirectAnswerService {
 
     /** Streaming variant — pushes tokens via listener.onToken() instead of blocking. */
     public AgentState executeStreaming(AgentState state, GraphListener listener) {
-        String systemPrompt = state.directMode() ? DIRECT_SYSTEM_PROMPT : SYSTEM_PROMPT;
+        String systemPrompt = resolveSystemPrompt(state);
         log.debug("[DirectAnswer] streaming directMode={} routingMode={} historyLen={}", state.directMode(),
                 state.routingMode(), state.conversationHistory().length());
         String userPrompt = buildUserPrompt(state);
@@ -78,6 +67,11 @@ public class DirectAnswerService {
         String answer = full.toString();
         log.debug("[DirectAnswer] streaming answer length={}", answer.length());
         return state.withAnswer(answer).withTokensAccumulated(0, 0);
+    }
+
+    private String resolveSystemPrompt(AgentState state) {
+        String key = state.directMode() ? "prompt.direct.system" : "prompt.direct.meta.system";
+        return messageSource.getMessage(key, null, state.locale());
     }
 
     private ChatClient buildClient(RoutingMode mode) {

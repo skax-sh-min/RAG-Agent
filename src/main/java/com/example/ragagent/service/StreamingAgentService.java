@@ -5,6 +5,9 @@ import com.example.ragagent.agent.AgentState;
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.model.ChatForm;
 import com.example.ragagent.model.SourceRef;
+import org.springframework.context.i18n.LocaleContextHolder;
+
+import java.util.Locale;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
@@ -71,22 +74,23 @@ public class StreamingAgentService {
         try {
             AgentState initial;
             RoutingMode rm = parseRoutingMode(form.routingMode());
+            Locale locale = LocaleContextHolder.getLocale();
 
             if (form.isDirectMode()) {
                 // directMode: classifier 생략, history만 로드
                 String history = memoryService.getHistory(form.threadId());
                 initial = AgentState.of(form.question(), form.version(), form.threadId(),
-                        history, rm, true);
+                        history, rm, true, locale);
             } else {
                 // 일반 RAG 모드: history 로드 + 분류 병렬 실행
                 try (var exec = Executors.newVirtualThreadPerTaskExecutor()) {
                     CompletableFuture<String> historyF = CompletableFuture.supplyAsync(
                             () -> memoryService.getHistory(form.threadId()), exec);
                     CompletableFuture<String> typeF = CompletableFuture.supplyAsync(
-                            () -> classifierService.classifyOnly(form.question()), exec);
+                            () -> classifierService.classifyOnly(form.question(), locale), exec);
 
                     initial = AgentState.of(form.question(), form.version(), form.threadId(),
-                                    historyF.join(), rm)
+                                    historyF.join(), rm, false, locale)
                             .withQuestionType(typeF.join());
                 }
             }

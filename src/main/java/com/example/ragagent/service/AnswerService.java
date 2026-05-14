@@ -16,9 +16,11 @@ import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.converter.BeanOutputConverter;
+import org.springframework.context.MessageSource;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
+import java.util.Locale;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
@@ -37,46 +39,20 @@ public class AnswerService {
 
     private static final int MAX_ANSWER_LEN = 20_000;
 
-    private static final String ANSWER_SYSTEM_PROMPT = """
-            당신은 문서 기반 지식 Q&A 어시스턴트입니다.
-            아래 검색된 문서를 바탕으로 질문에 답변하세요.
-
-            답변 형식 (마크다운):
-            ## 요약
-            (1-2문장 핵심 요약)
-
-            ## 상세 설명
-            (근거 문서 기반 상세 답변)
-
-            ## 예시/코드
-            (해당되는 경우만)
-
-            ## 설정/주의사항
-            (해당되는 경우만)
-
-            ## 참고
-            (관련 섹션/페이지)
-
-            오류(error) 질문에는 원인→확인→해결 순으로 작성하세요.
-            문서에 없는 내용은 추측하지 말고 "문서에서 확인되지 않음"으로 명시하세요.
-            """;
-
-    private static final String SUFFICIENCY_SYSTEM_PROMPT = """
-            아래 [질문]과 [답변]을 검토하여 답변이 질문에 충분한지 판단하세요.
-            sufficient=false: 검색된 문서 증거가 핵심 질문에 답하기에 불충분할 때만 사용하세요.
-            """;
-
     private record SufficiencyOutput(boolean sufficient) {}
 
     private final ChatClient chatClient;
     private final LlmRouter llmRouter;
+    private final MessageSource messageSource;
     private final int maxRetryCount;
     private final BeanOutputConverter<SufficiencyOutput> sufficiencyConverter =
             new BeanOutputConverter<>(SufficiencyOutput.class);
 
-    public AnswerService(ChatClient chatClient, LlmRouter llmRouter, AppProperties appProperties) {
+    public AnswerService(ChatClient chatClient, LlmRouter llmRouter,
+                         AppProperties appProperties, MessageSource messageSource) {
         this.chatClient = chatClient;
         this.llmRouter = llmRouter;
+        this.messageSource = messageSource;
         this.maxRetryCount = appProperties.maxRetryCount();
     }
 
@@ -97,13 +73,16 @@ public class AnswerService {
     // ── Internal ──────────────────────────────────────────────────────────────
 
     private AgentState executeInternal(AgentState state, GraphListener listener) {
+        Locale locale = state.locale();
+        String answerSystemPrompt = messageSource.getMessage("prompt.answer.system", null, locale);
+
         // DUAL: streaming when listener present, blocking otherwise
         if (state.isDualMode()) {
             if (listener != null) {
                 AgentState capturedState = state;
                 StringBuilder localBuf = new StringBuilder(), extBuf = new StringBuilder();
                 BiConsumer<ChatModel, Consumer<String>> streamFn =
-                        (model, sink) -> streamInto(model, capturedState, sink);
+                        (model, sink) -> streamInto(model, capturedState, answerSystemPrompt, sink);
                 LlmRouter.DualProviders dp = llmRouter.executeDualStream(
                         TaskType.TEXT,
                         streamFn,
@@ -122,7 +101,7 @@ public class AnswerService {
             DualResult dual = llmRouter.executeDual(
                     TaskType.TEXT,
                     model -> model.call(new Prompt(List.of(
-                            new SystemMessage(ANSWER_SYSTEM_PROMPT),
+                            new SystemMessage(answerSystemPrompt),
                             new UserMessage(answerPrompt)
                     )))
             );
@@ -139,13 +118,11 @@ public class AnswerService {
         // Call 1: answer generation
         String answer;
         if (listener != null) {
-            // Streaming path: token counts unavailable from most providers — accept 0
-            answer = streamAnswer(state, state.routingMode(), listener::onToken);
+            answer = streamAnswer(state, state.routingMode(), answerSystemPrompt, listener::onToken);
             state = state.withUsedProvider(llmRouter.findProviderName(TaskType.TEXT, state.routingMode()));
         } else {
-            // Blocking path (existing)
             ChatResponse answerResponse = chatClient.prompt()
-                    .system(ANSWER_SYSTEM_PROMPT)
+                    .system(answerSystemPrompt)
                     .user(buildAnswerPrompt(state))
                     .call()
                     .chatResponse();
@@ -156,7 +133,7 @@ public class AnswerService {
 
         answer = truncate(answer);
         // Call 2: sufficiency check (always blocking)
-        AgentState resultState = checkSufficiency(state.withAnswer(answer), answer);
+        AgentState resultState = checkSufficiency(state.withAnswer(answer), answer, locale);
 
         // PROGRESSIVE upgrade: re-stream when listener present, otherwise blocking.
         if (state.routingMode() == RoutingMode.PROGRESSIVE
@@ -167,13 +144,13 @@ public class AnswerService {
             if (listener != null) listener.onUpgrade(providerName);
             String premiumAnswer;
             if (listener != null) {
-                premiumAnswer = streamAnswer(state, RoutingMode.QUALITY_FIRST, listener::onToken);
+                premiumAnswer = streamAnswer(state, RoutingMode.QUALITY_FIRST, answerSystemPrompt, listener::onToken);
             } else {
                 String answerPrompt = buildAnswerPrompt(state);
                 premiumAnswer = llmRouter.executeWithTracking(
                         TaskType.TEXT, RoutingMode.QUALITY_FIRST,
                         model -> model.call(new Prompt(List.of(
-                                new SystemMessage(ANSWER_SYSTEM_PROMPT),
+                                new SystemMessage(answerSystemPrompt),
                                 new UserMessage(answerPrompt)
                         )))
                 );
@@ -188,21 +165,19 @@ public class AnswerService {
         return resultState;
     }
 
-    /**
-     * Streams the answer from the LLM, pushing each token to tokenSink.
-     * blockLast() is safe inside a Virtual Thread.
-     */
-    private String streamAnswer(AgentState state, RoutingMode routingMode, Consumer<String> tokenSink) {
+    private String streamAnswer(AgentState state, RoutingMode routingMode,
+                                String systemPrompt, Consumer<String> tokenSink) {
         ChatModel model = llmRouter.route(TaskType.TEXT, routingMode);
         StringBuilder full = new StringBuilder();
-        streamInto(model, state, t -> { tokenSink.accept(t); full.append(t); });
+        streamInto(model, state, systemPrompt, t -> { tokenSink.accept(t); full.append(t); });
         return full.toString();
     }
 
-    private void streamInto(ChatModel model, AgentState state, Consumer<String> tokenSink) {
+    private void streamInto(ChatModel model, AgentState state,
+                             String systemPrompt, Consumer<String> tokenSink) {
         ChatClient.builder(model).build()
                 .prompt()
-                .system(ANSWER_SYSTEM_PROMPT)
+                .system(systemPrompt)
                 .user(buildAnswerPrompt(state))
                 .stream()
                 .content()
@@ -210,13 +185,14 @@ public class AnswerService {
                 .blockLast();
     }
 
-    private AgentState checkSufficiency(AgentState state, String answer) {
+    private AgentState checkSufficiency(AgentState state, String answer, Locale locale) {
         try {
+            String systemPrompt = messageSource.getMessage("prompt.answer.sufficiency", null, locale);
             String evalPrompt = "[질문]\n%s\n\n[답변]\n%s\n\n%s"
                     .formatted(state.question(), answer, sufficiencyConverter.getFormat());
 
             ChatResponse sufficiencyResponse = chatClient.prompt()
-                    .system(SUFFICIENCY_SYSTEM_PROMPT)
+                    .system(systemPrompt)
                     .user(evalPrompt)
                     .call()
                     .chatResponse();

@@ -7,6 +7,7 @@ import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.converter.BeanOutputConverter;
 import org.springframework.ai.document.Document;
+import org.springframework.context.MessageSource;
 import org.springframework.stereotype.Service;
 
 import java.util.stream.Collectors;
@@ -22,23 +23,16 @@ public class CriticService {
 
     private static final Logger log = LoggerFactory.getLogger(CriticService.class);
 
-    private static final String SYSTEM_PROMPT = """
-            당신은 RAG 답변의 근거 검증 전문가입니다.
-            아래 [문서 발췌]를 바탕으로 [답변]이 문서에 근거하는지 판단하세요.
-
-            판단 기준:
-            - grounded=true : 답변의 핵심 주장이 문서에 명확히 근거함
-            - grounded=false: 답변에 문서에 없는 주요 내용이 포함되거나 사실 관계가 다름
-            """;
-
     private record CriticOutput(boolean grounded) {}
 
     private final ChatClient chatClient;
+    private final MessageSource messageSource;
     private final BeanOutputConverter<CriticOutput> converter =
             new BeanOutputConverter<>(CriticOutput.class);
 
-    public CriticService(ChatClient chatClient) {
+    public CriticService(ChatClient chatClient, MessageSource messageSource) {
         this.chatClient = chatClient;
+        this.messageSource = messageSource;
     }
 
     public AgentState execute(AgentState state) {
@@ -61,8 +55,9 @@ public class CriticService {
                 %s
                 """.formatted(excerpts, state.answer(), converter.getFormat());
 
+        String systemPrompt = messageSource.getMessage("prompt.critic.system", null, state.locale());
         ChatResponse chatResponse = chatClient.prompt()
-                .system(SYSTEM_PROMPT)
+                .system(systemPrompt)
                 .user(userPrompt)
                 .call()
                 .chatResponse();

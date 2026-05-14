@@ -12,8 +12,11 @@ import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.model.ChatResponse;
 
+import org.springframework.context.MessageSource;
+
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.function.Consumer;
 import java.util.function.Function;
 
@@ -52,7 +55,9 @@ class AnswerServiceTest {
         AppProperties props = new AppProperties(
                 "./data", MAX_RETRY, 8000, 800, 100, 7,
                 null, null, null, null, null);
-        service = new AnswerService(chatClient, llmRouter, props);
+        MessageSource messageSource = mock(MessageSource.class);
+        when(messageSource.getMessage(anyString(), any(), any(Locale.class))).thenReturn("prompt");
+        service = new AnswerService(chatClient, llmRouter, props, messageSource);
     }
 
     private AgentState newState(RoutingMode mode) {

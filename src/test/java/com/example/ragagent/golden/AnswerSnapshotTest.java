@@ -50,7 +50,7 @@ class AnswerSnapshotTest {
         ClassifierService classifier = mock(ClassifierService.class);
 
         when(memory.getHistory(any())).thenReturn("");
-        when(classifier.classifyOnly(any())).thenReturn(c.given().questionType());
+        when(classifier.classifyOnly(any(), any())).thenReturn(c.given().questionType());
         when(agentGraph.run(any())).thenReturn(buildAgentState(c));
 
         AgentService service = new AgentService(agentGraph, memory, classifier);

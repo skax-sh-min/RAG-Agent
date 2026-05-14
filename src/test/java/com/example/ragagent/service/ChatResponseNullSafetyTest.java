@@ -10,7 +10,12 @@ import org.springframework.ai.document.Document;
 import java.util.List;
 import java.util.Map;
 
+import org.springframework.context.MessageSource;
+
+import java.util.Locale;
+
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
 import static org.mockito.Mockito.mock;
@@ -59,7 +64,9 @@ class ChatResponseNullSafetyTest {
                 .thenReturn(resp);
         when(resp.getResult().getOutput().getText()).thenReturn(null);
 
-        ClassifierService svc = new ClassifierService(chatClient);
+        MessageSource messageSource = mock(MessageSource.class);
+        when(messageSource.getMessage(anyString(), any(), any(Locale.class))).thenReturn("prompt");
+        ClassifierService svc = new ClassifierService(chatClient, messageSource);
         AgentState state = AgentState.of("테스트", "latest", "t1", "", null);
         AgentState result = svc.execute(state);
 
@@ -79,7 +86,9 @@ class ChatResponseNullSafetyTest {
                 .thenReturn(resp);
         when(resp.getResult().getOutput().getText()).thenReturn(null);
 
-        CriticService svc = new CriticService(chatClient);
+        MessageSource messageSource = mock(MessageSource.class);
+        when(messageSource.getMessage(anyString(), any(), any(Locale.class))).thenReturn("prompt");
+        CriticService svc = new CriticService(chatClient, messageSource);
         AgentState state = AgentState.of("테스트", "latest", "t1", "", null)
                 .withAnswer("답변")
                 .withRetrievedDocs(List.of(new Document("doc content", Map.of())));
