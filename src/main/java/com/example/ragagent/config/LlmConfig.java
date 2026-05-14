@@ -51,6 +51,7 @@ public class LlmConfig {
                     String roleStr = cfg.role() != null ? cfg.role().toUpperCase() : "NORMAL";
                     String typeStr = cfg.type() != null ? cfg.type().toUpperCase() : "BOTH";
                     String resolvedUrl = cfg.baseUrl() != null ? cfg.baseUrl() : "https://api.openai.com";
+                    boolean providerStream = !Boolean.FALSE.equals(cfg.stream()); // default: true
                     return new LlmProvider(
                             cfg.name(),
                             TaskType.valueOf(typeStr),
@@ -59,6 +60,7 @@ public class LlmConfig {
                             cfg.apiKey(),
                             resolvedUrl,
                             cfg.model(),
+                            providerStream,
                             model);
                 })
                 .sorted(Comparator.comparingInt(LlmProvider::priority))
@@ -77,7 +79,7 @@ public class LlmConfig {
                 ? llmCfg.progressiveThreshold() : 0.6;
 
         log.info("LLM providers registered: {}", providers.stream()
-                .map(p -> "%s(%s/%s/p%d) → %s [%s]".formatted(p.name(), p.role(), p.type(), p.priority(), p.baseUrl(), p.model()))
+                .map(p -> "%s(%s/%s/p%d/stream=%b) → %s [%s]".formatted(p.name(), p.role(), p.type(), p.priority(), p.stream(), p.baseUrl(), p.model()))
                 .toList());
 
         return new LlmRouter(providers, usageRepo, circuitBreaker, defaultMode, threshold);

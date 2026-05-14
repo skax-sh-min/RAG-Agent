@@ -36,14 +36,19 @@ public class LlmRouter {
         this.progressiveThreshold = progressiveThreshold;
     }
 
-    /** 라우팅 모드에 맞는 첫 번째 사용 가능 ChatModel 반환. */
-    public ChatModel route(TaskType taskType, RoutingMode mode) {
+    /** 라우팅 모드에 맞는 첫 번째 사용 가능 LlmProvider 반환 (stream 플래그 포함). */
+    public LlmProvider routeProvider(TaskType taskType, RoutingMode mode) {
         LlmProvider p = findFirst(taskType, roleOrder(mode), Set.of())
                 .orElseThrow(() -> new LlmProviderExhaustedException(
                         "No available provider for task=" + taskType + " mode=" + mode));
-        log.debug("[LLM route] provider={} task={} mode={} endpoint={}/chat/completions model={}",
-                p.name(), taskType, mode, p.baseUrl(), p.model());
-        return p.chatModel();
+        log.debug("[LLM route] provider={} task={} mode={} endpoint={}/chat/completions model={} stream={}",
+                p.name(), taskType, mode, p.baseUrl(), p.model(), p.stream());
+        return p;
+    }
+
+    /** 라우팅 모드에 맞는 첫 번째 사용 가능 ChatModel 반환. */
+    public ChatModel route(TaskType taskType, RoutingMode mode) {
+        return routeProvider(taskType, mode).chatModel();
     }
 
     /** 실행 + 토큰 기록 + Circuit Breaker 자동 전환. */
@@ -88,10 +93,10 @@ public class LlmRouter {
 
     /**
      * DUAL 스트리밍: LOCAL과 외부 프로바이더를 Virtual Thread로 병렬 실행.
-     * streamFn은 (model, tokenSink) → void 형태로, 호출자가 프롬프트를 포함한 스트리밍 로직을 제공.
+     * callFn은 (provider, tokenSink) → void 형태. provider.stream() 에 따라 호출자가 스트림/블로킹 분기.
      */
     public DualProviders executeDualStream(TaskType taskType,
-                                            BiConsumer<ChatModel, Consumer<String>> streamFn,
+                                            BiConsumer<LlmProvider, Consumer<String>> callFn,
                                             Consumer<String> localTokenSink,
                                             Consumer<String> externalTokenSink) {
         LlmProvider local = findFirst(taskType, List.of(LOCAL), Set.of())
@@ -104,15 +109,15 @@ public class LlmRouter {
         try (var exec = Executors.newVirtualThreadPerTaskExecutor()) {
             // B-21: exceptionally() ensures one side's failure never cancels the other via exec.close()
             CompletableFuture<Void> localF = CompletableFuture
-                    .runAsync(() -> streamFn.accept(local.chatModel(), localTokenSink), exec)
+                    .runAsync(() -> callFn.accept(local, localTokenSink), exec)
                     .exceptionally(t -> {
-                        log.warn("[DUAL] LOCAL stream failed ({}): {}", local.name(), t.getMessage());
+                        log.warn("[DUAL] LOCAL call failed ({}): {}", local.name(), t.getMessage());
                         return null;
                     });
             CompletableFuture<Void> externalF = CompletableFuture
-                    .runAsync(() -> streamFn.accept(external.chatModel(), externalTokenSink), exec)
+                    .runAsync(() -> callFn.accept(external, externalTokenSink), exec)
                     .exceptionally(t -> {
-                        log.warn("[DUAL] external stream failed ({}): {}", external.name(), t.getMessage());
+                        log.warn("[DUAL] external call failed ({}): {}", external.name(), t.getMessage());
                         return null;
                     });
             CompletableFuture.allOf(localF, externalF).join();

@@ -347,6 +347,10 @@ curl -X POST "http://localhost:8080/api/documents/sync?version=latest"
 이미지 처리는 운영자 설정(`app.image-description.enabled=true`)이 필요합니다.  
 운영자 문의 또는 [OPERATOR_MANUAL.md](OPERATOR_MANUAL.md)를 참고하세요.
 
+### 답변이 토큰 단위가 아닌 한 번에 표시됨
+
+일부 환경에서는 LLM 프로바이더 설정(`stream=false`)에 따라 토큰이 하나씩 나타나는 대신 전체 응답이 완성된 후 한꺼번에 표시될 수 있습니다. 기능 자체는 정상이며, 설정은 운영자가 변경할 수 있습니다.
+
 ### 업로드 실패 (422)
 
 파일 내용이 확장자와 일치하지 않을 때 발생합니다. 원본 파일을 다시 확인하거나 올바른 형식으로 저장 후 재시도하세요.

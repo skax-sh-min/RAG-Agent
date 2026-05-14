@@ -32,7 +32,8 @@ public record AppProperties(
             String model,
             String type,
             String role,
-            int priority
+            int priority,
+            Boolean stream
     ) {}
 
     public record IndexingConfig(

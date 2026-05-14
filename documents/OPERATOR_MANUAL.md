@@ -324,6 +324,24 @@ Gemini도 `https://generativelanguage.googleapis.com/v1beta/openai/` 엔드포�
 | `role` | `LOCAL` \| `NORMAL` \| `PREMIUM` | 라우팅 우선순위 그룹 |
 | `type` | `LIGHT_BOTH` \| `BOTH` \| … | 처리 가능한 태스크 유형 (아래 표 참조) |
 | `priority` | 정수 (낮을수록 우선) | 같은 role 내 우선순위 |
+| `stream` | `true` (기본) \| `false` | LLM API 호출 방식. 미설정 시 `true`. 상세는 아래 참조 |
+
+#### stream 플래그
+
+`stream` 속성은 서버 ↔ LLM API 구간의 호출 방식을 제어합니다. 브라우저 ↔ 서버 간 SSE 연결은 이 값과 무관하게 유지됩니다.
+
+| 값 | 동작 | 적합한 상황 |
+|----|------|------------|
+| `true` (기본) | LLM API에 `stream: true`로 요청 — 토큰 생성 즉시 SSE로 전달 | 대부분의 클라우드 API, 표준 OpenAI 호환 서버 |
+| `false` | LLM API에 `stream: false`로 요청 — 전체 응답 완성 후 일괄 전달 | SSE를 제대로 지원하지 않는 로컬 LLM / 프록시 서버 |
+
+```properties
+# 예시: local 프로바이더만 블로킹 방식으로 호출
+app.llm.providers[0].stream=false
+```
+
+> 시작 로그에서 각 프로바이더의 stream 설정을 확인할 수 있습니다:  
+> `local(LOCAL/BOTH/p0/stream=false) → http://localhost:1234/v1 [gemma-4-e4b]`
 
 #### type 값
 
@@ -502,6 +520,7 @@ app.llm.providers[0].model=${LOCAL_LLM_MODEL:gemma-4-27b-it}
 app.llm.providers[0].type=LIGHT_BOTH
 app.llm.providers[0].role=LOCAL
 app.llm.providers[0].priority=0
+# app.llm.providers[0].stream=false  # 로컬 LLM이 SSE 미지원 시 비활성화
 
 # NORMAL — 저비용 외부 (Gemini Flash 우선, OpenAI Mini fallback)
 app.llm.providers[1].name=gemini-flash

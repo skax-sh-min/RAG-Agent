@@ -1,6 +1,7 @@
 package com.example.ragagent.service;
 
 import com.example.ragagent.agent.AgentState;
+import com.example.ragagent.llm.LlmProvider;
 import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.llm.TaskType;
@@ -55,14 +56,23 @@ public class DirectAnswerService {
                 state.routingMode(), state.conversationHistory().length());
         String userPrompt = buildUserPrompt(state);
 
+        RoutingMode effective = (state.routingMode() == RoutingMode.DUAL) ? RoutingMode.COST_FIRST : state.routingMode();
+        LlmProvider provider = llmRouter.routeProvider(TaskType.TEXT, effective);
+        ChatClient client = ChatClient.builder(provider.chatModel()).build();
+
         StringBuilder full = new StringBuilder();
-        buildClient(state.routingMode()).prompt()
-                .system(systemPrompt)
-                .user(userPrompt)
-                .stream()
-                .content()
-                .doOnNext(token -> { listener.onToken(token); full.append(token); })
-                .blockLast();
+        if (provider.stream()) {
+            client.prompt()
+                    .system(systemPrompt)
+                    .user(userPrompt)
+                    .stream()
+                    .content()
+                    .doOnNext(token -> { listener.onToken(token); full.append(token); })
+                    .blockLast();
+        } else {
+            String text = client.prompt().system(systemPrompt).user(userPrompt).call().content();
+            if (text != null) { full.append(text); listener.onToken(text); }
+        }
 
         String answer = full.toString();
         log.debug("[DirectAnswer] streaming answer length={}", answer.length());

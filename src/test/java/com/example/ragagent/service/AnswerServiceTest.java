@@ -3,7 +3,9 @@ package com.example.ragagent.service;
 import com.example.ragagent.agent.AgentState;
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.llm.DualResult;
+import com.example.ragagent.llm.LlmProvider;
 import com.example.ragagent.llm.LlmRouter;
+import com.example.ragagent.llm.ProviderRole;
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.llm.TaskType;
 import org.junit.jupiter.api.BeforeEach;
@@ -193,8 +195,10 @@ class AnswerServiceTest {
                 .thenReturn(answerResp, suffResp);
         when(llmRouter.findProviderName(any(), eq(RoutingMode.PROGRESSIVE)))
                 .thenReturn("gemini-flash");
-        when(llmRouter.findProviderName(any(), eq(RoutingMode.QUALITY_FIRST)))
-                .thenReturn("gemini-pro");
+        LlmProvider premiumProvider = new LlmProvider(
+                "gemini-pro", TaskType.TEXT, ProviderRole.PREMIUM, 4, "key", null, null, true, null);
+        when(llmRouter.routeProvider(any(), eq(RoutingMode.QUALITY_FIRST)))
+                .thenReturn(premiumProvider);
         when(llmRouter.executeWithTracking(eq(TaskType.TEXT), eq(RoutingMode.QUALITY_FIRST), any(Function.class)))
                 .thenReturn("프리미엄 답변");
 

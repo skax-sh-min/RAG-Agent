@@ -4,6 +4,7 @@ import com.example.ragagent.agent.AgentState;
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.model.MetaKey;
 import com.example.ragagent.llm.DualResult;
+import com.example.ragagent.llm.LlmProvider;
 import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.llm.TaskType;
@@ -12,7 +13,6 @@ import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.UserMessage;
-import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.converter.BeanOutputConverter;
@@ -81,11 +81,11 @@ public class AnswerService {
             if (listener != null) {
                 AgentState capturedState = state;
                 StringBuilder localBuf = new StringBuilder(), extBuf = new StringBuilder();
-                BiConsumer<ChatModel, Consumer<String>> streamFn =
-                        (model, sink) -> streamInto(model, capturedState, answerSystemPrompt, sink);
+                BiConsumer<LlmProvider, Consumer<String>> callFn =
+                        (prov, sink) -> callOrStream(prov, capturedState, answerSystemPrompt, sink);
                 LlmRouter.DualProviders dp = llmRouter.executeDualStream(
                         TaskType.TEXT,
-                        streamFn,
+                        callFn,
                         t -> { localBuf.append(t); listener.onToken("local", t); },
                         t -> { extBuf.append(t);   listener.onToken("external", t); }
                 );
@@ -118,8 +118,9 @@ public class AnswerService {
         // Call 1: answer generation
         String answer;
         if (listener != null) {
-            answer = streamAnswer(state, state.routingMode(), answerSystemPrompt, listener::onToken);
-            state = state.withUsedProvider(llmRouter.findProviderName(TaskType.TEXT, state.routingMode()));
+            LlmProvider provider = llmRouter.routeProvider(TaskType.TEXT, state.routingMode());
+            answer = streamAnswer(provider, state, answerSystemPrompt, listener::onToken);
+            state = state.withUsedProvider(provider.name());
         } else {
             ChatResponse answerResponse = chatClient.prompt()
                     .system(answerSystemPrompt)
@@ -135,16 +136,16 @@ public class AnswerService {
         // Call 2: sufficiency check (always blocking)
         AgentState resultState = checkSufficiency(state.withAnswer(answer), answer, locale);
 
-        // PROGRESSIVE upgrade: re-stream when listener present, otherwise blocking.
+        // PROGRESSIVE upgrade: re-call when listener present, otherwise blocking.
         if (state.routingMode() == RoutingMode.PROGRESSIVE
                 && resultState.needsRetry()
                 && state.retryCount() >= maxRetryCount) {
 
-            String providerName = llmRouter.findProviderName(TaskType.TEXT, RoutingMode.QUALITY_FIRST);
-            if (listener != null) listener.onUpgrade(providerName);
+            LlmProvider premiumProvider = llmRouter.routeProvider(TaskType.TEXT, RoutingMode.QUALITY_FIRST);
+            if (listener != null) listener.onUpgrade(premiumProvider.name());
             String premiumAnswer;
             if (listener != null) {
-                premiumAnswer = streamAnswer(state, RoutingMode.QUALITY_FIRST, answerSystemPrompt, listener::onToken);
+                premiumAnswer = streamAnswer(premiumProvider, state, answerSystemPrompt, listener::onToken);
             } else {
                 String answerPrompt = buildAnswerPrompt(state);
                 premiumAnswer = llmRouter.executeWithTracking(
@@ -157,32 +158,40 @@ public class AnswerService {
             }
             return resultState
                     .withAnswer(truncate(premiumAnswer))
-                    .withUsedProvider(providerName)
-                    .withPremiumUpgraded(providerName)
+                    .withUsedProvider(premiumProvider.name())
+                    .withPremiumUpgraded(premiumProvider.name())
                     .withNeedsRetry(false);
         }
 
         return resultState;
     }
 
-    private String streamAnswer(AgentState state, RoutingMode routingMode,
+    private String streamAnswer(LlmProvider provider, AgentState state,
                                 String systemPrompt, Consumer<String> tokenSink) {
-        ChatModel model = llmRouter.route(TaskType.TEXT, routingMode);
         StringBuilder full = new StringBuilder();
-        streamInto(model, state, systemPrompt, t -> { tokenSink.accept(t); full.append(t); });
+        callOrStream(provider, state, systemPrompt, t -> { tokenSink.accept(t); full.append(t); });
         return full.toString();
     }
 
-    private void streamInto(ChatModel model, AgentState state,
-                             String systemPrompt, Consumer<String> tokenSink) {
-        ChatClient.builder(model).build()
-                .prompt()
-                .system(systemPrompt)
-                .user(buildAnswerPrompt(state))
-                .stream()
-                .content()
-                .doOnNext(tokenSink)
-                .blockLast();
+    private void callOrStream(LlmProvider provider, AgentState state,
+                              String systemPrompt, Consumer<String> tokenSink) {
+        ChatClient client = ChatClient.builder(provider.chatModel()).build();
+        if (provider.stream()) {
+            client.prompt()
+                    .system(systemPrompt)
+                    .user(buildAnswerPrompt(state))
+                    .stream()
+                    .content()
+                    .doOnNext(tokenSink)
+                    .blockLast();
+        } else {
+            String text = client.prompt()
+                    .system(systemPrompt)
+                    .user(buildAnswerPrompt(state))
+                    .call()
+                    .content();
+            if (text != null) tokenSink.accept(text);
+        }
     }
 
     private AgentState checkSufficiency(AgentState state, String answer, Locale locale) {

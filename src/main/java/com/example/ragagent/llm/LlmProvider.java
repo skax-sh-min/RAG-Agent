@@ -12,6 +12,7 @@ public record LlmProvider(
         String apiKey,
         String baseUrl,
         String model,
+        boolean stream,
         ChatModel chatModel
 ) {
     public boolean supports(TaskType req) {
