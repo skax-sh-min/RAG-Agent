@@ -42,13 +42,13 @@ public class ImageTypeClassifier {
     public String classify(byte[] imageBytes, String mimeType) {
         try {
             ChatModel model = llmRouter.route(TaskType.LIGHT_BOTH, RoutingMode.COST_FIRST);
-            String result = ChatClient.builder(model).build()
+            StringBuilder buf = new StringBuilder();
+            ChatClient.builder(model).build()
                     .prompt()
                     .user(u -> u.text(PROMPT)
                                 .media(MimeTypeUtils.parseMimeType(mimeType), new ByteArrayResource(imageBytes)))
-                    .call()
-                    .content();
-            String type = result == null ? "other" : result.strip().toLowerCase();
+                    .stream().content().doOnNext(buf::append).blockLast();
+            String type = buf.isEmpty() ? "other" : buf.toString().strip().toLowerCase();
             return VALID_TYPES.contains(type) ? type : "other";
         } catch (Exception e) {
             log.warn("Image type classification failed, defaulting to 'other': {}", e.getMessage());

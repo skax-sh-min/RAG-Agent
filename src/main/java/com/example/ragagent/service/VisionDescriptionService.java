@@ -45,12 +45,13 @@ public class VisionDescriptionService {
     public String describe(byte[] imageBytes, String mimeType, String prompt) {
         try {
             ChatModel visionModel = llmRouter.route(TaskType.VISION, RoutingMode.COST_FIRST);
-            return ChatClient.builder(visionModel).build()
+            StringBuilder buf = new StringBuilder();
+            ChatClient.builder(visionModel).build()
                     .prompt()
                     .user(u -> u.text(prompt)
                                 .media(MimeTypeUtils.parseMimeType(mimeType), new ByteArrayResource(imageBytes)))
-                    .call()
-                    .content();
+                    .stream().content().doOnNext(buf::append).blockLast();
+            return buf.isEmpty() ? "" : buf.toString();
         } catch (LlmProviderExhaustedException e) {
             log.warn("No vision provider available: {}", e.getMessage());
             return "[이미지 설명 불가: Vision 프로바이더 미등록]";

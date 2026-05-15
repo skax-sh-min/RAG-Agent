@@ -5,7 +5,6 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.converter.BeanOutputConverter;
 import org.springframework.context.MessageSource;
 import org.springframework.stereotype.Service;
@@ -39,24 +38,23 @@ public class ClassifierService {
 
     public String classifyOnly(String question, Locale locale) {
         String prompt = messageSource.getMessage("prompt.classifier.system", null, locale);
-        String raw = chatClient.prompt()
+        StringBuilder buf = new StringBuilder();
+        chatClient.prompt()
                 .system(prompt)
                 .user(question + "\n\n" + converter.getFormat())
-                .call()
-                .content();
-        return parseType(raw);
+                .stream().content().doOnNext(buf::append).blockLast();
+        return parseType(buf.isEmpty() ? null : buf.toString());
     }
 
     public AgentState execute(AgentState state) {
         String prompt = messageSource.getMessage("prompt.classifier.system", null, state.locale());
-        ChatResponse chatResponse = chatClient.prompt()
+        StringBuilder buf = new StringBuilder();
+        chatClient.prompt()
                 .system(prompt)
                 .user(state.question() + "\n\n" + converter.getFormat())
-                .call()
-                .chatResponse();
-
-        state = accumulateTokens(state, chatResponse);
-        return state.withQuestionType(parseType(ChatResponses.safeText(chatResponse)));
+                .stream().content().doOnNext(buf::append).blockLast();
+        return state.withTokensAccumulated(0, 0)
+                    .withQuestionType(parseType(buf.isEmpty() ? null : buf.toString()));
     }
 
     private String parseType(String response) {
@@ -69,10 +67,4 @@ public class ClassifierService {
         }
     }
 
-    private static AgentState accumulateTokens(AgentState state, ChatResponse resp) {
-        var usage = resp.getMetadata().getUsage();
-        int in  = (usage != null && usage.getPromptTokens()     != null) ? usage.getPromptTokens()     : 0;
-        int out = (usage != null && usage.getCompletionTokens() != null) ? usage.getCompletionTokens() : 0;
-        return state.withTokensAccumulated(in, out);
-    }
 }

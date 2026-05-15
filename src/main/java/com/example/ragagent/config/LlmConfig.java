@@ -37,9 +37,11 @@ public class LlmConfig {
                     String typeStr = cfg.type() != null ? cfg.type().toUpperCase() : "BOTH";
                     String resolvedUrl = cfg.baseUrl() != null ? cfg.baseUrl() : "https://api.openai.com";
                     boolean providerStream = !Boolean.FALSE.equals(cfg.stream()); // default: true
-                    // Keep provider base URL as configured. Some OpenAI-compatible servers
-                    // are mounted under /v1 and fail when /v1 is stripped.
-                    String apiBase = resolvedUrl;
+                    // OpenAiApi.builder() appends /v1 internally, so strip it to avoid /v1/v1.
+                    // resolvedUrl (with /v1) is kept for LlmProvider.baseUrl() and LoggingChatModel curl logs.
+                    String apiBase = resolvedUrl.endsWith("/v1/") ? resolvedUrl.substring(0, resolvedUrl.length() - 4)
+                                   : resolvedUrl.endsWith("/v1")  ? resolvedUrl.substring(0, resolvedUrl.length() - 3)
+                                   : resolvedUrl;
                     OpenAiApi api = OpenAiApi.builder()
                             .baseUrl(apiBase)
                             .apiKey(cfg.apiKey())

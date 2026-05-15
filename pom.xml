@@ -41,6 +41,13 @@
             <artifactId>spring-boot-starter-web</artifactId>
         </dependency>
 
+        <!-- Reactor Netty HTTP client — enables WebClient wire-level logging
+             (reactor.netty.http.client=DEBUG) for debugging LLM HTTP traffic -->
+        <dependency>
+            <groupId>io.projectreactor.netty</groupId>
+            <artifactId>reactor-netty-http</artifactId>
+        </dependency>
+
         <!-- Spring AI - OpenAI (works for local OpenAI-compatible endpoints too) -->
         <dependency>
             <groupId>org.springframework.ai</groupId>

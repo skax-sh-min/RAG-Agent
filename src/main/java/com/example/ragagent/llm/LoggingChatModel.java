@@ -53,7 +53,7 @@ public class LoggingChatModel implements ChatModel {
         try {
             ObjectNode body = MAPPER.createObjectNode();
             body.put("model", modelName);
-            if (streaming) body.put("stream", true);
+            body.put("stream", streaming);
 
             ArrayNode messages = body.putArray("messages");
             for (Message msg : prompt.getInstructions()) {

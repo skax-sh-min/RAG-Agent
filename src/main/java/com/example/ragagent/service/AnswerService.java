@@ -13,11 +13,11 @@ import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.UserMessage;
-import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.converter.BeanOutputConverter;
 import org.springframework.context.MessageSource;
 import org.springframework.stereotype.Service;
+import reactor.core.scheduler.Schedulers;
 
 import java.util.List;
 import java.util.Locale;
@@ -122,13 +122,13 @@ public class AnswerService {
             answer = streamAnswer(provider, state, answerSystemPrompt, listener::onToken);
             state = state.withUsedProvider(provider.name());
         } else {
-            ChatResponse answerResponse = chatClient.prompt()
+            StringBuilder buf = new StringBuilder();
+            chatClient.prompt()
                     .system(answerSystemPrompt)
                     .user(buildAnswerPrompt(state))
-                    .call()
-                    .chatResponse();
-            state = accumulateTokens(state, answerResponse);
-            answer = ChatResponses.safeText(answerResponse);
+                    .stream().content().doOnNext(buf::append).blockLast();
+            state = state.withTokensAccumulated(0, 0);
+            answer = buf.isEmpty() ? "" : buf.toString();
             state = state.withUsedProvider(llmRouter.findProviderName(TaskType.TEXT, state.routingMode()));
         }
 
@@ -182,6 +182,7 @@ public class AnswerService {
                     .user(buildAnswerPrompt(state))
                     .stream()
                     .content()
+                    .publishOn(Schedulers.boundedElastic(), 1)
                     .doOnNext(tokenSink)
                     .blockLast();
         } else {
@@ -205,14 +206,14 @@ public class AnswerService {
             String evalPrompt = "[질문]\n%s\n\n[답변]\n%s\n\n%s"
                     .formatted(state.question(), answer, sufficiencyConverter.getFormat());
 
-            ChatResponse sufficiencyResponse = chatClient.prompt()
+            StringBuilder buf = new StringBuilder();
+            chatClient.prompt()
                     .system(systemPrompt)
                     .user(evalPrompt)
-                    .call()
-                    .chatResponse();
-            state = accumulateTokens(state, sufficiencyResponse);
+                    .stream().content().doOnNext(buf::append).blockLast();
+            state = state.withTokensAccumulated(0, 0);
             boolean sufficient = sufficiencyConverter
-                    .convert(ChatResponses.safeText(sufficiencyResponse))
+                    .convert(buf.isEmpty() ? "" : buf.toString())
                     .sufficient();
             return state.withNeedsRetry(!sufficient);
         } catch (Exception e) {
@@ -254,10 +255,4 @@ public class AnswerService {
         return answer.substring(0, MAX_ANSWER_LEN) + "\n\n…(응답이 너무 길어 잘렸습니다)";
     }
 
-    private static AgentState accumulateTokens(AgentState state, ChatResponse resp) {
-        var usage = resp.getMetadata().getUsage();
-        int in  = (usage != null && usage.getPromptTokens()     != null) ? usage.getPromptTokens()     : 0;
-        int out = (usage != null && usage.getCompletionTokens() != null) ? usage.getCompletionTokens() : 0;
-        return state.withTokensAccumulated(in, out);
-    }
 }

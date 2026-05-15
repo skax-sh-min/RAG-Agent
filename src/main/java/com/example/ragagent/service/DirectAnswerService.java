@@ -8,9 +8,9 @@ import com.example.ragagent.llm.TaskType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.context.MessageSource;
 import org.springframework.stereotype.Service;
+import reactor.core.scheduler.Schedulers;
 
 /**
  * Handles meta questions (greetings, service inquiries) without RAG retrieval.
@@ -37,16 +37,14 @@ public class DirectAnswerService {
         String userPrompt = buildUserPrompt(state);
 
         ChatClient client = buildClient(state.routingMode());
-        ChatResponse chatResponse = client.prompt()
+        StringBuilder buf = new StringBuilder();
+        client.prompt()
                 .system(systemPrompt)
                 .user(userPrompt)
-                .call()
-                .chatResponse();
-
-        String answer = ChatResponses.safeText(chatResponse);
+                .stream().content().doOnNext(buf::append).blockLast();
+        String answer = buf.isEmpty() ? null : buf.toString();
         log.debug("[DirectAnswer] answer length={}", answer == null ? -1 : answer.length());
-        state = accumulateTokens(state, chatResponse);
-        return state.withAnswer(answer);
+        return state.withAnswer(answer).withTokensAccumulated(0, 0);
     }
 
     /** Streaming variant — pushes tokens via listener.onToken() instead of blocking. */
@@ -86,13 +84,6 @@ public class DirectAnswerService {
                 : "[이전 대화]\n%s\n\n[현재 질문]\n%s".formatted(history, state.question());
     }
 
-    private static AgentState accumulateTokens(AgentState state, ChatResponse resp) {
-        var usage = resp.getMetadata().getUsage();
-        int in  = (usage != null && usage.getPromptTokens()     != null) ? usage.getPromptTokens()     : 0;
-        int out = (usage != null && usage.getCompletionTokens() != null) ? usage.getCompletionTokens() : 0;
-        return state.withTokensAccumulated(in, out);
-    }
-
     /**
      * Unified streaming handler for both provider.stream()=true/false.
      * Applies consistent error handling and token collection patterns.
@@ -112,6 +103,7 @@ public class DirectAnswerService {
                     .doOnError(e -> log.error("[DirectAnswer] Stream error", e))
                 .doFinally(signal -> log.debug("[DirectAnswer] Stream finished signal={} provider={} thread={}",
                     signal, provider.name(), state.threadId()))
+                    .publishOn(Schedulers.boundedElastic(), 1)
                     .doOnNext(tokenSink)
                     .blockLast();
         } else {

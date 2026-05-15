@@ -67,14 +67,25 @@ public class ThreadMetaService {
     /**
      * Generates a short Korean title via LLM on a virtual thread.
      * Saves "[{version}] {summary}" to thread_meta.title after completion.
+     * No-ops if the thread already has a non-default title.
      */
     public void generateTitleAsync(String threadId, String version, String question) {
+        Optional<ThreadMeta> meta = repository.findById(threadId);
+        if (meta.isEmpty()) return;
+        String defaultTitle = "[%s] 새 대화".formatted(version);
+        if (!defaultTitle.equals(meta.get().title())) return;
+
         Thread.ofVirtual().start(() -> {
             try {
-                String raw = chatClient.prompt()
+                // Use .stream() to avoid sending stream:false which hangs many local LLM servers.
+                StringBuilder buf = new StringBuilder();
+                chatClient.prompt()
                         .user("다음 질문을 20자 이내 한국어 명사구로 요약하세요 (설명 없이 명사구만 출력): " + question)
-                        .call()
-                        .content();
+                        .stream()
+                        .content()
+                        .doOnNext(buf::append)
+                        .blockLast();
+                String raw = buf.isEmpty() ? null : buf.toString();
                 String summary = raw == null ? "새 대화" : raw.strip();
                 if (summary.length() > TITLE_MAX_CHARS) {
                     summary = summary.substring(0, TITLE_MAX_CHARS);

@@ -332,8 +332,10 @@ Gemini도 `https://generativelanguage.googleapis.com/v1beta/openai/` 엔드포�
 
 | 값 | 동작 | 적합한 상황 |
 |----|------|------------|
-| `true` (기본) | LLM API에 `stream: true`로 요청 — 토큰 생성 즉시 SSE로 전달 | 대부분의 클라우드 API, 표준 OpenAI 호환 서버 |
-| `false` | LLM API에 `stream: false`로 요청 — 전체 응답 완성 후 일괄 전달 | SSE를 제대로 지원하지 않는 로컬 LLM / 프록시 서버 |
+| `true` (기본) | LLM 서버에 `stream: true`로 요청 — 토큰 생성 즉시 SSE로 전달 | 대부분의 클라우드 API, 표준 OpenAI 호환 서버 |
+| `false` | LLM 서버에도 `stream: true`로 요청하되, 토큰을 내부 버퍼에 모아 완성 후 일괄 SSE 전달 — 브라우저에는 응답이 한 번에 표시됨 | `stream: false`(블로킹 API)를 지원하지 않는 로컬 LLM 서버 (LM Studio 등) |
+
+> **주의**: 많은 로컬 LLM 서버(LM Studio 포함)는 `stream: false` 블로킹 모드를 제대로 처리하지 못하고 무한 대기합니다. 이 때문에 `stream=false`로 설정해도 내부적으로는 스트리밍 HTTP를 사용하며, 토큰을 모두 받은 뒤 일괄 전달하는 방식으로 동작합니다.
 
 ```properties
 # 예시: local 프로바이더만 블로킹 방식으로 호출
@@ -699,6 +701,53 @@ docker-compose logs app
 
 - `INDEXING_MAX_FILES` / `INDEXING_MAX_LLM` 값 증가 (CPU·API 쿼터 여유 있는 경우)
 - 키워드 추출(`KeywordMetadataEnricher`)이 청크당 LLM 호출 → 문서 수 많을수록 시간 증가 (의도된 동작)
+
+---
+
+### 로컬 LLM 응답 타임아웃 (`SSE worker cancelled`)
+
+로컬 LLM 서버(LM Studio 등)에 요청이 도달하지 않거나 응답이 없어 `app.sse-timeout-seconds` 경과 후 연결이 끊기는 경우입니다.
+
+| 원인 | 확인 방법 | 조치 |
+|------|----------|------|
+| LLM 서버 미실행·모델 미로드 | LM Studio 상태 확인 | 모델 로드 완료 후 재시도 |
+| `base-url`에 `/v1` 중복 | 시작 로그 `endpoint=...` 확인 | `base-url`에 `/v1` 포함 여부와 무관하게 내부 자동 처리됨. 앱 재시작 |
+| 구버전 앱에서 `stream=false` 설정 | — | 최신 버전은 내부적으로 스트리밍 방식으로 대체함. 앱 재시작 |
+
+---
+
+### LLM 요청/응답 디버깅
+
+애플리케이션이 LLM 서버로 보내는 실제 HTTP 요청(헤더·바디)을 확인하려면 Reactor Netty 와이어 로그를 Actuator로 런타임에 켭니다.
+
+```bash
+# 켜기 (스트리밍 응답의 모든 청크 포함 — 매우 시끄러움)
+curl -X POST http://localhost:8080/actuator/loggers/reactor.netty.http.client \
+  -H "Content-Type: application/json" \
+  -d '{"configuredLevel":"DEBUG"}'
+
+# 끄기
+curl -X POST http://localhost:8080/actuator/loggers/reactor.netty.http.client \
+  -H "Content-Type: application/json" \
+  -d '{"configuredLevel":"INFO"}'
+
+# 현재 레벨 확인 (GET, 204 대신 JSON 반환)
+curl http://localhost:8080/actuator/loggers/reactor.netty.http.client
+```
+
+**Windows CMD**:
+```cmd
+curl -X POST http://localhost:8080/actuator/loggers/reactor.netty.http.client -H "Content-Type: application/json" -d "{\"configuredLevel\":\"DEBUG\"}"
+```
+
+Spring AI OpenAI 내부 로그(직렬화된 `ChatCompletionRequest` 포함)는 이미 `TRACE`로 활성화되어 있습니다. 레벨을 되돌리려면:
+```bash
+curl -X POST http://localhost:8080/actuator/loggers/org.springframework.ai.openai \
+  -H "Content-Type: application/json" \
+  -d '{"configuredLevel":"INFO"}'
+```
+
+> Actuator POST 성공 응답은 **HTTP 204 No Content** (응답 바디 없음)입니다. `-i` 플래그를 추가하면 상태 코드를 확인할 수 있습니다.
 
 ---
 

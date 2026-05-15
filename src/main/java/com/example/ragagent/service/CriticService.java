@@ -4,7 +4,6 @@ import com.example.ragagent.agent.AgentState;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.converter.BeanOutputConverter;
 import org.springframework.ai.document.Document;
 import org.springframework.context.MessageSource;
@@ -56,15 +55,13 @@ public class CriticService {
                 """.formatted(excerpts, state.answer(), converter.getFormat());
 
         String systemPrompt = messageSource.getMessage("prompt.critic.system", null, state.locale());
-        ChatResponse chatResponse = chatClient.prompt()
+        StringBuilder buf = new StringBuilder();
+        chatClient.prompt()
                 .system(systemPrompt)
                 .user(userPrompt)
-                .call()
-                .chatResponse();
-
-        state = accumulateTokens(state, chatResponse);
-        boolean grounded = parseGrounded(ChatResponses.safeText(chatResponse));
-        return state.withGrounded(grounded).withNeedsRetry(!grounded);
+                .stream().content().doOnNext(buf::append).blockLast();
+        boolean grounded = parseGrounded(buf.isEmpty() ? null : buf.toString());
+        return state.withTokensAccumulated(0, 0).withGrounded(grounded).withNeedsRetry(!grounded);
     }
 
     private boolean parseGrounded(String response) {
@@ -76,10 +73,4 @@ public class CriticService {
         }
     }
 
-    private static AgentState accumulateTokens(AgentState state, ChatResponse resp) {
-        var usage = resp.getMetadata().getUsage();
-        int in  = (usage != null && usage.getPromptTokens()     != null) ? usage.getPromptTokens()     : 0;
-        int out = (usage != null && usage.getCompletionTokens() != null) ? usage.getCompletionTokens() : 0;
-        return state.withTokensAccumulated(in, out);
-    }
 }
