@@ -13,7 +13,6 @@ import org.springframework.context.MessageSource;
 
 import java.util.List;
 import org.springframework.stereotype.Service;
-import reactor.core.scheduler.Schedulers;
 
 /**
  * Handles meta questions (greetings, service inquiries) without RAG retrieval.
@@ -115,9 +114,8 @@ public class DirectAnswerService {
                     .doOnError(e -> log.error("[DirectAnswer] Stream error provider={}", provider.name(), e))
                     .doFinally(signal -> log.debug("[DirectAnswer] Stream finished signal={} provider={} thread={}",
                             signal, provider.name(), state.threadId()))
-                    .publishOn(Schedulers.boundedElastic(), 1)
-                    .doOnNext(tokenSink)
-                    .blockLast();
+                    .toIterable()
+                    .forEach(tokenSink);
         } else {
             // Provider does not support streaming: buffer and deliver as single chunk
             StringBuilder buf = new StringBuilder();

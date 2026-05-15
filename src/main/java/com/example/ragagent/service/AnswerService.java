@@ -18,7 +18,6 @@ import org.springframework.ai.converter.BeanOutputConverter;
 import org.springframework.ai.openai.api.OpenAiApi;
 import org.springframework.context.MessageSource;
 import org.springframework.stereotype.Service;
-import reactor.core.scheduler.Schedulers;
 
 import java.util.List;
 import java.util.Locale;
@@ -216,9 +215,8 @@ public class AnswerService {
                 .doOnError(e -> log.error("[Answer] Stream error provider={}", provider.name(), e))
                 .doFinally(signal -> log.debug("[Answer] Stream finished signal={} provider={} thread={}",
                         signal, provider.name(), threadId))
-                .publishOn(Schedulers.boundedElastic(), 1)
-                .doOnNext(tokenSink)
-                .blockLast();
+                .toIterable()
+                .forEach(tokenSink);
     }
 
     private AgentState checkSufficiency(AgentState state, String answer, Locale locale) {
