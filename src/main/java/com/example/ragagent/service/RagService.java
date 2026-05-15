@@ -20,6 +20,8 @@ import org.springframework.ai.vectorstore.filter.FilterExpressionBuilder;
 import org.springframework.stereotype.Service;
 
 import jakarta.annotation.PostConstruct;
+import com.example.ragagent.model.IndexingProgressEvent;
+
 import java.io.IOException;
 import java.nio.file.*;
 import java.security.MessageDigest;
@@ -27,6 +29,8 @@ import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Consumer;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
@@ -98,6 +102,15 @@ public class RagService {
      * to a temporary path but must be tracked under the user's original filename.
      */
     public DocumentInfo indexDocument(Path filePath, String filename, String version) throws IOException {
+        return indexDocument(filePath, filename, version, event -> {});
+    }
+
+    /**
+     * Indexes a document and reports granular progress via {@code onProgress}.
+     * Events: loading → chunking (with total) → enriching (K/N) → storing → [caller sends done/error]
+     */
+    public DocumentInfo indexDocument(Path filePath, String filename, String version,
+                                      Consumer<IndexingProgressEvent> onProgress) throws IOException {
         log.info("[INDEX] 시작: {} (version={})", filename, version);
         long t0 = System.currentTimeMillis();
 
@@ -111,6 +124,7 @@ public class RagService {
         List<Document> rawDocs;
         String lower = filename.toLowerCase();
         log.debug("[INDEX] {} 문서 로드 중...", filename);
+        onProgress.accept(IndexingProgressEvent.of("loading", 0, 0, filename, "문서 로드 중..."));
         if (lower.endsWith(".docx")) {
             rawDocs = loaderService.loadDocx(filePath, docId, imagesDir);
         } else {
@@ -121,9 +135,12 @@ public class RagService {
         }
         log.debug("[INDEX] {} 로드 완료 → 원본 섹션 {}개", filename, rawDocs.size());
 
+        onProgress.accept(IndexingProgressEvent.of("chunking", 0, 0, filename, "청크 분할 중..."));
         List<Document> chunks = splitDocuments(rawDocs, filename, props.chunkSize(), props.chunkOverlap());
         log.debug("[INDEX] {} 청크 분할 완료 → {}개 (chunkSize={}, overlap={})",
                 filename, chunks.size(), props.chunkSize(), props.chunkOverlap());
+        onProgress.accept(IndexingProgressEvent.of("chunking", 0, chunks.size(), filename,
+                chunks.size() + "개 청크"));
 
         // Tag metadata
         List<Document> tagged = new ArrayList<>();
@@ -146,13 +163,15 @@ public class RagService {
         // Delete old chunks for same doc_id if already indexed
         deleteByDocId(docId, version);
 
-        // Enrich chunks with LLM-extracted keywords (adds excerpt_keywords metadata)
+        // Enrich chunks with LLM-extracted keywords — progress tracked per chunk
         log.debug("[INDEX] {} 키워드 추출 중 ({}개 청크, 병렬)...", filename, tagged.size());
         Semaphore llmGate = new Semaphore(props.indexingSafe().maxConcurrentLlmCalls());
-        List<Document> enriched = enrichParallel(tagged, llmGate);
+        List<Document> enriched = enrichParallel(tagged, llmGate, filename, onProgress);
 
         // Add to vector store
         log.debug("[INDEX] {} 벡터 스토어 저장 중 ({}개 청크)...", filename, enriched.size());
+        onProgress.accept(IndexingProgressEvent.of("storing", enriched.size(), enriched.size(), filename,
+                "벡터 DB 저장 중..."));
         VectorStore store = vectorStoreRegistry.getStore(version);
         store.add(enriched);
 
@@ -168,6 +187,11 @@ public class RagService {
     }
 
     public SyncResult syncDirectory(String version) throws IOException {
+        return syncDirectory(version, event -> {});
+    }
+
+    public SyncResult syncDirectory(String version,
+                                    Consumer<IndexingProgressEvent> onProgress) throws IOException {
         log.info("[SYNC] 디렉터리 동기화 시작 (version={})", version);
         long t0 = System.currentTimeMillis();
 
@@ -205,11 +229,16 @@ public class RagService {
         filesToIndex.forEach((name, fe) ->
                 log.debug("[SYNC]   대상: {} (stale={})", name, fe.staleDocId()));
 
+        int totalFiles = filesToIndex.size();
+        onProgress.accept(IndexingProgressEvent.of("sync_start", 0, totalFiles, "sync",
+                "파일 " + totalFiles + "개 인덱싱 예정"));
+
         // Phase 2 (parallel): index each file
         int fileConcurrency = props.indexingSafe().maxConcurrentFiles();
         Semaphore llmGate = new Semaphore(props.indexingSafe().maxConcurrentLlmCalls());
         List<String> indexed = new CopyOnWriteArrayList<>();
         List<String> updated = new CopyOnWriteArrayList<>();
+        AtomicInteger doneFiles = new AtomicInteger(0);
 
         try (ExecutorService filePool = Executors.newFixedThreadPool(
                 fileConcurrency, Thread.ofVirtual().factory())) {
@@ -221,6 +250,9 @@ public class RagService {
                     } catch (Exception ex) {
                         log.error("[SYNC] 병렬 인덱싱 실패: {}", e.getKey(), ex);
                     }
+                    int k = doneFiles.incrementAndGet();
+                    onProgress.accept(IndexingProgressEvent.of("sync_file_done", k, totalFiles,
+                            e.getKey(), k + "/" + totalFiles + " 완료"));
                 }, filePool))
                 .toList();
             CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
@@ -349,12 +381,23 @@ public class RagService {
     }
 
     private List<Document> enrichParallel(List<Document> chunks, Semaphore llmGate) {
+        return enrichParallel(chunks, llmGate, "", event -> {});
+    }
+
+    private List<Document> enrichParallel(List<Document> chunks, Semaphore llmGate,
+                                          String filename, Consumer<IndexingProgressEvent> onProgress) {
+        int total = chunks.size();
+        AtomicInteger done = new AtomicInteger(0);
         try (var exec = Executors.newVirtualThreadPerTaskExecutor()) {
             return chunks.stream()
                 .map(chunk -> CompletableFuture.supplyAsync(() -> {
                     llmGate.acquireUninterruptibly();
                     try {
-                        return enrichKeywords(chunk);
+                        Document result = enrichKeywords(chunk);
+                        int k = done.incrementAndGet();
+                        onProgress.accept(IndexingProgressEvent.of("enriching", k, total, filename,
+                                k + "/" + total + " 청크 키워드 추출 완료"));
+                        return result;
                     } finally {
                         llmGate.release();
                     }

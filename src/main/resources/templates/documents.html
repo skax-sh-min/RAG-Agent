@@ -61,17 +61,23 @@
                         <i class="bi bi-upload me-1"></i>
                         <span th:text="#{doc.btn.upload}">Upload &amp; Index</span>
                     </button>
-                    <button id="sync-btn" class="btn btn-sm btn-outline-secondary"
-                            hx-post="/ui/documents/sync"
-                            hx-include="#version-input"
-                            hx-target="#toast-container"
-                            hx-swap="afterbegin"
-                            hx-on::after-request="htmx.ajax('GET','/ui/documents/list',{target:'#doc-table-body',swap:'outerHTML'})">
-                        <span class="htmx-indicator spinner-border spinner-border-sm me-1" role="status"></span>
+                    <button id="sync-btn" class="btn btn-sm btn-outline-secondary" onclick="startSync()">
+                        <span id="sync-spinner" class="spinner-border spinner-border-sm me-1 d-none" role="status"></span>
                         <i class="bi bi-arrow-repeat me-1"></i>
                         <span th:text="#{doc.btn.sync}">Sync Folder</span>
                     </button>
                 </div>
+                <!-- Sync progress (shown only during sync) -->
+                <div id="sync-progress" class="d-none mt-3">
+                    <div class="d-flex align-items-center gap-2 mb-1">
+                        <span class="spinner-border spinner-border-sm text-secondary flex-shrink-0"></span>
+                        <span id="sync-stage-label" class="small text-muted"></span>
+                    </div>
+                    <div class="progress" style="height: 5px;">
+                        <div id="sync-progress-bar" class="progress-bar" style="width: 0%; transition: width 0.4s;"></div>
+                    </div>
+                </div>
+
             </div>
         </div>
 
@@ -119,7 +125,7 @@
     };
 </script>
 <script>
-    /* Drop zone interaction */
+    /* ── Drop zone ───────────────────────────────────────────────────────── */
     const dropZone  = document.getElementById('drop-zone');
     const fileInput = document.getElementById('file-input');
     let selectedFiles = [];
@@ -148,9 +154,11 @@
         const tbody = document.getElementById('file-list-body');
         tbody.innerHTML = selectedFiles.map((f, i) => `
             <tr id="file-row-${i}">
-                <td class="text-truncate" style="max-width:300px;">${escHtml(f.name)}</td>
+                <td class="text-truncate" style="max-width:260px;">${escHtml(f.name)}</td>
                 <td>${(f.size / 1024 / 1024).toFixed(1)} MB</td>
-                <td id="file-status-${i}"><span class="text-muted">⏳ ${I18N.statusWaiting}</span></td>
+                <td id="file-status-${i}" style="min-width:260px;">
+                    <span class="text-muted">⏳ ${I18N.statusWaiting}</span>
+                </td>
                 <td><button class="btn btn-sm btn-link text-danger p-0"
                             onclick="removeFile(${i})">✕</button></td>
             </tr>`).join('');
@@ -172,6 +180,7 @@
         uploadFiles([...selectedFiles], version);
     });
 
+    /* ── Upload orchestration ────────────────────────────────────────────── */
     async function uploadFiles(files, version) {
         const btn = document.getElementById('upload-btn');
         btn.disabled = true;
@@ -187,10 +196,13 @@
         for (let i = 0; i < total; i++) {
             setFileStatus(i, 'uploading');
             try {
-                const result = await uploadWithProgress(files[i], version, (pct) => {
-                    setFileProgress(i, pct);
-                    if (pct === 100) setFileStatus(i, 'indexing');
-                });
+                const result = await uploadWithProgress(files[i], version,
+                    pct => {                                    // XHR upload progress
+                        setUploadBar(i, pct);
+                        if (pct === 100) setFileStatus(i, 'queued');
+                    },
+                    evt => setIndexingStage(i, evt)            // SSE indexing progress
+                );
                 setFileStatus(i, 'done', result.chunks);
                 appendDocRow(result);
                 showToast(`${escHtml(result.filename)} ${I18N.uploadSuccess} (${result.chunks} ${I18N.uploadChunks})`, 'success');
@@ -206,7 +218,12 @@
         htmx.ajax('GET', '/ui/documents/list', {target: '#doc-table-body', swap: 'outerHTML'});
     }
 
-    function uploadWithProgress(file, version, onProgress) {
+    /**
+     * Phase 1 — XHR: POST file → receive {taskId} (HTTP 202).
+     * Phase 2 — SSE: subscribe to /ui/documents/progress/{taskId} for chunk-level events.
+     * Resolves with DocumentInfo on 'done', rejects on 'error'.
+     */
+    function uploadWithProgress(file, version, onUploadPct, onStage) {
         return new Promise((resolve, reject) => {
             const xhr  = new XMLHttpRequest();
             const form = new FormData();
@@ -214,17 +231,19 @@
             form.append('version', version);
 
             xhr.upload.addEventListener('progress', e => {
-                if (e.lengthComputable) onProgress(Math.round(e.loaded / e.total * 100));
+                if (e.lengthComputable) onUploadPct(Math.round(e.loaded / e.total * 100));
             });
-            xhr.upload.addEventListener('load', () => onProgress(100));
+            xhr.upload.addEventListener('load', () => onUploadPct(100));
 
             xhr.addEventListener('load', () => {
-                if (xhr.status >= 200 && xhr.status < 300) {
-                    resolve(JSON.parse(xhr.responseText));
+                if (xhr.status === 202) {
+                    const { taskId } = JSON.parse(xhr.responseText);
+                    subscribeIndexingProgress(taskId, onStage, resolve, reject);
                 } else if (xhr.status === 503) {
                     reject(new Error(I18N.chromaUnavailable));
                 } else {
-                    reject(new Error(xhr.status === 400 ? I18N.fileEmpty : `${I18N.serverError} (${xhr.status})`));
+                    reject(new Error(xhr.status === 400 ? I18N.fileEmpty
+                            : `${I18N.serverError} (${xhr.status})`));
                 }
             });
             xhr.addEventListener('error', () => reject(new Error(I18N.networkError)));
@@ -235,23 +254,141 @@
         });
     }
 
+    function subscribeIndexingProgress(taskId, onStage, resolve, reject) {
+        const sse = new EventSource(`/ui/documents/progress/${taskId}`);
+        sse.addEventListener('progress', e => {
+            const evt = JSON.parse(e.data);
+            onStage(evt);
+            if (evt.stage === 'done') {
+                sse.close();
+                resolve(evt.docResult);
+            } else if (evt.stage === 'error') {
+                sse.close();
+                reject(new Error(evt.message || '인덱싱 오류'));
+            }
+        });
+        sse.onerror = () => {
+            sse.close();
+            reject(new Error('SSE 연결 실패'));
+        };
+    }
+
+    /* ── File row status helpers ─────────────────────────────────────────── */
     function setFileStatus(i, status, extra) {
         const el = document.getElementById(`file-status-${i}`);
         if (!el) return;
-        const statusMap = {
-            uploading: `<span class="text-primary">🔄 ${I18N.statusUploading}</span><div id="file-prog-${i}" class="progress mt-1" style="height:4px;"><div class="progress-bar" style="width:0%;transition:width 0.2s;"></div></div>`,
-            indexing:  `<span class="text-info">⚙️ ${I18N.statusIndexing}</span>`,
+        const map = {
+            uploading: `<span class="text-primary">🔄 ${I18N.statusUploading}</span>
+                        <div id="upload-bar-${i}" class="progress mt-1" style="height:4px;">
+                            <div class="progress-bar" style="width:0%;transition:width 0.2s;"></div>
+                        </div>`,
+            queued:    `<span class="text-info">⏳ 인덱싱 대기 중...</span>`,
             done:      `<span class="text-success">✅ ${PAGE_I18N.statusDone} (${extra} ${PAGE_I18N.chunks})</span>`,
             error:     `<span class="text-danger">❌ ${extra}</span>`,
         };
-        el.innerHTML = statusMap[status] ?? el.innerHTML;
+        if (map[status]) el.innerHTML = map[status];
     }
 
-    function setFileProgress(i, pct) {
-        const bar = document.querySelector(`#file-prog-${i} .progress-bar`);
+    function setUploadBar(i, pct) {
+        const bar = document.querySelector(`#upload-bar-${i} .progress-bar`);
         if (bar) bar.style.width = pct + '%';
     }
 
+    /**
+     * Renders the indexing stage inside the file row.
+     * Stage visual: loading → chunking → enriching (chunk progress bar) → storing
+     */
+    function setIndexingStage(i, evt) {
+        const el = document.getElementById(`file-status-${i}`);
+        if (!el) return;
+
+        const pct = evt.total > 0 ? Math.round(evt.done / evt.total * 100) : 0;
+
+        const stageHtml = {
+            loading:   () => `<span class="text-info">📄 문서 로드 중...</span>`,
+            chunking:  () => evt.total > 0
+                ? `<span class="text-info">✂️ 청크 분할 완료 <span class="fw-semibold">(${evt.total}개)</span></span>`
+                : `<span class="text-info">✂️ 청크 분할 중...</span>`,
+            enriching: () => `
+                <div class="d-flex justify-content-between align-items-center small mb-1">
+                    <span class="text-info">🔑 키워드 추출 중</span>
+                    <span class="text-muted fw-semibold">${evt.done} / ${evt.total}</span>
+                </div>
+                <div class="progress" style="height:5px;">
+                    <div class="progress-bar bg-info"
+                         style="width:${pct}%; transition:width 0.3s;"></div>
+                </div>`,
+            storing:   () => `<span class="text-info">💾 벡터 DB 저장 중...</span>`,
+        };
+
+        const fn = stageHtml[evt.stage];
+        if (fn) el.innerHTML = fn();
+    }
+
+    /* ── Sync ────────────────────────────────────────────────────────────── */
+    async function startSync() {
+        const version  = document.getElementById('version-input').value || 'latest';
+        const btn      = document.getElementById('sync-btn');
+        const spinner  = document.getElementById('sync-spinner');
+        const progress = document.getElementById('sync-progress');
+        const label    = document.getElementById('sync-stage-label');
+        const bar      = document.getElementById('sync-progress-bar');
+
+        btn.disabled = true;
+        spinner.classList.remove('d-none');
+        progress.classList.remove('d-none');
+        label.textContent = '동기화 준비 중...';
+        bar.style.width = '0%';
+
+        try {
+            const res = await fetch('/ui/documents/sync', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: `version=${encodeURIComponent(version)}`
+            });
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const { taskId } = await res.json();
+
+            await new Promise((resolve, reject) => {
+                const sse = new EventSource(`/ui/documents/progress/${taskId}`);
+                sse.addEventListener('progress', e => {
+                    const evt = JSON.parse(e.data);
+
+                    if (evt.stage === 'sync_start') {
+                        if (evt.total === 0) {
+                            label.textContent = '변경 파일 없음';
+                            bar.style.width = '100%';
+                        } else {
+                            label.textContent = `파일 ${evt.total}개 인덱싱 시작...`;
+                        }
+                    } else if (evt.stage === 'sync_file_done') {
+                        const pct = evt.total > 0 ? Math.round(evt.done / evt.total * 100) : 100;
+                        bar.style.width = `${pct}%`;
+                        label.textContent = `${evt.done} / ${evt.total} 완료: ${evt.filename}`;
+                    } else if (evt.stage === 'sync_done') {
+                        sse.close();
+                        bar.style.width = '100%';
+                        const s = evt.syncSummary;
+                        showToast(`동기화 완료 · 신규 ${s.indexed} · 갱신 ${s.updated} · 삭제 ${s.deleted}`, 'success');
+                        htmx.ajax('GET', '/ui/documents/list', {target: '#doc-table-body', swap: 'outerHTML'});
+                        resolve();
+                    } else if (evt.stage === 'error') {
+                        sse.close();
+                        reject(new Error(evt.message || '동기화 오류'));
+                    }
+                });
+                sse.onerror = () => { sse.close(); reject(new Error('SSE 연결 실패')); };
+            });
+        } catch (err) {
+            showToast(`동기화 실패: ${escHtml(err.message)}`, 'danger');
+        } finally {
+            btn.disabled = false;
+            spinner.classList.add('d-none');
+            progress.classList.add('d-none');
+        }
+    }
+
+    /* ── Shared helpers ──────────────────────────────────────────────────── */
     function appendDocRow(doc) {
         const tbody = document.getElementById('doc-table-body');
         if (!tbody) return;
@@ -275,11 +412,6 @@
     function escHtml(s) {
         return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
     }
-
-    /* Sync button version sync */
-    document.getElementById('sync-btn').addEventListener('htmx:configRequest', function(e) {
-        e.detail.parameters['version'] = document.getElementById('version-input').value || 'latest';
-    });
 </script>
 </th:block>
 

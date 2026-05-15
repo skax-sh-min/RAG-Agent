@@ -42,6 +42,7 @@ public class WebController {
     private final AgentService agentService;
     private final StreamingAgentService streamingAgentService;
     private final RagService ragService;
+    private final IndexingProgressService progressService;
     private final ThreadMetaService threadMetaService;
     private final MemoryService memoryService;
     private final AppProperties props;
@@ -52,12 +53,14 @@ public class WebController {
     public WebController(AgentService agentService,
                          StreamingAgentService streamingAgentService,
                          RagService ragService,
+                         IndexingProgressService progressService,
                          ThreadMetaService threadMetaService, MemoryService memoryService,
                          AppProperties props, LlmUsageRepository usageRepo,
                          CircuitBreaker circuitBreaker, LlmRouter llmRouter) {
         this.agentService = agentService;
         this.streamingAgentService = streamingAgentService;
         this.ragService = ragService;
+        this.progressService = progressService;
         this.threadMetaService = threadMetaService;
         this.memoryService = memoryService;
         this.props = props;
@@ -219,9 +222,14 @@ public class WebController {
 
     // ── Document actions ──────────────────────────────────────────────────
 
+    /**
+     * Accepts the file synchronously (transfer + magic-byte check), then starts indexing
+     * asynchronously on a virtual thread. Returns {taskId} immediately (HTTP 202) so the
+     * client can subscribe to GET /ui/documents/progress/{taskId} for chunk-level events.
+     */
     @PostMapping("/ui/documents/upload")
     @ResponseBody
-    public ResponseEntity<DocumentInfo> uploadDocument(
+    public ResponseEntity<Map<String, String>> uploadDocument(
             @RequestParam MultipartFile file,
             @RequestParam(defaultValue = "latest") String version) {
         if (file.isEmpty()) {
@@ -233,30 +241,51 @@ public class WebController {
             log.warn("Rejected upload: unsupported extension ({})", originalFilename);
             return ResponseEntity.unprocessableEntity().build();
         }
+
+        // Transfer to temp file synchronously (fast), validate magic bytes, then index async
+        Path tmp;
         try {
-            Path tmp = Files.createTempFile("rag-upload-", "-" + originalFilename);
-            try {
-                file.transferTo(tmp);
-                String ext = originalFilename.contains(".")
-                        ? originalFilename.substring(originalFilename.lastIndexOf('.'))
-                        : "";
-                if (!FileTypeDetector.matches(tmp, ext)) {
-                    log.warn("Magic-byte mismatch for {}", originalFilename);
-                    return ResponseEntity.unprocessableEntity().build();
-                }
-                DocumentInfo info = ragService.indexDocument(tmp, originalFilename, version);
-                return ResponseEntity.ok(info);
-            } finally {
+            tmp = Files.createTempFile("rag-upload-", "-" + originalFilename);
+            file.transferTo(tmp);
+            String ext = originalFilename.contains(".")
+                    ? originalFilename.substring(originalFilename.lastIndexOf('.')) : "";
+            if (!FileTypeDetector.matches(tmp, ext)) {
                 Files.deleteIfExists(tmp);
+                log.warn("Magic-byte mismatch for {}", originalFilename);
+                return ResponseEntity.unprocessableEntity().build();
             }
         } catch (Exception e) {
-            if (isChromaDown(e)) {
-                log.warn("[CHROMA] ChromaDB not reachable during upload: {}", e.getMessage());
-                return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).build();
-            }
-            log.error("Upload error", e);
+            log.error("Upload transfer error", e);
             return ResponseEntity.internalServerError().build();
         }
+
+        String taskId = progressService.newTaskId();
+        final Path tmpPath = tmp;
+        final String filename = originalFilename;
+        final String ver = version;
+
+        Thread.ofVirtual().name("idx-upload-" + taskId).start(() -> {
+            try {
+                DocumentInfo info = ragService.indexDocument(tmpPath, filename, ver,
+                        event -> progressService.publish(taskId, event));
+                progressService.publish(taskId, IndexingProgressEvent.done(info));
+            } catch (Exception e) {
+                String msg = isChromaDown(e) ? "ChromaDB 연결 실패" : e.getMessage();
+                log.error("Async index error for {}", filename, e);
+                progressService.publish(taskId, IndexingProgressEvent.error(filename, msg));
+            } finally {
+                try { Files.deleteIfExists(tmpPath); } catch (Exception ignored) {}
+            }
+        });
+
+        return ResponseEntity.accepted().body(Map.of("taskId", taskId));
+    }
+
+    /** SSE stream for indexing progress. Client subscribes immediately after receiving taskId. */
+    @GetMapping(value = "/ui/documents/progress/{taskId}", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    @ResponseBody
+    public SseEmitter indexingProgress(@PathVariable String taskId) {
+        return progressService.subscribe(taskId);
     }
 
     private static boolean isChromaDown(Throwable t) {
@@ -267,29 +296,29 @@ public class WebController {
         return false;
     }
 
+    /**
+     * Starts directory sync asynchronously on a virtual thread.
+     * Returns {taskId} (HTTP 202); client subscribes to SSE for per-file progress.
+     */
     @PostMapping("/ui/documents/sync")
-    public String syncDocuments(
-            @RequestParam(defaultValue = "latest") String version,
-            Model model) {
-        try {
-            SyncResult result = ragService.syncDirectory(version);
-            model.addAttribute("success", true);
-            model.addAttribute("indexed", result.indexed());
-            model.addAttribute("updated", result.updated());
-            model.addAttribute("deleted", result.deleted());
-        } catch (Exception e) {
-            if (isChromaDown(e)) {
-                log.warn("[CHROMA] ChromaDB not reachable during sync: {}", e.getMessage());
-                model.addAttribute("chromaDown", true);
-            } else {
+    @ResponseBody
+    public ResponseEntity<Map<String, String>> syncDocuments(
+            @RequestParam(defaultValue = "latest") String version) {
+        String taskId = progressService.newTaskId();
+
+        Thread.ofVirtual().name("idx-sync-" + taskId).start(() -> {
+            try {
+                SyncResult result = ragService.syncDirectory(version,
+                        event -> progressService.publish(taskId, event));
+                progressService.publish(taskId, IndexingProgressEvent.syncDone(result));
+            } catch (Exception e) {
+                String msg = isChromaDown(e) ? "ChromaDB 연결 실패" : e.getMessage();
                 log.error("Sync error", e);
+                progressService.publish(taskId, IndexingProgressEvent.error("sync", msg));
             }
-            model.addAttribute("success", false);
-            model.addAttribute("indexed", List.of());
-            model.addAttribute("updated", List.of());
-            model.addAttribute("deleted", List.of());
-        }
-        return "fragments/sync-result :: result";
+        });
+
+        return ResponseEntity.accepted().body(Map.of("taskId", taskId));
     }
 
     @DeleteMapping("/ui/documents/{docId}")
