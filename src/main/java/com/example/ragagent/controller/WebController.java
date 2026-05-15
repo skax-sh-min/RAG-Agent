@@ -26,6 +26,8 @@ import org.springframework.web.multipart.MultipartFile;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -161,6 +163,9 @@ public class WebController {
 
             threadMetaService.generateTitleAsync(form.threadId(), form.version(), form.question());
 
+            String receivedAt = DateTimeFormatter.ofPattern("HH:mm")
+                    .withZone(ZoneId.systemDefault()).format(Instant.now());
+            model.addAttribute("receivedAt", receivedAt);
             model.addAttribute("answer", resp.answer());
             model.addAttribute("questionType", resp.questionType());
             model.addAttribute("sources", resp.sources());

@@ -34,6 +34,17 @@ public class SqliteMemoryRepository implements MemoryRepository {
                 """);
         jdbc.execute(
                 "CREATE INDEX IF NOT EXISTS idx_thread_id ON conversation_turns(thread_id)");
+        // Add metadata columns (ALTER TABLE fails silently if column already exists)
+        for (String ddl : List.of(
+                "ALTER TABLE conversation_turns ADD COLUMN asked_at TEXT",
+                "ALTER TABLE conversation_turns ADD COLUMN input_tokens INTEGER DEFAULT 0",
+                "ALTER TABLE conversation_turns ADD COLUMN output_tokens INTEGER DEFAULT 0",
+                "ALTER TABLE conversation_turns ADD COLUMN elapsed_ms INTEGER DEFAULT 0",
+                "ALTER TABLE conversation_turns ADD COLUMN provider TEXT",
+                "ALTER TABLE conversation_turns ADD COLUMN llm_calls INTEGER DEFAULT 0"
+        )) {
+            try { jdbc.execute(ddl); } catch (Exception ignored) {}
+        }
         jdbc.execute("""
                 CREATE TABLE IF NOT EXISTS image_descriptions (
                     image_path  TEXT    PRIMARY KEY,
@@ -75,10 +86,14 @@ public class SqliteMemoryRepository implements MemoryRepository {
     }
 
     @Override
-    public void addTurn(String threadId, String question, String answer) {
+    public void addTurn(String threadId, String question, String answer,
+                        String askedAt, int inputTokens, int outputTokens,
+                        int elapsedMs, String provider, int llmCalls) {
         jdbc.update(
-                "INSERT INTO conversation_turns (thread_id, question, answer) VALUES (?, ?, ?)",
-                threadId, question, answer);
+                "INSERT INTO conversation_turns " +
+                "(thread_id, question, answer, asked_at, input_tokens, output_tokens, elapsed_ms, provider, llm_calls) " +
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                threadId, question, answer, askedAt, inputTokens, outputTokens, elapsedMs, provider, llmCalls);
     }
 
     @Override
@@ -89,12 +104,19 @@ public class SqliteMemoryRepository implements MemoryRepository {
     @Override
     public List<Turn> getTurns(String threadId) {
         return jdbc.query(
-                "SELECT question, answer, created_at FROM conversation_turns " +
-                "WHERE thread_id = ? ORDER BY id ASC",
+                "SELECT question, answer, asked_at, created_at, " +
+                "input_tokens, output_tokens, elapsed_ms, provider, llm_calls " +
+                "FROM conversation_turns WHERE thread_id = ? ORDER BY id ASC",
                 (rs, n) -> new Turn(
                         rs.getString("question"),
                         rs.getString("answer"),
-                        rs.getString("created_at")),
+                        rs.getString("asked_at"),
+                        rs.getString("created_at"),
+                        rs.getInt("input_tokens"),
+                        rs.getInt("output_tokens"),
+                        rs.getInt("elapsed_ms"),
+                        rs.getString("provider"),
+                        rs.getInt("llm_calls")),
                 threadId);
     }
 }

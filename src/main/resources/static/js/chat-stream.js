@@ -29,6 +29,10 @@
             .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
     }
 
+    function nowTimeStr() {
+        return new Date().toLocaleTimeString('ko-KR', {hour: '2-digit', minute: '2-digit', hour12: false});
+    }
+
     function genId() {
         return crypto.randomUUID().replace(/-/g, '').substring(0, 8);
     }
@@ -41,10 +45,14 @@
     // ── DOM builders ─────────────────────────────────────────────────────────
 
     function appendUserBubble(question) {
+        const timeStr = nowTimeStr();
         const wrap = document.createElement('div');
-        wrap.className = 'd-flex justify-content-end mb-3';
+        wrap.className = 'd-flex justify-content-end mb-3 align-items-end';
         wrap.innerHTML =
+            `<div class="d-flex flex-column align-items-end me-1">` +
             `<div class="bubble-user p-3">${escHtml(question)}</div>` +
+            `<small class="text-muted" style="font-size:0.68rem; margin-top:2px;">${escHtml(timeStr)}</small>` +
+            `</div>` +
             `<i class="bi bi-person-circle fs-5 text-secondary ms-2 mt-1 flex-shrink-0"></i>`;
         document.getElementById('chat-messages').appendChild(wrap);
     }
@@ -183,11 +191,13 @@
             if (data.grounded === true)   parts.push(`<span class="badge bg-success me-1">검증됨</span>`);
             else if (data.grounded === false) parts.push(`<span class="badge bg-warning text-dark me-1">미검증</span>`);
             if (data.premiumUpgraded)     parts.push(`<span class="badge-upgraded ms-1">⬆ ${escHtml(data.premiumUpgraded)}</span>`);
-            if (data.usedProvider)        parts.push(escHtml(data.usedProvider));
-            if (data.elapsedMs != null)   parts.push(`${(data.elapsedMs / 1000).toFixed(1)}s`);
+            if (data.usedProvider)        parts.push(`🤖 ${escHtml(data.usedProvider)}`);
+            if (data.elapsedMs != null)   parts.push(`⏱ ${(data.elapsedMs / 1000).toFixed(1)}s`);
             const inp = data.inputTokens  || 0;
             const out = data.outputTokens || 0;
-            if (inp || out)               parts.push(`↑${inp} ↓${out} tok`);
+            if (inp || out)               parts.push(`📥 ${inp} · 📤 ${out} · 합계 ${inp + out} tok`);
+            if (data.llmCalls)            parts.push(`🔄 ${data.llmCalls}`);
+            parts.push(`🕐 ${nowTimeStr()}`);
             metaEl.innerHTML = parts.join(' · ');
         }
 

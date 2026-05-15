@@ -17,6 +17,9 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.time.Instant;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -64,8 +67,12 @@ public class StreamingAgentService {
      * Runs the full agent pipeline in a Virtual Thread.
      * Caller should already have called threadMetaService.getOrCreate() before this.
      */
+    private static final DateTimeFormatter DB_FMT =
+            DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss").withZone(ZoneOffset.UTC);
+
     public void run(ChatForm form, SseEmitter emitter) {
         long startNs = System.nanoTime();
+        String askedAt = DB_FMT.format(Instant.now());
         SseGraphListener listener = null;
         ScheduledFuture<?> heartbeat = heartbeatScheduler.scheduleAtFixedRate(() -> {
             try { emitter.send(SseEmitter.event().comment("heartbeat")); }
@@ -99,6 +106,13 @@ public class StreamingAgentService {
             AgentState result = agentGraph.runStreaming(initial, listener);
 
             long elapsedMs = (System.nanoTime() - startNs) / 1_000_000;
+
+            if (result.answer() != null && !result.answer().isBlank()) {
+                memoryService.addTurn(form.threadId(), form.question(), result.answer(),
+                        askedAt, result.totalInputTokens(), result.totalOutputTokens(),
+                        (int) elapsedMs, result.usedProvider(), result.llmCallCount());
+            }
+
             sendEvent(emitter, "done", buildDonePayload(result, elapsedMs));
             emitter.complete();
 
@@ -122,7 +136,8 @@ public class StreamingAgentService {
                 if (!partial.isBlank()) {
                     try {
                         memoryService.addTurn(form.threadId(), form.question(),
-                                partial + "\n[오류로 중단됨]");
+                                partial + "\n[오류로 중단됨]",
+                                askedAt, 0, 0, 0, null, 0);
                         log.debug("[B-13] partial answer persisted ({} chars) thread={}",
                                 partial.length(), form.threadId());
                     } catch (Exception persistEx) {

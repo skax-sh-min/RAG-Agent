@@ -10,6 +10,9 @@ import org.slf4j.LoggerFactory;
 import org.springframework.context.i18n.LocaleContextHolder;
 import org.springframework.stereotype.Service;
 
+import java.time.Instant;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
 import java.util.Locale;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
@@ -63,9 +66,18 @@ public class AgentService {
             }
         }
 
+        String askedAt = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
+                .withZone(ZoneOffset.UTC).format(Instant.now());
         long startNano = System.nanoTime();
         AgentState result = agentGraph.run(initial);
-        double elapsedSeconds = (System.nanoTime() - startNano) / 1_000_000_000.0;
+        long elapsedMs = (System.nanoTime() - startNano) / 1_000_000;
+        double elapsedSeconds = elapsedMs / 1000.0;
+
+        if (result.answer() != null && !result.answer().isBlank()) {
+            memoryService.addTurn(request.threadId(), request.question(), result.answer(),
+                    askedAt, result.totalInputTokens(), result.totalOutputTokens(),
+                    (int) elapsedMs, result.usedProvider(), result.llmCallCount());
+        }
 
         return new ChatResponse(
                 result.answer(),

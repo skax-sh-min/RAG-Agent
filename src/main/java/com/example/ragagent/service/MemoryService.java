@@ -26,8 +26,11 @@ public class MemoryService {
         return repository.getHistory(threadId, maxConversationChars);
     }
 
-    public void addTurn(String threadId, String question, String answer) {
-        repository.addTurn(threadId, question, answer);
+    public void addTurn(String threadId, String question, String answer,
+                        String askedAt, int inputTokens, int outputTokens,
+                        int elapsedMs, String provider, int llmCalls) {
+        repository.addTurn(threadId, question, answer,
+                askedAt, inputTokens, outputTokens, elapsedMs, provider, llmCalls);
     }
 
     public void clearHistory(String threadId) {

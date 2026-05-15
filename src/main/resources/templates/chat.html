@@ -120,14 +120,38 @@
             <div id="chat-messages" class="flex-grow-1 p-3">
                 <!-- Server-rendered previous turns (restored from conversation_turns) -->
                 <th:block th:if="${turns != null}" th:each="turn : ${turns}">
-                    <div class="d-flex justify-content-end mb-3">
-                        <div class="bubble-user p-3" th:text="${turn.question}"></div>
+                    <div class="d-flex justify-content-end mb-3 align-items-end">
+                        <div class="d-flex flex-column align-items-end me-1">
+                            <div class="bubble-user p-3" th:text="${turn.question}"></div>
+                            <small class="text-muted msg-time"
+                                   th:if="${turn.askedAt != null}"
+                                   th:attr="data-utc-time=${turn.askedAt}"
+                                   style="font-size:0.68rem; margin-top:2px;"></small>
+                        </div>
                         <i class="bi bi-person-circle fs-5 text-secondary ms-2 mt-1 flex-shrink-0"></i>
                     </div>
                     <div class="d-flex align-items-start mb-3">
                         <i class="bi bi-robot fs-5 text-secondary me-2 mt-1 flex-shrink-0"></i>
                         <div class="bubble-assistant p-3 flex-grow-1">
                             <div class="md-content" th:attr="data-md=${turn.answer}"></div>
+                            <div class="mt-1 text-muted"
+                                 style="font-size:0.68rem;"
+                                 th:if="${turn.provider != null or turn.answeredAt != null}">
+                                <span th:if="${turn.provider != null}">🤖 <span th:text="${turn.provider}"></span> &nbsp;·&nbsp;</span>
+                                <span th:if="${turn.elapsedMs > 0}">⏱ <span th:text="${#numbers.formatDecimal(turn.elapsedMs / 1000.0, 1, 1)}"></span>s &nbsp;·&nbsp;</span>
+                                <span th:if="${turn.inputTokens > 0 or turn.outputTokens > 0}">
+                                    📥 <span th:text="${turn.inputTokens}"></span>
+                                    &nbsp;·&nbsp;
+                                    📤 <span th:text="${turn.outputTokens}"></span>
+                                    &nbsp;·&nbsp;
+                                    합계 <span th:text="${turn.inputTokens + turn.outputTokens}"></span> tok
+                                    &nbsp;·&nbsp;
+                                </span>
+                                <span th:if="${turn.llmCalls > 0}">🔄 <span th:text="${turn.llmCalls}"></span> &nbsp;·&nbsp;</span>
+                                <span class="msg-time"
+                                      th:if="${turn.answeredAt != null}"
+                                      th:attr="data-utc-time=${turn.answeredAt}">🕐</span>
+                            </div>
                         </div>
                     </div>
                 </th:block>
@@ -255,10 +279,14 @@
     chatForm.addEventListener('htmx:beforeRequest', function () {
         const q = questionInput.value.trim();
         if (q) {
+            const timeStr = new Date().toLocaleTimeString('ko-KR', {hour: '2-digit', minute: '2-digit', hour12: false});
             const bubble = document.createElement('div');
-            bubble.className = 'd-flex justify-content-end mb-3';
+            bubble.className = 'd-flex justify-content-end mb-3 align-items-end';
             bubble.innerHTML =
+                `<div class="d-flex flex-column align-items-end me-1">` +
                 `<div class="bubble-user p-3">${escHtml(q)}</div>` +
+                `<small class="text-muted" style="font-size:0.68rem; margin-top:2px;">${escHtml(timeStr)}</small>` +
+                `</div>` +
                 `<i class="bi bi-person-circle fs-5 text-secondary ms-2 mt-1 flex-shrink-0"></i>`;
             chatMessages.appendChild(bubble);
         }
@@ -370,6 +398,23 @@
         const wrapper = document.getElementById('thread-list-wrapper');
         if (wrapper) setTimeout(() => htmx.trigger(wrapper, 'refreshThreadListDelayed'), 5000);
     });
+
+    /* ── 복원된 turn 시간 포맷팅 (UTC DB 시간 → 로컬 HH:MM) ─────────────── */
+    function applyMsgTimes() {
+        document.querySelectorAll('.msg-time[data-utc-time]').forEach(function (el) {
+            const raw = el.getAttribute('data-utc-time');
+            if (!raw) return;
+            try {
+                const d = new Date(raw.replace(' ', 'T') + 'Z');
+                if (!isNaN(d)) {
+                    const t = d.toLocaleTimeString('ko-KR', {hour: '2-digit', minute: '2-digit', hour12: false});
+                    el.textContent = (el.textContent.includes('🕐') ? '🕐 ' : '') + t;
+                }
+            } catch (e) {}
+            el.removeAttribute('data-utc-time');
+        });
+    }
+    applyMsgTimes();
 
     /* ── 서버 렌더 이전 turn 마크다운 처리 + syntax highlight + 초기 스크롤 ── */
     document.querySelectorAll('.md-content[data-md]').forEach(function (el) {
