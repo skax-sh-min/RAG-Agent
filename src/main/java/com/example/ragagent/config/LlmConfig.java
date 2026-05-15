@@ -11,6 +11,7 @@ import org.springframework.ai.openai.api.OpenAiApi;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
+import org.springframework.retry.support.RetryTemplate;
 
 import java.util.Comparator;
 import java.util.List;
@@ -51,6 +52,10 @@ public class LlmConfig {
                                     connectTimeoutSeconds,
                                     readTimeoutSeconds))
                             .build();
+                    // Disable Spring AI's DEFAULT_RETRY_TEMPLATE (maxAttempts=10, retries on
+                    // ResourceAccessException which includes SocketTimeoutException). Without this,
+                    // a single slow LLM call sends the same request up to 10 times.
+                    // LlmRouter.executeWithTracking() handles retries at the router level instead.
                     ChatModel rawModel = OpenAiChatModel.builder()
                             .openAiApi(api)
                             .defaultOptions(OpenAiChatOptions.builder()
@@ -58,6 +63,7 @@ public class LlmConfig {
                                     .temperature(0.0)
                                     .maxTokens(6000)
                                     .build())
+                            .retryTemplate(RetryTemplate.builder().maxAttempts(1).build())
                             .build();
                     ChatModel model = new LoggingChatModel(rawModel, cfg.name(),
                             resolvedUrl, cfg.apiKey(), cfg.model());

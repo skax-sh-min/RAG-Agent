@@ -56,7 +56,7 @@ class AnswerServiceTest {
         llmRouter = mock(LlmRouter.class);
         AppProperties props = new AppProperties(
                 "./data", MAX_RETRY, 8000, 800, 100, 7,
-                null, null, null, null, null);
+                null, null, null, null, null, null);
         MessageSource messageSource = mock(MessageSource.class);
         when(messageSource.getMessage(anyString(), any(), any(Locale.class))).thenReturn("prompt");
         service = new AnswerService(chatClient, llmRouter, props, messageSource);
@@ -196,7 +196,7 @@ class AnswerServiceTest {
         when(llmRouter.findProviderName(any(), eq(RoutingMode.PROGRESSIVE)))
                 .thenReturn("gemini-flash");
         LlmProvider premiumProvider = new LlmProvider(
-                "gemini-pro", TaskType.TEXT, ProviderRole.PREMIUM, 4, "key", null, null, true, null);
+                "gemini-pro", TaskType.TEXT, ProviderRole.PREMIUM, 4, "key", null, null, true, null, null);
         when(llmRouter.routeProvider(any(), eq(RoutingMode.QUALITY_FIRST)))
                 .thenReturn(premiumProvider);
         when(llmRouter.executeWithTracking(eq(TaskType.TEXT), eq(RoutingMode.QUALITY_FIRST), any(Function.class)))

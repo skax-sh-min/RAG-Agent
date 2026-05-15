@@ -63,7 +63,7 @@ class AgentGraphTest {
 
         AppProperties props = new AppProperties(
                 "./data", MAX_RETRY, 8000, 800, 100, 7,
-                null, null, null, null, null);
+                null, null, null, null, null, null);
 
         graph = new AgentGraph(classifierService, directAnswerService, retrievalService,
                                answerService, criticService, finalizeService, props);

@@ -14,7 +14,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class LlmProviderTest {
 
     private LlmProvider provider(TaskType type, String apiKey) {
-        return new LlmProvider("p1", type, ProviderRole.NORMAL, 1, apiKey, null, null, true, null);
+        return new LlmProvider("p1", type, ProviderRole.NORMAL, 1, apiKey, null, null, true, null, null);
     }
 
     @Test

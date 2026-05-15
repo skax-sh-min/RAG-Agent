@@ -20,8 +20,13 @@ public class EmbeddingBeanConfig {
             throw new IllegalStateException(
                     "app.embedding.base-url (EMBED_BASE_URL) is required but not configured");
         }
+        // OpenAiApi.builder() appends /v1 internally — strip it to avoid /v1/v1/embeddings.
+        String rawUrl = cfg.baseUrl();
+        String apiBase = rawUrl.endsWith("/v1/") ? rawUrl.substring(0, rawUrl.length() - 4)
+                       : rawUrl.endsWith("/v1")  ? rawUrl.substring(0, rawUrl.length() - 3)
+                       : rawUrl;
         OpenAiApi api = OpenAiApi.builder()
-                .baseUrl(cfg.baseUrl())
+                .baseUrl(apiBase)
                 .apiKey(cfg.apiKey() != null && !cfg.apiKey().isBlank() ? cfg.apiKey() : "no-key")
                 .restClientBuilder(HttpClientTimeouts.restClientBuilder(
                         cfg.connectTimeoutSeconds(),

@@ -28,7 +28,7 @@ class LlmRouterTest {
     }
 
     private LlmProvider p(String name, ProviderRole role, TaskType type, int priority) {
-        return new LlmProvider(name, type, role, priority, "k", null, null, true, (ChatModel) null);
+        return new LlmProvider(name, type, role, priority, "k", null, null, true, (ChatModel) null, null);
     }
 
     private LlmRouter router(RoutingMode defaultMode, LlmProvider... providers) {
@@ -114,8 +114,8 @@ class LlmRouterTest {
     @Test
     @DisplayName("findFirst — apiKey 비어 있으면 후보에서 제외")
     void blankApiKeyExcluded() {
-        var local  = new LlmProvider("lm",     TaskType.TEXT, ProviderRole.LOCAL,  1, "",   null, null, true, (ChatModel) null);
-        var normal = new LlmProvider("openai", TaskType.TEXT, ProviderRole.NORMAL, 2, "sk", null, null, true, (ChatModel) null);
+        var local  = new LlmProvider("lm",     TaskType.TEXT, ProviderRole.LOCAL,  1, "",   null, null, true, (ChatModel) null, null);
+        var normal = new LlmProvider("openai", TaskType.TEXT, ProviderRole.NORMAL, 2, "sk", null, null, true, (ChatModel) null, null);
         var r = router(RoutingMode.COST_FIRST, local, normal);
 
         assertThat(r.findProviderName(TaskType.TEXT, RoutingMode.COST_FIRST)).isEqualTo("openai");
