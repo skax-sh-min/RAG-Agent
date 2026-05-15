@@ -15,12 +15,15 @@ public record AppProperties(
         Integer sseTimeoutSeconds,
         LlmConfig llm,
         IndexingConfig indexing,
+        ChromaHttpConfig chroma,
         ImageDescriptionProperties imageDescription,
         EmbeddingConfig embedding
 ) {
     public record LlmConfig(
             List<ProviderConfig> providers,
             int circuitBreakerMinutes,
+            int connectTimeoutSeconds,
+            int readTimeoutSeconds,
             String defaultRoutingMode,
             double progressiveThreshold
     ) {}
@@ -46,7 +49,14 @@ public record AppProperties(
             String baseUrl,
             String apiKey,
             String model,
-            Integer dimensions
+            Integer dimensions,
+            Integer connectTimeoutSeconds,
+            Integer readTimeoutSeconds
+    ) {}
+
+    public record ChromaHttpConfig(
+            int connectTimeoutSeconds,
+            int readTimeoutSeconds
     ) {}
 
     public record ImageDescriptionProperties(
@@ -80,13 +90,38 @@ public record AppProperties(
         return new IndexingConfig(files, llm, timeout);
     }
 
+    public ChromaHttpConfig chromaSafe() {
+        if (chroma == null) return new ChromaHttpConfig(5, 60);
+        int connect = chroma.connectTimeoutSeconds() > 0 ? chroma.connectTimeoutSeconds() : 5;
+        int read = chroma.readTimeoutSeconds() > 0 ? chroma.readTimeoutSeconds() : 60;
+        return new ChromaHttpConfig(connect, read);
+    }
+
+    public EmbeddingConfig embeddingSafe() {
+        if (embedding == null) return new EmbeddingConfig(null, null, null, null, 10, 120);
+        int connect = (embedding.connectTimeoutSeconds() != null && embedding.connectTimeoutSeconds() > 0)
+                ? embedding.connectTimeoutSeconds() : 10;
+        int read = (embedding.readTimeoutSeconds() != null && embedding.readTimeoutSeconds() > 0)
+                ? embedding.readTimeoutSeconds() : 120;
+        return new EmbeddingConfig(
+                embedding.baseUrl(),
+                embedding.apiKey(),
+                embedding.model(),
+                embedding.dimensions(),
+                connect,
+                read
+        );
+    }
+
     /** Null-safe accessor — returns an empty LlmConfig when app.llm is not configured. */
     public LlmConfig llmSafe() {
-        if (llm == null) return new LlmConfig(List.of(), 2, "COST_FIRST", 0.6);
+        if (llm == null) return new LlmConfig(List.of(), 2, 10, 180, "COST_FIRST", 0.6);
         List<ProviderConfig> providers = llm.providers() != null ? llm.providers() : List.of();
         int minutes = llm.circuitBreakerMinutes() > 0 ? llm.circuitBreakerMinutes() : 2;
+                int connectTimeout = llm.connectTimeoutSeconds() > 0 ? llm.connectTimeoutSeconds() : 10;
+                int readTimeout = llm.readTimeoutSeconds() > 0 ? llm.readTimeoutSeconds() : 180;
         String mode = llm.defaultRoutingMode() != null ? llm.defaultRoutingMode() : "COST_FIRST";
         double threshold = llm.progressiveThreshold() > 0 ? llm.progressiveThreshold() : 0.6;
-        return new LlmConfig(providers, minutes, mode, threshold);
+                return new LlmConfig(providers, minutes, connectTimeout, readTimeout, mode, threshold);
     }
 }

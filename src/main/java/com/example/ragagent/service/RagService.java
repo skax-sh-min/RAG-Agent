@@ -385,7 +385,11 @@ public class RagService {
             meta.put("excerpt_keywords", keywords);
             return new Document(chunk.getText(), meta);
         } catch (Exception e) {
-            log.debug("LLM keyword extraction failed (timeout={}s), falling back to TF: {}", timeoutSec, e.getMessage());
+            if (isTimeoutLike(e)) {
+                log.warn("[TIMEOUT:INDEX_KEYWORD] timeout={}s; falling back to TF", timeoutSec);
+            } else {
+                log.debug("LLM keyword extraction failed (timeout={}s), falling back to TF: {}", timeoutSec, e.getMessage());
+            }
             String keywords = extractKeywordsTf(chunk.getText(), 5);
             Map<String, Object> meta = new HashMap<>(chunk.getMetadata());
             meta.put("excerpt_keywords", keywords);
@@ -466,6 +470,17 @@ public class RagService {
             }
         }
         return result;
+    }
+
+    private static boolean isTimeoutLike(Throwable t) {
+        Throwable cur = t;
+        while (cur != null) {
+            if (cur instanceof InterruptedException || cur instanceof java.io.InterruptedIOException) {
+                return true;
+            }
+            cur = cur.getCause();
+        }
+        return Thread.currentThread().isInterrupted();
     }
 
     private List<Document> splitDocuments(List<Document> docs, String filename, int chunkSize, int overlap) {

@@ -8,7 +8,10 @@ import com.example.ragagent.llm.TaskType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.openai.api.OpenAiApi;
 import org.springframework.context.MessageSource;
+
+import java.util.List;
 import org.springframework.stereotype.Service;
 import reactor.core.scheduler.Schedulers;
 
@@ -86,38 +89,48 @@ public class DirectAnswerService {
 
     /**
      * Unified streaming handler for both provider.stream()=true/false.
-     * Applies consistent error handling and token collection patterns.
+     * When stream=true, calls OpenAiApi.chatCompletionStream() directly to bypass
+     * OpenAiChatModel.internalStream()'s buffer(int,int) which holds all tokens until LLM finishes.
      */
     private void callOrStream(LlmProvider provider, AgentState state,
                               String systemPrompt, java.util.function.Consumer<String> tokenSink) {
-        ChatClient client = ChatClient.builder(provider.chatModel()).build();
         if (provider.stream()) {
-            // Provider supports streaming: stream tokens directly
-            client.prompt()
-                    .system(systemPrompt)
-                    .user(buildUserPrompt(state))
-                    .stream()
-                    .content()
-                .doOnCancel(() -> log.warn("[DirectAnswer] Stream cancelled provider={} thread={} route={}",
-                    provider.name(), state.threadId(), state.routingMode()))
-                    .doOnError(e -> log.error("[DirectAnswer] Stream error", e))
-                .doFinally(signal -> log.debug("[DirectAnswer] Stream finished signal={} provider={} thread={}",
-                    signal, provider.name(), state.threadId()))
+            // Bypass OpenAiChatModel.internalStream() which buffers ALL chunks via buffer(int,int)
+            // before emitting, defeating real-time token delivery to the browser.
+            String userPrompt = buildUserPrompt(state);
+            List<OpenAiApi.ChatCompletionMessage> messages = List.of(
+                    new OpenAiApi.ChatCompletionMessage(systemPrompt, OpenAiApi.ChatCompletionMessage.Role.SYSTEM),
+                    new OpenAiApi.ChatCompletionMessage(userPrompt, OpenAiApi.ChatCompletionMessage.Role.USER)
+            );
+            OpenAiApi.ChatCompletionRequest request =
+                    new OpenAiApi.ChatCompletionRequest(messages, provider.model(), 0.0, true);
+            provider.openAiApi().chatCompletionStream(request)
+                    .mapNotNull(chunk -> {
+                        if (chunk.choices() == null || chunk.choices().isEmpty()) return null;
+                        return chunk.choices().get(0).delta().content();
+                    })
+                    .filter(t -> !t.isEmpty())
+                    .doOnCancel(() -> log.warn("[DirectAnswer] Stream cancelled provider={} thread={} route={}",
+                            provider.name(), state.threadId(), state.routingMode()))
+                    .doOnError(e -> log.error("[DirectAnswer] Stream error provider={}", provider.name(), e))
+                    .doFinally(signal -> log.debug("[DirectAnswer] Stream finished signal={} provider={} thread={}",
+                            signal, provider.name(), state.threadId()))
                     .publishOn(Schedulers.boundedElastic(), 1)
                     .doOnNext(tokenSink)
                     .blockLast();
         } else {
             // Provider does not support streaming: buffer and deliver as single chunk
             StringBuilder buf = new StringBuilder();
-            client.prompt()
+            ChatClient.builder(provider.chatModel()).build()
+                    .prompt()
                     .system(systemPrompt)
                     .user(buildUserPrompt(state))
                     .stream()
                     .content()
-                        .doOnCancel(() -> log.warn("[DirectAnswer] Buffered stream cancelled provider={} thread={} route={}",
+                    .doOnCancel(() -> log.warn("[DirectAnswer] Buffered stream cancelled provider={} thread={} route={}",
                             provider.name(), state.threadId(), state.routingMode()))
                     .doOnError(e -> log.error("[DirectAnswer] Stream error", e))
-                        .doFinally(signal -> log.debug("[DirectAnswer] Buffered stream finished signal={} provider={} thread={}",
+                    .doFinally(signal -> log.debug("[DirectAnswer] Buffered stream finished signal={} provider={} thread={}",
                             signal, provider.name(), state.threadId()))
                     .doOnNext(buf::append)
                     .blockLast();

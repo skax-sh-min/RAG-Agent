@@ -189,10 +189,29 @@ public class LlmRouter {
             return executeWithTracking(taskType, roleOrder, call, tried);
         } catch (Exception e) {
             circuitBreaker.block(provider.name(), "30");
-            log.warn("Provider [{}] threw {}: {}, trying next",
-                    provider.name(), e.getClass().getSimpleName(), e.getMessage());
+            if (isTimeoutLike(e)) {
+                log.warn("[TIMEOUT:LLM_HTTP] provider={} threw {}: {}, trying next",
+                        provider.name(), e.getClass().getSimpleName(), e.getMessage());
+            } else {
+                log.warn("Provider [{}] threw {}: {}, trying next",
+                        provider.name(), e.getClass().getSimpleName(), e.getMessage());
+            }
             return executeWithTracking(taskType, roleOrder, call, tried);
         }
+    }
+
+    private static boolean isTimeoutLike(Throwable t) {
+        Throwable cur = t;
+        while (cur != null) {
+            if (cur instanceof InterruptedException
+                    || cur instanceof java.io.InterruptedIOException
+                    || cur instanceof java.net.SocketTimeoutException
+                    || cur instanceof java.util.concurrent.TimeoutException) {
+                return true;
+            }
+            cur = cur.getCause();
+        }
+        return false;
     }
 
     private String executeSingleTracked(LlmProvider provider, TaskType taskType,

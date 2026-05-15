@@ -42,7 +42,7 @@ public class LibreOfficeConverter {
             boolean finished = process.waitFor(TIMEOUT_SECONDS, TimeUnit.SECONDS);
             if (!finished) {
                 process.destroyForcibly();
-                log.warn("LibreOffice WMF conversion timed out after {}s", TIMEOUT_SECONDS);
+                log.warn("[TIMEOUT:LIBREOFFICE] WMF conversion timed out after {}s", TIMEOUT_SECONDS);
                 return Optional.empty();
             }
 

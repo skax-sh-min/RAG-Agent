@@ -157,6 +157,19 @@ copy .env.example .env
 |------|--------|----------|------|
 | `INDEXING_MAX_FILES` | `3` | 1 ~ 8 | 파일 병렬 인덱싱 워커 수 |
 | `INDEXING_MAX_LLM` | `4` | 1 ~ 16 | 인덱싱 중 LLM 병렬 호출 수 (키워드 추출) |
+| `INDEXING_KEYWORD_TIMEOUT_SECONDS` | `180` | 30 ~ 600 | 청크 키워드 추출 1회당 최대 대기 시간. 초과 시 TF fallback |
+
+#### HTTP Timeout 튜닝
+
+| 변수 | 기본값 | 권장 범위 | 설명 |
+|------|--------|----------|------|
+| `SSE_TIMEOUT_SECONDS` | `300` | 60 ~ 1800 | 브라우저 ↔ 서버 SSE 연결 타임아웃 (`app.sse-timeout-seconds`) |
+| `LLM_CONNECT_TIMEOUT_SECONDS` | `10` | 2 ~ 30 | LLM API 연결 타임아웃 (`app.llm.connect-timeout-seconds`) |
+| `LLM_READ_TIMEOUT_SECONDS` | `180` | 30 ~ 600 | LLM API 응답 읽기 타임아웃 (`app.llm.read-timeout-seconds`) |
+| `EMBED_CONNECT_TIMEOUT_SECONDS` | `10` | 2 ~ 30 | 임베딩 API 연결 타임아웃 (`app.embedding.connect-timeout-seconds`) |
+| `EMBED_READ_TIMEOUT_SECONDS` | `120` | 30 ~ 600 | 임베딩 API 응답 읽기 타임아웃 (`app.embedding.read-timeout-seconds`) |
+| `CHROMA_CONNECT_TIMEOUT_SECONDS` | `5` | 1 ~ 15 | Chroma API 연결 타임아웃 (`app.chroma.connect-timeout-seconds`) |
+| `CHROMA_READ_TIMEOUT_SECONDS` | `60` | 10 ~ 300 | Chroma API 응답 읽기 타임아웃 (`app.chroma.read-timeout-seconds`) |
 
 #### 설정 예시
 
@@ -714,40 +727,117 @@ docker-compose logs app
 | `base-url`에 `/v1` 중복 | 시작 로그 `endpoint=...` 확인 | `base-url`에 `/v1` 포함 여부와 무관하게 내부 자동 처리됨. 앱 재시작 |
 | 구버전 앱에서 `stream=false` 설정 | — | 최신 버전은 내부적으로 스트리밍 방식으로 대체함. 앱 재시작 |
 
+타임아웃이 반복되면 아래 순서로 조정하세요.
+
+1. `SSE_TIMEOUT_SECONDS`를 먼저 증가 (예: 300 → 900)
+2. 인덱싱 중 키워드 추출이 자주 timeout이면 `INDEXING_KEYWORD_TIMEOUT_SECONDS` 증가
+3. 외부 LLM이 느린 경우 `LLM_READ_TIMEOUT_SECONDS` 증가
+4. 임베딩 단계 지연 시 `EMBED_READ_TIMEOUT_SECONDS` 증가
+5. Chroma 지연 시 `CHROMA_READ_TIMEOUT_SECONDS` 증가
+
+타임아웃 원인은 로그 키로 즉시 구분할 수 있습니다.
+
+| 로그 키 | 의미 |
+|--------|------|
+| `[TIMEOUT:SSE]` | SSE 연결 자체 timeout (브라우저 ↔ 서버) |
+| `[TIMEOUT:ASYNC_MVC]` | Spring MVC async 요청 timeout |
+| `[TIMEOUT:LLM_HTTP]` | LLM API 호출 중 connect/read timeout 계열 예외 |
+| `[TIMEOUT:INDEX_KEYWORD]` | 인덱싱 중 청크 키워드 추출 timeout (TF fallback 동작) |
+| `[TIMEOUT:LIBREOFFICE]` | DOCX WMF 변환(soffice) timeout |
+
 ---
 
 ### LLM 요청/응답 디버깅
 
-애플리케이션이 LLM 서버로 보내는 실제 HTTP 요청(헤더·바디)을 확인하려면 Reactor Netty 와이어 로그를 Actuator로 런타임에 켭니다.
+#### 로거별 레벨과 출력 내용
+
+각 로거를 어떤 레벨로 설정할 때 무엇이 출력되는지 정리합니다.
+
+| 로거 | 레벨 | 출력 내용 |
+|------|------|----------|
+| `com.example.ragagent` | `INFO` | 인덱싱 시작/완료, 동기화 결과, 프로바이더 등록 목록 |
+| `com.example.ragagent` | `DEBUG` | ↑ + 에이전트 노드 흐름, 프로바이더 라우팅 결정, **curl 재현 명령** (시스템 프롬프트·검색 문서·사용자 질문 전체 포함) |
+| `org.springframework.ai.openai` | `DEBUG` | Spring AI가 직렬화한 `ChatCompletionRequest` JSON (모델명·메시지 배열·temperature 등) 및 응답 메타데이터 |
+| `reactor.netty.http.client` | `DEBUG` | HTTP 연결 이벤트(CONNECT/DISCONNECT), **요청·응답 헤더** (URI·상태코드 포함) — body 내용은 포함되지 않음 |
+| `reactor.netty.http.client` | `TRACE` | ↑ + **실제 HTTP body 바이트** (요청 JSON, SSE 응답 청크 전체) — 스트리밍 중 매우 방대 |
+
+> `com.example.ragagent=DEBUG` 활성화 시 `LoggingChatModel`이 LLM에 전송한 프롬프트 전체(RAG 검색 문서 원문·대화 이력 포함)를 curl 명령 형식으로 출력합니다. 민감 정보가 포함될 수 있으므로 운영 로그 취급에 주의하세요.
+
+---
+
+#### 런타임 레벨 변경 (Actuator)
+
+재시작 없이 `/actuator/loggers` 엔드포인트로 레벨을 변경합니다.  
+변경은 **JVM 프로세스 내에서만 유효**하며, 재시작 시 `application.properties` 값으로 초기화됩니다.
 
 ```bash
-# 켜기 (스트리밍 응답의 모든 청크 포함 — 매우 시끄러움)
+# 형식: POST /actuator/loggers/{logger-name}
+#   Body: {"configuredLevel": "TRACE"|"DEBUG"|"INFO"|"WARN"|"ERROR"|null}
+#   null = 부모 로거에서 상속 (설정 해제)
+#   성공 응답: HTTP 204 No Content (응답 바디 없음)
+
+# ── 시나리오 1: 프로바이더 라우팅 + curl 재현 로그 ──────────────────────
+curl -X POST http://localhost:8080/actuator/loggers/com.example.ragagent.llm \
+  -H "Content-Type: application/json" \
+  -d '{"configuredLevel":"DEBUG"}'
+
+# ── 시나리오 2: 인덱싱 청크별 진행 상황 ────────────────────────────────
+curl -X POST http://localhost:8080/actuator/loggers/com.example.ragagent.service.RagService \
+  -H "Content-Type: application/json" \
+  -d '{"configuredLevel":"DEBUG"}'
+
+# ── 시나리오 3: 에이전트 그래프 흐름 (Classifier→Retrieval→Answer→Critic) ──
+curl -X POST http://localhost:8080/actuator/loggers/com.example.ragagent.agent \
+  -H "Content-Type: application/json" \
+  -d '{"configuredLevel":"DEBUG"}'
+
+# ── 시나리오 4: HTTP 요청/응답 헤더 확인 (URI·상태코드, body 제외) ────────
 curl -X POST http://localhost:8080/actuator/loggers/reactor.netty.http.client \
   -H "Content-Type: application/json" \
   -d '{"configuredLevel":"DEBUG"}'
 
-# 끄기
+# ── 시나리오 5: HTTP body까지 확인 (SSE 청크 포함, 매우 방대) ────────────
+curl -X POST http://localhost:8080/actuator/loggers/reactor.netty.http.client \
+  -H "Content-Type: application/json" \
+  -d '{"configuredLevel":"TRACE"}'
+
+# ── 레벨 되돌리기 ───────────────────────────────────────────────────────
+curl -X POST http://localhost:8080/actuator/loggers/com.example.ragagent.llm \
+  -H "Content-Type: application/json" \
+  -d '{"configuredLevel":"INFO"}'
+
 curl -X POST http://localhost:8080/actuator/loggers/reactor.netty.http.client \
   -H "Content-Type: application/json" \
   -d '{"configuredLevel":"INFO"}'
 
-# 현재 레벨 확인 (GET, 204 대신 JSON 반환)
-curl http://localhost:8080/actuator/loggers/reactor.netty.http.client
+# ── 현재 레벨 확인 ──────────────────────────────────────────────────────
+curl http://localhost:8080/actuator/loggers/com.example.ragagent
 ```
 
 **Windows CMD**:
 ```cmd
-curl -X POST http://localhost:8080/actuator/loggers/reactor.netty.http.client -H "Content-Type: application/json" -d "{\"configuredLevel\":\"DEBUG\"}"
+curl -X POST http://localhost:8080/actuator/loggers/com.example.ragagent.llm -H "Content-Type: application/json" -d "{\"configuredLevel\":\"DEBUG\"}"
 ```
 
-Spring AI OpenAI 내부 로그(직렬화된 `ChatCompletionRequest` 포함)는 이미 `TRACE`로 활성화되어 있습니다. 레벨을 되돌리려면:
-```bash
-curl -X POST http://localhost:8080/actuator/loggers/org.springframework.ai.openai \
-  -H "Content-Type: application/json" \
-  -d '{"configuredLevel":"INFO"}'
+> **팁**: `-i` 플래그를 추가하면 204 상태코드로 성공 여부를 확인할 수 있습니다.
+
+---
+
+#### 권장 운영 설정 (`application.properties`)
+
+```properties
+# 앱 네임스페이스 — INFO: 인덱싱·프로바이더 등록 이벤트만 출력
+# curl 재현 로그(프롬프트 전체 포함) 비활성화
+logging.level.com.example.ragagent=INFO
+
+# Spring AI 내부 — WARN: 정상 동작 시 출력 없음
+logging.level.org.springframework.ai.openai=WARN
+
+# Reactor Netty 와이어 로그 — 기본 off; 필요 시 Actuator로 활성화
+# logging.level.reactor.netty.http.client=DEBUG
 ```
 
-> Actuator POST 성공 응답은 **HTTP 204 No Content** (응답 바디 없음)입니다. `-i` 플래그를 추가하면 상태 코드를 확인할 수 있습니다.
+개발·디버깅 중에는 필요한 로거만 Actuator로 선택적으로 활성화하는 방식을 권장합니다.
 
 ---
 

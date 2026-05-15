@@ -1,6 +1,7 @@
 package com.example.ragagent.llm;
 
 import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.ai.openai.api.OpenAiApi;
 
 import static com.example.ragagent.llm.TaskType.*;
 
@@ -13,7 +14,8 @@ public record LlmProvider(
         String baseUrl,
         String model,
         boolean stream,
-        ChatModel chatModel
+        ChatModel chatModel,
+        OpenAiApi openAiApi
 ) {
     public boolean supports(TaskType req) {
         return switch (this.type) {

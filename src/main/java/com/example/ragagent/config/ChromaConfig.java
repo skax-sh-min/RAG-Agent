@@ -2,7 +2,6 @@ package com.example.ragagent.config;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.ai.chroma.vectorstore.ChromaApi;
-import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -18,10 +17,12 @@ public class ChromaConfig {
     private int chromaPort;
 
     @Bean
-    ChromaApi chromaApi(ObjectProvider<RestClient.Builder> restClientBuilderProvider,
-                               ObjectMapper objectMapper) {
+    ChromaApi chromaApi(AppProperties props, ObjectMapper objectMapper) {
         String baseUrl = String.format("%s:%s", chromaHost, chromaPort);
-        RestClient.Builder builder = restClientBuilderProvider.getIfAvailable(RestClient::builder);
+        AppProperties.ChromaHttpConfig timeoutCfg = props.chromaSafe();
+        RestClient.Builder builder = HttpClientTimeouts.restClientBuilder(
+                timeoutCfg.connectTimeoutSeconds(),
+                timeoutCfg.readTimeoutSeconds());
         return ChromaApi.builder()
                 .baseUrl(baseUrl)
                 .restClientBuilder(builder)

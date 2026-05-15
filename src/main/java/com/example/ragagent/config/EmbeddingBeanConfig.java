@@ -15,7 +15,7 @@ public class EmbeddingBeanConfig {
     @Bean
     @Primary
     public EmbeddingModel embeddingModel(AppProperties props) {
-        AppProperties.EmbeddingConfig cfg = props.embedding();
+        AppProperties.EmbeddingConfig cfg = props.embeddingSafe();
         if (cfg == null || cfg.baseUrl() == null || cfg.baseUrl().isBlank()) {
             throw new IllegalStateException(
                     "app.embedding.base-url (EMBED_BASE_URL) is required but not configured");
@@ -23,6 +23,9 @@ public class EmbeddingBeanConfig {
         OpenAiApi api = OpenAiApi.builder()
                 .baseUrl(cfg.baseUrl())
                 .apiKey(cfg.apiKey() != null && !cfg.apiKey().isBlank() ? cfg.apiKey() : "no-key")
+                .restClientBuilder(HttpClientTimeouts.restClientBuilder(
+                        cfg.connectTimeoutSeconds(),
+                        cfg.readTimeoutSeconds()))
                 .build();
         return new OpenAiEmbeddingModel(
                 api,

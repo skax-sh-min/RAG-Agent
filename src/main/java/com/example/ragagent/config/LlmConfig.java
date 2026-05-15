@@ -24,6 +24,8 @@ public class LlmConfig {
     public LlmRouter llmRouter(AppProperties props, LlmUsageRepository usageRepo,
                                 CircuitBreaker circuitBreaker) {
         AppProperties.LlmConfig llmCfg = props.llmSafe();
+                int connectTimeoutSeconds = llmCfg.connectTimeoutSeconds();
+                int readTimeoutSeconds = llmCfg.readTimeoutSeconds();
 
         llmCfg.providers().stream()
                 .filter(cfg -> cfg.apiKey() == null || cfg.apiKey().isBlank())
@@ -45,6 +47,9 @@ public class LlmConfig {
                     OpenAiApi api = OpenAiApi.builder()
                             .baseUrl(apiBase)
                             .apiKey(cfg.apiKey())
+                            .restClientBuilder(HttpClientTimeouts.restClientBuilder(
+                                    connectTimeoutSeconds,
+                                    readTimeoutSeconds))
                             .build();
                     ChatModel rawModel = OpenAiChatModel.builder()
                             .openAiApi(api)
@@ -65,7 +70,8 @@ public class LlmConfig {
                             resolvedUrl,
                             cfg.model(),
                             providerStream,
-                            model);
+                            model,
+                            api);
                 })
                 .sorted(Comparator.comparingInt(LlmProvider::priority))
                 .toList();
@@ -85,6 +91,7 @@ public class LlmConfig {
         log.info("LLM providers registered: {}", providers.stream()
                 .map(p -> "%s(%s/%s/p%d/stream=%b) → %s [%s]".formatted(p.name(), p.role(), p.type(), p.priority(), p.stream(), p.baseUrl(), p.model()))
                 .toList());
+        log.info("LLM HTTP timeouts: connect={}s read={}s", connectTimeoutSeconds, readTimeoutSeconds);
 
         return new LlmRouter(providers, usageRepo, circuitBreaker, defaultMode, threshold);
     }

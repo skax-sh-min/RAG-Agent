@@ -15,6 +15,7 @@ import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.converter.BeanOutputConverter;
+import org.springframework.ai.openai.api.OpenAiApi;
 import org.springframework.context.MessageSource;
 import org.springframework.stereotype.Service;
 import reactor.core.scheduler.Schedulers;
@@ -175,21 +176,17 @@ public class AnswerService {
 
     private void callOrStream(LlmProvider provider, AgentState state,
                               String systemPrompt, Consumer<String> tokenSink) {
-        ChatClient client = ChatClient.builder(provider.chatModel()).build();
         if (provider.stream()) {
-            client.prompt()
-                    .system(systemPrompt)
-                    .user(buildAnswerPrompt(state))
-                    .stream()
-                    .content()
-                    .publishOn(Schedulers.boundedElastic(), 1)
-                    .doOnNext(tokenSink)
-                    .blockLast();
+            // Bypass OpenAiChatModel.internalStream() which buffers ALL chunks via buffer(int,int)
+            // before emitting, defeating real-time token delivery to the browser.
+            streamDirect(provider, systemPrompt, buildAnswerPrompt(state), tokenSink,
+                    state.threadId(), state.routingMode());
         } else {
             // stream=false: still use streaming HTTP to stay compatible with local LLM servers
             // that do not support stream:false. Buffer all tokens and deliver as one chunk.
             StringBuilder buf = new StringBuilder();
-            client.prompt()
+            ChatClient.builder(provider.chatModel()).build()
+                    .prompt()
                     .system(systemPrompt)
                     .user(buildAnswerPrompt(state))
                     .stream()
@@ -198,6 +195,30 @@ public class AnswerService {
                     .blockLast();
             if (!buf.isEmpty()) tokenSink.accept(buf.toString());
         }
+    }
+
+    private void streamDirect(LlmProvider provider, String systemPrompt, String userPrompt,
+                               Consumer<String> tokenSink, String threadId, RoutingMode routingMode) {
+        List<OpenAiApi.ChatCompletionMessage> messages = List.of(
+                new OpenAiApi.ChatCompletionMessage(systemPrompt, OpenAiApi.ChatCompletionMessage.Role.SYSTEM),
+                new OpenAiApi.ChatCompletionMessage(userPrompt, OpenAiApi.ChatCompletionMessage.Role.USER)
+        );
+        OpenAiApi.ChatCompletionRequest request =
+                new OpenAiApi.ChatCompletionRequest(messages, provider.model(), 0.0, true);
+        provider.openAiApi().chatCompletionStream(request)
+                .mapNotNull(chunk -> {
+                    if (chunk.choices() == null || chunk.choices().isEmpty()) return null;
+                    return chunk.choices().get(0).delta().content();
+                })
+                .filter(t -> !t.isEmpty())
+                .doOnCancel(() -> log.warn("[Answer] Stream cancelled provider={} thread={} route={}",
+                        provider.name(), threadId, routingMode))
+                .doOnError(e -> log.error("[Answer] Stream error provider={}", provider.name(), e))
+                .doFinally(signal -> log.debug("[Answer] Stream finished signal={} provider={} thread={}",
+                        signal, provider.name(), threadId))
+                .publishOn(Schedulers.boundedElastic(), 1)
+                .doOnNext(tokenSink)
+                .blockLast();
     }
 
     private AgentState checkSufficiency(AgentState state, String answer, Locale locale) {

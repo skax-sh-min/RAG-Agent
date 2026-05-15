@@ -40,7 +40,7 @@ public class GlobalExceptionHandler {
     @ResponseStatus(HttpStatus.SERVICE_UNAVAILABLE)
     @ExceptionHandler(AsyncRequestTimeoutException.class)
     public void handleAsyncTimeout() {
-        // SSE connection timed out — expected behaviour, suppress ERROR log
+        log.warn("[TIMEOUT:ASYNC_MVC] Async request timed out");
     }
 
     @ExceptionHandler(NoResourceFoundException.class)
