@@ -221,6 +221,8 @@
             xhr.addEventListener('load', () => {
                 if (xhr.status >= 200 && xhr.status < 300) {
                     resolve(JSON.parse(xhr.responseText));
+                } else if (xhr.status === 503) {
+                    reject(new Error(I18N.chromaUnavailable));
                 } else {
                     reject(new Error(xhr.status === 400 ? I18N.fileEmpty : `${I18N.serverError} (${xhr.status})`));
                 }

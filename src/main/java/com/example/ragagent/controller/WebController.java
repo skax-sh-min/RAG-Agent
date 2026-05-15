@@ -15,6 +15,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.client.ResourceAccessException;
 import org.springframework.stereotype.Controller;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.ui.Model;
@@ -249,9 +250,21 @@ public class WebController {
                 Files.deleteIfExists(tmp);
             }
         } catch (Exception e) {
+            if (isChromaDown(e)) {
+                log.warn("[CHROMA] ChromaDB not reachable during upload: {}", e.getMessage());
+                return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).build();
+            }
             log.error("Upload error", e);
             return ResponseEntity.internalServerError().build();
         }
+    }
+
+    private static boolean isChromaDown(Throwable t) {
+        while (t != null) {
+            if (t instanceof ResourceAccessException) return true;
+            t = t.getCause();
+        }
+        return false;
     }
 
     @PostMapping("/ui/documents/sync")
@@ -265,7 +278,12 @@ public class WebController {
             model.addAttribute("updated", result.updated());
             model.addAttribute("deleted", result.deleted());
         } catch (Exception e) {
-            log.error("Sync error", e);
+            if (isChromaDown(e)) {
+                log.warn("[CHROMA] ChromaDB not reachable during sync: {}", e.getMessage());
+                model.addAttribute("chromaDown", true);
+            } else {
+                log.error("Sync error", e);
+            }
             model.addAttribute("success", false);
             model.addAttribute("indexed", List.of());
             model.addAttribute("updated", List.of());

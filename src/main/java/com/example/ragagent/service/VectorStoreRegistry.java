@@ -53,9 +53,12 @@ public class VectorStoreRegistry {
     }
 
     private ChromaVectorStore createStore(String version) {
+        // initializeImmediately(true) is required: without it, build() skips afterPropertiesSet()
+        // and collectionId is never set, causing "null" to appear in the ChromaDB upsert URL.
         return ChromaVectorStore.builder(chromaApi, embeddingModel)
                 .collectionName(collectionName(version))
                 .initializeSchema(true)
+                .initializeImmediately(true)
                 .build();
     }
 }
