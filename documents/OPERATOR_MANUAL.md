@@ -26,12 +26,13 @@ RAG Agent 시스템 배포·설정·운영 가이드입니다.
    - 6.2 [문서 버전 관리](#62-문서-버전-관리)
    - 6.3 [데이터 영속성](#63-데이터-영속성)
    - 6.4 [성능](#64-성능)
-7. [문제 해결](#7-문제-해결)
-8. [보안 설정](#8-보안-설정)
-   - 8.1 [git 훅 설치](#81-git-훅-설치)
-   - 8.2 [입력 검증 동작](#82-입력-검증-동작)
-   - 8.3 [응답 크기 제한](#83-응답-크기-제한)
-9. [운영 체크리스트](#9-운영-체크리스트)
+7. [관리자 패널](#7-관리자-패널)
+8. [문제 해결](#8-문제-해결)
+9. [보안 설정](#9-보안-설정)
+   - 9.1 [git 훅 설치](#91-git-훅-설치)
+   - 9.2 [입력 검증 동작](#92-입력-검증-동작)
+   - 9.3 [응답 크기 제한](#93-응답-크기-제한)
+10. [운영 체크리스트](#10-운영-체크리스트)
 
 ---
 
@@ -73,13 +74,14 @@ rag_java/
 ├── data/                       # 런타임 생성 (DATA_DIR)
 │   ├── documents/              # 업로드된 문서 원본 (Sync 대상)
 │   ├── images/                 # 추출된 이미지 ({docId}/ 하위)
+│   ├── converted/              # DOCX → Markdown 변환 결과 ({docId}.md)
 │   ├── doc_registry.json       # 인덱싱 레지스트리 (SHA-256 기반)
 │   └── memory.db               # 대화 이력 + LLM 사용량 (SQLite WAL)
 └── src/main/
     ├── java/com/example/ragagent/
     │   ├── agent/              # AgentGraph (상태 머신), AgentState (불변 레코드)
     │   ├── config/             # AppProperties, LlmConfig, WebConfig
-    │   ├── controller/         # ApiController (REST), WebController (HTMX), GlobalExceptionHandler
+    │   ├── controller/         # ApiController (REST), WebController (HTMX), AdminController, GlobalExceptionHandler
     │   ├── llm/                # LlmRouter, RoutingMode, CircuitBreaker
     │   ├── model/              # Java 21 레코드 (MetaKey 상수, ChatRequest/Response 등)
     │   ├── repository/         # SQLite CRUD (MemoryRepository, LlmUsageRepository 등)
@@ -609,6 +611,17 @@ COST_FIRST 흐름:
 - `/chat/{threadId}` 재진입 시 모든 이전 turn을 시간순으로 불러와 메시지 버블 복원
 - `MemoryRepository` 인터페이스로 추상화 — Redis 등으로 교체 시 구현체만 추가
 
+`conversation_turns` 테이블 확장 컬럼 (앱 시작 시 `ALTER TABLE`로 자동 마이그레이션):
+
+| 컬럼 | 타입 | 설명 |
+|------|------|------|
+| `asked_at` | TEXT | 질문 발송 시각 (UTC, `yyyy-MM-dd HH:mm:ss`) |
+| `input_tokens` | INTEGER | 해당 턴 입력 토큰 수 |
+| `output_tokens` | INTEGER | 해당 턴 출력 토큰 수 |
+| `elapsed_ms` | INTEGER | 에이전트 처리 소요 시간 (ms) |
+| `provider` | TEXT | 최종 응답에 사용된 LLM 프로바이더명 |
+| `llm_calls` | INTEGER | 해당 턴의 LLM 총 호출 횟수 |
+
 ---
 
 ### 6.2 문서 버전 관리
@@ -635,9 +648,10 @@ curl -X POST http://localhost:8080/api/chat \
 |--------|----------|------|
 | 문서 원본 | `DATA_DIR/documents/` | Sync 대상 |
 | 추출된 이미지 | `DATA_DIR/images/{docId}/` | 문서 삭제 시 함께 삭제 |
+| DOCX 변환 MD | `DATA_DIR/converted/{docId}.md` | DOCX 인덱싱 시 자동 생성; 문서 삭제 시 함께 삭제 |
 | 인덱스 레지스트리 | `DATA_DIR/doc_registry.json` | SHA-256 변경 감지 기준 |
 | 벡터 임베딩 | Chroma 서버 | 로컬: `data/chroma/`, Docker Compose: `chroma_data` 볼륨 |
-| 대화 이력 + LLM 사용량 | `DATA_DIR/memory.db` (SQLite) | WAL 모드 |
+| 대화 이력 + LLM 사용량 | `DATA_DIR/memory.db` (SQLite) | WAL 모드; 메시지 메타데이터(토큰·시간·프로바이더) 포함 |
 
 > Docker Compose 사용 시 `./data` 디렉터리를 컨테이너에 바인드 마운트합니다.  
 > 데이터 백업 시 `data/` 디렉터리와 Chroma 볼륨을 함께 보존하세요.
@@ -655,7 +669,29 @@ CPU/메모리 제약이 있는 환경에서는 `INDEXING_MAX_FILES`와 `INDEXING
 
 ---
 
-## 7. 문제 해결
+## 7. 관리자 패널
+
+`/admin` 페이지는 별도 인증 없이 접근 가능합니다 (운영 환경에서는 네트워크 레벨 접근 제한 권장).
+
+### 7.1 주요 기능
+
+| 기능 | 설명 |
+|------|------|
+| 컬렉션 목록 | ChromaDB 컬렉션별 버전·청크 수 표시 |
+| 청크 조회 | 컬렉션·문서(docId)별 청크 페이지네이션 (50건 단위) |
+| 청크 편집 | 텍스트·메타데이터 수정 (원본 임베딩 유지 upsert) |
+| 청크 삭제 | 개별 청크를 ChromaDB에서 즉시 제거 |
+| 문서 레지스트리 | 인덱싱된 전체 문서 목록 + 문서별 청크 바로 조회 |
+
+### 7.2 주의사항
+
+- **임베딩 미갱신**: 청크 텍스트를 수정해도 벡터 임베딩은 재계산되지 않습니다. 검색 결과에 반영하려면 해당 문서를 삭제 후 재인덱싱하세요.
+- **청크 단독 삭제 vs. 문서 삭제**: 청크를 개별 삭제해도 `doc_registry.json`의 레지스트리 항목은 남습니다. 문서 전체 제거는 Documents 페이지 또는 `DELETE /api/documents/{docId}`를 사용하세요.
+- **접근 제어**: 현재 인증 없이 접근 가능하므로 내부망 또는 리버스 프록시 수준에서 `/admin` 경로를 제한하는 것을 권장합니다.
+
+---
+
+## 8. 문제 해결
 
 ### 애플리케이션이 시작되지 않음
 
@@ -841,9 +877,9 @@ logging.level.org.springframework.ai.openai=WARN
 
 ---
 
-## 8. 보안 설정
+## 9. 보안 설정
 
-### 8.1 git 훅 설치
+### 9.1 git 훅 설치
 
 `.env` 파일이 실수로 커밋되지 않도록 pre-commit 훅을 설치하세요.
 
@@ -853,7 +889,7 @@ sh scripts/install-hooks.sh
 
 팀원 각자가 클론 후 1회 실행합니다.
 
-### 8.2 입력 검증 동작
+### 9.2 입력 검증 동작
 
 | 항목 | 제한 | 응답 |
 |------|------|------|
@@ -869,13 +905,13 @@ sh scripts/install-hooks.sh
 | `.docx`, `.pptx` | ZIP/PK 서명 `50 4B 03 04` (4바이트) |
 | `.txt`, `.md` | 첫 8바이트에 NUL 문자 없음 |
 
-### 8.3 응답 크기 제한
+### 9.3 응답 크기 제한
 
 LLM 응답이 20,000자를 초과하면 자동으로 잘리고 말줄임 메시지가 추가됩니다.
 
 ---
 
-## 9. 운영 체크리스트
+## 10. 운영 체크리스트
 
 배포 후 순서대로 확인하세요.
 
@@ -902,3 +938,5 @@ LLM 응답이 20,000자를 초과하면 자동으로 잘리고 말줄임 메시�
 - [ ] Circuit Breaker 차단 없음 확인
 - [ ] 데이터 디렉터리(`data/`) 마운트 및 쓰기 권한 확인
 - [ ] Chroma 볼륨 영속성 확인 (재시작 후 문서 목록 유지)
+- [ ] `/admin` 접속 → 컬렉션 목록·청크 테이블 정상 표시 확인
+- [ ] (운영 환경) `/admin` 경로에 대한 네트워크 접근 제한 적용 여부 확인
