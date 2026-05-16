@@ -92,7 +92,7 @@
                         <th class="text-center">청크</th>
                         <th>Doc ID</th>
                         <th>인덱싱 일시</th>
-                        <th class="text-center">청크 조회</th>
+                        <th class="text-center">작업</th>
                     </tr>
                     </thead>
                     <tbody>
@@ -109,6 +109,14 @@
                                     th:attr="data-doc-id=${doc.docId()}, data-version=${doc.version()}"
                                     onclick="loadChunksByDoc(this)">
                                 청크 보기
+                            </button>
+                            <button type="button"
+                                    class="btn btn-sm btn-outline-warning py-0 px-2 ms-1 reindex-btn"
+                                    style="font-size:0.75rem;"
+                                    th:attr="data-doc-id=${doc.docId()}"
+                                    onclick="reindexFromMd(this)"
+                                    title="저장된 MD 파일로 재인덱싱 (DOCX 전용)">
+                                <i class="bi bi-arrow-clockwise"></i>
                             </button>
                         </td>
                     </tr>
@@ -227,6 +235,22 @@ function deleteChunkInline(chunkId, collection, row) {
         else       { showToast('삭제 실패', 'danger'); }
     })
     .catch(() => showToast('삭제 중 오류', 'danger'));
+}
+
+function reindexFromMd(btn) {
+    const docId = btn.getAttribute('data-doc-id');
+    if (!confirm('저장된 MD 파일로 재인덱싱하시겠습니까?\n기존 청크가 삭제되고 MD 파일 기준으로 다시 인덱싱됩니다.\n(' + docId + ')')) return;
+    const icon = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm" style="width:.7rem;height:.7rem;"></span>';
+    fetch('/admin/documents/' + encodeURIComponent(docId) + '/reindex', { method: 'POST' })
+        .then(r => r.json())
+        .then(d => {
+            if (d.error) { showToast('재인덱싱 실패: ' + d.error, 'danger'); }
+            else { showToast('재인덱싱 완료', 'success'); setTimeout(() => location.reload(), 1500); }
+        })
+        .catch(() => showToast('재인덱싱 요청 실패', 'danger'))
+        .finally(() => { btn.disabled = false; btn.innerHTML = icon; });
 }
 
 function escHtml(s) {

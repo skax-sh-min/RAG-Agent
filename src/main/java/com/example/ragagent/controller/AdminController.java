@@ -88,4 +88,20 @@ public class AdminController {
         adminService.updateChunk(collection, chunkId, newText, newMeta);
         return ResponseEntity.ok().build();
     }
+
+    /** Re-index a document from its saved Markdown file (corrected or raw). */
+    @PostMapping("/admin/documents/{docId}/reindex")
+    @ResponseBody
+    public ResponseEntity<?> reindexFromMd(@PathVariable String docId) {
+        try {
+            ragService.reindexFromMd(docId);
+            return ResponseEntity.ok(Map.of("message", "재인덱싱 완료"));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        } catch (IllegalStateException e) {
+            return ResponseEntity.status(404).body(Map.of("error", e.getMessage()));
+        } catch (Exception e) {
+            return ResponseEntity.internalServerError().body(Map.of("error", e.getMessage()));
+        }
+    }
 }

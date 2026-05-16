@@ -49,6 +49,7 @@ public class RagService {
 
     private final AppProperties props;
     private final DocumentLoaderService loaderService;
+    private final MarkdownCorrectionService correctionService;
     private final ImageExtractorService imageExtractorService;
     private final VectorStoreRegistry vectorStoreRegistry;
     private final ObjectMapper mapper;
@@ -69,10 +70,12 @@ public class RagService {
     private Path registryPath;
 
     public RagService(AppProperties props, DocumentLoaderService loaderService,
+                      MarkdownCorrectionService correctionService,
                       ImageExtractorService imageExtractorService,
                       VectorStoreRegistry vectorStoreRegistry, LlmRouter llmRouter) {
         this.props = props;
         this.loaderService = loaderService;
+        this.correctionService = correctionService;
         this.imageExtractorService = imageExtractorService;
         this.vectorStoreRegistry = vectorStoreRegistry;
         this.mapper = new ObjectMapper().enable(SerializationFeature.INDENT_OUTPUT);
@@ -118,16 +121,22 @@ public class RagService {
         String docId = filename + "_" + sha256.substring(0, 8);
         String docType = inferDocType(filename);
         Path imagesDir = dataDir.resolve("images").resolve(docId);
-        Path mdOutputPath = dataDir.resolve("converted").resolve(docId + ".md");
+        Path rawMdPath = dataDir.resolve("converted").resolve(docId + ".md");
+        Path correctedMdPath = dataDir.resolve("converted").resolve(docId + "_corrected.md");
         log.debug("[INDEX] docId={}, type={}, sha256={}", docId, docType, sha256);
 
-        // Load & split (DOCX: converter-based with image extraction; PPTX/PDF: extract separately)
+        // Load & split (DOCX: converter → LLM correction → split; PPTX/PDF: extract separately)
         List<Document> rawDocs;
         String lower = filename.toLowerCase();
         log.debug("[INDEX] {} 문서 로드 중...", filename);
         onProgress.accept(IndexingProgressEvent.of("loading", 0, 0, filename, "문서 로드 중..."));
         if (lower.endsWith(".docx")) {
-            rawDocs = loaderService.loadDocx(filePath, docId, imagesDir, mdOutputPath);
+            String rawMd = loaderService.convertDocxToMd(filePath, docId, imagesDir);
+            Files.createDirectories(rawMdPath.getParent());
+            Files.writeString(rawMdPath, rawMd);
+            onProgress.accept(IndexingProgressEvent.of("loading", 0, 0, filename, "MD 포맷 교정 중..."));
+            String sourceMd = correctionService.correct(rawMd, docId, correctedMdPath);
+            rawDocs = loaderService.loadFromMarkdown(sourceMd);
         } else {
             rawDocs = loaderService.load(filePath);
             if (lower.endsWith(".pptx") || lower.endsWith(".pdf")) {
@@ -322,14 +331,19 @@ public class RagService {
         String docId = filename + "_" + sha256.substring(0, 8);
         String docType = inferDocType(filename);
         Path imagesDir = dataDir.resolve("images").resolve(docId);
-        Path mdOutputPath = dataDir.resolve("converted").resolve(docId + ".md");
+        Path rawMdPath = dataDir.resolve("converted").resolve(docId + ".md");
+        Path correctedMdPath = dataDir.resolve("converted").resolve(docId + "_corrected.md");
         log.debug("[SYNC] docId={}, type={}", docId, docType);
 
         List<Document> rawDocs;
         String lower = filename.toLowerCase();
         log.debug("[SYNC] {} 문서 로드 중...", filename);
         if (lower.endsWith(".docx")) {
-            rawDocs = loaderService.loadDocx(filePath, docId, imagesDir, mdOutputPath);
+            String rawMd = loaderService.convertDocxToMd(filePath, docId, imagesDir);
+            Files.createDirectories(rawMdPath.getParent());
+            Files.writeString(rawMdPath, rawMd);
+            String sourceMd = correctionService.correct(rawMd, docId, correctedMdPath);
+            rawDocs = loaderService.loadFromMarkdown(sourceMd);
         } else {
             rawDocs = loaderService.load(filePath);
             if (lower.endsWith(".pptx") || lower.endsWith(".pdf")) {
@@ -488,15 +502,84 @@ public class RagService {
     );
 
     private void deleteByDocId(String docId, String version) {
+        deleteByDocId(docId, version, true);
+    }
+
+    private void deleteByDocId(String docId, String version, boolean deleteFiles) {
         DocRegistryEntry existing = registry.get(docId);
         if (existing == null || existing.springDocIds().isEmpty()) return;
         VectorStore store = vectorStoreRegistry.getStore(version);
         store.delete(existing.springDocIds());
+        if (!deleteFiles) return;
         deleteImagesQuietly(dataDir.resolve("images").resolve(docId));
-        Path convertedMd = dataDir.resolve("converted").resolve(docId + ".md");
-        try { Files.deleteIfExists(convertedMd); } catch (IOException e) {
-            log.warn("Converted MD cleanup failed {}: {}", convertedMd, e.getMessage());
+        for (String suffix : List.of(".md", "_corrected.md")) {
+            Path p = dataDir.resolve("converted").resolve(docId + suffix);
+            try { Files.deleteIfExists(p); } catch (IOException e) {
+                log.warn("MD cleanup failed {}: {}", p, e.getMessage());
+            }
         }
+    }
+
+    /**
+     * Re-indexes a document from its saved Markdown file ({docId}_corrected.md, fallback {docId}.md).
+     * Deletes existing ChromaDB chunks and re-runs keyword enrichment + vector store insertion.
+     * The MD files on disk are preserved.
+     */
+    public void reindexFromMd(String docId) throws IOException {
+        DocRegistryEntry existing = registry.get(docId);
+        if (existing == null) throw new IllegalArgumentException("문서를 찾을 수 없습니다: " + docId);
+
+        String version  = existing.version();
+        String filename = filenameFromDocId(docId);
+        String sha256   = existing.sha256();
+        String docType  = inferDocType(filename);
+
+        Path correctedPath = dataDir.resolve("converted").resolve(docId + "_corrected.md");
+        Path rawPath       = dataDir.resolve("converted").resolve(docId + ".md");
+        Path mdPath = Files.exists(correctedPath) ? correctedPath : rawPath;
+        if (!Files.exists(mdPath)) {
+            throw new IllegalStateException("MD 파일이 없습니다 (DOCX 문서만 MD 재인덱싱 지원): " + docId);
+        }
+
+        log.info("[REINDEX] 시작: docId={}, src={}", docId, mdPath.getFileName());
+        long t0 = System.currentTimeMillis();
+
+        String md = Files.readString(mdPath);
+        List<Document> rawDocs = loaderService.loadFromMarkdown(md);
+
+        List<Document> chunks = splitDocuments(rawDocs, filename, props.chunkSize(), props.chunkOverlap());
+        List<Document> tagged = new ArrayList<>();
+        for (int i = 0; i < chunks.size(); i++) {
+            Document chunk = chunks.get(i);
+            Map<String, Object> meta = new HashMap<>(chunk.getMetadata());
+            meta.put(MetaKey.DOC_ID,       docId);
+            meta.put(MetaKey.FILENAME,     filename);
+            meta.put(MetaKey.VERSION,      version);
+            meta.put(MetaKey.DOC_TYPE,     docType);
+            meta.put(MetaKey.SHA256,       sha256);
+            meta.put(MetaKey.COLLECTED_AT, Instant.now().toString());
+            meta.putIfAbsent(MetaKey.SOURCE_TYPE,   "file");
+            meta.putIfAbsent(MetaKey.PAGE_OR_SLIDE, i + 1);
+            meta.put(MetaKey.OWNER_ID,    "anonymous");
+            meta.putIfAbsent(MetaKey.VISIBILITY, "private");
+            tagged.add(new Document(chunk.getText(), meta));
+        }
+
+        // Delete only ChromaDB chunks — keep MD files on disk
+        deleteByDocId(docId, version, false);
+
+        Semaphore llmGate = new Semaphore(props.indexingSafe().maxConcurrentLlmCalls());
+        List<Document> enriched = enrichParallel(tagged, llmGate);
+
+        VectorStore store = vectorStoreRegistry.getStore(version);
+        store.add(enriched);
+
+        List<String> springIds = enriched.stream().map(Document::getId).toList();
+        registry.put(docId, new DocRegistryEntry(sha256, version, Instant.now().toString(),
+                tagged.size(), springIds, List.of()));
+        saveRegistry();
+
+        log.info("[REINDEX] 완료: {} → {}개 청크, {}ms", filename, tagged.size(), System.currentTimeMillis() - t0);
     }
 
     private void deleteImagesQuietly(Path dir) {

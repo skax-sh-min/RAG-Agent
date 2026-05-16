@@ -129,18 +129,19 @@ public class DocumentLoaderService {
     }
 
     /**
-     * Image-aware DOCX loader: converts via DocxToMarkdownConverter,
-     * then splits by headings and extracts [이미지: ...] paths into image_paths metadata.
-     * Called from RagService when docId and imagesDir are available.
-     * If mdOutputPath is non-null the converted Markdown is also saved there for inspection.
+     * Converts a DOCX file to a Markdown string via {@link DocxToMarkdownConverter}.
+     * Called by RagService before optional LLM format correction.
      */
-    public List<Document> loadDocx(Path filePath, String docId, Path imagesDir,
-                                   Path mdOutputPath) throws IOException {
-        String md = converter.convert(filePath, docId, imagesDir);
-        if (mdOutputPath != null) {
-            Files.createDirectories(mdOutputPath.getParent());
-            Files.writeString(mdOutputPath, md);
-        }
+    public String convertDocxToMd(Path filePath, String docId, Path imagesDir) throws IOException {
+        return converter.convert(filePath, docId, imagesDir);
+    }
+
+    /**
+     * Splits a Markdown string into section-level Spring AI Documents and extracts
+     * [이미지: ...] path markers into image_paths metadata.
+     * Used both after DOCX→MD conversion and during MD re-indexing.
+     */
+    public List<Document> loadFromMarkdown(String md) {
         return splitMarkdownBySections(md).stream()
                 .map(doc -> {
                     List<String> imgs = extractImagePaths(doc.getText());
@@ -150,6 +151,22 @@ public class DocumentLoaderService {
                     return new Document(doc.getText(), meta);
                 })
                 .toList();
+    }
+
+    /**
+     * Image-aware DOCX loader: converts via DocxToMarkdownConverter,
+     * then splits by headings and extracts [이미지: ...] paths into image_paths metadata.
+     * Called from RagService when docId and imagesDir are available.
+     * If mdOutputPath is non-null the converted Markdown is also saved there for inspection.
+     */
+    public List<Document> loadDocx(Path filePath, String docId, Path imagesDir,
+                                   Path mdOutputPath) throws IOException {
+        String md = convertDocxToMd(filePath, docId, imagesDir);
+        if (mdOutputPath != null) {
+            Files.createDirectories(mdOutputPath.getParent());
+            Files.writeString(mdOutputPath, md);
+        }
+        return loadFromMarkdown(md);
     }
 
     private List<String> extractImagePaths(String text) {
