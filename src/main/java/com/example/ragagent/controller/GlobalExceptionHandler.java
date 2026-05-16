@@ -1,5 +1,6 @@
 package com.example.ragagent.controller;
 
+import com.example.ragagent.security.UnsupportedFileTypeException;
 import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -26,6 +27,14 @@ public class GlobalExceptionHandler {
         ProblemDetail pd = ProblemDetail.forStatus(HttpStatus.PAYLOAD_TOO_LARGE);
         pd.setTitle("File Too Large");
         pd.setDetail("Upload exceeds the maximum allowed size.");
+        return pd;
+    }
+
+    @ExceptionHandler(UnsupportedFileTypeException.class)
+    public ProblemDetail handleUnsupportedFileType(UnsupportedFileTypeException ex) {
+        ProblemDetail pd = ProblemDetail.forStatus(HttpStatus.UNPROCESSABLE_ENTITY);
+        pd.setTitle("Unsupported File Type");
+        pd.setDetail(ex.getMessage());
         return pd;
     }
 

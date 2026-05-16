@@ -4,7 +4,8 @@ import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.llm.CircuitBreaker;
 import com.example.ragagent.model.*;
 import com.example.ragagent.repository.LlmUsageRepository;
-import com.example.ragagent.security.FileTypeDetector;
+import com.example.ragagent.security.UnsupportedFileTypeException;
+import com.example.ragagent.security.UploadValidator;
 import com.example.ragagent.service.AgentService;
 import com.example.ragagent.service.RagService;
 import org.slf4j.Logger;
@@ -105,61 +106,49 @@ public class ApiController {
 
         if (file.isEmpty()) return ResponseEntity.badRequest().build();
 
+        // Sanitize, extension-check, stage to temp, magic-byte check — unified via UploadValidator
         String filename;
-        Path savedPath;
+        Path staged;
         try {
-            filename = sanitizeFilename(file.getOriginalFilename());
-            if (!RagService.isSupportedExtension(filename)) {
-                log.warn("Rejected upload: unsupported extension ({})", filename);
-                return ResponseEntity.unprocessableEntity().build();
-            }
-            Files.createDirectories(documentsDir);
-            Path base = documentsDir.toAbsolutePath().normalize();
-            savedPath = base.resolve(filename).normalize();
-            if (!savedPath.startsWith(base)) {
-                log.warn("Rejected upload: path escapes documentsDir ({})", filename);
-                return ResponseEntity.badRequest().build();
-            }
+            filename = UploadValidator.sanitizeFilename(file.getOriginalFilename());
+            UploadValidator.checkExtension(filename);
+            staged = UploadValidator.stageToTemp(file, filename);
+        } catch (UnsupportedFileTypeException e) {
+            log.warn("Rejected upload: {}", e.getMessage());
+            return ResponseEntity.unprocessableEntity().build();
         } catch (IllegalArgumentException e) {
             log.warn("Rejected upload: {}", e.getMessage());
             return ResponseEntity.badRequest().build();
         } catch (IOException e) {
-            log.error("Document upload error (mkdir)", e);
+            log.error("Document upload error (stage)", e);
             return ResponseEntity.internalServerError().build();
         }
 
-        String ext = filename.contains(".") ? filename.substring(filename.lastIndexOf('.')) : "";
+        // SHA-256 dedup + copy to final destination
         try {
-            Path dest = savedPath;
-            if (Files.exists(dest)) {
-                Path tmp = Files.createTempFile("rag-sha-", "-" + filename);
-                try {
-                    file.transferTo(tmp);
-                    if (!FileTypeDetector.matches(tmp, ext)) {
-                        log.warn("Magic-byte mismatch for {}", filename);
-                        return ResponseEntity.unprocessableEntity().build();
-                    }
-                    if (computeSha256(tmp).equals(computeSha256(dest))) {
-                        log.debug("Upload no-op: identical content for {}", filename);
-                        return ResponseEntity.ok(ragService.indexDocument(dest, version));
-                    }
-                    dest = versionedPath(dest);
-                    Files.copy(tmp, dest, StandardCopyOption.REPLACE_EXISTING);
-                } finally {
-                    Files.deleteIfExists(tmp);
-                }
-            } else {
-                file.transferTo(dest);
-                if (!FileTypeDetector.matches(dest, ext)) {
-                    log.warn("Magic-byte mismatch for {}", filename);
-                    Files.deleteIfExists(dest);
-                    return ResponseEntity.unprocessableEntity().build();
-                }
+            Files.createDirectories(documentsDir);
+            Path base = documentsDir.toAbsolutePath().normalize();
+            Path dest = base.resolve(filename).normalize();
+            if (!dest.startsWith(base)) {
+                log.warn("Rejected upload: path escapes documentsDir ({})", filename);
+                Files.deleteIfExists(staged);
+                return ResponseEntity.badRequest().build();
             }
+            if (Files.exists(dest) && computeSha256(staged).equals(computeSha256(dest))) {
+                log.debug("Upload no-op: identical content for {}", filename);
+                Files.deleteIfExists(staged);
+                return ResponseEntity.ok(ragService.indexDocument(dest, version));
+            }
+            if (Files.exists(dest)) {
+                dest = versionedPath(dest);
+            }
+            Files.copy(staged, dest, StandardCopyOption.REPLACE_EXISTING);
             return ResponseEntity.ok(ragService.indexDocument(dest, version));
         } catch (IOException e) {
             log.error("Document upload error", e);
             return ResponseEntity.internalServerError().build();
+        } finally {
+            try { Files.deleteIfExists(staged); } catch (IOException ignored) {}
         }
     }
 
@@ -307,15 +296,4 @@ public class ApiController {
         return dir.resolve(stem + "_v" + Instant.now().toEpochMilli() + ext);
     }
 
-    private String sanitizeFilename(String original) {
-        if (original == null || original.isBlank()) {
-            return "upload_" + Instant.now().toEpochMilli();
-        }
-        String base = Path.of(original).getFileName().toString()
-                .replaceAll("[^a-zA-Z0-9._\\-가-힣]", "_");
-        if (base.isBlank() || base.startsWith(".") || base.chars().allMatch(c -> c == '.')) {
-            throw new IllegalArgumentException("invalid filename: " + original);
-        }
-        return base;
-    }
 }

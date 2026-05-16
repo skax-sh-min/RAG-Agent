@@ -6,7 +6,8 @@ import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.model.*;
 import com.example.ragagent.repository.LlmUsageRepository;
-import com.example.ragagent.security.FileTypeDetector;
+import com.example.ragagent.security.UnsupportedFileTypeException;
+import com.example.ragagent.security.UploadValidator;
 import com.example.ragagent.service.*;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.servlet.http.HttpSession;
@@ -240,33 +241,25 @@ public class WebController {
         if (file.isEmpty()) {
             return ResponseEntity.badRequest().build();
         }
-        String originalFilename = file.getOriginalFilename() != null
-                ? Path.of(file.getOriginalFilename()).getFileName().toString() : "upload";
-        if (!RagService.isSupportedExtension(originalFilename)) {
-            log.warn("Rejected upload: unsupported extension ({})", originalFilename);
-            return ResponseEntity.unprocessableEntity().build();
-        }
-
-        // Transfer to temp file synchronously (fast), validate magic bytes, then index async
+        // Sanitize, extension-check, stage to temp, magic-byte check — unified via UploadValidator
+        String filename;
         Path tmp;
         try {
-            tmp = Files.createTempFile("rag-upload-", "-" + originalFilename);
-            file.transferTo(tmp);
-            String ext = originalFilename.contains(".")
-                    ? originalFilename.substring(originalFilename.lastIndexOf('.')) : "";
-            if (!FileTypeDetector.matches(tmp, ext)) {
-                Files.deleteIfExists(tmp);
-                log.warn("Magic-byte mismatch for {}", originalFilename);
-                return ResponseEntity.unprocessableEntity().build();
-            }
+            filename = UploadValidator.sanitizeFilename(file.getOriginalFilename());
+            UploadValidator.checkExtension(filename);
+            tmp = UploadValidator.stageToTemp(file, filename);
+        } catch (UnsupportedFileTypeException e) {
+            log.warn("Rejected upload: {}", e.getMessage());
+            return ResponseEntity.unprocessableEntity().build();
+        } catch (IllegalArgumentException e) {
+            log.warn("Rejected upload: {}", e.getMessage());
+            return ResponseEntity.badRequest().build();
         } catch (Exception e) {
             log.error("Upload transfer error", e);
             return ResponseEntity.internalServerError().build();
         }
-
         String taskId = progressService.newTaskId();
         final Path tmpPath = tmp;
-        final String filename = originalFilename;
         final String ver = version;
 
         Thread.ofVirtual().name("idx-upload-" + taskId).start(() -> {
