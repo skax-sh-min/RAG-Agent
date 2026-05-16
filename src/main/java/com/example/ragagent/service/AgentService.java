@@ -2,18 +2,17 @@ package com.example.ragagent.service;
 
 import com.example.ragagent.agent.AgentGraph;
 import com.example.ragagent.agent.AgentState;
+import com.example.ragagent.context.ThreadContext;
 import com.example.ragagent.model.ChatRequest;
 import com.example.ragagent.model.ChatResponse;
 import com.example.ragagent.security.PromptInjectionGuard;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.context.i18n.LocaleContextHolder;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
-import java.util.Locale;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
 
@@ -39,30 +38,29 @@ public class AgentService {
         this.classifierService = classifierService;
     }
 
-    public ChatResponse chat(ChatRequest request) {
+    public ChatResponse chat(ThreadContext ctx, ChatRequest request) {
         PromptInjectionGuard.validate(request.question());
-        Locale locale = LocaleContextHolder.getLocale();
         log.debug("[AgentService] chat start — directMode={} routingMode={} thread={} locale={}",
-                request.directMode(), request.routingMode(), request.threadId(), locale.getLanguage());
+                request.directMode(), request.routingMode(), request.threadId(), ctx.locale().getLanguage());
         AgentState initial;
         if (request.directMode()) {
             String history = memoryService.getHistory(request.threadId());
             initial = AgentState.of(request.question(), request.version(), request.threadId(),
-                    history, request.routingMode(), true, locale);
+                    history, request.routingMode(), true, ctx.locale());
         } else {
             try (var exec = Executors.newVirtualThreadPerTaskExecutor()) {
                 CompletableFuture<String> historyF = CompletableFuture.supplyAsync(
                         () -> memoryService.getHistory(request.threadId()), exec);
                 CompletableFuture<String> typeF = CompletableFuture.supplyAsync(
-                        () -> classifierService.classifyOnly(request.question(), locale), exec);
+                        () -> classifierService.classifyOnly(request.question(), ctx.locale()), exec);
                 initial = AgentState.of(
                         request.question(),
                         request.version(),
                         request.threadId(),
                         historyF.join(),
                         request.routingMode(),
-                        false, locale)
-                    .withQuestionType(typeF.join());
+                        false, ctx.locale())
+                    .toBuilder().questionType(typeF.join()).build();
             }
         }
 

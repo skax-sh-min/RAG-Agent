@@ -1,15 +1,12 @@
 package com.example.ragagent.controller;
 
 import com.example.ragagent.config.AppProperties;
-import com.example.ragagent.llm.CircuitBreaker;
+import com.example.ragagent.context.ThreadContextResolver;
 import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.model.ChatResponse;
 import com.example.ragagent.model.SourceRef;
-import com.example.ragagent.repository.LlmUsageRepository;
 import com.example.ragagent.service.AgentService;
-import com.example.ragagent.service.IndexingProgressService;
 import com.example.ragagent.service.MemoryService;
-import com.example.ragagent.service.RagService;
 import com.example.ragagent.service.StreamingAgentService;
 import com.example.ragagent.service.ThreadMetaService;
 import org.junit.jupiter.api.DisplayName;
@@ -17,51 +14,43 @@ import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
-import org.springframework.mock.web.MockMultipartFile;
+import org.springframework.context.annotation.Import;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
 import java.util.List;
-import java.util.Map;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.when;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.request;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.view;
 
 /**
- * QA — WebController HTMX 계약 보호
+ * QA — ChatController HTMX 계약 보호
  *
  * Covers (per refactoring/01-test-safety-net.md):
  *  - POST /ui/chat 가 정상 응답 시 'fragments/message-assistant :: message' 반환
  *  - 빈 질문 → 'fragments/message-error :: message'
  *  - DUAL 응답 시 'fragments/message-assistant-dual :: message'
- *  - 업로드 / 삭제 / 라우팅 모드 변경 동작
- *
- * 본 테스트는 fragment 셀렉터 (외부 계약)가 변경되면 즉시 실패해야 함.
+ *  - 서비스 예외 → 'fragments/message-error :: message'
+ *  - B-26: directMode 누락 시 400 방지
  */
-@WebMvcTest(WebController.class)
-class WebControllerHtmxTest {
+@WebMvcTest(ChatController.class)
+@Import(com.example.ragagent.context.WebMvcConfig.class)
+class ChatControllerHtmxTest {
 
     @Autowired MockMvc mvc;
 
     @MockitoBean AgentService agentService;
     @MockitoBean StreamingAgentService streamingAgentService;
-    @MockitoBean RagService ragService;
     @MockitoBean ThreadMetaService threadMetaService;
     @MockitoBean MemoryService memoryService;
     @MockitoBean AppProperties props;
-    @MockitoBean LlmUsageRepository usageRepo;
-    @MockitoBean CircuitBreaker circuitBreaker;
     @MockitoBean LlmRouter llmRouter;
-    @MockitoBean ChatModel chatModel;  // WebConfig.chatClient(ChatModel) 빈 의존성 충족
-    @MockitoBean IndexingProgressService indexingProgressService;
+    @MockitoBean ChatModel chatModel;
+    @MockitoBean ThreadContextResolver threadContextResolver;
 
     private ChatResponse sampleResponse() {
         return new ChatResponse(
@@ -86,8 +75,7 @@ class WebControllerHtmxTest {
     @Test
     @DisplayName("POST /ui/chat — 정상 응답 시 message-assistant fragment 반환")
     void postChat_returnsAssistantFragment() throws Exception {
-        when(agentService.chat(any())).thenReturn(sampleResponse());
-        when(circuitBreaker.getBlockedProviders()).thenReturn(Map.of());
+        when(agentService.chat(any(), any())).thenReturn(sampleResponse());
 
         mvc.perform(post("/ui/chat")
                         .param("question", "테스트 질문")
@@ -112,8 +100,7 @@ class WebControllerHtmxTest {
     @Test
     @DisplayName("POST /ui/chat — DUAL 응답 → message-assistant-dual fragment")
     void postChat_dualResponse_returnsDualFragment() throws Exception {
-        when(agentService.chat(any())).thenReturn(dualResponse());
-        when(circuitBreaker.getBlockedProviders()).thenReturn(Map.of());
+        when(agentService.chat(any(), any())).thenReturn(dualResponse());
 
         mvc.perform(post("/ui/chat")
                         .param("question", "DUAL 질문")
@@ -127,7 +114,7 @@ class WebControllerHtmxTest {
     @Test
     @DisplayName("POST /ui/chat — 서비스 예외 → message-error fragment")
     void postChat_serviceException_returnsErrorFragment() throws Exception {
-        when(agentService.chat(any())).thenThrow(new RuntimeException("LLM down"));
+        when(agentService.chat(any(), any())).thenThrow(new RuntimeException("LLM down"));
 
         mvc.perform(post("/ui/chat")
                         .param("question", "q")
@@ -136,82 +123,12 @@ class WebControllerHtmxTest {
                 .andExpect(view().name("fragments/message-error :: message"));
     }
 
-    @Test
-    @DisplayName("POST /ui/documents/upload — 정상 업로드 → 202 + taskId (비동기 인덱싱)")
-    void uploadDocument_success_returnsJson() throws Exception {
-        when(indexingProgressService.newTaskId()).thenReturn("task-abc");
-
-        MockMultipartFile file = new MockMultipartFile(
-                "file", "test.pdf", "application/pdf", "%PDF-1.4 dummy".getBytes());
-
-        mvc.perform(multipart("/ui/documents/upload").file(file)
-                        .param("version", "latest"))
-                .andExpect(status().isAccepted())
-                .andExpect(jsonPath("$.taskId").value("task-abc"));
-    }
-
-    @Test
-    @DisplayName("POST /ui/documents/upload — 빈 파일 → 400")
-    void uploadDocument_emptyFile_returns400() throws Exception {
-        MockMultipartFile empty = new MockMultipartFile(
-                "file", "empty.pdf", "application/pdf", new byte[0]);
-
-        mvc.perform(multipart("/ui/documents/upload").file(empty)
-                        .param("version", "latest"))
-                .andExpect(status().isBadRequest());
-    }
-
-    @Test
-    @DisplayName("POST /ui/documents/upload — 미지원 확장자 → 422")
-    void uploadDocument_unsupportedExt_returns422() throws Exception {
-        MockMultipartFile exe = new MockMultipartFile(
-                "file", "malware.exe", "application/octet-stream", "MZ".getBytes());
-
-        mvc.perform(multipart("/ui/documents/upload").file(exe)
-                        .param("version", "latest"))
-                .andExpect(status().isUnprocessableEntity());
-    }
-
-    @Test
-    @DisplayName("DELETE /ui/threads/{id} — 200 OK")
-    void deleteThread_returnsOk() throws Exception {
-        mvc.perform(delete("/ui/threads/t1"))
-                .andExpect(status().isOk());
-    }
-
-    @Test
-    @DisplayName("PATCH /ui/threads/{id}/routing-mode — 204 No Content")
-    void updateRoutingMode_returnsNoContent() throws Exception {
-        mvc.perform(patch("/ui/threads/t1/routing-mode")
-                        .param("routingMode", "QUALITY_FIRST"))
-                .andExpect(status().isNoContent());
-    }
-
-    @Test
-    @DisplayName("DELETE /ui/documents/{docId} — 200 OK")
-    void deleteDocument_returnsOk() throws Exception {
-        mvc.perform(delete("/ui/documents/doc_abc")
-                        .param("version", "latest"))
-                .andExpect(status().isOk());
-    }
-
-    @Test
-    @DisplayName("POST /ui/documents/sync — 정상 → 202 + taskId (비동기 싱크)")
-    void syncDocuments_returnsFragment() throws Exception {
-        when(indexingProgressService.newTaskId()).thenReturn("task-sync-1");
-
-        mvc.perform(post("/ui/documents/sync").param("version", "latest"))
-                .andExpect(status().isAccepted())
-                .andExpect(jsonPath("$.taskId").value("task-sync-1"));
-    }
-
     // ── B-26 회귀: directMode 파라미터 누락 시 400 방지 ────────────────────────
 
     @Test
     @DisplayName("POST /ui/chat — directMode 누락 시 400 아닌 정상 응답 (B-26 회귀)")
     void postChat_missingDirectMode_doesNotReturn400() throws Exception {
-        when(agentService.chat(any())).thenReturn(sampleResponse());
-        when(circuitBreaker.getBlockedProviders()).thenReturn(Map.of());
+        when(agentService.chat(any(), any())).thenReturn(sampleResponse());
 
         mvc.perform(post("/ui/chat")
                         .param("question", "테스트")

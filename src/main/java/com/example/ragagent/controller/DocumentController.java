@@ -1,12 +1,10 @@
 package com.example.ragagent.controller;
 
 import com.example.ragagent.config.AppProperties;
-import com.example.ragagent.llm.CircuitBreaker;
 import com.example.ragagent.model.*;
-import com.example.ragagent.repository.LlmUsageRepository;
 import com.example.ragagent.security.UnsupportedFileTypeException;
 import com.example.ragagent.security.UploadValidator;
-import com.example.ragagent.service.AgentService;
+import com.example.ragagent.service.IndexingProgressService;
 import com.example.ragagent.service.RagService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -15,98 +13,168 @@ import org.springframework.core.io.Resource;
 import org.springframework.http.CacheControl;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.stereotype.Controller;
+import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.multipart.MultipartFile;
-
-import java.time.Duration;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.io.IOException;
 import java.nio.file.*;
 import java.security.DigestInputStream;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
-import java.util.stream.Collectors;
 
 /**
- * REST API — equivalent to api.py (FastAPI) in the Python version.
- *
- * Endpoints:
- *   GET  /api/health
- *   POST /api/chat
- *   POST /api/documents
- *   POST /api/documents/sync
- *   GET  /api/documents
- *   DELETE /api/documents/{docId}
- *   GET  /api/llm/usage
- *   GET  /api/llm/usage/history
+ * Document management: UI pages, HTMX upload/sync/list/delete fragments,
+ * and REST /api/v1/documents + /api/v1/images.
  */
-@RestController
-@RequestMapping("/api")
-public class ApiController {
+@Controller
+public class DocumentController {
 
-    private static final Logger log = LoggerFactory.getLogger(ApiController.class);
+    private static final Logger log = LoggerFactory.getLogger(DocumentController.class);
 
-    private final AgentService agentService;
     private final RagService ragService;
+    private final IndexingProgressService progressService;
     private final AppProperties props;
-    private final LlmUsageRepository usageRepo;
-    private final CircuitBreaker circuitBreaker;
-    private final Path documentsDir;
 
-    public ApiController(AgentService agentService, RagService ragService,
-                         AppProperties props, LlmUsageRepository usageRepo,
-                         CircuitBreaker circuitBreaker) {
-        this.agentService = agentService;
+    public DocumentController(RagService ragService,
+                               IndexingProgressService progressService,
+                               AppProperties props) {
         this.ragService = ragService;
+        this.progressService = progressService;
         this.props = props;
-        this.usageRepo = usageRepo;
-        this.circuitBreaker = circuitBreaker;
-        this.documentsDir = Path.of(props.dataDir()).resolve("documents");
     }
 
-    // ── Health ──────────────────────────────────────────────────────────────
-
-    @GetMapping("/health")
-    public Map<String, Object> health() {
-        return Map.of(
-                "status", "ok",
-                "service", "rag-agent",
-                "timestamp", Instant.now().toString()
-        );
+    private Path documentsDir() {
+        return Path.of(props.dataDir()).resolve("documents");
     }
 
-    // ── Chat ────────────────────────────────────────────────────────────────
+    // ── Page ──────────────────────────────────────────────────────────
 
-    @PostMapping("/chat")
-    public ResponseEntity<ChatResponse> chat(@RequestBody ChatRequest request) {
-        if (request.question() == null || request.question().isBlank()) {
+    @GetMapping("/documents")
+    public String documents(Model model) {
+        model.addAttribute("documents", ragService.listDocuments());
+        return "documents";
+    }
+
+    // ── HTMX actions ─────────────────────────────────────────────────
+
+    /**
+     * Accepts the file synchronously (transfer + magic-byte check), then starts indexing
+     * asynchronously on a virtual thread. Returns {taskId} immediately (HTTP 202).
+     */
+    @PostMapping("/ui/documents/upload")
+    @ResponseBody
+    public ResponseEntity<Map<String, String>> uploadDocument(
+            @RequestParam MultipartFile file,
+            @RequestParam(defaultValue = "latest") String version) {
+        if (file.isEmpty()) {
             return ResponseEntity.badRequest().build();
         }
+        String filename;
+        Path tmp;
         try {
-            ChatResponse response = agentService.chat(request);
-            return ResponseEntity.ok(response);
+            filename = UploadValidator.sanitizeFilename(file.getOriginalFilename());
+            UploadValidator.checkExtension(filename);
+            tmp = UploadValidator.stageToTemp(file, filename);
+        } catch (UnsupportedFileTypeException e) {
+            log.warn("Rejected upload: {}", e.getMessage());
+            return ResponseEntity.unprocessableEntity().build();
         } catch (IllegalArgumentException e) {
+            log.warn("Rejected upload: {}", e.getMessage());
             return ResponseEntity.badRequest().build();
         } catch (Exception e) {
-            log.error("Chat error", e);
+            log.error("Upload transfer error", e);
+            return ResponseEntity.internalServerError().build();
+        }
+        String taskId = progressService.newTaskId();
+        final Path tmpPath = tmp;
+        final String fname = filename;
+        final String ver = version;
+
+        Thread.ofVirtual().name("idx-upload-" + taskId).start(() -> {
+            try {
+                DocumentInfo info = ragService.indexDocument(tmpPath, fname, ver,
+                        event -> progressService.publish(taskId, event));
+                progressService.publish(taskId, IndexingProgressEvent.done(info));
+            } catch (Exception e) {
+                String msg = isChromaDown(e) ? "ChromaDB 연결 실패" : e.getMessage();
+                log.error("Async index error for {}", fname, e);
+                progressService.publish(taskId, IndexingProgressEvent.error(fname, msg));
+            } finally {
+                try { Files.deleteIfExists(tmpPath); } catch (Exception ignored) {}
+            }
+        });
+
+        return ResponseEntity.accepted().body(Map.of("taskId", taskId));
+    }
+
+    /** SSE stream for indexing progress. */
+    @GetMapping(value = "/ui/documents/progress/{taskId}", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    @ResponseBody
+    public SseEmitter indexingProgress(@PathVariable String taskId) {
+        return progressService.subscribe(taskId);
+    }
+
+    /** Starts directory sync asynchronously and returns {taskId} (HTTP 202). */
+    @PostMapping("/ui/documents/sync")
+    @ResponseBody
+    public ResponseEntity<Map<String, String>> syncDocumentsUi(
+            @RequestParam(defaultValue = "latest") String version) {
+        String taskId = progressService.newTaskId();
+
+        Thread.ofVirtual().name("idx-sync-" + taskId).start(() -> {
+            try {
+                SyncResult result = ragService.syncDirectory(version,
+                        event -> progressService.publish(taskId, event));
+                progressService.publish(taskId, IndexingProgressEvent.syncDone(result));
+            } catch (Exception e) {
+                String msg = isChromaDown(e) ? "ChromaDB 연결 실패" : e.getMessage();
+                log.error("Sync error", e);
+                progressService.publish(taskId, IndexingProgressEvent.error("sync", msg));
+            }
+        });
+
+        return ResponseEntity.accepted().body(Map.of("taskId", taskId));
+    }
+
+    @DeleteMapping("/ui/documents/{docId}")
+    @ResponseBody
+    public ResponseEntity<Void> deleteDocumentUi(
+            @PathVariable String docId,
+            @RequestParam(defaultValue = "latest") String version) {
+        try {
+            ragService.deleteDocument(docId, version);
+            return ResponseEntity.ok().build();
+        } catch (Exception e) {
+            log.error("Document delete error", e);
             return ResponseEntity.internalServerError().build();
         }
     }
 
-    // ── Document Management ─────────────────────────────────────────────────
+    @GetMapping("/ui/documents/list")
+    public String documentList(Model model) {
+        model.addAttribute("documents", ragService.listDocuments());
+        return "fragments/doc-table-body :: body";
+    }
 
-    @PostMapping("/documents")
-    public ResponseEntity<DocumentInfo> uploadDocument(
+    // ── REST API ──────────────────────────────────────────────────────
+
+    @PostMapping("/api/v1/documents")
+    @ResponseBody
+    public ResponseEntity<DocumentInfo> uploadDocumentApi(
             @RequestParam("file") MultipartFile file,
             @RequestParam(value = "version", defaultValue = "latest") String version) {
 
         if (file.isEmpty()) return ResponseEntity.badRequest().build();
 
-        // Sanitize, extension-check, stage to temp, magic-byte check — unified via UploadValidator
         String filename;
         Path staged;
         try {
@@ -124,8 +192,8 @@ public class ApiController {
             return ResponseEntity.internalServerError().build();
         }
 
-        // SHA-256 dedup + copy to final destination
         try {
+            Path documentsDir = documentsDir();
             Files.createDirectories(documentsDir);
             Path base = documentsDir.toAbsolutePath().normalize();
             Path dest = base.resolve(filename).normalize();
@@ -152,8 +220,9 @@ public class ApiController {
         }
     }
 
-    @PostMapping("/documents/sync")
-    public ResponseEntity<SyncResult> syncDocuments(
+    @PostMapping("/api/v1/documents/sync")
+    @ResponseBody
+    public ResponseEntity<SyncResult> syncDocumentsApi(
             @RequestParam(value = "version", defaultValue = "latest") String version) {
         try {
             SyncResult result = ragService.syncDirectory(version);
@@ -164,13 +233,15 @@ public class ApiController {
         }
     }
 
-    @GetMapping("/documents")
-    public ResponseEntity<List<DocumentInfo>> listDocuments() {
+    @GetMapping("/api/v1/documents")
+    @ResponseBody
+    public ResponseEntity<List<DocumentInfo>> listDocumentsApi() {
         return ResponseEntity.ok(ragService.listDocuments());
     }
 
-    @DeleteMapping("/documents/{docId}")
-    public ResponseEntity<Void> deleteDocument(
+    @DeleteMapping("/api/v1/documents/{docId}")
+    @ResponseBody
+    public ResponseEntity<Void> deleteDocumentApi(
             @PathVariable String docId,
             @RequestParam(value = "version", defaultValue = "latest") String version) {
         try {
@@ -182,13 +253,11 @@ public class ApiController {
         }
     }
 
-    // ── Image Serving ────────────────────────────────────────────────────────
-
     /**
-     * Serves extracted images stored under data/images/{docId}/{filename}.
-     * Rejects path traversal attempts (.. or / in either segment).
+     * Serves extracted images. Rejects path traversal in docId / filename.
      */
-    @GetMapping("/images/{docId}/{filename}")
+    @GetMapping("/api/v1/images/{docId}/{filename}")
+    @ResponseBody
     public ResponseEntity<Resource> getImage(
             @PathVariable String docId,
             @PathVariable String filename) {
@@ -214,62 +283,16 @@ public class ApiController {
         }
     }
 
-    // ── LLM Usage ───────────────────────────────────────────────────────────
+    // ── Helpers ───────────────────────────────────────────────────────
 
-    /** Provider-level daily / weekly / monthly summary + Circuit Breaker state. */
-    @GetMapping("/llm/usage")
-    public List<UsageReport> getLlmUsage() {
-        Map<String, Instant> blocked = circuitBreaker.getBlockedProviders();
-        return props.llmSafe().providers().stream()
-                .map(cfg -> {
-                    String name = cfg.name();
-                    Instant until = blocked.get(name);
-                    return new UsageReport(
-                            name,
-                            cfg.type(),
-                            cfg.model(),
-                            usageRepo.getDaily(name),
-                            usageRepo.getWeekly(name),
-                            usageRepo.getMonthly(name),
-                            until != null ? until.toString() : null
-                    );
-                })
-                .toList();
+    private static boolean isChromaDown(Throwable t) {
+        while (t != null) {
+            if (t instanceof ResourceAccessException) return true;
+            t = t.getCause();
+        }
+        return false;
     }
 
-    /** Daily token history per provider for Chart.js stacked bar chart. */
-    @GetMapping("/llm/usage/history")
-    public Map<String, List<LlmUsageRepository.DailyRow>> getLlmUsageHistory(
-            @RequestParam(defaultValue = "30") int days) {
-        int safeDays = Math.min(Math.max(days, 1), 365);
-        return props.llmSafe().providers().stream().collect(
-                Collectors.toMap(
-                        AppProperties.ProviderConfig::name,
-                        cfg -> usageRepo.getDailyHistory(cfg.name(), safeDays),
-                        (a, b) -> a
-                )
-        );
-    }
-
-    // ── Response records ────────────────────────────────────────────────────
-
-    public record UsageReport(
-            String provider,
-            String type,
-            String model,
-            LlmUsageRepository.PeriodSummary daily,
-            LlmUsageRepository.PeriodSummary weekly,
-            LlmUsageRepository.PeriodSummary monthly,
-            String blockedUntil   // ISO-8601 or null
-    ) {}
-
-    // ── Internal helpers ────────────────────────────────────────────────────
-
-    /**
-     * Strips any directory components and replaces disallowed characters with '_'.
-     * Rejects names that are blank, dot-only ('.', '..', '...'), or start with a dot
-     * (hidden files / leading-dot traversal-like names) by throwing IllegalArgumentException.
-     */
     private static String computeSha256(Path path) throws IOException {
         try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
@@ -295,5 +318,4 @@ public class ApiController {
         }
         return dir.resolve(stem + "_v" + Instant.now().toEpochMilli() + ext);
     }
-
 }

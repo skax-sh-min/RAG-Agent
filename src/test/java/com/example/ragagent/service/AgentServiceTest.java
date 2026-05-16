@@ -2,6 +2,7 @@ package com.example.ragagent.service;
 
 import com.example.ragagent.agent.AgentGraph;
 import com.example.ragagent.agent.AgentState;
+import com.example.ragagent.context.ThreadContext;
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.model.ChatRequest;
 import com.example.ragagent.model.ChatResponse;
@@ -38,6 +39,8 @@ class AgentServiceTest {
     private ClassifierService classifierService;
     private AgentService service;
 
+    private static final ThreadContext CTX = ThreadContext.anonymous("t1");
+
     @BeforeEach
     void setUp() {
         agentGraph = mock(AgentGraph.class);
@@ -48,13 +51,15 @@ class AgentServiceTest {
 
     private AgentState fullResult() {
         return AgentState.of("질문", "v1", "t1", "", RoutingMode.COST_FIRST)
-                .withQuestionType("manual")
-                .withAnswer("최종 답변")
-                .withSources(List.of(new SourceRef("doc.pdf | v1 | p.3", "snippet", "doc_123", 3)))
-                .withImageRefs(List.of("data/images/doc_123/img1.png"))
-                .withUsedProvider("gemini-flash")
-                .withTokensAccumulated(120, 80)
-                .withTokensAccumulated(20, 10);
+                .toBuilder()
+                .questionType("manual")
+                .answer("최종 답변")
+                .sources(List.of(new SourceRef("doc.pdf | v1 | p.3", "snippet", "doc_123", 3)))
+                .imageRefs(List.of("data/images/doc_123/img1.png"))
+                .usedProvider("gemini-flash")
+                .accumulateTokens(120, 80)
+                .accumulateTokens(20, 10)
+                .build();
     }
 
     @Test
@@ -64,7 +69,7 @@ class AgentServiceTest {
         when(classifierService.classifyOnly(anyString(), any())).thenReturn("manual");
         when(agentGraph.run(any())).thenReturn(fullResult());
 
-        service.chat(new ChatRequest("질문", "v1", "t1", RoutingMode.COST_FIRST));
+        service.chat(CTX, new ChatRequest("질문", "v1", "t1", RoutingMode.COST_FIRST));
 
         ArgumentCaptor<AgentState> captor = ArgumentCaptor.forClass(AgentState.class);
         verify(agentGraph, times(1)).run(captor.capture());
@@ -88,7 +93,7 @@ class AgentServiceTest {
         when(classifierService.classifyOnly(any(), any())).thenReturn("manual");
         when(agentGraph.run(any())).thenReturn(fullResult());
 
-        ChatResponse resp = service.chat(new ChatRequest("질문", "v1", "t1", RoutingMode.COST_FIRST));
+        ChatResponse resp = service.chat(CTX, new ChatRequest("질문", "v1", "t1", RoutingMode.COST_FIRST));
 
         assertThat(resp.answer()).isEqualTo("최종 답변");
         assertThat(resp.questionType()).isEqualTo("manual");
@@ -105,16 +110,18 @@ class AgentServiceTest {
     @DisplayName("DUAL 모드 응답 — dualLocalAnswer/Provider 가 ChatResponse 에 노출")
     void chat_dualMode_exposesLocalAnswer() {
         AgentState dualResult = AgentState.of("q", "v1", "t1", "", RoutingMode.DUAL)
-                .withQuestionType("manual")
-                .withAnswer("외부 답변")
-                .withUsedProvider("gemini-flash")
-                .withDualResult("로컬 답변", "local");
+                .toBuilder()
+                .questionType("manual")
+                .answer("외부 답변")
+                .usedProvider("gemini-flash")
+                .dualResult("로컬 답변", "local")
+                .build();
 
         when(memoryService.getHistory(any())).thenReturn("");
         when(classifierService.classifyOnly(any(), any())).thenReturn("manual");
         when(agentGraph.run(any())).thenReturn(dualResult);
 
-        ChatResponse resp = service.chat(new ChatRequest("질문", "v1", "t1", RoutingMode.DUAL));
+        ChatResponse resp = service.chat(CTX, new ChatRequest("질문", "v1", "t1", RoutingMode.DUAL));
 
         assertThat(resp.dualLocalAnswer()).isEqualTo("로컬 답변");
         assertThat(resp.dualLocalProvider()).isEqualTo("local");
@@ -124,13 +131,13 @@ class AgentServiceTest {
     @Test
     @DisplayName("PROGRESSIVE 모드 응답 — premiumUpgraded 가 ChatResponse 에 노출")
     void chat_progressiveUpgrade_exposesPremiumProvider() {
-        AgentState upgradedResult = fullResult().withPremiumUpgraded("gemini-pro");
+        AgentState upgradedResult = fullResult().toBuilder().premiumUpgraded("gemini-pro").build();
 
         when(memoryService.getHistory(any())).thenReturn("");
         when(classifierService.classifyOnly(any(), any())).thenReturn("manual");
         when(agentGraph.run(any())).thenReturn(upgradedResult);
 
-        ChatResponse resp = service.chat(new ChatRequest("질문", "v1", "t1", RoutingMode.PROGRESSIVE));
+        ChatResponse resp = service.chat(CTX, new ChatRequest("질문", "v1", "t1", RoutingMode.PROGRESSIVE));
 
         assertThat(resp.premiumUpgraded()).isEqualTo("gemini-pro");
     }
@@ -149,7 +156,7 @@ class AgentServiceTest {
         when(agentGraph.run(any())).thenReturn(fullResult());
 
         long start = System.nanoTime();
-        service.chat(new ChatRequest("질문", "v1", "t1", RoutingMode.COST_FIRST));
+        service.chat(CTX, new ChatRequest("질문", "v1", "t1", RoutingMode.COST_FIRST));
         long elapsedMs = (System.nanoTime() - start) / 1_000_000;
 
         // 직렬이면 ~400ms, 병렬이면 ~200-300ms. 350ms 미만이면 병렬 보장.
@@ -165,7 +172,7 @@ class AgentServiceTest {
         when(classifierService.classifyOnly(any(), any())).thenReturn(null);
         when(agentGraph.run(any())).thenReturn(fullResult());
 
-        service.chat(new ChatRequest("질문", "v1", "t1", RoutingMode.COST_FIRST));
+        service.chat(CTX, new ChatRequest("질문", "v1", "t1", RoutingMode.COST_FIRST));
 
         ArgumentCaptor<AgentState> captor = ArgumentCaptor.forClass(AgentState.class);
         verify(agentGraph).run(captor.capture());
@@ -185,8 +192,8 @@ class AgentServiceTest {
             return fullResult();
         });
 
-        service.chat(new ChatRequest("q", "v1", "t1", RoutingMode.COST_FIRST));
-        service.chat(new ChatRequest("q", "v1", "t2", RoutingMode.COST_FIRST));
+        service.chat(CTX, new ChatRequest("q", "v1", "t1", RoutingMode.COST_FIRST));
+        service.chat(CTX, new ChatRequest("q", "v1", "t2", RoutingMode.COST_FIRST));
 
         assertThat(callCount.get()).isEqualTo(2);
     }

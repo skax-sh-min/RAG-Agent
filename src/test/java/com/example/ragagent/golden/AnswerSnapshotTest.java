@@ -2,6 +2,7 @@ package com.example.ragagent.golden;
 
 import com.example.ragagent.agent.AgentGraph;
 import com.example.ragagent.agent.AgentState;
+import com.example.ragagent.context.ThreadContext;
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.model.ChatRequest;
 import com.example.ragagent.model.ChatResponse;
@@ -55,7 +56,7 @@ class AnswerSnapshotTest {
 
         AgentService service = new AgentService(agentGraph, memory, classifier);
 
-        ChatResponse resp = service.chat(new ChatRequest(
+        ChatResponse resp = service.chat(ThreadContext.anonymous("t1"), new ChatRequest(
                 c.question(), c.version(), "t1", RoutingMode.valueOf(c.routingMode())));
 
         AnswerShape actual = AnswerShape.of(resp);
@@ -68,46 +69,44 @@ class AnswerSnapshotTest {
     /** GoldenCase.given → 시뮬레이션 AgentState. */
     private static AgentState buildAgentState(GoldenCase c) {
         GoldenCase.Given g = c.given();
-        AgentState state = AgentState.of(c.question(), c.version(), "t1", "",
-                                          RoutingMode.valueOf(c.routingMode()))
-                .withQuestionType(g.questionType())
-                .withAnswer(g.answer())
-                .withUsedProvider(g.usedProvider());
 
-        // sources 시뮬레이션 — 개수만 맞춰 SourceRef 더미 생성
+        // sources 더미
         List<SourceRef> sources = java.util.stream.IntStream.range(0, g.sourcesCount())
                 .mapToObj(i -> new SourceRef("doc%d.pdf | v1 | p.%d".formatted(i, i + 1),
                                               "preview-" + i, "doc_" + i, i + 1))
                 .toList();
-        state = state.withSources(sources);
 
         // imageRefs 더미
         List<String> imageRefs = java.util.stream.IntStream.range(0, g.imageRefsCount())
                 .mapToObj(i -> "data/images/doc_" + i + "/img" + i + ".png")
                 .toList();
-        state = state.withImageRefs(imageRefs);
 
-        // llm_call_count 시뮬레이션 — accumulateTokens(in, out) 호출로 누적
-        // 합산을 한 번에 적용하면서 callCount 만 지정 횟수로 맞춤
+        AgentState.Builder b = AgentState.of(c.question(), c.version(), "t1", "",
+                                              RoutingMode.valueOf(c.routingMode()))
+                .toBuilder()
+                .questionType(g.questionType())
+                .answer(g.answer())
+                .usedProvider(g.usedProvider())
+                .sources(sources)
+                .imageRefs(imageRefs);
+
+        // llm_call_count 시뮬레이션 — accumulateTokens 호출로 누적
         if (g.llmCallCount() > 0) {
-            int perCallIn = g.inputTokens() / g.llmCallCount();
+            int perCallIn  = g.inputTokens()  / g.llmCallCount();
             int perCallOut = g.outputTokens() / g.llmCallCount();
-            int residualIn = g.inputTokens() - perCallIn * g.llmCallCount();
+            int residualIn  = g.inputTokens()  - perCallIn  * g.llmCallCount();
             int residualOut = g.outputTokens() - perCallOut * g.llmCallCount();
             for (int i = 0; i < g.llmCallCount(); i++) {
-                int addIn = perCallIn + (i == 0 ? residualIn : 0);
-                int addOut = perCallOut + (i == 0 ? residualOut : 0);
-                state = state.withTokensAccumulated(addIn, addOut);
+                b.accumulateTokens(
+                        perCallIn  + (i == 0 ? residualIn  : 0),
+                        perCallOut + (i == 0 ? residualOut : 0));
             }
         }
 
-        if (g.premiumUpgraded() != null) {
-            state = state.withPremiumUpgraded(g.premiumUpgraded());
-        }
-        if (g.dualLocalAnswer() != null) {
-            state = state.withDualResult(g.dualLocalAnswer(), g.dualLocalProvider());
-        }
-        return state;
+        if (g.premiumUpgraded() != null) b.premiumUpgraded(g.premiumUpgraded());
+        if (g.dualLocalAnswer()  != null) b.dualResult(g.dualLocalAnswer(), g.dualLocalProvider());
+
+        return b.build();
     }
 
     /** golden/*.json 전부 로드. */

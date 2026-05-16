@@ -1,0 +1,57 @@
+package com.example.ragagent.controller;
+
+import com.example.ragagent.config.AppProperties;
+import com.example.ragagent.context.ThreadContextResolver;
+import com.example.ragagent.llm.CircuitBreaker;
+import com.example.ragagent.repository.LlmUsageRepository;
+import com.example.ragagent.service.MemoryService;
+import com.example.ragagent.service.ThreadMetaService;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
+import org.springframework.context.annotation.Import;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.web.servlet.MockMvc;
+
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+
+/**
+ * QA — OperationsController HTMX 계약 보호
+ *
+ * Covers:
+ *  - DELETE /ui/threads/{id} → 200 OK
+ *  - PATCH /ui/threads/{id}/routing-mode → 204 No Content
+ */
+@WebMvcTest(OperationsController.class)
+@Import(com.example.ragagent.context.WebMvcConfig.class)
+class OperationsControllerHtmxTest {
+
+    @Autowired MockMvc mvc;
+
+    @MockitoBean ThreadMetaService threadMetaService;
+    @MockitoBean MemoryService memoryService;
+    @MockitoBean LlmUsageRepository usageRepo;
+    @MockitoBean AppProperties props;
+    @MockitoBean CircuitBreaker circuitBreaker;
+    @MockitoBean ChatModel chatModel;
+    @MockitoBean ThreadContextResolver threadContextResolver;
+
+    @Test
+    @DisplayName("DELETE /ui/threads/{id} — 200 OK")
+    void deleteThread_returnsOk() throws Exception {
+        mvc.perform(delete("/ui/threads/t1"))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("PATCH /ui/threads/{id}/routing-mode — 204 No Content")
+    void updateRoutingMode_returnsNoContent() throws Exception {
+        mvc.perform(patch("/ui/threads/t1/routing-mode")
+                        .param("routingMode", "QUALITY_FIRST"))
+                .andExpect(status().isNoContent());
+    }
+}
