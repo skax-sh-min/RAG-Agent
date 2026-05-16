@@ -118,6 +118,7 @@ public class RagService {
         String docId = filename + "_" + sha256.substring(0, 8);
         String docType = inferDocType(filename);
         Path imagesDir = dataDir.resolve("images").resolve(docId);
+        Path mdOutputPath = dataDir.resolve("converted").resolve(docId + ".md");
         log.debug("[INDEX] docId={}, type={}, sha256={}", docId, docType, sha256);
 
         // Load & split (DOCX: converter-based with image extraction; PPTX/PDF: extract separately)
@@ -126,7 +127,7 @@ public class RagService {
         log.debug("[INDEX] {} 문서 로드 중...", filename);
         onProgress.accept(IndexingProgressEvent.of("loading", 0, 0, filename, "문서 로드 중..."));
         if (lower.endsWith(".docx")) {
-            rawDocs = loaderService.loadDocx(filePath, docId, imagesDir);
+            rawDocs = loaderService.loadDocx(filePath, docId, imagesDir, mdOutputPath);
         } else {
             rawDocs = loaderService.load(filePath);
             if (lower.endsWith(".pptx") || lower.endsWith(".pdf")) {
@@ -321,13 +322,14 @@ public class RagService {
         String docId = filename + "_" + sha256.substring(0, 8);
         String docType = inferDocType(filename);
         Path imagesDir = dataDir.resolve("images").resolve(docId);
+        Path mdOutputPath = dataDir.resolve("converted").resolve(docId + ".md");
         log.debug("[SYNC] docId={}, type={}", docId, docType);
 
         List<Document> rawDocs;
         String lower = filename.toLowerCase();
         log.debug("[SYNC] {} 문서 로드 중...", filename);
         if (lower.endsWith(".docx")) {
-            rawDocs = loaderService.loadDocx(filePath, docId, imagesDir);
+            rawDocs = loaderService.loadDocx(filePath, docId, imagesDir, mdOutputPath);
         } else {
             rawDocs = loaderService.load(filePath);
             if (lower.endsWith(".pptx") || lower.endsWith(".pdf")) {
@@ -491,6 +493,10 @@ public class RagService {
         VectorStore store = vectorStoreRegistry.getStore(version);
         store.delete(existing.springDocIds());
         deleteImagesQuietly(dataDir.resolve("images").resolve(docId));
+        Path convertedMd = dataDir.resolve("converted").resolve(docId + ".md");
+        try { Files.deleteIfExists(convertedMd); } catch (IOException e) {
+            log.warn("Converted MD cleanup failed {}: {}", convertedMd, e.getMessage());
+        }
     }
 
     private void deleteImagesQuietly(Path dir) {

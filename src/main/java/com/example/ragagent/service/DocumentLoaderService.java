@@ -132,9 +132,15 @@ public class DocumentLoaderService {
      * Image-aware DOCX loader: converts via DocxToMarkdownConverter,
      * then splits by headings and extracts [이미지: ...] paths into image_paths metadata.
      * Called from RagService when docId and imagesDir are available.
+     * If mdOutputPath is non-null the converted Markdown is also saved there for inspection.
      */
-    public List<Document> loadDocx(Path filePath, String docId, Path imagesDir) throws IOException {
+    public List<Document> loadDocx(Path filePath, String docId, Path imagesDir,
+                                   Path mdOutputPath) throws IOException {
         String md = converter.convert(filePath, docId, imagesDir);
+        if (mdOutputPath != null) {
+            Files.createDirectories(mdOutputPath.getParent());
+            Files.writeString(mdOutputPath, md);
+        }
         return splitMarkdownBySections(md).stream()
                 .map(doc -> {
                     List<String> imgs = extractImagePaths(doc.getText());
