@@ -1,5 +1,6 @@
 package com.example.ragagent.security;
 
+import com.example.ragagent.exception.UnsupportedFileTypeException;
 import com.example.ragagent.service.RagService;
 import org.springframework.web.multipart.MultipartFile;
 

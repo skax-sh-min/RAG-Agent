@@ -1,6 +1,6 @@
 package com.example.ragagent.service;
 
-import com.example.ragagent.llm.LlmProviderExhaustedException;
+import com.example.ragagent.exception.LlmProviderExhaustedException;
 import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.llm.TaskType;

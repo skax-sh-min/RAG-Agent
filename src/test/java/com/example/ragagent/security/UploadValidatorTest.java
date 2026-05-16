@@ -1,5 +1,6 @@
 package com.example.ragagent.security;
 
+import com.example.ragagent.exception.UnsupportedFileTypeException;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;

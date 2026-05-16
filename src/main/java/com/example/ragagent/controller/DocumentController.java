@@ -2,7 +2,8 @@ package com.example.ragagent.controller;
 
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.model.*;
-import com.example.ragagent.security.UnsupportedFileTypeException;
+import com.example.ragagent.exception.DocumentIndexingException;
+import com.example.ragagent.exception.UnsupportedFileTypeException;
 import com.example.ragagent.security.UploadValidator;
 import com.example.ragagent.service.IndexingProgressService;
 import com.example.ragagent.service.RagService;
@@ -74,7 +75,7 @@ public class DocumentController {
     @ResponseBody
     public ResponseEntity<Map<String, String>> uploadDocument(
             @RequestParam MultipartFile file,
-            @RequestParam(defaultValue = "latest") String version) {
+            @RequestParam(defaultValue = "latest") String version) throws IOException {
         if (file.isEmpty()) {
             return ResponseEntity.badRequest().build();
         }
@@ -90,9 +91,6 @@ public class DocumentController {
         } catch (IllegalArgumentException e) {
             log.warn("Rejected upload: {}", e.getMessage());
             return ResponseEntity.badRequest().build();
-        } catch (Exception e) {
-            log.error("Upload transfer error", e);
-            return ResponseEntity.internalServerError().build();
         }
         String taskId = progressService.newTaskId();
         final Path tmpPath = tmp;
@@ -149,14 +147,9 @@ public class DocumentController {
     @ResponseBody
     public ResponseEntity<Void> deleteDocumentUi(
             @PathVariable String docId,
-            @RequestParam(defaultValue = "latest") String version) {
-        try {
-            ragService.deleteDocument(docId, version);
-            return ResponseEntity.ok().build();
-        } catch (Exception e) {
-            log.error("Document delete error", e);
-            return ResponseEntity.internalServerError().build();
-        }
+            @RequestParam(defaultValue = "latest") String version) throws IOException {
+        ragService.deleteDocument(docId, version);
+        return ResponseEntity.ok().build();
     }
 
     @GetMapping("/ui/documents/list")
@@ -171,7 +164,7 @@ public class DocumentController {
     @ResponseBody
     public ResponseEntity<DocumentInfo> uploadDocumentApi(
             @RequestParam("file") MultipartFile file,
-            @RequestParam(value = "version", defaultValue = "latest") String version) {
+            @RequestParam(value = "version", defaultValue = "latest") String version) throws IOException {
 
         if (file.isEmpty()) return ResponseEntity.badRequest().build();
 
@@ -187,9 +180,6 @@ public class DocumentController {
         } catch (IllegalArgumentException e) {
             log.warn("Rejected upload: {}", e.getMessage());
             return ResponseEntity.badRequest().build();
-        } catch (IOException e) {
-            log.error("Document upload error (stage)", e);
-            return ResponseEntity.internalServerError().build();
         }
 
         try {
@@ -212,9 +202,6 @@ public class DocumentController {
             }
             Files.copy(staged, dest, StandardCopyOption.REPLACE_EXISTING);
             return ResponseEntity.ok(ragService.indexDocument(dest, version));
-        } catch (IOException e) {
-            log.error("Document upload error", e);
-            return ResponseEntity.internalServerError().build();
         } finally {
             try { Files.deleteIfExists(staged); } catch (IOException ignored) {}
         }
@@ -223,14 +210,8 @@ public class DocumentController {
     @PostMapping("/api/v1/documents/sync")
     @ResponseBody
     public ResponseEntity<SyncResult> syncDocumentsApi(
-            @RequestParam(value = "version", defaultValue = "latest") String version) {
-        try {
-            SyncResult result = ragService.syncDirectory(version);
-            return ResponseEntity.ok(result);
-        } catch (IOException e) {
-            log.error("Sync error", e);
-            return ResponseEntity.internalServerError().build();
-        }
+            @RequestParam(value = "version", defaultValue = "latest") String version) throws IOException {
+        return ResponseEntity.ok(ragService.syncDirectory(version));
     }
 
     @GetMapping("/api/v1/documents")
@@ -243,14 +224,9 @@ public class DocumentController {
     @ResponseBody
     public ResponseEntity<Void> deleteDocumentApi(
             @PathVariable String docId,
-            @RequestParam(value = "version", defaultValue = "latest") String version) {
-        try {
-            ragService.deleteDocument(docId, version);
-            return ResponseEntity.noContent().build();
-        } catch (IOException e) {
-            log.error("Delete error", e);
-            return ResponseEntity.internalServerError().build();
-        }
+            @RequestParam(value = "version", defaultValue = "latest") String version) throws IOException {
+        ragService.deleteDocument(docId, version);
+        return ResponseEntity.noContent().build();
     }
 
     /**
@@ -260,7 +236,7 @@ public class DocumentController {
     @ResponseBody
     public ResponseEntity<Resource> getImage(
             @PathVariable String docId,
-            @PathVariable String filename) {
+            @PathVariable String filename) throws IOException {
         if (docId.contains("..") || docId.contains("/") || docId.contains("\\")
                 || filename.contains("..") || filename.contains("/") || filename.contains("\\")) {
             return ResponseEntity.badRequest().build();
@@ -269,18 +245,13 @@ public class DocumentController {
         if (!Files.exists(imgPath) || !Files.isRegularFile(imgPath)) {
             return ResponseEntity.notFound().build();
         }
-        try {
-            String contentType = Files.probeContentType(imgPath);
-            if (contentType == null) contentType = "application/octet-stream";
-            return ResponseEntity.ok()
-                    .contentType(MediaType.parseMediaType(contentType))
-                    .cacheControl(CacheControl.maxAge(Duration.ofMinutes(5)).cachePrivate())
-                    .header("X-Robots-Tag", "noindex, nofollow")
-                    .body(new FileSystemResource(imgPath));
-        } catch (IOException e) {
-            log.error("Image serve error", e);
-            return ResponseEntity.internalServerError().build();
-        }
+        String contentType = Files.probeContentType(imgPath);
+        if (contentType == null) contentType = "application/octet-stream";
+        return ResponseEntity.ok()
+                .contentType(MediaType.parseMediaType(contentType))
+                .cacheControl(CacheControl.maxAge(Duration.ofMinutes(5)).cachePrivate())
+                .header("X-Robots-Tag", "noindex, nofollow")
+                .body(new FileSystemResource(imgPath));
     }
 
     // ── Helpers ───────────────────────────────────────────────────────
@@ -302,7 +273,7 @@ public class DocumentController {
             }
             return HexFormat.of().formatHex(digest.digest());
         } catch (NoSuchAlgorithmException e) {
-            throw new RuntimeException("SHA-256 not available", e);
+            throw new DocumentIndexingException("SHA-256 not available", e);
         }
     }
 

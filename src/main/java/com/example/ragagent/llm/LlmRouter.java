@@ -1,5 +1,6 @@
 package com.example.ragagent.llm;
 
+import com.example.ragagent.exception.LlmProviderExhaustedException;
 import com.example.ragagent.repository.LlmUsageRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;

@@ -1,6 +1,7 @@
 package com.example.ragagent.ingestion;
 
 import com.example.ragagent.config.AppProperties;
+import com.example.ragagent.exception.DocumentIndexingException;
 import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.llm.TaskType;
@@ -535,7 +536,7 @@ public class DocumentIndexer {
             }
             return HexFormat.of().formatHex(digest.digest());
         } catch (NoSuchAlgorithmException | IOException e) {
-            throw new RuntimeException("SHA-256 computation failed", e);
+            throw new DocumentIndexingException("SHA-256 computation failed", e);
         }
     }
 

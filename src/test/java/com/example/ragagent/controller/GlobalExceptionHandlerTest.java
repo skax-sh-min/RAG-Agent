@@ -1,0 +1,107 @@
+package com.example.ragagent.controller;
+
+import com.example.ragagent.exception.*;
+import com.example.ragagent.web.TraceIdFilter;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
+
+/**
+ * Verifies GlobalExceptionHandler: errorCode, HTTP status, X-Trace-Id, HX-Reswap headers.
+ * Uses standaloneSetup to avoid full Spring context — no Security/ThreadContextResolver needed.
+ */
+class GlobalExceptionHandlerTest {
+
+    @RestController
+    static class StubController {
+        @GetMapping("/test/indexing-error")
+        void indexingError() { throw new DocumentIndexingException("SHA-256 failed"); }
+
+        @GetMapping("/test/vector-error")
+        void vectorError() { throw new VectorStoreException("Chroma down", new RuntimeException("timeout")); }
+
+        @GetMapping("/test/invalid-question")
+        void invalidQuestion() { throw new InvalidQuestionException("question is blank"); }
+
+        @GetMapping("/test/unsupported-file")
+        void unsupportedFile() { throw new UnsupportedFileTypeException("unsupported extension: .exe"); }
+
+        @GetMapping("/test/llm-exhausted")
+        void llmExhausted() { throw new LlmProviderExhaustedException("all providers blocked"); }
+    }
+
+    private MockMvc mvc;
+
+    @BeforeEach
+    void setUp() {
+        mvc = MockMvcBuilders.standaloneSetup(new StubController())
+                .setControllerAdvice(new GlobalExceptionHandler())
+                .addFilters(new TraceIdFilter())
+                .build();
+    }
+
+    @Test
+    @DisplayName("DocumentIndexingException → 500 + RAG-INDEX-001")
+    void documentIndexingException_returns500() throws Exception {
+        mvc.perform(get("/test/indexing-error"))
+                .andExpect(status().isInternalServerError())
+                .andExpect(jsonPath("$.errorCode").value("RAG-INDEX-001"))
+                .andExpect(jsonPath("$.detail").value("SHA-256 failed"))
+                .andExpect(header().exists("X-Trace-Id"));
+    }
+
+    @Test
+    @DisplayName("VectorStoreException → 503 + RAG-VEC-001")
+    void vectorStoreException_returns503() throws Exception {
+        mvc.perform(get("/test/vector-error"))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.errorCode").value("RAG-VEC-001"));
+    }
+
+    @Test
+    @DisplayName("InvalidQuestionException → 400 + RAG-VAL-001")
+    void invalidQuestionException_returns400() throws Exception {
+        mvc.perform(get("/test/invalid-question"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errorCode").value("RAG-VAL-001"));
+    }
+
+    @Test
+    @DisplayName("UnsupportedFileTypeException → 422 + RAG-UP-001")
+    void unsupportedFileTypeException_returns422() throws Exception {
+        mvc.perform(get("/test/unsupported-file"))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.errorCode").value("RAG-UP-001"));
+    }
+
+    @Test
+    @DisplayName("LlmProviderExhaustedException → 503 + RAG-LLM-001")
+    void llmProviderExhaustedException_returns503() throws Exception {
+        mvc.perform(get("/test/llm-exhausted"))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.errorCode").value("RAG-LLM-001"));
+    }
+
+    @Test
+    @DisplayName("HTMX 요청 → HX-Reswap: none 헤더 포함")
+    void htmxRequest_getsHxReswapHeader() throws Exception {
+        mvc.perform(get("/test/indexing-error").header("HX-Request", "true"))
+                .andExpect(status().isInternalServerError())
+                .andExpect(header().string("HX-Reswap", "none"));
+    }
+
+    @Test
+    @DisplayName("X-Trace-Id 요청 헤더 → 응답 헤더에 동일 값 반영")
+    void traceIdFromRequest_echoedInResponse() throws Exception {
+        mvc.perform(get("/test/invalid-question").header("X-Trace-Id", "test-trace-42"))
+                .andExpect(header().string("X-Trace-Id", "test-trace-42"))
+                .andExpect(jsonPath("$.traceId").value("test-trace-42"));
+    }
+}
