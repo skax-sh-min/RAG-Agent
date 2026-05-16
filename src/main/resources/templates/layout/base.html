@@ -5,6 +5,8 @@
 <head>
     <meta charset="UTF-8"/>
     <meta name="viewport" content="width=device-width, initial-scale=1"/>
+    <meta name="_csrf" th:content="${_csrf != null ? _csrf.token : ''}"/>
+    <meta name="_csrf_header" th:content="${_csrf != null ? _csrf.headerName : 'X-CSRF-TOKEN'}"/>
     <title layout:title-pattern="$CONTENT_TITLE - RAG Q&A" th:text="#{nav.title}">Document Q&amp;A</title>
 
     <link rel="stylesheet" th:href="@{/webjars/bootstrap/css/bootstrap.min.css}"/>
@@ -189,6 +191,15 @@ const I18N = {
     document.addEventListener('themechange', syncHljsTheme);
     syncHljsTheme();
 
+    /* HTMX CSRF 자동 전송 */
+    document.body.addEventListener('htmx:configRequest', function (event) {
+        const tokenMeta  = document.querySelector('meta[name="_csrf"]');
+        const headerMeta = document.querySelector('meta[name="_csrf_header"]');
+        if (tokenMeta && headerMeta && tokenMeta.content) {
+            event.detail.headers[headerMeta.content] = tokenMeta.content;
+        }
+    });
+
     /* Global HTMX error handlers */
     document.body.addEventListener('htmx:sendError', function () {
         document.getElementById('network-banner').classList.remove('d-none');
@@ -211,7 +222,7 @@ const I18N = {
     (function () {
         const dot   = document.getElementById('api-dot');
         const label = document.getElementById('api-label');
-        fetch('/api/health')
+        fetch('/api/v1/health')
             .then(r => r.ok ? r.json() : Promise.reject())
             .then(d => {
                 if (d.status === 'ok') {

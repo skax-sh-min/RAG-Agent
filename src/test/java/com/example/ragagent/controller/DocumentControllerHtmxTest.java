@@ -15,6 +15,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
 import static org.mockito.Mockito.when;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -32,7 +33,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  *  - 동기화 → 202 + taskId
  */
 @WebMvcTest(DocumentController.class)
-@Import(com.example.ragagent.context.WebMvcConfig.class)
+@Import({com.example.ragagent.context.WebMvcConfig.class, com.example.ragagent.security.SecurityConfig.class})
 class DocumentControllerHtmxTest {
 
     @Autowired MockMvc mvc;
@@ -53,7 +54,8 @@ class DocumentControllerHtmxTest {
                 "file", "test.pdf", "application/pdf", "%PDF-1.4 dummy".getBytes());
 
         mvc.perform(multipart("/ui/documents/upload").file(file)
-                        .param("version", "latest"))
+                        .param("version", "latest")
+                        .with(csrf()))
                 .andExpect(status().isAccepted())
                 .andExpect(jsonPath("$.taskId").value("task-abc"));
     }
@@ -65,7 +67,8 @@ class DocumentControllerHtmxTest {
                 "file", "empty.pdf", "application/pdf", new byte[0]);
 
         mvc.perform(multipart("/ui/documents/upload").file(empty)
-                        .param("version", "latest"))
+                        .param("version", "latest")
+                        .with(csrf()))
                 .andExpect(status().isBadRequest());
     }
 
@@ -76,7 +79,8 @@ class DocumentControllerHtmxTest {
                 "file", "malware.exe", "application/octet-stream", "MZ".getBytes());
 
         mvc.perform(multipart("/ui/documents/upload").file(exe)
-                        .param("version", "latest"))
+                        .param("version", "latest")
+                        .with(csrf()))
                 .andExpect(status().isUnprocessableEntity());
     }
 
@@ -84,7 +88,8 @@ class DocumentControllerHtmxTest {
     @DisplayName("DELETE /ui/documents/{docId} — 200 OK")
     void deleteDocument_returnsOk() throws Exception {
         mvc.perform(delete("/ui/documents/doc_abc")
-                        .param("version", "latest"))
+                        .param("version", "latest")
+                        .with(csrf()))
                 .andExpect(status().isOk());
     }
 
@@ -93,7 +98,9 @@ class DocumentControllerHtmxTest {
     void syncDocuments_returnsAccepted() throws Exception {
         when(indexingProgressService.newTaskId()).thenReturn("task-sync-1");
 
-        mvc.perform(post("/ui/documents/sync").param("version", "latest"))
+        mvc.perform(post("/ui/documents/sync")
+                        .param("version", "latest")
+                        .with(csrf()))
                 .andExpect(status().isAccepted())
                 .andExpect(jsonPath("$.taskId").value("task-sync-1"));
     }

@@ -1,5 +1,6 @@
 package com.example.ragagent.context;
 
+import com.example.ragagent.security.CurrentUser;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpSession;
 import org.springframework.core.MethodParameter;
@@ -13,6 +14,12 @@ import java.util.UUID;
 
 @Component
 public class ThreadContextResolver implements HandlerMethodArgumentResolver {
+
+    private final CurrentUser currentUser;
+
+    public ThreadContextResolver(CurrentUser currentUser) {
+        this.currentUser = currentUser;  // 향후 JwtCurrentUser 등 구현체로 교체
+    }
 
     @Override
     public boolean supportsParameter(MethodParameter p) {
@@ -29,7 +36,6 @@ public class ThreadContextResolver implements HandlerMethodArgumentResolver {
             threadId = UUID.randomUUID().toString();
             session.setAttribute("threadId", threadId);
         }
-        // 향후: SecurityContextHolder.getContext().getAuthentication() 기반 userId 설정
-        return ThreadContext.anonymous(threadId);
+        return new ThreadContext(threadId, currentUser.userId(), currentUser.locale());
     }
 }

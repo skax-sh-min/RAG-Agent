@@ -15,6 +15,7 @@ import org.springframework.context.annotation.Import;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -27,7 +28,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  *  - PATCH /ui/threads/{id}/routing-mode → 204 No Content
  */
 @WebMvcTest(OperationsController.class)
-@Import(com.example.ragagent.context.WebMvcConfig.class)
+@Import({com.example.ragagent.context.WebMvcConfig.class, com.example.ragagent.security.SecurityConfig.class})
 class OperationsControllerHtmxTest {
 
     @Autowired MockMvc mvc;
@@ -43,7 +44,8 @@ class OperationsControllerHtmxTest {
     @Test
     @DisplayName("DELETE /ui/threads/{id} — 200 OK")
     void deleteThread_returnsOk() throws Exception {
-        mvc.perform(delete("/ui/threads/t1"))
+        mvc.perform(delete("/ui/threads/t1")
+                        .with(csrf()))
                 .andExpect(status().isOk());
     }
 
@@ -51,7 +53,8 @@ class OperationsControllerHtmxTest {
     @DisplayName("PATCH /ui/threads/{id}/routing-mode — 204 No Content")
     void updateRoutingMode_returnsNoContent() throws Exception {
         mvc.perform(patch("/ui/threads/t1/routing-mode")
-                        .param("routingMode", "QUALITY_FIRST"))
+                        .param("routingMode", "QUALITY_FIRST")
+                        .with(csrf()))
                 .andExpect(status().isNoContent());
     }
 }

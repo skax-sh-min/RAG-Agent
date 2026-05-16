@@ -22,6 +22,7 @@ import java.util.List;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.when;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.request;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -38,7 +39,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  *  - B-26: directMode 누락 시 400 방지
  */
 @WebMvcTest(ChatController.class)
-@Import(com.example.ragagent.context.WebMvcConfig.class)
+@Import({com.example.ragagent.context.WebMvcConfig.class, com.example.ragagent.security.SecurityConfig.class})
 class ChatControllerHtmxTest {
 
     @Autowired MockMvc mvc;
@@ -81,7 +82,8 @@ class ChatControllerHtmxTest {
                         .param("question", "테스트 질문")
                         .param("threadId", "t1")
                         .param("version", "latest")
-                        .param("routingMode", "COST_FIRST"))
+                        .param("routingMode", "COST_FIRST")
+                        .with(csrf()))
                 .andExpect(status().isOk())
                 .andExpect(view().name("fragments/message-assistant :: message"));
     }
@@ -92,7 +94,8 @@ class ChatControllerHtmxTest {
         mvc.perform(post("/ui/chat")
                         .param("question", "")
                         .param("threadId", "t1")
-                        .param("version", "latest"))
+                        .param("version", "latest")
+                        .with(csrf()))
                 .andExpect(status().isOk())
                 .andExpect(view().name("fragments/message-error :: message"));
     }
@@ -106,7 +109,8 @@ class ChatControllerHtmxTest {
                         .param("question", "DUAL 질문")
                         .param("threadId", "t1")
                         .param("version", "latest")
-                        .param("routingMode", "DUAL"))
+                        .param("routingMode", "DUAL")
+                        .with(csrf()))
                 .andExpect(status().isOk())
                 .andExpect(view().name("fragments/message-assistant-dual :: message"));
     }
@@ -119,7 +123,8 @@ class ChatControllerHtmxTest {
         mvc.perform(post("/ui/chat")
                         .param("question", "q")
                         .param("threadId", "t1")
-                        .param("version", "latest"))
+                        .param("version", "latest")
+                        .with(csrf()))
                 .andExpect(view().name("fragments/message-error :: message"));
     }
 
@@ -133,7 +138,8 @@ class ChatControllerHtmxTest {
         mvc.perform(post("/ui/chat")
                         .param("question", "테스트")
                         .param("threadId", "t1")
-                        .param("version", "latest"))
+                        .param("version", "latest")
+                        .with(csrf()))
                 .andExpect(status().isOk())
                 .andExpect(view().name("fragments/message-assistant :: message"));
     }
@@ -145,7 +151,8 @@ class ChatControllerHtmxTest {
         mvc.perform(post("/ui/chat/stream")
                         .param("question", "테스트")
                         .param("threadId", "t1")
-                        .param("version", "latest"))
+                        .param("version", "latest")
+                        .with(csrf()))
                 .andExpect(status().isOk())
                 .andExpect(request().asyncStarted());
     }
