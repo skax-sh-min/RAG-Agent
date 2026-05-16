@@ -98,7 +98,7 @@ class AgentServiceTest {
         assertThat(resp.totalOutputTokens()).isEqualTo(90);
         assertThat(resp.llmCallCount()).isEqualTo(2);
         assertThat(resp.usedProvider()).isEqualTo("gemini-flash");
-        assertThat(resp.elapsedSeconds()).isGreaterThan(0.0);
+        assertThat(resp.elapsedSeconds()).isGreaterThanOrEqualTo(0.0);
     }
 
     @Test

@@ -4,11 +4,10 @@ import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.llm.CircuitBreaker;
 import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.model.ChatResponse;
-import com.example.ragagent.model.DocumentInfo;
 import com.example.ragagent.model.SourceRef;
-import com.example.ragagent.model.SyncResult;
 import com.example.ragagent.repository.LlmUsageRepository;
 import com.example.ragagent.service.AgentService;
+import com.example.ragagent.service.IndexingProgressService;
 import com.example.ragagent.service.MemoryService;
 import com.example.ragagent.service.RagService;
 import com.example.ragagent.service.StreamingAgentService;
@@ -26,7 +25,6 @@ import java.util.List;
 import java.util.Map;
 
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
@@ -63,6 +61,7 @@ class WebControllerHtmxTest {
     @MockitoBean CircuitBreaker circuitBreaker;
     @MockitoBean LlmRouter llmRouter;
     @MockitoBean ChatModel chatModel;  // WebConfig.chatClient(ChatModel) 빈 의존성 충족
+    @MockitoBean IndexingProgressService indexingProgressService;
 
     private ChatResponse sampleResponse() {
         return new ChatResponse(
@@ -138,21 +137,17 @@ class WebControllerHtmxTest {
     }
 
     @Test
-    @DisplayName("POST /ui/documents/upload — 정상 업로드 → 200 + DocumentInfo JSON")
+    @DisplayName("POST /ui/documents/upload — 정상 업로드 → 202 + taskId (비동기 인덱싱)")
     void uploadDocument_success_returnsJson() throws Exception {
-        DocumentInfo info = new DocumentInfo("doc_abc", "test.pdf", "latest", 5,
-                "2026-05-12T00:00:00Z", "abc123", List.of());
-        when(ragService.indexDocument(any(), anyString(), anyString())).thenReturn(info);
+        when(indexingProgressService.newTaskId()).thenReturn("task-abc");
 
         MockMultipartFile file = new MockMultipartFile(
                 "file", "test.pdf", "application/pdf", "%PDF-1.4 dummy".getBytes());
 
         mvc.perform(multipart("/ui/documents/upload").file(file)
                         .param("version", "latest"))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.doc_id").value("doc_abc"))
-                .andExpect(jsonPath("$.filename").value("test.pdf"))
-                .andExpect(jsonPath("$.chunks").value(5));
+                .andExpect(status().isAccepted())
+                .andExpect(jsonPath("$.taskId").value("task-abc"));
     }
 
     @Test
@@ -201,14 +196,13 @@ class WebControllerHtmxTest {
     }
 
     @Test
-    @DisplayName("POST /ui/documents/sync — 정상 → sync-result fragment")
+    @DisplayName("POST /ui/documents/sync — 정상 → 202 + taskId (비동기 싱크)")
     void syncDocuments_returnsFragment() throws Exception {
-        when(ragService.syncDirectory(anyString()))
-                .thenReturn(new SyncResult(List.of("a.pdf"), List.of(), List.of()));
+        when(indexingProgressService.newTaskId()).thenReturn("task-sync-1");
 
         mvc.perform(post("/ui/documents/sync").param("version", "latest"))
-                .andExpect(status().isOk())
-                .andExpect(view().name("fragments/sync-result :: result"));
+                .andExpect(status().isAccepted())
+                .andExpect(jsonPath("$.taskId").value("task-sync-1"));
     }
 
     // ── B-26 회귀: directMode 파라미터 누락 시 400 방지 ────────────────────────

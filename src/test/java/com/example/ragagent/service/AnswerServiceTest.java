@@ -12,9 +12,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.ai.chat.model.ChatResponse;
-
 import org.springframework.context.MessageSource;
+import reactor.core.publisher.Flux;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -66,23 +65,16 @@ class AnswerServiceTest {
         return AgentState.of("질문", "v1", "t1", "", mode);
     }
 
-    private ChatResponse mockChatResponse(String text, int inTokens, int outTokens) {
-        ChatResponse resp = mock(ChatResponse.class, RETURNS_DEEP_STUBS);
-        when(resp.getResult().getOutput().getText()).thenReturn(text);
-        when(resp.getMetadata().getUsage().getPromptTokens()).thenReturn(inTokens);
-        when(resp.getMetadata().getUsage().getCompletionTokens()).thenReturn(outTokens);
-        return resp;
-    }
-
     // ── BLOCKING 경로 ────────────────────────────────────────────────────
+    // AnswerService 블로킹 경로는 .stream().content().blockLast() 를 사용하므로
+    // Flux<String> 으로 stub 해야 한다 (.call().chatResponse() 는 호출되지 않음).
+    // 스트리밍 경로는 토큰 수를 추적하지 않으므로 입출력 토큰은 0 으로 누적된다.
 
     @Test
-    @DisplayName("BLOCKING COST_FIRST — 답변+sufficiency 2회 호출, 토큰 누적")
+    @DisplayName("BLOCKING COST_FIRST — 답변+sufficiency 2회 호출, llmCallCount=2")
     void blocking_costFirst_basicFlow() {
-        ChatResponse answerResp = mockChatResponse("## 요약\n핵심 답변", 100, 50);
-        ChatResponse suffResp = mockChatResponse("{\"sufficient\":true}", 20, 5);
-        when(chatClient.prompt().system(anyString()).user(anyString()).call().chatResponse())
-                .thenReturn(answerResp, suffResp);
+        when(chatClient.prompt().system(anyString()).user(anyString()).stream().content())
+                .thenReturn(Flux.just("## 요약\n핵심 답변"), Flux.just("{\"sufficient\":true}"));
         when(llmRouter.findProviderName(any(), any())).thenReturn("gemini-flash");
 
         AgentState result = service.execute(newState(RoutingMode.COST_FIRST));
@@ -90,18 +82,16 @@ class AnswerServiceTest {
         assertThat(result.answer()).isEqualTo("## 요약\n핵심 답변");
         assertThat(result.usedProvider()).isEqualTo("gemini-flash");
         assertThat(result.needsRetry()).isFalse();
-        assertThat(result.totalInputTokens()).isEqualTo(120);
-        assertThat(result.totalOutputTokens()).isEqualTo(55);
+        assertThat(result.totalInputTokens()).isEqualTo(0);
+        assertThat(result.totalOutputTokens()).isEqualTo(0);
         assertThat(result.llmCallCount()).isEqualTo(2);
     }
 
     @Test
     @DisplayName("BLOCKING — sufficiency=false 면 needsRetry=true")
     void blocking_sufficiency_false_setsNeedsRetry() {
-        ChatResponse answerResp = mockChatResponse("불완전 답변", 80, 30);
-        ChatResponse suffResp = mockChatResponse("{\"sufficient\":false}", 15, 5);
-        when(chatClient.prompt().system(anyString()).user(anyString()).call().chatResponse())
-                .thenReturn(answerResp, suffResp);
+        when(chatClient.prompt().system(anyString()).user(anyString()).stream().content())
+                .thenReturn(Flux.just("불완전 답변"), Flux.just("{\"sufficient\":false}"));
         when(llmRouter.findProviderName(any(), any())).thenReturn("gemini-flash");
 
         AgentState result = service.execute(newState(RoutingMode.COST_FIRST));
@@ -112,10 +102,8 @@ class AnswerServiceTest {
     @Test
     @DisplayName("BLOCKING — sufficiency 파싱 실패 시 sufficient 처리 (fail-safe)")
     void blocking_sufficiency_parse_error_treatsAsSufficient() {
-        ChatResponse answerResp = mockChatResponse("답변", 50, 20);
-        ChatResponse suffResp = mockChatResponse("not-a-json", 10, 3);
-        when(chatClient.prompt().system(anyString()).user(anyString()).call().chatResponse())
-                .thenReturn(answerResp, suffResp);
+        when(chatClient.prompt().system(anyString()).user(anyString()).stream().content())
+                .thenReturn(Flux.just("답변"), Flux.just("not-a-json"));
         when(llmRouter.findProviderName(any(), any())).thenReturn("gemini-flash");
 
         AgentState result = service.execute(newState(RoutingMode.COST_FIRST));
@@ -189,10 +177,8 @@ class AnswerServiceTest {
     @DisplayName("PROGRESSIVE — sufficiency=false + retryCount>=maxRetry → QUALITY_FIRST 업그레이드")
     @SuppressWarnings("unchecked")
     void progressive_upgrade_triggersQualityFirst() {
-        ChatResponse answerResp = mockChatResponse("초안 답변", 60, 20);
-        ChatResponse suffResp = mockChatResponse("{\"sufficient\":false}", 10, 3);
-        when(chatClient.prompt().system(anyString()).user(anyString()).call().chatResponse())
-                .thenReturn(answerResp, suffResp);
+        when(chatClient.prompt().system(anyString()).user(anyString()).stream().content())
+                .thenReturn(Flux.just("초안 답변"), Flux.just("{\"sufficient\":false}"));
         when(llmRouter.findProviderName(any(), eq(RoutingMode.PROGRESSIVE)))
                 .thenReturn("gemini-flash");
         LlmProvider premiumProvider = new LlmProvider(
@@ -219,10 +205,8 @@ class AnswerServiceTest {
     @Test
     @DisplayName("PROGRESSIVE — sufficient=true 면 업그레이드 안 함")
     void progressive_sufficient_noUpgrade() {
-        ChatResponse answerResp = mockChatResponse("충분한 답변", 60, 20);
-        ChatResponse suffResp = mockChatResponse("{\"sufficient\":true}", 10, 3);
-        when(chatClient.prompt().system(anyString()).user(anyString()).call().chatResponse())
-                .thenReturn(answerResp, suffResp);
+        when(chatClient.prompt().system(anyString()).user(anyString()).stream().content())
+                .thenReturn(Flux.just("충분한 답변"), Flux.just("{\"sufficient\":true}"));
         when(llmRouter.findProviderName(any(), any())).thenReturn("gemini-flash");
 
         AgentState initial = newState(RoutingMode.PROGRESSIVE)
@@ -237,10 +221,8 @@ class AnswerServiceTest {
     @Test
     @DisplayName("PROGRESSIVE — needsRetry 더라도 retryCount < maxRetry 면 업그레이드 안 함")
     void progressive_underRetryLimit_noUpgrade() {
-        ChatResponse answerResp = mockChatResponse("답변", 60, 20);
-        ChatResponse suffResp = mockChatResponse("{\"sufficient\":false}", 10, 3);
-        when(chatClient.prompt().system(anyString()).user(anyString()).call().chatResponse())
-                .thenReturn(answerResp, suffResp);
+        when(chatClient.prompt().system(anyString()).user(anyString()).stream().content())
+                .thenReturn(Flux.just("답변"), Flux.just("{\"sufficient\":false}"));
         when(llmRouter.findProviderName(any(), any())).thenReturn("gemini-flash");
 
         // retryCount = 0 (< maxRetry=2) → 업그레이드 조건 미충족, needsRetry=true 만 전파
