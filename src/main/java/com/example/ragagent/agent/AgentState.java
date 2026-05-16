@@ -11,6 +11,9 @@ import java.util.Locale;
  * Immutable state record passed through all agent graph nodes.
  * Each node returns a new instance via withXxx() — no shared mutable state.
  * Equivalent to LangGraph's TypedDict AgentState in the Python version.
+ *
+ * New code: use state.toBuilder().xxx().build() instead of withXxx().
+ * Existing withXxx() methods are deprecated and delegate to the Builder.
  */
 public record AgentState(
         String question,
@@ -77,124 +80,175 @@ public record AgentState(
     public boolean isDualMode()  { return routingMode == RoutingMode.DUAL; }
     public boolean wasUpgraded() { return premiumUpgraded != null; }
 
-    // ── Withers ──────────────────────────────────────────────────────────────
+    // ── Builder factory ───────────────────────────────────────────────────────
 
+    public Builder toBuilder()        { return new Builder(this); }
+    public static Builder builder()   { return new Builder(); }
+
+    // ── Withers (deprecated — delegate to Builder) ────────────────────────────
+
+    @Deprecated(since = "0.2.0", forRemoval = true)
     public AgentState withQuestionType(String questionType) {
-        return new AgentState(question, version, threadId, questionType,
-                retrievedDocs, sources, retrievalWarnings, imageRefs,
-                answer, retryCount, needsRetry, conversationHistory,
-                totalInputTokens, totalOutputTokens, llmCallCount,
-                routingMode, usedProvider, premiumUpgraded, dualLocalAnswer, dualLocalProvider, grounded,
-                directMode, locale);
+        return toBuilder().questionType(questionType).build();
     }
 
+    @Deprecated(since = "0.2.0", forRemoval = true)
     public AgentState withRetrievedDocs(List<Document> retrievedDocs) {
-        return new AgentState(question, version, threadId, questionType,
-                retrievedDocs, sources, retrievalWarnings, imageRefs,
-                answer, retryCount, needsRetry, conversationHistory,
-                totalInputTokens, totalOutputTokens, llmCallCount,
-                routingMode, usedProvider, premiumUpgraded, dualLocalAnswer, dualLocalProvider, grounded,
-                directMode, locale);
+        return toBuilder().retrievedDocs(retrievedDocs).build();
     }
 
+    @Deprecated(since = "0.2.0", forRemoval = true)
     public AgentState withSources(List<SourceRef> sources) {
-        return new AgentState(question, version, threadId, questionType,
-                retrievedDocs, sources, retrievalWarnings, imageRefs,
-                answer, retryCount, needsRetry, conversationHistory,
-                totalInputTokens, totalOutputTokens, llmCallCount,
-                routingMode, usedProvider, premiumUpgraded, dualLocalAnswer, dualLocalProvider, grounded,
-                directMode, locale);
+        return toBuilder().sources(sources).build();
     }
 
+    @Deprecated(since = "0.2.0", forRemoval = true)
     public AgentState withRetrievalWarnings(List<String> retrievalWarnings) {
-        return new AgentState(question, version, threadId, questionType,
-                retrievedDocs, sources, retrievalWarnings, imageRefs,
-                answer, retryCount, needsRetry, conversationHistory,
-                totalInputTokens, totalOutputTokens, llmCallCount,
-                routingMode, usedProvider, premiumUpgraded, dualLocalAnswer, dualLocalProvider, grounded,
-                directMode, locale);
+        return toBuilder().retrievalWarnings(retrievalWarnings).build();
     }
 
+    @Deprecated(since = "0.2.0", forRemoval = true)
     public AgentState withImageRefs(List<String> imageRefs) {
-        return new AgentState(question, version, threadId, questionType,
-                retrievedDocs, sources, retrievalWarnings, imageRefs,
-                answer, retryCount, needsRetry, conversationHistory,
-                totalInputTokens, totalOutputTokens, llmCallCount,
-                routingMode, usedProvider, premiumUpgraded, dualLocalAnswer, dualLocalProvider, grounded,
-                directMode, locale);
+        return toBuilder().imageRefs(imageRefs).build();
     }
 
+    @Deprecated(since = "0.2.0", forRemoval = true)
     public AgentState withAnswer(String answer) {
-        return new AgentState(question, version, threadId, questionType,
-                retrievedDocs, sources, retrievalWarnings, imageRefs,
-                answer, retryCount, needsRetry, conversationHistory,
-                totalInputTokens, totalOutputTokens, llmCallCount,
-                routingMode, usedProvider, premiumUpgraded, dualLocalAnswer, dualLocalProvider, grounded,
-                directMode, locale);
+        return toBuilder().answer(answer).build();
     }
 
+    @Deprecated(since = "0.2.0", forRemoval = true)
     public AgentState withNeedsRetry(boolean needsRetry) {
-        return new AgentState(question, version, threadId, questionType,
-                retrievedDocs, sources, retrievalWarnings, imageRefs,
-                answer, retryCount, needsRetry, conversationHistory,
-                totalInputTokens, totalOutputTokens, llmCallCount,
-                routingMode, usedProvider, premiumUpgraded, dualLocalAnswer, dualLocalProvider, grounded,
-                directMode, locale);
+        return toBuilder().needsRetry(needsRetry).build();
     }
 
+    @Deprecated(since = "0.2.0", forRemoval = true)
     public AgentState withRetryCountIncremented() {
-        return new AgentState(question, version, threadId, questionType,
-                retrievedDocs, sources, retrievalWarnings, imageRefs,
-                answer, retryCount + 1, needsRetry, conversationHistory,
-                totalInputTokens, totalOutputTokens, llmCallCount,
-                routingMode, usedProvider, premiumUpgraded, dualLocalAnswer, dualLocalProvider, grounded,
-                directMode, locale);
+        return toBuilder().incrementRetry().build();
     }
 
+    @Deprecated(since = "0.2.0", forRemoval = true)
     public AgentState withTokensAccumulated(int inputTokens, int outputTokens) {
-        return new AgentState(question, version, threadId, questionType,
-                retrievedDocs, sources, retrievalWarnings, imageRefs,
-                answer, retryCount, needsRetry, conversationHistory,
-                totalInputTokens + inputTokens,
-                totalOutputTokens + outputTokens,
-                llmCallCount + 1,
-                routingMode, usedProvider, premiumUpgraded, dualLocalAnswer, dualLocalProvider, grounded,
-                directMode, locale);
+        return toBuilder().accumulateTokens(inputTokens, outputTokens).build();
     }
 
+    @Deprecated(since = "0.2.0", forRemoval = true)
     public AgentState withUsedProvider(String usedProvider) {
-        return new AgentState(question, version, threadId, questionType,
-                retrievedDocs, sources, retrievalWarnings, imageRefs,
-                answer, retryCount, needsRetry, conversationHistory,
-                totalInputTokens, totalOutputTokens, llmCallCount,
-                routingMode, usedProvider, premiumUpgraded, dualLocalAnswer, dualLocalProvider, grounded,
-                directMode, locale);
+        return toBuilder().usedProvider(usedProvider).build();
     }
 
+    @Deprecated(since = "0.2.0", forRemoval = true)
     public AgentState withPremiumUpgraded(String premiumUpgraded) {
-        return new AgentState(question, version, threadId, questionType,
-                retrievedDocs, sources, retrievalWarnings, imageRefs,
-                answer, retryCount, needsRetry, conversationHistory,
-                totalInputTokens, totalOutputTokens, llmCallCount,
-                routingMode, usedProvider, premiumUpgraded, dualLocalAnswer, dualLocalProvider, grounded,
-                directMode, locale);
+        return toBuilder().premiumUpgraded(premiumUpgraded).build();
     }
 
+    @Deprecated(since = "0.2.0", forRemoval = true)
     public AgentState withDualResult(String dualLocalAnswer, String dualLocalProvider) {
-        return new AgentState(question, version, threadId, questionType,
-                retrievedDocs, sources, retrievalWarnings, imageRefs,
-                answer, retryCount, needsRetry, conversationHistory,
-                totalInputTokens, totalOutputTokens, llmCallCount,
-                routingMode, usedProvider, premiumUpgraded, dualLocalAnswer, dualLocalProvider, grounded,
-                directMode, locale);
+        return toBuilder().dualResult(dualLocalAnswer, dualLocalProvider).build();
     }
 
+    @Deprecated(since = "0.2.0", forRemoval = true)
     public AgentState withGrounded(Boolean grounded) {
-        return new AgentState(question, version, threadId, questionType,
-                retrievedDocs, sources, retrievalWarnings, imageRefs,
-                answer, retryCount, needsRetry, conversationHistory,
-                totalInputTokens, totalOutputTokens, llmCallCount,
-                routingMode, usedProvider, premiumUpgraded, dualLocalAnswer, dualLocalProvider, grounded,
-                directMode, locale);
+        return toBuilder().grounded(grounded).build();
+    }
+
+    // ── Builder ───────────────────────────────────────────────────────────────
+
+    public static final class Builder {
+        private String question;
+        private String version;
+        private String threadId;
+        private String questionType;
+        private List<Document> retrievedDocs    = List.of();
+        private List<SourceRef> sources          = List.of();
+        private List<String> retrievalWarnings   = List.of();
+        private List<String> imageRefs           = List.of();
+        private String answer;
+        private int retryCount;
+        private boolean needsRetry;
+        private String conversationHistory       = "";
+        private int totalInputTokens;
+        private int totalOutputTokens;
+        private int llmCallCount;
+        private RoutingMode routingMode          = RoutingMode.COST_FIRST;
+        private String usedProvider;
+        private String premiumUpgraded;
+        private String dualLocalAnswer;
+        private String dualLocalProvider;
+        private Boolean grounded;
+        private boolean directMode;
+        private Locale locale                    = Locale.KOREAN;
+
+        Builder() {}
+
+        Builder(AgentState s) {
+            this.question           = s.question;
+            this.version            = s.version;
+            this.threadId           = s.threadId;
+            this.questionType       = s.questionType;
+            this.retrievedDocs      = s.retrievedDocs;
+            this.sources            = s.sources;
+            this.retrievalWarnings  = s.retrievalWarnings;
+            this.imageRefs          = s.imageRefs;
+            this.answer             = s.answer;
+            this.retryCount         = s.retryCount;
+            this.needsRetry         = s.needsRetry;
+            this.conversationHistory = s.conversationHistory;
+            this.totalInputTokens   = s.totalInputTokens;
+            this.totalOutputTokens  = s.totalOutputTokens;
+            this.llmCallCount       = s.llmCallCount;
+            this.routingMode        = s.routingMode;
+            this.usedProvider       = s.usedProvider;
+            this.premiumUpgraded    = s.premiumUpgraded;
+            this.dualLocalAnswer    = s.dualLocalAnswer;
+            this.dualLocalProvider  = s.dualLocalProvider;
+            this.grounded           = s.grounded;
+            this.directMode         = s.directMode;
+            this.locale             = s.locale;
+        }
+
+        public Builder question(String v)                  { this.question = v;           return this; }
+        public Builder version(String v)                   { this.version = v;            return this; }
+        public Builder threadId(String v)                  { this.threadId = v;           return this; }
+        public Builder questionType(String v)              { this.questionType = v;       return this; }
+        public Builder retrievedDocs(List<Document> v)     { this.retrievedDocs = v;      return this; }
+        public Builder sources(List<SourceRef> v)          { this.sources = v;            return this; }
+        public Builder retrievalWarnings(List<String> v)   { this.retrievalWarnings = v;  return this; }
+        public Builder imageRefs(List<String> v)           { this.imageRefs = v;          return this; }
+        public Builder answer(String v)                    { this.answer = v;             return this; }
+        public Builder retryCount(int v)                   { this.retryCount = v;         return this; }
+        public Builder incrementRetry()                    { this.retryCount++;            return this; }
+        public Builder needsRetry(boolean v)               { this.needsRetry = v;         return this; }
+        public Builder conversationHistory(String v)       { this.conversationHistory = v; return this; }
+        public Builder routingMode(RoutingMode v)          { this.routingMode = v;        return this; }
+        public Builder usedProvider(String v)              { this.usedProvider = v;       return this; }
+        public Builder premiumUpgraded(String v)           { this.premiumUpgraded = v;    return this; }
+        public Builder grounded(Boolean v)                 { this.grounded = v;           return this; }
+        public Builder directMode(boolean v)               { this.directMode = v;         return this; }
+        public Builder locale(Locale v)                    { this.locale = v;             return this; }
+
+        public Builder dualResult(String localAnswer, String localProvider) {
+            this.dualLocalAnswer   = localAnswer;
+            this.dualLocalProvider = localProvider;
+            return this;
+        }
+
+        public Builder accumulateTokens(int inputTokens, int outputTokens) {
+            this.totalInputTokens  += inputTokens;
+            this.totalOutputTokens += outputTokens;
+            this.llmCallCount++;
+            return this;
+        }
+
+        public AgentState build() {
+            return new AgentState(
+                    question, version, threadId, questionType,
+                    retrievedDocs, sources, retrievalWarnings, imageRefs,
+                    answer, retryCount, needsRetry, conversationHistory,
+                    totalInputTokens, totalOutputTokens, llmCallCount,
+                    routingMode, usedProvider, premiumUpgraded,
+                    dualLocalAnswer, dualLocalProvider, grounded,
+                    directMode, locale);
+        }
     }
 }
