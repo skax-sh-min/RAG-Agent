@@ -11,6 +11,7 @@ RAG Agent 시스템 배포·설정·운영 가이드입니다.
 3. [사전 준비](#3-사전-준비)
    - 3.1 [필수 소프트웨어](#31-필수-소프트웨어)
    - 3.2 [환경변수 전체 목록](#32-환경변수-전체-목록)
+   - 3.3 [application.properties 전용 설정](#33-applicationproperties-전용-설정)
 4. [실행 방법](#4-실행-방법)
    - 4.1 [Docker Compose (권장)](#41-docker-compose-권장)
    - 4.2 [로컬 실행](#42-로컬-실행)
@@ -193,6 +194,53 @@ LOCAL_LLM_KEY=                     # 비워서 LOCAL providers[0] 비활성화
 ```
 
 > 멀티 프로바이더 구성은 [§5 LLM 프로바이더 설정](#5-llm-프로바이더-설정)을 참고하세요.
+
+---
+
+### 3.3 application.properties 전용 설정
+
+환경변수로 주입할 수 없는 설정입니다. 변경이 필요하면 `src/main/resources/application.properties`를 직접 편집 후 재시작하세요.
+
+#### 이미지 처리 (`app.image-description.*`)
+
+| 속성 | 기본값 | 설명 |
+|------|--------|------|
+| `app.image-description.enabled` | `true` | Vision LLM 이미지 설명 기능 전체 활성화 여부. `false`이면 이미지 마커만 저장하고 LLM 호출 없음 |
+| `app.image-description.mode` | `strip` | `strip`: 이미지 마커를 텍스트에서 제거 / `describe`: Vision LLM으로 설명 생성 후 삽입 |
+| `app.image-description.lazy` | `true` | `true`: 검색 시 필요할 때 설명 생성 (LazyVisionService) / `false`: 인덱싱 중 즉시 생성 |
+| `app.image-description.classify-type` | `true` | 이미지 설명 전 유형(사진/도표/스크린샷 등) 분류 여부. 분류 결과를 프롬프트에 주입 |
+| `app.image-description.ocr-enabled` | `true` | 스캔 PDF 페이지에 대해 OCR 처리 활성화 여부 |
+| `app.image-description.min-image-bytes` | `1000` | 이 크기 미만의 이미지는 아이콘·구분선으로 간주하고 설명 생성 건너뜀 (바이트) |
+| `app.image-description.docx-emf-convert` | `true` | DOCX 내 EMF 벡터 이미지를 PNG로 변환 (LibreOffice `soffice` 필요) |
+| `app.image-description.docx-wmf-convert` | `false` | DOCX 내 WMF 벡터 이미지를 PNG로 변환 (EMF보다 변환 품질이 낮아 기본 비활성) |
+
+> **`mode=describe` 전제 조건**: `enabled=true` + Vision 모델 프로바이더 등록 (`type=VISION` 또는 `type=LIGHT_BOTH`).  
+> 프로바이더가 없으면 `strip`으로 자동 fallback됩니다.
+
+> **EMF/WMF 변환**: LibreOffice(`soffice`)가 PATH에 있어야 합니다. 없으면 변환이 건너뛰어지며 `[TIMEOUT:LIBREOFFICE]` 로그가 출력됩니다.
+
+#### LLM 응답 파라미터
+
+| 속성 | 기본값 | 설명 |
+|------|--------|------|
+| `spring.ai.openai.chat.options.temperature` | `0.0` | 전역 temperature. 낮을수록 일관된 답변, 높을수록 다양한 답변. 프로바이더별 override 불가 |
+| `spring.ai.openai.chat.options.max-tokens` | `8000` | 전역 최대 출력 토큰. LLM이 이 값을 초과하면 잘림. 긴 답변이 필요하면 증가 |
+
+#### 업로드 크기 제한
+
+| 속성 | 기본값 | 설명 |
+|------|--------|------|
+| `spring.servlet.multipart.max-file-size` | `200MB` | 단일 파일 최대 크기. 초과 시 413 응답 |
+| `spring.servlet.multipart.max-request-size` | `200MB` | 멀티파트 요청 전체 최대 크기 |
+
+#### 서버 및 기타
+
+| 속성 | 기본값 | 변경 가능 여부 | 설명 |
+|------|--------|--------------|------|
+| `server.port` | `8080` | ✅ | 애플리케이션 포트 |
+| `spring.threads.virtual.enabled` | `true` | ⚠️ 변경 비권장 | Java 21 Virtual Thread 활성화. LLM I/O 동시성에 핵심적 |
+| `spring.datasource.hikari.maximum-pool-size` | `1` | ❌ 변경 금지 | SQLite는 동시 쓰기 불가 — 반드시 1 유지 |
+| `spring.autoconfigure.exclude` | Chroma 자동구성 제외 | ❌ 변경 금지 | `VectorStoreRegistry`가 직접 Chroma 빈을 관리. 제거 시 충돌 |
 
 ---
 

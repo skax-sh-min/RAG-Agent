@@ -105,6 +105,7 @@ public class MarkdownCorrectionService {
     private String correctSection(String section) {
         if (section == null || section.isBlank()) return section;
         String safeSection = section.replace("[/DOCUMENT]", "");
+        log.debug("[MD_CORRECT] 섹션 교정 시작: {}자", safeSection.length());
         String prompt = """
                 당신은 문서 편집자입니다. 다음 마크다운 텍스트의 형식(포맷)만 교정하세요.
                 절대로 내용(사실, 데이터, 수치, 의미)을 변경하지 마세요.
@@ -122,9 +123,11 @@ public class MarkdownCorrectionService {
                 %s
                 [/DOCUMENT]""".formatted(safeSection);
         try {
-            return llmRouter.executeWithTracking(
+            String result = llmRouter.executeWithTracking(
                     TaskType.LIGHT_TEXT, RoutingMode.COST_FIRST,
                     model -> model.call(new Prompt(prompt)));
+            log.debug("[MD_CORRECT] 섹션 교정 완료: {}자 → {}자", safeSection.length(), result.length());
+            return result;
         } catch (Exception e) {
             log.warn("[MD_CORRECT] 섹션 교정 실패, 원본 유지: {}", e.getMessage());
             return section;

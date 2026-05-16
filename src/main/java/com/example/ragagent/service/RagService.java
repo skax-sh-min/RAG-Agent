@@ -446,6 +446,7 @@ public class RagService {
             String keywords = llmRouter.executeWithTracking(
                     TaskType.LIGHT_TEXT, RoutingMode.COST_FIRST,
                     model -> model.call(new Prompt(prompt)));
+            log.debug("[ENRICH] LLM 키워드: [{}]", keywords);
             Map<String, Object> meta = new HashMap<>(chunk.getMetadata());
             meta.put("excerpt_keywords", keywords);
             return new Document(chunk.getText(), meta);
@@ -508,6 +509,8 @@ public class RagService {
     private void deleteByDocId(String docId, String version, boolean deleteFiles) {
         DocRegistryEntry existing = registry.get(docId);
         if (existing == null || existing.springDocIds().isEmpty()) return;
+        log.debug("[DELETE] docId={} → 벡터 청크 {}개 삭제 (deleteFiles={})",
+                docId, existing.springDocIds().size(), deleteFiles);
         VectorStore store = vectorStoreRegistry.getStore(version);
         store.delete(existing.springDocIds());
         if (!deleteFiles) return;
@@ -545,9 +548,11 @@ public class RagService {
         long t0 = System.currentTimeMillis();
 
         String md = Files.readString(mdPath);
+        log.debug("[REINDEX] MD 로드: {}자 ({} 파일)", md.length(), mdPath.getFileName());
         List<Document> rawDocs = loaderService.loadFromMarkdown(md);
 
         List<Document> chunks = splitDocuments(rawDocs, filename, props.chunkSize(), props.chunkOverlap());
+        log.debug("[REINDEX] 청크 분할: {}섹션 → {}청크", rawDocs.size(), chunks.size());
         List<Document> tagged = new ArrayList<>();
         for (int i = 0; i < chunks.size(); i++) {
             Document chunk = chunks.get(i);
@@ -568,9 +573,11 @@ public class RagService {
         // Delete only ChromaDB chunks — keep MD files on disk
         deleteByDocId(docId, version, false);
 
+        log.debug("[REINDEX] 키워드 추출 시작: {}개 청크", tagged.size());
         Semaphore llmGate = new Semaphore(props.indexingSafe().maxConcurrentLlmCalls());
         List<Document> enriched = enrichParallel(tagged, llmGate);
 
+        log.debug("[REINDEX] 벡터 스토어 저장 중: {}개 청크", enriched.size());
         VectorStore store = vectorStoreRegistry.getStore(version);
         store.add(enriched);
 
@@ -625,7 +632,7 @@ public class RagService {
         String lower = filename.toLowerCase();
 
         if (lower.endsWith(".pptx")) {
-            // Already one Document per slide — no further splitting
+            log.debug("[SPLIT] {} → 슬라이드 유지 (분할 없음), {}개", filename, docs.size());
             return new ArrayList<>(docs);
         }
 
@@ -638,9 +645,12 @@ public class RagService {
                 if (doc.getText().length() <= chunkSize) {
                     result.add(doc);
                 } else {
+                    log.debug("[SPLIT] 섹션 {}자 > chunkSize={}, 슬라이딩 윈도우 적용",
+                            doc.getText().length(), chunkSize);
                     result.addAll(slidingWindow(doc, chunkSize, overlap));
                 }
             }
+            log.debug("[SPLIT] {} → 섹션 분할 전략, {}섹션 → {}청크", filename, docs.size(), result.size());
             return result;
         }
 
@@ -649,6 +659,7 @@ public class RagService {
         for (Document doc : docs) {
             result.addAll(slidingWindow(doc, chunkSize, overlap));
         }
+        log.debug("[SPLIT] {} → 슬라이딩 윈도우 전략, {}섹션 → {}청크", filename, docs.size(), result.size());
         return result;
     }
 

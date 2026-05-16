@@ -17,6 +17,9 @@ import org.springframework.ai.reader.pdf.config.PdfDocumentReaderConfig;
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.stereotype.Service;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.awt.image.BufferedImage;
 import java.io.FileInputStream;
 import java.io.IOException;
@@ -38,6 +41,8 @@ import java.util.stream.Collectors;
 @Service
 public class DocumentLoaderService {
 
+    private static final Logger log = LoggerFactory.getLogger(DocumentLoaderService.class);
+
     private static final Pattern IMAGE_PATH_MARKER = Pattern.compile("\\[이미지: ([^\\]]+?)]");
 
     private final DocxToMarkdownConverter converter;
@@ -51,6 +56,7 @@ public class DocumentLoaderService {
 
     public List<Document> load(Path filePath) throws IOException {
         String name = filePath.getFileName().toString().toLowerCase();
+        log.debug("[LOADER] 로드 시작: {} ({}B)", filePath.getFileName(), Files.size(filePath));
         if (name.endsWith(".pdf")) return loadPdf(filePath);
         if (name.endsWith(".pptx")) return loadPptx(filePath);
         if (name.endsWith(".docx")) return loadDocx(filePath);
@@ -70,8 +76,10 @@ public class DocumentLoaderService {
                 .filter(d -> d.getText() == null || d.getText().trim().length() < 50)
                 .count();
         boolean isScanned = emptyPages > docs.size() * 0.5;
+        log.debug("[LOADER:PDF] {} → {}페이지, 빈페이지={}, 스캔문서={}", filePath.getFileName(), docs.size(), emptyPages, isScanned);
 
         if (isScanned && ocrService != null) {
+            log.debug("[LOADER:PDF] OCR 모드로 전환: {}", filePath.getFileName());
             return ocrWithPdfRenderer(filePath, docs);
         }
 
@@ -88,10 +96,14 @@ public class DocumentLoaderService {
         try (PDDocument pdDoc = Loader.loadPDF(filePath.toFile())) {
             PDFRenderer renderer = new PDFRenderer(pdDoc);
             int pageCount = pdDoc.getNumberOfPages();
+            log.debug("[LOADER:OCR] {} → {}페이지 렌더링 시작", filePath.getFileName(), pageCount);
             for (int i = 0; i < pageCount; i++) {
                 BufferedImage img = renderer.renderImageWithDPI(i, 300, ImageType.RGB);
                 String text = ocrService.extractText(img);
-                if (text == null || text.isBlank()) continue;
+                if (text == null || text.isBlank()) {
+                    log.debug("[LOADER:OCR] 페이지 {} 텍스트 없음, 스킵", i + 1);
+                    continue;
+                }
                 Map<String, Object> meta = i < originalDocs.size()
                         ? new HashMap<>(originalDocs.get(i).getMetadata())
                         : new HashMap<>();
@@ -99,6 +111,7 @@ public class DocumentLoaderService {
                 result.add(new Document(text.trim(), meta));
             }
         }
+        log.debug("[LOADER:OCR] {} 완료 → {}페이지 텍스트 추출", filePath.getFileName(), result.size());
         return result;
     }
 
@@ -125,6 +138,7 @@ public class DocumentLoaderService {
                 }
             }
         }
+        log.debug("[LOADER:PPTX] {} → {}슬라이드 (텍스트 있는 슬라이드)", filePath.getFileName(), docs.size());
         return docs;
     }
 
@@ -133,7 +147,10 @@ public class DocumentLoaderService {
      * Called by RagService before optional LLM format correction.
      */
     public String convertDocxToMd(Path filePath, String docId, Path imagesDir) throws IOException {
-        return converter.convert(filePath, docId, imagesDir);
+        log.debug("[LOADER:DOCX] MD 변환 시작: {}", filePath.getFileName());
+        String md = converter.convert(filePath, docId, imagesDir);
+        log.debug("[LOADER:DOCX] MD 변환 완료: {} → {}자", filePath.getFileName(), md.length());
+        return md;
     }
 
     /**
@@ -142,7 +159,7 @@ public class DocumentLoaderService {
      * Used both after DOCX→MD conversion and during MD re-indexing.
      */
     public List<Document> loadFromMarkdown(String md) {
-        return splitMarkdownBySections(md).stream()
+        List<Document> result = splitMarkdownBySections(md).stream()
                 .map(doc -> {
                     List<String> imgs = extractImagePaths(doc.getText());
                     if (imgs.isEmpty()) return doc;
@@ -151,6 +168,11 @@ public class DocumentLoaderService {
                     return new Document(doc.getText(), meta);
                 })
                 .toList();
+        long withImages = result.stream()
+                .filter(d -> d.getMetadata().containsKey(MetaKey.IMAGE_PATHS))
+                .count();
+        log.debug("[LOADER:MD] {}자 → {}섹션 (이미지 참조 포함: {}개)", md.length(), result.size(), withImages);
+        return result;
     }
 
     /**
@@ -225,8 +247,13 @@ public class DocumentLoaderService {
     private List<Document> loadText(Path filePath) throws IOException {
         String content = Files.readString(filePath);
         String lower = filePath.getFileName().toString().toLowerCase();
-        return lower.endsWith(".md") ? splitMarkdownBySections(preprocessMarkdown(content))
-                : List.of(new Document(content, Map.of(MetaKey.SOURCE_TYPE, "file")));
+        if (lower.endsWith(".md")) {
+            List<Document> sections = splitMarkdownBySections(preprocessMarkdown(content));
+            log.debug("[LOADER:MD] {} → {}섹션", filePath.getFileName(), sections.size());
+            return sections;
+        }
+        log.debug("[LOADER:TXT] {} → {}자 단일 문서", filePath.getFileName(), content.length());
+        return List.of(new Document(content, Map.of(MetaKey.SOURCE_TYPE, "file")));
     }
 
     /** Strips MD image/link syntax from markdown before indexing. */
