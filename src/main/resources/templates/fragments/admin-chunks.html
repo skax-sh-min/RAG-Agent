@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" lang="ko">
+<body>
+
+<th:block th:fragment="table">
+<div class="card">
+    <div class="card-header py-2">
+        <div class="d-flex align-items-center justify-content-between flex-wrap gap-2">
+            <!-- Title -->
+            <div class="d-flex align-items-center gap-2">
+                <i class="bi bi-layers text-secondary"></i>
+                <span class="fw-semibold small">청크 목록</span>
+                <code class="small text-muted" th:text="${collection}"></code>
+                <span th:if="${docId != null and !#strings.isEmpty(docId)}"
+                      class="badge bg-info text-dark small" th:text="${'doc: ' + docId}"></span>
+            </div>
+
+            <!-- Filter form -->
+            <form class="d-flex gap-2 align-items-center" style="min-width:0;">
+                <select class="form-select form-select-sm" id="docId-select" style="max-width:220px;"
+                        onchange="applyDocFilter(this)">
+                    <option value="">-- 전체 --</option>
+                    <option th:each="doc : ${documents}"
+                            th:value="${doc.docId()}"
+                            th:text="${doc.filename() + ' (' + doc.version() + ')'}"
+                            th:selected="${doc.docId() == docId}"></option>
+                </select>
+                <span class="badge bg-secondary" th:text="${#lists.size(chunks) + '건'}">0건</span>
+            </form>
+        </div>
+    </div>
+
+    <!-- Pagination controls (top) -->
+    <div class="card-body border-bottom py-2 px-3 d-flex align-items-center gap-2 small text-muted"
+         th:if="${#lists.size(chunks) > 0 or offset > 0}">
+        <button class="btn btn-sm btn-outline-secondary py-0 px-2"
+                th:disabled="${offset == 0}"
+                th:onclick="|loadChunks('${collection}', '${docId}', ${offset - limit}, ${limit})|">
+            ‹ 이전
+        </button>
+        <span>
+            <span th:text="${offset + 1}">1</span> –
+            <span th:text="${offset + #lists.size(chunks)}">50</span>
+        </span>
+        <button class="btn btn-sm btn-outline-secondary py-0 px-2"
+                th:disabled="${#lists.size(chunks) < limit}"
+                th:onclick="|loadChunks('${collection}', '${docId}', ${offset + limit}, ${limit})|">
+            다음 ›
+        </button>
+        <span class="ms-auto text-muted" style="font-size:0.7rem;">
+            페이지당 <span th:text="${limit}">50</span>건
+        </span>
+    </div>
+
+    <!-- Empty state -->
+    <div th:if="${#lists.isEmpty(chunks)}"
+         class="card-body text-center text-muted py-5 small">
+        <i class="bi bi-inbox fs-3 d-block mb-2"></i>
+        조회된 청크가 없습니다.
+    </div>
+
+    <!-- Chunk table -->
+    <div class="table-responsive" th:unless="${#lists.isEmpty(chunks)}">
+        <table class="table table-sm table-hover mb-0" style="font-size:0.8rem;">
+            <thead class="table-light sticky-top">
+            <tr>
+                <th style="width:90px;">ID</th>
+                <th>텍스트 (미리보기)</th>
+                <th style="width:110px;">파일명</th>
+                <th style="width:50px;" class="text-center">페이지</th>
+                <th style="width:130px;">키워드</th>
+                <th style="width:90px;" class="text-center">작업</th>
+            </tr>
+            </thead>
+            <tbody>
+            <tr th:each="chunk : ${chunks}">
+                <!-- ID (truncated) -->
+                <td class="text-muted font-monospace" style="font-size:0.68rem; word-break:break-all;"
+                    th:title="${chunk.id()}" th:text="${#strings.abbreviate(chunk.id(), 12)}"></td>
+
+                <!-- Text preview -->
+                <td>
+                    <div class="text-truncate" style="max-width:380px;"
+                         th:title="${chunk.textPreview()}"
+                         th:text="${chunk.textPreview()}"></div>
+                </td>
+
+                <!-- Filename -->
+                <td class="text-muted text-truncate" style="max-width:110px;"
+                    th:title="${chunk.filename()}"
+                    th:text="${chunk.filename()}"></td>
+
+                <!-- Page/Slide -->
+                <td class="text-center text-muted" th:text="${chunk.pageSlide()}"></td>
+
+                <!-- Keywords (first 60 chars) -->
+                <td class="text-muted text-truncate" style="max-width:130px;"
+                    th:title="${chunk.keywords()}"
+                    th:text="${#strings.abbreviate(chunk.keywords(), 60)}"></td>
+
+                <!-- Actions -->
+                <td class="text-center">
+                    <button type="button"
+                            class="btn btn-sm btn-outline-secondary py-0 px-1 me-1"
+                            style="font-size:0.7rem;"
+                            th:onclick="|openChunkEdit('${chunk.id()}', '${collection}')|"
+                            title="편집">
+                        <i class="bi bi-pencil"></i>
+                    </button>
+                    <button type="button"
+                            class="btn btn-sm btn-outline-danger py-0 px-1"
+                            style="font-size:0.7rem;"
+                            th:onclick="|deleteChunkInline('${chunk.id()}', '${collection}', this)|"
+                            title="삭제">
+                        <i class="bi bi-trash"></i>
+                    </button>
+                </td>
+            </tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Pagination controls (bottom) -->
+    <div class="card-footer py-2 px-3 d-flex align-items-center gap-2 small text-muted"
+         th:if="${#lists.size(chunks) > 0 or offset > 0}">
+        <button class="btn btn-sm btn-outline-secondary py-0 px-2"
+                th:disabled="${offset == 0}"
+                th:onclick="|loadChunks('${collection}', '${docId}', ${offset - limit}, ${limit})|">
+            ‹ 이전
+        </button>
+        <span>
+            <span th:text="${offset + 1}">1</span> –
+            <span th:text="${offset + #lists.size(chunks)}">50</span>
+        </span>
+        <button class="btn btn-sm btn-outline-secondary py-0 px-2"
+                th:disabled="${#lists.size(chunks) < limit}"
+                th:onclick="|loadChunks('${collection}', '${docId}', ${offset + limit}, ${limit})|">
+            다음 ›
+        </button>
+    </div>
+</div>
+
+<script>
+function applyDocFilter(sel) {
+    const collection = /*[[${collection}]]*/ '';
+    const docId = sel.value;
+    loadChunks(collection, docId, 0, /*[[${limit}]]*/ 50);
+}
+
+function loadChunks(collection, docId, offset, limit) {
+    let url = '/admin/chunks?collection=' + encodeURIComponent(collection)
+            + '&offset=' + offset + '&limit=' + limit;
+    if (docId) url += '&docId=' + encodeURIComponent(docId);
+    document.getElementById('chunk-spinner').style.display = 'block';
+    fetch(url, { headers: { 'HX-Request': 'true' } })
+        .then(r => r.text())
+        .then(html => {
+            document.getElementById('chunk-panel').innerHTML = html;
+            document.getElementById('chunk-spinner').style.display = 'none';
+            htmx.process(document.getElementById('chunk-panel'));
+        })
+        .catch(() => { document.getElementById('chunk-spinner').style.display = 'none'; });
+}
+</script>
+</th:block>
+
+</body>
+</html>

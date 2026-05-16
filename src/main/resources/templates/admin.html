@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org"
+      xmlns:layout="http://www.ultraq.net.nz/thymeleaf/layout"
+      layout:decorate="~{layout/base}">
+<head><title>관리자</title></head>
+<body>
+
+<th:block layout:fragment="content">
+<div class="container-fluid py-4 px-4">
+
+    <!-- Header -->
+    <div class="d-flex align-items-center mb-4">
+        <i class="bi bi-gear-fill fs-4 me-2 text-secondary"></i>
+        <h5 class="mb-0 fw-semibold">관리자 패널</h5>
+        <span class="badge bg-warning text-dark ms-2 small">Admin</span>
+    </div>
+
+    <div class="row g-4">
+
+        <!-- ── Left: Collections ──────────────────────────────────────── -->
+        <div class="col-md-4 col-lg-3">
+            <div class="card h-100">
+                <div class="card-header d-flex align-items-center justify-content-between py-2">
+                    <span class="fw-semibold small"><i class="bi bi-database me-1"></i>ChromaDB 컬렉션</span>
+                    <a href="/admin" class="btn btn-sm btn-outline-secondary py-0 px-2 small">새로고침</a>
+                </div>
+                <div class="card-body p-0">
+                    <div th:if="${#lists.isEmpty(collections)}"
+                         class="text-muted small p-3 text-center">컬렉션이 없습니다.</div>
+                    <div class="list-group list-group-flush" th:unless="${#lists.isEmpty(collections)}">
+                        <button th:each="col : ${collections}"
+                                type="button"
+                                class="list-group-item list-group-item-action collection-btn px-3 py-2"
+                                th:data-collection="${col.name()}"
+                                th:data-version="${col.version()}"
+                                hx-get="/admin/chunks"
+                                th:hx-vals="|{&quot;collection&quot;: &quot;${col.name()}&quot;}|"
+                                hx-target="#chunk-panel"
+                                hx-swap="innerHTML"
+                                hx-indicator="#chunk-spinner">
+                            <div class="d-flex justify-content-between align-items-center">
+                                <div>
+                                    <div class="small fw-semibold" th:text="${col.version()}">version</div>
+                                    <div class="text-muted" style="font-size:0.7rem;" th:text="${col.name()}">collection</div>
+                                </div>
+                                <span class="badge bg-secondary rounded-pill"
+                                      th:text="${col.chunkCount()}">0</span>
+                            </div>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ── Right: Chunk Panel ─────────────────────────────────────── -->
+        <div class="col-md-8 col-lg-9">
+
+            <!-- Loading spinner -->
+            <div id="chunk-spinner" class="htmx-indicator text-center py-5">
+                <div class="spinner-border spinner-border-sm text-secondary" role="status"></div>
+                <div class="small text-muted mt-2">청크 로딩 중...</div>
+            </div>
+
+            <!-- Chunk panel (HTMX target) -->
+            <div id="chunk-panel">
+                <div class="card">
+                    <div class="card-body text-center text-muted py-5">
+                        <i class="bi bi-arrow-left-circle fs-2 mb-2 d-block"></i>
+                        <div class="small">왼쪽에서 컬렉션을 선택하면 청크를 조회할 수 있습니다.</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div><!-- /row -->
+
+    <!-- ── Document Registry ────────────────────────────────────────────── -->
+    <div class="card mt-4">
+        <div class="card-header d-flex align-items-center py-2">
+            <i class="bi bi-archive me-2"></i>
+            <span class="fw-semibold small">문서 레지스트리</span>
+            <span class="badge bg-secondary ms-2" th:text="${#lists.size(documents)}">0</span>
+        </div>
+        <div class="card-body p-0">
+            <div th:if="${#lists.isEmpty(documents)}"
+                 class="text-muted small p-3 text-center">인덱싱된 문서가 없습니다.</div>
+            <div class="table-responsive" th:unless="${#lists.isEmpty(documents)}">
+                <table class="table table-sm table-hover mb-0 small">
+                    <thead class="table-light">
+                    <tr>
+                        <th>파일명</th>
+                        <th>버전</th>
+                        <th class="text-center">청크</th>
+                        <th>Doc ID</th>
+                        <th>인덱싱 일시</th>
+                        <th class="text-center">청크 조회</th>
+                    </tr>
+                    </thead>
+                    <tbody>
+                    <tr th:each="doc : ${documents}">
+                        <td th:text="${doc.filename()}"></td>
+                        <td><span class="badge bg-secondary" th:text="${doc.version()}"></span></td>
+                        <td class="text-center" th:text="${doc.chunks()}"></td>
+                        <td class="text-muted" style="font-size:0.7rem;" th:text="${doc.docId()}"></td>
+                        <td class="text-muted" th:text="${doc.indexedAt() != null ? doc.indexedAt().substring(0,19).replace('T',' ') : ''}"></td>
+                        <td class="text-center">
+                            <button type="button"
+                                    class="btn btn-sm btn-outline-primary py-0 px-2"
+                                    style="font-size:0.75rem;"
+                                    th:attr="data-doc-id=${doc.docId()}, data-version=${doc.version()}"
+                                    onclick="loadChunksByDoc(this)">
+                                청크 보기
+                            </button>
+                        </td>
+                    </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+</div><!-- /container -->
+
+<!-- ── Edit Offcanvas ──────────────────────────────────────────────────── -->
+<div class="offcanvas offcanvas-end" tabindex="-1" id="editOffcanvas" style="width:520px;">
+    <div class="offcanvas-header border-bottom">
+        <h6 class="offcanvas-title"><i class="bi bi-pencil-square me-2"></i>청크 편집</h6>
+        <button type="button" class="btn-close" data-bs-dismiss="offcanvas"></button>
+    </div>
+    <div class="offcanvas-body d-flex flex-column gap-3" id="editOffcanvasBody">
+        <div class="text-muted small text-center py-5">청크를 선택하세요.</div>
+    </div>
+</div>
+</th:block>
+
+<!-- ── Page scripts ────────────────────────────────────────────────────── -->
+<th:block layout:fragment="scripts">
+<script>
+// Highlight selected collection button
+document.querySelectorAll('.collection-btn').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+        document.querySelectorAll('.collection-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+    });
+});
+
+// Load chunks filtered by docId from the registry table
+function loadChunksByDoc(btn) {
+    const docId   = btn.getAttribute('data-doc-id');
+    const version = btn.getAttribute('data-version');
+    const colName = 'manual_' + version;
+    const url = '/admin/chunks?collection=' + encodeURIComponent(colName)
+              + '&docId=' + encodeURIComponent(docId);
+
+    document.getElementById('chunk-spinner').style.display = 'block';
+    fetch(url, { headers: { 'HX-Request': 'true' } })
+        .then(r => r.text())
+        .then(html => {
+            document.getElementById('chunk-panel').innerHTML = html;
+            document.getElementById('chunk-spinner').style.display = 'none';
+            htmx.process(document.getElementById('chunk-panel'));
+            // Highlight matching collection button
+            document.querySelectorAll('.collection-btn').forEach(function (b) {
+                b.classList.toggle('active', b.getAttribute('data-collection') === colName);
+            });
+        })
+        .catch(() => { document.getElementById('chunk-spinner').style.display = 'none'; });
+}
+
+// Open edit offcanvas: fetch full chunk detail
+function openChunkEdit(chunkId, collection) {
+    fetch('/admin/chunks/' + encodeURIComponent(chunkId) + '/detail?collection=' + encodeURIComponent(collection))
+        .then(r => r.json())
+        .then(data => {
+            const body = document.getElementById('editOffcanvasBody');
+            const metaJson = JSON.stringify(data.metadata, null, 2);
+            body.innerHTML = `
+                <div>
+                    <label class="form-label small fw-semibold">Chunk ID</label>
+                    <div class="form-control form-control-sm text-muted" style="font-size:0.72rem; word-break:break-all;">${escHtml(chunkId)}</div>
+                </div>
+                <div class="flex-grow-1 d-flex flex-column">
+                    <label class="form-label small fw-semibold">텍스트</label>
+                    <textarea id="edit-text" class="form-control form-control-sm flex-grow-1"
+                              style="min-height:180px; font-size:0.82rem; resize:vertical;">${escHtml(data.text || '')}</textarea>
+                </div>
+                <div>
+                    <label class="form-label small fw-semibold">메타데이터 (JSON)</label>
+                    <textarea id="edit-meta" class="form-control form-control-sm font-monospace"
+                              style="min-height:200px; font-size:0.78rem; resize:vertical;">${escHtml(metaJson)}</textarea>
+                    <div class="form-text text-warning small">※ 텍스트 변경 시 벡터 임베딩은 갱신되지 않음 (원본 벡터 유지)</div>
+                </div>
+                <button class="btn btn-primary btn-sm" onclick="saveChunkEdit('${escAttr(chunkId)}', '${escAttr(collection)}')">
+                    <i class="bi bi-save me-1"></i>저장
+                </button>`;
+            new bootstrap.Offcanvas(document.getElementById('editOffcanvas')).show();
+        })
+        .catch(() => showToast('청크 정보를 불러올 수 없습니다.', 'danger'));
+}
+
+function saveChunkEdit(chunkId, collection) {
+    const text = document.getElementById('edit-text').value;
+    let metadata;
+    try { metadata = JSON.parse(document.getElementById('edit-meta').value); }
+    catch (e) { showToast('메타데이터 JSON 파싱 오류', 'danger'); return; }
+
+    fetch('/admin/chunks/' + encodeURIComponent(chunkId) + '?collection=' + encodeURIComponent(collection), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text, metadata })
+    })
+    .then(r => {
+        if (r.ok) {
+            showToast('청크가 저장되었습니다.', 'success');
+            bootstrap.Offcanvas.getInstance(document.getElementById('editOffcanvas')).hide();
+        } else { showToast('저장 실패', 'danger'); }
+    })
+    .catch(() => showToast('저장 중 오류 발생', 'danger'));
+}
+
+function deleteChunkInline(chunkId, collection, row) {
+    if (!confirm('이 청크를 삭제하시겠습니까?')) return;
+    fetch('/admin/chunks/' + encodeURIComponent(chunkId) + '?collection=' + encodeURIComponent(collection), {
+        method: 'DELETE'
+    })
+    .then(r => {
+        if (r.ok) { row.closest('tr').remove(); showToast('청크 삭제됨', 'success'); }
+        else       { showToast('삭제 실패', 'danger'); }
+    })
+    .catch(() => showToast('삭제 중 오류', 'danger'));
+}
+
+function escHtml(s) {
+    return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+                           .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+function escAttr(s) { return String(s || '').replace(/'/g, "\\'"); }
+</script>
+</th:block>
+
+</body>
+</html>
