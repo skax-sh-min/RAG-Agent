@@ -1,17 +1,22 @@
 package com.example.ragagent.security;
 
+import com.example.ragagent.ratelimit.RateLimitFilter;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.lang.Nullable;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.access.intercept.AuthorizationFilter;
 
 @Configuration
 @EnableWebSecurity
 public class SecurityConfig {
 
     @Bean
-    SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
+    SecurityFilterChain filterChain(HttpSecurity http,
+                                    @Autowired(required = false) @Nullable RateLimitFilter rateLimitFilter) throws Exception {
         http
             // CSRF: REST API는 stateless 토큰 기반(추후). HTMX UI는 토큰 필수.
             .csrf(csrf -> csrf
@@ -42,6 +47,10 @@ public class SecurityConfig {
             )
             .formLogin(form -> form.disable())
             .httpBasic(basic -> basic.disable());
+
+        if (rateLimitFilter != null) {
+            http.addFilterBefore(rateLimitFilter, AuthorizationFilter.class);
+        }
 
         return http.build();
     }

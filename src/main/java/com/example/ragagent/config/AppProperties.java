@@ -17,7 +17,8 @@ public record AppProperties(
         IndexingConfig indexing,
         ChromaHttpConfig chroma,
         ImageDescriptionProperties imageDescription,
-        EmbeddingConfig embedding
+        EmbeddingConfig embedding,
+        RateLimitConfig rateLimit
 ) {
     public record LlmConfig(
             List<ProviderConfig> providers,
@@ -57,6 +58,15 @@ public record AppProperties(
     public record ChromaHttpConfig(
             int connectTimeoutSeconds,
             int readTimeoutSeconds
+    ) {}
+
+    public record RateLimitConfig(
+            boolean enabled,
+            int chatPerMinute,
+            int uploadPerMinute,
+            int syncPerMinute,
+            int imagePerMinute,
+            int defaultPerMinute
     ) {}
 
     public record ImageDescriptionProperties(
@@ -111,6 +121,11 @@ public record AppProperties(
                 connect,
                 read
         );
+    }
+
+    public RateLimitConfig rateLimitSafe() {
+        if (rateLimit == null) return new RateLimitConfig(false, 60, 10, 2, 300, 120);
+        return rateLimit;
     }
 
     /** Null-safe accessor — returns an empty LlmConfig when app.llm is not configured. */

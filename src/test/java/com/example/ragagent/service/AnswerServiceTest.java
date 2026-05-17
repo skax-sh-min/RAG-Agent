@@ -55,7 +55,7 @@ class AnswerServiceTest {
         llmRouter = mock(LlmRouter.class);
         AppProperties props = new AppProperties(
                 "./data", MAX_RETRY, 8000, 800, 100, 7,
-                null, null, null, null, null, null);
+                null, null, null, null, null, null, null);
         MessageSource messageSource = mock(MessageSource.class);
         when(messageSource.getMessage(anyString(), any(), any(Locale.class))).thenReturn("prompt");
         service = new AnswerService(chatClient, llmRouter, props, messageSource);
