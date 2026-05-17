@@ -33,11 +33,14 @@ public class ThreadMetaRepository {
                     routing_mode TEXT NOT NULL DEFAULT 'COST_FIRST'
                 )
                 """);
-        // Migration: add routing_mode for existing databases
+        // Migration: add columns for existing databases
         var cols = jdbc.queryForList("PRAGMA table_info(thread_meta)");
-        boolean hasRoutingMode = cols.stream().anyMatch(c -> "routing_mode".equals(c.get("name")));
-        if (!hasRoutingMode) {
+        if (cols.stream().noneMatch(c -> "routing_mode".equals(c.get("name")))) {
             jdbc.execute("ALTER TABLE thread_meta ADD COLUMN routing_mode TEXT NOT NULL DEFAULT 'COST_FIRST'");
+        }
+        if (cols.stream().noneMatch(c -> "user_id".equals(c.get("name")))) {
+            jdbc.execute("ALTER TABLE thread_meta ADD COLUMN user_id TEXT NOT NULL DEFAULT 'anonymous'");
+            jdbc.execute("CREATE INDEX IF NOT EXISTS idx_thread_meta_user ON thread_meta(user_id)");
         }
     }
 

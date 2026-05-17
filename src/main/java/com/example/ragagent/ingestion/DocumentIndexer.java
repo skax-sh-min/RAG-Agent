@@ -138,7 +138,7 @@ public class DocumentIndexer {
         List<String> docIds = enriched.stream().map(Document::getId).toList();
         DocRegistry.DocRegistryEntry entry = new DocRegistry.DocRegistryEntry(
                 sha256, req.version(), Instant.now().toString(), tagged.size(), docIds, List.of());
-        docRegistry.put(docId, entry);
+        docRegistry.put(docId, req.ownerId(), entry);
 
         if (req.staleDocId() != null) {
             log.debug("[INDEX] {} 구버전 삭제: {}", req.filename(), req.staleDocId());
@@ -155,7 +155,7 @@ public class DocumentIndexer {
      * Calls {@link DocRegistry#save()} at the end.
      */
     public void reindexFromMd(String docId) throws IOException {
-        DocRegistry.DocRegistryEntry existing = docRegistry.findByDocId(docId)
+        DocRegistry.DocRegistryEntry existing = docRegistry.findByDocId(docId, "anonymous")
                 .orElseThrow(() -> new IllegalArgumentException("문서를 찾을 수 없습니다: " + docId));
 
         String version  = existing.version();
@@ -190,7 +190,7 @@ public class DocumentIndexer {
         vectorStore.add(version, enriched);
 
         List<String> springIds = enriched.stream().map(Document::getId).toList();
-        docRegistry.put(docId, new DocRegistry.DocRegistryEntry(
+        docRegistry.put(docId, "anonymous", new DocRegistry.DocRegistryEntry(
                 sha256, version, Instant.now().toString(), tagged.size(), springIds, List.of()));
         docRegistry.save();
 
@@ -224,9 +224,9 @@ public class DocumentIndexer {
             String sha256   = computeSha256(filePath);
             String docId    = filename + "_" + sha256.substring(0, 8);
 
-            if (docRegistry.existsBySha256AndVersion(sha256, version)) continue;
+            if (docRegistry.existsBySha256AndVersion(sha256, version, "anonymous")) continue;
 
-            String stale = docRegistry.findStaleDocId(filename, docId, version).orElse(null);
+            String stale = docRegistry.findStaleDocId(filename, docId, version, "anonymous").orElse(null);
             filesToIndex.put(filename, new FileEntry(filePath, stale));
         }
         log.info("[SYNC] Phase1 완료: 전체 {}개, 인덱싱 필요 {}개, 스킵 {}개",
@@ -266,8 +266,8 @@ public class DocumentIndexer {
 
         // Phase 3: detect deleted files
         List<String> deleted = new ArrayList<>();
-        for (String docId : new HashSet<>(docRegistry.docIds())) {
-            DocRegistry.DocRegistryEntry entry = docRegistry.findByDocId(docId).orElse(null);
+        for (String docId : new HashSet<>(docRegistry.docIds("anonymous"))) {
+            DocRegistry.DocRegistryEntry entry = docRegistry.findByDocId(docId, "anonymous").orElse(null);
             if (entry == null || !version.equals(entry.version())) continue;
             String filename = DocRegistry.filenameFromDocId(docId);
             if (!filesOnDisk.containsKey(filename)) {
@@ -290,7 +290,7 @@ public class DocumentIndexer {
     public void deleteArtifacts(String docId, String version) {
         deleteExistingVectorsOnly(docId, version);
         deleteDocFiles(docId);
-        docRegistry.remove(docId);
+        docRegistry.remove(docId, "anonymous");
     }
 
     // ── Private helpers ────────────────────────────────────────────────────
@@ -328,7 +328,7 @@ public class DocumentIndexer {
     }
 
     private void deleteExistingVectorsOnly(String docId, String version) {
-        docRegistry.findByDocId(docId).ifPresent(e -> {
+        docRegistry.findByDocId(docId, "anonymous").ifPresent(e -> {
             if (!e.springDocIds().isEmpty()) {
                 log.debug("[DELETE] docId={} → 벡터 청크 {}개 삭제", docId, e.springDocIds().size());
                 vectorStore.deleteByDocIds(version, e.springDocIds());

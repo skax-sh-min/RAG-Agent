@@ -41,10 +41,13 @@ public class SqliteMemoryRepository implements MemoryRepository {
                 "ALTER TABLE conversation_turns ADD COLUMN output_tokens INTEGER DEFAULT 0",
                 "ALTER TABLE conversation_turns ADD COLUMN elapsed_ms INTEGER DEFAULT 0",
                 "ALTER TABLE conversation_turns ADD COLUMN provider TEXT",
-                "ALTER TABLE conversation_turns ADD COLUMN llm_calls INTEGER DEFAULT 0"
+                "ALTER TABLE conversation_turns ADD COLUMN llm_calls INTEGER DEFAULT 0",
+                "ALTER TABLE conversation_turns ADD COLUMN user_id TEXT NOT NULL DEFAULT 'anonymous'"
         )) {
             try { jdbc.execute(ddl); } catch (Exception ignored) {}
         }
+        jdbc.execute(
+                "CREATE INDEX IF NOT EXISTS idx_turns_user_thread ON conversation_turns(user_id, thread_id)");
         jdbc.execute("""
                 CREATE TABLE IF NOT EXISTS image_descriptions (
                     image_path  TEXT    PRIMARY KEY,
@@ -54,6 +57,11 @@ public class SqliteMemoryRepository implements MemoryRepository {
                     created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
                 )
                 """);
+        try {
+            jdbc.execute("ALTER TABLE image_descriptions ADD COLUMN user_id TEXT NOT NULL DEFAULT 'anonymous'");
+        } catch (Exception ignored) {}
+        jdbc.execute(
+                "CREATE INDEX IF NOT EXISTS idx_img_user ON image_descriptions(user_id)");
     }
 
     @Override

@@ -1,32 +1,30 @@
 package com.example.ragagent.ingestion;
 
-import com.example.ragagent.config.AppProperties;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.datasource.DriverManagerDataSource;
 
-import java.io.IOException;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
 
 /**
- * Unit tests for DocRegistry — CRUD + JSON persistence.
+ * Unit tests for DocRegistry — CRUD + SQLite persistence.
  */
 class DocRegistryTest {
 
     @TempDir
     Path tmpDir;
 
-    private DocRegistry buildRegistry() throws IOException {
-        AppProperties props = mock(AppProperties.class);
-        when(props.dataDir()).thenReturn(tmpDir.toString());
-        DocRegistry reg = new DocRegistry(props);
+    private DocRegistry buildRegistry() {
+        DriverManagerDataSource ds = new DriverManagerDataSource();
+        ds.setDriverClassName("org.sqlite.JDBC");
+        ds.setUrl("jdbc:sqlite:" + tmpDir.resolve("test.db"));
+        DocRegistry reg = new DocRegistry(new JdbcTemplate(ds));
         reg.init();
         return reg;
     }
@@ -38,11 +36,11 @@ class DocRegistryTest {
 
     @Test
     @DisplayName("put → findByDocId → 조회 성공")
-    void put_and_find() throws IOException {
+    void put_and_find() {
         DocRegistry reg = buildRegistry();
-        reg.put("doc_abc12345", entry("sha1", "v1"));
+        reg.put("doc_abc12345", "anonymous", entry("sha1", "v1"));
 
-        Optional<DocRegistry.DocRegistryEntry> result = reg.findByDocId("doc_abc12345");
+        Optional<DocRegistry.DocRegistryEntry> result = reg.findByDocId("doc_abc12345", "anonymous");
 
         assertThat(result).isPresent();
         assertThat(result.get().sha256()).isEqualTo("sha1");
@@ -52,55 +50,54 @@ class DocRegistryTest {
 
     @Test
     @DisplayName("remove → findByDocId → empty")
-    void remove_then_find_empty() throws IOException {
+    void remove_then_find_empty() {
         DocRegistry reg = buildRegistry();
-        reg.put("doc_abc12345", entry("sha1", "v1"));
-        reg.remove("doc_abc12345");
+        reg.put("doc_abc12345", "anonymous", entry("sha1", "v1"));
+        reg.remove("doc_abc12345", "anonymous");
 
-        assertThat(reg.findByDocId("doc_abc12345")).isEmpty();
+        assertThat(reg.findByDocId("doc_abc12345", "anonymous")).isEmpty();
     }
 
     @Test
-    @DisplayName("save → 새 인스턴스 load → 데이터 복원")
-    void save_and_reload_persists_data() throws IOException {
-        DocRegistry reg = buildRegistry();
-        reg.put("doc_abc12345", entry("sha256abc", "latest"));
-        reg.save();
+    @DisplayName("put → 같은 파일 DB에서 재조회 → 즉시 지속 확인")
+    void put_persists_immediately() {
+        DocRegistry reg1 = buildRegistry();
+        reg1.put("doc_abc12345", "anonymous", entry("sha256abc", "latest"));
 
         DocRegistry reg2 = buildRegistry();
-        assertThat(reg2.findByDocId("doc_abc12345")).isPresent();
-        assertThat(reg2.findByDocId("doc_abc12345").get().sha256()).isEqualTo("sha256abc");
+        assertThat(reg2.findByDocId("doc_abc12345", "anonymous")).isPresent();
+        assertThat(reg2.findByDocId("doc_abc12345", "anonymous").get().sha256()).isEqualTo("sha256abc");
     }
 
     @Test
     @DisplayName("existsBySha256AndVersion — 존재 / 미존재")
-    void existsBySha256AndVersion() throws IOException {
+    void existsBySha256AndVersion() {
         DocRegistry reg = buildRegistry();
-        reg.put("doc_abc12345", entry("sha-x", "v1"));
+        reg.put("doc_abc12345", "anonymous", entry("sha-x", "v1"));
 
-        assertThat(reg.existsBySha256AndVersion("sha-x", "v1")).isTrue();
-        assertThat(reg.existsBySha256AndVersion("sha-x", "v2")).isFalse();
-        assertThat(reg.existsBySha256AndVersion("other", "v1")).isFalse();
+        assertThat(reg.existsBySha256AndVersion("sha-x", "v1", "anonymous")).isTrue();
+        assertThat(reg.existsBySha256AndVersion("sha-x", "v2", "anonymous")).isFalse();
+        assertThat(reg.existsBySha256AndVersion("other", "v1", "anonymous")).isFalse();
     }
 
     @Test
     @DisplayName("findStaleDocId — 구버전 docId 탐지")
-    void findStaleDocId_detects_old_entry() throws IOException {
+    void findStaleDocId_detects_old_entry() {
         DocRegistry reg = buildRegistry();
-        reg.put("report.pdf_aabbccdd", entry("sha-old", "v1"));
+        reg.put("report.pdf_aabbccdd", "anonymous", entry("sha-old", "v1"));
 
-        Optional<String> stale = reg.findStaleDocId("report.pdf", "report.pdf_11223344", "v1");
+        Optional<String> stale = reg.findStaleDocId("report.pdf", "report.pdf_11223344", "v1", "anonymous");
 
         assertThat(stale).hasValue("report.pdf_aabbccdd");
     }
 
     @Test
     @DisplayName("findStaleDocId — 동일 docId는 stale 아님")
-    void findStaleDocId_ignores_same_docId() throws IOException {
+    void findStaleDocId_ignores_same_docId() {
         DocRegistry reg = buildRegistry();
-        reg.put("report.pdf_aabbccdd", entry("sha-same", "v1"));
+        reg.put("report.pdf_aabbccdd", "anonymous", entry("sha-same", "v1"));
 
-        Optional<String> stale = reg.findStaleDocId("report.pdf", "report.pdf_aabbccdd", "v1");
+        Optional<String> stale = reg.findStaleDocId("report.pdf", "report.pdf_aabbccdd", "v1", "anonymous");
 
         assertThat(stale).isEmpty();
     }
@@ -113,19 +110,22 @@ class DocRegistryTest {
     }
 
     @Test
-    @DisplayName("saveQuiet — IOException 발생해도 예외 전파 없음")
-    void saveQuiet_does_not_throw() throws IOException {
-        AppProperties props = mock(AppProperties.class);
-        // Non-writable path to trigger IOException
-        Path readonlyDir = tmpDir.resolve("readonly");
-        Files.createDirectories(readonlyDir);
-        readonlyDir.toFile().setWritable(false);
-
-        when(props.dataDir()).thenReturn(readonlyDir.toString());
-        DocRegistry reg = new DocRegistry(props);
-        reg.put("doc_abc", entry("sha", "v1"));
-
-        // Must not throw even if save fails
+    @DisplayName("save/saveQuiet — no-op (예외 없음)")
+    void save_and_saveQuiet_are_noops() {
+        DocRegistry reg = buildRegistry();
+        reg.put("doc_abc", "anonymous", entry("sha", "v1"));
+        reg.save();
         reg.saveQuiet();
+    }
+
+    @Test
+    @DisplayName("userId 격리 — 다른 userId로 조회 시 empty")
+    void userId_isolation() {
+        DocRegistry reg = buildRegistry();
+        reg.put("doc_abc12345", "alice", entry("sha1", "v1"));
+
+        assertThat(reg.findByDocId("doc_abc12345", "alice")).isPresent();
+        assertThat(reg.findByDocId("doc_abc12345", "bob")).isEmpty();
+        assertThat(reg.findByDocId("doc_abc12345", "anonymous")).isEmpty();
     }
 }

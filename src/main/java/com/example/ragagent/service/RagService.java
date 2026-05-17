@@ -92,7 +92,7 @@ public class RagService {
     }
 
     public List<DocumentInfo> listDocuments() {
-        return docRegistry.entries().stream()
+        return docRegistry.entries("anonymous").stream()
                 .map(e -> {
                     DocRegistry.DocRegistryEntry r = e.getValue();
                     String filename = DocRegistry.filenameFromDocId(e.getKey());

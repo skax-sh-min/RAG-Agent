@@ -1,101 +1,146 @@
 package com.example.ragagent.ingestion;
 
-import com.example.ragagent.config.AppProperties;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.SerializationFeature;
 import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
-import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Registry of indexed documents — persisted as JSON.
- * Thread-safe reads; callers must serialise writes at the application level
- * (RagService guarantees single-writer via its own coordination).
+ * Registry of indexed documents — persisted in SQLite.
+ * All mutations are immediately durable; save()/saveQuiet() are kept as no-ops for API compatibility.
  */
 @Component
 public class DocRegistry {
 
     private static final Logger log = LoggerFactory.getLogger(DocRegistry.class);
-    private static final String REGISTRY_FILE = "doc_registry.json";
 
-    private final ConcurrentHashMap<String, DocRegistryEntry> data = new ConcurrentHashMap<>();
-    private final ObjectMapper mapper;
-    private final Path registryPath;
+    private final JdbcTemplate jdbc;
+    private final ObjectMapper mapper = new ObjectMapper();
 
-    public DocRegistry(AppProperties props) {
-        this.mapper = new ObjectMapper().enable(SerializationFeature.INDENT_OUTPUT);
-        this.registryPath = Path.of(props.dataDir()).resolve(REGISTRY_FILE);
+    public DocRegistry(JdbcTemplate jdbc) {
+        this.jdbc = jdbc;
     }
 
     @PostConstruct
-    void init() throws IOException {
-        Files.createDirectories(registryPath.getParent());
-        load();
+    void init() {
+        jdbc.execute("""
+                CREATE TABLE IF NOT EXISTS doc_registry (
+                    doc_id         TEXT NOT NULL,
+                    user_id        TEXT NOT NULL DEFAULT 'anonymous',
+                    sha256         TEXT NOT NULL,
+                    version        TEXT NOT NULL,
+                    indexed_at     TEXT NOT NULL,
+                    chunks         INTEGER NOT NULL,
+                    spring_doc_ids TEXT NOT NULL,
+                    errors         TEXT NOT NULL,
+                    PRIMARY KEY (doc_id, user_id)
+                )
+                """);
+        jdbc.execute(
+                "CREATE INDEX IF NOT EXISTS idx_doc_registry_user_version ON doc_registry(user_id, version)");
+        jdbc.execute(
+                "CREATE INDEX IF NOT EXISTS idx_doc_registry_sha_version ON doc_registry(sha256, version, user_id)");
+        log.debug("[REGISTRY] SQLite 초기화 완료");
     }
 
     // ── CRUD ──────────────────────────────────────────────────────────────
 
-    public void put(String docId, DocRegistryEntry entry) {
-        data.put(docId, entry);
+    public void put(String docId, String userId, DocRegistryEntry entry) {
+        jdbc.update("""
+                INSERT INTO doc_registry (doc_id, user_id, sha256, version, indexed_at, chunks, spring_doc_ids, errors)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(doc_id, user_id) DO UPDATE SET
+                  sha256=excluded.sha256, version=excluded.version,
+                  indexed_at=excluded.indexed_at, chunks=excluded.chunks,
+                  spring_doc_ids=excluded.spring_doc_ids, errors=excluded.errors
+                """,
+                docId, userId, entry.sha256(), entry.version(), entry.indexedAt(),
+                entry.chunks(), toJson(entry.springDocIds()), toJson(entry.errors()));
     }
 
-    public Optional<DocRegistryEntry> findByDocId(String docId) {
-        return Optional.ofNullable(data.get(docId));
+    public Optional<DocRegistryEntry> findByDocId(String docId, String userId) {
+        List<DocRegistryEntry> rows = jdbc.query(
+                "SELECT sha256, version, indexed_at, chunks, spring_doc_ids, errors " +
+                "FROM doc_registry WHERE doc_id = ? AND user_id = ?",
+                (rs, n) -> new DocRegistryEntry(
+                        rs.getString("sha256"),
+                        rs.getString("version"),
+                        rs.getString("indexed_at"),
+                        rs.getInt("chunks"),
+                        fromJsonList(rs.getString("spring_doc_ids")),
+                        fromJsonList(rs.getString("errors"))),
+                docId, userId);
+        return rows.isEmpty() ? Optional.empty() : Optional.of(rows.get(0));
     }
 
-    public void remove(String docId) {
-        data.remove(docId);
+    public void remove(String docId, String userId) {
+        jdbc.update("DELETE FROM doc_registry WHERE doc_id = ? AND user_id = ?", docId, userId);
     }
 
-    public Set<String> docIds() {
-        return data.keySet();
+    public Set<String> docIds(String userId) {
+        return new HashSet<>(jdbc.query(
+                "SELECT doc_id FROM doc_registry WHERE user_id = ?",
+                (rs, n) -> rs.getString("doc_id"),
+                userId));
     }
 
-    public Collection<DocRegistryEntry> values() {
-        return data.values();
+    public Collection<DocRegistryEntry> values(String userId) {
+        return jdbc.query(
+                "SELECT sha256, version, indexed_at, chunks, spring_doc_ids, errors " +
+                "FROM doc_registry WHERE user_id = ?",
+                (rs, n) -> new DocRegistryEntry(
+                        rs.getString("sha256"), rs.getString("version"),
+                        rs.getString("indexed_at"), rs.getInt("chunks"),
+                        fromJsonList(rs.getString("spring_doc_ids")),
+                        fromJsonList(rs.getString("errors"))),
+                userId);
     }
 
-    public Set<Map.Entry<String, DocRegistryEntry>> entries() {
-        return data.entrySet();
+    public Set<Map.Entry<String, DocRegistryEntry>> entries(String userId) {
+        Map<String, DocRegistryEntry> map = new LinkedHashMap<>();
+        jdbc.query(
+                "SELECT doc_id, sha256, version, indexed_at, chunks, spring_doc_ids, errors " +
+                "FROM doc_registry WHERE user_id = ? ORDER BY indexed_at DESC",
+                rs -> {
+                    map.put(rs.getString("doc_id"), new DocRegistryEntry(
+                            rs.getString("sha256"), rs.getString("version"),
+                            rs.getString("indexed_at"), rs.getInt("chunks"),
+                            fromJsonList(rs.getString("spring_doc_ids")),
+                            fromJsonList(rs.getString("errors"))));
+                },
+                userId);
+        return map.entrySet();
     }
 
     // ── Query helpers ──────────────────────────────────────────────────────
 
-    public boolean existsBySha256AndVersion(String sha256, String version) {
-        return data.values().stream()
-                .anyMatch(e -> e.sha256().equals(sha256) && e.version().equals(version));
+    public boolean existsBySha256AndVersion(String sha256, String version, String userId) {
+        Integer count = jdbc.queryForObject(
+                "SELECT count(*) FROM doc_registry WHERE sha256 = ? AND version = ? AND user_id = ?",
+                Integer.class, sha256, version, userId);
+        return count != null && count > 0;
     }
 
-    public Optional<String> findStaleDocId(String filename, String newDocId, String version) {
-        return data.entrySet().stream()
-                .filter(e -> e.getKey().startsWith(filename + "_")
-                          && !e.getKey().equals(newDocId)
-                          && version.equals(e.getValue().version()))
-                .map(Map.Entry::getKey)
+    public Optional<String> findStaleDocId(String filename, String newDocId, String version, String userId) {
+        return jdbc.query(
+                "SELECT doc_id FROM doc_registry WHERE version = ? AND user_id = ?",
+                (rs, n) -> rs.getString("doc_id"),
+                version, userId)
+                .stream()
+                .filter(id -> id.startsWith(filename + "_") && !id.equals(newDocId))
                 .findFirst();
     }
 
-    // ── Persistence ────────────────────────────────────────────────────────
+    // ── Persistence (no-ops — SQLite persists immediately) ────────────────
 
-    public void save() throws IOException {
-        mapper.writeValue(registryPath.toFile(), data);
-    }
+    public void save() {}
 
-    public void saveQuiet() {
-        try {
-            save();
-        } catch (IOException e) {
-            log.warn("[REGISTRY] 저장 실패: {}", e.getMessage());
-        }
-    }
+    public void saveQuiet() {}
 
     // ── Static utility ─────────────────────────────────────────────────────
 
@@ -104,18 +149,26 @@ public class DocRegistry {
         return idx > 0 ? docId.substring(0, idx) : docId;
     }
 
-    // ── Private ────────────────────────────────────────────────────────────
+    // ── Private helpers ────────────────────────────────────────────────────
 
-    private void load() throws IOException {
-        if (Files.exists(registryPath)) {
-            Map<String, DocRegistryEntry> loaded = mapper.readValue(registryPath.toFile(),
-                    new TypeReference<>() {});
-            data.putAll(loaded);
-            log.debug("[REGISTRY] 로드 완료: {}개", loaded.size());
+    private String toJson(List<String> list) {
+        try {
+            return mapper.writeValueAsString(list);
+        } catch (Exception e) {
+            return "[]";
         }
     }
 
-    // ── Registry entry (persisted as JSON) ─────────────────────────────────
+    private List<String> fromJsonList(String json) {
+        if (json == null || json.isBlank()) return List.of();
+        try {
+            return mapper.readValue(json, new TypeReference<List<String>>() {});
+        } catch (Exception e) {
+            return List.of();
+        }
+    }
+
+    // ── Registry entry ─────────────────────────────────────────────────────
 
     public record DocRegistryEntry(
             String sha256,

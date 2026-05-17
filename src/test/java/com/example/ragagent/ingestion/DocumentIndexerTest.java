@@ -10,6 +10,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.ai.document.Document;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.datasource.DriverManagerDataSource;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -53,8 +55,11 @@ class DocumentIndexerTest {
         // Stub VectorStoreFacade
         vectorStore = mock(VectorStoreFacade.class);
 
-        // Real DocRegistry backed by tmpDir
-        docRegistry = new DocRegistry(props);
+        // Real DocRegistry backed by a temp SQLite file
+        DriverManagerDataSource ds = new DriverManagerDataSource();
+        ds.setDriverClassName("org.sqlite.JDBC");
+        ds.setUrl("jdbc:sqlite:" + tmpDir.resolve("test.db"));
+        docRegistry = new DocRegistry(new JdbcTemplate(ds));
         docRegistry.init();
 
         // Stub DocumentLoaderService — returns a single Document per call
@@ -91,7 +96,7 @@ class DocumentIndexerTest {
         assertThat(info.sha256()).isNotBlank();
 
         // Registry updated
-        assertThat(docRegistry.findByDocId(info.docId())).isPresent();
+        assertThat(docRegistry.findByDocId(info.docId(), "anonymous")).isPresent();
 
         // Vector store received the enriched chunks
         verify(vectorStore, atLeastOnce()).add(eq("v1"), any());
@@ -106,7 +111,7 @@ class DocumentIndexerTest {
         DocumentInfo info = indexer.index(IndexRequest.single(txtFile, "user_guide.txt", "v1", e -> {}));
 
         // docType lives in spring-AI Document metadata, not in registry — verify via chunks > 0
-        assertThat(docRegistry.findByDocId(info.docId())).isPresent();
+        assertThat(docRegistry.findByDocId(info.docId(), "anonymous")).isPresent();
         assertThat(info.chunks()).isGreaterThanOrEqualTo(1);
     }
 
@@ -115,7 +120,7 @@ class DocumentIndexerTest {
     void index_parallel_deletesStaleDocId() throws IOException {
         // Register a stale entry first
         String staleDocId = "old_guide.txt_stale1234";
-        docRegistry.put(staleDocId,
+        docRegistry.put(staleDocId, "anonymous",
                 new DocRegistry.DocRegistryEntry("sha-old", "v1", "2025-01-01T00:00:00Z",
                         2, List.of("spring-id-1"), List.of()));
 
@@ -126,7 +131,7 @@ class DocumentIndexerTest {
         indexer.index(IndexRequest.parallel(txtFile, "v1", gate, staleDocId));
 
         // Stale entry removed from registry
-        assertThat(docRegistry.findByDocId(staleDocId)).isEmpty();
+        assertThat(docRegistry.findByDocId(staleDocId, "anonymous")).isEmpty();
         // Old spring-doc-ids deleted from vector store
         verify(vectorStore).deleteByDocIds("v1", List.of("spring-id-1"));
     }
@@ -135,13 +140,13 @@ class DocumentIndexerTest {
     @DisplayName("deleteArtifacts — registry 엔트리 제거 + vectorStore 삭제 호출")
     void deleteArtifacts_removesRegistryEntryAndCallsVectorStore() throws IOException {
         String docId = "sample.txt_abcd1234";
-        docRegistry.put(docId,
+        docRegistry.put(docId, "anonymous",
                 new DocRegistry.DocRegistryEntry("sha-del", "v1", "2026-01-01T00:00:00Z",
                         1, List.of("vec-id-x"), List.of()));
 
         indexer.deleteArtifacts(docId, "v1");
 
-        assertThat(docRegistry.findByDocId(docId)).isEmpty();
+        assertThat(docRegistry.findByDocId(docId, "anonymous")).isEmpty();
         verify(vectorStore).deleteByDocIds("v1", List.of("vec-id-x"));
     }
 }

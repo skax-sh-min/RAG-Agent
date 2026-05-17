@@ -35,6 +35,9 @@ public class LlmUsageRepository {
                 """);
         jdbc.execute(
                 "CREATE INDEX IF NOT EXISTS idx_llm_usage_date ON llm_usage(usage_date)");
+        try {
+            jdbc.execute("ALTER TABLE llm_usage ADD COLUMN user_id TEXT NOT NULL DEFAULT 'anonymous'");
+        } catch (Exception ignored) {}
     }
 
     // ── Write ──────────────────────────────────────────────────────────────
