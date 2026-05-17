@@ -56,115 +56,124 @@ public class AnswerService {
         this.maxRetryCount = appProperties.maxRetryCount();
     }
 
-    /** Existing blocking path — unchanged. */
     public AgentState execute(AgentState state) {
-        return executeInternal(state, null);
+        if (state.isDualMode()) return executeDualBlocking(state);
+        return executeBlocking(state);
     }
 
-    /**
-     * Streaming path: Call 1 tokens are pushed via listener.onToken().
-     * Call 2 (sufficiency) and PROGRESSIVE upgrade remain blocking.
-     * DUAL falls back to the blocking path (Phase 5 will add DUAL streaming).
-     */
     public AgentState executeStreaming(AgentState state, GraphListener listener) {
-        return executeInternal(state, listener);
+        if (state.isDualMode()) return executeDualStreaming(state, listener);
+        return executeStreamingNormal(state, listener);
     }
 
-    // ── Internal ──────────────────────────────────────────────────────────────
+    // ── Blocking paths ──────────────────────────────────────────────────────
 
-    private AgentState executeInternal(AgentState state, GraphListener listener) {
-        Locale locale = state.locale();
-        String answerSystemPrompt = messageSource.getMessage("prompt.answer.system", null, locale);
+    private AgentState executeBlocking(AgentState state) {
+        String systemPrompt = answerSystemPrompt(state.locale());
+        StringBuilder buf = new StringBuilder();
+        chatClient.prompt()
+                .system(systemPrompt)
+                .user(buildAnswerPrompt(state))
+                .stream().content().doOnNext(buf::append).blockLast();
+        String answer = truncate(buf.isEmpty() ? "" : buf.toString());
+        state = state.toBuilder()
+                     .accumulateTokens(0, 0)
+                     .usedProvider(llmRouter.findProviderName(TaskType.TEXT, state.routingMode()))
+                     .answer(answer)
+                     .build();
+        return checkSufficiencyAndMaybeUpgrade(state, answer, null);
+    }
 
-        // DUAL: streaming when listener present, blocking otherwise
-        if (state.isDualMode()) {
-            if (listener != null) {
-                AgentState capturedState = state;
-                StringBuilder localBuf = new StringBuilder(), extBuf = new StringBuilder();
-                BiConsumer<LlmProvider, Consumer<String>> callFn =
-                        (prov, sink) -> callOrStream(prov, capturedState, answerSystemPrompt, sink);
-                LlmRouter.DualProviders dp = llmRouter.executeDualStream(
-                        TaskType.TEXT,
-                        callFn,
-                        t -> { localBuf.append(t); listener.onToken("local", t); },
-                        t -> { extBuf.append(t);   listener.onToken("external", t); }
-                );
-                String localAnswer = truncate(localBuf.toString());
-                String extAnswer   = truncate(extBuf.toString());
-                return state.withAnswer(extAnswer)
-                            .withUsedProvider(dp.externalProvider())
-                            .withDualResult(localAnswer,
-                                    localAnswer.isBlank() ? null : dp.localProvider())
-                            .withNeedsRetry(false);
-            }
-            String answerPrompt = buildAnswerPrompt(state);
-            DualResult dual = llmRouter.executeDual(
-                    TaskType.TEXT,
-                    model -> model.call(new Prompt(List.of(
-                            new SystemMessage(answerSystemPrompt),
-                            new UserMessage(answerPrompt)
-                    )))
-            );
-            String extAnswer   = truncate(dual.externalAnswer());
-            String localAnswer = truncate(dual.localAnswer());
-            return state
-                    .withAnswer(extAnswer)
-                    .withUsedProvider(dual.externalProvider())
-                    .withDualResult(localAnswer,
-                            localAnswer.isBlank() ? null : dual.localProvider())
-                    .withNeedsRetry(false);
-        }
+    private AgentState executeDualBlocking(AgentState state) {
+        String systemPrompt = answerSystemPrompt(state.locale());
+        String userPrompt = buildAnswerPrompt(state);
+        DualResult dual = llmRouter.executeDual(
+                TaskType.TEXT,
+                model -> model.call(new Prompt(List.of(
+                        new SystemMessage(systemPrompt),
+                        new UserMessage(userPrompt)
+                )))
+        );
+        String extAnswer   = truncate(dual.externalAnswer());
+        String localAnswer = truncate(dual.localAnswer());
+        return state.toBuilder()
+                    .answer(extAnswer)
+                    .usedProvider(dual.externalProvider())
+                    .dualResult(localAnswer, localAnswer.isBlank() ? null : dual.localProvider())
+                    .needsRetry(false)
+                    .build();
+    }
 
-        // Call 1: answer generation
-        String answer;
-        if (listener != null) {
-            LlmProvider provider = llmRouter.routeProvider(TaskType.TEXT, state.routingMode());
-            answer = streamAnswer(provider, state, answerSystemPrompt, listener::onToken);
-            state = state.withUsedProvider(provider.name());
-        } else {
-            StringBuilder buf = new StringBuilder();
-            chatClient.prompt()
-                    .system(answerSystemPrompt)
-                    .user(buildAnswerPrompt(state))
-                    .stream().content().doOnNext(buf::append).blockLast();
-            state = state.withTokensAccumulated(0, 0);
-            answer = buf.isEmpty() ? "" : buf.toString();
-            state = state.withUsedProvider(llmRouter.findProviderName(TaskType.TEXT, state.routingMode()));
-        }
+    // ── Streaming paths ─────────────────────────────────────────────────────
 
-        answer = truncate(answer);
-        // Call 2: sufficiency check (always blocking)
-        AgentState resultState = checkSufficiency(state.withAnswer(answer), answer, locale);
+    private AgentState executeStreamingNormal(AgentState state, GraphListener listener) {
+        String systemPrompt = answerSystemPrompt(state.locale());
+        LlmProvider provider = llmRouter.routeProvider(TaskType.TEXT, state.routingMode());
+        String answer = truncate(streamAnswer(provider, state, systemPrompt, listener::onToken));
+        state = state.toBuilder().usedProvider(provider.name()).answer(answer).build();
+        return checkSufficiencyAndMaybeUpgrade(state, answer, listener);
+    }
 
-        // PROGRESSIVE upgrade: re-call when listener present, otherwise blocking.
+    private AgentState executeDualStreaming(AgentState state, GraphListener listener) {
+        String systemPrompt = answerSystemPrompt(state.locale());
+        AgentState capturedState = state;
+        StringBuilder localBuf = new StringBuilder(), extBuf = new StringBuilder();
+        BiConsumer<LlmProvider, Consumer<String>> callFn =
+                (prov, sink) -> callOrStream(prov, capturedState, systemPrompt, sink);
+        LlmRouter.DualProviders dp = llmRouter.executeDualStream(
+                TaskType.TEXT,
+                callFn,
+                t -> { localBuf.append(t); listener.onToken("local", t); },
+                t -> { extBuf.append(t);   listener.onToken("external", t); }
+        );
+        String localAnswer = truncate(localBuf.toString());
+        String extAnswer   = truncate(extBuf.toString());
+        return state.toBuilder()
+                    .answer(extAnswer)
+                    .usedProvider(dp.externalProvider())
+                    .dualResult(localAnswer, localAnswer.isBlank() ? null : dp.localProvider())
+                    .needsRetry(false)
+                    .build();
+    }
+
+    // ── Sufficiency + PROGRESSIVE ───────────────────────────────────────────
+
+    private AgentState checkSufficiencyAndMaybeUpgrade(AgentState state, String answer, GraphListener listener) {
+        AgentState resultState = checkSufficiency(state, answer, state.locale());
         if (state.routingMode() == RoutingMode.PROGRESSIVE
                 && resultState.needsRetry()
                 && state.retryCount() >= maxRetryCount) {
-
-            LlmProvider premiumProvider = llmRouter.routeProvider(TaskType.TEXT, RoutingMode.QUALITY_FIRST);
-            if (listener != null) listener.onUpgrade(premiumProvider.name());
-            String premiumAnswer;
-            if (listener != null) {
-                premiumAnswer = streamAnswer(premiumProvider, state, answerSystemPrompt, listener::onToken);
-            } else {
-                String answerPrompt = buildAnswerPrompt(state);
-                premiumAnswer = llmRouter.executeWithTracking(
-                        TaskType.TEXT, RoutingMode.QUALITY_FIRST,
-                        model -> model.call(new Prompt(List.of(
-                                new SystemMessage(answerSystemPrompt),
-                                new UserMessage(answerPrompt)
-                        )))
-                );
-            }
-            return resultState
-                    .withAnswer(truncate(premiumAnswer))
-                    .withUsedProvider(premiumProvider.name())
-                    .withPremiumUpgraded(premiumProvider.name())
-                    .withNeedsRetry(false);
+            return progressiveUpgrade(state, resultState, listener);
         }
-
         return resultState;
     }
+
+    private AgentState progressiveUpgrade(AgentState state, AgentState resultState, GraphListener listener) {
+        String systemPrompt = answerSystemPrompt(state.locale());
+        LlmProvider premiumProvider = llmRouter.routeProvider(TaskType.TEXT, RoutingMode.QUALITY_FIRST);
+        if (listener != null) listener.onUpgrade(premiumProvider.name());
+        String premiumAnswer;
+        if (listener != null) {
+            premiumAnswer = streamAnswer(premiumProvider, state, systemPrompt, listener::onToken);
+        } else {
+            String userPrompt = buildAnswerPrompt(state);
+            premiumAnswer = llmRouter.executeWithTracking(
+                    TaskType.TEXT, RoutingMode.QUALITY_FIRST,
+                    model -> model.call(new Prompt(List.of(
+                            new SystemMessage(systemPrompt),
+                            new UserMessage(userPrompt)
+                    )))
+            );
+        }
+        return resultState.toBuilder()
+                          .answer(truncate(premiumAnswer))
+                          .usedProvider(premiumProvider.name())
+                          .premiumUpgraded(premiumProvider.name())
+                          .needsRetry(false)
+                          .build();
+    }
+
+    // ── Stream helpers ──────────────────────────────────────────────────────
 
     private String streamAnswer(LlmProvider provider, AgentState state,
                                 String systemPrompt, Consumer<String> tokenSink) {
@@ -230,15 +239,18 @@ public class AnswerService {
                     .system(systemPrompt)
                     .user(evalPrompt)
                     .stream().content().doOnNext(buf::append).blockLast();
-            state = state.withTokensAccumulated(0, 0);
             boolean sufficient = sufficiencyConverter
                     .convert(buf.isEmpty() ? "" : buf.toString())
                     .sufficient();
-            return state.withNeedsRetry(!sufficient);
+            return state.toBuilder().accumulateTokens(0, 0).needsRetry(!sufficient).build();
         } catch (Exception e) {
             log.warn("Sufficiency check parse failed, treating as sufficient: {}", e.getMessage());
-            return state.withNeedsRetry(false);
+            return state.toBuilder().needsRetry(false).build();
         }
+    }
+
+    private String answerSystemPrompt(Locale locale) {
+        return messageSource.getMessage("prompt.answer.system", null, locale);
     }
 
     private String buildAnswerPrompt(AgentState state) {
