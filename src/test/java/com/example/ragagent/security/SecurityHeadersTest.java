@@ -1,5 +1,6 @@
 package com.example.ragagent.security;
 
+import com.example.ragagent.audit.AuditLogger;
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.context.ThreadContextResolver;
 import com.example.ragagent.controller.OperationsController;
@@ -37,6 +38,7 @@ class SecurityHeadersTest {
     @MockitoBean CircuitBreaker circuitBreaker;
     @MockitoBean ChatModel chatModel;
     @MockitoBean ThreadContextResolver threadContextResolver;
+    @MockitoBean AuditLogger auditLogger;
 
     @Test
     @DisplayName("GET 응답에 X-Frame-Options 헤더 존재")

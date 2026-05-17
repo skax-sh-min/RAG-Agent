@@ -1,5 +1,6 @@
 package com.example.ragagent.controller;
 
+import com.example.ragagent.audit.AuditLogger;
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.model.*;
 import com.example.ragagent.exception.DocumentIndexingException;
@@ -44,13 +45,16 @@ public class DocumentController {
     private final RagService ragService;
     private final IndexingProgressService progressService;
     private final AppProperties props;
+    private final AuditLogger auditLogger;
 
     public DocumentController(RagService ragService,
                                IndexingProgressService progressService,
-                               AppProperties props) {
+                               AppProperties props,
+                               AuditLogger auditLogger) {
         this.ragService = ragService;
         this.progressService = progressService;
         this.props = props;
+        this.auditLogger = auditLogger;
     }
 
     private Path documentsDir() {
@@ -102,6 +106,8 @@ public class DocumentController {
                 DocumentInfo info = ragService.indexDocument(tmpPath, fname, ver,
                         event -> progressService.publish(taskId, event));
                 progressService.publish(taskId, IndexingProgressEvent.done(info));
+                auditLogger.log("document.upload", info.docId(),
+                        Map.of("filename", fname, "version", ver, "chunks", info.chunks()));
             } catch (Exception e) {
                 String msg = isChromaDown(e) ? "ChromaDB 연결 실패" : e.getMessage();
                 log.error("Async index error for {}", fname, e);
@@ -133,6 +139,10 @@ public class DocumentController {
                 SyncResult result = ragService.syncDirectory(version,
                         event -> progressService.publish(taskId, event));
                 progressService.publish(taskId, IndexingProgressEvent.syncDone(result));
+                auditLogger.log("document.sync", null,
+                        Map.of("indexed", result.indexed().size(),
+                               "updated", result.updated().size(),
+                               "deleted", result.deleted().size()));
             } catch (Exception e) {
                 String msg = isChromaDown(e) ? "ChromaDB 연결 실패" : e.getMessage();
                 log.error("Sync error", e);
@@ -149,6 +159,7 @@ public class DocumentController {
             @PathVariable String docId,
             @RequestParam(defaultValue = "latest") String version) throws IOException {
         ragService.deleteDocument(docId, version);
+        auditLogger.log("document.delete", docId, Map.of("version", version));
         return ResponseEntity.ok().build();
     }
 
@@ -195,13 +206,19 @@ public class DocumentController {
             if (Files.exists(dest) && computeSha256(staged).equals(computeSha256(dest))) {
                 log.debug("Upload no-op: identical content for {}", filename);
                 Files.deleteIfExists(staged);
-                return ResponseEntity.ok(ragService.indexDocument(dest, version));
+                DocumentInfo existing = ragService.indexDocument(dest, version);
+                auditLogger.log("document.upload", existing.docId(),
+                        Map.of("filename", filename, "version", version, "chunks", existing.chunks()));
+                return ResponseEntity.ok(existing);
             }
             if (Files.exists(dest)) {
                 dest = versionedPath(dest);
             }
             Files.copy(staged, dest, StandardCopyOption.REPLACE_EXISTING);
-            return ResponseEntity.ok(ragService.indexDocument(dest, version));
+            DocumentInfo info = ragService.indexDocument(dest, version);
+            auditLogger.log("document.upload", info.docId(),
+                    Map.of("filename", filename, "version", version, "chunks", info.chunks()));
+            return ResponseEntity.ok(info);
         } finally {
             try { Files.deleteIfExists(staged); } catch (IOException ignored) {}
         }
@@ -211,7 +228,12 @@ public class DocumentController {
     @ResponseBody
     public ResponseEntity<SyncResult> syncDocumentsApi(
             @RequestParam(value = "version", defaultValue = "latest") String version) throws IOException {
-        return ResponseEntity.ok(ragService.syncDirectory(version));
+        SyncResult result = ragService.syncDirectory(version);
+        auditLogger.log("document.sync", null,
+                Map.of("indexed", result.indexed().size(),
+                       "updated", result.updated().size(),
+                       "deleted", result.deleted().size()));
+        return ResponseEntity.ok(result);
     }
 
     @GetMapping("/api/v1/documents")
@@ -226,6 +248,7 @@ public class DocumentController {
             @PathVariable String docId,
             @RequestParam(value = "version", defaultValue = "latest") String version) throws IOException {
         ragService.deleteDocument(docId, version);
+        auditLogger.log("document.delete", docId, Map.of("version", version));
         return ResponseEntity.noContent().build();
     }
 

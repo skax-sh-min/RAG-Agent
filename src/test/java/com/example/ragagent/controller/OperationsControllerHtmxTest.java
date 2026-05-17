@@ -1,5 +1,6 @@
 package com.example.ragagent.controller;
 
+import com.example.ragagent.audit.AuditLogger;
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.context.ThreadContextResolver;
 import com.example.ragagent.llm.CircuitBreaker;
@@ -40,6 +41,7 @@ class OperationsControllerHtmxTest {
     @MockitoBean CircuitBreaker circuitBreaker;
     @MockitoBean ChatModel chatModel;
     @MockitoBean ThreadContextResolver threadContextResolver;
+    @MockitoBean AuditLogger auditLogger;
 
     @Test
     @DisplayName("DELETE /ui/threads/{id} — 200 OK")

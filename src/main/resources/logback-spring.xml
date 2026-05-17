@@ -2,11 +2,43 @@
 <configuration>
     <include resource="org/springframework/boot/logging/logback/defaults.xml"/>
 
+    <!-- app.properties 값 주입 -->
+    <springProperty name="dataDir"           source="app.data-dir"                defaultValue="./data"/>
+    <springProperty name="auditMaxFileSize"  source="app.audit.max-file-size"     defaultValue="10MB"/>
+    <springProperty name="auditMaxHistory"   source="app.audit.max-history-days"  defaultValue="7"/>
+    <springProperty name="auditTotalSizeCap" source="app.audit.total-size-cap"    defaultValue="100MB"/>
+
     <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
         <encoder>
             <pattern>%d{HH:mm:ss.SSS} [%X{traceId:--}] %-5level %logger{36} - %msg%n</pattern>
         </encoder>
     </appender>
+
+    <!--
+        AUDIT 전용 롤링 파일 appender.
+        - 하루 단위 로테이션 + 10 MB 초과 시 추가 분할 (.0, .1, ...)
+        - maxHistory: 보관 일수 (기본 7일), 오래된 파일 자동 삭제
+        - totalSizeCap: 전체 audit 디렉터리 상한 (기본 100 MB)
+        - 포맷: JSON 한 줄 (NDJSON) — grep / jq 로 분석 가능
+    -->
+    <appender name="AUDIT_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>${dataDir}/audit/audit.log</file>
+        <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+            <fileNamePattern>${dataDir}/audit/audit.%d{yyyy-MM-dd}.%i.log.gz</fileNamePattern>
+            <maxFileSize>${auditMaxFileSize}</maxFileSize>
+            <maxHistory>${auditMaxHistory}</maxHistory>
+            <totalSizeCap>${auditTotalSizeCap}</totalSizeCap>
+        </rollingPolicy>
+        <encoder>
+            <charset>UTF-8</charset>
+            <pattern>%msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <!-- AUDIT logger: 앱 로그와 분리, 콘솔에는 출력 안 함 -->
+    <logger name="AUDIT" level="INFO" additivity="false">
+        <appender-ref ref="AUDIT_FILE"/>
+    </logger>
 
     <root level="INFO">
         <appender-ref ref="CONSOLE"/>

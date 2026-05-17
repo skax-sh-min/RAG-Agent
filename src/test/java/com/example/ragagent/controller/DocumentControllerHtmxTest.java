@@ -1,5 +1,6 @@
 package com.example.ragagent.controller;
 
+import com.example.ragagent.audit.AuditLogger;
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.context.ThreadContextResolver;
 import com.example.ragagent.service.IndexingProgressService;
@@ -43,6 +44,7 @@ class DocumentControllerHtmxTest {
     @MockitoBean AppProperties props;
     @MockitoBean ChatModel chatModel;
     @MockitoBean ThreadContextResolver threadContextResolver;
+    @MockitoBean AuditLogger auditLogger;
 
     @Test
     @DisplayName("POST /ui/documents/upload — 정상 업로드 → 202 + taskId (비동기 인덱싱)")

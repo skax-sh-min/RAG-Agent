@@ -18,7 +18,8 @@ public record AppProperties(
         ChromaHttpConfig chroma,
         ImageDescriptionProperties imageDescription,
         EmbeddingConfig embedding,
-        RateLimitConfig rateLimit
+        RateLimitConfig rateLimit,
+        AuditConfig audit
 ) {
     public record LlmConfig(
             List<ProviderConfig> providers,
@@ -67,6 +68,13 @@ public record AppProperties(
             int syncPerMinute,
             int imagePerMinute,
             int defaultPerMinute
+    ) {}
+
+    public record AuditConfig(
+            boolean enabled,
+            String maxFileSize,      // e.g. "10MB"  — Logback SizeAndTimeBasedRollingPolicy
+            int maxHistoryDays,      // 보관 일수, 이 일수가 지난 파일 자동 삭제
+            String totalSizeCap      // audit 디렉터리 전체 상한, e.g. "100MB"
     ) {}
 
     public record ImageDescriptionProperties(
@@ -126,6 +134,14 @@ public record AppProperties(
     public RateLimitConfig rateLimitSafe() {
         if (rateLimit == null) return new RateLimitConfig(false, 60, 10, 2, 300, 120);
         return rateLimit;
+    }
+
+    public AuditConfig auditSafe() {
+        if (audit == null) return new AuditConfig(true, "10MB", 7, "100MB");
+        String size = (audit.maxFileSize() != null && !audit.maxFileSize().isBlank()) ? audit.maxFileSize() : "10MB";
+        int days = audit.maxHistoryDays() > 0 ? audit.maxHistoryDays() : 7;
+        String cap = (audit.totalSizeCap() != null && !audit.totalSizeCap().isBlank()) ? audit.totalSizeCap() : "100MB";
+        return new AuditConfig(audit.enabled(), size, days, cap);
     }
 
     /** Null-safe accessor — returns an empty LlmConfig when app.llm is not configured. */

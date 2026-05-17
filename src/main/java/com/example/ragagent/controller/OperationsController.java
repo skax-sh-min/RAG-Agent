@@ -1,5 +1,6 @@
 package com.example.ragagent.controller;
 
+import com.example.ragagent.audit.AuditLogger;
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.llm.CircuitBreaker;
 import com.example.ragagent.model.LlmProviderReport;
@@ -29,17 +30,20 @@ public class OperationsController {
     private final LlmUsageRepository usageRepo;
     private final AppProperties props;
     private final CircuitBreaker circuitBreaker;
+    private final AuditLogger auditLogger;
 
     public OperationsController(ThreadMetaService threadMetaService,
                                 MemoryService memoryService,
                                 LlmUsageRepository usageRepo,
                                 AppProperties props,
-                                CircuitBreaker circuitBreaker) {
+                                CircuitBreaker circuitBreaker,
+                                AuditLogger auditLogger) {
         this.threadMetaService = threadMetaService;
         this.memoryService = memoryService;
         this.usageRepo = usageRepo;
         this.props = props;
         this.circuitBreaker = circuitBreaker;
+        this.auditLogger = auditLogger;
     }
 
     // ── Page ──────────────────────────────────────────────────────────
@@ -51,6 +55,7 @@ public class OperationsController {
     public void updateRoutingMode(@PathVariable String threadId,
                                    @RequestParam String routingMode) {
         threadMetaService.updateRoutingMode(threadId, routingMode);
+        auditLogger.log("thread.routing-mode", threadId, Map.of("mode", routingMode));
     }
 
     @PatchMapping("/ui/threads/{threadId}/title")
@@ -67,6 +72,7 @@ public class OperationsController {
     public ResponseEntity<Void> deleteThread(@PathVariable String threadId) {
         memoryService.clearHistory(threadId);
         threadMetaService.delete(threadId);
+        auditLogger.log("thread.delete", threadId);
         return ResponseEntity.ok().build();
     }
 
