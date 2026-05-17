@@ -1,0 +1,16 @@
+# DOMAIN 환경변수로 대상 도메인 지정 (기본: localhost)
+# 로컬: DOMAIN=localhost → Caddy 로컬 CA로 HTTPS (or http://localhost 사용)
+# 운영: DOMAIN=example.com → Let's Encrypt 자동 인증서 발급 + 갱신
+{$DOMAIN:localhost} {
+    reverse_proxy app:8080
+
+    encode gzip zstd
+
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Content-Type-Options  "nosniff"
+        Referrer-Policy         "strict-origin-when-cross-origin"
+        X-Frame-Options         "SAMEORIGIN"
+        -Server
+    }
+}

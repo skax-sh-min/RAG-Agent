@@ -1,4 +1,19 @@
 services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      - DOMAIN=${DOMAIN:-localhost}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - app
+
   chroma:
     image: chromadb/chroma:latest
     ports:
@@ -15,8 +30,10 @@ services:
 
   app:
     build: .
+    # 8080은 루프백에만 바인딩 — 외부 노출은 Caddy가 담당
+    # 디버깅 시 직접 접근이 필요하면 "127.0.0.1:8080:8080" 으로 변경
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     environment:
       # Spring AI global (embedding + fallback)
       - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.openai.com}
@@ -45,3 +62,5 @@ services:
 
 volumes:
   chroma_data:
+  caddy_data:
+  caddy_config:
