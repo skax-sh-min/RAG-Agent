@@ -18,6 +18,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -65,7 +66,7 @@ class AgentServiceTest {
     @Test
     @DisplayName("chat() 은 history+classifier 를 병렬 호출하고 결과를 AgentState 에 주입")
     void chat_parallelJoin_setsHistoryAndQuestionType() {
-        when(memoryService.getHistory("t1")).thenReturn("이전 대화");
+        when(memoryService.getHistory(anyString(), eq("t1"))).thenReturn("이전 대화");
         when(classifierService.classifyOnly(anyString(), any())).thenReturn("manual");
         when(agentGraph.run(any())).thenReturn(fullResult());
 
@@ -82,14 +83,14 @@ class AgentServiceTest {
         assertThat(initial.questionType()).isEqualTo("manual");
         assertThat(initial.routingMode()).isEqualTo(RoutingMode.COST_FIRST);
 
-        verify(memoryService, times(1)).getHistory("t1");
+        verify(memoryService, times(1)).getHistory(anyString(), eq("t1"));
         verify(classifierService, times(1)).classifyOnly(anyString(), any());
     }
 
     @Test
     @DisplayName("ChatResponse 매핑 — AgentState 모든 필드가 응답에 정확히 전이")
     void chat_mapsAgentStateToChatResponse() {
-        when(memoryService.getHistory(any())).thenReturn("");
+        when(memoryService.getHistory(any(), any())).thenReturn("");
         when(classifierService.classifyOnly(any(), any())).thenReturn("manual");
         when(agentGraph.run(any())).thenReturn(fullResult());
 
@@ -117,7 +118,7 @@ class AgentServiceTest {
                 .dualResult("로컬 답변", "local")
                 .build();
 
-        when(memoryService.getHistory(any())).thenReturn("");
+        when(memoryService.getHistory(any(), any())).thenReturn("");
         when(classifierService.classifyOnly(any(), any())).thenReturn("manual");
         when(agentGraph.run(any())).thenReturn(dualResult);
 
@@ -133,7 +134,7 @@ class AgentServiceTest {
     void chat_progressiveUpgrade_exposesPremiumProvider() {
         AgentState upgradedResult = fullResult().toBuilder().premiumUpgraded("gemini-pro").build();
 
-        when(memoryService.getHistory(any())).thenReturn("");
+        when(memoryService.getHistory(any(), any())).thenReturn("");
         when(classifierService.classifyOnly(any(), any())).thenReturn("manual");
         when(agentGraph.run(any())).thenReturn(upgradedResult);
 
@@ -145,7 +146,7 @@ class AgentServiceTest {
     @Test
     @DisplayName("memory 와 classifier 가 진짜 병렬 실행 (각각 200ms sleep 도 총 시간 ~200ms)")
     void chat_runsHistoryAndClassifyInParallel() {
-        when(memoryService.getHistory(any())).thenAnswer(inv -> {
+        when(memoryService.getHistory(any(), any())).thenAnswer(inv -> {
             Thread.sleep(200);
             return "";
         });
@@ -168,7 +169,7 @@ class AgentServiceTest {
     @Test
     @DisplayName("classifyOnly 가 questionType=null 반환해도 OK (AgentGraph 의 CLASSIFIER 가 처리)")
     void chat_classifyReturnsNull_propagatesToGraph() {
-        when(memoryService.getHistory(any())).thenReturn("");
+        when(memoryService.getHistory(any(), any())).thenReturn("");
         when(classifierService.classifyOnly(any(), any())).thenReturn(null);
         when(agentGraph.run(any())).thenReturn(fullResult());
 
@@ -182,7 +183,7 @@ class AgentServiceTest {
     @Test
     @DisplayName("chat() 호출마다 AgentGraph.run 정확히 1회")
     void chat_invokesGraphOnce() {
-        when(memoryService.getHistory(any())).thenReturn("");
+        when(memoryService.getHistory(any(), any())).thenReturn("");
         when(classifierService.classifyOnly(any(), any())).thenReturn("manual");
         when(agentGraph.run(any())).thenReturn(fullResult());
 

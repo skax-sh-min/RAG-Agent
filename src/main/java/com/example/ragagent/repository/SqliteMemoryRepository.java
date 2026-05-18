@@ -65,13 +65,13 @@ public class SqliteMemoryRepository implements MemoryRepository {
     }
 
     @Override
-    public String getHistory(String threadId, int maxChars) {
+    public String getHistory(String userId, String threadId, int maxChars) {
         // fetch last FETCH_LIMIT turns newest-first, then reverse for chronological order
         List<String> rows = jdbc.query(
                 "SELECT question, answer FROM conversation_turns " +
-                "WHERE thread_id = ? ORDER BY id DESC LIMIT ?",
+                "WHERE user_id = ? AND thread_id = ? ORDER BY id DESC LIMIT ?",
                 (rs, n) -> "Q: %s\nA: %s".formatted(rs.getString("question"), rs.getString("answer")),
-                threadId, FETCH_LIMIT);
+                userId, threadId, FETCH_LIMIT);
 
         if (rows.isEmpty()) return "";
 
@@ -94,27 +94,27 @@ public class SqliteMemoryRepository implements MemoryRepository {
     }
 
     @Override
-    public void addTurn(String threadId, String question, String answer,
+    public void addTurn(String userId, String threadId, String question, String answer,
                         String askedAt, int inputTokens, int outputTokens,
                         int elapsedMs, String provider, int llmCalls) {
         jdbc.update(
                 "INSERT INTO conversation_turns " +
-                "(thread_id, question, answer, asked_at, input_tokens, output_tokens, elapsed_ms, provider, llm_calls) " +
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                threadId, question, answer, askedAt, inputTokens, outputTokens, elapsedMs, provider, llmCalls);
+                "(user_id, thread_id, question, answer, asked_at, input_tokens, output_tokens, elapsed_ms, provider, llm_calls) " +
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                userId, threadId, question, answer, askedAt, inputTokens, outputTokens, elapsedMs, provider, llmCalls);
     }
 
     @Override
-    public void clearHistory(String threadId) {
-        jdbc.update("DELETE FROM conversation_turns WHERE thread_id = ?", threadId);
+    public void clearHistory(String userId, String threadId) {
+        jdbc.update("DELETE FROM conversation_turns WHERE user_id = ? AND thread_id = ?", userId, threadId);
     }
 
     @Override
-    public List<Turn> getTurns(String threadId) {
+    public List<Turn> getTurns(String userId, String threadId) {
         return jdbc.query(
                 "SELECT question, answer, asked_at, created_at, " +
                 "input_tokens, output_tokens, elapsed_ms, provider, llm_calls " +
-                "FROM conversation_turns WHERE thread_id = ? ORDER BY id ASC",
+                "FROM conversation_turns WHERE user_id = ? AND thread_id = ? ORDER BY id ASC",
                 (rs, n) -> new Turn(
                         rs.getString("question"),
                         rs.getString("answer"),
@@ -125,6 +125,6 @@ public class SqliteMemoryRepository implements MemoryRepository {
                         rs.getInt("elapsed_ms"),
                         rs.getString("provider"),
                         rs.getInt("llm_calls")),
-                threadId);
+                userId, threadId);
     }
 }

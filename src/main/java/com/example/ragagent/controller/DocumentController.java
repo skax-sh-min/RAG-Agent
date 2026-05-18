@@ -1,7 +1,7 @@
 package com.example.ragagent.controller;
 
 import com.example.ragagent.audit.AuditLogger;
-import com.example.ragagent.config.AppProperties;
+import com.example.ragagent.context.ThreadContext;
 import com.example.ragagent.model.*;
 import com.example.ragagent.exception.DocumentIndexingException;
 import com.example.ragagent.exception.UnsupportedFileTypeException;
@@ -44,28 +44,21 @@ public class DocumentController {
 
     private final RagService ragService;
     private final IndexingProgressService progressService;
-    private final AppProperties props;
     private final AuditLogger auditLogger;
 
     public DocumentController(RagService ragService,
                                IndexingProgressService progressService,
-                               AppProperties props,
                                AuditLogger auditLogger) {
         this.ragService = ragService;
         this.progressService = progressService;
-        this.props = props;
         this.auditLogger = auditLogger;
-    }
-
-    private Path documentsDir() {
-        return Path.of(props.dataDir()).resolve("documents");
     }
 
     // ── Page ──────────────────────────────────────────────────────────
 
     @GetMapping("/documents")
-    public String documents(Model model) {
-        model.addAttribute("documents", ragService.listDocuments());
+    public String documents(ThreadContext ctx, Model model) {
+        model.addAttribute("documents", ragService.listDocuments(ctx.userId()));
         return "documents";
     }
 
@@ -78,6 +71,7 @@ public class DocumentController {
     @PostMapping("/ui/documents/upload")
     @ResponseBody
     public ResponseEntity<Map<String, String>> uploadDocument(
+            ThreadContext ctx,
             @RequestParam MultipartFile file,
             @RequestParam(defaultValue = "latest") String version) throws IOException {
         if (file.isEmpty()) {
@@ -100,10 +94,11 @@ public class DocumentController {
         final Path tmpPath = tmp;
         final String fname = filename;
         final String ver = version;
+        final String userId = ctx.userId();
 
         Thread.ofVirtual().name("idx-upload-" + taskId).start(() -> {
             try {
-                DocumentInfo info = ragService.indexDocument(tmpPath, fname, ver,
+                DocumentInfo info = ragService.indexDocument(userId, tmpPath, fname, ver,
                         event -> progressService.publish(taskId, event));
                 progressService.publish(taskId, IndexingProgressEvent.done(info));
                 auditLogger.log("document.upload", info.docId(),
@@ -131,12 +126,14 @@ public class DocumentController {
     @PostMapping("/ui/documents/sync")
     @ResponseBody
     public ResponseEntity<Map<String, String>> syncDocumentsUi(
+            ThreadContext ctx,
             @RequestParam(defaultValue = "latest") String version) {
         String taskId = progressService.newTaskId();
+        final String userId = ctx.userId();
 
         Thread.ofVirtual().name("idx-sync-" + taskId).start(() -> {
             try {
-                SyncResult result = ragService.syncDirectory(version,
+                SyncResult result = ragService.syncDirectory(userId, version,
                         event -> progressService.publish(taskId, event));
                 progressService.publish(taskId, IndexingProgressEvent.syncDone(result));
                 auditLogger.log("document.sync", null,
@@ -156,16 +153,17 @@ public class DocumentController {
     @DeleteMapping("/ui/documents/{docId}")
     @ResponseBody
     public ResponseEntity<Void> deleteDocumentUi(
+            ThreadContext ctx,
             @PathVariable String docId,
             @RequestParam(defaultValue = "latest") String version) throws IOException {
-        ragService.deleteDocument(docId, version);
+        ragService.deleteDocument(ctx.userId(), docId, version);
         auditLogger.log("document.delete", docId, Map.of("version", version));
         return ResponseEntity.ok().build();
     }
 
     @GetMapping("/ui/documents/list")
-    public String documentList(Model model) {
-        model.addAttribute("documents", ragService.listDocuments());
+    public String documentList(ThreadContext ctx, Model model) {
+        model.addAttribute("documents", ragService.listDocuments(ctx.userId()));
         return "fragments/doc-table-body :: body";
     }
 
@@ -174,6 +172,7 @@ public class DocumentController {
     @PostMapping("/api/v1/documents")
     @ResponseBody
     public ResponseEntity<DocumentInfo> uploadDocumentApi(
+            ThreadContext ctx,
             @RequestParam("file") MultipartFile file,
             @RequestParam(value = "version", defaultValue = "latest") String version) throws IOException {
 
@@ -193,8 +192,9 @@ public class DocumentController {
             return ResponseEntity.badRequest().build();
         }
 
+        String userId = ctx.userId();
         try {
-            Path documentsDir = documentsDir();
+            Path documentsDir = ragService.userDocumentsDir(userId);
             Files.createDirectories(documentsDir);
             Path base = documentsDir.toAbsolutePath().normalize();
             Path dest = base.resolve(filename).normalize();
@@ -206,7 +206,7 @@ public class DocumentController {
             if (Files.exists(dest) && computeSha256(staged).equals(computeSha256(dest))) {
                 log.debug("Upload no-op: identical content for {}", filename);
                 Files.deleteIfExists(staged);
-                DocumentInfo existing = ragService.indexDocument(dest, version);
+                DocumentInfo existing = ragService.indexDocument(userId, dest, version);
                 auditLogger.log("document.upload", existing.docId(),
                         Map.of("filename", filename, "version", version, "chunks", existing.chunks()));
                 return ResponseEntity.ok(existing);
@@ -215,7 +215,7 @@ public class DocumentController {
                 dest = versionedPath(dest);
             }
             Files.copy(staged, dest, StandardCopyOption.REPLACE_EXISTING);
-            DocumentInfo info = ragService.indexDocument(dest, version);
+            DocumentInfo info = ragService.indexDocument(userId, dest, version);
             auditLogger.log("document.upload", info.docId(),
                     Map.of("filename", filename, "version", version, "chunks", info.chunks()));
             return ResponseEntity.ok(info);
@@ -227,8 +227,9 @@ public class DocumentController {
     @PostMapping("/api/v1/documents/sync")
     @ResponseBody
     public ResponseEntity<SyncResult> syncDocumentsApi(
+            ThreadContext ctx,
             @RequestParam(value = "version", defaultValue = "latest") String version) throws IOException {
-        SyncResult result = ragService.syncDirectory(version);
+        SyncResult result = ragService.syncDirectory(ctx.userId(), version);
         auditLogger.log("document.sync", null,
                 Map.of("indexed", result.indexed().size(),
                        "updated", result.updated().size(),
@@ -238,16 +239,17 @@ public class DocumentController {
 
     @GetMapping("/api/v1/documents")
     @ResponseBody
-    public ResponseEntity<List<DocumentInfo>> listDocumentsApi() {
-        return ResponseEntity.ok(ragService.listDocuments());
+    public ResponseEntity<List<DocumentInfo>> listDocumentsApi(ThreadContext ctx) {
+        return ResponseEntity.ok(ragService.listDocuments(ctx.userId()));
     }
 
     @DeleteMapping("/api/v1/documents/{docId}")
     @ResponseBody
     public ResponseEntity<Void> deleteDocumentApi(
+            ThreadContext ctx,
             @PathVariable String docId,
             @RequestParam(value = "version", defaultValue = "latest") String version) throws IOException {
-        ragService.deleteDocument(docId, version);
+        ragService.deleteDocument(ctx.userId(), docId, version);
         auditLogger.log("document.delete", docId, Map.of("version", version));
         return ResponseEntity.noContent().build();
     }
@@ -258,13 +260,15 @@ public class DocumentController {
     @GetMapping("/api/v1/images/{docId}/{filename}")
     @ResponseBody
     public ResponseEntity<Resource> getImage(
+            ThreadContext ctx,
             @PathVariable String docId,
             @PathVariable String filename) throws IOException {
         if (docId.contains("..") || docId.contains("/") || docId.contains("\\")
                 || filename.contains("..") || filename.contains("/") || filename.contains("\\")) {
             return ResponseEntity.badRequest().build();
         }
-        Path imgPath = Path.of(props.dataDir()).resolve("images").resolve(docId).resolve(filename);
+        Path imgPath = ragService.userDocumentsDir(ctx.userId())
+                .getParent().resolve("images").resolve(docId).resolve(filename);
         if (!Files.exists(imgPath) || !Files.isRegularFile(imgPath)) {
             return ResponseEntity.notFound().build();
         }

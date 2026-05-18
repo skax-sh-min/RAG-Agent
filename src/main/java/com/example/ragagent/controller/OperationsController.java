@@ -2,6 +2,7 @@ package com.example.ragagent.controller;
 
 import com.example.ragagent.audit.AuditLogger;
 import com.example.ragagent.config.AppProperties;
+import com.example.ragagent.context.ThreadContext;
 import com.example.ragagent.llm.CircuitBreaker;
 import com.example.ragagent.model.LlmProviderReport;
 import com.example.ragagent.repository.LlmUsageRepository;
@@ -52,33 +53,36 @@ public class OperationsController {
 
     @PatchMapping("/ui/threads/{threadId}/routing-mode")
     @ResponseStatus(HttpStatus.NO_CONTENT)
-    public void updateRoutingMode(@PathVariable String threadId,
+    public void updateRoutingMode(ThreadContext ctx, @PathVariable String threadId,
                                    @RequestParam String routingMode) {
-        threadMetaService.updateRoutingMode(threadId, routingMode);
+        threadMetaService.updateRoutingMode(ctx.userId(), threadId, routingMode);
         auditLogger.log("thread.routing-mode", threadId, Map.of("mode", routingMode));
     }
 
     @PatchMapping("/ui/threads/{threadId}/title")
-    public String updateTitle(@PathVariable String threadId,
+    public String updateTitle(ThreadContext ctx, @PathVariable String threadId,
                               @RequestParam String title, Model model) {
-        threadMetaService.updateTitle(threadId, title);
-        model.addAttribute("thread", threadMetaService.findById(threadId).orElse(null));
+        String userId = ctx.userId();
+        threadMetaService.updateTitle(userId, threadId, title);
+        model.addAttribute("thread", threadMetaService.findById(userId, threadId).orElse(null));
         model.addAttribute("activeThreadId", threadId);
         return "fragments/thread-item :: item";
     }
 
     @DeleteMapping("/ui/threads/{threadId}")
     @ResponseBody
-    public ResponseEntity<Void> deleteThread(@PathVariable String threadId) {
-        memoryService.clearHistory(threadId);
-        threadMetaService.delete(threadId);
+    public ResponseEntity<Void> deleteThread(ThreadContext ctx, @PathVariable String threadId) {
+        String userId = ctx.userId();
+        memoryService.clearHistory(userId, threadId);
+        threadMetaService.delete(userId, threadId);
         auditLogger.log("thread.delete", threadId);
         return ResponseEntity.ok().build();
     }
 
     @GetMapping("/ui/threads")
-    public String threadList(@RequestParam(required = false) String activeThreadId, Model model) {
-        model.addAttribute("threads", threadMetaService.getAll());
+    public String threadList(ThreadContext ctx,
+                             @RequestParam(required = false) String activeThreadId, Model model) {
+        model.addAttribute("threads", threadMetaService.getAll(ctx.userId()));
         model.addAttribute("activeThreadId", activeThreadId);
         return "fragments/thread-list :: list";
     }

@@ -19,6 +19,7 @@ public record AgentState(
         String question,
         String version,
         String threadId,
+        String userId,
         String questionType,
         List<Document> retrievedDocs,
         List<SourceRef> sources,
@@ -45,6 +46,7 @@ public record AgentState(
         sources           = sources           == null ? List.of() : List.copyOf(sources);
         retrievalWarnings = retrievalWarnings == null ? List.of() : List.copyOf(retrievalWarnings);
         imageRefs         = imageRefs         == null ? List.of() : List.copyOf(imageRefs);
+        if (userId      == null) userId      = "anonymous";
         if (routingMode == null) routingMode = RoutingMode.COST_FIRST;
         if (locale      == null) locale      = Locale.KOREAN;
     }
@@ -53,20 +55,26 @@ public record AgentState(
 
     public static AgentState of(String question, String version, String threadId,
                                  String conversationHistory, RoutingMode routingMode) {
-        return of(question, version, threadId, conversationHistory, routingMode, false, Locale.KOREAN);
+        return of(question, version, threadId, "anonymous", conversationHistory, routingMode, false, Locale.KOREAN);
     }
 
     public static AgentState of(String question, String version, String threadId,
                                  String conversationHistory, RoutingMode routingMode,
                                  boolean directMode) {
-        return of(question, version, threadId, conversationHistory, routingMode, directMode, Locale.KOREAN);
+        return of(question, version, threadId, "anonymous", conversationHistory, routingMode, directMode, Locale.KOREAN);
     }
 
     public static AgentState of(String question, String version, String threadId,
                                  String conversationHistory, RoutingMode routingMode,
                                  boolean directMode, Locale locale) {
+        return of(question, version, threadId, "anonymous", conversationHistory, routingMode, directMode, locale);
+    }
+
+    public static AgentState of(String question, String version, String threadId,
+                                 String userId, String conversationHistory, RoutingMode routingMode,
+                                 boolean directMode, Locale locale) {
         return new AgentState(
-                question, version, threadId,
+                question, version, threadId, userId,
                 null, List.of(), List.of(), List.of(), List.of(),
                 null, 0, false,
                 conversationHistory,
@@ -158,6 +166,7 @@ public record AgentState(
         private String question;
         private String version;
         private String threadId;
+        private String userId                    = "anonymous";
         private String questionType;
         private List<Document> retrievedDocs    = List.of();
         private List<SourceRef> sources          = List.of();
@@ -185,6 +194,7 @@ public record AgentState(
             this.question           = s.question;
             this.version            = s.version;
             this.threadId           = s.threadId;
+            this.userId             = s.userId;
             this.questionType       = s.questionType;
             this.retrievedDocs      = s.retrievedDocs;
             this.sources            = s.sources;
@@ -210,6 +220,7 @@ public record AgentState(
         public Builder question(String v)                  { this.question = v;           return this; }
         public Builder version(String v)                   { this.version = v;            return this; }
         public Builder threadId(String v)                  { this.threadId = v;           return this; }
+        public Builder userId(String v)                    { this.userId = v;             return this; }
         public Builder questionType(String v)              { this.questionType = v;       return this; }
         public Builder retrievedDocs(List<Document> v)     { this.retrievedDocs = v;      return this; }
         public Builder sources(List<SourceRef> v)          { this.sources = v;            return this; }
@@ -242,7 +253,7 @@ public record AgentState(
 
         public AgentState build() {
             return new AgentState(
-                    question, version, threadId, questionType,
+                    question, version, threadId, userId, questionType,
                     retrievedDocs, sources, retrievalWarnings, imageRefs,
                     answer, retryCount, needsRetry, conversationHistory,
                     totalInputTokens, totalOutputTokens, llmCallCount,

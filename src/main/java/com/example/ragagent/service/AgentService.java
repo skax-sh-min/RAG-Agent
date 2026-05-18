@@ -40,23 +40,25 @@ public class AgentService {
 
     public ChatResponse chat(ThreadContext ctx, ChatRequest request) {
         PromptInjectionGuard.validate(request.question());
+        String userId = ctx.userId();
         log.debug("[AgentService] chat start — directMode={} routingMode={} thread={} locale={}",
                 request.directMode(), request.routingMode(), request.threadId(), ctx.locale().getLanguage());
         AgentState initial;
         if (request.directMode()) {
-            String history = memoryService.getHistory(request.threadId());
+            String history = memoryService.getHistory(userId, request.threadId());
             initial = AgentState.of(request.question(), request.version(), request.threadId(),
-                    history, request.routingMode(), true, ctx.locale());
+                    userId, history, request.routingMode(), true, ctx.locale());
         } else {
             try (var exec = Executors.newVirtualThreadPerTaskExecutor()) {
                 CompletableFuture<String> historyF = CompletableFuture.supplyAsync(
-                        () -> memoryService.getHistory(request.threadId()), exec);
+                        () -> memoryService.getHistory(userId, request.threadId()), exec);
                 CompletableFuture<String> typeF = CompletableFuture.supplyAsync(
                         () -> classifierService.classifyOnly(request.question(), ctx.locale()), exec);
                 initial = AgentState.of(
                         request.question(),
                         request.version(),
                         request.threadId(),
+                        userId,
                         historyF.join(),
                         request.routingMode(),
                         false, ctx.locale())
@@ -72,7 +74,7 @@ public class AgentService {
         double elapsedSeconds = elapsedMs / 1000.0;
 
         if (result.answer() != null && !result.answer().isBlank()) {
-            memoryService.addTurn(request.threadId(), request.question(), result.answer(),
+            memoryService.addTurn(userId, request.threadId(), request.question(), result.answer(),
                     askedAt, result.totalInputTokens(), result.totalOutputTokens(),
                     (int) elapsedMs, result.usedProvider(), result.llmCallCount());
         }

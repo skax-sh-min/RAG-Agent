@@ -20,13 +20,13 @@ public record IndexRequest(
         boolean saveRegistryAfter,
         Consumer<IndexingProgressEvent> onProgress
 ) {
-    public static IndexRequest single(Path p, String filename, String version,
+    public static IndexRequest single(Path p, String filename, String version, String userId,
                                       Consumer<IndexingProgressEvent> onProgress) {
-        return new IndexRequest(p, filename, version, "anonymous", null, null, true, onProgress);
+        return new IndexRequest(p, filename, version, userId, null, null, true, onProgress);
     }
 
-    public static IndexRequest parallel(Path p, String version, Semaphore gate, String stale) {
-        return new IndexRequest(p, p.getFileName().toString(), version, "anonymous",
+    public static IndexRequest parallel(Path p, String version, String userId, Semaphore gate, String stale) {
+        return new IndexRequest(p, p.getFileName().toString(), version, userId,
                 gate, stale, false, event -> {});
     }
 }

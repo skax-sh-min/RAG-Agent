@@ -44,67 +44,68 @@ public class ThreadMetaRepository {
         }
     }
 
-    public Optional<ThreadMeta> findById(String threadId) {
+    private static ThreadMeta mapRow(java.sql.ResultSet rs, int n) throws java.sql.SQLException {
+        return new ThreadMeta(
+                rs.getString("thread_id"),
+                rs.getString("user_id"),
+                rs.getString("title"),
+                rs.getString("version"),
+                rs.getString("created_at"),
+                rs.getString("updated_at"),
+                rs.getString("routing_mode"));
+    }
+
+    public Optional<ThreadMeta> findById(String userId, String threadId) {
         List<ThreadMeta> rows = jdbc.query(
-                "SELECT thread_id, title, version, created_at, updated_at, routing_mode FROM thread_meta WHERE thread_id = ?",
-                (rs, n) -> new ThreadMeta(
-                        rs.getString("thread_id"),
-                        rs.getString("title"),
-                        rs.getString("version"),
-                        rs.getString("created_at"),
-                        rs.getString("updated_at"),
-                        rs.getString("routing_mode")),
-                threadId);
+                "SELECT thread_id, user_id, title, version, created_at, updated_at, routing_mode " +
+                "FROM thread_meta WHERE thread_id = ? AND user_id = ?",
+                ThreadMetaRepository::mapRow,
+                threadId, userId);
         return rows.isEmpty() ? Optional.empty() : Optional.of(rows.get(0));
     }
 
-    public List<ThreadMeta> findAllRecent(int limit) {
+    public List<ThreadMeta> findAllRecent(String userId, int limit) {
         return jdbc.query(
-                "SELECT thread_id, title, version, created_at, updated_at, routing_mode FROM thread_meta ORDER BY updated_at DESC LIMIT ?",
-                (rs, n) -> new ThreadMeta(
-                        rs.getString("thread_id"),
-                        rs.getString("title"),
-                        rs.getString("version"),
-                        rs.getString("created_at"),
-                        rs.getString("updated_at"),
-                        rs.getString("routing_mode")),
-                limit);
+                "SELECT thread_id, user_id, title, version, created_at, updated_at, routing_mode " +
+                "FROM thread_meta WHERE user_id = ? ORDER BY updated_at DESC LIMIT ?",
+                ThreadMetaRepository::mapRow,
+                userId, limit);
     }
 
     public void save(ThreadMeta meta) {
         jdbc.update("""
-                INSERT INTO thread_meta (thread_id, title, version, created_at, updated_at, routing_mode)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO thread_meta (thread_id, user_id, title, version, created_at, updated_at, routing_mode)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(thread_id) DO UPDATE SET
                     title        = excluded.title,
                     version      = excluded.version,
                     updated_at   = excluded.updated_at,
                     routing_mode = excluded.routing_mode
                 """,
-                meta.threadId(), meta.title(), meta.version(),
+                meta.threadId(), meta.userId(), meta.title(), meta.version(),
                 meta.createdAt(), meta.updatedAt(), meta.routingMode());
     }
 
-    public void updateTitle(String threadId, String title) {
+    public void updateTitle(String userId, String threadId, String title) {
         jdbc.update(
-                "UPDATE thread_meta SET title = ?, updated_at = ? WHERE thread_id = ?",
-                title, now(), threadId);
+                "UPDATE thread_meta SET title = ?, updated_at = ? WHERE thread_id = ? AND user_id = ?",
+                title, now(), threadId, userId);
     }
 
-    public void updateRoutingMode(String threadId, String routingMode) {
+    public void updateRoutingMode(String userId, String threadId, String routingMode) {
         jdbc.update(
-                "UPDATE thread_meta SET routing_mode = ? WHERE thread_id = ?",
-                routingMode, threadId);
+                "UPDATE thread_meta SET routing_mode = ? WHERE thread_id = ? AND user_id = ?",
+                routingMode, threadId, userId);
     }
 
-    public void delete(String threadId) {
-        jdbc.update("DELETE FROM thread_meta WHERE thread_id = ?", threadId);
+    public void delete(String userId, String threadId) {
+        jdbc.update("DELETE FROM thread_meta WHERE thread_id = ? AND user_id = ?", threadId, userId);
     }
 
-    public int countTurns(String threadId) {
+    public int countTurns(String userId, String threadId) {
         Integer count = jdbc.queryForObject(
-                "SELECT COUNT(*) FROM conversation_turns WHERE thread_id = ?",
-                Integer.class, threadId);
+                "SELECT COUNT(*) FROM conversation_turns WHERE user_id = ? AND thread_id = ?",
+                Integer.class, userId, threadId);
         return count != null ? count : 0;
     }
 

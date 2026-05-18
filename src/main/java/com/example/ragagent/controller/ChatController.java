@@ -57,22 +57,23 @@ public class ChatController {
     // ── Page routes ───────────────────────────────────────────────────
 
     @GetMapping("/")
-    public String home(HttpSession session, Model model) {
+    public String home(ThreadContext ctx, HttpSession session, Model model) {
         String threadId = UUID.randomUUID().toString();
         session.setAttribute("threadId", threadId);
-        populateChatModel(model, threadId, "latest", null);
+        populateChatModel(model, ctx.userId(), threadId, "latest", null);
         return "chat";
     }
 
     @GetMapping("/chat/{threadId}")
-    public String chat(@PathVariable String threadId, HttpSession session, Model model) {
+    public String chat(@PathVariable String threadId, ThreadContext ctx, HttpSession session, Model model) {
         session.setAttribute("threadId", threadId);
-        ThreadMeta meta = threadMetaService.findById(threadId).orElse(null);
+        String userId = ctx.userId();
+        ThreadMeta meta = threadMetaService.findById(userId, threadId).orElse(null);
         String version = meta != null ? meta.version() : "latest";
-        populateChatModel(model, threadId, version, meta);
+        populateChatModel(model, userId, threadId, version, meta);
         if (meta != null) {
-            model.addAttribute("historyCount", threadMetaService.countTurns(threadId));
-            model.addAttribute("turns", memoryService.getTurns(threadId));
+            model.addAttribute("historyCount", threadMetaService.countTurns(userId, threadId));
+            model.addAttribute("turns", memoryService.getTurns(userId, threadId));
         }
         return "chat";
     }
@@ -93,8 +94,9 @@ public class ChatController {
             emitter.completeWithError(new IllegalArgumentException("question is blank"));
             return emitter;
         }
-        threadMetaService.getOrCreate(form.threadId(), form.version());
-        Thread worker = Thread.ofVirtual().start(() -> streamingAgentService.run(form, emitter));
+        String userId = ctx.userId();
+        threadMetaService.getOrCreate(userId, form.threadId(), form.version());
+        Thread worker = Thread.ofVirtual().start(() -> streamingAgentService.run(userId, form, emitter));
         emitter.onTimeout(() -> {
             log.warn("[TIMEOUT:SSE] thread={} timeoutMs={}", form.threadId(), props.sseTimeoutMs());
             worker.interrupt();
@@ -118,8 +120,9 @@ public class ChatController {
         if (form.question() == null || form.question().isBlank()) {
             return "fragments/message-error :: message";
         }
+        String userId = ctx.userId();
         try {
-            threadMetaService.getOrCreate(form.threadId(), form.version());
+            threadMetaService.getOrCreate(userId, form.threadId(), form.version());
 
             RoutingMode rm = null;
             if (form.routingMode() != null && !form.routingMode().isBlank()) {
@@ -132,7 +135,7 @@ public class ChatController {
             log.debug("[postChat] done — provider={} tokens={}/{} directMode={}",
                     resp.usedProvider(), resp.totalInputTokens(), resp.totalOutputTokens(), form.isDirectMode());
 
-            threadMetaService.generateTitleAsync(form.threadId(), form.version(), form.question());
+            threadMetaService.generateTitleAsync(userId, form.threadId(), form.version(), form.question());
 
             String receivedAt = DateTimeFormatter.ofPattern("HH:mm")
                     .withZone(ZoneId.systemDefault()).format(Instant.now());
@@ -176,11 +179,11 @@ public class ChatController {
 
     // ── Helpers ───────────────────────────────────────────────────────
 
-    private void populateChatModel(Model model, String threadId, String version, ThreadMeta meta) {
+    private void populateChatModel(Model model, String userId, String threadId, String version, ThreadMeta meta) {
         model.addAttribute("threadId", threadId);
         model.addAttribute("version", version);
         model.addAttribute("meta", meta);
-        model.addAttribute("threads", threadMetaService.getAll());
+        model.addAttribute("threads", threadMetaService.getAll(userId));
         model.addAttribute("activeThreadId", threadId);
         model.addAttribute("hasLocalProvider", llmRouter.hasLocalProvider());
         model.addAttribute("routingMode", meta != null ? meta.routingMode() : "COST_FIRST");

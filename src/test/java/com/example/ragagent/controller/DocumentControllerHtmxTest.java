@@ -1,7 +1,6 @@
 package com.example.ragagent.controller;
 
 import com.example.ragagent.audit.AuditLogger;
-import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.context.ThreadContextResolver;
 import com.example.ragagent.service.IndexingProgressService;
 import com.example.ragagent.service.RagService;
@@ -43,7 +42,6 @@ class DocumentControllerHtmxTest {
 
     @MockitoBean RagService ragService;
     @MockitoBean IndexingProgressService indexingProgressService;
-    @MockitoBean AppProperties props;
     @MockitoBean ChatModel chatModel;
     @MockitoBean ThreadContextResolver threadContextResolver;
     @MockitoBean AuditLogger auditLogger;
@@ -52,7 +50,6 @@ class DocumentControllerHtmxTest {
     @DisplayName("POST /ui/documents/upload — 정상 업로드 → 202 + taskId (비동기 인덱싱)")
     void uploadDocument_success_returnsJson() throws Exception {
         when(indexingProgressService.newTaskId()).thenReturn("task-abc");
-        when(props.dataDir()).thenReturn("/tmp/rag-test");
 
         MockMultipartFile file = new MockMultipartFile(
                 "file", "test.pdf", "application/pdf", "%PDF-1.4 dummy".getBytes());

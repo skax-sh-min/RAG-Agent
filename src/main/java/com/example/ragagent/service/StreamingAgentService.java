@@ -70,7 +70,7 @@ public class StreamingAgentService {
     private static final DateTimeFormatter DB_FMT =
             DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss").withZone(ZoneOffset.UTC);
 
-    public void run(ChatForm form, SseEmitter emitter) {
+    public void run(String userId, ChatForm form, SseEmitter emitter) {
         long startNs = System.nanoTime();
         String askedAt = DB_FMT.format(Instant.now());
         SseGraphListener listener = null;
@@ -85,19 +85,19 @@ public class StreamingAgentService {
 
             if (form.isDirectMode()) {
                 // directMode: classifier 생략, history만 로드
-                String history = memoryService.getHistory(form.threadId());
+                String history = memoryService.getHistory(userId, form.threadId());
                 initial = AgentState.of(form.question(), form.version(), form.threadId(),
-                        history, rm, true, locale);
+                        userId, history, rm, true, locale);
             } else {
                 // 일반 RAG 모드: history 로드 + 분류 병렬 실행
                 try (var exec = Executors.newVirtualThreadPerTaskExecutor()) {
                     CompletableFuture<String> historyF = CompletableFuture.supplyAsync(
-                            () -> memoryService.getHistory(form.threadId()), exec);
+                            () -> memoryService.getHistory(userId, form.threadId()), exec);
                     CompletableFuture<String> typeF = CompletableFuture.supplyAsync(
                             () -> classifierService.classifyOnly(form.question(), locale), exec);
 
                     initial = AgentState.of(form.question(), form.version(), form.threadId(),
-                                    historyF.join(), rm, false, locale)
+                                    userId, historyF.join(), rm, false, locale)
                             .withQuestionType(typeF.join());
                 }
             }
@@ -108,7 +108,7 @@ public class StreamingAgentService {
             long elapsedMs = (System.nanoTime() - startNs) / 1_000_000;
 
             if (result.answer() != null && !result.answer().isBlank()) {
-                memoryService.addTurn(form.threadId(), form.question(), result.answer(),
+                memoryService.addTurn(userId, form.threadId(), form.question(), result.answer(),
                         askedAt, result.totalInputTokens(), result.totalOutputTokens(),
                         (int) elapsedMs, result.usedProvider(), result.llmCallCount());
             }
@@ -116,7 +116,7 @@ public class StreamingAgentService {
             sendEvent(emitter, "done", buildDonePayload(result, elapsedMs));
             emitter.complete();
 
-            threadMetaService.generateTitleAsync(form.threadId(), form.version(), form.question());
+            threadMetaService.generateTitleAsync(userId, form.threadId(), form.version(), form.question());
 
         } catch (Exception e) {
             // B-20: interrupt signals client disconnect / SSE timeout — not an error
@@ -135,7 +135,7 @@ public class StreamingAgentService {
                 String partial = listener.getAccumulatedAnswer();
                 if (!partial.isBlank()) {
                     try {
-                        memoryService.addTurn(form.threadId(), form.question(),
+                        memoryService.addTurn(userId, form.threadId(), form.question(),
                                 partial + "\n[오류로 중단됨]",
                                 askedAt, 0, 0, 0, null, 0);
                         log.debug("[B-13] partial answer persisted ({} chars) thread={}",

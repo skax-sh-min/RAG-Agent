@@ -1,5 +1,6 @@
 package com.example.ragagent.controller;
 
+import com.example.ragagent.context.ThreadContext;
 import com.example.ragagent.service.AdminService;
 import com.example.ragagent.service.RagService;
 import org.springframework.http.ResponseEntity;
@@ -26,9 +27,9 @@ public class AdminController {
     // ── Page ─────────────────────────────────────────────────────────────────
 
     @GetMapping("/admin")
-    public String adminPage(Model model) {
+    public String adminPage(ThreadContext ctx, Model model) {
         model.addAttribute("collections", adminService.listCollections());
-        model.addAttribute("documents",   ragService.listDocuments());
+        model.addAttribute("documents",   ragService.listDocuments(ctx.userId()));
         return "admin";
     }
 
@@ -36,7 +37,8 @@ public class AdminController {
 
     /** Chunk table fragment — loaded when user selects a collection (+ optional docId filter). */
     @GetMapping("/admin/chunks")
-    public String chunks(@RequestParam String collection,
+    public String chunks(ThreadContext ctx,
+                         @RequestParam String collection,
                          @RequestParam(required = false) String docId,
                          @RequestParam(defaultValue = "0")  int offset,
                          @RequestParam(defaultValue = "50") int limit,
@@ -46,7 +48,7 @@ public class AdminController {
         model.addAttribute("docId",      docId);
         model.addAttribute("offset",     offset);
         model.addAttribute("limit",      limit);
-        model.addAttribute("documents",  ragService.listDocuments());
+        model.addAttribute("documents",  ragService.listDocuments(ctx.userId()));
         return "fragments/admin-chunks :: table";
     }
 

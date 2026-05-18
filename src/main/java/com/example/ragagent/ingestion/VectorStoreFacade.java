@@ -14,6 +14,7 @@ import java.util.regex.Pattern;
 /**
  * Thin façade over VectorStoreRegistry.
  * Centralises SAFE_VERSION validation and all vector-store I/O.
+ * Each (userId, version) pair maps to its own Chroma collection.
  */
 @Component
 public class VectorStoreFacade {
@@ -26,9 +27,9 @@ public class VectorStoreFacade {
         this.registry = registry;
     }
 
-    public List<Document> search(String query, String version, int topK) {
+    public List<Document> search(String userId, String query, String version, int topK) {
         String safeVersion = safe(version);
-        VectorStore store = registry.getStore(safeVersion);
+        VectorStore store = registry.getStore(userId, safeVersion);
         FilterExpressionBuilder b = new FilterExpressionBuilder();
         SearchRequest request = SearchRequest.builder()
                 .query(query)
@@ -38,13 +39,13 @@ public class VectorStoreFacade {
         return store.similaritySearch(request);
     }
 
-    public void add(String version, List<Document> docs) {
-        registry.getStore(version).add(docs);
+    public void add(String userId, String version, List<Document> docs) {
+        registry.getStore(userId, version).add(docs);
     }
 
-    public void deleteByDocIds(String version, List<String> springDocIds) {
+    public void deleteByDocIds(String userId, String version, List<String> springDocIds) {
         if (springDocIds == null || springDocIds.isEmpty()) return;
-        registry.getStore(version).delete(springDocIds);
+        registry.getStore(userId, version).delete(springDocIds);
     }
 
     private static String safe(String version) {

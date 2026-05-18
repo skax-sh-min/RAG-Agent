@@ -53,14 +53,14 @@ public class RetrievalService {
             try (var exec = Executors.newVirtualThreadPerTaskExecutor()) {
                 List<CompletableFuture<List<Document>>> futures = queries.stream()
                         .map(q -> CompletableFuture.supplyAsync(
-                                () -> ragService.search(q.text(), state.version(), defaultTopK), exec))
+                                () -> ragService.search(state.userId(), q.text(), state.version(), defaultTopK), exec))
                         .toList();
                 ranked = futures.stream().map(CompletableFuture::join).toList();
             }
             unique = mergeRrf(ranked, defaultTopK);
         } catch (Exception e) {
             log.warn("Multi-query expansion failed, falling back to original question: {}", e.getMessage());
-            unique = ragService.search(state.question(), state.version(), defaultTopK);
+            unique = ragService.search(state.userId(), state.question(), state.version(), defaultTopK);
         }
 
         List<SourceRef> sources = unique.stream()

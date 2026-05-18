@@ -7,7 +7,7 @@ import org.springframework.stereotype.Service;
 import java.util.List;
 
 /**
- * Multi-turn conversation memory keyed by thread_id.
+ * Multi-turn conversation memory keyed by userId + thread_id.
  * Equivalent to LangGraph MemorySaver in the Python version.
  * Delegates storage to MemoryRepository (default: SQLite).
  */
@@ -22,22 +22,22 @@ public class MemoryService {
         this.repository = repository;
     }
 
-    public String getHistory(String threadId) {
-        return repository.getHistory(threadId, maxConversationChars);
+    public String getHistory(String userId, String threadId) {
+        return repository.getHistory(userId, threadId, maxConversationChars);
     }
 
-    public void addTurn(String threadId, String question, String answer,
+    public void addTurn(String userId, String threadId, String question, String answer,
                         String askedAt, int inputTokens, int outputTokens,
                         int elapsedMs, String provider, int llmCalls) {
-        repository.addTurn(threadId, question, answer,
+        repository.addTurn(userId, threadId, question, answer,
                 askedAt, inputTokens, outputTokens, elapsedMs, provider, llmCalls);
     }
 
-    public void clearHistory(String threadId) {
-        repository.clearHistory(threadId);
+    public void clearHistory(String userId, String threadId) {
+        repository.clearHistory(userId, threadId);
     }
 
-    public List<MemoryRepository.Turn> getTurns(String threadId) {
-        return repository.getTurns(threadId);
+    public List<MemoryRepository.Turn> getTurns(String userId, String threadId) {
+        return repository.getTurns(userId, threadId);
     }
 }
