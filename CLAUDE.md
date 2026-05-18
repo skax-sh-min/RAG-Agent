@@ -31,6 +31,11 @@ Flow:
 | `controller/WebController.java` | HTMX fragment endpoints + page routes |
 | `controller/ApiController.java` | REST API; magic-byte upload validation; `getImage()` with Cache-Control + X-Robots-Tag |
 | `controller/GlobalExceptionHandler.java` | `@RestControllerAdvice`; RFC 9457 ProblemDetail; handles `IllegalArgumentException` → 400, `MaxUploadSizeExceededException` → 413 |
+| `controller/AuthController.java` | `/login`, `/signup`, `/setup` page controllers; auto-login after signup; `/setup` guarded to no-auth mode only |
+| `controller/GlobalModelAdvice.java` | `@ControllerAdvice`; injects `authEnabled` model attr into all views; null-safe for `@WebMvcTest` mocks |
+| `security/SecurityConfig.java` | Conditional filter chain: auth-enabled (form login, CSRF, sessions) vs. no-auth (STATELESS, CSRF off, `NoAuthAutoLoginFilter`) |
+| `security/NoAuthAutoLoginFilter.java` | `@ConditionalOnProperty(name="app.auth.enabled", havingValue="false")`; auto-injects guest/admin identity; redirects to `/setup` until admin exists |
+| `security/SqliteUserDetailsService.java` | `loadUserByUsername`, `createUser`, `createAdminUser`, `findFirstAdmin()`, `emailExists`, lock management |
 | `llm/CircuitBreaker.java` | In-memory per-provider block (Retry-After aware) |
 | `llm/LlmRouter.java` | Provider selection by TaskType × RoutingMode; `route()`, `executeDual()`, `executeWithTracking()` |
 | `repository/LlmUsageRepository.java` | Daily UPSERT token tracking in SQLite |
@@ -52,7 +57,7 @@ Flow:
 - **No Spring Data JPA**: raw `JdbcTemplate` for all DB access (SQLite incompatibility)
 - **HTMX fragments**: endpoints return `"fragments/xxx :: selector"` strings
 - **ChromaDB auto-config excluded**: `spring.autoconfigure.exclude=...ChromaVectorStoreAutoConfiguration` — `ChromaConfig` manages beans manually
-- **Null-safe config**: always use `props.llmSafe()` / `props.indexingSafe()` — never access `props.llm()` or `props.indexing()` directly
+- **Null-safe config**: always use `props.llmSafe()` / `props.indexingSafe()` / `props.authSafe()` — never access `props.llm()`, `props.indexing()`, or `props.auth()` directly
 - **Korean prompts**: all LLM system/user prompts are Korean
 - **MetaKey constants**: all vector store metadata access goes through `MetaKey.*` — never inline strings
 - **Upload validation**: call `FileTypeDetector.matches(path, ext)` after writing to temp file; return 422 on mismatch
@@ -80,3 +85,5 @@ docker-compose up chroma
 - `syncDirectory()` calls `saveRegistry()` once after all parallel work — never call it from parallel threads
 - `indexDocumentParallel()` is for bulk sync only; `indexDocument()` is for single-file upload and calls `saveRegistry()` itself
 - `PromptInjectionGuard.wrap()` is implemented but not yet wired into prompts — deferred to 05-prompt-externalization.md
+- `app.auth.enabled=false` → CSRF disabled, `SessionCreationPolicy.STATELESS`, `NoAuthAutoLoginFilter` active; guest userId constant = `NoAuthAutoLoginFilter.GUEST_ID`; admin path (`/admin/**`) auto-authenticates as first DB `ROLE_ADMIN` user
+- `GlobalModelAdvice.authEnabled()` is computed per-request (not in constructor) to avoid NPE when `AppProperties` is mocked in `@WebMvcTest`

@@ -231,6 +231,7 @@ User question
 
 ## Features
 
+- **Authentication** — Spring Security form login with BCrypt(12) password hashing; account lockout after 5 failed attempts (15-min lock); `/login`, `/signup`, `/setup`; toggle off with `app.auth.enabled=false` for local no-login deployments
 - **Web UI** — Thymeleaf + HTMX chat, document management, and LLM usage interface with KO/EN language switcher
 - **SSE real-time streaming** — per-node stage badges (classifier → retrieval → answer → critic), token-level streaming via `chat-stream.js` (fetch + ReadableStream); DUAL mode streams both tabs simultaneously
 - **Dark mode** — CSS variable–based light/dark toggle, auto-detects `prefers-color-scheme` with `localStorage` user override
@@ -266,6 +267,9 @@ User question
 | `GET` | `/chat/{threadId}` | Resume an existing thread (restores previous message bubbles) |
 | `GET` | `/documents` | Document management page |
 | `GET` | `/llm-usage` | LLM usage statistics page |
+| `GET/POST` | `/login` | Login page (auth mode only) |
+| `GET/POST` | `/signup` | Sign-up page (auth mode only) |
+| `GET/POST` | `/setup` | First-run admin setup (no-auth mode only; redirects once admin exists) |
 
 ### REST API
 

@@ -206,6 +206,7 @@ rag_java/
 
 ## 주요 기능
 
+- **인증** — Spring Security 폼 로그인, BCrypt(12) 비밀번호 해싱, 5회 실패 시 15분 계정 잠금, `/login`·`/signup`·`/setup`. `app.auth.enabled=false`로 로컬 no-login 배포 가능
 - **Web UI** — Thymeleaf + HTMX 기반 채팅·문서 관리·LLM 사용량 화면, KO/EN 언어 전환
 - **SSE 실시간 스트리밍** — 노드별 단계 배지(classifier→retrieval→answer→critic) + 토큰 실시간 표시; DUAL 모드는 두 탭 동시 스트리밍 (`chat-stream.js`, fetch + ReadableStream)
 - **다크 모드** — CSS 변수 기반 라이트/다크 전환, `prefers-color-scheme` 자동 감지 + `localStorage` 사용자 override

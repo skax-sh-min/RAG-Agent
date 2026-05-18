@@ -233,6 +233,12 @@ LOCAL_LLM_KEY=                     # 비워서 LOCAL providers[0] 비활성화
 | `spring.servlet.multipart.max-file-size` | `200MB` | 단일 파일 최대 크기. 초과 시 413 응답 |
 | `spring.servlet.multipart.max-request-size` | `200MB` | 멀티파트 요청 전체 최대 크기 |
 
+#### 인증 (`app.auth.*`)
+
+| 속성 | 기본값 | 설명 |
+|------|--------|------|
+| `app.auth.enabled` | `true` | `false`로 설정하면 로그인 없이 실행 (no-auth 모드). 자세한 내용은 [§9.4](#94-인증-토글-no-auth-모드) 참조 |
+
 #### 서버 및 기타
 
 | 속성 | 기본값 | 변경 가능 여부 | 설명 |
@@ -720,7 +726,8 @@ CPU/메모리 제약이 있는 환경에서는 `INDEXING_MAX_FILES`와 `INDEXING
 
 ## 7. 관리자 패널
 
-`/admin` 페이지는 별도 인증 없이 접근 가능합니다 (운영 환경에서는 네트워크 레벨 접근 제한 권장).
+`/admin` 페이지는 인증 모드(`app.auth.enabled=true`)에서는 로그인된 사용자만 접근 가능합니다.  
+no-auth 모드(`false`)에서는 `/admin/**` 경로에 자동으로 관리자 계정이 주입됩니다.
 
 ### 7.1 주요 기능
 
@@ -747,7 +754,7 @@ CPU/메모리 제약이 있는 환경에서는 `INDEXING_MAX_FILES`와 `INDEXING
 - **임베딩 미갱신 (청크 편집)**: 청크 텍스트를 편집 패널에서 수정해도 벡터 임베딩은 재계산되지 않습니다. 임베딩까지 갱신하려면 MD 파일 수정 후 ↺ 재인덱싱을 사용하세요.
 - **MD 재인덱싱 대상**: DOCX 업로드 시 생성된 `_corrected.md` 파일이 없으면 `{docId}.md` 원본으로 fallback됩니다. PDF·PPTX·TXT 등 MD 파일이 없는 문서는 재인덱싱 불가 (에러 메시지 표시).
 - **청크 단독 삭제 vs. 문서 삭제**: 청크를 개별 삭제해도 `doc_registry.json`의 레지스트리 항목은 남습니다. 문서 전체 제거는 Documents 페이지 또는 `DELETE /api/documents/{docId}`를 사용하세요.
-- **접근 제어**: 현재 인증 없이 접근 가능하므로 내부망 또는 리버스 프록시 수준에서 `/admin` 경로를 제한하는 것을 권장합니다.
+- **접근 제어**: `app.auth.enabled=true`(기본)이면 `/admin`도 로그인 필요. no-auth 모드에서는 누구나 `/admin`에 접근 가능하므로 내부망 또는 리버스 프록시 수준에서 경로를 제한하는 것을 권장합니다.
 
 ---
 
@@ -970,6 +977,35 @@ sh scripts/install-hooks.sh
 
 LLM 응답이 20,000자를 초과하면 자동으로 잘리고 말줄임 메시지가 추가됩니다.
 
+### 9.4 인증 토글 (no-auth 모드)
+
+`app.auth.enabled=false`로 설정하면 로그인 없이 사용할 수 있습니다 (로컬·단일 사용자 환경에 적합).
+
+**no-auth 모드 동작**:
+
+| 항목 | 동작 |
+|------|------|
+| CSRF 보호 | 비활성화 |
+| 세션 관리 | STATELESS (세션 불필요) |
+| 첫 접속 (admin DB 없음) | `/setup` 페이지로 리다이렉트 |
+| `/setup` | 관리자 이메일·비밀번호 입력 → DB에 `ROLE_ADMIN` 계정 생성 |
+| `/admin/**` 접근 | DB 첫 번째 `ROLE_ADMIN` 계정으로 자동 인증 |
+| 그 외 모든 경로 | 고정 guest 계정 자동 인증 (userId = `00000000-0000-0000-0000-000000000001`, `ROLE_USER`) |
+| 로그아웃 버튼 | Navbar에서 숨겨짐 |
+
+**설정 예시**:
+```properties
+# application.properties
+app.auth.enabled=false
+```
+
+**인증 재활성화**:
+1. `app.auth.enabled=true`로 변경 후 재시작
+2. `/setup`에서 생성한 이메일·비밀번호로 `/login` 접속
+3. 기존 문서·대화 이력은 userId 기반 파티셔닝으로 그대로 유지
+
+> **주의**: no-auth 모드에서는 모든 사용자가 guest 파티션을 공유합니다. 멀티유저 환경에서는 반드시 `app.auth.enabled=true`를 사용하세요.
+
 ---
 
 ## 10. 운영 체크리스트
@@ -978,6 +1014,9 @@ LLM 응답이 20,000자를 초과하면 자동으로 잘리고 말줄임 메시�
 
 **초기 설정**:
 - [ ] `sh scripts/install-hooks.sh` — pre-commit 훅 설치 (팀원 각자 1회)
+- [ ] `app.auth.enabled` 설정 확인 (기본 `true` = 로그인 필요 / `false` = no-auth 모드)
+- [ ] (no-auth 모드) 첫 접속 시 `/setup` 페이지에서 admin 계정 생성 완료 확인
+- [ ] (auth 모드) `/signup`에서 첫 계정 생성 후 `/login` 접속 확인
 
 **기본 동작**:
 - [ ] `GET /api/health` → `{"status":"ok"}` 응답
@@ -992,6 +1031,8 @@ LLM 응답이 20,000자를 초과하면 자동으로 잘리고 말줄임 메시�
 **보안**:
 - [ ] 확장자 불일치 파일 업로드 → 422 응답 확인
 - [ ] 2,001자 이상 질문 → 400 응답 확인
+- [ ] (auth 모드) 미로그인 상태에서 `/` 접속 → `/login` 리다이렉트 확인
+- [ ] (no-auth 모드) `/admin` 경로에 대한 네트워크 접근 제한 적용 여부 확인
 
 **LLM 및 운영**:
 - [ ] `/llm-usage` — 프로바이더 카드 정상(초록) 확인
