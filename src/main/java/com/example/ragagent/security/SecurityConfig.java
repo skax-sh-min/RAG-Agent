@@ -7,8 +7,11 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.lang.Nullable;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.access.intercept.AuthorizationFilter;
+import org.springframework.security.web.session.HttpSessionEventPublisher;
 
 @Configuration
 @EnableWebSecurity
@@ -18,11 +21,9 @@ public class SecurityConfig {
     SecurityFilterChain filterChain(HttpSecurity http,
                                     @Autowired(required = false) @Nullable RateLimitFilter rateLimitFilter) throws Exception {
         http
-            // CSRF: REST API는 stateless 토큰 기반(추후). HTMX UI는 토큰 필수.
             .csrf(csrf -> csrf
                 .ignoringRequestMatchers("/api/v1/**")
             )
-            // 보안 헤더
             .headers(headers -> headers
                 .contentSecurityPolicy(csp -> csp
                     .policyDirectives(
@@ -32,26 +33,51 @@ public class SecurityConfig {
                         "style-src 'self' 'unsafe-inline'; " +
                         "connect-src 'self'"
                     )
-                    .reportOnly()   // Phase 1: Report-Only. 1주 운영 후 enforce로 전환.
+                    // Phase 1.3: enforced (was reportOnly during seam phase)
                 )
                 .frameOptions(f -> f.sameOrigin())
                 .httpStrictTransportSecurity(hsts -> hsts
                     .includeSubDomains(true)
                     .maxAgeInSeconds(31_536_000))
             )
-            // 인증 없음 — 모든 요청 허용 (향후 18-extension-roadmap.md LOGIN 도입 시 수정)
             .authorizeHttpRequests(auth -> auth
+                .requestMatchers("/login", "/signup", "/error").permitAll()
                 .requestMatchers("/webjars/**", "/css/**", "/js/**", "/images/**", "/favicon.ico").permitAll()
-                .requestMatchers("/actuator/health").permitAll()
-                .anyRequest().permitAll()
+                .requestMatchers("/actuator/health", "/api/v1/health").permitAll()
+                .anyRequest().authenticated()
             )
-            .formLogin(form -> form.disable())
-            .httpBasic(basic -> basic.disable());
+            .formLogin(form -> form
+                .loginPage("/login")
+                .loginProcessingUrl("/login")
+                .defaultSuccessUrl("/", true)
+                .failureUrl("/login?error")
+            )
+            .logout(logout -> logout
+                .logoutUrl("/logout")
+                .logoutSuccessUrl("/login?logout")
+                .invalidateHttpSession(true)
+                .deleteCookies("JSESSIONID")
+            )
+            .sessionManagement(session -> session
+                .sessionFixation().migrateSession()
+                .maximumSessions(3)
+            );
 
         if (rateLimitFilter != null) {
             http.addFilterBefore(rateLimitFilter, AuthorizationFilter.class);
         }
 
         return http.build();
+    }
+
+    @Bean
+    public PasswordEncoder passwordEncoder() {
+        return new BCryptPasswordEncoder(12);
+    }
+
+    /** Required for Spring Security maximumSessions() to track session lifecycle. */
+    @Bean
+    public HttpSessionEventPublisher httpSessionEventPublisher() {
+        return new HttpSessionEventPublisher();
     }
 }

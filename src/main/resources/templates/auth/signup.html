@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" lang="ko">
+<head>
+    <meta charset="UTF-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1"/>
+    <title th:text="#{auth.signup.title}">회원가입</title>
+    <link rel="stylesheet" th:href="@{/webjars/bootstrap/css/bootstrap.min.css}"/>
+    <link rel="stylesheet" th:href="@{/css/theme.css}"/>
+    <script>
+        (function(){
+            var t=localStorage.getItem('theme')||(window.matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light');
+            document.documentElement.setAttribute('data-theme',t);
+        })();
+    </script>
+</head>
+<body class="bg-body-tertiary d-flex align-items-center" style="min-height:100vh">
+
+<div class="container" style="max-width:440px">
+    <div class="text-center mb-4 pt-5">
+        <h1 class="h4 fw-semibold" th:text="#{nav.title}">Document Q&amp;A</h1>
+    </div>
+
+    <div class="card shadow-sm">
+        <div class="card-body p-4">
+            <h2 class="h5 card-title mb-4" th:text="#{auth.signup.heading}">회원가입</h2>
+
+            <!-- Validation error -->
+            <div th:if="${error}" class="alert alert-danger py-2 small" role="alert"
+                 th:text="#{'${error}'}">오류가 발생했습니다.</div>
+
+            <form th:action="@{/signup}" method="post" novalidate>
+                <input type="hidden" name="_csrf" th:value="${_csrf.token}"/>
+
+                <div class="mb-3">
+                    <label for="email" class="form-label small fw-medium" th:text="#{auth.field.email}">이메일</label>
+                    <input type="email" id="email" name="email"
+                           class="form-control" autocomplete="email"
+                           th:placeholder="#{auth.field.email.placeholder}" required/>
+                </div>
+
+                <div class="mb-3">
+                    <label for="displayName" class="form-label small fw-medium" th:text="#{auth.field.display_name}">
+                        표시 이름 <span class="text-secondary fw-normal">(선택)</span>
+                    </label>
+                    <input type="text" id="displayName" name="displayName"
+                           class="form-control" autocomplete="nickname"
+                           th:placeholder="#{auth.field.display_name.placeholder}"/>
+                </div>
+
+                <div class="mb-3">
+                    <label for="password" class="form-label small fw-medium" th:text="#{auth.field.password}">비밀번호</label>
+                    <input type="password" id="password" name="password"
+                           class="form-control" autocomplete="new-password"
+                           minlength="10" required/>
+                    <div class="form-text" th:text="#{auth.signup.password.hint}">
+                        10자 이상, 영문·숫자·특수문자 각 1개 이상 포함
+                    </div>
+                </div>
+
+                <div class="mb-4">
+                    <label for="passwordConfirm" class="form-label small fw-medium"
+                           th:text="#{auth.field.password.confirm}">비밀번호 확인</label>
+                    <input type="password" id="passwordConfirm" name="passwordConfirm"
+                           class="form-control" autocomplete="new-password"
+                           minlength="10" required/>
+                </div>
+
+                <button type="submit" class="btn btn-primary w-100" th:text="#{auth.signup.submit}">가입하기</button>
+            </form>
+        </div>
+    </div>
+
+    <div class="text-center mt-3 small text-secondary">
+        <span th:text="#{auth.signup.have_account}">이미 계정이 있으신가요?</span>
+        <a th:href="@{/login}" class="ms-1" th:text="#{auth.login.link}">로그인</a>
+    </div>
+</div>
+
+<script th:src="@{/webjars/bootstrap/js/bootstrap.bundle.min.js}"></script>
+<script>
+    // Client-side: confirm password match feedback
+    document.querySelector('form').addEventListener('submit', function(e) {
+        var p = document.getElementById('password').value;
+        var c = document.getElementById('passwordConfirm').value;
+        if (p !== c) {
+            e.preventDefault();
+            document.getElementById('passwordConfirm').setCustomValidity('비밀번호가 일치하지 않습니다.');
+            document.getElementById('passwordConfirm').reportValidity();
+        } else {
+            document.getElementById('passwordConfirm').setCustomValidity('');
+        }
+    });
+</script>
+</body>
+</html>

@@ -1,10 +1,8 @@
 package com.example.ragagent.security;
 
-import org.springframework.stereotype.Component;
-
 import java.util.Locale;
 
-@Component
+// Superseded by SessionCurrentUser (@Component). Kept as a non-Spring fallback for unit tests.
 public class AnonymousCurrentUser implements CurrentUser {
     @Override public String userId() { return "anonymous"; }
     @Override public boolean isAuthenticated() { return false; }

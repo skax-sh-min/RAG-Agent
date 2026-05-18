@@ -14,6 +14,7 @@ import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.context.annotation.Import;
+import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
@@ -27,6 +28,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  */
 @WebMvcTest(OperationsController.class)
 @Import({SecurityConfig.class, com.example.ragagent.context.WebMvcConfig.class})
+@WithMockUser
 class SecurityHeadersTest {
 
     @Autowired MockMvc mvc;
@@ -55,10 +57,10 @@ class SecurityHeadersTest {
     }
 
     @Test
-    @DisplayName("GET 응답에 Content-Security-Policy-Report-Only 헤더 존재")
+    @DisplayName("GET 응답에 Content-Security-Policy 헤더 존재")
     void response_hasCsp() throws Exception {
         mvc.perform(get("/api/v1/health"))
-                .andExpect(header().exists("Content-Security-Policy-Report-Only"));
+                .andExpect(header().exists("Content-Security-Policy"));
     }
 
     @Test

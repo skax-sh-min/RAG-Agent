@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" lang="ko">
+<head>
+    <meta charset="UTF-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1"/>
+    <title th:text="#{auth.login.title}">로그인</title>
+    <link rel="stylesheet" th:href="@{/webjars/bootstrap/css/bootstrap.min.css}"/>
+    <link rel="stylesheet" th:href="@{/css/theme.css}"/>
+    <script>
+        (function(){
+            var t=localStorage.getItem('theme')||(window.matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light');
+            document.documentElement.setAttribute('data-theme',t);
+        })();
+    </script>
+</head>
+<body class="bg-body-tertiary d-flex align-items-center" style="min-height:100vh">
+
+<div class="container" style="max-width:420px">
+    <div class="text-center mb-4 pt-5">
+        <h1 class="h4 fw-semibold" th:text="#{nav.title}">Document Q&amp;A</h1>
+    </div>
+
+    <div class="card shadow-sm">
+        <div class="card-body p-4">
+            <h2 class="h5 card-title mb-4" th:text="#{auth.login.heading}">로그인</h2>
+
+            <!-- Error alert -->
+            <div th:if="${error}" class="alert alert-danger py-2 small" role="alert"
+                 th:text="#{auth.login.error}">이메일 또는 비밀번호가 올바르지 않습니다.</div>
+
+            <!-- Logout success alert -->
+            <div th:if="${logout}" class="alert alert-success py-2 small" role="alert"
+                 th:text="#{auth.logout.success}">로그아웃되었습니다.</div>
+
+            <form th:action="@{/login}" method="post">
+                <input type="hidden" name="_csrf" th:value="${_csrf.token}"/>
+
+                <div class="mb-3">
+                    <label for="username" class="form-label small fw-medium" th:text="#{auth.field.email}">이메일</label>
+                    <input type="email" id="username" name="username"
+                           class="form-control" autocomplete="email"
+                           th:placeholder="#{auth.field.email.placeholder}" required/>
+                </div>
+
+                <div class="mb-4">
+                    <label for="password" class="form-label small fw-medium" th:text="#{auth.field.password}">비밀번호</label>
+                    <input type="password" id="password" name="password"
+                           class="form-control" autocomplete="current-password" required/>
+                </div>
+
+                <button type="submit" class="btn btn-primary w-100" th:text="#{auth.login.submit}">로그인</button>
+            </form>
+        </div>
+    </div>
+
+    <div class="text-center mt-3 small text-secondary">
+        <span th:text="#{auth.login.no_account}">계정이 없으신가요?</span>
+        <a th:href="@{/signup}" class="ms-1" th:text="#{auth.signup.link}">회원가입</a>
+    </div>
+</div>
+
+<script th:src="@{/webjars/bootstrap/js/bootstrap.bundle.min.js}"></script>
+</body>
+</html>
