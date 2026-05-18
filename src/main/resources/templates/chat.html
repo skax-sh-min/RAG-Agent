@@ -243,7 +243,7 @@
         if (this.dataset.hasThread === 'true') {
             fetch('/ui/threads/' + this.dataset.threadId + '/routing-mode', {
                 method: 'PATCH',
-                headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+                headers: {'Content-Type': 'application/x-www-form-urlencoded', ...getCsrfHeaders()},
                 body: 'routingMode=' + encodeURIComponent(mode)
             });
         }
@@ -366,7 +366,7 @@
             if (save && newTitle !== current) {
                 fetch(`/ui/threads/${threadId}/title`, {
                     method: 'PATCH',
-                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded', ...getCsrfHeaders() },
                     body: 'title=' + encodeURIComponent(newTitle)
                 }).then(() => {
                     const item = document.getElementById('thread-' + threadId);
@@ -388,7 +388,7 @@
     /* ── Delete current thread ─────────────────────────────────────── */
     function deleteCurrentThread(threadId) {
         if (!confirm(I18N.deleteConfirmThread)) return;
-        fetch(`/ui/threads/${threadId}`, { method: 'DELETE' })
+        fetch(`/ui/threads/${threadId}`, { method: 'DELETE', headers: getCsrfHeaders() })
             .then(r => { if (r.ok) window.location.href = '/'; })
             .catch(() => showToast(I18N.requestFailed, 'danger'));
     }

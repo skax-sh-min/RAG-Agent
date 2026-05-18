@@ -239,6 +239,7 @@
             const response = await fetch('/ui/chat/stream', {
                 method: 'POST',
                 body: formData,
+                headers: typeof getCsrfHeaders === 'function' ? getCsrfHeaders() : {},
             });
 
             if (!response.ok) {

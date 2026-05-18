@@ -213,7 +213,7 @@ function saveChunkEdit(chunkId, collection) {
 
     fetch('/admin/chunks/' + encodeURIComponent(chunkId) + '?collection=' + encodeURIComponent(collection), {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...getCsrfHeaders() },
         body: JSON.stringify({ text, metadata })
     })
     .then(r => {
@@ -228,7 +228,8 @@ function saveChunkEdit(chunkId, collection) {
 function deleteChunkInline(chunkId, collection, row) {
     if (!confirm('이 청크를 삭제하시겠습니까?')) return;
     fetch('/admin/chunks/' + encodeURIComponent(chunkId) + '?collection=' + encodeURIComponent(collection), {
-        method: 'DELETE'
+        method: 'DELETE',
+        headers: getCsrfHeaders()
     })
     .then(r => {
         if (r.ok) { row.closest('tr').remove(); showToast('청크 삭제됨', 'success'); }
@@ -243,7 +244,7 @@ function reindexFromMd(btn) {
     const icon = btn.innerHTML;
     btn.disabled = true;
     btn.innerHTML = '<span class="spinner-border spinner-border-sm" style="width:.7rem;height:.7rem;"></span>';
-    fetch('/admin/documents/' + encodeURIComponent(docId) + '/reindex', { method: 'POST' })
+    fetch('/admin/documents/' + encodeURIComponent(docId) + '/reindex', { method: 'POST', headers: getCsrfHeaders() })
         .then(r => r.json())
         .then(d => {
             if (d.error) { showToast('재인덱싱 실패: ' + d.error, 'danger'); }

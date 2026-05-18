@@ -207,13 +207,19 @@ const I18N = {
     document.addEventListener('themechange', syncHljsTheme);
     syncHljsTheme();
 
-    /* HTMX CSRF 자동 전송 */
-    document.body.addEventListener('htmx:configRequest', function (event) {
+    /* fetch() 에서 공통으로 사용하는 CSRF 헤더 빌더 */
+    function getCsrfHeaders() {
         const tokenMeta  = document.querySelector('meta[name="_csrf"]');
         const headerMeta = document.querySelector('meta[name="_csrf_header"]');
         if (tokenMeta && headerMeta && tokenMeta.content) {
-            event.detail.headers[headerMeta.content] = tokenMeta.content;
+            return { [headerMeta.content]: tokenMeta.content };
         }
+        return {};
+    }
+
+    /* HTMX CSRF 자동 전송 */
+    document.body.addEventListener('htmx:configRequest', function (event) {
+        Object.assign(event.detail.headers, getCsrfHeaders());
     });
 
     /* Global HTMX error handlers */

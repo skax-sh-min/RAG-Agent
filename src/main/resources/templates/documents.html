@@ -343,7 +343,7 @@
         try {
             const res = await fetch('/ui/documents/sync', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded', ...getCsrfHeaders() },
                 body: `version=${encodeURIComponent(version)}`
             });
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
