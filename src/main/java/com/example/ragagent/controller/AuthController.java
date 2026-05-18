@@ -1,5 +1,6 @@
 package com.example.ragagent.controller;
 
+import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.security.AppUserDetails;
 import com.example.ragagent.security.SqliteUserDetailsService;
 import jakarta.servlet.http.HttpServletRequest;
@@ -32,11 +33,60 @@ public class AuthController {
 
     private final SqliteUserDetailsService userDetailsService;
     private final PasswordEncoder passwordEncoder;
+    private final AppProperties props;
 
-    public AuthController(SqliteUserDetailsService userDetailsService, PasswordEncoder passwordEncoder) {
+    public AuthController(SqliteUserDetailsService userDetailsService,
+                          PasswordEncoder passwordEncoder,
+                          AppProperties props) {
         this.userDetailsService = userDetailsService;
         this.passwordEncoder = passwordEncoder;
+        this.props = props;
     }
+
+    // ── First-run setup (no-auth mode only) ─────────────────────────────
+
+    @GetMapping("/setup")
+    public String setupPage() {
+        if (props.authSafe().enabled()) return "redirect:/";
+        if (userDetailsService.findFirstAdmin().isPresent()) return "redirect:/";
+        return "auth/setup";
+    }
+
+    @PostMapping("/setup")
+    public String setup(@RequestParam String email,
+                        @RequestParam(defaultValue = "") String displayName,
+                        @RequestParam String password,
+                        @RequestParam String passwordConfirm,
+                        RedirectAttributes redirectAttributes) {
+        if (props.authSafe().enabled()) return "redirect:/";
+        if (userDetailsService.findFirstAdmin().isPresent()) return "redirect:/";
+
+        String trimmedEmail   = email.trim();
+        String trimmedDisplay = displayName.trim();
+
+        if (!EMAIL_PATTERN.matcher(trimmedEmail).matches()) {
+            redirectAttributes.addFlashAttribute("error", "auth.signup.error.email.invalid");
+            return "redirect:/setup";
+        }
+        if (!PASSWORD_PATTERN.matcher(password).matches()) {
+            redirectAttributes.addFlashAttribute("error", "auth.signup.error.password.weak");
+            return "redirect:/setup";
+        }
+        if (!password.equals(passwordConfirm)) {
+            redirectAttributes.addFlashAttribute("error", "auth.signup.error.password.mismatch");
+            return "redirect:/setup";
+        }
+
+        userDetailsService.createAdminUser(
+                UUID.randomUUID().toString(),
+                trimmedEmail,
+                passwordEncoder.encode(password),
+                trimmedDisplay.isEmpty() ? null : trimmedDisplay
+        );
+        return "redirect:/";
+    }
+
+    // ── Auth endpoints ───────────────────────────────────────────────────
 
     @GetMapping("/login")
     public String loginPage(@RequestParam(required = false) String error,

@@ -19,7 +19,8 @@ public record AppProperties(
         ImageDescriptionProperties imageDescription,
         EmbeddingConfig embedding,
         RateLimitConfig rateLimit,
-        AuditConfig audit
+        AuditConfig audit,
+        AuthConfig auth
 ) {
     public record LlmConfig(
             List<ProviderConfig> providers,
@@ -75,6 +76,10 @@ public record AppProperties(
             String maxFileSize,      // e.g. "10MB"  — Logback SizeAndTimeBasedRollingPolicy
             int maxHistoryDays,      // 보관 일수, 이 일수가 지난 파일 자동 삭제
             String totalSizeCap      // audit 디렉터리 전체 상한, e.g. "100MB"
+    ) {}
+
+    public record AuthConfig(
+            boolean enabled          // false → no-auth mode (guest/admin auto-login)
     ) {}
 
     public record ImageDescriptionProperties(
@@ -142,6 +147,11 @@ public record AppProperties(
         int days = audit.maxHistoryDays() > 0 ? audit.maxHistoryDays() : 7;
         String cap = (audit.totalSizeCap() != null && !audit.totalSizeCap().isBlank()) ? audit.totalSizeCap() : "100MB";
         return new AuditConfig(audit.enabled(), size, days, cap);
+    }
+
+    public AuthConfig authSafe() {
+        if (auth == null) return new AuthConfig(true);
+        return auth;
     }
 
     /** Null-safe accessor — returns an empty LlmConfig when app.llm is not configured. */
