@@ -16,6 +16,7 @@ RAG Agent 시스템 배포·설정·운영 가이드입니다.
    - 4.1 [Docker Compose (권장)](#41-docker-compose-권장)
    - 4.2 [로컬 실행](#42-로컬-실행)
    - 4.3 [접속 확인](#43-접속-확인)
+   - 4.4 [HTTPS 설정 (Caddy 리버스 프록시)](#44-https-설정-caddy-리버스-프록시)
 5. [LLM 프로바이더 설정](#5-llm-프로바이더-설정)
    - 5.1 [구조 개요](#51-구조-개요)
    - 5.2 [프로바이더 속성](#52-프로바이더-속성)
@@ -357,6 +358,224 @@ mvn spring-boot:run
 
 - **Web UI**: `http://localhost:8080`
 - **API 헬스 체크**: `http://localhost:8080/api/health` → `{"status":"ok",...}`
+
+---
+
+---
+
+### 4.4 HTTPS 설정 (Caddy 리버스 프록시)
+
+이 프로젝트는 **Caddy**를 리버스 프록시로 사용해 HTTPS를 처리합니다.  
+Caddy는 Let's Encrypt 인증서를 자동으로 발급·갱신하므로 별도의 certbot·cron 작업이 없습니다.
+
+```
+인터넷
+  │  HTTPS :443
+  ▼
+[Caddy 컨테이너]   ← TLS 종료 (인증서 자동 관리)
+  │  HTTP :8080 (내부 Docker 네트워크)
+  ▼
+[Spring Boot 컨테이너 (app)]
+```
+
+외부에 8080 포트는 노출되지 않습니다. Caddy만 80/443을 받습니다.
+
+---
+
+#### 전제: Spring Boot 측 설정 (이미 적용됨)
+
+```properties
+# application.properties — 이미 설정되어 있음
+server.forward-headers-strategy=framework
+server.tomcat.remoteip.protocol-header=X-Forwarded-Proto
+server.servlet.session.cookie.secure=true
+server.servlet.session.cookie.http-only=true
+server.servlet.session.cookie.same-site=lax
+```
+
+Caddy → Spring Boot 간 `X-Forwarded-Proto: https` 헤더가 전달되고,  
+Spring이 이를 인식해 `isSecure() = true`, JSESSIONID는 HTTPS 전용으로 전송됩니다.
+
+---
+
+#### 도메인 확보 방법 — 세 가지 선택지
+
+도메인이 없어도 무료로 HTTPS를 적용할 수 있습니다. 상황에 맞는 방법을 선택하세요.
+
+| 상황 | 추천 방법 |
+|------|---------|
+| 서버에 공인 IP가 있고 포트(80/443) 개방 가능 | **옵션 1**: DuckDNS 무료 서브도메인 |
+| 방화벽 안 / 공인 IP 없음 / 포트포워딩 불가 | **옵션 2**: Cloudflare Tunnel |
+| 나 혼자만 쓰는 로컬 환경 | **옵션 3**: HTTP 그대로 사용 |
+
+---
+
+#### 옵션 1 — DuckDNS 무료 서브도메인 (공인 IP 보유 시 권장)
+
+**1단계 — DuckDNS 서브도메인 생성**
+
+1. [duckdns.org](https://www.duckdns.org) 접속 → GitHub/Google 계정으로 로그인
+2. 원하는 서브도메인 입력 (예: `myrag`) → **add domain** 클릭
+3. **current ip** 란에 서버의 공인 IP 입력 → **update ip** 클릭
+4. 발급된 도메인: `myrag.duckdns.org`
+
+> 서버 IP가 유동 IP라면 아래 갱신 스크립트를 cron에 등록하세요.
+> ```bash
+> # /etc/cron.d/duckdns  (5분마다)
+> */5 * * * * root curl -s "https://www.duckdns.org/update?domains=myrag&token=YOUR_TOKEN&ip=" > /dev/null
+> ```
+> 토큰은 DuckDNS 대시보드 상단에 표시됩니다.
+
+**2단계 — Caddyfile 작성**
+
+프로젝트 루트에 `Caddyfile` 생성:
+
+```
+myrag.duckdns.org {
+    reverse_proxy app:8080
+    encode gzip zstd
+
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Content-Type-Options "nosniff"
+        Referrer-Policy "strict-origin-when-cross-origin"
+    }
+}
+```
+
+**3단계 — docker-compose.yml에 Caddy 서비스 추가**
+
+```yaml
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"   # HTTP/3
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data       # 인증서 저장 (재시작 후에도 유지)
+      - caddy_config:/config
+    depends_on:
+      - app
+
+  app:
+    # 기존 app 서비스 — ports 항목에서 "8080:8080" 제거 (외부 노출 불필요)
+    ports: []
+
+volumes:
+  caddy_data:
+  caddy_config:
+```
+
+> `app` 서비스의 `ports: ["8080:8080"]`은 **제거**하세요. 외부에서 직접 8080으로 접근을 차단해야 합니다.
+
+**4단계 — 실행**
+
+```bash
+docker-compose up --build -d
+```
+
+Caddy가 시작되면서 Let's Encrypt에 인증서를 자동 요청합니다 (수십 초 소요).  
+이후 `https://myrag.duckdns.org` 로 접속하면 됩니다.  
+HTTP(`http://myrag.duckdns.org`)는 자동으로 HTTPS로 리다이렉트됩니다.
+
+**인증서 갱신 확인**:
+```bash
+docker-compose logs caddy | grep -i "certificate\|renew\|tls"
+```
+
+---
+
+#### 옵션 2 — Cloudflare Tunnel (도메인·포트포워딩 없이 인터넷 공개)
+
+방화벽 안에 있거나 공인 IP가 없는 서버(집 PC, NAS, 사내 서버 등)에 적합합니다.  
+Cloudflare 서버가 중간에서 연결을 중계하므로 서버에서 외부로 나가는 연결만 필요합니다.
+
+**1단계 — Cloudflare 계정 및 Tunnel 생성**
+
+1. [cloudflare.com](https://www.cloudflare.com) 무료 계정 생성
+2. 대시보드 → **Zero Trust** → **Networks** → **Tunnels** → **Create a tunnel**
+3. Tunnel 이름 입력 (예: `rag-agent`) → **Save tunnel**
+4. **Docker** 탭 선택 → 표시된 토큰 복사 (`eyJ...` 형태)
+
+**2단계 — docker-compose.yml에 cloudflared 추가**
+
+```yaml
+services:
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}
+    depends_on:
+      - app
+```
+
+`.env`에 토큰 추가:
+```env
+CLOUDFLARE_TUNNEL_TOKEN=eyJ...여기에_복사한_토큰_붙여넣기...
+```
+
+**3단계 — Tunnel 라우팅 설정**
+
+Cloudflare 대시보드 → Tunnel 상세 → **Public Hostname** 탭:
+
+| 항목 | 값 |
+|------|-----|
+| Subdomain | `rag` (원하는 값) |
+| Domain | `*.trycloudflare.com` (무료) 또는 내 도메인 |
+| Service | `http://app:8080` |
+
+> **trycloudflare.com 주소**: 도메인 없이 `https://rag.trycloudflare.com` 형태로 즉시 사용 가능합니다.  
+> 나중에 도메인을 구입해 Cloudflare에 연결하면 클릭 몇 번으로 도메인 교체 가능합니다.
+
+**4단계 — 실행**
+
+```bash
+docker-compose up --build -d
+```
+
+Caddyfile 불필요. HTTPS 인증서는 Cloudflare가 자동 처리합니다.
+
+**트래픽 흐름**:
+```
+브라우저 → Cloudflare 엣지 (HTTPS) → cloudflared 컨테이너 (암호화 터널) → app:8080
+```
+
+> **주의**: Cloudflare가 트래픽을 중계하므로 기밀 문서를 처리하는 환경이라면 옵션 1(자체 서버 직접 TLS)을 사용하세요.
+
+---
+
+#### 옵션 3 — 로컬 전용 (HTTPS 불필요)
+
+자신만 사용하는 로컬 환경이라면 HTTP 그대로 사용해도 됩니다.  
+세션 쿠키 탈취 위험이 없으므로 `cookie.secure` 설정만 조정합니다.
+
+```properties
+# application.properties
+server.servlet.session.cookie.secure=false
+```
+
+Caddy 없이 `http://localhost:8080`으로 접속합니다.  
+docker-compose.yml에서 `app` 서비스의 `ports: ["8080:8080"]`은 그대로 유지합니다.
+
+---
+
+#### 인증서 상태 확인 (옵션 1 사용 시)
+
+```bash
+# Caddy 로그에서 인증서 관련 이벤트 확인
+docker-compose logs caddy | grep -iE "certificate|renew|tls|acme"
+
+# Caddy 컨테이너 내부에서 인증서 만료일 확인
+docker-compose exec caddy caddy trust
+```
+
+인증서는 `caddy_data` 볼륨에 저장됩니다. 볼륨을 삭제하면 인증서도 삭제되므로 주의하세요.
 
 ---
 
@@ -1017,6 +1236,17 @@ app.auth.enabled=false
 - [ ] `app.auth.enabled` 설정 확인 (기본 `true` = 로그인 필요 / `false` = no-auth 모드)
 - [ ] (no-auth 모드) 첫 접속 시 `/setup` 페이지에서 admin 계정 생성 완료 확인
 - [ ] (auth 모드) `/signup`에서 첫 계정 생성 후 `/login` 접속 확인
+
+**HTTPS (인터넷 공개 배포 시)**:
+- [ ] HTTPS 방식 선택: DuckDNS(공인 IP 보유) / Cloudflare Tunnel(IP 없음) / HTTP 로컬 전용
+- [ ] (DuckDNS) 서브도메인 생성 + 서버 IP 등록 완료
+- [ ] (DuckDNS) `Caddyfile`에 실제 도메인 입력, `docker-compose.yml`에 Caddy 서비스 추가
+- [ ] (DuckDNS) `app` 서비스의 `ports: ["8080:8080"]` 제거 (외부 직접 접근 차단)
+- [ ] (DuckDNS) `docker-compose up` 후 `https://도메인` HTTPS 접속 확인
+- [ ] (DuckDNS) HTTP → HTTPS 자동 리다이렉트 확인
+- [ ] (DuckDNS) 유동 IP 환경이면 cron DuckDNS 갱신 스크립트 등록 확인
+- [ ] (Cloudflare Tunnel) `.env`에 `CLOUDFLARE_TUNNEL_TOKEN` 추가, docker-compose에 cloudflared 서비스 추가
+- [ ] (Cloudflare Tunnel) 대시보드 Public Hostname → `http://app:8080` 라우팅 설정 확인
 
 **기본 동작**:
 - [ ] `GET /api/health` → `{"status":"ok"}` 응답
