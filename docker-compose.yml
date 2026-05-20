@@ -47,6 +47,7 @@ services:
       - LOCAL_LLM_MODEL=${LOCAL_LLM_MODEL:-gemma-4-27b-it}
       - CHROMA_HOST=chroma
       - CHROMA_PORT=8000
+      - AUTH_ENABLED=${AUTH_ENABLED:-true}
       - DATA_DIR=/app/data
       - CHUNK_SIZE=${CHUNK_SIZE:-800}
       - CHUNK_OVERLAP=${CHUNK_OVERLAP:-100}

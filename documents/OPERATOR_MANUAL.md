@@ -144,6 +144,7 @@ copy .env.example .env
 | `CHROMA_HOST` | — | `http://localhost` | Chroma 서버 호스트 (프로토콜 포함) |
 | `CHROMA_PORT` | — | `8001` | Chroma 서버 포트 |
 | `DATA_DIR` | — | `./data` | 문서·레지스트리·SQLite DB 저장 경로 |
+| `AUTH_ENABLED` | — | `true` | `false`로 설정하면 로그인 없이 실행 (no-auth 모드). 자세한 내용은 [§9.4](#94-인증-토글-no-auth-모드) 참조 |
 
 #### RAG 튜닝
 
@@ -238,7 +239,7 @@ LOCAL_LLM_KEY=                     # 비워서 LOCAL providers[0] 비활성화
 
 | 속성 | 기본값 | 설명 |
 |------|--------|------|
-| `app.auth.enabled` | `true` | `false`로 설정하면 로그인 없이 실행 (no-auth 모드). 자세한 내용은 [§9.4](#94-인증-토글-no-auth-모드) 참조 |
+| `app.auth.enabled` | `true` | `false`로 설정하면 로그인 없이 실행 (no-auth 모드). `AUTH_ENABLED` 환경변수로도 주입 가능. 자세한 내용은 [§9.4](#94-인증-토글-no-auth-모드) 참조 |
 
 #### 서버 및 기타
 
@@ -1213,8 +1214,12 @@ LLM 응답이 20,000자를 초과하면 자동으로 잘리고 말줄임 메시�
 | 로그아웃 버튼 | Navbar에서 숨겨짐 |
 
 **설정 예시**:
+```env
+# .env (권장 — 재빌드 없이 전환 가능)
+AUTH_ENABLED=false
+```
 ```properties
-# application.properties
+# application.properties (직접 편집 방식)
 app.auth.enabled=false
 ```
 
@@ -1233,7 +1238,7 @@ app.auth.enabled=false
 
 **초기 설정**:
 - [ ] `sh scripts/install-hooks.sh` — pre-commit 훅 설치 (팀원 각자 1회)
-- [ ] `app.auth.enabled` 설정 확인 (기본 `true` = 로그인 필요 / `false` = no-auth 모드)
+- [ ] 인증 모드 설정 확인 — `.env`의 `AUTH_ENABLED` 또는 `application.properties`의 `app.auth.enabled` (기본 `true` = 로그인 필요 / `false` = no-auth 모드)
 - [ ] (no-auth 모드) 첫 접속 시 `/setup` 페이지에서 admin 계정 생성 완료 확인
 - [ ] (auth 모드) `/signup`에서 첫 계정 생성 후 `/login` 접속 확인
 
