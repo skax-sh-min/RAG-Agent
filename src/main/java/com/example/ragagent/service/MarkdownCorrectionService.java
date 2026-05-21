@@ -1,5 +1,6 @@
 package com.example.ragagent.service;
 
+import com.example.ragagent.exception.LlmProviderExhaustedException;
 import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.llm.TaskType;
@@ -14,6 +15,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Semaphore;
 
@@ -64,6 +66,12 @@ public class MarkdownCorrectionService {
                 .stream()
                 .map(CompletableFuture::join)
                 .toList();
+        } catch (CompletionException ce) {
+            if (ce.getCause() instanceof LlmProviderExhaustedException) {
+                log.info("[MD_CORRECT] LLM 사용 불가, 원본 유지: docId={}", docId);
+                return rawMd;
+            }
+            throw ce;
         }
 
         String result = String.join("\n\n", corrected);
@@ -128,6 +136,8 @@ public class MarkdownCorrectionService {
                     model -> model.call(new Prompt(prompt)));
             log.debug("[MD_CORRECT] 섹션 교정 완료: {}자 → {}자", safeSection.length(), result.length());
             return result;
+        } catch (LlmProviderExhaustedException e) {
+            throw e;
         } catch (Exception e) {
             log.warn("[MD_CORRECT] 섹션 교정 실패, 원본 유지: {}", e.getMessage());
             return section;
