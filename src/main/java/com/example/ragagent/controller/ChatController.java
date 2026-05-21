@@ -1,6 +1,7 @@
 package com.example.ragagent.controller;
 
 import com.example.ragagent.context.ThreadContext;
+import com.example.ragagent.exception.LlmProviderExhaustedException;
 import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.model.*;
@@ -13,6 +14,8 @@ import jakarta.servlet.http.HttpServletResponse;
 import jakarta.servlet.http.HttpSession;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.context.MessageSource;
+import org.springframework.context.i18n.LocaleContextHolder;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Controller;
@@ -39,19 +42,22 @@ public class ChatController {
     private final MemoryService memoryService;
     private final AppProperties props;
     private final LlmRouter llmRouter;
+    private final MessageSource messageSource;
 
     public ChatController(AgentService agentService,
                           StreamingAgentService streamingAgentService,
                           ThreadMetaService threadMetaService,
                           MemoryService memoryService,
                           AppProperties props,
-                          LlmRouter llmRouter) {
+                          LlmRouter llmRouter,
+                          MessageSource messageSource) {
         this.agentService = agentService;
         this.streamingAgentService = streamingAgentService;
         this.threadMetaService = threadMetaService;
         this.memoryService = memoryService;
         this.props = props;
         this.llmRouter = llmRouter;
+        this.messageSource = messageSource;
     }
 
     // ── Page routes ───────────────────────────────────────────────────
@@ -157,6 +163,11 @@ public class ChatController {
                 response.setHeader("HX-Trigger", "refreshThreadList");
                 return "fragments/message-assistant-dual :: message";
             }
+        } catch (LlmProviderExhaustedException e) {
+            log.warn("LLM providers exhausted: {}", e.getMessage());
+            model.addAttribute("errorMessage", messageSource.getMessage(
+                    "error.llm.exhausted", null, LocaleContextHolder.getLocale()));
+            return "fragments/message-error :: message";
         } catch (Exception e) {
             log.error("Chat error", e);
             return "fragments/message-error :: message";

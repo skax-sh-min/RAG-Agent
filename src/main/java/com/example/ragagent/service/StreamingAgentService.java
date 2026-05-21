@@ -2,9 +2,11 @@ package com.example.ragagent.service;
 
 import com.example.ragagent.agent.AgentGraph;
 import com.example.ragagent.agent.AgentState;
+import com.example.ragagent.exception.LlmProviderExhaustedException;
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.model.ChatForm;
 import com.example.ragagent.model.SourceRef;
+import org.springframework.context.MessageSource;
 import org.springframework.context.i18n.LocaleContextHolder;
 
 import java.util.Locale;
@@ -50,17 +52,20 @@ public class StreamingAgentService {
     private final ClassifierService classifierService;
     private final ThreadMetaService threadMetaService;
     private final ObjectMapper objectMapper;
+    private final MessageSource messageSource;
 
     public StreamingAgentService(AgentGraph agentGraph,
                                   MemoryService memoryService,
                                   ClassifierService classifierService,
                                   ThreadMetaService threadMetaService,
-                                  ObjectMapper objectMapper) {
+                                  ObjectMapper objectMapper,
+                                  MessageSource messageSource) {
         this.agentGraph = agentGraph;
         this.memoryService = memoryService;
         this.classifierService = classifierService;
         this.threadMetaService = threadMetaService;
         this.objectMapper = objectMapper;
+        this.messageSource = messageSource;
     }
 
     /**
@@ -118,6 +123,12 @@ public class StreamingAgentService {
 
             threadMetaService.generateTitleAsync(userId, form.threadId(), form.version(), form.question());
 
+        } catch (LlmProviderExhaustedException e) {
+            log.warn("LLM providers exhausted: {}", e.getMessage());
+            String msg = messageSource.getMessage("error.llm.exhausted", null,
+                    "LLM 서버에 연결할 수 없습니다. 잠시 후 다시 시도해 주세요.", LocaleContextHolder.getLocale());
+            trySendError(emitter, msg);
+            emitter.complete();
         } catch (Exception e) {
             // B-20: interrupt signals client disconnect / SSE timeout — not an error
             boolean interrupted = e instanceof InterruptedException

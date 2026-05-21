@@ -7,7 +7,7 @@ import com.fasterxml.jackson.annotation.JsonInclude;
  *
  * stage values:
  *   upload flow  — loading | chunking | enriching | storing | done | error
- *   sync flow    — sync_start | sync_file_done | sync_done | error
+ *   sync flow    — sync_start | sync_file_done | sync_file_error | sync_done | error
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record IndexingProgressEvent(
@@ -39,5 +39,10 @@ public record IndexingProgressEvent(
 
     public static IndexingProgressEvent error(String filename, String message) {
         return new IndexingProgressEvent("error", 0, 0, filename, message, null, null);
+    }
+
+    /** Non-terminal: one file failed during sync, but sync continues for remaining files. */
+    public static IndexingProgressEvent syncFileError(int done, int total, String filename, String message) {
+        return new IndexingProgressEvent("sync_file_error", done, total, filename, message, null, null);
     }
 }

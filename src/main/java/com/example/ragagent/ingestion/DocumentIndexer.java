@@ -250,16 +250,26 @@ public class DocumentIndexer {
                 fileConcurrency, Thread.ofVirtual().factory())) {
             List<CompletableFuture<Void>> futures = filesToIndex.entrySet().stream()
                 .map(e -> CompletableFuture.runAsync(() -> {
+                    boolean failed = false;
+                    String errorMsg = null;
                     try {
                         index(IndexRequest.parallel(e.getValue().path(), version,
                                 userId, llmGate, e.getValue().staleDocId()));
                         (e.getValue().staleDocId() != null ? updated : indexed).add(e.getKey());
                     } catch (Exception ex) {
                         log.error("[SYNC] 병렬 인덱싱 실패: {}", e.getKey(), ex);
+                        failed = true;
+                        errorMsg = isConnectionError(ex)
+                                ? "임베딩/LLM 서버 연결 실패"
+                                : (ex.getMessage() != null ? ex.getMessage() : "인덱싱 오류");
                     }
                     int k = doneFiles.incrementAndGet();
-                    onProgress.accept(IndexingProgressEvent.of("sync_file_done", k, totalFiles,
-                            e.getKey(), k + "/" + totalFiles + " 완료"));
+                    if (failed) {
+                        onProgress.accept(IndexingProgressEvent.syncFileError(k, totalFiles, e.getKey(), errorMsg));
+                    } else {
+                        onProgress.accept(IndexingProgressEvent.of("sync_file_done", k, totalFiles,
+                                e.getKey(), k + "/" + totalFiles + " 완료"));
+                    }
                 }, filePool))
                 .toList();
             CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
@@ -547,6 +557,18 @@ public class DocumentIndexer {
         if (lower.contains("guide")) return "guide";
         if (lower.contains("edu") || lower.contains("lesson")) return "education";
         return "manual";
+    }
+
+    private static boolean isConnectionError(Throwable t) {
+        Throwable cur = t;
+        while (cur != null) {
+            if (cur instanceof org.springframework.web.client.ResourceAccessException
+                    || cur instanceof java.net.ConnectException) {
+                return true;
+            }
+            cur = cur.getCause();
+        }
+        return false;
     }
 
     private static boolean isTimeoutLike(Throwable t) {

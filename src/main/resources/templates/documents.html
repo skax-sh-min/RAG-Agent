@@ -365,6 +365,11 @@
                         const pct = evt.total > 0 ? Math.round(evt.done / evt.total * 100) : 100;
                         bar.style.width = `${pct}%`;
                         label.textContent = `${evt.done} / ${evt.total} 완료: ${evt.filename}`;
+                    } else if (evt.stage === 'sync_file_error') {
+                        const pct = evt.total > 0 ? Math.round(evt.done / evt.total * 100) : 100;
+                        bar.style.width = `${pct}%`;
+                        label.textContent = `❌ ${evt.filename}: ${evt.message || '인덱싱 오류'}`;
+                        showToast(`${escHtml(evt.filename)} 인덱싱 실패: ${escHtml(evt.message || '오류')}`, 'danger');
                     } else if (evt.stage === 'sync_done') {
                         sse.close();
                         bar.style.width = '100%';
