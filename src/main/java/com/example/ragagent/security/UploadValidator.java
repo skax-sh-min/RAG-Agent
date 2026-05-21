@@ -7,6 +7,7 @@ import org.springframework.web.multipart.MultipartFile;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.text.Normalizer;
 import java.time.Instant;
 
 /**
@@ -32,7 +33,10 @@ public final class UploadValidator {
         if (original == null || original.isBlank()) {
             return "upload_" + Instant.now().toEpochMilli();
         }
-        String base = Path.of(original).getFileName().toString()
+        // NFC normalization before regex: macOS HFS+/APFS returns NFD filenames,
+        // where Korean syllables decompose into jamo outside the 가-힣 range.
+        String base = Normalizer.normalize(
+                        Path.of(original).getFileName().toString(), Normalizer.Form.NFC)
                 .replaceAll("[^a-zA-Z0-9._\\-가-힣]", "_");
         if (base.isBlank() || base.startsWith(".") || base.chars().allMatch(c -> c == '.')) {
             throw new IllegalArgumentException("invalid filename: " + original);

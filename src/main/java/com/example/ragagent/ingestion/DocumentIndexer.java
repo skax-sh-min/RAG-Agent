@@ -22,6 +22,7 @@ import org.springframework.stereotype.Component;
 import java.io.IOException;
 import java.nio.file.*;
 import java.security.MessageDigest;
+import java.text.Normalizer;
 import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
 import java.util.*;
@@ -211,8 +212,10 @@ public class DocumentIndexer {
         Map<String, Path> filesOnDisk = new HashMap<>();
         if (Files.exists(documentsDir)) {
             try (Stream<Path> stream = Files.list(documentsDir)) {
+                // NFC normalization: macOS HFS+/APFS returns NFD filenames
                 stream.filter(p -> isSupportedExtension(p.getFileName().toString()))
-                      .forEach(p -> filesOnDisk.put(p.getFileName().toString(), p));
+                      .forEach(p -> filesOnDisk.put(
+                              Normalizer.normalize(p.getFileName().toString(), Normalizer.Form.NFC), p));
             }
         }
 
