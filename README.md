@@ -143,17 +143,31 @@ rag_java/
     │   ├── config/
     │   │   ├── AppProperties.java     # @ConfigurationProperties (includes LlmConfig)
     │   │   └── WebConfig.java         # ChatClient bean + CORS + i18n (CookieLocaleResolver)
+    │   ├── audit/
+    │   │   └── AuditLogger.java                # Structured audit events → Logback AUDIT_FILE appender
+    │   ├── context/
+    │   │   ├── ThreadContext.java              # Per-request record (threadId, userId, locale)
+    │   │   └── ThreadContextResolver.java      # HandlerMethodArgumentResolver for ThreadContext
     │   ├── controller/
-    │   │   ├── ApiController.java     # REST API (/api/*); magic-byte upload validation
-    │   │   ├── WebController.java     # Web UI HTMX handler (/ui/*, /chat/*, /llm-usage)
-    │   │   └── GlobalExceptionHandler.java  # RFC 9457 ProblemDetail; 400/413 handling
+    │   │   ├── ChatController.java             # REST POST /api/v1/chat; HTMX /ui/chat, /ui/chat/stream, thread management
+    │   │   ├── DocumentController.java         # REST /api/v1/documents, /api/v1/images; async upload (202+taskId)
+    │   │   ├── OperationsController.java       # REST GET /api/v1/health, /api/v1/llm/usage; HTMX thread list + LLM cards
+    │   │   ├── AdminController.java            # /admin, /admin/chunks; document re-index
+    │   │   └── GlobalExceptionHandler.java     # RFC 9457 ProblemDetail; 400/413 handling
+    │   ├── exception/                          # Domain exception classes
+    │   ├── ingestion/
+    │   │   ├── DocumentIndexer.java            # Core indexing logic; 3-phase sync; DocRegistry SQLite
+    │   │   ├── DocRegistry.java                # doc_registry SQLite table management
+    │   │   └── VectorStoreFacade.java          # Abstraction over ChromaVectorStore
+    │   ├── ratelimit/
+    │   │   └── RateLimitFilter.java            # Bucket4j + Caffeine per-user token-bucket; 429 + RAG-RATE-001
     │   ├── llm/
     │   │   ├── LlmRouter.java         # Multi-provider routing: TaskType × RoutingMode
     │   │   ├── RoutingMode.java       # COST_FIRST|QUALITY_FIRST|PROGRESSIVE|DUAL|LOCAL_ONLY
     │   │   └── CircuitBreaker.java    # In-memory per-provider circuit breaker (Retry-After aware)
     │   ├── model/                     # Java 21 records
     │   │   ├── MetaKey.java           # Vector store metadata key constants
-    │   │   └── ChatRequest/Response/SourceRef/DocumentInfo/SyncResult/ThreadMeta/ChatForm/LlmProviderReport.java
+    │   │   └── ChatRequest/Response/SourceRef/DocumentInfo/SyncResult/ThreadMeta/ChatForm/LlmProviderReport/IndexingProgressEvent.java
     │   ├── security/
     │   │   ├── FileTypeDetector.java  # Magic-byte validation (PDF, DOCX/PPTX, TXT/MD)
     │   │   └── PromptInjectionGuard.java  # Input validation + API key masking
@@ -174,6 +188,9 @@ rag_java/
     │       ├── FinalizeService.java           # Conversation memory save node
     │       ├── MemoryService.java             # Multi-turn memory — SQLite persistence
     │       ├── RagService.java                # Document indexing + sync + image cleanup
+    │       ├── AdminService.java              # Admin UI data queries (chunks, collection stats)
+    │       ├── IndexingProgressService.java   # SSE emitter registry for async upload/sync progress
+    │       ├── MarkdownCorrectionService.java # Post-process LLM markdown output
     │       ├── DocumentLoaderService.java     # PDF/PPTX/DOCX/TXT/MD loader; scanned PDF OCR
     │       ├── DocxToMarkdownConverter.java   # DOCX → Markdown with inline image extraction
     │       ├── ImageExtractorService.java     # Image extraction orchestrator (PDF/PPTX/DOCX)
@@ -185,7 +202,6 @@ rag_java/
     │       ├── OcrService.java                # Tesseract OCR for scanned PDFs (kor+eng)
     │       ├── EmfToPngConverter.java         # Batik WMFTranscoder→SVG→PNGTranscoder pipeline
     │       ├── LibreOfficeConverter.java      # LibreOffice headless WMF→PNG (20s timeout)
-    │       ├── KeywordMetadataEnricher.java   # LLM-based keyword extraction per chunk
     │       ├── ThreadMetaService.java         # Conversation thread metadata management
     │       └── VectorStoreRegistry.java       # Per-version ChromaVectorStore management
     └── resources/
@@ -243,7 +259,9 @@ User question
 - **Critic verification** — LLM double-checks whether the generated answer is grounded in documents
 - **PROGRESSIVE mode** — starts with COST_FIRST; if quality score < threshold, re-runs Answer with PREMIUM provider and marks response with upgrade badge
 - **DUAL mode** — runs local and external LLM in parallel, displays results in side-by-side tabs
-- **Image processing pipeline** — PDF/PPTX/DOCX image extraction → stored under `data/images/{docId}/`; Lazy Vision description on first retrieval (cached in SQLite); image thumbnails shown in answer bubble
+- **Rate limiting** — Bucket4j + Caffeine per-user token-bucket; 429 `RAG-RATE-001` + `Retry-After` header; configurable via `app.rate-limit.*`
+- **Audit logging** — structured events written to rolling file via Logback; configurable via `app.audit.*`
+- **Image processing pipeline** — PDF/PPTX/DOCX image extraction → stored under `data/users/{userId}/images/{docId}/`; Lazy Vision description on first retrieval (cached in SQLite); image thumbnails shown in answer bubble
 - **Image type classification** — pre-classifies images (diagram / screenshot / chart / photo / other) and uses type-specific Vision prompts for better descriptions
 - **Scanned PDF OCR** — Tesseract OCR (kor+eng) for pages with insufficient text; activated via `app.image-description.ocr-enabled=true`
 - **EMF/WMF conversion** — DOCX Windows Metafile images converted to PNG via Batik (EMF) or LibreOffice headless (WMF)
@@ -253,7 +271,7 @@ User question
 - **Code syntax highlighting** — highlight.js applied after DOMPurify sanitize, synced with dark mode
 - **LLM usage dashboard** — per-provider daily/weekly/monthly token stats, Chart.js daily history chart, circuit breaker countdown
 - **Document versioning** — separate Chroma collection per version (`manual_{version}`)
-- **Incremental indexing** — SHA-256 change detection, `doc_registry.json` persistence
+- **Incremental indexing** — SHA-256 change detection, `doc_registry` SQLite table persistence (per-user)
 - **Multiple document formats** — PDF, PPTX, DOCX, TXT, MD
 - **Java 21 Virtual Threads** — lightweight threads for all LLM I/O and parallel indexing
 
@@ -275,12 +293,12 @@ User question
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/api/health` | Health check |
-| `POST` | `/api/chat` | Ask a question → get an answer |
-| `POST` | `/api/documents` | Upload and index a document |
-| `POST` | `/api/documents/sync` | Incremental folder sync |
-| `GET` | `/api/documents` | List indexed documents |
-| `DELETE` | `/api/documents/{docId}` | Delete a document |
-| `GET` | `/api/images/{docId}/{filename}` | Serve an extracted image file |
-| `GET` | `/api/llm/usage` | Per-provider token usage + Circuit Breaker status |
-| `GET` | `/api/llm/usage/history` | Daily token history (`?days=7\|30\|90`) |
+| `GET` | `/api/v1/health` | Health check |
+| `POST` | `/api/v1/chat` | Ask a question → get an answer |
+| `POST` | `/api/v1/documents` | Upload and index a document |
+| `POST` | `/api/v1/documents/sync` | Incremental folder sync |
+| `GET` | `/api/v1/documents` | List indexed documents |
+| `DELETE` | `/api/v1/documents/{docId}` | Delete a document |
+| `GET` | `/api/v1/images/{docId}/{filename}` | Serve an extracted image file |
+| `GET` | `/api/v1/llm/usage` | Per-provider token usage + Circuit Breaker status |
+| `GET` | `/api/v1/llm/usage/history` | Daily token history (`?days=7\|30\|90`) |

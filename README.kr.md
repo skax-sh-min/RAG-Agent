@@ -118,17 +118,31 @@ rag_java/
     │   ├── config/
     │   │   ├── AppProperties.java     # @ConfigurationProperties (LlmConfig 포함)
     │   │   └── WebConfig.java         # ChatClient 빈 + CORS + i18n (CookieLocaleResolver)
+    │   ├── audit/
+    │   │   └── AuditLogger.java                # 감사 이벤트 → Logback AUDIT_FILE appender
+    │   ├── context/
+    │   │   ├── ThreadContext.java              # 요청별 record (threadId, userId, locale)
+    │   │   └── ThreadContextResolver.java      # HandlerMethodArgumentResolver
     │   ├── controller/
-    │   │   ├── ApiController.java     # REST API (/api/*); 매직바이트 업로드 검증
-    │   │   ├── WebController.java     # Web UI HTMX 핸들러 (/ui/*, /chat/*, /llm-usage)
-    │   │   └── GlobalExceptionHandler.java  # RFC 9457 ProblemDetail; 400/413 처리
+    │   │   ├── ChatController.java             # REST POST /api/v1/chat; HTMX /ui/chat, /ui/chat/stream, 스레드 관리
+    │   │   ├── DocumentController.java         # REST /api/v1/documents, /api/v1/images; 비동기 업로드 (202+taskId)
+    │   │   ├── OperationsController.java       # REST GET /api/v1/health, /api/v1/llm/usage; HTMX 스레드 목록 + LLM 카드
+    │   │   ├── AdminController.java            # /admin, /admin/chunks; 문서 재인덱스
+    │   │   └── GlobalExceptionHandler.java     # RFC 9457 ProblemDetail; 400/413 처리
+    │   ├── exception/                          # 도메인 예외 클래스
+    │   ├── ingestion/
+    │   │   ├── DocumentIndexer.java            # 핵심 인덱싱 로직; 3단계 동기화; DocRegistry SQLite
+    │   │   ├── DocRegistry.java                # doc_registry SQLite 테이블 관리
+    │   │   └── VectorStoreFacade.java          # ChromaVectorStore 추상화
+    │   ├── ratelimit/
+    │   │   └── RateLimitFilter.java            # Bucket4j + Caffeine 유저별 토큰버킷; 429 + RAG-RATE-001
     │   ├── llm/
     │   │   ├── LlmRouter.java             # 멀티 프로바이더 라우팅: TaskType × RoutingMode
     │   │   ├── RoutingMode.java           # COST_FIRST|QUALITY_FIRST|PROGRESSIVE|DUAL|LOCAL_ONLY
     │   │   └── CircuitBreaker.java        # LLM 프로바이더 인메모리 차단 관리 (Retry-After 지원)
     │   ├── model/                         # Java 21 record
     │   │   ├── MetaKey.java               # 벡터 스토어 메타데이터 키 상수
-    │   │   └── ChatRequest/Response/SourceRef/DocumentInfo/SyncResult/ThreadMeta/ChatForm/LlmProviderReport.java
+    │   │   └── ChatRequest/Response/SourceRef/DocumentInfo/SyncResult/ThreadMeta/ChatForm/LlmProviderReport/IndexingProgressEvent.java
     │   ├── security/
     │   │   ├── FileTypeDetector.java      # 매직바이트 검증 (PDF, DOCX/PPTX, TXT/MD)
     │   │   └── PromptInjectionGuard.java  # 입력 검증 + API 키 마스킹
@@ -149,6 +163,9 @@ rag_java/
     │       ├── FinalizeService.java           # 대화 메모리 저장 노드
     │       ├── MemoryService.java             # 멀티턴 메모리 — SQLite 영속
     │       ├── RagService.java                # 문서 인덱싱 + 동기화 + 이미지 정리
+    │       ├── AdminService.java              # Admin UI 데이터 조회 (청크, 컬렉션 통계)
+    │       ├── IndexingProgressService.java   # 비동기 업로드/동기화 SSE 진행 이벤트 관리
+    │       ├── MarkdownCorrectionService.java # LLM 마크다운 출력 후처리
     │       ├── DocumentLoaderService.java     # PDF/PPTX/DOCX/TXT/MD 로더; 스캔 PDF OCR
     │       ├── DocxToMarkdownConverter.java   # DOCX → Markdown + 인라인 이미지 추출
     │       ├── ImageExtractorService.java     # 이미지 추출 오케스트레이터 (PDF/PPTX/DOCX)
@@ -160,7 +177,6 @@ rag_java/
     │       ├── OcrService.java                # Tesseract OCR — 스캔 PDF (kor+eng)
     │       ├── EmfToPngConverter.java         # Batik WMFTranscoder→SVG→PNGTranscoder 파이프라인
     │       ├── LibreOfficeConverter.java      # LibreOffice headless WMF→PNG (20s 타임아웃)
-    │       ├── KeywordMetadataEnricher.java   # 청크별 LLM 키워드 추출
     │       ├── ThreadMetaService.java         # 대화 스레드 메타 관리
     │       └── VectorStoreRegistry.java       # 버전별 ChromaVectorStore 관리
     └── resources/
@@ -218,7 +234,9 @@ rag_java/
 - **Critic 검증** — 생성된 답변이 문서에 근거하는지 LLM이 이중 검증
 - **PROGRESSIVE 모드** — COST_FIRST로 시작 → 품질 임계값 미달 시 PREMIUM 프로바이더로 재실행 + 업그레이드 배지 표시
 - **DUAL 모드** — 로컬·외부 LLM 병렬 실행, 두 답변을 탭으로 비교
-- **이미지 처리 파이프라인** — PDF/PPTX/DOCX 이미지 추출 → `data/images/{docId}/` 저장; 검색 시점 Lazy Vision 설명 생성 (SQLite 캐시); 답변 버블에 이미지 썸네일 표시
+- **속도 제한** — Bucket4j + Caffeine 유저별 토큰버킷; 429 `RAG-RATE-001` + `Retry-After` 헤더; `app.rate-limit.*`로 설정
+- **감사 로그** — Logback 롤링 파일에 구조화된 이벤트 기록; `app.audit.*`로 설정
+- **이미지 처리 파이프라인** — PDF/PPTX/DOCX 이미지 추출 → `data/users/{userId}/images/{docId}/` 저장; 검색 시점 Lazy Vision 설명 생성 (SQLite 캐시); 답변 버블에 이미지 썸네일 표시
 - **이미지 유형 분류** — diagram / screenshot / chart / photo / other 분류 후 유형별 전용 Vision 프롬프트 적용
 - **스캔 PDF OCR** — Tesseract OCR (kor+eng)로 텍스트 없는 페이지 처리 (`app.image-description.ocr-enabled=true`)
 - **EMF/WMF 변환** — DOCX Windows Metafile 이미지를 Batik(EMF) 또는 LibreOffice headless(WMF)로 PNG 변환
@@ -228,7 +246,7 @@ rag_java/
 - **코드 syntax highlight** — DOMPurify sanitize 후 highlight.js 적용, 다크 모드 연동
 - **LLM 사용량 대시보드** — 프로바이더별 일간·주간·월간 토큰 사용량, Chart.js 일별 히스토리 차트, Circuit Breaker 카운트다운
 - **문서 버전 관리** — 버전별 Chroma 컬렉션 분리 (`manual_{version}`)
-- **증분 인덱싱** — SHA-256 기반 변경 감지, `doc_registry.json` 영속
+- **증분 인덱싱** — SHA-256 기반 변경 감지, `doc_registry` SQLite 테이블 영속 (유저별)
 - **다양한 문서 형식** — PDF, PPTX, DOCX, TXT, MD
 - **Java 21 Virtual Threads** — LLM I/O 및 병렬 인덱싱 전체에 경량 스레드 적용
 
@@ -247,12 +265,12 @@ rag_java/
 
 | Method | Path | 설명 |
 |--------|------|------|
-| `GET` | `/api/health` | 헬스 체크 |
-| `POST` | `/api/chat` | 질문 → 답변 |
-| `POST` | `/api/documents` | 문서 업로드 + 인덱싱 |
-| `POST` | `/api/documents/sync` | 증분 동기화 |
-| `GET` | `/api/documents` | 인덱싱된 문서 목록 |
-| `DELETE` | `/api/documents/{docId}` | 문서 삭제 |
-| `GET` | `/api/images/{docId}/{filename}` | 추출된 이미지 파일 서빙 |
-| `GET` | `/api/llm/usage` | 프로바이더별 토큰 사용량 + Circuit Breaker 상태 |
-| `GET` | `/api/llm/usage/history` | 일별 토큰 히스토리 (`?days=7\|30\|90`) |
+| `GET` | `/api/v1/health` | 헬스 체크 |
+| `POST` | `/api/v1/chat` | 질문 → 답변 |
+| `POST` | `/api/v1/documents` | 문서 업로드 + 인덱싱 |
+| `POST` | `/api/v1/documents/sync` | 증분 동기화 |
+| `GET` | `/api/v1/documents` | 인덱싱된 문서 목록 |
+| `DELETE` | `/api/v1/documents/{docId}` | 문서 삭제 |
+| `GET` | `/api/v1/images/{docId}/{filename}` | 추출된 이미지 파일 서빙 |
+| `GET` | `/api/v1/llm/usage` | 프로바이더별 토큰 사용량 + Circuit Breaker 상태 |
+| `GET` | `/api/v1/llm/usage/history` | 일별 토큰 히스토리 (`?days=7\|30\|90`) |

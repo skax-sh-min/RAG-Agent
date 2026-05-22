@@ -20,7 +20,7 @@ RAG Agent의 두 가지 핵심 흐름(질의응답, 문서 임포트)을 코드 
 
 ```
 HTTP 요청
-  └─ WebController → AgentService.chat()
+  └─ ChatController → AgentService.chat()
         │
         ├─ [병렬] 대화 히스토리 로드
         │         질문 유형 분류 (LLM ①)
@@ -133,8 +133,8 @@ PROGRESSIVE 모드 AND sufficient=false AND retryCount >= max
 
 | 방식 | 엔드포인트 | 내부 메서드 |
 |------|-----------|-----------|
-| 단일 업로드 | `POST /api/documents` | `RagService.indexDocument()` |
-| 디렉터리 동기화 | `POST /api/documents/sync` | `RagService.syncDirectory()` |
+| 단일 업로드 | `POST /api/v1/documents` | `RagService.indexDocument()` |
+| 디렉터리 동기화 | `POST /api/v1/documents/sync` | `RagService.syncDirectory()` |
 
 ### 단일 파일 인덱싱
 
@@ -169,7 +169,7 @@ PROGRESSIVE 모드 AND sufficient=false AND retryCount >= max
   │
   ├─ ChromaDB 저장 (version별 컬렉션)
   │
-  └─ 레지스트리 저장 (doc_registry.json)
+  └─ 레지스트리 저장 (SQLite doc_registry 테이블 — memory.db 공유)
 ```
 
 ### 디렉터리 동기화 — 3단계

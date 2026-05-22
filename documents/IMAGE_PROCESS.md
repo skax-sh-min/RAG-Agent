@@ -100,13 +100,15 @@
 
 ```
 data/
-└── images/
-    └── {docId}/                     ← 문서 단위 격리
-        ├── p1_img0.png              ← PDF: p{페이지}_{순번}
-        ├── p1_img1.jpeg
-        ├── s3_img0.png              ← PPTX: s{슬라이드}_{순번}
-        ├── d0_img0.png              ← DOCX: d{섹션}_{순번}
-        └── md_img0.png              ← MD: md_{순번} (로컬 경로 복사)
+└── users/
+    └── {userId}/
+        └── images/
+            └── {docId}/                     ← 문서 단위 격리
+                ├── p1_img0.png              ← PDF: p{페이지}_{순번}
+                ├── p1_img1.jpeg
+                ├── s3_img0.png              ← PPTX: s{슬라이드}_{순번}
+                ├── d0_img0.png              ← DOCX: d{섹션}_{순번}
+                └── md_img0.png              ← MD: md_{순번} (로컬 경로 복사)
 ```
 
 파일명 규칙: `{prefix}{pageOrSlide}_img{순번}.{ext}`
@@ -391,32 +393,34 @@ public class OcrService {
 
 ### 7.1 이미지 서빙 엔드포인트
 
-`ApiController`에 구현됨:
+`DocumentController`에 구현됨:
 
 ```java
-// GET /api/images/{docId}/{filename}
-@GetMapping("/api/images/{docId}/{filename}")
+// GET /api/v1/images/{docId}/{filename}
+@GetMapping("/api/v1/images/{docId}/{filename}")
 public ResponseEntity<Resource> getImage(
+        ThreadContext ctx,
         @PathVariable String docId,
         @PathVariable String filename) {
 
-    // Path traversal 방어: docId, filename에 "/" ".." 불허
-    if (docId.contains("/") || docId.contains("..") ||
-        filename.contains("/") || filename.contains("..")) {
+    // Path traversal 방어: docId, filename에 ".." "/" "\" 불허
+    if (docId.contains("..") || docId.contains("/") || docId.contains("\\")
+            || filename.contains("..") || filename.contains("/") || filename.contains("\\")) {
         return ResponseEntity.badRequest().build();
     }
 
-    Path imagePath = Path.of(props.dataDir())
-            .resolve("images").resolve(docId).resolve(filename);
+    Path imgPath = ragService.userDocumentsDir(ctx.userId())
+            .getParent().resolve("images").resolve(docId).resolve(filename);
 
-    if (!Files.exists(imagePath)) return ResponseEntity.notFound().build();
+    if (!Files.exists(imgPath)) return ResponseEntity.notFound().build();
 
-    Resource resource = new FileSystemResource(imagePath);
-    String contentType = URLConnection.guessContentTypeFromName(filename);
+    String contentType = Files.probeContentType(imgPath);
+    if (contentType == null) contentType = "application/octet-stream";
     return ResponseEntity.ok()
-            .contentType(MediaType.parseMediaType(
-                contentType != null ? contentType : "application/octet-stream"))
-            .body(resource);
+            .contentType(MediaType.parseMediaType(contentType))
+            .cacheControl(CacheControl.maxAge(Duration.ofMinutes(5)).cachePrivate())
+            .header("X-Robots-Tag", "noindex, nofollow")
+            .body(new FileSystemResource(imgPath));
 }
 ```
 
@@ -471,12 +475,16 @@ return state
 public record ChatResponse(
     String answer,
     @JsonProperty("question_type") String questionType,
-    List<SourceRef> sources,                              // UI step 18에서 SourceRef로 전환 완료
-    @JsonProperty("image_refs") List<String> imageRefs,   // NEW (미구현 — 본 절 구현 시 추가)
+    List<SourceRef> sources,
+    @JsonProperty("image_refs") List<String> imageRefs,
     @JsonProperty("total_input_tokens") int totalInputTokens,
     @JsonProperty("total_output_tokens") int totalOutputTokens,
     @JsonProperty("llm_call_count") int llmCallCount,
-    @JsonProperty("elapsed_seconds") double elapsedSeconds
+    @JsonProperty("elapsed_seconds") double elapsedSeconds,
+    @JsonProperty("premium_upgraded") String premiumUpgraded,   // PROGRESSIVE: 업그레이드된 PREMIUM provider명
+    @JsonProperty("used_provider") String usedProvider,
+    @JsonProperty("dual_local_answer") String dualLocalAnswer,   // DUAL: LOCAL 모델 답변
+    @JsonProperty("dual_local_provider") String dualLocalProvider
 ) {}
 ```
 
@@ -555,10 +563,10 @@ private void deleteByDocId(String docId, String version) {
 app.image-description.mode=strip
 
 # Vision 파이프라인 활성화 (LazyVisionService, ImageTypeClassifier)
-app.image-description.enabled=false
+app.image-description.enabled=true
 
 # PDF OCR 활성화 (OcrService)
-app.image-description.ocr-enabled=false
+app.image-description.ocr-enabled=true
 
 # Tesseract tessdata 경로 — 미설정 시 TESSDATA_PREFIX 환경변수 또는 시스템 기본 경로 사용
 # app.image-description.tessdata-path=/usr/share/tesseract-ocr/5/tessdata
@@ -569,11 +577,11 @@ app.image-description.min-image-bytes=1000
 # Lazy Vision: true=검색 시점 생성+캐시, false=인덱싱 시점 동기 생성
 app.image-description.lazy=true
 
-# 이미지 유형 분류기 활성화 여부 — Vision 호출이 2회로 증가하므로 기본 비활성
-app.image-description.classify-type=false
+# 이미지 유형 분류기 활성화 여부 — Vision 호출이 2회로 증가
+app.image-description.classify-type=true
 
-# DOCX EMF→PNG 변환 (Batik)
-app.image-description.docx-emf-convert=false
+# DOCX EMF→PNG 변환 (Batik — 추가 설치 불필요)
+app.image-description.docx-emf-convert=true
 
 # DOCX WMF→PNG 변환 (LibreOffice headless 필요)
 app.image-description.docx-wmf-convert=false
@@ -611,13 +619,13 @@ public record AppProperties(
 | 옵션 | 기본값 | 설명 |
 |------|--------|------|
 | `mode` | `strip` | 이미지 참조 처리 방식. `strip`: 이미지 마커 제거(L0). `describe`: Vision 설명 포함(L2). 현재 코드에서 실질적 분기는 `enabled` 플래그가 담당하므로 이 값은 참고용 |
-| `enabled` | `false` | `true`로 설정해야 `LazyVisionService`와 `ImageTypeClassifier` 빈이 등록됨. `false`이면 이미지는 추출·저장되지만 검색 시 Vision 설명이 프롬프트에 합성되지 않음 |
-| `ocr-enabled` | `false` | `true`로 설정해야 `OcrService` 빈이 등록됨. 스캔 PDF 판정(페이지 텍스트 50자 미만) 시 Tesseract OCR로 텍스트를 추출하여 청크에 `source_type=ocr` 태깅. Tesseract(`tesseract-ocr`, `tesseract-ocr-data-kor`)가 시스템에 설치되어 있어야 함 |
+| `enabled` | `true` | `true`이면 `LazyVisionService`와 `ImageTypeClassifier` 빈이 등록됨. `false`이면 이미지는 추출·저장되지만 검색 시 Vision 설명이 프롬프트에 합성되지 않음 |
+| `ocr-enabled` | `true` | `true`이면 `OcrService` 빈이 등록됨. 스캔 PDF 판정(페이지 텍스트 50자 미만) 시 Tesseract OCR로 텍스트를 추출하여 청크에 `source_type=ocr` 태깅. Tesseract(`tesseract-ocr`, `tesseract-ocr-data-kor`)가 시스템에 설치되어 있어야 함 |
 | `tessdata-path` | _(없음)_ | Tesseract tessdata 디렉터리 절대 경로. 미설정 시 `TESSDATA_PREFIX` 환경변수 → 시스템 기본 경로(`/usr/share/tesseract-ocr/…`) 순으로 탐색. Docker 이미지에서는 `apk add tesseract-ocr-data-kor` 설치 후 미설정해도 동작 |
 | `min-image-bytes` | `1000` | 이 크기(bytes) 미만 이미지는 아이콘·구분선으로 간주하여 L0(무시) 처리. Vision 호출 낭비 방지. 값을 높이면 더 많은 이미지가 무시되고, `0`으로 설정하면 모든 이미지를 처리 |
 | `lazy` | `true` | `true`: 검색 시점에 Vision 설명 생성(Lazy Vision, 12절). 인덱싱 시 LLM 호출 없이 이미지만 저장, 첫 검색 시 캐시 미스 이미지만 Vision 호출 후 SQLite 캐시. `false`: 인덱싱 시점에 모든 이미지를 즉시 Vision으로 설명(동기 L2). 대량 문서 인덱싱 시 LLM 호출이 폭주하므로 기본 `true` 유지 권장 |
-| `classify-type` | `false` | `true`: 이미지를 Vision으로 먼저 분류(`diagram`·`screenshot`·`chart`·`photo`·`other`) 후 유형별 전용 프롬프트로 설명 생성(13절). 이미지당 LLM 호출이 2회로 증가하므로 기본 `false`. 설명 품질보다 비용이 중요한 환경에서는 비활성 유지 |
-| `docx-emf-convert` | `false` | `true`: DOCX 내 EMF(Enhanced Metafile) 이미지를 Apache Batik으로 PNG 변환 후 저장. 변환 실패 시 원본 `.emf` 보존. Batik 의존성은 `pom.xml`에 이미 포함되어 있어 별도 설치 불필요 |
+| `classify-type` | `true` | `true`: 이미지를 Vision으로 먼저 분류(`diagram`·`screenshot`·`chart`·`photo`·`other`) 후 유형별 전용 프롬프트로 설명 생성(13절). 이미지당 LLM 호출이 2회로 증가. 비용 절감 시 `false`로 설정 |
+| `docx-emf-convert` | `true` | `true`: DOCX 내 EMF(Enhanced Metafile) 이미지를 Apache Batik으로 PNG 변환 후 저장. 변환 실패 시 원본 `.emf` 보존. Batik 의존성은 `pom.xml`에 이미 포함되어 있어 별도 설치 불필요 |
 | `docx-wmf-convert` | `false` | `true`: DOCX 내 WMF(Windows Metafile) 이미지를 LibreOffice headless로 PNG 변환(14절). `soffice` 명령이 PATH에 있어야 하며 변환 타임아웃은 20s. LibreOffice 미설치 환경에서는 `false`로 유지하면 WMF 원본만 저장되고 Vision 설명은 건너뜀 |
 
 ### 9.2 권장 설정 시나리오

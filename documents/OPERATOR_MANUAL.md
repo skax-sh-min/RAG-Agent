@@ -74,11 +74,14 @@ rag_java/
 │   └── hooks/
 │       └── pre-commit          # .env 우발 커밋 방지
 ├── data/                       # 런타임 생성 (DATA_DIR)
-│   ├── documents/              # 업로드된 문서 원본 (Sync 대상)
-│   ├── images/                 # 추출된 이미지 ({docId}/ 하위)
-│   ├── converted/              # DOCX → Markdown 변환 결과 ({docId}.md 원본, {docId}_corrected.md 교정본)
-│   ├── doc_registry.json       # 인덱싱 레지스트리 (SHA-256 기반)
-│   └── memory.db               # 대화 이력 + LLM 사용량 (SQLite WAL)
+│   ├── users/
+│   │   └── {userId}/           # 사용자별 격리 (userId = UUID)
+│   │       ├── documents/      # 업로드된 문서 원본 (Sync 대상)
+│   │       ├── images/         # 추출된 이미지 ({docId}/ 하위)
+│   │       └── converted/      # DOCX → Markdown 변환 결과 ({docId}.md 원본, {docId}_corrected.md 교정본)
+│   ├── chroma/                 # ChromaDB 벡터 데이터 (로컬 실행 시)
+│   ├── audit/                  # 감사 로그 (audit.log + 롤링 압축본)
+│   └── memory.db               # 대화 이력 + LLM 사용량 + 인덱스 레지스트리 (SQLite WAL)
 └── src/main/
     ├── java/com/example/ragagent/
     │   ├── agent/              # AgentGraph (상태 머신), AgentState (불변 레코드)
@@ -213,8 +216,8 @@ LOCAL_LLM_KEY=                     # 비워서 LOCAL providers[0] 비활성화
 | `app.image-description.classify-type` | `true` | 이미지 설명 전 유형(사진/도표/스크린샷 등) 분류 여부. 분류 결과를 프롬프트에 주입 |
 | `app.image-description.ocr-enabled` | `true` | 스캔 PDF 페이지에 대해 OCR 처리 활성화 여부 |
 | `app.image-description.min-image-bytes` | `1000` | 이 크기 미만의 이미지는 아이콘·구분선으로 간주하고 설명 생성 건너뜀 (바이트) |
-| `app.image-description.docx-emf-convert` | `true` | DOCX 내 EMF 벡터 이미지를 PNG로 변환 (LibreOffice `soffice` 필요) |
-| `app.image-description.docx-wmf-convert` | `false` | DOCX 내 WMF 벡터 이미지를 PNG로 변환 (EMF보다 변환 품질이 낮아 기본 비활성) |
+| `app.image-description.docx-emf-convert` | `true` | DOCX 내 EMF 벡터 이미지를 PNG로 변환 (Apache Batik — 추가 설치 불필요) |
+| `app.image-description.docx-wmf-convert` | `false` | DOCX 내 WMF 벡터 이미지를 PNG로 변환 (LibreOffice headless 필요 — EMF보다 변환 품질이 낮아 기본 비활성) |
 
 > **`mode=describe` 전제 조건**: `enabled=true` + Vision 모델 프로바이더 등록 (`type=VISION` 또는 `type=LIGHT_BOTH`).  
 > 프로바이더가 없으면 `strip`으로 자동 fallback됩니다.
@@ -234,6 +237,32 @@ LOCAL_LLM_KEY=                     # 비워서 LOCAL providers[0] 비활성화
 |------|--------|------|
 | `spring.servlet.multipart.max-file-size` | `200MB` | 단일 파일 최대 크기. 초과 시 413 응답 |
 | `spring.servlet.multipart.max-request-size` | `200MB` | 멀티파트 요청 전체 최대 크기 |
+
+#### Rate Limiting (`app.rate-limit.*`)
+
+애플리케이션 레벨 Rate Limiter (Bucket4j + Caffeine). 사용자 인증 시 userId, 미인증 시 IP 기준으로 버킷 분리.
+
+| 속성 | 기본값 | 설명 |
+|------|--------|------|
+| `app.rate-limit.enabled` | `true` | `false`로 설정하면 전체 비활성화 |
+| `app.rate-limit.chat-per-minute` | `60` | `/chat` 경로 — 분당 요청 수 |
+| `app.rate-limit.upload-per-minute` | `10` | `/documents` (업로드) 경로 — 분당 요청 수 |
+| `app.rate-limit.sync-per-minute` | `2` | `/documents/sync` 경로 — 분당 요청 수 |
+| `app.rate-limit.image-per-minute` | `300` | `/images/` 경로 — 분당 요청 수 |
+| `app.rate-limit.default-per-minute` | `120` | 그 외 경로 기본값 |
+
+초과 시 429 응답 + `Retry-After: {초}` 헤더 + `{"errorCode":"RAG-RATE-001","message":"..."}` body.
+
+#### 감사 로그 (`app.audit.*`)
+
+민감 작업(문서 업로드·삭제·동기화, 스레드 삭제 등)을 `data/audit/audit.log`에 JSON Lines 형식으로 기록.
+
+| 속성 | 기본값 | 설명 |
+|------|--------|------|
+| `app.audit.enabled` | `true` | `false`로 설정하면 감사 로그 미기록 |
+| `app.audit.max-file-size` | `10MB` | 롤링 전 최대 파일 크기 (Logback SizeAndTimeBasedRolling) |
+| `app.audit.max-history-days` | `7` | 압축 파일 보관 일수. 초과된 파일 자동 삭제 |
+| `app.audit.total-size-cap` | `100MB` | `data/audit/` 디렉터리 전체 상한. 초과 시 오래된 파일 삭제 |
 
 #### 인증 (`app.auth.*`)
 
@@ -358,7 +387,7 @@ mvn spring-boot:run
 ### 4.3 접속 확인
 
 - **Web UI**: `http://localhost:8080`
-- **API 헬스 체크**: `http://localhost:8080/api/health` → `{"status":"ok",...}`
+- **API 헬스 체크**: `http://localhost:8080/api/v1/health` → `{"status":"ok",...}`
 
 ---
 
@@ -902,11 +931,11 @@ COST_FIRST 흐름:
 
 ```bash
 # 버전 1.0으로 업로드
-curl -X POST http://localhost:8080/api/documents \
+curl -X POST http://localhost:8080/api/v1/documents \
   -F "file=@v1.0-manual.pdf" -F "version=1.0"
 
 # 버전 1.0 문서로 검색
-curl -X POST http://localhost:8080/api/chat \
+curl -X POST http://localhost:8080/api/v1/chat \
   -H "Content-Type: application/json" \
   -d '{"question": "...", "version": "1.0"}'
 ```
@@ -920,13 +949,14 @@ curl -X POST http://localhost:8080/api/chat \
 
 | 데이터 | 저장 위치 | 비고 |
 |--------|----------|------|
-| 문서 원본 | `DATA_DIR/documents/` | Sync 대상 |
-| 추출된 이미지 | `DATA_DIR/images/{docId}/` | 문서 삭제 시 함께 삭제 |
-| DOCX 변환 MD (원본) | `DATA_DIR/converted/{docId}.md` | DOCX 인덱싱 시 자동 생성; 문서 삭제 시 함께 삭제 |
-| DOCX 변환 MD (교정본) | `DATA_DIR/converted/{docId}_corrected.md` | LLM 포맷 교정 후 저장; 실제 인덱싱 소스; 수동 편집 후 Admin ↺ 재인덱싱 가능 |
-| 인덱스 레지스트리 | `DATA_DIR/doc_registry.json` | SHA-256 변경 감지 기준 |
+| 문서 원본 | `DATA_DIR/users/{userId}/documents/` | Sync 대상 |
+| 추출된 이미지 | `DATA_DIR/users/{userId}/images/{docId}/` | 문서 삭제 시 함께 삭제 |
+| DOCX 변환 MD (원본) | `DATA_DIR/users/{userId}/converted/{docId}.md` | DOCX 인덱싱 시 자동 생성; 문서 삭제 시 함께 삭제 |
+| DOCX 변환 MD (교정본) | `DATA_DIR/users/{userId}/converted/{docId}_corrected.md` | LLM 포맷 교정 후 저장; 실제 인덱싱 소스; 수동 편집 후 Admin ↺ 재인덱싱 가능 |
+| 인덱스 레지스트리 | `DATA_DIR/memory.db` (SQLite `doc_registry` 테이블) | userId·SHA-256 기반 변경 감지 |
 | 벡터 임베딩 | Chroma 서버 | 로컬: `data/chroma/`, Docker Compose: `chroma_data` 볼륨 |
 | 대화 이력 + LLM 사용량 | `DATA_DIR/memory.db` (SQLite) | WAL 모드; 메시지 메타데이터(토큰·시간·프로바이더) 포함 |
+| 감사 로그 | `DATA_DIR/audit/audit.log` | JSON Lines; 롤링 압축본 `audit.YYYY-MM-DD.N.log.gz` 포함 |
 
 > Docker Compose 사용 시 `./data` 디렉터리를 컨테이너에 바인드 마운트합니다.  
 > 데이터 백업 시 `data/` 디렉터리와 Chroma 볼륨을 함께 보존하세요.
@@ -973,7 +1003,7 @@ no-auth 모드(`false`)에서는 `/admin/**` 경로에 자동으로 관리자 �
 
 - **임베딩 미갱신 (청크 편집)**: 청크 텍스트를 편집 패널에서 수정해도 벡터 임베딩은 재계산되지 않습니다. 임베딩까지 갱신하려면 MD 파일 수정 후 ↺ 재인덱싱을 사용하세요.
 - **MD 재인덱싱 대상**: DOCX 업로드 시 생성된 `_corrected.md` 파일이 없으면 `{docId}.md` 원본으로 fallback됩니다. PDF·PPTX·TXT 등 MD 파일이 없는 문서는 재인덱싱 불가 (에러 메시지 표시).
-- **청크 단독 삭제 vs. 문서 삭제**: 청크를 개별 삭제해도 `doc_registry.json`의 레지스트리 항목은 남습니다. 문서 전체 제거는 Documents 페이지 또는 `DELETE /api/documents/{docId}`를 사용하세요.
+- **청크 단독 삭제 vs. 문서 삭제**: 청크를 개별 삭제해도 SQLite `doc_registry` 테이블의 레지스트리 항목은 남습니다. 문서 전체 제거는 Documents 페이지 또는 `DELETE /api/v1/documents/{docId}`를 사용하세요.
 - **접근 제어**: `app.auth.enabled=true`(기본)이면 `/admin`도 로그인 필요. no-auth 모드에서는 누구나 `/admin`에 접근 가능하므로 내부망 또는 리버스 프록시 수준에서 경로를 제한하는 것을 권장합니다.
 
 ---
@@ -985,6 +1015,9 @@ no-auth 모드(`false`)에서는 `/admin/**` 경로에 자동으로 관리자 �
 ```bash
 # 시작 로그 확인
 mvn spring-boot:run 2>&1 | head -80
+
+# 헬스 체크
+curl http://localhost:8080/api/v1/health
 
 # Chroma 연결 확인
 curl http://localhost:8001/api/v1/heartbeat
@@ -1182,8 +1215,9 @@ sh scripts/install-hooks.sh
 | 항목 | 제한 | 응답 |
 |------|------|------|
 | 질문 길이 | 최대 2,000자 | 400 Bad Request |
-| 파일 업로드 크기 | 최대 100 MB (기본) | 413 Payload Too Large |
+| 파일 업로드 크기 | 최대 200 MB (기본) | 413 Payload Too Large |
 | 파일 형식 불일치 (매직바이트) | 확장자와 실제 내용이 다른 경우 | 422 Unprocessable Entity |
+| API 요청 빈도 | 경로별 분당 제한 (§3.3 참고) | 429 Too Many Requests |
 
 업로드 허용 형식과 매직바이트 매핑:
 
@@ -1254,7 +1288,7 @@ app.auth.enabled=false
 - [ ] (Cloudflare Tunnel) 대시보드 Public Hostname → `http://app:8080` 라우팅 설정 확인
 
 **기본 동작**:
-- [ ] `GET /api/health` → `{"status":"ok"}` 응답
+- [ ] `GET /api/v1/health` → `{"status":"ok"}` 응답
 - [ ] Web UI `http://localhost:8080` 접속 확인
 - [ ] 샘플 문서 1개 업로드 성공
 - [ ] 문서 목록에 업로드 문서 표시 확인

@@ -150,7 +150,7 @@ Navbar 우측 상단 **KO | EN** 링크를 클릭하면 즉시 언어가 전환�
 | **목록 새로고침** | **Refresh** 버튼 |
 | **문서 삭제** | 행 우측 **Delete** 버튼 |
 
-**지원 형식**: PDF, PPTX, DOCX, TXT, MD / 최대 100 MB
+**지원 형식**: PDF, PPTX, DOCX, TXT, MD / 최대 200 MB
 
 업로드 시 참고 사항:
 - 같은 파일을 다시 올리면 SHA-256 기반 변경 감지로 변경된 경우에만 재인덱싱
@@ -210,7 +210,7 @@ Navbar 우측 상단 **KO | EN** 링크를 클릭하면 즉시 언어가 전환�
 ### 3.1 헬스 체크
 
 ```bash
-curl http://localhost:8080/api/health
+curl http://localhost:8080/api/v1/health
 # {"status":"ok","service":"rag-agent","timestamp":"..."}
 ```
 
@@ -221,7 +221,7 @@ curl http://localhost:8080/api/health
 지원 형식: **PDF, PPTX, DOCX, TXT, MD**
 
 ```bash
-curl -X POST http://localhost:8080/api/documents \
+curl -X POST http://localhost:8080/api/v1/documents \
   -F "file=@/path/to/manual.pdf" \
   -F "version=latest"
 ```
@@ -246,7 +246,7 @@ curl -X POST http://localhost:8080/api/documents \
 `data/documents/` 폴더를 스캔해 신규·변경·삭제 파일을 자동 처리합니다.
 
 ```bash
-curl -X POST "http://localhost:8080/api/documents/sync?version=latest"
+curl -X POST "http://localhost:8080/api/v1/documents/sync?version=latest"
 ```
 
 응답:
@@ -263,7 +263,7 @@ curl -X POST "http://localhost:8080/api/documents/sync?version=latest"
 ### 3.4 문서 목록 조회
 
 ```bash
-curl http://localhost:8080/api/documents
+curl http://localhost:8080/api/v1/documents
 ```
 
 ---
@@ -271,8 +271,8 @@ curl http://localhost:8080/api/documents
 ### 3.5 문서 삭제
 
 ```bash
-curl -X DELETE "http://localhost:8080/api/documents/manual.pdf_a1b2c3d4?version=latest"
-# 응답: 200 OK
+curl -X DELETE "http://localhost:8080/api/v1/documents/manual.pdf_a1b2c3d4?version=latest"
+# 응답: 204 No Content
 ```
 
 ---
@@ -280,7 +280,7 @@ curl -X DELETE "http://localhost:8080/api/documents/manual.pdf_a1b2c3d4?version=
 ### 3.6 질의응답 (채팅)
 
 ```bash
-curl -X POST http://localhost:8080/api/chat \
+curl -X POST http://localhost:8080/api/v1/chat \
   -H "Content-Type: application/json" \
   -d '{
     "question": "Spring Security에서 JWT 인증을 어떻게 설정하나요?",
@@ -333,7 +333,7 @@ curl -X POST http://localhost:8080/api/chat \
 
 ```bash
 # 일간·주간·월간 집계 + Circuit Breaker 상태
-curl http://localhost:8080/api/llm/usage
+curl http://localhost:8080/api/v1/llm/usage
 ```
 
 응답:
@@ -353,7 +353,7 @@ curl http://localhost:8080/api/llm/usage
 
 ```bash
 # 일별 히스토리 (days=7|30|90)
-curl "http://localhost:8080/api/llm/usage/history?days=30"
+curl "http://localhost:8080/api/v1/llm/usage/history?days=30"
 ```
 
 ---
@@ -408,10 +408,10 @@ MD 재인덱싱 (/admin ↺ 버튼)
 
 ```bash
 # 인덱싱된 문서 확인
-curl http://localhost:8080/api/documents
+curl http://localhost:8080/api/v1/documents
 
 # 폴더 동기화 실행
-curl -X POST "http://localhost:8080/api/documents/sync?version=latest"
+curl -X POST "http://localhost:8080/api/v1/documents/sync?version=latest"
 ```
 
 - 문서 미업로드 → `/documents` 페이지 또는 API로 업로드
@@ -443,7 +443,7 @@ curl -X POST "http://localhost:8080/api/documents/sync?version=latest"
 ### 연결 오류 / 서비스 미응답
 
 ```bash
-curl http://localhost:8080/api/health
+curl http://localhost:8080/api/v1/health
 ```
 
 응답이 없으면 운영자에게 서비스 상태를 확인 요청하세요.
@@ -454,11 +454,11 @@ curl http://localhost:8080/api/health
 
 서비스 첫 사용 시 순서대로 확인하세요.
 
-- [ ] `GET /api/health` → `{"status":"ok"}` 응답 확인
+- [ ] `GET /api/v1/health` → `{"status":"ok"}` 응답 확인
 - [ ] `http://localhost:8080` 접속 확인
   - 인증 모드: `/login` 페이지로 리디렉션 → 로그인 또는 `/signup` 계정 생성
   - 비인증 모드 + 첫 실행: `/setup` 페이지로 리디렉션 → 관리자 계정 생성
-- [ ] 샘플 문서 1개 업로드 성공 (`/documents` 또는 `POST /api/documents`)
+- [ ] 샘플 문서 1개 업로드 성공 (`/documents` 또는 `POST /api/v1/documents`)
 - [ ] 문서 목록에 업로드 문서 표시 확인
 - [ ] 업로드 문서 관련 질문 응답 성공 + Sources 포함 확인
 - [ ] 후속 질문 시 이전 맥락 반영 확인 (멀티턴)

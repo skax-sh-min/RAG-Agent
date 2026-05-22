@@ -59,14 +59,15 @@ src/main/resources/
 | PATCH | `/ui/threads/{threadId}/routing-mode` | `204` | 대화별 라우팅 모드 저장 |
 | DELETE | `/ui/threads/{threadId}` | `200` | 대화 삭제 |
 | GET | `/ui/threads` | `fragments/thread-list` | 대화 목록 새로고침 |
-| POST | `/ui/documents/upload` | JSON (`DocumentInfo`) | 파일 업로드 |
-| POST | `/ui/documents/sync` | `fragments/sync-result` | 폴더 동기화 |
+| POST | `/ui/documents/upload` | 202 `{"taskId":"..."}` | 파일 업로드 수신 → 비동기 인덱싱 시작 |
+| GET | `/ui/documents/progress/{taskId}` | `text/event-stream` (SSE) | 인덱싱 진행 이벤트 (`stage`, `done`, `error`) |
+| POST | `/ui/documents/sync` | 202 `{"taskId":"..."}` | 폴더 동기화 비동기 시작 |
 | DELETE | `/ui/documents/{docId}` | `200` | 문서 삭제 |
 | GET | `/ui/documents/list` | `fragments/doc-table-body` | 문서 목록 새로고침 |
 | GET | `/llm-usage` | `llm-usage.html` | LLM 사용량 페이지 |
 | GET | `/ui/llm-usage/cards` | `fragments/llm-usage-cards` | 카드 HTMX 자동 갱신 |
 
-REST API (`ApiController`): `GET /api/llm/usage`, `GET /api/llm/usage/history?days=N`
+REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N`
 
 ---
 
@@ -131,8 +132,9 @@ PROGRESSIVE 업그레이드 시 `🔝 고추론 재분석 → {premiumProvider}`
 
 [대화 목록]  항목 클릭 → GET /chat/{threadId} → 전체 페이지 전환
 
-[파일 업로드] Fetch API + XHR onprogress → 파일별 상태 표시
-              → 업로드 완료 후 인덱싱 중 → 완료 시 목록 자동 새로고침
+[파일 업로드] Fetch API → POST /ui/documents/upload → 202 {taskId}
+              → GET /ui/documents/progress/{taskId} SSE 구독
+              → progress 이벤트로 파일별 상태 갱신 → done/error 이벤트 후 목록 자동 새로고침
 
 [동기화]     hx-post="/ui/documents/sync" → fragments/sync-result → 토스트
 [문서 삭제]  hx-delete → hx-swap="outerHTML swap:0.3s" (페이드아웃)

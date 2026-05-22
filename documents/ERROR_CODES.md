@@ -11,6 +11,7 @@
 | RAG-INDEX-001 | 500 | `DocumentIndexingException` | 인덱싱 실패 (SHA-256 연산, 청크 저장 등) |
 | RAG-VEC-001 | 503 | `VectorStoreException` | Vector Store 호출 실패 |
 | RAG-LLM-001 | 503 | `LlmProviderExhaustedException` | 모든 LLM 프로바이더 차단 또는 소진 |
+| RAG-RATE-001 | 429 | (RateLimitFilter) | API 요청 빈도 제한 초과 — `Retry-After` 헤더(초)에 대기 시간 포함 |
 | RAG-INT-001 | 500 | (미분류 Exception) | 내부 알 수 없는 오류 |
 
 ## 응답 예시
