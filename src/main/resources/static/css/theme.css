@@ -26,6 +26,44 @@
     --thread-hover:   #1c2128;
     --thread-active:  #1a2233;
     --dropzone-hover: #1a2233;
+
+    /* Bootstrap CSS variable bridge — lets Bootstrap built-in components
+       (bg-body, bg-body-tertiary, offcanvas, modal, popover, form-text …)
+       auto-adapt without extra class overrides. */
+    --bs-body-bg:             #0d1117;
+    --bs-body-bg-rgb:         13, 17, 23;
+    --bs-body-color:          #e6edf3;
+    --bs-body-color-rgb:      230, 237, 243;
+    --bs-secondary-bg:        #161b22;
+    --bs-secondary-bg-rgb:    22, 27, 34;
+    --bs-tertiary-bg:         #1e242c;
+    --bs-tertiary-bg-rgb:     30, 36, 44;
+    --bs-border-color:        #30363d;
+    --bs-secondary-color:     #8b949e;
+    --bs-tertiary-color:      #6e7681;
+    --bs-emphasis-color:      #ffffff;
+    --bs-link-color:          #58a6ff;
+    --bs-link-hover-color:    #79b8ff;
+    --bs-code-color:          #d2a8ff;
+    --bs-heading-color:       inherit;
+    /* Component-level Bootstrap vars */
+    --bs-offcanvas-bg:        #161b22;
+    --bs-offcanvas-color:     #e6edf3;
+    --bs-modal-bg:            #161b22;
+    --bs-modal-color:         #e6edf3;
+    --bs-popover-bg:          #161b22;
+    --bs-popover-body-color:  #e6edf3;
+    --bs-popover-header-bg:   #0d1117;
+    --bs-popover-header-color: #e6edf3;
+    --bs-popover-border-color: #30363d;
+    --bs-tooltip-bg:          #e6edf3;
+    --bs-tooltip-color:       #0d1117;
+    --bs-card-bg:             #161b22;
+    --bs-card-color:          #e6edf3;
+    --bs-card-border-color:   #30363d;
+    /* Tell the browser to render native controls (scrollbar, select popup,
+       date picker) in dark mode. */
+    color-scheme: dark;
 }
 
 /* ── Base ─────────────────────────────────────────────────────────────── */
@@ -141,3 +179,93 @@ body { background: var(--bg-page); color: var(--fg-primary); }
 
 /* Markdown link color */
 [data-theme="dark"] .md-content a { color: #58a6ff; }
+
+/* ── Progress bar ─────────────────────────────────────────────────────── */
+[data-theme="dark"] .progress { background-color: var(--border-default); }
+
+/* ── Close button (network banner, offcanvas, modal) ─────────────────── */
+[data-theme="dark"] .btn-close { filter: invert(1) grayscale(100%); }
+
+/* ── Additional alert variants ───────────────────────────────────────── */
+[data-theme="dark"] .alert-success {
+    background-color: #1a3a2a;
+    border-color:     #256040;
+    color:            var(--fg-primary);
+}
+[data-theme="dark"] .alert-warning {
+    background-color: #3a2c00;
+    border-color:     #5c4500;
+    color:            var(--fg-primary);
+}
+[data-theme="dark"] .alert-secondary {
+    background-color: #21262d;
+    border-color:     var(--border-default);
+    color:            var(--fg-primary);
+}
+
+/* ── Offcanvas (explicit fallback — some Bootstrap 5.x versions hardcode bg) */
+[data-theme="dark"] .offcanvas,
+[data-theme="dark"] .offcanvas-start,
+[data-theme="dark"] .offcanvas-end,
+[data-theme="dark"] .offcanvas-top,
+[data-theme="dark"] .offcanvas-bottom {
+    background-color: var(--bg-elevated);
+    color:            var(--fg-primary);
+}
+[data-theme="dark"] .offcanvas-header { border-bottom-color: var(--border-default); }
+[data-theme="dark"] .offcanvas-footer { border-top-color:    var(--border-default); }
+
+/* ── Modal (explicit fallback) ───────────────────────────────────────── */
+[data-theme="dark"] .modal-content {
+    background-color: var(--bg-elevated);
+    color:            var(--fg-primary);
+    border-color:     var(--border-default);
+}
+[data-theme="dark"] .modal-header,
+[data-theme="dark"] .modal-footer { border-color: var(--border-default); }
+
+/* ── Popover ──────────────────────────────────────────────────────────── */
+[data-theme="dark"] .popover {
+    background-color: var(--bg-elevated);
+    border-color:     var(--border-default);
+}
+[data-theme="dark"] .popover-header {
+    background-color: var(--bg-page);
+    border-bottom-color: var(--border-default);
+    color:            var(--fg-primary);
+}
+[data-theme="dark"] .popover-body { color: var(--fg-primary); }
+
+/* ── Badge text-color guard on light-background badges ───────────────── */
+/* Bootstrap idiom: bg-warning/bg-info always pair with text-dark for contrast.
+   Our .text-dark override must not apply here. */
+[data-theme="dark"] .badge.bg-warning,
+[data-theme="dark"] .badge.bg-warning.text-dark,
+[data-theme="dark"] .badge.bg-info.text-dark,
+[data-theme="dark"] .badge.bg-light.text-dark { color: #212529 !important; }
+
+/* ── card-footer ─────────────────────────────────────────────────────── */
+[data-theme="dark"] .card-footer {
+    background-color: var(--bg-page);
+    border-top-color: var(--border-default);
+    color:            var(--fg-muted);
+}
+
+/* ── table-warning row (document error rows) ─────────────────────────── */
+[data-theme="dark"] .table-warning {
+    --bs-table-bg:           #3a2c00;
+    --bs-table-color:        var(--fg-primary);
+    --bs-table-border-color: #5c4500;
+}
+
+/* ── Form switch — unchecked slider dot invisible on dark bg ─────────── */
+/* Bootstrap 5.3 uses rgba(0,0,0,0.25) circle which vanishes on dark bg. */
+[data-theme="dark"] .form-switch .form-check-input:not(:checked):not(:focus) {
+    --bs-form-switch-bg: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='-4 -4 8 8'%3e%3ccircle r='3' fill='rgba%28255%2c255%2c255%2c0.25%29'/%3e%3c/svg%3e");
+}
+
+/* ── input-group-text.bg-body (RAG/Direct toggle strip in chat) ──────── */
+/* Without this, bg-body would be #0d1117 (page) vs form-control #161b22. */
+[data-theme="dark"] .input-group-text.bg-body {
+    background-color: var(--bg-elevated) !important;
+}
