@@ -15,6 +15,16 @@
         <span class="badge bg-warning text-dark ms-2 small">Admin</span>
     </div>
 
+    <!-- ChromaDB unavailable banner -->
+    <div th:if="${!chromaAvailable}"
+         class="alert alert-warning d-flex align-items-center gap-2 mb-4" role="alert">
+        <i class="bi bi-exclamation-triangle-fill flex-shrink-0"></i>
+        <div>
+            ChromaDB에 연결할 수 없습니다.
+            <code>docker-compose up chroma</code> 를 실행했는지 확인하세요.
+        </div>
+    </div>
+
     <div class="row g-4">
 
         <!-- ── Left: Collections ──────────────────────────────────────── -->

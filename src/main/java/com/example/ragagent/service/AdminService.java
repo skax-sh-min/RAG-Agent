@@ -43,13 +43,18 @@ public class AdminService {
         public String keywords()  { return metadata.getOrDefault("excerpt_keywords", ""); }
     }
 
+    // ── DTOs (public) ─────────────────────────────────────────────────────────
+
+    /** Wraps listCollections result with a ChromaDB availability flag. */
+    public record CollectionsResult(List<CollectionSummary> items, boolean available) {}
+
     // ── Public API ────────────────────────────────────────────────────────────
 
-    public List<CollectionSummary> listCollections() {
+    public CollectionsResult listCollections() {
         try {
             List<Collection> cols = chromaApi.listCollections(TENANT, DATABASE);
-            if (cols == null) return List.of();
-            return cols.stream().map(col -> {
+            if (cols == null) return new CollectionsResult(List.of(), true);
+            List<CollectionSummary> items = cols.stream().map(col -> {
                 long count = 0;
                 try { Long c = chromaApi.countEmbeddings(TENANT, DATABASE, col.name()); count = c != null ? c : 0; }
                 catch (Exception e) { log.warn("Count failed for {}: {}", col.name(), e.getMessage()); }
@@ -57,9 +62,10 @@ public class AdminService {
                         ? col.name().substring("manual_".length()) : col.name();
                 return new CollectionSummary(col.id(), col.name(), version, count);
             }).toList();
+            return new CollectionsResult(items, true);
         } catch (Exception e) {
             log.error("listCollections failed: {}", e.getMessage());
-            return List.of();
+            return new CollectionsResult(List.of(), false);
         }
     }
 

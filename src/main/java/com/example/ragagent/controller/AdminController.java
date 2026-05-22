@@ -28,8 +28,10 @@ public class AdminController {
 
     @GetMapping("/admin")
     public String adminPage(ThreadContext ctx, Model model) {
-        model.addAttribute("collections", adminService.listCollections());
-        model.addAttribute("documents",   ragService.listDocuments(ctx.userId()));
+        var result = adminService.listCollections();
+        model.addAttribute("collections",     result.items());
+        model.addAttribute("chromaAvailable", result.available());
+        model.addAttribute("documents",       ragService.listDocuments(ctx.userId()));
         return "admin";
     }
 

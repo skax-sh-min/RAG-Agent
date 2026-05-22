@@ -63,8 +63,8 @@ public class GlobalExceptionHandler {
 
     @ResponseStatus(HttpStatus.SERVICE_UNAVAILABLE)
     @ExceptionHandler(AsyncRequestTimeoutException.class)
-    public void handleAsyncTimeout() {
-        log.warn("[TIMEOUT:ASYNC_MVC] Async request timed out");
+    public void handleAsyncTimeout(HttpServletRequest req) {
+        log.info("[TIMEOUT:ASYNC_MVC] {} {}", req.getMethod(), req.getRequestURI());
     }
 
     @ExceptionHandler(NoResourceFoundException.class)
