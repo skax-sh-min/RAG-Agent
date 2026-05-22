@@ -256,7 +256,9 @@
 
     function subscribeIndexingProgress(taskId, onStage, resolve, reject) {
         const sse = new EventSource(`/ui/documents/progress/${taskId}`);
+        let retryCount = 0;
         sse.addEventListener('progress', e => {
+            retryCount = 0;
             const evt = JSON.parse(e.data);
             onStage(evt);
             if (evt.stage === 'done') {
@@ -268,8 +270,11 @@
             }
         });
         sse.onerror = () => {
-            sse.close();
-            reject(new Error('SSE 연결 실패'));
+            retryCount++;
+            if (retryCount > 5) {
+                sse.close();
+                reject(new Error('SSE 연결 실패 (재시도 초과)'));
+            }
         };
     }
 
@@ -351,7 +356,9 @@
 
             await new Promise((resolve, reject) => {
                 const sse = new EventSource(`/ui/documents/progress/${taskId}`);
+                let retryCount = 0;
                 sse.addEventListener('progress', e => {
+                    retryCount = 0;
                     const evt = JSON.parse(e.data);
 
                     if (evt.stage === 'sync_start') {
@@ -382,7 +389,13 @@
                         reject(new Error(evt.message || '동기화 오류'));
                     }
                 });
-                sse.onerror = () => { sse.close(); reject(new Error('SSE 연결 실패')); };
+                sse.onerror = () => {
+                    retryCount++;
+                    if (retryCount > 5) {
+                        sse.close();
+                        reject(new Error('SSE 연결 실패 (재시도 초과)'));
+                    }
+                };
             });
         } catch (err) {
             showToast(`동기화 실패: ${escHtml(err.message)}`, 'danger');

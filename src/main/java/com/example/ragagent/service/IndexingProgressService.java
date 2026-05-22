@@ -61,9 +61,15 @@ public class IndexingProgressService {
         }
 
         emitters.put(taskId, emitter);
-        emitter.onCompletion(() -> emitters.remove(taskId));
-        emitter.onTimeout(() -> emitters.remove(taskId));
-        emitter.onError(e -> emitters.remove(taskId));
+
+        java.util.concurrent.ScheduledFuture<?> hb = cleaner.scheduleAtFixedRate(() -> {
+            try { emitter.send(SseEmitter.event().name("ping").data("")); }
+            catch (Exception ignored) {}
+        }, 25, 25, TimeUnit.SECONDS);
+
+        emitter.onCompletion(() -> { hb.cancel(false); emitters.remove(taskId); });
+        emitter.onTimeout(   () -> { hb.cancel(false); emitters.remove(taskId); });
+        emitter.onError(e   -> { hb.cancel(false); emitters.remove(taskId); });
         return emitter;
     }
 
