@@ -35,7 +35,11 @@
          th:if="${#lists.size(chunks) > 0 or offset > 0}">
         <button class="btn btn-sm btn-outline-secondary py-0 px-2"
                 th:disabled="${offset == 0}"
-                th:onclick="|loadChunks('${collection}', '${docId}', ${offset - limit}, ${limit})|">
+                th:data-collection="${collection}"
+                th:data-doc-id="${docId}"
+                th:data-offset="${offset - limit}"
+                th:data-limit="${limit}"
+                onclick="loadChunks(this.dataset.collection, this.dataset.docId, +this.dataset.offset, +this.dataset.limit)">
             ‹ 이전
         </button>
         <span>
@@ -44,7 +48,11 @@
         </span>
         <button class="btn btn-sm btn-outline-secondary py-0 px-2"
                 th:disabled="${#lists.size(chunks) < limit}"
-                th:onclick="|loadChunks('${collection}', '${docId}', ${offset + limit}, ${limit})|">
+                th:data-collection="${collection}"
+                th:data-doc-id="${docId}"
+                th:data-offset="${offset + limit}"
+                th:data-limit="${limit}"
+                onclick="loadChunks(this.dataset.collection, this.dataset.docId, +this.dataset.offset, +this.dataset.limit)">
             다음 ›
         </button>
         <span class="ms-auto text-muted" style="font-size:0.7rem;">
@@ -103,14 +111,18 @@
                     <button type="button"
                             class="btn btn-sm btn-outline-secondary py-0 px-1 me-1"
                             style="font-size:0.7rem;"
-                            th:onclick="|openChunkEdit('${chunk.id()}', '${collection}')|"
+                            th:data-chunk-id="${chunk.id()}"
+                            th:data-collection="${collection}"
+                            onclick="openChunkEdit(this.dataset.chunkId, this.dataset.collection)"
                             title="편집">
                         <i class="bi bi-pencil"></i>
                     </button>
                     <button type="button"
                             class="btn btn-sm btn-outline-danger py-0 px-1"
                             style="font-size:0.7rem;"
-                            th:onclick="|deleteChunkInline('${chunk.id()}', '${collection}', this)|"
+                            th:data-chunk-id="${chunk.id()}"
+                            th:data-collection="${collection}"
+                            onclick="deleteChunkInline(this.dataset.chunkId, this.dataset.collection, this)"
                             title="삭제">
                         <i class="bi bi-trash"></i>
                     </button>
@@ -125,7 +137,11 @@
          th:if="${#lists.size(chunks) > 0 or offset > 0}">
         <button class="btn btn-sm btn-outline-secondary py-0 px-2"
                 th:disabled="${offset == 0}"
-                th:onclick="|loadChunks('${collection}', '${docId}', ${offset - limit}, ${limit})|">
+                th:data-collection="${collection}"
+                th:data-doc-id="${docId}"
+                th:data-offset="${offset - limit}"
+                th:data-limit="${limit}"
+                onclick="loadChunks(this.dataset.collection, this.dataset.docId, +this.dataset.offset, +this.dataset.limit)">
             ‹ 이전
         </button>
         <span>
@@ -134,7 +150,11 @@
         </span>
         <button class="btn btn-sm btn-outline-secondary py-0 px-2"
                 th:disabled="${#lists.size(chunks) < limit}"
-                th:onclick="|loadChunks('${collection}', '${docId}', ${offset + limit}, ${limit})|">
+                th:data-collection="${collection}"
+                th:data-doc-id="${docId}"
+                th:data-offset="${offset + limit}"
+                th:data-limit="${limit}"
+                onclick="loadChunks(this.dataset.collection, this.dataset.docId, +this.dataset.offset, +this.dataset.limit)">
             다음 ›
         </button>
     </div>
