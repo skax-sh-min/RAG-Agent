@@ -575,7 +575,9 @@ public class DocumentIndexer {
     private static boolean isTimeoutLike(Throwable t) {
         Throwable cur = t;
         while (cur != null) {
-            if (cur instanceof InterruptedException || cur instanceof java.io.InterruptedIOException) {
+            if (cur instanceof InterruptedException
+                    || cur instanceof java.io.InterruptedIOException
+                    || cur instanceof java.net.SocketTimeoutException) {
                 return true;
             }
             cur = cur.getCause();

@@ -189,14 +189,15 @@ public class LlmRouter {
             log.warn("Provider [{}] returned HTTP {}, trying next", provider.name(), status);
             return executeWithTracking(taskType, roleOrder, call, tried);
         } catch (Exception e) {
-            circuitBreaker.block(provider.name(), "30");
             if (isTimeoutLike(e)) {
-                log.warn("[TIMEOUT:LLM_HTTP] provider={} threw {}: {}, trying next",
-                        provider.name(), e.getClass().getSimpleName(), e.getMessage());
-            } else {
-                log.warn("Provider [{}] threw {}: {}, trying next",
-                        provider.name(), e.getClass().getSimpleName(), e.getMessage());
+                // Client-side interrupt — provider is healthy; block would cascade into "All providers exhausted"
+                log.warn("[TIMEOUT:LLM_HTTP] provider={} client-timeout, NOT blocking circuit breaker",
+                        provider.name());
+                throw e;
             }
+            circuitBreaker.block(provider.name(), "30");
+            log.warn("Provider [{}] threw {}: {}, trying next",
+                    provider.name(), e.getClass().getSimpleName(), e.getMessage());
             return executeWithTracking(taskType, roleOrder, call, tried);
         }
     }
