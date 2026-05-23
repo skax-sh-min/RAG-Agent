@@ -91,7 +91,7 @@ docker-compose up chroma
 - `classifyOnly()` does not accumulate tokens into `AgentState` → `llmCallCount` under-reported by 1 (accepted trade-off)
 - `DocumentIndexer.syncDirectory()` calls `saveRegistry()` once after all parallel work — never call it from parallel threads
 - `DocumentIndexer.indexDocumentParallel()` is for bulk sync only; `indexDocument()` is for single-file upload and calls `saveRegistry()` itself
-- Document storage is per-user: `data/users/{userId}/documents/`, `data/users/{userId}/images/`, `data/users/{userId}/converted/`
+- Document storage is shared (no per-user isolation): `data/documents/`, `data/images/{docId}/`, `data/converted/{docId}.md`; DocRegistry and Chroma collection use `DocRegistry.SHARED` as the owner key
 - Rate limiting: `RateLimitFilter` uses Bucket4j + Caffeine per-user token-bucket; `app.rate-limit.enabled` (default `true`)
 - Audit logging: `AuditLogger` writes to Logback AUDIT_FILE appender; `app.audit.enabled` (default `true`)
 - `PromptInjectionGuard.wrap()` is implemented but not yet wired into prompts — deferred to 05-prompt-externalization.md

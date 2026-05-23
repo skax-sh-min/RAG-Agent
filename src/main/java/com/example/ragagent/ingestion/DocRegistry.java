@@ -17,6 +17,9 @@ import java.util.*;
 @Component
 public class DocRegistry {
 
+    /** Shared owner key used when document isolation per user is not needed. */
+    public static final String SHARED = "shared";
+
     private static final Logger log = LoggerFactory.getLogger(DocRegistry.class);
 
     private final JdbcTemplate jdbc;
@@ -75,6 +78,22 @@ public class DocRegistry {
                         fromJsonList(rs.getString("spring_doc_ids")),
                         fromJsonList(rs.getString("errors"))),
                 docId, userId);
+        return rows.isEmpty() ? Optional.empty() : Optional.of(rows.get(0));
+    }
+
+    /** Finds by docId ignoring owner — for admin/reindex operations. */
+    public Optional<DocRegistryEntry> findByDocId(String docId) {
+        List<DocRegistryEntry> rows = jdbc.query(
+                "SELECT sha256, version, indexed_at, chunks, spring_doc_ids, errors " +
+                "FROM doc_registry WHERE doc_id = ? LIMIT 1",
+                (rs, n) -> new DocRegistryEntry(
+                        rs.getString("sha256"),
+                        rs.getString("version"),
+                        rs.getString("indexed_at"),
+                        rs.getInt("chunks"),
+                        fromJsonList(rs.getString("spring_doc_ids")),
+                        fromJsonList(rs.getString("errors"))),
+                docId);
         return rows.isEmpty() ? Optional.empty() : Optional.of(rows.get(0));
     }
 

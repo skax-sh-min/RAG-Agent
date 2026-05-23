@@ -23,7 +23,8 @@ import java.util.function.Consumer;
  * RAG pipeline orchestrator.
  * Delegates indexing logic to {@link DocumentIndexer}, registry to {@link DocRegistry},
  * and vector-store operations to {@link VectorStoreFacade}.
- * All operations are scoped to a userId — file paths and Chroma collections are isolated per user.
+ * Documents are stored in shared paths (data/documents, data/images, data/converted)
+ * and indexed into a single shared Chroma collection — no per-user isolation.
  */
 @Service
 public class RagService {
@@ -73,12 +74,12 @@ public class RagService {
     }
 
     public void deleteDocument(String userId, String docId, String version) throws IOException {
-        indexer.deleteArtifacts(userId, docId, version);
+        indexer.deleteArtifacts(DocRegistry.SHARED, docId, version);
         docRegistry.save();
     }
 
     public List<DocumentInfo> listDocuments(String userId) {
-        return docRegistry.entries(userId).stream()
+        return docRegistry.entries(DocRegistry.SHARED).stream()
                 .map(e -> {
                     DocRegistry.DocRegistryEntry r = e.getValue();
                     String filename = DocRegistry.filenameFromDocId(e.getKey());
@@ -90,7 +91,7 @@ public class RagService {
     }
 
     public List<Document> search(String userId, String query, String version, int topK) {
-        return vectorStore.search(userId, query, version, topK);
+        return vectorStore.search(DocRegistry.SHARED, query, version, topK);
     }
 
     public void reindexFromMd(String docId) throws IOException {
@@ -99,9 +100,9 @@ public class RagService {
 
     // ── Path helpers ───────────────────────────────────────────────────────
 
-    /** Per-user documents directory: {dataDir}/users/{userId}/documents */
+    /** Shared documents directory: {dataDir}/documents */
     public Path userDocumentsDir(String userId) {
-        return Path.of(props.dataDir()).resolve("users").resolve(userId).resolve("documents");
+        return Path.of(props.dataDir()).resolve("documents");
     }
 
     // ── Static utilities (kept here for backward compatibility) ────────────

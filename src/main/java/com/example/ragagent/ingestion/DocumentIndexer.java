@@ -90,10 +90,9 @@ public class DocumentIndexer {
         String sha256 = computeSha256(req.path());
         String docId = req.filename() + "_" + sha256.substring(0, 8);
         String docType = inferDocType(req.filename());
-        Path userDir = dataDir.resolve("users").resolve(req.ownerId());
-        Path imagesDir = userDir.resolve("images").resolve(docId);
-        Path rawMdPath = userDir.resolve("converted").resolve(docId + ".md");
-        Path correctedMdPath = userDir.resolve("converted").resolve(docId + "_corrected.md");
+        Path imagesDir = dataDir.resolve("images").resolve(docId);
+        Path rawMdPath = dataDir.resolve("converted").resolve(docId + ".md");
+        Path correctedMdPath = dataDir.resolve("converted").resolve(docId + "_corrected.md");
         log.debug("[INDEX] docId={}, type={}, sha256={}", docId, docType, sha256);
 
         String lower = req.filename().toLowerCase();
@@ -122,9 +121,9 @@ public class DocumentIndexer {
         req.onProgress().accept(IndexingProgressEvent.of("chunking", 0, chunks.size(), req.filename(),
                 chunks.size() + "개 청크"));
 
-        List<Document> tagged = tagMetadata(chunks, docId, req.filename(), req.version(), docType, sha256, req.ownerId());
+        List<Document> tagged = tagMetadata(chunks, docId, req.filename(), req.version(), docType, sha256, DocRegistry.SHARED);
 
-        deleteExistingVectorsAndFiles(req.ownerId(), docId, req.version());
+        deleteExistingVectorsAndFiles(DocRegistry.SHARED, docId, req.version());
 
         log.debug("[INDEX] {} 키워드 추출 중 ({}개 청크, 병렬)...", req.filename(), tagged.size());
         Semaphore gate = req.parallelGate() != null
@@ -135,16 +134,16 @@ public class DocumentIndexer {
         log.debug("[INDEX] {} 벡터 스토어 저장 중 ({}개 청크)...", req.filename(), enriched.size());
         req.onProgress().accept(IndexingProgressEvent.of("storing", enriched.size(), enriched.size(),
                 req.filename(), "벡터 DB 저장 중..."));
-        vectorStore.add(req.ownerId(), req.version(), enriched);
+        vectorStore.add(DocRegistry.SHARED, req.version(), enriched);
 
         List<String> docIds = enriched.stream().map(Document::getId).toList();
         DocRegistry.DocRegistryEntry entry = new DocRegistry.DocRegistryEntry(
                 sha256, req.version(), Instant.now().toString(), tagged.size(), docIds, List.of());
-        docRegistry.put(docId, req.ownerId(), entry);
+        docRegistry.put(docId, DocRegistry.SHARED, entry);
 
         if (req.staleDocId() != null) {
             log.debug("[INDEX] {} 구버전 삭제: {}", req.filename(), req.staleDocId());
-            deleteArtifacts(req.ownerId(), req.staleDocId(), req.version());
+            deleteArtifacts(DocRegistry.SHARED, req.staleDocId(), req.version());
         }
 
         log.info("[INDEX] 완료: {} → {}개 청크, {}ms", req.filename(), tagged.size(), System.currentTimeMillis() - t0);
@@ -157,7 +156,7 @@ public class DocumentIndexer {
      * Calls {@link DocRegistry#save()} at the end.
      */
     public void reindexFromMd(String docId) throws IOException {
-        DocRegistry.DocRegistryEntry existing = docRegistry.findByDocId(docId, "anonymous")
+        DocRegistry.DocRegistryEntry existing = docRegistry.findByDocId(docId)
                 .orElseThrow(() -> new IllegalArgumentException("문서를 찾을 수 없습니다: " + docId));
 
         String version  = existing.version();
@@ -180,19 +179,19 @@ public class DocumentIndexer {
         List<Document> rawDocs = loaderService.loadFromMarkdown(md);
         List<Document> chunks  = splitDocuments(rawDocs, filename, props.chunkSize(), props.chunkOverlap());
         log.debug("[REINDEX] 청크 분할: {}섹션 → {}청크", rawDocs.size(), chunks.size());
-        List<Document> tagged  = tagMetadata(chunks, docId, filename, version, docType, sha256, "anonymous");
+        List<Document> tagged  = tagMetadata(chunks, docId, filename, version, docType, sha256, DocRegistry.SHARED);
 
-        deleteExistingVectorsOnly("anonymous", docId, version);
+        deleteExistingVectorsOnly(DocRegistry.SHARED, docId, version);
 
         log.debug("[REINDEX] 키워드 추출 시작: {}개 청크", tagged.size());
         Semaphore gate = new Semaphore(props.indexingSafe().maxConcurrentLlmCalls());
         List<Document> enriched = enrichParallel(tagged, gate, filename, event -> {});
 
         log.debug("[REINDEX] 벡터 스토어 저장 중: {}개 청크", enriched.size());
-        vectorStore.add("anonymous", version, enriched);
+        vectorStore.add(DocRegistry.SHARED, version, enriched);
 
         List<String> springIds = enriched.stream().map(Document::getId).toList();
-        docRegistry.put(docId, "anonymous", new DocRegistry.DocRegistryEntry(
+        docRegistry.put(docId, DocRegistry.SHARED, new DocRegistry.DocRegistryEntry(
                 sha256, version, Instant.now().toString(), tagged.size(), springIds, List.of()));
         docRegistry.save();
 
@@ -228,9 +227,9 @@ public class DocumentIndexer {
             String sha256   = computeSha256(filePath);
             String docId    = filename + "_" + sha256.substring(0, 8);
 
-            if (docRegistry.existsBySha256AndVersion(sha256, version, userId)) continue;
+            if (docRegistry.existsBySha256AndVersion(sha256, version, DocRegistry.SHARED)) continue;
 
-            String stale = docRegistry.findStaleDocId(filename, docId, version, userId).orElse(null);
+            String stale = docRegistry.findStaleDocId(filename, docId, version, DocRegistry.SHARED).orElse(null);
             filesToIndex.put(filename, new FileEntry(filePath, stale));
         }
         log.info("[SYNC] Phase1 완료: 전체 {}개, 인덱싱 필요 {}개, 스킵 {}개",
@@ -257,7 +256,7 @@ public class DocumentIndexer {
                     String errorMsg = null;
                     try {
                         index(IndexRequest.parallel(e.getValue().path(), version,
-                                userId, llmGate, e.getValue().staleDocId()));
+                                DocRegistry.SHARED, llmGate, e.getValue().staleDocId()));
                         (e.getValue().staleDocId() != null ? updated : indexed).add(e.getKey());
                     } catch (Exception ex) {
                         log.error("[SYNC] 병렬 인덱싱 실패: {}", e.getKey(), ex);
@@ -280,13 +279,13 @@ public class DocumentIndexer {
 
         // Phase 3: detect deleted files
         List<String> deleted = new ArrayList<>();
-        for (String docId : new HashSet<>(docRegistry.docIds(userId))) {
-            DocRegistry.DocRegistryEntry entry = docRegistry.findByDocId(docId, userId).orElse(null);
+        for (String docId : new HashSet<>(docRegistry.docIds(DocRegistry.SHARED))) {
+            DocRegistry.DocRegistryEntry entry = docRegistry.findByDocId(docId, DocRegistry.SHARED).orElse(null);
             if (entry == null || !version.equals(entry.version())) continue;
             String filename = DocRegistry.filenameFromDocId(docId);
             if (!filesOnDisk.containsKey(filename)) {
                 log.debug("[SYNC] 삭제 감지: {}", filename);
-                deleteArtifacts(userId, docId, version);
+                deleteArtifacts(DocRegistry.SHARED, docId, version);
                 deleted.add(filename);
             }
         }
@@ -351,10 +350,9 @@ public class DocumentIndexer {
     }
 
     private void deleteDocFiles(String userId, String docId) {
-        Path userDir = dataDir.resolve("users").resolve(userId);
-        deleteImagesQuietly(userDir.resolve("images").resolve(docId));
+        deleteImagesQuietly(dataDir.resolve("images").resolve(docId));
         for (String suffix : List.of(".md", "_corrected.md")) {
-            Path p = userDir.resolve("converted").resolve(docId + suffix);
+            Path p = dataDir.resolve("converted").resolve(docId + suffix);
             try {
                 Files.deleteIfExists(p);
             } catch (IOException e) {
