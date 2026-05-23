@@ -56,7 +56,7 @@ public class AdminService {
             if (cols == null) return new CollectionsResult(List.of(), true);
             List<CollectionSummary> items = cols.stream().map(col -> {
                 long count = 0;
-                try { Long c = chromaApi.countEmbeddings(TENANT, DATABASE, col.name()); count = c != null ? c : 0; }
+                try { Long c = chromaApi.countEmbeddings(TENANT, DATABASE, col.id()); count = c != null ? c : 0; }
                 catch (Exception e) { log.warn("Count failed for {}: {}", col.name(), e.getMessage()); }
                 String version = col.name().startsWith("manual_")
                         ? col.name().substring("manual_".length()) : col.name();
@@ -79,7 +79,7 @@ public class AdminService {
                 null, where, limit, offset,
                 List.of(Include.DOCUMENTS, Include.METADATAS));
         try {
-            GetEmbeddingResponse resp = chromaApi.getEmbeddings(TENANT, DATABASE, collectionName, req);
+            GetEmbeddingResponse resp = chromaApi.getEmbeddings(TENANT, DATABASE, resolveId(collectionName), req);
             if (resp == null || resp.ids() == null) return List.of();
 
             List<String> ids  = resp.ids();
@@ -103,7 +103,7 @@ public class AdminService {
 
     public long countChunks(String collectionName, String docId) {
         if (docId == null || docId.isBlank()) {
-            try { Long c = chromaApi.countEmbeddings(TENANT, DATABASE, collectionName); return c != null ? c : 0; }
+            try { Long c = chromaApi.countEmbeddings(TENANT, DATABASE, resolveId(collectionName)); return c != null ? c : 0; }
             catch (Exception e) { return 0; }
         }
         // Approximate: fetch limit=0 with where filter → real count not possible via get, return chunk list size
@@ -116,7 +116,7 @@ public class AdminService {
                 List.of(chunkId), null, 1, 0,
                 List.of(Include.DOCUMENTS, Include.METADATAS));
         try {
-            GetEmbeddingResponse resp = chromaApi.getEmbeddings(TENANT, DATABASE, collectionName, req);
+            GetEmbeddingResponse resp = chromaApi.getEmbeddings(TENANT, DATABASE, resolveId(collectionName), req);
             if (resp == null || resp.ids() == null || resp.ids().isEmpty()) return null;
             String text = resp.documents() != null && !resp.documents().isEmpty()
                     ? resp.documents().get(0) : "";
@@ -134,6 +134,15 @@ public class AdminService {
                 new DeleteEmbeddingsRequest(List.of(chunkId)));
     }
 
+    private String resolveId(String collectionName) {
+        try {
+            Collection col = chromaApi.getCollection(TENANT, DATABASE, collectionName);
+            return col != null ? col.id() : collectionName;
+        } catch (Exception e) {
+            return collectionName;
+        }
+    }
+
     /**
      * Metadata-only update: fetches the existing embedding and re-upserts
      * with new text/metadata while preserving the original vector.
@@ -145,8 +154,9 @@ public class AdminService {
                 List.of(chunkId), null, 1, 0,
                 List.of(Include.EMBEDDINGS, Include.DOCUMENTS));
         GetEmbeddingResponse existing;
+        String collectionId = resolveId(collectionName);
         try {
-            existing = chromaApi.getEmbeddings(TENANT, DATABASE, collectionName, req);
+            existing = chromaApi.getEmbeddings(TENANT, DATABASE, collectionId, req);
         } catch (Exception e) {
             log.error("updateChunk fetch failed id={}: {}", chunkId, e.getMessage());
             return;
