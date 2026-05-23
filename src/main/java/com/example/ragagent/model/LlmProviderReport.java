@@ -16,7 +16,8 @@ public record LlmProviderReport(
         LlmUsageRepository.PeriodSummary daily,
         LlmUsageRepository.PeriodSummary weekly,
         LlmUsageRepository.PeriodSummary monthly,
-        Instant blockedUntil   // null when provider is operating normally
+        Instant blockedUntil,  // null when provider is operating normally
+        boolean configured     // false when apiKey is blank (provider cannot make calls)
 ) {
     /** True when the circuit breaker is currently open for this provider. */
     public boolean isBlocked() {

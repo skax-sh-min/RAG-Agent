@@ -176,7 +176,8 @@ public class OperationsController {
                         usageRepo.getDaily(cfg.name()),
                         usageRepo.getWeekly(cfg.name()),
                         usageRepo.getMonthly(cfg.name()),
-                        blocked.get(cfg.name())
+                        blocked.get(cfg.name()),
+                        cfg.apiKey() != null && !cfg.apiKey().isBlank()
                 ))
                 .toList();
     }

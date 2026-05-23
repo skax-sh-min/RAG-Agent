@@ -12,7 +12,7 @@
     <!-- ── Per-provider card ──────────────────────────────────────────── -->
     <div th:each="r : ${reports}" class="col-12 col-sm-6 col-xl-3">
         <div class="card h-100"
-             th:classappend="${r.blocked} ? ' border-danger border-2'">
+             th:classappend="${!r.configured} ? ' opacity-50' : (${r.blocked} ? ' border-danger border-2' : '')">
 
             <!-- Header: name + role badge + type badge -->
             <div class="card-header d-flex justify-content-between align-items-center py-2">
@@ -35,23 +35,28 @@
                     <span th:text="${r.model}">model-name</span>
                 </div>
 
-                <!-- Circuit Breaker status -->
+                <!-- Circuit Breaker / Configuration status -->
                 <div class="mb-3">
+                    <!-- API key not configured -->
+                    <span th:if="${!r.configured}"
+                          class="badge bg-secondary">
+                        <i class="bi bi-key me-1"></i>API 키 미설정
+                    </span>
                     <!-- Normal -->
-                    <span th:if="${!r.blocked}"
+                    <span th:if="${r.configured and !r.blocked}"
                           class="badge bg-success">
                         <i class="bi bi-check-circle-fill me-1"></i>
                         <span th:text="#{llm.status.normal}">Normal</span>
                     </span>
                     <!-- Blocked + countdown -->
-                    <span th:if="${r.blocked}"
+                    <span th:if="${r.configured and r.blocked}"
                           class="badge bg-danger"
                           th:attr="data-blocked-until=${r.blockedUntilIso()}">
                         <i class="bi bi-x-circle-fill me-1"></i>
                         <span th:text="#{llm.status.blocked}">Blocked</span>
                         <span class="blocked-countdown ms-1 font-monospace">--:--</span>
                     </span>
-                    <div th:if="${r.blocked}"
+                    <div th:if="${r.configured and r.blocked}"
                          class="text-muted mt-1"
                          style="font-size:.72rem;"
                          th:text="#{llm.blocked.until} + ' ' + ${r.blockedUntil}">
