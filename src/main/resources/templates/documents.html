@@ -81,6 +81,25 @@
             </div>
         </div>
 
+        <!-- ── Active task recovery panel (shown when returning mid-index) ── -->
+        <div id="recovery-panel" class="card border-info mb-4 d-none">
+            <div class="card-header text-info fw-semibold d-flex align-items-center gap-2">
+                <span class="spinner-border spinner-border-sm flex-shrink-0" role="status"></span>
+                진행 중인 인덱싱 작업
+            </div>
+            <div class="card-body p-0">
+                <table class="table table-sm mb-0">
+                    <thead class="table-light">
+                        <tr>
+                            <th th:text="#{doc.col.name}">Filename</th>
+                            <th th:text="#{doc.col.status}">Status</th>
+                        </tr>
+                    </thead>
+                    <tbody id="recovery-body"></tbody>
+                </table>
+            </div>
+        </div>
+
         <!-- ── Document list ─────────────────────────────────────────── -->
         <div class="card">
             <div class="card-header d-flex justify-content-between align-items-center">
@@ -238,6 +257,7 @@
             xhr.addEventListener('load', () => {
                 if (xhr.status === 202) {
                     const { taskId } = JSON.parse(xhr.responseText);
+                    storePendingTask(taskId, file.name);
                     subscribeIndexingProgress(taskId, onStage, resolve, reject);
                 } else if (xhr.status === 503) {
                     reject(new Error(I18N.chromaUnavailable));
@@ -263,9 +283,11 @@
             onStage(evt);
             if (evt.stage === 'done') {
                 sse.close();
+                dropPendingTask(taskId);
                 resolve(evt.docResult);
             } else if (evt.stage === 'error') {
                 sse.close();
+                dropPendingTask(taskId);
                 reject(new Error(evt.message || '인덱싱 오류'));
             }
         });
@@ -276,6 +298,7 @@
                 reject(new Error('SSE 연결 실패 (재시도 초과)'));
             }
         };
+        return sse;
     }
 
     /* ── File row status helpers ─────────────────────────────────────────── */
@@ -299,12 +322,12 @@
         if (bar) bar.style.width = pct + '%';
     }
 
-    /**
-     * Renders the indexing stage inside the file row.
-     * Stage visual: loading → chunking → enriching (chunk progress bar) → storing
-     */
     function setIndexingStage(i, evt) {
-        const el = document.getElementById(`file-status-${i}`);
+        setIndexingStageById(`file-status-${i}`, evt);
+    }
+
+    function setIndexingStageById(elId, evt) {
+        const el = document.getElementById(elId);
         if (!el) return;
 
         const pct = evt.total > 0 ? Math.round(evt.done / evt.total * 100) : 0;
@@ -447,6 +470,102 @@
     function escHtml(s) {
         return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
     }
+
+    /* ── Pending task persistence (survives same-tab page navigation) ────── */
+    const TASK_STORE_KEY = 'rag-active-tasks';
+
+    function storePendingTask(taskId, filename) {
+        try {
+            const list = loadPendingTasks().filter(t => t.taskId !== taskId);
+            list.push({ taskId, filename, ts: Date.now() });
+            sessionStorage.setItem(TASK_STORE_KEY, JSON.stringify(list));
+        } catch (_) {}
+    }
+
+    function dropPendingTask(taskId) {
+        try {
+            const list = loadPendingTasks().filter(t => t.taskId !== taskId);
+            sessionStorage.setItem(TASK_STORE_KEY, JSON.stringify(list));
+        } catch (_) {}
+    }
+
+    function loadPendingTasks() {
+        try {
+            const raw = sessionStorage.getItem(TASK_STORE_KEY);
+            if (!raw) return [];
+            return JSON.parse(raw).filter(t => Date.now() - t.ts < 15 * 60 * 1000);
+        } catch (_) { return []; }
+    }
+
+    function restorePendingTasks() {
+        const tasks = loadPendingTasks();
+        if (tasks.length === 0) return;
+
+        const panel = document.getElementById('recovery-panel');
+        const tbody = document.getElementById('recovery-body');
+        panel.classList.remove('d-none');
+
+        tasks.forEach(({ taskId, filename }) => {
+            const rowId    = `rec-row-${taskId}`;
+            const statusId = `rec-status-${taskId}`;
+            const tr = document.createElement('tr');
+            tr.id = rowId;
+            tr.innerHTML = `
+                <td class="text-truncate" style="max-width:280px;">${escHtml(filename)}</td>
+                <td id="${statusId}" style="min-width:280px;">
+                    <span class="spinner-border spinner-border-sm text-info me-1"></span>
+                    <span class="text-info small">진행 상태 복구 중...</span>
+                </td>`;
+            tbody.appendChild(tr);
+
+            let gotEvent = false;
+            let noEventTimer = null;
+
+            const sse = subscribeIndexingProgress(
+                taskId,
+                evt => {
+                    if (!gotEvent) { gotEvent = true; clearTimeout(noEventTimer); }
+                    setIndexingStageById(statusId, evt);
+                },
+                docResult => {
+                    clearTimeout(noEventTimer);
+                    dropPendingTask(taskId);
+                    const el = document.getElementById(statusId);
+                    if (el) el.innerHTML = `<span class="text-success">✅ 완료 (${docResult?.chunks ?? 0} ${PAGE_I18N.chunks})</span>`;
+                    showToast(`${escHtml(filename)} ${I18N.uploadSuccess} (${docResult?.chunks ?? 0} ${I18N.uploadChunks})`, 'success');
+                    removeRecoveryRow(rowId, tbody, panel, true);
+                },
+                err => {
+                    clearTimeout(noEventTimer);
+                    dropPendingTask(taskId);
+                    const el = document.getElementById(statusId);
+                    if (el) el.innerHTML = `<span class="text-danger">❌ ${escHtml(err.message)}</span>`;
+                    removeRecoveryRow(rowId, tbody, panel, false);
+                }
+            );
+
+            // No events within 5 s → task completed while away and buffer expired
+            noEventTimer = setTimeout(() => {
+                if (gotEvent) return;
+                sse.close();
+                dropPendingTask(taskId);
+                const el = document.getElementById(statusId);
+                if (el) el.innerHTML = `<span class="text-muted">✔️ 페이지 이탈 중 처리 완료</span>`;
+                removeRecoveryRow(rowId, tbody, panel, true);
+            }, 5000);
+        });
+    }
+
+    function removeRecoveryRow(rowId, tbody, panel, refreshList) {
+        setTimeout(() => {
+            const row = document.getElementById(rowId);
+            if (row) row.remove();
+            if (tbody.children.length === 0) panel.classList.add('d-none');
+            if (refreshList) htmx.ajax('GET', '/ui/documents/list', {target: '#doc-table-body', swap: 'outerHTML'});
+        }, 3000);
+    }
+
+    restorePendingTasks();
 </script>
 </th:block>
 
