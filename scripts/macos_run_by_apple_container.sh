@@ -1,4 +1,5 @@
 #!/bin/sh
+set -e
 
 # scripts 폴더에서 실행된 경우 프로젝트 루트로 이동
 if [ "$(basename "$(pwd)")" = "scripts" ]; then
@@ -19,7 +20,9 @@ if ! container system status > /dev/null 2>&1; then
 fi
 
 # chroma-server 컨테이너 상태에 따라 생성/시작/스킵
-CHROMA_STATUS=$(container inspect chroma-server 2>/dev/null)
+mkdir -p data/chroma
+
+CHROMA_STATUS=$(container inspect chroma-server 2>/dev/null) || true
 
 case "$CHROMA_STATUS" in
   *'"status":"running"'*)
@@ -43,7 +46,8 @@ case "$CHROMA_STATUS" in
 esac
 
 echo ".env 환경변수를 로딩합니다..."
-export $(grep -v '^#' .env | xargs)
+#old: export $(grep -v '^#' .env | xargs)
+set -a; . ./.env; set +a
 
 echo "Spring Boot 서버를 시작합니다..."
 mvn spring-boot:run

@@ -10,9 +10,8 @@ HOOKS_DST="$REPO_ROOT/.git/hooks"
 for src in "$HOOKS_SRC"/*; do
     name="$(basename "$src")"
     dst="$HOOKS_DST/$name"
-    cp "$src" "$dst"
-    chmod +x "$dst"
-    echo "installed: .git/hooks/$name"
+    ln -sf "$src" "$dst"
+    echo "installed: .git/hooks/$name -> $src"
 done
 
 echo "done."

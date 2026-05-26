@@ -1,4 +1,5 @@
 #!/bin/sh
+set -e
 
 # scripts 폴더에서 실행된 경우 프로젝트 루트로 이동
 if [ "$(basename "$(pwd)")" = "scripts" ]; then
@@ -6,7 +7,7 @@ if [ "$(basename "$(pwd)")" = "scripts" ]; then
 fi
 
 # chroma-server 컨테이너가 실행 중이면 중지
-CHROMA_STATUS=$(container inspect chroma-server 2>/dev/null)
+CHROMA_STATUS=$(container inspect chroma-server 2>/dev/null) || true
 
 case "$CHROMA_STATUS" in
   *'"status":"running"'*)

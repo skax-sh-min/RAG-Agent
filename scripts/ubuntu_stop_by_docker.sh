@@ -1,4 +1,5 @@
 #!/bin/sh
+set -e
 
 # scripts 폴더에서 실행된 경우 프로젝트 루트로 이동
 if [ "$(basename "$(pwd)")" = "scripts" ]; then
@@ -6,7 +7,7 @@ if [ "$(basename "$(pwd)")" = "scripts" ]; then
 fi
 
 # chroma-server 컨테이너가 실행 중이면 중지
-CHROMA_STATUS=$(docker inspect --format '{{.State.Status}}' chroma-server 2>/dev/null)
+CHROMA_STATUS=$(docker inspect --format '{{.State.Status}}' chroma-server 2>/dev/null) || true
 
 case "$CHROMA_STATUS" in
   running)
@@ -26,10 +27,10 @@ case "$CHROMA_STATUS" in
 esac
 
 # Docker 데몬이 실행 중이면 중지
-if docker info > /dev/null 2>&1; then
-  echo "Docker 데몬을 중지합니다..."
-  sudo systemctl stop docker
-  echo "Docker 데몬이 중지되었습니다."
-else
-  echo "Docker 데몬이 이미 중지 상태입니다."
-fi
+# if docker info > /dev/null 2>&1; then
+#   echo "Docker 데몬을 중지합니다..."
+#   sudo systemctl stop docker
+#   echo "Docker 데몬이 중지되었습니다."
+# else
+#   echo "Docker 데몬이 이미 중지 상태입니다."
+# fi

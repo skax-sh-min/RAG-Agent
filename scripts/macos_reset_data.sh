@@ -1,4 +1,5 @@
 #!/bin/sh
+set -e
 
 # scripts 폴더에서 실행된 경우 프로젝트 루트로 이동
 if [ "$(basename "$(pwd)")" = "scripts" ]; then
@@ -6,7 +7,7 @@ if [ "$(basename "$(pwd)")" = "scripts" ]; then
 fi
 
 # chroma-server 실행 여부 확인
-CHROMA_STATUS=$(container inspect chroma-server 2>/dev/null)
+CHROMA_STATUS=$(container inspect chroma-server 2>/dev/null) || true
 case "$CHROMA_STATUS" in
   *'"status":"running"'*) CHROMA_RUNNING=true ;;
   *)                      CHROMA_RUNNING=false ;;
@@ -44,7 +45,9 @@ fi
 echo "=== 초기화 대상 ==="
 echo "  data/chroma/       — ChromaDB 벡터 데이터"
 echo "  data/memory.db     — SQLite (채팅 히스토리, 문서 레지스트리, 사용자)"
-echo "  data/users/        — 사용자별 업로드 문서 · 이미지 · 변환 파일"
+echo "  data/documents/    — 업로드 원본 문서"
+echo "  data/images/       — 추출 이미지"
+echo "  data/converted/    — 변환된 Markdown 파일"
 echo ""
 echo "  data/audit/        — 감사 로그"
 echo ""
@@ -73,12 +76,14 @@ for f in data/memory.db data/memory.db-wal data/memory.db-shm; do
   fi
 done
 
-if [ -d "data/users" ]; then
-  rm -rf data/users
-  echo "  ✓ data/users 삭제 완료"
-else
-  echo "  - data/users 없음, 건너뜁니다."
-fi
+for dir in data/documents data/images data/converted; do
+  if [ -d "$dir" ]; then
+    rm -rf "$dir"
+    echo "  ✓ $dir 삭제 완료"
+  else
+    echo "  - $dir 없음, 건너뜁니다."
+  fi
+done
 
 if [ -d "data/audit" ]; then
   rm -f data/audit/audit.log data/audit/audit.*.log.gz
