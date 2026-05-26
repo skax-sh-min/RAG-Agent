@@ -310,11 +310,28 @@
         const pct = evt.total > 0 ? Math.round(evt.done / evt.total * 100) : 0;
 
         const stageHtml = {
-            loading:   () => `<span class="text-info">📄 문서 로드 중...</span>`,
-            chunking:  () => evt.total > 0
+            loading:    () => evt.total > 0 ? `
+                <div class="d-flex justify-content-between align-items-center small mb-1">
+                    <span class="text-info">📄 ${escHtml(evt.message || '문서 로드 중...')}</span>
+                    <span class="text-muted fw-semibold">${evt.done} / ${evt.total}</span>
+                </div>
+                <div class="progress" style="height:5px;">
+                    <div class="progress-bar bg-secondary"
+                         style="width:${pct}%; transition:width 0.3s;"></div>
+                </div>` : `<span class="text-info">📄 ${escHtml(evt.message || '문서 로드 중...')}</span>`,
+            correcting: () => evt.total > 0 ? `
+                <div class="d-flex justify-content-between align-items-center small mb-1">
+                    <span class="text-info">📝 Markdown 교정 중</span>
+                    <span class="text-muted fw-semibold">${evt.done} / ${evt.total} 섹션</span>
+                </div>
+                <div class="progress" style="height:5px;">
+                    <div class="progress-bar bg-warning"
+                         style="width:${pct}%; transition:width 0.3s;"></div>
+                </div>` : `<span class="text-info">📝 Markdown 교정 중...</span>`,
+            chunking:   () => evt.total > 0
                 ? `<span class="text-info">✂️ 청크 분할 완료 <span class="fw-semibold">(${evt.total}개)</span></span>`
                 : `<span class="text-info">✂️ 청크 분할 중...</span>`,
-            enriching: () => `
+            enriching:  () => `
                 <div class="d-flex justify-content-between align-items-center small mb-1">
                     <span class="text-info">🔑 키워드 추출 중</span>
                     <span class="text-muted fw-semibold">${evt.done} / ${evt.total}</span>
@@ -323,7 +340,7 @@
                     <div class="progress-bar bg-info"
                          style="width:${pct}%; transition:width 0.3s;"></div>
                 </div>`,
-            storing:   () => `<span class="text-info">💾 벡터 DB 저장 중...</span>`,
+            storing:    () => `<span class="text-info">💾 벡터 DB 저장 중...</span>`,
         };
 
         const fn = stageHtml[evt.stage];

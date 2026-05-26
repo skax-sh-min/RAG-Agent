@@ -30,6 +30,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.function.BiConsumer;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -55,16 +56,26 @@ public class DocumentLoaderService {
     }
 
     public List<Document> load(Path filePath) throws IOException {
+        return load(filePath, null);
+    }
+
+    /**
+     * Same as {@link #load(Path)} but calls {@code onOcrProgress(done, total)} per page
+     * when the PDF requires OCR rendering (scanned document).
+     */
+    public List<Document> load(Path filePath, BiConsumer<Integer, Integer> onOcrProgress)
+            throws IOException {
         String name = filePath.getFileName().toString().toLowerCase();
         log.debug("[LOADER] 로드 시작: {} ({}B)", filePath.getFileName(), Files.size(filePath));
-        if (name.endsWith(".pdf")) return loadPdf(filePath);
+        if (name.endsWith(".pdf")) return loadPdf(filePath, onOcrProgress);
         if (name.endsWith(".pptx")) return loadPptx(filePath);
         if (name.endsWith(".docx")) return loadDocx(filePath);
         if (name.endsWith(".txt") || name.endsWith(".md")) return loadText(filePath);
         throw new IllegalArgumentException("Unsupported file type: " + name);
     }
 
-    private List<Document> loadPdf(Path filePath) throws IOException {
+    private List<Document> loadPdf(Path filePath, BiConsumer<Integer, Integer> onOcrProgress)
+            throws IOException {
         var config = PdfDocumentReaderConfig.builder()
                 .withPagesPerDocument(1)
                 .build();
@@ -80,7 +91,7 @@ public class DocumentLoaderService {
 
         if (isScanned && ocrService != null) {
             log.debug("[LOADER:PDF] OCR 모드로 전환: {}", filePath.getFileName());
-            return ocrWithPdfRenderer(filePath, docs);
+            return ocrWithPdfRenderer(filePath, docs, onOcrProgress);
         }
 
         String sourceType = isScanned ? "ocr" : "file";
@@ -91,7 +102,9 @@ public class DocumentLoaderService {
         }).toList();
     }
 
-    private List<Document> ocrWithPdfRenderer(Path filePath, List<Document> originalDocs) throws IOException {
+    private List<Document> ocrWithPdfRenderer(Path filePath, List<Document> originalDocs,
+                                               BiConsumer<Integer, Integer> onProgress)
+            throws IOException {
         List<Document> result = new ArrayList<>();
         try (PDDocument pdDoc = Loader.loadPDF(filePath.toFile())) {
             PDFRenderer renderer = new PDFRenderer(pdDoc);
@@ -102,13 +115,14 @@ public class DocumentLoaderService {
                 String text = ocrService.extractText(img);
                 if (text == null || text.isBlank()) {
                     log.debug("[LOADER:OCR] 페이지 {} 텍스트 없음, 스킵", i + 1);
-                    continue;
+                } else {
+                    Map<String, Object> meta = i < originalDocs.size()
+                            ? new HashMap<>(originalDocs.get(i).getMetadata())
+                            : new HashMap<>();
+                    meta.put(MetaKey.SOURCE_TYPE, "ocr");
+                    result.add(new Document(text.trim(), meta));
                 }
-                Map<String, Object> meta = i < originalDocs.size()
-                        ? new HashMap<>(originalDocs.get(i).getMetadata())
-                        : new HashMap<>();
-                meta.put(MetaKey.SOURCE_TYPE, "ocr");
-                result.add(new Document(text.trim(), meta));
+                if (onProgress != null) onProgress.accept(i + 1, pageCount);
             }
         }
         log.debug("[LOADER:OCR] {} 완료 → {}페이지 텍스트 추출", filePath.getFileName(), result.size());

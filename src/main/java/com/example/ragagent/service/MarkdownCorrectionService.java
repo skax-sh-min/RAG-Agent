@@ -18,6 +18,8 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Semaphore;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.BiConsumer;
 
 /**
  * LLM-based Markdown format correction.
@@ -43,21 +45,35 @@ public class MarkdownCorrectionService {
      * On any LLM failure the original section text is kept (graceful fallback).
      */
     public String correct(String rawMd, String docId, Path correctedOutputPath) {
+        return correct(rawMd, docId, correctedOutputPath, null);
+    }
+
+    /**
+     * Same as {@link #correct(String, String, Path)} but calls {@code onSectionDone(done, total)}
+     * after each section completes — useful for streaming progress to the UI.
+     */
+    public String correct(String rawMd, String docId, Path correctedOutputPath,
+                          BiConsumer<Integer, Integer> onSectionDone) {
         if (rawMd == null || rawMd.isBlank()) return rawMd;
         log.info("[MD_CORRECT] 시작: docId={}, chars={}", docId, rawMd.length());
         long t0 = System.currentTimeMillis();
 
         List<String> sections = splitBySections(rawMd);
         log.debug("[MD_CORRECT] 섹션 {}개 분할 완료", sections.size());
+        int total = sections.size();
 
         Semaphore gate = new Semaphore(MAX_CONCURRENT);
+        AtomicInteger doneCount = new AtomicInteger(0);
         List<String> corrected;
         try (var exec = Executors.newVirtualThreadPerTaskExecutor()) {
             corrected = sections.stream()
                 .map(sec -> CompletableFuture.supplyAsync(() -> {
                     gate.acquireUninterruptibly();
                     try {
-                        return correctSection(sec);
+                        String result = correctSection(sec);
+                        int done = doneCount.incrementAndGet();
+                        if (onSectionDone != null) onSectionDone.accept(done, total);
+                        return result;
                     } finally {
                         gate.release();
                     }

@@ -6,6 +6,7 @@ import java.io.IOException;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
+import java.util.function.BiConsumer;
 
 /**
  * Orchestrates image extraction for PPTX and PDF.
@@ -30,9 +31,19 @@ public class ImageExtractorService {
      */
     public Map<Integer, List<String>> extract(Path filePath, String docId, Path imagesDir)
             throws IOException {
+        return extract(filePath, docId, imagesDir, null);
+    }
+
+    /**
+     * Same as {@link #extract(Path, String, Path)} but calls {@code onProgress(done, total)}
+     * after each page/slide is processed — PDF only (PPTX extraction is fast).
+     */
+    public Map<Integer, List<String>> extract(Path filePath, String docId, Path imagesDir,
+                                              BiConsumer<Integer, Integer> onProgress)
+            throws IOException {
         String name = filePath.getFileName().toString().toLowerCase();
         if (name.endsWith(".pptx")) return pptxExtractor.extract(filePath, docId, imagesDir);
-        if (name.endsWith(".pdf"))  return pdfExtractor.extract(filePath, docId, imagesDir);
+        if (name.endsWith(".pdf"))  return pdfExtractor.extract(filePath, docId, imagesDir, onProgress);
         return Map.of();
     }
 }

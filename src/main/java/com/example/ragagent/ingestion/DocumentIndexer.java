@@ -103,16 +103,28 @@ public class DocumentIndexer {
         req.onProgress().accept(IndexingProgressEvent.of("loading", 0, 0, req.filename(), "문서 로드 중..."));
         List<Document> rawDocs;
         if (lower.endsWith(".docx")) {
+            req.onProgress().accept(IndexingProgressEvent.of("loading", 0, 0, req.filename(), "DOCX → Markdown 변환 중..."));
             String rawMd = loaderService.convertDocxToMd(req.path(), docId, imagesDir);
             Files.createDirectories(rawMdPath.getParent());
             Files.writeString(rawMdPath, rawMd);
-            req.onProgress().accept(IndexingProgressEvent.of("loading", 0, 0, req.filename(), "MD 포맷 교정 중..."));
-            String sourceMd = correctionService.correct(rawMd, docId, correctedMdPath);
+            String sourceMd = correctionService.correct(rawMd, docId, correctedMdPath,
+                    (done, total) -> req.onProgress().accept(
+                            IndexingProgressEvent.of("correcting", done, total, req.filename(),
+                                    done + "/" + total + " 섹션 교정 중")));
             rawDocs = loaderService.loadFromMarkdown(sourceMd);
         } else {
-            rawDocs = loaderService.load(req.path());
+            rawDocs = loaderService.load(req.path(),
+                    (done, total) -> req.onProgress().accept(IndexingProgressEvent.of(
+                            "loading", done, total, req.filename(),
+                            "OCR 처리 중 (" + done + "/" + total + " 페이지)")));
             if (lower.endsWith(".pptx") || lower.endsWith(".pdf")) {
-                rawDocs = injectImagePaths(rawDocs, imageExtractorService.extract(req.path(), docId, imagesDir));
+                req.onProgress().accept(IndexingProgressEvent.of(
+                        "loading", 0, 0, req.filename(), "이미지 추출 중..."));
+                rawDocs = injectImagePaths(rawDocs, imageExtractorService.extract(
+                        req.path(), docId, imagesDir,
+                        (done, total) -> req.onProgress().accept(IndexingProgressEvent.of(
+                                "loading", done, total, req.filename(),
+                                "이미지 추출 중 (" + done + "/" + total + " 페이지)"))));
             }
         }
         log.debug("[INDEX] {} 로드 완료 → 원본 섹션 {}개", req.filename(), rawDocs.size());
