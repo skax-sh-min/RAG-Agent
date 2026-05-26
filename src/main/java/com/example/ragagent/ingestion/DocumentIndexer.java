@@ -76,6 +76,9 @@ public class DocumentIndexer {
     @PostConstruct
     void init() {
         dataDir = Path.of(props.dataDir());
+        log.info("[CONFIG] indexing.max-concurrent-files={}, indexing.max-concurrent-llm-calls={}",
+                props.indexingSafe().maxConcurrentFiles(),
+                props.indexingSafe().maxConcurrentLlmCalls());
     }
 
     // ── Public API ─────────────────────────────────────────────────────────
