@@ -98,6 +98,9 @@ public class DocumentIndexer {
         Path correctedMdPath = dataDir.resolve("converted").resolve(docId + "_corrected.md");
         log.debug("[INDEX] docId={}, type={}, sha256={}", docId, docType, sha256);
 
+        // Delete before conversion so newly created images/MD files are not immediately removed
+        deleteExistingVectorsAndFiles(DocRegistry.SHARED, docId, req.version());
+
         String lower = req.filename().toLowerCase();
         log.debug("[INDEX] {} 문서 로드 중...", req.filename());
         req.onProgress().accept(IndexingProgressEvent.of("loading", 0, 0, req.filename(), "문서 로드 중..."));
@@ -137,8 +140,6 @@ public class DocumentIndexer {
                 chunks.size() + "개 청크"));
 
         List<Document> tagged = tagMetadata(chunks, docId, req.filename(), req.version(), docType, sha256, DocRegistry.SHARED);
-
-        deleteExistingVectorsAndFiles(DocRegistry.SHARED, docId, req.version());
 
         log.debug("[INDEX] {} 키워드 추출 중 ({}개 청크, 병렬)...", req.filename(), tagged.size());
         Semaphore gate = req.parallelGate() != null
