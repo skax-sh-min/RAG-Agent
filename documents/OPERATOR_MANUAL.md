@@ -136,18 +136,23 @@ copy .env.example .env
 
 | 변수 | 필수 | 기본값 | 설명 |
 |------|------|--------|------|
-| `LOCAL_LLM_URL` | — | `http://localhost:1234/v1` | `providers[0]` LOCAL 엔드포인트. 임베딩 폴백으로도 사용 |
-| `LOCAL_LLM_KEY` | — | `lm-studio` | `providers[0]` API 키. **비우면 LOCAL 비활성화** |
-| `LOCAL_LLM_MODEL` | — | `google/gemma-4-e4b` | `providers[0]` 모델명 |
-| `OPENAI_API_KEY` | — | — | OpenAI providers 사용 시 필요. 미설정 시 해당 providers 자동 비활성화 |
-| `GEMINI_API_KEY` | — | — | Gemini providers 사용 시 필요. 미설정 시 해당 providers 자동 비활성화 |
-| `EMBED_BASE_URL` | — | `LOCAL_LLM_URL` | 임베딩 전용 엔드포인트. 미설정 시 `LOCAL_LLM_URL` 사용 |
-| `EMBED_API_KEY` | — | `LOCAL_LLM_KEY` | 임베딩 전용 API 키. 미설정 시 `LOCAL_LLM_KEY` 사용 |
-| `EMBED_MODEL` | — | `text-embedding-nomic-embed-text-v1.5` | 임베딩 모델명 |
-| `CHROMA_HOST` | — | `http://localhost` | Chroma 서버 호스트 (프로토콜 포함) |
-| `CHROMA_PORT` | — | `8001` | Chroma 서버 포트 |
-| `DATA_DIR` | — | `./data` | 문서·레지스트리·SQLite DB 저장 경로 |
+| `LOCAL_LLM_URL` | — | `http://localhost:1234/v1` | `providers[0]` LOCAL 엔드포인트 기본 URL. 임베딩 설정(`EMBED_BASE_URL`)의 폴백으로도 사용됨 |
+| `LOCAL_LLM_KEY` | — | `lm-studio` | `providers[0]` API 키. **빈 문자열(`=`)로 설정하면 LOCAL provider 자동 비활성화** |
+| `LOCAL_LLM_MODEL` | — | `google/gemma-4-e4b` | `providers[0]` 모델 식별자. 사용 중인 로컬 모델명으로 변경 |
+| `OPENAI_API_KEY` | — | — | OpenAI providers 사용 시 필요. 미설정 또는 빈 값이면 해당 providers 자동 비활성화. providers 설정에서 `${OPENAI_API_KEY}` 형태로 참조 |
+| `OPENAI_BASE_URL` | — | `https://api.openai.com` | OpenAI 호환 엔드포인트 기본 URL. providers 설정에서 `${OPENAI_BASE_URL}` 형태로 참조. Azure OpenAI 등 호환 엔드포인트로 교체 가능 |
+| `GEMINI_API_KEY1` | — | — | Gemini 1번 API 키 — `providers[1]`(gemini-flash-lite) 전용. 미설정 시 해당 provider 자동 비활성화. providers 설정에서 `${GEMINI_API_KEY1}` 형태로 참조 |
+| `GEMINI_API_KEY2` | — | — | Gemini 2번 API 키 — `providers[2]`(gemini-flash), `providers[4]`(gemma-4-31b) 공유. 미설정 시 해당 providers 자동 비활성화. providers 설정에서 `${GEMINI_API_KEY2}` 형태로 참조. Rate Limit 분산 목적으로 KEY1과 KEY2를 별도 키로 관리 가능 |
+| `GEMINI_BASE_URL` | — | `https://generativelanguage.googleapis.com/v1beta/openai/` | Gemini API 엔드포인트 URL. 모든 Gemini providers가 `${GEMINI_BASE_URL}` 형태로 참조하므로 이 값 하나로 Gemini 전체 엔드포인트를 일괄 변경 가능 |
+| `EMBED_BASE_URL` | — | `LOCAL_LLM_URL` 폴백 | 임베딩 전용 엔드포인트. 미설정 시 `LOCAL_LLM_URL` 사용. OpenAI 임베딩 사용 시 `https://api.openai.com` 등으로 독립 설정 |
+| `EMBED_API_KEY` | — | `LOCAL_LLM_KEY` 폴백 | 임베딩 전용 API 키. 미설정 시 `LOCAL_LLM_KEY` 사용 |
+| `EMBED_MODEL` | — | `text-embedding-nomic-embed-text-v1.5` | 임베딩 모델 식별자. **인덱싱 후 변경 금지** — 벡터 차원이 달라지면 기존 ChromaDB 검색이 깨짐. 변경 시 컬렉션 삭제 후 전체 재인덱싱 필요 |
+| `CHROMA_HOST` | — | `http://localhost` | Chroma 서버 호스트 (프로토콜 포함). Docker Compose 환경에서는 서비스명 `chroma`로 자동 지정됨 |
+| `CHROMA_PORT` | — | `8001` | Chroma 서버 포트. Docker Compose 환경에서는 `8000`으로 자동 지정됨 |
+| `DATA_DIR` | — | `./data` | 문서 원본·이미지·변환 MD·SQLite DB 저장 루트 경로. Docker 실행 시 `/app/data`(볼륨 마운트 고정값)로 컨테이너 내부에 자동 설정됨 |
 | `AUTH_ENABLED` | — | `true` | `false`로 설정하면 로그인 없이 실행 (no-auth 모드). 자세한 내용은 [§9.4](#94-인증-토글-no-auth-모드) 참조 |
+| `DOMAIN` | — | `localhost` | Docker Compose의 `caddy` 컨테이너가 사용하는 도메인명. `localhost`이면 Caddy 로컬 CA 인증서 자동 생성. 운영 시 실제 도메인(예: `myrag.duckdns.org`)으로 변경 |
+| `USE_CANDY_REVERSE_PROXY_HTTPS` | — | `true` | 세션 쿠키 `Secure` 플래그 제어 (`server.servlet.session.cookie.secure`). Caddy HTTPS 환경에서는 `true`(기본값). **HTTP 로컬 단독 실행 시 반드시 `false`로 변경** — `true` 상태에서 HTTP로 접근하면 쿠키가 전송되지 않아 로그인 불가 |
 
 #### RAG 튜닝
 
@@ -179,6 +184,20 @@ copy .env.example .env
 | `CHROMA_CONNECT_TIMEOUT_SECONDS` | `5` | 1 ~ 15 | Chroma API 연결 타임아웃 (`app.chroma.connect-timeout-seconds`) |
 | `CHROMA_READ_TIMEOUT_SECONDS` | `60` | 10 ~ 300 | Chroma API 응답 읽기 타임아웃 (`app.chroma.read-timeout-seconds`) |
 
+#### LLM 응답 파라미터
+
+| 변수 | 기본값 | 권장 범위 | 설명 |
+|------|--------|----------|------|
+| `LLM_MAX_TOKENS` | `8000` | 1000 ~ 32000 | LLM이 한 번의 응답에서 생성할 수 있는 최대 토큰 수 (`spring.ai.openai.chat.options.max-tokens`). 이 값을 초과하면 LLM 응답이 중간에서 잘림. 복잡한 질문·긴 문서 요약이 필요한 환경에서는 증가 권장 |
+| `LLM_TEMPERATURE` | `0.0` | 0.0 ~ 2.0 | LLM 응답의 무작위성 제어 (`spring.ai.openai.chat.options.temperature`). `0.0`은 매번 동일한 결정적(deterministic) 답변, 값이 높을수록 다양하고 창의적인 답변. RAG 시스템 특성상 일관성이 중요하므로 `0.0` ~ `0.3` 범위 권장 |
+
+#### 로그 레벨
+
+| 변수 | 기본값 | 설명 |
+|------|--------|------|
+| `LOGGING_LEVEL` | `INFO` | 앱 전체 로그 레벨을 일괄 설정합니다. `com.example.ragagent`(앱 코드), `org.springframework.ai.openai`(Spring AI 내부), `reactor.netty.http.client`(HTTP 와이어 로그) 세 로거가 이 값을 공유합니다.<br>• `INFO` — 인덱싱 시작/완료, 동기화 결과, 프로바이더 등록 이벤트만 출력 (운영 환경 기본값)<br>• `DEBUG` — 에이전트 흐름(Classifier→Retrieval→Answer→Critic), 프로바이더 라우팅 결정, LLM 요청 curl 재현 명령 출력. **프롬프트 원문·검색 문서·대화 이력이 포함**되므로 운영 환경에서는 사용 금지<br>• `TRACE` — HTTP body 바이트 전체 출력 (SSE 청크 포함, 매우 방대). 짧은 디버깅 후 즉시 해제 권장<br>재시작 없이 레벨을 바꾸려면 Actuator 사용 → [§8 런타임 레벨 변경](#8-문제-해결) 참조 |
+| `SPRING_SECURITY_LOGGING_LEVEL` | `WARN` | Spring Security 로그 레벨 (`logging.level.org.springframework.security`). `DEBUG`로 변경하면 인증 필터·세션 생성·권한 결정 과정이 상세하게 출력됨. 인증 이슈 디버깅 시에만 임시 사용 권장 |
+
 #### 설정 예시
 
 **로컬 LLM 전용 (LM Studio)**:
@@ -206,6 +225,8 @@ LOCAL_LLM_KEY=                     # 비워서 LOCAL providers[0] 비활성화
 
 환경변수로 주입할 수 없는 설정입니다. 변경이 필요하면 `src/main/resources/application.properties`를 직접 편집 후 재시작하세요.
 
+> 환경변수로 제어 가능한 설정(RAG 튜닝, 타임아웃, 로그 레벨 등)은 [§3.2 환경변수 전체 목록](#32-환경변수-전체-목록)을 참조하세요.
+
 #### 이미지 처리 (`app.image-description.*`)
 
 | 속성 | 기본값 | 설명 |
@@ -228,8 +249,7 @@ LOCAL_LLM_KEY=                     # 비워서 LOCAL providers[0] 비활성화
 
 | 속성 | 기본값 | 설명 |
 |------|--------|------|
-| `spring.ai.openai.chat.options.temperature` | `0.0` | 전역 temperature. 낮을수록 일관된 답변, 높을수록 다양한 답변. 프로바이더별 override 불가 |
-| `spring.ai.openai.chat.options.max-tokens` | `8000` | 전역 최대 출력 토큰. LLM이 이 값을 초과하면 잘림. 긴 답변이 필요하면 증가 |
+> **temperature와 최대 출력 토큰**은 각각 `LLM_TEMPERATURE`, `LLM_MAX_TOKENS` 환경변수로 설정할 수 있습니다. → [§3.2 LLM 응답 파라미터](#32-환경변수-전체-목록) 참조
 
 #### 업로드 크기 제한
 
