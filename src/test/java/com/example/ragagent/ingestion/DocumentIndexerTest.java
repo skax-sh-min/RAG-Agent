@@ -65,8 +65,9 @@ class DocumentIndexerTest {
 
         // Stub DocumentLoaderService — returns a single Document per call
         DocumentLoaderService loaderService = mock(DocumentLoaderService.class);
-        when(loaderService.load(any())).thenReturn(
-                List.of(new Document("테스트 문서 내용입니다. 청킹과 메타 태깅을 검증합니다.")));
+        List<Document> stubDocs = List.of(new Document("테스트 문서 내용입니다. 청킹과 메타 태깅을 검증합니다."));
+        when(loaderService.load(any())).thenReturn(stubDocs);
+        when(loaderService.load(any(), any())).thenReturn(stubDocs);
 
         // Stub MarkdownCorrectionService and ImageExtractorService (not exercised here)
         MarkdownCorrectionService correctionService = mock(MarkdownCorrectionService.class);
@@ -97,10 +98,10 @@ class DocumentIndexerTest {
         assertThat(info.sha256()).isNotBlank();
 
         // Registry updated
-        assertThat(docRegistry.findByDocId(info.docId(), "anonymous")).isPresent();
+        assertThat(docRegistry.findByDocId(info.docId(), DocRegistry.SHARED)).isPresent();
 
         // Vector store received the enriched chunks
-        verify(vectorStore, atLeastOnce()).add(eq("anonymous"), eq("v1"), any());
+        verify(vectorStore, atLeastOnce()).add(eq(DocRegistry.SHARED), eq("v1"), any());
     }
 
     @Test
@@ -112,7 +113,7 @@ class DocumentIndexerTest {
         DocumentInfo info = indexer.index(IndexRequest.single(txtFile, "user_guide.txt", "v1", "anonymous", e -> {}));
 
         // docType lives in spring-AI Document metadata, not in registry — verify via chunks > 0
-        assertThat(docRegistry.findByDocId(info.docId(), "anonymous")).isPresent();
+        assertThat(docRegistry.findByDocId(info.docId(), DocRegistry.SHARED)).isPresent();
         assertThat(info.chunks()).isGreaterThanOrEqualTo(1);
     }
 
@@ -121,7 +122,7 @@ class DocumentIndexerTest {
     void index_parallel_deletesStaleDocId() throws IOException {
         // Register a stale entry first
         String staleDocId = "old_guide.txt_stale1234";
-        docRegistry.put(staleDocId, "anonymous",
+        docRegistry.put(staleDocId, DocRegistry.SHARED,
                 new DocRegistry.DocRegistryEntry("sha-old", "v1", "2025-01-01T00:00:00Z",
                         2, List.of("spring-id-1"), List.of()));
 
@@ -129,12 +130,12 @@ class DocumentIndexerTest {
         Files.writeString(txtFile, "새 버전 내용");
         Semaphore gate = new Semaphore(2);
 
-        indexer.index(IndexRequest.parallel(txtFile, "v1", "anonymous", gate, staleDocId));
+        indexer.index(IndexRequest.parallel(txtFile, "v1", DocRegistry.SHARED, gate, staleDocId));
 
         // Stale entry removed from registry
-        assertThat(docRegistry.findByDocId(staleDocId, "anonymous")).isEmpty();
+        assertThat(docRegistry.findByDocId(staleDocId, DocRegistry.SHARED)).isEmpty();
         // Old spring-doc-ids deleted from vector store
-        verify(vectorStore).deleteByDocIds("anonymous", "v1", List.of("spring-id-1"));
+        verify(vectorStore).deleteByDocIds(DocRegistry.SHARED, "v1", List.of("spring-id-1"));
     }
 
     @Test
