@@ -17,7 +17,7 @@ Includes: spring-boot-starter-actuator (runtime log-level management)
 --------------------------------------------------------------------
 
 --------------------------------------------------------------------
-Spring AI 1.1.6 (https://spring.io/projects/spring-ai)
+Spring AI 1.1.7 (https://spring.io/projects/spring-ai)
 Copyright © 2023–2025 Broadcom. All Rights Reserved.
 The term "Broadcom" refers to Broadcom Inc. and/or its subsidiaries.
 Includes: spring-ai-openai, spring-ai-rag, spring-ai-chroma-store
@@ -29,8 +29,8 @@ Copyright © 2002–2024 Broadcom. All Rights Reserved.
 --------------------------------------------------------------------
 
 --------------------------------------------------------------------
-Apache POI 5.3.0 (https://poi.apache.org)
-Copyright © 2003–2024 The Apache Software Foundation
+Apache POI 5.5.1 (https://poi.apache.org)
+Copyright © 2003–2025 The Apache Software Foundation
 --------------------------------------------------------------------
 
 --------------------------------------------------------------------
@@ -39,20 +39,20 @@ Copyright © 2002–2024 The Apache Software Foundation
 --------------------------------------------------------------------
 
 --------------------------------------------------------------------
-Apache Batik 1.17 (https://xmlgraphics.apache.org/batik)
-Copyright © 2000–2024 The Apache Software Foundation
+Apache Batik 1.19 (https://xmlgraphics.apache.org/batik)
+Copyright © 2000–2025 The Apache Software Foundation
 --------------------------------------------------------------------
 
 --------------------------------------------------------------------
-Tess4j 5.11.0 (https://github.com/nguyenq/tess4j)
-Copyright © 2012–2024 Quan Nguyen and contributors
+Tess4j 5.19.0 (https://github.com/nguyenq/tess4j)
+Copyright © 2012–2026 Quan Nguyen and contributors
 (Java wrapper for Tesseract OCR — Apache License, Version 2.0)
 --------------------------------------------------------------------
 
 --------------------------------------------------------------------
-Apache Commons FileUpload 1.5
+Apache Commons FileUpload 1.6.0
 (https://commons.apache.org/proper/commons-fileupload)
-Copyright © 2002–2023 The Apache Software Foundation
+Copyright © 2002–2025 The Apache Software Foundation
 --------------------------------------------------------------------
 
 --------------------------------------------------------------------
@@ -68,8 +68,8 @@ Copyright © 2007–2024 Tatu Saloranta and contributors
 --------------------------------------------------------------------
 
 --------------------------------------------------------------------
-SQLite JDBC 3.45.3.0 (https://github.com/xerial/sqlite-jdbc)
-Copyright © 2006–2024 Taro L. Saito and contributors
+SQLite JDBC 3.53.1.0 (https://github.com/xerial/sqlite-jdbc)
+Copyright © 2006–2026 Taro L. Saito and contributors
 --------------------------------------------------------------------
 
 --------------------------------------------------------------------
@@ -94,13 +94,13 @@ Copyright © 2004–2023 QOS.ch
 --------------------------------------------------------------------
 
 --------------------------------------------------------------------
-Bootstrap 5.3.3 (https://getbootstrap.com)
-Copyright © 2011–2024 The Bootstrap Authors
+Bootstrap 5.3.8 (https://getbootstrap.com)
+Copyright © 2011–2025 The Bootstrap Authors
 --------------------------------------------------------------------
 
 --------------------------------------------------------------------
-Bootstrap Icons 1.11.3 (https://icons.getbootstrap.com)
-Copyright © 2019–2024 The Bootstrap Authors
+Bootstrap Icons 1.13.1 (https://icons.getbootstrap.com)
+Copyright © 2019–2025 The Bootstrap Authors
 --------------------------------------------------------------------
 
 --------------------------------------------------------------------
@@ -115,7 +115,7 @@ Copyright © 2012–2024 James Ward
 --------------------------------------------------------------------
 
 --------------------------------------------------------------------
-Chart.js 4.4.3 (https://www.chartjs.org)
+Chart.js 4.5.1 (https://www.chartjs.org)
 Copyright © 2014–2025 Chart.js Contributors
 --------------------------------------------------------------------
 
@@ -127,8 +127,8 @@ https://www.mozilla.org/en-US/MPL/2.0/
 ====================================================================
 
 --------------------------------------------------------------------
-DOMPurify 3.1.6 (https://github.com/cure53/DOMPurify)
-Copyright © 2015–2024 Mario Heiderich and contributors
+DOMPurify 3.4.7 (https://github.com/cure53/DOMPurify)
+Copyright © 2015–2026 Mario Heiderich and contributors
 --------------------------------------------------------------------
 
 
@@ -138,8 +138,8 @@ https://opensource.org/licenses/0BSD
 ====================================================================
 
 --------------------------------------------------------------------
-htmx 2.0.4 (https://htmx.org)
-Copyright © 2020–2024 Big Sky Software
+htmx 2.0.10 (https://htmx.org)
+Copyright © 2020–2026 Big Sky Software
 --------------------------------------------------------------------
 
 
