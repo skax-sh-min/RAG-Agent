@@ -5,6 +5,7 @@ import com.example.ragagent.security.AppUserDetails;
 import com.example.ragagent.security.SqliteUserDetailsService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpSession;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.context.SecurityContext;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -132,7 +133,13 @@ public class AuthController {
 
         String id = UUID.randomUUID().toString();
         String hash = passwordEncoder.encode(password);
-        userDetailsService.createUser(id, trimmedEmail, hash, trimmedDisplay.isEmpty() ? null : trimmedDisplay);
+        try {
+            userDetailsService.createUser(id, trimmedEmail, hash, trimmedDisplay.isEmpty() ? null : trimmedDisplay);
+        } catch (DataIntegrityViolationException e) {
+            // Concurrent signup with same email slipped past emailExists() check
+            redirectAttributes.addFlashAttribute("error", "auth.signup.error.email.taken");
+            return "redirect:/signup";
+        }
 
         // Auto-login after registration
         AppUserDetails userDetails = (AppUserDetails) userDetailsService.loadUserByUsername(trimmedEmail);
