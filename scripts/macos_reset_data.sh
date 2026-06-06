@@ -68,6 +68,7 @@ if [ -d "data/chroma" ]; then
 else
   echo "  - data/chroma 없음, 건너뜁니다."
 fi
+mkdir -p data/chroma
 
 for f in data/memory.db data/memory.db-wal data/memory.db-shm; do
   if [ -f "$f" ]; then
