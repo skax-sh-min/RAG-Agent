@@ -57,6 +57,30 @@ export $(grep -v '^#' .env | xargs)
 java -jar target/rag-agent-*.jar
 ```
 
+#### macOS — Apple Container (Apple Silicon 대안)
+
+```bash
+# 0. 설치 (최초 1회): https://github.com/apple/container/releases 에서 .pkg 다운로드
+
+# 1. 컨테이너 시스템 시작 (설치 후 또는 재부팅 후 1회)
+container system start
+
+# 2. Chroma 시작 (별도 터미널)
+container run --rm -p 8001:8000 \
+  -v "$(pwd)/data/chroma:/data" \
+  chromadb/chroma:latest
+
+# 3. 환경변수 로드 후 실행
+export $(grep -v '^#' .env | xargs)
+mvn spring-boot:run
+
+# 종료
+container stop <CONTAINER_ID>
+container system stop
+```
+
+> 편의 스크립트 `scripts/macos_run_by_apple_container.sh`를 사용하면 위 단계를 자동으로 수행합니다.
+
 접속: http://localhost:8080
 
 자세한 사용법은 [USER_MANUAL.md](USER_MANUAL.md)를, 배포·LLM 설정은 [OPERATOR_MANUAL.md](OPERATOR_MANUAL.md)를 참고하세요.
@@ -128,7 +152,9 @@ rag_java/
     │   │   ├── DocumentController.java         # REST /api/v1/documents, /api/v1/images; 비동기 업로드 (202+taskId)
     │   │   ├── OperationsController.java       # REST GET /api/v1/health, /api/v1/llm/usage; HTMX 스레드 목록 + LLM 카드
     │   │   ├── AdminController.java            # /admin, /admin/chunks; 문서 재인덱스
-    │   │   └── GlobalExceptionHandler.java     # RFC 9457 ProblemDetail; 400/413 처리
+    │   │   ├── AuthController.java             # /login, /signup, /setup 페이지 컨트롤러; 회원가입 후 자동 로그인
+    │   │   ├── GlobalExceptionHandler.java     # RFC 9457 ProblemDetail; 400/413 처리
+    │   │   └── GlobalModelAdvice.java          # @ControllerAdvice; authEnabled 모델 속성 전체 뷰 주입
     │   ├── exception/                          # 도메인 예외 클래스
     │   ├── ingestion/
     │   │   ├── DocumentIndexer.java            # 핵심 인덱싱 로직; 3단계 동기화; DocRegistry SQLite
@@ -236,7 +262,7 @@ rag_java/
 - **DUAL 모드** — 로컬·외부 LLM 병렬 실행, 두 답변을 탭으로 비교
 - **속도 제한** — Bucket4j + Caffeine 유저별 토큰버킷; 429 `RAG-RATE-001` + `Retry-After` 헤더; `app.rate-limit.*`로 설정
 - **감사 로그** — Logback 롤링 파일에 구조화된 이벤트 기록; `app.audit.*`로 설정
-- **이미지 처리 파이프라인** — PDF/PPTX/DOCX 이미지 추출 → `data/users/{userId}/images/{docId}/` 저장; 검색 시점 Lazy Vision 설명 생성 (SQLite 캐시); 답변 버블에 이미지 썸네일 표시
+- **이미지 처리 파이프라인** — PDF/PPTX/DOCX 이미지 추출 → `data/images/{docId}/` 저장; 검색 시점 Lazy Vision 설명 생성 (SQLite 캐시); 답변 버블에 이미지 썸네일 표시
 - **이미지 유형 분류** — diagram / screenshot / chart / photo / other 분류 후 유형별 전용 Vision 프롬프트 적용
 - **스캔 PDF OCR** — Tesseract OCR (kor+eng)로 텍스트 없는 페이지 처리 (`app.image-description.ocr-enabled=true`)
 - **EMF/WMF 변환** — DOCX Windows Metafile 이미지를 Batik(EMF) 또는 LibreOffice headless(WMF)로 PNG 변환

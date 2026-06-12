@@ -45,7 +45,7 @@ HTTP 요청
 |------|------|---------|
 | **CLASSIFIER** | 질문 유형 판별 (concept / usage / error / version / meta) | ① — AgentService에서 선실행하므로 그래프 내에서는 스킵 |
 | **DIRECT_ANSWER** | meta 질문 직접 응답 (벡터 검색 없음) | ② |
-| **RETRIEVAL** | 쿼리 확장(2변형) → ChromaDB 병렬 검색 → 중복 제거 | ③ 쿼리 확장 |
+| **RETRIEVAL** | 쿼리 확장(원본+2변형, 총 3쿼리 병렬) → ChromaDB 병렬 검색 → RRF 병합 | ③ 쿼리 확장 |
 | **ANSWER** | 문서 기반 답변 생성 + 충분도 검사 | ④ 답변, ⑤ 충분도 |
 | **CRITIC** | 답변이 문서에 근거하는지 검증 | ⑥ |
 | **FINALIZE** | 대화 히스토리 저장 (SQLite) | 없음 |
@@ -180,8 +180,8 @@ Phase 1  변경 감지 (단일 스레드)
   → 신규/변경/삭제 파일 목록 확정
 
 Phase 2  병렬 인덱싱 (Virtual Thread)
-  최대 maxConcurrentFiles(기본 4)개 파일 동시 처리
-  LLM 키워드 추출은 maxConcurrentLlmCalls(기본 8) Semaphore 제한
+  최대 maxConcurrentFiles(기본 3)개 파일 동시 처리
+  LLM 키워드 추출은 maxConcurrentLlmCalls(기본 4) Semaphore 제한
   변경 파일: 신규 인덱싱 성공 후 구 버전 삭제 (실패 시 구 버전 보존)
 
 Phase 3  삭제 처리 (단일 스레드)
@@ -199,7 +199,7 @@ PDF 페이지의 50% 이상이 50자 미만  →  스캔 문서로 판정
   → 답변 시 OCR 경고 문구 표시
 ```
 
-> OCR은 `app.image-description.ocr-enabled=true` 설정 시에만 활성화 (기본 비활성).  
+> OCR은 `app.image-description.ocr-enabled=true` 설정 시에만 활성화 (기본 활성 — application.properties에서 기본값 true).  
 > 이미지 Vision 설명 생성: [IMAGE_PROCESS.md](IMAGE_PROCESS.md)
 
 ---

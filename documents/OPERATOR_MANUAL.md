@@ -74,11 +74,9 @@ rag_java/
 │   └── hooks/
 │       └── pre-commit          # .env 우발 커밋 방지
 ├── data/                       # 런타임 생성 (DATA_DIR)
-│   ├── users/
-│   │   └── {userId}/           # 사용자별 격리 (userId = UUID)
-│   │       ├── documents/      # 업로드된 문서 원본 (Sync 대상)
-│   │       ├── images/         # 추출된 이미지 ({docId}/ 하위)
-│   │       └── converted/      # DOCX → Markdown 변환 결과 ({docId}.md 원본, {docId}_corrected.md 교정본)
+│   ├── documents/              # 업로드된 문서 원본 (Sync 대상, 공유)
+│   ├── images/                 # 추출된 이미지 ({docId}/ 하위, 공유)
+│   ├── converted/              # DOCX → Markdown 변환 결과 ({docId}.md 원본, {docId}_corrected.md 교정본, 공유)
 │   ├── chroma/                 # ChromaDB 벡터 데이터 (로컬 실행 시)
 │   ├── audit/                  # 감사 로그 (audit.log + 롤링 압축본)
 │   └── memory.db               # 대화 이력 + LLM 사용량 + 인덱스 레지스트리 (SQLite WAL)
@@ -267,7 +265,7 @@ LOCAL_LLM_KEY=                     # 비워서 LOCAL providers[0] 비활성화
 | `app.rate-limit.enabled` | `true` | `false`로 설정하면 전체 비활성화 |
 | `app.rate-limit.chat-per-minute` | `60` | `/chat` 경로 — 분당 요청 수 |
 | `app.rate-limit.upload-per-minute` | `10` | `/documents` (업로드) 경로 — 분당 요청 수 |
-| `app.rate-limit.sync-per-minute` | `2` | `/documents/sync` 경로 — 분당 요청 수 |
+| `app.rate-limit.sync-per-minute` | `3` | `/documents/sync` 경로 — 분당 요청 수 |
 | `app.rate-limit.image-per-minute` | `300` | `/images/` 경로 — 분당 요청 수 |
 | `app.rate-limit.default-per-minute` | `120` | 그 외 경로 기본값 |
 
@@ -849,7 +847,7 @@ LOCAL_LLM_MODEL=gemma-4-27b-it
 `application.properties`:
 ```properties
 app.llm.default-routing-mode=COST_FIRST
-app.llm.circuit-breaker-minutes=2
+app.llm.circuit-breaker-minutes=4
 app.llm.progressive-threshold=0.6
 
 # LOCAL — 무료, 분류·키워드·경량 태스크 처리
@@ -916,7 +914,7 @@ COST_FIRST 흐름:
 | HTTP 402 (결제 필요) | `Retry-After` 헤더 값 | |
 | 기타 오류 (5xx, 네트워크) | 30초 고정 | |
 
-- `app.llm.circuit-breaker-minutes=2` — 기본 차단 시간 (분)
+- `app.llm.circuit-breaker-minutes=4` — 기본 차단 시간 (분)
 - 차단 상태는 인메모리(`ConcurrentHashMap`) 유지 — 서버 재시작 시 초기화
 - 모든 프로바이더 소진 시 → `LlmProviderExhaustedException` (500 응답)
 - `/llm-usage` 대시보드에서 차단 중인 프로바이더를 빨간 카드 + MM:SS 카운트다운으로 확인 가능
@@ -969,10 +967,10 @@ curl -X POST http://localhost:8080/api/v1/chat \
 
 | 데이터 | 저장 위치 | 비고 |
 |--------|----------|------|
-| 문서 원본 | `DATA_DIR/users/{userId}/documents/` | Sync 대상 |
-| 추출된 이미지 | `DATA_DIR/users/{userId}/images/{docId}/` | 문서 삭제 시 함께 삭제 |
-| DOCX 변환 MD (원본) | `DATA_DIR/users/{userId}/converted/{docId}.md` | DOCX 인덱싱 시 자동 생성; 문서 삭제 시 함께 삭제 |
-| DOCX 변환 MD (교정본) | `DATA_DIR/users/{userId}/converted/{docId}_corrected.md` | LLM 포맷 교정 후 저장; 실제 인덱싱 소스; 수동 편집 후 Admin ↺ 재인덱싱 가능 |
+| 문서 원본 | `DATA_DIR/documents/` | Sync 대상 |
+| 추출된 이미지 | `DATA_DIR/images/{docId}/` | 문서 삭제 시 함께 삭제 |
+| DOCX 변환 MD (원본) | `DATA_DIR/converted/{docId}.md` | DOCX 인덱싱 시 자동 생성; 문서 삭제 시 함께 삭제 |
+| DOCX 변환 MD (교정본) | `DATA_DIR/converted/{docId}_corrected.md` | LLM 포맷 교정 후 저장; 실제 인덱싱 소스; 수동 편집 후 Admin ↺ 재인덱싱 가능 |
 | 인덱스 레지스트리 | `DATA_DIR/memory.db` (SQLite `doc_registry` 테이블) | userId·SHA-256 기반 변경 감지 |
 | 벡터 임베딩 | Chroma 서버 | 로컬: `data/chroma/`, Docker Compose: `chroma_data` 볼륨 |
 | 대화 이력 + LLM 사용량 | `DATA_DIR/memory.db` (SQLite) | WAL 모드; 메시지 메타데이터(토큰·시간·프로바이더) 포함 |

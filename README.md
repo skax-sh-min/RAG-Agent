@@ -153,7 +153,9 @@ rag_java/
     │   │   ├── DocumentController.java         # REST /api/v1/documents, /api/v1/images; async upload (202+taskId)
     │   │   ├── OperationsController.java       # REST GET /api/v1/health, /api/v1/llm/usage; HTMX thread list + LLM cards
     │   │   ├── AdminController.java            # /admin, /admin/chunks; document re-index
-    │   │   └── GlobalExceptionHandler.java     # RFC 9457 ProblemDetail; 400/413 handling
+    │   │   ├── AuthController.java             # /login, /signup, /setup page controllers; auto-login after signup
+    │   │   ├── GlobalExceptionHandler.java     # RFC 9457 ProblemDetail; 400/413 handling
+    │   │   └── GlobalModelAdvice.java          # @ControllerAdvice; injects authEnabled model attr into all views
     │   ├── exception/                          # Domain exception classes
     │   ├── ingestion/
     │   │   ├── DocumentIndexer.java            # Core indexing logic; 3-phase sync; DocRegistry SQLite
@@ -261,7 +263,7 @@ User question
 - **DUAL mode** — runs local and external LLM in parallel, displays results in side-by-side tabs
 - **Rate limiting** — Bucket4j + Caffeine per-user token-bucket; 429 `RAG-RATE-001` + `Retry-After` header; configurable via `app.rate-limit.*`
 - **Audit logging** — structured events written to rolling file via Logback; configurable via `app.audit.*`
-- **Image processing pipeline** — PDF/PPTX/DOCX image extraction → stored under `data/users/{userId}/images/{docId}/`; Lazy Vision description on first retrieval (cached in SQLite); image thumbnails shown in answer bubble
+- **Image processing pipeline** — PDF/PPTX/DOCX image extraction → stored under `data/images/{docId}/`; Lazy Vision description on first retrieval (cached in SQLite); image thumbnails shown in answer bubble
 - **Image type classification** — pre-classifies images (diagram / screenshot / chart / photo / other) and uses type-specific Vision prompts for better descriptions
 - **Scanned PDF OCR** — Tesseract OCR (kor+eng) for pages with insufficient text; activated via `app.image-description.ocr-enabled=true`
 - **EMF/WMF conversion** — DOCX Windows Metafile images converted to PNG via Batik (EMF) or LibreOffice headless (WMF)

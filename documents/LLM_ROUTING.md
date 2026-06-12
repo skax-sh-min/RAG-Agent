@@ -29,12 +29,13 @@
 ┌──────────────────────────────────────────────────────────────────────┐
 │ 프로바이더 역할(Role) × 유형(TaskType) 매트릭스                       │
 │                                                                      │
-│  LOCAL   (priority 0): 범용 로컬 LLM    LIGHT_BOTH — 무료            │
-│  LOCAL   (priority 0): local-vision     VISION     — Vision 전용     │
-│  NORMAL  (priority 1): gemini-flash     BOTH       — 저비용 범용     │
-│  NORMAL  (priority 2): openai-mini      BOTH       — 저비용 fallback │
-│  PREMIUM (priority 3): gemini-pro       BOTH       — 고추론 범용     │
-│  PREMIUM (priority 4): openai           BOTH       — 고추론 fallback │
+│  LOCAL   (priority 0): local            BOTH       — 범용 로컬 LLM (무료) │
+│  LOCAL   (priority 0): local-vision     VISION     — Vision 전용 (선택) │
+│  NORMAL  (priority 1): gemini-flash-lite TEXT       — 저비용 1순위   │
+│  NORMAL  (priority 2): gemini-flash     TEXT       — 저비용 2순위    │
+│  NORMAL  (priority 3): openai-mini      TEXT       — 저비용 fallback │
+│  PREMIUM (priority 4): gemma-4-31b      TEXT       — 고추론 1순위    │
+│  PREMIUM (priority 5): openai           TEXT       — 고추론 fallback │
 │                                                                      │
 │  AgentGraph 노드 → TaskType 기준:                                    │
 │    ClassifierService        → LIGHT_TEXT                             │
@@ -89,70 +90,81 @@ public enum RoutingMode {
 
 ```properties
 app.llm.default-routing-mode=COST_FIRST
-app.llm.circuit-breaker-minutes=2
+app.llm.circuit-breaker-minutes=4
 app.llm.progressive-threshold=0.6
 
 # ── [LOCAL] 범용 로컬 LLM ──────────────────────────────────────────
-# type=LIGHT_BOTH → LIGHT_TEXT + VISION 태스크 처리
+# type=BOTH → TEXT + VISION 태스크 처리
 # 없으면 COST_FIRST 시 NORMAL부터 시작
 app.llm.providers[0].name=local
-app.llm.providers[0].base-url=http://localhost:1234/v1
-app.llm.providers[0].api-key=lm-studio
-app.llm.providers[0].model=gemma-4-27b-it
-app.llm.providers[0].type=LIGHT_BOTH
+app.llm.providers[0].base-url=${LOCAL_LLM_URL:http://localhost:1234/v1}
+app.llm.providers[0].api-key=${LOCAL_LLM_KEY:}
+app.llm.providers[0].model=${LOCAL_LLM_MODEL:google/gemma-4-e4b}
+app.llm.providers[0].type=BOTH
 app.llm.providers[0].role=LOCAL
 app.llm.providers[0].priority=0
+app.llm.providers[0].stream=true
 
 # ── [LOCAL] Vision 전용 로컬 모델 (선택) ──────────────────────────
-# type=VISION → VISION task에서 LIGHT_BOTH보다 우선 선택됨
+# type=VISION → VISION task에서 BOTH보다 우선 선택됨
 # 등록 시: LLaVA, Qwen2-VL 등 Vision 특화 모델 권장
 # app.llm.providers[5].name=local-vision
-# app.llm.providers[5].base-url=http://localhost:1235/v1
-# app.llm.providers[5].api-key=lm-studio
+# app.llm.providers[5].base-url=${LOCAL_LLM_URL:http://localhost:1235/v1}
+# app.llm.providers[5].api-key=${LOCAL_LLM_KEY:lm-studio}
 # app.llm.providers[5].model=llava-1.6-34b
 # app.llm.providers[5].type=VISION
 # app.llm.providers[5].role=LOCAL
 # app.llm.providers[5].priority=0
 
-# ── [NORMAL] Gemini Flash ─────────────────────────────────────────
-# GEMINI_API_KEY 미설정 시 시작 시 warn 로그 후 자동 비활성화
-app.llm.providers[1].name=gemini-flash
+# ── [NORMAL] Gemini Flash Lite — 저비용 1순위 ────────────────────
+# GEMINI_API_KEY1 미설정 시 시작 시 warn 로그 후 자동 비활성화
+app.llm.providers[1].name=gemini-flash-lite
 app.llm.providers[1].base-url=${GEMINI_BASE_URL:https://generativelanguage.googleapis.com/v1beta/openai/}
-app.llm.providers[1].api-key=${GEMINI_API_KEY:}
-app.llm.providers[1].model=gemini-2.5-flash
-app.llm.providers[1].type=BOTH
+app.llm.providers[1].api-key=${GEMINI_API_KEY1:}
+app.llm.providers[1].model=gemini-3.1-flash-lite
+app.llm.providers[1].type=TEXT
 app.llm.providers[1].role=NORMAL
 app.llm.providers[1].priority=1
 
-# ── [NORMAL] OpenAI Mini (fallback) ──────────────────────────────
-# OPENAI_API_KEY 미설정 시 시작 시 warn 로그 후 자동 비활성화
-app.llm.providers[2].name=openai-mini
-app.llm.providers[2].base-url=${OPENAI_BASE_URL:https://api.openai.com}
-app.llm.providers[2].api-key=${OPENAI_API_KEY:}
-app.llm.providers[2].model=gpt-4o-mini
-app.llm.providers[2].type=BOTH
+# ── [NORMAL] Gemini Flash — 저비용 2순위 ────────────────────────
+# GEMINI_API_KEY2 미설정 시 시작 시 warn 로그 후 자동 비활성화
+app.llm.providers[2].name=gemini-flash
+app.llm.providers[2].base-url=${GEMINI_BASE_URL:https://generativelanguage.googleapis.com/v1beta/openai/}
+app.llm.providers[2].api-key=${GEMINI_API_KEY2:}
+app.llm.providers[2].model=gemini-2.5-flash
+app.llm.providers[2].type=TEXT
 app.llm.providers[2].role=NORMAL
 app.llm.providers[2].priority=2
 
-# ── [PREMIUM] Gemini Pro ──────────────────────────────────────────
-# GEMINI_API_KEY 미설정 시 시작 시 warn 로그 후 자동 비활성화
-app.llm.providers[3].name=gemini-pro
-app.llm.providers[3].base-url=${GEMINI_BASE_URL:https://generativelanguage.googleapis.com/v1beta/openai/}
-app.llm.providers[3].api-key=${GEMINI_API_KEY:}
-app.llm.providers[3].model=gemini-2.5-pro
-app.llm.providers[3].type=BOTH
-app.llm.providers[3].role=PREMIUM
+# ── [NORMAL] OpenAI Mini (fallback) ──────────────────────────────
+# OPENAI_API_KEY 미설정 시 시작 시 warn 로그 후 자동 비활성화
+app.llm.providers[3].name=openai-mini
+app.llm.providers[3].base-url=${OPENAI_BASE_URL:https://api.openai.com}
+app.llm.providers[3].api-key=${OPENAI_API_KEY:}
+app.llm.providers[3].model=gpt-4o-mini
+app.llm.providers[3].type=TEXT
+app.llm.providers[3].role=NORMAL
 app.llm.providers[3].priority=3
 
-# ── [PREMIUM] OpenAI GPT-4o (fallback) ───────────────────────────
-# OPENAI_API_KEY 미설정 시 시작 시 warn 로그 후 자동 비활성화
-app.llm.providers[4].name=openai
-app.llm.providers[4].base-url=${OPENAI_BASE_URL:https://api.openai.com}
-app.llm.providers[4].api-key=${OPENAI_API_KEY:}
-app.llm.providers[4].model=gpt-4o
-app.llm.providers[4].type=BOTH
+# ── [PREMIUM] Gemma 4 31B — 고추론 1순위 ─────────────────────────
+# GEMINI_API_KEY2 미설정 시 시작 시 warn 로그 후 자동 비활성화
+app.llm.providers[4].name=gemma-4-31b
+app.llm.providers[4].base-url=${GEMINI_BASE_URL:https://generativelanguage.googleapis.com/v1beta/openai/}
+app.llm.providers[4].api-key=${GEMINI_API_KEY2:}
+app.llm.providers[4].model=gemma-4-31b-it
+app.llm.providers[4].type=TEXT
 app.llm.providers[4].role=PREMIUM
 app.llm.providers[4].priority=4
+
+# ── [PREMIUM] OpenAI GPT-5o (fallback) ───────────────────────────
+# OPENAI_API_KEY 미설정 시 시작 시 warn 로그 후 자동 비활성화
+app.llm.providers[5].name=openai
+app.llm.providers[5].base-url=${OPENAI_BASE_URL:https://api.openai.com}
+app.llm.providers[5].api-key=${OPENAI_API_KEY:}
+app.llm.providers[5].model=gpt-5o
+app.llm.providers[5].type=TEXT
+app.llm.providers[5].role=PREMIUM
+app.llm.providers[5].priority=5
 
 # ── 병렬 인덱싱 제어 ──────────────────────────────────────────────
 app.indexing.max-concurrent-files=${INDEXING_MAX_FILES:3}

@@ -100,15 +100,13 @@
 
 ```
 data/
-└── users/
-    └── {userId}/
-        └── images/
-            └── {docId}/                     ← 문서 단위 격리
-                ├── p1_img0.png              ← PDF: p{페이지}_{순번}
-                ├── p1_img1.jpeg
-                ├── s3_img0.png              ← PPTX: s{슬라이드}_{순번}
-                ├── d0_img0.png              ← DOCX: d{섹션}_{순번}
-                └── md_img0.png              ← MD: md_{순번} (로컬 경로 복사)
+└── images/
+    └── {docId}/                     ← 문서 단위 격리
+        ├── p1_img0.png              ← PDF: p{페이지}_{순번}
+        ├── p1_img1.jpeg
+        ├── s3_img0.png              ← PPTX: s{슬라이드}_{순번}
+        ├── d0_img0.png              ← DOCX: d{섹션}_{순번}
+        └── md_img0.png              ← MD: md_{순번} (로컬 경로 복사)
 ```
 
 파일명 규칙: `{prefix}{pageOrSlide}_img{순번}.{ext}`

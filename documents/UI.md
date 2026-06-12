@@ -46,7 +46,9 @@ src/main/resources/
 
 ---
 
-## 3. 라우팅 (WebController 엔드포인트)
+## 3. 라우팅 (컨트롤러 엔드포인트)
+
+### 3.1 채팅 / 스레드 (ChatController)
 
 | Method | Path | 반환 | 설명 |
 |--------|------|------|------|
@@ -59,15 +61,36 @@ src/main/resources/
 | PATCH | `/ui/threads/{threadId}/routing-mode` | `204` | 대화별 라우팅 모드 저장 |
 | DELETE | `/ui/threads/{threadId}` | `200` | 대화 삭제 |
 | GET | `/ui/threads` | `fragments/thread-list` | 대화 목록 새로고침 |
+
+### 3.2 문서 관리 (DocumentController)
+
+| Method | Path | 반환 | 설명 |
+|--------|------|------|------|
+| GET | `/documents` | `documents.html` | 문서 관리 페이지 |
 | POST | `/ui/documents/upload` | 202 `{"taskId":"..."}` | 파일 업로드 수신 → 비동기 인덱싱 시작 |
 | GET | `/ui/documents/progress/{taskId}` | `text/event-stream` (SSE) | 인덱싱 진행 이벤트 (`stage`, `done`, `error`) |
 | POST | `/ui/documents/sync` | 202 `{"taskId":"..."}` | 폴더 동기화 비동기 시작 |
 | DELETE | `/ui/documents/{docId}` | `200` | 문서 삭제 |
 | GET | `/ui/documents/list` | `fragments/doc-table-body` | 문서 목록 새로고침 |
+
+### 3.3 운영 / LLM 사용량 (OperationsController)
+
+| Method | Path | 반환 | 설명 |
+|--------|------|------|------|
 | GET | `/llm-usage` | `llm-usage.html` | LLM 사용량 페이지 |
 | GET | `/ui/llm-usage/cards` | `fragments/llm-usage-cards` | 카드 HTMX 자동 갱신 |
 
 REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N`
+
+### 3.4 인증 (AuthController)
+
+| Method | Path | 반환 | 설명 |
+|--------|------|------|------|
+| GET | `/login` | `auth/login.html` | 로그인 페이지 (`app.auth.enabled=true` 시 활성) |
+| GET | `/signup` | `auth/signup.html` | 회원가입 페이지 |
+| POST | `/signup` | redirect `/` 또는 오류 | 회원가입 처리 (성공 시 자동 로그인) |
+| GET | `/setup` | `auth/setup.html` | 관리자 계정 초기 생성 페이지 (`app.auth.enabled=false` + DB에 admin 없을 때만) |
+| POST | `/setup` | redirect `/` 또는 오류 | 관리자 계정 생성 처리 |
 
 ---
 
