@@ -34,7 +34,7 @@ The built JAR is generated at `target/rag-agent-*.jar`.
 ```bash
 # 1. Start Chroma (separate terminal)
 docker run --rm -p 8001:8000 \
-  -v "$(pwd)/data/chroma:/chroma/chroma" \
+  -v "$(pwd)/data/chroma:/data" \
   chromadb/chroma:latest
 
 # 2. Configure environment variables
@@ -49,7 +49,7 @@ mvn spring-boot:run
 ```bash
 # 1. Start Chroma (separate terminal)
 docker run --rm -p 8001:8000 \
-  -v "$(pwd)/data/chroma:/chroma/chroma" \
+  -v "$(pwd)/data/chroma:/data" \
   chromadb/chroma:latest
 
 # 2. Load env vars and run JAR
@@ -67,7 +67,7 @@ container system start
 
 # 2. Start Chroma (separate terminal)
 container run --rm -p 8001:8000 \
-  -v "$(pwd)/data/chroma:/chroma/chroma" \
+  -v "$(pwd)/data/chroma:/data" \
   chromadb/chroma:latest
 
 # 3. Load env vars and run

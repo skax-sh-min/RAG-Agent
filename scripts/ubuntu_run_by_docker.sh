@@ -31,7 +31,7 @@ case "$CHROMA_STATUS" in
   "")
     echo "chroma-server 컨테이너를 새로 생성하고 시작합니다..."
     docker run -d --name chroma-server -p 8001:8000 \
-      -v "$(pwd)/data/chroma:/chroma/chroma" \
+      -v "$(pwd)/data/chroma:/data" \
       chromadb/chroma:latest
     echo "chroma-server가 시작되었습니다."
     ;;

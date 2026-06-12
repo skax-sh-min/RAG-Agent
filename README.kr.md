@@ -34,7 +34,7 @@ mvn clean package -DskipTests
 ```bash
 # 1. Chroma 서버 (별도 터미널)
 docker run --rm -p 8001:8000 \
-  -v "$(pwd)/data/chroma:/chroma/chroma" \
+  -v "$(pwd)/data/chroma:/data" \
   chromadb/chroma:latest
 
 # 2. 환경변수 설정
@@ -49,7 +49,7 @@ mvn spring-boot:run
 ```bash
 # 1. Chroma 서버 (별도 터미널)
 docker run --rm -p 8001:8000 \
-  -v "$(pwd)/data/chroma:/chroma/chroma" \
+  -v "$(pwd)/data/chroma:/data" \
   chromadb/chroma:latest
 
 # 2. 환경변수 로드 후 JAR 실행
