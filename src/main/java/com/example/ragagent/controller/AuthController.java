@@ -148,6 +148,8 @@ public class AuthController {
         SecurityContext ctx = SecurityContextHolder.createEmptyContext();
         ctx.setAuthentication(auth);
         SecurityContextHolder.setContext(ctx);
+        HttpSession old = request.getSession(false);
+        if (old != null) old.invalidate();
         HttpSession session = request.getSession(true);
         session.setAttribute(HttpSessionSecurityContextRepository.SPRING_SECURITY_CONTEXT_KEY, ctx);
 
