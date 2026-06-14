@@ -62,6 +62,8 @@ public class NoAuthAutoLoginFilter extends OncePerRequestFilter {
     private boolean isPassThrough(String path) {
         return path.equals("/setup")
                 || path.equals("/error")
+                || path.equals("/api/v1/health")
+                || path.startsWith("/actuator/")
                 || path.startsWith("/webjars/")
                 || path.startsWith("/css/")
                 || path.startsWith("/js/")
