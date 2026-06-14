@@ -24,9 +24,9 @@ import java.util.regex.Pattern;
 @Controller
 public class AuthController {
 
-    // 10+ chars, at least one letter, one digit, one special char
+    // 10–72 chars: BCrypt silently truncates beyond 72 bytes
     private static final Pattern PASSWORD_PATTERN = Pattern.compile(
-            "^(?=.*[a-zA-Z])(?=.*\\d)(?=.*[!@#$%^&*()_+\\-=\\[\\]{};':\"\\\\|,.<>/?`~]).{10,}$"
+            "^(?=.*[a-zA-Z])(?=.*\\d)(?=.*[!@#$%^&*()_+\\-=\\[\\]{};':\"\\\\|,.<>/?`~]).{10,72}$"
     );
     private static final Pattern EMAIL_PATTERN = Pattern.compile(
             "^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$"
