@@ -12,6 +12,7 @@ public record AppProperties(
         int chunkSize,
         int chunkOverlap,
         int searchTopK,
+        double searchSimilarityThreshold,
         Integer sseTimeoutSeconds,
         LlmConfig llm,
         IndexingConfig indexing,
@@ -98,6 +99,15 @@ public record AppProperties(
         if (imageDescription == null)
             return new ImageDescriptionProperties("strip", false, false, null, 1_000, true, false, false, false);
         return imageDescription;
+    }
+
+    /**
+     * Similarity threshold for vector search, clamped to [0,1].
+     * 0.0 = accept all (Spring AI default) — preserves pre-R-1 behavior.
+     */
+    public double searchSimilarityThresholdSafe() {
+        if (searchSimilarityThreshold <= 0.0) return 0.0;
+        return Math.min(searchSimilarityThreshold, 1.0);
     }
 
     public long sseTimeoutMs() {

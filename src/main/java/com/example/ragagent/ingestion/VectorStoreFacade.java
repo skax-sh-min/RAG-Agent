@@ -1,5 +1,6 @@
 package com.example.ragagent.ingestion;
 
+import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.model.MetaKey;
 import com.example.ragagent.service.VectorStoreRegistry;
 import org.springframework.ai.document.Document;
@@ -22,21 +23,26 @@ public class VectorStoreFacade {
     private static final Pattern SAFE_VERSION = Pattern.compile("^[a-zA-Z0-9._\\-]{1,50}$");
 
     private final VectorStoreRegistry registry;
+    private final double similarityThreshold;
 
-    public VectorStoreFacade(VectorStoreRegistry registry) {
+    public VectorStoreFacade(VectorStoreRegistry registry, AppProperties props) {
         this.registry = registry;
+        this.similarityThreshold = props.searchSimilarityThresholdSafe();
     }
 
     public List<Document> search(String userId, String query, String version, int topK) {
         String safeVersion = safe(version);
         VectorStore store = registry.getStore(userId, safeVersion);
         FilterExpressionBuilder b = new FilterExpressionBuilder();
-        SearchRequest request = SearchRequest.builder()
+        SearchRequest.Builder request = SearchRequest.builder()
                 .query(query)
                 .topK(topK)
-                .filterExpression(b.eq(MetaKey.VERSION, safeVersion).build())
-                .build();
-        return store.similaritySearch(request);
+                .filterExpression(b.eq(MetaKey.VERSION, safeVersion).build());
+        // R-1: only set when configured (>0) so 0.0 keeps Spring AI accept-all behavior.
+        if (similarityThreshold > 0.0) {
+            request.similarityThreshold(similarityThreshold);
+        }
+        return store.similaritySearch(request.build());
     }
 
     public void add(String userId, String version, List<Document> docs) {
