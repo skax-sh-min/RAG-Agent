@@ -29,12 +29,16 @@ public class RetrievalService {
     private final RagService ragService;
     private final MultiQueryExpander multiQueryExpander;
     private final int defaultTopK;
+    private final boolean multiqueryEnabled;
+    private final int multiqueryMinLength;
     private final LazyVisionService lazyVisionService; // null when disabled
 
     public RetrievalService(ChatModel chatModel, RagService ragService, AppProperties props,
                             Optional<LazyVisionService> lazyVisionOpt) {
         this.ragService = ragService;
         this.defaultTopK = props.searchTopK();
+        this.multiqueryEnabled = props.searchMultiqueryEnabled();
+        this.multiqueryMinLength = props.searchMultiqueryMinLengthSafe();
         this.lazyVisionService = lazyVisionOpt.orElse(null);
         this.multiQueryExpander = MultiQueryExpander.builder()
                 .chatClientBuilder(ChatClient.builder(chatModel))
@@ -46,9 +50,11 @@ public class RetrievalService {
     public AgentState execute(AgentState state) {
         List<Document> unique;
         try {
-            List<Query> queries = multiQueryExpander.expand(new Query(state.question()));
+            // S-4: skip the expansion LLM call for disabled mode or short keyword-ish queries.
+            List<String> queryTexts = shouldExpand(state.question())
+                    ? multiQueryExpander.expand(new Query(state.question())).stream().map(Query::text).toList()
+                    : List.of(state.question());
             // S-3: embed all variants in one batched call + a single Chroma query, then RRF-merge.
-            List<String> queryTexts = queries.stream().map(Query::text).toList();
             List<List<Document>> ranked = ragService.searchBatch(
                     state.userId(), queryTexts, state.version(), defaultTopK);
             unique = mergeRrf(ranked, defaultTopK);
@@ -94,6 +100,18 @@ public class RetrievalService {
                 .withRetrievalWarnings(warnings)
                 .withImageRefs(imageRefs)
                 .withNeedsRetry(false);
+    }
+
+    /**
+     * S-4: gate the multi-query expansion LLM call. Skips when disabled or when the
+     * question is shorter than the configured min length (short keyword-ish queries gain
+     * little from expansion but pay the LLM round-trip on the critical path).
+     * Package-private for unit testing.
+     */
+    boolean shouldExpand(String question) {
+        if (!multiqueryEnabled) return false;
+        if (question == null) return false;
+        return question.strip().length() >= multiqueryMinLength;
     }
 
     private List<Document> augmentWithDescriptions(List<Document> docs, Map<String, String> descriptions) {

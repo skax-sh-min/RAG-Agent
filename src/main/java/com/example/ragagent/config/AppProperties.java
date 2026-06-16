@@ -13,6 +13,8 @@ public record AppProperties(
         int chunkOverlap,
         int searchTopK,
         double searchSimilarityThreshold,
+        boolean searchMultiqueryEnabled,
+        int searchMultiqueryMinLength,
         Integer sseTimeoutSeconds,
         LlmConfig llm,
         IndexingConfig indexing,
@@ -108,6 +110,11 @@ public record AppProperties(
     public double searchSimilarityThresholdSafe() {
         if (searchSimilarityThreshold <= 0.0) return 0.0;
         return Math.min(searchSimilarityThreshold, 1.0);
+    }
+
+    /** S-4: query length (chars) at/above which multi-query expansion runs. Clamped to >= 0 (0 = no length gate). */
+    public int searchMultiqueryMinLengthSafe() {
+        return Math.max(0, searchMultiqueryMinLength);
     }
 
     public long sseTimeoutMs() {
