@@ -15,6 +15,7 @@ public record AppProperties(
         double searchSimilarityThreshold,
         boolean searchMultiqueryEnabled,
         int searchMultiqueryMinLength,
+        boolean searchHybridEnabled,
         Integer sseTimeoutSeconds,
         LlmConfig llm,
         IndexingConfig indexing,

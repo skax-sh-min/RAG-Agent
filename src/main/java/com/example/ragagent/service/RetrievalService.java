@@ -31,6 +31,7 @@ public class RetrievalService {
     private final int defaultTopK;
     private final boolean multiqueryEnabled;
     private final int multiqueryMinLength;
+    private final boolean hybridEnabled;
     private final LazyVisionService lazyVisionService; // null when disabled
 
     public RetrievalService(ChatModel chatModel, RagService ragService, AppProperties props,
@@ -39,6 +40,7 @@ public class RetrievalService {
         this.defaultTopK = props.searchTopK();
         this.multiqueryEnabled = props.searchMultiqueryEnabled();
         this.multiqueryMinLength = props.searchMultiqueryMinLengthSafe();
+        this.hybridEnabled = props.searchHybridEnabled();
         this.lazyVisionService = lazyVisionOpt.orElse(null);
         this.multiQueryExpander = MultiQueryExpander.builder()
                 .chatClientBuilder(ChatClient.builder(chatModel))
@@ -57,6 +59,15 @@ public class RetrievalService {
             // S-3: embed all variants in one batched call + a single Chroma query, then RRF-merge.
             List<List<Document>> ranked = ragService.searchBatch(
                     state.userId(), queryTexts, state.version(), defaultTopK);
+            // R-2: add a BM25 keyword axis to the fusion when hybrid search is enabled.
+            if (hybridEnabled) {
+                List<Document> keywordHits = ragService.keywordSearch(
+                        state.version(), state.question(), defaultTopK);
+                if (!keywordHits.isEmpty()) {
+                    ranked = new ArrayList<>(ranked);
+                    ranked.add(keywordHits);
+                }
+            }
             unique = mergeRrf(ranked, defaultTopK);
         } catch (Exception e) {
             log.warn("Multi-query expansion failed, falling back to original question: {}", e.getMessage());
@@ -170,11 +181,33 @@ public class RetrievalService {
                 .toList();
     }
 
-    private static String docKey(Document doc) {
-        String filename = String.valueOf(doc.getMetadata().getOrDefault(MetaKey.FILENAME, ""));
-        String page = String.valueOf(doc.getMetadata().getOrDefault(MetaKey.PAGE_OR_SLIDE, ""));
+    /**
+     * R-4: stable dedup key. Prefers {@code doc_id:chunk_index} (set at index time and
+     * shared across vector + keyword sources for hybrid fusion); falls back to the legacy
+     * filename|page|preview for chunks indexed before chunk_index existed.
+     */
+    static String docKey(Document doc) {
+        Map<String, Object> meta = doc.getMetadata();
+        Object docId = meta.get(MetaKey.DOC_ID);
+        Object chunkIdx = meta.get(MetaKey.CHUNK_INDEX);
+        if (docId != null && chunkIdx != null) {
+            return docId + ":" + normalizeIndex(chunkIdx);
+        }
+        String filename = String.valueOf(meta.getOrDefault(MetaKey.FILENAME, ""));
+        String page = String.valueOf(meta.getOrDefault(MetaKey.PAGE_OR_SLIDE, ""));
         String preview = doc.getText() == null ? "" : doc.getText().substring(0, Math.min(50, doc.getText().length()));
         return filename + "|" + page + "|" + preview;
+    }
+
+    /** Normalizes a chunk index from any source (Integer/Double/String) to a canonical int string. */
+    private static String normalizeIndex(Object idx) {
+        if (idx instanceof Number n) return Integer.toString(n.intValue());
+        String s = idx.toString().trim();
+        try {
+            return Integer.toString((int) Double.parseDouble(s));
+        } catch (NumberFormatException e) {
+            return s;
+        }
     }
 
     private String formatSource(Document doc) {

@@ -79,8 +79,11 @@ class DocumentIndexerTest {
         when(llmRouter.executeWithTracking(any(), any(), any()))
                 .thenThrow(new RuntimeException("no LLM in test"));
 
+        KeywordSearchRepository keywordRepo = new KeywordSearchRepository(new JdbcTemplate(ds));
+        keywordRepo.init();
+
         indexer = new DocumentIndexer(loaderService, correctionService, imageExtractorService,
-                vectorStore, docRegistry, llmRouter, props);
+                vectorStore, docRegistry, keywordRepo, llmRouter, props);
         indexer.init();
     }
 

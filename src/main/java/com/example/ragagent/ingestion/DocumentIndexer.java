@@ -45,6 +45,7 @@ public class DocumentIndexer {
     private final ImageExtractorService imageExtractorService;
     private final VectorStoreFacade vectorStore;
     private final DocRegistry docRegistry;
+    private final KeywordSearchRepository keywordRepo;
     private final LlmRouter llmRouter;
     private final AppProperties props;
 
@@ -62,6 +63,7 @@ public class DocumentIndexer {
                            ImageExtractorService imageExtractorService,
                            VectorStoreFacade vectorStore,
                            DocRegistry docRegistry,
+                           KeywordSearchRepository keywordRepo,
                            LlmRouter llmRouter,
                            AppProperties props) {
         this.loaderService = loaderService;
@@ -69,6 +71,7 @@ public class DocumentIndexer {
         this.imageExtractorService = imageExtractorService;
         this.vectorStore = vectorStore;
         this.docRegistry = docRegistry;
+        this.keywordRepo = keywordRepo;
         this.llmRouter = llmRouter;
         this.props = props;
     }
@@ -151,6 +154,7 @@ public class DocumentIndexer {
         req.onProgress().accept(IndexingProgressEvent.of("storing", enriched.size(), enriched.size(),
                 req.filename(), "벡터 DB 저장 중..."));
         vectorStore.add(DocRegistry.SHARED, req.version(), enriched);
+        keywordRepo.indexChunks(enriched);   // R-2: populate FTS keyword index
 
         List<String> docIds = enriched.stream().map(Document::getId).toList();
         DocRegistry.DocRegistryEntry entry = new DocRegistry.DocRegistryEntry(
@@ -205,6 +209,7 @@ public class DocumentIndexer {
 
         log.debug("[REINDEX] 벡터 스토어 저장 중: {}개 청크", enriched.size());
         vectorStore.add(DocRegistry.SHARED, version, enriched);
+        keywordRepo.indexChunks(enriched);   // R-2: populate FTS keyword index
 
         List<String> springIds = enriched.stream().map(Document::getId).toList();
         docRegistry.put(docId, DocRegistry.SHARED, new DocRegistry.DocRegistryEntry(
@@ -344,6 +349,7 @@ public class DocumentIndexer {
             meta.put(MetaKey.COLLECTED_AT, Instant.now().toString());
             meta.putIfAbsent(MetaKey.SOURCE_TYPE,   "file");
             meta.putIfAbsent(MetaKey.PAGE_OR_SLIDE, i + 1);
+            meta.put(MetaKey.CHUNK_INDEX,  i);   // R-4: stable per-chunk key (separate from page)
             meta.put(MetaKey.OWNER_ID,     ownerId);
             meta.putIfAbsent(MetaKey.VISIBILITY, "private");
             tagged.add(new Document(chunk.getText(), meta));
@@ -363,6 +369,7 @@ public class DocumentIndexer {
                 vectorStore.deleteByDocIds(userId, version, e.springDocIds());
             }
         });
+        keywordRepo.deleteByDocId(docId);   // R-2: keep FTS index in sync
     }
 
     private void deleteDocFiles(String userId, String docId) {
@@ -435,7 +442,7 @@ public class DocumentIndexer {
                     model -> model.call(new Prompt(prompt)));
             log.debug("[ENRICH] LLM 키워드: [{}]", keywords);
             Map<String, Object> meta = new HashMap<>(chunk.getMetadata());
-            meta.put("excerpt_keywords", keywords);
+            meta.put(MetaKey.EXCERPT_KEYWORDS, keywords);
             return new Document(chunk.getText(), meta);
         } catch (Exception e) {
             if (isTimeoutLike(e)) {
@@ -446,7 +453,7 @@ public class DocumentIndexer {
             }
             String keywords = extractKeywordsTf(chunk.getText(), 5);
             Map<String, Object> meta = new HashMap<>(chunk.getMetadata());
-            meta.put("excerpt_keywords", keywords);
+            meta.put(MetaKey.EXCERPT_KEYWORDS, keywords);
             return new Document(chunk.getText(), meta);
         } finally {
             killer.cancel(false);
