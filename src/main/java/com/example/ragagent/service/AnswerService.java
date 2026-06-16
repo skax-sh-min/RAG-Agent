@@ -39,14 +39,15 @@ public class AnswerService {
 
     private static final int MAX_ANSWER_LEN = 20_000;
 
-    private record SufficiencyOutput(boolean sufficient) {}
+    /** S-1: single evaluation call returns both gates. */
+    private record EvalOutput(boolean sufficient, boolean grounded) {}
 
     private final ChatClient chatClient;
     private final LlmRouter llmRouter;
     private final MessageSource messageSource;
     private final int maxRetryCount;
-    private final BeanOutputConverter<SufficiencyOutput> sufficiencyConverter =
-            new BeanOutputConverter<>(SufficiencyOutput.class);
+    private final BeanOutputConverter<EvalOutput> evalConverter =
+            new BeanOutputConverter<>(EvalOutput.class);
 
     public AnswerService(ChatClient chatClient, LlmRouter llmRouter,
                          AppProperties appProperties, MessageSource messageSource) {
@@ -136,10 +137,10 @@ public class AnswerService {
                     .build();
     }
 
-    // ── Sufficiency + PROGRESSIVE ───────────────────────────────────────────
+    // ── Evaluation (sufficiency + grounding) + PROGRESSIVE ───────────────────
 
     private AgentState checkSufficiencyAndMaybeUpgrade(AgentState state, String answer, GraphListener listener) {
-        AgentState resultState = checkSufficiency(state, answer, state.locale());
+        AgentState resultState = evaluate(state, answer, state.locale());
         if (state.routingMode() == RoutingMode.PROGRESSIVE
                 && resultState.needsRetry()
                 && state.retryCount() >= maxRetryCount) {
@@ -228,24 +229,38 @@ public class AnswerService {
                 .forEach(tokenSink);
     }
 
-    private AgentState checkSufficiency(AgentState state, String answer, Locale locale) {
+    /**
+     * S-1: single LLM call evaluating both gates at once.
+     * needsRetry is driven by sufficiency (the ANSWER-node gate); grounded is stored for the
+     * CRITIC node to consume without a second LLM round-trip. When no docs were retrieved,
+     * grounding is trivially true (CRITIC short-circuits on empty docs anyway).
+     */
+    private AgentState evaluate(AgentState state, String answer, Locale locale) {
+        boolean docsPresent = !state.retrievedDocs().isEmpty();
         try {
-            String systemPrompt = messageSource.getMessage("prompt.answer.sufficiency", null, locale);
-            String evalPrompt = "[질문]\n%s\n\n[답변]\n%s\n\n%s"
-                    .formatted(state.question(), answer, sufficiencyConverter.getFormat());
+            String systemPrompt = messageSource.getMessage("prompt.answer.eval", null, locale);
+            String excerpts = state.retrievedDocs().stream()
+                    .limit(5)
+                    .map(d -> d.getText() == null ? "" : d.getText())
+                    .collect(Collectors.joining("\n---\n"));
+            String evalPrompt = "[질문]\n%s\n\n[답변]\n%s\n\n[문서 발췌]\n%s\n\n%s"
+                    .formatted(state.question(), answer, excerpts, evalConverter.getFormat());
 
             StringBuilder buf = new StringBuilder();
             chatClient.prompt()
                     .system(systemPrompt)
                     .user(evalPrompt)
                     .stream().content().doOnNext(buf::append).blockLast();
-            boolean sufficient = sufficiencyConverter
-                    .convert(buf.isEmpty() ? "" : buf.toString())
-                    .sufficient();
-            return state.toBuilder().accumulateTokens(0, 0).needsRetry(!sufficient).build();
+            EvalOutput out = evalConverter.convert(buf.isEmpty() ? "" : buf.toString());
+            boolean grounded = !docsPresent || out.grounded();
+            return state.toBuilder()
+                    .accumulateTokens(0, 0)
+                    .needsRetry(!out.sufficient())
+                    .grounded(grounded)
+                    .build();
         } catch (Exception e) {
-            log.warn("Sufficiency check parse failed, treating as sufficient: {}", e.getMessage());
-            return state.toBuilder().needsRetry(false).build();
+            log.warn("Evaluation parse failed, treating as sufficient + grounded: {}", e.getMessage());
+            return state.toBuilder().needsRetry(false).grounded(true).build();
         }
     }
 

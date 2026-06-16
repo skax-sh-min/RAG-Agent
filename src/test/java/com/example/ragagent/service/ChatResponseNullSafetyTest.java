@@ -20,7 +20,6 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
@@ -80,26 +79,35 @@ class ChatResponseNullSafetyTest {
     // ── CriticService ─────────────────────────────────────────────────────────
 
     @Test
-    @DisplayName("CriticService.execute — getText() null → grounded=true 폴백 (B-23)")
-    void critic_nullText_treatsAsGrounded() {
-        ChatClient chatClient = mock(ChatClient.class, RETURNS_DEEP_STUBS);
-        ChatResponse resp = mock(ChatResponse.class, RETURNS_DEEP_STUBS);
-        when(chatClient.prompt().system(anyString()).user(anyString()).call().chatResponse())
-                .thenReturn(resp);
-        when(resp.getResult().getOutput().getText()).thenReturn(null);
-
-        MessageSource messageSource = mock(MessageSource.class);
-        when(messageSource.getMessage(anyString(), any(), any(Locale.class))).thenReturn("prompt");
-        CriticService svc = new CriticService(chatClient, messageSource);
+    @DisplayName("CriticService.execute — grounded 미설정(null) → grounded=true 폴백 (S-1)")
+    void critic_nullGrounded_treatsAsGrounded() {
+        CriticService svc = new CriticService();
         AgentState state = AgentState.of("테스트", "latest", "t1", "", null)
-                .withAnswer("답변")
-                .withRetrievedDocs(List.of(new Document("doc content", Map.of())));
+                .toBuilder()
+                .answer("답변")
+                .retrievedDocs(List.of(new Document("doc content", Map.of())))
+                .build();   // grounded 미설정 (null)
         AgentState result = svc.execute(state);
 
         assertThat(result.grounded())
-                .as("null text parse failure should treat answer as grounded")
+                .as("precomputed grounded null → treat as grounded (fail-safe)")
                 .isTrue();
         assertThat(result.needsRetry()).isFalse();
+    }
+
+    @Test
+    @DisplayName("CriticService.execute — 선계산 grounded=false → needsRetry=true (S-1)")
+    void critic_precomputedUngrounded_triggersRetry() {
+        CriticService svc = new CriticService();
+        AgentState state = AgentState.of("테스트", "latest", "t1", "", null)
+                .toBuilder()
+                .answer("답변")
+                .retrievedDocs(List.of(new Document("doc content", Map.of())))
+                .grounded(false)
+                .build();
+        AgentState result = svc.execute(state);
+
+        assertThat(result.needsRetry()).isTrue();
     }
 
     // ── ClassifierService — VALID_TYPES 범위 검증 ─────────────────────────────
@@ -125,17 +133,14 @@ class ChatResponseNullSafetyTest {
     // ── CriticService — retrievedDocs 비어있을 때 즉시 리턴 ───────────────────
 
     @Test
-    @DisplayName("CriticService — retrievedDocs 비어있으면 LLM 호출 없이 needsRetry=false")
-    void critic_emptyDocs_returnsFalseWithoutLlmCall() {
-        ChatClient chatClient = mock(ChatClient.class);
-        MessageSource messageSource = mock(MessageSource.class);
-        CriticService svc = new CriticService(chatClient, messageSource);
+    @DisplayName("CriticService — retrievedDocs 비어있으면 needsRetry=false")
+    void critic_emptyDocs_returnsFalse() {
+        CriticService svc = new CriticService();
         AgentState state = AgentState.of("테스트", "latest", "t1", "", null)
                 .toBuilder().answer("답변").retrievedDocs(List.of()).build();
 
         AgentState result = svc.execute(state);
 
         assertThat(result.needsRetry()).isFalse();
-        verifyNoInteractions(chatClient);
     }
 }
