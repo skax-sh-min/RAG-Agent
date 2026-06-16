@@ -14,8 +14,6 @@ import org.springframework.ai.rag.preretrieval.query.expansion.MultiQueryExpande
 import org.springframework.stereotype.Service;
 
 import java.util.*;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.Executors;
 
 /**
  * Retrieves relevant documents from the vector store.
@@ -49,14 +47,10 @@ public class RetrievalService {
         List<Document> unique;
         try {
             List<Query> queries = multiQueryExpander.expand(new Query(state.question()));
-            List<List<Document>> ranked;
-            try (var exec = Executors.newVirtualThreadPerTaskExecutor()) {
-                List<CompletableFuture<List<Document>>> futures = queries.stream()
-                        .map(q -> CompletableFuture.supplyAsync(
-                                () -> ragService.search(state.userId(), q.text(), state.version(), defaultTopK), exec))
-                        .toList();
-                ranked = futures.stream().map(CompletableFuture::join).toList();
-            }
+            // S-3: embed all variants in one batched call + a single Chroma query, then RRF-merge.
+            List<String> queryTexts = queries.stream().map(Query::text).toList();
+            List<List<Document>> ranked = ragService.searchBatch(
+                    state.userId(), queryTexts, state.version(), defaultTopK);
             unique = mergeRrf(ranked, defaultTopK);
         } catch (Exception e) {
             log.warn("Multi-query expansion failed, falling back to original question: {}", e.getMessage());

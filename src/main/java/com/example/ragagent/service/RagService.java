@@ -94,6 +94,11 @@ public class RagService {
         return vectorStore.search(DocRegistry.SHARED, query, version, topK);
     }
 
+    /** S-3: batched multi-query search — one embedding call + one Chroma query for all variants. */
+    public List<List<Document>> searchBatch(String userId, List<String> queries, String version, int topK) {
+        return vectorStore.searchBatch(DocRegistry.SHARED, queries, version, topK);
+    }
+
     public void reindexFromMd(String docId) throws IOException {
         indexer.reindexFromMd(docId);
     }
