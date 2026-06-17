@@ -45,7 +45,7 @@ HTTP 요청
 |------|------|---------|
 | **CLASSIFIER** | 질문 유형 판별 (concept / usage / error / version / meta) | ① — AgentService에서 선실행하므로 그래프 내에서는 스킵 |
 | **DIRECT_ANSWER** | meta 질문 직접 응답 (벡터 검색 없음) | ② |
-| **RETRIEVAL** | 쿼리 확장(원본+2변형, 총 3쿼리 병렬) → ChromaDB 병렬 검색 → RRF 병합 | ③ 쿼리 확장 |
+| **RETRIEVAL** | 쿼리 확장(조건부) → 1회 배치 임베딩 → 단일 Chroma 쿼리 → RRF 병합 → 선택적 LLM 리랭킹(opt-in). 재시도 시 후보 풀 ×(retry+1) 에스컬레이션 | ③ 쿼리 확장, [리랭킹 활성 시 1콜] |
 | **ANSWER** | 문서 기반 답변 생성 + 충분도 검사 | ④ 답변, ⑤ 충분도 |
 | **CRITIC** | 답변이 문서에 근거하는지 검증 | ⑥ |
 | **FINALIZE** | 대화 히스토리 저장 (SQLite) | 없음 |
@@ -123,7 +123,8 @@ PROGRESSIVE 모드 AND sufficient=false AND retryCount >= max
 
 > `retryCount`는 최초 RETRIEVAL 진입 시 증가하지 않습니다.  
 > ANSWER 또는 CRITIC이 재시도를 결정할 때만 증가합니다.  
-> `MAX_RETRY_COUNT=2`(기본)이면 최대 **2회 재검색**이 허용됩니다.
+> `MAX_RETRY_COUNT=2`(기본)이면 최대 **2회 재검색**이 허용됩니다.  
+> 재검색 시 후보 풀이 `min(topK×(retryCount+1), topK×3)`로 확대되어(`SEARCH_RETRY_ESCALATE=true`) 동일 검색 반복을 피합니다.
 
 ---
 

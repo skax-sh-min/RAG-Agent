@@ -54,7 +54,8 @@ Flow:
 | `service/AgentService.java` | Entry point; `PromptInjectionGuard.validate()` at entry; parallel history + classify before graph |
 | `service/StreamingAgentService.java` | SSE pipeline; Virtual Thread worker; heartbeat every 15 s; partial answer persisted on error (B-13) |
 | `service/ClassifierService.java` | `classifyOnly(String)` (no token accumulation) + `execute(AgentState)` |
-| `service/RetrievalService.java` | Parallel MultiQuery search (`CompletableFuture` + virtual thread executor) |
+| `service/RetrievalService.java` | Batch MultiQuery search → RRF fusion; retry escalation (`candidateK = min(topK×(retryCount+1), topK×3)`); optional rerank via injected `Optional<RerankerService>` |
+| `service/RerankerService.java` | LLM reranking (opt-in, `@ConditionalOnProperty app.search-rerank-enabled`); one LLM call reorders the candidate pool by relevance then cuts to topK; `parseRanking()` parses a JSON index array with range/dup filtering; falls back to original RRF order on parse failure |
 | `service/RagService.java` | 3-phase `syncDirectory()`: detect → parallel index → delete; `enrichParallel()` with Semaphore |
 | `service/VisionDescriptionService.java` | Image bytes → Korean description via `LlmRouter.route(VISION, COST_FIRST)` |
 
@@ -94,6 +95,8 @@ docker-compose up chroma
 - Document storage is shared (no per-user isolation): `data/documents/`, `data/images/{docId}/`, `data/converted/{docId}.md`; DocRegistry and Chroma collection use `DocRegistry.SHARED` as the owner key
 - Rate limiting: `RateLimitFilter` uses Bucket4j + Caffeine per-user token-bucket; `app.rate-limit.enabled` (default `true`)
 - Audit logging: `AuditLogger` writes to Logback AUDIT_FILE appender; `app.audit.enabled` (default `true`)
+- Search tuning props (all `app.search-*`): `retry-escalate` (default `true`), `rerank-enabled` (default `false`/opt-in), `candidate-multiplier` (rerank pool size, default `3`), `hybrid-enabled` (default `false`), `multiquery-enabled`/`multiquery-min-length`, `similarity-threshold`. Always read via `props.searchCandidateMultiplierSafe()` etc., never the raw getter
+- `RerankerService` is a `@ConditionalOnProperty` bean injected as `Optional<RerankerService>`; when `rerank-enabled=false` no bean exists and `RetrievalService` still works — never assume the Optional is present
 - `PromptInjectionGuard.wrap()` is implemented but not yet wired into prompts — deferred to 05-prompt-externalization.md
 - `app.auth.enabled=false` → CSRF disabled, `SessionCreationPolicy.STATELESS`, `NoAuthAutoLoginFilter` active; guest userId constant = `NoAuthAutoLoginFilter.GUEST_ID`; admin path (`/admin/**`) auto-authenticates as first DB `ROLE_ADMIN` user
 - `GlobalModelAdvice.authEnabled()` is computed per-request (not in constructor) to avoid NPE when `AppProperties` is mocked in `@WebMvcTest`

@@ -159,6 +159,13 @@ copy .env.example .env
 | `CHUNK_SIZE` | `800` | 300 ~ 2000 | 청크 크기 (문자 수). 작을수록 정밀, 클수록 문맥 풍부 |
 | `CHUNK_OVERLAP` | `100` | 0 ~ CHUNK_SIZE × 0.25 | 청크 간 중복 (문자 수). 청크 경계 문맥 보완 |
 | `SEARCH_TOP_K` | `7` | 2 ~ 15 | 벡터 검색 반환 문서 수. 높을수록 재현율↑, 토큰↑ |
+| `SEARCH_SIMILARITY_THRESHOLD` | `0.0` | 0.0 ~ 0.75 | 청크 유지 최소 코사인 유사도. `0.0`=전체 수용. 운영 0.5~0.75 튜닝 시 골든셋 recall 확인 후 적용 |
+| `SEARCH_MULTIQUERY_ENABLED` | `true` | true/false | 검색 전 질의 다중 확장(LLM) 여부. `false`면 임계 경로 첫 LLM 콜 제거 |
+| `SEARCH_MULTIQUERY_MIN_LENGTH` | `0` | 0 ~ 20 | 이 길이(trim) 미만 질의는 확장 생략. `0`=항상 확장. 짧은 키워드 질의 TTFT↓ |
+| `SEARCH_HYBRID_ENABLED` | `false` | true/false | RRF에 BM25(FTS5) 키워드 축 추가. **활성화 시 기존 색인 문서 재인덱싱 필요** |
+| `SEARCH_RETRY_ESCALATE` | `true` | true/false | 재시도마다 후보 풀 확대. `candidateK = min(topK×(retryCount+1), topK×3)`. 동일 검색 반복 회피 |
+| `SEARCH_RERANK_ENABLED` | `false` | true/false | RRF 후 LLM 리랭킹 단계 (opt-in). **턴당 LLM 1콜 추가** → 정밀도↑/레이턴시 트레이드오프 |
+| `SEARCH_CANDIDATE_MULTIPLIER` | `3` | 2 ~ 5 | 리랭킹 전 후보 풀 크기. `topK × N`개 가져와 리랭킹 후 topK로 축소 |
 | `MAX_RETRY_COUNT` | `2` | 0 ~ 4 | 증거 부족 시 재검색 최대 횟수 |
 | `MAX_CONVERSATION_CHARS` | `8000` | 1000 ~ 20000 | 멀티턴 컨텍스트 주입 최대 문자 수 |
 
@@ -711,6 +718,7 @@ app.llm.providers[0].stream=false
 | VisionDescriptionService | `VISION` | 이미지 → 설명 생성 |
 | ImageTypeClassifier | `LIGHT_BOTH` | 이미지 유형 분류 |
 | KeywordMetadataEnricher | `LIGHT_TEXT` | 청크 키워드 추출 |
+| RerankerService | `TEXT` (ChatClient) | 검색 후보 LLM 리랭킹 — `SEARCH_RERANK_ENABLED=true`일 때만 동작 |
 
 ---
 
@@ -984,7 +992,7 @@ curl -X POST http://localhost:8080/api/v1/chat \
 ### 6.4 성능
 
 - **Java 21 Virtual Threads** (`spring.threads.virtual.enabled=true`) — LLM I/O 동시 요청을 효율적으로 처리
-- **병렬 멀티 쿼리** — `RetrievalService`에서 3개 쿼리를 `CompletableFuture`로 병렬 실행
+- **배치 멀티 쿼리 검색** — `RetrievalService`가 확장 질의를 1회 배치 임베딩 → 단일 Chroma 쿼리 → RRF 융합. 재시도 시 후보 풀 에스컬레이션, 선택적 LLM 리랭킹(opt-in)
 - **병렬 인덱싱** — `RagService.syncDirectory()`에서 파일별·LLM 호출별 Semaphore 기반 병렬 처리
 - **DUAL 모드** — LOCAL + 외부를 Virtual Thread로 병렬 실행
 
