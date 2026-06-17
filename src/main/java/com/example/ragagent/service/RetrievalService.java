@@ -32,16 +32,25 @@ public class RetrievalService {
     private final boolean multiqueryEnabled;
     private final int multiqueryMinLength;
     private final boolean hybridEnabled;
+    private final boolean retryEscalate;
+    private final boolean rerankEnabled;
+    private final int candidateMultiplier;
     private final LazyVisionService lazyVisionService; // null when disabled
+    private final Optional<RerankerService> reranker;
 
     public RetrievalService(ChatModel chatModel, RagService ragService, AppProperties props,
-                            Optional<LazyVisionService> lazyVisionOpt) {
+                            Optional<LazyVisionService> lazyVisionOpt,
+                            Optional<RerankerService> rerankerOpt) {
         this.ragService = ragService;
         this.defaultTopK = props.searchTopK();
         this.multiqueryEnabled = props.searchMultiqueryEnabled();
         this.multiqueryMinLength = props.searchMultiqueryMinLengthSafe();
         this.hybridEnabled = props.searchHybridEnabled();
+        this.retryEscalate = props.searchRetryEscalate();
+        this.rerankEnabled = props.searchRerankEnabled();
+        this.candidateMultiplier = props.searchCandidateMultiplierSafe();
         this.lazyVisionService = lazyVisionOpt.orElse(null);
+        this.reranker = rerankerOpt;
         this.multiQueryExpander = MultiQueryExpander.builder()
                 .chatClientBuilder(ChatClient.builder(chatModel))
                 .includeOriginal(true)
@@ -52,23 +61,37 @@ public class RetrievalService {
     public AgentState execute(AgentState state) {
         List<Document> unique;
         try {
+            // S-2: escalate candidate count on retry to surface different documents.
+            int retry = state.retryCount();
+            int candidateK = (retryEscalate && retry > 0)
+                    ? Math.min(defaultTopK * (retry + 1), defaultTopK * 3)
+                    : defaultTopK;
+            // R-3: expand candidate pool further when reranking is active.
+            if (rerankEnabled && reranker.isPresent()) {
+                candidateK = Math.max(candidateK, defaultTopK * candidateMultiplier);
+            }
+
             // S-4: skip the expansion LLM call for disabled mode or short keyword-ish queries.
             List<String> queryTexts = shouldExpand(state.question())
                     ? multiQueryExpander.expand(new Query(state.question())).stream().map(Query::text).toList()
                     : List.of(state.question());
             // S-3: embed all variants in one batched call + a single Chroma query, then RRF-merge.
             List<List<Document>> ranked = ragService.searchBatch(
-                    state.userId(), queryTexts, state.version(), defaultTopK);
+                    state.userId(), queryTexts, state.version(), candidateK);
             // R-2: add a BM25 keyword axis to the fusion when hybrid search is enabled.
             if (hybridEnabled) {
                 List<Document> keywordHits = ragService.keywordSearch(
-                        state.version(), state.question(), defaultTopK);
+                        state.version(), state.question(), candidateK);
                 if (!keywordHits.isEmpty()) {
                     ranked = new ArrayList<>(ranked);
                     ranked.add(keywordHits);
                 }
             }
-            unique = mergeRrf(ranked, defaultTopK);
+            List<Document> candidates = mergeRrf(ranked, candidateK);
+            // R-3: rerank by LLM relevance, then cut to defaultTopK.
+            unique = (rerankEnabled && reranker.isPresent())
+                    ? reranker.get().rerank(state.question(), candidates, defaultTopK)
+                    : candidates.subList(0, Math.min(defaultTopK, candidates.size()));
         } catch (Exception e) {
             log.warn("Multi-query expansion failed, falling back to original question: {}", e.getMessage());
             unique = ragService.search(state.userId(), state.question(), state.version(), defaultTopK);
@@ -105,12 +128,13 @@ public class RetrievalService {
             warnings.add("⚠️ 이 답변에는 OCR로 처리된 스캔 문서가 포함되어 있습니다. 내용이 부정확할 수 있습니다.");
         }
 
-        return state
-                .withRetrievedDocs(contextDocs)
-                .withSources(sources)
-                .withRetrievalWarnings(warnings)
-                .withImageRefs(imageRefs)
-                .withNeedsRetry(false);
+        return state.toBuilder()
+                .retrievedDocs(contextDocs)
+                .sources(sources)
+                .retrievalWarnings(warnings)
+                .imageRefs(imageRefs)
+                .needsRetry(false)
+                .build();
     }
 
     /**

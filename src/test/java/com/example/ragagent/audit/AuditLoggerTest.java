@@ -44,6 +44,7 @@ class AuditLoggerTest {
 
         AppProperties props = new AppProperties(
                 "./data", 2, 8000, 800, 100, 7, 0.0, true, 0, false,
+                true, false, 3,
                 null, null, null, null, null, null, null,
                 new AppProperties.AuditConfig(true, "10MB", 7, "100MB"), null);
 
@@ -93,6 +94,7 @@ class AuditLoggerTest {
     void log_disabled_writesNothing() {
         AppProperties disabledProps = new AppProperties(
                 "./data", 2, 8000, 800, 100, 7, 0.0, true, 0, false,
+                true, false, 3,
                 null, null, null, null, null, null, null,
                 new AppProperties.AuditConfig(false, "10MB", 7, "100MB"), null);
         AuditLogger disabledLogger = new AuditLogger(new ObjectMapper(), disabledProps, currentUser);
@@ -107,6 +109,7 @@ class AuditLoggerTest {
     void auditSafe_nullConfig_returnsEnabledDefault() {
         AppProperties propsWithNull = new AppProperties(
                 "./data", 2, 8000, 800, 100, 7, 0.0, true, 0, false,
+                true, false, 3,
                 null, null, null, null, null, null, null, null, null);
         assertThat(propsWithNull.auditSafe().enabled()).isTrue();
         assertThat(propsWithNull.auditSafe().maxHistoryDays()).isEqualTo(7);

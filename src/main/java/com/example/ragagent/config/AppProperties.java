@@ -16,6 +16,9 @@ public record AppProperties(
         boolean searchMultiqueryEnabled,
         int searchMultiqueryMinLength,
         boolean searchHybridEnabled,
+        boolean searchRetryEscalate,      // S-2: topK escalation on retry
+        boolean searchRerankEnabled,      // R-3: LLM-based reranking (opt-in)
+        int searchCandidateMultiplier,    // R-3: candidate pool = defaultTopK × this
         Integer sseTimeoutSeconds,
         LlmConfig llm,
         IndexingConfig indexing,
@@ -116,6 +119,11 @@ public record AppProperties(
     /** S-4: query length (chars) at/above which multi-query expansion runs. Clamped to >= 0 (0 = no length gate). */
     public int searchMultiqueryMinLengthSafe() {
         return Math.max(0, searchMultiqueryMinLength);
+    }
+
+    /** R-3: candidate pool multiplier for reranking. Clamped to >= 1 to avoid empty pools. */
+    public int searchCandidateMultiplierSafe() {
+        return Math.max(1, searchCandidateMultiplier);
     }
 
     public long sseTimeoutMs() {

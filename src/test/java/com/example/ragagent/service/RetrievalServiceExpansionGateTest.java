@@ -21,7 +21,11 @@ class RetrievalServiceExpansionGateTest {
         when(props.searchTopK()).thenReturn(7);
         when(props.searchMultiqueryEnabled()).thenReturn(enabled);
         when(props.searchMultiqueryMinLengthSafe()).thenReturn(minLength);
-        return new RetrievalService(mock(ChatModel.class), mock(RagService.class), props, Optional.empty());
+        when(props.searchRetryEscalate()).thenReturn(true);
+        when(props.searchRerankEnabled()).thenReturn(false);
+        when(props.searchCandidateMultiplierSafe()).thenReturn(3);
+        return new RetrievalService(mock(ChatModel.class), mock(RagService.class), props,
+                Optional.empty(), Optional.empty());
     }
 
     @Test
