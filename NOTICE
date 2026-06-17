@@ -10,14 +10,14 @@ http://www.apache.org/licenses/LICENSE-2.0
 ====================================================================
 
 --------------------------------------------------------------------
-Spring Boot 3.5.14 (https://spring.io/projects/spring-boot)
+Spring Boot 3.5.15 (https://spring.io/projects/spring-boot)
 Copyright © 2012–2025 Broadcom. All Rights Reserved.
 The term "Broadcom" refers to Broadcom Inc. and/or its subsidiaries.
 Includes: spring-boot-starter-actuator (runtime log-level management)
 --------------------------------------------------------------------
 
 --------------------------------------------------------------------
-Spring AI 1.1.7 (https://spring.io/projects/spring-ai)
+Spring AI 1.1.8 (https://spring.io/projects/spring-ai)
 Copyright © 2023–2025 Broadcom. All Rights Reserved.
 The term "Broadcom" refers to Broadcom Inc. and/or its subsidiaries.
 Includes: spring-ai-openai, spring-ai-rag, spring-ai-chroma-store
@@ -29,12 +29,18 @@ Copyright © 2002–2024 Broadcom. All Rights Reserved.
 --------------------------------------------------------------------
 
 --------------------------------------------------------------------
+Reactor Netty HTTP 1.2.17 (https://github.com/reactor/reactor-netty)
+Copyright © 2011–2024 Broadcom. All Rights Reserved.
+The term "Broadcom" refers to Broadcom Inc. and/or its subsidiaries.
+--------------------------------------------------------------------
+
+--------------------------------------------------------------------
 Apache POI 5.5.1 (https://poi.apache.org)
 Copyright © 2003–2025 The Apache Software Foundation
 --------------------------------------------------------------------
 
 --------------------------------------------------------------------
-Apache PDFBox (https://pdfbox.apache.org)
+Apache PDFBox 3.0.7 (https://pdfbox.apache.org)
 Copyright © 2002–2024 The Apache Software Foundation
 --------------------------------------------------------------------
 
@@ -56,10 +62,25 @@ Copyright © 2002–2025 The Apache Software Foundation
 --------------------------------------------------------------------
 
 --------------------------------------------------------------------
-Apache Commons Codec 1.18.0, Commons IO 2.16.1,
-Commons Lang 3.17.0, Commons Collections4 4.4
+Apache Commons Codec 1.18.0, Commons IO 2.21.0,
+Commons Lang 3.17.0, Commons Collections4 4.5.0
 (https://commons.apache.org)
 Copyright © The Apache Software Foundation
+--------------------------------------------------------------------
+
+--------------------------------------------------------------------
+Flyway 11.7.2 (https://flywaydb.org)
+Copyright © 2010–2025 Redgate Software Ltd
+--------------------------------------------------------------------
+
+--------------------------------------------------------------------
+Bucket4j 8.10.1 (https://github.com/bucket4j/bucket4j)
+Copyright © 2015–2024 Vladimir Bukhtoyarov and contributors
+--------------------------------------------------------------------
+
+--------------------------------------------------------------------
+Caffeine 3.2.3 (https://github.com/ben-manes/caffeine)
+Copyright © 2014–2024 Ben Manes
 --------------------------------------------------------------------
 
 --------------------------------------------------------------------
@@ -68,7 +89,7 @@ Copyright © 2007–2024 Tatu Saloranta and contributors
 --------------------------------------------------------------------
 
 --------------------------------------------------------------------
-SQLite JDBC 3.53.1.0 (https://github.com/xerial/sqlite-jdbc)
+SQLite JDBC 3.53.2.0 (https://github.com/xerial/sqlite-jdbc)
 Copyright © 2006–2026 Taro L. Saito and contributors
 --------------------------------------------------------------------
 
