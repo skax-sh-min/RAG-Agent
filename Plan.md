@@ -538,7 +538,7 @@ Google/GitHub 제공자 등록. 가입 흐름은 **기존 폼 가입과 동등**
 | 단계 | 작업 | 선행 의존 | 산출물 | 리스크 |
 |------|------|----------|--------|--------|
 | Step 5.1 ✅ | VectorStoreProvider 추상화 (Chroma 무행위 리팩토링) | — | `VectorStoreProvider`, `ChromaVectorStoreProvider` | 낮 |
-| Step 5.2 | sqlite-vec 의존성 + 네이티브 확장 로딩 | — (병행 가능) | pom 의존성, `SqliteVecLoader` | 중 |
+| Step 5.2 ✅ | sqlite-vec 네이티브 확장 로딩 (운영자 제공 경로) | — (병행 가능) | `DataSourceConfig.configureSqliteVec`, `SqliteVecVerifier` | 중 |
 | Step 5.3 | sqlite-vec 스키마 초기화 | 5.2 | `SqliteVecSchemaInitializer` | 중 |
 | Step 5.4 | SqliteVecVectorStoreProvider 구현 | 5.1, 5.3 | `SqliteVecVectorStoreProvider` | 중 |
 | Step 5.5 | 백엔드 선택 스위치 (조건부 빈) | 5.1, 5.4 | `VectorStoreProviderConfig`, Chroma 빈 가드 | 중 |
@@ -592,35 +592,30 @@ public interface VectorStoreProvider {
 
 > **구현 메모**: `safe()`(SAFE_VERSION) 검증은 facade에 유지하고 provider는 검증된 버전을 받는다. `ChromaVectorStoreProvider`는 `@Component` 단일 빈으로 facade에 주입 — 백엔드 선택 스위치(`@ConditionalOnProperty`)는 Step 5.5에서 도입.
 
-### Step 5.2 — sqlite-vec 의존성 및 네이티브 확장 로딩
+### Step 5.2 — sqlite-vec 네이티브 확장 로딩 (운영자 제공 경로) ✅ 완료 (2026-06-23)
 
-**목표**: sqlite-vec 네이티브 확장을 런타임에 로드한다. Spring AI 공식 지원이 없어 JDBC 확장으로 직접 등록한다. (Step 5.1과 병행 가능)
+**목표**: sqlite-vec `vec0` 네이티브 확장을 런타임에 로드한다. (Step 5.1과 병행 가능)
 
-```xml
-<!-- pom.xml -->
-<dependency>
-  <groupId>io.github.sqlite-vec</groupId>
-  <artifactId>sqlite-vec-java</artifactId>
-  <version>0.1.7</version>  <!-- 최신 안정 버전 확인 후 고정 -->
-</dependency>
-```
+> ⚠️ **계획 정정**: 당초 `io.github.sqlite-vec:sqlite-vec-java` fat-jar를 가정했으나 **그런 공식 Maven 아티팩트는 존재하지 않는다** (검증 완료 — [asg017/sqlite-vec #90 "Java support"](https://github.com/asg017/sqlite-vec/issues/90)는 미해결 요청). 따라서 **새 의존성 0**으로, 이미 있는 xerial sqlite-jdbc의 `enable_load_extension` + `load_extension()`을 쓴다. 네이티브 바이너리는 **운영자가 직접 배치**(공식 릴리스의 플랫폼별 loadable)하고 경로만 설정한다.
 
-> **sqlite-vec-java**는 OS/아키텍처(macOS ARM64, Linux x86_64/ARM64)별 네이티브 `.so`/`.dylib`를 fat-jar에 번들링한다. `-Djava.library.path` 없이 `SQLiteVec.load()`로 등록한다.
+**구현**
+- `DataSourceConfig.configureSqliteVec(HikariConfig, type, path, entrypoint)` — `type=sqlite-vec`일 때만:
+  1. `config.addDataSourceProperty("enable_load_extension", "true")` (xerial 기본 off → 보안상 sqlite-vec 모드에서만 on)
+  2. `config.setConnectionInitSql("SELECT load_extension('<path>')")` — pool=1 커넥션(및 재생성 시)마다 로드. connectionInitSql은 단일 statement만 실행되므로 load_extension 한 문장만 둔다.
+  3. 경로 누락 시 기동 실패(`IllegalStateException`), 경로·엔트리포인트의 작은따옴표 차단(SQL 주입/깨짐 방지)
+- `SqliteVecVerifier` (`@ConditionalOnProperty type=sqlite-vec`) — `ApplicationReadyEvent`에서 `SELECT vec_version()`로 로드 확인, 실패 시 운영자 안내와 함께 fail-fast.
 
-```java
-// 벡터 확장 로드 — sqlite-vec 모드에서만 활성
-@Bean
-@ConditionalOnProperty(name = "app.vectorstore.type", havingValue = "sqlite-vec")
-ApplicationRunner sqliteVecLoader(DataSource dataSource) {
-    return args -> SQLiteVec.load();
-}
-```
+> **왜 `DataSourceConfig`에서 프로그램적으로?** DataSource를 수동 `@Bean`으로 만들기 때문에 `spring.datasource.hikari.*`(connectionInitSql 등) 바인딩이 적용되지 않는다 → 로딩을 코드로 설정해야 한다.
 
-> ⚠️ **pool=1 주의**: SQLite 커넥션 풀이 1이므로 확장이 **그 단일 커넥션에 로드**되어야 한다. sqlite-jdbc `enable_load_extension=true` 활성화 + 커넥션 초기화 시 확장 로드 경로를 PoC로 먼저 검증한다(드라이버/풀 조합에 따라 `connection-init-sql` 또는 커넥션 커스터마이저가 필요할 수 있음).
+**설정** (Step 5.6에서 .env/compose로 외부화)
+- `app.vectorstore.type=${VECTORSTORE_TYPE:chroma}`
+- `app.vectorstore.sqlite-vec.extension-path=${SQLITE_VEC_EXTENSION_PATH:}` — vec0 바이너리 절대경로 (suffix `.dylib/.so/.dll` 생략 가능)
+- `app.vectorstore.sqlite-vec.entrypoint=${SQLITE_VEC_ENTRYPOINT:}` — 보통 불필요(아래 PoC 결과)
 
 **완료 기준**
-- [ ] `type=sqlite-vec`로 기동 시 `SELECT vec_version()`가 정상 반환
-- [ ] `type=chroma`(기본)에서는 로더 빈이 생성되지 않음
+- [x] `type=sqlite-vec` + 경로 지정 시 `SELECT vec_version()` 정상 반환 — **PoC 검증**: v0.1.9 macOS arm64 loadable을 실제 xerial→Hikari→connectionInitSql 경로로 로드해 `vec_version()=v0.1.9` 확인. 엔트리포인트 **미지정**과 `sqlite3_vec_init` **명시** 모두 성공 → 운영자가 엔트리포인트를 설정할 필요 없음 (파일명 `vec0`만으로 SQLite가 정상 로드)
+- [x] `type=chroma`(기본)에서는 `SqliteVecVerifier` 빈 미생성 + DataSource 변경 없음(no-op)
+- [x] 단위 테스트: `DataSourceConfigTest`(7) + `SqliteVecVerifierTest`(3). 전체 스위트 260 tests BUILD SUCCESS (회귀 0)
 
 ### Step 5.3 — sqlite-vec 스키마 초기화 (동적 DDL)
 
@@ -893,7 +888,7 @@ Chroma 벡터를 sqlite-vec로 직접 덤프하는 것은 내부 포맷 의존�
 | HTTPS 인증서 갱신 실패 | 중 | Caddy 자동 갱신 + 만료 30일 전 헬스체크 알림 |
 | sqlite-vec — SQLite pool=1과 vec0 쓰기 충돌 | **고** | 기존 `busy_timeout=5000` 유효. vec0도 WAL 모드 하에서 동작하나 대규모 add() 시 write 홀딩 시간 측정 필요 |
 | sqlite-vec — 차원수 불일치 | **고** | `vec_embeddings` 테이블 생성 시 `app.embedding.dimensions` 값으로 DDL 생성. 임베딩 모델 변경 시 DROP+재인덱싱 필수 — 자동 감지 불가 |
-| sqlite-vec — 네이티브 라이브러리 플랫폼 | 중 | `sqlite-vec-java` fat-jar는 macOS ARM64, Linux x86_64, Linux ARM64 포함. Docker 컨테이너는 `linux/amd64` 이미지로 고정 권장 |
+| sqlite-vec — 네이티브 바이너리 운영자 제공 | 중 | 공식 Java 아티팩트가 없어 운영자가 플랫폼별 `vec0` loadable을 배치하고 `SQLITE_VEC_EXTENSION_PATH`로 지정. Docker는 컨테이너 아키텍처(`linux/amd64` 등)에 맞는 바이너리 사용. 미설정/플랫폼 불일치 시 `SqliteVecVerifier`가 기동 시 fail-fast |
 | sqlite-vec — searchBatch() N회 JDBC 쿼리 성능 | 낮 | 임베딩 배치 생성(1 HTTP 호출)이 병목. JDBC 쿼리 N번은 인메모리 SQLite 특성상 수 ms 수준으로 예상. 실측 후 CTE 방식 전환 검토 |
 | sqlite-vec — Spring AI VectorStore 미지원 | 중 | 커스텀 `VectorStoreProvider` 구현으로 Spring AI 인터페이스 우회. Spring AI 공식 sqlite-vec 지원 시 마이그레이션 경로 단순화 |
 
@@ -929,12 +924,9 @@ Chroma 벡터를 sqlite-vec로 직접 덤프하는 것은 내부 포맷 의존�
   <version>8.10.1</version>
 </dependency>
 
-<!-- Phase 5 — sqlite-vec (type=sqlite-vec 선택 시만 활성) -->
-<dependency>
-  <groupId>io.github.sqlite-vec</groupId>
-  <artifactId>sqlite-vec-java</artifactId>
-  <version>0.1.7</version>  <!-- 운영 전 최신 안정 버전 확인 -->
-</dependency>
+<!-- Phase 5 — sqlite-vec: 신규 의존성 없음.
+     공식 Java Maven 아티팩트가 없어 기존 org.xerial:sqlite-jdbc의 load_extension 으로 로드하고,
+     vec0 네이티브 바이너리는 운영자가 배치한다 (Step 5.2 참조). -->
 
 <!-- 테스트 -->
 <dependency>
@@ -969,8 +961,9 @@ app.security.login-lock-minutes=15
 app.security.upload-quota-mb=500
 
 # Vector Store (Phase 5)
-# app.vectorstore.type=chroma      # 기본값 — ChromaDB (docker-compose --profile chroma 필요)
-# app.vectorstore.type=sqlite-vec  # sqlite-vec — 외부 의존 없음
+app.vectorstore.type=${VECTORSTORE_TYPE:chroma}                          # chroma(기본) | sqlite-vec
+app.vectorstore.sqlite-vec.extension-path=${SQLITE_VEC_EXTENSION_PATH:}  # sqlite-vec: vec0 바이너리 경로(운영자 제공)
+app.vectorstore.sqlite-vec.entrypoint=${SQLITE_VEC_ENTRYPOINT:}          # sqlite-vec: 보통 불필요
 ```
 
 ---
