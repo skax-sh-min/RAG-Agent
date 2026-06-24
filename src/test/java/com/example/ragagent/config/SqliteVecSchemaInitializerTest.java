@@ -48,13 +48,15 @@ class SqliteVecSchemaInitializerTest {
     @DisplayName("embeddingTableDdl — vec0 DDL")
     class EmbeddingDdl {
         @Test
-        @DisplayName("차원이 FLOAT[]에 박히고 vec0 + IF NOT EXISTS 포함")
+        @DisplayName("차원이 FLOAT[]에 박히고 vec0 + partition key + cosine + IF NOT EXISTS 포함")
         void ddlShape() {
             String ddl = SqliteVecSchemaInitializer.embeddingTableDdl(768);
             assertThat(ddl).contains("FLOAT[768]")
                     .contains("USING vec0(")
                     .contains("CREATE VIRTUAL TABLE IF NOT EXISTS vec_embeddings")
-                    .contains("spring_doc_id TEXT PRIMARY KEY");
+                    .contains("spring_doc_id TEXT PRIMARY KEY")
+                    .contains("version TEXT partition key")          // KNN version 필터용
+                    .contains("distance_metric=cosine");             // Chroma와 동일 유사도 의미
         }
     }
 

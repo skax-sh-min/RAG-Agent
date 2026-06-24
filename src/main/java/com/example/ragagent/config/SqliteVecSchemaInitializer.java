@@ -78,13 +78,21 @@ public class SqliteVecSchemaInitializer {
         return dim;
     }
 
-    /** {@code vec0} virtual table DDL with the embedding dimension as a literal. */
+    /**
+     * {@code vec0} virtual table DDL with the embedding dimension as a literal.
+     *
+     * <p>{@code version} is a vec0 <em>partition key</em> so KNN can filter by version inside the
+     * search ({@code WHERE embedding MATCH ? AND k = ? AND version = ?}) without over-fetch + JOIN.
+     * {@code distance_metric=cosine} matches the Chroma path's {@code similarity = 1 - distance}
+     * semantics (verified: identical vectors → distance 0, orthogonal → 1).
+     */
     static String embeddingTableDdl(int dim) {
         return """
                 CREATE VIRTUAL TABLE IF NOT EXISTS vec_embeddings
                 USING vec0(
                     spring_doc_id TEXT PRIMARY KEY,
-                    embedding FLOAT[%d]
+                    version TEXT partition key,
+                    embedding FLOAT[%d] distance_metric=cosine
                 )
                 """.formatted(dim);
     }

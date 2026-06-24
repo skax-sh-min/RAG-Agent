@@ -540,7 +540,7 @@ Google/GitHub 제공자 등록. 가입 흐름은 **기존 폼 가입과 동등**
 | Step 5.1 ✅ | VectorStoreProvider 추상화 (Chroma 무행위 리팩토링) | — | `VectorStoreProvider`, `ChromaVectorStoreProvider` | 낮 |
 | Step 5.2 ✅ | sqlite-vec 네이티브 확장 로딩 (운영자 제공 경로) | — (병행 가능) | `DataSourceConfig.configureSqliteVec`, `SqliteVecVerifier` | 중 |
 | Step 5.3 ✅ | sqlite-vec 스키마 초기화 | 5.2 | `SqliteVecSchemaInitializer` | 중 |
-| Step 5.4 | SqliteVecVectorStoreProvider 구현 | 5.1, 5.3 | `SqliteVecVectorStoreProvider` | 중 |
+| Step 5.4 ✅ | SqliteVecVectorStoreProvider 구현 | 5.1, 5.3 | `SqliteVecVectorStoreProvider` | 중 |
 | Step 5.5 | 백엔드 선택 스위치 (조건부 빈) | 5.1, 5.4 | `VectorStoreProviderConfig`, Chroma 빈 가드 | 중 |
 | Step 5.6 | 설정 외부화 (.env / docker-compose) | 5.5 | properties, `.env.example`, compose profiles | 낮 |
 | Step 5.7 | 데이터 이전 + 통합 검증 | 5.6 | 재인덱싱 절차, 단위·통합 테스트 | 낮 |
@@ -668,9 +668,16 @@ public class SqliteVecSchemaInitializer {
 
 > **구현 메모**: `resolveDimension`/`embeddingTableDdl`/DDL 상수를 `static`으로 분리해 단위 테스트로 SQL 내용·차원 박힘·멱등(`IF NOT EXISTS`)을 검증. vec0 실제 동작은 네이티브 확장이 필요해 PoC로 검증(커밋 제외). `init()`은 `ApplicationReadyEvent`에서 실행 — 이 시점엔 `DataSourceConfig`가 커넥션에 vec0를 이미 로드한 상태.
 
-### Step 5.4 — SqliteVecVectorStoreProvider 구현
+### Step 5.4 — SqliteVecVectorStoreProvider 구현 ✅ 완료 (2026-06-24)
 
 **목표**: `VectorStoreProvider`의 sqlite-vec 구현체를 완성한다. (선행: Step 5.1 인터페이스, Step 5.3 스키마)
+
+> ⚠️ **구현 정정 (PoC로 확정)**: 아래 스니펫은 초기 스케치이며, 실제 구현은 다음을 따른다.
+> - **벡터 직렬화**: BLOB(`SqliteVecUtils.toBytes`)이 아니라 **JSON 텍스트 리터럴** `[v0,v1,...]` — vec0가 `?` 바인딩으로 직접 수용 (`toVectorLiteral`).
+> - **version 필터**: JOIN 후처리가 아니라 **vec0 partition key**로 KNN 내부 필터 → `WHERE embedding MATCH ? AND k = ? AND version = ?` 한 쿼리로 정확히 topK. JOIN은 `vec_document_chunks`에서 content/metadata 조회 전용 (Step 5.3 스키마에 `version TEXT partition key` + `distance_metric=cosine` 추가).
+> - **거리지표**: cosine → `similarity = 1 - distance` 가 Chroma 경로와 동일 (동일 벡터 dist 0, 직교 1).
+> - **add 멱등**: vec0는 `INSERT OR REPLACE` 미지원(UNIQUE 실패) → **기존 spring_doc_id DELETE 후 INSERT**.
+> - **임베딩**: `embeddingModel.embed(List<String>)`(텍스트 추출) 사용 — `embed(List<Document>)` 아님. 빈 배선(@Bean)은 Step 5.5.
 
 #### add()
 
@@ -764,10 +771,11 @@ public void deleteByDocIds(String userId, String version, List<String> springDoc
 ```
 
 **완료 기준**
-- [ ] `add` → `search` 라운드트립으로 방금 넣은 청크가 topK에 포함
-- [ ] `version` 필터가 교차 버전 누출 없이 동작
-- [ ] `deleteByDocIds` 후 두 테이블에서 동시 삭제 (고아 임베딩 없음)
-- [ ] 유사도 임계값(`app.search-similarity-threshold`) 동작이 Chroma 경로와 일치
+- [x] `add` → `search` 라운드트립으로 방금 넣은 청크가 topK에 포함 — **PoC**: apple 쿼리 → `[d1(score 1.0), d2(score 0.0)]`, 메타데이터 복원 확인
+- [x] `version` 필터가 교차 버전 누출 없이 동작 — **PoC**: v2의 d3(apple 동일 벡터)가 v1 검색에 누출 안 됨
+- [x] `deleteByDocIds` 후 두 테이블에서 동시 삭제 (고아 임베딩 없음) — **PoC**: d1 삭제 후 두 테이블 count 0
+- [x] 유사도 임계값(`app.search-similarity-threshold`) 동작이 Chroma 경로와 일치 — **PoC**: threshold 0.5에서 sim 0.0 결과 제외
+- [x] 멱등 재인덱싱(같은 id 재-add) UNIQUE 에러 없음. 단위 5 + 전체 272 tests BUILD SUCCESS
 
 ### Step 5.5 — 백엔드 선택 스위치 (조건부 빈 등록)
 
@@ -980,7 +988,7 @@ app.vectorstore.sqlite-vec.entrypoint=${SQLITE_VEC_ENTRYPOINT:}          # sqlit
 | `V3__user_scope.sql` | 기존 4개 테이블에 `user_id` 컬럼 + 인덱스 추가 |
 | `V4__audit_log.sql` | `audit_log` 신규 테이블 |
 | `V5__upload_quota.sql` | `users.storage_used_bytes` 컬럼 추가 |
-| (Phase 5) `SqliteVecSchemaInitializer` | `vec_embeddings` (vec0 가상 테이블), `vec_document_chunks` — Flyway 대신 앱 시작 시 동적 DDL (차원수 파라미터화 필요) |
+| (Phase 5) `SqliteVecSchemaInitializer` | `vec_embeddings` (vec0 가상 테이블 — `version` partition key + `distance_metric=cosine`), `vec_document_chunks` — Flyway 대신 앱 시작 시 동적 DDL (차원수 파라미터화) |
 
 > **기존 데이터 처리**: `V3` 적용 시 기존 row의 `user_id`는 NULL이 된다. 로컬 단일 사용자 데이터는 **최초 관리자 계정 생성 후 일괄 UPDATE**하는 별도 스크립트로 처리. 운영 데이터 보존이 불필요하면 마이그레이션 전 DROP도 옵션.
 
