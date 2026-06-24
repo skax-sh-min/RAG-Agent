@@ -4,7 +4,7 @@
 
 - **Backend**: Spring Boot 3 + Spring AI, Java 21 (virtual threads on), SQLite (WAL, pool=1)
 - **Frontend**: Thymeleaf + HTMX, Bootstrap 5, no JS framework
-- **Vector DB**: ChromaDB (per-version collections via `VectorStoreRegistry`)
+- **Vector DB**: `app.vectorstore.type` selects the backend (Phase 5) — `chroma` (default; per-version collections via `VectorStoreRegistry`) or `sqlite-vec` (vec0 virtual table in the SQLite file). Both behind `VectorStoreProvider`, injected into `VectorStoreFacade`.
 - **LLM**: OpenAI-compatible endpoint (Spring AI `ChatClient`); local LLM-Studio or remote
 
 ## Architecture
@@ -100,3 +100,4 @@ docker-compose up chroma
 - `PromptInjectionGuard.wrap()` is implemented but not yet wired into prompts — deferred to 05-prompt-externalization.md
 - `app.auth.enabled=false` → CSRF disabled, `SessionCreationPolicy.STATELESS`, `NoAuthAutoLoginFilter` active; guest userId constant = `NoAuthAutoLoginFilter.GUEST_ID`; admin path (`/admin/**`) auto-authenticates as first DB `ROLE_ADMIN` user
 - `GlobalModelAdvice.authEnabled()` is computed per-request (not in constructor) to avoid NPE when `AppProperties` is mocked in `@WebMvcTest`
+- Vector store backend (Phase 5): `app.vectorstore.type=chroma|sqlite-vec`, wired by `VectorStoreProviderConfig` (one `VectorStoreProvider` bean per mode). Chroma-only beans — `ChromaConfig`/`ChromaApi`, `VectorStoreRegistry`, `ChromaHealthChecker`, `VectorStoreWarmup`, `chromaVectorStoreProvider` — are `@ConditionalOnProperty(name="app.vectorstore.type", havingValue="chroma", matchIfMissing=true)`, so sqlite-vec mode starts without ChromaDB. sqlite-vec requires an operator-provided `vec0` native binary (`SQLITE_VEC_EXTENSION_PATH`, loaded via `DataSourceConfig.configureSqliteVec`) + `app.embedding.dimensions`; `AdminService` takes `Optional<ChromaApi>` (chunk browsing unsupported on sqlite-vec). Switching backends needs full re-indexing (vectors are not shared)

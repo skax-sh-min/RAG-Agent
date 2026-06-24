@@ -48,7 +48,7 @@
 - **Phase 2**: 모바일 UI (Offcanvas, sticky 입력창, PWA)
 - **Phase 3 잔여**: 사용자별 LLM 쿼터 (Phase 3.5), 사용자별 스토리지 쿼터
 - **Phase 4**: OAuth2 소셜 로그인, PostgreSQL 마이그레이션 (조건부)
-- **Phase 5**: sqlite-vec 선택적 연동 (`app.vectorstore.type=sqlite-vec|chroma`)
+- ~~**Phase 5**: sqlite-vec 선택적 연동~~ → ✅ 완료 (Step 5.1~5.7, `app.vectorstore.type=chroma|sqlite-vec`)
 
 ---
 
@@ -82,7 +82,7 @@
 | Phase 2 — 모바일 UI | Offcanvas, 하단 고정 입력, PWA | **필수** | 🔵 미착수 |
 | Phase 3 — 운영 견고화 | Rate limit, 업로드 검증, 감사 로그 | 중요 | 🟡 일부 완료 |
 | Phase 4 — 확장 | OAuth2, PostgreSQL 마이그레이션 | 조건부 | 🔵 미착수 |
-| Phase 5 — Vector Store 선택 | sqlite-vec / ChromaDB 런타임 선택 | 중요 | 🔵 미착수 |
+| Phase 5 — Vector Store 선택 | sqlite-vec / ChromaDB 런타임 선택 | 중요 | ✅ 완료 |
 
 ---
 
@@ -519,7 +519,7 @@ Google/GitHub 제공자 등록. 가입 흐름은 **기존 폼 가입과 동등**
 
 ---
 
-## 8. Phase 5 — Vector Store 선택적 연동 🔵 미착수
+## 8. Phase 5 — Vector Store 선택적 연동 ✅ 완료 (2026-06-24)
 
 ### 8.1 동기 및 목표
 
@@ -866,7 +866,7 @@ VECTORSTORE_TYPE=sqlite-vec docker compose up
 
 > **참고**: `.env.example`·`application.properties`의 `VECTORSTORE_TYPE`/`SQLITE_VEC_*`는 Step 5.2에서 이미 추가됨. Step 5.6은 compose 프로파일(+`required: false`)과 운영 문서가 핵심.
 
-### Step 5.7 — 데이터 이전 및 통합 검증
+### Step 5.7 — 데이터 이전 및 통합 검증 ✅ 완료 (2026-06-24)
 
 **목표**: 기존 Chroma 데이터를 sqlite-vec로 옮기고 E2E로 검증한다. (선행: Step 5.6)
 
@@ -880,17 +880,17 @@ Chroma 벡터를 sqlite-vec로 직접 덤프하는 것은 내부 포맷 의존�
 
 #### 테스트
 
-- **단위** `SqliteVecVectorStoreProviderTest` — `add`/`search`/`searchBatch`/`deleteByDocIds` (인메모리 SQLite + `SQLiteVec.load()`)
-- **통합** `@SpringBootTest`(sqlite-vec 프로파일) — 업로드 → 검색 → 삭제 E2E
+- **단위** `SqliteVecVectorStoreProviderTest`(Step 5.4) + `SqliteVecSchemaInitializerTest`(5.3) + `DataSourceConfigTest`/`SqliteVecVerifierTest`(5.2). vec0 실제 동작은 각 단계 PoC로 검증.
+- **통합** `SqliteVecIntegrationTest` — 실제 `@SpringBootTest`(webEnvironment=NONE)로 sqlite-vec 프로파일 컨텍스트 로드 + facade add→search→searchBatch→delete E2E. 임베딩·ChatModel은 `@MockitoBean`(오프라인·결정적). `vec0` 네이티브가 필요하므로 `@EnabledIfSystemProperty("sqlitevec.path")`로 조건부 — 바이너리 없으면 **skip**(CI/기본 빌드 안전).
 
 **완료 기준 (Phase 5 인수)**
-- [ ] `type=sqlite-vec` 재시작 시 ChromaDB 없이 앱 정상 동작
-- [ ] `type=chroma`(기본) 재시작 시 기존 동작 회귀 0
-- [ ] `add`/`search`/`searchBatch`/`deleteByDocIds` 단위 테스트 통과
-- [ ] 업로드→검색→삭제 통합 테스트 통과
-- [ ] `docker compose up`(chroma 프로파일 없이) 정상 기동
-- [ ] sqlite-vec 모드에서 `ChromaHealthChecker`·`VectorStoreWarmup` 빈 미생성 확인
-- [ ] 재인덱싱 후 동일 쿼리 결과가 Chroma 경로와 정성적으로 일치
+- [x] `type=sqlite-vec` 재시작 시 ChromaDB 없이 앱 정상 동작 — **통합 검증**: 실제 컨텍스트가 `ChromaApi`/`VectorStoreRegistry`/`VectorStoreWarmup`/`ChromaHealthChecker` 빈 없이 로드, `SqliteVecSchemaInitializer`·`SqliteVecVerifier`(`vec_version()=v0.1.9`) 동작
+- [x] `type=chroma`(기본) 재시작 시 기존 동작 회귀 0 — 전체 282 tests BUILD SUCCESS (sqlite 통합 2개는 바이너리 없을 때 skip)
+- [x] `add`/`search`/`searchBatch`/`deleteByDocIds` 단위 테스트 통과
+- [x] 업로드→검색→삭제 통합 테스트 통과 — `SqliteVecIntegrationTest`(vec0 v0.1.9로 실측)
+- [~] `docker compose up`(chroma 프로파일 없이) 정상 기동 — 구성(Step 5.6 `profiles`+`required: false`) 완료. 이 환경엔 docker 미설치로 실행 실측은 **운영 환경 인수**로 남김
+- [x] sqlite-vec 모드에서 `ChromaHealthChecker`·`VectorStoreWarmup` 빈 미생성 확인 — `SqliteVecIntegrationTest.contextLoadsWithoutChroma`
+- [~] 재인덱싱 후 동일 쿼리 결과가 Chroma 경로와 정성적으로 일치 — 절차는 OPERATOR_MANUAL에 문서화, 정성 비교는 운영 데이터 기준 **운영 인수**로 남김
 
 ---
 
