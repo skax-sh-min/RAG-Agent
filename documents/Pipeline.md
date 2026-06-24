@@ -45,7 +45,7 @@ HTTP 요청
 |------|------|---------|
 | **CLASSIFIER** | 질문 유형 판별 (concept / usage / error / version / meta) | ① — AgentService에서 선실행하므로 그래프 내에서는 스킵 |
 | **DIRECT_ANSWER** | meta 질문 직접 응답 (벡터 검색 없음) | ② |
-| **RETRIEVAL** | 쿼리 확장(조건부) → 1회 배치 임베딩 → 단일 Chroma 쿼리 → RRF 병합 → 선택적 LLM 리랭킹(opt-in). 재시도 시 후보 풀 ×(retry+1) 에스컬레이션 | ③ 쿼리 확장, [리랭킹 활성 시 1콜] |
+| **RETRIEVAL** | 쿼리 확장(조건부) → 1회 배치 임베딩 → 벡터 스토어 배치 쿼리(chroma 단일 호출 / sqlite-vec 쿼리별) → RRF 병합 → 선택적 LLM 리랭킹(opt-in). 재시도 시 후보 풀 ×(retry+1) 에스컬레이션 | ③ 쿼리 확장, [리랭킹 활성 시 1콜] |
 | **ANSWER** | 문서 기반 답변 생성 + 충분도 검사 | ④ 답변, ⑤ 충분도 |
 | **CRITIC** | 답변이 문서에 근거하는지 검증 | ⑥ |
 | **FINALIZE** | 대화 히스토리 저장 (SQLite) | 없음 |
@@ -168,7 +168,7 @@ PROGRESSIVE 모드 AND sufficient=false AND retryCount >= max
   │
   ├─ 키워드 추출 LLM → excerpt_keywords 메타데이터 추가
   │
-  ├─ ChromaDB 저장 (version별 컬렉션)
+  ├─ 벡터 스토어 저장 (version별 — chroma 컬렉션 / sqlite-vec partition)
   │
   └─ 레지스트리 저장 (SQLite doc_registry 테이블 — memory.db 공유)
 ```
@@ -186,7 +186,7 @@ Phase 2  병렬 인덱싱 (Virtual Thread)
   변경 파일: 신규 인덱싱 성공 후 구 버전 삭제 (실패 시 구 버전 보존)
 
 Phase 3  삭제 처리 (단일 스레드)
-  디렉터리에서 제거된 파일 → ChromaDB + 레지스트리 제거
+  디렉터리에서 제거된 파일 → 벡터 스토어 + 레지스트리 제거
   레지스트리 저장은 Phase 3 완료 후 1회만 실행
   → SyncResult(indexed, updated, deleted) 반환
 ```
