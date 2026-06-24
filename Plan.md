@@ -542,7 +542,7 @@ Google/GitHub 제공자 등록. 가입 흐름은 **기존 폼 가입과 동등**
 | Step 5.3 ✅ | sqlite-vec 스키마 초기화 | 5.2 | `SqliteVecSchemaInitializer` | 중 |
 | Step 5.4 ✅ | SqliteVecVectorStoreProvider 구현 | 5.1, 5.3 | `SqliteVecVectorStoreProvider` | 중 |
 | Step 5.5 ✅ | 백엔드 선택 스위치 (조건부 빈) | 5.1, 5.4 | `VectorStoreProviderConfig`, Chroma 빈 가드 | 중 |
-| Step 5.6 | 설정 외부화 (.env / docker-compose) | 5.5 | properties, `.env.example`, compose profiles | 낮 |
+| Step 5.6 ✅ | 설정 외부화 (.env / docker-compose) | 5.5 | properties, `.env.example`, compose profiles | 낮 |
 | Step 5.7 | 데이터 이전 + 통합 검증 | 5.6 | 재인덱싱 절차, 단위·통합 테스트 | 낮 |
 
 > **머지 전략**: Step 5.1은 동작 변화가 없는 순수 리팩토링이므로 **독립 PR로 먼저 머지**해 회귀를 차단한다. 기본값이 `chroma`라 Step 5.2~5.7은 운영 영향 없이 점진적으로 머지할 수 있고, 마지막에 `app.vectorstore.type=sqlite-vec`로 전환해 활성화한다.
@@ -819,9 +819,11 @@ public class VectorStoreProviderConfig {
 - [x] 두 모드 모두 `VectorStoreProvider` 빈이 정확히 1개
 - [x] `AdminService` Optional.empty 우아한 강등 (`AdminServiceTest` 3). 전체 280 tests BUILD SUCCESS (회귀 0)
 
-### Step 5.6 — 설정 외부화 (.env / docker-compose)
+### Step 5.6 — 설정 외부화 (.env / docker-compose) ✅ 완료 (2026-06-24)
 
 **목표**: 코드 변경 없이 `.env` + compose 프로파일만으로 백엔드를 전환한다. (선행: Step 5.5)
+
+> ⚠️ **구현 정정**: Plan이 `chroma`에 `profiles`만 추가하면 된다고 했으나, `app`이 `chroma`를 `depends_on: condition: service_healthy`로 강하게 의존해 sqlite-vec 모드(`docker compose up`)에서 비활성 서비스 의존으로 기동이 막힌다. → `depends_on`에 **`required: false`**(Compose 2.20.2+)를 추가해, chroma 프로파일이 꺼지면 의존을 무시하고 app만 뜨게 했다. `app` environment에 `VECTORSTORE_TYPE`/`SQLITE_VEC_EXTENSION_PATH`/`SQLITE_VEC_ENTRYPOINT`를 추가하고, sqlite-vec용 vec0 바이너리 볼륨 마운트 예시를 주석으로 제공한다.
 
 ```properties
 # application.properties — 백엔드 선택 (기본: chroma)
@@ -858,9 +860,11 @@ VECTORSTORE_TYPE=sqlite-vec docker compose up
 ```
 
 **완료 기준**
-- [ ] `.env`의 `VECTORSTORE_TYPE`만 바꿔 재기동하면 백엔드 전환
-- [ ] `docker compose up` (프로파일 없이) 시 chroma 컨테이너 미기동, 앱은 sqlite-vec로 정상
-- [ ] `OPERATOR_MANUAL.md`에 두 모드 운영법 반영
+- [x] `.env`의 `VECTORSTORE_TYPE`만 바꿔 재기동하면 백엔드 전환 (조건부 빈 — Step 5.5, application.properties `app.vectorstore.type=${VECTORSTORE_TYPE:chroma}` — Step 5.2)
+- [x] `docker compose up`(프로파일 없이) 시 chroma 컨테이너 미기동, 앱은 sqlite-vec로 정상 — `chroma profiles: ["chroma"]` + `app depends_on … required: false`로 구성. (이 환경엔 docker 미설치로 실행 실측은 Step 5.7/운영 환경에서)
+- [x] `OPERATOR_MANUAL.md`에 두 모드 운영법 반영 (§3.1 "벡터 스토어 백엔드 선택" — 기동 명령·sqlite-vec 바이너리 배치·재인덱싱·`/admin` 제약)
+
+> **참고**: `.env.example`·`application.properties`의 `VECTORSTORE_TYPE`/`SQLITE_VEC_*`는 Step 5.2에서 이미 추가됨. Step 5.6은 compose 프로파일(+`required: false`)과 운영 문서가 핵심.
 
 ### Step 5.7 — 데이터 이전 및 통합 검증
 

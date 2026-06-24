@@ -110,11 +110,30 @@ rag_java/
 |-----------|------|------|
 | Java JDK | 21 이상 | 애플리케이션 실행 |
 | Maven | 3.9 이상 | 빌드 |
-| Docker | 20 이상 | Chroma 벡터 DB 실행 (Linux / Windows / macOS) |
+| Docker | 20 이상 | **chroma 백엔드** 벡터 DB 실행 (sqlite-vec 백엔드는 불필요) |
 | Apple Container | 최신 | Chroma 벡터 DB 실행 (macOS Apple Silicon 대안) |
 
 > **macOS Apple Silicon**: Docker Desktop 대신 [Apple Container](https://github.com/apple/container)를 사용할 수 있습니다.  
 > GitHub Releases에서 최신 `.pkg`를 다운로드해 설치하세요.
+
+#### 벡터 스토어 백엔드 선택 (chroma / sqlite-vec)
+
+`VECTORSTORE_TYPE` 환경변수로 벡터 스토어 백엔드를 선택합니다.
+
+| 모드 | 기동 명령 | 비고 |
+|------|----------|------|
+| `chroma` (기본) | `docker compose --profile chroma up -d` | ChromaDB 컨테이너 필요 |
+| `sqlite-vec` | `docker compose up -d` | 외부 컨테이너 없음 — SQLite 한 파일에 벡터 저장 |
+
+> Docker Compose 2.20.2+ 필요 (`depends_on … required: false`). `.env`에 `COMPOSE_PROFILES=chroma`를 두면 `--profile` 없이도 chroma가 기동됩니다.
+
+**sqlite-vec 모드 추가 준비** (공식 Java 라이브러리가 없어 네이티브 확장을 운영자가 제공):
+
+1. 플랫폼용 `vec0` 로더블 확장을 [sqlite-vec 릴리스](https://github.com/asg017/sqlite-vec/releases)에서 받습니다. **컨테이너는 항상 Linux 바이너리** (`...-loadable-linux-{amd64|aarch64}`)가 필요합니다.
+2. Docker: `docker-compose.yml`의 `app.volumes`에서 바이너리 마운트 주석을 해제하고 `SQLITE_VEC_EXTENSION_PATH=/opt/sqlite-vec/vec0`(suffix 생략)로 지정합니다. 로컬 실행 시엔 호스트 절대경로를 지정합니다.
+3. `EMBED_*` 임베딩 모델의 **벡터 차원수**를 `app.embedding.dimensions`(예: 1536)로 반드시 설정합니다 — 미설정 시 기동이 실패합니다.
+
+> **백엔드 전환 = 재인덱싱**: chroma ↔ sqlite-vec 간 벡터는 공유되지 않습니다. 전환 후 문서 재업로드(또는 재동기화)로 재인덱싱해야 합니다 — 원본은 `data/documents/`에 보존됩니다. 또한 sqlite-vec 모드에서는 `/admin`의 청크 브라우징/편집이 지원되지 않습니다(빈 목록).
 
 ---
 
