@@ -539,7 +539,7 @@ Google/GitHub 제공자 등록. 가입 흐름은 **기존 폼 가입과 동등**
 |------|------|----------|--------|--------|
 | Step 5.1 ✅ | VectorStoreProvider 추상화 (Chroma 무행위 리팩토링) | — | `VectorStoreProvider`, `ChromaVectorStoreProvider` | 낮 |
 | Step 5.2 ✅ | sqlite-vec 네이티브 확장 로딩 (운영자 제공 경로) | — (병행 가능) | `DataSourceConfig.configureSqliteVec`, `SqliteVecVerifier` | 중 |
-| Step 5.3 | sqlite-vec 스키마 초기화 | 5.2 | `SqliteVecSchemaInitializer` | 중 |
+| Step 5.3 ✅ | sqlite-vec 스키마 초기화 | 5.2 | `SqliteVecSchemaInitializer` | 중 |
 | Step 5.4 | SqliteVecVectorStoreProvider 구현 | 5.1, 5.3 | `SqliteVecVectorStoreProvider` | 중 |
 | Step 5.5 | 백엔드 선택 스위치 (조건부 빈) | 5.1, 5.4 | `VectorStoreProviderConfig`, Chroma 빈 가드 | 중 |
 | Step 5.6 | 설정 외부화 (.env / docker-compose) | 5.5 | properties, `.env.example`, compose profiles | 낮 |
@@ -617,7 +617,7 @@ public interface VectorStoreProvider {
 - [x] `type=chroma`(기본)에서는 `SqliteVecVerifier` 빈 미생성 + DataSource 변경 없음(no-op)
 - [x] 단위 테스트: `DataSourceConfigTest`(7) + `SqliteVecVerifierTest`(3). 전체 스위트 260 tests BUILD SUCCESS (회귀 0)
 
-### Step 5.3 — sqlite-vec 스키마 초기화 (동적 DDL)
+### Step 5.3 — sqlite-vec 스키마 초기화 (동적 DDL) ✅ 완료 (2026-06-24)
 
 **목표**: `vec0` 가상 테이블과 메타 테이블을 앱 시작 시 생성한다. (선행: Step 5.2)
 
@@ -662,8 +662,11 @@ public class SqliteVecSchemaInitializer {
 > **설계 결정**: 벡터(숫자)는 `vec_embeddings`, 텍스트·메타(JSON)는 `vec_document_chunks`로 분리하고 `spring_doc_id`로 JOIN한다. `user_scope`는 현재 공유 스토리지(`DocRegistry.SHARED`) 고정이라 기본값 `'shared'`.
 
 **완료 기준**
-- [ ] `type=sqlite-vec` 첫 기동 시 두 테이블 + 인덱스 생성, 재기동 시 멱등(`IF NOT EXISTS`)
-- [ ] `app.embedding.dimensions` 미설정 시 명확한 오류로 기동 실패
+- [x] `type=sqlite-vec` 첫 기동 시 두 테이블 + 인덱스 생성, 재기동 시 멱등(`IF NOT EXISTS`) — **PoC 검증**: 실제 v0.1.9 바이너리로 `vec0` 가상 테이블(`FLOAT[8]`) + `vec_document_chunks` + 인덱스 2개 생성, `init()` 2회 멱등, 8차원 벡터 insert 라운드트립 확인
+- [x] `app.embedding.dimensions` 미설정/0/음수 시 `resolveDimension`이 명확한 오류로 기동 실패 (DDL 한 줄도 미실행)
+- [x] `type=chroma`(기본)에서는 빈 미생성. 단위+조건부 테스트 7개, 전체 스위트 267 tests BUILD SUCCESS (회귀 0)
+
+> **구현 메모**: `resolveDimension`/`embeddingTableDdl`/DDL 상수를 `static`으로 분리해 단위 테스트로 SQL 내용·차원 박힘·멱등(`IF NOT EXISTS`)을 검증. vec0 실제 동작은 네이티브 확장이 필요해 PoC로 검증(커밋 제외). `init()`은 `ApplicationReadyEvent`에서 실행 — 이 시점엔 `DataSourceConfig`가 커넥션에 vec0를 이미 로드한 상태.
 
 ### Step 5.4 — SqliteVecVectorStoreProvider 구현
 
