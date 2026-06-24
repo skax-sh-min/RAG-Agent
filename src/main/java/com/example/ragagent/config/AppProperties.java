@@ -27,7 +27,8 @@ public record AppProperties(
         EmbeddingConfig embedding,
         RateLimitConfig rateLimit,
         AuditConfig audit,
-        AuthConfig auth
+        AuthConfig auth,
+        VectorStoreConfig vectorstore
 ) {
     public record LlmConfig(
             List<ProviderConfig> providers,
@@ -88,6 +89,9 @@ public record AppProperties(
     public record AuthConfig(
             boolean enabled          // false → no-auth mode (guest/admin auto-login)
     ) {}
+
+    /** Phase 5 — vector store backend selection. {@code type}: chroma (default) | sqlite-vec. */
+    public record VectorStoreConfig(String type) {}
 
     public record ImageDescriptionProperties(
             String mode,
@@ -178,6 +182,13 @@ public record AppProperties(
     public AuthConfig authSafe() {
         if (auth == null) return new AuthConfig(true);
         return auth;
+    }
+
+    /** Vector store backend, defaulting to {@code chroma}. (Bean wiring uses raw @ConditionalOnProperty.) */
+    public VectorStoreConfig vectorStoreSafe() {
+        if (vectorstore == null || vectorstore.type() == null || vectorstore.type().isBlank())
+            return new VectorStoreConfig("chroma");
+        return new VectorStoreConfig(vectorstore.type().trim());
     }
 
     /** Null-safe accessor — returns an empty LlmConfig when app.llm is not configured. */

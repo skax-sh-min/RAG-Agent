@@ -25,10 +25,11 @@ public class AdminService {
     private static final String TENANT   = ChromaApiConstants.DEFAULT_TENANT_NAME;
     private static final String DATABASE = ChromaApiConstants.DEFAULT_DATABASE_NAME;
 
+    /** Nullable — the sqlite-vec backend (Phase 5) registers no ChromaApi bean. */
     private final ChromaApi chromaApi;
 
-    public AdminService(ChromaApi chromaApi) {
-        this.chromaApi = chromaApi;
+    public AdminService(Optional<ChromaApi> chromaApi) {
+        this.chromaApi = chromaApi.orElse(null);
     }
 
     // ── DTOs ─────────────────────────────────────────────────────────────────
@@ -51,6 +52,7 @@ public class AdminService {
     // ── Public API ────────────────────────────────────────────────────────────
 
     public CollectionsResult listCollections() {
+        if (chromaApi == null) return new CollectionsResult(List.of(), false);
         try {
             List<Collection> cols = chromaApi.listCollections(TENANT, DATABASE);
             if (cols == null) return new CollectionsResult(List.of(), true);
@@ -71,6 +73,7 @@ public class AdminService {
 
     public List<ChunkRow> getChunks(String collectionName, String docId,
                                     int offset, int limit) {
+        if (chromaApi == null) return List.of();
         Map<String, Object> where = null;
         if (docId != null && !docId.isBlank()) {
             where = Map.of(MetaKey.DOC_ID, Map.of("$eq", docId));
@@ -102,6 +105,7 @@ public class AdminService {
     }
 
     public long countChunks(String collectionName, String docId) {
+        if (chromaApi == null) return 0;
         if (docId == null || docId.isBlank()) {
             try { Long c = chromaApi.countEmbeddings(TENANT, DATABASE, resolveId(collectionName)); return c != null ? c : 0; }
             catch (Exception e) { return 0; }
@@ -112,6 +116,7 @@ public class AdminService {
     }
 
     public ChunkRow getChunk(String collectionName, String chunkId) {
+        if (chromaApi == null) return null;
         GetEmbeddingsRequest req = new GetEmbeddingsRequest(
                 List.of(chunkId), null, 1, 0,
                 List.of(Include.DOCUMENTS, Include.METADATAS));
@@ -130,6 +135,7 @@ public class AdminService {
     }
 
     public void deleteChunk(String collectionName, String chunkId) {
+        if (chromaApi == null) { log.warn("deleteChunk ignored — no ChromaApi (sqlite-vec backend)"); return; }
         chromaApi.deleteEmbeddings(TENANT, DATABASE, collectionName,
                 new DeleteEmbeddingsRequest(List.of(chunkId)));
     }
@@ -149,6 +155,7 @@ public class AdminService {
      */
     public void updateChunk(String collectionName, String chunkId,
                             String newText, Map<String, String> newMeta) {
+        if (chromaApi == null) { log.warn("updateChunk ignored — no ChromaApi (sqlite-vec backend)"); return; }
         // Fetch existing embedding to avoid re-embedding
         GetEmbeddingsRequest req = new GetEmbeddingsRequest(
                 List.of(chunkId), null, 1, 0,

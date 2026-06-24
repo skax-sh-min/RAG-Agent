@@ -17,7 +17,6 @@ import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.ai.vectorstore.filter.Filter;
 import org.springframework.ai.vectorstore.filter.FilterExpressionBuilder;
 import org.springframework.ai.vectorstore.filter.FilterExpressionConverter;
-import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -33,8 +32,10 @@ import java.util.concurrent.ConcurrentHashMap;
  * {@link ChromaApi} for batched multi-query search, the collection-id cache, and
  * the R-1 similarity threshold. Each (userId, version) pair maps to its own
  * Chroma collection.
+ *
+ * <p>Registered as a {@code VectorStoreProvider} bean by {@code VectorStoreProviderConfig} only when
+ * {@code app.vectorstore.type=chroma} (default); the sqlite-vec backend selects the other provider.
  */
-@Component
 public class ChromaVectorStoreProvider implements VectorStoreProvider {
 
     private static final Logger log = LoggerFactory.getLogger(ChromaVectorStoreProvider.class);

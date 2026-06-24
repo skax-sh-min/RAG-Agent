@@ -541,7 +541,7 @@ Google/GitHub 제공자 등록. 가입 흐름은 **기존 폼 가입과 동등**
 | Step 5.2 ✅ | sqlite-vec 네이티브 확장 로딩 (운영자 제공 경로) | — (병행 가능) | `DataSourceConfig.configureSqliteVec`, `SqliteVecVerifier` | 중 |
 | Step 5.3 ✅ | sqlite-vec 스키마 초기화 | 5.2 | `SqliteVecSchemaInitializer` | 중 |
 | Step 5.4 ✅ | SqliteVecVectorStoreProvider 구현 | 5.1, 5.3 | `SqliteVecVectorStoreProvider` | 중 |
-| Step 5.5 | 백엔드 선택 스위치 (조건부 빈) | 5.1, 5.4 | `VectorStoreProviderConfig`, Chroma 빈 가드 | 중 |
+| Step 5.5 ✅ | 백엔드 선택 스위치 (조건부 빈) | 5.1, 5.4 | `VectorStoreProviderConfig`, Chroma 빈 가드 | 중 |
 | Step 5.6 | 설정 외부화 (.env / docker-compose) | 5.5 | properties, `.env.example`, compose profiles | 낮 |
 | Step 5.7 | 데이터 이전 + 통합 검증 | 5.6 | 재인덱싱 절차, 단위·통합 테스트 | 낮 |
 
@@ -777,9 +777,11 @@ public void deleteByDocIds(String userId, String version, List<String> springDoc
 - [x] 유사도 임계값(`app.search-similarity-threshold`) 동작이 Chroma 경로와 일치 — **PoC**: threshold 0.5에서 sim 0.0 결과 제외
 - [x] 멱등 재인덱싱(같은 id 재-add) UNIQUE 에러 없음. 단위 5 + 전체 272 tests BUILD SUCCESS
 
-### Step 5.5 — 백엔드 선택 스위치 (조건부 빈 등록)
+### Step 5.5 — 백엔드 선택 스위치 (조건부 빈 등록) ✅ 완료 (2026-06-24)
 
 **목표**: `app.vectorstore.type` 하나로 두 provider 중 하나만 활성화한다. (선행: Step 5.1, Step 5.4)
+
+> ⚠️ **구현 정정**: Plan이 가드 대상에서 누락한 빈이 있었다 — `VectorStoreRegistry`(@Service, ChromaApi 의존)와 **`AdminService`(ChromaApi 강결합)**. ChromaApi를 가드하면 둘 다 깨지므로: `ChromaVectorStoreProvider`는 `@Component` 제거 후 `VectorStoreProviderConfig`의 `@Bean`(chroma)으로 이동, `VectorStoreRegistry`도 chroma 조건부화, **`AdminService`의 `ChromaApi`는 `Optional<ChromaApi>`로 변경**(sqlite-vec 모드에선 `available=false`/빈 결과로 우아하게 강등 — `/admin`은 깨지지 않음).
 
 ```java
 // VectorStoreProviderConfig.java
@@ -801,16 +803,21 @@ public class VectorStoreProviderConfig {
 }
 ```
 
-**작업**
-1. `AppProperties`에 `VectorStoreConfig(String type)` 레코드 + `vectorStoreSafe()`(기본 `"chroma"`) 추가 — 프로젝트 null-safe 규약 준수
-2. 위 `VectorStoreProviderConfig`로 provider 택일 등록 (`matchIfMissing=true`로 chroma 기본)
-3. Chroma 전용 빈 — `ChromaConfig`, `ChromaApi`, `ChromaHealthChecker`, `VectorStoreWarmup` — 에 `@ConditionalOnProperty(name="app.vectorstore.type", havingValue="chroma", matchIfMissing=true)` 적용 → sqlite-vec 모드에서 미생성
-4. CLAUDE.md의 "ChromaConfig가 빈 수동 관리" / `spring.autoconfigure.exclude` 제약과 상충 없는지 확인
+**작업** (실제 수행)
+1. `AppProperties`에 `VectorStoreConfig(String type)` 레코드 + `vectorStoreSafe()`(기본 `"chroma"`) 추가
+2. `VectorStoreProviderConfig`로 provider 택일 `@Bean` 등록 (sqlite-vec / chroma `matchIfMissing=true`), 생성자에서 활성 백엔드 로그
+3. `ChromaVectorStoreProvider` `@Component` 제거 → 위 `@Bean`(chroma)으로만 등록
+4. Chroma 전용 빈 가드 `@ConditionalOnProperty(havingValue="chroma", matchIfMissing=true)`: `ChromaConfig`(ChromaApi), `VectorStoreRegistry`, `ChromaHealthChecker`, `VectorStoreWarmup`
+5. **`AdminService` → `Optional<ChromaApi>`** + 메서드별 null 가드 (Plan 누락분; sqlite-vec 모드 `/admin` 강등)
+6. CLAUDE.md 제약 확인 — `spring.autoconfigure.exclude` 유지(무해), ChromaConfig 수동 빈 관리는 조건부화 후에도 chroma 모드 동일 → 상충 없음
+
+> sqlite-vec 모드의 chunk 브라우징/편집(`/admin`)은 **미지원**(빈 목록). sqlite-vec용 admin은 별도 작업으로 남김.
 
 **완료 기준**
-- [ ] `type=chroma`/미설정 시 chroma provider만, `type=sqlite-vec` 시 sqlite provider만 생성
-- [ ] sqlite-vec 모드에서 `ChromaApi`·`VectorStoreWarmup`·`ChromaHealthChecker` 빈 미생성 (ChromaDB 없이 기동)
-- [ ] 두 모드 모두 `VectorStoreProvider` 빈이 정확히 1개
+- [x] `type=chroma`/미설정 시 chroma provider만, `type=sqlite-vec` 시 sqlite provider만 — `VectorStoreProviderConfigTest`(ApplicationContextRunner, 3 케이스, 각 `VectorStoreProvider` 1개)
+- [x] sqlite-vec 모드에서 `ChromaApi` 빈 미생성 (ChromaDB 없이 기동) — `ChromaConfig` 조건부 테스트. `VectorStoreRegistry`·`VectorStoreWarmup`·`ChromaHealthChecker`도 동일 어노테이션
+- [x] 두 모드 모두 `VectorStoreProvider` 빈이 정확히 1개
+- [x] `AdminService` Optional.empty 우아한 강등 (`AdminServiceTest` 3). 전체 280 tests BUILD SUCCESS (회귀 0)
 
 ### Step 5.6 — 설정 외부화 (.env / docker-compose)
 

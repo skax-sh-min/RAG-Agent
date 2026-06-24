@@ -4,6 +4,7 @@ import com.example.ragagent.ingestion.DocRegistry;
 import com.example.ragagent.service.VectorStoreRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
@@ -17,6 +18,7 @@ import org.springframework.stereotype.Component;
  * unreachable ChromaDB must never block application startup.
  */
 @Component
+@ConditionalOnProperty(name = "app.vectorstore.type", havingValue = "chroma", matchIfMissing = true)
 public class VectorStoreWarmup {
 
     private static final Logger log = LoggerFactory.getLogger(VectorStoreWarmup.class);
