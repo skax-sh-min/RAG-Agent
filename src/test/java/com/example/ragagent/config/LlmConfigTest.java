@@ -14,18 +14,24 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
 
 /**
- * QA — Phase 6 G1: LOCAL providers (local endpoints like llama-server) need no api-key.
+ * QA — Phase 6 G1 + G5.
  *
- * {@code LlmConfig.llmRouter()} drops cloud providers whose api-key is blank, but must KEEP
+ * G1: {@code LlmConfig.llmRouter()} drops cloud providers whose api-key is blank, but must KEEP
  * LOCAL-role providers and substitute a non-blank placeholder so they remain routable
  * (LlmRouter.findFirst filters by LlmProvider.hasValidApiKey()).
+ * G5: air-gapped acceptance — with every external key blank, no external provider is ever
+ * selectable in any routing mode (the "no external call" guarantee at the routing layer).
  */
 class LlmConfigTest {
 
     private static final LlmUsageRepository USAGE = mock(LlmUsageRepository.class);
 
     private AppProperties propsWith(AppProperties.ProviderConfig... providers) {
-        var llm = new AppProperties.LlmConfig(List.of(providers), 2, 10, 180, "COST_FIRST", 0.6);
+        return propsWith("COST_FIRST", providers);
+    }
+
+    private AppProperties propsWith(String routingMode, AppProperties.ProviderConfig... providers) {
+        var llm = new AppProperties.LlmConfig(List.of(providers), 2, 10, 180, routingMode, 0.6);
         return new AppProperties(
                 "./data", 2, 8000, 800, 100, 7, 0.0, true, 0, false, true, false, 3,
                 null, llm, null, null, null, null, null, null, null, null);
@@ -66,5 +72,25 @@ class LlmConfigTest {
         LlmRouter router = new LlmConfig().llmRouter(props, USAGE, new CircuitBreaker(2));
 
         assertThat(router.findProviderName(TaskType.TEXT, RoutingMode.COST_FIRST)).isEqualTo("local");
+    }
+
+    @Test
+    @DisplayName("G5: 폐쇄망 — 외부 키 전부 비우면 어떤 라우팅 모드에서도 외부 provider가 선택되지 않는다")
+    void airGappedNeverRoutesToExternal() {
+        AppProperties props = propsWith("LOCAL_ONLY",
+                provider("local",  "LOCAL",   "BOTH", ""),   // 키리스 로컬 (G1) → 등록됨
+                provider("gemini", "NORMAL",  "TEXT", ""),   // 빈 클라우드 키 → 드롭
+                provider("openai", "PREMIUM", "TEXT", ""));  // 빈 클라우드 키 → 드롭
+
+        LlmRouter router = new LlmConfig().llmRouter(props, USAGE, new CircuitBreaker(2));
+
+        assertThat(router.hasLocalProvider()).isTrue();
+        // 외부 provider는 애초에 등록되지 않으므로 어떤 라우팅 모드에서도 선택될 수 없다.
+        for (RoutingMode mode : RoutingMode.values()) {
+            assertThat(router.findProviderName(TaskType.TEXT, mode))
+                    .as("routing mode %s must never select an external provider", mode)
+                    .isIn("local", "unknown");
+        }
+        assertThat(router.findProviderName(TaskType.TEXT, RoutingMode.LOCAL_ONLY)).isEqualTo("local");
     }
 }

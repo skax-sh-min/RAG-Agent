@@ -17,6 +17,7 @@ RAG Agent 시스템 배포·설정·운영 가이드입니다.
    - 4.2 [로컬 실행](#42-로컬-실행)
    - 4.3 [접속 확인](#43-접속-확인)
    - 4.4 [HTTPS 설정 (Caddy 리버스 프록시)](#44-https-설정-caddy-리버스-프록시)
+   - 4.5 [폐쇄망(Air-gapped) / 노-도커 실행](#45-폐쇄망air-gapped--노-도커-실행)
 5. [LLM 프로바이더 설정](#5-llm-프로바이더-설정)
    - 5.1 [구조 개요](#51-구조-개요)
    - 5.2 [프로바이더 속성](#52-프로바이더-속성)
@@ -154,8 +155,9 @@ copy .env.example .env
 | 변수 | 필수 | 기본값 | 설명 |
 |------|------|--------|------|
 | `LOCAL_LLM_URL` | — | `http://localhost:1234/v1` | `providers[0]` LOCAL 엔드포인트 기본 URL. 임베딩 설정(`EMBED_BASE_URL`)의 폴백으로도 사용됨 |
-| `LOCAL_LLM_KEY` | — | `lm-studio` | `providers[0]` API 키. **빈 문자열(`=`)로 설정하면 LOCAL provider 자동 비활성화** |
+| `LOCAL_LLM_KEY` | — | `lm-studio` | `providers[0]` API 키. **로컬 엔드포인트(llama-server 등)는 키가 불필요** — 비우거나 미설정해도 LOCAL provider는 등록됨(내부적으로 `no-key` 치환). 로컬 LLM이 아예 없으면 미사용 시 첫 호출 1회 실패 후 Circuit Breaker로 우회되며, 완전히 제외하려면 `application.properties`의 `providers[0]`를 주석 처리하거나 `LLM_ROUTING_MODE=QUALITY_FIRST`로 후순위 배치 |
 | `LOCAL_LLM_MODEL` | — | `google/gemma-4-e4b` | `providers[0]` 모델 식별자. 사용 중인 로컬 모델명으로 변경 |
+| `LLM_ROUTING_MODE` | — | `COST_FIRST` | 기본 라우팅 모드 (`app.llm.default-routing-mode`) — `COST_FIRST`/`QUALITY_FIRST`/`PROGRESSIVE`/`DUAL`/`LOCAL_ONLY`. **폐쇄망·로컬 전용은 `LOCAL_ONLY`** 로 외부 프로바이더 호출을 원천 차단 |
 | `OPENAI_API_KEY` | — | — | OpenAI providers 사용 시 필요. 미설정 또는 빈 값이면 해당 providers 자동 비활성화. providers 설정에서 `${OPENAI_API_KEY}` 형태로 참조 |
 | `OPENAI_BASE_URL` | — | `https://api.openai.com` | OpenAI 호환 엔드포인트 기본 URL. providers 설정에서 `${OPENAI_BASE_URL}` 형태로 참조. Azure OpenAI 등 호환 엔드포인트로 교체 가능 |
 | `GEMINI_API_KEY1` | — | — | Gemini 1번 API 키 — `providers[1]`(gemini-flash-lite) 전용. 미설정 시 해당 provider 자동 비활성화. providers 설정에서 `${GEMINI_API_KEY1}` 형태로 참조 |
@@ -164,6 +166,7 @@ copy .env.example .env
 | `EMBED_BASE_URL` | — | `LOCAL_LLM_URL` 폴백 | 임베딩 전용 엔드포인트. 미설정 시 `LOCAL_LLM_URL` 사용. OpenAI 임베딩 사용 시 `https://api.openai.com` 등으로 독립 설정 |
 | `EMBED_API_KEY` | — | `LOCAL_LLM_KEY` 폴백 | 임베딩 전용 API 키. 미설정 시 `LOCAL_LLM_KEY` 사용 |
 | `EMBED_MODEL` | — | `text-embedding-nomic-embed-text-v1.5` | 임베딩 모델 식별자. **인덱싱 후 변경 금지** — 벡터 차원이 달라지면 기존 검색이 깨짐. 변경 시 전체 재인덱싱 필요 (chroma: 컬렉션 삭제 / sqlite-vec: `vec_embeddings` DROP — 차원이 DDL에 고정되며 `app.embedding.dimensions`도 함께 변경) |
+| `EMBED_DIMENSIONS` | sqlite-vec 시 ✅ | — | **sqlite-vec 전용** — 임베딩 모델의 실제 출력 차원 (`app.embedding.dimensions`). vec0 테이블이 `FLOAT[dim]`이라 DDL에 고정 → 모델 실제 차원과 **정확히 일치**해야 함 (nomic-embed-text=768, bge-m3=1024, text-embedding-3-small=1536). chroma 모드에선 무시(빈값→null). sqlite-vec 모드에서 미설정 시 기동 실패(fail-fast) |
 | `VECTORSTORE_TYPE` | — | `chroma` | 벡터 스토어 백엔드 — `chroma` 또는 `sqlite-vec` (§3.1 "벡터 스토어 백엔드 선택" 참조) |
 | `SQLITE_VEC_EXTENSION_PATH` | — | — | **sqlite-vec 전용** — 운영자가 제공하는 `vec0` 로더블 확장 절대경로 (suffix 생략 가능). 미설정 시 sqlite-vec 모드 기동 실패 |
 | `SQLITE_VEC_ENTRYPOINT` | — | — | sqlite-vec 전용(선택) — `load_extension` 엔트리포인트 강제. 보통 불필요 |
@@ -241,7 +244,10 @@ EMBED_MODEL=text-embedding-nomic-embed-text-v1.5
 OPENAI_API_KEY=sk-proj-...
 EMBED_BASE_URL=https://api.openai.com
 EMBED_MODEL=text-embedding-3-large
-LOCAL_LLM_KEY=                     # 비워서 LOCAL providers[0] 비활성화
+# LOCAL_LLM_KEY를 비워도 LOCAL provider는 등록됩니다(로컬 엔드포인트는 키 불필요).
+# 로컬 LLM이 없으면 외부 우선 라우팅으로 LOCAL을 후순위에 두세요
+# (완전 제외는 application.properties의 providers[0] 주석 처리):
+LLM_ROUTING_MODE=QUALITY_FIRST
 ```
 
 > 멀티 프로바이더 구성은 [§5 LLM 프로바이더 설정](#5-llm-프로바이더-설정)을 참고하세요.
@@ -653,6 +659,82 @@ docker-compose exec caddy caddy trust
 ```
 
 인증서는 `caddy_data` 볼륨에 저장됩니다. 볼륨을 삭제하면 인증서도 삭제되므로 주의하세요.
+
+---
+
+### 4.5 폐쇄망(Air-gapped) / 노-도커 실행
+
+인터넷·Docker 없이 **sqlite-vec + 로컬 LLM(llama-server)** 만으로 운영하는 구성입니다. Phase 5로 ChromaDB(유일한 필수 Docker 서비스)를 제거할 수 있고(§3.1 "벡터 스토어 백엔드 선택"), 프론트엔드 자산은 jar에 번들된 webjar라 CDN 의존이 없습니다.
+
+#### 1) (연결망에서) 산출물 준비
+
+폐쇄망에는 빌드 도구를 들이지 않고 **산출물만 반입**합니다.
+
+```bash
+mvn clean package -DskipTests        # webjar·의존성 포함 실행 가능 jar 생성 → target/*.jar
+```
+
+반입 대상:
+- `target/rag-agent-*.jar` (실행 가능 fat-jar)
+- **JRE/JDK 21** (호스트에 미설치 시)
+- **`vec0` 네이티브 확장** — 폐쇄망 호스트 OS/아키텍처(예: linux x86_64)용 loadable. <https://github.com/asg017/sqlite-vec/releases> 에서 사전 다운로드. **아키텍처 불일치 시 `SqliteVecVerifier`가 기동 시 fail-fast**
+- (OCR 사용 시) **Tesseract + `kor`/`eng` tessdata**
+
+#### 2) 로컬 LLM(llama-server) 기동
+
+llama.cpp의 `llama-server`는 프로세스당 모델 1개를 제공하므로, **채팅용·임베딩용 2개 인스턴스**를 권장합니다.
+
+```bash
+llama-server -m chat-model.gguf   --port 8080               # 채팅
+llama-server -m embed-model.gguf  --port 8081 --embeddings  # 임베딩 (/v1/embeddings)
+```
+
+#### 3) 환경변수 + 실행
+
+> `.env`는 docker-compose 전용이라 **노-도커 실행 시 자동 로드되지 않습니다.** 셸에 export 하세요(§4.2의 `.env` 로드 방식 재사용 가능).
+
+```bash
+# 벡터 스토어: sqlite-vec (ChromaDB·Docker 불요)
+export VECTORSTORE_TYPE=sqlite-vec
+export SQLITE_VEC_EXTENSION_PATH=/opt/sqlite-vec/vec0     # 반입한 vec0 경로
+
+# 로컬 LLM (llama-server) — LOCAL_LLM_KEY 불필요(비워도 등록됨)
+export LOCAL_LLM_URL=http://127.0.0.1:8080/v1
+export LOCAL_LLM_MODEL=<채팅 모델명>
+
+# 임베딩 (별도 인스턴스)
+export EMBED_BASE_URL=http://127.0.0.1:8081/v1
+export EMBED_MODEL=<임베딩 모델명>
+export EMBED_DIMENSIONS=768          # ★ sqlite-vec 필수: 임베딩 모델 실제 차원과 일치 (nomic=768, bge-m3=1024)
+
+# 외부 호출 차단(권장) + 비-TLS HTTP 직노출
+export LLM_ROUTING_MODE=LOCAL_ONLY
+export USE_CANDY_REVERSE_PROXY_HTTPS=false
+
+java -jar target/rag-agent-*.jar
+```
+
+#### 4) TLS / 리버스 프록시
+
+Caddy는 Docker 컨테이너이자 Let's Encrypt(인터넷)에 의존하므로 폐쇄망·노-도커에 부적합합니다. 택일:
+
+- **HTTP 직노출** — `USE_CANDY_REVERSE_PROXY_HTTPS=false`(세션 쿠키 `Secure` 해제, 안 그러면 HTTP에서 로그인 불가). 신뢰망 한정 권장.
+- **사내 역프록시 / 사설 CA** — 조직 표준 프록시(nginx 등)에서 TLS 종료 후 `:8080`으로 포워딩. `server.forward-headers-strategy=framework`(기본)로 `X-Forwarded-*` 인식.
+
+#### 5) 이미지 · OCR (로컬 모델 전제)
+
+- **Vision 설명**: 기본 `app.image-description.mode=strip`(설명 생략, 모델 불요). 설명을 켜려면 로컬 vision 모델(예: llama-server에 llava 계열)을 VISION provider로 등록.
+- **OCR**: 스캔 PDF 처리에만 사용. 네이티브 Tesseract + `kor`/`eng` tessdata 필요. 불요 시 `app.image-description.ocr-enabled=false`.
+
+#### 6) 기동 확인 체크리스트
+
+- [ ] 로그에 `Provider [local] disabled …` 경고 **없음** (있으면 LOCAL 미등록 — `LOCAL_LLM_URL` 확인)
+- [ ] `SqliteVecVerifier`가 `vec_version()` 출력 (vec0 로드 성공)
+- [ ] `EMBED_DIMENSIONS` 미설정 시 sqlite-vec 모드는 차원 필수 메시지로 기동 실패 → 값 설정
+- [ ] 외부(인터넷) 소켓 시도 없음 — `LLM_ROUTING_MODE=LOCAL_ONLY` + 외부 프로바이더 키 전부 미설정
+- [ ] `http://<host>:8080/api/v1/health` → `{"status":"ok"}`
+
+> **데이터 이전**: 기존 Chroma 데이터를 sqlite-vec로 직접 복사하지 않습니다. 문서 원본이 `data/documents/`에 보존되므로 **전체 재인덱싱**(관리자 패널 §7, 또는 디렉터리 재동기화)으로 이전합니다.
 
 ---
 

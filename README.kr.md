@@ -29,7 +29,7 @@ mvn clean package -DskipTests
 
 ### 로컬 실행
 
-> **벡터 스토어 백엔드** — 기본은 ChromaDB. `VECTORSTORE_TYPE=sqlite-vec`로 설정하면 벡터를 SQLite 파일에 저장하고 아래 **"Chroma 서버" 단계를 생략**할 수 있습니다 (운영자가 제공하는 `vec0` 네이티브 확장 필요 — [OPERATOR_MANUAL.md](OPERATOR_MANUAL.md) 참조).
+> **벡터 스토어 백엔드** — 기본은 ChromaDB. `VECTORSTORE_TYPE=sqlite-vec`로 설정하면 벡터를 SQLite 파일에 저장하고 아래 **"Chroma 서버" 단계를 생략**할 수 있습니다 (운영자가 제공하는 `vec0` 네이티브 확장 필요 — [OPERATOR_MANUAL.md](OPERATOR_MANUAL.md) 참조). 인터넷·Docker 없이 sqlite-vec + 로컬 llama-server로만 돌리는 폐쇄망 구성은 [OPERATOR_MANUAL.md §4.5](OPERATOR_MANUAL.md#45-폐쇄망air-gapped--노-도커-실행) 참조.
 
 #### 개발 모드 (소스 직접 실행)
 
@@ -94,13 +94,15 @@ container system stop
 | 변수 | 필수 | 기본값 | 설명 |
 |------|------|--------|------|
 | `LOCAL_LLM_URL` | — | `http://localhost:1234/v1` | LOCAL provider 엔드포인트 (임베딩 폴백으로도 사용) |
-| `LOCAL_LLM_KEY` | — | `lm-studio` | LOCAL provider API 키. 비우면 LOCAL 비활성화 |
+| `LOCAL_LLM_KEY` | — | `lm-studio` | LOCAL provider API 키. **로컬 엔드포인트(llama-server)는 키 불필요** — 비워도 LOCAL provider는 등록됨(`no-key` 치환) |
 | `LOCAL_LLM_MODEL` | — | `google/gemma-4-e4b` | LOCAL provider 모델명 |
+| `LLM_ROUTING_MODE` | — | `COST_FIRST` | 기본 라우팅 모드 (`app.llm.default-routing-mode`). 폐쇄망/로컬 전용은 `LOCAL_ONLY`로 외부 프로바이더 호출 차단 |
 | `OPENAI_API_KEY` | — | — | OpenAI providers 사용 시 필요. 미설정 시 해당 providers 자동 비활성화 |
 | `GEMINI_API_KEY` | — | — | Gemini providers 사용 시 필요. 미설정 시 해당 providers 자동 비활성화 |
 | `EMBED_BASE_URL` | — | `LOCAL_LLM_URL` | 임베딩 전용 엔드포인트. 미설정 시 `LOCAL_LLM_URL` 사용 |
 | `EMBED_API_KEY` | — | `LOCAL_LLM_KEY` | 임베딩 API 키. 미설정 시 `LOCAL_LLM_KEY` 사용 |
 | `EMBED_MODEL` | — | `text-embedding-nomic-embed-text-v1.5` | 임베딩 모델명 |
+| `EMBED_DIMENSIONS` | sqlite-vec 시 | — | 임베딩 모델의 실제 출력 차원 (`app.embedding.dimensions`). `sqlite-vec` 필수 (vec0 DDL에 고정 — 모델 실제 차원과 일치: nomic=768, bge-m3=1024). chroma는 무시 |
 | `VECTORSTORE_TYPE` | — | `chroma` | 벡터 스토어 백엔드 — `chroma` 또는 `sqlite-vec` |
 | `SQLITE_VEC_EXTENSION_PATH` | — | — | sqlite-vec 전용 — 운영자가 제공하는 `vec0` 로더블 확장 경로 |
 | `CHROMA_HOST` | — | `http://localhost` | Chroma 서버 호스트 (chroma 백엔드) |

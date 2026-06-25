@@ -2,7 +2,7 @@
 
 > Java 개발자 관점 · Spring Boot 3.5 + Spring AI 1.1.4 + Java 21 · 작성일 2026-05-11  
 > **업데이트**: 2026-06-23 — Phase 5 sqlite-vec 연동을 단계별 작업(Step 5.1~5.7)으로 분해  
-> **개발 기준 문서**: 이 파일(Plan.md)이 마스터. `documents/refactoring/18-extension-roadmap.md`는 각 항목의 기술 레퍼런스.
+> **개발 기준 문서**: 이 파일(documents/PLAN.md)이 마스터. `documents/refactoring/18-extension-roadmap.md`는 각 항목의 기술 레퍼런스.
 
 ---
 
@@ -49,7 +49,7 @@
 - **Phase 3 잔여**: 사용자별 LLM 쿼터 (Phase 3.5), 사용자별 스토리지 쿼터
 - **Phase 4**: OAuth2 소셜 로그인, PostgreSQL 마이그레이션 (조건부)
 - ~~**Phase 5**: sqlite-vec 선택적 연동~~ → ✅ 완료 (Step 5.1~5.7, `app.vectorstore.type=chroma|sqlite-vec`)
-- ~~**Phase 6**: 폐쇄망/노-도커 — 키리스 LOCAL(G1)·차원 외부화(G2)·라우팅 외부화(G3)~~ → ✅ G1~G3 완료 (2026-06-25). 잔여: OPERATOR_MANUAL 런북(G4), 전체 부팅 인수(G5)
+- ~~**Phase 6**: 폐쇄망/노-도커 — 키리스 LOCAL(G1)·차원 외부화(G2)·라우팅 외부화(G3)·런북(G4)·무-외부호출 인수(G5)~~ → ✅ G1~G5 완료 (2026-06-25). sqlite-vec 라이브 부팅(vec0 바이너리)만 운영 인수
 
 ---
 
@@ -85,7 +85,7 @@
 | Phase 3 — 운영 견고화 | Rate limit, 업로드 검증, 감사 로그 | 중요 | 🟡 일부 완료 |
 | Phase 4 — 확장 | OAuth2, PostgreSQL 마이그레이션 | 조건부 | 🔵 미착수 |
 | Phase 5 — Vector Store 선택 | sqlite-vec / ChromaDB 런타임 선택 | 중요 | ✅ 완료 |
-| Phase 6 — 폐쇄망 / 노-도커 | sqlite-vec 단독·로컬 LLM·CDN 0 (키리스 LOCAL, 차원 외부화) | 중요 | 🟢 G1~G3 완료 |
+| Phase 6 — 폐쇄망 / 노-도커 | sqlite-vec 단독·로컬 LLM·CDN 0 (키리스 LOCAL, 차원 외부화) | 중요 | 🟢 G1~G5 완료 |
 
 ---
 
@@ -897,7 +897,7 @@ Chroma 벡터를 sqlite-vec로 직접 덤프하는 것은 내부 포맷 의존�
 
 ---
 
-## 9. Phase 6 — 폐쇄망(Air-gapped) / 노-도커 실행 지원 🟢 G1~G3 구현 완료 (2026-06-25) · G4 문서·G5 인수 잔여
+## 9. Phase 6 — 폐쇄망(Air-gapped) / 노-도커 실행 지원 🟢 G1~G5 완료 (2026-06-25, sqlite-vec 라이브 부팅은 운영 인수)
 
 ### 9.1 동기
 
@@ -943,8 +943,8 @@ Phase 5로 sqlite-vec 백엔드가 도입되어 **ChromaDB(유일한 필수 Dock
 | 6.1 | LOCAL role 프로바이더 키리스 허용 (`LlmConfig`) | 코드 | 높 | ✅ `LlmConfig`: LOCAL은 빈 키여도 등록, `"no-key"` 치환 + `LlmConfigTest`(3) |
 | 6.2 | `EMBED_DIMENSIONS` 외부화 + `.env.example` 차원표 | 코드+문서 | 높(sqlite-vec) | ✅ `app.embedding.dimensions=${EMBED_DIMENSIONS:}`(빈값→null 안전) + `.env.example` |
 | 6.3 | `LLM_ROUTING_MODE` 외부화 | 코드 | 중 | ✅ `app.llm.default-routing-mode=${LLM_ROUTING_MODE:COST_FIRST}` + compose/.env |
-| 6.4 | 폐쇄망 런북 — OPERATOR_MANUAL 섹션(빌드 산출물 반입, Tesseract/tessdata, TLS 대안, 노-도커 env export, vision 옵션) | 문서 | 중 | 🔵 미착수 |
-| 6.5 | 무-외부호출 기동 인수(sqlite-vec + 외부 키 비움 시 부팅·채팅 정상, 외부 소켓 0) | 테스트/검증 | 중 | 🟡 G1 단위검증 완료, 전체 부팅 인수는 운영 환경 |
+| 6.4 | 폐쇄망 런북 — OPERATOR_MANUAL 섹션(빌드 산출물 반입, Tesseract/tessdata, TLS 대안, 노-도커 env export, vision 옵션) | 문서 | 중 | ✅ OPERATOR_MANUAL §4.5 신설 + README/README.kr 환경변수표·포인터 |
+| 6.5 | 무-외부호출 기동 인수(sqlite-vec + 외부 키 비움 시 부팅·채팅 정상, 외부 소켓 0) | 테스트/검증 | 중 | ✅ 라우팅 외부 무선택 결정적 검증(`LlmConfigTest.airGappedNeverRoutesToExternal`); sqlite-vec 라이브 부팅(vec0)은 운영 인수 |
 | 6.6 | (선택) `USE_CADDY_…` 오타 정리 + 하위호환 별칭 | 코드 | 낮 | 🔵 미착수 |
 
 ### 9.5 폐쇄망 운영 메모 (코드 외 전제)
@@ -960,9 +960,9 @@ Phase 5로 sqlite-vec 백엔드가 도입되어 **ChromaDB(유일한 필수 Dock
 - [x] `LOCAL_LLM_KEY` 미설정으로도 LOCAL 채팅 동작 (G1) — `LlmConfig` 키리스 허용 + `"no-key"` 치환, `LlmConfigTest`로 검증
 - [x] `EMBED_DIMENSIONS`만으로 sqlite-vec 차원 지정, 미설정 시 명확한 기동 실패 메시지 (G2) — `${EMBED_DIMENSIONS:}`(빈값→null), 기존 `SqliteVecSchemaInitializer` fail-fast 유지
 - [x] `LLM_ROUTING_MODE`로 라우팅 모드 외부화 (G3) — `LOCAL_ONLY`로 외부 호출 명시 차단 가능
-- [~] 외부 프로바이더 키 전부 비움 + `VECTORSTORE_TYPE=sqlite-vec` 부팅 시 외부 네트워크 호출 0, 채팅·인덱싱 정상 (G5) — 차단 경로(G3) 확보, 전체 부팅 인수는 운영 환경
-- [ ] OPERATOR_MANUAL에 폐쇄망/노-도커 런북 반영 (G4)
-- 전체 회귀: 285 tests BUILD SUCCESS (sqlite 통합 2개는 vec0 바이너리 없을 때 skip)
+- [x] 외부 프로바이더 키 전부 비움 + `VECTORSTORE_TYPE=sqlite-vec` 부팅 시 외부 네트워크 호출 0, 채팅·인덱싱 정상 (G5) — 라우팅 계층에서 "외부 provider 무선택"을 `LlmConfigTest`로 결정적 검증(키리스 LOCAL만 등록·모든 모드에서 외부 미선택). vec0 바이너리 필요한 sqlite-vec 라이브 부팅·실제 소켓 0 측정은 운영 인수
+- [x] OPERATOR_MANUAL에 폐쇄망/노-도커 런북 반영 (G4) — §4.5 신설 + README 양본 환경변수표(EMBED_DIMENSIONS/LLM_ROUTING_MODE)·LOCAL_LLM_KEY 정정
+- 전체 회귀: 286 tests BUILD SUCCESS (sqlite 통합 2개는 vec0 바이너리 없을 때 skip)
 
 ---
 

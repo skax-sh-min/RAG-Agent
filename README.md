@@ -29,7 +29,7 @@ The built JAR is generated at `target/rag-agent-*.jar`.
 
 ### Local Run
 
-> **Vector store backend** — defaults to ChromaDB. Set `VECTORSTORE_TYPE=sqlite-vec` to store vectors in the SQLite file instead and **skip the "Start Chroma" step** below (requires an operator-provided `vec0` native extension — see [OPERATOR_MANUAL.md](OPERATOR_MANUAL.md)).
+> **Vector store backend** — defaults to ChromaDB. Set `VECTORSTORE_TYPE=sqlite-vec` to store vectors in the SQLite file instead and **skip the "Start Chroma" step** below (requires an operator-provided `vec0` native extension — see [OPERATOR_MANUAL.md](OPERATOR_MANUAL.md)). For a fully offline, no-Docker setup (sqlite-vec + local llama-server), see [OPERATOR_MANUAL.md §4.5](OPERATOR_MANUAL.md#45-폐쇄망air-gapped--노-도커-실행).
 
 #### Development mode (run from source)
 
@@ -92,13 +92,15 @@ See [USER_MANUAL.md](USER_MANUAL.md) for usage instructions and [OPERATOR_MANUAL
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `LOCAL_LLM_URL` | — | `http://localhost:1234/v1` | LOCAL provider endpoint (also used as embedding fallback) |
-| `LOCAL_LLM_KEY` | — | `lm-studio` | LOCAL provider API key. Empty value disables LOCAL provider |
+| `LOCAL_LLM_KEY` | — | `lm-studio` | LOCAL provider API key. **Optional for local endpoints** (llama-server needs none) — the LOCAL provider is kept even when blank (`no-key` is substituted) |
 | `LOCAL_LLM_MODEL` | — | `google/gemma-4-e4b` | LOCAL provider model name |
+| `LLM_ROUTING_MODE` | — | `COST_FIRST` | Default routing mode (`app.llm.default-routing-mode`). Air-gapped / local-only: set `LOCAL_ONLY` to block all external provider calls |
 | `OPENAI_API_KEY` | — | — | Required for OpenAI providers. Providers auto-disabled at startup if unset |
 | `GEMINI_API_KEY` | — | — | Required for Gemini providers. Providers auto-disabled at startup if unset |
 | `EMBED_BASE_URL` | — | `LOCAL_LLM_URL` | Embedding endpoint. Falls back to `LOCAL_LLM_URL` if unset |
 | `EMBED_API_KEY` | — | `LOCAL_LLM_KEY` | Embedding API key. Falls back to `LOCAL_LLM_KEY` if unset |
 | `EMBED_MODEL` | — | `text-embedding-nomic-embed-text-v1.5` | Embedding model name |
+| `EMBED_DIMENSIONS` | sqlite-vec only | — | Embedding model's real output dimension (`app.embedding.dimensions`). Required for `sqlite-vec` (baked into the `vec0` DDL — must match the model: nomic=768, bge-m3=1024). Ignored by chroma |
 | `VECTORSTORE_TYPE` | — | `chroma` | Vector store backend — `chroma` or `sqlite-vec` |
 | `SQLITE_VEC_EXTENSION_PATH` | — | — | sqlite-vec only — path to the operator-provided `vec0` loadable extension |
 | `CHROMA_HOST` | — | `http://localhost` | Chroma server host (chroma backend) |
