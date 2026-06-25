@@ -29,16 +29,22 @@ public class LlmConfig {
                 int connectTimeoutSeconds = llmCfg.connectTimeoutSeconds();
                 int readTimeoutSeconds = llmCfg.readTimeoutSeconds();
 
+        // G1: LOCAL providers target a local endpoint (e.g. llama-server) that needs no api-key.
+        // Only cloud providers (NORMAL/PREMIUM) with a blank key are disabled.
         llmCfg.providers().stream()
-                .filter(cfg -> cfg.apiKey() == null || cfg.apiKey().isBlank())
+                .filter(cfg -> (cfg.apiKey() == null || cfg.apiKey().isBlank()) && !isLocalRole(cfg))
                 .forEach(cfg -> log.warn(
                         "Provider [{}] disabled — api-key is empty (set the corresponding env var)", cfg.name()));
 
         List<LlmProvider> providers = llmCfg.providers().stream()
-                .filter(cfg -> cfg.apiKey() != null && !cfg.apiKey().isBlank())
+                .filter(cfg -> (cfg.apiKey() != null && !cfg.apiKey().isBlank()) || isLocalRole(cfg))
                 .map(cfg -> {
                     String roleStr = cfg.role() != null ? cfg.role().toUpperCase() : "NORMAL";
                     String typeStr = cfg.type() != null ? cfg.type().toUpperCase() : "BOTH";
+                    // LOCAL endpoints accept any token; substitute a non-blank placeholder so
+                    // LlmProvider.hasValidApiKey() passes in LlmRouter (mirrors EmbeddingBeanConfig's "no-key").
+                    String effectiveApiKey = (cfg.apiKey() != null && !cfg.apiKey().isBlank())
+                            ? cfg.apiKey() : "no-key";
                     String resolvedUrl = cfg.baseUrl() != null ? cfg.baseUrl() : "https://api.openai.com";
                     boolean providerStream = !Boolean.FALSE.equals(cfg.stream()); // default: true
                     // OpenAiApi.builder() appends /v1 internally, so strip it to avoid /v1/v1.
@@ -48,7 +54,7 @@ public class LlmConfig {
                                    : resolvedUrl;
                     OpenAiApi api = OpenAiApi.builder()
                             .baseUrl(apiBase)
-                            .apiKey(cfg.apiKey())
+                            .apiKey(effectiveApiKey)
                             .restClientBuilder(HttpClientTimeouts.restClientBuilder(
                                     connectTimeoutSeconds,
                                     readTimeoutSeconds))
@@ -67,13 +73,13 @@ public class LlmConfig {
                             .retryTemplate(RetryTemplate.builder().maxAttempts(1).build())
                             .build();
                     ChatModel model = new LoggingChatModel(rawModel, cfg.name(),
-                            resolvedUrl, cfg.apiKey(), cfg.model());
+                            resolvedUrl, effectiveApiKey, cfg.model());
                     return new LlmProvider(
                             cfg.name(),
                             TaskType.valueOf(typeStr),
                             ProviderRole.valueOf(roleStr),
                             cfg.priority(),
-                            cfg.apiKey(),
+                            effectiveApiKey,
                             resolvedUrl,
                             cfg.model(),
                             providerStream,
@@ -118,6 +124,11 @@ public class LlmConfig {
             }
         }
         throw new IllegalStateException(
-                "No LLM provider available. Set LOCAL_LLM_KEY or OPENAI_API_KEY / GEMINI_API_KEY.");
+                "No LLM provider available. Configure a LOCAL provider (LOCAL_LLM_URL) or set OPENAI_API_KEY / GEMINI_API_KEY.");
+    }
+
+    /** G1: a provider whose role is LOCAL targets a local endpoint (e.g. llama-server) that needs no api-key. */
+    private static boolean isLocalRole(AppProperties.ProviderConfig cfg) {
+        return cfg.role() != null && "LOCAL".equalsIgnoreCase(cfg.role().trim());
     }
 }

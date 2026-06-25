@@ -43,6 +43,8 @@ services:
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
       - LLM_MODEL=${LLM_MODEL:-gpt-4o}
       - EMBED_MODEL=${EMBED_MODEL:-text-embedding-ada-002}
+      # sqlite-vec 전용: 임베딩 모델 실제 출력 차원과 일치시켜야 함 (chroma 모드에선 비워둠)
+      - EMBED_DIMENSIONS=${EMBED_DIMENSIONS:-}
       # Local LLM provider (providers[0]) — separate from OPENAI_* above
       - LOCAL_LLM_URL=${LOCAL_LLM_URL:-http://localhost:1234/v1}
       - LOCAL_LLM_KEY=${LOCAL_LLM_KEY:-lm-studio}
@@ -53,6 +55,8 @@ services:
       - VECTORSTORE_TYPE=${VECTORSTORE_TYPE:-chroma}
       - SQLITE_VEC_EXTENSION_PATH=${SQLITE_VEC_EXTENSION_PATH:-}
       - SQLITE_VEC_ENTRYPOINT=${SQLITE_VEC_ENTRYPOINT:-}
+      # 폐쇄망/로컬 전용: LOCAL_ONLY 로 외부 프로바이더 호출 차단
+      - LLM_ROUTING_MODE=${LLM_ROUTING_MODE:-COST_FIRST}
       - AUTH_ENABLED=${AUTH_ENABLED:-true}
       - DATA_DIR=/app/data
       - CHUNK_SIZE=${CHUNK_SIZE:-800}

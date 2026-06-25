@@ -49,6 +49,7 @@
 - **Phase 3 잔여**: 사용자별 LLM 쿼터 (Phase 3.5), 사용자별 스토리지 쿼터
 - **Phase 4**: OAuth2 소셜 로그인, PostgreSQL 마이그레이션 (조건부)
 - ~~**Phase 5**: sqlite-vec 선택적 연동~~ → ✅ 완료 (Step 5.1~5.7, `app.vectorstore.type=chroma|sqlite-vec`)
+- ~~**Phase 6**: 폐쇄망/노-도커 — 키리스 LOCAL(G1)·차원 외부화(G2)·라우팅 외부화(G3)~~ → ✅ G1~G3 완료 (2026-06-25). 잔여: OPERATOR_MANUAL 런북(G4), 전체 부팅 인수(G5)
 
 ---
 
@@ -62,11 +63,12 @@
 6. [Phase 3 — 운영 견고화](#6-phase-3--운영-견고화-1주)
 7. [Phase 4 — 확장 (조건부)](#7-phase-4--확장-조건부)
 8. [Phase 5 — Vector Store 선택적 연동](#8-phase-5--vector-store-선택적-연동)
-9. [리스크 및 이슈](#9-리스크-및-이슈)
-10. [의존성 변경 사항](#10-의존성-변경-사항-pomxml)
-11. [DB 스키마 변경](#11-db-스키마-변경-요약)
-12. [최종 체크리스트](#12-최종-체크리스트)
-13. [부록 — 결정 사항 한눈에 보기](#부록--결정-사항-한눈에-보기)
+9. [Phase 6 — 폐쇄망 / 노-도커 실행 지원](#9-phase-6--폐쇄망air-gapped--노-도커-실행-지원)
+10. [리스크 및 이슈](#10-리스크-및-이슈)
+11. [의존성 변경 사항](#11-의존성-변경-사항-pomxml)
+12. [DB 스키마 변경](#12-db-스키마-변경-요약)
+13. [최종 체크리스트](#13-최종-체크리스트)
+14. [부록 — 결정 사항 한눈에 보기](#부록--결정-사항-한눈에-보기)
 
 ---
 
@@ -83,6 +85,7 @@
 | Phase 3 — 운영 견고화 | Rate limit, 업로드 검증, 감사 로그 | 중요 | 🟡 일부 완료 |
 | Phase 4 — 확장 | OAuth2, PostgreSQL 마이그레이션 | 조건부 | 🔵 미착수 |
 | Phase 5 — Vector Store 선택 | sqlite-vec / ChromaDB 런타임 선택 | 중요 | ✅ 완료 |
+| Phase 6 — 폐쇄망 / 노-도커 | sqlite-vec 단독·로컬 LLM·CDN 0 (키리스 LOCAL, 차원 외부화) | 중요 | 🟢 G1~G3 완료 |
 
 ---
 
@@ -894,7 +897,76 @@ Chroma 벡터를 sqlite-vec로 직접 덤프하는 것은 내부 포맷 의존�
 
 ---
 
-## 9. 리스크 및 이슈
+## 9. Phase 6 — 폐쇄망(Air-gapped) / 노-도커 실행 지원 🟢 G1~G3 구현 완료 (2026-06-25) · G4 문서·G5 인수 잔여
+
+### 9.1 동기
+
+요구사항: **(A) Docker 없이 실행**, **(B) 폐쇄망에서 sqlite-vec 단독 + 로컬 LLM(llama-server)으로 운영**.
+
+Phase 5로 sqlite-vec 백엔드가 도입되어 **ChromaDB(유일한 필수 Docker 서비스)를 제거**할 수 있게 됐고, 프론트엔드 자산은 전부 webjar/로컬 번들이라 **CDN 의존이 0**이다. 즉 **현재 코드로도 두 모드가 기본 동작 가능**하나, 아래 함정/공백 때문에 *무설정* 기동은 실패할 수 있다.
+
+### 9.2 현황 점검 (코드 기준)
+
+| 항목 | 상태 | 근거 |
+|---|---|---|
+| sqlite-vec 단독(ChromaDB·Docker 불요) | ✅ | Phase 5; Chroma 빈 `@ConditionalOnProperty` 가드 |
+| 프론트엔드 CDN 의존 | ✅ 없음 | Bootstrap/Bootstrap-icons/HTMX = webjar(jar 내장), highlight.js = 로컬 vendor |
+| 로컬 LLM 채팅 | ✅(조건부) | `providers[0]`=LOCAL, OpenAI 호환 → llama-server 직결 |
+| 외부 프로바이더 자동 비활성 | ✅ | `LlmConfig`가 빈 api-key 프로바이더를 기동 시 드롭(경고 로그) |
+| 외부 전용 LLM 차단 모드 | ✅ | `RoutingMode.LOCAL_ONLY` 존재 (`LlmRouter:151`) |
+| 임베딩 로컬 엔드포인트 | ✅ | `app.embedding.base-url` 기본값이 `LOCAL_LLM_URL` 폴백, 키 없으면 `"no-key"` 치환(`EmbeddingBeanConfig:31`) |
+| HTTP 직노출(비-TLS) | ✅ | `.env.example`에 `USE_CANDY_REVERSE_PROXY_HTTPS=false` 제공 |
+| Vision 모델 불요(기본) | ✅ | `app.image-description.mode=strip` 기본 |
+
+### 9.3 공백/함정 (개선 필요)
+
+> ⚠️ **G1 (중요) — LOCAL 프로바이더가 키 없으면 기동 시 제거됨.**
+> `LlmConfig`는 `api-key`가 비거나 null인 프로바이더를 **부팅 시점에 드롭**한다(`config/LlmConfig.java:37-38`). 그런데 `app.llm.providers[0].api-key=${LOCAL_LLM_KEY:}`의 기본값은 **빈 문자열**이고, llama-server는 보통 키가 불필요하다. 결과: `LOCAL_LLM_KEY`를 비워두면 LOCAL 프로바이더가 사라져 채팅이 `LlmProviderExhaustedException`으로 실패한다.
+> - **현재 우회**: `LOCAL_LLM_KEY`에 임의의 **비공백** 더미값(예: `no-key`) 지정.
+> - **개선안**: `LlmConfig`에서 `role==LOCAL`이면 키 없이도 등록(임베딩 경로의 `"no-key"` 치환과 동일 정책). 영향 파일 `config/LlmConfig.java`.
+
+> ⚠️ **G2 (중요, sqlite-vec) — `app.embedding.dimensions` 외부화/안내 부재.**
+> sqlite-vec의 `vec0` 테이블은 `FLOAT[dim]`으로 차원이 DDL에 박히며, 미설정 시 `SqliteVecSchemaInitializer`가 기동 실패시킨다(의도된 fail-fast). 그러나 (a) `application.properties`에서 해당 줄이 주석 처리돼 있고(`# app.embedding.dimensions=1536`), (b) `EMBED_DIMENSIONS` 같은 env 플레이스홀더가 없고, (c) `.env.example`에도 항목이 없다. 또한 이 값은 **임베딩 API로 전송되지 않고**(EmbeddingBeanConfig는 `.model()`만 설정) sqlite-vec DDL 전용이라 **모델의 실제 출력 차원과 정확히 일치**해야 한다(불일치 시 insert 실패).
+> - **현재 우회**: 기동 인자 `--app.embedding.dimensions=768`(nomic-embed-text 기준) 또는 환경변수 `APP_EMBEDDING_DIMENSIONS=768`(Spring relaxed binding), 또는 properties 주석 해제.
+> - **개선안**: `EMBED_DIMENSIONS` 외부화 + `.env.example` 항목 + 모델별 차원표 문서화. 단 빈 문자열→`Integer` 바인딩 실패 우려가 있어, chroma 모드(차원 불요)를 깨지 않도록 "값이 있을 때만 바인딩"으로 구현(주석 라인 유지 + 문서 안내가 가장 안전).
+
+> ⚠️ **G3 (소) — 기본 라우팅 모드 미외부화.**
+> `app.llm.default-routing-mode=COST_FIRST`가 하드코딩(env 플레이스홀더 없음). 폐쇄망에서 `LOCAL_ONLY`로 못박으려면 properties 수정/기동 인자가 필요. (외부 키가 비면 COST_FIRST도 사실상 LOCAL만 쓰므로 필수는 아니나, 명시적 차단이 안전.)
+> - **개선안**: `app.llm.default-routing-mode=${LLM_ROUTING_MODE:COST_FIRST}` + `.env.example` 항목.
+
+> ℹ️ **G4 (cosmetic) — 오타 `USE_CANDY_REVERSE_PROXY_HTTPS`** (CADDY 오기). `application.properties`·`.env.example` 동일 오타라 동작엔 무해. 정리 시 `USE_CADDY_…`로 통일 + 하위호환 별칭 검토.
+
+### 9.4 작업 항목
+
+| 단계 | 작업 | 유형 | 우선순위 | 상태 |
+|---|---|---|---|---|
+| 6.1 | LOCAL role 프로바이더 키리스 허용 (`LlmConfig`) | 코드 | 높 | ✅ `LlmConfig`: LOCAL은 빈 키여도 등록, `"no-key"` 치환 + `LlmConfigTest`(3) |
+| 6.2 | `EMBED_DIMENSIONS` 외부화 + `.env.example` 차원표 | 코드+문서 | 높(sqlite-vec) | ✅ `app.embedding.dimensions=${EMBED_DIMENSIONS:}`(빈값→null 안전) + `.env.example` |
+| 6.3 | `LLM_ROUTING_MODE` 외부화 | 코드 | 중 | ✅ `app.llm.default-routing-mode=${LLM_ROUTING_MODE:COST_FIRST}` + compose/.env |
+| 6.4 | 폐쇄망 런북 — OPERATOR_MANUAL 섹션(빌드 산출물 반입, Tesseract/tessdata, TLS 대안, 노-도커 env export, vision 옵션) | 문서 | 중 | 🔵 미착수 |
+| 6.5 | 무-외부호출 기동 인수(sqlite-vec + 외부 키 비움 시 부팅·채팅 정상, 외부 소켓 0) | 테스트/검증 | 중 | 🟡 G1 단위검증 완료, 전체 부팅 인수는 운영 환경 |
+| 6.6 | (선택) `USE_CADDY_…` 오타 정리 + 하위호환 별칭 | 코드 | 낮 | 🔵 미착수 |
+
+### 9.5 폐쇄망 운영 메모 (코드 외 전제)
+
+- **빌드 산출물 반입**: Maven 빌드는 연결망에서 수행(`./mvnw clean package` — webjar·의존성 포함 fat-jar 생성). 폐쇄망 호스트엔 **fat-jar + JRE 21 + 호스트 arch에 맞는 vec0 바이너리(+ 필요 시 tessdata)** 만 반입.
+- **vec0 바이너리 arch**: 호스트 OS/아키텍처(예: linux x86_64)용 loadable을 배치. 불일치 시 `SqliteVecVerifier`가 기동 시 fail-fast.
+- **OCR(Tesseract)**: 스캔 PDF 처리 시 네이티브 Tesseract + `kor`/`eng` tessdata 필요. 불요 시 `app.image-description.ocr-enabled=false`.
+- **이미지 설명(Vision)**: 기본 `mode=strip`(설명 안 함, 모델 불요). 설명을 켜려면 로컬 vision 모델(예: llama-server에 llava 계열) 등록 필요.
+- **TLS**: Caddy는 Docker 서비스이자 Let's Encrypt(인터넷) 의존 → 폐쇄망 부적합. **HTTP 직노출**(`USE_CANDY_REVERSE_PROXY_HTTPS=false`) 또는 **사내 역프록시/사설 CA**로 종료.
+- **`.env` 비자동로드**: `.env`는 docker-compose 전용이라 **노-도커 실행 시 자동 로드되지 않음**(dotenv 의존성 없음). 환경변수를 셸에 export 하거나 `--key=value` 기동 인자/외부 properties로 주입.
+
+**완료 기준 (인수)**
+- [x] `LOCAL_LLM_KEY` 미설정으로도 LOCAL 채팅 동작 (G1) — `LlmConfig` 키리스 허용 + `"no-key"` 치환, `LlmConfigTest`로 검증
+- [x] `EMBED_DIMENSIONS`만으로 sqlite-vec 차원 지정, 미설정 시 명확한 기동 실패 메시지 (G2) — `${EMBED_DIMENSIONS:}`(빈값→null), 기존 `SqliteVecSchemaInitializer` fail-fast 유지
+- [x] `LLM_ROUTING_MODE`로 라우팅 모드 외부화 (G3) — `LOCAL_ONLY`로 외부 호출 명시 차단 가능
+- [~] 외부 프로바이더 키 전부 비움 + `VECTORSTORE_TYPE=sqlite-vec` 부팅 시 외부 네트워크 호출 0, 채팅·인덱싱 정상 (G5) — 차단 경로(G3) 확보, 전체 부팅 인수는 운영 환경
+- [ ] OPERATOR_MANUAL에 폐쇄망/노-도커 런북 반영 (G4)
+- 전체 회귀: 285 tests BUILD SUCCESS (sqlite 통합 2개는 vec0 바이너리 없을 때 skip)
+
+---
+
+## 10. 리스크 및 이슈
 
 | 리스크 | 심각도 | 완화 방안 |
 |--------|--------|----------|
@@ -916,7 +988,7 @@ Chroma 벡터를 sqlite-vec로 직접 덤프하는 것은 내부 포맷 의존�
 
 ---
 
-## 10. 의존성 변경 사항 (pom.xml)
+## 11. 의존성 변경 사항 (pom.xml)
 
 ### 10.1 추가
 
@@ -990,7 +1062,7 @@ app.vectorstore.sqlite-vec.entrypoint=${SQLITE_VEC_ENTRYPOINT:}          # sqlit
 
 ---
 
-## 11. DB 스키마 변경 요약
+## 12. DB 스키마 변경 요약
 
 | 마이그레이션 | 내용 |
 |------------|------|
@@ -1005,7 +1077,7 @@ app.vectorstore.sqlite-vec.entrypoint=${SQLITE_VEC_ENTRYPOINT:}          # sqlit
 
 ---
 
-## 12. 최종 체크리스트
+## 13. 최종 체크리스트
 
 ### 12.1 Phase 1 완료 기준 ✅
 
