@@ -34,11 +34,11 @@ public class VectorStoreFacade {
     }
 
     public void add(String userId, String version, List<Document> docs) {
-        provider.add(userId, version, docs);
+        provider.add(userId, safe(version), docs);
     }
 
     public void deleteByDocIds(String userId, String version, List<String> springDocIds) {
-        provider.deleteByDocIds(userId, version, springDocIds);
+        provider.deleteByDocIds(userId, safe(version), springDocIds);
     }
 
     static String safe(String version) {
