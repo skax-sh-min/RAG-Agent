@@ -13,13 +13,12 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 /**
- * Phase 5 Step 5.5 — selects exactly one {@link VectorStoreProvider} from {@code app.vectorstore.type}.
+ * {@code app.vectorstore.type}에 따라 {@link VectorStoreProvider} 구현체를 정확히 하나 선택한다.
  *
- * <p>{@code chroma} (default, {@code matchIfMissing}) wires {@link ChromaVectorStoreProvider} from the
- * Chroma-only beans ({@link VectorStoreRegistry}, {@link ChromaApi}); {@code sqlite-vec} wires
- * {@link SqliteVecVectorStoreProvider} from the shared {@link JdbcTemplate}. The unused backend's beans
- * are not created (they carry the matching {@code @ConditionalOnProperty}), so sqlite-vec mode starts
- * without ChromaDB.
+ * <p>{@code chroma} (기본값, {@code matchIfMissing=true}) → {@link ChromaVectorStoreProvider}
+ * ({@link VectorStoreRegistry}, {@link ChromaApi} 사용); {@code sqlite-vec} →
+ * {@link SqliteVecVectorStoreProvider} (공유 {@link JdbcTemplate} 사용).
+ * 선택되지 않은 백엔드의 빈은 생성되지 않으므로 sqlite-vec 모드는 ChromaDB 없이 기동된다.
  */
 @Configuration
 public class VectorStoreProviderConfig {

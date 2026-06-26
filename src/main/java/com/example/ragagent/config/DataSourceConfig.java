@@ -29,7 +29,7 @@ public class DataSourceConfig {
     @Value("${spring.datasource.hikari.maximum-pool-size:1}")
     private int maxPoolSize;
 
-    // Phase 5 Step 5.2 — sqlite-vec 백엔드일 때만 네이티브 확장을 로드한다.
+    // sqlite-vec 백엔드일 때만 네이티브 확장을 로드한다.
     @Value("${app.vectorstore.type:chroma}")
     private String vectorStoreType;
 
@@ -53,10 +53,9 @@ public class DataSourceConfig {
     }
 
     /**
-     * Phase 5 Step 5.2 — when {@code app.vectorstore.type=sqlite-vec}, enable runtime
-     * extension loading and load the sqlite-vec {@code vec0} extension on <em>every</em>
-     * pooled connection via {@code connectionInitSql}. With pool=1 this also re-loads the
-     * extension if the single connection is ever recycled.
+     * {@code app.vectorstore.type=sqlite-vec}일 때 런타임 확장 로딩을 활성화하고,
+     * {@code connectionInitSql}로 풀링된 모든 커넥션에 sqlite-vec {@code vec0} 확장을 로드한다.
+     * pool=1이므로 단일 커넥션이 재생성되어도 확장이 다시 로드된다.
      *
      * <p>No official Maven artifact bundles the native binary, so the operator provides the
      * {@code vec0} loadable extension out-of-band and points {@code extension-path} at it

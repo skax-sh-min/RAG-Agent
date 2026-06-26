@@ -19,8 +19,8 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * Phase 5 Step 5.3 — {@link SqliteVecSchemaInitializer} 단위 + 조건부 빈 테스트.
- * vec0 가상 테이블의 실제 생성은 네이티브 확장이 필요해 PoC로 별도 검증한다.
+ * {@link SqliteVecSchemaInitializer} 단위 + 조건부 빈 테스트.
+ * vec0 가상 테이블의 실제 생성은 네이티브 확장이 필요해 통합 테스트로 별도 검증한다.
  */
 class SqliteVecSchemaInitializerTest {
 

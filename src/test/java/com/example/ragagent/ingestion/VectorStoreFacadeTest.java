@@ -13,10 +13,10 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * Step 5.1 — façade 책임 검증.
+ * {@link VectorStoreFacade} 책임 단위 테스트.
  *
- * <p>Chroma 내부 동작(R-1/S-3)은 {@link ChromaVectorStoreProviderTest}로 이전되었고,
- * 여기서는 façade가 남긴 두 책임만 검증한다: (1) {@code SAFE_VERSION} 검증,
+ * <p>Chroma 내부 동작(R-1/S-3)은 {@link ChromaVectorStoreProviderTest}에서 검증하며,
+ * 여기서는 façade 고유 책임만 확인한다: (1) {@code SAFE_VERSION} 정규화,
  * (2) {@link VectorStoreProvider}로의 위임(pass-through).
  */
 class VectorStoreFacadeTest {
@@ -59,7 +59,7 @@ class VectorStoreFacadeTest {
     }
 
     @Test
-    @DisplayName("add: 버전 그대로 위임 (검증 비적용 — 기존 동작 유지)")
+    @DisplayName("add: 유효한 버전은 그대로 위임")
     void add_delegatesRawVersion() {
         List<Document> docs = List.of(Document.builder().id("d1").text("t").build());
         facade.add("owner", "v2", docs);
@@ -67,7 +67,7 @@ class VectorStoreFacadeTest {
     }
 
     @Test
-    @DisplayName("deleteByDocIds: 버전 그대로 위임")
+    @DisplayName("deleteByDocIds: 유효한 버전은 그대로 위임")
     void delete_delegatesRawVersion() {
         facade.deleteByDocIds("owner", "v2", List.of("d1", "d2"));
         verify(provider).deleteByDocIds("owner", "v2", List.of("d1", "d2"));

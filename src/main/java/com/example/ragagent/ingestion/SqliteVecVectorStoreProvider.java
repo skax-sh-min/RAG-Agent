@@ -23,19 +23,19 @@ import java.util.Objects;
 import java.util.stream.Collectors;
 
 /**
- * sqlite-vec backed {@link VectorStoreProvider} (Plan.md Step 5.4).
+ * sqlite-vec 기반 {@link VectorStoreProvider}.
  *
- * <p>Stores vectors in the {@code vec_embeddings} vec0 virtual table and text + JSON metadata in
- * {@code vec_document_chunks} (see {@code SqliteVecSchemaInitializer}), joined on {@code spring_doc_id}.
- * KNN filters by {@code version} via the vec0 partition key in a single query
- * ({@code WHERE embedding MATCH ? AND k = ? AND version = ?}); the metric is cosine, so
- * {@code similarity = 1 - distance} matches the Chroma path.
+ * <p>벡터는 {@code vec_embeddings}(vec0 가상 테이블), 텍스트·JSON 메타데이터는
+ * {@code vec_document_chunks}({@code SqliteVecSchemaInitializer} 참고)에 저장하며
+ * {@code spring_doc_id}로 JOIN한다. KNN은 vec0 파티션 키로 버전을 필터링하므로
+ * 단일 쿼리({@code WHERE embedding MATCH ? AND k = ? AND version = ?})로 동작한다.
+ * 유사도 지표는 cosine({@code similarity = 1 - distance})으로 Chroma 경로와 동일하다.
  *
- * <p>Bean wiring is deferred to Step 5.5 ({@code VectorStoreProviderConfig} registers exactly one
- * {@link VectorStoreProvider} per {@code app.vectorstore.type}); this class is a plain POJO so it
- * does not collide with the Chroma provider in the default profile.
+ * <p>{@code VectorStoreProviderConfig}가 {@code app.vectorstore.type=sqlite-vec}일 때
+ * 정확히 하나의 {@link VectorStoreProvider} 빈으로 등록한다. 이 클래스 자체는 POJO이므로
+ * 기본 프로파일의 Chroma 빈과 충돌하지 않는다.
  *
- * <p>Versions passed in are assumed already validated by {@link VectorStoreFacade}.
+ * <p>전달되는 version 값은 {@link VectorStoreFacade}에서 이미 검증된 것으로 간주한다.
  */
 public class SqliteVecVectorStoreProvider implements VectorStoreProvider {
 

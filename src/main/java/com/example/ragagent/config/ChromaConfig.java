@@ -8,7 +8,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.web.client.RestClient;
 
-/** Provides the {@link ChromaApi} bean — only in the {@code chroma} backend (Phase 5 Step 5.5). */
+/** {@code app.vectorstore.type=chroma}(기본값)일 때만 {@link ChromaApi} 빈을 생성한다. */
 @Configuration
 @ConditionalOnProperty(name = "app.vectorstore.type", havingValue = "chroma", matchIfMissing = true)
 public class ChromaConfig {

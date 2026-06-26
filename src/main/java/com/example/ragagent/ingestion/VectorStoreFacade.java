@@ -10,9 +10,9 @@ import java.util.regex.Pattern;
  * Backend-agnostic façade over {@link VectorStoreProvider}.
  *
  * <p>Owns the cross-cutting {@code SAFE_VERSION} validation and delegates all
- * vector-store I/O to the active provider (Chroma today; sqlite-vec in a later
- * Plan.md Step). Call sites ({@code RagService}, {@code DocumentIndexer}) keep
- * injecting this façade by type — the backend swap is invisible to them.
+ * vector-store I/O to the active provider (Chroma or sqlite-vec, selected via
+ * {@code app.vectorstore.type}). Call sites ({@code RagService}, {@code DocumentIndexer})
+ * inject this façade — the backend swap is invisible to them.
  */
 @Component
 public class VectorStoreFacade {

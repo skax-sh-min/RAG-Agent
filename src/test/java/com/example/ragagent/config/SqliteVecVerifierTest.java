@@ -9,9 +9,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
 
 /**
- * Phase 5 Step 5.2 — {@link SqliteVecVerifier} 는 sqlite-vec 모드에서만 생성된다.
- * ApplicationContextRunner 는 ApplicationReadyEvent 를 발행하지 않으므로 verify() 는
- * 실행되지 않고, 빈 등록 조건(@ConditionalOnProperty)만 검증한다.
+ * {@link SqliteVecVerifier}는 sqlite-vec 모드에서만 생성됨을 검증한다.
+ * {@code ApplicationContextRunner}는 {@code ApplicationReadyEvent}를 발행하지 않으므로
+ * {@code verify()}는 실행되지 않고 {@code @ConditionalOnProperty} 빈 등록 조건만 확인한다.
  */
 class SqliteVecVerifierTest {
 

@@ -9,13 +9,11 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
 /**
- * Phase 5 Step 5.2 — verifies the sqlite-vec native extension actually loaded.
+ * sqlite-vec 네이티브 확장이 실제로 로드됐는지 기동 시점에 검증한다.
  *
- * <p>Only created when {@code app.vectorstore.type=sqlite-vec}; the default {@code chroma}
- * backend never instantiates this bean. {@link DataSourceConfig#configureSqliteVec} arranges
- * the extension to be loaded on every pooled connection — here we just confirm it at startup
- * by calling {@code vec_version()} and fail fast (with operator guidance) if it is missing,
- * rather than surfacing a cryptic "no such function" error on the first user query.
+ * <p>{@code app.vectorstore.type=sqlite-vec}일 때만 생성된다. {@link DataSourceConfig#configureSqliteVec}가
+ * 풀링된 커넥션마다 확장을 로드하도록 설정하며, 이 빈은 {@code vec_version()} 호출로 확인하고
+ * 실패 시 즉각 예외를 던진다 — 첫 쿼리까지 미루면 "no such function" 같은 불명확한 오류가 발생하기 때문.
  */
 @Component
 @ConditionalOnProperty(name = "app.vectorstore.type", havingValue = "sqlite-vec")

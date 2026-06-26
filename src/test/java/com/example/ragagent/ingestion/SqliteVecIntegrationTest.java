@@ -24,13 +24,12 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.when;
 
 /**
- * Phase 5 Step 5.7 — full sqlite-vec backend integration over the real Spring context.
+ * 실제 Spring 컨텍스트 위에서 sqlite-vec 백엔드를 E2E로 검증하는 통합 테스트.
  *
- * <p>Runs only when {@code -Dsqlitevec.path=/path/to/vec0} points at a vec0 loadable for this
- * platform (the DataSource loads it on connection init); otherwise the whole class is skipped, so
- * CI and the default build stay green without the native binary. Embeddings are mocked to keep the
- * test offline and deterministic — the vector store path itself is exercised end-to-end against
- * real sqlite-vec.
+ * <p>{@code -Dsqlitevec.path=/path/to/vec0}로 해당 플랫폼용 vec0 로더블을 지정해야만 실행된다
+ * ({@code DataSource}가 커넥션 초기화 시 로드); 미지정 시 클래스 전체가 skip되어 CI와
+ * 기본 빌드는 네이티브 바이너리 없이도 통과한다. 임베딩은 오프라인·결정적 실행을 위해 mock하고,
+ * 벡터 스토어 경로는 실제 sqlite-vec에 대해 E2E로 검증한다.
  */
 @SpringBootTest(
         webEnvironment = SpringBootTest.WebEnvironment.NONE,
@@ -46,7 +45,7 @@ import static org.mockito.Mockito.when;
 @EnabledIfSystemProperty(named = "sqlitevec.path", matches = ".+")
 class SqliteVecIntegrationTest {
 
-    private static final String V = "itv1";   // test-only version (vec0 partition key) → isolates data
+    private static final String V = "itv1";   // 테스트 전용 버전(vec0 파티션 키) → 다른 데이터와 격리
 
     @MockitoBean
     EmbeddingModel embeddingModel;

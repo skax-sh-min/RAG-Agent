@@ -8,7 +8,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * Phase 5 Step 5.2 — {@link DataSourceConfig#configureSqliteVec} 단위 테스트.
+ * {@link DataSourceConfig#configureSqliteVec} 단위 테스트.
  * 실제 커넥션을 열지 않고 HikariConfig 결과만 검증한다 (네이티브 바이너리 불필요).
  */
 class DataSourceConfigTest {

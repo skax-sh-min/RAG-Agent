@@ -19,8 +19,8 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
- * Step 5.4 — 순수 헬퍼 + empty/delete 경로 단위 테스트.
- * 실제 KNN/add/search/version 필터/멱등은 네이티브 vec0가 필요해 PoC로 검증한다.
+ * {@link SqliteVecVectorStoreProvider} 순수 헬퍼 + empty/delete 경로 단위 테스트.
+ * 실제 KNN/add/search/version 필터/멱등은 네이티브 vec0가 필요해 통합 테스트로 검증한다.
  */
 class SqliteVecVectorStoreProviderTest {
 

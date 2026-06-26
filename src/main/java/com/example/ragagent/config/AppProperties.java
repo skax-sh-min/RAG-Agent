@@ -90,7 +90,7 @@ public record AppProperties(
             boolean enabled          // false → no-auth mode (guest/admin auto-login)
     ) {}
 
-    /** Phase 5 — vector store backend selection. {@code type}: chroma (default) | sqlite-vec. */
+    /** 벡터 스토어 백엔드 선택. {@code type}: chroma (기본값) | sqlite-vec. */
     public record VectorStoreConfig(String type) {}
 
     public record ImageDescriptionProperties(

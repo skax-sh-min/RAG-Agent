@@ -9,19 +9,16 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
 /**
- * Phase 5 Step 5.3 — creates the sqlite-vec schema at startup.
+ * sqlite-vec 백엔드용 스키마를 기동 시점에 생성한다.
  *
- * <p>Only active when {@code app.vectorstore.type=sqlite-vec}; the default {@code chroma}
- * backend never instantiates this bean. The {@code vec0} virtual table dimension is bound to
- * the embedding model, so it must be a DDL literal — that makes it a poor fit for Flyway's
- * static migrations. Instead we run idempotent {@code IF NOT EXISTS} DDL on
- * {@link ApplicationReadyEvent} (by which point {@link DataSourceConfig#configureSqliteVec}
- * has loaded the vec0 extension on the pooled connection).
+ * <p>{@code app.vectorstore.type=sqlite-vec}일 때만 활성화된다. {@code vec0} 가상 테이블의
+ * 벡터 차원은 임베딩 모델에 종속된 DDL 리터럴이므로 Flyway 정적 마이그레이션에 적합하지 않다.
+ * 대신 {@link ApplicationReadyEvent} 시점에 멱등성({@code IF NOT EXISTS}) DDL을 실행한다
+ * (이 시점에는 {@link DataSourceConfig#configureSqliteVec}가 vec0 확장을 이미 로드한 상태).
  *
- * <p>Two tables, joined on {@code spring_doc_id}: {@code vec_embeddings} holds the vectors
- * (vec0 virtual table), {@code vec_document_chunks} holds text + JSON metadata. {@code user_scope}
- * defaults to {@code 'shared'} because document storage currently converges on
- * {@code DocRegistry.SHARED}.
+ * <p>테이블 두 개가 {@code spring_doc_id}로 JOIN된다: {@code vec_embeddings}(vec0 가상 테이블, 벡터 저장),
+ * {@code vec_document_chunks}(텍스트 + JSON 메타데이터). {@code user_scope}는 문서 스토리지가
+ * {@code DocRegistry.SHARED}로 단일화돼 있으므로 기본값 {@code 'shared'}.
  */
 @Component
 @ConditionalOnProperty(name = "app.vectorstore.type", havingValue = "sqlite-vec")

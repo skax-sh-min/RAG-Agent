@@ -6,9 +6,8 @@ import java.util.List;
 
 /**
  * Backend-agnostic vector-store operations. One implementation per backend
- * ({@link ChromaVectorStoreProvider} today; a sqlite-vec implementation arrives
- * in Plan.md Step 5.4). Selected at runtime via {@code app.vectorstore.type}
- * (Step 5.5).
+ * ({@link ChromaVectorStoreProvider}, {@link SqliteVecVectorStoreProvider}).
+ * Selected at runtime via {@code app.vectorstore.type}.
  *
  * <p>Contract: {@code version} strings are assumed already validated/normalised
  * by {@link VectorStoreFacade#safe(String)} — implementations must not re-validate.

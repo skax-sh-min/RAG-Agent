@@ -15,8 +15,8 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * Phase 5 Step 5.5 — AdminService must stay backend-agnostic: in sqlite-vec mode there is no
- * ChromaApi bean (Optional.empty), and admin chunk operations degrade gracefully instead of NPE.
+ * {@link AdminService}가 백엔드 독립적으로 동작하는지 검증한다: sqlite-vec 모드에서
+ * {@code ChromaApi} 빈이 없어도({@code Optional.empty}) 청크 조회/삭제가 NPE 없이 graceful하게 동작해야 한다.
  */
 class AdminServiceTest {
 

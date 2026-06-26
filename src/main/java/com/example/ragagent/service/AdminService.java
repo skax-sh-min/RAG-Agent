@@ -25,7 +25,7 @@ public class AdminService {
     private static final String TENANT   = ChromaApiConstants.DEFAULT_TENANT_NAME;
     private static final String DATABASE = ChromaApiConstants.DEFAULT_DATABASE_NAME;
 
-    /** Nullable — the sqlite-vec backend (Phase 5) registers no ChromaApi bean. */
+    /** Nullable — sqlite-vec 백엔드에서는 ChromaApi 빈이 없으므로 Optional로 주입된다. */
     private final ChromaApi chromaApi;
 
     public AdminService(Optional<ChromaApi> chromaApi) {

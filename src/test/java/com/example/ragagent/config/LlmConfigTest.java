@@ -14,13 +14,13 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
 
 /**
- * QA — Phase 6 G1 + G5.
+ * 키리스 LOCAL 프로바이더(G1) + 폐쇄망 라우팅(G5) 단위 테스트.
  *
- * G1: {@code LlmConfig.llmRouter()} drops cloud providers whose api-key is blank, but must KEEP
- * LOCAL-role providers and substitute a non-blank placeholder so they remain routable
- * (LlmRouter.findFirst filters by LlmProvider.hasValidApiKey()).
- * G5: air-gapped acceptance — with every external key blank, no external provider is ever
- * selectable in any routing mode (the "no external call" guarantee at the routing layer).
+ * <p>G1: {@code LlmConfig.llmRouter()}는 api-key가 빈 클라우드 프로바이더를 드롭하되,
+ * LOCAL role 프로바이더는 유지하고 플레이스홀더로 대체해 라우팅 가능 상태를 보장한다
+ * ({@code LlmRouter.findFirst}는 {@code LlmProvider.hasValidApiKey()}로 필터링).
+ * G5: 모든 외부 키가 비어 있으면 어떤 라우팅 모드에서도 외부 프로바이더가 선택되지 않는다
+ * (라우팅 계층의 "외부 호출 없음" 보장).
  */
 class LlmConfigTest {
 

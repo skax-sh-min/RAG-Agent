@@ -17,9 +17,9 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 /**
- * Phase 5 Step 5.5 — backend selection switch.
- * Verifies exactly one VectorStoreProvider per app.vectorstore.type, and that the
- * Chroma-only ChromaApi bean is absent in sqlite-vec mode.
+ * {@code app.vectorstore.type}에 따라 {@link VectorStoreProvider}가 정확히 하나 선택되는지,
+ * sqlite-vec 모드에서 Chroma 전용 {@link org.springframework.ai.chroma.vectorstore.ChromaApi}
+ * 빈이 생성되지 않는지 검증한다.
  */
 class VectorStoreProviderConfigTest {
 

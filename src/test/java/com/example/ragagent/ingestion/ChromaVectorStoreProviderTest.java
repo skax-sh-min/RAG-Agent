@@ -23,11 +23,10 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * R-1 (similarity threshold) + S-3 (batched multi-query) 회귀 테스트.
+ * R-1 (유사도 임계값) + S-3 (배치 멀티쿼리) 단위 테스트.
  *
- * <p>Step 5.1에서 {@code VectorStoreFacade}의 Chroma I/O 로직이
- * {@link ChromaVectorStoreProvider}로 이전됨에 따라, 기존 VectorStoreFacadeTest의
- * Chroma 내부 동작 검증을 그대로 이 클래스로 옮긴 것이다 (커버리지 동일).
+ * <p>{@code VectorStoreFacade}의 Chroma I/O 로직이 {@link ChromaVectorStoreProvider}로 분리된 후
+ * 해당 동작을 검증한다.
  */
 class ChromaVectorStoreProviderTest {
 
