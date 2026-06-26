@@ -29,6 +29,8 @@ mvn clean package -DskipTests
 
 ### 로컬 실행
 
+> **벡터 스토어 백엔드** — 기본은 ChromaDB. `VECTORSTORE_TYPE=sqlite-vec`로 설정하면 벡터를 SQLite 파일에 저장하고 아래 **"Chroma 서버" 단계를 생략**할 수 있습니다 (운영자가 제공하는 `vec0` 네이티브 확장 필요 — [OPERATOR_MANUAL.md](OPERATOR_MANUAL.md) 참조). 인터넷·Docker 없이 sqlite-vec + 로컬 llama-server로만 돌리는 폐쇄망 구성은 [OPERATOR_MANUAL.md §4.5](OPERATOR_MANUAL.md#45-폐쇄망air-gapped--노-도커-실행) 참조.
+
 #### 개발 모드 (소스 직접 실행)
 
 ```bash
@@ -92,15 +94,19 @@ container system stop
 | 변수 | 필수 | 기본값 | 설명 |
 |------|------|--------|------|
 | `LOCAL_LLM_URL` | — | `http://localhost:1234/v1` | LOCAL provider 엔드포인트 (임베딩 폴백으로도 사용) |
-| `LOCAL_LLM_KEY` | — | `lm-studio` | LOCAL provider API 키. 비우면 LOCAL 비활성화 |
+| `LOCAL_LLM_KEY` | — | `lm-studio` | LOCAL provider API 키. **로컬 엔드포인트(llama-server)는 키 불필요** — 비워도 LOCAL provider는 등록됨(`no-key` 치환) |
 | `LOCAL_LLM_MODEL` | — | `google/gemma-4-e4b` | LOCAL provider 모델명 |
+| `LLM_ROUTING_MODE` | — | `COST_FIRST` | 기본 라우팅 모드 (`app.llm.default-routing-mode`). 폐쇄망/로컬 전용은 `LOCAL_ONLY`로 외부 프로바이더 호출 차단 |
 | `OPENAI_API_KEY` | — | — | OpenAI providers 사용 시 필요. 미설정 시 해당 providers 자동 비활성화 |
 | `GEMINI_API_KEY` | — | — | Gemini providers 사용 시 필요. 미설정 시 해당 providers 자동 비활성화 |
 | `EMBED_BASE_URL` | — | `LOCAL_LLM_URL` | 임베딩 전용 엔드포인트. 미설정 시 `LOCAL_LLM_URL` 사용 |
 | `EMBED_API_KEY` | — | `LOCAL_LLM_KEY` | 임베딩 API 키. 미설정 시 `LOCAL_LLM_KEY` 사용 |
 | `EMBED_MODEL` | — | `text-embedding-nomic-embed-text-v1.5` | 임베딩 모델명 |
-| `CHROMA_HOST` | — | `http://localhost` | Chroma 서버 호스트 (프로토콜 포함) |
-| `CHROMA_PORT` | — | `8001` | Chroma 서버 포트 |
+| `EMBED_DIMENSIONS` | sqlite-vec 시 | — | 임베딩 모델의 실제 출력 차원 (`app.embedding.dimensions`). `sqlite-vec` 필수 (vec0 DDL에 고정 — 모델 실제 차원과 일치: nomic=768, bge-m3=1024). chroma는 무시 |
+| `VECTORSTORE_TYPE` | — | `chroma` | 벡터 스토어 백엔드 — `chroma` 또는 `sqlite-vec` |
+| `SQLITE_VEC_EXTENSION_PATH` | — | — | sqlite-vec 전용 — 운영자가 제공하는 `vec0` 로더블 확장 경로 |
+| `CHROMA_HOST` | — | `http://localhost` | Chroma 서버 호스트 (chroma 백엔드) |
+| `CHROMA_PORT` | — | `8001` | Chroma 서버 포트 (chroma 백엔드) |
 | `DATA_DIR` | — | `./data` | 문서·레지스트리·SQLite DB 저장 경로 |
 
 ### RAG 튜닝
@@ -166,7 +172,8 @@ rag_java/
     │   ├── ingestion/
     │   │   ├── DocumentIndexer.java            # 핵심 인덱싱 로직; 3단계 동기화; DocRegistry SQLite
     │   │   ├── DocRegistry.java                # doc_registry SQLite 테이블 관리
-    │   │   └── VectorStoreFacade.java          # ChromaVectorStore 추상화
+    │   │   ├── VectorStoreFacade.java          # VectorStoreProvider 위임 (백엔드 불가지론)
+    │   │   └── VectorStoreProvider.java        # chroma | sqlite-vec (app.vectorstore.type)
     │   ├── ratelimit/
     │   │   └── RateLimitFilter.java            # Bucket4j + Caffeine 유저별 토큰버킷; 429 + RAG-RATE-001
     │   ├── llm/
@@ -211,7 +218,7 @@ rag_java/
     │       ├── EmfToPngConverter.java         # Batik WMFTranscoder→SVG→PNGTranscoder 파이프라인
     │       ├── LibreOfficeConverter.java      # LibreOffice headless WMF→PNG (20s 타임아웃)
     │       ├── ThreadMetaService.java         # 대화 스레드 메타 관리
-    │       └── VectorStoreRegistry.java       # 버전별 ChromaVectorStore 관리
+    │       └── VectorStoreRegistry.java       # 버전별 ChromaVectorStore 관리 (chroma 백엔드)
     └── resources/
         ├── application.properties
         ├── messages.properties            # UI 문자열 — English (기본)
@@ -245,7 +252,7 @@ rag_java/
 질문 입력
   └─▶ [Classifier]  → 질문 유형 분류 (concept / usage / error / version / meta)
         ├─ meta  ──▶ [DirectAnswer] → [Finalize] → 응답
-        └─ other ──▶ [Retrieval]   (LLM 최적 쿼리 생성 → Chroma 검색)
+        └─ other ──▶ [Retrieval]   (LLM 최적 쿼리 생성 → 벡터 검색)
                        └─▶ [Answer]   (구조화 답변 + sufficient 자기평가)
                               ├─ 증거 부족 ──▶ [Retrieval] (최대 2회)
                               └─ 충분    ──▶ [Critic]   (근거 검증)
@@ -262,7 +269,7 @@ rag_java/
 - **질문 분류 + 라우팅** — meta(인사·잡담)는 RAG 없이 직접 응답, 나머지는 풀 파이프라인
 - **멀티 LLM 라우팅** — `LlmRouter`가 `TaskType × RoutingMode` 기준으로 프로바이더 선택: COST_FIRST / QUALITY_FIRST / PROGRESSIVE / DUAL (로컬+외부 병렬) / LOCAL_ONLY
 - **Circuit Breaker** — HTTP 429/오류 시 프로바이더 자동 차단 (Retry-After 지원), 우선순위 기반 failover; LLM 사용량 대시보드에서 차단 상태 확인
-- **벡터 검색** — `MultiQueryExpander`(3쿼리 병렬)로 최적 검색 후 Chroma 유사도 검색
+- **벡터 검색** — `MultiQueryExpander`(3쿼리 병렬)로 최적 검색 후 선택된 백엔드(ChromaDB 또는 sqlite-vec)로 유사도 검색
 - **ReAct 재검색** — 증거 부족 시 최대 2회 자동 재검색
 - **Critic 검증** — 생성된 답변이 문서에 근거하는지 LLM이 이중 검증
 - **PROGRESSIVE 모드** — COST_FIRST로 시작 → 품질 임계값 미달 시 PREMIUM 프로바이더로 재실행 + 업그레이드 배지 표시
@@ -278,7 +285,7 @@ rag_java/
 - **출처 hover 미리보기** — `SourceRef` 구조체 기반 Bootstrap Popover, 출처 hover 시 청크 텍스트 200자 미리보기
 - **코드 syntax highlight** — DOMPurify sanitize 후 highlight.js 적용, 다크 모드 연동
 - **LLM 사용량 대시보드** — 프로바이더별 일간·주간·월간 토큰 사용량, Chart.js 일별 히스토리 차트, Circuit Breaker 카운트다운
-- **문서 버전 관리** — 버전별 Chroma 컬렉션 분리 (`manual_{version}`)
+- **문서 버전 관리** — 버전별 격리 (chroma: 컬렉션 분리 / sqlite-vec: `version` partition key)
 - **증분 인덱싱** — SHA-256 기반 변경 감지, `doc_registry` SQLite 테이블 영속 (유저별)
 - **다양한 문서 형식** — PDF, PPTX, DOCX, TXT, MD
 - **Java 21 Virtual Threads** — LLM I/O 및 병렬 인덱싱 전체에 경량 스레드 적용

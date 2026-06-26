@@ -228,7 +228,7 @@ public class DocumentIndexer {
         log.info("[SYNC] 디렉터리 동기화 시작 (version={})", version);
         long t0 = System.currentTimeMillis();
 
-        // Phase 1: collect files on disk and detect what needs indexing
+        // 1단계: 디스크 파일 수집 + 인덱싱 대상 탐지
         Map<String, Path> filesOnDisk = new HashMap<>();
         if (Files.exists(documentsDir)) {
             try (Stream<Path> stream = Files.list(documentsDir)) {
@@ -253,7 +253,7 @@ public class DocumentIndexer {
             String stale = docRegistry.findStaleDocId(filename, docId, version, DocRegistry.SHARED).orElse(null);
             filesToIndex.put(filename, new FileEntry(filePath, stale));
         }
-        log.info("[SYNC] Phase1 완료: 전체 {}개, 인덱싱 필요 {}개, 스킵 {}개",
+        log.info("[SYNC] 1단계 완료: 전체 {}개, 인덱싱 필요 {}개, 스킵 {}개",
                 filesOnDisk.size(), filesToIndex.size(), filesOnDisk.size() - filesToIndex.size());
         filesToIndex.forEach((name, fe) ->
                 log.debug("[SYNC]   대상: {} (stale={})", name, fe.staleDocId()));
@@ -262,7 +262,7 @@ public class DocumentIndexer {
         onProgress.accept(IndexingProgressEvent.of("sync_start", 0, totalFiles, "sync",
                 "파일 " + totalFiles + "개 인덱싱 예정"));
 
-        // Phase 2: index each file in parallel
+        // 2단계: 파일별 병렬 인덱싱
         int fileConcurrency = props.indexingSafe().maxConcurrentFiles();
         Semaphore llmGate   = new Semaphore(props.indexingSafe().maxConcurrentLlmCalls());
         List<String> indexed = new CopyOnWriteArrayList<>();
@@ -298,7 +298,7 @@ public class DocumentIndexer {
             CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
         }
 
-        // Phase 3: detect deleted files
+        // 3단계: 삭제된 파일 감지
         List<String> deleted = new ArrayList<>();
         for (String docId : new HashSet<>(docRegistry.docIds(DocRegistry.SHARED))) {
             DocRegistry.DocRegistryEntry entry = docRegistry.findByDocId(docId, DocRegistry.SHARED).orElse(null);

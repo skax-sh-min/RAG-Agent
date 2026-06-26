@@ -4,6 +4,7 @@ import org.springframework.ai.chroma.vectorstore.ChromaApi;
 import org.springframework.ai.chroma.vectorstore.ChromaVectorStore;
 import org.springframework.ai.embedding.EmbeddingModel;
 import org.springframework.ai.vectorstore.VectorStore;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
 
 import java.util.concurrent.ConcurrentHashMap;
@@ -16,6 +17,7 @@ import java.util.concurrent.ConcurrentHashMap;
  *   - Chroma constrains collection names to [a-zA-Z0-9._-]{3,63}, start/end alphanumeric.
  */
 @Service
+@ConditionalOnProperty(name = "app.vectorstore.type", havingValue = "chroma", matchIfMissing = true)
 public class VectorStoreRegistry {
 
     private static final int MAX_NAME_LEN = 63;

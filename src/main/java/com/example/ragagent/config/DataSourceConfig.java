@@ -29,6 +29,16 @@ public class DataSourceConfig {
     @Value("${spring.datasource.hikari.maximum-pool-size:1}")
     private int maxPoolSize;
 
+    // sqlite-vec 백엔드일 때만 네이티브 확장을 로드한다.
+    @Value("${app.vectorstore.type:chroma}")
+    private String vectorStoreType;
+
+    @Value("${app.vectorstore.sqlite-vec.extension-path:}")
+    private String sqliteVecExtensionPath;
+
+    @Value("${app.vectorstore.sqlite-vec.entrypoint:}")
+    private String sqliteVecEntrypoint;
+
     @Bean
     public DataSource dataSource() throws IOException {
         Path dir = Path.of(dataDir);
@@ -38,6 +48,46 @@ public class DataSourceConfig {
         config.setJdbcUrl("jdbc:sqlite:" + dir.toAbsolutePath() + "/memory.db");
         config.setDriverClassName("org.sqlite.JDBC");
         config.setMaximumPoolSize(maxPoolSize);
+        configureSqliteVec(config, vectorStoreType, sqliteVecExtensionPath, sqliteVecEntrypoint);
         return new HikariDataSource(config);
+    }
+
+    /**
+     * {@code app.vectorstore.type=sqlite-vec}일 때 런타임 확장 로딩을 활성화하고,
+     * {@code connectionInitSql}로 풀링된 모든 커넥션에 sqlite-vec {@code vec0} 확장을 로드한다.
+     * pool=1이므로 단일 커넥션이 재생성되어도 확장이 다시 로드된다.
+     *
+     * <p>No official Maven artifact bundles the native binary, so the operator provides the
+     * {@code vec0} loadable extension out-of-band and points {@code extension-path} at it
+     * (see OPERATOR_MANUAL §sqlite-vec). For the default {@code chroma} backend this is a no-op
+     * — the connection is left exactly as before.
+     *
+     * <p>Package-private + static so it can be unit-tested without opening a real connection.
+     */
+    static void configureSqliteVec(HikariConfig config, String type, String extensionPath, String entrypoint) {
+        if (!"sqlite-vec".equalsIgnoreCase(type == null ? "" : type.trim())) {
+            return; // chroma (default) — unchanged
+        }
+        String path = extensionPath == null ? "" : extensionPath.trim();
+        if (path.isEmpty()) {
+            throw new IllegalStateException(
+                    "app.vectorstore.type=sqlite-vec 인데 app.vectorstore.sqlite-vec.extension-path 가 비어 있습니다. "
+                    + "vec0 로더블 확장 바이너리 경로를 지정하세요 (예: /opt/sqlite-vec/vec0).");
+        }
+        String ep = entrypoint == null ? "" : entrypoint.trim();
+        // load_extension SQL 리터럴 안전성: 작은따옴표는 SQL을 깨뜨리고 주입 위험 → 차단.
+        if (path.indexOf('\'') >= 0) {
+            throw new IllegalStateException("extension-path 에 작은따옴표(')를 포함할 수 없습니다: " + path);
+        }
+        if (ep.indexOf('\'') >= 0) {
+            throw new IllegalStateException("entrypoint 에 작은따옴표(')를 포함할 수 없습니다: " + ep);
+        }
+        // 1) 드라이버 레벨에서 load_extension() 허용 (xerial 기본 off — 보안)
+        config.addDataSourceProperty("enable_load_extension", "true");
+        // 2) 커넥션마다 vec0 로드 — connectionInitSql 은 단일 statement 만 실행됨
+        String initSql = ep.isEmpty()
+                ? "SELECT load_extension('" + path + "')"
+                : "SELECT load_extension('" + path + "', '" + ep + "')";
+        config.setConnectionInitSql(initSql);
     }
 }

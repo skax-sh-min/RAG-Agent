@@ -6,10 +6,12 @@ import org.slf4j.LoggerFactory;
 import org.springframework.ai.chroma.vectorstore.ChromaApi;
 import org.springframework.ai.chroma.vectorstore.common.ChromaApiConstants;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.ResourceAccessException;
 
 @Component
+@ConditionalOnProperty(name = "app.vectorstore.type", havingValue = "chroma", matchIfMissing = true)
 public class ChromaHealthChecker {
 
     private static final Logger log = LoggerFactory.getLogger(ChromaHealthChecker.class);

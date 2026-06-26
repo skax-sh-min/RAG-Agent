@@ -29,6 +29,8 @@ The built JAR is generated at `target/rag-agent-*.jar`.
 
 ### Local Run
 
+> **Vector store backend** — defaults to ChromaDB. Set `VECTORSTORE_TYPE=sqlite-vec` to store vectors in the SQLite file instead and **skip the "Start Chroma" step** below (requires an operator-provided `vec0` native extension — see [OPERATOR_MANUAL.md](OPERATOR_MANUAL.md)). For a fully offline, no-Docker setup (sqlite-vec + local llama-server), see [OPERATOR_MANUAL.md §4.5](OPERATOR_MANUAL.md#45-폐쇄망air-gapped--노-도커-실행).
+
 #### Development mode (run from source)
 
 ```bash
@@ -90,15 +92,19 @@ See [USER_MANUAL.md](USER_MANUAL.md) for usage instructions and [OPERATOR_MANUAL
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `LOCAL_LLM_URL` | — | `http://localhost:1234/v1` | LOCAL provider endpoint (also used as embedding fallback) |
-| `LOCAL_LLM_KEY` | — | `lm-studio` | LOCAL provider API key. Empty value disables LOCAL provider |
+| `LOCAL_LLM_KEY` | — | `lm-studio` | LOCAL provider API key. **Optional for local endpoints** (llama-server needs none) — the LOCAL provider is kept even when blank (`no-key` is substituted) |
 | `LOCAL_LLM_MODEL` | — | `google/gemma-4-e4b` | LOCAL provider model name |
+| `LLM_ROUTING_MODE` | — | `COST_FIRST` | Default routing mode (`app.llm.default-routing-mode`). Air-gapped / local-only: set `LOCAL_ONLY` to block all external provider calls |
 | `OPENAI_API_KEY` | — | — | Required for OpenAI providers. Providers auto-disabled at startup if unset |
 | `GEMINI_API_KEY` | — | — | Required for Gemini providers. Providers auto-disabled at startup if unset |
 | `EMBED_BASE_URL` | — | `LOCAL_LLM_URL` | Embedding endpoint. Falls back to `LOCAL_LLM_URL` if unset |
 | `EMBED_API_KEY` | — | `LOCAL_LLM_KEY` | Embedding API key. Falls back to `LOCAL_LLM_KEY` if unset |
 | `EMBED_MODEL` | — | `text-embedding-nomic-embed-text-v1.5` | Embedding model name |
-| `CHROMA_HOST` | — | `http://localhost` | Chroma server host (include protocol) |
-| `CHROMA_PORT` | — | `8001` | Chroma server port |
+| `EMBED_DIMENSIONS` | sqlite-vec only | — | Embedding model's real output dimension (`app.embedding.dimensions`). Required for `sqlite-vec` (baked into the `vec0` DDL — must match the model: nomic=768, bge-m3=1024). Ignored by chroma |
+| `VECTORSTORE_TYPE` | — | `chroma` | Vector store backend — `chroma` or `sqlite-vec` |
+| `SQLITE_VEC_EXTENSION_PATH` | — | — | sqlite-vec only — path to the operator-provided `vec0` loadable extension |
+| `CHROMA_HOST` | — | `http://localhost` | Chroma server host (chroma backend) |
+| `CHROMA_PORT` | — | `8001` | Chroma server port (chroma backend) |
 | `DATA_DIR` | — | `./data` | Storage path for documents, registry, and SQLite DB |
 
 ### RAG Tuning
@@ -167,7 +173,8 @@ rag_java/
     │   ├── ingestion/
     │   │   ├── DocumentIndexer.java            # Core indexing logic; 3-phase sync; DocRegistry SQLite
     │   │   ├── DocRegistry.java                # doc_registry SQLite table management
-    │   │   └── VectorStoreFacade.java          # Abstraction over ChromaVectorStore
+    │   │   ├── VectorStoreFacade.java          # Backend-agnostic facade over VectorStoreProvider
+    │   │   └── VectorStoreProvider.java        # chroma | sqlite-vec (app.vectorstore.type)
     │   ├── ratelimit/
     │   │   └── RateLimitFilter.java            # Bucket4j + Caffeine per-user token-bucket; 429 + RAG-RATE-001
     │   ├── llm/
@@ -212,7 +219,7 @@ rag_java/
     │       ├── EmfToPngConverter.java         # Batik WMFTranscoder→SVG→PNGTranscoder pipeline
     │       ├── LibreOfficeConverter.java      # LibreOffice headless WMF→PNG (20s timeout)
     │       ├── ThreadMetaService.java         # Conversation thread metadata management
-    │       └── VectorStoreRegistry.java       # Per-version ChromaVectorStore management
+    │       └── VectorStoreRegistry.java       # Per-version ChromaVectorStore management (chroma backend)
     └── resources/
         ├── application.properties
         ├── messages.properties            # UI strings — English (default)
@@ -246,7 +253,7 @@ rag_java/
 User question
   └─▶ [Classifier]  → Classify question type (concept / usage / error / version / meta)
         ├─ meta  ──▶ [DirectAnswer] → [Finalize] → Response
-        └─ other ──▶ [Retrieval]   (LLM generates optimal query → Chroma search)
+        └─ other ──▶ [Retrieval]   (LLM generates optimal query → vector search)
                        └─▶ [Answer]   (Structured answer + sufficient self-evaluation)
                               ├─ Insufficient evidence ──▶ [Retrieval] (up to 2 retries)
                               └─ Sufficient           ──▶ [Critic]   (evidence verification)
@@ -263,7 +270,7 @@ User question
 - **Question classification + routing** — meta (greetings/small talk) answered directly without RAG; all others go through the full pipeline
 - **Multi-LLM routing** — `LlmRouter` selects providers by `TaskType × RoutingMode`; COST_FIRST / QUALITY_FIRST / PROGRESSIVE / DUAL (parallel local + external) / LOCAL_ONLY
 - **Circuit Breaker** — automatic provider blocking on HTTP 429/errors (Retry-After aware), priority-based failover, status visible in LLM usage dashboard
-- **Vector search** — LLM generates an optimized search query (`MultiQueryExpander`, 3 parallel queries), then performs Chroma similarity search
+- **Vector search** — LLM generates an optimized search query (`MultiQueryExpander`, 3 parallel queries), then performs vector similarity search via the selected backend (ChromaDB or sqlite-vec)
 - **ReAct re-retrieval** — automatic re-retrieval up to 2 times when evidence is insufficient
 - **Critic verification** — LLM double-checks whether the generated answer is grounded in documents
 - **PROGRESSIVE mode** — starts with COST_FIRST; if quality score < threshold, re-runs Answer with PREMIUM provider and marks response with upgrade badge
@@ -279,7 +286,7 @@ User question
 - **Source hover preview** — `SourceRef` record with Bootstrap Popover shows a 200-char chunk text preview on hover
 - **Code syntax highlighting** — highlight.js applied after DOMPurify sanitize, synced with dark mode
 - **LLM usage dashboard** — per-provider daily/weekly/monthly token stats, Chart.js daily history chart, circuit breaker countdown
-- **Document versioning** — separate Chroma collection per version (`manual_{version}`)
+- **Document versioning** — per-version isolation (chroma: separate collection; sqlite-vec: `version` partition key)
 - **Incremental indexing** — SHA-256 change detection, `doc_registry` SQLite table persistence (per-user)
 - **Multiple document formats** — PDF, PPTX, DOCX, TXT, MD
 - **Java 21 Virtual Threads** — lightweight threads for all LLM I/O and parallel indexing

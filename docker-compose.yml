@@ -16,6 +16,8 @@ services:
 
   chroma:
     image: chromadb/chroma:latest
+    # Phase 5: chroma 프로파일에서만 기동 — sqlite-vec 모드(VECTORSTORE_TYPE=sqlite-vec)에선 띄우지 않음
+    profiles: ["chroma"]
     ports:
       - "8001:8000"
     volumes:
@@ -41,12 +43,20 @@ services:
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
       - LLM_MODEL=${LLM_MODEL:-gpt-4o}
       - EMBED_MODEL=${EMBED_MODEL:-text-embedding-ada-002}
+      # sqlite-vec 전용: 임베딩 모델 실제 출력 차원과 일치시켜야 함 (chroma 모드에선 비워둠)
+      - EMBED_DIMENSIONS=${EMBED_DIMENSIONS:-}
       # Local LLM provider (providers[0]) — separate from OPENAI_* above
       - LOCAL_LLM_URL=${LOCAL_LLM_URL:-http://localhost:1234/v1}
       - LOCAL_LLM_KEY=${LOCAL_LLM_KEY:-lm-studio}
       - LOCAL_LLM_MODEL=${LOCAL_LLM_MODEL:-gemma-4-27b-it}
       - CHROMA_HOST=chroma
       - CHROMA_PORT=8000
+      # Phase 5 — vector store 백엔드 (chroma 기본 | sqlite-vec)
+      - VECTORSTORE_TYPE=${VECTORSTORE_TYPE:-chroma}
+      - SQLITE_VEC_EXTENSION_PATH=${SQLITE_VEC_EXTENSION_PATH:-}
+      - SQLITE_VEC_ENTRYPOINT=${SQLITE_VEC_ENTRYPOINT:-}
+      # 폐쇄망/로컬 전용: LOCAL_ONLY 로 외부 프로바이더 호출 차단
+      - LLM_ROUTING_MODE=${LLM_ROUTING_MODE:-COST_FIRST}
       - AUTH_ENABLED=${AUTH_ENABLED:-true}
       - DATA_DIR=/app/data
       - CHUNK_SIZE=${CHUNK_SIZE:-800}
@@ -63,10 +73,15 @@ services:
       - MAX_CONVERSATION_CHARS=${MAX_CONVERSATION_CHARS:-8000}
     volumes:
       - ./data:/app/data
+      # sqlite-vec 모드: 컨테이너 아키텍처(linux)용 vec0 로더블 바이너리를 마운트하고
+      # SQLITE_VEC_EXTENSION_PATH=/opt/sqlite-vec/vec0 로 지정 (운영자 제공 — OPERATOR_MANUAL 참조)
+      # - ./sqlite-vec/vec0.so:/opt/sqlite-vec/vec0.so:ro
     restart: unless-stopped
     depends_on:
       chroma:
         condition: service_healthy
+        # chroma 프로파일이 비활성(sqlite-vec 모드)이면 이 의존을 무시하고 app 기동 (Compose 2.20.2+)
+        required: false
 
 volumes:
   chroma_data:
