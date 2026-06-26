@@ -915,7 +915,7 @@ Phase 5로 sqlite-vec 백엔드가 도입되어 **ChromaDB(유일한 필수 Dock
 | 외부 프로바이더 자동 비활성 | ✅ | `LlmConfig`가 빈 api-key 프로바이더를 기동 시 드롭(경고 로그) |
 | 외부 전용 LLM 차단 모드 | ✅ | `RoutingMode.LOCAL_ONLY` 존재 (`LlmRouter:151`) |
 | 임베딩 로컬 엔드포인트 | ✅ | `app.embedding.base-url` 기본값이 `LOCAL_LLM_URL` 폴백, 키 없으면 `"no-key"` 치환(`EmbeddingBeanConfig:31`) |
-| HTTP 직노출(비-TLS) | ✅ | `.env.example`에 `USE_CANDY_REVERSE_PROXY_HTTPS=false` 제공 |
+| HTTP 직노출(비-TLS) | ✅ | `.env.example`에 `USE_CADDY_REVERSE_PROXY_HTTPS=false` 제공 |
 | Vision 모델 불요(기본) | ✅ | `app.image-description.mode=strip` 기본 |
 
 ### 9.3 공백/함정 (개선 필요)
@@ -934,7 +934,7 @@ Phase 5로 sqlite-vec 백엔드가 도입되어 **ChromaDB(유일한 필수 Dock
 > `app.llm.default-routing-mode=COST_FIRST`가 하드코딩(env 플레이스홀더 없음). 폐쇄망에서 `LOCAL_ONLY`로 못박으려면 properties 수정/기동 인자가 필요. (외부 키가 비면 COST_FIRST도 사실상 LOCAL만 쓰므로 필수는 아니나, 명시적 차단이 안전.)
 > - **개선안**: `app.llm.default-routing-mode=${LLM_ROUTING_MODE:COST_FIRST}` + `.env.example` 항목.
 
-> ℹ️ **G4 (cosmetic) — 오타 `USE_CANDY_REVERSE_PROXY_HTTPS`** (CADDY 오기). `application.properties`·`.env.example` 동일 오타라 동작엔 무해. 정리 시 `USE_CADDY_…`로 통일 + 하위호환 별칭 검토.
+> ✅ **G4 (cosmetic) — 오타 `USE_CANDY_REVERSE_PROXY_HTTPS` 정리 완료**. 정식 이름 `USE_CADDY_REVERSE_PROXY_HTTPS`로 통일(`application.properties`·`.env.example`·문서). 과거 오타 이름은 제거됨.
 
 ### 9.4 작업 항목
 
@@ -953,7 +953,7 @@ Phase 5로 sqlite-vec 백엔드가 도입되어 **ChromaDB(유일한 필수 Dock
 - **vec0 바이너리 arch**: 호스트 OS/아키텍처(예: linux x86_64)용 loadable을 배치. 불일치 시 `SqliteVecVerifier`가 기동 시 fail-fast.
 - **OCR(Tesseract)**: 스캔 PDF 처리 시 네이티브 Tesseract + `kor`/`eng` tessdata 필요. 불요 시 `app.image-description.ocr-enabled=false`.
 - **이미지 설명(Vision)**: 기본 `mode=strip`(설명 안 함, 모델 불요). 설명을 켜려면 로컬 vision 모델(예: llama-server에 llava 계열) 등록 필요.
-- **TLS**: Caddy는 Docker 서비스이자 Let's Encrypt(인터넷) 의존 → 폐쇄망 부적합. **HTTP 직노출**(`USE_CANDY_REVERSE_PROXY_HTTPS=false`) 또는 **사내 역프록시/사설 CA**로 종료.
+- **TLS**: Caddy는 Docker 서비스이자 Let's Encrypt(인터넷) 의존 → 폐쇄망 부적합. **HTTP 직노출**(`USE_CADDY_REVERSE_PROXY_HTTPS=false`) 또는 **사내 역프록시/사설 CA**로 종료.
 - **`.env` 비자동로드**: `.env`는 docker-compose 전용이라 **노-도커 실행 시 자동 로드되지 않음**(dotenv 의존성 없음). 환경변수를 셸에 export 하거나 `--key=value` 기동 인자/외부 properties로 주입.
 
 **완료 기준 (인수)**
