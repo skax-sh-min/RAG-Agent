@@ -175,8 +175,7 @@
 @media (max-width: 767.98px) and (pointer: coarse) {
     .navbar .btn,
     .btn-icon,
-    .input-group > .btn,
-    .form-switch .form-check-input {
+    .input-group > .btn {
         min-height: 44px;
     }
     .input-group > .btn { min-width: 44px; }
