@@ -1,6 +1,16 @@
 /* ── Chat container ──────────────────────────────────────────────────── */
+/* Outer shell: full viewport minus navbar. dvh tracks the *dynamic* viewport
+   so the mobile browser chrome (URL bar) collapsing doesn't clip the input. */
+.chat-shell {
+    height: calc(100vh - 56px);
+    height: calc(100dvh - 56px);
+}
+
+/* Flex-based height so the input row stays pinned and the message list is the
+   only scroll area (min-height:0 lets a flex child actually shrink + scroll). */
 #chat-messages {
-    height: calc(100vh - 180px);
+    flex: 1 1 auto;
+    min-height: 0;
     overflow-y: auto;
     scroll-behavior: smooth;
 }
@@ -130,7 +140,53 @@
 .md-content p:last-child { margin-bottom: 0; }
 
 /* ── Sidebar layout ──────────────────────────────────────────────────── */
-.sidebar { width: 280px; min-width: 280px; }
+/* At md+ the offcanvas-md renders as a static flex child (fixed width).
+   Below md it becomes a slide-in drawer (Bootstrap offcanvas), so the width
+   constraint must only apply on larger screens. */
+@media (min-width: 768px) {
+    .sidebar { width: 280px; min-width: 280px; }
+    /* Bootstrap's .offcanvas-md forces `background-color: transparent !important`
+       at ≥md; restore the sidebar fill. --bg-elevated matches .bg-light in both
+       light (#f8f9fa) and dark (#161b22) themes. */
+    .sidebar.offcanvas-md { background-color: var(--bg-elevated) !important; }
+}
+
+/* ── Chat input safe-area (notched phones) ───────────────────────────── */
+.chat-input-bar {
+    padding-bottom: calc(0.5rem + env(safe-area-inset-bottom));
+}
+
+/* ── Mobile tweaks ───────────────────────────────────────────────────── */
+@media (max-width: 767.98px) {
+    /* iOS zooms any input whose font-size < 16px on focus. Force 16px on
+       all form controls (overrides Bootstrap's .form-control-sm 14px). */
+    .form-control,
+    .form-select,
+    textarea,
+    input:not([type="checkbox"]):not([type="radio"]) {
+        font-size: 16px;
+    }
+    /* Roomier message bubbles on narrow screens */
+    .bubble-user      { max-width: 88%; }
+    .bubble-assistant { max-width: 92%; }
+}
+
+/* ── Accessibility: minimum 44×44 touch target for icon-only buttons ──── */
+@media (max-width: 767.98px) and (pointer: coarse) {
+    .navbar .btn,
+    .btn-icon,
+    .input-group > .btn,
+    .form-switch .form-check-input {
+        min-height: 44px;
+    }
+    .input-group > .btn { min-width: 44px; }
+}
+
+/* Visible keyboard focus indicator (only for keyboard nav, not mouse) */
+:focus-visible {
+    outline: 2px solid #0d6efd;
+    outline-offset: 2px;
+}
 
 /* ── HTMX loading indicators ─────────────────────────────────────────── */
 .htmx-indicator               { opacity: 0; transition: opacity 150ms ease-in; }

@@ -45,7 +45,7 @@
 
 ### 아직 미착수 (다음 목표)
 
-- **Phase 2**: 모바일 UI (Offcanvas, sticky 입력창, PWA)
+- ~~**Phase 2**: 모바일 UI (Offcanvas, sticky 입력창, PWA)~~ → ✅ 완료 (2026-06-27, 오프캔버스 드로어·dvh sticky 입력·PWA(manifest/SW/오프라인)·iOS 16px·접근성)
 - **Phase 3 잔여**: 사용자별 LLM 쿼터 (Phase 3.5), 사용자별 스토리지 쿼터
 - **Phase 4**: OAuth2 소셜 로그인, PostgreSQL 마이그레이션 (조건부)
 - ~~**Phase 5**: sqlite-vec 선택적 연동~~ → ✅ 완료 (Step 5.1~5.7, `app.vectorstore.type=chroma|sqlite-vec`)
@@ -81,7 +81,7 @@
 | Phase | 핵심 산출물 | 우선순위 | 상태 |
 |-------|-----------|---------|------|
 | Phase 1 — 보안 기반 | Caddy/HTTPS, Spring Security, 멀티유저 격리, Flyway | **필수** | ✅ 완료 |
-| Phase 2 — 모바일 UI | Offcanvas, 하단 고정 입력, PWA | **필수** | 🔵 미착수 |
+| Phase 2 — 모바일 UI | Offcanvas, 하단 고정 입력, PWA | **필수** | ✅ 완료 |
 | Phase 3 — 운영 견고화 | Rate limit, 업로드 검증, 감사 로그 | 중요 | 🟡 일부 완료 |
 | Phase 4 — 확장 | OAuth2, PostgreSQL 마이그레이션 | 조건부 | 🔵 미착수 |
 | Phase 5 — Vector Store 선택 | sqlite-vec / ChromaDB 런타임 선택 | 중요 | ✅ 완료 |
@@ -394,7 +394,7 @@ document.body.addEventListener('htmx:configRequest', (e) => {
 
 ---
 
-## 5. Phase 2 — 모바일 UI 개선 🔵 미착수
+## 5. Phase 2 — 모바일 UI 개선 ✅ 완료 (2026-06-27)
 
 ### 5.1 분석 — 현재 모바일 갭
 
@@ -432,6 +432,15 @@ document.body.addEventListener('htmx:configRequest', (e) => {
 - 버튼 최소 터치 영역 44×44px
 - `aria-label` 누락된 아이콘 버튼 보완
 - 포커스 인디케이터 가시성 점검
+
+### 5.5 구현 메모 (2026-06-27 완료)
+
+- **레이아웃**: `chat.html` 사이드바를 `offcanvas-md offcanvas-start`(≥md 고정 컬럼 / <md 드로어)로 전환, 채팅 영역 상단에 햄버거(`#threadDrawer` 토글) 추가. 외곽을 `.chat-shell`(`100dvh`)로 바꾸고 `#chat-messages`를 `flex:1 1 auto; min-height:0`로 두어 입력창이 하단 고정되도록 함. ⚠️ Bootstrap `.offcanvas-md`는 ≥md에서 `background-color:transparent!important`를 강제하므로, 데스크톱 사이드바 배경을 `var(--bg-elevated)`로 복구하는 규칙을 `app.css`에 추가(라이트/다크 양쪽 일치).
+- **오버플로**: `documents.html` 두 테이블을 `.table-responsive`로 래핑(가로 페이지 스크롤 제거 — 원안의 카드 전환 대신 채택). `llm-usage.html` 차트를 `height:280px` 컨테이너 + `maintainAspectRatio:false`로 감싸 좁은 화면 넘침 해결.
+- **iOS**: `@media (max-width:767.98px)`에서 모든 폼 컨트롤 `font-size:16px`(포커스 자동 확대 방지).
+- **PWA**: `static/manifest.webmanifest`(+`WebConfig`에 `.webmanifest`→`application/manifest+json` MIME 매핑), `static/sw.js`(NETWORK-FIRST, navigation 요청만 가로채 실패 시 오프라인 페이지 — HTMX/SSE/인증 응답 비캐시), `static/offline.html`, `static/icons/icon.svg`(PNG 대신 SVG `any maskable`). `base.html`에 manifest/theme-color/apple meta + SW 등록 + iOS "홈 화면 추가" 1회 힌트. `SecurityConfig` permitAll에 PWA 정적 경로 추가.
+- **접근성**: 햄버거·드로어 닫기·전송·테마·로그아웃·navbar 토글에 `aria-label`(i18n; `th:attr`), 모바일 `pointer:coarse`에서 아이콘 버튼 44px 최소, `:focus-visible` 인디케이터.
+- **검증**: 전체 스위트 286 tests BUILD SUCCESS(회귀 0). no-auth 부팅으로 `/`·`/documents`·`/llm-usage` 200 렌더 + PWA 자산 4종 200 확인.
 
 ---
 

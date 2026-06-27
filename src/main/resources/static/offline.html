@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1"/>
+    <title>오프라인 · RAG Q&amp;A</title>
+    <style>
+        :root { color-scheme: light dark; }
+        body {
+            margin: 0;
+            min-height: 100vh;
+            min-height: 100dvh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+            background: #ffffff;
+            color: #212529;
+            text-align: center;
+            padding: 1.5rem;
+        }
+        @media (prefers-color-scheme: dark) {
+            body { background: #0d1117; color: #e6edf3; }
+            .muted { color: #8b949e; }
+            .btn { background: #1f6feb; }
+        }
+        .icon { font-size: 3rem; line-height: 1; margin-bottom: 1rem; }
+        h1 { font-size: 1.25rem; margin: 0 0 0.5rem; }
+        .muted { color: #6c757d; margin: 0 0 1.5rem; }
+        .btn {
+            display: inline-block;
+            border: 0;
+            border-radius: 8px;
+            background: #0d6efd;
+            color: #fff;
+            font-size: 1rem;
+            padding: 0.6rem 1.25rem;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+    <main>
+        <div class="icon">📡</div>
+        <h1>오프라인 상태입니다</h1>
+        <p class="muted">인터넷 연결을 확인한 뒤 다시 시도해 주세요.</p>
+        <button class="btn" onclick="location.reload()">다시 시도</button>
+    </main>
+</body>
+</html>

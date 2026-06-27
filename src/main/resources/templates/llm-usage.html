@@ -34,7 +34,11 @@
             </div>
         </div>
         <div class="card-body">
-            <canvas id="usageChart" style="max-height:280px;"></canvas>
+            <!-- Fixed-height wrapper + maintainAspectRatio:false so the chart
+                 scales to the container instead of overflowing on narrow screens -->
+            <div style="position:relative; height:280px;">
+                <canvas id="usageChart"></canvas>
+            </div>
         </div>
     </div>
 
@@ -136,6 +140,7 @@
             data: { labels: dates, datasets },
             options: {
                 responsive: true,
+                maintainAspectRatio: false,
                 scales: {
                     y: { stacked: true, beginAtZero: true,
                          ticks: { callback: v => v.toLocaleString() } },

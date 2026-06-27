@@ -1,0 +1,19 @@
+{
+  "name": "문서 기반 지식 Q&A",
+  "short_name": "RAG Q&A",
+  "description": "문서 기반 RAG 질의응답 에이전트",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#212529",
+  "lang": "ko",
+  "icons": [
+    {
+      "src": "/icons/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

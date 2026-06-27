@@ -9,10 +9,21 @@
 <body>
 
 <div layout:fragment="content">
-    <div class="d-flex" style="height: calc(100vh - 56px);">
+    <div class="d-flex chat-shell">
 
-        <!-- ── Sidebar ──────────────────────────────────────────────── -->
-        <div class="sidebar border-end bg-light d-flex flex-column p-3">
+        <!-- ── Sidebar (offcanvas drawer < md, static column ≥ md) ──────── -->
+        <div class="sidebar border-end bg-light d-flex flex-column p-3 offcanvas-md offcanvas-start"
+             id="threadDrawer" tabindex="-1"
+             th:attr="aria-label=#{chat.threads.aria}" aria-label="Conversations">
+
+            <!-- Drawer header (mobile only) -->
+            <div class="offcanvas-header d-md-none px-0 pt-0 pb-2 mb-2 border-bottom">
+                <h6 class="offcanvas-title mb-0 fw-semibold" th:text="#{chat.threads.title}">Conversations</h6>
+                <button type="button" class="btn-close" data-bs-dismiss="offcanvas"
+                        data-bs-target="#threadDrawer"
+                        th:attr="aria-label=#{action.close}" aria-label="Close"></button>
+            </div>
+
 
             <!-- New chat + version -->
             <div class="d-flex align-items-center gap-2 mb-2">
@@ -105,6 +116,18 @@
         <!-- ── Chat area ─────────────────────────────────────────────── -->
         <div class="flex-grow-1 d-flex flex-column overflow-hidden">
 
+            <!-- Mobile top bar (hamburger → opens thread drawer) -->
+            <div class="d-flex d-md-none align-items-center gap-2 border-bottom p-2">
+                <button type="button" class="btn btn-outline-secondary btn-sm btn-icon"
+                        data-bs-toggle="offcanvas" data-bs-target="#threadDrawer"
+                        aria-controls="threadDrawer"
+                        th:attr="aria-label=#{chat.threads.open}" aria-label="Open conversations">
+                    <i class="bi bi-list fs-5"></i>
+                </button>
+                <span class="fw-semibold text-truncate"
+                      th:text="${meta != null} ? ${meta.title} : #{chat.new}">New Chat</span>
+            </div>
+
             <!-- Previous thread resume banner -->
             <div th:if="${meta != null and historyCount != null and historyCount > 0}"
                  class="alert alert-info rounded-0 mb-0 py-2 small">
@@ -168,7 +191,7 @@
             </div>
 
             <!-- Input form -->
-            <div class="border-top p-3">
+            <div class="border-top p-3 chat-input-bar">
                 <form id="chat-form"
                       hx-post="/ui/chat"
                       hx-target="#chat-messages"
@@ -198,7 +221,8 @@
                                        th:text="#{chat.direct.label.rag}">RAG</label>
                             </div>
                         </span>
-                        <button id="send-btn" type="submit" class="btn btn-primary">
+                        <button id="send-btn" type="submit" class="btn btn-primary btn-icon"
+                                th:attr="aria-label=#{chat.send}" aria-label="Send">
                             <i class="bi bi-send-fill"></i>
                         </button>
                     </div>
