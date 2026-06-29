@@ -60,6 +60,7 @@ public class SecurityConfig {
                 .authorizeHttpRequests(auth -> auth
                     .requestMatchers("/login", "/signup", "/error").permitAll()
                     .requestMatchers("/webjars/**", "/css/**", "/js/**", "/images/**", "/favicon.ico").permitAll()
+                    .requestMatchers("/manifest.webmanifest", "/sw.js", "/offline.html", "/icons/**").permitAll()
                     .requestMatchers("/actuator/health", "/api/v1/health").permitAll()
                     .anyRequest().authenticated()
                 )

@@ -38,8 +38,12 @@ src/main/resources/
 │       ├── sync-result.html               # 동기화 결과 토스트
 │       └── llm-usage-cards.html           # 프로바이더 상태 카드 (30초 자동 갱신)
 └── static/
-    ├── css/app.css                        # 버블·배지·DUAL 탭·타이핑 인디케이터 스타일
+    ├── css/app.css                        # 버블·배지·DUAL 탭·타이핑·반응형(오프캔버스/dvh/16px/44px)
     ├── css/theme.css                      # light/dark CSS 변수
+    ├── manifest.webmanifest               # PWA 매니페스트 (이름·아이콘·standalone)
+    ├── sw.js                              # 서비스 워커 (NETWORK-FIRST, 오프라인 fallback 전용)
+    ├── offline.html                       # 오프라인 fallback 페이지 (자체 완결 정적 HTML)
+    ├── icons/icon.svg                     # 앱 아이콘 (SVG, any maskable)
     └── js/
         └── chat-stream.js                # SSE 스트리밍 클라이언트 (fetch + ReadableStream)
 ```
@@ -228,3 +232,37 @@ stage(classifier) → stage(retrieval) → sources → stage(answer) → token �
 - **PROGRESSIVE 업그레이드**: `listener.onUpgrade(provider)` → `stage(id=upgrade)` 이벤트, 콘텐츠 div 초기화 후 premium 답변 재채움
 - **DUAL 모드**: `onToken(tab, text)` → `stream-ext-{id}` / `stream-loc-{id}` 탭 div로 분리 라우팅
 - **재시도**: ANSWER 노드 2회 이상 진입 → 콘텐츠 div 초기화 → 새 답변으로 채움
+
+---
+
+## 9. 모바일 / PWA / 접근성 (Phase 2)
+
+### 9.1 반응형 레이아웃
+
+| 영역 | 구현 |
+|------|------|
+| 사이드바 | `chat.html` 사이드바에 `offcanvas-md offcanvas-start` — **≥md**: 고정 컬럼(280px), **<md**: 햄버거(`#threadDrawer`)로 여는 슬라이드 드로어. 드로어 헤더 닫기 버튼은 `d-md-none` |
+| 입력창 고정 | 외곽 `.chat-shell`(`height: calc(100dvh - 56px)`) + `#chat-messages`를 `flex:1 1 auto; min-height:0; overflow-y:auto`로 두어 메시지만 스크롤되고 입력창은 하단 고정 |
+| 테이블 넘침 | `documents.html` 두 테이블을 `.table-responsive`로 래핑(가로 페이지 스크롤 제거) |
+| 차트 넘침 | `llm-usage.html` 차트를 `height:280px` 컨테이너 + Chart.js `maintainAspectRatio:false` |
+| iOS 자동 확대 | `@media (max-width:767.98px)`에서 모든 폼 컨트롤 `font-size:16px` |
+
+> ⚠️ Bootstrap `.offcanvas-md`는 ≥md에서 `background-color:transparent!important`를 강제한다. 데스크톱 사이드바 배경은 `app.css`에서 `.sidebar.offcanvas-md { background-color: var(--bg-elevated) !important }`로 복구(라이트/다크 변수 일치).
+
+### 9.2 PWA
+
+| 파일 | 역할 |
+|------|------|
+| `static/manifest.webmanifest` | 앱 이름·아이콘·`display:standalone`·theme/background color. `WebConfig`에서 `.webmanifest` → `application/manifest+json` MIME 매핑 |
+| `static/sw.js` | **NETWORK-FIRST**. GET 내비게이션만 가로채 네트워크 실패 시 `offline.html` 제공. RAG 답변·HTMX 프래그먼트·SSE·인증 응답은 **캐시하지 않음**(프라이버시/쿠키 안전). 폼 POST(로그인 등)는 미가로챔 |
+| `static/offline.html` | 자체 완결 오프라인 fallback(다크모드 대응, 다시시도 버튼) |
+| `static/icons/icon.svg` | 앱 아이콘 (SVG `any maskable`) |
+
+- `base.html` `<head>`에 manifest/theme-color/apple-touch-icon meta, 본문 하단에 SW 등록 + iOS Safari "홈 화면에 추가" 1회 힌트 토스트(`localStorage` 플래그).
+- `SecurityConfig` permitAll에 `/manifest.webmanifest`, `/sw.js`, `/offline.html`, `/icons/**` 추가(auth 모드).
+
+### 9.3 접근성
+
+- 아이콘 전용 버튼(햄버거·드로어 닫기·전송·테마·로그아웃·navbar 토글)에 i18n `aria-label`(`th:attr="aria-label=#{...}"`).
+- 모바일 `pointer:coarse`에서 아이콘 버튼 최소 44×44px 터치 영역.
+- `:focus-visible` 키보드 포커스 인디케이터, `prefers-color-scheme` 자동 감지(기존 유지).

@@ -226,12 +226,16 @@ rag_java/
         ├── messages_ko.properties         # UI strings — Korean
         ├── static/
         │   ├── css/
-        │   │   ├── app.css                # Custom styles (bubbles, animations, upload progress, etc.)
+        │   │   ├── app.css                # Custom styles (bubbles, animations, responsive offcanvas/dvh/16px/44px)
         │   │   └── theme.css              # Light/dark CSS variables + Bootstrap dark mode overrides
+        │   ├── manifest.webmanifest       # PWA manifest (name, icon, standalone)
+        │   ├── sw.js                      # Service worker (NETWORK-FIRST, offline fallback only)
+        │   ├── offline.html               # Offline fallback page (self-contained static HTML)
+        │   ├── icons/icon.svg             # App icon (SVG, any maskable)
         │   └── js/
         │       └── chat-stream.js         # SSE streaming client (fetch + ReadableStream)
         └── templates/
-            ├── layout/base.html           # Shared layout (Thymeleaf Layout Dialect)
+            ├── layout/base.html           # Shared layout (Thymeleaf Layout Dialect; PWA meta + SW register)
             ├── chat.html                  # Chat page (server-renders previous turns)
             ├── documents.html             # Document management page
             ├── llm-usage.html             # LLM usage statistics page
@@ -267,6 +271,7 @@ User question
 - **Web UI** — Thymeleaf + HTMX chat, document management, and LLM usage interface with KO/EN language switcher
 - **SSE real-time streaming** — per-node stage badges (classifier → retrieval → answer → critic), token-level streaming via `chat-stream.js` (fetch + ReadableStream); DUAL mode streams both tabs simultaneously
 - **Dark mode** — CSS variable–based light/dark toggle, auto-detects `prefers-color-scheme` with `localStorage` user override
+- **Mobile & PWA** — responsive offcanvas thread drawer, `100dvh` bottom-pinned input, `table-responsive` overflow handling, iOS 16px no-zoom inputs; installable PWA (`manifest.webmanifest`, service worker with offline fallback that never caches authenticated/RAG/SSE responses, iOS "Add to Home Screen" hint); icon buttons carry i18n `aria-label`, 44px touch targets, `:focus-visible` outlines
 - **Question classification + routing** — meta (greetings/small talk) answered directly without RAG; all others go through the full pipeline
 - **Multi-LLM routing** — `LlmRouter` selects providers by `TaskType × RoutingMode`; COST_FIRST / QUALITY_FIRST / PROGRESSIVE / DUAL (parallel local + external) / LOCAL_ONLY
 - **Circuit Breaker** — automatic provider blocking on HTTP 429/errors (Retry-After aware), priority-based failover, status visible in LLM usage dashboard

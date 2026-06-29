@@ -225,12 +225,16 @@ rag_java/
         ├── messages_ko.properties         # UI 문자열 — 한국어
         ├── static/
         │   ├── css/
-        │   │   ├── app.css                # 커스텀 스타일 (버블·애니메이션·업로드 진행바 등)
+        │   │   ├── app.css                # 커스텀 스타일 (버블·애니메이션·반응형 오프캔버스/dvh/16px/44px)
         │   │   └── theme.css              # 라이트/다크 CSS 변수 + Bootstrap 다크 모드 오버라이드
+        │   ├── manifest.webmanifest       # PWA 매니페스트 (이름·아이콘·standalone)
+        │   ├── sw.js                      # 서비스 워커 (NETWORK-FIRST, 오프라인 fallback 전용)
+        │   ├── offline.html               # 오프라인 fallback 페이지 (자체 완결 정적 HTML)
+        │   ├── icons/icon.svg             # 앱 아이콘 (SVG, any maskable)
         │   └── js/
         │       └── chat-stream.js         # SSE 스트리밍 클라이언트 (fetch + ReadableStream)
         └── templates/
-            ├── layout/base.html           # 공통 레이아웃 (Thymeleaf Layout Dialect)
+            ├── layout/base.html           # 공통 레이아웃 (Thymeleaf Layout Dialect; PWA meta + SW 등록)
             ├── chat.html                  # 채팅 페이지 (이전 turn 서버 렌더 포함)
             ├── documents.html             # 문서 관리 페이지
             ├── llm-usage.html             # LLM 사용량 통계 페이지
@@ -266,6 +270,7 @@ rag_java/
 - **Web UI** — Thymeleaf + HTMX 기반 채팅·문서 관리·LLM 사용량 화면, KO/EN 언어 전환
 - **SSE 실시간 스트리밍** — 노드별 단계 배지(classifier→retrieval→answer→critic) + 토큰 실시간 표시; DUAL 모드는 두 탭 동시 스트리밍 (`chat-stream.js`, fetch + ReadableStream)
 - **다크 모드** — CSS 변수 기반 라이트/다크 전환, `prefers-color-scheme` 자동 감지 + `localStorage` 사용자 override
+- **모바일 & PWA** — 반응형 오프캔버스 대화 드로어, `100dvh` 하단 고정 입력창, `table-responsive` 가로 넘침 처리, iOS 16px 자동 확대 방지; 설치형 PWA(`manifest.webmanifest`, 인증/RAG/SSE 응답을 캐시하지 않는 오프라인 fallback 서비스 워커, iOS "홈 화면에 추가" 힌트); 아이콘 버튼 i18n `aria-label`·44px 터치 영역·`:focus-visible` 표시
 - **질문 분류 + 라우팅** — meta(인사·잡담)는 RAG 없이 직접 응답, 나머지는 풀 파이프라인
 - **멀티 LLM 라우팅** — `LlmRouter`가 `TaskType × RoutingMode` 기준으로 프로바이더 선택: COST_FIRST / QUALITY_FIRST / PROGRESSIVE / DUAL (로컬+외부 병렬) / LOCAL_ONLY
 - **Circuit Breaker** — HTTP 429/오류 시 프로바이더 자동 차단 (Retry-After 지원), 우선순위 기반 failover; LLM 사용량 대시보드에서 차단 상태 확인

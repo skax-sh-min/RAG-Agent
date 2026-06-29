@@ -88,15 +88,17 @@
                 진행 중인 인덱싱 작업
             </div>
             <div class="card-body p-0">
-                <table class="table table-sm mb-0">
-                    <thead class="table-light">
-                        <tr>
-                            <th th:text="#{doc.col.name}">Filename</th>
-                            <th th:text="#{doc.col.status}">Status</th>
-                        </tr>
-                    </thead>
-                    <tbody id="recovery-body"></tbody>
-                </table>
+                <div class="table-responsive">
+                    <table class="table table-sm mb-0">
+                        <thead class="table-light">
+                            <tr>
+                                <th th:text="#{doc.col.name}">Filename</th>
+                                <th th:text="#{doc.col.status}">Status</th>
+                            </tr>
+                        </thead>
+                        <tbody id="recovery-body"></tbody>
+                    </table>
+                </div>
             </div>
         </div>
 
@@ -117,18 +119,20 @@
                 </button>
             </div>
             <div class="card-body p-0">
-                <table class="table table-hover mb-0">
-                    <thead class="table-light">
-                    <tr>
-                        <th th:text="#{doc.col.name}">Filename</th>
-                        <th th:text="#{doc.col.version}">Version</th>
-                        <th th:text="#{doc.col.chunks}">Chunks</th>
-                        <th th:text="#{doc.col.indexed_at}">Indexed At</th>
-                        <th></th>
-                    </tr>
-                    </thead>
-                    <th:block th:replace="~{fragments/doc-table-body :: body}"></th:block>
-                </table>
+                <div class="table-responsive">
+                    <table class="table table-hover mb-0">
+                        <thead class="table-light">
+                        <tr>
+                            <th th:text="#{doc.col.name}">Filename</th>
+                            <th th:text="#{doc.col.version}">Version</th>
+                            <th th:text="#{doc.col.chunks}">Chunks</th>
+                            <th th:text="#{doc.col.indexed_at}">Indexed At</th>
+                            <th></th>
+                        </tr>
+                        </thead>
+                        <th:block th:replace="~{fragments/doc-table-body :: body}"></th:block>
+                    </table>
+                </div>
             </div>
         </div>
 

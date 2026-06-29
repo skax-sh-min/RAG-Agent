@@ -14,7 +14,11 @@ RAG Agent 시스템 배포·설정·운영 가이드입니다.
    - 3.3 [application.properties 전용 설정](#33-applicationproperties-전용-설정)
 4. [실행 방법](#4-실행-방법)
    - 4.1 [Docker Compose (권장)](#41-docker-compose-권장)
+      - 4.1.1 [ChromaDB 백엔드](#411-chromadb-백엔드)
+      - 4.1.2 [sqlite-vec 백엔드](#412-sqlite-vec-백엔드)
    - 4.2 [로컬 실행](#42-로컬-실행)
+      - 4.2.1 [ChromaDB 백엔드](#421-chromadb-백엔드)
+      - 4.2.2 [sqlite-vec 백엔드](#422-sqlite-vec-백엔드)
    - 4.3 [접속 확인](#43-접속-확인)
    - 4.4 [HTTPS 설정 (Caddy 리버스 프록시)](#44-https-설정-caddy-리버스-프록시)
    - 4.5 [폐쇄망(Air-gapped) / 노-도커 실행](#45-폐쇄망air-gapped--노-도커-실행)
@@ -175,7 +179,7 @@ copy .env.example .env
 | `DATA_DIR` | — | `./data` | 문서 원본·이미지·변환 MD·SQLite DB 저장 루트 경로. Docker 실행 시 `/app/data`(볼륨 마운트 고정값)로 컨테이너 내부에 자동 설정됨 |
 | `AUTH_ENABLED` | — | `true` | `false`로 설정하면 로그인 없이 실행 (no-auth 모드). 자세한 내용은 [§9.4](#94-인증-토글-no-auth-모드) 참조 |
 | `DOMAIN` | — | `localhost` | Docker Compose의 `caddy` 컨테이너가 사용하는 도메인명. `localhost`이면 Caddy 로컬 CA 인증서 자동 생성. 운영 시 실제 도메인(예: `myrag.duckdns.org`)으로 변경 |
-| `USE_CANDY_REVERSE_PROXY_HTTPS` | — | `true` | 세션 쿠키 `Secure` 플래그 제어 (`server.servlet.session.cookie.secure`). Caddy HTTPS 환경에서는 `true`(기본값). **HTTP 로컬 단독 실행 시 반드시 `false`로 변경** — `true` 상태에서 HTTP로 접근하면 쿠키가 전송되지 않아 로그인 불가 |
+| `USE_CADDY_REVERSE_PROXY_HTTPS` | — | `true` | 세션 쿠키 `Secure` 플래그 제어 (`server.servlet.session.cookie.secure`). Caddy HTTPS 환경에서는 `true`(기본값). **HTTP 로컬 단독 실행 시 반드시 `false`로 변경** — `true` 상태에서 HTTP로 접근하면 쿠키가 전송되지 않아 로그인 불가 |
 
 #### RAG 튜닝
 
@@ -338,32 +342,59 @@ LLM_ROUTING_MODE=QUALITY_FIRST
 
 ### 4.1 Docker Compose (권장)
 
+#### 4.1.1 ChromaDB 백엔드
+
 ```bash
 # 1. 환경변수 설정
 cp .env.example .env
 # .env 파일 편집
 
-# 2. 빌드 및 실행
-docker-compose up --build -d
+# 2. Chroma 프로파일로 실행
+docker compose --profile chroma up --build -d
 
 # 3. 상태 확인
-docker-compose ps
+docker compose ps
 
 # 4. 로그 확인
-docker-compose logs -f app
+docker compose logs -f app
 
 # 5. 종료
-docker-compose down
+docker compose down
 ```
 
-> `docker-compose.yml`에서 `CHROMA_HOST=chroma`, `CHROMA_PORT=8000`으로 자동 설정됩니다.  
+> `docker-compose.yml`에서 `CHROMA_HOST=chroma`, `CHROMA_PORT=8000`이 app 컨테이너에 자동 주입됩니다.
 > Chroma healthcheck 통과 후 app 컨테이너가 시작됩니다.
+
+#### 4.1.2 sqlite-vec 백엔드
+
+```bash
+# 1. sqlite-vec 예시 환경파일 복사
+cp .env.example.sqlite .env
+# .env 파일에서 SQLITE_VEC_EXTENSION_PATH / EMBED_DIMENSIONS 수정
+
+# 2. 실행 (외부 Chroma 컨테이너 불필요)
+docker compose up --build -d
+
+# 3. 상태 확인
+docker compose ps
+
+# 4. 로그 확인 (vec0 로딩/검증 로그 확인)
+docker compose logs -f app
+
+# 5. 종료
+docker compose down
+```
+
+> sqlite-vec 모드에서는 `SQLITE_VEC_EXTENSION_PATH`에 **컨테이너 내부에서 접근 가능한 경로**를 지정해야 합니다.
+> Docker에서는 플랫폼에 맞는 vec0 바이너리를 볼륨으로 마운트하고 경로를 지정하세요.
 
 ---
 
 ### 4.2 로컬 실행
 
-#### macOS — Docker
+#### 4.2.1 ChromaDB 백엔드
+
+**macOS — Docker**
 
 ```bash
 # 1. Chroma 서버 실행 (별도 터미널)
@@ -374,15 +405,16 @@ docker run -d --name chroma-server -p 8001:8000 \
 # 2. 로그 확인
 docker logs -f chroma-server
 ```
+
 ```bash
-# 2. 환경변수 로드
+# 3. 환경변수 로드
 export $(grep -v '^#' .env | xargs)
 
-# 3. 애플리케이션 실행
+# 4. 애플리케이션 실행
 mvn spring-boot:run
 ```
 
-#### macOS — Apple Container (Apple Silicon 권장)
+**macOS — Apple Container (Apple Silicon 권장)**
 
 ```bash
 # 0. Apple Container 설치 (최초 1회)
@@ -405,7 +437,7 @@ container stop <CONTAINER_ID>
 container system stop
 ```
 
-#### Ubuntu (Linux)
+**Ubuntu (Linux)**
 
 ```bash
 docker run -d --name chroma-server -p 8001:8000 \
@@ -415,7 +447,7 @@ set -a && source .env && set +a
 mvn spring-boot:run
 ```
 
-#### Windows (CMD)
+**Windows (CMD)**
 
 ```cmd
 REM 1. Chroma 서버 (별도 CMD 창)
@@ -429,11 +461,54 @@ mvn spring-boot:run
 ```
 
 **Windows PowerShell**:
+
 ```powershell
 Get-Content .env | Where-Object { $_ -notmatch '^#' -and $_ -match '=' } |
   ForEach-Object { $k,$v = $_ -split '=',2; [System.Environment]::SetEnvironmentVariable($k,$v,'Process') }
 mvn spring-boot:run
 ```
+
+#### 4.2.2 sqlite-vec 백엔드
+
+> sqlite-vec는 Chroma 서버를 띄우지 않습니다. 핵심은 `SQLITE_VEC_EXTENSION_PATH`와 `EMBED_DIMENSIONS`를 정확히 맞추는 것입니다.
+
+**macOS / Linux**
+
+```bash
+# 1. sqlite-vec 예시 환경파일 사용
+cp .env.example.sqlite .env
+
+# 2. 환경변수 로드
+set -a && source .env && set +a
+
+# 3. 앱 실행
+mvn spring-boot:run
+```
+
+**Windows (CMD)**
+
+```cmd
+REM 1. sqlite-vec 예시 환경파일 사용
+copy .env.example.sqlite .env
+
+REM 2. 환경변수 로드
+for /f "usebackq tokens=1,* delims==" %A in (`findstr /v "^#" .env`) do SET %A=%B
+
+REM 3. 앱 실행
+mvn spring-boot:run
+```
+
+**Windows PowerShell**
+
+```powershell
+Copy-Item .env.example.sqlite .env -Force
+Get-Content .env | Where-Object { $_ -notmatch '^#' -and $_ -match '=' } |
+  ForEach-Object { $k,$v = $_ -split '=',2; [System.Environment]::SetEnvironmentVariable($k,$v,'Process') }
+mvn spring-boot:run
+```
+
+> Windows 로컬 예시 경로는 `.env.example.sqlite`의 `SQLITE_VEC_EXTENSION_PATH=./lib/win64/vec0.dll`를 참고하세요.
+> 운영 환경에서는 실제 vec0 바이너리 위치로 변경해야 하며, 시작 로그에서 vec0 로딩 성공(`vec_version()`)을 확인하세요.
 
 ---
 
@@ -709,7 +784,7 @@ export EMBED_DIMENSIONS=768          # ★ sqlite-vec 필수: 임베딩 모델 �
 
 # 외부 호출 차단(권장) + 비-TLS HTTP 직노출
 export LLM_ROUTING_MODE=LOCAL_ONLY
-export USE_CANDY_REVERSE_PROXY_HTTPS=false
+export USE_CADDY_REVERSE_PROXY_HTTPS=false
 
 java -jar target/rag-agent-*.jar
 ```
@@ -718,7 +793,7 @@ java -jar target/rag-agent-*.jar
 
 Caddy는 Docker 컨테이너이자 Let's Encrypt(인터넷)에 의존하므로 폐쇄망·노-도커에 부적합합니다. 택일:
 
-- **HTTP 직노출** — `USE_CANDY_REVERSE_PROXY_HTTPS=false`(세션 쿠키 `Secure` 해제, 안 그러면 HTTP에서 로그인 불가). 신뢰망 한정 권장.
+- **HTTP 직노출** — `USE_CADDY_REVERSE_PROXY_HTTPS=false`(세션 쿠키 `Secure` 해제, 안 그러면 HTTP에서 로그인 불가). 신뢰망 한정 권장.
 - **사내 역프록시 / 사설 CA** — 조직 표준 프록시(nginx 등)에서 TLS 종료 후 `:8080`으로 포워딩. `server.forward-headers-strategy=framework`(기본)로 `X-Forwarded-*` 인식.
 
 #### 5) 이미지 · OCR (로컬 모델 전제)
