@@ -416,7 +416,7 @@ Chroma 결합을 `VectorStoreProvider`(search/searchBatch/add/deleteByDocIds) �
 
 ### Step 5.5 — 백엔드 선택 스위치 (조건부 빈 등록) ✅ 완료 (2026-06-24)
 
-`VectorStoreProviderConfig`가 `@ConditionalOnProperty(app.vectorstore.type)`로 provider 택일(chroma `matchIfMissing=true`). Chroma 전용 빈(`ChromaConfig`/`VectorStoreRegistry`/`ChromaHealthChecker`/`VectorStoreWarmup`) 가드. ⚠️ Plan이 누락했던 `AdminService`는 `Optional<ChromaApi>`로 변경해 sqlite-vec 모드에서 `/admin` chunk 브라우징을 우아하게 강등(미지원). 두 모드 모두 `VectorStoreProvider` 빈 정확히 1개.
+`VectorStoreProviderConfig`가 `@ConditionalOnProperty(app.vectorstore.type)`로 provider 택일(chroma `matchIfMissing=true`). Chroma 전용 빈(`ChromaConfig`/`VectorStoreRegistry`/`ChromaHealthChecker`/`VectorStoreWarmup`) 가드. ⚠️ Plan이 누락했던 `AdminService`는 `Optional<ChromaApi>`로 변경해 sqlite-vec 모드에서 `/admin` chunk 브라우징을 우아하게 강등(당시 미지원 → **Step 5.8에서 두 백엔드 모두 브라우징 지원으로 보강**). 두 모드 모두 `VectorStoreProvider` 빈 정확히 1개.
 
 ### Step 5.6 — 설정 외부화 (.env / docker-compose) ✅ 완료 (2026-06-24)
 

@@ -138,7 +138,7 @@ rag_java/
 2. Docker: `docker-compose.yml`의 `app.volumes`에서 바이너리 마운트 주석을 해제하고 `SQLITE_VEC_EXTENSION_PATH=/opt/sqlite-vec/vec0`(suffix 생략)로 지정합니다. 로컬 실행 시엔 호스트 절대경로를 지정합니다.
 3. `EMBED_*` 임베딩 모델의 **벡터 차원수**를 `app.embedding.dimensions`(예: 1536)로 반드시 설정합니다 — 미설정 시 기동이 실패합니다.
 
-> **백엔드 전환 = 재인덱싱**: chroma ↔ sqlite-vec 간 벡터는 공유되지 않습니다. 전환 후 문서 재업로드(또는 재동기화)로 재인덱싱해야 합니다 — 원본은 `data/documents/`에 보존됩니다. 또한 sqlite-vec 모드에서는 `/admin`의 청크 브라우징/편집이 지원되지 않습니다(빈 목록).
+> **백엔드 전환 = 재인덱싱**: chroma ↔ sqlite-vec 간 벡터는 공유되지 않습니다. 전환 후 문서 재업로드(또는 재동기화)로 재인덱싱해야 합니다 — 원본은 `data/documents/`에 보존됩니다. `/admin` 페이지는 **두 백엔드 모두** 상태 카드·청크 조회/편집/삭제를 제공합니다(§7).
 
 ---
 
@@ -1186,21 +1186,24 @@ no-auth 모드(`false`)에서는 `/admin/**` 경로에 자동으로 관리자 �
 
 ### 7.1 주요 기능
 
+`/admin`은 **chroma·sqlite-vec 두 백엔드 모두** 동일한 레이아웃으로 동작하며, 표시 지표·라벨만 백엔드에 맞게 바뀝니다(§7.4).
+
 | 기능 | 설명 |
 |------|------|
-| 컬렉션 목록 | ChromaDB 컬렉션별 버전·청크 수 표시 |
-| 청크 조회 | 컬렉션·문서(docId)별 청크 페이지네이션 (50건 단위) |
-| 청크 편집 | 텍스트·메타데이터 수정 (원본 임베딩 유지 upsert) |
-| 청크 삭제 | 개별 청크를 ChromaDB에서 즉시 제거 |
-| 문서 레지스트리 | 인덱싱된 전체 문서 목록 + 문서별 청크 바로 조회 |
+| Vector Store 상태 카드 | 백엔드 종류·정상 여부·청크 수·버전별 청크 수. chroma=컬렉션 수 / sqlite-vec=문서 수·`vec_version`·임베딩 차원 |
+| 컬렉션·버전 목록 | chroma=컬렉션별 / sqlite-vec=버전별 청크 수 표시 (클릭 시 청크 조회) |
+| 청크 조회 | 컬렉션(또는 버전)·문서(docId)별 청크 페이지네이션 (50건 단위) |
+| 청크 편집 | 텍스트·메타데이터 수정 (원본 임베딩 유지 — 벡터 재계산 안 함) |
+| 청크 삭제 | 개별 청크 즉시 제거. sqlite-vec는 `vec_document_chunks`+`vec_embeddings` 두 테이블 동기 삭제 |
+| 문서 레지스트리 | 인덱싱된 전체 문서 목록 + 문서별 청크 바로 조회 (백엔드 무관, SQLite `doc_registry` 기반) |
 | MD 재인덱싱 (↺ 버튼) | `{docId}_corrected.md`(없으면 `{docId}.md`)를 읽어 청크 재생성·재인덱싱 — DOCX 전용, 원본 재업로드 불필요 |
 
 ### 7.2 MD 재인덱싱 흐름
 
 1. `data/converted/{docId}_corrected.md` 파일을 텍스트 에디터로 직접 수정
 2. Admin 패널 문서 레지스트리에서 해당 문서의 ↺ 버튼 클릭
-3. 기존 ChromaDB 청크만 삭제 (MD 파일·이미지 보존)
-4. 수정된 MD 기준으로 청크 분할 → 키워드 추출 → Chroma 재등록
+3. 기존 벡터 청크만 삭제 — 활성 백엔드(chroma 또는 sqlite-vec) (MD 파일·이미지 보존)
+4. 수정된 MD 기준으로 청크 분할 → 키워드 추출 → 활성 백엔드에 재등록
 
 > **API 직접 호출**: `POST /admin/documents/{docId}/reindex`
 
@@ -1210,6 +1213,20 @@ no-auth 모드(`false`)에서는 `/admin/**` 경로에 자동으로 관리자 �
 - **MD 재인덱싱 대상**: DOCX 업로드 시 생성된 `_corrected.md` 파일이 없으면 `{docId}.md` 원본으로 fallback됩니다. PDF·PPTX·TXT 등 MD 파일이 없는 문서는 재인덱싱 불가 (에러 메시지 표시).
 - **청크 단독 삭제 vs. 문서 삭제**: 청크를 개별 삭제해도 SQLite `doc_registry` 테이블의 레지스트리 항목은 남습니다. 문서 전체 제거는 Documents 페이지 또는 `DELETE /api/v1/documents/{docId}`를 사용하세요.
 - **접근 제어**: `app.auth.enabled=true`(기본)이면 `/admin`도 로그인 필요. no-auth 모드에서는 누구나 `/admin`에 접근 가능하므로 내부망 또는 리버스 프록시 수준에서 경로를 제한하는 것을 권장합니다.
+
+### 7.4 백엔드별 표시 차이 (레이아웃·기능은 동일)
+
+| 항목 | chroma | sqlite-vec |
+|------|--------|------------|
+| 상태 카드 backend 배지 | `chroma` | `sqlite-vec` |
+| 상태 카드 — 문서 수 | 미표시(컬렉션은 distinct 문서수 미추적) | 표시 |
+| 상태 카드 — 컬렉션 수 | 표시 | 미표시 |
+| 상태 카드 — `vec_version` / 차원 | 미표시 | 표시 |
+| ChromaDB 연결 불가 경고 배너 | 연결 실패 시 표시 | 표시 안 함 |
+| 좌측 패널 라벨 | "ChromaDB 컬렉션" | "버전 (sqlite-vec)" |
+| 청크 데이터 소스 | `ChromaApi` | `vec_document_chunks` 테이블 |
+
+> 공통: 상태 배지·청크 수·버전별 청크 수·청크 조회/편집/삭제·문서 레지스트리·MD 재인덱싱은 두 백엔드 동일.
 
 ---
 

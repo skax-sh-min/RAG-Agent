@@ -203,7 +203,7 @@ rag_java/
     │       ├── FinalizeService.java           # 대화 메모리 저장 노드
     │       ├── MemoryService.java             # 멀티턴 메모리 — SQLite 영속
     │       ├── RagService.java                # 문서 인덱싱 + 동기화 + 이미지 정리
-    │       ├── AdminService.java              # Admin UI 데이터 조회 (청크, 컬렉션 통계)
+    │       ├── AdminService.java              # Admin UI 데이터 (청크 조회/편집 + 벡터 스토어 상태) — chroma·sqlite-vec
     │       ├── IndexingProgressService.java   # 비동기 업로드/동기화 SSE 진행 이벤트 관리
     │       ├── MarkdownCorrectionService.java # LLM 마크다운 출력 후처리
     │       ├── DocumentLoaderService.java     # PDF/PPTX/DOCX/TXT/MD 로더; 스캔 PDF OCR
