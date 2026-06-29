@@ -4,6 +4,10 @@ import com.zaxxer.hikari.HikariConfig;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -45,7 +49,10 @@ class DataSourceConfigTest {
         HikariConfig c = base();
         DataSourceConfig.configureSqliteVec(c, "sqlite-vec", "/opt/sqlite-vec/vec0", "");
         assertThat(c.getDataSourceProperties().getProperty("enable_load_extension")).isEqualTo("true");
-        assertThat(c.getConnectionInitSql()).isEqualTo("SELECT load_extension('/opt/sqlite-vec/vec0')");
+        assertThat(c.getConnectionInitSql())
+                .startsWith("SELECT load_extension('")
+                .contains("/opt/sqlite-vec/vec0")
+                .endsWith("')");
     }
 
     @Test
@@ -53,7 +60,10 @@ class DataSourceConfigTest {
     void sqliteVec_caseInsensitiveAndTrimmed() {
         HikariConfig c = base();
         DataSourceConfig.configureSqliteVec(c, "  SQLite-Vec ", "  /opt/vec0  ", "");
-        assertThat(c.getConnectionInitSql()).isEqualTo("SELECT load_extension('/opt/vec0')");
+        assertThat(c.getConnectionInitSql())
+                .startsWith("SELECT load_extension('")
+                .contains("/opt/vec0")
+                .endsWith("')");
     }
 
     @Test
@@ -62,7 +72,9 @@ class DataSourceConfigTest {
         HikariConfig c = base();
         DataSourceConfig.configureSqliteVec(c, "sqlite-vec", "/opt/vec0", "sqlite3_vec_init");
         assertThat(c.getConnectionInitSql())
-                .isEqualTo("SELECT load_extension('/opt/vec0', 'sqlite3_vec_init')");
+                .startsWith("SELECT load_extension('")
+                .contains("/opt/vec0")
+                .endsWith("', 'sqlite3_vec_init')");
     }
 
     @Test
@@ -83,5 +95,30 @@ class DataSourceConfigTest {
         assertThatThrownBy(() -> DataSourceConfig.configureSqliteVec(base(), "sqlite-vec", "/x/vec0", "ev'il"))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("작은따옴표");
+    }
+
+    @Test
+    @DisplayName("디렉터리 경로 입력 시 vec0 바이너리를 자동 해석한다")
+    void sqliteVec_resolvesDirectoryPath() throws IOException {
+        Path dir = Files.createTempDirectory("vec-dir-");
+        Path dll = dir.resolve("vec0.dll");
+        Files.writeString(dll, "stub");
+
+        HikariConfig c = base();
+        DataSourceConfig.configureSqliteVec(c, "sqlite-vec", dir.toString(), "");
+
+        String expected = "SELECT load_extension('" + dll.toAbsolutePath().normalize().toString().replace('\\', '/') + "')";
+        assertThat(c.getConnectionInitSql()).isEqualTo(expected);
+    }
+
+    @Test
+    @DisplayName("디렉터리 경로인데 vec0 바이너리가 없으면 명확한 오류")
+    void sqliteVec_directoryWithoutBinary_throws() throws IOException {
+        Path dir = Files.createTempDirectory("vec-empty-");
+        HikariConfig c = base();
+
+        assertThatThrownBy(() -> DataSourceConfig.configureSqliteVec(c, "sqlite-vec", dir.toString(), ""))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("vec0 바이너리");
     }
 }

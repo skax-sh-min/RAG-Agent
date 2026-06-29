@@ -2,6 +2,8 @@ package com.example.ragagent.config;
 
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -10,6 +12,7 @@ import javax.sql.DataSource;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 
 /**
  * Creates the data directory before HikariCP opens the SQLite database.
@@ -22,6 +25,8 @@ import java.nio.file.Path;
  */
 @Configuration
 public class DataSourceConfig {
+
+    private static final Logger log = LoggerFactory.getLogger(DataSourceConfig.class);
 
     @Value("${app.data-dir:./data}")
     private String dataDir;
@@ -82,6 +87,8 @@ public class DataSourceConfig {
         if (ep.indexOf('\'') >= 0) {
             throw new IllegalStateException("entrypoint 에 작은따옴표(')를 포함할 수 없습니다: " + ep);
         }
+        path = resolveExtensionPath(path);
+        log.info("[SQLITE-VEC] load_extension path resolved to: {}", path);
         // 1) 드라이버 레벨에서 load_extension() 허용 (xerial 기본 off — 보안)
         config.addDataSourceProperty("enable_load_extension", "true");
         // 2) 커넥션마다 vec0 로드 — connectionInitSql 은 단일 statement 만 실행됨
@@ -89,5 +96,35 @@ public class DataSourceConfig {
                 ? "SELECT load_extension('" + path + "')"
                 : "SELECT load_extension('" + path + "', '" + ep + "')";
         config.setConnectionInitSql(initSql);
+    }
+
+    /**
+     * Accept either a file path or a directory path for sqlite-vec extension binaries.
+     *
+     * <p>If a directory is given, resolve common vec0 filenames for the current platform.
+     * This keeps older operator configs like {@code ./data/vec-win64} working on Windows.
+     */
+    static String resolveExtensionPath(String rawPath) {
+        Path p = Path.of(rawPath).toAbsolutePath().normalize();
+        if (!Files.isDirectory(p)) {
+            return p.toString().replace('\\', '/');
+        }
+
+        List<String> candidates = List.of(
+                "vec0.dll",
+                "vec0.dylib",
+                "vec0.so",
+                "vec0"
+        );
+        for (String name : candidates) {
+            Path c = p.resolve(name);
+            if (Files.isRegularFile(c)) {
+                return c.toAbsolutePath().normalize().toString().replace('\\', '/');
+            }
+        }
+
+        throw new IllegalStateException(
+                "sqlite-vec extension-path 가 디렉터리를 가리키지만 vec0 바이너리를 찾지 못했습니다: "
+                        + p + " (expected one of " + String.join(", ", candidates) + ")");
     }
 }
