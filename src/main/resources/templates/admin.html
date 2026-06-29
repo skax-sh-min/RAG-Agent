@@ -79,19 +79,22 @@
         </div>
     </div>
 
-    <!-- ── ChromaDB 컬렉션/청크 브라우저 (chroma 백엔드 전용) ──────────────── -->
-    <div class="row g-4" th:if="${vectorStore.isChroma()}">
+    <!-- ── 컬렉션(chroma) / 버전(sqlite-vec) 청크 브라우저 ──────────────────── -->
+    <div class="row g-4">
 
-        <!-- ── Left: Collections ──────────────────────────────────────── -->
+        <!-- ── Left: Collections / Versions ────────────────────────────── -->
         <div class="col-md-4 col-lg-3">
             <div class="card h-100">
                 <div class="card-header d-flex align-items-center justify-content-between py-2">
-                    <span class="fw-semibold small"><i class="bi bi-database me-1"></i>ChromaDB 컬렉션</span>
+                    <span class="fw-semibold small">
+                        <i class="bi bi-database me-1"></i>
+                        <span th:text="${vectorStore.isSqliteVec()} ? '버전 (sqlite-vec)' : 'ChromaDB 컬렉션'">컬렉션</span>
+                    </span>
                     <a href="/admin" class="btn btn-sm btn-outline-secondary py-0 px-2 small">새로고침</a>
                 </div>
                 <div class="card-body p-0">
                     <div th:if="${#lists.isEmpty(collections)}"
-                         class="text-muted small p-3 text-center">컬렉션이 없습니다.</div>
+                         class="text-muted small p-3 text-center">항목이 없습니다.</div>
                     <div class="list-group list-group-flush" th:unless="${#lists.isEmpty(collections)}">
                         <button th:each="col : ${collections}"
                                 type="button"
@@ -106,7 +109,8 @@
                             <div class="d-flex justify-content-between align-items-center">
                                 <div>
                                     <div class="small fw-semibold" th:text="${col.version()}">version</div>
-                                    <div class="text-muted" style="font-size:0.7rem;" th:text="${col.name()}">collection</div>
+                                    <div th:if="${vectorStore.isChroma()}"
+                                         class="text-muted" style="font-size:0.7rem;" th:text="${col.name()}">collection</div>
                                 </div>
                                 <span class="badge bg-secondary rounded-pill"
                                       th:text="${col.chunkCount()}">0</span>
@@ -169,7 +173,6 @@
                         <td class="text-muted" th:text="${doc.indexedAt() != null ? doc.indexedAt().substring(0,19).replace('T',' ') : ''}"></td>
                         <td class="text-center">
                             <button type="button"
-                                    th:if="${vectorStore.isChroma()}"
                                     class="btn btn-sm btn-outline-primary py-0 px-2"
                                     style="font-size:0.75rem;"
                                     th:attr="data-doc-id=${doc.docId()}, data-version=${doc.version()}"
@@ -208,6 +211,11 @@
 
 <!-- ── Page scripts ────────────────────────────────────────────────────── -->
 <th:block layout:fragment="scripts">
+<script th:inline="javascript">
+// Active vector store backend — sqlite-vec uses the version string as the "collection"
+// identifier (vec0 partition key); chroma uses the "manual_<version>" collection name.
+const IS_SQLITE_VEC = /*[[${vectorStore.isSqliteVec()}]]*/ false;
+</script>
 <script>
 // Highlight selected collection button
 document.querySelectorAll('.collection-btn').forEach(function (btn) {
@@ -221,7 +229,7 @@ document.querySelectorAll('.collection-btn').forEach(function (btn) {
 function loadChunksByDoc(btn) {
     const docId   = btn.getAttribute('data-doc-id');
     const version = btn.getAttribute('data-version');
-    const colName = 'manual_' + version;
+    const colName = IS_SQLITE_VEC ? version : ('manual_' + version);
     const url = '/admin/chunks?collection=' + encodeURIComponent(colName)
               + '&docId=' + encodeURIComponent(docId);
 

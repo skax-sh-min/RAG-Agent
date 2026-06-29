@@ -4,6 +4,8 @@ import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.model.MetaKey;
 import com.example.ragagent.model.VectorStoreAdminView;
 import com.example.ragagent.model.VectorStoreAdminView.VersionCount;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chroma.vectorstore.ChromaApi;
@@ -35,11 +37,20 @@ public class AdminService {
     private final ChromaApi chromaApi;
     private final JdbcTemplate jdbc;
     private final AppProperties props;
+    private final ObjectMapper objectMapper;
 
-    public AdminService(Optional<ChromaApi> chromaApi, JdbcTemplate jdbc, AppProperties props) {
+    public AdminService(Optional<ChromaApi> chromaApi, JdbcTemplate jdbc, AppProperties props,
+                        ObjectMapper objectMapper) {
         this.chromaApi = chromaApi.orElse(null);
         this.jdbc = jdbc;
         this.props = props;
+        this.objectMapper = objectMapper;
+    }
+
+    /** Active backend is sqlite-vec? Null-safe so unit tests with mocked props don't NPE. */
+    private boolean isSqliteVec() {
+        return props != null && props.vectorStoreSafe() != null
+                && "sqlite-vec".equals(props.vectorStoreSafe().type());
     }
 
     // ── DTOs ─────────────────────────────────────────────────────────────────
@@ -115,6 +126,7 @@ public class AdminService {
     // ── Public API ────────────────────────────────────────────────────────────
 
     public CollectionsResult listCollections() {
+        if (isSqliteVec()) return sqliteVecCollections();
         if (chromaApi == null) return new CollectionsResult(List.of(), false);
         try {
             List<Collection> cols = chromaApi.listCollections(TENANT, DATABASE);
@@ -136,6 +148,7 @@ public class AdminService {
 
     public List<ChunkRow> getChunks(String collectionName, String docId,
                                     int offset, int limit) {
+        if (isSqliteVec()) return sqliteVecChunks(collectionName, docId, offset, limit);
         if (chromaApi == null) return List.of();
         Map<String, Object> where = null;
         if (docId != null && !docId.isBlank()) {
@@ -168,6 +181,7 @@ public class AdminService {
     }
 
     public long countChunks(String collectionName, String docId) {
+        if (isSqliteVec()) return sqliteVecCount(collectionName, docId);
         if (chromaApi == null) return 0;
         if (docId == null || docId.isBlank()) {
             try { Long c = chromaApi.countEmbeddings(TENANT, DATABASE, resolveId(collectionName)); return c != null ? c : 0; }
@@ -179,6 +193,7 @@ public class AdminService {
     }
 
     public ChunkRow getChunk(String collectionName, String chunkId) {
+        if (isSqliteVec()) return sqliteVecChunk(chunkId);
         if (chromaApi == null) return null;
         GetEmbeddingsRequest req = new GetEmbeddingsRequest(
                 List.of(chunkId), null, 1, 0,
@@ -198,7 +213,13 @@ public class AdminService {
     }
 
     public void deleteChunk(String collectionName, String chunkId) {
-        if (chromaApi == null) { log.warn("deleteChunk ignored — no ChromaApi (sqlite-vec backend)"); return; }
+        if (isSqliteVec()) {
+            // Two-table consistency: drop the chunk from both the metadata table and the vec0 store.
+            jdbc.update("DELETE FROM vec_document_chunks WHERE spring_doc_id = ?", chunkId);
+            jdbc.update("DELETE FROM vec_embeddings WHERE spring_doc_id = ?", chunkId);
+            return;
+        }
+        if (chromaApi == null) { log.warn("deleteChunk ignored — no ChromaApi"); return; }
         chromaApi.deleteEmbeddings(TENANT, DATABASE, collectionName,
                 new DeleteEmbeddingsRequest(List.of(chunkId)));
     }
@@ -218,7 +239,20 @@ public class AdminService {
      */
     public void updateChunk(String collectionName, String chunkId,
                             String newText, Map<String, String> newMeta) {
-        if (chromaApi == null) { log.warn("updateChunk ignored — no ChromaApi (sqlite-vec backend)"); return; }
+        if (isSqliteVec()) {
+            // Metadata/text only — the stored vector (vec_embeddings) is intentionally preserved
+            // (same caveat as the Chroma path: editing text does not re-embed).
+            if (newText != null) {
+                jdbc.update("UPDATE vec_document_chunks SET content = ? WHERE spring_doc_id = ?",
+                        newText, chunkId);
+            }
+            if (newMeta != null) {
+                jdbc.update("UPDATE vec_document_chunks SET metadata = ? WHERE spring_doc_id = ?",
+                        toJson(newMeta), chunkId);
+            }
+            return;
+        }
+        if (chromaApi == null) { log.warn("updateChunk ignored — no ChromaApi"); return; }
         // Fetch existing embedding to avoid re-embedding
         GetEmbeddingsRequest req = new GetEmbeddingsRequest(
                 List.of(chunkId), null, 1, 0,
@@ -249,5 +283,89 @@ public class AdminService {
         } catch (Exception e) {
             log.error("updateChunk upsert failed id={}: {}", chunkId, e.getMessage());
         }
+    }
+
+    // ── sqlite-vec chunk browsing (Step 5.8 parity) ────────────────────────────
+    // For sqlite-vec the "collection" identifier passed from the UI is the version
+    // string (vec0 partition key). Chunks live in vec_document_chunks(content/metadata).
+
+    private CollectionsResult sqliteVecCollections() {
+        try {
+            List<CollectionSummary> items = jdbc.query(
+                    "SELECT version, COUNT(*) AS c FROM vec_document_chunks GROUP BY version ORDER BY version",
+                    (rs, n) -> {
+                        String v = rs.getString("version");
+                        return new CollectionSummary(v, v, v, rs.getLong("c"));
+                    });
+            return new CollectionsResult(items, true);
+        } catch (Exception e) {
+            log.error("sqlite-vec listCollections failed: {}", e.getMessage());
+            return new CollectionsResult(List.of(), false);
+        }
+    }
+
+    private List<ChunkRow> sqliteVecChunks(String version, String docId, int offset, int limit) {
+        StringBuilder sql = new StringBuilder(
+                "SELECT spring_doc_id, content, metadata FROM vec_document_chunks WHERE version = ?");
+        List<Object> args = new ArrayList<>();
+        args.add(version);
+        if (docId != null && !docId.isBlank()) { sql.append(" AND doc_id = ?"); args.add(docId); }
+        sql.append(" ORDER BY created_at, spring_doc_id LIMIT ? OFFSET ?");
+        args.add(limit);
+        args.add(offset);
+        try {
+            return jdbc.query(sql.toString(), (rs, n) -> {
+                String text = rs.getString("content");
+                String preview = text != null && text.length() > 250
+                        ? text.substring(0, 250) + "…" : Objects.requireNonNullElse(text, "");
+                return new ChunkRow(rs.getString("spring_doc_id"), preview, text,
+                        parseMeta(rs.getString("metadata")));
+            }, args.toArray());
+        } catch (Exception e) {
+            log.error("sqlite-vec getChunks failed version={} docId={}: {}", version, docId, e.getMessage());
+            return List.of();
+        }
+    }
+
+    private long sqliteVecCount(String version, String docId) {
+        String sql = "SELECT COUNT(*) FROM vec_document_chunks WHERE version = ?";
+        Object[] args = (docId != null && !docId.isBlank())
+                ? new Object[]{version, docId} : new Object[]{version};
+        if (docId != null && !docId.isBlank()) sql += " AND doc_id = ?";
+        try { Long c = jdbc.queryForObject(sql, Long.class, args); return c != null ? c : 0; }
+        catch (Exception e) { return 0; }
+    }
+
+    private ChunkRow sqliteVecChunk(String chunkId) {
+        try {
+            return jdbc.query(
+                    "SELECT spring_doc_id, content, metadata FROM vec_document_chunks WHERE spring_doc_id = ?",
+                    (rs, n) -> {
+                        String text = rs.getString("content");
+                        return new ChunkRow(rs.getString("spring_doc_id"), text, text,
+                                parseMeta(rs.getString("metadata")));
+                    }, chunkId).stream().findFirst().orElse(null);
+        } catch (Exception e) {
+            log.error("sqlite-vec getChunk failed id={}: {}", chunkId, e.getMessage());
+            return null;
+        }
+    }
+
+    private Map<String, String> parseMeta(String json) {
+        if (json == null || json.isBlank()) return Map.of();
+        try {
+            Map<String, Object> raw = objectMapper.readValue(json, new TypeReference<>() {});
+            Map<String, String> out = new LinkedHashMap<>();
+            raw.forEach((k, v) -> out.put(k, v == null ? "" : String.valueOf(v)));
+            return out;
+        } catch (Exception e) {
+            log.warn("metadata JSON 파싱 실패: {}", e.getMessage());
+            return Map.of();
+        }
+    }
+
+    private String toJson(Map<String, String> meta) {
+        try { return objectMapper.writeValueAsString(meta); }
+        catch (Exception e) { log.warn("metadata 직렬화 실패: {}", e.getMessage()); return "{}"; }
     }
 }

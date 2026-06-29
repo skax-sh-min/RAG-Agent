@@ -448,10 +448,13 @@ Chroma 결합을 `VectorStoreProvider`(search/searchBatch/add/deleteByDocIds) �
 
 **완료 기준**:
 - [x] `VECTORSTORE_TYPE=sqlite-vec`에서 `/admin`에 백엔드 상태 + 최소 지표(`vec_version`, 문서 수, 청크 수, 버전별 청크 수)가 표시된다.
-- [~] (권장) sqlite-vec 청크 목록 브라우징 패리티 — **이번 범위에서 보류**(상태 카드 우선). 후속 작업으로 남김.
+- [x] (권장) sqlite-vec 청크 목록 브라우징 패리티 — `vec_document_chunks` 기반으로 조회·편집·삭제 동작.
 - [x] `VECTORSTORE_TYPE=chroma`의 기존 관리자 화면 동작/테스트는 회귀 없이 통과한다.
 
-> **구현 메모 (2026-06-29)**: `VectorStoreAdminView`(record, `model/`) 신규. `AdminService`에 `JdbcTemplate`·`AppProperties` 주입 + `vectorStoreView()`(백엔드 분기: chroma=컬렉션 집계 재사용·문서수 unknown(-1) / sqlite-vec=`vec_document_chunks` COUNT·DISTINCT doc_id·`GROUP BY version`·`vec_version()`·차원). `AdminController.adminPage`에 `vectorStore` 모델 속성 추가. `admin.html`에 "Vector Store 상태" 카드(공통) 추가, Chroma 불가 배너·컬렉션/청크 브라우저 row·레지스트리 "청크 보기" 버튼을 `vectorStore.isChroma()`로 가드(sqlite-vec에서 Chroma 전용 UI·오해 소지 배너 숨김). `AdminServiceTest` 백엔드별 2건 추가(총 5건). 전체 290 tests BUILD SUCCESS(회귀 0, sqlite 통합 2건 skip). 청크 브라우징 패리티(item 3, 권장)는 컬렉션 진입점·편집/삭제 정합까지 손대야 해 별도 작업으로 분리.
+> **구현 메모 (2026-06-29)**:
+> - **상태 카드**: `VectorStoreAdminView`(record, `model/`) 신규. `AdminService`에 `JdbcTemplate`·`AppProperties` 주입 + `vectorStoreView()`(chroma=컬렉션 집계 재사용·문서수 unknown(-1) / sqlite-vec=`vec_document_chunks` COUNT·DISTINCT doc_id·`GROUP BY version`·`vec_version()`·차원). `AdminController.adminPage`에 `vectorStore` 모델 속성, `admin.html`에 "Vector Store 상태" 카드(공통). Chroma 불가 배너는 `isChroma()`로 가드(sqlite-vec에서 오해 소지 배너 숨김).
+> - **청크 브라우징 패리티**: `AdminService`에 `ObjectMapper` 주입. `listCollections`/`getChunks`/`countChunks`/`getChunk`/`deleteChunk`/`updateChunk`를 `isSqliteVec()` 분기로 확장 — sqlite-vec에선 "collection"=version으로 해석해 `vec_document_chunks`(content·metadata JSON)를 `JdbcTemplate`로 조회. 삭제는 `vec_document_chunks`+`vec_embeddings` 두 테이블 동기 삭제, 수정은 content/metadata만(벡터 보존, Chroma 경로와 동일 정책). `admin.html` 좌측 패널을 백엔드 공통으로 노출(헤더 라벨 "버전(sqlite-vec)/ChromaDB 컬렉션" 조건부), `loadChunksByDoc`는 `IS_SQLITE_VEC` 플래그로 collection 식별자(version vs `manual_<version>`) 분기.
+> - **검증**: `AdminServiceTest` 백엔드별 4건 추가(총 7건). 전체 292 tests BUILD SUCCESS(회귀 0, sqlite 통합 2건 skip).
 
 ---
 

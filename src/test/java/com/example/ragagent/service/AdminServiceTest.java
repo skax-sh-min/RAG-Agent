@@ -4,6 +4,7 @@ import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.config.AppProperties.EmbeddingConfig;
 import com.example.ragagent.config.AppProperties.VectorStoreConfig;
 import com.example.ragagent.model.VectorStoreAdminView;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chroma.vectorstore.ChromaApi;
@@ -18,25 +19,28 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * {@link AdminService}가 백엔드 독립적으로 동작하는지 검증한다: sqlite-vec 모드에서
- * {@code ChromaApi} 빈이 없어도({@code Optional.empty}) 청크 조회/삭제가 NPE 없이 graceful하게 동작하고,
- * {@link AdminService#vectorStoreView()}가 백엔드별로 올바른 상태를 집계해야 한다 (Step 5.8).
+ * {@link AdminService}가 백엔드 독립적으로 동작하는지 검증한다: chroma 모드에서 {@code ChromaApi}
+ * 부재 시 graceful 강등, sqlite-vec 모드에서 {@code JdbcTemplate} 기반 상태 집계·청크 브라우징,
+ * 그리고 {@link AdminService#vectorStoreView()}의 백엔드별 집계 (Step 5.8).
  */
 class AdminServiceTest {
 
+    private static final ObjectMapper OM = new ObjectMapper();
+
     private AdminService chromaless() {
-        return new AdminService(Optional.empty(), mock(JdbcTemplate.class), mock(AppProperties.class));
+        return new AdminService(Optional.empty(), mock(JdbcTemplate.class), mock(AppProperties.class), OM);
     }
 
     @Test
-    @DisplayName("ChromaApi 없음(sqlite-vec): listCollections → available=false, 조회는 빈 결과, 변경은 no-op")
+    @DisplayName("ChromaApi 없음(chroma 모드): listCollections → available=false, 조회는 빈 결과, 변경은 no-op")
     void noChromaApi_degradesGracefully() {
-        AdminService svc = chromaless();
+        AdminService svc = chromaless();  // props mock → vectorStoreSafe() null → chroma 경로
 
         assertThat(svc.listCollections().available()).isFalse();
         assertThat(svc.listCollections().items()).isEmpty();
@@ -52,7 +56,7 @@ class AdminServiceTest {
     void withChromaApi_delegates() {
         ChromaApi api = mock(ChromaApi.class);
         when(api.listCollections(anyString(), anyString())).thenReturn(List.of());
-        AdminService svc = new AdminService(Optional.of(api), mock(JdbcTemplate.class), mock(AppProperties.class));
+        AdminService svc = new AdminService(Optional.of(api), mock(JdbcTemplate.class), mock(AppProperties.class), OM);
 
         AdminService.CollectionsResult r = svc.listCollections();
 
@@ -82,7 +86,7 @@ class AdminServiceTest {
         when(props.vectorStoreSafe()).thenReturn(new VectorStoreConfig("sqlite-vec"));
         when(props.embeddingSafe()).thenReturn(new EmbeddingConfig(null, null, null, 768, 10, 120));
 
-        AdminService svc = new AdminService(Optional.empty(), jdbc, props);
+        AdminService svc = new AdminService(Optional.empty(), jdbc, props, OM);
         VectorStoreAdminView v = svc.vectorStoreView();
 
         assertThat(v.isSqliteVec()).isTrue();
@@ -108,7 +112,7 @@ class AdminServiceTest {
         AppProperties props = mock(AppProperties.class);
         when(props.vectorStoreSafe()).thenReturn(new VectorStoreConfig("chroma"));
 
-        AdminService svc = new AdminService(Optional.of(api), mock(JdbcTemplate.class), props);
+        AdminService svc = new AdminService(Optional.of(api), mock(JdbcTemplate.class), props, OM);
         VectorStoreAdminView v = svc.vectorStoreView();
 
         assertThat(v.isChroma()).isTrue();
@@ -117,5 +121,40 @@ class AdminServiceTest {
         assertThat(v.totalChunks()).isZero();
         assertThat(v.hasDocCount()).isFalse();      // totalDocs == -1
         assertThat(v.vecVersion()).isNull();
+    }
+
+    @Test
+    @DisplayName("sqlite-vec: listCollections가 version 그룹을 pseudo-collection으로 반환(ChromaApi 미사용)")
+    @SuppressWarnings("unchecked")
+    void sqliteVec_listCollections_groupsByVersion() {
+        JdbcTemplate jdbc = mock(JdbcTemplate.class);
+        when(jdbc.query(anyString(), any(RowMapper.class)))
+                .thenReturn(List.of(new AdminService.CollectionSummary("latest", "latest", "latest", 7L)));
+
+        AppProperties props = mock(AppProperties.class);
+        when(props.vectorStoreSafe()).thenReturn(new VectorStoreConfig("sqlite-vec"));
+
+        AdminService svc = new AdminService(Optional.empty(), jdbc, props, OM);
+        AdminService.CollectionsResult r = svc.listCollections();
+
+        assertThat(r.available()).isTrue();
+        assertThat(r.items()).singleElement().satisfies(c -> {
+            assertThat(c.version()).isEqualTo("latest");
+            assertThat(c.chunkCount()).isEqualTo(7L);
+        });
+    }
+
+    @Test
+    @DisplayName("sqlite-vec: deleteChunk가 vec_document_chunks와 vec_embeddings 두 테이블 모두 삭제")
+    void sqliteVec_deleteChunk_deletesBothTables() {
+        JdbcTemplate jdbc = mock(JdbcTemplate.class);
+        AppProperties props = mock(AppProperties.class);
+        when(props.vectorStoreSafe()).thenReturn(new VectorStoreConfig("sqlite-vec"));
+
+        AdminService svc = new AdminService(Optional.empty(), jdbc, props, OM);
+        svc.deleteChunk("latest", "doc1::0");
+
+        verify(jdbc).update(eq("DELETE FROM vec_document_chunks WHERE spring_doc_id = ?"), eq("doc1::0"));
+        verify(jdbc).update(eq("DELETE FROM vec_embeddings WHERE spring_doc_id = ?"), eq("doc1::0"));
     }
 }
