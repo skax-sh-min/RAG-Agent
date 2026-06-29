@@ -276,6 +276,79 @@ SQLite `audit_log` 테이블 대신 Logback `SizeAndTimeBasedRollingPolicy`로 �
 
 `LlmUsageRepository`에 `user_id` 컬럼이 이미 추가됨 (Phase 1.4). `AnswerService` 진입 시 일일 토큰 합계 조회 → 한도 초과면 `QuotaExceededException`.
 
+### 6.6 LLM 사용량 — 임베딩 사용량 분리 🔵 계획
+
+**문제**: 현재 `llm_usage`에는 **채팅(ChatModel) 호출만** 기록된다. `LlmRouter.executeWithTracking()` → `usageRepo.record(provider, in, out)` 경로만 집계하고, 임베딩은 `@Primary EmbeddingModel`(OpenAiEmbeddingModel) 빈을 통해 `LlmRouter`를 **우회**하므로 토큰 사용량이 전혀 추적되지 않는다. 인덱싱·검색마다 임베딩 API를 호출하지만 사용량/비용 통계에 보이지 않아 운영자가 임베딩 비용을 파악할 수 없다.
+
+**선행 확인 (현재 코드 기준)**:
+- 임베딩 호출 지점: `SqliteVecVectorStoreProvider`(search/searchBatch/add), `ChromaVectorStoreProvider.searchBatch`, 그리고 Chroma 인덱싱은 `ChromaVectorStore.add()`가 **주입된 EmbeddingModel 빈으로 내부 임베딩**.
+  → `@Primary EmbeddingModel` 빈 **한 곳을 데코레이터로 감싸면** 모든 임베딩 호출(검색·인덱싱, 두 백엔드 공통)을 단일 지점에서 가로챌 수 있다.
+- `llm_usage`는 `provider_name` 키 기반(`record/getByPeriod/getDailyHistory` 모두 이름 인자) → 임베딩을 별도 이름으로 기록하면 공존 가능. 단 UI(`OperationsController`)는 `props.llmSafe().providers()`(채팅 프로바이더)만 순회하므로 **임베딩 행은 자동 표시되지 않음** → UI에 명시적 추가 필요.
+- 임베딩은 입력 토큰만 존재(출력 0). 토큰 수는 `EmbeddingResponse.getMetadata().getUsage()`에서 추출(OpenAI 호환 서버 제공). 로컬 llama-server 등 usage 미반환 시 fallback(텍스트 길이 기반 근사 또는 0) 필요.
+
+**설계 (권장: 예약 프로바이더 식별자 — 스키마 변경 없음)**:
+1. `TrackingEmbeddingModel implements EmbeddingModel` 데코레이터 — 실제 모델에 위임 후 응답 usage를 `usageRepo.record("embed:" + model, inputTokens, 0)`으로 기록. `EmbeddingBeanConfig`에서 실제 모델을 이 데코레이터로 래핑해 `@Primary`로 노출(주입 지점 변경 없음).
+   - `embed:` 접두사로 채팅 프로바이더 이름과 충돌 방지.
+   - usage 미제공 시 입력 텍스트 길이 근사(예: chars/4) 또는 0 기록 — 설정 플래그로 선택, 경고 로그 1회.
+2. `OperationsController` / `llm-usage.html` 확장:
+   - 사용량 표·카드에 **임베딩을 별도 행/카드로 분리**(type=`EMBEDDING`, 출력 토큰·circuit breaker 없음).
+   - 차트는 임베딩을 **별도 데이터셋(고유 색)** 또는 별도 미니 차트로 — 채팅 합계에 섞이지 않게.
+   - `/api/v1/llm/usage`·`/usage/history`가 `embed:*` 행도 포함하도록 조회 경로 추가(채팅 프로바이더 순회와 분리).
+
+**대안 (보류)**: `llm_usage`에 `kind`('chat'|'embedding') 컬럼 + PK 확장. 같은 모델명을 채팅/임베딩 양쪽으로 쓸 때 유리하나 SQLite PK 변경(테이블 재생성) 필요 → 현 요구엔 과함.
+
+**완료 기준**:
+- 인덱싱/검색 시 임베딩 토큰이 `llm_usage`에 `embed:<model>`로 누적된다(채팅 행과 분리).
+- `/llm-usage` 화면에서 임베딩 사용량이 채팅 프로바이더와 **시각적으로 분리**되어 표시된다(표 행/카드 + 차트 구분).
+- usage 미반환 임베딩 서버에서도 기록이 깨지지 않는다(근사 또는 0 + 경고 로그).
+- 기존 채팅 사용량 표/차트 회귀 0.
+
+### 6.7 LLM 사용량 — 비활성 프로바이더 조건부 표시 🔵 계획
+
+**문제**: `OperationsController`의 세 경로(`/api/v1/llm/usage` 표, `/usage/history` 차트, `buildProviderReports()` 카드)는 모두 `props.llmSafe().providers()` **전체**를 순회한다. 그래서 API 키가 없어 **비활성(`LlmProviderReport.configured == false`)인 프로바이더도 항상** 사용량 0으로 표시되어, 카드·표·차트가 쓰지 않는 프로바이더로 지저분해진다.
+
+**요구**: 비활성(=키 없음) 프로바이더는 **실제 사용 이력이 있을 때만** 노출한다. 활성 프로바이더는 사용량이 0이어도 항상 표시. (과거 키가 있어 사용하다 지금 비활성화된 경우엔 이력 보존을 위해 계속 표시.)
+
+**선행 확인 (현재 코드 기준)**:
+- "비활성" 판별은 이미 존재 — `LlmProviderReport.configured` = `apiKey` blank 여부. ※ Phase 6 G1로 LOCAL role은 키 없이도 런타임 등록되지만 UI는 config의 `apiKey` 기준이라 비활성으로 분류됨 → "사용량 있으면 표시" 규칙으로 자연히 노출되므로 별도 예외 불필요.
+- "사용량 있음" 데이터: `llm_usage`에 해당 `provider_name` 행 존재 + (`call_count > 0` 또는 토큰 합 > 0).
+- 필터는 **세 경로(카드/표/차트)에 일관 적용**해야 숨긴 프로바이더가 어디서도 안 보임.
+
+**설계**:
+1. `LlmUsageRepository`에 사용 이력 프로바이더 집합 조회 추가: `SELECT DISTINCT provider_name FROM llm_usage WHERE call_count > 0` → `Set<String> usedProviders()`. 단일 쿼리, 결과 작음(인덱스 불필요).
+2. `OperationsController`에서 report 목록을 `configured == true || usedProviders.contains(name)`로 필터. 세 경로가 쓰는 **공통 헬퍼**로 적용해 표시 목록 일치 보장.
+3. (선택) "사용량 있음" 기준 기간: 기본은 **누적(all-time) 존재**로 단순화(표시 기간과 무관하게 한 번이라도 쓴 비활성 프로바이더는 노출 — 이력 추적 목적). 더 엄격히 하려면 표시 기간 내 사용량으로 한정하는 옵션 플래그.
+
+**완료 기준**:
+- 키 없는 비활성 프로바이더 중 **사용 이력이 0인 것은 카드·표·차트 어디에도 표시되지 않는다.**
+- 사용 이력이 있는 비활성 프로바이더는 계속 표시된다(과거 데이터 보존).
+- 활성 프로바이더는 사용량 0이어도 항상 표시(회귀 없음).
+- 세 경로(카드/표/차트)의 표시 목록이 일치한다.
+
+### 6.8 LLM 사용량 — 설정에 없는(orphan) 프로바이더 기록 삭제 🔵 계획
+
+**배경**: §6.7로 "설정(`props.llmSafe().providers()`)에는 없지만 과거 사용 이력이 있어" 계속 노출되는 **orphan 카드**(예: 키를 빼거나 config에서 제거한 옛 모델, §6.6의 `embed:*`)가 생긴다. 운영자가 이런 카드의 누적 기록을 화면에서 직접 정리(DB 삭제)할 수 있어야 한다.
+
+**선행 확인 (현재 코드 기준)**:
+- `llm_usage`는 `provider_name` 키 → 특정 프로바이더 전체 행 삭제는 `DELETE FROM llm_usage WHERE provider_name = ?` 한 줄.
+- "orphan" 판별 = `llm_usage`에 있으나 config 프로바이더 목록에 **없는** 이름 (§6.7 `usedProviders()` ∖ `props.llmSafe().providers()` 차집합).
+- `/llm-usage`·`/api/v1/llm/*`는 현재 **GET만** 존재 → 삭제용 신규 엔드포인트 필요. 파괴적 작업이므로 권한·CSRF·서버측 가드 필수.
+
+**설계**:
+1. `LlmUsageRepository.deleteByProvider(String provider)` 추가 — `DELETE FROM llm_usage WHERE provider_name = ?`, 삭제 행수 반환.
+2. 엔드포인트 `DELETE /ui/llm-usage/{provider}`(HTMX 카드 갱신) 또는 `/api/v1/llm/usage/{provider}`:
+   - **안전 가드(필수)**: 대상이 config 프로바이더에 **존재하면 거부**(400/409) — 활성 프로바이더 이력은 화면에서 못 지움. orphan만 허용.
+   - **권한**: 파괴적 작업이므로 `ROLE_ADMIN` 한정(no-auth 모드에선 admin 자동 인증 경로 적용). CSRF 토큰 필요(기존 htmx 자동 주입 재사용).
+   - `AuditLogger`에 삭제 이벤트 기록(프로바이더명, 삭제 행수).
+3. UI: **orphan 카드에만** 삭제 버튼(🗑) 노출 → `hx-delete` + `hx-confirm` → 성공 시 카드 fragment 새로고침. §6.7과 맞물려 삭제 후 "사용량 0 + 미설정" → 카드가 자동으로 사라진다.
+4. (결정 필요) `embed:*`(§6.6) 임베딩 의사 프로바이더도 orphan으로 분류됨 → 동일하게 삭제 허용할지/제외할지 결정. 기본은 "허용하되 카드 라벨로 구분".
+
+**완료 기준**:
+- orphan 카드에서 삭제 시 해당 `provider_name`의 `llm_usage` 행이 모두 제거되고 카드가 사라진다.
+- config에 존재하는 활성 프로바이더는 삭제 버튼이 없고, 강제 호출해도 서버가 거부한다.
+- 삭제가 `AuditLogger`에 기록된다.
+- 권한 없는 요청 / CSRF 누락은 거부된다(기존 동작 회귀 0).
+
 ---
 
 ## 7. Phase 4 — 확장 (조건부) 🔵 미착수
@@ -323,7 +396,7 @@ Google/GitHub 제공자 등록. 가입 흐름은 **기존 폼 가입과 동등**
 | Step 5.5 ✅ | 백엔드 선택 스위치 (조건부 빈) | `VectorStoreProviderConfig`, Chroma 빈 가드 |
 | Step 5.6 ✅ | 설정 외부화 (.env / docker-compose) | properties, `.env.example`, compose profiles |
 | Step 5.7 ✅ | 데이터 이전 + 통합 검증 | 재인덱싱 절차, 단위·통합 테스트 |
-| Step 5.8 🔵 | 관리자 페이지 백엔드 가시성 보강 (sqlite-vec) | `VectorStoreAdminView`(신규), `/admin` 백엔드별 상태/통계 카드, 백엔드별 테스트 |
+| Step 5.8 🔵 | 관리자 페이지 백엔드 가시성 보강 (sqlite-vec) | `VectorStoreAdminView`(신규), `AdminService`에 `JdbcTemplate`/`AppProperties` 주입, `/admin` 백엔드별 상태/통계 카드, 백엔드별 테스트 |
 
 ### Step 5.1 — VectorStoreProvider 추상화 계층 도입 ✅ 완료 (2026-06-23)
 
@@ -355,20 +428,27 @@ Chroma 결합을 `VectorStoreProvider`(search/searchBatch/add/deleteByDocIds) �
 
 ### Step 5.8 — 관리자 페이지 백엔드 가시성 보강 (sqlite-vec) 🔵 계획
 
-현재 `/admin`은 Chroma 백엔드 정보는 노출되지만 sqlite-vec 모드에서는 청크 브라우징이 우아하게 강등되며(빈 목록), 운영자가 백엔드 상태를 한눈에 확인하기 어렵다. 이를 보완하기 위해 **백엔드 비종속 관리자 뷰 모델**을 도입한다.
+**문제**: `/admin`은 `AdminService`가 `Optional<ChromaApi>`만 의존해 Chroma 통계(컬렉션·청크 수)만 노출한다. sqlite-vec 모드에서는 `chromaApi == null` → 컬렉션 목록이 비고 청크 브라우징도 빈 목록으로 강등되어, 운영자가 벡터 스토어 상태를 전혀 확인할 수 없다.
 
-계획:
-- `VectorStoreAdminView`(가칭) 추가: 공통 필드(backend type, health, doc/chunk count, active version) + 백엔드별 필드(chroma collection 수 / sqlite `vec_version`, dim, 테이블 row 수).
-- `AdminService`에 백엔드별 집계 경로 추가:
-  - chroma: 기존 `ChromaApi` 기반 통계 재사용
-  - sqlite-vec: `JdbcTemplate`로 `vec_document_chunks`/`vec_embeddings` 집계 + `SELECT vec_version()` 노출
-- `/admin` 템플릿에 "Vector Store 상태" 카드 추가(백엔드별 조건부 렌더) — sqlite-vec에서도 비어 보이지 않도록 최소 운영 지표 제공.
-- 백엔드별 회귀 테스트 추가:
-  - `type=chroma`: 기존 카드/컬렉션 정보 유지
-  - `type=sqlite-vec`: 상태 카드 + sqlite 통계 표시, Chroma 전용 UI 요소는 숨김/비활성
+**선행 확인 (현재 코드 기준 — 원안의 빈 공백 보정)**:
+- `AdminService`는 **`JdbcTemplate`·`AppProperties`를 주입받지 않는다** → sqlite-vec 집계를 위해 둘 다 추가 주입이 필수(원안 누락).
+- 활성 백엔드는 `chromaApi == null` 추론이 아니라 `props.vectorStoreSafe().type()`로 **명시적 판별**.
+- `vec_document_chunks`/`vec_embeddings` 테이블과 `vec_version()` 함수는 **sqlite-vec 모드에서만** 존재/로드된다 → 반드시 백엔드 분기 안에서만 쿼리(chroma 모드에서 호출 시 실패).
+- sqlite-vec엔 단일 "active version" 개념이 없다(버전 = vec0 partition key) → 공통 필드는 "active version" 대신 **버전별 청크 수(`GROUP BY version`)**로 표현.
+- `AdminController.adminPage`는 `chromaAvailable` 모델 속성 + `admin.html`의 "Chroma 불가" 경고에 의존 → 신규 뷰로 대체/보강.
 
-완료 기준:
-- `VECTORSTORE_TYPE=sqlite-vec`에서 `/admin` 첫 화면에 백엔드 상태와 최소 3개 운영 지표(`vec_version`, 문서 수, 청크 수)가 표시된다.
+**작업**:
+1. `VectorStoreAdminView`(`model/`) 신규 — 공통: `backend`(chroma|sqlite-vec), `healthy`, `totalDocs`, `totalChunks`, `perVersion`(version→chunkCount). 백엔드별: chroma=`collectionCount`, sqlite-vec=`vecVersion`·`dimension`.
+2. `AdminService`에 `JdbcTemplate`·`AppProperties` 주입 + `vectorStoreView()` 추가:
+   - chroma 분기: 기존 `listCollections()` 집계 재사용.
+   - sqlite-vec 분기: `COUNT(*) FROM vec_document_chunks`, `COUNT(DISTINCT doc_id)`, `version, COUNT(*) … GROUP BY version`, `SELECT vec_version()`, `dimension`은 `props.embeddingSafe().dimensions()`.
+3. (권장) **sqlite-vec 청크 브라우징 패리티**: `getChunks`/`countChunks`/`getChunk`를 백엔드 분기로 확장해 `vec_document_chunks`(content·metadata JSON)에서 `JdbcTemplate`로 조회 → 상태 카드뿐 아니라 기존 청크 UI가 두 백엔드에서 동일 동작. 편집/삭제는 두 테이블 정합 유지하거나 sqlite-vec에선 읽기 전용으로 한정.
+4. `AdminController.adminPage`에 `vectorStoreView` 모델 속성 추가, `admin.html`에 "Vector Store 상태" 카드(백엔드별 조건부 렌더).
+5. 테스트: `AdminServiceTest`에 sqlite-vec 분기(mock `JdbcTemplate`) + chroma 분기 회귀, `@WebMvcTest`로 `adminPage` 모델 속성 백엔드별 검증.
+
+**완료 기준**:
+- `VECTORSTORE_TYPE=sqlite-vec`에서 `/admin`에 백엔드 상태 + 최소 지표(`vec_version`, 문서 수, 청크 수, 버전별 청크 수)가 표시된다.
+- (권장 채택 시) sqlite-vec에서도 청크 목록 브라우징이 동작한다.
 - `VECTORSTORE_TYPE=chroma`의 기존 관리자 화면 동작/테스트는 회귀 없이 통과한다.
 
 ---
