@@ -396,7 +396,7 @@ Google/GitHub 제공자 등록. 가입 흐름은 **기존 폼 가입과 동등**
 | Step 5.5 ✅ | 백엔드 선택 스위치 (조건부 빈) | `VectorStoreProviderConfig`, Chroma 빈 가드 |
 | Step 5.6 ✅ | 설정 외부화 (.env / docker-compose) | properties, `.env.example`, compose profiles |
 | Step 5.7 ✅ | 데이터 이전 + 통합 검증 | 재인덱싱 절차, 단위·통합 테스트 |
-| Step 5.8 🔵 | 관리자 페이지 백엔드 가시성 보강 (sqlite-vec) | `VectorStoreAdminView`(신규), `AdminService`에 `JdbcTemplate`/`AppProperties` 주입, `/admin` 백엔드별 상태/통계 카드, 백엔드별 테스트 |
+| Step 5.8 ✅ | 관리자 페이지 백엔드 가시성 보강 (sqlite-vec) | `VectorStoreAdminView`(신규), `AdminService`에 `JdbcTemplate`/`AppProperties` 주입, `/admin` 백엔드별 상태/통계 카드, 백엔드별 테스트 |
 
 ### Step 5.1 — VectorStoreProvider 추상화 계층 도입 ✅ 완료 (2026-06-23)
 
@@ -426,7 +426,7 @@ Chroma 결합을 `VectorStoreProvider`(search/searchBatch/add/deleteByDocIds) �
 
 이전 경로 = **재인덱싱**(`data/documents/` 원본 보존이라 무손실): `VECTORSTORE_TYPE=sqlite-vec` 재시작 → `/admin` 전체 재동기화. `SqliteVecIntegrationTest`(실 vec0 v0.1.9, 바이너리 없으면 skip)로 add→search→searchBatch→delete E2E + 무-Chroma 컨텍스트 로드 검증. ※ docker 무설치 환경이라 `docker compose up` 실측·운영 데이터 정성 비교는 운영 인수.
 
-### Step 5.8 — 관리자 페이지 백엔드 가시성 보강 (sqlite-vec) 🔵 계획
+### Step 5.8 — 관리자 페이지 백엔드 가시성 보강 (sqlite-vec) ✅ 완료 (2026-06-29)
 
 **문제**: `/admin`은 `AdminService`가 `Optional<ChromaApi>`만 의존해 Chroma 통계(컬렉션·청크 수)만 노출한다. sqlite-vec 모드에서는 `chromaApi == null` → 컬렉션 목록이 비고 청크 브라우징도 빈 목록으로 강등되어, 운영자가 벡터 스토어 상태를 전혀 확인할 수 없다.
 
@@ -447,9 +447,11 @@ Chroma 결합을 `VectorStoreProvider`(search/searchBatch/add/deleteByDocIds) �
 5. 테스트: `AdminServiceTest`에 sqlite-vec 분기(mock `JdbcTemplate`) + chroma 분기 회귀, `@WebMvcTest`로 `adminPage` 모델 속성 백엔드별 검증.
 
 **완료 기준**:
-- `VECTORSTORE_TYPE=sqlite-vec`에서 `/admin`에 백엔드 상태 + 최소 지표(`vec_version`, 문서 수, 청크 수, 버전별 청크 수)가 표시된다.
-- (권장 채택 시) sqlite-vec에서도 청크 목록 브라우징이 동작한다.
-- `VECTORSTORE_TYPE=chroma`의 기존 관리자 화면 동작/테스트는 회귀 없이 통과한다.
+- [x] `VECTORSTORE_TYPE=sqlite-vec`에서 `/admin`에 백엔드 상태 + 최소 지표(`vec_version`, 문서 수, 청크 수, 버전별 청크 수)가 표시된다.
+- [~] (권장) sqlite-vec 청크 목록 브라우징 패리티 — **이번 범위에서 보류**(상태 카드 우선). 후속 작업으로 남김.
+- [x] `VECTORSTORE_TYPE=chroma`의 기존 관리자 화면 동작/테스트는 회귀 없이 통과한다.
+
+> **구현 메모 (2026-06-29)**: `VectorStoreAdminView`(record, `model/`) 신규. `AdminService`에 `JdbcTemplate`·`AppProperties` 주입 + `vectorStoreView()`(백엔드 분기: chroma=컬렉션 집계 재사용·문서수 unknown(-1) / sqlite-vec=`vec_document_chunks` COUNT·DISTINCT doc_id·`GROUP BY version`·`vec_version()`·차원). `AdminController.adminPage`에 `vectorStore` 모델 속성 추가. `admin.html`에 "Vector Store 상태" 카드(공통) 추가, Chroma 불가 배너·컬렉션/청크 브라우저 row·레지스트리 "청크 보기" 버튼을 `vectorStore.isChroma()`로 가드(sqlite-vec에서 Chroma 전용 UI·오해 소지 배너 숨김). `AdminServiceTest` 백엔드별 2건 추가(총 5건). 전체 290 tests BUILD SUCCESS(회귀 0, sqlite 통합 2건 skip). 청크 브라우징 패리티(item 3, 권장)는 컬렉션 진입점·편집/삭제 정합까지 손대야 해 별도 작업으로 분리.
 
 ---
 

@@ -1,6 +1,9 @@
 package com.example.ragagent.service;
 
+import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.model.MetaKey;
+import com.example.ragagent.model.VectorStoreAdminView;
+import com.example.ragagent.model.VectorStoreAdminView.VersionCount;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chroma.vectorstore.ChromaApi;
@@ -11,12 +14,15 @@ import org.springframework.ai.chroma.vectorstore.ChromaApi.GetEmbeddingResponse;
 import org.springframework.ai.chroma.vectorstore.ChromaApi.GetEmbeddingsRequest;
 import org.springframework.ai.chroma.vectorstore.ChromaApi.QueryRequest.Include;
 import org.springframework.ai.chroma.vectorstore.common.ChromaApiConstants;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
 import java.util.*;
 
 /**
- * Admin-level access to ChromaDB: list collections, browse/delete/update chunks.
+ * Admin-level access to the active vector store: ChromaDB collection/chunk browsing,
+ * plus a backend-agnostic status view ({@link #vectorStoreView()}) covering both
+ * chroma and sqlite-vec (Step 5.8).
  */
 @Service
 public class AdminService {
@@ -27,9 +33,13 @@ public class AdminService {
 
     /** Nullable — sqlite-vec 백엔드에서는 ChromaApi 빈이 없으므로 Optional로 주입된다. */
     private final ChromaApi chromaApi;
+    private final JdbcTemplate jdbc;
+    private final AppProperties props;
 
-    public AdminService(Optional<ChromaApi> chromaApi) {
+    public AdminService(Optional<ChromaApi> chromaApi, JdbcTemplate jdbc, AppProperties props) {
         this.chromaApi = chromaApi.orElse(null);
+        this.jdbc = jdbc;
+        this.props = props;
     }
 
     // ── DTOs ─────────────────────────────────────────────────────────────────
@@ -48,6 +58,59 @@ public class AdminService {
 
     /** Wraps listCollections result with a ChromaDB availability flag. */
     public record CollectionsResult(List<CollectionSummary> items, boolean available) {}
+
+    // ── Vector store status (backend-agnostic, Step 5.8) ───────────────────────
+
+    /** Active-backend status for the {@code /admin} "Vector Store 상태" card. */
+    public VectorStoreAdminView vectorStoreView() {
+        return "sqlite-vec".equals(props.vectorStoreSafe().type()) ? sqliteVecView() : chromaView();
+    }
+
+    private VectorStoreAdminView chromaView() {
+        CollectionsResult r = listCollections();
+        long totalChunks = r.items().stream().mapToLong(CollectionSummary::chunkCount).sum();
+        List<VersionCount> perVersion = r.items().stream()
+                .map(c -> new VersionCount(c.version(), c.chunkCount()))
+                .toList();
+        // Chroma collections don't track distinct document counts → unknown (-1).
+        return new VectorStoreAdminView("chroma", r.available(), -1, totalChunks,
+                perVersion, r.items().size(), null, null);
+    }
+
+    private VectorStoreAdminView sqliteVecView() {
+        String vecVersion = null;
+        boolean healthy = false;
+        try {
+            vecVersion = jdbc.queryForObject("SELECT vec_version()", String.class);
+            healthy = vecVersion != null;
+        } catch (Exception e) {
+            log.warn("vec_version() 조회 실패 (sqlite-vec 확장 미로드?): {}", e.getMessage());
+        }
+        long totalChunks = safeCount("SELECT COUNT(*) FROM vec_document_chunks");
+        long totalDocs   = safeCount("SELECT COUNT(DISTINCT doc_id) FROM vec_document_chunks");
+        List<VersionCount> perVersion;
+        try {
+            perVersion = jdbc.query(
+                    "SELECT version, COUNT(*) AS c FROM vec_document_chunks GROUP BY version ORDER BY version",
+                    (rs, n) -> new VersionCount(rs.getString("version"), rs.getLong("c")));
+        } catch (Exception e) {
+            log.warn("버전별 청크 집계 실패: {}", e.getMessage());
+            perVersion = List.of();
+        }
+        Integer dim = props.embeddingSafe().dimensions();
+        return new VectorStoreAdminView("sqlite-vec", healthy, totalDocs, totalChunks,
+                perVersion, null, vecVersion, dim);
+    }
+
+    private long safeCount(String sql) {
+        try {
+            Long c = jdbc.queryForObject(sql, Long.class);
+            return c != null ? c : 0L;
+        } catch (Exception e) {
+            log.warn("count 쿼리 실패 [{}]: {}", sql, e.getMessage());
+            return 0L;
+        }
+    }
 
     // ── Public API ────────────────────────────────────────────────────────────
 

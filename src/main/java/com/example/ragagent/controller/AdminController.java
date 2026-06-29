@@ -31,6 +31,7 @@ public class AdminController {
         var result = adminService.listCollections();
         model.addAttribute("collections",     result.items());
         model.addAttribute("chromaAvailable", result.available());
+        model.addAttribute("vectorStore",     adminService.vectorStoreView());
         model.addAttribute("documents",       ragService.listDocuments(ctx.userId()));
         return "admin";
     }
