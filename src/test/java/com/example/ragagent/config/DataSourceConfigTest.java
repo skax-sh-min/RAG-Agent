@@ -3,6 +3,7 @@ package com.example.ragagent.config;
 import com.zaxxer.hikari.HikariConfig;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -99,8 +100,7 @@ class DataSourceConfigTest {
 
     @Test
     @DisplayName("디렉터리 경로 입력 시 vec0 바이너리를 자동 해석한다")
-    void sqliteVec_resolvesDirectoryPath() throws IOException {
-        Path dir = Files.createTempDirectory("vec-dir-");
+    void sqliteVec_resolvesDirectoryPath(@TempDir Path dir) throws IOException {
         Path dll = dir.resolve("vec0.dll");
         Files.writeString(dll, "stub");
 
@@ -113,8 +113,7 @@ class DataSourceConfigTest {
 
     @Test
     @DisplayName("디렉터리 경로인데 vec0 바이너리가 없으면 명확한 오류")
-    void sqliteVec_directoryWithoutBinary_throws() throws IOException {
-        Path dir = Files.createTempDirectory("vec-empty-");
+    void sqliteVec_directoryWithoutBinary_throws(@TempDir Path dir) {
         HikariConfig c = base();
 
         assertThatThrownBy(() -> DataSourceConfig.configureSqliteVec(c, "sqlite-vec", dir.toString(), ""))
