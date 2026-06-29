@@ -323,6 +323,7 @@ Google/GitHub 제공자 등록. 가입 흐름은 **기존 폼 가입과 동등**
 | Step 5.5 ✅ | 백엔드 선택 스위치 (조건부 빈) | `VectorStoreProviderConfig`, Chroma 빈 가드 |
 | Step 5.6 ✅ | 설정 외부화 (.env / docker-compose) | properties, `.env.example`, compose profiles |
 | Step 5.7 ✅ | 데이터 이전 + 통합 검증 | 재인덱싱 절차, 단위·통합 테스트 |
+| Step 5.8 🔵 | 관리자 페이지 백엔드 가시성 보강 (sqlite-vec) | `VectorStoreAdminView`(신규), `/admin` 백엔드별 상태/통계 카드, 백엔드별 테스트 |
 
 ### Step 5.1 — VectorStoreProvider 추상화 계층 도입 ✅ 완료 (2026-06-23)
 
@@ -351,6 +352,24 @@ Chroma 결합을 `VectorStoreProvider`(search/searchBatch/add/deleteByDocIds) �
 ### Step 5.7 — 데이터 이전 및 통합 검증 ✅ 완료 (2026-06-24)
 
 이전 경로 = **재인덱싱**(`data/documents/` 원본 보존이라 무손실): `VECTORSTORE_TYPE=sqlite-vec` 재시작 → `/admin` 전체 재동기화. `SqliteVecIntegrationTest`(실 vec0 v0.1.9, 바이너리 없으면 skip)로 add→search→searchBatch→delete E2E + 무-Chroma 컨텍스트 로드 검증. ※ docker 무설치 환경이라 `docker compose up` 실측·운영 데이터 정성 비교는 운영 인수.
+
+### Step 5.8 — 관리자 페이지 백엔드 가시성 보강 (sqlite-vec) 🔵 계획
+
+현재 `/admin`은 Chroma 백엔드 정보는 노출되지만 sqlite-vec 모드에서는 청크 브라우징이 우아하게 강등되며(빈 목록), 운영자가 백엔드 상태를 한눈에 확인하기 어렵다. 이를 보완하기 위해 **백엔드 비종속 관리자 뷰 모델**을 도입한다.
+
+계획:
+- `VectorStoreAdminView`(가칭) 추가: 공통 필드(backend type, health, doc/chunk count, active version) + 백엔드별 필드(chroma collection 수 / sqlite `vec_version`, dim, 테이블 row 수).
+- `AdminService`에 백엔드별 집계 경로 추가:
+  - chroma: 기존 `ChromaApi` 기반 통계 재사용
+  - sqlite-vec: `JdbcTemplate`로 `vec_document_chunks`/`vec_embeddings` 집계 + `SELECT vec_version()` 노출
+- `/admin` 템플릿에 "Vector Store 상태" 카드 추가(백엔드별 조건부 렌더) — sqlite-vec에서도 비어 보이지 않도록 최소 운영 지표 제공.
+- 백엔드별 회귀 테스트 추가:
+  - `type=chroma`: 기존 카드/컬렉션 정보 유지
+  - `type=sqlite-vec`: 상태 카드 + sqlite 통계 표시, Chroma 전용 UI 요소는 숨김/비활성
+
+완료 기준:
+- `VECTORSTORE_TYPE=sqlite-vec`에서 `/admin` 첫 화면에 백엔드 상태와 최소 3개 운영 지표(`vec_version`, 문서 수, 청크 수)가 표시된다.
+- `VECTORSTORE_TYPE=chroma`의 기존 관리자 화면 동작/테스트는 회귀 없이 통과한다.
 
 ---
 
