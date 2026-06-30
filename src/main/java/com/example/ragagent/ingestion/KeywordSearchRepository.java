@@ -82,7 +82,7 @@ public class KeywordSearchRepository {
                                 str(m.get(MetaKey.FILENAME)),
                                 str(m.get(MetaKey.PAGE_OR_SLIDE)),
                                 str(m.get(MetaKey.CHUNK_INDEX)),
-                                str(m.get(MetaKey.TAGS)),     // Step 5.9: 태그(쉼표 결합) — 검색 결과에 동행
+                                str(m.get(MetaKey.TAGS)),     // 태그(쉼표 결합) — 검색 결과에 동행
                                 d.getText() == null ? "" : d.getText(),
                                 str(m.get(MetaKey.EXCERPT_KEYWORDS))
                         };
@@ -126,7 +126,7 @@ public class KeywordSearchRepository {
                         meta.put(MetaKey.FILENAME, rs.getString("filename"));
                         meta.put(MetaKey.PAGE_OR_SLIDE, rs.getString("page"));
                         meta.put(MetaKey.CHUNK_INDEX, rs.getString("chunk_index"));
-                        meta.put(MetaKey.TAGS, rs.getString("doc_tags"));  // Step 5.9: 태그 동행
+                        meta.put(MetaKey.TAGS, rs.getString("doc_tags"));  // 태그 동행
                         return Document.builder()
                                 .id(rs.getString("spring_doc_id"))
                                 .text(rs.getString("content"))

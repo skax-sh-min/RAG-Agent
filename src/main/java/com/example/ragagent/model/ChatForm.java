@@ -8,7 +8,7 @@ public record ChatForm(
         String version,
         String routingMode,
         Boolean directMode,
-        String tags          // Step 5.9: 쉼표 구분 태그 (검색 스코프)
+        String tags
 ) {
     public boolean isDirectMode() {
         return Boolean.TRUE.equals(directMode);

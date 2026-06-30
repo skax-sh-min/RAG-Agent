@@ -69,7 +69,7 @@ public class ChromaVectorStoreProvider implements VectorStoreProvider {
                 .query(query)
                 .topK(topK)
                 .filterExpression(b.eq(MetaKey.VERSION, version).build());
-        // R-1: only set when configured (>0) so 0.0 keeps Spring AI accept-all behavior.
+        // Only set when configured (>0) so 0.0 keeps Spring AI accept-all behavior.
         if (similarityThreshold > 0.0) {
             request.similarityThreshold(similarityThreshold);
         }

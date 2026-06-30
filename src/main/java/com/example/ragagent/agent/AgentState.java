@@ -40,7 +40,7 @@ public record AgentState(
         Boolean grounded,         // CRITIC 결과 (null=CRITIC 미실행)
         boolean directMode,       // RAG 없이 LLM 직접 호출
         Locale locale,            // UI 언어 설정 — LLM 시스템 프롬프트 언어 선택에 사용
-        List<String> selectedTags // Step 5.9: 검색 스코프 태그 (빈 리스트 = version-only 검색)
+        List<String> selectedTags // 검색 스코프 태그 (빈 리스트 = version-only 검색)
 ) {
     public AgentState {
         retrievedDocs     = retrievedDocs     == null ? List.of() : List.copyOf(retrievedDocs);

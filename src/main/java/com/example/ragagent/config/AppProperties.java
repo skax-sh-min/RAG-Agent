@@ -16,9 +16,9 @@ public record AppProperties(
         boolean searchMultiqueryEnabled,
         int searchMultiqueryMinLength,
         boolean searchHybridEnabled,
-        boolean searchRetryEscalate,      // S-2: topK escalation on retry
-        boolean searchRerankEnabled,      // R-3: LLM-based reranking (opt-in)
-        int searchCandidateMultiplier,    // R-3: candidate pool = defaultTopK × this
+        boolean searchRetryEscalate,
+        boolean searchRerankEnabled,
+        int searchCandidateMultiplier,
         Integer sseTimeoutSeconds,
         LlmConfig llm,
         IndexingConfig indexing,
@@ -29,7 +29,7 @@ public record AppProperties(
         AuditConfig audit,
         AuthConfig auth,
         VectorStoreConfig vectorstore,
-        Integer searchTagCandidateMultiplier   // Step 5.9: 태그 선택 시 후보확대 배수 (기본 2)
+        Integer searchTagCandidateMultiplier   // 태그 선택 시 후보확대 배수 (기본 2)
 ) {
     public record LlmConfig(
             List<ProviderConfig> providers,
@@ -121,17 +121,17 @@ public record AppProperties(
         return Math.min(searchSimilarityThreshold, 1.0);
     }
 
-    /** S-4: query length (chars) at/above which multi-query expansion runs. Clamped to >= 0 (0 = no length gate). */
+    /** Query length (chars) at/above which multi-query expansion runs. Clamped to >= 0 (0 = no length gate). */
     public int searchMultiqueryMinLengthSafe() {
         return Math.max(0, searchMultiqueryMinLength);
     }
 
-    /** R-3: candidate pool multiplier for reranking. Clamped to >= 1 to avoid empty pools. */
+    /** Candidate pool multiplier for reranking. Clamped to >= 1 to avoid empty pools. */
     public int searchCandidateMultiplierSafe() {
         return Math.max(1, searchCandidateMultiplier);
     }
 
-    /** Step 5.9: candidate-expansion multiplier applied when tags are selected. Defaults to 2. */
+    /** Candidate-expansion multiplier applied when tags are selected. Defaults to 2. */
     public int searchTagCandidateMultiplierSafe() {
         return (searchTagCandidateMultiplier == null || searchTagCandidateMultiplier < 1)
                 ? 2 : searchTagCandidateMultiplier;

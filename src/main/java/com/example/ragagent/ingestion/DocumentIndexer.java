@@ -154,7 +154,7 @@ public class DocumentIndexer {
         req.onProgress().accept(IndexingProgressEvent.of("storing", enriched.size(), enriched.size(),
                 req.filename(), "벡터 DB 저장 중..."));
         vectorStore.add(DocRegistry.SHARED, req.version(), enriched);
-        keywordRepo.indexChunks(enriched);   // R-2: populate FTS keyword index
+        keywordRepo.indexChunks(enriched);   // populate FTS keyword index
 
         List<String> docIds = enriched.stream().map(Document::getId).toList();
         DocRegistry.DocRegistryEntry entry = new DocRegistry.DocRegistryEntry(
@@ -209,7 +209,7 @@ public class DocumentIndexer {
 
         log.debug("[REINDEX] 벡터 스토어 저장 중: {}개 청크", enriched.size());
         vectorStore.add(DocRegistry.SHARED, version, enriched);
-        keywordRepo.indexChunks(enriched);   // R-2: populate FTS keyword index
+        keywordRepo.indexChunks(enriched);   // populate FTS keyword index
 
         List<String> springIds = enriched.stream().map(Document::getId).toList();
         docRegistry.put(docId, DocRegistry.SHARED, new DocRegistry.DocRegistryEntry(
@@ -338,7 +338,7 @@ public class DocumentIndexer {
     private List<Document> tagMetadata(List<Document> chunks, String docId, String filename,
                                         String version, String docType, String sha256, String ownerId,
                                         List<String> tags) {
-        // Step 5.9: comma-joined storage form (matches the image_paths convention; backend-neutral).
+        // comma-joined storage form (matches the image_paths convention; backend-neutral).
         String tagsMeta = com.example.ragagent.model.TagUtils.toMetaValue(tags);
         List<Document> tagged = new ArrayList<>(chunks.size());
         for (int i = 0; i < chunks.size(); i++) {
@@ -352,7 +352,7 @@ public class DocumentIndexer {
             meta.put(MetaKey.COLLECTED_AT, Instant.now().toString());
             meta.putIfAbsent(MetaKey.SOURCE_TYPE,   "file");
             meta.putIfAbsent(MetaKey.PAGE_OR_SLIDE, i + 1);
-            meta.put(MetaKey.CHUNK_INDEX,  i);   // R-4: stable per-chunk key (separate from page)
+            meta.put(MetaKey.CHUNK_INDEX,  i);   // stable per-chunk key (separate from page)
             meta.put(MetaKey.OWNER_ID,     ownerId);
             meta.putIfAbsent(MetaKey.VISIBILITY, "private");
             if (!tagsMeta.isEmpty()) meta.put(MetaKey.TAGS, tagsMeta);
@@ -373,7 +373,7 @@ public class DocumentIndexer {
                 vectorStore.deleteByDocIds(userId, version, e.springDocIds());
             }
         });
-        keywordRepo.deleteByDocId(docId);   // R-2: keep FTS index in sync
+        keywordRepo.deleteByDocId(docId);   // keep FTS index in sync
     }
 
     private void deleteDocFiles(String userId, String docId) {

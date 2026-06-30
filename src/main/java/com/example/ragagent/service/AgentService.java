@@ -65,7 +65,7 @@ public class AgentService {
                     .toBuilder().questionType(typeF.join()).build();
             }
         }
-        // Step 5.9: carry the selected search-scope tags into the graph state.
+        // carry the selected search-scope tags into the graph state.
         initial = initial.toBuilder().selectedTags(request.selectedTags()).build();
 
         String askedAt = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")

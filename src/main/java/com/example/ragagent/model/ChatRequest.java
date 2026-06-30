@@ -11,7 +11,7 @@ public record ChatRequest(
         @JsonProperty("thread_id") String threadId,
         @JsonProperty("routing_mode") RoutingMode routingMode,
         @JsonProperty("direct_mode") boolean directMode,
-        @JsonProperty("selected_tags") List<String> selectedTags  // Step 5.9: 검색 스코프 태그
+        @JsonProperty("selected_tags") List<String> selectedTags
 ) {
     public ChatRequest {
         if (version == null || version.isBlank()) version = "latest";

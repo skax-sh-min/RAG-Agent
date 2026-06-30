@@ -85,7 +85,7 @@ public class DocumentController {
             filename = UploadValidator.sanitizeFilename(file.getOriginalFilename());
             UploadValidator.checkExtension(filename);
             tmp = UploadValidator.stageToTemp(file, filename);
-            tagList = TagUtils.parseCsv(tags);   // Step 5.9: 검증 실패 시 IllegalArgumentException → 400
+            tagList = TagUtils.parseCsv(tags);   // 검증 실패 시 IllegalArgumentException → 400
         } catch (UnsupportedFileTypeException e) {
             log.warn("Rejected upload: {}", e.getMessage());
             return ResponseEntity.unprocessableEntity().build();
@@ -189,7 +189,7 @@ public class DocumentController {
             filename = UploadValidator.sanitizeFilename(file.getOriginalFilename());
             UploadValidator.checkExtension(filename);
             staged = UploadValidator.stageToTemp(file, filename);
-            tagList = TagUtils.parseCsv(tags);   // Step 5.9: 검증 실패 시 → 400
+            tagList = TagUtils.parseCsv(tags);   // 검증 실패 시 → 400
         } catch (UnsupportedFileTypeException e) {
             log.warn("Rejected upload: {}", e.getMessage());
             return ResponseEntity.unprocessableEntity().build();

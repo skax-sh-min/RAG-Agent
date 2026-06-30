@@ -20,7 +20,7 @@ public record IndexRequest(
         String staleDocId,               // null → no stale-doc deletion after indexing
         boolean saveRegistryAfter,
         Consumer<IndexingProgressEvent> onProgress,
-        List<String> tags                // Step 5.9: 검색 스코프 태그 (청크 metadata에 저장)
+        List<String> tags                // 검색 스코프 태그 (청크 metadata에 저장)
 ) {
     public IndexRequest {
         tags = tags == null ? List.of() : List.copyOf(tags);
