@@ -73,6 +73,11 @@
                         <span th:text="#{doc.btn.sync}">Sync Folder</span>
                     </button>
                 </div>
+                <!-- 기존 태그 칩 (클릭하면 위 입력칸에 추가) -->
+                <div id="tag-suggest" class="d-none mt-2">
+                    <span class="small text-muted me-1" th:text="#{tags.existing}">Existing tags</span>
+                    <span id="tag-suggest-chips" class="d-inline-flex flex-wrap gap-1 align-middle"></span>
+                </div>
                 <!-- Sync progress (shown only during sync) -->
                 <div id="sync-progress" class="d-none mt-3">
                     <div class="d-flex align-items-center gap-2 mb-1">
@@ -246,6 +251,7 @@
         }
 
         htmx.ajax('GET', '/ui/documents/list', {target: '#doc-table-body', swap: 'outerHTML'});
+        loadTagSuggestions();   // 새 태그가 추가됐을 수 있으니 제안 목록 갱신
     }
 
     /**
@@ -578,6 +584,45 @@
     }
 
     restorePendingTasks();
+
+    /* ── 기존 태그 제안 칩 ─────────────────────────────────────────────── */
+    const tagsInput = document.getElementById('tags-input');
+
+    function currentTags() {
+        return (tagsInput.value || '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+    }
+    function addTag(tag) {
+        const tags = currentTags();
+        if (!tags.includes(tag)) tags.push(tag);
+        tagsInput.value = tags.join(', ');
+        syncTagChipStates();
+    }
+    function syncTagChipStates() {
+        const sel = currentTags();
+        document.querySelectorAll('#tag-suggest-chips [data-tag]').forEach(el => {
+            el.classList.toggle('btn-primary', sel.includes(el.dataset.tag));
+            el.classList.toggle('btn-outline-secondary', !sel.includes(el.dataset.tag));
+        });
+    }
+    function loadTagSuggestions() {
+        fetch('/api/v1/tags')
+            .then(r => r.ok ? r.json() : [])
+            .then(tags => {
+                const wrap  = document.getElementById('tag-suggest');
+                const chips = document.getElementById('tag-suggest-chips');
+                if (!tags || tags.length === 0) { wrap.classList.add('d-none'); return; }
+                chips.innerHTML = tags.map(t =>
+                    `<button type="button" class="btn btn-sm btn-outline-secondary py-0 px-2"
+                             style="font-size:0.72rem;" data-tag="${escHtml(t)}">${escHtml(t)}</button>`).join('');
+                chips.querySelectorAll('[data-tag]').forEach(btn =>
+                    btn.addEventListener('click', () => addTag(btn.dataset.tag)));
+                wrap.classList.remove('d-none');
+                syncTagChipStates();
+            })
+            .catch(() => {});
+    }
+    tagsInput.addEventListener('input', syncTagChipStates);
+    loadTagSuggestions();
 </script>
 </th:block>
 

@@ -532,8 +532,13 @@ Chroma 결합을 `VectorStoreProvider`(search/searchBatch/add/deleteByDocIds) �
 > - ⚠️ **정책 코드 단일화**: 원안은 형식 400/정책 422 구분이었으나 `IllegalArgumentException`(GlobalExceptionHandler→400)으로 통일. 422 세분화는 후속.
 > - ⚠️ **프리릴리즈**: `chunk_fts`에 `doc_tags` 컬럼 추가 = FTS5 스키마 변경. 기존 DB는 마이그레이션 없이 수동 초기화 후 재인덱싱(OPERATOR_MANUAL §4.6). 재인덱싱(↺) 경로는 태그 미보존(빈 태그) — 후속.
 
+**후속 — 태그 제안 UI ✅ 완료 (2026-07-01)**:
+- 등록된 태그를 칩으로 노출해 클릭 선택. **소스 = `chunk_fts.doc_tags`**(매 인덱싱마다 채워지고 hybrid 설정·백엔드와 무관) → `KeywordSearchRepository.distinctTags(version)`(정렬·중복 제거, 버전 선택 스코프) → `RagService.listTags` → `GET /api/v1/tags?version=`.
+- 업로드(`documents.html`): 전체 태그 칩 → 클릭 시 입력칸에 추가(업로드 후 갱신). 채팅(`chat.html`): **버전 스코프** 태그 칩 → 클릭 토글로 검색 범위 좁힘(버전 변경 시 재로딩). 입력값↔칩 활성 상태 동기화.
+- 테스트: `KeywordSearchRepositoryTest.distinctTags`(실 FTS5). 전체 311 tests BUILD SUCCESS.
+
 **범위 제외 (후속)**:
-- 태그 사전(Dictionary)/자동완성 API
+- 자유 입력 자동완성(typeahead) — 현재는 칩 선택만
 - 문서별 태그 수정 UI(인덱싱 후 편집)
 - AND/OR 사용자 전환 토글
 - 기존 데이터 자동 마이그레이션

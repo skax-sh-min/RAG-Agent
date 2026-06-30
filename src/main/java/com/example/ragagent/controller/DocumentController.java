@@ -170,6 +170,13 @@ public class DocumentController {
         return "fragments/doc-table-body :: body";
     }
 
+    /** Distinct tags in use (optional version scope) — powers tag-suggestion chips on upload/chat. */
+    @GetMapping("/api/v1/tags")
+    @ResponseBody
+    public List<String> listTags(@RequestParam(required = false) String version) {
+        return ragService.listTags(version);
+    }
+
     // ── REST API ──────────────────────────────────────────────────────
 
     @PostMapping("/api/v1/documents")

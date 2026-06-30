@@ -141,6 +141,33 @@ public class KeywordSearchRepository {
     }
 
     /**
+     * Distinct tags currently in use, derived from the {@code doc_tags} column (comma-joined,
+     * already normalized at index time). Optionally scoped to a version. Sorted, de-duplicated.
+     * No-op (empty) when FTS5 is unavailable.
+     */
+    public List<String> distinctTags(String version) {
+        if (!available) return List.of();
+        String base = "SELECT DISTINCT doc_tags FROM chunk_fts WHERE doc_tags IS NOT NULL AND doc_tags <> ''";
+        try {
+            List<String> rows = (version != null && !version.isBlank())
+                    ? jdbc.queryForList(base + " AND version = ?", String.class, version)
+                    : jdbc.queryForList(base, String.class);
+            java.util.TreeSet<String> tags = new java.util.TreeSet<>();
+            for (String row : rows) {
+                if (row == null) continue;
+                for (String t : row.split(",")) {
+                    String s = t.strip();
+                    if (!s.isEmpty()) tags.add(s);
+                }
+            }
+            return List.copyOf(tags);
+        } catch (Exception e) {
+            log.debug("[KEYWORD] distinctTags failed: {}", e.getMessage());
+            return List.of();
+        }
+    }
+
+    /**
      * Builds a safe FTS5 MATCH expression: each token is double-quoted (so punctuation/operators
      * cannot break the query) and OR-combined for recall.
      */

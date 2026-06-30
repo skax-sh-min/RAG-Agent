@@ -111,6 +111,11 @@ public class RagService {
     }
 
     /** R-2: BM25 keyword (FTS5) search axis for hybrid retrieval. */
+    /** Distinct tags in use (optionally scoped to a version) for tag-suggestion UI. */
+    public List<String> listTags(String version) {
+        return keywordRepo.distinctTags(version);
+    }
+
     public List<Document> keywordSearch(String version, String question, int topK) {
         return keywordRepo.search(version, question, topK);
     }

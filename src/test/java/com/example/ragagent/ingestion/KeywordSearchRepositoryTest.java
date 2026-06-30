@@ -49,6 +49,32 @@ class KeywordSearchRepositoryTest {
                 .build();
     }
 
+    private Document taggedChunk(String springId, String docId, String version, int chunkIndex,
+                                 String content, String tagsCsv) {
+        java.util.Map<String, Object> m = new java.util.HashMap<>();
+        m.put(MetaKey.DOC_ID, docId);
+        m.put(MetaKey.VERSION, version);
+        m.put(MetaKey.FILENAME, "manual.pdf");
+        m.put(MetaKey.PAGE_OR_SLIDE, "1");
+        m.put(MetaKey.CHUNK_INDEX, chunkIndex);
+        m.put(MetaKey.EXCERPT_KEYWORDS, "kw");
+        m.put(MetaKey.TAGS, tagsCsv);
+        return Document.builder().id(springId).text(content).metadata(m).build();
+    }
+
+    @Test
+    @DisplayName("distinctTags — doc_tags에서 정렬·중복 제거, 버전 스코프 적용")
+    void distinctTags_collectsAndScopes() {
+        repo.indexChunks(List.of(
+                taggedChunk("s1", "D1", "v1", 0, "내용 알파", "billing,policy"),
+                taggedChunk("s2", "D1", "v1", 1, "내용 베타", "policy"),
+                taggedChunk("s3", "D2", "v2", 0, "내용 감마", "onboarding")));
+
+        assertThat(repo.distinctTags(null)).containsExactly("billing", "onboarding", "policy");
+        assertThat(repo.distinctTags("v1")).containsExactly("billing", "policy");
+        assertThat(repo.distinctTags("v2")).containsExactly("onboarding");
+    }
+
     @Test
     @DisplayName("정확 용어로 검색 시 해당 청크 반환 (메타 포함)")
     void index_and_search_findsByContent() {

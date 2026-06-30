@@ -200,8 +200,8 @@
                     <input type="hidden" id="form-version" name="version" th:value="${version}"/>
                     <input type="hidden" id="form-routing-mode" name="routingMode" th:value="${routingMode}"/>
                     <input type="hidden" id="form-direct-mode" name="directMode" value="false"/>
-                    <!-- Step 5.9: 검색 스코프 태그 (쉼표 구분, 비우면 전체 검색) -->
-                    <div class="input-group input-group-sm mb-2">
+                    <!-- 검색 스코프 태그 (쉼표 구분, 비우면 전체 검색) -->
+                    <div class="input-group input-group-sm mb-1">
                         <span class="input-group-text" th:title="#{chat.tags.tooltip}">
                             <i class="bi bi-tags"></i>
                         </span>
@@ -209,6 +209,10 @@
                                class="form-control"
                                th:placeholder="#{chat.tags.placeholder}"
                                autocomplete="off"/>
+                    </div>
+                    <!-- 등록된 태그 칩 (클릭하면 검색 범위에 토글) -->
+                    <div id="chat-tag-suggest" class="d-none mb-2">
+                        <span id="chat-tag-suggest-chips" class="d-inline-flex flex-wrap gap-1"></span>
                     </div>
                     <div class="input-group">
                         <textarea id="question-input" name="question"
@@ -268,7 +272,50 @@
     /* Sync version input → hidden form field */
     document.getElementById('version-input').addEventListener('change', function () {
         document.getElementById('form-version').value = this.value;
+        loadChatTagSuggestions();   // 버전 변경 시 해당 버전 태그로 갱신
     });
+
+    /* ── 등록된 태그 칩 (버전 스코프, 클릭하면 검색 범위 토글) ──────────────── */
+    const chatTagsInput = document.getElementById('chat-tags-input');
+
+    function chatCurrentTags() {
+        return (chatTagsInput.value || '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+    }
+    function chatToggleTag(tag) {
+        const tags = chatCurrentTags();
+        const i = tags.indexOf(tag);
+        if (i >= 0) tags.splice(i, 1); else tags.push(tag);
+        chatTagsInput.value = tags.join(', ');
+        chatSyncTagChips();
+    }
+    function chatSyncTagChips() {
+        const sel = chatCurrentTags();
+        document.querySelectorAll('#chat-tag-suggest-chips [data-tag]').forEach(el => {
+            el.classList.toggle('btn-primary', sel.includes(el.dataset.tag));
+            el.classList.toggle('btn-outline-secondary', !sel.includes(el.dataset.tag));
+        });
+    }
+    function loadChatTagSuggestions() {
+        const ver = (document.getElementById('form-version').value || '').trim();
+        const url = '/api/v1/tags' + (ver ? ('?version=' + encodeURIComponent(ver)) : '');
+        fetch(url)
+            .then(r => r.ok ? r.json() : [])
+            .then(tags => {
+                const wrap  = document.getElementById('chat-tag-suggest');
+                const chips = document.getElementById('chat-tag-suggest-chips');
+                if (!tags || tags.length === 0) { wrap.classList.add('d-none'); chips.innerHTML = ''; return; }
+                chips.innerHTML = tags.map(t =>
+                    `<button type="button" class="btn btn-sm btn-outline-secondary py-0 px-2"
+                             style="font-size:0.72rem;" data-tag="${escHtml(t)}">${escHtml(t)}</button>`).join('');
+                chips.querySelectorAll('[data-tag]').forEach(btn =>
+                    btn.addEventListener('click', () => chatToggleTag(btn.dataset.tag)));
+                wrap.classList.remove('d-none');
+                chatSyncTagChips();
+            })
+            .catch(() => {});
+    }
+    chatTagsInput.addEventListener('input', chatSyncTagChips);
+    loadChatTagSuggestions();
 
     /* Sync routing mode → hidden form field + PATCH thread if it exists */
     document.getElementById('routing-mode-select').addEventListener('change', function () {
