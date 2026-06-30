@@ -18,6 +18,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.stream.Collectors;
@@ -56,6 +57,9 @@ public class SqliteVecVectorStoreProvider implements VectorStoreProvider {
             JOIN vec_document_chunks c ON c.spring_doc_id = knn.spring_doc_id
             ORDER BY knn.distance
             """;
+    private static final int MIN_EMBED_TEXT_LENGTH = 128;
+    private static final int MAX_EMBED_RETRY = 8;
+    private static final double EMBED_SHRINK_RATIO = 0.8;
 
     private final JdbcTemplate jdbc;
     private final EmbeddingModel embeddingModel;
@@ -72,13 +76,13 @@ public class SqliteVecVectorStoreProvider implements VectorStoreProvider {
 
     @Override
     public List<Document> search(String userId, String query, String version, int topK) {
-        return searchByEmbedding(embeddingModel.embed(query), version, topK);
+        return searchByEmbedding(embedSingleWithFallback(query), version, topK);
     }
 
     @Override
     public List<List<Document>> searchBatch(String userId, List<String> queries, String version, int topK) {
         if (queries == null || queries.isEmpty()) return List.of();
-        List<float[]> embeddings = embeddingModel.embed(queries);   // single batched call
+        List<float[]> embeddings = embedBatchWithFallback(queries);
         List<List<Document>> out = new ArrayList<>(queries.size());
         for (float[] embedding : embeddings) {
             out.add(searchByEmbedding(embedding, version, topK));
@@ -94,7 +98,7 @@ public class SqliteVecVectorStoreProvider implements VectorStoreProvider {
         deleteBySpringDocIds(docs.stream().map(Document::getId).toList());
 
         List<String> texts = docs.stream().map(d -> d.getText() == null ? "" : d.getText()).toList();
-        List<float[]> embeddings = embeddingModel.embed(texts);
+        List<float[]> embeddings = embedBatchWithFallback(texts);
 
         jdbc.batchUpdate(INSERT_EMBEDDING, new BatchPreparedStatementSetter() {
             @Override public void setValues(PreparedStatement ps, int i) throws SQLException {
@@ -178,5 +182,59 @@ public class SqliteVecVectorStoreProvider implements VectorStoreProvider {
             log.warn("[sqlite-vec] metadata 파싱 실패, 빈 맵으로 대체: {}", e.getMessage());
             return new HashMap<>();
         }
+    }
+
+    private List<float[]> embedBatchWithFallback(List<String> texts) {
+        try {
+            return embeddingModel.embed(texts); // fast path: single batched call
+        } catch (RuntimeException e) {
+            if (!isInputTooLargeError(e)) throw e;
+            log.warn("[sqlite-vec] batched embedding rejected by model token limit, retrying per item with shrinking");
+            List<float[]> out = new ArrayList<>(texts.size());
+            for (String text : texts) {
+                out.add(embedSingleWithFallback(text));
+            }
+            return out;
+        }
+    }
+
+    private float[] embedSingleWithFallback(String text) {
+        String candidate = text == null ? "" : text;
+        final int originalLength = candidate.length();
+
+        for (int i = 0; i < MAX_EMBED_RETRY; i++) {
+            try {
+                return embeddingModel.embed(candidate);
+            } catch (RuntimeException e) {
+                if (!isInputTooLargeError(e)) throw e;
+                if (candidate.length() <= MIN_EMBED_TEXT_LENGTH) {
+                    throw new VectorStoreException("임베딩 입력이 모델 제한을 초과하여 축소 재시도 후에도 실패했습니다.", e);
+                }
+                int nextLength = Math.max(MIN_EMBED_TEXT_LENGTH, (int) (candidate.length() * EMBED_SHRINK_RATIO));
+                if (nextLength >= candidate.length()) nextLength = candidate.length() - 1;
+                candidate = candidate.substring(0, nextLength);
+            }
+        }
+
+        log.warn("[sqlite-vec] embedding text truncated due to model token limit: {} -> {} chars",
+                originalLength, candidate.length());
+        return embeddingModel.embed(candidate);
+    }
+
+    private boolean isInputTooLargeError(Throwable error) {
+        Throwable cur = error;
+        while (cur != null) {
+            String msg = cur.getMessage();
+            if (msg != null) {
+                String lowered = msg.toLowerCase(Locale.ROOT);
+                if (lowered.contains("too large to process")
+                        || lowered.contains("maximum context length")
+                        || (lowered.contains("tokens") && lowered.contains("batch size"))) {
+                    return true;
+                }
+            }
+            cur = cur.getCause();
+        }
+        return false;
     }
 }

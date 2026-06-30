@@ -15,6 +15,8 @@ import org.springframework.web.context.request.async.AsyncRequestTimeoutExceptio
 import org.springframework.web.multipart.MaxUploadSizeExceededException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 
+import java.util.Locale;
+
 /**
  * RFC 9457 ProblemDetail responses for all domain + infrastructure exceptions.
  * All RagException subclasses are routed here; HTMX requests get an HX-Reswap:none header
@@ -76,8 +78,19 @@ public class GlobalExceptionHandler {
     }
 
     @ExceptionHandler(Exception.class)
-    public ResponseEntity<ProblemDetail> handleUnexpected(Exception ex, HttpServletRequest req) {
+    public ResponseEntity<?> handleUnexpected(Exception ex, HttpServletRequest req) {
         String traceId = MDC.get("traceId");
+
+        if (isClientAbort(ex)) {
+            log.debug("[RAG-INT-001][{}] Client disconnected on {} {}", traceId, req.getMethod(), req.getRequestURI());
+            return ResponseEntity.status(HttpStatus.NO_CONTENT).build();
+        }
+
+        if (isSseRequest(req)) {
+            log.warn("[RAG-INT-001][{}] SSE exception on {} {}", traceId, req.getMethod(), req.getRequestURI(), ex);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
+        }
+
         log.error("[RAG-INT-001][{}] Unhandled exception on {} {}", traceId, req.getMethod(), req.getRequestURI(), ex);
         ProblemDetail pd = ProblemDetail.forStatus(HttpStatus.INTERNAL_SERVER_ERROR);
         pd.setTitle("Internal Server Error");
@@ -85,5 +98,35 @@ public class GlobalExceptionHandler {
         pd.setProperty("errorCode", "RAG-INT-001");
         pd.setProperty("traceId", traceId);
         return ResponseEntity.internalServerError().body(pd);
+    }
+
+    private boolean isSseRequest(HttpServletRequest req) {
+        String accept = req.getHeader("Accept");
+        return (accept != null && accept.contains("text/event-stream"))
+                || req.getRequestURI().contains("/ui/documents/progress/")
+                || req.getRequestURI().contains("/ui/chat/stream");
+    }
+
+    private boolean isClientAbort(Throwable ex) {
+        Throwable cur = ex;
+        while (cur != null) {
+            String className = cur.getClass().getName();
+            if (className.contains("ClientAbortException") || className.contains("AsyncRequestNotUsableException")) {
+                return true;
+            }
+            String msg = cur.getMessage();
+            if (msg != null) {
+                String lowered = msg.toLowerCase(Locale.ROOT);
+                if (lowered.contains("broken pipe")
+                        || lowered.contains("connection reset")
+                        || lowered.contains("forcibly closed")
+                        || lowered.contains("software caused connection abort")
+                        || lowered.contains("connection abort")) {
+                    return true;
+                }
+            }
+            cur = cur.getCause();
+        }
+        return false;
     }
 }
