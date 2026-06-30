@@ -40,7 +40,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  *  - B-28 회귀: 가입 후 기존 세션 무효화
  *  - B-29 회귀: 73자 비밀번호 거부
  */
-@WebMvcTest(AuthController.class)
+@WebMvcTest(value = AuthController.class, properties = "app.auth.enabled=true")
 @Import({SecurityConfig.class, com.example.ragagent.context.WebMvcConfig.class})
 class AuthControllerTest {
 

@@ -33,7 +33,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  *  - 문서 삭제 → 200
  *  - 동기화 → 202 + taskId
  */
-@WebMvcTest(DocumentController.class)
+@WebMvcTest(value = DocumentController.class, properties = "app.auth.enabled=true")
 @Import({com.example.ragagent.context.WebMvcConfig.class, com.example.ragagent.security.SecurityConfig.class})
 @WithMockUser
 class DocumentControllerHtmxTest {

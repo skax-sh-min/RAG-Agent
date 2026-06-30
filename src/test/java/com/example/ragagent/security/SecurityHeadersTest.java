@@ -26,7 +26,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 /**
  * 07-auth-ready-seams: 보안 헤더 4종 응답 검증 + CSRF 403 검증.
  */
-@WebMvcTest(OperationsController.class)
+@WebMvcTest(value = OperationsController.class, properties = "app.auth.enabled=true")
 @Import({SecurityConfig.class, com.example.ragagent.context.WebMvcConfig.class})
 @WithMockUser
 class SecurityHeadersTest {

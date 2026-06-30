@@ -39,7 +39,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  *  - 서비스 예외 → 'fragments/message-error :: message'
  *  - B-26: directMode 누락 시 400 방지
  */
-@WebMvcTest(ChatController.class)
+@WebMvcTest(value = ChatController.class, properties = "app.auth.enabled=true")
 @Import({com.example.ragagent.context.WebMvcConfig.class, com.example.ragagent.security.SecurityConfig.class})
 @WithMockUser
 class ChatControllerHtmxTest {
