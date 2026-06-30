@@ -142,7 +142,7 @@ public class DocumentIndexer {
         req.onProgress().accept(IndexingProgressEvent.of("chunking", 0, chunks.size(), req.filename(),
                 chunks.size() + "개 청크"));
 
-        List<Document> tagged = tagMetadata(chunks, docId, req.filename(), req.version(), docType, sha256, DocRegistry.SHARED);
+        List<Document> tagged = tagMetadata(chunks, docId, req.filename(), req.version(), docType, sha256, DocRegistry.SHARED, req.tags());
 
         log.debug("[INDEX] {} 키워드 추출 중 ({}개 청크, 병렬)...", req.filename(), tagged.size());
         Semaphore gate = req.parallelGate() != null
@@ -199,7 +199,7 @@ public class DocumentIndexer {
         List<Document> rawDocs = loaderService.loadFromMarkdown(md);
         List<Document> chunks  = splitDocuments(rawDocs, filename, props.chunkSize(), props.chunkOverlap());
         log.debug("[REINDEX] 청크 분할: {}섹션 → {}청크", rawDocs.size(), chunks.size());
-        List<Document> tagged  = tagMetadata(chunks, docId, filename, version, docType, sha256, DocRegistry.SHARED);
+        List<Document> tagged  = tagMetadata(chunks, docId, filename, version, docType, sha256, DocRegistry.SHARED, java.util.List.of());
 
         deleteExistingVectorsOnly(DocRegistry.SHARED, docId, version);
 
@@ -336,7 +336,10 @@ public class DocumentIndexer {
     }
 
     private List<Document> tagMetadata(List<Document> chunks, String docId, String filename,
-                                        String version, String docType, String sha256, String ownerId) {
+                                        String version, String docType, String sha256, String ownerId,
+                                        List<String> tags) {
+        // Step 5.9: comma-joined storage form (matches the image_paths convention; backend-neutral).
+        String tagsMeta = com.example.ragagent.model.TagUtils.toMetaValue(tags);
         List<Document> tagged = new ArrayList<>(chunks.size());
         for (int i = 0; i < chunks.size(); i++) {
             Document chunk = chunks.get(i);
@@ -352,6 +355,7 @@ public class DocumentIndexer {
             meta.put(MetaKey.CHUNK_INDEX,  i);   // R-4: stable per-chunk key (separate from page)
             meta.put(MetaKey.OWNER_ID,     ownerId);
             meta.putIfAbsent(MetaKey.VISIBILITY, "private");
+            if (!tagsMeta.isEmpty()) meta.put(MetaKey.TAGS, tagsMeta);
             tagged.add(new Document(chunk.getText(), meta));
         }
         return tagged;

@@ -35,6 +35,7 @@ public class RetrievalService {
     private final boolean retryEscalate;
     private final boolean rerankEnabled;
     private final int candidateMultiplier;
+    private final int tagCandidateMultiplier;          // Step 5.9: candidate expansion when tags selected
     private final LazyVisionService lazyVisionService; // null when disabled
     private final Optional<RerankerService> reranker;
 
@@ -49,6 +50,7 @@ public class RetrievalService {
         this.retryEscalate = props.searchRetryEscalate();
         this.rerankEnabled = props.searchRerankEnabled();
         this.candidateMultiplier = props.searchCandidateMultiplierSafe();
+        this.tagCandidateMultiplier = props.searchTagCandidateMultiplierSafe();
         this.lazyVisionService = lazyVisionOpt.orElse(null);
         this.reranker = rerankerOpt;
         this.multiQueryExpander = MultiQueryExpander.builder()
@@ -59,6 +61,8 @@ public class RetrievalService {
     }
 
     public AgentState execute(AgentState state) {
+        // Step 5.9: normalized search-scope tags (empty → version-only behavior, unchanged).
+        List<String> selectedTags = com.example.ragagent.model.TagUtils.parseTagList(state.selectedTags());
         List<Document> unique;
         try {
             // S-2: escalate candidate count on retry to surface different documents.
@@ -69,6 +73,11 @@ public class RetrievalService {
             // R-3: expand candidate pool further when reranking is active.
             if (rerankEnabled && reranker.isPresent()) {
                 candidateK = Math.max(candidateK, defaultTopK * candidateMultiplier);
+            }
+            // Step 5.9: pre-expand the candidate pool when tags are selected (strict post-filter
+            // shrinks the pool; fetch more up-front in one shot — no provider/LLM re-call).
+            if (!selectedTags.isEmpty()) {
+                candidateK = Math.max(candidateK, defaultTopK * tagCandidateMultiplier);
             }
 
             // S-4: skip the expansion LLM call for disabled mode or short keyword-ish queries.
@@ -88,13 +97,21 @@ public class RetrievalService {
                 }
             }
             List<Document> candidates = mergeRrf(ranked, candidateK);
+            // Step 5.9: strict AND tag filter — applied after RRF, before rerank/cut. Covers vector
+            // + BM25 axes uniformly (tags travel in chunk metadata). No no-tag fallback on shortfall.
+            candidates = filterByTags(candidates, selectedTags, candidateK);
             // R-3: rerank by LLM relevance, then cut to defaultTopK.
             unique = (rerankEnabled && reranker.isPresent())
                     ? reranker.get().rerank(state.question(), candidates, defaultTopK)
                     : candidates.subList(0, Math.min(defaultTopK, candidates.size()));
         } catch (Exception e) {
             log.warn("Multi-query expansion failed, falling back to original question: {}", e.getMessage());
-            unique = ragService.search(state.userId(), state.question(), state.version(), defaultTopK);
+            // Step 5.9: keep the tag scope on the fallback path too (else tags leak through on error).
+            int fallbackK = selectedTags.isEmpty() ? defaultTopK
+                    : Math.max(defaultTopK, defaultTopK * tagCandidateMultiplier);
+            List<Document> fallback = ragService.search(state.userId(), state.question(), state.version(), fallbackK);
+            fallback = filterByTags(fallback, selectedTags, defaultTopK);
+            unique = fallback.subList(0, Math.min(defaultTopK, fallback.size()));
         }
 
         List<SourceRef> sources = unique.stream()
@@ -147,6 +164,25 @@ public class RetrievalService {
         if (!multiqueryEnabled) return false;
         if (question == null) return false;
         return question.strip().length() >= multiqueryMinLength;
+    }
+
+    /**
+     * Step 5.9: strict AND tag filter over already-retrieved candidates. A chunk passes only when
+     * its {@code tags} metadata contains every selected tag. Empty selection → pass-through
+     * (version-only behavior). Never falls back to unfiltered results on shortfall.
+     * Package-private for unit testing.
+     */
+    List<Document> filterByTags(List<Document> candidates, List<String> selectedTags, int candidateK) {
+        if (selectedTags == null || selectedTags.isEmpty()) return candidates;
+        int before = candidates.size();
+        List<Document> filtered = candidates.stream()
+                .filter(d -> com.example.ragagent.model.TagUtils.matchesAnd(
+                        com.example.ragagent.model.TagUtils.parseTagList(d.getMetadata().get(MetaKey.TAGS)),
+                        selectedTags))
+                .toList();
+        log.debug("[TAG] selectedTags={} candidateK={} postFilter={}/{}",
+                selectedTags, candidateK, filtered.size(), before);
+        return filtered;
     }
 
     private List<Document> augmentWithDescriptions(List<Document> docs, Map<String, String> descriptions) {

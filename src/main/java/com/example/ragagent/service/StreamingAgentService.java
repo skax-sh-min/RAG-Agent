@@ -106,6 +106,8 @@ public class StreamingAgentService {
                             .withQuestionType(typeF.join());
                 }
             }
+            // Step 5.9: carry the selected search-scope tags into the graph state.
+            initial = initial.toBuilder().selectedTags(form.selectedTags()).build();
 
             listener = new SseGraphListener(emitter);
             AgentState result = agentGraph.runStreaming(initial, listener);

@@ -46,6 +46,7 @@ public class KeywordSearchRepository {
                         filename      UNINDEXED,
                         page          UNINDEXED,
                         chunk_index   UNINDEXED,
+                        doc_tags      UNINDEXED,
                         content,
                         keywords,
                         tokenize = 'unicode61'
@@ -69,8 +70,8 @@ public class KeywordSearchRepository {
         try {
             jdbc.batchUpdate("""
                     INSERT INTO chunk_fts
-                        (spring_doc_id, doc_id, version, filename, page, chunk_index, content, keywords)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        (spring_doc_id, doc_id, version, filename, page, chunk_index, doc_tags, content, keywords)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     chunks.stream().map(d -> {
                         Map<String, Object> m = d.getMetadata();
@@ -81,6 +82,7 @@ public class KeywordSearchRepository {
                                 str(m.get(MetaKey.FILENAME)),
                                 str(m.get(MetaKey.PAGE_OR_SLIDE)),
                                 str(m.get(MetaKey.CHUNK_INDEX)),
+                                str(m.get(MetaKey.TAGS)),     // Step 5.9: 태그(쉼표 결합) — 검색 결과에 동행
                                 d.getText() == null ? "" : d.getText(),
                                 str(m.get(MetaKey.EXCERPT_KEYWORDS))
                         };
@@ -111,7 +113,7 @@ public class KeywordSearchRepository {
         if (match == null) return List.of();
         try {
             return jdbc.query("""
-                    SELECT spring_doc_id, doc_id, version, filename, page, chunk_index, content
+                    SELECT spring_doc_id, doc_id, version, filename, page, chunk_index, doc_tags, content
                     FROM chunk_fts
                     WHERE chunk_fts MATCH ? AND version = ?
                     ORDER BY bm25(chunk_fts)
@@ -124,6 +126,7 @@ public class KeywordSearchRepository {
                         meta.put(MetaKey.FILENAME, rs.getString("filename"));
                         meta.put(MetaKey.PAGE_OR_SLIDE, rs.getString("page"));
                         meta.put(MetaKey.CHUNK_INDEX, rs.getString("chunk_index"));
+                        meta.put(MetaKey.TAGS, rs.getString("doc_tags"));  // Step 5.9: 태그 동행
                         return Document.builder()
                                 .id(rs.getString("spring_doc_id"))
                                 .text(rs.getString("content"))

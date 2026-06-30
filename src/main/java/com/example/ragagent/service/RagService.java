@@ -61,7 +61,14 @@ public class RagService {
 
     public DocumentInfo indexDocument(String userId, Path filePath, String filename, String version,
                                       Consumer<IndexingProgressEvent> onProgress) throws IOException {
-        DocumentInfo info = indexer.index(IndexRequest.single(filePath, filename, version, userId, onProgress));
+        return indexDocument(userId, filePath, filename, version, List.of(), onProgress);
+    }
+
+    /** Step 5.9: index with search-scope tags stored in chunk metadata. */
+    public DocumentInfo indexDocument(String userId, Path filePath, String filename, String version,
+                                      List<String> tags,
+                                      Consumer<IndexingProgressEvent> onProgress) throws IOException {
+        DocumentInfo info = indexer.index(IndexRequest.single(filePath, filename, version, userId, tags, onProgress));
         docRegistry.save();
         return info;
     }

@@ -28,7 +28,8 @@ public record AppProperties(
         RateLimitConfig rateLimit,
         AuditConfig audit,
         AuthConfig auth,
-        VectorStoreConfig vectorstore
+        VectorStoreConfig vectorstore,
+        Integer searchTagCandidateMultiplier   // Step 5.9: 태그 선택 시 후보확대 배수 (기본 2)
 ) {
     public record LlmConfig(
             List<ProviderConfig> providers,
@@ -128,6 +129,12 @@ public record AppProperties(
     /** R-3: candidate pool multiplier for reranking. Clamped to >= 1 to avoid empty pools. */
     public int searchCandidateMultiplierSafe() {
         return Math.max(1, searchCandidateMultiplier);
+    }
+
+    /** Step 5.9: candidate-expansion multiplier applied when tags are selected. Defaults to 2. */
+    public int searchTagCandidateMultiplierSafe() {
+        return (searchTagCandidateMultiplier == null || searchTagCandidateMultiplier < 1)
+                ? 2 : searchTagCandidateMultiplier;
     }
 
     public long sseTimeoutMs() {

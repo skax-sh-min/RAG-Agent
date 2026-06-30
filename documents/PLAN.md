@@ -397,7 +397,7 @@ Google/GitHub 제공자 등록. 가입 흐름은 **기존 폼 가입과 동등**
 | Step 5.5 ✅ | 백엔드 선택 스위치 (조건부 빈) | `VectorStoreProviderConfig`, Chroma 빈 가드 |
 | Step 5.6 ✅ | 설정 외부화 (.env / docker-compose) | properties, `.env.example`, compose profiles |
 | Step 5.7 ✅ | 데이터 이전 + 통합 검증 | 재인덱싱 절차, 단위·통합 테스트 |
-| Step 5.8 ✅ | 관리자 페이지 백엔드 가시성 보강 (sqlite-vec) | `VectorStoreAdminView`(신규), `AdminService`에 `JdbcTemplate`/`AppProperties` 주입, `/admin` 백엔드별 상태/통계 카드, 백엔드별 테스트 |
+| Step 5.8 ✅ | 관리자 페이지 백엔드 가시성 보강 (sqlite-vec) | `VectorStoreAdminView`(신규), `AdminService`에 `JdbcTemplate`/`AppProperties`/`ObjectMapper` 주입, `/admin` 백엔드 공통 상태 카드 + 청크 브라우징 패리티, `AdminService`·`AdminController` 테스트 |
 | Step 5.9 🔵 | 태그 기반 검색 스코프(엄격 필터 + sqlite 후보확대 보정) | 업로드 다중 태그·채팅 태그 선택·백엔드별 엄격 필터·프리릴리즈 수동 초기화 런북 |
 
 ### Step 5.1 — VectorStoreProvider 추상화 계층 도입 ✅ 완료 (2026-06-23)
@@ -430,35 +430,15 @@ Chroma 결합을 `VectorStoreProvider`(search/searchBatch/add/deleteByDocIds) �
 
 ### Step 5.8 — 관리자 페이지 백엔드 가시성 보강 (sqlite-vec) ✅ 완료 (2026-06-29)
 
-**문제**: `/admin`은 `AdminService`가 `Optional<ChromaApi>`만 의존해 Chroma 통계(컬렉션·청크 수)만 노출한다. sqlite-vec 모드에서는 `chromaApi == null` → 컬렉션 목록이 비고 청크 브라우징도 빈 목록으로 강등되어, 운영자가 벡터 스토어 상태를 전혀 확인할 수 없다.
+기존 `/admin`은 `AdminService`가 `ChromaApi`에만 의존해 sqlite-vec 모드에서 상태·청크 브라우징이 빈 목록으로 강등됐다. 두 백엔드 공통으로 보강:
 
-**선행 확인 (현재 코드 기준 — 원안의 빈 공백 보정)**:
-- `AdminService`는 **`JdbcTemplate`·`AppProperties`를 주입받지 않는다** → sqlite-vec 집계를 위해 둘 다 추가 주입이 필수(원안 누락).
-- 활성 백엔드는 `chromaApi == null` 추론이 아니라 `props.vectorStoreSafe().type()`로 **명시적 판별**.
-- `vec_document_chunks`/`vec_embeddings` 테이블과 `vec_version()` 함수는 **sqlite-vec 모드에서만** 존재/로드된다 → 반드시 백엔드 분기 안에서만 쿼리(chroma 모드에서 호출 시 실패).
-- sqlite-vec엔 단일 "active version" 개념이 없다(버전 = vec0 partition key) → 공통 필드는 "active version" 대신 **버전별 청크 수(`GROUP BY version`)**로 표현.
-- `AdminController.adminPage`는 `chromaAvailable` 모델 속성 + `admin.html`의 "Chroma 불가" 경고에 의존 → 신규 뷰로 대체/보강.
+- **상태 카드**: `VectorStoreAdminView`(record) 신규. `AdminService`에 `JdbcTemplate`·`AppProperties`·`ObjectMapper` 주입 + `vectorStoreView()` — 활성 백엔드를 `props.vectorStoreSafe().type()`로 판별(chroma=컬렉션 집계·문서수 unknown(-1) / sqlite-vec=`vec_document_chunks` COUNT·DISTINCT doc_id·`GROUP BY version`·`vec_version()`·차원). `AdminController.adminPage`에 `vectorStore` 모델 속성, `admin.html`에 "Vector Store 상태" 카드(공통), Chroma 불가 배너는 `isChroma()` 가드.
+- **청크 브라우징 패리티**: `listCollections`/`getChunks`/`countChunks`/`getChunk`/`deleteChunk`/`updateChunk`를 `isSqliteVec()` 분기로 확장 — sqlite-vec에선 "collection"=version으로 해석해 `vec_document_chunks`(content·metadata JSON)를 조회. 삭제는 `vec_document_chunks`+`vec_embeddings` 두 테이블 동기, 수정은 content/metadata만(벡터 보존, Chroma와 동일 정책). `admin.html` 좌측 패널 백엔드 공통화(라벨·collection 식별자 `IS_SQLITE_VEC` 분기).
+- **검증**: `AdminServiceTest` 7건(백엔드별 집계·`listCollections`·두 테이블 삭제) + `AdminControllerWebMvcTest` 2건(`/admin` chroma·sqlite-vec 실제 렌더 — 컨트롤러 배선 + Thymeleaf 조건부 회귀 보호). 전체 299 tests BUILD SUCCESS(회귀 0, sqlite 통합 2건 skip).
 
-**작업**:
-1. `VectorStoreAdminView`(`model/`) 신규 — 공통: `backend`(chroma|sqlite-vec), `healthy`, `totalDocs`, `totalChunks`, `perVersion`(version→chunkCount). 백엔드별: chroma=`collectionCount`, sqlite-vec=`vecVersion`·`dimension`.
-2. `AdminService`에 `JdbcTemplate`·`AppProperties` 주입 + `vectorStoreView()` 추가:
-   - chroma 분기: 기존 `listCollections()` 집계 재사용.
-   - sqlite-vec 분기: `COUNT(*) FROM vec_document_chunks`, `COUNT(DISTINCT doc_id)`, `version, COUNT(*) … GROUP BY version`, `SELECT vec_version()`, `dimension`은 `props.embeddingSafe().dimensions()`.
-3. (권장) **sqlite-vec 청크 브라우징 패리티**: `getChunks`/`countChunks`/`getChunk`를 백엔드 분기로 확장해 `vec_document_chunks`(content·metadata JSON)에서 `JdbcTemplate`로 조회 → 상태 카드뿐 아니라 기존 청크 UI가 두 백엔드에서 동일 동작. 편집/삭제는 두 테이블 정합 유지하거나 sqlite-vec에선 읽기 전용으로 한정.
-4. `AdminController.adminPage`에 `vectorStoreView` 모델 속성 추가, `admin.html`에 "Vector Store 상태" 카드(백엔드별 조건부 렌더).
-5. 테스트: `AdminServiceTest`에 sqlite-vec 분기(mock `JdbcTemplate`) + chroma 분기 회귀, `@WebMvcTest`로 `adminPage` 모델 속성 백엔드별 검증.
+> ⚠️ sqlite-vec엔 단일 "active version" 개념이 없어(버전 = vec0 partition key) 상태를 버전별 청크 수로 표현. `vec_document_chunks`/`vec_version()`은 sqlite-vec 모드에서만 존재하므로 sqlite-vec 쿼리는 백엔드 분기 안에서만 실행(+ try/catch 안전 강등).
 
-**완료 기준**:
-- [x] `VECTORSTORE_TYPE=sqlite-vec`에서 `/admin`에 백엔드 상태 + 최소 지표(`vec_version`, 문서 수, 청크 수, 버전별 청크 수)가 표시된다.
-- [x] (권장) sqlite-vec 청크 목록 브라우징 패리티 — `vec_document_chunks` 기반으로 조회·편집·삭제 동작.
-- [x] `VECTORSTORE_TYPE=chroma`의 기존 관리자 화면 동작/테스트는 회귀 없이 통과한다.
-
-> **구현 메모 (2026-06-29)**:
-> - **상태 카드**: `VectorStoreAdminView`(record, `model/`) 신규. `AdminService`에 `JdbcTemplate`·`AppProperties` 주입 + `vectorStoreView()`(chroma=컬렉션 집계 재사용·문서수 unknown(-1) / sqlite-vec=`vec_document_chunks` COUNT·DISTINCT doc_id·`GROUP BY version`·`vec_version()`·차원). `AdminController.adminPage`에 `vectorStore` 모델 속성, `admin.html`에 "Vector Store 상태" 카드(공통). Chroma 불가 배너는 `isChroma()`로 가드(sqlite-vec에서 오해 소지 배너 숨김).
-> - **청크 브라우징 패리티**: `AdminService`에 `ObjectMapper` 주입. `listCollections`/`getChunks`/`countChunks`/`getChunk`/`deleteChunk`/`updateChunk`를 `isSqliteVec()` 분기로 확장 — sqlite-vec에선 "collection"=version으로 해석해 `vec_document_chunks`(content·metadata JSON)를 `JdbcTemplate`로 조회. 삭제는 `vec_document_chunks`+`vec_embeddings` 두 테이블 동기 삭제, 수정은 content/metadata만(벡터 보존, Chroma 경로와 동일 정책). `admin.html` 좌측 패널을 백엔드 공통으로 노출(헤더 라벨 "버전(sqlite-vec)/ChromaDB 컬렉션" 조건부), `loadChunksByDoc`는 `IS_SQLITE_VEC` 플래그로 collection 식별자(version vs `manual_<version>`) 분기.
-> - **검증**: `AdminServiceTest` 백엔드별 4건 추가(총 7건). 전체 292 tests BUILD SUCCESS(회귀 0, sqlite 통합 2건 skip).
-
-### Step 5.9 — 태그 기반 검색 스코프 (엄격 필터 + sqlite 후보확대 보정) 🔵 계획 (2026-06-30)
+### Step 5.9 — 태그 기반 검색 스코프 (엄격 필터 + sqlite 후보확대 보정) ✅ 완료 (2026-06-30)
 
 **목표**: 문서 등록 시 다중 태그를 저장하고, 채팅 시 선택한 태그에 해당하는 문서만 검색 대상에 포함한다. 기본 원칙은 **엄격 필터(strict filter)**이며, 벡터 검색 + 하이브리드 키워드 검색(BM25) 모두 동일한 태그 조건을 적용한다. sqlite-vec은 결과 부족을 막기 위해 **후보확대 보정(candidate expansion)**을 함께 적용한다.
 
@@ -536,13 +516,21 @@ Chroma 결합을 `VectorStoreProvider`(search/searchBatch/add/deleteByDocIds) �
   - 데이터 보존 미보장(프리릴리즈) 고지 문구 명시.
 
 **완료 기준**:
-- [ ] 문서 업로드에서 다중 태그를 저장할 수 있다.
-- [ ] 채팅에서 태그 선택 시 선택 태그 문서만 검색 근거로 사용된다(엄격 필터).
-- [ ] 하이브리드(BM25) 축에서도 태그 엄격 필터가 적용된다.
-- [ ] sqlite-vec에서 태그 필터로 인한 결과 부족 시 후보확대 보정이 동작한다.
-- [ ] 태그 미선택 요청은 기존 결과와 의미적으로 동일하다.
-- [ ] Chroma/sqlite-vec 두 백엔드에서 테스트가 통과한다.
-- [x] 마이그레이션 없이 수동 초기화 절차가 운영 문서에 반영되어 있다.
+- [x] 문서 업로드에서 다중 태그를 저장할 수 있다. (`/ui/documents/upload`·`/api/v1/documents` `tags` 파라미터 → 청크 metadata `tags`)
+- [x] 채팅에서 태그 선택 시 선택 태그 문서만 검색 근거로 사용된다(엄격 AND 필터).
+- [x] 하이브리드(BM25) 축에서도 태그 엄격 필터가 적용된다. (`chunk_fts.doc_tags` 동행 → 동일 post-filter)
+- [x] sqlite-vec에서 태그 필터로 인한 결과 부족 시 후보확대 보정이 동작한다. (전 백엔드 공통 `app.search-tag-candidate-multiplier`)
+- [x] 태그 미선택 요청은 기존 결과와 의미적으로 동일하다. (`selectedTags=[]` pass-through, 회귀 테스트)
+- [~] Chroma/sqlite-vec 두 백엔드에서 테스트가 통과한다. — 필터는 RetrievalService post-filter라 **백엔드 불가지론**(반환 Document metadata 기준)이며 단위 테스트로 검증. 라이브 백엔드 통합(Chroma 서버/vec0 바이너리)은 운영 인수.
+- [x] 마이그레이션 없이 수동 초기화 절차가 운영 문서에 반영되어 있다. (OPERATOR_MANUAL §4.6)
+
+> **구현 메모 (2026-06-30)**:
+> - **모델/상태**: `MetaKey.TAGS`, `TagUtils`(정규화·검증·`parseTagList` 방어·AND 매칭) 신규. `ChatForm.tags`/`ChatRequest.selectedTags`/`AgentState.selectedTags`/`IndexRequest.tags` 추가. `VectorStoreProvider`/`Facade`/`RagService.search*`/`KeywordSearchRepository.search()` **시그니처 불변**(설계대로).
+> - **인덱싱**: `DocumentIndexer.tagMetadata`가 청크 metadata에 `tags`(쉼표 결합, image_paths 컨벤션) 저장. 두 백엔드 공통 metadata.
+> - **검색**: `RetrievalService.execute()`가 `mergeRrf()` 직후·cut 직전에 `filterByTags()`(AND, `TagUtils.parseTagList` 방어) 적용. catch fallback 경로도 동일 필터. 태그 선택 시 `candidateK = max(candidateK, topK × tagMultiplier)` 선제 확대(재호출 없음). BM25는 `doc_tags UNINDEXED` 컬럼으로 태그를 결과 metadata에 동행시켜 동일 post-filter 적용.
+> - **UI/검증**: `documents.html`·`chat.html` 태그 입력(+i18n), 업로드 FormData·채팅 폼 전달. 업로드는 `TagUtils.parseCsv` 정책 검증(위반 시 400). 단위 테스트 `TagUtilsTest`(7) + `RetrievalServiceTagFilterTest`(4). 전체 310 tests BUILD SUCCESS(회귀 0, sqlite 통합 2 skip).
+> - ⚠️ **정책 코드 단일화**: 원안은 형식 400/정책 422 구분이었으나 `IllegalArgumentException`(GlobalExceptionHandler→400)으로 통일. 422 세분화는 후속.
+> - ⚠️ **프리릴리즈**: `chunk_fts`에 `doc_tags` 컬럼 추가 = FTS5 스키마 변경. 기존 DB는 마이그레이션 없이 수동 초기화 후 재인덱싱(OPERATOR_MANUAL §4.6). 재인덱싱(↺) 경로는 태그 미보존(빈 태그) — 후속.
 
 **범위 제외 (후속)**:
 - 태그 사전(Dictionary)/자동완성 API

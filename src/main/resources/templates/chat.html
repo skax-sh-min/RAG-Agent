@@ -200,6 +200,16 @@
                     <input type="hidden" id="form-version" name="version" th:value="${version}"/>
                     <input type="hidden" id="form-routing-mode" name="routingMode" th:value="${routingMode}"/>
                     <input type="hidden" id="form-direct-mode" name="directMode" value="false"/>
+                    <!-- Step 5.9: 검색 스코프 태그 (쉼표 구분, 비우면 전체 검색) -->
+                    <div class="input-group input-group-sm mb-2">
+                        <span class="input-group-text" th:title="#{chat.tags.tooltip}">
+                            <i class="bi bi-tags"></i>
+                        </span>
+                        <input type="text" id="chat-tags-input" name="tags"
+                               class="form-control"
+                               th:placeholder="#{chat.tags.placeholder}"
+                               autocomplete="off"/>
+                    </div>
                     <div class="input-group">
                         <textarea id="question-input" name="question"
                                   class="form-control"

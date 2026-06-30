@@ -52,11 +52,17 @@
                 </div>
 
                 <!-- Controls -->
-                <div class="d-flex align-items-center gap-2">
+                <div class="d-flex align-items-center gap-2 flex-wrap">
                     <input id="version-input" name="version" type="text"
                            class="form-control form-control-sm"
                            style="width: 120px;" value="latest"
                            th:placeholder="#{doc.version.label}"/>
+                    <!-- Step 5.9: 쉼표 구분 태그 (검색 스코프) -->
+                    <input id="tags-input" name="tags" type="text"
+                           class="form-control form-control-sm"
+                           style="min-width: 180px; max-width: 280px;"
+                           th:placeholder="#{doc.tags.placeholder}"
+                           th:title="#{doc.tags.tooltip}" autocomplete="off"/>
                     <button id="upload-btn" class="btn btn-sm btn-primary" disabled>
                         <i class="bi bi-upload me-1"></i>
                         <span th:text="#{doc.btn.upload}">Upload &amp; Index</span>
@@ -200,11 +206,12 @@
 
     document.getElementById('upload-btn').addEventListener('click', () => {
         const version = document.getElementById('version-input').value || 'latest';
-        uploadFiles([...selectedFiles], version);
+        const tags = (document.getElementById('tags-input').value || '').trim();
+        uploadFiles([...selectedFiles], version, tags);
     });
 
     /* ── Upload orchestration ────────────────────────────────────────────── */
-    async function uploadFiles(files, version) {
+    async function uploadFiles(files, version, tags) {
         const btn = document.getElementById('upload-btn');
         btn.disabled = true;
 
@@ -219,7 +226,7 @@
         for (let i = 0; i < total; i++) {
             setFileStatus(i, 'uploading');
             try {
-                const result = await uploadWithProgress(files[i], version,
+                const result = await uploadWithProgress(files[i], version, tags,
                     pct => {                                    // XHR upload progress
                         setUploadBar(i, pct);
                         if (pct === 100) setFileStatus(i, 'queued');
@@ -246,12 +253,13 @@
      * Phase 2 — SSE: subscribe to /ui/documents/progress/{taskId} for chunk-level events.
      * Resolves with DocumentInfo on 'done', rejects on 'error'.
      */
-    function uploadWithProgress(file, version, onUploadPct, onStage) {
+    function uploadWithProgress(file, version, tags, onUploadPct, onStage) {
         return new Promise((resolve, reject) => {
             const xhr  = new XMLHttpRequest();
             const form = new FormData();
             form.append('file', file);
             form.append('version', version);
+            if (tags) form.append('tags', tags);   // Step 5.9: 검색 스코프 태그
 
             xhr.upload.addEventListener('progress', e => {
                 if (e.lengthComputable) onUploadPct(Math.round(e.loaded / e.total * 100));
