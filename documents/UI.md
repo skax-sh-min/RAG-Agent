@@ -250,7 +250,7 @@ stage(classifier) → stage(retrieval) → sources → stage(answer) → token �
 
 ---
 
-## 9. 모바일 / PWA / 접근성 (Phase 2)
+## 9. 모바일 / PWA / 접근성
 
 ### 9.1 반응형 레이아웃
 

@@ -20,8 +20,9 @@ RAG Agent 시스템 배포·설정·운영 가이드입니다.
       - 4.2.1 [ChromaDB 백엔드](#421-chromadb-백엔드)
       - 4.2.2 [sqlite-vec 백엔드](#422-sqlite-vec-백엔드)
    - 4.3 [접속 확인](#43-접속-확인)
-   - 4.4 [HTTPS 설정 (Caddy 리버스 프록시)](#44-https-설정-caddy-리버스-프록시)
-   - 4.5 [폐쇄망(Air-gapped) / 노-도커 실행](#45-폐쇄망air-gapped--노-도커-실행)
+  - 4.4 [HTTPS 설정 (Caddy 리버스 프록시)](#44-https-설정-caddy-리버스-프록시)
+  - 4.5 [폐쇄망(Air-gapped) / 노-도커 실행](#45-폐쇄망air-gapped--노-도커-실행)
+  - 4.6 [태그 기반 검색 적용 전 수동 초기화 (프리릴리즈)](#46-태그-기반-검색-적용-전-수동-초기화-프리릴리즈)
 5. [LLM 프로바이더 설정](#5-llm-프로바이더-설정)
    - 5.1 [구조 개요](#51-구조-개요)
    - 5.2 [프로바이더 속성](#52-프로바이더-속성)
@@ -739,7 +740,7 @@ docker-compose exec caddy caddy trust
 
 ### 4.5 폐쇄망(Air-gapped) / 노-도커 실행
 
-인터넷·Docker 없이 **sqlite-vec + 로컬 LLM(llama-server)** 만으로 운영하는 구성입니다. Phase 5로 ChromaDB(유일한 필수 Docker 서비스)를 제거할 수 있고(§3.1 "벡터 스토어 백엔드 선택"), 프론트엔드 자산은 jar에 번들된 webjar라 CDN 의존이 없습니다.
+인터넷·Docker 없이 **sqlite-vec + 로컬 LLM(llama-server)** 만으로 운영하는 구성입니다. 현재 구현은 ChromaDB(유일한 필수 Docker 서비스) 없이도 동작하며(§3.1 "벡터 스토어 백엔드 선택"), 프론트엔드 자산은 jar에 번들된 webjar라 CDN 의존이 없습니다.
 
 #### 1) (연결망에서) 산출물 준비
 
@@ -810,6 +811,98 @@ Caddy는 Docker 컨테이너이자 Let's Encrypt(인터넷)에 의존하므로 �
 - [ ] `http://<host>:8080/api/v1/health` → `{"status":"ok"}`
 
 > **데이터 이전**: 기존 Chroma 데이터를 sqlite-vec로 직접 복사하지 않습니다. 문서 원본이 `data/documents/`에 보존되므로 **전체 재인덱싱**(관리자 패널 §7, 또는 디렉터리 재동기화)으로 이전합니다.
+
+### 4.6 태그 기반 검색 적용 전 수동 초기화 (프리릴리즈)
+
+태그 기반 검색 스코프(엄격 필터 + sqlite 후보확대 보정) 적용 시점에는
+정식 릴리즈 전 운영 정책에 따라 **DB 마이그레이션 없이 수동 초기화 후 재구성**을 기준으로 합니다.
+
+#### 1) 작업 중지
+
+먼저 앱/백엔드를 중지합니다.
+
+```bash
+# Docker Compose
+docker compose down
+```
+
+```bash
+# 로컬 실행 (포그라운드)
+# 실행 중 터미널에서 Ctrl+C
+```
+
+#### 2) (선택) 백업
+
+데이터 유실이 허용되지 않는 환경이면 초기화 전에 백업합니다.
+
+```bash
+# macOS / Linux
+tar -czf backup-before-tag-scope-$(date +%Y%m%d-%H%M%S).tar.gz data
+```
+
+```powershell
+# Windows PowerShell
+$ts = Get-Date -Format "yyyyMMdd-HHmmss"
+Compress-Archive -Path data -DestinationPath ("backup-before-tag-scope-" + $ts + ".zip")
+```
+
+#### 3) 수동 초기화 (기존 데이터 삭제)
+
+공통 삭제 대상:
+- `data/memory.db`
+- `data/memory.db-wal`
+- `data/memory.db-shm`
+- `data/documents/`
+- `data/converted/`
+- `data/images/`
+
+chroma 백엔드 추가 삭제 대상:
+- `data/chroma/` (로컬 Chroma 경로 사용 시)
+- Docker named volume `chroma_data` (compose volume 사용 시)
+
+```bash
+# macOS / Linux
+rm -f data/memory.db data/memory.db-wal data/memory.db-shm
+rm -rf data/documents data/converted data/images data/chroma
+mkdir -p data/documents data/converted data/images data/chroma data/audit
+```
+
+```powershell
+# Windows PowerShell
+Remove-Item data/memory.db,data/memory.db-wal,data/memory.db-shm -Force -ErrorAction SilentlyContinue
+Remove-Item data/documents,data/converted,data/images,data/chroma -Recurse -Force -ErrorAction SilentlyContinue
+New-Item -ItemType Directory -Force data/documents,data/converted,data/images,data/chroma,data/audit | Out-Null
+```
+
+```bash
+# Docker Compose에서 chroma named volume까지 초기화할 때만
+docker volume rm rag-agent_chroma_data
+```
+
+> 볼륨 이름은 환경마다 다를 수 있습니다. `docker volume ls`로 실제 이름을 확인하세요.
+
+#### 4) 재기동 + 초기 설정
+
+```bash
+# chroma 백엔드
+docker compose --profile chroma up --build -d
+
+# sqlite-vec 백엔드
+docker compose up --build -d
+```
+
+- no-auth 모드(`AUTH_ENABLED=false`)면 `/setup`에서 관리자 계정을 다시 생성합니다.
+- 문서를 재업로드하거나 문서 폴더 동기화로 전체 재인덱싱합니다.
+
+#### 5) 태그 기반 검색 기능 검증 체크리스트
+
+- [ ] 태그가 다른 문서 2개 이상 업로드 (예: `policy`, `billing`)
+- [ ] 채팅에서 태그 미선택 질의 시 기존(version-only)과 동일 동작 확인
+- [ ] 채팅에서 태그 선택 질의 시 선택 태그 문서만 Sources에 노출되는지 확인
+- [ ] 존재하지 않는 태그 조합 질의 시 무필터 폴백 없이 결과 축소/부재가 유지되는지 확인
+- [ ] sqlite-vec 모드에서 태그 필터 후 결과 부족 시 후보확대 보정 로그(`candidateK` 증가) 확인
+
+> 현재 구현은 1차에서 AND 매칭을 기본으로 사용합니다. OR 매칭 전환은 후속 범위입니다.
 
 ---
 
@@ -1535,3 +1628,10 @@ app.auth.enabled=false
 - [ ] DOCX 업로드 후 `data/converted/{docId}_corrected.md` 생성 확인
 - [ ] Admin ↺ 버튼으로 MD 재인덱싱 성공 확인
 - [ ] (운영 환경) `/admin` 경로에 대한 네트워크 접근 제한 적용 여부 확인
+
+**태그 기반 검색 적용 시 (프리릴리즈 정책)**:
+- [ ] 적용 전 백업 여부 결정 및 수행 (선택)
+- [ ] `data/memory.db`(+wal/shm), `data/documents`, `data/converted`, `data/images` 수동 초기화 완료
+- [ ] (chroma) `data/chroma` 또는 `chroma_data` 볼륨 초기화 완료
+- [ ] 재기동 후 `/setup` 또는 로그인 경로 정상 확인
+- [ ] 문서 재업로드/동기화 후 태그 엄격 필터 동작 확인
