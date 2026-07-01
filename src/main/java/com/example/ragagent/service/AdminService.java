@@ -63,6 +63,7 @@ public class AdminService {
         public String filename()  { return metadata.getOrDefault(MetaKey.FILENAME, ""); }
         public String pageSlide() { return metadata.getOrDefault(MetaKey.PAGE_OR_SLIDE, ""); }
         public String keywords()  { return metadata.getOrDefault("excerpt_keywords", ""); }
+        public int chunkSize()    { return fullText == null ? 0 : fullText.length(); }
     }
 
     // ── DTOs (public) ─────────────────────────────────────────────────────────

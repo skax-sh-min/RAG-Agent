@@ -72,12 +72,13 @@
         <table class="table table-sm table-hover mb-0" style="font-size:0.8rem;">
             <thead class="table-light sticky-top">
             <tr>
-                <th style="width:90px;">ID</th>
+                <th style="width:80px;">ID</th>
                 <th>텍스트 (미리보기)</th>
-                <th style="width:110px;">파일명</th>
+                <th style="width:70px;" class="text-center">크기</th>
+                <th style="width:120px;">파일명</th>
                 <th style="width:50px;" class="text-center">페이지</th>
                 <th style="width:130px;">키워드</th>
-                <th style="width:90px;" class="text-center">작업</th>
+                <th style="width:80px;" class="text-center">작업</th>
             </tr>
             </thead>
             <tbody>
@@ -92,6 +93,9 @@
                          th:title="${chunk.textPreview()}"
                          th:text="${chunk.textPreview()}"></div>
                 </td>
+
+                <!-- Chunk size (characters) -->
+                <td class="text-end text-muted" th:text="${chunk.chunkSize()}"></td>
 
                 <!-- Filename -->
                 <td class="text-muted text-truncate" style="max-width:110px;"

@@ -79,71 +79,8 @@
         </div>
     </div>
 
-    <!-- ── 컬렉션(chroma) / 버전(sqlite-vec) 청크 브라우저 ──────────────────── -->
-    <div class="row g-4">
-
-        <!-- ── Left: Collections / Versions ────────────────────────────── -->
-        <div class="col-md-4 col-lg-3">
-            <div class="card h-100">
-                <div class="card-header d-flex align-items-center justify-content-between py-2">
-                    <span class="fw-semibold small">
-                        <i class="bi bi-database me-1"></i>
-                        <span th:text="${vectorStore.isSqliteVec()} ? '버전 (sqlite-vec)' : 'ChromaDB 컬렉션'">컬렉션</span>
-                    </span>
-                    <a href="/admin" class="btn btn-sm btn-outline-secondary py-0 px-2 small">새로고침</a>
-                </div>
-                <div class="card-body p-0">
-                    <div th:if="${#lists.isEmpty(collections)}"
-                         class="text-muted small p-3 text-center">항목이 없습니다.</div>
-                    <div class="list-group list-group-flush" th:unless="${#lists.isEmpty(collections)}">
-                        <button th:each="col : ${collections}"
-                                type="button"
-                                class="list-group-item list-group-item-action collection-btn px-3 py-2"
-                                th:data-collection="${col.name()}"
-                                th:data-version="${col.version()}"
-                                hx-get="/admin/chunks"
-                                th:hx-vals="|{&quot;collection&quot;: &quot;${col.name()}&quot;}|"
-                                hx-target="#chunk-panel"
-                                hx-swap="innerHTML"
-                                hx-indicator="#chunk-spinner">
-                            <div class="d-flex justify-content-between align-items-center">
-                                <div>
-                                    <div class="small fw-semibold" th:text="${col.version()}">version</div>
-                                    <div th:if="${vectorStore.isChroma()}"
-                                         class="text-muted" style="font-size:0.7rem;" th:text="${col.name()}">collection</div>
-                                </div>
-                                <span class="badge bg-secondary rounded-pill"
-                                      th:text="${col.chunkCount()}">0</span>
-                            </div>
-                        </button>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- ── Right: Chunk Panel ─────────────────────────────────────── -->
-        <div class="col-md-8 col-lg-9">
-
-            <!-- Loading spinner -->
-            <div id="chunk-spinner" class="htmx-indicator text-center py-5">
-                <div class="spinner-border spinner-border-sm text-secondary" role="status"></div>
-                <div class="small text-muted mt-2">청크 로딩 중...</div>
-            </div>
-
-            <!-- Chunk panel (HTMX target) -->
-            <div id="chunk-panel">
-                <div class="card">
-                    <div class="card-body text-center text-muted py-5">
-                        <i class="bi bi-arrow-left-circle fs-2 mb-2 d-block"></i>
-                        <div class="small">왼쪽에서 컬렉션을 선택하면 청크를 조회할 수 있습니다.</div>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div><!-- /row -->
-
     <!-- ── Document Registry ────────────────────────────────────────────── -->
-    <div class="card mt-4">
+    <div class="card mb-4">
         <div class="card-header d-flex align-items-center py-2">
             <i class="bi bi-archive me-2"></i>
             <span class="fw-semibold small">문서 레지스트리</span>
@@ -194,6 +131,71 @@
             </div>
         </div>
     </div>
+
+    <!-- ── 컬렉션(chroma) / 버전(sqlite-vec) 청크 브라우저 ──────────────────── -->
+    <div class="row g-4">
+
+        <!-- ── Left: Collections / Versions ────────────────────────────── -->
+        <div class="col-md-4 col-lg-3">
+            <div class="card h-100">
+                <div class="card-header d-flex align-items-center justify-content-between py-2">
+                    <span class="fw-semibold small">
+                        <i class="bi bi-database me-1"></i>
+                        <span th:text="${vectorStore.isSqliteVec()} ? '버전 (sqlite-vec)' : 'ChromaDB 컬렉션'">컬렉션</span>
+                    </span>
+                    <a href="/admin" class="btn btn-sm btn-outline-secondary py-0 px-2 small">새로고침</a>
+                </div>
+                <div class="card-body p-0">
+                    <div th:if="${#lists.isEmpty(collections)}"
+                         class="text-muted small p-3 text-center">항목이 없습니다.</div>
+                    <div class="list-group list-group-flush" th:unless="${#lists.isEmpty(collections)}">
+                        <button th:each="col : ${collections}"
+                                type="button"
+                                class="list-group-item list-group-item-action collection-btn px-3 py-2"
+                                th:data-collection="${col.name()}"
+                                th:data-version="${col.version()}"
+                                hx-get="/admin/chunks"
+                                th:hx-vals="|{&quot;collection&quot;: &quot;${col.name()}&quot;}|"
+                                hx-target="#chunk-panel"
+                                hx-swap="innerHTML"
+                                hx-indicator="#chunk-spinner">
+                            <div class="d-flex justify-content-between align-items-center">
+                                <div>
+                                    <div class="small fw-semibold" th:text="${col.version()}">version</div>
+                                    <div th:if="${vectorStore.isChroma()}"
+                                         class="text-muted" style="font-size:0.7rem;" th:text="${col.name()}">collection</div>
+                                </div>
+                                <span class="badge bg-secondary rounded-pill"
+                                      th:text="${col.chunkCount()}">0</span>
+                            </div>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ── Right: Chunk Panel ─────────────────────────────────────── -->
+        <div class="col-md-8 col-lg-9 position-relative">
+
+            <!-- Loading spinner -->
+            <div id="chunk-spinner"
+                 class="htmx-indicator position-absolute top-0 start-0 w-100 h-100 d-flex flex-column justify-content-center align-items-center"
+                  style="pointer-events:none; z-index:2; background:rgba(var(--bs-body-bg-rgb),0.35);">
+                <div class="spinner-border spinner-border-sm text-secondary" role="status"></div>
+                <div class="small text-muted mt-2">청크 로딩 중...</div>
+            </div>
+
+            <!-- Chunk panel (HTMX target) -->
+            <div id="chunk-panel">
+                <div class="card">
+                    <div class="card-body text-center text-muted py-5">
+                        <i class="bi bi-arrow-left-circle fs-2 mb-2 d-block"></i>
+                        <div class="small">왼쪽에서 컬렉션을 선택하면 청크를 조회할 수 있습니다.</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div><!-- /row -->
 
 </div><!-- /container -->
 
