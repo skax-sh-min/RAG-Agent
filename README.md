@@ -204,7 +204,7 @@ rag_java/
     │       ├── FinalizeService.java           # Conversation memory save node
     │       ├── MemoryService.java             # Multi-turn memory — SQLite persistence
     │       ├── RagService.java                # Document indexing + sync + image cleanup
-    │       ├── AdminService.java              # Admin UI data queries (chunks, collection stats)
+    │       ├── AdminService.java              # Admin UI data (chunk browse/edit + vector store status) — chroma & sqlite-vec
     │       ├── IndexingProgressService.java   # SSE emitter registry for async upload/sync progress
     │       ├── MarkdownCorrectionService.java # Post-process LLM markdown output
     │       ├── DocumentLoaderService.java     # PDF/PPTX/DOCX/TXT/MD loader; scanned PDF OCR

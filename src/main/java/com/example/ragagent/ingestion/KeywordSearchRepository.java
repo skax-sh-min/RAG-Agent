@@ -13,9 +13,11 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.TreeSet;
 
 /**
- * R-2: SQLite FTS5 keyword index over chunk content + extracted keywords.
+ * SQLite FTS5 keyword index over chunk content + extracted keywords.
  * Provides a BM25-ranked lexical search axis that complements vector similarity
  * (recovers exact terms — product codes, error codes, API names — that embeddings miss).
  *
@@ -28,6 +30,23 @@ public class KeywordSearchRepository {
 
     private static final Logger log = LoggerFactory.getLogger(KeywordSearchRepository.class);
 
+    private static final String CHUNK_FTS = "chunk_fts";
+
+    private static final String CREATE_CHUNK_FTS_SQL = """
+            CREATE VIRTUAL TABLE IF NOT EXISTS %s USING fts5(
+                spring_doc_id UNINDEXED,
+                doc_id        UNINDEXED,
+                version       UNINDEXED,
+                filename      UNINDEXED,
+                page          UNINDEXED,
+                chunk_index   UNINDEXED,
+                doc_tags      UNINDEXED,
+                content,
+                keywords,
+                tokenize = 'unicode61'
+            )
+            """;
+
     private final JdbcTemplate jdbc;
     private volatile boolean available = false;
 
@@ -38,24 +57,59 @@ public class KeywordSearchRepository {
     @PostConstruct
     void init() {
         try {
-            jdbc.execute("""
-                    CREATE VIRTUAL TABLE IF NOT EXISTS chunk_fts USING fts5(
-                        spring_doc_id UNINDEXED,
-                        doc_id        UNINDEXED,
-                        version       UNINDEXED,
-                        filename      UNINDEXED,
-                        page          UNINDEXED,
-                        chunk_index   UNINDEXED,
-                        content,
-                        keywords,
-                        tokenize = 'unicode61'
-                    )
-                    """);
+            ensureChunkFtsSchema();
             available = true;
             log.info("[KEYWORD] FTS5 chunk_fts ready — hybrid search available");
         } catch (Exception e) {
             available = false;
             log.warn("[KEYWORD] FTS5 unavailable — hybrid search disabled: {}", e.getMessage());
+        }
+    }
+
+    private void ensureChunkFtsSchema() {
+        createChunkFtsTable(CHUNK_FTS);
+        Set<String> columns = tableColumns(CHUNK_FTS);
+        if (!columns.isEmpty() && !columns.contains("doc_tags")) {
+            log.warn("[KEYWORD] Legacy chunk_fts schema detected: doc_tags column is missing. Rebuilding FTS table.");
+            rebuildChunkFtsWithDocTags();
+            log.warn("[KEYWORD] chunk_fts rebuild completed. Run document sync once to repopulate historical tags and keywords.");
+        }
+    }
+
+    private void createChunkFtsTable(String tableName) {
+        jdbc.execute(CREATE_CHUNK_FTS_SQL.formatted(tableName));
+    }
+
+    private Set<String> tableColumns(String tableName) {
+        return new java.util.HashSet<>(jdbc.query(
+                "PRAGMA table_info(" + tableName + ")",
+                (rs, n) -> rs.getString("name")
+        ));
+    }
+
+    private void rebuildChunkFtsWithDocTags() {
+        final String tempTable = CHUNK_FTS + "_v2";
+        try {
+            jdbc.execute("DROP TABLE IF EXISTS " + tempTable);
+            createChunkFtsTable(tempTable);
+            try {
+                jdbc.update(("""
+                        INSERT INTO %s
+                            (spring_doc_id, doc_id, version, filename, page, chunk_index, doc_tags, content, keywords)
+                        SELECT spring_doc_id, doc_id, version, filename, page, chunk_index, '', content, keywords
+                        FROM %s
+                        """).formatted(tempTable, CHUNK_FTS));
+            } catch (Exception copyErr) {
+                // Keep rebuilding even if legacy rows cannot be copied; this table is a derived index.
+                log.warn("[KEYWORD] Skipped legacy row copy during rebuild (derived index will be refilled on next indexing): {}", copyErr.getMessage());
+            }
+            jdbc.execute("DROP TABLE IF EXISTS " + CHUNK_FTS);
+            jdbc.execute("ALTER TABLE " + tempTable + " RENAME TO " + CHUNK_FTS);
+        } catch (Exception e) {
+            log.warn("[KEYWORD] chunk_fts rebuild failed; recreating an empty FTS table as fallback: {}", e.getMessage());
+            jdbc.execute("DROP TABLE IF EXISTS " + tempTable);
+            jdbc.execute("DROP TABLE IF EXISTS " + CHUNK_FTS);
+            createChunkFtsTable(CHUNK_FTS);
         }
     }
 
@@ -69,8 +123,8 @@ public class KeywordSearchRepository {
         try {
             jdbc.batchUpdate("""
                     INSERT INTO chunk_fts
-                        (spring_doc_id, doc_id, version, filename, page, chunk_index, content, keywords)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        (spring_doc_id, doc_id, version, filename, page, chunk_index, doc_tags, content, keywords)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     chunks.stream().map(d -> {
                         Map<String, Object> m = d.getMetadata();
@@ -81,6 +135,7 @@ public class KeywordSearchRepository {
                                 str(m.get(MetaKey.FILENAME)),
                                 str(m.get(MetaKey.PAGE_OR_SLIDE)),
                                 str(m.get(MetaKey.CHUNK_INDEX)),
+                                str(m.get(MetaKey.TAGS)),     // 태그(쉼표 결합) — 검색 결과에 동행
                                 d.getText() == null ? "" : d.getText(),
                                 str(m.get(MetaKey.EXCERPT_KEYWORDS))
                         };
@@ -111,7 +166,7 @@ public class KeywordSearchRepository {
         if (match == null) return List.of();
         try {
             return jdbc.query("""
-                    SELECT spring_doc_id, doc_id, version, filename, page, chunk_index, content
+                    SELECT spring_doc_id, doc_id, version, filename, page, chunk_index, doc_tags, content
                     FROM chunk_fts
                     WHERE chunk_fts MATCH ? AND version = ?
                     ORDER BY bm25(chunk_fts)
@@ -124,6 +179,7 @@ public class KeywordSearchRepository {
                         meta.put(MetaKey.FILENAME, rs.getString("filename"));
                         meta.put(MetaKey.PAGE_OR_SLIDE, rs.getString("page"));
                         meta.put(MetaKey.CHUNK_INDEX, rs.getString("chunk_index"));
+                        meta.put(MetaKey.TAGS, rs.getString("doc_tags"));  // 태그 동행
                         return Document.builder()
                                 .id(rs.getString("spring_doc_id"))
                                 .text(rs.getString("content"))
@@ -134,6 +190,66 @@ public class KeywordSearchRepository {
         } catch (Exception e) {
             log.debug("[KEYWORD] search failed: {}", e.getMessage());
             return List.of();
+        }
+    }
+
+    /**
+     * Distinct tags currently in use, derived from the {@code doc_tags} column (comma-joined,
+     * already normalized at index time). Optionally scoped to a version. Sorted, de-duplicated.
+     * No-op (empty) when FTS5 is unavailable.
+     */
+    public List<String> distinctTags(String version) {
+        if (!available) return List.of();
+        String base = "SELECT DISTINCT doc_tags FROM chunk_fts WHERE doc_tags IS NOT NULL AND doc_tags <> ''";
+        try {
+            List<String> rows = (version != null && !version.isBlank())
+                    ? jdbc.queryForList(base + " AND version = ?", String.class, version)
+                    : jdbc.queryForList(base, String.class);
+            java.util.TreeSet<String> tags = new java.util.TreeSet<>();
+            for (String row : rows) {
+                if (row == null) continue;
+                for (String t : row.split(",")) {
+                    String s = t.strip();
+                    if (!s.isEmpty()) tags.add(s);
+                }
+            }
+            return List.copyOf(tags);
+        } catch (Exception e) {
+            log.debug("[KEYWORD] distinctTags failed: {}", e.getMessage());
+            return List.of();
+        }
+    }
+
+    /**
+     * Returns distinct tags per doc_id (comma-split from doc_tags), sorted and de-duplicated.
+     * No-op (empty map) when FTS5 is unavailable or docIds is empty.
+     */
+    public Map<String, List<String>> tagsByDocIds(List<String> docIds) {
+        if (!available || docIds == null || docIds.isEmpty()) return Map.of();
+        String placeholders = String.join(",", java.util.Collections.nCopies(docIds.size(), "?"));
+        String sql = "SELECT doc_id, doc_tags FROM chunk_fts " +
+                "WHERE doc_id IN (" + placeholders + ") AND doc_tags IS NOT NULL AND doc_tags <> ''";
+        try {
+            Map<String, Set<String>> grouped = new HashMap<>();
+            jdbc.query(sql, rs -> {
+                String docId = rs.getString("doc_id");
+                String row = rs.getString("doc_tags");
+                if (docId == null || row == null || row.isBlank()) return;
+                Set<String> bucket = grouped.computeIfAbsent(docId, __ -> new TreeSet<>());
+                for (String t : row.split(",")) {
+                    String s = t.strip();
+                    if (!s.isEmpty()) bucket.add(s);
+                }
+            }, docIds.toArray());
+
+            Map<String, List<String>> out = new HashMap<>();
+            for (Map.Entry<String, Set<String>> e : grouped.entrySet()) {
+                out.put(e.getKey(), List.copyOf(e.getValue()));
+            }
+            return out;
+        } catch (Exception e) {
+            log.debug("[KEYWORD] tagsByDocIds failed: {}", e.getMessage());
+            return Map.of();
         }
     }
 

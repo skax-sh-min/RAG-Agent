@@ -86,7 +86,22 @@ src/main/resources/
 
 REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N`
 
-### 3.4 인증 (AuthController)
+### 3.4 관리자 (AdminController)
+
+`app.auth.enabled=true`에선 로그인 필요, no-auth 모드에선 `/admin/**`에 관리자 자동 주입. **chroma·sqlite-vec 두 백엔드 모두** 동작하며, sqlite-vec에선 "collection" 식별자가 version 문자열이다.
+
+| Method | Path | 반환 | 설명 |
+|--------|------|------|------|
+| GET | `/admin` | `admin.html` | Vector Store 상태 카드 + 컬렉션/버전 목록 + 문서 레지스트리 |
+| GET | `/admin/chunks` | `fragments/admin-chunks :: table` | 컬렉션(또는 버전)·docId별 청크 페이지네이션 |
+| GET | `/admin/chunks/{chunkId}/detail` | JSON | 청크 텍스트·메타데이터 (편집 패널) |
+| POST | `/admin/chunks/{chunkId}` | `200` | 청크 텍스트·메타데이터 수정 (벡터 보존) |
+| DELETE | `/admin/chunks/{chunkId}` | `200` | 청크 삭제 (sqlite-vec는 두 테이블 동기 삭제) |
+| POST | `/admin/documents/{docId}/reindex` | JSON | 저장된 MD로 재인덱싱 (DOCX 전용) |
+
+> 상태 카드는 `AdminService.vectorStoreView()` → `VectorStoreAdminView`. 백엔드별 표시 차이는 [OPERATOR_MANUAL.md §7.4](OPERATOR_MANUAL.md) 참고.
+
+### 3.5 인증 (AuthController)
 
 | Method | Path | 반환 | 설명 |
 |--------|------|------|------|
@@ -235,7 +250,7 @@ stage(classifier) → stage(retrieval) → sources → stage(answer) → token �
 
 ---
 
-## 9. 모바일 / PWA / 접근성 (Phase 2)
+## 9. 모바일 / PWA / 접근성
 
 ### 9.1 반응형 레이아웃
 

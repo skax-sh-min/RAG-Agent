@@ -1,7 +1,7 @@
 # RAG-Agent 온라인 확장 개발 계획
 
 > Java 개발자 관점 · Spring Boot 3.5 + Spring AI 1.1.4 + Java 21 · 작성일 2026-05-11  
-> **업데이트**: 2026-06-23 — Phase 5 sqlite-vec 연동을 단계별 작업(Step 5.1~5.7)으로 분해  
+> **업데이트**: 2026-06-30 — Phase 5 태그 기반 검색 스코프 Step 5.9 계획 추가(엄격 필터 + sqlite 후보확대 보정, 프리릴리즈 수동 초기화 기준)  
 > **개발 기준 문서**: 이 파일(documents/PLAN.md)이 마스터. `documents/refactoring/18-extension-roadmap.md`는 각 항목의 기술 레퍼런스.
 
 ---
@@ -49,6 +49,7 @@
 - **Phase 3 잔여**: 사용자별 LLM 쿼터 (Phase 3.5), 사용자별 스토리지 쿼터
 - **Phase 4**: OAuth2 소셜 로그인, PostgreSQL 마이그레이션 (조건부)
 - ~~**Phase 5**: sqlite-vec 선택적 연동~~ → ✅ 완료 (Step 5.1~5.7, `app.vectorstore.type=chroma|sqlite-vec`)
+- **Phase 5 추가**: Step 5.9 태그 기반 검색 스코프(엄격 필터 + sqlite 후보확대 보정)
 - ~~**Phase 6**: 폐쇄망/노-도커 — 키리스 LOCAL(G1)·차원 외부화(G2)·라우팅 외부화(G3)·런북(G4)·무-외부호출 인수(G5)~~ → ✅ G1~G5 완료 (2026-06-25). sqlite-vec 라이브 부팅(vec0 바이너리)만 운영 인수
 
 ---
@@ -84,7 +85,7 @@
 | Phase 2 — 모바일 UI | Offcanvas, 하단 고정 입력, PWA | **필수** | ✅ 완료 |
 | Phase 3 — 운영 견고화 | Rate limit, 업로드 검증, 감사 로그 | 중요 | 🟡 일부 완료 |
 | Phase 4 — 확장 | OAuth2, PostgreSQL 마이그레이션 | 조건부 | 🔵 미착수 |
-| Phase 5 — Vector Store 선택 | sqlite-vec / ChromaDB 런타임 선택 | 중요 | ✅ 완료 |
+| Phase 5 — Vector Store 선택 | sqlite-vec / ChromaDB 런타임 선택 | 중요 | 🟡 완료 + Step 5.9 계획 |
 | Phase 6 — 폐쇄망 / 노-도커 | sqlite-vec 단독·로컬 LLM·CDN 0 (키리스 LOCAL, 차원 외부화) | 중요 | 🟢 G1~G5 완료 |
 
 ---
@@ -379,7 +380,7 @@ Google/GitHub 제공자 등록. 가입 흐름은 **기존 폼 가입과 동등**
 
 ---
 
-## 8. Phase 5 — Vector Store 선택적 연동 ✅ 완료 (2026-06-24)
+## 8. Phase 5 — Vector Store 선택적 연동 ✅ 완료 + 확장 계획
 
 ### 8.1 목표
 
@@ -396,7 +397,8 @@ Google/GitHub 제공자 등록. 가입 흐름은 **기존 폼 가입과 동등**
 | Step 5.5 ✅ | 백엔드 선택 스위치 (조건부 빈) | `VectorStoreProviderConfig`, Chroma 빈 가드 |
 | Step 5.6 ✅ | 설정 외부화 (.env / docker-compose) | properties, `.env.example`, compose profiles |
 | Step 5.7 ✅ | 데이터 이전 + 통합 검증 | 재인덱싱 절차, 단위·통합 테스트 |
-| Step 5.8 🔵 | 관리자 페이지 백엔드 가시성 보강 (sqlite-vec) | `VectorStoreAdminView`(신규), `AdminService`에 `JdbcTemplate`/`AppProperties` 주입, `/admin` 백엔드별 상태/통계 카드, 백엔드별 테스트 |
+| Step 5.8 ✅ | 관리자 페이지 백엔드 가시성 보강 (sqlite-vec) | `VectorStoreAdminView`(신규), `AdminService`에 `JdbcTemplate`/`AppProperties`/`ObjectMapper` 주입, `/admin` 백엔드 공통 상태 카드 + 청크 브라우징 패리티, `AdminService`·`AdminController` 테스트 |
+| Step 5.9 🔵 | 태그 기반 검색 스코프(엄격 필터 + sqlite 후보확대 보정) | 업로드 다중 태그·채팅 태그 선택·백엔드별 엄격 필터·프리릴리즈 수동 초기화 런북 |
 
 ### Step 5.1 — VectorStoreProvider 추상화 계층 도입 ✅ 완료 (2026-06-23)
 
@@ -416,7 +418,7 @@ Chroma 결합을 `VectorStoreProvider`(search/searchBatch/add/deleteByDocIds) �
 
 ### Step 5.5 — 백엔드 선택 스위치 (조건부 빈 등록) ✅ 완료 (2026-06-24)
 
-`VectorStoreProviderConfig`가 `@ConditionalOnProperty(app.vectorstore.type)`로 provider 택일(chroma `matchIfMissing=true`). Chroma 전용 빈(`ChromaConfig`/`VectorStoreRegistry`/`ChromaHealthChecker`/`VectorStoreWarmup`) 가드. ⚠️ Plan이 누락했던 `AdminService`는 `Optional<ChromaApi>`로 변경해 sqlite-vec 모드에서 `/admin` chunk 브라우징을 우아하게 강등(미지원). 두 모드 모두 `VectorStoreProvider` 빈 정확히 1개.
+`VectorStoreProviderConfig`가 `@ConditionalOnProperty(app.vectorstore.type)`로 provider 택일(chroma `matchIfMissing=true`). Chroma 전용 빈(`ChromaConfig`/`VectorStoreRegistry`/`ChromaHealthChecker`/`VectorStoreWarmup`) 가드. ⚠️ Plan이 누락했던 `AdminService`는 `Optional<ChromaApi>`로 변경해 sqlite-vec 모드에서 `/admin` chunk 브라우징을 우아하게 강등(당시 미지원 → **Step 5.8에서 두 백엔드 모두 브라우징 지원으로 보강**). 두 모드 모두 `VectorStoreProvider` 빈 정확히 1개.
 
 ### Step 5.6 — 설정 외부화 (.env / docker-compose) ✅ 완료 (2026-06-24)
 
@@ -426,30 +428,120 @@ Chroma 결합을 `VectorStoreProvider`(search/searchBatch/add/deleteByDocIds) �
 
 이전 경로 = **재인덱싱**(`data/documents/` 원본 보존이라 무손실): `VECTORSTORE_TYPE=sqlite-vec` 재시작 → `/admin` 전체 재동기화. `SqliteVecIntegrationTest`(실 vec0 v0.1.9, 바이너리 없으면 skip)로 add→search→searchBatch→delete E2E + 무-Chroma 컨텍스트 로드 검증. ※ docker 무설치 환경이라 `docker compose up` 실측·운영 데이터 정성 비교는 운영 인수.
 
-### Step 5.8 — 관리자 페이지 백엔드 가시성 보강 (sqlite-vec) 🔵 계획
+### Step 5.8 — 관리자 페이지 백엔드 가시성 보강 (sqlite-vec) ✅ 완료 (2026-06-29)
 
-**문제**: `/admin`은 `AdminService`가 `Optional<ChromaApi>`만 의존해 Chroma 통계(컬렉션·청크 수)만 노출한다. sqlite-vec 모드에서는 `chromaApi == null` → 컬렉션 목록이 비고 청크 브라우징도 빈 목록으로 강등되어, 운영자가 벡터 스토어 상태를 전혀 확인할 수 없다.
+기존 `/admin`은 `AdminService`가 `ChromaApi`에만 의존해 sqlite-vec 모드에서 상태·청크 브라우징이 빈 목록으로 강등됐다. 두 백엔드 공통으로 보강:
 
-**선행 확인 (현재 코드 기준 — 원안의 빈 공백 보정)**:
-- `AdminService`는 **`JdbcTemplate`·`AppProperties`를 주입받지 않는다** → sqlite-vec 집계를 위해 둘 다 추가 주입이 필수(원안 누락).
-- 활성 백엔드는 `chromaApi == null` 추론이 아니라 `props.vectorStoreSafe().type()`로 **명시적 판별**.
-- `vec_document_chunks`/`vec_embeddings` 테이블과 `vec_version()` 함수는 **sqlite-vec 모드에서만** 존재/로드된다 → 반드시 백엔드 분기 안에서만 쿼리(chroma 모드에서 호출 시 실패).
-- sqlite-vec엔 단일 "active version" 개념이 없다(버전 = vec0 partition key) → 공통 필드는 "active version" 대신 **버전별 청크 수(`GROUP BY version`)**로 표현.
-- `AdminController.adminPage`는 `chromaAvailable` 모델 속성 + `admin.html`의 "Chroma 불가" 경고에 의존 → 신규 뷰로 대체/보강.
+- **상태 카드**: `VectorStoreAdminView`(record) 신규. `AdminService`에 `JdbcTemplate`·`AppProperties`·`ObjectMapper` 주입 + `vectorStoreView()` — 활성 백엔드를 `props.vectorStoreSafe().type()`로 판별(chroma=컬렉션 집계·문서수 unknown(-1) / sqlite-vec=`vec_document_chunks` COUNT·DISTINCT doc_id·`GROUP BY version`·`vec_version()`·차원). `AdminController.adminPage`에 `vectorStore` 모델 속성, `admin.html`에 "Vector Store 상태" 카드(공통), Chroma 불가 배너는 `isChroma()` 가드.
+- **청크 브라우징 패리티**: `listCollections`/`getChunks`/`countChunks`/`getChunk`/`deleteChunk`/`updateChunk`를 `isSqliteVec()` 분기로 확장 — sqlite-vec에선 "collection"=version으로 해석해 `vec_document_chunks`(content·metadata JSON)를 조회. 삭제는 `vec_document_chunks`+`vec_embeddings` 두 테이블 동기, 수정은 content/metadata만(벡터 보존, Chroma와 동일 정책). `admin.html` 좌측 패널 백엔드 공통화(라벨·collection 식별자 `IS_SQLITE_VEC` 분기).
+- **검증**: `AdminServiceTest` 7건(백엔드별 집계·`listCollections`·두 테이블 삭제) + `AdminControllerWebMvcTest` 2건(`/admin` chroma·sqlite-vec 실제 렌더 — 컨트롤러 배선 + Thymeleaf 조건부 회귀 보호). 전체 299 tests BUILD SUCCESS(회귀 0, sqlite 통합 2건 skip).
 
-**작업**:
-1. `VectorStoreAdminView`(`model/`) 신규 — 공통: `backend`(chroma|sqlite-vec), `healthy`, `totalDocs`, `totalChunks`, `perVersion`(version→chunkCount). 백엔드별: chroma=`collectionCount`, sqlite-vec=`vecVersion`·`dimension`.
-2. `AdminService`에 `JdbcTemplate`·`AppProperties` 주입 + `vectorStoreView()` 추가:
-   - chroma 분기: 기존 `listCollections()` 집계 재사용.
-   - sqlite-vec 분기: `COUNT(*) FROM vec_document_chunks`, `COUNT(DISTINCT doc_id)`, `version, COUNT(*) … GROUP BY version`, `SELECT vec_version()`, `dimension`은 `props.embeddingSafe().dimensions()`.
-3. (권장) **sqlite-vec 청크 브라우징 패리티**: `getChunks`/`countChunks`/`getChunk`를 백엔드 분기로 확장해 `vec_document_chunks`(content·metadata JSON)에서 `JdbcTemplate`로 조회 → 상태 카드뿐 아니라 기존 청크 UI가 두 백엔드에서 동일 동작. 편집/삭제는 두 테이블 정합 유지하거나 sqlite-vec에선 읽기 전용으로 한정.
-4. `AdminController.adminPage`에 `vectorStoreView` 모델 속성 추가, `admin.html`에 "Vector Store 상태" 카드(백엔드별 조건부 렌더).
-5. 테스트: `AdminServiceTest`에 sqlite-vec 분기(mock `JdbcTemplate`) + chroma 분기 회귀, `@WebMvcTest`로 `adminPage` 모델 속성 백엔드별 검증.
+> ⚠️ sqlite-vec엔 단일 "active version" 개념이 없어(버전 = vec0 partition key) 상태를 버전별 청크 수로 표현. `vec_document_chunks`/`vec_version()`은 sqlite-vec 모드에서만 존재하므로 sqlite-vec 쿼리는 백엔드 분기 안에서만 실행(+ try/catch 안전 강등).
+
+### Step 5.9 — 태그 기반 검색 스코프 (엄격 필터 + sqlite 후보확대 보정) ✅ 완료 (2026-06-30)
+
+**목표**: 문서 등록 시 다중 태그를 저장하고, 채팅 시 선택한 태그에 해당하는 문서만 검색 대상에 포함한다. 기본 원칙은 **엄격 필터(strict filter)**이며, 벡터 검색 + 하이브리드 키워드 검색(BM25) 모두 동일한 태그 조건을 적용한다. sqlite-vec은 결과 부족을 막기 위해 **후보확대 보정(candidate expansion)**을 함께 적용한다.
+
+**적용 범위**:
+- 업로드 UI/API: 다중 태그 입력/검증/저장
+- 채팅 UI/API: 다중 태그 선택 전달
+- 인덱싱: 청크 메타데이터에 태그 저장
+- 검색: Chroma/sqlite-vec + 하이브리드(BM25) 모두 태그 엄격 필터 적용
+- 운영: 프리릴리즈 기준 데이터 마이그레이션 없이 수동 초기화 후 재구성
+
+**전제 (프리릴리즈 데이터 정책)**:
+- 정식 릴리즈 전이므로 DB/레지스트리 마이그레이션 스크립트는 작성하지 않는다.
+- 기존 데이터는 수동 삭제 후 신규 인덱싱으로 전환한다.
+- 초기화 대상: `data/memory.db`(+ `data/memory.db-wal`, `data/memory.db-shm`), `data/documents/`, `data/converted/`, `data/images/`, `data/chroma/`(chroma 사용 시), `data/audit/`(선택).
+- 초기화 후 `/setup`(no-auth) 또는 관리자 계정 생성 → 문서 재업로드/재동기화.
+
+**설계 결정**:
+- 태그 매칭 기본: `AND` (선택 태그 모두 포함된 청크만 허용)
+- 옵션: `OR` 모드(설정/파라미터) 추가 가능하되 1차는 `AND` 고정으로 출시
+- 태그 미선택 시 기존과 동일하게 version-only 검색
+- 태그 정규화: 소문자, trim, 중복 제거, 공백 태그 제거, 최대 10개/태그당 32자
+- 후보확대 책임: `RetrievalService` 단일 레이어에서 `candidateK`를 계산/확대하고, provider는 전달된 `candidateK` 범위 내 조회만 수행
+- **태그 필터 레이어**: `VectorStoreProvider`/`VectorStoreFacade`/`RagService` 인터페이스는 **변경하지 않는다**. Spring AI `FilterExpressionBuilder`는 배열 포함(containment) 연산자 미제공, vec0 KNN은 파티션 키(version)만 지원 — 두 백엔드 모두 provider 레이어에서 태그 push-down이 불가하다. 태그는 검색 결과 metadata에 이미 포함돼 반환되므로 `RetrievalService.execute()` 내 `mergeRrf()` 직후·최종 cut 직전에 Java post-filter를 적용한다.
+- **메타데이터 타입 방어**: `image_paths`와 동일하게, Chroma는 `List<String>` metadata를 버전에 따라 `String` 또는 `Collection<?>` 중 하나로 반환한다. `RetrievalService`에 `parseTagList(Object raw)` 유틸리티 메서드(String/Collection/null 방어 처리)를 추가하고 필터 로직 전반에서 사용한다.
+- **후보확대 전략**: 태그 선택 시 **선제 확대(fetch-more-upfront)** — 임베딩은 provider 내부에서 계산되므로 "provider 재호출"은 LLM API 재호출을 의미한다. 재호출 없이 처음부터 더 큰 `candidateK`로 요청하고, 그래도 topK 미달이면 가능한 결과만 반환한다. 새 속성 `app.search-tag-candidate-multiplier`(기본값 2)로 배수 제어.
+
+**세부 작업**:
+1. 도메인/모델 확장
+  - `MetaKey`에 `TAGS` 상수 추가.
+  - `ChatForm`, `ChatRequest`, `AgentState`에 `selectedTags` 필드 추가.
+  - 인덱싱 요청 모델(`IndexRequest`)에 `tags` 추가.
+  - 인덱싱 경로 시그니처 확장: `RagService.indexDocument()`에 `List<String> tags` 추가 → `IndexRequest.single()` factory method에 tags 전달.
+  - ⚠️ `VectorStoreProvider`/`VectorStoreFacade`/`RagService` search 시그니처 및 `KeywordSearchRepository.search()` 시그니처는 **변경하지 않는다**(태그 필터는 RetrievalService post-filter로 단일화 — 설계 결정 참조).
+
+2. 문서 업로드(다중 태그 입력)
+  - `documents.html` 업로드 카드에 태그 입력 추가(쉼표 구분 또는 chips).
+  - `/ui/documents/upload`, `/api/v1/documents`에 `tags` 파라미터 추가.
+  - 서버측 검증 실패 시 400(형식 오류)/422(정책 위반)로 일관 처리.
+
+3. 인덱싱 메타데이터 저장
+  - `DocumentIndexer.tagMetadata(...)`에서 청크 metadata에 `tags` 저장.
+  - Chroma/sqlite-vec 모두 동일한 metadata 구조를 사용(backend-neutral).
+  - `DocRegistry`는 마이그레이션 없이 유지(태그는 벡터 청크 metadata 기준).
+
+4. 채팅 태그 선택 UI/전달
+  - `chat.html` 입력 바에 태그 선택 UI 추가.
+  - 선택 태그를 hidden input으로 `/ui/chat`, `/ui/chat/stream`, `/api/v1/chat`에 전달.
+  - 스레드 단위 마지막 선택값 유지 여부는 1차에서 비적용(요청 단위 처리).
+
+5. 검색 레이어 적용 (엄격 필터 — Java post-filter)
+  - `RetrievalService.execute(state)`: `state.selectedTags()`를 읽어 `mergeRrf()` 직후·최종 cut 직전에 `parseTagList()` 기반 AND 필터 적용. provider/facade/ragService 시그니처는 변경하지 않는다.
+  - Chroma: 검색 결과 metadata에 tags가 반환됨(`List<String>` 또는 `String` — `parseTagList()`로 방어 처리). Java post-filter.
+  - sqlite-vec: version partition KNN 후 JOIN된 `vec_document_chunks.metadata` JSON에 tags 포함됨. Java post-filter.
+  - 하이브리드(BM25): `KeywordSearchRepository`의 FTS5 스키마에 `doc_tags UNINDEXED` 컬럼 추가(프리릴리즈 리셋으로 스키마 재생성). `indexChunks()`에서 쉼표 결합 문자열로 저장, `search()` 반환 metadata에 `MetaKey.TAGS` 포함 → RetrievalService에서 동일 `parseTagList()` 필터 적용(SQL-level WHERE 불필요).
+  - `RetrievalService.execute()` catch 블록 fallback(`ragService.search()` 직접 경로)에도 동일 post-filter 적용(누락 시 fallback에서 태그 우회 발생).
+
+6. 후보확대 보정 (전 백엔드 공통)
+  - `RetrievalService`에서 `selectedTags`가 비어있지 않으면 `candidateK` 계산 직후 `app.search-tag-candidate-multiplier`(기본값 2) 적용: `candidateK = max(candidateK, defaultTopK * tagCandidateMultiplier)`. provider 호출은 이 확대된 값으로 **한 번만** 수행한다(선제 확대, 재호출 없음).
+  - provider 내부에 별도 재조회 루프를 구현하지 않는다(이중 확대 방지). Chroma·sqlite-vec 모두 동일 규칙.
+  - 후보 확대 후에도 post-filter 결과가 topK 미달이면 가능한 결과만 반환(무필터 폴백 금지).
+  - 로그에 `selectedTags 수`, `candidateK`, `post-filter 후 결과 수`를 남겨 운영 튜닝 근거 확보.
+
+7. 테스트
+  - 단위: 태그 정규화/검증, AND 필터 일치, 빈 태그 경로 회귀.
+  - `parseTagList()` 단위: `String`, `Collection<String>`, `null`, JSON 배열 문자열 입력 모두 방어 처리 검증.
+  - `RetrievalService` catch 블록 fallback 경로에서 태그 필터가 적용됨을 검증.
+  - 백엔드별 통합: Chroma/sqlite-vec에서 태그 미선택/선택 시 검색 결과 검증.
+  - 하이브리드 통합: BM25(`doc_tags` 컬럼 포함 FTS5)에서 태그 미선택/선택 시 동일 필터 의미 검증.
+  - 웹 계층: 업로드/채팅 폼 파라미터 바인딩 + 유효성 실패 코드 검증.
+  - 회귀: 기존 version-only 검색, rerank/hybrid on/off, `selectedTags=[]` 시 동작 불변 확인.
+
+8. 운영 절차 문서화 (프리릴리즈)
+  - `OPERATOR_MANUAL.md`에 "Step 5.9 적용 전 수동 초기화 절차" 추가.
+  - "초기화 → 재기동 → 재업로드/동기화 → 태그 필터 검증" 체크리스트 포함.
+  - 데이터 보존 미보장(프리릴리즈) 고지 문구 명시.
 
 **완료 기준**:
-- `VECTORSTORE_TYPE=sqlite-vec`에서 `/admin`에 백엔드 상태 + 최소 지표(`vec_version`, 문서 수, 청크 수, 버전별 청크 수)가 표시된다.
-- (권장 채택 시) sqlite-vec에서도 청크 목록 브라우징이 동작한다.
-- `VECTORSTORE_TYPE=chroma`의 기존 관리자 화면 동작/테스트는 회귀 없이 통과한다.
+- [x] 문서 업로드에서 다중 태그를 저장할 수 있다. (`/ui/documents/upload`·`/api/v1/documents` `tags` 파라미터 → 청크 metadata `tags`)
+- [x] 채팅에서 태그 선택 시 선택 태그 문서만 검색 근거로 사용된다(엄격 AND 필터).
+- [x] 하이브리드(BM25) 축에서도 태그 엄격 필터가 적용된다. (`chunk_fts.doc_tags` 동행 → 동일 post-filter)
+- [x] sqlite-vec에서 태그 필터로 인한 결과 부족 시 후보확대 보정이 동작한다. (전 백엔드 공통 `app.search-tag-candidate-multiplier`)
+- [x] 태그 미선택 요청은 기존 결과와 의미적으로 동일하다. (`selectedTags=[]` pass-through, 회귀 테스트)
+- [~] Chroma/sqlite-vec 두 백엔드에서 테스트가 통과한다. — 필터는 RetrievalService post-filter라 **백엔드 불가지론**(반환 Document metadata 기준)이며 단위 테스트로 검증. 라이브 백엔드 통합(Chroma 서버/vec0 바이너리)은 운영 인수.
+- [x] 마이그레이션 없이 수동 초기화 절차가 운영 문서에 반영되어 있다. (OPERATOR_MANUAL §4.6)
+
+> **구현 메모 (2026-06-30)**:
+> - **모델/상태**: `MetaKey.TAGS`, `TagUtils`(정규화·검증·`parseTagList` 방어·AND 매칭) 신규. `ChatForm.tags`/`ChatRequest.selectedTags`/`AgentState.selectedTags`/`IndexRequest.tags` 추가. `VectorStoreProvider`/`Facade`/`RagService.search*`/`KeywordSearchRepository.search()` **시그니처 불변**(설계대로).
+> - **인덱싱**: `DocumentIndexer.tagMetadata`가 청크 metadata에 `tags`(쉼표 결합, image_paths 컨벤션) 저장. 두 백엔드 공통 metadata.
+> - **검색**: `RetrievalService.execute()`가 `mergeRrf()` 직후·cut 직전에 `filterByTags()`(AND, `TagUtils.parseTagList` 방어) 적용. catch fallback 경로도 동일 필터. 태그 선택 시 `candidateK = max(candidateK, topK × tagMultiplier)` 선제 확대(재호출 없음). BM25는 `doc_tags UNINDEXED` 컬럼으로 태그를 결과 metadata에 동행시켜 동일 post-filter 적용.
+> - **UI/검증**: `documents.html`·`chat.html` 태그 입력(+i18n), 업로드 FormData·채팅 폼 전달. 업로드는 `TagUtils.parseCsv` 정책 검증(위반 시 400). 단위 테스트 `TagUtilsTest`(7) + `RetrievalServiceTagFilterTest`(4). 전체 310 tests BUILD SUCCESS(회귀 0, sqlite 통합 2 skip).
+> - ⚠️ **정책 코드 단일화**: 원안은 형식 400/정책 422 구분이었으나 `IllegalArgumentException`(GlobalExceptionHandler→400)으로 통일. 422 세분화는 후속.
+> - ⚠️ **프리릴리즈**: `chunk_fts`에 `doc_tags` 컬럼 추가 = FTS5 스키마 변경. 기존 DB는 마이그레이션 없이 수동 초기화 후 재인덱싱(OPERATOR_MANUAL §4.6). 재인덱싱(↺) 경로는 태그 미보존(빈 태그) — 후속.
+
+**후속 — 태그 제안 UI ✅ 완료 (2026-07-01)**:
+- 등록된 태그를 칩으로 노출해 클릭 선택. **소스 = `chunk_fts.doc_tags`**(매 인덱싱마다 채워지고 hybrid 설정·백엔드와 무관) → `KeywordSearchRepository.distinctTags(version)`(정렬·중복 제거, 버전 선택 스코프) → `RagService.listTags` → `GET /api/v1/tags?version=`.
+- 업로드(`documents.html`): 전체 태그 칩 → 클릭 시 입력칸에 추가(업로드 후 갱신). 채팅(`chat.html`): **버전 스코프** 태그 칩 → 클릭 토글로 검색 범위 좁힘(버전 변경 시 재로딩). 입력값↔칩 활성 상태 동기화.
+- 테스트: `KeywordSearchRepositoryTest.distinctTags`(실 FTS5). 전체 311 tests BUILD SUCCESS.
+
+**범위 제외 (후속)**:
+- 자유 입력 자동완성(typeahead) — 현재는 칩 선택만
+- 문서별 태그 수정 UI(인덱싱 후 편집)
+- AND/OR 사용자 전환 토글
+- 기존 데이터 자동 마이그레이션
 
 ---
 
@@ -512,6 +604,8 @@ G1~G4 코드/문서 완료. G5는 라우팅 계층 "외부 무선택"을 `LlmCon
 | sqlite-vec — 네이티브 바이너리 운영자 제공 | 중 | 공식 Java 아티팩트가 없어 운영자가 플랫폼별 `vec0` loadable을 배치하고 `SQLITE_VEC_EXTENSION_PATH`로 지정. Docker는 컨테이너 아키텍처(`linux/amd64` 등)에 맞는 바이너리 사용. 미설정/플랫폼 불일치 시 `SqliteVecVerifier`가 기동 시 fail-fast |
 | sqlite-vec — searchBatch() N회 JDBC 쿼리 성능 | 낮 | 임베딩 배치 생성(1 HTTP 호출)이 병목. JDBC 쿼리 N번은 인메모리 SQLite 특성상 수 ms 수준으로 예상. 실측 후 CTE 방식 전환 검토 |
 | sqlite-vec — Spring AI VectorStore 미지원 | 중 | 커스텀 `VectorStoreProvider` 구현으로 Spring AI 인터페이스 우회. Spring AI 공식 sqlite-vec 지원 시 마이그레이션 경로 단순화 |
+| 태그 엄격 필터 — 결과 과소(recall 저하) | 중 | sqlite-vec 후보확대 보정(`candidateK` 단계 확대), AND 고정 1차 출시 후 OR 모드 후속 도입 |
+| 프리릴리즈 수동 초기화 — 데이터 유실 위험 | 중 | 적용 전 운영자 체크리스트(백업 선택), 초기화 대상 경로 명시, 재업로드/동기화 검증 절차 문서화 |
 
 ---
 

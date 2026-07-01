@@ -50,7 +50,8 @@ public class IndexingProgressService {
                     emitter.send(SseEmitter.event().name("progress")
                             .data(event, MediaType.APPLICATION_JSON));
                 } catch (IOException e) {
-                    emitter.completeWithError(e);
+                    log.debug("[IndexingProgress] buffered replay send failed taskId={}: {}", taskId, e.getMessage());
+                    try { emitter.complete(); } catch (Exception ignored) {}
                     return emitter;
                 }
             }
@@ -63,8 +64,13 @@ public class IndexingProgressService {
         emitters.put(taskId, emitter);
 
         java.util.concurrent.ScheduledFuture<?> hb = cleaner.scheduleAtFixedRate(() -> {
-            try { emitter.send(SseEmitter.event().name("ping").data("")); }
-            catch (Exception ignored) {}
+            try {
+                emitter.send(SseEmitter.event().name("ping").data(""));
+            } catch (Exception e) {
+                log.debug("[IndexingProgress] heartbeat failed taskId={}: {}", taskId, e.getMessage());
+                emitters.remove(taskId);
+                try { emitter.complete(); } catch (Exception ignored) {}
+            }
         }, 25, 25, TimeUnit.SECONDS);
 
         emitter.onCompletion(() -> { hb.cancel(false); emitters.remove(taskId); });
@@ -85,6 +91,7 @@ public class IndexingProgressService {
             } catch (IOException e) {
                 log.debug("[IndexingProgress] send failed taskId={}: {}", taskId, e.getMessage());
                 emitters.remove(taskId);
+                try { emitter.complete(); } catch (Exception ignored) {}
             }
         }
 

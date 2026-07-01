@@ -23,7 +23,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * R-1 (유사도 임계값) + S-3 (배치 멀티쿼리) 단위 테스트.
+ * 유사도 임계값 + 배치 멀티쿼리 - 단위 테스트.
  *
  * <p>{@code VectorStoreFacade}의 Chroma I/O 로직이 {@link ChromaVectorStoreProvider}로 분리된 후
  * 해당 동작을 검증한다.
@@ -37,7 +37,7 @@ class ChromaVectorStoreProviderTest {
         return new ChromaVectorStoreProvider(registry, chromaApi, embeddingModel, new ObjectMapper(), props);
     }
 
-    // ── R-1: single search threshold ──────────────────────────────────────────
+    // ── single search threshold ──────────────────────────────────────────
 
     private SearchRequest capturedSearch(double threshold) {
         VectorStoreRegistry registry = mock(VectorStoreRegistry.class);
@@ -54,7 +54,7 @@ class ChromaVectorStoreProviderTest {
     }
 
     @Test
-    @DisplayName("R-1: threshold>0 → SearchRequest.similarityThreshold 반영")
+    @DisplayName("threshold>0 → SearchRequest.similarityThreshold 반영")
     void threshold_applied_whenConfigured() {
         SearchRequest req = capturedSearch(0.6);
         assertThat(req.getSimilarityThreshold()).isEqualTo(0.6);
@@ -62,13 +62,13 @@ class ChromaVectorStoreProviderTest {
     }
 
     @Test
-    @DisplayName("R-1: threshold=0 → accept-all(0.0) 유지")
+    @DisplayName("threshold=0 → accept-all(0.0) 유지")
     void threshold_acceptAll_whenZero() {
         SearchRequest req = capturedSearch(0.0);
         assertThat(req.getSimilarityThreshold()).isEqualTo(0.0);
     }
 
-    // ── S-3: batched multi-query search ───────────────────────────────────────
+    // ── batched multi-query search ───────────────────────────────────────
 
     private ChromaVectorStoreProvider batchProvider(EmbeddingModel embeddingModel, ChromaApi chromaApi, double threshold) {
         VectorStoreRegistry registry = mock(VectorStoreRegistry.class);
@@ -90,7 +90,7 @@ class ChromaVectorStoreProviderTest {
     }
 
     @Test
-    @DisplayName("S-3: 배치 임베딩 1회 + 쿼리별 결과 그룹 보존, score=1-distance")
+    @DisplayName("배치 임베딩 1회 + 쿼리별 결과 그룹 보존, score=1-distance")
     void searchBatch_groupsPerQuery_andScores() {
         EmbeddingModel embeddingModel = mock(EmbeddingModel.class);
         when(embeddingModel.embed(any(List.class)))
@@ -113,7 +113,7 @@ class ChromaVectorStoreProviderTest {
     }
 
     @Test
-    @DisplayName("S-3: threshold 적용 — similarity<threshold 결과 제외")
+    @DisplayName("threshold 적용 — similarity<threshold 결과 제외")
     void searchBatch_appliesThreshold() {
         EmbeddingModel embeddingModel = mock(EmbeddingModel.class);
         when(embeddingModel.embed(any(List.class)))
@@ -132,7 +132,7 @@ class ChromaVectorStoreProviderTest {
     }
 
     @Test
-    @DisplayName("S-3: 컬렉션 없음 → 쿼리당 빈 리스트, Chroma 쿼리 미호출")
+    @DisplayName("컬렉션 없음 → 쿼리당 빈 리스트, Chroma 쿼리 미호출")
     void searchBatch_noCollection_returnsEmpty() {
         VectorStoreRegistry registry = mock(VectorStoreRegistry.class);
         when(registry.collectionName(any(), any())).thenReturn("u_shared_latest");

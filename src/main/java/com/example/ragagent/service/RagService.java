@@ -61,7 +61,14 @@ public class RagService {
 
     public DocumentInfo indexDocument(String userId, Path filePath, String filename, String version,
                                       Consumer<IndexingProgressEvent> onProgress) throws IOException {
-        DocumentInfo info = indexer.index(IndexRequest.single(filePath, filename, version, userId, onProgress));
+        return indexDocument(userId, filePath, filename, version, List.of(), onProgress);
+    }
+
+    /** index with search-scope tags stored in chunk metadata. */
+    public DocumentInfo indexDocument(String userId, Path filePath, String filename, String version,
+                                      List<String> tags,
+                                      Consumer<IndexingProgressEvent> onProgress) throws IOException {
+        DocumentInfo info = indexer.index(IndexRequest.single(filePath, filename, version, userId, tags, onProgress));
         docRegistry.save();
         return info;
     }
@@ -83,12 +90,19 @@ public class RagService {
     }
 
     public List<DocumentInfo> listDocuments(String userId) {
-        return docRegistry.entries(DocRegistry.SHARED).stream()
+        List<Map.Entry<String, DocRegistry.DocRegistryEntry>> entries = docRegistry.entries(DocRegistry.SHARED).stream()
+            .toList();
+        List<String> docIds = entries.stream().map(Map.Entry::getKey).toList();
+        Map<String, List<String>> tagsByDocId = keywordRepo.tagsByDocIds(docIds);
+
+        return entries.stream()
                 .map(e -> {
                     DocRegistry.DocRegistryEntry r = e.getValue();
                     String filename = DocRegistry.filenameFromDocId(e.getKey());
                     return new DocumentInfo(e.getKey(), filename, r.version(),
-                            r.chunks(), r.indexedAt(), r.sha256(), r.errors());
+                    r.chunks(), r.indexedAt(), r.sha256(),
+                    tagsByDocId.getOrDefault(e.getKey(), List.of()),
+                    r.errors());
                 })
                 .sorted(Comparator.comparing(DocumentInfo::indexedAt).reversed())
                 .toList();
@@ -98,12 +112,28 @@ public class RagService {
         return vectorStore.search(DocRegistry.SHARED, query, version, topK);
     }
 
-    /** S-3: batched multi-query search — one embedding call + one Chroma query for all variants. */
+    /** batched multi-query search — one embedding call + one Chroma query for all variants. */
     public List<List<Document>> searchBatch(String userId, List<String> queries, String version, int topK) {
         return vectorStore.searchBatch(DocRegistry.SHARED, queries, version, topK);
     }
 
-    /** R-2: BM25 keyword (FTS5) search axis for hybrid retrieval. */
+    /** BM25 keyword (FTS5) search axis for hybrid retrieval. */
+    /** Distinct tags in use (optionally scoped to a version) for tag-suggestion UI. */
+    public List<String> listTags(String version) {
+        return keywordRepo.distinctTags(version);
+    }
+
+    /** Distinct versions in use for version-selector UI. */
+    public List<String> listVersions() {
+        Set<String> versions = new HashSet<>();
+        for (Map.Entry<String, DocRegistry.DocRegistryEntry> e : docRegistry.entries(DocRegistry.SHARED)) {
+            String version = e.getValue().version();
+            if (version != null && !version.isBlank()) versions.add(version);
+        }
+        versions.add("latest");
+        return versions.stream().sorted().toList();
+    }
+
     public List<Document> keywordSearch(String version, String question, int topK) {
         return keywordRepo.search(version, question, topK);
     }

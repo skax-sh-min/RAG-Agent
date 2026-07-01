@@ -10,7 +10,7 @@ import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
 
 /**
- * S-5: Pre-creates the shared Chroma collection at startup so the first user
+ * Pre-creates the shared Chroma collection at startup so the first user
  * query does not pay the schema-initialization round-trip.
  *
  * <p>Document storage converges to {@code (DocRegistry.SHARED, "latest")}, so warming

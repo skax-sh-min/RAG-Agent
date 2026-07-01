@@ -6,7 +6,7 @@ import org.springframework.stereotype.Service;
 /**
  * Validates that the generated answer is grounded in the retrieved documents.
  *
- * <p>S-1: grounding is now computed in {@link AnswerService}'s single evaluation call
+ * <p>grounding is now computed in {@link AnswerService}'s single evaluation call
  * (alongside sufficiency). This node merely consumes the precomputed {@code grounded}
  * flag — no second LLM round-trip — and decides whether a retry is needed.
  */

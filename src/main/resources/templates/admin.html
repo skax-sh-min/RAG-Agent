@@ -15,8 +15,8 @@
         <span class="badge bg-warning text-dark ms-2 small">Admin</span>
     </div>
 
-    <!-- ChromaDB unavailable banner -->
-    <div th:if="${!chromaAvailable}"
+    <!-- ChromaDB unavailable banner (chroma 백엔드에서만) -->
+    <div th:if="${vectorStore.isChroma() and !chromaAvailable}"
          class="alert alert-warning d-flex align-items-center gap-2 mb-4" role="alert">
         <i class="bi bi-exclamation-triangle-fill flex-shrink-0"></i>
         <div>
@@ -25,66 +25,62 @@
         </div>
     </div>
 
-    <div class="row g-4">
-
-        <!-- ── Left: Collections ──────────────────────────────────────── -->
-        <div class="col-md-4 col-lg-3">
-            <div class="card h-100">
-                <div class="card-header d-flex align-items-center justify-content-between py-2">
-                    <span class="fw-semibold small"><i class="bi bi-database me-1"></i>ChromaDB 컬렉션</span>
-                    <a href="/admin" class="btn btn-sm btn-outline-secondary py-0 px-2 small">새로고침</a>
+    <!-- ── Vector Store 상태 카드 (백엔드 공통) ─────────────────────────── -->
+    <div class="card mb-4">
+        <div class="card-header d-flex align-items-center justify-content-between py-2 flex-wrap gap-2">
+            <span class="fw-semibold small"><i class="bi bi-hdd-stack me-1"></i>Vector Store 상태</span>
+            <span>
+                <span class="badge"
+                      th:classappend="${vectorStore.backend() == 'sqlite-vec'} ? ' bg-info text-dark' : ' bg-primary'"
+                      th:text="${vectorStore.backend()}">backend</span>
+                <span th:if="${vectorStore.healthy()}" class="badge bg-success ms-1">
+                    <i class="bi bi-check-circle-fill me-1"></i>정상
+                </span>
+                <span th:unless="${vectorStore.healthy()}" class="badge bg-danger ms-1">
+                    <i class="bi bi-x-circle-fill me-1"></i>연결 불가
+                </span>
+            </span>
+        </div>
+        <div class="card-body py-3">
+            <div class="row g-3 text-center small">
+                <div class="col-6 col-md-3" th:if="${vectorStore.hasDocCount()}">
+                    <div class="text-muted">문서 수</div>
+                    <div class="fs-5 fw-semibold" th:text="${vectorStore.totalDocs()}">0</div>
                 </div>
-                <div class="card-body p-0">
-                    <div th:if="${#lists.isEmpty(collections)}"
-                         class="text-muted small p-3 text-center">컬렉션이 없습니다.</div>
-                    <div class="list-group list-group-flush" th:unless="${#lists.isEmpty(collections)}">
-                        <button th:each="col : ${collections}"
-                                type="button"
-                                class="list-group-item list-group-item-action collection-btn px-3 py-2"
-                                th:data-collection="${col.name()}"
-                                th:data-version="${col.version()}"
-                                hx-get="/admin/chunks"
-                                th:hx-vals="|{&quot;collection&quot;: &quot;${col.name()}&quot;}|"
-                                hx-target="#chunk-panel"
-                                hx-swap="innerHTML"
-                                hx-indicator="#chunk-spinner">
-                            <div class="d-flex justify-content-between align-items-center">
-                                <div>
-                                    <div class="small fw-semibold" th:text="${col.version()}">version</div>
-                                    <div class="text-muted" style="font-size:0.7rem;" th:text="${col.name()}">collection</div>
-                                </div>
-                                <span class="badge bg-secondary rounded-pill"
-                                      th:text="${col.chunkCount()}">0</span>
-                            </div>
-                        </button>
-                    </div>
+                <div class="col-6 col-md-3">
+                    <div class="text-muted">청크 수</div>
+                    <div class="fs-5 fw-semibold" th:text="${vectorStore.totalChunks()}">0</div>
+                </div>
+                <div class="col-6 col-md-3" th:if="${vectorStore.isChroma()}">
+                    <div class="text-muted">컬렉션 수</div>
+                    <div class="fs-5 fw-semibold" th:text="${vectorStore.collectionCount()}">0</div>
+                </div>
+                <div class="col-6 col-md-3" th:if="${vectorStore.isSqliteVec()}">
+                    <div class="text-muted">vec_version</div>
+                    <div class="fs-6 fw-semibold font-monospace" th:text="${vectorStore.vecVersion() ?: '—'}">—</div>
+                </div>
+                <div class="col-6 col-md-3" th:if="${vectorStore.isSqliteVec()}">
+                    <div class="text-muted">차원</div>
+                    <div class="fs-5 fw-semibold" th:text="${vectorStore.dimension() ?: '—'}">—</div>
+                </div>
+            </div>
+
+            <!-- 버전별 청크 수 -->
+            <div th:if="${not #lists.isEmpty(vectorStore.perVersion())}" class="mt-3">
+                <div class="text-muted small mb-1">버전별 청크 수</div>
+                <div class="d-flex flex-wrap gap-2">
+                    <span th:each="v : ${vectorStore.perVersion()}"
+                          class="badge bg-secondary">
+                        <span th:text="${v.version()}">version</span>
+                        <span class="badge bg-light text-dark ms-1" th:text="${v.chunkCount()}">0</span>
+                    </span>
                 </div>
             </div>
         </div>
-
-        <!-- ── Right: Chunk Panel ─────────────────────────────────────── -->
-        <div class="col-md-8 col-lg-9">
-
-            <!-- Loading spinner -->
-            <div id="chunk-spinner" class="htmx-indicator text-center py-5">
-                <div class="spinner-border spinner-border-sm text-secondary" role="status"></div>
-                <div class="small text-muted mt-2">청크 로딩 중...</div>
-            </div>
-
-            <!-- Chunk panel (HTMX target) -->
-            <div id="chunk-panel">
-                <div class="card">
-                    <div class="card-body text-center text-muted py-5">
-                        <i class="bi bi-arrow-left-circle fs-2 mb-2 d-block"></i>
-                        <div class="small">왼쪽에서 컬렉션을 선택하면 청크를 조회할 수 있습니다.</div>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div><!-- /row -->
+    </div>
 
     <!-- ── Document Registry ────────────────────────────────────────────── -->
-    <div class="card mt-4">
+    <div class="card mb-4">
         <div class="card-header d-flex align-items-center py-2">
             <i class="bi bi-archive me-2"></i>
             <span class="fw-semibold small">문서 레지스트리</span>
@@ -109,7 +105,7 @@
                     <tr th:each="doc : ${documents}">
                         <td th:text="${doc.filename()}"></td>
                         <td><span class="badge bg-secondary" th:text="${doc.version()}"></span></td>
-                        <td class="text-center" th:text="${doc.chunks()}"></td>
+                        <td class="text-center" style="min-width:45px;" th:text="${doc.chunks()}"></td>
                         <td class="text-muted" style="font-size:0.7rem;" th:text="${doc.docId()}"></td>
                         <td class="text-muted" th:text="${doc.indexedAt() != null ? doc.indexedAt().substring(0,19).replace('T',' ') : ''}"></td>
                         <td class="text-center">
@@ -136,6 +132,71 @@
         </div>
     </div>
 
+    <!-- ── 컬렉션(chroma) / 버전(sqlite-vec) 청크 브라우저 ──────────────────── -->
+    <div class="row g-4">
+
+        <!-- ── Left: Collections / Versions ────────────────────────────── -->
+        <div class="col-md-4 col-lg-3">
+            <div class="card h-100">
+                <div class="card-header d-flex align-items-center justify-content-between py-2">
+                    <span class="fw-semibold small">
+                        <i class="bi bi-database me-1"></i>
+                        <span th:text="${vectorStore.isSqliteVec()} ? '버전 (sqlite-vec)' : 'ChromaDB 컬렉션'">컬렉션</span>
+                    </span>
+                    <a href="/admin" class="btn btn-sm btn-outline-secondary py-0 px-2 small">새로고침</a>
+                </div>
+                <div class="card-body p-0">
+                    <div th:if="${#lists.isEmpty(collections)}"
+                         class="text-muted small p-3 text-center">항목이 없습니다.</div>
+                    <div class="list-group list-group-flush" th:unless="${#lists.isEmpty(collections)}">
+                        <button th:each="col : ${collections}"
+                                type="button"
+                                class="list-group-item list-group-item-action collection-btn px-3 py-2"
+                                th:data-collection="${col.name()}"
+                                th:data-version="${col.version()}"
+                                hx-get="/admin/chunks"
+                                th:hx-vals="|{&quot;collection&quot;: &quot;${col.name()}&quot;}|"
+                                hx-target="#chunk-panel"
+                                hx-swap="innerHTML"
+                                hx-indicator="#chunk-spinner">
+                            <div class="d-flex justify-content-between align-items-center">
+                                <div>
+                                    <div class="small fw-semibold" th:text="${col.version()}">version</div>
+                                    <div th:if="${vectorStore.isChroma()}"
+                                         class="text-muted" style="font-size:0.7rem;" th:text="${col.name()}">collection</div>
+                                </div>
+                                <span class="badge bg-secondary rounded-pill"
+                                      th:text="${col.chunkCount()}">0</span>
+                            </div>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ── Right: Chunk Panel ─────────────────────────────────────── -->
+        <div class="col-md-8 col-lg-9 position-relative">
+
+            <!-- Loading spinner -->
+            <div id="chunk-spinner"
+                 class="htmx-indicator position-absolute top-0 start-0 w-100 h-100 d-flex flex-column justify-content-center align-items-center"
+                  style="pointer-events:none; z-index:2; background:rgba(var(--bs-body-bg-rgb),0.35);">
+                <div class="spinner-border spinner-border-sm text-secondary" role="status"></div>
+                <div class="small text-muted mt-2">청크 로딩 중...</div>
+            </div>
+
+            <!-- Chunk panel (HTMX target) -->
+            <div id="chunk-panel">
+                <div class="card">
+                    <div class="card-body text-center text-muted py-5">
+                        <i class="bi bi-arrow-left-circle fs-2 mb-2 d-block"></i>
+                        <div class="small">왼쪽에서 컬렉션을 선택하면 청크를 조회할 수 있습니다.</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div><!-- /row -->
+
 </div><!-- /container -->
 
 <!-- ── Edit Offcanvas ──────────────────────────────────────────────────── -->
@@ -152,6 +213,11 @@
 
 <!-- ── Page scripts ────────────────────────────────────────────────────── -->
 <th:block layout:fragment="scripts">
+<script th:inline="javascript">
+// Active vector store backend — sqlite-vec uses the version string as the "collection"
+// identifier (vec0 partition key); chroma uses the "manual_<version>" collection name.
+const IS_SQLITE_VEC = /*[[${vectorStore.isSqliteVec()}]]*/ false;
+</script>
 <script>
 // Highlight selected collection button
 document.querySelectorAll('.collection-btn').forEach(function (btn) {
@@ -165,7 +231,7 @@ document.querySelectorAll('.collection-btn').forEach(function (btn) {
 function loadChunksByDoc(btn) {
     const docId   = btn.getAttribute('data-doc-id');
     const version = btn.getAttribute('data-version');
-    const colName = 'manual_' + version;
+    const colName = IS_SQLITE_VEC ? version : ('manual_' + version);
     const url = '/admin/chunks?collection=' + encodeURIComponent(colName)
               + '&docId=' + encodeURIComponent(docId);
 

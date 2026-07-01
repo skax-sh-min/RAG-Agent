@@ -10,5 +10,6 @@ public record DocumentInfo(
         int chunks,
         @JsonProperty("indexed_at") String indexedAt,
         String sha256,
+        List<String> tags,
         List<String> errors
 ) {}

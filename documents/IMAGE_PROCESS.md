@@ -146,7 +146,7 @@ public record AgentState(
 public record ChatResponse(
     String answer,
     @JsonProperty("question_type") String questionType,
-    List<SourceRef> sources,                              // UI step 18에서 SourceRef로 전환 완료
+    List<SourceRef> sources,                              // SourceRef 구조로 출처 메타데이터 전달
     @JsonProperty("image_refs") List<String> imageRefs,   // /api/images/... URL 목록 (미구현)
     ...
 )

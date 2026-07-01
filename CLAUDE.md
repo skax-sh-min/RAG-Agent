@@ -52,7 +52,7 @@ Flow:
 | `security/PromptInjectionGuard.java` | `validate()` length/blank check (MAX=2000); `wrap()` for delimiter isolation; `maskApiKey()` for safe logging |
 | `service/AnswerService.java` | 2-call pattern: answer + sufficiency; PROGRESSIVE upgrade; DUAL branch; `truncate()` caps at 20,000 chars |
 | `service/AgentService.java` | Entry point; `PromptInjectionGuard.validate()` at entry; parallel history + classify before graph |
-| `service/StreamingAgentService.java` | SSE pipeline; Virtual Thread worker; heartbeat every 15 s; partial answer persisted on error (B-13) |
+| `service/StreamingAgentService.java` | SSE pipeline; Virtual Thread worker; heartbeat every 15 s; partial answer persisted on error) |
 | `service/ClassifierService.java` | `classifyOnly(String)` (no token accumulation) + `execute(AgentState)` |
 | `service/RetrievalService.java` | Batch MultiQuery search → RRF fusion; retry escalation (`candidateK = min(topK×(retryCount+1), topK×3)`); optional rerank via injected `Optional<RerankerService>` |
 | `service/RerankerService.java` | LLM reranking (opt-in, `@ConditionalOnProperty app.search-rerank-enabled`); one LLM call reorders the candidate pool by relevance then cuts to topK; `parseRanking()` parses a JSON index array with range/dup filtering; falls back to original RRF order on parse failure |
@@ -79,7 +79,7 @@ Flow:
 docker-compose up chroma
 
 # Run app (LM Studio or LLM key)
-./mvnw spring-boot:run
+./mvn spring-boot:run
 ```
 
 ## Key Constraints
@@ -100,4 +100,4 @@ docker-compose up chroma
 - `PromptInjectionGuard.wrap()` is implemented but not yet wired into prompts — deferred to 05-prompt-externalization.md
 - `app.auth.enabled=false` → CSRF disabled, `SessionCreationPolicy.STATELESS`, `NoAuthAutoLoginFilter` active; guest userId constant = `NoAuthAutoLoginFilter.GUEST_ID`; admin path (`/admin/**`) auto-authenticates as first DB `ROLE_ADMIN` user
 - `GlobalModelAdvice.authEnabled()` is computed per-request (not in constructor) to avoid NPE when `AppProperties` is mocked in `@WebMvcTest`
-- Vector store backend (Phase 5): `app.vectorstore.type=chroma|sqlite-vec`, wired by `VectorStoreProviderConfig` (one `VectorStoreProvider` bean per mode). Chroma-only beans — `ChromaConfig`/`ChromaApi`, `VectorStoreRegistry`, `ChromaHealthChecker`, `VectorStoreWarmup`, `chromaVectorStoreProvider` — are `@ConditionalOnProperty(name="app.vectorstore.type", havingValue="chroma", matchIfMissing=true)`, so sqlite-vec mode starts without ChromaDB. sqlite-vec requires an operator-provided `vec0` native binary (`SQLITE_VEC_EXTENSION_PATH`, loaded via `DataSourceConfig.configureSqliteVec`) + `app.embedding.dimensions`; `AdminService` takes `Optional<ChromaApi>` (chunk browsing unsupported on sqlite-vec). Switching backends needs full re-indexing (vectors are not shared)
+- Vector store backend (Phase 5): `app.vectorstore.type=chroma|sqlite-vec`, wired by `VectorStoreProviderConfig` (one `VectorStoreProvider` bean per mode). Chroma-only beans — `ChromaConfig`/`ChromaApi`, `VectorStoreRegistry`, `ChromaHealthChecker`, `VectorStoreWarmup`, `chromaVectorStoreProvider` — are `@ConditionalOnProperty(name="app.vectorstore.type", havingValue="chroma", matchIfMissing=true)`, so sqlite-vec mode starts without ChromaDB. sqlite-vec requires an operator-provided `vec0` native binary (`SQLITE_VEC_EXTENSION_PATH`, loaded via `DataSourceConfig.configureSqliteVec`) + `app.embedding.dimensions`; `AdminService` injects `Optional<ChromaApi>` + `JdbcTemplate`/`AppProperties`/`ObjectMapper` and serves `/admin` for both backends (chroma via `ChromaApi`, sqlite-vec via the `vec_document_chunks` table) plus a backend-agnostic status view (`vectorStoreView()` → `VectorStoreAdminView`); on sqlite-vec the UI "collection" identifier is the version string. Switching backends needs full re-indexing (vectors are not shared)

@@ -3,7 +3,7 @@
 <body>
 <tbody th:fragment="body" id="doc-table-body">
     <tr th:if="${#lists.isEmpty(documents)}">
-        <td colspan="5" class="text-center text-muted py-4"
+        <td colspan="6" class="text-center text-muted py-4"
             th:text="#{doc.list.empty}">No documents indexed.</td>
     </tr>
     <tr th:each="doc : ${documents}"
@@ -20,6 +20,11 @@
             </div>
         </td>
         <td th:text="${doc.version}">버전</td>
+        <td>
+            <span th:if="${doc.tags == null or #lists.isEmpty(doc.tags)}" class="text-muted">-</span>
+            <span th:each="tag : ${doc.tags}" class="badge text-bg-light border me-1 mb-1"
+                  th:text="${tag}">tag</span>
+        </td>
         <td th:text="${doc.chunks}">청크</td>
         <td th:text="${doc.indexedAt}">시각</td>
         <td>

@@ -22,7 +22,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * S-2 — 재시도 시 topK 에스컬레이션 검증.
+ * 재시도 시 topK 에스컬레이션 검증.
  */
 class RetrievalServiceEscalationTest {
 

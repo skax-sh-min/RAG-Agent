@@ -35,6 +35,17 @@ class GlobalExceptionHandlerTest {
 
         @GetMapping("/test/llm-exhausted")
         void llmExhausted() { throw new LlmProviderExhaustedException("all providers blocked"); }
+
+        @GetMapping("/test/unexpected")
+        void unexpected() { throw new RuntimeException("boom"); }
+
+        @GetMapping(value = "/test/sse-unexpected", produces = "text/event-stream")
+        void sseUnexpected() { throw new RuntimeException("sse boom"); }
+
+        @GetMapping("/test/client-abort")
+        void clientAbort() {
+            throw new RuntimeException("wrapper", new java.io.IOException("Broken pipe"));
+        }
     }
 
     private MockMvc mvc;
@@ -103,5 +114,29 @@ class GlobalExceptionHandlerTest {
         mvc.perform(get("/test/invalid-question").header("X-Trace-Id", "test-trace-42"))
                 .andExpect(header().string("X-Trace-Id", "test-trace-42"))
                 .andExpect(jsonPath("$.traceId").value("test-trace-42"));
+    }
+
+    @Test
+    @DisplayName("예상치 못한 예외(일반 요청) → 500 + ProblemDetail")
+    void unexpectedException_returns500ProblemDetail() throws Exception {
+        mvc.perform(get("/test/unexpected"))
+                .andExpect(status().isInternalServerError())
+                .andExpect(jsonPath("$.errorCode").value("RAG-INT-001"));
+    }
+
+    @Test
+    @DisplayName("SSE 요청에서 예외 발생 시 ProblemDetail 본문 없이 500")
+    void sseUnexpected_returns500WithoutProblemDetailBody() throws Exception {
+        mvc.perform(get("/test/sse-unexpected").header("Accept", "text/event-stream"))
+                .andExpect(status().isInternalServerError())
+                .andExpect(content().string(""));
+    }
+
+    @Test
+    @DisplayName("클라이언트 연결 종료 예외는 204로 정리")
+    void clientAbort_returns204() throws Exception {
+        mvc.perform(get("/test/client-abort"))
+                .andExpect(status().isNoContent())
+                .andExpect(content().string(""));
     }
 }

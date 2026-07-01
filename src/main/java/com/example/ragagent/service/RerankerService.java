@@ -13,7 +13,7 @@ import java.util.List;
 import java.util.Locale;
 
 /**
- * R-3: LLM-based reranking of retrieved document candidates.
+ * LLM-based reranking of retrieved document candidates.
  *
  * <p>Uses a single LLM call to score and reorder candidates by relevance to the question,
  * then returns the top-k. Registered as a bean only when reranking is enabled

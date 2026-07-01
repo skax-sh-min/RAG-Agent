@@ -73,16 +73,19 @@ public class DocumentController {
     public ResponseEntity<Map<String, String>> uploadDocument(
             ThreadContext ctx,
             @RequestParam MultipartFile file,
-            @RequestParam(defaultValue = "latest") String version) throws IOException {
+            @RequestParam(defaultValue = "latest") String version,
+            @RequestParam(required = false) String tags) throws IOException {
         if (file.isEmpty()) {
             return ResponseEntity.badRequest().build();
         }
         String filename;
         Path tmp;
+        final List<String> tagList;
         try {
             filename = UploadValidator.sanitizeFilename(file.getOriginalFilename());
             UploadValidator.checkExtension(filename);
             tmp = UploadValidator.stageToTemp(file, filename);
+            tagList = TagUtils.parseCsv(tags);   // 검증 실패 시 IllegalArgumentException → 400
         } catch (UnsupportedFileTypeException e) {
             log.warn("Rejected upload: {}", e.getMessage());
             return ResponseEntity.unprocessableEntity().build();
@@ -98,7 +101,7 @@ public class DocumentController {
 
         Thread.ofVirtual().name("idx-upload-" + taskId).start(() -> {
             try {
-                DocumentInfo info = ragService.indexDocument(userId, tmpPath, fname, ver,
+                DocumentInfo info = ragService.indexDocument(userId, tmpPath, fname, ver, tagList,
                         event -> progressService.publish(taskId, event));
                 progressService.publish(taskId, IndexingProgressEvent.done(info));
                 auditLogger.log("document.upload", info.docId(),
@@ -167,6 +170,20 @@ public class DocumentController {
         return "fragments/doc-table-body :: body";
     }
 
+    /** Distinct tags in use (optional version scope) — powers tag-suggestion chips on upload/chat. */
+    @GetMapping("/api/v1/tags")
+    @ResponseBody
+    public List<String> listTags(@RequestParam(required = false) String version) {
+        return ragService.listTags(version);
+    }
+
+    /** Distinct versions in use for version-selector UI. */
+    @GetMapping("/api/v1/versions")
+    @ResponseBody
+    public List<String> listVersions() {
+        return ragService.listVersions();
+    }
+
     // ── REST API ──────────────────────────────────────────────────────
 
     @PostMapping("/api/v1/documents")
@@ -174,16 +191,19 @@ public class DocumentController {
     public ResponseEntity<DocumentInfo> uploadDocumentApi(
             ThreadContext ctx,
             @RequestParam("file") MultipartFile file,
-            @RequestParam(value = "version", defaultValue = "latest") String version) throws IOException {
+            @RequestParam(value = "version", defaultValue = "latest") String version,
+            @RequestParam(value = "tags", required = false) String tags) throws IOException {
 
         if (file.isEmpty()) return ResponseEntity.badRequest().build();
 
         String filename;
         Path staged;
+        final List<String> tagList;
         try {
             filename = UploadValidator.sanitizeFilename(file.getOriginalFilename());
             UploadValidator.checkExtension(filename);
             staged = UploadValidator.stageToTemp(file, filename);
+            tagList = TagUtils.parseCsv(tags);   // 검증 실패 시 → 400
         } catch (UnsupportedFileTypeException e) {
             log.warn("Rejected upload: {}", e.getMessage());
             return ResponseEntity.unprocessableEntity().build();
@@ -206,7 +226,8 @@ public class DocumentController {
             if (Files.exists(dest) && computeSha256(staged).equals(computeSha256(dest))) {
                 log.debug("Upload no-op: identical content for {}", filename);
                 Files.deleteIfExists(staged);
-                DocumentInfo existing = ragService.indexDocument(userId, dest, version);
+                DocumentInfo existing = ragService.indexDocument(userId, dest,
+                        dest.getFileName().toString(), version, tagList, e -> {});
                 auditLogger.log("document.upload", existing.docId(),
                         Map.of("filename", filename, "version", version, "chunks", existing.chunks()));
                 return ResponseEntity.ok(existing);
@@ -215,7 +236,8 @@ public class DocumentController {
                 dest = versionedPath(dest);
             }
             Files.copy(staged, dest, StandardCopyOption.REPLACE_EXISTING);
-            DocumentInfo info = ragService.indexDocument(userId, dest, version);
+            DocumentInfo info = ragService.indexDocument(userId, dest,
+                    dest.getFileName().toString(), version, tagList, e -> {});
             auditLogger.log("document.upload", info.docId(),
                     Map.of("filename", filename, "version", version, "chunks", info.chunks()));
             return ResponseEntity.ok(info);

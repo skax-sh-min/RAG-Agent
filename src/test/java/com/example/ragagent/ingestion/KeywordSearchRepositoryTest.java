@@ -17,7 +17,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /**
- * R-2 회귀 — FTS5 키워드 인덱스 (인덱싱 / BM25 검색 / 버전 필터 / 삭제 / MATCH 빌더).
+ * 회귀 — FTS5 키워드 인덱스 (인덱싱 / BM25 검색 / 버전 필터 / 삭제 / MATCH 빌더).
  */
 class KeywordSearchRepositoryTest {
 
@@ -47,6 +47,32 @@ class KeywordSearchRepositoryTest {
                         MetaKey.CHUNK_INDEX, chunkIndex,
                         MetaKey.EXCERPT_KEYWORDS, keywords))
                 .build();
+    }
+
+    private Document taggedChunk(String springId, String docId, String version, int chunkIndex,
+                                 String content, String tagsCsv) {
+        java.util.Map<String, Object> m = new java.util.HashMap<>();
+        m.put(MetaKey.DOC_ID, docId);
+        m.put(MetaKey.VERSION, version);
+        m.put(MetaKey.FILENAME, "manual.pdf");
+        m.put(MetaKey.PAGE_OR_SLIDE, "1");
+        m.put(MetaKey.CHUNK_INDEX, chunkIndex);
+        m.put(MetaKey.EXCERPT_KEYWORDS, "kw");
+        m.put(MetaKey.TAGS, tagsCsv);
+        return Document.builder().id(springId).text(content).metadata(m).build();
+    }
+
+    @Test
+    @DisplayName("distinctTags — doc_tags에서 정렬·중복 제거, 버전 스코프 적용")
+    void distinctTags_collectsAndScopes() {
+        repo.indexChunks(List.of(
+                taggedChunk("s1", "D1", "v1", 0, "내용 알파", "billing,policy"),
+                taggedChunk("s2", "D1", "v1", 1, "내용 베타", "policy"),
+                taggedChunk("s3", "D2", "v2", 0, "내용 감마", "onboarding")));
+
+        assertThat(repo.distinctTags(null)).containsExactly("billing", "onboarding", "policy");
+        assertThat(repo.distinctTags("v1")).containsExactly("billing", "policy");
+        assertThat(repo.distinctTags("v2")).containsExactly("onboarding");
     }
 
     @Test

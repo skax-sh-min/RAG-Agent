@@ -49,7 +49,7 @@ public class DocumentIndexer {
     private final LlmRouter llmRouter;
     private final AppProperties props;
 
-    // B-24/B-25: single daemon thread for keyword-extraction timeout signals
+    // single daemon thread for keyword-extraction timeout signals
     private final ScheduledExecutorService timeoutScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
         Thread t = new Thread(r, "kw-timeout");
         t.setDaemon(true);
@@ -142,7 +142,7 @@ public class DocumentIndexer {
         req.onProgress().accept(IndexingProgressEvent.of("chunking", 0, chunks.size(), req.filename(),
                 chunks.size() + "개 청크"));
 
-        List<Document> tagged = tagMetadata(chunks, docId, req.filename(), req.version(), docType, sha256, DocRegistry.SHARED);
+        List<Document> tagged = tagMetadata(chunks, docId, req.filename(), req.version(), docType, sha256, DocRegistry.SHARED, req.tags());
 
         log.debug("[INDEX] {} 키워드 추출 중 ({}개 청크, 병렬)...", req.filename(), tagged.size());
         Semaphore gate = req.parallelGate() != null
@@ -154,7 +154,7 @@ public class DocumentIndexer {
         req.onProgress().accept(IndexingProgressEvent.of("storing", enriched.size(), enriched.size(),
                 req.filename(), "벡터 DB 저장 중..."));
         vectorStore.add(DocRegistry.SHARED, req.version(), enriched);
-        keywordRepo.indexChunks(enriched);   // R-2: populate FTS keyword index
+        keywordRepo.indexChunks(enriched);   // populate FTS keyword index
 
         List<String> docIds = enriched.stream().map(Document::getId).toList();
         DocRegistry.DocRegistryEntry entry = new DocRegistry.DocRegistryEntry(
@@ -168,7 +168,9 @@ public class DocumentIndexer {
 
         log.info("[INDEX] 완료: {} → {}개 청크, {}ms", req.filename(), tagged.size(), System.currentTimeMillis() - t0);
         return new DocumentInfo(docId, req.filename(), req.version(), tagged.size(),
-                entry.indexedAt(), sha256, List.of());
+            entry.indexedAt(), sha256,
+            List.copyOf(new LinkedHashSet<>(req.tags() == null ? List.of() : req.tags())),
+            List.of());
     }
 
     /**
@@ -199,7 +201,7 @@ public class DocumentIndexer {
         List<Document> rawDocs = loaderService.loadFromMarkdown(md);
         List<Document> chunks  = splitDocuments(rawDocs, filename, props.chunkSize(), props.chunkOverlap());
         log.debug("[REINDEX] 청크 분할: {}섹션 → {}청크", rawDocs.size(), chunks.size());
-        List<Document> tagged  = tagMetadata(chunks, docId, filename, version, docType, sha256, DocRegistry.SHARED);
+        List<Document> tagged  = tagMetadata(chunks, docId, filename, version, docType, sha256, DocRegistry.SHARED, java.util.List.of());
 
         deleteExistingVectorsOnly(DocRegistry.SHARED, docId, version);
 
@@ -209,7 +211,7 @@ public class DocumentIndexer {
 
         log.debug("[REINDEX] 벡터 스토어 저장 중: {}개 청크", enriched.size());
         vectorStore.add(DocRegistry.SHARED, version, enriched);
-        keywordRepo.indexChunks(enriched);   // R-2: populate FTS keyword index
+        keywordRepo.indexChunks(enriched);   // populate FTS keyword index
 
         List<String> springIds = enriched.stream().map(Document::getId).toList();
         docRegistry.put(docId, DocRegistry.SHARED, new DocRegistry.DocRegistryEntry(
@@ -336,7 +338,10 @@ public class DocumentIndexer {
     }
 
     private List<Document> tagMetadata(List<Document> chunks, String docId, String filename,
-                                        String version, String docType, String sha256, String ownerId) {
+                                        String version, String docType, String sha256, String ownerId,
+                                        List<String> tags) {
+        // comma-joined storage form (matches the image_paths convention; backend-neutral).
+        String tagsMeta = com.example.ragagent.model.TagUtils.toMetaValue(tags);
         List<Document> tagged = new ArrayList<>(chunks.size());
         for (int i = 0; i < chunks.size(); i++) {
             Document chunk = chunks.get(i);
@@ -349,9 +354,10 @@ public class DocumentIndexer {
             meta.put(MetaKey.COLLECTED_AT, Instant.now().toString());
             meta.putIfAbsent(MetaKey.SOURCE_TYPE,   "file");
             meta.putIfAbsent(MetaKey.PAGE_OR_SLIDE, i + 1);
-            meta.put(MetaKey.CHUNK_INDEX,  i);   // R-4: stable per-chunk key (separate from page)
+            meta.put(MetaKey.CHUNK_INDEX,  i);   // stable per-chunk key (separate from page)
             meta.put(MetaKey.OWNER_ID,     ownerId);
             meta.putIfAbsent(MetaKey.VISIBILITY, "private");
+            if (!tagsMeta.isEmpty()) meta.put(MetaKey.TAGS, tagsMeta);
             tagged.add(new Document(chunk.getText(), meta));
         }
         return tagged;
@@ -369,7 +375,7 @@ public class DocumentIndexer {
                 vectorStore.deleteByDocIds(userId, version, e.springDocIds());
             }
         });
-        keywordRepo.deleteByDocId(docId);   // R-2: keep FTS index in sync
+        keywordRepo.deleteByDocId(docId);   // keep FTS index in sync
     }
 
     private void deleteDocFiles(String userId, String docId) {
@@ -432,8 +438,8 @@ public class DocumentIndexer {
                 %s
                 [/DOCUMENT]""".formatted(safeText);
         int timeoutSec = props.indexingSafe().keywordTimeoutSeconds();
-        // B-24: called inside a VT from enrichParallel — invoke directly, no ForkJoinPool
-        // B-25: interrupt this thread on timeout so the blocking HTTP call is actually cancelled
+        // called inside a VT from enrichParallel — invoke directly, no ForkJoinPool
+        // interrupt this thread on timeout so the blocking HTTP call is actually cancelled
         Thread self = Thread.currentThread();
         ScheduledFuture<?> killer = timeoutScheduler.schedule(self::interrupt, timeoutSec, TimeUnit.SECONDS);
         try {

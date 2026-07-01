@@ -6,7 +6,7 @@ import org.junit.jupiter.api.Test;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * QA — VectorStoreRegistry.collectionName (B-08)
+ * QA — VectorStoreRegistry.collectionName 
  *
  * Verifies Chroma constraints:
  *   - format: u_{userId8}_{version}

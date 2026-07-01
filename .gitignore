@@ -39,3 +39,5 @@ refactoring/
 .idea/
 
 QA-Report.md
+
+lib/

@@ -4,6 +4,7 @@ import com.example.ragagent.config.AppProperties;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.ai.document.Document;
 import org.mockito.ArgumentCaptor;
 import org.springframework.ai.embedding.EmbeddingModel;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -11,8 +12,13 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.atLeast;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -57,6 +63,52 @@ class SqliteVecVectorStoreProviderTest {
         provider().add("u", "v1", List.of());
         verifyNoInteractions(embeddingModel);
         verifyNoInteractions(jdbc);
+    }
+
+    @Test
+    @DisplayName("add: 배치 임베딩 token limit 초과 시 개별 축소 재시도로 복구")
+    void addFallsBackWhenEmbeddingInputTooLarge() {
+        SqliteVecVectorStoreProvider p = provider();
+        Document doc = Document.builder()
+                .id("d1")
+                .text("x".repeat(220))
+                .metadata(java.util.Map.of("doc_id", "doc-1"))
+                .build();
+
+        when(embeddingModel.embed(anyList()))
+                .thenThrow(new RuntimeException("input (515 tokens) is too large to process. increase the physical batch size (current batch size: 512)"));
+        when(embeddingModel.embed(anyString())).thenAnswer(invocation -> {
+            String s = invocation.getArgument(0, String.class);
+            if (s.length() > 140) {
+                throw new RuntimeException("too large to process");
+            }
+            return new float[]{0.1f, 0.2f};
+        });
+
+        p.add("u", "v1", List.of(doc));
+
+        verify(embeddingModel, times(1)).embed(anyList());
+        verify(embeddingModel, atLeast(2)).embed(anyString());
+        verify(jdbc, times(1)).batchUpdate(eq("INSERT INTO vec_embeddings(spring_doc_id, version, embedding) VALUES (?, ?, ?)"), any(org.springframework.jdbc.core.BatchPreparedStatementSetter.class));
+        verify(jdbc, times(1)).batchUpdate(eq("INSERT INTO vec_document_chunks(spring_doc_id, content, metadata, version, doc_id, created_at) VALUES (?, ?, ?, ?, ?, ?)"), anyList());
+    }
+
+    @Test
+    @DisplayName("add: token-limit 오류가 아니면 즉시 예외 전파")
+    void addPropagatesNonTokenLimitError() {
+        SqliteVecVectorStoreProvider p = provider();
+        Document doc = Document.builder()
+                .id("d1")
+                .text("hello")
+                .metadata(java.util.Map.of())
+                .build();
+
+        when(embeddingModel.embed(anyList()))
+                .thenThrow(new RuntimeException("connection reset"));
+
+        assertThatThrownBy(() -> p.add("u", "v1", List.of(doc)))
+                .isInstanceOf(RuntimeException.class)
+                .hasMessageContaining("connection reset");
     }
 
     @Test

@@ -29,7 +29,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  *  - DELETE /ui/threads/{id} → 200 OK
  *  - PATCH /ui/threads/{id}/routing-mode → 204 No Content
  */
-@WebMvcTest(OperationsController.class)
+@WebMvcTest(value = OperationsController.class, properties = "app.auth.enabled=true")
 @Import({com.example.ragagent.context.WebMvcConfig.class, com.example.ragagent.security.SecurityConfig.class})
 @WithMockUser
 class OperationsControllerHtmxTest {
