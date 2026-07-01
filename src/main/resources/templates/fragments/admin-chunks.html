@@ -84,29 +84,29 @@
             <tbody>
             <tr th:each="chunk : ${chunks}">
                 <!-- ID (truncated) -->
-                <td class="text-muted font-monospace" style="font-size:0.68rem; word-break:break-all;"
+                <td class="text-muted font-monospace" style="font-size:0.68rem; word-break:break-all;min-width:60px;"
                     th:title="${chunk.id()}" th:text="${#strings.abbreviate(chunk.id(), 12)}"></td>
 
                 <!-- Text preview -->
                 <td>
-                    <div class="text-truncate" style="max-width:380px;"
+                    <div class="text-truncate" style="max-width:350px;"
                          th:title="${chunk.textPreview()}"
                          th:text="${chunk.textPreview()}"></div>
                 </td>
 
                 <!-- Chunk size (characters) -->
-                <td class="text-end text-muted" th:text="${chunk.chunkSize()}"></td>
+                <td class="text-center text-muted" style="min-width:50px;" th:text="${chunk.chunkSize()}"></td>
 
                 <!-- Filename -->
-                <td class="text-muted text-truncate" style="max-width:110px;"
+                <td class="text-muted text-truncate" style="min-width:60px;max-width:150px;"
                     th:title="${chunk.filename()}"
                     th:text="${chunk.filename()}"></td>
 
                 <!-- Page/Slide -->
-                <td class="text-center text-muted" th:text="${chunk.pageSlide()}"></td>
+                <td class="text-center text-muted" style="min-width:50px;" th:text="${chunk.pageSlide()}"></td>
 
                 <!-- Keywords (first 60 chars) -->
-                <td class="text-muted text-truncate" style="max-width:130px;"
+                <td class="text-muted text-truncate" style="min-width:60px;max-width:180px;"
                     th:title="${chunk.keywords()}"
                     th:text="${#strings.abbreviate(chunk.keywords(), 60)}"></td>
 

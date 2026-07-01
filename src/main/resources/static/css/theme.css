@@ -2,10 +2,12 @@
 :root {
     --bg-page:        #ffffff;
     --bg-elevated:    #f8f9fa;
+    --bg-table-head:  #eef3f8;
     --bg-bubble-user: #0d6efd;
     --bg-bubble-bot:  #ffffff;
     --fg-primary:     #212529;
     --fg-muted:       #6c757d;
+    --fg-table-head:  #1f2937;
     --border-default: #dee2e6;
     --code-bg:        #f6f8fa;
     --thread-hover:   #f0f4ff;
@@ -17,10 +19,12 @@
 [data-theme="dark"] {
     --bg-page:        #0d1117;
     --bg-elevated:    #161b22;
+    --bg-table-head:  #2a3748;
     --bg-bubble-user: #1f6feb;
     --bg-bubble-bot:  #161b22;
     --fg-primary:     #e6edf3;
     --fg-muted:       #8b949e;
+    --fg-table-head:  #f4f8ff;
     --border-default: #30363d;
     --code-bg:        #1e242c;
     --thread-hover:   #1c2128;
@@ -148,6 +152,12 @@ body { background: var(--bg-page); color: var(--fg-primary); }
 }
 
 /* Tables */
+[data-theme="dark"] .table > thead > tr > th,
+.table > thead > tr > th {
+    background-color: var(--bg-table-head) !important;
+    color: var(--fg-table-head) !important;
+}
+
 [data-theme="dark"] .table {
     --bs-table-bg:            transparent;
     --bs-table-border-color:  var(--border-default);
