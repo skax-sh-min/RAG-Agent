@@ -25,7 +25,7 @@
             </div>
 
 
-            <!-- New chat + version -->
+            <!-- New chat -->
             <div class="d-flex align-items-center gap-2 mb-2">
                 <form th:action="@{/ui/chat/new}" method="post" class="flex-grow-1">
                     <button type="submit" class="btn btn-sm btn-primary w-100">
@@ -33,10 +33,6 @@
                         <span th:text="#{chat.new}">New Chat</span>
                     </button>
                 </form>
-                <input id="version-input" type="text" class="form-control form-control-sm"
-                       style="width: 80px;"
-                       th:value="${version}"
-                       th:placeholder="#{chat.version.placeholder}"/>
             </div>
 
             <!-- Routing strategy selector -->
@@ -200,11 +196,21 @@
                     <input type="hidden" id="form-version" name="version" th:value="${version}"/>
                     <input type="hidden" id="form-routing-mode" name="routingMode" th:value="${routingMode}"/>
                     <input type="hidden" id="form-direct-mode" name="directMode" value="false"/>
-                    <!-- 검색 스코프 태그 (쉼표 구분, 비우면 전체 검색) -->
                     <div class="input-group input-group-sm mb-1">
+                        <!-- 버전: 하나만 선택 (태그 입력 왼쪽) -->
+                        <span class="input-group-text">Version</span>
+                        <select id="version-input" class="form-select" style="max-width: 100px;">
+                            <option th:value="${version}" th:text="${version}" selected>latest</option>
+                        </select>
+
+                        <!-- 검색 스코프 태그 입력 (쉼표 구분, 비우면 전체 검색) -->
                         <span class="input-group-text" th:title="#{chat.tags.tooltip}">
                             <i class="bi bi-tags"></i>
                         </span>
+                        <!-- 태그 선택 콤보: 선택 시 입력란에 자동 추가 -->
+                        <select id="chat-tag-select" class="form-select" style="max-width: 120px;">
+                            <option value="" selected>태그 선택...</option>
+                        </select>
                         <input type="text" id="chat-tags-input" name="tags"
                                class="form-control"
                                th:placeholder="#{chat.tags.placeholder}"
@@ -269,11 +275,34 @@
         directLabel.classList.toggle('text-muted', !isDirect);
     });
 
-    /* Sync version input → hidden form field */
-    document.getElementById('version-input').addEventListener('change', function () {
-        document.getElementById('form-version').value = this.value;
+    const versionInput  = document.getElementById('version-input');
+    const tagSelect     = document.getElementById('chat-tag-select');
+
+    /* Sync version selector → hidden form field */
+    versionInput.addEventListener('change', function () {
+        const ver = (this.value || '').trim() || 'latest';
+        document.getElementById('form-version').value = ver;
         loadChatTagSuggestions();   // 버전 변경 시 해당 버전 태그로 갱신
     });
+
+    function loadVersionOptions() {
+        const current = (document.getElementById('form-version').value || 'latest').trim();
+        fetch('/api/v1/versions')
+            .then(r => r.ok ? r.json() : [])
+            .then(versions => {
+                const list = Array.isArray(versions) ? versions.filter(Boolean) : [];
+                if (!list.includes(current)) list.push(current);
+                if (!list.includes('latest')) list.push('latest');
+                list.sort();
+                versionInput.innerHTML = list.map(v =>
+                    `<option value="${escHtml(v)}">${escHtml(v)}</option>`).join('');
+                versionInput.value = current;
+            })
+            .catch(() => {
+                versionInput.innerHTML = `<option value="${escHtml(current)}">${escHtml(current)}</option>`;
+                versionInput.value = current;
+            });
+    }
 
     /* ── 등록된 태그 칩 (버전 스코프, 클릭하면 검색 범위 토글) ──────────────── */
     const chatTagsInput = document.getElementById('chat-tags-input');
@@ -285,6 +314,14 @@
         const tags = chatCurrentTags();
         const i = tags.indexOf(tag);
         if (i >= 0) tags.splice(i, 1); else tags.push(tag);
+        chatTagsInput.value = tags.join(', ');
+        chatSyncTagChips();
+    }
+    function chatAddTag(tag) {
+        const t = (tag || '').trim().toLowerCase();
+        if (!t) return;
+        const tags = chatCurrentTags();
+        if (!tags.includes(t)) tags.push(t);
         chatTagsInput.value = tags.join(', ');
         chatSyncTagChips();
     }
@@ -303,18 +340,34 @@
             .then(tags => {
                 const wrap  = document.getElementById('chat-tag-suggest');
                 const chips = document.getElementById('chat-tag-suggest-chips');
-                if (!tags || tags.length === 0) { wrap.classList.add('d-none'); chips.innerHTML = ''; return; }
+                if (!tags || tags.length === 0) {
+                    wrap.classList.add('d-none');
+                    chips.innerHTML = '';
+                    tagSelect.innerHTML = '<option value="" selected>태그 선택...</option>';
+                    return;
+                }
                 chips.innerHTML = tags.map(t =>
                     `<button type="button" class="btn btn-sm btn-outline-secondary py-0 px-2"
                              style="font-size:0.72rem;" data-tag="${escHtml(t)}">${escHtml(t)}</button>`).join('');
                 chips.querySelectorAll('[data-tag]').forEach(btn =>
                     btn.addEventListener('click', () => chatToggleTag(btn.dataset.tag)));
+
+                const opts = ['<option value="" selected>태그 선택...</option>']
+                    .concat(tags.map(t => `<option value="${escHtml(t)}">${escHtml(t)}</option>`));
+                tagSelect.innerHTML = opts.join('');
+
                 wrap.classList.remove('d-none');
                 chatSyncTagChips();
             })
             .catch(() => {});
     }
+    tagSelect.addEventListener('change', function () {
+        if (!this.value) return;
+        chatAddTag(this.value);
+        this.value = '';
+    });
     chatTagsInput.addEventListener('input', chatSyncTagChips);
+    loadVersionOptions();
     loadChatTagSuggestions();
 
     /* Sync routing mode → hidden form field + PATCH thread if it exists */

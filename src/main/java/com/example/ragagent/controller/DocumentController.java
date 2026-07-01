@@ -177,6 +177,13 @@ public class DocumentController {
         return ragService.listTags(version);
     }
 
+    /** Distinct versions in use for version-selector UI. */
+    @GetMapping("/api/v1/versions")
+    @ResponseBody
+    public List<String> listVersions() {
+        return ragService.listVersions();
+    }
+
     // ── REST API ──────────────────────────────────────────────────────
 
     @PostMapping("/api/v1/documents")

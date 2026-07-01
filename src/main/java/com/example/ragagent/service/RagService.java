@@ -116,6 +116,17 @@ public class RagService {
         return keywordRepo.distinctTags(version);
     }
 
+    /** Distinct versions in use for version-selector UI. */
+    public List<String> listVersions() {
+        Set<String> versions = new HashSet<>();
+        for (Map.Entry<String, DocRegistry.DocRegistryEntry> e : docRegistry.entries(DocRegistry.SHARED)) {
+            String version = e.getValue().version();
+            if (version != null && !version.isBlank()) versions.add(version);
+        }
+        versions.add("latest");
+        return versions.stream().sorted().toList();
+    }
+
     public List<Document> keywordSearch(String version, String question, int topK) {
         return keywordRepo.search(version, question, topK);
     }
