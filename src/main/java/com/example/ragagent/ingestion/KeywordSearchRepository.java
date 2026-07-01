@@ -30,6 +30,23 @@ public class KeywordSearchRepository {
 
     private static final Logger log = LoggerFactory.getLogger(KeywordSearchRepository.class);
 
+    private static final String CHUNK_FTS = "chunk_fts";
+
+    private static final String CREATE_CHUNK_FTS_SQL = """
+            CREATE VIRTUAL TABLE IF NOT EXISTS %s USING fts5(
+                spring_doc_id UNINDEXED,
+                doc_id        UNINDEXED,
+                version       UNINDEXED,
+                filename      UNINDEXED,
+                page          UNINDEXED,
+                chunk_index   UNINDEXED,
+                doc_tags      UNINDEXED,
+                content,
+                keywords,
+                tokenize = 'unicode61'
+            )
+            """;
+
     private final JdbcTemplate jdbc;
     private volatile boolean available = false;
 
@@ -40,25 +57,59 @@ public class KeywordSearchRepository {
     @PostConstruct
     void init() {
         try {
-            jdbc.execute("""
-                    CREATE VIRTUAL TABLE IF NOT EXISTS chunk_fts USING fts5(
-                        spring_doc_id UNINDEXED,
-                        doc_id        UNINDEXED,
-                        version       UNINDEXED,
-                        filename      UNINDEXED,
-                        page          UNINDEXED,
-                        chunk_index   UNINDEXED,
-                        doc_tags      UNINDEXED,
-                        content,
-                        keywords,
-                        tokenize = 'unicode61'
-                    )
-                    """);
+            ensureChunkFtsSchema();
             available = true;
             log.info("[KEYWORD] FTS5 chunk_fts ready — hybrid search available");
         } catch (Exception e) {
             available = false;
             log.warn("[KEYWORD] FTS5 unavailable — hybrid search disabled: {}", e.getMessage());
+        }
+    }
+
+    private void ensureChunkFtsSchema() {
+        createChunkFtsTable(CHUNK_FTS);
+        Set<String> columns = tableColumns(CHUNK_FTS);
+        if (!columns.isEmpty() && !columns.contains("doc_tags")) {
+            log.warn("[KEYWORD] Legacy chunk_fts schema detected (missing doc_tags). Rebuilding FTS index.");
+            rebuildChunkFtsWithDocTags();
+            log.warn("[KEYWORD] chunk_fts rebuilt. Run document sync once to repopulate historical tags/keywords.");
+        }
+    }
+
+    private void createChunkFtsTable(String tableName) {
+        jdbc.execute(CREATE_CHUNK_FTS_SQL.formatted(tableName));
+    }
+
+    private Set<String> tableColumns(String tableName) {
+        return new java.util.HashSet<>(jdbc.query(
+                "PRAGMA table_info(" + tableName + ")",
+                (rs, n) -> rs.getString("name")
+        ));
+    }
+
+    private void rebuildChunkFtsWithDocTags() {
+        final String tempTable = CHUNK_FTS + "_v2";
+        try {
+            jdbc.execute("DROP TABLE IF EXISTS " + tempTable);
+            createChunkFtsTable(tempTable);
+            try {
+                jdbc.update(("""
+                        INSERT INTO %s
+                            (spring_doc_id, doc_id, version, filename, page, chunk_index, doc_tags, content, keywords)
+                        SELECT spring_doc_id, doc_id, version, filename, page, chunk_index, '', content, keywords
+                        FROM %s
+                        """).formatted(tempTable, CHUNK_FTS));
+            } catch (Exception copyErr) {
+                // Keep rebuilding even if legacy rows cannot be copied; this table is a derived index.
+                log.warn("[KEYWORD] FTS row copy skipped during rebuild: {}", copyErr.getMessage());
+            }
+            jdbc.execute("DROP TABLE IF EXISTS " + CHUNK_FTS);
+            jdbc.execute("ALTER TABLE " + tempTable + " RENAME TO " + CHUNK_FTS);
+        } catch (Exception e) {
+            log.warn("[KEYWORD] chunk_fts rebuild failed; recreating empty table: {}", e.getMessage());
+            jdbc.execute("DROP TABLE IF EXISTS " + tempTable);
+            jdbc.execute("DROP TABLE IF EXISTS " + CHUNK_FTS);
+            createChunkFtsTable(CHUNK_FTS);
         }
     }
 
