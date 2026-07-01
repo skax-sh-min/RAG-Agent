@@ -350,6 +350,90 @@ SQLite `audit_log` 테이블 대신 Logback `SizeAndTimeBasedRollingPolicy`로 �
 - 삭제가 `AuditLogger`에 기록된다.
 - 권한 없는 요청 / CSRF 누락은 거부된다(기존 동작 회귀 0).
 
+### 6.9 Chat 응답 피드백(좋아요/싫어요) 기반 컨텍스트 제외 🔵 계획
+
+**목표**:
+- 각 Assistant 응답에 대해 사용자가 `좋아요/싫어요`를 남길 수 있게 한다.
+- `싫어요`로 표시된 응답은 다음 질문의 프롬프트 컨텍스트 구성에서 제외한다.
+
+**요구사항 해석**:
+- 피드백은 turn 단위로 저장한다(질문 단위 아님).
+- `좋아요`는 가산점(향후 활용)으로 저장하되, 1차에서는 컨텍스트 포함/제외 결정에 직접 사용하지 않는다.
+- `싫어요`는 hard exclusion 규칙으로 적용한다.
+
+**설계(최소 침습)**:
+1. **데이터 모델 확장**
+  - `conversation_turns`에 `feedback` 컬럼 추가(예: `NULL | LIKE | DISLIKE`).
+  - 기존 행은 `NULL`로 유지(마이그레이션 안전).
+2. **저장/조회 경로**
+  - `ConversationRepository`(또는 동일 책임 계층)에 `updateFeedback(threadId, turnId, feedback)` 추가.
+  - 히스토리 조회 시 feedback 필드 포함.
+3. **UI/HTMX**
+  - 채팅 버블 하단에 👍/👎 토글 버튼 추가.
+  - 클릭 시 `PATCH /ui/threads/{threadId}/turns/{turnId}/feedback` 호출.
+  - 동일 버튼 재클릭 시 해제(`NULL`) 가능.
+4. **프롬프트 빌드 규칙**
+  - 다음 질문 처리 시 히스토리 구성 단계에서 `DISLIKE` turn은 제외.
+  - 사용자 질문은 기존대로 유지하고, 제외 규칙은 Assistant 응답에만 적용.
+5. **관찰성**
+  - `AuditLogger`에 feedback 변경 이벤트 기록(`threadId`, `turnId`, `from`, `to`).
+
+**예외/정책**:
+- 동일 turn에 대해 마지막 선택만 유효(멱등 업데이트).
+- no-auth 모드에서도 현재 thread 소유 컨텍스트 내에서만 변경 허용.
+- 삭제된 turn/타 thread turn에 대한 피드백 변경은 404/403 처리.
+
+**완료 기준**:
+- 채팅 UI에서 turn별 👍/👎 선택/해제가 가능하다.
+- `👎`가 붙은 Assistant turn은 다음 요청 프롬프트 컨텍스트에서 제외된다.
+- 기존 대화 저장/복원 동작 회귀가 없다.
+- 피드백 변경 이력이 감사 로그에 남는다.
+
+### 6.10 입력 시작 시 로컬 요약 선계산 + 중복 제거 컨텍스트 압축 🔵 계획
+
+**목표**:
+- 사용자가 질문 입력을 시작하면 이전 대화를 중복 제거 + 요약해 미리 준비한다.
+- 실제 질문 전송 시 준비된 요약을 프롬프트에 포함해 토큰 효율과 응답 품질을 개선한다.
+
+**핵심 아이디어**:
+- 요약 생성 시점: `질문 입력 시작(on input)` 이벤트에서 비동기 트리거.
+- 요약 실행 주체: `LOCAL` provider(또는 local-only task type) 우선.
+- 질문 전송 시점에는 요약 재사용(없거나 오래됐으면 기존 경로 fallback).
+
+**설계(단계적)**:
+1. **요약 파이프라인 추가**
+  - `ConversationSummarizerService` 신설: thread history -> dedupe -> summary.
+  - dedupe는 경량 규칙 기반(정규화 후 exact/near-exact 제거) + 핵심 슬롯(결정/제약/오류코드/버전) 보존.
+2. **캐시/저장 전략**
+  - 스레드별 요약 캐시(`threadId`, `summaryText`, `sourceTurnSeq`, `updatedAt`).
+  - 히스토리 변경(새 turn 저장) 시 캐시 무효화.
+3. **프론트 트리거**
+  - `chat.html` 입력창 첫 입력 시 `POST /ui/chat/summary/precompute?threadId=...` 비동기 호출(디바운스 적용).
+  - 사용자 타이핑 중 중복 호출 방지(예: 10~20초 TTL).
+4. **질문 처리 통합**
+  - `AgentService.chat()` 시작 시 "요약 사용 가능"이면 요약 + 최근 N턴(짧은 raw) 결합.
+  - 요약 없음/실패/타임아웃이면 기존 히스토리 경로로 자동 폴백.
+5. **프롬프트 정책**
+  - 요약 프롬프트에 "중복 제거, 사실/결정 우선, 금지사항 보존, 추측 금지" 명시.
+  - 최종 질문 프롬프트에는 `Conversation Summary` 블록을 별도 섹션으로 삽입.
+
+**운영/안전장치**:
+- 요약 호출 타임아웃 짧게(예: 5~10초) 설정해 UX 지연 방지.
+- local provider unavailable 시 즉시 포기하고 본질 경로 유지(서비스 연속성 우선).
+- 요약 길이 상한(예: 1~2k chars)으로 비용 상한 고정.
+- 새 대화 버튼을 누르거나 이전 대화로 변경 할 수 있으므로 요약 캐시를 threadId 기준으로 관리하고, threadId 변경 시 메모리에 임시 보관 (최대 3개). 
+
+**검증 계획**:
+- 단위: dedupe 규칙, 요약 캐시 무효화, fallback 경로.
+- 통합: 입력 시작 시 선계산 트리거, 질문 전송 시 요약 재사용 여부.
+- 회귀: 요약 실패 시 기존 답변 품질/지연 악화 없음.
+
+**완료 기준**:
+- 사용자가 입력을 시작하면 백그라운드 요약이 선계산된다.
+- 질문 전송 시 요약이 프롬프트에 포함되어 전달된다.
+- 중복 대화가 요약에서 제거되고 핵심 맥락은 유지된다.
+- 로컬 요약 실패 시 기존 대화 경로로 안전하게 폴백한다.
+
 ---
 
 ## 7. Phase 4 — 확장 (조건부) 🔵 미착수
@@ -399,6 +483,7 @@ Google/GitHub 제공자 등록. 가입 흐름은 **기존 폼 가입과 동등**
 | Step 5.7 ✅ | 데이터 이전 + 통합 검증 | 재인덱싱 절차, 단위·통합 테스트 |
 | Step 5.8 ✅ | 관리자 페이지 백엔드 가시성 보강 (sqlite-vec) | `VectorStoreAdminView`(신규), `AdminService`에 `JdbcTemplate`/`AppProperties`/`ObjectMapper` 주입, `/admin` 백엔드 공통 상태 카드 + 청크 브라우징 패리티, `AdminService`·`AdminController` 테스트 |
 | Step 5.9 🔵 | 태그 기반 검색 스코프(엄격 필터 + sqlite 후보확대 보정) | 업로드 다중 태그·채팅 태그 선택·백엔드별 엄격 필터·프리릴리즈 수동 초기화 런북 |
+| Step 5.10 🔵 | sqlite-vec 운영 DB 분리(최소 변경) | 운영 SQLite(`memory.db`)와 벡터 SQLite(`vector.db`)를 분리, DataSource/JdbcTemplate 2세트 구성, 무중단 롤백 스위치 |
 
 ### Step 5.1 — VectorStoreProvider 추상화 계층 도입 ✅ 완료 (2026-06-23)
 
@@ -536,6 +621,59 @@ Chroma 결합을 `VectorStoreProvider`(search/searchBatch/add/deleteByDocIds) �
 - 등록된 태그를 칩으로 노출해 클릭 선택. **소스 = `chunk_fts.doc_tags`**(매 인덱싱마다 채워지고 hybrid 설정·백엔드와 무관) → `KeywordSearchRepository.distinctTags(version)`(정렬·중복 제거, 버전 선택 스코프) → `RagService.listTags` → `GET /api/v1/tags?version=`.
 - 업로드(`documents.html`): 전체 태그 칩 → 클릭 시 입력칸에 추가(업로드 후 갱신). 채팅(`chat.html`): **버전 스코프** 태그 칩 → 클릭 토글로 검색 범위 좁힘(버전 변경 시 재로딩). 입력값↔칩 활성 상태 동기화.
 - 테스트: `KeywordSearchRepositoryTest.distinctTags`(실 FTS5). 전체 311 tests BUILD SUCCESS.
+
+### Step 5.10 — sqlite-vec 운영 DB 분리(최소 변경 설계안) 🔵 계획
+
+**배경**:
+- 현재 sqlite-vec 모드에서도 운영 데이터와 벡터/FTS 데이터가 동일 `memory.db`를 공유한다.
+- 인덱싱(write-heavy)과 운영성 트랜잭션(대화/사용량/인증)이 같은 WAL/체크포인트 경로에서 경합해, 락 대기·지연·복구 범위가 함께 커진다.
+
+**목표**:
+- 운영 DB(`memory.db`)와 벡터 DB(`vector.db`)를 분리해 장애 격리·성능 간섭 완화·백업/복구 유연성을 확보한다.
+- Chroma 경로에는 영향 없이, sqlite-vec 경로에만 최소한의 코드 변경으로 적용한다.
+
+**설계 원칙(최소 변경)**:
+1. 분리 대상은 sqlite-vec 관련 테이블(`vec_embeddings`, `vec_document_chunks`, `chunk_fts`)로 한정한다.
+2. 운영성 테이블(대화/인증/사용량/메타)은 기존 `memory.db` 유지한다.
+3. 서비스/도메인 시그니처는 유지하고, 주입 계층(DataSource/JdbcTemplate)만 분기한다.
+4. 실패 시 즉시 원복 가능한 feature switch를 둔다.
+
+**구현 범위**:
+1. **설정 추가**
+  - `app.vectorstore.sqlite-vec.db-path` (기본: `${DATA_DIR}/vector.db`)
+  - `.env.example.sqlite`에 `SQLITE_VEC_DB_PATH` 추가
+2. **빈 분리**
+  - `@Primary` 운영 `DataSource`/`JdbcTemplate`는 기존 `memory.db` 유지
+  - sqlite-vec 전용 `DataSource`/`JdbcTemplate`를 별도 이름으로 추가(`vectorDataSource`, `vectorJdbcTemplate`)
+  - sqlite-vec extension load(`load_extension`)는 전용 DataSource에만 적용
+3. **주입 전환(최소 세트)**
+  - `SqliteVecSchemaInitializer`, `SqliteVecVerifier`, `SqliteVecVectorStoreProvider`, `KeywordSearchRepository`를 `vectorJdbcTemplate`로 전환
+  - 운영성 Repository/Service는 기존 `JdbcTemplate` 유지
+4. **운영 가드**
+  - sqlite-vec 모드에서 `vector.db` 경로 미설정/생성 실패 시 fail-fast
+  - `/admin` 상태 카드에 운영 DB/벡터 DB 경로를 분리 표기(오인 방지)
+
+**장점**:
+- 인덱싱 I/O와 운영 트랜잭션 분리로 락 경합 및 지연 전파 감소
+- 백업 정책 분리(운영 DB 고주기, 벡터 DB 저주기/재생성 전제)
+- 벡터 DB 재구축/초기화 시 운영 데이터 영향 최소화
+
+**트레이드오프/주의점**:
+- DB 파일 2개(+ `-wal`, `-shm`) 운영 복잡도 증가
+- 파일 간 트랜잭션 원자성은 보장되지 않음(부분 성공 대비 보상 로직 필요)
+- 배포/복구 런북 업데이트 필수(백업 순서, 점검 포인트)
+
+**단계적 적용 순서(권장)**:
+1. 설정/빈 추가 + 기존 경로 유지(기본 동작 불변)
+2. sqlite-vec 구성요소만 `vectorJdbcTemplate`로 전환
+3. 통합 테스트(인덱싱/검색/삭제/태그 제안) + 부하 점검
+4. 운영 인수 시 `vector.db` 분리 활성화
+
+**완료 기준**:
+- sqlite-vec 모드에서 `memory.db`는 운영 테이블만, `vector.db`는 벡터/FTS 테이블만 보유
+- 기존 API/화면 동작 회귀 0(채팅/문서관리/태그 제안)
+- 벡터 DB 삭제/재생성 후 운영 데이터 보존 + 재인덱싱으로 복구 가능
+- `VECTORSTORE_TYPE=chroma` 경로 무영향
 
 **범위 제외 (후속)**:
 - 자유 입력 자동완성(typeahead) — 현재는 칩 선택만
