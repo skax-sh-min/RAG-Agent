@@ -16,9 +16,12 @@ import org.springframework.ai.chroma.vectorstore.ChromaApi.GetEmbeddingResponse;
 import org.springframework.ai.chroma.vectorstore.ChromaApi.GetEmbeddingsRequest;
 import org.springframework.ai.chroma.vectorstore.ChromaApi.QueryRequest.Include;
 import org.springframework.ai.chroma.vectorstore.common.ChromaApiConstants;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
+import java.nio.file.Path;
 import java.util.*;
 
 /**
@@ -39,8 +42,16 @@ public class AdminService {
     private final AppProperties props;
     private final ObjectMapper objectMapper;
 
-    public AdminService(Optional<ChromaApi> chromaApi, JdbcTemplate jdbc, AppProperties props,
-                        ObjectMapper objectMapper) {
+    // shown on /admin to disambiguate operational vs vector DB files. Field-injected
+    // (not constructor) so unit tests that build AdminService directly stay unaffected (null → hidden).
+    @Value("${app.data-dir:./data}")
+    private String dataDir;
+    @Value("${app.vectorstore.sqlite-vec.db-path:}")
+    private String sqliteVecDbPath;
+
+    // vec_document_chunks/vec_embeddings live with the vector tables → same template as the provider.
+    public AdminService(Optional<ChromaApi> chromaApi, @Qualifier("vectorJdbcTemplate") JdbcTemplate jdbc,
+                        AppProperties props, ObjectMapper objectMapper) {
         this.chromaApi = chromaApi.orElse(null);
         this.jdbc = jdbc;
         this.props = props;
@@ -85,8 +96,9 @@ public class AdminService {
                 .map(c -> new VersionCount(c.version(), c.chunkCount()))
                 .toList();
         // Chroma collections don't track distinct document counts → unknown (-1).
+        // Chroma stores vectors on its own server → no local vector DB file to report.
         return new VectorStoreAdminView("chroma", r.available(), -1, totalChunks,
-                perVersion, r.items().size(), null, null);
+                perVersion, r.items().size(), null, null, operationalDbPath(), null);
     }
 
     private VectorStoreAdminView sqliteVecView() {
@@ -111,7 +123,23 @@ public class AdminService {
         }
         Integer dim = props.embeddingSafe().dimensions();
         return new VectorStoreAdminView("sqlite-vec", healthy, totalDocs, totalChunks,
-                perVersion, null, vecVersion, dim);
+                perVersion, null, vecVersion, dim, operationalDbPath(), vectorDbPath());
+    }
+
+    /** memory.db absolute path (operational DB), or null when data-dir is unavailable (e.g. unit tests). */
+    private String operationalDbPath() {
+        return dataDir == null ? null : Path.of(dataDir, "memory.db").toAbsolutePath().normalize().toString();
+    }
+
+    /**
+     * Vector DB path for display: the dedicated {@code vector.db} when the Step 5.10 switch is on,
+     * else the same file as the operational DB (vectors live in memory.db).
+     */
+    private String vectorDbPath() {
+        if (sqliteVecDbPath != null && !sqliteVecDbPath.isBlank()) {
+            return Path.of(sqliteVecDbPath.trim()).toAbsolutePath().normalize().toString();
+        }
+        return operationalDbPath();
     }
 
     private long safeCount(String sql) {

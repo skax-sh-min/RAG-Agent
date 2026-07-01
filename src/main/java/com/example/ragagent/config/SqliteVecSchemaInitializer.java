@@ -2,6 +2,7 @@ package com.example.ragagent.config;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
@@ -46,14 +47,20 @@ public class SqliteVecSchemaInitializer {
     private final JdbcTemplate jdbc;
     private final AppProperties props;
 
-    public SqliteVecSchemaInitializer(JdbcTemplate jdbc, AppProperties props) {
+    public SqliteVecSchemaInitializer(@Qualifier("vectorJdbcTemplate") JdbcTemplate jdbc, AppProperties props) {
         this.jdbc = jdbc;
         this.props = props;
     }
 
     @EventListener(ApplicationReadyEvent.class)
     void init() {
+        // Fail fast BEFORE touching the DB so a misconfigured dimension executes no statements.
         int dim = resolveDimension(props.embeddingSafe().dimensions());
+        // Replicate the operational DB's pragmas on the vector template's connection. Harmless when
+        // vectorJdbcTemplate aliases memory.db (non-separated); required for a dedicated vector.db
+        // since its connection is created separately from SqliteMemoryRepository's.
+        jdbc.execute("PRAGMA journal_mode=WAL");
+        jdbc.execute("PRAGMA busy_timeout=5000");
         jdbc.execute(embeddingTableDdl(dim));
         jdbc.execute(CHUNK_TABLE_DDL);
         jdbc.execute(IDX_VERSION_DDL);

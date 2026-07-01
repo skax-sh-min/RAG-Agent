@@ -5,6 +5,7 @@ import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.document.Document;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
@@ -50,7 +51,9 @@ public class KeywordSearchRepository {
     private final JdbcTemplate jdbc;
     private volatile boolean available = false;
 
-    public KeywordSearchRepository(JdbcTemplate jdbc) {
+    // chunk_fts lives with the vector tables: vectorJdbcTemplate → vector.db when the
+    // separate-vector-DB switch is on, else the operational memory.db (chroma / non-separated).
+    public KeywordSearchRepository(@Qualifier("vectorJdbcTemplate") JdbcTemplate jdbc) {
         this.jdbc = jdbc;
     }
 

@@ -65,6 +65,21 @@
                 </div>
             </div>
 
+            <!-- 운영 DB / 벡터 DB 경로 (오인 방지) -->
+            <div th:if="${vectorStore.operationalDbPath() != null}" class="mt-3 small">
+                <div class="d-flex flex-wrap gap-3">
+                    <span class="text-muted">
+                        운영 DB:
+                        <span class="font-monospace" th:text="${vectorStore.operationalDbPath()}">memory.db</span>
+                    </span>
+                    <span th:if="${vectorStore.vectorDbPath() != null}" class="text-muted">
+                        벡터 DB:
+                        <span class="font-monospace" th:text="${vectorStore.vectorDbPath()}">vector.db</span>
+                        <span th:if="${vectorStore.isDbSeparated()}" class="badge bg-info text-dark ms-1">분리됨</span>
+                    </span>
+                </div>
+            </div>
+
             <!-- 버전별 청크 수 -->
             <div th:if="${not #lists.isEmpty(vectorStore.perVersion())}" class="mt-3">
                 <div class="text-muted small mb-1">버전별 청크 수</div>

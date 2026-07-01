@@ -66,7 +66,8 @@ class AdminControllerWebMvcTest {
     @DisplayName("GET /admin (chroma): 200 + 모델 속성 + 컬렉션 라벨 렌더")
     void adminPage_chroma() throws Exception {
         when(adminService.vectorStoreView()).thenReturn(
-                new VectorStoreAdminView("chroma", true, -1, 0, List.of(), 0, null, null));
+                new VectorStoreAdminView("chroma", true, -1, 0, List.of(), 0, null, null,
+                        "/data/memory.db", null));
 
         mvc.perform(get("/admin").with(user(ADMIN)))
                 .andExpect(status().isOk())
@@ -81,7 +82,8 @@ class AdminControllerWebMvcTest {
     void adminPage_sqliteVec() throws Exception {
         when(adminService.vectorStoreView()).thenReturn(
                 new VectorStoreAdminView("sqlite-vec", true, 5, 42,
-                        List.of(new VersionCount("latest", 42L)), null, "v0.1.9", 768));
+                        List.of(new VersionCount("latest", 42L)), null, "v0.1.9", 768,
+                        "/data/memory.db", "/data/vector.db"));
 
         mvc.perform(get("/admin").with(user(ADMIN)))
                 .andExpect(status().isOk())

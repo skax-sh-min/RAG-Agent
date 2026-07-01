@@ -19,7 +19,9 @@ public record VectorStoreAdminView(
         List<VersionCount> perVersion,  // chunk count per version
         Integer collectionCount,        // chroma only
         String vecVersion,              // sqlite-vec only (vec_version())
-        Integer dimension               // sqlite-vec only (embedding dimension)
+        Integer dimension,              // sqlite-vec only (embedding dimension)
+        String operationalDbPath,       // memory.db path (nullable)
+        String vectorDbPath             // vector.db path — separate file or same as operational; null when unknown
 ) {
     public record VersionCount(String version, long chunkCount) {}
 
@@ -28,4 +30,9 @@ public record VectorStoreAdminView(
 
     /** True when document count is known (sqlite-vec); chroma reports -1. */
     public boolean hasDocCount() { return totalDocs >= 0; }
+
+    /** True when the vector tables live in a dedicated file distinct from memory.db (active). */
+    public boolean isDbSeparated() {
+        return vectorDbPath != null && !vectorDbPath.equals(operationalDbPath);
+    }
 }

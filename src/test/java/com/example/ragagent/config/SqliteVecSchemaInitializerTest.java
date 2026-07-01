@@ -71,20 +71,23 @@ class SqliteVecSchemaInitializerTest {
         }
 
         @Test
-        @DisplayName("정상 차원: vec0 + chunk 테이블 + 인덱스 2개 = 4 DDL 실행 (멱등 IF NOT EXISTS)")
+        @DisplayName("정상 차원: WAL/busy_timeout PRAGMA 2개 + vec0 + chunk 테이블 + 인덱스 2개 = 6 실행")
         void runsAllDdl() {
             JdbcTemplate jdbc = mock(JdbcTemplate.class);
             new SqliteVecSchemaInitializer(jdbc, propsWithDim(1536)).init();
 
             ArgumentCaptor<String> sql = ArgumentCaptor.forClass(String.class);
-            verify(jdbc, times(4)).execute(sql.capture());
-            List<String> ddls = sql.getAllValues();
+            verify(jdbc, times(6)).execute(sql.capture());
+            List<String> stmts = sql.getAllValues();
 
-            assertThat(ddls.get(0)).contains("vec_embeddings").contains("FLOAT[1536]");
-            assertThat(ddls.get(1)).contains("CREATE TABLE IF NOT EXISTS vec_document_chunks");
-            assertThat(ddls.get(2)).contains("idx_vec_chunks_version");
-            assertThat(ddls.get(3)).contains("idx_vec_chunks_docid");
-            assertThat(ddls).allMatch(s -> s.contains("IF NOT EXISTS"));
+            // pragmas run first (vector DB connection parity), then the DDL block
+            assertThat(stmts.get(0)).isEqualTo("PRAGMA journal_mode=WAL");
+            assertThat(stmts.get(1)).isEqualTo("PRAGMA busy_timeout=5000");
+            assertThat(stmts.get(2)).contains("vec_embeddings").contains("FLOAT[1536]");
+            assertThat(stmts.get(3)).contains("CREATE TABLE IF NOT EXISTS vec_document_chunks");
+            assertThat(stmts.get(4)).contains("idx_vec_chunks_version");
+            assertThat(stmts.get(5)).contains("idx_vec_chunks_docid");
+            assertThat(stmts.subList(2, 6)).allMatch(s -> s.contains("IF NOT EXISTS"));
         }
 
         @Test
@@ -102,7 +105,7 @@ class SqliteVecSchemaInitializerTest {
     @DisplayName("조건부 빈 등록 (@ConditionalOnProperty)")
     class Conditional {
         private final ApplicationContextRunner runner = new ApplicationContextRunner()
-                .withBean(JdbcTemplate.class, () -> mock(JdbcTemplate.class))
+                .withBean("vectorJdbcTemplate", JdbcTemplate.class, () -> mock(JdbcTemplate.class))
                 .withBean(AppProperties.class, () -> mock(AppProperties.class))
                 .withUserConfiguration(SqliteVecSchemaInitializer.class);
 

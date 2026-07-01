@@ -34,7 +34,7 @@ class VectorStoreProviderConfigTest {
     @DisplayName("provider 택일 — 모드별 정확히 1개")
     class ProviderSelection {
         private final ApplicationContextRunner runner = new ApplicationContextRunner()
-                .withBean(JdbcTemplate.class, () -> mock(JdbcTemplate.class))
+                .withBean("vectorJdbcTemplate", JdbcTemplate.class, () -> mock(JdbcTemplate.class))
                 .withBean(EmbeddingModel.class, () -> mock(EmbeddingModel.class))
                 .withBean(ObjectMapper.class, ObjectMapper::new)
                 .withBean(VectorStoreRegistry.class, () -> mock(VectorStoreRegistry.class))

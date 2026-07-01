@@ -3,8 +3,12 @@ package com.example.ragagent.config;
 import com.zaxxer.hikari.HikariConfig;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import com.example.ragagent.ingestion.KeywordSearchRepository;
 import org.junit.jupiter.api.io.TempDir;
+import org.springframework.boot.test.context.runner.ApplicationContextRunner;
+import org.springframework.jdbc.core.JdbcTemplate;
 
+import javax.sql.DataSource;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -119,5 +123,58 @@ class DataSourceConfigTest {
         assertThatThrownBy(() -> DataSourceConfig.configureSqliteVec(c, "sqlite-vec", dir.toString(), ""))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("vec0 바이너리");
+    }
+
+    // ── separate vector DB ─────────────────────────────────────────
+
+    @Test
+    @DisplayName("buildVectorHikariConfig: vector.db URL + pool=1 + vec0 load_extension")
+    void vectorHikari_pointsAtVectorDbWithPoolAndExtension(@TempDir Path dir) {
+        Path vectorDb = dir.resolve("vector.db");
+        HikariConfig c = DataSourceConfig.buildVectorHikariConfig(
+                vectorDb, 1, "sqlite-vec", "/opt/sqlite-vec/vec0", "");
+
+        assertThat(c.getJdbcUrl()).isEqualTo("jdbc:sqlite:" + vectorDb);
+        assertThat(c.getMaximumPoolSize()).isEqualTo(1);
+        assertThat(c.getPoolName()).isEqualTo("vector-db");
+        assertThat(c.getDataSourceProperties().getProperty("enable_load_extension")).isEqualTo("true");
+        assertThat(c.getConnectionInitSql())
+                .startsWith("SELECT load_extension('")
+                .contains("/opt/sqlite-vec/vec0");
+    }
+
+    private final ApplicationContextRunner runner = new ApplicationContextRunner()
+            .withUserConfiguration(DataSourceConfig.class);
+
+    @Test
+    @DisplayName("기본(chroma): vectorJdbcTemplate 는 운영 DataSource 별칭 — 별도 vectorDataSource 없음(회귀 가드)")
+    void defaultMode_vectorTemplateAliasesPrimary(@TempDir Path dir) {
+        runner.withPropertyValues("app.data-dir=" + dir)
+                .run(ctx -> {
+                    assertThat(ctx).hasNotFailed();
+                    assertThat(ctx).doesNotHaveBean("vectorDataSource");
+                    assertThat(ctx).hasBean("vectorJdbcTemplate");
+                    // exactly one DataSource, and the vector template is backed by it (chunk_fts stays in memory.db)
+                    assertThat(ctx.getBeanNamesForType(DataSource.class)).hasSize(1);
+                    JdbcTemplate vectorTpl = (JdbcTemplate) ctx.getBean("vectorJdbcTemplate");
+                    assertThat(vectorTpl.getDataSource()).isSameAs(ctx.getBean("dataSource", DataSource.class));
+                });
+    }
+
+    @Test
+    @DisplayName("기본 모드: 다운스트림 소비자(KeywordSearchRepository)가 @Qualifier(vectorJdbcTemplate)로 memory.db에 실제 배선")
+    void defaultMode_downstreamConsumerWiresThroughQualifier(@TempDir Path dir) {
+        new ApplicationContextRunner()
+                .withUserConfiguration(DataSourceConfig.class, KeywordSearchRepository.class)
+                .withPropertyValues("app.data-dir=" + dir)
+                .run(ctx -> {
+                    assertThat(ctx).hasNotFailed();
+                    // @Qualifier("vectorJdbcTemplate") resolved + @PostConstruct created chunk_fts on the real DB
+                    KeywordSearchRepository repo = ctx.getBean(KeywordSearchRepository.class);
+                    assertThat(repo.isAvailable()).isTrue();
+                    // and that template is the memory.db (operational) DataSource in the non-separated path
+                    JdbcTemplate vectorTpl = (JdbcTemplate) ctx.getBean("vectorJdbcTemplate");
+                    assertThat(vectorTpl.getDataSource()).isSameAs(ctx.getBean("dataSource", DataSource.class));
+                });
     }
 }
