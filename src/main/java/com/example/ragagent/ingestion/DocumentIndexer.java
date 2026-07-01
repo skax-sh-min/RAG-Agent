@@ -101,6 +101,20 @@ public class DocumentIndexer {
         Path correctedMdPath = dataDir.resolve("converted").resolve(docId + "_corrected.md");
         log.debug("[INDEX] docId={}, type={}, sha256={}", docId, docType, sha256);
 
+        // Preserve tags on operator re-index / directory sync (those paths carry no tag input):
+        // the request has no tags, but they live in the FTS index under the prior docId
+        // (staleDocId when content changed, else this docId). Read BEFORE the delete below
+        // wipes those rows. Interactive single upload keeps its explicit tags — an empty list
+        // there means the user intentionally cleared them, so we do not auto-restore.
+        List<String> effectiveTags = req.tags();
+        if (effectiveTags.isEmpty() && req.parallelGate() != null) {
+            String priorDocId = req.staleDocId() != null ? req.staleDocId() : docId;
+            effectiveTags = restoreTags(priorDocId);
+            if (!effectiveTags.isEmpty()) {
+                log.debug("[INDEX] {} 태그 복원: {} (prior={})", req.filename(), effectiveTags, priorDocId);
+            }
+        }
+
         // Delete before conversion so newly created images/MD files are not immediately removed
         deleteExistingVectorsAndFiles(DocRegistry.SHARED, docId, req.version());
 
@@ -142,7 +156,7 @@ public class DocumentIndexer {
         req.onProgress().accept(IndexingProgressEvent.of("chunking", 0, chunks.size(), req.filename(),
                 chunks.size() + "개 청크"));
 
-        List<Document> tagged = tagMetadata(chunks, docId, req.filename(), req.version(), docType, sha256, DocRegistry.SHARED, req.tags());
+        List<Document> tagged = tagMetadata(chunks, docId, req.filename(), req.version(), docType, sha256, DocRegistry.SHARED, effectiveTags);
 
         log.debug("[INDEX] {} 키워드 추출 중 ({}개 청크, 병렬)...", req.filename(), tagged.size());
         Semaphore gate = req.parallelGate() != null
@@ -169,7 +183,7 @@ public class DocumentIndexer {
         log.info("[INDEX] 완료: {} → {}개 청크, {}ms", req.filename(), tagged.size(), System.currentTimeMillis() - t0);
         return new DocumentInfo(docId, req.filename(), req.version(), tagged.size(),
             entry.indexedAt(), sha256,
-            List.copyOf(new LinkedHashSet<>(req.tags() == null ? List.of() : req.tags())),
+            List.copyOf(new LinkedHashSet<>(effectiveTags)),
             List.of());
     }
 
@@ -201,7 +215,9 @@ public class DocumentIndexer {
         List<Document> rawDocs = loaderService.loadFromMarkdown(md);
         List<Document> chunks  = splitDocuments(rawDocs, filename, props.chunkSize(), props.chunkOverlap());
         log.debug("[REINDEX] 청크 분할: {}섹션 → {}청크", rawDocs.size(), chunks.size());
-        List<Document> tagged  = tagMetadata(chunks, docId, filename, version, docType, sha256, DocRegistry.SHARED, java.util.List.of());
+        // Keep tags across re-index (same docId): read from FTS before the delete wipes them.
+        List<String> preservedTags = restoreTags(docId);
+        List<Document> tagged  = tagMetadata(chunks, docId, filename, version, docType, sha256, DocRegistry.SHARED, preservedTags);
 
         deleteExistingVectorsOnly(DocRegistry.SHARED, docId, version);
 
@@ -361,6 +377,17 @@ public class DocumentIndexer {
             tagged.add(new Document(chunk.getText(), meta));
         }
         return tagged;
+    }
+
+    /**
+     * Recovers a document's search-scope tags from the FTS index ({@code chunk_fts.doc_tags}) so
+     * operator re-index / directory-sync paths — which carry no tag input — do not silently drop
+     * tags set at original upload. Returns an empty list when FTS is unavailable or no prior rows
+     * exist for {@code priorDocId}. Never throws.
+     */
+    private List<String> restoreTags(String priorDocId) {
+        if (priorDocId == null) return List.of();
+        return keywordRepo.tagsByDocIds(List.of(priorDocId)).getOrDefault(priorDocId, List.of());
     }
 
     private void deleteExistingVectorsAndFiles(String userId, String docId, String version) {

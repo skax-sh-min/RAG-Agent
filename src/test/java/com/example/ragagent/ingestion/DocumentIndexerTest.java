@@ -37,6 +37,7 @@ class DocumentIndexerTest {
     private DocumentIndexer indexer;
     private VectorStoreFacade vectorStore;
     private DocRegistry docRegistry;
+    private KeywordSearchRepository keywordRepo;
     private AppProperties props;
 
     @BeforeEach
@@ -79,7 +80,7 @@ class DocumentIndexerTest {
         when(llmRouter.executeWithTracking(any(), any(), any()))
                 .thenThrow(new RuntimeException("no LLM in test"));
 
-        KeywordSearchRepository keywordRepo = new KeywordSearchRepository(new JdbcTemplate(ds));
+        keywordRepo = new KeywordSearchRepository(new JdbcTemplate(ds));
         keywordRepo.init();
 
         indexer = new DocumentIndexer(loaderService, correctionService, imageExtractorService,
@@ -139,6 +140,47 @@ class DocumentIndexerTest {
         assertThat(docRegistry.findByDocId(staleDocId, DocRegistry.SHARED)).isEmpty();
         // Old spring-doc-ids deleted from vector store
         verify(vectorStore).deleteByDocIds(DocRegistry.SHARED, "v1", List.of("spring-id-1"));
+    }
+
+    @Test
+    @DisplayName("parallel index(sync 갱신) — staleDocId의 태그가 신규 docId로 복원됨")
+    void index_parallel_restoresTagsFromStaleDoc() throws IOException {
+        // 1) 최초 업로드(대화형 single) — 태그 [alpha, beta] 명시
+        Path file = tmpDir.resolve("notes.txt");
+        Files.writeString(file, "최초 내용 버전 A 입니다.");
+        DocumentInfo first = indexer.index(IndexRequest.single(
+                file, "notes.txt", "v1", "anonymous", List.of("alpha", "beta"), e -> {}));
+        // FTS(검색/복원 소스)에는 정규화된 형태로 저장됨
+        assertThat(keywordRepo.tagsByDocIds(List.of(first.docId())).get(first.docId()))
+                .containsExactlyInAnyOrder("alpha", "beta");
+
+        // 2) 내용 변경 후 동기화 갱신 — 태그 입력 없이 staleDocId만 전달
+        Files.writeString(file, "완전히 다른 내용 버전 B 입니다. 문장이 바뀌었습니다.");
+        Semaphore gate = new Semaphore(2);
+        DocumentInfo updated = indexer.index(IndexRequest.parallel(
+                file, "v1", DocRegistry.SHARED, gate, first.docId()));
+
+        // 내용 sha 변경으로 docId가 달라져도 태그가 이전 문서에서 복원됨
+        assertThat(updated.docId()).isNotEqualTo(first.docId());
+        assertThat(updated.tags()).containsExactlyInAnyOrder("alpha", "beta");
+        assertThat(keywordRepo.tagsByDocIds(List.of(updated.docId())).get(updated.docId()))
+                .containsExactlyInAnyOrder("alpha", "beta");
+    }
+
+    @Test
+    @DisplayName("single 재업로드(태그 미입력) — 자동복원 안 함(명시적 clear 존중)")
+    void index_single_doesNotAutoRestoreTags() throws IOException {
+        Path file = tmpDir.resolve("memo.txt");
+        Files.writeString(file, "태그 clear 검증용 내용.");
+        DocumentInfo first = indexer.index(IndexRequest.single(
+                file, "memo.txt", "v1", "anonymous", List.of("keep"), e -> {}));
+        assertThat(first.tags()).containsExactly("keep");
+
+        // 동일 내용/동일 docId 재업로드, 태그 비움 → 대화형 경로는 복원하지 않음
+        DocumentInfo second = indexer.index(IndexRequest.single(
+                file, "memo.txt", "v1", "anonymous", List.of(), e -> {}));
+        assertThat(second.docId()).isEqualTo(first.docId());
+        assertThat(second.tags()).isEmpty();
     }
 
     @Test
