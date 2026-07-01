@@ -144,21 +144,23 @@ PROGRESSIVE 모드 AND sufficient=false AND retryCount >= max
   │
   ├─ SHA-256 해시 → docId 생성 (filename_해시앞8자)
   │
-  ├─ 파일 타입별 파싱
+  ├─ 파일 타입별 파싱  (DOCX·TXT 는 Markdown 으로 정규화 후 처리)
   │    PDF   → 페이지 단위 (스캔 감지 시 OCR 자동 적용)
   │    PPTX  → 슬라이드 단위
-  │    DOCX  → 제목 기준 섹션 단위 + 이미지 인라인 추출
-  │    TXT/MD→ 섹션 분할
+  │    DOCX  → DocxToMarkdownConverter 로 MD 변환 → LLM 포맷 교정 → 섹션 분할 (이미지 인라인)
+  │    TXT   → 로컬 LLM 으로 구조화(제목/목록/표) + 문법 교정하여 MD 변환 → LLM 포맷 교정 → 섹션 분할
+  │    MD    → 이미지/링크 마커 전처리 → 섹션 분할
   │
   ├─ 이미지 추출
   │    PDF/PPTX → data/images/{docId}/ 에 별도 저장
   │    DOCX     → 파싱 단계에서 함께 처리
+  │    TXT/MD   → 없음 (평문/마크다운)
   │    → chunk 메타데이터 image_paths 에 경로 기록
   │
   ├─ 청킹
-  │    PPTX    → 슬라이드 단위 유지 (분할 없음)
-  │    DOCX/MD → 섹션 단위 유지, 초과 시 슬라이딩 윈도우
-  │    PDF/TXT → 슬라이딩 윈도우 (chunkSize / chunkOverlap)
+  │    PPTX        → 슬라이드 단위 유지 (분할 없음)
+  │    DOCX/TXT/MD → 섹션 단위 유지, 초과 시 슬라이딩 윈도우
+  │    PDF         → 슬라이딩 윈도우 (chunkSize / chunkOverlap)
   │
   ├─ 메타데이터 태깅
   │    doc_id, filename, version, page_or_slide,
@@ -172,6 +174,20 @@ PROGRESSIVE 모드 AND sufficient=false AND retryCount >= max
   │
   └─ 레지스트리 저장 (SQLite doc_registry 테이블 — memory.db 공유)
 ```
+
+### 문서 타입별 처리 상세
+
+| 타입 | 파싱/변환 | LLM 전처리 | 중간 산출물 (data/converted) | 청킹 | 이미지 | MD 재인덱싱(↺) |
+|------|-----------|-----------|------------------------------|------|--------|----------------|
+| **PDF** | `PagePdfDocumentReader` 페이지 단위. 50% 이상 페이지가 50자 미만이면 스캔 판정 → Tesseract(kor+eng) OCR (`source_type=ocr`) | 없음 | 없음 | 슬라이딩 윈도우 | 페이지 이미지 추출 → `data/images/{docId}/` | 미지원 |
+| **PPTX** | POI 로 슬라이드별 텍스트 (`source_type=ppt`) | 없음 | 없음 | 슬라이드 단위 유지 | 슬라이드 이미지 추출 | 미지원 |
+| **DOCX** | `DocxToMarkdownConverter` 로 MD 변환 (제목 스타일 → `##/###`, 이미지 `[이미지: ...]` 인라인) | `MarkdownCorrectionService.correct()` — 섹션 병렬 **포맷 교정**(끊긴 문장 연결·오타·헤딩 정규화, 내용 불변) | `{docId}.md`(원본) + `{docId}_corrected.md`(교정) | 섹션 단위, 초과 시 슬라이딩 윈도우 | 변환 단계에서 인라인 처리 | **지원** |
+| **TXT** | 평문 → `TextToMarkdownService.convert()` — 로컬 LLM 이 **구조화**(제목/목록/표 부여) + **문법 교정**(맞춤법·띄어쓰기·끊긴 문장), 내용 불변 → MD | 위 구조화에 이어 `MarkdownCorrectionService.correct()` **포맷 교정** 한 번 더 (DOCX 와 동일 파이프라인) | `{docId}.md`(구조화) + `{docId}_corrected.md`(교정) | 섹션 단위, 초과 시 슬라이딩 윈도우 | 없음 | **지원** |
+| **MD** | 이미지/링크 마커 전처리 후 `#` 헤딩 기준 섹션 분할 | 없음 | 없음 | 섹션 단위, 초과 시 슬라이딩 윈도우 | `[이미지: ...]` 마커 → image_paths | 미지원 |
+
+> **DOCX·TXT 의 LLM 전처리는 graceful**: LLM 사용 불가 시 원본(변환 전) 텍스트를 그대로 사용해 인덱싱은 계속된다.  
+> **TXT 구조화 LLM 호출**: `TaskType.LIGHT_TEXT` · `RoutingMode.COST_FIRST`(로컬 프로바이더 우선). 큰 파일은 6,000자 블록으로 나눠 병렬 처리.  
+> **MD 재인덱싱(↺)**: `data/converted/{docId}[_corrected].md` 가 존재하는 DOCX·TXT 만 지원(`AdminController` `/admin/documents/{docId}/reindex`). 재변환/재교정 없이 저장된 MD 를 다시 청킹·임베딩한다. 태그는 FTS 인덱스에서 복원.
 
 ### 디렉터리 동기화 — 3단계
 

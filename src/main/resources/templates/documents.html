@@ -368,6 +368,15 @@
                     <div class="progress-bar bg-secondary"
                          style="width:${pct}%; transition:width 0.3s;"></div>
                 </div>` : `<span class="text-info">📄 ${escHtml(evt.message || '문서 로드 중...')}</span>`,
+            structuring: () => evt.total > 0 ? `
+                <div class="d-flex justify-content-between align-items-center small mb-1">
+                    <span class="text-info">🧱 Markdown 구조화 중</span>
+                    <span class="text-muted fw-semibold">${evt.done} / ${evt.total} 블록</span>
+                </div>
+                <div class="progress" style="height:5px;">
+                    <div class="progress-bar bg-warning"
+                         style="width:${pct}%; transition:width 0.3s;"></div>
+                </div>` : `<span class="text-info">🧱 Markdown 구조화 중...</span>`,
             correcting: () => evt.total > 0 ? `
                 <div class="d-flex justify-content-between align-items-center small mb-1">
                     <span class="text-info">📝 Markdown 교정 중</span>

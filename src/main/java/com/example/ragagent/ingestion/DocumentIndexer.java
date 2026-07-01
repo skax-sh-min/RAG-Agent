@@ -12,6 +12,7 @@ import com.example.ragagent.model.SyncResult;
 import com.example.ragagent.service.DocumentLoaderService;
 import com.example.ragagent.service.ImageExtractorService;
 import com.example.ragagent.service.MarkdownCorrectionService;
+import com.example.ragagent.service.TextToMarkdownService;
 import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -42,6 +43,7 @@ public class DocumentIndexer {
 
     private final DocumentLoaderService loaderService;
     private final MarkdownCorrectionService correctionService;
+    private final TextToMarkdownService textToMarkdownService;
     private final ImageExtractorService imageExtractorService;
     private final VectorStoreFacade vectorStore;
     private final DocRegistry docRegistry;
@@ -60,6 +62,7 @@ public class DocumentIndexer {
 
     public DocumentIndexer(DocumentLoaderService loaderService,
                            MarkdownCorrectionService correctionService,
+                           TextToMarkdownService textToMarkdownService,
                            ImageExtractorService imageExtractorService,
                            VectorStoreFacade vectorStore,
                            DocRegistry docRegistry,
@@ -68,6 +71,7 @@ public class DocumentIndexer {
                            AppProperties props) {
         this.loaderService = loaderService;
         this.correctionService = correctionService;
+        this.textToMarkdownService = textToMarkdownService;
         this.imageExtractorService = imageExtractorService;
         this.vectorStore = vectorStore;
         this.docRegistry = docRegistry;
@@ -128,6 +132,23 @@ public class DocumentIndexer {
             Files.createDirectories(rawMdPath.getParent());
             Files.writeString(rawMdPath, rawMd);
             String sourceMd = correctionService.correct(rawMd, docId, correctedMdPath,
+                    (done, total) -> req.onProgress().accept(
+                            IndexingProgressEvent.of("correcting", done, total, req.filename(),
+                                    done + "/" + total + " 섹션 교정 중")));
+            rawDocs = loaderService.loadFromMarkdown(sourceMd);
+        } else if (lower.endsWith(".txt")) {
+            // Plain text has no inherent structure → let the LLM impose headings/lists + fix grammar,
+            // then run it through the same MD pipeline DOCX uses (format correction → section split).
+            // Graceful: convert()/correct() keep the original text if the LLM is unavailable.
+            req.onProgress().accept(IndexingProgressEvent.of("loading", 0, 0, req.filename(), "TXT → Markdown 구조화 중..."));
+            String plainText = Files.readString(req.path());
+            String structuredMd = textToMarkdownService.convert(plainText, docId,
+                    (done, total) -> req.onProgress().accept(
+                            IndexingProgressEvent.of("structuring", done, total, req.filename(),
+                                    done + "/" + total + " 블록 구조화 중")));
+            Files.createDirectories(rawMdPath.getParent());
+            Files.writeString(rawMdPath, structuredMd);
+            String sourceMd = correctionService.correct(structuredMd, docId, correctedMdPath,
                     (done, total) -> req.onProgress().accept(
                             IndexingProgressEvent.of("correcting", done, total, req.filename(),
                                     done + "/" + total + " 섹션 교정 중")));
@@ -205,7 +226,7 @@ public class DocumentIndexer {
         Path mdPath = Files.exists(correctedPath) ? correctedPath : rawPath;
         if (!Files.exists(mdPath)) {
             throw new IllegalStateException(
-                    "MD 파일이 없습니다 (DOCX 문서만 MD 재인덱싱 지원): " + docId);
+                    "MD 파일이 없습니다 (DOCX/TXT 문서만 MD 재인덱싱 지원): " + docId);
         }
 
         log.info("[REINDEX] 시작: docId={}, src={}", docId, mdPath.getFileName());
@@ -534,7 +555,8 @@ public class DocumentIndexer {
             return new ArrayList<>(docs);
         }
 
-        if (lower.endsWith(".md") || lower.endsWith(".docx")) {
+        // .txt is converted to structured MD before this point, so it splits section-wise too.
+        if (lower.endsWith(".md") || lower.endsWith(".docx") || lower.endsWith(".txt")) {
             List<Document> result = new ArrayList<>();
             for (Document doc : docs) {
                 if (doc.getText() == null || doc.getText().isBlank()) continue;

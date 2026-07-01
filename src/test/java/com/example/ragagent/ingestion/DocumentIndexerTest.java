@@ -5,6 +5,7 @@ import com.example.ragagent.model.DocumentInfo;
 import com.example.ragagent.service.DocumentLoaderService;
 import com.example.ragagent.service.ImageExtractorService;
 import com.example.ragagent.service.MarkdownCorrectionService;
+import com.example.ragagent.service.TextToMarkdownService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -69,9 +70,16 @@ class DocumentIndexerTest {
         List<Document> stubDocs = List.of(new Document("테스트 문서 내용입니다. 청킹과 메타 태깅을 검증합니다."));
         when(loaderService.load(any())).thenReturn(stubDocs);
         when(loaderService.load(any(), any())).thenReturn(stubDocs);
+        // TXT path (structured MD) feeds loadFromMarkdown
+        when(loaderService.loadFromMarkdown(any())).thenReturn(stubDocs);
 
-        // Stub MarkdownCorrectionService and ImageExtractorService (not exercised here)
+        // Stub MarkdownCorrectionService / TextToMarkdownService — pass content through unchanged
         MarkdownCorrectionService correctionService = mock(MarkdownCorrectionService.class);
+        when(correctionService.correct(any(), any(), any(), any()))
+                .thenAnswer(inv -> inv.getArgument(0));
+        TextToMarkdownService textToMarkdownService = mock(TextToMarkdownService.class);
+        when(textToMarkdownService.convert(any(), any(), any()))
+                .thenAnswer(inv -> inv.getArgument(0));
         ImageExtractorService imageExtractorService = mock(ImageExtractorService.class);
         when(imageExtractorService.extract(any(), anyString(), any())).thenReturn(java.util.Map.of());
 
@@ -83,8 +91,8 @@ class DocumentIndexerTest {
         keywordRepo = new KeywordSearchRepository(new JdbcTemplate(ds));
         keywordRepo.init();
 
-        indexer = new DocumentIndexer(loaderService, correctionService, imageExtractorService,
-                vectorStore, docRegistry, keywordRepo, llmRouter, props);
+        indexer = new DocumentIndexer(loaderService, correctionService, textToMarkdownService,
+                imageExtractorService, vectorStore, docRegistry, keywordRepo, llmRouter, props);
         indexer.init();
     }
 
@@ -105,6 +113,21 @@ class DocumentIndexerTest {
         assertThat(docRegistry.findByDocId(info.docId(), DocRegistry.SHARED)).isPresent();
 
         // Vector store received the enriched chunks
+        verify(vectorStore, atLeastOnce()).add(eq(DocRegistry.SHARED), eq("v1"), any());
+    }
+
+    @Test
+    @DisplayName("TXT 업로드 — DOCX처럼 구조화 MD가 converted/ 에 저장되고 MD 경로로 인덱싱")
+    void index_txt_convertsToMarkdown() throws IOException {
+        Path txt = tmpDir.resolve("plain.txt");
+        Files.writeString(txt, "제목 없는 평문입니다. 구조화 대상 내용.");
+
+        DocumentInfo info = indexer.index(IndexRequest.single(txt, "plain.txt", "v1", "anonymous", e -> {}));
+
+        // TXT는 이제 DOCX처럼 MD로 변환되어 저장된다 (plain load 경로가 아님을 입증)
+        Path md = tmpDir.resolve("converted").resolve(info.docId() + ".md");
+        assertThat(md).exists();
+        assertThat(Files.readString(md)).contains("구조화 대상 내용");
         verify(vectorStore, atLeastOnce()).add(eq(DocRegistry.SHARED), eq("v1"), any());
     }
 
