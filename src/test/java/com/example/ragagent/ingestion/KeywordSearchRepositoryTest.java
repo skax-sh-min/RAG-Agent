@@ -17,7 +17,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /**
- * R-2 회귀 — FTS5 키워드 인덱스 (인덱싱 / BM25 검색 / 버전 필터 / 삭제 / MATCH 빌더).
+ * 회귀 — FTS5 키워드 인덱스 (인덱싱 / BM25 검색 / 버전 필터 / 삭제 / MATCH 빌더).
  */
 class KeywordSearchRepositoryTest {
 

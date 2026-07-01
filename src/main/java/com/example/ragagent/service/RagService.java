@@ -64,7 +64,7 @@ public class RagService {
         return indexDocument(userId, filePath, filename, version, List.of(), onProgress);
     }
 
-    /** Step 5.9: index with search-scope tags stored in chunk metadata. */
+    /** index with search-scope tags stored in chunk metadata. */
     public DocumentInfo indexDocument(String userId, Path filePath, String filename, String version,
                                       List<String> tags,
                                       Consumer<IndexingProgressEvent> onProgress) throws IOException {
@@ -112,12 +112,12 @@ public class RagService {
         return vectorStore.search(DocRegistry.SHARED, query, version, topK);
     }
 
-    /** S-3: batched multi-query search — one embedding call + one Chroma query for all variants. */
+    /** batched multi-query search — one embedding call + one Chroma query for all variants. */
     public List<List<Document>> searchBatch(String userId, List<String> queries, String version, int topK) {
         return vectorStore.searchBatch(DocRegistry.SHARED, queries, version, topK);
     }
 
-    /** R-2: BM25 keyword (FTS5) search axis for hybrid retrieval. */
+    /** BM25 keyword (FTS5) search axis for hybrid retrieval. */
     /** Distinct tags in use (optionally scoped to a version) for tag-suggestion UI. */
     public List<String> listTags(String version) {
         return keywordRepo.distinctTags(version);

@@ -72,7 +72,7 @@ public class LlmRouter {
                         "DUAL requires at least one external provider (NORMAL or PREMIUM)."));
 
         try (var exec = Executors.newVirtualThreadPerTaskExecutor()) {
-            // B-21: exceptionally() ensures one side's failure never cancels the other via exec.close()
+            // exceptionally() ensures one side's failure never cancels the other via exec.close()
             CompletableFuture<String> localF = CompletableFuture
                     .supplyAsync(() -> executeSingleTracked(local, taskType, call), exec)
                     .exceptionally(t -> {
@@ -108,7 +108,7 @@ public class LlmRouter {
                         "DUAL requires at least one external provider (NORMAL or PREMIUM)."));
 
         try (var exec = Executors.newVirtualThreadPerTaskExecutor()) {
-            // B-21: exceptionally() ensures one side's failure never cancels the other via exec.close()
+            // exceptionally() ensures one side's failure never cancels the other via exec.close()
             CompletableFuture<Void> localF = CompletableFuture
                     .runAsync(() -> callFn.accept(local, localTokenSink), exec)
                     .exceptionally(t -> {

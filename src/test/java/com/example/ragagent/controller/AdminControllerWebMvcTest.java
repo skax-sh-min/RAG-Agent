@@ -34,7 +34,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 /**
  * QA — {@code GET /admin}이 두 백엔드(chroma·sqlite-vec)에서 모델 속성을 채우고
- * {@code admin.html}을 회귀 없이 렌더하는지 검증한다 (Step 5.8). 서비스 단위(AdminServiceTest)가
+ * {@code admin.html}을 회귀 없이 렌더하는지 검증한다. 서비스 단위(AdminServiceTest)가
  * 못 잡는 컨트롤러 배선 + Thymeleaf 백엔드 조건부 렌더 회귀를 보호한다.
  */
 @WebMvcTest(value = AdminController.class, properties = "app.auth.enabled=true")

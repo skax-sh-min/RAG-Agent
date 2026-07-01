@@ -49,7 +49,7 @@ public class DocumentIndexer {
     private final LlmRouter llmRouter;
     private final AppProperties props;
 
-    // B-24/B-25: single daemon thread for keyword-extraction timeout signals
+    // single daemon thread for keyword-extraction timeout signals
     private final ScheduledExecutorService timeoutScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
         Thread t = new Thread(r, "kw-timeout");
         t.setDaemon(true);
@@ -438,8 +438,8 @@ public class DocumentIndexer {
                 %s
                 [/DOCUMENT]""".formatted(safeText);
         int timeoutSec = props.indexingSafe().keywordTimeoutSeconds();
-        // B-24: called inside a VT from enrichParallel — invoke directly, no ForkJoinPool
-        // B-25: interrupt this thread on timeout so the blocking HTTP call is actually cancelled
+        // called inside a VT from enrichParallel — invoke directly, no ForkJoinPool
+        // interrupt this thread on timeout so the blocking HTTP call is actually cancelled
         Thread self = Thread.currentThread();
         ScheduledFuture<?> killer = timeoutScheduler.schedule(self::interrupt, timeoutSec, TimeUnit.SECONDS);
         try {

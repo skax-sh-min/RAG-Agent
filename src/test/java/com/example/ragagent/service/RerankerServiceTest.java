@@ -20,7 +20,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 /**
- * R-3 — RerankerService 단위 테스트.
+ * RerankerService 단위 테스트.
  */
 class RerankerServiceTest {
 

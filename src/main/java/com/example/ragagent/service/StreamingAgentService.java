@@ -132,7 +132,7 @@ public class StreamingAgentService {
             trySendError(emitter, msg);
             emitter.complete();
         } catch (Exception e) {
-            // B-20: interrupt signals client disconnect / SSE timeout — not an error
+            // interrupt signals client disconnect / SSE timeout — not an error
             boolean interrupted = e instanceof InterruptedException
                     || e.getCause() instanceof InterruptedException
                     || Thread.currentThread().isInterrupted();
@@ -143,7 +143,7 @@ public class StreamingAgentService {
             } else {
                 log.error("SSE streaming error", e);
             }
-            // B-13: persist whatever answer was streamed so subsequent turns have context
+            // persist whatever answer was streamed so subsequent turns have context
             if (listener != null) {
                 String partial = listener.getAccumulatedAnswer();
                 if (!partial.isBlank()) {
@@ -151,7 +151,7 @@ public class StreamingAgentService {
                         memoryService.addTurn(userId, form.threadId(), form.question(),
                                 partial + "\n[오류로 중단됨]",
                                 askedAt, 0, 0, 0, null, 0);
-                        log.debug("[B-13] partial answer persisted ({} chars) thread={}",
+                        log.debug("partial answer persisted ({} chars) thread={}",
                                 partial.length(), form.threadId());
                     } catch (Exception persistEx) {
                         log.warn("Failed to persist partial answer on streaming error", persistEx);

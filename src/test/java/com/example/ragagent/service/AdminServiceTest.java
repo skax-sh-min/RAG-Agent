@@ -27,7 +27,7 @@ import static org.mockito.Mockito.when;
 /**
  * {@link AdminService}가 백엔드 독립적으로 동작하는지 검증한다: chroma 모드에서 {@code ChromaApi}
  * 부재 시 graceful 강등, sqlite-vec 모드에서 {@code JdbcTemplate} 기반 상태 집계·청크 브라우징,
- * 그리고 {@link AdminService#vectorStoreView()}의 백엔드별 집계 (Step 5.8).
+ * 그리고 {@link AdminService#vectorStoreView()}의 백엔드별 집계.
  */
 class AdminServiceTest {
 

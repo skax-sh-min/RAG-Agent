@@ -30,7 +30,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * <p>Holds all Chroma-specific I/O (previously inlined in {@link VectorStoreFacade}):
  * {@link VectorStoreRegistry} for per-(userId, version) collections, the raw
  * {@link ChromaApi} for batched multi-query search, the collection-id cache, and
- * the R-1 similarity threshold. Each (userId, version) pair maps to its own
+ * the similarity threshold. Each (userId, version) pair maps to its own
  * Chroma collection.
  *
  * <p>Registered as a {@code VectorStoreProvider} bean by {@code VectorStoreProviderConfig} only when
@@ -77,12 +77,12 @@ public class ChromaVectorStoreProvider implements VectorStoreProvider {
     }
 
     /**
-     * S-3: Batched multi-query search. Embeds all query variants in a single
+     * Batched multi-query search. Embeds all query variants in a single
      * {@link EmbeddingModel#embed(List)} call and issues one Chroma {@code queryCollection}
      * with all embeddings, instead of N separate embed+query round-trips.
      *
      * <p>Mirrors {@code ChromaVectorStore.doSimilaritySearch} semantics:
-     * {@code similarity = 1 - distance}, R-1 threshold applied, same filter converter.
+     * {@code similarity = 1 - distance}, threshold applied, same filter converter.
      */
     @Override
     public List<List<Document>> searchBatch(String userId, List<String> queries, String version, int topK) {
@@ -109,7 +109,7 @@ public class ChromaVectorStoreProvider implements VectorStoreProvider {
         registry.getStore(userId, version).delete(springDocIds);
     }
 
-    // ── S-3 helpers ──────────────────────────────────────────────────────────
+    // ── helpers ──────────────────────────────────────────────────────────
 
     /** Resolves (and caches) the Chroma collection id. null when the collection does not exist yet. */
     private String resolveCollectionId(String userId, String version) {
@@ -148,7 +148,7 @@ public class ChromaVectorStoreProvider implements VectorStoreProvider {
             for (int j = 0; ids != null && j < ids.size(); j++) {
                 double distance = (dists != null && j < dists.size() && dists.get(j) != null) ? dists.get(j) : 0.0;
                 double similarity = 1.0 - distance;
-                if (similarity < similarityThreshold) continue;   // R-1 (0.0 = accept all)
+                if (similarity < similarityThreshold) continue;
                 String text = (docs != null && j < docs.size()) ? docs.get(j) : "";
                 Map<String, Object> meta = (metas != null && j < metas.size() && metas.get(j) != null)
                         ? new HashMap<>(metas.get(j)) : new HashMap<>();

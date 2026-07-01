@@ -15,7 +15,7 @@ import static org.mockito.Mockito.when;
 /**
  * {@link VectorStoreFacade} 책임 단위 테스트.
  *
- * <p>Chroma 내부 동작(R-1/S-3)은 {@link ChromaVectorStoreProviderTest}에서 검증하며,
+ * <p>Chroma 내부 동작은 {@link ChromaVectorStoreProviderTest}에서 검증하며,
  * 여기서는 façade 고유 책임만 확인한다: (1) {@code SAFE_VERSION} 정규화,
  * (2) {@link VectorStoreProvider}로의 위임(pass-through).
  */

@@ -39,7 +39,7 @@ public class AnswerService {
 
     private static final int MAX_ANSWER_LEN = 20_000;
 
-    /** S-1: single evaluation call returns both gates. */
+    /** single evaluation call returns both gates. */
     private record EvalOutput(boolean sufficient, boolean grounded) {}
 
     private final ChatClient chatClient;
@@ -230,7 +230,7 @@ public class AnswerService {
     }
 
     /**
-     * S-1: single LLM call evaluating both gates at once.
+     * single LLM call evaluating both gates at once.
      * needsRetry is driven by sufficiency (the ANSWER-node gate); grounded is stored for the
      * CRITIC node to consume without a second LLM round-trip. When no docs were retrieved,
      * grounding is trivially true (CRITIC short-circuits on empty docs anyway).

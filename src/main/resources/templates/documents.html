@@ -273,7 +273,7 @@
             const form = new FormData();
             form.append('file', file);
             form.append('version', version);
-            if (tags) form.append('tags', tags);   // Step 5.9: 검색 스코프 태그
+            if (tags) form.append('tags', tags);   // 검색 스코프 태그
 
             xhr.upload.addEventListener('progress', e => {
                 if (e.lengthComputable) onUploadPct(Math.round(e.loaded / e.total * 100));

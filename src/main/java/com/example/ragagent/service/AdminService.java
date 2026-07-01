@@ -24,7 +24,7 @@ import java.util.*;
 /**
  * Admin-level access to the active vector store: ChromaDB collection/chunk browsing,
  * plus a backend-agnostic status view ({@link #vectorStoreView()}) covering both
- * chroma and sqlite-vec (Step 5.8).
+ * chroma and sqlite-vec.
  */
 @Service
 public class AdminService {
@@ -71,7 +71,7 @@ public class AdminService {
     /** Wraps listCollections result with a ChromaDB availability flag. */
     public record CollectionsResult(List<CollectionSummary> items, boolean available) {}
 
-    // ── Vector store status (backend-agnostic, Step 5.8) ───────────────────────
+    // ── Vector store status (backend-agnostic) ───────────────────────
 
     /** Active-backend status for the {@code /admin} "Vector Store 상태" card. */
     public VectorStoreAdminView vectorStoreView() {
@@ -286,7 +286,7 @@ public class AdminService {
         }
     }
 
-    // ── sqlite-vec chunk browsing (Step 5.8 parity) ────────────────────────────
+    // ── sqlite-vec chunk browsing ────────────────────────────
     // For sqlite-vec the "collection" identifier passed from the UI is the version
     // string (vec0 partition key). Chunks live in vec_document_chunks(content/metadata).
 

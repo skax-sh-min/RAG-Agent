@@ -9,7 +9,7 @@ import java.util.Locale;
 import java.util.Objects;
 
 /**
- * Tag normalization, validation, and matching for the tag-based search scope (Step 5.9).
+ * Tag normalization, validation, and matching for the tag-based search scope.
  *
  * <p>Policy: lowercase + trim + dedupe + drop blanks; at most {@link #MAX_TAGS} tags,
  * each at most {@link #MAX_TAG_LEN} chars. {@link #normalize} throws on policy violation

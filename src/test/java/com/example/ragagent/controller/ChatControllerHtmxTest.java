@@ -37,7 +37,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  *  - 빈 질문 → 'fragments/message-error :: message'
  *  - DUAL 응답 시 'fragments/message-assistant-dual :: message'
  *  - 서비스 예외 → 'fragments/message-error :: message'
- *  - B-26: directMode 누락 시 400 방지
+ *  - directMode 누락 시 400 방지
  */
 @WebMvcTest(value = ChatController.class, properties = "app.auth.enabled=true")
 @Import({com.example.ragagent.context.WebMvcConfig.class, com.example.ragagent.security.SecurityConfig.class})
@@ -130,10 +130,10 @@ class ChatControllerHtmxTest {
                 .andExpect(view().name("fragments/message-error :: message"));
     }
 
-    // ── B-26 회귀: directMode 파라미터 누락 시 400 방지 ────────────────────────
+    // ── 회귀: directMode 파라미터 누락 시 400 방지 ────────────────────────
 
     @Test
-    @DisplayName("POST /ui/chat — directMode 누락 시 400 아닌 정상 응답 (B-26 회귀)")
+    @DisplayName("POST /ui/chat — directMode 누락 시 400 아닌 정상 응답")
     void postChat_missingDirectMode_doesNotReturn400() throws Exception {
         when(agentService.chat(any(), any())).thenReturn(sampleResponse());
 
@@ -147,7 +147,7 @@ class ChatControllerHtmxTest {
     }
 
     @Test
-    @DisplayName("POST /ui/chat/stream — directMode 누락 시 SSE 정상 시작 (B-26 회귀)")
+    @DisplayName("POST /ui/chat/stream — directMode 누락 시 SSE 정상 시작")
     void streamChat_missingDirectMode_doesNotReturn400() throws Exception {
         when(props.sseTimeoutMs()).thenReturn(300_000L);
         mvc.perform(post("/ui/chat/stream")

@@ -37,8 +37,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  *  - GET /login 기본 응답
  *  - GET /setup 접근 제어 (auth 모드 / admin 유무)
  *  - POST /signup 입력 검증 (이메일·비밀번호·중복)
- *  - B-28 회귀: 가입 후 기존 세션 무효화
- *  - B-29 회귀: 73자 비밀번호 거부
+ *  - 회귀: 가입 후 기존 세션 무효화
+ *  - 회귀: 73자 비밀번호 거부
  */
 @WebMvcTest(value = AuthController.class, properties = "app.auth.enabled=true")
 @Import({SecurityConfig.class, com.example.ragagent.context.WebMvcConfig.class})
@@ -165,7 +165,7 @@ class AuthControllerTest {
     }
 
     @Test
-    @DisplayName("POST /signup — 73자 비밀번호 → 검증 실패 (B-29 회귀)")
+    @DisplayName("POST /signup — 73자 비밀번호 → 검증 실패")
     void signup_passwordOver72Chars_rejectsWithError() throws Exception {
         String pw73 = "Aa1!" + "x".repeat(69); // 4 + 69 = 73 chars
         when(userDetailsService.emailExists(anyString())).thenReturn(false);
@@ -181,7 +181,7 @@ class AuthControllerTest {
     }
 
     @Test
-    @DisplayName("POST /signup — 72자 비밀번호 → 허용됨 (B-29 경계값)")
+    @DisplayName("POST /signup — 72자 비밀번호 → 허용됨")
     void signup_password72Chars_allowed() throws Exception {
         String pw72 = "Aa1!" + "x".repeat(68); // 4 + 68 = 72 chars
         when(userDetailsService.emailExists(anyString())).thenReturn(false);
@@ -212,10 +212,10 @@ class AuthControllerTest {
                 .andExpect(flash().attribute("error", "auth.signup.error.password.mismatch"));
     }
 
-    // ── B-28 회귀: 세션 고정 방지 ────────────────────────────────────────────
+    // ── 회귀: 세션 고정 방지 ────────────────────────────────────────────
 
     @Test
-    @DisplayName("POST /signup — 성공 후 기존 세션 무효화 (B-28 회귀)")
+    @DisplayName("POST /signup — 성공 후 기존 세션 무효화")
     void signup_success_invalidatesOldSession() throws Exception {
         when(userDetailsService.emailExists(anyString())).thenReturn(false);
         when(passwordEncoder.encode(anyString())).thenReturn("hash");
@@ -233,7 +233,7 @@ class AuthControllerTest {
                 .andExpect(redirectedToRoot());
 
         assertThat(preSession.isInvalid())
-                .as("기존 세션은 가입 완료 후 무효화돼야 한다 (B-28)")
+                .as("기존 세션은 가입 완료 후 무효화돼야 한다")
                 .isTrue();
     }
 }

@@ -17,7 +17,7 @@ import java.util.Set;
 import java.util.TreeSet;
 
 /**
- * R-2: SQLite FTS5 keyword index over chunk content + extracted keywords.
+ * SQLite FTS5 keyword index over chunk content + extracted keywords.
  * Provides a BM25-ranked lexical search axis that complements vector similarity
  * (recovers exact terms — product codes, error codes, API names — that embeddings miss).
  *
@@ -70,9 +70,9 @@ public class KeywordSearchRepository {
         createChunkFtsTable(CHUNK_FTS);
         Set<String> columns = tableColumns(CHUNK_FTS);
         if (!columns.isEmpty() && !columns.contains("doc_tags")) {
-            log.warn("[KEYWORD] Legacy chunk_fts schema detected (missing doc_tags). Rebuilding FTS index.");
+            log.warn("[KEYWORD] Legacy chunk_fts schema detected: doc_tags column is missing. Rebuilding FTS table.");
             rebuildChunkFtsWithDocTags();
-            log.warn("[KEYWORD] chunk_fts rebuilt. Run document sync once to repopulate historical tags/keywords.");
+            log.warn("[KEYWORD] chunk_fts rebuild completed. Run document sync once to repopulate historical tags and keywords.");
         }
     }
 
@@ -101,12 +101,12 @@ public class KeywordSearchRepository {
                         """).formatted(tempTable, CHUNK_FTS));
             } catch (Exception copyErr) {
                 // Keep rebuilding even if legacy rows cannot be copied; this table is a derived index.
-                log.warn("[KEYWORD] FTS row copy skipped during rebuild: {}", copyErr.getMessage());
+                log.warn("[KEYWORD] Skipped legacy row copy during rebuild (derived index will be refilled on next indexing): {}", copyErr.getMessage());
             }
             jdbc.execute("DROP TABLE IF EXISTS " + CHUNK_FTS);
             jdbc.execute("ALTER TABLE " + tempTable + " RENAME TO " + CHUNK_FTS);
         } catch (Exception e) {
-            log.warn("[KEYWORD] chunk_fts rebuild failed; recreating empty table: {}", e.getMessage());
+            log.warn("[KEYWORD] chunk_fts rebuild failed; recreating an empty FTS table as fallback: {}", e.getMessage());
             jdbc.execute("DROP TABLE IF EXISTS " + tempTable);
             jdbc.execute("DROP TABLE IF EXISTS " + CHUNK_FTS);
             createChunkFtsTable(CHUNK_FTS);

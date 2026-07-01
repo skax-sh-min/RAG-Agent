@@ -6,7 +6,7 @@ import org.junit.jupiter.api.Test;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * QA — RagService.isSupportedExtension (B-03)
+ * QA — RagService.isSupportedExtension
  *
  * Verifies that upload extension whitelist correctly accepts/rejects file types
  * before any disk staging happens.

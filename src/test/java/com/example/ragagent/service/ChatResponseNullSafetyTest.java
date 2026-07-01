@@ -23,7 +23,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 /**
- * QA — B-23 ChatResponse output null 안전성 회귀 테스트.
+ * QA — ChatResponse output null 안전성 회귀 테스트.
  *
  * Verifies that ChatResponses.safeText() and each service that uses it
  * never throw NPE when the LLM returns a null text payload.
@@ -33,13 +33,13 @@ class ChatResponseNullSafetyTest {
     // ── ChatResponses.safeText() unit tests ───────────────────────────────────
 
     @Test
-    @DisplayName("safeText — null ChatResponse → 빈 문자열 (B-23)")
+    @DisplayName("safeText — null ChatResponse → 빈 문자열")
     void safeText_nullResponse_returnsEmpty() {
         assertThat(ChatResponses.safeText(null)).isEmpty();
     }
 
     @Test
-    @DisplayName("safeText — null getResult() → 빈 문자열 (B-23)")
+    @DisplayName("safeText — null getResult() → 빈 문자열")
     void safeText_nullResult_returnsEmpty() {
         ChatResponse resp = mock(ChatResponse.class);
         when(resp.getResult()).thenReturn(null);
@@ -47,7 +47,7 @@ class ChatResponseNullSafetyTest {
     }
 
     @Test
-    @DisplayName("safeText — null getText() → 빈 문자열 (B-23)")
+    @DisplayName("safeText — null getText() → 빈 문자열")
     void safeText_nullText_returnsEmpty() {
         ChatResponse resp = mock(ChatResponse.class, RETURNS_DEEP_STUBS);
         when(resp.getResult().getOutput().getText()).thenReturn(null);
@@ -57,7 +57,7 @@ class ChatResponseNullSafetyTest {
     // ── ClassifierService ─────────────────────────────────────────────────────
 
     @Test
-    @DisplayName("ClassifierService.execute — getText() null → concept 폴백 (B-23)")
+    @DisplayName("ClassifierService.execute — getText() null → concept 폴백")
     void classifier_nullText_fallsToConcept() {
         ChatClient chatClient = mock(ChatClient.class, RETURNS_DEEP_STUBS);
         ChatResponse resp = mock(ChatResponse.class, RETURNS_DEEP_STUBS);
@@ -79,7 +79,7 @@ class ChatResponseNullSafetyTest {
     // ── CriticService ─────────────────────────────────────────────────────────
 
     @Test
-    @DisplayName("CriticService.execute — grounded 미설정(null) → grounded=true 폴백 (S-1)")
+    @DisplayName("CriticService.execute — grounded 미설정(null) → grounded=true 폴백")
     void critic_nullGrounded_treatsAsGrounded() {
         CriticService svc = new CriticService();
         AgentState state = AgentState.of("테스트", "latest", "t1", "", null)
@@ -96,7 +96,7 @@ class ChatResponseNullSafetyTest {
     }
 
     @Test
-    @DisplayName("CriticService.execute — 선계산 grounded=false → needsRetry=true (S-1)")
+    @DisplayName("CriticService.execute — 선계산 grounded=false → needsRetry=true")
     void critic_precomputedUngrounded_triggersRetry() {
         CriticService svc = new CriticService();
         AgentState state = AgentState.of("테스트", "latest", "t1", "", null)

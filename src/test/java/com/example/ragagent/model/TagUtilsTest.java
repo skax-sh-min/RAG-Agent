@@ -10,7 +10,7 @@ import java.util.stream.IntStream;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-/** Step 5.9 — 태그 정규화/검증/매칭 단위 테스트. */
+/** 태그 정규화/검증/매칭 단위 테스트. */
 class TagUtilsTest {
 
     @Test

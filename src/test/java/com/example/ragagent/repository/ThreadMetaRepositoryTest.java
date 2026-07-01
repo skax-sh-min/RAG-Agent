@@ -17,7 +17,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * QA — ThreadMetaRepository
  *
  * Covers:
- *  - B-04 save() UPSERT 가 routing_mode 갱신 누락하는지 회귀 검사
+ *  - save() UPSERT 가 routing_mode 갱신 누락하는지 회귀 검사
  */
 class ThreadMetaRepositoryTest {
 
@@ -41,7 +41,7 @@ class ThreadMetaRepositoryTest {
     }
 
     @Test
-    @DisplayName("save → save 두 번째 호출에서 routing_mode 가 갱신되어야 함 (B-04)")
+    @DisplayName("save → save 두 번째 호출에서 routing_mode 가 갱신되어야 함")
     void upsertShouldUpdateRoutingMode() {
         String now = ThreadMetaRepository.now();
         repo.save(new ThreadMeta("t1", UID, "first",  "v1", now, now, "COST_FIRST"));
@@ -50,7 +50,7 @@ class ThreadMetaRepositoryTest {
         var meta = repo.findById(UID, "t1").orElseThrow();
         assertThat(meta.title()).isEqualTo("second");
         assertThat(meta.routingMode())
-                .as("두 번째 save 호출의 routing_mode 가 반영되어야 함 (B-04)")
+                .as("두 번째 save 호출의 routing_mode 가 반영되어야 함")
                 .isEqualTo("QUALITY_FIRST");
     }
 

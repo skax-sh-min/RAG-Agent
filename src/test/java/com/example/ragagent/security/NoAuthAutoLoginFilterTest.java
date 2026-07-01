@@ -15,7 +15,7 @@ import static org.mockito.Mockito.*;
  * NoAuthAutoLoginFilter 계약 보호 테스트.
  *
  * Covers:
- *  - B-30 회귀: /api/v1/health, /actuator/** 는 passThrough — findFirstAdmin() 미호출
+ *  - /api/v1/health, /actuator/** 는 passThrough — findFirstAdmin() 미호출
  *  - admin 없을 때 /setup 리다이렉트
  *  - admin 있을 때 일반 경로 → GUEST principal 주입
  */
@@ -28,10 +28,10 @@ class NoAuthAutoLoginFilterTest {
         return new AppUserDetails("admin-id", "admin@local", "hash", "Admin", "ADMIN", true, false);
     }
 
-    // ── B-30 회귀: passThrough 경로 ─────────────────────────────────────────
+    // ── 회귀: passThrough 경로 ─────────────────────────────────────────
 
     @Test
-    @DisplayName("GET /api/v1/health — passThrough, DB 조회 없음 (B-30 회귀)")
+    @DisplayName("GET /api/v1/health — passThrough, DB 조회 없음")
     void healthPath_passesThrough_noDbCall() throws Exception {
         var req = new MockHttpServletRequest("GET", "/api/v1/health");
         var res = new MockHttpServletResponse();
@@ -44,7 +44,7 @@ class NoAuthAutoLoginFilterTest {
     }
 
     @Test
-    @DisplayName("GET /actuator/health — passThrough, DB 조회 없음 (B-30 회귀)")
+    @DisplayName("GET /actuator/health — passThrough, DB 조회 없음")
     void actuatorHealthPath_passesThrough_noDbCall() throws Exception {
         var req = new MockHttpServletRequest("GET", "/actuator/health");
         var res = new MockHttpServletResponse();
@@ -57,7 +57,7 @@ class NoAuthAutoLoginFilterTest {
     }
 
     @Test
-    @DisplayName("GET /actuator/prometheus — passThrough, DB 조회 없음 (B-30 회귀)")
+    @DisplayName("GET /actuator/prometheus — passThrough, DB 조회 없음")
     void actuatorSubpath_passesThrough_noDbCall() throws Exception {
         var req = new MockHttpServletRequest("GET", "/actuator/prometheus");
         var res = new MockHttpServletResponse();

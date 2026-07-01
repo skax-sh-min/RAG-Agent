@@ -114,7 +114,7 @@ public record AppProperties(
 
     /**
      * Similarity threshold for vector search, clamped to [0,1].
-     * 0.0 = accept all (Spring AI default) — preserves pre-R-1 behavior.
+     * 0.0 = accept all (Spring AI default).
      */
     public double searchSimilarityThresholdSafe() {
         if (searchSimilarityThreshold <= 0.0) return 0.0;

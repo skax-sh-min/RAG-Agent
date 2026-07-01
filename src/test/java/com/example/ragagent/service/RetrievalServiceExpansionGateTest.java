@@ -12,7 +12,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 /**
- * S-4 회귀 — 멀티쿼리 확장 게이트(shouldExpand) 동작.
+ * 회귀 — 멀티쿼리 확장 게이트(shouldExpand) 동작.
  */
 class RetrievalServiceExpansionGateTest {
 

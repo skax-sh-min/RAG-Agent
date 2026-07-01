@@ -136,7 +136,7 @@ public class SqliteVecVectorStoreProvider implements VectorStoreProvider {
         String vector = toVectorLiteral(embedding);
         List<Document> rows = jdbc.query(SEARCH, (rs, i) -> {
             double similarity = 1.0 - rs.getDouble("distance");
-            if (similarity < similarityThreshold) return null;          // R-1 (0.0 = accept all but negatives)
+            if (similarity < similarityThreshold) return null;          // 0.0 = accept all but negatives
             return Document.builder()
                     .id(rs.getString("spring_doc_id"))
                     .text(rs.getString("content"))

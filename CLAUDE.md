@@ -52,7 +52,7 @@ Flow:
 | `security/PromptInjectionGuard.java` | `validate()` length/blank check (MAX=2000); `wrap()` for delimiter isolation; `maskApiKey()` for safe logging |
 | `service/AnswerService.java` | 2-call pattern: answer + sufficiency; PROGRESSIVE upgrade; DUAL branch; `truncate()` caps at 20,000 chars |
 | `service/AgentService.java` | Entry point; `PromptInjectionGuard.validate()` at entry; parallel history + classify before graph |
-| `service/StreamingAgentService.java` | SSE pipeline; Virtual Thread worker; heartbeat every 15 s; partial answer persisted on error (B-13) |
+| `service/StreamingAgentService.java` | SSE pipeline; Virtual Thread worker; heartbeat every 15 s; partial answer persisted on error) |
 | `service/ClassifierService.java` | `classifyOnly(String)` (no token accumulation) + `execute(AgentState)` |
 | `service/RetrievalService.java` | Batch MultiQuery search → RRF fusion; retry escalation (`candidateK = min(topK×(retryCount+1), topK×3)`); optional rerank via injected `Optional<RerankerService>` |
 | `service/RerankerService.java` | LLM reranking (opt-in, `@ConditionalOnProperty app.search-rerank-enabled`); one LLM call reorders the candidate pool by relevance then cuts to topK; `parseRanking()` parses a JSON index array with range/dup filtering; falls back to original RRF order on parse failure |
@@ -79,7 +79,7 @@ Flow:
 docker-compose up chroma
 
 # Run app (LM Studio or LLM key)
-./mvnw spring-boot:run
+./mvn spring-boot:run
 ```
 
 ## Key Constraints

@@ -3,7 +3,7 @@ package com.example.ragagent.model;
 import java.util.List;
 
 /**
- * Backend-agnostic vector store status for the {@code /admin} page (Step 5.8).
+ * Backend-agnostic vector store status for the {@code /admin} page.
  *
  * <p>Common fields apply to both backends; backend-specific fields are null on the other backend:
  * <ul>

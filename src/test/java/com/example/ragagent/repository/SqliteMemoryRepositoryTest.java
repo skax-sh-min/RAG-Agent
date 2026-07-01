@@ -18,7 +18,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * Covers:
  *  - 신규 thread 빈 history
  *  - 50 turn 초과 시 FETCH_LIMIT 적용
- *  - B-11 단일 turn 이 maxChars 초과할 때의 동작
+ *  - 단일 turn 이 maxChars 초과할 때의 동작
  */
 class SqliteMemoryRepositoryTest {
 
@@ -79,14 +79,14 @@ class SqliteMemoryRepositoryTest {
     }
 
     @Test
-    @DisplayName("단일 turn 이 maxChars 초과해도 잘라서라도 컨텍스트 제공 (B-11)")
+    @DisplayName("단일 turn 이 maxChars 초과해도 잘라서라도 컨텍스트 제공")
     void singleTurnLargerThanBudget() {
         String huge = "x".repeat(10_000);
         repo.addTurn(UID, "t1", huge, huge, null, 0, 0, 0, null, 0);
         // 현재 구현: 첫 entry 가 budget 초과 → 즉시 break → 빈 문자열
         String result = repo.getHistory(UID, "t1", 1_000);
         assertThat(result)
-                .as("단일 거대 turn 이라도 잘라서라도 일부 컨텍스트 제공이 바람직 (B-11)")
+                .as("단일 거대 turn 이라도 잘라서라도 일부 컨텍스트 제공이 바람직")
                 .isNotEmpty();
     }
 }

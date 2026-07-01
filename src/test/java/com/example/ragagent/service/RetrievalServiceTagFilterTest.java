@@ -22,7 +22,7 @@ import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
-/** Step 5.9 — RetrievalService 태그 엄격(AND) post-filter 동작. */
+/** RetrievalService 태그 엄격(AND) post-filter 동작. */
 class RetrievalServiceTagFilterTest {
 
     private RagService rag;
