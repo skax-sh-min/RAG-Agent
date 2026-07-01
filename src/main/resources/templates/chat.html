@@ -207,10 +207,6 @@
                         <span class="input-group-text" th:title="#{chat.tags.tooltip}">
                             <i class="bi bi-tags"></i>
                         </span>
-                        <!-- 태그 선택 콤보: 선택 시 입력란에 자동 추가 -->
-                        <select id="chat-tag-select" class="form-select" style="max-width: 120px;">
-                            <option value="" selected>태그 선택...</option>
-                        </select>
                         <input type="text" id="chat-tags-input" name="tags"
                                class="form-control"
                                th:placeholder="#{chat.tags.placeholder}"
@@ -343,7 +339,9 @@
                 if (!tags || tags.length === 0) {
                     wrap.classList.add('d-none');
                     chips.innerHTML = '';
-                    tagSelect.innerHTML = '<option value="" selected>태그 선택...</option>';
+                    if (tagSelect) {
+                        tagSelect.innerHTML = '<option value="" selected>태그 선택...</option>';
+                    }
                     return;
                 }
                 chips.innerHTML = tags.map(t =>
@@ -352,20 +350,24 @@
                 chips.querySelectorAll('[data-tag]').forEach(btn =>
                     btn.addEventListener('click', () => chatToggleTag(btn.dataset.tag)));
 
-                const opts = ['<option value="" selected>태그 선택...</option>']
-                    .concat(tags.map(t => `<option value="${escHtml(t)}">${escHtml(t)}</option>`));
-                tagSelect.innerHTML = opts.join('');
+                if (tagSelect) {
+                    const opts = ['<option value="" selected>태그 선택...</option>']
+                        .concat(tags.map(t => `<option value="${escHtml(t)}">${escHtml(t)}</option>`));
+                    tagSelect.innerHTML = opts.join('');
+                }
 
                 wrap.classList.remove('d-none');
                 chatSyncTagChips();
             })
             .catch(() => {});
     }
-    tagSelect.addEventListener('change', function () {
-        if (!this.value) return;
-        chatAddTag(this.value);
-        this.value = '';
-    });
+    if (tagSelect) {
+        tagSelect.addEventListener('change', function () {
+            if (!this.value) return;
+            chatAddTag(this.value);
+            this.value = '';
+        });
+    }
     chatTagsInput.addEventListener('input', chatSyncTagChips);
     loadVersionOptions();
     loadChatTagSuggestions();

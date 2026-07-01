@@ -69,10 +69,6 @@
                                class="form-control"
                                th:placeholder="#{doc.tags.placeholder}"
                                th:title="#{doc.tags.tooltip}" autocomplete="off"/>
-                        <select id="tag-select" class="form-select" style="max-width: 170px;"
-                                th:title="#{doc.tags.select.title}">
-                            <option value="" selected th:text="#{doc.tags.select.placeholder}">태그 선택...</option>
-                        </select>
                     </div>
                     <button id="upload-btn" class="btn btn-sm btn-primary" disabled>
                         <i class="bi bi-upload me-1"></i>
@@ -614,7 +610,7 @@
     const tagSelect = document.getElementById('tag-select');
     const versionInput = document.getElementById('version-input');
     const versionOptions = document.getElementById('version-options');
-    const tagSelectPlaceholder = (tagSelect.options[0]?.textContent || 'Select tag...').trim();
+    const tagSelectPlaceholder = (tagSelect?.options?.[0]?.textContent || '태그 선택...').trim();
     let knownTagOptions = [];
 
     function currentTags() {
@@ -685,17 +681,20 @@
     }
 
     function syncTagSelectOptions() {
+        if (!tagSelect) return;
         const merged = Array.from(new Set([].concat(knownTagOptions, currentTags()))).sort();
         tagSelect.innerHTML = ['<option value="" selected>' + escHtml(tagSelectPlaceholder) + '</option>']
             .concat(merged.map(t => `<option value="${escHtml(t)}">${escHtml(t)}</option>`))
             .join('');
     }
 
-    tagSelect.addEventListener('change', function () {
-        if (!this.value) return;
-        addTag(this.value);
-        this.value = '';
-    });
+    if (tagSelect) {
+        tagSelect.addEventListener('change', function () {
+            if (!this.value) return;
+            addTag(this.value);
+            this.value = '';
+        });
+    }
     versionInput.addEventListener('change', function () {
         const v = (this.value || '').trim() || 'latest';
         this.value = v;
