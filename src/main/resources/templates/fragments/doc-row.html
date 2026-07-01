@@ -8,6 +8,11 @@
         <span th:text="${doc.filename}">파일명</span>
     </td>
     <td th:text="${doc.version}">버전</td>
+    <td>
+        <span th:if="${doc.tags == null or #lists.isEmpty(doc.tags)}" class="text-muted">-</span>
+        <span th:each="tag : ${doc.tags}" class="badge text-bg-light border me-1 mb-1"
+              th:text="${tag}">tag</span>
+    </td>
     <td th:text="${doc.chunks}">청크</td>
     <td th:text="${doc.indexedAt}">시각</td>
     <td>

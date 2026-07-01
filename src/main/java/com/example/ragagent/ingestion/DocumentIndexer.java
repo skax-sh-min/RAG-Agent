@@ -168,7 +168,9 @@ public class DocumentIndexer {
 
         log.info("[INDEX] 완료: {} → {}개 청크, {}ms", req.filename(), tagged.size(), System.currentTimeMillis() - t0);
         return new DocumentInfo(docId, req.filename(), req.version(), tagged.size(),
-                entry.indexedAt(), sha256, List.of());
+            entry.indexedAt(), sha256,
+            List.copyOf(new LinkedHashSet<>(req.tags() == null ? List.of() : req.tags())),
+            List.of());
     }
 
     /**

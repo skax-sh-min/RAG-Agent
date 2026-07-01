@@ -90,12 +90,19 @@ public class RagService {
     }
 
     public List<DocumentInfo> listDocuments(String userId) {
-        return docRegistry.entries(DocRegistry.SHARED).stream()
+        List<Map.Entry<String, DocRegistry.DocRegistryEntry>> entries = docRegistry.entries(DocRegistry.SHARED).stream()
+            .toList();
+        List<String> docIds = entries.stream().map(Map.Entry::getKey).toList();
+        Map<String, List<String>> tagsByDocId = keywordRepo.tagsByDocIds(docIds);
+
+        return entries.stream()
                 .map(e -> {
                     DocRegistry.DocRegistryEntry r = e.getValue();
                     String filename = DocRegistry.filenameFromDocId(e.getKey());
                     return new DocumentInfo(e.getKey(), filename, r.version(),
-                            r.chunks(), r.indexedAt(), r.sha256(), r.errors());
+                    r.chunks(), r.indexedAt(), r.sha256(),
+                    tagsByDocId.getOrDefault(e.getKey(), List.of()),
+                    r.errors());
                 })
                 .sorted(Comparator.comparing(DocumentInfo::indexedAt).reversed())
                 .toList();

@@ -13,6 +13,8 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.TreeSet;
 
 /**
  * R-2: SQLite FTS5 keyword index over chunk content + extracted keywords.
@@ -164,6 +166,39 @@ public class KeywordSearchRepository {
         } catch (Exception e) {
             log.debug("[KEYWORD] distinctTags failed: {}", e.getMessage());
             return List.of();
+        }
+    }
+
+    /**
+     * Returns distinct tags per doc_id (comma-split from doc_tags), sorted and de-duplicated.
+     * No-op (empty map) when FTS5 is unavailable or docIds is empty.
+     */
+    public Map<String, List<String>> tagsByDocIds(List<String> docIds) {
+        if (!available || docIds == null || docIds.isEmpty()) return Map.of();
+        String placeholders = String.join(",", java.util.Collections.nCopies(docIds.size(), "?"));
+        String sql = "SELECT doc_id, doc_tags FROM chunk_fts " +
+                "WHERE doc_id IN (" + placeholders + ") AND doc_tags IS NOT NULL AND doc_tags <> ''";
+        try {
+            Map<String, Set<String>> grouped = new HashMap<>();
+            jdbc.query(sql, rs -> {
+                String docId = rs.getString("doc_id");
+                String row = rs.getString("doc_tags");
+                if (docId == null || row == null || row.isBlank()) return;
+                Set<String> bucket = grouped.computeIfAbsent(docId, __ -> new TreeSet<>());
+                for (String t : row.split(",")) {
+                    String s = t.strip();
+                    if (!s.isEmpty()) bucket.add(s);
+                }
+            }, docIds.toArray());
+
+            Map<String, List<String>> out = new HashMap<>();
+            for (Map.Entry<String, Set<String>> e : grouped.entrySet()) {
+                out.put(e.getKey(), List.copyOf(e.getValue()));
+            }
+            return out;
+        } catch (Exception e) {
+            log.debug("[KEYWORD] tagsByDocIds failed: {}", e.getMessage());
+            return Map.of();
         }
     }
 
