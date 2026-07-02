@@ -2,10 +2,15 @@ package com.example.ragagent.service;
 
 import com.example.ragagent.config.AppProperties;
 import org.apache.poi.xwpf.usermodel.*;
+import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTPPr;
+import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTPPrGeneral;
 import org.springframework.stereotype.Component;
-import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTBr;
 import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTLvl;
-import org.openxmlformats.schemas.wordprocessingml.x2006.main.STBrType;
+import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTNumLvl;
+import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTTcPr;
+import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTNumPr;
+import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTStyle;
+import org.openxmlformats.schemas.wordprocessingml.x2006.main.STMerge;
 
 import java.io.IOException;
 import java.math.BigInteger;
@@ -15,6 +20,8 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Converts a DOCX to Markdown, extracting embedded images to imagesDir.
@@ -28,6 +35,14 @@ import java.util.Optional;
  */
 @Component
 public class DocxToMarkdownConverter {
+
+    private record ListInfo(BigInteger numId, int ilvl) {}
+    private record TextListInfo(boolean ordered, int ilvl, String content) {}
+
+    private static final Pattern TEXT_UNORDERED_LIST_PATTERN = Pattern.compile(
+        "^([\\t ]*)([-*+\\u2022\\u25E6\\u25AA\\u25CF\\u25C6\\u25B6])\\s+(.+)$");
+    private static final Pattern TEXT_ORDERED_LIST_PATTERN = Pattern.compile(
+        "^([\\t ]*)(\\(?\\d+\\)|\\d+[\\.)]|[A-Za-z][\\.)]|[가-힣][\\.)]|[①-⑳])\\s+(.+)$");
 
     private final Optional<EmfToPngConverter> emfConverter;
     private final Optional<LibreOfficeConverter> wmfConverter;
@@ -52,13 +67,14 @@ public class DocxToMarkdownConverter {
         StringBuilder sb = new StringBuilder();
         int[] imgCounter = {0};
         int[] paraIdx = {0};
-        int[] currentPage = {1};
         Map<String, int[]> headingCounters = new HashMap<>();
+        Map<String, boolean[]> headingCounterInit = new HashMap<>();
 
         try (XWPFDocument docx = new XWPFDocument(Files.newInputStream(docxPath))) {
             for (IBodyElement elem : docx.getBodyElements()) {
                 if (elem instanceof XWPFParagraph para) {
-                    appendParagraph(docx, sb, para, docId, imagesDir, imgCounter, paraIdx[0]++, currentPage, headingCounters);
+                    appendParagraph(docx, sb, para, docId, imagesDir, imgCounter, paraIdx[0]++,
+                            headingCounters, headingCounterInit);
                 } else if (elem instanceof XWPFTable table) {
                     appendTable(docx, sb, table, docId, imagesDir, imgCounter, paraIdx);
                 }
@@ -70,33 +86,37 @@ public class DocxToMarkdownConverter {
     private void appendParagraph(XWPFDocument doc, StringBuilder sb, XWPFParagraph para,
                                  String docId, Path imagesDir,
                                  int[] imgCounter, int paraIdx,
-                                 int[] currentPage,
-                                 Map<String, int[]> headingCounters) throws IOException {
+                                 Map<String, int[]> headingCounters,
+                                 Map<String, boolean[]> headingCounterInit) throws IOException {
         int heading = headingLevel(doc, para);
         String text = paragraphText(doc, para, docId, imagesDir, imgCounter, paraIdx);
+        ListInfo listInfo = resolveListInfo(doc, para);
 
         if (heading > 0) {
-            String numberingPrefix = resolveHeadingNumberPrefix(doc, para, headingCounters);
+            String numberingPrefix = resolveHeadingNumberPrefix(doc, listInfo, headingCounters, headingCounterInit);
             if (!numberingPrefix.isBlank() && !startsWithHeadingNumber(text)) {
                 text = numberingPrefix + " " + text;
             }
-            // Keep heading-level page anchors so downstream indexing can preserve source position.
-            sb.append("[헤딩페이지: ").append(currentPage[0]).append("]\n");
             if (!text.isBlank()) {
                 sb.append("#".repeat(Math.min(heading, 6)))
                         .append(" ").append(text.trim())
                         .append("\n\n");
             }
-            advancePageIfNeeded(sb, para, currentPage);
             return;
         }
 
-        if (para.getNumID() != null) {
-            int ilvl = para.getNumIlvl() != null ? para.getNumIlvl().intValue() : 0;
-            String indent = "  ".repeat(Math.max(0, ilvl));
-            String marker = isOrderedList(doc, para) ? "1." : "-";
+        if (listInfo != null) {
+            String indent = "  ".repeat(Math.max(0, listInfo.ilvl()));
+            String marker = isOrderedList(doc, listInfo.numId(), listInfo.ilvl()) ? "1." : "-";
             sb.append(indent).append(marker).append(" ").append(text).append("\n");
-            advancePageIfNeeded(sb, para, currentPage);
+            return;
+        }
+
+        TextListInfo textListInfo = resolveTextListInfo(para, text);
+        if (textListInfo != null) {
+            String indent = "  ".repeat(Math.max(0, textListInfo.ilvl()));
+            String marker = textListInfo.ordered() ? "1." : "-";
+            sb.append(indent).append(marker).append(" ").append(textListInfo.content()).append("\n");
             return;
         }
 
@@ -105,7 +125,6 @@ public class DocxToMarkdownConverter {
         } else {
             sb.append("\n");
         }
-        advancePageIfNeeded(sb, para, currentPage);
     }
 
     private String paragraphText(XWPFDocument doc, XWPFParagraph para,
@@ -206,24 +225,6 @@ public class DocxToMarkdownConverter {
         return link != null ? link.getURL() : null;
     }
 
-    private void advancePageIfNeeded(StringBuilder sb, XWPFParagraph para, int[] currentPage) {
-        if (!hasExplicitPageBreak(para)) return;
-        currentPage[0]++;
-        // Page anchor marker for sections that have no headings (e.g., prologue blocks).
-        sb.append("[페이지: ").append(currentPage[0]).append("]\n");
-    }
-
-    private boolean hasExplicitPageBreak(XWPFParagraph para) {
-        for (XWPFRun run : para.getRuns()) {
-            for (CTBr br : run.getCTR().getBrList()) {
-                if (br.isSetType() && STBrType.PAGE.equals(br.getType())) {
-                    return true;
-                }
-            }
-        }
-        return false;
-    }
-
     private void appendTable(XWPFDocument doc, StringBuilder sb, XWPFTable table,
                              String docId, Path imagesDir,
                              int[] imgCounter, int[] paraIdx) throws IOException {
@@ -237,26 +238,77 @@ public class DocxToMarkdownConverter {
             return;
         }
 
+        int maxCols = rows.stream()
+                .mapToInt(this::rowColumnWidth)
+                .max()
+                .orElse(0);
+        if (maxCols <= 0) return;
+
         sb.append("\n");
         for (int i = 0; i < rows.size(); i++) {
             XWPFTableRow row = rows.get(i);
-            List<XWPFTableCell> cells = row.getTableCells();
+            List<String> flatCells = flattenRow(doc, row, docId, imagesDir, imgCounter, paraIdx, maxCols);
+
             sb.append("|");
-            for (XWPFTableCell cell : cells) {
-                String text = cellContent(doc, cell, docId, imagesDir, imgCounter, paraIdx, " ")
-                        .replace("|", "\\|");
-                sb.append(" ").append(text).append(" |");
+            for (String text : flatCells) {
+                sb.append(" ").append(text.replace("|", "\\|")).append(" |");
             }
             sb.append("\n");
+
             if (i == 0) {
                 sb.append("|");
-                for (int j = 0; j < row.getTableCells().size(); j++) {
+                for (int j = 0; j < maxCols; j++) {
                     sb.append(" --- |");
                 }
                 sb.append("\n");
             }
         }
         sb.append("\n");
+    }
+
+    private int rowColumnWidth(XWPFTableRow row) {
+        int width = 0;
+        for (XWPFTableCell cell : row.getTableCells()) {
+            width += gridSpan(cell);
+        }
+        return width;
+    }
+
+    /**
+     * Flattens merged cells for markdown output.
+     * - horizontal merge(gridSpan): first column keeps text, expanded columns are blank
+     * - vertical merge(vMerge continue): blank cell
+     */
+    private List<String> flattenRow(XWPFDocument doc, XWPFTableRow row,
+                                    String docId, Path imagesDir,
+                                    int[] imgCounter, int[] paraIdx,
+                                    int maxCols) throws IOException {
+        List<String> out = new java.util.ArrayList<>(maxCols);
+        for (XWPFTableCell cell : row.getTableCells()) {
+            int span = gridSpan(cell);
+            String text = isVerticalMergeContinuation(cell)
+                    ? ""
+                    : cellContent(doc, cell, docId, imagesDir, imgCounter, paraIdx, " ");
+
+            out.add(text);
+            for (int i = 1; i < span; i++) out.add("");
+        }
+        while (out.size() < maxCols) out.add("");
+        if (out.size() > maxCols) return out.subList(0, maxCols);
+        return out;
+    }
+
+    private int gridSpan(XWPFTableCell cell) {
+        CTTcPr tcPr = cell.getCTTc() != null ? cell.getCTTc().getTcPr() : null;
+        if (tcPr == null || tcPr.getGridSpan() == null || tcPr.getGridSpan().getVal() == null) return 1;
+        return Math.max(1, tcPr.getGridSpan().getVal().intValue());
+    }
+
+    private boolean isVerticalMergeContinuation(XWPFTableCell cell) {
+        CTTcPr tcPr = cell.getCTTc() != null ? cell.getCTTc().getTcPr() : null;
+        if (tcPr == null || tcPr.getVMerge() == null) return false;
+        if (tcPr.getVMerge().getVal() == null) return true; // <w:vMerge/> means continuation
+        return tcPr.getVMerge().getVal() != STMerge.RESTART;
     }
 
     private boolean isSingleCellTable(List<XWPFTableRow> rows) {
@@ -271,6 +323,21 @@ public class DocxToMarkdownConverter {
         for (XWPFParagraph p : cell.getParagraphs()) {
             String line = paragraphText(doc, p, docId, imagesDir, imgCounter, paraIdx[0]++).trim();
             if (line.isEmpty()) continue;
+
+            ListInfo li = resolveListInfo(doc, p);
+            if (li != null) {
+                String indent = "  ".repeat(Math.max(0, li.ilvl()));
+                String marker = isOrderedList(doc, li.numId(), li.ilvl()) ? "1." : "-";
+                line = indent + marker + " " + line;
+            } else {
+                TextListInfo textLi = resolveTextListInfo(p, line);
+                if (textLi != null) {
+                    String indent = "  ".repeat(Math.max(0, textLi.ilvl()));
+                    String marker = textLi.ordered() ? "1." : "-";
+                    line = indent + marker + " " + textLi.content();
+                }
+            }
+
             if (!out.isEmpty()) out.append(separator);
             out.append(line);
         }
@@ -309,9 +376,8 @@ public class DocxToMarkdownConverter {
         return 0;
     }
 
-    private boolean isOrderedList(XWPFDocument doc, XWPFParagraph para) {
+    private boolean isOrderedList(XWPFDocument doc, BigInteger numId, int ilvl) {
         try {
-            BigInteger numId = para.getNumID();
             if (numId == null) return false;
             XWPFNumbering numbering = doc.getNumbering();
             if (numbering == null) return false;
@@ -320,7 +386,6 @@ public class DocxToMarkdownConverter {
             BigInteger abstractNumId = num.getCTNum().getAbstractNumId().getVal();
             XWPFAbstractNum abstractNum = numbering.getAbstractNum(abstractNumId);
             if (abstractNum == null) return false;
-            int ilvl = para.getNumIlvl() != null ? para.getNumIlvl().intValue() : 0;
             CTLvl lvl = abstractNum.getCTAbstractNum().getLvlArray(ilvl);
             if (lvl == null || lvl.getNumFmt() == null) return false;
             return !"bullet".equals(lvl.getNumFmt().getVal().toString());
@@ -329,19 +394,120 @@ public class DocxToMarkdownConverter {
         }
     }
 
-    private String resolveHeadingNumberPrefix(XWPFDocument doc, XWPFParagraph para, Map<String, int[]> countersByNumId) {
+    private ListInfo resolveListInfo(XWPFDocument doc, XWPFParagraph para) {
+        BigInteger numId = para.getNumID();
+        int ilvl = para.getNumIlvl() != null ? para.getNumIlvl().intValue() : 0;
+        if (numId != null) return new ListInfo(numId, ilvl);
+
+        CTPPr paraPPr = para.getCTP() != null ? para.getCTP().getPPr() : null;
+        if (paraPPr != null && paraPPr.getNumPr() != null) {
+            CTNumPr numPr = paraPPr.getNumPr();
+            if (numPr.getNumId() != null && numPr.getNumId().getVal() != null) {
+                BigInteger inheritedNumId = numPr.getNumId().getVal();
+                int inheritedIlvl = (numPr.getIlvl() != null && numPr.getIlvl().getVal() != null)
+                        ? numPr.getIlvl().getVal().intValue() : ilvl;
+                return new ListInfo(inheritedNumId, inheritedIlvl);
+            }
+        }
+
+        XWPFStyles styles = doc.getStyles();
+        if (styles == null) return null;
+
+        String styleId = para.getStyleID();
+        if (styleId == null || styleId.isBlank()) return null;
+
+        String current = styleId;
+        int hop = 0;
+        while (current != null && hop++ < 12) {
+            XWPFStyle style = styles.getStyle(current);
+            if (style == null || style.getCTStyle() == null) break;
+
+            CTStyle ctStyle = style.getCTStyle();
+            CTPPrGeneral ppr = ctStyle.getPPr();
+            if (ppr != null && ppr.getNumPr() != null) {
+                CTNumPr numPr = ppr.getNumPr();
+                if (numPr.getNumId() != null && numPr.getNumId().getVal() != null) {
+                    BigInteger inheritedNumId = numPr.getNumId().getVal();
+                    int inheritedIlvl = (numPr.getIlvl() != null && numPr.getIlvl().getVal() != null)
+                            ? numPr.getIlvl().getVal().intValue() : ilvl;
+                    return new ListInfo(inheritedNumId, inheritedIlvl);
+                }
+            }
+
+            if (ctStyle.getBasedOn() == null || ctStyle.getBasedOn().getVal() == null) break;
+            current = ctStyle.getBasedOn().getVal();
+        }
+        return null;
+    }
+
+    private TextListInfo resolveTextListInfo(XWPFParagraph para, String text) {
+        if (text == null || text.isBlank()) return null;
+        String leadingNormalized = normalizeLeadingMarkerStyle(text);
+
+        Matcher unordered = TEXT_UNORDERED_LIST_PATTERN.matcher(leadingNormalized);
+        if (unordered.matches()) {
+            int ilvl = textIndentLevel(para, unordered.group(1));
+            return new TextListInfo(false, ilvl, unordered.group(3).trim());
+        }
+
+        Matcher ordered = TEXT_ORDERED_LIST_PATTERN.matcher(leadingNormalized);
+        if (ordered.matches()) {
+            int ilvl = textIndentLevel(para, ordered.group(1));
+            return new TextListInfo(true, ilvl, ordered.group(3).trim());
+        }
+        return null;
+    }
+
+    private String normalizeLeadingMarkerStyle(String text) {
+        String out = text;
+        out = out.replaceFirst("^(\\s*)\\*\\*([^*]{1,6})\\*\\*(\\s+)", "$1$2$3");
+        out = out.replaceFirst("^(\\s*)_([^_]{1,6})_(\\s+)", "$1$2$3");
+        return out;
+    }
+
+    private int textIndentLevel(XWPFParagraph para, String leadingWhitespace) {
+        int byText = 0;
+        if (leadingWhitespace != null && !leadingWhitespace.isEmpty()) {
+            int width = 0;
+            for (int i = 0; i < leadingWhitespace.length(); i++) {
+                width += leadingWhitespace.charAt(i) == '\t' ? 2 : 1;
+            }
+            byText = width / 2;
+        }
+
+        int byPara = 0;
+        int left = Math.max(0, para.getIndentationLeft());
+        if (left > 0) byPara = left / 360;
+
+        return Math.max(byText, byPara);
+    }
+
+    private String resolveHeadingNumberPrefix(XWPFDocument doc, ListInfo listInfo,
+                                              Map<String, int[]> countersByNumId,
+                                              Map<String, boolean[]> initByNumId) {
         try {
-            BigInteger numId = para.getNumID();
-            if (numId == null) return "";
+            if (listInfo == null || listInfo.numId() == null) return "";
+            BigInteger numId = listInfo.numId();
 
             // Only numeric ordered headings should get synthetic numbering prefixes.
-            if (!isOrderedList(doc, para)) return "";
+            if (!isOrderedList(doc, listInfo.numId(), listInfo.ilvl())) return "";
 
-            int ilvl = para.getNumIlvl() != null ? para.getNumIlvl().intValue() : 0;
+            int ilvl = listInfo.ilvl();
             String key = numId.toString();
             int[] counters = countersByNumId.computeIfAbsent(key, k -> new int[9]);
-            counters[ilvl]++;
-            for (int i = ilvl + 1; i < counters.length; i++) counters[i] = 0;
+            boolean[] init = initByNumId.computeIfAbsent(key, k -> new boolean[9]);
+
+            int start = resolveStartNumber(doc, numId, ilvl);
+            if (!init[ilvl] || counters[ilvl] <= 0) {
+                counters[ilvl] = Math.max(1, start);
+                init[ilvl] = true;
+            } else {
+                counters[ilvl]++;
+            }
+            for (int i = ilvl + 1; i < counters.length; i++) {
+                counters[i] = 0;
+                init[i] = false;
+            }
 
             StringBuilder prefix = new StringBuilder();
             for (int i = 0; i <= ilvl; i++) {
@@ -353,6 +519,33 @@ public class DocxToMarkdownConverter {
         } catch (Exception e) {
             return "";
         }
+    }
+
+    private int resolveStartNumber(XWPFDocument doc, BigInteger numId, int ilvl) {
+        try {
+            XWPFNumbering numbering = doc.getNumbering();
+            if (numbering == null) return 1;
+            XWPFNum num = numbering.getNum(numId);
+            if (num == null || num.getCTNum() == null) return 1;
+
+            for (CTNumLvl ov : num.getCTNum().getLvlOverrideList()) {
+                if (ov != null && ov.getIlvl() != null && ov.getIlvl().intValue() == ilvl && ov.isSetStartOverride()) {
+                    BigInteger v = ov.getStartOverride().getVal();
+                    return v != null ? Math.max(1, v.intValue()) : 1;
+                }
+            }
+
+            BigInteger abstractNumId = num.getCTNum().getAbstractNumId().getVal();
+            XWPFAbstractNum abstractNum = numbering.getAbstractNum(abstractNumId);
+            if (abstractNum == null) return 1;
+            CTLvl lvl = abstractNum.getCTAbstractNum().getLvlArray(ilvl);
+            if (lvl != null && lvl.getStart() != null && lvl.getStart().getVal() != null) {
+                return Math.max(1, lvl.getStart().getVal().intValue());
+            }
+        } catch (Exception ignored) {
+            // Fallback to 1 when numbering metadata is incomplete.
+        }
+        return 1;
     }
 
     private boolean startsWithHeadingNumber(String text) {
