@@ -45,11 +45,26 @@
 ### 아직 미착수 (다음 목표)
 
 - ~~**Phase 2**: 모바일 UI (Offcanvas, sticky 입력창, PWA)~~ → ✅ 완료 (2026-06-27, 오프캔버스 드로어·dvh sticky 입력·PWA(manifest/SW/오프라인)·iOS 16px·접근성)
-- **Phase 3 잔여**: 사용자별 LLM 쿼터 (Phase 3.5), 사용자별 스토리지 쿼터
-- **Phase 4**: OAuth2 소셜 로그인, PostgreSQL 마이그레이션 (조건부)
+- ~~**Phase 3 — Chat 피드백(좋아요/싫어요) 기반 컨텍스트 제외**~~ → ✅ 완료 (2026-07-02, §6.9 — `conversation_turns.feedback` 컬럼, `PATCH /ui/threads/{threadId}/turns/{turnId}/feedback`, DISLIKE는 `getHistory()`에서 하드 제외)
+- **Phase 3 잔여** (미착수, §6.5~6.8·6.10~6.11 상세): 사용자별 LLM 토큰 쿼터(§6.5) · 사용자별 스토리지 쿼터(§6.11) · 임베딩 사용량 분리(§6.6) · 비활성 프로바이더 조건부 표시(§6.7) · orphan 프로바이더 기록 삭제(§6.8) · 대화 요약 선계산(§6.10)
+- **Phase 4** (조건부, 미착수): OAuth2 소셜 로그인(§7.1) · PostgreSQL 마이그레이션(§7.2) · 관리자 페이지 확장(§7.3, ※ `/admin` 기본 골격은 Phase 5.8에서 이미 존재)
 - ~~**Phase 5**: sqlite-vec 선택적 연동~~ → ✅ 완료 (Step 5.1~5.8, `app.vectorstore.type=chroma|sqlite-vec`)
 - ~~**Phase 5 추가**: Step 5.9 태그 기반 검색 스코프 + Step 5.10 sqlite-vec 운영/벡터 DB 분리~~ → ✅ 완료 (2026-07-01, Step 5.9 태그 필터/제안/복원 + Step 5.10 `SQLITE_VEC_DB_PATH` 분리 스위치). vec0 라이브 부팅은 운영 인수
 - ~~**Phase 6**: 폐쇄망/노-도커 — 키리스 LOCAL(G1)·차원 외부화(G2)·라우팅 외부화(G3)·런북(G4)·무-외부호출 인수(G5)~~ → ✅ G1~G5 완료 (2026-06-25). sqlite-vec 라이브 부팅(vec0 바이너리)만 운영 인수
+
+### ⚠️ 코드 대조 정정 (2026-07-02)
+
+실제 소스와 대조한 결과 아래 항목은 문서 표기와 어긋나 있어 정정한다(상세는 각 절).
+
+| 문서 표기 | 실제 코드 | 정정 위치 |
+|---|---|---|
+| §6.2 "Apache Tika MIME 검증" | Tika 의존성 없음. `FileTypeDetector` **매직바이트** 검증 | §6.2 |
+| §6.2 "사용자별 누적 용량 쿼터(기본 500MB)" ✅ | **미구현**. 저장은 공유(`DocRegistry.SHARED`), `storage_used_bytes` 컬럼·쿼터 로직 없음 | §6.2, §6.11 |
+| §6.2 "업로드 경로 `data/users/{userId}/`" | 공유 경로 `data/documents/`(per-user 격리 폐기, Phase 3에서 단순화) | §6.2 |
+| §10.2 `app.security.bcrypt-cost/login-lock/upload-quota` 프로퍼티 | **존재하지 않음**. BCrypt cost=12는 `SecurityConfig`, 잠금(5회/15분)은 `AuthEventListener` 상수 하드코딩 | §10.2 |
+| §12 마이그레이션 `V3__user_scope`/`V4__audit_log`/`V5__upload_quota` | **파일 없음**. Flyway는 `V1__baseline`+`V2__users`만. `user_id`·토큰 컬럼은 `SqliteMemoryRepository` 런타임 `ALTER TABLE`, 감사로그는 Logback 파일(테이블 아님), 스토리지 컬럼 없음 | §12 |
+
+> 스키마 관리 실태: **Flyway(V1·V2 baseline) + 런타임 멱등 DDL 혼용**. `SqliteMemoryRepository`/`SqliteUserDetailsService`가 `CREATE TABLE IF NOT EXISTS` + `ALTER TABLE ADD COLUMN`으로 컬럼을 증분 추가한다. 따라서 신규 컬럼(피드백·스토리지)은 새 Flyway 마이그레이션이 아니라 **기존 런타임 `ALTER TABLE` 패턴**으로 추가하는 것이 현 코드와 정합적이다.
 
 ---
 
@@ -240,13 +255,15 @@ Caddy(자동 TLS·HTTP/2)로 `app:8080` 프록시 + 보안 헤더(HSTS 등). Spr
 
 `OncePerRequestFilter` 구현 → `SecurityFilterChain` 앞단에 등록. 메모리 기반 버킷으로 시작, 다중 인스턴스 시 Redis로 이전.
 
-### 6.2 파일 업로드 보안 강화 ✅ 완료 (리팩토링 03, 12)
+### 6.2 파일 업로드 보안 강화 🟡 부분 완료 (리팩토링 03, 12)
 
+**✅ 완료**
 - 확장자 화이트리스트: `pdf, pptx, docx, txt, md`
-- Apache Tika MIME 검증 (확장자 위조 차단)
-- 사용자별 누적 용량 쿼터 (기본 500MB)
+- **매직바이트 검증** — `security/FileTypeDetector.matches(path, ext)`(Tika 아님, pom에 Tika 의존성 없음). 임시파일 기록 후 검증, 불일치 시 422
 - 파일명 sanitize — `Path.normalize()` + 화이트리스트 정규식
-- 업로드 경로 `data/users/{userId}/` 밖으로 나갈 수 없도록 `startsWith()` 검증
+- 경로 이탈 방지 — 공유 저장소 `data/documents/`(per-user 격리 폐기, `DocRegistry.SHARED`) 기준 `startsWith()` 검증
+
+**🔵 미착수** — 사용자별 누적 용량 쿼터 → §6.11로 이관·구체화(현재 `storage_used_bytes` 컬럼·쿼터 로직·`app.upload-quota` 프로퍼티 모두 없음).
 
 ### 6.3 글로벌 예외 처리 ✅ 완료 (리팩토링 11)
 
@@ -272,11 +289,30 @@ SQLite `audit_log` 테이블 대신 Logback `SizeAndTimeBasedRollingPolicy`로 �
 - `application.properties`로 모든 파라미터 조정 가능, `app.audit.enabled=false`로 즉시 비활성
 - 이벤트 8개 기록: upload×2, delete×2, sync×2, routing-mode, thread-delete
 
-### 6.5 사용자별 LLM 사용량 쿼터 🔵 미착수 (user_id 컬럼 슬롯은 준비됨)
+### 6.5 사용자별 LLM 사용량 쿼터 🔵 미착수
 
-`LlmUsageRepository`에 `user_id` 컬럼이 이미 추가됨 (Phase 1.4). `AnswerService` 진입 시 일일 토큰 합계 조회 → 한도 초과면 `QuotaExceededException`.
+**현재 코드 확인 (2026-07-02)**:
+- ⚠️ 문서는 "`LlmUsageRepository`에 `user_id` 컬럼이 이미 추가됨"이라 했으나 **실제 `llm_usage`는 프로바이더 단위 집계**다. `LlmUsageRepository.record(String provider, long in, long out)` → `usage_date + provider_name` UPSERT이며 `user_id` 컬럼/차원이 **없다**. 사용자별 쿼터를 하려면 `user_id` 축을 새로 도입해야 한다(현재 `getByPeriod/getDaily/...`는 모두 provider 인자만 받음).
+- 집계 조회는 provider별만 존재 → 사용자 단위 "오늘 전체 토큰 합" 쿼리가 없음.
+- `AnswerService.execute(AgentState)`(진입점)와 `AgentService.chat()`에 쿼터 게이트가 없음. `ThreadContext.userId()`로 사용자 식별은 가능.
+
+**설계 (권장: 사용량 테이블 분리, 스키마 변경 최소)**:
+1. **집계 소스 결정** — 두 안 중 택1.
+   - (A) `conversation_turns`에 이미 `input_tokens`/`output_tokens`/`user_id`가 있으므로 **채팅 토큰은 여기서 사용자별 일일 합계**를 구할 수 있음(`SELECT SUM(input_tokens+output_tokens) FROM conversation_turns WHERE user_id=? AND asked_at >= date('now')`). 별도 테이블 없이 채팅 쿼터 구현 가능 → **1차 권장**.
+   - (B) `llm_usage`에 `user_id` 축 추가(PK 확장 = SQLite 테이블 재생성) — provider×user 교차 집계가 필요할 때만. 현 요구엔 과함.
+2. `QuotaService.checkDailyTokenQuota(userId)` 신설 — (A) 쿼리로 일일 합계 조회 → `app.quota.daily-token-limit`(신규 프로퍼티, 0=무제한) 초과 시 `QuotaExceededException`(신규).
+3. **게이트 위치** — `AgentService.chat()` 진입 직후(`PromptInjectionGuard.validate()` 다음). 스트리밍은 `StreamingAgentService.run()` 진입에도 동일 적용.
+4. `GlobalExceptionHandler`에 `QuotaExceededException` → 429(RFC 9457 ProblemDetail, `RAG-QUOTA-001`) 매핑. 채팅 UI(HTMX)엔 한도 초과 알림 프래그먼트.
+5. 프로퍼티: `app.quota.enabled`(기본 false), `app.quota.daily-token-limit`. `AppProperties`에 `QuotaConfig` record + `quotaSafe()` null 가드.
+
+**완료 기준**:
+- 사용자의 당일 누적 토큰이 한도 초과 시 채팅이 429로 차단되고 `Retry-After`(자정까지) 안내가 표시된다.
+- `app.quota.enabled=false`(기본)이면 기존 동작 회귀 0.
+- 쿼터 집계가 스트리밍/블로킹 경로 모두에서 일관 적용된다.
 
 ### 6.6 LLM 사용량 — 임베딩 사용량 분리 🔵 계획
+
+> **현재 코드 확인 (2026-07-02)**: `EmbeddingBeanConfig.embeddingModel()`은 순수 `@Primary OpenAiEmbeddingModel`(데코레이터 없음) → 임베딩 토큰 추적 0. `TrackingEmbeddingModel` 미존재. `LlmUsageRepository.record()`는 채팅 경로만. 아래 설계 유효.
 
 **문제**: 현재 `llm_usage`에는 **채팅(ChatModel) 호출만** 기록된다. `LlmRouter.executeWithTracking()` → `usageRepo.record(provider, in, out)` 경로만 집계하고, 임베딩은 `@Primary EmbeddingModel`(OpenAiEmbeddingModel) 빈을 통해 `LlmRouter`를 **우회**하므로 토큰 사용량이 전혀 추적되지 않는다. 인덱싱·검색마다 임베딩 API를 호출하지만 사용량/비용 통계에 보이지 않아 운영자가 임베딩 비용을 파악할 수 없다.
 
@@ -305,6 +341,8 @@ SQLite `audit_log` 테이블 대신 Logback `SizeAndTimeBasedRollingPolicy`로 �
 
 ### 6.7 LLM 사용량 — 비활성 프로바이더 조건부 표시 🔵 계획
 
+> **현재 코드 확인 (2026-07-02)**: `OperationsController.buildProviderReports()` 존재, `LlmUsageRepository`에 `usedProviders()` 조회 없음(추가 필요). 아래 설계 유효.
+
 **문제**: `OperationsController`의 세 경로(`/api/v1/llm/usage` 표, `/usage/history` 차트, `buildProviderReports()` 카드)는 모두 `props.llmSafe().providers()` **전체**를 순회한다. 그래서 API 키가 없어 **비활성(`LlmProviderReport.configured == false`)인 프로바이더도 항상** 사용량 0으로 표시되어, 카드·표·차트가 쓰지 않는 프로바이더로 지저분해진다.
 
 **요구**: 비활성(=키 없음) 프로바이더는 **실제 사용 이력이 있을 때만** 노출한다. 활성 프로바이더는 사용량이 0이어도 항상 표시. (과거 키가 있어 사용하다 지금 비활성화된 경우엔 이력 보존을 위해 계속 표시.)
@@ -326,6 +364,8 @@ SQLite `audit_log` 테이블 대신 Logback `SizeAndTimeBasedRollingPolicy`로 �
 - 세 경로(카드/표/차트)의 표시 목록이 일치한다.
 
 ### 6.8 LLM 사용량 — 설정에 없는(orphan) 프로바이더 기록 삭제 🔵 계획
+
+> **현재 코드 확인 (2026-07-02)**: `LlmUsageRepository`에 `deleteByProvider()` 없음, `OperationsController`에 사용량 관련 `@DeleteMapping` 없음(현재 GET만: `/llm-usage`, `/ui/llm-usage/cards`, `/api/v1/llm/usage`, `/api/v1/llm/usage/history`). 신규 삭제 경로 필요. 권한은 DB `role`이 `ADMIN`(문자열, `ROLE_` 접두사 아님) 기준.
 
 **배경**: §6.7로 "설정(`props.llmSafe().providers()`)에는 없지만 과거 사용 이력이 있어" 계속 노출되는 **orphan 카드**(예: 키를 빼거나 config에서 제거한 옛 모델, §6.6의 `embed:*`)가 생긴다. 운영자가 이런 카드의 누적 기록을 화면에서 직접 정리(DB 삭제)할 수 있어야 한다.
 
@@ -349,7 +389,9 @@ SQLite `audit_log` 테이블 대신 Logback `SizeAndTimeBasedRollingPolicy`로 �
 - 삭제가 `AuditLogger`에 기록된다.
 - 권한 없는 요청 / CSRF 누락은 거부된다(기존 동작 회귀 0).
 
-### 6.9 Chat 응답 피드백(좋아요/싫어요) 기반 컨텍스트 제외 🔵 계획
+### 6.9 Chat 응답 피드백(좋아요/싫어요) 기반 컨텍스트 제외 ✅ 완료
+
+> **현재 코드 확인 (2026-07-02)**: `conversation_turns`에 `feedback` 컬럼 없음(현 컬럼: question·answer·asked_at·input_tokens·output_tokens·elapsed_ms·provider·llm_calls·user_id, PK `id`). ⚠️ 문서가 지칭한 `ConversationRepository`는 **존재하지 않음** — 실제 접근 계층은 `repository/SqliteMemoryRepository`(+ `service/MemoryService`)다. 컬럼 추가는 새 Flyway가 아니라 `SqliteMemoryRepository`의 기존 런타임 `ALTER TABLE ADD COLUMN` 목록에 한 줄 추가하는 방식이 정합적. **turnId = `conversation_turns.id`(PK)**.
 
 **목표**:
 - 각 Assistant 응답에 대해 사용자가 `좋아요/싫어요`를 남길 수 있게 한다.
@@ -362,18 +404,14 @@ SQLite `audit_log` 테이블 대신 Logback `SizeAndTimeBasedRollingPolicy`로 �
 
 **설계(최소 침습)**:
 1. **데이터 모델 확장**
-  - `conversation_turns`에 `feedback` 컬럼 추가(예: `NULL | LIKE | DISLIKE`).
-  - 기존 행은 `NULL`로 유지(마이그레이션 안전).
+  - `SqliteMemoryRepository`의 런타임 DDL 목록에 `ALTER TABLE conversation_turns ADD COLUMN feedback TEXT`(값: `NULL | LIKE | DISLIKE`) 추가. 기존 행은 `NULL`(안전).
 2. **저장/조회 경로**
-  - `ConversationRepository`(또는 동일 책임 계층)에 `updateFeedback(threadId, turnId, feedback)` 추가.
-  - 히스토리 조회 시 feedback 필드 포함.
+  - `SqliteMemoryRepository.updateFeedback(userId, threadId, turnId, feedback)` 추가(소유권 위해 `WHERE user_id=? AND thread_id=? AND id=?`). `MemoryService`에 위임 메서드.
+  - ⚠️ **핵심**: `getHistory(userId, threadId, maxChars)`는 현재 `question, answer`를 이어붙인 **단일 String**을 반환한다. `DISLIKE` 제외는 이 SELECT에 `AND (feedback IS NULL OR feedback <> 'DISLIKE')`를 추가하면 곧바로 컨텍스트에서 빠진다. UI 복원용 조회(`id ASC` 전체 turn)는 feedback 값을 포함해 반환(버튼 상태 표시).
 3. **UI/HTMX**
-  - 채팅 버블 하단에 👍/👎 토글 버튼 추가.
-  - 클릭 시 `PATCH /ui/threads/{threadId}/turns/{turnId}/feedback` 호출.
-  - 동일 버튼 재클릭 시 해제(`NULL`) 가능.
+  - 채팅 버블(`message-assistant.html`) 하단에 👍/👎 토글. 클릭 시 `PATCH /ui/threads/{threadId}/turns/{turnId}/feedback`(신규, `OperationsController` 또는 신규 컨트롤러). 재클릭 시 해제(`NULL`). CSRF는 기존 htmx 자동 주입 재사용.
 4. **프롬프트 빌드 규칙**
-  - 다음 질문 처리 시 히스토리 구성 단계에서 `DISLIKE` turn은 제외.
-  - 사용자 질문은 기존대로 유지하고, 제외 규칙은 Assistant 응답에만 적용.
+  - `getHistory()`의 SELECT 필터로 `DISLIKE` turn 제외(2번). Assistant 응답에만 적용, 사용자 질문 텍스트는 유지.
 5. **관찰성**
   - `AuditLogger`에 feedback 변경 이벤트 기록(`threadId`, `turnId`, `from`, `to`).
 
@@ -383,12 +421,23 @@ SQLite `audit_log` 테이블 대신 Logback `SizeAndTimeBasedRollingPolicy`로 �
 - 삭제된 turn/타 thread turn에 대한 피드백 변경은 404/403 처리.
 
 **완료 기준**:
-- 채팅 UI에서 turn별 👍/👎 선택/해제가 가능하다.
-- `👎`가 붙은 Assistant turn은 다음 요청 프롬프트 컨텍스트에서 제외된다.
-- 기존 대화 저장/복원 동작 회귀가 없다.
-- 피드백 변경 이력이 감사 로그에 남는다.
+- [x] 채팅 UI에서 turn별 👍/👎 선택/해제가 가능하다.
+- [x] `👎`가 붙은 Assistant turn은 다음 요청 프롬프트 컨텍스트에서 제외된다.
+- [x] 기존 대화 저장/복원 동작 회귀가 없다.
+- [x] 피드백 변경 이력이 감사 로그에 남는다.
+
+> **구현 메모 (2026-07-02)**:
+> - **모델/저장**: `MemoryRepository`/`SqliteMemoryRepository`에 `feedback TEXT` 컬럼(런타임 `ALTER TABLE`), `Turn` 레코드에 `id`+`feedback` 필드 추가. `addTurn()`을 `void`→`long`(생성 turn id 반환, `GeneratedKeyHolder`)으로 변경. `getFeedback()`(소유권 확인 + 감사로그 "from", `Optional<FeedbackRow>`로 "찾음+feedback=null" vs "못 찾음" 구분) + `updateFeedback()` 신규.
+> - **컨텍스트 제외**: `getHistory()` SELECT에 `AND (feedback IS NULL OR feedback <> 'DISLIKE')` 추가 — 설계대로 SQL 필터 한 줄로 처리.
+> - **응답 경로**: `ChatResponse`에 `turnId`(nullable Long) 필드 추가. `AgentService.chat()`/`StreamingAgentService.run()` 양쪽 모두 `addTurn()` 반환값을 캡처해 전달(스트리밍은 SSE `done` 이벤트 payload에 `turnId` 포함).
+> - **엔드포인트**: `OperationsController`에 `PATCH /ui/threads/{threadId}/turns/{turnId}/feedback`(`@RequestParam feedback=LIKE|DISLIKE|NONE`, `ResponseEntity<Void>` — 성공 204 / 미소유·미존재 404 / 잘못된 값 400). 감사로그에 `turnId`+`from`+`to` 기록.
+> - **UI**: `message-assistant.html`·`message-assistant-dual.html`(HTMX 응답)·`chat.html`(서버 렌더 복원 turn)·`chat-stream.js`(SSE 스트리밍 버블) 4곳 모두 동일한 `.feedback-controls[data-turn-id][data-thread-id] > .feedback-btn[data-feedback]` 마크업. 클릭 처리는 `chat.html`에 `#chat-messages` 위임(delegated) 리스너 **하나**로 통일 — 3개 렌더 경로(서버 렌더/HTMX swap/JS로 직접 append되는 스트리밍 버블) 모두 같은 컨테이너 안에서 발생하므로 개별 스크립트 중복 없이 한 곳에서 처리.
+> - **검증**: `SqliteMemoryRepositoryTest` +5(생성 id 반환, DISLIKE 제외, LIKE 유지, 소유권 검증, 갱신 반영), `OperationsControllerHtmxTest` +4(LIKE/해제/404/400). 전체 335 tests BUILD SUCCESS(회귀 0). LM Studio 연동 실사용 확인: Direct 모드로 스트리밍 응답 생성 → 👎 클릭(DB `feedback=DISLIKE` 반영, 감사로그 `from:NONE,to:DISLIKE`) → 페이지 새로고침 후 서버 렌더 경로에서도 빨간 버튼 상태 유지 → 👍 클릭으로 전환(감사로그 `from:DISLIKE,to:LIKE`) 확인.
+> - ⚠️ **범위 밖(비적용)**: LIKE는 저장만 되고 현재 어떤 로직도 소비하지 않음(설계대로 "향후 활용"). DUAL 모드는 `result.answer()`(외부 답변) 기준으로 turn 1개만 저장되므로 로컬 답변에는 별도 피드백이 없음(기존 turn 저장 정책과 동일 — 신규 결함 아님).
 
 ### 6.10 입력 시작 시 로컬 요약 선계산 + 중복 제거 컨텍스트 압축 🔵 계획
+
+> **현재 코드 확인 (2026-07-02)**: `ConversationSummarizerService` 미존재. `AgentService.chat()`는 이미 진입 시 `memoryService.getHistory()`를 `CompletableFuture`로 **classify와 병렬 프리페치**(현 `AgentService.java:48,54`)하므로 선계산 트리거를 얹을 자연스러운 지점이 있다. `getHistory()`는 단일 String 반환 → 요약 결과도 String이라 프롬프트 조립부 교체가 단순. `LlmRouter.route(TaskType.LIGHT_TEXT|…, RoutingMode.LOCAL_ONLY)`로 로컬 요약 라우팅 가능.
 
 **목표**:
 - 사용자가 질문 입력을 시작하면 이전 대화를 중복 제거 + 요약해 미리 준비한다.
@@ -433,6 +482,26 @@ SQLite `audit_log` 테이블 대신 Logback `SizeAndTimeBasedRollingPolicy`로 �
 - 중복 대화가 요약에서 제거되고 핵심 맥락은 유지된다.
 - 로컬 요약 실패 시 기존 대화 경로로 안전하게 폴백한다.
 
+### 6.11 사용자별 스토리지 쿼터 🔵 미착수 (§6.2에서 이관)
+
+> **현재 코드 확인 (2026-07-02)**: `storage_used_bytes` 컬럼·쿼터 로직·프로퍼티 모두 없음. §6.2가 "완료"로 표기했으나 **미구현**. 저장은 공유 구조(`DocRegistry.SHARED`, `data/documents/`)라 "사용자별" 쿼터의 의미부터 재정의 필요.
+
+**설계 결정 (선행)**:
+- 저장소가 공유(per-user 격리 폐기)이므로 쿼터 축을 **택1**: (A) 사용자별 업로드 누적량(공유 저장이라도 업로더 기준 과금/제한) / (B) **전역 저장 상한**(단순, 공유 모델에 정합). 폐쇄망·단일 운영자 성격상 **(B) 전역 상한 1차 권장**, (A)는 멀티테넌트 과금 필요 시 후속.
+
+**설계 (B 기준)**:
+1. 프로퍼티 `app.upload.max-total-bytes`(0=무제한) + `AppProperties.uploadSafe()` null 가드.
+2. `DocumentController` 업로드 진입 시 `data/documents/` 실제 사용량 합계(또는 `DocRegistry` 누적 크기) 조회 → 초과 시 `IllegalArgumentException`(→ `GlobalExceptionHandler` 400) 또는 신규 `QuotaExceededException`(→ 413/429).
+3. 삭제 시 자연 감소(파일 삭제가 곧 사용량 반영) → 별도 카운터 불필요하면 컬럼 없이 디스크 walk로 충분(문서 수 적을 때). 정밀·고빈도면 `DocRegistry`에 누적 바이트 필드.
+
+**설계 (A 기준 — 후속)**:
+- `users`에 `storage_used_bytes` 컬럼을 **런타임 `ALTER TABLE`**(SqliteUserDetailsService의 기존 DDL 패턴)로 추가. 업로드 성공 시 `+= size`, 삭제 시 `-= size`. `app.upload.quota-mb-per-user` 초과 시 거부. ⚠️ 공유 저장소라 실제 디스크는 공유되므로 이는 "논리적" 쿼터임을 문서에 명시.
+
+**완료 기준**:
+- 상한 초과 업로드가 거부되고 명확한 코드/메시지를 반환한다.
+- `app.upload.max-total-bytes=0`(기본)이면 회귀 0.
+- 삭제 후 재업로드 가능(사용량 정확히 반영).
+
 ---
 
 ## 7. Phase 4 — 확장 (조건부) 🔵 미착수
@@ -455,11 +524,13 @@ Google/GitHub 제공자 등록. 가입 흐름은 **기존 폼 가입과 동등**
 3. 커넥션 풀: HikariCP 기본값 (max=10)으로 시작 → 부하 테스트 후 조정
 4. Spring 프로파일 분리: `application-sqlite.properties` / `application-postgres.properties`
 
-### 7.3 관리자 페이지
+### 7.3 관리자 페이지 (부분 존재 → 확장)
 
-- `ROLE_ADMIN` 전용 `/admin/**`
-- 사용자 목록·상태, 전체 LLM 사용량, 감사 로그 조회
-- 강제 로그아웃·계정 잠금 기능
+> **현재 코드 확인 (2026-07-02)**: `/admin`·`/admin/chunks`는 **이미 존재**(`AdminController`/`AdminService`, Phase 5.8) — Vector Store 상태 카드 + 청크 브라우징/수정/삭제(두 백엔드). 아래는 **운영 관리 기능 확장**으로 범위 재정의.
+
+- `ROLE_ADMIN` 전용 경로 확장(현재 청크 관리 위주 → 사용자/운영 관리 추가). ※ DB `role` 값은 `ADMIN` 문자열, 인증은 `NoAuthAutoLoginFilter`가 no-auth 모드에서 첫 `ADMIN` 사용자로 자동 인증.
+- 사용자 목록·상태(잠금/활성), 전체 LLM 사용량(§6.6~6.8과 연계), 감사 로그(`data/audit/audit.log` NDJSON) 조회 뷰.
+- 강제 로그아웃·계정 잠금/해제(`SqliteUserDetailsService`의 `locked_until`/`failed_count` 조작 재사용).
 
 ---
 
@@ -831,11 +902,15 @@ spring.flyway.baseline-on-migrate=true
 # SQLite tuning
 spring.datasource.hikari.connection-init-sql=PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL;
 
-# Limits
-app.security.bcrypt-cost=12
-app.security.login-lock-attempts=5
-app.security.login-lock-minutes=15
-app.security.upload-quota-mb=500
+# Limits — ⚠️ 아래 app.security.* 는 계획일 뿐 실제 코드에 존재하지 않음 (2026-07-02 확인).
+#   현재 값은 상수 하드코딩: BCrypt cost=12 → SecurityConfig.java,
+#   로그인 잠금 5회/15분 → AuthEventListener.java (MAX_ATTEMPTS/LOCK_MINUTES).
+#   업로드 쿼터(upload-quota-mb)는 미구현 (§6.11 참조).
+#   외부화가 필요하면 AppProperties에 SecurityConfig record + securitySafe() 추가 후 주입 지점 교체.
+# app.security.bcrypt-cost=12
+# app.security.login-lock-attempts=5
+# app.security.login-lock-minutes=15
+# app.security.upload-quota-mb=500
 
 # Vector Store (Phase 5)
 app.vectorstore.type=${VECTORSTORE_TYPE:chroma}                          # chroma(기본) | sqlite-vec
@@ -847,16 +922,18 @@ app.vectorstore.sqlite-vec.entrypoint=${SQLITE_VEC_ENTRYPOINT:}          # sqlit
 
 ## 12. DB 스키마 변경 요약
 
-| 마이그레이션 | 내용 |
-|------------|------|
-| `V1__baseline.sql` | 기존 4개 테이블 (`conversation_turns`, `llm_usage`, `thread_meta`, `image_descriptions`) 캡처 |
-| `V2__users.sql` | `users`, `persistent_logins` 신규 테이블 |
-| `V3__user_scope.sql` | 기존 4개 테이블에 `user_id` 컬럼 + 인덱스 추가 |
-| `V4__audit_log.sql` | `audit_log` 신규 테이블 |
-| `V5__upload_quota.sql` | `users.storage_used_bytes` 컬럼 추가 |
-| (Phase 5) `SqliteVecSchemaInitializer` | `vec_embeddings` (vec0 가상 테이블 — `version` partition key + `distance_metric=cosine`), `vec_document_chunks` — Flyway 대신 앱 시작 시 동적 DDL (차원수 파라미터화) |
+> ⚠️ **실제 스키마 관리 방식 (2026-07-02 확인)**: Flyway는 **`V1__baseline`+`V2__users` 두 개만** 존재한다. 나머지 컬럼/인덱스는 **런타임 멱등 DDL**(`SqliteMemoryRepository`·`SqliteUserDetailsService`의 `CREATE TABLE IF NOT EXISTS` + `ALTER TABLE ADD COLUMN`)로 관리된다. 아래 표에서 V3~V5는 **계획일 뿐 파일이 없으며**, 해당 변경은 런타임 DDL로 흡수되었거나(=user_id/토큰 컬럼) 미구현(=storage_used_bytes)이다.
 
-> **기존 데이터 처리**: `V3` 적용 시 기존 row의 `user_id`는 NULL이 된다. 로컬 단일 사용자 데이터는 **최초 관리자 계정 생성 후 일괄 UPDATE**하는 별도 스크립트로 처리. 운영 데이터 보존이 불필요하면 마이그레이션 전 DROP도 옵션.
+| 마이그레이션/DDL | 상태 | 내용 |
+|------------|------|------|
+| `V1__baseline.sql` | ✅ 존재 | 기존 테이블 (`conversation_turns`, `llm_usage`, `thread_meta`, `image_descriptions`) 캡처 |
+| `V2__users.sql` | ✅ 존재 | `users`(`role` TEXT DEFAULT 'USER'), `persistent_logins` 신규 테이블 |
+| ~~`V3__user_scope.sql`~~ | ❌ 파일 없음 | `user_id` 컬럼·인덱스는 `SqliteMemoryRepository` 런타임 `ALTER TABLE`로 추가됨 |
+| ~~`V4__audit_log.sql`~~ | ❌ 파일 없음 | 감사로그는 **테이블이 아니라 Logback 파일**(`data/audit/audit.log`, §6.4). 테이블 불필요 |
+| ~~`V5__upload_quota.sql`~~ | ❌ 파일 없음 | `storage_used_bytes` **미구현**(§6.11) |
+| (Phase 5) `SqliteVecSchemaInitializer` | ✅ 동적 DDL | `vec_embeddings`(vec0 — `version` partition key + `distance_metric=cosine`), `vec_document_chunks`, `chunk_fts`(FTS5, `doc_tags`) — Flyway 대신 앱 시작 시 동적 DDL(차원 파라미터화). `SQLITE_VEC_DB_PATH` 설정 시 `vector.db`로 분리(§5.10) |
+
+> **신규 컬럼 추가 지침**: 피드백(§6.9)·스토리지(§6.11 A안) 등 신규 컬럼은 **새 Flyway 파일이 아니라** 기존 런타임 `ALTER TABLE ADD COLUMN` 패턴에 한 줄 추가하는 것이 현 코드와 정합적(멱등, 프리릴리즈 정책과도 부합).
 
 ---
 
@@ -868,7 +945,7 @@ app.vectorstore.sqlite-vec.entrypoint=${SQLITE_VEC_ENTRYPOINT:}          # sqlit
 - [x] 비로그인 사용자는 `/`, `/chat/**`, `/documents`, `/api/**` 접근 불가 (단 `/login`, `/signup`, `/api/health`는 허용)
 - [x] 회원가입 → 자동 로그인 → 채팅 (SecurityContextHolder 수동 주입)
 - [x] 멀티유저 데이터 격리 — SQLite `user_id` 컬럼 + Chroma `u_{userId8}_{version}` 컬렉션
-- [x] Flyway 마이그레이션 (`V1__baseline` ~ `V3__user_scope`)
+- [x] Flyway 마이그레이션 (`V1__baseline`·`V2__users`) + 런타임 멱등 DDL로 `user_id`/토큰 컬럼 관리 (V3~V5는 미생성 — §12 참조)
 - [x] 모든 HTMX 요청 + `chat-stream.js` fetch에 CSRF 토큰 자동 첨부
 - [x] 로그인 5회 실패 시 15분 잠금
 - [x] `app.auth.enabled=false` no-auth 모드 (guest 자동 로그인, 첫 실행 `/setup`)

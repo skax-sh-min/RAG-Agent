@@ -20,13 +20,27 @@
     background: var(--bg-bubble-user);
     color: white;
     border-radius: 1rem 1rem 0 1rem;
-    max-width: 75%;
+    /* Must NOT be a % value: .bubble-user is a shrink-to-fit flex item nested inside
+       another flex item (row > column). With max-width as a percentage, some browsers
+       resolve it against the (still-indeterminate) intrinsic size of that ancestor during
+       the same layout pass, which for Korean text (many CJK line-break opportunities)
+       self-attenuates the computed width to ~75% of the correct one-line width and forces
+       premature wrapping even with plenty of room. vw/px avoid the indeterminate-percentage
+       resolution entirely. */
+    max-width: min(70vw, 640px);
 }
 .bubble-assistant {
     background: var(--bg-bubble-bot);
     border: 1px solid var(--border-default);
     border-radius: 1rem 1rem 1rem 0;
     max-width: 85%;
+}
+
+/* ── Feedback (like/dislike) buttons ─────────────────────────────────── */
+.feedback-controls .feedback-btn {
+    padding: 0.05rem 0.35rem;
+    font-size: 0.7rem;
+    line-height: 1.4;
 }
 
 /* ── Typing indicator ────────────────────────────────────────────────── */
@@ -166,8 +180,9 @@
     input:not([type="checkbox"]):not([type="radio"]) {
         font-size: 16px;
     }
-    /* Roomier message bubbles on narrow screens */
-    .bubble-user      { max-width: 88%; }
+    /* Roomier message bubbles on narrow screens.
+       .bubble-user uses vw (not %) — see the comment on the base rule above. */
+    .bubble-user      { max-width: 90vw; }
     .bubble-assistant { max-width: 92%; }
 }
 

@@ -114,13 +114,14 @@ public class StreamingAgentService {
 
             long elapsedMs = (System.nanoTime() - startNs) / 1_000_000;
 
+            Long turnId = null;
             if (result.answer() != null && !result.answer().isBlank()) {
-                memoryService.addTurn(userId, form.threadId(), form.question(), result.answer(),
+                turnId = memoryService.addTurn(userId, form.threadId(), form.question(), result.answer(),
                         askedAt, result.totalInputTokens(), result.totalOutputTokens(),
                         (int) elapsedMs, result.usedProvider(), result.llmCallCount());
             }
 
-            sendEvent(emitter, "done", buildDonePayload(result, elapsedMs));
+            sendEvent(emitter, "done", buildDonePayload(result, elapsedMs, turnId));
             emitter.complete();
 
             threadMetaService.generateTitleAsync(userId, form.threadId(), form.version(), form.question());
@@ -247,7 +248,7 @@ public class StreamingAgentService {
         } catch (Exception ignored) {}
     }
 
-    private Map<String, Object> buildDonePayload(AgentState result, long elapsedMs) {
+    private Map<String, Object> buildDonePayload(AgentState result, long elapsedMs, Long turnId) {
         Map<String, Object> m = new HashMap<>();
         m.put("usedProvider",      result.usedProvider());
         m.put("dualLocalProvider", result.dualLocalProvider());
@@ -259,6 +260,7 @@ public class StreamingAgentService {
         m.put("questionType",      result.questionType());
         m.put("grounded",          result.grounded());
         m.put("refreshThreadList", true);
+        m.put("turnId",            turnId);
         return m;
     }
 
