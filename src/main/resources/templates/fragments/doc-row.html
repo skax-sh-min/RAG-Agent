@@ -14,7 +14,9 @@
               th:text="${tag}">tag</span>
     </td>
     <td th:text="${doc.chunks}">청크</td>
-    <td th:text="${doc.indexedAt}">시각</td>
+    <td th:text="${doc.indexedAt != null and #strings.length(doc.indexedAt) >= 16
+            ? #strings.replace(#strings.substring(doc.indexedAt, 0, 16), 'T', ' ')
+            : doc.indexedAt}">시각</td>
     <td>
         <button class="btn btn-sm btn-outline-danger"
                 th:attr="hx-delete=@{/ui/documents/{id}(id=${doc.docId},version=${doc.version})}"

@@ -518,13 +518,22 @@
             <td>${escHtml(version)}</td>
             <td>${tagsHtml}</td>
             <td>${chunks}</td>
-            <td>${escHtml(indexedAt)}</td>
+            <td>${escHtml(formatIndexedAtMinute(indexedAt))}</td>
             <td><button class="btn btn-sm btn-outline-danger"
                         hx-delete="/ui/documents/${encodeURIComponent(docId)}?version=${encodeURIComponent(version)}"
                         hx-target="closest tr" hx-swap="outerHTML swap:0.3s"
                         hx-confirm="${escHtml(deleteConfirm)}">${escHtml(deleteLabel)}</button></td>`;
         tbody.appendChild(tr);
         htmx.process(tr);
+    }
+
+    function formatIndexedAtMinute(value) {
+        if (!value) return '';
+        const s = String(value).trim();
+        if (s.length >= 16) {
+            return s.slice(0, 16).replace('T', ' ');
+        }
+        return s.replace('T', ' ');
     }
 
     function escHtml(s) {
