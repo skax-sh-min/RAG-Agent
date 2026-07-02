@@ -1,25 +1,33 @@
 package com.example.ragagent.service;
 
 import com.example.ragagent.exception.LlmProviderExhaustedException;
+import com.example.ragagent.llm.LlmProvider;
 import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.llm.TaskType;
+import org.springframework.ai.chat.client.ChatClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.prompt.Prompt;
+import org.springframework.core.io.ByteArrayResource;
 import org.springframework.stereotype.Service;
+import org.springframework.util.MimeTypeUtils;
 
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiConsumer;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * LLM-based Markdown format correction.
@@ -32,6 +40,9 @@ public class MarkdownCorrectionService {
     private static final Logger log = LoggerFactory.getLogger(MarkdownCorrectionService.class);
     private static final int MAX_CONCURRENT   = 3;
     private static final int MAX_SECTION_CHARS = 6_000;
+    private static final Pattern MD_IMAGE_LINK = Pattern.compile("!\\[([^\\]]*)]\\(([^)]+)\\)");
+    private static final Pattern IMAGE_MARKER = Pattern.compile("\\[이미지:\\s*([^\\]]+)]");
+    private static final Pattern FENCED_BLOCK = Pattern.compile("(?s)```(.*?)\\n(.*?)\\n```");
 
     private final LlmRouter llmRouter;
 
@@ -58,7 +69,9 @@ public class MarkdownCorrectionService {
         log.info("[MD_CORRECT] 시작: docId={}, chars={}", docId, rawMd.length());
         long t0 = System.currentTimeMillis();
 
-        List<String> sections = splitBySections(rawMd);
+        String preprocessed = augmentImageDescriptionsWithLocalVision(rawMd, correctedOutputPath);
+
+        List<String> sections = splitBySections(preprocessed);
         log.debug("[MD_CORRECT] 섹션 {}개 분할 완료", sections.size());
         int total = sections.size();
 
@@ -91,6 +104,7 @@ public class MarkdownCorrectionService {
         }
 
         String result = String.join("\n\n", corrected);
+        result = normalizeCodeBlocks(result);
         log.info("[MD_CORRECT] 완료: docId={}, {}ms", docId, System.currentTimeMillis() - t0);
 
         if (correctedOutputPath != null) {
@@ -139,6 +153,7 @@ public class MarkdownCorrectionService {
                 - 명백한 오타 수정
                 - 소제목 레벨 정규화 (H2/H3 일관성)
                 - 마커 형식 유지: [이미지: ...], [이미지(변환불가): ...], [헤딩페이지: N], [페이지: N]을 그대로 둘 것
+                - 코드 블록(```) 내부의 불필요한 공란/줄바꿈을 줄여 가독성을 높일 것 (의미는 변경 금지)
                 - 연속된 빈 줄 1개로 정리
 
                 교정된 마크다운만 반환하세요. 설명이나 주석을 추가하지 마세요.
@@ -158,5 +173,159 @@ public class MarkdownCorrectionService {
             log.warn("[MD_CORRECT] 섹션 교정 실패, 원본 유지: {}", e.getMessage());
             return section;
         }
+    }
+
+    private String augmentImageDescriptionsWithLocalVision(String md, Path correctedOutputPath) {
+        if (md == null || md.isBlank()) return md;
+        LlmProvider localVisionProvider;
+        try {
+            localVisionProvider = llmRouter.routeProvider(TaskType.VISION, RoutingMode.LOCAL_ONLY);
+        } catch (Exception e) {
+            return md;
+        }
+
+        Path baseDir = correctedOutputPath != null && correctedOutputPath.getParent() != null
+                ? correctedOutputPath.getParent() : null;
+        Path dataDir = baseDir != null ? baseDir.getParent() : null;
+        Map<String, String> descCache = new HashMap<>();
+
+        String withMarkerDesc = injectDescriptionsForPattern(md, IMAGE_MARKER, true, localVisionProvider, baseDir, dataDir, descCache);
+        return injectDescriptionsForPattern(withMarkerDesc, MD_IMAGE_LINK, false, localVisionProvider, baseDir, dataDir, descCache);
+    }
+
+    private String injectDescriptionsForPattern(String input,
+                                                Pattern pattern,
+                                                boolean imageMarker,
+                                                LlmProvider localVisionProvider,
+                                                Path baseDir,
+                                                Path dataDir,
+                                                Map<String, String> cache) {
+        Matcher m = pattern.matcher(input);
+        StringBuffer out = new StringBuffer();
+        while (m.find()) {
+            String full = m.group(0);
+            String pathRaw = imageMarker ? m.group(1) : m.group(2);
+            Path imagePath = resolveLocalImagePath(pathRaw, baseDir, dataDir);
+
+            if (hasFollowingImageDescription(input, m.end())) {
+                m.appendReplacement(out, Matcher.quoteReplacement(full));
+                continue;
+            }
+
+            if (imagePath == null || !Files.exists(imagePath) || !Files.isRegularFile(imagePath)) {
+                m.appendReplacement(out, Matcher.quoteReplacement(full));
+                continue;
+            }
+
+            String key = imagePath.toAbsolutePath().normalize().toString();
+            String desc = cache.computeIfAbsent(key, k -> describeImage(localVisionProvider, imagePath));
+            if (desc == null || desc.isBlank()) {
+                m.appendReplacement(out, Matcher.quoteReplacement(full));
+                continue;
+            }
+
+            String decorated;
+            if (imageMarker) {
+                decorated = full + "\n[이미지 설명: " + desc + "]";
+            } else {
+                decorated = full + "\n> 이미지 설명: " + desc;
+            }
+            m.appendReplacement(out, Matcher.quoteReplacement(decorated));
+        }
+        m.appendTail(out);
+        return out.toString();
+    }
+
+    private Path resolveLocalImagePath(String raw, Path baseDir, Path dataDir) {
+        if (raw == null || raw.isBlank()) return null;
+        String cleaned = raw.strip();
+        if ((cleaned.startsWith("\"") && cleaned.endsWith("\""))
+                || (cleaned.startsWith("'") && cleaned.endsWith("'"))) {
+            cleaned = cleaned.substring(1, cleaned.length() - 1);
+        }
+        if (cleaned.startsWith("http://") || cleaned.startsWith("https://") || cleaned.startsWith("data:")) {
+            return null;
+        }
+
+        Path p = Path.of(cleaned);
+        if (p.isAbsolute()) return p.normalize();
+
+        if (baseDir != null) {
+            Path candidate = baseDir.resolve(cleaned).normalize();
+            if (Files.exists(candidate)) return candidate;
+        }
+        if (dataDir != null) {
+            Path candidate = dataDir.resolve(cleaned).normalize();
+            if (Files.exists(candidate)) return candidate;
+        }
+        return p.normalize();
+    }
+
+    private boolean hasFollowingImageDescription(String input, int markerEndIndex) {
+        if (markerEndIndex >= input.length()) return false;
+        int tailStart = markerEndIndex;
+        int tailEnd = Math.min(input.length(), markerEndIndex + 160);
+        String tail = input.substring(tailStart, tailEnd).stripLeading();
+        return tail.startsWith("[이미지 설명:") || tail.startsWith("> 이미지 설명:");
+    }
+
+    private String describeImage(LlmProvider provider, Path imagePath) {
+        try {
+            byte[] bytes = Files.readAllBytes(imagePath);
+            String mimeType = detectMime(imagePath.toString());
+            String prompt = "이 이미지를 한국어 1~2문장으로 간단히 설명하세요.";
+            StringBuilder buf = new StringBuilder();
+            ChatClient.builder(provider.chatModel()).build()
+                    .prompt()
+                    .user(u -> u.text(prompt)
+                            .media(MimeTypeUtils.parseMimeType(mimeType), new ByteArrayResource(bytes)))
+                    .stream().content().doOnNext(buf::append).blockLast();
+            return buf.toString().trim();
+        } catch (Exception e) {
+            log.debug("[MD_CORRECT] 이미지 설명 생성 실패 {}: {}", imagePath, e.getMessage());
+            return "";
+        }
+    }
+
+    private String detectMime(String path) {
+        String lower = path.toLowerCase();
+        if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg";
+        if (lower.endsWith(".gif")) return "image/gif";
+        if (lower.endsWith(".webp")) return "image/webp";
+        return "image/png";
+    }
+
+    private String normalizeCodeBlocks(String md) {
+        Matcher m = FENCED_BLOCK.matcher(md);
+        StringBuffer out = new StringBuffer();
+        while (m.find()) {
+            String lang = m.group(1) == null ? "" : m.group(1);
+            String code = m.group(2) == null ? "" : m.group(2);
+            String normalized = normalizeCodeContent(code);
+            String replacement = "```" + lang + "\n" + normalized + "\n```";
+            m.appendReplacement(out, Matcher.quoteReplacement(replacement));
+        }
+        m.appendTail(out);
+        return out.toString();
+    }
+
+    private String normalizeCodeContent(String code) {
+        String[] lines = code.split("\\n", -1);
+        List<String> cleaned = new ArrayList<>(lines.length);
+        int blankRun = 0;
+        for (String line : lines) {
+            String trimmedRight = line.replaceAll("[ \\t]+$", "");
+            if (trimmedRight.isBlank()) {
+                blankRun++;
+                if (blankRun > 1) continue;
+                cleaned.add("");
+                continue;
+            }
+            blankRun = 0;
+            cleaned.add(trimmedRight);
+        }
+        while (!cleaned.isEmpty() && cleaned.get(0).isBlank()) cleaned.remove(0);
+        while (!cleaned.isEmpty() && cleaned.get(cleaned.size() - 1).isBlank()) cleaned.remove(cleaned.size() - 1);
+        return String.join("\n", cleaned);
     }
 }

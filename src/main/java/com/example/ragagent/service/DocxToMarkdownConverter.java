@@ -10,8 +10,10 @@ import org.openxmlformats.schemas.wordprocessingml.x2006.main.STBrType;
 import java.io.IOException;
 import java.math.BigInteger;
 import java.nio.file.Files;
+import java.util.HashMap;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -51,11 +53,12 @@ public class DocxToMarkdownConverter {
         int[] imgCounter = {0};
         int[] paraIdx = {0};
         int[] currentPage = {1};
+        Map<String, int[]> headingCounters = new HashMap<>();
 
         try (XWPFDocument docx = new XWPFDocument(Files.newInputStream(docxPath))) {
             for (IBodyElement elem : docx.getBodyElements()) {
                 if (elem instanceof XWPFParagraph para) {
-                    appendParagraph(docx, sb, para, docId, imagesDir, imgCounter, paraIdx[0]++, currentPage);
+                    appendParagraph(docx, sb, para, docId, imagesDir, imgCounter, paraIdx[0]++, currentPage, headingCounters);
                 } else if (elem instanceof XWPFTable table) {
                     appendTable(docx, sb, table, docId, imagesDir, imgCounter, paraIdx);
                 }
@@ -67,11 +70,16 @@ public class DocxToMarkdownConverter {
     private void appendParagraph(XWPFDocument doc, StringBuilder sb, XWPFParagraph para,
                                  String docId, Path imagesDir,
                                  int[] imgCounter, int paraIdx,
-                                 int[] currentPage) throws IOException {
+                                 int[] currentPage,
+                                 Map<String, int[]> headingCounters) throws IOException {
         int heading = headingLevel(doc, para);
         String text = paragraphText(doc, para, docId, imagesDir, imgCounter, paraIdx);
 
         if (heading > 0) {
+            String numberingPrefix = resolveHeadingNumberPrefix(doc, para, headingCounters);
+            if (!numberingPrefix.isBlank() && !startsWithHeadingNumber(text)) {
+                text = numberingPrefix + " " + text;
+            }
             // Keep heading-level page anchors so downstream indexing can preserve source position.
             sb.append("[헤딩페이지: ").append(currentPage[0]).append("]\n");
             if (!text.isBlank()) {
@@ -221,20 +229,22 @@ public class DocxToMarkdownConverter {
                              int[] imgCounter, int[] paraIdx) throws IOException {
         List<XWPFTableRow> rows = table.getRows();
         if (rows.isEmpty()) return;
+
+        // 1x1 tables are often used as code-like callout blocks in DOCX. Render as fenced code.
+        if (isSingleCellTable(rows)) {
+            String code = cellContent(doc, rows.get(0).getTableCells().get(0), docId, imagesDir, imgCounter, paraIdx, "\n");
+            sb.append("\n```\n").append(code).append("\n```\n\n");
+            return;
+        }
+
         sb.append("\n");
         for (int i = 0; i < rows.size(); i++) {
             XWPFTableRow row = rows.get(i);
             List<XWPFTableCell> cells = row.getTableCells();
             sb.append("|");
             for (XWPFTableCell cell : cells) {
-                StringBuilder cellText = new StringBuilder();
-                for (XWPFParagraph p : cell.getParagraphs()) {
-                    String line = paragraphText(doc, p, docId, imagesDir, imgCounter, paraIdx[0]++).trim();
-                    if (line.isEmpty()) continue;
-                    if (!cellText.isEmpty()) cellText.append(' ');
-                    cellText.append(line);
-                }
-                String text = cellText.toString().replace("|", "\\|");
+                String text = cellContent(doc, cell, docId, imagesDir, imgCounter, paraIdx, " ")
+                        .replace("|", "\\|");
                 sb.append(" ").append(text).append(" |");
             }
             sb.append("\n");
@@ -247,6 +257,24 @@ public class DocxToMarkdownConverter {
             }
         }
         sb.append("\n");
+    }
+
+    private boolean isSingleCellTable(List<XWPFTableRow> rows) {
+        return rows.size() == 1 && rows.get(0).getTableCells().size() == 1;
+    }
+
+    private String cellContent(XWPFDocument doc, XWPFTableCell cell,
+                               String docId, Path imagesDir,
+                               int[] imgCounter, int[] paraIdx,
+                               String separator) throws IOException {
+        StringBuilder out = new StringBuilder();
+        for (XWPFParagraph p : cell.getParagraphs()) {
+            String line = paragraphText(doc, p, docId, imagesDir, imgCounter, paraIdx[0]++).trim();
+            if (line.isEmpty()) continue;
+            if (!out.isEmpty()) out.append(separator);
+            out.append(line);
+        }
+        return out.toString();
     }
 
     private int headingLevel(XWPFDocument doc, XWPFParagraph para) {
@@ -299,5 +327,36 @@ public class DocxToMarkdownConverter {
         } catch (Exception e) {
             return false;
         }
+    }
+
+    private String resolveHeadingNumberPrefix(XWPFDocument doc, XWPFParagraph para, Map<String, int[]> countersByNumId) {
+        try {
+            BigInteger numId = para.getNumID();
+            if (numId == null) return "";
+
+            // Only numeric ordered headings should get synthetic numbering prefixes.
+            if (!isOrderedList(doc, para)) return "";
+
+            int ilvl = para.getNumIlvl() != null ? para.getNumIlvl().intValue() : 0;
+            String key = numId.toString();
+            int[] counters = countersByNumId.computeIfAbsent(key, k -> new int[9]);
+            counters[ilvl]++;
+            for (int i = ilvl + 1; i < counters.length; i++) counters[i] = 0;
+
+            StringBuilder prefix = new StringBuilder();
+            for (int i = 0; i <= ilvl; i++) {
+                if (counters[i] <= 0) continue;
+                if (prefix.length() > 0) prefix.append('.');
+                prefix.append(counters[i]);
+            }
+            return prefix.toString();
+        } catch (Exception e) {
+            return "";
+        }
+    }
+
+    private boolean startsWithHeadingNumber(String text) {
+        if (text == null) return false;
+        return text.trim().matches("^\\d+(\\.\\d+)*[\\.)]?\\s+.*");
     }
 }
