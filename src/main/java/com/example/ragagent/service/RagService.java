@@ -68,7 +68,16 @@ public class RagService {
     public DocumentInfo indexDocument(String userId, Path filePath, String filename, String version,
                                       List<String> tags,
                                       Consumer<IndexingProgressEvent> onProgress) throws IOException {
-        DocumentInfo info = indexer.index(IndexRequest.single(filePath, filename, version, userId, tags, onProgress));
+        return indexDocument(userId, filePath, filename, version, tags, false, onProgress);
+    }
+
+    /** index with search-scope tags and optional local image-description insertion during MD correction. */
+    public DocumentInfo indexDocument(String userId, Path filePath, String filename, String version,
+                                      List<String> tags,
+                                      boolean addImageDescriptions,
+                                      Consumer<IndexingProgressEvent> onProgress) throws IOException {
+        DocumentInfo info = indexer.index(IndexRequest.single(
+                filePath, filename, version, userId, tags, addImageDescriptions, onProgress));
         docRegistry.save();
         return info;
     }

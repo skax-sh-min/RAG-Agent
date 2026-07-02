@@ -56,7 +56,13 @@ public class MarkdownCorrectionService {
      * On any LLM failure the original section text is kept (graceful fallback).
      */
     public String correct(String rawMd, String docId, Path correctedOutputPath) {
-        return correct(rawMd, docId, correctedOutputPath, null);
+        return correct(rawMd, docId, correctedOutputPath, false, null);
+    }
+
+    /** Same as {@link #correct(String, String, Path)} with image-description toggle. */
+    public String correct(String rawMd, String docId, Path correctedOutputPath,
+                          boolean addImageDescriptions) {
+        return correct(rawMd, docId, correctedOutputPath, addImageDescriptions, null);
     }
 
     /**
@@ -65,11 +71,22 @@ public class MarkdownCorrectionService {
      */
     public String correct(String rawMd, String docId, Path correctedOutputPath,
                           BiConsumer<Integer, Integer> onSectionDone) {
+        return correct(rawMd, docId, correctedOutputPath, false, onSectionDone);
+    }
+
+    /**
+     * Same as {@link #correct(String, String, Path, boolean)} with section progress callback.
+     */
+    public String correct(String rawMd, String docId, Path correctedOutputPath,
+                          boolean addImageDescriptions,
+                          BiConsumer<Integer, Integer> onSectionDone) {
         if (rawMd == null || rawMd.isBlank()) return rawMd;
         log.info("[MD_CORRECT] 시작: docId={}, chars={}", docId, rawMd.length());
         long t0 = System.currentTimeMillis();
 
-        String preprocessed = augmentImageDescriptionsWithLocalVision(rawMd, correctedOutputPath);
+        String preprocessed = addImageDescriptions
+                ? augmentImageDescriptionsWithLocalVision(rawMd, correctedOutputPath)
+                : rawMd;
 
         List<String> sections = splitBySections(preprocessed);
         log.debug("[MD_CORRECT] 섹션 {}개 분할 완료", sections.size());

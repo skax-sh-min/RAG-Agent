@@ -53,7 +53,7 @@
 
                 <!-- Controls -->
                 <div class="d-flex align-items-center gap-2 flex-wrap">
-                    <div class="input-group input-group-sm" style="width: 230px;">
+                    <div class="input-group input-group-sm" style="width: 180px;">
                         <span class="input-group-text" th:text="#{doc.version.label}">Version</span>
                         <input id="version-input" name="version" type="text"
                                class="form-control"
@@ -63,12 +63,18 @@
                     </div>
                     <datalist id="version-options"></datalist>
 
-                    <div class="input-group input-group-sm" style="min-width: 280px; max-width: 420px;">
+                    <div class="input-group input-group-sm" style="min-width: 200px; max-width: 400px;">
                         <span class="input-group-text"><i class="bi bi-tags"></i></span>
                         <input id="tags-input" name="tags" type="text"
                                class="form-control"
                                th:placeholder="#{doc.tags.placeholder}"
                                th:title="#{doc.tags.tooltip}" autocomplete="off"/>
+                    </div>
+                    <div class="form-check form-check-inline mb-0">
+                        <input class="form-check-input" type="checkbox" id="add-image-desc-checkbox"/>
+                        <label class="form-check-label small" for="add-image-desc-checkbox"
+                               th:text="#{doc.upload.image_desc.option}"
+                               th:title="#{doc.upload.image_desc.tooltip}">이미지 설명 추가</label>
                     </div>
                     <button id="upload-btn" class="btn btn-sm btn-primary" disabled>
                         <i class="bi bi-upload me-1"></i>
@@ -220,11 +226,12 @@
     document.getElementById('upload-btn').addEventListener('click', () => {
         const version = (document.getElementById('version-input').value || '').trim() || 'latest';
         const tags = (document.getElementById('tags-input').value || '').trim();
-        uploadFiles([...selectedFiles], version, tags);
+        const addImageDescriptions = document.getElementById('add-image-desc-checkbox').checked;
+        uploadFiles([...selectedFiles], version, tags, addImageDescriptions);
     });
 
     /* ── Upload orchestration ────────────────────────────────────────────── */
-    async function uploadFiles(files, version, tags) {
+    async function uploadFiles(files, version, tags, addImageDescriptions) {
         const btn = document.getElementById('upload-btn');
         btn.disabled = true;
 
@@ -240,6 +247,7 @@
             setFileStatus(i, 'uploading');
             try {
                 const result = await uploadWithProgress(files[i], version, tags,
+                    addImageDescriptions,
                     pct => {                                    // XHR upload progress
                         setUploadBar(i, pct);
                         if (pct === 100) setFileStatus(i, 'queued');
@@ -267,13 +275,14 @@
      * Phase 2 — SSE: subscribe to /ui/documents/progress/{taskId} for chunk-level events.
      * Resolves with DocumentInfo on 'done', rejects on 'error'.
      */
-    function uploadWithProgress(file, version, tags, onUploadPct, onStage) {
+    function uploadWithProgress(file, version, tags, addImageDescriptions, onUploadPct, onStage) {
         return new Promise((resolve, reject) => {
             const xhr  = new XMLHttpRequest();
             const form = new FormData();
             form.append('file', file);
             form.append('version', version);
             if (tags) form.append('tags', tags);   // 검색 스코프 태그
+            form.append('addImageDescriptions', addImageDescriptions ? 'true' : 'false');
 
             xhr.upload.addEventListener('progress', e => {
                 if (e.lengthComputable) onUploadPct(Math.round(e.loaded / e.total * 100));

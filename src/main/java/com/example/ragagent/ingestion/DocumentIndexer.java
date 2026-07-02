@@ -131,7 +131,7 @@ public class DocumentIndexer {
             String rawMd = loaderService.convertDocxToMd(req.path(), docId, imagesDir);
             Files.createDirectories(rawMdPath.getParent());
             Files.writeString(rawMdPath, rawMd);
-            String sourceMd = correctionService.correct(rawMd, docId, correctedMdPath,
+            String sourceMd = correctionService.correct(rawMd, docId, correctedMdPath, req.addImageDescriptions(),
                     (done, total) -> req.onProgress().accept(
                             IndexingProgressEvent.of("correcting", done, total, req.filename(),
                                     done + "/" + total + " 섹션 교정 중")));
@@ -148,11 +148,21 @@ public class DocumentIndexer {
                                     done + "/" + total + " 블록 구조화 중")));
             Files.createDirectories(rawMdPath.getParent());
             Files.writeString(rawMdPath, structuredMd);
-            String sourceMd = correctionService.correct(structuredMd, docId, correctedMdPath,
+                String sourceMd = correctionService.correct(structuredMd, docId, correctedMdPath, req.addImageDescriptions(),
                     (done, total) -> req.onProgress().accept(
                             IndexingProgressEvent.of("correcting", done, total, req.filename(),
                                     done + "/" + total + " 섹션 교정 중")));
             rawDocs = loaderService.loadFromMarkdown(sourceMd);
+            } else if (lower.endsWith(".md")) {
+                req.onProgress().accept(IndexingProgressEvent.of("loading", 0, 0, req.filename(), "Markdown 로드 중..."));
+                String rawMd = Files.readString(req.path());
+                Files.createDirectories(rawMdPath.getParent());
+                Files.writeString(rawMdPath, rawMd);
+                String sourceMd = correctionService.correct(rawMd, docId, correctedMdPath, req.addImageDescriptions(),
+                    (done, total) -> req.onProgress().accept(
+                        IndexingProgressEvent.of("correcting", done, total, req.filename(),
+                            done + "/" + total + " 섹션 교정 중")));
+                rawDocs = loaderService.loadFromMarkdown(sourceMd);
         } else {
             rawDocs = loaderService.load(req.path(),
                     (done, total) -> req.onProgress().accept(IndexingProgressEvent.of(
