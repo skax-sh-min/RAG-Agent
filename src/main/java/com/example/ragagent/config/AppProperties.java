@@ -100,7 +100,6 @@ public record AppProperties(
             boolean ocrEnabled,
             String tessdataPath,
             int minImageBytes,
-            boolean lazy,
             boolean classifyType,
             boolean docxEmfConvert,
             boolean docxWmfConvert
@@ -108,7 +107,7 @@ public record AppProperties(
 
     public ImageDescriptionProperties imageDescriptionSafe() {
         if (imageDescription == null)
-            return new ImageDescriptionProperties("strip", false, false, null, 1_000, true, false, false, false);
+            return new ImageDescriptionProperties("strip", false, false, null, 1_000, false, false, false);
         return imageDescription;
     }
 

@@ -269,9 +269,8 @@ LLM_ROUTING_MODE=QUALITY_FIRST
 
 | 속성 | 기본값 | 설명 |
 |------|--------|------|
-| `app.image-description.enabled` | `true` | Vision LLM 이미지 설명 기능 전체 활성화 여부. `false`이면 이미지 마커만 저장하고 LLM 호출 없음 |
+| `app.image-description.enabled` | `true` | 검색 시점 Lazy Vision(`LazyVisionService`) 활성화 여부. `false`이면 이미지 마커만 저장하고 검색 시 LLM 호출 없음 |
 | `app.image-description.mode` | `strip` | `strip`: 이미지 마커를 텍스트에서 제거 / `describe`: Vision LLM으로 설명 생성 후 삽입 |
-| `app.image-description.lazy` | `true` | `true`: 검색 시 필요할 때 설명 생성 (LazyVisionService) / `false`: 인덱싱 중 즉시 생성 |
 | `app.image-description.classify-type` | `true` | 이미지 설명 전 유형(사진/도표/스크린샷 등) 분류 여부. 분류 결과를 프롬프트에 주입 |
 | `app.image-description.ocr-enabled` | `true` | 스캔 PDF 페이지에 대해 OCR 처리 활성화 여부 |
 | `app.image-description.min-image-bytes` | `1000` | 이 크기 미만의 이미지는 아이콘·구분선으로 간주하고 설명 생성 건너뜀 (바이트) |
@@ -282,6 +281,10 @@ LLM_ROUTING_MODE=QUALITY_FIRST
 > 프로바이더가 없으면 `strip`으로 자동 fallback됩니다.
 
 > **EMF/WMF 변환**: LibreOffice(`soffice`)가 PATH에 있어야 합니다. 없으면 변환이 건너뛰어지며 `[TIMEOUT:LIBREOFFICE]` 로그가 출력됩니다.
+
+> **인덱싱 시점 즉시 설명 생성**은 프로퍼티가 아니라 문서 업로드 화면의 "이미지 설명 추가" 체크박스로 제어됩니다
+> (DOCX·TXT·MD 한정). 여기 표의 설정들은 모두 검색 시점 Lazy Vision에 대한 것입니다. 자세한 내용은
+> `documents/IMAGE_PROCESS.md` 5절·12절 참고.
 
 #### LLM 응답 파라미터
 

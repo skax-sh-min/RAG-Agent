@@ -303,9 +303,13 @@ content = content.replaceAll("\\[([^\\]]+)]\\([^)]*\\)", "$1");
 
 ## 5. Vision 설명 생성 (L2)
 
-> 본 절은 **인덱싱 시점에 동기로** Vision을 호출하는 기본 설계입니다.
-> 12절 Lazy Vision은 동일한 `VisionDescriptionService`를 검색 시점에 호출하는 방식이며,
-> `app.image-description.lazy=true`(기본)일 때 활성화됩니다.
+> 인덱싱 시점 동기 L2는 문서 업로드 화면의 **"이미지 설명 추가" 체크박스**(`addImageDescriptions` 파라미터)로
+> 트리거됩니다. 체크 시 `MarkdownCorrectionService`가 로컬 Vision 프로바이더(`RoutingMode.LOCAL_ONLY`)를
+> 동기 호출해 마크다운에 `[이미지 설명: ...]`을 직접 삽입하며, **DOCX·TXT·MD 업로드에만 적용**됩니다
+> (PDF·PPTX는 미적용). 이 경로는 `VisionDescriptionService`를 거치지 않는 별도 구현입니다.
+> 12절 Lazy Vision은 이와 독립적으로 검색 시점에 항상 동작하는 별개의 메커니즘이며
+> (`app.image-description.enabled=true`일 때), `VisionDescriptionService`를 사용합니다.
+> 두 경로는 서로 대체 관계가 아니라 함께 동작할 수 있습니다 — 12.1절 참고.
 
 ### 5.1 VisionDescriptionService 설계
 
@@ -572,9 +576,6 @@ app.image-description.ocr-enabled=true
 # 이미지 크기 필터 — 이 값 미만(bytes) 이미지는 L0(무시)
 app.image-description.min-image-bytes=1000
 
-# Lazy Vision: true=검색 시점 생성+캐시, false=인덱싱 시점 동기 생성
-app.image-description.lazy=true
-
 # 이미지 유형 분류기 활성화 여부 — Vision 호출이 2회로 증가
 app.image-description.classify-type=true
 
@@ -604,7 +605,6 @@ public record AppProperties(
         boolean ocrEnabled,
         String tessdataPath,
         int minImageBytes,
-        boolean lazy,                // 12절
         boolean classifyType,        // 13절
         boolean docxEmfConvert,      // 14절
         boolean docxWmfConvert       // 14절
@@ -621,10 +621,13 @@ public record AppProperties(
 | `ocr-enabled` | `true` | `true`이면 `OcrService` 빈이 등록됨. 스캔 PDF 판정(페이지 텍스트 50자 미만) 시 Tesseract OCR로 텍스트를 추출하여 청크에 `source_type=ocr` 태깅. Tesseract(`tesseract-ocr`, `tesseract-ocr-data-kor`)가 시스템에 설치되어 있어야 함 |
 | `tessdata-path` | _(없음)_ | Tesseract tessdata 디렉터리 절대 경로. 미설정 시 `TESSDATA_PREFIX` 환경변수 → 시스템 기본 경로(`/usr/share/tesseract-ocr/…`) 순으로 탐색. Docker 이미지에서는 `apk add tesseract-ocr-data-kor` 설치 후 미설정해도 동작 |
 | `min-image-bytes` | `1000` | 이 크기(bytes) 미만 이미지는 아이콘·구분선으로 간주하여 L0(무시) 처리. Vision 호출 낭비 방지. 값을 높이면 더 많은 이미지가 무시되고, `0`으로 설정하면 모든 이미지를 처리 |
-| `lazy` | `true` | `true`: 검색 시점에 Vision 설명 생성(Lazy Vision, 12절). 인덱싱 시 LLM 호출 없이 이미지만 저장, 첫 검색 시 캐시 미스 이미지만 Vision 호출 후 SQLite 캐시. `false`: 인덱싱 시점에 모든 이미지를 즉시 Vision으로 설명(동기 L2). 대량 문서 인덱싱 시 LLM 호출이 폭주하므로 기본 `true` 유지 권장 |
 | `classify-type` | `true` | `true`: 이미지를 Vision으로 먼저 분류(`diagram`·`screenshot`·`chart`·`photo`·`other`) 후 유형별 전용 프롬프트로 설명 생성(13절). 이미지당 LLM 호출이 2회로 증가. 비용 절감 시 `false`로 설정 |
 | `docx-emf-convert` | `true` | `true`: DOCX 내 EMF(Enhanced Metafile) 이미지를 Apache Batik으로 PNG 변환 후 저장. 변환 실패 시 원본 `.emf` 보존. Batik 의존성은 `pom.xml`에 이미 포함되어 있어 별도 설치 불필요 |
 | `docx-wmf-convert` | `false` | `true`: DOCX 내 WMF(Windows Metafile) 이미지를 LibreOffice headless로 PNG 변환(14절). `soffice` 명령이 PATH에 있어야 하며 변환 타임아웃은 20s. LibreOffice 미설치 환경에서는 `false`로 유지하면 WMF 원본만 저장되고 Vision 설명은 건너뜀 |
+
+> **인덱싱 시점 동기 L2는 프로퍼티가 아니라 업로드 화면의 체크박스로 제어됩니다.** 문서 업로드 시
+> "이미지 설명 추가"(`addImageDescriptions`)를 체크하면 DOCX·TXT·MD에 한해 업로드 건별로 동기 L2가
+> 실행되어 임베딩에 포함됩니다(5절). `enabled`는 이와 별개로 검색 시점 Lazy Vision(12절)의 on/off 스위치입니다.
 
 ### 9.2 권장 설정 시나리오
 
@@ -634,14 +637,14 @@ app.image-description.enabled=false
 app.image-description.ocr-enabled=false
 ```
 
-**Vision 설명 활성화 (Lazy, 비용 최소)**
+**Vision 설명 활성화 (검색 시점 Lazy Vision, 비용 최소)**
 ```properties
 app.image-description.enabled=true
-app.image-description.lazy=true
 app.image-description.min-image-bytes=1000
 app.image-description.classify-type=false
 ```
 > Vision 프로바이더(`VISION` 또는 `BOTH` type) 가 `app.llm.providers`에 등록되어 있어야 함.
+> 업로드 시점에 즉시 임베딩에 포함하려면(동기 L2) 업로드 화면 체크박스를 사용하세요 — 별도 프로퍼티는 없습니다.
 
 **OCR 포함 (스캔 PDF 지원)**
 ```properties
@@ -661,7 +664,7 @@ app.image-description.docx-wmf-convert=true   # LibreOffice 설치 필요
 
 ## 10. 구현 완료 현황
 
-> 모든 항목 구현 완료. Lazy Vision이 기본 동작(`app.image-description.lazy=true`).
+> 모든 항목 구현 완료. 검색 시점 Lazy Vision은 `app.image-description.enabled=true`일 때 항상 동작(별도 on/off 스위치 없음).
 
 | 항목 | 구현 파일 | 상태 |
 |------|-----------|------|
@@ -696,18 +699,26 @@ app.image-description.docx-wmf-convert=true   # LibreOffice 설치 필요
 
 > **구현 완료** — `LazyVisionService`, `ImageDescriptionRepository`, `RetrievalService.augmentWithDescriptions()`.
 
-### 12.1 동기 L2 vs Lazy L2
+### 12.1 동기 L2(체크박스)와 Lazy L2(검색 시점)는 서로 독립적으로 항상 공존
 
-5절(L2)의 기본 설계는 **인덱싱 시점에 모든 이미지를 즉시 LLM으로 설명**합니다.
-대량 문서 동기화 시 LLM 호출이 폭주하는 단점이 있어 **Lazy를 기본 동작**으로 채택.
-`app.image-description.lazy=false`로 두면 인덱싱 시점 동기 L2로 전환.
+과거 설계는 단일 `app.image-description.lazy` 플래그로 "인덱싱 시점 동기 L2"와 "검색 시점 Lazy L2"를
+서로 배타적으로 전환하는 것을 의도했으나, 실제 구현은 그렇지 않습니다(해당 플래그는 삭제됨). **두 메커니즘은
+별도 트리거를 가지며 서로를 대체하지 않고 항상 함께 동작할 수 있습니다.**
 
-| 구분 | 동기 L2 (5절 기본) | Lazy L2 (본 절) |
+| 구분 | 동기 L2 (5절) | Lazy L2 (본 절) |
 |------|---------------------|-----------------|
-| 인덱싱 시 LLM 호출 | 이미지당 1회 | 0회 (alt·캡션·OCR만) |
-| 첫 검색 응답 시간 | 변화 없음 | 검색 결과에 신규 이미지 N개 시 +N×Vision 지연 (캐시 후 0) |
-| 최종 검색 품질 | 즉시 최고 | 검색·재방문 누적될수록 동기 L2 수준 수렴 |
-| 적합한 환경 | 정적·소규모 코퍼스 | 대량 인덱싱·자주 갱신되는 코퍼스 |
+| 트리거 | 업로드 화면 "이미지 설명 추가" 체크박스(`addImageDescriptions`) | `app.image-description.enabled=true` (프로퍼티) |
+| 적용 대상 | DOCX·TXT·MD만 (PDF·PPTX 미적용) | 모든 포맷 (`image_paths` 메타데이터가 있는 모든 청크) |
+| 구현 | `MarkdownCorrectionService.describeImage()` — 자체 구현, `RoutingMode.LOCAL_ONLY` 고정, 유형 분류 없음 | `VisionDescriptionService` + `ImageTypeClassifier`(13절) |
+| 인덱싱 시 LLM 호출 | 체크 시 이미지당 1회 (동기) | 0회 |
+| 결과 반영 위치 | 마크다운 텍스트에 직접 삽입 → 청크 텍스트의 일부로 **임베딩됨** | 검색 시 프롬프트에만 동적 합성 → **임베딩되지 않음** (12.6절) |
+| 첫 검색 응답 시간 | 영향 없음(이미 인덱싱 시 처리됨) | 검색 결과에 신규 이미지 N개 시 +N×Vision 지연 (캐시 후 0) |
+| 캐시 | 없음(업로드 1회성 호출) | `image_descriptions` SQLite 테이블에 영속 캐시 |
+
+즉 "체크박스 미체크 + `enabled=true`"로 두면 임베딩에는 설명이 없지만 검색 시점마다 Lazy Vision이 프롬프트에
+설명을 동적으로 얹어 줍니다. "체크박스 체크"는 그와 별개로 임베딩 자체에 설명을 영구히 포함시키는 효과이며,
+두 경로가 동시에 같은 이미지를 처리해도 서로 충돌하지 않습니다(체크박스 경로는 LOCAL 전용 Vision 프로바이더가
+없으면 조용히 원본 유지로 스킵됩니다 — 5절 참고).
 
 ### 12.2 Lazy 흐름
 
@@ -829,7 +840,7 @@ if (!imagePaths.isEmpty() && lazyVision != null) {
 | recall 개선 옵션 | 후속 작업으로 캐시된 설명을 다음 인덱싱 사이클에 청크 임베딩에 포함시키는 "warm-up reindex" 스케줄 잡 |
 | 빈 설명 캐싱 | 실패한 호출도 빈 문자열로 캐시 — 무한 재시도 폭주 방지. 일정 기간 후 재시도하려면 `created_at` 기반 TTL |
 | Circuit Breaker 연계 | `LlmRouter`가 모든 Vision 프로바이더를 차단한 상태면 `describeIfNeeded`는 실패만 캐시 — 차단 해제 후 새 검색에서 자연 복구 |
-| 설정 | `app.image-description.lazy=true` (기본값) — false로 두면 5절 동기 L2 동작 |
+| 설정 | `app.image-description.enabled=true`로 항상 활성화; 인덱싱 시 즉시 임베딩에 포함시키려면 업로드 화면 체크박스(5절) 사용 |
 
 ---
 
