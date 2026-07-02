@@ -11,6 +11,7 @@ import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.stereotype.Service;
 import org.springframework.util.MimeTypeUtils;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
 
 import java.util.Map;
 
@@ -45,19 +46,29 @@ public class VisionDescriptionService {
     public String describe(byte[] imageBytes, String mimeType, String prompt) {
         try {
             ChatModel visionModel = llmRouter.route(TaskType.VISION, RoutingMode.COST_FIRST);
-            StringBuilder buf = new StringBuilder();
-            ChatClient.builder(visionModel).build()
+            String response = ChatClient.builder(visionModel).build()
                     .prompt()
                     .user(u -> u.text(prompt)
                                 .media(MimeTypeUtils.parseMimeType(mimeType), new ByteArrayResource(imageBytes)))
-                    .stream().content().doOnNext(buf::append).blockLast();
-            return buf.isEmpty() ? "" : buf.toString();
+                .call()
+                .content();
+            return response == null ? "" : response;
         } catch (LlmProviderExhaustedException e) {
             log.warn("No vision provider available: {}", e.getMessage());
             return "[이미지 설명 불가: Vision 프로바이더 미등록]";
+        } catch (WebClientResponseException e) {
+            log.error("Vision description failed: HTTP {} body={}",
+                    e.getStatusCode().value(), compactBody(e.getResponseBodyAsString()));
+            return "[이미지 설명 생성 오류]";
         } catch (Exception e) {
             log.error("Vision description failed", e);
             return "[이미지 설명 생성 오류]";
         }
+    }
+
+    private static String compactBody(String body) {
+        if (body == null || body.isBlank()) return "<empty>";
+        String oneLine = body.replaceAll("\\s+", " ").trim();
+        return oneLine.length() > 500 ? oneLine.substring(0, 500) + "...(truncated)" : oneLine;
     }
 }

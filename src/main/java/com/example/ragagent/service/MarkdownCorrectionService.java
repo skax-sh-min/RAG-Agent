@@ -12,6 +12,7 @@ import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.stereotype.Service;
 import org.springframework.util.MimeTypeUtils;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -291,17 +292,27 @@ public class MarkdownCorrectionService {
             byte[] bytes = Files.readAllBytes(imagePath);
             String mimeType = detectMime(imagePath.toString());
             String prompt = "이 이미지를 한국어 1~2문장으로 간단히 설명하세요.";
-            StringBuilder buf = new StringBuilder();
-            ChatClient.builder(provider.chatModel()).build()
+            String response = ChatClient.builder(provider.chatModel()).build()
                     .prompt()
                     .user(u -> u.text(prompt)
                             .media(MimeTypeUtils.parseMimeType(mimeType), new ByteArrayResource(bytes)))
-                    .stream().content().doOnNext(buf::append).blockLast();
-            return buf.toString().trim();
+                .call()
+                .content();
+            return response == null ? "" : response.trim();
+        } catch (WebClientResponseException e) {
+            log.warn("[MD_CORRECT] 이미지 설명 생성 실패 {}: HTTP {} body={}",
+                    imagePath, e.getStatusCode().value(), compactBody(e.getResponseBodyAsString()));
+            return "";
         } catch (Exception e) {
             log.debug("[MD_CORRECT] 이미지 설명 생성 실패 {}: {}", imagePath, e.getMessage());
             return "";
         }
+    }
+
+    private static String compactBody(String body) {
+        if (body == null || body.isBlank()) return "<empty>";
+        String oneLine = body.replaceAll("\\s+", " ").trim();
+        return oneLine.length() > 500 ? oneLine.substring(0, 500) + "...(truncated)" : oneLine;
     }
 
     private String detectMime(String path) {

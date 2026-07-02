@@ -11,6 +11,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.stereotype.Service;
 import org.springframework.util.MimeTypeUtils;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
 
 import java.util.Set;
 
@@ -42,17 +43,27 @@ public class ImageTypeClassifier {
     public String classify(byte[] imageBytes, String mimeType) {
         try {
             ChatModel model = llmRouter.route(TaskType.LIGHT_BOTH, RoutingMode.COST_FIRST);
-            StringBuilder buf = new StringBuilder();
-            ChatClient.builder(model).build()
+            String response = ChatClient.builder(model).build()
                     .prompt()
                     .user(u -> u.text(PROMPT)
                                 .media(MimeTypeUtils.parseMimeType(mimeType), new ByteArrayResource(imageBytes)))
-                    .stream().content().doOnNext(buf::append).blockLast();
-            String type = buf.isEmpty() ? "other" : buf.toString().strip().toLowerCase();
+                    .call()
+                    .content();
+            String type = response == null ? "other" : response.strip().toLowerCase();
             return VALID_TYPES.contains(type) ? type : "other";
+        } catch (WebClientResponseException e) {
+            log.warn("Image type classification failed: HTTP {} body={} (defaulting to 'other')",
+                    e.getStatusCode().value(), compactBody(e.getResponseBodyAsString()));
+            return "other";
         } catch (Exception e) {
             log.warn("Image type classification failed, defaulting to 'other': {}", e.getMessage());
             return "other";
         }
+    }
+
+    private static String compactBody(String body) {
+        if (body == null || body.isBlank()) return "<empty>";
+        String oneLine = body.replaceAll("\\s+", " ").trim();
+        return oneLine.length() > 500 ? oneLine.substring(0, 500) + "...(truncated)" : oneLine;
     }
 }
