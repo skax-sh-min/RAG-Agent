@@ -130,14 +130,14 @@ PROGRESSIVE 모드 AND sufficient=false AND retryCount >= max
 
 ## 6. 문서 임포트 흐름
 
-### 진입점
+### 6.1. 진입점
 
 | 방식 | 엔드포인트 | 내부 메서드 |
 |------|-----------|-----------|
 | 단일 업로드 | `POST /api/v1/documents` | `RagService.indexDocument()` |
 | 디렉터리 동기화 | `POST /api/v1/documents/sync` | `RagService.syncDirectory()` |
 
-### 단일 파일 인덱싱
+### 6.2. 단일 파일 인덱싱
 
 ```
 파일 수신
@@ -175,13 +175,91 @@ PROGRESSIVE 모드 AND sufficient=false AND retryCount >= max
   └─ 레지스트리 저장 (SQLite doc_registry 테이블 — memory.db 공유)
 ```
 
-### 문서 타입별 처리 상세
+  ### 6.3. DOCX → MD → 임베딩 DB 저장 상세 (이미지 포함)
+
+  아래는 DOCX 파일 1건이 들어와 임베딩 DB(Chroma 또는 sqlite-vec)에 저장될 때의 실제 처리 순서.
+
+  ```
+  1) 입력 수신
+    filePath(.docx), version, tags
+
+  2) docId 생성
+    sha256(file) 계산 → docId = "{filename}_{sha256앞8자}"
+
+  3) 기존 아티팩트 정리(동일 docId)
+    - 기존 벡터 청크 삭제
+    - 기존 이미지/converted MD 삭제
+
+  4) DOCX → Markdown 변환
+    DocumentLoaderService.convertDocxToMd()
+      └─ DocxToMarkdownConverter.convert()
+        - Heading 스타일 → Markdown heading(#/##/###)
+        - 명시적 page break(w:br type=page) 추적
+        - 각 헤딩 앞에 [헤딩페이지: N] 마커 삽입 (헤딩 시작 위치 보존)
+        - 페이지 전환 시 [페이지: N] 앵커 마커 삽입 (비헤딩 구간 근사 페이지 보강)
+        - 표 → pipe table
+        - run 단위 bold/italic 반영
+        - 내장 이미지 추출: data/images/{docId}/d{para}_img{n}.{ext}
+        - 본문에는 [이미지: images/{docId}/{file}] 마커 삽입
+        - EMF/WMF는 설정 시 PNG 변환, 실패/미설정 시 [이미지(변환불가): ...] 마커
+
+  5) 변환 산출물 저장
+    - 원본 MD: data/converted/{docId}.md
+
+  6) Markdown 교정 [LLM]
+    MarkdownCorrectionService.correct()
+    - 전체 MD 1회 호출이 아니라, H2/H3(##/###) 기준 섹션 분할 후 병렬 교정
+    - 섹션이 큰 경우 MAX_SECTION_CHARS(6000) 기준으로 추가 분할
+    - 교정본 MD: data/converted/{docId}_corrected.md
+    - 이후 파이프라인은 교정본을 source로 사용
+
+  7) MD 섹션 로드
+    DocumentLoaderService.loadFromMarkdown(sourceMd)
+    - 섹션별 Document 생성
+    - [헤딩페이지: N] 마커 파싱 후 섹션 메타데이터 heading_page/page_or_slide 로 저장
+    - [페이지: N] 앵커를 파싱해 비헤딩 섹션의 page_or_slide 근사값으로 사용
+    - 프롤로그(첫 헤딩 이전 구간)는 첫 헤딩의 [헤딩페이지: N]이 있으면 해당 값을 우선 상속
+    - [이미지: ...] / [이미지(변환불가): ...] 마커 파싱
+    - image_paths 메타데이터에 경로(쉼표 결합) 저장
+
+  8) 청킹
+    splitDocuments()
+    - DOCX는 섹션 유지 우선
+    - 섹션이 chunkSize 초과 시 sliding window 분할
+
+  9) 메타데이터 태깅
+    DocumentIndexer.tagMetadata()
+    - doc_id, filename, version, doc_type, sha256, chunk_index, page_or_slide, tags, image_paths 등
+
+  10) 키워드 추출(enrich) [LLM]
+    excerpt_keywords 메타데이터 추가
+
+  11) 임베딩 DB 저장
+    a) Chroma 모드
+      - 컬렉션(버전별)에 Document(text + metadata) 저장
+    b) sqlite-vec 모드
+      - vec_embeddings: spring_doc_id, version, embedding
+      - vec_document_chunks: spring_doc_id, content, metadata(JSON), version, doc_id, created_at
+    + FTS 인덱스(chunk_fts)에도 doc_tags/content/keywords 동시 반영
+
+  12) 레지스트리 저장
+    doc_registry에 docId/version/chunk수/spring_doc_ids 기록
+  ```
+
+  핵심 포인트:
+  - DOCX 이미지 파일은 별도 디렉터리에 저장되고, 청크 본문에는 마커로 남는다.
+  - 마커 경로는 `loadFromMarkdown()`에서 `image_paths` 메타데이터로 승격되어 임베딩 DB metadata(JSON/Map)에 함께 저장된다.
+  - 따라서 검색 결과 청크가 이미지 경로 컨텍스트를 유지한 채 반환된다.
+  - DOCX는 물리 페이지 전체 보전 대신, 헤딩 단위 페이지 위치를 보전한다.
+  - `page_or_slide`는 DOCX에서 헤딩 시작 페이지(명시적 page break 기준)를 우선 사용하고, 없으면 기존 청크 순번 fallback을 사용한다.
+
+### 6.4. 문서 타입별 처리 상세
 
 | 타입 | 파싱/변환 | LLM 전처리 | 중간 산출물 (data/converted) | 청킹 | 이미지 | MD 재인덱싱(↺) |
 |------|-----------|-----------|------------------------------|------|--------|----------------|
 | **PDF** | `PagePdfDocumentReader` 페이지 단위. 50% 이상 페이지가 50자 미만이면 스캔 판정 → Tesseract(kor+eng) OCR (`source_type=ocr`) | 없음 | 없음 | 슬라이딩 윈도우 | 페이지 이미지 추출 → `data/images/{docId}/` | 미지원 |
 | **PPTX** | POI 로 슬라이드별 텍스트 (`source_type=ppt`) | 없음 | 없음 | 슬라이드 단위 유지 | 슬라이드 이미지 추출 | 미지원 |
-| **DOCX** | `DocxToMarkdownConverter` 로 MD 변환 (제목 스타일 → `##/###`, 이미지 `[이미지: ...]` 인라인) | `MarkdownCorrectionService.correct()` — 섹션 병렬 **포맷 교정**(끊긴 문장 연결·오타·헤딩 정규화, 내용 불변) | `{docId}.md`(원본) + `{docId}_corrected.md`(교정) | 섹션 단위, 초과 시 슬라이딩 윈도우 | 변환 단계에서 인라인 처리 | **지원** |
+| **DOCX** | `DocxToMarkdownConverter` 로 MD 변환 (제목 스타일 → `##/###`, `[헤딩페이지: N]`/`[페이지: N]` + 이미지 `[이미지: ...]` 인라인) | `MarkdownCorrectionService.correct()` — 섹션 병렬 **포맷 교정**(끊긴 문장 연결·오타·헤딩 정규화, 내용 불변, 페이지/이미지 마커 보존) | `{docId}.md`(원본) + `{docId}_corrected.md`(교정) | **헤딩 섹션 우선 유지**, 초과 시 섹션 내부 슬라이딩 윈도우 | 변환 단계에서 인라인 처리 | **지원** |
 | **TXT** | 평문 → `TextToMarkdownService.convert()` — 로컬 LLM 이 **구조화**(제목/목록/표 부여) + **문법 교정**(맞춤법·띄어쓰기·끊긴 문장), 내용 불변 → MD | 위 구조화에 이어 `MarkdownCorrectionService.correct()` **포맷 교정** 한 번 더 (DOCX 와 동일 파이프라인) | `{docId}.md`(구조화) + `{docId}_corrected.md`(교정) | 섹션 단위, 초과 시 슬라이딩 윈도우 | 없음 | **지원** |
 | **MD** | 이미지/링크 마커 전처리 후 `#` 헤딩 기준 섹션 분할 | 없음 | 없음 | 섹션 단위, 초과 시 슬라이딩 윈도우 | `[이미지: ...]` 마커 → image_paths | 미지원 |
 
@@ -189,7 +267,7 @@ PROGRESSIVE 모드 AND sufficient=false AND retryCount >= max
 > **TXT 구조화 LLM 호출**: `TaskType.LIGHT_TEXT` · `RoutingMode.COST_FIRST`(로컬 프로바이더 우선). 큰 파일은 6,000자 블록으로 나눠 병렬 처리.  
 > **MD 재인덱싱(↺)**: `data/converted/{docId}[_corrected].md` 가 존재하는 DOCX·TXT 만 지원(`AdminController` `/admin/documents/{docId}/reindex`). 재변환/재교정 없이 저장된 MD 를 다시 청킹·임베딩한다. 태그는 FTS 인덱스에서 복원.
 
-### 디렉터리 동기화 — 3단계
+### 6.5. 디렉터리 동기화 — 3단계
 
 ```
 Phase 1  변경 감지 (단일 스레드)
@@ -207,7 +285,7 @@ Phase 3  삭제 처리 (단일 스레드)
   → SyncResult(indexed, updated, deleted) 반환
 ```
 
-### OCR 자동 감지
+### 6.6. OCR 자동 감지
 
 ```
 PDF 페이지의 50% 이상이 50자 미만  →  스캔 문서로 판정

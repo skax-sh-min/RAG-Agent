@@ -3,6 +3,8 @@ package com.example.ragagent.service;
 import com.example.ragagent.config.AppProperties;
 import org.apache.poi.xwpf.usermodel.*;
 import org.springframework.stereotype.Component;
+import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTBr;
+import org.openxmlformats.schemas.wordprocessingml.x2006.main.STBrType;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -46,11 +48,12 @@ public class DocxToMarkdownConverter {
         StringBuilder sb = new StringBuilder();
         int[] imgCounter = {0};
         int[] paraIdx   = {0};
+        int[] currentPage = {1};
 
         try (XWPFDocument docx = new XWPFDocument(Files.newInputStream(docxPath))) {
             for (IBodyElement elem : docx.getBodyElements()) {
                 if (elem instanceof XWPFParagraph para) {
-                    appendParagraph(sb, para, docId, imagesDir, imgCounter, paraIdx[0]++);
+                    appendParagraph(sb, para, docId, imagesDir, imgCounter, paraIdx[0]++, currentPage);
                 } else if (elem instanceof XWPFTable table) {
                     appendTable(sb, table);
                 }
@@ -61,13 +64,18 @@ public class DocxToMarkdownConverter {
 
     private void appendParagraph(StringBuilder sb, XWPFParagraph para,
                                   String docId, Path imagesDir,
-                                  int[] imgCounter, int paraIdx) throws IOException {
+                      int[] imgCounter, int paraIdx,
+                      int[] currentPage) throws IOException {
         String style = para.getStyle();
-        if (style != null && style.toLowerCase().startsWith("heading")) {
+        boolean isHeading = style != null && style.toLowerCase().startsWith("heading");
+        if (isHeading) {
             int level = extractHeadingLevel(style);
+            // Keep heading-level page anchors so downstream indexing can preserve source position.
+            sb.append("[헤딩페이지: ").append(currentPage[0]).append("]\n");
             sb.append("#".repeat(Math.min(level, 3)))
-              .append(" ").append(para.getText().strip())
-              .append("\n\n");
+                .append(" ").append(para.getText().strip())
+                .append("\n\n");
+            advancePageIfNeeded(sb, para, currentPage);
             return;
         }
 
@@ -125,6 +133,25 @@ public class DocxToMarkdownConverter {
         String lineStr = line.toString().strip();
         if (!lineStr.isEmpty()) sb.append(lineStr);
         sb.append("\n");
+        advancePageIfNeeded(sb, para, currentPage);
+    }
+
+    private void advancePageIfNeeded(StringBuilder sb, XWPFParagraph para, int[] currentPage) {
+        if (!hasExplicitPageBreak(para)) return;
+        currentPage[0]++;
+        // Page anchor marker for sections that have no headings (e.g., prologue blocks).
+        sb.append("[페이지: ").append(currentPage[0]).append("]\n");
+    }
+
+    private boolean hasExplicitPageBreak(XWPFParagraph para) {
+        for (XWPFRun run : para.getRuns()) {
+            for (CTBr br : run.getCTR().getBrList()) {
+                if (br.isSetType() && STBrType.PAGE.equals(br.getType())) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     private void appendTable(StringBuilder sb, XWPFTable table) {
