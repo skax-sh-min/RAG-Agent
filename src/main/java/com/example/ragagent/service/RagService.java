@@ -76,8 +76,19 @@ public class RagService {
                                       List<String> tags,
                                       boolean addImageDescriptions,
                                       Consumer<IndexingProgressEvent> onProgress) throws IOException {
+        return indexDocument(userId, filePath, filename, version, tags,
+                addImageDescriptions, false, onProgress);
+    }
+
+    /** index with optional second-pass heading numbering + code-block polishing. */
+    public DocumentInfo indexDocument(String userId, Path filePath, String filename, String version,
+                                      List<String> tags,
+                                      boolean addImageDescriptions,
+                                      boolean addHeadingNumbers,
+                                      Consumer<IndexingProgressEvent> onProgress) throws IOException {
         DocumentInfo info = indexer.index(IndexRequest.single(
-                filePath, filename, version, userId, tags, addImageDescriptions, onProgress));
+                filePath, filename, version, userId, tags,
+                addImageDescriptions, addHeadingNumbers, onProgress));
         docRegistry.save();
         return info;
     }

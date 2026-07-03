@@ -76,6 +76,12 @@
                                th:text="#{doc.upload.image_desc.option}"
                                th:title="#{doc.upload.image_desc.tooltip}">이미지 설명 추가</label>
                     </div>
+                    <div class="form-check form-check-inline mb-0">
+                        <input class="form-check-input" type="checkbox" id="add-heading-numbers-checkbox"/>
+                        <label class="form-check-label small" for="add-heading-numbers-checkbox"
+                               th:text="#{doc.upload.heading_number.option}"
+                               th:title="#{doc.upload.heading_number.tooltip}">소제목 숫자 생성</label>
+                    </div>
                     <button id="upload-btn" class="btn btn-sm btn-primary" disabled>
                         <i class="bi bi-upload me-1"></i>
                         <span th:text="#{doc.btn.upload}">Upload &amp; Index</span>
@@ -227,11 +233,12 @@
         const version = (document.getElementById('version-input').value || '').trim() || 'latest';
         const tags = (document.getElementById('tags-input').value || '').trim();
         const addImageDescriptions = document.getElementById('add-image-desc-checkbox').checked;
-        uploadFiles([...selectedFiles], version, tags, addImageDescriptions);
+        const addHeadingNumbers = document.getElementById('add-heading-numbers-checkbox').checked;
+        uploadFiles([...selectedFiles], version, tags, addImageDescriptions, addHeadingNumbers);
     });
 
     /* ── Upload orchestration ────────────────────────────────────────────── */
-    async function uploadFiles(files, version, tags, addImageDescriptions) {
+    async function uploadFiles(files, version, tags, addImageDescriptions, addHeadingNumbers) {
         const btn = document.getElementById('upload-btn');
         btn.disabled = true;
 
@@ -247,7 +254,7 @@
             setFileStatus(i, 'uploading');
             try {
                 const result = await uploadWithProgress(files[i], version, tags,
-                    addImageDescriptions,
+                    addImageDescriptions, addHeadingNumbers,
                     pct => {                                    // XHR upload progress
                         setUploadBar(i, pct);
                         if (pct === 100) setFileStatus(i, 'queued');
@@ -275,7 +282,7 @@
      * Phase 2 — SSE: subscribe to /ui/documents/progress/{taskId} for chunk-level events.
      * Resolves with DocumentInfo on 'done', rejects on 'error'.
      */
-    function uploadWithProgress(file, version, tags, addImageDescriptions, onUploadPct, onStage) {
+    function uploadWithProgress(file, version, tags, addImageDescriptions, addHeadingNumbers, onUploadPct, onStage) {
         return new Promise((resolve, reject) => {
             const xhr  = new XMLHttpRequest();
             const form = new FormData();
@@ -283,6 +290,7 @@
             form.append('version', version);
             if (tags) form.append('tags', tags);   // 검색 스코프 태그
             form.append('addImageDescriptions', addImageDescriptions ? 'true' : 'false');
+            form.append('addHeadingNumbers', addHeadingNumbers ? 'true' : 'false');
 
             xhr.upload.addEventListener('progress', e => {
                 if (e.lengthComputable) onUploadPct(Math.round(e.loaded / e.total * 100));

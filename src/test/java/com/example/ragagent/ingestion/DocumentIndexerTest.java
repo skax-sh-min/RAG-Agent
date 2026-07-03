@@ -22,6 +22,7 @@ import java.util.concurrent.Semaphore;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
@@ -75,7 +76,7 @@ class DocumentIndexerTest {
 
         // Stub MarkdownCorrectionService / TextToMarkdownService — pass content through unchanged
         MarkdownCorrectionService correctionService = mock(MarkdownCorrectionService.class);
-        when(correctionService.correct(any(), any(), any(), any()))
+        when(correctionService.correct(any(), any(), any(), anyBoolean(), anyBoolean(), any()))
                 .thenAnswer(inv -> inv.getArgument(0));
         TextToMarkdownService textToMarkdownService = mock(TextToMarkdownService.class);
         when(textToMarkdownService.convert(any(), any(), any()))

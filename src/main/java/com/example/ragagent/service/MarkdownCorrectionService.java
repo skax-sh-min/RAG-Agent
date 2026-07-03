@@ -44,6 +44,7 @@ public class MarkdownCorrectionService {
     private static final Pattern MD_IMAGE_LINK = Pattern.compile("!\\[([^\\]]*)]\\(([^)]+)\\)");
     private static final Pattern IMAGE_MARKER = Pattern.compile("\\[이미지:\\s*([^\\]]+)]");
     private static final Pattern FENCED_BLOCK = Pattern.compile("(?s)```(.*?)\\n(.*?)\\n```");
+    private static final Pattern HEADING_NUMBER_PREFIX = Pattern.compile("^(?:\\d+(?:\\.\\d+)*(?:\\.)?|\\d+[\\)])\\s+");
 
     private final LlmRouter llmRouter;
 
@@ -57,13 +58,20 @@ public class MarkdownCorrectionService {
      * On any LLM failure the original section text is kept (graceful fallback).
      */
     public String correct(String rawMd, String docId, Path correctedOutputPath) {
-        return correct(rawMd, docId, correctedOutputPath, false, null);
+        return correct(rawMd, docId, correctedOutputPath, false, false, null);
     }
 
     /** Same as {@link #correct(String, String, Path)} with image-description toggle. */
     public String correct(String rawMd, String docId, Path correctedOutputPath,
                           boolean addImageDescriptions) {
-        return correct(rawMd, docId, correctedOutputPath, addImageDescriptions, null);
+        return correct(rawMd, docId, correctedOutputPath, addImageDescriptions, false, null);
+    }
+
+    /** Same as {@link #correct(String, String, Path, boolean)} with heading-number second pass. */
+    public String correct(String rawMd, String docId, Path correctedOutputPath,
+                          boolean addImageDescriptions,
+                          boolean addHeadingNumbers) {
+        return correct(rawMd, docId, correctedOutputPath, addImageDescriptions, addHeadingNumbers, null);
     }
 
     /**
@@ -72,7 +80,7 @@ public class MarkdownCorrectionService {
      */
     public String correct(String rawMd, String docId, Path correctedOutputPath,
                           BiConsumer<Integer, Integer> onSectionDone) {
-        return correct(rawMd, docId, correctedOutputPath, false, onSectionDone);
+        return correct(rawMd, docId, correctedOutputPath, false, false, onSectionDone);
     }
 
     /**
@@ -80,6 +88,7 @@ public class MarkdownCorrectionService {
      */
     public String correct(String rawMd, String docId, Path correctedOutputPath,
                           boolean addImageDescriptions,
+                          boolean addHeadingNumbers,
                           BiConsumer<Integer, Integer> onSectionDone) {
         if (rawMd == null || rawMd.isBlank()) return rawMd;
         log.info("[MD_CORRECT] 시작: docId={}, chars={}", docId, rawMd.length());
@@ -122,7 +131,10 @@ public class MarkdownCorrectionService {
         }
 
         String result = String.join("\n\n", corrected);
-        result = normalizeCodeBlocks(result);
+        result = normalizeCodeBlocks(result, false);
+        if (addHeadingNumbers) {
+            result = secondPassHeadingAndCodePolish(result);
+        }
         log.info("[MD_CORRECT] 완료: docId={}, {}ms", docId, System.currentTimeMillis() - t0);
 
         if (correctedOutputPath != null) {
@@ -135,6 +147,11 @@ public class MarkdownCorrectionService {
             }
         }
         return result;
+    }
+
+    private String secondPassHeadingAndCodePolish(String md) {
+        String numbered = addHierarchicalHeadingNumbers(md);
+        return normalizeCodeBlocks(numbered, true);
     }
 
     private List<String> splitBySections(String md) {
@@ -164,15 +181,15 @@ public class MarkdownCorrectionService {
         log.debug("[MD_CORRECT] 섹션 교정 시작: {}자", safeSection.length());
         String prompt = """
                 당신은 문서 편집자입니다. 다음 마크다운 텍스트의 형식(포맷)만 교정하세요.
-                절대로 내용(사실, 데이터, 수치, 의미)을 변경하지 마세요.
-                표 구조를 바꾸지 마세요. 표의 head 셀이 비어있어도 그대로 두세요. 표의 열/행 순서도 그대로 두세요.
+                - 내용(사실, 데이터, 수치, 의미)을 변경 절대 금지
 
                 교정 항목:
                 - 잘린 문장 연결 (줄바꿈으로 끊긴 문장을 이어붙이기)
                 - 명백한 오타 수정
                 - 소제목 레벨 정규화 (H2/H3 일관성)
+                - 표(table)는 변경 금지. (빈 셀도 유지)
                 - 마커 형식 유지: [이미지: ...], [이미지(변환불가): ...], [헤딩페이지: N], [페이지: N]을 그대로 둘 것
-                - 코드 블록(```) 내부의 불필요한 공란을 줄이고, 줄바꿈을 필요한 곳아만 남겨 가독성을 높일 것 (의미는 변경 금지)
+                - 코드 블록(```) 내부의 불필요한 공란을 줄이고, 빈 줄 최소화로 가독성을 높일 것 (의미는 변경 금지)
                 - 연속된 빈 줄 1개로 정리
 
                 교정된 마크다운만 반환하세요. 설명이나 주석을 추가하지 마세요.
@@ -324,18 +341,96 @@ public class MarkdownCorrectionService {
         return "image/png";
     }
 
-    private String normalizeCodeBlocks(String md) {
+    private String normalizeCodeBlocks(String md, boolean inferLanguage) {
         Matcher m = FENCED_BLOCK.matcher(md);
         StringBuffer out = new StringBuffer();
         while (m.find()) {
-            String lang = m.group(1) == null ? "" : m.group(1);
+            String lang = m.group(1) == null ? "" : m.group(1).trim();
             String code = m.group(2) == null ? "" : m.group(2);
+            if (inferLanguage && lang.isBlank()) {
+                lang = inferCodeLanguage(code);
+            }
             String normalized = normalizeCodeContent(code);
             String replacement = "```" + lang + "\n" + normalized + "\n```";
             m.appendReplacement(out, Matcher.quoteReplacement(replacement));
         }
         m.appendTail(out);
         return out.toString();
+    }
+
+    private String addHierarchicalHeadingNumbers(String md) {
+        String[] lines = md.split("\\n", -1);
+        int[] counters = new int[5]; // ##..###### => 5 levels
+        boolean inFence = false;
+
+        for (int i = 0; i < lines.length; i++) {
+            String line = lines[i];
+            String trimmed = line.stripLeading();
+            if (trimmed.startsWith("```")) {
+                inFence = !inFence;
+                continue;
+            }
+            if (inFence) continue;
+
+            int headingLevel = markdownHeadingLevel(line);
+            if (headingLevel < 2 || headingLevel > 6) continue;
+
+            String headingText = line.substring(headingLevel + 1).trim();
+            if (headingText.isBlank()) continue;
+
+            int idx = headingLevel - 2;
+            counters[idx]++;
+            for (int j = idx + 1; j < counters.length; j++) counters[j] = 0;
+
+            String cleanHeading = HEADING_NUMBER_PREFIX.matcher(headingText).replaceFirst("").trim();
+            String prefix = buildHeadingPrefix(counters, idx);
+            lines[i] = "#".repeat(headingLevel) + " " + prefix + " " + cleanHeading;
+        }
+
+        return String.join("\n", lines);
+    }
+
+    private int markdownHeadingLevel(String line) {
+        int i = 0;
+        while (i < line.length() && line.charAt(i) == '#') i++;
+        if (i < 1 || i > 6) return 0;
+        if (line.length() <= i || line.charAt(i) != ' ') return 0;
+        return i;
+    }
+
+    private String buildHeadingPrefix(int[] counters, int idx) {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i <= idx; i++) {
+            if (i > 0) sb.append('.');
+            sb.append(Math.max(counters[i], 1));
+        }
+        if (idx == 0) sb.append('.');
+        return sb.toString();
+    }
+
+    private String inferCodeLanguage(String code) {
+        if (code == null || code.isBlank()) return "";
+        String trimmed = code.trim();
+        String lower = trimmed.toLowerCase();
+
+        if (looksLikeJson(trimmed)) return "json";
+        if (lower.startsWith("<?xml") || (lower.contains("<") && lower.contains("</"))) return "xml";
+        if (lower.contains("<html") || lower.contains("</html>")) return "html";
+        if (lower.startsWith("---") || lower.matches("(?s).*^\\s*[a-zA-Z0-9_.-]+:\\s+.+$.*")) return "yaml";
+        if (lower.contains("public class") || lower.contains("import java.") || lower.contains("system.out.println")) return "java";
+        if (lower.matches("(?s).*\\b(select|insert|update|delete|create table|alter table)\\b.*")) return "sql";
+        if (lower.startsWith("#!/bin/sh")) return "sh";
+        if (lower.startsWith("#!/bin/bash") || lower.startsWith("#!/usr/bin/env bash")
+                || lower.contains(" apt-get ") || lower.contains(" curl ") || lower.contains(" grep ")) return "bash";
+        if (lower.matches("(?s).*\\b(def|class|import|from)\\b.*") && lower.contains(":")) return "python";
+        if (lower.matches("(?s).*\\b(function|const|let|var|console\\.log|=>)\\b.*")) return "javascript";
+        return "";
+    }
+
+    private boolean looksLikeJson(String code) {
+        String t = code.trim();
+        if (!(t.startsWith("{") || t.startsWith("["))) return false;
+        return t.contains(":") && (t.endsWith("}") || t.endsWith("]"));
     }
 
     private String normalizeCodeContent(String code) {

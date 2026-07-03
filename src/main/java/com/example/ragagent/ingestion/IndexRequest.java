@@ -20,6 +20,7 @@ public record IndexRequest(
         String staleDocId,               // null → no stale-doc deletion after indexing
         boolean saveRegistryAfter,
         boolean addImageDescriptions,    // true → Markdown correction adds local image descriptions
+        boolean addHeadingNumbers,       // true → Markdown second pass adds heading numbers + code-block polish
         Consumer<IndexingProgressEvent> onProgress,
         List<String> tags                // 검색 스코프 태그 (청크 metadata에 저장)
 ) {
@@ -41,11 +42,19 @@ public record IndexRequest(
                                       List<String> tags, boolean addImageDescriptions,
                                       Consumer<IndexingProgressEvent> onProgress) {
         return new IndexRequest(p, filename, version, userId,
-            null, null, true, addImageDescriptions, onProgress, tags);
+            null, null, true, addImageDescriptions, false, onProgress, tags);
+    }
+
+    public static IndexRequest single(Path p, String filename, String version, String userId,
+                                      List<String> tags, boolean addImageDescriptions,
+                                      boolean addHeadingNumbers,
+                                      Consumer<IndexingProgressEvent> onProgress) {
+        return new IndexRequest(p, filename, version, userId,
+            null, null, true, addImageDescriptions, addHeadingNumbers, onProgress, tags);
     }
 
     public static IndexRequest parallel(Path p, String version, String userId, Semaphore gate, String stale) {
         return new IndexRequest(p, p.getFileName().toString(), version, userId,
-                gate, stale, false, false, event -> {}, List.of());
+                gate, stale, false, false, false, event -> {}, List.of());
     }
 }

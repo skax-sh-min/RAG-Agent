@@ -6,7 +6,6 @@ import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTPPr;
 import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTPPrGeneral;
 import org.springframework.stereotype.Component;
 import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTLvl;
-import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTNumLvl;
 import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTTcPr;
 import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTNumPr;
 import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTStyle;
@@ -15,10 +14,8 @@ import org.openxmlformats.schemas.wordprocessingml.x2006.main.STMerge;
 import java.io.IOException;
 import java.math.BigInteger;
 import java.nio.file.Files;
-import java.util.HashMap;
 import java.nio.file.Path;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -67,14 +64,11 @@ public class DocxToMarkdownConverter {
         StringBuilder sb = new StringBuilder();
         int[] imgCounter = {0};
         int[] paraIdx = {0};
-        Map<String, int[]> headingCounters = new HashMap<>();
-        Map<String, boolean[]> headingCounterInit = new HashMap<>();
 
         try (XWPFDocument docx = new XWPFDocument(Files.newInputStream(docxPath))) {
             for (IBodyElement elem : docx.getBodyElements()) {
                 if (elem instanceof XWPFParagraph para) {
-                    appendParagraph(docx, sb, para, docId, imagesDir, imgCounter, paraIdx[0]++,
-                            headingCounters, headingCounterInit);
+                    appendParagraph(docx, sb, para, docId, imagesDir, imgCounter, paraIdx[0]++);
                 } else if (elem instanceof XWPFTable table) {
                     appendTable(docx, sb, table, docId, imagesDir, imgCounter, paraIdx);
                 }
@@ -85,18 +79,12 @@ public class DocxToMarkdownConverter {
 
     private void appendParagraph(XWPFDocument doc, StringBuilder sb, XWPFParagraph para,
                                  String docId, Path imagesDir,
-                                 int[] imgCounter, int paraIdx,
-                                 Map<String, int[]> headingCounters,
-                                 Map<String, boolean[]> headingCounterInit) throws IOException {
+                                 int[] imgCounter, int paraIdx) throws IOException {
         int heading = headingLevel(doc, para);
         String text = paragraphText(doc, para, docId, imagesDir, imgCounter, paraIdx);
         ListInfo listInfo = resolveListInfo(doc, para);
 
         if (heading > 0) {
-            String numberingPrefix = resolveHeadingNumberPrefix(doc, listInfo, headingCounters, headingCounterInit);
-            if (!numberingPrefix.isBlank() && !startsWithHeadingNumber(text)) {
-                text = numberingPrefix + " " + text;
-            }
             if (!text.isBlank()) {
                 sb.append("#".repeat(Math.min(heading, 6)))
                         .append(" ").append(text.trim())
@@ -482,74 +470,4 @@ public class DocxToMarkdownConverter {
         return Math.max(byText, byPara);
     }
 
-    private String resolveHeadingNumberPrefix(XWPFDocument doc, ListInfo listInfo,
-                                              Map<String, int[]> countersByNumId,
-                                              Map<String, boolean[]> initByNumId) {
-        try {
-            if (listInfo == null || listInfo.numId() == null) return "";
-            BigInteger numId = listInfo.numId();
-
-            // Only numeric ordered headings should get synthetic numbering prefixes.
-            if (!isOrderedList(doc, listInfo.numId(), listInfo.ilvl())) return "";
-
-            int ilvl = listInfo.ilvl();
-            String key = numId.toString();
-            int[] counters = countersByNumId.computeIfAbsent(key, k -> new int[9]);
-            boolean[] init = initByNumId.computeIfAbsent(key, k -> new boolean[9]);
-
-            int start = resolveStartNumber(doc, numId, ilvl);
-            if (!init[ilvl] || counters[ilvl] <= 0) {
-                counters[ilvl] = Math.max(1, start);
-                init[ilvl] = true;
-            } else {
-                counters[ilvl]++;
-            }
-            for (int i = ilvl + 1; i < counters.length; i++) {
-                counters[i] = 0;
-                init[i] = false;
-            }
-
-            StringBuilder prefix = new StringBuilder();
-            for (int i = 0; i <= ilvl; i++) {
-                if (counters[i] <= 0) continue;
-                if (prefix.length() > 0) prefix.append('.');
-                prefix.append(counters[i]);
-            }
-            return prefix.toString();
-        } catch (Exception e) {
-            return "";
-        }
-    }
-
-    private int resolveStartNumber(XWPFDocument doc, BigInteger numId, int ilvl) {
-        try {
-            XWPFNumbering numbering = doc.getNumbering();
-            if (numbering == null) return 1;
-            XWPFNum num = numbering.getNum(numId);
-            if (num == null || num.getCTNum() == null) return 1;
-
-            for (CTNumLvl ov : num.getCTNum().getLvlOverrideList()) {
-                if (ov != null && ov.getIlvl() != null && ov.getIlvl().intValue() == ilvl && ov.isSetStartOverride()) {
-                    BigInteger v = ov.getStartOverride().getVal();
-                    return v != null ? Math.max(1, v.intValue()) : 1;
-                }
-            }
-
-            BigInteger abstractNumId = num.getCTNum().getAbstractNumId().getVal();
-            XWPFAbstractNum abstractNum = numbering.getAbstractNum(abstractNumId);
-            if (abstractNum == null) return 1;
-            CTLvl lvl = abstractNum.getCTAbstractNum().getLvlArray(ilvl);
-            if (lvl != null && lvl.getStart() != null && lvl.getStart().getVal() != null) {
-                return Math.max(1, lvl.getStart().getVal().intValue());
-            }
-        } catch (Exception ignored) {
-            // Fallback to 1 when numbering metadata is incomplete.
-        }
-        return 1;
-    }
-
-    private boolean startsWithHeadingNumber(String text) {
-        if (text == null) return false;
-        return text.trim().matches("^\\d+(\\.\\d+)*[\\.)]?\\s+.*");
-    }
 }
