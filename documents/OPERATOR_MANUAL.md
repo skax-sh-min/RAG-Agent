@@ -187,7 +187,8 @@ copy .env.example .env
 | 변수 | 기본값 | 권장 범위 | 설명 |
 |------|--------|----------|------|
 | `CHUNK_SIZE` | `800` | 300 ~ 2000 | 청크 크기 (문자 수). 작을수록 정밀, 클수록 문맥 풍부 |
-| `CHUNK_OVERLAP` | `100` | 0 ~ CHUNK_SIZE × 0.25 | 청크 간 중복 (문자 수). 청크 경계 문맥 보완 |
+| `CHUNK_OVERLAP` | `100` | 0 ~ CHUNK_SIZE × 0.25 | 청크 간 중복 (문자 수). 청크 경계 문맥 보완 전용 |
+| `MIN_CHUNK_SIZE` | `100` | 50 ~ CHUNK_SIZE × 0.25 | 너무 작은 청크를 인접 청크와 병합할 최소 길이 기준 |
 | `SEARCH_TOP_K` | `7` | 2 ~ 15 | 벡터 검색 반환 문서 수. 높을수록 재현율↑, 토큰↑ |
 | `SEARCH_SIMILARITY_THRESHOLD` | `0.0` | 0.0 ~ 0.75 | 청크 유지 최소 코사인 유사도. `0.0`=전체 수용. 운영 0.5~0.75 튜닝 시 골든셋 recall 확인 후 적용 |
 | `SEARCH_MULTIQUERY_ENABLED` | `true` | true/false | 검색 전 질의 다중 확장(LLM) 여부. `false`면 임계 경로 첫 LLM 콜 제거 |
@@ -197,7 +198,8 @@ copy .env.example .env
 | `SEARCH_RERANK_ENABLED` | `false` | true/false | RRF 후 LLM 리랭킹 단계 (opt-in). **턴당 LLM 1콜 추가** → 정밀도↑/레이턴시 트레이드오프 |
 | `SEARCH_CANDIDATE_MULTIPLIER` | `3` | 2 ~ 5 | 리랭킹 전 후보 풀 크기. `topK × N`개 가져와 리랭킹 후 topK로 축소 |
 | `MAX_RETRY_COUNT` | `2` | 0 ~ 4 | 증거 부족 시 재검색 최대 횟수 |
-| `MAX_CONVERSATION_CHARS` | `8000` | 1000 ~ 20000 | 멀티턴 컨텍스트 주입 최대 문자 수 |
+
+대화 컨텍스트 주입 길이는 `LLM_MAX_TOKENS × 0.75`로 자동 계산됩니다.
 
 #### 인덱싱 병렬 처리
 
@@ -269,9 +271,8 @@ LLM_ROUTING_MODE=QUALITY_FIRST
 
 | 속성 | 기본값 | 설명 |
 |------|--------|------|
-| `app.image-description.enabled` | `true` | Vision LLM 이미지 설명 기능 전체 활성화 여부. `false`이면 이미지 마커만 저장하고 LLM 호출 없음 |
+| `app.image-description.enabled` | `true` | 검색 시점 Lazy Vision(`LazyVisionService`) 활성화 여부. `false`이면 이미지 마커만 저장하고 검색 시 LLM 호출 없음 |
 | `app.image-description.mode` | `strip` | `strip`: 이미지 마커를 텍스트에서 제거 / `describe`: Vision LLM으로 설명 생성 후 삽입 |
-| `app.image-description.lazy` | `true` | `true`: 검색 시 필요할 때 설명 생성 (LazyVisionService) / `false`: 인덱싱 중 즉시 생성 |
 | `app.image-description.classify-type` | `true` | 이미지 설명 전 유형(사진/도표/스크린샷 등) 분류 여부. 분류 결과를 프롬프트에 주입 |
 | `app.image-description.ocr-enabled` | `true` | 스캔 PDF 페이지에 대해 OCR 처리 활성화 여부 |
 | `app.image-description.min-image-bytes` | `1000` | 이 크기 미만의 이미지는 아이콘·구분선으로 간주하고 설명 생성 건너뜀 (바이트) |
@@ -282,6 +283,10 @@ LLM_ROUTING_MODE=QUALITY_FIRST
 > 프로바이더가 없으면 `strip`으로 자동 fallback됩니다.
 
 > **EMF/WMF 변환**: LibreOffice(`soffice`)가 PATH에 있어야 합니다. 없으면 변환이 건너뛰어지며 `[TIMEOUT:LIBREOFFICE]` 로그가 출력됩니다.
+
+> **인덱싱 시점 즉시 설명 생성**은 프로퍼티가 아니라 문서 업로드 화면의 "이미지 설명 추가" 체크박스로 제어됩니다
+> (DOCX·TXT·MD 한정). 여기 표의 설정들은 모두 검색 시점 Lazy Vision에 대한 것입니다. 자세한 내용은
+> `documents/IMAGE_PROCESS.md` 5절·12절 참고.
 
 #### LLM 응답 파라미터
 
@@ -1208,7 +1213,7 @@ COST_FIRST 흐름:
 `MemoryService`는 **SQLite**(`DATA_DIR/memory.db`)에 대화 이력을 영속합니다.
 
 - WAL 모드로 읽기/쓰기 경합 최소화. SQLite pool size는 반드시 1 유지
-- 스레드별 최근 50턴 이내에서 `MAX_CONVERSATION_CHARS`까지 LLM 컨텍스트 주입
+- 스레드별 최근 50턴 이내에서 `LLM_MAX_TOKENS × 0.75`까지 LLM 컨텍스트 주입
 - `/chat/{threadId}` 재진입 시 모든 이전 turn을 시간순으로 불러와 메시지 버블 복원
 - `MemoryRepository` 인터페이스로 추상화 — Redis 등으로 교체 시 구현체만 추가
 

@@ -89,4 +89,58 @@ class SqliteMemoryRepositoryTest {
                 .as("단일 거대 turn 이라도 잘라서라도 일부 컨텍스트 제공이 바람직")
                 .isNotEmpty();
     }
+
+    @Test
+    @DisplayName("addTurn 은 생성된 turn id 를 반환한다")
+    void addTurnReturnsGeneratedId() {
+        long id1 = repo.addTurn(UID, "t1", "Q1", "A1", null, 0, 0, 0, null, 0);
+        long id2 = repo.addTurn(UID, "t1", "Q2", "A2", null, 0, 0, 0, null, 0);
+        assertThat(id1).isPositive();
+        assertThat(id2).isGreaterThan(id1);
+    }
+
+    @Test
+    @DisplayName("DISLIKE 로 표시된 turn 은 getHistory 컨텍스트에서 제외된다")
+    void dislikedTurnExcludedFromHistory() {
+        long keep = repo.addTurn(UID, "t1", "keep-question", "keep-answer", null, 0, 0, 0, null, 0);
+        long drop = repo.addTurn(UID, "t1", "drop-question", "drop-answer", null, 0, 0, 0, null, 0);
+        repo.updateFeedback(UID, "t1", drop, "DISLIKE");
+
+        String history = repo.getHistory(UID, "t1", 1_000_000);
+
+        assertThat(history).contains("keep-question");
+        assertThat(history).doesNotContain("drop-question");
+        assertThat(keep).isNotEqualTo(drop); // sanity
+    }
+
+    @Test
+    @DisplayName("LIKE 로 표시된 turn 은 getHistory 컨텍스트에 그대로 남는다")
+    void likedTurnStaysInHistory() {
+        long id = repo.addTurn(UID, "t1", "liked-question", "liked-answer", null, 0, 0, 0, null, 0);
+        repo.updateFeedback(UID, "t1", id, "LIKE");
+
+        assertThat(repo.getHistory(UID, "t1", 1_000_000)).contains("liked-question");
+    }
+
+    @Test
+    @DisplayName("getFeedback — 존재하지 않는 turn/타 유저는 Optional.empty()")
+    void getFeedbackOwnershipCheck() {
+        long id = repo.addTurn(UID, "t1", "Q", "A", null, 0, 0, 0, null, 0);
+
+        assertThat(repo.getFeedback(UID, "t1", id)).isPresent();
+        assertThat(repo.getFeedback(UID, "t1", id).get().feedback()).isNull();
+        assertThat(repo.getFeedback("other-user", "t1", id)).isEmpty();
+        assertThat(repo.getFeedback(UID, "t1", id + 999)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("updateFeedback 후 getFeedback 이 새 값을 반영한다")
+    void updateFeedbackReflectedInGetFeedback() {
+        long id = repo.addTurn(UID, "t1", "Q", "A", null, 0, 0, 0, null, 0);
+        repo.updateFeedback(UID, "t1", id, "DISLIKE");
+        assertThat(repo.getFeedback(UID, "t1", id).get().feedback()).isEqualTo("DISLIKE");
+
+        repo.updateFeedback(UID, "t1", id, null); // clear
+        assertThat(repo.getFeedback(UID, "t1", id).get().feedback()).isNull();
+    }
 }

@@ -12,6 +12,7 @@ import com.example.ragagent.model.SyncResult;
 import com.example.ragagent.service.DocumentLoaderService;
 import com.example.ragagent.service.ImageExtractorService;
 import com.example.ragagent.service.MarkdownCorrectionService;
+import com.example.ragagent.service.TextToMarkdownService;
 import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -42,6 +43,7 @@ public class DocumentIndexer {
 
     private final DocumentLoaderService loaderService;
     private final MarkdownCorrectionService correctionService;
+    private final TextToMarkdownService textToMarkdownService;
     private final ImageExtractorService imageExtractorService;
     private final VectorStoreFacade vectorStore;
     private final DocRegistry docRegistry;
@@ -60,6 +62,7 @@ public class DocumentIndexer {
 
     public DocumentIndexer(DocumentLoaderService loaderService,
                            MarkdownCorrectionService correctionService,
+                           TextToMarkdownService textToMarkdownService,
                            ImageExtractorService imageExtractorService,
                            VectorStoreFacade vectorStore,
                            DocRegistry docRegistry,
@@ -68,6 +71,7 @@ public class DocumentIndexer {
                            AppProperties props) {
         this.loaderService = loaderService;
         this.correctionService = correctionService;
+        this.textToMarkdownService = textToMarkdownService;
         this.imageExtractorService = imageExtractorService;
         this.vectorStore = vectorStore;
         this.docRegistry = docRegistry;
@@ -101,6 +105,20 @@ public class DocumentIndexer {
         Path correctedMdPath = dataDir.resolve("converted").resolve(docId + "_corrected.md");
         log.debug("[INDEX] docId={}, type={}, sha256={}", docId, docType, sha256);
 
+        // Preserve tags on operator re-index / directory sync (those paths carry no tag input):
+        // the request has no tags, but they live in the FTS index under the prior docId
+        // (staleDocId when content changed, else this docId). Read BEFORE the delete below
+        // wipes those rows. Interactive single upload keeps its explicit tags — an empty list
+        // there means the user intentionally cleared them, so we do not auto-restore.
+        List<String> effectiveTags = req.tags();
+        if (effectiveTags.isEmpty() && req.parallelGate() != null) {
+            String priorDocId = req.staleDocId() != null ? req.staleDocId() : docId;
+            effectiveTags = restoreTags(priorDocId);
+            if (!effectiveTags.isEmpty()) {
+                log.debug("[INDEX] {} 태그 복원: {} (prior={})", req.filename(), effectiveTags, priorDocId);
+            }
+        }
+
         // Delete before conversion so newly created images/MD files are not immediately removed
         deleteExistingVectorsAndFiles(DocRegistry.SHARED, docId, req.version());
 
@@ -114,6 +132,36 @@ public class DocumentIndexer {
             Files.createDirectories(rawMdPath.getParent());
             Files.writeString(rawMdPath, rawMd);
             String sourceMd = correctionService.correct(rawMd, docId, correctedMdPath,
+                    req.addImageDescriptions(), req.addHeadingNumbers(),
+                    (done, total) -> req.onProgress().accept(
+                            IndexingProgressEvent.of("correcting", done, total, req.filename(),
+                                    done + "/" + total + " 섹션 교정 중")));
+            rawDocs = loaderService.loadFromMarkdown(sourceMd);
+        } else if (lower.endsWith(".txt")) {
+            // Plain text has no inherent structure → let the LLM impose headings/lists + fix grammar,
+            // then run it through the same MD pipeline DOCX uses (format correction → section split).
+            // Graceful: convert()/correct() keep the original text if the LLM is unavailable.
+            req.onProgress().accept(IndexingProgressEvent.of("loading", 0, 0, req.filename(), "TXT → Markdown 구조화 중..."));
+            String plainText = Files.readString(req.path());
+            String structuredMd = textToMarkdownService.convert(plainText, docId,
+                    (done, total) -> req.onProgress().accept(
+                            IndexingProgressEvent.of("structuring", done, total, req.filename(),
+                                    done + "/" + total + " 블록 구조화 중")));
+            Files.createDirectories(rawMdPath.getParent());
+            Files.writeString(rawMdPath, structuredMd);
+            String sourceMd = correctionService.correct(structuredMd, docId, correctedMdPath,
+                    req.addImageDescriptions(), req.addHeadingNumbers(),
+                    (done, total) -> req.onProgress().accept(
+                            IndexingProgressEvent.of("correcting", done, total, req.filename(),
+                                    done + "/" + total + " 섹션 교정 중")));
+            rawDocs = loaderService.loadFromMarkdown(sourceMd);
+        } else if (lower.endsWith(".md")) {
+            req.onProgress().accept(IndexingProgressEvent.of("loading", 0, 0, req.filename(), "Markdown 로드 중..."));
+            String rawMd = Files.readString(req.path());
+            Files.createDirectories(rawMdPath.getParent());
+            Files.writeString(rawMdPath, rawMd);
+            String sourceMd = correctionService.correct(rawMd, docId, correctedMdPath,
+                    req.addImageDescriptions(), req.addHeadingNumbers(),
                     (done, total) -> req.onProgress().accept(
                             IndexingProgressEvent.of("correcting", done, total, req.filename(),
                                     done + "/" + total + " 섹션 교정 중")));
@@ -136,13 +184,14 @@ public class DocumentIndexer {
         log.debug("[INDEX] {} 로드 완료 → 원본 섹션 {}개", req.filename(), rawDocs.size());
 
         req.onProgress().accept(IndexingProgressEvent.of("chunking", 0, 0, req.filename(), "청크 분할 중..."));
-        List<Document> chunks = splitDocuments(rawDocs, req.filename(), props.chunkSize(), props.chunkOverlap());
-        log.debug("[INDEX] {} 청크 분할 완료 → {}개 (chunkSize={}, overlap={})",
-                req.filename(), chunks.size(), props.chunkSize(), props.chunkOverlap());
+        List<Document> chunks = splitDocuments(
+            rawDocs, req.filename(), props.chunkSize(), props.chunkOverlap(), props.minChunkSizeSafe());
+        log.debug("[INDEX] {} 청크 분할 완료 → {}개 (chunkSize={}, overlap={}, minChunkSize={})",
+            req.filename(), chunks.size(), props.chunkSize(), props.chunkOverlap(), props.minChunkSizeSafe());
         req.onProgress().accept(IndexingProgressEvent.of("chunking", 0, chunks.size(), req.filename(),
                 chunks.size() + "개 청크"));
 
-        List<Document> tagged = tagMetadata(chunks, docId, req.filename(), req.version(), docType, sha256, DocRegistry.SHARED, req.tags());
+        List<Document> tagged = tagMetadata(chunks, docId, req.filename(), req.version(), docType, sha256, DocRegistry.SHARED, effectiveTags);
 
         log.debug("[INDEX] {} 키워드 추출 중 ({}개 청크, 병렬)...", req.filename(), tagged.size());
         Semaphore gate = req.parallelGate() != null
@@ -169,7 +218,7 @@ public class DocumentIndexer {
         log.info("[INDEX] 완료: {} → {}개 청크, {}ms", req.filename(), tagged.size(), System.currentTimeMillis() - t0);
         return new DocumentInfo(docId, req.filename(), req.version(), tagged.size(),
             entry.indexedAt(), sha256,
-            List.copyOf(new LinkedHashSet<>(req.tags() == null ? List.of() : req.tags())),
+            List.copyOf(new LinkedHashSet<>(effectiveTags)),
             List.of());
     }
 
@@ -191,7 +240,7 @@ public class DocumentIndexer {
         Path mdPath = Files.exists(correctedPath) ? correctedPath : rawPath;
         if (!Files.exists(mdPath)) {
             throw new IllegalStateException(
-                    "MD 파일이 없습니다 (DOCX 문서만 MD 재인덱싱 지원): " + docId);
+                    "MD 파일이 없습니다 (DOCX/TXT 문서만 MD 재인덱싱 지원): " + docId);
         }
 
         log.info("[REINDEX] 시작: docId={}, src={}", docId, mdPath.getFileName());
@@ -199,9 +248,12 @@ public class DocumentIndexer {
 
         String md = Files.readString(mdPath);
         List<Document> rawDocs = loaderService.loadFromMarkdown(md);
-        List<Document> chunks  = splitDocuments(rawDocs, filename, props.chunkSize(), props.chunkOverlap());
+        List<Document> chunks  = splitDocuments(
+            rawDocs, filename, props.chunkSize(), props.chunkOverlap(), props.minChunkSizeSafe());
         log.debug("[REINDEX] 청크 분할: {}섹션 → {}청크", rawDocs.size(), chunks.size());
-        List<Document> tagged  = tagMetadata(chunks, docId, filename, version, docType, sha256, DocRegistry.SHARED, java.util.List.of());
+        // Keep tags across re-index (same docId): read from FTS before the delete wipes them.
+        List<String> preservedTags = restoreTags(docId);
+        List<Document> tagged  = tagMetadata(chunks, docId, filename, version, docType, sha256, DocRegistry.SHARED, preservedTags);
 
         deleteExistingVectorsOnly(DocRegistry.SHARED, docId, version);
 
@@ -363,6 +415,17 @@ public class DocumentIndexer {
         return tagged;
     }
 
+    /**
+     * Recovers a document's search-scope tags from the FTS index ({@code chunk_fts.doc_tags}) so
+     * operator re-index / directory-sync paths — which carry no tag input — do not silently drop
+     * tags set at original upload. Returns an empty list when FTS is unavailable or no prior rows
+     * exist for {@code priorDocId}. Never throws.
+     */
+    private List<String> restoreTags(String priorDocId) {
+        if (priorDocId == null) return List.of();
+        return keywordRepo.tagsByDocIds(List.of(priorDocId)).getOrDefault(priorDocId, List.of());
+    }
+
     private void deleteExistingVectorsAndFiles(String userId, String docId, String version) {
         deleteExistingVectorsOnly(userId, docId, version);
         deleteDocFiles(userId, docId);
@@ -499,7 +562,8 @@ public class DocumentIndexer {
             "more", "also", "into", "than", "then", "its", "when", "there"
     );
 
-    private List<Document> splitDocuments(List<Document> docs, String filename, int chunkSize, int overlap) {
+    private List<Document> splitDocuments(List<Document> docs, String filename,
+                                          int chunkSize, int overlap, int minChunkSize) {
         String lower = filename.toLowerCase();
 
         if (lower.endsWith(".pptx")) {
@@ -507,32 +571,117 @@ public class DocumentIndexer {
             return new ArrayList<>(docs);
         }
 
-        if (lower.endsWith(".md") || lower.endsWith(".docx")) {
+        // .txt is converted to structured MD before this point, so it splits section-wise too.
+        if (lower.endsWith(".md") || lower.endsWith(".docx") || lower.endsWith(".txt")) {
+            List<Document> sectionMerged = mergeShortSections(docs, chunkSize);
             List<Document> result = new ArrayList<>();
-            for (Document doc : docs) {
+            for (Document doc : sectionMerged) {
                 if (doc.getText() == null || doc.getText().isBlank()) continue;
                 if (doc.getText().length() <= chunkSize) {
                     result.add(doc);
                 } else {
                     log.debug("[SPLIT] 섹션 {}자 > chunkSize={}, 슬라이딩 윈도우 적용",
                             doc.getText().length(), chunkSize);
-                    result.addAll(slidingWindow(doc, chunkSize, overlap));
+                    result.addAll(slidingWindow(doc, chunkSize, overlap, minChunkSize));
                 }
             }
-            log.debug("[SPLIT] {} → 섹션 분할 전략, {}섹션 → {}청크", filename, docs.size(), result.size());
+            log.debug("[SPLIT] {} → 섹션 분할 전략, {}섹션 → 병합 {}섹션 → {}청크",
+                    filename, docs.size(), sectionMerged.size(), result.size());
             return result;
         }
 
         List<Document> result = new ArrayList<>();
         for (Document doc : docs) {
-            result.addAll(slidingWindow(doc, chunkSize, overlap));
+            result.addAll(slidingWindow(doc, chunkSize, overlap, minChunkSize));
         }
         log.debug("[SPLIT] {} → 슬라이딩 윈도우 전략, {}섹션 → {}청크", filename, docs.size(), result.size());
         return result;
     }
 
-    private List<Document> slidingWindow(Document doc, int chunkSize, int overlap) {
+    private List<Document> mergeShortSections(List<Document> docs, int chunkSize) {
+        if (docs == null || docs.isEmpty()) return List.of();
+
+        final int threshold40 = (int) Math.floor(chunkSize * 0.40);
+        final int threshold75 = (int) Math.floor(chunkSize * 0.75);
+
+        List<Document> merged = new ArrayList<>();
+        int i = 0;
+        while (i < docs.size()) {
+            Document base = docs.get(i);
+            StringBuilder acc = new StringBuilder(base.getText() == null ? "" : base.getText());
+            Map<String, Object> metadata = new HashMap<>(base.getMetadata());
+
+            int currentHeadingLevel = sectionHeadingLevel(base);
+            int j = i;
+
+            while (j + 1 < docs.size()) {
+                Document next = docs.get(j + 1);
+                String nextText = next.getText() == null ? "" : next.getText();
+                if (nextText.isBlank()) {
+                    j++;
+                    continue;
+                }
+
+                int nextHeadingLevel = sectionHeadingLevel(next);
+                if (isMergeForbiddenByHeadingJump(currentHeadingLevel, nextHeadingLevel)) {
+                    break;
+                }
+
+                int currentLen = acc.length();
+                int combinedLen = currentLen + 2 + nextText.length();
+
+                boolean includeNext = false;
+                if (currentLen < threshold40) {
+                    includeNext = true;
+                } else if (currentLen < threshold75 && combinedLen < chunkSize) {
+                    includeNext = true;
+                }
+
+                if (!includeNext) break;
+
+                if (acc.length() > 0) acc.append("\n\n");
+                acc.append(nextText);
+                j++;
+                currentHeadingLevel = nextHeadingLevel > 0 ? nextHeadingLevel : currentHeadingLevel;
+            }
+
+            merged.add(new Document(acc.toString(), metadata));
+            i = j + 1;
+        }
+
+        return merged;
+    }
+
+    private boolean isMergeForbiddenByHeadingJump(int currentHeadingLevel, int nextHeadingLevel) {
+        if (currentHeadingLevel <= 0 || nextHeadingLevel <= 0) return false;
+        return (currentHeadingLevel - nextHeadingLevel) >= 2;
+    }
+
+    private int sectionHeadingLevel(Document doc) {
+        String text = doc.getText();
+        if (text == null || text.isBlank()) return 0;
+
+        String[] lines = text.split("\\n", -1);
+        for (String line : lines) {
+            String trimmed = line.stripLeading();
+            if (trimmed.isBlank()) continue;
+            if (!trimmed.startsWith("#")) return 0;
+
+            int level = 0;
+            while (level < trimmed.length() && trimmed.charAt(level) == '#') {
+                level++;
+            }
+            if (level > 0 && level < trimmed.length() && trimmed.charAt(level) == ' ') {
+                return level;
+            }
+            return 0;
+        }
+        return 0;
+    }
+
+    private List<Document> slidingWindow(Document doc, int chunkSize, int overlap, int minChunkSize) {
         List<Document> result = new ArrayList<>();
+        List<String> rawChunks = new ArrayList<>();
         String text = doc.getText();
         if (text == null || text.isBlank()) return result;
         int start = 0;
@@ -541,15 +690,211 @@ public class DocumentIndexer {
             if (end < text.length()) {
                 int lastNl = text.lastIndexOf('\n', end);
                 if (lastNl > start + overlap) end = lastNl + 1;
+
+                end = adjustEndForCodeBlock(text, start, end, overlap);
+                end = adjustEndForTableBlock(text, start, end, overlap);
+
+                // 남은 꼬리 길이가 overlap 이하이면 새 청크를 만들지 않고 현재 청크에 포함한다.
+                int remaining = text.length() - end;
+                if (remaining <= overlap) end = text.length();
+
+                // 경계 보정으로 end가 start와 같아진 경우 무한 루프를 방지한다.
+                if (end <= start) end = Math.min(start + chunkSize, text.length());
             }
             String chunk = text.substring(start, end).strip();
             if (!chunk.isBlank()) {
-                result.add(new Document(chunk, new HashMap<>(doc.getMetadata())));
+                rawChunks.add(chunk);
             }
             if (end >= text.length()) break;
             start = Math.max(start + 1, end - overlap);
         }
+
+        for (String merged : mergeTinyChunks(rawChunks, minChunkSize)) {
+            result.add(new Document(merged, new HashMap<>(doc.getMetadata())));
+        }
         return result;
+    }
+
+    private List<String> mergeTinyChunks(List<String> chunks, int minLength) {
+        if (chunks == null || chunks.isEmpty()) return List.of();
+
+        List<String> merged = new ArrayList<>();
+        String pendingPrefix = "";
+
+        for (String original : chunks) {
+            String text = original == null ? "" : original.strip();
+            if (text.isBlank()) continue;
+
+            if (!pendingPrefix.isEmpty()) {
+                text = mergeAdjacentText(pendingPrefix, text, minLength);
+                pendingPrefix = "";
+            }
+
+            if (text.length() < minLength) {
+                if (!merged.isEmpty()) {
+                    int last = merged.size() - 1;
+                    merged.set(last, mergeAdjacentText(merged.get(last), text, minLength));
+                } else {
+                    pendingPrefix = text;
+                }
+                continue;
+            }
+
+            merged.add(text);
+        }
+
+        if (!pendingPrefix.isEmpty()) {
+            if (!merged.isEmpty()) {
+                merged.set(0, mergeAdjacentText(pendingPrefix, merged.get(0), minLength));
+            } else {
+                merged.add(pendingPrefix);
+            }
+        }
+
+        return merged;
+    }
+
+    private String mergeAdjacentText(String left, String right, int maxOverlap) {
+        if (left == null || left.isBlank()) return right == null ? "" : right;
+        if (right == null || right.isBlank()) return left;
+
+        int limit = Math.min(Math.min(maxOverlap, left.length()), right.length());
+        int overlapLen = 0;
+        for (int k = limit; k >= 1; k--) {
+            if (left.regionMatches(left.length() - k, right, 0, k)) {
+                overlapLen = k;
+                break;
+            }
+        }
+
+        if (overlapLen > 0) {
+            return left + right.substring(overlapLen);
+        }
+        return left + "\n\n" + right;
+    }
+
+    private int adjustEndForCodeBlock(String text, int start, int end, int overlap) {
+        Range range = findFencedCodeRangeContaining(text, end);
+        if (range == null) return end;
+
+        int remaining = range.end - end;
+        if (remaining <= overlap) {
+            return range.end;
+        }
+
+        int currentCodeLen = end - range.start;
+        if (currentCodeLen < overlap * 2 && range.start > start) {
+            return range.start;
+        }
+
+        return end;
+    }
+
+    private int adjustEndForTableBlock(String text, int start, int end, int overlap) {
+        Range range = findTableRangeContaining(text, end);
+        if (range == null) return end;
+
+        int remaining = range.end - end;
+        if (remaining <= overlap) {
+            return range.end;
+        }
+
+        if (range.start > start) {
+            return range.start;
+        }
+
+        return end;
+    }
+
+    private Range findFencedCodeRangeContaining(String text, int boundary) {
+        if (text.isEmpty()) return null;
+
+        int probe = Math.max(0, Math.min(boundary - 1, text.length() - 1));
+        int idx = 0;
+        int openFenceStart = -1;
+
+        while (idx < text.length()) {
+            int lineEnd = text.indexOf('\n', idx);
+            if (lineEnd == -1) lineEnd = text.length();
+            int nextLineStart = lineEnd < text.length() ? lineEnd + 1 : lineEnd;
+
+            String line = text.substring(idx, lineEnd).stripLeading();
+            if (line.startsWith("```")) {
+                if (openFenceStart < 0) {
+                    openFenceStart = idx;
+                } else {
+                    int codeEnd = nextLineStart;
+                    if (probe >= openFenceStart && probe < codeEnd) {
+                        return new Range(openFenceStart, codeEnd);
+                    }
+                    openFenceStart = -1;
+                }
+            }
+
+            if (nextLineStart > probe && openFenceStart < 0) {
+                return null;
+            }
+
+            idx = nextLineStart;
+        }
+
+        if (openFenceStart >= 0 && probe >= openFenceStart) {
+            return new Range(openFenceStart, text.length());
+        }
+
+        return null;
+    }
+
+    private Range findTableRangeContaining(String text, int boundary) {
+        if (text.isEmpty()) return null;
+
+        int probe = Math.max(0, Math.min(boundary - 1, text.length() - 1));
+        int lineStart = findLineStart(text, probe);
+        if (!isTableLine(text, lineStart)) return null;
+
+        int tableStart = lineStart;
+        while (tableStart > 0) {
+            int prevLineEnd = tableStart - 1;
+            int prevLineStart = findLineStart(text, prevLineEnd);
+            if (!isTableLine(text, prevLineStart)) break;
+            tableStart = prevLineStart;
+        }
+
+        int tableEnd = findLineEndExclusive(text, lineStart);
+        int cursor = tableEnd;
+        while (cursor < text.length()) {
+            if (!isTableLine(text, cursor)) break;
+            tableEnd = findLineEndExclusive(text, cursor);
+            cursor = tableEnd;
+        }
+
+        return new Range(tableStart, tableEnd);
+    }
+
+    private int findLineStart(String text, int pos) {
+        int i = Math.max(0, Math.min(pos, text.length() - 1));
+        while (i > 0 && text.charAt(i - 1) != '\n') i--;
+        return i;
+    }
+
+    private int findLineEndExclusive(String text, int lineStart) {
+        int lineEnd = text.indexOf('\n', lineStart);
+        if (lineEnd == -1) return text.length();
+        return lineEnd + 1;
+    }
+
+    private boolean isTableLine(String text, int lineStart) {
+        int lineEnd = text.indexOf('\n', lineStart);
+        if (lineEnd == -1) lineEnd = text.length();
+
+        String line = text.substring(lineStart, lineEnd).trim();
+        if (line.isEmpty() || !line.startsWith("|")) return false;
+
+        long pipes = line.chars().filter(ch -> ch == '|').count();
+        return pipes >= 2;
+    }
+
+    private record Range(int start, int end) {
     }
 
     private List<Document> injectImagePaths(List<Document> docs, Map<Integer, List<String>> imageMap) {

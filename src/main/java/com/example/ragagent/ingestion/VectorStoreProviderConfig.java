@@ -9,6 +9,7 @@ import org.springframework.ai.chroma.vectorstore.ChromaApi;
 import org.springframework.ai.embedding.EmbeddingModel;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.jdbc.core.JdbcTemplate;
 
@@ -31,7 +32,7 @@ public class VectorStoreProviderConfig {
 
     @Bean
     @ConditionalOnProperty(name = "app.vectorstore.type", havingValue = "sqlite-vec")
-    VectorStoreProvider sqliteVecVectorStoreProvider(JdbcTemplate jdbc, EmbeddingModel embeddingModel,
+    VectorStoreProvider sqliteVecVectorStoreProvider(@Qualifier("vectorJdbcTemplate") JdbcTemplate jdbc, EmbeddingModel embeddingModel,
                                                      ObjectMapper objectMapper, AppProperties props) {
         return new SqliteVecVectorStoreProvider(jdbc, embeddingModel, objectMapper, props);
     }

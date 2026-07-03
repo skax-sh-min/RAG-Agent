@@ -5,6 +5,7 @@ import com.example.ragagent.model.DocumentInfo;
 import com.example.ragagent.service.DocumentLoaderService;
 import com.example.ragagent.service.ImageExtractorService;
 import com.example.ragagent.service.MarkdownCorrectionService;
+import com.example.ragagent.service.TextToMarkdownService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -14,6 +15,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
 
 import java.io.IOException;
+import java.lang.reflect.Method;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
@@ -21,6 +23,7 @@ import java.util.concurrent.Semaphore;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
@@ -37,6 +40,7 @@ class DocumentIndexerTest {
     private DocumentIndexer indexer;
     private VectorStoreFacade vectorStore;
     private DocRegistry docRegistry;
+    private KeywordSearchRepository keywordRepo;
     private AppProperties props;
 
     @BeforeEach
@@ -68,9 +72,16 @@ class DocumentIndexerTest {
         List<Document> stubDocs = List.of(new Document("테스트 문서 내용입니다. 청킹과 메타 태깅을 검증합니다."));
         when(loaderService.load(any())).thenReturn(stubDocs);
         when(loaderService.load(any(), any())).thenReturn(stubDocs);
+        // TXT path (structured MD) feeds loadFromMarkdown
+        when(loaderService.loadFromMarkdown(any())).thenReturn(stubDocs);
 
-        // Stub MarkdownCorrectionService and ImageExtractorService (not exercised here)
+        // Stub MarkdownCorrectionService / TextToMarkdownService — pass content through unchanged
         MarkdownCorrectionService correctionService = mock(MarkdownCorrectionService.class);
+        when(correctionService.correct(any(), any(), any(), anyBoolean(), anyBoolean(), any()))
+                .thenAnswer(inv -> inv.getArgument(0));
+        TextToMarkdownService textToMarkdownService = mock(TextToMarkdownService.class);
+        when(textToMarkdownService.convert(any(), any(), any()))
+                .thenAnswer(inv -> inv.getArgument(0));
         ImageExtractorService imageExtractorService = mock(ImageExtractorService.class);
         when(imageExtractorService.extract(any(), anyString(), any())).thenReturn(java.util.Map.of());
 
@@ -79,11 +90,11 @@ class DocumentIndexerTest {
         when(llmRouter.executeWithTracking(any(), any(), any()))
                 .thenThrow(new RuntimeException("no LLM in test"));
 
-        KeywordSearchRepository keywordRepo = new KeywordSearchRepository(new JdbcTemplate(ds));
+        keywordRepo = new KeywordSearchRepository(new JdbcTemplate(ds));
         keywordRepo.init();
 
-        indexer = new DocumentIndexer(loaderService, correctionService, imageExtractorService,
-                vectorStore, docRegistry, keywordRepo, llmRouter, props);
+        indexer = new DocumentIndexer(loaderService, correctionService, textToMarkdownService,
+                imageExtractorService, vectorStore, docRegistry, keywordRepo, llmRouter, props);
         indexer.init();
     }
 
@@ -104,6 +115,21 @@ class DocumentIndexerTest {
         assertThat(docRegistry.findByDocId(info.docId(), DocRegistry.SHARED)).isPresent();
 
         // Vector store received the enriched chunks
+        verify(vectorStore, atLeastOnce()).add(eq(DocRegistry.SHARED), eq("v1"), any());
+    }
+
+    @Test
+    @DisplayName("TXT 업로드 — DOCX처럼 구조화 MD가 converted/ 에 저장되고 MD 경로로 인덱싱")
+    void index_txt_convertsToMarkdown() throws IOException {
+        Path txt = tmpDir.resolve("plain.txt");
+        Files.writeString(txt, "제목 없는 평문입니다. 구조화 대상 내용.");
+
+        DocumentInfo info = indexer.index(IndexRequest.single(txt, "plain.txt", "v1", "anonymous", e -> {}));
+
+        // TXT는 이제 DOCX처럼 MD로 변환되어 저장된다 (plain load 경로가 아님을 입증)
+        Path md = tmpDir.resolve("converted").resolve(info.docId() + ".md");
+        assertThat(md).exists();
+        assertThat(Files.readString(md)).contains("구조화 대상 내용");
         verify(vectorStore, atLeastOnce()).add(eq(DocRegistry.SHARED), eq("v1"), any());
     }
 
@@ -142,6 +168,47 @@ class DocumentIndexerTest {
     }
 
     @Test
+    @DisplayName("parallel index(sync 갱신) — staleDocId의 태그가 신규 docId로 복원됨")
+    void index_parallel_restoresTagsFromStaleDoc() throws IOException {
+        // 1) 최초 업로드(대화형 single) — 태그 [alpha, beta] 명시
+        Path file = tmpDir.resolve("notes.txt");
+        Files.writeString(file, "최초 내용 버전 A 입니다.");
+        DocumentInfo first = indexer.index(IndexRequest.single(
+                file, "notes.txt", "v1", "anonymous", List.of("alpha", "beta"), e -> {}));
+        // FTS(검색/복원 소스)에는 정규화된 형태로 저장됨
+        assertThat(keywordRepo.tagsByDocIds(List.of(first.docId())).get(first.docId()))
+                .containsExactlyInAnyOrder("alpha", "beta");
+
+        // 2) 내용 변경 후 동기화 갱신 — 태그 입력 없이 staleDocId만 전달
+        Files.writeString(file, "완전히 다른 내용 버전 B 입니다. 문장이 바뀌었습니다.");
+        Semaphore gate = new Semaphore(2);
+        DocumentInfo updated = indexer.index(IndexRequest.parallel(
+                file, "v1", DocRegistry.SHARED, gate, first.docId()));
+
+        // 내용 sha 변경으로 docId가 달라져도 태그가 이전 문서에서 복원됨
+        assertThat(updated.docId()).isNotEqualTo(first.docId());
+        assertThat(updated.tags()).containsExactlyInAnyOrder("alpha", "beta");
+        assertThat(keywordRepo.tagsByDocIds(List.of(updated.docId())).get(updated.docId()))
+                .containsExactlyInAnyOrder("alpha", "beta");
+    }
+
+    @Test
+    @DisplayName("single 재업로드(태그 미입력) — 자동복원 안 함(명시적 clear 존중)")
+    void index_single_doesNotAutoRestoreTags() throws IOException {
+        Path file = tmpDir.resolve("memo.txt");
+        Files.writeString(file, "태그 clear 검증용 내용.");
+        DocumentInfo first = indexer.index(IndexRequest.single(
+                file, "memo.txt", "v1", "anonymous", List.of("keep"), e -> {}));
+        assertThat(first.tags()).containsExactly("keep");
+
+        // 동일 내용/동일 docId 재업로드, 태그 비움 → 대화형 경로는 복원하지 않음
+        DocumentInfo second = indexer.index(IndexRequest.single(
+                file, "memo.txt", "v1", "anonymous", List.of(), e -> {}));
+        assertThat(second.docId()).isEqualTo(first.docId());
+        assertThat(second.tags()).isEmpty();
+    }
+
+    @Test
     @DisplayName("deleteArtifacts — registry 엔트리 제거 + vectorStore 삭제 호출")
     void deleteArtifacts_removesRegistryEntryAndCallsVectorStore() throws IOException {
         String docId = "sample.txt_abcd1234";
@@ -154,4 +221,70 @@ class DocumentIndexerTest {
         assertThat(docRegistry.findByDocId(docId, "anonymous")).isEmpty();
         verify(vectorStore).deleteByDocIds("anonymous", "v1", List.of("vec-id-x"));
     }
+
+        @Test
+        @DisplayName("작은 중간 청크(< overlap)는 앞 청크로 병합된다")
+        @SuppressWarnings("unchecked")
+        void mergeTinyChunks_mergesMiddleTinyChunkIntoPrevious() throws Exception {
+                Method m = DocumentIndexer.class.getDeclaredMethod("mergeTinyChunks", List.class, int.class);
+                m.setAccessible(true);
+
+                List<String> out = (List<String>) m.invoke(indexer,
+                                List.of("A".repeat(220), "B".repeat(90), "C".repeat(210)),
+                                200);
+
+                assertThat(out).hasSize(2);
+                assertThat(out.get(0)).contains("A".repeat(220)).contains("B".repeat(90));
+                assertThat(out.get(1)).contains("C".repeat(210));
+        }
+
+        @Test
+        @DisplayName("시작부 작은 청크(< overlap)는 다음 청크 앞에 병합된다")
+        @SuppressWarnings("unchecked")
+        void mergeTinyChunks_mergesLeadingTinyChunkIntoNext() throws Exception {
+                Method m = DocumentIndexer.class.getDeclaredMethod("mergeTinyChunks", List.class, int.class);
+                m.setAccessible(true);
+
+                List<String> out = (List<String>) m.invoke(indexer,
+                                List.of("X".repeat(80), "Y".repeat(230), "Z".repeat(220)),
+                                200);
+
+                assertThat(out).hasSize(2);
+                assertThat(out.get(0)).startsWith("X".repeat(80));
+                assertThat(out.get(0)).contains("Y".repeat(230));
+                assertThat(out.get(1)).contains("Z".repeat(220));
+        }
+
+        @Test
+        @DisplayName("청크 길이가 overlap과 같으면 병합하지 않는다")
+        @SuppressWarnings("unchecked")
+        void mergeTinyChunks_doesNotMergeWhenLengthEqualsOverlap() throws Exception {
+                Method m = DocumentIndexer.class.getDeclaredMethod("mergeTinyChunks", List.class, int.class);
+                m.setAccessible(true);
+
+                List<String> out = (List<String>) m.invoke(indexer,
+                                List.of("A".repeat(220), "B".repeat(200), "C".repeat(220)),
+                                200);
+
+                assertThat(out).hasSize(3);
+                assertThat(out.get(1)).isEqualTo("B".repeat(200));
+        }
+
+        @Test
+        @DisplayName("작은 청크를 병합할 때 overlap 구간이 중복되지 않는다")
+        @SuppressWarnings("unchecked")
+        void mergeTinyChunks_deduplicatesOverlapText() throws Exception {
+                Method m = DocumentIndexer.class.getDeclaredMethod("mergeTinyChunks", List.class, int.class);
+                m.setAccessible(true);
+
+                String overlap = "__OVERLAP__";
+                String first = "A".repeat(220) + overlap;
+                String tiny = overlap + "B".repeat(60);
+                List<String> out = (List<String>) m.invoke(indexer, List.of(first, tiny), 200);
+
+                assertThat(out).hasSize(1);
+                String merged = out.get(0);
+                assertThat(merged.indexOf(overlap)).isEqualTo(merged.lastIndexOf(overlap));
+                assertThat(merged).contains("B".repeat(60));
+        }
 }

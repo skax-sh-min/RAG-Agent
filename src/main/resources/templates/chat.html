@@ -153,23 +153,36 @@
                         <i class="bi bi-robot fs-5 text-secondary me-2 mt-1 flex-shrink-0"></i>
                         <div class="bubble-assistant p-3 flex-grow-1">
                             <div class="md-content" th:attr="data-md=${turn.answer}"></div>
-                            <div class="mt-1 text-muted"
-                                 style="font-size:0.68rem;"
-                                 th:if="${turn.provider != null or turn.answeredAt != null}">
-                                <span th:if="${turn.provider != null}">🤖 <span th:text="${turn.provider}"></span> &nbsp;·&nbsp;</span>
-                                <span th:if="${turn.elapsedMs > 0}">⏱ <span th:text="${#numbers.formatDecimal(turn.elapsedMs / 1000.0, 1, 1)}"></span>s &nbsp;·&nbsp;</span>
-                                <span th:if="${turn.inputTokens > 0 or turn.outputTokens > 0}">
-                                    📥 <span th:text="${turn.inputTokens}"></span>
-                                    &nbsp;·&nbsp;
-                                    📤 <span th:text="${turn.outputTokens}"></span>
-                                    &nbsp;·&nbsp;
-                                    합계 <span th:text="${turn.inputTokens + turn.outputTokens}"></span> tok
-                                    &nbsp;·&nbsp;
-                                </span>
-                                <span th:if="${turn.llmCalls > 0}">🔄 <span th:text="${turn.llmCalls}"></span> &nbsp;·&nbsp;</span>
-                                <span class="msg-time"
-                                      th:if="${turn.answeredAt != null}"
-                                      th:attr="data-utc-time=${turn.answeredAt}">🕐</span>
+
+                            <!-- Feedback (like/dislike) + Metadata, same line -->
+                            <div class="mt-1 d-flex align-items-center flex-wrap gap-2">
+                                <div class="feedback-controls d-flex gap-1"
+                                     th:attr="data-turn-id=${turn.id},data-thread-id=${threadId}">
+                                    <button type="button" class="btn btn-sm feedback-btn" data-feedback="LIKE"
+                                            th:classappend="${turn.feedback == 'LIKE'} ? 'btn-primary' : 'btn-outline-secondary'"
+                                            th:attr="aria-label=#{feedback.like},title=#{feedback.like}">👍</button>
+                                    <button type="button" class="btn btn-sm feedback-btn" data-feedback="DISLIKE"
+                                            th:classappend="${turn.feedback == 'DISLIKE'} ? 'btn-danger' : 'btn-outline-secondary'"
+                                            th:attr="aria-label=#{feedback.dislike},title=#{feedback.dislike}">👎</button>
+                                </div>
+                                <div class="text-muted"
+                                     style="font-size:0.68rem;"
+                                     th:if="${turn.provider != null or turn.answeredAt != null}">
+                                    <span th:if="${turn.provider != null}">🤖 <span th:text="${turn.provider}"></span> &nbsp;·&nbsp;</span>
+                                    <span th:if="${turn.elapsedMs > 0}">⏱ <span th:text="${#numbers.formatDecimal(turn.elapsedMs / 1000.0, 1, 1)}"></span>s &nbsp;·&nbsp;</span>
+                                    <span th:if="${turn.inputTokens > 0 or turn.outputTokens > 0}">
+                                        📥 <span th:text="${turn.inputTokens}"></span>
+                                        &nbsp;·&nbsp;
+                                        📤 <span th:text="${turn.outputTokens}"></span>
+                                        &nbsp;·&nbsp;
+                                        합계 <span th:text="${turn.inputTokens + turn.outputTokens}"></span> tok
+                                        &nbsp;·&nbsp;
+                                    </span>
+                                    <span th:if="${turn.llmCalls > 0}">🔄 <span th:text="${turn.llmCalls}"></span> &nbsp;·&nbsp;</span>
+                                    <span class="msg-time"
+                                          th:if="${turn.answeredAt != null}"
+                                          th:attr="data-utc-time=${turn.answeredAt}">🕐</span>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -563,6 +576,39 @@
         }
         delete el.dataset.md;
     });
+
+    /* ── 응답 피드백 (좋아요/싫어요) — 서버 렌더/HTMX/스트리밍 버블 공통 위임 처리 ── */
+    document.getElementById('chat-messages').addEventListener('click', function (e) {
+        const btn = e.target.closest('.feedback-btn');
+        if (!btn) return;
+        const container = btn.closest('.feedback-controls');
+        if (!container) return;
+        const tId = container.dataset.threadId;
+        const turnId = container.dataset.turnId;
+        if (!tId || !turnId) return;
+
+        const clickedValue = btn.dataset.feedback;
+        const activeClass = clickedValue === 'LIKE' ? 'btn-primary' : 'btn-danger';
+        const wasActive = btn.classList.contains(activeClass);
+        const newValue = wasActive ? 'NONE' : clickedValue;
+
+        fetch(`/ui/threads/${tId}/turns/${turnId}/feedback`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded', ...getCsrfHeaders() },
+            body: 'feedback=' + encodeURIComponent(newValue)
+        }).then(function (r) {
+            if (!r.ok) { showToast(I18N.requestFailed, 'danger'); return; }
+            container.querySelectorAll('.feedback-btn').forEach(function (b) {
+                b.classList.remove('btn-primary', 'btn-danger');
+                b.classList.add('btn-outline-secondary');
+            });
+            if (newValue !== 'NONE') {
+                btn.classList.remove('btn-outline-secondary');
+                btn.classList.add(activeClass);
+            }
+        }).catch(function () { showToast(I18N.requestFailed, 'danger'); });
+    });
+
     scrollToBottom();
 </script>
 </th:block>

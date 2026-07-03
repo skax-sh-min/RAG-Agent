@@ -61,23 +61,33 @@
             </ul>
         </details>
 
-        <!-- Metadata -->
-        <div class="mt-2 text-muted" style="font-size: 0.72rem;">
-            <span>⏱ <span th:text="${#numbers.formatDecimal(elapsedSeconds,1,1)}"></span>
-                  <span th:text="#{meta.elapsed}">sec</span></span>
-            &nbsp;·&nbsp;
-            <span>📥 <span th:text="${totalInputTokens}"></span>
-                  <span th:text="#{meta.input.tokens}">tokens in</span></span>
-            &nbsp;·&nbsp;
-            <span>📤 <span th:text="${totalOutputTokens}"></span>
-                  <span th:text="#{meta.output.tokens}">tokens out</span></span>
-            &nbsp;·&nbsp;
-            <span><span th:text="#{meta.total}">total</span>
-                  <span th:text="${totalInputTokens + totalOutputTokens}"></span></span>
-            &nbsp;·&nbsp;
-            <span>🔄 <span th:text="#{meta.llm.calls}">LLM calls</span>
-                  <span th:text="${llmCallCount}"></span></span>
-            <span th:if="${receivedAt != null}">&nbsp;·&nbsp;🕐 <span th:text="${receivedAt}"></span></span>
+        <!-- Feedback (like/dislike) + Metadata, same line -->
+        <div class="mt-2 d-flex align-items-center flex-wrap gap-2">
+            <div class="feedback-controls d-flex gap-1"
+                 th:if="${turnId != null}"
+                 th:attr="data-turn-id=${turnId},data-thread-id=${threadId}">
+                <button type="button" class="btn btn-sm btn-outline-secondary feedback-btn" data-feedback="LIKE"
+                        th:attr="aria-label=#{feedback.like},title=#{feedback.like}">👍</button>
+                <button type="button" class="btn btn-sm btn-outline-secondary feedback-btn" data-feedback="DISLIKE"
+                        th:attr="aria-label=#{feedback.dislike},title=#{feedback.dislike}">👎</button>
+            </div>
+            <div class="text-muted" style="font-size: 0.72rem;">
+                <span>⏱ <span th:text="${#numbers.formatDecimal(elapsedSeconds,1,1)}"></span>
+                      <span th:text="#{meta.elapsed}">sec</span></span>
+                &nbsp;·&nbsp;
+                <span>📥 <span th:text="${totalInputTokens}"></span>
+                      <span th:text="#{meta.input.tokens}">tokens in</span></span>
+                &nbsp;·&nbsp;
+                <span>📤 <span th:text="${totalOutputTokens}"></span>
+                      <span th:text="#{meta.output.tokens}">tokens out</span></span>
+                &nbsp;·&nbsp;
+                <span><span th:text="#{meta.total}">total</span>
+                      <span th:text="${totalInputTokens + totalOutputTokens}"></span></span>
+                &nbsp;·&nbsp;
+                <span>🔄 <span th:text="#{meta.llm.calls}">LLM calls</span>
+                      <span th:text="${llmCallCount}"></span></span>
+                <span th:if="${receivedAt != null}">&nbsp;·&nbsp;🕐 <span th:text="${receivedAt}"></span></span>
+            </div>
         </div>
     </div>
 </div>

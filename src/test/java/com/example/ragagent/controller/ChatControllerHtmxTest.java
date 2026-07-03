@@ -62,7 +62,7 @@ class ChatControllerHtmxTest {
                 List.of(new SourceRef("doc.pdf | v1 | p.3", "snippet preview", "doc_abc", 3)),
                 List.of(),
                 120, 80, 2, 0.42,
-                null, "gemini-flash", null, null);
+                null, "gemini-flash", null, null, 1L);
     }
 
     private ChatResponse dualResponse() {
@@ -72,7 +72,7 @@ class ChatControllerHtmxTest {
                 List.of(),
                 List.of(),
                 100, 50, 2, 0.5,
-                null, "gemini-flash", "로컬 답변", "local");
+                null, "gemini-flash", "로컬 답변", "local", 2L);
     }
 
     @Test

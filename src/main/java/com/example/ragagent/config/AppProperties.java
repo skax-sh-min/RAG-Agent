@@ -8,9 +8,9 @@ import java.util.List;
 public record AppProperties(
         String dataDir,
         int maxRetryCount,
-        int maxConversationChars,
         int chunkSize,
         int chunkOverlap,
+    int minChunkSize,
         int searchTopK,
         double searchSimilarityThreshold,
         boolean searchMultiqueryEnabled,
@@ -100,7 +100,6 @@ public record AppProperties(
             boolean ocrEnabled,
             String tessdataPath,
             int minImageBytes,
-            boolean lazy,
             boolean classifyType,
             boolean docxEmfConvert,
             boolean docxWmfConvert
@@ -108,7 +107,7 @@ public record AppProperties(
 
     public ImageDescriptionProperties imageDescriptionSafe() {
         if (imageDescription == null)
-            return new ImageDescriptionProperties("strip", false, false, null, 1_000, true, false, false, false);
+            return new ImageDescriptionProperties("strip", false, false, null, 1_000, false, false, false);
         return imageDescription;
     }
 
@@ -124,6 +123,12 @@ public record AppProperties(
     /** Query length (chars) at/above which multi-query expansion runs. Clamped to >= 0 (0 = no length gate). */
     public int searchMultiqueryMinLengthSafe() {
         return Math.max(0, searchMultiqueryMinLength);
+    }
+
+    /** Minimum chunk length used by post-merge compaction. Falls back to chunkOverlap for backward compatibility. */
+    public int minChunkSizeSafe() {
+        if (minChunkSize > 0) return minChunkSize;
+        return Math.max(1, chunkOverlap);
     }
 
     /** Candidate pool multiplier for reranking. Clamped to >= 1 to avoid empty pools. */

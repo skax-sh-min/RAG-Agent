@@ -84,7 +84,7 @@
                     </div>
                 </div>
                 <div id="stream-sources-${bubbleId}"></div>
-                <div id="stream-meta-${bubbleId}" class="mt-2 text-muted" style="font-size:0.72rem;"></div>
+                <div id="stream-meta-${bubbleId}" class="mt-2 d-flex align-items-center flex-wrap gap-2" style="font-size:0.72rem;"></div>
             </div>`;
         document.getElementById('chat-messages').appendChild(wrap);
     }
@@ -183,8 +183,20 @@
         // 3. Hide stage spinner
         if (stageEl) stageEl.remove();
 
-        // 4. Metadata footer
+        // 4. Feedback buttons (like/dislike) + metadata footer, same line — feedback first (left).
+        //    Uses the same .feedback-btn/.feedback-controls markup the chat.html delegated
+        //    click handler listens for on #chat-messages.
         if (metaEl) {
+            let html = '';
+            if (data.turnId != null) {
+                const threadIdInput = document.querySelector('#chat-form input[name="threadId"]');
+                const tId = threadIdInput ? threadIdInput.value : '';
+                html += `<div class="feedback-controls d-flex gap-1" data-turn-id="${data.turnId}" data-thread-id="${escHtml(tId)}">
+                    <button type="button" class="btn btn-sm btn-outline-secondary feedback-btn" data-feedback="LIKE" aria-label="좋아요" title="좋아요">👍</button>
+                    <button type="button" class="btn btn-sm btn-outline-secondary feedback-btn" data-feedback="DISLIKE" aria-label="싫어요" title="싫어요 (다음 대화 컨텍스트에서 제외)">👎</button>
+                </div>`;
+            }
+
             const qt = data.questionType;
             const parts = [];
             if (qt)                       parts.push(`<span class="badge badge-${escHtml(qt)} me-1">${escHtml(qt)}</span>`);
@@ -198,7 +210,9 @@
             if (inp || out)               parts.push(`📥 ${inp} · 📤 ${out} · 합계 ${inp + out} tok`);
             if (data.llmCalls)            parts.push(`🔄 ${data.llmCalls}`);
             parts.push(`🕐 ${nowTimeStr()}`);
-            metaEl.innerHTML = parts.join(' · ');
+            html += `<span class="text-muted">${parts.join(' · ')}</span>`;
+
+            metaEl.innerHTML = html;
         }
 
         // 5. Trigger thread list refresh

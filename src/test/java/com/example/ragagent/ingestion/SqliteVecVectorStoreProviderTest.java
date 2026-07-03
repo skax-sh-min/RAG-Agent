@@ -1,6 +1,7 @@
 package com.example.ragagent.ingestion;
 
 import com.example.ragagent.config.AppProperties;
+import com.example.ragagent.exception.VectorStoreException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -110,6 +111,26 @@ class SqliteVecVectorStoreProviderTest {
                 .isInstanceOf(RuntimeException.class)
                 .hasMessageContaining("connection reset");
     }
+
+            @Test
+            @DisplayName("add: token-limit 축소 재시도 소진 시 VectorStoreException으로 변환")
+            void addWrapsTooLargeErrorAfterRetriesExhausted() {
+            SqliteVecVectorStoreProvider p = provider();
+            Document doc = Document.builder()
+                .id("d1")
+                .text("x".repeat(3000))
+                .metadata(java.util.Map.of())
+                .build();
+
+            when(embeddingModel.embed(anyList()))
+                .thenThrow(new RuntimeException("input (1123 tokens) is too large to process. increase the physical batch size (current batch size: 512)"));
+            when(embeddingModel.embed(anyString()))
+                .thenThrow(new RuntimeException("input (1123 tokens) is too large to process. increase the physical batch size (current batch size: 512)"));
+
+            assertThatThrownBy(() -> p.add("u", "v1", List.of(doc)))
+                .isInstanceOf(VectorStoreException.class)
+                .hasMessageContaining("모델 제한을 초과");
+            }
 
     @Test
     @DisplayName("deleteByDocIds(빈): DB 호출 없음")

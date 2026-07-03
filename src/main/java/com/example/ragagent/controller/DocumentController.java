@@ -74,7 +74,9 @@ public class DocumentController {
             ThreadContext ctx,
             @RequestParam MultipartFile file,
             @RequestParam(defaultValue = "latest") String version,
-            @RequestParam(required = false) String tags) throws IOException {
+            @RequestParam(required = false) String tags,
+            @RequestParam(name = "addImageDescriptions", defaultValue = "false") boolean addImageDescriptions,
+            @RequestParam(name = "addHeadingNumbers", defaultValue = "false") boolean addHeadingNumbers) throws IOException {
         if (file.isEmpty()) {
             return ResponseEntity.badRequest().build();
         }
@@ -102,10 +104,13 @@ public class DocumentController {
         Thread.ofVirtual().name("idx-upload-" + taskId).start(() -> {
             try {
                 DocumentInfo info = ragService.indexDocument(userId, tmpPath, fname, ver, tagList,
+                    addImageDescriptions, addHeadingNumbers,
                         event -> progressService.publish(taskId, event));
                 progressService.publish(taskId, IndexingProgressEvent.done(info));
                 auditLogger.log("document.upload", info.docId(),
-                        Map.of("filename", fname, "version", ver, "chunks", info.chunks()));
+                    Map.of("filename", fname, "version", ver, "chunks", info.chunks(),
+                        "addImageDescriptions", addImageDescriptions,
+                        "addHeadingNumbers", addHeadingNumbers));
             } catch (Exception e) {
                 String msg = isChromaDown(e) ? "ChromaDB 연결 실패" : e.getMessage();
                 log.error("Async index error for {}", fname, e);
@@ -192,7 +197,9 @@ public class DocumentController {
             ThreadContext ctx,
             @RequestParam("file") MultipartFile file,
             @RequestParam(value = "version", defaultValue = "latest") String version,
-            @RequestParam(value = "tags", required = false) String tags) throws IOException {
+            @RequestParam(value = "tags", required = false) String tags,
+            @RequestParam(name = "addImageDescriptions", defaultValue = "false") boolean addImageDescriptions,
+            @RequestParam(name = "addHeadingNumbers", defaultValue = "false") boolean addHeadingNumbers) throws IOException {
 
         if (file.isEmpty()) return ResponseEntity.badRequest().build();
 
@@ -227,9 +234,12 @@ public class DocumentController {
                 log.debug("Upload no-op: identical content for {}", filename);
                 Files.deleteIfExists(staged);
                 DocumentInfo existing = ragService.indexDocument(userId, dest,
-                        dest.getFileName().toString(), version, tagList, e -> {});
+                    dest.getFileName().toString(), version, tagList,
+                    addImageDescriptions, addHeadingNumbers, e -> {});
                 auditLogger.log("document.upload", existing.docId(),
-                        Map.of("filename", filename, "version", version, "chunks", existing.chunks()));
+                    Map.of("filename", filename, "version", version, "chunks", existing.chunks(),
+                        "addImageDescriptions", addImageDescriptions,
+                        "addHeadingNumbers", addHeadingNumbers));
                 return ResponseEntity.ok(existing);
             }
             if (Files.exists(dest)) {
@@ -237,9 +247,12 @@ public class DocumentController {
             }
             Files.copy(staged, dest, StandardCopyOption.REPLACE_EXISTING);
             DocumentInfo info = ragService.indexDocument(userId, dest,
-                    dest.getFileName().toString(), version, tagList, e -> {});
+                    dest.getFileName().toString(), version, tagList,
+                    addImageDescriptions, addHeadingNumbers, e -> {});
             auditLogger.log("document.upload", info.docId(),
-                    Map.of("filename", filename, "version", version, "chunks", info.chunks()));
+                    Map.of("filename", filename, "version", version, "chunks", info.chunks(),
+                    "addImageDescriptions", addImageDescriptions,
+                    "addHeadingNumbers", addHeadingNumbers));
             return ResponseEntity.ok(info);
         } finally {
             try { Files.deleteIfExists(staged); } catch (IOException ignored) {}

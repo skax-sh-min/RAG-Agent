@@ -45,6 +45,8 @@ public class DocumentLoaderService {
     private static final Logger log = LoggerFactory.getLogger(DocumentLoaderService.class);
 
     private static final Pattern IMAGE_PATH_MARKER = Pattern.compile("\\[이미지: ([^\\]]+?)]");
+    private static final Pattern HEADING_PAGE_MARKER = Pattern.compile("^\\[헤딩페이지:\\s*(\\d+)]\\s*$");
+    private static final Pattern PAGE_MARKER = Pattern.compile("^\\[페이지:\\s*(\\d+)]\\s*$");
 
     private final DocxToMarkdownConverter converter;
     private final OcrService ocrService; // null when disabled
@@ -282,26 +284,69 @@ public class DocumentLoaderService {
         List<Document> sections = new ArrayList<>();
         StringBuilder current = new StringBuilder();
         String currentHeading = "";
+        Integer currentHeadingPage = null;
+        Integer pendingHeadingPage = null;
+        int currentPage = 1;
+        int currentSectionPage = 1;
         int sectionNum = 0;
 
         for (String line : content.split("\n", -1)) {
+            Matcher genericPageMarker = PAGE_MARKER.matcher(line.strip());
+            if (genericPageMarker.matches()) {
+                currentPage = Integer.parseInt(genericPageMarker.group(1));
+                if (current.isEmpty()) currentSectionPage = currentPage;
+                continue; // metadata-only marker
+            }
+
+            Matcher pageMarker = HEADING_PAGE_MARKER.matcher(line.strip());
+            if (pageMarker.matches()) {
+                pendingHeadingPage = Integer.parseInt(pageMarker.group(1));
+                continue; // marker is metadata-only, not searchable content
+            }
+
             if (line.startsWith("#")) {
                 if (!current.isEmpty()) {
-                    sections.add(new Document(current.toString().strip(), Map.of(
-                            MetaKey.SOURCE_TYPE, "file", "section", sectionNum, "heading", currentHeading)));
+                    Integer resolvedPage = resolveSectionPage(currentHeadingPage, currentSectionPage, pendingHeadingPage);
+                    sections.add(sectionDocument(current.toString().strip(), sectionNum, currentHeading, resolvedPage));
                     current = new StringBuilder();
                     sectionNum++;
                 }
                 currentHeading = line.replaceFirst("^#+\\s*", "");
+                currentHeadingPage = pendingHeadingPage != null ? pendingHeadingPage : currentPage;
+                currentSectionPage = currentHeadingPage;
+                pendingHeadingPage = null;
+            }
+
+            if (current.isEmpty()) {
+                currentSectionPage = currentHeadingPage != null ? currentHeadingPage : currentPage;
             }
             current.append(line).append("\n");
         }
         if (!current.isEmpty()) {
-            sections.add(new Document(current.toString().strip(), Map.of(
-                    MetaKey.SOURCE_TYPE, "file", "section", sectionNum, "heading", currentHeading)));
+            Integer resolvedPage = currentHeadingPage != null ? currentHeadingPage : currentSectionPage;
+            sections.add(sectionDocument(current.toString().strip(), sectionNum, currentHeading, resolvedPage));
         }
         return sections.isEmpty()
                 ? List.of(new Document(content, Map.of(MetaKey.SOURCE_TYPE, "file")))
                 : sections;
+    }
+
+    private Integer resolveSectionPage(Integer currentHeadingPage, int currentSectionPage, Integer pendingHeadingPage) {
+        if (currentHeadingPage != null) return currentHeadingPage;
+        // Prologue fallback: if the first heading has an anchor, apply it to the pre-heading block.
+        if (pendingHeadingPage != null) return pendingHeadingPage;
+        return currentSectionPage;
+    }
+
+    private Document sectionDocument(String text, int sectionNum, String heading, Integer headingPage) {
+        Map<String, Object> meta = new HashMap<>();
+        meta.put(MetaKey.SOURCE_TYPE, "file");
+        meta.put("section", sectionNum);
+        meta.put("heading", heading);
+        if (headingPage != null) {
+            meta.put(MetaKey.HEADING_PAGE, headingPage);
+            meta.put(MetaKey.PAGE_OR_SLIDE, headingPage);
+        }
+        return new Document(text, meta);
     }
 }

@@ -6,6 +6,7 @@ import com.example.ragagent.context.ThreadContext;
 import com.example.ragagent.llm.CircuitBreaker;
 import com.example.ragagent.model.LlmProviderReport;
 import com.example.ragagent.repository.LlmUsageRepository;
+import com.example.ragagent.repository.MemoryRepository;
 import com.example.ragagent.service.MemoryService;
 import com.example.ragagent.service.ThreadMetaService;
 import org.springframework.http.HttpStatus;
@@ -17,6 +18,7 @@ import org.springframework.web.bind.annotation.*;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
@@ -85,6 +87,37 @@ public class OperationsController {
         model.addAttribute("threads", threadMetaService.getAll(ctx.userId()));
         model.addAttribute("activeThreadId", activeThreadId);
         return "fragments/thread-list :: list";
+    }
+
+    // ── Turn feedback (like/dislike) ─────────────────────────────────────
+
+    private static final Set<String> VALID_FEEDBACK = Set.of("LIKE", "DISLIKE", "NONE");
+
+    /**
+     * DISLIKE is a hard-exclusion signal consumed by MemoryRepository.getHistory() —
+     * disliked turns drop out of future prompt context. LIKE is stored for future use only.
+     */
+    @PatchMapping("/ui/threads/{threadId}/turns/{turnId}/feedback")
+    @ResponseBody
+    public ResponseEntity<Void> updateTurnFeedback(ThreadContext ctx, @PathVariable String threadId,
+                                                    @PathVariable long turnId, @RequestParam String feedback) {
+        String normalized = feedback == null ? "" : feedback.strip().toUpperCase();
+        if (!VALID_FEEDBACK.contains(normalized)) {
+            throw new IllegalArgumentException("feedback must be one of " + VALID_FEEDBACK);
+        }
+        String userId = ctx.userId();
+        var existing = memoryService.getFeedback(userId, threadId, turnId);
+        if (existing.isEmpty()) {
+            return ResponseEntity.notFound().build();
+        }
+
+        String dbValue = "NONE".equals(normalized) ? null : normalized;
+        memoryService.updateFeedback(userId, threadId, turnId, dbValue);
+        auditLogger.log("turn.feedback", threadId, Map.of(
+                "turnId", turnId,
+                "from", existing.get().feedback() == null ? "NONE" : existing.get().feedback(),
+                "to", normalized));
+        return ResponseEntity.noContent().build();
     }
 
     // ── LLM usage ─────────────────────────────────────────────────────

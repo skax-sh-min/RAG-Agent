@@ -54,7 +54,7 @@ class AnswerServiceTest {
         chatClient = mock(ChatClient.class, RETURNS_DEEP_STUBS);
         llmRouter = mock(LlmRouter.class);
         AppProperties props = new AppProperties(
-                "./data", MAX_RETRY, 8000, 800, 100, 7, 0.0, true, 0, false,
+                "./data", MAX_RETRY, 800, 100, 100, 7, 0.0, true, 0, false,
                 true, false, 3,
                 null, null, null, null, null, null, null, null, null, null, null);
         MessageSource messageSource = mock(MessageSource.class);

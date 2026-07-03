@@ -15,5 +15,6 @@ public record ChatResponse(
         @JsonProperty("premium_upgraded") String premiumUpgraded,
         @JsonProperty("used_provider") String usedProvider,
         @JsonProperty("dual_local_answer") String dualLocalAnswer,
-        @JsonProperty("dual_local_provider") String dualLocalProvider
+        @JsonProperty("dual_local_provider") String dualLocalProvider,
+        @JsonProperty("turn_id") Long turnId
 ) {}

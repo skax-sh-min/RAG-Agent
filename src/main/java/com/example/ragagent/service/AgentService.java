@@ -75,8 +75,9 @@ public class AgentService {
         long elapsedMs = (System.nanoTime() - startNano) / 1_000_000;
         double elapsedSeconds = elapsedMs / 1000.0;
 
+        Long turnId = null;
         if (result.answer() != null && !result.answer().isBlank()) {
-            memoryService.addTurn(userId, request.threadId(), request.question(), result.answer(),
+            turnId = memoryService.addTurn(userId, request.threadId(), request.question(), result.answer(),
                     askedAt, result.totalInputTokens(), result.totalOutputTokens(),
                     (int) elapsedMs, result.usedProvider(), result.llmCallCount());
         }
@@ -93,7 +94,8 @@ public class AgentService {
                 result.premiumUpgraded(),
                 result.usedProvider(),
                 result.dualLocalAnswer(),
-                result.dualLocalProvider()
+                result.dualLocalProvider(),
+                turnId
         );
     }
 }

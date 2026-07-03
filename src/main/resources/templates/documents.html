@@ -53,7 +53,7 @@
 
                 <!-- Controls -->
                 <div class="d-flex align-items-center gap-2 flex-wrap">
-                    <div class="input-group input-group-sm" style="width: 230px;">
+                    <div class="input-group input-group-sm" style="width: 180px;">
                         <span class="input-group-text" th:text="#{doc.version.label}">Version</span>
                         <input id="version-input" name="version" type="text"
                                class="form-control"
@@ -63,12 +63,24 @@
                     </div>
                     <datalist id="version-options"></datalist>
 
-                    <div class="input-group input-group-sm" style="min-width: 280px; max-width: 420px;">
+                    <div class="input-group input-group-sm" style="min-width: 200px; max-width: 400px;">
                         <span class="input-group-text"><i class="bi bi-tags"></i></span>
                         <input id="tags-input" name="tags" type="text"
                                class="form-control"
                                th:placeholder="#{doc.tags.placeholder}"
                                th:title="#{doc.tags.tooltip}" autocomplete="off"/>
+                    </div>
+                    <div class="form-check form-check-inline mb-0">
+                        <input class="form-check-input" type="checkbox" id="add-image-desc-checkbox"/>
+                        <label class="form-check-label small" for="add-image-desc-checkbox"
+                               th:text="#{doc.upload.image_desc.option}"
+                               th:title="#{doc.upload.image_desc.tooltip}">이미지 설명 추가</label>
+                    </div>
+                    <div class="form-check form-check-inline mb-0">
+                        <input class="form-check-input" type="checkbox" id="add-heading-numbers-checkbox"/>
+                        <label class="form-check-label small" for="add-heading-numbers-checkbox"
+                               th:text="#{doc.upload.heading_number.option}"
+                               th:title="#{doc.upload.heading_number.tooltip}">소제목 숫자 생성</label>
                     </div>
                     <button id="upload-btn" class="btn btn-sm btn-primary" disabled>
                         <i class="bi bi-upload me-1"></i>
@@ -220,11 +232,13 @@
     document.getElementById('upload-btn').addEventListener('click', () => {
         const version = (document.getElementById('version-input').value || '').trim() || 'latest';
         const tags = (document.getElementById('tags-input').value || '').trim();
-        uploadFiles([...selectedFiles], version, tags);
+        const addImageDescriptions = document.getElementById('add-image-desc-checkbox').checked;
+        const addHeadingNumbers = document.getElementById('add-heading-numbers-checkbox').checked;
+        uploadFiles([...selectedFiles], version, tags, addImageDescriptions, addHeadingNumbers);
     });
 
     /* ── Upload orchestration ────────────────────────────────────────────── */
-    async function uploadFiles(files, version, tags) {
+    async function uploadFiles(files, version, tags, addImageDescriptions, addHeadingNumbers) {
         const btn = document.getElementById('upload-btn');
         btn.disabled = true;
 
@@ -240,6 +254,7 @@
             setFileStatus(i, 'uploading');
             try {
                 const result = await uploadWithProgress(files[i], version, tags,
+                    addImageDescriptions, addHeadingNumbers,
                     pct => {                                    // XHR upload progress
                         setUploadBar(i, pct);
                         if (pct === 100) setFileStatus(i, 'queued');
@@ -267,13 +282,15 @@
      * Phase 2 — SSE: subscribe to /ui/documents/progress/{taskId} for chunk-level events.
      * Resolves with DocumentInfo on 'done', rejects on 'error'.
      */
-    function uploadWithProgress(file, version, tags, onUploadPct, onStage) {
+    function uploadWithProgress(file, version, tags, addImageDescriptions, addHeadingNumbers, onUploadPct, onStage) {
         return new Promise((resolve, reject) => {
             const xhr  = new XMLHttpRequest();
             const form = new FormData();
             form.append('file', file);
             form.append('version', version);
             if (tags) form.append('tags', tags);   // 검색 스코프 태그
+            form.append('addImageDescriptions', addImageDescriptions ? 'true' : 'false');
+            form.append('addHeadingNumbers', addHeadingNumbers ? 'true' : 'false');
 
             xhr.upload.addEventListener('progress', e => {
                 if (e.lengthComputable) onUploadPct(Math.round(e.loaded / e.total * 100));
@@ -368,6 +385,15 @@
                     <div class="progress-bar bg-secondary"
                          style="width:${pct}%; transition:width 0.3s;"></div>
                 </div>` : `<span class="text-info">📄 ${escHtml(evt.message || '문서 로드 중...')}</span>`,
+            structuring: () => evt.total > 0 ? `
+                <div class="d-flex justify-content-between align-items-center small mb-1">
+                    <span class="text-info">🧱 Markdown 구조화 중</span>
+                    <span class="text-muted fw-semibold">${evt.done} / ${evt.total} 블록</span>
+                </div>
+                <div class="progress" style="height:5px;">
+                    <div class="progress-bar bg-warning"
+                         style="width:${pct}%; transition:width 0.3s;"></div>
+                </div>` : `<span class="text-info">🧱 Markdown 구조화 중...</span>`,
             correcting: () => evt.total > 0 ? `
                 <div class="d-flex justify-content-between align-items-center small mb-1">
                     <span class="text-info">📝 Markdown 교정 중</span>
@@ -479,21 +505,43 @@
         const emptyRow = tbody.querySelector('td[colspan]')?.closest('tr');
         if (emptyRow) emptyRow.remove();
 
-        const tagsHtml = renderTagBadges(doc.tags);
+        // Be tolerant to both snake_case and camelCase JSON keys.
+        const filename = doc?.filename ?? '';
+        const version = doc?.version ?? 'latest';
+        const tags = Array.isArray(doc?.tags) ? doc.tags : [];
+        const chunks = doc?.chunks ?? 0;
+        const indexedAt = doc?.indexed_at ?? doc?.indexedAt ?? '';
+        const docId = doc?.doc_id ?? doc?.docId ?? '';
+
+        // If a critical key is missing, skip optimistic row append and rely on full reload.
+        if (!filename || !docId) return;
+
+        const tagsHtml = renderTagBadges(tags);
+        const deleteLabel = I18N.deleteBtnLabel || 'Delete';
+        const deleteConfirm = I18N.deleteConfirmDoc || 'Delete this document?';
 
         const tr = document.createElement('tr');
         tr.innerHTML = `
-            <td><i class="bi bi-file-earmark-text me-1 text-secondary"></i>${escHtml(doc.filename)}</td>
-            <td>${escHtml(doc.version)}</td>
+            <td><i class="bi bi-file-earmark-text me-1 text-secondary"></i>${escHtml(filename)}</td>
+            <td>${escHtml(version)}</td>
             <td>${tagsHtml}</td>
-            <td>${doc.chunks}</td>
-            <td>${escHtml(doc.indexed_at ?? '')}</td>
+            <td>${chunks}</td>
+            <td>${escHtml(formatIndexedAtMinute(indexedAt))}</td>
             <td><button class="btn btn-sm btn-outline-danger"
-                        hx-delete="/ui/documents/${encodeURIComponent(doc.doc_id)}?version=${encodeURIComponent(doc.version)}"
+                        hx-delete="/ui/documents/${encodeURIComponent(docId)}?version=${encodeURIComponent(version)}"
                         hx-target="closest tr" hx-swap="outerHTML swap:0.3s"
-                        hx-confirm="${I18N.deleteConfirmDoc}">${I18N.deleteBtnLabel}</button></td>`;
+                        hx-confirm="${escHtml(deleteConfirm)}">${escHtml(deleteLabel)}</button></td>`;
         tbody.appendChild(tr);
         htmx.process(tr);
+    }
+
+    function formatIndexedAtMinute(value) {
+        if (!value) return '';
+        const s = String(value).trim();
+        if (s.length >= 16) {
+            return s.slice(0, 16).replace('T', ' ');
+        }
+        return s.replace('T', ' ');
     }
 
     function escHtml(s) {

@@ -15,6 +15,7 @@ public final class MetaKey {
     public static final String CHUNK_INDEX     = "chunk_index";       // 안정적 청크 식별자 (0-based)
     public static final String EXCERPT_KEYWORDS = "excerpt_keywords"; // 청크 키워드 (하이브리드 검색)
     public static final String TAGS            = "tags";              // 문서 태그 (검색 스코프, 쉼표 결합 문자열)
+    public static final String HEADING_PAGE    = "heading_page";      // DOCX 헤딩 시작 페이지(명시적 page break 기준)
 
     // 미래 확장 — 멀티유저/권한
     public static final String OWNER_ID  = "owner_id";   // 'anonymous' 기본

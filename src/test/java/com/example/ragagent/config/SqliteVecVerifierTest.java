@@ -16,7 +16,7 @@ import static org.mockito.Mockito.mock;
 class SqliteVecVerifierTest {
 
     private final ApplicationContextRunner runner = new ApplicationContextRunner()
-            .withBean(JdbcTemplate.class, () -> mock(JdbcTemplate.class))
+            .withBean("vectorJdbcTemplate", JdbcTemplate.class, () -> mock(JdbcTemplate.class))
             .withUserConfiguration(SqliteVecVerifier.class);
 
     @Test

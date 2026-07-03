@@ -147,6 +147,8 @@ public class ChatController {
             String receivedAt = DateTimeFormatter.ofPattern("HH:mm")
                     .withZone(ZoneId.systemDefault()).format(Instant.now());
             model.addAttribute("receivedAt", receivedAt);
+            model.addAttribute("threadId", form.threadId());
+            model.addAttribute("turnId", resp.turnId());
             model.addAttribute("answer", resp.answer());
             model.addAttribute("questionType", resp.questionType());
             model.addAttribute("sources", resp.sources());
