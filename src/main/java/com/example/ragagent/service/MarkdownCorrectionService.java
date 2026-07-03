@@ -1,10 +1,12 @@
 package com.example.ragagent.service;
 
+import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.exception.LlmProviderExhaustedException;
 import com.example.ragagent.llm.LlmProvider;
 import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.llm.TaskType;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.ai.chat.client.ChatClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -39,17 +41,22 @@ import java.util.regex.Pattern;
 public class MarkdownCorrectionService {
 
     private static final Logger log = LoggerFactory.getLogger(MarkdownCorrectionService.class);
-    private static final int MAX_CONCURRENT   = 3;
-    private static final int MAX_SECTION_CHARS = 6_000;
+    private static final int MIN_SECTION_CHARS = 500;
     private static final Pattern MD_IMAGE_LINK = Pattern.compile("!\\[([^\\]]*)]\\(([^)]+)\\)");
     private static final Pattern IMAGE_MARKER = Pattern.compile("\\[이미지:\\s*([^\\]]+)]");
     private static final Pattern FENCED_BLOCK = Pattern.compile("(?s)```(.*?)\\n(.*?)\\n```");
     private static final Pattern HEADING_NUMBER_PREFIX = Pattern.compile("^(?:\\d+(?:\\.\\d+)*(?:\\.)?|\\d+[\\)])\\s+");
 
     private final LlmRouter llmRouter;
+    private final int maxConcurrent;
+    private final int maxSectionChars;
 
-    public MarkdownCorrectionService(LlmRouter llmRouter) {
+    public MarkdownCorrectionService(LlmRouter llmRouter,
+                                     AppProperties props,
+                                     @Value("${spring.ai.openai.chat.options.max-tokens:8000}") int llmMaxTokens) {
         this.llmRouter = llmRouter;
+        this.maxConcurrent = Math.max(1, props.indexingSafe().maxConcurrentLlmCalls());
+        this.maxSectionChars = Math.max(MIN_SECTION_CHARS, (llmMaxTokens - MIN_SECTION_CHARS) / 2);
     }
 
     /**
@@ -92,6 +99,7 @@ public class MarkdownCorrectionService {
                           BiConsumer<Integer, Integer> onSectionDone) {
         if (rawMd == null || rawMd.isBlank()) return rawMd;
         log.info("[MD_CORRECT] 시작: docId={}, chars={}", docId, rawMd.length());
+        log.debug("[MD_CORRECT] 설정: maxConcurrent={}, maxSectionChars={}", maxConcurrent, maxSectionChars);
         long t0 = System.currentTimeMillis();
 
         String preprocessed = addImageDescriptions
@@ -102,7 +110,7 @@ public class MarkdownCorrectionService {
         log.debug("[MD_CORRECT] 섹션 {}개 분할 완료", sections.size());
         int total = sections.size();
 
-        Semaphore gate = new Semaphore(MAX_CONCURRENT);
+        Semaphore gate = new Semaphore(maxConcurrent);
         AtomicInteger doneCount = new AtomicInteger(0);
         List<String> corrected;
         try (var exec = Executors.newVirtualThreadPerTaskExecutor()) {
@@ -166,7 +174,7 @@ public class MarkdownCorrectionService {
             }
             current.append(line).append("\n");
             // Flush oversized sections so they don't exceed the LLM context window
-            if (current.length() > MAX_SECTION_CHARS) {
+            if (current.length() > maxSectionChars) {
                 sections.add(current.toString());
                 current = new StringBuilder();
             }

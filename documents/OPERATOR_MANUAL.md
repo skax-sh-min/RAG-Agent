@@ -198,7 +198,8 @@ copy .env.example .env
 | `SEARCH_RERANK_ENABLED` | `false` | true/false | RRF 후 LLM 리랭킹 단계 (opt-in). **턴당 LLM 1콜 추가** → 정밀도↑/레이턴시 트레이드오프 |
 | `SEARCH_CANDIDATE_MULTIPLIER` | `3` | 2 ~ 5 | 리랭킹 전 후보 풀 크기. `topK × N`개 가져와 리랭킹 후 topK로 축소 |
 | `MAX_RETRY_COUNT` | `2` | 0 ~ 4 | 증거 부족 시 재검색 최대 횟수 |
-| `MAX_CONVERSATION_CHARS` | `8000` | 1000 ~ 20000 | 멀티턴 컨텍스트 주입 최대 문자 수 |
+
+대화 컨텍스트 주입 길이는 `LLM_MAX_TOKENS × 0.75`로 자동 계산됩니다.
 
 #### 인덱싱 병렬 처리
 
@@ -1212,7 +1213,7 @@ COST_FIRST 흐름:
 `MemoryService`는 **SQLite**(`DATA_DIR/memory.db`)에 대화 이력을 영속합니다.
 
 - WAL 모드로 읽기/쓰기 경합 최소화. SQLite pool size는 반드시 1 유지
-- 스레드별 최근 50턴 이내에서 `MAX_CONVERSATION_CHARS`까지 LLM 컨텍스트 주입
+- 스레드별 최근 50턴 이내에서 `LLM_MAX_TOKENS × 0.75`까지 LLM 컨텍스트 주입
 - `/chat/{threadId}` 재진입 시 모든 이전 turn을 시간순으로 불러와 메시지 버블 복원
 - `MemoryRepository` 인터페이스로 추상화 — Redis 등으로 교체 시 구현체만 추가
 

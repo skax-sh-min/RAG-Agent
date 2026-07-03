@@ -1,7 +1,7 @@
 package com.example.ragagent.service;
 
-import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.repository.MemoryRepository;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
@@ -18,8 +18,9 @@ public class MemoryService {
     private final int maxConversationChars;
     private final MemoryRepository repository;
 
-    public MemoryService(AppProperties appProperties, MemoryRepository repository) {
-        this.maxConversationChars = appProperties.maxConversationChars();
+    public MemoryService(MemoryRepository repository,
+                         @Value("${spring.ai.openai.chat.options.max-tokens:8000}") int llmMaxTokens) {
+        this.maxConversationChars = Math.max(1_000, llmMaxTokens * 3 / 4);
         this.repository = repository;
     }
 

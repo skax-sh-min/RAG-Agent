@@ -8,7 +8,6 @@ import java.util.List;
 public record AppProperties(
         String dataDir,
         int maxRetryCount,
-        int maxConversationChars,
         int chunkSize,
         int chunkOverlap,
     int minChunkSize,

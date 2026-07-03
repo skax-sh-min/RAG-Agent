@@ -125,7 +125,8 @@ container system stop
 | `SEARCH_RERANK_ENABLED` | `false` | true/false | RRF 후 LLM 리랭킹 단계 (턴당 LLM 1콜 추가) |
 | `SEARCH_CANDIDATE_MULTIPLIER` | `3` | 2 ~ 5 | 리랭킹 후보 풀 크기 — `topK × N` |
 | `MAX_RETRY_COUNT` | `2` | 0 ~ 4 | 증거 부족 시 재검색 최대 횟수 |
-| `MAX_CONVERSATION_CHARS` | `8000` | 1000 ~ 20000 | 멀티턴 대화 이력 최대 문자 수 |
+
+대화 이력 주입 길이는 `LLM_MAX_TOKENS × 0.75`로 자동 계산됩니다.
 
 > 형식별 분할 전략 상세 → [USER_MANUAL.md §4.1](USER_MANUAL.md#41-형식별-청크-분할-전략)
 
