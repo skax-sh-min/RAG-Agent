@@ -23,7 +23,8 @@ import java.util.regex.Pattern;
 /**
  * Converts a DOCX to Markdown, extracting embedded images to imagesDir.
  *
- * Heading styles → #/##/###  |  bold/italic runs → ** / _
+ * Document title → # ... (core-properties title or filename fallback)
+ * Heading styles → ##/###/####  |  bold/italic runs → ** / _
  * Tables → pipe-table  |  image runs → [이미지: relPath] markers
  * EMF: EmfToPngConverter (Batik) when docx-emf-convert=true, else [이미지(변환불가): ...]
  * WMF: LibreOfficeConverter when docx-wmf-convert=true, else [이미지(변환불가): ...]
@@ -40,11 +41,13 @@ public class DocxToMarkdownConverter {
         "^([\\t ]*)([-*+\\u2022\\u25E6\\u25AA\\u25CF\\u25C6\\u25B6])\\s+(.+)$");
     private static final Pattern TEXT_ORDERED_LIST_PATTERN = Pattern.compile(
         "^([\\t ]*)(\\(?\\d+\\)|\\d+[\\.)]|[A-Za-z][\\.)]|[가-힣][\\.)]|[①-⑳])\\s+(.+)$");
+    private static final Pattern DATE_TOKEN_PATTERN = Pattern.compile("\\b(?:\\d{8}|\\d{4}[-._]?\\d{2}[-._]?\\d{2})\\b");
 
     private final Optional<EmfToPngConverter> emfConverter;
     private final Optional<LibreOfficeConverter> wmfConverter;
     private final AppProperties props;
 
+    /** 선택적 이미지 변환기와 애플리케이션 변환 옵션을 초기화한다. */
     public DocxToMarkdownConverter(Optional<EmfToPngConverter> emfConverter,
                                    Optional<LibreOfficeConverter> wmfConverter,
                                    AppProperties props) {
@@ -66,6 +69,11 @@ public class DocxToMarkdownConverter {
         int[] paraIdx = {0};
 
         try (XWPFDocument docx = new XWPFDocument(Files.newInputStream(docxPath))) {
+            String title = resolveDocumentTitle(docx, docxPath);
+            if (!title.isBlank()) {
+                sb.append("# ").append(title).append("\n\n");
+            }
+
             for (IBodyElement elem : docx.getBodyElements()) {
                 if (elem instanceof XWPFParagraph para) {
                     appendParagraph(docx, sb, para, docId, imagesDir, imgCounter, paraIdx[0]++);
@@ -77,6 +85,7 @@ public class DocxToMarkdownConverter {
         return sb.toString();
     }
 
+    /** 단일 문단을 제목/목록/일반 텍스트 마크다운으로 변환해 출력 버퍼에 추가한다. */
     private void appendParagraph(XWPFDocument doc, StringBuilder sb, XWPFParagraph para,
                                  String docId, Path imagesDir,
                                  int[] imgCounter, int paraIdx) throws IOException {
@@ -86,7 +95,7 @@ public class DocxToMarkdownConverter {
 
         if (heading > 0) {
             if (!text.isBlank()) {
-                sb.append("#".repeat(Math.min(heading, 6)))
+                sb.append("#".repeat(Math.min(heading + 1, 6)))
                         .append(" ").append(text.trim())
                         .append("\n\n");
             }
@@ -115,6 +124,7 @@ public class DocxToMarkdownConverter {
         }
     }
 
+    /** 문단 run(텍스트/링크/스타일/이미지 마커)으로 인라인 마크다운 텍스트를 구성한다. */
     private String paragraphText(XWPFDocument doc, XWPFParagraph para,
                                  String docId, Path imagesDir,
                                  int[] imgCounter, int paraIdx) throws IOException {
@@ -144,6 +154,7 @@ public class DocxToMarkdownConverter {
         return sb.toString();
     }
 
+    /** 내장 이미지를 추출하고 필요 시 EMF/WMF를 PNG로 변환한 뒤 이미지 마커를 반환한다. */
     private String extractPictureMarker(XWPFPictureData picData, String docId, Path imagesDir,
                                         int[] imgCounter, int paraIdx) throws IOException {
         String ext = picData.suggestFileExtension();
@@ -184,6 +195,7 @@ public class DocxToMarkdownConverter {
                 : "[이미지: " + relPath + "]";
     }
 
+    /** run의 bold/italic 스타일에 따라 마크다운 강조 마커를 적용한다. */
     private String applyRunStyle(String text, boolean bold, boolean italic) {
         if (bold && italic) return "***" + text + "***";
         if (bold) return "**" + text + "**";
@@ -191,6 +203,7 @@ public class DocxToMarkdownConverter {
         return text;
     }
 
+    /** run 내부의 모든 텍스트 세그먼트를 안전하게 이어 붙인다. */
     private String runText(XWPFRun run) {
         int size = run.getCTR().sizeOfTArray();
         if (size == 0) return "";
@@ -206,6 +219,7 @@ public class DocxToMarkdownConverter {
         return sb.toString();
     }
 
+    /** 하이퍼링크 run의 URL을 조회한다. */
     private String resolveHyperlinkUrl(XWPFDocument doc, XWPFHyperlinkRun run) {
         String id = run.getHyperlinkId();
         if (id == null) return null;
@@ -213,16 +227,23 @@ public class DocxToMarkdownConverter {
         return link != null ? link.getURL() : null;
     }
 
+    /** DOCX 표를 마크다운 표로 변환한다(1x1 콜아웃 표는 fenced code로 처리). */
     private void appendTable(XWPFDocument doc, StringBuilder sb, XWPFTable table,
                              String docId, Path imagesDir,
                              int[] imgCounter, int[] paraIdx) throws IOException {
         List<XWPFTableRow> rows = table.getRows();
         if (rows.isEmpty()) return;
 
-        // 1x1 tables are often used as code-like callout blocks in DOCX. Render as fenced code.
+        // DOCX에서 1x1 표는 코드형 콜아웃으로 자주 쓰이므로,
+        // 이미지/비텍스트 요소가 없는 경우에는 fenced code로 렌더링한다.
         if (isSingleCellTable(rows)) {
             String code = cellContent(doc, rows.get(0).getTableCells().get(0), docId, imagesDir, imgCounter, paraIdx, "\n");
-            sb.append("\n```\n").append(code).append("\n```\n\n");
+            if (isTextOnlyCell(rows.get(0).getTableCells().get(0))) {
+                sb.append("\n```\n").append(code).append("\n```\n\n");
+            }
+            else {
+                sb.append("\n").append(code).append("\n\n");
+            }
             return;
         }
 
@@ -254,6 +275,7 @@ public class DocxToMarkdownConverter {
         sb.append("\n");
     }
 
+    /** 각 셀의 가로 grid span을 반영해 표의 유효 너비를 계산한다. */
     private int rowColumnWidth(XWPFTableRow row) {
         int width = 0;
         for (XWPFTableCell cell : row.getTableCells()) {
@@ -275,34 +297,50 @@ public class DocxToMarkdownConverter {
         for (XWPFTableCell cell : row.getTableCells()) {
             int span = gridSpan(cell);
             String text = isVerticalMergeContinuation(cell)
-                    ? ""
+                    ? "-"
                     : cellContent(doc, cell, docId, imagesDir, imgCounter, paraIdx, " ");
 
             out.add(text);
-            for (int i = 1; i < span; i++) out.add("");
+            for (int i = 1; i < span; i++) out.add("-");
         }
         while (out.size() < maxCols) out.add("");
         if (out.size() > maxCols) return out.subList(0, maxCols);
         return out;
     }
 
+    /** 표 셀의 가로 span을 반환하며, 지정되지 않았으면 기본값 1을 사용한다. */
     private int gridSpan(XWPFTableCell cell) {
         CTTcPr tcPr = cell.getCTTc() != null ? cell.getCTTc().getTcPr() : null;
         if (tcPr == null || tcPr.getGridSpan() == null || tcPr.getGridSpan().getVal() == null) return 1;
         return Math.max(1, tcPr.getGridSpan().getVal().intValue());
     }
 
+    /** 셀이 세로 병합의 연속 셀인지 판별한다(마크다운에서 자체 내용 없음). */
     private boolean isVerticalMergeContinuation(XWPFTableCell cell) {
         CTTcPr tcPr = cell.getCTTc() != null ? cell.getCTTc().getTcPr() : null;
         if (tcPr == null || tcPr.getVMerge() == null) return false;
-        if (tcPr.getVMerge().getVal() == null) return true; // <w:vMerge/> means continuation
+        if (tcPr.getVMerge().getVal() == null) return true; // <w:vMerge/> 는 연속 셀을 의미
         return tcPr.getVMerge().getVal() != STMerge.RESTART;
     }
 
+    /** 표가 코드/콜아웃 용도의 단일 셀 블록인지 확인한다. */
     private boolean isSingleCellTable(List<XWPFTableRow> rows) {
         return rows.size() == 1 && rows.get(0).getTableCells().size() == 1;
     }
 
+    /** 셀이 텍스트만 포함하는지 확인한다(이미지/드로잉/중첩 표가 있으면 false). */
+    private boolean isTextOnlyCell(XWPFTableCell cell) {
+        if (!cell.getTables().isEmpty()) return false;
+        for (XWPFParagraph paragraph : cell.getParagraphs()) {
+            for (XWPFRun run : paragraph.getRuns()) {
+                if (!run.getEmbeddedPictures().isEmpty()) return false;
+                if (run.getCTR().sizeOfDrawingArray() > 0) return false;
+            }
+        }
+        return true;
+    }
+
+    /** 셀 내부 모든 문단을 변환해 구분자로 연결한 단일 마크다운 문자열로 만든다. */
     private String cellContent(XWPFDocument doc, XWPFTableCell cell,
                                String docId, Path imagesDir,
                                int[] imgCounter, int[] paraIdx,
@@ -332,6 +370,7 @@ public class DocxToMarkdownConverter {
         return out.toString();
     }
 
+    /** DOCX 제목 스타일 메타데이터를 마크다운 제목 레벨(1..6)로 매핑한다. */
     private int headingLevel(XWPFDocument doc, XWPFParagraph para) {
         String styleId = para.getStyleID();
         if (styleId == null) return 0;
@@ -364,6 +403,7 @@ public class DocxToMarkdownConverter {
         return 0;
     }
 
+    /** 지정 레벨의 번호 매기기 정의가 순서형 목록인지(불릿 아님) 판별한다. */
     private boolean isOrderedList(XWPFDocument doc, BigInteger numId, int ilvl) {
         try {
             if (numId == null) return false;
@@ -382,6 +422,7 @@ public class DocxToMarkdownConverter {
         }
     }
 
+    /** 문단 numPr 또는 상속된 스타일 체인의 numPr에서 목록 메타데이터를 해석한다. */
     private ListInfo resolveListInfo(XWPFDocument doc, XWPFParagraph para) {
         BigInteger numId = para.getNumID();
         int ilvl = para.getNumIlvl() != null ? para.getNumIlvl().intValue() : 0;
@@ -428,6 +469,7 @@ public class DocxToMarkdownConverter {
         return null;
     }
 
+    /** DOCX 번호 메타데이터가 없을 때 텍스트 기반 목록 마커를 감지한다. */
     private TextListInfo resolveTextListInfo(XWPFParagraph para, String text) {
         if (text == null || text.isBlank()) return null;
         String leadingNormalized = normalizeLeadingMarkerStyle(text);
@@ -446,6 +488,7 @@ public class DocxToMarkdownConverter {
         return null;
     }
 
+    /** 선행 목록 마커 주변의 인라인 강조를 제거해 마커 정규식 매칭을 안정화한다. */
     private String normalizeLeadingMarkerStyle(String text) {
         String out = text;
         out = out.replaceFirst("^(\\s*)\\*\\*([^*]{1,6})\\*\\*(\\s+)", "$1$2$3");
@@ -453,6 +496,7 @@ public class DocxToMarkdownConverter {
         return out;
     }
 
+    /** 선행 공백과 문단 들여쓰기 설정을 바탕으로 목록 들여쓰기 레벨을 추정한다. */
     private int textIndentLevel(XWPFParagraph para, String leadingWhitespace) {
         int byText = 0;
         if (leadingWhitespace != null && !leadingWhitespace.isEmpty()) {
@@ -468,6 +512,35 @@ public class DocxToMarkdownConverter {
         if (left > 0) byPara = left / 360;
 
         return Math.max(byText, byPara);
+    }
+
+    /** 문서 제목을 core properties에서 우선 조회하고, 없으면 파일명 기반 제목으로 대체한다. */
+    private String resolveDocumentTitle(XWPFDocument docx, Path docxPath) {
+        try {
+            String fromCore = docx.getProperties().getCoreProperties().getTitle();
+            if (fromCore != null && !fromCore.isBlank()) {
+                return fromCore.trim().replaceAll("\\s+", " ");
+            }
+        } catch (Exception ignored) {
+            // core properties를 사용할 수 없으면 파일명 기반 제목으로 대체한다.
+        }
+        return titleFromFilename(docxPath);
+    }
+
+    /** 확장자/날짜 토큰/구분자를 제거해 파일명에서 읽기 쉬운 제목을 생성한다. */
+    private String titleFromFilename(Path docxPath) {
+        String file = docxPath.getFileName() != null ? docxPath.getFileName().toString() : "Document";
+        String noExt = file.replaceFirst("\\.[^.]+$", "");
+
+        String cleaned = noExt.replace('_', ' ');
+        cleaned = DATE_TOKEN_PATTERN.matcher(cleaned).replaceAll(" ");
+        cleaned = cleaned.replaceAll("[-()\\[\\]]+", " ");
+        cleaned = cleaned.replaceAll("\\s+", " ").trim();
+
+        if (!cleaned.isBlank()) return cleaned;
+
+        String fallback = noExt.replace('_', ' ').replaceAll("\\s+", " ").trim();
+        return fallback.isBlank() ? "Document" : fallback;
     }
 
 }
