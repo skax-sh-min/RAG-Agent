@@ -21,6 +21,9 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 /**
@@ -60,6 +63,9 @@ public class SqliteVecVectorStoreProvider implements VectorStoreProvider {
     private static final int MIN_EMBED_TEXT_LENGTH = 128;
     private static final int MAX_EMBED_RETRY = 8;
     private static final double EMBED_SHRINK_RATIO = 0.8;
+        private static final Pattern TOKEN_LIMIT_PATTERN = Pattern.compile(
+            "input \\((\\d+) tokens\\).+?current batch size: (\\d+)",
+            Pattern.CASE_INSENSITIVE);
 
     private final JdbcTemplate jdbc;
     private final EmbeddingModel embeddingModel;
@@ -189,6 +195,8 @@ public class SqliteVecVectorStoreProvider implements VectorStoreProvider {
             return embeddingModel.embed(texts); // fast path: single batched call
         } catch (RuntimeException e) {
             if (!isInputTooLargeError(e)) throw e;
+            logInputTooLarge("embed-batch", e, texts == null ? 0 : texts.size(),
+                    texts == null || texts.isEmpty() ? 0 : texts.get(0) == null ? 0 : texts.get(0).length());
             log.warn("[sqlite-vec] batched embedding rejected by model token limit, retrying per item with shrinking");
             List<float[]> out = new ArrayList<>(texts.size());
             for (String text : texts) {
@@ -201,24 +209,71 @@ public class SqliteVecVectorStoreProvider implements VectorStoreProvider {
     private float[] embedSingleWithFallback(String text) {
         String candidate = text == null ? "" : text;
         final int originalLength = candidate.length();
+        RuntimeException lastTooLarge = null;
 
         for (int i = 0; i < MAX_EMBED_RETRY; i++) {
             try {
                 return embeddingModel.embed(candidate);
             } catch (RuntimeException e) {
                 if (!isInputTooLargeError(e)) throw e;
+                logInputTooLarge("embed-single", e, i + 1, candidate.length());
+                lastTooLarge = e;
                 if (candidate.length() <= MIN_EMBED_TEXT_LENGTH) {
                     throw new VectorStoreException("임베딩 입력이 모델 제한을 초과하여 축소 재시도 후에도 실패했습니다.", e);
                 }
-                int nextLength = Math.max(MIN_EMBED_TEXT_LENGTH, (int) (candidate.length() * EMBED_SHRINK_RATIO));
+                int nextLength = computeNextLength(candidate.length(), e);
                 if (nextLength >= candidate.length()) nextLength = candidate.length() - 1;
                 candidate = candidate.substring(0, nextLength);
             }
         }
 
-        log.warn("[sqlite-vec] embedding text truncated due to model token limit: {} -> {} chars",
+        log.warn("[sqlite-vec] embedding text truncated due to model token limit but still rejected: {} -> {} chars",
                 originalLength, candidate.length());
-        return embeddingModel.embed(candidate);
+        throw new VectorStoreException("임베딩 입력이 모델 제한을 초과하여 축소 재시도 후에도 실패했습니다.", lastTooLarge);
+    }
+
+    private int computeNextLength(int currentLength, RuntimeException error) {
+        Optional<TokenLimitHint> hint = parseTokenLimitHint(error);
+        if (hint.isPresent() && hint.get().inputTokens() > 0 && hint.get().batchLimit() > 0) {
+            // token 비율로 다음 길이를 크게 줄여 재시도 횟수를 절약한다.
+            double ratio = ((double) hint.get().batchLimit() / hint.get().inputTokens()) * 0.9;
+            int byHint = (int) Math.floor(currentLength * Math.max(0.1, Math.min(ratio, 0.95)));
+            return Math.max(MIN_EMBED_TEXT_LENGTH, byHint);
+        }
+        return Math.max(MIN_EMBED_TEXT_LENGTH, (int) (currentLength * EMBED_SHRINK_RATIO));
+    }
+
+    private Optional<TokenLimitHint> parseTokenLimitHint(Throwable error) {
+        Throwable cur = error;
+        while (cur != null) {
+            String msg = cur.getMessage();
+            if (msg != null) {
+                Matcher m = TOKEN_LIMIT_PATTERN.matcher(msg);
+                if (m.find()) {
+                    try {
+                        int inputTokens = Integer.parseInt(m.group(1));
+                        int batchLimit = Integer.parseInt(m.group(2));
+                        return Optional.of(new TokenLimitHint(inputTokens, batchLimit));
+                    } catch (NumberFormatException ignored) {
+                        // continue parsing outer causes
+                    }
+                }
+            }
+            cur = cur.getCause();
+        }
+        return Optional.empty();
+    }
+
+    private void logInputTooLarge(String stage, Throwable error, int countOrAttempt, int textLength) {
+        Optional<TokenLimitHint> hint = parseTokenLimitHint(error);
+        if (hint.isPresent()) {
+            TokenLimitHint h = hint.get();
+            log.warn("[sqlite-vec] token-limit stage={} inputTokens={} limit={} n={} len={}",
+                    stage, h.inputTokens(), h.batchLimit(), countOrAttempt, textLength);
+            return;
+        }
+
+        log.warn("[sqlite-vec] token-limit stage={} n={} len={}", stage, countOrAttempt, textLength);
     }
 
     private boolean isInputTooLargeError(Throwable error) {
@@ -236,5 +291,8 @@ public class SqliteVecVectorStoreProvider implements VectorStoreProvider {
             cur = cur.getCause();
         }
         return false;
+    }
+
+    private record TokenLimitHint(int inputTokens, int batchLimit) {
     }
 }

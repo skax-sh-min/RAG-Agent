@@ -62,7 +62,7 @@ class AgentGraphTest {
         when(finalizeService.execute(any())).thenAnswer(inv -> inv.getArgument(0));
 
         AppProperties props = new AppProperties(
-                "./data", MAX_RETRY, 8000, 800, 100, 7, 0.0, true, 0, false,
+            "./data", MAX_RETRY, 8000, 800, 100, 100, 7, 0.0, true, 0, false,
                 true, false, 3,
                 null, null, null, null, null, null, null, null, null, null, null);
 

@@ -43,7 +43,7 @@ class AuditLoggerTest {
         when(currentUser.userId()).thenReturn("user-test");
 
         AppProperties props = new AppProperties(
-                "./data", 2, 8000, 800, 100, 7, 0.0, true, 0, false,
+            "./data", 2, 8000, 800, 100, 100, 7, 0.0, true, 0, false,
                 true, false, 3,
                 null, null, null, null, null, null, null,
                 new AppProperties.AuditConfig(true, "10MB", 7, "100MB"), null, null, null);
@@ -93,7 +93,7 @@ class AuditLoggerTest {
     @DisplayName("enabled=false → 아무것도 기록 안 함")
     void log_disabled_writesNothing() {
         AppProperties disabledProps = new AppProperties(
-                "./data", 2, 8000, 800, 100, 7, 0.0, true, 0, false,
+            "./data", 2, 8000, 800, 100, 100, 7, 0.0, true, 0, false,
                 true, false, 3,
                 null, null, null, null, null, null, null,
                 new AppProperties.AuditConfig(false, "10MB", 7, "100MB"), null, null, null);
@@ -108,7 +108,7 @@ class AuditLoggerTest {
     @DisplayName("auditSafe() — audit=null 이면 enabled=true 기본값")
     void auditSafe_nullConfig_returnsEnabledDefault() {
         AppProperties propsWithNull = new AppProperties(
-                "./data", 2, 8000, 800, 100, 7, 0.0, true, 0, false,
+            "./data", 2, 8000, 800, 100, 100, 7, 0.0, true, 0, false,
                 true, false, 3,
                 null, null, null, null, null, null, null, null, null, null, null);
         assertThat(propsWithNull.auditSafe().enabled()).isTrue();

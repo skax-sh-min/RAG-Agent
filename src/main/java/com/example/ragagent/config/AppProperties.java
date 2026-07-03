@@ -11,6 +11,7 @@ public record AppProperties(
         int maxConversationChars,
         int chunkSize,
         int chunkOverlap,
+    int minChunkSize,
         int searchTopK,
         double searchSimilarityThreshold,
         boolean searchMultiqueryEnabled,
@@ -123,6 +124,12 @@ public record AppProperties(
     /** Query length (chars) at/above which multi-query expansion runs. Clamped to >= 0 (0 = no length gate). */
     public int searchMultiqueryMinLengthSafe() {
         return Math.max(0, searchMultiqueryMinLength);
+    }
+
+    /** Minimum chunk length used by post-merge compaction. Falls back to chunkOverlap for backward compatibility. */
+    public int minChunkSizeSafe() {
+        if (minChunkSize > 0) return minChunkSize;
+        return Math.max(1, chunkOverlap);
     }
 
     /** Candidate pool multiplier for reranking. Clamped to >= 1 to avoid empty pools. */

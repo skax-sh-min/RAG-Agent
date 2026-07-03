@@ -15,6 +15,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
 
 import java.io.IOException;
+import java.lang.reflect.Method;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
@@ -220,4 +221,70 @@ class DocumentIndexerTest {
         assertThat(docRegistry.findByDocId(docId, "anonymous")).isEmpty();
         verify(vectorStore).deleteByDocIds("anonymous", "v1", List.of("vec-id-x"));
     }
+
+        @Test
+        @DisplayName("작은 중간 청크(< overlap)는 앞 청크로 병합된다")
+        @SuppressWarnings("unchecked")
+        void mergeTinyChunks_mergesMiddleTinyChunkIntoPrevious() throws Exception {
+                Method m = DocumentIndexer.class.getDeclaredMethod("mergeTinyChunks", List.class, int.class);
+                m.setAccessible(true);
+
+                List<String> out = (List<String>) m.invoke(indexer,
+                                List.of("A".repeat(220), "B".repeat(90), "C".repeat(210)),
+                                200);
+
+                assertThat(out).hasSize(2);
+                assertThat(out.get(0)).contains("A".repeat(220)).contains("B".repeat(90));
+                assertThat(out.get(1)).contains("C".repeat(210));
+        }
+
+        @Test
+        @DisplayName("시작부 작은 청크(< overlap)는 다음 청크 앞에 병합된다")
+        @SuppressWarnings("unchecked")
+        void mergeTinyChunks_mergesLeadingTinyChunkIntoNext() throws Exception {
+                Method m = DocumentIndexer.class.getDeclaredMethod("mergeTinyChunks", List.class, int.class);
+                m.setAccessible(true);
+
+                List<String> out = (List<String>) m.invoke(indexer,
+                                List.of("X".repeat(80), "Y".repeat(230), "Z".repeat(220)),
+                                200);
+
+                assertThat(out).hasSize(2);
+                assertThat(out.get(0)).startsWith("X".repeat(80));
+                assertThat(out.get(0)).contains("Y".repeat(230));
+                assertThat(out.get(1)).contains("Z".repeat(220));
+        }
+
+        @Test
+        @DisplayName("청크 길이가 overlap과 같으면 병합하지 않는다")
+        @SuppressWarnings("unchecked")
+        void mergeTinyChunks_doesNotMergeWhenLengthEqualsOverlap() throws Exception {
+                Method m = DocumentIndexer.class.getDeclaredMethod("mergeTinyChunks", List.class, int.class);
+                m.setAccessible(true);
+
+                List<String> out = (List<String>) m.invoke(indexer,
+                                List.of("A".repeat(220), "B".repeat(200), "C".repeat(220)),
+                                200);
+
+                assertThat(out).hasSize(3);
+                assertThat(out.get(1)).isEqualTo("B".repeat(200));
+        }
+
+        @Test
+        @DisplayName("작은 청크를 병합할 때 overlap 구간이 중복되지 않는다")
+        @SuppressWarnings("unchecked")
+        void mergeTinyChunks_deduplicatesOverlapText() throws Exception {
+                Method m = DocumentIndexer.class.getDeclaredMethod("mergeTinyChunks", List.class, int.class);
+                m.setAccessible(true);
+
+                String overlap = "__OVERLAP__";
+                String first = "A".repeat(220) + overlap;
+                String tiny = overlap + "B".repeat(60);
+                List<String> out = (List<String>) m.invoke(indexer, List.of(first, tiny), 200);
+
+                assertThat(out).hasSize(1);
+                String merged = out.get(0);
+                assertThat(merged.indexOf(overlap)).isEqualTo(merged.lastIndexOf(overlap));
+                assertThat(merged).contains("B".repeat(60));
+        }
 }
