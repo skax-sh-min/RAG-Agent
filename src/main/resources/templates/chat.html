@@ -406,6 +406,21 @@
     }
     questionInput.addEventListener('input', adjustTextarea);
 
+    /* ── 입력 시작 시 대화 요약 선계산 (백그라운드, 응답 안 기다림) ──────
+       요약 대상은 이미 저장된 turn 들뿐이라 지금 입력 중인 텍스트와 무관하므로,
+       입력을 시작하는 즉시(한 글자만 쳐도) 1회만 트리거하고 이번 입력 세션 동안 재호출하지 않는다.
+       실패해도 조용히 무시 — 다음 질문 전송 시 캐시가 없으면 기존 getHistory() 경로로 자동 폴백된다. */
+    questionInput.addEventListener('input', function () {
+        if (this.dataset.summaryPrecomputed || !this.value.trim()) return;
+        this.dataset.summaryPrecomputed = '1';
+        const threadId = document.getElementById('chat-form').querySelector('input[name="threadId"]').value;
+        fetch('/ui/chat/summary/precompute', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded', ...getCsrfHeaders() },
+            body: 'threadId=' + encodeURIComponent(threadId)
+        }).catch(() => {});
+    });
+
     /* Enter → submit, Shift+Enter → newline */
     questionInput.addEventListener('keydown', function (e) {
         if (e.key === 'Enter' && !e.shiftKey) {
@@ -441,6 +456,7 @@
         }
         questionInput.value = '';
         questionInput.style.height = 'auto';
+        delete questionInput.dataset.summaryPrecomputed;
         sendBtn.disabled = true;
         typingIndicator.classList.remove('d-none');
         typingIndicator.classList.add('d-flex');

@@ -339,6 +339,7 @@
             if (questionEl) {
                 questionEl.value = '';
                 questionEl.style.height = 'auto';
+                delete questionEl.dataset.summaryPrecomputed; // §6.10: allow next question to trigger precompute again
             }
 
             submitStream(formData, question);

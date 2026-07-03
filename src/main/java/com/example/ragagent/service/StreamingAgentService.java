@@ -53,19 +53,22 @@ public class StreamingAgentService {
     private final ThreadMetaService threadMetaService;
     private final ObjectMapper objectMapper;
     private final MessageSource messageSource;
+    private final ConversationSummarizerService summarizerService;
 
     public StreamingAgentService(AgentGraph agentGraph,
                                   MemoryService memoryService,
                                   ClassifierService classifierService,
                                   ThreadMetaService threadMetaService,
                                   ObjectMapper objectMapper,
-                                  MessageSource messageSource) {
+                                  MessageSource messageSource,
+                                  ConversationSummarizerService summarizerService) {
         this.agentGraph = agentGraph;
         this.memoryService = memoryService;
         this.classifierService = classifierService;
         this.threadMetaService = threadMetaService;
         this.objectMapper = objectMapper;
         this.messageSource = messageSource;
+        this.summarizerService = summarizerService;
     }
 
     /**
@@ -90,14 +93,14 @@ public class StreamingAgentService {
 
             if (form.isDirectMode()) {
                 // directMode: classifier 생략, history만 로드
-                String history = memoryService.getHistory(userId, form.threadId());
+                String history = resolveHistory(userId, form.threadId());
                 initial = AgentState.of(form.question(), form.version(), form.threadId(),
                         userId, history, rm, true, locale);
             } else {
                 // 일반 RAG 모드: history 로드 + 분류 병렬 실행
                 try (var exec = Executors.newVirtualThreadPerTaskExecutor()) {
                     CompletableFuture<String> historyF = CompletableFuture.supplyAsync(
-                            () -> memoryService.getHistory(userId, form.threadId()), exec);
+                            () -> resolveHistory(userId, form.threadId()), exec);
                     CompletableFuture<String> typeF = CompletableFuture.supplyAsync(
                             () -> classifierService.classifyOnly(form.question(), locale), exec);
 
@@ -119,6 +122,7 @@ public class StreamingAgentService {
                 turnId = memoryService.addTurn(userId, form.threadId(), form.question(), result.answer(),
                         askedAt, result.totalInputTokens(), result.totalOutputTokens(),
                         (int) elapsedMs, result.usedProvider(), result.llmCallCount());
+                summarizerService.invalidate(form.threadId());
             }
 
             sendEvent(emitter, "done", buildDonePayload(result, elapsedMs, turnId));
@@ -262,6 +266,12 @@ public class StreamingAgentService {
         m.put("refreshThreadList", true);
         m.put("turnId",            turnId);
         return m;
+    }
+
+    // §6.10: use the precomputed summary + recent turns when available, else full raw history.
+    private String resolveHistory(String userId, String threadId) {
+        String precomputed = summarizerService.buildContext(userId, threadId);
+        return precomputed != null ? precomputed : memoryService.getHistory(userId, threadId);
     }
 
     private static RoutingMode parseRoutingMode(String value) {

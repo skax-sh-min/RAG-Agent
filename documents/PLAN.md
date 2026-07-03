@@ -46,25 +46,14 @@
 
 - ~~**Phase 2**: 모바일 UI (Offcanvas, sticky 입력창, PWA)~~ → ✅ 완료 (2026-06-27, 오프캔버스 드로어·dvh sticky 입력·PWA(manifest/SW/오프라인)·iOS 16px·접근성)
 - ~~**Phase 3 — Chat 피드백(좋아요/싫어요) 기반 컨텍스트 제외**~~ → ✅ 완료 (2026-07-02, §6.9 — `conversation_turns.feedback` 컬럼, `PATCH /ui/threads/{threadId}/turns/{turnId}/feedback`, DISLIKE는 `getHistory()`에서 하드 제외)
-- **Phase 3 잔여** (미착수, §6.5~6.8·6.10~6.11 상세): 사용자별 LLM 토큰 쿼터(§6.5) · 사용자별 스토리지 쿼터(§6.11) · 임베딩 사용량 분리(§6.6) · 비활성 프로바이더 조건부 표시(§6.7) · orphan 프로바이더 기록 삭제(§6.8) · 대화 요약 선계산(§6.10)
+- ~~**Phase 3 — 입력 시작 시 로컬 요약 선계산 + 중복 제거 컨텍스트 압축**~~ → ✅ 완료 (2026-07-03, §6.10 — `ConversationSummarizerService`, `POST /ui/chat/summary/precompute`, LOCAL 전용 요약 + 캐시, 실패 시 `getHistory()` 자동 폴백)
+- **Phase 3 잔여** (미착수, §6.5~6.8·6.11 상세): 사용자별 LLM 토큰 쿼터(§6.5) · 사용자별 스토리지 쿼터(§6.11) · 임베딩 사용량 분리(§6.6) · 비활성 프로바이더 조건부 표시(§6.7) · orphan 프로바이더 기록 삭제(§6.8)
 - **Phase 4** (조건부, 미착수): OAuth2 소셜 로그인(§7.1) · PostgreSQL 마이그레이션(§7.2) · 관리자 페이지 확장(§7.3, ※ `/admin` 기본 골격은 Phase 5.8에서 이미 존재)
 - ~~**Phase 5**: sqlite-vec 선택적 연동~~ → ✅ 완료 (Step 5.1~5.8, `app.vectorstore.type=chroma|sqlite-vec`)
 - ~~**Phase 5 추가**: Step 5.9 태그 기반 검색 스코프 + Step 5.10 sqlite-vec 운영/벡터 DB 분리~~ → ✅ 완료 (2026-07-01, Step 5.9 태그 필터/제안/복원 + Step 5.10 `SQLITE_VEC_DB_PATH` 분리 스위치). vec0 라이브 부팅은 운영 인수
 - ~~**Phase 6**: 폐쇄망/노-도커 — 키리스 LOCAL(G1)·차원 외부화(G2)·라우팅 외부화(G3)·런북(G4)·무-외부호출 인수(G5)~~ → ✅ G1~G5 완료 (2026-06-25). sqlite-vec 라이브 부팅(vec0 바이너리)만 운영 인수
 
-### ⚠️ 코드 대조 정정 (2026-07-02)
-
-실제 소스와 대조한 결과 아래 항목은 문서 표기와 어긋나 있어 정정한다(상세는 각 절).
-
-| 문서 표기 | 실제 코드 | 정정 위치 |
-|---|---|---|
-| §6.2 "Apache Tika MIME 검증" | Tika 의존성 없음. `FileTypeDetector` **매직바이트** 검증 | §6.2 |
-| §6.2 "사용자별 누적 용량 쿼터(기본 500MB)" ✅ | **미구현**. 저장은 공유(`DocRegistry.SHARED`), `storage_used_bytes` 컬럼·쿼터 로직 없음 | §6.2, §6.11 |
-| §6.2 "업로드 경로 `data/users/{userId}/`" | 공유 경로 `data/documents/`(per-user 격리 폐기, Phase 3에서 단순화) | §6.2 |
-| §10.2 `app.security.bcrypt-cost/login-lock/upload-quota` 프로퍼티 | **존재하지 않음**. BCrypt cost=12는 `SecurityConfig`, 잠금(5회/15분)은 `AuthEventListener` 상수 하드코딩 | §10.2 |
-| §12 마이그레이션 `V3__user_scope`/`V4__audit_log`/`V5__upload_quota` | **파일 없음**. Flyway는 `V1__baseline`+`V2__users`만. `user_id`·토큰 컬럼은 `SqliteMemoryRepository` 런타임 `ALTER TABLE`, 감사로그는 Logback 파일(테이블 아님), 스토리지 컬럼 없음 | §12 |
-
-> 스키마 관리 실태: **Flyway(V1·V2 baseline) + 런타임 멱등 DDL 혼용**. `SqliteMemoryRepository`/`SqliteUserDetailsService`가 `CREATE TABLE IF NOT EXISTS` + `ALTER TABLE ADD COLUMN`으로 컬럼을 증분 추가한다. 따라서 신규 컬럼(피드백·스토리지)은 새 Flyway 마이그레이션이 아니라 **기존 런타임 `ALTER TABLE` 패턴**으로 추가하는 것이 현 코드와 정합적이다.
+> 스키마 관리 실태: **Flyway(V1·V2 baseline) + 런타임 멱등 DDL 혼용**. `SqliteMemoryRepository`/`SqliteUserDetailsService`가 `CREATE TABLE IF NOT EXISTS` + `ALTER TABLE ADD COLUMN`으로 컬럼을 증분 추가한다(§12). 신규 컬럼은 새 Flyway 파일이 아니라 이 런타임 `ALTER TABLE` 패턴으로 추가한다.
 
 ---
 
@@ -114,18 +103,18 @@
 - **HTMX + 서버 렌더링** — JS 프레임워크 없이 모바일/PWA 대응이 단순.
 - **VectorStoreRegistry** — 컬렉션 키 기반 추상화. 멀티테넌시 전환에 자연스럽게 맞물린다.
 
-### 2.2 약점 (개선이 필요한 부분)
+### 2.2 약점 (Phase 1 착수 시점 기준 — Phase 1~3에서 거의 모두 해소됨)
 
-| 항목 | 현재 | 온라인 전환 시 문제 |
+| 항목 | 당시 문제 | 해소 현황 |
 |------|------|-------------------|
-| 인증 | 없음 | 모든 데이터 무제한 접근 |
-| `threadId` 소유 개념 | UUID, 누구나 접근 | IDOR 취약점 |
-| 파일 저장 경로 | `data/` 단일 | 사용자 간 격리 없음 |
-| Chroma 컬렉션 | `manual_{version}` | 모든 사용자 벡터 혼재 |
-| HTTPS | HTTP 8080 직접 노출 | 세션 쿠키 평문 전송 |
-| 마이그레이션 도구 | 없음 (SQL 직접 실행 가정) | 스키마 변경 추적 불가 |
-| 모바일 UI | viewport meta만 존재 | 오프캔버스/하단 입력 미구현 |
-| Rate limit | 없음 | LLM 비용 폭주 위험 |
+| 인증 | 없음 | Spring Security 폼 로그인(Step 1.3), no-auth 모드 병행 |
+| `threadId` 소유 개념 | UUID, 누구나 접근 | Repository 시그니처에 userId 강제(Step 1.4) |
+| 파일 저장 경로 | 격리 없음 | 이후 공유 저장소로 의도적 단순화(`DocRegistry.SHARED`) |
+| Chroma 컬렉션 | `manual_{version}` | 사용자별 네이밍(Step 1.4) → Phase 3에서 공유로 재단순화 |
+| HTTPS | HTTP 8080 직접 노출 | Caddy 리버스 프록시(Step 1.1) |
+| 마이그레이션 도구 | 없음 | Flyway 도입(Step 1.2) |
+| 모바일 UI | 미구현 | Offcanvas/PWA(Phase 2) |
+| Rate limit | 없음 | Bucket4j(§6.1) |
 
 ---
 
@@ -391,96 +380,20 @@ SQLite `audit_log` 테이블 대신 Logback `SizeAndTimeBasedRollingPolicy`로 �
 
 ### 6.9 Chat 응답 피드백(좋아요/싫어요) 기반 컨텍스트 제외 ✅ 완료
 
-> **현재 코드 확인 (2026-07-02)**: `conversation_turns`에 `feedback` 컬럼 없음(현 컬럼: question·answer·asked_at·input_tokens·output_tokens·elapsed_ms·provider·llm_calls·user_id, PK `id`). ⚠️ 문서가 지칭한 `ConversationRepository`는 **존재하지 않음** — 실제 접근 계층은 `repository/SqliteMemoryRepository`(+ `service/MemoryService`)다. 컬럼 추가는 새 Flyway가 아니라 `SqliteMemoryRepository`의 기존 런타임 `ALTER TABLE ADD COLUMN` 목록에 한 줄 추가하는 방식이 정합적. **turnId = `conversation_turns.id`(PK)**.
+각 Assistant 응답에 👍/👎 토글을 추가하고, `DISLIKE` turn은 다음 프롬프트 컨텍스트에서 제외한다(`LIKE`는 저장만, 아직 미소비). `conversation_turns.feedback TEXT`(런타임 `ALTER TABLE`, `NULL|LIKE|DISLIKE`) + `PATCH /ui/threads/{threadId}/turns/{turnId}/feedback`(`OperationsController`, 소유권 확인 후 404/값 검증 400/성공 204). 제외 로직은 `getHistory()` SELECT에 `AND (feedback IS NULL OR feedback <> 'DISLIKE')` 한 줄. `ChatResponse.turnId` + `addTurn()`이 생성 id를 반환하도록 변경해 HTMX/DUAL/서버 복원/SSE 스트리밍 4개 렌더 경로 모두 같은 `.feedback-controls[data-turn-id] > .feedback-btn` 마크업 사용, 클릭 처리는 `chat.html`의 `#chat-messages` 위임 리스너 하나로 통일. `AuditLogger`에 `from`/`to` 기록. DUAL 모드는 외부 답변 turn 1개만 저장(로컬 답변엔 별도 피드백 없음 — 기존 정책과 동일). 테스트 +9(전체 335), LM Studio 연동 실사용 검증 완료.
 
-**목표**:
-- 각 Assistant 응답에 대해 사용자가 `좋아요/싫어요`를 남길 수 있게 한다.
-- `싫어요`로 표시된 응답은 다음 질문의 프롬프트 컨텍스트 구성에서 제외한다.
+### 6.10 입력 시작 시 로컬 요약 선계산 + 중복 제거 컨텍스트 압축 ✅ 완료
 
-**요구사항 해석**:
-- 피드백은 turn 단위로 저장한다(질문 단위 아님).
-- `좋아요`는 가산점(향후 활용)으로 저장하되, 1차에서는 컨텍스트 포함/제외 결정에 직접 사용하지 않는다.
-- `싫어요`는 hard exclusion 규칙으로 적용한다.
+사용자가 입력을 시작하면(첫 글자 입력 즉시, 입력 세션당 1회) `POST /ui/chat/summary/precompute`가 가상 스레드로 발화되어, `ConversationSummarizerService`가 스레드 turn들을 정규화 기반 중복 제거(동일 질문은 최신 답변만 유지, DISLIKE는 §6.9와 동일하게 하드 제외)한 뒤 `TaskType.LIGHT_TEXT`+`RoutingMode.LOCAL_ONLY`로 LOCAL 프로바이더에 요약을 요청한다. 결과는 스레드별 LRU 캐시(최대 3개)에 저장되고, `AgentService`/`StreamingAgentService`는 캐시가 있으면 "요약 + 최근 2턴 원문"을 히스토리로 쓰고 없으면(미계산·실패·LOCAL 미가용 등 모든 경우) 기존 `getHistory()`로 조용히 폴백한다. 새 turn 저장 시 캐시를 무효화해 다음 입력에서 재생성되게 한다.
 
-**설계(최소 침습)**:
-1. **데이터 모델 확장**
-  - `SqliteMemoryRepository`의 런타임 DDL 목록에 `ALTER TABLE conversation_turns ADD COLUMN feedback TEXT`(값: `NULL | LIKE | DISLIKE`) 추가. 기존 행은 `NULL`(안전).
-2. **저장/조회 경로**
-  - `SqliteMemoryRepository.updateFeedback(userId, threadId, turnId, feedback)` 추가(소유권 위해 `WHERE user_id=? AND thread_id=? AND id=?`). `MemoryService`에 위임 메서드.
-  - ⚠️ **핵심**: `getHistory(userId, threadId, maxChars)`는 현재 `question, answer`를 이어붙인 **단일 String**을 반환한다. `DISLIKE` 제외는 이 SELECT에 `AND (feedback IS NULL OR feedback <> 'DISLIKE')`를 추가하면 곧바로 컨텍스트에서 빠진다. UI 복원용 조회(`id ASC` 전체 turn)는 feedback 값을 포함해 반환(버튼 상태 표시).
-3. **UI/HTMX**
-  - 채팅 버블(`message-assistant.html`) 하단에 👍/👎 토글. 클릭 시 `PATCH /ui/threads/{threadId}/turns/{turnId}/feedback`(신규, `OperationsController` 또는 신규 컨트롤러). 재클릭 시 해제(`NULL`). CSRF는 기존 htmx 자동 주입 재사용.
-4. **프롬프트 빌드 규칙**
-  - `getHistory()`의 SELECT 필터로 `DISLIKE` turn 제외(2번). Assistant 응답에만 적용, 사용자 질문 텍스트는 유지.
-5. **관찰성**
-  - `AuditLogger`에 feedback 변경 이벤트 기록(`threadId`, `turnId`, `from`, `to`).
-
-**예외/정책**:
-- 동일 turn에 대해 마지막 선택만 유효(멱등 업데이트).
-- no-auth 모드에서도 현재 thread 소유 컨텍스트 내에서만 변경 허용.
-- 삭제된 turn/타 thread turn에 대한 피드백 변경은 404/403 처리.
-
-**완료 기준**:
-- [x] 채팅 UI에서 turn별 👍/👎 선택/해제가 가능하다.
-- [x] `👎`가 붙은 Assistant turn은 다음 요청 프롬프트 컨텍스트에서 제외된다.
-- [x] 기존 대화 저장/복원 동작 회귀가 없다.
-- [x] 피드백 변경 이력이 감사 로그에 남는다.
-
-> **구현 메모 (2026-07-02)**:
-> - **모델/저장**: `MemoryRepository`/`SqliteMemoryRepository`에 `feedback TEXT` 컬럼(런타임 `ALTER TABLE`), `Turn` 레코드에 `id`+`feedback` 필드 추가. `addTurn()`을 `void`→`long`(생성 turn id 반환, `GeneratedKeyHolder`)으로 변경. `getFeedback()`(소유권 확인 + 감사로그 "from", `Optional<FeedbackRow>`로 "찾음+feedback=null" vs "못 찾음" 구분) + `updateFeedback()` 신규.
-> - **컨텍스트 제외**: `getHistory()` SELECT에 `AND (feedback IS NULL OR feedback <> 'DISLIKE')` 추가 — 설계대로 SQL 필터 한 줄로 처리.
-> - **응답 경로**: `ChatResponse`에 `turnId`(nullable Long) 필드 추가. `AgentService.chat()`/`StreamingAgentService.run()` 양쪽 모두 `addTurn()` 반환값을 캡처해 전달(스트리밍은 SSE `done` 이벤트 payload에 `turnId` 포함).
-> - **엔드포인트**: `OperationsController`에 `PATCH /ui/threads/{threadId}/turns/{turnId}/feedback`(`@RequestParam feedback=LIKE|DISLIKE|NONE`, `ResponseEntity<Void>` — 성공 204 / 미소유·미존재 404 / 잘못된 값 400). 감사로그에 `turnId`+`from`+`to` 기록.
-> - **UI**: `message-assistant.html`·`message-assistant-dual.html`(HTMX 응답)·`chat.html`(서버 렌더 복원 turn)·`chat-stream.js`(SSE 스트리밍 버블) 4곳 모두 동일한 `.feedback-controls[data-turn-id][data-thread-id] > .feedback-btn[data-feedback]` 마크업. 클릭 처리는 `chat.html`에 `#chat-messages` 위임(delegated) 리스너 **하나**로 통일 — 3개 렌더 경로(서버 렌더/HTMX swap/JS로 직접 append되는 스트리밍 버블) 모두 같은 컨테이너 안에서 발생하므로 개별 스크립트 중복 없이 한 곳에서 처리.
-> - **검증**: `SqliteMemoryRepositoryTest` +5(생성 id 반환, DISLIKE 제외, LIKE 유지, 소유권 검증, 갱신 반영), `OperationsControllerHtmxTest` +4(LIKE/해제/404/400). 전체 335 tests BUILD SUCCESS(회귀 0). LM Studio 연동 실사용 확인: Direct 모드로 스트리밍 응답 생성 → 👎 클릭(DB `feedback=DISLIKE` 반영, 감사로그 `from:NONE,to:DISLIKE`) → 페이지 새로고침 후 서버 렌더 경로에서도 빨간 버튼 상태 유지 → 👍 클릭으로 전환(감사로그 `from:DISLIKE,to:LIKE`) 확인.
-> - ⚠️ **범위 밖(비적용)**: LIKE는 저장만 되고 현재 어떤 로직도 소비하지 않음(설계대로 "향후 활용"). DUAL 모드는 `result.answer()`(외부 답변) 기준으로 turn 1개만 저장되므로 로컬 답변에는 별도 피드백이 없음(기존 turn 저장 정책과 동일 — 신규 결함 아님).
-
-### 6.10 입력 시작 시 로컬 요약 선계산 + 중복 제거 컨텍스트 압축 🔵 계획
-
-> **현재 코드 확인 (2026-07-02)**: `ConversationSummarizerService` 미존재. `AgentService.chat()`는 이미 진입 시 `memoryService.getHistory()`를 `CompletableFuture`로 **classify와 병렬 프리페치**(현 `AgentService.java:48,54`)하므로 선계산 트리거를 얹을 자연스러운 지점이 있다. `getHistory()`는 단일 String 반환 → 요약 결과도 String이라 프롬프트 조립부 교체가 단순. `LlmRouter.route(TaskType.LIGHT_TEXT|…, RoutingMode.LOCAL_ONLY)`로 로컬 요약 라우팅 가능.
-
-**목표**:
-- 사용자가 질문 입력을 시작하면 이전 대화를 중복 제거 + 요약해 미리 준비한다.
-- 실제 질문 전송 시 준비된 요약을 프롬프트에 포함해 토큰 효율과 응답 품질을 개선한다.
-
-**핵심 아이디어**:
-- 요약 생성 시점: `질문 입력 시작(on input)` 이벤트에서 비동기 트리거.
-- 요약 실행 주체: `LOCAL` provider(또는 local-only task type) 우선.
-- 질문 전송 시점에는 요약 재사용(없거나 오래됐으면 기존 경로 fallback).
-
-**설계(단계적)**:
-1. **요약 파이프라인 추가**
-  - `ConversationSummarizerService` 신설: thread history -> dedupe -> summary.
-  - dedupe는 경량 규칙 기반(정규화 후 exact/near-exact 제거) + 핵심 슬롯(결정/제약/오류코드/버전) 보존.
-2. **캐시/저장 전략**
-  - 스레드별 요약 캐시(`threadId`, `summaryText`, `sourceTurnSeq`, `updatedAt`).
-  - 히스토리 변경(새 turn 저장) 시 캐시 무효화.
-3. **프론트 트리거**
-  - `chat.html` 입력창 첫 입력 시 `POST /ui/chat/summary/precompute?threadId=...` 비동기 호출(디바운스 적용).
-  - 사용자 타이핑 중 중복 호출 방지(예: 10~20초 TTL).
-4. **질문 처리 통합**
-  - `AgentService.chat()` 시작 시 "요약 사용 가능"이면 요약 + 최근 N턴(짧은 raw) 결합.
-  - 요약 없음/실패/타임아웃이면 기존 히스토리 경로로 자동 폴백.
-5. **프롬프트 정책**
-  - 요약 프롬프트에 "중복 제거, 사실/결정 우선, 금지사항 보존, 추측 금지" 명시.
-  - 최종 질문 프롬프트에는 `Conversation Summary` 블록을 별도 섹션으로 삽입.
-
-**운영/안전장치**:
-- 요약 호출 타임아웃 짧게(예: 5~10초) 설정해 UX 지연 방지.
-- local provider unavailable 시 즉시 포기하고 본질 경로 유지(서비스 연속성 우선).
-- 요약 길이 상한(예: 1~2k chars)으로 비용 상한 고정.
-- 새 대화 버튼을 누르거나 이전 대화로 변경 할 수 있으므로 요약 캐시를 threadId 기준으로 관리하고, threadId 변경 시 메모리에 임시 보관 (최대 3개). 
-
-**검증 계획**:
-- 단위: dedupe 규칙, 요약 캐시 무효화, fallback 경로.
-- 통합: 입력 시작 시 선계산 트리거, 질문 전송 시 요약 재사용 여부.
-- 회귀: 요약 실패 시 기존 답변 품질/지연 악화 없음.
-
-**완료 기준**:
-- 사용자가 입력을 시작하면 백그라운드 요약이 선계산된다.
-- 질문 전송 시 요약이 프롬프트에 포함되어 전달된다.
-- 중복 대화가 요약에서 제거되고 핵심 맥락은 유지된다.
-- 로컬 요약 실패 시 기존 대화 경로로 안전하게 폴백한다.
+> **구현 메모 (2026-07-03)**:
+> - **신규**: `ConversationSummarizerService`(`precompute`/`buildContext`/`invalidate`/`dedupe`). 캐시는 access-order `LinkedHashMap`+`removeEldestEntry`로 스레드 3개 LRU, 별도 맵으로 스레드당 15초 TTL 가드(프론트 디바운스와는 별개의 안전망).
+> - **연동**: `AgentService`/`StreamingAgentService`에 `resolveHistory()` 헬퍼(`buildContext()` 우선, null이면 `getHistory()`) — directMode/일반 모드 양쪽에 적용. `addTurn()` 성공 직후 `invalidate(threadId)`.
+> - **엔드포인트**: `ChatController.precomputeSummary()` — `Thread.ofVirtual().start(...)`로 즉시 202 반환(기존 `streamChat()`의 fire-and-forget 패턴 재사용), 실제 LLM 호출은 응답 이후 백그라운드 진행.
+> - **프론트**: `#question-input`의 `input` 리스너가 입력 시작 즉시(0→비0 전환) 1회 트리거하고 `dataset.summaryPrecomputed`로 이번 세션 재호출 방지(요약 대상은 이미 저장된 turn뿐이라 타이핑 완료를 기다릴 이유가 없음). 메시지 전송 시(`chat.html`·`chat-stream.js` 양쪽 clear 경로) 플래그 초기화.
+> - **프롬프트**: `prompt.summary.system` 신규 — 중복 제거·사실/결정 우선·제약/오류코드/버전 보존·추측 금지·3~5문장 평문 명시.
+> - ⚠️ **원안 대비 단순화**: 앱 레벨 명시적 타임아웃(5~10초)은 별도 구현하지 않음 — 이미 fire-and-forget 백그라운드라 느려도 채팅 요청 자체를 막지 않으므로 LOCAL 프로바이더의 기존 HTTP client read-timeout을 그대로 상한으로 사용. 캐시 스키마도 원안의 `sourceTurnSeq`/`updatedAt` 대신 단순 `threadId→summary` 맵 + TTL 타임스탬프로 축소(무효화가 항상 전체 삭제라 부분 staleness 추적 불필요).
+> - **검증**: `ConversationSummarizerServiceTest` 10건 + `AgentServiceTest` +3 + `ChatControllerHtmxTest` +1. 전체 354 tests BUILD SUCCESS(회귀 0). LM Studio 연동 실사용 확인: 질문1 전송 → 입력창 타이핑 시작 시 precompute 202 → 서버 로그에서 LOCAL 모델이 실제 요약 생성(`[SUMMARY] precomputed ... summaryChars=48`) 확인 → 질문2("방금 내가 뭘 물어봤지?")에서 `historyLen=108`(순수 원문 25자와 뚜렷이 구분되는 "요약+최근 턴" 길이)로 `buildContext()` 사용 확인 → 모델이 요약 기반으로 직전 질문을 정확히 회상하는 답변까지 브라우저에서 직접 확인.
 
 ### 6.11 사용자별 스토리지 쿼터 🔵 미착수 (§6.2에서 이관)
 
@@ -555,226 +468,24 @@ Google/GitHub 제공자 등록. 가입 흐름은 **기존 폼 가입과 동등**
 | Step 5.9 ✅ | 태그 기반 검색 스코프(엄격 필터 + sqlite 후보확대 보정) | 업로드 다중 태그·채팅 태그 선택·백엔드별 엄격 필터·프리릴리즈 수동 초기화 런북 |
 | Step 5.10 ✅ | sqlite-vec 운영 DB 분리(최소 변경) | 운영 SQLite(`memory.db`)와 벡터 SQLite(`vector.db`)를 분리, DataSource/JdbcTemplate 2세트 구성, 무중단 롤백 스위치 |
 
-### Step 5.1 — VectorStoreProvider 추상화 계층 도입 ✅ 완료
+### Step 5.1~5.8 — 백엔드 추상화 + sqlite-vec 구현 ✅ 완료
 
-Chroma 결합을 `VectorStoreProvider`(search/searchBatch/add/deleteByDocIds) 인터페이스 뒤로 이전한 **동작 변화 없는 순수 리팩토링**. `VectorStoreFacade`는 provider만 주입받고 SAFE_VERSION 검증은 facade에 유지. 호출부(`RetrievalService`·`DocumentIndexer`) 시그니처 불변.
+- **5.1** Chroma 결합을 `VectorStoreProvider`(search/searchBatch/add/deleteByDocIds) 인터페이스 뒤로 이전 — 동작 변화 없는 순수 리팩토링, 호출부 시그니처 불변.
+- **5.2** sqlite-jdbc `load_extension()`으로 운영자 제공 `vec0` 바이너리 로드(신규 의존성 0, 공식 Maven 아티팩트 없음). `SqliteVecVerifier`가 기동 시 `vec_version()` 확인 후 fail-fast.
+- **5.3** `vec0` 차원이 DDL 상수라 Flyway 대신 시작 시 동적 `IF NOT EXISTS` DDL. 벡터(`vec_embeddings`)와 텍스트·메타(`vec_document_chunks`)를 분리해 `spring_doc_id`로 JOIN. `app.embedding.dimensions` 미설정 시 fail-fast.
+- **5.4** `SqliteVecVectorStoreProvider`: version을 vec0 partition key로 KNN 내부 필터링(한 쿼리로 topK), cosine 거리→유사도 변환(Chroma와 동일 스케일). vec0가 upsert 미지원이라 add는 DELETE 후 INSERT.
+- **5.5** `VectorStoreProviderConfig`가 `app.vectorstore.type`으로 provider 택일(chroma 기본). Chroma 전용 빈은 `@ConditionalOnProperty`로 가드, 두 모드 모두 `VectorStoreProvider` 빈 정확히 1개.
+- **5.6** `chroma` 서비스를 compose profile로 분리, `depends_on.required:false`로 sqlite-vec 모드에서 무-Chroma 기동.
+- **5.7** 백엔드 전환 = 재인덱싱(원본 보존이라 무손실). `SqliteVecIntegrationTest`(vec0 바이너리 없으면 skip)로 add→search→delete E2E 검증.
+- **5.8** `AdminService`가 `ChromaApi` 전용이라 sqlite-vec 모드에서 청크 브라우징이 비어 있던 문제를 `VectorStoreAdminView`로 해결 — 백엔드 공통 상태 카드 + 청크 CRUD 패리티(sqlite-vec은 `vec_document_chunks` 직접 조회, 단일 "active version" 개념이 없어 버전별 청크 수로 표시).
 
-### Step 5.2 — sqlite-vec 네이티브 확장 로딩 (운영자 제공 경로) ✅ 완료
+### Step 5.9 — 태그 기반 검색 스코프 ✅ 완료
 
-새 의존성 0 — xerial sqlite-jdbc의 `enable_load_extension`+`load_extension()`으로 운영자 제공 `vec0` 바이너리를 로드(`DataSourceConfig`, sqlite-vec 모드에서만, 작은따옴표 차단). `SqliteVecVerifier`가 기동 시 `vec_version()`로 확인·fail-fast. ※ 공식 Maven fat-jar는 존재하지 않음(확인됨). 엔트리포인트는 보통 불필요.
+업로드 시 다중 태그를 저장하고, 채팅에서 선택한 태그로 **엄격 AND 필터**를 적용(Chroma·sqlite-vec·하이브리드 BM25 공통). 핵심 설계: Spring AI/vec0 모두 배열 포함 연산자가 없어 provider 레이어 태그 push-down이 불가하므로, `RetrievalService.execute()`가 `mergeRrf()` 직후 **Java post-filter**(`TagUtils.parseTagList`로 String/Collection 방어)를 적용하고, 결과 부족 대비 `candidateK`를 선제 확대(`app.search-tag-candidate-multiplier`, 재호출 없음)한다. 태그 소스는 하이브리드 BM25용 `chunk_fts.doc_tags` 컬럼 하나 — 태그 제안 UI(`GET /api/v1/tags`)와 재인덱싱 시 태그 자동복원(`DocumentIndexer.restoreTags`, 동기화 갱신 경로에서 빈 태그로 소실되던 결함 수정) 모두 여기서 조회한다. 프리릴리즈 정책상 스키마 변경(FTS5 `doc_tags` 추가)은 마이그레이션 없이 수동 초기화(OPERATOR_MANUAL §4.6).
 
-### Step 5.3 — sqlite-vec 스키마 초기화 (동적 DDL) ✅ 완료
+### Step 5.10 — sqlite-vec 운영 DB 분리 ✅ 완료
 
-`vec0` 차원이 DDL 상수라 Flyway 대신 시작 시 `IF NOT EXISTS` 동적 DDL 실행. 벡터(`vec_embeddings`)와 텍스트·메타(`vec_document_chunks`, `user_scope` 기본 `'shared'`)를 분리해 `spring_doc_id`로 JOIN. `app.embedding.dimensions` 미설정/0/음수 시 fail-fast(DDL 미실행).
-
-### Step 5.4 — SqliteVecVectorStoreProvider 구현 ✅ 완료
-
-`VectorStoreProvider`의 sqlite-vec 구현체. 벡터는 JSON 텍스트 리터럴(`[v0,v1,...]`)로 `?` 바인딩, version은 vec0 partition key로 KNN 내부 필터(`WHERE embedding MATCH ? AND k=? AND version=?` 한 쿼리로 정확히 topK), cosine 거리→`1-distance` 유사도(Chroma 경로와 동일). add 멱등은 vec0가 `INSERT OR REPLACE` 미지원이라 DELETE 후 INSERT, delete는 두 테이블 동시 삭제. searchBatch는 임베딩 1회 배치 + N 루프 쿼리(SQLite 인메모리라 수 ms).
-
-### Step 5.5 — 백엔드 선택 스위치 (조건부 빈 등록) ✅ 완료
-
-`VectorStoreProviderConfig`가 `@ConditionalOnProperty(app.vectorstore.type)`로 provider 택일(chroma `matchIfMissing=true`). Chroma 전용 빈(`ChromaConfig`/`VectorStoreRegistry`/`ChromaHealthChecker`/`VectorStoreWarmup`) 가드. ⚠️ Plan이 누락했던 `AdminService`는 `Optional<ChromaApi>`로 변경해 sqlite-vec 모드에서 `/admin` chunk 브라우징을 우아하게 강등(당시 미지원 → **Step 5.8에서 두 백엔드 모두 브라우징 지원으로 보강**). 두 모드 모두 `VectorStoreProvider` 빈 정확히 1개.
-
-### Step 5.6 — 설정 외부화 (.env / docker-compose) ✅ 완료
-
-`chroma` 서비스를 compose `profiles: ["chroma"]`로 분리. ⚠️ `app`의 `depends_on`에 **`required: false`**(Compose 2.20.2+)를 더해 sqlite-vec 모드(`docker compose up`)에서 무-Chroma 기동. `VECTORSTORE_TYPE`/`SQLITE_VEC_*` env 외부화(Step 5.2에서 추가), OPERATOR_MANUAL §3.1에 두 모드 운영법 반영.
-
-### Step 5.7 — 데이터 이전 및 통합 검증 ✅ 완료
-
-이전 경로 = **재인덱싱**(`data/documents/` 원본 보존이라 무손실): `VECTORSTORE_TYPE=sqlite-vec` 재시작 → `/admin` 전체 재동기화. `SqliteVecIntegrationTest`(실 vec0 v0.1.9, 바이너리 없으면 skip)로 add→search→searchBatch→delete E2E + 무-Chroma 컨텍스트 로드 검증. ※ docker 무설치 환경이라 `docker compose up` 실측·운영 데이터 정성 비교는 운영 인수.
-
-### Step 5.8 — 관리자 페이지 백엔드 가시성 보강 (sqlite-vec) ✅ 완료
-
-기존 `/admin`은 `AdminService`가 `ChromaApi`에만 의존해 sqlite-vec 모드에서 상태·청크 브라우징이 빈 목록으로 강등됐다. 두 백엔드 공통으로 보강:
-
-- **상태 카드**: `VectorStoreAdminView`(record) 신규. `AdminService`에 `JdbcTemplate`·`AppProperties`·`ObjectMapper` 주입 + `vectorStoreView()` — 활성 백엔드를 `props.vectorStoreSafe().type()`로 판별(chroma=컬렉션 집계·문서수 unknown(-1) / sqlite-vec=`vec_document_chunks` COUNT·DISTINCT doc_id·`GROUP BY version`·`vec_version()`·차원). `AdminController.adminPage`에 `vectorStore` 모델 속성, `admin.html`에 "Vector Store 상태" 카드(공통), Chroma 불가 배너는 `isChroma()` 가드.
-- **청크 브라우징 패리티**: `listCollections`/`getChunks`/`countChunks`/`getChunk`/`deleteChunk`/`updateChunk`를 `isSqliteVec()` 분기로 확장 — sqlite-vec에선 "collection"=version으로 해석해 `vec_document_chunks`(content·metadata JSON)를 조회. 삭제는 `vec_document_chunks`+`vec_embeddings` 두 테이블 동기, 수정은 content/metadata만(벡터 보존, Chroma와 동일 정책). `admin.html` 좌측 패널 백엔드 공통화(라벨·collection 식별자 `IS_SQLITE_VEC` 분기).
-- **검증**: `AdminServiceTest` 7건(백엔드별 집계·`listCollections`·두 테이블 삭제) + `AdminControllerWebMvcTest` 2건(`/admin` chroma·sqlite-vec 실제 렌더 — 컨트롤러 배선 + Thymeleaf 조건부 회귀 보호). 전체 299 tests BUILD SUCCESS(회귀 0, sqlite 통합 2건 skip).
-
-> ⚠️ sqlite-vec엔 단일 "active version" 개념이 없어(버전 = vec0 partition key) 상태를 버전별 청크 수로 표현. `vec_document_chunks`/`vec_version()`은 sqlite-vec 모드에서만 존재하므로 sqlite-vec 쿼리는 백엔드 분기 안에서만 실행(+ try/catch 안전 강등).
-
-### Step 5.9 — 태그 기반 검색 스코프 (엄격 필터 + sqlite 후보확대 보정) ✅ 완료
-
-**목표**: 문서 등록 시 다중 태그를 저장하고, 채팅 시 선택한 태그에 해당하는 문서만 검색 대상에 포함한다. 기본 원칙은 **엄격 필터(strict filter)**이며, 벡터 검색 + 하이브리드 키워드 검색(BM25) 모두 동일한 태그 조건을 적용한다. sqlite-vec은 결과 부족을 막기 위해 **후보확대 보정(candidate expansion)**을 함께 적용한다.
-
-**적용 범위**:
-- 업로드 UI/API: 다중 태그 입력/검증/저장
-- 채팅 UI/API: 다중 태그 선택 전달
-- 인덱싱: 청크 메타데이터에 태그 저장
-- 검색: Chroma/sqlite-vec + 하이브리드(BM25) 모두 태그 엄격 필터 적용
-- 운영: 프리릴리즈 기준 데이터 마이그레이션 없이 수동 초기화 후 재구성
-
-**전제 (프리릴리즈 데이터 정책)**:
-- 정식 릴리즈 전이므로 DB/레지스트리 마이그레이션 스크립트는 작성하지 않는다.
-- 기존 데이터는 수동 삭제 후 신규 인덱싱으로 전환한다.
-- 초기화 대상: `data/memory.db`(+ `data/memory.db-wal`, `data/memory.db-shm`), `data/documents/`, `data/converted/`, `data/images/`, `data/chroma/`(chroma 사용 시), `data/audit/`(선택).
-- 초기화 후 `/setup`(no-auth) 또는 관리자 계정 생성 → 문서 재업로드/재동기화.
-
-**설계 결정**:
-- 태그 매칭 기본: `AND` (선택 태그 모두 포함된 청크만 허용)
-- 옵션: `OR` 모드(설정/파라미터) 추가 가능하되 1차는 `AND` 고정으로 출시
-- 태그 미선택 시 기존과 동일하게 version-only 검색
-- 태그 정규화: 소문자, trim, 중복 제거, 공백 태그 제거, 최대 10개/태그당 32자
-- 후보확대 책임: `RetrievalService` 단일 레이어에서 `candidateK`를 계산/확대하고, provider는 전달된 `candidateK` 범위 내 조회만 수행
-- **태그 필터 레이어**: `VectorStoreProvider`/`VectorStoreFacade`/`RagService` 인터페이스는 **변경하지 않는다**. Spring AI `FilterExpressionBuilder`는 배열 포함(containment) 연산자 미제공, vec0 KNN은 파티션 키(version)만 지원 — 두 백엔드 모두 provider 레이어에서 태그 push-down이 불가하다. 태그는 검색 결과 metadata에 이미 포함돼 반환되므로 `RetrievalService.execute()` 내 `mergeRrf()` 직후·최종 cut 직전에 Java post-filter를 적용한다.
-- **메타데이터 타입 방어**: `image_paths`와 동일하게, Chroma는 `List<String>` metadata를 버전에 따라 `String` 또는 `Collection<?>` 중 하나로 반환한다. `RetrievalService`에 `parseTagList(Object raw)` 유틸리티 메서드(String/Collection/null 방어 처리)를 추가하고 필터 로직 전반에서 사용한다.
-- **후보확대 전략**: 태그 선택 시 **선제 확대(fetch-more-upfront)** — 임베딩은 provider 내부에서 계산되므로 "provider 재호출"은 LLM API 재호출을 의미한다. 재호출 없이 처음부터 더 큰 `candidateK`로 요청하고, 그래도 topK 미달이면 가능한 결과만 반환한다. 새 속성 `app.search-tag-candidate-multiplier`(기본값 2)로 배수 제어.
-
-**세부 작업**:
-1. 도메인/모델 확장
-  - `MetaKey`에 `TAGS` 상수 추가.
-  - `ChatForm`, `ChatRequest`, `AgentState`에 `selectedTags` 필드 추가.
-  - 인덱싱 요청 모델(`IndexRequest`)에 `tags` 추가.
-  - 인덱싱 경로 시그니처 확장: `RagService.indexDocument()`에 `List<String> tags` 추가 → `IndexRequest.single()` factory method에 tags 전달.
-  - ⚠️ `VectorStoreProvider`/`VectorStoreFacade`/`RagService` search 시그니처 및 `KeywordSearchRepository.search()` 시그니처는 **변경하지 않는다**(태그 필터는 RetrievalService post-filter로 단일화 — 설계 결정 참조).
-
-2. 문서 업로드(다중 태그 입력)
-  - `documents.html` 업로드 카드에 태그 입력 추가(쉼표 구분 또는 chips).
-  - `/ui/documents/upload`, `/api/v1/documents`에 `tags` 파라미터 추가.
-  - 서버측 검증 실패 시 400(형식 오류)/422(정책 위반)로 일관 처리.
-
-3. 인덱싱 메타데이터 저장
-  - `DocumentIndexer.tagMetadata(...)`에서 청크 metadata에 `tags` 저장.
-  - Chroma/sqlite-vec 모두 동일한 metadata 구조를 사용(backend-neutral).
-  - `DocRegistry`는 마이그레이션 없이 유지(태그는 벡터 청크 metadata 기준).
-
-4. 채팅 태그 선택 UI/전달
-  - `chat.html` 입력 바에 태그 선택 UI 추가.
-  - 선택 태그를 hidden input으로 `/ui/chat`, `/ui/chat/stream`, `/api/v1/chat`에 전달.
-  - 스레드 단위 마지막 선택값 유지 여부는 1차에서 비적용(요청 단위 처리).
-
-5. 검색 레이어 적용 (엄격 필터 — Java post-filter)
-  - `RetrievalService.execute(state)`: `state.selectedTags()`를 읽어 `mergeRrf()` 직후·최종 cut 직전에 `parseTagList()` 기반 AND 필터 적용. provider/facade/ragService 시그니처는 변경하지 않는다.
-  - Chroma: 검색 결과 metadata에 tags가 반환됨(`List<String>` 또는 `String` — `parseTagList()`로 방어 처리). Java post-filter.
-  - sqlite-vec: version partition KNN 후 JOIN된 `vec_document_chunks.metadata` JSON에 tags 포함됨. Java post-filter.
-  - 하이브리드(BM25): `KeywordSearchRepository`의 FTS5 스키마에 `doc_tags UNINDEXED` 컬럼 추가(프리릴리즈 리셋으로 스키마 재생성). `indexChunks()`에서 쉼표 결합 문자열로 저장, `search()` 반환 metadata에 `MetaKey.TAGS` 포함 → RetrievalService에서 동일 `parseTagList()` 필터 적용(SQL-level WHERE 불필요).
-  - `RetrievalService.execute()` catch 블록 fallback(`ragService.search()` 직접 경로)에도 동일 post-filter 적용(누락 시 fallback에서 태그 우회 발생).
-
-6. 후보확대 보정 (전 백엔드 공통)
-  - `RetrievalService`에서 `selectedTags`가 비어있지 않으면 `candidateK` 계산 직후 `app.search-tag-candidate-multiplier`(기본값 2) 적용: `candidateK = max(candidateK, defaultTopK * tagCandidateMultiplier)`. provider 호출은 이 확대된 값으로 **한 번만** 수행한다(선제 확대, 재호출 없음).
-  - provider 내부에 별도 재조회 루프를 구현하지 않는다(이중 확대 방지). Chroma·sqlite-vec 모두 동일 규칙.
-  - 후보 확대 후에도 post-filter 결과가 topK 미달이면 가능한 결과만 반환(무필터 폴백 금지).
-  - 로그에 `selectedTags 수`, `candidateK`, `post-filter 후 결과 수`를 남겨 운영 튜닝 근거 확보.
-
-7. 테스트
-  - 단위: 태그 정규화/검증, AND 필터 일치, 빈 태그 경로 회귀.
-  - `parseTagList()` 단위: `String`, `Collection<String>`, `null`, JSON 배열 문자열 입력 모두 방어 처리 검증.
-  - `RetrievalService` catch 블록 fallback 경로에서 태그 필터가 적용됨을 검증.
-  - 백엔드별 통합: Chroma/sqlite-vec에서 태그 미선택/선택 시 검색 결과 검증.
-  - 하이브리드 통합: BM25(`doc_tags` 컬럼 포함 FTS5)에서 태그 미선택/선택 시 동일 필터 의미 검증.
-  - 웹 계층: 업로드/채팅 폼 파라미터 바인딩 + 유효성 실패 코드 검증.
-  - 회귀: 기존 version-only 검색, rerank/hybrid on/off, `selectedTags=[]` 시 동작 불변 확인.
-
-8. 운영 절차 문서화 (프리릴리즈)
-  - `OPERATOR_MANUAL.md`에 "Step 5.9 적용 전 수동 초기화 절차" 추가.
-  - "초기화 → 재기동 → 재업로드/동기화 → 태그 필터 검증" 체크리스트 포함.
-  - 데이터 보존 미보장(프리릴리즈) 고지 문구 명시.
-
-**완료 기준**:
-- [x] 문서 업로드에서 다중 태그를 저장할 수 있다. (`/ui/documents/upload`·`/api/v1/documents` `tags` 파라미터 → 청크 metadata `tags`)
-- [x] 채팅에서 태그 선택 시 선택 태그 문서만 검색 근거로 사용된다(엄격 AND 필터).
-- [x] 하이브리드(BM25) 축에서도 태그 엄격 필터가 적용된다. (`chunk_fts.doc_tags` 동행 → 동일 post-filter)
-- [x] sqlite-vec에서 태그 필터로 인한 결과 부족 시 후보확대 보정이 동작한다. (전 백엔드 공통 `app.search-tag-candidate-multiplier`)
-- [x] 태그 미선택 요청은 기존 결과와 의미적으로 동일하다. (`selectedTags=[]` pass-through, 회귀 테스트)
-- [~] Chroma/sqlite-vec 두 백엔드에서 테스트가 통과한다. — 필터는 RetrievalService post-filter라 **백엔드 불가지론**(반환 Document metadata 기준)이며 단위 테스트로 검증. 라이브 백엔드 통합(Chroma 서버/vec0 바이너리)은 운영 인수.
-- [x] 마이그레이션 없이 수동 초기화 절차가 운영 문서에 반영되어 있다. (OPERATOR_MANUAL §4.6)
-
-> **구현 메모 (2026-06-30)**:
-> - **모델/상태**: `MetaKey.TAGS`, `TagUtils`(정규화·검증·`parseTagList` 방어·AND 매칭) 신규. `ChatForm.tags`/`ChatRequest.selectedTags`/`AgentState.selectedTags`/`IndexRequest.tags` 추가. `VectorStoreProvider`/`Facade`/`RagService.search*`/`KeywordSearchRepository.search()` **시그니처 불변**(설계대로).
-> - **인덱싱**: `DocumentIndexer.tagMetadata`가 청크 metadata에 `tags`(쉼표 결합, image_paths 컨벤션) 저장. 두 백엔드 공통 metadata.
-> - **검색**: `RetrievalService.execute()`가 `mergeRrf()` 직후·cut 직전에 `filterByTags()`(AND, `TagUtils.parseTagList` 방어) 적용. catch fallback 경로도 동일 필터. 태그 선택 시 `candidateK = max(candidateK, topK × tagMultiplier)` 선제 확대(재호출 없음). BM25는 `doc_tags UNINDEXED` 컬럼으로 태그를 결과 metadata에 동행시켜 동일 post-filter 적용.
-> - **UI/검증**: `documents.html`·`chat.html` 태그 입력(+i18n), 업로드 FormData·채팅 폼 전달. 업로드는 `TagUtils.parseCsv` 정책 검증(위반 시 400). 단위 테스트 `TagUtilsTest`(7) + `RetrievalServiceTagFilterTest`(4). 전체 310 tests BUILD SUCCESS(회귀 0, sqlite 통합 2 skip).
-> - ⚠️ **정책 코드 단일화**: 원안은 형식 400/정책 422 구분이었으나 `IllegalArgumentException`(GlobalExceptionHandler→400)으로 통일. 422 세분화는 후속.
-> - ⚠️ **프리릴리즈**: `chunk_fts`에 `doc_tags` 컬럼 추가 = FTS5 스키마 변경. 기존 DB는 마이그레이션 없이 수동 초기화 후 재인덱싱(OPERATOR_MANUAL §4.6).
-
-**후속 — 재인덱싱 태그 복원 ✅ 완료**:
-- 문제: 재인덱싱(↺, `reindexFromMd`)·디렉터리 동기화 갱신(`syncDirectory`→`index(parallel)`) 경로는 태그 입력 UI가 없어 `tagMetadata(..., List.of())`로 **빈 태그**를 넘겨, 재동기화 시 기존 태그가 소실(칩·검색 스코프 붕괴)됐다. 데이터 유실성 회귀로 판단해 후속이 아닌 결함으로 처리.
-- 수정: `DocumentIndexer.restoreTags(priorDocId)` 신규 — 태그는 `chunk_fts.doc_tags`에 이미 있으므로 `KeywordSearchRepository.tagsByDocIds`로 복원(FTS 불가/무이력 시 빈 리스트, no-throw). 삭제로 FTS 행이 지워지기 **전에** 읽는다.
-  - `index()`: `req.tags()`가 비고 **동기화/병렬 경로(`parallelGate != null`)일 때만** 복원(소스 = `staleDocId` 우선, 없으면 `docId`). 대화형 single 업로드는 명시적 태그를 존중 — 빈 태그는 "의도적 clear"로 보고 복원하지 않음.
-  - `reindexFromMd()`: 동일 `docId`에서 복원.
-- 테스트: `DocumentIndexerTest` +2(동기화 갱신 시 staleDocId→신규 docId 태그 복원 / single 재업로드는 자동복원 안 함). 전체 313 tests BUILD SUCCESS.
-
-**후속 — 태그 제안 UI ✅ 완료**:
-- 등록된 태그를 칩으로 노출해 클릭 선택. **소스 = `chunk_fts.doc_tags`**(매 인덱싱마다 채워지고 hybrid 설정·백엔드와 무관) → `KeywordSearchRepository.distinctTags(version)`(정렬·중복 제거, 버전 선택 스코프) → `RagService.listTags` → `GET /api/v1/tags?version=`.
-- 업로드(`documents.html`): 전체 태그 칩 → 클릭 시 입력칸에 추가(업로드 후 갱신). 채팅(`chat.html`): **버전 스코프** 태그 칩 → 클릭 토글로 검색 범위 좁힘(버전 변경 시 재로딩). 입력값↔칩 활성 상태 동기화.
-- 테스트: `KeywordSearchRepositoryTest.distinctTags`(실 FTS5).
-
-### Step 5.10 — sqlite-vec 운영 DB 분리(최소 변경 설계안) ✅ 완료
-
-**배경**:
-- 현재 sqlite-vec 모드에서도 운영 데이터와 벡터/FTS 데이터가 동일 `memory.db`를 공유한다.
-- 인덱싱(write-heavy)과 운영성 트랜잭션(대화/사용량/인증)이 같은 WAL/체크포인트 경로에서 경합해, 락 대기·지연·복구 범위가 함께 커진다.
-
-**목표**:
-- 운영 DB(`memory.db`)와 벡터 DB(`vector.db`)를 분리해 장애 격리·성능 간섭 완화·백업/복구 유연성을 확보한다.
-- Chroma 경로에는 영향 없이, sqlite-vec 경로에만 최소한의 코드 변경으로 적용한다.
-
-**설계 원칙(최소 변경)**:
-1. 분리 대상은 sqlite-vec 관련 테이블(`vec_embeddings`, `vec_document_chunks`, `chunk_fts`)로 한정한다.
-2. 운영성 테이블(대화/인증/사용량/메타)은 기존 `memory.db` 유지한다.
-3. 서비스/도메인 시그니처는 유지하고, 주입 계층(DataSource/JdbcTemplate)만 분기한다.
-4. 실패 시 즉시 원복 가능한 feature switch를 둔다.
-5. **쓰기 순서 고정(파일 간 원자성 부재 대응)**: 인덱싱은 항상 *벡터/FTS(vector.db) 먼저 → `DocRegistry.save()`(memory.db) 마지막* 순서로 커밋한다. 크래시 시 부분 실패가 "재인덱싱이 덮어쓸 고아 벡터"로 남게 하고, "레지스트리는 성공인데 벡터 없음"(=검색 시 조용한 빈 결과)은 만들지 않는다. ※ 현재 `index()`/`reindexFromMd()`가 이미 vectorStore.add → keywordRepo.indexChunks → docRegistry.put/save 순서이므로 **순서 재배치 불필요**, DB 분리 후에도 이 순서를 회귀 없이 유지하는 것이 핵심.
-
-**구현 범위**:
-1. **설정 추가**
-  - `app.vectorstore.sqlite-vec.db-path` (기본: `${DATA_DIR}/vector.db`)
-  - `.env.example.sqlite`에 `SQLITE_VEC_DB_PATH` 추가
-2. **빈 분리**
-  - `@Primary` 운영 `DataSource`/`JdbcTemplate`는 기존 `memory.db` 유지
-  - sqlite-vec 전용 `DataSource`/`JdbcTemplate`를 별도 이름으로 추가(`vectorDataSource`, `vectorJdbcTemplate`)
-  - sqlite-vec extension load(`load_extension`)는 전용 DataSource에만 적용
-  - ⚠️ **PRAGMA/풀 설정 복제 필수**: 전용 `vectorDataSource`도 운영 DataSource와 동일하게 **pool=1(CLAUDE.md 제약) + WAL + `busy_timeout`**를 복제한다. `DataSourceConfig.configureSqliteVec()`가 이미 `connectionInitSql`로 `load_extension`을 걸므로, 벡터 DataSource에는 여기에 WAL/busy_timeout PRAGMA까지 함께 적용(단일 statement 제약에 주의 — 필요 시 `connection-init-sql` 대신 URL 파라미터/별도 초기화). 운영 DataSource에서 sqlite-vec 확장 로딩은 **제거**(더 이상 memory.db에 vec0 불필요).
-3. **주입 전환(최소 세트)**
-  - `SqliteVecSchemaInitializer`, `SqliteVecVerifier`, `SqliteVecVectorStoreProvider`를 `vectorJdbcTemplate`로 전환. 이들은 이미 sqlite-vec 조건부 빈이라 chroma 모드엔 존재하지 않음 → 무영향.
-  - ⚠️ **`KeywordSearchRepository`의 이중 백엔드 처리(핵심 갭)**: `chunk_fts`(하이브리드 BM25 + Step 5.9 태그 제안/복원)는 **두 백엔드 모두** 사용한다. chroma 모드엔 `vector.db`/`vectorJdbcTemplate`가 없으므로 "항상 vectorJdbcTemplate 주입"은 성립하지 않는다. 해결: **`vectorJdbcTemplate` 빈을 두 모드 모두에서 정의**하되, sqlite-vec 모드 → `vector.db`, chroma 모드 → 운영 `memory.db`(사실상 `@Primary` 별칭)를 가리키게 한다. `KeywordSearchRepository`는 `@Qualifier("vectorJdbcTemplate")`로 고정 주입 → chroma 모드에선 `chunk_fts`가 그대로 `memory.db`에 남아 회귀 0, sqlite-vec 모드에선 `vector.db`로 이동.
-  - 운영성 Repository/Service는 기존 `@Primary JdbcTemplate` 유지.
-4. **운영 가드**
-  - sqlite-vec 모드에서 `vector.db` 경로 미설정/생성 실패 시 fail-fast
-  - `/admin` 상태 카드에 운영 DB/벡터 DB 경로를 분리 표기(오인 방지)
-  - 스키마 초기화 시 memory.db에 남은 구(舊) `vec_*`/`chunk_fts` 잔존 테이블은 프리릴리즈 수동 초기화로 정리(자동 이관 없음).
-
-**장점**:
-- 인덱싱 I/O와 운영 트랜잭션 분리로 락 경합 및 지연 전파 감소
-- 백업 정책 분리(운영 DB 고주기, 벡터 DB 저주기/재생성 전제)
-- 벡터 DB 재구축/초기화 시 운영 데이터 영향 최소화
-
-**트레이드오프/주의점**:
-- DB 파일 2개(+ `-wal`, `-shm`) 운영 복잡도 증가
-- 파일 간 트랜잭션 원자성은 보장되지 않음 → **보상 로직 대신 쓰기 순서(설계 원칙 5)로 대응**: 벡터/FTS 먼저 커밋, 레지스트리 마지막. 고아 벡터는 재인덱싱이 덮어쓰므로 허용, 역방향(레지스트리 성공+벡터 없음)은 금지.
-- 백업/복구 시 두 파일의 정합성 시점 불일치 가능 → 런북에 백업 순서(벡터 DB 먼저 스냅샷 후 운영 DB) 및 복구 후 재인덱싱 옵션 명시.
-- 배포/복구 런북 업데이트 필수(백업 순서, 점검 포인트)
-
-**단계적 적용 순서(권장)**:
-1. 설정/빈 추가 + 기존 경로 유지(기본 동작 불변)
-2. sqlite-vec 구성요소만 `vectorJdbcTemplate`로 전환
-3. 통합 테스트(인덱싱/검색/삭제/태그 제안) + 부하 점검
-4. 운영 인수 시 `vector.db` 분리 활성화
-
-**완료 기준**:
-- sqlite-vec 모드에서 `memory.db`는 운영 테이블만, `vector.db`는 벡터/FTS 테이블만 보유
-- 기존 API/화면 동작 회귀 0(채팅/문서관리/태그 제안/태그 복원)
-- **chroma 모드에서 `chunk_fts`가 `memory.db`에 그대로 남고 하이브리드/태그 제안이 회귀 0**(`vectorJdbcTemplate` = 운영 템플릿 별칭)
-- 벡터 DB 삭제/재생성 후 운영 데이터 보존 + 재인덱싱으로 복구 가능(쓰기 순서 원칙으로 "레지스트리 성공+벡터 없음" 상태 미발생)
-- 전용 `vectorDataSource`가 pool=1/WAL/busy_timeout을 복제하고, 운영 DataSource에서 vec0 로딩이 제거됨
-- `VECTORSTORE_TYPE=chroma` 경로 무영향
-
-> **구현 메모 (2026-07-01)**:
-> - **feature switch**: `app.vectorstore.sqlite-vec.db-path`(`SQLITE_VEC_DB_PATH`). 빈값(기본) → 기존과 동일(벡터/FTS 테이블이 memory.db). 값 지정(+ `type=sqlite-vec`) → 분리 활성. 즉시 원복 = 값 비우기. 원안은 기본 `${DATA_DIR}/vector.db`였으나 "기본 동작 불변 + opt-in 롤아웃" 원칙에 맞춰 **기본 빈값**으로 조정.
-> - **DataSourceConfig**: `dataSource()`에 `@Primary` + poolName `memory-db`, 분리 시 memory.db에서 vec0 로딩 제거. `vectorDataSource`(분리 시에만, `@ConditionalOnExpression`) = vector.db + pool=1 + vec0. `vectorJdbcTemplate` 빈은 **두 모드 모두 정의**(분리 시 vector.db / 그 외 memory.db 별칭) — 상호배타 `@ConditionalOnExpression`로 정확히 1개. 커넥션 안 여는 정적 빌더 `buildVectorHikariConfig` 분리(단위 테스트).
-> - **주입 전환(`@Qualifier("vectorJdbcTemplate")`)**: `SqliteVecSchemaInitializer`·`SqliteVecVerifier`·`SqliteVecVectorStoreProvider`(via `VectorStoreProviderConfig`)·`KeywordSearchRepository`(chunk_fts) + ⚠️ **`AdminService`(플랜 누락분 — `vec_document_chunks`/`vec_version()` 조회)**. chroma 모드에선 모두 memory.db 별칭이라 회귀 0.
-> - **PRAGMA 복제**: `SqliteVecSchemaInitializer.init()`이 DDL 전에 `PRAGMA journal_mode=WAL`+`busy_timeout=5000` 적용(전용 vector.db 커넥션은 `SqliteMemoryRepository`와 별도라 자체 설정 필요). 차원 fail-fast는 PRAGMA/DDL **이전**에 수행(오설정 시 무-실행 계약 유지).
-> - **쓰기 순서(원자성)**: 현재 `index()`/`reindexFromMd()`가 이미 벡터→FTS→레지스트리 순서라 재배치 불필요. 분리 후에도 이 순서 유지가 "레지스트리 성공+벡터 없음" 방지의 핵심.
-> - **/admin**: `VectorStoreAdminView`에 `operationalDbPath`/`vectorDbPath` + `isDbSeparated()` 추가, `admin.html`에 "운영 DB/벡터 DB" 경로·"분리됨" 배지 표기(오인 방지).
-> - **검증**: `DataSourceConfigTest` +3(정적 빌더 pool=1/vec0 로드 / 기본 모드 `vectorJdbcTemplate`=운영 별칭·`vectorDataSource` 부재 회귀 가드 / **실 다운스트림 소비자 `KeywordSearchRepository`가 `@Qualifier` 배선으로 memory.db에 chunk_fts 생성** — 기본 경로 E2E). 컨텍스트 러너 기반 3개 sqlite-vec 테스트는 신규 빈 이름(`vectorJdbcTemplate`)으로 갱신. `SqliteVecSeparateDbIntegrationTest` 신규(3, `-Dsqlitevec.path` 게이트) — **벡터/FTS 테이블이 vector.db에만 있고 memory.db엔 없음**(물리적 분리)·전용 DataSource 배선·add→search→delete E2E. 전체 **319 tests BUILD SUCCESS**(회귀 0, vec0 라이브 통합 5 skip).
-> - ⚠️ **운영 인수**: 실제 vec0 바이너리로 분리 부팅(`SqliteVecSeparateDbIntegrationTest`가 2파일 생성·물리 분리·E2E를 자동 검증하지만 vec0 미보유 환경에선 skip)·WAL 확인·백업 순서 런북은 운영 인수 대상.
-> - ⚠️ **알려진 한계(비회귀)**: `busy_timeout`은 커넥션 단위 설정이라 Hikari 커넥션 재생성(기본 maxLifetime) 시 초기화됨 — pool=1·단일 라이터라 영향 미미하고 memory.db의 기존 동작과 동일. WAL은 파일 단위라 재생성과 무관하게 유지.
-
-**범위 제외 (후속)**:
-- 자유 입력 자동완성(typeahead) — 현재는 칩 선택만
-- 문서별 태그 수정 UI(인덱싱 후 편집)
-- AND/OR 사용자 전환 토글
-- 기존 데이터 자동 마이그레이션
+`app.vectorstore.sqlite-vec.db-path`(`SQLITE_VEC_DB_PATH`) 설정 시 벡터/FTS 테이블(`vec_embeddings`/`vec_document_chunks`/`chunk_fts`)을 별도 `vector.db`로 분리해 인덱싱 I/O와 운영 트랜잭션의 락 경합을 줄인다(기본값 빈 문자열 = 분리 비활성, 기존과 동일). `vectorJdbcTemplate` 빈을 **두 모드 모두 정의**(분리 시 `vector.db` / 그 외 `memory.db` 별칭)해 `KeywordSearchRepository` 등 소비자 코드가 무변경으로 양쪽에 대응, Chroma 경로는 완전 무영향. 파일 간 트랜잭션 원자성이 없으므로 인덱싱은 항상 *벡터/FTS 먼저 → 레지스트리 마지막* 순서로 커밋해 "레지스트리는 성공인데 벡터 없음" 상태를 방지(고아 벡터는 재인덱싱이 덮어쓰므로 허용). 전용 DataSource도 pool=1+WAL+busy_timeout을 동일 복제.
 
 ---
 

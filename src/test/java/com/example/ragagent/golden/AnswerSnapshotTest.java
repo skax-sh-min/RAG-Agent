@@ -9,6 +9,7 @@ import com.example.ragagent.model.ChatResponse;
 import com.example.ragagent.model.SourceRef;
 import com.example.ragagent.service.AgentService;
 import com.example.ragagent.service.ClassifierService;
+import com.example.ragagent.service.ConversationSummarizerService;
 import com.example.ragagent.service.MemoryService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -49,12 +50,13 @@ class AnswerSnapshotTest {
         AgentGraph agentGraph = mock(AgentGraph.class);
         MemoryService memory = mock(MemoryService.class);
         ClassifierService classifier = mock(ClassifierService.class);
+        ConversationSummarizerService summarizer = mock(ConversationSummarizerService.class);
 
         when(memory.getHistory(any(), any())).thenReturn("");
         when(classifier.classifyOnly(any(), any())).thenReturn(c.given().questionType());
         when(agentGraph.run(any())).thenReturn(buildAgentState(c));
 
-        AgentService service = new AgentService(agentGraph, memory, classifier);
+        AgentService service = new AgentService(agentGraph, memory, classifier, summarizer);
 
         ChatResponse resp = service.chat(ThreadContext.anonymous("t1"), new ChatRequest(
                 c.question(), c.version(), "t1", RoutingMode.valueOf(c.routingMode())));

@@ -20,6 +20,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -38,6 +39,7 @@ class AgentServiceTest {
     private AgentGraph agentGraph;
     private MemoryService memoryService;
     private ClassifierService classifierService;
+    private ConversationSummarizerService summarizerService;
     private AgentService service;
 
     private static final ThreadContext CTX = ThreadContext.anonymous("t1");
@@ -47,7 +49,8 @@ class AgentServiceTest {
         agentGraph = mock(AgentGraph.class);
         memoryService = mock(MemoryService.class);
         classifierService = mock(ClassifierService.class);
-        service = new AgentService(agentGraph, memoryService, classifierService);
+        summarizerService = mock(ConversationSummarizerService.class);
+        service = new AgentService(agentGraph, memoryService, classifierService, summarizerService);
     }
 
     private AgentState fullResult() {
@@ -197,5 +200,47 @@ class AgentServiceTest {
         service.chat(CTX, new ChatRequest("q", "v1", "t2", RoutingMode.COST_FIRST));
 
         assertThat(callCount.get()).isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("§6.10 — summarizerService.buildContext() 가 값을 반환하면 그것을 history 로 사용 (getHistory 폴백 안 함)")
+    void chat_usesPrecomputedSummaryContext_whenAvailable() {
+        when(summarizerService.buildContext(anyString(), eq("t1"))).thenReturn("[Conversation Summary]\n요약본");
+        when(classifierService.classifyOnly(any(), any())).thenReturn("manual");
+        when(agentGraph.run(any())).thenReturn(fullResult());
+
+        service.chat(CTX, new ChatRequest("질문", "v1", "t1", RoutingMode.COST_FIRST));
+
+        ArgumentCaptor<AgentState> captor = ArgumentCaptor.forClass(AgentState.class);
+        verify(agentGraph).run(captor.capture());
+        assertThat(captor.getValue().conversationHistory()).isEqualTo("[Conversation Summary]\n요약본");
+        verify(memoryService, never()).getHistory(anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("§6.10 — summarizerService.buildContext() 가 null 이면 memoryService.getHistory() 로 폴백")
+    void chat_fallsBackToRawHistory_whenNoSummaryCached() {
+        when(summarizerService.buildContext(anyString(), eq("t1"))).thenReturn(null);
+        when(memoryService.getHistory(anyString(), eq("t1"))).thenReturn("원본 히스토리");
+        when(classifierService.classifyOnly(any(), any())).thenReturn("manual");
+        when(agentGraph.run(any())).thenReturn(fullResult());
+
+        service.chat(CTX, new ChatRequest("질문", "v1", "t1", RoutingMode.COST_FIRST));
+
+        ArgumentCaptor<AgentState> captor = ArgumentCaptor.forClass(AgentState.class);
+        verify(agentGraph).run(captor.capture());
+        assertThat(captor.getValue().conversationHistory()).isEqualTo("원본 히스토리");
+    }
+
+    @Test
+    @DisplayName("§6.10 — 새 turn 저장 후 summarizerService.invalidate() 호출")
+    void chat_invalidatesSummaryCache_afterNewTurnPersisted() {
+        when(memoryService.getHistory(any(), any())).thenReturn("");
+        when(classifierService.classifyOnly(any(), any())).thenReturn("manual");
+        when(agentGraph.run(any())).thenReturn(fullResult());
+
+        service.chat(CTX, new ChatRequest("질문", "v1", "t1", RoutingMode.COST_FIRST));
+
+        verify(summarizerService, times(1)).invalidate("t1");
     }
 }

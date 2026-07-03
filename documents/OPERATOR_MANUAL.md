@@ -139,6 +139,11 @@ rag_java/
 2. Docker: `docker-compose.yml`의 `app.volumes`에서 바이너리 마운트 주석을 해제하고 `SQLITE_VEC_EXTENSION_PATH=/opt/sqlite-vec/vec0`(suffix 생략)로 지정합니다. 로컬 실행 시엔 호스트 절대경로를 지정합니다.
 3. `EMBED_*` 임베딩 모델의 **벡터 차원수**를 `app.embedding.dimensions`(예: 1536)로 반드시 설정합니다 — 미설정 시 기동이 실패합니다.
 
+> **macOS 격리(quarantine) 주의**: 브라우저로 받은 `vec0.dylib`에는 macOS Gatekeeper가 `com.apple.quarantine` 속성을 붙여 서명되지 않은 바이너리의 `dlopen()` 로딩을 차단합니다. 기동 로그에는 `.../vec0.dylib.dylib`처럼 확장자가 중복된 경로 실패로 보이지만(SQLite가 첫 시도 실패 후 플랫폼 접미사를 다시 붙여 재시도하는 흔적일 뿐, 진짜 원인 아님) 근본 원인은 격리 플래그입니다. 아키텍처(`file`/`lipo -info`로 arm64/x86_64 확인)가 맞는데도 로딩이 실패하면 다음으로 해제하세요:
+> ```bash
+> xattr -d com.apple.quarantine <vec0.dylib 경로>
+> ```
+
 > **백엔드 전환 = 재인덱싱**: chroma ↔ sqlite-vec 간 벡터는 공유되지 않습니다. 전환 후 문서 재업로드(또는 재동기화)로 재인덱싱해야 합니다 — 원본은 `data/documents/`에 보존됩니다. `/admin` 페이지는 **두 백엔드 모두** 상태 카드·청크 조회/편집/삭제를 제공합니다(§7).
 
 ---
@@ -515,6 +520,7 @@ mvn spring-boot:run
 
 > Windows 로컬 예시 경로는 `.env.example.sqlite`의 `SQLITE_VEC_EXTENSION_PATH=./lib/win64/vec0.dll`를 참고하세요.
 > 운영 환경에서는 실제 vec0 바이너리 위치로 변경해야 하며, 시작 로그에서 vec0 로딩 성공(`vec_version()`)을 확인하세요.
+> macOS에서 `dlopen` 실패로 기동이 안 되면 §3.1의 "macOS 격리(quarantine) 주의" 참조.
 
 ---
 

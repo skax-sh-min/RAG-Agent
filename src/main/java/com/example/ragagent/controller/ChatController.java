@@ -6,6 +6,7 @@ import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.model.*;
 import com.example.ragagent.service.AgentService;
+import com.example.ragagent.service.ConversationSummarizerService;
 import com.example.ragagent.service.MemoryService;
 import com.example.ragagent.service.StreamingAgentService;
 import com.example.ragagent.service.ThreadMetaService;
@@ -16,6 +17,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.MessageSource;
 import org.springframework.context.i18n.LocaleContextHolder;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Controller;
@@ -26,6 +28,7 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
+import java.util.Locale;
 import java.util.UUID;
 
 /**
@@ -40,6 +43,7 @@ public class ChatController {
     private final StreamingAgentService streamingAgentService;
     private final ThreadMetaService threadMetaService;
     private final MemoryService memoryService;
+    private final ConversationSummarizerService summarizerService;
     private final AppProperties props;
     private final LlmRouter llmRouter;
     private final MessageSource messageSource;
@@ -48,6 +52,7 @@ public class ChatController {
                           StreamingAgentService streamingAgentService,
                           ThreadMetaService threadMetaService,
                           MemoryService memoryService,
+                          ConversationSummarizerService summarizerService,
                           AppProperties props,
                           LlmRouter llmRouter,
                           MessageSource messageSource) {
@@ -55,6 +60,7 @@ public class ChatController {
         this.streamingAgentService = streamingAgentService;
         this.threadMetaService = threadMetaService;
         this.memoryService = memoryService;
+        this.summarizerService = summarizerService;
         this.props = props;
         this.llmRouter = llmRouter;
         this.messageSource = messageSource;
@@ -91,6 +97,15 @@ public class ChatController {
         String threadId = UUID.randomUUID().toString();
         session.setAttribute("threadId", threadId);
         return "redirect:/chat/" + threadId;
+    }
+
+    /** §6.10 — fired when the user starts typing; runs in the background, never blocks the caller. */
+    @PostMapping("/ui/chat/summary/precompute")
+    @ResponseStatus(HttpStatus.ACCEPTED)
+    public void precomputeSummary(ThreadContext ctx, @RequestParam String threadId) {
+        String userId = ctx.userId();
+        Locale locale = ctx.locale();
+        Thread.ofVirtual().start(() -> summarizerService.precompute(userId, threadId, locale));
     }
 
     @PostMapping(value = "/ui/chat/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
