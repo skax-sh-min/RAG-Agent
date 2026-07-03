@@ -14,6 +14,7 @@ import org.springframework.util.MimeTypeUtils;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
 
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Generates Korean text descriptions for images using a vision-capable LLM.
@@ -24,6 +25,7 @@ import java.util.Map;
 public class VisionDescriptionService {
 
     private static final Logger log = LoggerFactory.getLogger(VisionDescriptionService.class);
+    private static final AtomicBoolean UNSUPPORTED_VISION_LOGGED = new AtomicBoolean(false);
 
     public static final Map<String, String> PROMPTS = Map.of(
             "diagram",    "이 다이어그램을 한국어로 설명하세요. 구성 요소와 흐름을 포함하여 최대 4문장.",
@@ -61,9 +63,32 @@ public class VisionDescriptionService {
                     e.getStatusCode().value(), compactBody(e.getResponseBodyAsString()));
             return "[이미지 설명 생성 오류]";
         } catch (Exception e) {
+            if (isVisionInputUnsupported(e)) {
+                if (UNSUPPORTED_VISION_LOGGED.compareAndSet(false, true)) {
+                    log.warn("Vision model does not support image input (mmproj missing or text-only model). "
+                            + "Falling back to placeholder descriptions.");
+                }
+                return "[이미지 설명 불가: Vision 미지원 모델]";
+            }
             log.error("Vision description failed", e);
             return "[이미지 설명 생성 오류]";
         }
+    }
+
+    private boolean isVisionInputUnsupported(Throwable error) {
+        Throwable cur = error;
+        while (cur != null) {
+            String msg = cur.getMessage();
+            if (msg != null) {
+                String lowered = msg.toLowerCase();
+                if (lowered.contains("image input is not supported")
+                        || lowered.contains("mmproj")) {
+                    return true;
+                }
+            }
+            cur = cur.getCause();
+        }
+        return false;
     }
 
     private static String compactBody(String body) {
