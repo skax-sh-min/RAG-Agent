@@ -24,7 +24,13 @@ import java.util.Set;
 
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.not;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -32,12 +38,13 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 /**
  * QA — OperationsController LLM/embedding usage reporting (§6.6) + inactive-provider
- * filtering (§6.7)
+ * filtering (§6.7) + orphan surfacing/deletion (§6.8)
  *
  * Verifies the embedding pseudo-provider ("embed:&lt;model&gt;", type=EMBEDDING) appears
  * alongside chat providers in all three usage surfaces without disturbing the existing
- * chat provider entries, and that unconfigured chat providers are hidden unless they have
- * historical usage.
+ * chat provider entries, that unconfigured chat providers are hidden unless they have
+ * historical usage, and that genuinely orphaned provider names (not in config at all) are
+ * surfaced with a delete affordance that only admins can use.
  */
 @WebMvcTest(value = OperationsController.class, properties = "app.auth.enabled=true")
 @Import({com.example.ragagent.context.WebMvcConfig.class, com.example.ragagent.security.SecurityConfig.class})
@@ -158,5 +165,99 @@ class OperationsControllerUsageTest {
         mvc.perform(get("/api/v1/llm/usage"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[*].provider", org.hamcrest.Matchers.hasItem("local")));
+    }
+
+    // ── §6.8 — orphan provider surfacing + admin-only deletion ───────────────
+
+    @Test
+    @DisplayName("§6.8 — config에 전혀 없는 이름은 type=ORPHAN 으로 카드·표·차트에 노출된다")
+    void orphanChatProviderName_surfacedWithTypeOrphan() throws Exception {
+        when(usageRepo.usedProviders()).thenReturn(Set.of("ancient-model"));
+
+        mvc.perform(get("/api/v1/llm/usage"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[*].provider", org.hamcrest.Matchers.hasItem("ancient-model")))
+                .andExpect(jsonPath("$[?(@.provider=='ancient-model')].type").value("ORPHAN"));
+        mvc.perform(get("/api/v1/llm/usage/history"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$['ancient-model']").exists());
+        mvc.perform(get("/ui/llm-usage/cards"))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("ancient-model")))
+                .andExpect(content().string(containsString("/admin/llm-usage/ancient-model")));
+    }
+
+    @Test
+    @DisplayName("§6.8 — 과거 EMBED_MODEL의 embed:* 는 ORPHAN, 현재 embed:* 는 EMBEDDING 유지")
+    void staleEmbeddingRow_isOrphan_liveEmbeddingRow_isNot() throws Exception {
+        when(usageRepo.usedProviders()).thenReturn(Set.of("embed:nomic-embed", "embed:old-model"));
+
+        mvc.perform(get("/api/v1/llm/usage"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[?(@.provider=='embed:nomic-embed')].type").value("EMBEDDING"))
+                .andExpect(jsonPath("$[?(@.provider=='embed:old-model')].type").value("ORPHAN"));
+    }
+
+    @Test
+    @DisplayName("§6.8 — DELETE 성공: repo 삭제 호출 + AuditLogger 기록 + 카드에서 사라짐")
+    void deleteOrphan_success() throws Exception {
+        when(usageRepo.usedProviders())
+                .thenReturn(Set.of("ancient-model"))  // guard check inside deleteOrphanUsage()
+                .thenReturn(Set.of());                // buildProviderReports() rebuild after delete
+        when(usageRepo.deleteByProvider("ancient-model")).thenReturn(3);
+
+        mvc.perform(delete("/admin/llm-usage/ancient-model")
+                        .with(csrf())
+                        .with(org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user("admin").roles("ADMIN")))
+                .andExpect(status().isOk())
+                .andExpect(content().string(not(containsString("ancient-model"))));
+
+        verify(usageRepo).deleteByProvider("ancient-model");
+        verify(auditLogger).log(eq("llm-usage.delete-orphan"), eq("ancient-model"), any());
+    }
+
+    @Test
+    @DisplayName("§6.8 — 아직 config에 있는 provider 는 삭제 거부(400), repo 삭제 미호출")
+    void deleteNonOrphan_rejected() throws Exception {
+        mvc.perform(delete("/admin/llm-usage/local")
+                        .with(csrf())
+                        .with(org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user("admin").roles("ADMIN")))
+                .andExpect(status().isBadRequest());
+
+        verify(usageRepo, never()).deleteByProvider(any());
+    }
+
+    @Test
+    @DisplayName("§6.8 — 현재 활성 embed:<model> 은 삭제 거부(400), repo 삭제 미호출")
+    void deleteLiveEmbeddingRow_rejected() throws Exception {
+        mvc.perform(delete("/admin/llm-usage/embed:nomic-embed")
+                        .with(csrf())
+                        .with(org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user("admin").roles("ADMIN")))
+                .andExpect(status().isBadRequest());
+
+        verify(usageRepo, never()).deleteByProvider(any());
+    }
+
+    @Test
+    @DisplayName("§6.8 — ADMIN 권한 없으면 403, repo 삭제 미호출")
+    void deleteWithoutAdminRole_forbidden() throws Exception {
+        when(usageRepo.usedProviders()).thenReturn(Set.of("ancient-model"));
+
+        mvc.perform(delete("/admin/llm-usage/ancient-model").with(csrf())) // class-level @WithMockUser = ROLE_USER
+                .andExpect(status().isForbidden());
+
+        verify(usageRepo, never()).deleteByProvider(any());
+    }
+
+    @Test
+    @DisplayName("§6.8 — CSRF 토큰 누락 시 거부(403)")
+    void deleteWithoutCsrf_rejected() throws Exception {
+        when(usageRepo.usedProviders()).thenReturn(Set.of("ancient-model"));
+
+        mvc.perform(delete("/admin/llm-usage/ancient-model")
+                        .with(org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user("admin").roles("ADMIN")))
+                .andExpect(status().isForbidden());
+
+        verify(usageRepo, never()).deleteByProvider(any());
     }
 }

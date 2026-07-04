@@ -62,6 +62,11 @@ public class LlmUsageRepository {
                 "SELECT DISTINCT provider_name FROM llm_usage WHERE call_count > 0", String.class));
     }
 
+    /** Deletes all rows for a provider (§6.8 — orphan cleanup). Returns the number of rows removed. */
+    public int deleteByProvider(String provider) {
+        return jdbc.update("DELETE FROM llm_usage WHERE provider_name = ?", provider);
+    }
+
     // ── Period aggregation ─────────────────────────────────────────────────
 
     public PeriodSummary getByPeriod(String provider, LocalDate from, LocalDate to) {

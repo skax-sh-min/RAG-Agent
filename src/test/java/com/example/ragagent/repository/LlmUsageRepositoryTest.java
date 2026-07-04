@@ -97,4 +97,25 @@ class LlmUsageRepositoryTest {
         assertThat(repo.usedProviders()).containsExactlyInAnyOrder("openai", "claude");
         assertThat(repo.usedProviders()).doesNotContain("never-used");
     }
+
+    @Test
+    @DisplayName("deleteByProvider — 해당 provider 행만 제거하고 삭제 행수 반환")
+    void deleteByProviderRemovesOnlyThatProvider() {
+        repo.record("openai", 10, 5);
+        repo.record("openai", 1, 1); // second day-independent call would collide on same day; still 1 row (UPSERT)
+        repo.record("claude", 1, 1);
+
+        int deleted = repo.deleteByProvider("openai");
+
+        assertThat(deleted).isEqualTo(1); // UPSERT keeps one row per (provider, date)
+        assertThat(repo.usedProviders()).containsExactly("claude");
+        assertThat(repo.getDaily("openai").callCount()).isZero();
+        assertThat(repo.getDaily("claude").callCount()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("deleteByProvider — 존재하지 않는 provider 는 0 반환, 예외 없음")
+    void deleteByProviderNonexistentReturnsZero() {
+        assertThat(repo.deleteByProvider("never-existed")).isZero();
+    }
 }

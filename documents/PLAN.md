@@ -49,7 +49,8 @@
 - ~~**Phase 3 — 입력 시작 시 로컬 요약 선계산 + 중복 제거 컨텍스트 압축**~~ → ✅ 완료 (2026-07-03, §6.10 — `ConversationSummarizerService`, `POST /ui/chat/summary/precompute`, LOCAL 전용 요약 + 캐시, 실패 시 `getHistory()` 자동 폴백)
 - ~~**Phase 3 — LLM 사용량 임베딩 사용량 분리**~~ → ✅ 완료 (2026-07-04, §6.6 — `TrackingEmbeddingModel` 데코레이터가 `embed:<model>` 프로바이더로 별도 기록, `/llm-usage` 표·카드·차트 시각 분리, usage 미반환 시 chars/4 근사 폴백)
 - ~~**Phase 3 — LLM 사용량 비활성 프로바이더 조건부 표시**~~ → ✅ 완료 (2026-07-04, §6.7 — `LlmUsageRepository.usedProviders()` + `OperationsController.visibleChatProviders()` 공통 필터, 미설정+이력 없는 프로바이더는 카드·표·차트에서 숨김, 이력 있으면 계속 표시)
-- **Phase 3 잔여** (미착수, §6.5·6.8·6.11 상세): 사용자별 LLM 토큰 쿼터(§6.5) · 사용자별 스토리지 쿼터(§6.11) · orphan 프로바이더 기록 삭제(§6.8)
+- ~~**Phase 3 — LLM 사용량 orphan 프로바이더 기록 삭제**~~ → ✅ 완료 (2026-07-04, §6.8 — config에 전혀 없는 provider_name(또는 옛 `embed:*`)을 ORPHAN 카드로 노출 + `DELETE /admin/llm-usage/{provider}`로 관리자만 삭제, 활성 provider·현재 임베딩 모델은 서버측에서 삭제 거부)
+- **Phase 3 잔여** (미착수, §6.5·6.11 상세): 사용자별 LLM 토큰 쿼터(§6.5) · 사용자별 스토리지 쿼터(§6.11)
 - **Phase 4** (조건부, 미착수): OAuth2 소셜 로그인(§7.1) · PostgreSQL 마이그레이션(§7.2) · 관리자 페이지 확장(§7.3, ※ `/admin` 기본 골격은 Phase 5.8에서 이미 존재)
 - ~~**Phase 5**: sqlite-vec 선택적 연동~~ → ✅ 완료 (Step 5.1~5.8, `app.vectorstore.type=chroma|sqlite-vec`)
 - ~~**Phase 5 추가**: Step 5.9 태그 기반 검색 스코프 + Step 5.10 sqlite-vec 운영/벡터 DB 분리~~ → ✅ 완료 (2026-07-01, Step 5.9 태그 필터/제안/복원 + Step 5.10 `SQLITE_VEC_DB_PATH` 분리 스위치). vec0 라이브 부팅은 운영 인수
@@ -227,24 +228,9 @@ Caddy(자동 TLS·HTTP/2)로 `app:8080` 프록시 + 보안 헤더(HSTS 등). Spr
 
 ## 6. Phase 3 — 운영 견고화 🟡 일부 완료
 
-### 6.1 Rate Limiting — Bucket4j ✅ 완료 (리팩토링)
+### 6.1 Rate Limiting — Bucket4j ✅ 완료
 
-```xml
-<dependency>
-  <groupId>com.bucket4j</groupId>
-  <artifactId>bucket4j_jdk17-core</artifactId>
-  <version>8.10.1</version>
-</dependency>
-```
-
-| 엔드포인트 | 제한 | 키 |
-|-----------|------|-----|
-| `POST /api/chat` | 분당 20회 | userId |
-| `POST /api/documents` | 분당 5회 | userId |
-| `POST /login` | 분당 10회 | IP |
-| 전체 익명 | 분당 30회 | IP |
-
-`OncePerRequestFilter` 구현 → `SecurityFilterChain` 앞단에 등록. 메모리 기반 버킷으로 시작, 다중 인스턴스 시 Redis로 이전.
+`RateLimitFilter`(`OncePerRequestFilter`, `SecurityFilterChain` 앞단 등록)가 엔드포인트별 인메모리 버킷을 적용 — 채팅 분당 20회/userId, 업로드 분당 5회/userId, 로그인 분당 10회/IP, 전체 익명 분당 30회/IP. 다중 인스턴스 확장 시 Redis 백엔드로 전환 필요(부록 참조).
 
 ### 6.2 파일 업로드 보안 강화 🟡 부분 완료 (리팩토링 03, 12)
 
@@ -256,21 +242,9 @@ Caddy(자동 TLS·HTTP/2)로 `app:8080` 프록시 + 보안 헤더(HSTS 등). Spr
 
 **🔵 미착수** — 사용자별 누적 용량 쿼터 → §6.11로 이관·구체화(현재 `storage_used_bytes` 컬럼·쿼터 로직·`app.upload-quota` 프로퍼티 모두 없음).
 
-### 6.3 글로벌 예외 처리 ✅ 완료 (리팩토링 11)
+### 6.3 글로벌 예외 처리 ✅ 완료
 
-```java
-@RestControllerAdvice
-public class GlobalExceptionHandler {
-  @ExceptionHandler(LlmProviderExhaustedException.class)
-  public ResponseEntity<ErrorResponse> llmExhausted(...) { ... }
-
-  @ExceptionHandler(AccessDeniedException.class)
-  public ResponseEntity<ErrorResponse> denied(...) { ... }
-
-  @ExceptionHandler(MaxUploadSizeExceededException.class)
-  public ResponseEntity<ErrorResponse> tooBig(...) { ... }
-}
-```
+`@RestControllerAdvice`(`GlobalExceptionHandler`) 기반 RFC 9457 ProblemDetail 응답 — `RagException` 서브클래스는 자체 `httpStatus()`로, `MaxUploadSizeExceededException`(413)·`IllegalArgumentException`(400)·미처리 예외(500, `RAG-INT-001`)는 개별 핸들러로 매핑. HTMX 요청엔 `HX-Reswap: none` 헤더 추가.
 
 ### 6.4 감사 로그 ✅ 완료 (리팩토링 14 — Logback 파일 롤링)
 
@@ -303,62 +277,15 @@ SQLite `audit_log` 테이블 대신 Logback `SizeAndTimeBasedRollingPolicy`로 �
 
 ### 6.6 LLM 사용량 — 임베딩 사용량 분리 ✅ 완료
 
-`TrackingEmbeddingModel implements EmbeddingModel`(`llm` 패키지) 데코레이터를 신설해 `EmbeddingBeanConfig`가 실제 `OpenAiEmbeddingModel`을 이 데코레이터로 감싼 뒤 동일하게 `@Primary`로 노출한다(주입 지점 무변경). `call(EmbeddingRequest)` 한 곳만 오버라이드해 `usageRepo.record("embed:" + model, inputTokens, 0)`으로 기록하고, `embed(String)`/`embed(List)`/`embedForResponse(List)`는 `EmbeddingModel` 인터페이스의 default 메서드가 전부 내부적으로 `this.call(...)`을 호출하므로 오버라이드 없이 자동으로 추적된다. `embed(Document)`는 인터페이스의 유일한 추상 메서드라 직접 구현이 강제되는데, `delegate.embed(document)`로 바로 위임하면 추적을 우회하므로 `this.embed(getEmbeddingContent(document))`(default 메서드 경유)로 구현해 동일하게 `call()`을 타도록 했다. `dimensions()`는 반대로 `delegate.dimensions()`에 직접 위임 — 실제 임베딩 호출이 아니므로 추적 대상이 아니고, delegate(OpenAiEmbeddingModel)가 캐싱하는 값을 그대로 보존한다.
-
-`OperationsController`의 세 경로(`buildProviderReports()`, `/api/v1/llm/usage`, `/api/v1/llm/usage/history`)에 `embeddingProviderName()`(`"embed:" + props.embeddingSafe().model()`) 기반 항목을 하나씩 추가해 채팅 프로바이더 목록과 함께 반환한다. 임베딩 카드/행은 `type="EMBEDDING"`, `role=null`(역할 배지 없음), `blockedUntil=null`(circuit breaker 없음, 항상 "정상")로 표시되어 채팅 프로바이더와 시각적으로 분리된다. 차트는 동일 `<canvas>`를 유지하되 `embed:` 접두사 데이터셋만 별도 Chart.js `stack` 그룹으로 분리해 채팅 합계 스택에 섞이지 않고 날짜별로 별도 막대로 렌더된다.
-
-**usage 미반환 폴백**: `EmbeddingResponseMetadata.getUsage()`가 `EmptyUsage`(promptTokens=0, null 아님)를 반환하는 로컬 서버 대응 — `promptTokens == null || <= 0`이면 `app.embedding.usage-fallback-enabled`(`EMBED_USAGE_FALLBACK_ENABLED`, 기본 `true`) 설정에 따라 입력 텍스트 길이 근사(chars/4, 배치 요청은 모든 텍스트 합산) 또는 0을 기록하고, 근사 경로는 최초 1회만 경고 로그를 남긴다(`AtomicBoolean`).
-
-> **구현 메모 (2026-07-04)**:
-> - **부수 수정**: `llm-usage.html`의 차트/표 JS가 `/api/llm/usage(...)`(버전 접두사 `/v1/` 누락)를 호출하던 기존 버그를 발견 — 실제 매핑은 `/api/v1/llm/usage(...)`라 이 화면의 일별 차트와 기간별 표가 항상 404로 완전히 비어 있었다(카드는 서버 렌더라 영향 없었음). 본 작업이 바로 이 두 화면을 다루므로 함께 수정.
-> - **실사용 검증**: LM Studio(`text-embedding-nomic-embed-text-v1.5`, sqlite-vec 모드로 ChromaDB 의존 없이 확인) 대상 실제 채팅 질의 → 서버 로그에서 `TrackingEmbeddingModel`의 1회성 경고(`did not report token usage; approximating...`) 확인 → `GET /api/v1/llm/usage` 응답에서 `embed:text-embedding-nomic-embed-text-v1.5` 행에 `inputTokens=24, callCount=1`(멀티쿼리 확장으로 배치된 여러 질의 문자열 합산 기준) 누적을 직접 확인. `/llm-usage` 화면에서 카드·차트·표 3곳 모두 임베딩 항목이 채팅 프로바이더와 분리 표시됨을 스크린샷으로 확인.
-> - **테스트**: `TrackingEmbeddingModelTest` 5건(실사용량 기록/근사 폴백/폴백 비활성 시 0/embed(Document) 경유 확인/dimensions() 직접 위임 확인) + `OperationsControllerUsageTest` 3건(표·차트 이력·카드 프래그먼트에 임베딩 행 존재 확인) 신규. 기존 `EmbeddingConfig` 6-인자 생성자를 직접 호출하던 `SqliteVecSchemaInitializerTest`/`AdminServiceTest` 2곳을 7-인자로 수정(신규 `usageFallbackEnabled` 필드). 전체 350 tests BUILD SUCCESS(회귀 0, sqlite-vec 통합 2개는 vec0 바이너리 없을 때만 skip).
-
-**완료 기준 달성**:
-- 인덱싱/검색 시 임베딩 토큰이 `llm_usage`에 `embed:<model>`로 누적된다(채팅 행과 분리) — 실사용 검증 완료.
-- `/llm-usage` 화면에서 임베딩 사용량이 채팅 프로바이더와 시각적으로 분리되어 표시된다(표 행/카드 + 차트 stack 구분).
-- usage 미반환 임베딩 서버에서도 기록이 깨지지 않는다(근사 또는 0 + 경고 로그 1회).
-- 기존 채팅 사용량 표/차트 회귀 0.
+`TrackingEmbeddingModel`(`llm` 패키지)이 `EmbeddingModel`을 데코레이트해 `call()` 한 곳에서 `usageRepo.record("embed:" + model, inputTokens, 0)`으로 채팅과 분리 기록한다 — `embed(String)`/`embed(List)`는 인터페이스 default가 결국 `this.call(...)`을 호출하므로 자동 추적되고, 유일한 추상 메서드인 `embed(Document)`는 `delegate` 직접 위임 대신 `this.embed(getEmbeddingContent(doc))`로 구현해 우회를 막았으며, `dimensions()`만 delegate에 직결(추적 대상 아님). 로컬 서버가 usage를 반환하지 않으면 `app.embedding.usage-fallback-enabled`(`EMBED_USAGE_FALLBACK_ENABLED`, 기본 true)에 따라 입력 길이 근사(chars/4, 배치는 합산) 또는 0을 기록하고 경고는 최초 1회만. `OperationsController`의 카드·REST 표·REST 이력 세 경로 모두 `embed:<model>` 항목을 `type=EMBEDDING`·역할 없음·circuit breaker 없음("정상" 고정)으로 추가하고, 차트는 별도 Chart.js `stack` 그룹으로 채팅 합계와 분리했다. 부수로 `llm-usage.html`의 `/api/llm/usage(...)` 경로 오타(`/v1/` 누락 — 차트·표가 항상 404로 비어 있던 기존 버그)를 발견해 함께 수정. 테스트 8건 추가(전체 350), LM Studio 연동으로 실제 근사 폴백 발동과 `embed:*` 행 누적을 실사용 검증(회귀 0).
 
 ### 6.7 LLM 사용량 — 비활성 프로바이더 조건부 표시 ✅ 완료
 
-`LlmUsageRepository.usedProviders()`(`SELECT DISTINCT provider_name FROM llm_usage WHERE call_count > 0`)를 신설하고, `OperationsController`에 `visibleChatProviders()` 공통 헬퍼를 추가해 `configured == true || usedProviders.contains(name)`로 채팅 프로바이더 목록을 필터링한다. 카드(`buildProviderReports()`)·REST 표(`/api/v1/llm/usage`)·REST 차트 이력(`/api/v1/llm/usage/history`) 세 경로 모두 `props.llmSafe().providers()`를 직접 순회하던 것을 이 헬퍼 호출로 교체해, 세 화면의 표시 목록이 항상 정확히 일치하도록 했다(설계 그대로 채택, `kind` 컬럼 등 스키마 변경 없음). "사용량 있음" 판정은 설계안대로 표시 기간과 무관한 **누적(all-time)** 기준으로 단순화했다(옵션 플래그 없이 확정). §6.6에서 추가된 `embed:<model>` 항목은 이 필터 대상이 아니다 — `props.llmSafe().providers()`에 속하지 않는 별도 경로이고 `configured=true`로 고정돼 있어 항상 표시된다(임베딩 모델은 부팅 시 필수 빈이라 "비활성" 개념 자체가 없음).
+`LlmUsageRepository.usedProviders()`(사용 이력 있는 provider_name 집합, all-time 기준)와 `OperationsController.visibleChatProviders()` 공통 헬퍼(`configured || usedProviders.contains(name)`)를 신설해 카드·REST 표·REST 이력 세 경로 모두 이 필터를 거치도록 통일했다(스키마 변경 없음, 설계 그대로 채택). 키 없는 프로바이더는 사용 이력이 없으면 숨겨지고 있으면(과거 사용 후 키 제거) 계속 표시되며, 활성 프로바이더는 항상 표시된다. §6.6의 `embed:*`는 `props.llmSafe().providers()`에 속하지 않는 별도 경로라 이 필터 대상이 아니다(항상 표시). 테스트 5건 추가(전체 355), 로컬 서버에서 재기동 전/후 비교로 카드·차트·표 3곳에서 동시에 숨김/노출됨을 실사용 검증(회귀 0).
 
-> **구현 메모 (2026-07-04)**:
-> - **실사용 검증**: 로컬 개발 서버(`app.llm.providers` 6개 중 `local`만 키 설정, 나머지 5개는 빈 키 + 사용 이력 없음)에서 `/llm-usage` 재기동 전/후를 비교 — 필터 적용 전에는 카드 7개(채팅 6 + 임베딩 1, 5개는 "API 키 미설정" 배지에 사용량 0), 적용 후에는 카드 2개(`local` + `embed:...`)만 남고 나머지 5개가 카드·차트 범례·표 3곳 모두에서 동시에 사라짐을 스크린샷으로 확인.
-> - **테스트**: `LlmUsageRepositoryTest` +2(`usedProviders()` 빈 결과/기록된 provider만 반환) + `OperationsControllerUsageTest` +3(미설정+이력없음 → 3경로 모두 제외, 미설정+이력있음 → 3경로 모두 유지, 설정된 provider는 사용량 0이어도 유지). 전체 355 tests BUILD SUCCESS(회귀 0).
+### 6.8 LLM 사용량 — 설정에 없는(orphan) 프로바이더 기록 삭제 ✅ 완료
 
-**완료 기준 달성**:
-- 키 없는 비활성 프로바이더 중 사용 이력이 0인 것은 카드·표·차트 어디에도 표시되지 않는다 — 실사용 검증 완료.
-- 사용 이력이 있는 비활성 프로바이더는 계속 표시된다(과거 데이터 보존) — 단위 테스트로 검증.
-- 활성 프로바이더는 사용량 0이어도 항상 표시(회귀 없음).
-- 세 경로(카드/표/차트)의 표시 목록이 일치한다(공통 `visibleChatProviders()` 헬퍼로 보장).
-
-### 6.8 LLM 사용량 — 설정에 없는(orphan) 프로바이더 기록 삭제 🔵 계획
-
-> **현재 코드 확인 (2026-07-02)**: `LlmUsageRepository`에 `deleteByProvider()` 없음, `OperationsController`에 사용량 관련 `@DeleteMapping` 없음(현재 GET만: `/llm-usage`, `/ui/llm-usage/cards`, `/api/v1/llm/usage`, `/api/v1/llm/usage/history`). 신규 삭제 경로 필요. 권한은 DB `role`이 `ADMIN`(문자열, `ROLE_` 접두사 아님) 기준.
-
-**배경**: §6.7로 "설정(`props.llmSafe().providers()`)에는 없지만 과거 사용 이력이 있어" 계속 노출되는 **orphan 카드**(예: 키를 빼거나 config에서 제거한 옛 모델, §6.6의 `embed:*`)가 생긴다. 운영자가 이런 카드의 누적 기록을 화면에서 직접 정리(DB 삭제)할 수 있어야 한다.
-
-**선행 확인 (현재 코드 기준)**:
-- `llm_usage`는 `provider_name` 키 → 특정 프로바이더 전체 행 삭제는 `DELETE FROM llm_usage WHERE provider_name = ?` 한 줄.
-- "orphan" 판별 = `llm_usage`에 있으나 config 프로바이더 목록에 **없는** 이름 (§6.7 `usedProviders()` ∖ `props.llmSafe().providers()` 차집합).
-- `/llm-usage`·`/api/v1/llm/*`는 현재 **GET만** 존재 → 삭제용 신규 엔드포인트 필요. 파괴적 작업이므로 권한·CSRF·서버측 가드 필수.
-
-**설계**:
-1. `LlmUsageRepository.deleteByProvider(String provider)` 추가 — `DELETE FROM llm_usage WHERE provider_name = ?`, 삭제 행수 반환.
-2. 엔드포인트 `DELETE /ui/llm-usage/{provider}`(HTMX 카드 갱신) 또는 `/api/v1/llm/usage/{provider}`:
-   - **안전 가드(필수)**: 대상이 config 프로바이더에 **존재하면 거부**(400/409) — 활성 프로바이더 이력은 화면에서 못 지움. orphan만 허용.
-   - **권한**: 파괴적 작업이므로 `ROLE_ADMIN` 한정(no-auth 모드에선 admin 자동 인증 경로 적용). CSRF 토큰 필요(기존 htmx 자동 주입 재사용).
-   - `AuditLogger`에 삭제 이벤트 기록(프로바이더명, 삭제 행수).
-3. UI: **orphan 카드에만** 삭제 버튼(🗑) 노출 → `hx-delete` + `hx-confirm` → 성공 시 카드 fragment 새로고침. §6.7과 맞물려 삭제 후 "사용량 0 + 미설정" → 카드가 자동으로 사라진다.
-4. (결정 필요) `embed:*`(§6.6) 임베딩 의사 프로바이더도 orphan으로 분류됨 → 동일하게 삭제 허용할지/제외할지 결정. 기본은 "허용하되 카드 라벨로 구분".
-
-**완료 기준**:
-- orphan 카드에서 삭제 시 해당 `provider_name`의 `llm_usage` 행이 모두 제거되고 카드가 사라진다.
-- config에 존재하는 활성 프로바이더는 삭제 버튼이 없고, 강제 호출해도 서버가 거부한다.
-- 삭제가 `AuditLogger`에 기록된다.
-- 권한 없는 요청 / CSRF 누락은 거부된다(기존 동작 회귀 0).
+`OperationsController.orphanProviderNames()`가 `usedProviders()`에서 현재 config 프로바이더 이름 전체와 현재 `embeddingProviderName()`을 뺀 차집합으로 orphan을 계산한다 — 활성 `embed:<model>`은 보호하고, `EMBED_MODEL` 변경 후 남은 `embed:<old-model>`은 일반 orphan과 동일하게 삭제 허용(§6.6이 나중에 추가한 "현재 임베딩 이름" 개념을 반영). §6.7 구현은 config 목록을 필터링할 뿐 밖의 이름을 노출하지 않아 orphan이 원안 가정과 달리 어디에도 안 보이는 공백이 있었기에, 세 경로 모두에 orphan 항목(`type=ORPHAN`, `deletable=true`)을 실제로 노출하는 단계를 원안에 보강했다. `DELETE /admin/llm-usage/{provider:.+}`(콜론·점이 섞인 이름 보호용 정규식)가 `LlmUsageRepository.deleteByProvider()`로 삭제하며, orphan이 아니면 400 거부 + `AuditLogger` 기록. `/admin/**` 경로에 배치해 `NoAuthAutoLoginFilter`의 기존 no-auth 관리자 자동 인증을 그대로 상속하고, 인증 모드는 `SecurityConfig`에 이 경로 전용 `hasRole("ADMIN")` 매처만 좁게 추가(다른 `/admin/**` 엔드포인트는 §7.3 전까지 기존 수준 유지, 회귀 없음). 테스트 9건 추가(전체 364), 가짜 orphan 행을 DB에 직접 삽입해 카드 노출→삭제 버튼 클릭→DB 실삭제까지 브라우저에서 실사용 검증(회귀 0).
 
 ### 6.9 Chat 응답 피드백(좋아요/싫어요) 기반 컨텍스트 제외 ✅ 완료
 
@@ -366,16 +293,7 @@ SQLite `audit_log` 테이블 대신 Logback `SizeAndTimeBasedRollingPolicy`로 �
 
 ### 6.10 입력 시작 시 로컬 요약 선계산 + 중복 제거 컨텍스트 압축 ✅ 완료
 
-사용자가 입력을 시작하면(첫 글자 입력 즉시, 입력 세션당 1회) `POST /ui/chat/summary/precompute`가 가상 스레드로 발화되어, `ConversationSummarizerService`가 스레드 turn들을 정규화 기반 중복 제거(동일 질문은 최신 답변만 유지, DISLIKE는 §6.9와 동일하게 하드 제외)한 뒤 `TaskType.LIGHT_TEXT`+`RoutingMode.LOCAL_ONLY`로 LOCAL 프로바이더에 요약을 요청한다. 결과는 스레드별 LRU 캐시(최대 3개)에 저장되고, `AgentService`/`StreamingAgentService`는 캐시가 있으면 "요약 + 최근 2턴 원문"을 히스토리로 쓰고 없으면(미계산·실패·LOCAL 미가용 등 모든 경우) 기존 `getHistory()`로 조용히 폴백한다. 새 turn 저장 시 캐시를 무효화해 다음 입력에서 재생성되게 한다.
-
-> **구현 메모 (2026-07-03)**:
-> - **신규**: `ConversationSummarizerService`(`precompute`/`buildContext`/`invalidate`/`dedupe`). 캐시는 access-order `LinkedHashMap`+`removeEldestEntry`로 스레드 3개 LRU, 별도 맵으로 스레드당 15초 TTL 가드(프론트 디바운스와는 별개의 안전망).
-> - **연동**: `AgentService`/`StreamingAgentService`에 `resolveHistory()` 헬퍼(`buildContext()` 우선, null이면 `getHistory()`) — directMode/일반 모드 양쪽에 적용. `addTurn()` 성공 직후 `invalidate(threadId)`.
-> - **엔드포인트**: `ChatController.precomputeSummary()` — `Thread.ofVirtual().start(...)`로 즉시 202 반환(기존 `streamChat()`의 fire-and-forget 패턴 재사용), 실제 LLM 호출은 응답 이후 백그라운드 진행.
-> - **프론트**: `#question-input`의 `input` 리스너가 입력 시작 즉시(0→비0 전환) 1회 트리거하고 `dataset.summaryPrecomputed`로 이번 세션 재호출 방지(요약 대상은 이미 저장된 turn뿐이라 타이핑 완료를 기다릴 이유가 없음). 메시지 전송 시(`chat.html`·`chat-stream.js` 양쪽 clear 경로) 플래그 초기화.
-> - **프롬프트**: `prompt.summary.system` 신규 — 중복 제거·사실/결정 우선·제약/오류코드/버전 보존·추측 금지·3~5문장 평문 명시.
-> - ⚠️ **원안 대비 단순화**: 앱 레벨 명시적 타임아웃(5~10초)은 별도 구현하지 않음 — 이미 fire-and-forget 백그라운드라 느려도 채팅 요청 자체를 막지 않으므로 LOCAL 프로바이더의 기존 HTTP client read-timeout을 그대로 상한으로 사용. 캐시 스키마도 원안의 `sourceTurnSeq`/`updatedAt` 대신 단순 `threadId→summary` 맵 + TTL 타임스탬프로 축소(무효화가 항상 전체 삭제라 부분 staleness 추적 불필요).
-> - **검증**: `ConversationSummarizerServiceTest` 10건 + `AgentServiceTest` +3 + `ChatControllerHtmxTest` +1. 전체 354 tests BUILD SUCCESS(회귀 0). LM Studio 연동 실사용 확인: 질문1 전송 → 입력창 타이핑 시작 시 precompute 202 → 서버 로그에서 LOCAL 모델이 실제 요약 생성(`[SUMMARY] precomputed ... summaryChars=48`) 확인 → 질문2("방금 내가 뭘 물어봤지?")에서 `historyLen=108`(순수 원문 25자와 뚜렷이 구분되는 "요약+최근 턴" 길이)로 `buildContext()` 사용 확인 → 모델이 요약 기반으로 직전 질문을 정확히 회상하는 답변까지 브라우저에서 직접 확인.
+사용자가 입력을 시작하면(첫 글자 입력 즉시, 세션당 1회) `POST /ui/chat/summary/precompute`가 가상 스레드로 발화되어, 신규 `ConversationSummarizerService`가 스레드 turn을 정규화 기반 중복 제거(동일 질문은 최신 답변만, DISLIKE는 §6.9와 동일하게 제외)한 뒤 LOCAL 프로바이더(`LIGHT_TEXT`+`LOCAL_ONLY`)로 요약을 생성한다. 결과는 스레드별 LRU 캐시(최대 3개, TTL 15초)에 저장되고, `AgentService`/`StreamingAgentService`는 캐시가 있으면 "요약+최근 2턴", 없으면(미계산·실패·LOCAL 미가용) 기존 `getHistory()`로 조용히 폴백한다. `addTurn()` 성공 직후 캐시를 무효화해 다음 입력에서 재생성한다. 원안의 명시적 타임아웃·`sourceTurnSeq` 추적은 fire-and-forget 특성상 불필요해 생략. 테스트 14건 추가(전체 354), LM Studio 연동으로 실제 요약 생성 → 다음 질문에서 회상까지 실사용 검증 완료(회귀 0).
 
 ### 6.11 사용자별 스토리지 쿼터 🔵 미착수 (§6.2에서 이관)
 

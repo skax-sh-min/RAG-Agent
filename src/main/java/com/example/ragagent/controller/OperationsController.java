@@ -18,6 +18,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.time.Instant;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -149,7 +150,7 @@ public class OperationsController {
         );
     }
 
-    /** Provider-level daily / weekly / monthly summary + Circuit Breaker state, plus one embedding row (§6.6). */
+    /** Provider-level daily / weekly / monthly summary + Circuit Breaker state, plus one embedding row (§6.6) and orphan rows (§6.8). */
     @GetMapping("/api/v1/llm/usage")
     @ResponseBody
     public List<UsageReport> getLlmUsage() {
@@ -178,10 +179,20 @@ public class OperationsController {
                 usageRepo.getMonthly(embedName),
                 null
         );
-        return Stream.concat(chatUsage, Stream.of(embedUsage)).toList();
+        Stream<UsageReport> orphanUsage = orphanProviderNames().stream().sorted()
+                .map(name -> new UsageReport(
+                        name,
+                        "ORPHAN",
+                        null,
+                        usageRepo.getDaily(name),
+                        usageRepo.getWeekly(name),
+                        usageRepo.getMonthly(name),
+                        null
+                ));
+        return Stream.concat(Stream.concat(chatUsage, Stream.of(embedUsage)), orphanUsage).toList();
     }
 
-    /** Daily token history per provider for Chart.js stacked bar chart, plus the embedding row (§6.6). */
+    /** Daily token history per provider for Chart.js stacked bar chart, plus embedding (§6.6) and orphan (§6.8) rows. */
     @GetMapping("/api/v1/llm/usage/history")
     @ResponseBody
     public Map<String, List<LlmUsageRepository.DailyRow>> getLlmUsageHistory(
@@ -193,7 +204,29 @@ public class OperationsController {
         }
         String embedName = embeddingProviderName();
         history.put(embedName, usageRepo.getDailyHistory(embedName, safeDays));
+        for (String name : orphanProviderNames()) {
+            history.put(name, usageRepo.getDailyHistory(name, safeDays));
+        }
         return history;
+    }
+
+    /**
+     * Deletes all llm_usage rows for a genuinely orphaned provider name (§6.8) — one that
+     * isn't in the current chat provider config and isn't the currently active embedding
+     * model. Rejects (400) any name still live in config so an operator can never wipe an
+     * active provider's history through this endpoint. Scoped under /admin/** so it inherits
+     * ROLE_ADMIN gating (SecurityConfig) and no-auth mode's automatic admin identity for
+     * /admin/** paths (NoAuthAutoLoginFilter) with no new plumbing.
+     */
+    @DeleteMapping("/admin/llm-usage/{provider:.+}")
+    public String deleteOrphanUsage(@PathVariable String provider, Model model) {
+        if (!orphanProviderNames().contains(provider)) {
+            throw new IllegalArgumentException("Not an orphan provider (still in config): " + provider);
+        }
+        int deleted = usageRepo.deleteByProvider(provider);
+        auditLogger.log("llm-usage.delete-orphan", provider, Map.of("deletedRows", deleted));
+        model.addAttribute("reports", buildProviderReports());
+        return "fragments/llm-usage-cards :: cards";
     }
 
     // ── Response records ──────────────────────────────────────────────
@@ -211,9 +244,12 @@ public class OperationsController {
     // ── Helpers ───────────────────────────────────────────────────────
 
     /**
-     * Chat provider cards/rows plus one always-shown embedding card (§6.6). Embedding has no
-     * ProviderRole (role=null → no role badge) and is never circuit-broken (blockedUntil=null) —
-     * the "EMBEDDING" type badge is what visually separates it from chat providers.
+     * Chat provider cards/rows, one always-shown embedding card (§6.6), plus any orphan
+     * cards (§6.8). Embedding has no ProviderRole (role=null → no role badge) and is never
+     * circuit-broken (blockedUntil=null) — the "EMBEDDING" type badge is what visually
+     * separates it from chat providers. Orphan cards similarly use type="ORPHAN", are never
+     * "configured" (dims the card, reusing the existing opacity styling), and set
+     * deletable=true so the fragment renders a delete button only for them.
      */
     private List<LlmProviderReport> buildProviderReports() {
         Map<String, Instant> blocked = circuitBreaker.getBlockedProviders();
@@ -227,7 +263,8 @@ public class OperationsController {
                         usageRepo.getWeekly(cfg.name()),
                         usageRepo.getMonthly(cfg.name()),
                         blocked.get(cfg.name()),
-                        isConfigured(cfg)
+                        isConfigured(cfg),
+                        false
                 ));
         String embedName = embeddingProviderName();
         LlmProviderReport embedReport = new LlmProviderReport(
@@ -239,9 +276,23 @@ public class OperationsController {
                 usageRepo.getWeekly(embedName),
                 usageRepo.getMonthly(embedName),
                 null,
-                true
+                true,
+                false
         );
-        return Stream.concat(chatReports, Stream.of(embedReport)).toList();
+        Stream<LlmProviderReport> orphanReports = orphanProviderNames().stream().sorted()
+                .map(name -> new LlmProviderReport(
+                        name,
+                        "ORPHAN",
+                        null,
+                        null,
+                        usageRepo.getDaily(name),
+                        usageRepo.getWeekly(name),
+                        usageRepo.getMonthly(name),
+                        null,
+                        false,
+                        true
+                ));
+        return Stream.concat(Stream.concat(chatReports, Stream.of(embedReport)), orphanReports).toList();
     }
 
     /**
@@ -266,5 +317,19 @@ public class OperationsController {
     private String embeddingProviderName() {
         String model = props.embeddingSafe().model();
         return TrackingEmbeddingModel.PROVIDER_PREFIX + (model != null ? model : "unknown");
+    }
+
+    /**
+     * Provider names with historical usage that don't correspond to any live config today
+     * (§6.8) — a chat provider removed entirely from app.llm.providers, or a stale
+     * embed:&lt;old-model&gt; row left behind after EMBED_MODEL was changed. Unlike §6.7's
+     * plain inactive filter (which only hides/shows names still present in config), these are
+     * actively surfaced so an operator can review and delete them.
+     */
+    private Set<String> orphanProviderNames() {
+        Set<String> orphans = new HashSet<>(usageRepo.usedProviders());
+        props.llmSafe().providers().forEach(cfg -> orphans.remove(cfg.name()));
+        orphans.remove(embeddingProviderName());
+        return orphans;
     }
 }

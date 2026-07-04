@@ -36,7 +36,7 @@ src/main/resources/
 │       ├── thread-item.html               # 대화 목록 항목 1건
 │       ├── doc-table-body.html            # 문서 목록 tbody (새로고침용)
 │       ├── sync-result.html               # 동기화 결과 토스트
-│       └── llm-usage-cards.html           # 프로바이더 상태 카드 (30초 자동 갱신)
+│       └── llm-usage-cards.html           # 프로바이더 + 임베딩(EMBEDDING) + orphan(ORPHAN, 삭제 가능) 상태 카드 (30초 자동 갱신)
 └── static/
     ├── css/app.css                        # 버블·배지·DUAL 탭·타이핑·반응형(오프캔버스/dvh/16px/44px)
     ├── css/theme.css                      # light/dark CSS 변수
@@ -82,9 +82,10 @@ src/main/resources/
 | Method | Path | 반환 | 설명 |
 |--------|------|------|------|
 | GET | `/llm-usage` | `llm-usage.html` | LLM 사용량 페이지 |
-| GET | `/ui/llm-usage/cards` | `fragments/llm-usage-cards` | 카드 HTMX 자동 갱신 |
+| GET | `/ui/llm-usage/cards` | `fragments/llm-usage-cards` | 카드 HTMX 자동 갱신(30초). 채팅 프로바이더 + 임베딩(`embed:<model>`, `EMBEDDING` 배지) + orphan(설정에 없는 이름, `ORPHAN` 배지 + 삭제 버튼) 카드 포함 |
+| DELETE | `/admin/llm-usage/{provider}` | `fragments/llm-usage-cards` | orphan 프로바이더의 누적 사용 기록 삭제. `/admin/**` 경로 아래 있어 `ROLE_ADMIN` 전용(no-auth 모드는 관리자 자동 인증 상속) — 컨트롤러는 `OperationsController` 소속, 경로만 admin 네임스페이스 |
 
-REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N`
+REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — 둘 다 임베딩·orphan 항목 포함(상세는 [OPERATOR_MANUAL.md](OPERATOR_MANUAL.md) 참고)
 
 ### 3.4 관리자 (AdminController)
 
@@ -181,6 +182,9 @@ PROGRESSIVE 업그레이드 시 `🔝 고추론 재분석 → {premiumProvider}`
 [동기화]     hx-post="/ui/documents/sync" → fragments/sync-result → 토스트
 [문서 삭제]  hx-delete → hx-swap="outerHTML swap:0.3s" (페이드아웃)
 [LLM 카드]   hx-trigger="load, every 30s" → 30초마다 자동 갱신
+[LLM orphan 삭제] 🗑 버튼(orphan 카드에만 노출) → hx-confirm 확인 → hx-delete="/admin/llm-usage/{provider}"
+              → hx-target="#llm-cards-target" → 응답으로 받은 fragments/llm-usage-cards로 즉시 교체
+              (카드만 즉시 반영; 차트·기간별 표는 별도 vanilla JS fetch라 다음 로드/새로고침에 반영)
 ```
 
 ---

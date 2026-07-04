@@ -14,7 +14,7 @@
         <div class="card h-100"
              th:classappend="${!r.configured} ? ' opacity-50' : (${r.blocked} ? ' border-danger border-2' : '')">
 
-            <!-- Header: name + role badge + type badge -->
+            <!-- Header: name + role badge + type badge + orphan delete button (§6.8) -->
             <div class="card-header d-flex justify-content-between align-items-center py-2">
                 <span class="fw-semibold small" th:text="${r.name}">provider</span>
                 <div>
@@ -24,6 +24,15 @@
                         <span th:case="'PREMIUM'" class="badge bg-warning text-dark me-1">PREMIUM</span>
                     </span>
                     <span class="badge bg-secondary" th:text="${r.type}">TYPE</span>
+                    <button th:if="${r.deletable}"
+                            type="button"
+                            class="btn btn-sm btn-link text-danger p-0 ms-1 align-baseline"
+                            th:attr="hx-delete=@{/admin/llm-usage/{provider}(provider=${r.name})},hx-confirm=#{llm.orphan.confirm}"
+                            hx-target="#llm-cards-target"
+                            hx-swap="innerHTML"
+                            th:title="#{llm.orphan.delete}">
+                        <i class="bi bi-trash"></i>
+                    </button>
                 </div>
             </div>
 
