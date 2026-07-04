@@ -91,19 +91,11 @@ public class AnswerService {
         String userPrompt = buildAnswerPrompt(state);
         DualResult dual = llmRouter.executeDual(
                 TaskType.TEXT,
-                model -> model.call(new Prompt(List.of(
-                        new SystemMessage(systemPrompt),
-                        new UserMessage(userPrompt)
-                )))
+                model -> model.call(buildPrompt(systemPrompt, userPrompt))
         );
-        String extAnswer   = truncate(dual.externalAnswer());
-        String localAnswer = truncate(dual.localAnswer());
-        return state.toBuilder()
-                    .answer(extAnswer)
-                    .usedProvider(dual.externalProvider())
-                    .dualResult(localAnswer, localAnswer.isBlank() ? null : dual.localProvider())
-                    .needsRetry(false)
-                    .build();
+        return buildDualResultState(state,
+                truncate(dual.externalAnswer()), dual.externalProvider(),
+                truncate(dual.localAnswer()), dual.localProvider());
     }
 
     // ── Streaming paths ─────────────────────────────────────────────────────
@@ -128,12 +120,18 @@ public class AnswerService {
                 t -> { localBuf.append(t); listener.onToken("local", t); },
                 t -> { extBuf.append(t);   listener.onToken("external", t); }
         );
-        String localAnswer = truncate(localBuf.toString());
-        String extAnswer   = truncate(extBuf.toString());
+        return buildDualResultState(state,
+                truncate(extBuf.toString()), dp.externalProvider(),
+                truncate(localBuf.toString()), dp.localProvider());
+    }
+
+    /** Shared DUAL result assembly for both blocking and streaming — CRITIC is bypassed (needsRetry=false). */
+    private AgentState buildDualResultState(AgentState state, String extAnswer, String extProvider,
+                                             String localAnswer, String localProvider) {
         return state.toBuilder()
                     .answer(extAnswer)
-                    .usedProvider(dp.externalProvider())
-                    .dualResult(localAnswer, localAnswer.isBlank() ? null : dp.localProvider())
+                    .usedProvider(extProvider)
+                    .dualResult(localAnswer, localAnswer.isBlank() ? null : localProvider)
                     .needsRetry(false)
                     .build();
     }
@@ -161,10 +159,7 @@ public class AnswerService {
             String userPrompt = buildAnswerPrompt(state);
             premiumAnswer = llmRouter.executeWithTracking(
                     TaskType.TEXT, RoutingMode.QUALITY_FIRST,
-                    model -> model.call(new Prompt(List.of(
-                            new SystemMessage(systemPrompt),
-                            new UserMessage(userPrompt)
-                    )))
+                    model -> model.call(buildPrompt(systemPrompt, userPrompt))
             );
         }
         return resultState.toBuilder()
@@ -173,6 +168,11 @@ public class AnswerService {
                           .premiumUpgraded(premiumProvider.name())
                           .needsRetry(false)
                           .build();
+    }
+
+    /** Shared raw Prompt construction for the non-fluent LlmRouter call sites (DUAL, PROGRESSIVE). */
+    private static Prompt buildPrompt(String systemPrompt, String userPrompt) {
+        return new Prompt(List.of(new SystemMessage(systemPrompt), new UserMessage(userPrompt)));
     }
 
     // ── Stream helpers ──────────────────────────────────────────────────────
