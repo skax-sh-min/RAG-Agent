@@ -98,7 +98,7 @@ public class AgentGraph {
                             : answerService.executeStreaming(state, listener);
                     if (state.isDualMode()) yield Node.FINALIZE;
                     if (state.needsRetry() && state.retryCount() < maxRetryCount) {
-                        state = state.withRetryCountIncremented();
+                        state = state.toBuilder().incrementRetry().build();
                         log.debug("[AgentGraph] retry #{} reason=ANSWER_INSUFFICIENT thread={}",
                                 state.retryCount(), state.threadId());
                         yield Node.RETRIEVAL;
@@ -109,7 +109,7 @@ public class AgentGraph {
                     listener.onNodeEnter("critic");
                     state = criticService.execute(state);
                     if (state.needsRetry() && state.retryCount() < maxRetryCount) {
-                        state = state.withRetryCountIncremented();
+                        state = state.toBuilder().incrementRetry().build();
                         log.debug("[AgentGraph] retry #{} reason=CRITIC_UNGROUNDED thread={}",
                                 state.retryCount(), state.threadId());
                         yield Node.RETRIEVAL;

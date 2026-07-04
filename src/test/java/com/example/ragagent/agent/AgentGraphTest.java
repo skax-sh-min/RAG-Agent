@@ -78,7 +78,7 @@ class AgentGraphTest {
     @DisplayName("classifier 가 meta 분류 → RETRIEVAL 건너뛰고 DIRECT_ANSWER 호출")
     void classifier_meta_skipsRetrieval() {
         when(classifierService.execute(any()))
-                .thenAnswer(inv -> ((AgentState) inv.getArgument(0)).withQuestionType("meta"));
+                .thenAnswer(inv -> ((AgentState) inv.getArgument(0)).toBuilder().questionType("meta").build());
 
         AgentState result = graph.run(newState(RoutingMode.COST_FIRST));
 
@@ -95,7 +95,7 @@ class AgentGraphTest {
     @DisplayName("classifier 가 non-meta 분류 → RETRIEVAL → ANSWER 진행")
     void classifier_nonMeta_goesToRetrieval() {
         when(classifierService.execute(any()))
-                .thenAnswer(inv -> ((AgentState) inv.getArgument(0)).withQuestionType("manual"));
+                .thenAnswer(inv -> ((AgentState) inv.getArgument(0)).toBuilder().questionType("manual").build());
 
         graph.run(newState(RoutingMode.COST_FIRST));
 
@@ -109,7 +109,7 @@ class AgentGraphTest {
     @Test
     @DisplayName("AgentService 사전 분류 — questionType 이미 설정되면 classifier 호출 skip")
     void existingQuestionType_skipsClassifier() {
-        AgentState pre = newState(RoutingMode.COST_FIRST).withQuestionType("manual");
+        AgentState pre = newState(RoutingMode.COST_FIRST).toBuilder().questionType("manual").build();
 
         graph.run(pre);
 
@@ -122,14 +122,14 @@ class AgentGraphTest {
     @DisplayName("ANSWER 가 needsRetry=true → RETRIEVAL 로 루프백 (1회 retry)")
     void answer_needsRetry_loopsBackToRetrieval() {
         when(classifierService.execute(any()))
-                .thenAnswer(inv -> ((AgentState) inv.getArgument(0)).withQuestionType("manual"));
+                .thenAnswer(inv -> ((AgentState) inv.getArgument(0)).toBuilder().questionType("manual").build());
 
         int[] answerCalls = {0};
         when(answerService.execute(any())).thenAnswer(inv -> {
             AgentState s = inv.getArgument(0);
             answerCalls[0]++;
             // 첫 호출: retry 요청, 두번째: ok
-            return answerCalls[0] == 1 ? s.withNeedsRetry(true) : s.withNeedsRetry(false);
+            return answerCalls[0] == 1 ? s.toBuilder().needsRetry(true).build() : s.toBuilder().needsRetry(false).build();
         });
 
         graph.run(newState(RoutingMode.COST_FIRST));
@@ -144,15 +144,15 @@ class AgentGraphTest {
     @DisplayName("CRITIC 가 needsRetry=true → RETRIEVAL 로 루프백")
     void critic_needsRetry_loopsBackToRetrieval() {
         when(classifierService.execute(any()))
-                .thenAnswer(inv -> ((AgentState) inv.getArgument(0)).withQuestionType("manual"));
+                .thenAnswer(inv -> ((AgentState) inv.getArgument(0)).toBuilder().questionType("manual").build());
         when(answerService.execute(any()))
-                .thenAnswer(inv -> ((AgentState) inv.getArgument(0)).withNeedsRetry(false));
+                .thenAnswer(inv -> ((AgentState) inv.getArgument(0)).toBuilder().needsRetry(false).build());
 
         int[] criticCalls = {0};
         when(criticService.execute(any())).thenAnswer(inv -> {
             AgentState s = inv.getArgument(0);
             criticCalls[0]++;
-            return criticCalls[0] == 1 ? s.withNeedsRetry(true) : s.withNeedsRetry(false);
+            return criticCalls[0] == 1 ? s.toBuilder().needsRetry(true).build() : s.toBuilder().needsRetry(false).build();
         });
 
         graph.run(newState(RoutingMode.COST_FIRST));
@@ -167,9 +167,9 @@ class AgentGraphTest {
     @DisplayName("maxRetryCount(2) 도달 후 retry 종료 — answer 3회 호출 후 CRITIC → FINALIZE")
     void retry_capped_at_maxRetryCount() {
         when(classifierService.execute(any()))
-                .thenAnswer(inv -> ((AgentState) inv.getArgument(0)).withQuestionType("manual"));
+                .thenAnswer(inv -> ((AgentState) inv.getArgument(0)).toBuilder().questionType("manual").build());
         when(answerService.execute(any()))
-                .thenAnswer(inv -> ((AgentState) inv.getArgument(0)).withNeedsRetry(true));
+                .thenAnswer(inv -> ((AgentState) inv.getArgument(0)).toBuilder().needsRetry(true).build());
 
         graph.run(newState(RoutingMode.COST_FIRST));
 
@@ -184,7 +184,7 @@ class AgentGraphTest {
     @DisplayName("DUAL 모드는 ANSWER 후 CRITIC 건너뛰고 바로 FINALIZE")
     void dualMode_skipsCritic() {
         when(classifierService.execute(any()))
-                .thenAnswer(inv -> ((AgentState) inv.getArgument(0)).withQuestionType("manual"));
+                .thenAnswer(inv -> ((AgentState) inv.getArgument(0)).toBuilder().questionType("manual").build());
 
         graph.run(newState(RoutingMode.DUAL));
 
@@ -198,9 +198,9 @@ class AgentGraphTest {
     @DisplayName("DUAL 모드는 needsRetry 가 true 여도 retry 안 함 (CRITIC 건너뛰기 보장)")
     void dualMode_ignoresNeedsRetry() {
         when(classifierService.execute(any()))
-                .thenAnswer(inv -> ((AgentState) inv.getArgument(0)).withQuestionType("manual"));
+                .thenAnswer(inv -> ((AgentState) inv.getArgument(0)).toBuilder().questionType("manual").build());
         when(answerService.execute(any()))
-                .thenAnswer(inv -> ((AgentState) inv.getArgument(0)).withNeedsRetry(true));
+                .thenAnswer(inv -> ((AgentState) inv.getArgument(0)).toBuilder().needsRetry(true).build());
 
         graph.run(newState(RoutingMode.DUAL));
 

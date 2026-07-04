@@ -106,7 +106,7 @@ public class StreamingAgentService {
 
                     initial = AgentState.of(form.question(), form.version(), form.threadId(),
                                     userId, historyF.join(), rm, false, locale)
-                            .withQuestionType(typeF.join());
+                            .toBuilder().questionType(typeF.join()).build();
                 }
             }
             // carry the selected search-scope tags into the graph state.

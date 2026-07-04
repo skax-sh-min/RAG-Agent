@@ -11,7 +11,7 @@
 
 ```
 AgentGraph (state machine) → nodes: CLASSIFIER → RETRIEVAL → ANSWER → CRITIC → FINALIZE
-AgentState: immutable record, each node returns new instance via withXxx()
+AgentState: immutable record, each node returns new instance via state.toBuilder().xxx().build()
 ```
 
 Flow:
@@ -70,7 +70,7 @@ Flow:
 - **MetaKey constants**: all vector store metadata access goes through `MetaKey.*` — never inline strings
 - **Upload validation**: call `FileTypeDetector.matches(path, ext)` after writing to temp file; return 422 on mismatch
 - **Input validation**: `PromptInjectionGuard.validate()` must be the first call in any public chat entry point
-- **AgentState mutation**: use `state.toBuilder().xxx().build()` for new code — `state.withXxx()` is deprecated since 0.2.0
+- **AgentState mutation**: use `state.toBuilder().xxx().build()` — the old `state.withXxx()` methods were removed (were deprecated since 0.2.0)
 
 ## Running Locally
 

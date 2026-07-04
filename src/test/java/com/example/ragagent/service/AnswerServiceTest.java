@@ -191,7 +191,7 @@ class AnswerServiceTest {
 
         // retryCount = maxRetry 도달 상태에서 진입 (그래프가 retry 한도 초과 후 PROGRESSIVE 진입 시 시나리오)
         AgentState initial = newState(RoutingMode.PROGRESSIVE)
-                .withRetryCountIncremented().withRetryCountIncremented();
+                .toBuilder().incrementRetry().incrementRetry().build();
 
         AgentState result = service.execute(initial);
 
@@ -211,7 +211,7 @@ class AnswerServiceTest {
         when(llmRouter.findProviderName(any(), any())).thenReturn("gemini-flash");
 
         AgentState initial = newState(RoutingMode.PROGRESSIVE)
-                .withRetryCountIncremented().withRetryCountIncremented();
+                .toBuilder().incrementRetry().incrementRetry().build();
 
         AgentState result = service.execute(initial);
 

@@ -64,7 +64,7 @@
 │    ├── MultiQueryExpander → VectorStore 검색                     │
 │    ├── 중복 제거 → unique chunks                                 │
 │    ├── chunk.metadata["image_paths"] 수집 → imageRefs 목록 생성  │
-│    └── AgentState.withImageRefs(imageRefs) 반환                  │
+│    └── AgentState.toBuilder().imageRefs(imageRefs).build() 반환  │
 │                                                                  │
 │  AgentService (최종 응답)                                        │
 │    └── ChatResponse { answer, sources, imageRefs, ... }          │
@@ -463,12 +463,13 @@ List<String> imageRefs = unique.stream()
         .distinct()
         .toList();
 
-return state
-        .withRetrievedDocs(unique)
-        .withSources(sources)
-        .withImageRefs(imageRefs)
-        .withRetrievalWarnings(warnings)
-        .withNeedsRetry(false);
+return state.toBuilder()
+        .retrievedDocs(unique)
+        .sources(sources)
+        .imageRefs(imageRefs)
+        .retrievalWarnings(warnings)
+        .needsRetry(false)
+        .build();
 ```
 
 ### 7.4 ChatResponse 확장
@@ -824,8 +825,8 @@ if (!imagePaths.isEmpty() && lazyVision != null) {
         return suffix.isEmpty() ? d
             : new Document(d.getText() + suffix, d.getMetadata());
     }).toList();
-    return state.withRetrievedDocs(enriched).withSources(sources)
-                .withImageRefs(imagePaths).withNeedsRetry(false);
+    return state.toBuilder().retrievedDocs(enriched).sources(sources)
+                .imageRefs(imagePaths).needsRetry(false).build();
 }
 ```
 

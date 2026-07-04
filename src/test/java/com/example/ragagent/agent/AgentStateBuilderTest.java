@@ -168,18 +168,4 @@ class AgentStateBuilderTest {
         assertThat(s.dualLocalAnswer()).isEqualTo("로컬 답변");
         assertThat(s.dualLocalProvider()).isEqualTo("local-model");
     }
-
-    @Test
-    @DisplayName("deprecated wither — Builder 위임으로 동일 결과")
-    @SuppressWarnings("deprecation")
-    void deprecatedWither_delegatesToBuilder() {
-        AgentState base = AgentState.of("q", "v", "t1", "", RoutingMode.COST_FIRST);
-
-        AgentState viaWither  = base.withAnswer("답변");
-        AgentState viaBuilder = base.toBuilder().answer("답변").build();
-
-        assertThat(viaWither.answer()).isEqualTo(viaBuilder.answer());
-        assertThat(viaWither.question()).isEqualTo(viaBuilder.question());
-        assertThat(viaWither.totalInputTokens()).isEqualTo(viaBuilder.totalInputTokens());
-    }
 }

@@ -256,8 +256,8 @@ SQLite `audit_log` 테이블 대신 Logback `SizeAndTimeBasedRollingPolicy`로 �
 
 ### 6.5 사용자별 LLM 사용량 쿼터 🔵 미착수
 
-**현재 코드 확인 (2026-07-02)**:
-- ⚠️ 문서는 "`LlmUsageRepository`에 `user_id` 컬럼이 이미 추가됨"이라 했으나 **실제 `llm_usage`는 프로바이더 단위 집계**다. `LlmUsageRepository.record(String provider, long in, long out)` → `usage_date + provider_name` UPSERT이며 `user_id` 컬럼/차원이 **없다**. 사용자별 쿼터를 하려면 `user_id` 축을 새로 도입해야 한다(현재 `getByPeriod/getDaily/...`는 모두 provider 인자만 받음).
+**현재 코드 확인 (2026-07-04 재확인)**:
+- `llm_usage.user_id` 컬럼 자체는 **이미 존재**한다(`LlmUsageRepository.init()`의 런타임 `ALTER TABLE ... DEFAULT 'anonymous'`, EDIT.md #6에서 발견). 하지만 `record(String provider, long in, long out)`에 `userId` 파라미터가 없고 `getByPeriod/getDaily/usedProviders/deleteByProvider` 등 모든 조회 메서드도 이 컬럼을 참조하지 않아 **모든 행이 영구히 'anonymous'로 고정** — 사실상 죽은 컬럼이다. **실제 `llm_usage`는 여전히 프로바이더 단위 집계**이며, 사용자별 쿼터를 하려면 이 컬럼을 실제로 채우거나(아래 B안) conversation_turns 기반(A안, 권장)으로 별도 집계해야 한다.
 - 집계 조회는 provider별만 존재 → 사용자 단위 "오늘 전체 토큰 합" 쿼리가 없음.
 - `AnswerService.execute(AgentState)`(진입점)와 `AgentService.chat()`에 쿼터 게이트가 없음. `ThreadContext.userId()`로 사용자 식별은 가능.
 

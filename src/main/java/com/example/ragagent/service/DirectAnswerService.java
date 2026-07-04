@@ -46,7 +46,7 @@ public class DirectAnswerService {
                 .stream().content().doOnNext(buf::append).blockLast();
         String answer = buf.isEmpty() ? null : buf.toString();
         log.debug("[DirectAnswer] answer length={}", answer == null ? -1 : answer.length());
-        return state.withAnswer(answer).withTokensAccumulated(0, 0);
+        return state.toBuilder().answer(answer).accumulateTokens(0, 0).build();
     }
 
     /** Streaming variant — pushes tokens via listener.onToken() instead of blocking. */
@@ -65,7 +65,7 @@ public class DirectAnswerService {
         String answer = full.toString();
         log.debug("[DirectAnswer] streaming answer length={}", answer.length());
         // Note: streaming mode cannot capture usage metadata for token tracking (no ChatResponse)
-        return state.withAnswer(answer).withTokensAccumulated(0, 0);
+        return state.toBuilder().answer(answer).accumulateTokens(0, 0).build();
     }
 
     private String resolveSystemPrompt(AgentState state) {
