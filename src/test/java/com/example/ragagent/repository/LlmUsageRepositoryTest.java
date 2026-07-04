@@ -81,4 +81,20 @@ class LlmUsageRepositoryTest {
         assertThat(repo.getDaily("openai").totalTokens()).isEqualTo(200);
         assertThat(repo.getDaily("claude").totalTokens()).isEqualTo(400);
     }
+
+    @Test
+    @DisplayName("usedProviders — 기록 없으면 빈 Set")
+    void usedProvidersEmptyWhenNoRecords() {
+        assertThat(repo.usedProviders()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("usedProviders — record() 된 provider 이름만 포함")
+    void usedProvidersReflectsRecordedProviders() {
+        repo.record("openai", 10, 5);
+        repo.record("claude", 1, 1);
+
+        assertThat(repo.usedProviders()).containsExactlyInAnyOrder("openai", "claude");
+        assertThat(repo.usedProviders()).doesNotContain("never-used");
+    }
 }

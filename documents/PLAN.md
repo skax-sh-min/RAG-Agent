@@ -48,7 +48,8 @@
 - ~~**Phase 3 — Chat 피드백(좋아요/싫어요) 기반 컨텍스트 제외**~~ → ✅ 완료 (2026-07-02, §6.9 — `conversation_turns.feedback` 컬럼, `PATCH /ui/threads/{threadId}/turns/{turnId}/feedback`, DISLIKE는 `getHistory()`에서 하드 제외)
 - ~~**Phase 3 — 입력 시작 시 로컬 요약 선계산 + 중복 제거 컨텍스트 압축**~~ → ✅ 완료 (2026-07-03, §6.10 — `ConversationSummarizerService`, `POST /ui/chat/summary/precompute`, LOCAL 전용 요약 + 캐시, 실패 시 `getHistory()` 자동 폴백)
 - ~~**Phase 3 — LLM 사용량 임베딩 사용량 분리**~~ → ✅ 완료 (2026-07-04, §6.6 — `TrackingEmbeddingModel` 데코레이터가 `embed:<model>` 프로바이더로 별도 기록, `/llm-usage` 표·카드·차트 시각 분리, usage 미반환 시 chars/4 근사 폴백)
-- **Phase 3 잔여** (미착수, §6.5·6.7·6.8·6.11 상세): 사용자별 LLM 토큰 쿼터(§6.5) · 사용자별 스토리지 쿼터(§6.11) · 비활성 프로바이더 조건부 표시(§6.7) · orphan 프로바이더 기록 삭제(§6.8)
+- ~~**Phase 3 — LLM 사용량 비활성 프로바이더 조건부 표시**~~ → ✅ 완료 (2026-07-04, §6.7 — `LlmUsageRepository.usedProviders()` + `OperationsController.visibleChatProviders()` 공통 필터, 미설정+이력 없는 프로바이더는 카드·표·차트에서 숨김, 이력 있으면 계속 표시)
+- **Phase 3 잔여** (미착수, §6.5·6.8·6.11 상세): 사용자별 LLM 토큰 쿼터(§6.5) · 사용자별 스토리지 쿼터(§6.11) · orphan 프로바이더 기록 삭제(§6.8)
 - **Phase 4** (조건부, 미착수): OAuth2 소셜 로그인(§7.1) · PostgreSQL 마이그레이션(§7.2) · 관리자 페이지 확장(§7.3, ※ `/admin` 기본 골격은 Phase 5.8에서 이미 존재)
 - ~~**Phase 5**: sqlite-vec 선택적 연동~~ → ✅ 완료 (Step 5.1~5.8, `app.vectorstore.type=chroma|sqlite-vec`)
 - ~~**Phase 5 추가**: Step 5.9 태그 기반 검색 스코프 + Step 5.10 sqlite-vec 운영/벡터 DB 분리~~ → ✅ 완료 (2026-07-01, Step 5.9 태그 필터/제안/복원 + Step 5.10 `SQLITE_VEC_DB_PATH` 분리 스위치). vec0 라이브 부팅은 운영 인수
@@ -319,29 +320,19 @@ SQLite `audit_log` 테이블 대신 Logback `SizeAndTimeBasedRollingPolicy`로 �
 - usage 미반환 임베딩 서버에서도 기록이 깨지지 않는다(근사 또는 0 + 경고 로그 1회).
 - 기존 채팅 사용량 표/차트 회귀 0.
 
-### 6.7 LLM 사용량 — 비활성 프로바이더 조건부 표시 🔵 계획
+### 6.7 LLM 사용량 — 비활성 프로바이더 조건부 표시 ✅ 완료
 
-> **현재 코드 확인 (2026-07-02)**: `OperationsController.buildProviderReports()` 존재, `LlmUsageRepository`에 `usedProviders()` 조회 없음(추가 필요). 아래 설계 유효.
+`LlmUsageRepository.usedProviders()`(`SELECT DISTINCT provider_name FROM llm_usage WHERE call_count > 0`)를 신설하고, `OperationsController`에 `visibleChatProviders()` 공통 헬퍼를 추가해 `configured == true || usedProviders.contains(name)`로 채팅 프로바이더 목록을 필터링한다. 카드(`buildProviderReports()`)·REST 표(`/api/v1/llm/usage`)·REST 차트 이력(`/api/v1/llm/usage/history`) 세 경로 모두 `props.llmSafe().providers()`를 직접 순회하던 것을 이 헬퍼 호출로 교체해, 세 화면의 표시 목록이 항상 정확히 일치하도록 했다(설계 그대로 채택, `kind` 컬럼 등 스키마 변경 없음). "사용량 있음" 판정은 설계안대로 표시 기간과 무관한 **누적(all-time)** 기준으로 단순화했다(옵션 플래그 없이 확정). §6.6에서 추가된 `embed:<model>` 항목은 이 필터 대상이 아니다 — `props.llmSafe().providers()`에 속하지 않는 별도 경로이고 `configured=true`로 고정돼 있어 항상 표시된다(임베딩 모델은 부팅 시 필수 빈이라 "비활성" 개념 자체가 없음).
 
-**문제**: `OperationsController`의 세 경로(`/api/v1/llm/usage` 표, `/usage/history` 차트, `buildProviderReports()` 카드)는 모두 `props.llmSafe().providers()` **전체**를 순회한다. 그래서 API 키가 없어 **비활성(`LlmProviderReport.configured == false`)인 프로바이더도 항상** 사용량 0으로 표시되어, 카드·표·차트가 쓰지 않는 프로바이더로 지저분해진다.
+> **구현 메모 (2026-07-04)**:
+> - **실사용 검증**: 로컬 개발 서버(`app.llm.providers` 6개 중 `local`만 키 설정, 나머지 5개는 빈 키 + 사용 이력 없음)에서 `/llm-usage` 재기동 전/후를 비교 — 필터 적용 전에는 카드 7개(채팅 6 + 임베딩 1, 5개는 "API 키 미설정" 배지에 사용량 0), 적용 후에는 카드 2개(`local` + `embed:...`)만 남고 나머지 5개가 카드·차트 범례·표 3곳 모두에서 동시에 사라짐을 스크린샷으로 확인.
+> - **테스트**: `LlmUsageRepositoryTest` +2(`usedProviders()` 빈 결과/기록된 provider만 반환) + `OperationsControllerUsageTest` +3(미설정+이력없음 → 3경로 모두 제외, 미설정+이력있음 → 3경로 모두 유지, 설정된 provider는 사용량 0이어도 유지). 전체 355 tests BUILD SUCCESS(회귀 0).
 
-**요구**: 비활성(=키 없음) 프로바이더는 **실제 사용 이력이 있을 때만** 노출한다. 활성 프로바이더는 사용량이 0이어도 항상 표시. (과거 키가 있어 사용하다 지금 비활성화된 경우엔 이력 보존을 위해 계속 표시.)
-
-**선행 확인 (현재 코드 기준)**:
-- "비활성" 판별은 이미 존재 — `LlmProviderReport.configured` = `apiKey` blank 여부. ※ Phase 6 G1로 LOCAL role은 키 없이도 런타임 등록되지만 UI는 config의 `apiKey` 기준이라 비활성으로 분류됨 → "사용량 있으면 표시" 규칙으로 자연히 노출되므로 별도 예외 불필요.
-- "사용량 있음" 데이터: `llm_usage`에 해당 `provider_name` 행 존재 + (`call_count > 0` 또는 토큰 합 > 0).
-- 필터는 **세 경로(카드/표/차트)에 일관 적용**해야 숨긴 프로바이더가 어디서도 안 보임.
-
-**설계**:
-1. `LlmUsageRepository`에 사용 이력 프로바이더 집합 조회 추가: `SELECT DISTINCT provider_name FROM llm_usage WHERE call_count > 0` → `Set<String> usedProviders()`. 단일 쿼리, 결과 작음(인덱스 불필요).
-2. `OperationsController`에서 report 목록을 `configured == true || usedProviders.contains(name)`로 필터. 세 경로가 쓰는 **공통 헬퍼**로 적용해 표시 목록 일치 보장.
-3. (선택) "사용량 있음" 기준 기간: 기본은 **누적(all-time) 존재**로 단순화(표시 기간과 무관하게 한 번이라도 쓴 비활성 프로바이더는 노출 — 이력 추적 목적). 더 엄격히 하려면 표시 기간 내 사용량으로 한정하는 옵션 플래그.
-
-**완료 기준**:
-- 키 없는 비활성 프로바이더 중 **사용 이력이 0인 것은 카드·표·차트 어디에도 표시되지 않는다.**
-- 사용 이력이 있는 비활성 프로바이더는 계속 표시된다(과거 데이터 보존).
+**완료 기준 달성**:
+- 키 없는 비활성 프로바이더 중 사용 이력이 0인 것은 카드·표·차트 어디에도 표시되지 않는다 — 실사용 검증 완료.
+- 사용 이력이 있는 비활성 프로바이더는 계속 표시된다(과거 데이터 보존) — 단위 테스트로 검증.
 - 활성 프로바이더는 사용량 0이어도 항상 표시(회귀 없음).
-- 세 경로(카드/표/차트)의 표시 목록이 일치한다.
+- 세 경로(카드/표/차트)의 표시 목록이 일치한다(공통 `visibleChatProviders()` 헬퍼로 보장).
 
 ### 6.8 LLM 사용량 — 설정에 없는(orphan) 프로바이더 기록 삭제 🔵 계획
 

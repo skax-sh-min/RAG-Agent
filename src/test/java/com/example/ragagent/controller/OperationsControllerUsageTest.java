@@ -20,8 +20,10 @@ import org.springframework.test.web.servlet.MockMvc;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import static org.hamcrest.Matchers.containsString;
+import static org.hamcrest.Matchers.not;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
@@ -29,11 +31,13 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * QA — OperationsController LLM/embedding usage reporting (§6.6)
+ * QA — OperationsController LLM/embedding usage reporting (§6.6) + inactive-provider
+ * filtering (§6.7)
  *
  * Verifies the embedding pseudo-provider ("embed:&lt;model&gt;", type=EMBEDDING) appears
  * alongside chat providers in all three usage surfaces without disturbing the existing
- * chat provider entries.
+ * chat provider entries, and that unconfigured chat providers are hidden unless they have
+ * historical usage.
  */
 @WebMvcTest(value = OperationsController.class, properties = "app.auth.enabled=true")
 @Import({com.example.ragagent.context.WebMvcConfig.class, com.example.ragagent.security.SecurityConfig.class})
@@ -97,5 +101,62 @@ class OperationsControllerUsageTest {
                 .andExpect(status().isOk())
                 .andExpect(content().string(containsString("embed:nomic-embed")))
                 .andExpect(content().string(containsString("EMBEDDING")));
+    }
+
+    // ── §6.7 — inactive (unconfigured) provider filtering ────────────────────
+
+    /** apiKey="" → unconfigured; only shown when usedProviders() contains its name. */
+    private void withGhostProvider() {
+        var local = new AppProperties.ProviderConfig(
+                "local", "http://localhost:1234/v1", "sk-fake", "gemma", "BOTH", "LOCAL", 0, true);
+        var ghost = new AppProperties.ProviderConfig(
+                "ghost", "https://api.example.com", "", "ghost-model", "TEXT", "NORMAL", 1, true);
+        when(props.llmSafe()).thenReturn(new AppProperties.LlmConfig(
+                List.of(local, ghost), 2, 10, 180, "COST_FIRST", 0.6));
+    }
+
+    @Test
+    @DisplayName("§6.7 — 미설정(apiKey 없음) + 사용 이력 없는 provider는 카드·표·차트 어디에도 안 보임")
+    void unconfiguredProviderWithoutHistory_excludedEverywhere() throws Exception {
+        withGhostProvider();
+        when(usageRepo.usedProviders()).thenReturn(Set.of());
+
+        mvc.perform(get("/api/v1/llm/usage"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[*].provider", not(org.hamcrest.Matchers.hasItem("ghost"))));
+        mvc.perform(get("/api/v1/llm/usage/history"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.ghost").doesNotExist());
+        mvc.perform(get("/ui/llm-usage/cards"))
+                .andExpect(status().isOk())
+                .andExpect(content().string(not(containsString("ghost-model"))));
+    }
+
+    @Test
+    @DisplayName("§6.7 — 미설정이지만 사용 이력 있는 provider는 계속 표시됨(이력 보존)")
+    void unconfiguredProviderWithHistory_stillShownEverywhere() throws Exception {
+        withGhostProvider();
+        when(usageRepo.usedProviders()).thenReturn(Set.of("ghost"));
+
+        mvc.perform(get("/api/v1/llm/usage"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[*].provider", org.hamcrest.Matchers.hasItem("ghost")));
+        mvc.perform(get("/api/v1/llm/usage/history"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.ghost").exists());
+        mvc.perform(get("/ui/llm-usage/cards"))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("ghost-model")));
+    }
+
+    @Test
+    @DisplayName("§6.7 — 설정된(apiKey 있음) provider는 사용 이력 0이어도 항상 표시(회귀 방지)")
+    void configuredProviderWithZeroUsage_alwaysShown() throws Exception {
+        withGhostProvider();
+        when(usageRepo.usedProviders()).thenReturn(Set.of());
+
+        mvc.perform(get("/api/v1/llm/usage"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[*].provider", org.hamcrest.Matchers.hasItem("local")));
     }
 }

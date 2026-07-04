@@ -154,7 +154,7 @@ public class OperationsController {
     @ResponseBody
     public List<UsageReport> getLlmUsage() {
         Map<String, Instant> blocked = circuitBreaker.getBlockedProviders();
-        Stream<UsageReport> chatUsage = props.llmSafe().providers().stream()
+        Stream<UsageReport> chatUsage = visibleChatProviders().stream()
                 .map(cfg -> {
                     String name = cfg.name();
                     Instant until = blocked.get(name);
@@ -188,7 +188,7 @@ public class OperationsController {
             @RequestParam(defaultValue = "30") int days) {
         int safeDays = Math.min(Math.max(days, 1), 365);
         Map<String, List<LlmUsageRepository.DailyRow>> history = new HashMap<>();
-        for (AppProperties.ProviderConfig cfg : props.llmSafe().providers()) {
+        for (AppProperties.ProviderConfig cfg : visibleChatProviders()) {
             history.put(cfg.name(), usageRepo.getDailyHistory(cfg.name(), safeDays));
         }
         String embedName = embeddingProviderName();
@@ -217,7 +217,7 @@ public class OperationsController {
      */
     private List<LlmProviderReport> buildProviderReports() {
         Map<String, Instant> blocked = circuitBreaker.getBlockedProviders();
-        Stream<LlmProviderReport> chatReports = props.llmSafe().providers().stream()
+        Stream<LlmProviderReport> chatReports = visibleChatProviders().stream()
                 .map(cfg -> new LlmProviderReport(
                         cfg.name(),
                         cfg.type(),
@@ -227,7 +227,7 @@ public class OperationsController {
                         usageRepo.getWeekly(cfg.name()),
                         usageRepo.getMonthly(cfg.name()),
                         blocked.get(cfg.name()),
-                        cfg.apiKey() != null && !cfg.apiKey().isBlank()
+                        isConfigured(cfg)
                 ));
         String embedName = embeddingProviderName();
         LlmProviderReport embedReport = new LlmProviderReport(
@@ -242,6 +242,24 @@ public class OperationsController {
                 true
         );
         return Stream.concat(chatReports, Stream.of(embedReport)).toList();
+    }
+
+    /**
+     * Chat providers to surface in the cards/table/chart (§6.7). Configured providers always
+     * show, even with zero usage. Unconfigured (no API key) providers show only if they have
+     * historical usage — hides never-used placeholder providers while preserving history for
+     * ones that were used and later had their key removed. Applied once here so all three
+     * usage surfaces (cards, REST usage, REST history) agree on the same visible set.
+     */
+    private List<AppProperties.ProviderConfig> visibleChatProviders() {
+        Set<String> used = usageRepo.usedProviders();
+        return props.llmSafe().providers().stream()
+                .filter(cfg -> isConfigured(cfg) || used.contains(cfg.name()))
+                .toList();
+    }
+
+    private static boolean isConfigured(AppProperties.ProviderConfig cfg) {
+        return cfg.apiKey() != null && !cfg.apiKey().isBlank();
     }
 
     /** {@code "embed:" + model} — matches the key TrackingEmbeddingModel records under. */
