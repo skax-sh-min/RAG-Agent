@@ -5,6 +5,7 @@ import com.example.ragagent.llm.LlmProvider;
 import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.llm.TaskType;
+import com.example.ragagent.security.PromptInjectionGuard;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
@@ -81,9 +82,10 @@ public class DirectAnswerService {
 
     private static String buildUserPrompt(AgentState state) {
         String history = state.conversationHistory();
+        String question = PromptInjectionGuard.wrap(state.question());
         return history.isBlank()
-                ? state.question()
-                : "[이전 대화]\n%s\n\n[현재 질문]\n%s".formatted(history, state.question());
+                ? question
+                : "[이전 대화]\n%s\n\n[현재 질문]\n%s".formatted(history, question);
     }
 
     /**

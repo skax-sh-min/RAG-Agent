@@ -99,6 +99,21 @@ class DirectAnswerServiceTest {
     }
 
     @Test
+    @DisplayName("execute — 질문이 PromptInjectionGuard.wrap()으로 감싸져 전달됨 (EDIT.md #5)")
+    void execute_wrapsQuestionInUserQuestionDelimiters() {
+        ChatModel chatModel = mock(ChatModel.class);
+        when(chatModel.stream(any(Prompt.class))).thenReturn(Flux.just(chatResponse("답변")));
+        when(llmRouter.route(eq(TaskType.TEXT), any())).thenReturn(chatModel);
+        org.mockito.ArgumentCaptor<Prompt> captor = org.mockito.ArgumentCaptor.forClass(Prompt.class);
+
+        service.execute(newState(false));
+
+        verify(chatModel).stream(captor.capture());
+        String userText = captor.getValue().getUserMessage().getText();
+        assertThat(userText).contains("[USER_QUESTION]").contains("[/USER_QUESTION]");
+    }
+
+    @Test
     @DisplayName("execute — DUAL 라우팅 모드는 COST_FIRST 로 폴백(DirectAnswer 는 DUAL 미지원)")
     void execute_dualMode_fallsBackToCostFirst() {
         ChatModel chatModel = mock(ChatModel.class);

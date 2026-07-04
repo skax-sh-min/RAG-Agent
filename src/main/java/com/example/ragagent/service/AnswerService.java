@@ -8,6 +8,7 @@ import com.example.ragagent.llm.LlmProvider;
 import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.llm.TaskType;
+import com.example.ragagent.security.PromptInjectionGuard;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
@@ -244,7 +245,7 @@ public class AnswerService {
                     .map(d -> d.getText() == null ? "" : d.getText())
                     .collect(Collectors.joining("\n---\n"));
             String evalPrompt = "[질문]\n%s\n\n[답변]\n%s\n\n[문서 발췌]\n%s\n\n%s"
-                    .formatted(state.question(), answer, excerpts, evalConverter.getFormat());
+                    .formatted(PromptInjectionGuard.wrap(state.question()), answer, excerpts, evalConverter.getFormat());
 
             StringBuilder buf = new StringBuilder();
             chatClient.prompt()
@@ -292,7 +293,7 @@ public class AnswerService {
             sb.append("[경고]\n").append(String.join("\n", state.retrievalWarnings())).append("\n\n");
         }
 
-        sb.append("[질문]\n").append(state.question());
+        sb.append("[질문]\n").append(PromptInjectionGuard.wrap(state.question()));
         return sb.toString();
     }
 

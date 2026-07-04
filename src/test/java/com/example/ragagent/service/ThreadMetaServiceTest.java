@@ -100,6 +100,23 @@ class ThreadMetaServiceTest {
     }
 
     @Test
+    @DisplayName("generateTitleAsync — 질문이 PromptInjectionGuard.wrap()으로 감싸져 전달됨 (EDIT.md #5)")
+    void generateTitleAsync_wrapsQuestionInUserQuestionDelimiters() {
+        ThreadMeta fresh = new ThreadMeta("t1", "u1", "[latest] 새 대화", "latest", "now", "now", "COST_FIRST");
+        when(repository.findById("u1", "t1")).thenReturn(Optional.of(fresh));
+        when(chatClient.prompt().user(anyString()).stream().content())
+                .thenReturn(Flux.just("요약"));
+        org.mockito.ArgumentCaptor<String> captor = org.mockito.ArgumentCaptor.forClass(String.class);
+        ChatClient.ChatClientRequestSpec requestSpec = chatClient.prompt();
+        org.mockito.Mockito.clearInvocations(requestSpec);
+
+        service.generateTitleAsync("u1", "t1", "latest", "질문");
+
+        verify(requestSpec, timeout(2000)).user(captor.capture());
+        assertThat(captor.getValue()).contains("[USER_QUESTION]").contains("[/USER_QUESTION]");
+    }
+
+    @Test
     @DisplayName("generateTitleAsync — LLM 실패해도 예외 전파 없이 조용히 무시")
     void generateTitleAsync_llmFailure_failsSilently() {
         ThreadMeta fresh = new ThreadMeta("t1", "u1", "[latest] 새 대화", "latest", "now", "now", "COST_FIRST");

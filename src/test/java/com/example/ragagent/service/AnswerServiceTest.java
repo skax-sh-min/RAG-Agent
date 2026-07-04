@@ -112,6 +112,23 @@ class AnswerServiceTest {
         assertThat(result.needsRetry()).isFalse();
     }
 
+    @Test
+    @DisplayName("BLOCKING — 질문이 답변/평가 프롬프트 모두에서 PromptInjectionGuard.wrap()으로 감싸짐 (EDIT.md #5)")
+    void blocking_wrapsQuestionInUserQuestionDelimiters() {
+        when(chatClient.prompt().system(anyString()).user(anyString()).stream().content())
+                .thenReturn(Flux.just("답변"), Flux.just("{\"sufficient\":true}"));
+        when(llmRouter.findProviderName(any(), any())).thenReturn("gemini-flash");
+        org.mockito.ArgumentCaptor<String> captor = org.mockito.ArgumentCaptor.forClass(String.class);
+        ChatClient.ChatClientRequestSpec requestSpec = chatClient.prompt().system(anyString());
+        org.mockito.Mockito.clearInvocations(requestSpec);
+
+        service.execute(newState(RoutingMode.COST_FIRST));
+
+        verify(requestSpec, times(2)).user(captor.capture());
+        assertThat(captor.getAllValues()).allSatisfy(prompt ->
+                assertThat(prompt).contains("[USER_QUESTION]").contains("[/USER_QUESTION]"));
+    }
+
     // ── DUAL BLOCKING 경로 ───────────────────────────────────────────────
 
     @Test

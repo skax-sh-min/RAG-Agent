@@ -11,11 +11,14 @@ import reactor.core.publisher.Flux;
 
 import java.util.Locale;
 
+import org.mockito.ArgumentCaptor;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -118,5 +121,21 @@ class ClassifierServiceTest {
         String type = service.classifyOnly("질문", Locale.KOREAN);
 
         assertThat(type).isEqualTo("error");
+    }
+
+    @Test
+    @DisplayName("execute/classifyOnly — 질문이 PromptInjectionGuard.wrap()으로 감싸져 전달됨 (EDIT.md #5)")
+    void wrapsQuestionInUserQuestionDelimiters() {
+        stubResponse("{\"question_type\": \"concept\"}");
+        ArgumentCaptor<String> captor = ArgumentCaptor.forClass(String.class);
+        ChatClient.ChatClientRequestSpec requestSpec = chatClient.prompt().system(anyString());
+        org.mockito.Mockito.clearInvocations(requestSpec);
+
+        service.execute(newState());
+        service.classifyOnly("질문", Locale.KOREAN);
+
+        verify(requestSpec, org.mockito.Mockito.times(2)).user(captor.capture());
+        assertThat(captor.getAllValues()).allSatisfy(prompt ->
+                assertThat(prompt).contains("[USER_QUESTION]").contains("[/USER_QUESTION]"));
     }
 }
