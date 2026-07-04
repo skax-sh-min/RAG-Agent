@@ -111,7 +111,7 @@
 
     // ── Chart ─────────────────────────────────────────────────────────────
     async function loadChart(days) {
-        const res  = await fetch('/api/llm/usage/history?days=' + days);
+        const res  = await fetch('/api/v1/llm/usage/history?days=' + days);
         const data = await res.json();
 
         // Build a full date axis (gaps filled with 0)
@@ -131,7 +131,9 @@
                 return row ? row.inputTokens + row.outputTokens : 0;
             }),
             backgroundColor: CHART_COLORS[idx % CHART_COLORS.length],
-            stack: 'tokens'
+            // Embedding usage gets its own stack group so it renders as a separate bar
+            // cluster per day instead of summing into the chat token stack.
+            stack: name.startsWith('embed:') ? 'embedding' : 'tokens'
         }));
 
         if (chartInstance) chartInstance.destroy();
@@ -160,7 +162,7 @@
 
     // ── Period table ──────────────────────────────────────────────────────
     async function loadTable(period) {
-        const res     = await fetch('/api/llm/usage');
+        const res     = await fetch('/api/v1/llm/usage');
         const reports = await res.json();
         const tbody   = document.getElementById('usage-table-body');
 

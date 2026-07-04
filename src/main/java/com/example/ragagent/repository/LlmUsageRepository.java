@@ -6,7 +6,9 @@ import org.springframework.stereotype.Repository;
 
 import java.time.LocalDate;
 import java.time.ZoneOffset;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * Tracks per-provider token usage in SQLite (daily UPSERT, period aggregation).
@@ -52,6 +54,17 @@ public class LlmUsageRepository {
                     output_tokens = output_tokens + excluded.output_tokens,
                     call_count    = call_count    + 1
                 """, provider, today, inputTokens, outputTokens);
+    }
+
+    /** Provider names with at least one recorded call, all-time (§6.7 — inactive-provider filter). */
+    public Set<String> usedProviders() {
+        return new HashSet<>(jdbc.queryForList(
+                "SELECT DISTINCT provider_name FROM llm_usage WHERE call_count > 0", String.class));
+    }
+
+    /** Deletes all rows for a provider (§6.8 — orphan cleanup). Returns the number of rows removed. */
+    public int deleteByProvider(String provider) {
+        return jdbc.update("DELETE FROM llm_usage WHERE provider_name = ?", provider);
     }
 
     // ── Period aggregation ─────────────────────────────────────────────────

@@ -1,5 +1,7 @@
 package com.example.ragagent.config;
 
+import com.example.ragagent.llm.TrackingEmbeddingModel;
+import com.example.ragagent.repository.LlmUsageRepository;
 import org.springframework.ai.document.MetadataMode;
 import org.springframework.ai.embedding.EmbeddingModel;
 import org.springframework.ai.openai.OpenAiEmbeddingModel;
@@ -15,7 +17,7 @@ public class EmbeddingBeanConfig {
 
     @Bean
     @Primary
-    public EmbeddingModel embeddingModel(AppProperties props) {
+    public EmbeddingModel embeddingModel(AppProperties props, LlmUsageRepository usageRepo) {
         AppProperties.EmbeddingConfig cfg = props.embeddingSafe();
         if (cfg == null || cfg.baseUrl() == null || cfg.baseUrl().isBlank()) {
             throw new IllegalStateException(
@@ -40,13 +42,15 @@ public class EmbeddingBeanConfig {
                 .maxAttempts(2)
                 .exponentialBackoff(500, 2.0, 5_000)
                 .build();
-        return new OpenAiEmbeddingModel(
+        String model = cfg.model() != null ? cfg.model() : "text-embedding-ada-002";
+        OpenAiEmbeddingModel raw = new OpenAiEmbeddingModel(
                 api,
                 MetadataMode.EMBED,
                 OpenAiEmbeddingOptions.builder()
-                        .model(cfg.model() != null ? cfg.model() : "text-embedding-ada-002")
+                        .model(model)
                         .build(),
                 shortRetry
         );
+        return new TrackingEmbeddingModel(raw, usageRepo, model, cfg.usageFallbackEnabled());
     }
 }

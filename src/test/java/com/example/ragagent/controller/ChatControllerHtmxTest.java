@@ -6,6 +6,7 @@ import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.model.ChatResponse;
 import com.example.ragagent.model.SourceRef;
 import com.example.ragagent.service.AgentService;
+import com.example.ragagent.service.ConversationSummarizerService;
 import com.example.ragagent.service.MemoryService;
 import com.example.ragagent.service.StreamingAgentService;
 import com.example.ragagent.service.ThreadMetaService;
@@ -50,6 +51,7 @@ class ChatControllerHtmxTest {
     @MockitoBean StreamingAgentService streamingAgentService;
     @MockitoBean ThreadMetaService threadMetaService;
     @MockitoBean MemoryService memoryService;
+    @MockitoBean ConversationSummarizerService summarizerService;
     @MockitoBean AppProperties props;
     @MockitoBean LlmRouter llmRouter;
     @MockitoBean ChatModel chatModel;
@@ -157,5 +159,14 @@ class ChatControllerHtmxTest {
                         .with(csrf()))
                 .andExpect(status().isOk())
                 .andExpect(request().asyncStarted());
+    }
+
+    @Test
+    @DisplayName("§6.10 — POST /ui/chat/summary/precompute → 202 Accepted (백그라운드 발화 후 즉시 응답)")
+    void precomputeSummary_returnsAccepted() throws Exception {
+        mvc.perform(post("/ui/chat/summary/precompute")
+                        .param("threadId", "t1")
+                        .with(csrf()))
+                .andExpect(status().isAccepted());
     }
 }

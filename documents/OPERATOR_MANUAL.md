@@ -139,6 +139,11 @@ rag_java/
 2. Docker: `docker-compose.yml`의 `app.volumes`에서 바이너리 마운트 주석을 해제하고 `SQLITE_VEC_EXTENSION_PATH=/opt/sqlite-vec/vec0`(suffix 생략)로 지정합니다. 로컬 실행 시엔 호스트 절대경로를 지정합니다.
 3. `EMBED_*` 임베딩 모델의 **벡터 차원수**를 `app.embedding.dimensions`(예: 1536)로 반드시 설정합니다 — 미설정 시 기동이 실패합니다.
 
+> **macOS 격리(quarantine) 주의**: 브라우저로 받은 `vec0.dylib`에는 macOS Gatekeeper가 `com.apple.quarantine` 속성을 붙여 서명되지 않은 바이너리의 `dlopen()` 로딩을 차단합니다. 기동 로그에는 `.../vec0.dylib.dylib`처럼 확장자가 중복된 경로 실패로 보이지만(SQLite가 첫 시도 실패 후 플랫폼 접미사를 다시 붙여 재시도하는 흔적일 뿐, 진짜 원인 아님) 근본 원인은 격리 플래그입니다. 아키텍처(`file`/`lipo -info`로 arm64/x86_64 확인)가 맞는데도 로딩이 실패하면 다음으로 해제하세요:
+> ```bash
+> xattr -d com.apple.quarantine <vec0.dylib 경로>
+> ```
+
 > **백엔드 전환 = 재인덱싱**: chroma ↔ sqlite-vec 간 벡터는 공유되지 않습니다. 전환 후 문서 재업로드(또는 재동기화)로 재인덱싱해야 합니다 — 원본은 `data/documents/`에 보존됩니다. `/admin` 페이지는 **두 백엔드 모두** 상태 카드·청크 조회/편집/삭제를 제공합니다(§7).
 
 ---
@@ -220,6 +225,12 @@ copy .env.example .env
 | `EMBED_READ_TIMEOUT_SECONDS` | `120` | 30 ~ 600 | 임베딩 API 응답 읽기 타임아웃 (`app.embedding.read-timeout-seconds`) |
 | `CHROMA_CONNECT_TIMEOUT_SECONDS` | `5` | 1 ~ 15 | Chroma API 연결 타임아웃 (`app.chroma.connect-timeout-seconds`) |
 | `CHROMA_READ_TIMEOUT_SECONDS` | `60` | 10 ~ 300 | Chroma API 응답 읽기 타임아웃 (`app.chroma.read-timeout-seconds`) |
+
+#### 임베딩 사용량 추적
+
+| 변수 | 기본값 | 설명 |
+|------|--------|------|
+| `EMBED_USAGE_FALLBACK_ENABLED` | `true` | 임베딩 사용량은 `llm_usage`에 `embed:<model>`로 채팅과 분리 집계되어 `/llm-usage`에 별도 카드로 표시됩니다(§5.5, §10). 임베딩 서버가 응답에 토큰 사용량을 반환하지 않으면(로컬 llama-server 등 흔함) 입력 텍스트 길이 근사(chars/4)로 대체 기록합니다. `false`로 설정하면 근사 대신 `0`을 기록합니다. 근사 경로 진입 시 서버 로그에 경고가 **최초 1회만** 출력됩니다 |
 
 #### LLM 응답 파라미터
 
@@ -515,6 +526,7 @@ mvn spring-boot:run
 
 > Windows 로컬 예시 경로는 `.env.example.sqlite`의 `SQLITE_VEC_EXTENSION_PATH=./lib/win64/vec0.dll`를 참고하세요.
 > 운영 환경에서는 실제 vec0 바이너리 위치로 변경해야 하며, 시작 로그에서 vec0 로딩 성공(`vec_version()`)을 확인하세요.
+> macOS에서 `dlopen` 실패로 기동이 안 되면 §3.1의 "macOS 격리(quarantine) 주의" 참조.
 
 ---
 
@@ -1203,6 +1215,22 @@ COST_FIRST 흐름:
 - 차단 상태는 인메모리(`ConcurrentHashMap`) 유지 — 서버 재시작 시 초기화
 - 모든 프로바이더 소진 시 → `LlmProviderExhaustedException` (500 응답)
 - `/llm-usage` 대시보드에서 차단 중인 프로바이더를 빨간 카드 + MM:SS 카운트다운으로 확인 가능
+- 임베딩 호출은 Circuit Breaker 대상이 아닙니다 — `/llm-usage`의 `embed:<model>` 카드는 항상 "정상" 배지로 표시되며 실패 시 재시도/차단 없이 즉시 예외가 전파됩니다(`EMBED_USAGE_FALLBACK_ENABLED` §3.2)
+- API 키가 없는(비활성) 프로바이더는 **사용 이력이 없으면** `/llm-usage`의 카드·표·차트 어디에도 표시되지 않습니다. 과거에 사용된 적이 있으면 키를 제거한 뒤에도 이력 보존을 위해 계속 표시됩니다. 활성(키 설정됨) 프로바이더는 사용량이 0이어도 항상 표시됩니다(§10)
+
+### 5.6 Orphan 프로바이더 사용 기록 정리
+
+설정(`app.llm.providers`)에서 완전히 제거된 프로바이더나, `EMBED_MODEL`을 변경한 뒤 남은 이전 임베딩 모델의 `embed:<old-model>` 기록은 `llm_usage`에 그대로 남아 orphan이 됩니다. `/llm-usage`에서 회색 **ORPHAN** 배지 카드로 노출되며, 카드 우측 상단 🗑 아이콘으로 정리할 수 있습니다.
+
+- **삭제 대상 판별**: 현재 config에 없는 프로바이더 이름, 또는 현재 활성 임베딩 모델이 아닌 `embed:*` 이름만 orphan으로 분류됩니다. 활성 프로바이더·현재 임베딩 모델 카드에는 삭제 버튼 자체가 없고, API를 직접 호출해도 서버가 400으로 거부합니다.
+- **엔드포인트**: `DELETE /admin/llm-usage/{provider}` — `/admin/**` 경로 아래에 있어 `ROLE_ADMIN` 전용입니다. no-auth 모드에서는 `/admin/**`에 대한 기존 관리자 자동 인증(§9.4)이 그대로 적용되어 별도 로그인 없이 동작합니다. 인증 모드에서는 CSRF 토큰이 필요합니다(HTMX 버튼은 자동 첨부).
+- **감사 로그**: 삭제 시 `AuditLogger`에 `llm-usage.delete-orphan` 이벤트(프로바이더명, 삭제 행 수)가 기록됩니다.
+- **API 예시** (no-auth 모드 — CSRF 비활성화라 세션/토큰 불필요):
+  ```bash
+  curl -X DELETE http://localhost:8080/admin/llm-usage/old-model-name
+  ```
+  인증 모드에서는 세션 쿠키 + CSRF 토큰이 필요하므로 `/llm-usage` 화면의 삭제 버튼 사용을 권장합니다.
+- 삭제 시 카드는 즉시 갱신되지만, `/llm-usage`의 일별 차트·기간별 표는 별도 fetch라 다음 로드/새로고침에 반영됩니다.
 
 ---
 
@@ -1626,6 +1654,9 @@ app.auth.enabled=false
 **LLM 및 운영**:
 - [ ] `/llm-usage` — 프로바이더 카드 정상(초록) 확인
 - [ ] `/llm-usage` — 일별 차트 데이터 표시 확인
+- [ ] `/llm-usage` — `embed:<model>` 카드가 채팅 프로바이더와 분리 표시되고 인덱싱/검색 후 토큰이 누적되는지 확인
+- [ ] `/llm-usage` — 키 없는(비활성) 프로바이더 중 사용 이력 없는 항목이 카드·표·차트에서 숨겨지는지 확인
+- [ ] `/llm-usage` — orphan 카드(있다면) 삭제 버튼 클릭 → 카드 사라짐 + `AuditLogger`에 `llm-usage.delete-orphan` 기록 확인, 활성 프로바이더는 삭제 버튼이 없는지 확인
 - [ ] Circuit Breaker 차단 없음 확인
 - [ ] 데이터 디렉터리(`data/`) 마운트 및 쓰기 권한 확인
 - [ ] Chroma 볼륨 영속성 확인 (재시작 후 문서 목록 유지)

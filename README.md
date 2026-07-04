@@ -101,6 +101,7 @@ See [USER_MANUAL.md](USER_MANUAL.md) for usage instructions and [OPERATOR_MANUAL
 | `EMBED_API_KEY` | — | `LOCAL_LLM_KEY` | Embedding API key. Falls back to `LOCAL_LLM_KEY` if unset |
 | `EMBED_MODEL` | — | `text-embedding-nomic-embed-text-v1.5` | Embedding model name |
 | `EMBED_DIMENSIONS` | sqlite-vec only | — | Embedding model's real output dimension (`app.embedding.dimensions`). Required for `sqlite-vec` (baked into the `vec0` DDL — must match the model: nomic=768, bge-m3=1024). Ignored by chroma |
+| `EMBED_USAGE_FALLBACK_ENABLED` | — | `true` | When the embedding server doesn't report token usage, approximate input tokens as chars/4 for the `/llm-usage` dashboard instead of recording 0 |
 | `VECTORSTORE_TYPE` | — | `chroma` | Vector store backend — `chroma` or `sqlite-vec` |
 | `SQLITE_VEC_EXTENSION_PATH` | — | — | sqlite-vec only — path to the operator-provided `vec0` loadable extension |
 | `CHROMA_HOST` | — | `http://localhost` | Chroma server host (chroma backend) |
@@ -182,7 +183,8 @@ rag_java/
     │   ├── llm/
     │   │   ├── LlmRouter.java         # Multi-provider routing: TaskType × RoutingMode
     │   │   ├── RoutingMode.java       # COST_FIRST|QUALITY_FIRST|PROGRESSIVE|DUAL|LOCAL_ONLY
-    │   │   └── CircuitBreaker.java    # In-memory per-provider circuit breaker (Retry-After aware)
+    │   │   ├── CircuitBreaker.java    # In-memory per-provider circuit breaker (Retry-After aware)
+    │   │   └── TrackingEmbeddingModel.java  # EmbeddingModel decorator — records embedding token usage separately (embed:<model>)
     │   ├── model/                     # Java 21 records
     │   │   ├── MetaKey.java           # Vector store metadata key constants
     │   │   └── ChatRequest/Response/SourceRef/DocumentInfo/SyncResult/ThreadMeta/ChatForm/LlmProviderReport/IndexingProgressEvent.java
@@ -292,7 +294,7 @@ User question
 - **Message bubble restore** — re-entering `/chat/{threadId}` server-renders all previous turn bubbles
 - **Source hover preview** — `SourceRef` record with Bootstrap Popover shows a 200-char chunk text preview on hover
 - **Code syntax highlighting** — highlight.js applied after DOMPurify sanitize, synced with dark mode
-- **LLM usage dashboard** — per-provider daily/weekly/monthly token stats, Chart.js daily history chart, circuit breaker countdown
+- **LLM usage dashboard** — per-provider daily/weekly/monthly token stats, Chart.js daily history chart, circuit breaker countdown; embedding usage tracked separately (`embed:<model>`, with an approximation fallback when the server omits usage); inactive providers with no history auto-hide, and orphaned records (removed from config) surface as admin-deletable cards
 - **Document versioning** — per-version isolation (chroma: separate collection; sqlite-vec: `version` partition key)
 - **Incremental indexing** — SHA-256 change detection, `doc_registry` SQLite table persistence (per-user)
 - **Multiple document formats** — PDF, PPTX, DOCX, TXT, MD

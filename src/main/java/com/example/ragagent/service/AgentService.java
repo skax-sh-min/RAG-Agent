@@ -30,12 +30,15 @@ public class AgentService {
     private final AgentGraph agentGraph;
     private final MemoryService memoryService;
     private final ClassifierService classifierService;
+    private final ConversationSummarizerService summarizerService;
 
     public AgentService(AgentGraph agentGraph, MemoryService memoryService,
-                        ClassifierService classifierService) {
+                        ClassifierService classifierService,
+                        ConversationSummarizerService summarizerService) {
         this.agentGraph = agentGraph;
         this.memoryService = memoryService;
         this.classifierService = classifierService;
+        this.summarizerService = summarizerService;
     }
 
     public ChatResponse chat(ThreadContext ctx, ChatRequest request) {
@@ -45,13 +48,13 @@ public class AgentService {
                 request.directMode(), request.routingMode(), request.threadId(), ctx.locale().getLanguage());
         AgentState initial;
         if (request.directMode()) {
-            String history = memoryService.getHistory(userId, request.threadId());
+            String history = resolveHistory(userId, request.threadId());
             initial = AgentState.of(request.question(), request.version(), request.threadId(),
                     userId, history, request.routingMode(), true, ctx.locale());
         } else {
             try (var exec = Executors.newVirtualThreadPerTaskExecutor()) {
                 CompletableFuture<String> historyF = CompletableFuture.supplyAsync(
-                        () -> memoryService.getHistory(userId, request.threadId()), exec);
+                        () -> resolveHistory(userId, request.threadId()), exec);
                 CompletableFuture<String> typeF = CompletableFuture.supplyAsync(
                         () -> classifierService.classifyOnly(request.question(), ctx.locale()), exec);
                 initial = AgentState.of(
@@ -80,6 +83,7 @@ public class AgentService {
             turnId = memoryService.addTurn(userId, request.threadId(), request.question(), result.answer(),
                     askedAt, result.totalInputTokens(), result.totalOutputTokens(),
                     (int) elapsedMs, result.usedProvider(), result.llmCallCount());
+            summarizerService.invalidate(request.threadId());
         }
 
         return new ChatResponse(
@@ -97,5 +101,11 @@ public class AgentService {
                 result.dualLocalProvider(),
                 turnId
         );
+    }
+
+    // §6.10: use the precomputed summary + recent turns when available, else full raw history.
+    private String resolveHistory(String userId, String threadId) {
+        String precomputed = summarizerService.buildContext(userId, threadId);
+        return precomputed != null ? precomputed : memoryService.getHistory(userId, threadId);
     }
 }

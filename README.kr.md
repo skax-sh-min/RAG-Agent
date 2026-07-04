@@ -103,6 +103,7 @@ container system stop
 | `EMBED_API_KEY` | — | `LOCAL_LLM_KEY` | 임베딩 API 키. 미설정 시 `LOCAL_LLM_KEY` 사용 |
 | `EMBED_MODEL` | — | `text-embedding-nomic-embed-text-v1.5` | 임베딩 모델명 |
 | `EMBED_DIMENSIONS` | sqlite-vec 시 | — | 임베딩 모델의 실제 출력 차원 (`app.embedding.dimensions`). `sqlite-vec` 필수 (vec0 DDL에 고정 — 모델 실제 차원과 일치: nomic=768, bge-m3=1024). chroma는 무시 |
+| `EMBED_USAGE_FALLBACK_ENABLED` | — | `true` | 임베딩 서버가 토큰 사용량을 반환하지 않을 때 `/llm-usage` 대시보드에 0 대신 입력 텍스트 길이 근사(chars/4)로 기록 |
 | `VECTORSTORE_TYPE` | — | `chroma` | 벡터 스토어 백엔드 — `chroma` 또는 `sqlite-vec` |
 | `SQLITE_VEC_EXTENSION_PATH` | — | — | sqlite-vec 전용 — 운영자가 제공하는 `vec0` 로더블 확장 경로 |
 | `CHROMA_HOST` | — | `http://localhost` | Chroma 서버 호스트 (chroma 백엔드) |
@@ -181,7 +182,8 @@ rag_java/
     │   ├── llm/
     │   │   ├── LlmRouter.java             # 멀티 프로바이더 라우팅: TaskType × RoutingMode
     │   │   ├── RoutingMode.java           # COST_FIRST|QUALITY_FIRST|PROGRESSIVE|DUAL|LOCAL_ONLY
-    │   │   └── CircuitBreaker.java        # LLM 프로바이더 인메모리 차단 관리 (Retry-After 지원)
+    │   │   ├── CircuitBreaker.java        # LLM 프로바이더 인메모리 차단 관리 (Retry-After 지원)
+    │   │   └── TrackingEmbeddingModel.java  # EmbeddingModel 데코레이터 — 임베딩 토큰 사용량을 채팅과 분리 기록 (embed:<model>)
     │   ├── model/                         # Java 21 record
     │   │   ├── MetaKey.java               # 벡터 스토어 메타데이터 키 상수
     │   │   └── ChatRequest/Response/SourceRef/DocumentInfo/SyncResult/ThreadMeta/ChatForm/LlmProviderReport/IndexingProgressEvent.java
@@ -291,7 +293,7 @@ rag_java/
 - **메시지 버블 복원** — `/chat/{threadId}` 재진입 시 이전 turn 메시지 버블 서버 렌더링
 - **출처 hover 미리보기** — `SourceRef` 구조체 기반 Bootstrap Popover, 출처 hover 시 청크 텍스트 200자 미리보기
 - **코드 syntax highlight** — DOMPurify sanitize 후 highlight.js 적용, 다크 모드 연동
-- **LLM 사용량 대시보드** — 프로바이더별 일간·주간·월간 토큰 사용량, Chart.js 일별 히스토리 차트, Circuit Breaker 카운트다운
+- **LLM 사용량 대시보드** — 프로바이더별 일간·주간·월간 토큰 사용량, Chart.js 일별 히스토리 차트, Circuit Breaker 카운트다운; 임베딩 사용량은 채팅과 분리 집계(`embed:<model>`, usage 미반환 서버는 근사치 폴백); 사용 이력 없는 비활성 프로바이더는 자동 숨김, 설정에서 제거된 orphan 기록은 관리자가 카드에서 삭제 가능
 - **문서 버전 관리** — 버전별 격리 (chroma: 컬렉션 분리 / sqlite-vec: `version` partition key)
 - **증분 인덱싱** — SHA-256 기반 변경 감지, `doc_registry` SQLite 테이블 영속 (유저별)
 - **다양한 문서 형식** — PDF, PPTX, DOCX, TXT, MD

@@ -5,6 +5,7 @@ import com.example.ragagent.ratelimit.RateLimitFilter;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpMethod;
 import org.springframework.lang.Nullable;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
@@ -62,6 +63,10 @@ public class SecurityConfig {
                     .requestMatchers("/webjars/**", "/css/**", "/js/**", "/images/**", "/favicon.ico").permitAll()
                     .requestMatchers("/manifest.webmanifest", "/sw.js", "/offline.html", "/icons/**").permitAll()
                     .requestMatchers("/actuator/health", "/api/v1/health").permitAll()
+                    // §6.8 — destructive orphan-usage cleanup, admin only. Scoped narrowly (not
+                    // all of /admin/**) so existing /admin/** endpoints keep their current
+                    // "any authenticated user" behavior unchanged.
+                    .requestMatchers(HttpMethod.DELETE, "/admin/llm-usage/**").hasRole("ADMIN")
                     .anyRequest().authenticated()
                 )
                 .formLogin(form -> form
