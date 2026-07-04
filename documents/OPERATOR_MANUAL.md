@@ -226,6 +226,12 @@ copy .env.example .env
 | `CHROMA_CONNECT_TIMEOUT_SECONDS` | `5` | 1 ~ 15 | Chroma API 연결 타임아웃 (`app.chroma.connect-timeout-seconds`) |
 | `CHROMA_READ_TIMEOUT_SECONDS` | `60` | 10 ~ 300 | Chroma API 응답 읽기 타임아웃 (`app.chroma.read-timeout-seconds`) |
 
+#### 임베딩 사용량 추적
+
+| 변수 | 기본값 | 설명 |
+|------|--------|------|
+| `EMBED_USAGE_FALLBACK_ENABLED` | `true` | 임베딩 사용량은 `llm_usage`에 `embed:<model>`로 채팅과 분리 집계되어 `/llm-usage`에 별도 카드로 표시됩니다(§5.5, §10). 임베딩 서버가 응답에 토큰 사용량을 반환하지 않으면(로컬 llama-server 등 흔함) 입력 텍스트 길이 근사(chars/4)로 대체 기록합니다. `false`로 설정하면 근사 대신 `0`을 기록합니다. 근사 경로 진입 시 서버 로그에 경고가 **최초 1회만** 출력됩니다 |
+
 #### LLM 응답 파라미터
 
 | 변수 | 기본값 | 권장 범위 | 설명 |
@@ -1209,6 +1215,7 @@ COST_FIRST 흐름:
 - 차단 상태는 인메모리(`ConcurrentHashMap`) 유지 — 서버 재시작 시 초기화
 - 모든 프로바이더 소진 시 → `LlmProviderExhaustedException` (500 응답)
 - `/llm-usage` 대시보드에서 차단 중인 프로바이더를 빨간 카드 + MM:SS 카운트다운으로 확인 가능
+- 임베딩 호출은 Circuit Breaker 대상이 아닙니다 — `/llm-usage`의 `embed:<model>` 카드는 항상 "정상" 배지로 표시되며 실패 시 재시도/차단 없이 즉시 예외가 전파됩니다(`EMBED_USAGE_FALLBACK_ENABLED` §3.2)
 
 ---
 
@@ -1632,6 +1639,7 @@ app.auth.enabled=false
 **LLM 및 운영**:
 - [ ] `/llm-usage` — 프로바이더 카드 정상(초록) 확인
 - [ ] `/llm-usage` — 일별 차트 데이터 표시 확인
+- [ ] `/llm-usage` — `embed:<model>` 카드가 채팅 프로바이더와 분리 표시되고 인덱싱/검색 후 토큰이 누적되는지 확인
 - [ ] Circuit Breaker 차단 없음 확인
 - [ ] 데이터 디렉터리(`data/`) 마운트 및 쓰기 권한 확인
 - [ ] Chroma 볼륨 영속성 확인 (재시작 후 문서 목록 유지)

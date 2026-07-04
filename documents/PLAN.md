@@ -47,7 +47,8 @@
 - ~~**Phase 2**: 모바일 UI (Offcanvas, sticky 입력창, PWA)~~ → ✅ 완료 (2026-06-27, 오프캔버스 드로어·dvh sticky 입력·PWA(manifest/SW/오프라인)·iOS 16px·접근성)
 - ~~**Phase 3 — Chat 피드백(좋아요/싫어요) 기반 컨텍스트 제외**~~ → ✅ 완료 (2026-07-02, §6.9 — `conversation_turns.feedback` 컬럼, `PATCH /ui/threads/{threadId}/turns/{turnId}/feedback`, DISLIKE는 `getHistory()`에서 하드 제외)
 - ~~**Phase 3 — 입력 시작 시 로컬 요약 선계산 + 중복 제거 컨텍스트 압축**~~ → ✅ 완료 (2026-07-03, §6.10 — `ConversationSummarizerService`, `POST /ui/chat/summary/precompute`, LOCAL 전용 요약 + 캐시, 실패 시 `getHistory()` 자동 폴백)
-- **Phase 3 잔여** (미착수, §6.5~6.8·6.11 상세): 사용자별 LLM 토큰 쿼터(§6.5) · 사용자별 스토리지 쿼터(§6.11) · 임베딩 사용량 분리(§6.6) · 비활성 프로바이더 조건부 표시(§6.7) · orphan 프로바이더 기록 삭제(§6.8)
+- ~~**Phase 3 — LLM 사용량 임베딩 사용량 분리**~~ → ✅ 완료 (2026-07-04, §6.6 — `TrackingEmbeddingModel` 데코레이터가 `embed:<model>` 프로바이더로 별도 기록, `/llm-usage` 표·카드·차트 시각 분리, usage 미반환 시 chars/4 근사 폴백)
+- **Phase 3 잔여** (미착수, §6.5·6.7·6.8·6.11 상세): 사용자별 LLM 토큰 쿼터(§6.5) · 사용자별 스토리지 쿼터(§6.11) · 비활성 프로바이더 조건부 표시(§6.7) · orphan 프로바이더 기록 삭제(§6.8)
 - **Phase 4** (조건부, 미착수): OAuth2 소셜 로그인(§7.1) · PostgreSQL 마이그레이션(§7.2) · 관리자 페이지 확장(§7.3, ※ `/admin` 기본 골격은 Phase 5.8에서 이미 존재)
 - ~~**Phase 5**: sqlite-vec 선택적 연동~~ → ✅ 완료 (Step 5.1~5.8, `app.vectorstore.type=chroma|sqlite-vec`)
 - ~~**Phase 5 추가**: Step 5.9 태그 기반 검색 스코프 + Step 5.10 sqlite-vec 운영/벡터 DB 분리~~ → ✅ 완료 (2026-07-01, Step 5.9 태그 필터/제안/복원 + Step 5.10 `SQLITE_VEC_DB_PATH` 분리 스위치). vec0 라이브 부팅은 운영 인수
@@ -299,33 +300,23 @@ SQLite `audit_log` 테이블 대신 Logback `SizeAndTimeBasedRollingPolicy`로 �
 - `app.quota.enabled=false`(기본)이면 기존 동작 회귀 0.
 - 쿼터 집계가 스트리밍/블로킹 경로 모두에서 일관 적용된다.
 
-### 6.6 LLM 사용량 — 임베딩 사용량 분리 🔵 계획
+### 6.6 LLM 사용량 — 임베딩 사용량 분리 ✅ 완료
 
-> **현재 코드 확인 (2026-07-02)**: `EmbeddingBeanConfig.embeddingModel()`은 순수 `@Primary OpenAiEmbeddingModel`(데코레이터 없음) → 임베딩 토큰 추적 0. `TrackingEmbeddingModel` 미존재. `LlmUsageRepository.record()`는 채팅 경로만. 아래 설계 유효.
+`TrackingEmbeddingModel implements EmbeddingModel`(`llm` 패키지) 데코레이터를 신설해 `EmbeddingBeanConfig`가 실제 `OpenAiEmbeddingModel`을 이 데코레이터로 감싼 뒤 동일하게 `@Primary`로 노출한다(주입 지점 무변경). `call(EmbeddingRequest)` 한 곳만 오버라이드해 `usageRepo.record("embed:" + model, inputTokens, 0)`으로 기록하고, `embed(String)`/`embed(List)`/`embedForResponse(List)`는 `EmbeddingModel` 인터페이스의 default 메서드가 전부 내부적으로 `this.call(...)`을 호출하므로 오버라이드 없이 자동으로 추적된다. `embed(Document)`는 인터페이스의 유일한 추상 메서드라 직접 구현이 강제되는데, `delegate.embed(document)`로 바로 위임하면 추적을 우회하므로 `this.embed(getEmbeddingContent(document))`(default 메서드 경유)로 구현해 동일하게 `call()`을 타도록 했다. `dimensions()`는 반대로 `delegate.dimensions()`에 직접 위임 — 실제 임베딩 호출이 아니므로 추적 대상이 아니고, delegate(OpenAiEmbeddingModel)가 캐싱하는 값을 그대로 보존한다.
 
-**문제**: 현재 `llm_usage`에는 **채팅(ChatModel) 호출만** 기록된다. `LlmRouter.executeWithTracking()` → `usageRepo.record(provider, in, out)` 경로만 집계하고, 임베딩은 `@Primary EmbeddingModel`(OpenAiEmbeddingModel) 빈을 통해 `LlmRouter`를 **우회**하므로 토큰 사용량이 전혀 추적되지 않는다. 인덱싱·검색마다 임베딩 API를 호출하지만 사용량/비용 통계에 보이지 않아 운영자가 임베딩 비용을 파악할 수 없다.
+`OperationsController`의 세 경로(`buildProviderReports()`, `/api/v1/llm/usage`, `/api/v1/llm/usage/history`)에 `embeddingProviderName()`(`"embed:" + props.embeddingSafe().model()`) 기반 항목을 하나씩 추가해 채팅 프로바이더 목록과 함께 반환한다. 임베딩 카드/행은 `type="EMBEDDING"`, `role=null`(역할 배지 없음), `blockedUntil=null`(circuit breaker 없음, 항상 "정상")로 표시되어 채팅 프로바이더와 시각적으로 분리된다. 차트는 동일 `<canvas>`를 유지하되 `embed:` 접두사 데이터셋만 별도 Chart.js `stack` 그룹으로 분리해 채팅 합계 스택에 섞이지 않고 날짜별로 별도 막대로 렌더된다.
 
-**선행 확인 (현재 코드 기준)**:
-- 임베딩 호출 지점: `SqliteVecVectorStoreProvider`(search/searchBatch/add), `ChromaVectorStoreProvider.searchBatch`, 그리고 Chroma 인덱싱은 `ChromaVectorStore.add()`가 **주입된 EmbeddingModel 빈으로 내부 임베딩**.
-  → `@Primary EmbeddingModel` 빈 **한 곳을 데코레이터로 감싸면** 모든 임베딩 호출(검색·인덱싱, 두 백엔드 공통)을 단일 지점에서 가로챌 수 있다.
-- `llm_usage`는 `provider_name` 키 기반(`record/getByPeriod/getDailyHistory` 모두 이름 인자) → 임베딩을 별도 이름으로 기록하면 공존 가능. 단 UI(`OperationsController`)는 `props.llmSafe().providers()`(채팅 프로바이더)만 순회하므로 **임베딩 행은 자동 표시되지 않음** → UI에 명시적 추가 필요.
-- 임베딩은 입력 토큰만 존재(출력 0). 토큰 수는 `EmbeddingResponse.getMetadata().getUsage()`에서 추출(OpenAI 호환 서버 제공). 로컬 llama-server 등 usage 미반환 시 fallback(텍스트 길이 기반 근사 또는 0) 필요.
+**usage 미반환 폴백**: `EmbeddingResponseMetadata.getUsage()`가 `EmptyUsage`(promptTokens=0, null 아님)를 반환하는 로컬 서버 대응 — `promptTokens == null || <= 0`이면 `app.embedding.usage-fallback-enabled`(`EMBED_USAGE_FALLBACK_ENABLED`, 기본 `true`) 설정에 따라 입력 텍스트 길이 근사(chars/4, 배치 요청은 모든 텍스트 합산) 또는 0을 기록하고, 근사 경로는 최초 1회만 경고 로그를 남긴다(`AtomicBoolean`).
 
-**설계 (권장: 예약 프로바이더 식별자 — 스키마 변경 없음)**:
-1. `TrackingEmbeddingModel implements EmbeddingModel` 데코레이터 — 실제 모델에 위임 후 응답 usage를 `usageRepo.record("embed:" + model, inputTokens, 0)`으로 기록. `EmbeddingBeanConfig`에서 실제 모델을 이 데코레이터로 래핑해 `@Primary`로 노출(주입 지점 변경 없음).
-   - `embed:` 접두사로 채팅 프로바이더 이름과 충돌 방지.
-   - usage 미제공 시 입력 텍스트 길이 근사(예: chars/4) 또는 0 기록 — 설정 플래그로 선택, 경고 로그 1회.
-2. `OperationsController` / `llm-usage.html` 확장:
-   - 사용량 표·카드에 **임베딩을 별도 행/카드로 분리**(type=`EMBEDDING`, 출력 토큰·circuit breaker 없음).
-   - 차트는 임베딩을 **별도 데이터셋(고유 색)** 또는 별도 미니 차트로 — 채팅 합계에 섞이지 않게.
-   - `/api/v1/llm/usage`·`/usage/history`가 `embed:*` 행도 포함하도록 조회 경로 추가(채팅 프로바이더 순회와 분리).
+> **구현 메모 (2026-07-04)**:
+> - **부수 수정**: `llm-usage.html`의 차트/표 JS가 `/api/llm/usage(...)`(버전 접두사 `/v1/` 누락)를 호출하던 기존 버그를 발견 — 실제 매핑은 `/api/v1/llm/usage(...)`라 이 화면의 일별 차트와 기간별 표가 항상 404로 완전히 비어 있었다(카드는 서버 렌더라 영향 없었음). 본 작업이 바로 이 두 화면을 다루므로 함께 수정.
+> - **실사용 검증**: LM Studio(`text-embedding-nomic-embed-text-v1.5`, sqlite-vec 모드로 ChromaDB 의존 없이 확인) 대상 실제 채팅 질의 → 서버 로그에서 `TrackingEmbeddingModel`의 1회성 경고(`did not report token usage; approximating...`) 확인 → `GET /api/v1/llm/usage` 응답에서 `embed:text-embedding-nomic-embed-text-v1.5` 행에 `inputTokens=24, callCount=1`(멀티쿼리 확장으로 배치된 여러 질의 문자열 합산 기준) 누적을 직접 확인. `/llm-usage` 화면에서 카드·차트·표 3곳 모두 임베딩 항목이 채팅 프로바이더와 분리 표시됨을 스크린샷으로 확인.
+> - **테스트**: `TrackingEmbeddingModelTest` 5건(실사용량 기록/근사 폴백/폴백 비활성 시 0/embed(Document) 경유 확인/dimensions() 직접 위임 확인) + `OperationsControllerUsageTest` 3건(표·차트 이력·카드 프래그먼트에 임베딩 행 존재 확인) 신규. 기존 `EmbeddingConfig` 6-인자 생성자를 직접 호출하던 `SqliteVecSchemaInitializerTest`/`AdminServiceTest` 2곳을 7-인자로 수정(신규 `usageFallbackEnabled` 필드). 전체 350 tests BUILD SUCCESS(회귀 0, sqlite-vec 통합 2개는 vec0 바이너리 없을 때만 skip).
 
-**대안 (보류)**: `llm_usage`에 `kind`('chat'|'embedding') 컬럼 + PK 확장. 같은 모델명을 채팅/임베딩 양쪽으로 쓸 때 유리하나 SQLite PK 변경(테이블 재생성) 필요 → 현 요구엔 과함.
-
-**완료 기준**:
-- 인덱싱/검색 시 임베딩 토큰이 `llm_usage`에 `embed:<model>`로 누적된다(채팅 행과 분리).
-- `/llm-usage` 화면에서 임베딩 사용량이 채팅 프로바이더와 **시각적으로 분리**되어 표시된다(표 행/카드 + 차트 구분).
-- usage 미반환 임베딩 서버에서도 기록이 깨지지 않는다(근사 또는 0 + 경고 로그).
+**완료 기준 달성**:
+- 인덱싱/검색 시 임베딩 토큰이 `llm_usage`에 `embed:<model>`로 누적된다(채팅 행과 분리) — 실사용 검증 완료.
+- `/llm-usage` 화면에서 임베딩 사용량이 채팅 프로바이더와 시각적으로 분리되어 표시된다(표 행/카드 + 차트 stack 구분).
+- usage 미반환 임베딩 서버에서도 기록이 깨지지 않는다(근사 또는 0 + 경고 로그 1회).
 - 기존 채팅 사용량 표/차트 회귀 0.
 
 ### 6.7 LLM 사용량 — 비활성 프로바이더 조건부 표시 🔵 계획

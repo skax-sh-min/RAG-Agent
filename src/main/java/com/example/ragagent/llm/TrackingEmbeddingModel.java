@@ -1,0 +1,92 @@
+package com.example.ragagent.llm;
+
+import com.example.ragagent.repository.LlmUsageRepository;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.ai.chat.metadata.Usage;
+import org.springframework.ai.document.Document;
+import org.springframework.ai.embedding.EmbeddingModel;
+import org.springframework.ai.embedding.EmbeddingRequest;
+import org.springframework.ai.embedding.EmbeddingResponse;
+
+import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
+
+/**
+ * Decorates the primary {@link EmbeddingModel} bean so every embedding call (search +
+ * indexing, both vector store backends) is recorded into {@link LlmUsageRepository} under
+ * a reserved {@code "embed:"} prefix — kept separate from chat provider rows without any
+ * schema change.
+ *
+ * <p>Only {@link #call(EmbeddingRequest)} is overridden as the tracking point; {@code embed(String)},
+ * {@code embed(List)} and {@code embedForResponse(List)} are inherited default methods on
+ * {@link EmbeddingModel} that all funnel into {@code this.call(...)}, so they're tracked for free.
+ * {@link #embed(Document)} is abstract on the interface, so it's implemented here to also
+ * route through {@code this.call(...)} rather than delegating directly (which would bypass
+ * tracking). {@link #dimensions()} delegates straight through since it's not a usage-generating
+ * call and the delegate may cache/short-circuit it.
+ */
+public class TrackingEmbeddingModel implements EmbeddingModel {
+
+    private static final Logger log = LoggerFactory.getLogger(TrackingEmbeddingModel.class);
+
+    /** Reserved provider-name prefix so embedding rows never collide with chat provider names. */
+    public static final String PROVIDER_PREFIX = "embed:";
+
+    private final EmbeddingModel delegate;
+    private final LlmUsageRepository usageRepo;
+    private final String providerName;
+    private final boolean approximateFallback;
+    private final AtomicBoolean fallbackWarned = new AtomicBoolean(false);
+
+    public TrackingEmbeddingModel(EmbeddingModel delegate, LlmUsageRepository usageRepo,
+                                  String modelName, boolean approximateFallback) {
+        this.delegate = delegate;
+        this.usageRepo = usageRepo;
+        this.providerName = PROVIDER_PREFIX + modelName;
+        this.approximateFallback = approximateFallback;
+    }
+
+    @Override
+    public EmbeddingResponse call(EmbeddingRequest request) {
+        EmbeddingResponse response = delegate.call(request);
+        usageRepo.record(providerName, extractInputTokens(response, request), 0);
+        return response;
+    }
+
+    @Override
+    public float[] embed(Document document) {
+        return this.embed(getEmbeddingContent(document));
+    }
+
+    @Override
+    public int dimensions() {
+        return delegate.dimensions();
+    }
+
+    private long extractInputTokens(EmbeddingResponse response, EmbeddingRequest request) {
+        Usage usage = response.getMetadata() != null ? response.getMetadata().getUsage() : null;
+        Integer promptTokens = usage != null ? usage.getPromptTokens() : null;
+        if (promptTokens != null && promptTokens > 0) {
+            return promptTokens;
+        }
+        if (!approximateFallback) {
+            return 0;
+        }
+        if (fallbackWarned.compareAndSet(false, true)) {
+            log.warn("[embedding usage] provider={} did not report token usage; approximating "
+                    + "input tokens as chars/4 for llm_usage tracking (this warning logs once)",
+                    providerName);
+        }
+        return approximateTokens(request.getInstructions());
+    }
+
+    private static long approximateTokens(List<String> texts) {
+        if (texts == null || texts.isEmpty()) return 0;
+        long chars = 0;
+        for (String text : texts) {
+            if (text != null) chars += text.length();
+        }
+        return chars / 4;
+    }
+}

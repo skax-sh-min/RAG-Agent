@@ -63,7 +63,8 @@ public record AppProperties(
             String model,
             Integer dimensions,
             Integer connectTimeoutSeconds,
-            Integer readTimeoutSeconds
+            Integer readTimeoutSeconds,
+            Boolean usageFallbackEnabled
     ) {}
 
     public record ChromaHttpConfig(
@@ -163,18 +164,20 @@ public record AppProperties(
     }
 
     public EmbeddingConfig embeddingSafe() {
-        if (embedding == null) return new EmbeddingConfig(null, null, null, null, 10, 120);
+        if (embedding == null) return new EmbeddingConfig(null, null, null, null, 10, 120, true);
         int connect = (embedding.connectTimeoutSeconds() != null && embedding.connectTimeoutSeconds() > 0)
                 ? embedding.connectTimeoutSeconds() : 10;
         int read = (embedding.readTimeoutSeconds() != null && embedding.readTimeoutSeconds() > 0)
                 ? embedding.readTimeoutSeconds() : 120;
+        boolean usageFallback = embedding.usageFallbackEnabled() == null || embedding.usageFallbackEnabled();
         return new EmbeddingConfig(
                 embedding.baseUrl(),
                 embedding.apiKey(),
                 embedding.model(),
                 embedding.dimensions(),
                 connect,
-                read
+                read,
+                usageFallback
         );
     }
 

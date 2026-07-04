@@ -4,6 +4,7 @@ import com.example.ragagent.audit.AuditLogger;
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.context.ThreadContext;
 import com.example.ragagent.llm.CircuitBreaker;
+import com.example.ragagent.llm.TrackingEmbeddingModel;
 import com.example.ragagent.model.LlmProviderReport;
 import com.example.ragagent.repository.LlmUsageRepository;
 import com.example.ragagent.repository.MemoryRepository;
@@ -16,10 +17,11 @@ import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.Instant;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 /**
  * Thread management, LLM usage stats: UI pages, HTMX fragments,
@@ -147,12 +149,12 @@ public class OperationsController {
         );
     }
 
-    /** Provider-level daily / weekly / monthly summary + Circuit Breaker state. */
+    /** Provider-level daily / weekly / monthly summary + Circuit Breaker state, plus one embedding row (§6.6). */
     @GetMapping("/api/v1/llm/usage")
     @ResponseBody
     public List<UsageReport> getLlmUsage() {
         Map<String, Instant> blocked = circuitBreaker.getBlockedProviders();
-        return props.llmSafe().providers().stream()
+        Stream<UsageReport> chatUsage = props.llmSafe().providers().stream()
                 .map(cfg -> {
                     String name = cfg.name();
                     Instant until = blocked.get(name);
@@ -165,23 +167,33 @@ public class OperationsController {
                             usageRepo.getMonthly(name),
                             until != null ? until.toString() : null
                     );
-                })
-                .toList();
+                });
+        String embedName = embeddingProviderName();
+        UsageReport embedUsage = new UsageReport(
+                embedName,
+                "EMBEDDING",
+                props.embeddingSafe().model(),
+                usageRepo.getDaily(embedName),
+                usageRepo.getWeekly(embedName),
+                usageRepo.getMonthly(embedName),
+                null
+        );
+        return Stream.concat(chatUsage, Stream.of(embedUsage)).toList();
     }
 
-    /** Daily token history per provider for Chart.js stacked bar chart. */
+    /** Daily token history per provider for Chart.js stacked bar chart, plus the embedding row (§6.6). */
     @GetMapping("/api/v1/llm/usage/history")
     @ResponseBody
     public Map<String, List<LlmUsageRepository.DailyRow>> getLlmUsageHistory(
             @RequestParam(defaultValue = "30") int days) {
         int safeDays = Math.min(Math.max(days, 1), 365);
-        return props.llmSafe().providers().stream().collect(
-                Collectors.toMap(
-                        AppProperties.ProviderConfig::name,
-                        cfg -> usageRepo.getDailyHistory(cfg.name(), safeDays),
-                        (a, b) -> a
-                )
-        );
+        Map<String, List<LlmUsageRepository.DailyRow>> history = new HashMap<>();
+        for (AppProperties.ProviderConfig cfg : props.llmSafe().providers()) {
+            history.put(cfg.name(), usageRepo.getDailyHistory(cfg.name(), safeDays));
+        }
+        String embedName = embeddingProviderName();
+        history.put(embedName, usageRepo.getDailyHistory(embedName, safeDays));
+        return history;
     }
 
     // ── Response records ──────────────────────────────────────────────
@@ -198,9 +210,14 @@ public class OperationsController {
 
     // ── Helpers ───────────────────────────────────────────────────────
 
+    /**
+     * Chat provider cards/rows plus one always-shown embedding card (§6.6). Embedding has no
+     * ProviderRole (role=null → no role badge) and is never circuit-broken (blockedUntil=null) —
+     * the "EMBEDDING" type badge is what visually separates it from chat providers.
+     */
     private List<LlmProviderReport> buildProviderReports() {
         Map<String, Instant> blocked = circuitBreaker.getBlockedProviders();
-        return props.llmSafe().providers().stream()
+        Stream<LlmProviderReport> chatReports = props.llmSafe().providers().stream()
                 .map(cfg -> new LlmProviderReport(
                         cfg.name(),
                         cfg.type(),
@@ -211,7 +228,25 @@ public class OperationsController {
                         usageRepo.getMonthly(cfg.name()),
                         blocked.get(cfg.name()),
                         cfg.apiKey() != null && !cfg.apiKey().isBlank()
-                ))
-                .toList();
+                ));
+        String embedName = embeddingProviderName();
+        LlmProviderReport embedReport = new LlmProviderReport(
+                embedName,
+                "EMBEDDING",
+                null,
+                props.embeddingSafe().model(),
+                usageRepo.getDaily(embedName),
+                usageRepo.getWeekly(embedName),
+                usageRepo.getMonthly(embedName),
+                null,
+                true
+        );
+        return Stream.concat(chatReports, Stream.of(embedReport)).toList();
+    }
+
+    /** {@code "embed:" + model} — matches the key TrackingEmbeddingModel records under. */
+    private String embeddingProviderName() {
+        String model = props.embeddingSafe().model();
+        return TrackingEmbeddingModel.PROVIDER_PREFIX + (model != null ? model : "unknown");
     }
 }
