@@ -104,7 +104,10 @@ public class AnswerService {
         String systemPrompt = answerSystemPrompt(state.locale());
         LlmProvider provider = llmRouter.routeProvider(TaskType.TEXT, state.routingMode());
         String answer = truncate(streamAnswer(provider, state, systemPrompt, listener::onToken));
-        state = state.toBuilder().usedProvider(provider.name()).answer(answer).build();
+        // streaming has no ChatResponse to read real usage from, but the call still happened —
+        // accumulateTokens(0,0) records it in llmCallCount, matching executeBlocking()'s bookkeeping
+        // (and DirectAnswerService's symmetric blocking/streaming treatment for the same reason).
+        state = state.toBuilder().accumulateTokens(0, 0).usedProvider(provider.name()).answer(answer).build();
         return checkSufficiencyAndMaybeUpgrade(state, answer, listener);
     }
 
