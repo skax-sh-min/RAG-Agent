@@ -99,6 +99,26 @@ class AuthControllerTest {
                 .andExpect(model().attribute("logout", true));
     }
 
+    @Test
+    @DisplayName("GET /login — no-auth 모드에서는 redirect:/ (CSRF 비활성화로 템플릿이 깨짐 방지)")
+    void loginPage_noAuthMode_redirectsToRoot() throws Exception {
+        when(props.authSafe()).thenReturn(new AppProperties.AuthConfig(false));
+
+        mvc.perform(get("/login"))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(redirectedToRoot());
+    }
+
+    @Test
+    @DisplayName("GET /signup — no-auth 모드에서는 redirect:/ (CSRF 비활성화로 템플릿이 깨짐 방지)")
+    void signupPage_noAuthMode_redirectsToRoot() throws Exception {
+        when(props.authSafe()).thenReturn(new AppProperties.AuthConfig(false));
+
+        mvc.perform(get("/signup"))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(redirectedToRoot());
+    }
+
     // ── GET /setup ──────────────────────────────────────────────────────────
 
     @Test

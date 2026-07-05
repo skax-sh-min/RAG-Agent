@@ -93,6 +93,9 @@ public class AuthController {
     public String loginPage(@RequestParam(required = false) String error,
                             @RequestParam(required = false) String logout,
                             Model model) {
+        // no-auth mode disables CSRF entirely (SecurityConfig), but the template
+        // unconditionally reads _csrf.token — reaching this page there would NPE.
+        if (!props.authSafe().enabled()) return "redirect:/";
         if (error != null) model.addAttribute("error", true);
         if (logout != null) model.addAttribute("logout", true);
         return "auth/login";
@@ -100,6 +103,7 @@ public class AuthController {
 
     @GetMapping("/signup")
     public String signupPage() {
+        if (!props.authSafe().enabled()) return "redirect:/";
         return "auth/signup";
     }
 

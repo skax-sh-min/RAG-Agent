@@ -2,6 +2,7 @@ package com.example.ragagent.service;
 
 import com.example.ragagent.agent.AgentGraph;
 import com.example.ragagent.agent.AgentState;
+import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.exception.LlmProviderExhaustedException;
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.model.ChatForm;
@@ -41,6 +42,7 @@ class StreamingAgentServiceTest {
     private ThreadMetaService threadMetaService;
     private MessageSource messageSource;
     private ConversationSummarizerService summarizerService;
+    private AppProperties props;
     private SseEmitter emitter;
     private StreamingAgentService service;
 
@@ -52,9 +54,11 @@ class StreamingAgentServiceTest {
         threadMetaService = mock(ThreadMetaService.class);
         messageSource = mock(MessageSource.class);
         summarizerService = mock(ConversationSummarizerService.class);
+        props = mock(AppProperties.class);
+        when(props.sseIdleTimeoutMs()).thenReturn(120_000L);
         emitter = mock(SseEmitter.class);
         service = new StreamingAgentService(agentGraph, memoryService, classifierService,
-                threadMetaService, new ObjectMapper(), messageSource, summarizerService);
+                threadMetaService, new ObjectMapper(), messageSource, summarizerService, props);
 
         when(memoryService.getHistory(any(), any())).thenReturn("");
         when(classifierService.classifyOnly(any(), any())).thenReturn("usage");
@@ -178,5 +182,50 @@ class StreamingAgentServiceTest {
         verify(memoryService, never())
                 .addTurn(any(), any(), any(), any(), any(), anyInt(), anyInt(), anyInt(), any(), anyInt());
         verify(emitter).completeWithError(boom);
+    }
+
+    // ── Idle watchdog ───────────────────────────────────────────────────────
+    // props.sseIdleTimeoutMs() is deliberately small here so the watchdog's own background
+    // scheduled thread genuinely fires (and interrupts the calling thread, since run() is
+    // invoked synchronously in these tests) within the test's timeout — no mocking of the
+    // interrupt mechanism itself.
+
+    @Test
+    @DisplayName("idle watchdog — 진행 신호 없이 idle timeout 경과 시 실행 스레드를 인터럽트")
+    void run_idleTimeout_interruptsWorkerWhenNoProgress() {
+        when(props.sseIdleTimeoutMs()).thenReturn(100L);
+        when(agentGraph.runStreaming(any(), any())).thenAnswer(inv -> {
+            Thread.sleep(1000); // no listener activity during this — watchdog should fire well before 1s
+            return resultState("답변");
+        });
+
+        service.run("u1", form(false, null), emitter);
+
+        assertThat(Thread.currentThread().isInterrupted())
+                .as("idle watchdog should have interrupted the worker thread").isTrue();
+        Thread.interrupted(); // clear so the flag doesn't leak into later tests
+        verify(emitter).completeWithError(any(InterruptedException.class));
+        verify(emitter, never()).complete();
+    }
+
+    @Test
+    @DisplayName("idle watchdog — 토큰이 계속 도착하면 누적 시간이 idle timeout을 넘겨도 인터럽트되지 않음")
+    void run_activeProgress_doesNotTriggerIdleTimeout() throws Exception {
+        when(props.sseIdleTimeoutMs()).thenReturn(300L);
+        when(agentGraph.runStreaming(any(), any())).thenAnswer(inv -> {
+            GraphListener listener = inv.getArgument(1);
+            for (int i = 0; i < 10; i++) {
+                Thread.sleep(60); // well under the 300ms idle timeout — resets the clock each time
+                listener.onToken("chunk" + i);
+            }
+            return resultState("최종 답변");
+        });
+
+        service.run("u1", form(false, null), emitter);
+
+        assertThat(Thread.currentThread().isInterrupted())
+                .as("active token stream (total > idle timeout) must not be cut off").isFalse();
+        verify(emitter).complete();
+        verify(emitter, never()).completeWithError(any());
     }
 }

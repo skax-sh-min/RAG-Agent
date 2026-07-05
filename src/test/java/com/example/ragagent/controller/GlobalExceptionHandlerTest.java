@@ -139,4 +139,21 @@ class GlobalExceptionHandlerTest {
                 .andExpect(status().isNoContent())
                 .andExpect(content().string(""));
     }
+
+    @Test
+    @DisplayName("브라우저 페이지 요청(Accept: text/html, HTMX 아님) → HTML 본문 (ProblemDetail은 text/html 컨버터가 없어 재크래시함)")
+    void unexpectedException_htmlPageRequest_returnsHtmlNotProblemDetail() throws Exception {
+        mvc.perform(get("/test/unexpected").header("Accept", "text/html"))
+                .andExpect(status().isInternalServerError())
+                .andExpect(content().contentTypeCompatibleWith("text/html"))
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("500")));
+    }
+
+    @Test
+    @DisplayName("HTMX 요청은 Accept: text/html 이어도 기존처럼 ProblemDetail(JSON) 유지")
+    void unexpectedException_htmxRequestWithHtmlAccept_stillReturnsProblemDetail() throws Exception {
+        mvc.perform(get("/test/unexpected").header("Accept", "text/html").header("HX-Request", "true"))
+                .andExpect(status().isInternalServerError())
+                .andExpect(jsonPath("$.errorCode").value("RAG-INT-001"));
+    }
 }

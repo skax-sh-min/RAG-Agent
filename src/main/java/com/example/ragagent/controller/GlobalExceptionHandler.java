@@ -6,6 +6,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ProblemDetail;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -92,12 +93,29 @@ public class GlobalExceptionHandler {
         }
 
         log.error("[RAG-INT-001][{}] Unhandled exception on {} {}", traceId, req.getMethod(), req.getRequestURI(), ex);
+
+        if (isHtmlPageRequest(req)) {
+            // Full browser page navigation (not HTMX/API) — ProblemDetail has no HTML
+            // message converter, so writing it here would throw a second exception
+            // (HttpMessageNotWritableException) on top of the original one.
+            String html = "<!DOCTYPE html><html><body><h1>500 - Internal Server Error</h1>"
+                    + "<p>An unexpected error occurred. Please try again.</p></body></html>";
+            return ResponseEntity.internalServerError().contentType(MediaType.TEXT_HTML).body(html);
+        }
+
         ProblemDetail pd = ProblemDetail.forStatus(HttpStatus.INTERNAL_SERVER_ERROR);
         pd.setTitle("Internal Server Error");
         pd.setDetail("An unexpected error occurred. Please try again.");
         pd.setProperty("errorCode", "RAG-INT-001");
         pd.setProperty("traceId", traceId);
         return ResponseEntity.internalServerError().body(pd);
+    }
+
+    /** Full browser page load (link click, address-bar navigation) — not HTMX (fragment swap) or API/JSON. */
+    private boolean isHtmlPageRequest(HttpServletRequest req) {
+        if (req.getHeader("HX-Request") != null) return false;
+        String accept = req.getHeader("Accept");
+        return accept != null && accept.contains(MediaType.TEXT_HTML_VALUE);
     }
 
     private boolean isSseRequest(HttpServletRequest req) {
