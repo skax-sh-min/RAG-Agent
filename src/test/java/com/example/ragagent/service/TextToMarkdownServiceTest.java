@@ -1,7 +1,10 @@
 package com.example.ragagent.service;
 
 import com.example.ragagent.exception.LlmProviderExhaustedException;
+import com.example.ragagent.llm.BackgroundUsage;
 import com.example.ragagent.llm.LlmRouter;
+import com.example.ragagent.llm.RoutingMode;
+import com.example.ragagent.llm.TaskType;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -10,7 +13,9 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -30,11 +35,22 @@ class TextToMarkdownServiceTest {
     @Test
     @DisplayName("정상: LLM이 반환한 구조화 마크다운을 이어붙여 반환")
     void convert_returnsStructuredMarkdown() {
-        when(llmRouter.executeWithTracking(any(), any(), any())).thenReturn("## 제목\n- 항목");
+        when(llmRouter.executeWithTracking(any(), any(), any(), any())).thenReturn("## 제목\n- 항목");
 
         String md = service.convert("항목 나열 텍스트", "doc1");
 
         assertThat(md).contains("## 제목").contains("- 항목");
+    }
+
+    @Test
+    @DisplayName("LlmRouter.executeWithTracking()을 txt2md: 접두사로 호출 (백그라운드 사용량 분리)")
+    void convert_tracksUsageUnderTxt2mdPrefix() {
+        when(llmRouter.executeWithTracking(any(), any(), any(), any())).thenReturn("## 제목");
+
+        service.convert("항목 나열 텍스트", "doc1");
+
+        verify(llmRouter).executeWithTracking(
+                eq(TaskType.LIGHT_TEXT), eq(RoutingMode.COST_FIRST), eq(BackgroundUsage.TXT2MD_PREFIX), any());
     }
 
     @Test
@@ -48,7 +64,7 @@ class TextToMarkdownServiceTest {
     @Test
     @DisplayName("LLM 소진(Exhausted): 원본 텍스트를 그대로 유지(인덱싱 계속)")
     void convert_llmExhausted_keepsOriginal() {
-        when(llmRouter.executeWithTracking(any(), any(), any()))
+        when(llmRouter.executeWithTracking(any(), any(), any(), any()))
                 .thenThrow(new LlmProviderExhaustedException("no provider"));
 
         String original = "구조화 대상 원본 텍스트";
@@ -58,7 +74,7 @@ class TextToMarkdownServiceTest {
     @Test
     @DisplayName("블록 단위 일반 오류: 해당 블록 원본 유지(폴백)")
     void convert_perBlockError_keepsBlock() {
-        when(llmRouter.executeWithTracking(any(), any(), any()))
+        when(llmRouter.executeWithTracking(any(), any(), any(), any()))
                 .thenThrow(new RuntimeException("model timeout"));
 
         String original = "한 블록 텍스트";
@@ -69,7 +85,7 @@ class TextToMarkdownServiceTest {
     @Test
     @DisplayName("진행 콜백이 블록 완료마다 호출된다")
     void convert_invokesProgressCallback() {
-        when(llmRouter.executeWithTracking(any(), any(), any())).thenReturn("## ok");
+        when(llmRouter.executeWithTracking(any(), any(), any(), any())).thenReturn("## ok");
         AtomicInteger last = new AtomicInteger(-1);
 
         service.convert("짧은 텍스트", "doc1", (done, total) -> last.set(done));

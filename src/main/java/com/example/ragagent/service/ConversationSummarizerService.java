@@ -1,5 +1,6 @@
 package com.example.ragagent.service;
 
+import com.example.ragagent.llm.BackgroundUsage;
 import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.llm.TaskType;
@@ -75,6 +76,7 @@ public class ConversationSummarizerService {
         try {
             String systemPrompt = messageSource.getMessage("prompt.summary.system", null, locale);
             String summary = llmRouter.executeWithTracking(TaskType.LIGHT_TEXT, RoutingMode.LOCAL_ONLY,
+                    BackgroundUsage.SUMMARY_PREFIX,
                     model -> model.call(new Prompt(List.of(
                             new SystemMessage(systemPrompt),
                             new UserMessage(deduped)))));

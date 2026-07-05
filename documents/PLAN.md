@@ -5,7 +5,7 @@
 
 ---
 
-## ⚡ 현재 진행 상황 (2026-07-01 기준)
+## ⚡ 현재 진행 상황 (2026-07-05 기준)
 
 ### ✅ Phase 1 전체 완료
 
@@ -29,7 +29,7 @@
 | 키워드 추출 타임아웃 시 CircuitBreaker 오동작 수정 | 타임아웃을 에러로 오인해 프로바이더 차단하던 버그 수정 |
 | DOCX 변환 전 구버전 아티팩트 삭제 순서 수정 | 변환 실패 시 구버전 파일이 남아있는 버그 수정 |
 | `LOGGING_LEVEL`, `LLM_TEMPERATURE`, `LLM_MAX_TOKENS`, `SPRING_SECURITY_LOGGING_LEVEL` 환경변수 외부화 | `.env.example` + `OPERATOR_MANUAL.md` 반영 |
-| 의존성 버전 최신 stable로 일괄 업데이트 | Spring Boot 3.5, Spring AI 1.1.4 등 |
+| 의존성 버전 최신 stable로 일괄 업데이트 | Spring Boot 3.5.15, Spring AI 1.1.8 (2026-07-05 재확인 — 계속 업데이트되는 값이므로 정확한 버전은 pom.xml 참조) |
 
 ### ✅ 보안 결함 수정 완료
 
@@ -50,7 +50,8 @@
 - ~~**Phase 3 — LLM 사용량 임베딩 사용량 분리**~~ → ✅ 완료 (2026-07-04, §6.6 — `TrackingEmbeddingModel` 데코레이터가 `embed:<model>` 프로바이더로 별도 기록, `/llm-usage` 표·카드·차트 시각 분리, usage 미반환 시 chars/4 근사 폴백)
 - ~~**Phase 3 — LLM 사용량 비활성 프로바이더 조건부 표시**~~ → ✅ 완료 (2026-07-04, §6.7 — `LlmUsageRepository.usedProviders()` + `OperationsController.visibleChatProviders()` 공통 필터, 미설정+이력 없는 프로바이더는 카드·표·차트에서 숨김, 이력 있으면 계속 표시)
 - ~~**Phase 3 — LLM 사용량 orphan 프로바이더 기록 삭제**~~ → ✅ 완료 (2026-07-04, §6.8 — config에 전혀 없는 provider_name(또는 옛 `embed:*`)을 ORPHAN 카드로 노출 + `DELETE /admin/llm-usage/{provider}`로 관리자만 삭제, 활성 provider·현재 임베딩 모델은 서버측에서 삭제 거부)
-- **Phase 3 잔여** (미착수, §6.5·6.11 상세): 사용자별 LLM 토큰 쿼터(§6.5) · 사용자별 스토리지 쿼터(§6.11)
+- ~~**Phase 3 — LLM 사용량 백그라운드(비-채팅) 사용량 분리 기록**~~ → ✅ 완료 (2026-07-05, §6.13 — `BackgroundUsage` 접두사(`summary:`/`keyword:`/`mdcorrect:`/`txt2md:`/`title:`)로 대화 요약·인덱싱 키워드 추출·문서 서식 교정·TXT→MD 변환·대화 제목 생성을 채팅 사용량과 분리 기록, `title:`은 이번에 처음 추적 대상 편입, `/llm-usage`에 type=BACKGROUND 카드 신설)
+- **Phase 3 잔여** (미착수, §6.5·6.11·6.12 상세): 사용자별 LLM 토큰 쿼터(§6.5) · 사용자별 스토리지 쿼터(§6.11) · 대화 컨텍스트 예산 정합성/설정 외부화(§6.12, 우선순위 쉬움 2건)
 - **Phase 4** (조건부, 미착수): OAuth2 소셜 로그인(§7.1) · PostgreSQL 마이그레이션(§7.2) · 관리자 페이지 확장(§7.3, ※ `/admin` 기본 골격은 Phase 5.8에서 이미 존재)
 - ~~**Phase 5**: sqlite-vec 선택적 연동~~ → ✅ 완료 (Step 5.1~5.8, `app.vectorstore.type=chroma|sqlite-vec`)
 - ~~**Phase 5 추가**: Step 5.9 태그 기반 검색 스코프 + Step 5.10 sqlite-vec 운영/벡터 DB 분리~~ → ✅ 완료 (2026-07-01, Step 5.9 태그 필터/제안/복원 + Step 5.10 `SQLITE_VEC_DB_PATH` 분리 스위치). vec0 라이브 부팅은 운영 인수
@@ -317,6 +318,38 @@ SQLite `audit_log` 테이블 대신 Logback `SizeAndTimeBasedRollingPolicy`로 �
 
 ---
 
+### 6.12 대화 컨텍스트 예산 정합성 + 설정 외부화 🔵 미착수 (2026-07-05 검토)
+
+> **현재 코드 확인 (2026-07-05)**: §6.10(`ConversationSummarizerService`) 도입 후 이전 대화를 프롬프트에 넣는 경로가 두 갈래로 나뉘었는데, 문자 예산 체크가 한쪽에만 있다 — `MemoryService.getHistory()`(폴백 경로)는 `max(1000, LLM_MAX_TOKENS × 0.75)` 문자 예산을 지키지만, 요약 캐시가 있을 때 쓰는 `ConversationSummarizerService.buildContext()`(요약 ≤2000자 + 최근 원문 2턴)는 이 예산을 전혀 체크하지 않는다. 또한 `FETCH_LIMIT=50`(`SqliteMemoryRepository`), `MAX_CACHED_THREADS=3`·`MAX_SUMMARY_CHARS=2000`·`RECENT_RAW_TURNS=2`·`PRECOMPUTE_TTL_MILLIS=15000`(`ConversationSummarizerService`)가 전부 하드코딩 상수라 `AppProperties`로 조정할 방법이 없다.
+
+**왜**: 최근 답변 2개가 길면 요약 경로가 폴백 경로보다 더 큰 컨텍스트를 LLM에 보낼 수 있어 두 경로의 동작이 앞뒤가 안 맞는다. 운영자가 배포 환경(로컬 소형 모델 vs 대형 클라우드 모델)에 맞춰 캐시 크기·요약 길이·최근 턴 수를 조정하고 싶어도 코드를 고쳐야 한다.
+
+**액션 (우선순위 쉬움 2건)**:
+1. `ConversationSummarizerService.buildContext()`가 조립한 `요약 + 최근 N턴` 결과에도 `MemoryService`와 동일한 문자 예산(`maxConversationChars`)을 적용 — 초과 시 최근 턴부터 자르거나(폴백 경로와 동일한 "최신 우선 채움" 전략 재사용) 요약 부분을 우선 유지. 두 경로가 항상 같은 상한을 지키도록 통일.
+2. 하드코딩 상수들을 `AppProperties`에 `app.memory.*`/`app.summary.*` 네임스페이스로 이전 — 예: `app.memory.fetch-limit-turns`(기본 50), `app.summary.max-cached-threads`(기본 3), `app.summary.max-summary-chars`(기본 2000), `app.summary.recent-raw-turns`(기본 2), `app.summary.precompute-ttl-seconds`(기본 15). 각 서비스에 null 가드(`xxxSafe()` 패턴) 적용.
+
+**완료 기준**:
+- 요약 캐시 경로와 폴백 경로 모두 동일한 문자 예산을 넘지 않는다(단위 테스트로 고정).
+- 위 5개 프로퍼티가 미설정 시 기존 하드코딩 값과 동일하게 동작(회귀 0), 설정 시 그 값을 따른다.
+
+**Effort**: 반나절~1일(상한 통일 + 프로퍼티 외부화, 테스트 포함).
+
+---
+
+### 6.13 LLM 사용량 — 백그라운드(비-채팅) 사용량 분리 기록 ✅ 완료 (2026-07-05)
+
+**현황 (2026-07-05 확인)**: `/llm-usage`에 채팅 답변 생성 이외의 LLM 호출도 잡히는지 점검한 결과, 5곳(대화 요약·인덱싱 키워드 추출·문서 서식 교정·TXT→MD 변환·대화 제목 자동생성) 중 4곳은 이미 `LlmRouter.executeWithTracking()`으로 추적은 되고 있었으나 **일반 채팅과 같은 provider 이름으로 섞여 기록**돼 구분이 불가능했고, 대화 제목 생성(`ThreadMetaService`)은 `LlmRouter`를 거치지 않는 직접 주입 `ChatClient`를 써서 **추적 자체가 안 되고 있었음**.
+
+**구현**: §6.6의 `embed:` 접두사 선례를 그대로 확장 — `BackgroundUsage` 클래스(`llm` 패키지)에 `summary:`/`keyword:`/`mdcorrect:`/`txt2md:`/`title:` 5개 예약 접두사 정의. `LlmRouter.executeWithTracking()`에 선택적 `usageLabelPrefix` 파라미터를 추가한 4-인자 오버로드를 신설(기존 3-인자 오버로드는 그대로 유지, 내부적으로 `prefix=null`로 위임)하여 `provider.name()` 대신 `prefix + provider.name()`으로 기록하도록 함. `ConversationSummarizerService`/`KeywordExtractor`/`MarkdownCorrectionService`/`TextToMarkdownService`는 라벨만 추가하고, `ThreadMetaService`는 `ChatClient` 의존성을 `LlmRouter`로 교체해 새로 추적 대상에 편입(스트리밍 없이 블로킹 `executeWithTracking()` 호출로 단순화됨 — 제목 생성은 토큰 단위로 화면에 표시되지 않아 스트리밍이 애초에 불필요했음).
+
+`OperationsController`는 `usedProviders()` 중 `BackgroundUsage.isBackground()`에 해당하는 이름을 새 `type=BACKGROUND` 카드/행으로 노출(embed:와 동일하게 `deletable=false`, 항상 원본 이름 그대로 표시)하고, 기존 `orphanProviderNames()`에서는 제외(그렇지 않으면 백그라운드 라벨이 "설정에 없는 이름"으로 오인되어 ORPHAN 카드로 잘못 노출되고 삭제 버튼까지 붙었을 것 — embed:가 이미 겪었던 함정과 동일).
+
+**검증**: 전체 436 tests BUILD SUCCESS(회귀 0). `data/memory.db`에 `summary:local` 임시 행을 직접 삽입해 `/llm-usage` 페이지에서 BACKGROUND 배지 카드로 정상 렌더(삭제 버튼 없음, 차트에 별도 계열로 표시)되는 것을 실사용 검증 후 임시 행 제거.
+
+> **범위 밖으로 남겨둔 발견 (후속 검토 필요, 미착수)**: 조사 중 `AnswerService`의 기본(non-streaming) 채팅 답변 경로, `evaluate()`(충분성 평가), `DirectAnswerService`, `ClassifierService`, `RerankerService`, `VisionDescriptionService`, `ImageTypeClassifier`, `RetrievalService`가 쓰는 Spring AI `MultiQueryExpander` 등 **다수의 실사용 채팅 경로가 `LlmRouter`를 아예 거치지 않아 `/llm-usage`에 전혀 잡히지 않는다는 더 큰 문제**를 발견함. 사용자 확인 후 이번 작업 범위에서 의도적으로 제외. 추후 착수 시: (1) 이들 각각이 왜 `LlmRouter.route()`/직접 주입 `ChatClient`로 라우팅만 하고 `executeWithTracking()`을 안 쓰는지 원인부터 재확인(스트리밍 응답은 `ChatResponse` usage 메타데이터를 못 읽는 구조적 이유가 있어 단순 라벨링보다 구조 변경이 필요할 가능성 높음), (2) `AnswerService`가 왜 `primaryChatModel`(기동 시 1회 COST_FIRST로 고정)을 직접 주입받는지부터 검토 — 이 고정 자체가 §6.7의 provider 갱신·circuit breaker 갱신을 못 따라가는 별도 문제일 수 있음.
+
+---
+
 ## 7. Phase 4 — 확장 (조건부) 🔵 미착수
 
 ### 7.1 OAuth2 소셜 로그인 (가입 마찰 문제 발생 시)
@@ -455,47 +488,20 @@ G1~G4 코드/문서 완료. G5는 라우팅 계층 "외부 무선택"을 `LlmCon
 
 ## 11. 의존성 변경 사항 (pom.xml)
 
-### 10.1 추가
+> **2026-07-05 재검증**: 의존성을 추가하는 Phase(1·3·5)가 모두 완료되어 이 절은 더 이상 "계획"이 아니라 이력이다. 정확한 최신 목록은 **pom.xml을 직접 참조**하는 것이 원칙(중복 유지 시 드리프트 위험 — 실제로 아래 두 건이 원안과 달랐다).
 
-```xml
-<!-- Phase 1 -->
-<dependency>
-  <groupId>org.springframework.boot</groupId>
-  <artifactId>spring-boot-starter-security</artifactId>
-</dependency>
-<dependency>
-  <groupId>org.thymeleaf.extras</groupId>
-  <artifactId>thymeleaf-extras-springsecurity6</artifactId>
-</dependency>
-<dependency>
-  <groupId>org.flywaydb</groupId>
-  <artifactId>flyway-core</artifactId>
-</dependency>
-<dependency>
-  <groupId>org.flywaydb</groupId>
-  <artifactId>flyway-database-sqlite</artifactId>
-</dependency>
+### 11.1 Phase별 추가 이력 (pom.xml과 대조 검증 완료)
 
-<!-- Phase 3 -->
-<dependency>
-  <groupId>com.bucket4j</groupId>
-  <artifactId>bucket4j_jdk17-core</artifactId>
-  <version>8.10.1</version>
-</dependency>
+| Phase | 추가 | 비고 |
+|---|---|---|
+| Phase 1 | `spring-boot-starter-security`, `thymeleaf-extras-springsecurity6`, `flyway-core` | SQLite 마이그레이션 지원은 `flyway-core`에 내장(pom.xml 주석 확인) — 원안의 별도 `flyway-database-sqlite` 의존성은 **실제로 추가되지 않았음**(불필요로 판명) |
+| Phase 3 | `com.bucket4j:bucket4j-core:8.10.1`, `com.github.ben-manes.caffeine:caffeine` | 원안은 아티팩트명을 `bucket4j_jdk17-core`로 오기 — 실제는 `bucket4j-core`. `caffeine`(rate-limit 버킷 Map의 무한 증가 방지용 LRU)은 원안에 없었고 구현 중 필요성이 발견되어 추가됨 |
+| Phase 5 | 없음 | sqlite-vec은 기존 `org.xerial:sqlite-jdbc`의 `load_extension()`으로 로드 — 공식 Maven 아티팩트가 없어 vec0 네이티브 바이너리는 운영자가 배치(Step 5.2) |
+| 테스트 | `spring-security-test` | |
 
-<!-- Phase 5 — sqlite-vec: 신규 의존성 없음.
-     공식 Java Maven 아티팩트가 없어 기존 org.xerial:sqlite-jdbc의 load_extension 으로 로드하고,
-     vec0 네이티브 바이너리는 운영자가 배치한다 (Step 5.2 참조). -->
+> Phase 2(모바일 UI)의 webjar 의존성(`bootstrap`/`htmx.org`/`chart.js` 등)과 `spring-boot-starter-thymeleaf`/`thymeleaf-layout-dialect`/`reactor-netty-http`/`spring-boot-configuration-processor`는 이 계획 문서가 추적하는 "보안/운영 강화" 축 밖의 기반 의존성이라 위 표에 없음 — pom.xml이 전체 목록의 단일 출처.
 
-<!-- 테스트 -->
-<dependency>
-  <groupId>org.springframework.security</groupId>
-  <artifactId>spring-security-test</artifactId>
-  <scope>test</scope>
-</dependency>
-```
-
-### 10.2 application.properties 추가
+### 11.2 application.properties 추가 (2026-07-05 재검증, 대조 완료)
 
 ```properties
 # Security
@@ -550,7 +556,7 @@ app.vectorstore.sqlite-vec.entrypoint=${SQLITE_VEC_ENTRYPOINT:}          # sqlit
 
 ## 13. 최종 체크리스트
 
-### 12.1 Phase 1 완료 기준 ✅
+### 13.1 Phase 1 완료 기준 ✅
 
 - [x] HTTPS: Caddy 설정 완료 — 도메인 배포 시 Let's Encrypt 자동 발급, HTTP → HTTPS 자동 리다이렉트
 - [x] 비로그인 사용자는 `/`, `/chat/**`, `/documents`, `/api/**` 접근 불가 (단 `/login`, `/signup`, `/api/health`는 허용)
@@ -561,14 +567,14 @@ app.vectorstore.sqlite-vec.entrypoint=${SQLITE_VEC_ENTRYPOINT:}          # sqlit
 - [x] 로그인 5회 실패 시 15분 잠금
 - [x] `app.auth.enabled=false` no-auth 모드 (guest 자동 로그인, 첫 실행 `/setup`)
 
-### 12.2 Phase 2 완료 기준
+### 13.2 Phase 2 완료 기준
 
 - [ ] iPhone Safari / Android Chrome에서 좌우 스크롤 없음
 - [ ] 채팅 입력창 키보드 출현 시에도 화면 하단 고정
 - [ ] 홈 화면 추가 시 standalone 앱처럼 실행
 - [ ] 다크모드 자동 전환 + 수동 토글 동작
 
-### 12.3 Phase 3 완료 기준
+### 13.3 Phase 3 완료 기준
 
 - [x] Rate limit 초과 시 HTTP 429 + `Retry-After` 헤더 반환
 - [x] 확장자 위조 파일 업로드 차단 (매직바이트 검증)
@@ -576,7 +582,7 @@ app.vectorstore.sqlite-vec.entrypoint=${SQLITE_VEC_ENTRYPOINT:}          # sqlit
 - [x] 주요 액션(로그인/업로드/삭제) `audit_log`에 기록
 - [ ] 일일 LLM 토큰 한도 초과 시 채팅 차단
 
-### 12.4 운영 준비 (Phase 1 종료 전)
+### 13.4 운영 준비 (Phase 1 종료 전)
 
 - [ ] SQLite 백업: Litestream 도입 또는 cron `.backup` 명령 (`cp`는 위험)
 - [x] `.env` 파일 git ignore 확인, API 키 로깅 마스킹 검증 (`PromptInjectionGuard.maskApiKey` + 테스트 완료)

@@ -55,7 +55,19 @@ public class LlmRouter {
     /** 실행 + 토큰 기록 + Circuit Breaker 자동 전환. */
     public String executeWithTracking(TaskType taskType, RoutingMode mode,
                                       Function<ChatModel, ChatResponse> call) {
-        return executeWithTracking(taskType, roleOrder(mode), call, new HashSet<>());
+        return executeWithTracking(taskType, mode, null, call);
+    }
+
+    /**
+     * Same as {@link #executeWithTracking(TaskType, RoutingMode, Function)}, but records usage
+     * under {@code usageLabelPrefix + provider.name()} instead of the bare provider name — see
+     * {@link BackgroundUsage} for the reserved prefixes that separate background/non-chat LLM
+     * calls (summarization, keyword extraction, etc.) from regular chat usage on /llm-usage.
+     * Pass {@code null} for ordinary chat-serving calls (same behavior as the 3-arg overload).
+     */
+    public String executeWithTracking(TaskType taskType, RoutingMode mode, String usageLabelPrefix,
+                                      Function<ChatModel, ChatResponse> call) {
+        return executeWithTracking(taskType, roleOrder(mode), usageLabelPrefix, call, new HashSet<>());
     }
 
     /**
@@ -168,7 +180,7 @@ public class LlmRouter {
         return Optional.empty();
     }
 
-    private String executeWithTracking(TaskType taskType, List<ProviderRole> roleOrder,
+    private String executeWithTracking(TaskType taskType, List<ProviderRole> roleOrder, String usageLabelPrefix,
                                        Function<ChatModel, ChatResponse> call,
                                        Set<String> tried) {
         LlmProvider provider = findFirst(taskType, roleOrder, tried)
@@ -176,7 +188,7 @@ public class LlmRouter {
                         "All providers exhausted for task=" + taskType));
         tried.add(provider.name());
         try {
-            return executeSingleTracked(provider, taskType, call);
+            return executeSingleTracked(provider, taskType, usageLabelPrefix, call);
         } catch (HttpClientErrorException e) {
             int status = e.getStatusCode().value();
             if (status == 429 || status == 402) {
@@ -187,7 +199,7 @@ public class LlmRouter {
                 circuitBreaker.block(provider.name(), "30");
             }
             log.warn("Provider [{}] returned HTTP {}, trying next", provider.name(), status);
-            return executeWithTracking(taskType, roleOrder, call, tried);
+            return executeWithTracking(taskType, roleOrder, usageLabelPrefix, call, tried);
         } catch (Exception e) {
             if (isTimeoutLike(e)) {
                 // Client-side interrupt — provider is healthy; block would cascade into "All providers exhausted"
@@ -198,7 +210,7 @@ public class LlmRouter {
             circuitBreaker.block(provider.name(), "30");
             log.warn("Provider [{}] threw {}: {}, trying next",
                     provider.name(), e.getClass().getSimpleName(), e.getMessage());
-            return executeWithTracking(taskType, roleOrder, call, tried);
+            return executeWithTracking(taskType, roleOrder, usageLabelPrefix, call, tried);
         }
     }
 
@@ -218,6 +230,11 @@ public class LlmRouter {
 
     private String executeSingleTracked(LlmProvider provider, TaskType taskType,
                                         Function<ChatModel, ChatResponse> call) {
+        return executeSingleTracked(provider, taskType, null, call);
+    }
+
+    private String executeSingleTracked(LlmProvider provider, TaskType taskType, String usageLabelPrefix,
+                                        Function<ChatModel, ChatResponse> call) {
         log.debug("[LLM →] provider={} task={} endpoint={}/chat/completions model={}", provider.name(), taskType, provider.baseUrl(), provider.model());
         long t0 = System.currentTimeMillis();
         ChatResponse response = call.apply(provider.chatModel());
@@ -225,7 +242,8 @@ public class LlmRouter {
         var usage = response.getMetadata().getUsage();
         int in  = (usage != null && usage.getPromptTokens()     != null) ? usage.getPromptTokens()     : 0;
         int out = (usage != null && usage.getCompletionTokens() != null) ? usage.getCompletionTokens() : 0;
-        usageRepo.record(provider.name(), in, out);
+        String usageKey = usageLabelPrefix != null ? usageLabelPrefix + provider.name() : provider.name();
+        usageRepo.record(usageKey, in, out);
         String text = response.getResult().getOutput().getText();
         if (log.isDebugEnabled()) {
             String preview = (text != null && text.length() > 80) ? text.substring(0, 80) + "…" : text;

@@ -86,7 +86,7 @@ class DocumentIndexerTest {
 
         // Stub LlmRouter — throw to force TF-IDF fallback (avoids real LLM calls)
         com.example.ragagent.llm.LlmRouter llmRouter = mock(com.example.ragagent.llm.LlmRouter.class);
-        when(llmRouter.executeWithTracking(any(), any(), any()))
+        when(llmRouter.executeWithTracking(any(), any(), any(), any()))
                 .thenThrow(new RuntimeException("no LLM in test"));
 
         keywordRepo = new KeywordSearchRepository(new JdbcTemplate(ds));

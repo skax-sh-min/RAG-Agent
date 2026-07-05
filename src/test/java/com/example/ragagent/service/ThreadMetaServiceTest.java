@@ -1,18 +1,28 @@
 package com.example.ragagent.service;
 
+import com.example.ragagent.llm.BackgroundUsage;
+import com.example.ragagent.llm.LlmRouter;
+import com.example.ragagent.llm.RoutingMode;
+import com.example.ragagent.llm.TaskType;
 import com.example.ragagent.model.ThreadMeta;
 import com.example.ragagent.repository.ThreadMetaRepository;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.springframework.ai.chat.client.ChatClient;
-import reactor.core.publisher.Flux;
+import org.mockito.ArgumentCaptor;
+import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.ai.chat.model.ChatResponse;
+import org.springframework.ai.chat.model.Generation;
+import org.springframework.ai.chat.prompt.Prompt;
 
-import java.time.Duration;
+import java.util.List;
 import java.util.Optional;
+import java.util.function.Function;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.timeout;
@@ -20,7 +30,11 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * QA — ThreadMetaService getOrCreate() + generateTitleAsync() (EDIT.md #1)
+ * QA — ThreadMetaService getOrCreate() + generateTitleAsync() (EDIT.md #1).
+ *
+ * generateTitleAsync() now routes through LlmRouter.executeWithTracking() (previously a
+ * directly-injected ChatClient that bypassed llm_usage tracking entirely) so title generation
+ * shows up on /llm-usage under the "title:" prefix (BackgroundUsage) instead of being invisible.
  *
  * Other methods (getAll/findById/countTurns/updateTitle/updateRoutingMode/delete) are
  * one-line delegation, not covered here. generateTitleAsync() runs on a virtual thread, so
@@ -30,8 +44,12 @@ import static org.mockito.Mockito.when;
 class ThreadMetaServiceTest {
 
     private final ThreadMetaRepository repository = mock(ThreadMetaRepository.class);
-    private final ChatClient chatClient = mock(ChatClient.class, RETURNS_DEEP_STUBS);
-    private final ThreadMetaService service = new ThreadMetaService(repository, chatClient);
+    private final LlmRouter llmRouter = mock(LlmRouter.class);
+    private final ThreadMetaService service = new ThreadMetaService(repository, llmRouter);
+
+    private static ChatResponse chatResponse(String text) {
+        return new ChatResponse(List.of(new Generation(new AssistantMessage(text))));
+    }
 
     @Test
     @DisplayName("getOrCreate — 이미 존재하면 그대로 반환, save() 호출 안 함")
@@ -66,7 +84,7 @@ class ThreadMetaServiceTest {
 
         service.generateTitleAsync("u1", "t1", "latest", "질문");
 
-        verify(chatClient, never()).prompt();
+        verify(llmRouter, never()).executeWithTracking(any(), any(), any(), any());
     }
 
     @Test
@@ -77,7 +95,7 @@ class ThreadMetaServiceTest {
 
         service.generateTitleAsync("u1", "t1", "latest", "질문");
 
-        verify(chatClient, never()).prompt();
+        verify(llmRouter, never()).executeWithTracking(any(), any(), any(), any());
     }
 
     @Test
@@ -85,14 +103,13 @@ class ThreadMetaServiceTest {
     void generateTitleAsync_defaultTitle_generatesAndTruncatesTitle() {
         ThreadMeta fresh = new ThreadMeta("t1", "u1", "[latest] 새 대화", "latest", "now", "now", "COST_FIRST");
         when(repository.findById("u1", "t1")).thenReturn(Optional.of(fresh));
-        when(chatClient.prompt().user(anyString()).stream().content())
-                .thenReturn(Flux.just("이것은 20자를 초과하는 아주 긴 요약 문장입니다 정말로"));
+        when(llmRouter.executeWithTracking(any(), any(), any(), any()))
+                .thenReturn("이것은 20자를 초과하는 아주 긴 요약 문장입니다 정말로");
 
         service.generateTitleAsync("u1", "t1", "latest", "질문");
 
         verify(repository, timeout(2000)).updateTitle(
-                org.mockito.ArgumentMatchers.eq("u1"),
-                org.mockito.ArgumentMatchers.eq("t1"),
+                eq("u1"), eq("t1"),
                 org.mockito.ArgumentMatchers.argThat(title -> {
                     String summary = title.substring("[latest] ".length());
                     return title.startsWith("[latest] ") && summary.length() <= 20;
@@ -100,20 +117,37 @@ class ThreadMetaServiceTest {
     }
 
     @Test
-    @DisplayName("generateTitleAsync — 질문이 PromptInjectionGuard.wrap()으로 감싸져 전달됨 (EDIT.md #5)")
-    void generateTitleAsync_wrapsQuestionInUserQuestionDelimiters() {
+    @DisplayName("generateTitleAsync — LlmRouter.executeWithTracking()을 title: 접두사로 호출 (백그라운드 사용량 분리)")
+    void generateTitleAsync_tracksUsageUnderTitlePrefix() {
         ThreadMeta fresh = new ThreadMeta("t1", "u1", "[latest] 새 대화", "latest", "now", "now", "COST_FIRST");
         when(repository.findById("u1", "t1")).thenReturn(Optional.of(fresh));
-        when(chatClient.prompt().user(anyString()).stream().content())
-                .thenReturn(Flux.just("요약"));
-        org.mockito.ArgumentCaptor<String> captor = org.mockito.ArgumentCaptor.forClass(String.class);
-        ChatClient.ChatClientRequestSpec requestSpec = chatClient.prompt();
-        org.mockito.Mockito.clearInvocations(requestSpec);
+        when(llmRouter.executeWithTracking(any(), any(), any(), any())).thenReturn("요약");
 
         service.generateTitleAsync("u1", "t1", "latest", "질문");
 
-        verify(requestSpec, timeout(2000)).user(captor.capture());
-        assertThat(captor.getValue()).contains("[USER_QUESTION]").contains("[/USER_QUESTION]");
+        verify(llmRouter, timeout(2000)).executeWithTracking(
+                eq(TaskType.LIGHT_TEXT), eq(RoutingMode.COST_FIRST), eq(BackgroundUsage.TITLE_PREFIX), any());
+    }
+
+    @Test
+    @DisplayName("generateTitleAsync — 질문이 PromptInjectionGuard.wrap()으로 감싸져 전달됨 (EDIT.md #5)")
+    @SuppressWarnings("unchecked")
+    void generateTitleAsync_wrapsQuestionInUserQuestionDelimiters() {
+        ThreadMeta fresh = new ThreadMeta("t1", "u1", "[latest] 새 대화", "latest", "now", "now", "COST_FIRST");
+        when(repository.findById("u1", "t1")).thenReturn(Optional.of(fresh));
+        ArgumentCaptor<Function<ChatModel, ChatResponse>> callCaptor = ArgumentCaptor.forClass(Function.class);
+        when(llmRouter.executeWithTracking(any(), any(), any(), callCaptor.capture())).thenReturn("요약");
+
+        service.generateTitleAsync("u1", "t1", "latest", "질문");
+
+        verify(repository, timeout(2000)).updateTitle(eq("u1"), eq("t1"), anyString());
+        ChatModel chatModel = mock(ChatModel.class);
+        ArgumentCaptor<Prompt> promptCaptor = ArgumentCaptor.forClass(Prompt.class);
+        when(chatModel.call(promptCaptor.capture())).thenReturn(chatResponse("요약"));
+        callCaptor.getValue().apply(chatModel);
+
+        assertThat(promptCaptor.getValue().getContents())
+                .contains("[USER_QUESTION]").contains("[/USER_QUESTION]");
     }
 
     @Test
@@ -121,8 +155,8 @@ class ThreadMetaServiceTest {
     void generateTitleAsync_llmFailure_failsSilently() {
         ThreadMeta fresh = new ThreadMeta("t1", "u1", "[latest] 새 대화", "latest", "now", "now", "COST_FIRST");
         when(repository.findById("u1", "t1")).thenReturn(Optional.of(fresh));
-        when(chatClient.prompt().user(anyString()).stream().content())
-                .thenReturn(Flux.error(new RuntimeException("LLM down")));
+        when(llmRouter.executeWithTracking(any(), any(), any(), any()))
+                .thenThrow(new RuntimeException("LLM down"));
 
         service.generateTitleAsync("u1", "t1", "latest", "질문");
 

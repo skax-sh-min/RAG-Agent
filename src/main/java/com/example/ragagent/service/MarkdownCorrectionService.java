@@ -2,6 +2,7 @@ package com.example.ragagent.service;
 
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.exception.LlmProviderExhaustedException;
+import com.example.ragagent.llm.BackgroundUsage;
 import com.example.ragagent.llm.LlmProvider;
 import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.RoutingMode;
@@ -207,7 +208,7 @@ public class MarkdownCorrectionService {
                 [/DOCUMENT]""".formatted(safeSection);
         try {
             String result = llmRouter.executeWithTracking(
-                    TaskType.LIGHT_TEXT, RoutingMode.COST_FIRST,
+                    TaskType.LIGHT_TEXT, RoutingMode.COST_FIRST, BackgroundUsage.MDCORRECT_PREFIX,
                     model -> model.call(new Prompt(prompt)));
             log.debug("[MD_CORRECT] 섹션 교정 완료: {}자 → {}자", safeSection.length(), result.length());
             return result;

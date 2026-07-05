@@ -1,6 +1,7 @@
 package com.example.ragagent.ingestion;
 
 import com.example.ragagent.config.AppProperties;
+import com.example.ragagent.llm.BackgroundUsage;
 import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.llm.TaskType;
@@ -93,7 +94,7 @@ public class KeywordExtractor {
         ScheduledFuture<?> killer = timeoutScheduler.schedule(self::interrupt, timeoutSec, TimeUnit.SECONDS);
         try {
             String keywords = llmRouter.executeWithTracking(
-                    TaskType.LIGHT_TEXT, RoutingMode.COST_FIRST,
+                    TaskType.LIGHT_TEXT, RoutingMode.COST_FIRST, BackgroundUsage.KEYWORD_PREFIX,
                     model -> model.call(new Prompt(prompt)));
             log.debug("[ENRICH] LLM 키워드: [{}]", keywords);
             Map<String, Object> meta = new HashMap<>(chunk.getMetadata());

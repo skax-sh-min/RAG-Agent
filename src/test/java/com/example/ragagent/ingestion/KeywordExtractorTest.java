@@ -1,7 +1,10 @@
 package com.example.ragagent.ingestion;
 
 import com.example.ragagent.config.AppProperties;
+import com.example.ragagent.llm.BackgroundUsage;
 import com.example.ragagent.llm.LlmRouter;
+import com.example.ragagent.llm.RoutingMode;
+import com.example.ragagent.llm.TaskType;
 import com.example.ragagent.model.MetaKey;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -13,7 +16,9 @@ import java.util.concurrent.Semaphore;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -38,7 +43,7 @@ class KeywordExtractorTest {
     @Test
     @DisplayName("LLM 호출 성공 시 반환된 키워드가 메타데이터에 저장된다")
     void enrichKeywords_llmSuccess_storesKeywordsInMetadata() {
-        when(llmRouter.executeWithTracking(any(), any(), any())).thenReturn("검색, 인덱싱, 청크");
+        when(llmRouter.executeWithTracking(any(), any(), any(), any())).thenReturn("검색, 인덱싱, 청크");
 
         Document result = extractor.enrichKeywords(new Document("테스트 문서 내용입니다."));
 
@@ -48,7 +53,7 @@ class KeywordExtractorTest {
     @Test
     @DisplayName("LLM 호출 실패 시 TF-IDF 폴백 키워드로 대체된다")
     void enrichKeywords_llmFailure_fallsBackToTf() {
-        when(llmRouter.executeWithTracking(any(), any(), any()))
+        when(llmRouter.executeWithTracking(any(), any(), any(), any()))
                 .thenThrow(new RuntimeException("no LLM in test"));
 
         Document result = extractor.enrichKeywords(new Document("keyword extraction fallback test content"));
@@ -59,9 +64,20 @@ class KeywordExtractorTest {
     }
 
     @Test
+    @DisplayName("enrichKeywords — LlmRouter.executeWithTracking()을 keyword: 접두사로 호출 (백그라운드 사용량 분리)")
+    void enrichKeywords_tracksUsageUnderKeywordPrefix() {
+        when(llmRouter.executeWithTracking(any(), any(), any(), any())).thenReturn("키워드");
+
+        extractor.enrichKeywords(new Document("테스트 문서 내용입니다."));
+
+        verify(llmRouter).executeWithTracking(
+                eq(TaskType.LIGHT_TEXT), eq(RoutingMode.COST_FIRST), eq(BackgroundUsage.KEYWORD_PREFIX), any());
+    }
+
+    @Test
     @DisplayName("enrichParallel — 모든 청크가 병렬로 처리되고 개수가 보존된다")
     void enrichParallel_processesAllChunksPreservingCount() {
-        when(llmRouter.executeWithTracking(any(), any(), any())).thenReturn("키워드");
+        when(llmRouter.executeWithTracking(any(), any(), any(), any())).thenReturn("키워드");
         List<Document> chunks = List.of(
                 new Document("첫 번째 청크"), new Document("두 번째 청크"), new Document("세 번째 청크"));
 
