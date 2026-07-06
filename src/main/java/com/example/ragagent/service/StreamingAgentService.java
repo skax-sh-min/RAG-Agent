@@ -2,6 +2,7 @@ package com.example.ragagent.service;
 
 import com.example.ragagent.agent.AgentGraph;
 import com.example.ragagent.agent.AgentState;
+import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.exception.LlmProviderExhaustedException;
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.model.ChatForm;
@@ -30,6 +31,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * SSE streaming pipeline orchestrator.
@@ -54,6 +56,7 @@ public class StreamingAgentService {
     private final ObjectMapper objectMapper;
     private final MessageSource messageSource;
     private final ConversationSummarizerService summarizerService;
+    private final AppProperties props;
 
     public StreamingAgentService(AgentGraph agentGraph,
                                   MemoryService memoryService,
@@ -61,7 +64,8 @@ public class StreamingAgentService {
                                   ThreadMetaService threadMetaService,
                                   ObjectMapper objectMapper,
                                   MessageSource messageSource,
-                                  ConversationSummarizerService summarizerService) {
+                                  ConversationSummarizerService summarizerService,
+                                  AppProperties props) {
         this.agentGraph = agentGraph;
         this.memoryService = memoryService;
         this.classifierService = classifierService;
@@ -69,6 +73,7 @@ public class StreamingAgentService {
         this.objectMapper = objectMapper;
         this.messageSource = messageSource;
         this.summarizerService = summarizerService;
+        this.props = props;
     }
 
     /**
@@ -82,10 +87,30 @@ public class StreamingAgentService {
         long startNs = System.nanoTime();
         String askedAt = DB_FMT.format(Instant.now());
         SseGraphListener listener = null;
+        // run() executes as the body of the worker virtual thread (see ChatController),
+        // so this IS the thread to interrupt when the pipeline goes idle too long.
+        Thread worker = Thread.currentThread();
+        AtomicLong lastActivityNanos = new AtomicLong(System.nanoTime());
+        long idleTimeoutNanos = TimeUnit.MILLISECONDS.toNanos(props.sseIdleTimeoutMs());
+
         ScheduledFuture<?> heartbeat = heartbeatScheduler.scheduleAtFixedRate(() -> {
             try { emitter.send(SseEmitter.event().comment("heartbeat")); }
             catch (Exception ignored) {}
         }, 15, 15, TimeUnit.SECONDS);
+        // Idle watchdog: aborts only when the graph makes NO forward progress (no node
+        // transition, token, or sources-ready event) for sseIdleTimeoutMs — a slow-but-actively-
+        // generating local LLM response is never cut off. SseEmitter's own timeout
+        // (props.sseTimeoutMs(), see ChatController) stays as a generous absolute backstop.
+        // Check interval scales with the configured idle timeout (~6 checks per window) so a
+        // shorter-than-default idle timeout is still detected promptly.
+        long checkIntervalMs = Math.max(100, props.sseIdleTimeoutMs() / 6);
+        ScheduledFuture<?> idleWatchdog = heartbeatScheduler.scheduleWithFixedDelay(() -> {
+            long idleNanos = System.nanoTime() - lastActivityNanos.get();
+            if (idleNanos > idleTimeoutNanos) {
+                log.warn("[TIMEOUT:SSE_IDLE] thread={} idleMs={}", form.threadId(), TimeUnit.NANOSECONDS.toMillis(idleNanos));
+                worker.interrupt();
+            }
+        }, checkIntervalMs, checkIntervalMs, TimeUnit.MILLISECONDS);
         try {
             AgentState initial;
             RoutingMode rm = parseRoutingMode(form.routingMode());
@@ -106,13 +131,13 @@ public class StreamingAgentService {
 
                     initial = AgentState.of(form.question(), form.version(), form.threadId(),
                                     userId, historyF.join(), rm, false, locale)
-                            .withQuestionType(typeF.join());
+                            .toBuilder().questionType(typeF.join()).build();
                 }
             }
             // carry the selected search-scope tags into the graph state.
             initial = initial.toBuilder().selectedTags(form.selectedTags()).build();
 
-            listener = new SseGraphListener(emitter);
+            listener = new SseGraphListener(emitter, lastActivityNanos);
             AgentState result = agentGraph.runStreaming(initial, listener);
 
             long elapsedMs = (System.nanoTime() - startNs) / 1_000_000;
@@ -167,6 +192,7 @@ public class StreamingAgentService {
             emitter.completeWithError(e);
         } finally {
             heartbeat.cancel(false);
+            idleWatchdog.cancel(false);
         }
     }
 
@@ -175,22 +201,26 @@ public class StreamingAgentService {
     private class SseGraphListener implements GraphListener {
 
         private final SseEmitter emitter;
+        private final AtomicLong lastActivityNanos;
         private final StringBuilder accumulated = new StringBuilder();
 
-        SseGraphListener(SseEmitter emitter) {
+        SseGraphListener(SseEmitter emitter, AtomicLong lastActivityNanos) {
             this.emitter = emitter;
+            this.lastActivityNanos = lastActivityNanos;
         }
 
         String getAccumulatedAnswer() { return accumulated.toString(); }
 
         @Override
         public void onNodeEnter(String nodeName) {
+            lastActivityNanos.set(System.nanoTime());
             Map<String, String> payload = Map.of("id", nodeName, "text", stageText(nodeName));
             sendEvent(emitter, "stage", payload);
         }
 
         @Override
         public void onToken(String text) {
+            lastActivityNanos.set(System.nanoTime());
             accumulated.append(text);
             Map<String, Object> payload = new HashMap<>();
             payload.put("text", text);
@@ -200,6 +230,7 @@ public class StreamingAgentService {
 
         @Override
         public void onToken(String tab, String text) {
+            lastActivityNanos.set(System.nanoTime());
             accumulated.append(text);
             Map<String, Object> payload = new HashMap<>();
             payload.put("text", text);
@@ -209,11 +240,13 @@ public class StreamingAgentService {
 
         @Override
         public void onSourcesReady(List<SourceRef> sources) {
+            lastActivityNanos.set(System.nanoTime());
             sendEvent(emitter, "sources", sources);
         }
 
         @Override
         public void onUpgrade(String provider) {
+            lastActivityNanos.set(System.nanoTime());
             Map<String, String> payload = Map.of(
                     "id", "upgrade",
                     "text", "고추론 재분석 중: " + provider);

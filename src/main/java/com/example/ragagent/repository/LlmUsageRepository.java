@@ -38,6 +38,11 @@ public class LlmUsageRepository {
         jdbc.execute(
                 "CREATE INDEX IF NOT EXISTS idx_llm_usage_date ON llm_usage(usage_date)");
         try {
+            // Currently unused: record()/getByPeriod()/usedProviders()/deleteByProvider() never
+            // read or write this column, so every row stays at the default 'anonymous'. Added in
+            // prep for §6.5 (per-user LLM quota), whose recommended design aggregates from
+            // conversation_turns.user_id instead — this column may end up staying dead. See
+            // documents/PLAN.md §6.5 before wiring it up.
             jdbc.execute("ALTER TABLE llm_usage ADD COLUMN user_id TEXT NOT NULL DEFAULT 'anonymous'");
         } catch (Exception ignored) {}
     }

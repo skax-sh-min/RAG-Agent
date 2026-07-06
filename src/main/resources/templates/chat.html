@@ -421,9 +421,18 @@
         }).catch(() => {});
     });
 
-    /* Enter → submit, Shift+Enter → newline */
+    /* Enter → submit, Shift+Enter → newline.
+       한글 등 IME 조합 중 Enter로 조합을 확정하면 일부 브라우저(특히 Safari)가 keydown을
+       두 번 발생시켜(조합 확정용 + 그 직후 실제 Enter) 같은 질문이 두 번 제출되는 버그가
+       있었다 — e.isComposing만으로는 해당 브라우저에서 조합 확정 keydown 때 false로
+       잘못 보고되는 경우가 있어 compositionstart/compositionend로 별도 플래그를 유지해
+       이중으로 방어한다. */
+    let isComposing = false;
+    questionInput.addEventListener('compositionstart', function () { isComposing = true; });
+    questionInput.addEventListener('compositionend', function () { isComposing = false; });
     questionInput.addEventListener('keydown', function (e) {
         if (e.key === 'Enter' && !e.shiftKey) {
+            if (e.isComposing || isComposing) return;
             e.preventDefault();
             if (this.value.trim()) chatForm.requestSubmit();
         }

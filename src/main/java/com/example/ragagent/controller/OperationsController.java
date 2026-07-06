@@ -3,6 +3,7 @@ package com.example.ragagent.controller;
 import com.example.ragagent.audit.AuditLogger;
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.context.ThreadContext;
+import com.example.ragagent.llm.BackgroundUsage;
 import com.example.ragagent.llm.CircuitBreaker;
 import com.example.ragagent.llm.TrackingEmbeddingModel;
 import com.example.ragagent.model.LlmProviderReport;
@@ -179,6 +180,16 @@ public class OperationsController {
                 usageRepo.getMonthly(embedName),
                 null
         );
+        Stream<UsageReport> backgroundUsage = backgroundUsageNames().stream()
+                .map(name -> new UsageReport(
+                        name,
+                        "BACKGROUND",
+                        null,
+                        usageRepo.getDaily(name),
+                        usageRepo.getWeekly(name),
+                        usageRepo.getMonthly(name),
+                        null
+                ));
         Stream<UsageReport> orphanUsage = orphanProviderNames().stream().sorted()
                 .map(name -> new UsageReport(
                         name,
@@ -189,7 +200,8 @@ public class OperationsController {
                         usageRepo.getMonthly(name),
                         null
                 ));
-        return Stream.concat(Stream.concat(chatUsage, Stream.of(embedUsage)), orphanUsage).toList();
+        return Stream.of(chatUsage, Stream.of(embedUsage), backgroundUsage, orphanUsage)
+                .flatMap(s -> s).toList();
     }
 
     /** Daily token history per provider for Chart.js stacked bar chart, plus embedding (§6.6) and orphan (§6.8) rows. */
@@ -204,6 +216,9 @@ public class OperationsController {
         }
         String embedName = embeddingProviderName();
         history.put(embedName, usageRepo.getDailyHistory(embedName, safeDays));
+        for (String name : backgroundUsageNames()) {
+            history.put(name, usageRepo.getDailyHistory(name, safeDays));
+        }
         for (String name : orphanProviderNames()) {
             history.put(name, usageRepo.getDailyHistory(name, safeDays));
         }
@@ -244,12 +259,14 @@ public class OperationsController {
     // ── Helpers ───────────────────────────────────────────────────────
 
     /**
-     * Chat provider cards/rows, one always-shown embedding card (§6.6), plus any orphan
-     * cards (§6.8). Embedding has no ProviderRole (role=null → no role badge) and is never
-     * circuit-broken (blockedUntil=null) — the "EMBEDDING" type badge is what visually
-     * separates it from chat providers. Orphan cards similarly use type="ORPHAN", are never
-     * "configured" (dims the card, reusing the existing opacity styling), and set
-     * deletable=true so the fragment renders a delete button only for them.
+     * Chat provider cards/rows, one always-shown embedding card (§6.6), any background-usage
+     * cards (§6.12 — conversation summarization, indexing keyword extraction/format correction,
+     * thread title generation; only shown once they have history), plus any orphan cards
+     * (§6.8). Embedding/background have no ProviderRole (role=null → no role badge) and are
+     * never circuit-broken (blockedUntil=null) — the type badge ("EMBEDDING"/"BACKGROUND") is
+     * what visually separates them from chat providers. Orphan cards similarly use
+     * type="ORPHAN", are never "configured" (dims the card, reusing the existing opacity
+     * styling), and set deletable=true so the fragment renders a delete button only for them.
      */
     private List<LlmProviderReport> buildProviderReports() {
         Map<String, Instant> blocked = circuitBreaker.getBlockedProviders();
@@ -279,6 +296,19 @@ public class OperationsController {
                 true,
                 false
         );
+        Stream<LlmProviderReport> backgroundReports = backgroundUsageNames().stream()
+                .map(name -> new LlmProviderReport(
+                        name,
+                        "BACKGROUND",
+                        null,
+                        null,
+                        usageRepo.getDaily(name),
+                        usageRepo.getWeekly(name),
+                        usageRepo.getMonthly(name),
+                        null,
+                        true,
+                        false
+                ));
         Stream<LlmProviderReport> orphanReports = orphanProviderNames().stream().sorted()
                 .map(name -> new LlmProviderReport(
                         name,
@@ -292,7 +322,8 @@ public class OperationsController {
                         false,
                         true
                 ));
-        return Stream.concat(Stream.concat(chatReports, Stream.of(embedReport)), orphanReports).toList();
+        return Stream.of(chatReports, Stream.of(embedReport), backgroundReports, orphanReports)
+                .flatMap(s -> s).toList();
     }
 
     /**
@@ -320,16 +351,33 @@ public class OperationsController {
     }
 
     /**
+     * Provider names recorded under a {@link BackgroundUsage} prefix (§6.12) — conversation
+     * summarization, indexing keyword extraction/format correction, thread title generation.
+     * Only names with actual history are shown (unlike embedding's always-shown single row,
+     * there's no single "current" background provider to default to, and several prefixes
+     * exist), sorted for stable rendering.
+     */
+    private Set<String> backgroundUsageNames() {
+        Set<String> names = new java.util.TreeSet<>();
+        for (String name : usageRepo.usedProviders()) {
+            if (BackgroundUsage.isBackground(name)) names.add(name);
+        }
+        return names;
+    }
+
+    /**
      * Provider names with historical usage that don't correspond to any live config today
      * (§6.8) — a chat provider removed entirely from app.llm.providers, or a stale
-     * embed:&lt;old-model&gt; row left behind after EMBED_MODEL was changed. Unlike §6.7's
-     * plain inactive filter (which only hides/shows names still present in config), these are
+     * embed:&lt;old-model&gt; row left behind after EMBED_MODEL was changed. Background usage
+     * (§6.12) is excluded — it's expected, ongoing usage, not stale config. Unlike §6.7's plain
+     * inactive filter (which only hides/shows names still present in config), these are
      * actively surfaced so an operator can review and delete them.
      */
     private Set<String> orphanProviderNames() {
         Set<String> orphans = new HashSet<>(usageRepo.usedProviders());
         props.llmSafe().providers().forEach(cfg -> orphans.remove(cfg.name()));
         orphans.remove(embeddingProviderName());
+        orphans.removeIf(BackgroundUsage::isBackground);
         return orphans;
     }
 }

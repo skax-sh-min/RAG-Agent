@@ -218,7 +218,8 @@ copy .env.example .env
 
 | 변수 | 기본값 | 권장 범위 | 설명 |
 |------|--------|----------|------|
-| `SSE_TIMEOUT_SECONDS` | `300` | 60 ~ 1800 | 브라우저 ↔ 서버 SSE 연결 타임아웃 (`app.sse-timeout-seconds`) |
+| `SSE_IDLE_TIMEOUT_SECONDS` | `120` | 30 ~ 600 | 에이전트 그래프의 진행 신호(노드 전환·토큰·소스 준비)가 이 시간만큼 전혀 없으면 중단 (`app.sse-idle-timeout-seconds`). 매 신호마다 리셋되므로 느리지만 계속 응답 중인 로컬 LLM은 끊기지 않음 — 실제로 "멈춘" 요청을 감지하는 주 타임아웃 |
+| `SSE_TIMEOUT_SECONDS` | `3600` | 600 ~ 7200 | 브라우저 ↔ 서버 SSE 연결의 절대 상한(활동 여부 무관, `app.sse-timeout-seconds`) — 응답이 영원히 끝나지 않는 극단적 상황에 대한 안전장치일 뿐, 평소엔 `SSE_IDLE_TIMEOUT_SECONDS`가 먼저 작동함 |
 | `LLM_CONNECT_TIMEOUT_SECONDS` | `10` | 2 ~ 30 | LLM API 연결 타임아웃 (`app.llm.connect-timeout-seconds`) |
 | `LLM_READ_TIMEOUT_SECONDS` | `180` | 30 ~ 600 | LLM API 응답 읽기 타임아웃 (`app.llm.read-timeout-seconds`) |
 | `EMBED_CONNECT_TIMEOUT_SECONDS` | `10` | 2 ~ 30 | 임베딩 API 연결 타임아웃 (`app.embedding.connect-timeout-seconds`) |
@@ -1424,7 +1425,10 @@ docker-compose logs app
 
 ### 로컬 LLM 응답 타임아웃 (`SSE worker cancelled`)
 
-로컬 LLM 서버(LM Studio 등)에 요청이 도달하지 않거나 응답이 없어 `app.sse-timeout-seconds` 경과 후 연결이 끊기는 경우입니다.
+두 가지 다른 원인이 같은 로그 패턴(`SSE worker cancelled`)으로 나타납니다.
+
+- **`[TIMEOUT:SSE_IDLE]`** — 에이전트 그래프가 `app.sse-idle-timeout-seconds`(기본 120초) 동안 노드 전환·토큰·소스 준비 신호를 전혀 못 받음. 로컬 LLM 서버(LM Studio 등)가 요청을 받고도 응답을 전혀 생성하지 못하는(멈춘) 경우가 전형적입니다. **응답이 느리더라도 토큰이 계속 나오고 있다면 이 타임아웃에 걸리지 않습니다** — 매 신호마다 리셋되기 때문입니다.
+- **`[TIMEOUT:SSE]`** — `app.sse-timeout-seconds`(기본 3600초) 절대 상한 초과. 응답이 활동 중이어도(토큰이 계속 나와도) 총 소요 시간이 이 값을 넘으면 발생 — 극히 드묾, 안전장치 성격.
 
 | 원인 | 확인 방법 | 조치 |
 |------|----------|------|
@@ -1434,11 +1438,12 @@ docker-compose logs app
 
 타임아웃이 반복되면 아래 순서로 조정하세요.
 
-1. `SSE_TIMEOUT_SECONDS`를 먼저 증가 (예: 300 → 900)
-2. 인덱싱 중 키워드 추출이 자주 timeout이면 `INDEXING_KEYWORD_TIMEOUT_SECONDS` 증가
-3. 외부 LLM이 느린 경우 `LLM_READ_TIMEOUT_SECONDS` 증가
-4. 임베딩 단계 지연 시 `EMBED_READ_TIMEOUT_SECONDS` 증가
-5. Chroma 지연 시 `CHROMA_READ_TIMEOUT_SECONDS` 증가
+1. `[TIMEOUT:SSE_IDLE]`이 반복되면 `SSE_IDLE_TIMEOUT_SECONDS` 증가 (기본 120, 예: 120 → 300) — LLM이 첫 토큰을 내기까지 오래 걸리는 환경(느린 하드웨어, 큰 모델)에 해당
+2. `[TIMEOUT:SSE]`가 발생하면 `SSE_TIMEOUT_SECONDS` 증가 (기본 3600, 예: 3600 → 7200)
+3. 인덱싱 중 키워드 추출이 자주 timeout이면 `INDEXING_KEYWORD_TIMEOUT_SECONDS` 증가
+4. 외부 LLM이 느린 경우 `LLM_READ_TIMEOUT_SECONDS` 증가
+5. 임베딩 단계 지연 시 `EMBED_READ_TIMEOUT_SECONDS` 증가
+6. Chroma 지연 시 `CHROMA_READ_TIMEOUT_SECONDS` 증가
 
 타임아웃 원인은 로그 키로 즉시 구분할 수 있습니다.
 

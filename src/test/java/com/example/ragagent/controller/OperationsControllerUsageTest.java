@@ -110,6 +110,45 @@ class OperationsControllerUsageTest {
                 .andExpect(content().string(containsString("EMBEDDING")));
     }
 
+    // ── §6.12 — background/non-chat LLM usage (summarization, keyword extraction, etc.) ─────
+
+    @Test
+    @DisplayName("§6.12 — summary:/keyword:/title: 등 백그라운드 사용량은 type=BACKGROUND 로 노출(ORPHAN 아님)")
+    void backgroundUsage_surfacedWithTypeBackground_notOrphan() throws Exception {
+        when(usageRepo.usedProviders()).thenReturn(Set.of("summary:local", "keyword:local", "title:local"));
+
+        mvc.perform(get("/api/v1/llm/usage"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[*].provider", org.hamcrest.Matchers.hasItems(
+                        "summary:local", "keyword:local", "title:local")))
+                .andExpect(jsonPath("$[?(@.provider=='summary:local')].type").value("BACKGROUND"))
+                .andExpect(jsonPath("$[?(@.provider=='keyword:local')].type").value("BACKGROUND"))
+                .andExpect(jsonPath("$[?(@.provider=='title:local')].type").value("BACKGROUND"));
+        mvc.perform(get("/api/v1/llm/usage/history"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$['summary:local']").exists());
+        mvc.perform(get("/ui/llm-usage/cards"))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("summary:local")))
+                .andExpect(content().string(containsString("BACKGROUND")));
+    }
+
+    @Test
+    @DisplayName("§6.12 — 백그라운드 사용량은 삭제 버튼 없음(deletable=false), DELETE 시도해도 orphan 아니라 거부")
+    void backgroundUsage_notDeletable() throws Exception {
+        when(usageRepo.usedProviders()).thenReturn(Set.of("summary:local"));
+
+        mvc.perform(get("/ui/llm-usage/cards"))
+                .andExpect(status().isOk())
+                .andExpect(content().string(not(containsString("/admin/llm-usage/summary:local"))));
+
+        mvc.perform(delete("/admin/llm-usage/summary:local")
+                        .with(csrf())
+                        .with(org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user("admin").roles("ADMIN")))
+                .andExpect(status().isBadRequest());
+        verify(usageRepo, never()).deleteByProvider(any());
+    }
+
     // ── §6.7 — inactive (unconfigured) provider filtering ────────────────────
 
     /** apiKey="" → unconfigured; only shown when usedProviders() contains its name. */

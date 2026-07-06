@@ -12,6 +12,11 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.ai.chat.model.ChatResponse;
+import org.springframework.ai.chat.model.Generation;
+import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.context.MessageSource;
 import reactor.core.publisher.Flux;
 
@@ -56,7 +61,7 @@ class AnswerServiceTest {
         AppProperties props = new AppProperties(
                 "./data", MAX_RETRY, 800, 100, 100, 7, 0.0, true, 0, false,
                 true, false, 3,
-                null, null, null, null, null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null, null, null, null, null, null);
         MessageSource messageSource = mock(MessageSource.class);
         when(messageSource.getMessage(anyString(), any(), any(Locale.class))).thenReturn("prompt");
         service = new AnswerService(chatClient, llmRouter, props, messageSource);
@@ -64,6 +69,10 @@ class AnswerServiceTest {
 
     private AgentState newState(RoutingMode mode) {
         return AgentState.of("질문", "v1", "t1", "", mode);
+    }
+
+    private static ChatResponse chatResponse(String text) {
+        return new ChatResponse(List.of(new Generation(new AssistantMessage(text))));
     }
 
     // ── BLOCKING 경로 ────────────────────────────────────────────────────
@@ -110,6 +119,51 @@ class AnswerServiceTest {
         AgentState result = service.execute(newState(RoutingMode.COST_FIRST));
 
         assertThat(result.needsRetry()).isFalse();
+    }
+
+    @Test
+    @DisplayName("BLOCKING — 질문이 답변/평가 프롬프트 모두에서 PromptInjectionGuard.wrap()으로 감싸짐 (EDIT.md #5)")
+    void blocking_wrapsQuestionInUserQuestionDelimiters() {
+        when(chatClient.prompt().system(anyString()).user(anyString()).stream().content())
+                .thenReturn(Flux.just("답변"), Flux.just("{\"sufficient\":true}"));
+        when(llmRouter.findProviderName(any(), any())).thenReturn("gemini-flash");
+        org.mockito.ArgumentCaptor<String> captor = org.mockito.ArgumentCaptor.forClass(String.class);
+        ChatClient.ChatClientRequestSpec requestSpec = chatClient.prompt().system(anyString());
+        org.mockito.Mockito.clearInvocations(requestSpec);
+
+        service.execute(newState(RoutingMode.COST_FIRST));
+
+        verify(requestSpec, times(2)).user(captor.capture());
+        assertThat(captor.getAllValues()).allSatisfy(prompt ->
+                assertThat(prompt).contains("[USER_QUESTION]").contains("[/USER_QUESTION]"));
+    }
+
+    // ── STREAMING 경로 (non-DUAL) ──────────────────────────────────────────
+    // ChatModel.stream()에는 call()로 위임하는 default 구현이 없어(UnsupportedOperationException)
+    // ChatModel을 직접 mock 해야 한다 (DirectAnswerServiceTest와 동일 패턴).
+
+    @Test
+    @DisplayName("STREAMING COST_FIRST — 답변+sufficiency 2회 호출, llmCallCount=2 (executeBlocking과 동일하게 집계돼야 함)")
+    void streaming_costFirst_accumulatesLlmCallCount() {
+        ChatModel chatModel = mock(ChatModel.class);
+        when(chatModel.stream(any(Prompt.class))).thenReturn(Flux.just(chatResponse("스트리밍 답변")));
+        LlmProvider provider = new LlmProvider(
+                "local", TaskType.TEXT, ProviderRole.LOCAL, 0, "key", null, "model", false, chatModel, null);
+        when(llmRouter.routeProvider(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST))).thenReturn(provider);
+        when(chatClient.prompt().system(anyString()).user(anyString()).stream().content())
+                .thenReturn(Flux.just("{\"sufficient\":true}"));
+
+        List<String> tokens = new ArrayList<>();
+        GraphListener listener = new GraphListener() {
+            @Override public void onToken(String text) { tokens.add(text); }
+        };
+
+        AgentState result = service.executeStreaming(newState(RoutingMode.COST_FIRST), listener);
+
+        assertThat(result.answer()).isEqualTo("스트리밍 답변");
+        assertThat(result.usedProvider()).isEqualTo("local");
+        assertThat(result.needsRetry()).isFalse();
+        assertThat(result.llmCallCount()).isEqualTo(2);
     }
 
     // ── DUAL BLOCKING 경로 ───────────────────────────────────────────────
@@ -191,7 +245,7 @@ class AnswerServiceTest {
 
         // retryCount = maxRetry 도달 상태에서 진입 (그래프가 retry 한도 초과 후 PROGRESSIVE 진입 시 시나리오)
         AgentState initial = newState(RoutingMode.PROGRESSIVE)
-                .withRetryCountIncremented().withRetryCountIncremented();
+                .toBuilder().incrementRetry().incrementRetry().build();
 
         AgentState result = service.execute(initial);
 
@@ -211,7 +265,7 @@ class AnswerServiceTest {
         when(llmRouter.findProviderName(any(), any())).thenReturn("gemini-flash");
 
         AgentState initial = newState(RoutingMode.PROGRESSIVE)
-                .withRetryCountIncremented().withRetryCountIncremented();
+                .toBuilder().incrementRetry().incrementRetry().build();
 
         AgentState result = service.execute(initial);
 

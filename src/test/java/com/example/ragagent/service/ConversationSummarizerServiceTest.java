@@ -1,6 +1,7 @@
 package com.example.ragagent.service;
 
 import com.example.ragagent.exception.LlmProviderExhaustedException;
+import com.example.ragagent.llm.BackgroundUsage;
 import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.llm.TaskType;
@@ -90,7 +91,7 @@ class ConversationSummarizerServiceTest {
 
         service.precompute(UID, TID, Locale.KOREAN);
 
-        verify(llmRouter, never()).executeWithTracking(any(), any(), any());
+        verify(llmRouter, never()).executeWithTracking(any(), any(), any(), any());
         assertThat(service.buildContext(UID, TID)).isNull();
     }
 
@@ -101,7 +102,8 @@ class ConversationSummarizerServiceTest {
                 turn(1, "질문1", "답변1", null),
                 turn(2, "질문2", "답변2", null));
         when(memoryService.getTurns(UID, TID)).thenReturn(turns);
-        when(llmRouter.executeWithTracking(eq(TaskType.LIGHT_TEXT), eq(RoutingMode.LOCAL_ONLY), any()))
+        when(llmRouter.executeWithTracking(eq(TaskType.LIGHT_TEXT), eq(RoutingMode.LOCAL_ONLY),
+                eq(BackgroundUsage.SUMMARY_PREFIX), any()))
                 .thenReturn("요약된 내용");
 
         service.precompute(UID, TID, Locale.KOREAN);
@@ -115,7 +117,7 @@ class ConversationSummarizerServiceTest {
     @DisplayName("precompute — LOCAL provider 없음(LlmProviderExhaustedException) 시 캐시에 남지 않음")
     void precompute_noLocalProvider_leavesCacheEmpty() {
         when(memoryService.getTurns(UID, TID)).thenReturn(List.of(turn(1, "질문", "답변", null)));
-        when(llmRouter.executeWithTracking(any(), any(), any()))
+        when(llmRouter.executeWithTracking(any(), any(), any(), any()))
                 .thenThrow(new LlmProviderExhaustedException("no local provider"));
 
         service.precompute(UID, TID, Locale.KOREAN);
@@ -127,7 +129,7 @@ class ConversationSummarizerServiceTest {
     @DisplayName("precompute — 알 수 없는 예외도 전파하지 않고 조용히 실패한다")
     void precompute_unexpectedException_doesNotPropagate() {
         when(memoryService.getTurns(UID, TID)).thenReturn(List.of(turn(1, "질문", "답변", null)));
-        when(llmRouter.executeWithTracking(any(), any(), any()))
+        when(llmRouter.executeWithTracking(any(), any(), any(), any()))
                 .thenThrow(new RuntimeException("boom"));
 
         service.precompute(UID, TID, Locale.KOREAN); // must not throw
@@ -140,19 +142,19 @@ class ConversationSummarizerServiceTest {
     void precompute_withinTtl_skipsSecondLlmCall() {
         when(memoryService.getTurns(anyString(), anyString()))
                 .thenReturn(List.of(turn(1, "질문", "답변", null)));
-        when(llmRouter.executeWithTracking(any(), any(), any())).thenReturn("요약");
+        when(llmRouter.executeWithTracking(any(), any(), any(), any())).thenReturn("요약");
 
         service.precompute(UID, TID, Locale.KOREAN);
         service.precompute(UID, TID, Locale.KOREAN);
 
-        verify(llmRouter, times(1)).executeWithTracking(any(), any(), any());
+        verify(llmRouter, times(1)).executeWithTracking(any(), any(), any(), any());
     }
 
     @Test
     @DisplayName("invalidate — 캐시 제거 후 buildContext() 는 다시 null")
     void invalidate_clearsCache() {
         when(memoryService.getTurns(UID, TID)).thenReturn(List.of(turn(1, "질문", "답변", null)));
-        when(llmRouter.executeWithTracking(any(), any(), any())).thenReturn("요약");
+        when(llmRouter.executeWithTracking(any(), any(), any(), any())).thenReturn("요약");
         service.precompute(UID, TID, Locale.KOREAN);
         assertThat(service.buildContext(UID, TID)).isNotNull();
 
@@ -166,13 +168,13 @@ class ConversationSummarizerServiceTest {
     void invalidate_resetsTtlGuardToo() {
         when(memoryService.getTurns(anyString(), anyString()))
                 .thenReturn(List.of(turn(1, "질문", "답변", null)));
-        when(llmRouter.executeWithTracking(any(), any(), any())).thenReturn("요약");
+        when(llmRouter.executeWithTracking(any(), any(), any(), any())).thenReturn("요약");
 
         service.precompute(UID, TID, Locale.KOREAN);
         service.invalidate(TID);
         service.precompute(UID, TID, Locale.KOREAN);
 
-        verify(llmRouter, times(2)).executeWithTracking(any(), any(), any());
+        verify(llmRouter, times(2)).executeWithTracking(any(), any(), any(), any());
     }
 
     @Test

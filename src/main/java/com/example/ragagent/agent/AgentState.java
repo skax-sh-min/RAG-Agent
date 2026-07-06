@@ -9,11 +9,8 @@ import java.util.Locale;
 
 /**
  * Immutable state record passed through all agent graph nodes.
- * Each node returns a new instance via withXxx() — no shared mutable state.
+ * Each node returns a new instance via state.toBuilder().xxx().build() — no shared mutable state.
  * Equivalent to LangGraph's TypedDict AgentState in the Python version.
- *
- * New code: use state.toBuilder().xxx().build() instead of withXxx().
- * Existing withXxx() methods are deprecated and delegate to the Builder.
  */
 public record AgentState(
         String question,
@@ -94,73 +91,6 @@ public record AgentState(
 
     public Builder toBuilder()        { return new Builder(this); }
     public static Builder builder()   { return new Builder(); }
-
-    // ── Withers (deprecated — delegate to Builder) ────────────────────────────
-
-    @Deprecated(since = "0.2.0", forRemoval = true)
-    public AgentState withQuestionType(String questionType) {
-        return toBuilder().questionType(questionType).build();
-    }
-
-    @Deprecated(since = "0.2.0", forRemoval = true)
-    public AgentState withRetrievedDocs(List<Document> retrievedDocs) {
-        return toBuilder().retrievedDocs(retrievedDocs).build();
-    }
-
-    @Deprecated(since = "0.2.0", forRemoval = true)
-    public AgentState withSources(List<SourceRef> sources) {
-        return toBuilder().sources(sources).build();
-    }
-
-    @Deprecated(since = "0.2.0", forRemoval = true)
-    public AgentState withRetrievalWarnings(List<String> retrievalWarnings) {
-        return toBuilder().retrievalWarnings(retrievalWarnings).build();
-    }
-
-    @Deprecated(since = "0.2.0", forRemoval = true)
-    public AgentState withImageRefs(List<String> imageRefs) {
-        return toBuilder().imageRefs(imageRefs).build();
-    }
-
-    @Deprecated(since = "0.2.0", forRemoval = true)
-    public AgentState withAnswer(String answer) {
-        return toBuilder().answer(answer).build();
-    }
-
-    @Deprecated(since = "0.2.0", forRemoval = true)
-    public AgentState withNeedsRetry(boolean needsRetry) {
-        return toBuilder().needsRetry(needsRetry).build();
-    }
-
-    @Deprecated(since = "0.2.0", forRemoval = true)
-    public AgentState withRetryCountIncremented() {
-        return toBuilder().incrementRetry().build();
-    }
-
-    @Deprecated(since = "0.2.0", forRemoval = true)
-    public AgentState withTokensAccumulated(int inputTokens, int outputTokens) {
-        return toBuilder().accumulateTokens(inputTokens, outputTokens).build();
-    }
-
-    @Deprecated(since = "0.2.0", forRemoval = true)
-    public AgentState withUsedProvider(String usedProvider) {
-        return toBuilder().usedProvider(usedProvider).build();
-    }
-
-    @Deprecated(since = "0.2.0", forRemoval = true)
-    public AgentState withPremiumUpgraded(String premiumUpgraded) {
-        return toBuilder().premiumUpgraded(premiumUpgraded).build();
-    }
-
-    @Deprecated(since = "0.2.0", forRemoval = true)
-    public AgentState withDualResult(String dualLocalAnswer, String dualLocalProvider) {
-        return toBuilder().dualResult(dualLocalAnswer, dualLocalProvider).build();
-    }
-
-    @Deprecated(since = "0.2.0", forRemoval = true)
-    public AgentState withGrounded(Boolean grounded) {
-        return toBuilder().grounded(grounded).build();
-    }
 
     // ── Builder ───────────────────────────────────────────────────────────────
 

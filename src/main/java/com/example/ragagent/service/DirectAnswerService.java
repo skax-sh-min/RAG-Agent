@@ -5,6 +5,7 @@ import com.example.ragagent.llm.LlmProvider;
 import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.llm.TaskType;
+import com.example.ragagent.security.PromptInjectionGuard;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
@@ -46,7 +47,7 @@ public class DirectAnswerService {
                 .stream().content().doOnNext(buf::append).blockLast();
         String answer = buf.isEmpty() ? null : buf.toString();
         log.debug("[DirectAnswer] answer length={}", answer == null ? -1 : answer.length());
-        return state.withAnswer(answer).withTokensAccumulated(0, 0);
+        return state.toBuilder().answer(answer).accumulateTokens(0, 0).build();
     }
 
     /** Streaming variant — pushes tokens via listener.onToken() instead of blocking. */
@@ -65,7 +66,7 @@ public class DirectAnswerService {
         String answer = full.toString();
         log.debug("[DirectAnswer] streaming answer length={}", answer.length());
         // Note: streaming mode cannot capture usage metadata for token tracking (no ChatResponse)
-        return state.withAnswer(answer).withTokensAccumulated(0, 0);
+        return state.toBuilder().answer(answer).accumulateTokens(0, 0).build();
     }
 
     private String resolveSystemPrompt(AgentState state) {
@@ -81,9 +82,10 @@ public class DirectAnswerService {
 
     private static String buildUserPrompt(AgentState state) {
         String history = state.conversationHistory();
+        String question = PromptInjectionGuard.wrap(state.question());
         return history.isBlank()
-                ? state.question()
-                : "[이전 대화]\n%s\n\n[현재 질문]\n%s".formatted(history, state.question());
+                ? question
+                : "[이전 대화]\n%s\n\n[현재 질문]\n%s".formatted(history, question);
     }
 
     /**

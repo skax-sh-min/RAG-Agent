@@ -1,6 +1,7 @@
 package com.example.ragagent.service;
 
 import com.example.ragagent.agent.AgentState;
+import com.example.ragagent.security.PromptInjectionGuard;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -41,7 +42,7 @@ public class ClassifierService {
         StringBuilder buf = new StringBuilder();
         chatClient.prompt()
                 .system(prompt)
-                .user(question + "\n\n" + converter.getFormat())
+                .user(PromptInjectionGuard.wrap(question) + "\n\n" + converter.getFormat())
                 .stream().content().doOnNext(buf::append).blockLast();
         return parseType(buf.isEmpty() ? null : buf.toString());
     }
@@ -51,10 +52,12 @@ public class ClassifierService {
         StringBuilder buf = new StringBuilder();
         chatClient.prompt()
                 .system(prompt)
-                .user(state.question() + "\n\n" + converter.getFormat())
+                .user(PromptInjectionGuard.wrap(state.question()) + "\n\n" + converter.getFormat())
                 .stream().content().doOnNext(buf::append).blockLast();
-        return state.withTokensAccumulated(0, 0)
-                    .withQuestionType(parseType(buf.isEmpty() ? null : buf.toString()));
+        return state.toBuilder()
+                    .accumulateTokens(0, 0)
+                    .questionType(parseType(buf.isEmpty() ? null : buf.toString()))
+                    .build();
     }
 
     private String parseType(String response) {

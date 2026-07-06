@@ -29,7 +29,8 @@ public record AppProperties(
         AuditConfig audit,
         AuthConfig auth,
         VectorStoreConfig vectorstore,
-        Integer searchTagCandidateMultiplier   // 태그 선택 시 후보확대 배수 (기본 2)
+        Integer searchTagCandidateMultiplier,  // 태그 선택 시 후보확대 배수 (기본 2)
+        Integer sseIdleTimeoutSeconds           // SSE 무활동(토큰/노드 이벤트 없음) 감시 타임아웃 (기본 120초)
 ) {
     public record LlmConfig(
             List<ProviderConfig> providers,
@@ -143,9 +144,25 @@ public record AppProperties(
                 ? 2 : searchTagCandidateMultiplier;
     }
 
+    /**
+     * Absolute hard ceiling for an SSE connection, regardless of activity — a backstop against
+     * a pathological case (e.g. a generation that never stops producing tokens). The idle
+     * timeout ({@link #sseIdleTimeoutMs()}) is what actually bounds a stuck-but-otherwise-healthy
+     * long response, so this can stay generous.
+     */
     public long sseTimeoutMs() {
         return (sseTimeoutSeconds != null && sseTimeoutSeconds > 0)
-                ? sseTimeoutSeconds * 1000L : 300_000L;
+                ? sseTimeoutSeconds * 1000L : 3_600_000L;
+    }
+
+    /**
+     * Max time with no forward-progress signal (node transition, token, or sources-ready event)
+     * from the agent graph before the SSE stream is considered stuck and aborted. Resets on
+     * every signal, so a slow-but-actively-generating local LLM response is never cut off.
+     */
+    public long sseIdleTimeoutMs() {
+        return (sseIdleTimeoutSeconds != null && sseIdleTimeoutSeconds > 0)
+                ? sseIdleTimeoutSeconds * 1000L : 120_000L;
     }
 
     public IndexingConfig indexingSafe() {

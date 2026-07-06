@@ -5,7 +5,7 @@
 
 ---
 
-## ⚡ 현재 진행 상황 (2026-07-01 기준)
+## ⚡ 현재 진행 상황 (2026-07-05 기준)
 
 ### ✅ Phase 1 전체 완료
 
@@ -29,7 +29,7 @@
 | 키워드 추출 타임아웃 시 CircuitBreaker 오동작 수정 | 타임아웃을 에러로 오인해 프로바이더 차단하던 버그 수정 |
 | DOCX 변환 전 구버전 아티팩트 삭제 순서 수정 | 변환 실패 시 구버전 파일이 남아있는 버그 수정 |
 | `LOGGING_LEVEL`, `LLM_TEMPERATURE`, `LLM_MAX_TOKENS`, `SPRING_SECURITY_LOGGING_LEVEL` 환경변수 외부화 | `.env.example` + `OPERATOR_MANUAL.md` 반영 |
-| 의존성 버전 최신 stable로 일괄 업데이트 | Spring Boot 3.5, Spring AI 1.1.4 등 |
+| 의존성 버전 최신 stable로 일괄 업데이트 | Spring Boot 3.5.15, Spring AI 1.1.8 (2026-07-05 재확인 — 계속 업데이트되는 값이므로 정확한 버전은 pom.xml 참조) |
 
 ### ✅ 보안 결함 수정 완료
 
@@ -45,12 +45,13 @@
 ### 아직 미착수 (다음 목표)
 
 - ~~**Phase 2**: 모바일 UI (Offcanvas, sticky 입력창, PWA)~~ → ✅ 완료 (2026-06-27, 오프캔버스 드로어·dvh sticky 입력·PWA(manifest/SW/오프라인)·iOS 16px·접근성)
-- ~~**Phase 3 — Chat 피드백(좋아요/싫어요) 기반 컨텍스트 제외**~~ → ✅ 완료 (2026-07-02, §6.9 — `conversation_turns.feedback` 컬럼, `PATCH /ui/threads/{threadId}/turns/{turnId}/feedback`, DISLIKE는 `getHistory()`에서 하드 제외)
-- ~~**Phase 3 — 입력 시작 시 로컬 요약 선계산 + 중복 제거 컨텍스트 압축**~~ → ✅ 완료 (2026-07-03, §6.10 — `ConversationSummarizerService`, `POST /ui/chat/summary/precompute`, LOCAL 전용 요약 + 캐시, 실패 시 `getHistory()` 자동 폴백)
-- ~~**Phase 3 — LLM 사용량 임베딩 사용량 분리**~~ → ✅ 완료 (2026-07-04, §6.6 — `TrackingEmbeddingModel` 데코레이터가 `embed:<model>` 프로바이더로 별도 기록, `/llm-usage` 표·카드·차트 시각 분리, usage 미반환 시 chars/4 근사 폴백)
-- ~~**Phase 3 — LLM 사용량 비활성 프로바이더 조건부 표시**~~ → ✅ 완료 (2026-07-04, §6.7 — `LlmUsageRepository.usedProviders()` + `OperationsController.visibleChatProviders()` 공통 필터, 미설정+이력 없는 프로바이더는 카드·표·차트에서 숨김, 이력 있으면 계속 표시)
-- ~~**Phase 3 — LLM 사용량 orphan 프로바이더 기록 삭제**~~ → ✅ 완료 (2026-07-04, §6.8 — config에 전혀 없는 provider_name(또는 옛 `embed:*`)을 ORPHAN 카드로 노출 + `DELETE /admin/llm-usage/{provider}`로 관리자만 삭제, 활성 provider·현재 임베딩 모델은 서버측에서 삭제 거부)
-- **Phase 3 잔여** (미착수, §6.5·6.11 상세): 사용자별 LLM 토큰 쿼터(§6.5) · 사용자별 스토리지 쿼터(§6.11)
+- ~~**Phase 3 — Chat 피드백(좋아요/싫어요) 기반 컨텍스트 제외**~~ → ✅ 완료 (2026-07-02, §6.8 — `conversation_turns.feedback` 컬럼, `PATCH /ui/threads/{threadId}/turns/{turnId}/feedback`, DISLIKE는 `getHistory()`에서 하드 제외)
+- ~~**Phase 3 — 입력 시작 시 로컬 요약 선계산 + 중복 제거 컨텍스트 압축**~~ → ✅ 완료 (2026-07-03, §6.9 — `ConversationSummarizerService`, `POST /ui/chat/summary/precompute`, LOCAL 전용 요약 + 캐시, 실패 시 `getHistory()` 자동 폴백)
+- ~~**Phase 3 — LLM 사용량 임베딩 사용량 분리**~~ → ✅ 완료 (2026-07-04, §6.5 — `TrackingEmbeddingModel` 데코레이터가 `embed:<model>` 프로바이더로 별도 기록, `/llm-usage` 표·카드·차트 시각 분리, usage 미반환 시 chars/4 근사 폴백)
+- ~~**Phase 3 — LLM 사용량 비활성 프로바이더 조건부 표시**~~ → ✅ 완료 (2026-07-04, §6.6 — `LlmUsageRepository.usedProviders()` + `OperationsController.visibleChatProviders()` 공통 필터, 미설정+이력 없는 프로바이더는 카드·표·차트에서 숨김, 이력 있으면 계속 표시)
+- ~~**Phase 3 — LLM 사용량 orphan 프로바이더 기록 삭제**~~ → ✅ 완료 (2026-07-04, §6.7 — config에 전혀 없는 provider_name(또는 옛 `embed:*`)을 ORPHAN 카드로 노출 + `DELETE /admin/llm-usage/{provider}`로 관리자만 삭제, 활성 provider·현재 임베딩 모델은 서버측에서 삭제 거부)
+- ~~**Phase 3 — LLM 사용량 백그라운드(비-채팅) 사용량 분리 기록**~~ → ✅ 완료 (2026-07-05, §6.10 — `BackgroundUsage` 접두사(`summary:`/`keyword:`/`mdcorrect:`/`txt2md:`/`title:`)로 대화 요약·인덱싱 키워드 추출·문서 서식 교정·TXT→MD 변환·대화 제목 생성을 채팅 사용량과 분리 기록, `title:`은 이번에 처음 추적 대상 편입, `/llm-usage`에 type=BACKGROUND 카드 신설)
+- **Phase 3 잔여** (미착수, 우선순위 순 — §6.11·6.12·6.13·6.14 상세): 대화 컨텍스트 예산 정합성/설정 외부화(§6.11, 쉬움) · 사용자별 LLM 토큰 쿼터(§6.12) · 사용자별 스토리지 쿼터(§6.13) · LLM 사용량 핵심 채팅 경로 추적 확장(§6.14, 설계 필요)
 - **Phase 4** (조건부, 미착수): OAuth2 소셜 로그인(§7.1) · PostgreSQL 마이그레이션(§7.2) · 관리자 페이지 확장(§7.3, ※ `/admin` 기본 골격은 Phase 5.8에서 이미 존재)
 - ~~**Phase 5**: sqlite-vec 선택적 연동~~ → ✅ 완료 (Step 5.1~5.8, `app.vectorstore.type=chroma|sqlite-vec`)
 - ~~**Phase 5 추가**: Step 5.9 태그 기반 검색 스코프 + Step 5.10 sqlite-vec 운영/벡터 DB 분리~~ → ✅ 완료 (2026-07-01, Step 5.9 태그 필터/제안/복원 + Step 5.10 `SQLITE_VEC_DB_PATH` 분리 스위치). vec0 라이브 부팅은 운영 인수
@@ -228,6 +229,8 @@ Caddy(자동 TLS·HTTP/2)로 `app:8080` 프록시 + 보안 헤더(HSTS 등). Spr
 
 ## 6. Phase 3 — 운영 견고화 🟡 일부 완료
 
+> **2026-07-05 재배열**: 완료 항목을 앞쪽에(기반 운영 항목 → LLM 사용량 클러스터 → 대화/컨텍스트 클러스터), 미착수 항목을 뒤쪽에 우선순위 순으로 재배치했다. 번호가 이 문서 다른 곳(§7·§11·§12)에서도 참조되므로 교차 참조는 전부 새 번호로 갱신됨.
+
 ### 6.1 Rate Limiting — Bucket4j ✅ 완료
 
 `RateLimitFilter`(`OncePerRequestFilter`, `SecurityFilterChain` 앞단 등록)가 엔드포인트별 인메모리 버킷을 적용 — 채팅 분당 20회/userId, 업로드 분당 5회/userId, 로그인 분당 10회/IP, 전체 익명 분당 30회/IP. 다중 인스턴스 확장 시 Redis 백엔드로 전환 필요(부록 참조).
@@ -240,7 +243,7 @@ Caddy(자동 TLS·HTTP/2)로 `app:8080` 프록시 + 보안 헤더(HSTS 등). Spr
 - 파일명 sanitize — `Path.normalize()` + 화이트리스트 정규식
 - 경로 이탈 방지 — 공유 저장소 `data/documents/`(per-user 격리 폐기, `DocRegistry.SHARED`) 기준 `startsWith()` 검증
 
-**🔵 미착수** — 사용자별 누적 용량 쿼터 → §6.11로 이관·구체화(현재 `storage_used_bytes` 컬럼·쿼터 로직·`app.upload-quota` 프로퍼티 모두 없음).
+**🔵 미착수** — 사용자별 누적 용량 쿼터 → §6.13으로 이관·구체화(현재 `storage_used_bytes` 컬럼·쿼터 로직·`app.upload-quota` 프로퍼티 모두 없음).
 
 ### 6.3 글로벌 예외 처리 ✅ 완료
 
@@ -254,10 +257,60 @@ SQLite `audit_log` 테이블 대신 Logback `SizeAndTimeBasedRollingPolicy`로 �
 - `application.properties`로 모든 파라미터 조정 가능, `app.audit.enabled=false`로 즉시 비활성
 - 이벤트 8개 기록: upload×2, delete×2, sync×2, routing-mode, thread-delete
 
-### 6.5 사용자별 LLM 사용량 쿼터 🔵 미착수
+### 6.5 LLM 사용량 — 임베딩 사용량 분리 ✅ 완료
 
-**현재 코드 확인 (2026-07-02)**:
-- ⚠️ 문서는 "`LlmUsageRepository`에 `user_id` 컬럼이 이미 추가됨"이라 했으나 **실제 `llm_usage`는 프로바이더 단위 집계**다. `LlmUsageRepository.record(String provider, long in, long out)` → `usage_date + provider_name` UPSERT이며 `user_id` 컬럼/차원이 **없다**. 사용자별 쿼터를 하려면 `user_id` 축을 새로 도입해야 한다(현재 `getByPeriod/getDaily/...`는 모두 provider 인자만 받음).
+`TrackingEmbeddingModel`(`llm` 패키지)이 `EmbeddingModel`을 데코레이트해 `call()` 한 곳에서 `usageRepo.record("embed:" + model, inputTokens, 0)`으로 채팅과 분리 기록한다 — `embed(String)`/`embed(List)`는 인터페이스 default가 결국 `this.call(...)`을 호출하므로 자동 추적되고, 유일한 추상 메서드인 `embed(Document)`는 `delegate` 직접 위임 대신 `this.embed(getEmbeddingContent(doc))`로 구현해 우회를 막았으며, `dimensions()`만 delegate에 직결(추적 대상 아님). 로컬 서버가 usage를 반환하지 않으면 `app.embedding.usage-fallback-enabled`(`EMBED_USAGE_FALLBACK_ENABLED`, 기본 true)에 따라 입력 길이 근사(chars/4, 배치는 합산) 또는 0을 기록하고 경고는 최초 1회만. `OperationsController`의 카드·REST 표·REST 이력 세 경로 모두 `embed:<model>` 항목을 `type=EMBEDDING`·역할 없음·circuit breaker 없음("정상" 고정)으로 추가하고, 차트는 별도 Chart.js `stack` 그룹으로 채팅 합계와 분리했다. 부수로 `llm-usage.html`의 `/api/llm/usage(...)` 경로 오타(`/v1/` 누락 — 차트·표가 항상 404로 비어 있던 기존 버그)를 발견해 함께 수정. 테스트 8건 추가(전체 350), LM Studio 연동으로 실제 근사 폴백 발동과 `embed:*` 행 누적을 실사용 검증(회귀 0).
+
+### 6.6 LLM 사용량 — 비활성 프로바이더 조건부 표시 ✅ 완료
+
+`LlmUsageRepository.usedProviders()`(사용 이력 있는 provider_name 집합, all-time 기준)와 `OperationsController.visibleChatProviders()` 공통 헬퍼(`configured || usedProviders.contains(name)`)를 신설해 카드·REST 표·REST 이력 세 경로 모두 이 필터를 거치도록 통일했다(스키마 변경 없음, 설계 그대로 채택). 키 없는 프로바이더는 사용 이력이 없으면 숨겨지고 있으면(과거 사용 후 키 제거) 계속 표시되며, 활성 프로바이더는 항상 표시된다. §6.5의 `embed:*`는 `props.llmSafe().providers()`에 속하지 않는 별도 경로라 이 필터 대상이 아니다(항상 표시). 테스트 5건 추가(전체 355), 로컬 서버에서 재기동 전/후 비교로 카드·차트·표 3곳에서 동시에 숨김/노출됨을 실사용 검증(회귀 0).
+
+### 6.7 LLM 사용량 — 설정에 없는(orphan) 프로바이더 기록 삭제 ✅ 완료
+
+`OperationsController.orphanProviderNames()`가 `usedProviders()`에서 현재 config 프로바이더 이름 전체와 현재 `embeddingProviderName()`을 뺀 차집합으로 orphan을 계산한다 — 활성 `embed:<model>`은 보호하고, `EMBED_MODEL` 변경 후 남은 `embed:<old-model>`은 일반 orphan과 동일하게 삭제 허용(§6.5가 나중에 추가한 "현재 임베딩 이름" 개념을 반영). §6.6 구현은 config 목록을 필터링할 뿐 밖의 이름을 노출하지 않아 orphan이 원안 가정과 달리 어디에도 안 보이는 공백이 있었기에, 세 경로 모두에 orphan 항목(`type=ORPHAN`, `deletable=true`)을 실제로 노출하는 단계를 원안에 보강했다. `DELETE /admin/llm-usage/{provider:.+}`(콜론·점이 섞인 이름 보호용 정규식)가 `LlmUsageRepository.deleteByProvider()`로 삭제하며, orphan이 아니면 400 거부 + `AuditLogger` 기록. `/admin/**` 경로에 배치해 `NoAuthAutoLoginFilter`의 기존 no-auth 관리자 자동 인증을 그대로 상속하고, 인증 모드는 `SecurityConfig`에 이 경로 전용 `hasRole("ADMIN")` 매처만 좁게 추가(다른 `/admin/**` 엔드포인트는 §7.3 전까지 기존 수준 유지, 회귀 없음). 테스트 9건 추가(전체 364), 가짜 orphan 행을 DB에 직접 삽입해 카드 노출→삭제 버튼 클릭→DB 실삭제까지 브라우저에서 실사용 검증(회귀 0).
+
+### 6.8 Chat 응답 피드백(좋아요/싫어요) 기반 컨텍스트 제외 ✅ 완료
+
+각 Assistant 응답에 👍/👎 토글을 추가하고, `DISLIKE` turn은 다음 프롬프트 컨텍스트에서 제외한다(`LIKE`는 저장만, 아직 미소비). `conversation_turns.feedback TEXT`(런타임 `ALTER TABLE`, `NULL|LIKE|DISLIKE`) + `PATCH /ui/threads/{threadId}/turns/{turnId}/feedback`(`OperationsController`, 소유권 확인 후 404/값 검증 400/성공 204). 제외 로직은 `getHistory()` SELECT에 `AND (feedback IS NULL OR feedback <> 'DISLIKE')` 한 줄. `ChatResponse.turnId` + `addTurn()`이 생성 id를 반환하도록 변경해 HTMX/DUAL/서버 복원/SSE 스트리밍 4개 렌더 경로 모두 같은 `.feedback-controls[data-turn-id] > .feedback-btn` 마크업 사용, 클릭 처리는 `chat.html`의 `#chat-messages` 위임 리스너 하나로 통일. `AuditLogger`에 `from`/`to` 기록. DUAL 모드는 외부 답변 turn 1개만 저장(로컬 답변엔 별도 피드백 없음 — 기존 정책과 동일). 테스트 +9(전체 335), LM Studio 연동 실사용 검증 완료.
+
+### 6.9 입력 시작 시 로컬 요약 선계산 + 중복 제거 컨텍스트 압축 ✅ 완료
+
+사용자가 입력을 시작하면(첫 글자 입력 즉시, 세션당 1회) `POST /ui/chat/summary/precompute`가 가상 스레드로 발화되어, 신규 `ConversationSummarizerService`가 스레드 turn을 정규화 기반 중복 제거(동일 질문은 최신 답변만, DISLIKE는 §6.8과 동일하게 제외)한 뒤 LOCAL 프로바이더(`LIGHT_TEXT`+`LOCAL_ONLY`)로 요약을 생성한다. 결과는 스레드별 LRU 캐시(최대 3개, TTL 15초)에 저장되고, `AgentService`/`StreamingAgentService`는 캐시가 있으면 "요약+최근 2턴", 없으면(미계산·실패·LOCAL 미가용) 기존 `getHistory()`로 조용히 폴백한다. `addTurn()` 성공 직후 캐시를 무효화해 다음 입력에서 재생성한다. 원안의 명시적 타임아웃·`sourceTurnSeq` 추적은 fire-and-forget 특성상 불필요해 생략. 테스트 14건 추가(전체 354), LM Studio 연동으로 실제 요약 생성 → 다음 질문에서 회상까지 실사용 검증 완료(회귀 0).
+
+### 6.10 LLM 사용량 — 백그라운드(비-채팅) 사용량 분리 기록 ✅ 완료 (2026-07-05)
+
+**현황 (2026-07-05 확인)**: `/llm-usage`에 채팅 답변 생성 이외의 LLM 호출도 잡히는지 점검한 결과, 5곳(대화 요약·인덱싱 키워드 추출·문서 서식 교정·TXT→MD 변환·대화 제목 자동생성) 중 4곳은 이미 `LlmRouter.executeWithTracking()`으로 추적은 되고 있었으나 **일반 채팅과 같은 provider 이름으로 섞여 기록**돼 구분이 불가능했고, 대화 제목 생성(`ThreadMetaService`)은 `LlmRouter`를 거치지 않는 직접 주입 `ChatClient`를 써서 **추적 자체가 안 되고 있었음**.
+
+**구현**: §6.5의 `embed:` 접두사 선례를 그대로 확장 — `BackgroundUsage` 클래스(`llm` 패키지)에 `summary:`/`keyword:`/`mdcorrect:`/`txt2md:`/`title:` 5개 예약 접두사 정의. `LlmRouter.executeWithTracking()`에 선택적 `usageLabelPrefix` 파라미터를 추가한 4-인자 오버로드를 신설(기존 3-인자 오버로드는 그대로 유지, 내부적으로 `prefix=null`로 위임)하여 `provider.name()` 대신 `prefix + provider.name()`으로 기록하도록 함. `ConversationSummarizerService`/`KeywordExtractor`/`MarkdownCorrectionService`/`TextToMarkdownService`는 라벨만 추가하고, `ThreadMetaService`는 `ChatClient` 의존성을 `LlmRouter`로 교체해 새로 추적 대상에 편입(스트리밍 없이 블로킹 `executeWithTracking()` 호출로 단순화됨 — 제목 생성은 토큰 단위로 화면에 표시되지 않아 스트리밍이 애초에 불필요했음).
+
+`OperationsController`는 `usedProviders()` 중 `BackgroundUsage.isBackground()`에 해당하는 이름을 새 `type=BACKGROUND` 카드/행으로 노출(embed:와 동일하게 `deletable=false`, 항상 원본 이름 그대로 표시)하고, 기존 `orphanProviderNames()`에서는 제외(그렇지 않으면 백그라운드 라벨이 "설정에 없는 이름"으로 오인되어 ORPHAN 카드로 잘못 노출되고 삭제 버튼까지 붙었을 것 — embed:가 이미 겪었던 함정과 동일).
+
+**검증**: 전체 436 tests BUILD SUCCESS(회귀 0). `data/memory.db`에 `summary:local` 임시 행을 직접 삽입해 `/llm-usage` 페이지에서 BACKGROUND 배지 카드로 정상 렌더(삭제 버튼 없음, 차트에 별도 계열로 표시)되는 것을 실사용 검증 후 임시 행 제거. 조사 중 발견한 더 큰 범위(핵심 채팅 경로 자체의 추적 공백)는 §6.14로 분리했다.
+
+---
+
+### 6.11 대화 컨텍스트 예산 정합성 + 설정 외부화 🔵 미착수 (2026-07-05 검토) — 다음 우선순위 1순위
+
+> **현재 코드 확인 (2026-07-05)**: §6.9(`ConversationSummarizerService`) 도입 후 이전 대화를 프롬프트에 넣는 경로가 두 갈래로 나뉘었는데, 문자 예산 체크가 한쪽에만 있다 — `MemoryService.getHistory()`(폴백 경로)는 `max(1000, LLM_MAX_TOKENS × 0.75)` 문자 예산을 지키지만, 요약 캐시가 있을 때 쓰는 `ConversationSummarizerService.buildContext()`(요약 ≤2000자 + 최근 원문 2턴)는 이 예산을 전혀 체크하지 않는다. 또한 `FETCH_LIMIT=50`(`SqliteMemoryRepository`), `MAX_CACHED_THREADS=3`·`MAX_SUMMARY_CHARS=2000`·`RECENT_RAW_TURNS=2`·`PRECOMPUTE_TTL_MILLIS=15000`(`ConversationSummarizerService`)가 전부 하드코딩 상수라 `AppProperties`로 조정할 방법이 없다.
+
+**왜**: 최근 답변 2개가 길면 요약 경로가 폴백 경로보다 더 큰 컨텍스트를 LLM에 보낼 수 있어 두 경로의 동작이 앞뒤가 안 맞는다. 운영자가 배포 환경(로컬 소형 모델 vs 대형 클라우드 모델)에 맞춰 캐시 크기·요약 길이·최근 턴 수를 조정하고 싶어도 코드를 고쳐야 한다.
+
+**액션 (우선순위 쉬움 2건)**:
+1. `ConversationSummarizerService.buildContext()`가 조립한 `요약 + 최근 N턴` 결과에도 `MemoryService`와 동일한 문자 예산(`maxConversationChars`)을 적용 — 초과 시 최근 턴부터 자르거나(폴백 경로와 동일한 "최신 우선 채움" 전략 재사용) 요약 부분을 우선 유지. 두 경로가 항상 같은 상한을 지키도록 통일.
+2. 하드코딩 상수들을 `AppProperties`에 `app.memory.*`/`app.summary.*` 네임스페이스로 이전 — 예: `app.memory.fetch-limit-turns`(기본 50), `app.summary.max-cached-threads`(기본 3), `app.summary.max-summary-chars`(기본 2000), `app.summary.recent-raw-turns`(기본 2), `app.summary.precompute-ttl-seconds`(기본 15). 각 서비스에 null 가드(`xxxSafe()` 패턴) 적용.
+
+**완료 기준**:
+- 요약 캐시 경로와 폴백 경로 모두 동일한 문자 예산을 넘지 않는다(단위 테스트로 고정).
+- 위 5개 프로퍼티가 미설정 시 기존 하드코딩 값과 동일하게 동작(회귀 0), 설정 시 그 값을 따른다.
+
+**Effort**: 반나절~1일(상한 통일 + 프로퍼티 외부화, 테스트 포함).
+
+---
+
+### 6.12 사용자별 LLM 사용량 쿼터 🔵 미착수 — 다음 우선순위 2순위
+
+**현재 코드 확인 (2026-07-04 재확인)**:
+- `llm_usage.user_id` 컬럼 자체는 **이미 존재**한다(`LlmUsageRepository.init()`의 런타임 `ALTER TABLE ... DEFAULT 'anonymous'`, EDIT.md #6에서 발견). 하지만 `record(String provider, long in, long out)`에 `userId` 파라미터가 없고 `getByPeriod/getDaily/usedProviders/deleteByProvider` 등 모든 조회 메서드도 이 컬럼을 참조하지 않아 **모든 행이 영구히 'anonymous'로 고정** — 사실상 죽은 컬럼이다. **실제 `llm_usage`는 여전히 프로바이더 단위 집계**이며, 사용자별 쿼터를 하려면 이 컬럼을 실제로 채우거나(아래 B안) conversation_turns 기반(A안, 권장)으로 별도 집계해야 한다.
 - 집계 조회는 provider별만 존재 → 사용자 단위 "오늘 전체 토큰 합" 쿼리가 없음.
 - `AnswerService.execute(AgentState)`(진입점)와 `AgentService.chat()`에 쿼터 게이트가 없음. `ThreadContext.userId()`로 사용자 식별은 가능.
 
@@ -275,27 +328,9 @@ SQLite `audit_log` 테이블 대신 Logback `SizeAndTimeBasedRollingPolicy`로 �
 - `app.quota.enabled=false`(기본)이면 기존 동작 회귀 0.
 - 쿼터 집계가 스트리밍/블로킹 경로 모두에서 일관 적용된다.
 
-### 6.6 LLM 사용량 — 임베딩 사용량 분리 ✅ 완료
+---
 
-`TrackingEmbeddingModel`(`llm` 패키지)이 `EmbeddingModel`을 데코레이트해 `call()` 한 곳에서 `usageRepo.record("embed:" + model, inputTokens, 0)`으로 채팅과 분리 기록한다 — `embed(String)`/`embed(List)`는 인터페이스 default가 결국 `this.call(...)`을 호출하므로 자동 추적되고, 유일한 추상 메서드인 `embed(Document)`는 `delegate` 직접 위임 대신 `this.embed(getEmbeddingContent(doc))`로 구현해 우회를 막았으며, `dimensions()`만 delegate에 직결(추적 대상 아님). 로컬 서버가 usage를 반환하지 않으면 `app.embedding.usage-fallback-enabled`(`EMBED_USAGE_FALLBACK_ENABLED`, 기본 true)에 따라 입력 길이 근사(chars/4, 배치는 합산) 또는 0을 기록하고 경고는 최초 1회만. `OperationsController`의 카드·REST 표·REST 이력 세 경로 모두 `embed:<model>` 항목을 `type=EMBEDDING`·역할 없음·circuit breaker 없음("정상" 고정)으로 추가하고, 차트는 별도 Chart.js `stack` 그룹으로 채팅 합계와 분리했다. 부수로 `llm-usage.html`의 `/api/llm/usage(...)` 경로 오타(`/v1/` 누락 — 차트·표가 항상 404로 비어 있던 기존 버그)를 발견해 함께 수정. 테스트 8건 추가(전체 350), LM Studio 연동으로 실제 근사 폴백 발동과 `embed:*` 행 누적을 실사용 검증(회귀 0).
-
-### 6.7 LLM 사용량 — 비활성 프로바이더 조건부 표시 ✅ 완료
-
-`LlmUsageRepository.usedProviders()`(사용 이력 있는 provider_name 집합, all-time 기준)와 `OperationsController.visibleChatProviders()` 공통 헬퍼(`configured || usedProviders.contains(name)`)를 신설해 카드·REST 표·REST 이력 세 경로 모두 이 필터를 거치도록 통일했다(스키마 변경 없음, 설계 그대로 채택). 키 없는 프로바이더는 사용 이력이 없으면 숨겨지고 있으면(과거 사용 후 키 제거) 계속 표시되며, 활성 프로바이더는 항상 표시된다. §6.6의 `embed:*`는 `props.llmSafe().providers()`에 속하지 않는 별도 경로라 이 필터 대상이 아니다(항상 표시). 테스트 5건 추가(전체 355), 로컬 서버에서 재기동 전/후 비교로 카드·차트·표 3곳에서 동시에 숨김/노출됨을 실사용 검증(회귀 0).
-
-### 6.8 LLM 사용량 — 설정에 없는(orphan) 프로바이더 기록 삭제 ✅ 완료
-
-`OperationsController.orphanProviderNames()`가 `usedProviders()`에서 현재 config 프로바이더 이름 전체와 현재 `embeddingProviderName()`을 뺀 차집합으로 orphan을 계산한다 — 활성 `embed:<model>`은 보호하고, `EMBED_MODEL` 변경 후 남은 `embed:<old-model>`은 일반 orphan과 동일하게 삭제 허용(§6.6이 나중에 추가한 "현재 임베딩 이름" 개념을 반영). §6.7 구현은 config 목록을 필터링할 뿐 밖의 이름을 노출하지 않아 orphan이 원안 가정과 달리 어디에도 안 보이는 공백이 있었기에, 세 경로 모두에 orphan 항목(`type=ORPHAN`, `deletable=true`)을 실제로 노출하는 단계를 원안에 보강했다. `DELETE /admin/llm-usage/{provider:.+}`(콜론·점이 섞인 이름 보호용 정규식)가 `LlmUsageRepository.deleteByProvider()`로 삭제하며, orphan이 아니면 400 거부 + `AuditLogger` 기록. `/admin/**` 경로에 배치해 `NoAuthAutoLoginFilter`의 기존 no-auth 관리자 자동 인증을 그대로 상속하고, 인증 모드는 `SecurityConfig`에 이 경로 전용 `hasRole("ADMIN")` 매처만 좁게 추가(다른 `/admin/**` 엔드포인트는 §7.3 전까지 기존 수준 유지, 회귀 없음). 테스트 9건 추가(전체 364), 가짜 orphan 행을 DB에 직접 삽입해 카드 노출→삭제 버튼 클릭→DB 실삭제까지 브라우저에서 실사용 검증(회귀 0).
-
-### 6.9 Chat 응답 피드백(좋아요/싫어요) 기반 컨텍스트 제외 ✅ 완료
-
-각 Assistant 응답에 👍/👎 토글을 추가하고, `DISLIKE` turn은 다음 프롬프트 컨텍스트에서 제외한다(`LIKE`는 저장만, 아직 미소비). `conversation_turns.feedback TEXT`(런타임 `ALTER TABLE`, `NULL|LIKE|DISLIKE`) + `PATCH /ui/threads/{threadId}/turns/{turnId}/feedback`(`OperationsController`, 소유권 확인 후 404/값 검증 400/성공 204). 제외 로직은 `getHistory()` SELECT에 `AND (feedback IS NULL OR feedback <> 'DISLIKE')` 한 줄. `ChatResponse.turnId` + `addTurn()`이 생성 id를 반환하도록 변경해 HTMX/DUAL/서버 복원/SSE 스트리밍 4개 렌더 경로 모두 같은 `.feedback-controls[data-turn-id] > .feedback-btn` 마크업 사용, 클릭 처리는 `chat.html`의 `#chat-messages` 위임 리스너 하나로 통일. `AuditLogger`에 `from`/`to` 기록. DUAL 모드는 외부 답변 turn 1개만 저장(로컬 답변엔 별도 피드백 없음 — 기존 정책과 동일). 테스트 +9(전체 335), LM Studio 연동 실사용 검증 완료.
-
-### 6.10 입력 시작 시 로컬 요약 선계산 + 중복 제거 컨텍스트 압축 ✅ 완료
-
-사용자가 입력을 시작하면(첫 글자 입력 즉시, 세션당 1회) `POST /ui/chat/summary/precompute`가 가상 스레드로 발화되어, 신규 `ConversationSummarizerService`가 스레드 turn을 정규화 기반 중복 제거(동일 질문은 최신 답변만, DISLIKE는 §6.9와 동일하게 제외)한 뒤 LOCAL 프로바이더(`LIGHT_TEXT`+`LOCAL_ONLY`)로 요약을 생성한다. 결과는 스레드별 LRU 캐시(최대 3개, TTL 15초)에 저장되고, `AgentService`/`StreamingAgentService`는 캐시가 있으면 "요약+최근 2턴", 없으면(미계산·실패·LOCAL 미가용) 기존 `getHistory()`로 조용히 폴백한다. `addTurn()` 성공 직후 캐시를 무효화해 다음 입력에서 재생성한다. 원안의 명시적 타임아웃·`sourceTurnSeq` 추적은 fire-and-forget 특성상 불필요해 생략. 테스트 14건 추가(전체 354), LM Studio 연동으로 실제 요약 생성 → 다음 질문에서 회상까지 실사용 검증 완료(회귀 0).
-
-### 6.11 사용자별 스토리지 쿼터 🔵 미착수 (§6.2에서 이관)
+### 6.13 사용자별 스토리지 쿼터 🔵 미착수 (§6.2에서 이관) — 다음 우선순위 3순위
 
 > **현재 코드 확인 (2026-07-02)**: `storage_used_bytes` 컬럼·쿼터 로직·프로퍼티 모두 없음. §6.2가 "완료"로 표기했으나 **미구현**. 저장은 공유 구조(`DocRegistry.SHARED`, `data/documents/`)라 "사용자별" 쿼터의 의미부터 재정의 필요.
 
@@ -314,6 +349,21 @@ SQLite `audit_log` 테이블 대신 Logback `SizeAndTimeBasedRollingPolicy`로 �
 - 상한 초과 업로드가 거부되고 명확한 코드/메시지를 반환한다.
 - `app.upload.max-total-bytes=0`(기본)이면 회귀 0.
 - 삭제 후 재업로드 가능(사용량 정확히 반영).
+
+---
+
+### 6.14 LLM 사용량 — 핵심 채팅 경로 추적 확장 🔵 미착수 (§6.10에서 발견, 설계 필요) — 다음 우선순위 4순위
+
+> **범위 밖으로 남겨둔 발견 (2026-07-05, §6.10 작업 중 발견)**: `/llm-usage`가 백그라운드 사용량(§6.10)까지는 잡지만, 정작 `AnswerService`의 기본(non-streaming) 채팅 답변 경로, `evaluate()`(충분성 평가), `DirectAnswerService`, `ClassifierService`, `RerankerService`, `VisionDescriptionService`, `ImageTypeClassifier`, `RetrievalService`가 쓰는 Spring AI `MultiQueryExpander` 등 **다수의 실사용 채팅 경로가 `LlmRouter`를 아예 거치지 않아 `/llm-usage`에 전혀 잡히지 않는다**. §6.10 작업 범위에서는 사용자 확인 후 의도적으로 제외했다.
+
+**왜**: 이 항목들은 "백그라운드"가 아니라 실제 채팅 응답을 만들어내는 핵심 경로다. 이게 안 잡히면 `/llm-usage`가 보여주는 숫자가 실제 LLM 호출량보다 상당히 적을 수 있다 — 쿼터(§6.12)를 나중에 붙일 때도 같은 누락이 반복된다.
+
+**추후 착수 시 확인할 것 (설계 미완료, 착수 전 재조사 필요)**:
+1. 이들 각각이 왜 `LlmRouter.route()`/직접 주입 `ChatClient`로 라우팅만 하고 `executeWithTracking()`을 안 쓰는지 원인부터 재확인 — 스트리밍 응답은 `ChatResponse` usage 메타데이터를 못 읽는 구조적 이유가 있어 단순 라벨링보다 구조 변경이 필요할 가능성 높음.
+2. `AnswerService`가 왜 `primaryChatModel`(기동 시 1회 COST_FIRST로 고정)을 직접 주입받는지부터 검토 — 이 고정 자체가 §6.6의 provider 갱신·circuit breaker 갱신을 못 따라가는 별도 문제일 수 있음.
+3. 위 두 가지가 정리되면 §6.10과 동일한 `BackgroundUsage`류 라벨링(또는 정식 chat-provider 이름 그대로) 중 어느 쪽이 맞는지 결정 — 이들은 "채팅"이므로 provider 이름 그대로 잡히는 게 맞을 가능성이 높다(§6.10의 라벨 분리 대상이 아님).
+
+**Effort**: 미산정(설계 선행 필요) — 스트리밍 경로의 구조 변경이 얽혀 있어 §6.11/§6.12/§6.13보다 큰 작업이 될 가능성이 높음.
 
 ---
 
@@ -342,7 +392,7 @@ Google/GitHub 제공자 등록. 가입 흐름은 **기존 폼 가입과 동등**
 > **현재 코드 확인 (2026-07-02)**: `/admin`·`/admin/chunks`는 **이미 존재**(`AdminController`/`AdminService`, Phase 5.8) — Vector Store 상태 카드 + 청크 브라우징/수정/삭제(두 백엔드). 아래는 **운영 관리 기능 확장**으로 범위 재정의.
 
 - `ROLE_ADMIN` 전용 경로 확장(현재 청크 관리 위주 → 사용자/운영 관리 추가). ※ DB `role` 값은 `ADMIN` 문자열, 인증은 `NoAuthAutoLoginFilter`가 no-auth 모드에서 첫 `ADMIN` 사용자로 자동 인증.
-- 사용자 목록·상태(잠금/활성), 전체 LLM 사용량(§6.6~6.8과 연계), 감사 로그(`data/audit/audit.log` NDJSON) 조회 뷰.
+- 사용자 목록·상태(잠금/활성), 전체 LLM 사용량(§6.5~6.7과 연계), 감사 로그(`data/audit/audit.log` NDJSON) 조회 뷰.
 - 강제 로그아웃·계정 잠금/해제(`SqliteUserDetailsService`의 `locked_until`/`failed_count` 조작 재사용).
 
 ---
@@ -455,47 +505,20 @@ G1~G4 코드/문서 완료. G5는 라우팅 계층 "외부 무선택"을 `LlmCon
 
 ## 11. 의존성 변경 사항 (pom.xml)
 
-### 10.1 추가
+> **2026-07-05 재검증**: 의존성을 추가하는 Phase(1·3·5)가 모두 완료되어 이 절은 더 이상 "계획"이 아니라 이력이다. 정확한 최신 목록은 **pom.xml을 직접 참조**하는 것이 원칙(중복 유지 시 드리프트 위험 — 실제로 아래 두 건이 원안과 달랐다).
 
-```xml
-<!-- Phase 1 -->
-<dependency>
-  <groupId>org.springframework.boot</groupId>
-  <artifactId>spring-boot-starter-security</artifactId>
-</dependency>
-<dependency>
-  <groupId>org.thymeleaf.extras</groupId>
-  <artifactId>thymeleaf-extras-springsecurity6</artifactId>
-</dependency>
-<dependency>
-  <groupId>org.flywaydb</groupId>
-  <artifactId>flyway-core</artifactId>
-</dependency>
-<dependency>
-  <groupId>org.flywaydb</groupId>
-  <artifactId>flyway-database-sqlite</artifactId>
-</dependency>
+### 11.1 Phase별 추가 이력 (pom.xml과 대조 검증 완료)
 
-<!-- Phase 3 -->
-<dependency>
-  <groupId>com.bucket4j</groupId>
-  <artifactId>bucket4j_jdk17-core</artifactId>
-  <version>8.10.1</version>
-</dependency>
+| Phase | 추가 | 비고 |
+|---|---|---|
+| Phase 1 | `spring-boot-starter-security`, `thymeleaf-extras-springsecurity6`, `flyway-core` | SQLite 마이그레이션 지원은 `flyway-core`에 내장(pom.xml 주석 확인) — 원안의 별도 `flyway-database-sqlite` 의존성은 **실제로 추가되지 않았음**(불필요로 판명) |
+| Phase 3 | `com.bucket4j:bucket4j-core:8.10.1`, `com.github.ben-manes.caffeine:caffeine` | 원안은 아티팩트명을 `bucket4j_jdk17-core`로 오기 — 실제는 `bucket4j-core`. `caffeine`(rate-limit 버킷 Map의 무한 증가 방지용 LRU)은 원안에 없었고 구현 중 필요성이 발견되어 추가됨 |
+| Phase 5 | 없음 | sqlite-vec은 기존 `org.xerial:sqlite-jdbc`의 `load_extension()`으로 로드 — 공식 Maven 아티팩트가 없어 vec0 네이티브 바이너리는 운영자가 배치(Step 5.2) |
+| 테스트 | `spring-security-test` | |
 
-<!-- Phase 5 — sqlite-vec: 신규 의존성 없음.
-     공식 Java Maven 아티팩트가 없어 기존 org.xerial:sqlite-jdbc의 load_extension 으로 로드하고,
-     vec0 네이티브 바이너리는 운영자가 배치한다 (Step 5.2 참조). -->
+> Phase 2(모바일 UI)의 webjar 의존성(`bootstrap`/`htmx.org`/`chart.js` 등)과 `spring-boot-starter-thymeleaf`/`thymeleaf-layout-dialect`/`reactor-netty-http`/`spring-boot-configuration-processor`는 이 계획 문서가 추적하는 "보안/운영 강화" 축 밖의 기반 의존성이라 위 표에 없음 — pom.xml이 전체 목록의 단일 출처.
 
-<!-- 테스트 -->
-<dependency>
-  <groupId>org.springframework.security</groupId>
-  <artifactId>spring-security-test</artifactId>
-  <scope>test</scope>
-</dependency>
-```
-
-### 10.2 application.properties 추가
+### 11.2 application.properties 추가 (2026-07-05 재검증, 대조 완료)
 
 ```properties
 # Security
@@ -516,7 +539,7 @@ spring.datasource.hikari.connection-init-sql=PRAGMA busy_timeout=5000; PRAGMA jo
 # Limits — ⚠️ 아래 app.security.* 는 계획일 뿐 실제 코드에 존재하지 않음 (2026-07-02 확인).
 #   현재 값은 상수 하드코딩: BCrypt cost=12 → SecurityConfig.java,
 #   로그인 잠금 5회/15분 → AuthEventListener.java (MAX_ATTEMPTS/LOCK_MINUTES).
-#   업로드 쿼터(upload-quota-mb)는 미구현 (§6.11 참조).
+#   업로드 쿼터(upload-quota-mb)는 미구현 (§6.13 참조).
 #   외부화가 필요하면 AppProperties에 SecurityConfig record + securitySafe() 추가 후 주입 지점 교체.
 # app.security.bcrypt-cost=12
 # app.security.login-lock-attempts=5
@@ -541,16 +564,16 @@ app.vectorstore.sqlite-vec.entrypoint=${SQLITE_VEC_ENTRYPOINT:}          # sqlit
 | `V2__users.sql` | ✅ 존재 | `users`(`role` TEXT DEFAULT 'USER'), `persistent_logins` 신규 테이블 |
 | ~~`V3__user_scope.sql`~~ | ❌ 파일 없음 | `user_id` 컬럼·인덱스는 `SqliteMemoryRepository` 런타임 `ALTER TABLE`로 추가됨 |
 | ~~`V4__audit_log.sql`~~ | ❌ 파일 없음 | 감사로그는 **테이블이 아니라 Logback 파일**(`data/audit/audit.log`, §6.4). 테이블 불필요 |
-| ~~`V5__upload_quota.sql`~~ | ❌ 파일 없음 | `storage_used_bytes` **미구현**(§6.11) |
+| ~~`V5__upload_quota.sql`~~ | ❌ 파일 없음 | `storage_used_bytes` **미구현**(§6.13) |
 | (Phase 5) `SqliteVecSchemaInitializer` | ✅ 동적 DDL | `vec_embeddings`(vec0 — `version` partition key + `distance_metric=cosine`), `vec_document_chunks`, `chunk_fts`(FTS5, `doc_tags`) — Flyway 대신 앱 시작 시 동적 DDL(차원 파라미터화). `SQLITE_VEC_DB_PATH` 설정 시 `vector.db`로 분리(§5.10) |
 
-> **신규 컬럼 추가 지침**: 피드백(§6.9)·스토리지(§6.11 A안) 등 신규 컬럼은 **새 Flyway 파일이 아니라** 기존 런타임 `ALTER TABLE ADD COLUMN` 패턴에 한 줄 추가하는 것이 현 코드와 정합적(멱등, 프리릴리즈 정책과도 부합).
+> **신규 컬럼 추가 지침**: 피드백(§6.8)·스토리지(§6.13 A안) 등 신규 컬럼은 **새 Flyway 파일이 아니라** 기존 런타임 `ALTER TABLE ADD COLUMN` 패턴에 한 줄 추가하는 것이 현 코드와 정합적(멱등, 프리릴리즈 정책과도 부합).
 
 ---
 
 ## 13. 최종 체크리스트
 
-### 12.1 Phase 1 완료 기준 ✅
+### 13.1 Phase 1 완료 기준 ✅
 
 - [x] HTTPS: Caddy 설정 완료 — 도메인 배포 시 Let's Encrypt 자동 발급, HTTP → HTTPS 자동 리다이렉트
 - [x] 비로그인 사용자는 `/`, `/chat/**`, `/documents`, `/api/**` 접근 불가 (단 `/login`, `/signup`, `/api/health`는 허용)
@@ -561,14 +584,14 @@ app.vectorstore.sqlite-vec.entrypoint=${SQLITE_VEC_ENTRYPOINT:}          # sqlit
 - [x] 로그인 5회 실패 시 15분 잠금
 - [x] `app.auth.enabled=false` no-auth 모드 (guest 자동 로그인, 첫 실행 `/setup`)
 
-### 12.2 Phase 2 완료 기준
+### 13.2 Phase 2 완료 기준
 
 - [ ] iPhone Safari / Android Chrome에서 좌우 스크롤 없음
 - [ ] 채팅 입력창 키보드 출현 시에도 화면 하단 고정
 - [ ] 홈 화면 추가 시 standalone 앱처럼 실행
 - [ ] 다크모드 자동 전환 + 수동 토글 동작
 
-### 12.3 Phase 3 완료 기준
+### 13.3 Phase 3 완료 기준
 
 - [x] Rate limit 초과 시 HTTP 429 + `Retry-After` 헤더 반환
 - [x] 확장자 위조 파일 업로드 차단 (매직바이트 검증)
@@ -576,7 +599,7 @@ app.vectorstore.sqlite-vec.entrypoint=${SQLITE_VEC_ENTRYPOINT:}          # sqlit
 - [x] 주요 액션(로그인/업로드/삭제) `audit_log`에 기록
 - [ ] 일일 LLM 토큰 한도 초과 시 채팅 차단
 
-### 12.4 운영 준비 (Phase 1 종료 전)
+### 13.4 운영 준비 (Phase 1 종료 전)
 
 - [ ] SQLite 백업: Litestream 도입 또는 cron `.backup` 명령 (`cp`는 위험)
 - [x] `.env` 파일 git ignore 확인, API 키 로깅 마스킹 검증 (`PromptInjectionGuard.maskApiKey` + 테스트 완료)

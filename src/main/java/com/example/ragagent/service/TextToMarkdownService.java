@@ -1,6 +1,7 @@
 package com.example.ragagent.service;
 
 import com.example.ragagent.exception.LlmProviderExhaustedException;
+import com.example.ragagent.llm.BackgroundUsage;
 import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.llm.TaskType;
@@ -142,7 +143,7 @@ public class TextToMarkdownService {
                 [/DOCUMENT]""".formatted(safeBlock);
         try {
             String result = llmRouter.executeWithTracking(
-                    TaskType.LIGHT_TEXT, RoutingMode.COST_FIRST,
+                    TaskType.LIGHT_TEXT, RoutingMode.COST_FIRST, BackgroundUsage.TXT2MD_PREFIX,
                     model -> model.call(new Prompt(prompt)));
             log.debug("[TXT2MD] 블록 구조화 완료: {}자 → {}자", safeBlock.length(), result.length());
             return result;

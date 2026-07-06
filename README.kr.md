@@ -23,9 +23,19 @@ mvn clean package
 
 # 테스트 생략 빌드 (빠름)
 mvn clean package -DskipTests
+
+# Exploded 빌드 — fat JAR로 묶지 않고 계층화된 디렉터리로 추출
+mvn clean package -DskipTests
+java -Djarmode=tools -jar target/rag-agent-*.jar extract --destination target/extracted
 ```
 
 빌드 완료 후 `target/rag-agent-*.jar` 파일이 생성됩니다.
+
+> **Exploded 실행** — 위 `extract` 단계 완료 후, 풀어진 레이아웃에서 바로 실행합니다. JVM이 런타임에 JAR을 해제할 필요가 없어 기동이 빠릅니다:
+> ```bash
+> java -jar target/extracted/rag-agent-*.jar
+> ```
+> `--destination target/extracted`는 최초 1회만 실행하면 되며, 이후에는 `java -jar` 명령만 사용합니다.
 
 ### 로컬 실행
 
