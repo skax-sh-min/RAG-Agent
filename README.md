@@ -23,9 +23,19 @@ mvn clean package
 
 # Build without tests (faster)
 mvn clean package -DskipTests
+
+# Exploded build — extract layers without bundling into a fat JAR
+mvn clean package -DskipTests
+java -Djarmode=tools -jar target/rag-agent-*.jar extract --destination target/extracted
 ```
 
 The built JAR is generated at `target/rag-agent-*.jar`.
+
+> **Exploded (layered) run** — after the `extract` step above, run the application directly from the unpacked layout. Avoids fat-JAR overhead; JVM loads classes and dependencies without unpacking at runtime:
+> ```bash
+> java -jar target/extracted/rag-agent-*.jar
+> ```
+> Use `--destination target/extracted` only once; subsequent runs can go straight to the `java -jar` line.
 
 ### Local Run
 
