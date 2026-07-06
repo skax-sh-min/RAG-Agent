@@ -43,16 +43,13 @@ public class AnswerService {
     /** single evaluation call returns both gates. */
     private record EvalOutput(boolean sufficient, boolean grounded) {}
 
-    private final ChatClient chatClient;
     private final LlmRouter llmRouter;
     private final MessageSource messageSource;
     private final int maxRetryCount;
     private final BeanOutputConverter<EvalOutput> evalConverter =
             new BeanOutputConverter<>(EvalOutput.class);
 
-    public AnswerService(ChatClient chatClient, LlmRouter llmRouter,
-                         AppProperties appProperties, MessageSource messageSource) {
-        this.chatClient = chatClient;
+    public AnswerService(LlmRouter llmRouter, AppProperties appProperties, MessageSource messageSource) {
         this.llmRouter = llmRouter;
         this.messageSource = messageSource;
         this.maxRetryCount = appProperties.maxRetryCount();
@@ -72,12 +69,10 @@ public class AnswerService {
 
     private AgentState executeBlocking(AgentState state) {
         String systemPrompt = answerSystemPrompt(state.locale());
-        StringBuilder buf = new StringBuilder();
-        chatClient.prompt()
-                .system(systemPrompt)
-                .user(buildAnswerPrompt(state))
-                .stream().content().doOnNext(buf::append).blockLast();
-        String answer = truncate(buf.isEmpty() ? "" : buf.toString());
+        String userPrompt = buildAnswerPrompt(state);
+        String rawAnswer = llmRouter.executeWithTracking(TaskType.TEXT, state.routingMode(),
+                model -> model.call(buildPrompt(systemPrompt, userPrompt)));
+        String answer = truncate(rawAnswer == null ? "" : rawAnswer);
         state = state.toBuilder()
                      .accumulateTokens(0, 0)
                      .usedProvider(llmRouter.findProviderName(TaskType.TEXT, state.routingMode()))
@@ -104,15 +99,16 @@ public class AnswerService {
         String systemPrompt = answerSystemPrompt(state.locale());
         LlmProvider provider = llmRouter.routeProvider(TaskType.TEXT, state.routingMode());
         String answer = truncate(streamAnswer(provider, state, systemPrompt, listener::onToken));
-        // streaming has no ChatResponse to read real usage from, but the call still happened —
-        // accumulateTokens(0,0) records it in llmCallCount, matching executeBlocking()'s bookkeeping
-        // (and DirectAnswerService's symmetric blocking/streaming treatment for the same reason).
+        // streaming has no ChatResponse to read real usage from — record an approximate
+        // (chars/4) usage entry so /llm-usage isn't blind to the entire streaming chat path.
+        llmRouter.recordApproxUsage(provider.name(), systemPrompt + buildAnswerPrompt(state), answer);
         state = state.toBuilder().accumulateTokens(0, 0).usedProvider(provider.name()).answer(answer).build();
         return checkSufficiencyAndMaybeUpgrade(state, answer, listener);
     }
 
     private AgentState executeDualStreaming(AgentState state, GraphListener listener) {
         String systemPrompt = answerSystemPrompt(state.locale());
+        String userPrompt = buildAnswerPrompt(state);
         AgentState capturedState = state;
         StringBuilder localBuf = new StringBuilder(), extBuf = new StringBuilder();
         BiConsumer<LlmProvider, Consumer<String>> callFn =
@@ -123,6 +119,8 @@ public class AnswerService {
                 t -> { localBuf.append(t); listener.onToken("local", t); },
                 t -> { extBuf.append(t);   listener.onToken("external", t); }
         );
+        llmRouter.recordApproxUsage(dp.localProvider(), systemPrompt + userPrompt, localBuf.toString());
+        llmRouter.recordApproxUsage(dp.externalProvider(), systemPrompt + userPrompt, extBuf.toString());
         return buildDualResultState(state,
                 truncate(extBuf.toString()), dp.externalProvider(),
                 truncate(localBuf.toString()), dp.localProvider());
@@ -158,6 +156,8 @@ public class AnswerService {
         String premiumAnswer;
         if (listener != null) {
             premiumAnswer = streamAnswer(premiumProvider, state, systemPrompt, listener::onToken);
+            llmRouter.recordApproxUsage(premiumProvider.name(),
+                    systemPrompt + buildAnswerPrompt(state), premiumAnswer);
         } else {
             String userPrompt = buildAnswerPrompt(state);
             premiumAnswer = llmRouter.executeWithTracking(
@@ -250,12 +250,9 @@ public class AnswerService {
             String evalPrompt = "[질문]\n%s\n\n[답변]\n%s\n\n[문서 발췌]\n%s\n\n%s"
                     .formatted(PromptInjectionGuard.wrap(state.question()), answer, excerpts, evalConverter.getFormat());
 
-            StringBuilder buf = new StringBuilder();
-            chatClient.prompt()
-                    .system(systemPrompt)
-                    .user(evalPrompt)
-                    .stream().content().doOnNext(buf::append).blockLast();
-            EvalOutput out = evalConverter.convert(buf.isEmpty() ? "" : buf.toString());
+            String response = llmRouter.executeWithTracking(TaskType.TEXT, state.routingMode(),
+                    model -> model.call(buildPrompt(systemPrompt, evalPrompt)));
+            EvalOutput out = evalConverter.convert(response == null ? "" : response);
             boolean grounded = !docsPresent || out.grounded();
             return state.toBuilder()
                     .accumulateTokens(0, 0)

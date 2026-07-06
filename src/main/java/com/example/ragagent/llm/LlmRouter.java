@@ -138,6 +138,22 @@ public class LlmRouter {
         return new DualProviders(local.name(), external.name());
     }
 
+    /**
+     * Records approximate usage (chars/4, mirrors {@code TrackingEmbeddingModel}'s embedding
+     * fallback) for calls whose real token count isn't available — real-time SSE token streaming
+     * reads only content deltas, never a {@link ChatResponse} with usage metadata, and reading
+     * one would mean buffering the full response first and breaking the token-by-token UX.
+     * No-op when {@code answerText} is blank (failed/empty call — nothing was actually served).
+     */
+    public void recordApproxUsage(String providerName, String promptText, String answerText) {
+        if (answerText == null || answerText.isBlank()) return;
+        usageRepo.record(providerName, approxTokens(promptText), approxTokens(answerText));
+    }
+
+    private static long approxTokens(String text) {
+        return text == null ? 0 : text.length() / 4;
+    }
+
     public boolean hasLocalProvider() {
         return providers.stream()
                 .anyMatch(p -> p.role() == LOCAL && !circuitBreaker.isBlocked(p.name()));
