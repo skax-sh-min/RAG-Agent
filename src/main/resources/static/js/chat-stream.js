@@ -83,6 +83,7 @@
                         <div class="tab-pane fade md-content stream-cursor" id="stream-loc-${bubbleId}"></div>
                     </div>
                 </div>
+                <div id="stream-images-${bubbleId}"></div>
                 <div id="stream-sources-${bubbleId}"></div>
                 <div id="stream-meta-${bubbleId}" class="mt-2 d-flex align-items-center flex-wrap gap-2" style="font-size:0.72rem;"></div>
             </div>`;
@@ -108,6 +109,19 @@
                 if (contentEl) contentEl.textContent = '';
             }
         }
+    }
+
+    function onImages(bubbleId, imageRefs) {
+        const container = document.getElementById(`stream-images-${bubbleId}`);
+        if (!container || !imageRefs || imageRefs.length === 0) return;
+        const thumbs = imageRefs.map(ref => {
+            const url = escHtml('/api/v1/' + encodeURI(ref));
+            return `<a href="${url}" target="_blank" rel="noopener">
+                <img src="${url}" alt="참조 이미지" loading="lazy"
+                     style="max-height:120px; max-width:180px; object-fit:contain; border:1px solid var(--border-default, #dee2e6); border-radius:4px;" />
+            </a>`;
+        }).join('');
+        container.innerHTML = `<div class="mt-2 d-flex flex-wrap gap-2">${thumbs}</div>`;
     }
 
     function onSources(bubbleId, sources) {
@@ -313,6 +327,7 @@
         switch (name) {
             case 'stage':   onStage(bubbleId, data);          break;
             case 'sources': onSources(bubbleId, data);        break;
+            case 'images':  onImages(bubbleId, data);         break;
             case 'token':   onToken(bubbleId, data.tab, data.text);  break;
             case 'done':    onDone(bubbleId, data);           break;
             case 'error':   onError(bubbleId, data.message);  break;

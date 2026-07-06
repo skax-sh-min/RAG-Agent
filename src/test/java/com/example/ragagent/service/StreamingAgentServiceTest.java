@@ -14,6 +14,7 @@ import org.mockito.ArgumentCaptor;
 import org.springframework.context.MessageSource;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
+import java.util.List;
 import java.util.Locale;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -182,6 +183,38 @@ class StreamingAgentServiceTest {
         verify(memoryService, never())
                 .addTurn(any(), any(), any(), any(), any(), anyInt(), anyInt(), anyInt(), any(), anyInt());
         verify(emitter).completeWithError(boom);
+    }
+
+    // ── images 이벤트 (RAG 관련 이미지 썸네일) ───────────────────────────────
+
+    @Test
+    @DisplayName("images 이벤트 — imageRefs가 비어있으면 emitter.send() 추가 호출 없음")
+    void run_onImagesReady_emptyList_sendsNoExtraEvent() throws Exception {
+        when(agentGraph.runStreaming(any(), any())).thenAnswer(inv -> {
+            GraphListener listener = inv.getArgument(1);
+            listener.onImagesReady(List.of());
+            return resultState("답변");
+        });
+
+        service.run("u1", form(false, null), emitter);
+
+        // "done" 이벤트 1건만 — images 이벤트는 추가되지 않아야 한다.
+        verify(emitter, org.mockito.Mockito.times(1)).send(any(SseEmitter.SseEventBuilder.class));
+    }
+
+    @Test
+    @DisplayName("images 이벤트 — imageRefs가 있으면 emitter.send()가 1회 더 호출됨")
+    void run_onImagesReady_nonEmptyList_sendsExtraEvent() throws Exception {
+        when(agentGraph.runStreaming(any(), any())).thenAnswer(inv -> {
+            GraphListener listener = inv.getArgument(1);
+            listener.onImagesReady(List.of("images/doc1/p1_img1.png"));
+            return resultState("답변");
+        });
+
+        service.run("u1", form(false, null), emitter);
+
+        // "done" 이벤트 + "images" 이벤트 = 2건.
+        verify(emitter, org.mockito.Mockito.times(2)).send(any(SseEmitter.SseEventBuilder.class));
     }
 
     // ── Idle watchdog ───────────────────────────────────────────────────────

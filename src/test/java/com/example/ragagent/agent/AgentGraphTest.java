@@ -7,10 +7,14 @@ import com.example.ragagent.service.ClassifierService;
 import com.example.ragagent.service.CriticService;
 import com.example.ragagent.service.DirectAnswerService;
 import com.example.ragagent.service.FinalizeService;
+import com.example.ragagent.service.GraphListener;
 import com.example.ragagent.service.RetrievalService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+
+import java.util.ArrayList;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -207,5 +211,27 @@ class AgentGraphTest {
         verify(answerService, times(1)).execute(any());
         verify(retrievalService, times(1)).execute(any());
         verify(criticService, never()).execute(any());
+    }
+
+    @Test
+    @DisplayName("runStreaming — RETRIEVAL 직후 listener.onImagesReady()가 state.imageRefs()로 호출됨")
+    void runStreaming_firesOnImagesReadyAfterRetrieval() {
+        List<String> refs = List.of("images/doc1/p1_img1.png");
+        when(classifierService.execute(any()))
+                .thenAnswer(inv -> ((AgentState) inv.getArgument(0)).toBuilder().questionType("manual").build());
+        when(retrievalService.execute(any()))
+                .thenAnswer(inv -> ((AgentState) inv.getArgument(0)).toBuilder().imageRefs(refs).build());
+        // non-NOOP listener → AgentGraph calls answerService.executeStreaming(), not execute().
+        when(answerService.executeStreaming(any(), any())).thenAnswer(inv -> inv.getArgument(0));
+
+        List<List<String>> captured = new ArrayList<>();
+        GraphListener listener = new GraphListener() {
+            @Override public void onImagesReady(List<String> imageRefs) { captured.add(imageRefs); }
+        };
+
+        graph.runStreaming(newState(RoutingMode.COST_FIRST), listener);
+
+        assertThat(captured).hasSize(1);
+        assertThat(captured.get(0)).isEqualTo(refs);
     }
 }

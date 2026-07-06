@@ -245,6 +245,12 @@ public class StreamingAgentService {
         }
 
         @Override
+        public void onImagesReady(List<String> imageRefs) {
+            lastActivityNanos.set(System.nanoTime());
+            if (!imageRefs.isEmpty()) sendEvent(emitter, "images", imageRefs);
+        }
+
+        @Override
         public void onUpgrade(String provider) {
             lastActivityNanos.set(System.nanoTime());
             Map<String, String> payload = Map.of(
