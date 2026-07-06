@@ -2,7 +2,12 @@ package com.example.ragagent.service;
 
 import com.example.ragagent.agent.AgentState;
 import com.example.ragagent.config.AppProperties;
+import com.example.ragagent.llm.LlmProvider;
+import com.example.ragagent.llm.LlmRouter;
+import com.example.ragagent.llm.ProviderRole;
 import com.example.ragagent.llm.RoutingMode;
+import com.example.ragagent.llm.TaskType;
+import com.example.ragagent.repository.LlmUsageRepository;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.model.ChatModel;
@@ -30,6 +35,15 @@ class RetrievalServiceEscalationTest {
 
     private RagService ragService;
 
+    /** RetrievalService 생성자가 MultiQueryExpander용 모델을 즉시 resolve하므로 항상 스텁 필요. */
+    private static LlmRouter stubLlmRouter() {
+        LlmRouter llmRouter = mock(LlmRouter.class);
+        LlmProvider expansionProvider = new LlmProvider(
+                "local", TaskType.TEXT, ProviderRole.LOCAL, 0, "key", null, "model", true, mock(ChatModel.class), null);
+        when(llmRouter.routeProviderWithFallback(any(), any())).thenReturn(expansionProvider);
+        return llmRouter;
+    }
+
     private RetrievalService serviceWithEscalate(boolean escalate) {
         AppProperties props = mock(AppProperties.class);
         when(props.searchTopK()).thenReturn(DEFAULT_TOP_K);
@@ -44,7 +58,7 @@ class RetrievalServiceEscalationTest {
         when(ragService.searchBatch(anyString(), any(), anyString(), anyInt()))
                 .thenReturn(List.of(List.of(new Document("d", Map.of()))));
 
-        return new RetrievalService(mock(ChatModel.class), ragService, props,
+        return new RetrievalService(stubLlmRouter(), mock(LlmUsageRepository.class), ragService, props,
                 Optional.empty(), Optional.empty());
     }
 
@@ -112,7 +126,7 @@ class RetrievalServiceEscalationTest {
         when(rs.searchBatch(anyString(), any(), anyString(), anyInt()))
                 .thenReturn(List.of(bigList));
 
-        RetrievalService svc = new RetrievalService(mock(ChatModel.class), rs, props,
+        RetrievalService svc = new RetrievalService(stubLlmRouter(), mock(LlmUsageRepository.class), rs, props,
                 Optional.empty(), Optional.empty());
 
         AgentState result = svc.execute(stateWithRetry(2));

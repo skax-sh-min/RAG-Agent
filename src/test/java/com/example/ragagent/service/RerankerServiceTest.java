@@ -1,12 +1,13 @@
 package com.example.ragagent.service;
 
+import com.example.ragagent.llm.LlmRouter;
+import com.example.ragagent.llm.RoutingMode;
+import com.example.ragagent.llm.TaskType;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.document.Document;
 import org.springframework.context.MessageSource;
-import reactor.core.publisher.Flux;
 
 import java.util.List;
 import java.util.Locale;
@@ -15,24 +16,28 @@ import java.util.Map;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
  * RerankerService 단위 테스트.
+ *
+ * rerank()는 LlmRouter.executeWithTracking()(TaskType.TEXT, RoutingMode.COST_FIRST)으로
+ * 라우팅한다 — 이전에는 직접 주입된 ChatClient를 써서 /llm-usage에 전혀 잡히지 않았다(§6.14).
  */
 class RerankerServiceTest {
 
-    private ChatClient chatClient;
+    private LlmRouter llmRouter;
     private RerankerService service;
 
     @BeforeEach
     void setUp() {
-        chatClient = mock(ChatClient.class, RETURNS_DEEP_STUBS);
+        llmRouter = mock(LlmRouter.class);
         MessageSource messageSource = mock(MessageSource.class);
         when(messageSource.getMessage(anyString(), any(), any(Locale.class))).thenReturn("rerank-system-prompt");
-        service = new RerankerService(chatClient, messageSource);
+        service = new RerankerService(llmRouter, messageSource);
     }
 
     private static Document doc(String id) {
@@ -40,8 +45,7 @@ class RerankerServiceTest {
     }
 
     private void stubLlmResponse(String response) {
-        when(chatClient.prompt().system(anyString()).user(anyString()).stream().content())
-                .thenReturn(Flux.just(response));
+        when(llmRouter.executeWithTracking(any(), any(), any())).thenReturn(response);
     }
 
     @Test
@@ -85,6 +89,17 @@ class RerankerServiceTest {
     @DisplayName("빈 candidates → 빈 결과")
     void rerank_emptyCandidates_returnsEmpty() {
         assertThat(service.rerank("질문", List.of(), 3)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("rerank — LlmRouter.executeWithTracking()을 TaskType.TEXT/COST_FIRST로 호출 (사용량 추적)")
+    void rerank_tracksUsageViaLlmRouter() {
+        List<Document> candidates = List.of(doc("A"), doc("B"), doc("C"));
+        stubLlmResponse("[0, 1, 2]");
+
+        service.rerank("질문", candidates, 2);
+
+        verify(llmRouter).executeWithTracking(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), any());
     }
 
     // ── parseRanking 단위 테스트 ──────────────────────────────────────────────

@@ -40,8 +40,8 @@
 - ~~**Phase 3 — LLM 사용량 비활성 프로바이더 조건부 표시**~~ → ✅ 완료 (2026-07-04, §6.6 — `LlmUsageRepository.usedProviders()` + `OperationsController.visibleChatProviders()` 공통 필터, 미설정+이력 없는 프로바이더는 카드·표·차트에서 숨김, 이력 있으면 계속 표시)
 - ~~**Phase 3 — LLM 사용량 orphan 프로바이더 기록 삭제**~~ → ✅ 완료 (2026-07-04, §6.7 — config에 전혀 없는 provider_name(또는 옛 `embed:*`)을 ORPHAN 카드로 노출 + `DELETE /admin/llm-usage/{provider}`로 관리자만 삭제, 활성 provider·현재 임베딩 모델은 서버측에서 삭제 거부)
 - ~~**Phase 3 — LLM 사용량 백그라운드(비-채팅) 사용량 분리 기록**~~ → ✅ 완료 (2026-07-05, §6.10 — `BackgroundUsage` 접두사(`summary:`/`keyword:`/`mdcorrect:`/`txt2md:`/`title:`)로 대화 요약·인덱싱 키워드 추출·문서 서식 교정·TXT→MD 변환·대화 제목 생성을 채팅 사용량과 분리 기록, `title:`은 이번에 처음 추적 대상 편입, `/llm-usage`에 type=BACKGROUND 카드 신설)
-- ~~**Phase 3 — LLM 사용량 핵심 채팅 경로 추적 확장**~~ → 🟡 부분 완료 (2026-07-06, §6.14 — Direct/RAG 채팅 시 `/llm-usage`에 `embed:*`만 증가하고 실제 채팅 사용량이 전혀 안 잡히던 버그 재현·수정. `AnswerService`/`DirectAnswerService`/`ClassifierService`가 `LlmRouter`를 거치지 않던 것을 `executeWithTracking()`(블로킹, 실사용량)/`recordApproxUsage()`(스트리밍, chars/4 근사)로 교체. `RerankerService`·`VisionDescriptionService`·`ImageTypeClassifier`·`MultiQueryExpander`는 잔여)
-- **Phase 3 잔여** (미착수, 우선순위 순 — §6.11·6.12·6.13·6.14 상세): 대화 컨텍스트 예산 정합성/설정 외부화(§6.11, 쉬움) · 사용자별 LLM 토큰 쿼터(§6.12) · 사용자별 스토리지 쿼터(§6.13) · LLM 사용량 핵심 채팅 경로 추적 확장 잔여분(§6.14, RerankerService 등 4곳)
+- ~~**Phase 3 — LLM 사용량 핵심 채팅 경로 추적 확장**~~ → ✅ 완료 (2026-07-06, §6.14 — Direct/RAG 채팅 시 `/llm-usage`에 `embed:*`만 증가하고 실제 채팅 사용량이 전혀 안 잡히던 버그 재현·수정. `AnswerService`/`DirectAnswerService`/`ClassifierService`/`RerankerService`/`VisionDescriptionService`/`ImageTypeClassifier`/`RetrievalService`의 `MultiQueryExpander` 7곳 모두 `LlmRouter`를 거치도록 정리 — `executeWithTracking()`(블로킹, 실사용량) 또는 `recordApproxUsage()`(스트리밍, chars/4 근사) 또는 신규 `TrackingChatModel` 데코레이터(프레임워크 내부 호출용))
+- **Phase 3 잔여** (미착수, 우선순위 순 — §6.11·6.12·6.13 상세): 대화 컨텍스트 예산 정합성/설정 외부화(§6.11, 쉬움) · 사용자별 LLM 토큰 쿼터(§6.12) · 사용자별 스토리지 쿼터(§6.13)
 - **Phase 4** (조건부, 미착수): OAuth2 소셜 로그인(§7.1) · PostgreSQL 마이그레이션(§7.2) · 관리자 페이지 확장(§7.3, ※ `/admin` 기본 골격은 Phase 5.8에서 이미 존재)
 - ~~**Phase 5**: sqlite-vec 선택적 연동~~ → ✅ 완료 (Step 5.1~5.8, `app.vectorstore.type=chroma|sqlite-vec`)
 - ~~**Phase 5 추가**: Step 5.9 태그 기반 검색 스코프 + Step 5.10 sqlite-vec 운영/벡터 DB 분리~~ → ✅ 완료 (2026-07-01, Step 5.9 태그 필터/제안/복원 + Step 5.10 `SQLITE_VEC_DB_PATH` 분리 스위치). vec0 라이브 부팅은 운영 인수
@@ -342,22 +342,22 @@ SQLite `audit_log` 테이블 대신 Logback `SizeAndTimeBasedRollingPolicy`로 �
 
 ---
 
-### 6.14 LLM 사용량 — 핵심 채팅 경로 추적 확장 🟡 부분 완료 (2026-07-06)
+### 6.14 LLM 사용량 — 핵심 채팅 경로 추적 확장 ✅ 완료 (2026-07-06)
 
-> **배경 (2026-07-05, §6.10 작업 중 발견)**: `/llm-usage`가 백그라운드 사용량(§6.10)까지는 잡지만, `AnswerService`/`DirectAnswerService`/`ClassifierService`가 `LlmRouter`를 거치지 않는 직접 주입 `ChatClient`(또는 기동 시 1회 COST_FIRST로 고정된 `primaryChatModel`)를 호출해 실제 채팅 사용량이 `/llm-usage`에 전혀 잡히지 않는 문제. 2026-07-06에 사용자가 "Direct/RAG 질문 시 EMBEDDING만 증가한다"고 실사용 중 재현·보고해 착수.
+> **배경 (2026-07-05, §6.10 작업 중 발견)**: `/llm-usage`가 백그라운드 사용량(§6.10)까지는 잡지만, `AnswerService`/`DirectAnswerService`/`ClassifierService`/`RerankerService`/`VisionDescriptionService`/`ImageTypeClassifier`/`RetrievalService`의 `MultiQueryExpander`가 `LlmRouter`를 거치지 않는 직접 주입 `ChatClient`(또는 기동 시 1회 COST_FIRST로 고정된 `primaryChatModel`)를 호출해 실제 채팅 사용량이 `/llm-usage`에 전혀 잡히지 않는 문제. 2026-07-06에 사용자가 "Direct/RAG 질문 시 EMBEDDING만 증가한다"고 실사용 중 재현·보고해 1차 착수(핵심 3곳), 곧이어 잔여 4곳도 마저 정리.
 
-**완료된 부분**:
+**1차 (핵심 3곳 — 사용자가 실사용 중 보고한 증상의 직접 원인)**:
 - `ClassifierService`: `ChatClient` 필드 → `LlmRouter` 주입으로 교체, `classifyOnly()`/`execute()` 모두 `executeWithTracking(TaskType.TEXT, RoutingMode.COST_FIRST, ...)`로 라우팅 + 기록.
 - `AnswerService`: `executeBlocking()`/`evaluate()`는 `llmRouter.executeWithTracking(TaskType.TEXT, state.routingMode(), model -> model.call(...))`(실사용량, DUAL 블로킹이 이미 쓰던 패턴과 동일)로 교체. `executeStreamingNormal()`/`executeDualStreaming()`/`progressiveUpgrade()`의 스트리밍 분기는 실제 `ChatResponse`를 못 읽으므로 신규 `LlmRouter.recordApproxUsage(provider, promptText, answerText)`(§6.5 임베딩 chars/4 근사 폴백과 동일 패턴)로 근사 기록. 더 이상 쓰이지 않는 `ChatClient` 필드/생성자 인자 제거.
 - `DirectAnswerService`: `execute()`(블로킹)는 `executeWithTracking()`으로 교체(실사용량), `executeStreaming()`은 `recordApproxUsage()` 추가. `buildClient()`(사용처 없어짐) 삭제, DUAL→COST_FIRST 폴백 로직을 `effectiveRoutingMode()`로 추출(3곳 중복 제거).
-- 테스트: `AnswerServiceTest`/`ClassifierServiceTest`/`DirectAnswerServiceTest`/`ChatResponseNullSafetyTest` 전면 갱신(신규 생성자 시그니처, `executeWithTracking`/`recordApproxUsage` 호출 검증 포함) — 전체 449 tests BUILD SUCCESS(회귀 0, +5 skip 그대로).
 - **실사용 검증**: LM Studio 연동 상태로 Direct 질문 1건 + RAG 질문 1건(재시도 루프 포함, 총 7회 LLM 호출)을 실제 채팅 UI로 전송 → `/api/v1/llm/usage` 응답과 `/llm-usage` 화면에서 `local`(chat) 프로바이더가 오늘 3,468 토큰·7회 호출로 정상 누적됨을 확인(이전엔 `embed:*`만 증가하고 `local`은 고정이었던 버그가 해소됨). 스크린샷으로 `local` 막대가 `embed:*`/`title:local`보다 압도적으로 크게 나타나는 것도 확인.
 
-**남은 부분 (미착수, 후속)**:
-- `RerankerService`, `VisionDescriptionService`, `ImageTypeClassifier`, `RetrievalService`가 쓰는 Spring AI `MultiQueryExpander` — 이 4곳은 여전히 `LlmRouter`를 거치지 않아 `/llm-usage`에 안 잡힘. 오늘 고친 3곳(`AnswerService`/`DirectAnswerService`/`ClassifierService`)이 사용자가 실제로 보고한 증상(Direct/RAG 질문 시 채팅 사용량 미기록)의 원인 전체였으므로 이번 수정 범위에서 의도적으로 제외.
-- 이 4곳도 §6.6의 provider 갱신·circuit breaker를 못 따라가는 동일한 구조적 문제를 안고 있을 가능성이 높음 — 착수 시 재확인 필요.
-
-**Effort (잔여분)**: 반나절 내외로 추정(오늘 고친 3곳과 동일한 패턴 적용 — 다만 `VisionDescriptionService`는 `TaskType.VISION` 경로라 별도 확인 필요).
+**2차 (잔여 4곳 — 같은 날 마저 정리)**:
+- `RerankerService`/`ImageTypeClassifier`: 각각 `ChatClient` 직접 주입 / `llmRouter.route()`로 모델만 얻어 수동 `ChatClient.builder()` 호출하던 것을 `LlmRouter.executeWithTracking()`(각각 TaskType.TEXT/LIGHT_BOTH, COST_FIRST)로 교체.
+- `VisionDescriptionService`: 동일하게 `executeWithTracking(TaskType.VISION, COST_FIRST, ...)`로 교체 — 멀티모달 프롬프트는 `ChatClient`의 `.user(u -> u.media(...))` 대신 `UserMessage.builder().text(...).media(new Media(mimeType, resource)).build()` + `new Prompt(userMessage)`로 직접 구성.
+- `RetrievalService`의 Spring AI `MultiQueryExpander`: 프레임워크 유틸리티 클래스라 내부에서 자체 `ChatClient`를 구성해 호출 — `executeWithTracking()`으로 가로챌 수 없어, `TrackingEmbeddingModel`과 동일한 데코레이터 패턴으로 신규 `TrackingChatModel`(`llm` 패키지, `call()`만 오버라이드해 실사용량 기록·`stream()`/`getDefaultOptions()`는 delegate)을 추가하고, `MultiQueryExpander.builder().chatClientBuilder(ChatClient.builder(trackedModel))`에 주입. 생성자를 `ChatModel chatModel` 직접 주입에서 `LlmRouter`+`LlmUsageRepository`로 교체하고, 신규 `LlmRouter.routeProviderWithFallback(List<TaskType>, RoutingMode)`(TEXT→LIGHT_TEXT 순, `LlmConfig.primaryChatModel()`과 동일한 폴백 순서)로 provider를 1회 resolve.
+- 테스트: `AnswerServiceTest`/`ClassifierServiceTest`/`DirectAnswerServiceTest`/`ChatResponseNullSafetyTest`/`RerankerServiceTest`/`RetrievalService*Test`(3개) 갱신 + 신규 `VisionDescriptionServiceTest`/`ImageTypeClassifierTest`/`TrackingChatModelTest`(기존 테스트 전무했던 2곳 포함) — 전체 466 tests BUILD SUCCESS(회귀 0, +5 skip 그대로).
+- 실사용 브라우저 검증은 생략(reranker/image-description은 opt-in 플래그, MultiQueryExpander는 이미 검증된 것과 동일한 `executeWithTracking`/데코레이터 메커니즘 재사용이라 단위 테스트로 충분하다고 판단).
 
 ---
 

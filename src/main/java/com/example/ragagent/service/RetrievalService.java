@@ -2,8 +2,14 @@ package com.example.ragagent.service;
 
 import com.example.ragagent.agent.AgentState;
 import com.example.ragagent.config.AppProperties;
+import com.example.ragagent.llm.LlmProvider;
+import com.example.ragagent.llm.LlmRouter;
+import com.example.ragagent.llm.RoutingMode;
+import com.example.ragagent.llm.TaskType;
+import com.example.ragagent.llm.TrackingChatModel;
 import com.example.ragagent.model.MetaKey;
 import com.example.ragagent.model.SourceRef;
+import com.example.ragagent.repository.LlmUsageRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
@@ -39,8 +45,8 @@ public class RetrievalService {
     private final LazyVisionService lazyVisionService; // null when disabled
     private final Optional<RerankerService> reranker;
 
-    public RetrievalService(ChatModel chatModel, RagService ragService, AppProperties props,
-                            Optional<LazyVisionService> lazyVisionOpt,
+    public RetrievalService(LlmRouter llmRouter, LlmUsageRepository usageRepo, RagService ragService,
+                            AppProperties props, Optional<LazyVisionService> lazyVisionOpt,
                             Optional<RerankerService> rerankerOpt) {
         this.ragService = ragService;
         this.defaultTopK = props.searchTopK();
@@ -53,8 +59,17 @@ public class RetrievalService {
         this.tagCandidateMultiplier = props.searchTagCandidateMultiplierSafe();
         this.lazyVisionService = lazyVisionOpt.orElse(null);
         this.reranker = rerankerOpt;
+        // MultiQueryExpander builds its own ChatClient around the model it's given, so the
+        // only way to have its calls recorded in llm_usage is to wrap that model (mirrors
+        // TrackingEmbeddingModel's decorator for embeddings). Same TEXT→LIGHT_TEXT fallback
+        // order as LlmConfig.primaryChatModel() so LIGHT_BOTH-only (local, no cloud key)
+        // setups still resolve a model here.
+        LlmProvider expansionProvider = llmRouter.routeProviderWithFallback(
+                List.of(TaskType.TEXT, TaskType.LIGHT_TEXT), RoutingMode.COST_FIRST);
+        ChatModel trackedExpansionModel =
+                new TrackingChatModel(expansionProvider.chatModel(), expansionProvider.name(), usageRepo);
         this.multiQueryExpander = MultiQueryExpander.builder()
-                .chatClientBuilder(ChatClient.builder(chatModel))
+                .chatClientBuilder(ChatClient.builder(trackedExpansionModel))
                 .includeOriginal(true)
                 .numberOfQueries(2)
                 .build();

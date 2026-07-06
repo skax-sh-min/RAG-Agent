@@ -52,6 +52,23 @@ public class LlmRouter {
         return routeProvider(taskType, mode).chatModel();
     }
 
+    /**
+     * Tries each {@link TaskType} in order and returns the first provider found — for singleton
+     * default-model resolution (e.g. {@code LlmConfig.primaryChatModel()}, the LLM behind
+     * {@code MultiQueryExpander}) where a plain {@link #routeProvider} would fail on a
+     * LIGHT_BOTH-only (local, no cloud key) setup that doesn't register a TEXT/BOTH provider.
+     */
+    public LlmProvider routeProviderWithFallback(List<TaskType> taskTypeOrder, RoutingMode mode) {
+        for (TaskType t : taskTypeOrder) {
+            try {
+                return routeProvider(t, mode);
+            } catch (LlmProviderExhaustedException ignored) {
+                // try next
+            }
+        }
+        throw new LlmProviderExhaustedException("No provider available for any of: " + taskTypeOrder);
+    }
+
     /** 실행 + 토큰 기록 + Circuit Breaker 자동 전환. */
     public String executeWithTracking(TaskType taskType, RoutingMode mode,
                                       Function<ChatModel, ChatResponse> call) {
