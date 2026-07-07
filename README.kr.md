@@ -137,7 +137,17 @@ container system stop
 | `SEARCH_CANDIDATE_MULTIPLIER` | `3` | 2 ~ 5 | 리랭킹 후보 풀 크기 — `topK × N` |
 | `MAX_RETRY_COUNT` | `2` | 0 ~ 4 | 증거 부족 시 재검색 최대 횟수 |
 
-대화 이력 주입 길이는 `LLM_MAX_TOKENS × 0.75`로 자동 계산됩니다.
+### 대화 메모리 / 요약 캐시
+
+대화 이력 주입 길이는 `LLM_MAX_TOKENS × 0.75`(최소 1,000자)로 자동 계산됩니다. 원문 그대로 보내는 폴백 경로와 아래 요약 캐시 경로 모두 이 예산을 그대로 지키므로, 두 경로 사이를 오가도 LLM에 전달되는 컨텍스트 양은 항상 동일하게 유지됩니다.
+
+| 변수 | 기본값 | 설명 |
+|------|--------|------|
+| `MEMORY_FETCH_LIMIT_TURNS` | `50` | 폴백 경로에서 문자 예산 적용 전 조회할 최근 turn 상한 |
+| `SUMMARY_MAX_CACHED_THREADS` | `3` | 요약 캐시(LRU)가 동시에 유지하는 최대 thread 수 |
+| `SUMMARY_MAX_SUMMARY_CHARS` | `2000` | 생성된 요약 문자열의 상한 (초과 시 잘림) |
+| `SUMMARY_RECENT_RAW_TURNS` | `2` | 요약 뒤에 원문 그대로 덧붙일 최근 turn 수 (이 turn들도 예산 안에서 최신 우선으로 채워짐) |
+| `SUMMARY_PRECOMPUTE_TTL_SECONDS` | `15` | 동일 thread에 대한 중복 요약 사전계산(precompute) 억제 창(초) |
 
 > 형식별 분할 전략 상세 → [USER_MANUAL.md §4.1](USER_MANUAL.md#41-형식별-청크-분할-전략)
 

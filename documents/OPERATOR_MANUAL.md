@@ -204,7 +204,19 @@ copy .env.example .env
 | `SEARCH_CANDIDATE_MULTIPLIER` | `3` | 2 ~ 5 | 리랭킹 전 후보 풀 크기. `topK × N`개 가져와 리랭킹 후 topK로 축소 |
 | `MAX_RETRY_COUNT` | `2` | 0 ~ 4 | 증거 부족 시 재검색 최대 횟수 |
 
-대화 컨텍스트 주입 길이는 `LLM_MAX_TOKENS × 0.75`로 자동 계산됩니다.
+대화 컨텍스트 주입 길이는 `LLM_MAX_TOKENS × 0.75`(최소 1,000자)로 자동 계산됩니다. 원문 그대로 보내는 폴백 경로(`MemoryService.getHistory()`)와 요약 캐시 경로(`ConversationSummarizerService.buildContext()`, §6.1) 모두 이 예산을 동일하게 지키도록 통일되어 있습니다.
+
+#### 대화 메모리 / 요약 캐시 튜닝
+
+| 변수 | 기본값 | 권장 범위 | 설명 |
+|------|--------|----------|------|
+| `MEMORY_FETCH_LIMIT_TURNS` | `50` | 20 ~ 200 | 폴백 경로(`SqliteMemoryRepository.getHistory()`)에서 문자 예산 적용 전 조회할 최근 turn 상한 |
+| `SUMMARY_MAX_CACHED_THREADS` | `3` | 1 ~ 20 | 요약 사전계산 결과를 유지하는 LRU 캐시 크기(동시 활성 thread 수). 초과 시 가장 오래 미사용된 thread부터 축출 |
+| `SUMMARY_MAX_SUMMARY_CHARS` | `2000` | 500 ~ 5000 | LLM이 생성한 요약 문자열의 상한 (초과 시 잘림) |
+| `SUMMARY_RECENT_RAW_TURNS` | `2` | 1 ~ 5 | 요약 뒤에 원문 그대로 덧붙일 최근 turn 수 — 이 turn들도 위 문자 예산 안에서 최신 우선으로 채워지며, 예산 초과분은 잘리지 않고 통째로 드롭됨 |
+| `SUMMARY_PRECOMPUTE_TTL_SECONDS` | `15` | 5 ~ 60 | 동일 thread에 대한 중복 요약 사전계산(precompute) 억제 창(초). 프런트엔드가 이미 debounce하므로 이 값은 안전장치 성격 |
+
+> 모두 미설정 시 기존 하드코딩 값과 동일하게 동작합니다(회귀 없음). 로컬 소형 모델처럼 요약 생성이 느리거나 부정확한 환경에서는 `SUMMARY_MAX_CACHED_THREADS`/`SUMMARY_RECENT_RAW_TURNS`를 낮춰 컨텍스트 품질보다 속도를 우선할 수 있습니다.
 
 #### 인덱싱 병렬 처리
 
@@ -1242,9 +1254,15 @@ COST_FIRST 흐름:
 `MemoryService`는 **SQLite**(`DATA_DIR/memory.db`)에 대화 이력을 영속합니다.
 
 - WAL 모드로 읽기/쓰기 경합 최소화. SQLite pool size는 반드시 1 유지
-- 스레드별 최근 50턴 이내에서 `LLM_MAX_TOKENS × 0.75`까지 LLM 컨텍스트 주입
+- 스레드별 최근 `MEMORY_FETCH_LIMIT_TURNS`(기본 50)턴 이내에서 `LLM_MAX_TOKENS × 0.75`까지 LLM 컨텍스트 주입
 - `/chat/{threadId}` 재진입 시 모든 이전 turn을 시간순으로 불러와 메시지 버블 복원
 - `MemoryRepository` 인터페이스로 추상화 — Redis 등으로 교체 시 구현체만 추가
+
+**요약 캐시 (`ConversationSummarizerService`)**: 사용자가 다음 질문을 입력하는 동안 백그라운드에서 스레드 대화 이력을 LOCAL 프로바이더로 미리 요약해 캐싱합니다. 이후 실제 질의 시 원문 전체 대신 "요약 + 최근 N턴 원문"을 컨텍스트로 사용해 토큰을 절약합니다.
+
+- 캐시 미스이거나 LOCAL 프로바이더가 없으면 자동으로 원문 폴백 경로(`MemoryService.getHistory()`) 사용 — best-effort, 실패해도 채팅이 막히지 않음
+- 요약 경로와 폴백 경로는 **동일한 문자 예산**을 지키도록 통일되어 있어(위 참조), 요약 캐시 유무에 따라 LLM에 전달되는 컨텍스트 양이 달라지지 않음
+- 캐시 크기·요약 길이·최근 턴 수·재계산 억제 창은 `MEMORY_FETCH_LIMIT_TURNS`/`SUMMARY_*` 환경변수로 조정 (위 "대화 메모리 / 요약 캐시 튜닝" 참조)
 
 `conversation_turns` 테이블 확장 컬럼 (앱 시작 시 `ALTER TABLE`로 자동 마이그레이션):
 
@@ -1420,6 +1438,17 @@ docker-compose logs app
 - `INDEXING_MAX_FILES` / `INDEXING_MAX_LLM` 값 증가 (CPU·API 쿼터 여유 있는 경우)
 - 키워드 추출(`KeywordMetadataEnricher`)이 청크당 LLM 호출 → 문서 수 많을수록 시간 증가 (의도된 동작)
 - DOCX 파일은 LLM 포맷 교정(섹션당 1회 LLM 호출)이 추가되어 PDF/PPTX보다 인덱싱 시간이 더 길 수 있습니다. 교정 실패 시 원본 MD로 fallback됩니다.
+
+---
+
+### 이미지 썸네일 링크가 클릭 시 "연결할 수 없음"으로 뜸
+
+`GET /api/v1/images/{docId}/{filename}`은 경로 순회(path traversal) 방지를 위해 `docId`/`filename`에 `..`가 포함되면 400을 반환합니다. **PPTX에서 추출된 이미지 파일명이 `img1..png`처럼 점이 두 개 겹친 형태**라면 아래 원인입니다.
+
+| 원인 | 조치 |
+|------|------|
+| Apache POI `PictureType.extension`이 이미 `.png`처럼 점을 포함하는데, 파일명 조립 시 점을 한 번 더 붙여 `img1..png`가 됨 (해당 버전 이전 `PptxImageExtractor` 버그) | 코드는 이미 수정됨. **이 버그가 있던 버전으로 인덱싱된 PPTX 문서**는 `data/images/{docId}/`에 이미 잘못된 파일명으로 저장돼 있고, 벡터 스토어에 저장된 청크 내용에도 잘못된 경로 문자열이 그대로 박혀 있으므로 **파일만 이름 변경해서는 해결되지 않습니다** — 해당 문서를 삭제 후 재업로드하거나 `/documents`의 Sync Folder로 재인덱싱하세요 |
+| 확인 방법 | `find data/images -name "*..*"`로 이중 점 파일명이 있는지 검사 |
 
 ---
 

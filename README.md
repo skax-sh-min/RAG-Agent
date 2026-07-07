@@ -135,7 +135,17 @@ See [USER_MANUAL.md](USER_MANUAL.md) for usage instructions and [OPERATOR_MANUAL
 | `SEARCH_CANDIDATE_MULTIPLIER` | `3` | 2 ~ 5 | Candidate pool size for reranking — `topK × N` |
 | `MAX_RETRY_COUNT` | `2` | 0 ~ 4 | Maximum re-retrieval attempts when evidence is insufficient |
 
-Conversation history budget is auto-derived as `LLM_MAX_TOKENS × 0.75`.
+### Conversation Memory / Summary Cache
+
+Conversation history budget is auto-derived as `LLM_MAX_TOKENS × 0.75` (floor 1,000 chars). Both the raw-history fallback path and the precomputed-summary path (below) honor this exact same ceiling, so switching between them never changes how much context reaches the LLM.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MEMORY_FETCH_LIMIT_TURNS` | `50` | Max recent turns fetched (fallback path) before the char budget above trims them newest-first |
+| `SUMMARY_MAX_CACHED_THREADS` | `3` | Number of threads kept warm in the precomputed-summary LRU cache |
+| `SUMMARY_MAX_SUMMARY_CHARS` | `2000` | Hard cap on the generated summary string |
+| `SUMMARY_RECENT_RAW_TURNS` | `2` | Verbatim recent turns appended after the summary (also budget-trimmed newest-first) |
+| `SUMMARY_PRECOMPUTE_TTL_SECONDS` | `15` | Suppression window for duplicate summary-precompute triggers on the same thread |
 
 > Per-format splitting strategy → [USER_MANUAL.md §4.1](USER_MANUAL.md#41-형식별-청크-분할-전략)
 
