@@ -69,8 +69,9 @@ public class ConversationSummarizerService {
     /**
      * Dedupes thread history and summarizes it via a LOCAL-only LLM call, caching the result
      * for {@link #buildContext}. No-ops (without calling the LLM) if this thread was already
-     * precomputed within {@link #PRECOMPUTE_TTL_MILLIS} — the frontend already debounces the
-     * trigger, this is just a safety net against duplicate tabs/requests.
+     * precomputed within the last {@code app.summary.precompute-ttl-seconds} (§6.11) — the
+     * frontend already debounces the trigger, this is just a safety net against duplicate
+     * tabs/requests.
      */
     public void precompute(String userId, String threadId, Locale locale) {
         long now = System.currentTimeMillis();
