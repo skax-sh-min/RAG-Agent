@@ -289,32 +289,45 @@ public class DocumentLoaderService {
         int currentPage = 1;
         int currentSectionPage = 1;
         int sectionNum = 0;
+        boolean insideFence = false;
 
         for (String line : content.split("\n", -1)) {
-            Matcher genericPageMarker = PAGE_MARKER.matcher(line.strip());
-            if (genericPageMarker.matches()) {
-                currentPage = Integer.parseInt(genericPageMarker.group(1));
-                if (current.isEmpty()) currentSectionPage = currentPage;
-                continue; // metadata-only marker
-            }
+            String trimmed = line.strip();
 
-            Matcher pageMarker = HEADING_PAGE_MARKER.matcher(line.strip());
-            if (pageMarker.matches()) {
-                pendingHeadingPage = Integer.parseInt(pageMarker.group(1));
-                continue; // marker is metadata-only, not searchable content
-            }
+            // Track fenced code blocks (``` / ~~~) so their contents — e.g. shell/python
+            // comments starting with '#', or lines that resemble page markers — are treated
+            // as plain code, never as section headings or metadata markers.
+            boolean isFenceLine = trimmed.startsWith("```") || trimmed.startsWith("~~~");
+            boolean wasInsideFence = insideFence;
+            if (isFenceLine) insideFence = !insideFence;
+            boolean skipStructural = isFenceLine || wasInsideFence;
 
-            if (line.startsWith("#")) {
-                if (!current.isEmpty()) {
-                    Integer resolvedPage = resolveSectionPage(currentHeadingPage, currentSectionPage, pendingHeadingPage);
-                    sections.add(sectionDocument(current.toString().strip(), sectionNum, currentHeading, resolvedPage));
-                    current = new StringBuilder();
-                    sectionNum++;
+            if (!skipStructural) {
+                Matcher genericPageMarker = PAGE_MARKER.matcher(trimmed);
+                if (genericPageMarker.matches()) {
+                    currentPage = Integer.parseInt(genericPageMarker.group(1));
+                    if (current.isEmpty()) currentSectionPage = currentPage;
+                    continue; // metadata-only marker
                 }
-                currentHeading = line.replaceFirst("^#+\\s*", "");
-                currentHeadingPage = pendingHeadingPage != null ? pendingHeadingPage : currentPage;
-                currentSectionPage = currentHeadingPage;
-                pendingHeadingPage = null;
+
+                Matcher pageMarker = HEADING_PAGE_MARKER.matcher(trimmed);
+                if (pageMarker.matches()) {
+                    pendingHeadingPage = Integer.parseInt(pageMarker.group(1));
+                    continue; // marker is metadata-only, not searchable content
+                }
+
+                if (line.startsWith("#")) {
+                    if (!current.isEmpty()) {
+                        Integer resolvedPage = resolveSectionPage(currentHeadingPage, currentSectionPage, pendingHeadingPage);
+                        sections.add(sectionDocument(current.toString().strip(), sectionNum, currentHeading, resolvedPage));
+                        current = new StringBuilder();
+                        sectionNum++;
+                    }
+                    currentHeading = line.replaceFirst("^#+\\s*", "");
+                    currentHeadingPage = pendingHeadingPage != null ? pendingHeadingPage : currentPage;
+                    currentSectionPage = currentHeadingPage;
+                    pendingHeadingPage = null;
+                }
             }
 
             if (current.isEmpty()) {

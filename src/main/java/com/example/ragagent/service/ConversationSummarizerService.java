@@ -1,5 +1,6 @@
 package com.example.ragagent.service;
 
+import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.llm.BackgroundUsage;
 import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.RoutingMode;
@@ -31,43 +32,51 @@ public class ConversationSummarizerService {
 
     private static final Logger log = LoggerFactory.getLogger(ConversationSummarizerService.class);
 
-    private static final int MAX_CACHED_THREADS = 3;
-    private static final int MAX_SUMMARY_CHARS = 2_000;
-    private static final int RECENT_RAW_TURNS = 2;
-    private static final long PRECOMPUTE_TTL_MILLIS = 15_000;
-
     private final MemoryService memoryService;
     private final LlmRouter llmRouter;
     private final MessageSource messageSource;
 
+    // §6.11: previously hardcoded constants, now sourced from app.summary.* (null-safe defaults).
+    private final int maxSummaryChars;
+    private final int recentRawTurns;
+    private final long precomputeTtlMillis;
+
     // Bounded to the most recently used threads — access-order LinkedHashMap evicts the
-    // least-recently-used entry once size exceeds MAX_CACHED_THREADS.
-    private final Map<String, String> summaryCache = Collections.synchronizedMap(
-            new LinkedHashMap<>(MAX_CACHED_THREADS + 1, 0.75f, true) {
-                @Override
-                protected boolean removeEldestEntry(Map.Entry<String, String> eldest) {
-                    return size() > MAX_CACHED_THREADS;
-                }
-            });
+    // least-recently-used entry once size exceeds maxCachedThreads.
+    private final Map<String, String> summaryCache;
     private final Map<String, Long> lastPrecomputeAt = new ConcurrentHashMap<>();
 
     public ConversationSummarizerService(MemoryService memoryService, LlmRouter llmRouter,
-                                         MessageSource messageSource) {
+                                         MessageSource messageSource, AppProperties props) {
         this.memoryService = memoryService;
         this.llmRouter = llmRouter;
         this.messageSource = messageSource;
+
+        AppProperties.SummaryConfig cfg = props.summarySafe();
+        int maxCachedThreads = cfg.maxCachedThreads();
+        this.maxSummaryChars = cfg.maxSummaryChars();
+        this.recentRawTurns = cfg.recentRawTurns();
+        this.precomputeTtlMillis = cfg.precomputeTtlSeconds() * 1_000L;
+        this.summaryCache = Collections.synchronizedMap(
+                new LinkedHashMap<>(maxCachedThreads + 1, 0.75f, true) {
+                    @Override
+                    protected boolean removeEldestEntry(Map.Entry<String, String> eldest) {
+                        return size() > maxCachedThreads;
+                    }
+                });
     }
 
     /**
      * Dedupes thread history and summarizes it via a LOCAL-only LLM call, caching the result
      * for {@link #buildContext}. No-ops (without calling the LLM) if this thread was already
-     * precomputed within {@link #PRECOMPUTE_TTL_MILLIS} — the frontend already debounces the
-     * trigger, this is just a safety net against duplicate tabs/requests.
+     * precomputed within the last {@code app.summary.precompute-ttl-seconds} (§6.11) — the
+     * frontend already debounces the trigger, this is just a safety net against duplicate
+     * tabs/requests.
      */
     public void precompute(String userId, String threadId, Locale locale) {
         long now = System.currentTimeMillis();
         Long last = lastPrecomputeAt.get(threadId);
-        if (last != null && now - last < PRECOMPUTE_TTL_MILLIS) return;
+        if (last != null && now - last < precomputeTtlMillis) return;
         lastPrecomputeAt.put(threadId, now);
 
         String deduped = dedupe(memoryService.getTurns(userId, threadId));
@@ -93,6 +102,12 @@ public class ConversationSummarizerService {
      * Combines the cached summary (if any) with the last few raw turns, so the model sees
      * both the compacted history and full-fidelity detail on the most recent exchange.
      * Returns null when nothing is cached — caller must fall back to MemoryService.getHistory().
+     *
+     * <p>§6.11: honors the exact same char budget as the fallback path
+     * ({@link MemoryService#maxConversationChars()}). The summary is preserved first; recent raw
+     * turns are then filled newest-first within the remaining budget (the same latest-first fill
+     * strategy {@code MemoryRepository.getHistory()} uses), so the summary path can never send a
+     * larger context to the LLM than the fallback path.
      */
     public String buildContext(String userId, String threadId) {
         String summary = summaryCache.get(threadId);
@@ -101,13 +116,32 @@ public class ConversationSummarizerService {
         List<MemoryRepository.Turn> turns = memoryService.getTurns(userId, threadId);
         if (turns.isEmpty()) return null;
 
+        int budget = memoryService.maxConversationChars();
+        String summaryBlock = "[Conversation Summary]\n" + summary;
+
         List<MemoryRepository.Turn> recent =
-                turns.subList(Math.max(0, turns.size() - RECENT_RAW_TURNS), turns.size());
-        StringBuilder sb = new StringBuilder("[Conversation Summary]\n").append(summary).append("\n\n[Recent]\n");
-        for (MemoryRepository.Turn t : recent) {
-            sb.append("Q: ").append(t.question()).append("\nA: ").append(t.answer()).append("\n\n");
+                turns.subList(Math.max(0, turns.size() - recentRawTurns), turns.size());
+
+        // Reserve the "[Recent]" header up front so the budget check stays honest even before we
+        // know whether any recent turn fits; unused reservation is harmless (conservative).
+        String recentHeader = "\n\n[Recent]\n";
+        int used = summaryBlock.length() + recentHeader.length();
+        StringBuilder recentSb = new StringBuilder();
+        for (int i = recent.size() - 1; i >= 0; i--) {
+            MemoryRepository.Turn t = recent.get(i);
+            String entry = "Q: " + t.question() + "\nA: " + t.answer() + "\n\n";
+            if (used + entry.length() > budget) break;
+            recentSb.insert(0, entry);
+            used += entry.length();
         }
-        return sb.toString().strip();
+
+        StringBuilder sb = new StringBuilder(summaryBlock);
+        if (recentSb.length() > 0) sb.append(recentHeader).append(recentSb);
+        String result = sb.toString().strip();
+
+        // Hard-cap guard: only reachable when the summary alone already exceeds the budget
+        // (e.g. a very small LLM_MAX_TOKENS). Truncate so the invariant "never exceeds budget" holds.
+        return result.length() > budget ? result.substring(0, budget).strip() : result;
     }
 
     /** Call after a new turn is persisted so the next precompute regenerates a fresh summary. */
@@ -136,7 +170,7 @@ public class ConversationSummarizerService {
         return s == null ? "" : s.strip().toLowerCase(Locale.ROOT).replaceAll("\\s+", " ");
     }
 
-    private static String truncate(String s) {
-        return s.length() > MAX_SUMMARY_CHARS ? s.substring(0, MAX_SUMMARY_CHARS) : s;
+    private String truncate(String s) {
+        return s.length() > maxSummaryChars ? s.substring(0, maxSummaryChars) : s;
     }
 }

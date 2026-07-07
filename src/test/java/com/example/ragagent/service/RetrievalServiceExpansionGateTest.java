@@ -1,6 +1,11 @@
 package com.example.ragagent.service;
 
 import com.example.ragagent.config.AppProperties;
+import com.example.ragagent.llm.LlmProvider;
+import com.example.ragagent.llm.LlmRouter;
+import com.example.ragagent.llm.ProviderRole;
+import com.example.ragagent.llm.TaskType;
+import com.example.ragagent.repository.LlmUsageRepository;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.model.ChatModel;
@@ -8,6 +13,7 @@ import org.springframework.ai.chat.model.ChatModel;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -24,7 +30,11 @@ class RetrievalServiceExpansionGateTest {
         when(props.searchRetryEscalate()).thenReturn(true);
         when(props.searchRerankEnabled()).thenReturn(false);
         when(props.searchCandidateMultiplierSafe()).thenReturn(3);
-        return new RetrievalService(mock(ChatModel.class), mock(RagService.class), props,
+        LlmRouter llmRouter = mock(LlmRouter.class);
+        LlmProvider expansionProvider = new LlmProvider(
+                "local", TaskType.TEXT, ProviderRole.LOCAL, 0, "key", null, "model", true, mock(ChatModel.class), null);
+        when(llmRouter.routeProviderWithFallback(any(), any())).thenReturn(expansionProvider);
+        return new RetrievalService(llmRouter, mock(LlmUsageRepository.class), mock(RagService.class), props,
                 Optional.empty(), Optional.empty());
     }
 

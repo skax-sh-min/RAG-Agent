@@ -1,5 +1,6 @@
 package com.example.ragagent.repository;
 
+import com.example.ragagent.config.AppProperties;
 import jakarta.annotation.PostConstruct;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
@@ -15,13 +16,13 @@ import java.util.Optional;
 @Repository
 public class SqliteMemoryRepository implements MemoryRepository {
 
-    // fetch at most this many recent turns before applying char truncation
-    private static final int FETCH_LIMIT = 50;
-
     private final JdbcTemplate jdbc;
+    // fetch at most this many recent turns before applying char truncation (§6.11: app.memory.*)
+    private final int fetchLimit;
 
-    public SqliteMemoryRepository(JdbcTemplate jdbc) {
+    public SqliteMemoryRepository(JdbcTemplate jdbc, AppProperties props) {
         this.jdbc = jdbc;
+        this.fetchLimit = props.memorySafe().fetchLimitTurns();
     }
 
     @PostConstruct
@@ -72,14 +73,14 @@ public class SqliteMemoryRepository implements MemoryRepository {
 
     @Override
     public String getHistory(String userId, String threadId, int maxChars) {
-        // fetch last FETCH_LIMIT turns newest-first, then reverse for chronological order.
+        // fetch last fetchLimit turns newest-first, then reverse for chronological order.
         // DISLIKE-tagged turns are excluded from context (hard exclusion, §6.9).
         List<String> rows = jdbc.query(
                 "SELECT question, answer FROM conversation_turns " +
                 "WHERE user_id = ? AND thread_id = ? AND (feedback IS NULL OR feedback <> 'DISLIKE') " +
                 "ORDER BY id DESC LIMIT ?",
                 (rs, n) -> "Q: %s\nA: %s".formatted(rs.getString("question"), rs.getString("answer")),
-                userId, threadId, FETCH_LIMIT);
+                userId, threadId, fetchLimit);
 
         if (rows.isEmpty()) return "";
 

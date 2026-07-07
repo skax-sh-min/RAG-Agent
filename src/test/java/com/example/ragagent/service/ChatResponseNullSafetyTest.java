@@ -1,9 +1,9 @@
 package com.example.ragagent.service;
 
 import com.example.ragagent.agent.AgentState;
+import com.example.ragagent.llm.LlmRouter;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.document.Document;
 
@@ -11,7 +11,6 @@ import java.util.List;
 import java.util.Map;
 
 import org.springframework.context.MessageSource;
-import reactor.core.publisher.Flux;
 
 import java.util.Locale;
 
@@ -57,17 +56,14 @@ class ChatResponseNullSafetyTest {
     // ── ClassifierService ─────────────────────────────────────────────────────
 
     @Test
-    @DisplayName("ClassifierService.execute — getText() null → concept 폴백")
+    @DisplayName("ClassifierService.execute — LlmRouter가 null 반환 → concept 폴백")
     void classifier_nullText_fallsToConcept() {
-        ChatClient chatClient = mock(ChatClient.class, RETURNS_DEEP_STUBS);
-        ChatResponse resp = mock(ChatResponse.class, RETURNS_DEEP_STUBS);
-        when(chatClient.prompt().system(anyString()).user(anyString()).call().chatResponse())
-                .thenReturn(resp);
-        when(resp.getResult().getOutput().getText()).thenReturn(null);
+        LlmRouter llmRouter = mock(LlmRouter.class);
+        when(llmRouter.executeWithTracking(any(), any(), any())).thenReturn(null);
 
         MessageSource messageSource = mock(MessageSource.class);
         when(messageSource.getMessage(anyString(), any(), any(Locale.class))).thenReturn("prompt");
-        ClassifierService svc = new ClassifierService(chatClient, messageSource);
+        ClassifierService svc = new ClassifierService(llmRouter, messageSource);
         AgentState state = AgentState.of("테스트", "latest", "t1", "", null);
         AgentState result = svc.execute(state);
 
@@ -115,13 +111,13 @@ class ChatResponseNullSafetyTest {
     @Test
     @DisplayName("ClassifierService — VALID_TYPES 외 응답 시 'concept' 폴백")
     void classifier_invalidType_fallsToConcept() {
-        ChatClient chatClient = mock(ChatClient.class, RETURNS_DEEP_STUBS);
-        when(chatClient.prompt().system(anyString()).user(anyString()).stream().content())
-                .thenReturn(Flux.just("{\"question_type\": \"unknown_garbage\"}"));
+        LlmRouter llmRouter = mock(LlmRouter.class);
+        when(llmRouter.executeWithTracking(any(), any(), any()))
+                .thenReturn("{\"question_type\": \"unknown_garbage\"}");
 
         MessageSource messageSource = mock(MessageSource.class);
         when(messageSource.getMessage(anyString(), any(), any(Locale.class))).thenReturn("prompt");
-        ClassifierService svc = new ClassifierService(chatClient, messageSource);
+        ClassifierService svc = new ClassifierService(llmRouter, messageSource);
         AgentState state = AgentState.of("테스트", "latest", "t1", "", null);
         AgentState result = svc.execute(state);
 

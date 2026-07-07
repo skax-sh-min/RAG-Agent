@@ -1,8 +1,13 @@
 package com.example.ragagent.service;
 
+import com.example.ragagent.llm.LlmRouter;
+import com.example.ragagent.llm.RoutingMode;
+import com.example.ragagent.llm.TaskType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.messages.SystemMessage;
+import org.springframework.ai.chat.messages.UserMessage;
+import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.document.Document;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.MessageSource;
@@ -28,11 +33,11 @@ public class RerankerService {
 
     private static final Logger log = LoggerFactory.getLogger(RerankerService.class);
 
-    private final ChatClient chatClient;
+    private final LlmRouter llmRouter;
     private final MessageSource messageSource;
 
-    public RerankerService(ChatClient chatClient, MessageSource messageSource) {
-        this.chatClient = chatClient;
+    public RerankerService(LlmRouter llmRouter, MessageSource messageSource) {
+        this.llmRouter = llmRouter;
         this.messageSource = messageSource;
     }
 
@@ -49,13 +54,11 @@ public class RerankerService {
             String userContent = "[질문]\n%s\n\n[문서 목록]\n%s"
                     .formatted(question, formatDocList(candidates));
 
-            StringBuilder buf = new StringBuilder();
-            chatClient.prompt()
-                    .system(systemPrompt)
-                    .user(userContent)
-                    .stream().content().doOnNext(buf::append).blockLast();
+            String response = llmRouter.executeWithTracking(TaskType.TEXT, RoutingMode.COST_FIRST,
+                    model -> model.call(new Prompt(List.of(
+                            new SystemMessage(systemPrompt), new UserMessage(userContent)))));
 
-            List<Integer> ranking = parseRanking(buf.toString(), candidates.size());
+            List<Integer> ranking = parseRanking(response == null ? "" : response, candidates.size());
             List<Document> reranked = ranking.stream()
                     .filter(i -> i >= 0 && i < candidates.size())
                     .distinct()

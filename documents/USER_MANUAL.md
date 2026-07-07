@@ -444,6 +444,10 @@ curl -X POST "http://localhost:8080/api/v1/documents/sync?version=latest"
 이미지 처리는 운영자 설정(`app.image-description.enabled=true`)이 필요합니다.  
 운영자 문의 또는 [OPERATOR_MANUAL.md](OPERATOR_MANUAL.md)를 참고하세요.
 
+### 이미지 썸네일을 클릭하면 "연결할 수 없음"으로 표시됨
+
+PPTX 문서에서 추출된 이미지 링크가 열리지 않으면 해당 문서를 재업로드하거나 문서 관리 화면의 **Sync Folder**로 재인덱싱해 보세요. 자세한 원인은 운영자에게 문의하거나 [OPERATOR_MANUAL.md §8](OPERATOR_MANUAL.md#8-문제-해결)를 참고하세요.
+
 ### 답변이 토큰 단위가 아닌 한 번에 표시됨
 
 일부 환경에서는 LLM 프로바이더 설정(`stream=false`)에 따라 토큰이 하나씩 나타나는 대신 전체 응답이 완성된 후 한꺼번에 표시될 수 있습니다. 기능 자체는 정상이며, 설정은 운영자가 변경할 수 있습니다.

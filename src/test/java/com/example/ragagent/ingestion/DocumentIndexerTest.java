@@ -49,6 +49,8 @@ class DocumentIndexerTest {
         when(props.dataDir()).thenReturn(tmpDir.toString());
         when(props.chunkSize()).thenReturn(2000);
         when(props.chunkOverlap()).thenReturn(200);
+        when(props.embeddingSafe()).thenReturn(
+                new AppProperties.EmbeddingConfig(null, null, null, null, 10, 120, true, 0));
 
         AppProperties.IndexingConfig indexing = mock(AppProperties.IndexingConfig.class);
         when(indexing.maxConcurrentLlmCalls()).thenReturn(2);

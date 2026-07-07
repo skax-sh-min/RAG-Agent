@@ -112,6 +112,7 @@ See [USER_MANUAL.md](USER_MANUAL.md) for usage instructions and [OPERATOR_MANUAL
 | `EMBED_MODEL` | — | `text-embedding-nomic-embed-text-v1.5` | Embedding model name |
 | `EMBED_DIMENSIONS` | sqlite-vec only | — | Embedding model's real output dimension (`app.embedding.dimensions`). Required for `sqlite-vec` (baked into the `vec0` DDL — must match the model: nomic=768, bge-m3=1024). Ignored by chroma |
 | `EMBED_USAGE_FALLBACK_ENABLED` | — | `true` | When the embedding server doesn't report token usage, approximate input tokens as chars/4 for the `/llm-usage` dashboard instead of recording 0 |
+| `EMBED_MAX_CHUNK_CHARS` | — | `0` (off) | Hard per-chunk character ceiling to fit the embedding server's batch/token limit. Set (e.g. `450`) when you hit `input (N tokens) is too large ... (batch size: 512)`; oversized chunks are force-split at line boundaries. Prefer raising the server batch (`llama-server -b/-ub`) first — see [OPERATOR_MANUAL §8](documents/OPERATOR_MANUAL.md#8-문제-해결) |
 | `VECTORSTORE_TYPE` | — | `chroma` | Vector store backend — `chroma` or `sqlite-vec` |
 | `SQLITE_VEC_EXTENSION_PATH` | — | — | sqlite-vec only — path to the operator-provided `vec0` loadable extension |
 | `CHROMA_HOST` | — | `http://localhost` | Chroma server host (chroma backend) |
@@ -135,7 +136,17 @@ See [USER_MANUAL.md](USER_MANUAL.md) for usage instructions and [OPERATOR_MANUAL
 | `SEARCH_CANDIDATE_MULTIPLIER` | `3` | 2 ~ 5 | Candidate pool size for reranking — `topK × N` |
 | `MAX_RETRY_COUNT` | `2` | 0 ~ 4 | Maximum re-retrieval attempts when evidence is insufficient |
 
-Conversation history budget is auto-derived as `LLM_MAX_TOKENS × 0.75`.
+### Conversation Memory / Summary Cache
+
+Conversation history budget is auto-derived as `LLM_MAX_TOKENS × 0.75` (floor 1,000 chars). Both the raw-history fallback path and the precomputed-summary path (below) honor this exact same ceiling, so switching between them never changes how much context reaches the LLM.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MEMORY_FETCH_LIMIT_TURNS` | `50` | Max recent turns fetched (fallback path) before the char budget above trims them newest-first |
+| `SUMMARY_MAX_CACHED_THREADS` | `3` | Number of threads kept warm in the precomputed-summary LRU cache |
+| `SUMMARY_MAX_SUMMARY_CHARS` | `2000` | Hard cap on the generated summary string |
+| `SUMMARY_RECENT_RAW_TURNS` | `2` | Verbatim recent turns appended after the summary (also budget-trimmed newest-first) |
+| `SUMMARY_PRECOMPUTE_TTL_SECONDS` | `15` | Suppression window for duplicate summary-precompute triggers on the same thread |
 
 > Per-format splitting strategy → [USER_MANUAL.md §4.1](USER_MANUAL.md#41-형식별-청크-분할-전략)
 

@@ -2,8 +2,13 @@ package com.example.ragagent.service;
 
 import com.example.ragagent.agent.AgentState;
 import com.example.ragagent.config.AppProperties;
+import com.example.ragagent.llm.LlmProvider;
+import com.example.ragagent.llm.LlmRouter;
+import com.example.ragagent.llm.ProviderRole;
 import com.example.ragagent.llm.RoutingMode;
+import com.example.ragagent.llm.TaskType;
 import com.example.ragagent.model.MetaKey;
+import com.example.ragagent.repository.LlmUsageRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -40,7 +45,11 @@ class RetrievalServiceTagFilterTest {
         when(props.searchCandidateMultiplierSafe()).thenReturn(3);
         when(props.searchTagCandidateMultiplierSafe()).thenReturn(2);
         rag = mock(RagService.class);
-        svc = new RetrievalService(mock(ChatModel.class), rag, props, Optional.empty(), Optional.empty());
+        LlmRouter llmRouter = mock(LlmRouter.class);
+        LlmProvider expansionProvider = new LlmProvider(
+                "local", TaskType.TEXT, ProviderRole.LOCAL, 0, "key", null, "model", true, mock(ChatModel.class), null);
+        when(llmRouter.routeProviderWithFallback(any(), any())).thenReturn(expansionProvider);
+        svc = new RetrievalService(llmRouter, mock(LlmUsageRepository.class), rag, props, Optional.empty(), Optional.empty());
     }
 
     private static Document doc(String id, String tagsCsv) {

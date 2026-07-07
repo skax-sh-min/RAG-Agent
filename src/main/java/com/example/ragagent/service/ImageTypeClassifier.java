@@ -5,8 +5,9 @@ import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.llm.TaskType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.ai.chat.messages.UserMessage;
+import org.springframework.ai.chat.prompt.Prompt;
+import org.springframework.ai.content.Media;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.stereotype.Service;
@@ -42,13 +43,10 @@ public class ImageTypeClassifier {
 
     public String classify(byte[] imageBytes, String mimeType) {
         try {
-            ChatModel model = llmRouter.route(TaskType.LIGHT_BOTH, RoutingMode.COST_FIRST);
-            String response = ChatClient.builder(model).build()
-                    .prompt()
-                    .user(u -> u.text(PROMPT)
-                                .media(MimeTypeUtils.parseMimeType(mimeType), new ByteArrayResource(imageBytes)))
-                    .call()
-                    .content();
+            Media media = new Media(MimeTypeUtils.parseMimeType(mimeType), new ByteArrayResource(imageBytes));
+            UserMessage userMessage = UserMessage.builder().text(PROMPT).media(media).build();
+            String response = llmRouter.executeWithTracking(TaskType.LIGHT_BOTH, RoutingMode.COST_FIRST,
+                    model -> model.call(new Prompt(userMessage)));
             String type = response == null ? "other" : response.strip().toLowerCase();
             return VALID_TYPES.contains(type) ? type : "other";
         } catch (WebClientResponseException e) {

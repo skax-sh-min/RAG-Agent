@@ -114,6 +114,7 @@ container system stop
 | `EMBED_MODEL` | — | `text-embedding-nomic-embed-text-v1.5` | 임베딩 모델명 |
 | `EMBED_DIMENSIONS` | sqlite-vec 시 | — | 임베딩 모델의 실제 출력 차원 (`app.embedding.dimensions`). `sqlite-vec` 필수 (vec0 DDL에 고정 — 모델 실제 차원과 일치: nomic=768, bge-m3=1024). chroma는 무시 |
 | `EMBED_USAGE_FALLBACK_ENABLED` | — | `true` | 임베딩 서버가 토큰 사용량을 반환하지 않을 때 `/llm-usage` 대시보드에 0 대신 입력 텍스트 길이 근사(chars/4)로 기록 |
+| `EMBED_MAX_CHUNK_CHARS` | — | `0` (비활성) | 임베딩 서버 배치/토큰 한계에 맞추는 청크 문자 수 하드 상한. `input (N tokens) is too large ... (batch size: 512)` 에러 시 설정(예: `450`). 초과 청크는 줄 경계에서 강제 재분할. 먼저 서버 배치를 키우는 것(`llama-server -b/-ub`)을 권장 — [OPERATOR_MANUAL §8](documents/OPERATOR_MANUAL.md#8-문제-해결) 참조 |
 | `VECTORSTORE_TYPE` | — | `chroma` | 벡터 스토어 백엔드 — `chroma` 또는 `sqlite-vec` |
 | `SQLITE_VEC_EXTENSION_PATH` | — | — | sqlite-vec 전용 — 운영자가 제공하는 `vec0` 로더블 확장 경로 |
 | `CHROMA_HOST` | — | `http://localhost` | Chroma 서버 호스트 (chroma 백엔드) |
@@ -137,7 +138,17 @@ container system stop
 | `SEARCH_CANDIDATE_MULTIPLIER` | `3` | 2 ~ 5 | 리랭킹 후보 풀 크기 — `topK × N` |
 | `MAX_RETRY_COUNT` | `2` | 0 ~ 4 | 증거 부족 시 재검색 최대 횟수 |
 
-대화 이력 주입 길이는 `LLM_MAX_TOKENS × 0.75`로 자동 계산됩니다.
+### 대화 메모리 / 요약 캐시
+
+대화 이력 주입 길이는 `LLM_MAX_TOKENS × 0.75`(최소 1,000자)로 자동 계산됩니다. 원문 그대로 보내는 폴백 경로와 아래 요약 캐시 경로 모두 이 예산을 그대로 지키므로, 두 경로 사이를 오가도 LLM에 전달되는 컨텍스트 양은 항상 동일하게 유지됩니다.
+
+| 변수 | 기본값 | 설명 |
+|------|--------|------|
+| `MEMORY_FETCH_LIMIT_TURNS` | `50` | 폴백 경로에서 문자 예산 적용 전 조회할 최근 turn 상한 |
+| `SUMMARY_MAX_CACHED_THREADS` | `3` | 요약 캐시(LRU)가 동시에 유지하는 최대 thread 수 |
+| `SUMMARY_MAX_SUMMARY_CHARS` | `2000` | 생성된 요약 문자열의 상한 (초과 시 잘림) |
+| `SUMMARY_RECENT_RAW_TURNS` | `2` | 요약 뒤에 원문 그대로 덧붙일 최근 turn 수 (이 turn들도 예산 안에서 최신 우선으로 채워짐) |
+| `SUMMARY_PRECOMPUTE_TTL_SECONDS` | `15` | 동일 thread에 대한 중복 요약 사전계산(precompute) 억제 창(초) |
 
 > 형식별 분할 전략 상세 → [USER_MANUAL.md §4.1](USER_MANUAL.md#41-형식별-청크-분할-전략)
 

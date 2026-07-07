@@ -67,7 +67,7 @@ Flow:
 - **No Spring Data JPA**: raw `JdbcTemplate` for all DB access (SQLite incompatibility)
 - **HTMX fragments**: endpoints return `"fragments/xxx :: selector"` strings
 - **ChromaDB auto-config excluded**: `spring.autoconfigure.exclude=...ChromaVectorStoreAutoConfiguration` — `ChromaConfig` manages beans manually
-- **Null-safe config**: always use `props.llmSafe()` / `props.indexingSafe()` / `props.authSafe()` / `props.imageDescriptionSafe()` — never access the raw getters directly
+- **Null-safe config**: always use `props.llmSafe()` / `props.indexingSafe()` / `props.authSafe()` / `props.imageDescriptionSafe()` / `props.memorySafe()` / `props.summarySafe()` — never access the raw getters directly (`AppPropertiesSafeAccessorTest` enforces this for every `xxxSafe()`)
 - **Korean prompts**: all LLM system/user prompts are Korean
 - **MetaKey constants**: all vector store metadata access goes through `MetaKey.*` — never inline strings
 - **Upload validation**: call `FileTypeDetector.matches(path, ext)` after writing to temp file; return 422 on mismatch

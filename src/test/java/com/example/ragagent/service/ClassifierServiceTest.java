@@ -1,28 +1,39 @@
 package com.example.ragagent.service;
 
 import com.example.ragagent.agent.AgentState;
+import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.RoutingMode;
+import com.example.ragagent.llm.TaskType;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.context.MessageSource;
-import reactor.core.publisher.Flux;
-
-import java.util.Locale;
-
 import org.mockito.ArgumentCaptor;
+import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.ai.chat.model.ChatResponse;
+import org.springframework.ai.chat.model.Generation;
+import org.springframework.ai.chat.prompt.Prompt;
+import org.springframework.context.MessageSource;
+
+import java.util.List;
+import java.util.Locale;
+import java.util.function.Function;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * QA — ClassifierService question-type parsing (EDIT.md #1)
+ * QA — ClassifierService question-type parsing (EDIT.md #1).
+ *
+ * classifyOnly()/execute() now route through LlmRouter.executeWithTracking() (TaskType.TEXT,
+ * RoutingMode.COST_FIRST) — previously a directly-injected ChatClient bound to a single
+ * boot-time-fixed model, which bypassed both llm_usage tracking and per-request routing.
  *
  * Covers: valid type parse, out-of-enum fallback to "concept", malformed-JSON fallback,
  * case-insensitivity, and that execute() accumulates a (0,0) token call while setting
@@ -31,20 +42,23 @@ import static org.mockito.Mockito.when;
  */
 class ClassifierServiceTest {
 
-    private ChatClient chatClient;
+    private LlmRouter llmRouter;
     private ClassifierService service;
 
     @BeforeEach
     void setUp() {
-        chatClient = mock(ChatClient.class, RETURNS_DEEP_STUBS);
+        llmRouter = mock(LlmRouter.class);
         MessageSource messageSource = mock(MessageSource.class);
         when(messageSource.getMessage(anyString(), any(), any(Locale.class))).thenReturn("prompt");
-        service = new ClassifierService(chatClient, messageSource);
+        service = new ClassifierService(llmRouter, messageSource);
     }
 
-    private void stubResponse(String json) {
-        when(chatClient.prompt().system(anyString()).user(anyString()).stream().content())
-                .thenReturn(json == null ? Flux.empty() : Flux.just(json));
+    private static ChatResponse chatResponse(String text) {
+        return new ChatResponse(List.of(new Generation(new AssistantMessage(text))));
+    }
+
+    private void stubResponse(String text) {
+        when(llmRouter.executeWithTracking(any(), any(), any())).thenReturn(text);
     }
 
     private AgentState newState() {
@@ -92,7 +106,7 @@ class ClassifierServiceTest {
     }
 
     @Test
-    @DisplayName("execute — 빈 응답(스트림 종료 시 buf 비어있음) 시 concept 로 폴백")
+    @DisplayName("execute — 빈 응답(null) 시 concept 로 폴백")
     void execute_emptyResponseFallsBackToConcept() {
         stubResponse(null);
 
@@ -124,18 +138,34 @@ class ClassifierServiceTest {
     }
 
     @Test
-    @DisplayName("execute/classifyOnly — 질문이 PromptInjectionGuard.wrap()으로 감싸져 전달됨 (EDIT.md #5)")
-    void wrapsQuestionInUserQuestionDelimiters() {
+    @DisplayName("execute/classifyOnly — LlmRouter.executeWithTracking()을 TaskType.TEXT/COST_FIRST로 호출")
+    void routesViaTextTaskTypeAndCostFirst() {
         stubResponse("{\"question_type\": \"concept\"}");
-        ArgumentCaptor<String> captor = ArgumentCaptor.forClass(String.class);
-        ChatClient.ChatClientRequestSpec requestSpec = chatClient.prompt().system(anyString());
-        org.mockito.Mockito.clearInvocations(requestSpec);
 
         service.execute(newState());
         service.classifyOnly("질문", Locale.KOREAN);
 
-        verify(requestSpec, org.mockito.Mockito.times(2)).user(captor.capture());
-        assertThat(captor.getAllValues()).allSatisfy(prompt ->
-                assertThat(prompt).contains("[USER_QUESTION]").contains("[/USER_QUESTION]"));
+        verify(llmRouter, times(2))
+                .executeWithTracking(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), any());
+    }
+
+    @Test
+    @DisplayName("execute/classifyOnly — 질문이 PromptInjectionGuard.wrap()으로 감싸져 전달됨 (EDIT.md #5)")
+    @SuppressWarnings("unchecked")
+    void wrapsQuestionInUserQuestionDelimiters() {
+        ArgumentCaptor<Function<ChatModel, ChatResponse>> callCaptor = ArgumentCaptor.forClass(Function.class);
+        when(llmRouter.executeWithTracking(any(), any(), callCaptor.capture()))
+                .thenReturn("{\"question_type\": \"concept\"}");
+
+        service.execute(newState());
+        service.classifyOnly("질문", Locale.KOREAN);
+
+        ChatModel chatModel = mock(ChatModel.class);
+        ArgumentCaptor<Prompt> promptCaptor = ArgumentCaptor.forClass(Prompt.class);
+        when(chatModel.call(promptCaptor.capture())).thenReturn(chatResponse("{\"question_type\": \"concept\"}"));
+        callCaptor.getAllValues().forEach(fn -> fn.apply(chatModel));
+
+        assertThat(promptCaptor.getAllValues()).hasSize(2).allSatisfy(prompt ->
+                assertThat(prompt.getContents()).contains("[USER_QUESTION]").contains("[/USER_QUESTION]"));
     }
 }

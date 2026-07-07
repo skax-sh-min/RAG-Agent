@@ -22,6 +22,9 @@ public interface GraphListener {
 
     default void onSourcesReady(List<SourceRef> sources) {}
 
+    /** Fired alongside onSourcesReady when the retrieved documents reference extracted images. */
+    default void onImagesReady(List<String> imageRefs) {}
+
     /** Fired when PROGRESSIVE mode triggers a PREMIUM provider upgrade. */
     default void onUpgrade(String provider) {}
 }

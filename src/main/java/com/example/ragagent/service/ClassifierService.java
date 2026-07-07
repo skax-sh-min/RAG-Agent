@@ -1,15 +1,21 @@
 package com.example.ragagent.service;
 
 import com.example.ragagent.agent.AgentState;
+import com.example.ragagent.llm.LlmRouter;
+import com.example.ragagent.llm.RoutingMode;
+import com.example.ragagent.llm.TaskType;
 import com.example.ragagent.security.PromptInjectionGuard;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.messages.SystemMessage;
+import org.springframework.ai.chat.messages.UserMessage;
+import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.converter.BeanOutputConverter;
 import org.springframework.context.MessageSource;
 import org.springframework.stereotype.Service;
 
+import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 
@@ -27,37 +33,37 @@ public class ClassifierService {
 
     private record ClassifierOutput(@JsonProperty("question_type") String questionType) {}
 
-    private final ChatClient chatClient;
+    private final LlmRouter llmRouter;
     private final MessageSource messageSource;
     private final BeanOutputConverter<ClassifierOutput> converter =
             new BeanOutputConverter<>(ClassifierOutput.class);
 
-    public ClassifierService(ChatClient chatClient, MessageSource messageSource) {
-        this.chatClient = chatClient;
+    public ClassifierService(LlmRouter llmRouter, MessageSource messageSource) {
+        this.llmRouter = llmRouter;
         this.messageSource = messageSource;
     }
 
     public String classifyOnly(String question, Locale locale) {
-        String prompt = messageSource.getMessage("prompt.classifier.system", null, locale);
-        StringBuilder buf = new StringBuilder();
-        chatClient.prompt()
-                .system(prompt)
-                .user(PromptInjectionGuard.wrap(question) + "\n\n" + converter.getFormat())
-                .stream().content().doOnNext(buf::append).blockLast();
-        return parseType(buf.isEmpty() ? null : buf.toString());
+        String systemPrompt = messageSource.getMessage("prompt.classifier.system", null, locale);
+        String userPrompt = PromptInjectionGuard.wrap(question) + "\n\n" + converter.getFormat();
+        String response = llmRouter.executeWithTracking(TaskType.TEXT, RoutingMode.COST_FIRST,
+                model -> model.call(buildPrompt(systemPrompt, userPrompt)));
+        return parseType(response);
     }
 
     public AgentState execute(AgentState state) {
-        String prompt = messageSource.getMessage("prompt.classifier.system", null, state.locale());
-        StringBuilder buf = new StringBuilder();
-        chatClient.prompt()
-                .system(prompt)
-                .user(PromptInjectionGuard.wrap(state.question()) + "\n\n" + converter.getFormat())
-                .stream().content().doOnNext(buf::append).blockLast();
+        String systemPrompt = messageSource.getMessage("prompt.classifier.system", null, state.locale());
+        String userPrompt = PromptInjectionGuard.wrap(state.question()) + "\n\n" + converter.getFormat();
+        String response = llmRouter.executeWithTracking(TaskType.TEXT, RoutingMode.COST_FIRST,
+                model -> model.call(buildPrompt(systemPrompt, userPrompt)));
         return state.toBuilder()
                     .accumulateTokens(0, 0)
-                    .questionType(parseType(buf.isEmpty() ? null : buf.toString()))
+                    .questionType(parseType(response))
                     .build();
+    }
+
+    private static Prompt buildPrompt(String systemPrompt, String userPrompt) {
+        return new Prompt(List.of(new SystemMessage(systemPrompt), new UserMessage(userPrompt)));
     }
 
     private String parseType(String response) {

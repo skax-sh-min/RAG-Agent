@@ -9,6 +9,7 @@ import com.example.ragagent.llm.TaskType;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
@@ -21,6 +22,7 @@ import reactor.core.publisher.Flux;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.function.Function;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -33,10 +35,11 @@ import static org.mockito.Mockito.when;
 /**
  * QA — DirectAnswerService (meta / directMode, blocking + streaming) — EDIT.md #1
  *
- * ChatModel.stream(Prompt) has no delegating default (throws UnsupportedOperationException
- * unless overridden), so both execute() and the stream=false branch of executeStreaming()
- * — which both go through ChatClient's reactive .stream() surface even though execute() is
- * nominally "blocking" — require stubbing ChatModel.stream() directly, not just call().
+ * execute() now routes through LlmRouter.executeWithTracking() (a real, blocking .call() —
+ * previously a streaming .stream().content().blockLast() that discarded ChatResponse usage
+ * metadata entirely) so /llm-usage sees real token counts for the blocking direct-answer path.
+ * executeStreaming() still can't read real ChatResponse usage (token-by-token SSE UX), so it
+ * records an approximate (chars/4) usage entry via LlmRouter.recordApproxUsage() instead.
  */
 class DirectAnswerServiceTest {
 
@@ -61,11 +64,10 @@ class DirectAnswerServiceTest {
     }
 
     @Test
-    @DisplayName("execute — meta 질문 답변 생성, 토큰 (0,0) 누적 (스트리밍 경로라 사용량 미측정)")
+    @DisplayName("execute — meta 질문 답변 생성 (블로킹 .call() 이라 실제 사용량 추적)")
     void execute_generatesAnswer() {
-        ChatModel chatModel = mock(ChatModel.class);
-        when(chatModel.stream(any(Prompt.class))).thenReturn(Flux.just(chatResponse("안녕하세요")));
-        when(llmRouter.route(eq(TaskType.TEXT), any())).thenReturn(chatModel);
+        when(llmRouter.executeWithTracking(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), any()))
+                .thenReturn("안녕하세요");
 
         AgentState result = service.execute(newState(false));
 
@@ -77,9 +79,8 @@ class DirectAnswerServiceTest {
     @Test
     @DisplayName("execute — directMode=true 는 prompt.direct.system 키 사용")
     void execute_directMode_usesDirectSystemPromptKey() {
-        ChatModel chatModel = mock(ChatModel.class);
-        when(chatModel.stream(any(Prompt.class))).thenReturn(Flux.just(chatResponse("답변")));
-        when(llmRouter.route(eq(TaskType.TEXT), any())).thenReturn(chatModel);
+        when(llmRouter.executeWithTracking(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), any()))
+                .thenReturn("답변");
 
         service.execute(newState(true));
 
@@ -89,9 +90,8 @@ class DirectAnswerServiceTest {
     @Test
     @DisplayName("execute — directMode=false(meta) 는 prompt.direct.meta.system 키 사용")
     void execute_metaMode_usesMetaSystemPromptKey() {
-        ChatModel chatModel = mock(ChatModel.class);
-        when(chatModel.stream(any(Prompt.class))).thenReturn(Flux.just(chatResponse("답변")));
-        when(llmRouter.route(eq(TaskType.TEXT), any())).thenReturn(chatModel);
+        when(llmRouter.executeWithTracking(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), any()))
+                .thenReturn("답변");
 
         service.execute(newState(false));
 
@@ -100,35 +100,38 @@ class DirectAnswerServiceTest {
 
     @Test
     @DisplayName("execute — 질문이 PromptInjectionGuard.wrap()으로 감싸져 전달됨 (EDIT.md #5)")
+    @SuppressWarnings("unchecked")
     void execute_wrapsQuestionInUserQuestionDelimiters() {
-        ChatModel chatModel = mock(ChatModel.class);
-        when(chatModel.stream(any(Prompt.class))).thenReturn(Flux.just(chatResponse("답변")));
-        when(llmRouter.route(eq(TaskType.TEXT), any())).thenReturn(chatModel);
-        org.mockito.ArgumentCaptor<Prompt> captor = org.mockito.ArgumentCaptor.forClass(Prompt.class);
+        ArgumentCaptor<Function<ChatModel, ChatResponse>> callCaptor = ArgumentCaptor.forClass(Function.class);
+        when(llmRouter.executeWithTracking(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), callCaptor.capture()))
+                .thenReturn("답변");
 
         service.execute(newState(false));
 
-        verify(chatModel).stream(captor.capture());
-        String userText = captor.getValue().getUserMessage().getText();
+        ChatModel chatModel = mock(ChatModel.class);
+        ArgumentCaptor<Prompt> promptCaptor = ArgumentCaptor.forClass(Prompt.class);
+        when(chatModel.call(promptCaptor.capture())).thenReturn(chatResponse("답변"));
+        callCaptor.getValue().apply(chatModel);
+
+        String userText = promptCaptor.getValue().getUserMessage().getText();
         assertThat(userText).contains("[USER_QUESTION]").contains("[/USER_QUESTION]");
     }
 
     @Test
     @DisplayName("execute — DUAL 라우팅 모드는 COST_FIRST 로 폴백(DirectAnswer 는 DUAL 미지원)")
     void execute_dualMode_fallsBackToCostFirst() {
-        ChatModel chatModel = mock(ChatModel.class);
-        when(chatModel.stream(any(Prompt.class))).thenReturn(Flux.just(chatResponse("답변")));
-        when(llmRouter.route(TaskType.TEXT, RoutingMode.COST_FIRST)).thenReturn(chatModel);
+        when(llmRouter.executeWithTracking(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), any()))
+                .thenReturn("답변");
 
         AgentState dualState = AgentState.of("질문", "v1", "t1", "", RoutingMode.DUAL, false);
         AgentState result = service.execute(dualState);
 
         assertThat(result.answer()).isEqualTo("답변");
-        verify(llmRouter).route(TaskType.TEXT, RoutingMode.COST_FIRST);
+        verify(llmRouter).executeWithTracking(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), any());
     }
 
     @Test
-    @DisplayName("executeStreaming — stream=false 프로바이더는 ChatClient 경유, listener.onToken 으로 전달")
+    @DisplayName("executeStreaming — stream=false 프로바이더는 ChatClient 경유, listener.onToken 으로 전달 + 근사 사용량 기록")
     void executeStreaming_nonStreamingProvider_deliversTokensViaListener() {
         ChatModel chatModel = mock(ChatModel.class);
         when(chatModel.stream(any(Prompt.class))).thenReturn(Flux.just(chatResponse("스트리밍답변")));
@@ -145,10 +148,11 @@ class DirectAnswerServiceTest {
 
         assertThat(result.answer()).isEqualTo("스트리밍답변");
         assertThat(String.join("", tokens)).isEqualTo("스트리밍답변");
+        verify(llmRouter).recordApproxUsage(eq("local"), anyString(), eq("스트리밍답변"));
     }
 
     @Test
-    @DisplayName("executeStreaming — stream=true 프로바이더는 OpenAiApi 네이티브 스트림을 직접 사용(청크별 onToken)")
+    @DisplayName("executeStreaming — stream=true 프로바이더는 OpenAiApi 네이티브 스트림을 직접 사용(청크별 onToken) + 근사 사용량 기록")
     void executeStreaming_streamingProvider_usesNativeOpenAiStream() {
         OpenAiApi openAiApi = mock(OpenAiApi.class);
         var delta1 = new OpenAiApi.ChatCompletionMessage("안", OpenAiApi.ChatCompletionMessage.Role.ASSISTANT);
@@ -172,5 +176,6 @@ class DirectAnswerServiceTest {
 
         assertThat(result.answer()).isEqualTo("안녕");
         assertThat(tokens).containsExactly("안", "녕");
+        verify(llmRouter).recordApproxUsage(eq("openai"), anyString(), eq("안녕"));
     }
 }

@@ -204,7 +204,19 @@ copy .env.example .env
 | `SEARCH_CANDIDATE_MULTIPLIER` | `3` | 2 ~ 5 | 리랭킹 전 후보 풀 크기. `topK × N`개 가져와 리랭킹 후 topK로 축소 |
 | `MAX_RETRY_COUNT` | `2` | 0 ~ 4 | 증거 부족 시 재검색 최대 횟수 |
 
-대화 컨텍스트 주입 길이는 `LLM_MAX_TOKENS × 0.75`로 자동 계산됩니다.
+대화 컨텍스트 주입 길이는 `LLM_MAX_TOKENS × 0.75`(최소 1,000자)로 자동 계산됩니다. 원문 그대로 보내는 폴백 경로(`MemoryService.getHistory()`)와 요약 캐시 경로(`ConversationSummarizerService.buildContext()`, §6.1) 모두 이 예산을 동일하게 지키도록 통일되어 있습니다.
+
+#### 대화 메모리 / 요약 캐시 튜닝
+
+| 변수 | 기본값 | 권장 범위 | 설명 |
+|------|--------|----------|------|
+| `MEMORY_FETCH_LIMIT_TURNS` | `50` | 20 ~ 200 | 폴백 경로(`SqliteMemoryRepository.getHistory()`)에서 문자 예산 적용 전 조회할 최근 turn 상한 |
+| `SUMMARY_MAX_CACHED_THREADS` | `3` | 1 ~ 20 | 요약 사전계산 결과를 유지하는 LRU 캐시 크기(동시 활성 thread 수). 초과 시 가장 오래 미사용된 thread부터 축출 |
+| `SUMMARY_MAX_SUMMARY_CHARS` | `2000` | 500 ~ 5000 | LLM이 생성한 요약 문자열의 상한 (초과 시 잘림) |
+| `SUMMARY_RECENT_RAW_TURNS` | `2` | 1 ~ 5 | 요약 뒤에 원문 그대로 덧붙일 최근 turn 수 — 이 turn들도 위 문자 예산 안에서 최신 우선으로 채워지며, 예산 초과분은 잘리지 않고 통째로 드롭됨 |
+| `SUMMARY_PRECOMPUTE_TTL_SECONDS` | `15` | 5 ~ 60 | 동일 thread에 대한 중복 요약 사전계산(precompute) 억제 창(초). 프런트엔드가 이미 debounce하므로 이 값은 안전장치 성격 |
+
+> 모두 미설정 시 기존 하드코딩 값과 동일하게 동작합니다(회귀 없음). 로컬 소형 모델처럼 요약 생성이 느리거나 부정확한 환경에서는 `SUMMARY_MAX_CACHED_THREADS`/`SUMMARY_RECENT_RAW_TURNS`를 낮춰 컨텍스트 품질보다 속도를 우선할 수 있습니다.
 
 #### 인덱싱 병렬 처리
 
@@ -232,6 +244,7 @@ copy .env.example .env
 | 변수 | 기본값 | 설명 |
 |------|--------|------|
 | `EMBED_USAGE_FALLBACK_ENABLED` | `true` | 임베딩 사용량은 `llm_usage`에 `embed:<model>`로 채팅과 분리 집계되어 `/llm-usage`에 별도 카드로 표시됩니다(§5.5, §10). 임베딩 서버가 응답에 토큰 사용량을 반환하지 않으면(로컬 llama-server 등 흔함) 입력 텍스트 길이 근사(chars/4)로 대체 기록합니다. `false`로 설정하면 근사 대신 `0`을 기록합니다. 근사 경로 진입 시 서버 로그에 경고가 **최초 1회만** 출력됩니다 |
+| `EMBED_MAX_CHUNK_CHARS` | `0` (비활성) | 청크 1개의 **문자 수 하드 상한**. 임베딩 서버가 `input (N tokens) is too large ... (current batch size: 512)`처럼 배치/토큰 한계로 청크를 거부할 때 사용합니다. 이 값을 넘는 청크는 (의미 단위 청킹이 끝난 뒤) 줄 경계에서 **강제 재분할**되어 서버 한계를 넘지 않도록 보장합니다. 한국어·코드는 대략 1토큰/문자이므로 512토큰 배치라면 `~450` 정도가 안전. **먼저 서버 배치를 키우는 것을 권장**(아래 §8 참조)하고, 이건 최후의 안전장치로 사용하세요 |
 
 #### LLM 응답 파라미터
 
@@ -1242,9 +1255,15 @@ COST_FIRST 흐름:
 `MemoryService`는 **SQLite**(`DATA_DIR/memory.db`)에 대화 이력을 영속합니다.
 
 - WAL 모드로 읽기/쓰기 경합 최소화. SQLite pool size는 반드시 1 유지
-- 스레드별 최근 50턴 이내에서 `LLM_MAX_TOKENS × 0.75`까지 LLM 컨텍스트 주입
+- 스레드별 최근 `MEMORY_FETCH_LIMIT_TURNS`(기본 50)턴 이내에서 `LLM_MAX_TOKENS × 0.75`까지 LLM 컨텍스트 주입
 - `/chat/{threadId}` 재진입 시 모든 이전 turn을 시간순으로 불러와 메시지 버블 복원
 - `MemoryRepository` 인터페이스로 추상화 — Redis 등으로 교체 시 구현체만 추가
+
+**요약 캐시 (`ConversationSummarizerService`)**: 사용자가 다음 질문을 입력하는 동안 백그라운드에서 스레드 대화 이력을 LOCAL 프로바이더로 미리 요약해 캐싱합니다. 이후 실제 질의 시 원문 전체 대신 "요약 + 최근 N턴 원문"을 컨텍스트로 사용해 토큰을 절약합니다.
+
+- 캐시 미스이거나 LOCAL 프로바이더가 없으면 자동으로 원문 폴백 경로(`MemoryService.getHistory()`) 사용 — best-effort, 실패해도 채팅이 막히지 않음
+- 요약 경로와 폴백 경로는 **동일한 문자 예산**을 지키도록 통일되어 있어(위 참조), 요약 캐시 유무에 따라 LLM에 전달되는 컨텍스트 양이 달라지지 않음
+- 캐시 크기·요약 길이·최근 턴 수·재계산 억제 창은 `MEMORY_FETCH_LIMIT_TURNS`/`SUMMARY_*` 환경변수로 조정 (위 "대화 메모리 / 요약 캐시 튜닝" 참조)
 
 `conversation_turns` 테이블 확장 컬럼 (앱 시작 시 `ALTER TABLE`로 자동 마이그레이션):
 
@@ -1420,6 +1439,37 @@ docker-compose logs app
 - `INDEXING_MAX_FILES` / `INDEXING_MAX_LLM` 값 증가 (CPU·API 쿼터 여유 있는 경우)
 - 키워드 추출(`KeywordMetadataEnricher`)이 청크당 LLM 호출 → 문서 수 많을수록 시간 증가 (의도된 동작)
 - DOCX 파일은 LLM 포맷 교정(섹션당 1회 LLM 호출)이 추가되어 PDF/PPTX보다 인덱싱 시간이 더 길 수 있습니다. 교정 실패 시 원본 MD로 fallback됩니다.
+
+---
+
+### 이미지 썸네일 링크가 클릭 시 "연결할 수 없음"으로 뜸
+
+`GET /api/v1/images/{docId}/{filename}`은 경로 순회(path traversal) 방지를 위해 `docId`/`filename`에 `..`가 포함되면 400을 반환합니다. **PPTX에서 추출된 이미지 파일명이 `img1..png`처럼 점이 두 개 겹친 형태**라면 아래 원인입니다.
+
+| 원인 | 조치 |
+|------|------|
+| Apache POI `PictureType.extension`이 이미 `.png`처럼 점을 포함하는데, 파일명 조립 시 점을 한 번 더 붙여 `img1..png`가 됨 (해당 버전 이전 `PptxImageExtractor` 버그) | 코드는 이미 수정됨. **이 버그가 있던 버전으로 인덱싱된 PPTX 문서**는 `data/images/{docId}/`에 이미 잘못된 파일명으로 저장돼 있고, 벡터 스토어에 저장된 청크 내용에도 잘못된 경로 문자열이 그대로 박혀 있으므로 **파일만 이름 변경해서는 해결되지 않습니다** — 해당 문서를 삭제 후 재업로드하거나 `/documents`의 Sync Folder로 재인덱싱하세요 |
+| 확인 방법 | `find data/images -name "*..*"`로 이중 점 파일명이 있는지 검사 |
+
+---
+
+### 임베딩 서버 배치/토큰 초과 (`input (N tokens) is too large to process`)
+
+인덱싱 중 임베딩 서버(llama-server 등)에서 아래 같은 에러가 나면, **한 청크의 토큰 수가 서버의 물리 배치(physical batch) 한계를 초과**한 것입니다.
+
+```
+srv send_error: ... error: input (706 tokens) is too large to process. increase the physical batch size (current batch size: 512)
+```
+
+근본 원인: `CHUNK_SIZE`는 **문자 수**인데 임베딩 한계는 **토큰 수**입니다. 한국어·마크다운·코드는 대략 1토큰/문자에 가까워서 `CHUNK_SIZE=700`이면 700자 청크가 ~700토큰이 되어 512 배치를 넘습니다. 표·코드블록을 통째로 유지하거나 작은 청크가 병합되면 청크가 더 커질 수도 있습니다.
+
+| 조치 | 방법 | 비고 |
+|------|------|------|
+| **① 임베딩 서버 배치 확대 (1순위 권장)** | llama-server 임베딩 인스턴스를 `-b 2048 -ub 2048`(또는 그 이상)로 재기동 | bge-m3는 8192 토큰까지 지원하므로 안전. 청크 품질 손실 없이 에러 제거. `-ub`(=`--ubatch-size`)가 핵심 |
+| **② 청크 하드 상한 설정 (앱 측 안전장치)** | `.env`에 `EMBED_MAX_CHUNK_CHARS=450`(512토큰 배치 기준) 설정 후 재인덱싱 | 이 값을 넘는 청크는 줄 경계에서 강제 재분할됨. 서버를 못 건드릴 때 사용. 값이 작을수록 청크가 잘게 나뉘어 검색 문맥이 짧아지는 트레이드오프 |
+| **③ CHUNK_SIZE 축소** | `CHUNK_SIZE`를 700 → 450~500으로 | ②와 목적은 같지만 의미 단위 청킹 자체가 작아짐. ②가 더 정밀(소프트 목표 크기와 하드 상한을 분리) |
+
+> ①로 근본 해결이 안 되는 폐쇄망·고정 서버 환경에서는 ②를 상한(guardrail)으로 두는 조합을 권장합니다. `EMBED_MAX_CHUNK_CHARS`는 의미 단위 청킹(헤딩 재삽입·작은 청크 병합 포함)이 모두 끝난 **마지막 단계**에서 적용되므로 어떤 청크도 이 값을 넘지 않는 것이 보장됩니다.
 
 ---
 

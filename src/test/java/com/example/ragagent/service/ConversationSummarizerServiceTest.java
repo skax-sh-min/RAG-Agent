@@ -1,5 +1,6 @@
 package com.example.ragagent.service;
 
+import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.exception.LlmProviderExhaustedException;
 import com.example.ragagent.llm.BackgroundUsage;
 import com.example.ragagent.llm.LlmRouter;
@@ -52,7 +53,12 @@ class ConversationSummarizerServiceTest {
         messageSource = mock(MessageSource.class);
         when(messageSource.getMessage(eq("prompt.summary.system"), any(), any(Locale.class)))
                 .thenReturn("system prompt");
-        service = new ConversationSummarizerService(memoryService, llmRouter, messageSource);
+        // Generous budget so buildContext() keeps the summary + recent turns intact by default;
+        // the budget-trim behavior is exercised explicitly in its own test.
+        when(memoryService.maxConversationChars()).thenReturn(6_000);
+        AppProperties props = mock(AppProperties.class);
+        when(props.summarySafe()).thenReturn(new AppProperties.SummaryConfig(3, 2_000, 2, 15));
+        service = new ConversationSummarizerService(memoryService, llmRouter, messageSource, props);
     }
 
     private static MemoryRepository.Turn turn(long id, String q, String a, String feedback) {
@@ -175,6 +181,41 @@ class ConversationSummarizerServiceTest {
         service.precompute(UID, TID, Locale.KOREAN);
 
         verify(llmRouter, times(2)).executeWithTracking(any(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("buildContext — 요약+최근턴 조합도 폴백 경로와 동일한 문자 예산을 넘지 않는다 (§6.11)")
+    void buildContext_respectsSameCharBudgetAsFallback() {
+        when(memoryService.maxConversationChars()).thenReturn(200);
+        String longAnswer = "가".repeat(300);
+        when(memoryService.getTurns(UID, TID)).thenReturn(List.of(
+                turn(1, "질문1", longAnswer, null),
+                turn(2, "질문2", longAnswer, null)));
+        when(llmRouter.executeWithTracking(eq(TaskType.LIGHT_TEXT), eq(RoutingMode.LOCAL_ONLY),
+                eq(BackgroundUsage.SUMMARY_PREFIX), any()))
+                .thenReturn("짧은 요약");
+
+        service.precompute(UID, TID, Locale.KOREAN);
+        String context = service.buildContext(UID, TID);
+
+        assertThat(context).isNotNull();
+        assertThat(context.length()).isLessThanOrEqualTo(200);
+        assertThat(context).contains("짧은 요약");           // summary is always preserved
+        assertThat(context).doesNotContain(longAnswer);      // oversized recent turns dropped, not overflowed
+    }
+
+    @Test
+    @DisplayName("buildContext — 요약만으로 예산 초과 시에도 예산 이내로 하드 캡 (아주 작은 LLM_MAX_TOKENS)")
+    void buildContext_summaryAloneExceedsBudget_isHardCapped() {
+        when(memoryService.maxConversationChars()).thenReturn(50);
+        when(memoryService.getTurns(UID, TID)).thenReturn(List.of(turn(1, "질문", "답변", null)));
+        when(llmRouter.executeWithTracking(any(), any(), any(), any())).thenReturn("요".repeat(500));
+
+        service.precompute(UID, TID, Locale.KOREAN);
+        String context = service.buildContext(UID, TID);
+
+        assertThat(context).isNotNull();
+        assertThat(context.length()).isLessThanOrEqualTo(50);
     }
 
     @Test

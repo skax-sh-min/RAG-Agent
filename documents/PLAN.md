@@ -31,17 +31,6 @@
 | `LOGGING_LEVEL`, `LLM_TEMPERATURE`, `LLM_MAX_TOKENS`, `SPRING_SECURITY_LOGGING_LEVEL` 환경변수 외부화 | `.env.example` + `OPERATOR_MANUAL.md` 반영 |
 | 의존성 버전 최신 stable로 일괄 업데이트 | Spring Boot 3.5.15, Spring AI 1.1.8 (2026-07-05 재확인 — 계속 업데이트되는 값이므로 정확한 버전은 pom.xml 참조) |
 
-### ✅ 보안 결함 수정 완료
-
-| 항목 | 수정 내용 |
-|---|---|
-| B-27 — TOCTOU 회원가입 | `DataIntegrityViolationException` catch로 중복 이메일 경쟁 조건 처리 |
-| B-28 — 세션 고정 | 회원가입 성공 시 `old.invalidate()` → `getSession(true)` 패턴으로 세션 재발급 |
-| B-29 — BCrypt 72바이트 절삭 | `PASSWORD_PATTERN` 상한 `.{10,72}` 추가로 73자+ 비밀번호 등록 차단 |
-| B-30 — 헬스체크 DB 조회 | `NoAuthAutoLoginFilter.isPassThrough()`에 `/api/v1/health`, `/actuator/**` 추가 |
-| B-31 — ChromaDB 볼륨 경로 | `docker-compose.yml` 볼륨 마운트 `chroma_data:/data` 로 수정 (persist_path 일치) |
-| 회귀 테스트 | `AuthControllerTest` 12개, `NoAuthAutoLoginFilterTest` 5개, `ChatResponseNullSafetyTest` +4개 추가 |
-
 ### 아직 미착수 (다음 목표)
 
 - ~~**Phase 2**: 모바일 UI (Offcanvas, sticky 입력창, PWA)~~ → ✅ 완료 (2026-06-27, 오프캔버스 드로어·dvh sticky 입력·PWA(manifest/SW/오프라인)·iOS 16px·접근성)
@@ -51,7 +40,9 @@
 - ~~**Phase 3 — LLM 사용량 비활성 프로바이더 조건부 표시**~~ → ✅ 완료 (2026-07-04, §6.6 — `LlmUsageRepository.usedProviders()` + `OperationsController.visibleChatProviders()` 공통 필터, 미설정+이력 없는 프로바이더는 카드·표·차트에서 숨김, 이력 있으면 계속 표시)
 - ~~**Phase 3 — LLM 사용량 orphan 프로바이더 기록 삭제**~~ → ✅ 완료 (2026-07-04, §6.7 — config에 전혀 없는 provider_name(또는 옛 `embed:*`)을 ORPHAN 카드로 노출 + `DELETE /admin/llm-usage/{provider}`로 관리자만 삭제, 활성 provider·현재 임베딩 모델은 서버측에서 삭제 거부)
 - ~~**Phase 3 — LLM 사용량 백그라운드(비-채팅) 사용량 분리 기록**~~ → ✅ 완료 (2026-07-05, §6.10 — `BackgroundUsage` 접두사(`summary:`/`keyword:`/`mdcorrect:`/`txt2md:`/`title:`)로 대화 요약·인덱싱 키워드 추출·문서 서식 교정·TXT→MD 변환·대화 제목 생성을 채팅 사용량과 분리 기록, `title:`은 이번에 처음 추적 대상 편입, `/llm-usage`에 type=BACKGROUND 카드 신설)
-- **Phase 3 잔여** (미착수, 우선순위 순 — §6.11·6.12·6.13·6.14 상세): 대화 컨텍스트 예산 정합성/설정 외부화(§6.11, 쉬움) · 사용자별 LLM 토큰 쿼터(§6.12) · 사용자별 스토리지 쿼터(§6.13) · LLM 사용량 핵심 채팅 경로 추적 확장(§6.14, 설계 필요)
+- ~~**Phase 3 — LLM 사용량 핵심 채팅 경로 추적 확장**~~ → ✅ 완료 (2026-07-06, §6.14 — Direct/RAG 채팅 시 `/llm-usage`에 `embed:*`만 증가하고 실제 채팅 사용량이 전혀 안 잡히던 버그 재현·수정. `AnswerService`/`DirectAnswerService`/`ClassifierService`/`RerankerService`/`VisionDescriptionService`/`ImageTypeClassifier`/`RetrievalService`의 `MultiQueryExpander` 7곳 모두 `LlmRouter`를 거치도록 정리 — `executeWithTracking()`(블로킹, 실사용량) 또는 `recordApproxUsage()`(스트리밍, chars/4 근사) 또는 신규 `TrackingChatModel` 데코레이터(프레임워크 내부 호출용))
+- ~~**대화 컨텍스트 예산 정합성 + 설정 외부화**~~ → ✅ 완료 (2026-07-07, §6.11 — 요약 경로/폴백 경로가 동일한 문자 예산(`MemoryService.maxConversationChars()`)을 지키도록 통일 + `FETCH_LIMIT`·요약 캐시 4개 상수를 `app.memory.*`/`app.summary.*`로 외부화)
+- **Phase 3 잔여** (미착수, 우선순위 순 — §6.12·6.13 상세): 사용자별 LLM 토큰 쿼터(§6.12) · 사용자별 스토리지 쿼터(§6.13)
 - **Phase 4** (조건부, 미착수): OAuth2 소셜 로그인(§7.1) · PostgreSQL 마이그레이션(§7.2) · 관리자 페이지 확장(§7.3, ※ `/admin` 기본 골격은 Phase 5.8에서 이미 존재)
 - ~~**Phase 5**: sqlite-vec 선택적 연동~~ → ✅ 완료 (Step 5.1~5.8, `app.vectorstore.type=chroma|sqlite-vec`)
 - ~~**Phase 5 추가**: Step 5.9 태그 기반 검색 스코프 + Step 5.10 sqlite-vec 운영/벡터 DB 분리~~ → ✅ 완료 (2026-07-01, Step 5.9 태그 필터/제안/복원 + Step 5.10 `SQLITE_VEC_DB_PATH` 분리 스위치). vec0 라이브 부팅은 운영 인수
@@ -289,7 +280,7 @@ SQLite `audit_log` 테이블 대신 Logback `SizeAndTimeBasedRollingPolicy`로 �
 
 ---
 
-### 6.11 대화 컨텍스트 예산 정합성 + 설정 외부화 🔵 미착수 (2026-07-05 검토) — 다음 우선순위 1순위
+### 6.11 대화 컨텍스트 예산 정합성 + 설정 외부화 ✅ 완료 (2026-07-07)
 
 > **현재 코드 확인 (2026-07-05)**: §6.9(`ConversationSummarizerService`) 도입 후 이전 대화를 프롬프트에 넣는 경로가 두 갈래로 나뉘었는데, 문자 예산 체크가 한쪽에만 있다 — `MemoryService.getHistory()`(폴백 경로)는 `max(1000, LLM_MAX_TOKENS × 0.75)` 문자 예산을 지키지만, 요약 캐시가 있을 때 쓰는 `ConversationSummarizerService.buildContext()`(요약 ≤2000자 + 최근 원문 2턴)는 이 예산을 전혀 체크하지 않는다. 또한 `FETCH_LIMIT=50`(`SqliteMemoryRepository`), `MAX_CACHED_THREADS=3`·`MAX_SUMMARY_CHARS=2000`·`RECENT_RAW_TURNS=2`·`PRECOMPUTE_TTL_MILLIS=15000`(`ConversationSummarizerService`)가 전부 하드코딩 상수라 `AppProperties`로 조정할 방법이 없다.
 
@@ -305,9 +296,14 @@ SQLite `audit_log` 테이블 대신 Logback `SizeAndTimeBasedRollingPolicy`로 �
 
 **Effort**: 반나절~1일(상한 통일 + 프로퍼티 외부화, 테스트 포함).
 
+**구현 (2026-07-07)**:
+- **예산 통일**: 단일 진실 원천을 위해 `MemoryService.maxConversationChars()`(= `max(1000, LLM_MAX_TOKENS × 0.75)`) getter를 신설하고, `ConversationSummarizerService.buildContext()`가 이 값을 그대로 예산으로 사용하도록 함. 요약 블록은 항상 보존하고, 최근 원문 turn을 폴백 경로(`SqliteMemoryRepository.getHistory()`)와 동일한 "최신 우선 채움" 전략으로 남은 예산 안에서만 채운다(초과 turn은 오버플로 대신 드롭). 요약만으로 예산을 넘는 극단(아주 작은 `LLM_MAX_TOKENS`)에서는 최종 결과를 예산으로 하드 캡 — 두 경로 모두 절대 예산을 넘지 않음이 단위 테스트로 고정됨.
+- **설정 외부화**: `AppProperties`에 `MemoryConfig`(`app.memory.fetch-limit-turns`)·`SummaryConfig`(`app.summary.max-cached-threads`/`max-summary-chars`/`recent-raw-turns`/`precompute-ttl-seconds`) record + `memorySafe()`/`summarySafe()` null 가드(각 필드 ≥1 클램프, 기존 하드코딩과 동일한 50/3/2000/2/15 기본값) 추가. `SqliteMemoryRepository`(생성자에 `AppProperties` 주입)의 `FETCH_LIMIT`와 `ConversationSummarizerService`의 4개 상수를 전부 이 설정에서 읽도록 교체(캐시 LRM 크기가 이제 생성자에서 결정되므로 `summaryCache` 초기화도 생성자로 이동). `application.properties`에 5개 프로퍼티(+환경변수 오버라이드) 추가.
+- **검증**: 전체 461 tests BUILD SUCCESS(회귀 0, +2 신규 예산 일관성 테스트, 5 skip 그대로). `AppPropertiesSafeAccessorTest`가 신규 `memorySafe()`/`summarySafe()`에 대해서도 raw getter 미사용을 자동 강제. CLAUDE.md Null-safe config 컨벤션에 두 접근자 추가.
+
 ---
 
-### 6.12 사용자별 LLM 사용량 쿼터 🔵 미착수 — 다음 우선순위 2순위
+### 6.12 사용자별 LLM 사용량 쿼터 🔵 미착수 — 다음 우선순위 1순위
 
 **현재 코드 확인 (2026-07-04 재확인)**:
 - `llm_usage.user_id` 컬럼 자체는 **이미 존재**한다(`LlmUsageRepository.init()`의 런타임 `ALTER TABLE ... DEFAULT 'anonymous'`, EDIT.md #6에서 발견). 하지만 `record(String provider, long in, long out)`에 `userId` 파라미터가 없고 `getByPeriod/getDaily/usedProviders/deleteByProvider` 등 모든 조회 메서드도 이 컬럼을 참조하지 않아 **모든 행이 영구히 'anonymous'로 고정** — 사실상 죽은 컬럼이다. **실제 `llm_usage`는 여전히 프로바이더 단위 집계**이며, 사용자별 쿼터를 하려면 이 컬럼을 실제로 채우거나(아래 B안) conversation_turns 기반(A안, 권장)으로 별도 집계해야 한다.
@@ -330,7 +326,7 @@ SQLite `audit_log` 테이블 대신 Logback `SizeAndTimeBasedRollingPolicy`로 �
 
 ---
 
-### 6.13 사용자별 스토리지 쿼터 🔵 미착수 (§6.2에서 이관) — 다음 우선순위 3순위
+### 6.13 사용자별 스토리지 쿼터 🔵 미착수 (§6.2에서 이관) — 다음 우선순위 2순위
 
 > **현재 코드 확인 (2026-07-02)**: `storage_used_bytes` 컬럼·쿼터 로직·프로퍼티 모두 없음. §6.2가 "완료"로 표기했으나 **미구현**. 저장은 공유 구조(`DocRegistry.SHARED`, `data/documents/`)라 "사용자별" 쿼터의 의미부터 재정의 필요.
 
@@ -352,18 +348,22 @@ SQLite `audit_log` 테이블 대신 Logback `SizeAndTimeBasedRollingPolicy`로 �
 
 ---
 
-### 6.14 LLM 사용량 — 핵심 채팅 경로 추적 확장 🔵 미착수 (§6.10에서 발견, 설계 필요) — 다음 우선순위 4순위
+### 6.14 LLM 사용량 — 핵심 채팅 경로 추적 확장 ✅ 완료 (2026-07-06)
 
-> **범위 밖으로 남겨둔 발견 (2026-07-05, §6.10 작업 중 발견)**: `/llm-usage`가 백그라운드 사용량(§6.10)까지는 잡지만, 정작 `AnswerService`의 기본(non-streaming) 채팅 답변 경로, `evaluate()`(충분성 평가), `DirectAnswerService`, `ClassifierService`, `RerankerService`, `VisionDescriptionService`, `ImageTypeClassifier`, `RetrievalService`가 쓰는 Spring AI `MultiQueryExpander` 등 **다수의 실사용 채팅 경로가 `LlmRouter`를 아예 거치지 않아 `/llm-usage`에 전혀 잡히지 않는다**. §6.10 작업 범위에서는 사용자 확인 후 의도적으로 제외했다.
+> **배경 (2026-07-05, §6.10 작업 중 발견)**: `/llm-usage`가 백그라운드 사용량(§6.10)까지는 잡지만, `AnswerService`/`DirectAnswerService`/`ClassifierService`/`RerankerService`/`VisionDescriptionService`/`ImageTypeClassifier`/`RetrievalService`의 `MultiQueryExpander`가 `LlmRouter`를 거치지 않는 직접 주입 `ChatClient`(또는 기동 시 1회 COST_FIRST로 고정된 `primaryChatModel`)를 호출해 실제 채팅 사용량이 `/llm-usage`에 전혀 잡히지 않는 문제. 2026-07-06에 사용자가 "Direct/RAG 질문 시 EMBEDDING만 증가한다"고 실사용 중 재현·보고해 1차 착수(핵심 3곳), 곧이어 잔여 4곳도 마저 정리.
 
-**왜**: 이 항목들은 "백그라운드"가 아니라 실제 채팅 응답을 만들어내는 핵심 경로다. 이게 안 잡히면 `/llm-usage`가 보여주는 숫자가 실제 LLM 호출량보다 상당히 적을 수 있다 — 쿼터(§6.12)를 나중에 붙일 때도 같은 누락이 반복된다.
+**1차 (핵심 3곳 — 사용자가 실사용 중 보고한 증상의 직접 원인)**:
+- `ClassifierService`: `ChatClient` 필드 → `LlmRouter` 주입으로 교체, `classifyOnly()`/`execute()` 모두 `executeWithTracking(TaskType.TEXT, RoutingMode.COST_FIRST, ...)`로 라우팅 + 기록.
+- `AnswerService`: `executeBlocking()`/`evaluate()`는 `llmRouter.executeWithTracking(TaskType.TEXT, state.routingMode(), model -> model.call(...))`(실사용량, DUAL 블로킹이 이미 쓰던 패턴과 동일)로 교체. `executeStreamingNormal()`/`executeDualStreaming()`/`progressiveUpgrade()`의 스트리밍 분기는 실제 `ChatResponse`를 못 읽으므로 신규 `LlmRouter.recordApproxUsage(provider, promptText, answerText)`(§6.5 임베딩 chars/4 근사 폴백과 동일 패턴)로 근사 기록. 더 이상 쓰이지 않는 `ChatClient` 필드/생성자 인자 제거.
+- `DirectAnswerService`: `execute()`(블로킹)는 `executeWithTracking()`으로 교체(실사용량), `executeStreaming()`은 `recordApproxUsage()` 추가. `buildClient()`(사용처 없어짐) 삭제, DUAL→COST_FIRST 폴백 로직을 `effectiveRoutingMode()`로 추출(3곳 중복 제거).
+- **실사용 검증**: LM Studio 연동 상태로 Direct 질문 1건 + RAG 질문 1건(재시도 루프 포함, 총 7회 LLM 호출)을 실제 채팅 UI로 전송 → `/api/v1/llm/usage` 응답과 `/llm-usage` 화면에서 `local`(chat) 프로바이더가 오늘 3,468 토큰·7회 호출로 정상 누적됨을 확인(이전엔 `embed:*`만 증가하고 `local`은 고정이었던 버그가 해소됨). 스크린샷으로 `local` 막대가 `embed:*`/`title:local`보다 압도적으로 크게 나타나는 것도 확인.
 
-**추후 착수 시 확인할 것 (설계 미완료, 착수 전 재조사 필요)**:
-1. 이들 각각이 왜 `LlmRouter.route()`/직접 주입 `ChatClient`로 라우팅만 하고 `executeWithTracking()`을 안 쓰는지 원인부터 재확인 — 스트리밍 응답은 `ChatResponse` usage 메타데이터를 못 읽는 구조적 이유가 있어 단순 라벨링보다 구조 변경이 필요할 가능성 높음.
-2. `AnswerService`가 왜 `primaryChatModel`(기동 시 1회 COST_FIRST로 고정)을 직접 주입받는지부터 검토 — 이 고정 자체가 §6.6의 provider 갱신·circuit breaker 갱신을 못 따라가는 별도 문제일 수 있음.
-3. 위 두 가지가 정리되면 §6.10과 동일한 `BackgroundUsage`류 라벨링(또는 정식 chat-provider 이름 그대로) 중 어느 쪽이 맞는지 결정 — 이들은 "채팅"이므로 provider 이름 그대로 잡히는 게 맞을 가능성이 높다(§6.10의 라벨 분리 대상이 아님).
-
-**Effort**: 미산정(설계 선행 필요) — 스트리밍 경로의 구조 변경이 얽혀 있어 §6.11/§6.12/§6.13보다 큰 작업이 될 가능성이 높음.
+**2차 (잔여 4곳 — 같은 날 마저 정리)**:
+- `RerankerService`/`ImageTypeClassifier`: 각각 `ChatClient` 직접 주입 / `llmRouter.route()`로 모델만 얻어 수동 `ChatClient.builder()` 호출하던 것을 `LlmRouter.executeWithTracking()`(각각 TaskType.TEXT/LIGHT_BOTH, COST_FIRST)로 교체.
+- `VisionDescriptionService`: 동일하게 `executeWithTracking(TaskType.VISION, COST_FIRST, ...)`로 교체 — 멀티모달 프롬프트는 `ChatClient`의 `.user(u -> u.media(...))` 대신 `UserMessage.builder().text(...).media(new Media(mimeType, resource)).build()` + `new Prompt(userMessage)`로 직접 구성.
+- `RetrievalService`의 Spring AI `MultiQueryExpander`: 프레임워크 유틸리티 클래스라 내부에서 자체 `ChatClient`를 구성해 호출 — `executeWithTracking()`으로 가로챌 수 없어, `TrackingEmbeddingModel`과 동일한 데코레이터 패턴으로 신규 `TrackingChatModel`(`llm` 패키지, `call()`만 오버라이드해 실사용량 기록·`stream()`/`getDefaultOptions()`는 delegate)을 추가하고, `MultiQueryExpander.builder().chatClientBuilder(ChatClient.builder(trackedModel))`에 주입. 생성자를 `ChatModel chatModel` 직접 주입에서 `LlmRouter`+`LlmUsageRepository`로 교체하고, 신규 `LlmRouter.routeProviderWithFallback(List<TaskType>, RoutingMode)`(TEXT→LIGHT_TEXT 순, `LlmConfig.primaryChatModel()`과 동일한 폴백 순서)로 provider를 1회 resolve.
+- 테스트: `AnswerServiceTest`/`ClassifierServiceTest`/`DirectAnswerServiceTest`/`ChatResponseNullSafetyTest`/`RerankerServiceTest`/`RetrievalService*Test`(3개) 갱신 + 신규 `VisionDescriptionServiceTest`/`ImageTypeClassifierTest`/`TrackingChatModelTest`(기존 테스트 전무했던 2곳 포함) — 전체 466 tests BUILD SUCCESS(회귀 0, +5 skip 그대로).
+- 실사용 브라우저 검증은 생략(reranker/image-description은 opt-in 플래그, MultiQueryExpander는 이미 검증된 것과 동일한 `executeWithTracking`/데코레이터 메커니즘 재사용이라 단위 테스트로 충분하다고 판단).
 
 ---
 

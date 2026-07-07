@@ -22,11 +22,22 @@ public class ChunkSplitter {
 
     public List<Document> splitDocuments(List<Document> docs, String filename,
                                           int chunkSize, int overlap, int minChunkSize) {
+        return splitDocuments(docs, filename, chunkSize, overlap, minChunkSize, 0);
+    }
+
+    /**
+     * @param maxChunkChars hard per-chunk character ceiling (0 = disabled). Applied as a final
+     *                      safety pass after all semantic splitting/merging so no emitted chunk
+     *                      exceeds the embedding server's batch/token limit — see
+     *                      {@code app.embedding.max-chunk-chars}.
+     */
+    public List<Document> splitDocuments(List<Document> docs, String filename,
+                                          int chunkSize, int overlap, int minChunkSize, int maxChunkChars) {
         String lower = filename.toLowerCase();
 
         if (lower.endsWith(".pptx")) {
             log.debug("[SPLIT] {} → 슬라이드 유지 (분할 없음), {}개", filename, docs.size());
-            return new ArrayList<>(docs);
+            return enforceMaxChars(new ArrayList<>(docs), maxChunkChars, filename);
         }
 
         // .txt is converted to structured MD before this point, so it splits section-wise too.
@@ -40,12 +51,13 @@ public class ChunkSplitter {
                 } else {
                     log.debug("[SPLIT] 섹션 {}자 > chunkSize={}, 슬라이딩 윈도우 적용",
                             doc.getText().length(), chunkSize);
-                    result.addAll(slidingWindow(doc, chunkSize, overlap, minChunkSize));
+                    List<Document> pieces = slidingWindow(doc, chunkSize, overlap, minChunkSize);
+                    result.addAll(reinjectHeadingForSplitPieces(doc.getText(), pieces));
                 }
             }
             log.debug("[SPLIT] {} → 섹션 분할 전략, {}섹션 → 병합 {}섹션 → {}청크",
                     filename, docs.size(), sectionMerged.size(), result.size());
-            return result;
+            return enforceMaxChars(result, maxChunkChars, filename);
         }
 
         List<Document> result = new ArrayList<>();
@@ -53,7 +65,68 @@ public class ChunkSplitter {
             result.addAll(slidingWindow(doc, chunkSize, overlap, minChunkSize));
         }
         log.debug("[SPLIT] {} → 슬라이딩 윈도우 전략, {}섹션 → {}청크", filename, docs.size(), result.size());
-        return result;
+        return enforceMaxChars(result, maxChunkChars, filename);
+    }
+
+    /**
+     * Final safety net: guarantees no emitted chunk exceeds {@code maxChars} characters, force-
+     * splitting oversized ones at line boundaries (and hard-cutting any single line longer than the
+     * limit). Runs after heading reinjection / tiny-chunk merges — all of which can push a chunk
+     * past the target size — so it is the last word on chunk size. No-op when {@code maxChars <= 0}.
+     */
+    List<Document> enforceMaxChars(List<Document> docs, int maxChars, String filename) {
+        if (maxChars <= 0) return docs;
+
+        List<Document> out = new ArrayList<>(docs.size());
+        int split = 0;
+        for (Document doc : docs) {
+            String text = doc.getText();
+            if (text == null || text.length() <= maxChars) {
+                out.add(doc);
+                continue;
+            }
+            split++;
+            for (String piece : hardSplitByLines(text, maxChars)) {
+                out.add(new Document(piece, new HashMap<>(doc.getMetadata())));
+            }
+        }
+        if (split > 0) {
+            log.debug("[SPLIT] {} → 임베딩 한계({}자) 초과 청크 {}개 강제 재분할 → 총 {}청크",
+                    filename, maxChars, split, out.size());
+        }
+        return out;
+    }
+
+    /** Greedily packs whole lines up to {@code maxChars}; a single over-long line is char-cut. */
+    List<String> hardSplitByLines(String text, int maxChars) {
+        List<String> pieces = new ArrayList<>();
+        StringBuilder cur = new StringBuilder();
+        for (String line : text.split("\n", -1)) {
+            if (line.length() > maxChars) {
+                if (cur.length() > 0) {
+                    addIfNotBlank(pieces, cur.toString());
+                    cur.setLength(0);
+                }
+                for (int i = 0; i < line.length(); i += maxChars) {
+                    addIfNotBlank(pieces, line.substring(i, Math.min(i + maxChars, line.length())));
+                }
+                continue;
+            }
+            int addition = (cur.length() == 0 ? 0 : 1) + line.length(); // +1 for the joining '\n'
+            if (cur.length() > 0 && cur.length() + addition > maxChars) {
+                addIfNotBlank(pieces, cur.toString());
+                cur.setLength(0);
+            }
+            if (cur.length() > 0) cur.append('\n');
+            cur.append(line);
+        }
+        if (cur.length() > 0) addIfNotBlank(pieces, cur.toString());
+        return pieces;
+    }
+
+    private static void addIfNotBlank(List<String> pieces, String s) {
+        String stripped = s.strip();
+        if (!stripped.isBlank()) pieces.add(stripped);
     }
 
     List<Document> mergeShortSections(List<Document> docs, int chunkSize) {
@@ -116,25 +189,65 @@ public class ChunkSplitter {
     }
 
     int sectionHeadingLevel(Document doc) {
-        String text = doc.getText();
-        if (text == null || text.isBlank()) return 0;
+        HeadingInfo heading = extractLeadingHeading(doc.getText());
+        return heading == null ? 0 : heading.marker().length();
+    }
+
+    /**
+     * When a section's markdown heading (e.g. {@code "## 소제목"}) survives only in the first
+     * sliding-window piece, later pieces lose all indication of which section they belong to.
+     * Re-injects the same heading — suffixed with its piece number, e.g. {@code "## 소제목 (2)"} —
+     * at the top of every piece after the first, so each embedded chunk is self-describing.
+     * No-op when the section has no leading heading, or when it wasn't split into multiple pieces.
+     */
+    List<Document> reinjectHeadingForSplitPieces(String originalSectionText, List<Document> pieces) {
+        if (pieces.size() <= 1) return pieces;
+
+        HeadingInfo heading = extractLeadingHeading(originalSectionText);
+        if (heading == null) return pieces;
+
+        List<Document> result = new ArrayList<>(pieces.size());
+        for (int i = 0; i < pieces.size(); i++) {
+            Document piece = pieces.get(i);
+            if (i == 0) {
+                result.add(piece);
+                continue;
+            }
+            String marker = heading.marker() + " " + heading.text() + " (" + i + ")";
+            result.add(new Document(marker + "\n\n" + piece.getText(), new HashMap<>(piece.getMetadata())));
+        }
+        return result;
+    }
+
+    /**
+     * Extracts the {@code #}-marker and text of the section's leading heading line, if any.
+     * Only a valid ATX heading (1–6 {@code #} followed by a space) at the very start of the
+     * section counts. Anything else — a code fence ({@code ```}), a table row ({@code |}),
+     * {@code #######}+ over-long markers, or a bare {@code #comment} without a space — yields
+     * {@code null}, so heading reinjection never fires on code comments or table fragments.
+     */
+    HeadingInfo extractLeadingHeading(String text) {
+        if (text == null || text.isBlank()) return null;
 
         String[] lines = text.split("\\n", -1);
         for (String line : lines) {
             String trimmed = line.stripLeading();
             if (trimmed.isBlank()) continue;
-            if (!trimmed.startsWith("#")) return 0;
+            if (!trimmed.startsWith("#")) return null; // fences (```), table rows (|), body text
 
             int level = 0;
             while (level < trimmed.length() && trimmed.charAt(level) == '#') {
                 level++;
             }
-            if (level > 0 && level < trimmed.length() && trimmed.charAt(level) == ' ') {
-                return level;
+            if (level >= 1 && level <= 6 && level < trimmed.length() && trimmed.charAt(level) == ' ') {
+                return new HeadingInfo("#".repeat(level), trimmed.substring(level + 1).strip());
             }
-            return 0;
+            return null;
         }
-        return 0;
+        return null;
+    }
+
+    record HeadingInfo(String marker, String text) {
     }
 
     List<Document> slidingWindow(Document doc, int chunkSize, int overlap, int minChunkSize) {
@@ -161,7 +274,7 @@ public class ChunkSplitter {
             }
             String chunk = text.substring(start, end).strip();
             if (!chunk.isBlank()) {
-                rawChunks.add(chunk);
+                rawChunks.add(reopenTruncatedBlock(text, start, end, chunk));
             }
             if (end >= text.length()) break;
             start = Math.max(start + 1, end - overlap);
@@ -171,6 +284,51 @@ public class ChunkSplitter {
             result.add(new Document(merged, new HashMap<>(doc.getMetadata())));
         }
         return result;
+    }
+
+    /**
+     * When a sliding-window boundary falls inside a table or fenced code block too large to keep
+     * whole (see {@link #adjustEndForCodeBlock}/{@link #adjustEndForTableBlock}, which only snap
+     * boundaries when doing so is cheap), the piece starting at {@code start} continues mid-block
+     * with no header row / opening fence — it reads as a headerless data row or a bare code
+     * fragment with no language context. Detects that case and re-wraps the piece so it is
+     * self-contained: table pieces get the original header+separator row prepended; code pieces
+     * get the original opening fence line prepended, plus a closing fence appended if the block
+     * doesn't close within this piece. No-op when {@code start} isn't a continuation of either.
+     */
+    String reopenTruncatedBlock(String fullText, int start, int end, String chunk) {
+        Range codeRange = findFencedCodeRangeContaining(fullText, start + 1);
+        if (codeRange != null && codeRange.start() < start) {
+            return reopenCodeFence(fullText, codeRange, end, chunk);
+        }
+        Range tableRange = findTableRangeContaining(fullText, start + 1);
+        if (tableRange != null && tableRange.start() < start) {
+            return reinjectTableHeader(fullText, tableRange, chunk);
+        }
+        return chunk;
+    }
+
+    String reopenCodeFence(String fullText, Range codeRange, int chunkEnd, String chunk) {
+        int fenceLineEnd = fullText.indexOf('\n', codeRange.start());
+        if (fenceLineEnd == -1) fenceLineEnd = fullText.length();
+        String openingFenceLine = fullText.substring(codeRange.start(), fenceLineEnd).strip();
+
+        StringBuilder sb = new StringBuilder(openingFenceLine).append('\n').append(chunk);
+        if (chunkEnd < codeRange.end()) {
+            sb.append("\n```"); // block doesn't close within this piece — close it so it stays valid
+        }
+        return sb.toString();
+    }
+
+    String reinjectTableHeader(String fullText, Range tableRange, String chunk) {
+        int headerLineEnd = findLineEndExclusive(fullText, tableRange.start());
+        String headerBlock = fullText.substring(tableRange.start(), headerLineEnd);
+        if (isTableLine(fullText, headerLineEnd)) {
+            int sepLineEnd = findLineEndExclusive(fullText, headerLineEnd);
+            headerBlock += fullText.substring(headerLineEnd, sepLineEnd);
+        }
+        headerBlock = headerBlock.stripTrailing();
+        return headerBlock.isBlank() ? chunk : headerBlock + "\n" + chunk;
     }
 
     List<String> mergeTinyChunks(List<String> chunks, int minLength) {

@@ -10,6 +10,7 @@ import org.springframework.web.client.HttpClientErrorException;
 
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
@@ -26,6 +27,17 @@ public class LlmRouter {
     private final CircuitBreaker circuitBreaker;
     private final RoutingMode defaultMode;
     private final double progressiveThreshold;
+
+    /**
+     * Providers known (for the life of this process) to lack image-input support
+     * (missing mmproj, text-only model, ...). Populated on first such failure so
+     * later VISION/LIGHT_BOTH calls skip the doomed HTTP round-trip instead of
+     * repeatedly failing — this is deliberately NOT routed through CircuitBreaker,
+     * since a provider name is shared across task types and blocking it there would
+     * also stall unrelated TEXT/LIGHT_TEXT calls (e.g. ANSWER/CLASSIFIER) that the
+     * same provider can still serve fine.
+     */
+    private final Set<String> visionUnsupportedProviders = ConcurrentHashMap.newKeySet();
 
     public LlmRouter(List<LlmProvider> providers, LlmUsageRepository usageRepo,
                      CircuitBreaker circuitBreaker, RoutingMode defaultMode,
@@ -50,6 +62,23 @@ public class LlmRouter {
     /** 라우팅 모드에 맞는 첫 번째 사용 가능 ChatModel 반환. */
     public ChatModel route(TaskType taskType, RoutingMode mode) {
         return routeProvider(taskType, mode).chatModel();
+    }
+
+    /**
+     * Tries each {@link TaskType} in order and returns the first provider found — for singleton
+     * default-model resolution (e.g. {@code LlmConfig.primaryChatModel()}, the LLM behind
+     * {@code MultiQueryExpander}) where a plain {@link #routeProvider} would fail on a
+     * LIGHT_BOTH-only (local, no cloud key) setup that doesn't register a TEXT/BOTH provider.
+     */
+    public LlmProvider routeProviderWithFallback(List<TaskType> taskTypeOrder, RoutingMode mode) {
+        for (TaskType t : taskTypeOrder) {
+            try {
+                return routeProvider(t, mode);
+            } catch (LlmProviderExhaustedException ignored) {
+                // try next
+            }
+        }
+        throw new LlmProviderExhaustedException("No provider available for any of: " + taskTypeOrder);
     }
 
     /** 실행 + 토큰 기록 + Circuit Breaker 자동 전환. */
@@ -138,6 +167,22 @@ public class LlmRouter {
         return new DualProviders(local.name(), external.name());
     }
 
+    /**
+     * Records approximate usage (chars/4, mirrors {@code TrackingEmbeddingModel}'s embedding
+     * fallback) for calls whose real token count isn't available — real-time SSE token streaming
+     * reads only content deltas, never a {@link ChatResponse} with usage metadata, and reading
+     * one would mean buffering the full response first and breaking the token-by-token UX.
+     * No-op when {@code answerText} is blank (failed/empty call — nothing was actually served).
+     */
+    public void recordApproxUsage(String providerName, String promptText, String answerText) {
+        if (answerText == null || answerText.isBlank()) return;
+        usageRepo.record(providerName, approxTokens(promptText), approxTokens(answerText));
+    }
+
+    private static long approxTokens(String text) {
+        return text == null ? 0 : text.length() / 4;
+    }
+
     public boolean hasLocalProvider() {
         return providers.stream()
                 .anyMatch(p -> p.role() == LOCAL && !circuitBreaker.isBlocked(p.name()));
@@ -167,17 +212,23 @@ public class LlmRouter {
     Optional<LlmProvider> findFirst(TaskType taskType,
                                     List<ProviderRole> roleOrder,
                                     Set<String> excluded) {
+        boolean imageTask = isImageTask(taskType);
         for (ProviderRole role : roleOrder) {
             Optional<LlmProvider> p = providers.stream()
                     .filter(x -> x.role() == role
                             && x.supports(taskType)
                             && x.hasValidApiKey()
                             && !circuitBreaker.isBlocked(x.name())
-                            && !excluded.contains(x.name()))
+                            && !excluded.contains(x.name())
+                            && !(imageTask && visionUnsupportedProviders.contains(x.name())))
                     .findFirst();
             if (p.isPresent()) return p;
         }
         return Optional.empty();
+    }
+
+    private static boolean isImageTask(TaskType taskType) {
+        return taskType == TaskType.VISION || taskType == TaskType.LIGHT_BOTH;
     }
 
     private String executeWithTracking(TaskType taskType, List<ProviderRole> roleOrder, String usageLabelPrefix,
@@ -207,7 +258,18 @@ public class LlmRouter {
                         provider.name());
                 throw e;
             }
-            circuitBreaker.block(provider.name(), "30");
+            if (isVisionUnsupported(e)) {
+                // Model lacks mmproj / image-input support — a request-shape limitation, not a
+                // provider outage. Blocking here (like any other failure) would also stall
+                // unrelated TEXT/LIGHT_TEXT tasks sharing this provider name until the block
+                // expires. Remember it instead so future VISION/LIGHT_BOTH calls skip this
+                // provider without even attempting the doomed call.
+                visionUnsupportedProviders.add(provider.name());
+                log.warn("Provider [{}] does not support image input (mmproj missing) — "
+                        + "skipping image tasks for this provider, NOT blocking circuit breaker", provider.name());
+            } else {
+                circuitBreaker.block(provider.name(), "30");
+            }
             log.warn("Provider [{}] threw {}: {}, trying next",
                     provider.name(), e.getClass().getSimpleName(), e.getMessage());
             return executeWithTracking(taskType, roleOrder, usageLabelPrefix, call, tried);
@@ -222,6 +284,21 @@ public class LlmRouter {
                     || cur instanceof java.net.SocketTimeoutException
                     || cur instanceof java.util.concurrent.TimeoutException) {
                 return true;
+            }
+            cur = cur.getCause();
+        }
+        return false;
+    }
+
+    private static boolean isVisionUnsupported(Throwable t) {
+        Throwable cur = t;
+        while (cur != null) {
+            String msg = cur.getMessage();
+            if (msg != null) {
+                String lowered = msg.toLowerCase();
+                if (lowered.contains("image input is not supported") || lowered.contains("mmproj")) {
+                    return true;
+                }
             }
             cur = cur.getCause();
         }

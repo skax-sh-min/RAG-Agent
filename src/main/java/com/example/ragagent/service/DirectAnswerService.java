@@ -9,6 +9,9 @@ import com.example.ragagent.security.PromptInjectionGuard;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.messages.SystemMessage;
+import org.springframework.ai.chat.messages.UserMessage;
+import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.openai.api.OpenAiApi;
 import org.springframework.context.MessageSource;
 
@@ -39,13 +42,10 @@ public class DirectAnswerService {
                 state.routingMode(), state.conversationHistory().length());
         String userPrompt = buildUserPrompt(state);
 
-        ChatClient client = buildClient(state.routingMode());
-        StringBuilder buf = new StringBuilder();
-        client.prompt()
-                .system(systemPrompt)
-                .user(userPrompt)
-                .stream().content().doOnNext(buf::append).blockLast();
-        String answer = buf.isEmpty() ? null : buf.toString();
+        RoutingMode effective = effectiveRoutingMode(state.routingMode());
+        String rawAnswer = llmRouter.executeWithTracking(TaskType.TEXT, effective,
+                model -> model.call(buildPrompt(systemPrompt, userPrompt)));
+        String answer = (rawAnswer == null || rawAnswer.isEmpty()) ? null : rawAnswer;
         log.debug("[DirectAnswer] answer length={}", answer == null ? -1 : answer.length());
         return state.toBuilder().answer(answer).accumulateTokens(0, 0).build();
     }
@@ -56,7 +56,7 @@ public class DirectAnswerService {
         log.debug("[DirectAnswer] streaming directMode={} routingMode={} historyLen={}", state.directMode(),
                 state.routingMode(), state.conversationHistory().length());
 
-        RoutingMode effective = (state.routingMode() == RoutingMode.DUAL) ? RoutingMode.COST_FIRST : state.routingMode();
+        RoutingMode effective = effectiveRoutingMode(state.routingMode());
         LlmProvider provider = llmRouter.routeProvider(TaskType.TEXT, effective);
 
         StringBuilder full = new StringBuilder();
@@ -65,7 +65,9 @@ public class DirectAnswerService {
 
         String answer = full.toString();
         log.debug("[DirectAnswer] streaming answer length={}", answer.length());
-        // Note: streaming mode cannot capture usage metadata for token tracking (no ChatResponse)
+        // Streaming mode has no ChatResponse to read real usage from — record an approximate
+        // (chars/4) usage entry so /llm-usage isn't blind to the entire direct-answer stream path.
+        llmRouter.recordApproxUsage(provider.name(), systemPrompt + buildUserPrompt(state), answer);
         return state.toBuilder().answer(answer).accumulateTokens(0, 0).build();
     }
 
@@ -74,10 +76,13 @@ public class DirectAnswerService {
         return messageSource.getMessage(key, null, state.locale());
     }
 
-    private ChatClient buildClient(RoutingMode mode) {
-        // DUAL is not implemented in DirectAnswer; fall back to COST_FIRST (LOCAL preferred)
-        RoutingMode effective = (mode == RoutingMode.DUAL) ? RoutingMode.COST_FIRST : mode;
-        return ChatClient.builder(llmRouter.route(TaskType.TEXT, effective)).build();
+    /** DUAL is not implemented in DirectAnswer; fall back to COST_FIRST (LOCAL preferred). */
+    private static RoutingMode effectiveRoutingMode(RoutingMode mode) {
+        return (mode == RoutingMode.DUAL) ? RoutingMode.COST_FIRST : mode;
+    }
+
+    private static Prompt buildPrompt(String systemPrompt, String userPrompt) {
+        return new Prompt(List.of(new SystemMessage(systemPrompt), new UserMessage(userPrompt)));
     }
 
     private static String buildUserPrompt(AgentState state) {

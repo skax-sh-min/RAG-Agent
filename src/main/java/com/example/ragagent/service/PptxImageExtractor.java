@@ -39,7 +39,10 @@ public class PptxImageExtractor {
                     if (shape instanceof XSLFPictureShape pic) {
                         XSLFPictureData pd = pic.getPictureData();
                         PictureData.PictureType type = pd.getType();
+                        // PictureType.extension already includes the leading dot (e.g. ".png") —
+                        // strip it so "." + ext below doesn't double up into "img1..png".
                         String ext = (type != null) ? type.extension : "bin";
+                        if (ext.startsWith(".")) ext = ext.substring(1);
                         imgIdx++;
                         String fileName = "s" + slideNum + "_img" + imgIdx + "." + ext;
                         Files.write(imagesDir.resolve(fileName), pd.getData());

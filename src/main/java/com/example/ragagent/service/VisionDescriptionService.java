@@ -6,8 +6,9 @@ import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.llm.TaskType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.ai.chat.messages.UserMessage;
+import org.springframework.ai.chat.prompt.Prompt;
+import org.springframework.ai.content.Media;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.stereotype.Service;
 import org.springframework.util.MimeTypeUtils;
@@ -47,13 +48,10 @@ public class VisionDescriptionService {
 
     public String describe(byte[] imageBytes, String mimeType, String prompt) {
         try {
-            ChatModel visionModel = llmRouter.route(TaskType.VISION, RoutingMode.COST_FIRST);
-            String response = ChatClient.builder(visionModel).build()
-                    .prompt()
-                    .user(u -> u.text(prompt)
-                                .media(MimeTypeUtils.parseMimeType(mimeType), new ByteArrayResource(imageBytes)))
-                .call()
-                .content();
+            Media media = new Media(MimeTypeUtils.parseMimeType(mimeType), new ByteArrayResource(imageBytes));
+            UserMessage userMessage = UserMessage.builder().text(prompt).media(media).build();
+            String response = llmRouter.executeWithTracking(TaskType.VISION, RoutingMode.COST_FIRST,
+                    model -> model.call(new Prompt(userMessage)));
             return response == null ? "" : response;
         } catch (LlmProviderExhaustedException e) {
             log.warn("No vision provider available: {}", e.getMessage());
