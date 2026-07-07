@@ -40,7 +40,8 @@ public class ChunkSplitter {
                 } else {
                     log.debug("[SPLIT] 섹션 {}자 > chunkSize={}, 슬라이딩 윈도우 적용",
                             doc.getText().length(), chunkSize);
-                    result.addAll(slidingWindow(doc, chunkSize, overlap, minChunkSize));
+                    List<Document> pieces = slidingWindow(doc, chunkSize, overlap, minChunkSize);
+                    result.addAll(reinjectHeadingForSplitPieces(doc.getText(), pieces));
                 }
             }
             log.debug("[SPLIT] {} → 섹션 분할 전략, {}섹션 → 병합 {}섹션 → {}청크",
@@ -116,25 +117,59 @@ public class ChunkSplitter {
     }
 
     int sectionHeadingLevel(Document doc) {
-        String text = doc.getText();
-        if (text == null || text.isBlank()) return 0;
+        HeadingInfo heading = extractLeadingHeading(doc.getText());
+        return heading == null ? 0 : heading.marker().length();
+    }
+
+    /**
+     * When a section's markdown heading (e.g. {@code "## 소제목"}) survives only in the first
+     * sliding-window piece, later pieces lose all indication of which section they belong to.
+     * Re-injects the same heading — suffixed with its piece number, e.g. {@code "## 소제목 (2)"} —
+     * at the top of every piece after the first, so each embedded chunk is self-describing.
+     * No-op when the section has no leading heading, or when it wasn't split into multiple pieces.
+     */
+    List<Document> reinjectHeadingForSplitPieces(String originalSectionText, List<Document> pieces) {
+        if (pieces.size() <= 1) return pieces;
+
+        HeadingInfo heading = extractLeadingHeading(originalSectionText);
+        if (heading == null) return pieces;
+
+        List<Document> result = new ArrayList<>(pieces.size());
+        for (int i = 0; i < pieces.size(); i++) {
+            Document piece = pieces.get(i);
+            if (i == 0) {
+                result.add(piece);
+                continue;
+            }
+            String marker = heading.marker() + " " + heading.text() + " (" + i + ")";
+            result.add(new Document(marker + "\n\n" + piece.getText(), new HashMap<>(piece.getMetadata())));
+        }
+        return result;
+    }
+
+    /** Extracts the {@code #}-marker and text of the section's leading heading line, if any. */
+    HeadingInfo extractLeadingHeading(String text) {
+        if (text == null || text.isBlank()) return null;
 
         String[] lines = text.split("\\n", -1);
         for (String line : lines) {
             String trimmed = line.stripLeading();
             if (trimmed.isBlank()) continue;
-            if (!trimmed.startsWith("#")) return 0;
+            if (!trimmed.startsWith("#")) return null;
 
             int level = 0;
             while (level < trimmed.length() && trimmed.charAt(level) == '#') {
                 level++;
             }
             if (level > 0 && level < trimmed.length() && trimmed.charAt(level) == ' ') {
-                return level;
+                return new HeadingInfo("#".repeat(level), trimmed.substring(level + 1).strip());
             }
-            return 0;
+            return null;
         }
-        return 0;
+        return null;
+    }
+
+    record HeadingInfo(String marker, String text) {
     }
 
     List<Document> slidingWindow(Document doc, int chunkSize, int overlap, int minChunkSize) {

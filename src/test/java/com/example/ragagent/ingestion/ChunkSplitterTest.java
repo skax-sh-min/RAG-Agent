@@ -102,4 +102,50 @@ class ChunkSplitterTest {
 
         assertThat(result.size()).isGreaterThanOrEqualTo(2);
     }
+
+    @Test
+    @DisplayName("splitDocuments — 소제목이 있는 긴 섹션이 여러 청크로 나뉘면 두 번째 청크부터 소제목(N)이 재삽입된다")
+    void splitDocuments_longSectionWithHeading_reinjectsNumberedHeadingFromSecondPiece() {
+        String section = "## 소챕터명\n\n" + "가".repeat(3000);
+        List<Document> docs = List.of(new Document(section));
+
+        List<Document> result = splitter.splitDocuments(docs, "doc.md", 2000, 200, 100);
+
+        assertThat(result.size()).isGreaterThanOrEqualTo(2);
+        assertThat(result.get(0).getText()).startsWith("## 소챕터명");
+        assertThat(result.get(0).getText()).doesNotContain("(1)");
+        for (int i = 1; i < result.size(); i++) {
+            assertThat(result.get(i).getText()).startsWith("## 소챕터명 (" + i + ")");
+        }
+    }
+
+    @Test
+    @DisplayName("splitDocuments — 소제목 없는 긴 섹션은 재삽입 없이 그대로 슬라이딩 윈도우만 적용된다")
+    void splitDocuments_longSectionWithoutHeading_noReinjection() {
+        List<Document> docs = List.of(new Document("X".repeat(3000)));
+
+        List<Document> result = splitter.splitDocuments(docs, "doc.md", 2000, 200, 100);
+
+        assertThat(result).allSatisfy(d -> assertThat(d.getText()).doesNotContain("("));
+    }
+
+    @Test
+    @DisplayName("extractLeadingHeading — 선행 텍스트 없이 헤딩으로 시작해야 인식된다")
+    void extractLeadingHeading_recognizesLeadingHeadingOnly() {
+        assertThat(splitter.extractLeadingHeading("### 제목 텍스트\n본문"))
+                .isEqualTo(new ChunkSplitter.HeadingInfo("###", "제목 텍스트"));
+        assertThat(splitter.extractLeadingHeading("본문 먼저\n## 제목")).isNull();
+        assertThat(splitter.extractLeadingHeading("#헤딩아님(공백없음)")).isNull();
+        assertThat(splitter.extractLeadingHeading(null)).isNull();
+    }
+
+    @Test
+    @DisplayName("reinjectHeadingForSplitPieces — 조각이 1개면 변경 없이 그대로 반환")
+    void reinjectHeadingForSplitPieces_singlePiece_returnsUnchanged() {
+        List<Document> pieces = List.of(new Document("## 소제목\n내용"));
+
+        List<Document> result = splitter.reinjectHeadingForSplitPieces("## 소제목\n내용", pieces);
+
+        assertThat(result).isSameAs(pieces);
+    }
 }
