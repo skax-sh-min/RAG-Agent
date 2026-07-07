@@ -13,6 +13,8 @@ import org.slf4j.LoggerFactory;
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.core.io.Resource;
 import org.springframework.http.CacheControl;
+import org.springframework.http.ContentDisposition;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Controller;
@@ -31,7 +33,9 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Document management: UI pages, HTMX upload/sync/list/delete fragments,
@@ -289,6 +293,11 @@ public class DocumentController {
         return ResponseEntity.noContent().build();
     }
 
+    // Only these are ever served inline as image/*. Anything else — notably SVG, which can
+    // carry an executable <script>/onload and would run same-origin if rendered inline — is
+    // forced to download instead (QA.md B-32).
+    private static final Set<String> SAFE_IMAGE_EXTENSIONS = Set.of("png", "jpg", "jpeg", "gif", "webp");
+
     /**
      * Serves extracted images. Rejects path traversal in docId / filename.
      */
@@ -307,6 +316,21 @@ public class DocumentController {
         if (!Files.exists(imgPath) || !Files.isRegularFile(imgPath)) {
             return ResponseEntity.notFound().build();
         }
+
+        if (!SAFE_IMAGE_EXTENSIONS.contains(fileExtension(filename))) {
+            // Non-raster (SVG, EMF/WMF, etc.) — never render inline. Force download under a
+            // locked-down per-response CSP so an embedded script can't execute same-origin
+            // even if a browser is coaxed into displaying it directly.
+            return ResponseEntity.ok()
+                    .contentType(MediaType.APPLICATION_OCTET_STREAM)
+                    .header(HttpHeaders.CONTENT_DISPOSITION,
+                            ContentDisposition.attachment().filename(filename).build().toString())
+                    .header("Content-Security-Policy", "default-src 'none'; sandbox")
+                    .cacheControl(CacheControl.maxAge(Duration.ofMinutes(5)).cachePrivate())
+                    .header("X-Robots-Tag", "noindex, nofollow")
+                    .body(new FileSystemResource(imgPath));
+        }
+
         String contentType = Files.probeContentType(imgPath);
         if (contentType == null) contentType = "application/octet-stream";
         return ResponseEntity.ok()
@@ -314,6 +338,12 @@ public class DocumentController {
                 .cacheControl(CacheControl.maxAge(Duration.ofMinutes(5)).cachePrivate())
                 .header("X-Robots-Tag", "noindex, nofollow")
                 .body(new FileSystemResource(imgPath));
+    }
+
+    private static String fileExtension(String filename) {
+        int dot = filename.lastIndexOf('.');
+        return (dot < 0 || dot == filename.length() - 1)
+                ? "" : filename.substring(dot + 1).toLowerCase(Locale.ROOT);
     }
 
     // ── Helpers ───────────────────────────────────────────────────────
