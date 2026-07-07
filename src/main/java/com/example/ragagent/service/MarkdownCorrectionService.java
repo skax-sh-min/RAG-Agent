@@ -163,24 +163,60 @@ public class MarkdownCorrectionService {
         return normalizeCodeBlocks(numbered, true);
     }
 
-    private List<String> splitBySections(String md) {
+    /**
+     * Splits by H2/H3 headings, but never while inside a fenced code block (``` / ~~~). Log
+     * dumps and batch output are often pasted verbatim into a fence and commonly contain lines
+     * like {@code "### Job ID : ..."} that only look like headings — treating them as real
+     * section boundaries splits the fence in half, and each half then goes to the LLM with no
+     * idea it's inside (or missing) a code block, which reliably produces hallucinated language
+     * tags, re-wrapped fences, or leaked prompt delimiters in the corrected output.
+     *
+     * <p>When the oversized-section check trips while a fence is still open, the fence is not
+     * cut — but it also isn't unconditionally kept in the current (already-full) section. If the
+     * fence started at or after {@code MIN_SECTION_CHARS / 2} chars into the current section (i.e.
+     * this section already had a substantial amount of its own content before the fence began),
+     * everything before the fence is flushed now and the fence is deferred whole to the next
+     * section. If the fence started very early in a (so far small) section, deferring would just
+     * leave a tiny orphan section, so it's left alone and allowed to keep growing until it closes.
+     */
+    List<String> splitBySections(String md) {
         List<String> sections = new ArrayList<>();
         StringBuilder current = new StringBuilder();
+        boolean inFence = false;
+        int fenceStartInSection = 0; // current.length() right before the currently-open fence began
 
         for (String line : md.split("\n", -1)) {
-            boolean isHeading = line.startsWith("## ") || line.startsWith("### ");
+            String trimmed = line.stripLeading();
+            boolean isFenceLine = trimmed.startsWith("```") || trimmed.startsWith("~~~");
+            boolean isHeading = !inFence && (line.startsWith("## ") || line.startsWith("### "));
+
             if (isHeading && !current.isEmpty()) {
                 sections.add(current.toString());
                 current = new StringBuilder();
             }
+
+            if (isFenceLine && !inFence) {
+                fenceStartInSection = current.length(); // remember where this fence begins
+            }
             current.append(line).append("\n");
-            // Flush oversized sections so they don't exceed the LLM context window
+            if (isFenceLine) inFence = !inFence;
+
             if (current.length() > maxSectionChars) {
-                sections.add(current.toString());
-                current = new StringBuilder();
+                if (!inFence) {
+                    sections.add(current.toString());
+                    current = new StringBuilder();
+                } else if (fenceStartInSection >= MIN_SECTION_CHARS / 2) {
+                    sections.add(current.substring(0, fenceStartInSection));
+                    current = new StringBuilder(current.substring(fenceStartInSection));
+                    fenceStartInSection = 0;
+                }
+                // else: fence started very early in this section — let it keep growing.
             }
         }
-        if (!current.isEmpty()) sections.add(current.toString());
+        if (!current.isEmpty()) {
+            if (inFence) current.append("```\n"); // malformed input (fence never closed) — close it out
+            sections.add(current.toString());
+        }
         return sections;
     }
 
@@ -195,11 +231,12 @@ public class MarkdownCorrectionService {
                 교정 항목:
                 - 잘린 문장 연결 (줄바꿈으로 끊긴 문장을 이어붙이기)
                 - 명백한 오타 수정
-                - 표(table)는 변경 금지.
+                - 표(table)는 변경 금지
                 - 마커 형식 유지: [이미지: ...], [이미지(변환불가): ...], [헤딩페이지: N], [페이지: N]을 그대로 둘 것
-                - 내용이 코드일 경우, 코드 블록(```)으로 감싸고 언어 태그를 유지
+                - 이미 코드 블록(```)으로 감싸인 내용은 그대로 유지: 언어 태그가 이미 있으면 유지 (코드 블록 안에 로그, 일반 텍스트 출력은 그대로 유지)
                 - 코드 블록(```) 내부의 불필요한 공란을 줄이고, 빈 줄 최소화로 가독성을 높일 것 (의미는 변경 금지)
                 - 연속된 빈 줄 1개로 정리
+                - 응답에 [DOCUMENT], [/DOCUMENT] 같은 구분자를 절대 포함하지 말 것
 
                 교정된 마크다운만 반환하세요. 설명이나 주석을 추가하지 마세요.
 

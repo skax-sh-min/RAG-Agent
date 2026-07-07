@@ -208,8 +208,19 @@ PROGRESSIVE 모드 AND sufficient=false AND retryCount >= max
 
   6) Markdown 교정 [LLM]
     MarkdownCorrectionService.correct()
-    - 전체 MD 1회 호출이 아니라, H2/H3(##/###) 기준 섹션 분할 후 병렬 교정
-    - 섹션이 큰 경우 MAX_SECTION_CHARS(6000) 기준으로 추가 분할
+    - 전체 MD 1회 호출이 아니라, splitBySections()로 섹션 분할 후 병렬 교정
+    - 분할 기준 (splitBySections, 모두 코드펜스 ```/~~~ 내부에서는 적용 안 함):
+      a) H2/H3 헤딩(줄이 "## " 또는 "### "로 시작) — 펜스 안의 "### Job ID : ..." 같은
+         로그/배치 실행 결과 줄은 헤딩처럼 보여도 분할 트리거로 취급하지 않음
+      b) 섹션 길이가 maxSectionChars 초과 시 강제 분할
+         (maxSectionChars = max(500, (LLM_MAX_TOKENS-500)/2) → 기본 8,000토큰 기준 3,750자)
+         — 펜스가 열려 있는 동안 초과가 감지되면 펜스는 자르지 않고, 펜스 시작 위치로 처리 분기:
+           · 펜스가 이 섹션 안에서 MIN_SECTION_CHARS/2(250자) 이상 지난 뒤에 시작됐다면
+             → 펜스 이전 내용까지만 즉시 flush하고, 펜스 전체(지금까지 쌓인 내용 포함)를
+               통째로 다음 섹션으로 넘겨 그 섹션에서 계속 자라게 함
+           · 펜스가 섹션 아주 초반(< 250자)에 시작됐다면 → 넘겨봤자 자투리 섹션만 남으므로
+             넘기지 않고, 펜스가 닫힐 때까지 이 섹션에 그대로 누적(섹션이 한도를 넘긴 채로 flush됨)
+      c) 문서 끝까지 펜스가 닫히지 않은 기형 입력은 안전하게 "```"를 붙여 마감
     - 교정본 MD: data/converted/{docId}_corrected.md
     - 이후 파이프라인은 교정본을 source로 사용
 
