@@ -84,7 +84,7 @@ class AdminServiceTest {
 
         AppProperties props = mock(AppProperties.class);
         when(props.vectorStoreSafe()).thenReturn(new VectorStoreConfig("sqlite-vec"));
-        when(props.embeddingSafe()).thenReturn(new EmbeddingConfig(null, null, null, 768, 10, 120, true));
+        when(props.embeddingSafe()).thenReturn(new EmbeddingConfig(null, null, null, 768, 10, 120, true, 0));
 
         AdminService svc = new AdminService(Optional.empty(), jdbc, props, OM);
         VectorStoreAdminView v = svc.vectorStoreView();

@@ -163,4 +163,58 @@ class ChunkSplitterTest {
 
         assertThat(result).isSameAs(pieces);
     }
+
+    @Test
+    @DisplayName("splitDocuments — maxChunkChars 설정 시 pptx 슬라이드도 그 길이 이하로 강제 분할된다")
+    void splitDocuments_maxChunkChars_capsUnsplitSlides() {
+        List<Document> docs = List.of(new Document("문장. ".repeat(500))); // ~2000자 단일 슬라이드
+
+        List<Document> result = splitter.splitDocuments(docs, "deck.pptx", 2000, 200, 100, 500);
+
+        assertThat(result).hasSizeGreaterThan(1);
+        assertThat(result).allSatisfy(d -> assertThat(d.getText().length()).isLessThanOrEqualTo(500));
+    }
+
+    @Test
+    @DisplayName("splitDocuments — md 헤딩 재삽입 이후에도 maxChunkChars 상한이 최종 보장된다")
+    void splitDocuments_md_reinjectThenHardCap() {
+        String section = "## 소제목\n\n" + "가".repeat(3000);
+        List<Document> docs = List.of(new Document(section));
+
+        List<Document> result = splitter.splitDocuments(docs, "doc.md", 2000, 200, 100, 400);
+
+        assertThat(result).allSatisfy(d -> assertThat(d.getText().length()).isLessThanOrEqualTo(400));
+    }
+
+    @Test
+    @DisplayName("splitDocuments — maxChunkChars=0 이면 상한 없이 기존 동작 유지")
+    void splitDocuments_maxChunkCharsZero_disabled() {
+        List<Document> docs = List.of(new Document("A".repeat(1500)));
+
+        List<Document> capped = splitter.splitDocuments(docs, "deck.pptx", 2000, 200, 100, 0);
+
+        assertThat(capped).hasSize(1);
+        assertThat(capped.get(0).getText()).hasSize(1500);
+    }
+
+    @Test
+    @DisplayName("enforceMaxChars — maxChars<=0 이면 입력 리스트를 그대로(동일 참조) 반환")
+    void enforceMaxChars_disabled_returnsSameReference() {
+        List<Document> docs = List.of(new Document("A".repeat(5000)));
+
+        assertThat(splitter.enforceMaxChars(docs, 0, "x.md")).isSameAs(docs);
+    }
+
+    @Test
+    @DisplayName("hardSplitByLines — 줄 단위로 채우고, 상한을 넘는 한 줄은 문자 단위로 자른다")
+    void hardSplitByLines_packsLinesAndCutsOversizedLine() {
+        String threeLines = "A".repeat(30) + "\n" + "B".repeat(30) + "\n" + "C".repeat(30);
+        List<String> packed = splitter.hardSplitByLines(threeLines, 70);
+        assertThat(packed).allSatisfy(p -> assertThat(p.length()).isLessThanOrEqualTo(70));
+        assertThat(String.join("\n", packed)).contains("A".repeat(30)).contains("C".repeat(30));
+
+        List<String> cut = splitter.hardSplitByLines("X".repeat(250), 100);
+        assertThat(cut).allSatisfy(p -> assertThat(p.length()).isLessThanOrEqualTo(100));
+        assertThat(String.join("", cut)).isEqualTo("X".repeat(250)); // 손실 없이 재구성
+    }
 }

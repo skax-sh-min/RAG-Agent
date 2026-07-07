@@ -177,7 +177,8 @@ public class DocumentIndexer {
 
         req.onProgress().accept(IndexingProgressEvent.of("chunking", 0, 0, req.filename(), "청크 분할 중..."));
         List<Document> chunks = chunkSplitter.splitDocuments(
-            rawDocs, req.filename(), props.chunkSize(), props.chunkOverlap(), props.minChunkSizeSafe());
+            rawDocs, req.filename(), props.chunkSize(), props.chunkOverlap(), props.minChunkSizeSafe(),
+            props.embeddingSafe().maxChunkChars());
         log.debug("[INDEX] {} 청크 분할 완료 → {}개 (chunkSize={}, overlap={}, minChunkSize={})",
             req.filename(), chunks.size(), props.chunkSize(), props.chunkOverlap(), props.minChunkSizeSafe());
         req.onProgress().accept(IndexingProgressEvent.of("chunking", 0, chunks.size(), req.filename(),
@@ -241,7 +242,8 @@ public class DocumentIndexer {
         String md = Files.readString(mdPath);
         List<Document> rawDocs = loaderService.loadFromMarkdown(md);
         List<Document> chunks  = chunkSplitter.splitDocuments(
-            rawDocs, filename, props.chunkSize(), props.chunkOverlap(), props.minChunkSizeSafe());
+            rawDocs, filename, props.chunkSize(), props.chunkOverlap(), props.minChunkSizeSafe(),
+            props.embeddingSafe().maxChunkChars());
         log.debug("[REINDEX] 청크 분할: {}섹션 → {}청크", rawDocs.size(), chunks.size());
         // Keep tags across re-index (same docId): read from FTS before the delete wipes them.
         List<String> preservedTags = restoreTags(docId);

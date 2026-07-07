@@ -22,11 +22,22 @@ public class ChunkSplitter {
 
     public List<Document> splitDocuments(List<Document> docs, String filename,
                                           int chunkSize, int overlap, int minChunkSize) {
+        return splitDocuments(docs, filename, chunkSize, overlap, minChunkSize, 0);
+    }
+
+    /**
+     * @param maxChunkChars hard per-chunk character ceiling (0 = disabled). Applied as a final
+     *                      safety pass after all semantic splitting/merging so no emitted chunk
+     *                      exceeds the embedding server's batch/token limit — see
+     *                      {@code app.embedding.max-chunk-chars}.
+     */
+    public List<Document> splitDocuments(List<Document> docs, String filename,
+                                          int chunkSize, int overlap, int minChunkSize, int maxChunkChars) {
         String lower = filename.toLowerCase();
 
         if (lower.endsWith(".pptx")) {
             log.debug("[SPLIT] {} → 슬라이드 유지 (분할 없음), {}개", filename, docs.size());
-            return new ArrayList<>(docs);
+            return enforceMaxChars(new ArrayList<>(docs), maxChunkChars, filename);
         }
 
         // .txt is converted to structured MD before this point, so it splits section-wise too.
@@ -46,7 +57,7 @@ public class ChunkSplitter {
             }
             log.debug("[SPLIT] {} → 섹션 분할 전략, {}섹션 → 병합 {}섹션 → {}청크",
                     filename, docs.size(), sectionMerged.size(), result.size());
-            return result;
+            return enforceMaxChars(result, maxChunkChars, filename);
         }
 
         List<Document> result = new ArrayList<>();
@@ -54,7 +65,68 @@ public class ChunkSplitter {
             result.addAll(slidingWindow(doc, chunkSize, overlap, minChunkSize));
         }
         log.debug("[SPLIT] {} → 슬라이딩 윈도우 전략, {}섹션 → {}청크", filename, docs.size(), result.size());
-        return result;
+        return enforceMaxChars(result, maxChunkChars, filename);
+    }
+
+    /**
+     * Final safety net: guarantees no emitted chunk exceeds {@code maxChars} characters, force-
+     * splitting oversized ones at line boundaries (and hard-cutting any single line longer than the
+     * limit). Runs after heading reinjection / tiny-chunk merges — all of which can push a chunk
+     * past the target size — so it is the last word on chunk size. No-op when {@code maxChars <= 0}.
+     */
+    List<Document> enforceMaxChars(List<Document> docs, int maxChars, String filename) {
+        if (maxChars <= 0) return docs;
+
+        List<Document> out = new ArrayList<>(docs.size());
+        int split = 0;
+        for (Document doc : docs) {
+            String text = doc.getText();
+            if (text == null || text.length() <= maxChars) {
+                out.add(doc);
+                continue;
+            }
+            split++;
+            for (String piece : hardSplitByLines(text, maxChars)) {
+                out.add(new Document(piece, new HashMap<>(doc.getMetadata())));
+            }
+        }
+        if (split > 0) {
+            log.debug("[SPLIT] {} → 임베딩 한계({}자) 초과 청크 {}개 강제 재분할 → 총 {}청크",
+                    filename, maxChars, split, out.size());
+        }
+        return out;
+    }
+
+    /** Greedily packs whole lines up to {@code maxChars}; a single over-long line is char-cut. */
+    List<String> hardSplitByLines(String text, int maxChars) {
+        List<String> pieces = new ArrayList<>();
+        StringBuilder cur = new StringBuilder();
+        for (String line : text.split("\n", -1)) {
+            if (line.length() > maxChars) {
+                if (cur.length() > 0) {
+                    addIfNotBlank(pieces, cur.toString());
+                    cur.setLength(0);
+                }
+                for (int i = 0; i < line.length(); i += maxChars) {
+                    addIfNotBlank(pieces, line.substring(i, Math.min(i + maxChars, line.length())));
+                }
+                continue;
+            }
+            int addition = (cur.length() == 0 ? 0 : 1) + line.length(); // +1 for the joining '\n'
+            if (cur.length() > 0 && cur.length() + addition > maxChars) {
+                addIfNotBlank(pieces, cur.toString());
+                cur.setLength(0);
+            }
+            if (cur.length() > 0) cur.append('\n');
+            cur.append(line);
+        }
+        if (cur.length() > 0) addIfNotBlank(pieces, cur.toString());
+        return pieces;
+    }
+
+    private static void addIfNotBlank(List<String> pieces, String s) {
+        String stripped = s.strip();
+        if (!stripped.isBlank()) pieces.add(stripped);
     }
 
     List<Document> mergeShortSections(List<Document> docs, int chunkSize) {

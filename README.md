@@ -112,6 +112,7 @@ See [USER_MANUAL.md](USER_MANUAL.md) for usage instructions and [OPERATOR_MANUAL
 | `EMBED_MODEL` | — | `text-embedding-nomic-embed-text-v1.5` | Embedding model name |
 | `EMBED_DIMENSIONS` | sqlite-vec only | — | Embedding model's real output dimension (`app.embedding.dimensions`). Required for `sqlite-vec` (baked into the `vec0` DDL — must match the model: nomic=768, bge-m3=1024). Ignored by chroma |
 | `EMBED_USAGE_FALLBACK_ENABLED` | — | `true` | When the embedding server doesn't report token usage, approximate input tokens as chars/4 for the `/llm-usage` dashboard instead of recording 0 |
+| `EMBED_MAX_CHUNK_CHARS` | — | `0` (off) | Hard per-chunk character ceiling to fit the embedding server's batch/token limit. Set (e.g. `450`) when you hit `input (N tokens) is too large ... (batch size: 512)`; oversized chunks are force-split at line boundaries. Prefer raising the server batch (`llama-server -b/-ub`) first — see [OPERATOR_MANUAL §8](documents/OPERATOR_MANUAL.md#8-문제-해결) |
 | `VECTORSTORE_TYPE` | — | `chroma` | Vector store backend — `chroma` or `sqlite-vec` |
 | `SQLITE_VEC_EXTENSION_PATH` | — | — | sqlite-vec only — path to the operator-provided `vec0` loadable extension |
 | `CHROMA_HOST` | — | `http://localhost` | Chroma server host (chroma backend) |

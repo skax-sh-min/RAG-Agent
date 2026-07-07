@@ -67,7 +67,8 @@ public record AppProperties(
             Integer dimensions,
             Integer connectTimeoutSeconds,
             Integer readTimeoutSeconds,
-            Boolean usageFallbackEnabled
+            Boolean usageFallbackEnabled,
+            Integer maxChunkChars   // hard ceiling per chunk to fit the embedding server batch; 0/null = disabled
     ) {}
 
     public record ChromaHttpConfig(
@@ -197,12 +198,15 @@ public record AppProperties(
     }
 
     public EmbeddingConfig embeddingSafe() {
-        if (embedding == null) return new EmbeddingConfig(null, null, null, null, 10, 120, true);
+        if (embedding == null) return new EmbeddingConfig(null, null, null, null, 10, 120, true, 0);
         int connect = (embedding.connectTimeoutSeconds() != null && embedding.connectTimeoutSeconds() > 0)
                 ? embedding.connectTimeoutSeconds() : 10;
         int read = (embedding.readTimeoutSeconds() != null && embedding.readTimeoutSeconds() > 0)
                 ? embedding.readTimeoutSeconds() : 120;
         boolean usageFallback = embedding.usageFallbackEnabled() == null || embedding.usageFallbackEnabled();
+        // 0 = disabled (no hard cap); negative values are clamped to 0.
+        int maxChunkChars = (embedding.maxChunkChars() != null && embedding.maxChunkChars() > 0)
+                ? embedding.maxChunkChars() : 0;
         return new EmbeddingConfig(
                 embedding.baseUrl(),
                 embedding.apiKey(),
@@ -210,7 +214,8 @@ public record AppProperties(
                 embedding.dimensions(),
                 connect,
                 read,
-                usageFallback
+                usageFallback,
+                maxChunkChars
         );
     }
 

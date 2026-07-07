@@ -114,6 +114,7 @@ container system stop
 | `EMBED_MODEL` | — | `text-embedding-nomic-embed-text-v1.5` | 임베딩 모델명 |
 | `EMBED_DIMENSIONS` | sqlite-vec 시 | — | 임베딩 모델의 실제 출력 차원 (`app.embedding.dimensions`). `sqlite-vec` 필수 (vec0 DDL에 고정 — 모델 실제 차원과 일치: nomic=768, bge-m3=1024). chroma는 무시 |
 | `EMBED_USAGE_FALLBACK_ENABLED` | — | `true` | 임베딩 서버가 토큰 사용량을 반환하지 않을 때 `/llm-usage` 대시보드에 0 대신 입력 텍스트 길이 근사(chars/4)로 기록 |
+| `EMBED_MAX_CHUNK_CHARS` | — | `0` (비활성) | 임베딩 서버 배치/토큰 한계에 맞추는 청크 문자 수 하드 상한. `input (N tokens) is too large ... (batch size: 512)` 에러 시 설정(예: `450`). 초과 청크는 줄 경계에서 강제 재분할. 먼저 서버 배치를 키우는 것(`llama-server -b/-ub`)을 권장 — [OPERATOR_MANUAL §8](documents/OPERATOR_MANUAL.md#8-문제-해결) 참조 |
 | `VECTORSTORE_TYPE` | — | `chroma` | 벡터 스토어 백엔드 — `chroma` 또는 `sqlite-vec` |
 | `SQLITE_VEC_EXTENSION_PATH` | — | — | sqlite-vec 전용 — 운영자가 제공하는 `vec0` 로더블 확장 경로 |
 | `CHROMA_HOST` | — | `http://localhost` | Chroma 서버 호스트 (chroma 백엔드) |
