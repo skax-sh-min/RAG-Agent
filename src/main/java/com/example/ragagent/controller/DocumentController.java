@@ -311,8 +311,13 @@ public class DocumentController {
                 || filename.contains("..") || filename.contains("/") || filename.contains("\\")) {
             return ResponseEntity.badRequest().build();
         }
-        Path imgPath = ragService.userDocumentsDir(ctx.userId())
-                .getParent().resolve("images").resolve(docId).resolve(filename);
+        Path imagesBase = ragService.userDocumentsDir(ctx.userId()).getParent().resolve("images").normalize();
+        Path imgPath = imagesBase.resolve(docId).resolve(filename).normalize();
+        // Defense in depth alongside the reject-list above: the resolved path must still
+        // land inside imagesBase.
+        if (!imgPath.startsWith(imagesBase)) {
+            return ResponseEntity.badRequest().build();
+        }
         if (!Files.exists(imgPath) || !Files.isRegularFile(imgPath)) {
             return ResponseEntity.notFound().build();
         }
