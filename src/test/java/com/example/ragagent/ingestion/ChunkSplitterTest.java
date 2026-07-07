@@ -140,6 +140,21 @@ class ChunkSplitterTest {
     }
 
     @Test
+    @DisplayName("extractLeadingHeading — 레벨 1~6만 헤딩으로 인정, 7개 이상은 무시")
+    void extractLeadingHeading_onlyLevels1Through6() {
+        assertThat(splitter.extractLeadingHeading("###### 여섯단계"))
+                .isEqualTo(new ChunkSplitter.HeadingInfo("######", "여섯단계"));
+        assertThat(splitter.extractLeadingHeading("####### 일곱단계는아님")).isNull();
+    }
+
+    @Test
+    @DisplayName("extractLeadingHeading — 코드펜스/표로 시작하면 헤딩이 아니다")
+    void extractLeadingHeading_fenceOrTableIsNotHeading() {
+        assertThat(splitter.extractLeadingHeading("```python\n# 주석\nx = 1\n```")).isNull();
+        assertThat(splitter.extractLeadingHeading("| A | B |\n|---|---|\n| 1 | 2 |")).isNull();
+    }
+
+    @Test
     @DisplayName("reinjectHeadingForSplitPieces — 조각이 1개면 변경 없이 그대로 반환")
     void reinjectHeadingForSplitPieces_singlePiece_returnsUnchanged() {
         List<Document> pieces = List.of(new Document("## 소제목\n내용"));

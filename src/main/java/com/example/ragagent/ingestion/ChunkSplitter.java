@@ -147,7 +147,13 @@ public class ChunkSplitter {
         return result;
     }
 
-    /** Extracts the {@code #}-marker and text of the section's leading heading line, if any. */
+    /**
+     * Extracts the {@code #}-marker and text of the section's leading heading line, if any.
+     * Only a valid ATX heading (1–6 {@code #} followed by a space) at the very start of the
+     * section counts. Anything else — a code fence ({@code ```}), a table row ({@code |}),
+     * {@code #######}+ over-long markers, or a bare {@code #comment} without a space — yields
+     * {@code null}, so heading reinjection never fires on code comments or table fragments.
+     */
     HeadingInfo extractLeadingHeading(String text) {
         if (text == null || text.isBlank()) return null;
 
@@ -155,13 +161,13 @@ public class ChunkSplitter {
         for (String line : lines) {
             String trimmed = line.stripLeading();
             if (trimmed.isBlank()) continue;
-            if (!trimmed.startsWith("#")) return null;
+            if (!trimmed.startsWith("#")) return null; // fences (```), table rows (|), body text
 
             int level = 0;
             while (level < trimmed.length() && trimmed.charAt(level) == '#') {
                 level++;
             }
-            if (level > 0 && level < trimmed.length() && trimmed.charAt(level) == ' ') {
+            if (level >= 1 && level <= 6 && level < trimmed.length() && trimmed.charAt(level) == ' ') {
                 return new HeadingInfo("#".repeat(level), trimmed.substring(level + 1).strip());
             }
             return null;
