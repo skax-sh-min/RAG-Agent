@@ -41,7 +41,8 @@
 - ~~**Phase 3 — LLM 사용량 orphan 프로바이더 기록 삭제**~~ → ✅ 완료 (2026-07-04, §6.7 — config에 전혀 없는 provider_name(또는 옛 `embed:*`)을 ORPHAN 카드로 노출 + `DELETE /admin/llm-usage/{provider}`로 관리자만 삭제, 활성 provider·현재 임베딩 모델은 서버측에서 삭제 거부)
 - ~~**Phase 3 — LLM 사용량 백그라운드(비-채팅) 사용량 분리 기록**~~ → ✅ 완료 (2026-07-05, §6.10 — `BackgroundUsage` 접두사(`summary:`/`keyword:`/`mdcorrect:`/`txt2md:`/`title:`)로 대화 요약·인덱싱 키워드 추출·문서 서식 교정·TXT→MD 변환·대화 제목 생성을 채팅 사용량과 분리 기록, `title:`은 이번에 처음 추적 대상 편입, `/llm-usage`에 type=BACKGROUND 카드 신설)
 - ~~**Phase 3 — LLM 사용량 핵심 채팅 경로 추적 확장**~~ → ✅ 완료 (2026-07-06, §6.14 — Direct/RAG 채팅 시 `/llm-usage`에 `embed:*`만 증가하고 실제 채팅 사용량이 전혀 안 잡히던 버그 재현·수정. `AnswerService`/`DirectAnswerService`/`ClassifierService`/`RerankerService`/`VisionDescriptionService`/`ImageTypeClassifier`/`RetrievalService`의 `MultiQueryExpander` 7곳 모두 `LlmRouter`를 거치도록 정리 — `executeWithTracking()`(블로킹, 실사용량) 또는 `recordApproxUsage()`(스트리밍, chars/4 근사) 또는 신규 `TrackingChatModel` 데코레이터(프레임워크 내부 호출용))
-- **Phase 3 잔여** (미착수, 우선순위 순 — §6.11·6.12·6.13 상세): 대화 컨텍스트 예산 정합성/설정 외부화(§6.11, 쉬움) · 사용자별 LLM 토큰 쿼터(§6.12) · 사용자별 스토리지 쿼터(§6.13)
+- ~~**대화 컨텍스트 예산 정합성 + 설정 외부화**~~ → ✅ 완료 (2026-07-07, §6.11 — 요약 경로/폴백 경로가 동일한 문자 예산(`MemoryService.maxConversationChars()`)을 지키도록 통일 + `FETCH_LIMIT`·요약 캐시 4개 상수를 `app.memory.*`/`app.summary.*`로 외부화)
+- **Phase 3 잔여** (미착수, 우선순위 순 — §6.12·6.13 상세): 사용자별 LLM 토큰 쿼터(§6.12) · 사용자별 스토리지 쿼터(§6.13)
 - **Phase 4** (조건부, 미착수): OAuth2 소셜 로그인(§7.1) · PostgreSQL 마이그레이션(§7.2) · 관리자 페이지 확장(§7.3, ※ `/admin` 기본 골격은 Phase 5.8에서 이미 존재)
 - ~~**Phase 5**: sqlite-vec 선택적 연동~~ → ✅ 완료 (Step 5.1~5.8, `app.vectorstore.type=chroma|sqlite-vec`)
 - ~~**Phase 5 추가**: Step 5.9 태그 기반 검색 스코프 + Step 5.10 sqlite-vec 운영/벡터 DB 분리~~ → ✅ 완료 (2026-07-01, Step 5.9 태그 필터/제안/복원 + Step 5.10 `SQLITE_VEC_DB_PATH` 분리 스위치). vec0 라이브 부팅은 운영 인수
@@ -279,7 +280,7 @@ SQLite `audit_log` 테이블 대신 Logback `SizeAndTimeBasedRollingPolicy`로 �
 
 ---
 
-### 6.11 대화 컨텍스트 예산 정합성 + 설정 외부화 🔵 미착수 (2026-07-05 검토) — 다음 우선순위 1순위
+### 6.11 대화 컨텍스트 예산 정합성 + 설정 외부화 ✅ 완료 (2026-07-07)
 
 > **현재 코드 확인 (2026-07-05)**: §6.9(`ConversationSummarizerService`) 도입 후 이전 대화를 프롬프트에 넣는 경로가 두 갈래로 나뉘었는데, 문자 예산 체크가 한쪽에만 있다 — `MemoryService.getHistory()`(폴백 경로)는 `max(1000, LLM_MAX_TOKENS × 0.75)` 문자 예산을 지키지만, 요약 캐시가 있을 때 쓰는 `ConversationSummarizerService.buildContext()`(요약 ≤2000자 + 최근 원문 2턴)는 이 예산을 전혀 체크하지 않는다. 또한 `FETCH_LIMIT=50`(`SqliteMemoryRepository`), `MAX_CACHED_THREADS=3`·`MAX_SUMMARY_CHARS=2000`·`RECENT_RAW_TURNS=2`·`PRECOMPUTE_TTL_MILLIS=15000`(`ConversationSummarizerService`)가 전부 하드코딩 상수라 `AppProperties`로 조정할 방법이 없다.
 
@@ -295,9 +296,14 @@ SQLite `audit_log` 테이블 대신 Logback `SizeAndTimeBasedRollingPolicy`로 �
 
 **Effort**: 반나절~1일(상한 통일 + 프로퍼티 외부화, 테스트 포함).
 
+**구현 (2026-07-07)**:
+- **예산 통일**: 단일 진실 원천을 위해 `MemoryService.maxConversationChars()`(= `max(1000, LLM_MAX_TOKENS × 0.75)`) getter를 신설하고, `ConversationSummarizerService.buildContext()`가 이 값을 그대로 예산으로 사용하도록 함. 요약 블록은 항상 보존하고, 최근 원문 turn을 폴백 경로(`SqliteMemoryRepository.getHistory()`)와 동일한 "최신 우선 채움" 전략으로 남은 예산 안에서만 채운다(초과 turn은 오버플로 대신 드롭). 요약만으로 예산을 넘는 극단(아주 작은 `LLM_MAX_TOKENS`)에서는 최종 결과를 예산으로 하드 캡 — 두 경로 모두 절대 예산을 넘지 않음이 단위 테스트로 고정됨.
+- **설정 외부화**: `AppProperties`에 `MemoryConfig`(`app.memory.fetch-limit-turns`)·`SummaryConfig`(`app.summary.max-cached-threads`/`max-summary-chars`/`recent-raw-turns`/`precompute-ttl-seconds`) record + `memorySafe()`/`summarySafe()` null 가드(각 필드 ≥1 클램프, 기존 하드코딩과 동일한 50/3/2000/2/15 기본값) 추가. `SqliteMemoryRepository`(생성자에 `AppProperties` 주입)의 `FETCH_LIMIT`와 `ConversationSummarizerService`의 4개 상수를 전부 이 설정에서 읽도록 교체(캐시 LRM 크기가 이제 생성자에서 결정되므로 `summaryCache` 초기화도 생성자로 이동). `application.properties`에 5개 프로퍼티(+환경변수 오버라이드) 추가.
+- **검증**: 전체 461 tests BUILD SUCCESS(회귀 0, +2 신규 예산 일관성 테스트, 5 skip 그대로). `AppPropertiesSafeAccessorTest`가 신규 `memorySafe()`/`summarySafe()`에 대해서도 raw getter 미사용을 자동 강제. CLAUDE.md Null-safe config 컨벤션에 두 접근자 추가.
+
 ---
 
-### 6.12 사용자별 LLM 사용량 쿼터 🔵 미착수 — 다음 우선순위 2순위
+### 6.12 사용자별 LLM 사용량 쿼터 🔵 미착수 — 다음 우선순위 1순위
 
 **현재 코드 확인 (2026-07-04 재확인)**:
 - `llm_usage.user_id` 컬럼 자체는 **이미 존재**한다(`LlmUsageRepository.init()`의 런타임 `ALTER TABLE ... DEFAULT 'anonymous'`, EDIT.md #6에서 발견). 하지만 `record(String provider, long in, long out)`에 `userId` 파라미터가 없고 `getByPeriod/getDaily/usedProviders/deleteByProvider` 등 모든 조회 메서드도 이 컬럼을 참조하지 않아 **모든 행이 영구히 'anonymous'로 고정** — 사실상 죽은 컬럼이다. **실제 `llm_usage`는 여전히 프로바이더 단위 집계**이며, 사용자별 쿼터를 하려면 이 컬럼을 실제로 채우거나(아래 B안) conversation_turns 기반(A안, 권장)으로 별도 집계해야 한다.
@@ -320,7 +326,7 @@ SQLite `audit_log` 테이블 대신 Logback `SizeAndTimeBasedRollingPolicy`로 �
 
 ---
 
-### 6.13 사용자별 스토리지 쿼터 🔵 미착수 (§6.2에서 이관) — 다음 우선순위 3순위
+### 6.13 사용자별 스토리지 쿼터 🔵 미착수 (§6.2에서 이관) — 다음 우선순위 2순위
 
 > **현재 코드 확인 (2026-07-02)**: `storage_used_bytes` 컬럼·쿼터 로직·프로퍼티 모두 없음. §6.2가 "완료"로 표기했으나 **미구현**. 저장은 공유 구조(`DocRegistry.SHARED`, `data/documents/`)라 "사용자별" 쿼터의 의미부터 재정의 필요.
 

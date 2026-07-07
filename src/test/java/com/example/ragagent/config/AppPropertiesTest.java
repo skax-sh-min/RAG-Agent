@@ -17,7 +17,7 @@ class AppPropertiesTest {
         return new AppProperties(
                 "./data", 2, 800, 100, 100, 7, 0.0, true, 0, false,
                 true, false, 3, sseTimeoutSeconds,
-                null, null, null, null, null, null, null, null, null, null,
+                null, null, null, null, null, null, null, null, null, null, null, null,
                 sseIdleTimeoutSeconds);
     }
 

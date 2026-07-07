@@ -1,5 +1,6 @@
 package com.example.ragagent.repository;
 
+import com.example.ragagent.config.AppProperties;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -11,6 +12,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 /**
  * QA — SqliteMemoryRepository
@@ -32,7 +35,9 @@ class SqliteMemoryRepositoryTest {
         dbFile = Files.createTempFile("rag-test-", ".db");
         DriverManagerDataSource ds = new DriverManagerDataSource("jdbc:sqlite:" + dbFile);
         JdbcTemplate jdbc = new JdbcTemplate(ds);
-        repo = new SqliteMemoryRepository(jdbc);
+        AppProperties props = mock(AppProperties.class);
+        when(props.memorySafe()).thenReturn(new AppProperties.MemoryConfig(50));
+        repo = new SqliteMemoryRepository(jdbc, props);
         repo.init();
     }
 

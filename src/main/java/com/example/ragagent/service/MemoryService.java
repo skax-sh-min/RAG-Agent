@@ -28,6 +28,15 @@ public class MemoryService {
         return repository.getHistory(userId, threadId, maxConversationChars);
     }
 
+    /**
+     * Char budget applied to conversation history (LLM_MAX_TOKENS × 0.75, floor 1,000).
+     * Exposed so the summary path ({@code ConversationSummarizerService.buildContext()}) can
+     * respect the exact same ceiling as this fallback path — single source of truth (§6.11).
+     */
+    public int maxConversationChars() {
+        return maxConversationChars;
+    }
+
     /** Returns the generated turn id (conversation_turns.id). */
     public long addTurn(String userId, String threadId, String question, String answer,
                         String askedAt, int inputTokens, int outputTokens,
