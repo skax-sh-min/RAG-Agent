@@ -10,6 +10,7 @@ import org.springframework.web.client.HttpClientErrorException;
 
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
@@ -26,6 +27,17 @@ public class LlmRouter {
     private final CircuitBreaker circuitBreaker;
     private final RoutingMode defaultMode;
     private final double progressiveThreshold;
+
+    /**
+     * Providers known (for the life of this process) to lack image-input support
+     * (missing mmproj, text-only model, ...). Populated on first such failure so
+     * later VISION/LIGHT_BOTH calls skip the doomed HTTP round-trip instead of
+     * repeatedly failing — this is deliberately NOT routed through CircuitBreaker,
+     * since a provider name is shared across task types and blocking it there would
+     * also stall unrelated TEXT/LIGHT_TEXT calls (e.g. ANSWER/CLASSIFIER) that the
+     * same provider can still serve fine.
+     */
+    private final Set<String> visionUnsupportedProviders = ConcurrentHashMap.newKeySet();
 
     public LlmRouter(List<LlmProvider> providers, LlmUsageRepository usageRepo,
                      CircuitBreaker circuitBreaker, RoutingMode defaultMode,
@@ -200,17 +212,23 @@ public class LlmRouter {
     Optional<LlmProvider> findFirst(TaskType taskType,
                                     List<ProviderRole> roleOrder,
                                     Set<String> excluded) {
+        boolean imageTask = isImageTask(taskType);
         for (ProviderRole role : roleOrder) {
             Optional<LlmProvider> p = providers.stream()
                     .filter(x -> x.role() == role
                             && x.supports(taskType)
                             && x.hasValidApiKey()
                             && !circuitBreaker.isBlocked(x.name())
-                            && !excluded.contains(x.name()))
+                            && !excluded.contains(x.name())
+                            && !(imageTask && visionUnsupportedProviders.contains(x.name())))
                     .findFirst();
             if (p.isPresent()) return p;
         }
         return Optional.empty();
+    }
+
+    private static boolean isImageTask(TaskType taskType) {
+        return taskType == TaskType.VISION || taskType == TaskType.LIGHT_BOTH;
     }
 
     private String executeWithTracking(TaskType taskType, List<ProviderRole> roleOrder, String usageLabelPrefix,
@@ -240,7 +258,18 @@ public class LlmRouter {
                         provider.name());
                 throw e;
             }
-            circuitBreaker.block(provider.name(), "30");
+            if (isVisionUnsupported(e)) {
+                // Model lacks mmproj / image-input support — a request-shape limitation, not a
+                // provider outage. Blocking here (like any other failure) would also stall
+                // unrelated TEXT/LIGHT_TEXT tasks sharing this provider name until the block
+                // expires. Remember it instead so future VISION/LIGHT_BOTH calls skip this
+                // provider without even attempting the doomed call.
+                visionUnsupportedProviders.add(provider.name());
+                log.warn("Provider [{}] does not support image input (mmproj missing) — "
+                        + "skipping image tasks for this provider, NOT blocking circuit breaker", provider.name());
+            } else {
+                circuitBreaker.block(provider.name(), "30");
+            }
             log.warn("Provider [{}] threw {}: {}, trying next",
                     provider.name(), e.getClass().getSimpleName(), e.getMessage());
             return executeWithTracking(taskType, roleOrder, usageLabelPrefix, call, tried);
@@ -255,6 +284,21 @@ public class LlmRouter {
                     || cur instanceof java.net.SocketTimeoutException
                     || cur instanceof java.util.concurrent.TimeoutException) {
                 return true;
+            }
+            cur = cur.getCause();
+        }
+        return false;
+    }
+
+    private static boolean isVisionUnsupported(Throwable t) {
+        Throwable cur = t;
+        while (cur != null) {
+            String msg = cur.getMessage();
+            if (msg != null) {
+                String lowered = msg.toLowerCase();
+                if (lowered.contains("image input is not supported") || lowered.contains("mmproj")) {
+                    return true;
+                }
             }
             cur = cur.getCause();
         }
