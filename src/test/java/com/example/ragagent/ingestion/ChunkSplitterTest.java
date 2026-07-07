@@ -206,6 +206,108 @@ class ChunkSplitterTest {
     }
 
     @Test
+    @DisplayName("slidingWindow — 코드블록이 청크 경계에서 잘리면 이어지는 조각마다 여는 펜스(언어 태그)가 재삽입되고, " +
+            "블록이 그 조각 안에서 끝나지 않으면 닫는 펜스도 덧붙는다")
+    void slidingWindow_codeBlockSplitAcrossPieces_reopensFenceOnContinuations() {
+        // 10자/줄로 정렬: fence("```python\n")=10자, 데이터 100줄×10자=1000자, 닫는 펜스("```\n")=4자 → 총 1014자.
+        // chunkSize=300, overlap=30 → 경계가 항상 줄 경계와 맞아떨어지도록 설계된 값.
+        String fenceOpen = "```python\n";
+        String dataLine = "a".repeat(9) + "\n";
+        String fenceClose = "```\n";
+        String code = fenceOpen + dataLine.repeat(100) + fenceClose;
+        Document doc = new Document(code);
+
+        List<Document> pieces = splitter.slidingWindow(doc, 300, 30, 50);
+
+        assertThat(pieces).hasSize(4);
+
+        // 첫 조각: 실제 여는 펜스를 그대로 포함 (재삽입 아님) — 이중 펜스 없음
+        String first = pieces.get(0).getText();
+        assertThat(first).startsWith("```python");
+        assertThat(countOccurrences(first, "```")).isEqualTo(1);
+
+        // 중간 조각들: 이어지는 조각이므로 여는 펜스 재삽입 + 그 조각 안에서 블록이 안 끝나므로 닫는 펜스도 추가
+        for (int i = 1; i <= 2; i++) {
+            String piece = pieces.get(i).getText();
+            assertThat(piece).as("piece " + i).startsWith("```python");
+            assertThat(piece).as("piece " + i).endsWith("```");
+            assertThat(countOccurrences(piece, "```")).as("piece " + i).isEqualTo(2);
+        }
+
+        // 마지막 조각: 여는 펜스는 재삽입되지만, 원본의 실제 닫는 펜스를 이미 포함하므로 중복 추가되지 않음
+        String last = pieces.get(3).getText();
+        assertThat(last).startsWith("```python");
+        assertThat(last).endsWith("```");
+        assertThat(countOccurrences(last, "```")).isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("slidingWindow — 표가 청크 경계에서 잘리면 이어지는 조각마다 헤더+구분행이 재삽입된다")
+    void slidingWindow_tableSplitAcrossPieces_reinjectsHeaderOnContinuations() {
+        // 6자/줄로 정렬: 헤더("|HHH|\n")=6자, 구분("|---|\n")=6자, 데이터 100행×6자=600자 → 총 612자.
+        String header = "|HHH|\n";
+        String separator = "|---|\n";
+        String dataRow = "|xxx|\n";
+        String table = header + separator + dataRow.repeat(100);
+        Document doc = new Document(table);
+
+        List<Document> pieces = splitter.slidingWindow(doc, 200, 12, 50);
+
+        assertThat(pieces).hasSizeGreaterThanOrEqualTo(3);
+
+        String first = pieces.get(0).getText();
+        assertThat(first).startsWith("|HHH|").contains("|---|");
+        // 첫 조각은 이미 헤더가 원본 그대로 있으므로 중복 삽입되지 않는다
+        assertThat(countOccurrences(first, "|HHH|")).isEqualTo(1);
+
+        for (int i = 1; i < pieces.size(); i++) {
+            String piece = pieces.get(i).getText();
+            assertThat(piece).as("piece " + i).startsWith("|HHH|");
+            assertThat(piece).as("piece " + i).contains("|---|");
+        }
+    }
+
+    @Test
+    @DisplayName("reopenTruncatedBlock — 코드/표 어느 쪽도 아니면 청크를 그대로 반환")
+    void reopenTruncatedBlock_plainText_returnsUnchanged() {
+        String text = "그냥 본문입니다.\n계속됩니다.";
+        String chunk = text.substring(5);
+
+        assertThat(splitter.reopenTruncatedBlock(text, 5, text.length(), chunk)).isEqualTo(chunk);
+    }
+
+    @Test
+    @DisplayName("reopenCodeFence — 원본의 여는 펜스 줄(언어 태그 포함)을 그대로 재사용한다")
+    void reopenCodeFence_reusesOriginalOpeningFenceLine() {
+        String full = "```java\ncode line 1\ncode line 2\n```\n";
+        ChunkSplitter.Range range = new ChunkSplitter.Range(0, full.length());
+
+        String result = splitter.reopenCodeFence(full, range, 20, "code line 2");
+
+        assertThat(result).isEqualTo("```java\ncode line 2\n```");
+    }
+
+    @Test
+    @DisplayName("reinjectTableHeader — 헤더 다음 줄이 표 형식이 아니면 헤더행만 재삽입한다")
+    void reinjectTableHeader_secondLineNotTableLike_prependsHeaderOnly() {
+        String full = "|H|\n지나가는 본문\n|2|\n"; // 헤더 바로 다음 줄이 표가 아님(파이프 미포함)
+        ChunkSplitter.Range range = new ChunkSplitter.Range(0, full.length());
+
+        String result = splitter.reinjectTableHeader(full, range, "|2|");
+
+        assertThat(result).isEqualTo("|H|\n|2|");
+    }
+
+    private static int countOccurrences(String haystack, String needle) {
+        int count = 0, idx = 0;
+        while ((idx = haystack.indexOf(needle, idx)) != -1) {
+            count++;
+            idx += needle.length();
+        }
+        return count;
+    }
+
+    @Test
     @DisplayName("hardSplitByLines — 줄 단위로 채우고, 상한을 넘는 한 줄은 문자 단위로 자른다")
     void hardSplitByLines_packsLinesAndCutsOversizedLine() {
         String threeLines = "A".repeat(30) + "\n" + "B".repeat(30) + "\n" + "C".repeat(30);

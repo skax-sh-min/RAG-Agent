@@ -274,7 +274,7 @@ public class ChunkSplitter {
             }
             String chunk = text.substring(start, end).strip();
             if (!chunk.isBlank()) {
-                rawChunks.add(chunk);
+                rawChunks.add(reopenTruncatedBlock(text, start, end, chunk));
             }
             if (end >= text.length()) break;
             start = Math.max(start + 1, end - overlap);
@@ -284,6 +284,51 @@ public class ChunkSplitter {
             result.add(new Document(merged, new HashMap<>(doc.getMetadata())));
         }
         return result;
+    }
+
+    /**
+     * When a sliding-window boundary falls inside a table or fenced code block too large to keep
+     * whole (see {@link #adjustEndForCodeBlock}/{@link #adjustEndForTableBlock}, which only snap
+     * boundaries when doing so is cheap), the piece starting at {@code start} continues mid-block
+     * with no header row / opening fence — it reads as a headerless data row or a bare code
+     * fragment with no language context. Detects that case and re-wraps the piece so it is
+     * self-contained: table pieces get the original header+separator row prepended; code pieces
+     * get the original opening fence line prepended, plus a closing fence appended if the block
+     * doesn't close within this piece. No-op when {@code start} isn't a continuation of either.
+     */
+    String reopenTruncatedBlock(String fullText, int start, int end, String chunk) {
+        Range codeRange = findFencedCodeRangeContaining(fullText, start + 1);
+        if (codeRange != null && codeRange.start() < start) {
+            return reopenCodeFence(fullText, codeRange, end, chunk);
+        }
+        Range tableRange = findTableRangeContaining(fullText, start + 1);
+        if (tableRange != null && tableRange.start() < start) {
+            return reinjectTableHeader(fullText, tableRange, chunk);
+        }
+        return chunk;
+    }
+
+    String reopenCodeFence(String fullText, Range codeRange, int chunkEnd, String chunk) {
+        int fenceLineEnd = fullText.indexOf('\n', codeRange.start());
+        if (fenceLineEnd == -1) fenceLineEnd = fullText.length();
+        String openingFenceLine = fullText.substring(codeRange.start(), fenceLineEnd).strip();
+
+        StringBuilder sb = new StringBuilder(openingFenceLine).append('\n').append(chunk);
+        if (chunkEnd < codeRange.end()) {
+            sb.append("\n```"); // block doesn't close within this piece — close it so it stays valid
+        }
+        return sb.toString();
+    }
+
+    String reinjectTableHeader(String fullText, Range tableRange, String chunk) {
+        int headerLineEnd = findLineEndExclusive(fullText, tableRange.start());
+        String headerBlock = fullText.substring(tableRange.start(), headerLineEnd);
+        if (isTableLine(fullText, headerLineEnd)) {
+            int sepLineEnd = findLineEndExclusive(fullText, headerLineEnd);
+            headerBlock += fullText.substring(headerLineEnd, sepLineEnd);
+        }
+        headerBlock = headerBlock.stripTrailing();
+        return headerBlock.isBlank() ? chunk : headerBlock + "\n" + chunk;
     }
 
     List<String> mergeTinyChunks(List<String> chunks, int minLength) {
