@@ -295,7 +295,7 @@ public class DocumentController {
 
     // Only these are ever served inline as image/*. Anything else — notably SVG, which can
     // carry an executable <script>/onload and would run same-origin if rendered inline — is
-    // forced to download instead (QA.md B-32).
+    // forced to download instead.
     private static final Set<String> SAFE_IMAGE_EXTENSIONS = Set.of("png", "jpg", "jpeg", "gif", "webp");
 
     /**

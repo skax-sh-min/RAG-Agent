@@ -129,7 +129,7 @@ class DocumentControllerHtmxTest {
                 .andExpect(jsonPath("$.taskId").value("task-sync-1"));
     }
 
-    // ── QA.md B-32 회귀: 추출된 SVG는 inline 렌더 금지 ───────────────────────
+    // ── 회귀: 추출된 SVG는 inline 렌더 금지 ───────────────────────
 
     @Test
     @DisplayName("GET /api/v1/images/{docId}/{filename} — .svg는 octet-stream + attachment로 강제 다운로드")
