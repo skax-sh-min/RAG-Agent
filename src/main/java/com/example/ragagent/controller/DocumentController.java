@@ -99,15 +99,28 @@ public class DocumentController {
             log.warn("Rejected upload: {}", e.getMessage());
             return ResponseEntity.badRequest().build();
         }
-        String taskId = progressService.newTaskId();
-        final Path tmpPath = tmp;
-        final String fname = filename;
-        final String ver = version;
         final String userId = ctx.userId();
+        Path dest;
+        try {
+            // Persist into documentsDir (not just the temp stage) — directory sync treats any
+            // registered document missing from disk as user-deleted and wipes its embeddings,
+            // so an upload that never lands on disk gets destroyed on the next sync.
+            dest = persistToDocumentsDir(tmp, filename, ragService.userDocumentsDir(userId));
+        } catch (IllegalArgumentException e) {
+            log.warn("Rejected upload: {}", e.getMessage());
+            return ResponseEntity.badRequest().build();
+        } finally {
+            try { Files.deleteIfExists(tmp); } catch (IOException ignored) {}
+        }
+
+        String taskId = progressService.newTaskId();
+        final Path docPath = dest;
+        final String fname = dest.getFileName().toString();
+        final String ver = version;
 
         Thread.ofVirtual().name("idx-upload-" + taskId).start(() -> {
             try {
-                DocumentInfo info = ragService.indexDocument(userId, tmpPath, fname, ver, tagList,
+                DocumentInfo info = ragService.indexDocument(userId, docPath, fname, ver, tagList,
                     addImageDescriptions, addHeadingNumbers,
                         event -> progressService.publish(taskId, event));
                 progressService.publish(taskId, IndexingProgressEvent.done(info));
@@ -119,8 +132,6 @@ public class DocumentController {
                 String msg = isChromaDown(e) ? "ChromaDB 연결 실패" : e.getMessage();
                 log.error("Async index error for {}", fname, e);
                 progressService.publish(taskId, IndexingProgressEvent.error(fname, msg));
-            } finally {
-                try { Files.deleteIfExists(tmpPath); } catch (Exception ignored) {}
             }
         });
 
@@ -224,43 +235,23 @@ public class DocumentController {
         }
 
         String userId = ctx.userId();
+        Path dest;
         try {
-            Path documentsDir = ragService.userDocumentsDir(userId);
-            Files.createDirectories(documentsDir);
-            Path base = documentsDir.toAbsolutePath().normalize();
-            Path dest = base.resolve(filename).normalize();
-            if (!dest.startsWith(base)) {
-                log.warn("Rejected upload: path escapes documentsDir ({})", filename);
-                Files.deleteIfExists(staged);
-                return ResponseEntity.badRequest().build();
-            }
-            if (Files.exists(dest) && computeSha256(staged).equals(computeSha256(dest))) {
-                log.debug("Upload no-op: identical content for {}", filename);
-                Files.deleteIfExists(staged);
-                DocumentInfo existing = ragService.indexDocument(userId, dest,
-                    dest.getFileName().toString(), version, tagList,
-                    addImageDescriptions, addHeadingNumbers, e -> {});
-                auditLogger.log("document.upload", existing.docId(),
-                    Map.of("filename", filename, "version", version, "chunks", existing.chunks(),
-                        "addImageDescriptions", addImageDescriptions,
-                        "addHeadingNumbers", addHeadingNumbers));
-                return ResponseEntity.ok(existing);
-            }
-            if (Files.exists(dest)) {
-                dest = versionedPath(dest);
-            }
-            Files.copy(staged, dest, StandardCopyOption.REPLACE_EXISTING);
-            DocumentInfo info = ragService.indexDocument(userId, dest,
-                    dest.getFileName().toString(), version, tagList,
-                    addImageDescriptions, addHeadingNumbers, e -> {});
-            auditLogger.log("document.upload", info.docId(),
-                    Map.of("filename", filename, "version", version, "chunks", info.chunks(),
-                    "addImageDescriptions", addImageDescriptions,
-                    "addHeadingNumbers", addHeadingNumbers));
-            return ResponseEntity.ok(info);
+            dest = persistToDocumentsDir(staged, filename, ragService.userDocumentsDir(userId));
+        } catch (IllegalArgumentException e) {
+            log.warn("Rejected upload: {}", e.getMessage());
+            return ResponseEntity.badRequest().build();
         } finally {
             try { Files.deleteIfExists(staged); } catch (IOException ignored) {}
         }
+        DocumentInfo info = ragService.indexDocument(userId, dest,
+                dest.getFileName().toString(), version, tagList,
+                addImageDescriptions, addHeadingNumbers, e -> {});
+        auditLogger.log("document.upload", info.docId(),
+                Map.of("filename", filename, "version", version, "chunks", info.chunks(),
+                "addImageDescriptions", addImageDescriptions,
+                "addHeadingNumbers", addHeadingNumbers));
+        return ResponseEntity.ok(info);
     }
 
     @PostMapping("/api/v1/documents/sync")
@@ -359,6 +350,33 @@ public class DocumentController {
             t = t.getCause();
         }
         return false;
+    }
+
+    /**
+     * Persists a staged upload into {@code documentsDir} so it survives for future directory
+     * syncs — {@link com.example.ragagent.ingestion.DocumentIndexer#syncDirectory} treats any
+     * registered document missing from disk as user-deleted. No-ops (returns the existing path)
+     * if identical content is already there; falls back to a versioned name on a same-name
+     * collision with different content.
+     *
+     * @throws IllegalArgumentException if the resolved destination escapes documentsDir
+     */
+    private static Path persistToDocumentsDir(Path staged, String filename, Path documentsDir) throws IOException {
+        Files.createDirectories(documentsDir);
+        Path base = documentsDir.toAbsolutePath().normalize();
+        Path dest = base.resolve(filename).normalize();
+        if (!dest.startsWith(base)) {
+            throw new IllegalArgumentException("path escapes documentsDir: " + filename);
+        }
+        if (Files.exists(dest) && computeSha256(staged).equals(computeSha256(dest))) {
+            log.debug("Upload no-op: identical content for {}", filename);
+            return dest;
+        }
+        if (Files.exists(dest)) {
+            dest = versionedPath(dest);
+        }
+        Files.copy(staged, dest, StandardCopyOption.REPLACE_EXISTING);
+        return dest;
     }
 
     private static String computeSha256(Path path) throws IOException {

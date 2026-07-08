@@ -20,6 +20,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
@@ -82,6 +83,25 @@ class DocumentControllerHtmxTest {
                         .with(csrf()))
                 .andExpect(status().isAccepted())
                 .andExpect(jsonPath("$.taskId").value("task-abc"));
+    }
+
+    @Test
+    @DisplayName("POST /ui/documents/upload — 업로드 파일이 documentsDir에 영구 저장됨 (동기화 삭제 오판 회귀 방지)")
+    void uploadDocument_persistsFileToDocumentsDir() throws Exception {
+        when(indexingProgressService.newTaskId()).thenReturn("task-persist");
+
+        MockMultipartFile file = new MockMultipartFile(
+                "file", "keep.pdf", "application/pdf", "%PDF-1.4 dummy".getBytes());
+
+        mvc.perform(multipart("/ui/documents/upload").file(file)
+                        .param("version", "latest")
+                        .with(csrf()))
+                .andExpect(status().isAccepted());
+
+        // syncDirectory() scans documentsDir and deletes any registered doc missing from disk —
+        // if the upload only wrote to a temp file, this file would be absent and the next sync
+        // would wipe the document's embeddings.
+        assertThat(tempDir.resolve("documents").resolve("keep.pdf")).exists();
     }
 
     @Test
