@@ -47,8 +47,9 @@
 - ~~**Phase 5**: sqlite-vec 선택적 연동~~ → ✅ 완료 (Step 5.1~5.8, `app.vectorstore.type=chroma|sqlite-vec`)
 - ~~**Phase 5 추가**: Step 5.9 태그 기반 검색 스코프 + Step 5.10 sqlite-vec 운영/벡터 DB 분리~~ → ✅ 완료 (2026-07-01, Step 5.9 태그 필터/제안/복원 + Step 5.10 `SQLITE_VEC_DB_PATH` 분리 스위치). vec0 라이브 부팅은 운영 인수
 - ~~**Phase 6**: 폐쇄망/노-도커 — 키리스 LOCAL(G1)·차원 외부화(G2)·라우팅 외부화(G3)·런북(G4)·무-외부호출 인수(G5)~~ → ✅ G1~G5 완료 (2026-06-25). sqlite-vec 라이브 부팅(vec0 바이너리)만 운영 인수
+- **Phase 7** (검색 품질·성능 고도화, 미착수): Contextual Retrieval(§10.1) · 가중 RRF(§10.2) · 쿼리 임베딩 캐시(§10.3) · 한국어 FTS 토크나이저(§10.4) · sqlite-vec 단일 스캔(§10.5) · cross-encoder 리랭커(§10.6) · 시맨틱 응답 캐시(§10.7). 권장 착수: Phase 7-A(§10.2+§10.3, 빠른 승리) → Phase 7-B(§10.1, 정확도 본편). 상세 우선순위/단계는 §10.8
 
-> 스키마 관리 실태: **Flyway(V1·V2 baseline) + 런타임 멱등 DDL 혼용**. `SqliteMemoryRepository`/`SqliteUserDetailsService`가 `CREATE TABLE IF NOT EXISTS` + `ALTER TABLE ADD COLUMN`으로 컬럼을 증분 추가한다(§12). 신규 컬럼은 새 Flyway 파일이 아니라 이 런타임 `ALTER TABLE` 패턴으로 추가한다.
+> 스키마 관리 실태: **Flyway(V1·V2 baseline) + 런타임 멱등 DDL 혼용**. `SqliteMemoryRepository`/`SqliteUserDetailsService`가 `CREATE TABLE IF NOT EXISTS` + `ALTER TABLE ADD COLUMN`으로 컬럼을 증분 추가한다(§13). 신규 컬럼은 새 Flyway 파일이 아니라 이 런타임 `ALTER TABLE` 패턴으로 추가한다.
 
 ---
 
@@ -63,11 +64,12 @@
 7. [Phase 4 — 확장 (조건부)](#7-phase-4--확장-조건부)
 8. [Phase 5 — Vector Store 선택적 연동](#8-phase-5--vector-store-선택적-연동)
 9. [Phase 6 — 폐쇄망 / 노-도커 실행 지원](#9-phase-6--폐쇄망air-gapped--노-도커-실행-지원)
-10. [리스크 및 이슈](#10-리스크-및-이슈)
-11. [의존성 변경 사항](#11-의존성-변경-사항-pomxml)
-12. [DB 스키마 변경](#12-db-스키마-변경-요약)
-13. [최종 체크리스트](#13-최종-체크리스트)
-14. [부록 — 결정 사항 한눈에 보기](#부록--결정-사항-한눈에-보기)
+10. [Phase 7 — 검색 품질·성능 고도화](#10-phase-7--검색-품질성능-고도화)
+11. [리스크 및 이슈](#11-리스크-및-이슈)
+12. [의존성 변경 사항](#12-의존성-변경-사항-pomxml)
+13. [DB 스키마 변경](#13-db-스키마-변경-요약)
+14. [최종 체크리스트](#14-최종-체크리스트)
+15. [부록 — 결정 사항 한눈에 보기](#부록--결정-사항-한눈에-보기)
 
 ---
 
@@ -220,7 +222,7 @@ Caddy(자동 TLS·HTTP/2)로 `app:8080` 프록시 + 보안 헤더(HSTS 등). Spr
 
 ## 6. Phase 3 — 운영 견고화 🟡 일부 완료
 
-> **2026-07-05 재배열**: 완료 항목을 앞쪽에(기반 운영 항목 → LLM 사용량 클러스터 → 대화/컨텍스트 클러스터), 미착수 항목을 뒤쪽에 우선순위 순으로 재배치했다. 번호가 이 문서 다른 곳(§7·§11·§12)에서도 참조되므로 교차 참조는 전부 새 번호로 갱신됨.
+> **2026-07-05 재배열**: 완료 항목을 앞쪽에(기반 운영 항목 → LLM 사용량 클러스터 → 대화/컨텍스트 클러스터), 미착수 항목을 뒤쪽에 우선순위 순으로 재배치했다. 번호가 이 문서 다른 곳(§7·§12·§13)에서도 참조되므로 교차 참조는 전부 새 번호로 갱신됨.
 
 ### 6.1 Rate Limiting — Bucket4j ✅ 완료
 
@@ -479,7 +481,86 @@ G1~G4 코드/문서 완료. G5는 라우팅 계층 "외부 무선택"을 `LlmCon
 
 ---
 
-## 10. 리스크 및 이슈
+## 10. Phase 7 — 검색 품질·성능 고도화 🔵 미착수
+
+> **배경 (2026-07-07 코드 확인)**: 검색 파이프라인(`RetrievalService`)은 이미 MultiQuery(원본+2) → 배치 임베딩 → 벡터 검색 → RRF 융합 → (옵션)하이브리드 BM25 → (옵션)LLM 리랭크 → 태그 필터로 잘 구성돼 있다. 아래는 "빠진 것"이 아니라 **현 구조 위에서 정확도/성능을 끌어올리는 증분 개선**이며, 자바 관점의 난이도·회귀 리스크와 함께 우선순위화했다. 자체 검색 품질 평가 세트가 없으므로 각 항목의 효과는 도입 후 정성/정량 측정으로 검증하는 것을 전제로 한다.
+
+### 10.1 Contextual Retrieval — 청크 맥락 주입 (정확도 ROI 1순위)
+
+**현재 상태**: `ChunkSplitter`(섹션 병합 + 슬라이딩 윈도우, 순수 텍스트 로직)는 각 청크의 자기 텍스트만 임베딩 대상으로 넘긴다. "이 청크가 어느 문서·상위 섹션의 무엇인지"가 벡터에 반영되지 않아, 대명사·표·코드 조각 청크의 검색 recall이 낮다.
+**개선안**: 인덱싱 시 청크별로 "이 청크는 {문서명}의 {상위 섹션}에 대한 내용" 1~2문장 맥락을 LLM으로 생성해 **임베딩 대상 텍스트 앞에 prepend**(화면 표시용 원문은 유지, 임베딩 입력만 확장). 이미 `KeywordExtractor`가 청크별 LLM 호출(+TF 폴백)을 수행하므로 **같은 호출에서 keywords + context를 함께 추출**하면 인덱싱 왕복 추가 없이 얹을 수 있다. 백그라운드 사용량은 `BackgroundUsage`의 `keyword:`와 유사하게 `context:` 접두사로 분리 기록.
+**효과**: 공개 벤치 기준 검색 실패율 대폭 감소(문헌상 ~35%). 이 프로젝트 정확도 ROI 1순위.
+**비용/리스크**: 인덱싱 1회성 LLM 토큰 증가, 검색 지연 0, 재인덱싱 필요.
+**완료 기준**: 신규 인덱싱 청크의 임베딩 입력에 맥락 문장이 포함되고, `context:` 사용량이 `/llm-usage`에 분리 집계되며, 맥락 생성 실패 시 원문만으로 폴백(회귀 0).
+
+### 10.2 가중 RRF (Weighted RRF)
+
+**현재 상태**: `RetrievalService.mergeRrf()`는 모든 후보 리스트에 `1/(rank+1+60)` 동일 가중을 준다. MultiQuery로 벡터 축이 3개(원본+2), 하이브리드 시 BM25 축은 1개 → **정확 용어(에러코드·API명·제품코드) 매칭이 벡터 합의에 밀려 저평가**된다.
+**개선안**: 축별 가중치를 도입해 `score += weight * 1/(rank+1+k)`. 최소한 키워드 축 가중치를 프로퍼티(`app.search-rrf-keyword-weight` 등, `props.searchXxxSafe()` 관례)로 노출. 상수 k(기본 60)도 외부화 검토.
+**효과**: 하이브리드 검색 실효성 상승, 특히 완전 일치 용어 질의.
+**난이도**: 최저 — 한 메서드(`mergeRrf`) 시그니처에 가중치 맵 추가 + 프로퍼티 1~2개. `mergeRrf`는 이미 package-private로 단위 테스트됨.
+
+### 10.3 쿼리 임베딩 캐시 (성능, 저비용)
+
+**현재 상태**: 검색마다 원본+확장 쿼리(최대 3개)를 새로 임베딩한다(`RagService.searchBatch()` → provider가 매번 embed). 반복·유사 질문도 재임베딩해 지연·토큰을 낭비.
+**개선안**: 정규화된 쿼리 텍스트 → `float[]` **Caffeine 캐시**(크기/TTL 상한). Caffeine은 이미 `RateLimitFilter`에서 사용 중이라 **신규 의존성 0**. 임베딩 모델·차원 변경 시 무효화되도록 캐시 키에 모델명을 포함.
+**효과**: 반복 질의의 임베딩 왕복·토큰 절감(FAQ성 트래픽에서 큼).
+**난이도**: 최저.
+
+### 10.4 한국어 형태소 기반 FTS 토크나이저 (하이브리드 정확도)
+
+**현재 상태**: `KeywordSearchRepository`의 `chunk_fts`는 `tokenize='unicode61'` — 공백·구두점만 분리한다. **한국어 조사·복합어를 처리하지 못해** BM25 lexical recall이 영어 대비 크게 낮다. `toMatchQuery()`도 2자 이상 토큰을 OR로 결합할 뿐.
+**개선안**: (최소안) `trigram` 토크나이저로 전환해 부분 문자열 매칭 보강, 또는 (본안) 한국어 분석기(nori/은전한닢 계열) 연동. FTS 스키마 변경이므로 `chunk_fts` 재구축 + 재인덱싱 필요(이미 `rebuildChunkFtsWithDocTags()`류 재구축 경로 존재).
+**효과**: 하이브리드 모드 한국어 정확 매칭 개선 → **10.2와 세트로 하이브리드 기본 활성화(`app.search-hybrid-enabled`) 재검토 가능**.
+**난이도**: 중 — 스키마 재구축 + 폐쇄망 시 분석기 바이너리 조달 고려.
+
+### 10.5 sqlite-vec 배치 검색 단일 스캔 (성능)
+
+**현재 상태**: `SqliteVecVectorStoreProvider.searchBatch()`는 임베딩마다 `SEARCH` SQL을 **개별 실행**한다. vec0는 ANN 인덱스가 없는 **brute-force KNN(O(n))**이라, 쿼리 3개면 버전 파티션 전체를 3회 스캔한다.
+**개선안**: 버전 파티션 후보를 1회 로드 후 다중 쿼리 벡터에 재사용하거나, 다중 MATCH를 단일 스캔으로 처리. Chroma 모드는 HNSW라 해당 없음(sqlite-vec 전용 최적화).
+**효과**: sqlite-vec 모드 검색 지연 최대 ~1/3(코퍼스·쿼리 수에 비례해 체감↑).
+**난이도**: 중. 대규모에선 스칼라/바이너리 양자화 2단계(coarse bit 벡터 프리필터 → 정밀 재랭크)까지 고려 가능하나 별도 과제.
+
+### 10.6 Cross-Encoder 리랭커 (정확도, 인프라 투자)
+
+**현재 상태**: `RerankerService`는 LLM에 후보를 주고 JSON 인덱스 배열로 재정렬받는다(`parseRanking()`, 실패 시 원순서 폴백). 느리고 토큰 비용이 크며 파싱이 취약하다.
+**개선안**: bge-reranker-v2-m3 등 cross-encoder를 ONNX Runtime(Java)로 로컬 구동하거나 rerank 전용 API로 교체. `Optional<RerankerService>` 주입 구조라 **인터페이스 유지한 채 구현만 교체**할 수 있다(호출부 `RetrievalService` 무변경).
+**효과**: 리랭크 정확도↑ + 지연·토큰 비용↓.
+**난이도**: 상 — ONNX 런타임/모델 도입, 폐쇄망 시 모델 파일 조달·차원/토큰 제약 관리.
+
+### 10.7 시맨틱 응답 캐시 (성능, 리스크 有)
+
+**현재 상태**: 동일·유사 질문도 그래프 전체(분류→검색→답변→비평)를 재실행한다.
+**개선안**: 질문 임베딩 코사인 유사도 > 임계값이면 캐시된 답변 반환. FAQ성 트래픽에 효과적.
+**효과**: 반복 질의 지연 대폭↓.
+**리스크**: **stale 답변** — 문서 재인덱싱/버전 변경 시 캐시 무효화 필수, 피드백(§6.8 DISLIKE) 답변은 캐시 제외. 리스크 관리 필요로 후순위.
+**난이도**: 중.
+
+### 10.8 우선순위 및 단계 계획
+
+점수 = (Impact + 회귀리스크의 역) 관점으로 정리. 여기서 리스크는 "미조치 시 손해"가 아니라 **도입 시 회귀 리스크**(낮을수록 안전)로 해석한다.
+
+| 항목 | Impact | 회귀리스크 | Effort | 성격 |
+|------|:--:|:--:|:--:|------|
+| 10.1 Contextual Retrieval | 5 | 2 | 3 | 정확도(ROI 1위) |
+| 10.2 가중 RRF | 3 | 1 | 1 | 정확도(초저비용) |
+| 10.3 쿼리 임베딩 캐시 | 3 | 1 | 1 | 성능(초저비용) |
+| 10.4 한국어 FTS 토크나이저 | 4 | 2 | 3 | 정확도 |
+| 10.5 sqlite-vec 단일 스캔 | 3 | 1 | 2 | 성능 |
+| 10.6 Cross-Encoder 리랭커 | 4 | 2 | 4 | 정확도(고비용) |
+| 10.7 시맨틱 응답 캐시 | 4 | 3 | 3 | 성능(리스크 有) |
+
+**단계 계획**:
+- **Phase 7-A (빠른 승리)**: 10.2 가중 RRF + 10.3 임베딩 캐시 — 코드 변경 작고 회귀 리스크 최소, 즉시 체감. 이후 큰 작업의 효과를 측정할 baseline 확보.
+- **Phase 7-B (정확도 본편)**: 10.1 Contextual Retrieval — `KeywordExtractor` 파이프라인에 얹어 인덱싱 재구성. 정확도 ROI 1위.
+- **Phase 7-C (한국어 최적화)**: 10.4 FTS 토크나이저 + 하이브리드 기본 활성화 재검토.
+- **Phase 7-D (인프라 투자)**: 10.6 cross-encoder / 10.7 응답 캐시 / 10.5 스캔 최적화.
+
+**선결 과제(권장)**: 검색 품질을 정량 비교할 **평가 세트**(질문–정답 청크 쌍 소량 + recall@k/nDCG 측정 스크립트)가 있으면 10.1·10.4·10.6의 효과 검증이 크게 쉬워진다. Phase 7-A와 병행 준비를 권장.
+
+---
+
+## 11. 리스크 및 이슈
 
 | 리스크 | 심각도 | 완화 방안 |
 |--------|--------|----------|
@@ -503,11 +584,11 @@ G1~G4 코드/문서 완료. G5는 라우팅 계층 "외부 무선택"을 `LlmCon
 
 ---
 
-## 11. 의존성 변경 사항 (pom.xml)
+## 12. 의존성 변경 사항 (pom.xml)
 
 > **2026-07-05 재검증**: 의존성을 추가하는 Phase(1·3·5)가 모두 완료되어 이 절은 더 이상 "계획"이 아니라 이력이다. 정확한 최신 목록은 **pom.xml을 직접 참조**하는 것이 원칙(중복 유지 시 드리프트 위험 — 실제로 아래 두 건이 원안과 달랐다).
 
-### 11.1 Phase별 추가 이력 (pom.xml과 대조 검증 완료)
+### 12.1 Phase별 추가 이력 (pom.xml과 대조 검증 완료)
 
 | Phase | 추가 | 비고 |
 |---|---|---|
@@ -518,7 +599,7 @@ G1~G4 코드/문서 완료. G5는 라우팅 계층 "외부 무선택"을 `LlmCon
 
 > Phase 2(모바일 UI)의 webjar 의존성(`bootstrap`/`htmx.org`/`chart.js` 등)과 `spring-boot-starter-thymeleaf`/`thymeleaf-layout-dialect`/`reactor-netty-http`/`spring-boot-configuration-processor`는 이 계획 문서가 추적하는 "보안/운영 강화" 축 밖의 기반 의존성이라 위 표에 없음 — pom.xml이 전체 목록의 단일 출처.
 
-### 11.2 application.properties 추가 (2026-07-05 재검증, 대조 완료)
+### 12.2 application.properties 추가 (2026-07-05 재검증, 대조 완료)
 
 ```properties
 # Security
@@ -554,7 +635,7 @@ app.vectorstore.sqlite-vec.entrypoint=${SQLITE_VEC_ENTRYPOINT:}          # sqlit
 
 ---
 
-## 12. DB 스키마 변경 요약
+## 13. DB 스키마 변경 요약
 
 > ⚠️ **실제 스키마 관리 방식 (2026-07-02 확인)**: Flyway는 **`V1__baseline`+`V2__users` 두 개만** 존재한다. 나머지 컬럼/인덱스는 **런타임 멱등 DDL**(`SqliteMemoryRepository`·`SqliteUserDetailsService`의 `CREATE TABLE IF NOT EXISTS` + `ALTER TABLE ADD COLUMN`)로 관리된다. 아래 표에서 V3~V5는 **계획일 뿐 파일이 없으며**, 해당 변경은 런타임 DDL로 흡수되었거나(=user_id/토큰 컬럼) 미구현(=storage_used_bytes)이다.
 
@@ -571,27 +652,27 @@ app.vectorstore.sqlite-vec.entrypoint=${SQLITE_VEC_ENTRYPOINT:}          # sqlit
 
 ---
 
-## 13. 최종 체크리스트
+## 14. 최종 체크리스트
 
-### 13.1 Phase 1 완료 기준 ✅
+### 14.1 Phase 1 완료 기준 ✅
 
 - [x] HTTPS: Caddy 설정 완료 — 도메인 배포 시 Let's Encrypt 자동 발급, HTTP → HTTPS 자동 리다이렉트
 - [x] 비로그인 사용자는 `/`, `/chat/**`, `/documents`, `/api/**` 접근 불가 (단 `/login`, `/signup`, `/api/health`는 허용)
 - [x] 회원가입 → 자동 로그인 → 채팅 (SecurityContextHolder 수동 주입)
 - [x] 멀티유저 데이터 격리 — SQLite `user_id` 컬럼 + Chroma `u_{userId8}_{version}` 컬렉션
-- [x] Flyway 마이그레이션 (`V1__baseline`·`V2__users`) + 런타임 멱등 DDL로 `user_id`/토큰 컬럼 관리 (V3~V5는 미생성 — §12 참조)
+- [x] Flyway 마이그레이션 (`V1__baseline`·`V2__users`) + 런타임 멱등 DDL로 `user_id`/토큰 컬럼 관리 (V3~V5는 미생성 — §13 참조)
 - [x] 모든 HTMX 요청 + `chat-stream.js` fetch에 CSRF 토큰 자동 첨부
 - [x] 로그인 5회 실패 시 15분 잠금
 - [x] `app.auth.enabled=false` no-auth 모드 (guest 자동 로그인, 첫 실행 `/setup`)
 
-### 13.2 Phase 2 완료 기준
+### 14.2 Phase 2 완료 기준
 
 - [ ] iPhone Safari / Android Chrome에서 좌우 스크롤 없음
 - [ ] 채팅 입력창 키보드 출현 시에도 화면 하단 고정
 - [ ] 홈 화면 추가 시 standalone 앱처럼 실행
 - [ ] 다크모드 자동 전환 + 수동 토글 동작
 
-### 13.3 Phase 3 완료 기준
+### 14.3 Phase 3 완료 기준
 
 - [x] Rate limit 초과 시 HTTP 429 + `Retry-After` 헤더 반환
 - [x] 확장자 위조 파일 업로드 차단 (매직바이트 검증)
@@ -599,7 +680,7 @@ app.vectorstore.sqlite-vec.entrypoint=${SQLITE_VEC_ENTRYPOINT:}          # sqlit
 - [x] 주요 액션(로그인/업로드/삭제) `audit_log`에 기록
 - [ ] 일일 LLM 토큰 한도 초과 시 채팅 차단
 
-### 13.4 운영 준비 (Phase 1 종료 전)
+### 14.4 운영 준비 (Phase 1 종료 전)
 
 - [ ] SQLite 백업: Litestream 도입 또는 cron `.backup` 명령 (`cp`는 위험)
 - [x] `.env` 파일 git ignore 확인, API 키 로깅 마스킹 검증 (`PromptInjectionGuard.maskApiKey` + 테스트 완료)

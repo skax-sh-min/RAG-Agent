@@ -90,7 +90,7 @@ public class DocxToMarkdownConverter {
                                  String docId, Path imagesDir,
                                  int[] imgCounter, int paraIdx) throws IOException {
         int heading = headingLevel(doc, para);
-        String text = paragraphText(doc, para, docId, imagesDir, imgCounter, paraIdx);
+        String text = paragraphText(doc, para, docId, imagesDir, imgCounter, paraIdx, false);
         ListInfo listInfo = resolveListInfo(doc, para);
 
         if (heading > 0) {
@@ -124,14 +124,30 @@ public class DocxToMarkdownConverter {
         }
     }
 
-    /** 문단 run(텍스트/링크/스타일/이미지 마커)으로 인라인 마크다운 텍스트를 구성한다. */
+    /**
+     * 문단 run(텍스트/링크/스타일/이미지 마커)으로 인라인 마크다운 텍스트를 구성한다.
+     * DOCX는 리비전/맞춤법 검사 등의 이유로 시각적으로 동일한 문구를 스타일이 같은
+     * 여러 run으로 쪼개 저장하는 경우가 흔하므로, 인접한 동일 스타일 run을 먼저 병합한 뒤
+     * 강조 마커를 한 번만 적용한다(그렇지 않으면 "**a****b**" 같은 중복 마커가 생김).
+     * plain=true(코드블록으로 렌더링될 셀)이면 bold/italic 강조 마커를 전혀 붙이지 않는다.
+     */
     private String paragraphText(XWPFDocument doc, XWPFParagraph para,
                                  String docId, Path imagesDir,
-                                 int[] imgCounter, int paraIdx) throws IOException {
+                                 int[] imgCounter, int paraIdx, boolean plain) throws IOException {
         StringBuilder sb = new StringBuilder();
+        StringBuilder pending = new StringBuilder();
+        boolean pendingBold = false;
+        boolean pendingItalic = false;
+        boolean hasPending = false;
+
         for (XWPFRun run : para.getRuns()) {
             List<XWPFPicture> pics = run.getEmbeddedPictures();
             if (!pics.isEmpty()) {
+                if (hasPending) {
+                    sb.append(applyRunStyle(pending.toString(), pendingBold, pendingItalic));
+                    pending.setLength(0);
+                    hasPending = false;
+                }
                 for (XWPFPicture pic : pics) {
                     sb.append(extractPictureMarker(pic.getPictureData(), docId, imagesDir, imgCounter, paraIdx));
                 }
@@ -144,12 +160,29 @@ public class DocxToMarkdownConverter {
             if (run instanceof XWPFHyperlinkRun hyperlinkRun) {
                 String url = resolveHyperlinkUrl(doc, hyperlinkRun);
                 if (url != null && !url.isBlank()) {
+                    if (hasPending) {
+                        sb.append(applyRunStyle(pending.toString(), pendingBold, pendingItalic));
+                        pending.setLength(0);
+                        hasPending = false;
+                    }
                     sb.append("[").append(text).append("](").append(url).append(")");
                     continue;
                 }
             }
 
-            sb.append(applyRunStyle(text, run.isBold(), run.isItalic()));
+            boolean bold = !plain && run.isBold();
+            boolean italic = !plain && run.isItalic();
+            if (hasPending && (bold != pendingBold || italic != pendingItalic)) {
+                sb.append(applyRunStyle(pending.toString(), pendingBold, pendingItalic));
+                pending.setLength(0);
+            }
+            pending.append(text);
+            pendingBold = bold;
+            pendingItalic = italic;
+            hasPending = true;
+        }
+        if (hasPending) {
+            sb.append(applyRunStyle(pending.toString(), pendingBold, pendingItalic));
         }
         return sb.toString();
     }
@@ -195,12 +228,25 @@ public class DocxToMarkdownConverter {
                 : "[이미지: " + relPath + "]";
     }
 
-    /** run의 bold/italic 스타일에 따라 마크다운 강조 마커를 적용한다. */
+    /**
+     * run의 bold/italic 스타일에 따라 마크다운 강조 마커를 적용한다.
+     * CommonMark는 강조 마커 안쪽에 공백이 붙으면 강조로 파싱되지 않으므로,
+     * 앞뒤 공백은 마커 밖으로 빼내고 순수 공백/빈 문자열에는 마커를 붙이지 않는다.
+     */
     private String applyRunStyle(String text, boolean bold, boolean italic) {
-        if (bold && italic) return "***" + text + "***";
-        if (bold) return "**" + text + "**";
-        if (italic) return "_" + text + "_";
-        return text;
+        if (!bold && !italic) return text;
+
+        int start = 0;
+        int end = text.length();
+        while (start < end && Character.isWhitespace(text.charAt(start))) start++;
+        while (end > start && Character.isWhitespace(text.charAt(end - 1))) end--;
+        if (start == end) return text;
+
+        String lead = text.substring(0, start);
+        String core = text.substring(start, end);
+        String trail = text.substring(end);
+        String marker = bold && italic ? "***" : bold ? "**" : "_";
+        return lead + marker + core + marker + trail;
     }
 
     /** run 내부의 모든 텍스트 세그먼트를 안전하게 이어 붙인다. */
@@ -237,8 +283,11 @@ public class DocxToMarkdownConverter {
         // DOCX에서 1x1 표는 코드형 콜아웃으로 자주 쓰이므로,
         // 이미지/비텍스트 요소가 없는 경우에는 fenced code로 렌더링한다.
         if (isSingleCellTable(rows)) {
-            String code = cellContent(doc, rows.get(0).getTableCells().get(0), docId, imagesDir, imgCounter, paraIdx, "\n");
-            if (isTextOnlyCell(rows.get(0).getTableCells().get(0))) {
+            XWPFTableCell singleCell = rows.get(0).getTableCells().get(0);
+            boolean textOnly = isTextOnlyCell(singleCell);
+            // fenced code로 나갈 셀은 bold/italic 마커 없이 원문 그대로 담는다(plain=true).
+            String code = cellContent(doc, singleCell, docId, imagesDir, imgCounter, paraIdx, "\n", textOnly);
+            if (textOnly) {
                 sb.append("\n```\n").append(code).append("\n```\n\n");
             }
             else {
@@ -298,7 +347,7 @@ public class DocxToMarkdownConverter {
             int span = gridSpan(cell);
             String text = isVerticalMergeContinuation(cell)
                     ? "-"
-                    : cellContent(doc, cell, docId, imagesDir, imgCounter, paraIdx, " ");
+                    : cellContent(doc, cell, docId, imagesDir, imgCounter, paraIdx, " ", false);
 
             out.add(text);
             for (int i = 1; i < span; i++) out.add("-");
@@ -340,14 +389,17 @@ public class DocxToMarkdownConverter {
         return true;
     }
 
-    /** 셀 내부 모든 문단을 변환해 구분자로 연결한 단일 마크다운 문자열로 만든다. */
+    /**
+     * 셀 내부 모든 문단을 변환해 구분자로 연결한 단일 마크다운 문자열로 만든다.
+     * plain=true이면 bold/italic 강조 마커 없이 원문 텍스트만 담는다(fenced code 셀용).
+     */
     private String cellContent(XWPFDocument doc, XWPFTableCell cell,
                                String docId, Path imagesDir,
                                int[] imgCounter, int[] paraIdx,
-                               String separator) throws IOException {
+                               String separator, boolean plain) throws IOException {
         StringBuilder out = new StringBuilder();
         for (XWPFParagraph p : cell.getParagraphs()) {
-            String line = paragraphText(doc, p, docId, imagesDir, imgCounter, paraIdx[0]++).trim();
+            String line = paragraphText(doc, p, docId, imagesDir, imgCounter, paraIdx[0]++, plain).trim();
             if (line.isEmpty()) continue;
 
             ListInfo li = resolveListInfo(doc, p);
