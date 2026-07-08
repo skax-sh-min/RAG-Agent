@@ -11,7 +11,7 @@ import org.springframework.web.bind.annotation.*;
 import java.util.Map;
 
 /**
- * Admin UI: ChromaDB collection/chunk viewer and editor.
+ * Admin UI: vector-store collection/chunk viewer and editor (Chroma and sqlite-vec backends).
  */
 @Controller
 public class AdminController {
