@@ -18,7 +18,7 @@ public record LlmProviderReport(
         LlmUsageRepository.PeriodSummary monthly,
         Instant blockedUntil,  // null when provider is operating normally
         boolean configured,    // false when apiKey is blank (provider cannot make calls)
-        boolean deletable      // true only for orphan rows not in current config (§6.8)
+        boolean deletable      // true only for orphan rows not in current config
 ) {
     /** True when the circuit breaker is currently open for this provider. */
     public boolean isBlocked() {

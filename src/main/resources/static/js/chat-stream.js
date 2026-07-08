@@ -100,6 +100,15 @@
             const contentEl = document.getElementById(`stream-content-${bubbleId}`);
             if (contentEl) contentEl.textContent = '';
         }
+        // RETRIEVAL (re)entry: clear the prior search's images/sources first. A retry that
+        // finds no images doesn't send an "images" event at all (see onImages), so without
+        // this the previous search's now-unrelated thumbnails/badges would linger.
+        if (data.id === 'retrieval') {
+            const imagesEl = document.getElementById(`stream-images-${bubbleId}`);
+            if (imagesEl) imagesEl.innerHTML = '';
+            const sourcesEl = document.getElementById(`stream-sources-${bubbleId}`);
+            if (sourcesEl) sourcesEl.innerHTML = '';
+        }
         // RETRIEVAL retry: 2nd+ answer stage means prior content was insufficient — clear and re-fill
         if (data.id === 'answer') {
             const count = (answerCountMap.get(bubbleId) || 0) + 1;

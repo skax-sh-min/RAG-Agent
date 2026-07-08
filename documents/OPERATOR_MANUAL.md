@@ -798,7 +798,7 @@ llama-server -m embed-model.gguf  --port 8081 --embeddings  # 임베딩 (/v1/emb
 
 #### 3) 환경변수 + 실행
 
-> `.env`는 docker-compose 전용이라 **노-도커 실행 시 자동 로드되지 않습니다.** 셸에 export 하세요(§4.2의 `.env` 로드 방식 재사용 가능).
+> `.env`는 docker-compose 전용이라 **노-도커 실행 시 자동 로드되지 않습니다.** 셸에 export 하세요(`.env` 로드 방식 재사용 가능).
 
 ```bash
 # 벡터 스토어: sqlite-vec (ChromaDB·Docker 불요)
@@ -841,7 +841,7 @@ Caddy는 Docker 컨테이너이자 Let's Encrypt(인터넷)에 의존하므로 �
 - [ ] 외부(인터넷) 소켓 시도 없음 — `LLM_ROUTING_MODE=LOCAL_ONLY` + 외부 프로바이더 키 전부 미설정
 - [ ] `http://<host>:8080/api/v1/health` → `{"status":"ok"}`
 
-> **데이터 이전**: 기존 Chroma 데이터를 sqlite-vec로 직접 복사하지 않습니다. 문서 원본이 `data/documents/`에 보존되므로 **전체 재인덱싱**(관리자 패널 §7, 또는 디렉터리 재동기화)으로 이전합니다.
+> **데이터 이전**: 기존 Chroma 데이터를 sqlite-vec로 직접 복사하지 않습니다. 문서 원본이 `data/documents/`에 보존되므로 **전체 재인덱싱**(관리자 패널 또는 디렉터리 재동기화)으로 이전합니다.
 
 ### 4.6 태그 기반 검색 적용 전 수동 초기화 (프리릴리즈)
 
@@ -1229,15 +1229,15 @@ COST_FIRST 흐름:
 - 차단 상태는 인메모리(`ConcurrentHashMap`) 유지 — 서버 재시작 시 초기화
 - 모든 프로바이더 소진 시 → `LlmProviderExhaustedException` (500 응답)
 - `/llm-usage` 대시보드에서 차단 중인 프로바이더를 빨간 카드 + MM:SS 카운트다운으로 확인 가능
-- 임베딩 호출은 Circuit Breaker 대상이 아닙니다 — `/llm-usage`의 `embed:<model>` 카드는 항상 "정상" 배지로 표시되며 실패 시 재시도/차단 없이 즉시 예외가 전파됩니다(`EMBED_USAGE_FALLBACK_ENABLED` §3.2)
-- API 키가 없는(비활성) 프로바이더는 **사용 이력이 없으면** `/llm-usage`의 카드·표·차트 어디에도 표시되지 않습니다. 과거에 사용된 적이 있으면 키를 제거한 뒤에도 이력 보존을 위해 계속 표시됩니다. 활성(키 설정됨) 프로바이더는 사용량이 0이어도 항상 표시됩니다(§10)
+- 임베딩 호출은 Circuit Breaker 대상이 아닙니다 — `/llm-usage`의 `embed:<model>` 카드는 항상 "정상" 배지로 표시되며 실패 시 재시도/차단 없이 즉시 예외가 전파됩니다(`EMBED_USAGE_FALLBACK_ENABLED`)
+- API 키가 없는(비활성) 프로바이더는 **사용 이력이 없으면** `/llm-usage`의 카드·표·차트 어디에도 표시되지 않습니다. 과거에 사용된 적이 있으면 키를 제거한 뒤에도 이력 보존을 위해 계속 표시됩니다. 활성(키 설정됨) 프로바이더는 사용량이 0이어도 항상 표시됩니다.
 
 ### 5.6 Orphan 프로바이더 사용 기록 정리
 
 설정(`app.llm.providers`)에서 완전히 제거된 프로바이더나, `EMBED_MODEL`을 변경한 뒤 남은 이전 임베딩 모델의 `embed:<old-model>` 기록은 `llm_usage`에 그대로 남아 orphan이 됩니다. `/llm-usage`에서 회색 **ORPHAN** 배지 카드로 노출되며, 카드 우측 상단 🗑 아이콘으로 정리할 수 있습니다.
 
 - **삭제 대상 판별**: 현재 config에 없는 프로바이더 이름, 또는 현재 활성 임베딩 모델이 아닌 `embed:*` 이름만 orphan으로 분류됩니다. 활성 프로바이더·현재 임베딩 모델 카드에는 삭제 버튼 자체가 없고, API를 직접 호출해도 서버가 400으로 거부합니다.
-- **엔드포인트**: `DELETE /admin/llm-usage/{provider}` — `/admin/**` 경로 아래에 있어 `ROLE_ADMIN` 전용입니다. no-auth 모드에서는 `/admin/**`에 대한 기존 관리자 자동 인증(§9.4)이 그대로 적용되어 별도 로그인 없이 동작합니다. 인증 모드에서는 CSRF 토큰이 필요합니다(HTMX 버튼은 자동 첨부).
+- **엔드포인트**: `DELETE /admin/llm-usage/{provider}` — `/admin/**` 경로 아래에 있어 `ROLE_ADMIN` 전용입니다. no-auth 모드에서는 `/admin/**`에 대한 기존 관리자 자동 인증이 그대로 적용되어 별도 로그인 없이 동작합니다. 인증 모드에서는 CSRF 토큰이 필요합니다(HTMX 버튼은 자동 첨부).
 - **감사 로그**: 삭제 시 `AuditLogger`에 `llm-usage.delete-orphan` 이벤트(프로바이더명, 삭제 행 수)가 기록됩니다.
 - **API 예시** (no-auth 모드 — CSRF 비활성화라 세션/토큰 불필요):
   ```bash
@@ -1332,7 +1332,7 @@ no-auth 모드(`false`)에서는 `/admin/**` 경로에 자동으로 관리자 �
 
 ### 7.1 주요 기능
 
-`/admin`은 **chroma·sqlite-vec 두 백엔드 모두** 동일한 레이아웃으로 동작하며, 표시 지표·라벨만 백엔드에 맞게 바뀝니다(§7.4).
+`/admin`은 **chroma·sqlite-vec 두 백엔드 모두** 동일한 레이아웃으로 동작하며, 표시 지표·라벨만 백엔드에 맞게 바뀝니다.
 
 | 기능 | 설명 |
 |------|------|
@@ -1620,7 +1620,7 @@ sh scripts/install-hooks.sh
 | 질문 길이 | 최대 2,000자 | 400 Bad Request |
 | 파일 업로드 크기 | 최대 200 MB (기본) | 413 Payload Too Large |
 | 파일 형식 불일치 (매직바이트) | 확장자와 실제 내용이 다른 경우 | 422 Unprocessable Entity |
-| API 요청 빈도 | 경로별 분당 제한 (§3.3 참고) | 429 Too Many Requests |
+| API 요청 빈도 | 경로별 분당 제한 | 429 Too Many Requests |
 
 업로드 허용 형식과 매직바이트 매핑:
 

@@ -26,7 +26,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * QA — VisionDescriptionService (§6.14 잔여).
+ * QA — VisionDescriptionService.
  *
  * describe()는 LlmRouter.executeWithTracking()(TaskType.VISION, RoutingMode.COST_FIRST)으로
  * 라우팅한다 — 이전에는 llmRouter.route()로 모델만 얻어 직접 ChatClient를 구성해 호출해서
