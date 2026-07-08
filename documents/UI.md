@@ -213,7 +213,7 @@ PROGRESSIVE 업그레이드 시 `🔝 고추론 재분석 → {premiumProvider}`
 | DUAL, LOCAL 미연결 | 드롭다운 `disabled` + 툴팁 |
 | LOCAL_ONLY, LOCAL 미연결 | 빨간 버블 + `LlmProviderExhaustedException` 메시지 |
 | 빈 질문 전송 | 클라이언트 validation, API 호출 차단 |
-| 대용량 파일 | 업로드 전 100 MB 초과 감지 → 즉시 오류 표시 |
+| 대용량 파일 | 업로드 전 200 MB 초과 감지 → 즉시 오류 표시 |
 
 ---
 

@@ -23,7 +23,7 @@
                 <div id="drop-zone" class="drop-zone text-center py-5 mb-3">
                     <i class="bi bi-folder2-open fs-2 text-secondary d-block mb-2"></i>
                     <span class="text-muted" th:text="#{doc.drop.hint}">Drag files here or click to select</span><br/>
-                    <small class="text-muted" th:text="#{doc.drop.formats}">Supported: PDF, PPTX, DOCX, TXT, MD · Max 100 MB</small>
+                    <small class="text-muted" th:text="#{doc.drop.formats}">Supported: PDF, PPTX, DOCX, TXT, MD · Max 200 MB</small>
                     <input id="file-input" type="file"
                            accept=".pdf,.pptx,.docx,.txt,.md"
                            multiple class="d-none"/>
@@ -195,7 +195,7 @@
     fileInput.addEventListener('change', () => handleFiles(Array.from(fileInput.files)));
 
     function handleFiles(files) {
-        const limit = 100 * 1024 * 1024;
+        const limit = 200 * 1024 * 1024;
         files.filter(f => f.size > limit).forEach(f =>
             showToast(`${escHtml(f.name)}: ${I18N.fileTooBig}`, 'warning'));
         selectedFiles = files.filter(f => f.size <= limit);
