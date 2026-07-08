@@ -200,22 +200,64 @@
             showToast(`${escHtml(f.name)}: ${I18N.fileTooBig}`, 'warning'));
         selectedFiles = files.filter(f => f.size <= limit);
         if (selectedFiles.length === 0) return;
+
+        const existing = existingFilenames();
+        selectedFiles.forEach(f => {
+            const nextName = predictDuplicateName(f.name, existing);
+            if (nextName) showToast(escHtml(duplicateMessage(nextName)), 'warning');
+        });
+
         renderFileList();
         document.getElementById('upload-btn').disabled = false;
     }
 
+    /** Filenames of documents already indexed — scraped from the live doc table, no extra round trip. */
+    function existingFilenames() {
+        return new Set(Array.from(document.querySelectorAll('#doc-table-body .doc-filename'))
+            .map(el => el.textContent.trim())
+            .filter(Boolean));
+    }
+
+    /**
+     * If `filename` collides with an already-indexed document, predicts the "_vN" name the
+     * server will actually store it under (mirrors DocumentController#versionedPath). Returns
+     * null when there's no collision. Best-effort: only sees registered docs, not stray files
+     * dropped into data/documents/ that were never synced.
+     */
+    function predictDuplicateName(filename, existing) {
+        const name = filename.normalize('NFC');
+        if (!existing.has(name)) return null;
+        const dot = name.lastIndexOf('.');
+        const stem = dot > 0 ? name.substring(0, dot) : name;
+        const ext  = dot > 0 ? name.substring(dot)    : '';
+        for (let v = 2; v <= 99; v++) {
+            const candidate = `${stem}_v${v}${ext}`;
+            if (!existing.has(candidate)) return candidate;
+        }
+        return `${stem}_v${Date.now()}${ext}`;
+    }
+
+    function duplicateMessage(nextName) {
+        return I18N.duplicateFileName.replace('{name}', nextName);
+    }
+
     function renderFileList() {
+        const existing = existingFilenames();
         const tbody = document.getElementById('file-list-body');
-        tbody.innerHTML = selectedFiles.map((f, i) => `
+        tbody.innerHTML = selectedFiles.map((f, i) => {
+            const nextName = predictDuplicateName(f.name, existing);
+            const status = nextName
+                ? `<span class="text-warning"><i class="bi bi-exclamation-triangle-fill"></i> ${escHtml(duplicateMessage(nextName))}</span>`
+                : `<span class="text-muted">⏳ ${I18N.statusWaiting}</span>`;
+            return `
             <tr id="file-row-${i}">
                 <td class="text-truncate" style="max-width:260px;">${escHtml(f.name)}</td>
                 <td>${(f.size / 1024 / 1024).toFixed(1)} MB</td>
-                <td id="file-status-${i}" style="min-width:260px;">
-                    <span class="text-muted">⏳ ${I18N.statusWaiting}</span>
-                </td>
+                <td id="file-status-${i}" style="min-width:260px;">${status}</td>
                 <td><button class="btn btn-sm btn-link text-danger p-0"
                             onclick="removeFile(${i})">✕</button></td>
-            </tr>`).join('');
+            </tr>`;
+        }).join('');
         document.getElementById('file-list').classList.remove('d-none');
     }
 
@@ -522,7 +564,7 @@
 
         const tr = document.createElement('tr');
         tr.innerHTML = `
-            <td><i class="bi bi-file-earmark-text me-1 text-secondary"></i>${escHtml(filename)}</td>
+            <td><i class="bi bi-file-earmark-text me-1 text-secondary"></i><span class="doc-filename">${escHtml(filename)}</span></td>
             <td>${escHtml(version)}</td>
             <td>${tagsHtml}</td>
             <td>${chunks}</td>

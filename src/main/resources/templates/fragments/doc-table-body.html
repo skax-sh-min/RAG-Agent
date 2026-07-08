@@ -7,7 +7,7 @@
         th:classappend="${doc.errors != null and !#lists.isEmpty(doc.errors)} ? 'table-warning'">
         <td>
             <i class="bi bi-file-earmark-text me-1 text-secondary"></i>
-            <span th:text="${doc.filename}">파일명</span>
+            <span class="doc-filename" th:text="${doc.filename}">파일명</span>
             <div th:if="${doc.errors != null and !#lists.isEmpty(doc.errors)}"
                  class="small text-danger mt-1">
                 <th:block th:each="err : ${doc.errors}">
