@@ -1,5 +1,6 @@
 package com.example.ragagent.service;
 
+import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.model.IndexingProgressEvent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -25,12 +26,17 @@ public class IndexingProgressService {
 
     private final ConcurrentHashMap<String, SseEmitter> emitters = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, List<IndexingProgressEvent>> buffers = new ConcurrentHashMap<>();
+    private final AppProperties props;
 
     private final ScheduledExecutorService cleaner = Executors.newSingleThreadScheduledExecutor(r -> {
         Thread t = new Thread(r, "idx-progress-cleanup");
         t.setDaemon(true);
         return t;
     });
+
+    public IndexingProgressService(AppProperties props) {
+        this.props = props;
+    }
 
     public String newTaskId() {
         return UUID.randomUUID().toString();
@@ -41,7 +47,10 @@ public class IndexingProgressService {
      * Replays any events already buffered (handles race with async task start).
      */
     public SseEmitter subscribe(String taskId) {
-        SseEmitter emitter = new SseEmitter(600_000L);
+        // Large uploads/keyword extraction can run well past 10 minutes; reuse the same
+        // generous absolute ceiling as chat SSE (default 1h) instead of a fixed 10-minute
+        // cap that a long-running-but-healthy indexing job would always exceed.
+        SseEmitter emitter = new SseEmitter(props.sseTimeoutMs());
 
         List<IndexingProgressEvent> buffered = buffers.get(taskId);
         if (buffered != null && !buffered.isEmpty()) {

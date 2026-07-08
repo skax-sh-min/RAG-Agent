@@ -82,7 +82,7 @@ public class GlobalExceptionHandler {
     public ResponseEntity<?> handleUnexpected(Exception ex, HttpServletRequest req) {
         String traceId = MDC.get("traceId");
 
-        if (isClientAbort(ex)) {
+        if (isClientAbort(ex) || (isSseRequest(req) && hasIoExceptionCause(ex))) {
             log.debug("[RAG-INT-001][{}] Client disconnected on {} {}", traceId, req.getMethod(), req.getRequestURI());
             return ResponseEntity.status(HttpStatus.NO_CONTENT).build();
         }
@@ -143,6 +143,22 @@ public class GlobalExceptionHandler {
                     return true;
                 }
             }
+            cur = cur.getCause();
+        }
+        return false;
+    }
+
+    /**
+     * OS-localized socket abort messages (e.g. Korean Windows renders WSAECONNABORTED as
+     * "현재 연결은 사용자의 호스트 시스템의 소프트웨어에 의해 중단되었습니다") don't match the English
+     * substrings in {@link #isClientAbort}, so a normal client disconnect on an SSE endpoint
+     * gets misreported as a server error. SSE/streaming handlers never do file I/O, so any
+     * IOException surfacing from them is the socket write failing, not an application bug.
+     */
+    private boolean hasIoExceptionCause(Throwable ex) {
+        Throwable cur = ex;
+        while (cur != null) {
+            if (cur instanceof java.io.IOException) return true;
             cur = cur.getCause();
         }
         return false;

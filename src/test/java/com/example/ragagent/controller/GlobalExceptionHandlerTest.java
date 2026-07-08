@@ -46,6 +46,13 @@ class GlobalExceptionHandlerTest {
         void clientAbort() {
             throw new RuntimeException("wrapper", new java.io.IOException("Broken pipe"));
         }
+
+        @GetMapping(value = "/test/sse-io-abort", produces = "text/event-stream")
+        void sseIoAbort() {
+            // Korean-Windows-localized WSAECONNABORTED message — no English substring match.
+            throw new RuntimeException("wrapper",
+                    new java.io.IOException("현재 연결은 사용자의 호스트 시스템의 소프트웨어에 의해 중단되었습니다"));
+        }
     }
 
     private MockMvc mvc;
@@ -136,6 +143,14 @@ class GlobalExceptionHandlerTest {
     @DisplayName("클라이언트 연결 종료 예외는 204로 정리")
     void clientAbort_returns204() throws Exception {
         mvc.perform(get("/test/client-abort"))
+                .andExpect(status().isNoContent())
+                .andExpect(content().string(""));
+    }
+
+    @Test
+    @DisplayName("SSE 요청 중 로케일 메시지의 IOException도 클라이언트 연결 종료로 204 처리")
+    void sseIoExceptionWithLocalizedMessage_returns204() throws Exception {
+        mvc.perform(get("/test/sse-io-abort").header("Accept", "text/event-stream"))
                 .andExpect(status().isNoContent())
                 .andExpect(content().string(""));
     }
