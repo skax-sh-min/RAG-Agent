@@ -8,6 +8,7 @@ import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.HashMap;
 import java.util.Map;
 
 /**
@@ -87,9 +88,18 @@ public class AdminController {
                                              @RequestParam String collection,
                                              @RequestBody Map<String, Object> body) {
         String newText = body.get("text") instanceof String s ? s : null;
-        @SuppressWarnings("unchecked")
-        Map<String, String> newMeta = body.get("metadata") instanceof Map<?,?> m
-                ? (Map<String, String>) m : null;
+        Map<String, String> newMeta = null;
+        if (body.get("metadata") instanceof Map<?, ?> m) {
+            // Defensive: only string key/value pairs pass through — a nested object or
+            // non-string value in the request silently drops that entry instead of risking
+            // a ClassCastException wherever the map is later read as Map<String, String>.
+            newMeta = new HashMap<>();
+            for (Map.Entry<?, ?> e : m.entrySet()) {
+                if (e.getKey() instanceof String k && e.getValue() instanceof String v) {
+                    newMeta.put(k, v);
+                }
+            }
+        }
         adminService.updateChunk(collection, chunkId, newText, newMeta);
         return ResponseEntity.ok().build();
     }
