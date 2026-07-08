@@ -1,5 +1,6 @@
 package com.example.ragagent.config;
 
+import com.example.ragagent.llm.CachingEmbeddingModel;
 import com.example.ragagent.llm.TrackingEmbeddingModel;
 import com.example.ragagent.repository.LlmUsageRepository;
 import org.springframework.ai.document.MetadataMode;
@@ -51,6 +52,12 @@ public class EmbeddingBeanConfig {
                         .build(),
                 shortRetry
         );
-        return new TrackingEmbeddingModel(raw, usageRepo, model, cfg.usageFallbackEnabled());
+        EmbeddingModel tracked = new TrackingEmbeddingModel(raw, usageRepo, model, cfg.usageFallbackEnabled());
+        if (!props.searchQueryEmbedCacheEnabledSafe()) {
+            return tracked;
+        }
+        // Cache sits outside tracking so a cache hit records no usage — no provider call happened.
+        return new CachingEmbeddingModel(tracked, model,
+                props.searchQueryEmbedCacheMaxSizeSafe(), props.searchQueryEmbedCacheTtlSecondsSafe());
     }
 }

@@ -42,6 +42,8 @@ public class RetrievalService {
     private final boolean rerankEnabled;
     private final int candidateMultiplier;
     private final int tagCandidateMultiplier;
+    private final int rrfK;
+    private final double rrfKeywordWeight;
     private final LazyVisionService lazyVisionService; // null when disabled
     private final Optional<RerankerService> reranker;
 
@@ -57,6 +59,8 @@ public class RetrievalService {
         this.rerankEnabled = props.searchRerankEnabled();
         this.candidateMultiplier = props.searchCandidateMultiplierSafe();
         this.tagCandidateMultiplier = props.searchTagCandidateMultiplierSafe();
+        this.rrfK = props.searchRrfKSafe();
+        this.rrfKeywordWeight = props.searchRrfKeywordWeightSafe();
         this.lazyVisionService = lazyVisionOpt.orElse(null);
         this.reranker = rerankerOpt;
         // MultiQueryExpander builds its own ChatClient around the model it's given, so the
@@ -103,15 +107,10 @@ public class RetrievalService {
             List<List<Document>> ranked = ragService.searchBatch(
                     state.userId(), queryTexts, state.version(), candidateK);
             // Add a BM25 keyword axis to the fusion when hybrid search is enabled.
-            if (hybridEnabled) {
-                List<Document> keywordHits = ragService.keywordSearch(
-                        state.version(), state.question(), candidateK);
-                if (!keywordHits.isEmpty()) {
-                    ranked = new ArrayList<>(ranked);
-                    ranked.add(keywordHits);
-                }
-            }
-            List<Document> candidates = mergeRrf(ranked, candidateK);
+            List<Document> keywordHits = hybridEnabled
+                    ? ragService.keywordSearch(state.version(), state.question(), candidateK)
+                    : List.of();
+            List<Document> candidates = mergeRrf(ranked, keywordHits, candidateK, rrfK, rrfKeywordWeight);
             // Strict AND tag filter — applied after RRF, before rerank/cut. Covers vector
             // + BM25 axes uniformly (tags travel in chunk metadata). No no-tag fallback on shortfall.
             candidates = filterByTags(candidates, selectedTags, candidateK);
@@ -233,27 +232,49 @@ public class RetrievalService {
     }
 
     /**
-     * Reciprocal Rank Fusion — score(d) = Σ 1/(rank_i + 1 + k) across all query lists where d appears.
-     * k=60 is the standard constant from the original RRF paper.
-     * Package-private for unit testing.
+     * Reciprocal Rank Fusion, vector-only, default k=60 — kept for callers/tests that don't
+     * care about the keyword axis or weighting. Package-private for unit testing.
      */
     static List<Document> mergeRrf(List<List<Document>> ranked, int topK) {
-        int k = 60;
+        return mergeRrf(ranked, List.of(), topK, 60, 1.0);
+    }
+
+    /**
+     * Weighted Reciprocal Rank Fusion — score(d) = Σ w/(rank_i + 1 + k) across every axis where d appears.
+     * Vector axes are group-normalized (weight = 1/axisCount) so a document's score doesn't scale with
+     * the number of MultiQuery variants (1~3) — otherwise the single keyword (BM25) axis is structurally
+     * outvoted whenever it competes with 2-3 vector axes on an exact-term match. The keyword axis instead
+     * carries its own configurable {@code keywordWeight} (default 1.0 = parity with the normalized vector
+     * group). When there is no keyword axis (hybrid disabled or no hits), this reduces to unweighted RRF —
+     * every vector axis is scaled by the same constant 1/axisCount, so ranking order is unchanged.
+     * Package-private for unit testing.
+     */
+    static List<Document> mergeRrf(List<List<Document>> vectorRanked, List<Document> keywordRanked,
+                                    int topK, int k, double keywordWeight) {
         Map<String, Double> scores = new LinkedHashMap<>();
         Map<String, Document> byKey = new LinkedHashMap<>();
-        for (List<Document> list : ranked) {
-            for (int i = 0; i < list.size(); i++) {
-                Document doc = list.get(i);
-                String key = docKey(doc);
-                scores.merge(key, 1.0 / (i + 1 + k), Double::sum);
-                byKey.putIfAbsent(key, doc);
-            }
+        double vectorWeight = vectorRanked.isEmpty() ? 0.0 : 1.0 / vectorRanked.size();
+        for (List<Document> list : vectorRanked) {
+            addRrfAxis(list, vectorWeight, k, scores, byKey);
+        }
+        if (keywordRanked != null && !keywordRanked.isEmpty()) {
+            addRrfAxis(keywordRanked, keywordWeight, k, scores, byKey);
         }
         return scores.entrySet().stream()
                 .sorted(Map.Entry.<String, Double>comparingByValue().reversed())
                 .limit(topK)
                 .map(e -> byKey.get(e.getKey()))
                 .toList();
+    }
+
+    private static void addRrfAxis(List<Document> axis, double weight, int k,
+                                    Map<String, Double> scores, Map<String, Document> byKey) {
+        for (int i = 0; i < axis.size(); i++) {
+            Document doc = axis.get(i);
+            String key = docKey(doc);
+            scores.merge(key, weight / (i + 1 + k), Double::sum);
+            byKey.putIfAbsent(key, doc);
+        }
     }
 
     /**
