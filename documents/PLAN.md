@@ -5,49 +5,49 @@
 
 ---
 
-## ⚡ 현재 진행 상황 (2026-07-05 기준)
+## 📊 전체 현황 대시보드
 
-### ✅ Phase 1 전체 완료
+> 완료/미착수를 한눈에 보도록 상단 대시보드를 신설했다. 완료 항목의 서술은 아래 본문(§4~§9)에서 대폭 압축했지만 **항목 자체는 삭제하지 않았다** — 절 번호(§6.5, Step 5.3 등)는 교차 참조 보존을 위해 그대로 유지했으므로, 이 번호로 본문을 검색(Ctrl+F)하면 상세 구현 내용을 바로 찾을 수 있다. 2026-07-05 재배열 이력은 §6 도입부에 계속 남아 있다.
 
-| 완료 항목 | 비고 |
-|---|---|
-| Step 1.1 — Caddy 리버스 프록시 + TLS | |
-| Step 1.2 — Flyway 마이그레이션 도입 | |
-| Step 1.3 — Spring Security 폼 로그인/회원가입 | |
-| Step 1.4 — 멀티유저 데이터 격리 (SQLite `user_id` + Chroma 컬렉션) | |
-| Step 1.5 — CSRF + HTMX fetch 통합 | |
-| Step 1.6 — 로그인/회원가입 화면 | |
-| `app.auth.enabled` 토글 — no-auth 모드 (guest/admin 자동 로그인 + 첫 실행 `/setup`) | |
+### ✅ 완료 — Phase 1 · 2 · 5 · 6 전체, Phase 3 대부분
 
-### ✅ Phase 3 추가 완료
+| Phase | 완료 항목 | 상세 |
+|---|---|---|
+| **Phase 1** — 보안 기반 | Step 1.1~1.6 전체(Caddy·Flyway·Spring Security·멀티유저 격리·CSRF·로그인/회원가입 UI) + `app.auth.enabled` no-auth 토글 | §4 |
+| **Phase 2** — 모바일 UI | 반응형 레이아웃(Offcanvas) · PWA(manifest/SW/오프라인) · 다크모드·접근성 · 전체 286 tests 검증 | §5 |
+| **Phase 3** — 운영 견고화 (12개 항목) | §6.1 Rate limit · §6.2 업로드 검증(매직바이트, 쿼터는 미착수) · §6.3 예외처리 · §6.4 감사로그 · §6.5 임베딩 사용량 분리 · §6.6 비활성 프로바이더 표시 · §6.7 orphan 기록 삭제 · §6.8 피드백 기반 컨텍스트 제외 · §6.9 요약 선계산 · §6.10 백그라운드 사용량 분리 · §6.11 컨텍스트 예산 정합성 · §6.14 핵심 채팅 경로 추적 | §6 |
+| **Phase 5** — Vector Store | Step 5.1~5.10 전체(Chroma↔sqlite-vec 런타임 전환, 관리자 페이지, 태그 검색, 운영/벡터 DB 분리) | §8 |
+| **Phase 6** — 폐쇄망/노-도커 | G1~G5(키리스 LOCAL·차원 외부화·라우팅 외부화·런북·무외부호출 인수) | §9 |
 
-| 완료 항목 | 비고 |
-|---|---|
-| ChromaDB v2 API 대응 — 컬렉션명 → UUID 자동 변환 | 구버전 Chroma와의 호환 단절 수정 |
-| 문서 저장 경로 공유 구조로 단순화 (`DocRegistry.SHARED`) | 멀티유저 격리 대신 공유 저장소 구조로 확정 |
-| 인덱싱 SSE 진행 단계별 표시 (파일 타입별 step) | 페이지 복귀 시 진행 중 상태 복원 포함 |
-| 키워드 추출 타임아웃 시 CircuitBreaker 오동작 수정 | 타임아웃을 에러로 오인해 프로바이더 차단하던 버그 수정 |
-| DOCX 변환 전 구버전 아티팩트 삭제 순서 수정 | 변환 실패 시 구버전 파일이 남아있는 버그 수정 |
-| `LOGGING_LEVEL`, `LLM_TEMPERATURE`, `LLM_MAX_TOKENS`, `SPRING_SECURITY_LOGGING_LEVEL` 환경변수 외부화 | `.env.example` + `OPERATOR_MANUAL.md` 반영 |
-| 의존성 버전 최신 stable로 일괄 업데이트 | Spring Boot 3.5.15, Spring AI 1.1.8 (2026-07-05 재확인 — 계속 업데이트되는 값이므로 정확한 버전은 pom.xml 참조) |
+추가로 Phase 3 초기에 완료된 항목(문서화되지 않았던 픽스 포함): ChromaDB v2 API 컬렉션명→UUID 자동 변환, 문서 저장 경로 공유 구조 단순화(`DocRegistry.SHARED`), 인덱싱 SSE 진행 단계별 표시, 키워드 추출 타임아웃 시 CircuitBreaker 오동작 수정, DOCX 변환 전 구버전 아티팩트 삭제 순서 수정, `LOGGING_LEVEL`/`LLM_TEMPERATURE`/`LLM_MAX_TOKENS`/`SPRING_SECURITY_LOGGING_LEVEL` 환경변수 외부화, 의존성 최신 stable 일괄 업데이트(Spring Boot 3.5.15·Spring AI 1.1.8, 정확한 버전은 pom.xml 참조).
 
-### 아직 미착수 (다음 목표)
+### 🔵 진행할 것 (우선순위 순)
 
-- ~~**Phase 2**: 모바일 UI (Offcanvas, sticky 입력창, PWA)~~ → ✅ 완료 (2026-06-27, 오프캔버스 드로어·dvh sticky 입력·PWA(manifest/SW/오프라인)·iOS 16px·접근성)
-- ~~**Phase 3 — Chat 피드백(좋아요/싫어요) 기반 컨텍스트 제외**~~ → ✅ 완료 (2026-07-02, §6.8 — `conversation_turns.feedback` 컬럼, `PATCH /ui/threads/{threadId}/turns/{turnId}/feedback`, DISLIKE는 `getHistory()`에서 하드 제외)
-- ~~**Phase 3 — 입력 시작 시 로컬 요약 선계산 + 중복 제거 컨텍스트 압축**~~ → ✅ 완료 (2026-07-03, §6.9 — `ConversationSummarizerService`, `POST /ui/chat/summary/precompute`, LOCAL 전용 요약 + 캐시, 실패 시 `getHistory()` 자동 폴백)
-- ~~**Phase 3 — LLM 사용량 임베딩 사용량 분리**~~ → ✅ 완료 (2026-07-04, §6.5 — `TrackingEmbeddingModel` 데코레이터가 `embed:<model>` 프로바이더로 별도 기록, `/llm-usage` 표·카드·차트 시각 분리, usage 미반환 시 chars/4 근사 폴백)
-- ~~**Phase 3 — LLM 사용량 비활성 프로바이더 조건부 표시**~~ → ✅ 완료 (2026-07-04, §6.6 — `LlmUsageRepository.usedProviders()` + `OperationsController.visibleChatProviders()` 공통 필터, 미설정+이력 없는 프로바이더는 카드·표·차트에서 숨김, 이력 있으면 계속 표시)
-- ~~**Phase 3 — LLM 사용량 orphan 프로바이더 기록 삭제**~~ → ✅ 완료 (2026-07-04, §6.7 — config에 전혀 없는 provider_name(또는 옛 `embed:*`)을 ORPHAN 카드로 노출 + `DELETE /admin/llm-usage/{provider}`로 관리자만 삭제, 활성 provider·현재 임베딩 모델은 서버측에서 삭제 거부)
-- ~~**Phase 3 — LLM 사용량 백그라운드(비-채팅) 사용량 분리 기록**~~ → ✅ 완료 (2026-07-05, §6.10 — `BackgroundUsage` 접두사(`summary:`/`keyword:`/`mdcorrect:`/`txt2md:`/`title:`)로 대화 요약·인덱싱 키워드 추출·문서 서식 교정·TXT→MD 변환·대화 제목 생성을 채팅 사용량과 분리 기록, `title:`은 이번에 처음 추적 대상 편입, `/llm-usage`에 type=BACKGROUND 카드 신설)
-- ~~**Phase 3 — LLM 사용량 핵심 채팅 경로 추적 확장**~~ → ✅ 완료 (2026-07-06, §6.14 — Direct/RAG 채팅 시 `/llm-usage`에 `embed:*`만 증가하고 실제 채팅 사용량이 전혀 안 잡히던 버그 재현·수정. `AnswerService`/`DirectAnswerService`/`ClassifierService`/`RerankerService`/`VisionDescriptionService`/`ImageTypeClassifier`/`RetrievalService`의 `MultiQueryExpander` 7곳 모두 `LlmRouter`를 거치도록 정리 — `executeWithTracking()`(블로킹, 실사용량) 또는 `recordApproxUsage()`(스트리밍, chars/4 근사) 또는 신규 `TrackingChatModel` 데코레이터(프레임워크 내부 호출용))
-- ~~**대화 컨텍스트 예산 정합성 + 설정 외부화**~~ → ✅ 완료 (2026-07-07, §6.11 — 요약 경로/폴백 경로가 동일한 문자 예산(`MemoryService.maxConversationChars()`)을 지키도록 통일 + `FETCH_LIMIT`·요약 캐시 4개 상수를 `app.memory.*`/`app.summary.*`로 외부화)
-- **Phase 3 잔여** (미착수, 우선순위 순 — §6.12·6.13 상세): 사용자별 LLM 토큰 쿼터(§6.12) · 사용자별 스토리지 쿼터(§6.13)
-- **Phase 4** (조건부, 미착수): OAuth2 소셜 로그인(§7.1) · PostgreSQL 마이그레이션(§7.2) · 관리자 페이지 확장(§7.3, ※ `/admin` 기본 골격은 Phase 5.8에서 이미 존재)
-- ~~**Phase 5**: sqlite-vec 선택적 연동~~ → ✅ 완료 (Step 5.1~5.8, `app.vectorstore.type=chroma|sqlite-vec`)
-- ~~**Phase 5 추가**: Step 5.9 태그 기반 검색 스코프 + Step 5.10 sqlite-vec 운영/벡터 DB 분리~~ → ✅ 완료 (2026-07-01, Step 5.9 태그 필터/제안/복원 + Step 5.10 `SQLITE_VEC_DB_PATH` 분리 스위치). vec0 라이브 부팅은 운영 인수
-- ~~**Phase 6**: 폐쇄망/노-도커 — 키리스 LOCAL(G1)·차원 외부화(G2)·라우팅 외부화(G3)·런북(G4)·무-외부호출 인수(G5)~~ → ✅ G1~G5 완료 (2026-06-25). sqlite-vec 라이브 부팅(vec0 바이너리)만 운영 인수
-- **Phase 7** (검색 품질·성능 고도화, 미착수): Contextual Retrieval(§10.1) · 가중 RRF(§10.2) · 쿼리 임베딩 캐시(§10.3) · 한국어 FTS 토크나이저(§10.4) · sqlite-vec 단일 스캔(§10.5) · cross-encoder 리랭커(§10.6) · 시맨틱 응답 캐시(§10.7). 권장 착수: Phase 7-A(§10.2+§10.3, 빠른 승리) → Phase 7-B(§10.1, 정확도 본편). 상세 우선순위/단계는 §10.8
+> **2026-07-08 재우선순위화**: 현재 실배포 기준(폐쇄망·no-auth 단일 운영자)에서 가치가 없는 **멀티유저(`auth.enabled=true`) 전용 작업은 전부 후속으로 내렸다** — §6.15(보안 하드닝 3건 전부 auth 모드 전용), §6.12(사용자별 LLM 쿼터, "사용자별" 구분 자체가 다중 사용자 전제), §6.16.2(계정 잠금 피드백, no-auth엔 로그인이 없음), Phase 4 전체(OAuth2·Postgres·관리자 확장 모두 다중 사용자/스케일 트리거). §6.13(스토리지 쿼터)은 이름과 달리 설계상 (B) 전역 상한이 1차 권장이라 단일 운영자에도 그대로 적용되므로 즉시 그룹에 남겼다.
+
+**🟢 지금 진행 (no-auth 단일 운영자 배포에도 바로 적용)**
+
+| 순위 | 항목 | 현재 상태 |
+|---|---|---|
+| 1 | **Phase 7-A** — §10.2 가중 RRF + §10.3 쿼리 임베딩 캐시 | 미착수 — 빠른 승리(저비용·저리스크) |
+| 2 | **§6.16.1 스트리밍/인덱싱 중단 버튼** | 미착수 — 2026-07-08 리뷰 도출, auth 무관 |
+| 3 | **§6.13 스토리지 쿼터**(전역 상한 B안, §6.2에서 이관) | 설계 완료, 구현 전 |
+| 4 | **Phase 7-B** — §10.1 Contextual Retrieval | 미착수 — 정확도 ROI 1순위 |
+| 5 | **Phase 7-C** — §10.4 한국어 FTS 토크나이저 | 미착수 — 하이브리드 기본 활성화 전제조건 |
+| 6 | 운영 준비 잔여 — SQLite 백업 자동화(Litestream/cron), Caddy 인증서 만료 모니터링 | 미착수 |
+| 7 | §9.4 — CADDY 하위호환 별칭 | 선택, 낮은 우선순위 |
+| 8 | Phase 2 남은 실기기 검증 2건 (키보드 하단 고정 · 홈 화면 standalone) | 좌우 스크롤·다크모드는 2026-07-08 자동 검증 완료, 나머지는 실기기 필요 |
+
+**🟣 후속 — 멀티유저(`auth.enabled=true`) 활성화 시에만 착수**
+
+| 순위 | 항목 | 트리거 |
+|---|---|---|
+| 1 | **§6.15 보안 하드닝** — API CSRF/세션 혼용(6.15.1) · `/admin/**` ROLE_ADMIN 게이트(6.15.2) · XFF 무검증 rate limit(6.15.3) | **auth 모드 여는 시점에 반드시 선행**(게이트) — no-auth엔 노출면 없음 |
+| 2 | **§6.12 사용자별 LLM 토큰 쿼터** | 실사용자가 여럿 생겨 사용량 격리가 필요해질 때 |
+| 3 | **§6.16.2 계정 잠금 상태 피드백** | auth 모드 로그인 UX — no-auth엔 로그인 자체가 없음 |
+| 4 | **Phase 4** (조건부) — §7.1 OAuth2 소셜 로그인 · §7.2 PostgreSQL 마이그레이션 · §7.3 관리자 페이지 확장 | §3 트리거 참조(가입 마찰·SQLite 한계 신호·다중 사용자 운영 관리 필요 시) |
+
+> 검색 고도화 **Phase 7-D(인프라 투자: sqlite-vec 단일 스캔·cross-encoder 리랭커·시맨틱 응답 캐시)는 2026-07-08 재검토에서 범위 제외**했다(사유는 §10.5). Phase 7은 7-A~C(§10.1~10.4)만 유효.
 
 > 스키마 관리 실태: **Flyway(V1·V2 baseline) + 런타임 멱등 DDL 혼용**. `SqliteMemoryRepository`/`SqliteUserDetailsService`가 `CREATE TABLE IF NOT EXISTS` + `ALTER TABLE ADD COLUMN`으로 컬럼을 증분 추가한다(§13). 신규 컬럼은 새 Flyway 파일이 아니라 이 런타임 `ALTER TABLE` 패턴으로 추가한다.
 
@@ -68,8 +68,7 @@
 11. [리스크 및 이슈](#11-리스크-및-이슈)
 12. [의존성 변경 사항](#12-의존성-변경-사항-pomxml)
 13. [DB 스키마 변경](#13-db-스키마-변경-요약)
-14. [최종 체크리스트](#14-최종-체크리스트)
-15. [부록 — 결정 사항 한눈에 보기](#부록--결정-사항-한눈에-보기)
+14. [부록 — 결정 사항 한눈에 보기](#부록--결정-사항-한눈에-보기)
 
 ---
 
@@ -252,56 +251,35 @@ SQLite `audit_log` 테이블 대신 Logback `SizeAndTimeBasedRollingPolicy`로 �
 
 ### 6.5 LLM 사용량 — 임베딩 사용량 분리 ✅ 완료
 
-`TrackingEmbeddingModel`(`llm` 패키지)이 `EmbeddingModel`을 데코레이트해 `call()` 한 곳에서 `usageRepo.record("embed:" + model, inputTokens, 0)`으로 채팅과 분리 기록한다 — `embed(String)`/`embed(List)`는 인터페이스 default가 결국 `this.call(...)`을 호출하므로 자동 추적되고, 유일한 추상 메서드인 `embed(Document)`는 `delegate` 직접 위임 대신 `this.embed(getEmbeddingContent(doc))`로 구현해 우회를 막았으며, `dimensions()`만 delegate에 직결(추적 대상 아님). 로컬 서버가 usage를 반환하지 않으면 `app.embedding.usage-fallback-enabled`(`EMBED_USAGE_FALLBACK_ENABLED`, 기본 true)에 따라 입력 길이 근사(chars/4, 배치는 합산) 또는 0을 기록하고 경고는 최초 1회만. `OperationsController`의 카드·REST 표·REST 이력 세 경로 모두 `embed:<model>` 항목을 `type=EMBEDDING`·역할 없음·circuit breaker 없음("정상" 고정)으로 추가하고, 차트는 별도 Chart.js `stack` 그룹으로 채팅 합계와 분리했다. 부수로 `llm-usage.html`의 `/api/llm/usage(...)` 경로 오타(`/v1/` 누락 — 차트·표가 항상 404로 비어 있던 기존 버그)를 발견해 함께 수정. 테스트 8건 추가(전체 350), LM Studio 연동으로 실제 근사 폴백 발동과 `embed:*` 행 누적을 실사용 검증(회귀 0).
+`TrackingEmbeddingModel`(`llm` 패키지)이 `EmbeddingModel`을 데코레이트해 `embed:<model>` 이름으로 채팅과 분리 기록(`embed()` 계열은 결국 `call()`을 거치므로 자동 추적, `dimensions()`만 미추적). usage 미반환 시 `app.embedding.usage-fallback-enabled`(기본 true)로 chars/4 근사 폴백. `/llm-usage` 카드·표·차트 3경로 모두 `type=EMBEDDING`으로 분리 표시(차트는 별도 Chart.js stack 그룹). 부수로 `/api/llm/usage` 경로 오타(항상 404였던 기존 버그) 발견·수정. 테스트 +8(전체 350), LM Studio 실사용 검증 완료(회귀 0).
 
 ### 6.6 LLM 사용량 — 비활성 프로바이더 조건부 표시 ✅ 완료
 
-`LlmUsageRepository.usedProviders()`(사용 이력 있는 provider_name 집합, all-time 기준)와 `OperationsController.visibleChatProviders()` 공통 헬퍼(`configured || usedProviders.contains(name)`)를 신설해 카드·REST 표·REST 이력 세 경로 모두 이 필터를 거치도록 통일했다(스키마 변경 없음, 설계 그대로 채택). 키 없는 프로바이더는 사용 이력이 없으면 숨겨지고 있으면(과거 사용 후 키 제거) 계속 표시되며, 활성 프로바이더는 항상 표시된다. §6.5의 `embed:*`는 `props.llmSafe().providers()`에 속하지 않는 별도 경로라 이 필터 대상이 아니다(항상 표시). 테스트 5건 추가(전체 355), 로컬 서버에서 재기동 전/후 비교로 카드·차트·표 3곳에서 동시에 숨김/노출됨을 실사용 검증(회귀 0).
+`LlmUsageRepository.usedProviders()` + `OperationsController.visibleChatProviders()` 공통 필터(`configured || 사용이력있음`)로 카드·표·차트 3경로를 통일 — 키 없는 프로바이더는 이력 없으면 숨기고 있으면(과거 사용 후 키 제거) 계속 표시, 활성 프로바이더는 항상 표시. §6.5의 `embed:*`는 이 필터 대상이 아니라 항상 표시. 테스트 +5(전체 355), 재기동 전/후 비교로 3곳 동시 숨김/노출을 실사용 검증(회귀 0).
 
 ### 6.7 LLM 사용량 — 설정에 없는(orphan) 프로바이더 기록 삭제 ✅ 완료
 
-`OperationsController.orphanProviderNames()`가 `usedProviders()`에서 현재 config 프로바이더 이름 전체와 현재 `embeddingProviderName()`을 뺀 차집합으로 orphan을 계산한다 — 활성 `embed:<model>`은 보호하고, `EMBED_MODEL` 변경 후 남은 `embed:<old-model>`은 일반 orphan과 동일하게 삭제 허용(§6.5가 나중에 추가한 "현재 임베딩 이름" 개념을 반영). §6.6 구현은 config 목록을 필터링할 뿐 밖의 이름을 노출하지 않아 orphan이 원안 가정과 달리 어디에도 안 보이는 공백이 있었기에, 세 경로 모두에 orphan 항목(`type=ORPHAN`, `deletable=true`)을 실제로 노출하는 단계를 원안에 보강했다. `DELETE /admin/llm-usage/{provider:.+}`(콜론·점이 섞인 이름 보호용 정규식)가 `LlmUsageRepository.deleteByProvider()`로 삭제하며, orphan이 아니면 400 거부 + `AuditLogger` 기록. `/admin/**` 경로에 배치해 `NoAuthAutoLoginFilter`의 기존 no-auth 관리자 자동 인증을 그대로 상속하고, 인증 모드는 `SecurityConfig`에 이 경로 전용 `hasRole("ADMIN")` 매처만 좁게 추가(다른 `/admin/**` 엔드포인트는 §7.3 전까지 기존 수준 유지, 회귀 없음). 테스트 9건 추가(전체 364), 가짜 orphan 행을 DB에 직접 삽입해 카드 노출→삭제 버튼 클릭→DB 실삭제까지 브라우저에서 실사용 검증(회귀 0).
+`OperationsController.orphanProviderNames()` = 사용 이력 있는 provider 전체 − 현재 config provider − 현재 임베딩 모델명(활성 `embed:<model>`은 보호, 옛 임베딩 모델명은 삭제 허용). 카드·표·차트 세 경로에 `type=ORPHAN`·`deletable=true`로 노출하고, `DELETE /admin/llm-usage/{provider:.+}`(관리자 전용, orphan 아니면 400 거부 + 감사로그)로 `LlmUsageRepository.deleteByProvider()` 삭제. `/admin/**` 경로라 `NoAuthAutoLoginFilter`의 기존 no-auth 관리자 인증을 그대로 상속. 테스트 +9(전체 364), 가짜 orphan 행 삽입 → 카드 노출 → 삭제 → DB 반영까지 브라우저 실사용 검증(회귀 0).
 
 ### 6.8 Chat 응답 피드백(좋아요/싫어요) 기반 컨텍스트 제외 ✅ 완료
 
-각 Assistant 응답에 👍/👎 토글을 추가하고, `DISLIKE` turn은 다음 프롬프트 컨텍스트에서 제외한다(`LIKE`는 저장만, 아직 미소비). `conversation_turns.feedback TEXT`(런타임 `ALTER TABLE`, `NULL|LIKE|DISLIKE`) + `PATCH /ui/threads/{threadId}/turns/{turnId}/feedback`(`OperationsController`, 소유권 확인 후 404/값 검증 400/성공 204). 제외 로직은 `getHistory()` SELECT에 `AND (feedback IS NULL OR feedback <> 'DISLIKE')` 한 줄. `ChatResponse.turnId` + `addTurn()`이 생성 id를 반환하도록 변경해 HTMX/DUAL/서버 복원/SSE 스트리밍 4개 렌더 경로 모두 같은 `.feedback-controls[data-turn-id] > .feedback-btn` 마크업 사용, 클릭 처리는 `chat.html`의 `#chat-messages` 위임 리스너 하나로 통일. `AuditLogger`에 `from`/`to` 기록. DUAL 모드는 외부 답변 turn 1개만 저장(로컬 답변엔 별도 피드백 없음 — 기존 정책과 동일). 테스트 +9(전체 335), LM Studio 연동 실사용 검증 완료.
+Assistant 응답에 👍/👎 토글 추가, `conversation_turns.feedback`(런타임 컬럼, `NULL|LIKE|DISLIKE`) + `PATCH /ui/threads/{threadId}/turns/{turnId}/feedback`. `DISLIKE` turn은 `getHistory()` SELECT에서 하드 제외(`LIKE`는 저장만, 아직 미소비). HTMX/DUAL/서버복원/SSE 4개 렌더 경로가 공통 마크업 + `#chat-messages` 위임 리스너 하나로 클릭 처리 통일. DUAL 모드는 외부 답변 turn만 저장(로컬 답변엔 피드백 없음). 테스트 +9(전체 335), LM Studio 실사용 검증 완료.
 
 ### 6.9 입력 시작 시 로컬 요약 선계산 + 중복 제거 컨텍스트 압축 ✅ 완료
 
-사용자가 입력을 시작하면(첫 글자 입력 즉시, 세션당 1회) `POST /ui/chat/summary/precompute`가 가상 스레드로 발화되어, 신규 `ConversationSummarizerService`가 스레드 turn을 정규화 기반 중복 제거(동일 질문은 최신 답변만, DISLIKE는 §6.8과 동일하게 제외)한 뒤 LOCAL 프로바이더(`LIGHT_TEXT`+`LOCAL_ONLY`)로 요약을 생성한다. 결과는 스레드별 LRU 캐시(최대 3개, TTL 15초)에 저장되고, `AgentService`/`StreamingAgentService`는 캐시가 있으면 "요약+최근 2턴", 없으면(미계산·실패·LOCAL 미가용) 기존 `getHistory()`로 조용히 폴백한다. `addTurn()` 성공 직후 캐시를 무효화해 다음 입력에서 재생성한다. 원안의 명시적 타임아웃·`sourceTurnSeq` 추적은 fire-and-forget 특성상 불필요해 생략. 테스트 14건 추가(전체 354), LM Studio 연동으로 실제 요약 생성 → 다음 질문에서 회상까지 실사용 검증 완료(회귀 0).
+입력 시작 시(첫 글자, 세션당 1회) `POST /ui/chat/summary/precompute`가 가상 스레드로 발화 — `ConversationSummarizerService`가 turn을 정규화 중복제거(§6.8 DISLIKE 제외 동일 적용) 후 LOCAL 프로바이더로 요약, 스레드별 LRU 캐시(최대 3개, TTL 15초)에 저장. 캐시 있으면 "요약+최근 2턴", 없으면(미계산·실패·LOCAL 미가용) 기존 `getHistory()`로 조용히 폴백하고, `addTurn()` 직후 캐시를 무효화해 재생성한다. 테스트 +14(전체 354), LM Studio 실사용 검증(요약 생성 → 다음 질문 회상) 완료(회귀 0).
 
 ### 6.10 LLM 사용량 — 백그라운드(비-채팅) 사용량 분리 기록 ✅ 완료 (2026-07-05)
 
-**현황 (2026-07-05 확인)**: `/llm-usage`에 채팅 답변 생성 이외의 LLM 호출도 잡히는지 점검한 결과, 5곳(대화 요약·인덱싱 키워드 추출·문서 서식 교정·TXT→MD 변환·대화 제목 자동생성) 중 4곳은 이미 `LlmRouter.executeWithTracking()`으로 추적은 되고 있었으나 **일반 채팅과 같은 provider 이름으로 섞여 기록**돼 구분이 불가능했고, 대화 제목 생성(`ThreadMetaService`)은 `LlmRouter`를 거치지 않는 직접 주입 `ChatClient`를 써서 **추적 자체가 안 되고 있었음**.
-
-**구현**: §6.5의 `embed:` 접두사 선례를 그대로 확장 — `BackgroundUsage` 클래스(`llm` 패키지)에 `summary:`/`keyword:`/`mdcorrect:`/`txt2md:`/`title:` 5개 예약 접두사 정의. `LlmRouter.executeWithTracking()`에 선택적 `usageLabelPrefix` 파라미터를 추가한 4-인자 오버로드를 신설(기존 3-인자 오버로드는 그대로 유지, 내부적으로 `prefix=null`로 위임)하여 `provider.name()` 대신 `prefix + provider.name()`으로 기록하도록 함. `ConversationSummarizerService`/`KeywordExtractor`/`MarkdownCorrectionService`/`TextToMarkdownService`는 라벨만 추가하고, `ThreadMetaService`는 `ChatClient` 의존성을 `LlmRouter`로 교체해 새로 추적 대상에 편입(스트리밍 없이 블로킹 `executeWithTracking()` 호출로 단순화됨 — 제목 생성은 토큰 단위로 화면에 표시되지 않아 스트리밍이 애초에 불필요했음).
-
-`OperationsController`는 `usedProviders()` 중 `BackgroundUsage.isBackground()`에 해당하는 이름을 새 `type=BACKGROUND` 카드/행으로 노출(embed:와 동일하게 `deletable=false`, 항상 원본 이름 그대로 표시)하고, 기존 `orphanProviderNames()`에서는 제외(그렇지 않으면 백그라운드 라벨이 "설정에 없는 이름"으로 오인되어 ORPHAN 카드로 잘못 노출되고 삭제 버튼까지 붙었을 것 — embed:가 이미 겪었던 함정과 동일).
-
-**검증**: 전체 436 tests BUILD SUCCESS(회귀 0). `data/memory.db`에 `summary:local` 임시 행을 직접 삽입해 `/llm-usage` 페이지에서 BACKGROUND 배지 카드로 정상 렌더(삭제 버튼 없음, 차트에 별도 계열로 표시)되는 것을 실사용 검증 후 임시 행 제거. 조사 중 발견한 더 큰 범위(핵심 채팅 경로 자체의 추적 공백)는 §6.14로 분리했다.
+채팅 외 LLM 호출(요약·키워드추출·서식교정·TXT→MD·제목생성) 5곳 점검 결과, 4곳은 추적은 되나 채팅과 provider명이 섞여 구분 불가했고 대화 제목 생성(`ThreadMetaService`)은 `LlmRouter`를 안 거쳐 추적 자체가 안 되고 있었음. §6.5의 `embed:` 접두사 선례를 확장해 `BackgroundUsage` 클래스에 `summary:`/`keyword:`/`mdcorrect:`/`txt2md:`/`title:` 5개 접두사를 정의하고, `LlmRouter.executeWithTracking()`에 `usageLabelPrefix` 4-인자 오버로드를 추가(기존 3-인자는 유지). `ThreadMetaService`는 직접 `ChatClient` 의존을 `LlmRouter`로 교체해 신규 추적 편입. `OperationsController`가 `type=BACKGROUND` 카드로 노출(`deletable=false`, orphan 판정에서는 제외 — embed:와 동일한 함정 방지). 전체 436 tests BUILD SUCCESS, 임시 행 삽입으로 BACKGROUND 카드 렌더를 실사용 검증(회귀 0). 조사 중 발견한 더 큰 범위(핵심 채팅 경로 자체의 추적 공백)는 §6.14로 분리했다.
 
 ---
 
 ### 6.11 대화 컨텍스트 예산 정합성 + 설정 외부화 ✅ 완료 (2026-07-07)
 
-> **현재 코드 확인 (2026-07-05)**: §6.9(`ConversationSummarizerService`) 도입 후 이전 대화를 프롬프트에 넣는 경로가 두 갈래로 나뉘었는데, 문자 예산 체크가 한쪽에만 있다 — `MemoryService.getHistory()`(폴백 경로)는 `max(1000, LLM_MAX_TOKENS × 0.75)` 문자 예산을 지키지만, 요약 캐시가 있을 때 쓰는 `ConversationSummarizerService.buildContext()`(요약 ≤2000자 + 최근 원문 2턴)는 이 예산을 전혀 체크하지 않는다. 또한 `FETCH_LIMIT=50`(`SqliteMemoryRepository`), `MAX_CACHED_THREADS=3`·`MAX_SUMMARY_CHARS=2000`·`RECENT_RAW_TURNS=2`·`PRECOMPUTE_TTL_MILLIS=15000`(`ConversationSummarizerService`)가 전부 하드코딩 상수라 `AppProperties`로 조정할 방법이 없다.
+**배경**: §6.9 도입 후 이전 대화를 프롬프트에 넣는 경로가 둘로 나뉘었는데, 문자 예산 체크가 폴백 경로(`MemoryService.getHistory()`)에만 있고 요약 경로(`ConversationSummarizerService.buildContext()`)엔 없어 — 최근 답변이 길면 요약 경로가 오히려 더 큰 컨텍스트를 보낼 수 있는 불일치가 있었다. 또한 `FETCH_LIMIT`·캐시 크기·TTL 등 5개 값이 하드코딩이라 배포 환경별 조정이 불가했다.
 
-**왜**: 최근 답변 2개가 길면 요약 경로가 폴백 경로보다 더 큰 컨텍스트를 LLM에 보낼 수 있어 두 경로의 동작이 앞뒤가 안 맞는다. 운영자가 배포 환경(로컬 소형 모델 vs 대형 클라우드 모델)에 맞춰 캐시 크기·요약 길이·최근 턴 수를 조정하고 싶어도 코드를 고쳐야 한다.
-
-**액션 (우선순위 쉬움 2건)**:
-1. `ConversationSummarizerService.buildContext()`가 조립한 `요약 + 최근 N턴` 결과에도 `MemoryService`와 동일한 문자 예산(`maxConversationChars`)을 적용 — 초과 시 최근 턴부터 자르거나(폴백 경로와 동일한 "최신 우선 채움" 전략 재사용) 요약 부분을 우선 유지. 두 경로가 항상 같은 상한을 지키도록 통일.
-2. 하드코딩 상수들을 `AppProperties`에 `app.memory.*`/`app.summary.*` 네임스페이스로 이전 — 예: `app.memory.fetch-limit-turns`(기본 50), `app.summary.max-cached-threads`(기본 3), `app.summary.max-summary-chars`(기본 2000), `app.summary.recent-raw-turns`(기본 2), `app.summary.precompute-ttl-seconds`(기본 15). 각 서비스에 null 가드(`xxxSafe()` 패턴) 적용.
-
-**완료 기준**:
-- 요약 캐시 경로와 폴백 경로 모두 동일한 문자 예산을 넘지 않는다(단위 테스트로 고정).
-- 위 5개 프로퍼티가 미설정 시 기존 하드코딩 값과 동일하게 동작(회귀 0), 설정 시 그 값을 따른다.
-
-**Effort**: 반나절~1일(상한 통일 + 프로퍼티 외부화, 테스트 포함).
-
-**구현 (2026-07-07)**:
-- **예산 통일**: 단일 진실 원천을 위해 `MemoryService.maxConversationChars()`(= `max(1000, LLM_MAX_TOKENS × 0.75)`) getter를 신설하고, `ConversationSummarizerService.buildContext()`가 이 값을 그대로 예산으로 사용하도록 함. 요약 블록은 항상 보존하고, 최근 원문 turn을 폴백 경로(`SqliteMemoryRepository.getHistory()`)와 동일한 "최신 우선 채움" 전략으로 남은 예산 안에서만 채운다(초과 turn은 오버플로 대신 드롭). 요약만으로 예산을 넘는 극단(아주 작은 `LLM_MAX_TOKENS`)에서는 최종 결과를 예산으로 하드 캡 — 두 경로 모두 절대 예산을 넘지 않음이 단위 테스트로 고정됨.
-- **설정 외부화**: `AppProperties`에 `MemoryConfig`(`app.memory.fetch-limit-turns`)·`SummaryConfig`(`app.summary.max-cached-threads`/`max-summary-chars`/`recent-raw-turns`/`precompute-ttl-seconds`) record + `memorySafe()`/`summarySafe()` null 가드(각 필드 ≥1 클램프, 기존 하드코딩과 동일한 50/3/2000/2/15 기본값) 추가. `SqliteMemoryRepository`(생성자에 `AppProperties` 주입)의 `FETCH_LIMIT`와 `ConversationSummarizerService`의 4개 상수를 전부 이 설정에서 읽도록 교체(캐시 LRM 크기가 이제 생성자에서 결정되므로 `summaryCache` 초기화도 생성자로 이동). `application.properties`에 5개 프로퍼티(+환경변수 오버라이드) 추가.
-- **검증**: 전체 461 tests BUILD SUCCESS(회귀 0, +2 신규 예산 일관성 테스트, 5 skip 그대로). `AppPropertiesSafeAccessorTest`가 신규 `memorySafe()`/`summarySafe()`에 대해서도 raw getter 미사용을 자동 강제. CLAUDE.md Null-safe config 컨벤션에 두 접근자 추가.
+**구현**: 단일 진실 원천 `MemoryService.maxConversationChars()`(= `max(1000, LLM_MAX_TOKENS × 0.75)`)를 신설해 양쪽 경로가 동일 예산을 쓰도록 통일(요약 블록은 항상 보존, 최근 원문은 "최신 우선 채움"으로 남은 예산만 채움, 극단적으로 작은 예산은 최종 결과 하드 캡). `FETCH_LIMIT`(50) 등 5개 하드코딩 상수를 `app.memory.*`/`app.summary.*` 프로퍼티로 외부화 + `memorySafe()`/`summarySafe()` null 가드 추가(미설정 시 기존값과 동일). 전체 461 tests BUILD SUCCESS(+2 신규 예산 일관성 테스트, 회귀 0).
 
 ---
 
@@ -352,20 +330,48 @@ SQLite `audit_log` 테이블 대신 Logback `SizeAndTimeBasedRollingPolicy`로 �
 
 ### 6.14 LLM 사용량 — 핵심 채팅 경로 추적 확장 ✅ 완료 (2026-07-06)
 
-> **배경 (2026-07-05, §6.10 작업 중 발견)**: `/llm-usage`가 백그라운드 사용량(§6.10)까지는 잡지만, `AnswerService`/`DirectAnswerService`/`ClassifierService`/`RerankerService`/`VisionDescriptionService`/`ImageTypeClassifier`/`RetrievalService`의 `MultiQueryExpander`가 `LlmRouter`를 거치지 않는 직접 주입 `ChatClient`(또는 기동 시 1회 COST_FIRST로 고정된 `primaryChatModel`)를 호출해 실제 채팅 사용량이 `/llm-usage`에 전혀 잡히지 않는 문제. 2026-07-06에 사용자가 "Direct/RAG 질문 시 EMBEDDING만 증가한다"고 실사용 중 재현·보고해 1차 착수(핵심 3곳), 곧이어 잔여 4곳도 마저 정리.
+§6.10 조사 중 `AnswerService`/`DirectAnswerService`/`ClassifierService`/`RerankerService`/`VisionDescriptionService`/`ImageTypeClassifier`/`RetrievalService`의 `MultiQueryExpander` 7곳이 `LlmRouter`를 거치지 않는 직접 `ChatClient` 호출이라 실제 채팅 사용량이 `/llm-usage`에 전혀 안 잡히던(embed:만 증가) 문제를 사용자가 실사용 중 재현·보고(2026-07-06).
 
-**1차 (핵심 3곳 — 사용자가 실사용 중 보고한 증상의 직접 원인)**:
-- `ClassifierService`: `ChatClient` 필드 → `LlmRouter` 주입으로 교체, `classifyOnly()`/`execute()` 모두 `executeWithTracking(TaskType.TEXT, RoutingMode.COST_FIRST, ...)`로 라우팅 + 기록.
-- `AnswerService`: `executeBlocking()`/`evaluate()`는 `llmRouter.executeWithTracking(TaskType.TEXT, state.routingMode(), model -> model.call(...))`(실사용량, DUAL 블로킹이 이미 쓰던 패턴과 동일)로 교체. `executeStreamingNormal()`/`executeDualStreaming()`/`progressiveUpgrade()`의 스트리밍 분기는 실제 `ChatResponse`를 못 읽으므로 신규 `LlmRouter.recordApproxUsage(provider, promptText, answerText)`(§6.5 임베딩 chars/4 근사 폴백과 동일 패턴)로 근사 기록. 더 이상 쓰이지 않는 `ChatClient` 필드/생성자 인자 제거.
-- `DirectAnswerService`: `execute()`(블로킹)는 `executeWithTracking()`으로 교체(실사용량), `executeStreaming()`은 `recordApproxUsage()` 추가. `buildClient()`(사용처 없어짐) 삭제, DUAL→COST_FIRST 폴백 로직을 `effectiveRoutingMode()`로 추출(3곳 중복 제거).
-- **실사용 검증**: LM Studio 연동 상태로 Direct 질문 1건 + RAG 질문 1건(재시도 루프 포함, 총 7회 LLM 호출)을 실제 채팅 UI로 전송 → `/api/v1/llm/usage` 응답과 `/llm-usage` 화면에서 `local`(chat) 프로바이더가 오늘 3,468 토큰·7회 호출로 정상 누적됨을 확인(이전엔 `embed:*`만 증가하고 `local`은 고정이었던 버그가 해소됨). 스크린샷으로 `local` 막대가 `embed:*`/`title:local`보다 압도적으로 크게 나타나는 것도 확인.
+**1차(핵심 3곳, 당일 즉시 수정)**: `ClassifierService`/`AnswerService`/`DirectAnswerService`의 블로킹 호출을 `executeWithTracking()`(실사용량)으로, 스트리밍 분기는 신규 `LlmRouter.recordApproxUsage()`(§6.5와 동일한 chars/4 근사)로 교체. LM Studio로 Direct+RAG 질문(총 7회 호출) 전송 → `local` 프로바이더가 정상 누적됨을 실사용 검증.
 
-**2차 (잔여 4곳 — 같은 날 마저 정리)**:
-- `RerankerService`/`ImageTypeClassifier`: 각각 `ChatClient` 직접 주입 / `llmRouter.route()`로 모델만 얻어 수동 `ChatClient.builder()` 호출하던 것을 `LlmRouter.executeWithTracking()`(각각 TaskType.TEXT/LIGHT_BOTH, COST_FIRST)로 교체.
-- `VisionDescriptionService`: 동일하게 `executeWithTracking(TaskType.VISION, COST_FIRST, ...)`로 교체 — 멀티모달 프롬프트는 `ChatClient`의 `.user(u -> u.media(...))` 대신 `UserMessage.builder().text(...).media(new Media(mimeType, resource)).build()` + `new Prompt(userMessage)`로 직접 구성.
-- `RetrievalService`의 Spring AI `MultiQueryExpander`: 프레임워크 유틸리티 클래스라 내부에서 자체 `ChatClient`를 구성해 호출 — `executeWithTracking()`으로 가로챌 수 없어, `TrackingEmbeddingModel`과 동일한 데코레이터 패턴으로 신규 `TrackingChatModel`(`llm` 패키지, `call()`만 오버라이드해 실사용량 기록·`stream()`/`getDefaultOptions()`는 delegate)을 추가하고, `MultiQueryExpander.builder().chatClientBuilder(ChatClient.builder(trackedModel))`에 주입. 생성자를 `ChatModel chatModel` 직접 주입에서 `LlmRouter`+`LlmUsageRepository`로 교체하고, 신규 `LlmRouter.routeProviderWithFallback(List<TaskType>, RoutingMode)`(TEXT→LIGHT_TEXT 순, `LlmConfig.primaryChatModel()`과 동일한 폴백 순서)로 provider를 1회 resolve.
-- 테스트: `AnswerServiceTest`/`ClassifierServiceTest`/`DirectAnswerServiceTest`/`ChatResponseNullSafetyTest`/`RerankerServiceTest`/`RetrievalService*Test`(3개) 갱신 + 신규 `VisionDescriptionServiceTest`/`ImageTypeClassifierTest`/`TrackingChatModelTest`(기존 테스트 전무했던 2곳 포함) — 전체 466 tests BUILD SUCCESS(회귀 0, +5 skip 그대로).
-- 실사용 브라우저 검증은 생략(reranker/image-description은 opt-in 플래그, MultiQueryExpander는 이미 검증된 것과 동일한 `executeWithTracking`/데코레이터 메커니즘 재사용이라 단위 테스트로 충분하다고 판단).
+**2차(잔여 4곳, 같은 날 마저 정리)**: `RerankerService`/`ImageTypeClassifier`/`VisionDescriptionService`는 동일하게 `executeWithTracking()`으로 교체. `MultiQueryExpander`(Spring AI 프레임워크 유틸, 내부에서 자체 `ChatClient` 구성이라 가로챌 수 없음)는 `TrackingEmbeddingModel`과 동일한 데코레이터 패턴의 신규 `TrackingChatModel`을 만들어 주입.
+
+관련 테스트 9개 파일 갱신/신설(기존 테스트 전무했던 2곳 포함), 전체 466 tests BUILD SUCCESS(회귀 0).
+
+---
+
+### 6.15 보안 하드닝 (2026-07-08 코드 리뷰 도출) 🔵 미착수 — 인증 활성 배포 시 우선순위
+
+> **범위 주의**: 아래 3건은 **`app.auth.enabled=true`(멀티유저 인증) 배포에서만** 의미가 있다. 폐쇄망 단일 운영자(no-auth) 기본 배포에는 노출면이 없다 — 그래서 §6.12/6.13(쿼터)보다 뒤가 아니라 "인증 켜고 다중 사용자로 열 때 반드시 선행"으로 조건부 우선순위다. 각 항목은 실제 코드 위치와 재현 조건을 명시했다.
+
+**6.15.1 `/api/v1/**` CSRF 비활성 + 세션 인증 혼용 (CSRF 노출)**
+- **현재 코드**: `SecurityConfig`가 인증 모드에서 `csrf.ignoringRequestMatchers("/api/v1/**")`로 API 전체를 CSRF 예외 처리하지만, 같은 엔드포인트가 `anyRequest().authenticated()` — 즉 **세션 쿠키 인증**이다. `POST /api/v1/documents`는 `multipart/form-data`(CSRF "simple request")라 크로스사이트 폼으로 인증된 사용자의 브라우저에서 업로드를 유발할 수 있다(`DELETE`·JSON body 경로는 preflight로 상대적으로 안전).
+- **개선안**: (A) API를 브라우저 세션이 아닌 **별도 인증(API 토큰/헤더)** 전용으로 못박고 CSRF 예외를 유지하거나, (B) 세션 인증을 계속 쓸 거면 `/api/v1/**`도 CSRF 토큰을 요구(현 HTMX/폼 경로 `/ui/**`는 이미 CSRF 적용). 최소 조치로 `POST /api/v1/documents`만이라도 CSRF 토큰 또는 커스텀 헤더 요구.
+- **완료 기준**: 인증 모드에서 크로스사이트 폼 제출로 인증 사용자의 업로드/삭제가 트리거되지 않음(테스트로 재현→차단 확인). no-auth 모드 회귀 0.
+
+**6.15.2 `/admin/**` 인가 공백 — 일반 인증 사용자도 관리 기능 접근**
+- **현재 코드**: 인증 모드에서 ROLE_ADMIN을 요구하는 경로는 **`DELETE /admin/llm-usage/**` 하나뿐**(`SecurityConfig` 주석이 "나머지 `/admin/**`는 any authenticated user 유지"를 명시). 따라서 `/admin`(청크 브라우징), `DELETE /admin/chunks/{id}`, `POST /admin/chunks/{id}`(편집), `POST /admin/documents/{docId}/reindex`를 **로그인한 일반 사용자 누구나** 호출해 벡터 청크를 조회·수정·삭제·재인덱싱할 수 있다.
+- **개선안**: `/admin/**` 전체를 `hasRole("ADMIN")`으로 게이트. no-auth 모드는 `NoAuthAutoLoginFilter`가 `/admin` 요청을 첫 ADMIN으로 자동 인증하므로 무영향. 단, `AdminController`/`AdminService` 테스트에 비관리자 403 케이스 추가 필요.
+- **완료 기준**: 인증 모드에서 비-ADMIN 사용자의 `/admin/**` 접근이 403. no-auth 모드 관리자 자동 인증 회귀 0.
+
+**6.15.3 Rate limit — `X-Forwarded-For` 무검증 신뢰 (per-IP 제한 우회)**
+- **현재 코드**: `RateLimitFilter.clientKey()`가 익명 요청에서 `X-Forwarded-For`의 첫 값을 무조건 클라이언트 IP로 사용. 리버스 프록시가 이 헤더를 덮어쓰지 않으면 공격자가 매 요청 XFF를 바꿔 **로그인 per-IP 브루트포스 제한(분당 10회/IP)을 우회**할 수 있다.
+- **개선안**: Tomcat `RemoteIpValve`(이미 `server.tomcat.remoteip.protocol-header` 설정 존재)로 신뢰 프록시 홉만 XFF를 해석하게 하고 `req.getRemoteAddr()`를 신뢰 원천으로 사용, 또는 `app.rate-limit.trust-forwarded-for`(기본 false) 플래그로 XFF 신뢰를 명시적 옵트인. 폐쇄망 직노출(프록시 없음) 시엔 XFF 신뢰 끄기가 안전 기본값.
+- **완료 기준**: 프록시 없는 배포에서 XFF 조작으로 per-IP 제한이 뚫리지 않음. Caddy 배포에서 실제 클라이언트 IP 정상 인식(기능 회귀 0).
+
+---
+
+### 6.16 사용자 경험(UX) 개선 (2026-07-08 리뷰 도출) 🔵 미착수
+
+**6.16.1 스트리밍 답변·인덱싱 중단(취소) 컨트롤 부재**
+- **현재 상태**: 채팅 SSE 스트리밍(`chat-stream.js`)과 문서 인덱싱 진행(`documents.html`) 모두 시작 후 사용자가 멈출 방법이 없다 — 잘못 보낸 긴 질문이나 대용량 인덱싱을 끝까지 기다려야 하고, 서버 자원도 계속 소모된다. `StreamingAgentService`는 이미 `emitter.onError/onTimeout`에서 워커를 `interrupt()`하므로 클라이언트가 SSE를 닫으면 중단 훅은 존재한다.
+- **개선안**: 스트리밍 답변 버블에 "중지" 버튼 → `EventSource.close()` + (필요 시) 서버에 취소 신호. 인덱싱은 업로드 행별 취소가 이상적이나, 최소한 진행 중 SSE 구독 해제 + 서버측 가상 스레드 `interrupt` 경로 정리. 부분 답변은 이미 에러 시 저장 로직(`StreamingAgentService`)이 있어 재사용 가능.
+- **완료 기준**: 사용자가 스트리밍/인덱싱을 즉시 중단할 수 있고, 서버 워커도 실제로 종료된다(좀비 스레드 없음).
+
+**6.16.2 계정 잠금 상태 피드백 부재**
+- **현재 상태**: 로그인 5회 실패 시 15분 잠금(`AuthEventListener`)되지만, 잠긴 뒤에도 로그인 화면은 일반 "이메일 또는 비밀번호가 올바르지 않습니다" 문구만 보여준다(`formLogin.failureUrl("/login?error")` 고정). 사용자는 자신이 잠겼는지, 언제 풀리는지 알 수 없다(문구가 "5회 실패 시 15분 잠금"을 안내는 하지만 현재 잠금 상태/해제 시각은 아님).
+- **개선안**: `LockedException` 분기를 별도 실패 핸들러로 잡아 "N분 후 해제" 메시지 전달(`locked_until` 조회). 잠금 남은 시간은 이미 `SqliteUserDetailsService`가 관리 중.
+- **완료 기준**: 잠긴 계정 로그인 시 잠금 상태 + 해제 예정 시각이 구분되어 표시된다.
 
 ---
 
@@ -422,22 +428,22 @@ Google/GitHub 제공자 등록. 가입 흐름은 **기존 폼 가입과 동등**
 
 ### Step 5.1~5.8 — 백엔드 추상화 + sqlite-vec 구현 ✅ 완료
 
-- **5.1** Chroma 결합을 `VectorStoreProvider`(search/searchBatch/add/deleteByDocIds) 인터페이스 뒤로 이전 — 동작 변화 없는 순수 리팩토링, 호출부 시그니처 불변.
-- **5.2** sqlite-jdbc `load_extension()`으로 운영자 제공 `vec0` 바이너리 로드(신규 의존성 0, 공식 Maven 아티팩트 없음). `SqliteVecVerifier`가 기동 시 `vec_version()` 확인 후 fail-fast.
-- **5.3** `vec0` 차원이 DDL 상수라 Flyway 대신 시작 시 동적 `IF NOT EXISTS` DDL. 벡터(`vec_embeddings`)와 텍스트·메타(`vec_document_chunks`)를 분리해 `spring_doc_id`로 JOIN. `app.embedding.dimensions` 미설정 시 fail-fast.
-- **5.4** `SqliteVecVectorStoreProvider`: version을 vec0 partition key로 KNN 내부 필터링(한 쿼리로 topK), cosine 거리→유사도 변환(Chroma와 동일 스케일). vec0가 upsert 미지원이라 add는 DELETE 후 INSERT.
-- **5.5** `VectorStoreProviderConfig`가 `app.vectorstore.type`으로 provider 택일(chroma 기본). Chroma 전용 빈은 `@ConditionalOnProperty`로 가드, 두 모드 모두 `VectorStoreProvider` 빈 정확히 1개.
-- **5.6** `chroma` 서비스를 compose profile로 분리, `depends_on.required:false`로 sqlite-vec 모드에서 무-Chroma 기동.
-- **5.7** 백엔드 전환 = 재인덱싱(원본 보존이라 무손실). `SqliteVecIntegrationTest`(vec0 바이너리 없으면 skip)로 add→search→delete E2E 검증.
-- **5.8** `AdminService`가 `ChromaApi` 전용이라 sqlite-vec 모드에서 청크 브라우징이 비어 있던 문제를 `VectorStoreAdminView`로 해결 — 백엔드 공통 상태 카드 + 청크 CRUD 패리티(sqlite-vec은 `vec_document_chunks` 직접 조회, 단일 "active version" 개념이 없어 버전별 청크 수로 표시).
+- **5.1** Chroma 호출을 `VectorStoreProvider` 인터페이스 뒤로 이전(동작 변화 없는 순수 리팩토링).
+- **5.2** `load_extension()`으로 운영자 제공 `vec0` 바이너리 로드, `SqliteVecVerifier`가 기동 시 `vec_version()` 확인 후 fail-fast.
+- **5.3** 차원이 DDL 상수라 Flyway 대신 동적 DDL. 벡터(`vec_embeddings`)/텍스트·메타(`vec_document_chunks`) 분리 후 `spring_doc_id` JOIN. 차원 미설정 시 fail-fast.
+- **5.4** `SqliteVecVectorStoreProvider`: version을 partition key로 KNN 필터링, cosine→유사도 변환(Chroma와 동일 스케일). upsert 미지원이라 add=DELETE 후 INSERT.
+- **5.5** `VectorStoreProviderConfig`가 `app.vectorstore.type`으로 택일(기본 chroma), Chroma 전용 빈은 `@ConditionalOnProperty` 가드.
+- **5.6** `chroma` 서비스를 compose profile로 분리, sqlite-vec 모드는 무-Chroma 기동.
+- **5.7** 백엔드 전환=재인덱싱(원본 보존, 무손실). `SqliteVecIntegrationTest`(vec0 없으면 skip)로 E2E 검증.
+- **5.8** sqlite-vec 모드에서 비어있던 청크 브라우징을 `VectorStoreAdminView`로 해결(백엔드 공통 상태 카드 + CRUD 패리티).
 
 ### Step 5.9 — 태그 기반 검색 스코프 ✅ 완료
 
-업로드 시 다중 태그를 저장하고, 채팅에서 선택한 태그로 **엄격 AND 필터**를 적용(Chroma·sqlite-vec·하이브리드 BM25 공통). 핵심 설계: Spring AI/vec0 모두 배열 포함 연산자가 없어 provider 레이어 태그 push-down이 불가하므로, `RetrievalService.execute()`가 `mergeRrf()` 직후 **Java post-filter**(`TagUtils.parseTagList`로 String/Collection 방어)를 적용하고, 결과 부족 대비 `candidateK`를 선제 확대(`app.search-tag-candidate-multiplier`, 재호출 없음)한다. 태그 소스는 하이브리드 BM25용 `chunk_fts.doc_tags` 컬럼 하나 — 태그 제안 UI(`GET /api/v1/tags`)와 재인덱싱 시 태그 자동복원(`DocumentIndexer.restoreTags`, 동기화 갱신 경로에서 빈 태그로 소실되던 결함 수정) 모두 여기서 조회한다. 프리릴리즈 정책상 스키마 변경(FTS5 `doc_tags` 추가)은 마이그레이션 없이 수동 초기화(OPERATOR_MANUAL §4.6).
+업로드 시 다중 태그 저장 + 채팅에서 선택한 태그로 **엄격 AND 필터**(Chroma·sqlite-vec·하이브리드 공통). provider가 배열 포함 연산자를 지원하지 않아 `RetrievalService.execute()`가 `mergeRrf()` 직후 Java post-filter로 적용하고, 결과 부족 대비 `candidateK`를 선제 확대(`app.search-tag-candidate-multiplier`). 태그 소스는 `chunk_fts.doc_tags` 단일 컬럼(태그 제안 UI + 재인덱싱 자동복원 공용). 스키마 변경은 프리릴리즈 정책상 마이그레이션 없이 수동 초기화(OPERATOR_MANUAL §4.6).
 
 ### Step 5.10 — sqlite-vec 운영 DB 분리 ✅ 완료
 
-`app.vectorstore.sqlite-vec.db-path`(`SQLITE_VEC_DB_PATH`) 설정 시 벡터/FTS 테이블(`vec_embeddings`/`vec_document_chunks`/`chunk_fts`)을 별도 `vector.db`로 분리해 인덱싱 I/O와 운영 트랜잭션의 락 경합을 줄인다(기본값 빈 문자열 = 분리 비활성, 기존과 동일). `vectorJdbcTemplate` 빈을 **두 모드 모두 정의**(분리 시 `vector.db` / 그 외 `memory.db` 별칭)해 `KeywordSearchRepository` 등 소비자 코드가 무변경으로 양쪽에 대응, Chroma 경로는 완전 무영향. 파일 간 트랜잭션 원자성이 없으므로 인덱싱은 항상 *벡터/FTS 먼저 → 레지스트리 마지막* 순서로 커밋해 "레지스트리는 성공인데 벡터 없음" 상태를 방지(고아 벡터는 재인덱싱이 덮어쓰므로 허용). 전용 DataSource도 pool=1+WAL+busy_timeout을 동일 복제.
+`SQLITE_VEC_DB_PATH` 설정 시 벡터/FTS 테이블을 별도 `vector.db`로 분리해 인덱싱 I/O와 운영 트랜잭션 락 경합을 감소(기본 비활성, 기존과 동일 동작). `vectorJdbcTemplate` 빈이 두 모드 모두 대응(분리 시 `vector.db`/아니면 `memory.db` 별칭)해 소비자 코드는 무변경, Chroma 경로는 완전 무영향. 파일 간 트랜잭션 원자성이 없어 인덱싱은 항상 벡터/FTS 먼저 → 레지스트리 마지막 순서로 커밋(고아 벡터는 재인덱싱이 덮어씀). 전용 DataSource도 pool=1+WAL+busy_timeout 동일 적용.
 
 ---
 
@@ -488,55 +494,65 @@ G1~G4 코드/문서 완료. G5는 라우팅 계층 "외부 무선택"을 `LlmCon
 ### 10.1 Contextual Retrieval — 청크 맥락 주입 (정확도 ROI 1순위)
 
 **현재 상태**: `ChunkSplitter`(섹션 병합 + 슬라이딩 윈도우, 순수 텍스트 로직)는 각 청크의 자기 텍스트만 임베딩 대상으로 넘긴다. "이 청크가 어느 문서·상위 섹션의 무엇인지"가 벡터에 반영되지 않아, 대명사·표·코드 조각 청크의 검색 recall이 낮다.
-**개선안**: 인덱싱 시 청크별로 "이 청크는 {문서명}의 {상위 섹션}에 대한 내용" 1~2문장 맥락을 LLM으로 생성해 **임베딩 대상 텍스트 앞에 prepend**(화면 표시용 원문은 유지, 임베딩 입력만 확장). 이미 `KeywordExtractor`가 청크별 LLM 호출(+TF 폴백)을 수행하므로 **같은 호출에서 keywords + context를 함께 추출**하면 인덱싱 왕복 추가 없이 얹을 수 있다. 백그라운드 사용량은 `BackgroundUsage`의 `keyword:`와 유사하게 `context:` 접두사로 분리 기록.
-**효과**: 공개 벤치 기준 검색 실패율 대폭 감소(문헌상 ~35%). 이 프로젝트 정확도 ROI 1순위.
-**비용/리스크**: 인덱싱 1회성 LLM 토큰 증가, 검색 지연 0, 재인덱싱 필요.
-**완료 기준**: 신규 인덱싱 청크의 임베딩 입력에 맥락 문장이 포함되고, `context:` 사용량이 `/llm-usage`에 분리 집계되며, 맥락 생성 실패 시 원문만으로 폴백(회귀 0).
+
+**개선안 (2단계 — 무비용 하한선 + LLM 강화)**:
+1. **구조적 맥락 (LLM 0, baseline)**: `ChunkSplitter`가 이미 섹션 인지 병합을 하므로 각 청크가 속한 `{문서명} > {상위 섹션 경로}` 헤더를 **결정적으로** 임베딩 입력 앞에 prepend한다. LLM 호출 0, 재인덱싱만으로 즉시 얻는 하한선이자 아래 2의 폴백.
+2. **LLM 맥락 강화 (enrichment)**: 그 위에 청크별 1~2문장 맥락을 LLM으로 생성해 얹는다. 이미 `KeywordExtractor`가 청크별 LLM 호출(+TF 폴백)을 수행하므로 **같은 호출에서 keywords + context를 함께 추출**하면 인덱싱 왕복 추가가 없다. 생성 실패 시 1의 구조적 맥락으로 폴백. 백그라운드 사용량은 `BackgroundUsage`(§6.10)에 `context:` 접두사로 분리 기록.
+
+**Contextual BM25 시너지**: Anthropic 원기법은 맥락 텍스트를 임베딩뿐 아니라 **BM25 인덱스에도** 넣어 lexical recall까지 올린다. 여기서도 맥락 텍스트를 `chunk_fts` content로 함께 넣으면 §10.4·§10.2와 맞물려 하이브리드 효과가 증폭된다. 화면 표시용 원문은 그대로 두고, 맥락은 **임베딩+FTS 입력에만** 확장한다.
+
+**Spring AI 위치 확인 (Context7)**: Spring AI 1.1의 `RetrievalAugmentationAdvisor`/`RewriteQueryTransformer`/Query Expansion은 전부 **쿼리 측(pre-retrieval)** 증강이라 이 인덱스 측 기법과 층이 다르다 → `KeywordExtractor` 내 커스텀 구현이 정답(프레임워크가 대체 안 함).
+
+**효과**: 공개 벤치 검색 실패율 대폭 감소(문헌상 ~35%, 맥락+Contextual BM25 결합 기준). 정확도 ROI 1순위.
+**비용/리스크**: 인덱싱 1회성 LLM 토큰 증가(구조적 맥락만 쓰면 0), 검색 지연 0, 재인덱싱 필요.
+**완료 기준**: 신규 청크의 임베딩·FTS 입력에 맥락이 포함되고, `context:` 사용량이 `/llm-usage`에 분리 집계되며, LLM 맥락 실패 시 구조적 맥락(1)만으로 폴백(회귀 0).
 
 ### 10.2 가중 RRF (Weighted RRF)
 
-**현재 상태**: `RetrievalService.mergeRrf()`는 모든 후보 리스트에 `1/(rank+1+60)` 동일 가중을 준다. MultiQuery로 벡터 축이 3개(원본+2), 하이브리드 시 BM25 축은 1개 → **정확 용어(에러코드·API명·제품코드) 매칭이 벡터 합의에 밀려 저평가**된다.
-**개선안**: 축별 가중치를 도입해 `score += weight * 1/(rank+1+k)`. 최소한 키워드 축 가중치를 프로퍼티(`app.search-rrf-keyword-weight` 등, `props.searchXxxSafe()` 관례)로 노출. 상수 k(기본 60)도 외부화 검토.
-**효과**: 하이브리드 검색 실효성 상승, 특히 완전 일치 용어 질의.
-**난이도**: 최저 — 한 메서드(`mergeRrf`) 시그니처에 가중치 맵 추가 + 프로퍼티 1~2개. `mergeRrf`는 이미 package-private로 단위 테스트됨.
+**현재 상태**: `RetrievalService.mergeRrf()`는 모든 후보 리스트에 `1/(rank+1+60)` 동일 가중을 준다. MultiQuery로 벡터 축이 3개(원본+2), 하이브리드 시 BM25 축은 1개 → **정확 용어(에러코드·API명·제품코드) 매칭이 3개 벡터 축의 합의에 구조적으로 밀려 저평가**된다.
+
+**개선안 (레버 2개 — 가중치 + 축 정규화)**:
+1. **축별 가중치**: `score += weight * 1/(rank+1+k)`. 최소한 키워드(BM25) 축 가중치를 프로퍼티(`app.search-rrf-keyword-weight` 등, `props.searchXxxSafe()` 관례)로 노출하고, 상수 k(기본 60)도 외부화.
+2. **축 그룹 정규화 (더 근본적)**: 진짜 왜곡은 개수 불균형(벡터 3 : BM25 1)이므로, 벡터 축들의 **합산 기여를 평균/상한으로 묶어** BM25가 표수로 밀리지 않게 한다. 가중치만으로 부족하면 이쪽이 정공법. 두 레버는 병행 가능.
+
+**효과**: 하이브리드 검색 실효성 상승, 특히 완전 일치 용어 질의. §10.4와 세트일 때 체감이 크다.
+**난이도**: 최저 — 한 메서드(`mergeRrf`) 시그니처에 가중치/그룹 정보 추가 + 프로퍼티 1~2개. `mergeRrf`는 이미 package-private로 단위 테스트됨.
 
 ### 10.3 쿼리 임베딩 캐시 (성능, 저비용)
 
 **현재 상태**: 검색마다 원본+확장 쿼리(최대 3개)를 새로 임베딩한다(`RagService.searchBatch()` → provider가 매번 embed). 반복·유사 질문도 재임베딩해 지연·토큰을 낭비.
-**개선안**: 정규화된 쿼리 텍스트 → `float[]` **Caffeine 캐시**(크기/TTL 상한). Caffeine은 이미 `RateLimitFilter`에서 사용 중이라 **신규 의존성 0**. 임베딩 모델·차원 변경 시 무효화되도록 캐시 키에 모델명을 포함.
+
+**개선안**: 정규화된 쿼리 텍스트 → `float[]` **Caffeine 캐시**. **Context7로 확인 — Spring AI 1.1엔 임베딩 결과 캐시가 없다**(유일한 "caching" 지원은 Bedrock 프롬프트 캐시로 이 목적과 무관). 따라서 기존 `TrackingEmbeddingModel`/`TrackingChatModel`(§6.5·§6.14)과 **동일한 데코레이터 패턴으로 `CachingEmbeddingModel`을 `EmbeddingModel` 앞단에 합성**한다(순서: cache → tracking → delegate, 캐시 히트 시 usage 기록 안 함). Caffeine은 이미 `RateLimitFilter`에서 사용 중이라 **신규 의존성 0**.
+- 캐시 키 = `정규화 쿼리 + 모델명 + 차원` → 임베딩 모델/차원 변경 시 자동 무효화.
+- 값 = `float[]`(차원×4바이트/엔트리로 메모리 산정), `maximumSize` + `expireAfterWrite` 상한.
+- Caffeine은 스레드세이프라 가상 스레드와 무관.
+
 **효과**: 반복 질의의 임베딩 왕복·토큰 절감(FAQ성 트래픽에서 큼).
 **난이도**: 최저.
 
-### 10.4 한국어 형태소 기반 FTS 토크나이저 (하이브리드 정확도)
+### 10.4 한국어 FTS 토크나이저 (하이브리드 정확도)
 
 **현재 상태**: `KeywordSearchRepository`의 `chunk_fts`는 `tokenize='unicode61'` — 공백·구두점만 분리한다. **한국어 조사·복합어를 처리하지 못해** BM25 lexical recall이 영어 대비 크게 낮다. `toMatchQuery()`도 2자 이상 토큰을 OR로 결합할 뿐.
-**개선안**: (최소안) `trigram` 토크나이저로 전환해 부분 문자열 매칭 보강, 또는 (본안) 한국어 분석기(nori/은전한닢 계열) 연동. FTS 스키마 변경이므로 `chunk_fts` 재구축 + 재인덱싱 필요(이미 `rebuildChunkFtsWithDocTags()`류 재구축 경로 존재).
-**효과**: 하이브리드 모드 한국어 정확 매칭 개선 → **10.2와 세트로 하이브리드 기본 활성화(`app.search-hybrid-enabled`) 재검토 가능**.
-**난이도**: 중 — 스키마 재구축 + 폐쇄망 시 분석기 바이너리 조달 고려.
 
-### 10.5 sqlite-vec 배치 검색 단일 스캔 (성능)
+**개선안 (⚠️ 원안 정정 포함)**:
+- **정정 (Context7 SQLite 문서 확인)**: 원안이 언급한 **nori/은전한닢은 Lucene/Elasticsearch 분석기라 SQLite FTS5에 직접 쓸 수 없다.** FTS5 내장 토크나이저는 `unicode61`/`ascii`/`porter`/`trigram` 뿐이고, 형태소 분석을 붙이려면 **커스텀 C FTS5 토크나이저**(`fts5_api` 등록, 예: mecab-ko 기반)를 loadable 확장으로 컴파일해야 한다 — vec0 바이너리와 똑같은 폐쇄망 바이너리 조달 부담이고 유지되는 기성품이 없다. 사실상 별도 과제/범위 밖.
+- **현실안 = `trigram`**(SQLite 3.34+ 내장): 부분 문자열 매칭이라 조사 변형·복합어를 상당 부분 흡수하고 **외부 바이너리 0**. 트레이드오프 — 인덱스 ~3배, 최소 3자 매칭 granularity, 형태소 가중치 없음, `MATCH` 의미가 달라져 `toMatchQuery()` 조정 필요.
+- (직교 튜닝) `unicode61`의 `remove_diacritics`·토큰 문자 커스터마이즈는 trigram 여부와 무관하게 별도로 손볼 수 있다.
 
-**현재 상태**: `SqliteVecVectorStoreProvider.searchBatch()`는 임베딩마다 `SEARCH` SQL을 **개별 실행**한다. vec0는 ANN 인덱스가 없는 **brute-force KNN(O(n))**이라, 쿼리 3개면 버전 파티션 전체를 3회 스캔한다.
-**개선안**: 버전 파티션 후보를 1회 로드 후 다중 쿼리 벡터에 재사용하거나, 다중 MATCH를 단일 스캔으로 처리. Chroma 모드는 HNSW라 해당 없음(sqlite-vec 전용 최적화).
-**효과**: sqlite-vec 모드 검색 지연 최대 ~1/3(코퍼스·쿼리 수에 비례해 체감↑).
-**난이도**: 중. 대규모에선 스칼라/바이너리 양자화 2단계(coarse bit 벡터 프리필터 → 정밀 재랭크)까지 고려 가능하나 별도 과제.
+**효과**: 하이브리드 한국어 정확 매칭 개선 → **§10.2(가중 RRF)·§10.1(Contextual BM25)과 세트로 하이브리드 기본 활성화(`app.search-hybrid-enabled`) 재검토 가능**.
+**난이도**: 중(trigram, 스키마 재구축 + 재인덱싱 — 이미 `rebuildChunkFtsWithDocTags()`류 경로 존재) / 상(형태소 커스텀 토크나이저, 폐쇄망 바이너리 조달로 사실상 범위 밖).
 
-### 10.6 Cross-Encoder 리랭커 (정확도, 인프라 투자)
+### 10.5 검토 후 제외 (Phase 7-D 취소, 2026-07-08)
 
-**현재 상태**: `RerankerService`는 LLM에 후보를 주고 JSON 인덱스 배열로 재정렬받는다(`parseRanking()`, 실패 시 원순서 폴백). 느리고 토큰 비용이 크며 파싱이 취약하다.
-**개선안**: bge-reranker-v2-m3 등 cross-encoder를 ONNX Runtime(Java)로 로컬 구동하거나 rerank 전용 API로 교체. `Optional<RerankerService>` 주입 구조라 **인터페이스 유지한 채 구현만 교체**할 수 있다(호출부 `RetrievalService` 무변경).
-**효과**: 리랭크 정확도↑ + 지연·토큰 비용↓.
-**난이도**: 상 — ONNX 런타임/모델 도입, 폐쇄망 시 모델 파일 조달·차원/토큰 제약 관리.
+원래 Phase 7-D(인프라 투자)로 묶였던 아래 3건은 재검토 결과 **범위 제외**한다 — 삭제가 아니라 판단 근거를 남겨, 아래 "재개 신호"가 실제로 관측되면 이 기록을 근거로 다시 꺼낸다.
 
-### 10.7 시맨틱 응답 캐시 (성능, 리스크 有)
+| 제외 항목 | 원래 개선안 | 제외 사유 | 재개 신호 |
+|---|---|---|---|
+| **sqlite-vec 배치 검색 단일 스캔** | vec0 brute-force KNN(O(n))을 다중 쿼리 1회 스캔으로 최적화 | 현 코퍼스 규모에선 병목이 임베딩 배치 생성(1 HTTP)이고 JDBC 루프는 수 ms라 체감 이득이 작다(§11 "searchBatch N회" 리스크 항목과 동일 판단) | 대규모 코퍼스에서 검색 지연 실측 악화 |
+| **Cross-Encoder 리랭커** | LLM 리랭커를 ONNX bge-reranker 등 로컬 cross-encoder로 교체 | ONNX 런타임/모델 도입 + 폐쇄망 모델 파일 조달 비용이 크고, 현 opt-in `Optional<RerankerService>` LLM 리랭커로 충분. **인터페이스 유지 구조라 필요 시 구현만 교체 가능**(지금 만들 이유는 없음) | LLM 리랭크 정확도/지연 불만이 실사용에서 반복 보고 |
+| **시맨틱 응답 캐시** | 질문 임베딩 유사도 > 임계값이면 캐시 답변 반환 | stale 답변 위험 + 무효화 복잡도(재인덱싱·버전 변경·§6.8 DISLIKE 연동) 대비 이득이 불확실 | FAQ성 반복 트래픽이 지배적이고 지연이 문제화될 때 |
 
-**현재 상태**: 동일·유사 질문도 그래프 전체(분류→검색→답변→비평)를 재실행한다.
-**개선안**: 질문 임베딩 코사인 유사도 > 임계값이면 캐시된 답변 반환. FAQ성 트래픽에 효과적.
-**효과**: 반복 질의 지연 대폭↓.
-**리스크**: **stale 답변** — 문서 재인덱싱/버전 변경 시 캐시 무효화 필수, 피드백(§6.8 DISLIKE) 답변은 캐시 제외. 리스크 관리 필요로 후순위.
-**난이도**: 중.
-
-### 10.8 우선순위 및 단계 계획
+### 10.6 우선순위 및 단계 계획
 
 점수 = (Impact + 회귀리스크의 역) 관점으로 정리. 여기서 리스크는 "미조치 시 손해"가 아니라 **도입 시 회귀 리스크**(낮을수록 안전)로 해석한다.
 
@@ -546,17 +562,13 @@ G1~G4 코드/문서 완료. G5는 라우팅 계층 "외부 무선택"을 `LlmCon
 | 10.2 가중 RRF | 3 | 1 | 1 | 정확도(초저비용) |
 | 10.3 쿼리 임베딩 캐시 | 3 | 1 | 1 | 성능(초저비용) |
 | 10.4 한국어 FTS 토크나이저 | 4 | 2 | 3 | 정확도 |
-| 10.5 sqlite-vec 단일 스캔 | 3 | 1 | 2 | 성능 |
-| 10.6 Cross-Encoder 리랭커 | 4 | 2 | 4 | 정확도(고비용) |
-| 10.7 시맨틱 응답 캐시 | 4 | 3 | 3 | 성능(리스크 有) |
 
 **단계 계획**:
-- **Phase 7-A (빠른 승리)**: 10.2 가중 RRF + 10.3 임베딩 캐시 — 코드 변경 작고 회귀 리스크 최소, 즉시 체감. 이후 큰 작업의 효과를 측정할 baseline 확보.
-- **Phase 7-B (정확도 본편)**: 10.1 Contextual Retrieval — `KeywordExtractor` 파이프라인에 얹어 인덱싱 재구성. 정확도 ROI 1위.
-- **Phase 7-C (한국어 최적화)**: 10.4 FTS 토크나이저 + 하이브리드 기본 활성화 재검토.
-- **Phase 7-D (인프라 투자)**: 10.6 cross-encoder / 10.7 응답 캐시 / 10.5 스캔 최적화.
+- **Phase 7-A (빠른 승리)**: §10.2 가중 RRF + §10.3 임베딩 캐시 — 코드 변경 작고 회귀 리스크 최소, 즉시 체감. 이후 큰 작업의 효과를 측정할 baseline 확보.
+- **Phase 7-B (정확도 본편)**: §10.1 Contextual Retrieval — `KeywordExtractor` 파이프라인에 얹어(구조적 맥락 baseline → LLM 강화) 인덱싱 재구성. 정확도 ROI 1위.
+- **Phase 7-C (한국어 최적화)**: §10.4 `trigram` FTS 토크나이저 + §10.2·§10.1과 묶어 하이브리드 기본 활성화 재검토.
 
-**선결 과제(권장)**: 검색 품질을 정량 비교할 **평가 세트**(질문–정답 청크 쌍 소량 + recall@k/nDCG 측정 스크립트)가 있으면 10.1·10.4·10.6의 효과 검증이 크게 쉬워진다. Phase 7-A와 병행 준비를 권장.
+**선결 과제(권장)**: 검색 품질을 정량 비교할 **평가 세트**(질문–정답 청크 쌍 소량 + recall@k/nDCG 측정 스크립트)가 있으면 §10.1·§10.2·§10.4의 효과 검증이 크게 쉬워진다. Phase 7-A와 병행 준비를 권장.
 
 ---
 
@@ -586,107 +598,17 @@ G1~G4 코드/문서 완료. G5는 라우팅 계층 "외부 무선택"을 `LlmCon
 
 ## 12. 의존성 변경 사항 (pom.xml)
 
-> **2026-07-05 재검증**: 의존성을 추가하는 Phase(1·3·5)가 모두 완료되어 이 절은 더 이상 "계획"이 아니라 이력이다. 정확한 최신 목록은 **pom.xml을 직접 참조**하는 것이 원칙(중복 유지 시 드리프트 위험 — 실제로 아래 두 건이 원안과 달랐다).
+> **2026-07-08 대폭 압축**: 완료된 Phase의 의존성 이력·설정 덤프는 **pom.xml/application.properties 자체가 단일 출처**라 여기 중복 유지는 드리프트 위험만 키운다. 코드에서 바로 확인 안 되는, 실제로 유용한 사실만 남긴다.
 
-### 12.1 Phase별 추가 이력 (pom.xml과 대조 검증 완료)
-
-| Phase | 추가 | 비고 |
-|---|---|---|
-| Phase 1 | `spring-boot-starter-security`, `thymeleaf-extras-springsecurity6`, `flyway-core` | SQLite 마이그레이션 지원은 `flyway-core`에 내장(pom.xml 주석 확인) — 원안의 별도 `flyway-database-sqlite` 의존성은 **실제로 추가되지 않았음**(불필요로 판명) |
-| Phase 3 | `com.bucket4j:bucket4j-core:8.10.1`, `com.github.ben-manes.caffeine:caffeine` | 원안은 아티팩트명을 `bucket4j_jdk17-core`로 오기 — 실제는 `bucket4j-core`. `caffeine`(rate-limit 버킷 Map의 무한 증가 방지용 LRU)은 원안에 없었고 구현 중 필요성이 발견되어 추가됨 |
-| Phase 5 | 없음 | sqlite-vec은 기존 `org.xerial:sqlite-jdbc`의 `load_extension()`으로 로드 — 공식 Maven 아티팩트가 없어 vec0 네이티브 바이너리는 운영자가 배치(Step 5.2) |
-| 테스트 | `spring-security-test` | |
-
-> Phase 2(모바일 UI)의 webjar 의존성(`bootstrap`/`htmx.org`/`chart.js` 등)과 `spring-boot-starter-thymeleaf`/`thymeleaf-layout-dialect`/`reactor-netty-http`/`spring-boot-configuration-processor`는 이 계획 문서가 추적하는 "보안/운영 강화" 축 밖의 기반 의존성이라 위 표에 없음 — pom.xml이 전체 목록의 단일 출처.
-
-### 12.2 application.properties 추가 (2026-07-05 재검증, 대조 완료)
-
-```properties
-# Security
-server.servlet.session.cookie.secure=true
-server.servlet.session.cookie.http-only=true
-server.servlet.session.cookie.same-site=lax
-server.servlet.session.timeout=8h
-server.forward-headers-strategy=framework
-
-# Flyway
-spring.flyway.enabled=true
-spring.flyway.locations=classpath:db/migration
-spring.flyway.baseline-on-migrate=true
-
-# SQLite tuning
-spring.datasource.hikari.connection-init-sql=PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL;
-
-# Limits — ⚠️ 아래 app.security.* 는 계획일 뿐 실제 코드에 존재하지 않음 (2026-07-02 확인).
-#   현재 값은 상수 하드코딩: BCrypt cost=12 → SecurityConfig.java,
-#   로그인 잠금 5회/15분 → AuthEventListener.java (MAX_ATTEMPTS/LOCK_MINUTES).
-#   업로드 쿼터(upload-quota-mb)는 미구현 (§6.13 참조).
-#   외부화가 필요하면 AppProperties에 SecurityConfig record + securitySafe() 추가 후 주입 지점 교체.
-# app.security.bcrypt-cost=12
-# app.security.login-lock-attempts=5
-# app.security.login-lock-minutes=15
-# app.security.upload-quota-mb=500
-
-# Vector Store (Phase 5)
-app.vectorstore.type=${VECTORSTORE_TYPE:chroma}                          # chroma(기본) | sqlite-vec
-app.vectorstore.sqlite-vec.extension-path=${SQLITE_VEC_EXTENSION_PATH:}  # sqlite-vec: vec0 바이너리 경로(운영자 제공)
-app.vectorstore.sqlite-vec.entrypoint=${SQLITE_VEC_ENTRYPOINT:}          # sqlite-vec: 보통 불필요
-```
+- **`flyway-database-sqlite`는 불필요로 판명** — SQLite 마이그레이션 지원은 `flyway-core`에 이미 내장되어 있다. 다시 검토할 필요 없음.
+- **`app.security.*` 외부화는 미착수** — BCrypt cost(12)는 `SecurityConfig.java`에, 로그인 잠금(5회/15분)은 `AuthEventListener.java`(`MAX_ATTEMPTS`/`LOCK_MINUTES`)에 상수로 하드코딩되어 있다. 외부화 필요 시 `AppProperties`에 `SecurityConfig` record + `securitySafe()` 가드를 추가하고 이 두 지점을 프로퍼티 참조로 교체.
+- 그 외 전체 의존성/프로퍼티 목록은 pom.xml·application.properties 참조.
 
 ---
 
 ## 13. DB 스키마 변경 요약
 
-> ⚠️ **실제 스키마 관리 방식 (2026-07-02 확인)**: Flyway는 **`V1__baseline`+`V2__users` 두 개만** 존재한다. 나머지 컬럼/인덱스는 **런타임 멱등 DDL**(`SqliteMemoryRepository`·`SqliteUserDetailsService`의 `CREATE TABLE IF NOT EXISTS` + `ALTER TABLE ADD COLUMN`)로 관리된다. 아래 표에서 V3~V5는 **계획일 뿐 파일이 없으며**, 해당 변경은 런타임 DDL로 흡수되었거나(=user_id/토큰 컬럼) 미구현(=storage_used_bytes)이다.
-
-| 마이그레이션/DDL | 상태 | 내용 |
-|------------|------|------|
-| `V1__baseline.sql` | ✅ 존재 | 기존 테이블 (`conversation_turns`, `llm_usage`, `thread_meta`, `image_descriptions`) 캡처 |
-| `V2__users.sql` | ✅ 존재 | `users`(`role` TEXT DEFAULT 'USER'), `persistent_logins` 신규 테이블 |
-| ~~`V3__user_scope.sql`~~ | ❌ 파일 없음 | `user_id` 컬럼·인덱스는 `SqliteMemoryRepository` 런타임 `ALTER TABLE`로 추가됨 |
-| ~~`V4__audit_log.sql`~~ | ❌ 파일 없음 | 감사로그는 **테이블이 아니라 Logback 파일**(`data/audit/audit.log`, §6.4). 테이블 불필요 |
-| ~~`V5__upload_quota.sql`~~ | ❌ 파일 없음 | `storage_used_bytes` **미구현**(§6.13) |
-| (Phase 5) `SqliteVecSchemaInitializer` | ✅ 동적 DDL | `vec_embeddings`(vec0 — `version` partition key + `distance_metric=cosine`), `vec_document_chunks`, `chunk_fts`(FTS5, `doc_tags`) — Flyway 대신 앱 시작 시 동적 DDL(차원 파라미터화). `SQLITE_VEC_DB_PATH` 설정 시 `vector.db`로 분리(§5.10) |
-
-> **신규 컬럼 추가 지침**: 피드백(§6.8)·스토리지(§6.13 A안) 등 신규 컬럼은 **새 Flyway 파일이 아니라** 기존 런타임 `ALTER TABLE ADD COLUMN` 패턴에 한 줄 추가하는 것이 현 코드와 정합적(멱등, 프리릴리즈 정책과도 부합).
-
----
-
-## 14. 최종 체크리스트
-
-### 14.1 Phase 1 완료 기준 ✅
-
-- [x] HTTPS: Caddy 설정 완료 — 도메인 배포 시 Let's Encrypt 자동 발급, HTTP → HTTPS 자동 리다이렉트
-- [x] 비로그인 사용자는 `/`, `/chat/**`, `/documents`, `/api/**` 접근 불가 (단 `/login`, `/signup`, `/api/health`는 허용)
-- [x] 회원가입 → 자동 로그인 → 채팅 (SecurityContextHolder 수동 주입)
-- [x] 멀티유저 데이터 격리 — SQLite `user_id` 컬럼 + Chroma `u_{userId8}_{version}` 컬렉션
-- [x] Flyway 마이그레이션 (`V1__baseline`·`V2__users`) + 런타임 멱등 DDL로 `user_id`/토큰 컬럼 관리 (V3~V5는 미생성 — §13 참조)
-- [x] 모든 HTMX 요청 + `chat-stream.js` fetch에 CSRF 토큰 자동 첨부
-- [x] 로그인 5회 실패 시 15분 잠금
-- [x] `app.auth.enabled=false` no-auth 모드 (guest 자동 로그인, 첫 실행 `/setup`)
-
-### 14.2 Phase 2 완료 기준
-
-- [ ] iPhone Safari / Android Chrome에서 좌우 스크롤 없음
-- [ ] 채팅 입력창 키보드 출현 시에도 화면 하단 고정
-- [ ] 홈 화면 추가 시 standalone 앱처럼 실행
-- [ ] 다크모드 자동 전환 + 수동 토글 동작
-
-### 14.3 Phase 3 완료 기준
-
-- [x] Rate limit 초과 시 HTTP 429 + `Retry-After` 헤더 반환
-- [x] 확장자 위조 파일 업로드 차단 (매직바이트 검증)
-- [ ] 사용자 `storage_used_bytes` > 쿼터 시 업로드 거부
-- [x] 주요 액션(로그인/업로드/삭제) `audit_log`에 기록
-- [ ] 일일 LLM 토큰 한도 초과 시 채팅 차단
-
-### 14.4 운영 준비 (Phase 1 종료 전)
-
-- [ ] SQLite 백업: Litestream 도입 또는 cron `.backup` 명령 (`cp`는 위험)
-- [x] `.env` 파일 git ignore 확인, API 키 로깅 마스킹 검증 (`PromptInjectionGuard.maskApiKey` + 테스트 완료)
-- [x] 로그 레벨: `org.springframework.security`는 운영에서 WARN (`SPRING_SECURITY_LOGGING_LEVEL` 환경변수 기본값 `WARN` 적용)
-- [ ] Caddy 인증서 만료 모니터링
-- [x] 관리자 계정 1개 사전 생성 (no-auth 모드 최초 실행 시 `/setup` 페이지로 관리자 생성)
+> **신규 컬럼 추가 지침**: Flyway는 `V1__baseline`+`V2__users` 두 개만 존재하고, 그 이후 컬럼/인덱스(`user_id`, 피드백 컬럼 등)는 전부 **런타임 멱등 DDL**(`SqliteMemoryRepository`/`SqliteUserDetailsService`의 `CREATE TABLE IF NOT EXISTS` + `ALTER TABLE ADD COLUMN`)로 추가돼 왔다. **신규 컬럼은 새 Flyway 파일이 아니라 이 런타임 `ALTER TABLE ADD COLUMN` 패턴에 한 줄 추가**하는 것이 현재 코드와 정합적이다(멱등, 프리릴리즈 정책과도 부합). sqlite-vec 쪽 스키마(`vec_embeddings`/`vec_document_chunks`/`chunk_fts`)도 동일하게 Flyway가 아니라 `SqliteVecSchemaInitializer`의 동적 DDL(차원 파라미터화)로 관리된다.
 
 ---
 
