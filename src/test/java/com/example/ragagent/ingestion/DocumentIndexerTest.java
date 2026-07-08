@@ -1,6 +1,7 @@
 package com.example.ragagent.ingestion;
 
 import com.example.ragagent.config.AppProperties;
+import com.example.ragagent.exception.IndexingCancelledException;
 import com.example.ragagent.model.DocumentInfo;
 import com.example.ragagent.service.DocumentLoaderService;
 import com.example.ragagent.service.ImageExtractorService;
@@ -18,7 +19,10 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Semaphore;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -41,6 +45,7 @@ class DocumentIndexerTest {
     private DocRegistry docRegistry;
     private KeywordSearchRepository keywordRepo;
     private AppProperties props;
+    private DocumentLoaderService loaderService;
 
     @BeforeEach
     void setUp() throws IOException {
@@ -69,7 +74,7 @@ class DocumentIndexerTest {
         docRegistry.init();
 
         // Stub DocumentLoaderService — returns a single Document per call
-        DocumentLoaderService loaderService = mock(DocumentLoaderService.class);
+        loaderService = mock(DocumentLoaderService.class);
         List<Document> stubDocs = List.of(new Document("테스트 문서 내용입니다. 청킹과 메타 태깅을 검증합니다."));
         when(loaderService.load(any())).thenReturn(stubDocs);
         when(loaderService.load(any(), any())).thenReturn(stubDocs);
@@ -224,5 +229,60 @@ class DocumentIndexerTest {
 
         assertThat(docRegistry.findByDocId(docId, "anonymous")).isEmpty();
         verify(vectorStore).deleteByDocIds("anonymous", "v1", List.of("vec-id-x"));
+    }
+
+    @Test
+    @DisplayName("syncDirectory — 취소(인터럽트) 시 IndexingCancelledException 던지고 그때까지 완료된 파일은 registry에 보존(§6.16.1)")
+    void syncDirectory_cancelled_throwsAndSavesPartialRegistry() throws Exception {
+        Path docsDir = tmpDir.resolve("documents");
+        Files.createDirectories(docsDir);
+        Files.writeString(docsDir.resolve("fast.txt"), "빠르게 끝나는 문서 내용입니다.");
+        Files.writeString(docsDir.resolve("slow.txt"), "SLOW_MARKER 오래 걸리는 문서 내용입니다.");
+
+        CountDownLatch slowFileStarted = new CountDownLatch(1);
+        CountDownLatch fastFileDone = new CountDownLatch(1);
+        // correctionService/textToMarkdownService echo their input unchanged (stubbed in setUp),
+        // so the markdown reaching loadFromMarkdown() is exactly the original file content —
+        // enough to tell the two files apart and block only the "slow" one.
+        when(loaderService.loadFromMarkdown(any())).thenAnswer(inv -> {
+            String md = inv.getArgument(0);
+            if (md.contains("SLOW_MARKER")) {
+                slowFileStarted.countDown();
+                Thread.sleep(30_000); // interrupted well before this elapses
+            }
+            return List.of(new Document(md));
+        });
+
+        AtomicReference<Throwable> thrown = new AtomicReference<>();
+        Thread syncThread = new Thread(() -> {
+            try {
+                indexer.syncDirectory("anonymous", "v1", docsDir, evt -> {
+                    if ("sync_file_done".equals(evt.stage()) && "fast.txt".equals(evt.filename())) {
+                        fastFileDone.countDown();
+                    }
+                });
+            } catch (Throwable t) {
+                thrown.set(t);
+            }
+        });
+        syncThread.start();
+
+        assertThat(slowFileStarted.await(5, TimeUnit.SECONDS))
+                .as("slow.txt should have started processing before cancellation")
+                .isTrue();
+        // Wait for fast.txt to fully finish (including docRegistry.put()) before cancelling,
+        // so the assertion below observes genuinely completed-before-cancel work rather than
+        // racing shutdownNow() against fast.txt's own in-flight keyword extraction.
+        assertThat(fastFileDone.await(5, TimeUnit.SECONDS))
+                .as("fast.txt should have completed before cancellation")
+                .isTrue();
+        syncThread.interrupt();
+        syncThread.join(10_000);
+
+        assertThat(syncThread.isAlive()).as("worker must terminate, no zombie thread").isFalse();
+        assertThat(thrown.get()).isInstanceOf(IndexingCancelledException.class);
+        // fast.txt had already completed (and been registered in-memory) by the time the
+        // interrupt landed on slow.txt; the cancel path must still persist that partial work.
+        assertThat(docRegistry.docIds(DocRegistry.SHARED)).hasSize(1);
     }
 }

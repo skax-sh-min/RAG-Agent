@@ -1,6 +1,7 @@
 package com.example.ragagent.ingestion;
 
 import com.example.ragagent.config.AppProperties;
+import com.example.ragagent.exception.IndexingCancelledException;
 import com.example.ragagent.llm.BackgroundUsage;
 import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.RoutingMode;
@@ -13,12 +14,14 @@ import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.document.Document;
 import org.springframework.stereotype.Component;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
@@ -56,7 +59,7 @@ public class KeywordExtractor {
         int total = chunks.size();
         AtomicInteger done = new AtomicInteger(0);
         try (var exec = Executors.newVirtualThreadPerTaskExecutor()) {
-            return chunks.stream()
+            List<CompletableFuture<Document>> futures = chunks.stream()
                 .map(chunk -> CompletableFuture.supplyAsync(() -> {
                     llmGate.acquireUninterruptibly();
                     try {
@@ -69,10 +72,23 @@ public class KeywordExtractor {
                         llmGate.release();
                     }
                 }, exec))
-                .toList()
-                .stream()
-                .map(CompletableFuture::join)
                 .toList();
+            // .get() (not .join()) so a cancel-driven interrupt of this coordinating thread
+            // actually unblocks the wait instead of parking through it (§6.16.1).
+            try {
+                List<Document> results = new ArrayList<>(futures.size());
+                for (CompletableFuture<Document> f : futures) {
+                    results.add(f.get());
+                }
+                return results;
+            } catch (InterruptedException e) {
+                log.warn("[ENRICH] cancelled — interrupting in-flight keyword extraction: {}", filename);
+                exec.shutdownNow();
+                Thread.currentThread().interrupt();
+                throw new IndexingCancelledException("keyword extraction cancelled: " + filename);
+            } catch (ExecutionException e) {
+                throw new RuntimeException(e.getCause());
+            }
         }
     }
 

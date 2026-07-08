@@ -2,6 +2,7 @@ package com.example.ragagent.ingestion;
 
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.exception.DocumentIndexingException;
+import com.example.ragagent.exception.IndexingCancelledException;
 import com.example.ragagent.model.DocumentInfo;
 import com.example.ragagent.model.IndexingProgressEvent;
 import com.example.ragagent.model.MetaKey;
@@ -343,7 +344,27 @@ public class DocumentIndexer {
                     }
                 }, filePool))
                 .toList();
-            CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
+            // .get() (not .join()) so a cancel-driven interrupt of this coordinating thread
+            // actually unblocks the wait instead of parking through it (§6.16.1).
+            try {
+                CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).get();
+            } catch (InterruptedException e) {
+                log.warn("[SYNC] cancelled by user — interrupting in-flight file(s), {}/{} completed",
+                        doneFiles.get(), totalFiles);
+                filePool.shutdownNow();
+                try {
+                    filePool.awaitTermination(10, TimeUnit.SECONDS);
+                } catch (InterruptedException ignored) {
+                    Thread.currentThread().interrupt();
+                }
+                // Persist whatever succeeded before cancellation so completed work isn't lost;
+                // step 3 (deletion detection) is skipped — it can run on the next normal sync.
+                docRegistry.save();
+                throw new IndexingCancelledException(
+                        "sync cancelled: " + doneFiles.get() + "/" + totalFiles + " files processed");
+            } catch (ExecutionException e) {
+                throw new RuntimeException(e.getCause());
+            }
         }
 
         // 3단계: 삭제된 파일 감지

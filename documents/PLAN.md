@@ -19,6 +19,7 @@
 | **Phase 5** — Vector Store | Step 5.1~5.10 전체(Chroma↔sqlite-vec 런타임 전환, 관리자 페이지, 태그 검색, 운영/벡터 DB 분리) | §8 |
 | **Phase 6** — 폐쇄망/노-도커 | G1~G5(키리스 LOCAL·차원 외부화·라우팅 외부화·런북·무외부호출 인수) | §9 |
 | **Phase 7-A** — 검색 빠른 승리 | §10.2 가중 RRF(벡터축 그룹 정규화 + 키워드축 가중치/k 외부화) · §10.3 쿼리 임베딩 캐시(Caffeine, cache→tracking→delegate 데코레이터) | §10 |
+| **§6.16.1** — 스트리밍/인덱싱 중단 버튼 | 채팅 SSE 중지(AbortController) + 업로드/동기화 취소(워커 스레드 interrupt, `.join()`→`.get()` 인터럽트 가능화) | §6.16 |
 
 추가로 Phase 3 초기에 완료된 항목(문서화되지 않았던 픽스 포함): ChromaDB v2 API 컬렉션명→UUID 자동 변환, 문서 저장 경로 공유 구조 단순화(`DocRegistry.SHARED`), 인덱싱 SSE 진행 단계별 표시, 키워드 추출 타임아웃 시 CircuitBreaker 오동작 수정, DOCX 변환 전 구버전 아티팩트 삭제 순서 수정, `LOGGING_LEVEL`/`LLM_TEMPERATURE`/`LLM_MAX_TOKENS`/`SPRING_SECURITY_LOGGING_LEVEL` 환경변수 외부화, 의존성 최신 stable 일괄 업데이트(Spring Boot 3.5.15·Spring AI 1.1.8, 정확한 버전은 pom.xml 참조).
 
@@ -30,15 +31,15 @@
 
 | 순위 | 항목 | 현재 상태 |
 |---|---|---|
-| 1 | **§6.16.1 스트리밍/인덱싱 중단 버튼** | 미착수 — 2026-07-08 리뷰 도출, auth 무관 |
-| 2 | **§6.13 스토리지 쿼터**(전역 상한 B안, §6.2에서 이관) | 설계 완료, 구현 전 |
-| 3 | **Phase 7-B** — §10.1 Contextual Retrieval | 미착수 — 정확도 ROI 1순위 |
-| 4 | **Phase 7-C** — §10.4 한국어 FTS 토크나이저 | 미착수 — 하이브리드 기본 활성화 전제조건 |
-| 5 | 운영 준비 잔여 — SQLite 백업 자동화(Litestream/cron), Caddy 인증서 만료 모니터링 | 미착수 |
-| 6 | §9.4 — CADDY 하위호환 별칭 | 선택, 낮은 우선순위 |
-| 7 | Phase 2 남은 실기기 검증 2건 (키보드 하단 고정 · 홈 화면 standalone) | 좌우 스크롤·다크모드는 2026-07-08 자동 검증 완료, 나머지는 실기기 필요 |
+| 1 | **§6.13 스토리지 쿼터**(전역 상한 B안, §6.2에서 이관) | 설계 완료, 구현 전 |
+| 2 | **Phase 7-B** — §10.1 Contextual Retrieval | 미착수 — 정확도 ROI 1순위 |
+| 3 | **Phase 7-C** — §10.4 한국어 FTS 토크나이저 | 미착수 — 하이브리드 기본 활성화 전제조건 |
+| 4 | 운영 준비 잔여 — SQLite 백업 자동화(Litestream/cron), Caddy 인증서 만료 모니터링 | 미착수 |
+| 5 | §9.4 — CADDY 하위호환 별칭 | 선택, 낮은 우선순위 |
+| 6 | Phase 2 남은 실기기 검증 2건 (키보드 하단 고정 · 홈 화면 standalone) | 좌우 스크롤·다크모드는 2026-07-08 자동 검증 완료, 나머지는 실기기 필요 |
 
 > **Phase 7-A 완료 (2026-07-08)**: §10.2 가중 RRF + §10.3 쿼리 임베딩 캐시. 상세는 아래 §10.2·§10.3 본문 참조.
+> **§6.16.1 완료 (2026-07-08)**: 채팅 스트리밍 중지 + 업로드/동기화 취소 버튼. 상세는 아래 §6.16.1 본문 참조.
 
 **🟣 후속 — 멀티유저(`auth.enabled=true`) 활성화 시에만 착수**
 
@@ -364,12 +365,20 @@ Assistant 응답에 👍/👎 토글 추가, `conversation_turns.feedback`(런�
 
 ---
 
-### 6.16 사용자 경험(UX) 개선 (2026-07-08 리뷰 도출) 🔵 미착수
+### 6.16 사용자 경험(UX) 개선 (2026-07-08 리뷰 도출) 🟡 일부 완료 (6.16.1)
 
-**6.16.1 스트리밍 답변·인덱싱 중단(취소) 컨트롤 부재**
+**6.16.1 스트리밍 답변·인덱싱 중단(취소) 컨트롤 부재 ✅ 완료 (2026-07-08)**
 - **현재 상태**: 채팅 SSE 스트리밍(`chat-stream.js`)과 문서 인덱싱 진행(`documents.html`) 모두 시작 후 사용자가 멈출 방법이 없다 — 잘못 보낸 긴 질문이나 대용량 인덱싱을 끝까지 기다려야 하고, 서버 자원도 계속 소모된다. `StreamingAgentService`는 이미 `emitter.onError/onTimeout`에서 워커를 `interrupt()`하므로 클라이언트가 SSE를 닫으면 중단 훅은 존재한다.
 - **개선안**: 스트리밍 답변 버블에 "중지" 버튼 → `EventSource.close()` + (필요 시) 서버에 취소 신호. 인덱싱은 업로드 행별 취소가 이상적이나, 최소한 진행 중 SSE 구독 해제 + 서버측 가상 스레드 `interrupt` 경로 정리. 부분 답변은 이미 에러 시 저장 로직(`StreamingAgentService`)이 있어 재사용 가능.
 - **완료 기준**: 사용자가 스트리밍/인덱싱을 즉시 중단할 수 있고, 서버 워커도 실제로 종료된다(좀비 스레드 없음).
+
+**구현**:
+- **채팅 스트리밍**: `chat-stream.js`가 `fetch`+`ReadableStream`(EventSource 아님) 기반이라 원안의 `EventSource.close()` 대신 `AbortController`를 사용 — 전송 버튼이 스트리밍 중 "중지" 버튼으로 전환(아이콘·`aria-label`·`btn-danger` 스타일 교체)되고, 클릭 시 `abortController.abort()`. `AbortError`는 일반 오류와 분리해 `onAborted()`로 처리해 그때까지 스트리밍된 부분 답변은 마크다운 렌더링을 보존하고 "사용자가 중단함" 메타 텍스트만 추가. 서버 측 `emitter.onError` 훅이 이미 워커 가상 스레드를 `interrupt()`하므로 fetch abort만으로 서버 작업도 함께 종료됨(신규 서버 코드 불필요).
+- **인덱싱 취소**: 신규 `IndexingCancelledException`(unchecked, `RagException` 계층 밖 — HTTP 응답으로 노출되지 않는 내부 제어 신호) + `IndexingProgressEvent.cancelled()`(신규 terminal stage). `IndexingProgressService`가 taskId→워커 `Thread` 맵을 추가로 관리(`registerWorker()`), 신규 `cancel(taskId)`가 워커를 `interrupt()`하고 즉시 terminal `cancelled` 이벤트를 publish해 클라이언트 SSE 구독이 워커의 실제 종료를 기다리지 않고 바로 끝남. 신규 엔드포인트 `POST /ui/documents/progress/{taskId}/cancel`.
+  - **인터럽트가 실제로 먹히게 하는 수정**(이게 핵심 난이도) — `KeywordExtractor.enrichParallel()`과 `DocumentIndexer.syncDirectory()`의 병렬 대기가 각각 `CompletableFuture.join()`/`CompletableFuture.allOf().join()`을 쓰고 있었는데, `join()`은 **호출 스레드가 인터럽트되어도 반응하지 않는다**(non-interruptible) — 즉 워커를 `interrupt()`해도 이 두 지점에서는 조용히 무시되어 취소가 먹히지 않았다. `.get()`(interruptible)으로 교체하고, `InterruptedException` catch 시 각각의 내부 executor(`exec`/`filePool`)를 `shutdownNow()`(+`syncDirectory`는 `awaitTermination`까지)해 실제 in-flight 가상 스레드까지 인터럽트가 전파되도록 했다. `syncDirectory()`는 취소 시점까지 완료된 파일은 `docRegistry.save()`로 보존하고(3단계 삭제감지는 스킵) `IndexingCancelledException`을 던진다.
+  - `KeywordExtractor.enrichKeywords()`의 기존 자체 타임아웃 메커니즘(`finally { Thread.interrupted(); }`으로 인터럽트 플래그를 지움)은 그대로 뒀다 — 취소로 인한 인터럽트가 이 지점에 도달해도 해당 청크는 TF 폴백으로 빠르게 완료되어 반환되므로(좀비 없이 스레드가 정상 종료), 별도 처리 없이도 "완료 기준"을 만족함을 테스트로 확인.
+  - `documents.html`: 파일 목록 행의 4번째 `<td>`(기존 "제거" ✕ 버튼)를 업로드/인덱싱 중에는 취소 버튼으로 재활용(taskId 확정 전엔 `xhr.abort()`, 이후엔 `POST .../cancel`), 동기화 진행바 옆에도 취소 버튼 추가. `cancelled` stage는 오류(빨강)와 구분되는 중립(회색) 상태로 렌더링.
+- 신규 테스트 8개(`KeywordExtractorTest` 인터럽트 케이스, `DocumentIndexerTest` sync 취소 시 부분 registry 보존 케이스, `IndexingProgressServiceTest` 3건) + 프리뷰 브라우저로 채팅 중지 버튼(실제 SSE 스트림 abort → "사용자가 중단함" 렌더 확인)과 문서 업로드 행 취소 버튼(DOM 와이어링) 실사용 검증. 전체 518 tests BUILD SUCCESS(회귀 0).
 
 **6.16.2 계정 잠금 상태 피드백 부재**
 - **현재 상태**: 로그인 5회 실패 시 15분 잠금(`AuthEventListener`)되지만, 잠긴 뒤에도 로그인 화면은 일반 "이메일 또는 비밀번호가 올바르지 않습니다" 문구만 보여준다(`formLogin.failureUrl("/login?error")` 고정). 사용자는 자신이 잠겼는지, 언제 풀리는지 알 수 없다(문구가 "5회 실패 시 15분 잠금"을 안내는 하지만 현재 잠금 상태/해제 시각은 아님).

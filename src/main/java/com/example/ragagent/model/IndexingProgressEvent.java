@@ -6,8 +6,8 @@ import com.fasterxml.jackson.annotation.JsonInclude;
  * SSE payload for real-time indexing progress.
  *
  * stage values:
- *   upload flow  — loading | structuring (TXT) | correcting (DOCX/TXT) | chunking | enriching | storing | done | error
- *   sync flow    — sync_start | sync_file_done | sync_file_error | sync_done | error
+ *   upload flow  — loading | structuring (TXT) | correcting (DOCX/TXT) | chunking | enriching | storing | done | error | cancelled
+ *   sync flow    — sync_start | sync_file_done | sync_file_error | sync_done | error | cancelled
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record IndexingProgressEvent(
@@ -39,6 +39,11 @@ public record IndexingProgressEvent(
 
     public static IndexingProgressEvent error(String filename, String message) {
         return new IndexingProgressEvent("error", 0, 0, filename, message, null, null);
+    }
+
+    /** §6.16.1 — terminal: user cancelled the task via the cancel endpoint. */
+    public static IndexingProgressEvent cancelled() {
+        return new IndexingProgressEvent("cancelled", 0, 0, null, "사용자가 취소함", null, null);
     }
 
     /** Non-terminal: one file failed during sync, but sync continues for remaining files. */

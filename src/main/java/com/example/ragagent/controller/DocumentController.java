@@ -4,6 +4,7 @@ import com.example.ragagent.audit.AuditLogger;
 import com.example.ragagent.context.ThreadContext;
 import com.example.ragagent.model.*;
 import com.example.ragagent.exception.DocumentIndexingException;
+import com.example.ragagent.exception.IndexingCancelledException;
 import com.example.ragagent.exception.UnsupportedFileTypeException;
 import com.example.ragagent.security.UploadValidator;
 import com.example.ragagent.service.IndexingProgressService;
@@ -118,7 +119,7 @@ public class DocumentController {
         final String fname = dest.getFileName().toString();
         final String ver = version;
 
-        Thread.ofVirtual().name("idx-upload-" + taskId).start(() -> {
+        Thread worker = Thread.ofVirtual().name("idx-upload-" + taskId).start(() -> {
             try {
                 DocumentInfo info = ragService.indexDocument(userId, docPath, fname, ver, tagList,
                     addImageDescriptions, addHeadingNumbers,
@@ -128,12 +129,16 @@ public class DocumentController {
                     Map.of("filename", fname, "version", ver, "chunks", info.chunks(),
                         "addImageDescriptions", addImageDescriptions,
                         "addHeadingNumbers", addHeadingNumbers));
+            } catch (IndexingCancelledException e) {
+                // progressService.cancel() already published the terminal 'cancelled' event.
+                log.info("[UPLOAD] cancelled by user: taskId={} file={}", taskId, fname);
             } catch (Exception e) {
                 String msg = isChromaDown(e) ? "ChromaDB 연결 실패" : e.getMessage();
                 log.error("Async index error for {}", fname, e);
                 progressService.publish(taskId, IndexingProgressEvent.error(fname, msg));
             }
         });
+        progressService.registerWorker(taskId, worker);
 
         return ResponseEntity.accepted().body(Map.of("taskId", taskId));
     }
@@ -145,6 +150,15 @@ public class DocumentController {
         return progressService.subscribe(taskId);
     }
 
+    /** §6.16.1 — cancels an in-progress upload/sync task: interrupts the worker thread and
+     *  completes the SSE progress stream immediately. */
+    @PostMapping("/ui/documents/progress/{taskId}/cancel")
+    @ResponseBody
+    public ResponseEntity<Void> cancelIndexing(@PathVariable String taskId) {
+        progressService.cancel(taskId);
+        return ResponseEntity.noContent().build();
+    }
+
     /** Starts directory sync asynchronously and returns {taskId} (HTTP 202). */
     @PostMapping("/ui/documents/sync")
     @ResponseBody
@@ -154,7 +168,7 @@ public class DocumentController {
         String taskId = progressService.newTaskId();
         final String userId = ctx.userId();
 
-        Thread.ofVirtual().name("idx-sync-" + taskId).start(() -> {
+        Thread worker = Thread.ofVirtual().name("idx-sync-" + taskId).start(() -> {
             try {
                 SyncResult result = ragService.syncDirectory(userId, version,
                         event -> progressService.publish(taskId, event));
@@ -163,12 +177,16 @@ public class DocumentController {
                         Map.of("indexed", result.indexed().size(),
                                "updated", result.updated().size(),
                                "deleted", result.deleted().size()));
+            } catch (IndexingCancelledException e) {
+                // progressService.cancel() already published the terminal 'cancelled' event.
+                log.info("[SYNC] cancelled by user: taskId={} ({})", taskId, e.getMessage());
             } catch (Exception e) {
                 String msg = isChromaDown(e) ? "ChromaDB 연결 실패" : e.getMessage();
                 log.error("Sync error", e);
                 progressService.publish(taskId, IndexingProgressEvent.error("sync", msg));
             }
         });
+        progressService.registerWorker(taskId, worker);
 
         return ResponseEntity.accepted().body(Map.of("taskId", taskId));
     }

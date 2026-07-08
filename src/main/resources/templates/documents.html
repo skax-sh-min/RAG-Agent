@@ -101,7 +101,10 @@
                 <div id="sync-progress" class="d-none mt-3">
                     <div class="d-flex align-items-center gap-2 mb-1">
                         <span class="spinner-border spinner-border-sm text-secondary flex-shrink-0"></span>
-                        <span id="sync-stage-label" class="small text-muted"></span>
+                        <span id="sync-stage-label" class="small text-muted flex-grow-1"></span>
+                        <button id="sync-cancel-btn" type="button"
+                                class="btn btn-sm btn-outline-danger py-0 px-2"
+                                th:text="#{doc.btn.cancel}">Cancel</button>
                     </div>
                     <div class="progress" style="height: 5px;">
                         <div id="sync-progress-bar" class="progress-bar" style="width: 0%; transition: width 0.4s;"></div>
@@ -301,14 +304,22 @@
                         setUploadBar(i, pct);
                         if (pct === 100) setFileStatus(i, 'queued');
                     },
-                    evt => setIndexingStage(i, evt)            // SSE indexing progress
+                    evt => setIndexingStage(i, evt),           // SSE indexing progress
+                    cancelFn => setFileActionButton(i, cancelFn) // §6.16.1 — wire row's ✕ into cancel
                 );
+                setFileActionButton(i, null);
                 setFileStatus(i, 'done', result.chunks);
                 appendDocRow(result);
                 showToast(`${escHtml(result.filename)} ${I18N.uploadSuccess} (${result.chunks} ${I18N.uploadChunks})`, 'success');
             } catch (err) {
-                setFileStatus(i, 'error', err.message);
-                showToast(`${escHtml(files[i].name)} ${I18N.uploadError}: ${err.message}`, 'danger');
+                setFileActionButton(i, null);
+                if (err.cancelled) {
+                    setFileStatus(i, 'cancelled');
+                    showToast(`${escHtml(files[i].name)} ${I18N.cancelled}`, 'warning');
+                } else {
+                    setFileStatus(i, 'error', err.message);
+                    showToast(`${escHtml(files[i].name)} ${I18N.uploadError}: ${err.message}`, 'danger');
+                }
             }
             doneCount++;
             overallLabel.textContent = `${doneCount} / ${total}`;
@@ -319,12 +330,41 @@
         loadTagSuggestions();   // 새 태그가 추가됐을 수 있으니 제안 목록 갱신
     }
 
+    /** §6.16.1 — POSTs the cancel signal for an in-progress upload/sync task. Best-effort. */
+    function cancelIndexingTask(taskId) {
+        fetch(`/ui/documents/progress/${taskId}/cancel`, {
+            method: 'POST',
+            headers: getCsrfHeaders()
+        }).catch(() => {});
+    }
+
+    /**
+     * §6.16.1 — repurposes a file row's action cell (4th <td>) as a cancel button while that
+     * row is uploading/indexing. Passing null restores it to empty (terminal state — the row
+     * has nothing left to cancel).
+     */
+    function setFileActionButton(i, onCancel) {
+        const row = document.getElementById(`file-row-${i}`);
+        if (!row) return;
+        const cell = row.children[3];
+        if (!cell) return;
+        if (!onCancel) {
+            cell.innerHTML = '';
+            return;
+        }
+        cell.innerHTML = `<button type="button" class="btn btn-sm btn-link text-danger p-0">${escHtml(I18N.cancelBtnLabel)}</button>`;
+        cell.querySelector('button').addEventListener('click', onCancel, {once: true});
+    }
+
     /**
      * Phase 1 — XHR: POST file → receive {taskId} (HTTP 202).
      * Phase 2 — SSE: subscribe to /ui/documents/progress/{taskId} for chunk-level events.
-     * Resolves with DocumentInfo on 'done', rejects on 'error'.
+     * Resolves with DocumentInfo on 'done', rejects on 'error'/'cancelled' (rejection carries
+     * `.cancelled = true` for the latter so the caller can render it as a neutral outcome).
+     * onCancelReady(fn) hands the caller a cancel closure as soon as one is available — it
+     * aborts the XHR before a taskId exists, or calls the server cancel endpoint after.
      */
-    function uploadWithProgress(file, version, tags, addImageDescriptions, addHeadingNumbers, onUploadPct, onStage) {
+    function uploadWithProgress(file, version, tags, addImageDescriptions, addHeadingNumbers, onUploadPct, onStage, onCancelReady) {
         return new Promise((resolve, reject) => {
             const xhr  = new XMLHttpRequest();
             const form = new FormData();
@@ -334,6 +374,20 @@
             form.append('addImageDescriptions', addImageDescriptions ? 'true' : 'false');
             form.append('addHeadingNumbers', addHeadingNumbers ? 'true' : 'false');
 
+            let sse = null;
+            let currentTaskId = null;
+
+            if (onCancelReady) {
+                onCancelReady(() => {
+                    if (currentTaskId) {
+                        cancelIndexingTask(currentTaskId);
+                        if (sse) sse.close();
+                    } else {
+                        xhr.abort();
+                    }
+                });
+            }
+
             xhr.upload.addEventListener('progress', e => {
                 if (e.lengthComputable) onUploadPct(Math.round(e.loaded / e.total * 100));
             });
@@ -342,8 +396,9 @@
             xhr.addEventListener('load', () => {
                 if (xhr.status === 202) {
                     const { taskId } = JSON.parse(xhr.responseText);
+                    currentTaskId = taskId;
                     storePendingTask(taskId, file.name);
-                    subscribeIndexingProgress(taskId, onStage, resolve, reject);
+                    sse = subscribeIndexingProgress(taskId, onStage, resolve, reject);
                 } else if (xhr.status === 503) {
                     reject(new Error(I18N.chromaUnavailable));
                 } else {
@@ -352,7 +407,11 @@
                 }
             });
             xhr.addEventListener('error', () => reject(new Error(I18N.networkError)));
-            xhr.addEventListener('abort', () => reject(new Error(I18N.cancelled)));
+            xhr.addEventListener('abort', () => {
+                const err = new Error(I18N.cancelled);
+                err.cancelled = true;
+                reject(err);
+            });
 
             xhr.open('POST', '/ui/documents/upload');
             xhr.send(form);
@@ -374,6 +433,12 @@
                 sse.close();
                 dropPendingTask(taskId);
                 reject(new Error(evt.message || '인덱싱 오류'));
+            } else if (evt.stage === 'cancelled') {
+                sse.close();
+                dropPendingTask(taskId);
+                const err = new Error(evt.message || I18N.cancelled);
+                err.cancelled = true;
+                reject(err);
             }
         });
         sse.onerror = () => {
@@ -398,6 +463,7 @@
             queued:    `<span class="text-info">⏳ 인덱싱 대기 중...</span>`,
             done:      `<span class="text-success">✅ ${PAGE_I18N.statusDone} (${extra} ${PAGE_I18N.chunks})</span>`,
             error:     `<span class="text-danger">❌ ${extra}</span>`,
+            cancelled: `<span class="text-muted">⏹ ${I18N.cancelled}</span>`,
         };
         if (map[status]) el.innerHTML = map[status];
     }
@@ -467,11 +533,12 @@
     /* ── Sync ────────────────────────────────────────────────────────────── */
     async function startSync() {
         const version  = (document.getElementById('version-input').value || '').trim() || 'latest';
-        const btn      = document.getElementById('sync-btn');
-        const spinner  = document.getElementById('sync-spinner');
-        const progress = document.getElementById('sync-progress');
-        const label    = document.getElementById('sync-stage-label');
-        const bar      = document.getElementById('sync-progress-bar');
+        const btn       = document.getElementById('sync-btn');
+        const spinner   = document.getElementById('sync-spinner');
+        const progress  = document.getElementById('sync-progress');
+        const label     = document.getElementById('sync-stage-label');
+        const bar       = document.getElementById('sync-progress-bar');
+        const cancelBtn = document.getElementById('sync-cancel-btn');
 
         btn.disabled = true;
         spinner.classList.remove('d-none');
@@ -487,6 +554,8 @@
             });
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
             const { taskId } = await res.json();
+
+            cancelBtn.onclick = () => cancelIndexingTask(taskId);
 
             await new Promise((resolve, reject) => {
                 const sse = new EventSource(`/ui/documents/progress/${taskId}`);
@@ -518,6 +587,12 @@
                         showToast(`동기화 완료 · 신규 ${s.indexed} · 갱신 ${s.updated} · 삭제 ${s.deleted}`, 'success');
                         htmx.ajax('GET', '/ui/documents/list', {target: '#doc-table-body', swap: 'outerHTML'});
                         resolve();
+                    } else if (evt.stage === 'cancelled') {
+                        sse.close();
+                        label.textContent = I18N.cancelled;
+                        showToast(`동기화 ${I18N.cancelled}`, 'warning');
+                        htmx.ajax('GET', '/ui/documents/list', {target: '#doc-table-body', swap: 'outerHTML'});
+                        resolve();
                     } else if (evt.stage === 'error') {
                         sse.close();
                         reject(new Error(evt.message || '동기화 오류'));
@@ -537,6 +612,7 @@
             btn.disabled = false;
             spinner.classList.add('d-none');
             progress.classList.add('d-none');
+            cancelBtn.onclick = null;
         }
     }
 
@@ -667,7 +743,9 @@
                     clearTimeout(noEventTimer);
                     dropPendingTask(taskId);
                     const el = document.getElementById(statusId);
-                    if (el) el.innerHTML = `<span class="text-danger">❌ ${escHtml(err.message)}</span>`;
+                    if (el) el.innerHTML = err.cancelled
+                        ? `<span class="text-muted">⏹ ${escHtml(err.message)}</span>`
+                        : `<span class="text-danger">❌ ${escHtml(err.message)}</span>`;
                     removeRecoveryRow(rowId, tbody, panel, false);
                 }
             );

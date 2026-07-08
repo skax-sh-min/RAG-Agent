@@ -1,6 +1,7 @@
 package com.example.ragagent.ingestion;
 
 import com.example.ragagent.config.AppProperties;
+import com.example.ragagent.exception.IndexingCancelledException;
 import com.example.ragagent.llm.BackgroundUsage;
 import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.RoutingMode;
@@ -12,7 +13,10 @@ import org.junit.jupiter.api.Test;
 import org.springframework.ai.document.Document;
 
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Semaphore;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -86,6 +90,35 @@ class KeywordExtractorTest {
         assertThat(result).hasSize(3);
         assertThat(result).allSatisfy(d ->
                 assertThat(d.getMetadata().get(MetaKey.EXCERPT_KEYWORDS)).isEqualTo("키워드"));
+    }
+
+    @Test
+    @DisplayName("enrichParallel — 호출 스레드 인터럽트(취소) 시 IndexingCancelledException 던지고 즉시 반환(§6.16.1)")
+    void enrichParallel_interrupted_throwsIndexingCancelledException() throws InterruptedException {
+        CountDownLatch llmCallStarted = new CountDownLatch(1);
+        when(llmRouter.executeWithTracking(any(), any(), any(), any())).thenAnswer(inv -> {
+            llmCallStarted.countDown();
+            Thread.sleep(30_000); // simulates a hung LLM call; interrupted well before this elapses
+            return "unused";
+        });
+        List<Document> chunks = List.of(new Document("interrupt-test chunk"));
+
+        AtomicReference<Throwable> thrown = new AtomicReference<>();
+        Thread worker = new Thread(() -> {
+            try {
+                extractor.enrichParallel(chunks, new Semaphore(1), "test.txt", e -> {});
+            } catch (Throwable t) {
+                thrown.set(t);
+            }
+        });
+        worker.start();
+
+        assertThat(llmCallStarted.await(5, TimeUnit.SECONDS)).isTrue();
+        worker.interrupt();
+        worker.join(10_000);
+
+        assertThat(worker.isAlive()).as("worker must terminate, no zombie thread").isFalse();
+        assertThat(thrown.get()).isInstanceOf(IndexingCancelledException.class);
     }
 
     @Test
