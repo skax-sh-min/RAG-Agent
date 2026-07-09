@@ -128,6 +128,29 @@ class KeywordSearchRepositoryTest {
     }
 
     @Test
+    @DisplayName("updateDocTags — 매칭되는 청크 행 수를 반환하고 doc_tags를 갱신한다")
+    void updateDocTags_returnsMatchedRowCount() {
+        repo.indexChunks(List.of(
+                chunk("s1", "D1", "latest", 0, "내용 알파", "kw"),
+                chunk("s2", "D1", "latest", 1, "내용 베타", "kw")));
+
+        int updated = repo.updateDocTags("D1", "billing,policy");
+
+        assertThat(updated).isEqualTo(2);
+        assertThat(repo.tagsByDocIds(List.of("D1")).get("D1")).containsExactlyInAnyOrder("billing", "policy");
+    }
+
+    @Test
+    @DisplayName("updateDocTags — 존재하지 않는 docId → 0 (고아 registry entry 감지용)")
+    void updateDocTags_unknownDocId_returnsZero() {
+        repo.indexChunks(List.of(chunk("s1", "D1", "latest", 0, "내용", "kw")));
+
+        int updated = repo.updateDocTags("D-missing", "tag");
+
+        assertThat(updated).isZero();
+    }
+
+    @Test
     @DisplayName("deleteBySpringDocIds(빈/널) — no-op")
     void deleteBySpringDocIds_emptyOrNull_isNoOp() {
         repo.indexChunks(List.of(chunk("s1", "D1", "latest", 0, "유지 콘텐츠", "kw")));

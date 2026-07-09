@@ -148,13 +148,19 @@ public class KeywordSearchRepository {
         }
     }
 
-    /** Overwrites {@code doc_tags} for every chunk row of a document. No-op when FTS5 is unavailable. */
-    public void updateDocTags(String docId, String tagsCsv) {
-        if (!available || docId == null) return;
+    /**
+     * Overwrites {@code doc_tags} for every chunk row of a document. Returns the number of rows
+     * updated (0 when FTS5 is unavailable, on error, or when no chunk_fts row exists for this
+     * {@code docId} — e.g. an orphaned {@code doc_registry} entry left behind by a prior indexing
+     * failure) so the caller can detect a no-op write instead of reporting a false success.
+     */
+    public int updateDocTags(String docId, String tagsCsv) {
+        if (!available || docId == null) return 0;
         try {
-            jdbc.update("UPDATE chunk_fts SET doc_tags = ? WHERE doc_id = ?", tagsCsv, docId);
+            return jdbc.update("UPDATE chunk_fts SET doc_tags = ? WHERE doc_id = ?", tagsCsv, docId);
         } catch (Exception e) {
-            log.debug("[KEYWORD] updateDocTags failed docId={}: {}", docId, e.getMessage());
+            log.warn("[KEYWORD] updateDocTags failed docId={}: {}", docId, e.getMessage());
+            return 0;
         }
     }
 

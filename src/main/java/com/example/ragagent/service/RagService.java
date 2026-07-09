@@ -1,6 +1,7 @@
 package com.example.ragagent.service;
 
 import com.example.ragagent.config.AppProperties;
+import com.example.ragagent.exception.DocumentIndexingException;
 import com.example.ragagent.ingestion.DocRegistry;
 import com.example.ragagent.ingestion.DocumentIndexer;
 import com.example.ragagent.ingestion.KeywordSearchRepository;
@@ -143,7 +144,13 @@ public class RagService {
      * influence the vector). Updates both the vector store (search filter source) and
      * {@code chunk_fts.doc_tags} (suggestion UI + reindex-tag-restore source) so the two stay
      * consistent. Throws {@link IllegalArgumentException} on tag policy violation ({@link
-     * TagUtils#normalize}) or when {@code docId} does not exist.
+     * TagUtils#normalize}) or when {@code docId} does not exist in {@code doc_registry}.
+     *
+     * <p>Verifies the {@code chunk_fts} write actually touched a row — a {@code doc_registry}
+     * entry can outlive its real chunk data (e.g. a prior indexing/reindex failure that never
+     * reached {@code saveRegistry()} for the new state), in which case the update would silently
+     * affect 0 rows and this method would otherwise return a falsely successful result. Throws
+     * {@link DocumentIndexingException} in that case, telling the caller to re-sync/re-upload.
      */
     public DocumentInfo updateDocumentTags(String userId, String docId, List<String> rawTags) {
         List<String> tags = TagUtils.normalize(rawTags);
@@ -152,7 +159,11 @@ public class RagService {
 
         String tagsCsv = TagUtils.toMetaValue(tags);
         vectorStore.updateTags(DocRegistry.SHARED, entry.version(), entry.springDocIds(), tagsCsv);
-        keywordRepo.updateDocTags(docId, tagsCsv);
+        int updatedRows = keywordRepo.updateDocTags(docId, tagsCsv);
+        if (updatedRows == 0) {
+            throw new DocumentIndexingException(
+                    "문서의 색인 데이터를 찾을 수 없어 태그를 저장하지 못했습니다 (재동기화 또는 재업로드가 필요합니다): " + docId);
+        }
 
         return new DocumentInfo(docId, DocRegistry.filenameFromDocId(docId), entry.version(),
                 entry.chunks(), entry.indexedAt(), entry.sha256(), tags, entry.errors());

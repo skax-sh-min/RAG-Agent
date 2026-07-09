@@ -156,6 +156,7 @@ class RagServiceTest {
     void updateDocumentTags_updatesVectorStoreAndFts() {
         DocRegistry.DocRegistryEntry existing = entry("sha", "v2", "2026-01-01T00:00:00Z", 3);
         when(docRegistry.findByDocId("doc1", DocRegistry.SHARED)).thenReturn(java.util.Optional.of(existing));
+        when(keywordRepo.updateDocTags("doc1", "faq,guide")).thenReturn(3);
 
         DocumentInfo result = service.updateDocumentTags("u1", "doc1", List.of(" FAQ ", "Guide", "faq"));
 
@@ -163,6 +164,17 @@ class RagServiceTest {
         assertThat(result.tags()).containsExactly("faq", "guide"); // normalized: lowercase + trim + dedupe
         verify(vectorStore).updateTags(DocRegistry.SHARED, "v2", existing.springDocIds(), "faq,guide");
         verify(keywordRepo).updateDocTags("doc1", "faq,guide");
+    }
+
+    @Test
+    @DisplayName("updateDocumentTags — chunk_fts에 매칭되는 행이 0개(고아 registry entry) → DocumentIndexingException")
+    void updateDocumentTags_noFtsRowsUpdated_throwsIndexingException() {
+        DocRegistry.DocRegistryEntry existing = entry("sha", "v2", "2026-01-01T00:00:00Z", 3);
+        when(docRegistry.findByDocId("doc1", DocRegistry.SHARED)).thenReturn(java.util.Optional.of(existing));
+        when(keywordRepo.updateDocTags("doc1", "faq")).thenReturn(0);
+
+        assertThatThrownBy(() -> service.updateDocumentTags("u1", "doc1", List.of("faq")))
+                .isInstanceOf(com.example.ragagent.exception.DocumentIndexingException.class);
     }
 
     @Test
