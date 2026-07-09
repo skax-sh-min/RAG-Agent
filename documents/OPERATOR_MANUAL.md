@@ -46,7 +46,7 @@ RAG Agent 시스템 배포·설정·운영 가이드입니다.
 
 ## 1. 시스템 개요
 
-**기술 스택**: Spring Boot 3.5 + Spring AI 1.1.4, Java 21 Virtual Threads  
+**기술 스택**: Spring Boot 3.5.15 + Spring AI 1.1.8, Java 21 Virtual Threads  
 **벡터 DB**: ChromaDB(기본) 또는 sqlite-vec — `VECTORSTORE_TYPE`으로 선택 (§3.1 참조)  
 **대화 저장**: SQLite WAL  
 **프론트엔드**: Thymeleaf + HTMX (SSE 스트리밍)
@@ -57,7 +57,7 @@ RAG Agent 시스템 배포·설정·운영 가이드입니다.
 사용자 질문
   └─▶ [Classifier]  → 질문 유형 분류 (concept / usage / error / version / meta)
         ├─ meta  ──▶ [DirectAnswer] → [Finalize] → 응답
-        └─ other ──▶ [Retrieval]   (LLM이 최적 쿼리 생성 → Chroma 검색)
+        └─ other ──▶ [Retrieval]   (LLM이 최적 쿼리 생성 → 벡터 검색, chroma/sqlite-vec 백엔드 선택)
                        └─▶ [Answer]   (구조화 답변 + 충분성 자체 평가)
                               ├─ 증거 부족 ──▶ [Retrieval] (최대 2회 재시도)
                               └─ 충분      ──▶ [Critic]   (근거 검증)
@@ -71,7 +71,7 @@ RAG Agent 시스템 배포·설정·운영 가이드입니다.
 
 ```
 rag_java/
-├── pom.xml                     # Spring Boot 3.5 + Spring AI 1.1.4
+├── pom.xml                     # Spring Boot 3.5.15 + Spring AI 1.1.8
 ├── Dockerfile
 ├── docker-compose.yml
 ├── .env.example
@@ -1034,7 +1034,7 @@ app.llm.providers[0].stream=false
 | DirectAnswerService | `LIGHT_TEXT` | meta 질문 직접 응답 |
 | VisionDescriptionService | `VISION` | 이미지 → 설명 생성 |
 | ImageTypeClassifier | `LIGHT_BOTH` | 이미지 유형 분류 |
-| KeywordMetadataEnricher | `LIGHT_TEXT` | 청크 키워드 추출 |
+| KeywordExtractor | `LIGHT_TEXT` | 청크 키워드+맥락(Contextual Retrieval, §10.1) 통합 추출 — 한 번의 호출로 `keyword:` 대신 `context:` 사용량 라벨로 기록 |
 | RerankerService | `TEXT` (ChatClient) | 검색 후보 LLM 리랭킹 — `SEARCH_RERANK_ENABLED=true`일 때만 동작 |
 
 ---
@@ -1305,7 +1305,7 @@ curl -X POST http://localhost:8080/api/v1/chat \
   -d '{"question": "...", "version": "1.0"}'
 ```
 
-- 버전별로 `manual_{version}` Chroma 컬렉션 분리 (예: `manual_latest`, `manual_1_0`)
+- 버전별로 격리 저장 — chroma: `manual_{version}` 컬렉션 분리 (예: `manual_latest`, `manual_1_0`) / sqlite-vec: `version` 파티션 키
 - Web UI에서는 채팅 사이드바 상단의 **version** 입력창에 버전 입력
 
 ---
@@ -1319,7 +1319,7 @@ curl -X POST http://localhost:8080/api/v1/chat \
 | DOCX 변환 MD (원본) | `DATA_DIR/converted/{docId}.md` | DOCX 인덱싱 시 자동 생성; 문서 삭제 시 함께 삭제 |
 | DOCX 변환 MD (교정본) | `DATA_DIR/converted/{docId}_corrected.md` | LLM 포맷 교정 후 저장; 실제 인덱싱 소스; 수동 편집 후 벡터 스토어 관리 페이지에서 ↺ 재인덱싱 가능 |
 | 인덱스 레지스트리 | `DATA_DIR/memory.db` (SQLite `doc_registry` 테이블) | userId·SHA-256 기반 변경 감지 |
-| 벡터 임베딩 | Chroma 서버 | 로컬: `data/chroma/`, Docker Compose: `chroma_data` 볼륨 |
+| 벡터 임베딩 | chroma: Chroma 서버(로컬 `data/chroma/`, Docker Compose `chroma_data` 볼륨) / sqlite-vec: `DATA_DIR/memory.db`(기본) 또는 `app.vectorstore.sqlite-vec.db-path` 설정 시 별도 `vector.db` | 백엔드 전환 시 벡터 공유 안 됨(§3.1) |
 | 대화 이력 + LLM 사용량 | `DATA_DIR/memory.db` (SQLite) | WAL 모드; 메시지 메타데이터(토큰·시간·프로바이더) 포함 |
 | 감사 로그 | `DATA_DIR/audit/audit.log` | JSON Lines; 롤링 압축본 `audit.YYYY-MM-DD.N.log.gz` 포함 |
 
@@ -1331,8 +1331,9 @@ curl -X POST http://localhost:8080/api/v1/chat \
 ### 6.4 성능
 
 - **Java 21 Virtual Threads** (`spring.threads.virtual.enabled=true`) — LLM I/O 동시 요청을 효율적으로 처리
-- **배치 멀티 쿼리 검색** — `RetrievalService`가 확장 질의를 1회 배치 임베딩 → 단일 Chroma 쿼리 → 가중 RRF 융합(Phase 7-A — 벡터 축 그룹 정규화 + 키워드 축 가중치 외부화). 재시도 시 후보 풀 에스컬레이션, 선택적 LLM 리랭킹(opt-in)
+- **배치 멀티 쿼리 검색** — `RetrievalService`가 확장 질의를 1회 배치 임베딩 → 단일 쿼리(chroma) 또는 쿼리별 개별 조회(sqlite-vec) → 가중 RRF 융합(Phase 7-A — 벡터 축 그룹 정규화 + 키워드 축 가중치 외부화). 재시도 시 후보 풀 에스컬레이션, 선택적 LLM 리랭킹(opt-in)
 - **쿼리 임베딩 캐시** (Phase 7-A) — 반복·유사 질문은 Caffeine 캐시로 임베딩 재호출 없이 처리 (`SEARCH_QUERY_EMBED_CACHE_*`)
+- **Contextual Retrieval + 임베딩 입력 정규화** (Phase 7-B) — 인덱싱 시 청크별로 `{파일명} > {섹션 제목}` 구조적 맥락 + LLM 생성 1~2문장을 임베딩·FTS 입력 앞에 결합(`KeywordExtractor`가 키워드 추출과 한 번에 처리, 사용량은 `context:` 라벨). 마크다운 장식(구분선·강조 마커)은 임베딩/FTS/답변 프롬프트 입력에서만 제거되고 저장·표시 원문은 그대로 유지된다. 설정 프로퍼티 없음(항상 적용) — 기존 문서는 재인덱싱해야 새 맥락/정규화가 반영됨
 - **병렬 인덱싱** — `RagService.syncDirectory()`에서 파일별·LLM 호출별 Semaphore 기반 병렬 처리
 - **DUAL 모드** — LOCAL + 외부를 Virtual Thread로 병렬 실행
 
@@ -1452,7 +1453,7 @@ docker-compose logs app
 ### 인덱싱이 느림
 
 - `INDEXING_MAX_FILES` / `INDEXING_MAX_LLM` 값 증가 (CPU·API 쿼터 여유 있는 경우)
-- 키워드 추출(`KeywordMetadataEnricher`)이 청크당 LLM 호출 → 문서 수 많을수록 시간 증가 (의도된 동작)
+- 키워드+맥락 추출(`KeywordExtractor`)이 청크당 LLM 호출 → 문서 수 많을수록 시간 증가 (의도된 동작)
 - DOCX 파일은 LLM 포맷 교정(섹션당 1회 LLM 호출)이 추가되어 PDF/PPTX보다 인덱싱 시간이 더 길 수 있습니다. 교정 실패 시 원본 MD로 fallback됩니다.
 
 ---

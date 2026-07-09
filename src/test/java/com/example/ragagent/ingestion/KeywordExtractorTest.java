@@ -68,14 +68,65 @@ class KeywordExtractorTest {
     }
 
     @Test
-    @DisplayName("enrichKeywords — LlmRouter.executeWithTracking()을 keyword: 접두사로 호출 (백그라운드 사용량 분리)")
-    void enrichKeywords_tracksUsageUnderKeywordPrefix() {
+    @DisplayName("enrichKeywords — LlmRouter.executeWithTracking()을 context: 접두사로 호출 (키워드+맥락 통합 호출, §10.1)")
+    void enrichKeywords_tracksUsageUnderContextPrefix() {
         when(llmRouter.executeWithTracking(any(), any(), any(), any())).thenReturn("키워드");
 
         extractor.enrichKeywords(new Document("테스트 문서 내용입니다."));
 
         verify(llmRouter).executeWithTracking(
-                eq(TaskType.LIGHT_TEXT), eq(RoutingMode.COST_FIRST), eq(BackgroundUsage.KEYWORD_PREFIX), any());
+                eq(TaskType.LIGHT_TEXT), eq(RoutingMode.COST_FIRST), eq(BackgroundUsage.CONTEXT_PREFIX), any());
+    }
+
+    @Test
+    @DisplayName("enrichKeywords — LLM 응답에 키워드/맥락 마커가 모두 있으면 각각 파싱해 저장한다")
+    void enrichKeywords_llmSuccessWithMarkers_parsesKeywordsAndContext() {
+        when(llmRouter.executeWithTracking(any(), any(), any(), any()))
+                .thenReturn("키워드: 검색, 인덱싱, 청크\n맥락: 이 청크는 설정 방법을 설명합니다.");
+        Document chunk = new Document("테스트 문서 내용입니다.",
+                java.util.Map.of(MetaKey.FILENAME, "가이드.pdf", MetaKey.HEADING, "설정 방법"));
+
+        Document result = extractor.enrichKeywords(chunk);
+
+        assertThat(result.getMetadata().get(MetaKey.EXCERPT_KEYWORDS)).isEqualTo("검색, 인덱싱, 청크");
+        assertThat(result.getMetadata().get(MetaKey.CHUNK_CONTEXT))
+                .isEqualTo("가이드.pdf > 설정 방법\n이 청크는 설정 방법을 설명합니다.");
+    }
+
+    @Test
+    @DisplayName("enrichKeywords — 맥락 마커만 없으면 구조적 맥락으로 폴백한다")
+    void enrichKeywords_missingContextMarker_fallsBackToStructuralContext() {
+        when(llmRouter.executeWithTracking(any(), any(), any(), any()))
+                .thenReturn("키워드: 검색, 인덱싱, 청크");
+        Document chunk = new Document("테스트 문서 내용입니다.",
+                java.util.Map.of(MetaKey.FILENAME, "가이드.pdf", MetaKey.HEADING, "설정 방법"));
+
+        Document result = extractor.enrichKeywords(chunk);
+
+        assertThat(result.getMetadata().get(MetaKey.CHUNK_CONTEXT)).isEqualTo("가이드.pdf > 설정 방법");
+    }
+
+    @Test
+    @DisplayName("enrichKeywords — 마커 없는 레거시 응답도 키워드로 정상 파싱된다(하위호환)")
+    void enrichKeywords_legacyResponseWithoutMarkers_parsesAsKeywords() {
+        when(llmRouter.executeWithTracking(any(), any(), any(), any())).thenReturn("검색, 인덱싱, 청크");
+
+        Document result = extractor.enrichKeywords(new Document("테스트 문서 내용입니다."));
+
+        assertThat(result.getMetadata().get(MetaKey.EXCERPT_KEYWORDS)).isEqualTo("검색, 인덱싱, 청크");
+    }
+
+    @Test
+    @DisplayName("enrichKeywords — LLM 호출 실패 시 CHUNK_CONTEXT는 구조적 맥락만으로 폴백한다")
+    void enrichKeywords_llmFailure_fallsBackToStructuralContextOnly() {
+        when(llmRouter.executeWithTracking(any(), any(), any(), any()))
+                .thenThrow(new RuntimeException("no LLM in test"));
+        Document chunk = new Document("keyword extraction fallback test content",
+                java.util.Map.of(MetaKey.FILENAME, "가이드.pdf", MetaKey.HEADING, "설정 방법"));
+
+        Document result = extractor.enrichKeywords(chunk);
+
+        assertThat(result.getMetadata().get(MetaKey.CHUNK_CONTEXT)).isEqualTo("가이드.pdf > 설정 방법");
     }
 
     @Test

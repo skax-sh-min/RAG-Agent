@@ -17,9 +17,13 @@ public final class BackgroundUsage {
     public static final String MDCORRECT_PREFIX = "mdcorrect:";
     public static final String TXT2MD_PREFIX    = "txt2md:";
     public static final String TITLE_PREFIX     = "title:";
+    // §10.1 — KeywordExtractor now extracts keywords + context in one call, tracked under this
+    // label. KEYWORD_PREFIX is kept below (no new rows) so isBackground() still recognizes
+    // historical keyword: rows recorded before this switch.
+    public static final String CONTEXT_PREFIX   = "context:";
 
     private static final Set<String> PREFIXES = Set.of(
-            SUMMARY_PREFIX, KEYWORD_PREFIX, MDCORRECT_PREFIX, TXT2MD_PREFIX, TITLE_PREFIX);
+            SUMMARY_PREFIX, KEYWORD_PREFIX, MDCORRECT_PREFIX, TXT2MD_PREFIX, TITLE_PREFIX, CONTEXT_PREFIX);
 
     /** True when {@code providerName} was recorded by one of the background call sites above. */
     public static boolean isBackground(String providerName) {

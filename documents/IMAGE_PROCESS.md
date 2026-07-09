@@ -45,15 +45,15 @@
 ┌─────────────────────────────────────────────────────────────────┐
 │  인덱싱 파이프라인                                               │
 │                                                                  │
-│  RagService.indexDocument()                                      │
+│  DocumentIndexer.index()                                          │
 │    ├── 1. SHA-256 계산 → docId 확정                              │
 │    ├── 2. ImageExtractorService.extract(filePath, docId)         │
 │    │       └── 포맷 판별 → 이미지 추출 → data/images/{docId}/ 저장│
 │    │           반환: Map<pageOrSlide, List<imagePath>>            │
 │    ├── 3. DocumentLoaderService.load(filePath) → 텍스트 청크     │
 │    ├── 4. 메타데이터 태깅 (image_paths 포함)                     │
-│    ├── 5. KeywordMetadataEnricher.apply()                        │
-│    └── 6. VectorStore.add()                                      │
+│    ├── 5. KeywordExtractor.enrichParallel() — 키워드+맥락 통합 추출(§10.1) │
+│    └── 6. VectorStoreFacade.add() — chroma/sqlite-vec 백엔드 선택 │
 │                                                                  │
 └─────────────────────────────────────────────────────────────────┘
 
@@ -532,25 +532,25 @@ REST API 응답 예시:
 
 ## 8. 문서 삭제 시 이미지 정리
 
-> **구현 완료** — `RagService.deleteByDocId()`에서 `deleteImagesQuietly()` 호출로 `data/images/{docId}/` 전체 삭제.
+> **구현 완료** — `DocumentIndexer.deleteArtifacts()`가 `deleteDocFiles()`를 통해 `deleteImagesQuietly()` 호출로 `data/images/{docId}/` 전체 삭제.
 
-`RagService.deleteByDocId()` 구현:
+`DocumentIndexer` 구현(요지):
 
 ```java
-private void deleteByDocId(String docId, String version) {
-    DocRegistryEntry existing = registry.get(docId);
-    if (existing != null && !existing.springDocIds().isEmpty()) {
-        VectorStore store = vectorStoreRegistry.getStore(version);
-        store.delete(existing.springDocIds());
-    }
-    // 이미지 디렉터리 정리
-    Path imgDir = dataDir.resolve("images").resolve(docId);
-    if (Files.exists(imgDir)) {
-        try (Stream<Path> files = Files.walk(imgDir)) {
-            files.sorted(Comparator.reverseOrder()).forEach(p -> {
-                try { Files.delete(p); } catch (IOException ignored) {}
-            });
-        }
+public void deleteArtifacts(String userId, String docId, String version) {
+    deleteExistingVectorsOnly(userId, docId, version);  // VectorStoreFacade.deleteByDocIds() — 활성 백엔드(chroma/sqlite-vec)
+    deleteDocFiles(userId, docId);                      // MD·이미지 정리
+    docRegistry.remove(docId, userId);
+}
+
+private void deleteImagesQuietly(Path dir) {
+    if (!Files.exists(dir)) return;
+    try (Stream<Path> walk = Files.walk(dir)) {
+        walk.sorted(Comparator.reverseOrder()).forEach(p -> {
+            try { Files.delete(p); } catch (IOException ignored) {}
+        });
+    } catch (IOException e) {
+        log.warn("Image directory cleanup failed {}: {}", dir, e.getMessage());
     }
 }
 ```

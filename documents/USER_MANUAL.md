@@ -383,19 +383,21 @@ curl "http://localhost:8080/api/v1/llm/usage/history?days=30"
 
 ```
 파일 업로드 or 폴더 동기화 (REST API)
-  └─▶ SHA-256 계산 → doc_registry.json 과 비교
-        ├─ 신규 파일 → 로드 → [DOCX: MD 변환 → LLM 포맷 교정] → 청크 분할 → 키워드 추출 (LLM) → Chroma 추가
+  └─▶ SHA-256 계산 → doc_registry(SQLite, memory.db 공유)와 비교
+        ├─ 신규 파일 → 로드 → [DOCX: MD 변환 → LLM 포맷 교정] → 청크 분할 → 키워드+맥락 추출 (LLM) → 벡터 스토어 추가
         ├─ 변경 파일 → 기존 청크 삭제 → 재인덱싱
-        └─ 삭제 파일 → Chroma에서 제거
+        └─ 삭제 파일 → 벡터 스토어에서 제거
 
 MD 재인덱싱 (/admin ↺ 버튼)
-  └─▶ 저장된 교정 MD 읽기 → 청크 분할 → 키워드 추출 (LLM) → 기존 청크 삭제 → Chroma 추가
+  └─▶ 저장된 교정 MD 읽기 → 청크 분할 → 키워드+맥락 추출 (LLM) → 기존 청크 삭제 → 벡터 스토어 추가
 ```
 
+> **벡터 스토어**: `chroma`(기본) 또는 `sqlite-vec` 중 운영자가 선택한 백엔드로 저장됩니다(둘 다 동일한 사용자 경험).
+>
 > **DOCX 포맷 교정**: DOCX → Markdown 변환 직후 LLM이 섹션별로 잘린 문장·소제목 불일치·오타를 교정합니다. 원본(`{docId}.md`)과 교정본(`{docId}_corrected.md`) 모두 `data/converted/`에 저장됩니다.
 >
-> **키워드 추출**: 청크당 LLM을 호출해 핵심 키워드 5개를 `excerpt_keywords` 메타데이터로 저장합니다.  
-> 검색 품질이 높아지는 대신 인덱싱 시간이 늘어납니다.
+> **키워드+맥락 추출**: 청크당 LLM을 한 번 호출해 핵심 키워드 5개(`excerpt_keywords`)와 이 청크가 속한 맥락(`chunk_context` — 문서명·섹션 제목 + 짧은 설명, 검색 전용이며 화면에는 표시되지 않음)을 함께 생성합니다.  
+> 검색 품질(recall)이 높아지는 대신 인덱싱 시간이 늘어납니다.
 
 ### 4.1 형식별 청크 분할 전략
 
@@ -418,8 +420,9 @@ MD 재인덱싱 (/admin ↺ 버튼)
 | `page_or_slide` | PDF, PPTX | 페이지/슬라이드 번호 |
 | `section`, `heading` | MD, DOCX | 섹션 번호·헤더 텍스트 |
 | `excerpt_keywords` | 전체 | LLM이 추출한 핵심 키워드 5개 |
+| `chunk_context` | 전체 | 검색(임베딩+키워드) 전용 맥락 헤더 — "{파일명} > {heading}" + LLM 1~2문장. 화면 표시·저장 텍스트에는 포함되지 않음 (Contextual Retrieval) |
 
-버전별로 `manual_{version}` 컬렉션 분리 (예: `manual_latest`, `manual_1_0`).
+버전별로 격리 저장됩니다 — chroma는 `manual_{version}` 컬렉션 분리(예: `manual_latest`, `manual_1_0`), sqlite-vec는 `version` 파티션 키를 사용합니다.
 
 ---
 

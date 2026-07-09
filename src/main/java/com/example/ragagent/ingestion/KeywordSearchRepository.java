@@ -139,7 +139,7 @@ public class KeywordSearchRepository {
                                 str(m.get(MetaKey.PAGE_OR_SLIDE)),
                                 str(m.get(MetaKey.CHUNK_INDEX)),
                                 str(m.get(MetaKey.TAGS)),     // 태그(쉼표 결합) — 검색 결과에 동행
-                                d.getText() == null ? "" : d.getText(),
+                                SearchTextBuilder.build(d),   // 맥락+정규화 텍스트 (Contextual BM25, §10.1)
                                 str(m.get(MetaKey.EXCERPT_KEYWORDS))
                         };
                     }).toList());

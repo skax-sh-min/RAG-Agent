@@ -229,7 +229,7 @@ public class DocumentLoaderService {
 
                 if (isHeading && !current.isEmpty()) {
                     sections.add(new Document(current.toString().strip(), Map.of(
-                            MetaKey.SOURCE_TYPE, "file", "section", sectionNum, "heading", currentHeading)));
+                            MetaKey.SOURCE_TYPE, "file", "section", sectionNum, MetaKey.HEADING, currentHeading)));
                     current = new StringBuilder();
                     sectionNum++;
                 }
@@ -238,7 +238,7 @@ public class DocumentLoaderService {
             }
             if (!current.isEmpty()) {
                 sections.add(new Document(current.toString().strip(), Map.of(
-                        MetaKey.SOURCE_TYPE, "file", "section", sectionNum, "heading", currentHeading)));
+                        MetaKey.SOURCE_TYPE, "file", "section", sectionNum, MetaKey.HEADING, currentHeading)));
             }
 
             // No headings found → return as single flat document
@@ -355,7 +355,7 @@ public class DocumentLoaderService {
         Map<String, Object> meta = new HashMap<>();
         meta.put(MetaKey.SOURCE_TYPE, "file");
         meta.put("section", sectionNum);
-        meta.put("heading", heading);
+        meta.put(MetaKey.HEADING, heading);
         if (headingPage != null) {
             meta.put(MetaKey.HEADING_PAGE, headingPage);
             meta.put(MetaKey.PAGE_OR_SLIDE, headingPage);

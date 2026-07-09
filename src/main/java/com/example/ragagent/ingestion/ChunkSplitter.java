@@ -81,7 +81,12 @@ public class ChunkSplitter {
         int split = 0;
         for (Document doc : docs) {
             String text = doc.getText();
-            if (text == null || text.length() <= maxChars) {
+            // Gate measures normalized length (§10.1-보완) — the embedding-time payload
+            // (SearchTextBuilder) is context+normalize(text), not raw text, so that's the size
+            // that actually needs bounding. The split below still packs raw text/raw maxChars —
+            // reinterpreting maxChars against normalized length there would need a raw↔normalized
+            // offset mapping, which is exactly the complexity this measure-only change avoids.
+            if (text == null || MarkdownNoiseNormalizer.normalize(text).length() <= maxChars) {
                 out.add(doc);
                 continue;
             }
@@ -141,6 +146,10 @@ public class ChunkSplitter {
             Document base = docs.get(i);
             StringBuilder acc = new StringBuilder(base.getText() == null ? "" : base.getText());
             Map<String, Object> metadata = new HashMap<>(base.getMetadata());
+            // Merge decisions measure normalized length (§10.1-보완 — decorative markdown shouldn't
+            // consume the merge budget); acc itself stays raw text. Running counter instead of
+            // renormalizing acc.toString() on every iteration to avoid O(n^2) on long sections.
+            int normalizedLen = MarkdownNoiseNormalizer.normalize(acc.toString()).length();
 
             int currentHeadingLevel = sectionHeadingLevel(base);
             int j = i;
@@ -158,13 +167,13 @@ public class ChunkSplitter {
                     break;
                 }
 
-                int currentLen = acc.length();
-                int combinedLen = currentLen + 2 + nextText.length();
+                int normalizedNextLen = MarkdownNoiseNormalizer.normalize(nextText).length();
+                int combinedNormalizedLen = normalizedLen + 2 + normalizedNextLen;
 
                 boolean includeNext = false;
-                if (currentLen < threshold40) {
+                if (normalizedLen < threshold40) {
                     includeNext = true;
-                } else if (currentLen < threshold75 && combinedLen < chunkSize) {
+                } else if (normalizedLen < threshold75 && combinedNormalizedLen < chunkSize) {
                     includeNext = true;
                 }
 
@@ -172,6 +181,7 @@ public class ChunkSplitter {
 
                 if (acc.length() > 0) acc.append("\n\n");
                 acc.append(nextText);
+                normalizedLen = combinedNormalizedLen;
                 j++;
                 currentHeadingLevel = nextHeadingLevel > 0 ? nextHeadingLevel : currentHeadingLevel;
             }

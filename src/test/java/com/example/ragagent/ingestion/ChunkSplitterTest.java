@@ -206,6 +206,29 @@ class ChunkSplitterTest {
     }
 
     @Test
+    @DisplayName("enforceMaxChars — 장식 줄로 raw 길이가 상한을 넘어도 정규화 길이가 상한 이하면 분할하지 않는다(§10.1-보완)")
+    void enforceMaxChars_measuresNormalizedLengthForOverflowGate() {
+        String text = "실제 내용입니다\n" + "=".repeat(80); // raw ~89자, 정규화 시 장식줄 제거되어 ~8자
+
+        List<Document> result = splitter.enforceMaxChars(List.of(new Document(text)), 50, "x.md");
+
+        assertThat(result).hasSize(1);
+        assertThat(result.get(0).getText()).isEqualTo(text);
+    }
+
+    @Test
+    @DisplayName("mergeShortSections — 장식 줄로 raw 길이가 부풀려져도 정규화 길이 기준으로 병합 여부를 판단한다(§10.1-보완)")
+    void mergeShortSections_measuresNormalizedLengthForMergeDecision() {
+        String base = "짧은 내용\n" + "-".repeat(80); // raw 86자(threshold75=75 초과) → 정규화 시 5자(threshold40=40 미만)
+        List<Document> docs = List.of(new Document(base), new Document("다음 섹션"));
+
+        List<Document> result = splitter.mergeShortSections(docs, 100);
+
+        assertThat(result).hasSize(1);
+        assertThat(result.get(0).getText()).contains("짧은 내용", "다음 섹션");
+    }
+
+    @Test
     @DisplayName("slidingWindow — 코드블록이 청크 경계에서 잘리면 이어지는 조각마다 여는 펜스(언어 태그)가 재삽입되고, " +
             "블록이 그 조각 안에서 끝나지 않으면 닫는 펜스도 덧붙는다")
     void slidingWindow_codeBlockSplitAcrossPieces_reopensFenceOnContinuations() {

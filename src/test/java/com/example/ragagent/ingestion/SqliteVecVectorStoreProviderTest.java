@@ -2,6 +2,7 @@ package com.example.ragagent.ingestion;
 
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.exception.VectorStoreException;
+import com.example.ragagent.model.MetaKey;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -176,6 +177,32 @@ class SqliteVecVectorStoreProviderTest {
         } catch (java.sql.SQLException e) {
             throw new RuntimeException(e);
         }
+    }
+
+    @Test
+    @DisplayName("add: 임베딩 입력은 맥락+정규화 텍스트이고, vec_document_chunks.content는 원문 그대로이며 CHUNK_CONTEXT는 제외된다(§10.1)")
+    void add_embedsDerivedTextButPersistsOriginalContent() {
+        SqliteVecVectorStoreProvider p = provider();
+        String original = "**중요**한 내용\n------";
+        Document doc = Document.builder().id("d1").text(original)
+                .metadata(Map.of(MetaKey.CHUNK_CONTEXT, "문서.pdf > 설정"))
+                .build();
+
+        when(embeddingModel.embed(anyList())).thenReturn(List.of(new float[]{0.1f}));
+
+        p.add("u", "v1", List.of(doc));
+
+        ArgumentCaptor<List> embedCaptor = ArgumentCaptor.forClass(List.class);
+        verify(embeddingModel).embed(embedCaptor.capture());
+        assertThat(embedCaptor.getValue()).containsExactly("문서.pdf > 설정\n\n중요한 내용");
+
+        ArgumentCaptor<List> rowsCaptor = ArgumentCaptor.forClass(List.class);
+        verify(jdbc).batchUpdate(
+                eq("INSERT INTO vec_document_chunks(spring_doc_id, content, metadata, version, doc_id, created_at) VALUES (?, ?, ?, ?, ?, ?)"),
+                rowsCaptor.capture());
+        Object[] row = (Object[]) rowsCaptor.getValue().get(0);
+        assertThat(row[1]).isEqualTo(original);                          // content column = raw original
+        assertThat((String) row[2]).doesNotContain("chunk_context");     // metadata JSON excludes CHUNK_CONTEXT
     }
 
     @Test

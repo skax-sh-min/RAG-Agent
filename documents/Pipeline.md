@@ -163,14 +163,22 @@ PROGRESSIVE 모드 AND sufficient=false AND retryCount >= max
   │    PDF         → 슬라이딩 윈도우 (chunkSize / chunkOverlap)
   │
   ├─ 메타데이터 태깅
-  │    doc_id, filename, version, page_or_slide,
-  │    source_type, sha256, collected_at, image_paths
+  │    doc_id, filename, version, doc_type, sha256, collected_at,
+  │    chunk_index, owner_id, visibility, tags(선택), page_or_slide,
+  │    source_type, image_paths, heading(MD/DOCX 섹션 제목)
   │
   ├─ 기존 청크 삭제 (재인덱싱 시 동일 docId 덮어쓰기)
   │
-  ├─ 키워드 추출 LLM → excerpt_keywords 메타데이터 추가
+  ├─ 키워드+맥락 추출 LLM (한 번의 호출, §10.1 Contextual Retrieval)
+  │    → excerpt_keywords 메타데이터 추가
+  │    → chunk_context 메타데이터 추가 ("{파일명} > {heading}" 구조적 맥락 + LLM 1~2문장,
+  │      LLM 실패 시 구조적 맥락만 — 임베딩/FTS 입력 전용, 영속 저장 안 함)
   │
-  ├─ 벡터 스토어 저장 (version별 — chroma 컬렉션 / sqlite-vec partition)
+  ├─ 임베딩 입력 구성 = chunk_context + 정규화(원문) (§10.1-보완 — 마크다운 장식 제거)
+  │    저장·표시 텍스트(원문)는 그대로 유지, 임베딩/FTS 입력에만 반영
+  │
+  ├─ 벡터 스토어 저장 (version별 — chroma 컬렉션 / sqlite-vec partition, content는 원문)
+  │    + FTS 인덱스(chunk_fts)에도 동일 맥락+정규화 텍스트 반영 (Contextual BM25 시너지)
   │
   └─ 레지스트리 저장 (SQLite doc_registry 테이블 — memory.db 공유)
 ```
@@ -242,18 +250,28 @@ PROGRESSIVE 모드 AND sufficient=false AND retryCount >= max
     DocumentIndexer.tagMetadata()
     - doc_id, filename, version, doc_type, sha256, chunk_index, page_or_slide, tags, image_paths 등
 
-  10) 키워드 추출(enrich) [LLM]
-    excerpt_keywords 메타데이터 추가
+  10) 키워드+맥락 추출(enrich) [LLM] — §10.1 Contextual Retrieval
+    KeywordExtractor.enrichKeywords() — 한 번의 LLM 호출로:
+    - excerpt_keywords 메타데이터 추가
+    - chunk_context 메타데이터 추가 ("{filename} > {heading}" 구조적 맥락 + LLM 1~2문장 맥락;
+      LLM 실패/타임아웃 시 구조적 맥락만 — 사용량은 context: 라벨로 기록)
 
-  11) 임베딩 DB 저장
+  11) 임베딩 입력 구성 — §10.1-보완 임베딩 입력 정규화
+    SearchTextBuilder.build() = chunk_context + MarkdownNoiseNormalizer.normalize(원문)
+    - 마크다운 장식 줄(구분선 등) 제거, 강조 마커(**bold**/*italic*/<u>)만 제거하고 내용 보존
+    - 코드펜스 내부·표 행은 무변형
+    - 이 파생 텍스트는 임베딩·FTS 입력에만 쓰이고 영속 저장되지 않음(저장/표시는 원문 그대로)
+
+  12) 임베딩 DB 저장
     a) Chroma 모드
-      - 컬렉션(버전별)에 Document(text + metadata) 저장
+      - `chromaApi.upsertEmbeddings()`로 수동 upsert(TokenCountBatchingStrategy 서브배치) —
+        임베딩은 11)의 파생 텍스트, 저장 content/metadata는 원문(chunk_context 키 제외)
     b) sqlite-vec 모드
-      - vec_embeddings: spring_doc_id, version, embedding
-      - vec_document_chunks: spring_doc_id, content, metadata(JSON), version, doc_id, created_at
-    + FTS 인덱스(chunk_fts)에도 doc_tags/content/keywords 동시 반영
+      - vec_embeddings: spring_doc_id, version, embedding(11의 파생 텍스트로 계산)
+      - vec_document_chunks: spring_doc_id, content(원문), metadata(JSON, chunk_context 제외), version, doc_id, created_at
+    + FTS 인덱스(chunk_fts)에도 doc_tags/keywords + content(11의 파생 텍스트, Contextual BM25 시너지) 반영
 
-  12) 레지스트리 저장
+  13) 레지스트리 저장
     doc_registry에 docId/version/chunk수/spring_doc_ids 기록
   ```
 
@@ -263,6 +281,7 @@ PROGRESSIVE 모드 AND sufficient=false AND retryCount >= max
   - 따라서 검색 결과 청크가 이미지 경로 컨텍스트를 유지한 채 반환된다.
   - DOCX는 물리 페이지 전체 보전 대신, 헤딩 단위 페이지 위치를 보전한다.
   - `page_or_slide`는 DOCX에서 헤딩 시작 페이지(명시적 page break 기준)를 우선 사용하고, 없으면 기존 청크 순번 fallback을 사용한다.
+  - **저장·표시 텍스트(원문) ≠ 임베딩·FTS·답변 프롬프트 입력(맥락+정규화)** — 3계층 분리가 §10.1/10.1-보완의 핵심 원칙이며, `AnswerService.buildAnswerPrompt()`도 정규화된(맥락 헤더 없는) 텍스트를 사용한다.
 
 ### 6.4. 문서 타입별 처리 상세
 

@@ -91,6 +91,28 @@ class KeywordSearchRepositoryTest {
     }
 
     @Test
+    @DisplayName("indexChunks — CHUNK_CONTEXT가 있으면 content 컬럼이 맥락+정규화 텍스트로 저장된다(Contextual BM25, §10.1)")
+    void indexChunks_storesContextAndNormalizedTextAsContent() {
+        java.util.Map<String, Object> m = new java.util.HashMap<>();
+        m.put(MetaKey.DOC_ID, "D1");
+        m.put(MetaKey.VERSION, "latest");
+        m.put(MetaKey.FILENAME, "manual.pdf");
+        m.put(MetaKey.PAGE_OR_SLIDE, "1");
+        m.put(MetaKey.CHUNK_INDEX, 0);
+        m.put(MetaKey.EXCERPT_KEYWORDS, "kw");
+        m.put(MetaKey.CHUNK_CONTEXT, "설정가이드 > 네트워크절 고유맥락어");
+        Document doc = Document.builder().id("s1").text("**본문**만 있고 다른 단어는 없음").metadata(m).build();
+
+        repo.indexChunks(List.of(doc));
+
+        // "고유맥락어"는 원문(raw text)에는 없고 CHUNK_CONTEXT에만 있는 용어 — 검색되면 content가
+        // 원문이 아니라 맥락+정규화 텍스트임이 증명된다.
+        List<Document> hits = repo.search("latest", "고유맥락어", 10);
+        assertThat(hits).hasSize(1);
+        assertThat(hits.get(0).getText()).contains("고유맥락어").doesNotContain("**본문**");
+    }
+
+    @Test
     @DisplayName("버전 필터 — 다른 버전 청크는 제외")
     void search_filtersByVersion() {
         repo.indexChunks(List.of(chunk("s1", "D1", "v1", 0, "공통키워드 알파", "알파")));
