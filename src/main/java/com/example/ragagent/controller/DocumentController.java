@@ -159,38 +159,6 @@ public class DocumentController {
         return ResponseEntity.noContent().build();
     }
 
-    /** Starts directory sync asynchronously and returns {taskId} (HTTP 202). */
-    @PostMapping("/ui/documents/sync")
-    @ResponseBody
-    public ResponseEntity<Map<String, String>> syncDocumentsUi(
-            ThreadContext ctx,
-            @RequestParam(defaultValue = "latest") String version) {
-        String taskId = progressService.newTaskId();
-        final String userId = ctx.userId();
-
-        Thread worker = Thread.ofVirtual().name("idx-sync-" + taskId).start(() -> {
-            try {
-                SyncResult result = ragService.syncDirectory(userId, version,
-                        event -> progressService.publish(taskId, event));
-                progressService.publish(taskId, IndexingProgressEvent.syncDone(result));
-                auditLogger.log("document.sync", null,
-                        Map.of("indexed", result.indexed().size(),
-                               "updated", result.updated().size(),
-                               "deleted", result.deleted().size()));
-            } catch (IndexingCancelledException e) {
-                // progressService.cancel() already published the terminal 'cancelled' event.
-                log.info("[SYNC] cancelled by user: taskId={} ({})", taskId, e.getMessage());
-            } catch (Exception e) {
-                String msg = isChromaDown(e) ? "ChromaDB 연결 실패" : e.getMessage();
-                log.error("Sync error", e);
-                progressService.publish(taskId, IndexingProgressEvent.error("sync", msg));
-            }
-        });
-        progressService.registerWorker(taskId, worker);
-
-        return ResponseEntity.accepted().body(Map.of("taskId", taskId));
-    }
-
     @DeleteMapping("/ui/documents/{docId}")
     @ResponseBody
     public ResponseEntity<Void> deleteDocumentUi(

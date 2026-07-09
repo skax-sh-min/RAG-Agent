@@ -32,7 +32,6 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -141,18 +140,6 @@ class DocumentControllerHtmxTest {
                         .param("version", "latest")
                         .with(csrf()))
                 .andExpect(status().isOk());
-    }
-
-    @Test
-    @DisplayName("POST /ui/documents/sync — 정상 → 202 + taskId (비동기 싱크)")
-    void syncDocuments_returnsAccepted() throws Exception {
-        when(indexingProgressService.newTaskId()).thenReturn("task-sync-1");
-
-        mvc.perform(post("/ui/documents/sync")
-                        .param("version", "latest")
-                        .with(csrf()))
-                .andExpect(status().isAccepted())
-                .andExpect(jsonPath("$.taskId").value("task-sync-1"));
     }
 
     // ── 태그 편집 (HTMX view/edit toggle) ───────────────────────

@@ -279,8 +279,7 @@ rag_java/
                 ├── doc-table-body.html    # HTMX document table tbody fragment
                 ├── message-user.html      # User message bubble fragment
                 ├── message-assistant.html # HTMX assistant bubble (includes source hover preview)
-                ├── message-error.html     # HTMX error bubble fragment
-                └── sync-result.html       # HTMX sync result toast fragment
+                └── message-error.html     # HTMX error bubble fragment
 ```
 
 ## Agent Pipeline

@@ -278,8 +278,7 @@ rag_java/
                 ├── doc-table-body.html    # HTMX 문서 테이블 tbody fragment
                 ├── message-user.html      # 사용자 메시지 버블 fragment
                 ├── message-assistant.html # HTMX 답변 버블 (출처 hover preview 포함)
-                ├── message-error.html     # HTMX 에러 버블 fragment
-                └── sync-result.html       # HTMX 동기화 결과 toast fragment
+                └── message-error.html     # HTMX 에러 버블 fragment
 ```
 
 ## 에이전트 파이프라인

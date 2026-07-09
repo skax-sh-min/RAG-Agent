@@ -35,7 +35,6 @@ src/main/resources/
 │       ├── thread-list.html               # 대화 목록 사이드바
 │       ├── thread-item.html               # 대화 목록 항목 1건
 │       ├── doc-table-body.html            # 문서 목록 tbody (새로고침용)
-│       ├── sync-result.html               # 동기화 결과 토스트
 │       └── llm-usage-cards.html           # 프로바이더 + 임베딩(EMBEDDING) + orphan(ORPHAN, 삭제 가능) 상태 카드 (30초 자동 갱신)
 └── static/
     ├── css/app.css                        # 버블·배지·DUAL 탭·타이핑·반응형(오프캔버스/dvh/16px/44px)
@@ -73,7 +72,6 @@ src/main/resources/
 | GET | `/documents` | `documents.html` | 문서 관리 페이지 |
 | POST | `/ui/documents/upload` | 202 `{"taskId":"..."}` | 파일 업로드 수신 → 비동기 인덱싱 시작 |
 | GET | `/ui/documents/progress/{taskId}` | `text/event-stream` (SSE) | 인덱싱 진행 이벤트 (`stage`, `done`, `error`) |
-| POST | `/ui/documents/sync` | 202 `{"taskId":"..."}` | 폴더 동기화 비동기 시작 |
 | DELETE | `/ui/documents/{docId}` | `200` | 문서 삭제 |
 | GET | `/ui/documents/list` | `fragments/doc-table-body` | 문서 목록 새로고침 |
 
@@ -179,7 +177,6 @@ PROGRESSIVE 업그레이드 시 `🔝 고추론 재분석 → {premiumProvider}`
               → GET /ui/documents/progress/{taskId} SSE 구독
               → progress 이벤트로 파일별 상태 갱신 → done/error 이벤트 후 목록 자동 새로고침
 
-[동기화]     hx-post="/ui/documents/sync" → fragments/sync-result → 토스트
 [문서 삭제]  hx-delete → hx-swap="outerHTML swap:0.3s" (페이드아웃)
 [LLM 카드]   hx-trigger="load, every 30s" → 30초마다 자동 갱신
 [LLM orphan 삭제] 🗑 버튼(orphan 카드에만 노출) → hx-confirm 확인 → hx-delete="/admin/llm-usage/{provider}"
@@ -208,7 +205,6 @@ PROGRESSIVE 업그레이드 시 `🔝 고추론 재분석 → {premiumProvider}`
 |------|----------|
 | 채팅 API 오류 | `message-error.html` fragment (빨간 버블) |
 | 파일 업로드 실패 | 파일 행 상태 ❌ + 오류 토스트 |
-| 동기화 실패 | 오류 토스트 |
 | 문서 삭제 실패 | `htmx:responseError` → 오류 토스트 |
 | DUAL, LOCAL 미연결 | 드롭다운 `disabled` + 툴팁 |
 | LOCAL_ONLY, LOCAL 미연결 | 빨간 버블 + `LlmProviderExhaustedException` 메시지 |

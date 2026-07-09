@@ -248,7 +248,7 @@ const I18N = {
         showToast(I18N.requestFailed + (status ? ' (' + status + ')' : ''), 'danger');
     });
 
-    /* Auto-initialize Bootstrap toasts injected by HTMX fragments (e.g. sync-result) */
+    /* Auto-initialize Bootstrap toasts injected by HTMX fragments */
     document.body.addEventListener('htmx:afterSettle', function (e) {
         (e.detail.target || document).querySelectorAll('.toast:not([data-bs-inited])').forEach(function (el) {
             el.setAttribute('data-bs-inited', '');

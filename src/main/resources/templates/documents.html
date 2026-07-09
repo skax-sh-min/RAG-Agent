@@ -86,31 +86,12 @@
                         <i class="bi bi-upload me-1"></i>
                         <span th:text="#{doc.btn.upload}">Upload &amp; Index</span>
                     </button>
-                    <button id="sync-btn" class="btn btn-sm btn-outline-secondary" onclick="startSync()">
-                        <span id="sync-spinner" class="spinner-border spinner-border-sm me-1 d-none" role="status"></span>
-                        <i class="bi bi-arrow-repeat me-1"></i>
-                        <span th:text="#{doc.btn.sync}">Sync Folder</span>
-                    </button>
                 </div>
                 <!-- 기존 태그 칩 (클릭하면 위 입력칸에 추가) -->
                 <div id="tag-suggest" class="d-none mt-2">
                     <span class="small text-muted me-1" th:text="#{tags.existing}">Existing tags</span>
                     <span id="tag-suggest-chips" class="d-inline-flex flex-wrap gap-1 align-middle"></span>
                 </div>
-                <!-- Sync progress (shown only during sync) -->
-                <div id="sync-progress" class="d-none mt-3">
-                    <div class="d-flex align-items-center gap-2 mb-1">
-                        <span class="spinner-border spinner-border-sm text-secondary flex-shrink-0"></span>
-                        <span id="sync-stage-label" class="small text-muted flex-grow-1"></span>
-                        <button id="sync-cancel-btn" type="button"
-                                class="btn btn-sm btn-outline-danger py-0 px-2"
-                                th:text="#{doc.btn.cancel}">Cancel</button>
-                    </div>
-                    <div class="progress" style="height: 5px;">
-                        <div id="sync-progress-bar" class="progress-bar" style="width: 0%; transition: width 0.4s;"></div>
-                    </div>
-                </div>
-
             </div>
         </div>
 
@@ -348,7 +329,7 @@
                     setFileStatus(i, 'cancelled');
                     showToast(`${escHtml(files[i].name)} ${I18N.cancelled}`, 'warning');
                 } else {
-                    setFileStatus(i, 'error', err.message);
+                    setFileError(i, err.message);
                     showToast(`${escHtml(files[i].name)} ${I18N.uploadError}: ${err.message}`, 'danger');
                 }
             }
@@ -361,7 +342,7 @@
         loadTagSuggestions();   // 새 태그가 추가됐을 수 있으니 제안 목록 갱신
     }
 
-    /** §6.16.1 — POSTs the cancel signal for an in-progress upload/sync task. Best-effort. */
+    /** §6.16.1 — POSTs the cancel signal for an in-progress upload task. Best-effort. */
     function cancelIndexingTask(taskId) {
         fetch(`/ui/documents/progress/${taskId}/cancel`, {
             method: 'POST',
@@ -493,7 +474,6 @@
                         </div>`,
             queued:    `<span class="text-info">⏳ 인덱싱 대기 중...</span>`,
             done:      `<span class="text-success">✅ ${PAGE_I18N.statusDone} (${extra} ${PAGE_I18N.chunks})</span>`,
-            error:     `<span class="text-danger">❌ ${extra}</span>`,
             cancelled: `<span class="text-muted">⏹ ${I18N.cancelled}</span>`,
         };
         if (map[status]) el.innerHTML = map[status];
@@ -504,8 +484,56 @@
         if (bar) bar.style.width = pct + '%';
     }
 
+    /* ── Per-file indexing event log — in-memory only, so it naturally disappears on page
+     * navigation. Lets a failed upload show which stage broke, not just the final message. ── */
+    const STAGE_LABELS = {
+        loading: '문서 로드', structuring: 'Markdown 구조화', correcting: 'Markdown 교정',
+        chunking: '청크 분할', enriching: '키워드 추출', storing: '벡터 DB 저장'
+    };
+    const fileEventLogs = {};   // i -> [{stage, message, done, total, time}]
+
     function setIndexingStage(i, evt) {
+        (fileEventLogs[i] = fileEventLogs[i] || []).push({
+            stage: evt.stage, message: evt.message, done: evt.done, total: evt.total,
+            time: nowHms()
+        });
         setIndexingStageById(`file-status-${i}`, evt);
+    }
+
+    function nowHms() {
+        const d = new Date();
+        const pad = n => String(n).padStart(2, '0');
+        return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+    }
+
+    /** Shows which stage failed (if known) + a collapsible trail of this file's progress
+     * events. The trail is in-memory only — it is not persisted and disappears on navigation. */
+    function setFileError(i, message) {
+        const el = document.getElementById(`file-status-${i}`);
+        if (!el) return;
+        const log = fileEventLogs[i] || [];
+        const lastWorkStage = [...log].reverse().find(e => STAGE_LABELS[e.stage]);
+        const stageLabel = lastWorkStage ? STAGE_LABELS[lastWorkStage.stage] : null;
+        const headline = stageLabel
+            ? `❌ <strong>${escHtml(stageLabel)}</strong> 단계 오류: ${escHtml(message)}`
+            : `❌ ${escHtml(message)}`;
+
+        const logId = `file-log-${i}`;
+        const trail = log.length > 0
+            ? log.map(e => {
+                const label = STAGE_LABELS[e.stage] || e.stage;
+                const detail = e.total > 0 ? ` (${e.done}/${e.total})` : '';
+                const msg = e.message ? ` — ${escHtml(e.message)}` : '';
+                return `<div>[${e.time}] ${escHtml(label)}${detail}${msg}</div>`;
+            }).join('')
+            : '<div class="text-muted">기록된 진행 로그 없음</div>';
+
+        el.innerHTML = `
+            <span class="text-danger">${headline}</span>
+            <button type="button" class="btn btn-sm btn-link p-0 ms-1 small"
+                    data-bs-toggle="collapse" data-bs-target="#${logId}">로그 보기</button>
+            <div id="${logId}" class="collapse small mt-1 p-2 bg-body-secondary border rounded"
+                 style="max-height:150px; overflow-y:auto; font-family:monospace;">${trail}</div>`;
     }
 
     function setIndexingStageById(elId, evt) {
@@ -567,92 +595,6 @@
 
         const fn = stageHtml[evt.stage];
         if (fn) el.innerHTML = fn();
-    }
-
-    /* ── Sync ────────────────────────────────────────────────────────────── */
-    async function startSync() {
-        const version  = (document.getElementById('version-input').value || '').trim() || 'latest';
-        const btn       = document.getElementById('sync-btn');
-        const spinner   = document.getElementById('sync-spinner');
-        const progress  = document.getElementById('sync-progress');
-        const label     = document.getElementById('sync-stage-label');
-        const bar       = document.getElementById('sync-progress-bar');
-        const cancelBtn = document.getElementById('sync-cancel-btn');
-
-        btn.disabled = true;
-        spinner.classList.remove('d-none');
-        progress.classList.remove('d-none');
-        label.textContent = '동기화 준비 중...';
-        bar.style.width = '0%';
-
-        try {
-            const res = await fetch('/ui/documents/sync', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/x-www-form-urlencoded', ...getCsrfHeaders() },
-                body: `version=${encodeURIComponent(version)}`
-            });
-            if (!res.ok) throw new Error(`HTTP ${res.status}`);
-            const { taskId } = await res.json();
-
-            cancelBtn.onclick = () => cancelIndexingTask(taskId);
-
-            await new Promise((resolve, reject) => {
-                const sse = new EventSource(`/ui/documents/progress/${taskId}`);
-                let retryCount = 0;
-                sse.addEventListener('progress', e => {
-                    retryCount = 0;
-                    const evt = JSON.parse(e.data);
-
-                    if (evt.stage === 'sync_start') {
-                        if (evt.total === 0) {
-                            label.textContent = '변경 파일 없음';
-                            bar.style.width = '100%';
-                        } else {
-                            label.textContent = `파일 ${evt.total}개 인덱싱 시작...`;
-                        }
-                    } else if (evt.stage === 'sync_file_done') {
-                        const pct = evt.total > 0 ? Math.round(evt.done / evt.total * 100) : 100;
-                        bar.style.width = `${pct}%`;
-                        label.textContent = `${evt.done} / ${evt.total} 완료: ${evt.filename}`;
-                    } else if (evt.stage === 'sync_file_error') {
-                        const pct = evt.total > 0 ? Math.round(evt.done / evt.total * 100) : 100;
-                        bar.style.width = `${pct}%`;
-                        label.textContent = `❌ ${evt.filename}: ${evt.message || '인덱싱 오류'}`;
-                        showToast(`${escHtml(evt.filename)} 인덱싱 실패: ${escHtml(evt.message || '오류')}`, 'danger');
-                    } else if (evt.stage === 'sync_done') {
-                        sse.close();
-                        bar.style.width = '100%';
-                        const s = evt.syncSummary;
-                        showToast(`동기화 완료 · 신규 ${s.indexed} · 갱신 ${s.updated} · 삭제 ${s.deleted}`, 'success');
-                        htmx.ajax('GET', '/ui/documents/list', {target: '#doc-table-body', swap: 'outerHTML'});
-                        resolve();
-                    } else if (evt.stage === 'cancelled') {
-                        sse.close();
-                        label.textContent = I18N.cancelled;
-                        showToast(`동기화 ${I18N.cancelled}`, 'warning');
-                        htmx.ajax('GET', '/ui/documents/list', {target: '#doc-table-body', swap: 'outerHTML'});
-                        resolve();
-                    } else if (evt.stage === 'error') {
-                        sse.close();
-                        reject(new Error(evt.message || '동기화 오류'));
-                    }
-                });
-                sse.onerror = () => {
-                    retryCount++;
-                    if (retryCount > 5) {
-                        sse.close();
-                        reject(new Error('SSE 연결 실패 (재시도 초과)'));
-                    }
-                };
-            });
-        } catch (err) {
-            showToast(`동기화 실패: ${escHtml(err.message)}`, 'danger');
-        } finally {
-            btn.disabled = false;
-            spinner.classList.add('d-none');
-            progress.classList.add('d-none');
-            cancelBtn.onclick = null;
-        }
     }
 
     /* ── Shared helpers ──────────────────────────────────────────────────── */

@@ -855,7 +855,7 @@ Caddy는 Docker 컨테이너이자 Let's Encrypt(인터넷)에 의존하므로 �
 - [ ] 외부(인터넷) 소켓 시도 없음 — `LLM_ROUTING_MODE=LOCAL_ONLY` + 외부 프로바이더 키 전부 미설정
 - [ ] `http://<host>:8080/api/v1/health` → `{"status":"ok"}`
 
-> **데이터 이전**: 기존 Chroma 데이터를 sqlite-vec로 직접 복사하지 않습니다. 문서 원본이 `data/documents/`에 보존되므로 **전체 재인덱싱**(벡터 스토어 관리 페이지 또는 디렉터리 재동기화)으로 이전합니다.
+> **데이터 이전**: 기존 Chroma 데이터를 sqlite-vec로 직접 복사하지 않습니다. 문서 원본이 `data/documents/`에 보존되므로 **전체 재인덱싱**(문서 재업로드 또는 `POST /api/v1/documents/sync`로 재동기화)으로 이전합니다.
 
 ### 4.6 태그 기반 검색 적용 전 수동 초기화 (프리릴리즈)
 
@@ -937,7 +937,7 @@ docker compose up --build -d
 ```
 
 - no-auth 모드(`AUTH_ENABLED=false`)면 `/setup`에서 관리자 계정을 다시 생성합니다.
-- 문서를 재업로드하거나 문서 폴더 동기화로 전체 재인덱싱합니다.
+- 문서를 재업로드하거나 `POST /api/v1/documents/sync`로 폴더를 재동기화해 전체 재인덱싱합니다.
 
 #### 5) 태그 기반 검색 기능 검증 체크리스트
 
@@ -1463,7 +1463,7 @@ docker-compose logs app
 
 | 원인 | 조치 |
 |------|------|
-| Apache POI `PictureType.extension`이 이미 `.png`처럼 점을 포함하는데, 파일명 조립 시 점을 한 번 더 붙여 `img1..png`가 됨 (해당 버전 이전 `PptxImageExtractor` 버그) | 코드는 이미 수정됨. **이 버그가 있던 버전으로 인덱싱된 PPTX 문서**는 `data/images/{docId}/`에 이미 잘못된 파일명으로 저장돼 있고, 벡터 스토어에 저장된 청크 내용에도 잘못된 경로 문자열이 그대로 박혀 있으므로 **파일만 이름 변경해서는 해결되지 않습니다** — 해당 문서를 삭제 후 재업로드하거나 `/documents`의 Sync Folder로 재인덱싱하세요 |
+| Apache POI `PictureType.extension`이 이미 `.png`처럼 점을 포함하는데, 파일명 조립 시 점을 한 번 더 붙여 `img1..png`가 됨 (해당 버전 이전 `PptxImageExtractor` 버그) | 코드는 이미 수정됨. **이 버그가 있던 버전으로 인덱싱된 PPTX 문서**는 `data/images/{docId}/`에 이미 잘못된 파일명으로 저장돼 있고, 벡터 스토어에 저장된 청크 내용에도 잘못된 경로 문자열이 그대로 박혀 있으므로 **파일만 이름 변경해서는 해결되지 않습니다** — 해당 문서를 삭제 후 재업로드하거나 `POST /api/v1/documents/sync`로 재동기화하세요 |
 | 확인 방법 | `find data/images -name "*..*"`로 이중 점 파일명이 있는지 검사 |
 
 ---
