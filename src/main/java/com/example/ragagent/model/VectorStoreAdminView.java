@@ -16,15 +16,12 @@ public record VectorStoreAdminView(
         boolean healthy,
         long totalDocs,                 // distinct documents; -1 = unknown (chroma)
         long totalChunks,
-        List<VersionCount> perVersion,  // chunk count per version
         Integer collectionCount,        // chroma only
         String vecVersion,              // sqlite-vec only (vec_version())
         Integer dimension,              // sqlite-vec only (embedding dimension)
         String operationalDbPath,       // memory.db path (nullable)
         String vectorDbPath             // vector.db path — separate file or same as operational; null when unknown
 ) {
-    public record VersionCount(String version, long chunkCount) {}
-
     public boolean isSqliteVec() { return "sqlite-vec".equals(backend); }
     public boolean isChroma()    { return "chroma".equals(backend); }
 

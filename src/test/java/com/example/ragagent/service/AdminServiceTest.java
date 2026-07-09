@@ -72,15 +72,12 @@ class AdminServiceTest {
     }
 
     @Test
-    @DisplayName("vectorStoreView(sqlite-vec): JdbcTemplate 집계로 vec_version·문서/청크 수·버전별 집계 노출")
-    @SuppressWarnings("unchecked")
+    @DisplayName("vectorStoreView(sqlite-vec): JdbcTemplate 집계로 vec_version·문서/청크 수 노출")
     void vectorStoreView_sqliteVec() {
         JdbcTemplate jdbc = mock(JdbcTemplate.class);
         when(jdbc.queryForObject("SELECT vec_version()", String.class)).thenReturn("v0.1.9");
         when(jdbc.queryForObject("SELECT COUNT(*) FROM vec_document_chunks", Long.class)).thenReturn(42L);
         when(jdbc.queryForObject("SELECT COUNT(DISTINCT doc_id) FROM vec_document_chunks", Long.class)).thenReturn(5L);
-        when(jdbc.query(anyString(), any(RowMapper.class)))
-                .thenReturn(List.of(new VectorStoreAdminView.VersionCount("latest", 42L)));
 
         AppProperties props = mock(AppProperties.class);
         when(props.vectorStoreSafe()).thenReturn(new VectorStoreConfig("sqlite-vec"));
@@ -96,10 +93,6 @@ class AdminServiceTest {
         assertThat(v.totalChunks()).isEqualTo(42L);
         assertThat(v.totalDocs()).isEqualTo(5L);
         assertThat(v.hasDocCount()).isTrue();
-        assertThat(v.perVersion()).singleElement().satisfies(pv -> {
-            assertThat(pv.version()).isEqualTo("latest");
-            assertThat(pv.chunkCount()).isEqualTo(42L);
-        });
         assertThat(v.collectionCount()).isNull();
     }
 

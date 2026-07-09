@@ -3,7 +3,6 @@ package com.example.ragagent.service;
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.model.MetaKey;
 import com.example.ragagent.model.VectorStoreAdminView;
-import com.example.ragagent.model.VectorStoreAdminView.VersionCount;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
@@ -92,13 +91,10 @@ public class AdminService {
     private VectorStoreAdminView chromaView() {
         CollectionsResult r = listCollections();
         long totalChunks = r.items().stream().mapToLong(CollectionSummary::chunkCount).sum();
-        List<VersionCount> perVersion = r.items().stream()
-                .map(c -> new VersionCount(c.version(), c.chunkCount()))
-                .toList();
         // Chroma collections don't track distinct document counts → unknown (-1).
         // Chroma stores vectors on its own server → no local vector DB file to report.
         return new VectorStoreAdminView("chroma", r.available(), -1, totalChunks,
-                perVersion, r.items().size(), null, null, operationalDbPath(), null);
+                r.items().size(), null, null, operationalDbPath(), null);
     }
 
     private VectorStoreAdminView sqliteVecView() {
@@ -112,18 +108,9 @@ public class AdminService {
         }
         long totalChunks = safeCount("SELECT COUNT(*) FROM vec_document_chunks");
         long totalDocs   = safeCount("SELECT COUNT(DISTINCT doc_id) FROM vec_document_chunks");
-        List<VersionCount> perVersion;
-        try {
-            perVersion = jdbc.query(
-                    "SELECT version, COUNT(*) AS c FROM vec_document_chunks GROUP BY version ORDER BY version",
-                    (rs, n) -> new VersionCount(rs.getString("version"), rs.getLong("c")));
-        } catch (Exception e) {
-            log.warn("버전별 청크 집계 실패: {}", e.getMessage());
-            perVersion = List.of();
-        }
         Integer dim = props.embeddingSafe().dimensions();
         return new VectorStoreAdminView("sqlite-vec", healthy, totalDocs, totalChunks,
-                perVersion, null, vecVersion, dim, operationalDbPath(), vectorDbPath());
+                null, vecVersion, dim, operationalDbPath(), vectorDbPath());
     }
 
     /** memory.db absolute path (operational DB), or null when data-dir is unavailable (e.g. unit tests). */
