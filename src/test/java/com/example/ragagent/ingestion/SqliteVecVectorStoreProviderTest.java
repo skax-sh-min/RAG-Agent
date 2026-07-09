@@ -8,9 +8,13 @@ import org.junit.jupiter.api.Test;
 import org.springframework.ai.document.Document;
 import org.mockito.ArgumentCaptor;
 import org.springframework.ai.embedding.EmbeddingModel;
+import org.springframework.jdbc.core.BatchPreparedStatementSetter;
 import org.springframework.jdbc.core.JdbcTemplate;
 
+import java.net.SocketTimeoutException;
+import java.sql.PreparedStatement;
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -131,6 +135,72 @@ class SqliteVecVectorStoreProviderTest {
                 .isInstanceOf(VectorStoreException.class)
                 .hasMessageContaining("모델 제한을 초과");
             }
+
+    @Test
+    @DisplayName("add: 대용량 문서는 여러 배치로 나눠 임베딩되고, 결과가 올바른 doc id에 매핑된다")
+    void addMapsEmbeddingsToCorrectDocIdAcrossBatches() {
+        SqliteVecVectorStoreProvider p = provider();
+        // ~20,000 chars each stays well under TokenCountBatchingStrategy's default per-document
+        // cap (8191 tokens, ~4.1-4.75 chars/token observed for repeated ASCII text), but the two
+        // combined exceed the 90%-reserved batch cap (~7371 tokens), forcing separate batches.
+        Document doc1 = Document.builder().id("d1").text("a".repeat(20_000)).metadata(Map.of()).build();
+        Document doc2 = Document.builder().id("d2").text("b".repeat(20_000)).metadata(Map.of()).build();
+
+        when(embeddingModel.embed(anyList())).thenAnswer(invocation -> {
+            List<String> texts = invocation.getArgument(0);
+            return texts.stream()
+                    .map(t -> t.startsWith("a") ? new float[]{1f} : new float[]{2f})
+                    .toList();
+        });
+
+        p.add("u", "v1", List.of(doc1, doc2));
+
+        verify(embeddingModel, atLeast(2)).embed(anyList());
+
+        ArgumentCaptor<BatchPreparedStatementSetter> captor = ArgumentCaptor.forClass(BatchPreparedStatementSetter.class);
+        verify(jdbc).batchUpdate(
+                eq("INSERT INTO vec_embeddings(spring_doc_id, version, embedding) VALUES (?, ?, ?)"),
+                captor.capture());
+        BatchPreparedStatementSetter setter = captor.getValue();
+
+        try {
+            PreparedStatement ps0 = mock(PreparedStatement.class);
+            setter.setValues(ps0, 0);
+            verify(ps0).setString(1, "d1");
+            verify(ps0).setString(3, "[1.0]");
+
+            PreparedStatement ps1 = mock(PreparedStatement.class);
+            setter.setValues(ps1, 1);
+            verify(ps1).setString(1, "d2");
+            verify(ps1).setString(3, "[2.0]");
+        } catch (java.sql.SQLException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    @Test
+    @DisplayName("add: 임베딩 배치가 read timeout에 걸리면 절반으로 나눠 재시도한다")
+    void addSplitsBatchInHalfOnTimeout() {
+        SqliteVecVectorStoreProvider p = provider();
+        Document doc1 = Document.builder().id("d1").text("hello1").metadata(Map.of()).build();
+        Document doc2 = Document.builder().id("d2").text("hello2").metadata(Map.of()).build();
+
+        when(embeddingModel.embed(anyList())).thenAnswer(invocation -> {
+            List<String> texts = invocation.getArgument(0);
+            if (texts.size() > 1) {
+                throw new RuntimeException("I/O error", new SocketTimeoutException("Read timed out"));
+            }
+            return texts.stream().map(t -> new float[]{0.5f}).toList();
+        });
+
+        p.add("u", "v1", List.of(doc1, doc2));
+
+        // 1 initial 2-item call that times out, then 2 single-item retries (halved) = 3 total.
+        verify(embeddingModel, times(3)).embed(anyList());
+        verify(jdbc, times(1)).batchUpdate(
+                eq("INSERT INTO vec_embeddings(spring_doc_id, version, embedding) VALUES (?, ?, ?)"),
+                any(BatchPreparedStatementSetter.class));
+    }
 
     @Test
     @DisplayName("deleteByDocIds(빈): DB 호출 없음")
