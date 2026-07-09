@@ -114,6 +114,31 @@ class KeywordSearchRepositoryTest {
     }
 
     @Test
+    @DisplayName("deleteBySpringDocIds — 지정한 chunk id만 제거, 같은 doc_id의 다른 행은 보존")
+    void deleteBySpringDocIds_removesOnlySpecifiedChunks() {
+        // s1/s2 share doc_id D1 (simulates old+new rows momentarily coexisting during reindex).
+        repo.indexChunks(List.of(
+                chunk("s1", "D1", "latest", 0, "구버전 키워드콘텐츠", "콘텐츠"),
+                chunk("s2", "D1", "latest", 1, "신버전 키워드콘텐츠", "콘텐츠")));
+
+        repo.deleteBySpringDocIds(List.of("s1"));
+
+        assertThat(repo.search("latest", "키워드콘텐츠", 10))
+                .extracting(Document::getId).containsExactly("s2");
+    }
+
+    @Test
+    @DisplayName("deleteBySpringDocIds(빈/널) — no-op")
+    void deleteBySpringDocIds_emptyOrNull_isNoOp() {
+        repo.indexChunks(List.of(chunk("s1", "D1", "latest", 0, "유지 콘텐츠", "kw")));
+
+        repo.deleteBySpringDocIds(List.of());
+        repo.deleteBySpringDocIds(null);
+
+        assertThat(repo.search("latest", "콘텐츠", 10)).extracting(Document::getId).containsExactly("s1");
+    }
+
+    @Test
     @DisplayName("빈/널 질의 → 빈 결과")
     void search_blankQuery_returnsEmpty() {
         repo.indexChunks(List.of(chunk("s1", "D1", "latest", 0, "내용", "kw")));

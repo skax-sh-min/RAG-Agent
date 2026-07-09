@@ -156,6 +156,44 @@ class DocumentIndexerTest {
     }
 
     @Test
+    @DisplayName("reindexFromMd — 성공 시 태그가 FTS에서 복원되어 유지된다")
+    void reindexFromMd_success_preservesTags() throws IOException {
+        Path txtFile = tmpDir.resolve("guide.txt");
+        Files.writeString(txtFile, "테스트 문서 내용입니다. 청킹과 메타 태깅을 검증합니다.");
+        DocumentInfo info = indexer.index(IndexRequest.single(txtFile, "guide.txt", "v1", "anonymous", e -> {}));
+        keywordRepo.updateDocTags(info.docId(), "faq,guide");
+
+        indexer.reindexFromMd(info.docId());
+
+        assertThat(keywordRepo.tagsByDocIds(List.of(info.docId())).get(info.docId()))
+                .containsExactlyInAnyOrder("faq", "guide");
+    }
+
+    @Test
+    @DisplayName("reindexFromMd — 벡터 저장 실패 시 기존 태그/청크가 그대로 남는다 (delete-before-write 회귀 방지)")
+    void reindexFromMd_vectorStoreAddFails_leavesExistingDataIntact() throws IOException {
+        Path txtFile = tmpDir.resolve("guide.txt");
+        Files.writeString(txtFile, "테스트 문서 내용입니다. 청킹과 메타 태깅을 검증합니다.");
+        DocumentInfo info = indexer.index(IndexRequest.single(txtFile, "guide.txt", "v1", "anonymous", e -> {}));
+        keywordRepo.updateDocTags(info.docId(), "faq,guide");
+
+        // Reset the mock so the earlier successful index() stubbing/interactions don't leak in,
+        // then make the reindex's add() call fail.
+        reset(vectorStore);
+        doThrow(new RuntimeException("embedding server down")).when(vectorStore).add(any(), any(), any());
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> indexer.reindexFromMd(info.docId()))
+                .isInstanceOf(RuntimeException.class)
+                .hasMessage("embedding server down");
+
+        // Old FTS rows (chunks + tags) must survive — the old-row delete only runs after a
+        // successful add()+indexChunks(), which never happened here.
+        assertThat(keywordRepo.tagsByDocIds(List.of(info.docId())).get(info.docId()))
+                .containsExactlyInAnyOrder("faq", "guide");
+        verify(vectorStore, never()).deleteByDocIds(any(), any(), any());
+    }
+
+    @Test
     @DisplayName("parallel index — staleDocId 있으면 구버전 삭제됨")
     void index_parallel_deletesStaleDocId() throws IOException {
         // Register a stale entry first

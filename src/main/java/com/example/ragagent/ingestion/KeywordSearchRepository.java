@@ -169,6 +169,22 @@ public class KeywordSearchRepository {
     }
 
     /**
+     * Removes specific rows by their {@code spring_doc_id} (chunk identity), not by {@code doc_id}
+     * (document identity) — needed when new and old chunk rows momentarily share the same
+     * {@code doc_id} (reindex-in-place), where a {@code doc_id}-based delete would also wipe the
+     * rows just inserted. No-op when FTS5 is unavailable.
+     */
+    public void deleteBySpringDocIds(List<String> springDocIds) {
+        if (!available || springDocIds == null || springDocIds.isEmpty()) return;
+        try {
+            String placeholders = springDocIds.stream().map(id -> "?").collect(java.util.stream.Collectors.joining(","));
+            jdbc.update("DELETE FROM chunk_fts WHERE spring_doc_id IN (" + placeholders + ")", springDocIds.toArray());
+        } catch (Exception e) {
+            log.debug("[KEYWORD] deleteBySpringDocIds failed: {}", e.getMessage());
+        }
+    }
+
+    /**
      * BM25-ranked lexical search over content + keywords, filtered by version.
      * Returns Documents carrying the same metadata keys vector results use so RRF dedup
      * (via {@code doc_id:chunk_index}) merges the two sources cleanly.

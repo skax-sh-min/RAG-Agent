@@ -240,17 +240,21 @@ public class DocumentIndexer {
         log.info("[REINDEX] 시작: docId={}, src={}", docId, mdPath.getFileName());
         long t0 = System.currentTimeMillis();
 
+        // Old chunks are captured but NOT deleted yet — write-then-delete (not delete-then-write)
+        // so a failure below (embedding/LLM call) leaves the existing document intact instead of
+        // wiping it. New chunk ids are always freshly generated, so old and new rows can briefly
+        // coexist under the same doc_id without colliding.
+        List<String> oldSpringDocIds = existing.springDocIds();
+
         String md = Files.readString(mdPath);
         List<Document> rawDocs = loaderService.loadFromMarkdown(md);
         List<Document> chunks  = chunkSplitter.splitDocuments(
             rawDocs, filename, props.chunkSize(), props.chunkOverlap(), props.minChunkSizeSafe(),
             props.embeddingSafe().maxChunkChars());
         log.debug("[REINDEX] 청크 분할: {}섹션 → {}청크", rawDocs.size(), chunks.size());
-        // Keep tags across re-index (same docId): read from FTS before the delete wipes them.
+        // Keep tags across re-index (same docId): read from FTS before the old rows are removed.
         List<String> preservedTags = restoreTags(docId);
         List<Document> tagged  = tagMetadata(chunks, docId, filename, version, docType, sha256, DocRegistry.SHARED, preservedTags);
-
-        deleteExistingVectorsOnly(DocRegistry.SHARED, docId, version);
 
         log.debug("[REINDEX] 키워드 추출 시작: {}개 청크", tagged.size());
         Semaphore gate = new Semaphore(props.indexingSafe().maxConcurrentLlmCalls());
@@ -259,6 +263,14 @@ public class DocumentIndexer {
         log.debug("[REINDEX] 벡터 스토어 저장 중: {}개 청크", enriched.size());
         vectorStore.add(DocRegistry.SHARED, version, enriched);
         keywordRepo.indexChunks(enriched);   // populate FTS keyword index
+
+        // Only now remove the old chunks — by their captured spring_doc_ids, not by doc_id (both
+        // old and new rows share the same doc_id string; a doc_id-based delete would also wipe
+        // the rows just inserted above).
+        if (!oldSpringDocIds.isEmpty()) {
+            vectorStore.deleteByDocIds(DocRegistry.SHARED, version, oldSpringDocIds);
+            keywordRepo.deleteBySpringDocIds(oldSpringDocIds);
+        }
 
         List<String> springIds = enriched.stream().map(Document::getId).toList();
         docRegistry.put(docId, DocRegistry.SHARED, new DocRegistry.DocRegistryEntry(
