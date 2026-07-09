@@ -7,6 +7,7 @@ import com.example.ragagent.model.VectorStoreAdminView;
 import com.example.ragagent.security.AppUserDetails;
 import com.example.ragagent.service.AdminService;
 import com.example.ragagent.service.AdminService.CollectionsResult;
+import com.example.ragagent.service.IndexingProgressService;
 import com.example.ragagent.service.RagService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -47,6 +48,7 @@ class AdminControllerWebMvcTest {
 
     @MockitoBean AdminService adminService;
     @MockitoBean RagService ragService;
+    @MockitoBean IndexingProgressService progressService;
     @MockitoBean AppProperties props;                 // SecurityConfig 의존
     @MockitoBean ThreadContextResolver threadContextResolver;
     @MockitoBean org.springframework.ai.chat.model.ChatModel chatModel;  // WebConfig.chatClient 의존

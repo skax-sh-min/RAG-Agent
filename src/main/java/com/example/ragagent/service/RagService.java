@@ -203,6 +203,11 @@ public class RagService {
         indexer.reindexFromMd(docId);
     }
 
+    /** Same as {@link #reindexFromMd(String)}, reporting per-stage progress via {@code onProgress}. */
+    public void reindexFromMd(String docId, Consumer<IndexingProgressEvent> onProgress) throws IOException {
+        indexer.reindexFromMd(docId, onProgress);
+    }
+
     // ── Path helpers ───────────────────────────────────────────────────────
 
     /** Shared documents directory: {dataDir}/documents */

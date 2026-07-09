@@ -221,6 +221,11 @@ public class DocumentIndexer {
      * Calls {@link DocRegistry#save()} at the end.
      */
     public void reindexFromMd(String docId) throws IOException {
+        reindexFromMd(docId, event -> {});
+    }
+
+    /** Same as {@link #reindexFromMd(String)}, reporting per-stage progress via {@code onProgress}. */
+    public void reindexFromMd(String docId, Consumer<IndexingProgressEvent> onProgress) throws IOException {
         DocRegistry.DocRegistryEntry existing = docRegistry.findByDocId(docId)
                 .orElseThrow(() -> new IllegalArgumentException("문서를 찾을 수 없습니다: " + docId));
 
@@ -246,22 +251,27 @@ public class DocumentIndexer {
         // coexist under the same doc_id without colliding.
         List<String> oldSpringDocIds = existing.springDocIds();
 
+        onProgress.accept(IndexingProgressEvent.of("loading", 0, 0, filename, "MD 파일 로드 중..."));
         String md = Files.readString(mdPath);
         List<Document> rawDocs = loaderService.loadFromMarkdown(md);
         List<Document> chunks  = chunkSplitter.splitDocuments(
             rawDocs, filename, props.chunkSize(), props.chunkOverlap(), props.minChunkSizeSafe(),
             props.embeddingSafe().maxChunkChars());
         log.debug("[REINDEX] 청크 분할: {}섹션 → {}청크", rawDocs.size(), chunks.size());
+        onProgress.accept(IndexingProgressEvent.of("chunking", 0, chunks.size(), filename,
+                chunks.size() + "개 청크로 분할 완료"));
         // Keep tags across re-index (same docId): read from FTS before the old rows are removed.
         List<String> preservedTags = restoreTags(docId);
         List<Document> tagged  = tagMetadata(chunks, docId, filename, version, docType, sha256, DocRegistry.SHARED, preservedTags);
 
         log.debug("[REINDEX] 키워드 추출 시작: {}개 청크", tagged.size());
         Semaphore gate = new Semaphore(props.indexingSafe().maxConcurrentLlmCalls());
-        List<Document> enriched = keywordExtractor.enrichParallel(tagged, gate, filename, event -> {});
+        List<Document> enriched = keywordExtractor.enrichParallel(tagged, gate, filename, onProgress);
 
         log.debug("[REINDEX] 벡터 스토어 저장 중: {}개 청크", enriched.size());
-        vectorStore.add(DocRegistry.SHARED, version, enriched);
+        vectorStore.add(DocRegistry.SHARED, version, enriched, (done, total) ->
+                onProgress.accept(IndexingProgressEvent.of("storing", done, total, filename,
+                        done + "/" + total + " 벡터 저장 완료")));
         keywordRepo.indexChunks(enriched);   // populate FTS keyword index
 
         // Only now remove the old chunks — by their captured spring_doc_ids, not by doc_id (both

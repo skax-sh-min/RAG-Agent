@@ -178,9 +178,10 @@ class DocumentIndexerTest {
         keywordRepo.updateDocTags(info.docId(), "faq,guide");
 
         // Reset the mock so the earlier successful index() stubbing/interactions don't leak in,
-        // then make the reindex's add() call fail.
+        // then make the reindex's add() call fail. reindexFromMd() uses the progress-reporting
+        // 4-arg overload (storing-stage progress), not the plain 3-arg one.
         reset(vectorStore);
-        doThrow(new RuntimeException("embedding server down")).when(vectorStore).add(any(), any(), any());
+        doThrow(new RuntimeException("embedding server down")).when(vectorStore).add(any(), any(), any(), any());
 
         org.assertj.core.api.Assertions.assertThatThrownBy(() -> indexer.reindexFromMd(info.docId()))
                 .isInstanceOf(RuntimeException.class)
