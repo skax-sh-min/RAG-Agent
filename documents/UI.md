@@ -87,7 +87,7 @@ src/main/resources/
 
 REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — 둘 다 임베딩·orphan 항목 포함(상세는 [OPERATOR_MANUAL.md](OPERATOR_MANUAL.md) 참고)
 
-### 3.4 관리자 (AdminController)
+### 3.4 벡터 스토어 관리 (AdminController)
 
 `app.auth.enabled=true`에선 로그인 필요, no-auth 모드에선 `/admin/**`에 관리자 자동 주입. **chroma·sqlite-vec 두 백엔드 모두** 동작하며, sqlite-vec에선 "collection" 식별자가 version 문자열이다.
 

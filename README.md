@@ -101,6 +101,7 @@ See [USER_MANUAL.md](USER_MANUAL.md) for usage instructions and [OPERATOR_MANUAL
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
+| `SERVER_PORT` | — | `8080` | Port the application listens on. Change only on conflict with another local service |
 | `LOCAL_LLM_URL` | — | `http://localhost:1234/v1` | LOCAL provider endpoint (also used as embedding fallback) |
 | `LOCAL_LLM_KEY` | — | `lm-studio` | LOCAL provider API key. **Optional for local endpoints** (llama-server needs none) — the LOCAL provider is kept even when blank (`no-key` is substituted) |
 | `LOCAL_LLM_MODEL` | — | `google/gemma-4-e4b` | LOCAL provider model name |

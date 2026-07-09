@@ -103,6 +103,7 @@ container system stop
 
 | 변수 | 필수 | 기본값 | 설명 |
 |------|------|--------|------|
+| `SERVER_PORT` | — | `8080` | 애플리케이션이 리스닝할 포트. 다른 로컬 서비스와 충돌할 때만 변경 |
 | `LOCAL_LLM_URL` | — | `http://localhost:1234/v1` | LOCAL provider 엔드포인트 (임베딩 폴백으로도 사용) |
 | `LOCAL_LLM_KEY` | — | `lm-studio` | LOCAL provider API 키. **로컬 엔드포인트(llama-server)는 키 불필요** — 비워도 LOCAL provider는 등록됨(`no-key` 치환) |
 | `LOCAL_LLM_MODEL` | — | `google/gemma-4-e4b` | LOCAL provider 모델명 |

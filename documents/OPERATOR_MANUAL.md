@@ -34,7 +34,7 @@ RAG Agent 시스템 배포·설정·운영 가이드입니다.
    - 6.2 [문서 버전 관리](#62-문서-버전-관리)
    - 6.3 [데이터 영속성](#63-데이터-영속성)
    - 6.4 [성능](#64-성능)
-7. [관리자 패널](#7-관리자-패널)
+7. [벡터 스토어 관리](#7-벡터-스토어-관리)
 8. [문제 해결](#8-문제-해결)
 9. [보안 설정](#9-보안-설정)
    - 9.1 [git 훅 설치](#91-git-훅-설치)
@@ -164,6 +164,7 @@ copy .env.example .env
 
 | 변수 | 필수 | 기본값 | 설명 |
 |------|------|--------|------|
+| `SERVER_PORT` | — | `8080` | 애플리케이션이 리스닝할 포트 (`server.port`). 다른 서비스와 충돌할 때만 변경 — Docker Compose 사용 시 `docker-compose.yml`의 포트 매핑(`127.0.0.1:8080:8080`)과 Caddy `reverse_proxy app:8080`도 함께 맞춰야 함 |
 | `LOCAL_LLM_URL` | — | `http://localhost:1234/v1` | `providers[0]` LOCAL 엔드포인트 기본 URL. 임베딩 설정(`EMBED_BASE_URL`)의 폴백으로도 사용됨 |
 | `LOCAL_LLM_KEY` | — | `lm-studio` | `providers[0]` API 키. **로컬 엔드포인트(llama-server 등)는 키가 불필요** — 비우거나 미설정해도 LOCAL provider는 등록됨(내부적으로 `no-key` 치환). 로컬 LLM이 아예 없으면 미사용 시 첫 호출 1회 실패 후 Circuit Breaker로 우회되며, 완전히 제외하려면 `application.properties`의 `providers[0]`를 주석 처리하거나 `LLM_ROUTING_MODE=QUALITY_FIRST`로 후순위 배치 |
 | `LOCAL_LLM_MODEL` | — | `google/gemma-4-e4b` | `providers[0]` 모델 식별자. 사용 중인 로컬 모델명으로 변경 |
@@ -372,9 +373,10 @@ LLM_ROUTING_MODE=QUALITY_FIRST
 
 #### 서버 및 기타
 
+> `server.port`는 `SERVER_PORT` 환경변수로 주입 가능하므로 [§3.2 API 키 / 연결 정보](#32-환경변수-전체-목록)를 참조하세요. 아래 표는 환경변수로 주입할 수 없어 `application.properties` 직접 편집이 필요한 항목만 다룹니다.
+
 | 속성 | 기본값 | 변경 가능 여부 | 설명 |
 |------|--------|--------------|------|
-| `server.port` | `8080` | ✅ | 애플리케이션 포트 |
 | `spring.threads.virtual.enabled` | `true` | ⚠️ 변경 비권장 | Java 21 Virtual Thread 활성화. LLM I/O 동시성에 핵심적 |
 | `spring.datasource.hikari.maximum-pool-size` | `1` | ❌ 변경 금지 | SQLite는 동시 쓰기 불가 — 반드시 1 유지 |
 | `spring.autoconfigure.exclude` | Chroma 자동구성 제외 | ❌ 변경 금지 | `VectorStoreRegistry`가 직접 Chroma 빈을 관리. 제거 시 충돌 |
@@ -853,7 +855,7 @@ Caddy는 Docker 컨테이너이자 Let's Encrypt(인터넷)에 의존하므로 �
 - [ ] 외부(인터넷) 소켓 시도 없음 — `LLM_ROUTING_MODE=LOCAL_ONLY` + 외부 프로바이더 키 전부 미설정
 - [ ] `http://<host>:8080/api/v1/health` → `{"status":"ok"}`
 
-> **데이터 이전**: 기존 Chroma 데이터를 sqlite-vec로 직접 복사하지 않습니다. 문서 원본이 `data/documents/`에 보존되므로 **전체 재인덱싱**(관리자 패널 또는 디렉터리 재동기화)으로 이전합니다.
+> **데이터 이전**: 기존 Chroma 데이터를 sqlite-vec로 직접 복사하지 않습니다. 문서 원본이 `data/documents/`에 보존되므로 **전체 재인덱싱**(벡터 스토어 관리 페이지 또는 디렉터리 재동기화)으로 이전합니다.
 
 ### 4.6 태그 기반 검색 적용 전 수동 초기화 (프리릴리즈)
 
@@ -1315,7 +1317,7 @@ curl -X POST http://localhost:8080/api/v1/chat \
 | 문서 원본 | `DATA_DIR/documents/` | Sync 대상 |
 | 추출된 이미지 | `DATA_DIR/images/{docId}/` | 문서 삭제 시 함께 삭제 |
 | DOCX 변환 MD (원본) | `DATA_DIR/converted/{docId}.md` | DOCX 인덱싱 시 자동 생성; 문서 삭제 시 함께 삭제 |
-| DOCX 변환 MD (교정본) | `DATA_DIR/converted/{docId}_corrected.md` | LLM 포맷 교정 후 저장; 실제 인덱싱 소스; 수동 편집 후 Admin ↺ 재인덱싱 가능 |
+| DOCX 변환 MD (교정본) | `DATA_DIR/converted/{docId}_corrected.md` | LLM 포맷 교정 후 저장; 실제 인덱싱 소스; 수동 편집 후 벡터 스토어 관리 페이지에서 ↺ 재인덱싱 가능 |
 | 인덱스 레지스트리 | `DATA_DIR/memory.db` (SQLite `doc_registry` 테이블) | userId·SHA-256 기반 변경 감지 |
 | 벡터 임베딩 | Chroma 서버 | 로컬: `data/chroma/`, Docker Compose: `chroma_data` 볼륨 |
 | 대화 이력 + LLM 사용량 | `DATA_DIR/memory.db` (SQLite) | WAL 모드; 메시지 메타데이터(토큰·시간·프로바이더) 포함 |
@@ -1338,9 +1340,9 @@ CPU/메모리 제약이 있는 환경에서는 `INDEXING_MAX_FILES`와 `INDEXING
 
 ---
 
-## 7. 관리자 패널
+## 7. 벡터 스토어 관리
 
-`/admin` 페이지는 인증 모드(`app.auth.enabled=true`)에서는 로그인된 사용자만 접근 가능합니다.  
+`/admin` 페이지(네비게이션 라벨: **벡터 스토어 관리**)는 인증 모드(`app.auth.enabled=true`)에서는 로그인된 사용자만 접근 가능합니다.  
 no-auth 모드(`false`)에서는 `/admin/**` 경로에 자동으로 관리자 계정이 주입됩니다.
 
 ### 7.1 주요 기능
@@ -1360,7 +1362,7 @@ no-auth 모드(`false`)에서는 `/admin/**` 경로에 자동으로 관리자 �
 ### 7.2 MD 재인덱싱 흐름
 
 1. `data/converted/{docId}_corrected.md` 파일을 텍스트 에디터로 직접 수정
-2. Admin 패널 문서 레지스트리에서 해당 문서의 ↺ 버튼 클릭
+2. 벡터 스토어 관리 페이지 문서 레지스트리에서 해당 문서의 ↺ 버튼 클릭
 3. 기존 벡터 청크만 삭제 — 활성 백엔드(chroma 또는 sqlite-vec) (MD 파일·이미지 보존)
 4. 수정된 MD 기준으로 청크 분할 → 키워드 추출 → 활성 백엔드에 재등록
 
@@ -1730,7 +1732,7 @@ app.auth.enabled=false
 - [ ] Chroma 볼륨 영속성 확인 (재시작 후 문서 목록 유지)
 - [ ] `/admin` 접속 → 컬렉션 목록·청크 테이블 정상 표시 확인
 - [ ] DOCX 업로드 후 `data/converted/{docId}_corrected.md` 생성 확인
-- [ ] Admin ↺ 버튼으로 MD 재인덱싱 성공 확인
+- [ ] 벡터 스토어 관리 페이지 ↺ 버튼으로 MD 재인덱싱 성공 확인
 - [ ] (운영 환경) `/admin` 경로에 대한 네트워크 접근 제한 적용 여부 확인
 
 **태그 기반 검색 적용 시 (프리릴리즈 정책)**:
