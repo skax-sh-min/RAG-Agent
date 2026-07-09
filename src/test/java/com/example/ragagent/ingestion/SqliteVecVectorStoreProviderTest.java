@@ -203,6 +203,33 @@ class SqliteVecVectorStoreProviderTest {
     }
 
     @Test
+    @DisplayName("add(onProgress): 배치가 나뉠 때마다 실제 진행률을 보고한다")
+    void addReportsIncrementalProgressAcrossBatches() {
+        SqliteVecVectorStoreProvider p = provider();
+        // Same sizing as addMapsEmbeddingsToCorrectDocIdAcrossBatches — forces a 2-batch split.
+        Document doc1 = Document.builder().id("d1").text("a".repeat(20_000)).metadata(Map.of()).build();
+        Document doc2 = Document.builder().id("d2").text("b".repeat(20_000)).metadata(Map.of()).build();
+
+        when(embeddingModel.embed(anyList())).thenAnswer(invocation -> {
+            List<String> texts = invocation.getArgument(0);
+            return texts.stream().map(t -> new float[]{1f}).toList();
+        });
+
+        List<int[]> calls = new java.util.ArrayList<>();
+        p.add("u", "v1", List.of(doc1, doc2), (done, total) -> calls.add(new int[]{done, total}));
+
+        assertThat(calls.get(0)).containsExactly(0, 2);           // reported before any batch starts
+        assertThat(calls.get(calls.size() - 1)).containsExactly(2, 2); // reaches 100% at the end
+        assertThat(calls.size()).isGreaterThanOrEqualTo(3);        // 0/2 + at least 2 incremental steps
+        // never reports done > total, and done is non-decreasing
+        int prevDone = -1;
+        for (int[] call : calls) {
+            assertThat(call[0]).isLessThanOrEqualTo(call[1]).isGreaterThanOrEqualTo(prevDone);
+            prevDone = call[0];
+        }
+    }
+
+    @Test
     @DisplayName("deleteByDocIds(빈): DB 호출 없음")
     void deleteEmpty() {
         provider().deleteByDocIds("u", "v1", List.of());

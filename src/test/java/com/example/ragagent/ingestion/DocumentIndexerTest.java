@@ -124,7 +124,7 @@ class DocumentIndexerTest {
         assertThat(docRegistry.findByDocId(info.docId(), DocRegistry.SHARED)).isPresent();
 
         // Vector store received the enriched chunks
-        verify(vectorStore, atLeastOnce()).add(eq(DocRegistry.SHARED), eq("v1"), any());
+        verify(vectorStore, atLeastOnce()).add(eq(DocRegistry.SHARED), eq("v1"), any(), any());
     }
 
     @Test
@@ -139,7 +139,7 @@ class DocumentIndexerTest {
         Path md = tmpDir.resolve("converted").resolve(info.docId() + ".md");
         assertThat(md).exists();
         assertThat(Files.readString(md)).contains("구조화 대상 내용");
-        verify(vectorStore, atLeastOnce()).add(eq(DocRegistry.SHARED), eq("v1"), any());
+        verify(vectorStore, atLeastOnce()).add(eq(DocRegistry.SHARED), eq("v1"), any(), any());
     }
 
     @Test

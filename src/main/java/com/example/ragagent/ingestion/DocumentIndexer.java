@@ -194,9 +194,9 @@ public class DocumentIndexer {
         List<Document> enriched = keywordExtractor.enrichParallel(tagged, gate, req.filename(), req.onProgress());
 
         log.debug("[INDEX] {} 벡터 스토어 저장 중 ({}개 청크)...", req.filename(), enriched.size());
-        req.onProgress().accept(IndexingProgressEvent.of("storing", enriched.size(), enriched.size(),
-                req.filename(), "벡터 DB 저장 중..."));
-        vectorStore.add(DocRegistry.SHARED, req.version(), enriched);
+        vectorStore.add(DocRegistry.SHARED, req.version(), enriched, (done, total) ->
+                req.onProgress().accept(IndexingProgressEvent.of("storing", done, total,
+                        req.filename(), "벡터 DB 저장 중...")));
         keywordRepo.indexChunks(enriched);   // populate FTS keyword index
 
         List<String> docIds = enriched.stream().map(Document::getId).toList();

@@ -26,6 +26,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.function.BiConsumer;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -107,6 +108,12 @@ public class SqliteVecVectorStoreProvider implements VectorStoreProvider {
 
     @Override
     public void add(String userId, String version, List<Document> docs) {
+        add(userId, version, docs, (done, total) -> { });
+    }
+
+    @Override
+    public void add(String userId, String version, List<Document> docs,
+                     BiConsumer<Integer, Integer> onProgress) {
         if (docs == null || docs.isEmpty()) return;
 
         // vec0 does not support INSERT OR REPLACE → delete first so re-indexing is idempotent.
@@ -115,7 +122,11 @@ public class SqliteVecVectorStoreProvider implements VectorStoreProvider {
         // Embed per token-bounded sub-batch (not all of docs in one call) so a large document's
         // chunk count can't turn into a single oversized HTTP request that times out against a
         // slow local embedding server. Keyed by doc id since batchingStrategy.batch() does not
-        // guarantee it preserves docs' original order.
+        // guarantee it preserves docs' original order. Each completed sub-batch reports real
+        // incremental progress instead of the caller only seeing a single 0%→100% jump.
+        int total = docs.size();
+        int done = 0;
+        onProgress.accept(0, total);
         Map<String, float[]> embeddingByDocId = new HashMap<>(docs.size() * 2);
         for (List<Document> batch : batchingStrategy.batch(docs)) {
             List<String> texts = batch.stream().map(d -> d.getText() == null ? "" : d.getText()).toList();
@@ -123,6 +134,8 @@ public class SqliteVecVectorStoreProvider implements VectorStoreProvider {
             for (int i = 0; i < batch.size(); i++) {
                 embeddingByDocId.put(batch.get(i).getId(), batchEmbeddings.get(i));
             }
+            done += batch.size();
+            onProgress.accept(done, total);
         }
 
         jdbc.batchUpdate(INSERT_EMBEDDING, new BatchPreparedStatementSetter() {

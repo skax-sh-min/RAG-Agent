@@ -148,4 +148,25 @@ class ChromaVectorStoreProviderTest {
         assertThat(result.get(0)).isEmpty();
         assertThat(result.get(1)).isEmpty();
     }
+
+    // ── add(onProgress) default method ───────────────────────────────────
+
+    @Test
+    @DisplayName("add(onProgress): Chroma는 배치 내부 가시성이 없어 0→total 단일 점프만 보고한다")
+    void add_withProgress_reportsSingleJump() {
+        VectorStoreRegistry registry = mock(VectorStoreRegistry.class);
+        VectorStore store = mock(VectorStore.class);
+        when(registry.getStore(any(), any())).thenReturn(store);
+
+        Document doc = Document.builder().id("d1").text("hello").metadata(Map.of()).build();
+        List<int[]> calls = new java.util.ArrayList<>();
+
+        provider(registry, mock(ChromaApi.class), mock(EmbeddingModel.class), 0.0)
+                .add("owner", "latest", List.of(doc), (done, total) -> calls.add(new int[]{done, total}));
+
+        verify(store).add(List.of(doc));
+        assertThat(calls).hasSize(2);
+        assertThat(calls.get(0)).containsExactly(0, 1);
+        assertThat(calls.get(1)).containsExactly(1, 1);
+    }
 }
