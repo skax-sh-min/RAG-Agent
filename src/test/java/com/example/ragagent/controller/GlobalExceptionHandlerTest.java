@@ -1,5 +1,6 @@
 package com.example.ragagent.controller;
 
+import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.exception.*;
 import com.example.ragagent.web.TraceIdFilter;
 import org.junit.jupiter.api.BeforeEach;
@@ -10,6 +11,8 @@ import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
@@ -59,8 +62,10 @@ class GlobalExceptionHandlerTest {
 
     @BeforeEach
     void setUp() {
+        AppProperties props = mock(AppProperties.class);
+        when(props.sseTimeoutMs()).thenReturn(3_600_000L);
         mvc = MockMvcBuilders.standaloneSetup(new StubController())
-                .setControllerAdvice(new GlobalExceptionHandler())
+                .setControllerAdvice(new GlobalExceptionHandler(props))
                 .addFilters(new TraceIdFilter())
                 .build();
     }

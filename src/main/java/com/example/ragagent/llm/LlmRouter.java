@@ -27,6 +27,7 @@ public class LlmRouter {
     private final CircuitBreaker circuitBreaker;
     private final RoutingMode defaultMode;
     private final double progressiveThreshold;
+    private final int readTimeoutSeconds;
 
     /**
      * Providers known (for the life of this process) to lack image-input support
@@ -42,11 +43,18 @@ public class LlmRouter {
     public LlmRouter(List<LlmProvider> providers, LlmUsageRepository usageRepo,
                      CircuitBreaker circuitBreaker, RoutingMode defaultMode,
                      double progressiveThreshold) {
+        this(providers, usageRepo, circuitBreaker, defaultMode, progressiveThreshold, 180);
+    }
+
+    public LlmRouter(List<LlmProvider> providers, LlmUsageRepository usageRepo,
+                     CircuitBreaker circuitBreaker, RoutingMode defaultMode,
+                     double progressiveThreshold, int readTimeoutSeconds) {
         this.providers = providers;
         this.usageRepo = usageRepo;
         this.circuitBreaker = circuitBreaker;
         this.defaultMode = defaultMode;
         this.progressiveThreshold = progressiveThreshold;
+        this.readTimeoutSeconds = readTimeoutSeconds;
     }
 
     /** 라우팅 모드에 맞는 첫 번째 사용 가능 LlmProvider 반환 (stream 플래그 포함). */
@@ -254,8 +262,8 @@ public class LlmRouter {
         } catch (Exception e) {
             if (isTimeoutLike(e)) {
                 // Client-side interrupt — provider is healthy; block would cascade into "All providers exhausted"
-                log.warn("[TIMEOUT:LLM_HTTP] provider={} client-timeout, NOT blocking circuit breaker",
-                        provider.name());
+                log.warn("[TIMEOUT:LLM_HTTP] provider={} client-timeout (app.llm.read-timeout-seconds={}s), "
+                        + "NOT blocking circuit breaker", provider.name(), readTimeoutSeconds);
                 throw e;
             }
             if (isVisionUnsupported(e)) {
