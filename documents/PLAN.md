@@ -39,12 +39,14 @@
 | 4 | 운영 준비 잔여 — SQLite 백업 자동화(Litestream/cron), Caddy 인증서 만료 모니터링 | 미착수 |
 | 5 | §9.4 — CADDY 하위호환 별칭 | 선택, 낮은 우선순위 |
 | 6 | Phase 2 남은 실기기 검증 2건 (키보드 하단 고정 · 홈 화면 standalone) | 좌우 스크롤·다크모드는 자동 검증 완료, 나머지는 실기기 필요 |
+| 7 | **§6.19 Direct 메시지 전용 LLM Temperature 분리** | 미착수 (2026-07-09 요청, 낮은 우선순위/후속). §6.18 설정 페이지 선행 필요 |
 
 > **Phase 7-A 완료 (2026-07-08)**: §10.2 가중 RRF + §10.3 쿼리 임베딩 캐시. 상세는 아래 §10.2·§10.3 본문 참조.
 > **Phase 7-B 완료 (2026-07-09)**: §10.1 Contextual Retrieval + §10.1-보완 임베딩 입력 정규화. 상세는 아래 §10.1 본문 참조. 재인덱싱은 운영 단계에서 별도 수행.
 > **Phase 7-C 완료 (2026-07-09)**: §10.4 한국어 FTS 트라이그램 토크나이저. 상세는 아래 §10.4 본문 참조. Phase 7(§10.1~10.4) 전체 완료 — 하이브리드 기본 활성화(`app.search-hybrid-enabled=true`) 전환 여부는 별도 후속 판단으로 남김.
 > **§6.16.1 완료 (2026-07-08)**: 채팅 스트리밍 중지 + 업로드/동기화 취소 버튼. 상세는 아래 §6.16.1 본문 참조.
 > **§6.17·§6.18 추가 (2026-07-09 요청, 중간 순위)**: 민감 페이지(문서 관리·Admin) 로그인 필수화 + 역할 기반 화면 분기(§6.17), LLM/RAG 설정 조회·부분 수정 페이지(§6.18).
+> **§6.19 추가 (2026-07-09 요청, 낮은 우선순위)**: Direct(meta) 응답 전용 temperature를 RAG 응답과 분리해 0.0~0.2(기본 0.1) 범위로 화면에서 조정 가능하게. 조사 중 temperature가 현재 어디에서도 실제로 설정 가능하지 않다는(하드코딩) 선행 이슈를 발견 — 상세는 §6.19 본문 참조.
 > **2026-07-09 재우선순위화**: 검색 정확도(Phase 7-B·7-C)를 최상단으로 승격 — 코드 변경 범위가 이미 확정돼 있고(§10.1·§10.4 본문) 체감 ROI가 가장 크다. §6.17/§6.18 순서를 뒤집었다 — §6.18 본문("수정은 관리자 전용, §6.17 역할 분기와 연동")이 §6.17의 admin role 개념을 전제하므로 개발 순서상 §6.17이 선행돼야 한다. §6.13(스토리지 쿼터)은 설정 페이지(§6.18) 이후로 순위를 낮췄다 — 즉시 필요한 안전장치라기보단 운영 편의 항목이라는 재판단. Phase 7-B·7-C 모두 같은 날 구현 완료.
 
 **🟣 후속 — 멀티유저(`auth.enabled=true`) 활성화 시에만 착수**
@@ -444,6 +446,26 @@ Assistant 응답에 👍/👎 토글 추가, `conversation_turns.feedback`(런�
 - 재기동 필요 항목은 수정 UI가 막히고 사유가 표시된다.
 - 오버라이드가 재기동 후에도 유지되고, 삭제 시 프로퍼티 기본값으로 정확히 복귀한다(회귀 0).
 - 설정 변경이 감사 로그에 남는다.
+
+---
+
+### 6.19 Direct 메시지 전용 LLM Temperature 분리 🔵 미착수 — 낮은 우선순위/후속 (2026-07-09 요청)
+
+**현재 상태 (코드 확인)**: temperature는 겉보기엔 `LLM_TEMPERATURE` 환경변수(`application.properties`의 `spring.ai.openai.chat.options.temperature=${LLM_TEMPERATURE:0.0}`, README.md/OPERATOR_MANUAL.md가 "0.0~2.0 조정 가능"이라 문서화)로 조정 가능해 보이지만, **실제로는 어디서도 이 값을 읽지 않는다** — `LlmRouter`가 실제로 선택하는 모든 provider `ChatModel`은 `LlmConfig.llmRouter()`(`config/LlmConfig.java:66-74`)가 기동 시점에 직접 생성하며, 그 `OpenAiChatOptions`에 `.temperature(0.0)`이 **하드코딩**되어 있다(CLAUDE.md의 "모든 LLM 프로바이더는 LlmRouter를 거쳐야 함" 원칙과 일치하는 구조지만, 결과적으로 `spring.ai.openai.*` 프로퍼티로 만들어지는 Spring AI 오토컨피규레이션 빈은 LlmRouter 경로에서 전혀 쓰이지 않아 `LLM_TEMPERATURE`가 죽은 설정이 됐다). `DirectAnswerService`(meta 질문 직접 응답, `service/DirectAnswerService.java:84-85` `buildPrompt()`)와 `AnswerService`(RAG 답변) 모두 이 하드코딩된 0.0을 그대로 물려받아 애초에 구분 자체가 없다.
+
+**요청 배경**: meta 질문(인사·잡담 등, RAG 미사용 직접 응답)은 문서 근거가 없는 자유 응답이라 RAG 답변보다 약간의 다양성이 자연스러울 수 있어, Direct 경로만 별도로 0.0~0.2(기본 0.1) 범위에서 화면 조정 가능하게 하고 싶다는 요청.
+
+**개선안**:
+1. **선결 — temperature를 실제로 살아있는 설정으로 전환**: `LlmConfig.java:70`의 하드코딩된 `.temperature(0.0)`을 제거하고(provider별 `defaultOptions`는 유지하되 특정 고정값을 강제하지 않음), 실제 온도는 **호출 시점에 `Prompt`의 `ChatOptions`로 오버라이드**한다 — Spring AI는 `Prompt(messages, chatOptions)`에 실린 옵션이 모델 `defaultOptions`보다 우선 적용되므로, 같은 라우터/프로바이더 빈을 공유하면서도 호출부(Direct vs RAG)마다 다른 온도를 지정할 수 있다. §6.18의 "temperature/max-tokens 핫 수정 가능" 전제도 이 전환이 선행돼야 실제로 동작한다(지금은 빈 생성 시점에 고정이라 핫 리로드 자체가 물리적으로 불가능).
+2. **신규 프로퍼티**: `app.llm.direct-temperature`(`AppProperties.LlmConfig`에 필드 추가, `DIRECT_LLM_TEMPERATURE` 환경변수) — 기본 `0.1`, `llmSafe()`에서 `[0.0, 0.2]`로 clamp. RAG 경로(`AnswerService`)는 선결 작업으로 "살아있게" 고친 뒤에도 기존 `LLM_TEMPERATURE`(기본 0.0)를 그대로 프로바이더 기본 온도로 계속 사용 — 이번 항목에서 RAG 쪽 값 자체는 새로 건드리지 않는다.
+3. **적용 지점**: `DirectAnswerService`의 블로킹 경로(`buildPrompt()`가 만드는 `Prompt`)와 스트리밍 경로(`ChatClient.builder(provider.chatModel())...`) 양쪽에서 `OpenAiChatOptions.builder().temperature(directTemperature).build()`를 실어 보낸다.
+4. **UI 노출**: 별도 화면을 새로 만들지 않고 §6.18 설정 페이지(신규 `/settings`)의 "핫 수정 가능" LLM 그룹에 슬라이더/숫자 입력(0.0~0.2, step 0.05, 기본 0.1)으로 포함한다 — §6.18이 이미 temperature를 핫 수정 대상으로 지목해뒀으므로 §6.18 구현 시 함께 추가하면 설정 저장·권한·감사 배관(§6.18 3)/4))을 중복 구축하지 않아도 된다. **§6.18 선행이 이 항목의 전제.**
+
+**완료 기준**:
+- Direct(meta) 응답과 RAG 응답이 서로 다른 temperature로 호출된다(`LoggingChatModel`의 curl 재현 로그로 확인 가능).
+- `app.llm.direct-temperature`를 0.0~0.2 범위 밖 값으로 설정해도 clamp되어 기동/응답이 깨지지 않는다.
+- §6.18 설정 페이지에서 값을 조정하면 재기동 없이 다음 Direct 호출부터 반영된다.
+- "선결" 작업(온도 하드코딩 제거) 이후 `LLM_TEMPERATURE`가 RAG 경로에 처음으로 실제 적용되기 시작한다는 점을 동작 변경으로 명시 — 값 자체(기본 0.0)는 바뀌지 않으므로 즉시 체감 회귀는 없지만, 운영자가 과거에 설정해 둔 `LLM_TEMPERATURE`가 있다면 이번에 처음으로 실제 적용된다는 점을 릴리스 노트에 남긴다.
 
 ---
 
