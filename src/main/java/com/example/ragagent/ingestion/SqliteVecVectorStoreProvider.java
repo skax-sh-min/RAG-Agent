@@ -168,6 +168,27 @@ public class SqliteVecVectorStoreProvider implements VectorStoreProvider {
         deleteBySpringDocIds(springDocIds);
     }
 
+    @Override
+    public void updateTags(String userId, String version, List<String> springDocIds, String tagsCsv) {
+        if (springDocIds == null || springDocIds.isEmpty()) return;
+        String placeholders = springDocIds.stream().map(id -> "?").collect(Collectors.joining(","));
+        List<Object[]> rows = jdbc.query(
+                "SELECT spring_doc_id, metadata FROM vec_document_chunks WHERE spring_doc_id IN (" + placeholders + ")",
+                (rs, i) -> new Object[]{rs.getString("spring_doc_id"), rs.getString("metadata")},
+                springDocIds.toArray());
+        if (rows.isEmpty()) return;
+
+        List<Object[]> updates = new ArrayList<>(rows.size());
+        for (Object[] row : rows) {
+            String springDocId = (String) row[0];
+            Map<String, Object> meta = parseMetadata((String) row[1]);
+            if (tagsCsv == null || tagsCsv.isEmpty()) meta.remove(MetaKey.TAGS);
+            else meta.put(MetaKey.TAGS, tagsCsv);
+            updates.add(new Object[]{toJson(meta), springDocId});
+        }
+        jdbc.batchUpdate("UPDATE vec_document_chunks SET metadata = ? WHERE spring_doc_id = ?", updates);
+    }
+
     // ── helpers ───────────────────────────────────────────────────────────────
 
     private List<Document> searchByEmbedding(float[] embedding, String version, int topK) {

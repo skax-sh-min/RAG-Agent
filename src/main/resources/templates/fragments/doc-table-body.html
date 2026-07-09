@@ -17,11 +17,7 @@
             </div>
         </td>
         <td th:text="${doc.version}">버전</td>
-        <td>
-            <span th:if="${doc.tags == null or #lists.isEmpty(doc.tags)}" class="text-muted">-</span>
-            <span th:each="tag : ${doc.tags}" class="badge text-bg-light border me-1 mb-1"
-                  th:text="${tag}">tag</span>
-        </td>
+        <td th:replace="~{::tagsView}"></td>
         <td th:text="${doc.chunks}">청크</td>
         <td th:text="${doc.indexedAt != null and #strings.length(doc.indexedAt) >= 16
             ? #strings.replace(#strings.substring(doc.indexedAt, 0, 16), 'T', ' ')
@@ -35,3 +31,31 @@
         </td>
     </tr>
 </tbody>
+
+<!-- Tags cell — view/edit toggle, HTMX round-trip. Standalone-selectable (controller renders
+     these directly with a `doc` model attribute) and also th:replace'd inline above; Thymeleaf
+     fragment inclusion without explicit params inherits the calling context either way. -->
+<td th:fragment="tagsView">
+    <span th:if="${doc.tags == null or #lists.isEmpty(doc.tags)}" class="text-muted">-</span>
+    <span th:each="tag : ${doc.tags}" class="badge text-bg-light border me-1 mb-1"
+          th:text="${tag}">tag</span>
+    <button type="button" class="btn btn-sm btn-link p-0 ms-1 text-muted"
+            th:attr="hx-get=@{/ui/documents/{id}/tags/edit(id=${doc.docId})}"
+            hx-target="closest td" hx-swap="outerHTML"
+            title="태그 편집" aria-label="태그 편집">
+        <i class="bi bi-pencil-square"></i>
+    </button>
+</td>
+
+<td th:fragment="tagsEdit">
+    <form class="d-flex gap-1 align-items-center"
+          th:attr="hx-patch=@{/ui/documents/{id}/tags(id=${doc.docId})}"
+          hx-target="closest td" hx-swap="outerHTML">
+        <input type="text" name="tags" class="form-control form-control-sm"
+               th:value="${tagsCsv}" placeholder="태그(쉼표 구분)" style="min-width:140px;">
+        <button type="submit" class="btn btn-sm btn-primary py-0 px-2">저장</button>
+        <button type="button" class="btn btn-sm btn-outline-secondary py-0 px-2"
+                th:attr="hx-get=@{/ui/documents/{id}/tags/view(id=${doc.docId})}"
+                hx-target="closest td" hx-swap="outerHTML">취소</button>
+    </form>
+</td>

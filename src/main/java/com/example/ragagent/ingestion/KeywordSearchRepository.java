@@ -148,6 +148,16 @@ public class KeywordSearchRepository {
         }
     }
 
+    /** Overwrites {@code doc_tags} for every chunk row of a document. No-op when FTS5 is unavailable. */
+    public void updateDocTags(String docId, String tagsCsv) {
+        if (!available || docId == null) return;
+        try {
+            jdbc.update("UPDATE chunk_fts SET doc_tags = ? WHERE doc_id = ?", tagsCsv, docId);
+        } catch (Exception e) {
+            log.debug("[KEYWORD] updateDocTags failed docId={}: {}", docId, e.getMessage());
+        }
+    }
+
     /** Removes all FTS rows for a document. No-op when FTS5 is unavailable. */
     public void deleteByDocId(String docId) {
         if (!available || docId == null) return;

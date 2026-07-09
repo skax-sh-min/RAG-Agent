@@ -109,6 +109,50 @@ public class ChromaVectorStoreProvider implements VectorStoreProvider {
         registry.getStore(userId, version).delete(springDocIds);
     }
 
+    /**
+     * Fetches the existing embeddings for the given chunk ids in one round-trip, patches the
+     * {@code tags} metadata key in-place, and re-upserts in a single batched call — the vector
+     * itself is round-tripped unchanged (fetch → same value → upsert), never recomputed.
+     */
+    @Override
+    public void updateTags(String userId, String version, List<String> springDocIds, String tagsCsv) {
+        if (springDocIds == null || springDocIds.isEmpty()) return;
+        String collectionId = resolveCollectionId(userId, version);
+        if (collectionId == null) return;
+        String collectionName = registry.collectionName(userId, version);
+
+        ChromaApi.GetEmbeddingResponse existing;
+        try {
+            existing = chromaApi.getEmbeddings(TENANT, DATABASE, collectionId,
+                    new ChromaApi.GetEmbeddingsRequest(springDocIds, null, null, null,
+                            List.of(ChromaApi.QueryRequest.Include.EMBEDDINGS,
+                                    ChromaApi.QueryRequest.Include.DOCUMENTS,
+                                    ChromaApi.QueryRequest.Include.METADATAS)));
+        } catch (Exception e) {
+            log.warn("[updateTags] fetch failed: {}", e.getMessage());
+            return;
+        }
+        if (existing == null || existing.ids() == null || existing.ids().isEmpty()) return;
+
+        List<Map<String, Object>> newMeta = new ArrayList<>(existing.ids().size());
+        List<Map<String, String>> metaList = existing.metadata();
+        for (int i = 0; i < existing.ids().size(); i++) {
+            Map<String, Object> merged = (metaList != null && i < metaList.size() && metaList.get(i) != null)
+                    ? new HashMap<>(metaList.get(i)) : new HashMap<>();
+            if (tagsCsv == null || tagsCsv.isEmpty()) merged.remove(MetaKey.TAGS);
+            else merged.put(MetaKey.TAGS, tagsCsv);
+            newMeta.add(merged);
+        }
+
+        try {
+            chromaApi.upsertEmbeddings(TENANT, DATABASE, collectionName,
+                    new ChromaApi.AddEmbeddingsRequest(existing.ids(), existing.embeddings(), newMeta,
+                            existing.documents()));
+        } catch (Exception e) {
+            log.warn("[updateTags] upsert failed: {}", e.getMessage());
+        }
+    }
+
     // ── helpers ──────────────────────────────────────────────────────────
 
     /** Resolves (and caches) the Chroma collection id. null when the collection does not exist yet. */

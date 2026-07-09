@@ -9,6 +9,7 @@ import com.example.ragagent.ingestion.VectorStoreFacade;
 import com.example.ragagent.model.DocumentInfo;
 import com.example.ragagent.model.IndexingProgressEvent;
 import com.example.ragagent.model.SyncResult;
+import com.example.ragagent.model.TagUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.document.Document;
@@ -126,6 +127,35 @@ public class RagService {
                 })
                 .sorted(Comparator.comparing(DocumentInfo::indexedAt).reversed())
                 .toList();
+    }
+
+    /** Single-document lookup (current tags included) — powers the tag-edit UI. Empty if not found. */
+    public Optional<DocumentInfo> findDocument(String userId, String docId) {
+        return docRegistry.findByDocId(docId, DocRegistry.SHARED).map(r -> {
+            List<String> tags = keywordRepo.tagsByDocIds(List.of(docId)).getOrDefault(docId, List.of());
+            return new DocumentInfo(docId, DocRegistry.filenameFromDocId(docId), r.version(),
+                    r.chunks(), r.indexedAt(), r.sha256(), tags, r.errors());
+        });
+    }
+
+    /**
+     * Replaces a document's search-scope tags — metadata-only, no re-embedding (tags never
+     * influence the vector). Updates both the vector store (search filter source) and
+     * {@code chunk_fts.doc_tags} (suggestion UI + reindex-tag-restore source) so the two stay
+     * consistent. Throws {@link IllegalArgumentException} on tag policy violation ({@link
+     * TagUtils#normalize}) or when {@code docId} does not exist.
+     */
+    public DocumentInfo updateDocumentTags(String userId, String docId, List<String> rawTags) {
+        List<String> tags = TagUtils.normalize(rawTags);
+        DocRegistry.DocRegistryEntry entry = docRegistry.findByDocId(docId, DocRegistry.SHARED)
+                .orElseThrow(() -> new IllegalArgumentException("문서를 찾을 수 없습니다: " + docId));
+
+        String tagsCsv = TagUtils.toMetaValue(tags);
+        vectorStore.updateTags(DocRegistry.SHARED, entry.version(), entry.springDocIds(), tagsCsv);
+        keywordRepo.updateDocTags(docId, tagsCsv);
+
+        return new DocumentInfo(docId, DocRegistry.filenameFromDocId(docId), entry.version(),
+                entry.chunks(), entry.indexedAt(), entry.sha256(), tags, entry.errors());
     }
 
     public List<Document> search(String userId, String query, String version, int topK) {

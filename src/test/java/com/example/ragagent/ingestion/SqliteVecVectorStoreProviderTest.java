@@ -230,6 +230,46 @@ class SqliteVecVectorStoreProviderTest {
     }
 
     @Test
+    @DisplayName("updateTags: 기존 메타데이터를 보존하며 tags 필드만 갱신한다")
+    void updateTagsMergesIntoExistingMetadata() {
+        SqliteVecVectorStoreProvider p = provider();
+        String existingJson = "{\"doc_id\":\"doc-1\",\"tags\":\"old\"}";
+        when(jdbc.query(anyString(), any(org.springframework.jdbc.core.RowMapper.class), any(Object[].class)))
+                .thenReturn(java.util.Collections.singletonList(new Object[]{"d1", existingJson}));
+
+        p.updateTags("u", "v1", List.of("d1"), "new,tags");
+
+        ArgumentCaptor<List<Object[]>> captor = ArgumentCaptor.forClass(List.class);
+        verify(jdbc).batchUpdate(eq("UPDATE vec_document_chunks SET metadata = ? WHERE spring_doc_id = ?"), captor.capture());
+        List<Object[]> updates = captor.getValue();
+        assertThat(updates).hasSize(1);
+        assertThat((String) updates.get(0)[0]).contains("\"tags\":\"new,tags\"").contains("\"doc_id\":\"doc-1\"");
+        assertThat(updates.get(0)[1]).isEqualTo("d1");
+    }
+
+    @Test
+    @DisplayName("updateTags: 빈 tagsCsv → tags 키 제거")
+    void updateTagsRemovesKeyWhenBlank() {
+        SqliteVecVectorStoreProvider p = provider();
+        String existingJson = "{\"doc_id\":\"doc-1\",\"tags\":\"old\"}";
+        when(jdbc.query(anyString(), any(org.springframework.jdbc.core.RowMapper.class), any(Object[].class)))
+                .thenReturn(java.util.Collections.singletonList(new Object[]{"d1", existingJson}));
+
+        p.updateTags("u", "v1", List.of("d1"), "");
+
+        ArgumentCaptor<List<Object[]>> captor = ArgumentCaptor.forClass(List.class);
+        verify(jdbc).batchUpdate(eq("UPDATE vec_document_chunks SET metadata = ? WHERE spring_doc_id = ?"), captor.capture());
+        assertThat((String) captor.getValue().get(0)[0]).doesNotContain("tags");
+    }
+
+    @Test
+    @DisplayName("updateTags(빈 springDocIds): DB 호출 없음")
+    void updateTagsEmptyIds() {
+        provider().updateTags("u", "v1", List.of(), "x");
+        verifyNoInteractions(jdbc);
+    }
+
+    @Test
     @DisplayName("deleteByDocIds(빈): DB 호출 없음")
     void deleteEmpty() {
         provider().deleteByDocIds("u", "v1", List.of());

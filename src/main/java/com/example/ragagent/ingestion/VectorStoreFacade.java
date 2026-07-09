@@ -47,6 +47,10 @@ public class VectorStoreFacade {
         provider.deleteByDocIds(userId, safe(version), springDocIds);
     }
 
+    public void updateTags(String userId, String version, List<String> springDocIds, String tagsCsv) {
+        provider.updateTags(userId, safe(version), springDocIds, tagsCsv);
+    }
+
     static String safe(String version) {
         return (version != null && SAFE_VERSION.matcher(version).matches()) ? version : "latest";
     }

@@ -41,4 +41,12 @@ public interface VectorStoreProvider {
     }
 
     void deleteByDocIds(String userId, String version, List<String> springDocIds);
+
+    /**
+     * Overwrites the {@code tags} metadata field on the given chunks in place — the stored
+     * embedding is untouched (tags never influence the vector, so no re-embedding is needed).
+     * {@code tagsCsv} is the comma-joined, already-normalized form ({@link
+     * com.example.ragagent.model.TagUtils#toMetaValue}); an empty string clears tags.
+     */
+    void updateTags(String userId, String version, List<String> springDocIds, String tagsCsv);
 }

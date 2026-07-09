@@ -202,6 +202,36 @@ public class DocumentController {
         return ResponseEntity.ok().build();
     }
 
+    /** Tags-cell edit form (HTMX fragment) — pre-filled with the document's current tags. */
+    @GetMapping("/ui/documents/{docId}/tags/edit")
+    public String editTagsForm(ThreadContext ctx, @PathVariable String docId, Model model) {
+        DocumentInfo doc = ragService.findDocument(ctx.userId(), docId)
+                .orElseThrow(() -> new IllegalArgumentException("문서를 찾을 수 없습니다: " + docId));
+        model.addAttribute("doc", doc);
+        model.addAttribute("tagsCsv", String.join(", ", doc.tags()));
+        return "fragments/doc-table-body :: tagsEdit";
+    }
+
+    /** Tags-cell view fragment — also used as the Cancel target for the edit form. */
+    @GetMapping("/ui/documents/{docId}/tags/view")
+    public String viewTagsCell(ThreadContext ctx, @PathVariable String docId, Model model) {
+        DocumentInfo doc = ragService.findDocument(ctx.userId(), docId)
+                .orElseThrow(() -> new IllegalArgumentException("문서를 찾을 수 없습니다: " + docId));
+        model.addAttribute("doc", doc);
+        return "fragments/doc-table-body :: tagsView";
+    }
+
+    /** Replaces a document's search-scope tags (metadata-only — no re-embedding). */
+    @PatchMapping("/ui/documents/{docId}/tags")
+    public String updateTagsUi(ThreadContext ctx, @PathVariable String docId,
+                                @RequestParam(defaultValue = "") String tags, Model model) {
+        List<String> tagList = TagUtils.parseCsv(tags);   // policy violation → 400 (IllegalArgumentException)
+        DocumentInfo doc = ragService.updateDocumentTags(ctx.userId(), docId, tagList);
+        auditLogger.log("document.tags_update", docId, Map.of("tags", doc.tags()));
+        model.addAttribute("doc", doc);
+        return "fragments/doc-table-body :: tagsView";
+    }
+
     @GetMapping("/ui/documents/list")
     public String documentList(ThreadContext ctx, Model model) {
         model.addAttribute("documents", ragService.listDocuments(ctx.userId()));

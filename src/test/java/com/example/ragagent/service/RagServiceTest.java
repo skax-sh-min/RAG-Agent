@@ -19,12 +19,16 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import java.util.Optional;
+
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
@@ -40,6 +44,7 @@ class RagServiceTest {
 
     private DocumentIndexer indexer;
     private DocRegistry docRegistry;
+    private VectorStoreFacade vectorStore;
     private KeywordSearchRepository keywordRepo;
     private RagService service;
 
@@ -47,7 +52,7 @@ class RagServiceTest {
     void setUp() {
         indexer = mock(DocumentIndexer.class);
         docRegistry = mock(DocRegistry.class);
-        VectorStoreFacade vectorStore = mock(VectorStoreFacade.class);
+        vectorStore = mock(VectorStoreFacade.class);
         keywordRepo = mock(KeywordSearchRepository.class);
         AppProperties props = mock(AppProperties.class);
         service = new RagService(indexer, docRegistry, vectorStore, keywordRepo, props);
@@ -122,6 +127,63 @@ class RagServiceTest {
 
         verify(indexer).deleteArtifacts(DocRegistry.SHARED, "doc1", "latest");
         verify(docRegistry).save();
+    }
+
+    @Test
+    @DisplayName("findDocument — 등록된 문서: docId/filename/tags 포함")
+    void findDocument_present_includesTags() {
+        when(docRegistry.findByDocId("doc1", DocRegistry.SHARED))
+                .thenReturn(java.util.Optional.of(entry("sha", "latest", "2026-01-01T00:00:00Z", 3)));
+        when(keywordRepo.tagsByDocIds(List.of("doc1"))).thenReturn(Map.of("doc1", List.of("faq", "guide")));
+
+        Optional<DocumentInfo> result = service.findDocument("u1", "doc1");
+
+        assertThat(result).isPresent();
+        assertThat(result.get().docId()).isEqualTo("doc1");
+        assertThat(result.get().tags()).containsExactly("faq", "guide");
+    }
+
+    @Test
+    @DisplayName("findDocument — 미등록 문서: Optional.empty()")
+    void findDocument_absent_returnsEmpty() {
+        when(docRegistry.findByDocId("missing", DocRegistry.SHARED)).thenReturn(java.util.Optional.empty());
+
+        assertThat(service.findDocument("u1", "missing")).isEmpty();
+    }
+
+    @Test
+    @DisplayName("updateDocumentTags — 정규화된 태그로 벡터스토어+FTS 모두 갱신하고 갱신된 DocumentInfo 반환")
+    void updateDocumentTags_updatesVectorStoreAndFts() {
+        DocRegistry.DocRegistryEntry existing = entry("sha", "v2", "2026-01-01T00:00:00Z", 3);
+        when(docRegistry.findByDocId("doc1", DocRegistry.SHARED)).thenReturn(java.util.Optional.of(existing));
+
+        DocumentInfo result = service.updateDocumentTags("u1", "doc1", List.of(" FAQ ", "Guide", "faq"));
+
+        assertThat(result.docId()).isEqualTo("doc1");
+        assertThat(result.tags()).containsExactly("faq", "guide"); // normalized: lowercase + trim + dedupe
+        verify(vectorStore).updateTags(DocRegistry.SHARED, "v2", existing.springDocIds(), "faq,guide");
+        verify(keywordRepo).updateDocTags("doc1", "faq,guide");
+    }
+
+    @Test
+    @DisplayName("updateDocumentTags — 존재하지 않는 docId → IllegalArgumentException, 부수효과 없음")
+    void updateDocumentTags_missingDoc_throwsAndNoSideEffects() {
+        when(docRegistry.findByDocId("missing", DocRegistry.SHARED)).thenReturn(java.util.Optional.empty());
+
+        assertThatThrownBy(() -> service.updateDocumentTags("u1", "missing", List.of("x")))
+                .isInstanceOf(IllegalArgumentException.class);
+        verifyNoInteractions(vectorStore);
+    }
+
+    @Test
+    @DisplayName("updateDocumentTags — 태그 정책 위반(최대 개수 초과) → IllegalArgumentException, 부수효과 없음")
+    void updateDocumentTags_policyViolation_throwsBeforeLookup() {
+        List<String> tooMany = java.util.stream.IntStream.range(0, 11)
+                .mapToObj(i -> "tag" + i).toList();
+
+        assertThatThrownBy(() -> service.updateDocumentTags("u1", "doc1", tooMany))
+                .isInstanceOf(IllegalArgumentException.class);
+        verifyNoInteractions(vectorStore, keywordRepo);
     }
 
     @Test
