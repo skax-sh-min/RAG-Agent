@@ -206,8 +206,8 @@
 
         const existing = existingFilenames();
         selectedFiles.forEach(f => {
-            const nextName = predictDuplicateName(f.name, existing);
-            if (nextName) showToast(escHtml(duplicateMessage(nextName)), 'warning');
+            const dup = checkDuplicate(f.name, existing);
+            if (dup) showToast(escHtml(dup.message), 'warning');
         });
 
         renderFileList();
@@ -219,6 +219,13 @@
         return new Set(Array.from(document.querySelectorAll('#doc-table-body .doc-filename'))
             .map(el => el.textContent.trim())
             .filter(Boolean));
+    }
+
+    /** Filename without its extension, NFC-normalized (matches server-side stem splitting). */
+    function stemOf(filename) {
+        const name = filename.normalize('NFC');
+        const dot = name.lastIndexOf('.');
+        return dot > 0 ? name.substring(0, dot) : name;
     }
 
     /**
@@ -240,17 +247,41 @@
         return `${stem}_v${Date.now()}${ext}`;
     }
 
+    /**
+     * Checks `filename` against already-indexed documents in two tiers:
+     *  1. Exact name+extension match → server will rename it (versionedPath), warn with the
+     *     predicted "_vN" name.
+     *  2. Same stem, different extension → server does NOT rename (different filename, so no
+     *     collision on disk); just flag that a same-titled document already exists so the user
+     *     can decide whether to delete the old one first.
+     * Returns null when there's no match either way.
+     */
+    function checkDuplicate(filename, existing) {
+        const nextName = predictDuplicateName(filename, existing);
+        if (nextName) return { message: duplicateMessage(nextName) };
+
+        const stem = stemOf(filename);
+        const similar = Array.from(existing).find(name => stemOf(name) === stem);
+        if (similar) return { message: similarMessage(similar) };
+
+        return null;
+    }
+
     function duplicateMessage(nextName) {
         return I18N.duplicateFileName.replace('{name}', nextName);
+    }
+
+    function similarMessage(existingName) {
+        return I18N.similarFileName.replace('{name}', existingName);
     }
 
     function renderFileList() {
         const existing = existingFilenames();
         const tbody = document.getElementById('file-list-body');
         tbody.innerHTML = selectedFiles.map((f, i) => {
-            const nextName = predictDuplicateName(f.name, existing);
-            const status = nextName
-                ? `<span class="text-warning"><i class="bi bi-exclamation-triangle-fill"></i> ${escHtml(duplicateMessage(nextName))}</span>`
+            const dup = checkDuplicate(f.name, existing);
+            const status = dup
+                ? `<span class="text-warning"><i class="bi bi-exclamation-triangle-fill"></i> ${escHtml(dup.message)}</span>`
                 : `<span class="text-muted">⏳ ${I18N.statusWaiting}</span>`;
             return `
             <tr id="file-row-${i}">
