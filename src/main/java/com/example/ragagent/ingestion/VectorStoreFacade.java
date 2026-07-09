@@ -4,6 +4,7 @@ import org.springframework.ai.document.Document;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
+import java.util.function.BiConsumer;
 import java.util.regex.Pattern;
 
 /**
@@ -37,8 +38,17 @@ public class VectorStoreFacade {
         provider.add(userId, safe(version), docs);
     }
 
+    public void add(String userId, String version, List<Document> docs,
+                     BiConsumer<Integer, Integer> onProgress) {
+        provider.add(userId, safe(version), docs, onProgress);
+    }
+
     public void deleteByDocIds(String userId, String version, List<String> springDocIds) {
         provider.deleteByDocIds(userId, safe(version), springDocIds);
+    }
+
+    public void updateTags(String userId, String version, List<String> springDocIds, String tagsCsv) {
+        provider.updateTags(userId, safe(version), springDocIds, tagsCsv);
     }
 
     static String safe(String version) {

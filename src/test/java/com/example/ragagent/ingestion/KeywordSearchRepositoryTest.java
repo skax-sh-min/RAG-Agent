@@ -114,6 +114,54 @@ class KeywordSearchRepositoryTest {
     }
 
     @Test
+    @DisplayName("deleteBySpringDocIds — 지정한 chunk id만 제거, 같은 doc_id의 다른 행은 보존")
+    void deleteBySpringDocIds_removesOnlySpecifiedChunks() {
+        // s1/s2 share doc_id D1 (simulates old+new rows momentarily coexisting during reindex).
+        repo.indexChunks(List.of(
+                chunk("s1", "D1", "latest", 0, "구버전 키워드콘텐츠", "콘텐츠"),
+                chunk("s2", "D1", "latest", 1, "신버전 키워드콘텐츠", "콘텐츠")));
+
+        repo.deleteBySpringDocIds(List.of("s1"));
+
+        assertThat(repo.search("latest", "키워드콘텐츠", 10))
+                .extracting(Document::getId).containsExactly("s2");
+    }
+
+    @Test
+    @DisplayName("updateDocTags — 매칭되는 청크 행 수를 반환하고 doc_tags를 갱신한다")
+    void updateDocTags_returnsMatchedRowCount() {
+        repo.indexChunks(List.of(
+                chunk("s1", "D1", "latest", 0, "내용 알파", "kw"),
+                chunk("s2", "D1", "latest", 1, "내용 베타", "kw")));
+
+        int updated = repo.updateDocTags("D1", "billing,policy");
+
+        assertThat(updated).isEqualTo(2);
+        assertThat(repo.tagsByDocIds(List.of("D1")).get("D1")).containsExactlyInAnyOrder("billing", "policy");
+    }
+
+    @Test
+    @DisplayName("updateDocTags — 존재하지 않는 docId → 0 (고아 registry entry 감지용)")
+    void updateDocTags_unknownDocId_returnsZero() {
+        repo.indexChunks(List.of(chunk("s1", "D1", "latest", 0, "내용", "kw")));
+
+        int updated = repo.updateDocTags("D-missing", "tag");
+
+        assertThat(updated).isZero();
+    }
+
+    @Test
+    @DisplayName("deleteBySpringDocIds(빈/널) — no-op")
+    void deleteBySpringDocIds_emptyOrNull_isNoOp() {
+        repo.indexChunks(List.of(chunk("s1", "D1", "latest", 0, "유지 콘텐츠", "kw")));
+
+        repo.deleteBySpringDocIds(List.of());
+        repo.deleteBySpringDocIds(null);
+
+        assertThat(repo.search("latest", "콘텐츠", 10)).extracting(Document::getId).containsExactly("s1");
+    }
+
+    @Test
     @DisplayName("빈/널 질의 → 빈 결과")
     void search_blankQuery_returnsEmpty() {
         repo.indexChunks(List.of(chunk("s1", "D1", "latest", 0, "내용", "kw")));

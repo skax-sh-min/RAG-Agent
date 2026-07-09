@@ -4,10 +4,10 @@ import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.context.ThreadContext;
 import com.example.ragagent.context.ThreadContextResolver;
 import com.example.ragagent.model.VectorStoreAdminView;
-import com.example.ragagent.model.VectorStoreAdminView.VersionCount;
 import com.example.ragagent.security.AppUserDetails;
 import com.example.ragagent.service.AdminService;
 import com.example.ragagent.service.AdminService.CollectionsResult;
+import com.example.ragagent.service.IndexingProgressService;
 import com.example.ragagent.service.RagService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -48,6 +48,7 @@ class AdminControllerWebMvcTest {
 
     @MockitoBean AdminService adminService;
     @MockitoBean RagService ragService;
+    @MockitoBean IndexingProgressService progressService;
     @MockitoBean AppProperties props;                 // SecurityConfig 의존
     @MockitoBean ThreadContextResolver threadContextResolver;
     @MockitoBean org.springframework.ai.chat.model.ChatModel chatModel;  // WebConfig.chatClient 의존
@@ -66,7 +67,7 @@ class AdminControllerWebMvcTest {
     @DisplayName("GET /admin (chroma): 200 + 모델 속성 + 컬렉션 라벨 렌더")
     void adminPage_chroma() throws Exception {
         when(adminService.vectorStoreView()).thenReturn(
-                new VectorStoreAdminView("chroma", true, -1, 0, List.of(), 0, null, null,
+                new VectorStoreAdminView("chroma", true, -1, 0, 0, null, null,
                         "/data/memory.db", null));
 
         mvc.perform(get("/admin").with(user(ADMIN)))
@@ -82,7 +83,7 @@ class AdminControllerWebMvcTest {
     void adminPage_sqliteVec() throws Exception {
         when(adminService.vectorStoreView()).thenReturn(
                 new VectorStoreAdminView("sqlite-vec", true, 5, 42,
-                        List.of(new VersionCount("latest", 42L)), null, "v0.1.9", 768,
+                        null, "v0.1.9", 768,
                         "/data/memory.db", "/data/vector.db"));
 
         mvc.perform(get("/admin").with(user(ADMIN)))

@@ -2,6 +2,7 @@ package com.example.ragagent.ingestion;
 
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.exception.DocumentIndexingException;
+import com.example.ragagent.exception.IndexingCancelledException;
 import com.example.ragagent.model.DocumentInfo;
 import com.example.ragagent.model.IndexingProgressEvent;
 import com.example.ragagent.model.MetaKey;
@@ -193,9 +194,9 @@ public class DocumentIndexer {
         List<Document> enriched = keywordExtractor.enrichParallel(tagged, gate, req.filename(), req.onProgress());
 
         log.debug("[INDEX] {} 벡터 스토어 저장 중 ({}개 청크)...", req.filename(), enriched.size());
-        req.onProgress().accept(IndexingProgressEvent.of("storing", enriched.size(), enriched.size(),
-                req.filename(), "벡터 DB 저장 중..."));
-        vectorStore.add(DocRegistry.SHARED, req.version(), enriched);
+        vectorStore.add(DocRegistry.SHARED, req.version(), enriched, (done, total) ->
+                req.onProgress().accept(IndexingProgressEvent.of("storing", done, total,
+                        req.filename(), "벡터 DB 저장 중...")));
         keywordRepo.indexChunks(enriched);   // populate FTS keyword index
 
         List<String> docIds = enriched.stream().map(Document::getId).toList();
@@ -220,6 +221,11 @@ public class DocumentIndexer {
      * Calls {@link DocRegistry#save()} at the end.
      */
     public void reindexFromMd(String docId) throws IOException {
+        reindexFromMd(docId, event -> {});
+    }
+
+    /** Same as {@link #reindexFromMd(String)}, reporting per-stage progress via {@code onProgress}. */
+    public void reindexFromMd(String docId, Consumer<IndexingProgressEvent> onProgress) throws IOException {
         DocRegistry.DocRegistryEntry existing = docRegistry.findByDocId(docId)
                 .orElseThrow(() -> new IllegalArgumentException("문서를 찾을 수 없습니다: " + docId));
 
@@ -239,25 +245,42 @@ public class DocumentIndexer {
         log.info("[REINDEX] 시작: docId={}, src={}", docId, mdPath.getFileName());
         long t0 = System.currentTimeMillis();
 
+        // Old chunks are captured but NOT deleted yet — write-then-delete (not delete-then-write)
+        // so a failure below (embedding/LLM call) leaves the existing document intact instead of
+        // wiping it. New chunk ids are always freshly generated, so old and new rows can briefly
+        // coexist under the same doc_id without colliding.
+        List<String> oldSpringDocIds = existing.springDocIds();
+
+        onProgress.accept(IndexingProgressEvent.of("loading", 0, 0, filename, "MD 파일 로드 중..."));
         String md = Files.readString(mdPath);
         List<Document> rawDocs = loaderService.loadFromMarkdown(md);
         List<Document> chunks  = chunkSplitter.splitDocuments(
             rawDocs, filename, props.chunkSize(), props.chunkOverlap(), props.minChunkSizeSafe(),
             props.embeddingSafe().maxChunkChars());
         log.debug("[REINDEX] 청크 분할: {}섹션 → {}청크", rawDocs.size(), chunks.size());
-        // Keep tags across re-index (same docId): read from FTS before the delete wipes them.
+        onProgress.accept(IndexingProgressEvent.of("chunking", 0, chunks.size(), filename,
+                chunks.size() + "개 청크로 분할 완료"));
+        // Keep tags across re-index (same docId): read from FTS before the old rows are removed.
         List<String> preservedTags = restoreTags(docId);
         List<Document> tagged  = tagMetadata(chunks, docId, filename, version, docType, sha256, DocRegistry.SHARED, preservedTags);
 
-        deleteExistingVectorsOnly(DocRegistry.SHARED, docId, version);
-
         log.debug("[REINDEX] 키워드 추출 시작: {}개 청크", tagged.size());
         Semaphore gate = new Semaphore(props.indexingSafe().maxConcurrentLlmCalls());
-        List<Document> enriched = keywordExtractor.enrichParallel(tagged, gate, filename, event -> {});
+        List<Document> enriched = keywordExtractor.enrichParallel(tagged, gate, filename, onProgress);
 
         log.debug("[REINDEX] 벡터 스토어 저장 중: {}개 청크", enriched.size());
-        vectorStore.add(DocRegistry.SHARED, version, enriched);
+        vectorStore.add(DocRegistry.SHARED, version, enriched, (done, total) ->
+                onProgress.accept(IndexingProgressEvent.of("storing", done, total, filename,
+                        done + "/" + total + " 벡터 저장 완료")));
         keywordRepo.indexChunks(enriched);   // populate FTS keyword index
+
+        // Only now remove the old chunks — by their captured spring_doc_ids, not by doc_id (both
+        // old and new rows share the same doc_id string; a doc_id-based delete would also wipe
+        // the rows just inserted above).
+        if (!oldSpringDocIds.isEmpty()) {
+            vectorStore.deleteByDocIds(DocRegistry.SHARED, version, oldSpringDocIds);
+            keywordRepo.deleteBySpringDocIds(oldSpringDocIds);
+        }
 
         List<String> springIds = enriched.stream().map(Document::getId).toList();
         docRegistry.put(docId, DocRegistry.SHARED, new DocRegistry.DocRegistryEntry(
@@ -343,7 +366,27 @@ public class DocumentIndexer {
                     }
                 }, filePool))
                 .toList();
-            CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
+            // .get() (not .join()) so a cancel-driven interrupt of this coordinating thread
+            // actually unblocks the wait instead of parking through it (§6.16.1).
+            try {
+                CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).get();
+            } catch (InterruptedException e) {
+                log.warn("[SYNC] cancelled by user — interrupting in-flight file(s), {}/{} completed",
+                        doneFiles.get(), totalFiles);
+                filePool.shutdownNow();
+                try {
+                    filePool.awaitTermination(10, TimeUnit.SECONDS);
+                } catch (InterruptedException ignored) {
+                    Thread.currentThread().interrupt();
+                }
+                // Persist whatever succeeded before cancellation so completed work isn't lost;
+                // step 3 (deletion detection) is skipped — it can run on the next normal sync.
+                docRegistry.save();
+                throw new IndexingCancelledException(
+                        "sync cancelled: " + doneFiles.get() + "/" + totalFiles + " files processed");
+            } catch (ExecutionException e) {
+                throw new RuntimeException(e.getCause());
+            }
         }
 
         // 3단계: 삭제된 파일 감지

@@ -1,27 +1,37 @@
 package com.example.ragagent.controller;
 
 import com.example.ragagent.context.ThreadContext;
+import com.example.ragagent.model.IndexingProgressEvent;
 import com.example.ragagent.service.AdminService;
+import com.example.ragagent.service.IndexingProgressService;
 import com.example.ragagent.service.RagService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.HashMap;
 import java.util.Map;
 
 /**
- * Admin UI: ChromaDB collection/chunk viewer and editor.
+ * Admin UI: vector-store collection/chunk viewer and editor (Chroma and sqlite-vec backends).
  */
 @Controller
 public class AdminController {
 
+    private static final Logger log = LoggerFactory.getLogger(AdminController.class);
+
     private final AdminService adminService;
     private final RagService   ragService;
+    private final IndexingProgressService progressService;
 
-    public AdminController(AdminService adminService, RagService ragService) {
+    public AdminController(AdminService adminService, RagService ragService,
+                            IndexingProgressService progressService) {
         this.adminService = adminService;
         this.ragService   = ragService;
+        this.progressService = progressService;
     }
 
     // ── Page ─────────────────────────────────────────────────────────────────
@@ -87,24 +97,44 @@ public class AdminController {
                                              @RequestParam String collection,
                                              @RequestBody Map<String, Object> body) {
         String newText = body.get("text") instanceof String s ? s : null;
-        @SuppressWarnings("unchecked")
-        Map<String, String> newMeta = body.get("metadata") instanceof Map<?,?> m
-                ? (Map<String, String>) m : null;
+        Map<String, String> newMeta = null;
+        if (body.get("metadata") instanceof Map<?, ?> m) {
+            // Defensive: only string key/value pairs pass through — a nested object or
+            // non-string value in the request silently drops that entry instead of risking
+            // a ClassCastException wherever the map is later read as Map<String, String>.
+            newMeta = new HashMap<>();
+            for (Map.Entry<?, ?> e : m.entrySet()) {
+                if (e.getKey() instanceof String k && e.getValue() instanceof String v) {
+                    newMeta.put(k, v);
+                }
+            }
+        }
         adminService.updateChunk(collection, chunkId, newText, newMeta);
         return ResponseEntity.ok().build();
     }
 
-    /** Re-index a document from its saved Markdown file (corrected or raw). */
+    /**
+     * Re-index a document from its saved Markdown file (corrected or raw). Async — starts the
+     * work on a virtual thread and returns {@code {taskId}} immediately (202); progress and the
+     * terminal outcome are reported via the shared SSE endpoint (same one uploads/sync use):
+     * {@code GET /ui/documents/progress/{taskId}}.
+     */
     @PostMapping("/admin/documents/{docId}/reindex")
     @ResponseBody
-    public ResponseEntity<?> reindexFromMd(@PathVariable String docId) throws java.io.IOException {
-        try {
-            ragService.reindexFromMd(docId);
-            return ResponseEntity.ok(Map.of("message", "재인덱싱 완료"));
-        } catch (IllegalArgumentException e) {
-            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
-        } catch (IllegalStateException e) {
-            return ResponseEntity.status(404).body(Map.of("error", e.getMessage()));
-        }
+    public ResponseEntity<Map<String, String>> reindexFromMd(@PathVariable String docId) {
+        String taskId = progressService.newTaskId();
+
+        Thread worker = Thread.ofVirtual().name("idx-reindex-" + taskId).start(() -> {
+            try {
+                ragService.reindexFromMd(docId, event -> progressService.publish(taskId, event));
+                progressService.publish(taskId, IndexingProgressEvent.of("done", 0, 0, docId, "재인덱싱 완료"));
+            } catch (Exception e) {
+                log.warn("[REINDEX] 재인덱싱 실패: docId={}, {}", docId, e.getMessage());
+                progressService.publish(taskId, IndexingProgressEvent.error(docId, e.getMessage()));
+            }
+        });
+        progressService.registerWorker(taskId, worker);
+
+        return ResponseEntity.accepted().body(Map.of("taskId", taskId));
     }
 }

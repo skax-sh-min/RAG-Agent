@@ -81,6 +81,50 @@ class RetrievalServiceRrfTest {
         assertThat(RetrievalService.mergeRrf(ranked, 0)).isEmpty();
     }
 
+    // ── weighted RRF (§10.2) ────────────────────────────────────────────
+
+    @Test
+    @DisplayName("가중 RRF — 벡터축 그룹 정규화로 멀티쿼리 축 개수가 많아도 키워드축과 동등 비중")
+    void weightedRrf_groupNormalizesVectorAxes() {
+        // 3 vector axes (e.g. MultiQuery original+2), doc "x" ranks 0 in every one of them.
+        // keyword axis has a single hit "y" at rank 0. Without group normalization x would
+        // score 3x a lone keyword hit at equal per-axis weight; with normalization both
+        // axes contribute like a single axis, so x and y tie.
+        List<List<Document>> vectorRanked = List.of(
+                List.of(doc("x")), List.of(doc("x")), List.of(doc("x")));
+        List<Document> keywordRanked = List.of(doc("y"));
+
+        List<Document> result = RetrievalService.mergeRrf(vectorRanked, keywordRanked, 2, 60, 1.0);
+
+        assertThat(ids(result))
+                .as("group-normalized vector axes should not out-score a single keyword hit at equal weight")
+                .containsExactlyInAnyOrder("x", "y");
+    }
+
+    @Test
+    @DisplayName("가중 RRF — keywordWeight 상향 시 키워드 축 문서가 우선 순위 획득")
+    void weightedRrf_keywordWeightBoostsKeywordAxis() {
+        List<List<Document>> vectorRanked = List.of(List.of(doc("x")));
+        List<Document> keywordRanked = List.of(doc("y"));
+
+        List<Document> result = RetrievalService.mergeRrf(vectorRanked, keywordRanked, 1, 60, 3.0);
+
+        assertThat(result.get(0).getMetadata().get("filename")).isEqualTo("y");
+    }
+
+    @Test
+    @DisplayName("가중 RRF — 키워드축 없음(하이브리드 비활성) → 2-arg 오버로드와 동일 순위")
+    void weightedRrf_noKeywordAxisMatchesUnweightedOverload() {
+        List<List<Document>> vectorRanked = List.of(
+                List.of(doc("a"), doc("b")),
+                List.of(doc("b"), doc("c")));
+
+        List<Document> weighted = RetrievalService.mergeRrf(vectorRanked, List.of(), 3, 60, 1.0);
+        List<Document> unweighted = RetrievalService.mergeRrf(vectorRanked, 3);
+
+        assertThat(ids(weighted)).isEqualTo(ids(unweighted));
+    }
+
     // ── stable docKey ────────────────────────────────────────────────────
 
     @Test

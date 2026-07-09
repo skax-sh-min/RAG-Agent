@@ -119,7 +119,8 @@ public class ChatController {
         threadMetaService.getOrCreate(userId, form.threadId(), form.version());
         Thread worker = Thread.ofVirtual().start(() -> streamingAgentService.run(userId, form, emitter));
         emitter.onTimeout(() -> {
-            log.warn("[TIMEOUT:SSE] thread={} timeoutMs={}", form.threadId(), props.sseTimeoutMs());
+            log.warn("[TIMEOUT:SSE] thread={} timeoutMs={} (app.sse-timeout-seconds={}s)",
+                    form.threadId(), props.sseTimeoutMs(), props.sseTimeoutMs() / 1000);
             worker.interrupt();
         });
         emitter.onError(t -> {

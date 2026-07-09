@@ -107,7 +107,8 @@ public class StreamingAgentService {
         ScheduledFuture<?> idleWatchdog = heartbeatScheduler.scheduleWithFixedDelay(() -> {
             long idleNanos = System.nanoTime() - lastActivityNanos.get();
             if (idleNanos > idleTimeoutNanos) {
-                log.warn("[TIMEOUT:SSE_IDLE] thread={} idleMs={}", form.threadId(), TimeUnit.NANOSECONDS.toMillis(idleNanos));
+                log.warn("[TIMEOUT:SSE_IDLE] thread={} idleMs={} (app.sse-idle-timeout-seconds={}s)",
+                        form.threadId(), TimeUnit.NANOSECONDS.toMillis(idleNanos), props.sseIdleTimeoutMs() / 1000);
                 worker.interrupt();
             }
         }, checkIntervalMs, checkIntervalMs, TimeUnit.MILLISECONDS);

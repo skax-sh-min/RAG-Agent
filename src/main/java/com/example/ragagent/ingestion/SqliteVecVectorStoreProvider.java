@@ -8,10 +8,14 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.document.Document;
+import org.springframework.ai.embedding.BatchingStrategy;
 import org.springframework.ai.embedding.EmbeddingModel;
+import org.springframework.ai.embedding.TokenCountBatchingStrategy;
 import org.springframework.jdbc.core.BatchPreparedStatementSetter;
 import org.springframework.jdbc.core.JdbcTemplate;
 
+import java.io.InterruptedIOException;
+import java.net.SocketTimeoutException;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.time.Instant;
@@ -22,6 +26,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.function.BiConsumer;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -71,6 +76,11 @@ public class SqliteVecVectorStoreProvider implements VectorStoreProvider {
     private final EmbeddingModel embeddingModel;
     private final ObjectMapper objectMapper;
     private final double similarityThreshold;
+    // Same default Spring AI applies internally to ChromaVectorStore.add() — splits by token
+    // count (8191 default, 10% reserve) so add() never sends an entire large document's chunks
+    // (e.g. 500+) as one unbounded embed() call. Without this, only the Chroma backend got this
+    // safety net "for free"; sqlite-vec bypassed it by calling embeddingModel.embed() directly.
+    private final BatchingStrategy batchingStrategy = new TokenCountBatchingStrategy();
 
     public SqliteVecVectorStoreProvider(JdbcTemplate jdbc, EmbeddingModel embeddingModel,
                                         ObjectMapper objectMapper, AppProperties props) {
@@ -98,19 +108,41 @@ public class SqliteVecVectorStoreProvider implements VectorStoreProvider {
 
     @Override
     public void add(String userId, String version, List<Document> docs) {
+        add(userId, version, docs, (done, total) -> { });
+    }
+
+    @Override
+    public void add(String userId, String version, List<Document> docs,
+                     BiConsumer<Integer, Integer> onProgress) {
         if (docs == null || docs.isEmpty()) return;
 
         // vec0 does not support INSERT OR REPLACE → delete first so re-indexing is idempotent.
         deleteBySpringDocIds(docs.stream().map(Document::getId).toList());
 
-        List<String> texts = docs.stream().map(d -> d.getText() == null ? "" : d.getText()).toList();
-        List<float[]> embeddings = embedBatchWithFallback(texts);
+        // Embed per token-bounded sub-batch (not all of docs in one call) so a large document's
+        // chunk count can't turn into a single oversized HTTP request that times out against a
+        // slow local embedding server. Keyed by doc id since batchingStrategy.batch() does not
+        // guarantee it preserves docs' original order. Each completed sub-batch reports real
+        // incremental progress instead of the caller only seeing a single 0%→100% jump.
+        int total = docs.size();
+        int done = 0;
+        onProgress.accept(0, total);
+        Map<String, float[]> embeddingByDocId = new HashMap<>(docs.size() * 2);
+        for (List<Document> batch : batchingStrategy.batch(docs)) {
+            List<String> texts = batch.stream().map(d -> d.getText() == null ? "" : d.getText()).toList();
+            List<float[]> batchEmbeddings = embedBatchWithFallback(texts);
+            for (int i = 0; i < batch.size(); i++) {
+                embeddingByDocId.put(batch.get(i).getId(), batchEmbeddings.get(i));
+            }
+            done += batch.size();
+            onProgress.accept(done, total);
+        }
 
         jdbc.batchUpdate(INSERT_EMBEDDING, new BatchPreparedStatementSetter() {
             @Override public void setValues(PreparedStatement ps, int i) throws SQLException {
                 ps.setString(1, docs.get(i).getId());
                 ps.setString(2, version);
-                ps.setString(3, toVectorLiteral(embeddings.get(i)));
+                ps.setString(3, toVectorLiteral(embeddingByDocId.get(docs.get(i).getId())));
             }
             @Override public int getBatchSize() { return docs.size(); }
         });
@@ -134,6 +166,27 @@ public class SqliteVecVectorStoreProvider implements VectorStoreProvider {
     @Override
     public void deleteByDocIds(String userId, String version, List<String> springDocIds) {
         deleteBySpringDocIds(springDocIds);
+    }
+
+    @Override
+    public void updateTags(String userId, String version, List<String> springDocIds, String tagsCsv) {
+        if (springDocIds == null || springDocIds.isEmpty()) return;
+        String placeholders = springDocIds.stream().map(id -> "?").collect(Collectors.joining(","));
+        List<Object[]> rows = jdbc.query(
+                "SELECT spring_doc_id, metadata FROM vec_document_chunks WHERE spring_doc_id IN (" + placeholders + ")",
+                (rs, i) -> new Object[]{rs.getString("spring_doc_id"), rs.getString("metadata")},
+                springDocIds.toArray());
+        if (rows.isEmpty()) return;
+
+        List<Object[]> updates = new ArrayList<>(rows.size());
+        for (Object[] row : rows) {
+            String springDocId = (String) row[0];
+            Map<String, Object> meta = parseMetadata((String) row[1]);
+            if (tagsCsv == null || tagsCsv.isEmpty()) meta.remove(MetaKey.TAGS);
+            else meta.put(MetaKey.TAGS, tagsCsv);
+            updates.add(new Object[]{toJson(meta), springDocId});
+        }
+        jdbc.batchUpdate("UPDATE vec_document_chunks SET metadata = ? WHERE spring_doc_id = ?", updates);
     }
 
     // ── helpers ───────────────────────────────────────────────────────────────
@@ -194,16 +247,44 @@ public class SqliteVecVectorStoreProvider implements VectorStoreProvider {
         try {
             return embeddingModel.embed(texts); // fast path: single batched call
         } catch (RuntimeException e) {
-            if (!isInputTooLargeError(e)) throw e;
-            logInputTooLarge("embed-batch", e, texts == null ? 0 : texts.size(),
-                    texts == null || texts.isEmpty() ? 0 : texts.get(0) == null ? 0 : texts.get(0).length());
-            log.warn("[sqlite-vec] batched embedding rejected by model token limit, retrying per item with shrinking");
-            List<float[]> out = new ArrayList<>(texts.size());
-            for (String text : texts) {
-                out.add(embedSingleWithFallback(text));
+            if (isInputTooLargeError(e)) {
+                logInputTooLarge("embed-batch", e, texts == null ? 0 : texts.size(),
+                        texts == null || texts.isEmpty() ? 0 : texts.get(0) == null ? 0 : texts.get(0).length());
+                log.warn("[sqlite-vec] batched embedding rejected by model token limit, retrying per item with shrinking");
+                List<float[]> out = new ArrayList<>(texts.size());
+                for (String text : texts) {
+                    out.add(embedSingleWithFallback(text));
+                }
+                return out;
             }
-            return out;
+            // A read timeout is a wall-clock problem, not a token-limit one — retrying the exact
+            // same batch (RetryTemplate in EmbeddingBeanConfig) just times out again. Halving the
+            // batch shrinks the request until it fits within the read-timeout window, without
+            // needing to know the embedding server's actual throughput up front.
+            if (isTimeoutLike(e) && texts.size() > 1) {
+                log.warn("[sqlite-vec] embedding batch timed out (n={}), splitting in half and retrying",
+                        texts.size());
+                int mid = texts.size() / 2;
+                List<float[]> left = embedBatchWithFallback(texts.subList(0, mid));
+                List<float[]> right = embedBatchWithFallback(texts.subList(mid, texts.size()));
+                List<float[]> combined = new ArrayList<>(texts.size());
+                combined.addAll(left);
+                combined.addAll(right);
+                return combined;
+            }
+            throw e;
         }
+    }
+
+    private static boolean isTimeoutLike(Throwable t) {
+        Throwable cur = t;
+        while (cur != null) {
+            if (cur instanceof SocketTimeoutException || cur instanceof InterruptedIOException) {
+                return true;
+            }
+            cur = cur.getCause();
+        }
+        return false;
     }
 
     private float[] embedSingleWithFallback(String text) {

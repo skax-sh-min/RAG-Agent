@@ -64,7 +64,8 @@ class AnswerServiceTest {
         AppProperties props = new AppProperties(
                 "./data", MAX_RETRY, 800, 100, 100, 7, 0.0, true, 0, false,
                 true, false, 3,
-                null, null, null, null, null, null, null, null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null, null, null, null, null, null, null, null,
+                null, null, null, null, null);
         MessageSource messageSource = mock(MessageSource.class);
         when(messageSource.getMessage(anyString(), any(), any(Locale.class))).thenReturn("prompt");
         service = new AnswerService(llmRouter, props, messageSource);

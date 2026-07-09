@@ -1,6 +1,7 @@
 package com.example.ragagent.service;
 
 import com.example.ragagent.config.AppProperties;
+import com.example.ragagent.exception.DocumentIndexingException;
 import com.example.ragagent.ingestion.DocRegistry;
 import com.example.ragagent.ingestion.DocumentIndexer;
 import com.example.ragagent.ingestion.KeywordSearchRepository;
@@ -9,6 +10,7 @@ import com.example.ragagent.ingestion.VectorStoreFacade;
 import com.example.ragagent.model.DocumentInfo;
 import com.example.ragagent.model.IndexingProgressEvent;
 import com.example.ragagent.model.SyncResult;
+import com.example.ragagent.model.TagUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.document.Document;
@@ -128,6 +130,45 @@ public class RagService {
                 .toList();
     }
 
+    /** Single-document lookup (current tags included) — powers the tag-edit UI. Empty if not found. */
+    public Optional<DocumentInfo> findDocument(String userId, String docId) {
+        return docRegistry.findByDocId(docId, DocRegistry.SHARED).map(r -> {
+            List<String> tags = keywordRepo.tagsByDocIds(List.of(docId)).getOrDefault(docId, List.of());
+            return new DocumentInfo(docId, DocRegistry.filenameFromDocId(docId), r.version(),
+                    r.chunks(), r.indexedAt(), r.sha256(), tags, r.errors());
+        });
+    }
+
+    /**
+     * Replaces a document's search-scope tags — metadata-only, no re-embedding (tags never
+     * influence the vector). Updates both the vector store (search filter source) and
+     * {@code chunk_fts.doc_tags} (suggestion UI + reindex-tag-restore source) so the two stay
+     * consistent. Throws {@link IllegalArgumentException} on tag policy violation ({@link
+     * TagUtils#normalize}) or when {@code docId} does not exist in {@code doc_registry}.
+     *
+     * <p>Verifies the {@code chunk_fts} write actually touched a row — a {@code doc_registry}
+     * entry can outlive its real chunk data (e.g. a prior indexing/reindex failure that never
+     * reached {@code saveRegistry()} for the new state), in which case the update would silently
+     * affect 0 rows and this method would otherwise return a falsely successful result. Throws
+     * {@link DocumentIndexingException} in that case, telling the caller to re-sync/re-upload.
+     */
+    public DocumentInfo updateDocumentTags(String userId, String docId, List<String> rawTags) {
+        List<String> tags = TagUtils.normalize(rawTags);
+        DocRegistry.DocRegistryEntry entry = docRegistry.findByDocId(docId, DocRegistry.SHARED)
+                .orElseThrow(() -> new IllegalArgumentException("문서를 찾을 수 없습니다: " + docId));
+
+        String tagsCsv = TagUtils.toMetaValue(tags);
+        vectorStore.updateTags(DocRegistry.SHARED, entry.version(), entry.springDocIds(), tagsCsv);
+        int updatedRows = keywordRepo.updateDocTags(docId, tagsCsv);
+        if (updatedRows == 0) {
+            throw new DocumentIndexingException(
+                    "문서의 색인 데이터를 찾을 수 없어 태그를 저장하지 못했습니다 (재동기화 또는 재업로드가 필요합니다): " + docId);
+        }
+
+        return new DocumentInfo(docId, DocRegistry.filenameFromDocId(docId), entry.version(),
+                entry.chunks(), entry.indexedAt(), entry.sha256(), tags, entry.errors());
+    }
+
     public List<Document> search(String userId, String query, String version, int topK) {
         return vectorStore.search(DocRegistry.SHARED, query, version, topK);
     }
@@ -160,6 +201,11 @@ public class RagService {
 
     public void reindexFromMd(String docId) throws IOException {
         indexer.reindexFromMd(docId);
+    }
+
+    /** Same as {@link #reindexFromMd(String)}, reporting per-stage progress via {@code onProgress}. */
+    public void reindexFromMd(String docId, Consumer<IndexingProgressEvent> onProgress) throws IOException {
+        indexer.reindexFromMd(docId, onProgress);
     }
 
     // ── Path helpers ───────────────────────────────────────────────────────

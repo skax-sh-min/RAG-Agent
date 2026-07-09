@@ -4,6 +4,7 @@ import com.example.ragagent.audit.AuditLogger;
 import com.example.ragagent.context.ThreadContext;
 import com.example.ragagent.model.*;
 import com.example.ragagent.exception.DocumentIndexingException;
+import com.example.ragagent.exception.IndexingCancelledException;
 import com.example.ragagent.exception.UnsupportedFileTypeException;
 import com.example.ragagent.security.UploadValidator;
 import com.example.ragagent.service.IndexingProgressService;
@@ -99,15 +100,28 @@ public class DocumentController {
             log.warn("Rejected upload: {}", e.getMessage());
             return ResponseEntity.badRequest().build();
         }
-        String taskId = progressService.newTaskId();
-        final Path tmpPath = tmp;
-        final String fname = filename;
-        final String ver = version;
         final String userId = ctx.userId();
+        Path dest;
+        try {
+            // Persist into documentsDir (not just the temp stage) — directory sync treats any
+            // registered document missing from disk as user-deleted and wipes its embeddings,
+            // so an upload that never lands on disk gets destroyed on the next sync.
+            dest = persistToDocumentsDir(tmp, filename, ragService.userDocumentsDir(userId));
+        } catch (IllegalArgumentException e) {
+            log.warn("Rejected upload: {}", e.getMessage());
+            return ResponseEntity.badRequest().build();
+        } finally {
+            try { Files.deleteIfExists(tmp); } catch (IOException ignored) {}
+        }
 
-        Thread.ofVirtual().name("idx-upload-" + taskId).start(() -> {
+        String taskId = progressService.newTaskId();
+        final Path docPath = dest;
+        final String fname = dest.getFileName().toString();
+        final String ver = version;
+
+        Thread worker = Thread.ofVirtual().name("idx-upload-" + taskId).start(() -> {
             try {
-                DocumentInfo info = ragService.indexDocument(userId, tmpPath, fname, ver, tagList,
+                DocumentInfo info = ragService.indexDocument(userId, docPath, fname, ver, tagList,
                     addImageDescriptions, addHeadingNumbers,
                         event -> progressService.publish(taskId, event));
                 progressService.publish(taskId, IndexingProgressEvent.done(info));
@@ -115,14 +129,16 @@ public class DocumentController {
                     Map.of("filename", fname, "version", ver, "chunks", info.chunks(),
                         "addImageDescriptions", addImageDescriptions,
                         "addHeadingNumbers", addHeadingNumbers));
+            } catch (IndexingCancelledException e) {
+                // progressService.cancel() already published the terminal 'cancelled' event.
+                log.info("[UPLOAD] cancelled by user: taskId={} file={}", taskId, fname);
             } catch (Exception e) {
                 String msg = isChromaDown(e) ? "ChromaDB 연결 실패" : e.getMessage();
                 log.error("Async index error for {}", fname, e);
                 progressService.publish(taskId, IndexingProgressEvent.error(fname, msg));
-            } finally {
-                try { Files.deleteIfExists(tmpPath); } catch (Exception ignored) {}
             }
         });
+        progressService.registerWorker(taskId, worker);
 
         return ResponseEntity.accepted().body(Map.of("taskId", taskId));
     }
@@ -134,32 +150,13 @@ public class DocumentController {
         return progressService.subscribe(taskId);
     }
 
-    /** Starts directory sync asynchronously and returns {taskId} (HTTP 202). */
-    @PostMapping("/ui/documents/sync")
+    /** §6.16.1 — cancels an in-progress upload/sync task: interrupts the worker thread and
+     *  completes the SSE progress stream immediately. */
+    @PostMapping("/ui/documents/progress/{taskId}/cancel")
     @ResponseBody
-    public ResponseEntity<Map<String, String>> syncDocumentsUi(
-            ThreadContext ctx,
-            @RequestParam(defaultValue = "latest") String version) {
-        String taskId = progressService.newTaskId();
-        final String userId = ctx.userId();
-
-        Thread.ofVirtual().name("idx-sync-" + taskId).start(() -> {
-            try {
-                SyncResult result = ragService.syncDirectory(userId, version,
-                        event -> progressService.publish(taskId, event));
-                progressService.publish(taskId, IndexingProgressEvent.syncDone(result));
-                auditLogger.log("document.sync", null,
-                        Map.of("indexed", result.indexed().size(),
-                               "updated", result.updated().size(),
-                               "deleted", result.deleted().size()));
-            } catch (Exception e) {
-                String msg = isChromaDown(e) ? "ChromaDB 연결 실패" : e.getMessage();
-                log.error("Sync error", e);
-                progressService.publish(taskId, IndexingProgressEvent.error("sync", msg));
-            }
-        });
-
-        return ResponseEntity.accepted().body(Map.of("taskId", taskId));
+    public ResponseEntity<Void> cancelIndexing(@PathVariable String taskId) {
+        progressService.cancel(taskId);
+        return ResponseEntity.noContent().build();
     }
 
     @DeleteMapping("/ui/documents/{docId}")
@@ -171,6 +168,36 @@ public class DocumentController {
         ragService.deleteDocument(ctx.userId(), docId, version);
         auditLogger.log("document.delete", docId, Map.of("version", version));
         return ResponseEntity.ok().build();
+    }
+
+    /** Tags-cell edit form (HTMX fragment) — pre-filled with the document's current tags. */
+    @GetMapping("/ui/documents/{docId}/tags/edit")
+    public String editTagsForm(ThreadContext ctx, @PathVariable String docId, Model model) {
+        DocumentInfo doc = ragService.findDocument(ctx.userId(), docId)
+                .orElseThrow(() -> new IllegalArgumentException("문서를 찾을 수 없습니다: " + docId));
+        model.addAttribute("doc", doc);
+        model.addAttribute("tagsCsv", String.join(", ", doc.tags()));
+        return "fragments/doc-table-body :: tagsEdit";
+    }
+
+    /** Tags-cell view fragment — also used as the Cancel target for the edit form. */
+    @GetMapping("/ui/documents/{docId}/tags/view")
+    public String viewTagsCell(ThreadContext ctx, @PathVariable String docId, Model model) {
+        DocumentInfo doc = ragService.findDocument(ctx.userId(), docId)
+                .orElseThrow(() -> new IllegalArgumentException("문서를 찾을 수 없습니다: " + docId));
+        model.addAttribute("doc", doc);
+        return "fragments/doc-table-body :: tagsView";
+    }
+
+    /** Replaces a document's search-scope tags (metadata-only — no re-embedding). */
+    @PatchMapping("/ui/documents/{docId}/tags")
+    public String updateTagsUi(ThreadContext ctx, @PathVariable String docId,
+                                @RequestParam(defaultValue = "") String tags, Model model) {
+        List<String> tagList = TagUtils.parseCsv(tags);   // policy violation → 400 (IllegalArgumentException)
+        DocumentInfo doc = ragService.updateDocumentTags(ctx.userId(), docId, tagList);
+        auditLogger.log("document.tags_update", docId, Map.of("tags", doc.tags()));
+        model.addAttribute("doc", doc);
+        return "fragments/doc-table-body :: tagsView";
     }
 
     @GetMapping("/ui/documents/list")
@@ -224,43 +251,23 @@ public class DocumentController {
         }
 
         String userId = ctx.userId();
+        Path dest;
         try {
-            Path documentsDir = ragService.userDocumentsDir(userId);
-            Files.createDirectories(documentsDir);
-            Path base = documentsDir.toAbsolutePath().normalize();
-            Path dest = base.resolve(filename).normalize();
-            if (!dest.startsWith(base)) {
-                log.warn("Rejected upload: path escapes documentsDir ({})", filename);
-                Files.deleteIfExists(staged);
-                return ResponseEntity.badRequest().build();
-            }
-            if (Files.exists(dest) && computeSha256(staged).equals(computeSha256(dest))) {
-                log.debug("Upload no-op: identical content for {}", filename);
-                Files.deleteIfExists(staged);
-                DocumentInfo existing = ragService.indexDocument(userId, dest,
-                    dest.getFileName().toString(), version, tagList,
-                    addImageDescriptions, addHeadingNumbers, e -> {});
-                auditLogger.log("document.upload", existing.docId(),
-                    Map.of("filename", filename, "version", version, "chunks", existing.chunks(),
-                        "addImageDescriptions", addImageDescriptions,
-                        "addHeadingNumbers", addHeadingNumbers));
-                return ResponseEntity.ok(existing);
-            }
-            if (Files.exists(dest)) {
-                dest = versionedPath(dest);
-            }
-            Files.copy(staged, dest, StandardCopyOption.REPLACE_EXISTING);
-            DocumentInfo info = ragService.indexDocument(userId, dest,
-                    dest.getFileName().toString(), version, tagList,
-                    addImageDescriptions, addHeadingNumbers, e -> {});
-            auditLogger.log("document.upload", info.docId(),
-                    Map.of("filename", filename, "version", version, "chunks", info.chunks(),
-                    "addImageDescriptions", addImageDescriptions,
-                    "addHeadingNumbers", addHeadingNumbers));
-            return ResponseEntity.ok(info);
+            dest = persistToDocumentsDir(staged, filename, ragService.userDocumentsDir(userId));
+        } catch (IllegalArgumentException e) {
+            log.warn("Rejected upload: {}", e.getMessage());
+            return ResponseEntity.badRequest().build();
         } finally {
             try { Files.deleteIfExists(staged); } catch (IOException ignored) {}
         }
+        DocumentInfo info = ragService.indexDocument(userId, dest,
+                dest.getFileName().toString(), version, tagList,
+                addImageDescriptions, addHeadingNumbers, e -> {});
+        auditLogger.log("document.upload", info.docId(),
+                Map.of("filename", filename, "version", version, "chunks", info.chunks(),
+                "addImageDescriptions", addImageDescriptions,
+                "addHeadingNumbers", addHeadingNumbers));
+        return ResponseEntity.ok(info);
     }
 
     @PostMapping("/api/v1/documents/sync")
@@ -359,6 +366,33 @@ public class DocumentController {
             t = t.getCause();
         }
         return false;
+    }
+
+    /**
+     * Persists a staged upload into {@code documentsDir} so it survives for future directory
+     * syncs — {@link com.example.ragagent.ingestion.DocumentIndexer#syncDirectory} treats any
+     * registered document missing from disk as user-deleted. No-ops (returns the existing path)
+     * if identical content is already there; falls back to a versioned name on a same-name
+     * collision with different content.
+     *
+     * @throws IllegalArgumentException if the resolved destination escapes documentsDir
+     */
+    private static Path persistToDocumentsDir(Path staged, String filename, Path documentsDir) throws IOException {
+        Files.createDirectories(documentsDir);
+        Path base = documentsDir.toAbsolutePath().normalize();
+        Path dest = base.resolve(filename).normalize();
+        if (!dest.startsWith(base)) {
+            throw new IllegalArgumentException("path escapes documentsDir: " + filename);
+        }
+        if (Files.exists(dest) && computeSha256(staged).equals(computeSha256(dest))) {
+            log.debug("Upload no-op: identical content for {}", filename);
+            return dest;
+        }
+        if (Files.exists(dest)) {
+            dest = versionedPath(dest);
+        }
+        Files.copy(staged, dest, StandardCopyOption.REPLACE_EXISTING);
+        return dest;
     }
 
     private static String computeSha256(Path path) throws IOException {

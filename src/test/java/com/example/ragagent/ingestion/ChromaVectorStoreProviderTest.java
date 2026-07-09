@@ -18,8 +18,10 @@ import java.util.Map;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
@@ -147,5 +149,90 @@ class ChromaVectorStoreProviderTest {
         assertThat(result).hasSize(2);
         assertThat(result.get(0)).isEmpty();
         assertThat(result.get(1)).isEmpty();
+    }
+
+    // ── add(onProgress) default method ───────────────────────────────────
+
+    @Test
+    @DisplayName("add(onProgress): Chroma는 배치 내부 가시성이 없어 0→total 단일 점프만 보고한다")
+    void add_withProgress_reportsSingleJump() {
+        VectorStoreRegistry registry = mock(VectorStoreRegistry.class);
+        VectorStore store = mock(VectorStore.class);
+        when(registry.getStore(any(), any())).thenReturn(store);
+
+        Document doc = Document.builder().id("d1").text("hello").metadata(Map.of()).build();
+        List<int[]> calls = new java.util.ArrayList<>();
+
+        provider(registry, mock(ChromaApi.class), mock(EmbeddingModel.class), 0.0)
+                .add("owner", "latest", List.of(doc), (done, total) -> calls.add(new int[]{done, total}));
+
+        verify(store).add(List.of(doc));
+        assertThat(calls).hasSize(2);
+        assertThat(calls.get(0)).containsExactly(0, 1);
+        assertThat(calls.get(1)).containsExactly(1, 1);
+    }
+
+    // ── updateTags ──────────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("updateTags: 기존 임베딩을 그대로 유지하며 tags 메타데이터만 갱신한다")
+    void updateTags_mergesTagsAndPreservesEmbedding() {
+        VectorStoreRegistry registry = mock(VectorStoreRegistry.class);
+        when(registry.collectionName(any(), any())).thenReturn("u_shared_latest");
+        when(registry.getStore(any(), any())).thenReturn(mock(VectorStore.class));
+        ChromaApi chromaApi = mock(ChromaApi.class);
+        when(chromaApi.getCollection(anyString(), anyString(), anyString()))
+                .thenReturn(new ChromaApi.Collection("cid", "u_shared_latest", Map.of()));
+
+        ChromaApi.GetEmbeddingResponse existing = new ChromaApi.GetEmbeddingResponse(
+                List.of("d1", "d2"),
+                List.of(new float[]{0.1f}, new float[]{0.2f}),
+                List.of("text1", "text2"),
+                List.of(Map.of("filename", "f.pdf"), Map.of("filename", "g.pdf", "tags", "old")));
+        when(chromaApi.getEmbeddings(anyString(), anyString(), anyString(), any())).thenReturn(existing);
+
+        provider(registry, chromaApi, mock(EmbeddingModel.class), 0.0)
+                .updateTags("owner", "latest", List.of("d1", "d2"), "new,tags");
+
+        ArgumentCaptor<ChromaApi.AddEmbeddingsRequest> captor = ArgumentCaptor.forClass(ChromaApi.AddEmbeddingsRequest.class);
+        verify(chromaApi).upsertEmbeddings(anyString(), anyString(), eq("u_shared_latest"), captor.capture());
+        ChromaApi.AddEmbeddingsRequest req = captor.getValue();
+        assertThat(req.ids()).containsExactly("d1", "d2");
+        assertThat(req.embeddings()).isSameAs(existing.embeddings());
+        assertThat(req.metadata().get(0)).containsEntry("tags", "new,tags").containsEntry("filename", "f.pdf");
+        assertThat(req.metadata().get(1)).containsEntry("tags", "new,tags").containsEntry("filename", "g.pdf");
+    }
+
+    @Test
+    @DisplayName("updateTags: 빈 tagsCsv → tags 키 제거")
+    void updateTags_removesKeyWhenBlank() {
+        VectorStoreRegistry registry = mock(VectorStoreRegistry.class);
+        when(registry.collectionName(any(), any())).thenReturn("u_shared_latest");
+        when(registry.getStore(any(), any())).thenReturn(mock(VectorStore.class));
+        ChromaApi chromaApi = mock(ChromaApi.class);
+        when(chromaApi.getCollection(anyString(), anyString(), anyString()))
+                .thenReturn(new ChromaApi.Collection("cid", "u_shared_latest", Map.of()));
+
+        ChromaApi.GetEmbeddingResponse existing = new ChromaApi.GetEmbeddingResponse(
+                List.of("d1"), List.of(new float[]{0.1f}), List.of("text1"),
+                List.of(Map.of("filename", "f.pdf", "tags", "old")));
+        when(chromaApi.getEmbeddings(anyString(), anyString(), anyString(), any())).thenReturn(existing);
+
+        provider(registry, chromaApi, mock(EmbeddingModel.class), 0.0)
+                .updateTags("owner", "latest", List.of("d1"), "");
+
+        ArgumentCaptor<ChromaApi.AddEmbeddingsRequest> captor = ArgumentCaptor.forClass(ChromaApi.AddEmbeddingsRequest.class);
+        verify(chromaApi).upsertEmbeddings(anyString(), anyString(), anyString(), captor.capture());
+        assertThat(captor.getValue().metadata().get(0)).doesNotContainKey("tags");
+    }
+
+    @Test
+    @DisplayName("updateTags(빈 springDocIds): Chroma 호출 없음")
+    void updateTags_emptyIds() {
+        VectorStoreRegistry registry = mock(VectorStoreRegistry.class);
+        ChromaApi chromaApi = mock(ChromaApi.class);
+        provider(registry, chromaApi, mock(EmbeddingModel.class), 0.0)
+                .updateTags("owner", "latest", List.of(), "x");
+        verifyNoInteractions(chromaApi);
     }
 }

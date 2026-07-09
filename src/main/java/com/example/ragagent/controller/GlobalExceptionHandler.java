@@ -1,5 +1,6 @@
 package com.example.ragagent.controller;
 
+import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.exception.RagException;
 import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
@@ -27,6 +28,12 @@ import java.util.Locale;
 public class GlobalExceptionHandler {
 
     private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
+
+    private final AppProperties props;
+
+    public GlobalExceptionHandler(AppProperties props) {
+        this.props = props;
+    }
 
     @ExceptionHandler(RagException.class)
     public ResponseEntity<ProblemDetail> handleRag(RagException ex, HttpServletRequest req) {
@@ -67,7 +74,11 @@ public class GlobalExceptionHandler {
     @ResponseStatus(HttpStatus.SERVICE_UNAVAILABLE)
     @ExceptionHandler(AsyncRequestTimeoutException.class)
     public void handleAsyncTimeout(HttpServletRequest req) {
-        log.info("[TIMEOUT:ASYNC_MVC] {} {}", req.getMethod(), req.getRequestURI());
+        // All current async endpoints are SseEmitter-based (chat stream, indexing progress) and
+        // construct their emitter with props.sseTimeoutMs() — that per-emitter value governs the
+        // timeout, not the global spring.mvc.async.request-timeout (set to -1/unlimited).
+        log.info("[TIMEOUT:ASYNC_MVC] {} {} (app.sse-timeout-seconds={}s)",
+                req.getMethod(), req.getRequestURI(), props.sseTimeoutMs() / 1000);
     }
 
     @ExceptionHandler(NoResourceFoundException.class)

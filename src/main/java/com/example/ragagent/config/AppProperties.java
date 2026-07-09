@@ -32,7 +32,12 @@ public record AppProperties(
         MemoryConfig memory,
         SummaryConfig summary,
         Integer searchTagCandidateMultiplier,  // 태그 선택 시 후보확대 배수 (기본 2)
-        Integer sseIdleTimeoutSeconds           // SSE 무활동(토큰/노드 이벤트 없음) 감시 타임아웃 (기본 120초)
+        Integer sseIdleTimeoutSeconds,          // SSE 무활동(토큰/노드 이벤트 없음) 감시 타임아웃 (기본 120초)
+        Double searchRrfKeywordWeight,          // 가중 RRF — 키워드(BM25) 축 가중치 (기본 1.0, 벡터축은 그룹 정규화되어 자동으로 1.0과 동등 비중)
+        Integer searchRrfK,                     // 가중 RRF — RRF 상수 k (기본 60, 원논문 표준값)
+        Boolean searchQueryEmbedCacheEnabled,   // 쿼리 임베딩 캐시 on/off (기본 true)
+        Integer searchQueryEmbedCacheMaxSize,   // 쿼리 임베딩 캐시 최대 엔트리 수 (기본 500)
+        Integer searchQueryEmbedCacheTtlSeconds // 쿼리 임베딩 캐시 TTL 초 (기본 600 = 10분)
 ) {
     public record LlmConfig(
             List<ProviderConfig> providers,
@@ -159,6 +164,33 @@ public record AppProperties(
     public int searchTagCandidateMultiplierSafe() {
         return (searchTagCandidateMultiplier == null || searchTagCandidateMultiplier < 1)
                 ? 2 : searchTagCandidateMultiplier;
+    }
+
+    /** Weighted RRF — keyword (BM25) axis weight. Defaults to 1.0 (parity with the group-normalized vector axes). */
+    public double searchRrfKeywordWeightSafe() {
+        return (searchRrfKeywordWeight != null && searchRrfKeywordWeight > 0) ? searchRrfKeywordWeight : 1.0;
+    }
+
+    /** Weighted RRF — rank-fusion constant k. Defaults to 60 (the original RRF paper's value). */
+    public int searchRrfKSafe() {
+        return (searchRrfK != null && searchRrfK > 0) ? searchRrfK : 60;
+    }
+
+    /** Query embedding cache on/off. Defaults to enabled. */
+    public boolean searchQueryEmbedCacheEnabledSafe() {
+        return searchQueryEmbedCacheEnabled == null || searchQueryEmbedCacheEnabled;
+    }
+
+    /** Query embedding cache max entries. Defaults to 500. */
+    public int searchQueryEmbedCacheMaxSizeSafe() {
+        return (searchQueryEmbedCacheMaxSize != null && searchQueryEmbedCacheMaxSize > 0)
+                ? searchQueryEmbedCacheMaxSize : 500;
+    }
+
+    /** Query embedding cache TTL (seconds, write-based expiry). Defaults to 600 (10 min). */
+    public int searchQueryEmbedCacheTtlSecondsSafe() {
+        return (searchQueryEmbedCacheTtlSeconds != null && searchQueryEmbedCacheTtlSeconds > 0)
+                ? searchQueryEmbedCacheTtlSeconds : 600;
     }
 
     /**

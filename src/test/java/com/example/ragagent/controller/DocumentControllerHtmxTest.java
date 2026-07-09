@@ -2,6 +2,7 @@ package com.example.ragagent.controller;
 
 import com.example.ragagent.audit.AuditLogger;
 import com.example.ragagent.context.ThreadContextResolver;
+import com.example.ragagent.model.DocumentInfo;
 import com.example.ragagent.service.IndexingProgressService;
 import com.example.ragagent.service.RagService;
 import org.junit.jupiter.api.BeforeEach;
@@ -19,14 +20,19 @@ import org.springframework.test.web.servlet.MockMvc;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
+import java.util.Optional;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -85,6 +91,25 @@ class DocumentControllerHtmxTest {
     }
 
     @Test
+    @DisplayName("POST /ui/documents/upload — 업로드 파일이 documentsDir에 영구 저장됨 (동기화 삭제 오판 회귀 방지)")
+    void uploadDocument_persistsFileToDocumentsDir() throws Exception {
+        when(indexingProgressService.newTaskId()).thenReturn("task-persist");
+
+        MockMultipartFile file = new MockMultipartFile(
+                "file", "keep.pdf", "application/pdf", "%PDF-1.4 dummy".getBytes());
+
+        mvc.perform(multipart("/ui/documents/upload").file(file)
+                        .param("version", "latest")
+                        .with(csrf()))
+                .andExpect(status().isAccepted());
+
+        // syncDirectory() scans documentsDir and deletes any registered doc missing from disk —
+        // if the upload only wrote to a temp file, this file would be absent and the next sync
+        // would wipe the document's embeddings.
+        assertThat(tempDir.resolve("documents").resolve("keep.pdf")).exists();
+    }
+
+    @Test
     @DisplayName("POST /ui/documents/upload — 빈 파일 → 400")
     void uploadDocument_emptyFile_returns400() throws Exception {
         MockMultipartFile empty = new MockMultipartFile(
@@ -117,16 +142,40 @@ class DocumentControllerHtmxTest {
                 .andExpect(status().isOk());
     }
 
-    @Test
-    @DisplayName("POST /ui/documents/sync — 정상 → 202 + taskId (비동기 싱크)")
-    void syncDocuments_returnsAccepted() throws Exception {
-        when(indexingProgressService.newTaskId()).thenReturn("task-sync-1");
+    // ── 태그 편집 (HTMX view/edit toggle) ───────────────────────
 
-        mvc.perform(post("/ui/documents/sync")
-                        .param("version", "latest")
+    @Test
+    @DisplayName("GET /ui/documents/{docId}/tags/edit — 현재 태그가 채워진 편집 폼 반환")
+    void editTagsForm_returnsFormPrefilledWithCurrentTags() throws Exception {
+        when(ragService.findDocument(any(), eq("doc1"))).thenReturn(Optional.of(
+                new DocumentInfo("doc1", "f.pdf", "latest", 3, "t", "sha", List.of("faq", "guide"), List.of())));
+
+        mvc.perform(get("/ui/documents/doc1/tags/edit"))
+                .andExpect(status().isOk())
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("faq, guide")));
+    }
+
+    @Test
+    @DisplayName("GET /ui/documents/{docId}/tags/edit — 존재하지 않는 문서 → 400")
+    void editTagsForm_missingDoc_returns400() throws Exception {
+        when(ragService.findDocument(any(), eq("missing"))).thenReturn(Optional.empty());
+
+        mvc.perform(get("/ui/documents/missing/tags/edit"))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    @DisplayName("PATCH /ui/documents/{docId}/tags — 갱신된 태그로 뷰 프래그먼트 반환 + 감사 로그")
+    void updateTags_success_returnsViewFragment() throws Exception {
+        when(ragService.updateDocumentTags(any(), eq("doc1"), any())).thenReturn(
+                new DocumentInfo("doc1", "f.pdf", "latest", 3, "t", "sha", List.of("x", "y"), List.of()));
+
+        mvc.perform(patch("/ui/documents/doc1/tags")
+                        .param("tags", "x, y")
                         .with(csrf()))
-                .andExpect(status().isAccepted())
-                .andExpect(jsonPath("$.taskId").value("task-sync-1"));
+                .andExpect(status().isOk())
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("x")))
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("y")));
     }
 
     // ── 회귀: 추출된 SVG는 inline 렌더 금지 ───────────────────────

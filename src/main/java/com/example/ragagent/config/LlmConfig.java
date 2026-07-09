@@ -106,7 +106,7 @@ public class LlmConfig {
                 .toList());
         log.info("LLM HTTP timeouts: connect={}s read={}s", connectTimeoutSeconds, readTimeoutSeconds);
 
-        return new LlmRouter(providers, usageRepo, circuitBreaker, defaultMode, threshold);
+        return new LlmRouter(providers, usageRepo, circuitBreaker, defaultMode, threshold, readTimeoutSeconds);
     }
 
     @Bean

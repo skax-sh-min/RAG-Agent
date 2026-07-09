@@ -101,6 +101,7 @@ See [USER_MANUAL.md](USER_MANUAL.md) for usage instructions and [OPERATOR_MANUAL
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
+| `SERVER_PORT` | — | `8080` | Port the application listens on. Change only on conflict with another local service |
 | `LOCAL_LLM_URL` | — | `http://localhost:1234/v1` | LOCAL provider endpoint (also used as embedding fallback) |
 | `LOCAL_LLM_KEY` | — | `lm-studio` | LOCAL provider API key. **Optional for local endpoints** (llama-server needs none) — the LOCAL provider is kept even when blank (`no-key` is substituted) |
 | `LOCAL_LLM_MODEL` | — | `google/gemma-4-e4b` | LOCAL provider model name |
@@ -134,6 +135,11 @@ See [USER_MANUAL.md](USER_MANUAL.md) for usage instructions and [OPERATOR_MANUAL
 | `SEARCH_RETRY_ESCALATE` | `true` | true/false | Grow candidate pool on each retry — `×(retryCount+1)`, capped `×3` |
 | `SEARCH_RERANK_ENABLED` | `false` | true/false | LLM reranking stage after RRF (adds 1 LLM call/turn) |
 | `SEARCH_CANDIDATE_MULTIPLIER` | `3` | 2 ~ 5 | Candidate pool size for reranking — `topK × N` |
+| `SEARCH_RRF_KEYWORD_WEIGHT` | `1.0` | 0.5 ~ 3.0 | Weighted RRF (Phase 7-A) — BM25 keyword axis weight. Vector axes (1-3 MultiQuery variants) are always group-normalized to `1/axisCount`, so `1.0` is parity with the normalized vector group. No effect when `SEARCH_HYBRID_ENABLED=false` |
+| `SEARCH_RRF_K` | `60` | 20 ~ 100 | Weighted RRF (Phase 7-A) — rank-fusion constant k (original paper default) |
+| `SEARCH_QUERY_EMBED_CACHE_ENABLED` | `true` | true/false | Query embedding cache (Phase 7-A) — caches normalized-query → vector (Caffeine, in-memory) so repeated/similar questions skip the embedding round-trip; a cache hit also records no `embed:<model>` usage |
+| `SEARCH_QUERY_EMBED_CACHE_MAX_SIZE` | `500` | 100 ~ 5000 | Query embedding cache entry cap |
+| `SEARCH_QUERY_EMBED_CACHE_TTL_SECONDS` | `600` | 60 ~ 3600 | Query embedding cache TTL (seconds, write-based expiry) |
 | `MAX_RETRY_COUNT` | `2` | 0 ~ 4 | Maximum re-retrieval attempts when evidence is insufficient |
 
 ### Conversation Memory / Summary Cache
@@ -205,7 +211,8 @@ rag_java/
     │   │   ├── LlmRouter.java         # Multi-provider routing: TaskType × RoutingMode
     │   │   ├── RoutingMode.java       # COST_FIRST|QUALITY_FIRST|PROGRESSIVE|DUAL|LOCAL_ONLY
     │   │   ├── CircuitBreaker.java    # In-memory per-provider circuit breaker (Retry-After aware)
-    │   │   └── TrackingEmbeddingModel.java  # EmbeddingModel decorator — records embedding token usage separately (embed:<model>)
+    │   │   ├── TrackingEmbeddingModel.java  # EmbeddingModel decorator — records embedding token usage separately (embed:<model>)
+    │   │   └── CachingEmbeddingModel.java   # EmbeddingModel decorator — Caffeine query-embedding cache (Phase 7-A), composed outside tracking
     │   ├── model/                     # Java 21 records
     │   │   ├── MetaKey.java           # Vector store metadata key constants
     │   │   └── ChatRequest/Response/SourceRef/DocumentInfo/SyncResult/ThreadMeta/ChatForm/LlmProviderReport/IndexingProgressEvent.java
@@ -272,8 +279,7 @@ rag_java/
                 ├── doc-table-body.html    # HTMX document table tbody fragment
                 ├── message-user.html      # User message bubble fragment
                 ├── message-assistant.html # HTMX assistant bubble (includes source hover preview)
-                ├── message-error.html     # HTMX error bubble fragment
-                └── sync-result.html       # HTMX sync result toast fragment
+                └── message-error.html     # HTMX error bubble fragment
 ```
 
 ## Agent Pipeline

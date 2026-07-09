@@ -34,7 +34,7 @@ RAG Agent 시스템 배포·설정·운영 가이드입니다.
    - 6.2 [문서 버전 관리](#62-문서-버전-관리)
    - 6.3 [데이터 영속성](#63-데이터-영속성)
    - 6.4 [성능](#64-성능)
-7. [관리자 패널](#7-관리자-패널)
+7. [벡터 스토어 관리](#7-벡터-스토어-관리)
 8. [문제 해결](#8-문제-해결)
 9. [보안 설정](#9-보안-설정)
    - 9.1 [git 훅 설치](#91-git-훅-설치)
@@ -164,6 +164,7 @@ copy .env.example .env
 
 | 변수 | 필수 | 기본값 | 설명 |
 |------|------|--------|------|
+| `SERVER_PORT` | — | `8080` | 애플리케이션이 리스닝할 포트 (`server.port`). 다른 서비스와 충돌할 때만 변경 — Docker Compose 사용 시 `docker-compose.yml`의 포트 매핑(`127.0.0.1:8080:8080`)과 Caddy `reverse_proxy app:8080`도 함께 맞춰야 함 |
 | `LOCAL_LLM_URL` | — | `http://localhost:1234/v1` | `providers[0]` LOCAL 엔드포인트 기본 URL. 임베딩 설정(`EMBED_BASE_URL`)의 폴백으로도 사용됨 |
 | `LOCAL_LLM_KEY` | — | `lm-studio` | `providers[0]` API 키. **로컬 엔드포인트(llama-server 등)는 키가 불필요** — 비우거나 미설정해도 LOCAL provider는 등록됨(내부적으로 `no-key` 치환). 로컬 LLM이 아예 없으면 미사용 시 첫 호출 1회 실패 후 Circuit Breaker로 우회되며, 완전히 제외하려면 `application.properties`의 `providers[0]`를 주석 처리하거나 `LLM_ROUTING_MODE=QUALITY_FIRST`로 후순위 배치 |
 | `LOCAL_LLM_MODEL` | — | `google/gemma-4-e4b` | `providers[0]` 모델 식별자. 사용 중인 로컬 모델명으로 변경 |
@@ -202,6 +203,8 @@ copy .env.example .env
 | `SEARCH_RETRY_ESCALATE` | `true` | true/false | 재시도마다 후보 풀 확대. `candidateK = min(topK×(retryCount+1), topK×3)`. 동일 검색 반복 회피 |
 | `SEARCH_RERANK_ENABLED` | `false` | true/false | RRF 후 LLM 리랭킹 단계 (opt-in). **턴당 LLM 1콜 추가** → 정밀도↑/레이턴시 트레이드오프 |
 | `SEARCH_CANDIDATE_MULTIPLIER` | `3` | 2 ~ 5 | 리랭킹 전 후보 풀 크기. `topK × N`개 가져와 리랭킹 후 topK로 축소 |
+| `SEARCH_RRF_KEYWORD_WEIGHT` | `1.0` | 0.5 ~ 3.0 | 가중 RRF(Phase 7-A) — BM25 키워드 축 가중치. 벡터 축(MultiQuery 1~3개)은 항상 `1/축개수`로 그룹 정규화되므로 `1.0`이 정규화된 벡터 그룹과 동일 비중. `SEARCH_HYBRID_ENABLED=false`면 키워드 축이 없어 무영향 |
+| `SEARCH_RRF_K` | `60` | 20 ~ 100 | 가중 RRF(Phase 7-A) — RRF 순위융합 상수 k(원논문 기본값 60) |
 | `MAX_RETRY_COUNT` | `2` | 0 ~ 4 | 증거 부족 시 재검색 최대 횟수 |
 
 대화 컨텍스트 주입 길이는 `LLM_MAX_TOKENS × 0.75`(최소 1,000자)로 자동 계산됩니다. 원문 그대로 보내는 폴백 경로(`MemoryService.getHistory()`)와 요약 캐시 경로(`ConversationSummarizerService.buildContext()`, §6.1) 모두 이 예산을 동일하게 지키도록 통일되어 있습니다.
@@ -245,6 +248,16 @@ copy .env.example .env
 |------|--------|------|
 | `EMBED_USAGE_FALLBACK_ENABLED` | `true` | 임베딩 사용량은 `llm_usage`에 `embed:<model>`로 채팅과 분리 집계되어 `/llm-usage`에 별도 카드로 표시됩니다(§5.5, §10). 임베딩 서버가 응답에 토큰 사용량을 반환하지 않으면(로컬 llama-server 등 흔함) 입력 텍스트 길이 근사(chars/4)로 대체 기록합니다. `false`로 설정하면 근사 대신 `0`을 기록합니다. 근사 경로 진입 시 서버 로그에 경고가 **최초 1회만** 출력됩니다 |
 | `EMBED_MAX_CHUNK_CHARS` | `0` (비활성) | 청크 1개의 **문자 수 하드 상한**. 임베딩 서버가 `input (N tokens) is too large ... (current batch size: 512)`처럼 배치/토큰 한계로 청크를 거부할 때 사용합니다. 이 값을 넘는 청크는 (의미 단위 청킹이 끝난 뒤) 줄 경계에서 **강제 재분할**되어 서버 한계를 넘지 않도록 보장합니다. 한국어·코드는 대략 1토큰/문자이므로 512토큰 배치라면 `~450` 정도가 안전. **먼저 서버 배치를 키우는 것을 권장**(아래 §8 참조)하고, 이건 최후의 안전장치로 사용하세요 |
+
+#### 쿼리 임베딩 캐시 (Phase 7-A)
+
+| 변수 | 기본값 | 권장 범위 | 설명 |
+|------|--------|----------|------|
+| `SEARCH_QUERY_EMBED_CACHE_ENABLED` | `true` | true/false | 정규화된 질의 텍스트 → 임베딩 벡터를 Caffeine 인메모리 캐시에 저장해 반복·유사 질문의 임베딩 왕복을 생략합니다. 캐시 히트 시 `embed:<model>` usage도 기록되지 않습니다(실제 호출이 없었으므로) |
+| `SEARCH_QUERY_EMBED_CACHE_MAX_SIZE` | `500` | 100 ~ 5000 | 캐시 최대 엔트리 수 |
+| `SEARCH_QUERY_EMBED_CACHE_TTL_SECONDS` | `600` | 60 ~ 3600 | 캐시 엔트리 TTL(초, write 기준 만료) |
+
+> 캐시는 인메모리 전용(재시작 시 초기화)이며, 인덱싱 시 청크 텍스트 임베딩도 같은 캐시를 지나가지만 대부분 캐시 미스로 끝나 `MAX_SIZE`/`TTL` 안에서 자연히 흡수됩니다(메모리 누수 없음, 다만 인덱싱 자체는 캐시 이득이 없음). `EMBED_MODEL`을 바꾸면 재시작 시 캐시가 자동으로 비워지므로 별도 무효화 절차는 불필요합니다.
 
 #### LLM 응답 파라미터
 
@@ -360,9 +373,10 @@ LLM_ROUTING_MODE=QUALITY_FIRST
 
 #### 서버 및 기타
 
+> `server.port`는 `SERVER_PORT` 환경변수로 주입 가능하므로 [§3.2 API 키 / 연결 정보](#32-환경변수-전체-목록)를 참조하세요. 아래 표는 환경변수로 주입할 수 없어 `application.properties` 직접 편집이 필요한 항목만 다룹니다.
+
 | 속성 | 기본값 | 변경 가능 여부 | 설명 |
 |------|--------|--------------|------|
-| `server.port` | `8080` | ✅ | 애플리케이션 포트 |
 | `spring.threads.virtual.enabled` | `true` | ⚠️ 변경 비권장 | Java 21 Virtual Thread 활성화. LLM I/O 동시성에 핵심적 |
 | `spring.datasource.hikari.maximum-pool-size` | `1` | ❌ 변경 금지 | SQLite는 동시 쓰기 불가 — 반드시 1 유지 |
 | `spring.autoconfigure.exclude` | Chroma 자동구성 제외 | ❌ 변경 금지 | `VectorStoreRegistry`가 직접 Chroma 빈을 관리. 제거 시 충돌 |
@@ -841,7 +855,7 @@ Caddy는 Docker 컨테이너이자 Let's Encrypt(인터넷)에 의존하므로 �
 - [ ] 외부(인터넷) 소켓 시도 없음 — `LLM_ROUTING_MODE=LOCAL_ONLY` + 외부 프로바이더 키 전부 미설정
 - [ ] `http://<host>:8080/api/v1/health` → `{"status":"ok"}`
 
-> **데이터 이전**: 기존 Chroma 데이터를 sqlite-vec로 직접 복사하지 않습니다. 문서 원본이 `data/documents/`에 보존되므로 **전체 재인덱싱**(관리자 패널 또는 디렉터리 재동기화)으로 이전합니다.
+> **데이터 이전**: 기존 Chroma 데이터를 sqlite-vec로 직접 복사하지 않습니다. 문서 원본이 `data/documents/`에 보존되므로 **전체 재인덱싱**(문서 재업로드 또는 `POST /api/v1/documents/sync`로 재동기화)으로 이전합니다.
 
 ### 4.6 태그 기반 검색 적용 전 수동 초기화 (프리릴리즈)
 
@@ -923,7 +937,7 @@ docker compose up --build -d
 ```
 
 - no-auth 모드(`AUTH_ENABLED=false`)면 `/setup`에서 관리자 계정을 다시 생성합니다.
-- 문서를 재업로드하거나 문서 폴더 동기화로 전체 재인덱싱합니다.
+- 문서를 재업로드하거나 `POST /api/v1/documents/sync`로 폴더를 재동기화해 전체 재인덱싱합니다.
 
 #### 5) 태그 기반 검색 기능 검증 체크리스트
 
@@ -1303,7 +1317,7 @@ curl -X POST http://localhost:8080/api/v1/chat \
 | 문서 원본 | `DATA_DIR/documents/` | Sync 대상 |
 | 추출된 이미지 | `DATA_DIR/images/{docId}/` | 문서 삭제 시 함께 삭제 |
 | DOCX 변환 MD (원본) | `DATA_DIR/converted/{docId}.md` | DOCX 인덱싱 시 자동 생성; 문서 삭제 시 함께 삭제 |
-| DOCX 변환 MD (교정본) | `DATA_DIR/converted/{docId}_corrected.md` | LLM 포맷 교정 후 저장; 실제 인덱싱 소스; 수동 편집 후 Admin ↺ 재인덱싱 가능 |
+| DOCX 변환 MD (교정본) | `DATA_DIR/converted/{docId}_corrected.md` | LLM 포맷 교정 후 저장; 실제 인덱싱 소스; 수동 편집 후 벡터 스토어 관리 페이지에서 ↺ 재인덱싱 가능 |
 | 인덱스 레지스트리 | `DATA_DIR/memory.db` (SQLite `doc_registry` 테이블) | userId·SHA-256 기반 변경 감지 |
 | 벡터 임베딩 | Chroma 서버 | 로컬: `data/chroma/`, Docker Compose: `chroma_data` 볼륨 |
 | 대화 이력 + LLM 사용량 | `DATA_DIR/memory.db` (SQLite) | WAL 모드; 메시지 메타데이터(토큰·시간·프로바이더) 포함 |
@@ -1317,7 +1331,8 @@ curl -X POST http://localhost:8080/api/v1/chat \
 ### 6.4 성능
 
 - **Java 21 Virtual Threads** (`spring.threads.virtual.enabled=true`) — LLM I/O 동시 요청을 효율적으로 처리
-- **배치 멀티 쿼리 검색** — `RetrievalService`가 확장 질의를 1회 배치 임베딩 → 단일 Chroma 쿼리 → RRF 융합. 재시도 시 후보 풀 에스컬레이션, 선택적 LLM 리랭킹(opt-in)
+- **배치 멀티 쿼리 검색** — `RetrievalService`가 확장 질의를 1회 배치 임베딩 → 단일 Chroma 쿼리 → 가중 RRF 융합(Phase 7-A — 벡터 축 그룹 정규화 + 키워드 축 가중치 외부화). 재시도 시 후보 풀 에스컬레이션, 선택적 LLM 리랭킹(opt-in)
+- **쿼리 임베딩 캐시** (Phase 7-A) — 반복·유사 질문은 Caffeine 캐시로 임베딩 재호출 없이 처리 (`SEARCH_QUERY_EMBED_CACHE_*`)
 - **병렬 인덱싱** — `RagService.syncDirectory()`에서 파일별·LLM 호출별 Semaphore 기반 병렬 처리
 - **DUAL 모드** — LOCAL + 외부를 Virtual Thread로 병렬 실행
 
@@ -1325,9 +1340,9 @@ CPU/메모리 제약이 있는 환경에서는 `INDEXING_MAX_FILES`와 `INDEXING
 
 ---
 
-## 7. 관리자 패널
+## 7. 벡터 스토어 관리
 
-`/admin` 페이지는 인증 모드(`app.auth.enabled=true`)에서는 로그인된 사용자만 접근 가능합니다.  
+`/admin` 페이지(네비게이션 라벨: **벡터 스토어 관리**)는 인증 모드(`app.auth.enabled=true`)에서는 로그인된 사용자만 접근 가능합니다.  
 no-auth 모드(`false`)에서는 `/admin/**` 경로에 자동으로 관리자 계정이 주입됩니다.
 
 ### 7.1 주요 기능
@@ -1336,7 +1351,7 @@ no-auth 모드(`false`)에서는 `/admin/**` 경로에 자동으로 관리자 �
 
 | 기능 | 설명 |
 |------|------|
-| Vector Store 상태 카드 | 백엔드 종류·정상 여부·청크 수·버전별 청크 수. chroma=컬렉션 수 / sqlite-vec=문서 수·`vec_version`·임베딩 차원 |
+| Vector Store 상태 카드 | 백엔드 종류·정상 여부·청크 수. chroma=컬렉션 수 / sqlite-vec=문서 수·`vec_version`·임베딩 차원 |
 | 컬렉션·버전 목록 | chroma=컬렉션별 / sqlite-vec=버전별 청크 수 표시 (클릭 시 청크 조회) |
 | 청크 조회 | 컬렉션(또는 버전)·문서(docId)별 청크 페이지네이션 (50건 단위) |
 | 청크 편집 | 텍스트·메타데이터 수정 (원본 임베딩 유지 — 벡터 재계산 안 함) |
@@ -1347,7 +1362,7 @@ no-auth 모드(`false`)에서는 `/admin/**` 경로에 자동으로 관리자 �
 ### 7.2 MD 재인덱싱 흐름
 
 1. `data/converted/{docId}_corrected.md` 파일을 텍스트 에디터로 직접 수정
-2. Admin 패널 문서 레지스트리에서 해당 문서의 ↺ 버튼 클릭
+2. 벡터 스토어 관리 페이지 문서 레지스트리에서 해당 문서의 ↺ 버튼 클릭
 3. 기존 벡터 청크만 삭제 — 활성 백엔드(chroma 또는 sqlite-vec) (MD 파일·이미지 보존)
 4. 수정된 MD 기준으로 청크 분할 → 키워드 추출 → 활성 백엔드에 재등록
 
@@ -1448,7 +1463,7 @@ docker-compose logs app
 
 | 원인 | 조치 |
 |------|------|
-| Apache POI `PictureType.extension`이 이미 `.png`처럼 점을 포함하는데, 파일명 조립 시 점을 한 번 더 붙여 `img1..png`가 됨 (해당 버전 이전 `PptxImageExtractor` 버그) | 코드는 이미 수정됨. **이 버그가 있던 버전으로 인덱싱된 PPTX 문서**는 `data/images/{docId}/`에 이미 잘못된 파일명으로 저장돼 있고, 벡터 스토어에 저장된 청크 내용에도 잘못된 경로 문자열이 그대로 박혀 있으므로 **파일만 이름 변경해서는 해결되지 않습니다** — 해당 문서를 삭제 후 재업로드하거나 `/documents`의 Sync Folder로 재인덱싱하세요 |
+| Apache POI `PictureType.extension`이 이미 `.png`처럼 점을 포함하는데, 파일명 조립 시 점을 한 번 더 붙여 `img1..png`가 됨 (해당 버전 이전 `PptxImageExtractor` 버그) | 코드는 이미 수정됨. **이 버그가 있던 버전으로 인덱싱된 PPTX 문서**는 `data/images/{docId}/`에 이미 잘못된 파일명으로 저장돼 있고, 벡터 스토어에 저장된 청크 내용에도 잘못된 경로 문자열이 그대로 박혀 있으므로 **파일만 이름 변경해서는 해결되지 않습니다** — 해당 문서를 삭제 후 재업로드하거나 `POST /api/v1/documents/sync`로 재동기화하세요 |
 | 확인 방법 | `find data/images -name "*..*"`로 이중 점 파일명이 있는지 검사 |
 
 ---
@@ -1717,7 +1732,7 @@ app.auth.enabled=false
 - [ ] Chroma 볼륨 영속성 확인 (재시작 후 문서 목록 유지)
 - [ ] `/admin` 접속 → 컬렉션 목록·청크 테이블 정상 표시 확인
 - [ ] DOCX 업로드 후 `data/converted/{docId}_corrected.md` 생성 확인
-- [ ] Admin ↺ 버튼으로 MD 재인덱싱 성공 확인
+- [ ] 벡터 스토어 관리 페이지 ↺ 버튼으로 MD 재인덱싱 성공 확인
 - [ ] (운영 환경) `/admin` 경로에 대한 네트워크 접근 제한 적용 여부 확인
 
 **태그 기반 검색 적용 시 (프리릴리즈 정책)**:

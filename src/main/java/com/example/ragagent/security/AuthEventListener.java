@@ -8,6 +8,8 @@ import org.springframework.stereotype.Component;
 @Component
 public class AuthEventListener {
 
+    // Values are restated in messages.properties/messages_ko.properties (auth.login.error) —
+    // update both message keys if these change.
     private static final int MAX_ATTEMPTS  = 5;
     private static final int LOCK_MINUTES  = 15;
 

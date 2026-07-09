@@ -1,6 +1,7 @@
 package com.example.ragagent.ingestion;
 
 import com.example.ragagent.config.AppProperties;
+import com.example.ragagent.exception.IndexingCancelledException;
 import com.example.ragagent.model.DocumentInfo;
 import com.example.ragagent.service.DocumentLoaderService;
 import com.example.ragagent.service.ImageExtractorService;
@@ -18,7 +19,10 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Semaphore;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -41,6 +45,7 @@ class DocumentIndexerTest {
     private DocRegistry docRegistry;
     private KeywordSearchRepository keywordRepo;
     private AppProperties props;
+    private DocumentLoaderService loaderService;
 
     @BeforeEach
     void setUp() throws IOException {
@@ -69,7 +74,7 @@ class DocumentIndexerTest {
         docRegistry.init();
 
         // Stub DocumentLoaderService — returns a single Document per call
-        DocumentLoaderService loaderService = mock(DocumentLoaderService.class);
+        loaderService = mock(DocumentLoaderService.class);
         List<Document> stubDocs = List.of(new Document("테스트 문서 내용입니다. 청킹과 메타 태깅을 검증합니다."));
         when(loaderService.load(any())).thenReturn(stubDocs);
         when(loaderService.load(any(), any())).thenReturn(stubDocs);
@@ -119,7 +124,7 @@ class DocumentIndexerTest {
         assertThat(docRegistry.findByDocId(info.docId(), DocRegistry.SHARED)).isPresent();
 
         // Vector store received the enriched chunks
-        verify(vectorStore, atLeastOnce()).add(eq(DocRegistry.SHARED), eq("v1"), any());
+        verify(vectorStore, atLeastOnce()).add(eq(DocRegistry.SHARED), eq("v1"), any(), any());
     }
 
     @Test
@@ -134,7 +139,7 @@ class DocumentIndexerTest {
         Path md = tmpDir.resolve("converted").resolve(info.docId() + ".md");
         assertThat(md).exists();
         assertThat(Files.readString(md)).contains("구조화 대상 내용");
-        verify(vectorStore, atLeastOnce()).add(eq(DocRegistry.SHARED), eq("v1"), any());
+        verify(vectorStore, atLeastOnce()).add(eq(DocRegistry.SHARED), eq("v1"), any(), any());
     }
 
     @Test
@@ -148,6 +153,45 @@ class DocumentIndexerTest {
         // docType lives in spring-AI Document metadata, not in registry — verify via chunks > 0
         assertThat(docRegistry.findByDocId(info.docId(), DocRegistry.SHARED)).isPresent();
         assertThat(info.chunks()).isGreaterThanOrEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("reindexFromMd — 성공 시 태그가 FTS에서 복원되어 유지된다")
+    void reindexFromMd_success_preservesTags() throws IOException {
+        Path txtFile = tmpDir.resolve("guide.txt");
+        Files.writeString(txtFile, "테스트 문서 내용입니다. 청킹과 메타 태깅을 검증합니다.");
+        DocumentInfo info = indexer.index(IndexRequest.single(txtFile, "guide.txt", "v1", "anonymous", e -> {}));
+        keywordRepo.updateDocTags(info.docId(), "faq,guide");
+
+        indexer.reindexFromMd(info.docId());
+
+        assertThat(keywordRepo.tagsByDocIds(List.of(info.docId())).get(info.docId()))
+                .containsExactlyInAnyOrder("faq", "guide");
+    }
+
+    @Test
+    @DisplayName("reindexFromMd — 벡터 저장 실패 시 기존 태그/청크가 그대로 남는다 (delete-before-write 회귀 방지)")
+    void reindexFromMd_vectorStoreAddFails_leavesExistingDataIntact() throws IOException {
+        Path txtFile = tmpDir.resolve("guide.txt");
+        Files.writeString(txtFile, "테스트 문서 내용입니다. 청킹과 메타 태깅을 검증합니다.");
+        DocumentInfo info = indexer.index(IndexRequest.single(txtFile, "guide.txt", "v1", "anonymous", e -> {}));
+        keywordRepo.updateDocTags(info.docId(), "faq,guide");
+
+        // Reset the mock so the earlier successful index() stubbing/interactions don't leak in,
+        // then make the reindex's add() call fail. reindexFromMd() uses the progress-reporting
+        // 4-arg overload (storing-stage progress), not the plain 3-arg one.
+        reset(vectorStore);
+        doThrow(new RuntimeException("embedding server down")).when(vectorStore).add(any(), any(), any(), any());
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> indexer.reindexFromMd(info.docId()))
+                .isInstanceOf(RuntimeException.class)
+                .hasMessage("embedding server down");
+
+        // Old FTS rows (chunks + tags) must survive — the old-row delete only runs after a
+        // successful add()+indexChunks(), which never happened here.
+        assertThat(keywordRepo.tagsByDocIds(List.of(info.docId())).get(info.docId()))
+                .containsExactlyInAnyOrder("faq", "guide");
+        verify(vectorStore, never()).deleteByDocIds(any(), any(), any());
     }
 
     @Test
@@ -224,5 +268,60 @@ class DocumentIndexerTest {
 
         assertThat(docRegistry.findByDocId(docId, "anonymous")).isEmpty();
         verify(vectorStore).deleteByDocIds("anonymous", "v1", List.of("vec-id-x"));
+    }
+
+    @Test
+    @DisplayName("syncDirectory — 취소(인터럽트) 시 IndexingCancelledException 던지고 그때까지 완료된 파일은 registry에 보존(§6.16.1)")
+    void syncDirectory_cancelled_throwsAndSavesPartialRegistry() throws Exception {
+        Path docsDir = tmpDir.resolve("documents");
+        Files.createDirectories(docsDir);
+        Files.writeString(docsDir.resolve("fast.txt"), "빠르게 끝나는 문서 내용입니다.");
+        Files.writeString(docsDir.resolve("slow.txt"), "SLOW_MARKER 오래 걸리는 문서 내용입니다.");
+
+        CountDownLatch slowFileStarted = new CountDownLatch(1);
+        CountDownLatch fastFileDone = new CountDownLatch(1);
+        // correctionService/textToMarkdownService echo their input unchanged (stubbed in setUp),
+        // so the markdown reaching loadFromMarkdown() is exactly the original file content —
+        // enough to tell the two files apart and block only the "slow" one.
+        when(loaderService.loadFromMarkdown(any())).thenAnswer(inv -> {
+            String md = inv.getArgument(0);
+            if (md.contains("SLOW_MARKER")) {
+                slowFileStarted.countDown();
+                Thread.sleep(30_000); // interrupted well before this elapses
+            }
+            return List.of(new Document(md));
+        });
+
+        AtomicReference<Throwable> thrown = new AtomicReference<>();
+        Thread syncThread = new Thread(() -> {
+            try {
+                indexer.syncDirectory("anonymous", "v1", docsDir, evt -> {
+                    if ("sync_file_done".equals(evt.stage()) && "fast.txt".equals(evt.filename())) {
+                        fastFileDone.countDown();
+                    }
+                });
+            } catch (Throwable t) {
+                thrown.set(t);
+            }
+        });
+        syncThread.start();
+
+        assertThat(slowFileStarted.await(5, TimeUnit.SECONDS))
+                .as("slow.txt should have started processing before cancellation")
+                .isTrue();
+        // Wait for fast.txt to fully finish (including docRegistry.put()) before cancelling,
+        // so the assertion below observes genuinely completed-before-cancel work rather than
+        // racing shutdownNow() against fast.txt's own in-flight keyword extraction.
+        assertThat(fastFileDone.await(5, TimeUnit.SECONDS))
+                .as("fast.txt should have completed before cancellation")
+                .isTrue();
+        syncThread.interrupt();
+        syncThread.join(10_000);
+
+        assertThat(syncThread.isAlive()).as("worker must terminate, no zombie thread").isFalse();
+        assertThat(thrown.get()).isInstanceOf(IndexingCancelledException.class);
+        // fast.txt had already completed (and been registered in-memory) by the time the
+        // interrupt landed on slow.txt; the cancel path must still persist that partial work.
+        assertThat(docRegistry.docIds(DocRegistry.SHARED)).hasSize(1);
     }
 }

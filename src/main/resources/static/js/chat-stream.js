@@ -12,6 +12,10 @@
     // ── Per-bubble answer stage counter (tracks RETRIEVAL retries) ──────────
     const answerCountMap = new Map();
 
+    // ── Active stream cancellation — only one stream can be in flight at a time
+    // (the send button is repurposed as a stop button while streaming) ──────
+    let currentAbort = null;
+
     // ── Stage label map ──────────────────────────────────────────────────────
     const STAGE_LABELS = {
         classifier: '질문 분류 중...',
@@ -40,6 +44,18 @@
     function scrollToBottom() {
         const el = document.getElementById('chat-messages');
         if (el) el.scrollTop = el.scrollHeight;
+    }
+
+    /** Toggles the send button between "send" and "stop" while a stream is active. */
+    function setStreamingUiState(active) {
+        const sendBtn = document.getElementById('send-btn');
+        if (!sendBtn) return;
+        sendBtn.classList.toggle('btn-primary', !active);
+        sendBtn.classList.toggle('btn-danger', active);
+        sendBtn.innerHTML = active ? '<i class="bi bi-stop-fill"></i>' : '<i class="bi bi-send-fill"></i>';
+        sendBtn.setAttribute('aria-label', active
+            ? (sendBtn.dataset.stopLabel || 'Stop')
+            : (sendBtn.dataset.sendLabel || 'Send'));
     }
 
     // ── DOM builders ─────────────────────────────────────────────────────────
@@ -260,6 +276,34 @@
         }
     }
 
+    /** User-initiated stop (AbortController). Keeps whatever partial answer already streamed in. */
+    function onAborted(bubbleId) {
+        answerCountMap.delete(bubbleId);
+        const stageEl = document.getElementById(`stream-stage-${bubbleId}`);
+        if (stageEl) stageEl.remove();
+
+        const contentEl = document.getElementById(`stream-content-${bubbleId}`);
+        const dualEl = document.getElementById(`stream-dual-${bubbleId}`);
+        const isDual = dualEl && !dualEl.classList.contains('d-none');
+
+        if (isDual) {
+            const extEl = document.getElementById(`stream-ext-${bubbleId}`);
+            const locEl = document.getElementById(`stream-loc-${bubbleId}`);
+            extEl?.classList.remove('stream-cursor');
+            locEl?.classList.remove('stream-cursor');
+            renderMarkdown(extEl);
+            renderMarkdown(locEl);
+        } else if (contentEl) {
+            contentEl.classList.remove('stream-cursor');
+            renderMarkdown(contentEl);
+        }
+
+        const metaEl = document.getElementById(`stream-meta-${bubbleId}`);
+        if (metaEl) {
+            metaEl.innerHTML = `<span class="text-muted"><i class="bi bi-stop-circle me-1"></i>사용자가 중단함 · ${escHtml(nowTimeStr())}</span>`;
+        }
+    }
+
     // ── SSE fetch + parse ────────────────────────────────────────────────────
 
     async function submitStream(formData, question) {
@@ -269,14 +313,16 @@
         appendStreamingBubble(bubbleId);
         scrollToBottom();
 
-        const sendBtn = document.getElementById('send-btn');
-        if (sendBtn) sendBtn.disabled = true;
+        const abortController = new AbortController();
+        currentAbort = abortController;
+        setStreamingUiState(true);
 
         try {
             const response = await fetch('/ui/chat/stream', {
                 method: 'POST',
                 body: formData,
                 headers: typeof getCsrfHeaders === 'function' ? getCsrfHeaders() : {},
+                signal: abortController.signal,
             });
 
             if (!response.ok) {
@@ -319,9 +365,14 @@
             }
 
         } catch (e) {
-            onError(bubbleId, e.message || '네트워크 오류');
+            if (e.name === 'AbortError') {
+                onAborted(bubbleId);
+            } else {
+                onError(bubbleId, e.message || '네트워크 오류');
+            }
         } finally {
-            if (sendBtn) sendBtn.disabled = false;
+            currentAbort = null;
+            setStreamingUiState(false);
         }
     }
 
@@ -352,6 +403,12 @@
         form.addEventListener('submit', function (e) {
             e.preventDefault();
             e.stopImmediatePropagation(); // prevent HTMX from also handling it
+
+            // Send button doubles as a stop button while a stream is active.
+            if (currentAbort) {
+                currentAbort.abort();
+                return;
+            }
 
             const questionEl = document.getElementById('question-input');
             const question   = questionEl ? questionEl.value.trim() : '';

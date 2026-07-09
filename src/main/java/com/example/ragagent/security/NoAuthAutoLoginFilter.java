@@ -68,6 +68,13 @@ public class NoAuthAutoLoginFilter extends OncePerRequestFilter {
                 || path.startsWith("/css/")
                 || path.startsWith("/js/")
                 || path.startsWith("/images/")
-                || path.equals("/favicon.ico");
+                || path.equals("/favicon.ico")
+                // PWA assets — must stay in sync with SecurityConfig's permitAll list so they're
+                // reachable before an admin exists (otherwise install banner/offline fallback
+                // redirect to /setup on first run).
+                || path.equals("/manifest.webmanifest")
+                || path.equals("/sw.js")
+                || path.equals("/offline.html")
+                || path.startsWith("/icons/");
     }
 }

@@ -148,6 +148,22 @@ public class KeywordSearchRepository {
         }
     }
 
+    /**
+     * Overwrites {@code doc_tags} for every chunk row of a document. Returns the number of rows
+     * updated (0 when FTS5 is unavailable, on error, or when no chunk_fts row exists for this
+     * {@code docId} — e.g. an orphaned {@code doc_registry} entry left behind by a prior indexing
+     * failure) so the caller can detect a no-op write instead of reporting a false success.
+     */
+    public int updateDocTags(String docId, String tagsCsv) {
+        if (!available || docId == null) return 0;
+        try {
+            return jdbc.update("UPDATE chunk_fts SET doc_tags = ? WHERE doc_id = ?", tagsCsv, docId);
+        } catch (Exception e) {
+            log.warn("[KEYWORD] updateDocTags failed docId={}: {}", docId, e.getMessage());
+            return 0;
+        }
+    }
+
     /** Removes all FTS rows for a document. No-op when FTS5 is unavailable. */
     public void deleteByDocId(String docId) {
         if (!available || docId == null) return;
@@ -155,6 +171,22 @@ public class KeywordSearchRepository {
             jdbc.update("DELETE FROM chunk_fts WHERE doc_id = ?", docId);
         } catch (Exception e) {
             log.debug("[KEYWORD] deleteByDocId failed docId={}: {}", docId, e.getMessage());
+        }
+    }
+
+    /**
+     * Removes specific rows by their {@code spring_doc_id} (chunk identity), not by {@code doc_id}
+     * (document identity) — needed when new and old chunk rows momentarily share the same
+     * {@code doc_id} (reindex-in-place), where a {@code doc_id}-based delete would also wipe the
+     * rows just inserted. No-op when FTS5 is unavailable.
+     */
+    public void deleteBySpringDocIds(List<String> springDocIds) {
+        if (!available || springDocIds == null || springDocIds.isEmpty()) return;
+        try {
+            String placeholders = springDocIds.stream().map(id -> "?").collect(java.util.stream.Collectors.joining(","));
+            jdbc.update("DELETE FROM chunk_fts WHERE spring_doc_id IN (" + placeholders + ")", springDocIds.toArray());
+        } catch (Exception e) {
+            log.debug("[KEYWORD] deleteBySpringDocIds failed: {}", e.getMessage());
         }
     }
 

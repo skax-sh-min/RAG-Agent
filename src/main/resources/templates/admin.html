@@ -2,7 +2,7 @@
 <html xmlns:th="http://www.thymeleaf.org"
       xmlns:layout="http://www.ultraq.net.nz/thymeleaf/layout"
       layout:decorate="~{layout/base}">
-<head><title>관리자</title></head>
+<head><title>벡터 스토어 관리</title></head>
 <body>
 
 <th:block layout:fragment="content">
@@ -11,7 +11,7 @@
     <!-- Header -->
     <div class="d-flex align-items-center mb-4">
         <i class="bi bi-gear-fill fs-4 me-2 text-secondary"></i>
-        <h5 class="mb-0 fw-semibold">관리자 패널</h5>
+        <h5 class="mb-0 fw-semibold">벡터 스토어 관리</h5>
         <span class="badge bg-warning text-dark ms-2 small">Admin</span>
     </div>
 
@@ -79,27 +79,16 @@
                     </span>
                 </div>
             </div>
-
-            <!-- 버전별 청크 수 -->
-            <div th:if="${not #lists.isEmpty(vectorStore.perVersion())}" class="mt-3">
-                <div class="text-muted small mb-1">버전별 청크 수</div>
-                <div class="d-flex flex-wrap gap-2">
-                    <span th:each="v : ${vectorStore.perVersion()}"
-                          class="badge bg-secondary">
-                        <span th:text="${v.version()}">version</span>
-                        <span class="badge bg-light text-dark ms-1" th:text="${v.chunkCount()}">0</span>
-                    </span>
-                </div>
-            </div>
         </div>
     </div>
 
     <!-- ── Document Registry ────────────────────────────────────────────── -->
-    <div class="card mb-4">
+    <div class="card mb-4" id="doc-registry-card">
         <div class="card-header d-flex align-items-center py-2">
             <i class="bi bi-archive me-2"></i>
             <span class="fw-semibold small">문서 레지스트리</span>
             <span class="badge bg-secondary ms-2" th:text="${#lists.size(documents)}">0</span>
+            <span id="registry-status" class="ms-auto small text-muted text-truncate" style="max-width:60%;"></span>
         </div>
         <div class="card-body p-0">
             <div th:if="${#lists.isEmpty(documents)}"
@@ -134,7 +123,7 @@
                             <button type="button"
                                     class="btn btn-sm btn-outline-warning py-0 px-2 ms-1 reindex-btn"
                                     style="font-size:0.75rem;"
-                                    th:attr="data-doc-id=${doc.docId()}"
+                                    th:attr="data-doc-id=${doc.docId()}, data-filename=${doc.filename()}"
                                     onclick="reindexFromMd(this)"
                                     title="저장된 MD 파일로 재인덱싱 (DOCX/TXT 전용)">
                                 <i class="bi bi-arrow-clockwise"></i>
@@ -329,20 +318,69 @@ function deleteChunkInline(chunkId, collection, row) {
     .catch(() => showToast('삭제 중 오류', 'danger'));
 }
 
+/** Disables/re-enables every button in the 문서 레지스트리 card and shows/clears its status text. */
+function setRegistryBusy(busy, statusText) {
+    const card = document.getElementById('doc-registry-card');
+    if (card) card.querySelectorAll('button').forEach(b => b.disabled = busy);
+    setRegistryStatus(statusText);
+}
+
+function setRegistryStatus(text) {
+    const status = document.getElementById('registry-status');
+    if (status) status.textContent = text || '';
+}
+
+/** One-line status for a reindex progress event, e.g. "[REINDEX] 키워드 추출 중 ... 3/30". */
+const REINDEX_STAGE_LABELS = {
+    loading: '문서 로드', chunking: '청크 분할', enriching: '키워드 추출', storing: '벡터 DB 저장'
+};
+const REINDEX_PROGRESSIVE_STAGES = new Set(['enriching', 'storing']);
+
+function formatReindexStatus(evt) {
+    const label = REINDEX_STAGE_LABELS[evt.stage] || evt.stage;
+    if (REINDEX_PROGRESSIVE_STAGES.has(evt.stage) && evt.total > 0) {
+        return `[REINDEX] ${label} 중 ... ${evt.done}/${evt.total}`;
+    }
+    return `[REINDEX] ${evt.message || (label + ' 중...')}`;
+}
+
 function reindexFromMd(btn) {
     const docId = btn.getAttribute('data-doc-id');
+    const filename = btn.getAttribute('data-filename') || docId;
     if (!confirm('저장된 MD 파일로 재인덱싱하시겠습니까?\n기존 청크가 삭제되고 MD 파일 기준으로 다시 인덱싱됩니다.\n(' + docId + ')')) return;
     const icon = btn.innerHTML;
-    btn.disabled = true;
+
+    setRegistryBusy(true, '[REINDEX] 준비 중: ' + filename);
     btn.innerHTML = '<span class="spinner-border spinner-border-sm" style="width:.7rem;height:.7rem;"></span>';
+
     fetch('/admin/documents/' + encodeURIComponent(docId) + '/reindex', { method: 'POST', headers: getCsrfHeaders() })
         .then(r => r.json())
-        .then(d => {
-            if (d.error) { showToast('재인덱싱 실패: ' + d.error, 'danger'); }
-            else { showToast('재인덱싱 완료', 'success'); setTimeout(() => location.reload(), 1500); }
-        })
-        .catch(() => showToast('재인덱싱 요청 실패', 'danger'))
-        .finally(() => { btn.disabled = false; btn.innerHTML = icon; });
+        .then(({ taskId }) => subscribeReindexProgress(taskId, btn, icon))
+        .catch(() => {
+            showToast('재인덱싱 요청 실패', 'danger');
+            btn.innerHTML = icon;
+            setRegistryBusy(false, '');
+        });
+}
+
+function subscribeReindexProgress(taskId, btn, icon) {
+    const sse = new EventSource('/ui/documents/progress/' + taskId);
+    const finish = () => { sse.close(); btn.innerHTML = icon; setRegistryBusy(false, ''); };
+
+    sse.addEventListener('progress', e => {
+        const evt = JSON.parse(e.data);
+        if (evt.stage === 'done') {
+            finish();
+            showToast('재인덱싱 완료', 'success');
+            setTimeout(() => location.reload(), 1000);
+        } else if (evt.stage === 'error') {
+            finish();
+            showToast('재인덱싱 실패: ' + (evt.message || '오류'), 'danger');
+        } else {
+            setRegistryStatus(formatReindexStatus(evt));
+        }
+    });
+    sse.onerror = () => { finish(); showToast('재인덱싱 진행 상태 연결 오류', 'danger'); };
 }
 
 function escHtml(s) {

@@ -26,6 +26,10 @@ public class IndexingProgressService {
 
     private final ConcurrentHashMap<String, SseEmitter> emitters = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, List<IndexingProgressEvent>> buffers = new ConcurrentHashMap<>();
+    // §6.16.1 — the async virtual thread actually doing the indexing work, keyed by taskId,
+    // so a user-initiated cancel can interrupt it (distinct from the SSE emitter above, which
+    // only carries progress events to the browser).
+    private final ConcurrentHashMap<String, Thread> workers = new ConcurrentHashMap<>();
     private final AppProperties props;
 
     private final ScheduledExecutorService cleaner = Executors.newSingleThreadScheduledExecutor(r -> {
@@ -40,6 +44,25 @@ public class IndexingProgressService {
 
     public String newTaskId() {
         return UUID.randomUUID().toString();
+    }
+
+    /** §6.16.1 — records the worker thread for a task so {@link #cancel(String)} can interrupt it. */
+    public void registerWorker(String taskId, Thread worker) {
+        workers.put(taskId, worker);
+    }
+
+    /**
+     * §6.16.1 — user-initiated cancel. Interrupts the registered worker thread (if any) and
+     * immediately publishes a terminal {@code cancelled} event so the client's SSE subscription
+     * completes right away, without waiting for the interrupted worker to unwind and report back.
+     */
+    public void cancel(String taskId) {
+        Thread worker = workers.remove(taskId);
+        if (worker != null) {
+            log.info("[IndexingProgress] cancel requested taskId={}", taskId);
+            worker.interrupt();
+        }
+        publish(taskId, IndexingProgressEvent.cancelled());
     }
 
     /**
@@ -109,11 +132,13 @@ public class IndexingProgressService {
                 try { emitter.complete(); } catch (Exception ignored) {}
             }
             emitters.remove(taskId);
+            workers.remove(taskId);
             cleaner.schedule(() -> buffers.remove(taskId), 60, TimeUnit.SECONDS);
         }
     }
 
     private static boolean isTerminal(String stage) {
-        return "done".equals(stage) || "error".equals(stage) || "sync_done".equals(stage);
+        return "done".equals(stage) || "error".equals(stage) || "sync_done".equals(stage)
+                || "cancelled".equals(stage);
     }
 }

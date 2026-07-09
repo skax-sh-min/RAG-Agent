@@ -80,7 +80,7 @@
                    th:href="@{/admin}"
                    th:classappend="${#strings.startsWith(requestURI, '/admin')} ? ' active'">
                     <i class="bi bi-gear me-1"></i>
-                    Admin
+                    <span th:text="#{nav.admin}">Vector Store</span>
                 </a>
             </li>
         </ul>
@@ -170,7 +170,9 @@
 const I18N = {
     apiOk:           /*[[#{nav.api.ok}]]*/ 'API OK',
     apiError:        /*[[#{nav.api.error}]]*/ 'API Error',
-    fileTooBig:      /*[[#{toast.upload.too_large}]]*/ 'File exceeds 100 MB limit',
+    fileTooBig:      /*[[#{toast.upload.too_large}]]*/ 'File exceeds 200 MB limit',
+    duplicateFileName: /*[[#{toast.upload.duplicate_name}]]*/ 'A file with this name already exists. Uploading will register it as {name}. To replace the existing file, delete it first.',
+    similarFileName: /*[[#{toast.upload.similar_name}]]*/ 'A document with the same name but a different extension already exists ({name}). It will be uploaded as a separate file — delete the existing one first if you want to replace it.',
     uploadSuccess:   /*[[#{toast.upload.success}]]*/ 'uploaded successfully',
     uploadChunks:    /*[[#{toast.upload.chunks}]]*/ 'chunks',
     uploadError:     /*[[#{toast.upload.error}]]*/ 'error',
@@ -186,6 +188,7 @@ const I18N = {
     statusUploading: /*[[#{status.uploading}]]*/ 'Uploading...',
     statusIndexing:  /*[[#{status.indexing}]]*/ 'Indexing...',
     deleteBtnLabel:  /*[[#{doc.btn.delete}]]*/ 'Delete',
+    cancelBtnLabel:  /*[[#{doc.btn.cancel}]]*/ 'Cancel',
     llmStatusNormal:     /*[[#{llm.status.normal}]]*/ 'Normal',
     llmStatusBlocked:    /*[[#{llm.status.blocked}]]*/ 'Blocked',
     llmTableTotal:       /*[[#{llm.table.total}]]*/ 'Total',
@@ -245,7 +248,7 @@ const I18N = {
         showToast(I18N.requestFailed + (status ? ' (' + status + ')' : ''), 'danger');
     });
 
-    /* Auto-initialize Bootstrap toasts injected by HTMX fragments (e.g. sync-result) */
+    /* Auto-initialize Bootstrap toasts injected by HTMX fragments */
     document.body.addEventListener('htmx:afterSettle', function (e) {
         (e.detail.target || document).querySelectorAll('.toast:not([data-bs-inited])').forEach(function (el) {
             el.setAttribute('data-bs-inited', '');
