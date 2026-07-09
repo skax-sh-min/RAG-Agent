@@ -115,11 +115,56 @@ class KeywordSearchRepositoryTest {
     @Test
     @DisplayName("버전 필터 — 다른 버전 청크는 제외")
     void search_filtersByVersion() {
-        repo.indexChunks(List.of(chunk("s1", "D1", "v1", 0, "공통키워드 알파", "알파")));
-        repo.indexChunks(List.of(chunk("s2", "D2", "v2", 0, "공통키워드 알파", "알파")));
+        repo.indexChunks(List.of(chunk("s1", "D1", "v1", 0, "공통키워드 알파값", "알파값")));
+        repo.indexChunks(List.of(chunk("s2", "D2", "v2", 0, "공통키워드 알파값", "알파값")));
 
-        assertThat(repo.search("v1", "알파", 10)).extracting(Document::getId).containsExactly("s1");
-        assertThat(repo.search("v2", "알파", 10)).extracting(Document::getId).containsExactly("s2");
+        assertThat(repo.search("v1", "공통키워드", 10)).extracting(Document::getId).containsExactly("s1");
+        assertThat(repo.search("v2", "공통키워드", 10)).extracting(Document::getId).containsExactly("s2");
+    }
+
+    @Test
+    @DisplayName("search — 활용형 종결어미가 붙어도 어간만으로 청크를 찾는다 (trigram 부분열 매칭, §10.4)")
+    void search_matchesBareStemAgainstInflectedForm() {
+        repo.indexChunks(List.of(chunk("s1", "D1", "latest", 0, "문서를 업로드하면 자동으로 인덱싱됩니다", "문서, 업로드")));
+
+        // "인덱싱"(어간, 3글자)만 검색해도 본문의 "인덱싱됩니다"(활용형)에서 부분열로 발견된다 —
+        // unicode61이었다면 전체 토큰이 달라 매칭되지 않았을 케이스.
+        List<Document> hits = repo.search("latest", "인덱싱", 10);
+
+        assertThat(hits).extracting(Document::getId).containsExactly("s1");
+    }
+
+    @Test
+    @DisplayName("init — 기존 unicode61(doc_tags 포함) 테이블을 감지하면 trigram으로 자동 재구축하고 기존 행을 보존한다 (§10.4)")
+    void init_migratesLegacyUnicode61TableToTrigramPreservingRows() {
+        DriverManagerDataSource ds = new DriverManagerDataSource();
+        ds.setDriverClassName("org.sqlite.JDBC");
+        ds.setUrl("jdbc:sqlite:" + tmp.resolve("legacy.db"));
+        JdbcTemplate legacyJdbc = new JdbcTemplate(ds);
+
+        legacyJdbc.execute("""
+                CREATE VIRTUAL TABLE chunk_fts USING fts5(
+                    spring_doc_id UNINDEXED, doc_id UNINDEXED, version UNINDEXED,
+                    filename UNINDEXED, page UNINDEXED, chunk_index UNINDEXED, doc_tags UNINDEXED,
+                    content, keywords, tokenize = 'unicode61'
+                )
+                """);
+        legacyJdbc.update("""
+                INSERT INTO chunk_fts (spring_doc_id, doc_id, version, filename, page, chunk_index, doc_tags, content, keywords)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, "s1", "D1", "latest", "manual.pdf", "1", "0", "billing",
+                "문서를 업로드하면 자동으로 인덱싱됩니다", "문서, 업로드");
+
+        KeywordSearchRepository migrated = new KeywordSearchRepository(legacyJdbc);
+        migrated.init();
+
+        assertThat(migrated.isAvailable()).isTrue();
+        // Bare-stem query ("인덱싱" vs. indexed "인덱싱됩니다") only matches under trigram — proves
+        // the rebuild actually re-tokenized existing rows (not just recreated an empty table), since
+        // this same query would find nothing against the original unicode61 whole-token index.
+        List<Document> hits = migrated.search("latest", "인덱싱", 10);
+        assertThat(hits).extracting(Document::getId).containsExactly("s1");
+        assertThat(migrated.tagsByDocIds(List.of("D1")).get("D1")).containsExactly("billing");
     }
 
     @Test
@@ -194,9 +239,16 @@ class KeywordSearchRepositoryTest {
     @Test
     @DisplayName("toMatchQuery — 토큰 인용·OR 결합, 특수문자 안전")
     void toMatchQuery_quotesAndOrs() {
-        assertThat(KeywordSearchRepository.toMatchQuery("결제 오류")).isEqualTo("\"결제\" OR \"오류\"");
+        assertThat(KeywordSearchRepository.toMatchQuery("결제오류 코드확인")).isEqualTo("\"결제오류\" OR \"코드확인\"");
         assertThat(KeywordSearchRepository.toMatchQuery("a")).isNull();            // 1글자 제외
         assertThat(KeywordSearchRepository.toMatchQuery("  ")).isNull();
-        assertThat(KeywordSearchRepository.toMatchQuery("OR AND \"")).isEqualTo("\"OR\" OR \"AND\"");
+        assertThat(KeywordSearchRepository.toMatchQuery("AND NOT \"")).isEqualTo("\"AND\" OR \"NOT\"");
+    }
+
+    @Test
+    @DisplayName("toMatchQuery — 3자 미만 토큰은 제외된다 (trigram 최소 매칭 단위, §10.4)")
+    void toMatchQuery_dropsTermsShorterThanThree() {
+        assertThat(KeywordSearchRepository.toMatchQuery("문서 오류")).isNull();                     // 둘 다 2글자 → 전부 제외
+        assertThat(KeywordSearchRepository.toMatchQuery("문서 코드확인")).isEqualTo("\"코드확인\""); // 2글자만 제외, 4글자는 유지
     }
 }
