@@ -242,7 +242,7 @@ rag_java/
     │       ├── DocxToMarkdownConverter.java   # DOCX → Markdown + 인라인 이미지 추출
     │       ├── PptxToMarkdownConverter.java   # PPTX → Markdown (슬라이드별 제목 헤딩, [페이지: N] 마커, SmartArt/차트제목/하이퍼링크 텍스트)
     │       ├── PdfToMarkdownConverter.java    # 비스캔 PDF → Markdown (페이지별 합성 헤딩, [페이지: N] 마커)
-    │       ├── ImageExtractorService.java     # 이미지 추출 오케스트레이터 (PDF/PPTX/DOCX)
+    │       ├── ImageExtractorService.java     # 스캔 PDF 전용 이미지 추출 오케스트레이터(다른 포맷은 각자 변환기에서 인라인 처리)
     │       ├── PdfImageExtractor.java         # PDFBox PDImageXObject 기반 PDF 이미지 추출
     │       ├── PptxImageExtractor.java        # POI XSLFPictureShape 기반 PPTX 이미지 추출 + 그리기 도구 래스터라이즈 + SmartArt/차트/OLE 그래픽 프레임
     │       ├── VisionDescriptionService.java  # 이미지 → 한국어 설명 (Vision LLM)

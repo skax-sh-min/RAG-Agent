@@ -110,7 +110,10 @@ class DocumentIndexerTest {
         when(textToMarkdownService.convert(any(), any(), any()))
                 .thenAnswer(inv -> inv.getArgument(0));
         ImageExtractorService imageExtractorService = mock(ImageExtractorService.class);
-        when(imageExtractorService.extract(any(), anyString(), any())).thenReturn(java.util.Map.of());
+        // DocumentIndexer only ever calls the 4-arg (onProgress) overload (scanned-PDF branch) —
+        // stubbing the 3-arg overload here was a no-op that happened to pass anyway because
+        // Mockito's default answer for an unstubbed Map-returning method is already an empty map.
+        when(imageExtractorService.extract(any(), anyString(), any(), any())).thenReturn(java.util.Map.of());
 
         // Stub LlmRouter — throw to force TF-IDF fallback (avoids real LLM calls)
         com.example.ragagent.llm.LlmRouter llmRouter = mock(com.example.ragagent.llm.LlmRouter.class);

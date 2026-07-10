@@ -243,7 +243,7 @@ rag_java/
     │       ├── DocxToMarkdownConverter.java   # DOCX → Markdown with inline image extraction
     │       ├── PptxToMarkdownConverter.java   # PPTX → Markdown (title heading per slide, [페이지: N] marker, SmartArt/chart-title/hyperlink text)
     │       ├── PdfToMarkdownConverter.java    # Non-scanned PDF → Markdown (synthetic per-page heading, [페이지: N] marker)
-    │       ├── ImageExtractorService.java     # Image extraction orchestrator (PDF/PPTX/DOCX)
+    │       ├── ImageExtractorService.java     # Scanned-PDF-only image extraction orchestrator (other formats extract inline in their own converter)
     │       ├── PdfImageExtractor.java         # PDFBox PDImageXObject-based PDF image extractor
     │       ├── PptxImageExtractor.java        # POI XSLFPictureShape-based PPTX image extractor + drawing-tool rasterization + SmartArt/chart/OLE graphic frames
     │       ├── VisionDescriptionService.java  # Image → Korean description via LLM (Vision task)

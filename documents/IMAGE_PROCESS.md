@@ -47,8 +47,11 @@
 │                                                                  │
 │  DocumentIndexer.index()                                          │
 │    ├── 1. SHA-256 계산 → docId 확정                              │
-│    ├── 2. ImageExtractorService.extract(filePath, docId)         │
-│    │       └── 포맷 판별 → 이미지 추출 → data/images/{docId}/ 저장│
+│    ├── 2. 이미지 추출 → data/images/{docId}/ 저장                │
+│    │       └── DOCX/PPTX/PDF(비스캔): 각 변환기가 자체 추출기를   │
+│    │             주입받아 MD 변환 중 인라인으로 처리(§4 각 절)    │
+│    │           PDF(스캔): 변환이 없으므로 ImageExtractorService.  │
+│    │             extract(filePath, docId)를 별도로 호출           │
 │    │           반환: Map<pageOrSlide, List<imagePath>>            │
 │    ├── 3. DocumentLoaderService.load(filePath) → 텍스트 청크     │
 │    ├── 4. 메타데이터 태깅 (image_paths 포함)                     │
@@ -84,7 +87,7 @@
 
 | 컴포넌트 | 역할 | 조건 |
 |---------|------|------|
-| `ImageExtractorService` | 포맷별 이미지 추출 + 디스크 저장 조율 | 항상 활성 |
+| `ImageExtractorService` | 스캔 PDF 전용 이미지 추출 조율(OCR 경로는 MD 변환이 없어 인라인 추출 지점이 없음) — DOCX·PPTX·PDF(비스캔)는 각 변환기가 `PptxImageExtractor`/`PdfImageExtractor`를 직접 주입받아 자체 처리하므로 거치지 않음 | 항상 활성 |
 | `PdfImageExtractor` | PDFBox `PDImageXObject` 기반 PDF 이미지 추출 | 항상 활성 |
 | `PptxImageExtractor` | POI `XSLFPictureShape` 기반 PPTX 이미지 추출 + 그리기 도구 도형 래스터라이즈 + SmartArt/차트/OLE 그래픽 프레임 처리 | 항상 활성 |
 | `DocxToMarkdownConverter` | DOCX → Markdown 변환 + 인라인 이미지 추출 (EMF/WMF 변환 포함) | 항상 활성 |
