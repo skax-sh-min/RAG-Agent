@@ -7,7 +7,10 @@ import org.apache.poi.sl.usermodel.PictureData;
 import org.apache.poi.xslf.usermodel.XMLSlideShow;
 import org.apache.poi.xslf.usermodel.XSLFAutoShape;
 import org.apache.poi.xslf.usermodel.XSLFConnectorShape;
+import org.apache.poi.xslf.usermodel.XSLFDiagram;
+import org.apache.poi.xslf.usermodel.XSLFGraphicFrame;
 import org.apache.poi.xslf.usermodel.XSLFGroupShape;
+import org.apache.poi.xslf.usermodel.XSLFObjectShape;
 import org.apache.poi.xslf.usermodel.XSLFPictureData;
 import org.apache.poi.xslf.usermodel.XSLFPictureShape;
 import org.apache.poi.xslf.usermodel.XSLFShape;
@@ -61,6 +64,16 @@ import java.util.Map;
  * A minimum bounding-box dimension ({@code app.pptx-image.min-shape-dimension-pt}) filters out
  * trivial icons/dividers before they can seed a cluster. Rendering failures are skipped silently
  * (graceful degradation, like the EMF/WMF converters) rather than failing the whole extraction.
+ *
+ * <b>{@code XSLFGraphicFrame} variants</b> ({@code XSLFTable} aside) get their own handling since
+ * none of them can be drawn "live" by POI: an OLE embed ({@link XSLFObjectShape}) always carries
+ * its own embedded preview picture, extracted verbatim like a real picture. A SmartArt frame
+ * ({@link XSLFDiagram}) has no drawable frame of its own — {@code getGroupShape()} is the actual
+ * rendered box/connector layer, so it's fed into the same proximity-clustering pipeline as an
+ * ordinary {@link XSLFGroupShape} (as one seed, not its individual children). A chart frame has no
+ * rendering path in POI at all; its only recoverable image is a {@code mc:Fallback} preview
+ * picture PowerPoint may or may not have embedded — extracted verbatim when present, silently
+ * skipped otherwise (its title text is still captured by {@code PptxToMarkdownConverter}).
  *
  * Saves to imagesDir as s{slide}_img{n}.{ext} (real pictures) or s{slide}_img{n}.png (rasterized
  * shapes/clusters) — a single shared per-slide counter, so callers see one flat image list either way.
@@ -117,6 +130,26 @@ public class PptxImageExtractor {
         for (XSLFShape shape : slide.getShapes()) {
             if (shape instanceof XSLFPictureShape pic) {
                 addPicture(pic, slideNum, imgIdx, docId, imagesDir, paths);
+            } else if (shape instanceof XSLFObjectShape ole) {
+                // OLE embed: always carries its own preview picture (that's how OOXML lets a
+                // viewer render it without running the source app) — save it directly, no
+                // clustering/rasterization needed.
+                addOlePreview(ole, slideNum, imgIdx, docId, imagesDir, paths);
+            } else if (shape instanceof XSLFDiagram diagram) {
+                // SmartArt: getGroupShape() is the real rendered drawing (actual box/connector
+                // shapes with real anchors), unlike the outer XSLFDiagram frame itself — POI's
+                // DrawFactory only knows how to draw the frame's (usually absent) fallback
+                // picture, not the diagram live. Feed the group shape into the same
+                // proximity-clustering/rasterization pipeline as an ordinary XSLFGroupShape.
+                XSLFDiagram.XSLFDiagramGroupShape diagramGroup = diagram.getGroupShape();
+                if (diagramGroup != null && passesSizeFilter(diagramGroup)) {
+                    clusterable.add(new Clusterable(diagramGroup, true));
+                }
+            } else if (shape instanceof XSLFGraphicFrame frame && frame.hasChart()) {
+                // Charts have no live-rendering path in POI — only a best-effort mc:Fallback
+                // preview picture that PowerPoint may or may not have embedded.
+                XSLFPictureShape fallback = frame.getFallbackPicture();
+                if (fallback != null) addPicture(fallback, slideNum, imgIdx, docId, imagesDir, paths);
             } else if (!(shape instanceof XSLFTable)) {
                 ShapeRole role = classify(shape);
                 if (role != ShapeRole.NOT_ELIGIBLE) {
@@ -142,7 +175,19 @@ public class PptxImageExtractor {
 
     private void addPicture(XSLFPictureShape pic, int slideNum, int[] imgIdx, String docId,
                              Path imagesDir, List<String> paths) throws IOException {
-        XSLFPictureData pd = pic.getPictureData();
+        addPictureData(pic.getPictureData(), slideNum, imgIdx, docId, imagesDir, paths);
+    }
+
+    /** OLE 객체의 내장 미리보기 그림을 저장한다 — 외부 링크 OLE(내장 미리보기 없음)는 조용히 건너뛴다. */
+    private void addOlePreview(XSLFObjectShape ole, int slideNum, int[] imgIdx, String docId,
+                                Path imagesDir, List<String> paths) throws IOException {
+        XSLFPictureData pd = ole.getPictureData();
+        if (pd == null) return;
+        addPictureData(pd, slideNum, imgIdx, docId, imagesDir, paths);
+    }
+
+    private void addPictureData(XSLFPictureData pd, int slideNum, int[] imgIdx, String docId,
+                                 Path imagesDir, List<String> paths) throws IOException {
         PictureData.PictureType type = pd.getType();
         // PictureType.extension already includes the leading dot (e.g. ".png") — strip it so
         // "." + ext below doesn't double up into "img1..png".

@@ -2,8 +2,12 @@ package com.example.ragagent.service;
 
 import org.apache.poi.sl.usermodel.Placeholder;
 import org.apache.poi.xslf.usermodel.XMLSlideShow;
+import org.apache.poi.xslf.usermodel.XSLFChart;
+import org.apache.poi.xslf.usermodel.XSLFDiagram;
+import org.apache.poi.xslf.usermodel.XSLFGraphicFrame;
 import org.apache.poi.xslf.usermodel.XSLFGroupShape;
 import org.apache.poi.xslf.usermodel.XSLFHyperlink;
+import org.apache.poi.xslf.usermodel.XSLFObjectShape;
 import org.apache.poi.xslf.usermodel.XSLFShape;
 import org.apache.poi.xslf.usermodel.XSLFShapeContainer;
 import org.apache.poi.xslf.usermodel.XSLFSlide;
@@ -73,6 +77,15 @@ import java.util.regex.Pattern;
  * an auto-numbered list ({@code getAutoNumberingScheme() != null}) or {@code "- "} otherwise,
  * mirroring {@link DocxToMarkdownConverter}'s ordered/unordered distinction. Hyperlinked runs
  * render as {@code [text](url)} via {@code XSLFTextRun#getHyperlink()}.
+ *
+ * {@code XSLFTable}, {@code XSLFDiagram} (SmartArt), {@code XSLFObjectShape} (OLE embeds), and
+ * chart frames are all {@code XSLFGraphicFrame} subclasses/variants that the plain
+ * {@code XSLFTextShape} walk above never sees on its own. SmartArt's box/label text is extracted
+ * via {@link #appendGroupText} on {@code XSLFDiagram#getGroupShape()} (the rendered drawing
+ * layer); a chart frame contributes only its title text (series/category values aren't reliably
+ * extractable without re-implementing per-chart-type layout); an OLE embed contributes no text at
+ * all — {@link PptxImageExtractor} separately pulls its embedded preview picture and, best-effort,
+ * a chart's {@code mc:Fallback} preview picture when PowerPoint included one.
  *
  * Thread-safe: opens a new {@link XMLSlideShow} per call (no shared state).
  */
@@ -162,6 +175,23 @@ public class PptxToMarkdownConverter {
                 appendTable(body, table);
                 continue;
             }
+            if (shape instanceof XSLFDiagram diagram) {
+                // SmartArt: getGroupShape() is the rendered drawing layer (real box/text shapes),
+                // reused via the same text walk as a plain group — extracting from the diagram's
+                // own data model would require re-implementing POI's layout engine.
+                XSLFShapeContainer diagramGroup = diagram.getGroupShape();
+                if (diagramGroup != null) {
+                    appendGroupText(body, diagramGroup);
+                }
+                continue;
+            }
+            if (shape instanceof XSLFObjectShape) {
+                continue; // OLE 객체 — 텍스트 없음, 미리보기 이미지는 PptxImageExtractor가 별도로 추출
+            }
+            if (shape instanceof XSLFGraphicFrame frame && frame.hasChart()) {
+                appendChartText(body, frame);
+                continue;
+            }
             if (shape instanceof XSLFGroupShape group) {
                 // The group is also rasterized as one bundled image (PptxImageExtractor), but
                 // that alone is invisible without a Vision-capable LLM — extract its text too so
@@ -218,6 +248,24 @@ public class PptxToMarkdownConverter {
                 }
             }
         }
+    }
+
+    /**
+     * 차트 프레임의 제목 텍스트를 본문에 추가한다. 시리즈/카테고리 값은 POI의 청크 API로
+     * 안전하게 뽑아내기 어렵다(차트 종류별로 구조가 다르고, 실제 값은 캐시된 XML에 있음) — 검색
+     * 가치가 큰 제목만 추출해 "완전 소실"은 막는다. 시각 자료는 {@code PptxImageExtractor}가
+     * {@code mc:Fallback} 미리보기 그림을 발견하면 별도 이미지 마커로 남긴다.
+     */
+    private void appendChartText(StringBuilder body, XSLFGraphicFrame frame) {
+        XSLFChart chart = frame.getChart();
+        if (chart == null) return;
+
+        XSLFTextShape titleShape = chart.getTitleShape();
+        if (titleShape == null) return;
+
+        String title = titleShape.getText();
+        if (title == null || title.isBlank()) return;
+        body.append(title.trim()).append("\n\n");
     }
 
     /**

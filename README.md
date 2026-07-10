@@ -241,11 +241,11 @@ rag_java/
     │       ├── MarkdownCorrectionService.java # Post-process LLM markdown output
     │       ├── DocumentLoaderService.java     # PDF/DOCX/TXT/MD loader + Markdown section parser; scanned PDF OCR
     │       ├── DocxToMarkdownConverter.java   # DOCX → Markdown with inline image extraction
-    │       ├── PptxToMarkdownConverter.java   # PPTX → Markdown (title-only heading per slide, [페이지: N] marker)
+    │       ├── PptxToMarkdownConverter.java   # PPTX → Markdown (title heading per slide, [페이지: N] marker, SmartArt/chart-title/hyperlink text)
     │       ├── PdfToMarkdownConverter.java    # Non-scanned PDF → Markdown (synthetic per-page heading, [페이지: N] marker)
     │       ├── ImageExtractorService.java     # Image extraction orchestrator (PDF/PPTX/DOCX)
     │       ├── PdfImageExtractor.java         # PDFBox PDImageXObject-based PDF image extractor
-    │       ├── PptxImageExtractor.java        # POI XSLFPictureShape-based PPTX image extractor
+    │       ├── PptxImageExtractor.java        # POI XSLFPictureShape-based PPTX image extractor + drawing-tool rasterization + SmartArt/chart/OLE graphic frames
     │       ├── VisionDescriptionService.java  # Image → Korean description via LLM (Vision task)
     │       ├── LazyVisionService.java         # On-demand Vision description + SQLite cache
     │       ├── ImageTypeClassifier.java       # Image type classification for prompt selection

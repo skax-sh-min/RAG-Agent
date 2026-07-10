@@ -240,11 +240,11 @@ rag_java/
     │       ├── MarkdownCorrectionService.java # LLM 마크다운 출력 후처리
     │       ├── DocumentLoaderService.java     # PDF/DOCX/TXT/MD 로더 + 마크다운 섹션 파서; 스캔 PDF OCR
     │       ├── DocxToMarkdownConverter.java   # DOCX → Markdown + 인라인 이미지 추출
-    │       ├── PptxToMarkdownConverter.java   # PPTX → Markdown (슬라이드별 제목만 헤딩 승격, [페이지: N] 마커)
+    │       ├── PptxToMarkdownConverter.java   # PPTX → Markdown (슬라이드별 제목 헤딩, [페이지: N] 마커, SmartArt/차트제목/하이퍼링크 텍스트)
     │       ├── PdfToMarkdownConverter.java    # 비스캔 PDF → Markdown (페이지별 합성 헤딩, [페이지: N] 마커)
     │       ├── ImageExtractorService.java     # 이미지 추출 오케스트레이터 (PDF/PPTX/DOCX)
     │       ├── PdfImageExtractor.java         # PDFBox PDImageXObject 기반 PDF 이미지 추출
-    │       ├── PptxImageExtractor.java        # POI XSLFPictureShape 기반 PPTX 이미지 추출
+    │       ├── PptxImageExtractor.java        # POI XSLFPictureShape 기반 PPTX 이미지 추출 + 그리기 도구 래스터라이즈 + SmartArt/차트/OLE 그래픽 프레임
     │       ├── VisionDescriptionService.java  # 이미지 → 한국어 설명 (Vision LLM)
     │       ├── LazyVisionService.java         # 검색 시점 Vision 설명 생성 + SQLite 캐시
     │       ├── ImageTypeClassifier.java       # 이미지 유형 분류 → 전용 프롬프트 선택

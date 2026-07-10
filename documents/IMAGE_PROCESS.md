@@ -86,7 +86,7 @@
 |---------|------|------|
 | `ImageExtractorService` | 포맷별 이미지 추출 + 디스크 저장 조율 | 항상 활성 |
 | `PdfImageExtractor` | PDFBox `PDImageXObject` 기반 PDF 이미지 추출 | 항상 활성 |
-| `PptxImageExtractor` | POI `XSLFPictureShape` 기반 PPTX 이미지 추출 | 항상 활성 |
+| `PptxImageExtractor` | POI `XSLFPictureShape` 기반 PPTX 이미지 추출 + 그리기 도구 도형 래스터라이즈 + SmartArt/차트/OLE 그래픽 프레임 처리 | 항상 활성 |
 | `DocxToMarkdownConverter` | DOCX → Markdown 변환 + 인라인 이미지 추출 (EMF/WMF 변환 포함) | 항상 활성 |
 | `VisionDescriptionService` | 멀티모달 LLM 호출 → 이미지 설명 텍스트 생성 (L2); 유형별 프롬프트 내장 | 항상 활성 |
 | `LazyVisionService` | 검색 시점 Vision 설명 생성 + SQLite 캐시 | `enabled=true` |
@@ -198,11 +198,10 @@ for (int i = 0; i < pdf.getNumberOfPages(); i++) {
 
 > 텍스트 처리(`PptxToMarkdownConverter`로 MD 변환, 슬라이드 제목만 헤딩 승격)는 이 절과 별개입니다 —
 > 상세는 [Pipeline.md §6.3-bis](Pipeline.md#63-bis-pptxpdf비스캔--md-변환--docx와의-차이점) 참고.
-> 이미지 추출·저장 방식 자체(`PptxImageExtractor`)는 아래 내용 그대로 변경 없습니다 — 다만 이제
 > `PptxToMarkdownConverter`가 이 추출기를 직접 호출해, 추출된 이미지를 본문 `[이미지: ...]` 인라인
 > 마커로 곧바로 삽입합니다(DOCX와 동일한 방식).
 
-**이미지 유형**: `XSLFPictureShape` (그림, 다이어그램, 스크린샷)
+**이미지 유형**: `XSLFPictureShape`(그림·스크린샷) 외에, 아래 코드가 다루지 않는 세 부류도 함께 추출됩니다 — 그룹/커넥터/텍스트없는 도형 등 "그리기 도구" 요소(근접 클러스터링 후 PNG로 래스터라이즈), SmartArt(`XSLFDiagram` — 실제 렌더링 레이어인 `getGroupShape()`를 그룹 도형처럼 래스터라이즈), OLE 객체(`XSLFObjectShape` — 내장 미리보기 그림을 그대로 저장). 차트 프레임은 POI가 라이브 렌더링을 지원하지 않아 PowerPoint가 남겨둔 `mc:Fallback` 미리보기가 있을 때만 추출되고, 없으면 제목 텍스트만(§4.2 텍스트 처리 경로) 남습니다. 상세 알고리즘은 [Pipeline.md §6.3-bis 2·4번](Pipeline.md#63-bis-pptxpdf비스캔--md-변환--docx와의-차이점) 참고.
 
 **추출 방법** (Apache POI — 기존 의존성):
 ```java

@@ -2,10 +2,20 @@ package com.example.ragagent.service;
 
 import com.example.ragagent.config.AppProperties;
 import org.apache.poi.sl.usermodel.PictureData;
+import org.apache.poi.xddf.usermodel.chart.AxisPosition;
+import org.apache.poi.xddf.usermodel.chart.ChartTypes;
+import org.apache.poi.xddf.usermodel.chart.XDDFBarChartData;
+import org.apache.poi.xddf.usermodel.chart.XDDFCategoryDataSource;
+import org.apache.poi.xddf.usermodel.chart.XDDFChartAxis;
+import org.apache.poi.xddf.usermodel.chart.XDDFDataSourcesFactory;
+import org.apache.poi.xddf.usermodel.chart.XDDFNumericalDataSource;
+import org.apache.poi.xddf.usermodel.chart.XDDFValueAxis;
 import org.apache.poi.xslf.usermodel.XMLSlideShow;
 import org.apache.poi.xslf.usermodel.XSLFAutoShape;
+import org.apache.poi.xslf.usermodel.XSLFChart;
 import org.apache.poi.xslf.usermodel.XSLFConnectorShape;
 import org.apache.poi.xslf.usermodel.XSLFGroupShape;
+import org.apache.poi.xslf.usermodel.XSLFObjectShape;
 import org.apache.poi.xslf.usermodel.XSLFPictureData;
 import org.apache.poi.xslf.usermodel.XSLFSlide;
 import org.apache.poi.xslf.usermodel.XSLFTextBox;
@@ -354,6 +364,60 @@ class PptxImageExtractorTest {
         Map<Integer, List<String>> result = strictThreshold.extract(pptxPath, "doc1", imagesDir);
 
         assertThat(result).doesNotContainKey(1); // 임계값을 200pt로 올리면 100x50 도형도 제외됨
+    }
+
+    @Test
+    @DisplayName("OLE 객체의 내장 미리보기 그림은 실제 픽처처럼 그대로 추출된다")
+    void oleObjectPreviewPictureIsExtractedVerbatim() throws IOException {
+        byte[] fakePreviewPng = "fake-ole-preview-bytes".getBytes();
+        writePptx(pptx -> {
+            XSLFSlide slide = pptx.createSlide();
+            XSLFPictureData pd = pptx.addPicture(fakePreviewPng, PictureData.PictureType.PNG);
+            XSLFObjectShape ole = slide.createOleShape(pd);
+            ole.setAnchor(new Rectangle2D.Double(10, 10, 100, 100));
+        });
+
+        Map<Integer, List<String>> result = extractor.extract(pptxPath, "doc1", imagesDir);
+
+        assertThat(result).containsKey(1);
+        String fileName = fileNameOf(result.get(1).get(0));
+        assertThat(Files.readAllBytes(imagesDir.resolve(fileName))).isEqualTo(fakePreviewPng);
+    }
+
+    @Test
+    @DisplayName("SmartArt(다이어그램)의 렌더링 레이어(getGroupShape())는 하나의 PNG로 래스터라이즈된다")
+    void smartArtGroupShapeIsRasterizedToNonBlankPng() throws IOException {
+        PptxSmartArtFixture.write(pptxPath, List.of("기획팀", "개발팀"));
+
+        Map<Integer, List<String>> result = extractor.extract(pptxPath, "doc1", imagesDir);
+
+        assertThat(result).containsKey(1);
+        String fileName = fileNameOf(result.get(1).get(0));
+        assertThat(containsNonWhitePixel(imagesDir.resolve(fileName))).isTrue();
+    }
+
+    @Test
+    @DisplayName("mc:Fallback 미리보기 그림이 없는 차트는 (POI가 라이브 렌더링을 지원하지 않으므로) 빈 이미지를 남기지 않고 조용히 건너뛴다")
+    void chartWithoutFallbackPictureProducesNoImage() throws IOException {
+        writePptx(pptx -> {
+            XSLFSlide slide = pptx.createSlide();
+            XSLFChart chart = pptx.createChart();
+            chart.setTitleText("연도별 매출 추이");
+
+            XDDFCategoryDataSource catDs = XDDFDataSourcesFactory.fromArray(new String[] {"2023", "2024"});
+            XDDFNumericalDataSource<Double> valDs = XDDFDataSourcesFactory.fromArray(new Double[] {10.0, 20.0});
+            XDDFChartAxis catAxis = chart.createCategoryAxis(AxisPosition.BOTTOM);
+            XDDFValueAxis valAxis = chart.createValueAxis(AxisPosition.LEFT);
+            XDDFBarChartData bar = (XDDFBarChartData) chart.createData(ChartTypes.BAR, catAxis, valAxis);
+            bar.addSeries(catDs, valDs);
+            chart.plot(bar);
+
+            slide.addChart(chart, new Rectangle2D.Double(50, 50, 300, 200));
+        });
+
+        Map<Integer, List<String>> result = extractor.extract(pptxPath, "doc1", imagesDir);
+
+        assertThat(result).doesNotContainKey(1); // POI가 직접 만든 차트는 mc:Fallback이 없음 — 빈 이미지 대신 스킵
     }
 
     private static String fileNameOf(String relPath) {

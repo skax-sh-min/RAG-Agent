@@ -4,15 +4,26 @@ import com.example.ragagent.config.AppProperties;
 import org.apache.poi.sl.usermodel.AutoNumberingScheme;
 import org.apache.poi.sl.usermodel.PictureData;
 import org.apache.poi.sl.usermodel.Placeholder;
+import org.apache.poi.xddf.usermodel.chart.AxisPosition;
+import org.apache.poi.xddf.usermodel.chart.ChartTypes;
+import org.apache.poi.xddf.usermodel.chart.XDDFBarChartData;
+import org.apache.poi.xddf.usermodel.chart.XDDFCategoryDataSource;
+import org.apache.poi.xddf.usermodel.chart.XDDFChartAxis;
+import org.apache.poi.xddf.usermodel.chart.XDDFDataSourcesFactory;
+import org.apache.poi.xddf.usermodel.chart.XDDFNumericalDataSource;
+import org.apache.poi.xddf.usermodel.chart.XDDFValueAxis;
 import org.apache.poi.xslf.usermodel.XMLSlideShow;
+import org.apache.poi.xslf.usermodel.XSLFChart;
 import org.apache.poi.xslf.usermodel.XSLFGroupShape;
 import org.apache.poi.xslf.usermodel.XSLFHyperlink;
+import org.apache.poi.xslf.usermodel.XSLFObjectShape;
 import org.apache.poi.xslf.usermodel.XSLFPictureData;
 import org.apache.poi.xslf.usermodel.XSLFSlide;
 import org.apache.poi.xslf.usermodel.XSLFTable;
 import org.apache.poi.xslf.usermodel.XSLFTextBox;
 import org.apache.poi.xslf.usermodel.XSLFTextParagraph;
 import org.apache.poi.xslf.usermodel.XSLFTextRun;
+
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -23,6 +34,7 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 import java.util.function.Consumer;
 import java.util.stream.Stream;
 
@@ -554,5 +566,60 @@ class PptxToMarkdownConverterTest {
         String md = convert();
 
         assertThat(md).contains("[공식 문서](https://example.com/docs)");
+    }
+
+    @Test
+    @DisplayName("SmartArt(다이어그램) 도형의 박스 텍스트는 본문에서 검색 가능한 텍스트로 추출된다")
+    void smartArtBoxTextIsExtractedAsBodyText() throws IOException {
+        PptxSmartArtFixture.write(pptxPath, List.of("기획팀", "개발팀", "운영팀"));
+
+        String md = convert();
+
+        assertThat(md).contains("기획팀");
+        assertThat(md).contains("개발팀");
+        assertThat(md).contains("운영팀");
+    }
+
+    @Test
+    @DisplayName("차트 프레임의 제목 텍스트는 본문으로 추출된다")
+    void chartTitleIsExtractedAsBodyText() throws IOException {
+        writePptx(pptx -> {
+            XSLFSlide slide = pptx.createSlide();
+            addTitle(slide, "실적 현황");
+            XSLFChart chart = pptx.createChart();
+            chart.setTitleText("연도별 매출 추이");
+
+            XDDFCategoryDataSource catDs = XDDFDataSourcesFactory.fromArray(new String[] {"2023", "2024"});
+            XDDFNumericalDataSource<Double> valDs = XDDFDataSourcesFactory.fromArray(new Double[] {10.0, 20.0});
+            XDDFChartAxis catAxis = chart.createCategoryAxis(AxisPosition.BOTTOM);
+            XDDFValueAxis valAxis = chart.createValueAxis(AxisPosition.LEFT);
+            XDDFBarChartData bar = (XDDFBarChartData) chart.createData(ChartTypes.BAR, catAxis, valAxis);
+            XDDFBarChartData.Series series = (XDDFBarChartData.Series) bar.addSeries(catDs, valDs);
+            series.setTitle("매출", null);
+            chart.plot(bar);
+
+            slide.addChart(chart, new Rectangle2D.Double(50, 50, 300, 200));
+        });
+
+        String md = convert();
+
+        assertThat(md).contains("연도별 매출 추이");
+    }
+
+    @Test
+    @DisplayName("OLE 객체는 텍스트를 남기지 않지만, 내장 미리보기 이미지는 [이미지: ...] 마커로 추출된다")
+    void oleObjectContributesOnlyItsPreviewImageNotText() throws IOException {
+        writePptx(pptx -> {
+            XSLFSlide slide = pptx.createSlide();
+            addTitle(slide, "첨부 문서");
+            byte[] fakePreviewPng = "fake-ole-preview-bytes".getBytes();
+            XSLFPictureData pd = pptx.addPicture(fakePreviewPng, PictureData.PictureType.PNG);
+            XSLFObjectShape ole = slide.createOleShape(pd);
+            ole.setAnchor(new Rectangle2D.Double(10, 10, 100, 100));
+        });
+
+        String md = convert();
+
+        assertThat(md).contains("[이미지: images/doc1/s1_img1.png]");
     }
 }
