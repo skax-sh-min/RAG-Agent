@@ -1,10 +1,12 @@
 package com.example.ragagent.service;
 
 import com.example.ragagent.config.AppProperties;
+import org.apache.poi.sl.usermodel.AutoNumberingScheme;
 import org.apache.poi.sl.usermodel.PictureData;
 import org.apache.poi.sl.usermodel.Placeholder;
 import org.apache.poi.xslf.usermodel.XMLSlideShow;
 import org.apache.poi.xslf.usermodel.XSLFGroupShape;
+import org.apache.poi.xslf.usermodel.XSLFHyperlink;
 import org.apache.poi.xslf.usermodel.XSLFPictureData;
 import org.apache.poi.xslf.usermodel.XSLFSlide;
 import org.apache.poi.xslf.usermodel.XSLFTable;
@@ -453,5 +455,104 @@ class PptxToMarkdownConverterTest {
 
         assertThat(md).contains("승인 처리"); // 그룹 내부 텍스트가 검색 가능한 본문 텍스트로 남는다
         assertThat(md).contains("[이미지:"); // 그룹 자체도 여전히 이미지로 래스터라이즈된다
+    }
+
+    @Test
+    @DisplayName("FOOTER/SLIDE_NUMBER/DATETIME placeholder 텍스트는 매 슬라이드 본문에 유입되지 않는다")
+    void footerPlaceholderTextIsExcludedFromBody() throws IOException {
+        writePptx(pptx -> {
+            XSLFSlide slide = pptx.createSlide();
+            addTitle(slide, "제목");
+            XSLFTextBox body = slide.createTextBox();
+            addRun(addParagraph(body, false, 0), "일반 본문", false, false);
+
+            XSLFTextBox footer = slide.createTextBox();
+            footer.setPlaceholder(Placeholder.FOOTER);
+            addRun(addParagraph(footer, false, 0), "대외비", false, false);
+
+            XSLFTextBox slideNumber = slide.createTextBox();
+            slideNumber.setPlaceholder(Placeholder.SLIDE_NUMBER);
+            addRun(addParagraph(slideNumber, false, 0), "SLIDENUM_MARKER", false, false);
+
+            XSLFTextBox dateTime = slide.createTextBox();
+            dateTime.setPlaceholder(Placeholder.DATETIME);
+            addRun(addParagraph(dateTime, false, 0), "2024-01-01", false, false);
+        });
+
+        String md = convert();
+
+        assertThat(md).contains("일반 본문");
+        assertThat(md).doesNotContain("대외비");
+        assertThat(md).doesNotContain("SLIDENUM_MARKER");
+        assertThat(md).doesNotContain("2024-01-01");
+    }
+
+    @Test
+    @DisplayName("자동 번호 매기기 불릿은 순서형 마커(\"1. \")로, 일반 불릿은 \"- \"로 렌더링된다")
+    void autoNumberedBulletRendersAsOrderedMarker() throws IOException {
+        writePptx(pptx -> {
+            XSLFSlide slide = pptx.createSlide();
+            addTitle(slide, "절차");
+            XSLFTextBox body = slide.createTextBox();
+
+            XSLFTextParagraph p1 = addParagraph(body, true, 0);
+            p1.setBulletAutoNumber(AutoNumberingScheme.arabicPeriod, 1);
+            addRun(p1, "첫 단계", false, false);
+
+            XSLFTextParagraph p2 = addParagraph(body, true, 0);
+            p2.setBulletAutoNumber(AutoNumberingScheme.arabicPeriod, 2);
+            addRun(p2, "둘째 단계", false, false);
+
+            XSLFTextParagraph p3 = addParagraph(body, true, 0); // 일반 불릿(자동 번호 아님)
+            addRun(p3, "일반 불릿", false, false);
+        });
+
+        String md = convert();
+
+        assertThat(md).contains("1. 첫 단계");
+        assertThat(md).contains("1. 둘째 단계"); // 마크다운 순서형 목록은 소스 번호를 그대로 쓰지 않아도 됨
+        assertThat(md).contains("- 일반 불릿");
+    }
+
+    @Test
+    @DisplayName("헤딩 후보 텍스트의 내부 공백 차이가 정규화되어 크로스 슬라이드 빈도 집계가 흔들리지 않는다")
+    void headingCandidateWhitespaceIsNormalizedForFrequencyCalibration() throws IOException {
+        writePptx(pptx -> {
+            addTwoTitleSlide(pptx, "landing1", "온라인   서비스 개발"); // 내부에 공백 2칸
+            addTwoTitleSlide(pptx, "landing2", "온라인 서비스 개발");
+            addTwoTitleSlide(pptx, "landing3", "온라인 서비스 개발");
+        });
+
+        String md = convert();
+
+        // 정규화 전이라면 슬라이드1의 라벨("온라인   서비스 개발")이 다른 두 슬라이드와 다른
+        // 문자열로 취급되어 빈도가 1대1로 갈리고, 슬라이드1만 부제(landing1)가 상위(##) 헤딩으로
+        // 잘못 승격된다. 정규화 후에는 세 슬라이드 모두 공통 라벨이 상위 헤딩이 되어야 한다.
+        assertThat(md).contains("## 온라인 서비스 개발");
+        assertThat(md).doesNotContain("온라인   서비스 개발"); // 공백 2칸 형태는 사라져야 함
+        assertThat(md).contains("### landing1");
+        assertThat(md).contains("### landing2");
+        assertThat(md).contains("### landing3");
+        assertThat(md).doesNotContain("\n## landing1")
+                .doesNotContain("\n## landing2")
+                .doesNotContain("\n## landing3");
+    }
+
+    @Test
+    @DisplayName("하이퍼링크가 있는 run은 [텍스트](URL) 마크다운 링크로 렌더링된다")
+    void hyperlinkRunRendersAsMarkdownLink() throws IOException {
+        writePptx(pptx -> {
+            XSLFSlide slide = pptx.createSlide();
+            addTitle(slide, "참고자료");
+            XSLFTextBox body = slide.createTextBox();
+            XSLFTextParagraph p = addParagraph(body, false, 0);
+            XSLFTextRun run = addRun(p, "공식 문서", false, false);
+            XSLFHyperlink link = run.createHyperlink();
+            link.linkToUrl("https://example.com/docs");
+        });
+
+        String md = convert();
+
+        assertThat(md).contains("[공식 문서](https://example.com/docs)");
     }
 }

@@ -3,6 +3,7 @@ package com.example.ragagent.service;
 import org.apache.poi.sl.usermodel.Placeholder;
 import org.apache.poi.xslf.usermodel.XMLSlideShow;
 import org.apache.poi.xslf.usermodel.XSLFGroupShape;
+import org.apache.poi.xslf.usermodel.XSLFHyperlink;
 import org.apache.poi.xslf.usermodel.XSLFShape;
 import org.apache.poi.xslf.usermodel.XSLFShapeContainer;
 import org.apache.poi.xslf.usermodel.XSLFSlide;
@@ -65,6 +66,13 @@ import java.util.regex.Pattern;
  * as a markdown pipe table by {@link #appendTable} wherever they appear in shape order — merge-
  * continuation cells ({@code XSLFTableCell#isMerged()}) render blank, mirroring how
  * {@link DocxToMarkdownConverter} handles merged DOCX table cells.
+ *
+ * {@code FOOTER}/{@code SLIDE_NUMBER}/{@code DATETIME} placeholders (page footers, running slide
+ * numbers, dates) are skipped entirely — they repeat verbatim on every slide and would otherwise
+ * pollute every chunk's embedding. Bulleted paragraphs render as {@code "1. "} when the bullet is
+ * an auto-numbered list ({@code getAutoNumberingScheme() != null}) or {@code "- "} otherwise,
+ * mirroring {@link DocxToMarkdownConverter}'s ordered/unordered distinction. Hyperlinked runs
+ * render as {@code [text](url)} via {@code XSLFTextRun#getHyperlink()}.
  *
  * Thread-safe: opens a new {@link XMLSlideShow} per call (no shared state).
  */
@@ -138,7 +146,7 @@ public class PptxToMarkdownConverter {
         List<String> headingCandidates = new ArrayList<>();
         String slideTitle = slide.getTitle();
         if (slideTitle != null && !slideTitle.isBlank()) {
-            headingCandidates.add(slideTitle.trim().replaceAll("\\s+", " "));
+            headingCandidates.add(normalizeHeadingText(slideTitle));
         }
 
         // Only slides that actually have bulleted content further down match the "title(s) then
@@ -163,8 +171,11 @@ public class PptxToMarkdownConverter {
             }
             if (!(shape instanceof XSLFTextShape textShape)) continue;
             Placeholder type = textShape.getTextType();
-            if (type == Placeholder.TITLE || type == Placeholder.CENTERED_TITLE) {
+            if (isTitlePlaceholder(type)) {
                 continue; // already captured via slide.getTitle() above
+            }
+            if (isNoiseFooterPlaceholder(type)) {
+                continue; // footer/slide-number/date-time placeholders repeat on every slide — noise, not content
             }
 
             for (XSLFTextParagraph para : textShape.getTextParagraphs()) {
@@ -175,18 +186,12 @@ public class PptxToMarkdownConverter {
                 if (!isBullet && !bulletSeen && slideHasBullets
                         && headingCandidates.size() < MAX_HEADING_CANDIDATES
                         && looksLikeHeadingCandidate(para, raw)) {
-                    headingCandidates.add(raw);
+                    headingCandidates.add(normalizeHeadingText(raw));
                     continue; // promoted to a heading, not body
                 }
 
-                String text = paragraphText(para);
-                if (isBullet) {
-                    bulletSeen = true;
-                    String indent = "  ".repeat(Math.max(0, para.getIndentLevel()));
-                    body.append(indent).append("- ").append(text).append("\n");
-                } else {
-                    body.append(text).append("\n\n");
-                }
+                if (isBullet) bulletSeen = true;
+                appendBodyLine(body, para, paragraphText(para));
             }
         }
 
@@ -209,13 +214,7 @@ public class PptxToMarkdownConverter {
                 for (XSLFTextParagraph para : textShape.getTextParagraphs()) {
                     String text = paragraphText(para);
                     if (text.isBlank()) continue;
-
-                    if (para.isBullet()) {
-                        String indent = "  ".repeat(Math.max(0, para.getIndentLevel()));
-                        body.append(indent).append("- ").append(text).append("\n");
-                    } else {
-                        body.append(text).append("\n\n");
-                    }
+                    appendBodyLine(body, para, text);
                 }
             }
         }
@@ -272,13 +271,49 @@ public class PptxToMarkdownConverter {
         for (XSLFShape shape : slide.getShapes()) {
             if (!(shape instanceof XSLFTextShape textShape)) continue;
             Placeholder type = textShape.getTextType();
-            if (type == Placeholder.TITLE || type == Placeholder.CENTERED_TITLE) continue;
+            if (isTitlePlaceholder(type) || isNoiseFooterPlaceholder(type)) continue;
 
             for (XSLFTextParagraph para : textShape.getTextParagraphs()) {
                 if (para.isBullet() && !rawParagraphText(para).isBlank()) return true;
             }
         }
         return false;
+    }
+
+    /** 슬라이드 제목으로 이미 처리되는 placeholder 종류(별도 헤딩 추출 경로가 있음). */
+    private boolean isTitlePlaceholder(Placeholder type) {
+        return type == Placeholder.TITLE || type == Placeholder.CENTERED_TITLE;
+    }
+
+    /**
+     * 모든 슬라이드에 반복되는 푸터성 placeholder — 본문으로 들어가면 "대외비" 같은 문구가
+     * 청크마다 중복되어 임베딩 유사도를 오염시키므로 완전히 건너뛴다.
+     */
+    private boolean isNoiseFooterPlaceholder(Placeholder type) {
+        return type == Placeholder.FOOTER || type == Placeholder.SLIDE_NUMBER || type == Placeholder.DATETIME;
+    }
+
+    /** 헤딩 후보 텍스트를 정규화한다(앞뒤 공백 제거 + 내부 연속 공백을 한 칸으로) — 제목 placeholder와
+     * 승격된 텍스트박스 후보가 같은 규칙을 거치게 해, 같은 라벨이 정규화 차이로 다른 문자열로
+     * 갈리며 빈도 집계({@link #calibrateHeadingOrder})가 틀어지는 것을 막는다. */
+    private String normalizeHeadingText(String text) {
+        return text.trim().replaceAll("\\s+", " ");
+    }
+
+    /**
+     * 문단 하나를 본문 버퍼에 목록 항목 또는 일반 텍스트로 추가한다. 불릿이 자동 번호
+     * ({@link XSLFTextParagraph#getAutoNumberingScheme()} != null)이면 순서형 마커("1.")를,
+     * 그 외 불릿은 "-"를 사용한다 — DocxToMarkdownConverter가 numPr의 numFmt로 ordered/unordered를
+     * 구분하는 것과 동일한 원칙.
+     */
+    private void appendBodyLine(StringBuilder body, XSLFTextParagraph para, String text) {
+        if (para.isBullet()) {
+            String indent = "  ".repeat(Math.max(0, para.getIndentLevel()));
+            String marker = para.getAutoNumberingScheme() != null ? "1." : "-";
+            body.append(indent).append(marker).append(" ").append(text).append("\n");
+        } else {
+            body.append(text).append("\n\n");
+        }
     }
 
     /**
@@ -364,9 +399,11 @@ public class PptxToMarkdownConverter {
         for (int i = 0; i < lines.length; i++) {
             String trimmed = lines[i].strip();
             if (trimmed.isEmpty()) continue;
-            if (!trimmed.startsWith("- ")) return body; // first content line isn't a bullet
 
-            String bulletText = stripEmphasisMarkers(trimmed.substring(2).strip());
+            String marker = trimmed.startsWith("- ") ? "- " : trimmed.startsWith("1. ") ? "1. " : null;
+            if (marker == null) return body; // first content line isn't a bullet
+
+            String bulletText = stripEmphasisMarkers(trimmed.substring(marker.length()).strip());
             if (!headingSet.contains(bulletText)) return body;
 
             StringBuilder result = new StringBuilder();
@@ -418,6 +455,18 @@ public class PptxToMarkdownConverter {
         for (XSLFTextRun run : para.getTextRuns()) {
             String text = run.getRawText();
             if (text == null || text.isEmpty()) continue;
+
+            XSLFHyperlink link = run.getHyperlink();
+            String url = link != null ? link.getAddress() : null;
+            if (url != null && !url.isBlank()) {
+                if (hasPending) {
+                    sb.append(applyRunStyle(pending.toString(), pendingBold, pendingItalic));
+                    pending.setLength(0);
+                    hasPending = false;
+                }
+                sb.append("[").append(text).append("](").append(url).append(")");
+                continue;
+            }
 
             boolean bold = run.isBold();
             boolean italic = run.isItalic();
