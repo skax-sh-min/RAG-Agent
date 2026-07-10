@@ -5,6 +5,7 @@ import org.apache.poi.sl.usermodel.Placeholder;
 import org.apache.poi.xslf.usermodel.XMLSlideShow;
 import org.apache.poi.xslf.usermodel.XSLFPictureData;
 import org.apache.poi.xslf.usermodel.XSLFSlide;
+import org.apache.poi.xslf.usermodel.XSLFTable;
 import org.apache.poi.xslf.usermodel.XSLFTextBox;
 import org.apache.poi.xslf.usermodel.XSLFTextParagraph;
 import org.apache.poi.xslf.usermodel.XSLFTextRun;
@@ -28,8 +29,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  * decision), bold/italic emphasis without duplicated markers, inline [이미지: ...] markers per
  * slide (like DOCX — image_paths metadata is promoted downstream by loadFromMarkdown()). Also
  * covers the dual-heading heuristic (untyped "title + subtitle" text boxes on slides that have
- * bullets), its cross-slide frequency calibration, the leading-bullet dedup rule, and cover/
- * divider-slide regressions where the heuristic must NOT kick in.
+ * bullets), its cross-slide frequency calibration, the leading-bullet dedup rule, cover/
+ * divider-slide regressions where the heuristic must NOT kick in, and XSLFTable → markdown
+ * pipe-table conversion (including merged-cell blanking).
  */
 class PptxToMarkdownConverterTest {
 
@@ -376,5 +378,47 @@ class PptxToMarkdownConverterTest {
         assertThat(md).contains("## 1번 슬라이드");
         assertThat(md).doesNotContain("### PART 2").doesNotContain("### 결제 시스템");
         assertThat(md).contains("**PART 2**").contains("**결제 시스템**");
+    }
+
+    @Test
+    @DisplayName("슬라이드의 표(XSLFTable)는 마크다운 파이프 표로 변환된다")
+    void tableConvertsToMarkdownPipeTable() throws IOException {
+        writePptx(pptx -> {
+            XSLFSlide slide = pptx.createSlide();
+            addTitle(slide, "표 슬라이드");
+            XSLFTable table = slide.createTable(2, 3);
+            table.getCell(0, 0).setText("이름");
+            table.getCell(0, 1).setText("부서");
+            table.getCell(0, 2).setText("직급");
+            table.getCell(1, 0).setText("홍길동");
+            table.getCell(1, 1).setText("개발팀");
+            table.getCell(1, 2).setText("과장");
+        });
+
+        String md = convert();
+
+        assertThat(md).contains("| 이름 | 부서 | 직급 |");
+        assertThat(md).contains("| --- | --- | --- |");
+        assertThat(md).contains("| 홍길동 | 개발팀 | 과장 |");
+    }
+
+    @Test
+    @DisplayName("가로로 병합된 표 셀은 연속 셀이 빈 칸으로 렌더링된다")
+    void mergedTableCellRendersBlank() throws IOException {
+        writePptx(pptx -> {
+            XSLFSlide slide = pptx.createSlide();
+            addTitle(slide, "병합 표 슬라이드");
+            XSLFTable table = slide.createTable(2, 2);
+            table.getCell(0, 0).setText("헤더");
+            table.getCell(0, 1).setText("헤더");
+            table.mergeCells(0, 0, 0, 1); // 첫 행의 두 열을 가로로 병합
+            table.getCell(1, 0).setText("A");
+            table.getCell(1, 1).setText("B");
+        });
+
+        String md = convert();
+
+        assertThat(md).contains("| 헤더 |  |");
+        assertThat(md).contains("| A | B |");
     }
 }

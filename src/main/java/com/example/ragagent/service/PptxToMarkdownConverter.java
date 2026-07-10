@@ -4,6 +4,9 @@ import org.apache.poi.sl.usermodel.Placeholder;
 import org.apache.poi.xslf.usermodel.XMLSlideShow;
 import org.apache.poi.xslf.usermodel.XSLFShape;
 import org.apache.poi.xslf.usermodel.XSLFSlide;
+import org.apache.poi.xslf.usermodel.XSLFTable;
+import org.apache.poi.xslf.usermodel.XSLFTableCell;
+import org.apache.poi.xslf.usermodel.XSLFTableRow;
 import org.apache.poi.xslf.usermodel.XSLFTextParagraph;
 import org.apache.poi.xslf.usermodel.XSLFTextRun;
 import org.apache.poi.xslf.usermodel.XSLFTextShape;
@@ -56,9 +59,10 @@ import java.util.regex.Pattern;
  * extracts each slide's pictures to {@code imagesDir} up front, and their relative paths are
  * emitted as {@code [이미지: ...]} markers right after the slide's heading(s). {@code loadFromMarkdown()}
  * then promotes those markers into {@code image_paths} metadata exactly as it does for DOCX — no
- * separate metadata-attachment step is needed downstream. Tables ({@code XSLFTable}) are not
- * handled — it implements {@code TableShape}, not {@code TextShape}, matching the pre-existing
- * scope of the old flat PPTX loader, which also never read table content.
+ * separate metadata-attachment step is needed downstream. Tables ({@code XSLFTable}) are rendered
+ * as a markdown pipe table by {@link #appendTable} wherever they appear in shape order — merge-
+ * continuation cells ({@code XSLFTableCell#isMerged()}) render blank, mirroring how
+ * {@link DocxToMarkdownConverter} handles merged DOCX table cells.
  *
  * Thread-safe: opens a new {@link XMLSlideShow} per call (no shared state).
  */
@@ -144,6 +148,10 @@ public class PptxToMarkdownConverter {
         StringBuilder body = new StringBuilder();
         boolean bulletSeen = false;
         for (XSLFShape shape : slide.getShapes()) {
+            if (shape instanceof XSLFTable table) {
+                appendTable(body, table);
+                continue;
+            }
             if (!(shape instanceof XSLFTextShape textShape)) continue;
             Placeholder type = textShape.getTextType();
             if (type == Placeholder.TITLE || type == Placeholder.CENTERED_TITLE) {
@@ -174,6 +182,52 @@ public class PptxToMarkdownConverter {
         }
 
         return new SlideExtract(headingCandidates, body.toString());
+    }
+
+    /**
+     * PPTX 표를 마크다운 파이프 테이블로 변환해 본문 버퍼에 추가한다. PPTX의 표 모델은 DOCX와
+     * 달리 병합된 셀도 행의 셀 목록에서 빠지지 않고 그대로 남아있으므로(각 행은 항상
+     * {@code getNumberOfColumns()}개의 셀을 가짐), DOCX처럼 gridSpan을 계산해 셀 목록을 다시
+     * 채워 넣을 필요가 없다 — 병합 연속 셀({@link XSLFTableCell#isMerged()})만 빈 칸으로 렌더링하면
+     * 충분하다.
+     */
+    private void appendTable(StringBuilder body, XSLFTable table) {
+        List<XSLFTableRow> rows = table.getRows();
+        if (rows.isEmpty()) return;
+
+        body.append("\n");
+        for (int r = 0; r < rows.size(); r++) {
+            List<XSLFTableCell> cells = rows.get(r).getCells();
+            if (cells.isEmpty()) continue;
+
+            body.append("|");
+            for (XSLFTableCell cell : cells) {
+                String text = cell.isMerged() ? "" : tableCellText(cell);
+                body.append(" ").append(text.replace("|", "\\|")).append(" |");
+            }
+            body.append("\n");
+
+            if (r == 0) {
+                body.append("|");
+                for (int c = 0; c < cells.size(); c++) {
+                    body.append(" --- |");
+                }
+                body.append("\n");
+            }
+        }
+        body.append("\n");
+    }
+
+    /** 표 셀 내 모든 문단을 공백으로 이어붙인다 — 파이프 표 행 내부이므로 개행을 넣을 수 없다. */
+    private String tableCellText(XSLFTableCell cell) {
+        StringBuilder out = new StringBuilder();
+        for (XSLFTextParagraph para : cell.getTextParagraphs()) {
+            String text = paragraphText(para).trim();
+            if (text.isEmpty()) continue;
+            if (!out.isEmpty()) out.append(" ");
+            out.append(text);
+        }
+        return out.toString();
     }
 
     /** 슬라이드의 제목 이외 shape들 중 불릿 문단이 하나라도 있는지 확인한다(빈 불릿은 제외). */
