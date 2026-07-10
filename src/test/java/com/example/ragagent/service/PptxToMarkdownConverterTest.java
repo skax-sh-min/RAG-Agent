@@ -26,7 +26,10 @@ import static org.assertj.core.api.Assertions.assertThat;
  * QA — PptxToMarkdownConverter: slide title → H2, [페이지: N] marker per slide, body outline
  * level → nested list only (never promoted to its own heading, per the PPTX heading-level
  * decision), bold/italic emphasis without duplicated markers, inline [이미지: ...] markers per
- * slide (like DOCX — image_paths metadata is promoted downstream by loadFromMarkdown()).
+ * slide (like DOCX — image_paths metadata is promoted downstream by loadFromMarkdown()). Also
+ * covers the dual-heading heuristic (untyped "title + subtitle" text boxes on slides that have
+ * bullets), its cross-slide frequency calibration, the leading-bullet dedup rule, and cover/
+ * divider-slide regressions where the heuristic must NOT kick in.
  */
 class PptxToMarkdownConverterTest {
 
@@ -274,5 +277,104 @@ class PptxToMarkdownConverterTest {
         assertThat(idx2).isGreaterThan(idx1);
         assertThat(idx3).isGreaterThan(idx2);
         assertThat(md).contains("## 첫 슬라이드").contains("## 둘째 슬라이드").contains("## 셋째 슬라이드");
+    }
+
+    /**
+     * 제목 placeholder가 없는 슬라이드에 굵은 비불릿 텍스트 상자 2개(순서: 슬라이드마다 달라지는
+     * 부제 먼저, 여러 슬라이드에 공통인 라벨 나중) + 불릿 본문을 만든다 — 실제 문제 사례(표 최상단
+     * 좌측 "장" 라벨 + 우측 부제)를 그대로 재현한다.
+     */
+    private static void addTwoTitleSlide(XMLSlideShow pptx, String uniqueSubtitle, String commonLabel) {
+        XSLFSlide slide = pptx.createSlide();
+        XSLFTextBox subtitleBox = slide.createTextBox();
+        addRun(addParagraph(subtitleBox, false, 0), uniqueSubtitle, true, false);
+        XSLFTextBox labelBox = slide.createTextBox();
+        addRun(addParagraph(labelBox, false, 0), commonLabel, true, false);
+        XSLFTextBox content = slide.createTextBox();
+        addRun(addParagraph(content, true, 0), "상세 내용", false, false);
+    }
+
+    @Test
+    @DisplayName("두 헤딩 후보 중 더 많은 슬라이드에 공통으로 등장하는 텍스트가 상위(##) 헤딩으로 보정된다")
+    void calibratesOuterHeadingByCrossSlideFrequency() throws IOException {
+        writePptx(pptx -> {
+            addTwoTitleSlide(pptx, "연동거래", "온라인 서비스 개발");
+            addTwoTitleSlide(pptx, "배치처리", "온라인 서비스 개발");
+            addTwoTitleSlide(pptx, "장애복구", "온라인 서비스 개발");
+        });
+
+        String md = convert();
+
+        // "온라인 서비스 개발"은 매 슬라이드에서 두 번째로 발견되지만(발견 순서만 보면 하위 헤딩),
+        // 3개 슬라이드 모두에 공통으로 등장하므로 보정 로직이 상위(##) 헤딩으로 승격해야 한다.
+        assertThat(md).contains("## 온라인 서비스 개발");
+        assertThat(md).contains("### 연동거래");
+        assertThat(md).contains("### 배치처리");
+        assertThat(md).contains("### 장애복구");
+        assertThat(md).doesNotContain("### 온라인 서비스 개발");
+        // "## X" is a substring of "### X", so anchor on the preceding newline to avoid a false
+        // match against the (correct) "### 연동거래" line.
+        assertThat(md).doesNotContain("\n## 연동거래")
+                .doesNotContain("\n## 배치처리")
+                .doesNotContain("\n## 장애복구");
+    }
+
+    @Test
+    @DisplayName("본문의 첫 불릿이 헤딩 텍스트와 정확히 같으면 그 불릿 한 줄만 제거된다")
+    void dropsLeadingBulletThatDuplicatesHeadingText() throws IOException {
+        writePptx(pptx -> {
+            XSLFSlide slide = pptx.createSlide();
+            XSLFTextBox labelBox = slide.createTextBox();
+            addRun(addParagraph(labelBox, false, 0), "온라인 서비스 개발", true, false);
+            XSLFTextBox subtitleBox = slide.createTextBox();
+            addRun(addParagraph(subtitleBox, false, 0), "연동거래", true, false);
+            XSLFTextBox content = slide.createTextBox();
+            addRun(addParagraph(content, true, 0), "연동거래", true, false); // ### 헤딩과 중복
+            addRun(addParagraph(content, true, 0), "기동 거래에서 수동 거래를 호출하는 것", false, false);
+        });
+
+        String md = convert();
+
+        assertThat(md).contains("## 온라인 서비스 개발");
+        assertThat(md).contains("### 연동거래");
+        assertThat(md).doesNotContain("- **연동거래**").doesNotContain("- 연동거래");
+        assertThat(md).contains("- 기동 거래에서 수동 거래를 호출하는 것");
+    }
+
+    @Test
+    @DisplayName("표지 슬라이드(제목 + 불릿 없는 부제)는 새 헤딩 승격 로직의 영향을 받지 않는다 — 회귀")
+    void coverSlideWithBoldSubtitleIsUnaffectedByHeadingPromotion() throws IOException {
+        writePptx(pptx -> {
+            XSLFSlide slide = pptx.createSlide();
+            addTitle(slide, "2024년 3분기 실적 보고");
+            XSLFTextBox subtitleBox = slide.createTextBox();
+            addRun(addParagraph(subtitleBox, false, 0), "발표자: 홍길동", true, false);
+            // 슬라이드 전체에 불릿이 하나도 없음 — 전형적인 표지 슬라이드
+        });
+
+        String md = convert();
+
+        assertThat(md).contains("## 2024년 3분기 실적 보고");
+        assertThat(md).doesNotContain("### 발표자");
+        assertThat(md).contains("**발표자: 홍길동**"); // 승격되지 않고 굵은 본문 텍스트로 남는다
+    }
+
+    @Test
+    @DisplayName("중간 표지 슬라이드(제목 없음, 불릿 없음, 굵은 텍스트 2개)는 폴백 헤딩 하나만 받는다 — 회귀")
+    void sectionDividerSlideWithTwoBoldTextsGetsOnlyFallbackHeading() throws IOException {
+        writePptx(pptx -> {
+            XSLFSlide slide = pptx.createSlide();
+            XSLFTextBox partBox = slide.createTextBox();
+            addRun(addParagraph(partBox, false, 0), "PART 2", true, false);
+            XSLFTextBox chapterBox = slide.createTextBox();
+            addRun(addParagraph(chapterBox, false, 0), "결제 시스템", true, false);
+            // 제목 placeholder도, 불릿도 없음 — 챕터 사이 구분 슬라이드
+        });
+
+        String md = convert();
+
+        assertThat(md).contains("## 1번 슬라이드");
+        assertThat(md).doesNotContain("### PART 2").doesNotContain("### 결제 시스템");
+        assertThat(md).contains("**PART 2**").contains("**결제 시스템**");
     }
 }
