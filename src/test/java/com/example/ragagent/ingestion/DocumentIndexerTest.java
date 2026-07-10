@@ -8,7 +8,9 @@ import com.example.ragagent.service.DocumentLoaderService;
 import com.example.ragagent.service.DocxToMarkdownConverter;
 import com.example.ragagent.service.ImageExtractorService;
 import com.example.ragagent.service.MarkdownCorrectionService;
+import com.example.ragagent.service.PdfImageExtractor;
 import com.example.ragagent.service.PdfToMarkdownConverter;
+import com.example.ragagent.service.PptxImageExtractor;
 import com.example.ragagent.service.PptxToMarkdownConverter;
 import com.example.ragagent.service.TextToMarkdownService;
 import org.apache.pdfbox.pdmodel.PDDocument;
@@ -16,8 +18,10 @@ import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.pdmodel.PDPageContentStream;
 import org.apache.pdfbox.pdmodel.font.PDType1Font;
 import org.apache.pdfbox.pdmodel.font.Standard14Fonts;
+import org.apache.poi.sl.usermodel.PictureData;
 import org.apache.poi.sl.usermodel.Placeholder;
 import org.apache.poi.xslf.usermodel.XMLSlideShow;
+import org.apache.poi.xslf.usermodel.XSLFPictureData;
 import org.apache.poi.xslf.usermodel.XSLFSlide;
 import org.apache.poi.xslf.usermodel.XSLFTextBox;
 import org.junit.jupiter.api.BeforeEach;
@@ -122,7 +126,8 @@ class DocumentIndexerTest {
         // loadFromMarkdown()/loadPdfPagesForConversion() to delegate to a real DocumentLoaderService
         // where they need genuine [페이지:N]/heading parsing instead of the generic stubDocs echo.
         indexer = new DocumentIndexer(loaderService, correctionService, textToMarkdownService,
-                new PptxToMarkdownConverter(), new PdfToMarkdownConverter(),
+                new PptxToMarkdownConverter(new PptxImageExtractor()),
+                new PdfToMarkdownConverter(new PdfImageExtractor()),
                 imageExtractorService, vectorStore, docRegistry, keywordRepo, chunkSplitter, keywordExtractor, props);
         indexer.init();
     }
@@ -214,6 +219,35 @@ class DocumentIndexerTest {
         assertThat(mdContent).contains("[페이지: 1]").contains("## 개요");
         assertThat(info.chunks()).isGreaterThan(0);
         verify(vectorStore, atLeastOnce()).add(eq(DocRegistry.SHARED), eq("v1"), any(), any());
+    }
+
+    @Test
+    @DisplayName("PPTX 업로드 — 슬라이드 이미지가 converted/ 의 MD 본문에 [이미지: ...] 인라인 마커로 남는다 (DOCX와 동일)")
+    void index_pptx_inlinesImageMarkerInMarkdown() throws IOException {
+        DocumentLoaderService realLoader = realLoader();
+        when(loaderService.loadFromMarkdown(anyString()))
+                .thenAnswer(inv -> realLoader.loadFromMarkdown(inv.getArgument(0)));
+
+        Path pptxFile = tmpDir.resolve("deck-with-image.pptx");
+        try (XMLSlideShow pptx = new XMLSlideShow()) {
+            byte[] fakePng = "fake-png-bytes".getBytes();
+            XSLFPictureData pd = pptx.addPicture(fakePng, PictureData.PictureType.PNG);
+            XSLFSlide slide = pptx.createSlide();
+            XSLFTextBox title = slide.createTextBox();
+            title.setPlaceholder(Placeholder.TITLE);
+            title.setText("다이어그램");
+            slide.createPicture(pd);
+            try (OutputStream out = Files.newOutputStream(pptxFile)) {
+                pptx.write(out);
+            }
+        }
+
+        DocumentInfo info = indexer.index(IndexRequest.single(pptxFile, "deck-with-image.pptx", "v1", "anonymous", e -> {}));
+
+        Path md = tmpDir.resolve("converted").resolve(info.docId() + ".md");
+        String mdContent = Files.readString(md);
+        assertThat(mdContent).containsPattern("\\[이미지: images/[^\\]]+\\.png]");
+        assertThat(info.chunks()).isGreaterThan(0);
     }
 
     @Test

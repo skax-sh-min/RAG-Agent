@@ -12,6 +12,8 @@ import org.springframework.stereotype.Component;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
+import java.util.Map;
 import java.util.regex.Pattern;
 
 /**
@@ -22,11 +24,18 @@ import java.util.regex.Pattern;
  * for bulleted paragraphs, a nested list line keyed off {@code getIndentLevel()}. Indent depth is
  * never promoted to its own heading, regardless of nesting.
  *
- * Images are not handled here: {@code ImageExtractorService}/{@code PptxImageExtractor} still
- * attach them as {@code image_paths} metadata after {@code loadFromMarkdown()}, matched by
- * {@code page_or_slide}. Tables ({@code XSLFTable}) are not handled either — it implements
- * {@code TableShape}, not {@code TextShape}, matching the pre-existing scope of the old flat
- * PPTX loader, which also never read table content.
+ * A slide with no title, no body text, and no extracted image (blank divider, etc.) is skipped
+ * entirely — no marker, no fallback heading — so it never becomes a content-free chunk. Slide
+ * numbering ({@code [페이지: N]}) is unaffected by skipped slides; it always reflects the real
+ * slide index.
+ *
+ * Images are handled inline here, like {@link DocxToMarkdownConverter}: {@link PptxImageExtractor}
+ * extracts each slide's pictures to {@code imagesDir} up front, and their relative paths are
+ * emitted as {@code [이미지: ...]} markers right after the slide's heading. {@code loadFromMarkdown()}
+ * then promotes those markers into {@code image_paths} metadata exactly as it does for DOCX — no
+ * separate metadata-attachment step is needed downstream. Tables ({@code XSLFTable}) are not
+ * handled — it implements {@code TableShape}, not {@code TextShape}, matching the pre-existing
+ * scope of the old flat PPTX loader, which also never read table content.
  *
  * Thread-safe: opens a new {@link XMLSlideShow} per call (no shared state).
  */
@@ -35,11 +44,22 @@ public class PptxToMarkdownConverter {
 
     private static final Pattern DATE_TOKEN_PATTERN = Pattern.compile("\\b(?:\\d{8}|\\d{4}[-._]?\\d{2}[-._]?\\d{2})\\b");
 
+    private final PptxImageExtractor imageExtractor;
+
+    public PptxToMarkdownConverter(PptxImageExtractor imageExtractor) {
+        this.imageExtractor = imageExtractor;
+    }
+
     /**
-     * @param pptxPath source PPTX file
-     * @return full markdown text with a {@code [페이지: N]}-tagged {@code ##} heading per slide
+     * @param pptxPath  source PPTX file
+     * @param docId     unique document ID (used to name the image subdirectory)
+     * @param imagesDir directory where extracted images are saved
+     * @return full markdown text with a {@code [페이지: N]}-tagged {@code ##} heading per slide,
+     *         with {@code [이미지: ...]} markers for any pictures on that slide
      */
-    public String convert(Path pptxPath) throws IOException {
+    public String convert(Path pptxPath, String docId, Path imagesDir) throws IOException {
+        Map<Integer, List<String>> imageMap = imageExtractor.extract(pptxPath, docId, imagesDir);
+
         StringBuilder sb = new StringBuilder();
         try (XMLSlideShow pptx = new XMLSlideShow(Files.newInputStream(pptxPath))) {
             String title = resolveDocumentTitle(pptx, pptxPath);
@@ -50,27 +70,31 @@ public class PptxToMarkdownConverter {
             int slideNum = 0;
             for (XSLFSlide slide : pptx.getSlides()) {
                 slideNum++;
-                appendSlide(sb, slide, slideNum);
+                List<String> images = imageMap.getOrDefault(slideNum, List.of());
+                appendSlide(sb, slide, slideNum, images);
             }
         }
         return sb.toString();
     }
 
-    /** 슬라이드 하나를 [페이지: N] 마커 + 제목 헤딩 + 본문(목록/텍스트)으로 출력 버퍼에 추가한다. */
-    private void appendSlide(StringBuilder sb, XSLFSlide slide, int slideNum) {
-        sb.append("[페이지: ").append(slideNum).append("]\n");
-
+    /**
+     * 슬라이드 하나를 [페이지: N] 마커 + 제목 헤딩 + 이미지 마커 + 본문(목록/텍스트)으로 출력
+     * 버퍼에 추가한다. 제목도, 본문도, 이미지도 없는 슬라이드(완전 공백 구분 슬라이드 등)만
+     * 아무것도 추가하지 않고 건너뛴다 — 그런 슬라이드까지 폴백 헤딩("N번 슬라이드")만 붙여 청크로
+     * 만들면 내용 없는 청크가 임베딩/검색 인덱스에 그대로 남아 노이즈가 된다(PdfToMarkdownConverter의
+     * 빈 페이지 스킵과 동일한 이유). 슬라이드 번호(page_or_slide)는 스킵 여부와 무관하게 실제 슬라이드
+     * 순서를 그대로 유지한다.
+     */
+    private void appendSlide(StringBuilder sb, XSLFSlide slide, int slideNum, List<String> images) {
         String slideTitle = slide.getTitle();
-        String headingText = (slideTitle != null && !slideTitle.isBlank())
-                ? slideTitle.trim().replaceAll("\\s+", " ")
-                : slideNum + "번 슬라이드";
-        sb.append("## ").append(headingText).append("\n\n");
+        boolean hasTitle = slideTitle != null && !slideTitle.isBlank();
 
+        StringBuilder body = new StringBuilder();
         for (XSLFShape shape : slide.getShapes()) {
             if (!(shape instanceof XSLFTextShape textShape)) continue;
             Placeholder type = textShape.getTextType();
             if (type == Placeholder.TITLE || type == Placeholder.CENTERED_TITLE) {
-                continue; // already emitted as the slide heading above
+                continue; // already emitted as the slide heading below
             }
 
             for (XSLFTextParagraph para : textShape.getTextParagraphs()) {
@@ -79,12 +103,29 @@ public class PptxToMarkdownConverter {
 
                 if (para.isBullet()) {
                     String indent = "  ".repeat(Math.max(0, para.getIndentLevel()));
-                    sb.append(indent).append("- ").append(text).append("\n");
+                    body.append(indent).append("- ").append(text).append("\n");
                 } else {
-                    sb.append(text).append("\n\n");
+                    body.append(text).append("\n\n");
                 }
             }
         }
+
+        if (!hasTitle && body.isEmpty() && images.isEmpty()) {
+            return; // 제목·본문·이미지 모두 없음 — 의미 없는 헤딩 전용 청크를 만들지 않는다
+        }
+
+        sb.append("[페이지: ").append(slideNum).append("]\n");
+        String headingText = hasTitle
+                ? slideTitle.trim().replaceAll("\\s+", " ")
+                : slideNum + "번 슬라이드";
+        sb.append("## ").append(headingText).append("\n\n");
+        for (String path : images) {
+            sb.append("[이미지: ").append(path).append("]\n");
+        }
+        if (!images.isEmpty()) {
+            sb.append("\n");
+        }
+        sb.append(body);
         sb.append("\n");
     }
 

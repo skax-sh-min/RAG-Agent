@@ -160,7 +160,9 @@ public record ChatResponse(
 
 > 텍스트 처리(비스캔 PDF는 `PdfToMarkdownConverter`로 MD 변환)는 이 절과 별개입니다 — 상세는
 > [Pipeline.md §6.3-bis](Pipeline.md#63-bis-pptxpdf비스캔--md-변환--docx와의-차이점) 참고.
-> 이미지 추출·저장 방식 자체(`PdfImageExtractor`)는 아래 내용 그대로 변경 없습니다.
+> 이미지 추출·저장 방식 자체(`PdfImageExtractor`)는 아래 내용 그대로 변경 없습니다 — 다만 이제
+> `PdfToMarkdownConverter`가 이 추출기를 직접 호출해, 추출된 이미지를 본문 `[이미지: ...]` 인라인
+> 마커로 곧바로 삽입합니다(DOCX와 동일한 방식).
 
 **이미지 유형**: 페이지 임베드 래스터 이미지 (`PDImageXObject`), 인라인 이미지
 
@@ -196,7 +198,9 @@ for (int i = 0; i < pdf.getNumberOfPages(); i++) {
 
 > 텍스트 처리(`PptxToMarkdownConverter`로 MD 변환, 슬라이드 제목만 헤딩 승격)는 이 절과 별개입니다 —
 > 상세는 [Pipeline.md §6.3-bis](Pipeline.md#63-bis-pptxpdf비스캔--md-변환--docx와의-차이점) 참고.
-> 이미지 추출·저장 방식 자체(`PptxImageExtractor`)는 아래 내용 그대로 변경 없습니다.
+> 이미지 추출·저장 방식 자체(`PptxImageExtractor`)는 아래 내용 그대로 변경 없습니다 — 다만 이제
+> `PptxToMarkdownConverter`가 이 추출기를 직접 호출해, 추출된 이미지를 본문 `[이미지: ...]` 인라인
+> 마커로 곧바로 삽입합니다(DOCX와 동일한 방식).
 
 **이미지 유형**: `XSLFPictureShape` (그림, 다이어그램, 스크린샷)
 
@@ -313,12 +317,12 @@ content = content.replaceAll("\\[([^\\]]+)]\\([^)]*\\)", "$1");
 
 > 인덱싱 시점 동기 L2는 문서 업로드 화면의 **"이미지 설명 추가" 체크박스**(`addImageDescriptions` 파라미터)로
 > 트리거됩니다. 체크 시 `MarkdownCorrectionService`가 로컬 Vision 프로바이더(`RoutingMode.LOCAL_ONLY`)를
-> 동기 호출해 마크다운에 `[이미지 설명: ...]`을 직접 삽입하며, **DOCX·TXT·MD 업로드에만 적용**됩니다
-> (PDF·PPTX는 미적용). 이 경로는 `VisionDescriptionService`를 거치지 않는 별도 구현입니다.
-> **PDF(비스캔)·PPTX도 이제 `MarkdownCorrectionService.correct()`를 거치지만**(Pipeline.md §6.3-bis 참고)
-> 이 두 포맷의 변환기(`PdfToMarkdownConverter`/`PptxToMarkdownConverter`)는 본문에 `[이미지: ...]` 인라인
-> 마커를 넣지 않으므로(이미지는 여전히 `image_paths` 메타데이터로만 첨부) `addImageDescriptions`가 스캔할
-> 마커 자체가 없어 여전히 아무 효과가 없습니다 — 버그가 아니라 의도된 동작입니다.
+> 동기 호출해 마크다운에 `[이미지 설명: ...]`을 직접 삽입하며, 마크다운 본문에 `[이미지: ...]` 마커가
+> 있는 포맷에 적용됩니다 — **DOCX·TXT·MD·PPTX·PDF(스캔 아님) 전부**. `PdfToMarkdownConverter`/
+> `PptxToMarkdownConverter`가 각각 `PdfImageExtractor`/`PptxImageExtractor`를 직접 호출해 DOCX와
+> 동일하게 헤딩 바로 다음에 `[이미지: ...]` 인라인 마커를 삽입하므로(Pipeline.md §6.3-bis 참고),
+> PPTX/PDF도 이 체크박스로 임베딩에 이미지 설명을 포함시킬 수 있습니다. 이 경로는
+> `VisionDescriptionService`를 거치지 않는 별도 구현입니다.
 > 12절 Lazy Vision은 이와 독립적으로 검색 시점에 항상 동작하는 별개의 메커니즘이며
 > (`app.image-description.enabled=true`일 때), `VisionDescriptionService`를 사용합니다.
 > 두 경로는 서로 대체 관계가 아니라 함께 동작할 수 있습니다 — 12.1절 참고.
@@ -721,7 +725,7 @@ app.image-description.docx-wmf-convert=true   # LibreOffice 설치 필요
 | 구분 | 동기 L2 (5절) | Lazy L2 (본 절) |
 |------|---------------------|-----------------|
 | 트리거 | 업로드 화면 "이미지 설명 추가" 체크박스(`addImageDescriptions`) | `app.image-description.enabled=true` (프로퍼티) |
-| 적용 대상 | DOCX·TXT·MD만 (PDF·PPTX는 본문에 이미지 마커가 없어 미적용 — 위 §5 참고) | 모든 포맷 (`image_paths` 메타데이터가 있는 모든 청크) |
+| 적용 대상 | DOCX·TXT·MD·PPTX·PDF(스캔 아님) — 본문에 `[이미지: ...]` 마커가 있는 모든 포맷 (위 §5 참고) | 모든 포맷 (`image_paths` 메타데이터가 있는 모든 청크) |
 | 구현 | `MarkdownCorrectionService.describeImage()` — 자체 구현, `RoutingMode.LOCAL_ONLY` 고정, 유형 분류 없음 | `VisionDescriptionService` + `ImageTypeClassifier`(13절) |
 | 인덱싱 시 LLM 호출 | 체크 시 이미지당 1회 (동기) | 0회 |
 | 결과 반영 위치 | 마크다운 텍스트에 직접 삽입 → 청크 텍스트의 일부로 **임베딩됨** | 검색 시 프롬프트에만 동적 합성 → **임베딩되지 않음** (12.6절) |

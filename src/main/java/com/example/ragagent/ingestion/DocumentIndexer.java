@@ -169,9 +169,11 @@ public class DocumentIndexer {
             rawDocs = loaderService.loadFromMarkdown(sourceMd);
         } else if (lower.endsWith(".pptx")) {
             // PPTX has unambiguous slide numbers → convert to MD (title-only heading per slide,
-            // [페이지: N] marker) and run it through the same correction+section pipeline DOCX uses.
+            // [페이지: N] marker, inline [이미지: ...] markers like DOCX) and run it through the
+            // same correction+section pipeline DOCX uses. loadFromMarkdown() promotes the image
+            // markers into image_paths metadata automatically — no separate attach step needed.
             req.onProgress().accept(IndexingProgressEvent.of("loading", 0, 0, req.filename(), "PPTX → Markdown 변환 중..."));
-            String rawMd = pptxConverter.convert(req.path());
+            String rawMd = pptxConverter.convert(req.path(), docId, imagesDir);
             Files.createDirectories(rawMdPath.getParent());
             Files.writeString(rawMdPath, rawMd);
             String sourceMd = correctionService.correct(rawMd, docId, correctedMdPath,
@@ -180,10 +182,6 @@ public class DocumentIndexer {
                             IndexingProgressEvent.of("correcting", done, total, req.filename(),
                                     done + "/" + total + " 섹션 교정 중")));
             rawDocs = loaderService.loadFromMarkdown(sourceMd);
-
-            req.onProgress().accept(IndexingProgressEvent.of(
-                    "loading", 0, 0, req.filename(), "이미지 추출 중..."));
-            rawDocs = injectImagePathsByPage(rawDocs, imageExtractorService.extract(req.path(), docId, imagesDir));
         } else if (lower.endsWith(".pdf")) {
             DocumentLoaderService.PdfPages pdfPages = loaderService.loadPdfPagesForConversion(req.path());
             if (pdfPages.scanned()) {
@@ -201,9 +199,14 @@ public class DocumentIndexer {
                                 "이미지 추출 중 (" + done + "/" + total + " 페이지)"))));
             } else {
                 // Non-scanned PDF has unambiguous page numbers → convert to MD ([페이지: N] marker
-                // + synthetic per-page heading) and run it through the same pipeline DOCX uses.
+                // + synthetic per-page heading, inline [이미지: ...] markers like DOCX) and run it
+                // through the same pipeline DOCX uses. loadFromMarkdown() promotes the image
+                // markers into image_paths metadata automatically — no separate attach step needed.
                 req.onProgress().accept(IndexingProgressEvent.of("loading", 0, 0, req.filename(), "PDF → Markdown 변환 중..."));
-                String rawMd = pdfConverter.convert(pdfPages.pages(), req.path());
+                String rawMd = pdfConverter.convert(pdfPages.pages(), req.path(), docId, imagesDir,
+                        (done, total) -> req.onProgress().accept(IndexingProgressEvent.of(
+                                "loading", done, total, req.filename(),
+                                "이미지 추출 중 (" + done + "/" + total + " 페이지)")));
                 Files.createDirectories(rawMdPath.getParent());
                 Files.writeString(rawMdPath, rawMd);
                 String sourceMd = correctionService.correct(rawMd, docId, correctedMdPath,
@@ -212,10 +215,6 @@ public class DocumentIndexer {
                                 IndexingProgressEvent.of("correcting", done, total, req.filename(),
                                         done + "/" + total + " 섹션 교정 중")));
                 rawDocs = loaderService.loadFromMarkdown(sourceMd);
-
-                req.onProgress().accept(IndexingProgressEvent.of(
-                        "loading", 0, 0, req.filename(), "이미지 추출 중..."));
-                rawDocs = injectImagePathsByPage(rawDocs, imageExtractorService.extract(req.path(), docId, imagesDir));
             }
         } else {
             throw new IllegalArgumentException("Unsupported file type: " + req.filename());
@@ -567,34 +566,6 @@ public class DocumentIndexer {
             }
         }
         return result;
-    }
-
-    /**
-     * Metadata-based image attachment: matches each section {@code Document}'s
-     * {@link MetaKey#PAGE_OR_SLIDE} value against the slide/page → paths map. Used by the
-     * PPTX/non-scanned-PDF MD-conversion paths, where section count is not guaranteed to equal
-     * the raw slide/page count (unlike {@link #injectImagePaths}'s position-based assumption).
-     */
-    private List<Document> injectImagePathsByPage(List<Document> docs, Map<Integer, List<String>> imageMap) {
-        if (imageMap.isEmpty()) return docs;
-        List<Document> result = new ArrayList<>(docs.size());
-        for (Document doc : docs) {
-            Integer page = pageOrSlideOf(doc);
-            List<String> imgs = page != null ? imageMap.getOrDefault(page, List.of()) : List.of();
-            if (imgs.isEmpty()) {
-                result.add(doc);
-            } else {
-                Map<String, Object> meta = new HashMap<>(doc.getMetadata());
-                meta.put(MetaKey.IMAGE_PATHS, String.join(",", imgs));
-                result.add(new Document(doc.getText(), meta));
-            }
-        }
-        return result;
-    }
-
-    private Integer pageOrSlideOf(Document doc) {
-        Object v = doc.getMetadata().get(MetaKey.PAGE_OR_SLIDE);
-        return v instanceof Integer i ? i : null;
     }
 
     private String computeSha256(Path filePath) {
