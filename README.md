@@ -239,8 +239,10 @@ rag_java/
     │       ├── AdminService.java              # Admin UI data (chunk browse/edit + vector store status) — chroma & sqlite-vec
     │       ├── IndexingProgressService.java   # SSE emitter registry for async upload/sync progress
     │       ├── MarkdownCorrectionService.java # Post-process LLM markdown output
-    │       ├── DocumentLoaderService.java     # PDF/PPTX/DOCX/TXT/MD loader; scanned PDF OCR
+    │       ├── DocumentLoaderService.java     # PDF/DOCX/TXT/MD loader + Markdown section parser; scanned PDF OCR
     │       ├── DocxToMarkdownConverter.java   # DOCX → Markdown with inline image extraction
+    │       ├── PptxToMarkdownConverter.java   # PPTX → Markdown (title-only heading per slide, [페이지: N] marker)
+    │       ├── PdfToMarkdownConverter.java    # Non-scanned PDF → Markdown (synthetic per-page heading, [페이지: N] marker)
     │       ├── ImageExtractorService.java     # Image extraction orchestrator (PDF/PPTX/DOCX)
     │       ├── PdfImageExtractor.java         # PDFBox PDImageXObject-based PDF image extractor
     │       ├── PptxImageExtractor.java        # POI XSLFPictureShape-based PPTX image extractor

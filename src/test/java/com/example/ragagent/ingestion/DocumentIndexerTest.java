@@ -3,10 +3,23 @@ package com.example.ragagent.ingestion;
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.exception.IndexingCancelledException;
 import com.example.ragagent.model.DocumentInfo;
+import com.example.ragagent.model.MetaKey;
 import com.example.ragagent.service.DocumentLoaderService;
+import com.example.ragagent.service.DocxToMarkdownConverter;
 import com.example.ragagent.service.ImageExtractorService;
 import com.example.ragagent.service.MarkdownCorrectionService;
+import com.example.ragagent.service.PdfToMarkdownConverter;
+import com.example.ragagent.service.PptxToMarkdownConverter;
 import com.example.ragagent.service.TextToMarkdownService;
+import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.pdfbox.pdmodel.PDPage;
+import org.apache.pdfbox.pdmodel.PDPageContentStream;
+import org.apache.pdfbox.pdmodel.font.PDType1Font;
+import org.apache.pdfbox.pdmodel.font.Standard14Fonts;
+import org.apache.poi.sl.usermodel.Placeholder;
+import org.apache.poi.xslf.usermodel.XMLSlideShow;
+import org.apache.poi.xslf.usermodel.XSLFSlide;
+import org.apache.poi.xslf.usermodel.XSLFTextBox;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -16,9 +29,12 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
 
 import java.io.IOException;
+import java.io.OutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
@@ -102,9 +118,45 @@ class DocumentIndexerTest {
         ChunkSplitter chunkSplitter = new ChunkSplitter();
         KeywordExtractor keywordExtractor = new KeywordExtractor(llmRouter, props);
 
+        // Real, dependency-free converters — pptx/pdf tests below re-stub loaderService's
+        // loadFromMarkdown()/loadPdfPagesForConversion() to delegate to a real DocumentLoaderService
+        // where they need genuine [페이지:N]/heading parsing instead of the generic stubDocs echo.
         indexer = new DocumentIndexer(loaderService, correctionService, textToMarkdownService,
+                new PptxToMarkdownConverter(), new PdfToMarkdownConverter(),
                 imageExtractorService, vectorStore, docRegistry, keywordRepo, chunkSplitter, keywordExtractor, props);
         indexer.init();
+    }
+
+    private DocumentLoaderService realLoader() {
+        return new DocumentLoaderService(
+                new DocxToMarkdownConverter(Optional.empty(), Optional.empty(), props), Optional.empty());
+    }
+
+    private void writeMinimalPptx(Path path, String title) throws IOException {
+        try (XMLSlideShow pptx = new XMLSlideShow()) {
+            XSLFSlide slide = pptx.createSlide();
+            XSLFTextBox box = slide.createTextBox();
+            box.setPlaceholder(Placeholder.TITLE);
+            box.setText(title);
+            try (OutputStream out = Files.newOutputStream(path)) {
+                pptx.write(out);
+            }
+        }
+    }
+
+    private void writeTextPdf(Path path, String text) throws IOException {
+        try (PDDocument doc = new PDDocument()) {
+            PDPage page = new PDPage();
+            doc.addPage(page);
+            try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
+                cs.beginText();
+                cs.setFont(new PDType1Font(Standard14Fonts.FontName.HELVETICA), 12);
+                cs.newLineAtOffset(50, 700);
+                cs.showText(text);
+                cs.endText();
+            }
+            doc.save(path.toFile());
+        }
     }
 
     @Test
@@ -140,6 +192,70 @@ class DocumentIndexerTest {
         assertThat(md).exists();
         assertThat(Files.readString(md)).contains("구조화 대상 내용");
         verify(vectorStore, atLeastOnce()).add(eq(DocRegistry.SHARED), eq("v1"), any(), any());
+    }
+
+    @Test
+    @DisplayName("PPTX 업로드 — 슬라이드가 MD로 변환되어 converted/ 에 저장되고 슬라이드 제목이 헤딩으로 반영된다")
+    void index_pptx_convertsToMarkdownWithSlideHeading() throws IOException {
+        // Re-stub loadFromMarkdown to genuinely parse — the shared @BeforeEach stub just echoes
+        // a canned generic Document, which can't prove [페이지:N]/## 마커가 실제로 파싱되는지 증명 못 함.
+        DocumentLoaderService realLoader = realLoader();
+        when(loaderService.loadFromMarkdown(anyString()))
+                .thenAnswer(inv -> realLoader.loadFromMarkdown(inv.getArgument(0)));
+
+        Path pptxFile = tmpDir.resolve("deck.pptx");
+        writeMinimalPptx(pptxFile, "개요");
+
+        DocumentInfo info = indexer.index(IndexRequest.single(pptxFile, "deck.pptx", "v1", "anonymous", e -> {}));
+
+        Path md = tmpDir.resolve("converted").resolve(info.docId() + ".md");
+        assertThat(Files.exists(md)).isTrue();
+        String mdContent = Files.readString(md);
+        assertThat(mdContent).contains("[페이지: 1]").contains("## 개요");
+        assertThat(info.chunks()).isGreaterThan(0);
+        verify(vectorStore, atLeastOnce()).add(eq(DocRegistry.SHARED), eq("v1"), any(), any());
+    }
+
+    @Test
+    @DisplayName("PDF 업로드(스캔 아님) — 페이지가 MD로 변환되어 converted/ 에 저장되고 페이지 번호가 헤딩으로 반영된다")
+    void index_nonScannedPdf_convertsToMarkdownWithPageMarker() throws IOException {
+        DocumentLoaderService realLoader = realLoader();
+        when(loaderService.loadFromMarkdown(anyString()))
+                .thenAnswer(inv -> realLoader.loadFromMarkdown(inv.getArgument(0)));
+        when(loaderService.loadPdfPagesForConversion(any()))
+                .thenAnswer(inv -> realLoader.loadPdfPagesForConversion(inv.getArgument(0)));
+
+        Path pdfFile = tmpDir.resolve("report.pdf");
+        writeTextPdf(pdfFile, "This is real extractable text on a non-scanned PDF page, "
+                + "long enough on its own to avoid the scanned-document heuristic.");
+
+        DocumentInfo info = indexer.index(IndexRequest.single(pdfFile, "report.pdf", "v1", "anonymous", e -> {}));
+
+        Path md = tmpDir.resolve("converted").resolve(info.docId() + ".md");
+        assertThat(Files.exists(md)).isTrue();
+        String mdContent = Files.readString(md);
+        assertThat(mdContent).contains("[페이지: 1]").contains("## 1페이지");
+        assertThat(info.chunks()).isGreaterThan(0);
+    }
+
+    @Test
+    @DisplayName("PDF 업로드(스캔 문서) — MD 변환 없이 기존 OCR/플랫 경로를 그대로 탄다 (회귀 방지)")
+    void index_scannedPdf_skipsMarkdownConversion() throws IOException {
+        Path pdfFile = tmpDir.resolve("scanned.pdf");
+        Files.writeString(pdfFile, "%PDF-1.4 fake bytes — content never actually parsed in this test");
+
+        List<Document> scannedPages = List.of(
+                new Document("표지", Map.of(MetaKey.SOURCE_TYPE, "ocr")),
+                new Document("목차 내용", Map.of(MetaKey.SOURCE_TYPE, "ocr")));
+        when(loaderService.loadPdfPagesForConversion(any()))
+                .thenReturn(new DocumentLoaderService.PdfPages(scannedPages, true));
+        when(loaderService.load(any(), any())).thenReturn(scannedPages);
+
+        DocumentInfo info = indexer.index(IndexRequest.single(pdfFile, "scanned.pdf", "v1", "anonymous", e -> {}));
+
+        Path md = tmpDir.resolve("converted").resolve(info.docId() + ".md");
+        assertThat(Files.exists(md)).isFalse(); // scanned PDFs never produce a converted MD file
+        assertThat(info.chunks()).isGreaterThan(0);
     }
 
     @Test

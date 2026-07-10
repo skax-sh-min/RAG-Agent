@@ -4,10 +4,6 @@ import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.rendering.ImageType;
 import org.apache.pdfbox.rendering.PDFRenderer;
-import org.apache.poi.sl.usermodel.TextShape;
-import org.apache.poi.xslf.usermodel.XMLSlideShow;
-import org.apache.poi.xslf.usermodel.XSLFShape;
-import org.apache.poi.xslf.usermodel.XSLFSlide;
 import org.apache.poi.xwpf.usermodel.XWPFDocument;
 import org.apache.poi.xwpf.usermodel.XWPFParagraph;
 import com.example.ragagent.model.MetaKey;
@@ -37,7 +33,11 @@ import java.util.stream.Collectors;
 
 /**
  * Loads documents from various file formats into Spring AI Document objects.
- * Supports: PDF, PPTX, DOCX, TXT, MD
+ * PDF is handled directly here (OCR path for scanned pages via {@link #loadPdfPagesForConversion}
+ * / {@link #load}); DOCX/TXT/MD go through Markdown conversion + {@link #loadFromMarkdown}.
+ * PPTX and non-scanned PDF are converted to Markdown upstream by {@code PptxToMarkdownConverter}/
+ * {@code PdfToMarkdownConverter} before reaching {@link #loadFromMarkdown} — this class no longer
+ * loads PPTX directly.
  */
 @Service
 public class DocumentLoaderService {
@@ -70,26 +70,50 @@ public class DocumentLoaderService {
         String name = filePath.getFileName().toString().toLowerCase();
         log.debug("[LOADER] 로드 시작: {} ({}B)", filePath.getFileName(), Files.size(filePath));
         if (name.endsWith(".pdf")) return loadPdf(filePath, onOcrProgress);
-        if (name.endsWith(".pptx")) return loadPptx(filePath);
         if (name.endsWith(".docx")) return loadDocx(filePath);
         if (name.endsWith(".txt") || name.endsWith(".md")) return loadText(filePath);
         throw new IllegalArgumentException("Unsupported file type: " + name);
     }
 
-    private List<Document> loadPdf(Path filePath, BiConsumer<Integer, Integer> onOcrProgress)
-            throws IOException {
+    /**
+     * Per-page PDF text extracted via {@link PagePdfDocumentReader}, plus whether the PDF looks
+     * scanned ({@link #isScannedByEmptyPageRatio}). No OCR is run here — callers pick between the
+     * OCR path ({@link #load}) and Markdown conversion ({@code PdfToMarkdownConverter}) using
+     * {@code scanned()} before committing to either.
+     */
+    public record PdfPages(List<Document> pages, boolean scanned) {}
+
+    /**
+     * Extracts per-page text and reports whether the PDF looks scanned, for callers that must
+     * choose between the OCR path and Markdown-conversion path (e.g. {@code DocumentIndexer}
+     * routing non-scanned PDFs to {@code PdfToMarkdownConverter}) without extracting twice.
+     */
+    public PdfPages loadPdfPagesForConversion(Path filePath) {
+        List<Document> pages = extractPdfPages(filePath);
+        return new PdfPages(pages, isScannedByEmptyPageRatio(pages));
+    }
+
+    private List<Document> extractPdfPages(Path filePath) {
         var config = PdfDocumentReaderConfig.builder()
                 .withPagesPerDocument(1)
                 .build();
         var reader = new PagePdfDocumentReader(new FileSystemResource(filePath.toFile()), config);
-        List<Document> docs = reader.get();
+        return reader.get();
+    }
 
-        // Tag source_type: check if pages are mostly empty (scanned) → mark as ocr
-        long emptyPages = docs.stream()
+    /** More than half the pages near-empty (&lt;50 chars) → heuristic for a scanned PDF. */
+    static boolean isScannedByEmptyPageRatio(List<Document> pages) {
+        long emptyPages = pages.stream()
                 .filter(d -> d.getText() == null || d.getText().trim().length() < 50)
                 .count();
-        boolean isScanned = emptyPages > docs.size() * 0.5;
-        log.debug("[LOADER:PDF] {} → {}페이지, 빈페이지={}, 스캔문서={}", filePath.getFileName(), docs.size(), emptyPages, isScanned);
+        return emptyPages > pages.size() * 0.5;
+    }
+
+    private List<Document> loadPdf(Path filePath, BiConsumer<Integer, Integer> onOcrProgress)
+            throws IOException {
+        List<Document> docs = extractPdfPages(filePath);
+        boolean isScanned = isScannedByEmptyPageRatio(docs);
+        log.debug("[LOADER:PDF] {} → {}페이지, 스캔문서={}", filePath.getFileName(), docs.size(), isScanned);
 
         if (isScanned && ocrService != null) {
             log.debug("[LOADER:PDF] OCR 모드로 전환: {}", filePath.getFileName());
@@ -129,33 +153,6 @@ public class DocumentLoaderService {
         }
         log.debug("[LOADER:OCR] {} 완료 → {}페이지 텍스트 추출", filePath.getFileName(), result.size());
         return result;
-    }
-
-    private List<Document> loadPptx(Path filePath) throws IOException {
-        List<Document> docs = new ArrayList<>();
-        try (XMLSlideShow pptx = new XMLSlideShow(new FileInputStream(filePath.toFile()))) {
-            int slideNum = 0;
-            for (XSLFSlide slide : pptx.getSlides()) {
-                slideNum++;
-                StringBuilder text = new StringBuilder();
-                for (XSLFShape shape : slide.getShapes()) {
-                    if (shape instanceof TextShape<?, ?> textShape) {
-                        String t = textShape.getText();
-                        if (t != null && !t.isBlank()) {
-                            text.append(t).append("\n");
-                        }
-                    }
-                }
-                if (!text.isEmpty()) {
-                    docs.add(new Document(text.toString(), Map.of(
-                            MetaKey.SOURCE_TYPE, "ppt",
-                            MetaKey.PAGE_OR_SLIDE, slideNum
-                    )));
-                }
-            }
-        }
-        log.debug("[LOADER:PPTX] {} → {}슬라이드 (텍스트 있는 슬라이드)", filePath.getFileName(), docs.size());
-        return docs;
     }
 
     /**

@@ -10,6 +10,8 @@ import com.example.ragagent.model.SyncResult;
 import com.example.ragagent.service.DocumentLoaderService;
 import com.example.ragagent.service.ImageExtractorService;
 import com.example.ragagent.service.MarkdownCorrectionService;
+import com.example.ragagent.service.PdfToMarkdownConverter;
+import com.example.ragagent.service.PptxToMarkdownConverter;
 import com.example.ragagent.service.TextToMarkdownService;
 import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
@@ -41,6 +43,8 @@ public class DocumentIndexer {
     private final DocumentLoaderService loaderService;
     private final MarkdownCorrectionService correctionService;
     private final TextToMarkdownService textToMarkdownService;
+    private final PptxToMarkdownConverter pptxConverter;
+    private final PdfToMarkdownConverter pdfConverter;
     private final ImageExtractorService imageExtractorService;
     private final VectorStoreFacade vectorStore;
     private final DocRegistry docRegistry;
@@ -54,6 +58,8 @@ public class DocumentIndexer {
     public DocumentIndexer(DocumentLoaderService loaderService,
                            MarkdownCorrectionService correctionService,
                            TextToMarkdownService textToMarkdownService,
+                           PptxToMarkdownConverter pptxConverter,
+                           PdfToMarkdownConverter pdfConverter,
                            ImageExtractorService imageExtractorService,
                            VectorStoreFacade vectorStore,
                            DocRegistry docRegistry,
@@ -64,6 +70,8 @@ public class DocumentIndexer {
         this.loaderService = loaderService;
         this.correctionService = correctionService;
         this.textToMarkdownService = textToMarkdownService;
+        this.pptxConverter = pptxConverter;
+        this.pdfConverter = pdfConverter;
         this.imageExtractorService = imageExtractorService;
         this.vectorStore = vectorStore;
         this.docRegistry = docRegistry;
@@ -159,12 +167,31 @@ public class DocumentIndexer {
                             IndexingProgressEvent.of("correcting", done, total, req.filename(),
                                     done + "/" + total + " 섹션 교정 중")));
             rawDocs = loaderService.loadFromMarkdown(sourceMd);
-        } else {
-            rawDocs = loaderService.load(req.path(),
-                    (done, total) -> req.onProgress().accept(IndexingProgressEvent.of(
-                            "loading", done, total, req.filename(),
-                            "OCR 처리 중 (" + done + "/" + total + " 페이지)")));
-            if (lower.endsWith(".pptx") || lower.endsWith(".pdf")) {
+        } else if (lower.endsWith(".pptx")) {
+            // PPTX has unambiguous slide numbers → convert to MD (title-only heading per slide,
+            // [페이지: N] marker) and run it through the same correction+section pipeline DOCX uses.
+            req.onProgress().accept(IndexingProgressEvent.of("loading", 0, 0, req.filename(), "PPTX → Markdown 변환 중..."));
+            String rawMd = pptxConverter.convert(req.path());
+            Files.createDirectories(rawMdPath.getParent());
+            Files.writeString(rawMdPath, rawMd);
+            String sourceMd = correctionService.correct(rawMd, docId, correctedMdPath,
+                    req.addImageDescriptions(), req.addHeadingNumbers(),
+                    (done, total) -> req.onProgress().accept(
+                            IndexingProgressEvent.of("correcting", done, total, req.filename(),
+                                    done + "/" + total + " 섹션 교정 중")));
+            rawDocs = loaderService.loadFromMarkdown(sourceMd);
+
+            req.onProgress().accept(IndexingProgressEvent.of(
+                    "loading", 0, 0, req.filename(), "이미지 추출 중..."));
+            rawDocs = injectImagePathsByPage(rawDocs, imageExtractorService.extract(req.path(), docId, imagesDir));
+        } else if (lower.endsWith(".pdf")) {
+            DocumentLoaderService.PdfPages pdfPages = loaderService.loadPdfPagesForConversion(req.path());
+            if (pdfPages.scanned()) {
+                // Scanned PDF — unchanged legacy OCR/flat path (no MD conversion).
+                rawDocs = loaderService.load(req.path(),
+                        (done, total) -> req.onProgress().accept(IndexingProgressEvent.of(
+                                "loading", done, total, req.filename(),
+                                "OCR 처리 중 (" + done + "/" + total + " 페이지)")));
                 req.onProgress().accept(IndexingProgressEvent.of(
                         "loading", 0, 0, req.filename(), "이미지 추출 중..."));
                 rawDocs = injectImagePaths(rawDocs, imageExtractorService.extract(
@@ -172,7 +199,26 @@ public class DocumentIndexer {
                         (done, total) -> req.onProgress().accept(IndexingProgressEvent.of(
                                 "loading", done, total, req.filename(),
                                 "이미지 추출 중 (" + done + "/" + total + " 페이지)"))));
+            } else {
+                // Non-scanned PDF has unambiguous page numbers → convert to MD ([페이지: N] marker
+                // + synthetic per-page heading) and run it through the same pipeline DOCX uses.
+                req.onProgress().accept(IndexingProgressEvent.of("loading", 0, 0, req.filename(), "PDF → Markdown 변환 중..."));
+                String rawMd = pdfConverter.convert(pdfPages.pages(), req.path());
+                Files.createDirectories(rawMdPath.getParent());
+                Files.writeString(rawMdPath, rawMd);
+                String sourceMd = correctionService.correct(rawMd, docId, correctedMdPath,
+                        req.addImageDescriptions(), req.addHeadingNumbers(),
+                        (done, total) -> req.onProgress().accept(
+                                IndexingProgressEvent.of("correcting", done, total, req.filename(),
+                                        done + "/" + total + " 섹션 교정 중")));
+                rawDocs = loaderService.loadFromMarkdown(sourceMd);
+
+                req.onProgress().accept(IndexingProgressEvent.of(
+                        "loading", 0, 0, req.filename(), "이미지 추출 중..."));
+                rawDocs = injectImagePathsByPage(rawDocs, imageExtractorService.extract(req.path(), docId, imagesDir));
             }
+        } else {
+            throw new IllegalArgumentException("Unsupported file type: " + req.filename());
         }
         log.debug("[INDEX] {} 로드 완료 → 원본 섹션 {}개", req.filename(), rawDocs.size());
 
@@ -239,7 +285,7 @@ public class DocumentIndexer {
         Path mdPath = Files.exists(correctedPath) ? correctedPath : rawPath;
         if (!Files.exists(mdPath)) {
             throw new IllegalStateException(
-                    "MD 파일이 없습니다 (DOCX/TXT 문서만 MD 재인덱싱 지원): " + docId);
+                    "MD 파일이 없습니다 (DOCX/TXT/PPTX/PDF 문서만 MD 재인덱싱 지원): " + docId);
         }
 
         log.info("[REINDEX] 시작: docId={}, src={}", docId, mdPath.getFileName());
@@ -501,6 +547,11 @@ public class DocumentIndexer {
         }
     }
 
+    /**
+     * Position-based image attachment: assumes exactly one raw {@code Document} per slide/page
+     * ({@code docs.get(i)} ↔ slide/page {@code i+1}). Used only by the untouched scanned-PDF path,
+     * where that invariant still holds (no MD conversion, no section merge/split in between).
+     */
     private List<Document> injectImagePaths(List<Document> docs, Map<Integer, List<String>> imageMap) {
         if (imageMap.isEmpty()) return docs;
         List<Document> result = new ArrayList<>(docs.size());
@@ -516,6 +567,34 @@ public class DocumentIndexer {
             }
         }
         return result;
+    }
+
+    /**
+     * Metadata-based image attachment: matches each section {@code Document}'s
+     * {@link MetaKey#PAGE_OR_SLIDE} value against the slide/page → paths map. Used by the
+     * PPTX/non-scanned-PDF MD-conversion paths, where section count is not guaranteed to equal
+     * the raw slide/page count (unlike {@link #injectImagePaths}'s position-based assumption).
+     */
+    private List<Document> injectImagePathsByPage(List<Document> docs, Map<Integer, List<String>> imageMap) {
+        if (imageMap.isEmpty()) return docs;
+        List<Document> result = new ArrayList<>(docs.size());
+        for (Document doc : docs) {
+            Integer page = pageOrSlideOf(doc);
+            List<String> imgs = page != null ? imageMap.getOrDefault(page, List.of()) : List.of();
+            if (imgs.isEmpty()) {
+                result.add(doc);
+            } else {
+                Map<String, Object> meta = new HashMap<>(doc.getMetadata());
+                meta.put(MetaKey.IMAGE_PATHS, String.join(",", imgs));
+                result.add(new Document(doc.getText(), meta));
+            }
+        }
+        return result;
+    }
+
+    private Integer pageOrSlideOf(Document doc) {
+        Object v = doc.getMetadata().get(MetaKey.PAGE_OR_SLIDE);
+        return v instanceof Integer i ? i : null;
     }
 
     private String computeSha256(Path filePath) {

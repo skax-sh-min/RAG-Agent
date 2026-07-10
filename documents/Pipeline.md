@@ -144,28 +144,32 @@ PROGRESSIVE 모드 AND sufficient=false AND retryCount >= max
   │
   ├─ SHA-256 해시 → docId 생성 (filename_해시앞8자)
   │
-  ├─ 파일 타입별 파싱  (DOCX·TXT 는 Markdown 으로 정규화 후 처리)
-  │    PDF   → 페이지 단위 (스캔 감지 시 OCR 자동 적용)
-  │    PPTX  → 슬라이드 단위
+  ├─ 파일 타입별 파싱  (DOCX·TXT·PPTX·PDF[비스캔] 는 모두 Markdown 으로 정규화 후 처리)
+  │    PDF   → 스캔 감지(페이지 50% 이상이 50자 미만) 시 페이지 단위 + OCR 자동 적용 (MD 변환 없음)
+  │            비스캔 시 PdfToMarkdownConverter 로 페이지별 [페이지: N] 마커 + 합성 헤딩("N페이지") 삽입 → LLM 포맷 교정 → 섹션 분할
+  │    PPTX  → PptxToMarkdownConverter 로 슬라이드별 [페이지: N] 마커 + 제목 헤딩(##, 제목 없으면 "N번 슬라이드") 삽입
+  │            (본문 불릿은 들여쓰기 레벨만 중첩 목록으로 반영, 소제목으로 승격하지 않음) → LLM 포맷 교정 → 섹션 분할
   │    DOCX  → DocxToMarkdownConverter 로 MD 변환 → LLM 포맷 교정 → 섹션 분할 (이미지 인라인)
   │    TXT   → 로컬 LLM 으로 구조화(제목/목록/표) + 문법 교정하여 MD 변환 → LLM 포맷 교정 → 섹션 분할
   │    MD    → 이미지/링크 마커 전처리 → 섹션 분할
   │
   ├─ 이미지 추출
-  │    PDF/PPTX → data/images/{docId}/ 에 별도 저장
-  │    DOCX     → 파싱 단계에서 함께 처리
+  │    PDF/PPTX → data/images/{docId}/ 에 별도 저장 (MD 변환과 무관하게 ImageExtractorService 가 그대로 처리 —
+  │               본문에 [이미지: ...] 인라인 마커는 넣지 않고 청크의 page_or_slide 값으로 매칭해 image_paths 메타데이터만 채움)
+  │    DOCX     → 파싱 단계에서 함께 처리 (본문에 [이미지: ...] 인라인 마커 삽입)
   │    TXT/MD   → 없음 (평문/마크다운)
   │    → chunk 메타데이터 image_paths 에 경로 기록
   │
   ├─ 청킹
-  │    PPTX        → 슬라이드 단위 유지 (분할 없음)
-  │    DOCX/TXT/MD → 섹션 단위 유지, 초과 시 슬라이딩 윈도우
-  │    PDF         → 슬라이딩 윈도우 (chunkSize / chunkOverlap)
+  │    DOCX/TXT/MD/PPTX/PDF(비스캔) → 섹션(헤딩) 단위 유지, 초과 시 섹션 내부 슬라이딩 윈도우
+  │      단, PPTX/PDF(비스캔)는 서로 다른 슬라이드/페이지(page_or_slide) 간 병합은 금지 —
+  │      "청크 1개 = 슬라이드/페이지 1개 = 정확한 인용" 보장을 유지하기 위함
+  │    PDF(스캔) → 슬라이딩 윈도우만 적용 (chunkSize / chunkOverlap, 섹션 병합 없음 — 기존 동작 그대로)
   │
   ├─ 메타데이터 태깅
   │    doc_id, filename, version, doc_type, sha256, collected_at,
   │    chunk_index, owner_id, visibility, tags(선택), page_or_slide,
-  │    source_type, image_paths, heading(MD/DOCX 섹션 제목)
+  │    source_type, image_paths, heading(MD/DOCX/PPTX/PDF[비스캔] 섹션 제목)
   │
   ├─ 기존 청크 삭제 (재인덱싱 시 동일 docId 덮어쓰기)
   │
@@ -283,19 +287,36 @@ PROGRESSIVE 모드 AND sufficient=false AND retryCount >= max
   - `page_or_slide`는 DOCX에서 헤딩 시작 페이지(명시적 page break 기준)를 우선 사용하고, 없으면 기존 청크 순번 fallback을 사용한다.
   - **저장·표시 텍스트(원문) ≠ 임베딩·FTS·답변 프롬프트 입력(맥락+정규화)** — 3계층 분리가 §10.1/10.1-보완의 핵심 원칙이며, `AnswerService.buildAnswerPrompt()`도 정규화된(맥락 헤더 없는) 텍스트를 사용한다.
 
+### 6.3-bis. PPTX/PDF(비스캔) → MD 변환 — DOCX와의 차이점
+
+6.3절 DOCX 흐름과 4)~7) 단계는 거의 동일하되(변환 → 저장 → LLM 포맷 교정 → MD 섹션 로드 → 청킹 → 태깅 → 키워드+맥락 추출 → 임베딩 저장), 다음 지점만 다르다.
+
+1. **변환기**: `PptxToMarkdownConverter`(PPTX) / `PdfToMarkdownConverter`(PDF, 스캔 아닌 경우만) — `DocxToMarkdownConverter`와 나란히 `service` 패키지에 위치. 각각 `docId`/`imagesDir` 없이 텍스트 변환만 담당한다(이미지는 4번 참고).
+2. **헤딩 생성 규칙**:
+   - **PPTX** — 슬라이드 제목 placeholder(`TITLE`/`CENTERED_TITLE`)만 `##`로 승격한다. 제목이 없는 슬라이드(이미지 전용·구분 슬라이드 등)는 `"{N}번 슬라이드"`로 대체. 본문 불릿은 들여쓰기 레벨(`XSLFTextParagraph.getIndentLevel()`)을 중첩 목록으로만 반영하고, 어떤 경우에도 소제목(`###` 이상)으로 승격하지 않는다 — 슬라이드 하나를 하나의 원자적 섹션으로 다루는 편이 PPTX의 실제 구조에 더 가깝고, 들여쓰기를 헤딩으로 승격하면 평범한 한 줄짜리 불릿 목록도 소제목이 되어 메타데이터가 산만해질 위험이 있기 때문 (검토된 대안 및 채택 근거는 구현 당시 논의 참고).
+   - **PDF(비스캔)** — 페이지 텍스트만으로는 신뢰할 구조 신호가 없으므로 페이지마다 합성 헤딩 `"## N페이지"`만 부여한다(제목·소제목 추론 없음). 빈 페이지는 마커·헤딩 모두 생략하고 건너뛰되, 다음 페이지 번호는 밀리지 않고 실제 PDF 페이지 인덱스를 그대로 유지한다.
+3. **페이지/슬라이드 마커**: 항상 제네릭 `[페이지: N]` 마커만 사용한다(DOCX 전용의 `[헤딩페이지: N]`은 쓰지 않음) — 각 슬라이드/페이지의 헤딩 직전에 위치시켜 `splitMarkdownBySections()`가 그 헤딩의 `page_or_slide`로 정확히 귀속시킨다. **모든 슬라이드/페이지가 반드시 헤딩 하나씩을 가져야 하는 이유**: 헤딩이 없으면 섹션 경계가 전혀 생기지 않아 문서 전체가 헤딩 없는 섹션 1개로 뭉쳐버리고, 두 번째 슬라이드/페이지부터는 `page_or_slide` 값이 유실된다.
+4. **이미지**: DOCX와 달리 본문에 `[이미지: ...]` 인라인 마커를 넣지 않는다 — `ImageExtractorService`(`PptxImageExtractor`/`PdfImageExtractor`)가 추출한 슬라이드/페이지→경로 맵을, MD 변환 후 생성된 각 섹션의 `page_or_slide` 메타데이터 값으로 매칭해 `image_paths`에만 붙인다(`DocumentIndexer.injectImagePathsByPage()`). 이 때문에 `addImageDescriptions`(이미지 설명 추가) 옵션은 지금도 PPTX/PDF에 대해 효과가 없다 — [IMAGE_PROCESS.md §5](IMAGE_PROCESS.md#5-vision-설명-생성-l2) 참고.
+5. **청킹**: DOCX/TXT/MD와 같은 섹션 병합(`mergeShortSections`) 전략을 타지만, 서로 다른 `page_or_slide`를 가진 인접 섹션끼리는 병합을 금지한다(`ChunkSplitter.isMergeForbiddenByPageMismatch()`, 기존 헤딩-레벨-점프 금지 규칙과 나란히 적용) — "청크 1개 = 슬라이드/페이지 1개 = 정확한 인용" 보장을 DOCX보다 더 엄격하게 유지한다. 값이 없는 DOCX/TXT/MD는 항상 no-op.
+6. **표(테이블)**: PPTX의 `XSLFTable`은 다루지 않는다 — `TableShape`이지 `TextShape`가 아니라서 기존 슬라이드 로더도 표 내용을 읽은 적이 없어 회귀는 아니다.
+7. **스캔 판정**: `DocumentLoaderService.loadPdfPagesForConversion()`이 페이지 텍스트 추출과 스캔 판정(§6.6, 빈 페이지 50% 초과)을 함께 반환해, 스캔 PDF는 기존 `ocrWithPdfRenderer()` OCR 경로로, 비스캔 PDF는 위 MD 변환 경로로 분기한다 — 스캔 판정 로직 자체(임계값·휴리스틱)는 변경되지 않았다.
+8. **MD 재인덱싱(↺)**: 위 변환기들도 `converted/{docId}.md`(+`_corrected.md`)를 남기므로 PPTX·비스캔 PDF도 DOCX·TXT와 동일하게 `/admin` 재인덱싱을 지원한다(스캔 PDF는 MD 파일이 없어 미지원).
+
 ### 6.4. 문서 타입별 처리 상세
 
 | 타입 | 파싱/변환 | LLM 전처리 | 중간 산출물 (data/converted) | 청킹 | 이미지 | MD 재인덱싱(↺) |
 |------|-----------|-----------|------------------------------|------|--------|----------------|
-| **PDF** | `PagePdfDocumentReader` 페이지 단위. 50% 이상 페이지가 50자 미만이면 스캔 판정 → Tesseract(kor+eng) OCR (`source_type=ocr`) | 없음 | 없음 | 슬라이딩 윈도우 | 페이지 이미지 추출 → `data/images/{docId}/` | 미지원 |
-| **PPTX** | POI 로 슬라이드별 텍스트 (`source_type=ppt`) | 없음 | 없음 | 슬라이드 단위 유지 | 슬라이드 이미지 추출 | 미지원 |
+| **PDF(스캔)** | `PagePdfDocumentReader` 페이지 단위. 50% 이상 페이지가 50자 미만이면 스캔 판정 → Tesseract(kor+eng) OCR (`source_type=ocr`). **MD 변환 없음** | 없음 | 없음 | 슬라이딩 윈도우(섹션 병합 없음) | 페이지 이미지 추출 → `data/images/{docId}/` | 미지원 |
+| **PDF(비스캔)** | `PdfToMarkdownConverter` 로 MD 변환 (페이지별 `[페이지: N]` + 합성 헤딩 `## N페이지`, 빈 페이지는 건너뜀) | `MarkdownCorrectionService.correct()` — 섹션 병렬 **포맷 교정** (DOCX·TXT 와 동일 파이프라인, 페이지 마커 보존) | `{docId}.md`(원본) + `{docId}_corrected.md`(교정) | **헤딩(페이지) 섹션 우선 유지**, 초과 시 섹션 내부 슬라이딩 윈도우 — 단, 서로 다른 페이지끼리는 병합되지 않음(§6.3-bis) | 페이지 이미지 추출 → `image_paths` 메타데이터로만 첨부(인라인 마커 없음) | **지원** |
+| **PPTX** | `PptxToMarkdownConverter` 로 MD 변환 (슬라이드별 `[페이지: N]` + 제목 헤딩 `##`, 본문 불릿은 중첩 목록만) | `MarkdownCorrectionService.correct()` — 섹션 병렬 **포맷 교정** (DOCX·TXT 와 동일 파이프라인, 슬라이드 마커 보존) | `{docId}.md`(원본) + `{docId}_corrected.md`(교정) | **헤딩(슬라이드) 섹션 우선 유지**, 초과 시 섹션 내부 슬라이딩 윈도우 — 단, 서로 다른 슬라이드끼리는 병합되지 않음(§6.3-bis) | 슬라이드 이미지 추출 → `image_paths` 메타데이터로만 첨부(인라인 마커 없음) | **지원** |
 | **DOCX** | `DocxToMarkdownConverter` 로 MD 변환 (제목 스타일 → `##/###`, `[헤딩페이지: N]`/`[페이지: N]` + 이미지 `[이미지: ...]` 인라인) | `MarkdownCorrectionService.correct()` — 섹션 병렬 **포맷 교정**(끊긴 문장 연결·오타·헤딩 정규화, 내용 불변, 페이지/이미지 마커 보존) | `{docId}.md`(원본) + `{docId}_corrected.md`(교정) | **헤딩 섹션 우선 유지**, 초과 시 섹션 내부 슬라이딩 윈도우 | 변환 단계에서 인라인 처리 | **지원** |
 | **TXT** | 평문 → `TextToMarkdownService.convert()` — 로컬 LLM 이 **구조화**(제목/목록/표 부여) + **문법 교정**(맞춤법·띄어쓰기·끊긴 문장), 내용 불변 → MD | 위 구조화에 이어 `MarkdownCorrectionService.correct()` **포맷 교정** 한 번 더 (DOCX 와 동일 파이프라인) | `{docId}.md`(구조화) + `{docId}_corrected.md`(교정) | 섹션 단위, 초과 시 슬라이딩 윈도우 | 없음 | **지원** |
 | **MD** | 이미지/링크 마커 전처리 후 `#` 헤딩 기준 섹션 분할 | 없음 | 없음 | 섹션 단위, 초과 시 슬라이딩 윈도우 | `[이미지: ...]` 마커 → image_paths | 미지원 |
 
-> **DOCX·TXT 의 LLM 전처리는 graceful**: LLM 사용 불가 시 원본(변환 전) 텍스트를 그대로 사용해 인덱싱은 계속된다.  
+> **DOCX·TXT·PPTX·PDF(비스캔)의 LLM 전처리는 graceful**: LLM 사용 불가 시 원본(변환 전) 텍스트를 그대로 사용해 인덱싱은 계속된다.  
 > **TXT 구조화 LLM 호출**: `TaskType.LIGHT_TEXT` · `RoutingMode.COST_FIRST`(로컬 프로바이더 우선). 큰 파일은 6,000자 블록으로 나눠 병렬 처리.  
-> **MD 재인덱싱(↺)**: `data/converted/{docId}[_corrected].md` 가 존재하는 DOCX·TXT 만 지원(`AdminController` `/admin/documents/{docId}/reindex`). 재변환/재교정 없이 저장된 MD 를 다시 청킹·임베딩한다. 태그는 FTS 인덱스에서 복원.
+> **PPTX/PDF(비스캔)는 이미지를 인라인 마커로 넣지 않으므로**, 업로드 화면의 "이미지 설명 추가"(`addImageDescriptions`) 체크박스는 지금도 이 두 포맷에 대해 효과가 없다(DOCX·TXT·MD만 적용) — [IMAGE_PROCESS.md §5](IMAGE_PROCESS.md#5-vision-설명-생성-l2) 참고.  
+> **MD 재인덱싱(↺)**: `data/converted/{docId}[_corrected].md` 가 존재하는 DOCX·TXT·PPTX·PDF(비스캔) 만 지원(`AdminController` `/admin/documents/{docId}/reindex`). 재변환/재교정 없이 저장된 MD 를 다시 청킹·임베딩한다. 태그는 FTS 인덱스에서 복원. 스캔 PDF는 MD 파일 자체가 없어 미지원.
 
 ### 6.5. 디렉터리 동기화 — 3단계
 

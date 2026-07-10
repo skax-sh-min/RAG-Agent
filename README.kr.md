@@ -238,8 +238,10 @@ rag_java/
     │       ├── AdminService.java              # Admin UI 데이터 (청크 조회/편집 + 벡터 스토어 상태) — chroma·sqlite-vec
     │       ├── IndexingProgressService.java   # 비동기 업로드/동기화 SSE 진행 이벤트 관리
     │       ├── MarkdownCorrectionService.java # LLM 마크다운 출력 후처리
-    │       ├── DocumentLoaderService.java     # PDF/PPTX/DOCX/TXT/MD 로더; 스캔 PDF OCR
+    │       ├── DocumentLoaderService.java     # PDF/DOCX/TXT/MD 로더 + 마크다운 섹션 파서; 스캔 PDF OCR
     │       ├── DocxToMarkdownConverter.java   # DOCX → Markdown + 인라인 이미지 추출
+    │       ├── PptxToMarkdownConverter.java   # PPTX → Markdown (슬라이드별 제목만 헤딩 승격, [페이지: N] 마커)
+    │       ├── PdfToMarkdownConverter.java    # 비스캔 PDF → Markdown (페이지별 합성 헤딩, [페이지: N] 마커)
     │       ├── ImageExtractorService.java     # 이미지 추출 오케스트레이터 (PDF/PPTX/DOCX)
     │       ├── PdfImageExtractor.java         # PDFBox PDImageXObject 기반 PDF 이미지 추출
     │       ├── PptxImageExtractor.java        # POI XSLFPictureShape 기반 PPTX 이미지 추출

@@ -1,5 +1,6 @@
 package com.example.ragagent.ingestion;
 
+import com.example.ragagent.model.MetaKey;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.document.Document;
@@ -12,8 +13,9 @@ import java.util.Map;
 
 /**
  * Splits loaded documents into chunks: section-aware merge/split for structured
- * formats (MD/DOCX/TXT), plain sliding window otherwise. Pure text logic — no
- * external dependencies, so every helper below is independently unit-testable.
+ * formats (MD/DOCX/TXT/PPTX/non-scanned PDF), plain sliding window otherwise (scanned PDF,
+ * via {@code source_type=ocr}). Pure text logic — no external dependencies, so every helper
+ * below is independently unit-testable.
  */
 @Component
 public class ChunkSplitter {
@@ -35,13 +37,14 @@ public class ChunkSplitter {
                                           int chunkSize, int overlap, int minChunkSize, int maxChunkChars) {
         String lower = filename.toLowerCase();
 
-        if (lower.endsWith(".pptx")) {
-            log.debug("[SPLIT] {} → 슬라이드 유지 (분할 없음), {}개", filename, docs.size());
-            return enforceMaxChars(new ArrayList<>(docs), maxChunkChars, filename);
-        }
+        // .txt/.pptx/non-scanned .pdf are all converted to structured MD before this point, so
+        // they split section-wise too. Scanned PDF (source_type=ocr) never goes through MD
+        // conversion, so it stays on the plain sliding-window path below.
+        boolean structuredMd = lower.endsWith(".md") || lower.endsWith(".docx") || lower.endsWith(".txt")
+                || lower.endsWith(".pptx")
+                || (lower.endsWith(".pdf") && !isOcrSourced(docs));
 
-        // .txt is converted to structured MD before this point, so it splits section-wise too.
-        if (lower.endsWith(".md") || lower.endsWith(".docx") || lower.endsWith(".txt")) {
+        if (structuredMd) {
             List<Document> sectionMerged = mergeShortSections(docs, chunkSize);
             List<Document> result = new ArrayList<>();
             for (Document doc : sectionMerged) {
@@ -66,6 +69,12 @@ public class ChunkSplitter {
         }
         log.debug("[SPLIT] {} → 슬라이딩 윈도우 전략, {}섹션 → {}청크", filename, docs.size(), result.size());
         return enforceMaxChars(result, maxChunkChars, filename);
+    }
+
+    /** True when the (non-empty) raw doc list is tagged as OCR output — i.e. a scanned PDF. */
+    private boolean isOcrSourced(List<Document> docs) {
+        if (docs.isEmpty()) return false;
+        return "ocr".equals(docs.get(0).getMetadata().get(MetaKey.SOURCE_TYPE));
     }
 
     /**
@@ -152,6 +161,7 @@ public class ChunkSplitter {
             int normalizedLen = MarkdownNoiseNormalizer.normalize(acc.toString()).length();
 
             int currentHeadingLevel = sectionHeadingLevel(base);
+            Integer pageOrSlide = pageOrSlideOf(base);
             int j = i;
 
             while (j + 1 < docs.size()) {
@@ -164,6 +174,9 @@ public class ChunkSplitter {
 
                 int nextHeadingLevel = sectionHeadingLevel(next);
                 if (isMergeForbiddenByHeadingJump(currentHeadingLevel, nextHeadingLevel)) {
+                    break;
+                }
+                if (isMergeForbiddenByPageMismatch(pageOrSlide, pageOrSlideOf(next))) {
                     break;
                 }
 
@@ -191,6 +204,24 @@ public class ChunkSplitter {
         }
 
         return merged;
+    }
+
+    /**
+     * Blocks merging across a slide/page boundary. PPTX/non-scanned-PDF sections are always
+     * tagged with {@link MetaKey#PAGE_OR_SLIDE}; letting them merge across a different value would
+     * silently drop every merged-in slide/page number but the first ({@link #mergeShortSections}
+     * keeps only the base section's metadata), breaking the "1 chunk = 1 slide/page = exact
+     * citation" guarantee those formats rely on. No-op when either side lacks the field (DOCX/
+     * TXT/MD don't set it) — matches today's behavior for those formats exactly.
+     */
+    boolean isMergeForbiddenByPageMismatch(Integer currentPageOrSlide, Integer nextPageOrSlide) {
+        if (currentPageOrSlide == null || nextPageOrSlide == null) return false;
+        return !currentPageOrSlide.equals(nextPageOrSlide);
+    }
+
+    private Integer pageOrSlideOf(Document doc) {
+        Object v = doc.getMetadata().get(MetaKey.PAGE_OR_SLIDE);
+        return v instanceof Integer i ? i : null;
     }
 
     boolean isMergeForbiddenByHeadingJump(int currentHeadingLevel, int nextHeadingLevel) {
