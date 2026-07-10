@@ -420,6 +420,25 @@ class PptxImageExtractorTest {
         assertThat(result).doesNotContainKey(1); // POI가 직접 만든 차트는 mc:Fallback이 없음 — 빈 이미지 대신 스킵
     }
 
+    @Test
+    @DisplayName("이미 열린 XMLSlideShow를 넘기는 오버로드는 파일 경로를 넘기는 것과 동일한 결과를 낸다")
+    void extractWithAlreadyOpenSlideShowMatchesPathOverload() throws IOException {
+        writePptxWithOnePng();
+
+        // PptxToMarkdownConverter는 이 오버로드를 써서 같은 파일을 XMLSlideShow로 두 번 열지 않는다
+        // (한 번은 이미지 추출용, 한 번은 텍스트 변환용) — 결과가 Path 오버로드와 동일해야 한다.
+        Map<Integer, List<String>> viaPath = extractor.extract(pptxPath, "doc1", imagesDir);
+
+        Path imagesDir2 = Files.createTempDirectory("pptx-images-2-");
+        try (XMLSlideShow pptx = new XMLSlideShow(Files.newInputStream(pptxPath))) {
+            Map<Integer, List<String>> viaOpenSlideShow = extractor.extract(pptx, "doc1", imagesDir2);
+            assertThat(viaOpenSlideShow.keySet()).isEqualTo(viaPath.keySet());
+            assertThat(viaOpenSlideShow.get(1)).isEqualTo(viaPath.get(1));
+        } finally {
+            deleteRecursively(imagesDir2);
+        }
+    }
+
     private static String fileNameOf(String relPath) {
         return relPath.substring(relPath.lastIndexOf('/') + 1);
     }

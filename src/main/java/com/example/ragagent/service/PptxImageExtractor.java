@@ -104,16 +104,27 @@ public class PptxImageExtractor {
     /** @return {slideNum(1-based) → relative image paths from dataDir} */
     public Map<Integer, List<String>> extract(Path pptxPath, String docId, Path imagesDir)
             throws IOException {
+        try (XMLSlideShow pptx = new XMLSlideShow(Files.newInputStream(pptxPath))) {
+            return extract(pptx, docId, imagesDir);
+        }
+    }
+
+    /**
+     * Same as {@link #extract(Path, String, Path)} but reuses an already-open
+     * {@link XMLSlideShow} instead of parsing the file again — {@link PptxToMarkdownConverter}
+     * needs its own open slideshow for text conversion anyway, so it calls this overload to avoid
+     * parsing the same PPTX twice (real cost on large decks; harmless to correctness either way).
+     */
+    public Map<Integer, List<String>> extract(XMLSlideShow pptx, String docId, Path imagesDir)
+            throws IOException {
         Files.createDirectories(imagesDir);
         Map<Integer, List<String>> result = new LinkedHashMap<>();
 
-        try (XMLSlideShow pptx = new XMLSlideShow(Files.newInputStream(pptxPath))) {
-            int slideNum = 0;
-            for (XSLFSlide slide : pptx.getSlides()) {
-                slideNum++;
-                List<String> paths = processSlide(slide, slideNum, docId, imagesDir);
-                if (!paths.isEmpty()) result.put(slideNum, paths);
-            }
+        int slideNum = 0;
+        for (XSLFSlide slide : pptx.getSlides()) {
+            slideNum++;
+            List<String> paths = processSlide(slide, slideNum, docId, imagesDir);
+            if (!paths.isEmpty()) result.put(slideNum, paths);
         }
         return result;
     }

@@ -313,7 +313,7 @@ public class DocumentLoaderService {
                     continue; // marker is metadata-only, not searchable content
                 }
 
-                if (line.startsWith("#")) {
+                if (isAtxHeading(line)) {
                     if (!current.isEmpty()) {
                         Integer resolvedPage = resolveSectionPage(currentHeadingPage, currentSectionPage, pendingHeadingPage);
                         sections.add(sectionDocument(current.toString().strip(), sectionNum, currentHeading, resolvedPage));
@@ -339,6 +339,19 @@ public class DocumentLoaderService {
         return sections.isEmpty()
                 ? List.of(new Document(content, Map.of(MetaKey.SOURCE_TYPE, "file")))
                 : sections;
+    }
+
+    /**
+     * CommonMark ATX 헤딩 규칙: {@code #}가 1개 이상 이어지고, 그 뒤가 공백이거나 줄 끝이어야
+     * 헤딩으로 인정한다. 이 검증이 없으면(예: 예전의 단순 {@code line.startsWith("#")}) 슬라이드/
+     * 문단에 흔한 해시태그(예: "#캠페인")처럼 우연히 '#'로 시작하는 평문이 가짜 헤딩/섹션 경계로
+     * 오인된다 — DOCX·PPTX 등 어느 변환기에서 나온 텍스트든 공유되는 파싱 단계라 포맷 불문 적용.
+     */
+    private boolean isAtxHeading(String line) {
+        int i = 0;
+        while (i < line.length() && line.charAt(i) == '#') i++;
+        if (i == 0) return false;
+        return i == line.length() || Character.isWhitespace(line.charAt(i));
     }
 
     private Integer resolveSectionPage(Integer currentHeadingPage, int currentSectionPage, Integer pendingHeadingPage) {

@@ -692,4 +692,50 @@ class PptxToMarkdownConverterTest {
         assertThat(firstIdx).isGreaterThanOrEqualTo(0);
         assertThat(secondIdx).isGreaterThan(firstIdx);
     }
+
+    @Test
+    @DisplayName("헤딩 후보가 2개(##·###)면 본문 선두에 두 헤딩을 모두 반복한 불릿 2개가 전부 제거된다")
+    void stripsMultipleLeadingDuplicateBulletsWhenTwoHeadingsRepeated() throws IOException {
+        writePptx(pptx -> {
+            XSLFSlide slide = pptx.createSlide();
+            XSLFTextBox labelBox = slide.createTextBox();
+            addRun(addParagraph(labelBox, false, 0), "온라인 서비스", true, false);
+            XSLFTextBox subtitleBox = slide.createTextBox();
+            addRun(addParagraph(subtitleBox, false, 0), "연동거래 상세", true, false);
+            XSLFTextBox content = slide.createTextBox();
+            addRun(addParagraph(content, true, 0), "온라인 서비스", true, false); // ## 중복
+            addRun(addParagraph(content, true, 0), "연동거래 상세", true, false); // ### 중복
+            addRun(addParagraph(content, true, 0), "실제 본문 내용입니다", false, false);
+        });
+
+        String md = convert();
+
+        assertThat(md).contains("## 온라인 서비스");
+        assertThat(md).contains("### 연동거래 상세");
+        assertThat(md).doesNotContain("- **온라인 서비스**");
+        assertThat(md).doesNotContain("- **연동거래 상세**");
+        assertThat(md).contains("- 실제 본문 내용입니다");
+    }
+
+    @Test
+    @DisplayName("본문 첫 불릿에 포함된 식별자(예: user_name_field)의 언더스코어를 강조 마커로 오인해 지우지 않는다")
+    void identifierWithUnderscoresIsNotMangledByEmphasisStripping() throws IOException {
+        writePptx(pptx -> {
+            XSLFSlide slide = pptx.createSlide();
+            XSLFTextBox labelBox = slide.createTextBox();
+            // 예전 버그: stripEmphasisMarkers("user_name_field")가 "_name_"을 강조 마커로 오인해
+            // "usernamefield"로 뭉갰다 — 이 헤딩 텍스트를 그 corruption 결과와 정확히 일치시켜,
+            // 버그가 있었다면 아래 식별자 불릿이 "중복 헤딩"으로 오인되어 삭제됐을 것임을 검증한다.
+            addRun(addParagraph(labelBox, false, 0), "usernamefield", true, false);
+            XSLFTextBox content = slide.createTextBox();
+            addRun(addParagraph(content, true, 0), "user_name_field", false, false); // 식별자, 강조 아님
+            addRun(addParagraph(content, true, 0), "실제 설명 문장", false, false);
+        });
+
+        String md = convert();
+
+        assertThat(md).contains("## usernamefield");
+        assertThat(md).contains("- user_name_field"); // 오탐 삭제되지 않고 그대로 보존됨
+        assertThat(md).contains("- 실제 설명 문장");
+    }
 }

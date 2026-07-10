@@ -134,4 +134,46 @@ class DocumentLoaderMarkdownSectionTest {
         assertThat(sections).hasSize(1);
         assertThat(sections.get(0).getMetadata().get(MetaKey.PAGE_OR_SLIDE)).isEqualTo(1);
     }
+
+    @Test
+    @DisplayName("'#' 뒤에 공백이 없는 줄(해시태그 등)은 가짜 헤딩으로 오인해 섹션을 쪼개지 않는다")
+    void hashPrefixWithoutSpaceIsNotTreatedAsHeading() {
+        // A PPTX/DOCX paragraph can legitimately start with a literal '#' that isn't a markdown
+        // heading — e.g. a social-media-style hashtag ("#캠페인") in a marketing slide. CommonMark
+        // ATX headings require '#' to be followed by whitespace or end-of-line; without that check
+        // this line would be mis-split into its own (heading-less) section.
+        String md = """
+                ## 캠페인 소개
+
+                #캠페인 #신제품 #출시기념
+                이번 분기 마케팅 캠페인입니다.
+
+                ## 다음 절
+                본문
+                """;
+
+        List<Document> sections = loader.loadFromMarkdown(md);
+
+        assertThat(sections).hasSize(2);
+        assertThat(sections.get(0).getMetadata().get("heading")).isEqualTo("캠페인 소개");
+        assertThat(sections.get(0).getText()).contains("#캠페인 #신제품 #출시기념");
+        assertThat(sections.get(1).getMetadata().get("heading")).isEqualTo("다음 절");
+    }
+
+    @Test
+    @DisplayName("'#'로만 이루어진 줄(뒤에 아무 내용 없음)은 여전히 빈 헤딩으로 인정된다 (CommonMark: '#' + 줄끝)")
+    void hashOnlyLineWithNothingAfterIsStillAHeading() {
+        String md = """
+                본문 시작
+
+                ##
+                다음 섹션 본문
+                """;
+
+        List<Document> sections = loader.loadFromMarkdown(md);
+
+        assertThat(sections).hasSize(2);
+        assertThat(sections.get(1).getMetadata().get("heading")).isEqualTo("");
+        assertThat(sections.get(1).getText()).contains("다음 섹션 본문");
+    }
 }

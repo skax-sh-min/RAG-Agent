@@ -68,10 +68,16 @@ import java.util.regex.Pattern;
  * extracts each slide's pictures to {@code imagesDir} up front, and their relative paths are
  * emitted as {@code [이미지: ...]} markers right after the slide's heading(s). {@code loadFromMarkdown()}
  * then promotes those markers into {@code image_paths} metadata exactly as it does for DOCX — no
- * separate metadata-attachment step is needed downstream. Tables ({@code XSLFTable}) are rendered
- * as a markdown pipe table by {@link #appendTable} wherever they appear in shape order — merge-
- * continuation cells ({@code XSLFTableCell#isMerged()}) render blank, mirroring how
- * {@link DocxToMarkdownConverter} handles merged DOCX table cells.
+ * separate metadata-attachment step is needed downstream. All of a slide's image markers are always
+ * hoisted to this one spot, regardless of where the picture actually sits among the slide's shapes
+ * (e.g. a picture visually placed below several paragraphs of body text still emits its marker
+ * right after the heading, before that text) — an intentional simplification, not a bug: a whole
+ * slide is always one chunk (§6.3-bis in Pipeline.md), so exact marker position within that chunk
+ * doesn't affect what's retrievable, only how the raw chunk text reads if inspected directly (e.g.
+ * in {@code /admin}). Tables ({@code XSLFTable}) are rendered as a markdown pipe table by
+ * {@link #appendTable} wherever they appear in shape order — merge-continuation cells
+ * ({@code XSLFTableCell#isMerged()}) render blank, mirroring how {@link DocxToMarkdownConverter}
+ * handles merged DOCX table cells.
  *
  * {@code FOOTER}/{@code SLIDE_NUMBER}/{@code DATETIME} placeholders (page footers, running slide
  * numbers, dates) are skipped entirely — they repeat verbatim on every slide and would otherwise
@@ -102,7 +108,13 @@ import java.util.regex.Pattern;
 public class PptxToMarkdownConverter {
 
     private static final Pattern DATE_TOKEN_PATTERN = Pattern.compile("\\b(?:\\d{8}|\\d{4}[-._]?\\d{2}[-._]?\\d{2})\\b");
-    private static final Pattern EMPHASIS_PATTERN = Pattern.compile("(\\*\\*\\*|\\*\\*|_)(.*?)\\1");
+    // Bold's delimiter (** vs ***) needs its own capture group (1) to backreference the same
+    // delimiter at the close, pushing content to group 2. Italic's delimiter is always a literal
+    // single '_' guarded by lookaround (see stripEmphasisMarkers), so it needs no delimiter group
+    // and content is group 1. stripMarkerPattern() takes the content-group index explicitly since
+    // the two patterns don't share a layout.
+    private static final Pattern BOLD_EMPHASIS_PATTERN = Pattern.compile("(\\*\\*\\*|\\*\\*)(.*?)\\1");
+    private static final Pattern ITALIC_EMPHASIS_PATTERN = Pattern.compile("(?<!\\w)_(.*?)_(?!\\w)");
     private static final int MAX_HEADING_CANDIDATES = 2;
     private static final int MAX_HEADING_CANDIDATE_LENGTH = 40;
 
@@ -124,10 +136,13 @@ public class PptxToMarkdownConverter {
      *         {@code [이미지: ...]} markers for any pictures on that slide
      */
     public String convert(Path pptxPath, String docId, Path imagesDir) throws IOException {
-        Map<Integer, List<String>> imageMap = imageExtractor.extract(pptxPath, docId, imagesDir);
-
         StringBuilder sb = new StringBuilder();
+        // One XMLSlideShow, reused for both image extraction and text conversion — parsing a large
+        // deck's XML twice is real, avoidable cost (correctness is unaffected either way, since the
+        // two passes don't mutate shared state).
         try (XMLSlideShow pptx = new XMLSlideShow(Files.newInputStream(pptxPath))) {
+            Map<Integer, List<String>> imageMap = imageExtractor.extract(pptx, docId, imagesDir);
+
             String title = resolveDocumentTitle(pptx, pptxPath);
             if (!title.isBlank()) {
                 sb.append("# ").append(title).append("\n\n");
@@ -482,44 +497,60 @@ public class PptxToMarkdownConverter {
     }
 
     /**
-     * 본문의 첫 내용 줄이 불릿이면서 그 텍스트(강조 마커 제거 후)가 슬라이드 헤딩 텍스트 중
-     * 하나와 정확히 같으면 그 한 줄만 제거한다. 저자가 하위 주제 제목을 콘텐츠 placeholder의
-     * 첫 불릿으로 그대로 반복 입력하는 경우가 흔해, 그대로 두면 같은 텍스트가 헤딩과 본문에
-     * 중복으로 남는다. 첫 줄이 불릿이 아니거나 헤딩과 다르면 본문을 그대로 반환한다.
+     * 본문 선두의 불릿 줄들이 슬라이드 헤딩 텍스트(강조 마커 제거 후)와 정확히 같으면 그만큼
+     * 제거한다. 저자가 하위 주제 제목을 콘텐츠 placeholder의 첫 불릿으로 그대로 반복 입력하는
+     * 경우가 흔해, 그대로 두면 같은 텍스트가 헤딩과 본문에 중복으로 남는다. 헤딩이 ##·### 둘 다
+     * 있고 본문 선두에 둘 다 반복되는 경우도 커버하도록, 슬라이드당 헤딩 개수만큼(최대
+     * {@link #MAX_HEADING_CANDIDATES}개)까지 연속으로 제거를 허용한다 — 헤딩 하나당 중복 제거는
+     * 최대 한 번뿐이라(집합에서 소진되면 재사용 불가), 우연히 헤딩 텍스트를 반복하는 진짜 본문
+     * 내용까지 계속 지워지지는 않는다. 선두 빈 줄은 건너뛰고, 불릿이 아니거나 남은 헤딩과
+     * 일치하지 않는 줄을 만나면 즉시 멈춘다.
      */
     private String stripLeadingDuplicateBullet(String body, List<String> headings) {
         if (headings.isEmpty() || body.isEmpty()) return body;
 
-        Set<String> headingSet = new HashSet<>(headings);
-        String[] lines = body.split("\n", -1);
-        for (int i = 0; i < lines.length; i++) {
-            String trimmed = lines[i].strip();
-            if (trimmed.isEmpty()) continue;
+        Set<String> remainingHeadings = new HashSet<>(headings);
+        List<String> lines = new ArrayList<>(List.of(body.split("\n", -1)));
+
+        int i = 0;
+        while (i < lines.size() && !remainingHeadings.isEmpty()) {
+            String trimmed = lines.get(i).strip();
+            if (trimmed.isEmpty()) {
+                i++;
+                continue;
+            }
 
             String marker = trimmed.startsWith("- ") ? "- " : trimmed.startsWith("1. ") ? "1. " : null;
-            if (marker == null) return body; // first content line isn't a bullet
+            if (marker == null) break; // first content line isn't a bullet
 
             String bulletText = stripEmphasisMarkers(trimmed.substring(marker.length()).strip());
-            if (!headingSet.contains(bulletText)) return body;
+            if (!remainingHeadings.remove(bulletText)) break; // doesn't match any remaining heading
 
-            StringBuilder result = new StringBuilder();
-            for (int j = 0; j < lines.length; j++) {
-                if (j == i) continue;
-                result.append(lines[j]);
-                if (j < lines.length - 1) result.append("\n");
-            }
-            return result.toString();
+            lines.remove(i); // next line shifts into this index — don't advance i
         }
-        return body;
+
+        return String.join("\n", lines);
     }
 
-    /** {@code **}/{@code ***}/{@code _} 강조 마커를 제거해 순수 텍스트만 비교할 수 있게 한다. */
+    /**
+     * {@code **}/{@code ***}/{@code _} 강조 마커를 제거해 순수 텍스트만 비교할 수 있게 한다.
+     * {@code _} 쌍은 CommonMark의 intraword 규칙(앞뒤가 단어 문자가 아니어야 함)을 적용해, 굵게/
+     * 기울임 표시가 아닌 식별자(예: {@code user_name_field})의 언더스코어를 강조 마커로 오인해
+     * 뭉개지 않도록 한다 — 여는/닫는 {@code _}가 각각 좌우로 단어 문자와 붙어 있으면(intraword)
+     * 매치하지 않는다.
+     */
     private String stripEmphasisMarkers(String text) {
-        Matcher matcher = EMPHASIS_PATTERN.matcher(text);
+        String result = stripMarkerPattern(text, BOLD_EMPHASIS_PATTERN, 2);
+        return stripMarkerPattern(result, ITALIC_EMPHASIS_PATTERN, 1);
+    }
+
+    /** 주어진 패턴의 각 매치에서 {@code contentGroup}(마커 안쪽 내용)만 남기고 마커 문자 자체는 제거한다. */
+    private String stripMarkerPattern(String text, Pattern pattern, int contentGroup) {
+        Matcher matcher = pattern.matcher(text);
         StringBuilder result = new StringBuilder();
         int last = 0;
         while (matcher.find()) {
-            result.append(text, last, matcher.start()).append(matcher.group(2));
+            result.append(text, last, matcher.start()).append(matcher.group(contentGroup));
             last = matcher.end();
         }
         result.append(text.substring(last));
