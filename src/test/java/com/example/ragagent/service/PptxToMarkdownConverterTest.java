@@ -1,8 +1,10 @@
 package com.example.ragagent.service;
 
+import com.example.ragagent.config.AppProperties;
 import org.apache.poi.sl.usermodel.PictureData;
 import org.apache.poi.sl.usermodel.Placeholder;
 import org.apache.poi.xslf.usermodel.XMLSlideShow;
+import org.apache.poi.xslf.usermodel.XSLFGroupShape;
 import org.apache.poi.xslf.usermodel.XSLFPictureData;
 import org.apache.poi.xslf.usermodel.XSLFSlide;
 import org.apache.poi.xslf.usermodel.XSLFTable;
@@ -14,6 +16,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import java.awt.geom.Rectangle2D;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.file.Files;
@@ -22,6 +25,8 @@ import java.util.function.Consumer;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 /**
  * QA — PptxToMarkdownConverter: slide title → H2, [페이지: N] marker per slide, body outline
@@ -35,7 +40,14 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 class PptxToMarkdownConverterTest {
 
-    private final PptxToMarkdownConverter converter = new PptxToMarkdownConverter(new PptxImageExtractor());
+    private static AppProperties mockAppProperties() {
+        AppProperties props = mock(AppProperties.class);
+        when(props.pptxImageSafe()).thenReturn(new AppProperties.PptxShapeExtractionConfig(30.0, 15.0));
+        return props;
+    }
+
+    private final PptxToMarkdownConverter converter =
+            new PptxToMarkdownConverter(new PptxImageExtractor(mockAppProperties()));
     private Path pptxPath;
     private Path imagesDir;
 
@@ -420,5 +432,26 @@ class PptxToMarkdownConverterTest {
 
         assertThat(md).contains("| 헤더 |  |");
         assertThat(md).contains("| A | B |");
+    }
+
+    @Test
+    @DisplayName("그룹 도형은 하나의 이미지로 래스터라이즈되지만, 내부 텍스트는 Vision 없이도 검색되도록 본문에도 별도로 추출된다")
+    void groupInternalTextIsExtractedSeparatelyFromGroupImage() throws IOException {
+        writePptx(pptx -> {
+            XSLFSlide slide = pptx.createSlide();
+            addTitle(slide, "다이어그램 슬라이드");
+            XSLFGroupShape group = slide.createGroup();
+            Rectangle2D bounds = new Rectangle2D.Double(0, 0, 200, 100);
+            group.setAnchor(bounds);
+            group.setInteriorAnchor(bounds);
+            XSLFTextBox label = group.createTextBox();
+            label.setAnchor(new Rectangle2D.Double(10, 10, 80, 40));
+            label.setText("승인 처리");
+        });
+
+        String md = convert();
+
+        assertThat(md).contains("승인 처리"); // 그룹 내부 텍스트가 검색 가능한 본문 텍스트로 남는다
+        assertThat(md).contains("[이미지:"); // 그룹 자체도 여전히 이미지로 래스터라이즈된다
     }
 }

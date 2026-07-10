@@ -37,7 +37,8 @@ public record AppProperties(
         Integer searchRrfK,                     // 가중 RRF — RRF 상수 k (기본 60, 원논문 표준값)
         Boolean searchQueryEmbedCacheEnabled,   // 쿼리 임베딩 캐시 on/off (기본 true)
         Integer searchQueryEmbedCacheMaxSize,   // 쿼리 임베딩 캐시 최대 엔트리 수 (기본 500)
-        Integer searchQueryEmbedCacheTtlSeconds // 쿼리 임베딩 캐시 TTL 초 (기본 600 = 10분)
+        Integer searchQueryEmbedCacheTtlSeconds, // 쿼리 임베딩 캐시 TTL 초 (기본 600 = 10분)
+        PptxShapeExtractionConfig pptxImage     // PPTX 그리기 도구 도형 래스터라이즈/클러스터링 튜닝
 ) {
     public record LlmConfig(
             List<ProviderConfig> providers,
@@ -116,6 +117,15 @@ public record AppProperties(
             Integer maxSummaryChars,      // 요약 문자열 상한 (초과 시 잘림)
             Integer recentRawTurns,       // 요약 뒤에 원문 그대로 덧붙일 최근 turn 수
             Integer precomputeTtlSeconds  // 동일 thread 재-precompute 억제 창(초)
+    ) {}
+
+    /**
+     * PPTX 그리기 도구 도형(그룹/커넥터/텍스트 없는 자유형 도형) 래스터라이즈 튜닝 —
+     * {@link com.example.ragagent.service.PptxImageExtractor} 참고.
+     */
+    public record PptxShapeExtractionConfig(
+            Double minShapeDimensionPt,       // 가로/세로 중 큰 쪽이 이 값 미만이면 아이콘/구분선으로 보고 제외 (기본 30)
+            Double clusterProximityPaddingPt  // 클러스터링 근접 판정 시 바운딩박스에 적용할 바깥쪽 패딩 (기본 15)
     ) {}
 
     public record ImageDescriptionProperties(
@@ -297,6 +307,19 @@ public record AppProperties(
 
     private static int pos(Integer value, int fallback) {
         return (value != null && value > 0) ? value : fallback;
+    }
+
+    /**
+     * PPTX shape-rasterization tuning, defaulting to 30pt (min shape dimension) / 15pt (cluster
+     * proximity padding). Only falls back on an unset (null) field — an explicit 0 is honored
+     * (e.g. padding=0 to only bundle shapes that literally touch/overlap).
+     */
+    public PptxShapeExtractionConfig pptxImageSafe() {
+        double minDim = (pptxImage != null && pptxImage.minShapeDimensionPt() != null && pptxImage.minShapeDimensionPt() >= 0)
+                ? pptxImage.minShapeDimensionPt() : 30.0;
+        double padding = (pptxImage != null && pptxImage.clusterProximityPaddingPt() != null && pptxImage.clusterProximityPaddingPt() >= 0)
+                ? pptxImage.clusterProximityPaddingPt() : 15.0;
+        return new PptxShapeExtractionConfig(minDim, padding);
     }
 
     /** Null-safe accessor — returns an empty LlmConfig when app.llm is not configured. */

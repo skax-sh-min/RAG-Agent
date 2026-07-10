@@ -69,7 +69,7 @@ class AgentGraphTest {
             "./data", MAX_RETRY, 800, 100, 100, 7, 0.0, true, 0, false,
                 true, false, 3,
                 null, null, null, null, null, null, null, null, null, null, null, null, null, null,
-                null, null, null, null, null);
+                null, null, null, null, null, null);
 
         graph = new AgentGraph(classifierService, directAnswerService, retrievalService,
                                answerService, criticService, finalizeService, props);

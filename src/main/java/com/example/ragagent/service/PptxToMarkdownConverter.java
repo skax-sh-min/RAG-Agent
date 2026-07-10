@@ -2,7 +2,9 @@ package com.example.ragagent.service;
 
 import org.apache.poi.sl.usermodel.Placeholder;
 import org.apache.poi.xslf.usermodel.XMLSlideShow;
+import org.apache.poi.xslf.usermodel.XSLFGroupShape;
 import org.apache.poi.xslf.usermodel.XSLFShape;
+import org.apache.poi.xslf.usermodel.XSLFShapeContainer;
 import org.apache.poi.xslf.usermodel.XSLFSlide;
 import org.apache.poi.xslf.usermodel.XSLFTable;
 import org.apache.poi.xslf.usermodel.XSLFTableCell;
@@ -152,6 +154,13 @@ public class PptxToMarkdownConverter {
                 appendTable(body, table);
                 continue;
             }
+            if (shape instanceof XSLFGroupShape group) {
+                // The group is also rasterized as one bundled image (PptxImageExtractor), but
+                // that alone is invisible without a Vision-capable LLM — extract its text too so
+                // it stays searchable even when addImageDescriptions/Vision isn't available.
+                appendGroupText(body, group);
+                continue;
+            }
             if (!(shape instanceof XSLFTextShape textShape)) continue;
             Placeholder type = textShape.getTextType();
             if (type == Placeholder.TITLE || type == Placeholder.CENTERED_TITLE) {
@@ -182,6 +191,34 @@ public class PptxToMarkdownConverter {
         }
 
         return new SlideExtract(headingCandidates, body.toString());
+    }
+
+    /**
+     * 그룹 도형 내부를 재귀적으로 순회해 텍스트(및 중첩된 표)를 본문에 추가한다 — 그룹 자체는
+     * 이미지로도 래스터라이즈되지만(PptxImageExtractor), Vision 설명이 없는 환경에서도 검색 가능한
+     * 텍스트가 남도록 별도로 추출해 둔다. 그룹 내부 라벨을 슬라이드 제목으로 오인하지 않도록,
+     * 최상위 슬라이드에서만 적용되는 헤딩 후보 승격은 여기서는 적용하지 않는다.
+     */
+    private void appendGroupText(StringBuilder body, XSLFShapeContainer container) {
+        for (XSLFShape shape : container.getShapes()) {
+            if (shape instanceof XSLFTable table) {
+                appendTable(body, table);
+            } else if (shape instanceof XSLFGroupShape nestedGroup) {
+                appendGroupText(body, nestedGroup);
+            } else if (shape instanceof XSLFTextShape textShape) {
+                for (XSLFTextParagraph para : textShape.getTextParagraphs()) {
+                    String text = paragraphText(para);
+                    if (text.isBlank()) continue;
+
+                    if (para.isBullet()) {
+                        String indent = "  ".repeat(Math.max(0, para.getIndentLevel()));
+                        body.append(indent).append("- ").append(text).append("\n");
+                    } else {
+                        body.append(text).append("\n\n");
+                    }
+                }
+            }
+        }
     }
 
     /**

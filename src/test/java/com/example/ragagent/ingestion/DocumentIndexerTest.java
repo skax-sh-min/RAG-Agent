@@ -82,6 +82,7 @@ class DocumentIndexerTest {
         when(indexing.keywordTimeoutSeconds()).thenReturn(5);
         when(indexing.maxConcurrentFiles()).thenReturn(2);
         when(props.indexingSafe()).thenReturn(indexing);
+        when(props.pptxImageSafe()).thenReturn(new AppProperties.PptxShapeExtractionConfig(30.0, 15.0));
 
         // Stub VectorStoreFacade
         vectorStore = mock(VectorStoreFacade.class);
@@ -126,7 +127,7 @@ class DocumentIndexerTest {
         // loadFromMarkdown()/loadPdfPagesForConversion() to delegate to a real DocumentLoaderService
         // where they need genuine [페이지:N]/heading parsing instead of the generic stubDocs echo.
         indexer = new DocumentIndexer(loaderService, correctionService, textToMarkdownService,
-                new PptxToMarkdownConverter(new PptxImageExtractor()),
+                new PptxToMarkdownConverter(new PptxImageExtractor(props)),
                 new PdfToMarkdownConverter(new PdfImageExtractor()),
                 imageExtractorService, vectorStore, docRegistry, keywordRepo, chunkSplitter, keywordExtractor, props);
         indexer.init();

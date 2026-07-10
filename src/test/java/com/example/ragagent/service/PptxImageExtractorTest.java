@@ -1,5 +1,6 @@
 package com.example.ragagent.service;
 
+import com.example.ragagent.config.AppProperties;
 import org.apache.poi.sl.usermodel.PictureData;
 import org.apache.poi.xslf.usermodel.XMLSlideShow;
 import org.apache.poi.xslf.usermodel.XSLFAutoShape;
@@ -26,6 +27,8 @@ import java.util.Map;
 import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 /**
  * QA — PptxImageExtractor
@@ -43,9 +46,18 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 class PptxImageExtractorTest {
 
-    private final PptxImageExtractor extractor = new PptxImageExtractor();
+    // 기존 하드코딩 상수와 동일한 기본값(30pt/15pt)으로 대부분의 테스트를 실행한다.
+    private final PptxImageExtractor extractor = extractorWith(30.0, 15.0);
     private Path pptxPath;
     private Path imagesDir;
+
+    /** app.pptx-image.* 설정값을 다르게 주입한 추출기를 만든다 — 옵션화된 두 값이 실제로 동작을 바꾸는지 검증용. */
+    private static PptxImageExtractor extractorWith(double minShapeDimensionPt, double clusterProximityPaddingPt) {
+        AppProperties props = mock(AppProperties.class);
+        when(props.pptxImageSafe()).thenReturn(
+                new AppProperties.PptxShapeExtractionConfig(minShapeDimensionPt, clusterProximityPaddingPt));
+        return new PptxImageExtractor(props);
+    }
 
     @BeforeEach
     void setUp() throws IOException {
@@ -157,16 +169,18 @@ class PptxImageExtractorTest {
     }
 
     @Test
-    @DisplayName("텍스트 없는 도형은 래스터라이즈되지만, 텍스트가 있는 도형은 본문에서 이미 캡처되므로 중복 렌더링되지 않는다")
-    void blankAutoShapeIsRasterizedButTextBearingIsNot() throws IOException {
+    @DisplayName("텍스트 없는 도형은 래스터라이즈되지만, 근처에 시드(빈 도형/커넥터/그룹)가 없는 텍스트 도형은 혼자서는 렌더링되지 않는다")
+    void blankAutoShapeIsRasterizedButIsolatedTextBearingIsNot() throws IOException {
         writePptx(pptx -> {
             XSLFSlide slide = pptx.createSlide();
             XSLFAutoShape blank = slide.createAutoShape();
             blank.setAnchor(new Rectangle2D.Double(0, 0, 100, 50));
             blank.setFillColor(Color.BLUE);
 
+            // 클러스터링 근접 판정(패딩 15pt)에 걸리지 않도록 충분히 멀리 떨어뜨림 — 이 도형이
+            // 혼자 있을 때는(근처에 시드가 없으면) 텍스트가 있어도 절대 래스터라이즈되지 않음을 검증.
             XSLFAutoShape withText = slide.createAutoShape();
-            withText.setAnchor(new Rectangle2D.Double(0, 60, 100, 50));
+            withText.setAnchor(new Rectangle2D.Double(0, 500, 100, 50));
             withText.setFillColor(Color.GREEN);
             withText.setText("본문에 이미 캡처되는 라벨");
         });
@@ -174,7 +188,7 @@ class PptxImageExtractorTest {
         Map<Integer, List<String>> result = extractor.extract(pptxPath, "doc1", imagesDir);
 
         assertThat(result).containsKey(1);
-        assertThat(result.get(1)).hasSize(1); // 텍스트 있는 도형은 제외되어 1개만 생성됨
+        assertThat(result.get(1)).hasSize(1); // 텍스트 있는 독립 도형은 제외되어 blank 도형 1개만 생성됨
     }
 
     @Test
@@ -205,6 +219,141 @@ class PptxImageExtractorTest {
         Map<Integer, List<String>> result = extractor.extract(pptxPath, "doc1", imagesDir);
 
         assertThat(result).doesNotContainKey(1);
+    }
+
+    @Test
+    @DisplayName("커넥터가 두 도형 사이 '틈'에 있어 어느 쪽과도 겹치지 않아도, 패딩된 근접 판정으로 하나의 이미지로 묶인다")
+    void connectorBridgesGapBetweenTwoShapesIntoOneCluster() throws IOException {
+        writePptx(pptx -> {
+            XSLFSlide slide = pptx.createSlide();
+            XSLFAutoShape boxA = slide.createAutoShape();
+            boxA.setAnchor(new Rectangle2D.Double(0, 0, 60, 60));
+            boxA.setFillColor(Color.RED);
+
+            // boxA(0~60)와도, boxB(120~180)와도 겹치지 않는 10pt 틈에 위치 — 순수 bbox 교차
+            // 검사라면 어느 쪽 클러스터에도 속하지 못했을 케이스.
+            XSLFConnectorShape connector = slide.createConnector();
+            connector.setAnchor(new Rectangle2D.Double(70, 28, 40, 4));
+            connector.setLineColor(Color.BLACK);
+            connector.setLineWidth(2.0);
+
+            XSLFAutoShape boxB = slide.createAutoShape();
+            boxB.setAnchor(new Rectangle2D.Double(120, 0, 60, 60));
+            boxB.setFillColor(Color.BLUE);
+        });
+
+        Map<Integer, List<String>> result = extractor.extract(pptxPath, "doc1", imagesDir);
+
+        assertThat(result).containsKey(1);
+        assertThat(result.get(1)).hasSize(1); // 세 도형이 하나의 번들 이미지로 묶임
+        assertThat(containsNonWhitePixel(imagesDir.resolve(fileNameOf(result.get(1).get(0))))).isTrue();
+    }
+
+    @Test
+    @DisplayName("텍스트가 있는 도형도 근처에 시드(빈 도형)가 있으면 함께 묶여 하나의 번들 이미지가 된다")
+    void textBearingShapeJoinsNearbyClusterAsPassenger() throws IOException {
+        writePptx(pptx -> {
+            XSLFSlide slide = pptx.createSlide();
+            XSLFAutoShape blank = slide.createAutoShape();
+            blank.setAnchor(new Rectangle2D.Double(0, 0, 100, 50));
+            blank.setFillColor(Color.BLUE);
+
+            // 패딩(15pt) 이내의 5pt 틈 — 근접으로 판정되어 같은 클러스터에 합류해야 함.
+            XSLFAutoShape withText = slide.createAutoShape();
+            withText.setAnchor(new Rectangle2D.Double(0, 55, 100, 50));
+            withText.setFillColor(Color.GREEN);
+            withText.setText("연동거래 상세");
+        });
+
+        Map<Integer, List<String>> result = extractor.extract(pptxPath, "doc1", imagesDir);
+
+        assertThat(result).containsKey(1);
+        assertThat(result.get(1)).hasSize(1); // 별도 이미지 2장이 아니라 번들 이미지 1장
+    }
+
+    @Test
+    @DisplayName("그룹 도형도 근처의 독립 커넥터와 하나의 클러스터로 묶인다")
+    void groupBundlesWithNearbyConnector() throws IOException {
+        writePptx(pptx -> {
+            XSLFSlide slide = pptx.createSlide();
+            XSLFGroupShape group = slide.createGroup();
+            Rectangle2D bounds = new Rectangle2D.Double(0, 0, 100, 100);
+            group.setAnchor(bounds);
+            group.setInteriorAnchor(bounds);
+            XSLFAutoShape inner = group.createAutoShape();
+            inner.setAnchor(new Rectangle2D.Double(10, 10, 80, 80));
+            inner.setFillColor(Color.RED);
+
+            // 그룹 오른쪽 경계(x=100)에서 10pt 떨어진 커넥터 — 패딩(15pt) 이내.
+            XSLFConnectorShape connector = slide.createConnector();
+            connector.setAnchor(new Rectangle2D.Double(110, 40, 40, 4));
+            connector.setLineColor(Color.BLACK);
+            connector.setLineWidth(2.0);
+        });
+
+        Map<Integer, List<String>> result = extractor.extract(pptxPath, "doc1", imagesDir);
+
+        assertThat(result).containsKey(1);
+        assertThat(result.get(1)).hasSize(1); // 그룹 + 커넥터가 하나의 번들 이미지로 묶임
+    }
+
+    @Test
+    @DisplayName("서로 멀리 떨어진 두 클러스터는 하나로 합쳐지지 않고 별개의 이미지로 남는다")
+    void distantClustersStaySeparate() throws IOException {
+        writePptx(pptx -> {
+            XSLFSlide slide = pptx.createSlide();
+            XSLFAutoShape first = slide.createAutoShape();
+            first.setAnchor(new Rectangle2D.Double(0, 0, 60, 60));
+            first.setFillColor(Color.RED);
+
+            XSLFAutoShape second = slide.createAutoShape();
+            second.setAnchor(new Rectangle2D.Double(500, 500, 60, 60)); // 패딩을 훨씬 벗어난 거리
+            second.setFillColor(Color.BLUE);
+        });
+
+        Map<Integer, List<String>> result = extractor.extract(pptxPath, "doc1", imagesDir);
+
+        assertThat(result).containsKey(1);
+        assertThat(result.get(1)).hasSize(2); // 하나로 뭉치지 않고 각각 별도 이미지
+    }
+
+    @Test
+    @DisplayName("app.pptx-image.cluster-proximity-padding-pt=0 이면 겹치지 않는 도형은 더 이상 하나로 묶이지 않는다")
+    void clusterProximityPaddingIsConfigurable() throws IOException {
+        writePptx(pptx -> {
+            XSLFSlide slide = pptx.createSlide();
+            XSLFAutoShape boxA = slide.createAutoShape();
+            boxA.setAnchor(new Rectangle2D.Double(0, 0, 60, 60));
+            boxA.setFillColor(Color.RED);
+
+            // 기본값(15pt)이면 묶이지만, 패딩을 0으로 낮추면 겹치지 않는 이 10pt 틈은 더 이상
+            // 이어지지 않아야 한다.
+            XSLFAutoShape boxB = slide.createAutoShape();
+            boxB.setAnchor(new Rectangle2D.Double(70, 0, 60, 60));
+            boxB.setFillColor(Color.BLUE);
+        });
+
+        PptxImageExtractor zeroPadding = extractorWith(30.0, 0.0);
+        Map<Integer, List<String>> result = zeroPadding.extract(pptxPath, "doc1", imagesDir);
+
+        assertThat(result).containsKey(1);
+        assertThat(result.get(1)).hasSize(2); // 패딩 0 → 별개의 클러스터 2개
+    }
+
+    @Test
+    @DisplayName("app.pptx-image.min-shape-dimension-pt를 높이면 더 큰 도형도 아이콘으로 취급되어 제외된다")
+    void minShapeDimensionIsConfigurable() throws IOException {
+        writePptx(pptx -> {
+            XSLFSlide slide = pptx.createSlide();
+            XSLFAutoShape shape = slide.createAutoShape();
+            shape.setAnchor(new Rectangle2D.Double(0, 0, 100, 50)); // 기본값(30pt)이면 통과하는 크기
+            shape.setFillColor(Color.RED);
+        });
+
+        PptxImageExtractor strictThreshold = extractorWith(200.0, 15.0);
+        Map<Integer, List<String>> result = strictThreshold.extract(pptxPath, "doc1", imagesDir);
+
+        assertThat(result).doesNotContainKey(1); // 임계값을 200pt로 올리면 100x50 도형도 제외됨
     }
 
     private static String fileNameOf(String relPath) {
