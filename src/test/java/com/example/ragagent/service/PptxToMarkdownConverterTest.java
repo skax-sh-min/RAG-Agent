@@ -622,4 +622,74 @@ class PptxToMarkdownConverterTest {
 
         assertThat(md).contains("[이미지: images/doc1/s1_img1.png]");
     }
+
+    @Test
+    @DisplayName("본문은 z-order(도형 추가/그린 순서)가 아니라 anchor 좌표 기준 읽기 순서(위→아래)로 조립된다")
+    void bodyOrderFollowsReadingOrderNotZOrder() throws IOException {
+        writePptx(pptx -> {
+            XSLFSlide slide = pptx.createSlide();
+            addTitle(slide, "제목");
+
+            // 추가 순서(z-order)는 "아래쪽 문단"이 먼저, "위쪽 문단"이 나중 — 저자가 나중에
+            // 슬라이드 상단에 텍스트 상자를 추가한 전형적인 시나리오를 재현한다.
+            XSLFTextBox lowerBox = slide.createTextBox();
+            lowerBox.setAnchor(new Rectangle2D.Double(0, 200, 300, 50));
+            addRun(addParagraph(lowerBox, false, 0), "아래쪽 문단", false, false);
+
+            XSLFTextBox upperBox = slide.createTextBox();
+            upperBox.setAnchor(new Rectangle2D.Double(0, 0, 300, 50));
+            addRun(addParagraph(upperBox, false, 0), "위쪽 문단", false, false);
+        });
+
+        String md = convert();
+
+        int upperIdx = md.indexOf("위쪽 문단");
+        int lowerIdx = md.indexOf("아래쪽 문단");
+        assertThat(upperIdx).isGreaterThanOrEqualTo(0);
+        assertThat(lowerIdx).isGreaterThan(upperIdx); // 화면상 위쪽 문단이 z-order와 무관하게 먼저 나옴
+    }
+
+    @Test
+    @DisplayName("같은 높이(Y)의 도형은 z-order와 무관하게 X 좌표(왼쪽→오른쪽) 순으로 조립된다")
+    void bodyOrderFollowsLeftToRightOnSameRow() throws IOException {
+        writePptx(pptx -> {
+            XSLFSlide slide = pptx.createSlide();
+            addTitle(slide, "제목");
+
+            XSLFTextBox rightBox = slide.createTextBox();
+            rightBox.setAnchor(new Rectangle2D.Double(200, 0, 100, 50));
+            addRun(addParagraph(rightBox, false, 0), "오른쪽 문단", false, false);
+
+            XSLFTextBox leftBox = slide.createTextBox();
+            leftBox.setAnchor(new Rectangle2D.Double(0, 0, 100, 50));
+            addRun(addParagraph(leftBox, false, 0), "왼쪽 문단", false, false);
+        });
+
+        String md = convert();
+
+        int leftIdx = md.indexOf("왼쪽 문단");
+        int rightIdx = md.indexOf("오른쪽 문단");
+        assertThat(leftIdx).isGreaterThanOrEqualTo(0);
+        assertThat(rightIdx).isGreaterThan(leftIdx);
+    }
+
+    @Test
+    @DisplayName("anchor가 없는 도형(레이아웃 상속 등)들은 동일한 기본값으로 취급되어 안정 정렬로 원래 z-order가 유지된다")
+    void shapesWithoutAnchorPreserveOriginalZOrder() throws IOException {
+        writePptx(pptx -> {
+            XSLFSlide slide = pptx.createSlide();
+            addTitle(slide, "제목");
+            XSLFTextBox first = slide.createTextBox(); // setAnchor() 호출 안 함
+            addRun(addParagraph(first, false, 0), "첫번째", false, false);
+            XSLFTextBox second = slide.createTextBox(); // setAnchor() 호출 안 함
+            addRun(addParagraph(second, false, 0), "두번째", false, false);
+        });
+
+        String md = convert();
+
+        int firstIdx = md.indexOf("첫번째");
+        int secondIdx = md.indexOf("두번째");
+        assertThat(firstIdx).isGreaterThanOrEqualTo(0);
+        assertThat(secondIdx).isGreaterThan(firstIdx);
+    }
 }

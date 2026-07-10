@@ -19,10 +19,12 @@ import org.apache.poi.xslf.usermodel.XSLFTextRun;
 import org.apache.poi.xslf.usermodel.XSLFTextShape;
 import org.springframework.stereotype.Component;
 
+import java.awt.geom.Rectangle2D;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
@@ -86,6 +88,13 @@ import java.util.regex.Pattern;
  * extractable without re-implementing per-chart-type layout); an OLE embed contributes no text at
  * all — {@link PptxImageExtractor} separately pulls its embedded preview picture and, best-effort,
  * a chart's {@code mc:Fallback} preview picture when PowerPoint included one.
+ *
+ * Shapes are walked in reading order, not {@code slide.getShapes()}'s z-order (paint order) —
+ * {@link #inReadingOrder} sorts by anchor position (top first, then left) before the body loop
+ * runs, so a text box added last (and therefore drawn last / listed last in z-order) but placed
+ * near the top of the slide is still emitted first, matching how a human reads the slide. This
+ * also improves heading-candidate detection, since {@link #looksLikeHeadingCandidate} promotion
+ * depends on "appears before the first bullet" in the same walk order.
  *
  * Thread-safe: opens a new {@link XMLSlideShow} per call (no shared state).
  */
@@ -170,7 +179,7 @@ public class PptxToMarkdownConverter {
 
         StringBuilder body = new StringBuilder();
         boolean bulletSeen = false;
-        for (XSLFShape shape : slide.getShapes()) {
+        for (XSLFShape shape : inReadingOrder(slide.getShapes())) {
             if (shape instanceof XSLFTable table) {
                 appendTable(body, table);
                 continue;
@@ -226,6 +235,45 @@ public class PptxToMarkdownConverter {
         }
 
         return new SlideExtract(headingCandidates, body.toString());
+    }
+
+    /** 도형 하나 + 정렬 키(anchor 좌상단 y, x)를 함께 들고 다니기 위한 보조 레코드. */
+    private record ShapeWithPosition(XSLFShape shape, double y, double x) {
+    }
+
+    /**
+     * {@code slide.getShapes()}가 반환하는 z-order(그린 순서·paint order)는 읽기 순서와 다를 수
+     * 있다 — 저자가 나중에 슬라이드 상단에 텍스트 상자를 추가하면 z-order상으로는 맨 뒤에 오지만
+     * 화면에는 맨 위에 보인다. 각 도형의 anchor 좌상단 좌표(y 우선, 동률이면 x)로 재정렬해 본문이
+     * 화면에 보이는 순서에 더 가깝게 조립되도록 한다. anchor가 없는 도형(레이아웃에서 위치를
+     * 상속받아 로컬 {@code xfrm}이 없는 placeholder 등)은 {@link Double#MAX_VALUE}로 취급해 맨
+     * 뒤로 보내되, {@link List#sort}가 안정 정렬이므로 anchor 없는 도형들끼리는 원래 z-order가
+     * 그대로 유지된다 — 위치 정보가 없으니 그 이상은 추정하지 않는다.
+     */
+    private List<XSLFShape> inReadingOrder(List<XSLFShape> shapes) {
+        List<ShapeWithPosition> positioned = new ArrayList<>(shapes.size());
+        for (XSLFShape shape : shapes) {
+            Rectangle2D anchor = safeAnchor(shape);
+            positioned.add(new ShapeWithPosition(shape,
+                    anchor != null ? anchor.getY() : Double.MAX_VALUE,
+                    anchor != null ? anchor.getX() : Double.MAX_VALUE));
+        }
+        positioned.sort(Comparator.comparingDouble(ShapeWithPosition::y)
+                .thenComparingDouble(ShapeWithPosition::x));
+        return positioned.stream().map(ShapeWithPosition::shape).toList();
+    }
+
+    /**
+     * {@code XSLFGraphicFrame}(표·SmartArt·차트·OLE) 계열은 {@code xfrm}이 없으면
+     * {@code getAnchor()}가 예외를 던진다(스펙상 필수 요소지만 손상된 파일에 대비) — 나머지 도형은
+     * {@code null}만 반환하므로 두 경우 모두 {@code null}로 통일해 정렬 키 계산을 단순화한다.
+     */
+    private Rectangle2D safeAnchor(XSLFShape shape) {
+        try {
+            return shape.getAnchor();
+        } catch (RuntimeException e) {
+            return null;
+        }
     }
 
     /**
