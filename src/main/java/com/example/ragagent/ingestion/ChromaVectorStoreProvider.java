@@ -11,7 +11,9 @@ import org.springframework.ai.chroma.vectorstore.ChromaApi;
 import org.springframework.ai.chroma.vectorstore.ChromaFilterExpressionConverter;
 import org.springframework.ai.chroma.vectorstore.common.ChromaApiConstants;
 import org.springframework.ai.document.Document;
+import org.springframework.ai.embedding.BatchingStrategy;
 import org.springframework.ai.embedding.EmbeddingModel;
+import org.springframework.ai.embedding.TokenCountBatchingStrategy;
 import org.springframework.ai.vectorstore.SearchRequest;
 import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.ai.vectorstore.filter.Filter;
@@ -23,6 +25,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.BiConsumer;
 
 /**
  * ChromaDB-backed {@link VectorStoreProvider}.
@@ -51,6 +54,11 @@ public class ChromaVectorStoreProvider implements VectorStoreProvider {
 
     private final FilterExpressionConverter filterConverter = new ChromaFilterExpressionConverter();
     private final ConcurrentHashMap<String, String> collectionIdCache = new ConcurrentHashMap<>();
+    // Spring AI's VectorStore.add() gave this for free before add() started embedding a derived
+    // (context+normalized) string instead of doc.getText() directly (§10.1) — same batching
+    // strategy SqliteVecVectorStoreProvider already uses, so both backends share the same
+    // token-count safety net.
+    private final BatchingStrategy batchingStrategy = new TokenCountBatchingStrategy();
 
     public ChromaVectorStoreProvider(VectorStoreRegistry registry, ChromaApi chromaApi,
                                      EmbeddingModel embeddingModel, ObjectMapper objectMapper, AppProperties props) {
@@ -100,7 +108,53 @@ public class ChromaVectorStoreProvider implements VectorStoreProvider {
 
     @Override
     public void add(String userId, String version, List<Document> docs) {
-        registry.getStore(userId, version).add(docs);
+        add(userId, version, docs, (done, total) -> { });
+    }
+
+    /**
+     * Manual embed + upsert, replacing the former {@code registry.getStore(userId,
+     * version).add(docs)} delegation to Spring AI's {@code VectorStore.add()} — that call embeds
+     * AND stores the exact same {@code document.getText()}, which no longer works now that the
+     * embedding input is a derived context+normalized string (§10.1) while the stored/retrievable
+     * content must stay the untouched original (source accordion, {@code /admin} chunk view).
+     */
+    @Override
+    public void add(String userId, String version, List<Document> docs,
+                     BiConsumer<Integer, Integer> onProgress) {
+        if (docs == null || docs.isEmpty()) { onProgress.accept(0, 0); return; }
+        registry.getStore(userId, version); // ensure collection exists (idempotent) — mirrors resolveCollectionId()
+        String collectionName = registry.collectionName(userId, version);
+
+        int total = docs.size();
+        onProgress.accept(0, total);
+        List<Document> embedInputDocs = docs.stream()
+                .map(d -> new Document(d.getId(), SearchTextBuilder.build(d), Map.of()))
+                .toList();
+        Map<String, float[]> embeddingByDocId = new HashMap<>(docs.size() * 2);
+        int done = 0;
+        for (List<Document> batch : batchingStrategy.batch(embedInputDocs)) {
+            List<float[]> batchEmbeddings = embeddingModel.embed(batch.stream().map(Document::getText).toList());
+            for (int i = 0; i < batch.size(); i++) {
+                embeddingByDocId.put(batch.get(i).getId(), batchEmbeddings.get(i));
+            }
+            done += batch.size();
+            onProgress.accept(done, total);
+        }
+
+        List<String> ids = new ArrayList<>(docs.size());
+        List<float[]> embeddings = new ArrayList<>(docs.size());
+        List<Map<String, Object>> metadatas = new ArrayList<>(docs.size());
+        List<String> contents = new ArrayList<>(docs.size());
+        for (Document d : docs) {
+            ids.add(d.getId());
+            embeddings.add(embeddingByDocId.get(d.getId()));
+            Map<String, Object> meta = new HashMap<>(d.getMetadata());
+            meta.remove(MetaKey.CHUNK_CONTEXT);                    // transient — never persisted
+            metadatas.add(meta);
+            contents.add(d.getText() == null ? "" : d.getText()); // untouched original
+        }
+        chromaApi.upsertEmbeddings(TENANT, DATABASE, collectionName,
+                new ChromaApi.AddEmbeddingsRequest(ids, embeddings, metadatas, contents));
     }
 
     @Override

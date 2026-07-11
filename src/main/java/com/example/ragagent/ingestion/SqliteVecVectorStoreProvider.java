@@ -124,12 +124,17 @@ public class SqliteVecVectorStoreProvider implements VectorStoreProvider {
         // slow local embedding server. Keyed by doc id since batchingStrategy.batch() does not
         // guarantee it preserves docs' original order. Each completed sub-batch reports real
         // incremental progress instead of the caller only seeing a single 0%→100% jump.
+        // Batches over the derived (context+normalized) text, not raw text — that's what actually
+        // gets embedded, so that's what the token-count estimate must be sized against (§10.1).
         int total = docs.size();
         int done = 0;
         onProgress.accept(0, total);
         Map<String, float[]> embeddingByDocId = new HashMap<>(docs.size() * 2);
-        for (List<Document> batch : batchingStrategy.batch(docs)) {
-            List<String> texts = batch.stream().map(d -> d.getText() == null ? "" : d.getText()).toList();
+        List<Document> embedInputDocs = docs.stream()
+                .map(d -> new Document(d.getId(), SearchTextBuilder.build(d), Map.of()))
+                .toList();
+        for (List<Document> batch : batchingStrategy.batch(embedInputDocs)) {
+            List<String> texts = batch.stream().map(Document::getText).toList(); // already derived
             List<float[]> batchEmbeddings = embedBatchWithFallback(texts);
             for (int i = 0; i < batch.size(); i++) {
                 embeddingByDocId.put(batch.get(i).getId(), batchEmbeddings.get(i));
@@ -150,7 +155,8 @@ public class SqliteVecVectorStoreProvider implements VectorStoreProvider {
         String now = Instant.now().toString();
         List<Object[]> chunkRows = new ArrayList<>(docs.size());
         for (Document d : docs) {
-            Map<String, Object> meta = d.getMetadata() == null ? Map.of() : d.getMetadata();
+            Map<String, Object> meta = d.getMetadata() == null ? new HashMap<>() : new HashMap<>(d.getMetadata());
+            meta.remove(MetaKey.CHUNK_CONTEXT); // transient — never persisted
             chunkRows.add(new Object[]{
                     d.getId(),
                     d.getText() == null ? "" : d.getText(),

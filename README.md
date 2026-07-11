@@ -171,7 +171,7 @@ See [OPERATOR_MANUAL.md §5](documents/OPERATOR_MANUAL.md#5-llm-프로바이더-
 
 ```
 rag_java/
-├── pom.xml                            # Spring Boot 3.5 + Spring AI 1.1.4
+├── pom.xml                            # Spring Boot 3.5.15 + Spring AI 1.1.8
 ├── Dockerfile / docker-compose.yml
 ├── .env.example
 ├── scripts/
@@ -239,11 +239,13 @@ rag_java/
     │       ├── AdminService.java              # Admin UI data (chunk browse/edit + vector store status) — chroma & sqlite-vec
     │       ├── IndexingProgressService.java   # SSE emitter registry for async upload/sync progress
     │       ├── MarkdownCorrectionService.java # Post-process LLM markdown output
-    │       ├── DocumentLoaderService.java     # PDF/PPTX/DOCX/TXT/MD loader; scanned PDF OCR
+    │       ├── DocumentLoaderService.java     # PDF/DOCX/TXT/MD loader + Markdown section parser; scanned PDF OCR
     │       ├── DocxToMarkdownConverter.java   # DOCX → Markdown with inline image extraction
-    │       ├── ImageExtractorService.java     # Image extraction orchestrator (PDF/PPTX/DOCX)
+    │       ├── PptxToMarkdownConverter.java   # PPTX → Markdown (title heading per slide, [페이지: N] marker, SmartArt/chart-title/hyperlink text)
+    │       ├── PdfToMarkdownConverter.java    # Non-scanned PDF → Markdown (synthetic per-page heading, [페이지: N] marker)
+    │       ├── ImageExtractorService.java     # Scanned-PDF-only image extraction orchestrator (other formats extract inline in their own converter)
     │       ├── PdfImageExtractor.java         # PDFBox PDImageXObject-based PDF image extractor
-    │       ├── PptxImageExtractor.java        # POI XSLFPictureShape-based PPTX image extractor
+    │       ├── PptxImageExtractor.java        # POI XSLFPictureShape-based PPTX image extractor + drawing-tool rasterization + SmartArt/chart/OLE graphic frames
     │       ├── VisionDescriptionService.java  # Image → Korean description via LLM (Vision task)
     │       ├── LazyVisionService.java         # On-demand Vision description + SQLite cache
     │       ├── ImageTypeClassifier.java       # Image type classification for prompt selection
@@ -307,6 +309,8 @@ User question
 - **Multi-LLM routing** — `LlmRouter` selects providers by `TaskType × RoutingMode`; COST_FIRST / QUALITY_FIRST / PROGRESSIVE / DUAL (parallel local + external) / LOCAL_ONLY
 - **Circuit Breaker** — automatic provider blocking on HTTP 429/errors (Retry-After aware), priority-based failover, status visible in LLM usage dashboard
 - **Vector search** — LLM generates an optimized search query (`MultiQueryExpander`, 3 parallel queries), then performs vector similarity search via the selected backend (ChromaDB or sqlite-vec)
+- **Contextual Retrieval** — each chunk's embedding and lexical (`chunk_fts`) index include a prepended context header (`{filename} > {section heading}`, plus an optional LLM-generated 1-2 sentence summary from the same call that extracts keywords) so chunks that read ambiguously alone (tables, code fragments, pronoun-heavy text) are recalled more reliably; the header never appears in stored/displayed text, the source preview, or the answer prompt — only in the embedding/lexical-search input
+- **Embedding input normalization** — decorative markdown (separator lines, bold/italic/underline markers) is stripped from the embedding, `chunk_fts`, and answer-prompt inputs (not from stored/displayed text), reducing noise in the search index and prompt token usage
 - **ReAct re-retrieval** — automatic re-retrieval up to 2 times when evidence is insufficient
 - **Critic verification** — LLM double-checks whether the generated answer is grounded in documents
 - **PROGRESSIVE mode** — starts with COST_FIRST; if quality score < threshold, re-runs Answer with PREMIUM provider and marks response with upgrade badge

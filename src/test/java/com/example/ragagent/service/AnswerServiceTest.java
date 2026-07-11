@@ -8,6 +8,7 @@ import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.ProviderRole;
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.llm.TaskType;
+import com.example.ragagent.model.MetaKey;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -17,12 +18,14 @@ import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
 import org.springframework.ai.chat.prompt.Prompt;
+import org.springframework.ai.document.Document;
 import org.springframework.context.MessageSource;
 import reactor.core.publisher.Flux;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.function.Consumer;
 import java.util.function.Function;
 
@@ -65,7 +68,7 @@ class AnswerServiceTest {
                 "./data", MAX_RETRY, 800, 100, 100, 7, 0.0, true, 0, false,
                 true, false, 3,
                 null, null, null, null, null, null, null, null, null, null, null, null, null, null,
-                null, null, null, null, null);
+                null, null, null, null, null, null);
         MessageSource messageSource = mock(MessageSource.class);
         when(messageSource.getMessage(anyString(), any(), any(Locale.class))).thenReturn("prompt");
         service = new AnswerService(llmRouter, props, messageSource);
@@ -142,6 +145,32 @@ class AnswerServiceTest {
 
         assertThat(promptCaptor.getAllValues()).hasSize(2).allSatisfy(prompt ->
                 assertThat(prompt.getContents()).contains("[USER_QUESTION]").contains("[/USER_QUESTION]"));
+    }
+
+    @Test
+    @DisplayName("BLOCKING — 답변 프롬프트의 [검색된 문서]는 정규화된 텍스트를 쓰고 맥락 헤더는 넣지 않는다(§10.1)")
+    @SuppressWarnings("unchecked")
+    void blocking_answerPrompt_usesNormalizedRetrievedDocTextWithoutContextHeader() {
+        ArgumentCaptor<Function<ChatModel, ChatResponse>> callCaptor = ArgumentCaptor.forClass(Function.class);
+        when(llmRouter.executeWithTracking(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), callCaptor.capture()))
+                .thenReturn("답변", "{\"sufficient\":true}");
+        when(llmRouter.findProviderName(any(), any())).thenReturn("gemini-flash");
+
+        Document doc = new Document("**중요**한 내용\n------", Map.of(
+                MetaKey.FILENAME, "가이드.pdf", MetaKey.PAGE_OR_SLIDE, "3",
+                MetaKey.CHUNK_CONTEXT, "가이드.pdf > 설정"));
+        AgentState state = newState(RoutingMode.COST_FIRST).toBuilder().retrievedDocs(List.of(doc)).build();
+
+        service.execute(state);
+
+        ChatModel chatModel = mock(ChatModel.class);
+        ArgumentCaptor<Prompt> promptCaptor = ArgumentCaptor.forClass(Prompt.class);
+        when(chatModel.call(promptCaptor.capture())).thenReturn(chatResponse("dummy"));
+        callCaptor.getAllValues().forEach(fn -> fn.apply(chatModel));
+
+        String answerPrompt = promptCaptor.getAllValues().get(0).getContents();
+        assertThat(answerPrompt).contains("중요한 내용");
+        assertThat(answerPrompt).doesNotContain("**중요**", "------", "가이드.pdf > 설정");
     }
 
     // ── STREAMING 경로 (non-DUAL) ──────────────────────────────────────────

@@ -2,6 +2,7 @@ package com.example.ragagent.service;
 
 import com.example.ragagent.agent.AgentState;
 import com.example.ragagent.config.AppProperties;
+import com.example.ragagent.ingestion.MarkdownNoiseNormalizer;
 import com.example.ragagent.model.MetaKey;
 import com.example.ragagent.llm.DualResult;
 import com.example.ragagent.llm.LlmProvider;
@@ -279,7 +280,10 @@ public class AnswerService {
                 .map(doc -> {
                     String filename = String.valueOf(doc.getMetadata().getOrDefault(MetaKey.FILENAME, "unknown"));
                     String page     = String.valueOf(doc.getMetadata().getOrDefault(MetaKey.PAGE_OR_SLIDE, "?"));
-                    return "[%s | p.%s]\n%s".formatted(filename, page, doc.getText());
+                    // Normalized (no context header, §10.1) — decorative markdown is stripped so it
+                    // doesn't consume prompt tokens; the stored/displayed text elsewhere stays raw.
+                    return "[%s | p.%s]\n%s".formatted(filename, page,
+                            MarkdownNoiseNormalizer.normalize(doc.getText()));
                 })
                 .collect(Collectors.joining("\n\n---\n\n"));
 

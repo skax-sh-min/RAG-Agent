@@ -4,10 +4,6 @@ import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.rendering.ImageType;
 import org.apache.pdfbox.rendering.PDFRenderer;
-import org.apache.poi.sl.usermodel.TextShape;
-import org.apache.poi.xslf.usermodel.XMLSlideShow;
-import org.apache.poi.xslf.usermodel.XSLFShape;
-import org.apache.poi.xslf.usermodel.XSLFSlide;
 import org.apache.poi.xwpf.usermodel.XWPFDocument;
 import org.apache.poi.xwpf.usermodel.XWPFParagraph;
 import com.example.ragagent.model.MetaKey;
@@ -37,7 +33,11 @@ import java.util.stream.Collectors;
 
 /**
  * Loads documents from various file formats into Spring AI Document objects.
- * Supports: PDF, PPTX, DOCX, TXT, MD
+ * PDF is handled directly here (OCR path for scanned pages via {@link #loadPdfPagesForConversion}
+ * / {@link #load}); DOCX/TXT/MD go through Markdown conversion + {@link #loadFromMarkdown}.
+ * PPTX and non-scanned PDF are converted to Markdown upstream by {@code PptxToMarkdownConverter}/
+ * {@code PdfToMarkdownConverter} before reaching {@link #loadFromMarkdown} — this class no longer
+ * loads PPTX directly.
  */
 @Service
 public class DocumentLoaderService {
@@ -70,26 +70,50 @@ public class DocumentLoaderService {
         String name = filePath.getFileName().toString().toLowerCase();
         log.debug("[LOADER] 로드 시작: {} ({}B)", filePath.getFileName(), Files.size(filePath));
         if (name.endsWith(".pdf")) return loadPdf(filePath, onOcrProgress);
-        if (name.endsWith(".pptx")) return loadPptx(filePath);
         if (name.endsWith(".docx")) return loadDocx(filePath);
         if (name.endsWith(".txt") || name.endsWith(".md")) return loadText(filePath);
         throw new IllegalArgumentException("Unsupported file type: " + name);
     }
 
-    private List<Document> loadPdf(Path filePath, BiConsumer<Integer, Integer> onOcrProgress)
-            throws IOException {
+    /**
+     * Per-page PDF text extracted via {@link PagePdfDocumentReader}, plus whether the PDF looks
+     * scanned ({@link #isScannedByEmptyPageRatio}). No OCR is run here — callers pick between the
+     * OCR path ({@link #load}) and Markdown conversion ({@code PdfToMarkdownConverter}) using
+     * {@code scanned()} before committing to either.
+     */
+    public record PdfPages(List<Document> pages, boolean scanned) {}
+
+    /**
+     * Extracts per-page text and reports whether the PDF looks scanned, for callers that must
+     * choose between the OCR path and Markdown-conversion path (e.g. {@code DocumentIndexer}
+     * routing non-scanned PDFs to {@code PdfToMarkdownConverter}) without extracting twice.
+     */
+    public PdfPages loadPdfPagesForConversion(Path filePath) {
+        List<Document> pages = extractPdfPages(filePath);
+        return new PdfPages(pages, isScannedByEmptyPageRatio(pages));
+    }
+
+    private List<Document> extractPdfPages(Path filePath) {
         var config = PdfDocumentReaderConfig.builder()
                 .withPagesPerDocument(1)
                 .build();
         var reader = new PagePdfDocumentReader(new FileSystemResource(filePath.toFile()), config);
-        List<Document> docs = reader.get();
+        return reader.get();
+    }
 
-        // Tag source_type: check if pages are mostly empty (scanned) → mark as ocr
-        long emptyPages = docs.stream()
+    /** More than half the pages near-empty (&lt;50 chars) → heuristic for a scanned PDF. */
+    static boolean isScannedByEmptyPageRatio(List<Document> pages) {
+        long emptyPages = pages.stream()
                 .filter(d -> d.getText() == null || d.getText().trim().length() < 50)
                 .count();
-        boolean isScanned = emptyPages > docs.size() * 0.5;
-        log.debug("[LOADER:PDF] {} → {}페이지, 빈페이지={}, 스캔문서={}", filePath.getFileName(), docs.size(), emptyPages, isScanned);
+        return emptyPages > pages.size() * 0.5;
+    }
+
+    private List<Document> loadPdf(Path filePath, BiConsumer<Integer, Integer> onOcrProgress)
+            throws IOException {
+        List<Document> docs = extractPdfPages(filePath);
+        boolean isScanned = isScannedByEmptyPageRatio(docs);
+        log.debug("[LOADER:PDF] {} → {}페이지, 스캔문서={}", filePath.getFileName(), docs.size(), isScanned);
 
         if (isScanned && ocrService != null) {
             log.debug("[LOADER:PDF] OCR 모드로 전환: {}", filePath.getFileName());
@@ -129,33 +153,6 @@ public class DocumentLoaderService {
         }
         log.debug("[LOADER:OCR] {} 완료 → {}페이지 텍스트 추출", filePath.getFileName(), result.size());
         return result;
-    }
-
-    private List<Document> loadPptx(Path filePath) throws IOException {
-        List<Document> docs = new ArrayList<>();
-        try (XMLSlideShow pptx = new XMLSlideShow(new FileInputStream(filePath.toFile()))) {
-            int slideNum = 0;
-            for (XSLFSlide slide : pptx.getSlides()) {
-                slideNum++;
-                StringBuilder text = new StringBuilder();
-                for (XSLFShape shape : slide.getShapes()) {
-                    if (shape instanceof TextShape<?, ?> textShape) {
-                        String t = textShape.getText();
-                        if (t != null && !t.isBlank()) {
-                            text.append(t).append("\n");
-                        }
-                    }
-                }
-                if (!text.isEmpty()) {
-                    docs.add(new Document(text.toString(), Map.of(
-                            MetaKey.SOURCE_TYPE, "ppt",
-                            MetaKey.PAGE_OR_SLIDE, slideNum
-                    )));
-                }
-            }
-        }
-        log.debug("[LOADER:PPTX] {} → {}슬라이드 (텍스트 있는 슬라이드)", filePath.getFileName(), docs.size());
-        return docs;
     }
 
     /**
@@ -229,7 +226,7 @@ public class DocumentLoaderService {
 
                 if (isHeading && !current.isEmpty()) {
                     sections.add(new Document(current.toString().strip(), Map.of(
-                            MetaKey.SOURCE_TYPE, "file", "section", sectionNum, "heading", currentHeading)));
+                            MetaKey.SOURCE_TYPE, "file", "section", sectionNum, MetaKey.HEADING, currentHeading)));
                     current = new StringBuilder();
                     sectionNum++;
                 }
@@ -238,7 +235,7 @@ public class DocumentLoaderService {
             }
             if (!current.isEmpty()) {
                 sections.add(new Document(current.toString().strip(), Map.of(
-                        MetaKey.SOURCE_TYPE, "file", "section", sectionNum, "heading", currentHeading)));
+                        MetaKey.SOURCE_TYPE, "file", "section", sectionNum, MetaKey.HEADING, currentHeading)));
             }
 
             // No headings found → return as single flat document
@@ -316,7 +313,7 @@ public class DocumentLoaderService {
                     continue; // marker is metadata-only, not searchable content
                 }
 
-                if (line.startsWith("#")) {
+                if (isAtxHeading(line)) {
                     if (!current.isEmpty()) {
                         Integer resolvedPage = resolveSectionPage(currentHeadingPage, currentSectionPage, pendingHeadingPage);
                         sections.add(sectionDocument(current.toString().strip(), sectionNum, currentHeading, resolvedPage));
@@ -344,6 +341,19 @@ public class DocumentLoaderService {
                 : sections;
     }
 
+    /**
+     * CommonMark ATX 헤딩 규칙: {@code #}가 1개 이상 이어지고, 그 뒤가 공백이거나 줄 끝이어야
+     * 헤딩으로 인정한다. 이 검증이 없으면(예: 예전의 단순 {@code line.startsWith("#")}) 슬라이드/
+     * 문단에 흔한 해시태그(예: "#캠페인")처럼 우연히 '#'로 시작하는 평문이 가짜 헤딩/섹션 경계로
+     * 오인된다 — DOCX·PPTX 등 어느 변환기에서 나온 텍스트든 공유되는 파싱 단계라 포맷 불문 적용.
+     */
+    private boolean isAtxHeading(String line) {
+        int i = 0;
+        while (i < line.length() && line.charAt(i) == '#') i++;
+        if (i == 0) return false;
+        return i == line.length() || Character.isWhitespace(line.charAt(i));
+    }
+
     private Integer resolveSectionPage(Integer currentHeadingPage, int currentSectionPage, Integer pendingHeadingPage) {
         if (currentHeadingPage != null) return currentHeadingPage;
         // Prologue fallback: if the first heading has an anchor, apply it to the pre-heading block.
@@ -355,7 +365,7 @@ public class DocumentLoaderService {
         Map<String, Object> meta = new HashMap<>();
         meta.put(MetaKey.SOURCE_TYPE, "file");
         meta.put("section", sectionNum);
-        meta.put("heading", heading);
+        meta.put(MetaKey.HEADING, heading);
         if (headingPage != null) {
             meta.put(MetaKey.HEADING_PAGE, headingPage);
             meta.put(MetaKey.PAGE_OR_SLIDE, headingPage);

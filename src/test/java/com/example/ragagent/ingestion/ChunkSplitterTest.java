@@ -1,11 +1,13 @@
 package com.example.ragagent.ingestion;
 
+import com.example.ragagent.model.MetaKey;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.document.Document;
 
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -72,14 +74,26 @@ class ChunkSplitterTest {
     }
 
     @Test
-    @DisplayName("splitDocuments — pptx는 슬라이드 유지, 분할하지 않는다")
-    void splitDocuments_pptx_keepsSlidesUnsplit() {
-        List<Document> docs = List.of(new Document("A".repeat(3000)), new Document("B".repeat(10)));
+    @DisplayName("splitDocuments — pptx는 섹션 병합 전략을 타지만, 서로 다른 슬라이드(page_or_slide)는 병합되지 않는다")
+    void splitDocuments_pptx_routesToSectionStrategy_neverMergesDifferentSlides() {
+        List<Document> docs = List.of(
+                new Document("## 첫 슬라이드\n\n짧은 내용", Map.of(MetaKey.PAGE_OR_SLIDE, 1)),
+                new Document("## 둘째 슬라이드\n\n짧은 내용", Map.of(MetaKey.PAGE_OR_SLIDE, 2)));
 
         List<Document> result = splitter.splitDocuments(docs, "deck.pptx", 2000, 200, 100);
 
-        assertThat(result).hasSize(2);
-        assertThat(result.get(0).getText()).hasSize(3000);
+        assertThat(result).hasSize(2); // both short, but different slides — merge is blocked
+    }
+
+    @Test
+    @DisplayName("splitDocuments — chunkSize를 넘는 단일 슬라이드는 슬라이딩 윈도우로 분할된다 (더 이상 무조건 유지되지 않음)")
+    void splitDocuments_pptx_splitsOversizedSingleSlide() {
+        List<Document> docs = List.of(
+                new Document("## 긴 슬라이드\n\n" + "A".repeat(3000), Map.of(MetaKey.PAGE_OR_SLIDE, 1)));
+
+        List<Document> result = splitter.splitDocuments(docs, "deck.pptx", 2000, 200, 100);
+
+        assertThat(result).hasSizeGreaterThan(1);
     }
 
     @Test
@@ -94,13 +108,37 @@ class ChunkSplitterTest {
     }
 
     @Test
-    @DisplayName("splitDocuments — 기타 확장자는 섹션 병합 없이 슬라이딩 윈도우만 적용")
+    @DisplayName("splitDocuments — 처리되지 않는 확장자는 섹션 병합 없이 슬라이딩 윈도우만 적용")
     void splitDocuments_other_appliesSlidingWindowOnly() {
         List<Document> docs = List.of(new Document("Y".repeat(2500)));
 
-        List<Document> result = splitter.splitDocuments(docs, "scan.pdf", 2000, 200, 100);
+        List<Document> result = splitter.splitDocuments(docs, "notes.xyz", 2000, 200, 100);
 
         assertThat(result.size()).isGreaterThanOrEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("splitDocuments — 스캔 아닌 pdf(source_type=file)는 섹션 병합 전략을 탄다 (짧은 섹션끼리 병합)")
+    void splitDocuments_nonScannedPdf_mergesShortSections() {
+        List<Document> docs = List.of(
+                new Document("짧은 섹션 A", Map.of(MetaKey.SOURCE_TYPE, "file")),
+                new Document("짧은 섹션 B", Map.of(MetaKey.SOURCE_TYPE, "file")));
+
+        List<Document> result = splitter.splitDocuments(docs, "report.pdf", 2000, 200, 100);
+
+        assertThat(result).hasSize(1); // merged into one — proves the section-merge branch was taken
+    }
+
+    @Test
+    @DisplayName("splitDocuments — 스캔 pdf(source_type=ocr)는 섹션 병합 없이 슬라이딩 윈도우만 적용된다 (기존 동작 유지)")
+    void splitDocuments_scannedPdf_neverMergesStaysOnSlidingWindow() {
+        List<Document> docs = List.of(
+                new Document("짧은 섹션 A", Map.of(MetaKey.SOURCE_TYPE, "ocr")),
+                new Document("짧은 섹션 B", Map.of(MetaKey.SOURCE_TYPE, "ocr")));
+
+        List<Document> result = splitter.splitDocuments(docs, "scanned.pdf", 2000, 200, 100);
+
+        assertThat(result).hasSize(2); // never merged — scanned PDF stays on the legacy sliding-window path
     }
 
     @Test
@@ -203,6 +241,29 @@ class ChunkSplitterTest {
         List<Document> docs = List.of(new Document("A".repeat(5000)));
 
         assertThat(splitter.enforceMaxChars(docs, 0, "x.md")).isSameAs(docs);
+    }
+
+    @Test
+    @DisplayName("enforceMaxChars — 장식 줄로 raw 길이가 상한을 넘어도 정규화 길이가 상한 이하면 분할하지 않는다(§10.1-보완)")
+    void enforceMaxChars_measuresNormalizedLengthForOverflowGate() {
+        String text = "실제 내용입니다\n" + "=".repeat(80); // raw ~89자, 정규화 시 장식줄 제거되어 ~8자
+
+        List<Document> result = splitter.enforceMaxChars(List.of(new Document(text)), 50, "x.md");
+
+        assertThat(result).hasSize(1);
+        assertThat(result.get(0).getText()).isEqualTo(text);
+    }
+
+    @Test
+    @DisplayName("mergeShortSections — 장식 줄로 raw 길이가 부풀려져도 정규화 길이 기준으로 병합 여부를 판단한다(§10.1-보완)")
+    void mergeShortSections_measuresNormalizedLengthForMergeDecision() {
+        String base = "짧은 내용\n" + "-".repeat(80); // raw 86자(threshold75=75 초과) → 정규화 시 5자(threshold40=40 미만)
+        List<Document> docs = List.of(new Document(base), new Document("다음 섹션"));
+
+        List<Document> result = splitter.mergeShortSections(docs, 100);
+
+        assertThat(result).hasSize(1);
+        assertThat(result.get(0).getText()).contains("짧은 내용", "다음 섹션");
     }
 
     @Test

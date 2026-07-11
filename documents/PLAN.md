@@ -9,7 +9,7 @@
 
 > 완료/미착수를 한눈에 보도록 상단 대시보드를 신설했다. 완료 항목의 서술은 아래 본문(§4~§9)에서 대폭 압축했지만 **항목 자체는 삭제하지 않았다** — 절 번호(§6.5, Step 5.3 등)는 교차 참조 보존을 위해 그대로 유지했으므로, 이 번호로 본문을 검색(Ctrl+F)하면 상세 구현 내용을 바로 찾을 수 있다. 2026-07-05 재배열 이력은 §6 도입부에 계속 남아 있다.
 
-### ✅ 완료 — Phase 1 · 2 · 5 · 6 전체, Phase 3 대부분, Phase 7-A
+### ✅ 완료 — Phase 1 · 2 · 5 · 6 · 7 전체, Phase 3 대부분
 
 | Phase | 완료 항목 | 상세 |
 |---|---|---|
@@ -19,6 +19,8 @@
 | **Phase 5** — Vector Store | Step 5.1~5.10 전체(Chroma↔sqlite-vec 런타임 전환, 관리자 페이지, 태그 검색, 운영/벡터 DB 분리) | §8 |
 | **Phase 6** — 폐쇄망/노-도커 | G1~G5(키리스 LOCAL·차원 외부화·라우팅 외부화·런북·무외부호출 인수) | §9 |
 | **Phase 7-A** — 검색 빠른 승리 | §10.2 가중 RRF(벡터축 그룹 정규화 + 키워드축 가중치/k 외부화) · §10.3 쿼리 임베딩 캐시(Caffeine, cache→tracking→delegate 데코레이터) | §10 |
+| **Phase 7-B** — Contextual Retrieval + 임베딩 입력 정규화 | §10.1 청크 맥락 헤더(구조적+LLM) 임베딩/FTS 입력에 prepend, `context:` 사용량 분리 · §10.1-보완 마크다운 장식 제거 정규화(임베딩/FTS/답변프롬프트 3곳 공유), 저장·표시 텍스트는 원문 불변 | §10 |
+| **Phase 7-C** — 한국어 FTS 토크나이저 | §10.4 `chunk_fts`를 `unicode61`→`trigram` 전환(무손실 자동 재구축), 어간-활용형/코드 부분열 매칭 개선. 2글자 단어는 단독 검색 불가라는 실측 트레이드오프 확인(벡터 축은 무관) | §10 |
 | **§6.16.1** — 스트리밍/인덱싱 중단 버튼 | 채팅 SSE 중지(AbortController) + 업로드/동기화 취소(워커 스레드 interrupt, `.join()`→`.get()` 인터럽트 가능화) | §6.16 |
 
 추가로 Phase 3 초기에 완료된 항목(문서화되지 않았던 픽스 포함): ChromaDB v2 API 컬렉션명→UUID 자동 변환, 문서 저장 경로 공유 구조 단순화(`DocRegistry.SHARED`), 인덱싱 SSE 진행 단계별 표시, 키워드 추출 타임아웃 시 CircuitBreaker 오동작 수정, DOCX 변환 전 구버전 아티팩트 삭제 순서 수정, `LOGGING_LEVEL`/`LLM_TEMPERATURE`/`LLM_MAX_TOKENS`/`SPRING_SECURITY_LOGGING_LEVEL` 환경변수 외부화, 의존성 최신 stable 일괄 업데이트(Spring Boot 3.5.15·Spring AI 1.1.8, 정확한 버전은 pom.xml 참조).
@@ -31,19 +33,21 @@
 
 | 순위 | 항목 | 현재 상태 |
 |---|---|---|
-| 1 | **Phase 7-B** — §10.1 Contextual Retrieval + 임베딩 입력 정규화(10.1-보완) | 미착수 — 정확도 ROI 1순위. 두 건 모두 재인덱싱 필요라 한 사이클로 묶음 (2026-07-09) |
-| 2 | **Phase 7-C** — §10.4 한국어 FTS 토크나이저 | 미착수 — §10.2·§10.1과 세트로 하이브리드 기본 활성화 재검토, Phase 7-B와 이어서 진행 |
-| 3 | **§6.17 문서관리·Admin 인증 필수화 + 역할 분기** | 미착수 (2026-07-09 요청, 중간 순위). 관리 전용 인증(B안)은 no-auth에서도 착수 가능 |
-| 4 | **§6.18 설정 페이지** — LLM/RAG 옵션 조회·부분(핫) 수정 | 미착수 (2026-07-09 요청, 중간 순위). 수정 권한 게이트가 §6.17의 관리자 역할 분기에 의존 — §6.17 선행 필요 |
-| 5 | **§6.13 스토리지 쿼터**(전역 상한 B안, §6.2에서 이관) | 설계 완료, 구현 전. 2026-07-09 설정 페이지(§6.18) 이후로 순위 하향 |
-| 6 | 운영 준비 잔여 — SQLite 백업 자동화(Litestream/cron), Caddy 인증서 만료 모니터링 | 미착수 |
-| 7 | §9.4 — CADDY 하위호환 별칭 | 선택, 낮은 우선순위 |
-| 8 | Phase 2 남은 실기기 검증 2건 (키보드 하단 고정 · 홈 화면 standalone) | 좌우 스크롤·다크모드는 2026-07-08 자동 검증 완료, 나머지는 실기기 필요 |
+| 1 | **§6.17 문서관리·Admin 인증 필수화 + 역할 분기** | 미착수 (2026-07-09 요청, 중간 순위). 관리 전용 인증(B안)은 no-auth에서도 착수 가능 |
+| 2 | **§6.18 설정 페이지** — LLM/RAG 옵션 조회·부분(핫) 수정 | 미착수 (2026-07-09 요청, 중간 순위). 수정 권한 게이트가 §6.17의 관리자 역할 분기에 의존 — §6.17 선행 필요 |
+| 3 | **§6.13 스토리지 쿼터**(전역 상한 B안, §6.2에서 이관) | 설계 완료, 구현 전. 설정 페이지(§6.18) 이후로 순위 하향 |
+| 4 | 운영 준비 잔여 — SQLite 백업 자동화(Litestream/cron), Caddy 인증서 만료 모니터링 | 미착수 |
+| 5 | §9.4 — CADDY 하위호환 별칭 | 선택, 낮은 우선순위 |
+| 6 | Phase 2 남은 실기기 검증 2건 (키보드 하단 고정 · 홈 화면 standalone) | 좌우 스크롤·다크모드는 자동 검증 완료, 나머지는 실기기 필요 |
+| 7 | **§6.19 Direct 메시지 전용 LLM Temperature 분리** | 미착수 (2026-07-09 요청, 낮은 우선순위/후속). §6.18 설정 페이지 선행 필요 |
 
 > **Phase 7-A 완료 (2026-07-08)**: §10.2 가중 RRF + §10.3 쿼리 임베딩 캐시. 상세는 아래 §10.2·§10.3 본문 참조.
+> **Phase 7-B 완료 (2026-07-09)**: §10.1 Contextual Retrieval + §10.1-보완 임베딩 입력 정규화. 상세는 아래 §10.1 본문 참조. 재인덱싱은 운영 단계에서 별도 수행.
+> **Phase 7-C 완료 (2026-07-09)**: §10.4 한국어 FTS 트라이그램 토크나이저. 상세는 아래 §10.4 본문 참조. Phase 7(§10.1~10.4) 전체 완료 — 하이브리드 기본 활성화(`app.search-hybrid-enabled=true`) 전환 여부는 별도 후속 판단으로 남김.
 > **§6.16.1 완료 (2026-07-08)**: 채팅 스트리밍 중지 + 업로드/동기화 취소 버튼. 상세는 아래 §6.16.1 본문 참조.
 > **§6.17·§6.18 추가 (2026-07-09 요청, 중간 순위)**: 민감 페이지(문서 관리·Admin) 로그인 필수화 + 역할 기반 화면 분기(§6.17), LLM/RAG 설정 조회·부분 수정 페이지(§6.18).
-> **2026-07-09 재우선순위화**: 검색 정확도(Phase 7-B·7-C)를 최상단으로 승격 — 코드 변경 범위가 이미 확정돼 있고(§10.1·§10.4 본문) 체감 ROI가 가장 크다. §6.17/§6.18 순서를 뒤집었다 — §6.18 본문("수정은 관리자 전용, §6.17 역할 분기와 연동")이 §6.17의 admin role 개념을 전제하므로 개발 순서상 §6.17이 선행돼야 한다. §6.13(스토리지 쿼터)은 설정 페이지(§6.18) 이후로 순위를 낮췄다 — 즉시 필요한 안전장치라기보단 운영 편의 항목이라는 재판단.
+> **§6.19 추가 (2026-07-09 요청, 낮은 우선순위)**: Direct(meta) 응답 전용 temperature를 RAG 응답과 분리해 0.0~0.2(기본 0.1) 범위로 화면에서 조정 가능하게. 조사 중 temperature가 현재 어디에서도 실제로 설정 가능하지 않다는(하드코딩) 선행 이슈를 발견 — 상세는 §6.19 본문 참조.
+> **2026-07-09 재우선순위화**: 검색 정확도(Phase 7-B·7-C)를 최상단으로 승격 — 코드 변경 범위가 이미 확정돼 있고(§10.1·§10.4 본문) 체감 ROI가 가장 크다. §6.17/§6.18 순서를 뒤집었다 — §6.18 본문("수정은 관리자 전용, §6.17 역할 분기와 연동")이 §6.17의 admin role 개념을 전제하므로 개발 순서상 §6.17이 선행돼야 한다. §6.13(스토리지 쿼터)은 설정 페이지(§6.18) 이후로 순위를 낮췄다 — 즉시 필요한 안전장치라기보단 운영 편의 항목이라는 재판단. Phase 7-B·7-C 모두 같은 날 구현 완료.
 
 **🟣 후속 — 멀티유저(`auth.enabled=true`) 활성화 시에만 착수**
 
@@ -93,7 +97,7 @@
 | Phase 4 — 확장 | OAuth2, PostgreSQL 마이그레이션 | 조건부 | 🔵 미착수 |
 | Phase 5 — Vector Store 선택 | sqlite-vec / ChromaDB 런타임 선택 | 중요 | ✅ 완료 (Step 5.1~5.10) |
 | Phase 6 — 폐쇄망 / 노-도커 | sqlite-vec 단독·로컬 LLM·CDN 0 (키리스 LOCAL, 차원 외부화) | 중요 | 🟢 G1~G5 완료 |
-| Phase 7 — 검색 품질·성능 고도화 | 가중 RRF·쿼리 임베딩 캐시(7-A) · Contextual Retrieval(7-B) · 한국어 FTS(7-C) | 중요 | 🟡 7-A 완료, 7-B/7-C 미착수 |
+| Phase 7 — 검색 품질·성능 고도화 | 가중 RRF·쿼리 임베딩 캐시(7-A) · Contextual Retrieval(7-B) · 한국어 FTS(7-C) | 중요 | ✅ 7-A·7-B·7-C 전체 완료 |
 
 ---
 
@@ -445,6 +449,26 @@ Assistant 응답에 👍/👎 토글 추가, `conversation_turns.feedback`(런�
 
 ---
 
+### 6.19 Direct 메시지 전용 LLM Temperature 분리 🔵 미착수 — 낮은 우선순위/후속 (2026-07-09 요청)
+
+**현재 상태 (코드 확인)**: temperature는 겉보기엔 `LLM_TEMPERATURE` 환경변수(`application.properties`의 `spring.ai.openai.chat.options.temperature=${LLM_TEMPERATURE:0.0}`, README.md/OPERATOR_MANUAL.md가 "0.0~2.0 조정 가능"이라 문서화)로 조정 가능해 보이지만, **실제로는 어디서도 이 값을 읽지 않는다** — `LlmRouter`가 실제로 선택하는 모든 provider `ChatModel`은 `LlmConfig.llmRouter()`(`config/LlmConfig.java:66-74`)가 기동 시점에 직접 생성하며, 그 `OpenAiChatOptions`에 `.temperature(0.0)`이 **하드코딩**되어 있다(CLAUDE.md의 "모든 LLM 프로바이더는 LlmRouter를 거쳐야 함" 원칙과 일치하는 구조지만, 결과적으로 `spring.ai.openai.*` 프로퍼티로 만들어지는 Spring AI 오토컨피규레이션 빈은 LlmRouter 경로에서 전혀 쓰이지 않아 `LLM_TEMPERATURE`가 죽은 설정이 됐다). `DirectAnswerService`(meta 질문 직접 응답, `service/DirectAnswerService.java:84-85` `buildPrompt()`)와 `AnswerService`(RAG 답변) 모두 이 하드코딩된 0.0을 그대로 물려받아 애초에 구분 자체가 없다.
+
+**요청 배경**: meta 질문(인사·잡담 등, RAG 미사용 직접 응답)은 문서 근거가 없는 자유 응답이라 RAG 답변보다 약간의 다양성이 자연스러울 수 있어, Direct 경로만 별도로 0.0~0.2(기본 0.1) 범위에서 화면 조정 가능하게 하고 싶다는 요청.
+
+**개선안**:
+1. **선결 — temperature를 실제로 살아있는 설정으로 전환**: `LlmConfig.java:70`의 하드코딩된 `.temperature(0.0)`을 제거하고(provider별 `defaultOptions`는 유지하되 특정 고정값을 강제하지 않음), 실제 온도는 **호출 시점에 `Prompt`의 `ChatOptions`로 오버라이드**한다 — Spring AI는 `Prompt(messages, chatOptions)`에 실린 옵션이 모델 `defaultOptions`보다 우선 적용되므로, 같은 라우터/프로바이더 빈을 공유하면서도 호출부(Direct vs RAG)마다 다른 온도를 지정할 수 있다. §6.18의 "temperature/max-tokens 핫 수정 가능" 전제도 이 전환이 선행돼야 실제로 동작한다(지금은 빈 생성 시점에 고정이라 핫 리로드 자체가 물리적으로 불가능).
+2. **신규 프로퍼티**: `app.llm.direct-temperature`(`AppProperties.LlmConfig`에 필드 추가, `DIRECT_LLM_TEMPERATURE` 환경변수) — 기본 `0.1`, `llmSafe()`에서 `[0.0, 0.2]`로 clamp. RAG 경로(`AnswerService`)는 선결 작업으로 "살아있게" 고친 뒤에도 기존 `LLM_TEMPERATURE`(기본 0.0)를 그대로 프로바이더 기본 온도로 계속 사용 — 이번 항목에서 RAG 쪽 값 자체는 새로 건드리지 않는다.
+3. **적용 지점**: `DirectAnswerService`의 블로킹 경로(`buildPrompt()`가 만드는 `Prompt`)와 스트리밍 경로(`ChatClient.builder(provider.chatModel())...`) 양쪽에서 `OpenAiChatOptions.builder().temperature(directTemperature).build()`를 실어 보낸다.
+4. **UI 노출**: 별도 화면을 새로 만들지 않고 §6.18 설정 페이지(신규 `/settings`)의 "핫 수정 가능" LLM 그룹에 슬라이더/숫자 입력(0.0~0.2, step 0.05, 기본 0.1)으로 포함한다 — §6.18이 이미 temperature를 핫 수정 대상으로 지목해뒀으므로 §6.18 구현 시 함께 추가하면 설정 저장·권한·감사 배관(§6.18 3)/4))을 중복 구축하지 않아도 된다. **§6.18 선행이 이 항목의 전제.**
+
+**완료 기준**:
+- Direct(meta) 응답과 RAG 응답이 서로 다른 temperature로 호출된다(`LoggingChatModel`의 curl 재현 로그로 확인 가능).
+- `app.llm.direct-temperature`를 0.0~0.2 범위 밖 값으로 설정해도 clamp되어 기동/응답이 깨지지 않는다.
+- §6.18 설정 페이지에서 값을 조정하면 재기동 없이 다음 Direct 호출부터 반영된다.
+- "선결" 작업(온도 하드코딩 제거) 이후 `LLM_TEMPERATURE`가 RAG 경로에 처음으로 실제 적용되기 시작한다는 점을 동작 변경으로 명시 — 값 자체(기본 0.0)는 바뀌지 않으므로 즉시 체감 회귀는 없지만, 운영자가 과거에 설정해 둔 `LLM_TEMPERATURE`가 있다면 이번에 처음으로 실제 적용된다는 점을 릴리스 노트에 남긴다.
+
+---
+
 ## 7. Phase 4 — 확장 (조건부) 🔵 미착수
 
 ### 7.1 OAuth2 소셜 로그인 (가입 마찰 문제 발생 시)
@@ -557,11 +581,11 @@ G1~G4 코드/문서 완료. G5는 라우팅 계층 "외부 무선택"을 `LlmCon
 
 ---
 
-## 10. Phase 7 — 검색 품질·성능 고도화 🟡 일부 완료 (7-A)
+## 10. Phase 7 — 검색 품질·성능 고도화 ✅ 완료 (7-A · 7-B · 7-C)
 
 > **배경 (2026-07-07 코드 확인)**: 검색 파이프라인(`RetrievalService`)은 이미 MultiQuery(원본+2) → 배치 임베딩 → 벡터 검색 → RRF 융합 → (옵션)하이브리드 BM25 → (옵션)LLM 리랭크 → 태그 필터로 잘 구성돼 있다. 아래는 "빠진 것"이 아니라 **현 구조 위에서 정확도/성능을 끌어올리는 증분 개선**이며, 자바 관점의 난이도·회귀 리스크와 함께 우선순위화했다. 자체 검색 품질 평가 세트가 없으므로 각 항목의 효과는 도입 후 정성/정량 측정으로 검증하는 것을 전제로 한다.
 
-### 10.1 Contextual Retrieval — 청크 맥락 주입 (정확도 ROI 1순위)
+### 10.1 Contextual Retrieval — 청크 맥락 주입 (정확도 ROI 1순위) ✅ 완료 (2026-07-09)
 
 **현재 상태**: `ChunkSplitter`(섹션 병합 + 슬라이딩 윈도우, 순수 텍스트 로직)는 각 청크의 자기 텍스트만 임베딩 대상으로 넘긴다. "이 청크가 어느 문서·상위 섹션의 무엇인지"가 벡터에 반영되지 않아, 대명사·표·코드 조각 청크의 검색 recall이 낮다.
 
@@ -576,6 +600,8 @@ G1~G4 코드/문서 완료. G5는 라우팅 계층 "외부 무선택"을 `LlmCon
 **효과**: 공개 벤치 검색 실패율 대폭 감소(문헌상 ~35%, 맥락+Contextual BM25 결합 기준). 정확도 ROI 1순위.
 **비용/리스크**: 인덱싱 1회성 LLM 토큰 증가(구조적 맥락만 쓰면 0), 검색 지연 0, 재인덱싱 필요.
 **완료 기준**: 신규 청크의 임베딩·FTS 입력에 맥락이 포함되고, `context:` 사용량이 `/llm-usage`에 분리 집계되며, LLM 맥락 실패 시 구조적 맥락(1)만으로 폴백(회귀 0).
+
+**구현**: `KeywordExtractor`의 기존 키워드 추출 LLM 호출을 확장해 "키워드: .../맥락: ..." 두 줄 형식으로 키워드+맥락을 한 번에 받는다(로컬 모델 호환을 위해 JSON이 아닌 평문 파싱 유지, 마커 없는 레거시 응답은 하위호환으로 전체를 키워드로 처리). 구조적 맥락(`{filename} > {heading}` — `MetaKey.HEADING`으로 기존 raw `"heading"` 문자열을 승격)은 항상 계산되고, LLM 맥락 문장이 있으면 그 위에 얹는다(합본은 `MetaKey.CHUNK_CONTEXT`에 저장 — transient, 영속 메타데이터에는 남지 않음). 사용량은 `BackgroundUsage.CONTEXT_PREFIX`(`context:`)로 통합 기록(`keyword:`는 과거 기록 인식용으로 유지). 신규 `SearchTextBuilder`(`CHUNK_CONTEXT + 정규화 본문`)를 임베딩(양쪽 `VectorStoreProvider`) + `chunk_fts.content` 세 곳에서 공유. Chroma는 `VectorStore.add()` 위임(임베딩=저장 텍스트 강제라 분리 불가)을 수동 임베딩 + `chromaApi.upsertEmbeddings()`로 교체하고 `TokenCountBatchingStrategy` 서브배치를 이식(저장 content/메타데이터는 원문 그대로, `CHUNK_CONTEXT`는 영속 전 제거); sqlite-vec은 기존 수동 임베딩 구조에 파생 텍스트만 교체. 전체 565 tests BUILD SUCCESS(회귀 0).
 
 **10.1-보완 — 임베딩 입력 정규화 (마크다운 노이즈 제거, 2026-07-09 추가)**
 
@@ -597,6 +623,8 @@ G1~G4 코드/문서 완료. G5는 라우팅 계층 "외부 무선택"을 `LlmCon
 - **구현 위치**: 정규화 함수는 `ChunkSplitter` 옆 순수 유틸(빈 의존성 0)로 1개 신설, 임베딩·FTS·답변 프롬프트 3곳이 공유. 과잉 제거 방지(표 구분행 `|---|`·코드펜스 내부 보존)를 단위 테스트로 고정.
 - **부수 효과**: 임베딩 입력 축소로 read-timeout 재발 확률 감소(§10.3 아래 배치 분할과 상승 작용), FTS BM25 통계의 장식 문자 오염 제거.
 - **완료 기준**: 동일 문서 재인덱싱 시 청크 수가 감소하고, 출처 표시·관리자 뷰에는 원문이 그대로 보이며, 코드펜스 내부가 변형되지 않음(테스트로 고정). 답변 프롬프트 토큰이 동일 topK 대비 감소.
+
+**구현**: 신규 순수 유틸 `MarkdownNoiseNormalizer`(코드펜스 내부·표 행 무변경, 장식 줄 전체 제거, 볼드/이탤릭/밑줄 마커만 제거하고 안쪽 텍스트 보존)를 임베딩+FTS 입력(`SearchTextBuilder` 경유)과 답변 프롬프트(`AnswerService.buildAnswerPrompt()` — 맥락 헤더 없이 정규화만) 두 곳에서 공유. 저장·표시 텍스트(`Document.getText()`, 벡터스토어 content, 출처 아코디언·`/admin` 뷰)는 원문 불변. 청크 크기 예산은 `ChunkSplitter.mergeShortSections()`(병합 임계값 비교 — 매 반복 재정규화 대신 누적 정규화-길이 카운터로 O(n²) 방지)와 `enforceMaxChars()`(오버플로 게이트만)에서 정규화 길이로 측정 — `slidingWindow()`류 원문 오프셋 기반 로직(코드펜스/표 경계 스냅 포함)은 그대로 raw 유지(오프셋 매핑 복잡도 회피, 스코프 축소 지점). 전체 565 tests BUILD SUCCESS(회귀 0).
 
 ### 10.2 가중 RRF (Weighted RRF) ✅ 완료 (2026-07-08)
 
@@ -625,7 +653,7 @@ G1~G4 코드/문서 완료. G5는 라우팅 계층 "외부 무선택"을 `LlmCon
 
 **구현**: 신규 `llm/CachingEmbeddingModel`(`EmbeddingModel` 데코레이터, `call(EmbeddingRequest)`만 오버라이드)을 `EmbeddingBeanConfig.embeddingModel()`에서 `TrackingEmbeddingModel` 바깥에 합성(cache → tracking → delegate) — 캐시 히트는 `delegate.call()` 자체를 안 타므로 usage 기록도 자동으로 스킵된다. 부분 히트(일부만 캐시)는 미스분만 모아 한 번에 delegate 배치 호출 후 원래 순서로 병합. 캐시 키는 **모델명만** 사용(정규화 쿼리 텍스트 + 모델명) — 원안의 "+차원"은 제외했다: `EmbeddingModel.dimensions()`가 `OpenAiEmbeddingModel`에서 최초 호출 시 실제 임베딩 서버에 프로브 요청을 보내고 나서야 캐싱되는 지연 호출이라, 빈 생성자에서 이를 즉시 호출하면 기동 시점에 임베딩 서버 의존성이 새로 생긴다(기존엔 없던 의존성) — 캐시가 부팅당 1회 생성되는 인메모리 인스턴스라 모델 변경은 재기동으로 이미 자연 무효화되므로 차원 없이도 충분. Caffeine은 `RateLimitFilter`에서 이미 사용 중이라 신규 의존성 0. `app.search-query-embed-cache-enabled`(기본 true)/`-max-size`(500)/`-ttl-seconds`(600)로 외부화. 인덱싱 호출(청크 텍스트, 대부분 캐시 미스)도 동일 캐시를 지나가지만 사이즈/TTL로 유계이므로 메모리 누수 없음(캐시 이득만 없을 뿐). 단위테스트 5개(캐시 히트 시 delegate 미호출·usage 미기록, 부분 히트 매핑, `embed(Document)` 경유, `dimensions()` 미개입) 추가. 전체 513 tests BUILD SUCCESS(회귀 0).
 
-### 10.4 한국어 FTS 토크나이저 (하이브리드 정확도)
+### 10.4 한국어 FTS 토크나이저 (하이브리드 정확도) ✅ 완료 (2026-07-09)
 
 **현재 상태**: `KeywordSearchRepository`의 `chunk_fts`는 `tokenize='unicode61'` — 공백·구두점만 분리한다. **한국어 조사·복합어를 처리하지 못해** BM25 lexical recall이 영어 대비 크게 낮다. `toMatchQuery()`도 2자 이상 토큰을 OR로 결합할 뿐.
 
@@ -636,6 +664,10 @@ G1~G4 코드/문서 완료. G5는 라우팅 계층 "외부 무선택"을 `LlmCon
 
 **효과**: 하이브리드 한국어 정확 매칭 개선 → **§10.2(가중 RRF)·§10.1(Contextual BM25)과 세트로 하이브리드 기본 활성화(`app.search-hybrid-enabled`) 재검토 가능**.
 **난이도**: 중(trigram, 스키마 재구축 + 재인덱싱 — 이미 `rebuildChunkFtsWithDocTags()`류 경로 존재) / 상(형태소 커스텀 토크나이저, 폐쇄망 바이너리 조달로 사실상 범위 밖).
+
+**구현**: `chunk_fts`의 `tokenize`를 `unicode61` → `trigram`으로 전환(`KeywordSearchRepository.CREATE_CHUNK_FTS_SQL`). 기존 테이블은 PRAGMA로 토크나이저를 노출하지 않으므로 `sqlite_master.sql`의 `CREATE VIRTUAL TABLE` 원문 텍스트에 `'trigram'` 포함 여부로 감지 — 미감지(또는 `doc_tags` 컬럼 부재, 기존 레거시 체크와 통합)면 자동 재구축한다. 재구축은 `INSERT ... SELECT`로 새 테이블에 복사하는데, FTS5는 INSERT 시점에 **대상 테이블의 토크나이저**로 재토큰화하므로(소스 토크나이저와 무관) `doc_tags`/`content`/`keywords`가 손실 없이 trigram으로 이전된다(기존 `doc_tags` 마이그레이션과 달리 재동기화 불필요 — 기존 `rebuildChunkFtsWithDocTags()`를 `rebuildChunkFts(boolean sourceHasDocTags)`로 일반화). `toMatchQuery()`의 최소 토큰 길이를 2→3자로 조정(trigram이 만들 수 있는 최소 단위).
+
+**실측 정정(원안 대비, 2026-07-09 — sqlite3 CLI 3.51로 실제 FTS5 trigram에 직접 질의해 검증)**: trigram이 실제로 제공하는 건 조사 간 임의 등가(예: "문서를"↔"문서가"가 서로 매칭)가 아니라 **부분열 매칭**이다 — 어간이 3글자 이상이면 활용형에 종결어미가 붙어도(예: 질의 "인덱싱"이 본문 "인덱싱됩니다"에 매칭됨, `unicode61`이면 전체 토큰이 달라 매칭 안 됨) 찾아지고, 코드/식별자의 부분 문자열(예: 질의 "ERR45"가 "ERR4521"을 찾음)도 잘 동작한다. 반면 **2글자 한국어 단어("문서", "오류" 등 매우 흔한 단어)는 단독 질의로는 검색이 원천적으로 불가능**하다(trigram 최소 단위 미달, `toMatchQuery()`가 애초에 드롭함) — 하이브리드 RRF의 벡터 축은 이 제약과 무관하게 그대로 동작하므로 완전 검색 실패는 아니지만, 그 질의에 한해 BM25 키워드 축 기여가 0이 된다는 점은 원안이 정량화하지 않았던 트레이드오프라 기록해 둔다. `search_matchesBareStemAgainstInflectedForm`/`toMatchQuery_dropsTermsShorterThanThree`/`init_migratesLegacyUnicode61TableToTrigramPreservingRows` 테스트로 위 세 가지 동작(어간-활용형 매칭, 3자 미만 드롭, 무손실 마이그레이션)을 고정. 전체 568 tests BUILD SUCCESS(회귀 0).
 
 ### 10.5 검토 후 제외 (Phase 7-D 취소, 2026-07-08)
 
@@ -660,8 +692,8 @@ G1~G4 코드/문서 완료. G5는 라우팅 계층 "외부 무선택"을 `LlmCon
 
 **단계 계획**:
 - **Phase 7-A (빠른 승리) ✅ 완료 (2026-07-08)**: §10.2 가중 RRF + §10.3 임베딩 캐시 — 코드 변경 작고 회귀 리스크 최소, 즉시 체감. 이후 큰 작업의 효과를 측정할 baseline 확보.
-- **Phase 7-B (정확도 본편)**: §10.1 Contextual Retrieval — `KeywordExtractor` 파이프라인에 얹어(구조적 맥락 baseline → LLM 강화) 인덱싱 재구성. 정확도 ROI 1위.
-- **Phase 7-C (한국어 최적화)**: §10.4 `trigram` FTS 토크나이저 + §10.2·§10.1과 묶어 하이브리드 기본 활성화 재검토.
+- **Phase 7-B (정확도 본편) ✅ 완료 (2026-07-09)**: §10.1 Contextual Retrieval — `KeywordExtractor` 파이프라인에 얹어(구조적 맥락 baseline → LLM 강화) 인덱싱 재구성. 정확도 ROI 1위.
+- **Phase 7-C (한국어 최적화) ✅ 완료 (2026-07-09)**: §10.4 `trigram` FTS 토크나이저. 하이브리드 기본 활성화(`app.search-hybrid-enabled`) 전환은 별도 후속 판단으로 남김.
 
 **선결 과제(권장)**: 검색 품질을 정량 비교할 **평가 세트**(질문–정답 청크 쌍 소량 + recall@k/nDCG 측정 스크립트)가 있으면 §10.1·§10.2·§10.4의 효과 검증이 크게 쉬워진다. Phase 7-A와 병행 준비를 권장.
 

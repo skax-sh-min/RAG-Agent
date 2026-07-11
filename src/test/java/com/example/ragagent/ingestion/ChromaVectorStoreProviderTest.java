@@ -1,6 +1,7 @@
 package com.example.ragagent.ingestion;
 
 import com.example.ragagent.config.AppProperties;
+import com.example.ragagent.model.MetaKey;
 import com.example.ragagent.service.VectorStoreRegistry;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.DisplayName;
@@ -151,25 +152,64 @@ class ChromaVectorStoreProviderTest {
         assertThat(result.get(1)).isEmpty();
     }
 
-    // ── add(onProgress) default method ───────────────────────────────────
+    // ── add() — manual embed + upsert (§10.1) ────────────────────────────
+
+    private ChromaVectorStoreProvider addProvider(VectorStoreRegistry registry, ChromaApi chromaApi,
+                                                   EmbeddingModel embeddingModel) {
+        when(registry.getStore(any(), any())).thenReturn(mock(VectorStore.class));
+        when(registry.collectionName(any(), any())).thenReturn("u_shared_latest");
+        return provider(registry, chromaApi, embeddingModel, 0.0);
+    }
 
     @Test
-    @DisplayName("add(onProgress): Chroma는 배치 내부 가시성이 없어 0→total 단일 점프만 보고한다")
-    void add_withProgress_reportsSingleJump() {
+    @DisplayName("add(onProgress): 서브배치별 실제 진행률을 보고하고 chromaApi.upsertEmbeddings()로 저장한다")
+    void add_reportsSubBatchProgressAndUpserts() {
         VectorStoreRegistry registry = mock(VectorStoreRegistry.class);
-        VectorStore store = mock(VectorStore.class);
-        when(registry.getStore(any(), any())).thenReturn(store);
+        EmbeddingModel embeddingModel = mock(EmbeddingModel.class);
+        when(embeddingModel.embed(any(List.class))).thenReturn(List.of(new float[]{0.1f}));
+        ChromaApi chromaApi = mock(ChromaApi.class);
 
-        Document doc = Document.builder().id("d1").text("hello").metadata(Map.of()).build();
+        Document doc = Document.builder().id("d1").text("hello")
+                .metadata(Map.of("filename", "f.pdf")).build();
         List<int[]> calls = new java.util.ArrayList<>();
 
-        provider(registry, mock(ChromaApi.class), mock(EmbeddingModel.class), 0.0)
+        addProvider(registry, chromaApi, embeddingModel)
                 .add("owner", "latest", List.of(doc), (done, total) -> calls.add(new int[]{done, total}));
 
-        verify(store).add(List.of(doc));
-        assertThat(calls).hasSize(2);
         assertThat(calls.get(0)).containsExactly(0, 1);
-        assertThat(calls.get(1)).containsExactly(1, 1);
+        assertThat(calls.get(calls.size() - 1)).containsExactly(1, 1);
+
+        ArgumentCaptor<ChromaApi.AddEmbeddingsRequest> captor = ArgumentCaptor.forClass(ChromaApi.AddEmbeddingsRequest.class);
+        verify(chromaApi).upsertEmbeddings(anyString(), anyString(), eq("u_shared_latest"), captor.capture());
+        ChromaApi.AddEmbeddingsRequest req = captor.getValue();
+        assertThat(req.ids()).containsExactly("d1");
+        assertThat(req.documents()).containsExactly("hello");
+        assertThat(req.metadata().get(0)).containsEntry("filename", "f.pdf");
+    }
+
+    @Test
+    @DisplayName("add: 저장 content/metadata는 원문 그대로이고, 임베딩 입력은 맥락+정규화본이며 CHUNK_CONTEXT는 영속에서 제외된다")
+    void add_embedsDerivedTextButPersistsOriginal() {
+        VectorStoreRegistry registry = mock(VectorStoreRegistry.class);
+        EmbeddingModel embeddingModel = mock(EmbeddingModel.class);
+        when(embeddingModel.embed(any(List.class))).thenReturn(List.of(new float[]{0.1f}));
+        ChromaApi chromaApi = mock(ChromaApi.class);
+
+        String original = "**중요**한 내용\n------";
+        Document doc = Document.builder().id("d1").text(original)
+                .metadata(Map.of(MetaKey.CHUNK_CONTEXT, "문서.pdf > 설정"))
+                .build();
+
+        addProvider(registry, chromaApi, embeddingModel).add("owner", "latest", List.of(doc));
+
+        ArgumentCaptor<List> embedCaptor = ArgumentCaptor.forClass(List.class);
+        verify(embeddingModel).embed(embedCaptor.capture());
+        assertThat(embedCaptor.getValue()).containsExactly("문서.pdf > 설정\n\n중요한 내용");
+
+        ArgumentCaptor<ChromaApi.AddEmbeddingsRequest> captor = ArgumentCaptor.forClass(ChromaApi.AddEmbeddingsRequest.class);
+        verify(chromaApi).upsertEmbeddings(anyString(), anyString(), anyString(), captor.capture());
+        assertThat(captor.getValue().documents()).containsExactly(original);
+        assertThat(captor.getValue().metadata().get(0)).doesNotContainKey(MetaKey.CHUNK_CONTEXT);
     }
 
     // ── updateTags ──────────────────────────────────────────────────────
