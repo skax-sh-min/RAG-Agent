@@ -189,16 +189,21 @@ public class PptxImageExtractor {
         addPictureData(pic.getPictureData(), slideNum, imgIdx, docId, imagesDir, paths);
     }
 
-    /** OLE 객체의 내장 미리보기 그림을 저장한다 — 외부 링크 OLE(내장 미리보기 없음)는 조용히 건너뛴다. */
+    /** OLE 객체의 내장 미리보기 그림을 저장한다 — 외부 링크 OLE(내장 미리보기 없음)는 addPictureData()가 조용히 건너뛴다. */
     private void addOlePreview(XSLFObjectShape ole, int slideNum, int[] imgIdx, String docId,
                                 Path imagesDir, List<String> paths) throws IOException {
-        XSLFPictureData pd = ole.getPictureData();
-        if (pd == null) return;
-        addPictureData(pd, slideNum, imgIdx, docId, imagesDir, paths);
+        addPictureData(ole.getPictureData(), slideNum, imgIdx, docId, imagesDir, paths);
     }
 
+    /**
+     * {@code pd}는 외부 링크(embed가 아닌 {@code r:link}) 픽처·OLE에서 null일 수 있다
+     * ({@code XSLFPictureShape.getPictureData()}는 {@code getBlipId() == null}이면 null 반환) —
+     * 저장할 로컬 바이트가 없으므로 조용히 건너뛴다. 실사진·OLE 미리보기·차트 fallback 세 호출
+     * 경로가 모두 이 메서드를 거치므로 가드를 한 곳에 두면 셋 다 동일하게 보호된다.
+     */
     private void addPictureData(XSLFPictureData pd, int slideNum, int[] imgIdx, String docId,
                                  Path imagesDir, List<String> paths) throws IOException {
+        if (pd == null) return;
         PictureData.PictureType type = pd.getType();
         // PictureType.extension already includes the leading dot (e.g. ".png") — strip it so
         // "." + ext below doesn't double up into "img1..png".

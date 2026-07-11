@@ -30,8 +30,12 @@ import java.awt.geom.Rectangle2D;
 import java.awt.image.BufferedImage;
 import java.io.IOException;
 import java.io.OutputStream;
+import java.net.URI;
+import java.nio.file.FileSystem;
+import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Consumer;
@@ -99,6 +103,46 @@ class PptxImageExtractorTest {
             try (OutputStream out = Files.newOutputStream(pptxPath)) {
                 pptx.write(out);
             }
+        }
+    }
+
+    /**
+     * POI의 공개 API(createPicture(PictureData))는 항상 r:embed 관계만 만들 수 있어 외부 링크
+     * 사진을 만들 방법이 없다 — 슬라이드 XML을 직접 조작해 {@code r:embed} 대신
+     * {@code r:link}(TargetMode="External")를 쓰는 {@code <p:pic>}를 주입한다. 이러면
+     * {@code XSLFPictureShape.getPictureData()}가 null을 반환한다(POI 소스 확인:
+     * getBlipId()==null이면 embed 관계가 없다는 뜻이라 조기 반환).
+     */
+    private static void writeExternalLinkedPicturePptx(Path target) throws IOException {
+        Files.deleteIfExists(target);
+        try (XMLSlideShow pptx = new XMLSlideShow()) {
+            pptx.createSlide();
+            try (OutputStream out = Files.newOutputStream(target)) {
+                pptx.write(out);
+            }
+        }
+
+        Map<String, String> env = new HashMap<>();
+        env.put("create", "false");
+        URI uri = URI.create("jar:" + target.toUri());
+        try (FileSystem zipfs = FileSystems.newFileSystem(uri, env)) {
+            Path slideRelsPath = zipfs.getPath("/ppt/slides/_rels/slide1.xml.rels");
+            String newRels = Files.readString(slideRelsPath).replace("</Relationships>",
+                      "<Relationship Id=\"rIdExtPic\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/image\" "
+                    + "Target=\"https://example.com/photo.png\" TargetMode=\"External\"/></Relationships>");
+            Files.writeString(zipfs.getPath("/ppt/slides/_rels/slide1.xml.rels"), newRels);
+
+            Path slidePath = zipfs.getPath("/ppt/slides/slide1.xml");
+            String pic =
+                  "<p:pic>"
+                + "<p:nvPicPr><p:cNvPr id=\"10\" name=\"ExternalPic\"/><p:cNvPicPr/><p:nvPr/></p:nvPicPr>"
+                + "<p:blipFill><a:blip xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\" r:link=\"rIdExtPic\"/>"
+                + "<a:stretch><a:fillRect/></a:stretch></p:blipFill>"
+                + "<p:spPr><a:xfrm><a:off x=\"914400\" y=\"914400\"/><a:ext cx=\"1828800\" cy=\"1828800\"/></a:xfrm>"
+                + "<a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom></p:spPr>"
+                + "</p:pic>";
+            Files.writeString(zipfs.getPath("/ppt/slides/slide1.xml"),
+                    Files.readString(slidePath).replace("</p:spTree>", pic + "</p:spTree>"));
         }
     }
 
@@ -437,6 +481,19 @@ class PptxImageExtractorTest {
         } finally {
             deleteRecursively(imagesDir2);
         }
+    }
+
+    @Test
+    @DisplayName("외부 링크(embed 아닌) 사진은 로컬에 저장할 바이트가 없어 NPE 없이 조용히 건너뛴다")
+    void externallyLinkedPictureIsSkippedWithoutThrowing() throws IOException {
+        // XSLFPictureShape.getPictureData()는 getBlipId()==null(embed 관계 없음, 링크만 있음)이면
+        // null을 반환한다 — addPictureData()에 null 가드가 없던 예전 코드였다면 pd.getType()에서
+        // NPE가 나 문서 인덱싱 전체가 실패했을 것이다.
+        writeExternalLinkedPicturePptx(pptxPath);
+
+        Map<Integer, List<String>> result = extractor.extract(pptxPath, "doc1", imagesDir);
+
+        assertThat(result).doesNotContainKey(1); // 저장할 바이트가 없으므로 이미지 목록에 나타나지 않음
     }
 
     private static String fileNameOf(String relPath) {
