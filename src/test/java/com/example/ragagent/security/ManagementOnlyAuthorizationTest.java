@@ -213,4 +213,38 @@ class ManagementOnlyAuthorizationTest {
         mvc.perform(get("/admin").session(session))
                 .andExpect(status().isOk());
     }
+
+    @Test
+    @DisplayName("로그인 후 POST /logout — 세션 무효화 + /login?logout 리다이렉트, 같은 세션으로 GET /admin 재요청은 다시 거부")
+    void adminLogout_invalidatesSession_thenAdminAccessDeniedAgain() throws Exception {
+        when(userDetailsService.loadUserByUsername("admin@local")).thenReturn(adminUser());
+        when(passwordEncoder.matches(anyString(), anyString())).thenReturn(true);
+
+        var loginResult = mvc.perform(post("/login")
+                        .param("username", "admin@local")
+                        .param("password", "whatever")
+                        .with(csrf()))
+                .andExpect(status().is3xxRedirection())
+                .andReturn();
+
+        MockHttpSession session = (MockHttpSession) loginResult.getRequest().getSession(false);
+        org.assertj.core.api.Assertions.assertThat(session).isNotNull();
+
+        // sanity check — still admin right before logout
+        mvc.perform(get("/admin").session(session)).andExpect(status().isOk());
+
+        mvc.perform(post("/logout").session(session).with(csrf()))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(result -> {
+                    String loc = result.getResponse().getRedirectedUrl();
+                    org.assertj.core.api.Assertions.assertThat(loc).isEqualTo("/login?logout");
+                });
+
+        org.assertj.core.api.Assertions.assertThat(session.isInvalid())
+                .as("POST /logout must invalidate the session (invalidateHttpSession(true))")
+                .isTrue();
+
+        mvc.perform(get("/admin").session(session))
+                .andExpect(status().is3xxRedirection());
+    }
 }
