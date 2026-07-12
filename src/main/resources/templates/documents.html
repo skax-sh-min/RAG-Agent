@@ -12,7 +12,12 @@
     <div class="container-fluid py-4" style="max-width: 1500px;">
 
         <!-- ── Upload card ───────────────────────────────────────────── -->
-        <div class="card mb-4">
+        <!-- CSS-hidden (not th:if) for non-admins: the drop-zone/file-input JS below assumes
+             these elements always exist (document.getElementById(...).addEventListener(...) with
+             no null guard) — removing them from the DOM would throw on page load. Visually and
+             interactively this is indistinguishable from absent; the write endpoint itself is
+             already server-side gated (SecurityConfig hasRole("ADMIN")) regardless. -->
+        <div class="card mb-4" th:classappend="${isAdmin} ? '' : ' d-none'">
             <div class="card-header fw-semibold">
                 <i class="bi bi-cloud-upload me-1"></i>
                 <span th:text="#{doc.upload.title}">Document Upload</span>
@@ -426,6 +431,10 @@
             });
 
             xhr.open('POST', '/ui/documents/upload');
+            // §6.17 — the only mutating call in this file that didn't already go through
+            // getCsrfHeaders() (cancelIndexingTask() below already does). No-op when CSRF is
+            // inactive (plain no-auth mode), since getCsrfHeaders() returns {} there.
+            Object.entries(getCsrfHeaders()).forEach(([name, value]) => xhr.setRequestHeader(name, value));
             xhr.send(form);
         });
     }

@@ -40,6 +40,9 @@ RAG Agent 시스템 배포·설정·운영 가이드입니다.
    - 9.1 [git 훅 설치](#91-git-훅-설치)
    - 9.2 [입력 검증 동작](#92-입력-검증-동작)
    - 9.3 [응답 크기 제한](#93-응답-크기-제한)
+   - 9.4 [인증 토글 (no-auth 모드)](#94-인증-토글-no-auth-모드)
+      - 9.4.1 [평문 no-auth 모드](#941-평문-no-auth-모드)
+      - 9.4.2 [관리 전용 인증 (management-only)](#942-관리-전용-인증-management-only)
 10. [운영 체크리스트](#10-운영-체크리스트)
 
 ---
@@ -370,6 +373,7 @@ LLM_ROUTING_MODE=QUALITY_FIRST
 | 속성 | 기본값 | 설명 |
 |------|--------|------|
 | `app.auth.enabled` | `true` | `false`로 설정하면 로그인 없이 실행 (no-auth 모드). `AUTH_ENABLED` 환경변수로도 주입 가능. 자세한 내용은 [§9.4](#94-인증-토글-no-auth-모드) 참조 |
+| `app.auth.management-only` | `false` | `app.auth.enabled=false`일 때만 의미 있는 서브모드. `true`이면 채팅·조회는 게스트에 열어두고 `/admin/**`·문서 관리 쓰기만 로그인을 요구한다. `AUTH_MANAGEMENT_ONLY` 환경변수로도 주입 가능. `app.auth.enabled=true`와 동시 설정 시 자동으로 `false`로 정규화됨. 자세한 내용은 [§9.4.2](#942-관리-전용-인증-management-only) 참조 |
 
 #### 서버 및 기타
 
@@ -1344,8 +1348,10 @@ CPU/메모리 제약이 있는 환경에서는 `INDEXING_MAX_FILES`와 `INDEXING
 
 ## 7. 벡터 스토어 관리
 
-`/admin` 페이지(네비게이션 라벨: **벡터 스토어 관리**)는 인증 모드(`app.auth.enabled=true`)에서는 로그인된 사용자만 접근 가능합니다.  
-no-auth 모드(`false`)에서는 `/admin/**` 경로에 자동으로 관리자 계정이 주입됩니다.
+`/admin` 페이지(네비게이션 라벨: **벡터 스토어 관리**)의 접근 제어는 인증 모드에 따라 다릅니다.  
+전체 인증 모드(`app.auth.enabled=true`)에서는 로그인된 사용자만 접근 가능합니다.  
+평문 no-auth 모드(`app.auth.enabled=false`, `app.auth.management-only=false`)에서는 `/admin/**` 경로에 자동으로 관리자 계정이 주입됩니다.  
+관리 전용 인증 모드(`app.auth.management-only=true`)에서는 실제 로그인(`/login`)이 필요합니다 — 자세한 내용은 [§9.4.2](#942-관리-전용-인증-management-only) 참조.
 
 ### 7.1 주요 기능
 
@@ -1375,7 +1381,7 @@ no-auth 모드(`false`)에서는 `/admin/**` 경로에 자동으로 관리자 �
 - **임베딩 미갱신 (청크 편집)**: 청크 텍스트를 편집 패널에서 수정해도 벡터 임베딩은 재계산되지 않습니다. 임베딩까지 갱신하려면 MD 파일 수정 후 ↺ 재인덱싱을 사용하세요.
 - **MD 재인덱싱 대상**: DOCX·TXT·PPTX·PDF(스캔 아님) 업로드 시 생성된 `_corrected.md` 파일이 없으면 `{docId}.md` 원본으로 fallback됩니다. 스캔 PDF처럼 MD 파일 자체가 없는 문서는 재인덱싱 불가 (에러 메시지 표시).
 - **청크 단독 삭제 vs. 문서 삭제**: 청크를 개별 삭제해도 SQLite `doc_registry` 테이블의 레지스트리 항목은 남습니다. 문서 전체 제거는 Documents 페이지 또는 `DELETE /api/v1/documents/{docId}`를 사용하세요.
-- **접근 제어**: `app.auth.enabled=true`(기본)이면 `/admin`도 로그인 필요. no-auth 모드에서는 누구나 `/admin`에 접근 가능하므로 내부망 또는 리버스 프록시 수준에서 경로를 제한하는 것을 권장합니다.
+- **접근 제어**: `app.auth.enabled=true`(기본)이면 `/admin`도 로그인 필요. 평문 no-auth 모드에서는 누구나 `/admin`에 접근 가능하므로 내부망 또는 리버스 프록시 수준에서 경로를 제한하거나, [§9.4.2 관리 전용 인증](#942-관리-전용-인증-management-only)으로 전환해 애플리케이션 레벨에서 잠그는 것을 권장합니다.
 
 ### 7.4 백엔드별 표시 차이 (레이아웃·기능은 동일)
 
@@ -1653,9 +1659,17 @@ LLM 응답이 20,000자를 초과하면 자동으로 잘리고 말줄임 메시�
 
 ### 9.4 인증 토글 (no-auth 모드)
 
-`app.auth.enabled=false`로 설정하면 로그인 없이 사용할 수 있습니다 (로컬·단일 사용자 환경에 적합).
+`app.auth.enabled=false`로 설정하면 로그인 없이 사용할 수 있습니다 (로컬·단일 사용자 환경에 적합). 여기에는 두 서브모드가 있습니다 — **평문 no-auth**(기본, 아래 §9.4.1)는 모든 경로가 열려 있고, **관리 전용 인증**(§6.17 B안, 아래 §9.4.2)은 채팅·조회는 열어두되 문서 관리 쓰기와 `/admin`만 로그인을 요구합니다.
 
-**no-auth 모드 동작**:
+| 모드 | `app.auth.enabled` | `app.auth.management-only` | 요약 |
+|------|--------------------|-----------------------------|------|
+| 전체 인증 | `true` | (무의미 — `authSafe()`가 자동으로 `false` 정규화) | 모든 경로 로그인 필요 |
+| 평문 no-auth (기본) | `false` | `false` | 모든 경로 게스트 자동 인증, `/admin`도 자동 |
+| 관리 전용 인증 | `false` | `true` | 채팅·조회는 게스트 자동 인증, 문서 관리 쓰기·`/admin`만 로그인 필요 |
+
+#### 9.4.1 평문 no-auth 모드
+
+**동작**:
 
 | 항목 | 동작 |
 |------|------|
@@ -1677,12 +1691,47 @@ AUTH_ENABLED=false
 app.auth.enabled=false
 ```
 
-**인증 재활성화**:
-1. `app.auth.enabled=true`로 변경 후 재시작
-2. `/setup`에서 생성한 이메일·비밀번호로 `/login` 접속
-3. 기존 문서·대화 이력은 userId 기반 파티셔닝으로 그대로 유지
+> **주의**: 이 모드에서는 모든 사용자가 guest 파티션을 공유하고 `/admin`도 자동 인증됩니다. 문서 관리·`/admin`만이라도 잠그려면 아래 §9.4.2를 사용하세요.
 
-> **주의**: no-auth 모드에서는 모든 사용자가 guest 파티션을 공유합니다. 멀티유저 환경에서는 반드시 `app.auth.enabled=true`를 사용하세요.
+#### 9.4.2 관리 전용 인증 (management-only)
+
+`app.auth.enabled=false` + `app.auth.management-only=true`. 공용/외부 노출 채팅 데모처럼 **채팅·문서 조회는 로그인 없이 열어두되, 문서 업로드·삭제·동기화(웹 UI)와 `/admin/**`만 실제 로그인을 요구**하고 싶을 때 사용합니다. 재빌드 없이 기존 no-auth 배포에 바로 얹을 수 있는 서브모드입니다(§6.17 B안).
+
+**설정 예시**:
+```env
+# .env
+AUTH_ENABLED=false
+AUTH_MANAGEMENT_ONLY=true
+```
+
+**동작**:
+
+| 항목 | 동작 |
+|------|------|
+| CSRF 보호 | **활성화**(`CookieCsrfTokenRepository`) — 평문 no-auth와 달리 로그인 세션을 지켜야 하므로 `formLogin()`을 쓸 수 있게 CSRF도 함께 켠다 |
+| 세션 관리 | `IF_REQUIRED` — 실제 로그인이 발생할 때만 세션 생성(게스트 트래픽은 세션 비용 없음) |
+| 첫 접속 (admin DB 없음) | `/setup` 페이지로 리다이렉트 (평문 no-auth와 동일) |
+| `/setup` | 관리자 이메일·비밀번호 입력 → DB에 `ROLE_ADMIN` 계정 생성. **생성 직후 자동 로그인은 되지 않음** — `/login`으로 별도 로그인 필요 |
+| 채팅(`/`, `/chat/**`) | 로그인 없이 게스트 자동 인증 (평문 no-auth와 동일) |
+| `GET /documents`, `GET /ui/documents/list`, `GET /api/v1/documents` | 로그인 없이 조회 가능 |
+| 문서 관리 쓰기(업로드, 업로드취소, 삭제, 태그 수정·편집) | **로그인 필요** — 비로그인 시 `/login` 리다이렉트, `ROLE_ADMIN` 아닌 로그인은 403 |
+| `/admin/**` | **로그인 필요** — 게스트/첫 관리자 자동 주입 없음(평문 no-auth와의 핵심 차이) |
+| `/api/v1/documents/**` REST 엔드포인트 | **의도적으로 그대로 열어둠 + CSRF 예외** — `POST /api/v1/documents/sync` 등 curl 자동화([§6.2](#62-문서-버전-관리) 참조)가 그대로 인증 없이 동작 |
+| Web UI 게스트 화면 | 업로드 카드·삭제 버튼·Admin 내비가 숨겨짐(관리자로 로그인해야 노출) |
+| 로그아웃 버튼 | 관리자로 로그인했을 때만 노출 |
+
+**로그인 → 관리 흐름**:
+1. `/setup`에서 관리자 계정 생성 (최초 1회, 평문 no-auth와 동일)
+2. `/login`에서 방금 만든 이메일·비밀번호로 로그인
+3. 로그인 세션이 유지되는 동안 `/documents`에서 업로드·삭제, `/admin`에서 청크 관리 가능
+4. 다른 탭/시크릿 창은 여전히 게스트 — 관리 기능은 로그인한 브라우저 세션에서만 보임
+
+> **주의**: 평문 no-auth와 마찬가지로 채팅·문서 조회는 guest 파티션을 공유합니다. 이 모드는 "누가 관리할 수 있는가"만 잠그며 사용자별 데이터 격리는 제공하지 않습니다 — 멀티유저 격리가 필요하면 전체 인증 모드(`app.auth.enabled=true`)를 사용하세요.
+
+**인증 재활성화 (전체 인증 모드로 전환)**:
+1. `app.auth.enabled=true`로 변경 후 재시작 (`app.auth.management-only`는 자동으로 무시됨)
+2. `/setup`(또는 관리 전용 인증에서 이미 만든) 계정의 이메일·비밀번호로 `/login` 접속
+3. 기존 문서·대화 이력은 userId 기반 파티셔닝으로 그대로 유지
 
 ---
 
@@ -1693,7 +1742,9 @@ app.auth.enabled=false
 **초기 설정**:
 - [ ] `sh scripts/install-hooks.sh` — pre-commit 훅 설치 (팀원 각자 1회)
 - [ ] 인증 모드 설정 확인 — `.env`의 `AUTH_ENABLED` 또는 `application.properties`의 `app.auth.enabled` (기본 `true` = 로그인 필요 / `false` = no-auth 모드)
+- [ ] (no-auth 모드) 문서 관리·`/admin`도 로그인 없이 열어둘지, 관리 전용으로 잠글지 결정 — 잠그려면 `AUTH_MANAGEMENT_ONLY=true` (§9.4.2)
 - [ ] (no-auth 모드) 첫 접속 시 `/setup` 페이지에서 admin 계정 생성 완료 확인
+- [ ] (관리 전용 인증 모드) `/setup` 계정 생성 후 `/login`으로 별도 로그인 확인(자동 로그인되지 않음)
 - [ ] (auth 모드) `/signup`에서 첫 계정 생성 후 `/login` 접속 확인
 
 **HTTPS (인터넷 공개 배포 시)**:
@@ -1721,7 +1772,10 @@ app.auth.enabled=false
 - [ ] 확장자 불일치 파일 업로드 → 422 응답 확인
 - [ ] 2,001자 이상 질문 → 400 응답 확인
 - [ ] (auth 모드) 미로그인 상태에서 `/` 접속 → `/login` 리다이렉트 확인
-- [ ] (no-auth 모드) `/admin` 경로에 대한 네트워크 접근 제한 적용 여부 확인
+- [ ] (평문 no-auth 모드) `/admin` 경로에 대한 네트워크 접근 제한 적용 여부 확인
+- [ ] (관리 전용 인증 모드) 게스트로 `/admin` 및 문서 업로드 시도 → `/login` 리다이렉트 확인, 게스트 화면에 업로드 카드 미노출 확인
+- [ ] (관리 전용 인증 모드) 관리자 로그인 후 `/admin`·문서 업로드/삭제 정상 동작 + 다른 페이지 이동 후에도 로그인 상태 유지 확인
+- [ ] (관리 전용 인증 모드) `curl -X POST ".../api/v1/documents/sync"` 무인증 호출 정상 동작 확인(curl 자동화 보존)
 
 **LLM 및 운영**:
 - [ ] `/llm-usage` — 프로바이더 카드 정상(초록) 확인

@@ -75,7 +75,7 @@
                     <span th:text="#{nav.llm_usage}">LLM Usage</span>
                 </a>
             </li>
-            <li class="nav-item">
+            <li class="nav-item" th:if="${isAdmin}">
                 <a class="nav-link"
                    th:href="@{/admin}"
                    th:classappend="${#strings.startsWith(requestURI, '/admin')} ? ' active'">
@@ -111,13 +111,17 @@
                 <i class="bi bi-moon-fill" data-theme-icon="dark"></i>
             </button>
 
-            <!-- User info (authenticated) -->
-            <div sec:authorize="isAuthenticated()" class="d-flex align-items-center gap-2">
+            <!-- User info (authenticated) — in management-only mode, NoAuthAutoLoginFilter's
+                 GUEST_PRINCIPAL is itself a real (non-anonymous) authenticated principal, so
+                 sec:authorize="isAuthenticated()" alone can't tell guest apart from a real admin
+                 login; the extra th:if does that (true unchanged in full-auth/plain no-auth). -->
+            <div sec:authorize="isAuthenticated()" th:if="${!managementOnly or isAdmin}"
+                 class="d-flex align-items-center gap-2">
                 <span class="text-light small">
                     <i class="bi bi-person-circle me-1"></i>
                     <span sec:authentication="principal.displayName">User</span>
                 </span>
-                <form th:if="${authEnabled}" th:action="@{/logout}" method="post" class="mb-0">
+                <form th:if="${authEnabled or (managementOnly and isAdmin)}" th:action="@{/logout}" method="post" class="mb-0">
                     <input type="hidden" th:name="${_csrf != null ? _csrf.parameterName : '_csrf'}"
                            th:value="${_csrf != null ? _csrf.token : ''}"/>
                     <button type="submit" class="btn btn-sm btn-outline-light border-0 py-0"
@@ -127,8 +131,15 @@
                     </button>
                 </form>
             </div>
-            <!-- Guest (anonymous) — only shown when auth is enabled -->
+            <!-- Guest (anonymous) — full-auth mode only; sec:authorize="isAnonymous()" never
+                 fires in either no-auth submode (GUEST_PRINCIPAL is never Spring-anonymous). -->
             <span th:if="${authEnabled}" sec:authorize="isAnonymous()" class="text-secondary small">
+                <i class="bi bi-person-circle me-1"></i>
+                <a th:href="@{/login}" class="text-secondary text-decoration-none"
+                   th:text="#{nav.login}">Login</a>
+            </span>
+            <!-- Guest in management-only mode — separate block since isAnonymous() never applies. -->
+            <span th:if="${managementOnly and !isAdmin}" class="text-secondary small">
                 <i class="bi bi-person-circle me-1"></i>
                 <a th:href="@{/login}" class="text-secondary text-decoration-none"
                    th:text="#{nav.login}">Login</a>

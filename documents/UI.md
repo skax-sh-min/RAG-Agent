@@ -75,6 +75,8 @@ src/main/resources/
 | DELETE | `/ui/documents/{docId}` | `200` | 문서 삭제 |
 | GET | `/ui/documents/list` | `fragments/doc-table-body` | 문서 목록 새로고침 |
 
+> **관리 전용 인증 모드**(`app.auth.management-only=true`, §6.17 B안)에서는 `POST /ui/documents/upload`, `POST /ui/documents/progress/*/cancel`, `DELETE /ui/documents/{docId}`, `PATCH /ui/documents/{id}/tags`, `GET /ui/documents/{id}/tags/edit`가 `hasRole("ADMIN")`로 게이트된다 — 비로그인은 `/login` 리다이렉트, 관리자 아닌 로그인은 403. `GET /documents`·`GET /ui/documents/list`·태그 조회는 게스트에게 그대로 열려 있다. 자세한 내용은 [OPERATOR_MANUAL.md §9.4.2](OPERATOR_MANUAL.md#942-관리-전용-인증-management-only) 참고.
+
 ### 3.3 운영 / LLM 사용량 (OperationsController)
 
 | Method | Path | 반환 | 설명 |
@@ -87,7 +89,7 @@ REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — �
 
 ### 3.4 벡터 스토어 관리 (AdminController)
 
-`app.auth.enabled=true`에선 로그인 필요, no-auth 모드에선 `/admin/**`에 관리자 자동 주입. **chroma·sqlite-vec 두 백엔드 모두** 동작하며, sqlite-vec에선 "collection" 식별자가 version 문자열이다.
+접근 제어는 인증 모드에 따라 다르다: `app.auth.enabled=true`(전체 인증)면 로그인 필요, 평문 no-auth(`app.auth.enabled=false`, `app.auth.management-only=false`)면 `/admin/**`에 관리자 자동 주입, 관리 전용 인증(`app.auth.management-only=true`, §6.17 B안)이면 게스트 자동 주입 없이 실제 로그인이 필요하다. **chroma·sqlite-vec 두 백엔드 모두** 동작하며, sqlite-vec에선 "collection" 식별자가 version 문자열이다.
 
 | Method | Path | 반환 | 설명 |
 |--------|------|------|------|
@@ -104,11 +106,11 @@ REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — �
 
 | Method | Path | 반환 | 설명 |
 |--------|------|------|------|
-| GET | `/login` | `auth/login.html` | 로그인 페이지 (`app.auth.enabled=true` 시 활성) |
+| GET | `/login` | `auth/login.html` | 로그인 페이지 — `app.auth.enabled=true`(전체 인증) 또는 `app.auth.management-only=true`(관리 전용 인증, §6.17 B안)일 때 활성. 그 외(평문 no-auth)는 `redirect:/` |
 | GET | `/signup` | `auth/signup.html` | 회원가입 페이지 |
 | POST | `/signup` | redirect `/` 또는 오류 | 회원가입 처리 (성공 시 자동 로그인) |
-| GET | `/setup` | `auth/setup.html` | 관리자 계정 초기 생성 페이지 (`app.auth.enabled=false` + DB에 admin 없을 때만) |
-| POST | `/setup` | redirect `/` 또는 오류 | 관리자 계정 생성 처리 |
+| GET | `/setup` | `auth/setup.html` | 관리자 계정 초기 생성 페이지 (`app.auth.enabled=false` + DB에 admin 없을 때만 — management-only 서브모드 포함) |
+| POST | `/setup` | redirect `/` 또는 오류 | 관리자 계정 생성 처리. management-only 모드에서는 생성 후 자동 로그인되지 않음 — `/login`에서 별도 로그인 필요 |
 
 ---
 

@@ -31,6 +31,11 @@
                  th:text="#{__${error}__}">오류가 발생했습니다.</div>
 
             <form th:action="@{/setup}" method="post" novalidate>
+                <!-- Reachable in both no-auth submodes; CSRF is only active in management-only mode
+                     (§6.17 B안), so this must stay null-safe — unlike signup.html, which is only ever
+                     reachable when CSRF is guaranteed active. -->
+                <input type="hidden" th:name="${_csrf != null ? _csrf.parameterName : '_csrf'}"
+                       th:value="${_csrf != null ? _csrf.token : ''}"/>
 
                 <div class="mb-3">
                     <label for="email" class="form-label small fw-medium" th:text="#{auth.field.email}">이메일</label>

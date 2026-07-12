@@ -99,7 +99,12 @@ public record AppProperties(
     ) {}
 
     public record AuthConfig(
-            boolean enabled          // false → no-auth mode (guest/admin auto-login)
+            boolean enabled,         // false → no-auth mode (guest/admin auto-login)
+            boolean managementOnly   // §6.17 B안 — only meaningful when enabled=false; authSafe() normalizes
+                                     // this to false whenever enabled=true, so it's the only place that rule
+                                     // needs to be known. true → /admin/** + document-write UI require a real
+                                     // login (NoAuthAutoLoginFilter/SecurityConfig), everything else stays
+                                     // guest-auto-authenticated exactly like plain no-auth mode.
     ) {}
 
     /** 벡터 스토어 백엔드 선택. {@code type}: chroma (기본값) | sqlite-vec. */
@@ -275,8 +280,11 @@ public record AppProperties(
     }
 
     public AuthConfig authSafe() {
-        if (auth == null) return new AuthConfig(true);
-        return auth;
+        if (auth == null) return new AuthConfig(true, false);
+        // managementOnly is only meaningful when auth is disabled — normalize here so every
+        // downstream consumer (SecurityConfig, NoAuthAutoLoginFilter, GlobalModelAdvice, ...)
+        // can trust authSafe().managementOnly() directly without re-deriving this rule.
+        return new AuthConfig(auth.enabled(), !auth.enabled() && auth.managementOnly());
     }
 
     /** Vector store backend, defaulting to {@code chroma}. (Bean wiring uses raw @ConditionalOnProperty.) */

@@ -21,6 +21,14 @@ class AppPropertiesTest {
                 sseIdleTimeoutSeconds, null, null, null, null, null, null);
     }
 
+    private static AppProperties withAuth(AppProperties.AuthConfig auth) {
+        return new AppProperties(
+                "./data", 2, 800, 100, 100, 7, 0.0, true, 0, false,
+                true, false, 3, null,
+                null, null, null, null, null, null, null, auth, null, null, null,
+                null, null, null, null, null, null, null, null);
+    }
+
     @Test
     @DisplayName("sseTimeoutMs — 미설정(null) 시 3600초(3_600_000ms) 기본값 사용")
     void sseTimeoutMs_nullDefaultsTo3600Seconds() {
@@ -59,5 +67,43 @@ class AppPropertiesTest {
     void sseIdleTimeoutMs_positiveValueIsRespected() {
         assertThat(withSseTimeouts(null, 30).sseIdleTimeoutMs()).isEqualTo(30_000L);
         assertThat(withSseTimeouts(null, 300).sseIdleTimeoutMs()).isEqualTo(300_000L);
+    }
+
+    // ── authSafe() — §6.17 B안 ──────────────────────────────────────────────
+
+    @Test
+    @DisplayName("authSafe — auth==null 시 기본값(enabled=true, managementOnly=false)")
+    void authSafe_nullAuth_defaultsToFullAuth() {
+        AppProperties.AuthConfig cfg = withAuth(null).authSafe();
+
+        assertThat(cfg.enabled()).isTrue();
+        assertThat(cfg.managementOnly()).isFalse();
+    }
+
+    @Test
+    @DisplayName("authSafe — enabled=false, managementOnly=true는 그대로 통과")
+    void authSafe_managementOnlyPassesThrough() {
+        AppProperties.AuthConfig cfg = withAuth(new AppProperties.AuthConfig(false, true)).authSafe();
+
+        assertThat(cfg.enabled()).isFalse();
+        assertThat(cfg.managementOnly()).isTrue();
+    }
+
+    @Test
+    @DisplayName("authSafe — enabled=true인데 managementOnly=true(오설정)는 managementOnly=false로 정규화")
+    void authSafe_misconfiguredEnabledAndManagementOnly_normalizesManagementOnlyToFalse() {
+        AppProperties.AuthConfig cfg = withAuth(new AppProperties.AuthConfig(true, true)).authSafe();
+
+        assertThat(cfg.enabled()).isTrue();
+        assertThat(cfg.managementOnly()).isFalse();
+    }
+
+    @Test
+    @DisplayName("authSafe — enabled=false, managementOnly=false는 그대로 통과(plain no-auth)")
+    void authSafe_plainNoAuthPassesThrough() {
+        AppProperties.AuthConfig cfg = withAuth(new AppProperties.AuthConfig(false, false)).authSafe();
+
+        assertThat(cfg.enabled()).isFalse();
+        assertThat(cfg.managementOnly()).isFalse();
     }
 }
