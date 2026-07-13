@@ -82,7 +82,7 @@ class DocumentIndexerTest {
         when(indexing.keywordTimeoutSeconds()).thenReturn(5);
         when(indexing.maxConcurrentFiles()).thenReturn(2);
         when(props.indexingSafe()).thenReturn(indexing);
-        when(props.pptxImageSafe()).thenReturn(new AppProperties.PptxShapeExtractionConfig(30.0, 15.0));
+        when(props.pptxImageSafe()).thenReturn(new AppProperties.PptxShapeExtractionConfig(30.0, 15.0, true));
 
         // Stub VectorStoreFacade
         vectorStore = mock(VectorStoreFacade.class);

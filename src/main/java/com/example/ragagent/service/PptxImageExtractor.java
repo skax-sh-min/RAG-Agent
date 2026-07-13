@@ -71,6 +71,13 @@ import java.util.Set;
  * {@link XSLFTextBox}es are never rasterized when empty — they're just empty text containers, not
  * drawn shapes.
  *
+ * <b>{@code app.pptx-image.merge-annotated-pictures}</b> ({@code true} by default) toggles the
+ * paragraph above: {@code false} disables proximity-based merging for pictures entirely — a
+ * top-level picture always extracts verbatim, and only pictures the author actually grouped in
+ * PowerPoint (nested inside a real {@link XSLFGroupShape}, never reaching the top-level shape
+ * dispatch below) still merge with their group-mates, since that is POI's own object model and is
+ * unaffected by this flag either way.
+ *
  * A minimum bounding-box dimension ({@code app.pptx-image.min-shape-dimension-pt}) filters out
  * trivial icons/dividers before they can seed a cluster. Rendering failures are skipped silently
  * (graceful degradation, like the EMF/WMF converters) rather than failing the whole extraction.
@@ -98,11 +105,13 @@ public class PptxImageExtractor {
 
     private final double minShapeDimensionPt;
     private final double clusterProximityPaddingPt;
+    private final boolean mergeAnnotatedPictures;
 
     public PptxImageExtractor(AppProperties props) {
         AppProperties.PptxShapeExtractionConfig config = props.pptxImageSafe();
         this.minShapeDimensionPt = config.minShapeDimensionPt();
         this.clusterProximityPaddingPt = config.clusterProximityPaddingPt();
+        this.mergeAnnotatedPictures = config.mergeAnnotatedPictures();
     }
 
     private enum ShapeRole { SEED, CANDIDATE, NOT_ELIGIBLE }
@@ -154,10 +163,19 @@ public class PptxImageExtractor {
 
         for (XSLFShape shape : slide.getShapes()) {
             if (shape instanceof XSLFPictureShape pic) {
-                pictures.add(pic);
-                // Never a seed on its own — a picture with no nearby annotation shape must not
-                // spontaneously pull in unrelated nearby shapes into a merge.
-                clusterable.add(new Clusterable(pic, false));
+                if (mergeAnnotatedPictures) {
+                    pictures.add(pic);
+                    // Never a seed on its own — a picture with no nearby annotation shape must
+                    // not spontaneously pull in unrelated nearby shapes into a merge.
+                    clusterable.add(new Clusterable(pic, false));
+                } else {
+                    // app.pptx-image.merge-annotated-pictures=false: never join proximity
+                    // clustering — a top-level picture always extracts verbatim. A picture that
+                    // is genuinely grouped with other shapes in PowerPoint never reaches this
+                    // branch at all (it's nested inside the XSLFGroupShape below, not a top-level
+                    // shape), so real author-made groups still merge either way.
+                    addPicture(pic, slideNum, imgIdx, imageId, imagesDir, paths);
+                }
             } else if (shape instanceof XSLFObjectShape ole) {
                 // OLE embed: always carries its own preview picture (that's how OOXML lets a
                 // viewer render it without running the source app) — save it directly, no

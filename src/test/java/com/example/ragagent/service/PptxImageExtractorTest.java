@@ -63,16 +63,21 @@ import static org.mockito.Mockito.when;
  */
 class PptxImageExtractorTest {
 
-    // 기존 하드코딩 상수와 동일한 기본값(30pt/15pt)으로 대부분의 테스트를 실행한다.
-    private final PptxImageExtractor extractor = extractorWith(30.0, 15.0);
+    // 기존 하드코딩 상수와 동일한 기본값(30pt/15pt/merge=true)으로 대부분의 테스트를 실행한다.
+    private final PptxImageExtractor extractor = extractorWith(30.0, 15.0, true);
     private Path pptxPath;
     private Path imagesDir;
 
-    /** app.pptx-image.* 설정값을 다르게 주입한 추출기를 만든다 — 옵션화된 두 값이 실제로 동작을 바꾸는지 검증용. */
+    /** app.pptx-image.* 설정값을 다르게 주입한 추출기를 만든다 — 옵션화된 값들이 실제로 동작을 바꾸는지 검증용. */
     private static PptxImageExtractor extractorWith(double minShapeDimensionPt, double clusterProximityPaddingPt) {
+        return extractorWith(minShapeDimensionPt, clusterProximityPaddingPt, true);
+    }
+
+    private static PptxImageExtractor extractorWith(double minShapeDimensionPt, double clusterProximityPaddingPt,
+                                                      boolean mergeAnnotatedPictures) {
         AppProperties props = mock(AppProperties.class);
-        when(props.pptxImageSafe()).thenReturn(
-                new AppProperties.PptxShapeExtractionConfig(minShapeDimensionPt, clusterProximityPaddingPt));
+        when(props.pptxImageSafe()).thenReturn(new AppProperties.PptxShapeExtractionConfig(
+                minShapeDimensionPt, clusterProximityPaddingPt, mergeAnnotatedPictures));
         return new PptxImageExtractor(props);
     }
 
@@ -479,6 +484,57 @@ class PptxImageExtractorTest {
         String fileName = fileNameOf(result.get(1).get(0));
         assertThat(fileName).isEqualTo("s1_img1.png");
         assertThat(Files.readAllBytes(imagesDir.resolve(fileName))).isEqualTo(realPng); // 원본 바이트 그대로(재인코딩 아님)
+    }
+
+    @Test
+    @DisplayName("merge-annotated-pictures=false 이면 사진과 근접한(그룹 아닌) 주석 도형이 있어도 병합되지 않고 별도 이미지로 남는다")
+    void mergeDisabled_proximityOnlyPictureAndShape_stayAsSeparateImages() throws IOException {
+        byte[] realPng = renderPngBytes(Color.RED, 100, 100);
+        writePptx(pptx -> {
+            XSLFSlide slide = pptx.createSlide();
+            XSLFPictureData pd = pptx.addPicture(realPng, PictureData.PictureType.PNG);
+            XSLFPictureShape pic = slide.createPicture(pd);
+            pic.setAnchor(new Rectangle2D.Double(0, 0, 100, 100));
+
+            XSLFAutoShape mark = slide.createAutoShape();
+            mark.setAnchor(new Rectangle2D.Double(20, 20, 40, 40));
+            mark.setFillColor(Color.BLUE);
+        });
+
+        PptxImageExtractor mergeDisabled = extractorWith(30.0, 15.0, false);
+        Map<Integer, List<String>> result = mergeDisabled.extract(pptxPath, "doc1", imagesDir);
+
+        assertThat(result).containsKey(1);
+        assertThat(result.get(1)).hasSize(2); // 사진(원본 그대로) + 도형(단독 래스터라이즈) 각각 별도 이미지
+    }
+
+    @Test
+    @DisplayName("merge-annotated-pictures=false 여도 PPTX에서 실제로 그룹(Ctrl+G)된 사진+도형은 여전히 하나의 이미지로 합쳐진다")
+    void mergeDisabled_realPptxGroupOfPictureAndShape_stillMergesIntoOneImage() throws IOException {
+        byte[] realPng = renderPngBytes(Color.RED, 100, 100);
+        writePptx(pptx -> {
+            XSLFSlide slide = pptx.createSlide();
+            XSLFGroupShape group = slide.createGroup();
+            Rectangle2D bounds = new Rectangle2D.Double(0, 0, 100, 100);
+            group.setAnchor(bounds);
+            group.setInteriorAnchor(bounds);
+
+            XSLFPictureData pd = pptx.addPicture(realPng, PictureData.PictureType.PNG);
+            XSLFPictureShape pic = group.createPicture(pd);
+            pic.setAnchor(new Rectangle2D.Double(0, 0, 100, 100));
+
+            XSLFAutoShape mark = group.createAutoShape();
+            mark.setAnchor(new Rectangle2D.Double(20, 20, 40, 40));
+            mark.setFillColor(Color.BLUE);
+        });
+
+        PptxImageExtractor mergeDisabled = extractorWith(30.0, 15.0, false);
+        Map<Integer, List<String>> result = mergeDisabled.extract(pptxPath, "doc1", imagesDir);
+
+        assertThat(result).containsKey(1);
+        assertThat(result.get(1)).hasSize(1); // 실제 PPTX 그룹은 옵션과 무관하게 POI가 통째로 그려 항상 하나로 합쳐짐
+        String fileName = fileNameOf(result.get(1).get(0));
+        assertThat(containsNonWhitePixel(imagesDir.resolve(fileName))).isTrue();
     }
 
     @Test

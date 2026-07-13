@@ -130,7 +130,8 @@ public record AppProperties(
      */
     public record PptxShapeExtractionConfig(
             Double minShapeDimensionPt,       // 가로/세로 중 큰 쪽이 이 값 미만이면 아이콘/구분선으로 보고 제외 (기본 30)
-            Double clusterProximityPaddingPt  // 클러스터링 근접 판정 시 바운딩박스에 적용할 바깥쪽 패딩 (기본 15)
+            Double clusterProximityPaddingPt, // 클러스터링 근접 판정 시 바운딩박스에 적용할 바깥쪽 패딩 (기본 15)
+            Boolean mergeAnnotatedPictures    // true(기본): 사진도 근접 클러스터링에 참여해 겹친 주석 도형과 합성 / false: PPTX에서 실제 그룹(XSLFGroupShape)으로 묶인 경우만 합성, 그 외 사진은 항상 원본 그대로 추출
     ) {}
 
     public record ImageDescriptionProperties(
@@ -319,15 +320,18 @@ public record AppProperties(
 
     /**
      * PPTX shape-rasterization tuning, defaulting to 30pt (min shape dimension) / 15pt (cluster
-     * proximity padding). Only falls back on an unset (null) field — an explicit 0 is honored
-     * (e.g. padding=0 to only bundle shapes that literally touch/overlap).
+     * proximity padding) / true (merge annotated pictures). Only falls back on an unset (null)
+     * field — an explicit 0 (padding) or false (mergeAnnotatedPictures) is honored (e.g. padding=0
+     * to only bundle shapes that literally touch/overlap).
      */
     public PptxShapeExtractionConfig pptxImageSafe() {
         double minDim = (pptxImage != null && pptxImage.minShapeDimensionPt() != null && pptxImage.minShapeDimensionPt() >= 0)
                 ? pptxImage.minShapeDimensionPt() : 30.0;
         double padding = (pptxImage != null && pptxImage.clusterProximityPaddingPt() != null && pptxImage.clusterProximityPaddingPt() >= 0)
                 ? pptxImage.clusterProximityPaddingPt() : 15.0;
-        return new PptxShapeExtractionConfig(minDim, padding);
+        boolean mergeAnnotatedPictures = (pptxImage != null && pptxImage.mergeAnnotatedPictures() != null)
+                ? pptxImage.mergeAnnotatedPictures() : true;
+        return new PptxShapeExtractionConfig(minDim, padding, mergeAnnotatedPictures);
     }
 
     /** Null-safe accessor — returns an empty LlmConfig when app.llm is not configured. */

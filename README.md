@@ -318,7 +318,7 @@ User question
 - **DUAL mode** — runs local and external LLM in parallel, displays results in side-by-side tabs
 - **Rate limiting** — Bucket4j + Caffeine per-user token-bucket; 429 `RAG-RATE-001` + `Retry-After` header; configurable via `app.rate-limit.*`
 - **Audit logging** — structured events written to rolling file via Logback; configurable via `app.audit.*`
-- **Image processing pipeline** — PDF/PPTX/DOCX image extraction → stored under `data/images/{imageId}/` (a content-hash key derived from the document's SHA-256, distinct from the document's own `docId`, so long filenames aren't repeated per image); Lazy Vision description on first retrieval (cached in SQLite); image thumbnails shown in answer bubble
+- **Image processing pipeline** — PDF/PPTX/DOCX image extraction → stored under `data/images/{imageId}/` (a content-hash key derived from the document's SHA-256, distinct from the document's own `docId`, so long filenames aren't repeated per image); PPTX pictures with annotation shapes (highlight circle, arrow, callout) drawn on/near them are merged into one composite image by default (`app.pptx-image.merge-annotated-pictures`); Lazy Vision description on first retrieval (cached in SQLite); image thumbnails shown in answer bubble
 - **Image type classification** — pre-classifies images (diagram / screenshot / chart / photo / other) and uses type-specific Vision prompts for better descriptions
 - **Scanned PDF OCR** — Tesseract OCR (kor+eng) for pages with insufficient text; activated via `app.image-description.ocr-enabled=true`
 - **EMF/WMF conversion** — DOCX Windows Metafile images converted to PNG via Batik (EMF) or LibreOffice headless (WMF)

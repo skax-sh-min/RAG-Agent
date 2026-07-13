@@ -56,7 +56,7 @@ class PptxToMarkdownConverterTest {
 
     private static AppProperties mockAppProperties() {
         AppProperties props = mock(AppProperties.class);
-        when(props.pptxImageSafe()).thenReturn(new AppProperties.PptxShapeExtractionConfig(30.0, 15.0));
+        when(props.pptxImageSafe()).thenReturn(new AppProperties.PptxShapeExtractionConfig(30.0, 15.0, true));
         return props;
     }
 

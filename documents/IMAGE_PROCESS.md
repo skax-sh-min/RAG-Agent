@@ -46,12 +46,12 @@
 │  인덱싱 파이프라인                                               │
 │                                                                  │
 │  DocumentIndexer.index()                                          │
-│    ├── 1. SHA-256 계산 → docId 확정                              │
-│    ├── 2. 이미지 추출 → data/images/{docId}/ 저장                │
+│    ├── 1. SHA-256 계산 → docId 확정, imageId 파생(§3.3)          │
+│    ├── 2. 이미지 추출 → data/images/{imageId}/ 저장               │
 │    │       └── DOCX/PPTX/PDF(비스캔): 각 변환기가 자체 추출기를   │
 │    │             주입받아 MD 변환 중 인라인으로 처리(§4 각 절)    │
 │    │           PDF(스캔): 변환이 없으므로 ImageExtractorService.  │
-│    │             extract(filePath, docId)를 별도로 호출           │
+│    │             extract(filePath, imageId)를 별도로 호출         │
 │    │           반환: Map<pageOrSlide, List<imagePath>>            │
 │    ├── 3. DocumentLoaderService.load(filePath) → 텍스트 청크     │
 │    ├── 4. 메타데이터 태깅 (image_paths 포함)                     │
@@ -77,8 +77,10 @@
 ┌─────────────────────────────────────────────────────────────────┐
 │  이미지 서빙                                                     │
 │                                                                  │
-│  GET /api/images/{docId}/{filename}                              │
-│    └── ApiController → data/images/{docId}/{filename} 스트리밍   │
+│  GET /api/v1/images/{docId}/{filename}                           │
+│    └── DocumentController → data/images/{imageId}/{filename}     │
+│        스트리밍 — URL 경로 변수명은 docId이지만 실제 값은         │
+│        imageId(§3.3)                                             │
 │                                                                  │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -104,16 +106,17 @@
 ```
 data/
 └── images/
-    └── {docId}/                     ← 문서 단위 격리
-        ├── p1_img0.png              ← PDF: p{페이지}_{순번}
-        ├── p1_img1.jpeg
-        ├── s3_img0.png              ← PPTX: s{슬라이드}_{순번}
-        ├── d0_img0.png              ← DOCX: d{섹션}_{순번}
-        └── md_img0.png              ← MD: md_{순번} (로컬 경로 복사)
+    └── {imageId}/                   ← 문서 내용(SHA-256) 단위 격리 — docId(파일명 포함)와는 별개
+        ├── p1_img1.png              ← PDF: p{페이지}_img{순번, 1-based}
+        ├── p1_img2.jpeg
+        ├── s3_img1.png              ← PPTX: s{슬라이드}_img{순번, 1-based}
+        ├── d0_img1.png              ← DOCX: d{문단 인덱스}_img{순번, 1-based}
+        └── md_img1.png              ← MD: md_img{순번, 1-based} (로컬 경로 복사)
 ```
 
-파일명 규칙: `{prefix}{pageOrSlide}_img{순번}.{ext}`
-- 이미지 해시 기반 중복 저장 방지: 동일 byte[] → 동일 파일명 (SHA-256 prefix 8자리)
+파일명 규칙: `{prefix}{pageOrSlideOrParaIdx}_img{순번}.{ext}` (순번은 슬라이드/페이지/문단마다 1부터 시작)
+
+> **`imageId`**: `DocumentIndexer.imageId()`가 `sha256.substring(0, 16)`으로 계산하는, 문서 내용 자체에서 파생된 짧은 키입니다. `docId`(원본 파일명 + 해시 8자리)를 그대로 디렉터리명으로 쓰면 이미지 1장마다 그 문자열 전체가 `[이미지: ...]` 마커와 `image_paths` 메타데이터에 반복 저장되어, 파일명이 긴 문서(특히 긴 한글 파일명)에 이미지가 많으면 청크 크기·DB 용량에 영향을 주기 때문에 분리했습니다. **부수 효과**: 내용이 완전히 동일한(byte-for-byte) 두 문서는 같은 `imageId`를 가지므로 이미지 디렉터리를 공유합니다 — `DocRegistry.existsOtherBySha256()`이 삭제 시 이를 확인해, 다른 문서가 아직 참조 중이면 공유 디렉터리를 지우지 않습니다(§8). 파일명 자체의 해시 기반 중복 제거는 없습니다 — 같은 슬라이드/페이지 안에서 순번은 항상 새로 매겨집니다.
 
 ### 3.4 메타데이터 확장
 
@@ -125,11 +128,13 @@ data/
   "filename":     "manual.pdf",
   "version":      "latest",
   "page_or_slide": 5,
-  "image_paths":  ["images/manual.pdf_a1b2c3d4/p5_img0.png",
-                   "images/manual.pdf_a1b2c3d4/p5_img1.png"],
+  "image_paths":  ["images/1f3a9c7e2b6d4051/p5_img1.png",
+                   "images/1f3a9c7e2b6d4051/p5_img2.png"],
   "image_description": "[이미지1: 3계층 아키텍처 다이어그램] [이미지2: 시퀀스 다이어그램]"
 }
 ```
+
+`image_paths`의 `1f3a9c7e2b6d4051`은 `imageId`(§3.3)이며 `doc_id`(`manual.pdf_a1b2c3d4`)와는 다른 값입니다 — `doc_id`는 표시·버전관리·재인덱싱용, `imageId`는 이미지 디렉터리 전용 키입니다.
 
 `image_description`은 L2/L3 처리 시에만 추가되며 벡터 임베딩 텍스트에 포함되어 검색 품질에 기여합니다.
 
@@ -150,7 +155,7 @@ public record ChatResponse(
     String answer,
     @JsonProperty("question_type") String questionType,
     List<SourceRef> sources,                              // SourceRef 구조로 출처 메타데이터 전달
-    @JsonProperty("image_refs") List<String> imageRefs,   // /api/images/... URL 목록 (미구현)
+    @JsonProperty("image_refs") List<String> imageRefs,   // "images/{imageId}/{filename}" 상대 경로 목록 — /api/v1/ 접두사만 붙이면 요청 URL(§7.5)
     ...
 )
 ```
@@ -169,20 +174,23 @@ public record ChatResponse(
 
 **이미지 유형**: 페이지 임베드 래스터 이미지 (`PDImageXObject`), 인라인 이미지
 
-**추출 방법** (PDFBox — 기존 의존성):
+**추출 방법** (PDFBox 3.x — 기존 의존성):
 ```java
 // PdfImageExtractor.java
-PDDocument pdf = PDDocument.load(filePath.toFile());
-for (int i = 0; i < pdf.getNumberOfPages(); i++) {
-    PDPage page = pdf.getPage(i);
-    PDResources resources = page.getResources();
-    int imgIdx = 0;
-    for (COSName name : resources.getXObjectNames()) {
-        PDXObject xobj = resources.getXObject(name);
-        if (xobj instanceof PDImageXObject img) {
-            BufferedImage buffered = img.getImage();
-            String filename = "p" + (i + 1) + "_img" + imgIdx++ + ".png";
-            ImageIO.write(buffered, "PNG", imagesDir.resolve(filename).toFile());
+try (PDDocument pdf = Loader.loadPDF(pdfPath.toFile())) {
+    int pageNum = 0;
+    for (PDPage page : pdf.getPages()) {
+        pageNum++;
+        PDResources resources = page.getResources();
+        int imgIdx = 0;
+        for (COSName name : resources.getXObjectNames()) {
+            PDXObject xobj = resources.getXObject(name);
+            if (!(xobj instanceof PDImageXObject img)) continue;
+            BufferedImage bi = img.getImage();
+            if ((long) bi.getWidth() * bi.getHeight() * 3 < MIN_IMAGE_BYTES) continue; // L0
+            imgIdx++;
+            String filename = "p" + pageNum + "_img" + imgIdx + ".png";
+            ImageIO.write(bi, "png", imagesDir.resolve(filename).toFile());
         }
     }
 }
@@ -191,7 +199,7 @@ for (int i = 0; i < pdf.getNumberOfPages(); i++) {
 **처리 레벨 판단**:
 - 스캔 PDF (`source_type=ocr`) → **L3 OCR** 우선 (이미지가 곧 페이지 전체)
 - 일반 PDF 도표·그래프 → **L2 Vision**
-- 배경·워터마크 (width < 100px 또는 height < 100px) → **L0 무시**
+- 배경·워터마크·아이콘 → **L0 무시** — `MIN_IMAGE_BYTES`(기본 1000) 미만으로 추정되는(가로×세로×3바이트 근사) 이미지는 추출 자체를 건너뜀. `width`/`height` 개별 임계값이 아니라 이 근사 바이트 수 하나로 판정합니다
 
 **설명 삽입 위치**: 해당 페이지 청크 텍스트 말미에 `\n[이미지: {설명}]` 추가
 
@@ -206,19 +214,23 @@ for (int i = 0; i < pdf.getNumberOfPages(); i++) {
 
 **이미지 유형**: `XSLFPictureShape`(그림·스크린샷) 외에, 아래 코드가 다루지 않는 세 부류도 함께 추출됩니다 — 그룹/커넥터/텍스트없는 도형 등 "그리기 도구" 요소(근접 클러스터링 후 PNG로 래스터라이즈), SmartArt(`XSLFDiagram` — 실제 렌더링 레이어인 `getGroupShape()`를 그룹 도형처럼 래스터라이즈), OLE 객체(`XSLFObjectShape` — 내장 미리보기 그림을 그대로 저장). 차트 프레임은 POI가 라이브 렌더링을 지원하지 않아 PowerPoint가 남겨둔 `mc:Fallback` 미리보기가 있을 때만 추출되고, 없으면 제목 텍스트만(§4.2 텍스트 처리 경로) 남습니다. 상세 알고리즘은 [Pipeline.md §6.3-bis 2·4번](Pipeline.md#63-bis-pptxpdf비스캔--md-변환--docx와의-차이점) 참고.
 
-**추출 방법** (Apache POI — 기존 의존성):
+**사진 위 주석 도형 병합** (`app.pptx-image.merge-annotated-pictures`, 기본 `true`): 화면 캡처 위에 오류 부분을 동그라미로 표시하거나 화살표로 짚는 등, 사진 위/근처에 별도 도형으로 markup을 남기는 경우가 실무 PPTX에 흔합니다. 이 옵션이 켜져 있으면 `XSLFPictureShape`도 위 "그리기 도구" 요소와 같은 근접 클러스터링에 참여합니다 — 단, 스스로 클러스터를 시작하는 시드는 될 수 없고(그룹/커넥터/텍스트없는 도형만 시드), 시드가 근처에 있을 때만 합류하는 passenger입니다. 합류하면 사진과 주석 도형이 하나의 합성 PNG로 래스터라이즈되어, "깨끗한 사진 한 장 + 맥락 없이 떠 있는 주석 도형 한 장"으로 따로 추출되던 문제를 없앱니다. 근처에 시드가 없는 평범한 사진은 지금까지처럼 원본 바이트 그대로(무손실) 추출됩니다. `false`로 끄면 사진은 절대 근접 클러스터링에 참여하지 않고 항상 원본 그대로 추출되며, PPTX에서 실제로 그룹(Ctrl+G)으로 묶인 사진+도형만 여전히 하나로 합쳐집니다(POI가 그룹을 통째로 그리는 것은 이 옵션과 무관하게 항상 그렇습니다). 자세한 튜닝값은 [OPERATOR_MANUAL.md §3.2 "PPTX 이미지 추출 튜닝"](OPERATOR_MANUAL.md#32-환경변수-전체-목록) 참고.
+
+**추출 방법** (Apache POI — 기존 의존성; 아래는 사진 단독 추출의 단순화한 예시이며, 실제로는 위 병합 로직이 추가로 개입합니다):
 ```java
 // PptxImageExtractor.java
-XMLSlideShow pptx = new XMLSlideShow(new FileInputStream(filePath.toFile()));
-int slideNum = 0;
-for (XSLFSlide slide : pptx.getSlides()) {
-    slideNum++;
-    int imgIdx = 0;
-    for (XSLFShape shape : slide.getShapes()) {
-        if (shape instanceof XSLFPictureShape picShape) {
+try (XMLSlideShow pptx = new XMLSlideShow(Files.newInputStream(pptxPath))) {
+    int slideNum = 0;
+    for (XSLFSlide slide : pptx.getSlides()) {
+        slideNum++;
+        int imgIdx = 0;
+        for (XSLFShape shape : slide.getShapes()) {
+            if (!(shape instanceof XSLFPictureShape picShape)) continue;
             XSLFPictureData data = picShape.getPictureData();
-            String ext = data.getType().extension;  // png, jpeg, gif, ...
-            String filename = "s" + slideNum + "_img" + imgIdx++ + "." + ext;
+            if (data == null) continue; // 외부 링크 사진 — 로컬 바이트 없음
+            String ext = data.getType().extension.substring(1); // ".png" → "png"
+            imgIdx++;
+            String filename = "s" + slideNum + "_img" + imgIdx + "." + ext;
             Files.write(imagesDir.resolve(filename), data.getData());
         }
     }
@@ -409,11 +421,11 @@ public class OcrService {
 
 ## 7. 이미지 서빙 및 검색 결과 연동
 
-> **구현 완료** — AgentState·ChatResponse imageRefs, RetrievalService 수집, ApiController 서빙, message-assistant.html 썸네일 모두 구현됨.
+> **구현 완료** — AgentState·ChatResponse imageRefs, RetrievalService 수집, DocumentController 서빙, message-assistant.html 썸네일 모두 구현됨.
 
 ### 7.1 이미지 서빙 엔드포인트
 
-`DocumentController`에 구현됨:
+`DocumentController`에 구현됨. 경로 변수명은 하위 호환을 위해 `docId`로 남아있지만, 실제로 이 자리에 들어오는 값은 §3.3의 `imageId`(문서 SHA-256 앞 16자)입니다 — `image_paths` 메타데이터·`[이미지: ...]` 마커에 저장된 상대 경로를 그대로 이어 붙여 호출하므로 클라이언트는 이 차이를 신경 쓸 필요가 없습니다:
 
 ```java
 // GET /api/v1/images/{docId}/{filename}
@@ -521,9 +533,9 @@ public record ChatResponse(
     <small class="text-muted">관련 이미지</small>
     <div class="d-flex flex-wrap gap-2 mt-1">
         <a th:each="ref : ${imageRefs}"
-           th:href="@{'/api/images/' + ${ref}}"
+           th:href="@{'/api/v1/' + ${ref}}"
            target="_blank">
-            <img th:src="@{'/api/images/' + ${ref}}"
+            <img th:src="@{'/api/v1/' + ${ref}}"
                  class="img-thumbnail"
                  style="max-height: 120px; cursor: pointer;"
                  loading="lazy" />
@@ -538,27 +550,39 @@ REST API 응답 예시:
   "answer": "...",
   "sources": ["manual.pdf | vlatest | p.5"],
   "image_refs": [
-    "manual.pdf_a1b2c3d4/p5_img0.png",
-    "manual.pdf_a1b2c3d4/p5_img1.png"
+    "images/1f3a9c7e2b6d4051/p5_img1.png",
+    "images/1f3a9c7e2b6d4051/p5_img2.png"
   ]
 }
 ```
 
-클라이언트는 `/api/images/{image_refs[i]}` 로 이미지를 직접 요청합니다.
+`image_refs`의 각 값은 이미 `images/` 접두사를 포함하므로, 클라이언트는 앞에 `/api/v1/`만 붙여 `/api/v1/images/{imageId}/{filename}`으로 이미지를 직접 요청합니다(`/api/v1/images/images/...`처럼 접두사를 중복하지 않도록 주의).
 
 ---
 
 ## 8. 문서 삭제 시 이미지 정리
 
-> **구현 완료** — `DocumentIndexer.deleteArtifacts()`가 `deleteDocFiles()`를 통해 `deleteImagesQuietly()` 호출로 `data/images/{docId}/` 전체 삭제.
+> **구현 완료** — `DocumentIndexer.deleteArtifacts()`가 `deleteDocFiles()`를 통해 `data/images/{imageId}/`(§3.3)를 정리. `imageId`는 삭제 대상 `docId`의 레지스트리 항목에서 조회한 `sha256`으로부터 다시 계산합니다.
 
-`DocumentIndexer` 구현(요지):
+`DocumentIndexer` 구현(요지) — `imageId`가 문서 내용 기반 키라 여러 `docId`(내용이 완전히 동일한 문서)가 같은 이미지 디렉터리를 공유할 수 있으므로, 삭제 전에 다른 문서가 아직 참조 중인지 확인합니다:
 
 ```java
 public void deleteArtifacts(String userId, String docId, String version) {
     deleteExistingVectorsOnly(userId, docId, version);  // VectorStoreFacade.deleteByDocIds() — 활성 백엔드(chroma/sqlite-vec)
     deleteDocFiles(userId, docId);                      // MD·이미지 정리
     docRegistry.remove(docId, userId);
+}
+
+private void deleteDocFiles(String userId, String docId) {
+    docRegistry.findByDocId(docId, userId).ifPresent(entry -> {
+        String imageId = imageId(entry.sha256());
+        if (!docRegistry.existsOtherBySha256(entry.sha256(), docId)) {
+            deleteImagesQuietly(dataDir.resolve("images").resolve(imageId));
+        }
+        // else: 내용이 동일한 다른 문서가 여전히 이 이미지 디렉터리를 참조 — 보존
+    });
+    deleteImagesQuietly(dataDir.resolve("images").resolve(docId)); // 마이그레이션 이전(구버전) 레이아웃 정리
+    // + converted/{docId}.md, {docId}_corrected.md 삭제
 }
 
 private void deleteImagesQuietly(Path dir) {
@@ -691,7 +715,7 @@ app.image-description.docx-wmf-convert=true   # LibreOffice 설치 필요
 | MD 이미지 정제 (L1) | `DocumentLoaderService.preprocessMarkdown()` | ✅ |
 | 이미지 추출 저장 | `ImageExtractorService`, `PdfImageExtractor`, `PptxImageExtractor`, `DocxToMarkdownConverter` | ✅ |
 | AgentState·ChatResponse 확장 | `AgentState.imageRefs`, `ChatResponse.imageRefs`, `RetrievalService`, `AgentService` | ✅ |
-| 이미지 서빙 엔드포인트 | `ApiController GET /api/images/{docId}/{filename}` | ✅ |
+| 이미지 서빙 엔드포인트 | `DocumentController GET /api/v1/images/{docId}/{filename}` (값은 imageId, §3.3) | ✅ |
 | `image_descriptions` 캐시 | `ImageDescriptionRepository`, SQLite `image_descriptions` 테이블 | ✅ |
 | LazyVisionService + RetrievalService 통합 | `LazyVisionService`, `RetrievalService.augmentWithDescriptions()` | ✅ |
 | ImageTypeClassifier + 유형별 프롬프트 | `ImageTypeClassifier`, `VisionDescriptionService.PROMPTS` | ✅ |
@@ -708,7 +732,7 @@ app.image-description.docx-wmf-convert=true   # LibreOffice 설치 필요
 
 - **Vision LLM 라우팅**: L2 사용 시 `LlmRouter.route(TaskType.VISION)` 호출 → gemma4(LIGHT_BOTH)가 priority=0으로 기본 처리. gemma4 미지원 모델로 교체하는 경우 `app.llm.providers[0].type=LIGHT_TEXT`로 변경하면 VISION 태스크는 gemini-1(BOTH)로 자동 라우팅됨
 - **인덱싱 시간 증가**: L2 적용 시 이미지가 많은 문서는 청크당 1회 + 이미지당 1회 LLM 호출 발생 — 12절 Lazy Vision으로 대폭 완화 가능
-- **Path Traversal 방어**: `/api/images/{docId}/{filename}` 엔드포인트에서 `..`, `/` 포함 입력 차단 필수 (7.1절 코드 포함)
+- **Path Traversal 방어**: `/api/v1/images/{docId}/{filename}` 엔드포인트에서 `..`, `/` 포함 입력 차단 필수 (7.1절 코드 포함)
 - **이미지 저장 용량**: `data/images/` 하위 파일은 문서 삭제 시 반드시 함께 정리 (8절 참조)
 - **WMF/EMF 포맷** (DOCX에서 발생): Java 표준 `ImageIO`가 지원하지 않으므로 Apache Batik 또는 외부 변환 필요 (14절 상세)
 
@@ -744,7 +768,7 @@ app.image-description.docx-wmf-convert=true   # LibreOffice 설치 필요
 ```
 인덱싱 시
   ImageExtractorService.extract()
-    └─ 이미지 추출 + data/images/{docId}/ 저장
+    └─ 이미지 추출 + data/images/{imageId}/ 저장
        chunk.metadata["image_paths"] 채움
        chunk.metadata["image_description"]는 비워둠 (또는 alt 텍스트만 채움)
 
@@ -762,7 +786,7 @@ app.image-description.docx-wmf-convert=true   # LibreOffice 설치 필요
 
 ```sql
 CREATE TABLE IF NOT EXISTS image_descriptions (
-    image_path     TEXT PRIMARY KEY,    -- "{docId}/{filename}"
+    image_path     TEXT PRIMARY KEY,    -- "{imageId}/{filename}" (§3.3)
     description    TEXT NOT NULL,
     image_type     TEXT,                -- 13절: diagram | screenshot | photo | chart | other
     created_at     TEXT NOT NULL,
@@ -770,8 +794,9 @@ CREATE TABLE IF NOT EXISTS image_descriptions (
 );
 ```
 
-> **키 선택 이유**: 이미지 byte 해시가 아닌 `image_path`를 키로 쓰는 이유는 동일 이미지를 여러
-> 문서가 가져도 docId가 다르면 격리하기 위함입니다. 동일 이미지 dedup은 별도 작업으로 분리.
+> **키 선택**: `image_path`가 이미 `imageId`(문서 내용 SHA-256 기반, §3.3)를 포함하므로, 내용이
+> 완전히 동일한 이미지를 서로 다른 문서가 가지고 있으면 이 캐시가 자연스럽게 공유되어 Vision
+> 재호출을 절약합니다 — 별도 dedup 로직 없이 `imageId` 설계의 부수 효과로 얻는 이점입니다.
 
 ### 12.4 LazyVisionService
 
@@ -944,7 +969,7 @@ private static final Map<String, String> PROMPTS = Map.of(
 
 DOCX의 `XWPFPictureData`는 Word 작성 환경에 따라 WMF/EMF (Windows Metafile) 포맷 이미지를 포함합니다.
 Java 표준 `ImageIO`는 WMF/EMF를 디코딩하지 못하므로:
-- `data/images/{docId}/d0_img0.wmf` 로 저장은 되지만 브라우저가 표시 불가
+- `data/images/{imageId}/d0_img1.wmf` 로 저장은 되지만 브라우저가 표시 불가
 - Vision LLM도 WMF를 일반적으로 입력으로 받지 않음 (PNG/JPEG/WEBP 위주)
 
 ### 14.2 변환 전략
