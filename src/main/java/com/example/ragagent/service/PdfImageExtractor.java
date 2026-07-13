@@ -31,16 +31,16 @@ public class PdfImageExtractor {
     private static final int MIN_IMAGE_BYTES = 1_000;
 
     /** @return {pageNum(1-based) → relative image paths from dataDir} */
-    public Map<Integer, List<String>> extract(Path pdfPath, String docId, Path imagesDir)
+    public Map<Integer, List<String>> extract(Path pdfPath, String imageId, Path imagesDir)
             throws IOException {
-        return extract(pdfPath, docId, imagesDir, null);
+        return extract(pdfPath, imageId, imagesDir, null);
     }
 
     /**
      * Same as {@link #extract(Path, String, Path)} but calls {@code onProgress(done, total)}
      * after each page is processed.
      */
-    public Map<Integer, List<String>> extract(Path pdfPath, String docId, Path imagesDir,
+    public Map<Integer, List<String>> extract(Path pdfPath, String imageId, Path imagesDir,
                                               BiConsumer<Integer, Integer> onProgress)
             throws IOException {
         Files.createDirectories(imagesDir);
@@ -78,7 +78,7 @@ public class PdfImageExtractor {
                         String fileName = "p" + pageNum + "_img" + imgIdx + ".png";
                         Path imgFile = imagesDir.resolve(fileName);
                         ImageIO.write(bi, "png", imgFile.toFile());
-                        paths.add("images/" + docId + "/" + fileName);
+                        paths.add("images/" + imageId + "/" + fileName);
                     }
                     if (!paths.isEmpty()) result.put(pageNum, paths);
                 }

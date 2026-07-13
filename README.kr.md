@@ -128,7 +128,7 @@ container system stop
 |------|--------|-----------|------|
 | `CHUNK_SIZE` | `800` | 300 ~ 2000 | 문서 청크 크기 (문자 수) |
 | `CHUNK_OVERLAP` | `100` | 0 ~ CHUNK_SIZE × 0.25 | 청크 경계 문맥 보완용 중복 문자 수 |
-| `MIN_CHUNK_SIZE` | `100` | 50 ~ CHUNK_SIZE × 0.25 | 너무 작은 청크를 인접 청크와 병합할 최소 길이 기준 |
+| `MIN_CHUNK_SIZE` | `300` | 50 ~ CHUNK_SIZE × 0.25 | 너무 작은 청크를 인접 청크와 병합할 최소 길이 기준 |
 | `SEARCH_TOP_K` | `7` | 2 ~ 15 | 벡터 검색 반환 문서 수 |
 | `SEARCH_SIMILARITY_THRESHOLD` | `0.0` | 0.0 ~ 0.75 | 청크 유지 최소 코사인 유사도 (`0.0`=전체 수용) |
 | `SEARCH_MULTIQUERY_ENABLED` | `true` | true/false | 검색 전 질의 다중 확장 여부 |
@@ -137,6 +137,7 @@ container system stop
 | `SEARCH_RETRY_ESCALATE` | `true` | true/false | 재시도마다 후보 풀 확대 — `×(retryCount+1)`, 상한 `×3` |
 | `SEARCH_RERANK_ENABLED` | `false` | true/false | RRF 후 LLM 리랭킹 단계 (턴당 LLM 1콜 추가) |
 | `SEARCH_CANDIDATE_MULTIPLIER` | `3` | 2 ~ 5 | 리랭킹 후보 풀 크기 — `topK × N` |
+| `SEARCH_TAG_CANDIDATE_MULTIPLIER` | `2` | 1 ~ 5 | 태그 선택 시 후보 풀 확대 — `candidateK = max(candidateK, topK × N)` |
 | `SEARCH_RRF_KEYWORD_WEIGHT` | `1.0` | 0.5 ~ 3.0 | 가중 RRF(Phase 7-A) — BM25 키워드 축 가중치. 벡터 축(MultiQuery 1~3개)은 항상 `1/축개수`로 그룹 정규화되므로 `1.0`이 정규화된 벡터 그룹과 동일 비중. `SEARCH_HYBRID_ENABLED=false`면 무영향 |
 | `SEARCH_RRF_K` | `60` | 20 ~ 100 | 가중 RRF(Phase 7-A) — RRF 순위융합 상수 k(원논문 기본값 60) |
 | `SEARCH_QUERY_EMBED_CACHE_ENABLED` | `true` | true/false | 쿼리 임베딩 캐시(Phase 7-A) — 정규화된 질의 → 벡터를 Caffeine 인메모리 캐시에 저장해 반복·유사 질문의 임베딩 왕복을 생략. 캐시 히트 시 `embed:<model>` usage도 기록 안 됨 |
@@ -316,7 +317,7 @@ rag_java/
 - **DUAL 모드** — 로컬·외부 LLM 병렬 실행, 두 답변을 탭으로 비교
 - **속도 제한** — Bucket4j + Caffeine 유저별 토큰버킷; 429 `RAG-RATE-001` + `Retry-After` 헤더; `app.rate-limit.*`로 설정
 - **감사 로그** — Logback 롤링 파일에 구조화된 이벤트 기록; `app.audit.*`로 설정
-- **이미지 처리 파이프라인** — PDF/PPTX/DOCX 이미지 추출 → `data/images/{docId}/` 저장; 검색 시점 Lazy Vision 설명 생성 (SQLite 캐시); 답변 버블에 이미지 썸네일 표시
+- **이미지 처리 파이프라인** — PDF/PPTX/DOCX 이미지 추출 → `data/images/{imageId}/` 저장(문서 SHA-256 기반 해시 키 — 문서 자체의 `docId`와는 별개이며, 긴 파일명이 이미지마다 반복 저장되는 것을 방지); 검색 시점 Lazy Vision 설명 생성 (SQLite 캐시); 답변 버블에 이미지 썸네일 표시
 - **이미지 유형 분류** — diagram / screenshot / chart / photo / other 분류 후 유형별 전용 Vision 프롬프트 적용
 - **스캔 PDF OCR** — Tesseract OCR (kor+eng)로 텍스트 없는 페이지 처리 (`app.image-description.ocr-enabled=true`)
 - **EMF/WMF 변환** — DOCX Windows Metafile 이미지를 Batik(EMF) 또는 LibreOffice headless(WMF)로 PNG 변환

@@ -28,19 +28,19 @@ public class ImageExtractorService {
 
     /**
      * @param pdfPath   scanned PDF file
-     * @param docId     unique document ID
+     * @param imageId   content-hash key for the images subdirectory (see DocumentIndexer.imageId)
      * @param imagesDir target directory for extracted images
      * @return map from page number (1-based) to relative image paths from dataDir
      */
-    public Map<Integer, List<String>> extract(Path pdfPath, String docId, Path imagesDir)
+    public Map<Integer, List<String>> extract(Path pdfPath, String imageId, Path imagesDir)
             throws IOException {
-        return extract(pdfPath, docId, imagesDir, null);
+        return extract(pdfPath, imageId, imagesDir, null);
     }
 
     /** Same as {@link #extract(Path, String, Path)} but calls {@code onProgress(done, total)} after each page. */
-    public Map<Integer, List<String>> extract(Path pdfPath, String docId, Path imagesDir,
+    public Map<Integer, List<String>> extract(Path pdfPath, String imageId, Path imagesDir,
                                               BiConsumer<Integer, Integer> onProgress)
             throws IOException {
-        return pdfExtractor.extract(pdfPath, docId, imagesDir, onProgress);
+        return pdfExtractor.extract(pdfPath, imageId, imagesDir, onProgress);
     }
 }

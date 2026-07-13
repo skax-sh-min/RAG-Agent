@@ -159,9 +159,9 @@ public class DocumentLoaderService {
      * Converts a DOCX file to a Markdown string via {@link DocxToMarkdownConverter}.
      * Called by RagService before optional LLM format correction.
      */
-    public String convertDocxToMd(Path filePath, String docId, Path imagesDir) throws IOException {
+    public String convertDocxToMd(Path filePath, String imageId, Path imagesDir) throws IOException {
         log.debug("[LOADER:DOCX] MD 변환 시작: {}", filePath.getFileName());
-        String md = converter.convert(filePath, docId, imagesDir);
+        String md = converter.convert(filePath, imageId, imagesDir);
         log.debug("[LOADER:DOCX] MD 변환 완료: {} → {}자", filePath.getFileName(), md.length());
         return md;
     }
@@ -191,12 +191,12 @@ public class DocumentLoaderService {
     /**
      * Image-aware DOCX loader: converts via DocxToMarkdownConverter,
      * then splits by headings and extracts [이미지: ...] paths into image_paths metadata.
-     * Called from RagService when docId and imagesDir are available.
+     * Called from RagService when imageId and imagesDir are available.
      * If mdOutputPath is non-null the converted Markdown is also saved there for inspection.
      */
-    public List<Document> loadDocx(Path filePath, String docId, Path imagesDir,
+    public List<Document> loadDocx(Path filePath, String imageId, Path imagesDir,
                                    Path mdOutputPath) throws IOException {
-        String md = convertDocxToMd(filePath, docId, imagesDir);
+        String md = convertDocxToMd(filePath, imageId, imagesDir);
         if (mdOutputPath != null) {
             Files.createDirectories(mdOutputPath.getParent());
             Files.writeString(mdOutputPath, md);

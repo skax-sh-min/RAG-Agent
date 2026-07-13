@@ -46,6 +46,7 @@
 │    VisionDescriptionService → VISION                                 │
 │    ImageTypeClassifier      → LIGHT_BOTH  (분류는 범용 멀티모달로)   │
 │    KeywordExtractor (키워드+맥락) → LIGHT_TEXT                                  │
+│    RerankerService (opt-in) → TEXT        (SEARCH_RERANK_ENABLED=true일 때만) │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -108,13 +109,14 @@ app.llm.providers[0].stream=true
 # ── [LOCAL] Vision 전용 로컬 모델 (선택) ──────────────────────────
 # type=VISION → VISION task에서 BOTH보다 우선 선택됨
 # 등록 시: LLaVA, Qwen2-VL 등 Vision 특화 모델 권장
-# app.llm.providers[5].name=local-vision
-# app.llm.providers[5].base-url=${LOCAL_LLM_URL:http://localhost:1235/v1}
-# app.llm.providers[5].api-key=${LOCAL_LLM_KEY:lm-studio}
-# app.llm.providers[5].model=llava-1.6-34b
-# app.llm.providers[5].type=VISION
-# app.llm.providers[5].role=LOCAL
-# app.llm.providers[5].priority=0
+# index 6 사용 — index 5는 이미 [PREMIUM] openai가 점유 중이므로 충돌 방지
+# app.llm.providers[6].name=local-vision
+# app.llm.providers[6].base-url=${LOCAL_LLM_URL:http://localhost:1235/v1}
+# app.llm.providers[6].api-key=${LOCAL_LLM_KEY:lm-studio}
+# app.llm.providers[6].model=llava-1.6-34b
+# app.llm.providers[6].type=VISION
+# app.llm.providers[6].role=LOCAL
+# app.llm.providers[6].priority=0
 
 # ── [NORMAL] Gemini Flash Lite — 저비용 1순위 ────────────────────
 # GEMINI_API_KEY1 미설정 시 시작 시 warn 로그 후 자동 비활성화

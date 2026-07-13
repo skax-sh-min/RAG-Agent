@@ -44,8 +44,8 @@ public class PdfToMarkdownConverter {
     }
 
     /** {@link #convert(List, Path, String, Path, BiConsumer)} without a progress callback. */
-    public String convert(List<Document> pages, Path pdfPath, String docId, Path imagesDir) throws IOException {
-        return convert(pages, pdfPath, docId, imagesDir, null);
+    public String convert(List<Document> pages, Path pdfPath, String imageId, Path imagesDir) throws IOException {
+        return convert(pages, pdfPath, imageId, imagesDir, null);
     }
 
     /**
@@ -53,14 +53,14 @@ public class PdfToMarkdownConverter {
      *                 {@code DocumentLoaderService.loadPdfPagesForConversion})
      * @param pdfPath  source PDF file, used to extract images and to derive the document-title
      *                 fallback from its filename
-     * @param docId    unique document ID (used to name the image subdirectory)
+     * @param imageId  content-hash key for the images subdirectory (see DocumentIndexer.imageId)
      * @param imagesDir directory where extracted images are saved
      * @return full markdown text with a {@code [페이지: N]}-tagged {@code ##} heading per
      *         non-blank page, with {@code [이미지: ...]} markers for any images on that page
      */
-    public String convert(List<Document> pages, Path pdfPath, String docId, Path imagesDir,
+    public String convert(List<Document> pages, Path pdfPath, String imageId, Path imagesDir,
                           BiConsumer<Integer, Integer> onProgress) throws IOException {
-        Map<Integer, List<String>> imageMap = imageExtractor.extract(pdfPath, docId, imagesDir, onProgress);
+        Map<Integer, List<String>> imageMap = imageExtractor.extract(pdfPath, imageId, imagesDir, onProgress);
 
         StringBuilder sb = new StringBuilder();
         String title = titleFromFilename(pdfPath);

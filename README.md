@@ -126,7 +126,7 @@ See [USER_MANUAL.md](USER_MANUAL.md) for usage instructions and [OPERATOR_MANUAL
 |----------|---------|-------------------|-------------|
 | `CHUNK_SIZE` | `800` | 300 ~ 2000 | Document chunk size (characters) |
 | `CHUNK_OVERLAP` | `100` | 0 ~ CHUNK_SIZE × 0.25 | Overlap between chunks (characters, boundary context only) |
-| `MIN_CHUNK_SIZE` | `100` | 50 ~ CHUNK_SIZE × 0.25 | Minimum chunk size threshold for tiny-chunk merge |
+| `MIN_CHUNK_SIZE` | `300` | 50 ~ CHUNK_SIZE × 0.25 | Minimum chunk size threshold for tiny-chunk merge |
 | `SEARCH_TOP_K` | `7` | 2 ~ 15 | Number of documents returned by vector search |
 | `SEARCH_SIMILARITY_THRESHOLD` | `0.0` | 0.0 ~ 0.75 | Min cosine similarity to keep a chunk (`0.0` = accept all) |
 | `SEARCH_MULTIQUERY_ENABLED` | `true` | true/false | Expand the query into sub-queries before search |
@@ -135,6 +135,7 @@ See [USER_MANUAL.md](USER_MANUAL.md) for usage instructions and [OPERATOR_MANUAL
 | `SEARCH_RETRY_ESCALATE` | `true` | true/false | Grow candidate pool on each retry — `×(retryCount+1)`, capped `×3` |
 | `SEARCH_RERANK_ENABLED` | `false` | true/false | LLM reranking stage after RRF (adds 1 LLM call/turn) |
 | `SEARCH_CANDIDATE_MULTIPLIER` | `3` | 2 ~ 5 | Candidate pool size for reranking — `topK × N` |
+| `SEARCH_TAG_CANDIDATE_MULTIPLIER` | `2` | 1 ~ 5 | Candidate pool expansion when tags are selected — `candidateK = max(candidateK, topK × N)` |
 | `SEARCH_RRF_KEYWORD_WEIGHT` | `1.0` | 0.5 ~ 3.0 | Weighted RRF (Phase 7-A) — BM25 keyword axis weight. Vector axes (1-3 MultiQuery variants) are always group-normalized to `1/axisCount`, so `1.0` is parity with the normalized vector group. No effect when `SEARCH_HYBRID_ENABLED=false` |
 | `SEARCH_RRF_K` | `60` | 20 ~ 100 | Weighted RRF (Phase 7-A) — rank-fusion constant k (original paper default) |
 | `SEARCH_QUERY_EMBED_CACHE_ENABLED` | `true` | true/false | Query embedding cache (Phase 7-A) — caches normalized-query → vector (Caffeine, in-memory) so repeated/similar questions skip the embedding round-trip; a cache hit also records no `embed:<model>` usage |
@@ -317,7 +318,7 @@ User question
 - **DUAL mode** — runs local and external LLM in parallel, displays results in side-by-side tabs
 - **Rate limiting** — Bucket4j + Caffeine per-user token-bucket; 429 `RAG-RATE-001` + `Retry-After` header; configurable via `app.rate-limit.*`
 - **Audit logging** — structured events written to rolling file via Logback; configurable via `app.audit.*`
-- **Image processing pipeline** — PDF/PPTX/DOCX image extraction → stored under `data/images/{docId}/`; Lazy Vision description on first retrieval (cached in SQLite); image thumbnails shown in answer bubble
+- **Image processing pipeline** — PDF/PPTX/DOCX image extraction → stored under `data/images/{imageId}/` (a content-hash key derived from the document's SHA-256, distinct from the document's own `docId`, so long filenames aren't repeated per image); Lazy Vision description on first retrieval (cached in SQLite); image thumbnails shown in answer bubble
 - **Image type classification** — pre-classifies images (diagram / screenshot / chart / photo / other) and uses type-specific Vision prompts for better descriptions
 - **Scanned PDF OCR** — Tesseract OCR (kor+eng) for pages with insufficient text; activated via `app.image-description.ocr-enabled=true`
 - **EMF/WMF conversion** — DOCX Windows Metafile images converted to PNG via Batik (EMF) or LibreOffice headless (WMF)

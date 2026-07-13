@@ -84,7 +84,7 @@ rag_java/
 │       └── pre-commit          # .env 우발 커밋 방지
 ├── data/                       # 런타임 생성 (DATA_DIR)
 │   ├── documents/              # 업로드된 문서 원본 (Sync 대상, 공유)
-│   ├── images/                 # 추출된 이미지 ({docId}/ 하위, 공유)
+│   ├── images/                 # 추출된 이미지 ({imageId}/ 하위 — 문서 SHA-256 기반 해시 키, docId와 별개, 공유)
 │   ├── converted/              # DOCX → Markdown 변환 결과 ({docId}.md 원본, {docId}_corrected.md 교정본, 공유)
 │   ├── chroma/                 # ChromaDB 벡터 데이터 (로컬 실행 시)
 │   ├── audit/                  # 감사 로그 (audit.log + 롤링 압축본)
@@ -197,7 +197,7 @@ copy .env.example .env
 |------|--------|----------|------|
 | `CHUNK_SIZE` | `800` | 300 ~ 2000 | 청크 크기 (문자 수). 작을수록 정밀, 클수록 문맥 풍부 |
 | `CHUNK_OVERLAP` | `100` | 0 ~ CHUNK_SIZE × 0.25 | 청크 간 중복 (문자 수). 청크 경계 문맥 보완 전용 |
-| `MIN_CHUNK_SIZE` | `100` | 50 ~ CHUNK_SIZE × 0.25 | 너무 작은 청크를 인접 청크와 병합할 최소 길이 기준 |
+| `MIN_CHUNK_SIZE` | `300` | 50 ~ CHUNK_SIZE × 0.25 | 너무 작은 청크를 인접 청크와 병합할 최소 길이 기준 |
 | `SEARCH_TOP_K` | `7` | 2 ~ 15 | 벡터 검색 반환 문서 수. 높을수록 재현율↑, 토큰↑ |
 | `SEARCH_SIMILARITY_THRESHOLD` | `0.0` | 0.0 ~ 0.75 | 청크 유지 최소 코사인 유사도. `0.0`=전체 수용. 운영 0.5~0.75 튜닝 시 골든셋 recall 확인 후 적용 |
 | `SEARCH_MULTIQUERY_ENABLED` | `true` | true/false | 검색 전 질의 다중 확장(LLM) 여부. `false`면 임계 경로 첫 LLM 콜 제거 |
@@ -206,6 +206,7 @@ copy .env.example .env
 | `SEARCH_RETRY_ESCALATE` | `true` | true/false | 재시도마다 후보 풀 확대. `candidateK = min(topK×(retryCount+1), topK×3)`. 동일 검색 반복 회피 |
 | `SEARCH_RERANK_ENABLED` | `false` | true/false | RRF 후 LLM 리랭킹 단계 (opt-in). **턴당 LLM 1콜 추가** → 정밀도↑/레이턴시 트레이드오프 |
 | `SEARCH_CANDIDATE_MULTIPLIER` | `3` | 2 ~ 5 | 리랭킹 전 후보 풀 크기. `topK × N`개 가져와 리랭킹 후 topK로 축소 |
+| `SEARCH_TAG_CANDIDATE_MULTIPLIER` | `2` | 1 ~ 5 | 태그가 선택된 검색의 후보 풀 확대 배수. `candidateK = max(candidateK, topK × N)` — sqlite-vec에서 태그 엄격 필터 후 결과가 부족할 때 보정(§4.6) |
 | `SEARCH_RRF_KEYWORD_WEIGHT` | `1.0` | 0.5 ~ 3.0 | 가중 RRF(Phase 7-A) — BM25 키워드 축 가중치. 벡터 축(MultiQuery 1~3개)은 항상 `1/축개수`로 그룹 정규화되므로 `1.0`이 정규화된 벡터 그룹과 동일 비중. `SEARCH_HYBRID_ENABLED=false`면 키워드 축이 없어 무영향 |
 | `SEARCH_RRF_K` | `60` | 20 ~ 100 | 가중 RRF(Phase 7-A) — RRF 순위융합 상수 k(원논문 기본값 60) |
 | `MAX_RETRY_COUNT` | `2` | 0 ~ 4 | 증거 부족 시 재검색 최대 횟수 |
@@ -1319,10 +1320,10 @@ curl -X POST http://localhost:8080/api/v1/chat \
 | 데이터 | 저장 위치 | 비고 |
 |--------|----------|------|
 | 문서 원본 | `DATA_DIR/documents/` | Sync 대상 |
-| 추출된 이미지 | `DATA_DIR/images/{docId}/` | 문서 삭제 시 함께 삭제 |
+| 추출된 이미지 | `DATA_DIR/images/{imageId}/` | `imageId`는 문서 SHA-256 앞 16자(문서명이 아닌 내용 기반 키) — 문서 삭제 시 함께 삭제되나, 내용이 동일한 다른 문서가 남아 있으면 보존 |
 | DOCX 변환 MD (원본) | `DATA_DIR/converted/{docId}.md` | DOCX 인덱싱 시 자동 생성; 문서 삭제 시 함께 삭제 |
 | DOCX 변환 MD (교정본) | `DATA_DIR/converted/{docId}_corrected.md` | LLM 포맷 교정 후 저장; 실제 인덱싱 소스; 수동 편집 후 벡터 스토어 관리 페이지에서 ↺ 재인덱싱 가능 |
-| 인덱스 레지스트리 | `DATA_DIR/memory.db` (SQLite `doc_registry` 테이블) | userId·SHA-256 기반 변경 감지 |
+| 인덱스 레지스트리 | `DATA_DIR/memory.db` (SQLite `doc_registry` 테이블) | SHA-256 기반 변경 감지. 문서 저장소는 사용자별 격리 없이 공유됨(`DocRegistry.SHARED`) — `userId` 파라미터는 API 시그니처상 존재하나 실제로는 무시됨 |
 | 벡터 임베딩 | chroma: Chroma 서버(로컬 `data/chroma/`, Docker Compose `chroma_data` 볼륨) / sqlite-vec: `DATA_DIR/memory.db`(기본) 또는 `app.vectorstore.sqlite-vec.db-path` 설정 시 별도 `vector.db` | 백엔드 전환 시 벡터 공유 안 됨(§3.1) |
 | 대화 이력 + LLM 사용량 | `DATA_DIR/memory.db` (SQLite) | WAL 모드; 메시지 메타데이터(토큰·시간·프로바이더) 포함 |
 | 감사 로그 | `DATA_DIR/audit/audit.log` | JSON Lines; 롤링 압축본 `audit.YYYY-MM-DD.N.log.gz` 포함 |
@@ -1467,11 +1468,11 @@ docker-compose logs app
 
 ### 이미지 썸네일 링크가 클릭 시 "연결할 수 없음"으로 뜸
 
-`GET /api/v1/images/{docId}/{filename}`은 경로 순회(path traversal) 방지를 위해 `docId`/`filename`에 `..`가 포함되면 400을 반환합니다. **PPTX에서 추출된 이미지 파일명이 `img1..png`처럼 점이 두 개 겹친 형태**라면 아래 원인입니다.
+`GET /api/v1/images/{docId}/{filename}`(경로 세그먼트 이름은 `docId`이지만 실제 값은 `imageId` — 문서 SHA-256 기반 해시 키)은 경로 순회(path traversal) 방지를 위해 두 세그먼트 중 하나에라도 `..`가 포함되면 400을 반환합니다. **PPTX에서 추출된 이미지 파일명이 `img1..png`처럼 점이 두 개 겹친 형태**라면 아래 원인입니다.
 
 | 원인 | 조치 |
 |------|------|
-| Apache POI `PictureType.extension`이 이미 `.png`처럼 점을 포함하는데, 파일명 조립 시 점을 한 번 더 붙여 `img1..png`가 됨 (해당 버전 이전 `PptxImageExtractor` 버그) | 코드는 이미 수정됨. **이 버그가 있던 버전으로 인덱싱된 PPTX 문서**는 `data/images/{docId}/`에 이미 잘못된 파일명으로 저장돼 있고, 벡터 스토어에 저장된 청크 내용에도 잘못된 경로 문자열이 그대로 박혀 있으므로 **파일만 이름 변경해서는 해결되지 않습니다** — 해당 문서를 삭제 후 재업로드하거나 `POST /api/v1/documents/sync`로 재동기화하세요 |
+| Apache POI `PictureType.extension`이 이미 `.png`처럼 점을 포함하는데, 파일명 조립 시 점을 한 번 더 붙여 `img1..png`가 됨 (해당 버전 이전 `PptxImageExtractor` 버그) | 코드는 이미 수정됨. **이 버그가 있던 버전으로 인덱싱된 PPTX 문서**는 `data/images/{imageId}/`(구버전은 `data/images/{docId}/`)에 이미 잘못된 파일명으로 저장돼 있고, 벡터 스토어에 저장된 청크 내용에도 잘못된 경로 문자열이 그대로 박혀 있으므로 **파일만 이름 변경해서는 해결되지 않습니다** — 해당 문서를 삭제 후 재업로드하거나 `POST /api/v1/documents/sync`로 재동기화하세요 |
 | 확인 방법 | `find data/images -name "*..*"`로 이중 점 파일명이 있는지 검사 |
 
 ---
@@ -1731,7 +1732,7 @@ AUTH_MANAGEMENT_ONLY=true
 **인증 재활성화 (전체 인증 모드로 전환)**:
 1. `app.auth.enabled=true`로 변경 후 재시작 (`app.auth.management-only`는 자동으로 무시됨)
 2. `/setup`(또는 관리 전용 인증에서 이미 만든) 계정의 이메일·비밀번호로 `/login` 접속
-3. 기존 문서·대화 이력은 userId 기반 파티셔닝으로 그대로 유지
+3. 대화 이력(스레드)은 userId 기반으로 그대로 유지됩니다. 문서는 애초에 사용자별 격리 없이 공유 저장소(`DocRegistry.SHARED`)이므로, 전체 인증 모드로 전환한 뒤에도 모든 로그인 계정이 동일한 문서 목록을 봅니다 — 계정별로 문서가 분리되지 않습니다
 
 ---
 

@@ -58,11 +58,11 @@ public class DocxToMarkdownConverter {
 
     /**
      * @param docxPath  source DOCX file
-     * @param docId     unique document ID (used to name the image subdirectory)
+     * @param imageId   content-hash key for the images subdirectory (see DocumentIndexer.imageId)
      * @param imagesDir directory where extracted images are saved
      * @return full markdown text with [이미지: ...] markers for embedded images
      */
-    public String convert(Path docxPath, String docId, Path imagesDir) throws IOException {
+    public String convert(Path docxPath, String imageId, Path imagesDir) throws IOException {
         Files.createDirectories(imagesDir);
         StringBuilder sb = new StringBuilder();
         int[] imgCounter = {0};
@@ -76,9 +76,9 @@ public class DocxToMarkdownConverter {
 
             for (IBodyElement elem : docx.getBodyElements()) {
                 if (elem instanceof XWPFParagraph para) {
-                    appendParagraph(docx, sb, para, docId, imagesDir, imgCounter, paraIdx[0]++);
+                    appendParagraph(docx, sb, para, imageId, imagesDir, imgCounter, paraIdx[0]++);
                 } else if (elem instanceof XWPFTable table) {
-                    appendTable(docx, sb, table, docId, imagesDir, imgCounter, paraIdx);
+                    appendTable(docx, sb, table, imageId, imagesDir, imgCounter, paraIdx);
                 }
             }
         }
@@ -87,10 +87,10 @@ public class DocxToMarkdownConverter {
 
     /** 단일 문단을 제목/목록/일반 텍스트 마크다운으로 변환해 출력 버퍼에 추가한다. */
     private void appendParagraph(XWPFDocument doc, StringBuilder sb, XWPFParagraph para,
-                                 String docId, Path imagesDir,
+                                 String imageId, Path imagesDir,
                                  int[] imgCounter, int paraIdx) throws IOException {
         int heading = headingLevel(doc, para);
-        String text = paragraphText(doc, para, docId, imagesDir, imgCounter, paraIdx, false);
+        String text = paragraphText(doc, para, imageId, imagesDir, imgCounter, paraIdx, false);
         ListInfo listInfo = resolveListInfo(doc, para);
 
         if (heading > 0) {
@@ -132,7 +132,7 @@ public class DocxToMarkdownConverter {
      * plain=true(코드블록으로 렌더링될 셀)이면 bold/italic 강조 마커를 전혀 붙이지 않는다.
      */
     private String paragraphText(XWPFDocument doc, XWPFParagraph para,
-                                 String docId, Path imagesDir,
+                                 String imageId, Path imagesDir,
                                  int[] imgCounter, int paraIdx, boolean plain) throws IOException {
         StringBuilder sb = new StringBuilder();
         StringBuilder pending = new StringBuilder();
@@ -149,7 +149,7 @@ public class DocxToMarkdownConverter {
                     hasPending = false;
                 }
                 for (XWPFPicture pic : pics) {
-                    sb.append(extractPictureMarker(pic.getPictureData(), docId, imagesDir, imgCounter, paraIdx));
+                    sb.append(extractPictureMarker(pic.getPictureData(), imageId, imagesDir, imgCounter, paraIdx));
                 }
                 continue;
             }
@@ -188,7 +188,7 @@ public class DocxToMarkdownConverter {
     }
 
     /** 내장 이미지를 추출하고 필요 시 EMF/WMF를 PNG로 변환한 뒤 이미지 마커를 반환한다. */
-    private String extractPictureMarker(XWPFPictureData picData, String docId, Path imagesDir,
+    private String extractPictureMarker(XWPFPictureData picData, String imageId, Path imagesDir,
                                         int[] imgCounter, int paraIdx) throws IOException {
         String ext = picData.suggestFileExtension();
         if (ext == null || ext.isBlank()) ext = "bin";
@@ -221,7 +221,7 @@ public class DocxToMarkdownConverter {
 
         String fileName = "d" + paraIdx + "_img" + imgCounter[0] + "." + savedExt;
         Files.write(imagesDir.resolve(fileName), imageBytes);
-        String relPath = "images/" + docId + "/" + fileName;
+        String relPath = "images/" + imageId + "/" + fileName;
         boolean unconvertable = (isEmf || isWmf) && !converted;
         return unconvertable
                 ? "[이미지(변환불가): " + relPath + "]"
@@ -275,7 +275,7 @@ public class DocxToMarkdownConverter {
 
     /** DOCX 표를 마크다운 표로 변환한다(1x1 콜아웃 표는 fenced code로 처리). */
     private void appendTable(XWPFDocument doc, StringBuilder sb, XWPFTable table,
-                             String docId, Path imagesDir,
+                             String imageId, Path imagesDir,
                              int[] imgCounter, int[] paraIdx) throws IOException {
         List<XWPFTableRow> rows = table.getRows();
         if (rows.isEmpty()) return;
@@ -286,7 +286,7 @@ public class DocxToMarkdownConverter {
             XWPFTableCell singleCell = rows.get(0).getTableCells().get(0);
             boolean textOnly = isTextOnlyCell(singleCell);
             // fenced code로 나갈 셀은 bold/italic 마커 없이 원문 그대로 담는다(plain=true).
-            String code = cellContent(doc, singleCell, docId, imagesDir, imgCounter, paraIdx, "\n", textOnly);
+            String code = cellContent(doc, singleCell, imageId, imagesDir, imgCounter, paraIdx, "\n", textOnly);
             if (textOnly) {
                 sb.append("\n```\n").append(code).append("\n```\n\n");
             }
@@ -305,7 +305,7 @@ public class DocxToMarkdownConverter {
         sb.append("\n");
         for (int i = 0; i < rows.size(); i++) {
             XWPFTableRow row = rows.get(i);
-            List<String> flatCells = flattenRow(doc, row, docId, imagesDir, imgCounter, paraIdx, maxCols);
+            List<String> flatCells = flattenRow(doc, row, imageId, imagesDir, imgCounter, paraIdx, maxCols);
 
             sb.append("|");
             for (String text : flatCells) {
@@ -339,7 +339,7 @@ public class DocxToMarkdownConverter {
      * - vertical merge(vMerge continue): blank cell
      */
     private List<String> flattenRow(XWPFDocument doc, XWPFTableRow row,
-                                    String docId, Path imagesDir,
+                                    String imageId, Path imagesDir,
                                     int[] imgCounter, int[] paraIdx,
                                     int maxCols) throws IOException {
         List<String> out = new java.util.ArrayList<>(maxCols);
@@ -347,7 +347,7 @@ public class DocxToMarkdownConverter {
             int span = gridSpan(cell);
             String text = isVerticalMergeContinuation(cell)
                     ? "-"
-                    : cellContent(doc, cell, docId, imagesDir, imgCounter, paraIdx, " ", false);
+                    : cellContent(doc, cell, imageId, imagesDir, imgCounter, paraIdx, " ", false);
 
             out.add(text);
             for (int i = 1; i < span; i++) out.add("-");
@@ -394,12 +394,12 @@ public class DocxToMarkdownConverter {
      * plain=true이면 bold/italic 강조 마커 없이 원문 텍스트만 담는다(fenced code 셀용).
      */
     private String cellContent(XWPFDocument doc, XWPFTableCell cell,
-                               String docId, Path imagesDir,
+                               String imageId, Path imagesDir,
                                int[] imgCounter, int[] paraIdx,
                                String separator, boolean plain) throws IOException {
         StringBuilder out = new StringBuilder();
         for (XWPFParagraph p : cell.getParagraphs()) {
-            String line = paragraphText(doc, p, docId, imagesDir, imgCounter, paraIdx[0]++, plain).trim();
+            String line = paragraphText(doc, p, imageId, imagesDir, imgCounter, paraIdx[0]++, plain).trim();
             if (line.isEmpty()) continue;
 
             ListInfo li = resolveListInfo(doc, p);
