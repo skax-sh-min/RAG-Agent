@@ -30,9 +30,12 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Extracts embedded images from PPTX slides, and rasterizes "drawing tool" shapes that the
@@ -56,10 +59,17 @@ import java.util.Map;
  * crowded/busy slide) falls back to rasterizing just its seed members individually, to avoid one
  * giant slide-sized image.
  *
- * {@link XSLFTable} and {@link XSLFPictureShape} never join a cluster — tables stay as structured
- * markdown pipe-tables ({@code PptxToMarkdownConverter.appendTable()}), and real pictures are
- * extracted verbatim below. Plain {@link XSLFTextBox}es are never rasterized when empty — they're
- * just empty text containers, not drawn shapes.
+ * {@link XSLFTable} never joins a cluster — tables stay as structured markdown pipe-tables
+ * ({@code PptxToMarkdownConverter.appendTable()}). {@link XSLFPictureShape} is the one exception
+ * to "verbatim extraction": authors frequently draw markup (a highlight circle, an arrow, a
+ * callout) directly on top of a screenshot/photo, and extracting the picture and that markup as
+ * two disconnected images would strand the annotation with no context. A picture therefore also
+ * joins the same proximity-clustering pass — as a passenger only, never a seed (a lone picture
+ * must never pull in unrelated nearby shapes) — and gets flattened together with any overlapping
+ * seed cluster into one composite PNG. A picture with no nearby seed, or whose cluster fails to
+ * rasterize, falls back to the original verbatim extraction exactly as before. Plain
+ * {@link XSLFTextBox}es are never rasterized when empty — they're just empty text containers, not
+ * drawn shapes.
  *
  * A minimum bounding-box dimension ({@code app.pptx-image.min-shape-dimension-pt}) filters out
  * trivial icons/dividers before they can seed a cluster. Rendering failures are skipped silently
@@ -137,10 +147,17 @@ public class PptxImageExtractor {
         // Preserves slide.getShapes() order — needed so clusters render members back-to-front
         // in their original paint order.
         List<Clusterable> clusterable = new ArrayList<>();
+        // Real pictures are collected here instead of extracted immediately — a picture that
+        // ends up in a rasterized cluster (see below) is "consumed" and must NOT also be
+        // extracted verbatim; only leftover, unconsumed pictures fall back to that.
+        List<XSLFPictureShape> pictures = new ArrayList<>();
 
         for (XSLFShape shape : slide.getShapes()) {
             if (shape instanceof XSLFPictureShape pic) {
-                addPicture(pic, slideNum, imgIdx, imageId, imagesDir, paths);
+                pictures.add(pic);
+                // Never a seed on its own — a picture with no nearby annotation shape must not
+                // spontaneously pull in unrelated nearby shapes into a merge.
+                clusterable.add(new Clusterable(pic, false));
             } else if (shape instanceof XSLFObjectShape ole) {
                 // OLE embed: always carries its own preview picture (that's how OOXML lets a
                 // viewer render it without running the source app) — save it directly, no
@@ -169,15 +186,33 @@ public class PptxImageExtractor {
             }
         }
 
+        // Identity-based: two POI shape wrappers are only "the same picture" by reference here,
+        // not by equals()/hashCode() (unspecified for XSLFShape).
+        Set<XSLFPictureShape> consumedPictures = Collections.newSetFromMap(new IdentityHashMap<>());
         for (List<Clusterable> cluster : clusterByProximity(clusterable)) {
             if (cluster.size() > MAX_CLUSTER_SHAPES) {
                 // Too crowded to be one coherent diagram — fall back to capturing just the seeds.
+                // Pictures are never seeds, so any picture caught in an oversized cluster is left
+                // unconsumed and extracted verbatim below, same as if it had no cluster at all.
                 for (Clusterable c : cluster) {
                     if (c.seed()) tryRasterize(List.of(c.shape()), slideNum, imgIdx, imageId, imagesDir, paths);
                 }
             } else {
                 List<XSLFShape> members = cluster.stream().map(Clusterable::shape).toList();
-                tryRasterize(members, slideNum, imgIdx, imageId, imagesDir, paths);
+                if (tryRasterize(members, slideNum, imgIdx, imageId, imagesDir, paths)) {
+                    for (Clusterable c : cluster) {
+                        if (c.shape() instanceof XSLFPictureShape pic) consumedPictures.add(pic);
+                    }
+                }
+                // rasterize() failure (e.g. undecodable picture bytes) leaves every member of
+                // this cluster — including any picture — unconsumed, so pictures still fall back
+                // to verbatim extraction below rather than being silently dropped.
+            }
+        }
+
+        for (XSLFPictureShape pic : pictures) {
+            if (!consumedPictures.contains(pic)) {
+                addPicture(pic, slideNum, imgIdx, imageId, imagesDir, paths);
             }
         }
 
@@ -215,13 +250,16 @@ public class PptxImageExtractor {
         paths.add("images/" + imageId + "/" + fileName);
     }
 
-    private void tryRasterize(List<XSLFShape> members, int slideNum, int[] imgIdx, String imageId,
-                               Path imagesDir, List<String> paths) {
+    /** @return true if the composite was actually written (members can be treated as "consumed") */
+    private boolean tryRasterize(List<XSLFShape> members, int slideNum, int[] imgIdx, String imageId,
+                                  Path imagesDir, List<String> paths) {
         String fileName = "s" + slideNum + "_img" + (imgIdx[0] + 1) + ".png";
         if (rasterize(members, imagesDir.resolve(fileName))) {
             imgIdx[0]++;
             paths.add("images/" + imageId + "/" + fileName);
+            return true;
         }
+        return false;
     }
 
     /**

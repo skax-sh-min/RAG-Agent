@@ -17,6 +17,7 @@ import org.apache.poi.xslf.usermodel.XSLFConnectorShape;
 import org.apache.poi.xslf.usermodel.XSLFGroupShape;
 import org.apache.poi.xslf.usermodel.XSLFObjectShape;
 import org.apache.poi.xslf.usermodel.XSLFPictureData;
+import org.apache.poi.xslf.usermodel.XSLFPictureShape;
 import org.apache.poi.xslf.usermodel.XSLFSlide;
 import org.apache.poi.xslf.usermodel.XSLFTextBox;
 import org.junit.jupiter.api.AfterEach;
@@ -26,8 +27,10 @@ import org.junit.jupiter.api.Test;
 
 import javax.imageio.ImageIO;
 import java.awt.Color;
+import java.awt.Graphics2D;
 import java.awt.geom.Rectangle2D;
 import java.awt.image.BufferedImage;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.net.URI;
@@ -153,6 +156,22 @@ class PptxImageExtractorTest {
                 pptx.write(out);
             }
         }
+    }
+
+    /**
+     * 실제로 디코딩 가능한 최소 PNG 바이트를 만든다 — 클러스터에 합류한 사진은 (원본 그대로
+     * 복사되는 verbatim 경로와 달리) POI의 DrawPictureShape가 실제로 디코딩해서 그리므로,
+     * writePptxWithOnePng()의 가짜 바이트("fake-png-bytes")로는 래스터라이즈가 예외로 실패한다.
+     */
+    private static byte[] renderPngBytes(Color color, int width, int height) throws IOException {
+        BufferedImage img = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
+        Graphics2D g = img.createGraphics();
+        g.setColor(color);
+        g.fillRect(0, 0, width, height);
+        g.dispose();
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        ImageIO.write(img, "png", out);
+        return out.toByteArray();
     }
 
     /** 지정한 파일에 흰색(0xFFFFFF)이 아닌 픽셀이 하나라도 있는지 확인한다 — 빈 캔버스가 아니라 실제로 뭔가 그려졌는지 검증. */
@@ -408,6 +427,58 @@ class PptxImageExtractorTest {
         Map<Integer, List<String>> result = strictThreshold.extract(pptxPath, "doc1", imagesDir);
 
         assertThat(result).doesNotContainKey(1); // 임계값을 200pt로 올리면 100x50 도형도 제외됨
+    }
+
+    @Test
+    @DisplayName("사진 위에 겹친 주석 도형(시드)이 있으면 별도 이미지 2장이 아니라 하나의 합성 이미지로 합쳐진다")
+    void pictureOverlappedByAnnotationShapeMergesIntoOneComposite() throws IOException {
+        byte[] realPng = renderPngBytes(Color.RED, 100, 100);
+        writePptx(pptx -> {
+            XSLFSlide slide = pptx.createSlide();
+            XSLFPictureData pd = pptx.addPicture(realPng, PictureData.PictureType.PNG);
+            XSLFPictureShape pic = slide.createPicture(pd);
+            pic.setAnchor(new Rectangle2D.Double(0, 0, 100, 100));
+
+            // 사진 위에 직접 겹쳐 그려진 강조 표시(텍스트 없는 도형 = 시드) — 화면 캡처 위에
+            // 오류 부분을 동그라미로 표시하는 실제 사용 패턴을 흉내낸다.
+            XSLFAutoShape mark = slide.createAutoShape();
+            mark.setAnchor(new Rectangle2D.Double(20, 20, 40, 40));
+            mark.setFillColor(Color.BLUE);
+        });
+
+        Map<Integer, List<String>> result = extractor.extract(pptxPath, "doc1", imagesDir);
+
+        assertThat(result).containsKey(1);
+        assertThat(result.get(1)).hasSize(1); // 사진 + 주석이 하나의 합성 PNG로 병합됨
+        String fileName = fileNameOf(result.get(1).get(0));
+        assertThat(fileName).isEqualTo("s1_img1.png"); // 래스터라이즈 결과이므로 .png (원본 확장자 아님)
+        assertThat(containsNonWhitePixel(imagesDir.resolve(fileName))).isTrue();
+    }
+
+    @Test
+    @DisplayName("사진 근처에 캡션(텍스트만 있는 도형)만 있고 진짜 시드가 없으면 병합되지 않고 사진은 원본 그대로 추출된다")
+    void pictureNearCaptionOnlyDoesNotMerge() throws IOException {
+        byte[] realPng = renderPngBytes(Color.RED, 100, 100);
+        writePptx(pptx -> {
+            XSLFSlide slide = pptx.createSlide();
+            XSLFPictureData pd = pptx.addPicture(realPng, PictureData.PictureType.PNG);
+            XSLFPictureShape pic = slide.createPicture(pd);
+            pic.setAnchor(new Rectangle2D.Double(0, 0, 100, 100));
+
+            // 패딩(15pt) 이내로 인접한 캡션 — 하지만 텍스트가 있는 도형은 candidate일 뿐 시드가
+            // 아니므로, 시드 없는 클러스터는 형성되지 않고 사진은 병합되지 않아야 한다.
+            XSLFAutoShape caption = slide.createAutoShape();
+            caption.setAnchor(new Rectangle2D.Double(0, 105, 100, 30));
+            caption.setText("그림 1. 예시 화면");
+        });
+
+        Map<Integer, List<String>> result = extractor.extract(pptxPath, "doc1", imagesDir);
+
+        assertThat(result).containsKey(1);
+        assertThat(result.get(1)).hasSize(1); // 캡션은 본문 텍스트로 이미 캡처되므로 사진 1장만 남음
+        String fileName = fileNameOf(result.get(1).get(0));
+        assertThat(fileName).isEqualTo("s1_img1.png");
+        assertThat(Files.readAllBytes(imagesDir.resolve(fileName))).isEqualTo(realPng); // 원본 바이트 그대로(재인코딩 아님)
     }
 
     @Test
