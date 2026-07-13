@@ -18,7 +18,7 @@ class AppPropertiesTest {
                 "./data", 2, 800, 100, 100, 7, 0.0, true, 0, false,
                 true, false, 3, sseTimeoutSeconds,
                 null, null, null, null, null, null, null, null, null, null, null, null,
-                sseIdleTimeoutSeconds, null, null, null, null, null, null);
+                sseIdleTimeoutSeconds, null, null, null, null, null, null, null);
     }
 
     private static AppProperties withAuth(AppProperties.AuthConfig auth) {
@@ -26,7 +26,15 @@ class AppPropertiesTest {
                 "./data", 2, 800, 100, 100, 7, 0.0, true, 0, false,
                 true, false, 3, null,
                 null, null, null, null, null, null, null, auth, null, null, null,
-                null, null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null, null, null);
+    }
+
+    private static AppProperties withMdCorrectionDefaultCodeLanguage(String lang) {
+        return new AppProperties(
+                "./data", 2, 800, 100, 100, 7, 0.0, true, 0, false,
+                true, false, 3, null,
+                null, null, null, null, null, null, null, null, null, null, null,
+                null, null, null, null, null, null, null, null, lang);
     }
 
     @Test
@@ -105,5 +113,29 @@ class AppPropertiesTest {
 
         assertThat(cfg.enabled()).isFalse();
         assertThat(cfg.managementOnly()).isFalse();
+    }
+
+    // ── mdCorrectionDefaultCodeLanguageSafe() ────────────────────────────────
+
+    @Test
+    @DisplayName("mdCorrectionDefaultCodeLanguageSafe — 미설정(null) 시 java 기본값 사용")
+    void mdCorrectionDefaultCodeLanguageSafe_nullDefaultsToJava() {
+        assertThat(withMdCorrectionDefaultCodeLanguage(null).mdCorrectionDefaultCodeLanguageSafe()).isEqualTo("java");
+    }
+
+    @Test
+    @DisplayName("mdCorrectionDefaultCodeLanguageSafe — java/bash/sql 외의 값(오설정)은 java로 대체")
+    void mdCorrectionDefaultCodeLanguageSafe_invalidValueDefaultsToJava() {
+        assertThat(withMdCorrectionDefaultCodeLanguage("python").mdCorrectionDefaultCodeLanguageSafe()).isEqualTo("java");
+        assertThat(withMdCorrectionDefaultCodeLanguage("").mdCorrectionDefaultCodeLanguageSafe()).isEqualTo("java");
+        assertThat(withMdCorrectionDefaultCodeLanguage("   ").mdCorrectionDefaultCodeLanguageSafe()).isEqualTo("java");
+    }
+
+    @Test
+    @DisplayName("mdCorrectionDefaultCodeLanguageSafe — java/bash/sql은 대소문자 무관하게 그대로 통과")
+    void mdCorrectionDefaultCodeLanguageSafe_validValuesPassThroughCaseInsensitively() {
+        assertThat(withMdCorrectionDefaultCodeLanguage("bash").mdCorrectionDefaultCodeLanguageSafe()).isEqualTo("bash");
+        assertThat(withMdCorrectionDefaultCodeLanguage("SQL").mdCorrectionDefaultCodeLanguageSafe()).isEqualTo("sql");
+        assertThat(withMdCorrectionDefaultCodeLanguage(" Java ").mdCorrectionDefaultCodeLanguageSafe()).isEqualTo("java");
     }
 }

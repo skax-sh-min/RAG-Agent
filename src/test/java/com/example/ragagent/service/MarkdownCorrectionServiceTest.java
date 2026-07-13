@@ -9,7 +9,10 @@ import org.junit.jupiter.api.Test;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -26,10 +29,11 @@ import static org.mockito.Mockito.when;
 class MarkdownCorrectionServiceTest {
 
     private MarkdownCorrectionService service;
+    private LlmRouter llmRouter;
 
     @BeforeEach
     void setUp() {
-        LlmRouter llmRouter = mock(LlmRouter.class);
+        llmRouter = mock(LlmRouter.class);
         AppProperties props = mock(AppProperties.class);
         AppProperties.IndexingConfig indexing = mock(AppProperties.IndexingConfig.class);
         when(indexing.maxConcurrentLlmCalls()).thenReturn(2);
@@ -141,6 +145,53 @@ class MarkdownCorrectionServiceTest {
 
         assertThat(sections).hasSize(1);
         assertThat(countOccurrences(sections.get(0), "```")).isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("correctSection — lookahead가 있으면 응답에서 SECTION_END 경계 이후(다음 섹션 미리보기)를 " +
+            "잘라내고 그 앞부분만 교정 결과로 반환한다")
+    void correctSection_withLookahead_trimsResponseAtBoundary() {
+        String section = "#### DB 배치 로그\n\n```\n#### BATCH START ####\n### Job ID : BEDU0001\n```\n";
+        // LLM이 지시대로 교정 결과 뒤에 경계 마커를 남기고, 그 뒤에 미리보기까지 (교정해) 붙여 돌려준 상황
+        String llmResponse = "#### DB 배치 로그\n\n```\n#### BATCH START ####\n### Job ID : BEDU0001\n```\n"
+                + "<<<SECTION_END>>>\n## 이건 다음 섹션 미리보기라 버려져야 함";
+        when(llmRouter.executeWithTracking(any(), any(), any(), any())).thenReturn(llmResponse);
+
+        String result = service.correctSection(section, "## 이건 다음 섹션 미리보기라 버려져야 함");
+
+        assertThat(result).doesNotContain("<<<SECTION_END>>>");
+        assertThat(result).doesNotContain("다음 섹션 미리보기");
+        assertThat(result).endsWith("```");
+    }
+
+    @Test
+    @DisplayName("correctSection — lookahead가 있는데 LLM이 경계 마커를 누락하면 미리보기 유출을 막기 위해 " +
+            "lookahead 없이 재교정한다")
+    void correctSection_lookaheadButMarkerDropped_reCorrectsWithoutLookahead() {
+        String section = "본문입니다\n";
+        // 첫 호출(lookahead 포함): 마커 없이 미리보기가 섞인 응답 → 신뢰 불가
+        // 재호출(lookahead 없음): 깔끔한 교정 결과. 두 호출을 순서대로 스텁.
+        when(llmRouter.executeWithTracking(any(), any(), any(), any()))
+                .thenReturn("본문 입니다.\n다음 섹션 미리보기가 섞여버림")   // 1st: no marker
+                .thenReturn("본문 입니다.");                                  // 2nd: clean re-correction
+
+        String result = service.correctSection(section, "다음 섹션 미리보기");
+
+        assertThat(result).isEqualTo("본문 입니다.");
+        // 마커 누락 감지 → 정확히 2번 호출(lookahead 포함 1회 + 재교정 1회)
+        verify(llmRouter, times(2)).executeWithTracking(any(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("correctSection — lookahead가 없으면 경계 처리 없이 LLM 교정 결과를 그대로 반환한다")
+    void correctSection_noLookahead_returnsLlmResultVerbatim() {
+        String section = "본문입니다\n\n```java\nSystem.out.println(1);\n```\n";
+        String corrected = "본문 입니다.\n\n```java\nSystem.out.println(1);\n```\n";
+        when(llmRouter.executeWithTracking(any(), any(), any(), any())).thenReturn(corrected);
+
+        String result = service.correctSection(section);
+
+        assertThat(result).isEqualTo(corrected);
     }
 
     private static int countOccurrences(String haystack, String needle) {

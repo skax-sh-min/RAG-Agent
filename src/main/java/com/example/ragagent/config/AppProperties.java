@@ -3,6 +3,7 @@ package com.example.ragagent.config;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 import java.util.List;
+import java.util.Locale;
 
 @ConfigurationProperties(prefix = "app")
 public record AppProperties(
@@ -38,7 +39,8 @@ public record AppProperties(
         Boolean searchQueryEmbedCacheEnabled,   // 쿼리 임베딩 캐시 on/off (기본 true)
         Integer searchQueryEmbedCacheMaxSize,   // 쿼리 임베딩 캐시 최대 엔트리 수 (기본 500)
         Integer searchQueryEmbedCacheTtlSeconds, // 쿼리 임베딩 캐시 TTL 초 (기본 600 = 10분)
-        PptxShapeExtractionConfig pptxImage     // PPTX 그리기 도구 도형 래스터라이즈/클러스터링 튜닝
+        PptxShapeExtractionConfig pptxImage,    // PPTX 그리기 도구 도형 래스터라이즈/클러스터링 튜닝
+        String mdCorrectionDefaultCodeLanguage  // MD 교정 시 LLM이 미펜스 코드를 감쌀 때 언어 판단이 어려우면 붙일 기본 언어 (java/bash/sql, 기본 java)
 ) {
     public record LlmConfig(
             List<ProviderConfig> providers,
@@ -332,6 +334,20 @@ public record AppProperties(
         boolean mergeAnnotatedPictures = (pptxImage != null && pptxImage.mergeAnnotatedPictures() != null)
                 ? pptxImage.mergeAnnotatedPictures() : true;
         return new PptxShapeExtractionConfig(minDim, padding, mergeAnnotatedPictures);
+    }
+
+    /**
+     * Default language tag the correction LLM is told to use when it wraps unfenced code/logs into a
+     * code block and can't determine the language ({@link com.example.ragagent.service.MarkdownCorrectionService}).
+     * Restricted to java/bash/sql (this project's own stack) — any other configured value (including
+     * unset/blank) falls back to {@code "java"}.
+     */
+    public String mdCorrectionDefaultCodeLanguageSafe() {
+        String v = mdCorrectionDefaultCodeLanguage == null ? "" : mdCorrectionDefaultCodeLanguage.strip().toLowerCase(Locale.ROOT);
+        return switch (v) {
+            case "java", "bash", "sql" -> v;
+            default -> "java";
+        };
     }
 
     /** Null-safe accessor — returns an empty LlmConfig when app.llm is not configured. */
