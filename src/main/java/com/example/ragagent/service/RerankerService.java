@@ -1,8 +1,10 @@
 package com.example.ragagent.service;
 
+import com.example.ragagent.ingestion.KeywordExtractor;
 import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.llm.TaskType;
+import com.example.ragagent.model.MetaKey;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.messages.SystemMessage;
@@ -32,6 +34,9 @@ import java.util.Locale;
 public class RerankerService {
 
     private static final Logger log = LoggerFactory.getLogger(RerankerService.class);
+    // §10.7.1 — was 200 (often cut off an 800-char chunk's substance); widened so the LLM
+    // sees enough of the chunk to judge relevance without a large token-budget increase.
+    private static final int PREVIEW_LENGTH = 500;
 
     private final LlmRouter llmRouter;
     private final MessageSource messageSource;
@@ -78,12 +83,24 @@ public class RerankerService {
         }
     }
 
-    private static String formatDocList(List<Document> docs) {
+    /**
+     * §10.7.1 — prepends a "{@code (filename > heading)}" context header before the preview so
+     * the LLM knows which document/section a chunk came from, not just its raw text. This reuses
+     * {@link KeywordExtractor#buildStructuralContext(Document)}'s deterministic baseline rather
+     * than {@link MetaKey#CHUNK_CONTEXT} itself — that LLM-enhanced field is transient (§10.1,
+     * stripped before persistence in both vector store providers) and is never present on a
+     * Document once it comes back from a search.
+     * Package-private for unit testing.
+     */
+    static String formatDocList(List<Document> docs) {
         StringBuilder sb = new StringBuilder();
         for (int i = 0; i < docs.size(); i++) {
-            String text = docs.get(i).getText();
-            String preview = (text == null) ? "" : text.substring(0, Math.min(200, text.length()));
-            sb.append("[%d] %s\n".formatted(i, preview));
+            Document doc = docs.get(i);
+            String text = doc.getText();
+            String preview = (text == null) ? "" : text.substring(0, Math.min(PREVIEW_LENGTH, text.length()));
+            String context = KeywordExtractor.buildStructuralContext(doc);
+            String header = context.isBlank() ? "" : "(%s) ".formatted(context);
+            sb.append("[%d] %s%s\n".formatted(i, header, preview));
         }
         return sb.toString();
     }

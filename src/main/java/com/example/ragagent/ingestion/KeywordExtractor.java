@@ -145,8 +145,13 @@ public class KeywordExtractor {
         }
     }
 
-    /** {@code "{filename} > {heading}"} — deterministic, LLM-free baseline context (§10.1). */
-    static String buildStructuralContext(Document chunk) {
+    /**
+     * {@code "{filename} > {heading}"} — deterministic, LLM-free baseline context (§10.1).
+     * Public: also reused at query time by {@link com.example.ragagent.service.RerankerService}
+     * (§10.7.1) — the LLM-enhanced {@link MetaKey#CHUNK_CONTEXT} sentence itself is transient and
+     * never persisted, so this structural fallback is the only context available post-retrieval.
+     */
+    public static String buildStructuralContext(Document chunk) {
         String filename = str(chunk.getMetadata().get(MetaKey.FILENAME));
         String heading = str(chunk.getMetadata().get(MetaKey.HEADING));
         if (filename.isBlank()) return heading;
