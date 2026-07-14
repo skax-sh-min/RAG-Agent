@@ -23,7 +23,8 @@
 │    1. TaskType 지원 여부                                             │
 │    2. Circuit Breaker 미차단                                         │
 │    3. API 키 유효성                                                  │
-│    4. priority 순서 (낮을수록 우선)                                  │
+│    4. priority 순서 (낮을수록 우선, 동일 priority 후보는 §6.12       │
+│       개선안 5 — 잔여 permit 최다(least-in-flight)로 로드밸런싱)     │
 │                                                                      │
 │  동시성 게이트 (§6.12, 질의 경로 전용 — 프로바이더 선택과는 별개):    │
 │    executeGated()/acquirePermit() → 프로바이더별 Semaphore로 서버    │
@@ -113,7 +114,20 @@ app.llm.providers[0].type=BOTH
 app.llm.providers[0].role=LOCAL
 app.llm.providers[0].priority=0
 app.llm.providers[0].stream=true
-# app.llm.providers[0].concurrency=3   # 미설정 시 default-provider-concurrency 사용
+# app.llm.providers[0].concurrency=4   # 미설정 시 default-provider-concurrency 사용
+
+# ── [LOCAL] 로드밸런싱 예시 (선택, §6.12 개선안 5) ─────────────────
+# local과 동일 role(LOCAL)·동일 priority(0)·다른 base-url로 등록하면
+# LlmRouter가 잔여 permit이 더 많은(least-in-flight) 쪽으로 자동 분산한다.
+# 총 동시 처리량 = 등록 대수 × concurrency (2대 × 4 = 8).
+# app.llm.providers[7].name=local-2
+# app.llm.providers[7].base-url=http://gpu-b:1234/v1
+# app.llm.providers[7].api-key=lm-studio
+# app.llm.providers[7].model=google/gemma-4-e4b
+# app.llm.providers[7].type=BOTH
+# app.llm.providers[7].role=LOCAL
+# app.llm.providers[7].priority=0
+# app.llm.providers[7].concurrency=4
 
 # ── [LOCAL] Vision 전용 로컬 모델 (선택) ──────────────────────────
 # type=VISION → VISION task에서 BOTH보다 우선 선택됨
@@ -267,6 +281,21 @@ SSE 스트리밍에서는 `error.llm.backpressure` 메시지("현재 요청이 �
 
 **인플라이트 single-flight (임베딩 전용)**: 위 세마포어 게이트와는 별개로, `CachingEmbeddingModel`(질의 임베딩 캐시, Phase 7-A)이 동시 요청 중복 계산까지 제거한다. 4명이 완전히 동일한 질문을 거의 동시에 물으면, 첫 호출(owner)만 실제로 임베딩 API를 호출하고 나머지(joiner)는 그 결과를 `CompletableFuture.join()`으로 공유한다(`ConcurrentHashMap<key, CompletableFuture<float[]>>` 기반) — thundering herd 방지. owner가 실패하면 joiner에도 동일 예외가 전파되고 in-flight 항목은 정리되어 다음 호출이 새로 재시도한다. 완전 동일한(정규화 후) 텍스트만 병합되며, 근사 질문은 여전히 캐시 미스(§10.5 시맨틱 캐시 영역, 보류). CLASSIFIER 등 다른 텍스트 응답에는 적용되지 않는다 — 오늘 기준 그런 캐시 자체가 없다.
 
+**동일 우선순위 프로바이더 로드밸런싱 (처리량 확장, §6.12 개선안 5)**: 같은 `role`·같은 `priority`로 프로바이더를 여러 대 등록하면(§3 "LOCAL 로드밸런싱 예시" 참고) `LlmRouter.findFirst()`가 이제 그중 **잔여 permit이 가장 많은(least-in-flight) 프로바이더**를 선택한다 — 각 프로바이더가 위 동시성 게이트(개선안 1)의 `Semaphore`를 하나씩 갖고 있으므로 잔여 permit 수를 즉시 조회할 수 있어 별도 상태 없이 "least-connections" 로드밸런싱이 된다.
+
+```
+findFirst(role, priority 오름차순 순회)
+  → 그 role에서 가장 낮은 priority를 가진 후보 그룹 선택(우선순위는 그대로 tie-break/장애조치 순서)
+    ├─ 후보가 1개 → 기존과 동일하게 그대로 선택
+    └─ 후보가 여러 개(동일 priority) → 잔여 permit(availablePermits())이 가장 많은 쪽 선택
+         · 둘 다 동일하면(예: 둘 다 유휴) 먼저 등록된 프로바이더로 결정적 tie-break
+```
+
+- **priority가 다르면 부하와 무관하게 낮은 priority가 항상 우선** — 로드밸런싱은 동일 priority 그룹 내부에서만 일어난다. 부하가 높다고 다음 priority(예: 외부 유료 API)로 자동 전환되지는 않는다 — 그건 프로바이더가 실제로 응답 실패(429/402/503/기타)할 때만 §5 Circuit Breaker가 처리하는 영역이다.
+- **총 동시 처리량 = 등록 대수 × per-provider concurrency** (예: LOCAL 2대 × concurrency 3 = 6).
+- 임베딩 프로바이더는 아직 이 로드밸런싱 대상이 아니다 — `EmbeddingModel` 데코레이터 체인이라 라우팅 지점이 다르며, 우선 LLM 경로부터 적용했다.
+- `/llm-usage`에서 프로바이더별 사용량 집계로 실제 분산 여부를 확인할 수 있다.
+
 ---
 
 ## 7. 사용량 추적 (SQLite — memory.db 공유)
@@ -296,4 +325,4 @@ CREATE TABLE IF NOT EXISTS llm_usage (
 - **tried 집합 순환 방지**: `executeWithTracking()` 내 tried 집합이 모든 프로바이더를 포함하면 exhausted — 최대 재귀 = 프로바이더 수
 - **Vision 라우팅**: `type=VISION` 모델 미등록 시 `LIGHT_BOTH` → `BOTH` 순으로 fallback. Vision 문서 많으면 `local-vision` 등록 권장
 - **동시성 게이트(§6) 크기 설정 실수**: `providers[N].concurrency`를 서버의 실제 `--parallel`보다 크게 잡으면 앱이 스스로 429/타임아웃을 유발할 수 있다(서버가 처리 못 할 요청까지 통과시킴). 반대로 너무 작게 잡으면 여유 용량을 못 씀 — 서버 설정값과 일치시키는 것이 원칙
-- **동일 우선순위 프로바이더 다중 등록은 아직 로드밸런싱 안 됨**: `findFirst()`가 같은 role 안에서 항상 첫 번째 프로바이더만 선택 — 여러 대 등록해도 나머지는 장애 시 폴백 용도로만 쓰인다(처리량 확장을 위한 로드밸런싱은 §6.12 개선안 5, PLAN.md 미착수)
+- **동일 우선순위 프로바이더 다중 등록 시 자동 로드밸런싱**(§6.12 개선안 5): `findFirst()`가 같은 role·같은 priority 후보 중 §6.12 동시성 게이트의 잔여 permit이 가장 많은(least-in-flight) 프로바이더를 선택 — 여러 대 등록하면 실제로 부하가 분산된다. priority가 다르면 부하와 무관하게 낮은 priority가 항상 우선(동일 priority 그룹 내부에서만 분산). 설정 방법은 §3 "LOCAL 로드밸런싱 예시" 참고

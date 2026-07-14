@@ -216,7 +216,7 @@ rag_java/
     │   │   ├── RoutingMode.java       # COST_FIRST|QUALITY_FIRST|PROGRESSIVE|DUAL|LOCAL_ONLY
     │   │   ├── CircuitBreaker.java    # In-memory per-provider circuit breaker (Retry-After aware)
     │   │   ├── TrackingEmbeddingModel.java  # EmbeddingModel decorator — records embedding token usage separately (embed:<model>)
-    │   │   └── CachingEmbeddingModel.java   # EmbeddingModel decorator — Caffeine query-embedding cache (Phase 7-A), composed outside tracking
+    │   │   └── CachingEmbeddingModel.java   # EmbeddingModel decorator — Caffeine query-embedding cache (Phase 7-A) + §6.12 in-flight single-flight dedup (ConcurrentHashMap<key,CompletableFuture>), composed outside tracking
     │   ├── model/                     # Java 21 records
     │   │   ├── MetaKey.java           # Vector store metadata key constants
     │   │   └── ChatRequest/Response/SourceRef/DocumentInfo/SyncResult/ThreadMeta/ChatForm/LlmProviderReport/IndexingProgressEvent.java
@@ -313,6 +313,9 @@ User question
 - **Multi-LLM routing** — `LlmRouter` selects providers by `TaskType × RoutingMode`; COST_FIRST / QUALITY_FIRST / PROGRESSIVE / DUAL (parallel local + external) / LOCAL_ONLY
 - **Circuit Breaker** — automatic provider blocking on HTTP 429/errors (Retry-After aware), priority-based failover, status visible in LLM usage dashboard
 - **Per-provider concurrency gate + backpressure** — the chat/query path never sends more concurrent requests to a provider than it can serve (sized to the LLM server's `--parallel`); a request that waits past `LLM_PERMIT_WAIT_TIMEOUT_SECONDS` (default 20s) fails fast with HTTP 429 + `Retry-After` instead of hanging until the 180s read timeout. Indexing/background LLM calls are unaffected (they keep their own semaphore)
+- **In-flight single-flight (embeddings)** — concurrent requests for the exact same (post-normalization) text — e.g. several users asking the same question at nearly the same moment — collapse into one delegate call; the rest share that result instead of each recomputing it (`CachingEmbeddingModel`)
+- **Overload-aware circuit breaking** — a 429/402/503 with no fallback provider available (e.g. a lone LOCAL deployment) triggers a short 30s block instead of the full multi-minute default, so a transient capacity blip doesn't take chat down for everyone; falls back to normal blocking + auto-failover whenever another provider can pick up the slack
+- **Same-priority load balancing** — registering multiple providers at the same role + priority (e.g. two LOCAL servers) automatically distributes requests to whichever has more free concurrency-gate capacity (least-in-flight), for horizontal throughput scaling — no code changes, just deployment config
 - **Vector search** — LLM generates an optimized search query (`MultiQueryExpander`, 3 parallel queries), then performs vector similarity search via the selected backend (ChromaDB or sqlite-vec)
 - **Contextual Retrieval** — each chunk's embedding and lexical (`chunk_fts`) index include a prepended context header (`{filename} > {section heading}`, plus an optional LLM-generated 1-2 sentence summary from the same call that extracts keywords) so chunks that read ambiguously alone (tables, code fragments, pronoun-heavy text) are recalled more reliably; the header never appears in stored/displayed text, the source preview, or the answer prompt — only in the embedding/lexical-search input
 - **Embedding input normalization** — decorative markdown (separator lines, bold/italic/underline markers) is stripped from the embedding, `chunk_fts`, and answer-prompt inputs (not from stored/displayed text), reducing noise in the search index and prompt token usage

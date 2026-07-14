@@ -1249,6 +1249,40 @@ app.llm.providers[4].role=PREMIUM
 app.llm.providers[4].priority=4
 ```
 
+---
+
+#### 예제 5 — 로컬 LLM 2대 로드밸런싱 (§6.12 개선안 5, 처리량 확장)
+
+GPU가 2대 있어 로컬 LLM 서버를 2대 띄울 수 있을 때, 같은 `role`(LOCAL)·같은 `priority`로 등록하면 `LlmRouter`가 요청마다 잔여 permit이 더 많은(least-in-flight) 쪽으로 자동 분산합니다. 상세 동작은 [§5.7](#57-동시성-제어-및-백프레셔-612)을 참고하세요.
+
+`application.properties`:
+```properties
+app.llm.default-routing-mode=COST_FIRST
+app.llm.default-provider-concurrency=4
+
+app.llm.providers[0].name=local-a
+app.llm.providers[0].base-url=http://gpu-a:1234/v1
+app.llm.providers[0].api-key=lm-studio
+app.llm.providers[0].model=google/gemma-4-e4b
+app.llm.providers[0].type=BOTH
+app.llm.providers[0].role=LOCAL
+app.llm.providers[0].priority=0
+app.llm.providers[0].concurrency=4
+
+app.llm.providers[1].name=local-b
+app.llm.providers[1].base-url=http://gpu-b:1234/v1
+app.llm.providers[1].api-key=lm-studio
+app.llm.providers[1].model=google/gemma-4-e4b
+app.llm.providers[1].type=BOTH
+app.llm.providers[1].role=LOCAL
+app.llm.providers[1].priority=0
+app.llm.providers[1].concurrency=4
+```
+
+- `priority=0`으로 동일 — 이래야 같은 그룹으로 묶여 부하 분산 대상이 됩니다. `priority`를 다르게 주면 로드밸런싱이 아니라 일반 폴백(낮은 쪽 우선, §5.5)이 됩니다.
+- 총 동시 처리량 = 2대 × `concurrency`(4) = 8 — "4명 동시 질문" 시나리오에도 여유가 생깁니다.
+- 서버 사양이 다르면 `concurrency`도 각각 다르게(예: `local-a`는 4, `local-b`는 2) 그 서버의 실제 `--parallel` 값에 맞춰 설정하세요.
+
 COST_FIRST 흐름:
 ```
 [분류·키워드·쿼리] local(LIGHT_BOTH)
@@ -1307,9 +1341,15 @@ COST_FIRST 흐름:
 
 **튜닝 가이드**:
 - **기본 원칙**: `LLM_DEFAULT_PROVIDER_CONCURRENCY`(또는 프로바이더별 `concurrency`)는 그 LLM 서버의 실제 `--parallel`(또는 동급) 설정값과 일치시키세요. 너무 크게 잡으면 앱이 서버가 처리 못 할 요청까지 통과시켜 결국 서버 쪽에서 429/타임아웃이 발생하고, 너무 작게 잡으면 서버 여유 용량을 못 씁니다.
-- 429가 자주 발생한다면: ① `LLM_PERMIT_WAIT_TIMEOUT_SECONDS`를 늘려 더 오래 대기하게 하거나, ② LLM 서버의 `--parallel` 값과 `concurrency` 설정을 함께 늘리거나(서버 리소스가 허용하는 한도 내에서), ③ 동일 role로 프로바이더를 추가 등록해 부하를 분산하세요(단, 같은 role 안에서 로드밸런싱은 아직 미구현 — `findFirst()`가 첫 번째 프로바이더만 선택하므로 장애 시 폴백 용도로만 유효, [PLAN.md §6.12](../documents/PLAN.md) 개선안 5 참고).
+- 429가 자주 발생한다면: ① `LLM_PERMIT_WAIT_TIMEOUT_SECONDS`를 늘려 더 오래 대기하게 하거나, ② LLM 서버의 `--parallel` 값과 `concurrency` 설정을 함께 늘리거나(서버 리소스가 허용하는 한도 내에서), ③ 동일 role·동일 priority로 프로바이더를 추가 등록해 부하를 분산하세요 — 아래 "동일 우선순위 로드밸런싱" 참고.
 - 로그로 확인: `[BACKPRESSURE] provider=... concurrency slot wait exceeded Ns, rejecting with 429` 로그 라인이 반복되면 해당 프로바이더가 지속적으로 포화 상태라는 신호입니다.
 - 인덱싱 중에도 같은 물리 서버를 채팅이 함께 쓰는 구성이라면, 인덱싱 트래픽도 결국 이 게이트 뒤의 같은 서버 용량을 공유하게 되므로 대량 동기화 작업은 사용자 트래픽이 적은 시간대에 실행하는 것을 권장합니다.
+
+**동일 우선순위 로드밸런싱(§6.12 개선안 5, 처리량 확장)**: 같은 `role`·같은 `priority`로 프로바이더를 여러 대 등록하면(설정 예시는 [§5.4 예제 5](#54-시나리오별-설정-예제) 참고), 요청 시점마다 그중 **잔여 permit이 가장 많은(least-in-flight) 프로바이더**가 자동 선택됩니다 — 위 세마포어 게이트를 그대로 재사용하므로 별도 설정이 필요 없습니다.
+- `priority`가 다르면 부하와 무관하게 낮은 `priority`가 항상 우선합니다 — 로드밸런싱은 **동일 priority 그룹 내부에서만** 일어나고, 서로 다른 priority 간 자동 전환은 여전히 프로바이더 실패(§5.5 Circuit Breaker) 시에만 일어납니다.
+- 총 동시 처리량 = 등록 대수 × per-provider `concurrency`(예: LOCAL 2대 × 3 = 6).
+- `/llm-usage`에서 프로바이더별 사용량이 실제로 분산되는지 확인할 수 있습니다.
+- 임베딩 프로바이더는 아직 이 로드밸런싱 대상이 아닙니다(라우팅 지점이 다른 `EmbeddingModel` 데코레이터 체인) — 향후 과제로 남아 있습니다.
 
 ---
 

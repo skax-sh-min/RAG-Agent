@@ -215,7 +215,7 @@ rag_java/
     │   │   ├── RoutingMode.java           # COST_FIRST|QUALITY_FIRST|PROGRESSIVE|DUAL|LOCAL_ONLY
     │   │   ├── CircuitBreaker.java        # LLM 프로바이더 인메모리 차단 관리 (Retry-After 지원)
     │   │   ├── TrackingEmbeddingModel.java  # EmbeddingModel 데코레이터 — 임베딩 토큰 사용량을 채팅과 분리 기록 (embed:<model>)
-    │   │   └── CachingEmbeddingModel.java   # EmbeddingModel 데코레이터 — Caffeine 쿼리 임베딩 캐시(Phase 7-A), tracking 바깥쪽에 합성
+    │   │   └── CachingEmbeddingModel.java   # EmbeddingModel 데코레이터 — Caffeine 쿼리 임베딩 캐시(Phase 7-A) + §6.12 인플라이트 single-flight 중복 제거(ConcurrentHashMap<key,CompletableFuture>), tracking 바깥쪽에 합성
     │   ├── model/                         # Java 21 record
     │   │   ├── MetaKey.java               # 벡터 스토어 메타데이터 키 상수
     │   │   └── ChatRequest/Response/SourceRef/DocumentInfo/SyncResult/ThreadMeta/ChatForm/LlmProviderReport/IndexingProgressEvent.java
@@ -312,6 +312,9 @@ rag_java/
 - **멀티 LLM 라우팅** — `LlmRouter`가 `TaskType × RoutingMode` 기준으로 프로바이더 선택: COST_FIRST / QUALITY_FIRST / PROGRESSIVE / DUAL (로컬+외부 병렬) / LOCAL_ONLY
 - **Circuit Breaker** — HTTP 429/오류 시 프로바이더 자동 차단 (Retry-After 지원), 우선순위 기반 failover; LLM 사용량 대시보드에서 차단 상태 확인
 - **프로바이더별 동시성 게이트 + 백프레셔** — 채팅/질의 경로가 한 프로바이더에 보내는 동시 요청은 그 서버가 처리 가능한 만큼(`--parallel`)을 절대 넘지 않음; `LLM_PERMIT_WAIT_TIMEOUT_SECONDS`(기본 20초)를 넘겨 대기하면 180초 read timeout까지 기다리지 않고 즉시 HTTP 429 + `Retry-After` 응답. 인덱싱/백그라운드 LLM 호출은 영향받지 않음(자체 세마포어 유지)
+- **인플라이트 single-flight (임베딩)** — 완전히 동일한(정규화 후) 텍스트를 동시에 요청하면(예: 여러 사용자가 거의 동시에 같은 질문) 첫 호출만 실제로 계산하고 나머지는 그 결과를 공유(`CachingEmbeddingModel`) — 각자 다시 계산하지 않음
+- **과부하 인지 서킷브레이커** — 폴백 프로바이더가 없는 상태에서(예: 단일 LOCAL 배포) 429/402/503을 받으면 기본 다중 분 단위 차단 대신 30초로 짧게 차단해 일시적 용량 초과가 채팅 전체를 다운시키지 않음 — 다른 프로바이더로 넘길 수 있는 상황이면 기존처럼 정상 차단 후 자동 폴백
+- **동일 우선순위 로드밸런싱** — 같은 role·priority로 프로바이더를 여러 대 등록하면(예: 로컬 서버 2대) 동시성 게이트 여유가 더 많은 쪽으로 요청이 자동 분산(least-in-flight) — 코드 변경 없이 배포 설정만으로 처리량 수평 확장
 - **벡터 검색** — `MultiQueryExpander`(3쿼리 병렬)로 최적 검색 후 선택된 백엔드(ChromaDB 또는 sqlite-vec)로 유사도 검색
 - **Contextual Retrieval** — 청크 임베딩과 키워드 검색(`chunk_fts`) 입력 앞에 맥락 헤더(`{파일명} > {섹션 제목}` + 키워드 추출과 같은 호출에서 생성되는 LLM 1~2문장 요약)를 결합해, 표·코드 조각·대명사 위주 텍스트처럼 단독으로는 모호한 청크의 검색 재현율을 높임. 이 헤더는 저장·표시 텍스트, 출처 미리보기, 답변 프롬프트에는 절대 나타나지 않고 임베딩/키워드 검색 입력에만 반영됨
 - **임베딩 입력 정규화** — 마크다운 장식(구분선, 볼드/이탤릭/밑줄 마커)을 임베딩·`chunk_fts`·답변 프롬프트 입력에서만 제거(저장·표시 텍스트는 원문 유지)해 검색 인덱스 노이즈와 프롬프트 토큰 사용량을 줄임

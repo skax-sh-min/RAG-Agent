@@ -318,4 +318,66 @@ class LlmRouterTest {
 
         assertThat(blockedSecondsFromNow("lm")).isBetween(20L, 40L);
     }
+
+    // ── §6.12 item 5 — least-in-flight load balancing across same-priority providers ──
+
+    @Test
+    @DisplayName("§6.12(5) — 동일 role·동일 priority에서 둘 다 여유 있으면 먼저 등록된 프로바이더를 선택한다(결정적 tie-break)")
+    void samePriorityBothIdle_picksFirstRegistered() {
+        var local1 = p("local-1", ProviderRole.LOCAL, TaskType.TEXT, 0);
+        var local2 = p("local-2", ProviderRole.LOCAL, TaskType.TEXT, 0);
+        var r = router(RoutingMode.COST_FIRST, local1, local2);
+
+        assertThat(r.findProviderName(TaskType.TEXT, RoutingMode.COST_FIRST)).isEqualTo("local-1");
+    }
+
+    @Test
+    @DisplayName("§6.12(5) — 동일 role·동일 priority에서 한쪽이 포화 상태면(permit 0) 여유 있는 쪽을 선택한다(least-in-flight)")
+    void samePriorityOneSaturated_picksLeastInFlight() {
+        var local1 = p("local-1", ProviderRole.LOCAL, TaskType.TEXT, 0);
+        var local2 = p("local-2", ProviderRole.LOCAL, TaskType.TEXT, 0);
+        var r = new LlmRouter(List.of(local1, local2), null, breaker, RoutingMode.COST_FIRST, 0.6, 180,
+                Map.of("local-1", 1, "local-2", 1), 1, 1);
+
+        LlmRouter.Permit held = r.acquirePermit(local1); // local-1의 유일한 슬롯을 점유
+        assertThat(r.findProviderName(TaskType.TEXT, RoutingMode.COST_FIRST)).isEqualTo("local-2");
+        held.close();
+
+        // 슬롯 반환 후에는 다시 tie 상태 → 먼저 등록된 local-1로 돌아옴
+        assertThat(r.findProviderName(TaskType.TEXT, RoutingMode.COST_FIRST)).isEqualTo("local-1");
+    }
+
+    @Test
+    @DisplayName("§6.12(5) — priority가 다르면 부하와 무관하게 낮은 priority가 항상 우선한다(동일 priority 그룹 내부에서만 분산)")
+    void differentPriorityIgnoresLoad() {
+        var local1 = p("local-1", ProviderRole.LOCAL, TaskType.TEXT, 0);
+        var local2 = p("local-2", ProviderRole.LOCAL, TaskType.TEXT, 1); // 더 높은(나중) priority
+        var r = new LlmRouter(List.of(local1, local2), null, breaker, RoutingMode.COST_FIRST, 0.6, 180,
+                Map.of("local-1", 1, "local-2", 1), 1, 1);
+
+        LlmRouter.Permit held = r.acquirePermit(local1); // local-1이 포화 상태여도
+        assertThat(r.findProviderName(TaskType.TEXT, RoutingMode.COST_FIRST)).isEqualTo("local-1"); // priority가 우선
+        held.close();
+    }
+
+    @Test
+    @DisplayName("§6.12(5) — 동일 priority 프로바이더 2대 등록 시 한쪽이 포화되면 실제 호출이 다른 쪽으로 분산된다")
+    void executeGated_distributesAcrossSamePriorityProvidersUnderLoad() {
+        ChatModel model1 = mock(ChatModel.class);
+        when(model1.call(any(Prompt.class))).thenReturn(chatResponse("from-1"));
+        ChatModel model2 = mock(ChatModel.class);
+        when(model2.call(any(Prompt.class))).thenReturn(chatResponse("from-2"));
+        var local1 = new LlmProvider("local-1", TaskType.TEXT, ProviderRole.LOCAL, 0, "k", null, null, true,
+                model1, null);
+        var local2 = new LlmProvider("local-2", TaskType.TEXT, ProviderRole.LOCAL, 0, "k", null, null, true,
+                model2, null);
+        var r = new LlmRouter(List.of(local1, local2), mock(LlmUsageRepository.class), breaker,
+                RoutingMode.COST_FIRST, 0.6, 180, Map.of("local-1", 1, "local-2", 1), 1, 5);
+
+        LlmRouter.Permit held = r.acquirePermit(local1); // local-1 포화
+        String result = r.executeGated(TaskType.TEXT, RoutingMode.COST_FIRST, m -> m.call(new Prompt("x")));
+
+        assertThat(result).isEqualTo("from-2");
+        held.close();
+    }
 }

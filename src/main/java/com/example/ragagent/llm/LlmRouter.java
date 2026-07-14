@@ -319,17 +319,51 @@ public class LlmRouter {
                                     Set<String> excluded) {
         boolean imageTask = isImageTask(taskType);
         for (ProviderRole role : roleOrder) {
-            Optional<LlmProvider> p = providers.stream()
+            List<LlmProvider> eligible = providers.stream()
                     .filter(x -> x.role() == role
                             && x.supports(taskType)
                             && x.hasValidApiKey()
                             && !circuitBreaker.isBlocked(x.name())
                             && !excluded.contains(x.name())
                             && !(imageTask && visionUnsupportedProviders.contains(x.name())))
-                    .findFirst();
-            if (p.isPresent()) return p;
+                    .toList();
+            if (!eligible.isEmpty()) {
+                return Optional.of(selectWithinTopPriority(eligible));
+            }
         }
         return Optional.empty();
+    }
+
+    /**
+     * §6.12 (item 5) — {@code providers} (and therefore {@code eligible}, a filtered view of it)
+     * is priority-ascending, so the lowest priority present is always the preferred tier —
+     * unchanged tie-break/failover semantics for the common case of one provider per priority.
+     * When more than one provider shares that lowest priority (e.g. two LOCAL providers
+     * registered for horizontal throughput), distribute across them by least-in-flight — the one
+     * with the most free permits on its §6.12 concurrency gate (item 1) — instead of always
+     * picking the first-registered one. This reuses the existing per-provider {@link Semaphore},
+     * so it's a "least-connections" load balancer with no new bookkeeping. Ties (e.g. both fully
+     * idle) deterministically keep the first-registered provider at that priority.
+     */
+    private LlmProvider selectWithinTopPriority(List<LlmProvider> eligible) {
+        int topPriority = eligible.get(0).priority();
+        LlmProvider best = eligible.get(0);
+        int bestFreePermits = availablePermits(best);
+        for (int i = 1; i < eligible.size(); i++) {
+            LlmProvider candidate = eligible.get(i);
+            if (candidate.priority() != topPriority) break; // priority-ascending: no more ties possible
+            int freePermits = availablePermits(candidate);
+            if (freePermits > bestFreePermits) {
+                best = candidate;
+                bestFreePermits = freePermits;
+            }
+        }
+        return best;
+    }
+
+    private int availablePermits(LlmProvider provider) {
+        Semaphore gate = providerGates.get(provider.name());
+        return gate != null ? gate.availablePermits() : defaultProviderConcurrency;
     }
 
     private static boolean isImageTask(TaskType taskType) {
