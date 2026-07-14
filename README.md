@@ -133,7 +133,7 @@ See [USER_MANUAL.md](USER_MANUAL.md) for usage instructions and [OPERATOR_MANUAL
 | `SEARCH_SIMILARITY_THRESHOLD` | `0.0` | 0.0 ~ 0.75 | Min cosine similarity to keep a chunk (`0.0` = accept all) |
 | `SEARCH_MULTIQUERY_ENABLED` | `true` | true/false | Expand the query into sub-queries before search |
 | `SEARCH_MULTIQUERY_MIN_LENGTH` | `0` | 0 ~ 20 | Skip expansion for queries shorter than this (`0` = always expand) |
-| `SEARCH_HYBRID_ENABLED` | `false` | true/false | Add a BM25 (FTS5) keyword axis to RRF fusion (re-index required) |
+| `SEARCH_HYBRID_ENABLED` | `true` | true/false | Add a BM25 (FTS5) keyword axis to RRF fusion (§10.7.2 — the FTS index is populated at indexing time regardless of this flag, so no re-index is needed to benefit) |
 | `SEARCH_RETRY_ESCALATE` | `true` | true/false | Grow candidate pool on each retry — `×(retryCount+1)`, capped `×3` |
 | `SEARCH_RERANK_ENABLED` | `false` | true/false | LLM reranking stage after RRF (adds 1 LLM call/turn) |
 | `SEARCH_CANDIDATE_MULTIPLIER` | `3` | 2 ~ 5 | Candidate pool size for reranking — `topK × N` |
