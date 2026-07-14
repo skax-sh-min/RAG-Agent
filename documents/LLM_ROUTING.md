@@ -262,6 +262,8 @@ CLASSIFIER·RETRIEVAL은 COST_FIRST(공유), ANSWER만 LOCAL∥외부 병렬 실
 
 SSE 스트리밍에서는 `error.llm.backpressure` 메시지("현재 요청이 몰려 있습니다. 잠시 후 다시 시도해 주세요.")로 우아하게 종료된다(`StreamingAgentService`). REST/HTMX 블로킹 경로는 `GlobalExceptionHandler`가 `RagException.retryAfterSeconds()`를 읽어 `Retry-After` 헤더를 자동 부착한다.
 
+**인플라이트 single-flight (임베딩 전용)**: 위 세마포어 게이트와는 별개로, `CachingEmbeddingModel`(질의 임베딩 캐시, Phase 7-A)이 동시 요청 중복 계산까지 제거한다. 4명이 완전히 동일한 질문을 거의 동시에 물으면, 첫 호출(owner)만 실제로 임베딩 API를 호출하고 나머지(joiner)는 그 결과를 `CompletableFuture.join()`으로 공유한다(`ConcurrentHashMap<key, CompletableFuture<float[]>>` 기반) — thundering herd 방지. owner가 실패하면 joiner에도 동일 예외가 전파되고 in-flight 항목은 정리되어 다음 호출이 새로 재시도한다. 완전 동일한(정규화 후) 텍스트만 병합되며, 근사 질문은 여전히 캐시 미스(§10.5 시맨틱 캐시 영역, 보류). CLASSIFIER 등 다른 텍스트 응답에는 적용되지 않는다 — 오늘 기준 그런 캐시 자체가 없다.
+
 ---
 
 ## 7. 사용량 추적 (SQLite — memory.db 공유)
