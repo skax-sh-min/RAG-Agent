@@ -31,9 +31,11 @@ import static org.mockito.Mockito.when;
 /**
  * QA — ClassifierService question-type parsing (EDIT.md #1).
  *
- * classifyOnly()/execute() now route through LlmRouter.executeWithTracking() (TaskType.TEXT,
+ * classifyOnly()/execute() now route through LlmRouter.executeGated() (TaskType.TEXT,
  * RoutingMode.COST_FIRST) — previously a directly-injected ChatClient bound to a single
  * boot-time-fixed model, which bypassed both llm_usage tracking and per-request routing.
+ * executeGated (§6.12) applies the per-provider concurrency gate since CLASSIFIER is on the
+ * interactive chat/query path.
  *
  * Covers: valid type parse, out-of-enum fallback to "concept", malformed-JSON fallback,
  * case-insensitivity, and that execute() accumulates a (0,0) token call while setting
@@ -58,7 +60,7 @@ class ClassifierServiceTest {
     }
 
     private void stubResponse(String text) {
-        when(llmRouter.executeWithTracking(any(), any(), any())).thenReturn(text);
+        when(llmRouter.executeGated(any(), any(), any())).thenReturn(text);
     }
 
     private AgentState newState() {
@@ -138,7 +140,7 @@ class ClassifierServiceTest {
     }
 
     @Test
-    @DisplayName("execute/classifyOnly — LlmRouter.executeWithTracking()을 TaskType.TEXT/COST_FIRST로 호출")
+    @DisplayName("execute/classifyOnly — LlmRouter.executeGated()을 TaskType.TEXT/COST_FIRST로 호출")
     void routesViaTextTaskTypeAndCostFirst() {
         stubResponse("{\"question_type\": \"concept\"}");
 
@@ -146,7 +148,7 @@ class ClassifierServiceTest {
         service.classifyOnly("질문", Locale.KOREAN);
 
         verify(llmRouter, times(2))
-                .executeWithTracking(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), any());
+                .executeGated(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), any());
     }
 
     @Test
@@ -154,7 +156,7 @@ class ClassifierServiceTest {
     @SuppressWarnings("unchecked")
     void wrapsQuestionInUserQuestionDelimiters() {
         ArgumentCaptor<Function<ChatModel, ChatResponse>> callCaptor = ArgumentCaptor.forClass(Function.class);
-        when(llmRouter.executeWithTracking(any(), any(), callCaptor.capture()))
+        when(llmRouter.executeGated(any(), any(), callCaptor.capture()))
                 .thenReturn("{\"question_type\": \"concept\"}");
 
         service.execute(newState());

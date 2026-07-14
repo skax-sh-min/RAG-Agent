@@ -3,7 +3,7 @@ package com.example.ragagent.exception;
 public sealed abstract class RagException extends RuntimeException
         permits DocumentIndexingException, VectorStoreException,
                 InvalidQuestionException, UnsupportedFileTypeException,
-                LlmProviderExhaustedException {
+                LlmProviderExhaustedException, LlmBackpressureException {
 
     private final String errorCode;
 
@@ -20,4 +20,7 @@ public sealed abstract class RagException extends RuntimeException
     public String errorCode() { return errorCode; }
 
     public abstract int httpStatus();
+
+    /** Seconds the client should wait before retrying, or -1 when not applicable. */
+    public int retryAfterSeconds() { return -1; }
 }

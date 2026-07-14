@@ -1,13 +1,19 @@
 package com.example.ragagent.llm;
 
+import com.example.ragagent.exception.LlmBackpressureException;
 import com.example.ragagent.exception.LlmProviderExhaustedException;
+import com.example.ragagent.repository.LlmUsageRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.ai.chat.model.ChatResponse;
+import org.springframework.ai.chat.model.Generation;
 import org.springframework.ai.chat.prompt.Prompt;
 
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -159,5 +165,64 @@ class LlmRouterTest {
         var r = router(RoutingMode.COST_FIRST, local, normal);
 
         assertThat(r.findProviderName(TaskType.TEXT, RoutingMode.COST_FIRST)).isEqualTo("openai");
+    }
+
+    // ── §6.12 — per-provider concurrency gate + backpressure ─────────────────
+
+    private static ChatResponse chatResponse(String text) {
+        return new ChatResponse(List.of(new Generation(new AssistantMessage(text))));
+    }
+
+    @Test
+    @DisplayName("§6.12 — acquirePermit: concurrency=1에서 슬롯이 점유돼 있으면 대기 후 LlmBackpressureException")
+    void acquirePermit_timesOutWhenSaturated() {
+        var local = p("lm", ProviderRole.LOCAL, TaskType.TEXT, 1);
+        var r = new LlmRouter(List.of(local), null, breaker, RoutingMode.COST_FIRST, 0.6, 180,
+                Map.of("lm", 1), 1, 1);
+
+        LlmRouter.Permit held = r.acquirePermit(local);
+        long start = System.currentTimeMillis();
+        assertThatThrownBy(() -> r.acquirePermit(local))
+                .isInstanceOf(LlmBackpressureException.class);
+        assertThat(System.currentTimeMillis() - start).isGreaterThanOrEqualTo(900);
+        assertThat(breaker.isBlocked("lm")).isFalse();
+
+        held.close();
+        // slot freed — a new acquire must succeed immediately (no leaked permit).
+        r.acquirePermit(local).close();
+    }
+
+    @Test
+    @DisplayName("§6.12 — executeGated: 게이트 포화 시 즉시 429 전파, CircuitBreaker는 차단하지 않음")
+    void executeGated_backpressureDoesNotBlockCircuitBreakerOrRetry() {
+        ChatModel chatModel = mock(ChatModel.class);
+        var local = new LlmProvider("lm", TaskType.TEXT, ProviderRole.LOCAL, 1, "k", null, null, true,
+                chatModel, null);
+        var r = new LlmRouter(List.of(local), mock(LlmUsageRepository.class), breaker,
+                RoutingMode.COST_FIRST, 0.6, 180, Map.of("lm", 1), 1, 1);
+
+        LlmRouter.Permit held = r.acquirePermit(local);
+        assertThatThrownBy(() -> r.executeGated(TaskType.TEXT, RoutingMode.COST_FIRST,
+                m -> m.call(new Prompt("x"))))
+                .isInstanceOf(LlmBackpressureException.class);
+        assertThat(breaker.isBlocked("lm")).isFalse();
+        held.close();
+    }
+
+    @Test
+    @DisplayName("§6.12 — executeWithTracking(인덱싱 경로, 미적용)은 게이트가 가득 차도 대기 없이 즉시 호출됨")
+    void executeWithTracking_ungated_ignoresConcurrencyGate() {
+        ChatModel chatModel = mock(ChatModel.class);
+        when(chatModel.call(any(Prompt.class))).thenReturn(chatResponse("ok"));
+        var local = new LlmProvider("lm", TaskType.TEXT, ProviderRole.LOCAL, 1, "k", null, null, true,
+                chatModel, null);
+        var r = new LlmRouter(List.of(local), mock(LlmUsageRepository.class), breaker,
+                RoutingMode.COST_FIRST, 0.6, 180, Map.of("lm", 1), 1, 1);
+
+        LlmRouter.Permit held = r.acquirePermit(local); // saturate the gate
+        String result = r.executeWithTracking(TaskType.TEXT, RoutingMode.COST_FIRST,
+                m -> m.call(new Prompt("x")));
+        assertThat(result).isEqualTo("ok");
+        held.close();
     }
 }

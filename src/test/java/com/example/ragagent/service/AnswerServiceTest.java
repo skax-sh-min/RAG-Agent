@@ -48,7 +48,7 @@ import static org.mockito.Mockito.when;
  *  - DUAL STREAMING (token sink 양쪽 분기)
  *  - PROGRESSIVE 업그레이드 (sufficient=false 후 PREMIUM 호출)
  *
- * executeBlocking()/evaluate() now route through LlmRouter.executeWithTracking() (TaskType.TEXT,
+ * executeBlocking()/evaluate() now route through LlmRouter.executeGated() (TaskType.TEXT,
  * state.routingMode()) instead of a directly-injected ChatClient bound to a single boot-time-fixed
  * model — this was previously invisible to /llm-usage and ignored the request's routing mode
  * entirely (§6.14 in PLAN.md). Streaming paths still can't read real ChatResponse usage, so they
@@ -83,13 +83,13 @@ class AnswerServiceTest {
     }
 
     // ── BLOCKING 경로 ────────────────────────────────────────────────────
-    // 답변(executeBlocking)과 sufficiency(evaluate) 둘 다 llmRouter.executeWithTracking()을
+    // 답변(executeBlocking)과 sufficiency(evaluate) 둘 다 llmRouter.executeGated()을
     // 같은 (TaskType.TEXT, routingMode)로 순서대로 호출하므로 thenReturn(a, b)로 스텁한다.
 
     @Test
     @DisplayName("BLOCKING COST_FIRST — 답변+sufficiency 2회 호출, llmCallCount=2")
     void blocking_costFirst_basicFlow() {
-        when(llmRouter.executeWithTracking(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), any()))
+        when(llmRouter.executeGated(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), any()))
                 .thenReturn("## 요약\n핵심 답변", "{\"sufficient\":true}");
         when(llmRouter.findProviderName(any(), any())).thenReturn("gemini-flash");
 
@@ -106,7 +106,7 @@ class AnswerServiceTest {
     @Test
     @DisplayName("BLOCKING — sufficiency=false 면 needsRetry=true")
     void blocking_sufficiency_false_setsNeedsRetry() {
-        when(llmRouter.executeWithTracking(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), any()))
+        when(llmRouter.executeGated(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), any()))
                 .thenReturn("불완전 답변", "{\"sufficient\":false}");
         when(llmRouter.findProviderName(any(), any())).thenReturn("gemini-flash");
 
@@ -118,7 +118,7 @@ class AnswerServiceTest {
     @Test
     @DisplayName("BLOCKING — sufficiency 파싱 실패 시 sufficient 처리 (fail-safe)")
     void blocking_sufficiency_parse_error_treatsAsSufficient() {
-        when(llmRouter.executeWithTracking(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), any()))
+        when(llmRouter.executeGated(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), any()))
                 .thenReturn("답변", "not-a-json");
         when(llmRouter.findProviderName(any(), any())).thenReturn("gemini-flash");
 
@@ -132,7 +132,7 @@ class AnswerServiceTest {
     @SuppressWarnings("unchecked")
     void blocking_wrapsQuestionInUserQuestionDelimiters() {
         ArgumentCaptor<Function<ChatModel, ChatResponse>> callCaptor = ArgumentCaptor.forClass(Function.class);
-        when(llmRouter.executeWithTracking(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), callCaptor.capture()))
+        when(llmRouter.executeGated(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), callCaptor.capture()))
                 .thenReturn("답변", "{\"sufficient\":true}");
         when(llmRouter.findProviderName(any(), any())).thenReturn("gemini-flash");
 
@@ -152,7 +152,7 @@ class AnswerServiceTest {
     @SuppressWarnings("unchecked")
     void blocking_answerPrompt_usesNormalizedRetrievedDocTextWithoutContextHeader() {
         ArgumentCaptor<Function<ChatModel, ChatResponse>> callCaptor = ArgumentCaptor.forClass(Function.class);
-        when(llmRouter.executeWithTracking(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), callCaptor.capture()))
+        when(llmRouter.executeGated(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), callCaptor.capture()))
                 .thenReturn("답변", "{\"sufficient\":true}");
         when(llmRouter.findProviderName(any(), any())).thenReturn("gemini-flash");
 
@@ -176,7 +176,7 @@ class AnswerServiceTest {
     // ── STREAMING 경로 (non-DUAL) ──────────────────────────────────────────
     // ChatModel.stream()에는 call()로 위임하는 default 구현이 없어(UnsupportedOperationException)
     // ChatModel을 직접 mock 해야 한다 (DirectAnswerServiceTest와 동일 패턴).
-    // sufficiency(evaluate)는 블로킹 호출이므로 executeWithTracking으로 스텁한다.
+    // sufficiency(evaluate)는 블로킹 호출이므로 executeGated으로 스텁한다.
 
     @Test
     @DisplayName("STREAMING COST_FIRST — 답변+sufficiency 2회 호출, llmCallCount=2 (executeBlocking과 동일하게 집계돼야 함)")
@@ -186,7 +186,7 @@ class AnswerServiceTest {
         LlmProvider provider = new LlmProvider(
                 "local", TaskType.TEXT, ProviderRole.LOCAL, 0, "key", null, "model", false, chatModel, null);
         when(llmRouter.routeProvider(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST))).thenReturn(provider);
-        when(llmRouter.executeWithTracking(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), any()))
+        when(llmRouter.executeGated(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), any()))
                 .thenReturn("{\"sufficient\":true}");
 
         List<String> tokens = new ArrayList<>();
@@ -271,7 +271,7 @@ class AnswerServiceTest {
     @DisplayName("PROGRESSIVE — sufficiency=false + retryCount>=maxRetry → QUALITY_FIRST 업그레이드")
     @SuppressWarnings("unchecked")
     void progressive_upgrade_triggersQualityFirst() {
-        when(llmRouter.executeWithTracking(eq(TaskType.TEXT), eq(RoutingMode.PROGRESSIVE), any()))
+        when(llmRouter.executeGated(eq(TaskType.TEXT), eq(RoutingMode.PROGRESSIVE), any()))
                 .thenReturn("초안 답변", "{\"sufficient\":false}");
         when(llmRouter.findProviderName(any(), eq(RoutingMode.PROGRESSIVE)))
                 .thenReturn("gemini-flash");
@@ -279,7 +279,7 @@ class AnswerServiceTest {
                 "gemini-pro", TaskType.TEXT, ProviderRole.PREMIUM, 4, "key", null, null, true, null, null);
         when(llmRouter.routeProvider(any(), eq(RoutingMode.QUALITY_FIRST)))
                 .thenReturn(premiumProvider);
-        when(llmRouter.executeWithTracking(eq(TaskType.TEXT), eq(RoutingMode.QUALITY_FIRST), any(Function.class)))
+        when(llmRouter.executeGated(eq(TaskType.TEXT), eq(RoutingMode.QUALITY_FIRST), any(Function.class)))
                 .thenReturn("프리미엄 답변");
 
         // retryCount = maxRetry 도달 상태에서 진입 (그래프가 retry 한도 초과 후 PROGRESSIVE 진입 시 시나리오)
@@ -293,13 +293,13 @@ class AnswerServiceTest {
         assertThat(result.premiumUpgraded()).isEqualTo("gemini-pro");
         assertThat(result.needsRetry()).isFalse();
         verify(llmRouter, times(1))
-                .executeWithTracking(eq(TaskType.TEXT), eq(RoutingMode.QUALITY_FIRST), any(Function.class));
+                .executeGated(eq(TaskType.TEXT), eq(RoutingMode.QUALITY_FIRST), any(Function.class));
     }
 
     @Test
     @DisplayName("PROGRESSIVE — sufficient=true 면 업그레이드 안 함")
     void progressive_sufficient_noUpgrade() {
-        when(llmRouter.executeWithTracking(eq(TaskType.TEXT), eq(RoutingMode.PROGRESSIVE), any()))
+        when(llmRouter.executeGated(eq(TaskType.TEXT), eq(RoutingMode.PROGRESSIVE), any()))
                 .thenReturn("충분한 답변", "{\"sufficient\":true}");
         when(llmRouter.findProviderName(any(), any())).thenReturn("gemini-flash");
 
@@ -315,7 +315,7 @@ class AnswerServiceTest {
     @Test
     @DisplayName("PROGRESSIVE — needsRetry 더라도 retryCount < maxRetry 면 업그레이드 안 함")
     void progressive_underRetryLimit_noUpgrade() {
-        when(llmRouter.executeWithTracking(eq(TaskType.TEXT), eq(RoutingMode.PROGRESSIVE), any()))
+        when(llmRouter.executeGated(eq(TaskType.TEXT), eq(RoutingMode.PROGRESSIVE), any()))
                 .thenReturn("답변", "{\"sufficient\":false}");
         when(llmRouter.findProviderName(any(), any())).thenReturn("gemini-flash");
 

@@ -29,6 +29,8 @@ RAG Agent 시스템 배포·설정·운영 가이드입니다.
    - 5.3 [라우팅 모드](#53-라우팅-모드)
    - 5.4 [시나리오별 설정 예제](#54-시나리오별-설정-예제)
    - 5.5 [Circuit Breaker](#55-circuit-breaker)
+   - 5.6 [Orphan 프로바이더 사용 기록 정리](#56-orphan-프로바이더-사용-기록-정리)
+   - 5.7 [동시성 제어 및 백프레셔 (§6.12)](#57-동시성-제어-및-백프레셔-612)
 6. [운영 팁](#6-운영-팁)
    - 6.1 [대화 메모리](#61-대화-메모리)
    - 6.2 [문서 버전 관리](#62-문서-버전-관리)
@@ -232,6 +234,15 @@ copy .env.example .env
 | `INDEXING_MAX_FILES` | `3` | 1 ~ 8 | 파일 병렬 인덱싱 워커 수 |
 | `INDEXING_MAX_LLM` | `4` | 1 ~ 16 | 인덱싱 중 LLM 병렬 호출 수 (키워드 추출) |
 | `INDEXING_KEYWORD_TIMEOUT_SECONDS` | `180` | 30 ~ 600 | 청크 키워드 추출 1회당 최대 대기 시간. 초과 시 TF fallback |
+
+#### 질의 경로 동시성 제어 (§6.12)
+
+인덱싱과 별개로, **채팅/질의 경로**(분류·답변·재검색 등)가 프로바이더별로 동시에 보내는 요청 수를 제어합니다. 상세 동작·적용 범위는 [§5.7](#57-동시성-제어-및-백프레셔-612)을 참고하세요.
+
+| 변수 | 기본값 | 권장 범위 | 설명 |
+|------|--------|----------|------|
+| `LLM_DEFAULT_PROVIDER_CONCURRENCY` | `3` | 1 ~ 16 | 프로바이더별 동시 처리 상한 기본값(`app.llm.default-provider-concurrency`) — LLM 서버의 실제 `--parallel` 값과 일치시키는 것이 원칙. 개별 프로바이더는 `application.properties`의 `app.llm.providers[N].concurrency`로 오버라이드 가능 |
+| `LLM_PERMIT_WAIT_TIMEOUT_SECONDS` | `20` | 5 ~ 60 | 동시성 슬롯 대기 상한(초, `app.llm.permit-wait-timeout-seconds`). 초과 시 `LLM_READ_TIMEOUT_SECONDS`(기본 180초)까지 기다리지 않고 즉시 HTTP 429 + `Retry-After` 응답 |
 
 #### HTTP Timeout 튜닝
 
@@ -1002,6 +1013,7 @@ Gemini도 `https://generativelanguage.googleapis.com/v1beta/openai/` 엔드포�
 | `type` | `LIGHT_BOTH` \| `BOTH` \| … | 처리 가능한 태스크 유형 (아래 표 참조) |
 | `priority` | 정수 (낮을수록 우선) | 같은 role 내 우선순위 |
 | `stream` | `true` (기본) \| `false` | LLM API 호출 방식. 미설정 시 `true`. 상세는 아래 참조 |
+| `concurrency` | 정수 (예: `3`) | 이 프로바이더의 질의 경로 동시성 게이트 크기(§6.12·§5.7). 미설정 시 `LLM_DEFAULT_PROVIDER_CONCURRENCY`(기본 3) 사용. 서버의 실제 `--parallel` 값과 일치시킬 것 |
 
 #### stream 플래그
 
@@ -1262,6 +1274,7 @@ COST_FIRST 흐름:
 - `/llm-usage` 대시보드에서 차단 중인 프로바이더를 빨간 카드 + MM:SS 카운트다운으로 확인 가능
 - 임베딩 호출은 Circuit Breaker 대상이 아닙니다 — `/llm-usage`의 `embed:<model>` 카드는 항상 "정상" 배지로 표시되며 실패 시 재시도/차단 없이 즉시 예외가 전파됩니다(`EMBED_USAGE_FALLBACK_ENABLED`)
 - API 키가 없는(비활성) 프로바이더는 **사용 이력이 없으면** `/llm-usage`의 카드·표·차트 어디에도 표시되지 않습니다. 과거에 사용된 적이 있으면 키를 제거한 뒤에도 이력 보존을 위해 계속 표시됩니다. 활성(키 설정됨) 프로바이더는 사용량이 0이어도 항상 표시됩니다.
+- **Circuit Breaker ≠ 동시성 백프레셔(§6.12·§5.7)**: 429/402/기타 오류로 인한 차단은 "프로바이더가 고장났다"는 신호로 취급해 일정 시간 우회합니다. 반면 동시성 게이트가 대기 상한을 넘겨 던지는 429(`LlmBackpressureException`)는 "프로바이더는 정상이지만 지금 자리가 없다"는 신호이므로 Circuit Breaker를 차단하지 않고, 다른 프로바이더로 자동 전환하지도 않습니다 — 요청을 보낸 쪽에 그대로 즉시 전파됩니다.
 
 ### 5.6 Orphan 프로바이더 사용 기록 정리
 
@@ -1276,6 +1289,24 @@ COST_FIRST 흐름:
   ```
   인증 모드에서는 세션 쿠키 + CSRF 토큰이 필요하므로 `/llm-usage` 화면의 삭제 버튼 사용을 권장합니다.
 - 삭제 시 카드는 즉시 갱신되지만, `/llm-usage`의 일별 차트·기간별 표는 별도 fetch라 다음 로드/새로고침에 반영됩니다.
+
+### 5.7 동시성 제어 및 백프레셔 (§6.12)
+
+여러 사용자의 질문이 거의 동시에 도착하면(예: 로컬 LLM 1대·동시 3건 처리 가능한데 사용자 4명이 거의 동시에 질문), 앱은 채팅/질의 경로에서 프로바이더별로 서버가 실제로 처리 가능한 동시 요청 수를 넘지 않도록 자체 제한합니다.
+
+**동작 방식**:
+1. 프로바이더마다 `concurrency`(§5.2, 미설정 시 `LLM_DEFAULT_PROVIDER_CONCURRENCY`) 크기의 슬롯 풀을 가짐.
+2. 요청이 슬롯을 요청하면 최대 `LLM_PERMIT_WAIT_TIMEOUT_SECONDS`(기본 20초) 동안 대기.
+3. 슬롯이 나면 즉시 LLM 호출 → 완료 후 슬롯 반환.
+4. 대기 상한을 넘기면 HTTP 429 + `Retry-After` 헤더로 즉시 응답(`RAG-LLM-002`) — Circuit Breaker 차단이나 다른 프로바이더로의 자동 전환은 하지 않습니다(§5.5 참고). SSE 스트리밍 응답에서는 "현재 요청이 몰려 있습니다. 잠시 후 다시 시도해 주세요." 메시지로 우아하게 종료됩니다.
+
+**적용 범위**: 분류(Classifier)·답변 생성(블로킹+스트리밍+PROGRESSIVE 업그레이드+충분도 평가)·DUAL(양쪽 프로바이더)·DirectAnswer·리랭킹(opt-in)·MultiQuery 확장까지 채팅/질의 경로 전체에 적용됩니다. **인덱싱/백그라운드 LLM 호출(키워드 추출, MD 포맷 교정, Vision 설명, TXT 구조화, 대화 요약 사전계산, 스레드 제목 생성)은 이 게이트의 대상이 아닙니다** — 이미 `INDEXING_MAX_LLM`으로 자체 동시성을 제어하고 있고, 마감시한 있는 동기 HTTP 호출자가 없기 때문입니다.
+
+**튜닝 가이드**:
+- **기본 원칙**: `LLM_DEFAULT_PROVIDER_CONCURRENCY`(또는 프로바이더별 `concurrency`)는 그 LLM 서버의 실제 `--parallel`(또는 동급) 설정값과 일치시키세요. 너무 크게 잡으면 앱이 서버가 처리 못 할 요청까지 통과시켜 결국 서버 쪽에서 429/타임아웃이 발생하고, 너무 작게 잡으면 서버 여유 용량을 못 씁니다.
+- 429가 자주 발생한다면: ① `LLM_PERMIT_WAIT_TIMEOUT_SECONDS`를 늘려 더 오래 대기하게 하거나, ② LLM 서버의 `--parallel` 값과 `concurrency` 설정을 함께 늘리거나(서버 리소스가 허용하는 한도 내에서), ③ 동일 role로 프로바이더를 추가 등록해 부하를 분산하세요(단, 같은 role 안에서 로드밸런싱은 아직 미구현 — `findFirst()`가 첫 번째 프로바이더만 선택하므로 장애 시 폴백 용도로만 유효, [PLAN.md §6.12](../documents/PLAN.md) 개선안 5 참고).
+- 로그로 확인: `[BACKPRESSURE] provider=... concurrency slot wait exceeded Ns, rejecting with 429` 로그 라인이 반복되면 해당 프로바이더가 지속적으로 포화 상태라는 신호입니다.
+- 인덱싱 중에도 같은 물리 서버를 채팅이 함께 쓰는 구성이라면, 인덱싱 트래픽도 결국 이 게이트 뒤의 같은 서버 용량을 공유하게 되므로 대량 동기화 작업은 사용자 트래픽이 적은 시간대에 실행하는 것을 권장합니다.
 
 ---
 
@@ -1453,6 +1484,26 @@ curl $LOCAL_LLM_URL/models -H "Authorization: Bearer $LOCAL_LLM_KEY"
 | LOCAL LLM 서버 미실행 | LM Studio / Ollama 실행 확인 |
 | 로컬 LLM 없이 실행 | `LOCAL_LLM_KEY=` (빈 값)으로 LOCAL 비활성화 후 NORMAL/PREMIUM 등록 |
 | 모든 프로바이더 소진 | `/llm-usage`에서 차단 상태 확인; circuit-breaker-minutes 경과 후 자동 해제 |
+
+---
+
+### 다수 사용자 동시 요청 시 429 응답 ("현재 요청이 몰려 있습니다")
+
+500(장애)이 아니라 429(용량 초과) 응답이고, `/llm-usage`에는 해당 프로바이더가 차단(빨간 카드)으로 표시되지 않는다면 §6.12 동시성 게이트가 정상 동작 중인 것입니다 — Circuit Breaker와는 별개입니다(§5.5·§5.7 참고).
+
+```bash
+# 로그에서 백프레셔 발생 빈도 확인
+grep "\[BACKPRESSURE\]" logs/*.log | tail -20
+```
+
+| 상황 | 조치 |
+|------|------|
+| 가끔 1~2회 발생, 재시도하면 바로 성공 | 정상 동작 — 순간적인 동시 접속 피크. 조치 불필요 |
+| 특정 프로바이더에서 지속 반복 | `LLM_DEFAULT_PROVIDER_CONCURRENCY`(또는 해당 프로바이더의 `concurrency`)가 실제 서버 `--parallel`보다 낮게 설정됐는지 확인 후 상향 — 단, 서버가 실제로 그만큼 처리 가능한 경우에만 |
+| 사용자 대기 시간이 너무 김 | `LLM_PERMIT_WAIT_TIMEOUT_SECONDS`(기본 20초)를 늘려 대기 상한을 확대 — 단, `LLM_READ_TIMEOUT_SECONDS`(기본 180초)보다는 충분히 짧게 유지 |
+| 물리 서버 자체가 상시 포화 | 동일 role로 프로바이더를 추가 등록하거나(§5.4 예제 4), NORMAL/PREMIUM 외부 fallback을 함께 구성해 부하 분산(동일 role 안에서의 자동 로드밸런싱은 아직 미구현 — [PLAN.md §6.12](../documents/PLAN.md) 개선안 5 참고) |
+
+상세 동작 원리는 [§5.7 동시성 제어 및 백프레셔](#57-동시성-제어-및-백프레셔-612)를 참고하세요.
 
 ---
 

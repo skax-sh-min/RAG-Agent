@@ -210,6 +210,7 @@ PROGRESSIVE 업그레이드 시 `🔝 고추론 재분석 → {premiumProvider}`
 | 문서 삭제 실패 | `htmx:responseError` → 오류 토스트 |
 | DUAL, LOCAL 미연결 | 드롭다운 `disabled` + 툴팁 |
 | LOCAL_ONLY, LOCAL 미연결 | 빨간 버블 + `LlmProviderExhaustedException` 메시지 |
+| 동시 사용자 급증으로 프로바이더 용량 초과 (§6.12, 429) | 빨간 버블 + "현재 요청이 몰려 있습니다. 잠시 후 다시 시도해 주세요." — 서킷브레이커 전면차단이 아니라 일시적 대기 상한 초과이므로 잠시 후 재시도하면 대개 성공 |
 | 빈 질문 전송 | 클라이언트 validation, API 호출 차단 |
 | 대용량 파일 | 업로드 전 200 MB 초과 감지 → 즉시 오류 표시 |
 

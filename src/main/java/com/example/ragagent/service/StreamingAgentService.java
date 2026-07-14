@@ -3,6 +3,7 @@ package com.example.ragagent.service;
 import com.example.ragagent.agent.AgentGraph;
 import com.example.ragagent.agent.AgentState;
 import com.example.ragagent.config.AppProperties;
+import com.example.ragagent.exception.LlmBackpressureException;
 import com.example.ragagent.exception.LlmProviderExhaustedException;
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.model.ChatForm;
@@ -160,6 +161,13 @@ public class StreamingAgentService {
             log.warn("LLM providers exhausted: {}", e.getMessage());
             String msg = messageSource.getMessage("error.llm.exhausted", null,
                     "LLM 서버에 연결할 수 없습니다. 잠시 후 다시 시도해 주세요.", LocaleContextHolder.getLocale());
+            trySendError(emitter, msg);
+            emitter.complete();
+        } catch (LlmBackpressureException e) {
+            // Provider is healthy but momentarily at capacity (§6.12) — not an error, just backpressure.
+            log.warn("LLM backpressure: {}", e.getMessage());
+            String msg = messageSource.getMessage("error.llm.backpressure", null,
+                    "현재 요청이 몰려 있습니다. 잠시 후 다시 시도해 주세요.", LocaleContextHolder.getLocale());
             trySendError(emitter, msg);
             emitter.complete();
         } catch (Exception e) {

@@ -2,6 +2,7 @@ package com.example.ragagent.service;
 
 import com.example.ragagent.agent.AgentState;
 import com.example.ragagent.config.AppProperties;
+import com.example.ragagent.llm.ConcurrencyLimitingChatModel;
 import com.example.ragagent.llm.LlmProvider;
 import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.RoutingMode;
@@ -70,8 +71,12 @@ public class RetrievalService {
         // setups still resolve a model here.
         LlmProvider expansionProvider = llmRouter.routeProviderWithFallback(
                 List.of(TaskType.TEXT, TaskType.LIGHT_TEXT), RoutingMode.COST_FIRST);
+        // §6.12 — gate this persistent model too: MultiQueryExpander calls it internally at a
+        // point RetrievalService doesn't control, so executeGated() can't wrap the call site.
+        ChatModel gatedExpansionModel =
+                new ConcurrencyLimitingChatModel(expansionProvider.chatModel(), expansionProvider, llmRouter);
         ChatModel trackedExpansionModel =
-                new TrackingChatModel(expansionProvider.chatModel(), expansionProvider.name(), usageRepo);
+                new TrackingChatModel(gatedExpansionModel, expansionProvider.name(), usageRepo);
         this.multiQueryExpander = MultiQueryExpander.builder()
                 .chatClientBuilder(ChatClient.builder(trackedExpansionModel))
                 .includeOriginal(true)

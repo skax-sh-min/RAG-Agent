@@ -71,7 +71,7 @@ public class AnswerService {
     private AgentState executeBlocking(AgentState state) {
         String systemPrompt = answerSystemPrompt(state.locale());
         String userPrompt = buildAnswerPrompt(state);
-        String rawAnswer = llmRouter.executeWithTracking(TaskType.TEXT, state.routingMode(),
+        String rawAnswer = llmRouter.executeGated(TaskType.TEXT, state.routingMode(),
                 model -> model.call(buildPrompt(systemPrompt, userPrompt)));
         String answer = truncate(rawAnswer == null ? "" : rawAnswer);
         state = state.toBuilder()
@@ -99,7 +99,11 @@ public class AnswerService {
     private AgentState executeStreamingNormal(AgentState state, GraphListener listener) {
         String systemPrompt = answerSystemPrompt(state.locale());
         LlmProvider provider = llmRouter.routeProvider(TaskType.TEXT, state.routingMode());
-        String answer = truncate(streamAnswer(provider, state, systemPrompt, listener::onToken));
+        String streamed;
+        try (var permit = llmRouter.acquirePermit(provider)) {
+            streamed = streamAnswer(provider, state, systemPrompt, listener::onToken);
+        }
+        String answer = truncate(streamed);
         // streaming has no ChatResponse to read real usage from — record an approximate
         // (chars/4) usage entry so /llm-usage isn't blind to the entire streaming chat path.
         llmRouter.recordApproxUsage(provider.name(), systemPrompt + buildAnswerPrompt(state), answer);
@@ -156,12 +160,14 @@ public class AnswerService {
         if (listener != null) listener.onUpgrade(premiumProvider.name());
         String premiumAnswer;
         if (listener != null) {
-            premiumAnswer = streamAnswer(premiumProvider, state, systemPrompt, listener::onToken);
+            try (var permit = llmRouter.acquirePermit(premiumProvider)) {
+                premiumAnswer = streamAnswer(premiumProvider, state, systemPrompt, listener::onToken);
+            }
             llmRouter.recordApproxUsage(premiumProvider.name(),
                     systemPrompt + buildAnswerPrompt(state), premiumAnswer);
         } else {
             String userPrompt = buildAnswerPrompt(state);
-            premiumAnswer = llmRouter.executeWithTracking(
+            premiumAnswer = llmRouter.executeGated(
                     TaskType.TEXT, RoutingMode.QUALITY_FIRST,
                     model -> model.call(buildPrompt(systemPrompt, userPrompt))
             );
@@ -251,7 +257,7 @@ public class AnswerService {
             String evalPrompt = "[질문]\n%s\n\n[답변]\n%s\n\n[문서 발췌]\n%s\n\n%s"
                     .formatted(PromptInjectionGuard.wrap(state.question()), answer, excerpts, evalConverter.getFormat());
 
-            String response = llmRouter.executeWithTracking(TaskType.TEXT, state.routingMode(),
+            String response = llmRouter.executeGated(TaskType.TEXT, state.routingMode(),
                     model -> model.call(buildPrompt(systemPrompt, evalPrompt)));
             EvalOutput out = evalConverter.convert(response == null ? "" : response);
             boolean grounded = !docsPresent || out.grounded();

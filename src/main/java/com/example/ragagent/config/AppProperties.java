@@ -48,7 +48,9 @@ public record AppProperties(
             int connectTimeoutSeconds,
             int readTimeoutSeconds,
             String defaultRoutingMode,
-            double progressiveThreshold
+            double progressiveThreshold,
+            int defaultProviderConcurrency,  // §6.12 — per-provider concurrency gate default (matches the server's --parallel), fallback when a provider omits its own `concurrency`
+            int permitWaitTimeoutSeconds     // §6.12 — max wait for a concurrency slot on the query path before failing fast with 429 (default 20s, well under the 180s read-timeout)
     ) {}
 
     public record ProviderConfig(
@@ -59,7 +61,8 @@ public record AppProperties(
             String type,
             String role,
             int priority,
-            Boolean stream
+            Boolean stream,
+            Integer concurrency  // §6.12 — this provider's own concurrency slots; null/<=0 falls back to LlmConfig.defaultProviderConcurrency
     ) {}
 
     public record IndexingConfig(
@@ -352,13 +355,16 @@ public record AppProperties(
 
     /** Null-safe accessor — returns an empty LlmConfig when app.llm is not configured. */
     public LlmConfig llmSafe() {
-        if (llm == null) return new LlmConfig(List.of(), 2, 10, 180, "COST_FIRST", 0.6);
+        if (llm == null) return new LlmConfig(List.of(), 2, 10, 180, "COST_FIRST", 0.6, 3, 20);
         List<ProviderConfig> providers = llm.providers() != null ? llm.providers() : List.of();
         int minutes = llm.circuitBreakerMinutes() > 0 ? llm.circuitBreakerMinutes() : 2;
                 int connectTimeout = llm.connectTimeoutSeconds() > 0 ? llm.connectTimeoutSeconds() : 10;
                 int readTimeout = llm.readTimeoutSeconds() > 0 ? llm.readTimeoutSeconds() : 180;
         String mode = llm.defaultRoutingMode() != null ? llm.defaultRoutingMode() : "COST_FIRST";
         double threshold = llm.progressiveThreshold() > 0 ? llm.progressiveThreshold() : 0.6;
-                return new LlmConfig(providers, minutes, connectTimeout, readTimeout, mode, threshold);
+        int defaultProviderConcurrency = llm.defaultProviderConcurrency() > 0 ? llm.defaultProviderConcurrency() : 3;
+        int permitWaitTimeoutSeconds = llm.permitWaitTimeoutSeconds() > 0 ? llm.permitWaitTimeoutSeconds() : 20;
+                return new LlmConfig(providers, minutes, connectTimeout, readTimeout, mode, threshold,
+                        defaultProviderConcurrency, permitWaitTimeoutSeconds);
     }
 }
