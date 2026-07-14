@@ -449,7 +449,7 @@ class PptxToMarkdownConverterTest {
     }
 
     @Test
-    @DisplayName("그룹 도형은 하나의 이미지로 래스터라이즈되지만, 내부 텍스트는 Vision 없이도 검색되도록 본문에도 별도로 추출된다")
+    @DisplayName("그룹 도형은 하나의 이미지로 래스터라이즈되지만, 내부 텍스트는 Vision 없이도 검색되도록 [도형 그룹] 마커로 감싸 본문에도 별도로 추출된다")
     void groupInternalTextIsExtractedSeparatelyFromGroupImage() throws IOException {
         writePptx(pptx -> {
             XSLFSlide slide = pptx.createSlide();
@@ -466,7 +466,58 @@ class PptxToMarkdownConverterTest {
         String md = convert();
 
         assertThat(md).contains("승인 처리"); // 그룹 내부 텍스트가 검색 가능한 본문 텍스트로 남는다
+        assertThat(md).contains("[도형 그룹]").contains("[/도형 그룹]"); // 도형에서 추출됐음을 표시하는 마커
         assertThat(md).contains("[이미지:"); // 그룹 자체도 여전히 이미지로 래스터라이즈된다
+    }
+
+    @Test
+    @DisplayName("한 그룹 도형의 여러 텍스트 라벨은 [도형 그룹] 여는/닫는 마커 사이에 하나의 블록으로 묶인다")
+    void multipleGroupLabelsAreBundledInsideOneMarkerBlock() throws IOException {
+        writePptx(pptx -> {
+            XSLFSlide slide = pptx.createSlide();
+            addTitle(slide, "프로세스 슬라이드");
+            XSLFGroupShape group = slide.createGroup();
+            Rectangle2D bounds = new Rectangle2D.Double(0, 0, 300, 100);
+            group.setAnchor(bounds);
+            group.setInteriorAnchor(bounds);
+            XSLFTextBox b1 = group.createTextBox();
+            b1.setAnchor(new Rectangle2D.Double(10, 10, 80, 40));
+            b1.setText("승인 처리");
+            XSLFTextBox b2 = group.createTextBox();
+            b2.setAnchor(new Rectangle2D.Double(110, 10, 80, 40));
+            b2.setText("반려 처리");
+        });
+
+        String md = convert();
+
+        int openIdx = md.indexOf("[도형 그룹]");
+        int label1Idx = md.indexOf("승인 처리");
+        int label2Idx = md.indexOf("반려 처리");
+        int closeIdx = md.indexOf("[/도형 그룹]");
+        // 두 라벨이 모두 여는 마커와 닫는 마커 사이에 온다 = 하나의 도형에서 나온 것으로 묶임
+        assertThat(openIdx).isGreaterThanOrEqualTo(0);
+        assertThat(label1Idx).isGreaterThan(openIdx);
+        assertThat(label2Idx).isGreaterThan(openIdx);
+        assertThat(closeIdx).isGreaterThan(label1Idx).isGreaterThan(label2Idx);
+    }
+
+    @Test
+    @DisplayName("텍스트가 하나도 없는 순수 장식 그룹 도형은 [도형 그룹] 마커를 남기지 않는다(빈 블록 방지)")
+    void textlessGroupDoesNotEmitEmptyMarkerBlock() throws IOException {
+        writePptx(pptx -> {
+            XSLFSlide slide = pptx.createSlide();
+            addTitle(slide, "장식 슬라이드");
+            XSLFGroupShape group = slide.createGroup();
+            Rectangle2D bounds = new Rectangle2D.Double(0, 0, 200, 100);
+            group.setAnchor(bounds);
+            group.setInteriorAnchor(bounds);
+            // 텍스트 박스 없음 — 순수 도형만 있는 장식 그룹
+        });
+
+        String md = convert();
+
+        assertThat(md).doesNotContain("[도형 그룹]");
+        assertThat(md).doesNotContain("[/도형 그룹]");
     }
 
     @Test
@@ -569,7 +620,7 @@ class PptxToMarkdownConverterTest {
     }
 
     @Test
-    @DisplayName("SmartArt(다이어그램) 도형의 박스 텍스트는 본문에서 검색 가능한 텍스트로 추출된다")
+    @DisplayName("SmartArt(다이어그램) 도형의 박스 텍스트는 [다이어그램] 마커로 감싸 본문에서 검색 가능한 텍스트로 추출된다")
     void smartArtBoxTextIsExtractedAsBodyText() throws IOException {
         PptxSmartArtFixture.write(pptxPath, List.of("기획팀", "개발팀", "운영팀"));
 
@@ -578,10 +629,16 @@ class PptxToMarkdownConverterTest {
         assertThat(md).contains("기획팀");
         assertThat(md).contains("개발팀");
         assertThat(md).contains("운영팀");
+        // SmartArt 박스 라벨들이 [다이어그램] 블록으로 묶여 도형 출처가 드러난다
+        assertThat(md).contains("[다이어그램]").contains("[/다이어그램]");
+        int openIdx = md.indexOf("[다이어그램]");
+        int closeIdx = md.indexOf("[/다이어그램]");
+        assertThat(md.indexOf("기획팀")).isGreaterThan(openIdx).isLessThan(closeIdx);
+        assertThat(md.indexOf("운영팀")).isGreaterThan(openIdx).isLessThan(closeIdx);
     }
 
     @Test
-    @DisplayName("차트 프레임의 제목 텍스트는 본문으로 추출된다")
+    @DisplayName("차트 프레임의 제목 텍스트는 [차트: ...] 라벨로 감싸 본문으로 추출된다")
     void chartTitleIsExtractedAsBodyText() throws IOException {
         writePptx(pptx -> {
             XSLFSlide slide = pptx.createSlide();
@@ -603,7 +660,7 @@ class PptxToMarkdownConverterTest {
 
         String md = convert();
 
-        assertThat(md).contains("연도별 매출 추이");
+        assertThat(md).contains("[차트: 연도별 매출 추이]");
     }
 
     @Test

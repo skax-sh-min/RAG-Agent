@@ -88,12 +88,18 @@ import java.util.regex.Pattern;
  *
  * {@code XSLFTable}, {@code XSLFDiagram} (SmartArt), {@code XSLFObjectShape} (OLE embeds), and
  * chart frames are all {@code XSLFGraphicFrame} subclasses/variants that the plain
- * {@code XSLFTextShape} walk above never sees on its own. SmartArt's box/label text is extracted
- * via {@link #appendGroupText} on {@code XSLFDiagram#getGroupShape()} (the rendered drawing
- * layer); a chart frame contributes only its title text (series/category values aren't reliably
- * extractable without re-implementing per-chart-type layout); an OLE embed contributes no text at
- * all — {@link PptxImageExtractor} separately pulls its embedded preview picture and, best-effort,
- * a chart's {@code mc:Fallback} preview picture when PowerPoint included one.
+ * {@code XSLFTextShape} walk above never sees on its own. SmartArt's box/label text and a plain
+ * group's inner text are each wrapped in a {@code [다이어그램] … [/다이어그램]} /
+ * {@code [도형 그룹] … [/도형 그룹]} marker block by {@link #appendShapeGroup} so all labels pulled
+ * from one shape stay bundled together and are visibly marked as shape-extracted (rather than
+ * bleeding into the surrounding body text); a chart frame contributes only its title, rendered as
+ * {@code [차트: 제목]} (series/category values aren't reliably extractable without re-implementing
+ * per-chart-type layout); an OLE embed contributes no text at all — {@link PptxImageExtractor}
+ * separately pulls its embedded preview picture and, best-effort, a chart's {@code mc:Fallback}
+ * preview picture when PowerPoint included one. These bracket markers live in {@code Document.getText()}
+ * itself, so they flow into the embedding/FTS input, the {@code /admin} chunk view, and the answer
+ * prompt (like {@code [이미지: ...]}); they start with '[' not '#', so {@code splitMarkdownBySections()}
+ * never treats them as section boundaries and {@code MarkdownNoiseNormalizer} never strips them.
  *
  * Shapes are walked in reading order, not {@code slide.getShapes()}'s z-order (paint order) —
  * {@link #inReadingOrder} sorts by anchor position (top first, then left) before the body loop
@@ -205,7 +211,7 @@ public class PptxToMarkdownConverter {
                 // own data model would require re-implementing POI's layout engine.
                 XSLFShapeContainer diagramGroup = diagram.getGroupShape();
                 if (diagramGroup != null) {
-                    appendGroupText(body, diagramGroup);
+                    appendShapeGroup(body, diagramGroup, "다이어그램");
                 }
                 continue;
             }
@@ -220,7 +226,7 @@ public class PptxToMarkdownConverter {
                 // The group is also rasterized as one bundled image (PptxImageExtractor), but
                 // that alone is invisible without a Vision-capable LLM — extract its text too so
                 // it stays searchable even when addImageDescriptions/Vision isn't available.
-                appendGroupText(body, group);
+                appendShapeGroup(body, group, "도형 그룹");
                 continue;
             }
             if (!(shape instanceof XSLFTextShape textShape)) continue;
@@ -292,10 +298,33 @@ public class PptxToMarkdownConverter {
     }
 
     /**
-     * 그룹 도형 내부를 재귀적으로 순회해 텍스트(및 중첩된 표)를 본문에 추가한다 — 그룹 자체는
+     * 그룹/다이어그램 도형 하나에서 추출한 텍스트를 {@code [label] ... [/label]} 마커로 감싸 본문에
+     * 추가한다. 같은 도형에서 나온 여러 라벨(예: 조직도 부서, 프로세스 단계)이 하나의 블록으로
+     * 묶여, 뒤따르는 일반 본문 텍스트와 섞이지 않고 "이 텍스트는 도형에서 뽑은 것"임이 드러난다.
+     * 텍스트가 하나도 없는 도형(순수 장식 그룹 등)은 마커도 붙이지 않는다.
+     *
+     * <p>이 마커는 {@code Document.getText()}에 그대로 남아 검색(임베딩/FTS)·{@code /admin} 표시·
+     * 답변 프롬프트에 모두 흘러간다({@code [이미지: ...]}·코드 연속 마커와 동일한 취급). {@code #}로
+     * 시작하지 않으므로 {@code DocumentLoaderService.splitMarkdownBySections()}가 섹션 경계로
+     * 오인하지 않고, 대괄호 라벨 줄은 {@code MarkdownNoiseNormalizer}가 장식/강조로 지우지 않는다.
+     */
+    private void appendShapeGroup(StringBuilder body, XSLFShapeContainer container, String label) {
+        StringBuilder inner = new StringBuilder();
+        appendGroupText(inner, container);
+        if (inner.toString().isBlank()) return; // 텍스트 없는 도형 — 마커만 남는 빈 블록을 만들지 않는다
+
+        body.append("[").append(label).append("]\n");
+        body.append(inner.toString().strip()).append("\n");
+        body.append("[/").append(label).append("]\n\n");
+    }
+
+    /**
+     * 그룹 도형 내부를 재귀적으로 순회해 텍스트(및 중첩된 표)를 버퍼에 추가한다 — 그룹 자체는
      * 이미지로도 래스터라이즈되지만(PptxImageExtractor), Vision 설명이 없는 환경에서도 검색 가능한
      * 텍스트가 남도록 별도로 추출해 둔다. 그룹 내부 라벨을 슬라이드 제목으로 오인하지 않도록,
-     * 최상위 슬라이드에서만 적용되는 헤딩 후보 승격은 여기서는 적용하지 않는다.
+     * 최상위 슬라이드에서만 적용되는 헤딩 후보 승격은 여기서는 적용하지 않는다. 중첩 그룹은 별도
+     * 마커로 감싸지 않고 그대로 이어붙인다 — 최상위 {@link #appendShapeGroup} 마커 하나가 도형
+     * 전체를 이미 감싸므로, 안쪽까지 매번 마커를 붙이면 오히려 지저분해진다.
      */
     private void appendGroupText(StringBuilder body, XSLFShapeContainer container) {
         for (XSLFShape shape : container.getShapes()) {
@@ -307,9 +336,25 @@ public class PptxToMarkdownConverter {
                 for (XSLFTextParagraph para : textShape.getTextParagraphs()) {
                     String text = paragraphText(para);
                     if (text.isBlank()) continue;
-                    appendBodyLine(body, para, text);
+                    appendGroupBodyLine(body, para, text);
                 }
             }
+        }
+    }
+
+    /**
+     * 그룹 내부 텍스트 한 줄을 버퍼에 추가한다. 불릿은 {@link #appendBodyLine}과 동일하게
+     * 들여쓰기+마커로 렌더링하되, 비불릿 일반 텍스트는 문단 분리({@code \n\n}) 대신 한 줄 개행
+     * ({@code \n})으로 촘촘하게 이어붙인다 — 도형 내부 라벨들은 서로 관계있는 짧은 항목(노드·단계)이
+     * 대부분이라, 마커 블록 안에서 빈 줄로 벌어지지 않고 하나로 묶여 보이는 편이 낫다.
+     */
+    private void appendGroupBodyLine(StringBuilder body, XSLFTextParagraph para, String text) {
+        if (para.isBullet()) {
+            String indent = "  ".repeat(Math.max(0, para.getIndentLevel()));
+            String marker = para.getAutoNumberingScheme() != null ? "1." : "-";
+            body.append(indent).append(marker).append(" ").append(text).append("\n");
+        } else {
+            body.append(text).append("\n");
         }
     }
 
@@ -328,7 +373,9 @@ public class PptxToMarkdownConverter {
 
         String title = titleShape.getText();
         if (title == null || title.isBlank()) return;
-        body.append(title.trim()).append("\n\n");
+        // "[차트: ...]" 라벨로 감싸 이 텍스트가 차트 제목(도형에서 추출)임을 드러낸다 — 그러지 않으면
+        // 본문에 덩그러니 남은 제목이 일반 문장인지 도형 출처인지 구분되지 않는다.
+        body.append("[차트: ").append(title.trim()).append("]\n\n");
     }
 
     /**
