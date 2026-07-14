@@ -29,7 +29,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * request to learn it); doing that eagerly in this constructor would add a new startup-time
  * dependency on the embedding server being reachable.
  *
- * <p><b>§6.12 in-flight single-flight</b>: a text that's already being fetched by another
+ * <p><b>In-flight single-flight</b>: a text that's already being fetched by another
  * concurrent {@link #call(EmbeddingRequest)} (e.g. two users asking the same question at
  * nearly the same moment) is <em>not</em> re-sent to the delegate — the second caller joins
  * the first caller's in-flight {@link CompletableFuture} and reuses its result. Only exactly
@@ -67,7 +67,7 @@ public class CachingEmbeddingModel implements EmbeddingModel {
         float[][] outputs = new float[n][];
 
         // Texts this call must actually fetch (not cached, and no other in-flight call already
-        // owns them) — batched into a single delegate call, same as the pre-§6.12 behavior.
+        // owns them) — batched into a single delegate call, same as the pre-single-flight behavior.
         List<Integer> ownedIndexes = new ArrayList<>();
         List<String> ownedTexts = new ArrayList<>();
         List<String> ownedKeys = new ArrayList<>();

@@ -35,16 +35,16 @@ public class RetrievalService {
 
     private final RagService ragService;
     private final MultiQueryExpander multiQueryExpander;
+    private final AppProperties props;
+    // Structural values decided at startup (restart-required — a runtime change can't take effect
+    // without re-wiring beans/pipeline), so they're cached once. topK is view-only on /settings.
     private final int defaultTopK;
     private final boolean multiqueryEnabled;
-    private final int multiqueryMinLength;
     private final boolean hybridEnabled;
-    private final boolean retryEscalate;
     private final boolean rerankEnabled;
-    private final int candidateMultiplier;
-    private final int tagCandidateMultiplier;
-    private final int rrfK;
-    private final double rrfKeywordWeight;
+    // Hot-editable values (retry-escalate, candidate/tag multipliers, RRF k/weight,
+    // multiquery min-length) are deliberately NOT cached — they're read fresh from props.xxxSafe()
+    // on every execute()/shouldExpand() so a /settings override applies on the next search.
     private final LazyVisionService lazyVisionService; // null when disabled
     private final Optional<RerankerService> reranker;
 
@@ -52,16 +52,11 @@ public class RetrievalService {
                             AppProperties props, Optional<LazyVisionService> lazyVisionOpt,
                             Optional<RerankerService> rerankerOpt) {
         this.ragService = ragService;
+        this.props = props;
         this.defaultTopK = props.searchTopK();
         this.multiqueryEnabled = props.searchMultiqueryEnabled();
-        this.multiqueryMinLength = props.searchMultiqueryMinLengthSafe();
         this.hybridEnabled = props.searchHybridEnabled();
-        this.retryEscalate = props.searchRetryEscalate();
         this.rerankEnabled = props.searchRerankEnabled();
-        this.candidateMultiplier = props.searchCandidateMultiplierSafe();
-        this.tagCandidateMultiplier = props.searchTagCandidateMultiplierSafe();
-        this.rrfK = props.searchRrfKSafe();
-        this.rrfKeywordWeight = props.searchRrfKeywordWeightSafe();
         this.lazyVisionService = lazyVisionOpt.orElse(null);
         this.reranker = rerankerOpt;
         // MultiQueryExpander builds its own ChatClient around the model it's given, so the
@@ -71,7 +66,7 @@ public class RetrievalService {
         // setups still resolve a model here.
         LlmProvider expansionProvider = llmRouter.routeProviderWithFallback(
                 List.of(TaskType.TEXT, TaskType.LIGHT_TEXT), RoutingMode.COST_FIRST);
-        // §6.12 — gate this persistent model too: MultiQueryExpander calls it internally at a
+        // Gate this persistent model too: MultiQueryExpander calls it internally at a
         // point RetrievalService doesn't control, so executeGated() can't wrap the call site.
         ChatModel gatedExpansionModel =
                 new ConcurrencyLimitingChatModel(expansionProvider.chatModel(), expansionProvider, llmRouter);
@@ -87,6 +82,12 @@ public class RetrievalService {
     public AgentState execute(AgentState state) {
         // normalized search-scope tags (empty → version-only behavior, unchanged).
         List<String> selectedTags = com.example.ragagent.model.TagUtils.parseTagList(state.selectedTags());
+        // Read hot-editable tuning fresh each call so /settings overrides apply live.
+        boolean retryEscalate = props.searchRetryEscalateSafe();
+        int candidateMultiplier = props.searchCandidateMultiplierSafe();
+        int tagCandidateMultiplier = props.searchTagCandidateMultiplierSafe();
+        int rrfK = props.searchRrfKSafe();
+        double rrfKeywordWeight = props.searchRrfKeywordWeightSafe();
         List<Document> unique;
         try {
             // Escalate candidate count on retry to surface different documents.
@@ -182,7 +183,8 @@ public class RetrievalService {
     boolean shouldExpand(String question) {
         if (!multiqueryEnabled) return false;
         if (question == null) return false;
-        return question.strip().length() >= multiqueryMinLength;
+        // Hot-editable — read fresh so a /settings override applies without a restart.
+        return question.strip().length() >= props.searchMultiqueryMinLengthSafe();
     }
 
     /**

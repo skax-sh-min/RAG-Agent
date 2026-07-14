@@ -75,6 +75,14 @@
                     <span th:text="#{nav.llm_usage}">LLM Usage</span>
                 </a>
             </li>
+            <li class="nav-item">
+                <a class="nav-link"
+                   th:href="@{/settings}"
+                   th:classappend="${#strings.startsWith(requestURI, '/settings')} ? ' active'">
+                    <i class="bi bi-sliders me-1"></i>
+                    <span th:text="#{nav.settings}">Settings</span>
+                </a>
+            </li>
             <li class="nav-item" th:if="${isAdmin}">
                 <a class="nav-link"
                    th:href="@{/admin}"

@@ -198,6 +198,7 @@ rag_java/
     │   │   ├── DocumentController.java         # REST /api/v1/documents, /api/v1/images; 비동기 업로드 (202+taskId)
     │   │   ├── OperationsController.java       # REST GET /api/v1/health, /api/v1/llm/usage; HTMX 스레드 목록 + LLM 카드
     │   │   ├── AdminController.java            # /admin, /admin/chunks; 문서 재인덱스
+    │   │   ├── SettingsController.java         # /settings 조회 + /admin/settings/update|reset
     │   │   ├── AuthController.java             # /login, /signup, /setup 페이지 컨트롤러; 회원가입 후 자동 로그인
     │   │   ├── GlobalExceptionHandler.java     # RFC 9457 ProblemDetail; 400/413 처리
     │   │   └── GlobalModelAdvice.java          # @ControllerAdvice; authEnabled 모델 속성 전체 뷰 주입
@@ -215,7 +216,7 @@ rag_java/
     │   │   ├── RoutingMode.java           # COST_FIRST|QUALITY_FIRST|PROGRESSIVE|DUAL|LOCAL_ONLY
     │   │   ├── CircuitBreaker.java        # LLM 프로바이더 인메모리 차단 관리 (Retry-After 지원)
     │   │   ├── TrackingEmbeddingModel.java  # EmbeddingModel 데코레이터 — 임베딩 토큰 사용량을 채팅과 분리 기록 (embed:<model>)
-    │   │   └── CachingEmbeddingModel.java   # EmbeddingModel 데코레이터 — Caffeine 쿼리 임베딩 캐시(Phase 7-A) + §6.12 인플라이트 single-flight 중복 제거(ConcurrentHashMap<key,CompletableFuture>), tracking 바깥쪽에 합성
+    │   │   └── CachingEmbeddingModel.java   # EmbeddingModel 데코레이터 — Caffeine 쿼리 임베딩 캐시(Phase 7-A) + 인플라이트 single-flight 중복 제거(ConcurrentHashMap<key,CompletableFuture>), tracking 바깥쪽에 합성
     │   ├── model/                         # Java 21 record
     │   │   ├── MetaKey.java               # 벡터 스토어 메타데이터 키 상수
     │   │   └── ChatRequest/Response/SourceRef/DocumentInfo/SyncResult/ThreadMeta/ChatForm/LlmProviderReport/IndexingProgressEvent.java
@@ -240,6 +241,7 @@ rag_java/
     │       ├── MemoryService.java             # 멀티턴 메모리 — SQLite 영속
     │       ├── RagService.java                # 문서 인덱싱 + 동기화 + 이미지 정리
     │       ├── AdminService.java              # Admin UI 데이터 (청크 조회/편집 + 벡터 스토어 상태) — chroma·sqlite-vec
+    │       ├── SettingsService.java           # 런타임 설정 오버라이드 레이어(AppProperties.OverrideSource) + /settings 조회/검증/감사
     │       ├── IndexingProgressService.java   # 비동기 업로드/동기화 SSE 진행 이벤트 관리
     │       ├── MarkdownCorrectionService.java # LLM 마크다운 출력 후처리
     │       ├── DocumentLoaderService.java     # PDF/DOCX/TXT/MD 로더 + 마크다운 섹션 파서; 스캔 PDF OCR
@@ -315,6 +317,7 @@ rag_java/
 - **인플라이트 single-flight (임베딩)** — 완전히 동일한(정규화 후) 텍스트를 동시에 요청하면(예: 여러 사용자가 거의 동시에 같은 질문) 첫 호출만 실제로 계산하고 나머지는 그 결과를 공유(`CachingEmbeddingModel`) — 각자 다시 계산하지 않음
 - **과부하 인지 서킷브레이커** — 폴백 프로바이더가 없는 상태에서(예: 단일 LOCAL 배포) 429/402/503을 받으면 기본 다중 분 단위 차단 대신 30초로 짧게 차단해 일시적 용량 초과가 채팅 전체를 다운시키지 않음 — 다른 프로바이더로 넘길 수 있는 상황이면 기존처럼 정상 차단 후 자동 폴백
 - **동일 우선순위 로드밸런싱** — 같은 role·priority로 프로바이더를 여러 대 등록하면(예: 로컬 서버 2대) 동시성 게이트 여유가 더 많은 쪽으로 요청이 자동 분산(least-in-flight) — 코드 변경 없이 배포 설정만으로 처리량 수평 확장
+- **설정 페이지(`/settings`)** — 유효 LLM/RAG 설정(프로바이더·라우팅·임베딩·검색 튜닝)을 한 화면에서 조회하고, 검색 튜닝 값(유사도 임계값·RRF 가중치/k·후보 배수·멀티쿼리 최소 길이·재시도 확대)은 **재기동 없이** 다음 검색부터 적용되는 **핫 수정**이 가능(`settings_override` 테이블에 영속, 삭제 시 프로퍼티 기본값 복귀). 수정은 관리자 전용이며 감사 로그에 기록되고, 재기동 필요 값은 조회 전용으로 표시
 - **벡터 검색** — `MultiQueryExpander`(3쿼리 병렬)로 최적 검색 후 선택된 백엔드(ChromaDB 또는 sqlite-vec)로 유사도 검색
 - **Contextual Retrieval** — 청크 임베딩과 키워드 검색(`chunk_fts`) 입력 앞에 맥락 헤더(`{파일명} > {섹션 제목}` + 키워드 추출과 같은 호출에서 생성되는 LLM 1~2문장 요약)를 결합해, 표·코드 조각·대명사 위주 텍스트처럼 단독으로는 모호한 청크의 검색 재현율을 높임. 이 헤더는 저장·표시 텍스트, 출처 미리보기, 답변 프롬프트에는 절대 나타나지 않고 임베딩/키워드 검색 입력에만 반영됨
 - **임베딩 입력 정규화** — 마크다운 장식(구분선, 볼드/이탤릭/밑줄 마커)을 임베딩·`chunk_fts`·답변 프롬프트 입력에서만 제거(저장·표시 텍스트는 원문 유지)해 검색 인덱스 노이즈와 프롬프트 토큰 사용량을 줄임

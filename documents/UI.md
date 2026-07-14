@@ -27,6 +27,7 @@ src/main/resources/
 │   ├── chat.html                          # 채팅 페이지 (이전 turn 서버 렌더 포함)
 │   ├── documents.html                     # 문서 관리 페이지
 │   ├── llm-usage.html                     # LLM 사용량 통계 페이지
+│   ├── settings.html                      # LLM/RAG 설정 조회·핫 수정 페이지
 │   └── fragments/
 │       ├── message-user.html              # 사용자 메시지 버블
 │       ├── message-assistant.html         # 어시스턴트 버블 (메타데이터 포함)
@@ -35,7 +36,8 @@ src/main/resources/
 │       ├── thread-list.html               # 대화 목록 사이드바
 │       ├── thread-item.html               # 대화 목록 항목 1건
 │       ├── doc-table-body.html            # 문서 목록 tbody (새로고침용)
-│       └── llm-usage-cards.html           # 프로바이더 + 임베딩(EMBEDDING) + orphan(ORPHAN, 삭제 가능) 상태 카드 (30초 자동 갱신)
+│       ├── llm-usage-cards.html           # 프로바이더 + 임베딩(EMBEDDING) + orphan(ORPHAN, 삭제 가능) 상태 카드 (30초 자동 갱신)
+│       └── settings-item.html             # 설정 항목 1행(조회 또는 편집 입력 + 저장/기본값 버튼) — HTMX 부분 갱신 대상
 └── static/
     ├── css/app.css                        # 버블·배지·DUAL 탭·타이핑·반응형(오프캔버스/dvh/16px/44px)
     ├── css/theme.css                      # light/dark CSS 변수
@@ -102,7 +104,22 @@ REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — �
 
 > 상태 카드는 `AdminService.vectorStoreView()` → `VectorStoreAdminView`. 백엔드별 표시 차이는 [OPERATOR_MANUAL.md §7.4](OPERATOR_MANUAL.md) 참고.
 
-### 3.5 인증 (AuthController)
+### 3.5 설정 관리 (SettingsController)
+
+조회(`GET /settings`)는 게스트에게도 열려 있다 — API 키 자체는 절대 노출하지 않고 "설정됨/없음" 배지만 보여준다. 수정 엔드포인트(`/admin/settings/**`)는 `/admin/**`과 동일한 인가를 상속한다: 평문 no-auth면 관리자 자동 주입, 관리 전용 인증(`app.auth.management-only=true`)이면 실제 로그인이 필요, 전체 인증이면 로그인이 필요하다. 화면에서도 편집 입력·저장/기본값 버튼은 `isAdmin`일 때만 렌더되고(그 외는 값만 표시), 서버 인가가 1차 방어선이다.
+
+| Method | Path | 반환 | 설명 |
+|--------|------|------|------|
+| GET | `/settings` | `settings.html` | LLM/RAG 유효 설정 조회 페이지(프로바이더, 임베딩, 벡터 스토어, 검색 튜닝) |
+| POST | `/admin/settings/update` | `fragments/settings-item :: item` | 핫 수정 가능 항목 하나에 오버라이드 저장(`key`, `value`) — 재기동 없이 다음 검색부터 반영, 감사 로그 기록 |
+| POST | `/admin/settings/reset` | `fragments/settings-item :: item` | 오버라이드 삭제 → 프로퍼티 기본값으로 복귀, 감사 로그 기록 |
+
+- 핫 수정 가능 항목(유사도 임계값·RRF 가중치/k·후보 배수·태그 후보 배수·멀티쿼리 최소 길이·재시도 시 후보 확대)만 `key`를 받아 수정할 수 있다. 그 외 키는 400(`IllegalArgumentException`)으로 거부된다.
+- 값 검증 실패(범위 초과, 타입 불일치)도 400 — `GlobalExceptionHandler`가 처리.
+- 재기동이 필요한 값(rerank/hybrid 활성화, 벡터 스토어 백엔드, 임베딩 차원 등)과 temperature/max-tokens(§6.18 선행 필요)·기본 라우팅 모드는 조회 전용으로만 노출된다.
+- 상세는 [OPERATOR_MANUAL.md §6.5](OPERATOR_MANUAL.md#65-설정-페이지-settings--llmrag-옵션-조회핫-수정) 참고.
+
+### 3.6 인증 (AuthController)
 
 | Method | Path | 반환 | 설명 |
 |--------|------|------|------|

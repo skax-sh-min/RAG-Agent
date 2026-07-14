@@ -29,7 +29,7 @@ import static org.mockito.Mockito.when;
 
 /**
  * QA — CachingEmbeddingModel query-embedding cache decorator (§10.3) + in-flight
- * single-flight dedup (§6.12).
+ * single-flight dedup.
  *
  * Covers: repeated text hits the cache and skips the delegate entirely (so a
  * TrackingEmbeddingModel delegate records no usage on a hit), a partial hit only
@@ -125,10 +125,10 @@ class CachingEmbeddingModelTest {
         verify(delegate, never()).call(any());
     }
 
-    // ── §6.12 — in-flight single-flight ───────────────────────────────────────
+    // ── In-flight single-flight ─────────────────────────────────────────────
 
     @Test
-    @DisplayName("§6.12 — 동시에 도착한 동일 텍스트 요청은 delegate를 한 번만 호출하고 결과를 공유한다")
+    @DisplayName("동시에 도착한 동일 텍스트 요청은 delegate를 한 번만 호출하고 결과를 공유한다")
     void concurrentIdenticalTextSingleFlights() throws Exception {
         CountDownLatch delegateEntered = new CountDownLatch(1);
         CountDownLatch releaseDelegate = new CountDownLatch(1);
@@ -163,7 +163,7 @@ class CachingEmbeddingModelTest {
     }
 
     @Test
-    @DisplayName("§6.12 — owner 호출 실패 시 join 중이던 호출에도 예외가 전파되고, in-flight 항목은 정리되어 다음 호출은 재시도한다")
+    @DisplayName("owner 호출 실패 시 join 중이던 호출에도 예외가 전파되고, in-flight 항목은 정리되어 다음 호출은 재시도한다")
     void concurrentFailurePropagatesToJoinerAndClearsInFlight() throws Exception {
         CountDownLatch delegateEntered = new CountDownLatch(1);
         CountDownLatch releaseDelegate = new CountDownLatch(1);
@@ -205,7 +205,7 @@ class CachingEmbeddingModelTest {
     }
 
     @Test
-    @DisplayName("§6.12 — 같은 요청 안에 동일 텍스트가 중복돼도 데드락 없이 delegate에는 한 번만 전달된다")
+    @DisplayName("같은 요청 안에 동일 텍스트가 중복돼도 데드락 없이 delegate에는 한 번만 전달된다")
     void duplicateTextWithinSameRequestDoesNotDeadlock() {
         when(delegate.call(any())).thenReturn(responseFor(new float[]{5f}));
         var model = new CachingEmbeddingModel(delegate, "nomic", 500, 600);

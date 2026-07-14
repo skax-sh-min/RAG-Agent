@@ -26,7 +26,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * QA — ConcurrencyLimitingChatModel (§6.12 — gates framework-internal callers, e.g.
+ * QA — ConcurrencyLimitingChatModel (gates framework-internal callers, e.g.
  * MultiQueryExpander's injected ChatModel in RetrievalService, that bypass LlmRouter.executeGated).
  */
 class ConcurrencyLimitingChatModelTest {

@@ -199,6 +199,7 @@ rag_java/
     │   │   ├── DocumentController.java         # REST /api/v1/documents, /api/v1/images; async upload (202+taskId)
     │   │   ├── OperationsController.java       # REST GET /api/v1/health, /api/v1/llm/usage; HTMX thread list + LLM cards
     │   │   ├── AdminController.java            # /admin, /admin/chunks; document re-index
+    │   │   ├── SettingsController.java         # /settings view + /admin/settings/update|reset
     │   │   ├── AuthController.java             # /login, /signup, /setup page controllers; auto-login after signup
     │   │   ├── GlobalExceptionHandler.java     # RFC 9457 ProblemDetail; 400/413 handling
     │   │   └── GlobalModelAdvice.java          # @ControllerAdvice; injects authEnabled model attr into all views
@@ -216,7 +217,7 @@ rag_java/
     │   │   ├── RoutingMode.java       # COST_FIRST|QUALITY_FIRST|PROGRESSIVE|DUAL|LOCAL_ONLY
     │   │   ├── CircuitBreaker.java    # In-memory per-provider circuit breaker (Retry-After aware)
     │   │   ├── TrackingEmbeddingModel.java  # EmbeddingModel decorator — records embedding token usage separately (embed:<model>)
-    │   │   └── CachingEmbeddingModel.java   # EmbeddingModel decorator — Caffeine query-embedding cache (Phase 7-A) + §6.12 in-flight single-flight dedup (ConcurrentHashMap<key,CompletableFuture>), composed outside tracking
+    │   │   └── CachingEmbeddingModel.java   # EmbeddingModel decorator — Caffeine query-embedding cache (Phase 7-A) + in-flight single-flight dedup (ConcurrentHashMap<key,CompletableFuture>), composed outside tracking
     │   ├── model/                     # Java 21 records
     │   │   ├── MetaKey.java           # Vector store metadata key constants
     │   │   └── ChatRequest/Response/SourceRef/DocumentInfo/SyncResult/ThreadMeta/ChatForm/LlmProviderReport/IndexingProgressEvent.java
@@ -241,6 +242,7 @@ rag_java/
     │       ├── MemoryService.java             # Multi-turn memory — SQLite persistence
     │       ├── RagService.java                # Document indexing + sync + image cleanup
     │       ├── AdminService.java              # Admin UI data (chunk browse/edit + vector store status) — chroma & sqlite-vec
+    │       ├── SettingsService.java           # runtime settings-override layer (AppProperties.OverrideSource) + /settings view/validation/audit
     │       ├── IndexingProgressService.java   # SSE emitter registry for async upload/sync progress
     │       ├── MarkdownCorrectionService.java # Post-process LLM markdown output
     │       ├── DocumentLoaderService.java     # PDF/DOCX/TXT/MD loader + Markdown section parser; scanned PDF OCR
@@ -316,6 +318,7 @@ User question
 - **In-flight single-flight (embeddings)** — concurrent requests for the exact same (post-normalization) text — e.g. several users asking the same question at nearly the same moment — collapse into one delegate call; the rest share that result instead of each recomputing it (`CachingEmbeddingModel`)
 - **Overload-aware circuit breaking** — a 429/402/503 with no fallback provider available (e.g. a lone LOCAL deployment) triggers a short 30s block instead of the full multi-minute default, so a transient capacity blip doesn't take chat down for everyone; falls back to normal blocking + auto-failover whenever another provider can pick up the slack
 - **Same-priority load balancing** — registering multiple providers at the same role + priority (e.g. two LOCAL servers) automatically distributes requests to whichever has more free concurrency-gate capacity (least-in-flight), for horizontal throughput scaling — no code changes, just deployment config
+- **Settings page (`/settings`)** — view the effective LLM/RAG configuration (providers, routing, embedding, search tuning) in one place; a set of search-tuning values (similarity threshold, RRF weight/k, candidate multipliers, multi-query min length, retry escalation) are **hot-editable** and apply on the next search **without a restart** (persisted in a `settings_override` table, revert to the property default on delete). Editing is admin-only and audited; restart-required values are shown read-only
 - **Vector search** — LLM generates an optimized search query (`MultiQueryExpander`, 3 parallel queries), then performs vector similarity search via the selected backend (ChromaDB or sqlite-vec)
 - **Contextual Retrieval** — each chunk's embedding and lexical (`chunk_fts`) index include a prepended context header (`{filename} > {section heading}`, plus an optional LLM-generated 1-2 sentence summary from the same call that extracts keywords) so chunks that read ambiguously alone (tables, code fragments, pronoun-heavy text) are recalled more reliably; the header never appears in stored/displayed text, the source preview, or the answer prompt — only in the embedding/lexical-search input
 - **Embedding input normalization** — decorative markdown (separator lines, bold/italic/underline markers) is stripped from the embedding, `chunk_fts`, and answer-prompt inputs (not from stored/displayed text), reducing noise in the search index and prompt token usage

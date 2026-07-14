@@ -34,7 +34,7 @@ import static org.mockito.Mockito.when;
  * classifyOnly()/execute() now route through LlmRouter.executeGated() (TaskType.TEXT,
  * RoutingMode.COST_FIRST) — previously a directly-injected ChatClient bound to a single
  * boot-time-fixed model, which bypassed both llm_usage tracking and per-request routing.
- * executeGated (§6.12) applies the per-provider concurrency gate since CLASSIFIER is on the
+ * executeGated applies the per-provider concurrency gate since CLASSIFIER is on the
  * interactive chat/query path.
  *
  * Covers: valid type parse, out-of-enum fallback to "concept", malformed-JSON fallback,

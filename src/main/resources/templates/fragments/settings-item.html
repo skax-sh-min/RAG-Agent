@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<body>
+
+<!-- ── One settings row — editable or read-only ───────────────────────────────
+     Returned on its own by POST /admin/settings/update|reset (hx-swap=outerHTML),
+     and inserted per-item by settings.html. `isAdmin` comes from GlobalModelAdvice. -->
+<div th:fragment="item"
+     class="setting-row row g-2 align-items-center py-2 border-bottom"
+     th:id="'setting-' + (${item.key} ?: ${item.label})">
+
+    <!-- Hidden key travels with the editor's hx-include -->
+    <input th:if="${item.editable}" type="hidden" name="key" th:value="${item.key}"/>
+
+    <!-- Label + technical key + badges -->
+    <div class="col-12 col-md-5">
+        <span class="fw-semibold" th:text="#{__${item.label}__}">label</span>
+        <span th:if="${item.overridden}" class="badge bg-info ms-1"
+              th:text="#{settings.badge.overridden}">overridden</span>
+        <span th:if="${item.note != null}" class="badge bg-warning text-dark ms-1"
+              th:text="#{__${item.note}__}">note</span>
+        <code th:if="${item.key != null}" class="d-block small text-secondary mt-1"
+              th:text="'app.' + ${item.key}">app.key</code>
+    </div>
+
+    <!-- Value / editor -->
+    <div class="col-12 col-md-7">
+        <!-- Admin editor for hot-editable items -->
+        <div th:if="${item.editable and isAdmin}" class="input-group input-group-sm" style="max-width: 22rem;">
+            <input th:if="${item.type == 'number'}" type="number" name="value" class="form-control"
+                   th:value="${item.value}" th:min="${item.min}" th:max="${item.max}" th:step="${item.step}"/>
+            <select th:if="${item.type == 'bool'}" name="value" class="form-select">
+                <option value="true"  th:selected="${item.value == 'true'}">true</option>
+                <option value="false" th:selected="${item.value == 'false'}">false</option>
+            </select>
+            <button type="button" class="btn btn-primary"
+                    hx-post="/admin/settings/update"
+                    th:attr="hx-include='#setting-' + ${item.key}"
+                    hx-target="closest .setting-row" hx-swap="outerHTML"
+                    th:text="#{settings.btn.save}">Save</button>
+            <button type="button" class="btn btn-outline-secondary" th:if="${item.overridden}"
+                    hx-post="/admin/settings/reset"
+                    th:attr="hx-include='#setting-' + ${item.key}"
+                    hx-target="closest .setting-row" hx-swap="outerHTML"
+                    th:text="#{settings.btn.reset}">Reset</button>
+        </div>
+        <!-- Read-only value (non-editable rows, or guests on editable rows) -->
+        <span th:unless="${item.editable and isAdmin}" class="font-monospace"
+              th:text="${item.value}">value</span>
+    </div>
+</div>
+
+</body>
+</html>

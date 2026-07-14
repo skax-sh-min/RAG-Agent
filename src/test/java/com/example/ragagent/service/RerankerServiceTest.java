@@ -26,7 +26,7 @@ import static org.mockito.Mockito.when;
  *
  * rerank()는 LlmRouter.executeGated()(TaskType.TEXT, RoutingMode.COST_FIRST)으로
  * 라우팅한다 — 이전에는 직접 주입된 ChatClient를 써서 /llm-usage에 전혀 잡히지 않았다(§6.14).
- * executeGated (§6.12) 적용 — 재랭킹은 질의 경로이므로 동시성 게이트 대상.
+ * executeGated 적용 — 재랭킹은 질의 경로이므로 동시성 게이트 대상.
  */
 class RerankerServiceTest {
 

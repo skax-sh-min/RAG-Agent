@@ -110,10 +110,10 @@ class OperationsControllerUsageTest {
                 .andExpect(content().string(containsString("EMBEDDING")));
     }
 
-    // ── §6.12 — background/non-chat LLM usage (summarization, keyword extraction, etc.) ─────
+    // ── Background/non-chat LLM usage (summarization, keyword extraction, etc.) ───────────────
 
     @Test
-    @DisplayName("§6.12 — summary:/keyword:/title: 등 백그라운드 사용량은 type=BACKGROUND 로 노출(ORPHAN 아님)")
+    @DisplayName("summary:/keyword:/title: 등 백그라운드 사용량은 type=BACKGROUND 로 노출(ORPHAN 아님)")
     void backgroundUsage_surfacedWithTypeBackground_notOrphan() throws Exception {
         when(usageRepo.usedProviders()).thenReturn(Set.of("summary:local", "keyword:local", "title:local"));
 
@@ -134,7 +134,7 @@ class OperationsControllerUsageTest {
     }
 
     @Test
-    @DisplayName("§6.12 — 백그라운드 사용량은 삭제 버튼 없음(deletable=false), DELETE 시도해도 orphan 아니라 거부")
+    @DisplayName("백그라운드 사용량은 삭제 버튼 없음(deletable=false), DELETE 시도해도 orphan 아니라 거부")
     void backgroundUsage_notDeletable() throws Exception {
         when(usageRepo.usedProviders()).thenReturn(Set.of("summary:local"));
 

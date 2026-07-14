@@ -7,7 +7,7 @@ import org.springframework.ai.chat.prompt.Prompt;
 import reactor.core.publisher.Flux;
 
 /**
- * §6.12 — applies {@link LlmRouter}'s per-provider concurrency gate to framework-internal
+ * Applies {@link LlmRouter}'s per-provider concurrency gate to framework-internal
  * callers that build their own {@code ChatClient} around an injected model (e.g. Spring AI's
  * {@code MultiQueryExpander} in {@code RetrievalService}) and therefore never go through
  * {@link LlmRouter#executeGated} — mirrors {@link TrackingChatModel}'s decorator pattern.

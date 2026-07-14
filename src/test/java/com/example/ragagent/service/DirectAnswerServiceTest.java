@@ -35,7 +35,7 @@ import static org.mockito.Mockito.when;
 /**
  * QA — DirectAnswerService (meta / directMode, blocking + streaming) — EDIT.md #1
  *
- * execute() now routes through LlmRouter.executeGated() (§6.12 concurrency-gated; a real, blocking .call() —
+ * execute() now routes through LlmRouter.executeGated() (concurrency-gated; a real, blocking .call() —
  * previously a streaming .stream().content().blockLast() that discarded ChatResponse usage
  * metadata entirely) so /llm-usage sees real token counts for the blocking direct-answer path.
  * executeStreaming() still can't read real ChatResponse usage (token-by-token SSE UX), so it

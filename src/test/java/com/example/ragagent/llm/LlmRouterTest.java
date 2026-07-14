@@ -33,7 +33,7 @@ import static org.mockito.Mockito.when;
  * Focuses mainly on the side-effect-free surface: findFirst() priority by RoutingMode,
  * hasLocalProvider(), findProviderName(), and DUAL preconditions — plus targeted
  * Mockito-based coverage of executeWithTracking()'s circuit-breaker/backpressure branches
- * (mmproj detection, §6.12 concurrency gate, §6.12 item-4 overload-without-fallback blocking).
+ * (mmproj detection, concurrency gate, overload-without-fallback blocking).
  */
 class LlmRouterTest {
 
@@ -173,14 +173,14 @@ class LlmRouterTest {
         assertThat(r.findProviderName(TaskType.TEXT, RoutingMode.COST_FIRST)).isEqualTo("openai");
     }
 
-    // ── §6.12 — per-provider concurrency gate + backpressure ─────────────────
+    // ── Per-provider concurrency gate + backpressure ──────────────────────────
 
     private static ChatResponse chatResponse(String text) {
         return new ChatResponse(List.of(new Generation(new AssistantMessage(text))));
     }
 
     @Test
-    @DisplayName("§6.12 — acquirePermit: concurrency=1에서 슬롯이 점유돼 있으면 대기 후 LlmBackpressureException")
+    @DisplayName("acquirePermit: concurrency=1에서 슬롯이 점유돼 있으면 대기 후 LlmBackpressureException")
     void acquirePermit_timesOutWhenSaturated() {
         var local = p("lm", ProviderRole.LOCAL, TaskType.TEXT, 1);
         var r = new LlmRouter(List.of(local), null, breaker, RoutingMode.COST_FIRST, 0.6, 180,
@@ -199,7 +199,7 @@ class LlmRouterTest {
     }
 
     @Test
-    @DisplayName("§6.12 — executeGated: 게이트 포화 시 즉시 429 전파, CircuitBreaker는 차단하지 않음")
+    @DisplayName("executeGated: 게이트 포화 시 즉시 429 전파, CircuitBreaker는 차단하지 않음")
     void executeGated_backpressureDoesNotBlockCircuitBreakerOrRetry() {
         ChatModel chatModel = mock(ChatModel.class);
         var local = new LlmProvider("lm", TaskType.TEXT, ProviderRole.LOCAL, 1, "k", null, null, true,
@@ -216,7 +216,7 @@ class LlmRouterTest {
     }
 
     @Test
-    @DisplayName("§6.12 — executeWithTracking(인덱싱 경로, 미적용)은 게이트가 가득 차도 대기 없이 즉시 호출됨")
+    @DisplayName("executeWithTracking(인덱싱 경로, 미적용)은 게이트가 가득 차도 대기 없이 즉시 호출됨")
     void executeWithTracking_ungated_ignoresConcurrencyGate() {
         ChatModel chatModel = mock(ChatModel.class);
         when(chatModel.call(any(Prompt.class))).thenReturn(chatResponse("ok"));
@@ -232,7 +232,7 @@ class LlmRouterTest {
         held.close();
     }
 
-    // ── §6.12 item 4 — overload (429/402/503) circuit-breaker blocking ───────
+    // ── Overload (429/402/503) circuit-breaker blocking ───────────────────────
 
     private static HttpClientErrorException tooManyRequests(HttpHeaders headers) {
         return HttpClientErrorException.create(HttpStatus.TOO_MANY_REQUESTS, "Too Many Requests",
@@ -246,7 +246,7 @@ class LlmRouterTest {
     }
 
     @Test
-    @DisplayName("§6.12(4) — 폴백 없는 단일 프로바이더의 429(Retry-After 헤더 없음)는 기본 차단시간 대신 짧게(30초) 차단된다")
+    @DisplayName("폴백 없는 단일 프로바이더의 429(Retry-After 헤더 없음)는 기본 차단시간 대신 짧게(30초) 차단된다")
     void overloadWithoutFallback_usesShortBlockInsteadOfFullDuration() {
         ChatModel chatModel = mock(ChatModel.class);
         when(chatModel.call(any(Prompt.class))).thenThrow(tooManyRequests(HttpHeaders.EMPTY));
@@ -262,7 +262,7 @@ class LlmRouterTest {
     }
 
     @Test
-    @DisplayName("§6.12(4) — 폴백이 있는 프로바이더의 429(헤더 없음)는 그대로 정상 차단(기본 시간)되고 다음 프로바이더로 폴백된다")
+    @DisplayName("폴백이 있는 프로바이더의 429(헤더 없음)는 그대로 정상 차단(기본 시간)되고 다음 프로바이더로 폴백된다")
     void overloadWithFallback_usesFullBlockDurationAndFallsOver() {
         ChatModel localModel = mock(ChatModel.class);
         when(localModel.call(any(Prompt.class))).thenThrow(tooManyRequests(HttpHeaders.EMPTY));
@@ -285,7 +285,7 @@ class LlmRouterTest {
     }
 
     @Test
-    @DisplayName("§6.12(4) — 폴백이 없어도 서버가 명시한 Retry-After 헤더는 그대로 존중된다(짧은 차단으로 덮어쓰지 않음)")
+    @DisplayName("폴백이 없어도 서버가 명시한 Retry-After 헤더는 그대로 존중된다(짧은 차단으로 덮어쓰지 않음)")
     void overloadWithoutFallback_stillHonorsExplicitRetryAfterHeader() {
         HttpHeaders headers = new HttpHeaders();
         headers.add("Retry-After", "5");
@@ -303,7 +303,7 @@ class LlmRouterTest {
     }
 
     @Test
-    @DisplayName("§6.12(4) — 폴백 없는 단일 프로바이더의 503(헤더 없음)도 429와 동일하게 짧게 차단된다")
+    @DisplayName("폴백 없는 단일 프로바이더의 503(헤더 없음)도 429와 동일하게 짧게 차단된다")
     void serviceUnavailableWithoutFallback_usesShortBlock() {
         ChatModel chatModel = mock(ChatModel.class);
         when(chatModel.call(any(Prompt.class))).thenThrow(HttpServerErrorException.create(
@@ -319,10 +319,10 @@ class LlmRouterTest {
         assertThat(blockedSecondsFromNow("lm")).isBetween(20L, 40L);
     }
 
-    // ── §6.12 item 5 — least-in-flight load balancing across same-priority providers ──
+    // ── Least-in-flight load balancing across same-priority providers ─────────
 
     @Test
-    @DisplayName("§6.12(5) — 동일 role·동일 priority에서 둘 다 여유 있으면 먼저 등록된 프로바이더를 선택한다(결정적 tie-break)")
+    @DisplayName("동일 role·동일 priority에서 둘 다 여유 있으면 먼저 등록된 프로바이더를 선택한다(결정적 tie-break)")
     void samePriorityBothIdle_picksFirstRegistered() {
         var local1 = p("local-1", ProviderRole.LOCAL, TaskType.TEXT, 0);
         var local2 = p("local-2", ProviderRole.LOCAL, TaskType.TEXT, 0);
@@ -332,7 +332,7 @@ class LlmRouterTest {
     }
 
     @Test
-    @DisplayName("§6.12(5) — 동일 role·동일 priority에서 한쪽이 포화 상태면(permit 0) 여유 있는 쪽을 선택한다(least-in-flight)")
+    @DisplayName("동일 role·동일 priority에서 한쪽이 포화 상태면(permit 0) 여유 있는 쪽을 선택한다(least-in-flight)")
     void samePriorityOneSaturated_picksLeastInFlight() {
         var local1 = p("local-1", ProviderRole.LOCAL, TaskType.TEXT, 0);
         var local2 = p("local-2", ProviderRole.LOCAL, TaskType.TEXT, 0);
@@ -348,7 +348,7 @@ class LlmRouterTest {
     }
 
     @Test
-    @DisplayName("§6.12(5) — priority가 다르면 부하와 무관하게 낮은 priority가 항상 우선한다(동일 priority 그룹 내부에서만 분산)")
+    @DisplayName("priority가 다르면 부하와 무관하게 낮은 priority가 항상 우선한다(동일 priority 그룹 내부에서만 분산)")
     void differentPriorityIgnoresLoad() {
         var local1 = p("local-1", ProviderRole.LOCAL, TaskType.TEXT, 0);
         var local2 = p("local-2", ProviderRole.LOCAL, TaskType.TEXT, 1); // 더 높은(나중) priority
@@ -361,7 +361,7 @@ class LlmRouterTest {
     }
 
     @Test
-    @DisplayName("§6.12(5) — 동일 priority 프로바이더 2대 등록 시 한쪽이 포화되면 실제 호출이 다른 쪽으로 분산된다")
+    @DisplayName("동일 priority 프로바이더 2대 등록 시 한쪽이 포화되면 실제 호출이 다른 쪽으로 분산된다")
     void executeGated_distributesAcrossSamePriorityProvidersUnderLoad() {
         ChatModel model1 = mock(ChatModel.class);
         when(model1.call(any(Prompt.class))).thenReturn(chatResponse("from-1"));

@@ -27,7 +27,7 @@ class RetrievalServiceExpansionGateTest {
         when(props.searchTopK()).thenReturn(7);
         when(props.searchMultiqueryEnabled()).thenReturn(enabled);
         when(props.searchMultiqueryMinLengthSafe()).thenReturn(minLength);
-        when(props.searchRetryEscalate()).thenReturn(true);
+        when(props.searchRetryEscalateSafe()).thenReturn(true);
         when(props.searchRerankEnabled()).thenReturn(false);
         when(props.searchCandidateMultiplierSafe()).thenReturn(3);
         LlmRouter llmRouter = mock(LlmRouter.class);

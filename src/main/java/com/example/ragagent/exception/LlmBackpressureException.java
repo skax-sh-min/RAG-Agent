@@ -1,7 +1,7 @@
 package com.example.ragagent.exception;
 
 /**
- * Thrown when a provider's per-server concurrency gate (§6.12 — {@code LlmRouter.acquirePermit()})
+ * Thrown when a provider's per-server concurrency gate ({@code LlmRouter.acquirePermit()})
  * stays saturated past {@code app.llm.permit-wait-timeout-seconds}. Distinct from
  * {@link LlmProviderExhaustedException}: the provider is healthy, just momentarily at capacity,
  * so callers must not treat this as a provider failure (no circuit-breaker block, no retry to

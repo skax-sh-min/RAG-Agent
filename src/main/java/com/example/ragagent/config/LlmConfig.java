@@ -103,7 +103,7 @@ public class LlmConfig {
         double threshold = llmCfg.progressiveThreshold() > 0
                 ? llmCfg.progressiveThreshold() : 0.6;
 
-        // §6.12 — per-provider concurrency gate: falls back to defaultProviderConcurrency
+        // Per-provider concurrency gate: falls back to defaultProviderConcurrency
         // when a provider config omits its own `concurrency`.
         Map<String, Integer> providerConcurrency = new HashMap<>();
         for (AppProperties.ProviderConfig cfg : llmCfg.providers()) {

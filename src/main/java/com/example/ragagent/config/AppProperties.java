@@ -49,8 +49,8 @@ public record AppProperties(
             int readTimeoutSeconds,
             String defaultRoutingMode,
             double progressiveThreshold,
-            int defaultProviderConcurrency,  // §6.12 — per-provider concurrency gate default (matches the server's --parallel), fallback when a provider omits its own `concurrency`
-            int permitWaitTimeoutSeconds     // §6.12 — max wait for a concurrency slot on the query path before failing fast with 429 (default 20s, well under the 180s read-timeout)
+            int defaultProviderConcurrency,  // per-provider concurrency gate default (matches the server's --parallel), fallback when a provider omits its own `concurrency`
+            int permitWaitTimeoutSeconds     // max wait for a concurrency slot on the query path before failing fast with 429 (default 20s, well under the 180s read-timeout)
     ) {}
 
     public record ProviderConfig(
@@ -62,7 +62,7 @@ public record AppProperties(
             String role,
             int priority,
             Boolean stream,
-            Integer concurrency  // §6.12 — this provider's own concurrency slots; null/<=0 falls back to LlmConfig.defaultProviderConcurrency
+            Integer concurrency  // this provider's own concurrency slots; null/<=0 falls back to LlmConfig.defaultProviderConcurrency
     ) {}
 
     public record IndexingConfig(
@@ -156,18 +156,86 @@ public record AppProperties(
         return imageDescription;
     }
 
+    // ── Runtime settings-override layer ───────────────────────────────────────
+    //
+    // A hot-editable value's xxxSafe() accessor consults this source FIRST (override → else the
+    // bound property default), so a change saved on the /settings page reaches the next search
+    // without a restart. AppProperties is an immutable @ConfigurationProperties record — it cannot
+    // take the store as a constructor arg (Spring binds it) nor hold a non-component instance field,
+    // so the source is a process-wide static bound by SettingsService at startup. When unbound
+    // (null — unit tests, or before SettingsService initializes) every accessor behaves exactly as
+    // before: the override lookup is a no-op. Only the keys in SettingsKeys are ever looked up here.
+
+    /** Supplies a raw override string for a settings key (see {@link SettingsKeys}), or null when unset. */
+    public interface OverrideSource {
+        String get(String key);
+    }
+
+    private static volatile OverrideSource overrideSource;
+
+    /** Bound once by {@code SettingsService} at startup; replaces any previously bound source. */
+    public static void bindOverrides(OverrideSource source) {
+        overrideSource = source;
+    }
+
+    /** Clears the bound source (used on shutdown and to isolate tests). */
+    public static void unbindOverrides() {
+        overrideSource = null;
+    }
+
+    private static String rawOverride(String key) {
+        OverrideSource s = overrideSource;
+        if (s == null) return null;
+        String v = s.get(key);
+        return (v == null || v.isBlank()) ? null : v.trim();
+    }
+
+    private static Double overrideDouble(String key) {
+        String v = rawOverride(key);
+        if (v == null) return null;
+        try { return Double.parseDouble(v); } catch (NumberFormatException e) { return null; }
+    }
+
+    private static Integer overrideInt(String key) {
+        String v = rawOverride(key);
+        if (v == null) return null;
+        try { return Integer.parseInt(v); } catch (NumberFormatException e) { return null; }
+    }
+
+    private static Boolean overrideBool(String key) {
+        String v = rawOverride(key);
+        if (v == null) return null;
+        if (v.equalsIgnoreCase("true"))  return Boolean.TRUE;
+        if (v.equalsIgnoreCase("false")) return Boolean.FALSE;
+        return null;
+    }
+
     /**
      * Similarity threshold for vector search, clamped to [0,1].
      * 0.0 = accept all (Spring AI default).
      */
     public double searchSimilarityThresholdSafe() {
-        if (searchSimilarityThreshold <= 0.0) return 0.0;
-        return Math.min(searchSimilarityThreshold, 1.0);
+        Double o = overrideDouble(SettingsKeys.SEARCH_SIMILARITY_THRESHOLD);
+        double base = (o != null) ? o : searchSimilarityThreshold;
+        if (base <= 0.0) return 0.0;
+        return Math.min(base, 1.0);
     }
 
     /** Query length (chars) at/above which multi-query expansion runs. Clamped to >= 0 (0 = no length gate). */
     public int searchMultiqueryMinLengthSafe() {
-        return Math.max(0, searchMultiqueryMinLength);
+        Integer o = overrideInt(SettingsKeys.SEARCH_MULTIQUERY_MIN_LENGTH);
+        return Math.max(0, o != null ? o : searchMultiqueryMinLength);
+    }
+
+    /**
+     * Retry-escalation toggle for candidate expansion on retry (hot-editable via /settings). Plain boolean
+     * with an override hook — no clamping, so the accessor exists purely to route through the
+     * override layer. {@code searchRetryEscalate()} raw getter must not be called elsewhere
+     * (AppPropertiesSafeAccessorTest enforces this).
+     */
+    public boolean searchRetryEscalateSafe() {
+        Boolean o = overrideBool(SettingsKeys.SEARCH_RETRY_ESCALATE);
+        return o != null ? o : searchRetryEscalate;
     }
 
     /** Minimum chunk length used by post-merge compaction. Falls back to chunkOverlap for backward compatibility. */
@@ -178,23 +246,29 @@ public record AppProperties(
 
     /** Candidate pool multiplier for reranking. Clamped to >= 1 to avoid empty pools. */
     public int searchCandidateMultiplierSafe() {
-        return Math.max(1, searchCandidateMultiplier);
+        Integer o = overrideInt(SettingsKeys.SEARCH_CANDIDATE_MULTIPLIER);
+        return Math.max(1, o != null ? o : searchCandidateMultiplier);
     }
 
     /** Candidate-expansion multiplier applied when tags are selected. Defaults to 2. */
     public int searchTagCandidateMultiplierSafe() {
-        return (searchTagCandidateMultiplier == null || searchTagCandidateMultiplier < 1)
-                ? 2 : searchTagCandidateMultiplier;
+        Integer o = overrideInt(SettingsKeys.SEARCH_TAG_CANDIDATE_MULTIPLIER);
+        Integer effective = (o != null) ? o : searchTagCandidateMultiplier;
+        return (effective == null || effective < 1) ? 2 : effective;
     }
 
     /** Weighted RRF — keyword (BM25) axis weight. Defaults to 1.0 (parity with the group-normalized vector axes). */
     public double searchRrfKeywordWeightSafe() {
-        return (searchRrfKeywordWeight != null && searchRrfKeywordWeight > 0) ? searchRrfKeywordWeight : 1.0;
+        Double o = overrideDouble(SettingsKeys.SEARCH_RRF_KEYWORD_WEIGHT);
+        Double effective = (o != null) ? o : searchRrfKeywordWeight;
+        return (effective != null && effective > 0) ? effective : 1.0;
     }
 
     /** Weighted RRF — rank-fusion constant k. Defaults to 60 (the original RRF paper's value). */
     public int searchRrfKSafe() {
-        return (searchRrfK != null && searchRrfK > 0) ? searchRrfK : 60;
+        Integer o = overrideInt(SettingsKeys.SEARCH_RRF_K);
+        Integer effective = (o != null) ? o : searchRrfK;
+        return (effective != null && effective > 0) ? effective : 60;
     }
 
     /** Query embedding cache on/off. Defaults to enabled. */

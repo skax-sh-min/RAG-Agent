@@ -36,7 +36,7 @@ public class LlmRouter {
     private final int readTimeoutSeconds;
 
     /**
-     * §6.12 — per-provider concurrency gate for the interactive query/chat path (CLASSIFIER,
+     * Per-provider concurrency gate for the interactive query/chat path (CLASSIFIER,
      * ANSWER, CRITIC-feeding evaluation, DUAL, DirectAnswer, reranking, multi-query expansion).
      * Sized from {@code AppProperties.ProviderConfig.concurrency()} (falls back to
      * {@code defaultProviderConcurrency}) so the app never sends more concurrent requests to a
@@ -179,7 +179,7 @@ public class LlmRouter {
     }
 
     /**
-     * §6.12 — same as {@link #executeWithTracking(TaskType, RoutingMode, Function)}, but bounded
+     * Same as {@link #executeWithTracking(TaskType, RoutingMode, Function)}, but bounded
      * by the target provider's per-server concurrency gate ({@link #acquirePermit}): waits up to
      * {@code app.llm.permit-wait-timeout-seconds} for a slot, then fails fast with
      * {@link LlmBackpressureException} (HTTP 429 + Retry-After) instead of piling up behind the
@@ -197,7 +197,7 @@ public class LlmRouter {
     }
 
     /**
-     * DUAL 모드 병렬 실행 (§6.12: 두 프로바이더 모두 동시성 게이트 적용).
+     * DUAL 모드 병렬 실행 (두 프로바이더 모두 동시성 게이트 적용).
      * LOCAL 프로바이더 미등록 시 즉시 LlmProviderExhaustedException.
      */
     public DualResult executeDual(TaskType taskType,
@@ -335,12 +335,12 @@ public class LlmRouter {
     }
 
     /**
-     * §6.12 (item 5) — {@code providers} (and therefore {@code eligible}, a filtered view of it)
+     * {@code providers} (and therefore {@code eligible}, a filtered view of it)
      * is priority-ascending, so the lowest priority present is always the preferred tier —
      * unchanged tie-break/failover semantics for the common case of one provider per priority.
      * When more than one provider shares that lowest priority (e.g. two LOCAL providers
      * registered for horizontal throughput), distribute across them by least-in-flight — the one
-     * with the most free permits on its §6.12 concurrency gate (item 1) — instead of always
+     * with the most free permits on its concurrency gate — instead of always
      * picking the first-registered one. This reuses the existing per-provider {@link Semaphore},
      * so it's a "least-connections" load balancer with no new bookkeeping. Ties (e.g. both fully
      * idle) deterministically keep the first-registered provider at that priority.
@@ -420,13 +420,13 @@ public class LlmRouter {
     }
 
     /**
-     * §6.12 (item 4) — for overload-type errors (429/402/503), a full circuit-breaker block is
+     * For overload-type errors (429/402/503), a full circuit-breaker block is
      * only useful if there's a fallback provider to degrade to. When {@code provider} is the
      * only one currently viable for {@code taskType} (e.g. a lone LOCAL provider with no
      * NORMAL/PREMIUM configured — the common air-gapped/no-auth deployment), blocking it for
      * the full {@code circuit-breaker-minutes} just turns a transient capacity blip into a
      * multi-minute total outage for every subsequent request — worse than leaving it open, since
-     * the §6.12 concurrency gate already throttles how hard the app hammers it. An explicit
+     * the concurrency gate already throttles how hard the app hammers it. An explicit
      * {@code Retry-After} header is still honored even with no fallback (authoritative operator
      * guidance from the provider itself, not a default we're second-guessing).
      */

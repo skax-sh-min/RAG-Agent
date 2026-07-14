@@ -164,7 +164,7 @@ public class StreamingAgentService {
             trySendError(emitter, msg);
             emitter.complete();
         } catch (LlmBackpressureException e) {
-            // Provider is healthy but momentarily at capacity (§6.12) — not an error, just backpressure.
+            // Provider is healthy but momentarily at capacity — not an error, just backpressure.
             log.warn("LLM backpressure: {}", e.getMessage());
             String msg = messageSource.getMessage("error.llm.backpressure", null,
                     "현재 요청이 몰려 있습니다. 잠시 후 다시 시도해 주세요.", LocaleContextHolder.getLocale());
