@@ -68,6 +68,10 @@ public class SqliteVecVectorStoreProvider implements VectorStoreProvider {
     private static final int MIN_EMBED_TEXT_LENGTH = 128;
     private static final int MAX_EMBED_RETRY = 8;
     private static final double EMBED_SHRINK_RATIO = 0.8;
+    // §10.7.4 — post-filtering by similarityThreshold can shrink the pool below topK when the
+    // KNN query only ever asks for exactly topK candidates; over-fetch when a threshold is
+    // actually active. No-op at the default (0.0, accept-all) — nothing to filter out there.
+    private static final double THRESHOLD_OVERFETCH_MULTIPLIER = 2.0;
         private static final Pattern TOKEN_LIMIT_PATTERN = Pattern.compile(
             "input \\((\\d+) tokens\\).+?current batch size: (\\d+)",
             Pattern.CASE_INSENSITIVE);
@@ -197,8 +201,16 @@ public class SqliteVecVectorStoreProvider implements VectorStoreProvider {
 
     // ── helpers ───────────────────────────────────────────────────────────────
 
+    /**
+     * §10.7.4 — over-fetches {@code k} when a similarity threshold is active (post-filtering can
+     * otherwise shrink the pool below {@code topK}) and caps the filtered result back to
+     * {@code topK} — rows arrive pre-sorted by ascending distance, so taking the first
+     * {@code topK} that pass the threshold is exactly "closest topK above threshold".
+     */
     private List<Document> searchByEmbedding(float[] embedding, String version, int topK) {
         String vector = toVectorLiteral(embedding);
+        int fetchK = similarityThreshold > 0.0
+                ? (int) Math.ceil(topK * THRESHOLD_OVERFETCH_MULTIPLIER) : topK;
         List<Document> rows = jdbc.query(SEARCH, (rs, i) -> {
             double similarity = 1.0 - rs.getDouble("distance");
             if (similarity < similarityThreshold) return null;          // 0.0 = accept all but negatives
@@ -208,8 +220,8 @@ public class SqliteVecVectorStoreProvider implements VectorStoreProvider {
                     .metadata(parseMetadata(rs.getString("metadata")))
                     .score(similarity)
                     .build();
-        }, vector, topK, version);
-        return rows.stream().filter(Objects::nonNull).toList();
+        }, vector, fetchK, version);
+        return rows.stream().filter(Objects::nonNull).limit(topK).toList();
     }
 
     /** spring_doc_id is the global primary key, so a single delete per table covers every version. */

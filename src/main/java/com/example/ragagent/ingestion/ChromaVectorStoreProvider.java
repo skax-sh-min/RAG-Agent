@@ -45,6 +45,10 @@ public class ChromaVectorStoreProvider implements VectorStoreProvider {
 
     private static final String TENANT = ChromaApiConstants.DEFAULT_TENANT_NAME;
     private static final String DATABASE = ChromaApiConstants.DEFAULT_DATABASE_NAME;
+    // §10.7.4 — post-filtering by similarityThreshold can shrink the pool below topK when the
+    // KNN query only ever asks for exactly topK candidates; over-fetch when a threshold is
+    // actually active. No-op at the default (0.0, accept-all) — nothing to filter out there.
+    private static final double THRESHOLD_OVERFETCH_MULTIPLIER = 2.0;
 
     private final VectorStoreRegistry registry;
     private final ChromaApi chromaApi;
@@ -101,9 +105,11 @@ public class ChromaVectorStoreProvider implements VectorStoreProvider {
         }
         List<float[]> embeddings = embeddingModel.embed(queries);          // single batched HTTP call
         Map<String, Object> where = whereForVersion(version);
-        var request = new ChromaApi.QueryRequest(embeddings, topK, where, ChromaApi.QueryRequest.Include.all);
+        int fetchK = similarityThreshold > 0.0
+                ? (int) Math.ceil(topK * THRESHOLD_OVERFETCH_MULTIPLIER) : topK;
+        var request = new ChromaApi.QueryRequest(embeddings, fetchK, where, ChromaApi.QueryRequest.Include.all);
         var response = chromaApi.queryCollection(TENANT, DATABASE, collectionId, request);
-        return mapPerQuery(response);
+        return mapPerQuery(response, topK);
     }
 
     @Override
@@ -232,8 +238,14 @@ public class ChromaVectorStoreProvider implements VectorStoreProvider {
         }
     }
 
-    /** Maps a batched QueryResponse into one Document list per query (outer index = query). */
-    private List<List<Document>> mapPerQuery(ChromaApi.QueryResponse resp) {
+    /**
+     * Maps a batched QueryResponse into one Document list per query (outer index = query).
+     * §10.7.4 — caps each per-query list at {@code topK} even though the request may have
+     * over-fetched more candidates than that to survive threshold filtering; results arrive
+     * pre-sorted by ascending distance, so taking the first {@code topK} that pass the threshold
+     * is exactly "closest topK above threshold".
+     */
+    private List<List<Document>> mapPerQuery(ChromaApi.QueryResponse resp, int topK) {
         if (resp == null || resp.ids() == null) return List.of();
         List<List<Document>> out = new ArrayList<>(resp.ids().size());
         for (int i = 0; i < resp.ids().size(); i++) {
@@ -243,7 +255,7 @@ public class ChromaVectorStoreProvider implements VectorStoreProvider {
             List<Double> dists = nth(resp.distances(), i);
 
             List<Document> perQuery = new ArrayList<>();
-            for (int j = 0; ids != null && j < ids.size(); j++) {
+            for (int j = 0; ids != null && j < ids.size() && perQuery.size() < topK; j++) {
                 double distance = (dists != null && j < dists.size() && dists.get(j) != null) ? dists.get(j) : 0.0;
                 double similarity = 1.0 - distance;
                 if (similarity < similarityThreshold) continue;

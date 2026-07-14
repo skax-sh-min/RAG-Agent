@@ -135,6 +135,62 @@ class ChromaVectorStoreProviderTest {
     }
 
     @Test
+    @DisplayName("threshold>0 → n_results를 topK의 2배로 과조회한다 (§10.7.4)")
+    void searchBatch_overfetchesWhenThresholdActive() {
+        EmbeddingModel embeddingModel = mock(EmbeddingModel.class);
+        when(embeddingModel.embed(any(List.class)))
+                .thenReturn(List.of(new float[]{0.1f}, new float[]{0.2f}));
+        ChromaApi chromaApi = mock(ChromaApi.class);
+        when(chromaApi.queryCollection(anyString(), anyString(), anyString(), any()))
+                .thenReturn(twoQueryResponse());
+
+        batchProvider(embeddingModel, chromaApi, 0.5)
+                .searchBatch("owner", List.of("q1", "q2"), "latest", 7);
+
+        ArgumentCaptor<ChromaApi.QueryRequest> captor = ArgumentCaptor.forClass(ChromaApi.QueryRequest.class);
+        verify(chromaApi).queryCollection(anyString(), anyString(), anyString(), captor.capture());
+        assertThat(captor.getValue().nResults()).isEqualTo(14); // ceil(7 * 2.0)
+    }
+
+    @Test
+    @DisplayName("threshold=0.0(기본) → n_results는 topK 그대로, 과조회 없음 (무해)")
+    void searchBatch_noOverfetchWhenThresholdZero() {
+        EmbeddingModel embeddingModel = mock(EmbeddingModel.class);
+        when(embeddingModel.embed(any(List.class)))
+                .thenReturn(List.of(new float[]{0.1f}, new float[]{0.2f}));
+        ChromaApi chromaApi = mock(ChromaApi.class);
+        when(chromaApi.queryCollection(anyString(), anyString(), anyString(), any()))
+                .thenReturn(twoQueryResponse());
+
+        batchProvider(embeddingModel, chromaApi, 0.0)
+                .searchBatch("owner", List.of("q1", "q2"), "latest", 7);
+
+        ArgumentCaptor<ChromaApi.QueryRequest> captor = ArgumentCaptor.forClass(ChromaApi.QueryRequest.class);
+        verify(chromaApi).queryCollection(anyString(), anyString(), anyString(), captor.capture());
+        assertThat(captor.getValue().nResults()).isEqualTo(7);
+    }
+
+    @Test
+    @DisplayName("필터 통과 결과가 topK보다 많아도 topK로 잘라낸다 (§10.7.4)")
+    void searchBatch_capsPerQueryResultsAtTopK() {
+        EmbeddingModel embeddingModel = mock(EmbeddingModel.class);
+        when(embeddingModel.embed(any(List.class))).thenReturn(List.of(new float[]{0.1f}));
+        ChromaApi chromaApi = mock(ChromaApi.class);
+        ChromaApi.QueryResponse threeHits = new ChromaApi.QueryResponse(
+                List.of(List.of("a1", "a2", "a3")),
+                null,
+                List.of(List.of("t1", "t2", "t3")),
+                List.of(List.of(Map.of("filename", "a.pdf"), Map.of("filename", "b.pdf"), Map.of("filename", "c.pdf"))),
+                List.of(List.of(0.1, 0.2, 0.3)));
+        when(chromaApi.queryCollection(anyString(), anyString(), anyString(), any())).thenReturn(threeHits);
+
+        List<List<Document>> result = batchProvider(embeddingModel, chromaApi, 0.0)
+                .searchBatch("owner", List.of("q1"), "latest", 2);
+
+        assertThat(result.get(0)).hasSize(2);
+    }
+
+    @Test
     @DisplayName("컬렉션 없음 → 쿼리당 빈 리스트, Chroma 쿼리 미호출")
     void searchBatch_noCollection_returnsEmpty() {
         VectorStoreRegistry registry = mock(VectorStoreRegistry.class);

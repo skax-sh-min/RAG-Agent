@@ -40,9 +40,60 @@ class SqliteVecVectorStoreProviderTest {
     private final EmbeddingModel embeddingModel = mock(EmbeddingModel.class);
 
     private SqliteVecVectorStoreProvider provider() {
+        return provider(0.0);
+    }
+
+    private SqliteVecVectorStoreProvider provider(double threshold) {
         AppProperties props = mock(AppProperties.class);
-        when(props.searchSimilarityThresholdSafe()).thenReturn(0.0);
+        when(props.searchSimilarityThresholdSafe()).thenReturn(threshold);
         return new SqliteVecVectorStoreProvider(jdbc, embeddingModel, new ObjectMapper(), props);
+    }
+
+    // ── §10.7.4 — threshold-active overfetch ─────────────────────────────
+
+    @Test
+    @DisplayName("search — threshold>0이면 k를 topK의 2배로 과조회한다")
+    void search_overfetchesKWhenThresholdActive() {
+        when(embeddingModel.embed(anyString())).thenReturn(new float[]{0.1f});
+        when(jdbc.query(anyString(), any(org.springframework.jdbc.core.RowMapper.class), any(), any(), any()))
+                .thenReturn(List.of());
+
+        provider(0.5).search("u", "질문", "latest", 7);
+
+        ArgumentCaptor<Integer> kCaptor = ArgumentCaptor.forClass(Integer.class);
+        verify(jdbc).query(anyString(), any(org.springframework.jdbc.core.RowMapper.class),
+                any(), kCaptor.capture(), any());
+        assertThat(kCaptor.getValue()).isEqualTo(14); // ceil(7 * 2.0)
+    }
+
+    @Test
+    @DisplayName("search — threshold=0.0(기본)이면 과조회하지 않는다 (무해)")
+    void search_noOverfetchWhenThresholdZero() {
+        when(embeddingModel.embed(anyString())).thenReturn(new float[]{0.1f});
+        when(jdbc.query(anyString(), any(org.springframework.jdbc.core.RowMapper.class), any(), any(), any()))
+                .thenReturn(List.of());
+
+        provider().search("u", "질문", "latest", 7);
+
+        ArgumentCaptor<Integer> kCaptor = ArgumentCaptor.forClass(Integer.class);
+        verify(jdbc).query(anyString(), any(org.springframework.jdbc.core.RowMapper.class),
+                any(), kCaptor.capture(), any());
+        assertThat(kCaptor.getValue()).isEqualTo(7);
+    }
+
+    @Test
+    @DisplayName("search — 결과가 topK보다 많아도 topK로 잘라낸다")
+    void search_capsResultsAtTopKEvenWhenMoreSurvive() {
+        when(embeddingModel.embed(anyString())).thenReturn(new float[]{0.1f});
+        List<Document> tenDocs = java.util.stream.IntStream.range(0, 10)
+                .mapToObj(i -> Document.builder().id("d" + i).text("t").metadata(Map.of()).build())
+                .toList();
+        when(jdbc.query(anyString(), any(org.springframework.jdbc.core.RowMapper.class), any(), any(), any()))
+                .thenReturn(tenDocs);
+
+        List<Document> result = provider().search("u", "질문", "latest", 5);
+
+        assertThat(result).hasSize(5);
     }
 
     @Test
