@@ -251,4 +251,80 @@ class KeywordSearchRepositoryTest {
         assertThat(KeywordSearchRepository.toMatchQuery("문서 오류")).isNull();                     // 둘 다 2글자 → 전부 제외
         assertThat(KeywordSearchRepository.toMatchQuery("문서 코드확인")).isEqualTo("\"코드확인\""); // 2글자만 제외, 4글자는 유지
     }
+
+    // ── §10.7.3 — 3자 미만 질의어 LIKE 폴백 ────────────────────────────────────
+
+    @Test
+    @DisplayName("shortTerms — 3자 미만 토큰만 추출, 원본 순서 유지")
+    void shortTerms_extractsSubThreeCharTokens() {
+        assertThat(KeywordSearchRepository.shortTerms("문서 오류")).containsExactly("문서", "오류");
+        assertThat(KeywordSearchRepository.shortTerms("문서 코드확인")).containsExactly("문서");
+        assertThat(KeywordSearchRepository.shortTerms("코드확인")).isEmpty();
+        assertThat(KeywordSearchRepository.shortTerms(null)).isEmpty();
+        assertThat(KeywordSearchRepository.shortTerms("  ")).isEmpty();
+    }
+
+    @Test
+    @DisplayName("shortTerms — 중복 토큰은 한 번만 반환")
+    void shortTerms_deduplicates() {
+        assertThat(KeywordSearchRepository.shortTerms("오류 오류 문서")).containsExactly("오류", "문서");
+    }
+
+    @Test
+    @DisplayName("search — 2글자 질의어는 LIKE 폴백으로 최소 1건 반환한다 (이전엔 0건, §10.7.3)")
+    void search_shortQuery_fallsBackToLikeScan() {
+        repo.indexChunks(List.of(
+                chunk("s1", "D1", "latest", 0, "결제 오류 코드 ERR4521 발생 시 재시도", "ERR4521, 결제, 오류")));
+
+        List<Document> hits = repo.search("latest", "오류", 10);
+
+        assertThat(hits).extracting(Document::getId).containsExactly("s1");
+    }
+
+    @Test
+    @DisplayName("search — 혼합 길이 질의: 3자 이상은 MATCH로, 3자 미만은 LIKE로 보충되어 둘 다 반환된다")
+    void search_mixedLengthQuery_combinesMatchAndLikeResults() {
+        repo.indexChunks(List.of(
+                chunk("s1", "D1", "latest", 0, "코드확인 절차를 안내합니다", "코드확인"),
+                chunk("s2", "D1", "latest", 1, "결제 오류 시 재시도하세요", "재시도")));
+
+        List<Document> hits = repo.search("latest", "코드확인 오류", 10);
+
+        assertThat(hits).extracting(Document::getId).containsExactlyInAnyOrder("s1", "s2");
+    }
+
+    @Test
+    @DisplayName("search — MATCH와 LIKE 양쪽에 걸리는 청크는 중복 없이 한 번만 반환된다")
+    void search_shortTermFallback_dedupesAgainstMatchResults() {
+        repo.indexChunks(List.of(
+                chunk("s1", "D1", "latest", 0, "결제 오류 코드확인 절차", "결제,오류,코드확인")));
+
+        List<Document> hits = repo.search("latest", "코드확인 오류", 10);
+
+        assertThat(hits).extracting(Document::getId).containsExactly("s1");
+    }
+
+    @Test
+    @DisplayName("search — LIKE 폴백도 버전 필터를 적용한다")
+    void search_shortTermFallback_respectsVersionFilter() {
+        repo.indexChunks(List.of(chunk("s1", "D1", "v1", 0, "공통 오류 발생", "오류")));
+        repo.indexChunks(List.of(chunk("s2", "D2", "v2", 0, "공통 오류 발생", "오류")));
+
+        assertThat(repo.search("v1", "오류", 10)).extracting(Document::getId).containsExactly("s1");
+        assertThat(repo.search("v2", "오류", 10)).extracting(Document::getId).containsExactly("s2");
+    }
+
+    @Test
+    @DisplayName("search — LIKE 폴백을 더해도 결과는 topK를 넘지 않는다")
+    void search_shortTermFallback_respectsTopKCap() {
+        repo.indexChunks(List.of(
+                chunk("s1", "D1", "latest", 0, "코드확인 절차1", "코드확인"),
+                chunk("s2", "D1", "latest", 1, "오류 발생1", "오류"),
+                chunk("s3", "D1", "latest", 2, "오류 발생2", "오류"),
+                chunk("s4", "D1", "latest", 3, "오류 발생3", "오류")));
+
+        List<Document> hits = repo.search("latest", "코드확인 오류", 2);
+
+        assertThat(hits).hasSize(2);
+    }
 }
