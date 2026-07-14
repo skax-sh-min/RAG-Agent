@@ -34,7 +34,7 @@
 
 | 순위 | 항목 | 현재 상태 |
 |---|---|---|
-| 1 | **§6.12 다중 사용자 동시 LLM 처리** — 프로바이더별 동시성 세마포어 + 429 백프레셔 + 동일 우선순위 LLM 다중 등록/로드밸런싱 | 🟡 부분 완료 (2026-07-14). 개선안 1(프로바이더별 세마포어)·2(대기상한+429 백프레셔)·3(임베딩 single-flight) 완료 — 채팅/질의 경로 전체(CLASSIFIER·ANSWER·DUAL·DirectAnswer·재랭킹·MultiQuery)에 적용, 회귀 0(681 테스트 통과). 잔여: 4(서킷브레이커 연쇄 방지)·5(동일 우선순위 LLM 다중 등록/로드밸런싱) 미착수 |
+| 1 | **§6.12 다중 사용자 동시 LLM 처리** — 프로바이더별 동시성 세마포어 + 429 백프레셔 + 동일 우선순위 LLM 다중 등록/로드밸런싱 | 🟡 부분 완료 (2026-07-14). 개선안 1(프로바이더별 세마포어)·2(대기상한+429 백프레셔)·3(임베딩 single-flight)·4(폴백 없는 프로바이더 서킷브레이커 연쇄 방지) 완료 — 채팅/질의 경로 전체(CLASSIFIER·ANSWER·DUAL·DirectAnswer·재랭킹·MultiQuery)에 적용, 회귀 0(685 테스트 통과). 잔여: 5(동일 우선순위 LLM 다중 등록/로드밸런싱) 미착수 |
 | 2 | **§6.13 설정 페이지** — LLM/RAG 옵션 조회·부분(핫) 수정 | 미착수 (2026-07-09 요청, 중간 순위). 수정 권한 게이트가 의존하던 §6.17 관리자 역할 분기는 완료됨 — 선행 조건 충족 |
 | 3 | **§6.15 스토리지 쿼터**(전역 상한 B안, §6.2에서 이관) | 설계 완료, 구현 전. 설정 페이지(§6.13) 이후로 순위 하향 |
 | 4 | 운영 준비 잔여 — SQLite 백업 자동화(Litestream/cron), Caddy 인증서 만료 모니터링 | 미착수 |
@@ -50,6 +50,7 @@
 > **§6.12 추가 (2026-07-14 요청, 높은 우선순위)**: 다중 사용자 동시 LLM 요청 처리 — 채팅 경로 무제한 동시성(인덱싱만 세마포어 존재) → 슬롯 초과 시 429→서킷브레이커 전면차단·타임아웃 폭주 위험. 프로바이더별 동시성 세마포어 + 429 백프레셔 + (처리량 확장) 동일 우선순위 LLM 다중 등록/로드밸런싱. 상세는 §6.12 본문 참조.
 > **§6.12 개선안 1~2 완료 (2026-07-14)**: 프로바이더별 동시성 세마포어(`LlmRouter.acquirePermit`) + 대기상한·429 백프레셔(`LlmBackpressureException`, `executeGated`) — 채팅/질의 경로(CLASSIFIER·ANSWER·DUAL·DirectAnswer·재랭킹·MultiQuery) 전체 적용, 인덱싱 경로는 의도적으로 미적용(회귀 방지). 잔여 3~5(single-flight·서킷브레이커 완화·다중 프로바이더 로드밸런싱)는 미착수. 상세는 §6.12 본문 참조.
 > **§6.12 개선안 3 완료 (2026-07-14)**: `CachingEmbeddingModel`을 `ConcurrentHashMap<key, CompletableFuture>` 기반 in-flight single-flight로 승격 — 동시에 도착한 완전 동일 텍스트의 임베딩 요청은 첫 호출(owner)만 delegate를 부르고 나머지(joiner)는 그 결과를 공유, thundering herd 제거. 잔여 4~5(서킷브레이커 완화·다중 프로바이더 로드밸런싱)는 미착수. 상세는 §6.12 본문 참조.
+> **§6.12 개선안 4 완료 (2026-07-14)**: `LlmRouter`가 429/402/503 차단 전에 폴백 존재 여부를 확인(`blockForOverload`) — 폴백이 있으면 기존처럼 정상 차단 후 자동 전환, 폴백이 전혀 없는 유일 프로바이더(전형적으로 단일 LOCAL 배포)는 명시적 `Retry-After`가 없는 한 30초로 단축 차단해 다중 분(分) 단위 전면 다운을 방지. 잔여 5(다중 프로바이더 로드밸런싱)는 미착수. 상세는 §6.12 본문 참조.
 > **§6.16.1 완료 (2026-07-08)**: 채팅 스트리밍 중지 + 업로드/동기화 취소 버튼. 상세는 아래 §6.16.1 본문 참조.
 > **§6.17 완료 (2026-07-12)**: 문서 관리·Admin 관리 전용 인증(B안) — `app.auth.management-only`. 상세는 아래 §6.17 본문 참조. (A) 전체 인증 모드는 §6.19와 함께 후속(멀티유저 활성화 시) 유지.
 > **§6.13 추가 (2026-07-09 요청, 중간 순위)**: LLM/RAG 설정 조회·부분 수정 페이지. 선행 조건이던 §6.17 관리자 역할 분기는 완료.
@@ -302,7 +303,7 @@ Assistant 응답에 👍/👎 토글 추가, `conversation_turns.feedback`(런�
 
 ---
 
-### 6.12 다중 사용자 동시 LLM 요청 처리 — 동시성 제어 + 처리량 확장 🟡 부분 완료 (개선안 1~3, 2026-07-14)
+### 6.12 다중 사용자 동시 LLM 요청 처리 — 동시성 제어 + 처리량 확장 🟡 부분 완료 (개선안 1~4, 2026-07-14)
 
 **배경 (코드 확인)**: 로컬 LLM 1대 + 임베딩 1대, 각 서버가 동시 3건 처리 가능한 전형적 배포에서, **채팅(질의) 경로에는 앱 레벨 동시성 제한이 전혀 없다** — 세마포어는 인덱싱 경로(`KeywordExtractor`/`MarkdownCorrectionService`/`RagService.enrichParallel`, `INDEXING_MAX_LLM=4`)에만 있고, 질의 경로는 무제한 가상 스레드로 LLM 서버에 그대로 요청을 던진다. 게다가 질문 1개당 LLM 호출이 **5회**(CLASSIFIER 1 + MultiQuery 확장 1 + ANSWER 답변+충분성 2 + CRITIC 1, 재시도 시 추가) + 임베딩 1회다.
 
@@ -319,9 +320,9 @@ Assistant 응답에 👍/👎 토글 추가, `conversation_turns.feedback`(런�
 1. **프로바이더별 동시성 세마포어** — `LlmRouter`에 provider별 `Semaphore`(`providerGates`, provider명 키) 신설. 크기 = `app.llm.providers[].concurrency`(미설정 시 `app.llm.default-provider-concurrency`, 기본 3 — 서버의 실제 `--parallel` 값에 맞춘다). 인덱싱 전용이던 세마포어 패턴을 질의 경로 전용 신규 `LlmRouter.executeGated()`/`acquirePermit()`로 확장해 CLASSIFIER(`ClassifierService`)·ANSWER(블로킹+스트리밍+PROGRESSIVE 업그레이드+sufficiency 평가, `AnswerService`)·DUAL(`executeDual`/`executeDualStream` 양쪽 프로바이더 모두)·DirectAnswer(`DirectAnswerService`)·재랭킹(`RerankerService`, opt-in)·MultiQuery 확장(`RetrievalService`, 신규 `ConcurrencyLimitingChatModel` 데코레이터 — `MultiQueryExpander`가 내부에서 호출 시점을 제어해 호출부 래핑이 불가능하므로 `TrackingChatModel`과 같은 데코레이터 패턴 사용)에 적용. 인덱싱/백그라운드 경로(`KeywordExtractor`·`MarkdownCorrectionService`·`VisionDescriptionService`·`ImageTypeClassifier`·`TextToMarkdownService`·`ConversationSummarizerService.precompute`·`ThreadMetaService.generateTitleAsync`)는 기존 `executeWithTracking()`(게이트 미적용) 그대로 유지 — 이미 자체 세마포어(`app.indexing.max-concurrent-llm-calls`)가 있고 마감시한 있는 동기 HTTP 호출자가 없어 이중 게이팅·회귀 위험만 커진다.
 2. **대기 상한 + 빠른 429 백프레셔** — `acquirePermit()`이 `app.llm.permit-wait-timeout-seconds`(기본 20초, 180초 read-timeout보다 훨씬 짧음) 동안 `tryAcquire` 대기 후 실패 시 신규 `LlmBackpressureException`(`RAG-LLM-002`, HTTP 429)을 던진다. 용량 압박이지 프로바이더 장애가 아니므로 서킷브레이커 차단도, 다른 프로바이더로의 자동 재시도도 하지 않고 즉시 호출자에 전파. `GlobalExceptionHandler`가 `RagException.retryAfterSeconds()`를 읽어 `Retry-After` 헤더를 자동 부착(REST/HTMX). SSE 스트리밍(`StreamingAgentService`)은 별도 catch로 `error.llm.backpressure` 메시지를 보내고 우아하게 스트림을 종료(500 아님).
 3. **인플라이트 single-flight** — `CachingEmbeddingModel`을 `ConcurrentHashMap<key, CompletableFuture<float[]>>` 기반 in-flight 등록 테이블로 승격(기존 Caffeine `Cache`는 "완료된" 결과의 TTL/사이즈 상한 저장소로 그대로 유지). 텍스트별로 이 요청이 실제로 호출해야 할 "owner"인지, 이미 다른 동시 호출이 계산 중이라 그 결과를 "join"만 하면 되는지 `putIfAbsent`로 원자적으로 판정 — 동시에 동일 텍스트를 요청한 2~4번째 호출은 delegate를 다시 부르지 않고 owner의 `CompletableFuture`를 기다렸다가 같은 결과를 공유한다(owner 실패 시 예외도 그대로 전파, in-flight 항목은 정리되어 다음 호출은 새로 재시도). 같은 호출(`EmbeddingRequest`) 안에서 동시에 새로 필요한 텍스트들은 기존과 동일하게 하나의 배치 delegate 호출로 묶인다 — single-flight는 **서로 다른 호출 간의** 경합만 병합한다. **완전 동일(정규화 후) 텍스트만** 병합되며, 근사 질문은 여전히 미스(§10.5 시맨틱 캐시 영역). CLASSIFIER에는 적용하지 않음 — 오늘 시점엔 캐시 자체가 없어 새 캐시를 도입하는 별도 스코프이므로 이번 범위에서 제외.
+4. **서킷브레이커 연쇄 방지** — `LlmRouter`가 429/402/503(과부하성 오류)로 차단하기 전에 `blockForOverload()`로 폴백 가능 여부를 먼저 확인한다. 이 taskType에 대해 현재 요청에서 이미 시도한 프로바이더를 제외하고도 다른 프로바이더가 남아있으면(=폴백 존재) 기존과 동일하게 정상 차단(`Retry-After` 헤더 또는 `circuit-breaker-minutes` 기본값)하고 다음 프로바이더로 넘어간다 — 정상적으로 우아하게 저하(graceful degradation)되므로 그대로 둔다. 반대로 폴백이 전혀 없으면(유일 LOCAL 프로바이더가 전형적 사례) 전체 차단은 다음 요청까지 전원 다운시킬 뿐이므로, **서버가 명시적 `Retry-After`를 보낸 경우를 제외하고** 30초의 짧은 차단으로 완화한다(§6.12 동시성 게이트가 이미 프로바이더에 걸리는 부하를 억제하고 있으므로 굳이 길게 차단할 필요가 없다). 명시적 `Retry-After`는 폴백 유무와 무관하게 항상 그대로 존중한다(운영자/프로바이더가 준 권위 있는 신호를 임의로 덮어쓰지 않음). 502/504/500 등 그 외 상태 코드는 기존과 동일하게 30초 고정 차단 유지(변경 없음).
 
-**🔵 미착수 (개선안 4~5)**
-4. **서킷브레이커 연쇄 방지** — 유일 LOCAL 프로바이더는 과부하성 오류(429/503)에 대해 **미차단 또는 짧은 차단**으로 완화(현재 타임아웃은 이미 미차단 처리됨). 1대뿐인 로컬이 일시 과부하로 2분 전면 차단되는 사태 방지.
+**🔵 미착수 (개선안 5)**
 5. **동일 우선순위 LLM 추가 등록 + 로드밸런싱 (처리량 확장)** — 아래 별도 상술.
 
 **5) 동일 우선순위 LLM 다중 등록으로 처리량 확장**:
@@ -333,14 +334,17 @@ Assistant 응답에 👍/👎 토글 추가, `conversation_turns.feedback`(런�
 **완료 기준**:
 - ✅ `N > (프로바이더 수 × per-provider 동시성)`인 적당한 초과 부하는 대기 상한(기본 20초) 내에서 순차 대기로 처리되고, 그 이상 지속되는 과부하는 전면차단·180초 타임아웃 대신 즉시 429(Retry-After)로 응답한다.
 - ✅ 4명이 *동일* 질문을 거의 동시에 물어도 임베딩 계산은 1회만 수행되고 나머지는 그 결과를 공유한다(thundering herd 제거) — `CachingEmbeddingModelTest`의 동시성 테스트로 검증.
+- ✅ 폴백이 없는 유일 프로바이더가 429/503을 반환해도 전체가 몇 분씩 다운되지 않는다 — 폴백 부재 시 30초로 단축 차단(명시적 `Retry-After`는 예외 없이 존중), 폴백이 있으면 기존처럼 정상 차단 후 자동 폴백 — `LlmRouterTest` 4건(폴백 없음/있음, 명시적 헤더, 503)으로 검증.
 - 🔵 동일 role 프로바이더 2대 등록 시 요청이 두 대에 실제 분산된다(`/llm-usage` provider별 집계 또는 라우팅 로그로 확인) — 개선안 5 미착수라 아직 미충족.
-- ✅ 개선안 1~3만으로도 단일 프로바이더 배포에서 "4명 동시"가 안전한 대기·백프레셔·중복계산 제거로 처리되고(회귀 0 — 전체 681 테스트 통과 확인), 세마포어 크기·429 임계·프로바이더별 동시성은 프로퍼티로 외부화(`app.llm.default-provider-concurrency`/`app.llm.permit-wait-timeout-seconds`/`app.llm.providers[].concurrency`, `props.llmSafe()` 관례)된다.
+- ✅ 개선안 1~4만으로도 단일 프로바이더 배포에서 "4명 동시"가 안전한 대기·백프레셔·중복계산 제거·짧은 장애 완화로 처리되고(회귀 0 — 전체 685 테스트 통과 확인), 세마포어 크기·429 임계·프로바이더별 동시성은 프로퍼티로 외부화(`app.llm.default-provider-concurrency`/`app.llm.permit-wait-timeout-seconds`/`app.llm.providers[].concurrency`, `props.llmSafe()` 관례)된다.
 
 **구현 메모 (2026-07-14, 개선안 1~2)**: 신규 `LlmRouter.Permit`(AutoCloseable)·`acquirePermit()`·`executeGated()`; `LlmConfig.llmRouter()`가 provider별 concurrency map을 조립해 `LlmRouter` 생성자에 전달(기존 5·6-arg 생성자는 하위호환 오버로드로 유지). 신규 `ConcurrencyLimitingChatModel`(`llm` 패키지, `TrackingChatModel`과 동일한 데코레이터 패턴)이 `RetrievalService`의 MultiQueryExpander 전용 모델을 감싼다. 신규 `LlmBackpressureException`(`exception` 패키지, `RAG-LLM-002`)을 `RagException` sealed 계층에 추가하고 `RagException.retryAfterSeconds()` 기본 메서드 도입. 테스트: `LlmRouterTest`(백프레셔 타임아웃·게이트 무시 등 3건 추가) + 신규 `ConcurrencyLimitingChatModelTest`(4건).
 
 **구현 메모 (2026-07-14, 개선안 3)**: `CachingEmbeddingModel`에 `ConcurrentHashMap<String, CompletableFuture<float[]>> inFlight` 필드 추가(기존 Caffeine `Cache<String,float[]>`는 그대로 유지, 역할 분리: Caffeine=완료된 결과의 TTL 캐시 / ConcurrentHashMap=진행 중인 계산의 일시적 조정 테이블). `call()`을 owner/joiner 두 그룹으로 분류하는 로직으로 재작성 — owner 그룹은 기존과 동일하게 배치 delegate 호출, joiner 그룹은 owner의 future를 `join()`. 예외는 owner→joiner로 그대로 전파(`CompletionException` 언랩)하고 실패 시 in-flight 항목을 정리해 재시도 가능하게 함. 같은 요청 내 텍스트 중복(예: `["dup","dup"]`)도 데드락 없이 처리됨(첫 등장만 owner, 나머지는 즉시 완료되는 자신의 owner future를 join). 테스트: `CachingEmbeddingModelTest`에 실제 스레드풀 기반 동시성 테스트 3건 추가(단일 delegate 호출로 병합·owner 실패 시 전파+재시도·요청 내 중복 텍스트 무데드락).
 
-**비고**: 개선안 1~3은 단일 로컬 프로바이더 기본 배포에 즉시 적용되는 안전장치(높은 우선순위) — **완료**. 4·5는 남은 후속 과제이며, 5는 실제 처리량이 부족할 때의 수평 확장 경로다. 근사(동일하지 않은) 질문의 중복 계산까지 없애려면 §10.5(시맨틱 응답 캐시, 현재 보류)가 별도 후보다.
+**구현 메모 (2026-07-14, 개선안 4)**: `LlmRouter`의 429/402 전용 `catch (HttpClientErrorException)`를 `catch (HttpStatusCodeException)`로 넓혀 503(`HttpServerErrorException`)도 같은 분기로 들어오게 하고, 신규 `blockForOverload(provider, taskType, roleOrder, tried, retryAfterHeader)`가 `findFirst(taskType, roleOrder, tried)`로 폴백 존재 여부를 판정 — 폴백이 있거나 명시적 `Retry-After` 헤더가 있으면 기존과 동일하게 차단(`circuitBreaker.block(name, retryAfterHeader)`), 폴백도 헤더도 없으면 신규 상수 `SHORT_BLOCK_SECONDS`("30")로 단축 차단. 기존에 두 곳에 흩어져 있던 하드코딩 `"30"` 리터럴(429 외 4xx, 일반 예외 분기)도 이 상수로 통합. mmproj/timeout 특수 처리(`isVisionUnsupported`/`isTimeoutLike`)는 항상 일반 `RuntimeException`으로 관측되는 것이 테스트로 이미 확인돼 있어 catch 타입 확장의 영향을 받지 않는다. 테스트: `LlmRouterTest`에 4건 추가(폴백 없음→30초 단축, 폴백 있음→기존 시간 유지+정상 폴백, 폴백 없어도 명시적 헤더는 존중, 503도 429와 동일 취급).
+
+**비고**: 개선안 1~4는 단일 로컬 프로바이더 기본 배포에 즉시 적용되는 안전장치(높은 우선순위) — **완료**. 5는 실제 처리량이 부족할 때의 수평 확장 경로로 남아있다. 근사(동일하지 않은) 질문의 중복 계산까지 없애려면 §10.5(시맨틱 응답 캐시, 현재 보류)가 별도 후보다.
 
 ---
 

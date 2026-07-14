@@ -11,7 +11,13 @@ import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
 import org.springframework.ai.chat.prompt.Prompt;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.client.HttpClientErrorException;
+import org.springframework.web.client.HttpServerErrorException;
 
+import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 
@@ -24,10 +30,10 @@ import static org.mockito.Mockito.when;
 /**
  * QA — LlmRouter routing & guard behaviour
  *
- * Focuses on the side-effect-free surface: findFirst() priority by RoutingMode,
- * hasLocalProvider(), findProviderName(), and DUAL preconditions. We do NOT
- * exercise executeWithTracking / executeDual here — those require a non-null
- * usage repository and live ChatModel calls and belong in a Mockito-based test.
+ * Focuses mainly on the side-effect-free surface: findFirst() priority by RoutingMode,
+ * hasLocalProvider(), findProviderName(), and DUAL preconditions — plus targeted
+ * Mockito-based coverage of executeWithTracking()'s circuit-breaker/backpressure branches
+ * (mmproj detection, §6.12 concurrency gate, §6.12 item-4 overload-without-fallback blocking).
  */
 class LlmRouterTest {
 
@@ -224,5 +230,92 @@ class LlmRouterTest {
                 m -> m.call(new Prompt("x")));
         assertThat(result).isEqualTo("ok");
         held.close();
+    }
+
+    // ── §6.12 item 4 — overload (429/402/503) circuit-breaker blocking ───────
+
+    private static HttpClientErrorException tooManyRequests(HttpHeaders headers) {
+        return HttpClientErrorException.create(HttpStatus.TOO_MANY_REQUESTS, "Too Many Requests",
+                headers, new byte[0], null);
+    }
+
+    private long blockedSecondsFromNow(String providerName) {
+        Instant until = breaker.getBlockedProviders().get(providerName);
+        assertThat(until).as("provider [%s] should be blocked", providerName).isNotNull();
+        return Duration.between(Instant.now(), until).getSeconds();
+    }
+
+    @Test
+    @DisplayName("§6.12(4) — 폴백 없는 단일 프로바이더의 429(Retry-After 헤더 없음)는 기본 차단시간 대신 짧게(30초) 차단된다")
+    void overloadWithoutFallback_usesShortBlockInsteadOfFullDuration() {
+        ChatModel chatModel = mock(ChatModel.class);
+        when(chatModel.call(any(Prompt.class))).thenThrow(tooManyRequests(HttpHeaders.EMPTY));
+        var local = new LlmProvider("lm", TaskType.TEXT, ProviderRole.LOCAL, 1, "k", null, null, true,
+                chatModel, null);
+        var r = router(RoutingMode.COST_FIRST, local); // breaker 기본 차단 = 2분(120s)
+
+        assertThatThrownBy(() -> r.executeWithTracking(TaskType.TEXT, RoutingMode.COST_FIRST,
+                m -> m.call(new Prompt("x"))))
+                .isInstanceOf(LlmProviderExhaustedException.class);
+
+        assertThat(blockedSecondsFromNow("lm")).isBetween(20L, 40L);
+    }
+
+    @Test
+    @DisplayName("§6.12(4) — 폴백이 있는 프로바이더의 429(헤더 없음)는 그대로 정상 차단(기본 시간)되고 다음 프로바이더로 폴백된다")
+    void overloadWithFallback_usesFullBlockDurationAndFallsOver() {
+        ChatModel localModel = mock(ChatModel.class);
+        when(localModel.call(any(Prompt.class))).thenThrow(tooManyRequests(HttpHeaders.EMPTY));
+        var local = new LlmProvider("lm", TaskType.TEXT, ProviderRole.LOCAL, 1, "k", null, null, true,
+                localModel, null);
+        ChatModel normalModel = mock(ChatModel.class);
+        when(normalModel.call(any(Prompt.class))).thenReturn(chatResponse("ok"));
+        var normal = new LlmProvider("openai", TaskType.TEXT, ProviderRole.NORMAL, 2, "sk", null, null, true,
+                normalModel, null);
+        // router() passes a null usageRepo — fine for tests that only ever throw, but this one
+        // needs a real fallback success, which records usage.
+        var r = new LlmRouter(List.of(local, normal), mock(LlmUsageRepository.class), breaker,
+                RoutingMode.COST_FIRST, 0.6);
+
+        String result = r.executeWithTracking(TaskType.TEXT, RoutingMode.COST_FIRST,
+                m -> m.call(new Prompt("x")));
+
+        assertThat(result).isEqualTo("ok");
+        assertThat(blockedSecondsFromNow("lm")).isGreaterThan(60L); // 짧은 차단(30s)이 아니라 기본 2분 차단 유지
+    }
+
+    @Test
+    @DisplayName("§6.12(4) — 폴백이 없어도 서버가 명시한 Retry-After 헤더는 그대로 존중된다(짧은 차단으로 덮어쓰지 않음)")
+    void overloadWithoutFallback_stillHonorsExplicitRetryAfterHeader() {
+        HttpHeaders headers = new HttpHeaders();
+        headers.add("Retry-After", "5");
+        ChatModel chatModel = mock(ChatModel.class);
+        when(chatModel.call(any(Prompt.class))).thenThrow(tooManyRequests(headers));
+        var local = new LlmProvider("lm", TaskType.TEXT, ProviderRole.LOCAL, 1, "k", null, null, true,
+                chatModel, null);
+        var r = router(RoutingMode.COST_FIRST, local);
+
+        assertThatThrownBy(() -> r.executeWithTracking(TaskType.TEXT, RoutingMode.COST_FIRST,
+                m -> m.call(new Prompt("x"))))
+                .isInstanceOf(LlmProviderExhaustedException.class);
+
+        assertThat(blockedSecondsFromNow("lm")).isBetween(0L, 10L);
+    }
+
+    @Test
+    @DisplayName("§6.12(4) — 폴백 없는 단일 프로바이더의 503(헤더 없음)도 429와 동일하게 짧게 차단된다")
+    void serviceUnavailableWithoutFallback_usesShortBlock() {
+        ChatModel chatModel = mock(ChatModel.class);
+        when(chatModel.call(any(Prompt.class))).thenThrow(HttpServerErrorException.create(
+                HttpStatus.SERVICE_UNAVAILABLE, "Service Unavailable", HttpHeaders.EMPTY, new byte[0], null));
+        var local = new LlmProvider("lm", TaskType.TEXT, ProviderRole.LOCAL, 1, "k", null, null, true,
+                chatModel, null);
+        var r = router(RoutingMode.COST_FIRST, local);
+
+        assertThatThrownBy(() -> r.executeWithTracking(TaskType.TEXT, RoutingMode.COST_FIRST,
+                m -> m.call(new Prompt("x"))))
+                .isInstanceOf(LlmProviderExhaustedException.class);
+
+        assertThat(blockedSecondsFromNow("lm")).isBetween(20L, 40L);
     }
 }

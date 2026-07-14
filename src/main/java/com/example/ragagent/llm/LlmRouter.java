@@ -7,7 +7,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
-import org.springframework.web.client.HttpClientErrorException;
+import org.springframework.web.client.HttpStatusCodeException;
 
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
@@ -24,6 +24,9 @@ import static com.example.ragagent.llm.ProviderRole.*;
 public class LlmRouter {
 
     private static final Logger log = LoggerFactory.getLogger(LlmRouter.class);
+
+    /** Short fallback block (seconds) for transient/overload-type failures — see {@link #blockForOverload}. */
+    private static final String SHORT_BLOCK_SECONDS = "30";
 
     private final List<LlmProvider> providers; // priority 오름차순
     private final LlmUsageRepository usageRepo;
@@ -346,14 +349,14 @@ public class LlmRouter {
             // Capacity pressure, not a provider failure — do not block the circuit breaker or
             // silently retry against another provider; let the 429 propagate to the caller.
             throw e;
-        } catch (HttpClientErrorException e) {
+        } catch (HttpStatusCodeException e) {
             int status = e.getStatusCode().value();
-            if (status == 429 || status == 402) {
+            if (status == 429 || status == 402 || status == 503) {
                 String retryAfter = e.getResponseHeaders() != null
                         ? e.getResponseHeaders().getFirst("Retry-After") : null;
-                circuitBreaker.block(provider.name(), retryAfter);
+                blockForOverload(provider, taskType, roleOrder, tried, retryAfter);
             } else {
-                circuitBreaker.block(provider.name(), "30");
+                circuitBreaker.block(provider.name(), SHORT_BLOCK_SECONDS);
             }
             log.warn("Provider [{}] returned HTTP {}, trying next", provider.name(), status);
             return executeWithTracking(taskType, roleOrder, usageLabelPrefix, call, tried, gated);
@@ -374,11 +377,35 @@ public class LlmRouter {
                 log.warn("Provider [{}] does not support image input (mmproj missing) — "
                         + "skipping image tasks for this provider, NOT blocking circuit breaker", provider.name());
             } else {
-                circuitBreaker.block(provider.name(), "30");
+                circuitBreaker.block(provider.name(), SHORT_BLOCK_SECONDS);
             }
             log.warn("Provider [{}] threw {}: {}, trying next",
                     provider.name(), e.getClass().getSimpleName(), e.getMessage());
             return executeWithTracking(taskType, roleOrder, usageLabelPrefix, call, tried, gated);
+        }
+    }
+
+    /**
+     * §6.12 (item 4) — for overload-type errors (429/402/503), a full circuit-breaker block is
+     * only useful if there's a fallback provider to degrade to. When {@code provider} is the
+     * only one currently viable for {@code taskType} (e.g. a lone LOCAL provider with no
+     * NORMAL/PREMIUM configured — the common air-gapped/no-auth deployment), blocking it for
+     * the full {@code circuit-breaker-minutes} just turns a transient capacity blip into a
+     * multi-minute total outage for every subsequent request — worse than leaving it open, since
+     * the §6.12 concurrency gate already throttles how hard the app hammers it. An explicit
+     * {@code Retry-After} header is still honored even with no fallback (authoritative operator
+     * guidance from the provider itself, not a default we're second-guessing).
+     */
+    private void blockForOverload(LlmProvider provider, TaskType taskType, List<ProviderRole> roleOrder,
+                                  Set<String> tried, String retryAfterHeader) {
+        boolean hasFallback = findFirst(taskType, roleOrder, tried).isPresent();
+        if (hasFallback || (retryAfterHeader != null && !retryAfterHeader.isBlank())) {
+            circuitBreaker.block(provider.name(), retryAfterHeader);
+        } else {
+            log.warn("[NO-FALLBACK] provider={} is the only viable provider for task={} — "
+                    + "blocking briefly ({}s) instead of the full circuit-breaker duration to avoid a total outage",
+                    provider.name(), taskType, SHORT_BLOCK_SECONDS);
+            circuitBreaker.block(provider.name(), SHORT_BLOCK_SECONDS);
         }
     }
 
