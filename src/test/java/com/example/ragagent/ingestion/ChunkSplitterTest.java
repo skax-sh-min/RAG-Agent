@@ -267,8 +267,9 @@ class ChunkSplitterTest {
     }
 
     @Test
-    @DisplayName("slidingWindow — 코드블록이 청크 경계에서 잘리면 이어지는 조각마다 여는 펜스(언어 태그)가 재삽입되고, " +
-            "블록이 그 조각 안에서 끝나지 않으면 닫는 펜스도 덧붙는다")
+    @DisplayName("slidingWindow — 코드블록이 청크 경계에서 잘리면 이어지는 조각마다 여는 펜스(언어 태그)와 " +
+            "'이전 청크에서 계속' 주석이 재삽입되고, 블록이 그 조각 안에서 끝나지 않으면 닫는 펜스와 " +
+            "'다음 청크로 계속' 주석도 덧붙는다")
     void slidingWindow_codeBlockSplitAcrossPieces_reopensFenceOnContinuations() {
         // 10자/줄로 정렬: fence("```python\n")=10자, 데이터 100줄×10자=1000자, 닫는 펜스("```\n")=4자 → 총 1014자.
         // chunkSize=300, overlap=30 → 경계가 항상 줄 경계와 맞아떨어지도록 설계된 값.
@@ -282,23 +283,30 @@ class ChunkSplitterTest {
 
         assertThat(pieces).hasSize(4);
 
-        // 첫 조각: 실제 여는 펜스를 그대로 포함 (재삽입 아님) — 이중 펜스 없음
+        // 첫 조각: 실제 여는 펜스를 그대로 포함(재삽입도 BEFORE 주석도 없음 — 앞에 이어지는 내용이 없음),
+        // 다만 이 조각 안에서 블록이 끝나지 않으므로 닫는 펜스 + AFTER 주석이 덧붙는다.
         String first = pieces.get(0).getText();
         assertThat(first).startsWith("```python");
-        assertThat(countOccurrences(first, "```")).isEqualTo(1);
+        assertThat(first).doesNotContain(ChunkSplitter.CODE_CONTINUATION_BEFORE);
+        assertThat(first).endsWith(ChunkSplitter.CODE_CONTINUATION_AFTER);
+        assertThat(countOccurrences(first, "```")).isEqualTo(2);
 
-        // 중간 조각들: 이어지는 조각이므로 여는 펜스 재삽입 + 그 조각 안에서 블록이 안 끝나므로 닫는 펜스도 추가
+        // 중간 조각들: 앞뒤 모두 이어지므로 BEFORE 주석+재삽입 펜스로 시작해 AFTER 주석으로 끝난다.
         for (int i = 1; i <= 2; i++) {
             String piece = pieces.get(i).getText();
-            assertThat(piece).as("piece " + i).startsWith("```python");
-            assertThat(piece).as("piece " + i).endsWith("```");
+            assertThat(piece).as("piece " + i).startsWith(ChunkSplitter.CODE_CONTINUATION_BEFORE);
+            assertThat(piece).as("piece " + i).contains("```python");
+            assertThat(piece).as("piece " + i).endsWith(ChunkSplitter.CODE_CONTINUATION_AFTER);
             assertThat(countOccurrences(piece, "```")).as("piece " + i).isEqualTo(2);
         }
 
-        // 마지막 조각: 여는 펜스는 재삽입되지만, 원본의 실제 닫는 펜스를 이미 포함하므로 중복 추가되지 않음
+        // 마지막 조각: 앞에서 이어지므로 BEFORE 주석+재삽입 펜스로 시작하지만, 원본의 실제 닫는 펜스를
+        // 이미 포함하므로 AFTER 주석이나 중복 닫는 펜스는 추가되지 않는다.
         String last = pieces.get(3).getText();
-        assertThat(last).startsWith("```python");
+        assertThat(last).startsWith(ChunkSplitter.CODE_CONTINUATION_BEFORE);
+        assertThat(last).contains("```python");
         assertThat(last).endsWith("```");
+        assertThat(last).doesNotContain(ChunkSplitter.CODE_CONTINUATION_AFTER);
         assertThat(countOccurrences(last, "```")).isEqualTo(2);
     }
 
@@ -338,14 +346,44 @@ class ChunkSplitterTest {
     }
 
     @Test
-    @DisplayName("reopenCodeFence — 원본의 여는 펜스 줄(언어 태그 포함)을 그대로 재사용한다")
+    @DisplayName("reopenTruncatedBlock — 코드블록의 실제 시작을 포함해도(from-before 아님) 그 조각 안에서 블록이 " +
+            "끝나지 않으면 닫는 펜스 + AFTER 주석을 덧붙인다")
+    void reopenTruncatedBlock_containsRealStartButBlockContinues_appendsAfterMarker() {
+        String full = "```java\ncode line 1\ncode line 2\n```\n";
+        String chunk = "```java\ncode line 1"; // start=0은 블록의 실제 시작, end=20은 블록이 끝나기 전
+
+        String result = splitter.reopenTruncatedBlock(full, 0, 20, chunk);
+
+        assertThat(result).isEqualTo(chunk + "\n```\n" + ChunkSplitter.CODE_CONTINUATION_AFTER);
+        assertThat(result).doesNotContain(ChunkSplitter.CODE_CONTINUATION_BEFORE);
+    }
+
+    @Test
+    @DisplayName("reopenCodeFence — 앞뒤 모두 이어지면 원본의 여는 펜스 줄(언어 태그 포함)을 재사용하고 " +
+            "BEFORE/AFTER 주석을 펜스 바깥에 덧붙인다")
     void reopenCodeFence_reusesOriginalOpeningFenceLine() {
         String full = "```java\ncode line 1\ncode line 2\n```\n";
         ChunkSplitter.Range range = new ChunkSplitter.Range(0, full.length());
 
-        String result = splitter.reopenCodeFence(full, range, 20, "code line 2");
+        // chunkStart(10) > range.start()(0) → continuesFromBefore; chunkEnd(20) < range.end()(36) → continuesAfter
+        String result = splitter.reopenCodeFence(full, range, 10, 20, "code line 2");
 
-        assertThat(result).isEqualTo("```java\ncode line 2\n```");
+        String expected = ChunkSplitter.CODE_CONTINUATION_BEFORE + "\n```java\ncode line 2\n```\n"
+                + ChunkSplitter.CODE_CONTINUATION_AFTER;
+        assertThat(result).isEqualTo(expected);
+    }
+
+    @Test
+    @DisplayName("reopenCodeFence — 이 조각이 블록의 실제 시작을 포함하면 여는 펜스를 재삽입/BEFORE 주석 없이 그대로 두고, " +
+            "블록이 이 조각 안에서 끝나지 않을 때만 닫는 펜스 + AFTER 주석을 덧붙인다")
+    void reopenCodeFence_containsRealStart_onlyAppendsAfterMarkerWhenBlockContinues() {
+        String full = "```java\ncode line 1\ncode line 2\n```\n";
+        ChunkSplitter.Range range = new ChunkSplitter.Range(0, full.length());
+
+        // chunkStart(0) == range.start() → continuesFromBefore=false; chunkEnd(20) < range.end()(36) → continuesAfter=true
+        String result = splitter.reopenCodeFence(full, range, 0, 20, "```java\ncode line 1");
+
+        assertThat(result).isEqualTo("```java\ncode line 1\n```\n" + ChunkSplitter.CODE_CONTINUATION_AFTER);
     }
 
     @Test

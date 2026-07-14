@@ -18,7 +18,23 @@ class AppPropertiesTest {
                 "./data", 2, 800, 100, 100, 7, 0.0, true, 0, false,
                 true, false, 3, sseTimeoutSeconds,
                 null, null, null, null, null, null, null, null, null, null, null, null,
-                sseIdleTimeoutSeconds, null, null, null, null, null, null);
+                sseIdleTimeoutSeconds, null, null, null, null, null, null, null);
+    }
+
+    private static AppProperties withAuth(AppProperties.AuthConfig auth) {
+        return new AppProperties(
+                "./data", 2, 800, 100, 100, 7, 0.0, true, 0, false,
+                true, false, 3, null,
+                null, null, null, null, null, null, null, auth, null, null, null,
+                null, null, null, null, null, null, null, null, null);
+    }
+
+    private static AppProperties withMdCorrectionDefaultCodeLanguage(String lang) {
+        return new AppProperties(
+                "./data", 2, 800, 100, 100, 7, 0.0, true, 0, false,
+                true, false, 3, null,
+                null, null, null, null, null, null, null, null, null, null, null,
+                null, null, null, null, null, null, null, null, lang);
     }
 
     @Test
@@ -59,5 +75,67 @@ class AppPropertiesTest {
     void sseIdleTimeoutMs_positiveValueIsRespected() {
         assertThat(withSseTimeouts(null, 30).sseIdleTimeoutMs()).isEqualTo(30_000L);
         assertThat(withSseTimeouts(null, 300).sseIdleTimeoutMs()).isEqualTo(300_000L);
+    }
+
+    // ── authSafe() — §6.17 B안 ──────────────────────────────────────────────
+
+    @Test
+    @DisplayName("authSafe — auth==null 시 기본값(enabled=true, managementOnly=false)")
+    void authSafe_nullAuth_defaultsToFullAuth() {
+        AppProperties.AuthConfig cfg = withAuth(null).authSafe();
+
+        assertThat(cfg.enabled()).isTrue();
+        assertThat(cfg.managementOnly()).isFalse();
+    }
+
+    @Test
+    @DisplayName("authSafe — enabled=false, managementOnly=true는 그대로 통과")
+    void authSafe_managementOnlyPassesThrough() {
+        AppProperties.AuthConfig cfg = withAuth(new AppProperties.AuthConfig(false, true)).authSafe();
+
+        assertThat(cfg.enabled()).isFalse();
+        assertThat(cfg.managementOnly()).isTrue();
+    }
+
+    @Test
+    @DisplayName("authSafe — enabled=true인데 managementOnly=true(오설정)는 managementOnly=false로 정규화")
+    void authSafe_misconfiguredEnabledAndManagementOnly_normalizesManagementOnlyToFalse() {
+        AppProperties.AuthConfig cfg = withAuth(new AppProperties.AuthConfig(true, true)).authSafe();
+
+        assertThat(cfg.enabled()).isTrue();
+        assertThat(cfg.managementOnly()).isFalse();
+    }
+
+    @Test
+    @DisplayName("authSafe — enabled=false, managementOnly=false는 그대로 통과(plain no-auth)")
+    void authSafe_plainNoAuthPassesThrough() {
+        AppProperties.AuthConfig cfg = withAuth(new AppProperties.AuthConfig(false, false)).authSafe();
+
+        assertThat(cfg.enabled()).isFalse();
+        assertThat(cfg.managementOnly()).isFalse();
+    }
+
+    // ── mdCorrectionDefaultCodeLanguageSafe() ────────────────────────────────
+
+    @Test
+    @DisplayName("mdCorrectionDefaultCodeLanguageSafe — 미설정(null) 시 java 기본값 사용")
+    void mdCorrectionDefaultCodeLanguageSafe_nullDefaultsToJava() {
+        assertThat(withMdCorrectionDefaultCodeLanguage(null).mdCorrectionDefaultCodeLanguageSafe()).isEqualTo("java");
+    }
+
+    @Test
+    @DisplayName("mdCorrectionDefaultCodeLanguageSafe — java/bash/sql 외의 값(오설정)은 java로 대체")
+    void mdCorrectionDefaultCodeLanguageSafe_invalidValueDefaultsToJava() {
+        assertThat(withMdCorrectionDefaultCodeLanguage("python").mdCorrectionDefaultCodeLanguageSafe()).isEqualTo("java");
+        assertThat(withMdCorrectionDefaultCodeLanguage("").mdCorrectionDefaultCodeLanguageSafe()).isEqualTo("java");
+        assertThat(withMdCorrectionDefaultCodeLanguage("   ").mdCorrectionDefaultCodeLanguageSafe()).isEqualTo("java");
+    }
+
+    @Test
+    @DisplayName("mdCorrectionDefaultCodeLanguageSafe — java/bash/sql은 대소문자 무관하게 그대로 통과")
+    void mdCorrectionDefaultCodeLanguageSafe_validValuesPassThroughCaseInsensitively() {
+        assertThat(withMdCorrectionDefaultCodeLanguage("bash").mdCorrectionDefaultCodeLanguageSafe()).isEqualTo("bash");
+        assertThat(withMdCorrectionDefaultCodeLanguage("SQL").mdCorrectionDefaultCodeLanguageSafe()).isEqualTo("sql");
+        assertThat(withMdCorrectionDefaultCodeLanguage(" Java ").mdCorrectionDefaultCodeLanguageSafe()).isEqualTo("java");
     }
 }

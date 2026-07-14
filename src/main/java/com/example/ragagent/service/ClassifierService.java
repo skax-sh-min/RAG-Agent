@@ -46,7 +46,7 @@ public class ClassifierService {
     public String classifyOnly(String question, Locale locale) {
         String systemPrompt = messageSource.getMessage("prompt.classifier.system", null, locale);
         String userPrompt = PromptInjectionGuard.wrap(question) + "\n\n" + converter.getFormat();
-        String response = llmRouter.executeWithTracking(TaskType.TEXT, RoutingMode.COST_FIRST,
+        String response = llmRouter.executeGated(TaskType.TEXT, RoutingMode.COST_FIRST,
                 model -> model.call(buildPrompt(systemPrompt, userPrompt)));
         return parseType(response);
     }
@@ -54,7 +54,7 @@ public class ClassifierService {
     public AgentState execute(AgentState state) {
         String systemPrompt = messageSource.getMessage("prompt.classifier.system", null, state.locale());
         String userPrompt = PromptInjectionGuard.wrap(state.question()) + "\n\n" + converter.getFormat();
-        String response = llmRouter.executeWithTracking(TaskType.TEXT, RoutingMode.COST_FIRST,
+        String response = llmRouter.executeGated(TaskType.TEXT, RoutingMode.COST_FIRST,
                 model -> model.call(buildPrompt(systemPrompt, userPrompt)));
         return state.toBuilder()
                     .accumulateTokens(0, 0)

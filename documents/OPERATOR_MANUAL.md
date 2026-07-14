@@ -29,17 +29,23 @@ RAG Agent 시스템 배포·설정·운영 가이드입니다.
    - 5.3 [라우팅 모드](#53-라우팅-모드)
    - 5.4 [시나리오별 설정 예제](#54-시나리오별-설정-예제)
    - 5.5 [Circuit Breaker](#55-circuit-breaker)
+   - 5.6 [Orphan 프로바이더 사용 기록 정리](#56-orphan-프로바이더-사용-기록-정리)
+   - 5.7 [동시성 제어 및 백프레셔](#57-동시성-제어-및-백프레셔)
 6. [운영 팁](#6-운영-팁)
    - 6.1 [대화 메모리](#61-대화-메모리)
    - 6.2 [문서 버전 관리](#62-문서-버전-관리)
    - 6.3 [데이터 영속성](#63-데이터-영속성)
    - 6.4 [성능](#64-성능)
+   - 6.5 [설정 페이지 (/settings) — LLM/RAG 옵션 조회·핫 수정](#65-설정-페이지-settings--llmrag-옵션-조회핫-수정)
 7. [벡터 스토어 관리](#7-벡터-스토어-관리)
 8. [문제 해결](#8-문제-해결)
 9. [보안 설정](#9-보안-설정)
    - 9.1 [git 훅 설치](#91-git-훅-설치)
    - 9.2 [입력 검증 동작](#92-입력-검증-동작)
    - 9.3 [응답 크기 제한](#93-응답-크기-제한)
+   - 9.4 [인증 토글 (no-auth 모드)](#94-인증-토글-no-auth-모드)
+      - 9.4.1 [평문 no-auth 모드](#941-평문-no-auth-모드)
+      - 9.4.2 [관리 전용 인증 (management-only)](#942-관리-전용-인증-management-only)
 10. [운영 체크리스트](#10-운영-체크리스트)
 
 ---
@@ -81,7 +87,7 @@ rag_java/
 │       └── pre-commit          # .env 우발 커밋 방지
 ├── data/                       # 런타임 생성 (DATA_DIR)
 │   ├── documents/              # 업로드된 문서 원본 (Sync 대상, 공유)
-│   ├── images/                 # 추출된 이미지 ({docId}/ 하위, 공유)
+│   ├── images/                 # 추출된 이미지 ({imageId}/ 하위 — 문서 SHA-256 기반 해시 키, docId와 별개, 공유)
 │   ├── converted/              # DOCX → Markdown 변환 결과 ({docId}.md 원본, {docId}_corrected.md 교정본, 공유)
 │   ├── chroma/                 # ChromaDB 벡터 데이터 (로컬 실행 시)
 │   ├── audit/                  # 감사 로그 (audit.log + 롤링 압축본)
@@ -194,7 +200,7 @@ copy .env.example .env
 |------|--------|----------|------|
 | `CHUNK_SIZE` | `800` | 300 ~ 2000 | 청크 크기 (문자 수). 작을수록 정밀, 클수록 문맥 풍부 |
 | `CHUNK_OVERLAP` | `100` | 0 ~ CHUNK_SIZE × 0.25 | 청크 간 중복 (문자 수). 청크 경계 문맥 보완 전용 |
-| `MIN_CHUNK_SIZE` | `100` | 50 ~ CHUNK_SIZE × 0.25 | 너무 작은 청크를 인접 청크와 병합할 최소 길이 기준 |
+| `MIN_CHUNK_SIZE` | `300` | 50 ~ CHUNK_SIZE × 0.25 | 너무 작은 청크를 인접 청크와 병합할 최소 길이 기준 |
 | `SEARCH_TOP_K` | `7` | 2 ~ 15 | 벡터 검색 반환 문서 수. 높을수록 재현율↑, 토큰↑ |
 | `SEARCH_SIMILARITY_THRESHOLD` | `0.0` | 0.0 ~ 0.75 | 청크 유지 최소 코사인 유사도. `0.0`=전체 수용. 운영 0.5~0.75 튜닝 시 골든셋 recall 확인 후 적용 |
 | `SEARCH_MULTIQUERY_ENABLED` | `true` | true/false | 검색 전 질의 다중 확장(LLM) 여부. `false`면 임계 경로 첫 LLM 콜 제거 |
@@ -203,6 +209,7 @@ copy .env.example .env
 | `SEARCH_RETRY_ESCALATE` | `true` | true/false | 재시도마다 후보 풀 확대. `candidateK = min(topK×(retryCount+1), topK×3)`. 동일 검색 반복 회피 |
 | `SEARCH_RERANK_ENABLED` | `false` | true/false | RRF 후 LLM 리랭킹 단계 (opt-in). **턴당 LLM 1콜 추가** → 정밀도↑/레이턴시 트레이드오프 |
 | `SEARCH_CANDIDATE_MULTIPLIER` | `3` | 2 ~ 5 | 리랭킹 전 후보 풀 크기. `topK × N`개 가져와 리랭킹 후 topK로 축소 |
+| `SEARCH_TAG_CANDIDATE_MULTIPLIER` | `2` | 1 ~ 5 | 태그가 선택된 검색의 후보 풀 확대 배수. `candidateK = max(candidateK, topK × N)` — sqlite-vec에서 태그 엄격 필터 후 결과가 부족할 때 보정(§4.6) |
 | `SEARCH_RRF_KEYWORD_WEIGHT` | `1.0` | 0.5 ~ 3.0 | 가중 RRF(Phase 7-A) — BM25 키워드 축 가중치. 벡터 축(MultiQuery 1~3개)은 항상 `1/축개수`로 그룹 정규화되므로 `1.0`이 정규화된 벡터 그룹과 동일 비중. `SEARCH_HYBRID_ENABLED=false`면 키워드 축이 없어 무영향 |
 | `SEARCH_RRF_K` | `60` | 20 ~ 100 | 가중 RRF(Phase 7-A) — RRF 순위융합 상수 k(원논문 기본값 60) |
 | `MAX_RETRY_COUNT` | `2` | 0 ~ 4 | 증거 부족 시 재검색 최대 횟수 |
@@ -228,6 +235,15 @@ copy .env.example .env
 | `INDEXING_MAX_FILES` | `3` | 1 ~ 8 | 파일 병렬 인덱싱 워커 수 |
 | `INDEXING_MAX_LLM` | `4` | 1 ~ 16 | 인덱싱 중 LLM 병렬 호출 수 (키워드 추출) |
 | `INDEXING_KEYWORD_TIMEOUT_SECONDS` | `180` | 30 ~ 600 | 청크 키워드 추출 1회당 최대 대기 시간. 초과 시 TF fallback |
+
+#### 질의 경로 동시성 제어
+
+인덱싱과 별개로, **채팅/질의 경로**(분류·답변·재검색 등)가 프로바이더별로 동시에 보내는 요청 수를 제어합니다. 상세 동작·적용 범위는 [§5.7](#57-동시성-제어-및-백프레셔)을 참고하세요.
+
+| 변수 | 기본값 | 권장 범위 | 설명 |
+|------|--------|----------|------|
+| `LLM_DEFAULT_PROVIDER_CONCURRENCY` | `3` | 1 ~ 16 | 프로바이더별 동시 처리 상한 기본값(`app.llm.default-provider-concurrency`) — LLM 서버의 실제 `--parallel` 값과 일치시키는 것이 원칙. 개별 프로바이더는 `application.properties`의 `app.llm.providers[N].concurrency`로 오버라이드 가능 |
+| `LLM_PERMIT_WAIT_TIMEOUT_SECONDS` | `20` | 5 ~ 60 | 동시성 슬롯 대기 상한(초, `app.llm.permit-wait-timeout-seconds`). 초과 시 `LLM_READ_TIMEOUT_SECONDS`(기본 180초)까지 기다리지 않고 즉시 HTTP 429 + `Retry-After` 응답 |
 
 #### HTTP Timeout 튜닝
 
@@ -258,6 +274,18 @@ copy .env.example .env
 | `SEARCH_QUERY_EMBED_CACHE_TTL_SECONDS` | `600` | 60 ~ 3600 | 캐시 엔트리 TTL(초, write 기준 만료) |
 
 > 캐시는 인메모리 전용(재시작 시 초기화)이며, 인덱싱 시 청크 텍스트 임베딩도 같은 캐시를 지나가지만 대부분 캐시 미스로 끝나 `MAX_SIZE`/`TTL` 안에서 자연히 흡수됩니다(메모리 누수 없음, 다만 인덱싱 자체는 캐시 이득이 없음). `EMBED_MODEL`을 바꾸면 재시작 시 캐시가 자동으로 비워지므로 별도 무효화 절차는 불필요합니다.
+
+#### PPTX 이미지 추출 튜닝
+
+`PptxImageExtractor`가 슬라이드에서 그림/도형을 추출·래스터라이즈하는 방식을 제어합니다.
+
+| 변수 | 기본값 | 설명 |
+|------|--------|------|
+| `PPTX_IMAGE_MIN_SHAPE_DIMENSION_PT` | `30` | 도형의 가로/세로 중 큰 쪽이 이 값(포인트) 미만이면 아이콘/구분선으로 보고 래스터라이즈 대상에서 제외 |
+| `PPTX_IMAGE_CLUSTER_PROXIMITY_PADDING_PT` | `15` | 근접 클러스터링 판정 시 각 도형 바운딩박스에 적용할 바깥쪽 패딩(포인트). 커넥터가 도형 사이 '틈'에 있어도 하나로 묶이도록 함 |
+| `PPTX_IMAGE_MERGE_ANNOTATED_PICTURES` | `true` | `true`(기본) — 사진(그림)도 근접 클러스터링에 참여해, 사진 위/근처에 겹친 주석 도형(강조 원·화살표·말풍선)이 있으면 사진과 하나의 합성 PNG로 합쳐짐. `false` — 사진은 근접 클러스터링에 참여하지 않고 항상 원본 그대로 추출됨; PPTX에서 실제로 그룹(Ctrl+G)으로 묶인 사진+도형만 여전히 하나로 합쳐짐(POI가 그룹을 통째로 그리는 것은 이 옵션과 무관) |
+
+> `PPTX_IMAGE_MERGE_ANNOTATED_PICTURES=false`는 화면 캡처 위의 강조 표시를 원본 사진과 분리해서 보관하고 싶을 때(예: 원본 사진을 다른 용도로 재사용) 사용합니다. 변경 후에는 기존 PPTX 문서를 재인덱싱해야 반영됩니다. (PPTX에서 실제로 Ctrl+G로 그룹핑된 사진+도형만 여전히 하나로 합쳐지는데, 이는 POI가 그룹을 통째로 그리는 자체 동작이라 옵션과 무관하게 항상 그렇게 동작합니다.)
 
 #### LLM 응답 파라미터
 
@@ -370,6 +398,7 @@ LLM_ROUTING_MODE=QUALITY_FIRST
 | 속성 | 기본값 | 설명 |
 |------|--------|------|
 | `app.auth.enabled` | `true` | `false`로 설정하면 로그인 없이 실행 (no-auth 모드). `AUTH_ENABLED` 환경변수로도 주입 가능. 자세한 내용은 [§9.4](#94-인증-토글-no-auth-모드) 참조 |
+| `app.auth.management-only` | `false` | `app.auth.enabled=false`일 때만 의미 있는 서브모드. `true`이면 채팅·조회는 게스트에 열어두고 `/admin/**`·문서 관리 쓰기만 로그인을 요구한다. `AUTH_MANAGEMENT_ONLY` 환경변수로도 주입 가능. `app.auth.enabled=true`와 동시 설정 시 자동으로 `false`로 정규화됨. 자세한 내용은 [§9.4.2](#942-관리-전용-인증-management-only) 참조 |
 
 #### 서버 및 기타
 
@@ -985,6 +1014,7 @@ Gemini도 `https://generativelanguage.googleapis.com/v1beta/openai/` 엔드포�
 | `type` | `LIGHT_BOTH` \| `BOTH` \| … | 처리 가능한 태스크 유형 (아래 표 참조) |
 | `priority` | 정수 (낮을수록 우선) | 같은 role 내 우선순위 |
 | `stream` | `true` (기본) \| `false` | LLM API 호출 방식. 미설정 시 `true`. 상세는 아래 참조 |
+| `concurrency` | 정수 (예: `3`) | 이 프로바이더의 질의 경로 동시성 게이트 크기. 미설정 시 `LLM_DEFAULT_PROVIDER_CONCURRENCY`(기본 3) 사용. 서버의 실제 `--parallel` 값과 일치시킬 것 |
 
 #### stream 플래그
 
@@ -1220,6 +1250,40 @@ app.llm.providers[4].role=PREMIUM
 app.llm.providers[4].priority=4
 ```
 
+---
+
+#### 예제 5 — 로컬 LLM 2대 로드밸런싱 (처리량 확장)
+
+GPU가 2대 있어 로컬 LLM 서버를 2대 띄울 수 있을 때, 같은 `role`(LOCAL)·같은 `priority`로 등록하면 `LlmRouter`가 요청마다 잔여 permit이 더 많은(least-in-flight) 쪽으로 자동 분산합니다. 상세 동작은 [§5.7](#57-동시성-제어-및-백프레셔)을 참고하세요.
+
+`application.properties`:
+```properties
+app.llm.default-routing-mode=COST_FIRST
+app.llm.default-provider-concurrency=4
+
+app.llm.providers[0].name=local-a
+app.llm.providers[0].base-url=http://gpu-a:1234/v1
+app.llm.providers[0].api-key=lm-studio
+app.llm.providers[0].model=google/gemma-4-e4b
+app.llm.providers[0].type=BOTH
+app.llm.providers[0].role=LOCAL
+app.llm.providers[0].priority=0
+app.llm.providers[0].concurrency=4
+
+app.llm.providers[1].name=local-b
+app.llm.providers[1].base-url=http://gpu-b:1234/v1
+app.llm.providers[1].api-key=lm-studio
+app.llm.providers[1].model=google/gemma-4-e4b
+app.llm.providers[1].type=BOTH
+app.llm.providers[1].role=LOCAL
+app.llm.providers[1].priority=0
+app.llm.providers[1].concurrency=4
+```
+
+- `priority=0`으로 동일 — 이래야 같은 그룹으로 묶여 부하 분산 대상이 됩니다. `priority`를 다르게 주면 로드밸런싱이 아니라 일반 폴백(낮은 쪽 우선, §5.5)이 됩니다.
+- 총 동시 처리량 = 2대 × `concurrency`(4) = 8 — "4명 동시 질문" 시나리오에도 여유가 생깁니다.
+- 서버 사양이 다르면 `concurrency`도 각각 다르게(예: `local-a`는 4, `local-b`는 2) 그 서버의 실제 `--parallel` 값에 맞춰 설정하세요.
+
 COST_FIRST 흐름:
 ```
 [분류·키워드·쿼리] local(LIGHT_BOTH)
@@ -1235,9 +1299,12 @@ COST_FIRST 흐름:
 
 | 오류 유형 | 차단 시간 | 비고 |
 |----------|----------|------|
-| HTTP 429 (Rate Limit) | `Retry-After` 헤더 값 | 헤더 없으면 `circuit-breaker-minutes` 적용 |
-| HTTP 402 (결제 필요) | `Retry-After` 헤더 값 | |
-| 기타 오류 (5xx, 네트워크) | 30초 고정 | |
+| HTTP 429 (Rate Limit) | `Retry-After` 헤더 값 | 헤더 없으면 아래 "폴백 없는 프로바이더 완화"에 따라 폴백 가능 여부로 분기 |
+| HTTP 402 (결제 필요) | `Retry-After` 헤더 값 | 헤더 없으면 위와 동일 |
+| HTTP 503 (Service Unavailable) | `Retry-After` 헤더 값 | 헤더 없으면 위와 동일 |
+| 그 외 4xx/5xx, 네트워크 오류 | 30초 고정 | 변경 없음 |
+
+**폴백 없는 프로바이더의 과부하성 오류(429/402/503) 완화**: `Retry-After` 헤더가 없을 때, 이 요청에서 시도 가능한 다른 프로바이더가 남아있으면(폴백 존재) 기존과 동일하게 `circuit-breaker-minutes` 전체를 차단합니다 — 다음 프로바이더로 정상 전환되므로 문제가 없습니다. 반면 **폴백이 전혀 없는 유일한 프로바이더**(전형적으로 단일 LOCAL 프로바이더만 등록된 배포)라면, 전체 시간 차단은 다음 요청부터 만료 시각까지 서비스 전체를 다운시킬 뿐이므로 **30초로 단축 차단**합니다 — 동시성 게이트(§5.7)가 이미 프로바이더에 걸리는 부하를 억제하고 있어 짧게 재시도해도 안전합니다. 서버가 명시적으로 `Retry-After`를 보낸 경우는 폴백 유무와 무관하게 항상 그대로 존중됩니다.
 
 - `app.llm.circuit-breaker-minutes=4` — 기본 차단 시간 (분)
 - 차단 상태는 인메모리(`ConcurrentHashMap`) 유지 — 서버 재시작 시 초기화
@@ -1245,6 +1312,7 @@ COST_FIRST 흐름:
 - `/llm-usage` 대시보드에서 차단 중인 프로바이더를 빨간 카드 + MM:SS 카운트다운으로 확인 가능
 - 임베딩 호출은 Circuit Breaker 대상이 아닙니다 — `/llm-usage`의 `embed:<model>` 카드는 항상 "정상" 배지로 표시되며 실패 시 재시도/차단 없이 즉시 예외가 전파됩니다(`EMBED_USAGE_FALLBACK_ENABLED`)
 - API 키가 없는(비활성) 프로바이더는 **사용 이력이 없으면** `/llm-usage`의 카드·표·차트 어디에도 표시되지 않습니다. 과거에 사용된 적이 있으면 키를 제거한 뒤에도 이력 보존을 위해 계속 표시됩니다. 활성(키 설정됨) 프로바이더는 사용량이 0이어도 항상 표시됩니다.
+- **Circuit Breaker ≠ 동시성 백프레셔(§5.7)**: 429/402/기타 오류로 인한 차단은 "프로바이더가 고장났다"는 신호로 취급해 일정 시간 우회합니다. 반면 동시성 게이트가 대기 상한을 넘겨 던지는 429(`LlmBackpressureException`)는 "프로바이더는 정상이지만 지금 자리가 없다"는 신호이므로 Circuit Breaker를 차단하지 않고, 다른 프로바이더로 자동 전환하지도 않습니다 — 요청을 보낸 쪽에 그대로 즉시 전파됩니다.
 
 ### 5.6 Orphan 프로바이더 사용 기록 정리
 
@@ -1259,6 +1327,30 @@ COST_FIRST 흐름:
   ```
   인증 모드에서는 세션 쿠키 + CSRF 토큰이 필요하므로 `/llm-usage` 화면의 삭제 버튼 사용을 권장합니다.
 - 삭제 시 카드는 즉시 갱신되지만, `/llm-usage`의 일별 차트·기간별 표는 별도 fetch라 다음 로드/새로고침에 반영됩니다.
+
+### 5.7 동시성 제어 및 백프레셔
+
+여러 사용자의 질문이 거의 동시에 도착하면(예: 로컬 LLM 1대·동시 3건 처리 가능한데 사용자 4명이 거의 동시에 질문), 앱은 채팅/질의 경로에서 프로바이더별로 서버가 실제로 처리 가능한 동시 요청 수를 넘지 않도록 자체 제한합니다.
+
+**동작 방식**:
+1. 프로바이더마다 `concurrency`(§5.2, 미설정 시 `LLM_DEFAULT_PROVIDER_CONCURRENCY`) 크기의 슬롯 풀을 가짐.
+2. 요청이 슬롯을 요청하면 최대 `LLM_PERMIT_WAIT_TIMEOUT_SECONDS`(기본 20초) 동안 대기.
+3. 슬롯이 나면 즉시 LLM 호출 → 완료 후 슬롯 반환.
+4. 대기 상한을 넘기면 HTTP 429 + `Retry-After` 헤더로 즉시 응답(`RAG-LLM-002`) — Circuit Breaker 차단이나 다른 프로바이더로의 자동 전환은 하지 않습니다(§5.5 참고). SSE 스트리밍 응답에서는 "현재 요청이 몰려 있습니다. 잠시 후 다시 시도해 주세요." 메시지로 우아하게 종료됩니다.
+
+**적용 범위**: 분류(Classifier)·답변 생성(블로킹+스트리밍+PROGRESSIVE 업그레이드+충분도 평가)·DUAL(양쪽 프로바이더)·DirectAnswer·리랭킹(opt-in)·MultiQuery 확장까지 채팅/질의 경로 전체에 적용됩니다. **인덱싱/백그라운드 LLM 호출(키워드 추출, MD 포맷 교정, Vision 설명, TXT 구조화, 대화 요약 사전계산, 스레드 제목 생성)은 이 게이트의 대상이 아닙니다** — 이미 `INDEXING_MAX_LLM`으로 자체 동시성을 제어하고 있고, 마감시한 있는 동기 HTTP 호출자가 없기 때문입니다.
+
+**튜닝 가이드**:
+- **기본 원칙**: `LLM_DEFAULT_PROVIDER_CONCURRENCY`(또는 프로바이더별 `concurrency`)는 그 LLM 서버의 실제 `--parallel`(또는 동급) 설정값과 일치시키세요. 너무 크게 잡으면 앱이 서버가 처리 못 할 요청까지 통과시켜 결국 서버 쪽에서 429/타임아웃이 발생하고, 너무 작게 잡으면 서버 여유 용량을 못 씁니다.
+- 429가 자주 발생한다면: ① `LLM_PERMIT_WAIT_TIMEOUT_SECONDS`를 늘려 더 오래 대기하게 하거나, ② LLM 서버의 `--parallel` 값과 `concurrency` 설정을 함께 늘리거나(서버 리소스가 허용하는 한도 내에서), ③ 동일 role·동일 priority로 프로바이더를 추가 등록해 부하를 분산하세요 — 아래 "동일 우선순위 로드밸런싱" 참고.
+- 로그로 확인: `[BACKPRESSURE] provider=... concurrency slot wait exceeded Ns, rejecting with 429` 로그 라인이 반복되면 해당 프로바이더가 지속적으로 포화 상태라는 신호입니다.
+- 인덱싱 중에도 같은 물리 서버를 채팅이 함께 쓰는 구성이라면, 인덱싱 트래픽도 결국 이 게이트 뒤의 같은 서버 용량을 공유하게 되므로 대량 동기화 작업은 사용자 트래픽이 적은 시간대에 실행하는 것을 권장합니다.
+
+**동일 우선순위 로드밸런싱(처리량 확장)**: 같은 `role`·같은 `priority`로 프로바이더를 여러 대 등록하면(설정 예시는 [§5.4 예제 5](#54-시나리오별-설정-예제) 참고), 요청 시점마다 그중 **잔여 permit이 가장 많은(least-in-flight) 프로바이더**가 자동 선택됩니다 — 위 세마포어 게이트를 그대로 재사용하므로 별도 설정이 필요 없습니다.
+- `priority`가 다르면 부하와 무관하게 낮은 `priority`가 항상 우선합니다 — 로드밸런싱은 **동일 priority 그룹 내부에서만** 일어나고, 서로 다른 priority 간 자동 전환은 여전히 프로바이더 실패(§5.5 Circuit Breaker) 시에만 일어납니다.
+- 총 동시 처리량 = 등록 대수 × per-provider `concurrency`(예: LOCAL 2대 × 3 = 6).
+- `/llm-usage`에서 프로바이더별 사용량이 실제로 분산되는지 확인할 수 있습니다.
+- 임베딩 프로바이더는 아직 이 로드밸런싱 대상이 아닙니다(라우팅 지점이 다른 `EmbeddingModel` 데코레이터 체인) — 향후 과제로 남아 있습니다.
 
 ---
 
@@ -1315,10 +1407,10 @@ curl -X POST http://localhost:8080/api/v1/chat \
 | 데이터 | 저장 위치 | 비고 |
 |--------|----------|------|
 | 문서 원본 | `DATA_DIR/documents/` | Sync 대상 |
-| 추출된 이미지 | `DATA_DIR/images/{docId}/` | 문서 삭제 시 함께 삭제 |
+| 추출된 이미지 | `DATA_DIR/images/{imageId}/` | `imageId`는 문서 SHA-256 앞 16자(문서명이 아닌 내용 기반 키) — 문서 삭제 시 함께 삭제되나, 내용이 동일한 다른 문서가 남아 있으면 보존 |
 | DOCX 변환 MD (원본) | `DATA_DIR/converted/{docId}.md` | DOCX 인덱싱 시 자동 생성; 문서 삭제 시 함께 삭제 |
 | DOCX 변환 MD (교정본) | `DATA_DIR/converted/{docId}_corrected.md` | LLM 포맷 교정 후 저장; 실제 인덱싱 소스; 수동 편집 후 벡터 스토어 관리 페이지에서 ↺ 재인덱싱 가능 |
-| 인덱스 레지스트리 | `DATA_DIR/memory.db` (SQLite `doc_registry` 테이블) | userId·SHA-256 기반 변경 감지 |
+| 인덱스 레지스트리 | `DATA_DIR/memory.db` (SQLite `doc_registry` 테이블) | SHA-256 기반 변경 감지. 문서 저장소는 사용자별 격리 없이 공유됨(`DocRegistry.SHARED`) — `userId` 파라미터는 API 시그니처상 존재하나 실제로는 무시됨 |
 | 벡터 임베딩 | chroma: Chroma 서버(로컬 `data/chroma/`, Docker Compose `chroma_data` 볼륨) / sqlite-vec: `DATA_DIR/memory.db`(기본) 또는 `app.vectorstore.sqlite-vec.db-path` 설정 시 별도 `vector.db` | 백엔드 전환 시 벡터 공유 안 됨(§3.1) |
 | 대화 이력 + LLM 사용량 | `DATA_DIR/memory.db` (SQLite) | WAL 모드; 메시지 메타데이터(토큰·시간·프로바이더) 포함 |
 | 감사 로그 | `DATA_DIR/audit/audit.log` | JSON Lines; 롤링 압축본 `audit.YYYY-MM-DD.N.log.gz` 포함 |
@@ -1342,10 +1434,42 @@ CPU/메모리 제약이 있는 환경에서는 `INDEXING_MAX_FILES`와 `INDEXING
 
 ---
 
+### 6.5 설정 페이지 (`/settings`) — LLM/RAG 옵션 조회·핫 수정
+
+`/settings`는 현재 **유효** LLM/RAG 설정을 한 화면에서 보여주고, 일부 검색 튜닝 값은 **재기동 없이** 조정할 수 있게 합니다. `application.properties`/환경변수를 고치고 재기동하지 않아도 검색 동작을 실시간으로 미세조정할 수 있습니다.
+
+**조회 항목 (그룹별)**:
+- **LLM 라우팅**: 등록 프로바이더·역할(role)·우선순위·모델·API 키 설정 여부·서킷브레이커 상태, 기본 라우팅 모드, temperature/max-tokens.
+- **임베딩 / 벡터 스토어**: 임베딩 모델·차원, 벡터 스토어 백엔드(chroma/sqlite-vec).
+- **검색 튜닝 / 캐시**: 아래 핫 수정 항목 + 조회 전용 항목.
+
+**핫 수정 가능 (재기동 불필요, 다음 검색부터 반영)** — 값을 바꾸면 `settings_override` 테이블(`memory.db`)에 저장되고, 다음 검색부터 즉시 적용됩니다:
+
+| 항목 | 키 | 범위 |
+|------|----|------|
+| 유사도 임계값 | `app.search-similarity-threshold` | 0.0 ~ 1.0 |
+| RRF 키워드 가중치 | `app.search-rrf-keyword-weight` | 0.0 ~ 10.0 |
+| RRF 상수 k | `app.search-rrf-k` | 1 ~ 1000 |
+| 후보 배수(리랭크) | `app.search-candidate-multiplier` | 1 ~ 20 |
+| 태그 후보 배수 | `app.search-tag-candidate-multiplier` | 1 ~ 20 |
+| 멀티쿼리 최소 길이 | `app.search-multiquery-min-length` | 0 ~ 1000 |
+| 재시도 시 후보 확대 | `app.search-retry-escalate` | true/false |
+
+- **"기본값" 버튼**으로 오버라이드를 삭제하면 `application.properties`/환경변수 값으로 정확히 복귀합니다(오버라이드가 있으면 항상 프로퍼티보다 우선).
+- 오버라이드는 **재기동 후에도 유지**됩니다(테이블에 영속). 배포 기본값 자체를 바꾸려면 여전히 환경변수/`application.properties`를 수정하세요 — 오버라이드는 그 위에 얹히는 런타임 조정 레이어입니다.
+
+**조회 전용(재기동 필요)**: `rerank-enabled`·`hybrid-enabled`·쿼리 임베딩 캐시(모두 빈 생성 시점 결정), 임베딩 차원·벡터 스토어 백엔드(DDL/빈 구성), topK·멀티쿼리 활성화. temperature/max-tokens와 기본 라우팅 모드는 현재 조회 전용입니다(전자는 §6.18 선행 필요, 후자는 대화별 라우팅을 채팅 화면에서 설정).
+
+**권한**: 조회는 누구나 가능하지만, **수정은 관리자만** 가능합니다(관리 전용 인증 모드 `AUTH_MANAGEMENT_ONLY=true`에서 `/setup` 관리자 로그인 필요 — §9 참조). 수정 UI(입력/버튼)는 비관리자에게 숨겨지며, 서버도 `/admin/settings/**` 경로로 이중 방어합니다. 모든 변경은 감사 로그(`settings.update`/`settings.reset`, 변경 키·이전값·새값)에 남습니다.
+
+---
+
 ## 7. 벡터 스토어 관리
 
-`/admin` 페이지(네비게이션 라벨: **벡터 스토어 관리**)는 인증 모드(`app.auth.enabled=true`)에서는 로그인된 사용자만 접근 가능합니다.  
-no-auth 모드(`false`)에서는 `/admin/**` 경로에 자동으로 관리자 계정이 주입됩니다.
+`/admin` 페이지(네비게이션 라벨: **벡터 스토어 관리**)의 접근 제어는 인증 모드에 따라 다릅니다.  
+전체 인증 모드(`app.auth.enabled=true`)에서는 로그인된 사용자만 접근 가능합니다.  
+평문 no-auth 모드(`app.auth.enabled=false`, `app.auth.management-only=false`)에서는 `/admin/**` 경로에 자동으로 관리자 계정이 주입됩니다.  
+관리 전용 인증 모드(`app.auth.management-only=true`)에서는 실제 로그인(`/login`)이 필요합니다 — 자세한 내용은 [§9.4.2](#942-관리-전용-인증-management-only) 참조.
 
 ### 7.1 주요 기능
 
@@ -1375,7 +1499,7 @@ no-auth 모드(`false`)에서는 `/admin/**` 경로에 자동으로 관리자 �
 - **임베딩 미갱신 (청크 편집)**: 청크 텍스트를 편집 패널에서 수정해도 벡터 임베딩은 재계산되지 않습니다. 임베딩까지 갱신하려면 MD 파일 수정 후 ↺ 재인덱싱을 사용하세요.
 - **MD 재인덱싱 대상**: DOCX·TXT·PPTX·PDF(스캔 아님) 업로드 시 생성된 `_corrected.md` 파일이 없으면 `{docId}.md` 원본으로 fallback됩니다. 스캔 PDF처럼 MD 파일 자체가 없는 문서는 재인덱싱 불가 (에러 메시지 표시).
 - **청크 단독 삭제 vs. 문서 삭제**: 청크를 개별 삭제해도 SQLite `doc_registry` 테이블의 레지스트리 항목은 남습니다. 문서 전체 제거는 Documents 페이지 또는 `DELETE /api/v1/documents/{docId}`를 사용하세요.
-- **접근 제어**: `app.auth.enabled=true`(기본)이면 `/admin`도 로그인 필요. no-auth 모드에서는 누구나 `/admin`에 접근 가능하므로 내부망 또는 리버스 프록시 수준에서 경로를 제한하는 것을 권장합니다.
+- **접근 제어**: `app.auth.enabled=true`(기본)이면 `/admin`도 로그인 필요. 평문 no-auth 모드에서는 누구나 `/admin`에 접근 가능하므로 내부망 또는 리버스 프록시 수준에서 경로를 제한하거나, [§9.4.2 관리 전용 인증](#942-관리-전용-인증-management-only)으로 전환해 애플리케이션 레벨에서 잠그는 것을 권장합니다.
 
 ### 7.4 백엔드별 표시 차이 (레이아웃·기능은 동일)
 
@@ -1437,6 +1561,26 @@ curl $LOCAL_LLM_URL/models -H "Authorization: Bearer $LOCAL_LLM_KEY"
 
 ---
 
+### 다수 사용자 동시 요청 시 429 응답 ("현재 요청이 몰려 있습니다")
+
+500(장애)이 아니라 429(용량 초과) 응답이고, `/llm-usage`에는 해당 프로바이더가 차단(빨간 카드)으로 표시되지 않는다면 동시성 게이트가 정상 동작 중인 것입니다 — Circuit Breaker와는 별개입니다(§5.5·§5.7 참고).
+
+```bash
+# 로그에서 백프레셔 발생 빈도 확인
+grep "\[BACKPRESSURE\]" logs/*.log | tail -20
+```
+
+| 상황 | 조치 |
+|------|------|
+| 가끔 1~2회 발생, 재시도하면 바로 성공 | 정상 동작 — 순간적인 동시 접속 피크. 조치 불필요 |
+| 특정 프로바이더에서 지속 반복 | `LLM_DEFAULT_PROVIDER_CONCURRENCY`(또는 해당 프로바이더의 `concurrency`)가 실제 서버 `--parallel`보다 낮게 설정됐는지 확인 후 상향 — 단, 서버가 실제로 그만큼 처리 가능한 경우에만 |
+| 사용자 대기 시간이 너무 김 | `LLM_PERMIT_WAIT_TIMEOUT_SECONDS`(기본 20초)를 늘려 대기 상한을 확대 — 단, `LLM_READ_TIMEOUT_SECONDS`(기본 180초)보다는 충분히 짧게 유지 |
+| 물리 서버 자체가 상시 포화 | 동일 role·동일 priority로 프로바이더를 추가 등록하면(§5.4 예제 5) 잔여 permit이 가장 많은 쪽으로 자동 분산됩니다. 그래도 부족하면 NORMAL/PREMIUM 외부 fallback을 함께 구성해 부하를 분산하세요 |
+
+상세 동작 원리는 [§5.7 동시성 제어 및 백프레셔](#57-동시성-제어-및-백프레셔)를 참고하세요.
+
+---
+
 ### Docker Compose에서 app 컨테이너가 재시작 반복
 
 ```bash
@@ -1461,11 +1605,11 @@ docker-compose logs app
 
 ### 이미지 썸네일 링크가 클릭 시 "연결할 수 없음"으로 뜸
 
-`GET /api/v1/images/{docId}/{filename}`은 경로 순회(path traversal) 방지를 위해 `docId`/`filename`에 `..`가 포함되면 400을 반환합니다. **PPTX에서 추출된 이미지 파일명이 `img1..png`처럼 점이 두 개 겹친 형태**라면 아래 원인입니다.
+`GET /api/v1/images/{docId}/{filename}`(경로 세그먼트 이름은 `docId`이지만 실제 값은 `imageId` — 문서 SHA-256 기반 해시 키)은 경로 순회(path traversal) 방지를 위해 두 세그먼트 중 하나에라도 `..`가 포함되면 400을 반환합니다. **PPTX에서 추출된 이미지 파일명이 `img1..png`처럼 점이 두 개 겹친 형태**라면 아래 원인입니다.
 
 | 원인 | 조치 |
 |------|------|
-| Apache POI `PictureType.extension`이 이미 `.png`처럼 점을 포함하는데, 파일명 조립 시 점을 한 번 더 붙여 `img1..png`가 됨 (해당 버전 이전 `PptxImageExtractor` 버그) | 코드는 이미 수정됨. **이 버그가 있던 버전으로 인덱싱된 PPTX 문서**는 `data/images/{docId}/`에 이미 잘못된 파일명으로 저장돼 있고, 벡터 스토어에 저장된 청크 내용에도 잘못된 경로 문자열이 그대로 박혀 있으므로 **파일만 이름 변경해서는 해결되지 않습니다** — 해당 문서를 삭제 후 재업로드하거나 `POST /api/v1/documents/sync`로 재동기화하세요 |
+| Apache POI `PictureType.extension`이 이미 `.png`처럼 점을 포함하는데, 파일명 조립 시 점을 한 번 더 붙여 `img1..png`가 됨 (해당 버전 이전 `PptxImageExtractor` 버그) | 코드는 이미 수정됨. **이 버그가 있던 버전으로 인덱싱된 PPTX 문서**는 `data/images/{imageId}/`(구버전은 `data/images/{docId}/`)에 이미 잘못된 파일명으로 저장돼 있고, 벡터 스토어에 저장된 청크 내용에도 잘못된 경로 문자열이 그대로 박혀 있으므로 **파일만 이름 변경해서는 해결되지 않습니다** — 해당 문서를 삭제 후 재업로드하거나 `POST /api/v1/documents/sync`로 재동기화하세요 |
 | 확인 방법 | `find data/images -name "*..*"`로 이중 점 파일명이 있는지 검사 |
 
 ---
@@ -1653,9 +1797,17 @@ LLM 응답이 20,000자를 초과하면 자동으로 잘리고 말줄임 메시�
 
 ### 9.4 인증 토글 (no-auth 모드)
 
-`app.auth.enabled=false`로 설정하면 로그인 없이 사용할 수 있습니다 (로컬·단일 사용자 환경에 적합).
+`app.auth.enabled=false`로 설정하면 로그인 없이 사용할 수 있습니다 (로컬·단일 사용자 환경에 적합). 여기에는 두 서브모드가 있습니다 — **평문 no-auth**(기본, 아래 §9.4.1)는 모든 경로가 열려 있고, **관리 전용 인증**(§6.17 B안, 아래 §9.4.2)은 채팅·조회는 열어두되 문서 관리 쓰기와 `/admin`만 로그인을 요구합니다.
 
-**no-auth 모드 동작**:
+| 모드 | `app.auth.enabled` | `app.auth.management-only` | 요약 |
+|------|--------------------|-----------------------------|------|
+| 전체 인증 | `true` | (무의미 — `authSafe()`가 자동으로 `false` 정규화) | 모든 경로 로그인 필요 |
+| 평문 no-auth (기본) | `false` | `false` | 모든 경로 게스트 자동 인증, `/admin`도 자동 |
+| 관리 전용 인증 | `false` | `true` | 채팅·조회는 게스트 자동 인증, 문서 관리 쓰기·`/admin`만 로그인 필요 |
+
+#### 9.4.1 평문 no-auth 모드
+
+**동작**:
 
 | 항목 | 동작 |
 |------|------|
@@ -1677,12 +1829,47 @@ AUTH_ENABLED=false
 app.auth.enabled=false
 ```
 
-**인증 재활성화**:
-1. `app.auth.enabled=true`로 변경 후 재시작
-2. `/setup`에서 생성한 이메일·비밀번호로 `/login` 접속
-3. 기존 문서·대화 이력은 userId 기반 파티셔닝으로 그대로 유지
+> **주의**: 이 모드에서는 모든 사용자가 guest 파티션을 공유하고 `/admin`도 자동 인증됩니다. 문서 관리·`/admin`만이라도 잠그려면 아래 §9.4.2를 사용하세요.
 
-> **주의**: no-auth 모드에서는 모든 사용자가 guest 파티션을 공유합니다. 멀티유저 환경에서는 반드시 `app.auth.enabled=true`를 사용하세요.
+#### 9.4.2 관리 전용 인증 (management-only)
+
+`app.auth.enabled=false` + `app.auth.management-only=true`. 공용/외부 노출 채팅 데모처럼 **채팅·문서 조회는 로그인 없이 열어두되, 문서 업로드·삭제·동기화(웹 UI)와 `/admin/**`만 실제 로그인을 요구**하고 싶을 때 사용합니다. 재빌드 없이 기존 no-auth 배포에 바로 얹을 수 있는 서브모드입니다(§6.17 B안).
+
+**설정 예시**:
+```env
+# .env
+AUTH_ENABLED=false
+AUTH_MANAGEMENT_ONLY=true
+```
+
+**동작**:
+
+| 항목 | 동작 |
+|------|------|
+| CSRF 보호 | **활성화**(`CookieCsrfTokenRepository`) — 평문 no-auth와 달리 로그인 세션을 지켜야 하므로 `formLogin()`을 쓸 수 있게 CSRF도 함께 켠다 |
+| 세션 관리 | `IF_REQUIRED` — 실제 로그인이 발생할 때만 세션 생성(게스트 트래픽은 세션 비용 없음) |
+| 첫 접속 (admin DB 없음) | `/setup` 페이지로 리다이렉트 (평문 no-auth와 동일) |
+| `/setup` | 관리자 이메일·비밀번호 입력 → DB에 `ROLE_ADMIN` 계정 생성. **생성 직후 자동 로그인은 되지 않음** — `/login`으로 별도 로그인 필요 |
+| 채팅(`/`, `/chat/**`) | 로그인 없이 게스트 자동 인증 (평문 no-auth와 동일) |
+| `GET /documents`, `GET /ui/documents/list`, `GET /api/v1/documents` | 로그인 없이 조회 가능 |
+| 문서 관리 쓰기(업로드, 업로드취소, 삭제, 태그 수정·편집) | **로그인 필요** — 비로그인 시 `/login` 리다이렉트, `ROLE_ADMIN` 아닌 로그인은 403 |
+| `/admin/**` | **로그인 필요** — 게스트/첫 관리자 자동 주입 없음(평문 no-auth와의 핵심 차이) |
+| `/api/v1/documents/**` REST 엔드포인트 | **의도적으로 그대로 열어둠 + CSRF 예외** — `POST /api/v1/documents/sync` 등 curl 자동화([§6.2](#62-문서-버전-관리) 참조)가 그대로 인증 없이 동작 |
+| Web UI 게스트 화면 | 업로드 카드·삭제 버튼·Admin 내비가 숨겨짐(관리자로 로그인해야 노출) |
+| 로그아웃 버튼 | 관리자로 로그인했을 때만 노출 |
+
+**로그인 → 관리 흐름**:
+1. `/setup`에서 관리자 계정 생성 (최초 1회, 평문 no-auth와 동일)
+2. `/login`에서 방금 만든 이메일·비밀번호로 로그인
+3. 로그인 세션이 유지되는 동안 `/documents`에서 업로드·삭제, `/admin`에서 청크 관리 가능
+4. 다른 탭/시크릿 창은 여전히 게스트 — 관리 기능은 로그인한 브라우저 세션에서만 보임
+
+> **주의**: 평문 no-auth와 마찬가지로 채팅·문서 조회는 guest 파티션을 공유합니다. 이 모드는 "누가 관리할 수 있는가"만 잠그며 사용자별 데이터 격리는 제공하지 않습니다 — 멀티유저 격리가 필요하면 전체 인증 모드(`app.auth.enabled=true`)를 사용하세요.
+
+**인증 재활성화 (전체 인증 모드로 전환)**:
+1. `app.auth.enabled=true`로 변경 후 재시작 (`app.auth.management-only`는 자동으로 무시됨)
+2. `/setup`(또는 관리 전용 인증에서 이미 만든) 계정의 이메일·비밀번호로 `/login` 접속
+3. 대화 이력(스레드)은 userId 기반으로 그대로 유지됩니다. 문서는 애초에 사용자별 격리 없이 공유 저장소(`DocRegistry.SHARED`)이므로, 전체 인증 모드로 전환한 뒤에도 모든 로그인 계정이 동일한 문서 목록을 봅니다 — 계정별로 문서가 분리되지 않습니다
 
 ---
 
@@ -1693,7 +1880,9 @@ app.auth.enabled=false
 **초기 설정**:
 - [ ] `sh scripts/install-hooks.sh` — pre-commit 훅 설치 (팀원 각자 1회)
 - [ ] 인증 모드 설정 확인 — `.env`의 `AUTH_ENABLED` 또는 `application.properties`의 `app.auth.enabled` (기본 `true` = 로그인 필요 / `false` = no-auth 모드)
+- [ ] (no-auth 모드) 문서 관리·`/admin`도 로그인 없이 열어둘지, 관리 전용으로 잠글지 결정 — 잠그려면 `AUTH_MANAGEMENT_ONLY=true` (§9.4.2)
 - [ ] (no-auth 모드) 첫 접속 시 `/setup` 페이지에서 admin 계정 생성 완료 확인
+- [ ] (관리 전용 인증 모드) `/setup` 계정 생성 후 `/login`으로 별도 로그인 확인(자동 로그인되지 않음)
 - [ ] (auth 모드) `/signup`에서 첫 계정 생성 후 `/login` 접속 확인
 
 **HTTPS (인터넷 공개 배포 시)**:
@@ -1721,7 +1910,10 @@ app.auth.enabled=false
 - [ ] 확장자 불일치 파일 업로드 → 422 응답 확인
 - [ ] 2,001자 이상 질문 → 400 응답 확인
 - [ ] (auth 모드) 미로그인 상태에서 `/` 접속 → `/login` 리다이렉트 확인
-- [ ] (no-auth 모드) `/admin` 경로에 대한 네트워크 접근 제한 적용 여부 확인
+- [ ] (평문 no-auth 모드) `/admin` 경로에 대한 네트워크 접근 제한 적용 여부 확인
+- [ ] (관리 전용 인증 모드) 게스트로 `/admin` 및 문서 업로드 시도 → `/login` 리다이렉트 확인, 게스트 화면에 업로드 카드 미노출 확인
+- [ ] (관리 전용 인증 모드) 관리자 로그인 후 `/admin`·문서 업로드/삭제 정상 동작 + 다른 페이지 이동 후에도 로그인 상태 유지 확인
+- [ ] (관리 전용 인증 모드) `curl -X POST ".../api/v1/documents/sync"` 무인증 호출 정상 동작 확인(curl 자동화 보존)
 
 **LLM 및 운영**:
 - [ ] `/llm-usage` — 프로바이더 카드 정상(초록) 확인

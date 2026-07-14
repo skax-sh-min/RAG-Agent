@@ -260,7 +260,7 @@ public class OperationsController {
 
     /**
      * Chat provider cards/rows, one always-shown embedding card (§6.6), any background-usage
-     * cards (§6.12 — conversation summarization, indexing keyword extraction/format correction,
+     * cards (conversation summarization, indexing keyword extraction/format correction,
      * thread title generation; only shown once they have history), plus any orphan cards
      * (§6.8). Embedding/background have no ProviderRole (role=null → no role badge) and are
      * never circuit-broken (blockedUntil=null) — the type badge ("EMBEDDING"/"BACKGROUND") is
@@ -351,7 +351,7 @@ public class OperationsController {
     }
 
     /**
-     * Provider names recorded under a {@link BackgroundUsage} prefix (§6.12) — conversation
+     * Provider names recorded under a {@link BackgroundUsage} prefix — conversation
      * summarization, indexing keyword extraction/format correction, thread title generation.
      * Only names with actual history are shown (unlike embedding's always-shown single row,
      * there's no single "current" background provider to default to, and several prefixes
@@ -369,7 +369,7 @@ public class OperationsController {
      * Provider names with historical usage that don't correspond to any live config today
      * (§6.8) — a chat provider removed entirely from app.llm.providers, or a stale
      * embed:&lt;old-model&gt; row left behind after EMBED_MODEL was changed. Background usage
-     * (§6.12) is excluded — it's expected, ongoing usage, not stale config. Unlike §6.7's plain
+     * is excluded — it's expected, ongoing usage, not stale config. Unlike §6.7's plain
      * inactive filter (which only hides/shows names still present in config), these are
      * actively surfaced so an operator can review and delete them.
      */

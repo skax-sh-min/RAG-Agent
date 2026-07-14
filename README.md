@@ -106,6 +106,8 @@ See [USER_MANUAL.md](USER_MANUAL.md) for usage instructions and [OPERATOR_MANUAL
 | `LOCAL_LLM_KEY` | — | `lm-studio` | LOCAL provider API key. **Optional for local endpoints** (llama-server needs none) — the LOCAL provider is kept even when blank (`no-key` is substituted) |
 | `LOCAL_LLM_MODEL` | — | `google/gemma-4-e4b` | LOCAL provider model name |
 | `LLM_ROUTING_MODE` | — | `COST_FIRST` | Default routing mode (`app.llm.default-routing-mode`). Air-gapped / local-only: set `LOCAL_ONLY` to block all external provider calls |
+| `LLM_DEFAULT_PROVIDER_CONCURRENCY` | — | `3` | Query-path per-provider concurrency gate (`app.llm.default-provider-concurrency`) — the app never sends more concurrent requests to one provider than this (match the LLM server's real `--parallel` value). Per-provider override: `app.llm.providers[N].concurrency` |
+| `LLM_PERMIT_WAIT_TIMEOUT_SECONDS` | — | `20` | Max wait for a concurrency slot before failing fast with HTTP 429 + `Retry-After` (`app.llm.permit-wait-timeout-seconds`) instead of hanging until the read timeout. Indexing/background LLM calls are not subject to this cap |
 | `OPENAI_API_KEY` | — | — | Required for OpenAI providers. Providers auto-disabled at startup if unset |
 | `GEMINI_API_KEY` | — | — | Required for Gemini providers. Providers auto-disabled at startup if unset |
 | `EMBED_BASE_URL` | — | `LOCAL_LLM_URL` | Embedding endpoint. Falls back to `LOCAL_LLM_URL` if unset |
@@ -126,7 +128,7 @@ See [USER_MANUAL.md](USER_MANUAL.md) for usage instructions and [OPERATOR_MANUAL
 |----------|---------|-------------------|-------------|
 | `CHUNK_SIZE` | `800` | 300 ~ 2000 | Document chunk size (characters) |
 | `CHUNK_OVERLAP` | `100` | 0 ~ CHUNK_SIZE × 0.25 | Overlap between chunks (characters, boundary context only) |
-| `MIN_CHUNK_SIZE` | `100` | 50 ~ CHUNK_SIZE × 0.25 | Minimum chunk size threshold for tiny-chunk merge |
+| `MIN_CHUNK_SIZE` | `300` | 50 ~ CHUNK_SIZE × 0.25 | Minimum chunk size threshold for tiny-chunk merge |
 | `SEARCH_TOP_K` | `7` | 2 ~ 15 | Number of documents returned by vector search |
 | `SEARCH_SIMILARITY_THRESHOLD` | `0.0` | 0.0 ~ 0.75 | Min cosine similarity to keep a chunk (`0.0` = accept all) |
 | `SEARCH_MULTIQUERY_ENABLED` | `true` | true/false | Expand the query into sub-queries before search |
@@ -135,6 +137,7 @@ See [USER_MANUAL.md](USER_MANUAL.md) for usage instructions and [OPERATOR_MANUAL
 | `SEARCH_RETRY_ESCALATE` | `true` | true/false | Grow candidate pool on each retry — `×(retryCount+1)`, capped `×3` |
 | `SEARCH_RERANK_ENABLED` | `false` | true/false | LLM reranking stage after RRF (adds 1 LLM call/turn) |
 | `SEARCH_CANDIDATE_MULTIPLIER` | `3` | 2 ~ 5 | Candidate pool size for reranking — `topK × N` |
+| `SEARCH_TAG_CANDIDATE_MULTIPLIER` | `2` | 1 ~ 5 | Candidate pool expansion when tags are selected — `candidateK = max(candidateK, topK × N)` |
 | `SEARCH_RRF_KEYWORD_WEIGHT` | `1.0` | 0.5 ~ 3.0 | Weighted RRF (Phase 7-A) — BM25 keyword axis weight. Vector axes (1-3 MultiQuery variants) are always group-normalized to `1/axisCount`, so `1.0` is parity with the normalized vector group. No effect when `SEARCH_HYBRID_ENABLED=false` |
 | `SEARCH_RRF_K` | `60` | 20 ~ 100 | Weighted RRF (Phase 7-A) — rank-fusion constant k (original paper default) |
 | `SEARCH_QUERY_EMBED_CACHE_ENABLED` | `true` | true/false | Query embedding cache (Phase 7-A) — caches normalized-query → vector (Caffeine, in-memory) so repeated/similar questions skip the embedding round-trip; a cache hit also records no `embed:<model>` usage |
@@ -196,6 +199,7 @@ rag_java/
     │   │   ├── DocumentController.java         # REST /api/v1/documents, /api/v1/images; async upload (202+taskId)
     │   │   ├── OperationsController.java       # REST GET /api/v1/health, /api/v1/llm/usage; HTMX thread list + LLM cards
     │   │   ├── AdminController.java            # /admin, /admin/chunks; document re-index
+    │   │   ├── SettingsController.java         # /settings view + /admin/settings/update|reset
     │   │   ├── AuthController.java             # /login, /signup, /setup page controllers; auto-login after signup
     │   │   ├── GlobalExceptionHandler.java     # RFC 9457 ProblemDetail; 400/413 handling
     │   │   └── GlobalModelAdvice.java          # @ControllerAdvice; injects authEnabled model attr into all views
@@ -208,11 +212,12 @@ rag_java/
     │   ├── ratelimit/
     │   │   └── RateLimitFilter.java            # Bucket4j + Caffeine per-user token-bucket; 429 + RAG-RATE-001
     │   ├── llm/
-    │   │   ├── LlmRouter.java         # Multi-provider routing: TaskType × RoutingMode
+    │   │   ├── LlmRouter.java         # Multi-provider routing: TaskType × RoutingMode; executeGated()/acquirePermit() — per-provider concurrency gate + 429 backpressure for the chat/query path
+    │   │   ├── ConcurrencyLimitingChatModel.java  # ChatModel decorator — applies the concurrency gate to framework-internal callers (MultiQueryExpander) that bypass executeGated()
     │   │   ├── RoutingMode.java       # COST_FIRST|QUALITY_FIRST|PROGRESSIVE|DUAL|LOCAL_ONLY
     │   │   ├── CircuitBreaker.java    # In-memory per-provider circuit breaker (Retry-After aware)
     │   │   ├── TrackingEmbeddingModel.java  # EmbeddingModel decorator — records embedding token usage separately (embed:<model>)
-    │   │   └── CachingEmbeddingModel.java   # EmbeddingModel decorator — Caffeine query-embedding cache (Phase 7-A), composed outside tracking
+    │   │   └── CachingEmbeddingModel.java   # EmbeddingModel decorator — Caffeine query-embedding cache (Phase 7-A) + in-flight single-flight dedup (ConcurrentHashMap<key,CompletableFuture>), composed outside tracking
     │   ├── model/                     # Java 21 records
     │   │   ├── MetaKey.java           # Vector store metadata key constants
     │   │   └── ChatRequest/Response/SourceRef/DocumentInfo/SyncResult/ThreadMeta/ChatForm/LlmProviderReport/IndexingProgressEvent.java
@@ -237,6 +242,7 @@ rag_java/
     │       ├── MemoryService.java             # Multi-turn memory — SQLite persistence
     │       ├── RagService.java                # Document indexing + sync + image cleanup
     │       ├── AdminService.java              # Admin UI data (chunk browse/edit + vector store status) — chroma & sqlite-vec
+    │       ├── SettingsService.java           # runtime settings-override layer (AppProperties.OverrideSource) + /settings view/validation/audit
     │       ├── IndexingProgressService.java   # SSE emitter registry for async upload/sync progress
     │       ├── MarkdownCorrectionService.java # Post-process LLM markdown output
     │       ├── DocumentLoaderService.java     # PDF/DOCX/TXT/MD loader + Markdown section parser; scanned PDF OCR
@@ -300,7 +306,7 @@ User question
 
 ## Features
 
-- **Authentication** — Spring Security form login with BCrypt(12) password hashing; account lockout after 5 failed attempts (15-min lock); `/login`, `/signup`, `/setup`; toggle off with `app.auth.enabled=false` for local no-login deployments
+- **Authentication** — Spring Security form login with BCrypt(12) password hashing; account lockout after 5 failed attempts (15-min lock); `/login`, `/signup`, `/setup`; toggle off with `app.auth.enabled=false` for local no-login deployments; `app.auth.management-only=true` keeps chat/browsing guest-open while requiring login for document management and `/admin` — see [OPERATOR_MANUAL.md §9.4.2](documents/OPERATOR_MANUAL.md#942-관리-전용-인증-management-only)
 - **Web UI** — Thymeleaf + HTMX chat, document management, and LLM usage interface with KO/EN language switcher
 - **SSE real-time streaming** — per-node stage badges (classifier → retrieval → answer → critic), token-level streaming via `chat-stream.js` (fetch + ReadableStream); DUAL mode streams both tabs simultaneously
 - **Dark mode** — CSS variable–based light/dark toggle, auto-detects `prefers-color-scheme` with `localStorage` user override
@@ -308,6 +314,11 @@ User question
 - **Question classification + routing** — meta (greetings/small talk) answered directly without RAG; all others go through the full pipeline
 - **Multi-LLM routing** — `LlmRouter` selects providers by `TaskType × RoutingMode`; COST_FIRST / QUALITY_FIRST / PROGRESSIVE / DUAL (parallel local + external) / LOCAL_ONLY
 - **Circuit Breaker** — automatic provider blocking on HTTP 429/errors (Retry-After aware), priority-based failover, status visible in LLM usage dashboard
+- **Per-provider concurrency gate + backpressure** — the chat/query path never sends more concurrent requests to a provider than it can serve (sized to the LLM server's `--parallel`); a request that waits past `LLM_PERMIT_WAIT_TIMEOUT_SECONDS` (default 20s) fails fast with HTTP 429 + `Retry-After` instead of hanging until the 180s read timeout. Indexing/background LLM calls are unaffected (they keep their own semaphore)
+- **In-flight single-flight (embeddings)** — concurrent requests for the exact same (post-normalization) text — e.g. several users asking the same question at nearly the same moment — collapse into one delegate call; the rest share that result instead of each recomputing it (`CachingEmbeddingModel`)
+- **Overload-aware circuit breaking** — a 429/402/503 with no fallback provider available (e.g. a lone LOCAL deployment) triggers a short 30s block instead of the full multi-minute default, so a transient capacity blip doesn't take chat down for everyone; falls back to normal blocking + auto-failover whenever another provider can pick up the slack
+- **Same-priority load balancing** — registering multiple providers at the same role + priority (e.g. two LOCAL servers) automatically distributes requests to whichever has more free concurrency-gate capacity (least-in-flight), for horizontal throughput scaling — no code changes, just deployment config
+- **Settings page (`/settings`)** — view the effective LLM/RAG configuration (providers, routing, embedding, search tuning) in one place; a set of search-tuning values (similarity threshold, RRF weight/k, candidate multipliers, multi-query min length, retry escalation) are **hot-editable** and apply on the next search **without a restart** (persisted in a `settings_override` table, revert to the property default on delete). Editing is admin-only and audited; restart-required values are shown read-only
 - **Vector search** — LLM generates an optimized search query (`MultiQueryExpander`, 3 parallel queries), then performs vector similarity search via the selected backend (ChromaDB or sqlite-vec)
 - **Contextual Retrieval** — each chunk's embedding and lexical (`chunk_fts`) index include a prepended context header (`{filename} > {section heading}`, plus an optional LLM-generated 1-2 sentence summary from the same call that extracts keywords) so chunks that read ambiguously alone (tables, code fragments, pronoun-heavy text) are recalled more reliably; the header never appears in stored/displayed text, the source preview, or the answer prompt — only in the embedding/lexical-search input
 - **Embedding input normalization** — decorative markdown (separator lines, bold/italic/underline markers) is stripped from the embedding, `chunk_fts`, and answer-prompt inputs (not from stored/displayed text), reducing noise in the search index and prompt token usage
@@ -317,7 +328,7 @@ User question
 - **DUAL mode** — runs local and external LLM in parallel, displays results in side-by-side tabs
 - **Rate limiting** — Bucket4j + Caffeine per-user token-bucket; 429 `RAG-RATE-001` + `Retry-After` header; configurable via `app.rate-limit.*`
 - **Audit logging** — structured events written to rolling file via Logback; configurable via `app.audit.*`
-- **Image processing pipeline** — PDF/PPTX/DOCX image extraction → stored under `data/images/{docId}/`; Lazy Vision description on first retrieval (cached in SQLite); image thumbnails shown in answer bubble
+- **Image processing pipeline** — PDF/PPTX/DOCX image extraction → stored under `data/images/{imageId}/` (a content-hash key derived from the document's SHA-256, distinct from the document's own `docId`, so long filenames aren't repeated per image); PPTX pictures with annotation shapes (highlight circle, arrow, callout) drawn on/near them are merged into one composite image by default (`app.pptx-image.merge-annotated-pictures`); Lazy Vision description on first retrieval (cached in SQLite); image thumbnails shown in answer bubble
 - **Image type classification** — pre-classifies images (diagram / screenshot / chart / photo / other) and uses type-specific Vision prompts for better descriptions
 - **Scanned PDF OCR** — Tesseract OCR (kor+eng) for pages with insufficient text; activated via `app.image-description.ocr-enabled=true`
 - **EMF/WMF conversion** — DOCX Windows Metafile images converted to PNG via Batik (EMF) or LibreOffice headless (WMF)
@@ -341,7 +352,7 @@ User question
 | `GET` | `/chat/{threadId}` | Resume an existing thread (restores previous message bubbles) |
 | `GET` | `/documents` | Document management page |
 | `GET` | `/llm-usage` | LLM usage statistics page |
-| `GET/POST` | `/login` | Login page (auth mode only) |
+| `GET/POST` | `/login` | Login page (auth mode, or no-auth management-only submode) |
 | `GET/POST` | `/signup` | Sign-up page (auth mode only) |
 | `GET/POST` | `/setup` | First-run admin setup (no-auth mode only; redirects once admin exists) |
 

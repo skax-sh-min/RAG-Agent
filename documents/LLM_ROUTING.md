@@ -23,7 +23,13 @@
 │    1. TaskType 지원 여부                                             │
 │    2. Circuit Breaker 미차단                                         │
 │    3. API 키 유효성                                                  │
-│    4. priority 순서 (낮을수록 우선)                                  │
+│    4. priority 순서 (낮을수록 우선, 동일 priority 후보는            │
+│       잔여 permit 최다(least-in-flight)로 로드밸런싱)                │
+│                                                                      │
+│  동시성 게이트 (질의 경로 전용 — 프로바이더 선택과는 별개):           │
+│    executeGated()/acquirePermit() → 프로바이더별 Semaphore로 서버    │
+│    실제 --parallel 값을 초과해 보내지 않음. 대기 상한 초과 시 즉시   │
+│    429(LlmBackpressureException) — 상세는 §6                        │
 └──────────────────────────────────────────────────────────────────────┘
          ↕ ChatModel
 ┌──────────────────────────────────────────────────────────────────────┐
@@ -46,6 +52,7 @@
 │    VisionDescriptionService → VISION                                 │
 │    ImageTypeClassifier      → LIGHT_BOTH  (분류는 범용 멀티모달로)   │
 │    KeywordExtractor (키워드+맥락) → LIGHT_TEXT                                  │
+│    RerankerService (opt-in) → TEXT        (SEARCH_RERANK_ENABLED=true일 때만) │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -92,6 +99,9 @@ public enum RoutingMode {
 app.llm.default-routing-mode=COST_FIRST
 app.llm.circuit-breaker-minutes=4
 app.llm.progressive-threshold=0.6
+# 질의 경로 동시성 게이트 기본값(서버의 실제 --parallel 값에 맞춘다) + 대기 상한
+app.llm.default-provider-concurrency=${LLM_DEFAULT_PROVIDER_CONCURRENCY:3}
+app.llm.permit-wait-timeout-seconds=${LLM_PERMIT_WAIT_TIMEOUT_SECONDS:20}
 
 # ── [LOCAL] 범용 로컬 LLM ──────────────────────────────────────────
 # type=BOTH → TEXT + VISION 태스크 처리
@@ -104,17 +114,32 @@ app.llm.providers[0].type=BOTH
 app.llm.providers[0].role=LOCAL
 app.llm.providers[0].priority=0
 app.llm.providers[0].stream=true
+# app.llm.providers[0].concurrency=4   # 미설정 시 default-provider-concurrency 사용
+
+# ── [LOCAL] 로드밸런싱 예시 (선택) ──────────────────────────────────
+# local과 동일 role(LOCAL)·동일 priority(0)·다른 base-url로 등록하면
+# LlmRouter가 잔여 permit이 더 많은(least-in-flight) 쪽으로 자동 분산한다.
+# 총 동시 처리량 = 등록 대수 × concurrency (2대 × 4 = 8).
+# app.llm.providers[7].name=local-2
+# app.llm.providers[7].base-url=http://gpu-b:1234/v1
+# app.llm.providers[7].api-key=lm-studio
+# app.llm.providers[7].model=google/gemma-4-e4b
+# app.llm.providers[7].type=BOTH
+# app.llm.providers[7].role=LOCAL
+# app.llm.providers[7].priority=0
+# app.llm.providers[7].concurrency=4
 
 # ── [LOCAL] Vision 전용 로컬 모델 (선택) ──────────────────────────
 # type=VISION → VISION task에서 BOTH보다 우선 선택됨
 # 등록 시: LLaVA, Qwen2-VL 등 Vision 특화 모델 권장
-# app.llm.providers[5].name=local-vision
-# app.llm.providers[5].base-url=${LOCAL_LLM_URL:http://localhost:1235/v1}
-# app.llm.providers[5].api-key=${LOCAL_LLM_KEY:lm-studio}
-# app.llm.providers[5].model=llava-1.6-34b
-# app.llm.providers[5].type=VISION
-# app.llm.providers[5].role=LOCAL
-# app.llm.providers[5].priority=0
+# index 6 사용 — index 5는 이미 [PREMIUM] openai가 점유 중이므로 충돌 방지
+# app.llm.providers[6].name=local-vision
+# app.llm.providers[6].base-url=${LOCAL_LLM_URL:http://localhost:1235/v1}
+# app.llm.providers[6].api-key=${LOCAL_LLM_KEY:lm-studio}
+# app.llm.providers[6].model=llava-1.6-34b
+# app.llm.providers[6].type=VISION
+# app.llm.providers[6].role=LOCAL
+# app.llm.providers[6].priority=0
 
 # ── [NORMAL] Gemini Flash Lite — 저비용 1순위 ────────────────────
 # GEMINI_API_KEY1 미설정 시 시작 시 warn 로그 후 자동 비활성화
@@ -198,14 +223,82 @@ CLASSIFIER·RETRIEVAL은 COST_FIRST(공유), ANSWER만 LOCAL∥외부 병렬 실
 
 ## 5. Circuit Breaker
 
-- HTTP 429/402: `Retry-After` 헤더 파싱 → 해당 시간 차단. 헤더 없으면 `circuit-breaker-minutes` 적용.
-- 기타 예외: 30초 차단 후 다음 프로바이더 시도.
+- HTTP 429/402/503(과부하성 오류): `Retry-After` 헤더 파싱 → 해당 시간 차단. 헤더 없으면 **폴백 가능 여부**에 따라 분기 — 폴백 프로바이더가 있으면 `circuit-breaker-minutes`(기본값) 적용, 폴백이 전혀 없는 유일 프로바이더면 30초로 단축 차단(다중 분 단위 전면 다운 방지).
+- 그 외 4xx/5xx 및 기타 예외: 30초 차단 후 다음 프로바이더 시도.
 - 차단 만료는 다음 라우팅 시 자동 해제.
 - `/llm-usage` 페이지에서 차단 상태 + 남은 시간 카운트다운 확인 가능 (30초마다 자동 갱신).
+- **동시성 백프레셔(§6, 아래)는 Circuit Breaker와 별개**다 — 용량 초과는 프로바이더 장애가 아니므로 차단하지 않는다.
+- **"30초"의 근거**: `LlmRouter.SHORT_BLOCK_SECONDS`("30") 하드코딩 상수 하나를 **세 갈래**(폴백 없는 과부하 차단·기타 4xx/5xx·일반 예외)가 공유한다. 이 값은 폴백 없는 프로바이더 완화 로직을 구현하며 새로 정한 게 아니라, 그 이전부터 "기타 4xx/5xx·일반 예외" 차단에 쓰이던 기존 값을 그대로 재사용한 것 — `permit-wait-timeout-seconds`(기본 20초)와 비슷한 수준이라 재사용에 무리가 없었다. `app.llm.default-provider-concurrency`/`app.llm.permit-wait-timeout-seconds`와 달리 **프로퍼티로 외부화되어 있지 않다** — 값을 바꾸려면 코드 수정이 필요하다.
+  - 더 짧게(예: 10~20초) 바꾸면 일시적 장애에서 더 빨리 회복되지만, 실제 서버 복구가 그보다 오래 걸리는 상황이면 재시도가 더 잦아져(연결·요청·로그 비용만 반복) 실질적인 다운타임 단축 효과 없이 노이즈만 늘 수 있다.
+  - 세 갈래가 상수 하나를 공유하므로, 폴백 없는 과부하 차단만 다르게(예: 10초) 가져가고 싶다면 상수를 분리해야 한다.
 
 ---
 
-## 6. 사용량 추적 (SQLite — memory.db 공유)
+## 6. 동시성 게이트 + 백프레셔
+
+여러 사용자의 질문이 동시에 도착하면, 앱은 프로바이더별로 실제 서버가 처리 가능한 동시 요청 수(`llama-server --parallel` 등)를 절대 초과해 보내지 않는다.
+
+```
+┌────────────────────────────────────────────────────────────────────┐
+│  LlmRouter.executeGated() / acquirePermit()                        │
+│                                                                     │
+│  각 LlmProvider마다 Semaphore(concurrency) 보유 (provider명 키)     │
+│    크기 = providers[N].concurrency, 미설정 시 default-provider-    │
+│           concurrency(기본 3)                                      │
+│                                                                     │
+│  요청 도착 → tryAcquire(permit-wait-timeout-seconds, 기본 20초)     │
+│    ├─ 획득 성공 → LLM 호출 → 응답 후 permit 반환                    │
+│    └─ 대기 상한 초과 → LlmBackpressureException                    │
+│          → HTTP 429 + Retry-After (RAG-LLM-002)                    │
+│          → Circuit Breaker 차단 없음, 다른 프로바이더 재시도도 없음  │
+│             (용량 압박이지 프로바이더 장애가 아니므로 즉시 전파)     │
+└────────────────────────────────────────────────────────────────────┘
+```
+
+**적용 범위 — 질의(채팅) 경로만, 인덱싱/백그라운드는 미적용**:
+
+| 게이트 적용 (질의 경로) | 게이트 미적용 (인덱싱/백그라운드) |
+|---|---|
+| `ClassifierService` (분류) | `KeywordExtractor` (키워드+맥락 추출) |
+| `AnswerService` (블로킹+스트리밍+PROGRESSIVE+평가) | `MarkdownCorrectionService` (MD 포맷 교정) |
+| `LlmRouter.executeDual()`/`executeDualStream()` (DUAL 양쪽) | `VisionDescriptionService` |
+| `DirectAnswerService` | `ImageTypeClassifier` |
+| `RerankerService` (opt-in) | `TextToMarkdownService` (TXT 구조화) |
+| `RetrievalService`의 MultiQuery 확장 모델(`ConcurrencyLimitingChatModel` 데코레이터 경유) | `ConversationSummarizerService.precompute()`(fire-and-forget) |
+| | `ThreadMetaService.generateTitleAsync()`(fire-and-forget) |
+
+인덱싱 경로는 이미 자체 세마포어(`app.indexing.max-concurrent-llm-calls`)로 동시성을 제어하고 있고, 마감시한 있는 동기 HTTP 호출자가 없으므로 이중 게이팅을 피하기 위해 의도적으로 제외했다 — `LlmRouter.executeWithTracking()`(게이트 미적용, 기존 동작 그대로)을 그대로 사용한다.
+
+**설정**:
+
+| 프로퍼티 | 환경변수 | 기본값 | 설명 |
+|---|---|---|---|
+| `app.llm.default-provider-concurrency` | `LLM_DEFAULT_PROVIDER_CONCURRENCY` | `3` | 프로바이더별 동시 처리 상한 기본값(개별 프로바이더가 `concurrency`를 지정하지 않을 때) |
+| `app.llm.providers[N].concurrency` | — (인덱스 프로퍼티) | 위 기본값 | 프로바이더별 개별 오버라이드 — 서버의 실제 `--parallel` 값에 맞춘다 |
+| `app.llm.permit-wait-timeout-seconds` | `LLM_PERMIT_WAIT_TIMEOUT_SECONDS` | `20` | 슬롯 대기 상한(초). `LLM_READ_TIMEOUT_SECONDS`(기본 180)보다 훨씬 짧게 유지해 사용자가 오래 기다리지 않고 빠른 429를 받도록 함 |
+
+SSE 스트리밍에서는 `error.llm.backpressure` 메시지("현재 요청이 몰려 있습니다. 잠시 후 다시 시도해 주세요.")로 우아하게 종료된다(`StreamingAgentService`). REST/HTMX 블로킹 경로는 `GlobalExceptionHandler`가 `RagException.retryAfterSeconds()`를 읽어 `Retry-After` 헤더를 자동 부착한다.
+
+**인플라이트 single-flight (임베딩 전용)**: 위 세마포어 게이트와는 별개로, `CachingEmbeddingModel`(질의 임베딩 캐시, Phase 7-A)이 동시 요청 중복 계산까지 제거한다. 4명이 완전히 동일한 질문을 거의 동시에 물으면, 첫 호출(owner)만 실제로 임베딩 API를 호출하고 나머지(joiner)는 그 결과를 `CompletableFuture.join()`으로 공유한다(`ConcurrentHashMap<key, CompletableFuture<float[]>>` 기반) — thundering herd 방지. owner가 실패하면 joiner에도 동일 예외가 전파되고 in-flight 항목은 정리되어 다음 호출이 새로 재시도한다. 완전 동일한(정규화 후) 텍스트만 병합되며, 근사 질문은 여전히 캐시 미스(§10.5 시맨틱 캐시 영역, 보류). CLASSIFIER 등 다른 텍스트 응답에는 적용되지 않는다 — 오늘 기준 그런 캐시 자체가 없다.
+
+**동일 우선순위 프로바이더 로드밸런싱 (처리량 확장)**: 같은 `role`·같은 `priority`로 프로바이더를 여러 대 등록하면(§3 "LOCAL 로드밸런싱 예시" 참고) `LlmRouter.findFirst()`가 이제 그중 **잔여 permit이 가장 많은(least-in-flight) 프로바이더**를 선택한다 — 각 프로바이더가 위 동시성 게이트의 `Semaphore`를 하나씩 갖고 있으므로 잔여 permit 수를 즉시 조회할 수 있어 별도 상태 없이 "least-connections" 로드밸런싱이 된다.
+
+```
+findFirst(role, priority 오름차순 순회)
+  → 그 role에서 가장 낮은 priority를 가진 후보 그룹 선택(우선순위는 그대로 tie-break/장애조치 순서)
+    ├─ 후보가 1개 → 기존과 동일하게 그대로 선택
+    └─ 후보가 여러 개(동일 priority) → 잔여 permit(availablePermits())이 가장 많은 쪽 선택
+         · 둘 다 동일하면(예: 둘 다 유휴) 먼저 등록된 프로바이더로 결정적 tie-break
+```
+
+- **priority가 다르면 부하와 무관하게 낮은 priority가 항상 우선** — 로드밸런싱은 동일 priority 그룹 내부에서만 일어난다. 부하가 높다고 다음 priority(예: 외부 유료 API)로 자동 전환되지는 않는다 — 그건 프로바이더가 실제로 응답 실패(429/402/503/기타)할 때만 §5 Circuit Breaker가 처리하는 영역이다.
+- **총 동시 처리량 = 등록 대수 × per-provider concurrency** (예: LOCAL 2대 × concurrency 3 = 6).
+- 임베딩 프로바이더는 아직 이 로드밸런싱 대상이 아니다 — `EmbeddingModel` 데코레이터 체인이라 라우팅 지점이 다르며, 우선 LLM 경로부터 적용했다.
+- `/llm-usage`에서 프로바이더별 사용량 집계로 실제 분산 여부를 확인할 수 있다.
+
+---
+
+## 7. 사용량 추적 (SQLite — memory.db 공유)
 
 ```sql
 CREATE TABLE IF NOT EXISTS llm_usage (
@@ -222,7 +315,7 @@ CREATE TABLE IF NOT EXISTS llm_usage (
 
 ---
 
-## 7. 제약 및 주의사항
+## 8. 제약 및 주의사항
 
 - **프로바이더 자동 비활성화**: `api-key`가 비어있으면 (`${GEMINI_API_KEY:}` 등 빈 기본값) 시작 시 warn 로그 출력 후 해당 프로바이더를 제외. 키 미설정만으로 providers 블록을 남겨둔 채 비활성화 가능
 - **DUAL 활성 조건**: LOCAL 미등록 → UI에서 드롭다운 `disabled` + "로컬 LLM이 필요합니다" 툴팁
@@ -231,3 +324,5 @@ CREATE TABLE IF NOT EXISTS llm_usage (
 - **classifyOnly() 토큰 미누적**: `AgentService`가 선행 분류 시 `AgentState` 토큰 집계에서 1회 누락 (허용된 MVP 트레이드오프)
 - **tried 집합 순환 방지**: `executeWithTracking()` 내 tried 집합이 모든 프로바이더를 포함하면 exhausted — 최대 재귀 = 프로바이더 수
 - **Vision 라우팅**: `type=VISION` 모델 미등록 시 `LIGHT_BOTH` → `BOTH` 순으로 fallback. Vision 문서 많으면 `local-vision` 등록 권장
+- **동시성 게이트(§6) 크기 설정 실수**: `providers[N].concurrency`를 서버의 실제 `--parallel`보다 크게 잡으면 앱이 스스로 429/타임아웃을 유발할 수 있다(서버가 처리 못 할 요청까지 통과시킴). 반대로 너무 작게 잡으면 여유 용량을 못 씀 — 서버 설정값과 일치시키는 것이 원칙
+- **동일 우선순위 프로바이더 다중 등록 시 자동 로드밸런싱**: `findFirst()`가 같은 role·같은 priority 후보 중 동시성 게이트의 잔여 permit이 가장 많은(least-in-flight) 프로바이더를 선택 — 여러 대 등록하면 실제로 부하가 분산된다. priority가 다르면 부하와 무관하게 낮은 priority가 항상 우선(동일 priority 그룹 내부에서만 분산). 설정 방법은 §3 "LOCAL 로드밸런싱 예시" 참고

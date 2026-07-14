@@ -9,52 +9,55 @@
 
 > 완료/미착수를 한눈에 보도록 상단 대시보드를 신설했다. 완료 항목의 서술은 아래 본문(§4~§9)에서 대폭 압축했지만 **항목 자체는 삭제하지 않았다** — 절 번호(§6.5, Step 5.3 등)는 교차 참조 보존을 위해 그대로 유지했으므로, 이 번호로 본문을 검색(Ctrl+F)하면 상세 구현 내용을 바로 찾을 수 있다. 2026-07-05 재배열 이력은 §6 도입부에 계속 남아 있다.
 
-### ✅ 완료 — Phase 1 · 2 · 5 · 6 · 7 전체, Phase 3 대부분
+### ✅ 완료 — Phase 1 · 2 · 5 · 6 전체, Phase 3 · 7 대부분
 
 | Phase | 완료 항목 | 상세 |
 |---|---|---|
 | **Phase 1** — 보안 기반 | Step 1.1~1.6 전체(Caddy·Flyway·Spring Security·멀티유저 격리·CSRF·로그인/회원가입 UI) + `app.auth.enabled` no-auth 토글 | §4 |
 | **Phase 2** — 모바일 UI | 반응형 레이아웃(Offcanvas) · PWA(manifest/SW/오프라인) · 다크모드·접근성 · 전체 286 tests 검증 | §5 |
-| **Phase 3** — 운영 견고화 (12개 항목) | §6.1 Rate limit · §6.2 업로드 검증(매직바이트, 쿼터는 미착수) · §6.3 예외처리 · §6.4 감사로그 · §6.5 임베딩 사용량 분리 · §6.6 비활성 프로바이더 표시 · §6.7 orphan 기록 삭제 · §6.8 피드백 기반 컨텍스트 제외 · §6.9 요약 선계산 · §6.10 백그라운드 사용량 분리 · §6.11 컨텍스트 예산 정합성 · §6.14 핵심 채팅 경로 추적 | §6 |
+| **Phase 3** — 운영 견고화 (12개 항목) | §6.1 Rate limit · §6.2 업로드 검증(매직바이트, 쿼터는 미착수) · §6.3 예외처리 · §6.4 감사로그 · §6.5 임베딩 사용량 분리 · §6.6 비활성 프로바이더 표시 · §6.7 orphan 기록 삭제 · §6.8 피드백 기반 컨텍스트 제외 · §6.9 요약 선계산 · §6.10 백그라운드 사용량 분리 · §6.11 컨텍스트 예산 정합성 · §6.12 다중 사용자 동시 LLM 처리(동시성 게이트+429 백프레셔+single-flight+서킷브레이커 완화+로드밸런싱) · §6.13 설정 페이지(LLM/RAG 조회+핫 수정 오버라이드 레이어) · §6.14 핵심 채팅 경로 추적 | §6 |
 | **Phase 5** — Vector Store | Step 5.1~5.10 전체(Chroma↔sqlite-vec 런타임 전환, 관리자 페이지, 태그 검색, 운영/벡터 DB 분리) | §8 |
 | **Phase 6** — 폐쇄망/노-도커 | G1~G5(키리스 LOCAL·차원 외부화·라우팅 외부화·런북·무외부호출 인수) | §9 |
 | **Phase 7-A** — 검색 빠른 승리 | §10.2 가중 RRF(벡터축 그룹 정규화 + 키워드축 가중치/k 외부화) · §10.3 쿼리 임베딩 캐시(Caffeine, cache→tracking→delegate 데코레이터) | §10 |
 | **Phase 7-B** — Contextual Retrieval + 임베딩 입력 정규화 | §10.1 청크 맥락 헤더(구조적+LLM) 임베딩/FTS 입력에 prepend, `context:` 사용량 분리 · §10.1-보완 마크다운 장식 제거 정규화(임베딩/FTS/답변프롬프트 3곳 공유), 저장·표시 텍스트는 원문 불변 | §10 |
 | **Phase 7-C** — 한국어 FTS 토크나이저 | §10.4 `chunk_fts`를 `unicode61`→`trigram` 전환(무손실 자동 재구축), 어간-활용형/코드 부분열 매칭 개선. 2글자 단어는 단독 검색 불가라는 실측 트레이드오프 확인(벡터 축은 무관) | §10 |
 | **§6.16.1** — 스트리밍/인덱싱 중단 버튼 | 채팅 SSE 중지(AbortController) + 업로드/동기화 취소(워커 스레드 interrupt, `.join()`→`.get()` 인터럽트 가능화) | §6.16 |
+| **§6.17** — 문서관리·Admin 관리 전용 인증(B안) | `app.auth.management-only` 신규 서브모드, `SecurityConfig` 3번째 필터 체인(`IF_REQUIRED`+쿠키 CSRF), `/admin/**`+문서쓰기 5라우트 `hasRole("ADMIN")` 게이트, `NoAuthAutoLoginFilter` 실로그인 보존, 역할 기반 화면 분기(`isAdmin`) | §6.17 |
 
 추가로 Phase 3 초기에 완료된 항목(문서화되지 않았던 픽스 포함): ChromaDB v2 API 컬렉션명→UUID 자동 변환, 문서 저장 경로 공유 구조 단순화(`DocRegistry.SHARED`), 인덱싱 SSE 진행 단계별 표시, 키워드 추출 타임아웃 시 CircuitBreaker 오동작 수정, DOCX 변환 전 구버전 아티팩트 삭제 순서 수정, `LOGGING_LEVEL`/`LLM_TEMPERATURE`/`LLM_MAX_TOKENS`/`SPRING_SECURITY_LOGGING_LEVEL` 환경변수 외부화, 의존성 최신 stable 일괄 업데이트(Spring Boot 3.5.15·Spring AI 1.1.8, 정확한 버전은 pom.xml 참조).
 
 ### 🔵 진행할 것 (우선순위 순)
 
-> **2026-07-08 재우선순위화**: 현재 실배포 기준(폐쇄망·no-auth 단일 운영자)에서 가치가 없는 **멀티유저(`auth.enabled=true`) 전용 작업은 전부 후속으로 내렸다** — §6.15(보안 하드닝 3건 전부 auth 모드 전용), §6.12(사용자별 LLM 쿼터, "사용자별" 구분 자체가 다중 사용자 전제), §6.16.2(계정 잠금 피드백, no-auth엔 로그인이 없음), Phase 4 전체(OAuth2·Postgres·관리자 확장 모두 다중 사용자/스케일 트리거). §6.13(스토리지 쿼터)은 이름과 달리 설계상 (B) 전역 상한이 1차 권장이라 단일 운영자에도 그대로 적용되므로 즉시 그룹에 남겼다.
+> **2026-07-08 재우선순위화**: 현재 실배포 기준(폐쇄망·no-auth 단일 운영자)에서 가치가 없는 **멀티유저(`auth.enabled=true`) 전용 작업은 전부 후속으로 내렸다** — §6.19(보안 하드닝 3건 전부 auth 모드 전용), §6.20(사용자별 LLM 쿼터, "사용자별" 구분 자체가 다중 사용자 전제), §6.16.2(계정 잠금 피드백, no-auth엔 로그인이 없음), Phase 4 전체(OAuth2·Postgres·관리자 확장 모두 다중 사용자/스케일 트리거). §6.15(스토리지 쿼터)은 이름과 달리 설계상 (B) 전역 상한이 1차 권장이라 단일 운영자에도 그대로 적용되므로 즉시 그룹에 남겼다.
 
 **🟢 지금 진행 (no-auth 단일 운영자 배포에도 바로 적용)**
 
 | 순위 | 항목 | 현재 상태 |
 |---|---|---|
-| 1 | **§6.17 문서관리·Admin 인증 필수화 + 역할 분기** | 미착수 (2026-07-09 요청, 중간 순위). 관리 전용 인증(B안)은 no-auth에서도 착수 가능 |
-| 2 | **§6.18 설정 페이지** — LLM/RAG 옵션 조회·부분(핫) 수정 | 미착수 (2026-07-09 요청, 중간 순위). 수정 권한 게이트가 §6.17의 관리자 역할 분기에 의존 — §6.17 선행 필요 |
-| 3 | **§6.13 스토리지 쿼터**(전역 상한 B안, §6.2에서 이관) | 설계 완료, 구현 전. 설정 페이지(§6.18) 이후로 순위 하향 |
-| 4 | 운영 준비 잔여 — SQLite 백업 자동화(Litestream/cron), Caddy 인증서 만료 모니터링 | 미착수 |
-| 5 | §9.4 — CADDY 하위호환 별칭 | 선택, 낮은 우선순위 |
-| 6 | Phase 2 남은 실기기 검증 2건 (키보드 하단 고정 · 홈 화면 standalone) | 좌우 스크롤·다크모드는 자동 검증 완료, 나머지는 실기기 필요 |
-| 7 | **§6.19 Direct 메시지 전용 LLM Temperature 분리** | 미착수 (2026-07-09 요청, 낮은 우선순위/후속). §6.18 설정 페이지 선행 필요 |
+| 1 | **§6.15 스토리지 쿼터**(전역 상한 B안, §6.2에서 이관) | 설계 완료, 구현 전. 설정 페이지(§6.13) 이후로 순위 하향 |
+| 2 | 운영 준비 잔여 — SQLite 백업 자동화(Litestream/cron), Caddy 인증서 만료 모니터링 | 미착수 |
+| 3 | §9.4 — CADDY 하위호환 별칭 | 선택, 낮은 우선순위 |
+| 4 | Phase 2 남은 실기기 검증 2건 (키보드 하단 고정 · 홈 화면 standalone) | 좌우 스크롤·다크모드는 자동 검증 완료, 나머지는 실기기 필요 |
+| 5 | **§6.18 Direct 메시지 전용 LLM Temperature 분리** | 미착수 (2026-07-09 요청, 낮은 우선순위). §6.13 설정 페이지 선행 완료 — 이제 진행 가능 |
+| 6 | **Phase 7-E 검색·인덱싱 성능/메모리 최적화 제안**(§10.7~10.10) | 미착수 (2026-07-13 코드 리뷰, 13건). 즉효 저리스크인 §10.9.1(Chroma 응답에서 미사용 임베딩 제외)부터 우선 적용 검토 |
 
 > **Phase 7-A 완료 (2026-07-08)**: §10.2 가중 RRF + §10.3 쿼리 임베딩 캐시. 상세는 아래 §10.2·§10.3 본문 참조.
 > **Phase 7-B 완료 (2026-07-09)**: §10.1 Contextual Retrieval + §10.1-보완 임베딩 입력 정규화. 상세는 아래 §10.1 본문 참조. 재인덱싱은 운영 단계에서 별도 수행.
-> **Phase 7-C 완료 (2026-07-09)**: §10.4 한국어 FTS 트라이그램 토크나이저. 상세는 아래 §10.4 본문 참조. Phase 7(§10.1~10.4) 전체 완료 — 하이브리드 기본 활성화(`app.search-hybrid-enabled=true`) 전환 여부는 별도 후속 판단으로 남김.
+> **Phase 7-C 완료 (2026-07-09)**: §10.4 한국어 FTS 트라이그램 토크나이저. 상세는 아래 §10.4 본문 참조. Phase 7-A~C(§10.1~10.4) 전체 완료 — 하이브리드 기본 활성화(`app.search-hybrid-enabled=true`) 전환 여부는 별도 후속 판단으로 남김.
+> **Phase 7-E 제안 추가 (2026-07-13)**: 검색·인덱싱 파이프라인 재검토로 정확도·속도·메모리 최적화 13건 도출, 전부 미착수. 상세는 §10.7~10.10 참조.
+> **§6.12 완료 (2026-07-14 요청 → 같은 날 개선안 1~5 전체 완료)**: 다중 사용자 동시 LLM 요청 처리 — 채팅 경로 무제한 동시성(인덱싱만 세마포어 존재) → 슬롯 초과 시 429→서킷브레이커 전면차단·타임아웃 폭주 위험이었던 문제를 5단계로 해결. ① 프로바이더별 동시성 세마포어(`LlmRouter.acquirePermit`/`executeGated`, 채팅/질의 경로 전체 적용) ② 대기상한+429 백프레셔(`LlmBackpressureException`) ③ `CachingEmbeddingModel` in-flight single-flight(동일 텍스트 동시 요청 thundering herd 제거) ④ 폴백 없는 유일 프로바이더의 서킷브레이커 단축 차단(`blockForOverload`, 다중 분 단위 전면 다운 방지) ⑤ 동일 role·priority 프로바이더 로드밸런싱(least-in-flight, 처리량 수평 확장). 인덱싱/백그라운드 경로는 의도적으로 미적용(회귀 방지, 자체 세마포어 유지). 상세는 §6.12 본문 참조.
 > **§6.16.1 완료 (2026-07-08)**: 채팅 스트리밍 중지 + 업로드/동기화 취소 버튼. 상세는 아래 §6.16.1 본문 참조.
-> **§6.17·§6.18 추가 (2026-07-09 요청, 중간 순위)**: 민감 페이지(문서 관리·Admin) 로그인 필수화 + 역할 기반 화면 분기(§6.17), LLM/RAG 설정 조회·부분 수정 페이지(§6.18).
-> **§6.19 추가 (2026-07-09 요청, 낮은 우선순위)**: Direct(meta) 응답 전용 temperature를 RAG 응답과 분리해 0.0~0.2(기본 0.1) 범위로 화면에서 조정 가능하게. 조사 중 temperature가 현재 어디에서도 실제로 설정 가능하지 않다는(하드코딩) 선행 이슈를 발견 — 상세는 §6.19 본문 참조.
-> **2026-07-09 재우선순위화**: 검색 정확도(Phase 7-B·7-C)를 최상단으로 승격 — 코드 변경 범위가 이미 확정돼 있고(§10.1·§10.4 본문) 체감 ROI가 가장 크다. §6.17/§6.18 순서를 뒤집었다 — §6.18 본문("수정은 관리자 전용, §6.17 역할 분기와 연동")이 §6.17의 admin role 개념을 전제하므로 개발 순서상 §6.17이 선행돼야 한다. §6.13(스토리지 쿼터)은 설정 페이지(§6.18) 이후로 순위를 낮췄다 — 즉시 필요한 안전장치라기보단 운영 편의 항목이라는 재판단. Phase 7-B·7-C 모두 같은 날 구현 완료.
+> **§6.17 완료 (2026-07-12)**: 문서 관리·Admin 관리 전용 인증(B안) — `app.auth.management-only`. 상세는 아래 §6.17 본문 참조. (A) 전체 인증 모드는 §6.19와 함께 후속(멀티유저 활성화 시) 유지.
+> **§6.13 완료 (2026-07-09 요청 → 2026-07-14 구현)**: `/settings` LLM/RAG 설정 조회 + 핫 수정 페이지. `AppProperties`에 정적 `OverrideSource`(런타임 오버라이드 레이어)를 붙여 검색 튜닝 7개 값을 `settings_override`(memory.db) 기반으로 재기동 없이 조정 — `RetrievalService`가 매 검색 시 `props.xxxSafe()`로 재조회하도록 캐싱 제거. 수정은 `/admin/settings/**`(§6.17 ROLE_ADMIN 상속), 조회는 게스트 열람+`isAdmin` 편집 게이트, 변경은 `AuditLogger` 기록. temperature/max-tokens·기본 라우팅 모드는 조회 전용(§6.18 선행/런타임 소비처 부재). 상세는 §6.13 본문 참조.
+> **§6.18 추가 (2026-07-09 요청, 낮은 우선순위)**: Direct(meta) 응답 전용 temperature를 RAG 응답과 분리해 0.0~0.2(기본 0.1) 범위로 화면에서 조정 가능하게. 조사 중 temperature가 현재 어디에서도 실제로 설정 가능하지 않다는(하드코딩) 선행 이슈를 발견 — 상세는 §6.18 본문 참조.
+> **2026-07-09 재우선순위화**: 검색 정확도(Phase 7-B·7-C)를 최상단으로 승격 — 코드 변경 범위가 이미 확정돼 있고(§10.1·§10.4 본문) 체감 ROI가 가장 크다. §6.17/§6.13 순서를 뒤집었다 — §6.13 본문("수정은 관리자 전용, §6.17 역할 분기와 연동")이 §6.17의 admin role 개념을 전제하므로 개발 순서상 §6.17이 선행돼야 한다. §6.15(스토리지 쿼터)은 설정 페이지(§6.13) 이후로 순위를 낮췄다 — 즉시 필요한 안전장치라기보단 운영 편의 항목이라는 재판단. Phase 7-B·7-C 모두 같은 날 구현 완료.
 
 **🟣 후속 — 멀티유저(`auth.enabled=true`) 활성화 시에만 착수**
 
 | 순위 | 항목 | 트리거 |
 |---|---|---|
-| 1 | **§6.15 보안 하드닝** — API CSRF/세션 혼용(6.15.1) · `/admin/**` ROLE_ADMIN 게이트(6.15.2) · XFF 무검증 rate limit(6.15.3) | **auth 모드 여는 시점에 반드시 선행**(게이트) — no-auth엔 노출면 없음 |
-| 2 | **§6.12 사용자별 LLM 토큰 쿼터** | 실사용자가 여럿 생겨 사용량 격리가 필요해질 때 |
+| 1 | **§6.19 보안 하드닝** — API CSRF/세션 혼용(6.19.1) · `/admin/**` ROLE_ADMIN 게이트(6.19.2) · XFF 무검증 rate limit(6.19.3) | **auth 모드 여는 시점에 반드시 선행**(게이트) — no-auth엔 노출면 없음 |
+| 2 | **§6.20 사용자별 LLM 토큰 쿼터** | 실사용자가 여럿 생겨 사용량 격리가 필요해질 때 |
 | 3 | **§6.16.2 계정 잠금 상태 피드백** | auth 모드 로그인 UX — no-auth엔 로그인 자체가 없음 |
 | 4 | **Phase 4** (조건부) — §7.1 OAuth2 소셜 로그인 · §7.2 PostgreSQL 마이그레이션 · §7.3 관리자 페이지 확장 | §3 트리거 참조(가입 마찰·SQLite 한계 신호·다중 사용자 운영 관리 필요 시) |
 
@@ -97,7 +100,7 @@
 | Phase 4 — 확장 | OAuth2, PostgreSQL 마이그레이션 | 조건부 | 🔵 미착수 |
 | Phase 5 — Vector Store 선택 | sqlite-vec / ChromaDB 런타임 선택 | 중요 | ✅ 완료 (Step 5.1~5.10) |
 | Phase 6 — 폐쇄망 / 노-도커 | sqlite-vec 단독·로컬 LLM·CDN 0 (키리스 LOCAL, 차원 외부화) | 중요 | 🟢 G1~G5 완료 |
-| Phase 7 — 검색 품질·성능 고도화 | 가중 RRF·쿼리 임베딩 캐시(7-A) · Contextual Retrieval(7-B) · 한국어 FTS(7-C) | 중요 | ✅ 7-A·7-B·7-C 전체 완료 |
+| Phase 7 — 검색 품질·성능 고도화 | 가중 RRF·쿼리 임베딩 캐시(7-A) · Contextual Retrieval(7-B) · 한국어 FTS(7-C) · 성능/메모리 최적화 제안(7-E) | 중요 | 🟡 7-A·7-B·7-C 완료, 7-E 제안 검토중 |
 
 ---
 
@@ -247,7 +250,7 @@ Caddy(자동 TLS·HTTP/2)로 `app:8080` 프록시 + 보안 헤더(HSTS 등). Spr
 - 파일명 sanitize — `Path.normalize()` + 화이트리스트 정규식
 - 경로 이탈 방지 — 공유 저장소 `data/documents/`(per-user 격리 폐기, `DocRegistry.SHARED`) 기준 `startsWith()` 검증
 
-**🔵 미착수** — 사용자별 누적 용량 쿼터 → §6.13으로 이관·구체화(현재 `storage_used_bytes` 컬럼·쿼터 로직·`app.upload-quota` 프로퍼티 모두 없음).
+**🔵 미착수** — 사용자별 누적 용량 쿼터 → §6.15로 이관·구체화(현재 `storage_used_bytes` 컬럼·쿼터 로직·`app.upload-quota` 프로퍼티 모두 없음).
 
 ### 6.3 글로벌 예외 처리 ✅ 완료
 
@@ -295,30 +298,96 @@ Assistant 응답에 👍/👎 토글 추가, `conversation_turns.feedback`(런�
 
 ---
 
-### 6.12 사용자별 LLM 사용량 쿼터 🔵 미착수 — 다음 우선순위 1순위
+### 6.12 다중 사용자 동시 LLM 요청 처리 — 동시성 제어 + 처리량 확장 ✅ 완료 (개선안 1~5, 2026-07-14)
 
-**현재 코드 확인 (2026-07-04 재확인)**:
-- `llm_usage.user_id` 컬럼 자체는 **이미 존재**한다(`LlmUsageRepository.init()`의 런타임 `ALTER TABLE ... DEFAULT 'anonymous'`, EDIT.md #6에서 발견). 하지만 `record(String provider, long in, long out)`에 `userId` 파라미터가 없고 `getByPeriod/getDaily/usedProviders/deleteByProvider` 등 모든 조회 메서드도 이 컬럼을 참조하지 않아 **모든 행이 영구히 'anonymous'로 고정** — 사실상 죽은 컬럼이다. **실제 `llm_usage`는 여전히 프로바이더 단위 집계**이며, 사용자별 쿼터를 하려면 이 컬럼을 실제로 채우거나(아래 B안) conversation_turns 기반(A안, 권장)으로 별도 집계해야 한다.
-- 집계 조회는 provider별만 존재 → 사용자 단위 "오늘 전체 토큰 합" 쿼리가 없음.
-- `AnswerService.execute(AgentState)`(진입점)와 `AgentService.chat()`에 쿼터 게이트가 없음. `ThreadContext.userId()`로 사용자 식별은 가능.
+**배경 (코드 확인)**: 로컬 LLM 1대 + 임베딩 1대, 각 서버가 동시 3건 처리 가능한 전형적 배포에서, **채팅(질의) 경로에는 앱 레벨 동시성 제한이 전혀 없다** — 세마포어는 인덱싱 경로(`KeywordExtractor`/`MarkdownCorrectionService`/`RagService.enrichParallel`, `INDEXING_MAX_LLM=4`)에만 있고, 질의 경로는 무제한 가상 스레드로 LLM 서버에 그대로 요청을 던진다. 게다가 질문 1개당 LLM 호출이 **5회**(CLASSIFIER 1 + MultiQuery 확장 1 + ANSWER 답변+충분성 2 + CRITIC 1, 재시도 시 추가) + 임베딩 1회다.
 
-**설계 (권장: 사용량 테이블 분리, 스키마 변경 최소)**:
-1. **집계 소스 결정** — 두 안 중 택1.
-   - (A) `conversation_turns`에 이미 `input_tokens`/`output_tokens`/`user_id`가 있으므로 **채팅 토큰은 여기서 사용자별 일일 합계**를 구할 수 있음(`SELECT SUM(input_tokens+output_tokens) FROM conversation_turns WHERE user_id=? AND asked_at >= date('now')`). 별도 테이블 없이 채팅 쿼터 구현 가능 → **1차 권장**.
-   - (B) `llm_usage`에 `user_id` 축 추가(PK 확장 = SQLite 테이블 재생성) — provider×user 교차 집계가 필요할 때만. 현 요구엔 과함.
-2. `QuotaService.checkDailyTokenQuota(userId)` 신설 — (A) 쿼리로 일일 합계 조회 → `app.quota.daily-token-limit`(신규 프로퍼티, 0=무제한) 초과 시 `QuotaExceededException`(신규).
-3. **게이트 위치** — `AgentService.chat()` 진입 직후(`PromptInjectionGuard.validate()` 다음). 스트리밍은 `StreamingAgentService.run()` 진입에도 동일 적용.
-4. `GlobalExceptionHandler`에 `QuotaExceededException` → 429(RFC 9457 ProblemDetail, `RAG-QUOTA-001`) 매핑. 채팅 UI(HTMX)엔 한도 초과 알림 프래그먼트.
-5. 프로퍼티: `app.quota.enabled`(기본 false), `app.quota.daily-token-limit`. `AppProperties`에 `QuotaConfig` record + `quotaSafe()` null 가드.
+**증상 (4명이 "거의 비슷하게" 질문 시)**: 유저 내부의 5회 호출은 순차적이라 어긋나 들어오면 동시성이 흩어지지만, 위상이 맞으면(=거의 동시 도착) 매 단계가 4-동시로 정렬돼 **지속적으로 슬롯(3)을 초과**한다. 4번째 요청의 운명은 전적으로 LLM 서버 동작에 달림:
+- **서버가 큐 보유**(`llama-server --parallel 3` 등) → 서버측 대기, 지연만 증가, 실패 없음(양호).
+- **서버가 429/503 거부** → `LlmRouter`가 429를 잡아 `CircuitBreaker.block()`(기본 2분) → **폴백 프로바이더가 없으니(로컬 1대) 전원이 `LlmProviderExhaustedException` → 채팅 전체가 2분 다운**(최악의 연쇄).
+- **큐 대기가 180s read-timeout 초과** → `SocketTimeoutException`(코드가 타임아웃엔 서킷브레이커를 안 걸어 전면차단은 회피하나 해당 유저는 실패).
+
+추가로 (a) `RateLimitFilter`는 분당 60회 기준이라 **초 단위 동시성 급증을 못 막고**, (b) 4명이 *동일* 질문을 동시에 해도 인플라이트 병합이 없어 4번 각자 계산한다 — `CachingEmbeddingModel`은 "완료 후 저장" 캐시라 동시 미스에는 무력하다(thundering herd).
+
+**개선안 (우선순위 순)**:
+
+**✅ 완료 (2026-07-14)**
+1. **프로바이더별 동시성 세마포어** — `LlmRouter`에 provider별 `Semaphore`(`providerGates`, provider명 키) 신설. 크기 = `app.llm.providers[].concurrency`(미설정 시 `app.llm.default-provider-concurrency`, 기본 3 — 서버의 실제 `--parallel` 값에 맞춘다). 인덱싱 전용이던 세마포어 패턴을 질의 경로 전용 신규 `LlmRouter.executeGated()`/`acquirePermit()`로 확장해 CLASSIFIER(`ClassifierService`)·ANSWER(블로킹+스트리밍+PROGRESSIVE 업그레이드+sufficiency 평가, `AnswerService`)·DUAL(`executeDual`/`executeDualStream` 양쪽 프로바이더 모두)·DirectAnswer(`DirectAnswerService`)·재랭킹(`RerankerService`, opt-in)·MultiQuery 확장(`RetrievalService`, 신규 `ConcurrencyLimitingChatModel` 데코레이터 — `MultiQueryExpander`가 내부에서 호출 시점을 제어해 호출부 래핑이 불가능하므로 `TrackingChatModel`과 같은 데코레이터 패턴 사용)에 적용. 인덱싱/백그라운드 경로(`KeywordExtractor`·`MarkdownCorrectionService`·`VisionDescriptionService`·`ImageTypeClassifier`·`TextToMarkdownService`·`ConversationSummarizerService.precompute`·`ThreadMetaService.generateTitleAsync`)는 기존 `executeWithTracking()`(게이트 미적용) 그대로 유지 — 이미 자체 세마포어(`app.indexing.max-concurrent-llm-calls`)가 있고 마감시한 있는 동기 HTTP 호출자가 없어 이중 게이팅·회귀 위험만 커진다.
+2. **대기 상한 + 빠른 429 백프레셔** — `acquirePermit()`이 `app.llm.permit-wait-timeout-seconds`(기본 20초, 180초 read-timeout보다 훨씬 짧음) 동안 `tryAcquire` 대기 후 실패 시 신규 `LlmBackpressureException`(`RAG-LLM-002`, HTTP 429)을 던진다. 용량 압박이지 프로바이더 장애가 아니므로 서킷브레이커 차단도, 다른 프로바이더로의 자동 재시도도 하지 않고 즉시 호출자에 전파. `GlobalExceptionHandler`가 `RagException.retryAfterSeconds()`를 읽어 `Retry-After` 헤더를 자동 부착(REST/HTMX). SSE 스트리밍(`StreamingAgentService`)은 별도 catch로 `error.llm.backpressure` 메시지를 보내고 우아하게 스트림을 종료(500 아님).
+3. **인플라이트 single-flight** — `CachingEmbeddingModel`을 `ConcurrentHashMap<key, CompletableFuture<float[]>>` 기반 in-flight 등록 테이블로 승격(기존 Caffeine `Cache`는 "완료된" 결과의 TTL/사이즈 상한 저장소로 그대로 유지). 텍스트별로 이 요청이 실제로 호출해야 할 "owner"인지, 이미 다른 동시 호출이 계산 중이라 그 결과를 "join"만 하면 되는지 `putIfAbsent`로 원자적으로 판정 — 동시에 동일 텍스트를 요청한 2~4번째 호출은 delegate를 다시 부르지 않고 owner의 `CompletableFuture`를 기다렸다가 같은 결과를 공유한다(owner 실패 시 예외도 그대로 전파, in-flight 항목은 정리되어 다음 호출은 새로 재시도). 같은 호출(`EmbeddingRequest`) 안에서 동시에 새로 필요한 텍스트들은 기존과 동일하게 하나의 배치 delegate 호출로 묶인다 — single-flight는 **서로 다른 호출 간의** 경합만 병합한다. **완전 동일(정규화 후) 텍스트만** 병합되며, 근사 질문은 여전히 미스(§10.5 시맨틱 캐시 영역). CLASSIFIER에는 적용하지 않음 — 오늘 시점엔 캐시 자체가 없어 새 캐시를 도입하는 별도 스코프이므로 이번 범위에서 제외.
+4. **서킷브레이커 연쇄 방지** — `LlmRouter`가 429/402/503(과부하성 오류)로 차단하기 전에 `blockForOverload()`로 폴백 가능 여부를 먼저 확인한다. 이 taskType에 대해 현재 요청에서 이미 시도한 프로바이더를 제외하고도 다른 프로바이더가 남아있으면(=폴백 존재) 기존과 동일하게 정상 차단(`Retry-After` 헤더 또는 `circuit-breaker-minutes` 기본값)하고 다음 프로바이더로 넘어간다 — 정상적으로 우아하게 저하(graceful degradation)되므로 그대로 둔다. 반대로 폴백이 전혀 없으면(유일 LOCAL 프로바이더가 전형적 사례) 전체 차단은 다음 요청까지 전원 다운시킬 뿐이므로, **서버가 명시적 `Retry-After`를 보낸 경우를 제외하고** 30초의 짧은 차단으로 완화한다(§6.12 동시성 게이트가 이미 프로바이더에 걸리는 부하를 억제하고 있으므로 굳이 길게 차단할 필요가 없다). 명시적 `Retry-After`는 폴백 유무와 무관하게 항상 그대로 존중한다(운영자/프로바이더가 준 권위 있는 신호를 임의로 덮어쓰지 않음). 502/504/500 등 그 외 상태 코드는 기존과 동일하게 30초 고정 차단 유지(변경 없음).
+5. **동일 우선순위 LLM 추가 등록 + 로드밸런싱 (처리량 확장)** — `LlmRouter.findFirst()`가 한 role 안에서 후보가 여러 개(동일 priority)일 때 **least-in-flight**(각 프로바이더 §6.12 동시성 게이트의 잔여 permit이 가장 많은 쪽) 선택으로 확장. 개선안 1의 프로바이더별 세마포어를 그대로 재사용해 별도 상태 없이 **least-connections 로드밸런싱이 공짜로** 됐다. `providers` 리스트가 priority 오름차순이라는 불변식을 이용해, 그 role에서 가장 낮은 priority의 후보군만 추려(`eligible.get(0).priority()`) 그 안에서만 permit 비교 — priority가 다른 후보는 부하와 무관하게 항상 낮은 쪽이 우선(기존 tie-break/장애조치 순서 그대로 유지, 동일 priority 그룹 내부에서만 분산). 둘 다 유휴(permit 동일)면 먼저 등록된 프로바이더로 결정적 tie-break. **설정은 순수 배포 구성 변경**(코드/스키마 변경 불필요) — `app.llm.providers[]`에 같은 `role`·같은 `priority`·다른 `base-url`로 프로바이더를 추가 등록하면 그대로 적용된다(예: `local-1`+`local-2` 둘 다 `role=LOCAL, priority=0` → 총 동시 처리량 = 등록 대수 × per-provider concurrency). 임베딩 프로바이더는 이번 범위에서 제외(`EmbeddingModel` 데코레이터 체인이라 라우팅 지점이 다름 — 우선은 LLM 경로부터, 향후 과제로 남김).
 
 **완료 기준**:
-- 사용자의 당일 누적 토큰이 한도 초과 시 채팅이 429로 차단되고 `Retry-After`(자정까지) 안내가 표시된다.
-- `app.quota.enabled=false`(기본)이면 기존 동작 회귀 0.
-- 쿼터 집계가 스트리밍/블로킹 경로 모두에서 일관 적용된다.
+- ✅ `N > (프로바이더 수 × per-provider 동시성)`인 적당한 초과 부하는 대기 상한(기본 20초) 내에서 순차 대기로 처리되고, 그 이상 지속되는 과부하는 전면차단·180초 타임아웃 대신 즉시 429(Retry-After)로 응답한다.
+- ✅ 4명이 *동일* 질문을 거의 동시에 물어도 임베딩 계산은 1회만 수행되고 나머지는 그 결과를 공유한다(thundering herd 제거) — `CachingEmbeddingModelTest`의 동시성 테스트로 검증.
+- ✅ 폴백이 없는 유일 프로바이더가 429/503을 반환해도 전체가 몇 분씩 다운되지 않는다 — 폴백 부재 시 30초로 단축 차단(명시적 `Retry-After`는 예외 없이 존중), 폴백이 있으면 기존처럼 정상 차단 후 자동 폴백 — `LlmRouterTest` 4건(폴백 없음/있음, 명시적 헤더, 503)으로 검증.
+- ✅ 동일 role·동일 priority 프로바이더 2대 등록 시 요청이 두 대에 실제 분산된다 — 한쪽이 포화(permit 0)면 `findFirst()`가 다른 쪽을 선택하고, `executeGated()`로 실제 호출까지 그쪽으로 나가는 것을 `LlmRouterTest` 4건으로 검증(둘 다 유휴 시 결정적 tie-break, least-in-flight 선택, priority 상이 시 부하 무관 우선순위 유지, end-to-end 분산). 운영 중에는 `/llm-usage` provider별 집계로 확인 가능.
+- ✅ 개선안 1~5 전체 완료로 단일 프로바이더 배포에서 "4명 동시"가 안전한 대기·백프레셔·중복계산 제거·짧은 장애 완화로 처리되고, 물리 용량이 부족하면 동일 priority로 프로바이더를 추가 등록해 수평 확장할 수 있다(회귀 0 — 전체 689 테스트 통과 확인). 세마포어 크기·429 임계·프로바이더별 동시성은 프로퍼티로 외부화(`app.llm.default-provider-concurrency`/`app.llm.permit-wait-timeout-seconds`/`app.llm.providers[].concurrency`, `props.llmSafe()` 관례)된다.
+
+**구현 메모 (2026-07-14, 개선안 1~2)**: 신규 `LlmRouter.Permit`(AutoCloseable)·`acquirePermit()`·`executeGated()`; `LlmConfig.llmRouter()`가 provider별 concurrency map을 조립해 `LlmRouter` 생성자에 전달(기존 5·6-arg 생성자는 하위호환 오버로드로 유지). 신규 `ConcurrencyLimitingChatModel`(`llm` 패키지, `TrackingChatModel`과 동일한 데코레이터 패턴)이 `RetrievalService`의 MultiQueryExpander 전용 모델을 감싼다. 신규 `LlmBackpressureException`(`exception` 패키지, `RAG-LLM-002`)을 `RagException` sealed 계층에 추가하고 `RagException.retryAfterSeconds()` 기본 메서드 도입. 테스트: `LlmRouterTest`(백프레셔 타임아웃·게이트 무시 등 3건 추가) + 신규 `ConcurrencyLimitingChatModelTest`(4건).
+
+**구현 메모 (2026-07-14, 개선안 3)**: `CachingEmbeddingModel`에 `ConcurrentHashMap<String, CompletableFuture<float[]>> inFlight` 필드 추가(기존 Caffeine `Cache<String,float[]>`는 그대로 유지, 역할 분리: Caffeine=완료된 결과의 TTL 캐시 / ConcurrentHashMap=진행 중인 계산의 일시적 조정 테이블). `call()`을 owner/joiner 두 그룹으로 분류하는 로직으로 재작성 — owner 그룹은 기존과 동일하게 배치 delegate 호출, joiner 그룹은 owner의 future를 `join()`. 예외는 owner→joiner로 그대로 전파(`CompletionException` 언랩)하고 실패 시 in-flight 항목을 정리해 재시도 가능하게 함. 같은 요청 내 텍스트 중복(예: `["dup","dup"]`)도 데드락 없이 처리됨(첫 등장만 owner, 나머지는 즉시 완료되는 자신의 owner future를 join). 테스트: `CachingEmbeddingModelTest`에 실제 스레드풀 기반 동시성 테스트 3건 추가(단일 delegate 호출로 병합·owner 실패 시 전파+재시도·요청 내 중복 텍스트 무데드락).
+
+**구현 메모 (2026-07-14, 개선안 4)**: `LlmRouter`의 429/402 전용 `catch (HttpClientErrorException)`를 `catch (HttpStatusCodeException)`로 넓혀 503(`HttpServerErrorException`)도 같은 분기로 들어오게 하고, 신규 `blockForOverload(provider, taskType, roleOrder, tried, retryAfterHeader)`가 `findFirst(taskType, roleOrder, tried)`로 폴백 존재 여부를 판정 — 폴백이 있거나 명시적 `Retry-After` 헤더가 있으면 기존과 동일하게 차단(`circuitBreaker.block(name, retryAfterHeader)`), 폴백도 헤더도 없으면 신규 상수 `SHORT_BLOCK_SECONDS`("30")로 단축 차단. 기존에 두 곳에 흩어져 있던 하드코딩 `"30"` 리터럴(429 외 4xx, 일반 예외 분기)도 이 상수로 통합. mmproj/timeout 특수 처리(`isVisionUnsupported`/`isTimeoutLike`)는 항상 일반 `RuntimeException`으로 관측되는 것이 테스트로 이미 확인돼 있어 catch 타입 확장의 영향을 받지 않는다. 테스트: `LlmRouterTest`에 4건 추가(폴백 없음→30초 단축, 폴백 있음→기존 시간 유지+정상 폴백, 폴백 없어도 명시적 헤더는 존중, 503도 429와 동일 취급).
+
+**구현 메모 (2026-07-14, 개선안 5)**: `LlmRouter.findFirst()`를 역할별 `Optional<LlmProvider>` 단건 조회에서 `eligible`(필터 통과 후보 리스트) 조회로 바꾸고, 신규 `selectWithinTopPriority(eligible)`가 (1) `eligible.get(0).priority()`로 최저 priority 판정 → (2) 그 priority에 묶인 후보만 순회하며 `availablePermits()`(provider별 `Semaphore.availablePermits()`)가 가장 큰 쪽을 선택. `providers`가 이미 priority 오름차순으로 정렬돼 있다는 기존 불변식을 그대로 활용해 순회 중 priority가 바뀌는 순간 `break`. 새 설정 스키마나 프로퍼티는 필요 없음 — 기존 `providers[N].role`/`priority`/`concurrency`만으로 동작. 테스트: `LlmRouterTest`에 4건 추가(둘 다 유휴 시 결정적 tie-break, 한쪽 포화 시 least-in-flight 선택 후 슬롯 반환되면 tie-break로 복귀, priority가 다르면 부하 무관 우선순위 유지, `executeGated()` end-to-end 분산 확인).
+
+**비고**: 개선안 1~5 전체 완료. 근사(동일하지 않은) 질문의 중복 계산까지 없애려면 §10.5(시맨틱 응답 캐시, 현재 보류)가 별도 후보다.
 
 ---
 
-### 6.13 사용자별 스토리지 쿼터 🔵 미착수 (§6.2에서 이관) — 다음 우선순위 2순위
+### 6.13 설정 페이지 — LLM/RAG 옵션 조회·부분 수정 ✅ 완료 (2026-07-14)
+
+**현재 상태**: 모든 설정이 `application.properties` + 환경변수 → `AppProperties`(`@ConfigurationProperties(prefix="app")`) + `xxxSafe()` 접근자 경로로만 존재한다. 운영자가 **현재 유효 설정을 한 화면에서 확인하거나, 재기동 없이 조정할 방법이 없다**. `/llm-usage`(사용량)·`/admin`(벡터 스토어 상태)은 있지만 LLM 라우팅/RAG 검색 튜닝 값 자체를 보여주는 뷰는 없다.
+
+**개선안**:
+
+*1) 조회 뷰 (신규 `/settings` 또는 `/admin/settings`)* — 현재 유효값을 그룹별로 표시.
+- LLM: 등록 프로바이더·role, 기본 라우팅 모드, temperature, max-tokens, circuit-breaker 상태.
+- 임베딩: 모델명, 차원(`app.embedding.dimensions`).
+- RAG 검색(모두 `app.search-*`): topK, hybrid-enabled, rerank-enabled, similarity-threshold, multiquery-enabled/min-length, RRF keyword-weight/k, candidate-multiplier, tag-candidate-multiplier, retry-escalate.
+- 쿼터(§6.20/6.15 도입 시)·쿼리 임베딩 캐시(§10.3) 파라미터.
+
+*2) 수정 가능 범위 — 런타임 안전 항목만*:
+- **핫 수정 가능**(매 호출 `props.xxxSafe()`로 새로 읽는 값): 검색 튜닝 수치(similarity-threshold, RRF keyword-weight/k, candidate-multiplier, tag-candidate-multiplier, retry-escalate, multiquery-min-length), 기본 라우팅 모드, temperature/max-tokens. → 오버라이드 레이어만 있으면 재기동 없이 반영.
+- **재기동 필요(수정 UI 잠금 + 값만 노출)**: `rerank-enabled`·`hybrid-enabled`·`vectorstore.type`(모두 `@ConditionalOnProperty` 빈 생성 시점에 결정 — 런타임 토글 불가), `embedding.dimensions`(sqlite-vec DDL 상수), `auth.enabled`(필터 체인 구성), DB 경로. 이들은 조회 + "재기동 필요" 배지만.
+
+*3) 오버라이드 저장 방식*:
+- SQLite **설정 오버라이드 테이블**(key→value, 런타임 멱등 DDL §13 패턴) + `xxxSafe()` 접근자가 **오버라이드 우선 → 없으면 프로퍼티 기본값** 순으로 조회하도록 소량 개편. 재기동 후에도 오버라이드 유지, 삭제 시 프로퍼티 기본값 복귀.
+- 대안(부적합): Spring `@RefreshScope`/Environment 재바인딩은 `@ConfigurationProperties` 즉시 반영 보장이 약하고 프리릴리즈 규모엔 과함. env 재주입은 재기동 전제라 목적 미충족.
+
+*4) 권한·감사*:
+- 수정은 **관리자 전용**(§6.17 역할 분기와 연동), 조회 노출 범위는 정책 택1. 설정 변경은 §6.4 `AuditLogger`에 이벤트로 기록(변경 키·이전값·새값).
+
+**완료 기준 — 충족**:
+- ✅ 운영자가 `/settings`에서 유효 LLM/RAG 설정을 확인하고, 핫 수정 가능 항목을 바꾸면 **재기동 없이** 다음 검색/응답에 반영된다.
+- ✅ 재기동 필요 항목은 수정 UI가 막히고("재기동 필요" 배지) 조회만 노출된다.
+- ✅ 오버라이드가 재기동 후에도 유지되고(`settings_override` 테이블), 삭제 시 프로퍼티 기본값으로 정확히 복귀한다(회귀 0 — `AppPropertiesOverrideTest`/`SettingsServiceTest`).
+- ✅ 설정 변경이 감사 로그에 남는다(`settings.update`/`settings.reset`, 변경 키·이전값·새값).
+
+**구현 메모 (2026-07-14)**:
+- **오버라이드 레이어**: `AppProperties`에 프로세스 전역 `OverrideSource`(정적, `SettingsService`가 기동 시 `bindOverrides()`) 추가 — hot 접근자 7개(`searchSimilarityThresholdSafe`/`searchRrfKeywordWeightSafe`/`searchRrfKSafe`/`searchCandidateMultiplierSafe`/`searchTagCandidateMultiplierSafe`/`searchMultiqueryMinLengthSafe`/신규 `searchRetryEscalateSafe`)가 **오버라이드 우선 → 없으면 프로퍼티 기본값** 순으로 읽고 기존 클램핑을 그대로 적용. 소스 미바인딩(null) 시 기존 동작과 100% 동일(회귀 0). 레코드라 생성자 주입 불가 → 정적 홀더가 유일한 방법. 키 상수는 `SettingsKeys`.
+- **핫 반영 실동작 전제**: `RetrievalService`가 이 값들을 **생성자에서 캐싱하던 것을 매 `execute()`/`shouldExpand()` 호출 시 `props.xxxSafe()`로 재조회**하도록 변경(그래야 오버라이드가 다음 검색에 실제로 반영됨). 구조값(topK/multiquery-enabled/hybrid-enabled/rerank-enabled)은 재기동 필요라 캐싱 유지.
+- **저장·권한·감사**: `SettingsOverrideRepository`(memory.db `settings_override` 멱등 DDL) + `SettingsService`(검증·정규화·감사, 인메모리 캐시로 읽기 핫패스는 SQLite 미접근). 조회 뷰 `GET /settings`(게스트 열람, 편집 컨트롤은 `isAdmin` 게이트), 수정 `POST /admin/settings/update|reset`은 **`/admin/**` 기존 인가(§6.17 ROLE_ADMIN)를 그대로 상속**해 신규 보안 배관 0.
+- **범위 밖(의도적)**: temperature/max-tokens 라이브 편집은 §6.18 선행 필요(현재 `LlmConfig`에서 빈 생성 시점 하드코딩)라 조회 전용(고정값 배지)으로 노출. 기본 라우팅 모드도 런타임 소비처가 없어 조회 전용.
+- 신규 테스트 19개(`AppPropertiesOverrideTest` 4 + `SettingsServiceTest` 9 + `SettingsControllerTest` 4 + `SettingsControllerRenderTest` 2 — 후자는 `th:each`+`th:replace` 동일 태그 선점 버그를 실렌더로 포착·수정). 전체 708 tests BUILD SUCCESS(회귀 0).
+
+---
+
+### 6.14 LLM 사용량 — 핵심 채팅 경로 추적 확장 ✅ 완료 (2026-07-06)
+
+§6.10 조사 중 `AnswerService`/`DirectAnswerService`/`ClassifierService`/`RerankerService`/`VisionDescriptionService`/`ImageTypeClassifier`/`RetrievalService`의 `MultiQueryExpander` 7곳이 `LlmRouter`를 거치지 않는 직접 `ChatClient` 호출이라 실제 채팅 사용량이 `/llm-usage`에 전혀 안 잡히던(embed:만 증가) 문제를 사용자가 실사용 중 재현·보고(2026-07-06).
+
+**1차(핵심 3곳, 당일 즉시 수정)**: `ClassifierService`/`AnswerService`/`DirectAnswerService`의 블로킹 호출을 `executeWithTracking()`(실사용량)으로, 스트리밍 분기는 신규 `LlmRouter.recordApproxUsage()`(§6.5와 동일한 chars/4 근사)로 교체. LM Studio로 Direct+RAG 질문(총 7회 호출) 전송 → `local` 프로바이더가 정상 누적됨을 실사용 검증.
+
+**2차(잔여 4곳, 같은 날 마저 정리)**: `RerankerService`/`ImageTypeClassifier`/`VisionDescriptionService`는 동일하게 `executeWithTracking()`으로 교체. `MultiQueryExpander`(Spring AI 프레임워크 유틸, 내부에서 자체 `ChatClient` 구성이라 가로챌 수 없음)는 `TrackingEmbeddingModel`과 동일한 데코레이터 패턴의 신규 `TrackingChatModel`을 만들어 주입.
+
+관련 테스트 9개 파일 갱신/신설(기존 테스트 전무했던 2곳 포함), 전체 466 tests BUILD SUCCESS(회귀 0).
+
+---
+
+### 6.15 사용자별 스토리지 쿼터 🔵 미착수 (§6.2에서 이관) — 지금 진행 (우선순위 3)
 
 > **현재 코드 확인 (2026-07-02)**: `storage_used_bytes` 컬럼·쿼터 로직·프로퍼티 모두 없음. §6.2가 "완료"로 표기했으나 **미구현**. 저장은 공유 구조(`DocRegistry.SHARED`, `data/documents/`)라 "사용자별" 쿼터의 의미부터 재정의 필요.
 
@@ -337,39 +406,6 @@ Assistant 응답에 👍/👎 토글 추가, `conversation_turns.feedback`(런�
 - 상한 초과 업로드가 거부되고 명확한 코드/메시지를 반환한다.
 - `app.upload.max-total-bytes=0`(기본)이면 회귀 0.
 - 삭제 후 재업로드 가능(사용량 정확히 반영).
-
----
-
-### 6.14 LLM 사용량 — 핵심 채팅 경로 추적 확장 ✅ 완료 (2026-07-06)
-
-§6.10 조사 중 `AnswerService`/`DirectAnswerService`/`ClassifierService`/`RerankerService`/`VisionDescriptionService`/`ImageTypeClassifier`/`RetrievalService`의 `MultiQueryExpander` 7곳이 `LlmRouter`를 거치지 않는 직접 `ChatClient` 호출이라 실제 채팅 사용량이 `/llm-usage`에 전혀 안 잡히던(embed:만 증가) 문제를 사용자가 실사용 중 재현·보고(2026-07-06).
-
-**1차(핵심 3곳, 당일 즉시 수정)**: `ClassifierService`/`AnswerService`/`DirectAnswerService`의 블로킹 호출을 `executeWithTracking()`(실사용량)으로, 스트리밍 분기는 신규 `LlmRouter.recordApproxUsage()`(§6.5와 동일한 chars/4 근사)로 교체. LM Studio로 Direct+RAG 질문(총 7회 호출) 전송 → `local` 프로바이더가 정상 누적됨을 실사용 검증.
-
-**2차(잔여 4곳, 같은 날 마저 정리)**: `RerankerService`/`ImageTypeClassifier`/`VisionDescriptionService`는 동일하게 `executeWithTracking()`으로 교체. `MultiQueryExpander`(Spring AI 프레임워크 유틸, 내부에서 자체 `ChatClient` 구성이라 가로챌 수 없음)는 `TrackingEmbeddingModel`과 동일한 데코레이터 패턴의 신규 `TrackingChatModel`을 만들어 주입.
-
-관련 테스트 9개 파일 갱신/신설(기존 테스트 전무했던 2곳 포함), 전체 466 tests BUILD SUCCESS(회귀 0).
-
----
-
-### 6.15 보안 하드닝 (2026-07-08 코드 리뷰 도출) 🔵 미착수 — 인증 활성 배포 시 우선순위
-
-> **범위 주의**: 아래 3건은 **`app.auth.enabled=true`(멀티유저 인증) 배포에서만** 의미가 있다. 폐쇄망 단일 운영자(no-auth) 기본 배포에는 노출면이 없다 — 그래서 §6.12/6.13(쿼터)보다 뒤가 아니라 "인증 켜고 다중 사용자로 열 때 반드시 선행"으로 조건부 우선순위다. 각 항목은 실제 코드 위치와 재현 조건을 명시했다.
-
-**6.15.1 `/api/v1/**` CSRF 비활성 + 세션 인증 혼용 (CSRF 노출)**
-- **현재 코드**: `SecurityConfig`가 인증 모드에서 `csrf.ignoringRequestMatchers("/api/v1/**")`로 API 전체를 CSRF 예외 처리하지만, 같은 엔드포인트가 `anyRequest().authenticated()` — 즉 **세션 쿠키 인증**이다. `POST /api/v1/documents`는 `multipart/form-data`(CSRF "simple request")라 크로스사이트 폼으로 인증된 사용자의 브라우저에서 업로드를 유발할 수 있다(`DELETE`·JSON body 경로는 preflight로 상대적으로 안전).
-- **개선안**: (A) API를 브라우저 세션이 아닌 **별도 인증(API 토큰/헤더)** 전용으로 못박고 CSRF 예외를 유지하거나, (B) 세션 인증을 계속 쓸 거면 `/api/v1/**`도 CSRF 토큰을 요구(현 HTMX/폼 경로 `/ui/**`는 이미 CSRF 적용). 최소 조치로 `POST /api/v1/documents`만이라도 CSRF 토큰 또는 커스텀 헤더 요구.
-- **완료 기준**: 인증 모드에서 크로스사이트 폼 제출로 인증 사용자의 업로드/삭제가 트리거되지 않음(테스트로 재현→차단 확인). no-auth 모드 회귀 0.
-
-**6.15.2 `/admin/**` 인가 공백 — 일반 인증 사용자도 관리 기능 접근**
-- **현재 코드**: 인증 모드에서 ROLE_ADMIN을 요구하는 경로는 **`DELETE /admin/llm-usage/**` 하나뿐**(`SecurityConfig` 주석이 "나머지 `/admin/**`는 any authenticated user 유지"를 명시). 따라서 `/admin`(청크 브라우징), `DELETE /admin/chunks/{id}`, `POST /admin/chunks/{id}`(편집), `POST /admin/documents/{docId}/reindex`를 **로그인한 일반 사용자 누구나** 호출해 벡터 청크를 조회·수정·삭제·재인덱싱할 수 있다.
-- **개선안**: `/admin/**` 전체를 `hasRole("ADMIN")`으로 게이트. no-auth 모드는 `NoAuthAutoLoginFilter`가 `/admin` 요청을 첫 ADMIN으로 자동 인증하므로 무영향. 단, `AdminController`/`AdminService` 테스트에 비관리자 403 케이스 추가 필요.
-- **완료 기준**: 인증 모드에서 비-ADMIN 사용자의 `/admin/**` 접근이 403. no-auth 모드 관리자 자동 인증 회귀 0.
-
-**6.15.3 Rate limit — `X-Forwarded-For` 무검증 신뢰 (per-IP 제한 우회)**
-- **현재 코드**: `RateLimitFilter.clientKey()`가 익명 요청에서 `X-Forwarded-For`의 첫 값을 무조건 클라이언트 IP로 사용. 리버스 프록시가 이 헤더를 덮어쓰지 않으면 공격자가 매 요청 XFF를 바꿔 **로그인 per-IP 브루트포스 제한(분당 10회/IP)을 우회**할 수 있다.
-- **개선안**: Tomcat `RemoteIpValve`(이미 `server.tomcat.remoteip.protocol-header` 설정 존재)로 신뢰 프록시 홉만 XFF를 해석하게 하고 `req.getRemoteAddr()`를 신뢰 원천으로 사용, 또는 `app.rate-limit.trust-forwarded-for`(기본 false) 플래그로 XFF 신뢰를 명시적 옵트인. 폐쇄망 직노출(프록시 없음) 시엔 XFF 신뢰 끄기가 안전 기본값.
-- **완료 기준**: 프록시 없는 배포에서 XFF 조작으로 per-IP 제한이 뚫리지 않음. Caddy 배포에서 실제 클라이언트 IP 정상 인식(기능 회귀 0).
 
 ---
 
@@ -395,77 +431,92 @@ Assistant 응답에 👍/👎 토글 추가, `conversation_turns.feedback`(런�
 
 ---
 
-### 6.17 문서 관리·Admin 접근 인증 필수화 + 역할 기반 화면 분기 🔵 미착수 — 중간 순위 (2026-07-09 요청)
+### 6.17 문서 관리·Admin 접근 인증 필수화 + 역할 기반 화면 분기 ✅ 완료 (2026-07-12, B안)
 
-**현재 상태**: no-auth 기본 배포에서 `NoAuthAutoLoginFilter`가 모든 경로에 guest 신원을, `/admin/**`엔 첫 `ADMIN` 사용자를 자동 주입한다 — 즉 **문서 관리(`/documents`, `/ui/documents/**` 업로드·삭제·동기화)와 `/admin`(청크 열람·수정·삭제·재인덱싱)에 로그인 없이 접근**된다. 인증 모드(`auth.enabled=true`)에서도 `/admin/**`은 `DELETE /admin/llm-usage/**`만 `ROLE_ADMIN`이고 나머지는 "인증된 사용자 누구나"라(§6.15.2) 일반 사용자가 벡터 청크를 조작할 수 있다. 화면도 인증 여부(`GlobalModelAdvice.authEnabled`)만 구분할 뿐 **관리자/일반 역할에 따른 분기가 없다**.
+**배경**: no-auth 기본 배포에서 `NoAuthAutoLoginFilter`가 모든 경로에 guest 신원을, `/admin/**`엔 첫 `ADMIN` 사용자를 자동 주입했다 — 즉 **문서 관리(`/documents`, `/ui/documents/**` 업로드·삭제·동기화)와 `/admin`(청크 열람·수정·삭제·재인덱싱)에 로그인 없이 접근**되는 문제가 있었다.
 
-**개선안 (2방향 — 배포 형태에 따라 택1)**:
-- **(A) 전체 인증 모드**: `auth.enabled=true`로 열고 모든 경로를 로그인 뒤로. 이 경우 §6.15(하드닝 3건)이 **선행 게이트**이고, `/admin/**` 전체를 `hasRole("ADMIN")`으로 좁히는 §6.15.2가 이 절의 핵심 조각이 된다. → 후속(멀티유저) 성격.
-- **(B) 관리 전용 인증 (single-operator에서도 즉시 적용 가능, 권장 1차)**: 채팅·조회는 no-auth로 열어두되 **`/documents`(쓰기)와 `/admin/**`만 로그인 요구**. 신규 플래그(예: `app.auth.management-only`)로 `NoAuthAutoLoginFilter`가 이 두 경로군만 pass-through에서 제외하고 로그인으로 리다이렉트, 나머지는 기존 guest 자동 인증 유지. 공용/외부 노출 채팅 데모에서 관리 기능만 잠그는 실용적 중간 지점.
+**채택안 — (B) 관리 전용 인증**: 2방향(A: 전체 인증 모드 / B: 관리 전용 인증) 중 B를 채택·구현했다. 채팅·조회는 no-auth로 열어두되 `/documents`(쓰기)와 `/admin/**`만 로그인을 요구하는 서브모드로, single-operator/no-auth 배포에도 즉시 적용 가능하다는 것이 (A) 대비 채택 이유. (A) 전체 인증 모드는 §6.19(하드닝 3건, 멀티유저 전용) 선행이 필요해 후속으로 유지.
 
-**역할 기반 화면 분기**:
-- `GlobalModelAdvice`에 현재 사용자 role(`isAdmin`) 모델 속성 추가(현 `authEnabled`와 동일하게 per-request, 목 NPE 안전).
-- 관리자: 청크 편집/삭제/재인덱싱, 전체 LLM 사용량(§6.5~6.7), 감사 로그(§6.4) 뷰, 설정 수정(§6.18) 노출.
-- 일반 사용자: 문서 목록·상태 조회 한정(업로드 허용/차단 정책 택1), `/admin` 미노출, 사용량은 본인 것만/미노출.
-- 템플릿(`documents.html`/`admin.html`/`base.html` 내비)에 `th:if="${isAdmin}"` 게이트. **서버 측 인가(§6.15.2)가 1차 방어선**이고 화면 분기는 UX 보조임을 명시(클라이언트 숨김만으로 인가 대체 금지).
+**구현 내용**:
+- `app.auth.management-only=true`(`AUTH_MANAGEMENT_ONLY` 환경변수, `app.auth.enabled=false`일 때만 의미) 신규 서브모드. `AppProperties.authSafe()`가 `enabled=true`일 땐 `managementOnly`를 항상 `false`로 정규화해 오설정을 방지.
+- `SecurityConfig`에 3번째 필터 체인 분기 신설 — `SessionCreationPolicy.IF_REQUIRED` + `CookieCsrfTokenRepository`(기존 no-auth의 STATELESS+CSRF-off로는 `formLogin()`의 세션 지속이 원천 불가능해 별도 분기 필요). `/admin/**` + 문서 쓰기 5개 라우트(업로드·업로드취소·삭제·태그수정·태그편집)를 `.hasRole("ADMIN")`으로 게이트 — `.authenticated()`가 아닌 이유는 `NoAuthAutoLoginFilter`의 `GUEST_PRINCIPAL`이 실제로는 인증된(비-anonymous) `ROLE_USER`라 `.authenticated()`로는 게스트가 통과해버리기 때문(필터 게이트 목록과 독립된 이중 방어).
+- `NoAuthAutoLoginFilter` — 실제 로그인이 이미 있으면(관리자가 `/login`으로 로그인한 뒤 비게이트 경로로 이동하는 경우 등) **어떤 경로에서도 GUEST로 덮어쓰지 않음**(`hasRealLogin()` 최우선 체크). 게이트 경로는 Authentication 미설정 상태로 통과시켜 Spring이 `hasRole("ADMIN")` 미충족으로 `/login` 리다이렉트하도록 위임.
+- `GlobalModelAdvice`에 `managementOnly`/`isAdmin` 모델 속성 추가 — `isAdmin`은 management-only 모드에서만 실제 `ROLE_ADMIN` 여부를 반영하고, 나머지 두 모드(전체 인증·평문 no-auth)는 기존처럼 항상 `true`(무회귀).
+- 템플릿(`documents.html` 업로드 카드, `doc-table-body.html` 삭제·태그편집 버튼, `base.html` Admin 내비)에 `th:if="${isAdmin}"` 게이트 — 서버 인가가 1차 방어선이고 화면 분기는 UX 보조.
+- CSRF 활성화의 부수 영향 3곳 수정: `chat.html`(New Chat 폼), `auth/setup.html`(관리자 계정 생성 폼 — no-auth·management-only 양쪽에서 열리므로 null-safe 토큰 필요), `documents.html` 업로드 XHR에 CSRF 헤더 첨부.
+- `/api/v1/documents/**` REST 엔드포인트는 의도적으로 게이트 밖 + CSRF 예외 — OPERATOR_MANUAL.md에 문서화된 curl 동기화 자동화 보존.
 
-**§6.15.2·§7.3와의 관계**: 이 절이 "무엇을 잠그고 누가 무엇을 보는가"의 상위 방향이고, §6.15.2(`/admin/**` ROLE_ADMIN 인가)와 §7.3(관리자 페이지 기능 확장)이 그 구현 조각이다. 중복 구현 금지 — 인가 규칙은 §6.15.2, 기능 확장은 §7.3을 따른다.
+**완료 기준 — 충족**:
+- ✅ management-only 모드에서 문서 관리·`/admin` 접근이 비로그인/비관리자에게 거부(`ManagementOnlyAuthorizationTest` 서버 인가 테스트로 재현→차단, 세션 왕복 e2e로 `IF_REQUIRED` 지속성 검증).
+- ✅ 관리자 로그인 시 업로드 카드·삭제 버튼·Admin 내비가 노출되고, 게스트는 조회만 가능(업로드 카드 자체가 숨겨짐) — 브라우저 실사용 검증 완료.
+- ✅ `management-only=false`(기본, 회귀 가드) — 전체 658 tests + 브라우저 검증에서 기존 no-auth 동작과 100% 동일 확인.
+- (A) 전체 인증 모드는 이 절 범위 밖 — §6.19와 함께 후속(멀티유저 활성화 트리거) 유지.
 
-**완료 기준**:
-- 선택한 방향(A/B)에서 문서 관리·`/admin` 접근이 비로그인/비관리자에게 거부된다(서버 인가 테스트로 재현→차단).
-- 관리자/일반 로그인 시 화면 구성 요소가 역할에 맞게 달라진다.
-- no-auth 순수 채팅 배포(관리 인증 미사용)는 회귀 0.
-
----
-
-### 6.18 설정 페이지 — LLM/RAG 옵션 조회·부분 수정 🔵 미착수 — 중간 순위 (2026-07-09 요청)
-
-**현재 상태**: 모든 설정이 `application.properties` + 환경변수 → `AppProperties`(`@ConfigurationProperties(prefix="app")`) + `xxxSafe()` 접근자 경로로만 존재한다. 운영자가 **현재 유효 설정을 한 화면에서 확인하거나, 재기동 없이 조정할 방법이 없다**. `/llm-usage`(사용량)·`/admin`(벡터 스토어 상태)은 있지만 LLM 라우팅/RAG 검색 튜닝 값 자체를 보여주는 뷰는 없다.
-
-**개선안**:
-
-*1) 조회 뷰 (신규 `/settings` 또는 `/admin/settings`)* — 현재 유효값을 그룹별로 표시.
-- LLM: 등록 프로바이더·role, 기본 라우팅 모드, temperature, max-tokens, circuit-breaker 상태.
-- 임베딩: 모델명, 차원(`app.embedding.dimensions`).
-- RAG 검색(모두 `app.search-*`): topK, hybrid-enabled, rerank-enabled, similarity-threshold, multiquery-enabled/min-length, RRF keyword-weight/k, candidate-multiplier, tag-candidate-multiplier, retry-escalate.
-- 쿼터(§6.12/6.13 도입 시)·쿼리 임베딩 캐시(§10.3) 파라미터.
-
-*2) 수정 가능 범위 — 런타임 안전 항목만*:
-- **핫 수정 가능**(매 호출 `props.xxxSafe()`로 새로 읽는 값): 검색 튜닝 수치(similarity-threshold, RRF keyword-weight/k, candidate-multiplier, tag-candidate-multiplier, retry-escalate, multiquery-min-length), 기본 라우팅 모드, temperature/max-tokens. → 오버라이드 레이어만 있으면 재기동 없이 반영.
-- **재기동 필요(수정 UI 잠금 + 값만 노출)**: `rerank-enabled`·`hybrid-enabled`·`vectorstore.type`(모두 `@ConditionalOnProperty` 빈 생성 시점에 결정 — 런타임 토글 불가), `embedding.dimensions`(sqlite-vec DDL 상수), `auth.enabled`(필터 체인 구성), DB 경로. 이들은 조회 + "재기동 필요" 배지만.
-
-*3) 오버라이드 저장 방식*:
-- SQLite **설정 오버라이드 테이블**(key→value, 런타임 멱등 DDL §13 패턴) + `xxxSafe()` 접근자가 **오버라이드 우선 → 없으면 프로퍼티 기본값** 순으로 조회하도록 소량 개편. 재기동 후에도 오버라이드 유지, 삭제 시 프로퍼티 기본값 복귀.
-- 대안(부적합): Spring `@RefreshScope`/Environment 재바인딩은 `@ConfigurationProperties` 즉시 반영 보장이 약하고 프리릴리즈 규모엔 과함. env 재주입은 재기동 전제라 목적 미충족.
-
-*4) 권한·감사*:
-- 수정은 **관리자 전용**(§6.17 역할 분기와 연동), 조회 노출 범위는 정책 택1. 설정 변경은 §6.4 `AuditLogger`에 이벤트로 기록(변경 키·이전값·새값).
-
-**완료 기준**:
-- 운영자가 `/settings`에서 유효 LLM/RAG 설정을 확인하고, 핫 수정 가능 항목을 바꾸면 **재기동 없이** 다음 검색/응답에 반영된다.
-- 재기동 필요 항목은 수정 UI가 막히고 사유가 표시된다.
-- 오버라이드가 재기동 후에도 유지되고, 삭제 시 프로퍼티 기본값으로 정확히 복귀한다(회귀 0).
-- 설정 변경이 감사 로그에 남는다.
+**§6.19.2·§7.3와의 관계**: 이 절이 "무엇을 잠그고 누가 무엇을 보는가"의 상위 방향이고, §6.19.2(`/admin/**` ROLE_ADMIN 인가, (A) 전체 인증 모드 전용)와 §7.3(관리자 페이지 기능 확장)이 그 구현 조각이다. B안은 §6.19.2와 독립적으로 자체 `.hasRole("ADMIN")` 게이트를 갖추고 있어 §6.19.2 선행 없이 완료됐으며, §6.19.2는 (A) 전체 인증 모드를 열 때만 별도로 필요하다.
 
 ---
 
-### 6.19 Direct 메시지 전용 LLM Temperature 분리 🔵 미착수 — 낮은 우선순위/후속 (2026-07-09 요청)
+### 6.18 Direct 메시지 전용 LLM Temperature 분리 🔵 미착수 — 지금 진행, 낮은 우선순위 (2026-07-09 요청)
 
 **현재 상태 (코드 확인)**: temperature는 겉보기엔 `LLM_TEMPERATURE` 환경변수(`application.properties`의 `spring.ai.openai.chat.options.temperature=${LLM_TEMPERATURE:0.0}`, README.md/OPERATOR_MANUAL.md가 "0.0~2.0 조정 가능"이라 문서화)로 조정 가능해 보이지만, **실제로는 어디서도 이 값을 읽지 않는다** — `LlmRouter`가 실제로 선택하는 모든 provider `ChatModel`은 `LlmConfig.llmRouter()`(`config/LlmConfig.java:66-74`)가 기동 시점에 직접 생성하며, 그 `OpenAiChatOptions`에 `.temperature(0.0)`이 **하드코딩**되어 있다(CLAUDE.md의 "모든 LLM 프로바이더는 LlmRouter를 거쳐야 함" 원칙과 일치하는 구조지만, 결과적으로 `spring.ai.openai.*` 프로퍼티로 만들어지는 Spring AI 오토컨피규레이션 빈은 LlmRouter 경로에서 전혀 쓰이지 않아 `LLM_TEMPERATURE`가 죽은 설정이 됐다). `DirectAnswerService`(meta 질문 직접 응답, `service/DirectAnswerService.java:84-85` `buildPrompt()`)와 `AnswerService`(RAG 답변) 모두 이 하드코딩된 0.0을 그대로 물려받아 애초에 구분 자체가 없다.
 
 **요청 배경**: meta 질문(인사·잡담 등, RAG 미사용 직접 응답)은 문서 근거가 없는 자유 응답이라 RAG 답변보다 약간의 다양성이 자연스러울 수 있어, Direct 경로만 별도로 0.0~0.2(기본 0.1) 범위에서 화면 조정 가능하게 하고 싶다는 요청.
 
 **개선안**:
-1. **선결 — temperature를 실제로 살아있는 설정으로 전환**: `LlmConfig.java:70`의 하드코딩된 `.temperature(0.0)`을 제거하고(provider별 `defaultOptions`는 유지하되 특정 고정값을 강제하지 않음), 실제 온도는 **호출 시점에 `Prompt`의 `ChatOptions`로 오버라이드**한다 — Spring AI는 `Prompt(messages, chatOptions)`에 실린 옵션이 모델 `defaultOptions`보다 우선 적용되므로, 같은 라우터/프로바이더 빈을 공유하면서도 호출부(Direct vs RAG)마다 다른 온도를 지정할 수 있다. §6.18의 "temperature/max-tokens 핫 수정 가능" 전제도 이 전환이 선행돼야 실제로 동작한다(지금은 빈 생성 시점에 고정이라 핫 리로드 자체가 물리적으로 불가능).
+1. **선결 — temperature를 실제로 살아있는 설정으로 전환**: `LlmConfig.java:70`의 하드코딩된 `.temperature(0.0)`을 제거하고(provider별 `defaultOptions`는 유지하되 특정 고정값을 강제하지 않음), 실제 온도는 **호출 시점에 `Prompt`의 `ChatOptions`로 오버라이드**한다 — Spring AI는 `Prompt(messages, chatOptions)`에 실린 옵션이 모델 `defaultOptions`보다 우선 적용되므로, 같은 라우터/프로바이더 빈을 공유하면서도 호출부(Direct vs RAG)마다 다른 온도를 지정할 수 있다. §6.13의 "temperature/max-tokens 핫 수정 가능" 전제도 이 전환이 선행돼야 실제로 동작한다(지금은 빈 생성 시점에 고정이라 핫 리로드 자체가 물리적으로 불가능).
 2. **신규 프로퍼티**: `app.llm.direct-temperature`(`AppProperties.LlmConfig`에 필드 추가, `DIRECT_LLM_TEMPERATURE` 환경변수) — 기본 `0.1`, `llmSafe()`에서 `[0.0, 0.2]`로 clamp. RAG 경로(`AnswerService`)는 선결 작업으로 "살아있게" 고친 뒤에도 기존 `LLM_TEMPERATURE`(기본 0.0)를 그대로 프로바이더 기본 온도로 계속 사용 — 이번 항목에서 RAG 쪽 값 자체는 새로 건드리지 않는다.
 3. **적용 지점**: `DirectAnswerService`의 블로킹 경로(`buildPrompt()`가 만드는 `Prompt`)와 스트리밍 경로(`ChatClient.builder(provider.chatModel())...`) 양쪽에서 `OpenAiChatOptions.builder().temperature(directTemperature).build()`를 실어 보낸다.
-4. **UI 노출**: 별도 화면을 새로 만들지 않고 §6.18 설정 페이지(신규 `/settings`)의 "핫 수정 가능" LLM 그룹에 슬라이더/숫자 입력(0.0~0.2, step 0.05, 기본 0.1)으로 포함한다 — §6.18이 이미 temperature를 핫 수정 대상으로 지목해뒀으므로 §6.18 구현 시 함께 추가하면 설정 저장·권한·감사 배관(§6.18 3)/4))을 중복 구축하지 않아도 된다. **§6.18 선행이 이 항목의 전제.**
+4. **UI 노출**: 별도 화면을 새로 만들지 않고 §6.13 설정 페이지(신규 `/settings`)의 "핫 수정 가능" LLM 그룹에 슬라이더/숫자 입력(0.0~0.2, step 0.05, 기본 0.1)으로 포함한다 — §6.13이 이미 temperature를 핫 수정 대상으로 지목해뒀으므로 §6.13 구현 시 함께 추가하면 설정 저장·권한·감사 배관(§6.13 3)/4))을 중복 구축하지 않아도 된다. **§6.13 선행이 이 항목의 전제.**
 
 **완료 기준**:
 - Direct(meta) 응답과 RAG 응답이 서로 다른 temperature로 호출된다(`LoggingChatModel`의 curl 재현 로그로 확인 가능).
 - `app.llm.direct-temperature`를 0.0~0.2 범위 밖 값으로 설정해도 clamp되어 기동/응답이 깨지지 않는다.
-- §6.18 설정 페이지에서 값을 조정하면 재기동 없이 다음 Direct 호출부터 반영된다.
+- §6.13 설정 페이지에서 값을 조정하면 재기동 없이 다음 Direct 호출부터 반영된다.
 - "선결" 작업(온도 하드코딩 제거) 이후 `LLM_TEMPERATURE`가 RAG 경로에 처음으로 실제 적용되기 시작한다는 점을 동작 변경으로 명시 — 값 자체(기본 0.0)는 바뀌지 않으므로 즉시 체감 회귀는 없지만, 운영자가 과거에 설정해 둔 `LLM_TEMPERATURE`가 있다면 이번에 처음으로 실제 적용된다는 점을 릴리스 노트에 남긴다.
+
+---
+
+### 6.19 보안 하드닝 (2026-07-08 코드 리뷰 도출) 🔵 미착수 — 인증 활성 배포 시 우선순위(후속 1순위)
+
+> **범위 주의**: 아래 3건은 **`app.auth.enabled=true`(멀티유저 인증) 배포에서만** 의미가 있다. 폐쇄망 단일 운영자(no-auth) 기본 배포에는 노출면이 없다 — 그래서 §6.20/6.15(쿼터)보다 뒤가 아니라 "인증 켜고 다중 사용자로 열 때 반드시 선행"으로 조건부 우선순위다. 각 항목은 실제 코드 위치와 재현 조건을 명시했다.
+
+**6.19.1 `/api/v1/**` CSRF 비활성 + 세션 인증 혼용 (CSRF 노출)**
+- **현재 코드**: `SecurityConfig`가 인증 모드에서 `csrf.ignoringRequestMatchers("/api/v1/**")`로 API 전체를 CSRF 예외 처리하지만, 같은 엔드포인트가 `anyRequest().authenticated()` — 즉 **세션 쿠키 인증**이다. `POST /api/v1/documents`는 `multipart/form-data`(CSRF "simple request")라 크로스사이트 폼으로 인증된 사용자의 브라우저에서 업로드를 유발할 수 있다(`DELETE`·JSON body 경로는 preflight로 상대적으로 안전).
+- **개선안**: (A) API를 브라우저 세션이 아닌 **별도 인증(API 토큰/헤더)** 전용으로 못박고 CSRF 예외를 유지하거나, (B) 세션 인증을 계속 쓸 거면 `/api/v1/**`도 CSRF 토큰을 요구(현 HTMX/폼 경로 `/ui/**`는 이미 CSRF 적용). 최소 조치로 `POST /api/v1/documents`만이라도 CSRF 토큰 또는 커스텀 헤더 요구.
+- **완료 기준**: 인증 모드에서 크로스사이트 폼 제출로 인증 사용자의 업로드/삭제가 트리거되지 않음(테스트로 재현→차단 확인). no-auth 모드 회귀 0.
+
+**6.19.2 `/admin/**` 인가 공백 — 일반 인증 사용자도 관리 기능 접근**
+- **현재 코드**: 인증 모드에서 ROLE_ADMIN을 요구하는 경로는 **`DELETE /admin/llm-usage/**` 하나뿐**(`SecurityConfig` 주석이 "나머지 `/admin/**`는 any authenticated user 유지"를 명시). 따라서 `/admin`(청크 브라우징), `DELETE /admin/chunks/{id}`, `POST /admin/chunks/{id}`(편집), `POST /admin/documents/{docId}/reindex`를 **로그인한 일반 사용자 누구나** 호출해 벡터 청크를 조회·수정·삭제·재인덱싱할 수 있다.
+- **개선안**: `/admin/**` 전체를 `hasRole("ADMIN")`으로 게이트. no-auth 모드는 `NoAuthAutoLoginFilter`가 `/admin` 요청을 첫 ADMIN으로 자동 인증하므로 무영향. 단, `AdminController`/`AdminService` 테스트에 비관리자 403 케이스 추가 필요.
+- **완료 기준**: 인증 모드에서 비-ADMIN 사용자의 `/admin/**` 접근이 403. no-auth 모드 관리자 자동 인증 회귀 0.
+
+**6.19.3 Rate limit — `X-Forwarded-For` 무검증 신뢰 (per-IP 제한 우회)**
+- **현재 코드**: `RateLimitFilter.clientKey()`가 익명 요청에서 `X-Forwarded-For`의 첫 값을 무조건 클라이언트 IP로 사용. 리버스 프록시가 이 헤더를 덮어쓰지 않으면 공격자가 매 요청 XFF를 바꿔 **로그인 per-IP 브루트포스 제한(분당 10회/IP)을 우회**할 수 있다.
+- **개선안**: Tomcat `RemoteIpValve`(이미 `server.tomcat.remoteip.protocol-header` 설정 존재)로 신뢰 프록시 홉만 XFF를 해석하게 하고 `req.getRemoteAddr()`를 신뢰 원천으로 사용, 또는 `app.rate-limit.trust-forwarded-for`(기본 false) 플래그로 XFF 신뢰를 명시적 옵트인. 폐쇄망 직노출(프록시 없음) 시엔 XFF 신뢰 끄기가 안전 기본값.
+- **완료 기준**: 프록시 없는 배포에서 XFF 조작으로 per-IP 제한이 뚫리지 않음. Caddy 배포에서 실제 클라이언트 IP 정상 인식(기능 회귀 0).
+
+---
+
+### 6.20 사용자별 LLM 사용량 쿼터 🔵 미착수 — 멀티유저 활성화 시 후속 (우선순위 2)
+
+**현재 코드 확인 (2026-07-04 재확인)**:
+- `llm_usage.user_id` 컬럼 자체는 **이미 존재**한다(`LlmUsageRepository.init()`의 런타임 `ALTER TABLE ... DEFAULT 'anonymous'`, EDIT.md #6에서 발견). 하지만 `record(String provider, long in, long out)`에 `userId` 파라미터가 없고 `getByPeriod/getDaily/usedProviders/deleteByProvider` 등 모든 조회 메서드도 이 컬럼을 참조하지 않아 **모든 행이 영구히 'anonymous'로 고정** — 사실상 죽은 컬럼이다. **실제 `llm_usage`는 여전히 프로바이더 단위 집계**이며, 사용자별 쿼터를 하려면 이 컬럼을 실제로 채우거나(아래 B안) conversation_turns 기반(A안, 권장)으로 별도 집계해야 한다.
+- 집계 조회는 provider별만 존재 → 사용자 단위 "오늘 전체 토큰 합" 쿼리가 없음.
+- `AnswerService.execute(AgentState)`(진입점)와 `AgentService.chat()`에 쿼터 게이트가 없음. `ThreadContext.userId()`로 사용자 식별은 가능.
+
+**설계 (권장: 사용량 테이블 분리, 스키마 변경 최소)**:
+1. **집계 소스 결정** — 두 안 중 택1.
+   - (A) `conversation_turns`에 이미 `input_tokens`/`output_tokens`/`user_id`가 있으므로 **채팅 토큰은 여기서 사용자별 일일 합계**를 구할 수 있음(`SELECT SUM(input_tokens+output_tokens) FROM conversation_turns WHERE user_id=? AND asked_at >= date('now')`). 별도 테이블 없이 채팅 쿼터 구현 가능 → **1차 권장**.
+   - (B) `llm_usage`에 `user_id` 축 추가(PK 확장 = SQLite 테이블 재생성) — provider×user 교차 집계가 필요할 때만. 현 요구엔 과함.
+2. `QuotaService.checkDailyTokenQuota(userId)` 신설 — (A) 쿼리로 일일 합계 조회 → `app.quota.daily-token-limit`(신규 프로퍼티, 0=무제한) 초과 시 `QuotaExceededException`(신규).
+3. **게이트 위치** — `AgentService.chat()` 진입 직후(`PromptInjectionGuard.validate()` 다음). 스트리밍은 `StreamingAgentService.run()` 진입에도 동일 적용.
+4. `GlobalExceptionHandler`에 `QuotaExceededException` → 429(RFC 9457 ProblemDetail, `RAG-QUOTA-001`) 매핑. 채팅 UI(HTMX)엔 한도 초과 알림 프래그먼트.
+5. 프로퍼티: `app.quota.enabled`(기본 false), `app.quota.daily-token-limit`. `AppProperties`에 `QuotaConfig` record + `quotaSafe()` null 가드.
+
+**완료 기준**:
+- 사용자의 당일 누적 토큰이 한도 초과 시 채팅이 429로 차단되고 `Retry-After`(자정까지) 안내가 표시된다.
+- `app.quota.enabled=false`(기본)이면 기존 동작 회귀 0.
+- 쿼터 집계가 스트리밍/블로킹 경로 모두에서 일관 적용된다.
 
 ---
 
@@ -696,6 +747,96 @@ G1~G4 코드/문서 완료. G5는 라우팅 계층 "외부 무선택"을 `LlmCon
 - **Phase 7-C (한국어 최적화) ✅ 완료 (2026-07-09)**: §10.4 `trigram` FTS 토크나이저. 하이브리드 기본 활성화(`app.search-hybrid-enabled`) 전환은 별도 후속 판단으로 남김.
 
 **선결 과제(권장)**: 검색 품질을 정량 비교할 **평가 세트**(질문–정답 청크 쌍 소량 + recall@k/nDCG 측정 스크립트)가 있으면 §10.1·§10.2·§10.4의 효과 검증이 크게 쉬워진다. Phase 7-A와 병행 준비를 권장.
+
+### 10.7 Phase 7-E 제안 — 검색 정확도 개선 🔵 미착수 (2026-07-13 코드 리뷰)
+
+**배경**: 검색·인덱싱 파이프라인 전체(`RetrievalService`, `ChromaVectorStoreProvider`/`SqliteVecVectorStoreProvider`, `KeywordSearchRepository`, `RerankerService`)를 다시 정독하며 도출한 후속 제안. Phase 7-A~C(§10.1~10.4)가 이미 반영된 상태 위에서의 증분 개선이며, 전부 미착수다.
+
+**10.7.1 리랭커 입력이 청크 앞 200자로 제한됨**
+- 현재: `RerankerService.formatDocList()`(`RerankerService.java:85`)가 `text.substring(0, 200)`만 LLM에 전달. 800자 청크의 핵심 내용이 뒤쪽에 있으면 리랭킹이 오히려 순위를 망칠 수 있다.
+- 개선안: `MetaKey.CHUNK_CONTEXT`(§10.1에서 이미 청크당 1~2문장 요약을 보유)를 프리뷰 앞에 붙이고 프리뷰 길이도 400~500자로 확장 — 토큰 예산 증가는 작고 판단 재료는 크게 개선.
+- 완료 기준: 리랭크 활성(`app.search-rerank-enabled=true`) 상태에서 프리뷰에 컨텍스트 헤더가 포함되고, 기존 리랭크 단위테스트가 회귀 없이 통과.
+
+**10.7.2 하이브리드 검색 기본값(off)이 이미 지불한 인덱싱 비용을 낭비**
+- 현재: `chunk_fts`는 `app.search-hybrid-enabled` 값과 무관하게 모든 인덱싱에서 채워진다(`DocumentIndexer.java:246`의 `keywordRepo.indexChunks(enriched)`가 조건 없이 호출됨). 즉 인덱싱 비용은 항상 내면서 검색 시 기본값(false)이라 혜택은 못 받는 상태.
+- 개선안: §10.6 "선결 과제"의 평가 하네스로 hybrid on/off를 측정 후 기본값 전환 여부 결정. 데이터가 없다면 우선 `SEARCH_HYBRID_ENABLED=true`를 스테이징에서 시범 적용해볼 가치가 있음(§10.2 가중 RRF·§10.4 trigram 토크나이저가 이미 이 위험을 완화해 둔 상태).
+- 완료 기준: 평가 세트 기준 recall이 hybrid on에서 유의미하게 개선되면 기본값 전환, 아니면 현행 유지 근거를 기록.
+
+**10.7.3 한국어 2글자 질의어가 BM25 축에서 완전히 탈락**
+- 현재: `KeywordSearchRepository.toMatchQuery()`(`KeywordSearchRepository.java:333`)가 3자 미만 토큰을 드롭 — trigram 토크나이저의 알려진 트레이드오프(§10.4 실측 정정에 이미 기록됨)이지만 아직 보완책은 없다.
+- 개선안: 3자 미만 질의어에 한해 `content LIKE '%용어%'` 보조 스캔을 추가해 RRF의 별도 축(또는 BM25 축의 폴백)으로 편입. FTS가 아니므로 BM25 점수는 없지만 존재 여부 기반 신호는 얻을 수 있고, 현재 코퍼스 규모(로컬 SQLite)에서는 스캔 비용이 낮다.
+- 완료 기준: "오류", "문서" 같은 2글자 질의가 최소 1개 이상의 BM25측 후보를 반환(현재는 0).
+
+**10.7.4 유사도 임계값 적용 시 후보 풀이 topK 미만으로 조용히 축소**
+- 현재: `SqliteVecVectorStoreProvider.searchByEmbedding()`(`SqliteVecVectorStoreProvider.java:204`)와 `ChromaVectorStoreProvider.mapPerQuery()`(`ChromaVectorStoreProvider.java:249`) 모두 정확히 `k=topK`로 KNN 조회한 뒤 `similarityThreshold`로 필터링 — `app.search-similarity-threshold > 0`으로 튜닝하는 순간 후보 풀이 topK보다 작아진다. 기본값(0.0)에서는 무해.
+- 개선안: 임계값이 설정된 경우에 한해 조회 `k`를 1.5~2배로 과조회한 뒤 필터링.
+- 완료 기준: `similarity-threshold > 0`으로 설정된 상태에서도 필터 후 결과 수가 가능한 한 topK에 근접.
+
+**10.7.5 검색 품질 평가 하네스 부재 (§10.6 선결 과제 재확인)**
+- §10.6에 이미 "선결 과제(권장)"로 기록돼 있으나 여전히 미착수. 위 4개 항목(특히 10.7.2)의 효과를 수치로 검증하려면 질문–정답 청크 쌍 20~50개 + recall@k/nDCG 스크립트가 사실상 선행 조건. 신규 제안 중 우선순위가 가장 높다(§10.10 참조).
+
+### 10.8 Phase 7-E 제안 — 검색·인덱싱 속도 개선 🔵 미착수 (2026-07-13 코드 리뷰)
+
+**10.8.1 [검색] MultiQuery 확장 LLM 호출이 모든 질문의 크리티컬 패스에 있음**
+- 현재: `RetrievalService.shouldExpand()`(`RetrievalService.java:177`)의 최소 길이 기준이 `app.search-multiquery-min-length` 기본값 0(`application.properties:137`)이라 한 글자짜리 질문도 확장 LLM 왕복을 먼저 거친다.
+- 개선안 (택1 또는 병행): (a) 기본값을 15~20자로 상향 — 짧은 키워드형 질의는 확장 이득이 작음. (b) 원본 질의 검색을 확장과 병렬로 먼저 시작하고 확장 완료 시 변형 질의 결과만 추가 병합 — 체감 지연에서 확장 대기시간이 사라짐.
+- 완료 기준: (a)는 프로퍼티 값 변경만으로 검증 가능. (b)는 원본-쿼리 검색 결과가 확장 완료 전에도 반환 가능함을 통합 테스트로 확인.
+
+**10.8.2 [인덱싱] 청크당 LLM 1회 호출이 인덱싱 시간의 지배 항목**
+- 현재: `KeywordExtractor.enrichKeywords()`(`KeywordExtractor.java:97`)가 청크마다 독립 LLM 호출이며 동시성 상한은 `app.indexing.max-concurrent-llm-calls`(기본 4)뿐. 300청크 문서면 LLM 왕복 300회를 동시성 4로 처리.
+- 개선안: 한 호출에 청크 3~5개를 번호를 붙여 묶어 보내고 응답을 번호별로 파싱 — 왕복 횟수를 1/3~1/5로 절감(프롬프트 크기 증가는 로컬 모델 컨텍스트 한도 내에서 관리).
+- 완료 기준: 배치 크기 N에서 왕복 횟수가 `ceil(청크수/N)`로 감소하고, 파싱 실패 시 개별 청크 단위 폴백(TF 추출)이 유지됨(회귀 0).
+
+**10.8.3 [인덱싱] SQLite 배치 삽입이 명시적 트랜잭션 밖에서 실행됨**
+- 현재: `SqliteVecVectorStoreProvider.add()`의 `jdbc.batchUpdate(INSERT_EMBEDDING, ...)`(`SqliteVecVectorStoreProvider.java:146`)와 `KeywordSearchRepository.indexChunks()`의 `jdbc.batchUpdate(...)`(`KeywordSearchRepository.java:156`)가 각각 autocommit 상태로 실행 — WAL 모드라 파국적이진 않지만 행 수만큼 커밋 오버헤드가 붙는다.
+- 개선안: `TransactionTemplate`으로 `add()` 내부의 `vec_embeddings`+`vec_document_chunks` 배치 2개를 한 트랜잭션으로 묶는다. "vectors→FTS→registry 순서" 제약(CLAUDE.md 명시)은 트랜잭션이 `add()` 내부에 갇혀 있는 한 그대로 유지된다.
+- 완료 기준: 대량 문서 인덱싱 시간이 측정 가능한 수준으로 단축(벤치마크로 확인), 기존 순서 제약 테스트 회귀 0.
+
+**10.8.4 [인덱싱] 디렉터리 동기화가 같은 파일을 두 번 SHA-256 해싱**
+- 현재: `DocumentIndexer.syncDirectory()` 1단계(`DocumentIndexer.java:365`)에서 계산한 sha256을 버리고 `index()`(`DocumentIndexer.java:101`)가 파일 전체를 다시 읽어 재해싱한다.
+- 개선안: `IndexRequest`에 미리 계산된 sha256을 실어 전달 — 대용량 PDF 다수를 동기화할 때 파일 I/O가 절반으로 준다. 필드 하나 추가 수준의 저위험 수정.
+- 완료 기준: `syncDirectory()` 경로에서 `computeSha256()` 호출이 파일당 1회로 감소(단위테스트로 호출 횟수 검증).
+
+**10.8.5 [인덱싱] 파생 텍스트(정규화) 중복 계산 — 낮은 우선순위**
+- 현재: `SearchTextBuilder.build()`가 임베딩 경로(`ChromaVectorStoreProvider.java:131` 등)와 FTS 경로(`KeywordSearchRepository.java:171`)에서 청크당 각각 호출된다.
+- 개선안: `DocumentIndexer`에서 한 번 계산해 전달하는 구조로 통합. LLM 비용 대비 절감이 미미해 우선순위는 낮음.
+
+### 10.9 Phase 7-E 제안 — 메모리 최적화 🔵 미착수 (2026-07-13 코드 리뷰)
+
+**10.9.1 Chroma 배치 검색이 쓰지 않는 임베딩까지 응답으로 받아옴 (확인 완료 — Spring AI 1.1.8 소스 대조)**
+- 현재: `ChromaVectorStoreProvider.searchBatch()`(`ChromaVectorStoreProvider.java:104`)가 `ChromaApi.QueryRequest.Include.all`을 사용하는데, Spring AI 1.1.8 소스(`spring-ai-chroma-store-1.1.8-sources.jar`) 확인 결과 `Include.all = {METADATAS, DOCUMENTS, DISTANCES, EMBEDDINGS}` — `mapPerQuery()`(`ChromaVectorStoreProvider.java:236`)는 임베딩을 전혀 사용하지 않는다. 리랭크 활성 시 질의 3개 × 후보 21개 × 1536차원이면 검색 1회당 약 1MB의 무의미한 부동소수점 JSON을 전송·파싱·GC하는 셈.
+- 개선안: `List.of(Include.METADATAS, Include.DOCUMENTS, Include.DISTANCES)`로 축소.
+- 완료 기준: 검색 응답에서 임베딩 필드가 요청되지 않음(네트워크 요청 바디로 확인), 기존 검색 단위테스트 회귀 0. 이번 목록에서 가장 즉효가 확실한 수정.
+
+**10.9.2 sqlite-vec 벡터가 텍스트 리터럴로 직렬화됨**
+- 현재: `SqliteVecVectorStoreProvider.toVectorLiteral()`(`SqliteVecVectorStoreProvider.java:225`)이 1536차원 벡터를 `[0.123,...]` 문자열(~15KB, float32 BLOB 6KB의 2.5배)로 직렬화 — 삽입·검색마다 vec0가 JSON 파싱을 수행.
+- 개선안: sqlite-vec의 raw float32 BLOB 바인딩으로 전환(`byte[]`) — 저장 I/O, 파싱 CPU, 힙 문자열 모두 감소. KNN 질의 벡터에도 동일 적용.
+- 리스크: 운영자가 배치한 vec0 빌드에서 BLOB 바인딩 지원 여부를 사전 검증 필요(폐쇄망 바이너리라 버전 편차 가능).
+- 완료 기준: 삽입/검색 벡터가 BLOB로 바인딩되고 기존 sqlite-vec 테스트 스위트 회귀 0.
+
+**10.9.3 대형 문서 add()가 전체 임베딩을 힙에 모은 뒤 일괄 삽입**
+- 현재: `SqliteVecVectorStoreProvider.add()`(`SqliteVecVectorStoreProvider.java:132`)가 `embeddingByDocId` 맵에 문서 전체 임베딩과 `chunkRows` 전체를 쌓은 뒤 마지막에 일괄 `batchUpdate`. 500청크×1536차원 ≈ 3MB로 당장 위험하진 않으나, 대용량 문서가 커질수록 피크 메모리가 문서 크기에 비례해 증가.
+- 개선안: 토큰 서브배치(`batchingStrategy.batch()`) 단위로 삽입까지 완료하는 스트리밍 구조로 전환 — 피크 메모리가 서브배치 크기로 고정되고, §10.8.3의 트랜잭션과 배치 단위를 맞추면 자연스럽게 결합된다.
+- 완료 기준: 서브배치 완료마다 해당 배치의 삽입이 끝나고(전체 완료를 기다리지 않음), 진행률 콜백(`onProgress`) 정밀도가 유지되거나 개선.
+
+**10.9.4 인덱싱 청크가 질의 임베딩 캐시를 밀어냄**
+- 현재: `CachingEmbeddingModel`(`CachingEmbeddingModel.java`, Javadoc이 스스로 트레이드오프를 인정)의 캐시(기본 max 500, §10.3)를 인덱싱 청크와 검색 질의가 공유한다. 문서 하나(500+청크) 인덱싱 직후 질의 캐시가 사실상 전멸하고, 그동안 캐시는 청크 원문(~800자) × 500개를 키로 점유한다.
+- 개선안: (a) 인덱싱 경로(`VectorStoreProvider.add()`)는 캐시를 우회 — 청크 텍스트 재사용률은 사실상 0이라 캐시에 넣을 이유가 없음. (b) 캐시 키를 원문 대신 SHA-256으로 바꿔 키 메모리를 축소.
+- 완료 기준: 문서 인덱싱 직후에도 직전 검색 질의의 캐시 히트가 유지됨(통합 테스트로 확인), §10.3 기존 캐시 테스트 회귀 0.
+
+### 10.10 Phase 7-E 제안 우선순위
+
+| 순위 | 항목 | Impact | 회귀리스크 | Effort |
+|:--:|---|:--:|:--:|:--:|
+| 1 | 10.9.1 Chroma `Include`에서 `EMBEDDINGS` 제외 | 3 | 1 | 1 |
+| 2 | 10.8.1 MultiQuery 최소 길이 상향/병렬화 | 4 | 1~2 | 1~2 |
+| 3 | 10.8.2 키워드 추출 청크 배칭 | 4 | 2 | 3 |
+| 4 | 10.8.3 + 10.9.3 트랜잭션 묶기 + 스트리밍 삽입 | 3 | 2 | 2 |
+| 5 | 10.7.1 리랭커 입력 보강, 10.8.4 sha256 중복 제거 | 2 | 1 | 1 |
+| 6 | 10.7.5 검색 품질 평가 하네스 → 10.7.2/10.7.3/10.7.4 튜닝 결정 | 4(선행조건) | 0 | 2 |
+| 후속 | 10.9.2 sqlite-vec BLOB 벡터, 10.8.5 파생 텍스트 중복 계산 제거, 10.9.4 캐시 분리 | 2 | 1~2 | 2 |
+
+**진행 순서 제안**: 즉효·저리스크(10.9.1)부터 적용 → 체감 지연이 큰 검색 경로(10.8.1) → 인덱싱 시간 지배 항목(10.8.2) → 나머지는 평가 하네스(10.7.5) 확보 후 데이터 기반으로 순서 재조정.
 
 ---
 

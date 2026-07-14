@@ -24,12 +24,12 @@ Includes: spring-ai-openai, spring-ai-rag, spring-ai-chroma-store
 --------------------------------------------------------------------
 
 --------------------------------------------------------------------
-Spring Framework 6.2.18 (https://spring.io/projects/spring-framework)
+Spring Framework 6.2.19 (https://spring.io/projects/spring-framework)
 Copyright © 2002–2024 Broadcom. All Rights Reserved.
 --------------------------------------------------------------------
 
 --------------------------------------------------------------------
-Reactor Netty HTTP 1.2.17 (https://github.com/reactor/reactor-netty)
+Reactor Netty HTTP 1.2.18 (https://github.com/reactor/reactor-netty)
 Copyright © 2011–2024 Broadcom. All Rights Reserved.
 The term "Broadcom" refers to Broadcom Inc. and/or its subsidiaries.
 --------------------------------------------------------------------
@@ -79,12 +79,12 @@ Copyright © 2015–2024 Vladimir Bukhtoyarov and contributors
 --------------------------------------------------------------------
 
 --------------------------------------------------------------------
-Caffeine 3.2.3 (https://github.com/ben-manes/caffeine)
+Caffeine 3.2.4 (https://github.com/ben-manes/caffeine)
 Copyright © 2014–2024 Ben Manes
 --------------------------------------------------------------------
 
 --------------------------------------------------------------------
-Jackson Databind 2.21.2 (https://github.com/FasterXML/jackson)
+Jackson Databind 2.21.4 (https://github.com/FasterXML/jackson)
 Copyright © 2007–2024 Tatu Saloranta and contributors
 --------------------------------------------------------------------
 
@@ -110,7 +110,7 @@ https://opensource.org/licenses/MIT
 ====================================================================
 
 --------------------------------------------------------------------
-SLF4J 2.0.17 (https://www.slf4j.org)
+SLF4J 2.0.18 (https://www.slf4j.org)
 Copyright © 2004–2023 QOS.ch
 --------------------------------------------------------------------
 
@@ -183,7 +183,7 @@ https://www.gnu.org/licenses/lgpl-2.1.html
 ====================================================================
 
 --------------------------------------------------------------------
-Logback 1.5.32 (https://logback.qos.ch)
+Logback 1.5.34 (https://logback.qos.ch)
 Copyright © 1999–2024 QOS.ch
 --------------------------------------------------------------------
 
@@ -195,6 +195,7 @@ Test scope only — NOT distributed with the production binary
 --------------------------------------------------------------------
 JUnit 5.12.2 (https://junit.org/junit5) — Eclipse Public License 2.0
 Mockito 5.17.0 (https://site.mockito.org) — MIT License
+AssertJ 3.27.7 (https://assertj.github.io/doc) — Apache License, Version 2.0
 --------------------------------------------------------------------
 
 

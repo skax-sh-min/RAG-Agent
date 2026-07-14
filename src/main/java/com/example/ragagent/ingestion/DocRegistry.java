@@ -145,6 +145,18 @@ public class DocRegistry {
         return count != null && count > 0;
     }
 
+    /**
+     * True if some other doc_id (any user/version) shares this sha256 — the images directory is
+     * keyed by content hash, so a delete must not remove it out from under a content-identical
+     * duplicate document that is still live.
+     */
+    public boolean existsOtherBySha256(String sha256, String excludeDocId) {
+        Integer count = jdbc.queryForObject(
+                "SELECT count(*) FROM doc_registry WHERE sha256 = ? AND doc_id <> ?",
+                Integer.class, sha256, excludeDocId);
+        return count != null && count > 0;
+    }
+
     public Optional<String> findStaleDocId(String filename, String newDocId, String version, String userId) {
         return jdbc.query(
                 "SELECT doc_id FROM doc_registry WHERE version = ? AND user_id = ?",

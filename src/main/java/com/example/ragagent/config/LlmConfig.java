@@ -15,7 +15,9 @@ import org.springframework.context.annotation.Primary;
 import org.springframework.retry.support.RetryTemplate;
 
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 @Configuration
 public class LlmConfig {
@@ -101,12 +103,25 @@ public class LlmConfig {
         double threshold = llmCfg.progressiveThreshold() > 0
                 ? llmCfg.progressiveThreshold() : 0.6;
 
-        log.info("LLM providers registered: {}", providers.stream()
-                .map(p -> "%s(%s/%s/p%d/stream=%b) → %s [%s]".formatted(p.name(), p.role(), p.type(), p.priority(), p.stream(), p.baseUrl(), p.model()))
-                .toList());
-        log.info("LLM HTTP timeouts: connect={}s read={}s", connectTimeoutSeconds, readTimeoutSeconds);
+        // Per-provider concurrency gate: falls back to defaultProviderConcurrency
+        // when a provider config omits its own `concurrency`.
+        Map<String, Integer> providerConcurrency = new HashMap<>();
+        for (AppProperties.ProviderConfig cfg : llmCfg.providers()) {
+            int concurrency = (cfg.concurrency() != null && cfg.concurrency() > 0)
+                    ? cfg.concurrency() : llmCfg.defaultProviderConcurrency();
+            providerConcurrency.put(cfg.name(), concurrency);
+        }
 
-        return new LlmRouter(providers, usageRepo, circuitBreaker, defaultMode, threshold, readTimeoutSeconds);
+        log.info("LLM providers registered: {}", providers.stream()
+                .map(p -> "%s(%s/%s/p%d/stream=%b/concurrency=%d) → %s [%s]".formatted(p.name(), p.role(), p.type(),
+                        p.priority(), p.stream(), providerConcurrency.getOrDefault(p.name(), llmCfg.defaultProviderConcurrency()),
+                        p.baseUrl(), p.model()))
+                .toList());
+        log.info("LLM HTTP timeouts: connect={}s read={}s, permit-wait={}s", connectTimeoutSeconds, readTimeoutSeconds,
+                llmCfg.permitWaitTimeoutSeconds());
+
+        return new LlmRouter(providers, usageRepo, circuitBreaker, defaultMode, threshold, readTimeoutSeconds,
+                providerConcurrency, llmCfg.defaultProviderConcurrency(), llmCfg.permitWaitTimeoutSeconds());
     }
 
     @Bean

@@ -100,11 +100,12 @@ public class DocumentIndexer {
 
         String sha256 = computeSha256(req.path());
         String docId = req.filename() + "_" + sha256.substring(0, 8);
+        String imageId = imageId(sha256);
         String docType = inferDocType(req.filename());
-        Path imagesDir = dataDir.resolve("images").resolve(docId);
+        Path imagesDir = dataDir.resolve("images").resolve(imageId);
         Path rawMdPath = dataDir.resolve("converted").resolve(docId + ".md");
         Path correctedMdPath = dataDir.resolve("converted").resolve(docId + "_corrected.md");
-        log.debug("[INDEX] docId={}, type={}, sha256={}", docId, docType, sha256);
+        log.debug("[INDEX] docId={}, imageId={}, type={}, sha256={}", docId, imageId, docType, sha256);
 
         // Preserve tags on operator re-index / directory sync (those paths carry no tag input):
         // the request has no tags, but they live in the FTS index under the prior docId
@@ -129,7 +130,7 @@ public class DocumentIndexer {
         List<Document> rawDocs;
         if (lower.endsWith(".docx")) {
             req.onProgress().accept(IndexingProgressEvent.of("loading", 0, 0, req.filename(), "DOCX → Markdown 변환 중..."));
-            String rawMd = loaderService.convertDocxToMd(req.path(), docId, imagesDir);
+            String rawMd = loaderService.convertDocxToMd(req.path(), imageId, imagesDir);
             Files.createDirectories(rawMdPath.getParent());
             Files.writeString(rawMdPath, rawMd);
             String sourceMd = correctionService.correct(rawMd, docId, correctedMdPath,
@@ -173,7 +174,7 @@ public class DocumentIndexer {
             // same correction+section pipeline DOCX uses. loadFromMarkdown() promotes the image
             // markers into image_paths metadata automatically — no separate attach step needed.
             req.onProgress().accept(IndexingProgressEvent.of("loading", 0, 0, req.filename(), "PPTX → Markdown 변환 중..."));
-            String rawMd = pptxConverter.convert(req.path(), docId, imagesDir);
+            String rawMd = pptxConverter.convert(req.path(), imageId, imagesDir);
             Files.createDirectories(rawMdPath.getParent());
             Files.writeString(rawMdPath, rawMd);
             String sourceMd = correctionService.correct(rawMd, docId, correctedMdPath,
@@ -193,7 +194,7 @@ public class DocumentIndexer {
                 req.onProgress().accept(IndexingProgressEvent.of(
                         "loading", 0, 0, req.filename(), "이미지 추출 중..."));
                 rawDocs = injectImagePaths(rawDocs, imageExtractorService.extract(
-                        req.path(), docId, imagesDir,
+                        req.path(), imageId, imagesDir,
                         (done, total) -> req.onProgress().accept(IndexingProgressEvent.of(
                                 "loading", done, total, req.filename(),
                                 "이미지 추출 중 (" + done + "/" + total + " 페이지)"))));
@@ -203,7 +204,7 @@ public class DocumentIndexer {
                 // through the same pipeline DOCX uses. loadFromMarkdown() promotes the image
                 // markers into image_paths metadata automatically — no separate attach step needed.
                 req.onProgress().accept(IndexingProgressEvent.of("loading", 0, 0, req.filename(), "PDF → Markdown 변환 중..."));
-                String rawMd = pdfConverter.convert(pdfPages.pages(), req.path(), docId, imagesDir,
+                String rawMd = pdfConverter.convert(pdfPages.pages(), req.path(), imageId, imagesDir,
                         (done, total) -> req.onProgress().accept(IndexingProgressEvent.of(
                                 "loading", done, total, req.filename(),
                                 "이미지 추출 중 (" + done + "/" + total + " 페이지)")));
@@ -523,8 +524,25 @@ public class DocumentIndexer {
         keywordRepo.deleteByDocId(docId);   // keep FTS index in sync
     }
 
+    /**
+     * Deletes the images directory (keyed by content-hash {@code imageId} — resolved from the
+     * registry entry still present at this point in every caller) plus converted MD files (keyed
+     * by {@code docId}, unaffected by the imageId change). Also attempts the legacy
+     * {@code images/{docId}/} path for documents indexed before imageId existed, since those
+     * images never moved. Before deleting the imageId directory, checks that no other doc_id
+     * still shares that sha256 — content-identical documents share one images directory by
+     * design, so deleting one must not orphan the other's image links.
+     */
     private void deleteDocFiles(String userId, String docId) {
-        deleteImagesQuietly(dataDir.resolve("images").resolve(docId));
+        docRegistry.findByDocId(docId, userId).ifPresent(entry -> {
+            String imageId = imageId(entry.sha256());
+            if (!docRegistry.existsOtherBySha256(entry.sha256(), docId)) {
+                deleteImagesQuietly(dataDir.resolve("images").resolve(imageId));
+            } else {
+                log.debug("[DELETE] imageId={} 는 다른 문서와 공유 중 — 이미지 보존", imageId);
+            }
+        });
+        deleteImagesQuietly(dataDir.resolve("images").resolve(docId)); // legacy pre-imageId layout
         for (String suffix : List.of(".md", "_corrected.md")) {
             Path p = dataDir.resolve("converted").resolve(docId + suffix);
             try {
@@ -579,6 +597,23 @@ public class DocumentIndexer {
         } catch (NoSuchAlgorithmException | IOException e) {
             throw new DocumentIndexingException("SHA-256 computation failed", e);
         }
+    }
+
+    /**
+     * Short content-derived key for the images directory/path, kept separate from {@code docId}
+     * (which stays filename-prefixed for display and stale-version detection — see
+     * {@link DocRegistry#filenameFromDocId} / {@link DocRegistry#findStaleDocId}). Embedding the
+     * full docId in every {@code [이미지: ...]} marker and {@code image_paths} metadata entry
+     * scales badly for long (often Korean, 30+ char) filenames on documents with many images —
+     * this fixed-length hash prefix is repeated instead. 16 hex chars (64 bits) makes an
+     * unintended collision between unrelated documents astronomically unlikely; a genuine
+     * collision only happens for byte-identical files, which is handled as intentional image
+     * sharing (see {@link DocRegistry#existsOtherBySha256}).
+     */
+    private static final int IMAGE_ID_LENGTH = 16;
+
+    private String imageId(String sha256) {
+        return sha256.substring(0, Math.min(IMAGE_ID_LENGTH, sha256.length()));
     }
 
     private String inferDocType(String filename) {

@@ -3,6 +3,7 @@ package com.example.ragagent.config;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 import java.util.List;
+import java.util.Locale;
 
 @ConfigurationProperties(prefix = "app")
 public record AppProperties(
@@ -38,7 +39,8 @@ public record AppProperties(
         Boolean searchQueryEmbedCacheEnabled,   // 쿼리 임베딩 캐시 on/off (기본 true)
         Integer searchQueryEmbedCacheMaxSize,   // 쿼리 임베딩 캐시 최대 엔트리 수 (기본 500)
         Integer searchQueryEmbedCacheTtlSeconds, // 쿼리 임베딩 캐시 TTL 초 (기본 600 = 10분)
-        PptxShapeExtractionConfig pptxImage     // PPTX 그리기 도구 도형 래스터라이즈/클러스터링 튜닝
+        PptxShapeExtractionConfig pptxImage,    // PPTX 그리기 도구 도형 래스터라이즈/클러스터링 튜닝
+        String mdCorrectionDefaultCodeLanguage  // MD 교정 시 LLM이 미펜스 코드를 감쌀 때 언어 판단이 어려우면 붙일 기본 언어 (java/bash/sql, 기본 java)
 ) {
     public record LlmConfig(
             List<ProviderConfig> providers,
@@ -46,7 +48,9 @@ public record AppProperties(
             int connectTimeoutSeconds,
             int readTimeoutSeconds,
             String defaultRoutingMode,
-            double progressiveThreshold
+            double progressiveThreshold,
+            int defaultProviderConcurrency,  // per-provider concurrency gate default (matches the server's --parallel), fallback when a provider omits its own `concurrency`
+            int permitWaitTimeoutSeconds     // max wait for a concurrency slot on the query path before failing fast with 429 (default 20s, well under the 180s read-timeout)
     ) {}
 
     public record ProviderConfig(
@@ -57,7 +61,8 @@ public record AppProperties(
             String type,
             String role,
             int priority,
-            Boolean stream
+            Boolean stream,
+            Integer concurrency  // this provider's own concurrency slots; null/<=0 falls back to LlmConfig.defaultProviderConcurrency
     ) {}
 
     public record IndexingConfig(
@@ -99,7 +104,12 @@ public record AppProperties(
     ) {}
 
     public record AuthConfig(
-            boolean enabled          // false → no-auth mode (guest/admin auto-login)
+            boolean enabled,         // false → no-auth mode (guest/admin auto-login)
+            boolean managementOnly   // §6.17 B안 — only meaningful when enabled=false; authSafe() normalizes
+                                     // this to false whenever enabled=true, so it's the only place that rule
+                                     // needs to be known. true → /admin/** + document-write UI require a real
+                                     // login (NoAuthAutoLoginFilter/SecurityConfig), everything else stays
+                                     // guest-auto-authenticated exactly like plain no-auth mode.
     ) {}
 
     /** 벡터 스토어 백엔드 선택. {@code type}: chroma (기본값) | sqlite-vec. */
@@ -125,7 +135,8 @@ public record AppProperties(
      */
     public record PptxShapeExtractionConfig(
             Double minShapeDimensionPt,       // 가로/세로 중 큰 쪽이 이 값 미만이면 아이콘/구분선으로 보고 제외 (기본 30)
-            Double clusterProximityPaddingPt  // 클러스터링 근접 판정 시 바운딩박스에 적용할 바깥쪽 패딩 (기본 15)
+            Double clusterProximityPaddingPt, // 클러스터링 근접 판정 시 바운딩박스에 적용할 바깥쪽 패딩 (기본 15)
+            Boolean mergeAnnotatedPictures    // true(기본): 사진도 근접 클러스터링에 참여해 겹친 주석 도형과 합성 / false: PPTX에서 실제 그룹(XSLFGroupShape)으로 묶인 경우만 합성, 그 외 사진은 항상 원본 그대로 추출
     ) {}
 
     public record ImageDescriptionProperties(
@@ -145,18 +156,86 @@ public record AppProperties(
         return imageDescription;
     }
 
+    // ── Runtime settings-override layer ───────────────────────────────────────
+    //
+    // A hot-editable value's xxxSafe() accessor consults this source FIRST (override → else the
+    // bound property default), so a change saved on the /settings page reaches the next search
+    // without a restart. AppProperties is an immutable @ConfigurationProperties record — it cannot
+    // take the store as a constructor arg (Spring binds it) nor hold a non-component instance field,
+    // so the source is a process-wide static bound by SettingsService at startup. When unbound
+    // (null — unit tests, or before SettingsService initializes) every accessor behaves exactly as
+    // before: the override lookup is a no-op. Only the keys in SettingsKeys are ever looked up here.
+
+    /** Supplies a raw override string for a settings key (see {@link SettingsKeys}), or null when unset. */
+    public interface OverrideSource {
+        String get(String key);
+    }
+
+    private static volatile OverrideSource overrideSource;
+
+    /** Bound once by {@code SettingsService} at startup; replaces any previously bound source. */
+    public static void bindOverrides(OverrideSource source) {
+        overrideSource = source;
+    }
+
+    /** Clears the bound source (used on shutdown and to isolate tests). */
+    public static void unbindOverrides() {
+        overrideSource = null;
+    }
+
+    private static String rawOverride(String key) {
+        OverrideSource s = overrideSource;
+        if (s == null) return null;
+        String v = s.get(key);
+        return (v == null || v.isBlank()) ? null : v.trim();
+    }
+
+    private static Double overrideDouble(String key) {
+        String v = rawOverride(key);
+        if (v == null) return null;
+        try { return Double.parseDouble(v); } catch (NumberFormatException e) { return null; }
+    }
+
+    private static Integer overrideInt(String key) {
+        String v = rawOverride(key);
+        if (v == null) return null;
+        try { return Integer.parseInt(v); } catch (NumberFormatException e) { return null; }
+    }
+
+    private static Boolean overrideBool(String key) {
+        String v = rawOverride(key);
+        if (v == null) return null;
+        if (v.equalsIgnoreCase("true"))  return Boolean.TRUE;
+        if (v.equalsIgnoreCase("false")) return Boolean.FALSE;
+        return null;
+    }
+
     /**
      * Similarity threshold for vector search, clamped to [0,1].
      * 0.0 = accept all (Spring AI default).
      */
     public double searchSimilarityThresholdSafe() {
-        if (searchSimilarityThreshold <= 0.0) return 0.0;
-        return Math.min(searchSimilarityThreshold, 1.0);
+        Double o = overrideDouble(SettingsKeys.SEARCH_SIMILARITY_THRESHOLD);
+        double base = (o != null) ? o : searchSimilarityThreshold;
+        if (base <= 0.0) return 0.0;
+        return Math.min(base, 1.0);
     }
 
     /** Query length (chars) at/above which multi-query expansion runs. Clamped to >= 0 (0 = no length gate). */
     public int searchMultiqueryMinLengthSafe() {
-        return Math.max(0, searchMultiqueryMinLength);
+        Integer o = overrideInt(SettingsKeys.SEARCH_MULTIQUERY_MIN_LENGTH);
+        return Math.max(0, o != null ? o : searchMultiqueryMinLength);
+    }
+
+    /**
+     * Retry-escalation toggle for candidate expansion on retry (hot-editable via /settings). Plain boolean
+     * with an override hook — no clamping, so the accessor exists purely to route through the
+     * override layer. {@code searchRetryEscalate()} raw getter must not be called elsewhere
+     * (AppPropertiesSafeAccessorTest enforces this).
+     */
+    public boolean searchRetryEscalateSafe() {
+        Boolean o = overrideBool(SettingsKeys.SEARCH_RETRY_ESCALATE);
+        return o != null ? o : searchRetryEscalate;
     }
 
     /** Minimum chunk length used by post-merge compaction. Falls back to chunkOverlap for backward compatibility. */
@@ -167,23 +246,29 @@ public record AppProperties(
 
     /** Candidate pool multiplier for reranking. Clamped to >= 1 to avoid empty pools. */
     public int searchCandidateMultiplierSafe() {
-        return Math.max(1, searchCandidateMultiplier);
+        Integer o = overrideInt(SettingsKeys.SEARCH_CANDIDATE_MULTIPLIER);
+        return Math.max(1, o != null ? o : searchCandidateMultiplier);
     }
 
     /** Candidate-expansion multiplier applied when tags are selected. Defaults to 2. */
     public int searchTagCandidateMultiplierSafe() {
-        return (searchTagCandidateMultiplier == null || searchTagCandidateMultiplier < 1)
-                ? 2 : searchTagCandidateMultiplier;
+        Integer o = overrideInt(SettingsKeys.SEARCH_TAG_CANDIDATE_MULTIPLIER);
+        Integer effective = (o != null) ? o : searchTagCandidateMultiplier;
+        return (effective == null || effective < 1) ? 2 : effective;
     }
 
     /** Weighted RRF — keyword (BM25) axis weight. Defaults to 1.0 (parity with the group-normalized vector axes). */
     public double searchRrfKeywordWeightSafe() {
-        return (searchRrfKeywordWeight != null && searchRrfKeywordWeight > 0) ? searchRrfKeywordWeight : 1.0;
+        Double o = overrideDouble(SettingsKeys.SEARCH_RRF_KEYWORD_WEIGHT);
+        Double effective = (o != null) ? o : searchRrfKeywordWeight;
+        return (effective != null && effective > 0) ? effective : 1.0;
     }
 
     /** Weighted RRF — rank-fusion constant k. Defaults to 60 (the original RRF paper's value). */
     public int searchRrfKSafe() {
-        return (searchRrfK != null && searchRrfK > 0) ? searchRrfK : 60;
+        Integer o = overrideInt(SettingsKeys.SEARCH_RRF_K);
+        Integer effective = (o != null) ? o : searchRrfK;
+        return (effective != null && effective > 0) ? effective : 60;
     }
 
     /** Query embedding cache on/off. Defaults to enabled. */
@@ -275,8 +360,11 @@ public record AppProperties(
     }
 
     public AuthConfig authSafe() {
-        if (auth == null) return new AuthConfig(true);
-        return auth;
+        if (auth == null) return new AuthConfig(true, false);
+        // managementOnly is only meaningful when auth is disabled — normalize here so every
+        // downstream consumer (SecurityConfig, NoAuthAutoLoginFilter, GlobalModelAdvice, ...)
+        // can trust authSafe().managementOnly() directly without re-deriving this rule.
+        return new AuthConfig(auth.enabled(), !auth.enabled() && auth.managementOnly());
     }
 
     /** Vector store backend, defaulting to {@code chroma}. (Bean wiring uses raw @ConditionalOnProperty.) */
@@ -311,26 +399,46 @@ public record AppProperties(
 
     /**
      * PPTX shape-rasterization tuning, defaulting to 30pt (min shape dimension) / 15pt (cluster
-     * proximity padding). Only falls back on an unset (null) field — an explicit 0 is honored
-     * (e.g. padding=0 to only bundle shapes that literally touch/overlap).
+     * proximity padding) / true (merge annotated pictures). Only falls back on an unset (null)
+     * field — an explicit 0 (padding) or false (mergeAnnotatedPictures) is honored (e.g. padding=0
+     * to only bundle shapes that literally touch/overlap).
      */
     public PptxShapeExtractionConfig pptxImageSafe() {
         double minDim = (pptxImage != null && pptxImage.minShapeDimensionPt() != null && pptxImage.minShapeDimensionPt() >= 0)
                 ? pptxImage.minShapeDimensionPt() : 30.0;
         double padding = (pptxImage != null && pptxImage.clusterProximityPaddingPt() != null && pptxImage.clusterProximityPaddingPt() >= 0)
                 ? pptxImage.clusterProximityPaddingPt() : 15.0;
-        return new PptxShapeExtractionConfig(minDim, padding);
+        boolean mergeAnnotatedPictures = (pptxImage != null && pptxImage.mergeAnnotatedPictures() != null)
+                ? pptxImage.mergeAnnotatedPictures() : true;
+        return new PptxShapeExtractionConfig(minDim, padding, mergeAnnotatedPictures);
+    }
+
+    /**
+     * Default language tag the correction LLM is told to use when it wraps unfenced code/logs into a
+     * code block and can't determine the language ({@link com.example.ragagent.service.MarkdownCorrectionService}).
+     * Restricted to java/bash/sql (this project's own stack) — any other configured value (including
+     * unset/blank) falls back to {@code "java"}.
+     */
+    public String mdCorrectionDefaultCodeLanguageSafe() {
+        String v = mdCorrectionDefaultCodeLanguage == null ? "" : mdCorrectionDefaultCodeLanguage.strip().toLowerCase(Locale.ROOT);
+        return switch (v) {
+            case "java", "bash", "sql" -> v;
+            default -> "java";
+        };
     }
 
     /** Null-safe accessor — returns an empty LlmConfig when app.llm is not configured. */
     public LlmConfig llmSafe() {
-        if (llm == null) return new LlmConfig(List.of(), 2, 10, 180, "COST_FIRST", 0.6);
+        if (llm == null) return new LlmConfig(List.of(), 2, 10, 180, "COST_FIRST", 0.6, 3, 20);
         List<ProviderConfig> providers = llm.providers() != null ? llm.providers() : List.of();
         int minutes = llm.circuitBreakerMinutes() > 0 ? llm.circuitBreakerMinutes() : 2;
                 int connectTimeout = llm.connectTimeoutSeconds() > 0 ? llm.connectTimeoutSeconds() : 10;
                 int readTimeout = llm.readTimeoutSeconds() > 0 ? llm.readTimeoutSeconds() : 180;
         String mode = llm.defaultRoutingMode() != null ? llm.defaultRoutingMode() : "COST_FIRST";
         double threshold = llm.progressiveThreshold() > 0 ? llm.progressiveThreshold() : 0.6;
-                return new LlmConfig(providers, minutes, connectTimeout, readTimeout, mode, threshold);
+        int defaultProviderConcurrency = llm.defaultProviderConcurrency() > 0 ? llm.defaultProviderConcurrency() : 3;
+        int permitWaitTimeoutSeconds = llm.permitWaitTimeoutSeconds() > 0 ? llm.permitWaitTimeoutSeconds() : 20;
+                return new LlmConfig(providers, minutes, connectTimeout, readTimeout, mode, threshold,
+                        defaultProviderConcurrency, permitWaitTimeoutSeconds);
     }
 }

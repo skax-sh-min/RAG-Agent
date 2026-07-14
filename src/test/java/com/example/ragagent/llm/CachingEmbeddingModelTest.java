@@ -12,8 +12,15 @@ import org.springframework.ai.embedding.EmbeddingResponse;
 import org.springframework.ai.embedding.EmbeddingResponseMetadata;
 
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -21,12 +28,15 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * QA — CachingEmbeddingModel query-embedding cache decorator (§10.3)
+ * QA — CachingEmbeddingModel query-embedding cache decorator (§10.3) + in-flight
+ * single-flight dedup.
  *
  * Covers: repeated text hits the cache and skips the delegate entirely (so a
  * TrackingEmbeddingModel delegate records no usage on a hit), a partial hit only
  * forwards the missing texts to the delegate (in the right order/mapping), embed(Document)
- * benefits from the cache the same as embed(String), and dimensions() bypasses the cache.
+ * benefits from the cache the same as embed(String), dimensions() bypasses the cache, and
+ * concurrent calls for the exact same (not-yet-cached) text collapse into a single delegate
+ * call instead of each recomputing independently.
  */
 class CachingEmbeddingModelTest {
 
@@ -113,5 +123,100 @@ class CachingEmbeddingModelTest {
 
         assertThat(model.dimensions()).isEqualTo(768);
         verify(delegate, never()).call(any());
+    }
+
+    // ── In-flight single-flight ─────────────────────────────────────────────
+
+    @Test
+    @DisplayName("동시에 도착한 동일 텍스트 요청은 delegate를 한 번만 호출하고 결과를 공유한다")
+    void concurrentIdenticalTextSingleFlights() throws Exception {
+        CountDownLatch delegateEntered = new CountDownLatch(1);
+        CountDownLatch releaseDelegate = new CountDownLatch(1);
+        AtomicInteger callCount = new AtomicInteger();
+        EmbeddingModel racyDelegate = mock(EmbeddingModel.class);
+        when(racyDelegate.call(any())).thenAnswer(inv -> {
+            callCount.incrementAndGet();
+            delegateEntered.countDown();
+            assertThat(releaseDelegate.await(5, TimeUnit.SECONDS)).isTrue();
+            return responseFor(new float[]{7f});
+        });
+        var model = new CachingEmbeddingModel(racyDelegate, "nomic", 500, 600);
+
+        ExecutorService exec = Executors.newFixedThreadPool(2);
+        try {
+            Future<EmbeddingResponse> f1 = exec.submit(() ->
+                    model.call(new EmbeddingRequest(List.of("same question"), null)));
+            assertThat(delegateEntered.await(5, TimeUnit.SECONDS)).isTrue();
+            Future<EmbeddingResponse> f2 = exec.submit(() ->
+                    model.call(new EmbeddingRequest(List.of("same question"), null)));
+            // Give f2's thread a moment to reach the in-flight check and register as a joiner
+            // before releasing f1 — see the failure-propagation test below for why this matters.
+            Thread.sleep(200);
+            releaseDelegate.countDown();
+
+            assertThat(f1.get(5, TimeUnit.SECONDS).getResults().get(0).getOutput()).isEqualTo(new float[]{7f});
+            assertThat(f2.get(5, TimeUnit.SECONDS).getResults().get(0).getOutput()).isEqualTo(new float[]{7f});
+            assertThat(callCount.get()).isEqualTo(1);
+        } finally {
+            exec.shutdown();
+        }
+    }
+
+    @Test
+    @DisplayName("owner 호출 실패 시 join 중이던 호출에도 예외가 전파되고, in-flight 항목은 정리되어 다음 호출은 재시도한다")
+    void concurrentFailurePropagatesToJoinerAndClearsInFlight() throws Exception {
+        CountDownLatch delegateEntered = new CountDownLatch(1);
+        CountDownLatch releaseDelegate = new CountDownLatch(1);
+        AtomicInteger callCount = new AtomicInteger();
+        EmbeddingModel racyDelegate = mock(EmbeddingModel.class);
+        when(racyDelegate.call(any())).thenAnswer(inv -> {
+            int n = callCount.incrementAndGet();
+            if (n == 1) {
+                delegateEntered.countDown();
+                assertThat(releaseDelegate.await(5, TimeUnit.SECONDS)).isTrue();
+                throw new RuntimeException("boom");
+            }
+            return responseFor(new float[]{9f});
+        });
+        var model = new CachingEmbeddingModel(racyDelegate, "nomic", 500, 600);
+
+        ExecutorService exec = Executors.newFixedThreadPool(2);
+        try {
+            Future<EmbeddingResponse> f1 = exec.submit(() ->
+                    model.call(new EmbeddingRequest(List.of("boom text"), null)));
+            assertThat(delegateEntered.await(5, TimeUnit.SECONDS)).isTrue();
+            Future<EmbeddingResponse> f2 = exec.submit(() ->
+                    model.call(new EmbeddingRequest(List.of("boom text"), null)));
+            // Give f2's thread a moment to reach the in-flight check and register as a joiner
+            // before f1 is released — otherwise f1 may complete/fail and clear the in-flight
+            // entry before f2 gets there, making f2 race to become a (second) owner instead.
+            Thread.sleep(200);
+            releaseDelegate.countDown();
+
+            assertThatThrownBy(() -> f1.get(5, TimeUnit.SECONDS)).hasRootCauseMessage("boom");
+            assertThatThrownBy(() -> f2.get(5, TimeUnit.SECONDS)).hasRootCauseMessage("boom");
+
+            EmbeddingResponse retry = model.call(new EmbeddingRequest(List.of("boom text"), null));
+            assertThat(retry.getResults().get(0).getOutput()).isEqualTo(new float[]{9f});
+            assertThat(callCount.get()).isEqualTo(2);
+        } finally {
+            exec.shutdown();
+        }
+    }
+
+    @Test
+    @DisplayName("같은 요청 안에 동일 텍스트가 중복돼도 데드락 없이 delegate에는 한 번만 전달된다")
+    void duplicateTextWithinSameRequestDoesNotDeadlock() {
+        when(delegate.call(any())).thenReturn(responseFor(new float[]{5f}));
+        var model = new CachingEmbeddingModel(delegate, "nomic", 500, 600);
+
+        EmbeddingResponse response = model.call(new EmbeddingRequest(List.of("dup", "dup"), null));
+
+        assertThat(response.getResults()).hasSize(2);
+        assertThat(response.getResults().get(0).getOutput()).isEqualTo(new float[]{5f});
+        assertThat(response.getResults().get(1).getOutput()).isEqualTo(new float[]{5f});
+        var captor = org.mockito.ArgumentCaptor.forClass(EmbeddingRequest.class);
+        verify(delegate, org.mockito.Mockito.times(1)).call(captor.capture());
+        assertThat(captor.getValue().getInstructions()).containsExactly("dup");
     }
 }

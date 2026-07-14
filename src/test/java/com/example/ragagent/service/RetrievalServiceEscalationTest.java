@@ -50,7 +50,7 @@ class RetrievalServiceEscalationTest {
         when(props.searchMultiqueryEnabled()).thenReturn(false);
         when(props.searchMultiqueryMinLengthSafe()).thenReturn(0);
         when(props.searchHybridEnabled()).thenReturn(false);
-        when(props.searchRetryEscalate()).thenReturn(escalate);
+        when(props.searchRetryEscalateSafe()).thenReturn(escalate);
         when(props.searchRerankEnabled()).thenReturn(false);
         when(props.searchCandidateMultiplierSafe()).thenReturn(3);
 
@@ -115,7 +115,7 @@ class RetrievalServiceEscalationTest {
         when(props.searchMultiqueryEnabled()).thenReturn(false);
         when(props.searchMultiqueryMinLengthSafe()).thenReturn(0);
         when(props.searchHybridEnabled()).thenReturn(false);
-        when(props.searchRetryEscalate()).thenReturn(true);
+        when(props.searchRetryEscalateSafe()).thenReturn(true);
         when(props.searchRerankEnabled()).thenReturn(false);
         when(props.searchCandidateMultiplierSafe()).thenReturn(3);
 

@@ -22,6 +22,17 @@ public class ChunkSplitter {
 
     private static final Logger log = LoggerFactory.getLogger(ChunkSplitter.class);
 
+    /**
+     * Inline markers noting that a fenced code block was cut across a chunk boundary — inserted
+     * as plain text lines outside the fence (never inside it, so the code content itself stays
+     * byte-for-byte reproducible). Since {@code Document.getText()} is stored/displayed verbatim
+     * (source citation, {@code /admin} chunk view), these are visible there as-is, and since they
+     * also flow into {@link SearchTextBuilder}'s embedding/FTS input like any other chunk text, a
+     * query such as "함수 뒷부분" can still surface the neighboring chunk.
+     */
+    static final String CODE_CONTINUATION_BEFORE = "[코드 이어짐: 이전 청크에서 계속]";
+    static final String CODE_CONTINUATION_AFTER  = "[코드 이어짐: 다음 청크로 계속]";
+
     public List<Document> splitDocuments(List<Document> docs, String filename,
                                           int chunkSize, int overlap, int minChunkSize) {
         return splitDocuments(docs, filename, chunkSize, overlap, minChunkSize, 0);
@@ -330,17 +341,19 @@ public class ChunkSplitter {
     /**
      * When a sliding-window boundary falls inside a table or fenced code block too large to keep
      * whole (see {@link #adjustEndForCodeBlock}/{@link #adjustEndForTableBlock}, which only snap
-     * boundaries when doing so is cheap), the piece starting at {@code start} continues mid-block
-     * with no header row / opening fence — it reads as a headerless data row or a bare code
-     * fragment with no language context. Detects that case and re-wraps the piece so it is
+     * boundaries when doing so is cheap), the piece reads as a headerless data row or a bare code
+     * fragment with no language context — and, for code, gives no indication that the block
+     * continues in a neighboring chunk. Detects that case and re-wraps the piece so it is
      * self-contained: table pieces get the original header+separator row prepended; code pieces
-     * get the original opening fence line prepended, plus a closing fence appended if the block
-     * doesn't close within this piece. No-op when {@code start} isn't a continuation of either.
+     * get the original opening fence line prepended (when this piece doesn't contain the block's
+     * real start) and a closing fence appended (when the block doesn't close within this piece) —
+     * either side also gets a {@link #CODE_CONTINUATION_BEFORE}/{@link #CODE_CONTINUATION_AFTER}
+     * marker line. No-op when {@code start}/{@code end} aren't a continuation of either.
      */
     String reopenTruncatedBlock(String fullText, int start, int end, String chunk) {
         Range codeRange = findFencedCodeRangeContaining(fullText, start + 1);
-        if (codeRange != null && codeRange.start() < start) {
-            return reopenCodeFence(fullText, codeRange, end, chunk);
+        if (codeRange != null && (codeRange.start() < start || end < codeRange.end())) {
+            return reopenCodeFence(fullText, codeRange, start, end, chunk);
         }
         Range tableRange = findTableRangeContaining(fullText, start + 1);
         if (tableRange != null && tableRange.start() < start) {
@@ -349,14 +362,27 @@ public class ChunkSplitter {
         return chunk;
     }
 
-    String reopenCodeFence(String fullText, Range codeRange, int chunkEnd, String chunk) {
-        int fenceLineEnd = fullText.indexOf('\n', codeRange.start());
-        if (fenceLineEnd == -1) fenceLineEnd = fullText.length();
-        String openingFenceLine = fullText.substring(codeRange.start(), fenceLineEnd).strip();
+    /**
+     * Re-wraps a code-fence piece and annotates it with {@link #CODE_CONTINUATION_BEFORE}/
+     * {@link #CODE_CONTINUATION_AFTER} markers as plain text lines outside the fence — never
+     * inside it, so the reconstructed code content stays exactly what {@code fullText} had.
+     */
+    String reopenCodeFence(String fullText, Range codeRange, int chunkStart, int chunkEnd, String chunk) {
+        boolean continuesFromBefore = codeRange.start() < chunkStart;
+        boolean continuesAfter = chunkEnd < codeRange.end();
 
-        StringBuilder sb = new StringBuilder(openingFenceLine).append('\n').append(chunk);
-        if (chunkEnd < codeRange.end()) {
-            sb.append("\n```"); // block doesn't close within this piece — close it so it stays valid
+        StringBuilder sb = new StringBuilder();
+        if (continuesFromBefore) {
+            int fenceLineEnd = fullText.indexOf('\n', codeRange.start());
+            if (fenceLineEnd == -1) fenceLineEnd = fullText.length();
+            String openingFenceLine = fullText.substring(codeRange.start(), fenceLineEnd).strip();
+            sb.append(CODE_CONTINUATION_BEFORE).append('\n').append(openingFenceLine).append('\n');
+        }
+        sb.append(chunk);
+        if (continuesAfter) {
+            // block doesn't close within this piece — close it so it stays valid, then note the
+            // continuation (marker sits after the fence, not inside it).
+            sb.append("\n```\n").append(CODE_CONTINUATION_AFTER);
         }
         return sb.toString();
     }

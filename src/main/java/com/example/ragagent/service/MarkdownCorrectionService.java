@@ -47,10 +47,15 @@ public class MarkdownCorrectionService {
     private static final Pattern IMAGE_MARKER = Pattern.compile("\\[이미지:\\s*([^\\]]+)]");
     private static final Pattern FENCED_BLOCK = Pattern.compile("(?s)```(.*?)\\n(.*?)\\n```");
     private static final Pattern HEADING_NUMBER_PREFIX = Pattern.compile("^(?:\\d+(?:\\.\\d+)*(?:\\.)?|\\d+[\\)])\\s+");
+    /** Lines of the next section sent as read-only forward context during correction (§ code-fence continuity). */
+    private static final int LOOKAHEAD_LINES = 8;
+    /** Sentinel separating a section from its appended lookahead preview; the response is cut here. */
+    private static final String SECTION_BOUNDARY = "<<<SECTION_END>>>";
 
     private final LlmRouter llmRouter;
     private final int maxConcurrent;
     private final int maxSectionChars;
+    private final String defaultCodeLanguage;
 
     public MarkdownCorrectionService(LlmRouter llmRouter,
                                      AppProperties props,
@@ -58,6 +63,7 @@ public class MarkdownCorrectionService {
         this.llmRouter = llmRouter;
         this.maxConcurrent = Math.max(1, props.indexingSafe().maxConcurrentLlmCalls());
         this.maxSectionChars = Math.max(MIN_SECTION_CHARS, (llmMaxTokens - MIN_SECTION_CHARS) / 2);
+        this.defaultCodeLanguage = props.mdCorrectionDefaultCodeLanguageSafe();
     }
 
     /**
@@ -115,22 +121,28 @@ public class MarkdownCorrectionService {
         AtomicInteger doneCount = new AtomicInteger(0);
         List<String> corrected;
         try (var exec = Executors.newVirtualThreadPerTaskExecutor()) {
-            corrected = sections.stream()
-                .map(sec -> CompletableFuture.supplyAsync(() -> {
+            List<CompletableFuture<String>> futures = new ArrayList<>(sections.size());
+            for (int i = 0; i < sections.size(); i++) {
+                final String sec = sections.get(i);
+                // Forward lookahead: the first few lines of the NEXT section, sent as read-only
+                // context so a section that ends mid-code-block (esp. an unfenced one whose "##"
+                // lines were mistaken for headings at the split) can see it continues and fence it
+                // correctly. The lookahead is trimmed back off the LLM response — see correctSection.
+                final String lookahead = (i + 1 < sections.size())
+                        ? lookaheadLines(sections.get(i + 1), LOOKAHEAD_LINES) : "";
+                futures.add(CompletableFuture.supplyAsync(() -> {
                     gate.acquireUninterruptibly();
                     try {
-                        String result = correctSection(sec);
+                        String result = correctSection(sec, lookahead);
                         int done = doneCount.incrementAndGet();
                         if (onSectionDone != null) onSectionDone.accept(done, total);
                         return result;
                     } finally {
                         gate.release();
                     }
-                }, exec))
-                .toList()
-                .stream()
-                .map(CompletableFuture::join)
-                .toList();
+                }, exec));
+            }
+            corrected = futures.stream().map(CompletableFuture::join).toList();
         } catch (CompletionException ce) {
             if (ce.getCause() instanceof LlmProviderExhaustedException) {
                 log.info("[MD_CORRECT] LLM 사용 불가, 원본 유지: docId={}", docId);
@@ -220,11 +232,36 @@ public class MarkdownCorrectionService {
         return sections;
     }
 
-    private String correctSection(String section) {
+    /** Package-private for unit testing. Corrects a single section with no lookahead context. */
+    String correctSection(String section) {
+        return correctSection(section, "");
+    }
+
+    /**
+     * Corrects one section's formatting. When {@code lookahead} (the opening lines of the next
+     * section) is non-blank it is appended after a {@link #SECTION_BOUNDARY} marker as read-only
+     * continuity context: it lets the LLM see whether a code block continues past this section's
+     * end so it can fence unfenced code correctly, and is trimmed back off the response at the
+     * marker. If the model drops the marker, we re-correct without lookahead so the preview can
+     * never leak into the stored output. Package-private for unit testing.
+     */
+    String correctSection(String section, String lookahead) {
         if (section == null || section.isBlank()) return section;
         String safeSection = section.replace("[/DOCUMENT]", "");
-        log.debug("[MD_CORRECT] 섹션 교정 시작: {}자", safeSection.length());
-        String prompt = """
+        boolean hasLookahead = lookahead != null && !lookahead.isBlank();
+        String body = hasLookahead
+                ? safeSection + "\n" + SECTION_BOUNDARY + "\n" + lookahead.replace("[/DOCUMENT]", "")
+                : safeSection;
+        log.debug("[MD_CORRECT] 섹션 교정 시작: {}자 (lookahead={})", safeSection.length(), hasLookahead);
+
+        String boundaryNote = hasLookahead ? ("""
+
+                [미리보기 처리]
+                - `%s` 줄 뒤의 텍스트는 '다음 섹션 미리보기'입니다. 문맥 파악(특히 코드 블록이 다음으로 이어지는지 판단)에만 사용하고, 교정 결과에는 절대 포함하지 마세요.
+                - 교정 결과의 맨 끝에 `%s` 줄만 그대로 한 번 남기고, 그 뒤에는 아무것도 쓰지 마세요.""")
+                .formatted(SECTION_BOUNDARY, SECTION_BOUNDARY) : "";
+
+        String prompt = ("""
                 당신은 문서 편집자입니다. 다음 마크다운 텍스트의 형식(포맷)만 교정하세요.
                 - 내용(사실, 데이터, 수치, 의미)을 변경 절대 금지
 
@@ -233,21 +270,33 @@ public class MarkdownCorrectionService {
                 - 명백한 오타 수정
                 - 표(table)는 변경 금지
                 - 마커 형식 유지: [이미지: ...], [이미지(변환불가): ...], [헤딩페이지: N], [페이지: N]을 그대로 둘 것
-                - 이미 코드 블록(```)으로 감싸인 내용은 그대로 유지: 언어 태그가 이미 있으면 유지 (코드 블록 안에 로그, 일반 텍스트 출력은 그대로 유지)
+                - 코드/로그/명령어(CLI)/설정 파일처럼 보이지만 코드 블록(```)으로 감싸이지 않은 부분은 반드시 코드 블록으로 감싸세요. 언어를 알 수 있으면 그 언어 태그를, 판단이 어려우면 `%s` 태그를 사용하세요.
+                - 코드/로그 안에서 "#", "##", "###"으로 시작하는 줄은 마크다운 제목이 아니라 코드 내용(주석·배너·출력)입니다. 반드시 코드 블록 안에 두고 제목으로 바꾸지 마세요.
+                - 이미 코드 블록(```)으로 감싸인 내용은 그대로 유지: 언어 태그가 이미 있으면 유지 (코드 블록 안의 로그·일반 텍스트 출력은 그대로 유지)
                 - 코드 블록(```) 내부의 불필요한 공란을 줄이고, 빈 줄 최소화로 가독성을 높일 것 (의미는 변경 금지)
                 - 연속된 빈 줄 1개로 정리
-                - 응답에 [DOCUMENT], [/DOCUMENT] 같은 구분자를 절대 포함하지 말 것
+                - 응답에 [DOCUMENT], [/DOCUMENT] 같은 구분자를 절대 포함하지 말 것%s
 
                 교정된 마크다운만 반환하세요. 설명이나 주석을 추가하지 마세요.
 
                 [DOCUMENT]
                 %s
-                [/DOCUMENT]""".formatted(safeSection);
+                [/DOCUMENT]""").formatted(defaultCodeLanguage, boundaryNote, body);
         try {
             String result = llmRouter.executeWithTracking(
                     TaskType.LIGHT_TEXT, RoutingMode.COST_FIRST, BackgroundUsage.MDCORRECT_PREFIX,
                     model -> model.call(new Prompt(prompt)));
             log.debug("[MD_CORRECT] 섹션 교정 완료: {}자 → {}자", safeSection.length(), result.length());
+            if (hasLookahead) {
+                int idx = result.indexOf(SECTION_BOUNDARY);
+                if (idx > 0) {
+                    return result.substring(0, idx).stripTrailing();
+                }
+                // Marker dropped/misplaced → the response may hold the next-section preview with no
+                // reliable cut point. Re-correct without lookahead so nothing leaks across sections.
+                log.debug("[MD_CORRECT] 경계 마커 누락 — lookahead 없이 재교정");
+                return correctSection(section, "");
+            }
             return result;
         } catch (LlmProviderExhaustedException e) {
             throw e;
@@ -255,6 +304,19 @@ public class MarkdownCorrectionService {
             log.warn("[MD_CORRECT] 섹션 교정 실패, 원본 유지: {}", e.getMessage());
             return section;
         }
+    }
+
+    /** First {@code maxLines} lines of a section — read-only forward context for {@link #correctSection}. */
+    private static String lookaheadLines(String nextSection, int maxLines) {
+        if (nextSection == null || nextSection.isBlank()) return "";
+        String[] lines = nextSection.split("\n", -1);
+        int n = Math.min(maxLines, lines.length);
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < n; i++) {
+            if (i > 0) sb.append('\n');
+            sb.append(lines[i]);
+        }
+        return sb.toString();
     }
 
     private String augmentImageDescriptionsWithLocalVision(String md, Path correctedOutputPath) {

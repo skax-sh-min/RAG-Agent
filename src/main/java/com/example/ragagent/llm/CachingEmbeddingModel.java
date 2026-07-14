@@ -11,6 +11,9 @@ import org.springframework.ai.embedding.EmbeddingResponse;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Decorates the primary {@link EmbeddingModel} bean with a Caffeine cache keyed on
@@ -26,6 +29,15 @@ import java.util.List;
  * request to learn it); doing that eagerly in this constructor would add a new startup-time
  * dependency on the embedding server being reachable.
  *
+ * <p><b>In-flight single-flight</b>: a text that's already being fetched by another
+ * concurrent {@link #call(EmbeddingRequest)} (e.g. two users asking the same question at
+ * nearly the same moment) is <em>not</em> re-sent to the delegate — the second caller joins
+ * the first caller's in-flight {@link CompletableFuture} and reuses its result. Only exactly
+ * identical (post-normalization) text collapses this way; near-duplicate questions still miss
+ * (that's §10.5 semantic-cache territory, currently deferred). Texts that are simultaneously
+ * new within the *same* request are still batched into one delegate call, same as before —
+ * single-flight only affects cross-call races on the same key.
+ *
  * <p>Only {@link #call(EmbeddingRequest)} is overridden; every other {@link EmbeddingModel}
  * method is a default that funnels into {@code this.call(...)}, mirroring
  * {@link TrackingEmbeddingModel}'s approach. Indexing calls (unique chunk text, rarely
@@ -36,6 +48,7 @@ public class CachingEmbeddingModel implements EmbeddingModel {
 
     private final EmbeddingModel delegate;
     private final Cache<String, float[]> cache;
+    private final ConcurrentHashMap<String, CompletableFuture<float[]>> inFlight = new ConcurrentHashMap<>();
     private final String cacheKeyPrefix;
 
     public CachingEmbeddingModel(EmbeddingModel delegate, String modelName, int maximumSize, int ttlSeconds) {
@@ -50,31 +63,66 @@ public class CachingEmbeddingModel implements EmbeddingModel {
     @Override
     public EmbeddingResponse call(EmbeddingRequest request) {
         List<String> texts = request.getInstructions();
-        float[][] outputs = new float[texts.size()][];
-        List<Integer> missIndexes = new ArrayList<>();
-        List<String> missTexts = new ArrayList<>();
-        for (int i = 0; i < texts.size(); i++) {
-            float[] cached = cache.getIfPresent(cacheKey(texts.get(i)));
+        int n = texts.size();
+        float[][] outputs = new float[n][];
+
+        // Texts this call must actually fetch (not cached, and no other in-flight call already
+        // owns them) — batched into a single delegate call, same as the pre-single-flight behavior.
+        List<Integer> ownedIndexes = new ArrayList<>();
+        List<String> ownedTexts = new ArrayList<>();
+        List<String> ownedKeys = new ArrayList<>();
+        List<CompletableFuture<float[]>> ownedFutures = new ArrayList<>();
+
+        // Texts owned by another concurrent call — this call just joins their future.
+        List<Integer> joinedIndexes = new ArrayList<>();
+        List<CompletableFuture<float[]>> joinedFutures = new ArrayList<>();
+
+        for (int i = 0; i < n; i++) {
+            String key = cacheKey(texts.get(i));
+            float[] cached = cache.getIfPresent(key);
             if (cached != null) {
                 outputs[i] = cached;
+                continue;
+            }
+            CompletableFuture<float[]> ownFuture = new CompletableFuture<>();
+            CompletableFuture<float[]> existing = inFlight.putIfAbsent(key, ownFuture);
+            if (existing != null) {
+                joinedIndexes.add(i);
+                joinedFutures.add(existing);
             } else {
-                missIndexes.add(i);
-                missTexts.add(texts.get(i));
+                ownedIndexes.add(i);
+                ownedTexts.add(texts.get(i));
+                ownedKeys.add(key);
+                ownedFutures.add(ownFuture);
             }
         }
 
-        if (!missTexts.isEmpty()) {
-            EmbeddingResponse response = delegate.call(new EmbeddingRequest(missTexts, request.getOptions()));
-            List<Embedding> results = response.getResults();
-            for (int j = 0; j < missIndexes.size(); j++) {
-                float[] output = results.get(j).getOutput();
-                outputs[missIndexes.get(j)] = output;
-                cache.put(cacheKey(missTexts.get(j)), output);
+        if (!ownedTexts.isEmpty()) {
+            try {
+                EmbeddingResponse response = delegate.call(new EmbeddingRequest(ownedTexts, request.getOptions()));
+                List<Embedding> results = response.getResults();
+                for (int j = 0; j < ownedTexts.size(); j++) {
+                    float[] output = results.get(j).getOutput();
+                    outputs[ownedIndexes.get(j)] = output;
+                    cache.put(ownedKeys.get(j), output);
+                    ownedFutures.get(j).complete(output);
+                }
+            } catch (RuntimeException e) {
+                for (CompletableFuture<float[]> f : ownedFutures) f.completeExceptionally(e);
+                throw e;
+            } finally {
+                for (int j = 0; j < ownedKeys.size(); j++) {
+                    inFlight.remove(ownedKeys.get(j), ownedFutures.get(j));
+                }
             }
         }
 
-        List<Embedding> merged = new ArrayList<>(outputs.length);
-        for (int i = 0; i < outputs.length; i++) {
+        for (int j = 0; j < joinedIndexes.size(); j++) {
+            outputs[joinedIndexes.get(j)] = join(joinedFutures.get(j));
+        }
+
+        List<Embedding> merged = new ArrayList<>(n);
+        for (int i = 0; i < n; i++) {
             merged.add(new Embedding(outputs[i], i));
         }
         return new EmbeddingResponse(merged);
@@ -88,6 +136,16 @@ public class CachingEmbeddingModel implements EmbeddingModel {
     @Override
     public int dimensions() {
         return delegate.dimensions();
+    }
+
+    private static float[] join(CompletableFuture<float[]> future) {
+        try {
+            return future.join();
+        } catch (CompletionException e) {
+            Throwable cause = e.getCause();
+            if (cause instanceof RuntimeException re) throw re;
+            throw e;
+        }
     }
 
     private String cacheKey(String text) {

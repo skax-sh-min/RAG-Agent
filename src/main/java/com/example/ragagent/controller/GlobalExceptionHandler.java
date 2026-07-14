@@ -48,6 +48,9 @@ public class GlobalExceptionHandler {
         pd.setProperty("traceId", traceId);
 
         ResponseEntity.BodyBuilder builder = ResponseEntity.status(ex.httpStatus());
+        if (ex.retryAfterSeconds() >= 0) {
+            builder = builder.header("Retry-After", String.valueOf(ex.retryAfterSeconds()));
+        }
         if (req.getHeader("HX-Request") != null) {
             builder = builder.header("HX-Reswap", "none");
         }

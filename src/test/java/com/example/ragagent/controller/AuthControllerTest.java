@@ -70,7 +70,7 @@ class AuthControllerTest {
 
     @BeforeEach
     void setUp() {
-        when(props.authSafe()).thenReturn(new AppProperties.AuthConfig(true));
+        when(props.authSafe()).thenReturn(new AppProperties.AuthConfig(true, false));
     }
 
     // ── GET /login ──────────────────────────────────────────────────────────
@@ -102,7 +102,7 @@ class AuthControllerTest {
     @Test
     @DisplayName("GET /login — no-auth 모드에서는 redirect:/ (CSRF 비활성화로 템플릿이 깨짐 방지)")
     void loginPage_noAuthMode_redirectsToRoot() throws Exception {
-        when(props.authSafe()).thenReturn(new AppProperties.AuthConfig(false));
+        when(props.authSafe()).thenReturn(new AppProperties.AuthConfig(false, false));
 
         mvc.perform(get("/login"))
                 .andExpect(status().is3xxRedirection())
@@ -110,9 +110,29 @@ class AuthControllerTest {
     }
 
     @Test
+    @DisplayName("GET /login — §6.17 B안 management-only 모드에서는 200 OK (CSRF 활성이라 템플릿이 안전함)")
+    void loginPage_managementOnlyMode_returns200() throws Exception {
+        when(props.authSafe()).thenReturn(new AppProperties.AuthConfig(false, true));
+
+        mvc.perform(get("/login"))
+                .andExpect(status().isOk())
+                .andExpect(view().name("auth/login"));
+    }
+
+    @Test
     @DisplayName("GET /signup — no-auth 모드에서는 redirect:/ (CSRF 비활성화로 템플릿이 깨짐 방지)")
     void signupPage_noAuthMode_redirectsToRoot() throws Exception {
-        when(props.authSafe()).thenReturn(new AppProperties.AuthConfig(false));
+        when(props.authSafe()).thenReturn(new AppProperties.AuthConfig(false, false));
+
+        mvc.perform(get("/signup"))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(redirectedToRoot());
+    }
+
+    @Test
+    @DisplayName("GET /signup — management-only 모드에서도 자체 가입은 계속 차단(redirect:/) — 관리자 1명만 로그인 가능")
+    void signupPage_managementOnlyMode_stillRedirectsToRoot() throws Exception {
+        when(props.authSafe()).thenReturn(new AppProperties.AuthConfig(false, true));
 
         mvc.perform(get("/signup"))
                 .andExpect(status().is3xxRedirection())
@@ -134,7 +154,7 @@ class AuthControllerTest {
     @WithMockUser
     @DisplayName("GET /setup — auth.enabled=false + admin 존재 시 redirect:/")
     void setupPage_adminExists_redirectsToRoot() throws Exception {
-        when(props.authSafe()).thenReturn(new AppProperties.AuthConfig(false));
+        when(props.authSafe()).thenReturn(new AppProperties.AuthConfig(false, false));
         when(userDetailsService.findFirstAdmin()).thenReturn(Optional.of(testUser()));
 
         mvc.perform(get("/setup"))
@@ -146,7 +166,7 @@ class AuthControllerTest {
     @WithMockUser
     @DisplayName("GET /setup — auth.enabled=false + admin 없을 때 setup 페이지 반환")
     void setupPage_noAdmin_returnsSetupView() throws Exception {
-        when(props.authSafe()).thenReturn(new AppProperties.AuthConfig(false));
+        when(props.authSafe()).thenReturn(new AppProperties.AuthConfig(false, false));
         when(userDetailsService.findFirstAdmin()).thenReturn(Optional.empty());
 
         mvc.perform(get("/setup"))

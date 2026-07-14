@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org"
+      xmlns:layout="http://www.ultraq.net.nz/thymeleaf/layout"
+      layout:decorate="~{layout/base}"
+      th:lang="${#locale.language}">
+<head>
+    <title th:text="#{nav.settings}">Settings</title>
+</head>
+<body>
+
+<section layout:fragment="content" class="container-fluid py-4 px-4">
+
+    <h5 class="fw-semibold mb-1">
+        <i class="bi bi-sliders me-2"></i>
+        <span th:text="#{settings.title}">Settings (LLM / RAG)</span>
+    </h5>
+    <p class="text-secondary small mb-4" th:text="#{settings.subtitle}">
+        View the effective configuration. Hot-editable items apply on the next search without a restart.
+    </p>
+
+    <!-- Guest / non-admin hint (management-only mode) -->
+    <div th:unless="${isAdmin}" class="alert alert-secondary py-2 small" role="alert">
+        <i class="bi bi-info-circle me-1"></i>
+        <span th:text="#{settings.readonly.hint}">Only administrators can change these values.</span>
+    </div>
+
+    <!-- ── LLM providers ─────────────────────────────────────────────────── -->
+    <div class="card mb-4">
+        <div class="card-header fw-semibold" th:text="#{settings.group.llm}">LLM Routing</div>
+        <div class="card-body p-0">
+            <div class="table-responsive">
+                <table class="table table-sm mb-0 align-middle">
+                    <thead class="table-light">
+                    <tr>
+                        <th class="ps-3" th:text="#{settings.col.provider}">Provider</th>
+                        <th th:text="#{settings.col.role}">Role</th>
+                        <th class="text-end" th:text="#{settings.col.priority}">Priority</th>
+                        <th th:text="#{settings.col.model}">Model</th>
+                        <th th:text="#{settings.col.key}">API Key</th>
+                        <th class="pe-3" th:text="#{settings.col.status}">Status</th>
+                    </tr>
+                    </thead>
+                    <tbody>
+                    <tr th:each="p : ${settings.providers}">
+                        <td class="ps-3 fw-semibold" th:text="${p.name}">local</td>
+                        <td><span class="badge bg-secondary" th:text="${p.role}">LOCAL</span></td>
+                        <td class="text-end" th:text="${p.priority}">0</td>
+                        <td class="small" th:text="${p.model}">model</td>
+                        <td>
+                            <span th:if="${p.configured}" class="badge bg-success"
+                                  th:text="#{settings.key.set}">set</span>
+                            <span th:unless="${p.configured}" class="badge bg-light text-dark border"
+                                  th:text="#{settings.key.none}">none</span>
+                        </td>
+                        <td class="pe-3">
+                            <span th:if="${p.blocked}" class="badge bg-danger"
+                                  th:text="#{llm.status.blocked}">Blocked</span>
+                            <span th:unless="${p.blocked}" class="badge bg-success"
+                                  th:text="#{llm.status.normal}">Normal</span>
+                        </td>
+                    </tr>
+                    <tr th:if="${settings.providers.isEmpty()}">
+                        <td colspan="6" class="text-center text-muted py-3" th:text="#{llm.no.providers}">
+                            No providers configured.
+                        </td>
+                    </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        <div class="card-footer small">
+            <div class="row g-2">
+                <div class="col-12 col-md-4">
+                    <span class="text-secondary" th:text="#{settings.item.default-routing-mode}">Routing mode</span>:
+                    <span class="font-monospace" th:text="${settings.defaultRoutingMode}">COST_FIRST</span>
+                </div>
+                <div class="col-6 col-md-4">
+                    <span class="text-secondary" th:text="#{settings.item.temperature}">temperature</span>:
+                    <span class="font-monospace" th:text="${settings.temperature}">0.0</span>
+                    <span class="badge bg-warning text-dark ms-1" th:text="#{settings.note.temperature}">§6.18</span>
+                </div>
+                <div class="col-6 col-md-4">
+                    <span class="text-secondary" th:text="#{settings.item.max-tokens}">max-tokens</span>:
+                    <span class="font-monospace" th:text="${settings.maxTokens}">6000</span>
+                    <span class="badge bg-warning text-dark ms-1" th:text="#{settings.note.temperature}">§6.18</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── Embedding / Vector store ──────────────────────────────────────── -->
+    <div class="row g-4 mb-4">
+        <div class="col-12 col-md-6">
+            <div class="card h-100">
+                <div class="card-header fw-semibold" th:text="#{settings.group.embedding}">Embedding</div>
+                <div class="card-body">
+                    <div class="d-flex justify-content-between py-1 border-bottom">
+                        <span class="text-secondary" th:text="#{settings.item.embedding-model}">Model</span>
+                        <span class="font-monospace" th:text="${settings.embeddingModel}">bge-m3</span>
+                    </div>
+                    <div class="d-flex justify-content-between align-items-center py-1">
+                        <span class="text-secondary">
+                            <span th:text="#{settings.item.embedding-dimensions}">Dimensions</span>
+                            <span class="badge bg-warning text-dark ms-1" th:text="#{settings.note.restart}">restart</span>
+                        </span>
+                        <span class="font-monospace" th:text="${settings.embeddingDimensions}">1024</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-12 col-md-6">
+            <div class="card h-100">
+                <div class="card-header fw-semibold" th:text="#{settings.group.vectorstore}">Vector Store</div>
+                <div class="card-body">
+                    <div class="d-flex justify-content-between align-items-center py-1">
+                        <span class="text-secondary">
+                            <span th:text="#{settings.item.vectorstore-type}">Backend</span>
+                            <span class="badge bg-warning text-dark ms-1" th:text="#{settings.note.restart}">restart</span>
+                        </span>
+                        <span class="font-monospace" th:text="${settings.vectorStoreType}">chroma</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── Setting groups (search hot / fixed / cache) ───────────────────── -->
+    <div class="card mb-4" th:each="group : ${settings.groups}">
+        <div class="card-header fw-semibold" th:text="#{__${group.title}__}">Group</div>
+        <div class="card-body py-2">
+            <th:block th:each="item : ${group.items}">
+                <div th:replace="~{fragments/settings-item :: item}"></div>
+            </th:block>
+        </div>
+    </div>
+
+</section>
+
+</body>
+</html>

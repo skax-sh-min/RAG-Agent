@@ -130,18 +130,18 @@ public class PptxToMarkdownConverter {
 
     /**
      * @param pptxPath  source PPTX file
-     * @param docId     unique document ID (used to name the image subdirectory)
+     * @param imageId   content-hash key for the images subdirectory (see DocumentIndexer.imageId)
      * @param imagesDir directory where extracted images are saved
      * @return full markdown text with a {@code [페이지: N]}-tagged heading per slide, with
      *         {@code [이미지: ...]} markers for any pictures on that slide
      */
-    public String convert(Path pptxPath, String docId, Path imagesDir) throws IOException {
+    public String convert(Path pptxPath, String imageId, Path imagesDir) throws IOException {
         StringBuilder sb = new StringBuilder();
         // One XMLSlideShow, reused for both image extraction and text conversion — parsing a large
         // deck's XML twice is real, avoidable cost (correctness is unaffected either way, since the
         // two passes don't mutate shared state).
         try (XMLSlideShow pptx = new XMLSlideShow(Files.newInputStream(pptxPath))) {
-            Map<Integer, List<String>> imageMap = imageExtractor.extract(pptx, docId, imagesDir);
+            Map<Integer, List<String>> imageMap = imageExtractor.extract(pptx, imageId, imagesDir);
 
             String title = resolveDocumentTitle(pptx, pptxPath);
             if (!title.isBlank()) {

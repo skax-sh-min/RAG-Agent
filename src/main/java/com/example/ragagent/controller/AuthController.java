@@ -93,9 +93,12 @@ public class AuthController {
     public String loginPage(@RequestParam(required = false) String error,
                             @RequestParam(required = false) String logout,
                             Model model) {
-        // no-auth mode disables CSRF entirely (SecurityConfig), but the template
-        // unconditionally reads _csrf.token — reaching this page there would NPE.
-        if (!props.authSafe().enabled()) return "redirect:/";
+        // Plain no-auth mode disables CSRF entirely (SecurityConfig), but the template
+        // unconditionally reads _csrf.token — reaching this page there would NPE. §6.17 B안
+        // management-only mode is the one no-auth submode where CSRF is active and real login is
+        // meaningful, so it's the one exception that's allowed through here.
+        var authCfg = props.authSafe();
+        if (!authCfg.enabled() && !authCfg.managementOnly()) return "redirect:/";
         if (error != null) model.addAttribute("error", true);
         if (logout != null) model.addAttribute("logout", true);
         return "auth/login";

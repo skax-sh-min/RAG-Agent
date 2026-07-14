@@ -30,9 +30,12 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Extracts embedded images from PPTX slides, and rasterizes "drawing tool" shapes that the
@@ -56,10 +59,24 @@ import java.util.Map;
  * crowded/busy slide) falls back to rasterizing just its seed members individually, to avoid one
  * giant slide-sized image.
  *
- * {@link XSLFTable} and {@link XSLFPictureShape} never join a cluster — tables stay as structured
- * markdown pipe-tables ({@code PptxToMarkdownConverter.appendTable()}), and real pictures are
- * extracted verbatim below. Plain {@link XSLFTextBox}es are never rasterized when empty — they're
- * just empty text containers, not drawn shapes.
+ * {@link XSLFTable} never joins a cluster — tables stay as structured markdown pipe-tables
+ * ({@code PptxToMarkdownConverter.appendTable()}). {@link XSLFPictureShape} is the one exception
+ * to "verbatim extraction": authors frequently draw markup (a highlight circle, an arrow, a
+ * callout) directly on top of a screenshot/photo, and extracting the picture and that markup as
+ * two disconnected images would strand the annotation with no context. A picture therefore also
+ * joins the same proximity-clustering pass — as a passenger only, never a seed (a lone picture
+ * must never pull in unrelated nearby shapes) — and gets flattened together with any overlapping
+ * seed cluster into one composite PNG. A picture with no nearby seed, or whose cluster fails to
+ * rasterize, falls back to the original verbatim extraction exactly as before. Plain
+ * {@link XSLFTextBox}es are never rasterized when empty — they're just empty text containers, not
+ * drawn shapes.
+ *
+ * <b>{@code app.pptx-image.merge-annotated-pictures}</b> ({@code true} by default) toggles the
+ * paragraph above: {@code false} disables proximity-based merging for pictures entirely — a
+ * top-level picture always extracts verbatim, and only pictures the author actually grouped in
+ * PowerPoint (nested inside a real {@link XSLFGroupShape}, never reaching the top-level shape
+ * dispatch below) still merge with their group-mates, since that is POI's own object model and is
+ * unaffected by this flag either way.
  *
  * A minimum bounding-box dimension ({@code app.pptx-image.min-shape-dimension-pt}) filters out
  * trivial icons/dividers before they can seed a cluster. Rendering failures are skipped silently
@@ -88,11 +105,13 @@ public class PptxImageExtractor {
 
     private final double minShapeDimensionPt;
     private final double clusterProximityPaddingPt;
+    private final boolean mergeAnnotatedPictures;
 
     public PptxImageExtractor(AppProperties props) {
         AppProperties.PptxShapeExtractionConfig config = props.pptxImageSafe();
         this.minShapeDimensionPt = config.minShapeDimensionPt();
         this.clusterProximityPaddingPt = config.clusterProximityPaddingPt();
+        this.mergeAnnotatedPictures = config.mergeAnnotatedPictures();
     }
 
     private enum ShapeRole { SEED, CANDIDATE, NOT_ELIGIBLE }
@@ -102,10 +121,10 @@ public class PptxImageExtractor {
     }
 
     /** @return {slideNum(1-based) → relative image paths from dataDir} */
-    public Map<Integer, List<String>> extract(Path pptxPath, String docId, Path imagesDir)
+    public Map<Integer, List<String>> extract(Path pptxPath, String imageId, Path imagesDir)
             throws IOException {
         try (XMLSlideShow pptx = new XMLSlideShow(Files.newInputStream(pptxPath))) {
-            return extract(pptx, docId, imagesDir);
+            return extract(pptx, imageId, imagesDir);
         }
     }
 
@@ -115,7 +134,7 @@ public class PptxImageExtractor {
      * needs its own open slideshow for text conversion anyway, so it calls this overload to avoid
      * parsing the same PPTX twice (real cost on large decks; harmless to correctness either way).
      */
-    public Map<Integer, List<String>> extract(XMLSlideShow pptx, String docId, Path imagesDir)
+    public Map<Integer, List<String>> extract(XMLSlideShow pptx, String imageId, Path imagesDir)
             throws IOException {
         Files.createDirectories(imagesDir);
         Map<Integer, List<String>> result = new LinkedHashMap<>();
@@ -123,13 +142,13 @@ public class PptxImageExtractor {
         int slideNum = 0;
         for (XSLFSlide slide : pptx.getSlides()) {
             slideNum++;
-            List<String> paths = processSlide(slide, slideNum, docId, imagesDir);
+            List<String> paths = processSlide(slide, slideNum, imageId, imagesDir);
             if (!paths.isEmpty()) result.put(slideNum, paths);
         }
         return result;
     }
 
-    private List<String> processSlide(XSLFSlide slide, int slideNum, String docId, Path imagesDir)
+    private List<String> processSlide(XSLFSlide slide, int slideNum, String imageId, Path imagesDir)
             throws IOException {
         List<String> paths = new ArrayList<>();
         int[] imgIdx = {0};
@@ -137,15 +156,31 @@ public class PptxImageExtractor {
         // Preserves slide.getShapes() order — needed so clusters render members back-to-front
         // in their original paint order.
         List<Clusterable> clusterable = new ArrayList<>();
+        // Real pictures are collected here instead of extracted immediately — a picture that
+        // ends up in a rasterized cluster (see below) is "consumed" and must NOT also be
+        // extracted verbatim; only leftover, unconsumed pictures fall back to that.
+        List<XSLFPictureShape> pictures = new ArrayList<>();
 
         for (XSLFShape shape : slide.getShapes()) {
             if (shape instanceof XSLFPictureShape pic) {
-                addPicture(pic, slideNum, imgIdx, docId, imagesDir, paths);
+                if (mergeAnnotatedPictures) {
+                    pictures.add(pic);
+                    // Never a seed on its own — a picture with no nearby annotation shape must
+                    // not spontaneously pull in unrelated nearby shapes into a merge.
+                    clusterable.add(new Clusterable(pic, false));
+                } else {
+                    // app.pptx-image.merge-annotated-pictures=false: never join proximity
+                    // clustering — a top-level picture always extracts verbatim. A picture that
+                    // is genuinely grouped with other shapes in PowerPoint never reaches this
+                    // branch at all (it's nested inside the XSLFGroupShape below, not a top-level
+                    // shape), so real author-made groups still merge either way.
+                    addPicture(pic, slideNum, imgIdx, imageId, imagesDir, paths);
+                }
             } else if (shape instanceof XSLFObjectShape ole) {
                 // OLE embed: always carries its own preview picture (that's how OOXML lets a
                 // viewer render it without running the source app) — save it directly, no
                 // clustering/rasterization needed.
-                addOlePreview(ole, slideNum, imgIdx, docId, imagesDir, paths);
+                addOlePreview(ole, slideNum, imgIdx, imageId, imagesDir, paths);
             } else if (shape instanceof XSLFDiagram diagram) {
                 // SmartArt: getGroupShape() is the real rendered drawing (actual box/connector
                 // shapes with real anchors), unlike the outer XSLFDiagram frame itself — POI's
@@ -160,7 +195,7 @@ public class PptxImageExtractor {
                 // Charts have no live-rendering path in POI — only a best-effort mc:Fallback
                 // preview picture that PowerPoint may or may not have embedded.
                 XSLFPictureShape fallback = frame.getFallbackPicture();
-                if (fallback != null) addPicture(fallback, slideNum, imgIdx, docId, imagesDir, paths);
+                if (fallback != null) addPicture(fallback, slideNum, imgIdx, imageId, imagesDir, paths);
             } else if (!(shape instanceof XSLFTable)) {
                 ShapeRole role = classify(shape);
                 if (role != ShapeRole.NOT_ELIGIBLE) {
@@ -169,30 +204,48 @@ public class PptxImageExtractor {
             }
         }
 
+        // Identity-based: two POI shape wrappers are only "the same picture" by reference here,
+        // not by equals()/hashCode() (unspecified for XSLFShape).
+        Set<XSLFPictureShape> consumedPictures = Collections.newSetFromMap(new IdentityHashMap<>());
         for (List<Clusterable> cluster : clusterByProximity(clusterable)) {
             if (cluster.size() > MAX_CLUSTER_SHAPES) {
                 // Too crowded to be one coherent diagram — fall back to capturing just the seeds.
+                // Pictures are never seeds, so any picture caught in an oversized cluster is left
+                // unconsumed and extracted verbatim below, same as if it had no cluster at all.
                 for (Clusterable c : cluster) {
-                    if (c.seed()) tryRasterize(List.of(c.shape()), slideNum, imgIdx, docId, imagesDir, paths);
+                    if (c.seed()) tryRasterize(List.of(c.shape()), slideNum, imgIdx, imageId, imagesDir, paths);
                 }
             } else {
                 List<XSLFShape> members = cluster.stream().map(Clusterable::shape).toList();
-                tryRasterize(members, slideNum, imgIdx, docId, imagesDir, paths);
+                if (tryRasterize(members, slideNum, imgIdx, imageId, imagesDir, paths)) {
+                    for (Clusterable c : cluster) {
+                        if (c.shape() instanceof XSLFPictureShape pic) consumedPictures.add(pic);
+                    }
+                }
+                // rasterize() failure (e.g. undecodable picture bytes) leaves every member of
+                // this cluster — including any picture — unconsumed, so pictures still fall back
+                // to verbatim extraction below rather than being silently dropped.
+            }
+        }
+
+        for (XSLFPictureShape pic : pictures) {
+            if (!consumedPictures.contains(pic)) {
+                addPicture(pic, slideNum, imgIdx, imageId, imagesDir, paths);
             }
         }
 
         return paths;
     }
 
-    private void addPicture(XSLFPictureShape pic, int slideNum, int[] imgIdx, String docId,
+    private void addPicture(XSLFPictureShape pic, int slideNum, int[] imgIdx, String imageId,
                              Path imagesDir, List<String> paths) throws IOException {
-        addPictureData(pic.getPictureData(), slideNum, imgIdx, docId, imagesDir, paths);
+        addPictureData(pic.getPictureData(), slideNum, imgIdx, imageId, imagesDir, paths);
     }
 
     /** OLE 객체의 내장 미리보기 그림을 저장한다 — 외부 링크 OLE(내장 미리보기 없음)는 addPictureData()가 조용히 건너뛴다. */
-    private void addOlePreview(XSLFObjectShape ole, int slideNum, int[] imgIdx, String docId,
+    private void addOlePreview(XSLFObjectShape ole, int slideNum, int[] imgIdx, String imageId,
                                 Path imagesDir, List<String> paths) throws IOException {
-        addPictureData(ole.getPictureData(), slideNum, imgIdx, docId, imagesDir, paths);
+        addPictureData(ole.getPictureData(), slideNum, imgIdx, imageId, imagesDir, paths);
     }
 
     /**
@@ -201,7 +254,7 @@ public class PptxImageExtractor {
      * 저장할 로컬 바이트가 없으므로 조용히 건너뛴다. 실사진·OLE 미리보기·차트 fallback 세 호출
      * 경로가 모두 이 메서드를 거치므로 가드를 한 곳에 두면 셋 다 동일하게 보호된다.
      */
-    private void addPictureData(XSLFPictureData pd, int slideNum, int[] imgIdx, String docId,
+    private void addPictureData(XSLFPictureData pd, int slideNum, int[] imgIdx, String imageId,
                                  Path imagesDir, List<String> paths) throws IOException {
         if (pd == null) return;
         PictureData.PictureType type = pd.getType();
@@ -212,16 +265,19 @@ public class PptxImageExtractor {
         imgIdx[0]++;
         String fileName = "s" + slideNum + "_img" + imgIdx[0] + "." + ext;
         Files.write(imagesDir.resolve(fileName), pd.getData());
-        paths.add("images/" + docId + "/" + fileName);
+        paths.add("images/" + imageId + "/" + fileName);
     }
 
-    private void tryRasterize(List<XSLFShape> members, int slideNum, int[] imgIdx, String docId,
-                               Path imagesDir, List<String> paths) {
+    /** @return true if the composite was actually written (members can be treated as "consumed") */
+    private boolean tryRasterize(List<XSLFShape> members, int slideNum, int[] imgIdx, String imageId,
+                                  Path imagesDir, List<String> paths) {
         String fileName = "s" + slideNum + "_img" + (imgIdx[0] + 1) + ".png";
         if (rasterize(members, imagesDir.resolve(fileName))) {
             imgIdx[0]++;
-            paths.add("images/" + docId + "/" + fileName);
+            paths.add("images/" + imageId + "/" + fileName);
+            return true;
         }
+        return false;
     }
 
     /**

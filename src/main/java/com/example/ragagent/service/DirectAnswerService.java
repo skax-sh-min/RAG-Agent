@@ -43,7 +43,7 @@ public class DirectAnswerService {
         String userPrompt = buildUserPrompt(state);
 
         RoutingMode effective = effectiveRoutingMode(state.routingMode());
-        String rawAnswer = llmRouter.executeWithTracking(TaskType.TEXT, effective,
+        String rawAnswer = llmRouter.executeGated(TaskType.TEXT, effective,
                 model -> model.call(buildPrompt(systemPrompt, userPrompt)));
         String answer = (rawAnswer == null || rawAnswer.isEmpty()) ? null : rawAnswer;
         log.debug("[DirectAnswer] answer length={}", answer == null ? -1 : answer.length());
@@ -60,8 +60,10 @@ public class DirectAnswerService {
         LlmProvider provider = llmRouter.routeProvider(TaskType.TEXT, effective);
 
         StringBuilder full = new StringBuilder();
-        callOrStream(provider, state, systemPrompt,
-                t -> { listener.onToken(t); full.append(t); });
+        try (var permit = llmRouter.acquirePermit(provider)) {
+            callOrStream(provider, state, systemPrompt,
+                    t -> { listener.onToken(t); full.append(t); });
+        }
 
         String answer = full.toString();
         log.debug("[DirectAnswer] streaming answer length={}", answer.length());

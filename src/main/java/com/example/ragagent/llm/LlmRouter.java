@@ -1,17 +1,20 @@
 package com.example.ragagent.llm;
 
+import com.example.ragagent.exception.LlmBackpressureException;
 import com.example.ragagent.exception.LlmProviderExhaustedException;
 import com.example.ragagent.repository.LlmUsageRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
-import org.springframework.web.client.HttpClientErrorException;
+import org.springframework.web.client.HttpStatusCodeException;
 
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.TimeUnit;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.function.Function;
@@ -22,12 +25,34 @@ public class LlmRouter {
 
     private static final Logger log = LoggerFactory.getLogger(LlmRouter.class);
 
+    /** Short fallback block (seconds) for transient/overload-type failures — see {@link #blockForOverload}. */
+    private static final String SHORT_BLOCK_SECONDS = "30";
+
     private final List<LlmProvider> providers; // priority 오름차순
     private final LlmUsageRepository usageRepo;
     private final CircuitBreaker circuitBreaker;
     private final RoutingMode defaultMode;
     private final double progressiveThreshold;
     private final int readTimeoutSeconds;
+
+    /**
+     * Per-provider concurrency gate for the interactive query/chat path (CLASSIFIER,
+     * ANSWER, CRITIC-feeding evaluation, DUAL, DirectAnswer, reranking, multi-query expansion).
+     * Sized from {@code AppProperties.ProviderConfig.concurrency()} (falls back to
+     * {@code defaultProviderConcurrency}) so the app never sends more concurrent requests to a
+     * single physical LLM server than it can actually serve (e.g. llama-server --parallel).
+     * Deliberately NOT applied to indexing/background LLM calls ({@code executeWithTracking}),
+     * which already have their own semaphore ({@code app.indexing.max-concurrent-llm-calls}) and
+     * no synchronous HTTP caller waiting on a deadline — see {@link #executeGated}.
+     */
+    private final Map<String, Semaphore> providerGates = new ConcurrentHashMap<>();
+    private final int defaultProviderConcurrency;
+    private final int permitWaitTimeoutSeconds;
+
+    /** A held concurrency slot from {@link #acquirePermit}; release via try-with-resources. */
+    public interface Permit extends AutoCloseable {
+        @Override void close();
+    }
 
     /**
      * Providers known (for the life of this process) to lack image-input support
@@ -49,12 +74,54 @@ public class LlmRouter {
     public LlmRouter(List<LlmProvider> providers, LlmUsageRepository usageRepo,
                      CircuitBreaker circuitBreaker, RoutingMode defaultMode,
                      double progressiveThreshold, int readTimeoutSeconds) {
+        this(providers, usageRepo, circuitBreaker, defaultMode, progressiveThreshold, readTimeoutSeconds,
+                Map.of(), 3, 20);
+    }
+
+    public LlmRouter(List<LlmProvider> providers, LlmUsageRepository usageRepo,
+                     CircuitBreaker circuitBreaker, RoutingMode defaultMode,
+                     double progressiveThreshold, int readTimeoutSeconds,
+                     Map<String, Integer> providerConcurrency,
+                     int defaultProviderConcurrency, int permitWaitTimeoutSeconds) {
         this.providers = providers;
         this.usageRepo = usageRepo;
         this.circuitBreaker = circuitBreaker;
         this.defaultMode = defaultMode;
         this.progressiveThreshold = progressiveThreshold;
         this.readTimeoutSeconds = readTimeoutSeconds;
+        this.defaultProviderConcurrency = defaultProviderConcurrency > 0 ? defaultProviderConcurrency : 3;
+        this.permitWaitTimeoutSeconds = permitWaitTimeoutSeconds > 0 ? permitWaitTimeoutSeconds : 20;
+        for (LlmProvider p : providers) {
+            int concurrency = (providerConcurrency != null && providerConcurrency.containsKey(p.name()))
+                    ? providerConcurrency.get(p.name()) : this.defaultProviderConcurrency;
+            providerGates.put(p.name(), new Semaphore(Math.max(1, concurrency)));
+        }
+    }
+
+    /**
+     * Blocks (up to {@code app.llm.permit-wait-timeout-seconds}) for a concurrency slot on
+     * {@code provider}'s per-server gate. Throws {@link LlmBackpressureException} (HTTP 429,
+     * NOT a provider failure — no circuit-breaker block) when the wait times out.
+     */
+    public Permit acquirePermit(LlmProvider provider) {
+        Semaphore gate = providerGates.computeIfAbsent(provider.name(),
+                n -> new Semaphore(defaultProviderConcurrency));
+        boolean acquired;
+        try {
+            acquired = gate.tryAcquire(permitWaitTimeoutSeconds, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new LlmBackpressureException(
+                    "Interrupted while waiting for provider [" + provider.name() + "] capacity", 1);
+        }
+        if (!acquired) {
+            log.warn("[BACKPRESSURE] provider={} concurrency slot wait exceeded {}s, rejecting with 429",
+                    provider.name(), permitWaitTimeoutSeconds);
+            throw new LlmBackpressureException(
+                    "Provider [" + provider.name() + "] is at capacity. Please retry shortly.",
+                    permitWaitTimeoutSeconds);
+        }
+        return gate::release;
     }
 
     /** 라우팅 모드에 맞는 첫 번째 사용 가능 LlmProvider 반환 (stream 플래그 포함). */
@@ -89,7 +156,7 @@ public class LlmRouter {
         throw new LlmProviderExhaustedException("No provider available for any of: " + taskTypeOrder);
     }
 
-    /** 실행 + 토큰 기록 + Circuit Breaker 자동 전환. */
+    /** 실행 + 토큰 기록 + Circuit Breaker 자동 전환. 인덱싱/백그라운드 경로용 — 동시성 게이트 미적용. */
     public String executeWithTracking(TaskType taskType, RoutingMode mode,
                                       Function<ChatModel, ChatResponse> call) {
         return executeWithTracking(taskType, mode, null, call);
@@ -101,14 +168,36 @@ public class LlmRouter {
      * {@link BackgroundUsage} for the reserved prefixes that separate background/non-chat LLM
      * calls (summarization, keyword extraction, etc.) from regular chat usage on /llm-usage.
      * Pass {@code null} for ordinary chat-serving calls (same behavior as the 3-arg overload).
+     *
+     * <p>Indexing/background callers (KeywordExtractor, MarkdownCorrectionService,
+     * VisionDescriptionService, ...) use this — no per-provider wait-cap, since they already
+     * throttle via their own semaphore and have no synchronous HTTP caller waiting on a deadline.
      */
     public String executeWithTracking(TaskType taskType, RoutingMode mode, String usageLabelPrefix,
                                       Function<ChatModel, ChatResponse> call) {
-        return executeWithTracking(taskType, roleOrder(mode), usageLabelPrefix, call, new HashSet<>());
+        return executeWithTracking(taskType, roleOrder(mode), usageLabelPrefix, call, new HashSet<>(), false);
     }
 
     /**
-     * DUAL 모드 병렬 실행.
+     * Same as {@link #executeWithTracking(TaskType, RoutingMode, Function)}, but bounded
+     * by the target provider's per-server concurrency gate ({@link #acquirePermit}): waits up to
+     * {@code app.llm.permit-wait-timeout-seconds} for a slot, then fails fast with
+     * {@link LlmBackpressureException} (HTTP 429 + Retry-After) instead of piling up behind the
+     * server. Use this for the interactive chat/query path (CLASSIFIER, ANSWER, evaluation,
+     * DirectAnswer, reranking) — never for indexing/background calls.
+     */
+    public String executeGated(TaskType taskType, RoutingMode mode,
+                               Function<ChatModel, ChatResponse> call) {
+        return executeGated(taskType, mode, null, call);
+    }
+
+    public String executeGated(TaskType taskType, RoutingMode mode, String usageLabelPrefix,
+                               Function<ChatModel, ChatResponse> call) {
+        return executeWithTracking(taskType, roleOrder(mode), usageLabelPrefix, call, new HashSet<>(), true);
+    }
+
+    /**
+     * DUAL 모드 병렬 실행 (두 프로바이더 모두 동시성 게이트 적용).
      * LOCAL 프로바이더 미등록 시 즉시 LlmProviderExhaustedException.
      */
     public DualResult executeDual(TaskType taskType,
@@ -123,13 +212,13 @@ public class LlmRouter {
         try (var exec = Executors.newVirtualThreadPerTaskExecutor()) {
             // exceptionally() ensures one side's failure never cancels the other via exec.close()
             CompletableFuture<String> localF = CompletableFuture
-                    .supplyAsync(() -> executeSingleTracked(local, taskType, call), exec)
+                    .supplyAsync(() -> executeSingleTracked(local, taskType, null, call, true), exec)
                     .exceptionally(t -> {
                         log.warn("[DUAL] LOCAL call failed ({}): {}", local.name(), t.getMessage());
                         return "";
                     });
             CompletableFuture<String> externalF = CompletableFuture
-                    .supplyAsync(() -> executeSingleTracked(external, taskType, call), exec)
+                    .supplyAsync(() -> executeSingleTracked(external, taskType, null, call, true), exec)
                     .exceptionally(t -> {
                         log.warn("[DUAL] external call failed ({}): {}", external.name(), t.getMessage());
                         return "";
@@ -159,13 +248,21 @@ public class LlmRouter {
         try (var exec = Executors.newVirtualThreadPerTaskExecutor()) {
             // exceptionally() ensures one side's failure never cancels the other via exec.close()
             CompletableFuture<Void> localF = CompletableFuture
-                    .runAsync(() -> callFn.accept(local, localTokenSink), exec)
+                    .runAsync(() -> {
+                        try (Permit permit = acquirePermit(local)) {
+                            callFn.accept(local, localTokenSink);
+                        }
+                    }, exec)
                     .exceptionally(t -> {
                         log.warn("[DUAL] LOCAL call failed ({}): {}", local.name(), t.getMessage());
                         return null;
                     });
             CompletableFuture<Void> externalF = CompletableFuture
-                    .runAsync(() -> callFn.accept(external, externalTokenSink), exec)
+                    .runAsync(() -> {
+                        try (Permit permit = acquirePermit(external)) {
+                            callFn.accept(external, externalTokenSink);
+                        }
+                    }, exec)
                     .exceptionally(t -> {
                         log.warn("[DUAL] external call failed ({}): {}", external.name(), t.getMessage());
                         return null;
@@ -222,17 +319,51 @@ public class LlmRouter {
                                     Set<String> excluded) {
         boolean imageTask = isImageTask(taskType);
         for (ProviderRole role : roleOrder) {
-            Optional<LlmProvider> p = providers.stream()
+            List<LlmProvider> eligible = providers.stream()
                     .filter(x -> x.role() == role
                             && x.supports(taskType)
                             && x.hasValidApiKey()
                             && !circuitBreaker.isBlocked(x.name())
                             && !excluded.contains(x.name())
                             && !(imageTask && visionUnsupportedProviders.contains(x.name())))
-                    .findFirst();
-            if (p.isPresent()) return p;
+                    .toList();
+            if (!eligible.isEmpty()) {
+                return Optional.of(selectWithinTopPriority(eligible));
+            }
         }
         return Optional.empty();
+    }
+
+    /**
+     * {@code providers} (and therefore {@code eligible}, a filtered view of it)
+     * is priority-ascending, so the lowest priority present is always the preferred tier —
+     * unchanged tie-break/failover semantics for the common case of one provider per priority.
+     * When more than one provider shares that lowest priority (e.g. two LOCAL providers
+     * registered for horizontal throughput), distribute across them by least-in-flight — the one
+     * with the most free permits on its concurrency gate — instead of always
+     * picking the first-registered one. This reuses the existing per-provider {@link Semaphore},
+     * so it's a "least-connections" load balancer with no new bookkeeping. Ties (e.g. both fully
+     * idle) deterministically keep the first-registered provider at that priority.
+     */
+    private LlmProvider selectWithinTopPriority(List<LlmProvider> eligible) {
+        int topPriority = eligible.get(0).priority();
+        LlmProvider best = eligible.get(0);
+        int bestFreePermits = availablePermits(best);
+        for (int i = 1; i < eligible.size(); i++) {
+            LlmProvider candidate = eligible.get(i);
+            if (candidate.priority() != topPriority) break; // priority-ascending: no more ties possible
+            int freePermits = availablePermits(candidate);
+            if (freePermits > bestFreePermits) {
+                best = candidate;
+                bestFreePermits = freePermits;
+            }
+        }
+        return best;
+    }
+
+    private int availablePermits(LlmProvider provider) {
+        Semaphore gate = providerGates.get(provider.name());
+        return gate != null ? gate.availablePermits() : defaultProviderConcurrency;
     }
 
     private static boolean isImageTask(TaskType taskType) {
@@ -241,24 +372,28 @@ public class LlmRouter {
 
     private String executeWithTracking(TaskType taskType, List<ProviderRole> roleOrder, String usageLabelPrefix,
                                        Function<ChatModel, ChatResponse> call,
-                                       Set<String> tried) {
+                                       Set<String> tried, boolean gated) {
         LlmProvider provider = findFirst(taskType, roleOrder, tried)
                 .orElseThrow(() -> new LlmProviderExhaustedException(
                         "All providers exhausted for task=" + taskType));
         tried.add(provider.name());
         try {
-            return executeSingleTracked(provider, taskType, usageLabelPrefix, call);
-        } catch (HttpClientErrorException e) {
+            return executeSingleTracked(provider, taskType, usageLabelPrefix, call, gated);
+        } catch (LlmBackpressureException e) {
+            // Capacity pressure, not a provider failure — do not block the circuit breaker or
+            // silently retry against another provider; let the 429 propagate to the caller.
+            throw e;
+        } catch (HttpStatusCodeException e) {
             int status = e.getStatusCode().value();
-            if (status == 429 || status == 402) {
+            if (status == 429 || status == 402 || status == 503) {
                 String retryAfter = e.getResponseHeaders() != null
                         ? e.getResponseHeaders().getFirst("Retry-After") : null;
-                circuitBreaker.block(provider.name(), retryAfter);
+                blockForOverload(provider, taskType, roleOrder, tried, retryAfter);
             } else {
-                circuitBreaker.block(provider.name(), "30");
+                circuitBreaker.block(provider.name(), SHORT_BLOCK_SECONDS);
             }
             log.warn("Provider [{}] returned HTTP {}, trying next", provider.name(), status);
-            return executeWithTracking(taskType, roleOrder, usageLabelPrefix, call, tried);
+            return executeWithTracking(taskType, roleOrder, usageLabelPrefix, call, tried, gated);
         } catch (Exception e) {
             if (isTimeoutLike(e)) {
                 // Client-side interrupt — provider is healthy; block would cascade into "All providers exhausted"
@@ -276,11 +411,35 @@ public class LlmRouter {
                 log.warn("Provider [{}] does not support image input (mmproj missing) — "
                         + "skipping image tasks for this provider, NOT blocking circuit breaker", provider.name());
             } else {
-                circuitBreaker.block(provider.name(), "30");
+                circuitBreaker.block(provider.name(), SHORT_BLOCK_SECONDS);
             }
             log.warn("Provider [{}] threw {}: {}, trying next",
                     provider.name(), e.getClass().getSimpleName(), e.getMessage());
-            return executeWithTracking(taskType, roleOrder, usageLabelPrefix, call, tried);
+            return executeWithTracking(taskType, roleOrder, usageLabelPrefix, call, tried, gated);
+        }
+    }
+
+    /**
+     * For overload-type errors (429/402/503), a full circuit-breaker block is
+     * only useful if there's a fallback provider to degrade to. When {@code provider} is the
+     * only one currently viable for {@code taskType} (e.g. a lone LOCAL provider with no
+     * NORMAL/PREMIUM configured — the common air-gapped/no-auth deployment), blocking it for
+     * the full {@code circuit-breaker-minutes} just turns a transient capacity blip into a
+     * multi-minute total outage for every subsequent request — worse than leaving it open, since
+     * the concurrency gate already throttles how hard the app hammers it. An explicit
+     * {@code Retry-After} header is still honored even with no fallback (authoritative operator
+     * guidance from the provider itself, not a default we're second-guessing).
+     */
+    private void blockForOverload(LlmProvider provider, TaskType taskType, List<ProviderRole> roleOrder,
+                                  Set<String> tried, String retryAfterHeader) {
+        boolean hasFallback = findFirst(taskType, roleOrder, tried).isPresent();
+        if (hasFallback || (retryAfterHeader != null && !retryAfterHeader.isBlank())) {
+            circuitBreaker.block(provider.name(), retryAfterHeader);
+        } else {
+            log.warn("[NO-FALLBACK] provider={} is the only viable provider for task={} — "
+                    + "blocking briefly ({}s) instead of the full circuit-breaker duration to avoid a total outage",
+                    provider.name(), taskType, SHORT_BLOCK_SECONDS);
+            circuitBreaker.block(provider.name(), SHORT_BLOCK_SECONDS);
         }
     }
 
@@ -313,16 +472,18 @@ public class LlmRouter {
         return false;
     }
 
-    private String executeSingleTracked(LlmProvider provider, TaskType taskType,
-                                        Function<ChatModel, ChatResponse> call) {
-        return executeSingleTracked(provider, taskType, null, call);
-    }
-
     private String executeSingleTracked(LlmProvider provider, TaskType taskType, String usageLabelPrefix,
-                                        Function<ChatModel, ChatResponse> call) {
+                                        Function<ChatModel, ChatResponse> call, boolean gated) {
         log.debug("[LLM →] provider={} task={} endpoint={}/chat/completions model={}", provider.name(), taskType, provider.baseUrl(), provider.model());
         long t0 = System.currentTimeMillis();
-        ChatResponse response = call.apply(provider.chatModel());
+        ChatResponse response;
+        if (gated) {
+            try (Permit permit = acquirePermit(provider)) {
+                response = call.apply(provider.chatModel());
+            }
+        } else {
+            response = call.apply(provider.chatModel());
+        }
         long elapsed = System.currentTimeMillis() - t0;
         var usage = response.getMetadata().getUsage();
         int in  = (usage != null && usage.getPromptTokens()     != null) ? usage.getPromptTokens()     : 0;

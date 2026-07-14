@@ -54,7 +54,7 @@ public class RerankerService {
             String userContent = "[질문]\n%s\n\n[문서 목록]\n%s"
                     .formatted(question, formatDocList(candidates));
 
-            String response = llmRouter.executeWithTracking(TaskType.TEXT, RoutingMode.COST_FIRST,
+            String response = llmRouter.executeGated(TaskType.TEXT, RoutingMode.COST_FIRST,
                     model -> model.call(new Prompt(List.of(
                             new SystemMessage(systemPrompt), new UserMessage(userContent)))));
 

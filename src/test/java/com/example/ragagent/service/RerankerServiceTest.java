@@ -24,8 +24,9 @@ import static org.mockito.Mockito.when;
 /**
  * RerankerService 단위 테스트.
  *
- * rerank()는 LlmRouter.executeWithTracking()(TaskType.TEXT, RoutingMode.COST_FIRST)으로
+ * rerank()는 LlmRouter.executeGated()(TaskType.TEXT, RoutingMode.COST_FIRST)으로
  * 라우팅한다 — 이전에는 직접 주입된 ChatClient를 써서 /llm-usage에 전혀 잡히지 않았다(§6.14).
+ * executeGated 적용 — 재랭킹은 질의 경로이므로 동시성 게이트 대상.
  */
 class RerankerServiceTest {
 
@@ -45,7 +46,7 @@ class RerankerServiceTest {
     }
 
     private void stubLlmResponse(String response) {
-        when(llmRouter.executeWithTracking(any(), any(), any())).thenReturn(response);
+        when(llmRouter.executeGated(any(), any(), any())).thenReturn(response);
     }
 
     @Test
@@ -92,14 +93,14 @@ class RerankerServiceTest {
     }
 
     @Test
-    @DisplayName("rerank — LlmRouter.executeWithTracking()을 TaskType.TEXT/COST_FIRST로 호출 (사용량 추적)")
+    @DisplayName("rerank — LlmRouter.executeGated()을 TaskType.TEXT/COST_FIRST로 호출 (사용량 추적)")
     void rerank_tracksUsageViaLlmRouter() {
         List<Document> candidates = List.of(doc("A"), doc("B"), doc("C"));
         stubLlmResponse("[0, 1, 2]");
 
         service.rerank("질문", candidates, 2);
 
-        verify(llmRouter).executeWithTracking(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), any());
+        verify(llmRouter).executeGated(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), any());
     }
 
     // ── parseRanking 단위 테스트 ──────────────────────────────────────────────
