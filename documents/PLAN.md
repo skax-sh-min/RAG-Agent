@@ -39,7 +39,7 @@
 | 3 | §9.4 — CADDY 하위호환 별칭 | 선택, 낮은 우선순위 |
 | 4 | Phase 2 남은 실기기 검증 2건 (키보드 하단 고정 · 홈 화면 standalone) | 좌우 스크롤·다크모드는 자동 검증 완료, 나머지는 실기기 필요 |
 | 5 | **§6.18 Direct 메시지 전용 LLM Temperature 분리** | 미착수 (2026-07-09 요청, 낮은 우선순위). §6.13 설정 페이지 선행 완료 — 이제 진행 가능 |
-| 6 | **Phase 7-E 검색·인덱싱 성능/메모리 최적화 제안**(§10.7~10.10) | §10.7.1~10.7.4·§10.8 전체(10.8.1~10.8.5, 2026-07-15) 완료. 나머지 §10.9.1~10.9.4 미착수 — 다음은 즉효 저리스크인 §10.9.1(Chroma 응답에서 미사용 임베딩 제외) 우선 적용 검토 |
+| 6 | **Phase 7-E 검색·인덱싱 성능/메모리 최적화 제안**(§10.7~10.10) | §10.7.1~10.7.4·§10.8 전체(10.8.1~10.8.5)·§10.9.2·§10.9.4(2026-07-15) 완료. 나머지 §10.9.1(즉효 저리스크, Chroma 응답에서 미사용 임베딩 제외)·§10.9.3(스트리밍 삽입) 미착수 |
 
 > **Phase 7-A 완료**: §10.2 가중 RRF + §10.3 쿼리 임베딩 캐시. 상세는 아래 §10.2·§10.3 본문 참조.
 > **Phase 7-B 완료**: §10.1 Contextual Retrieval + §10.1-보완 임베딩 입력 정규화. 상세는 아래 §10.1 본문 참조. 재인덱싱은 운영 단계에서 별도 수행.
@@ -59,6 +59,8 @@
 > **§10.8.3 완료**: `SqliteVecVectorStoreProvider.add()`의 `vec_embeddings`+`vec_document_chunks` 배치 삽입 2개를 하나의 트랜잭션으로 결합(실 DataSource에서만 활성). 부수로 중간 실패 시 부분 커밋(고아 행) 가능성도 제거. 상세는 아래 §10.8.3 본문 참조.
 > **§10.8.4 완료**: `syncDirectory()` 1단계에서 계산한 sha256을 `IndexRequest`에 실어 2단계 `index()`에 전달 — 동기화 대상 파일마다 있던 이중 해싱 제거. 상세는 아래 §10.8.4 본문 참조.
 > **§10.8.5 완료**: `SearchTextBuilder.precompute()`로 임베딩+FTS 파생 텍스트를 청크당 1회만 계산해 transient 메타키(`SEARCH_TEXT`)에 저장, `build()`가 있으면 재사용 — 벡터 스토어/FTS 호출부는 무수정. 상세는 아래 §10.8.5 본문 참조.
+> **§10.9.2 완료**: sqlite-vec 벡터 직렬화를 JSON 텍스트에서 little-endian float32 BLOB(`toVectorBlob()`)로 전환 — 삽입/KNN 질의 양쪽 적용, 기존 데이터와 호환(백필 불필요). 상세는 아래 §10.9.2 본문 참조.
+> **§10.9.4 완료**: `CachingEmbeddingModel.unwrapForIndexing()`으로 인덱싱 경로(`add()`)가 질의 임베딩 캐시를 우회 — 대량 청크 인덱싱이 더 이상 직전 검색 질의의 캐시를 밀어내지 않음. 캐시 키도 원문 대신 SHA-256 해시로 축소. 상세는 아래 §10.9.4 본문 참조.
 
 **🟣 후속 — 멀티유저(`auth.enabled=true`) 활성화 시에만 착수**
 
@@ -668,28 +670,35 @@ G1~G4 코드/문서 완료. G5는 라우팅 계층 "외부 무선택"을 `LlmCon
 
 **완료 기준 — 충족**: `precompute()`가 `SEARCH_TEXT`를 저장하고 `build()`가 그 값을 그대로 반환함(재계산 없음)을 신규 테스트로 검증, 원본 텍스트/다른 메타데이터 보존 확인, 사전계산값이 공백일 때 무시하고 재계산하는 방어 로직도 검증. 전체 742 tests 회귀 0.
 
-### 10.9 Phase 7-E 제안 — 메모리 최적화 🔵 미착수 (2026-07-13 코드 리뷰)
+### 10.9 Phase 7-E 제안 — 메모리 최적화 🟡 일부 완료 (10.9.2·10.9.4, 2026-07-13 코드 리뷰 → 2026-07-15 완료)
 
 **10.9.1 Chroma 배치 검색이 쓰지 않는 임베딩까지 응답으로 받아옴 (확인 완료 — Spring AI 1.1.8 소스 대조)**
 - 현재: `ChromaVectorStoreProvider.searchBatch()`(`ChromaVectorStoreProvider.java:104`)가 `ChromaApi.QueryRequest.Include.all`을 사용하는데, Spring AI 1.1.8 소스(`spring-ai-chroma-store-1.1.8-sources.jar`) 확인 결과 `Include.all = {METADATAS, DOCUMENTS, DISTANCES, EMBEDDINGS}` — `mapPerQuery()`(`ChromaVectorStoreProvider.java:236`)는 임베딩을 전혀 사용하지 않는다. 리랭크 활성 시 질의 3개 × 후보 21개 × 1536차원이면 검색 1회당 약 1MB의 무의미한 부동소수점 JSON을 전송·파싱·GC하는 셈.
 - 개선안: `List.of(Include.METADATAS, Include.DOCUMENTS, Include.DISTANCES)`로 축소.
 - 완료 기준: 검색 응답에서 임베딩 필드가 요청되지 않음(네트워크 요청 바디로 확인), 기존 검색 단위테스트 회귀 0. 이번 목록에서 가장 즉효가 확실한 수정.
 
-**10.9.2 sqlite-vec 벡터가 텍스트 리터럴로 직렬화됨**
-- 현재: `SqliteVecVectorStoreProvider.toVectorLiteral()`(`SqliteVecVectorStoreProvider.java:225`)이 1536차원 벡터를 `[0.123,...]` 문자열(~15KB, float32 BLOB 6KB의 2.5배)로 직렬화 — 삽입·검색마다 vec0가 JSON 파싱을 수행.
-- 개선안: sqlite-vec의 raw float32 BLOB 바인딩으로 전환(`byte[]`) — 저장 I/O, 파싱 CPU, 힙 문자열 모두 감소. KNN 질의 벡터에도 동일 적용.
-- 리스크: 운영자가 배치한 vec0 빌드에서 BLOB 바인딩 지원 여부를 사전 검증 필요(폐쇄망 바이너리라 버전 편차 가능).
-- 완료 기준: 삽입/검색 벡터가 BLOB로 바인딩되고 기존 sqlite-vec 테스트 스위트 회귀 0.
+**10.9.2 sqlite-vec 벡터가 텍스트 리터럴로 직렬화됨 ✅ 완료 (2026-07-15)**
+
+**배경**: `SqliteVecVectorStoreProvider.toVectorLiteral()`이 1536차원 벡터를 `[0.123,...]` 문자열(~15KB, float32 BLOB 6KB의 2.5배)로 직렬화 — 삽입·검색마다 vec0가 JSON 파싱을 수행.
+
+**구현**: `toVectorLiteral()`을 제거하고 `toVectorBlob()`(little-endian float32 raw blob, `ByteBuffer`)로 교체. `add()`의 `INSERT_EMBEDDING` 배치(`PreparedStatement.setBytes()`)와 `searchByEmbedding()`의 KNN 질의 파라미터(`JdbcTemplate`이 `byte[]` varargs를 자동으로 `setBytes()`로 바인딩 — 커스텀 `PreparedStatementSetter` 불필요) 양쪽 모두 적용. vec0는 입력 시점의 SQLite 값 타입(TEXT vs BLOB)으로 포맷을 자동 판별하고 내부적으로는 항상 자체 이진 표현으로 저장하므로, 기존에 JSON 텍스트로 삽입된 행과 새로 BLOB로 삽입되는 행이 같은 테이블에 섞여도 호환 문제가 없다 — 백필/마이그레이션 불필요.
+
+**완료 기준 — 충족**: `toVectorBlob()`의 바이트 단위 라운드트립(디코드 후 원래 float 값과 일치)과 길이(4×차원) 검증 신규 테스트, `INSERT_EMBEDDING` 파라미터를 검증하던 기존 테스트(`addMapsEmbeddingsToCorrectDocIdAcrossBatches`)를 `setString`→`setBytes` 기대값으로 갱신. 전체 747 tests 회귀 0.
+
+**리스크 — 문서화**: 원안이 지적한 "폐쇄망 vec0 빌드의 BLOB 바인딩 지원 여부"는 실제로는 거의 발생하지 않을 것으로 판단 — BLOB는 sqlite-vec의 근본 이진 포맷이고 JSON 텍스트는 그 위의 편의 계층이라 "JSON은 되는데 BLOB는 안 되는" 조합은 현실적으로 드물다. 그럼에도 실패 시 vec0가 명확한 오류를 던지므로(조용한 데이터 손상이 아님) 조기 발견 가능 — sqlite-vec 백엔드로 전환/업그레이드 시 문서 1건 인덱싱+검색으로 우선 확인 권장(OPERATOR_MANUAL.md에 기록).
 
 **10.9.3 대형 문서 add()가 전체 임베딩을 힙에 모은 뒤 일괄 삽입**
 - 현재: `SqliteVecVectorStoreProvider.add()`(`SqliteVecVectorStoreProvider.java:132`)가 `embeddingByDocId` 맵에 문서 전체 임베딩과 `chunkRows` 전체를 쌓은 뒤 마지막에 일괄 `batchUpdate`. 500청크×1536차원 ≈ 3MB로 당장 위험하진 않으나, 대용량 문서가 커질수록 피크 메모리가 문서 크기에 비례해 증가.
 - 개선안: 토큰 서브배치(`batchingStrategy.batch()`) 단위로 삽입까지 완료하는 스트리밍 구조로 전환 — 피크 메모리가 서브배치 크기로 고정되고, §10.8.3의 트랜잭션과 배치 단위를 맞추면 자연스럽게 결합된다.
 - 완료 기준: 서브배치 완료마다 해당 배치의 삽입이 끝나고(전체 완료를 기다리지 않음), 진행률 콜백(`onProgress`) 정밀도가 유지되거나 개선.
 
-**10.9.4 인덱싱 청크가 질의 임베딩 캐시를 밀어냄**
-- 현재: `CachingEmbeddingModel`(`CachingEmbeddingModel.java`, Javadoc이 스스로 트레이드오프를 인정)의 캐시(기본 max 500, §10.3)를 인덱싱 청크와 검색 질의가 공유한다. 문서 하나(500+청크) 인덱싱 직후 질의 캐시가 사실상 전멸하고, 그동안 캐시는 청크 원문(~800자) × 500개를 키로 점유한다.
-- 개선안: (a) 인덱싱 경로(`VectorStoreProvider.add()`)는 캐시를 우회 — 청크 텍스트 재사용률은 사실상 0이라 캐시에 넣을 이유가 없음. (b) 캐시 키를 원문 대신 SHA-256으로 바꿔 키 메모리를 축소.
-- 완료 기준: 문서 인덱싱 직후에도 직전 검색 질의의 캐시 히트가 유지됨(통합 테스트로 확인), §10.3 기존 캐시 테스트 회귀 0.
+**10.9.4 인덱싱 청크가 질의 임베딩 캐시를 밀어냄 ✅ 완료 (2026-07-15)**
+
+**배경**: `CachingEmbeddingModel`(Javadoc이 스스로 트레이드오프를 인정)의 캐시(기본 max 500, §10.3)를 인덱싱 청크와 검색 질의가 공유한다. 문서 하나(500+청크) 인덱싱 직후 질의 캐시가 사실상 전멸하고, 그동안 캐시는 청크 원문(~800자) × 500개를 키로 점유한다.
+
+**구현**: 제안된 두 안(a/b) 모두 적용. (a) `CachingEmbeddingModel.unwrapForIndexing(EmbeddingModel)` 신설 — `CachingEmbeddingModel` 인스턴스면 내부 delegate(캐시 미적용 원본)를 반환하고, 아니면 그대로 반환. `ChromaVectorStoreProvider`/`SqliteVecVectorStoreProvider` 생성자가 주입받은 `embeddingModel`과 별도로 `indexingEmbeddingModel = unwrapForIndexing(embeddingModel)`을 계산해 두고 `add()` 경로의 임베딩 호출에만 사용 — `search()`/`searchBatch()`는 기존 `embeddingModel`(캐시 적용)을 그대로 사용해 질의 캐시 혜택은 무변경. sqlite-vec는 `embedBatchWithFallback`/`embedSingleWithFallback`이 사용할 `EmbeddingModel`을 파라미터로 받도록 리팩터링해 동일 폴백 로직을 캐시/비캐시 두 모델에 재사용한다. (b) `CachingEmbeddingModel.cacheKey()`가 원문 대신 SHA-256 해시를 캐시/in-flight 맵 키로 사용 — 맵 엔트리 크기가 질의 길이와 무관하게 고정된다.
+
+**완료 기준 — 충족**: `CachingEmbeddingModel`을 실제로 주입한 `SqliteVecVectorStoreProvider.add()` 호출 전후로 delegate 호출 횟수를 비교해 인덱싱 직후에도 직전 검색 질의가 캐시 히트로 유지됨을 신규 통합 테스트로 확인. 인덱싱 임베딩 호출이 캐시 계층을 완전히 우회함(`delegate.call()` 미호출, `delegate.embed()` 직접 호출)을 Chroma·sqlite-vec 양쪽에 대해 검증, `searchBatch()`는 캐시가 여전히 적용됨을 별도 테스트로 확인(무회귀). `unwrapForIndexing()` 자체의 단위테스트 2개(래핑/비래핑)도 추가. 기존 §10.3 `CachingEmbeddingModelTest` 8개 회귀 0(캐시 키 해시화는 동작 기반 테스트라 영향 없음). 전체 747 tests 회귀 0.
 
 ### 10.10 Phase 7-E 제안 우선순위
 
@@ -701,9 +710,9 @@ G1~G4 코드/문서 완료. G5는 라우팅 계층 "외부 무선택"을 `LlmCon
 | 4 | 10.8.3 + 10.9.3 트랜잭션 묶기 + 스트리밍 삽입 (10.8.3만 완료 — §10.8.3 참조; 10.9.3은 미착수) | 3 | 2 | 2 |
 | 5 | 10.8.4 sha256 중복 제거 (완료 — §10.8.4 참조; 10.7.1도 완료 — §10.7.1 참조) | 2 | 1 | 1 |
 | 6 | 10.7.5 검색 품질 평가 하네스 → 10.7.2/10.7.3 재검증 | 4(선행조건) | 0 | 2 |
-| 후속 | 10.9.2 sqlite-vec BLOB 벡터, 10.9.4 캐시 분리 (10.8.5는 완료 — §10.8.5 참조) | 2 | 1~2 | 2 |
+| 후속 | 10.9.2 sqlite-vec BLOB 벡터 (완료 — §10.9.2 참조), 10.9.4 캐시 분리 (완료 — §10.9.4 참조; 10.8.5도 완료 — §10.8.5 참조) | 2 | 1~2 | 2 |
 
-**진행 순서 제안**: 즉효·저리스크(10.9.1, 미착수)부터 적용 → 체감 지연이 큰 검색 경로(10.8.1, 완료) → 인덱싱 시간 지배 항목(10.8.2, 완료) → 나머지는 평가 하네스(10.7.5) 확보 후 데이터 기반으로 순서 재조정.
+**진행 순서 제안**: 즉효·저리스크(10.9.1, 미착수)부터 적용 → 체감 지연이 큰 검색 경로(10.8.1, 완료) → 인덱싱 시간 지배 항목(10.8.2, 완료) → 나머지는 평가 하네스(10.7.5) 확보 후 데이터 기반으로 순서 재조정. §10.9.2·§10.9.4(메모리 최적화)는 우선순위상 후순위였으나 사용자 요청으로 조기 완료.
 
 ---
 

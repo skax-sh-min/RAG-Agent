@@ -2,6 +2,7 @@ package com.example.ragagent.ingestion;
 
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.exception.VectorStoreException;
+import com.example.ragagent.llm.CachingEmbeddingModel;
 import com.example.ragagent.model.MetaKey;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -19,6 +20,8 @@ import org.springframework.transaction.support.TransactionTemplate;
 import javax.sql.DataSource;
 import java.io.InterruptedIOException;
 import java.net.SocketTimeoutException;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.time.Instant;
@@ -81,6 +84,9 @@ public class SqliteVecVectorStoreProvider implements VectorStoreProvider {
 
     private final JdbcTemplate jdbc;
     private final EmbeddingModel embeddingModel;
+    // §10.9.4 — indexing embeds chunk text (rarely reused) via the uncached delegate so it
+    // doesn't evict query-cache entries that would otherwise serve repeated search questions.
+    private final EmbeddingModel indexingEmbeddingModel;
     private final ObjectMapper objectMapper;
     private final double similarityThreshold;
     // §10.8.3 — lazily built from jdbc.getDataSource() (never null in real wiring; null only for
@@ -97,19 +103,20 @@ public class SqliteVecVectorStoreProvider implements VectorStoreProvider {
                                         ObjectMapper objectMapper, AppProperties props) {
         this.jdbc = jdbc;
         this.embeddingModel = embeddingModel;
+        this.indexingEmbeddingModel = CachingEmbeddingModel.unwrapForIndexing(embeddingModel);
         this.objectMapper = objectMapper;
         this.similarityThreshold = props.searchSimilarityThresholdSafe();
     }
 
     @Override
     public List<Document> search(String userId, String query, String version, int topK) {
-        return searchByEmbedding(embedSingleWithFallback(query), version, topK);
+        return searchByEmbedding(embedSingleWithFallback(embeddingModel, query), version, topK);
     }
 
     @Override
     public List<List<Document>> searchBatch(String userId, List<String> queries, String version, int topK) {
         if (queries == null || queries.isEmpty()) return List.of();
-        List<float[]> embeddings = embedBatchWithFallback(queries);
+        List<float[]> embeddings = embedBatchWithFallback(embeddingModel, queries);
         List<List<Document>> out = new ArrayList<>(queries.size());
         for (float[] embedding : embeddings) {
             out.add(searchByEmbedding(embedding, version, topK));
@@ -146,7 +153,7 @@ public class SqliteVecVectorStoreProvider implements VectorStoreProvider {
                 .toList();
         for (List<Document> batch : batchingStrategy.batch(embedInputDocs)) {
             List<String> texts = batch.stream().map(Document::getText).toList(); // already derived
-            List<float[]> batchEmbeddings = embedBatchWithFallback(texts);
+            List<float[]> batchEmbeddings = embedBatchWithFallback(indexingEmbeddingModel, texts);
             for (int i = 0; i < batch.size(); i++) {
                 embeddingByDocId.put(batch.get(i).getId(), batchEmbeddings.get(i));
             }
@@ -158,7 +165,7 @@ public class SqliteVecVectorStoreProvider implements VectorStoreProvider {
             @Override public void setValues(PreparedStatement ps, int i) throws SQLException {
                 ps.setString(1, docs.get(i).getId());
                 ps.setString(2, version);
-                ps.setString(3, toVectorLiteral(embeddingByDocId.get(docs.get(i).getId())));
+                ps.setBytes(3, toVectorBlob(embeddingByDocId.get(docs.get(i).getId())));
             }
             @Override public int getBatchSize() { return docs.size(); }
         };
@@ -245,7 +252,7 @@ public class SqliteVecVectorStoreProvider implements VectorStoreProvider {
      * {@code topK} that pass the threshold is exactly "closest topK above threshold".
      */
     private List<Document> searchByEmbedding(float[] embedding, String version, int topK) {
-        String vector = toVectorLiteral(embedding);
+        byte[] vector = toVectorBlob(embedding);
         int fetchK = similarityThreshold > 0.0
                 ? (int) Math.ceil(topK * THRESHOLD_OVERFETCH_MULTIPLIER) : topK;
         List<Document> rows = jdbc.query(SEARCH, (rs, i) -> {
@@ -270,14 +277,20 @@ public class SqliteVecVectorStoreProvider implements VectorStoreProvider {
         jdbc.update("DELETE FROM vec_document_chunks WHERE spring_doc_id IN (" + placeholders + ")", args);
     }
 
-    /** float[] → sqlite-vec JSON text literal {@code [v0,v1,...]} (accepted by vec0 directly). */
-    static String toVectorLiteral(float[] vector) {
-        StringBuilder sb = new StringBuilder(vector.length * 10 + 2).append('[');
-        for (int i = 0; i < vector.length; i++) {
-            if (i > 0) sb.append(',');
-            sb.append(vector[i]);
-        }
-        return sb.append(']').toString();
+    /**
+     * §10.9.2 — float[] → raw little-endian float32 blob, the binary format sqlite-vec's vec0
+     * accepts directly at insert/KNN-query time (auto-detected by SQLite value type — BLOB vs.
+     * the legacy JSON-text literal this replaces). Roughly 2.5x smaller than the JSON form and
+     * skips vec0's per-call text parse on both insert and search. vec0 stores vectors in its own
+     * internal binary representation regardless of which input format was used, so this is a
+     * drop-in replacement — no backfill needed for rows inserted by the old JSON-literal path.
+     * Byte order follows the platform-native convention every vec0 build assumes (little-endian
+     * on the x86/x86_64/ARM64 platforms this project targets).
+     */
+    static byte[] toVectorBlob(float[] vector) {
+        ByteBuffer buf = ByteBuffer.allocate(vector.length * Float.BYTES).order(ByteOrder.LITTLE_ENDIAN);
+        for (float v : vector) buf.putFloat(v);
+        return buf.array();
     }
 
     private String toJson(Map<String, Object> metadata) {
@@ -298,9 +311,9 @@ public class SqliteVecVectorStoreProvider implements VectorStoreProvider {
         }
     }
 
-    private List<float[]> embedBatchWithFallback(List<String> texts) {
+    private List<float[]> embedBatchWithFallback(EmbeddingModel model, List<String> texts) {
         try {
-            return embeddingModel.embed(texts); // fast path: single batched call
+            return model.embed(texts); // fast path: single batched call
         } catch (RuntimeException e) {
             if (isInputTooLargeError(e)) {
                 logInputTooLarge("embed-batch", e, texts == null ? 0 : texts.size(),
@@ -308,7 +321,7 @@ public class SqliteVecVectorStoreProvider implements VectorStoreProvider {
                 log.warn("[sqlite-vec] batched embedding rejected by model token limit, retrying per item with shrinking");
                 List<float[]> out = new ArrayList<>(texts.size());
                 for (String text : texts) {
-                    out.add(embedSingleWithFallback(text));
+                    out.add(embedSingleWithFallback(model, text));
                 }
                 return out;
             }
@@ -320,8 +333,8 @@ public class SqliteVecVectorStoreProvider implements VectorStoreProvider {
                 log.warn("[sqlite-vec] embedding batch timed out (n={}), splitting in half and retrying",
                         texts.size());
                 int mid = texts.size() / 2;
-                List<float[]> left = embedBatchWithFallback(texts.subList(0, mid));
-                List<float[]> right = embedBatchWithFallback(texts.subList(mid, texts.size()));
+                List<float[]> left = embedBatchWithFallback(model, texts.subList(0, mid));
+                List<float[]> right = embedBatchWithFallback(model, texts.subList(mid, texts.size()));
                 List<float[]> combined = new ArrayList<>(texts.size());
                 combined.addAll(left);
                 combined.addAll(right);
@@ -342,14 +355,14 @@ public class SqliteVecVectorStoreProvider implements VectorStoreProvider {
         return false;
     }
 
-    private float[] embedSingleWithFallback(String text) {
+    private float[] embedSingleWithFallback(EmbeddingModel model, String text) {
         String candidate = text == null ? "" : text;
         final int originalLength = candidate.length();
         RuntimeException lastTooLarge = null;
 
         for (int i = 0; i < MAX_EMBED_RETRY; i++) {
             try {
-                return embeddingModel.embed(candidate);
+                return model.embed(candidate);
             } catch (RuntimeException e) {
                 if (!isInputTooLargeError(e)) throw e;
                 logInputTooLarge("embed-single", e, i + 1, candidate.length());

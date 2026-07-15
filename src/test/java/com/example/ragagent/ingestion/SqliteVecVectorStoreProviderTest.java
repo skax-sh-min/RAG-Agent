@@ -16,6 +16,8 @@ import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.net.SocketTimeoutException;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.nio.file.Path;
 import java.sql.PreparedStatement;
 import java.util.ArrayList;
@@ -105,12 +107,18 @@ class SqliteVecVectorStoreProviderTest {
     }
 
     @Test
-    @DisplayName("toVectorLiteral: float[] → sqlite-vec JSON 텍스트")
-    void vectorLiteral() {
-        assertThat(SqliteVecVectorStoreProvider.toVectorLiteral(new float[]{1.0f, -2.5f, 0.0f}))
-                .isEqualTo("[1.0,-2.5,0.0]");
-        assertThat(SqliteVecVectorStoreProvider.toVectorLiteral(new float[]{})).isEqualTo("[]");
-        assertThat(SqliteVecVectorStoreProvider.toVectorLiteral(new float[]{42.0f})).isEqualTo("[42.0]");
+    @DisplayName("toVectorBlob: float[] → little-endian float32 바이트 배열 (§10.9.2)")
+    void vectorBlob() {
+        byte[] blob = SqliteVecVectorStoreProvider.toVectorBlob(new float[]{1.0f, -2.5f, 0.0f});
+
+        assertThat(blob).hasSize(12); // 3 floats * 4 bytes
+        ByteBuffer buf = ByteBuffer.wrap(blob).order(ByteOrder.LITTLE_ENDIAN);
+        assertThat(buf.getFloat()).isEqualTo(1.0f);
+        assertThat(buf.getFloat()).isEqualTo(-2.5f);
+        assertThat(buf.getFloat()).isEqualTo(0.0f);
+
+        assertThat(SqliteVecVectorStoreProvider.toVectorBlob(new float[]{})).isEmpty();
+        assertThat(SqliteVecVectorStoreProvider.toVectorBlob(new float[]{42.0f})).hasSize(4);
     }
 
     @Test
@@ -227,12 +235,12 @@ class SqliteVecVectorStoreProviderTest {
             PreparedStatement ps0 = mock(PreparedStatement.class);
             setter.setValues(ps0, 0);
             verify(ps0).setString(1, "d1");
-            verify(ps0).setString(3, "[1.0]");
+            verify(ps0).setBytes(3, SqliteVecVectorStoreProvider.toVectorBlob(new float[]{1f}));
 
             PreparedStatement ps1 = mock(PreparedStatement.class);
             setter.setValues(ps1, 1);
             verify(ps1).setString(1, "d2");
-            verify(ps1).setString(3, "[2.0]");
+            verify(ps1).setBytes(3, SqliteVecVectorStoreProvider.toVectorBlob(new float[]{2f}));
         } catch (java.sql.SQLException e) {
             throw new RuntimeException(e);
         }
@@ -408,6 +416,38 @@ class SqliteVecVectorStoreProviderTest {
                 .containsExactly(true, true);
         assertThat(TransactionSynchronizationManager.isActualTransactionActive())
                 .as("transaction must be closed once add() returns").isFalse();
+    }
+
+    // ── §10.9.4 — indexing bypasses the query-embedding cache ─────────────
+
+    @Test
+    @DisplayName("add: CachingEmbeddingModel이 주입되면 인덱싱 직후에도 직전 검색 질의의 캐시 히트가 유지된다")
+    void add_doesNotEvictOrPopulateQueryCache() {
+        EmbeddingModel delegate = mock(EmbeddingModel.class);
+        when(delegate.call(org.mockito.ArgumentMatchers.argThat(
+                req -> req.getInstructions().equals(List.of("검색 질의")))))
+                .thenReturn(new org.springframework.ai.embedding.EmbeddingResponse(
+                        List.of(new org.springframework.ai.embedding.Embedding(new float[]{0.9f}, 0))));
+        when(delegate.embed(any(List.class))).thenReturn(List.of(new float[]{0.1f}));
+        var cachingModel = new com.example.ragagent.llm.CachingEmbeddingModel(delegate, "test", 500, 600);
+
+        // Warm the query cache first (mirrors a prior search).
+        cachingModel.call(new org.springframework.ai.embedding.EmbeddingRequest(List.of("검색 질의"), null));
+        verify(delegate, times(1)).call(any());
+
+        // Index a chunk — must go through the raw delegate's embed(List), not the cache's call().
+        AppProperties props = mock(AppProperties.class);
+        when(props.searchSimilarityThresholdSafe()).thenReturn(0.0);
+        SqliteVecVectorStoreProvider p = new SqliteVecVectorStoreProvider(jdbc, cachingModel, new ObjectMapper(), props);
+        Document chunk = Document.builder().id("c1").text("인덱싱되는 청크 본문").metadata(Map.of()).build();
+        p.add("u", "v1", List.of(chunk));
+
+        verify(delegate).embed(any(List.class));          // indexing reached the raw delegate directly
+        verify(delegate, times(1)).call(any());            // still just the one warmup call — no extra call() traffic
+
+        // The previously cached query must still be a cache hit (delegate.call() count unchanged).
+        cachingModel.call(new org.springframework.ai.embedding.EmbeddingRequest(List.of("검색 질의"), null));
+        verify(delegate, times(1)).call(any());
     }
 
     @Test

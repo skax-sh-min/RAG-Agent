@@ -268,6 +268,48 @@ class ChromaVectorStoreProviderTest {
         assertThat(captor.getValue().metadata().get(0)).doesNotContainKey(MetaKey.CHUNK_CONTEXT);
     }
 
+    // ── §10.9.4 — indexing bypasses the query-embedding cache ────────────
+
+    @Test
+    @DisplayName("add: CachingEmbeddingModel이 주입되면 캐시를 우회해 delegate로 직접 임베딩한다")
+    void add_bypassesCachingEmbeddingModelDelegate() {
+        VectorStoreRegistry registry = mock(VectorStoreRegistry.class);
+        EmbeddingModel delegate = mock(EmbeddingModel.class);
+        when(delegate.embed(any(List.class))).thenReturn(List.of(new float[]{0.5f}));
+        var cachingModel = new com.example.ragagent.llm.CachingEmbeddingModel(delegate, "test", 500, 600);
+        ChromaApi chromaApi = mock(ChromaApi.class);
+
+        Document doc = Document.builder().id("d1").text("인덱싱되는 청크 본문").metadata(Map.of()).build();
+        addProvider(registry, chromaApi, cachingModel).add("owner", "latest", List.of(doc));
+
+        verify(delegate).embed(any(List.class));                                  // reached the raw delegate directly
+        verify(delegate, org.mockito.Mockito.never()).call(any());                // the cache's call()-based path never ran
+    }
+
+    @Test
+    @DisplayName("searchBatch: CachingEmbeddingModel이 주입되면 쿼리 캐시가 그대로 적용된다(인덱싱과 무관)")
+    void searchBatch_stillBenefitsFromCache() {
+        EmbeddingModel delegate = mock(EmbeddingModel.class);
+        when(delegate.call(any())).thenAnswer(inv -> {
+            org.springframework.ai.embedding.EmbeddingRequest req = inv.getArgument(0);
+            List<org.springframework.ai.embedding.Embedding> out = new java.util.ArrayList<>();
+            for (int i = 0; i < req.getInstructions().size(); i++) {
+                out.add(new org.springframework.ai.embedding.Embedding(new float[]{0.1f}, i));
+            }
+            return new org.springframework.ai.embedding.EmbeddingResponse(out);
+        });
+        var cachingModel = new com.example.ragagent.llm.CachingEmbeddingModel(delegate, "test", 500, 600);
+        ChromaApi chromaApi = mock(ChromaApi.class);
+        when(chromaApi.queryCollection(anyString(), anyString(), anyString(), any()))
+                .thenReturn(twoQueryResponse());
+
+        ChromaVectorStoreProvider p = batchProvider(cachingModel, chromaApi, 0.0);
+        p.searchBatch("owner", List.of("q1", "q2"), "latest", 7);
+        p.searchBatch("owner", List.of("q1", "q2"), "latest", 7); // same queries — should be a cache hit
+
+        verify(delegate, org.mockito.Mockito.times(1)).call(any()); // only the first call reached the delegate
+    }
+
     // ── updateTags ──────────────────────────────────────────────────────
 
     @Test

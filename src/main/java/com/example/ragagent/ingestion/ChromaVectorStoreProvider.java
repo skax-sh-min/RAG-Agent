@@ -1,6 +1,7 @@
 package com.example.ragagent.ingestion;
 
 import com.example.ragagent.config.AppProperties;
+import com.example.ragagent.llm.CachingEmbeddingModel;
 import com.example.ragagent.model.MetaKey;
 import com.example.ragagent.service.VectorStoreRegistry;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -53,6 +54,9 @@ public class ChromaVectorStoreProvider implements VectorStoreProvider {
     private final VectorStoreRegistry registry;
     private final ChromaApi chromaApi;
     private final EmbeddingModel embeddingModel;
+    // §10.9.4 — indexing embeds chunk text (rarely reused) via the uncached delegate so it
+    // doesn't evict query-cache entries that would otherwise serve repeated search questions.
+    private final EmbeddingModel indexingEmbeddingModel;
     private final ObjectMapper objectMapper;
     private final double similarityThreshold;
 
@@ -69,6 +73,7 @@ public class ChromaVectorStoreProvider implements VectorStoreProvider {
         this.registry = registry;
         this.chromaApi = chromaApi;
         this.embeddingModel = embeddingModel;
+        this.indexingEmbeddingModel = CachingEmbeddingModel.unwrapForIndexing(embeddingModel);
         this.objectMapper = objectMapper;
         this.similarityThreshold = props.searchSimilarityThresholdSafe();
     }
@@ -139,7 +144,7 @@ public class ChromaVectorStoreProvider implements VectorStoreProvider {
         Map<String, float[]> embeddingByDocId = new HashMap<>(docs.size() * 2);
         int done = 0;
         for (List<Document> batch : batchingStrategy.batch(embedInputDocs)) {
-            List<float[]> batchEmbeddings = embeddingModel.embed(batch.stream().map(Document::getText).toList());
+            List<float[]> batchEmbeddings = indexingEmbeddingModel.embed(batch.stream().map(Document::getText).toList());
             for (int i = 0; i < batch.size(); i++) {
                 embeddingByDocId.put(batch.get(i).getId(), batchEmbeddings.get(i));
             }
