@@ -6,14 +6,19 @@ import com.example.ragagent.model.MetaKey;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.springframework.ai.document.Document;
 import org.mockito.ArgumentCaptor;
 import org.springframework.ai.embedding.EmbeddingModel;
 import org.springframework.jdbc.core.BatchPreparedStatementSetter;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.datasource.DriverManagerDataSource;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.net.SocketTimeoutException;
+import java.nio.file.Path;
 import java.sql.PreparedStatement;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
@@ -35,6 +40,9 @@ import static org.mockito.Mockito.when;
  * 실제 KNN/add/search/version 필터/멱등은 네이티브 vec0가 필요해 통합 테스트로 검증한다.
  */
 class SqliteVecVectorStoreProviderTest {
+
+    @TempDir
+    Path tmpDir;
 
     private final JdbcTemplate jdbc = mock(JdbcTemplate.class);
     private final EmbeddingModel embeddingModel = mock(EmbeddingModel.class);
@@ -364,5 +372,58 @@ class SqliteVecVectorStoreProviderTest {
         List<String> stmts = sql.getAllValues();
         assertThat(stmts.get(0)).contains("DELETE FROM vec_embeddings").contains("IN (?,?)");
         assertThat(stmts.get(1)).contains("DELETE FROM vec_document_chunks").contains("IN (?,?)");
+    }
+
+    // ── §10.8.3 — transactional batch insert ─────────────────────────────
+
+    @Test
+    @DisplayName("add: 실제 DataSource가 있으면 두 batchUpdate가 하나의 트랜잭션 안에서 실행된다")
+    void add_wrapsBothBatchUpdatesInOneTransactionWhenRealDataSourceAvailable() {
+        DriverManagerDataSource ds = new DriverManagerDataSource();
+        ds.setDriverClassName("org.sqlite.JDBC");
+        ds.setUrl("jdbc:sqlite:" + tmpDir.resolve("tx-test.db"));
+        when(jdbc.getDataSource()).thenReturn(ds);
+
+        List<Boolean> txActiveDuringCall = new ArrayList<>();
+        when(jdbc.batchUpdate(eq("INSERT INTO vec_embeddings(spring_doc_id, version, embedding) VALUES (?, ?, ?)"),
+                any(BatchPreparedStatementSetter.class)))
+                .thenAnswer(inv -> {
+                    txActiveDuringCall.add(TransactionSynchronizationManager.isActualTransactionActive());
+                    return new int[0];
+                });
+        when(jdbc.batchUpdate(eq("INSERT INTO vec_document_chunks(spring_doc_id, content, metadata, version, doc_id, created_at) VALUES (?, ?, ?, ?, ?, ?)"),
+                anyList()))
+                .thenAnswer(inv -> {
+                    txActiveDuringCall.add(TransactionSynchronizationManager.isActualTransactionActive());
+                    return new int[0];
+                });
+
+        SqliteVecVectorStoreProvider p = provider();
+        Document doc = Document.builder().id("d1").text("hello").metadata(Map.of()).build();
+        when(embeddingModel.embed(anyList())).thenReturn(List.of(new float[]{0.1f}));
+
+        p.add("u", "v1", List.of(doc));
+
+        assertThat(txActiveDuringCall).as("both batchUpdate calls should run inside an active transaction")
+                .containsExactly(true, true);
+        assertThat(TransactionSynchronizationManager.isActualTransactionActive())
+                .as("transaction must be closed once add() returns").isFalse();
+    }
+
+    @Test
+    @DisplayName("add: DataSource가 없으면(목 JdbcTemplate) 트랜잭션 없이 그대로 두 batchUpdate를 호출한다")
+    void add_noDataSource_fallsBackToSequentialBatchUpdates() {
+        // jdbc.getDataSource() defaults to null (unstubbed mock) — same setup every other test in
+        // this file already relies on; this test names that fallback path explicitly.
+        SqliteVecVectorStoreProvider p = provider();
+        Document doc = Document.builder().id("d1").text("hello").metadata(Map.of()).build();
+        when(embeddingModel.embed(anyList())).thenReturn(List.of(new float[]{0.1f}));
+
+        p.add("u", "v1", List.of(doc));
+
+        verify(jdbc).batchUpdate(eq("INSERT INTO vec_embeddings(spring_doc_id, version, embedding) VALUES (?, ?, ?)"),
+                any(BatchPreparedStatementSetter.class));
+        verify(jdbc).batchUpdate(eq("INSERT INTO vec_document_chunks(spring_doc_id, content, metadata, version, doc_id, created_at) VALUES (?, ?, ?, ?, ?, ?)"),
+                anyList());
     }
 }

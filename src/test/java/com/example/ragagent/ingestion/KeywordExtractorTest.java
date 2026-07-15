@@ -188,4 +188,111 @@ class KeywordExtractorTest {
         assertThat(KeywordExtractor.extractKeywordsTf("", 5)).isEmpty();
         assertThat(KeywordExtractor.extractKeywordsTf(null, 5)).isEmpty();
     }
+
+    // ── §10.8.2 — batch keyword extraction ──────────────────────────────
+
+    @Test
+    @DisplayName("splitBatchSections — 번호별 [결과 N] 마커로 구간을 정확히 분리한다")
+    void splitBatchSections_parsesNumberedMarkers() {
+        String response = """
+                [결과 1]
+                키워드: 가, 나, 다
+                맥락: 첫 번째 설명.
+                [결과 2]
+                키워드: 라, 마, 바
+                맥락: 두 번째 설명.""";
+
+        java.util.Map<Integer, String> sections = KeywordExtractor.splitBatchSections(response);
+
+        assertThat(sections).hasSize(2);
+        assertThat(sections.get(1)).contains("가, 나, 다").contains("첫 번째 설명");
+        assertThat(sections.get(2)).contains("라, 마, 바").contains("두 번째 설명");
+    }
+
+    @Test
+    @DisplayName("splitBatchSections — 마커가 없으면 빈 맵을 반환한다")
+    void splitBatchSections_noMarkers_returnsEmpty() {
+        assertThat(KeywordExtractor.splitBatchSections("마커 없는 응답입니다")).isEmpty();
+        assertThat(KeywordExtractor.splitBatchSections(null)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("enrichKeywordsBatch — 정상 응답이면 청크별로 올바른 키워드/맥락이 매핑된다")
+    void enrichKeywordsBatch_success_mapsPerChunkResults() {
+        when(llmRouter.executeWithTracking(any(), any(), any(), any())).thenReturn("""
+                [결과 1]
+                키워드: 가, 나, 다
+                맥락: 첫 번째 청크 설명.
+                [결과 2]
+                키워드: 라, 마, 바
+                맥락: 두 번째 청크 설명.""");
+        List<Document> batch = List.of(new Document("첫 번째 청크 내용"), new Document("두 번째 청크 내용"));
+
+        List<Document> result = extractor.enrichKeywordsBatch(batch);
+
+        assertThat(result).hasSize(2);
+        assertThat(result.get(0).getMetadata().get(MetaKey.EXCERPT_KEYWORDS)).isEqualTo("가, 나, 다");
+        assertThat(result.get(0).getMetadata().get(MetaKey.CHUNK_CONTEXT)).isEqualTo("첫 번째 청크 설명.");
+        assertThat(result.get(1).getMetadata().get(MetaKey.EXCERPT_KEYWORDS)).isEqualTo("라, 마, 바");
+        assertThat(result.get(1).getMetadata().get(MetaKey.CHUNK_CONTEXT)).isEqualTo("두 번째 청크 설명.");
+    }
+
+    @Test
+    @DisplayName("enrichKeywordsBatch — 응답에 결과 마커가 부족하면(파싱 실패) 배치 전체가 개별 TF 폴백된다")
+    void enrichKeywordsBatch_incompleteResponse_fallsBackToTfForEveryChunk() {
+        when(llmRouter.executeWithTracking(any(), any(), any(), any()))
+                .thenReturn("[결과 1]\n키워드: 가, 나, 다\n맥락: 설명."); // only 1 of 2 expected sections
+        List<Document> batch = List.of(
+                new Document("apple apple apple banana"), new Document("cherry cherry cherry date"));
+
+        List<Document> result = extractor.enrichKeywordsBatch(batch);
+
+        assertThat(result).hasSize(2);
+        // TF fallback derives keywords from each chunk's own text, not from the (unused) LLM reply.
+        assertThat(result.get(0).getMetadata().get(MetaKey.EXCERPT_KEYWORDS).toString()).contains("apple");
+        assertThat(result.get(1).getMetadata().get(MetaKey.EXCERPT_KEYWORDS).toString()).contains("cherry");
+    }
+
+    @Test
+    @DisplayName("enrichKeywordsBatch — LLM 호출 실패 시 배치 전체가 개별 TF 폴백된다(청크별 재시도 없음)")
+    void enrichKeywordsBatch_llmFailure_fallsBackToTfWithoutPerChunkRetry() {
+        when(llmRouter.executeWithTracking(any(), any(), any(), any()))
+                .thenThrow(new RuntimeException("no LLM in test"));
+        List<Document> batch = List.of(
+                new Document("apple apple apple banana"), new Document("cherry cherry cherry date"));
+
+        List<Document> result = extractor.enrichKeywordsBatch(batch);
+
+        assertThat(result).hasSize(2);
+        verify(llmRouter, org.mockito.Mockito.times(1)).executeWithTracking(any(), any(), any(), any());
+        assertThat(result.get(0).getMetadata().get(MetaKey.EXCERPT_KEYWORDS).toString()).contains("apple");
+    }
+
+    @Test
+    @DisplayName("enrichParallel — batchSize>1이면 LLM 왕복 횟수가 ceil(청크수/N)로 감소한다")
+    void enrichParallel_batchSizeAboveOne_reducesRoundTrips() {
+        LlmRouter router = mock(LlmRouter.class);
+        AppProperties props = mock(AppProperties.class);
+        AppProperties.IndexingConfig indexing = mock(AppProperties.IndexingConfig.class);
+        when(indexing.keywordTimeoutSeconds()).thenReturn(5);
+        when(indexing.keywordBatchSize()).thenReturn(2);
+        when(props.indexingSafe()).thenReturn(indexing);
+        KeywordExtractor batchExtractor = new KeywordExtractor(router, props);
+        when(router.executeWithTracking(any(), any(), any(), any())).thenReturn("""
+                [결과 1]
+                키워드: 가
+                맥락: 설명1
+                [결과 2]
+                키워드: 나
+                맥락: 설명2""");
+        // 5 chunks, batchSize=2 → batches of 2,2,1 → ceil(5/2)=3 round-trips.
+        List<Document> chunks = List.of(
+                new Document("청크1"), new Document("청크2"), new Document("청크3"),
+                new Document("청크4"), new Document("청크5"));
+
+        List<Document> result = batchExtractor.enrichParallel(chunks, new Semaphore(4), "test.txt", e -> {});
+
+        assertThat(result).hasSize(5);
+        verify(router, org.mockito.Mockito.times(3)).executeWithTracking(any(), any(), any(), any());
+    }
 }

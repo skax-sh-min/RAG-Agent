@@ -22,7 +22,8 @@ public record IndexRequest(
         boolean addImageDescriptions,    // true → Markdown correction adds local image descriptions
         boolean addHeadingNumbers,       // true → Markdown second pass adds heading numbers + code-block polish
         Consumer<IndexingProgressEvent> onProgress,
-        List<String> tags                // 검색 스코프 태그 (청크 metadata에 저장)
+        List<String> tags,               // 검색 스코프 태그 (청크 metadata에 저장)
+        String precomputedSha256         // §10.8.4 — null이면 index()가 직접 재계산
 ) {
     public IndexRequest {
         tags = tags == null ? List.of() : List.copyOf(tags);
@@ -42,7 +43,7 @@ public record IndexRequest(
                                       List<String> tags, boolean addImageDescriptions,
                                       Consumer<IndexingProgressEvent> onProgress) {
         return new IndexRequest(p, filename, version, userId,
-            null, null, true, addImageDescriptions, false, onProgress, tags);
+            null, null, true, addImageDescriptions, false, onProgress, tags, null);
     }
 
     public static IndexRequest single(Path p, String filename, String version, String userId,
@@ -50,11 +51,17 @@ public record IndexRequest(
                                       boolean addHeadingNumbers,
                                       Consumer<IndexingProgressEvent> onProgress) {
         return new IndexRequest(p, filename, version, userId,
-            null, null, true, addImageDescriptions, addHeadingNumbers, onProgress, tags);
+            null, null, true, addImageDescriptions, addHeadingNumbers, onProgress, tags, null);
     }
 
     public static IndexRequest parallel(Path p, String version, String userId, Semaphore gate, String stale) {
+        return parallel(p, version, userId, gate, stale, null);
+    }
+
+    /** §10.8.4 — syncDirectory() already hashed the file in its detection pass; skip index()'s re-hash. */
+    public static IndexRequest parallel(Path p, String version, String userId, Semaphore gate, String stale,
+                                        String precomputedSha256) {
         return new IndexRequest(p, p.getFileName().toString(), version, userId,
-                gate, stale, false, false, false, event -> {}, List.of());
+                gate, stale, false, false, false, event -> {}, List.of(), precomputedSha256);
     }
 }

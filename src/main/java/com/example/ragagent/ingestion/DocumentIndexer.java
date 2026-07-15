@@ -98,7 +98,9 @@ public class DocumentIndexer {
         log.info("[INDEX] 시작: {} (version={})", req.filename(), req.version());
         long t0 = System.currentTimeMillis();
 
-        String sha256 = computeSha256(req.path());
+        // §10.8.4 — syncDirectory() already hashed this file during detection; reuse it instead
+        // of re-reading the whole file. Interactive single-upload requests still compute fresh.
+        String sha256 = req.precomputedSha256() != null ? req.precomputedSha256() : computeSha256(req.path());
         String docId = req.filename() + "_" + sha256.substring(0, 8);
         String imageId = imageId(sha256);
         String docType = inferDocType(req.filename());
@@ -238,6 +240,10 @@ public class DocumentIndexer {
                 ? req.parallelGate()
                 : new Semaphore(props.indexingSafe().maxConcurrentLlmCalls());
         List<Document> enriched = keywordExtractor.enrichParallel(tagged, gate, req.filename(), req.onProgress());
+        // §10.8.5 — compute the embedding/FTS derived text once here instead of once per consumer
+        // (vectorStore.add() below + keywordRepo.indexChunks()); both read it back via
+        // SearchTextBuilder.build()'s short-circuit and strip it before persisting metadata.
+        enriched = enriched.stream().map(SearchTextBuilder::precompute).toList();
 
         log.debug("[INDEX] {} 벡터 스토어 저장 중 ({}개 청크)...", req.filename(), enriched.size());
         vectorStore.add(DocRegistry.SHARED, req.version(), enriched, (done, total) ->
@@ -313,6 +319,7 @@ public class DocumentIndexer {
         log.debug("[REINDEX] 키워드 추출 시작: {}개 청크", tagged.size());
         Semaphore gate = new Semaphore(props.indexingSafe().maxConcurrentLlmCalls());
         List<Document> enriched = keywordExtractor.enrichParallel(tagged, gate, filename, onProgress);
+        enriched = enriched.stream().map(SearchTextBuilder::precompute).toList(); // §10.8.5
 
         log.debug("[REINDEX] 벡터 스토어 저장 중: {}개 청크", enriched.size());
         vectorStore.add(DocRegistry.SHARED, version, enriched, (done, total) ->
@@ -356,7 +363,8 @@ public class DocumentIndexer {
             }
         }
 
-        record FileEntry(Path path, String staleDocId) {}
+        // §10.8.4 — sha256 carried through to step 2 so index() doesn't re-hash the same file.
+        record FileEntry(Path path, String staleDocId, String sha256) {}
         Map<String, FileEntry> filesToIndex = new HashMap<>();
 
         for (Map.Entry<String, Path> e : filesOnDisk.entrySet()) {
@@ -368,7 +376,7 @@ public class DocumentIndexer {
             if (docRegistry.existsBySha256AndVersion(sha256, version, DocRegistry.SHARED)) continue;
 
             String stale = docRegistry.findStaleDocId(filename, docId, version, DocRegistry.SHARED).orElse(null);
-            filesToIndex.put(filename, new FileEntry(filePath, stale));
+            filesToIndex.put(filename, new FileEntry(filePath, stale, sha256));
         }
         log.info("[SYNC] 1단계 완료: 전체 {}개, 인덱싱 필요 {}개, 스킵 {}개",
                 filesOnDisk.size(), filesToIndex.size(), filesOnDisk.size() - filesToIndex.size());
@@ -394,7 +402,7 @@ public class DocumentIndexer {
                     String errorMsg = null;
                     try {
                         index(IndexRequest.parallel(e.getValue().path(), version,
-                                DocRegistry.SHARED, llmGate, e.getValue().staleDocId()));
+                                DocRegistry.SHARED, llmGate, e.getValue().staleDocId(), e.getValue().sha256()));
                         (e.getValue().staleDocId() != null ? updated : indexed).add(e.getKey());
                     } catch (Exception ex) {
                         log.error("[SYNC] 병렬 인덱싱 실패: {}", e.getKey(), ex);

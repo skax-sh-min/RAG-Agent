@@ -156,6 +156,7 @@ public class ChromaVectorStoreProvider implements VectorStoreProvider {
             embeddings.add(embeddingByDocId.get(d.getId()));
             Map<String, Object> meta = new HashMap<>(d.getMetadata());
             meta.remove(MetaKey.CHUNK_CONTEXT);                    // transient — never persisted
+            meta.remove(MetaKey.SEARCH_TEXT);                      // transient — never persisted (§10.8.5)
             metadatas.add(meta);
             contents.add(d.getText() == null ? "" : d.getText()); // untouched original
         }

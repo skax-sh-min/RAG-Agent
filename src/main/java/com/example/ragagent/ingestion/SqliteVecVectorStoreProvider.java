@@ -13,7 +13,10 @@ import org.springframework.ai.embedding.EmbeddingModel;
 import org.springframework.ai.embedding.TokenCountBatchingStrategy;
 import org.springframework.jdbc.core.BatchPreparedStatementSetter;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.datasource.DataSourceTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
+import javax.sql.DataSource;
 import java.io.InterruptedIOException;
 import java.net.SocketTimeoutException;
 import java.sql.PreparedStatement;
@@ -80,6 +83,10 @@ public class SqliteVecVectorStoreProvider implements VectorStoreProvider {
     private final EmbeddingModel embeddingModel;
     private final ObjectMapper objectMapper;
     private final double similarityThreshold;
+    // §10.8.3 — lazily built from jdbc.getDataSource() (never null in real wiring; null only for
+    // fully-mocked JdbcTemplate test doubles, where the transaction wrap is harmlessly skipped —
+    // see addBatches()).
+    private volatile TransactionTemplate transactionTemplate;
     // Same default Spring AI applies internally to ChromaVectorStore.add() — splits by token
     // count (8191 default, 10% reserve) so add() never sends an entire large document's chunks
     // (e.g. 500+) as one unbounded embed() call. Without this, only the Chroma backend got this
@@ -147,20 +154,21 @@ public class SqliteVecVectorStoreProvider implements VectorStoreProvider {
             onProgress.accept(done, total);
         }
 
-        jdbc.batchUpdate(INSERT_EMBEDDING, new BatchPreparedStatementSetter() {
+        BatchPreparedStatementSetter embeddingSetter = new BatchPreparedStatementSetter() {
             @Override public void setValues(PreparedStatement ps, int i) throws SQLException {
                 ps.setString(1, docs.get(i).getId());
                 ps.setString(2, version);
                 ps.setString(3, toVectorLiteral(embeddingByDocId.get(docs.get(i).getId())));
             }
             @Override public int getBatchSize() { return docs.size(); }
-        });
+        };
 
         String now = Instant.now().toString();
         List<Object[]> chunkRows = new ArrayList<>(docs.size());
         for (Document d : docs) {
             Map<String, Object> meta = d.getMetadata() == null ? new HashMap<>() : new HashMap<>(d.getMetadata());
             meta.remove(MetaKey.CHUNK_CONTEXT); // transient — never persisted
+            meta.remove(MetaKey.SEARCH_TEXT);   // transient — never persisted (§10.8.5)
             chunkRows.add(new Object[]{
                     d.getId(),
                     d.getText() == null ? "" : d.getText(),
@@ -170,7 +178,36 @@ public class SqliteVecVectorStoreProvider implements VectorStoreProvider {
                     now
             });
         }
-        jdbc.batchUpdate(INSERT_CHUNK, chunkRows);
+
+        // §10.8.3 — both batch inserts commit together (one round-trip) instead of two separate
+        // autocommit statements, and a mid-write failure no longer leaves orphaned vec_embeddings
+        // rows with no matching vec_document_chunks row.
+        Runnable insertBoth = () -> {
+            jdbc.batchUpdate(INSERT_EMBEDDING, embeddingSetter);
+            jdbc.batchUpdate(INSERT_CHUNK, chunkRows);
+        };
+        TransactionTemplate tx = transactionTemplate();
+        if (tx != null) {
+            tx.executeWithoutResult(status -> insertBoth.run());
+        } else {
+            insertBoth.run();
+        }
+    }
+
+    /**
+     * Builds (once) and caches the transaction template around {@code jdbc}'s DataSource. Returns
+     * null when no DataSource is available — a fully-mocked {@code JdbcTemplate} in unit tests,
+     * never the case in real Spring wiring — so {@link #add} falls back to the pre-§10.8.3
+     * sequential (non-transactional) inserts instead of failing.
+     */
+    private TransactionTemplate transactionTemplate() {
+        TransactionTemplate tt = transactionTemplate;
+        if (tt == null) {
+            DataSource ds = jdbc.getDataSource();
+            tt = ds != null ? new TransactionTemplate(new DataSourceTransactionManager(ds)) : null;
+            transactionTemplate = tt;
+        }
+        return tt;
     }
 
     @Override

@@ -349,6 +349,36 @@ class DocumentIndexerTest {
     }
 
     @Test
+    @DisplayName("parallel index — 사전계산된 sha256이 전달되면 파일을 재해싱하지 않고 그대로 사용한다(§10.8.4)")
+    void index_parallel_usesPrecomputedSha256WithoutRehashing() throws IOException {
+        Path txtFile = tmpDir.resolve("presha.txt");
+        Files.writeString(txtFile, "실제 파일 내용");
+        Semaphore gate = new Semaphore(2);
+        // Deliberately wrong vs. the file's real content hash — if index() actually re-read and
+        // re-hashed the file (bypassing the precomputed value), info.sha256() would NOT equal this.
+        String fakeSha256 = "f".repeat(64);
+
+        DocumentInfo info = indexer.index(
+                IndexRequest.parallel(txtFile, "v1", DocRegistry.SHARED, gate, null, fakeSha256));
+
+        assertThat(info.sha256()).isEqualTo(fakeSha256);
+        assertThat(info.docId()).isEqualTo("presha.txt_" + fakeSha256.substring(0, 8));
+    }
+
+    @Test
+    @DisplayName("parallel index — sha256 미전달(null) 시 기존과 동일하게 파일에서 직접 계산한다")
+    void index_parallel_withoutPrecomputedSha256_computesFromFile() throws IOException {
+        Path txtFile = tmpDir.resolve("nopresha.txt");
+        Files.writeString(txtFile, "실제 파일 내용");
+        Semaphore gate = new Semaphore(2);
+
+        DocumentInfo info = indexer.index(IndexRequest.parallel(txtFile, "v1", DocRegistry.SHARED, gate, null));
+
+        assertThat(info.sha256()).isNotEqualTo("f".repeat(64));
+        assertThat(info.sha256()).isNotBlank();
+    }
+
+    @Test
     @DisplayName("parallel index — staleDocId 있으면 구버전 삭제됨")
     void index_parallel_deletesStaleDocId() throws IOException {
         // Register a stale entry first

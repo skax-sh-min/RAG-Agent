@@ -68,7 +68,8 @@ public record AppProperties(
     public record IndexingConfig(
             int maxConcurrentFiles,
             int maxConcurrentLlmCalls,
-            int keywordTimeoutSeconds
+            int keywordTimeoutSeconds,
+            int keywordBatchSize   // §10.8.2 — chunks bundled into one keyword-extraction LLM call (1 = no batching)
     ) {}
 
     public record EmbeddingConfig(
@@ -310,11 +311,12 @@ public record AppProperties(
     }
 
     public IndexingConfig indexingSafe() {
-        if (indexing == null) return new IndexingConfig(4, 8, 30);
+        if (indexing == null) return new IndexingConfig(4, 8, 30, 4);
         int files   = indexing.maxConcurrentFiles() > 0    ? indexing.maxConcurrentFiles()    : 4;
         int llm     = indexing.maxConcurrentLlmCalls() > 0 ? indexing.maxConcurrentLlmCalls() : 8;
         int timeout = indexing.keywordTimeoutSeconds() > 0 ? indexing.keywordTimeoutSeconds() : 30;
-        return new IndexingConfig(files, llm, timeout);
+        int batch   = indexing.keywordBatchSize() > 0      ? indexing.keywordBatchSize()      : 4;
+        return new IndexingConfig(files, llm, timeout, batch);
     }
 
     public ChromaHttpConfig chromaSafe() {

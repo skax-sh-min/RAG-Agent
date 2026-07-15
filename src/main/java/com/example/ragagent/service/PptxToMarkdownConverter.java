@@ -72,7 +72,7 @@ import java.util.regex.Pattern;
  * hoisted to this one spot, regardless of where the picture actually sits among the slide's shapes
  * (e.g. a picture visually placed below several paragraphs of body text still emits its marker
  * right after the heading, before that text) — an intentional simplification, not a bug: a whole
- * slide is always one chunk (§6.3-bis in Pipeline.md), so exact marker position within that chunk
+ * slide is always one chunk (§6.3-bis in PIPELINE.md), so exact marker position within that chunk
  * doesn't affect what's retrievable, only how the raw chunk text reads if inspected directly (e.g.
  * in {@code /admin}). Tables ({@code XSLFTable}) are rendered as a markdown pipe table by
  * {@link #appendTable} wherever they appear in shape order — merge-continuation cells

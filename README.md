@@ -39,7 +39,7 @@ The built JAR is generated at `target/rag-agent-*.jar`.
 
 ### Local Run
 
-> **Vector store backend** — defaults to ChromaDB. Set `VECTORSTORE_TYPE=sqlite-vec` to store vectors in the SQLite file instead and **skip the "Start Chroma" step** below (requires an operator-provided `vec0` native extension — see [OPERATOR_MANUAL.md](OPERATOR_MANUAL.md)). For a fully offline, no-Docker setup (sqlite-vec + local llama-server), see [OPERATOR_MANUAL.md §4.5](OPERATOR_MANUAL.md#45-폐쇄망air-gapped--노-도커-실행).
+> **Vector store backend** — defaults to ChromaDB. Set `VECTORSTORE_TYPE=sqlite-vec` to store vectors in the SQLite file instead and **skip the "Start Chroma" step** below (requires an operator-provided `vec0` native extension — see [OPERATOR_MANUAL.md](documents/OPERATOR_MANUAL.md)). For a fully offline, no-Docker setup (sqlite-vec + local llama-server), see [OPERATOR_MANUAL.md §4.5](documents/OPERATOR_MANUAL.md#45-폐쇄망air-gapped--노-도커-실행).
 
 #### Development mode (run from source)
 
@@ -93,7 +93,7 @@ container system stop
 
 Open: http://localhost:8080
 
-See [USER_MANUAL.md](USER_MANUAL.md) for usage instructions and [OPERATOR_MANUAL.md](OPERATOR_MANUAL.md) for deployment and LLM configuration.
+See [USER_MANUAL.md](documents/USER_MANUAL.md) for usage instructions and [OPERATOR_MANUAL.md](documents/OPERATOR_MANUAL.md) for deployment and LLM configuration.
 
 ## Environment Variables
 
@@ -132,7 +132,7 @@ See [USER_MANUAL.md](USER_MANUAL.md) for usage instructions and [OPERATOR_MANUAL
 | `SEARCH_TOP_K` | `7` | 2 ~ 15 | Number of documents returned by vector search |
 | `SEARCH_SIMILARITY_THRESHOLD` | `0.0` | 0.0 ~ 0.75 | Min cosine similarity to keep a chunk (`0.0` = accept all) |
 | `SEARCH_MULTIQUERY_ENABLED` | `true` | true/false | Expand the query into sub-queries before search |
-| `SEARCH_MULTIQUERY_MIN_LENGTH` | `0` | 0 ~ 20 | Skip expansion for queries shorter than this (`0` = always expand) |
+| `SEARCH_MULTIQUERY_MIN_LENGTH` | `15` | 0 ~ 20 | Skip expansion for queries shorter than this (`0` = always expand). When expansion does run, the original-question search executes in parallel with it instead of waiting behind it |
 | `SEARCH_HYBRID_ENABLED` | `true` | true/false | Add a BM25 (FTS5) keyword axis to RRF fusion (§10.7.2 — the FTS index is populated at indexing time regardless of this flag, so no re-index is needed to benefit) |
 | `SEARCH_RETRY_ESCALATE` | `true` | true/false | Grow candidate pool on each retry — `×(retryCount+1)`, capped `×3` |
 | `SEARCH_RERANK_ENABLED` | `false` | true/false | LLM reranking stage after RRF (adds 1 LLM call/turn) |
@@ -157,7 +157,7 @@ Conversation history budget is auto-derived as `LLM_MAX_TOKENS × 0.75` (floor 1
 | `SUMMARY_RECENT_RAW_TURNS` | `2` | Verbatim recent turns appended after the summary (also budget-trimmed newest-first) |
 | `SUMMARY_PRECOMPUTE_TTL_SECONDS` | `15` | Suppression window for duplicate summary-precompute triggers on the same thread |
 
-> Per-format splitting strategy → [USER_MANUAL.md §4.1](USER_MANUAL.md#41-형식별-청크-분할-전략)
+> Per-format splitting strategy → [USER_MANUAL.md §4.1](documents/USER_MANUAL.md#41-형식별-청크-분할-전략)
 
 Local LLM (LM Studio, Ollama, etc.):
 ```env
@@ -319,7 +319,7 @@ User question
 - **Overload-aware circuit breaking** — a 429/402/503 with no fallback provider available (e.g. a lone LOCAL deployment) triggers a short 30s block instead of the full multi-minute default, so a transient capacity blip doesn't take chat down for everyone; falls back to normal blocking + auto-failover whenever another provider can pick up the slack
 - **Same-priority load balancing** — registering multiple providers at the same role + priority (e.g. two LOCAL servers) automatically distributes requests to whichever has more free concurrency-gate capacity (least-in-flight), for horizontal throughput scaling — no code changes, just deployment config
 - **Settings page (`/settings`)** — view the effective LLM/RAG configuration (providers, routing, embedding, search tuning) in one place; a set of search-tuning values (similarity threshold, RRF weight/k, candidate multipliers, multi-query min length, retry escalation) are **hot-editable** and apply on the next search **without a restart** (persisted in a `settings_override` table, revert to the property default on delete). Editing is admin-only and audited; restart-required values are shown read-only
-- **Vector search** — LLM generates an optimized search query (`MultiQueryExpander`, 3 parallel queries), then performs vector similarity search via the selected backend (ChromaDB or sqlite-vec)
+- **Vector search** — LLM generates an optimized search query (`MultiQueryExpander`, 3 parallel queries; skipped for short keyword-ish questions), then performs vector similarity search via the selected backend (ChromaDB or sqlite-vec); the original-question search runs in parallel with query expansion instead of waiting behind it
 - **Contextual Retrieval** — each chunk's embedding and lexical (`chunk_fts`) index include a prepended context header (`{filename} > {section heading}`, plus an optional LLM-generated 1-2 sentence summary from the same call that extracts keywords) so chunks that read ambiguously alone (tables, code fragments, pronoun-heavy text) are recalled more reliably; the header never appears in stored/displayed text, the source preview, or the answer prompt — only in the embedding/lexical-search input
 - **Embedding input normalization** — decorative markdown (separator lines, bold/italic/underline markers) is stripped from the embedding, `chunk_fts`, and answer-prompt inputs (not from stored/displayed text), reducing noise in the search index and prompt token usage
 - **ReAct re-retrieval** — automatic re-retrieval up to 2 times when evidence is insufficient
@@ -339,6 +339,7 @@ User question
 - **LLM usage dashboard** — per-provider daily/weekly/monthly token stats, Chart.js daily history chart, circuit breaker countdown; embedding usage tracked separately (`embed:<model>`, with an approximation fallback when the server omits usage); inactive providers with no history auto-hide, and orphaned records (removed from config) surface as admin-deletable cards
 - **Document versioning** — per-version isolation (chroma: separate collection; sqlite-vec: `version` partition key)
 - **Incremental indexing** — SHA-256 change detection, `doc_registry` SQLite table persistence (per-user)
+- **Batched keyword extraction** — chunks are bundled N-at-a-time (default 4, `INDEXING_KEYWORD_BATCH_SIZE`) into one LLM call during indexing instead of one call per chunk, cutting round-trips roughly N-fold; falls back to per-chunk TF extraction if a batch call or its parsing fails
 - **Multiple document formats** — PDF, PPTX, DOCX, TXT, MD
 - **Java 21 Virtual Threads** — lightweight threads for all LLM I/O and parallel indexing
 

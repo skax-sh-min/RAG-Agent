@@ -45,7 +45,7 @@ HTTP 요청
 |------|------|---------|
 | **CLASSIFIER** | 질문 유형 판별 (concept / usage / error / version / meta) | ① — AgentService에서 선실행하므로 그래프 내에서는 스킵 |
 | **DIRECT_ANSWER** | meta 질문 직접 응답 (벡터 검색 없음) | ② |
-| **RETRIEVAL** | 쿼리 확장(조건부) → 1회 배치 임베딩(쿼리 임베딩 캐시 히트 시 스킵) → 벡터 스토어 배치 쿼리(chroma 단일 호출 / sqlite-vec 쿼리별) → 가중 RRF 병합(벡터축 그룹 정규화 + 키워드축 가중치) → 선택적 LLM 리랭킹(opt-in). 재시도 시 후보 풀 ×(retry+1) 에스컬레이션 | ③ 쿼리 확장, [리랭킹 활성 시 1콜] |
+| **RETRIEVAL** | 쿼리 확장(조건부 — 15자 미만 질의는 생략, `app.search-multiquery-min-length`) → 확장 LLM 호출과 원본 질의 벡터 검색을 가상 스레드로 병렬 실행(§10.8.1, 원본 검색 지연이 확장 대기 뒤에 숨음) → 배치 임베딩(쿼리 임베딩 캐시 히트 시 스킵) → 벡터 스토어 배치 쿼리(chroma 단일 호출 / sqlite-vec 쿼리별) → 가중 RRF 병합(벡터축 그룹 정규화 + 키워드축 가중치) → 선택적 LLM 리랭킹(opt-in). 재시도 시 후보 풀 ×(retry+1) 에스컬레이션 | ③ 쿼리 확장(조건부), [리랭킹 활성 시 1콜] |
 | **ANSWER** | 문서 기반 답변 생성 + 충분도 검사 | ④ 답변, ⑤ 충분도 |
 | **CRITIC** | 답변이 문서에 근거하는지 검증 | ⑥ |
 | **FINALIZE** | 대화 히스토리 저장 (SQLite) | 없음 |
@@ -107,7 +107,7 @@ COST_FIRST와 동일하되,
 | ⑦ | ANSWER (PROGRESSIVE) | PREMIUM 재답변 | ✓ |
 
 > ①은 `AgentState`에 누적되지 않아 `llmCallCount`가 실제보다 1 낮게 표시됨 — 허용된 tradeoff.  
-> ③ (MultiQueryExpander)도 토큰 미누적.
+> ③ (MultiQueryExpander)도 토큰 미누적. 15자 미만 질의는 생략되며(기본값), 실행될 때도 원본 질의 검색과 병렬로 진행되어(§10.8.1) 검색 전체 지연에 그대로 더해지지 않는다.
 
 > **동시성 게이트**: ①~⑦ 모두 프로바이더별 동시성 게이트(`LlmRouter.executeGated()`, 서버의 실제 `--parallel` 값에 맞춘 `Semaphore`)를 거친다 — 여러 사용자의 질문이 겹쳐도 앱이 한 프로바이더에 동시 전송하는 요청 수는 이 한도를 넘지 않는다. 대기가 상한(기본 20초)을 넘으면 즉시 HTTP 429로 응답하고 재검색/재시도로 넘어가지 않는다. 문서 인덱싱의 LLM 호출(키워드 추출, MD 포맷 교정 등)은 이 게이트 대상이 아니며 기존 `INDEXING_MAX_LLM` 세마포어만 적용된다 — 상세는 [LLM_ROUTING.md §6](LLM_ROUTING.md#6-동시성-게이트--백프레셔) 참고.
 
@@ -180,15 +180,19 @@ PROGRESSIVE 모드 AND sufficient=false AND retryCount >= max
   │
   ├─ 기존 청크 삭제 (재인덱싱 시 동일 docId 덮어쓰기)
   │
-  ├─ 키워드+맥락 추출 LLM (한 번의 호출, §10.1 Contextual Retrieval)
+  ├─ 키워드+맥락 추출 LLM (§10.1 Contextual Retrieval — 청크 N개(기본 4)를 번호 매긴 프롬프트로
+  │    묶어 배치당 1콜, §10.8.2. N=1이면 청크당 1콜이던 이전 동작과 동일)
   │    → excerpt_keywords 메타데이터 추가
   │    → chunk_context 메타데이터 추가 ("{파일명} > {heading}" 구조적 맥락 + LLM 1~2문장,
-  │      LLM 실패 시 구조적 맥락만 — 임베딩/FTS 입력 전용, 영속 저장 안 함)
+  │      LLM 실패 또는 배치 응답 파싱 실패 시 해당 청크(들)만 구조적 맥락만으로 폴백(TF 추출) —
+  │      임베딩/FTS 입력 전용, 영속 저장 안 함)
   │
   ├─ 임베딩 입력 구성 = chunk_context + 정규화(원문) (§10.1-보완 — 마크다운 장식 제거)
+  │    청크당 1회만 계산해 재사용(§10.8.5) — 벡터 스토어 저장과 FTS 인덱싱이 같은 결과를 공유
   │    저장·표시 텍스트(원문)는 그대로 유지, 임베딩/FTS 입력에만 반영
   │
-  ├─ 벡터 스토어 저장 (version별 — chroma 컬렉션 / sqlite-vec partition, content는 원문)
+  ├─ 벡터 스토어 저장 (version별 — chroma 컬렉션 / sqlite-vec partition, content는 원문;
+  │    sqlite-vec는 벡터+청크 배치 삽입 2개를 하나의 트랜잭션으로 커밋, §10.8.3)
   │    + FTS 인덱스(chunk_fts)에도 동일 맥락+정규화 텍스트 반영 (Contextual BM25 시너지)
   │
   └─ 레지스트리 저장 (SQLite doc_registry 테이블 — memory.db 공유)
@@ -262,24 +266,31 @@ PROGRESSIVE 모드 AND sufficient=false AND retryCount >= max
     - doc_id, filename, version, doc_type, sha256, chunk_index, page_or_slide, tags, image_paths 등
 
   10) 키워드+맥락 추출(enrich) [LLM] — §10.1 Contextual Retrieval
-    KeywordExtractor.enrichKeywords() — 한 번의 LLM 호출로:
+    KeywordExtractor.enrichParallel() — 청크를 app.indexing.keyword-batch-size(기본 4)개씩
+    묶어 배치당 1회 LLM 호출(§10.8.2, enrichKeywordsBatch()); 나머지 1개짜리(마지막 배치 등)는
+    기존 단일 청크 경로(enrichKeywords())를 그대로 사용:
     - excerpt_keywords 메타데이터 추가
     - chunk_context 메타데이터 추가 ("{filename} > {heading}" 구조적 맥락 + LLM 1~2문장 맥락;
-      LLM 실패/타임아웃 시 구조적 맥락만 — 사용량은 context: 라벨로 기록)
+      LLM 실패/타임아웃 또는 배치 응답에 결과 마커가 모두 없으면(파싱 실패) 해당 청크(들)만
+      구조적 맥락만으로 폴백 — 사용량은 context: 라벨로 기록)
 
   11) 임베딩 입력 구성 — §10.1-보완 임베딩 입력 정규화
     SearchTextBuilder.build() = chunk_context + MarkdownNoiseNormalizer.normalize(원문)
     - 마크다운 장식 줄(구분선 등) 제거, 강조 마커(**bold**/*italic*/<u>)만 제거하고 내용 보존
     - 코드펜스 내부·표 행은 무변형
     - 이 파생 텍스트는 임베딩·FTS 입력에만 쓰이고 영속 저장되지 않음(저장/표시는 원문 그대로)
+    - SearchTextBuilder.precompute()가 청크당 1회만 계산해 임시 메타키(search_text)에 담아
+      12)의 두 소비처(임베딩·FTS)에 공유 — 각자 다시 계산하지 않음(§10.8.5)
 
   12) 임베딩 DB 저장
     a) Chroma 모드
       - `chromaApi.upsertEmbeddings()`로 수동 upsert(TokenCountBatchingStrategy 서브배치) —
-        임베딩은 11)의 파생 텍스트, 저장 content/metadata는 원문(chunk_context 키 제외)
+        임베딩은 11)의 파생 텍스트, 저장 content/metadata는 원문(chunk_context/search_text 키 제외)
     b) sqlite-vec 모드
       - vec_embeddings: spring_doc_id, version, embedding(11의 파생 텍스트로 계산)
-      - vec_document_chunks: spring_doc_id, content(원문), metadata(JSON, chunk_context 제외), version, doc_id, created_at
+      - vec_document_chunks: spring_doc_id, content(원문), metadata(JSON, chunk_context/search_text 제외), version, doc_id, created_at
+      - 두 배치 삽입을 하나의 트랜잭션으로 커밋(§10.8.3) — 중간 실패 시 함께 롤백되어
+        vec_embeddings만 커밋되고 매칭되는 vec_document_chunks가 없는 상태가 생기지 않음
     + FTS 인덱스(chunk_fts)에도 doc_tags/keywords + content(11의 파생 텍스트, Contextual BM25 시너지) 반영
 
   13) 레지스트리 저장
@@ -336,7 +347,9 @@ Phase 1  변경 감지 (단일 스레드)
 
 Phase 2  병렬 인덱싱 (Virtual Thread)
   최대 maxConcurrentFiles(기본 3)개 파일 동시 처리
-  LLM 키워드 추출은 maxConcurrentLlmCalls(기본 4) Semaphore 제한
+  LLM 키워드 추출은 maxConcurrentLlmCalls(기본 4) Semaphore 제한(배치당 1회 획득, §10.8.2)
+  Phase 1에서 이미 계산한 SHA-256을 그대로 전달받아 재사용 — 파일을 다시 읽어 재해싱하지
+  않음(§10.8.4)
   변경 파일: 신규 인덱싱 성공 후 구 버전 삭제 (실패 시 구 버전 보존)
 
 Phase 3  삭제 처리 (단일 스레드)

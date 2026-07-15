@@ -234,7 +234,8 @@ copy .env.example .env
 |------|--------|----------|------|
 | `INDEXING_MAX_FILES` | `3` | 1 ~ 8 | 파일 병렬 인덱싱 워커 수 |
 | `INDEXING_MAX_LLM` | `4` | 1 ~ 16 | 인덱싱 중 LLM 병렬 호출 수 (키워드 추출) |
-| `INDEXING_KEYWORD_TIMEOUT_SECONDS` | `180` | 30 ~ 600 | 청크 키워드 추출 1회당 최대 대기 시간. 초과 시 TF fallback |
+| `INDEXING_KEYWORD_TIMEOUT_SECONDS` | `180` | 30 ~ 600 | 청크 키워드 추출 1회당(§10.8.2 배치 시 배치 1회당) 최대 대기 시간. 초과 시 TF fallback |
+| `INDEXING_KEYWORD_BATCH_SIZE` | `4` | 1 ~ 8 | §10.8.2 — 청크 N개를 한 LLM 호출로 묶어 요청(왕복 ≈ ceil(청크수/N)). `1`=배치 없음(청크당 1콜, 이전 동작). 배치가 클수록 응답 길이도 늘어나므로 로컬 모델에서 타임아웃이 잦으면 `INDEXING_KEYWORD_TIMEOUT_SECONDS`를 함께 올리세요 |
 
 #### 질의 경로 동시성 제어
 
@@ -297,7 +298,7 @@ copy .env.example .env
 | `[도형 그룹] ... [/도형 그룹]` | 일반 그룹 도형(`XSLFGroupShape`) | 그룹 안의 텍스트 상자들이 한 블록으로 묶여 저장됨 |
 | `[차트: 제목]` | 차트 프레임 | 차트 제목만 인라인 라벨로 저장됨(시리즈·축 값은 추출하지 않음) |
 
-텍스트가 하나도 없는 순수 장식 그룹은 마커 자체가 생성되지 않습니다. `[이미지: ...]`와 마찬가지로 이 마커는 저장·표시 텍스트에 그대로 남아 임베딩·FTS·답변 프롬프트에 반영되며, `#`가 아니라 `[`로 시작해 섹션 헤딩으로 오인되지 않습니다. 기존에 인덱싱된 PPTX 문서에는 소급 적용되지 않으므로, 마커가 보이길 원하면 재업로드하거나 `POST /api/v1/documents/sync`로 재동기화하세요. 상세 구현은 [Pipeline.md §6.3-bis](Pipeline.md#63-bis-pptxpdf비스캔--md-변환--docx와의-차이점) 참고.
+텍스트가 하나도 없는 순수 장식 그룹은 마커 자체가 생성되지 않습니다. `[이미지: ...]`와 마찬가지로 이 마커는 저장·표시 텍스트에 그대로 남아 임베딩·FTS·답변 프롬프트에 반영되며, `#`가 아니라 `[`로 시작해 섹션 헤딩으로 오인되지 않습니다. 기존에 인덱싱된 PPTX 문서에는 소급 적용되지 않으므로, 마커가 보이길 원하면 재업로드하거나 `POST /api/v1/documents/sync`로 재동기화하세요. 상세 구현은 [PIPELINE.md §6.3-bis](PIPELINE.md#63-bis-pptxpdf비스캔--md-변환--docx와의-차이점) 참고.
 
 #### LLM 응답 파라미터
 
@@ -1663,7 +1664,7 @@ srv send_error: ... error: input (706 tokens) is too large to process. increase 
 
 1. `[TIMEOUT:SSE_IDLE]`이 반복되면 `SSE_IDLE_TIMEOUT_SECONDS` 증가 (기본 120, 예: 120 → 300) — LLM이 첫 토큰을 내기까지 오래 걸리는 환경(느린 하드웨어, 큰 모델)에 해당
 2. `[TIMEOUT:SSE]`가 발생하면 `SSE_TIMEOUT_SECONDS` 증가 (기본 3600, 예: 3600 → 7200)
-3. 인덱싱 중 키워드 추출이 자주 timeout이면 `INDEXING_KEYWORD_TIMEOUT_SECONDS` 증가
+3. 인덱싱 중 키워드 추출이 자주 timeout이면 `INDEXING_KEYWORD_TIMEOUT_SECONDS` 증가 (§10.8.2로 `INDEXING_KEYWORD_BATCH_SIZE`를 올린 경우 배치 1회의 응답 길이도 함께 늘어나므로 우선 검토 — 안 되면 배치 크기를 낮추는 것도 방법)
 4. 외부 LLM이 느린 경우 `LLM_READ_TIMEOUT_SECONDS` 증가
 5. 임베딩 단계 지연 시 `EMBED_READ_TIMEOUT_SECONDS` 증가
 6. Chroma 지연 시 `CHROMA_READ_TIMEOUT_SECONDS` 증가

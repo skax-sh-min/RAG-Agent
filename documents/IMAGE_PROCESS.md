@@ -167,7 +167,7 @@ public record ChatResponse(
 ### 4.1 PDF
 
 > 텍스트 처리(비스캔 PDF는 `PdfToMarkdownConverter`로 MD 변환)는 이 절과 별개입니다 — 상세는
-> [Pipeline.md §6.3-bis](Pipeline.md#63-bis-pptxpdf비스캔--md-변환--docx와의-차이점) 참고.
+> [PIPELINE.md §6.3-bis](PIPELINE.md#63-bis-pptxpdf비스캔--md-변환--docx와의-차이점) 참고.
 > 이미지 추출·저장 방식 자체(`PdfImageExtractor`)는 아래 내용 그대로 변경 없습니다 — 다만 이제
 > `PdfToMarkdownConverter`가 이 추출기를 직접 호출해, 추출된 이미지를 본문 `[이미지: ...]` 인라인
 > 마커로 곧바로 삽입합니다(DOCX와 동일한 방식).
@@ -208,11 +208,11 @@ try (PDDocument pdf = Loader.loadPDF(pdfPath.toFile())) {
 ### 4.2 PPTX
 
 > 텍스트 처리(`PptxToMarkdownConverter`로 MD 변환, 슬라이드 제목만 헤딩 승격)는 이 절과 별개입니다 —
-> 상세는 [Pipeline.md §6.3-bis](Pipeline.md#63-bis-pptxpdf비스캔--md-변환--docx와의-차이점) 참고.
+> 상세는 [PIPELINE.md §6.3-bis](PIPELINE.md#63-bis-pptxpdf비스캔--md-변환--docx와의-차이점) 참고.
 > `PptxToMarkdownConverter`가 이 추출기를 직접 호출해, 추출된 이미지를 본문 `[이미지: ...]` 인라인
 > 마커로 곧바로 삽입합니다(DOCX와 동일한 방식).
 
-**이미지 유형**: `XSLFPictureShape`(그림·스크린샷) 외에, 아래 코드가 다루지 않는 세 부류도 함께 추출됩니다 — 그룹/커넥터/텍스트없는 도형 등 "그리기 도구" 요소(근접 클러스터링 후 PNG로 래스터라이즈), SmartArt(`XSLFDiagram` — 실제 렌더링 레이어인 `getGroupShape()`를 그룹 도형처럼 래스터라이즈), OLE 객체(`XSLFObjectShape` — 내장 미리보기 그림을 그대로 저장). 차트 프레임은 POI가 라이브 렌더링을 지원하지 않아 PowerPoint가 남겨둔 `mc:Fallback` 미리보기가 있을 때만 추출되고, 없으면 제목 텍스트만(§4.2 텍스트 처리 경로) 남습니다. 상세 알고리즘은 [Pipeline.md §6.3-bis 2·4번](Pipeline.md#63-bis-pptxpdf비스캔--md-변환--docx와의-차이점) 참고.
+**이미지 유형**: `XSLFPictureShape`(그림·스크린샷) 외에, 아래 코드가 다루지 않는 세 부류도 함께 추출됩니다 — 그룹/커넥터/텍스트없는 도형 등 "그리기 도구" 요소(근접 클러스터링 후 PNG로 래스터라이즈), SmartArt(`XSLFDiagram` — 실제 렌더링 레이어인 `getGroupShape()`를 그룹 도형처럼 래스터라이즈), OLE 객체(`XSLFObjectShape` — 내장 미리보기 그림을 그대로 저장). 차트 프레임은 POI가 라이브 렌더링을 지원하지 않아 PowerPoint가 남겨둔 `mc:Fallback` 미리보기가 있을 때만 추출되고, 없으면 제목 텍스트만(§4.2 텍스트 처리 경로) 남습니다. 상세 알고리즘은 [PIPELINE.md §6.3-bis 2·4번](PIPELINE.md#63-bis-pptxpdf비스캔--md-변환--docx와의-차이점) 참고.
 
 **사진 위 주석 도형 병합** (`app.pptx-image.merge-annotated-pictures`, 기본 `true`): 화면 캡처 위에 오류 부분을 동그라미로 표시하거나 화살표로 짚는 등, 사진 위/근처에 별도 도형으로 markup을 남기는 경우가 실무 PPTX에 흔합니다. 이 옵션이 켜져 있으면 `XSLFPictureShape`도 위 "그리기 도구" 요소와 같은 근접 클러스터링에 참여합니다 — 단, 스스로 클러스터를 시작하는 시드는 될 수 없고(그룹/커넥터/텍스트없는 도형만 시드), 시드가 근처에 있을 때만 합류하는 passenger입니다. 합류하면 사진과 주석 도형이 하나의 합성 PNG로 래스터라이즈되어, "깨끗한 사진 한 장 + 맥락 없이 떠 있는 주석 도형 한 장"으로 따로 추출되던 문제를 없앱니다. 근처에 시드가 없는 평범한 사진은 지금까지처럼 원본 바이트 그대로(무손실) 추출됩니다. `false`로 끄면 사진은 절대 근접 클러스터링에 참여하지 않고 항상 원본 그대로 추출되며, PPTX에서 실제로 그룹(Ctrl+G)으로 묶인 사진+도형만 여전히 하나로 합쳐집니다(POI가 그룹을 통째로 그리는 것은 이 옵션과 무관하게 항상 그렇습니다). 자세한 튜닝값은 [OPERATOR_MANUAL.md §3.2 "PPTX 이미지 추출 튜닝"](OPERATOR_MANUAL.md#32-환경변수-전체-목록) 참고.
 
@@ -334,7 +334,7 @@ content = content.replaceAll("\\[([^\\]]+)]\\([^)]*\\)", "$1");
 > 동기 호출해 마크다운에 `[이미지 설명: ...]`을 직접 삽입하며, 마크다운 본문에 `[이미지: ...]` 마커가
 > 있는 포맷에 적용됩니다 — **DOCX·TXT·MD·PPTX·PDF(스캔 아님) 전부**. `PdfToMarkdownConverter`/
 > `PptxToMarkdownConverter`가 각각 `PdfImageExtractor`/`PptxImageExtractor`를 직접 호출해 DOCX와
-> 동일하게 헤딩 바로 다음에 `[이미지: ...]` 인라인 마커를 삽입하므로(Pipeline.md §6.3-bis 참고),
+> 동일하게 헤딩 바로 다음에 `[이미지: ...]` 인라인 마커를 삽입하므로(PIPELINE.md §6.3-bis 참고),
 > PPTX/PDF도 이 체크박스로 임베딩에 이미지 설명을 포함시킬 수 있습니다. 이 경로는
 > `VisionDescriptionService`를 거치지 않는 별도 구현입니다.
 > 12절 Lazy Vision은 이와 독립적으로 검색 시점에 항상 동작하는 별개의 메커니즘이며

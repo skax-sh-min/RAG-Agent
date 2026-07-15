@@ -194,6 +194,10 @@ app.llm.providers[5].priority=5
 # ── 병렬 인덱싱 제어 ──────────────────────────────────────────────
 app.indexing.max-concurrent-files=${INDEXING_MAX_FILES:3}
 app.indexing.max-concurrent-llm-calls=${INDEXING_MAX_LLM:4}
+# 키워드+맥락 추출 배치 크기(§10.8.2) — 청크 N개를 한 LLM 호출로 묶어 왕복을 ceil(청크수/N)로 절감.
+# 1=배치 없음(청크당 1콜, 이전 동작). 배치가 클수록 응답도 길어지므로 로컬 모델에서 타임아웃이
+# 잦으면 keyword-timeout-seconds도 함께 올린다.
+app.indexing.keyword-batch-size=${INDEXING_KEYWORD_BATCH_SIZE:4}
 ```
 
 ---
@@ -259,7 +263,7 @@ CLASSIFIER·RETRIEVAL은 COST_FIRST(공유), ANSWER만 LOCAL∥외부 병렬 실
 
 | 게이트 적용 (질의 경로) | 게이트 미적용 (인덱싱/백그라운드) |
 |---|---|
-| `ClassifierService` (분류) | `KeywordExtractor` (키워드+맥락 추출) |
+| `ClassifierService` (분류) | `KeywordExtractor` (키워드+맥락 추출 — §10.8.2로 청크를 배치 묶음당 1콜로 호출, `app.indexing.keyword-batch-size`) |
 | `AnswerService` (블로킹+스트리밍+PROGRESSIVE+평가) | `MarkdownCorrectionService` (MD 포맷 교정) |
 | `LlmRouter.executeDual()`/`executeDualStream()` (DUAL 양쪽) | `VisionDescriptionService` |
 | `DirectAnswerService` | `ImageTypeClassifier` |
