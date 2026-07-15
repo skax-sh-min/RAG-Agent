@@ -130,6 +130,14 @@ public class PptxToMarkdownConverter {
     private static final int MAX_HEADING_CANDIDATE_LENGTH = 40;
     /** 슬라이드 하나에 이 값 이상 볼드 스팬이 있으면 강조로서 의미가 없다고 보고 마커를 전부 제거한다. */
     private static final int EXCESSIVE_BOLD_THRESHOLD = 10;
+    /** 도형 그룹/표 하나 안에 이 값 이상 볼드 스팬이 있으면 그 블록만 볼드 마커를 전부 제거한다
+     *  ({@link #EXCESSIVE_BOLD_THRESHOLD}는 슬라이드 전체 기준이라, 볼드가 한 블록에만 몰려 있고
+     *  슬라이드 전체 개수는 임계값 미만인 경우를 놓친다). */
+    private static final int BLOCK_BOLD_COUNT_THRESHOLD = 6;
+    /** 도형 그룹/표 하나에서 볼드로 덮인 글자 수가 전체 글자 수의 이 비율 이상이면(개수와 무관하게)
+     *  그 블록만 볼드 마커를 전부 제거한다 — 스팬 몇 개뿐이라도 그게 텍스트 대부분을 차지하면
+     *  개수 기준({@link #BLOCK_BOLD_COUNT_THRESHOLD})만으로는 못 잡기 때문. */
+    private static final double BLOCK_BOLD_RATIO_THRESHOLD = 0.5;
 
     private final PptxImageExtractor imageExtractor;
 
@@ -384,7 +392,7 @@ public class PptxToMarkdownConverter {
             body.append("[이미지: ").append(path).append("]\n");
             consumedImagePaths.add(path);
         }
-        body.append(inner.toString().strip()).append("\n");
+        body.append(stripBoldIfExcessive(inner.toString().strip())).append("\n");
         body.append("[/").append(label).append("]\n\n");
     }
 
@@ -492,27 +500,30 @@ public class PptxToMarkdownConverter {
         List<XSLFTableRow> rows = table.getRows();
         if (rows.isEmpty()) return;
 
-        body.append("\n");
+        // Assembled into its own buffer (not appended to body directly) so stripBoldIfExcessive can
+        // judge/strip bold over this table alone, not the slide text already in body.
+        StringBuilder tableMd = new StringBuilder("\n");
         for (int r = 0; r < rows.size(); r++) {
             List<XSLFTableCell> cells = rows.get(r).getCells();
             if (cells.isEmpty()) continue;
 
-            body.append("|");
+            tableMd.append("|");
             for (XSLFTableCell cell : cells) {
                 String text = cell.isMerged() ? "" : tableCellText(cell);
-                body.append(" ").append(text.replace("|", "\\|")).append(" |");
+                tableMd.append(" ").append(text.replace("|", "\\|")).append(" |");
             }
-            body.append("\n");
+            tableMd.append("\n");
 
             if (r == 0) {
-                body.append("|");
+                tableMd.append("|");
                 for (int c = 0; c < cells.size(); c++) {
-                    body.append(" --- |");
+                    tableMd.append(" --- |");
                 }
-                body.append("\n");
+                tableMd.append("\n");
             }
         }
-        body.append("\n");
+        tableMd.append("\n");
+        body.append(stripBoldIfExcessive(tableMd.toString()));
     }
 
     /**
@@ -712,6 +723,29 @@ public class PptxToMarkdownConverter {
         while (matcher.find()) count++;
         if (count < EXCESSIVE_BOLD_THRESHOLD) return body;
         return stripMarkerPattern(body, BOLD_EMPHASIS_PATTERN, 2);
+    }
+
+    /**
+     * 도형 그룹/표 텍스트 하나({@link #appendShapeGroup}/{@link #appendTable} 전용, 슬라이드 전체가
+     * 아님)에서 볼드 스팬 개수와 볼드로 덮인 글자 비율을 재서, 둘 중 하나라도
+     * {@link #BLOCK_BOLD_COUNT_THRESHOLD}/{@link #BLOCK_BOLD_RATIO_THRESHOLD}를 넘으면 그 블록
+     * 안의 {@code **}과 {@code ***} 마커를 전부 제거한다. {@link #stripExcessiveBold}(슬라이드 전체,
+     * 개수만 판단)와는 독립적으로 작동 — 볼드가 도형 그룹/표 하나에만 몰려 있어서 슬라이드 전체
+     * 개수는 임계값 미만인 경우도 잡아낸다.
+     */
+    private String stripBoldIfExcessive(String text) {
+        if (text == null || text.isEmpty()) return text;
+        Matcher matcher = BOLD_EMPHASIS_PATTERN.matcher(text);
+        int count = 0;
+        int boldChars = 0;
+        while (matcher.find()) {
+            count++;
+            boldChars += matcher.group(2).length();
+        }
+        if (count == 0) return text;
+        boolean excessive = count >= BLOCK_BOLD_COUNT_THRESHOLD
+                || boldChars >= text.length() * BLOCK_BOLD_RATIO_THRESHOLD;
+        return excessive ? stripMarkerPattern(text, BOLD_EMPHASIS_PATTERN, 2) : text;
     }
 
     /** 주어진 패턴의 각 매치에서 {@code contentGroup}(마커 안쪽 내용)만 남기고 마커 문자 자체는 제거한다. */

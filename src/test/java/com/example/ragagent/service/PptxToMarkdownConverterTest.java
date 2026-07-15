@@ -702,6 +702,124 @@ class PptxToMarkdownConverterTest {
     }
 
     @Test
+    @DisplayName("도형 그룹 안에 볼드가 6개 이상이면(슬라이드 전체는 임계값 미만이어도) 그 그룹 안의 볼드만 제거된다")
+    void groupBoldStrippedWhenBlockCountThresholdReachedEvenBelowSlideThreshold() throws IOException {
+        writePptx(pptx -> {
+            XSLFSlide slide = pptx.createSlide();
+            addTitle(slide, "그룹 볼드 슬라이드");
+            XSLFGroupShape group = slide.createGroup();
+            Rectangle2D bounds = new Rectangle2D.Double(0, 0, 300, 200);
+            group.setAnchor(bounds);
+            group.setInteriorAnchor(bounds);
+            XSLFTextBox box = group.createTextBox();
+            box.setAnchor(new Rectangle2D.Double(10, 10, 280, 180));
+            for (int i = 1; i <= 6; i++) {
+                addRun(addParagraph(box, true, 0), "항목" + i, true, false);
+            }
+        });
+
+        String md = convert();
+
+        assertThat(md).doesNotContain("**");
+        for (int i = 1; i <= 6; i++) {
+            assertThat(md).contains("항목" + i);
+        }
+    }
+
+    @Test
+    @DisplayName("도형 그룹 안에 볼드가 임계값(6) 미만이고 비율도 낮으면 그대로 유지된다")
+    void groupBoldKeptWhenBelowBothThresholds() throws IOException {
+        writePptx(pptx -> {
+            XSLFSlide slide = pptx.createSlide();
+            addTitle(slide, "그룹 볼드 슬라이드");
+            XSLFGroupShape group = slide.createGroup();
+            Rectangle2D bounds = new Rectangle2D.Double(0, 0, 300, 200);
+            group.setAnchor(bounds);
+            group.setInteriorAnchor(bounds);
+            XSLFTextBox box = group.createTextBox();
+            box.setAnchor(new Rectangle2D.Double(10, 10, 280, 180));
+            addRun(addParagraph(box, true, 0), "굵게1", true, false);
+            addRun(addParagraph(box, true, 0), "굵게2", true, false);
+            addRun(addParagraph(box, true, 0), "굵게3", true, false);
+            addRun(addParagraph(box, true, 0), "이것은 강조되지 않은 일반 설명 텍스트입니다", false, false);
+            addRun(addParagraph(box, true, 0), "이것도 강조되지 않은 일반 설명 텍스트입니다", false, false);
+        });
+
+        String md = convert();
+
+        assertThat(md).contains("**굵게1**").contains("**굵게2**").contains("**굵게3**");
+    }
+
+    @Test
+    @DisplayName("도형 그룹 안의 볼드 스팬이 6개 미만이라도 볼드로 덮인 비율이 50% 이상이면 그 그룹의 볼드가 제거된다")
+    void groupBoldStrippedWhenRatioThresholdReachedEvenBelowCountThreshold() throws IOException {
+        writePptx(pptx -> {
+            XSLFSlide slide = pptx.createSlide();
+            addTitle(slide, "그룹 볼드 비율 슬라이드");
+            XSLFGroupShape group = slide.createGroup();
+            Rectangle2D bounds = new Rectangle2D.Double(0, 0, 300, 200);
+            group.setAnchor(bounds);
+            group.setInteriorAnchor(bounds);
+            XSLFTextBox box = group.createTextBox();
+            box.setAnchor(new Rectangle2D.Double(10, 10, 280, 180));
+            addRun(addParagraph(box, true, 0), "이 문장은 거의 전부가 볼드로 강조되어 있습니다", true, false);
+            addRun(addParagraph(box, true, 0), "짧음", false, false);
+        });
+
+        String md = convert();
+
+        assertThat(md).doesNotContain("**");
+        assertThat(md).contains("이 문장은 거의 전부가 볼드로 강조되어 있습니다");
+        assertThat(md).contains("짧음");
+    }
+
+    @Test
+    @DisplayName("표 셀 안에 볼드가 6개 이상이면(슬라이드 전체는 임계값 미만이어도) 그 표 안의 볼드만 제거된다")
+    void tableBoldStrippedWhenBlockCountThresholdReached() throws IOException {
+        writePptx(pptx -> {
+            XSLFSlide slide = pptx.createSlide();
+            addTitle(slide, "표 볼드 슬라이드");
+            XSLFTable table = slide.createTable(2, 3);
+            String[][] values = {{"헤더1", "헤더2", "헤더3"}, {"항목1", "항목2", "항목3"}};
+            for (int r = 0; r < 2; r++) {
+                for (int c = 0; c < 3; c++) {
+                    XSLFTableCell cell = table.getCell(r, c);
+                    cell.setText(values[r][c]);
+                    cell.getTextParagraphs().get(0).getTextRuns().get(0).setBold(true);
+                }
+            }
+        });
+
+        String md = convert();
+
+        assertThat(md).doesNotContain("**");
+        assertThat(md).contains("| 헤더1 | 헤더2 | 헤더3 |");
+        assertThat(md).contains("| 항목1 | 항목2 | 항목3 |");
+    }
+
+    @Test
+    @DisplayName("표 셀 안에 볼드가 임계값(6) 미만이고 비율도 낮으면 그대로 유지된다")
+    void tableBoldKeptWhenBelowBothThresholds() throws IOException {
+        writePptx(pptx -> {
+            XSLFSlide slide = pptx.createSlide();
+            addTitle(slide, "표 볼드 슬라이드");
+            XSLFTable table = slide.createTable(2, 3);
+            table.getCell(0, 0).setText("헤더1");
+            table.getCell(0, 1).setText("헤더2");
+            table.getCell(0, 2).setText("헤더3");
+            table.getCell(1, 0).setText("이것은 강조 없는 일반 항목 설명입니다");
+            table.getCell(1, 1).setText("이것도 강조 없는 일반 항목 설명입니다");
+            XSLFTableCell boldCell = table.getCell(1, 2);
+            boldCell.setText("굵게강조");
+            boldCell.getTextParagraphs().get(0).getTextRuns().get(0).setBold(true);
+        });
+
+        String md = convert();
+
+        assertThat(md).contains("**굵게강조**");
+    }
+
+    @Test
     @DisplayName("FOOTER/SLIDE_NUMBER/DATETIME placeholder 텍스트는 매 슬라이드 본문에 유입되지 않는다")
     void footerPlaceholderTextIsExcludedFromBody() throws IOException {
         writePptx(pptx -> {
