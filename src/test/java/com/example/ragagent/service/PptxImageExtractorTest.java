@@ -14,10 +14,12 @@ import org.apache.poi.xslf.usermodel.XMLSlideShow;
 import org.apache.poi.xslf.usermodel.XSLFAutoShape;
 import org.apache.poi.xslf.usermodel.XSLFChart;
 import org.apache.poi.xslf.usermodel.XSLFConnectorShape;
+import org.apache.poi.xslf.usermodel.XSLFDiagram;
 import org.apache.poi.xslf.usermodel.XSLFGroupShape;
 import org.apache.poi.xslf.usermodel.XSLFObjectShape;
 import org.apache.poi.xslf.usermodel.XSLFPictureData;
 import org.apache.poi.xslf.usermodel.XSLFPictureShape;
+import org.apache.poi.xslf.usermodel.XSLFShape;
 import org.apache.poi.xslf.usermodel.XSLFSlide;
 import org.apache.poi.xslf.usermodel.XSLFTextBox;
 import org.junit.jupiter.api.AfterEach;
@@ -226,6 +228,71 @@ class PptxImageExtractorTest {
         String fileName = fileNameOf(result.get(1).get(0));
         assertThat(fileName).isEqualTo("s1_img1.png");
         assertThat(containsNonWhitePixel(imagesDir.resolve(fileName))).isTrue();
+    }
+
+    @Test
+    @DisplayName("extractWithOwners — 그룹 도형 이미지는 자신의 slide.getShapes() 인덱스로 태깅된다")
+    void extractWithOwners_groupShapeImageIsTaggedWithOwnerIndex() throws IOException {
+        writePptx(pptx -> {
+            XSLFSlide slide = pptx.createSlide();
+            XSLFGroupShape group = slide.createGroup();
+            Rectangle2D bounds = new Rectangle2D.Double(0, 0, 200, 100);
+            group.setAnchor(bounds);
+            group.setInteriorAnchor(bounds);
+            XSLFAutoShape box = group.createAutoShape();
+            box.setAnchor(new Rectangle2D.Double(10, 10, 80, 40));
+            box.setFillColor(Color.RED);
+        });
+
+        try (XMLSlideShow pptx = new XMLSlideShow(Files.newInputStream(pptxPath))) {
+            Map<Integer, List<PptxImageExtractor.ExtractedImage>> result =
+                    extractor.extractWithOwners(pptx, "doc1", imagesDir);
+
+            assertThat(result).containsKey(1);
+            PptxImageExtractor.ExtractedImage image = result.get(1).get(0);
+            assertThat(image.ownerShapeIndices()).containsExactly(0); // 슬라이드에 그룹 하나뿐 — 인덱스 0
+        }
+    }
+
+    @Test
+    @DisplayName("extractWithOwners — 일반 사진은 소유 도형이 없다(빈 Set)")
+    void extractWithOwners_plainPictureHasNoOwner() throws IOException {
+        writePptxWithOnePng();
+
+        try (XMLSlideShow pptx = new XMLSlideShow(Files.newInputStream(pptxPath))) {
+            Map<Integer, List<PptxImageExtractor.ExtractedImage>> result =
+                    extractor.extractWithOwners(pptx, "doc1", imagesDir);
+
+            assertThat(result).containsKey(1);
+            PptxImageExtractor.ExtractedImage image = result.get(1).get(0);
+            assertThat(image.ownerShapeIndices()).isEmpty();
+        }
+    }
+
+    @Test
+    @DisplayName("extractWithOwners — SmartArt 이미지는 내부 렌더 도형이 아니라 바깥쪽 XSLFDiagram 프레임의 인덱스로 태깅된다")
+    void extractWithOwners_smartArtImageOwnedByOuterDiagramIndex() throws IOException {
+        PptxSmartArtFixture.write(pptxPath, List.of("기획팀", "개발팀"));
+
+        try (XMLSlideShow pptx = new XMLSlideShow(Files.newInputStream(pptxPath))) {
+            XSLFSlide slide = pptx.getSlides().get(0);
+            List<XSLFShape> shapes = slide.getShapes();
+            int diagramIndex = -1;
+            for (int i = 0; i < shapes.size(); i++) {
+                if (shapes.get(i) instanceof XSLFDiagram) {
+                    diagramIndex = i;
+                    break;
+                }
+            }
+            assertThat(diagramIndex).isGreaterThanOrEqualTo(0);
+
+            Map<Integer, List<PptxImageExtractor.ExtractedImage>> result =
+                    extractor.extractWithOwners(pptx, "doc1", imagesDir);
+
+            assertThat(result).containsKey(1);
+            PptxImageExtractor.ExtractedImage image = result.get(1).get(0);
+            assertThat(image.ownerShapeIndices()).containsExactly(diagramIndex);
+        }
     }
 
     @Test

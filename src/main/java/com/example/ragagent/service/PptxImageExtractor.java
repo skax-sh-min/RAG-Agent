@@ -33,6 +33,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -116,8 +117,30 @@ public class PptxImageExtractor {
 
     private enum ShapeRole { SEED, CANDIDATE, NOT_ELIGIBLE }
 
-    /** A shape eligible for clustering, tagged with whether it can seed a cluster on its own. */
-    private record Clusterable(XSLFShape shape, boolean seed) {
+    /**
+     * A shape eligible for clustering, tagged with whether it can seed a cluster on its own, and
+     * (if it's a group/SmartArt shape) which top-level {@code slide.getShapes()} index "owns" it —
+     * see {@link ExtractedImage} for why this index exists. {@code ownerIndex} is {@code -1} for
+     * anything that isn't itself a correlatable group/diagram source (connectors, auto-shapes,
+     * text-bearing passengers, pictures).
+     */
+    private record Clusterable(XSLFShape shape, boolean seed, int ownerIndex) {
+    }
+
+    /**
+     * One extracted/rasterized image, plus the 0-based index/indices (into that slide's
+     * {@code slide.getShapes()} — the same list {@link PptxToMarkdownConverter#extractSlide} can
+     * independently compute, since both classes share one already-open {@link XMLSlideShow}) of
+     * the top-level shape(s) that "own" it: a plain {@code XSLFGroupShape}'s own index, or (for
+     * SmartArt) the outer {@code XSLFDiagram} frame's index — never the inner
+     * {@code getGroupShape()} render layer, which doesn't appear in {@code slide.getShapes()} at
+     * all. Empty for anything {@link PptxToMarkdownConverter} doesn't wrap in its own bracket
+     * block (plain pictures, OLE previews, chart frames aside — see below): those stay hoisted at
+     * the top of the slide exactly as before, unaffected by ownership. A cluster that merges two
+     * adjacent top-level groups (rare — padded bounding boxes happened to intersect) legitimately
+     * reports both indices; the caller may then place the same image marker in both groups' blocks.
+     */
+    public record ExtractedImage(String path, Set<Integer> ownerShapeIndices) {
     }
 
     /** @return {slideNum(1-based) → relative image paths from dataDir} */
@@ -136,21 +159,38 @@ public class PptxImageExtractor {
      */
     public Map<Integer, List<String>> extract(XMLSlideShow pptx, String imageId, Path imagesDir)
             throws IOException {
-        Files.createDirectories(imagesDir);
+        Map<Integer, List<ExtractedImage>> withOwners = extractWithOwners(pptx, imageId, imagesDir);
         Map<Integer, List<String>> result = new LinkedHashMap<>();
-
-        int slideNum = 0;
-        for (XSLFSlide slide : pptx.getSlides()) {
-            slideNum++;
-            List<String> paths = processSlide(slide, slideNum, imageId, imagesDir);
-            if (!paths.isEmpty()) result.put(slideNum, paths);
+        for (Map.Entry<Integer, List<ExtractedImage>> entry : withOwners.entrySet()) {
+            result.put(entry.getKey(), entry.getValue().stream().map(ExtractedImage::path).toList());
         }
         return result;
     }
 
-    private List<String> processSlide(XSLFSlide slide, int slideNum, String imageId, Path imagesDir)
+    /**
+     * Same as {@link #extract(XMLSlideShow, String, Path)} but also reports, for each image,
+     * which top-level shape(s) on that slide "own" it ({@link ExtractedImage}) — used by
+     * {@link PptxToMarkdownConverter} to place a group/diagram/chart's own image marker inside
+     * that shape's bracket block instead of only ever hoisting every image to the top of the
+     * slide.
+     */
+    public Map<Integer, List<ExtractedImage>> extractWithOwners(XMLSlideShow pptx, String imageId, Path imagesDir)
             throws IOException {
-        List<String> paths = new ArrayList<>();
+        Files.createDirectories(imagesDir);
+        Map<Integer, List<ExtractedImage>> result = new LinkedHashMap<>();
+
+        int slideNum = 0;
+        for (XSLFSlide slide : pptx.getSlides()) {
+            slideNum++;
+            List<ExtractedImage> images = processSlide(slide, slideNum, imageId, imagesDir);
+            if (!images.isEmpty()) result.put(slideNum, images);
+        }
+        return result;
+    }
+
+    private List<ExtractedImage> processSlide(XSLFSlide slide, int slideNum, String imageId, Path imagesDir)
+            throws IOException {
+        List<ExtractedImage> images = new ArrayList<>();
         int[] imgIdx = {0};
 
         // Preserves slide.getShapes() order — needed so clusters render members back-to-front
@@ -161,45 +201,58 @@ public class PptxImageExtractor {
         // extracted verbatim; only leftover, unconsumed pictures fall back to that.
         List<XSLFPictureShape> pictures = new ArrayList<>();
 
+        int topLevelIndex = -1;
         for (XSLFShape shape : slide.getShapes()) {
+            topLevelIndex++;
             if (shape instanceof XSLFPictureShape pic) {
                 if (mergeAnnotatedPictures) {
                     pictures.add(pic);
                     // Never a seed on its own — a picture with no nearby annotation shape must
-                    // not spontaneously pull in unrelated nearby shapes into a merge.
-                    clusterable.add(new Clusterable(pic, false));
+                    // not spontaneously pull in unrelated nearby shapes into a merge. Never a
+                    // correlation owner either — PptxToMarkdownConverter never wraps a plain
+                    // picture in its own bracket block.
+                    clusterable.add(new Clusterable(pic, false, -1));
                 } else {
                     // app.pptx-image.merge-annotated-pictures=false: never join proximity
                     // clustering — a top-level picture always extracts verbatim. A picture that
                     // is genuinely grouped with other shapes in PowerPoint never reaches this
                     // branch at all (it's nested inside the XSLFGroupShape below, not a top-level
                     // shape), so real author-made groups still merge either way.
-                    addPicture(pic, slideNum, imgIdx, imageId, imagesDir, paths);
+                    addPicture(pic, slideNum, imgIdx, imageId, imagesDir, images, Set.of());
                 }
             } else if (shape instanceof XSLFObjectShape ole) {
                 // OLE embed: always carries its own preview picture (that's how OOXML lets a
                 // viewer render it without running the source app) — save it directly, no
                 // clustering/rasterization needed.
-                addOlePreview(ole, slideNum, imgIdx, imageId, imagesDir, paths);
+                addOlePreview(ole, slideNum, imgIdx, imageId, imagesDir, images);
             } else if (shape instanceof XSLFDiagram diagram) {
                 // SmartArt: getGroupShape() is the real rendered drawing (actual box/connector
                 // shapes with real anchors), unlike the outer XSLFDiagram frame itself — POI's
                 // DrawFactory only knows how to draw the frame's (usually absent) fallback
                 // picture, not the diagram live. Feed the group shape into the same
                 // proximity-clustering/rasterization pipeline as an ordinary XSLFGroupShape.
+                // Ownership is tagged with topLevelIndex — the OUTER XSLFDiagram frame's own
+                // index — since diagramGroup itself never appears in slide.getShapes() and is
+                // therefore not an index PptxToMarkdownConverter could ever resolve.
                 XSLFDiagram.XSLFDiagramGroupShape diagramGroup = diagram.getGroupShape();
                 if (diagramGroup != null && passesSizeFilter(diagramGroup)) {
-                    clusterable.add(new Clusterable(diagramGroup, true));
+                    clusterable.add(new Clusterable(diagramGroup, true, topLevelIndex));
                 }
             } else if (shape instanceof XSLFGraphicFrame frame && frame.hasChart()) {
                 // Charts have no live-rendering path in POI — only a best-effort mc:Fallback
                 // preview picture that PowerPoint may or may not have embedded.
                 XSLFPictureShape fallback = frame.getFallbackPicture();
-                if (fallback != null) addPicture(fallback, slideNum, imgIdx, imageId, imagesDir, paths);
+                if (fallback != null) {
+                    addPicture(fallback, slideNum, imgIdx, imageId, imagesDir, images, Set.of(topLevelIndex));
+                }
             } else if (!(shape instanceof XSLFTable)) {
                 ShapeRole role = classify(shape);
                 if (role != ShapeRole.NOT_ELIGIBLE) {
-                    clusterable.add(new Clusterable(shape, role == ShapeRole.SEED));
+                    // Only a plain XSLFGroupShape is a correlation owner here — connectors/
+                    // auto-shapes/text-bearing candidates never get their own bracket block from
+                    // PptxToMarkdownConverter, so tagging their index would have no consumer.
+                    int owner = (shape instanceof XSLFGroupShape) ? topLevelIndex : -1;
+                    clusterable.add(new Clusterable(shape, role == ShapeRole.SEED, owner));
                 }
             }
         }
@@ -213,11 +266,21 @@ public class PptxImageExtractor {
                 // Pictures are never seeds, so any picture caught in an oversized cluster is left
                 // unconsumed and extracted verbatim below, same as if it had no cluster at all.
                 for (Clusterable c : cluster) {
-                    if (c.seed()) tryRasterize(List.of(c.shape()), slideNum, imgIdx, imageId, imagesDir, paths);
+                    if (c.seed()) {
+                        Set<Integer> owners = c.ownerIndex() >= 0 ? Set.of(c.ownerIndex()) : Set.of();
+                        tryRasterize(List.of(c.shape()), slideNum, imgIdx, imageId, imagesDir, images, owners);
+                    }
                 }
             } else {
                 List<XSLFShape> members = cluster.stream().map(Clusterable::shape).toList();
-                if (tryRasterize(members, slideNum, imgIdx, imageId, imagesDir, paths)) {
+                // A cluster can (rarely) merge more than one group/diagram — e.g. two adjacent
+                // top-level groups whose padded bounding boxes happened to intersect — in which
+                // case the resulting composite image legitimately belongs to all of them.
+                Set<Integer> owners = new LinkedHashSet<>();
+                for (Clusterable c : cluster) {
+                    if (c.ownerIndex() >= 0) owners.add(c.ownerIndex());
+                }
+                if (tryRasterize(members, slideNum, imgIdx, imageId, imagesDir, images, owners)) {
                     for (Clusterable c : cluster) {
                         if (c.shape() instanceof XSLFPictureShape pic) consumedPictures.add(pic);
                     }
@@ -230,22 +293,22 @@ public class PptxImageExtractor {
 
         for (XSLFPictureShape pic : pictures) {
             if (!consumedPictures.contains(pic)) {
-                addPicture(pic, slideNum, imgIdx, imageId, imagesDir, paths);
+                addPicture(pic, slideNum, imgIdx, imageId, imagesDir, images, Set.of());
             }
         }
 
-        return paths;
+        return images;
     }
 
     private void addPicture(XSLFPictureShape pic, int slideNum, int[] imgIdx, String imageId,
-                             Path imagesDir, List<String> paths) throws IOException {
-        addPictureData(pic.getPictureData(), slideNum, imgIdx, imageId, imagesDir, paths);
+                             Path imagesDir, List<ExtractedImage> images, Set<Integer> owners) throws IOException {
+        addPictureData(pic.getPictureData(), slideNum, imgIdx, imageId, imagesDir, images, owners);
     }
 
     /** OLE 객체의 내장 미리보기 그림을 저장한다 — 외부 링크 OLE(내장 미리보기 없음)는 addPictureData()가 조용히 건너뛴다. */
     private void addOlePreview(XSLFObjectShape ole, int slideNum, int[] imgIdx, String imageId,
-                                Path imagesDir, List<String> paths) throws IOException {
-        addPictureData(ole.getPictureData(), slideNum, imgIdx, imageId, imagesDir, paths);
+                                Path imagesDir, List<ExtractedImage> images) throws IOException {
+        addPictureData(ole.getPictureData(), slideNum, imgIdx, imageId, imagesDir, images, Set.of());
     }
 
     /**
@@ -255,7 +318,7 @@ public class PptxImageExtractor {
      * 경로가 모두 이 메서드를 거치므로 가드를 한 곳에 두면 셋 다 동일하게 보호된다.
      */
     private void addPictureData(XSLFPictureData pd, int slideNum, int[] imgIdx, String imageId,
-                                 Path imagesDir, List<String> paths) throws IOException {
+                                 Path imagesDir, List<ExtractedImage> images, Set<Integer> owners) throws IOException {
         if (pd == null) return;
         PictureData.PictureType type = pd.getType();
         // PictureType.extension already includes the leading dot (e.g. ".png") — strip it so
@@ -265,16 +328,16 @@ public class PptxImageExtractor {
         imgIdx[0]++;
         String fileName = "s" + slideNum + "_img" + imgIdx[0] + "." + ext;
         Files.write(imagesDir.resolve(fileName), pd.getData());
-        paths.add("images/" + imageId + "/" + fileName);
+        images.add(new ExtractedImage("images/" + imageId + "/" + fileName, owners));
     }
 
     /** @return true if the composite was actually written (members can be treated as "consumed") */
     private boolean tryRasterize(List<XSLFShape> members, int slideNum, int[] imgIdx, String imageId,
-                                  Path imagesDir, List<String> paths) {
+                                  Path imagesDir, List<ExtractedImage> images, Set<Integer> owners) {
         String fileName = "s" + slideNum + "_img" + (imgIdx[0] + 1) + ".png";
         if (rasterize(members, imagesDir.resolve(fileName))) {
             imgIdx[0]++;
-            paths.add("images/" + imageId + "/" + fileName);
+            images.add(new ExtractedImage("images/" + imageId + "/" + fileName, owners));
             return true;
         }
         return false;
