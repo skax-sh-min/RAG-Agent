@@ -176,6 +176,44 @@ public class MarkdownCorrectionService {
     }
 
     /**
+     * Re-checks and re-computes hierarchical heading numbers on already-numbered markdown — no
+     * LLM call, no code-block normalization. Used by {@code DocumentIndexer.reindexFromMd()}: the
+     * saved MD may have been edited since the numbers were first assigned at upload time (e.g. a
+     * code block was split/merged or a section removed, shifting which H2-H6 headings exist or
+     * where), leaving stale numbers behind. {@link #addHierarchicalHeadingNumbers} always strips
+     * any existing numeric prefix before recomputing, so calling it again here fixes staleness
+     * regardless of what the old numbers were.
+     *
+     * <p>A no-op when {@code md} has no numbered heading already ({@link #hasNumberedHeading}) —
+     * a document that never had heading numbers (checkbox was off at upload, or is a PPTX, which
+     * never gets them — see {@code DocumentIndexer}'s {@code .pptx} branch) never gains them here
+     * either; this method only ever refreshes numbers that already exist.
+     */
+    public String reapplyHeadingNumbers(String md) {
+        if (md == null || md.isBlank() || !hasNumberedHeading(md)) return md;
+        return addHierarchicalHeadingNumbers(md);
+    }
+
+    /** True if any H2-H6 heading (outside a fenced code block) already starts with a numeric prefix. */
+    private boolean hasNumberedHeading(String md) {
+        boolean inFence = false;
+        for (String line : md.split("\n", -1)) {
+            String trimmed = line.stripLeading();
+            if (trimmed.startsWith("```")) {
+                inFence = !inFence;
+                continue;
+            }
+            if (inFence) continue;
+
+            int level = markdownHeadingLevel(line);
+            if (level < 2 || level > 6) continue;
+            String text = line.substring(level + 1).trim();
+            if (HEADING_NUMBER_PREFIX.matcher(text).find()) return true;
+        }
+        return false;
+    }
+
+    /**
      * Splits by H2/H3 headings, but never while inside a fenced code block (``` / ~~~). Log
      * dumps and batch output are often pasted verbatim into a fence and commonly contain lines
      * like {@code "### Job ID : ..."} that only look like headings — treating them as real
@@ -256,10 +294,12 @@ public class MarkdownCorrectionService {
 
         String boundaryNote = hasLookahead ? ("""
 
-                [미리보기 처리]
-                - `%s` 줄 뒤의 텍스트는 '다음 섹션 미리보기'입니다. 문맥 파악(특히 코드 블록이 다음으로 이어지는지 판단)에만 사용하고, 교정 결과에는 절대 포함하지 마세요.
-                - 교정 결과의 맨 끝에 `%s` 줄만 그대로 한 번 남기고, 그 뒤에는 아무것도 쓰지 마세요.""")
-                .formatted(SECTION_BOUNDARY, SECTION_BOUNDARY) : "";
+                [미리보기 처리 — 매우 중요]
+                - `%s` 줄 뒤의 텍스트는 '다음 섹션 미리보기'이며 이 섹션의 내용이 아닙니다. 오직 코드 블록이 다음 섹션으로 계속 이어지는지 판단하는 용도로만 참고하세요.
+                - "잘린 문장 연결" 규칙은 `%s` 이전(이 섹션 내부)에만 적용됩니다. 이 섹션의 마지막 문장/줄이 미완성으로 보이더라도 미리보기 쪽 단어를 가져와 이어붙이거나 병합하지 말고, 미완성인 상태 그대로 두세요 — 미리보기와 이어붙이면 다음 섹션을 교정할 때 같은 내용이 다시 나와 문서에 중복이 생깁니다.
+                - 미리보기의 문장이나 단어를 그대로든 재작성해서든 교정 결과에 절대 포함하지 마세요.
+                - 이 섹션의 원본 텍스트가 끝나는 지점 바로 다음 줄에 `%s`만 그대로 한 번 쓰고, 그 뒤에는 아무것도 쓰지 마세요.""")
+                .formatted(SECTION_BOUNDARY, SECTION_BOUNDARY, SECTION_BOUNDARY) : "";
 
         String prompt = ("""
                 당신은 문서 편집자입니다. 다음 마크다운 텍스트의 형식(포맷)만 교정하세요.

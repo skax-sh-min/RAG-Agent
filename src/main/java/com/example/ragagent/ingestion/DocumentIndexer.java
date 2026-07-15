@@ -186,8 +186,12 @@ public class DocumentIndexer {
             String rawMd = pptxConverter.convert(req.path(), imageId, imagesDir);
             Files.createDirectories(rawMdPath.getParent());
             Files.writeString(rawMdPath, rawMd);
+            // addHeadingNumbers는 체크되어 있어도 항상 무시한다 — PPTX의 ##/### 헤딩은 슬라이드
+            // 제목/부제목 라벨(최대 2단계, calibrateHeadingOrder로 슬라이드별 결정)이지 문서
+            // 목차 같은 계층 구조가 아니어서, 순차적으로 "1.1"/"1.2" 번호를 매겨도 실제 구조를
+            // 반영하지 못하고 이미 있는 [페이지: N] 마커와도 겹쳐 혼란만 준다.
             String sourceMd = correctionService.correct(rawMd, docId, correctedMdPath,
-                    req.addImageDescriptions(), req.addHeadingNumbers(),
+                    req.addImageDescriptions(), false,
                     (done, total) -> req.onProgress().accept(
                             IndexingProgressEvent.of("correcting", done, total, req.filename(),
                                     done + "/" + total + " 섹션 교정 중")));
@@ -313,6 +317,7 @@ public class DocumentIndexer {
         onProgress.accept(IndexingProgressEvent.of("loading", 0, 0, filename, "MD 파일 로드 중..."));
         String md = Files.readString(mdPath);
         md = removeMissingImageMarkers(md, mdPath, filename);
+        md = reapplyHeadingNumbersIfNeeded(md, mdPath, filename);
         List<Document> rawDocs = loaderService.loadFromMarkdown(md);
         List<Document> chunks  = chunkSplitter.splitDocuments(
             rawDocs, filename, props.chunkSize(), props.chunkOverlap(), props.minChunkSizeSafe(),
@@ -556,6 +561,30 @@ public class DocumentIndexer {
             Files.writeString(mdPath, result);
         } catch (IOException e) {
             log.warn("[REINDEX] {} — 정리된 MD 저장 실패(이번 인덱싱은 계속 진행): {}", filename, e.getMessage());
+        }
+        return result;
+    }
+
+    /**
+     * Re-checks and re-computes hierarchical heading numbers on re-index — the saved MD may have
+     * been edited since the numbers were first assigned (e.g. a chunk edit split/merged a code
+     * block, shifting which headings exist), leaving stale numbers behind.
+     * {@link MarkdownCorrectionService#reapplyHeadingNumbers} is a no-op unless the document
+     * already has a numbered heading, so a document that never had numbers stays that way. PPTX is
+     * skipped outright — its headings never get numbered even at upload time (see the {@code
+     * .pptx} branch in {@link #index}), so there's nothing to re-check.
+     */
+    private String reapplyHeadingNumbersIfNeeded(String md, Path mdPath, String filename) {
+        if (filename.toLowerCase().endsWith(".pptx")) return md;
+
+        String result = correctionService.reapplyHeadingNumbers(md);
+        if (result.equals(md)) return md;
+
+        log.debug("[REINDEX] {} — 소제목 번호 재계산", filename);
+        try {
+            Files.writeString(mdPath, result);
+        } catch (IOException e) {
+            log.warn("[REINDEX] {} — 소제목 번호 갱신 MD 저장 실패(이번 인덱싱은 계속 진행): {}", filename, e.getMessage());
         }
         return result;
     }

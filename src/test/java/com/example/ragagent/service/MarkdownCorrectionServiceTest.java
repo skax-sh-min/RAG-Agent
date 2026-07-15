@@ -194,6 +194,43 @@ class MarkdownCorrectionServiceTest {
         assertThat(result).isEqualTo(corrected);
     }
 
+    @Test
+    @DisplayName("reapplyHeadingNumbers — 번호 붙은 헤딩이 하나도 없으면 그대로 반환한다(새로 번호를 붙이지 않음)")
+    void reapplyHeadingNumbers_noNumberedHeadings_returnsUnchanged() {
+        String md = "## 첫 번째 절\n본문A\n\n## 두 번째 절\n본문B\n";
+
+        String result = service.reapplyHeadingNumbers(md);
+
+        assertThat(result).isEqualTo(md);
+    }
+
+    @Test
+    @DisplayName("reapplyHeadingNumbers — 이미 번호가 있던 문서에서 헤딩이 줄면(코드블록 편집 등) 남은 헤딩 번호를 다시 계산한다")
+    void reapplyHeadingNumbers_headingRemoved_renumbersRemaining() {
+        // 원래 3개였던 헤딩(1./2./3.) 중 가운데가 편집으로 사라져 번호가 어긋난 상황을 재현
+        String md = "## 1. 첫 번째 절\n본문A\n\n## 3. 세 번째 절\n본문B\n";
+
+        String result = service.reapplyHeadingNumbers(md);
+
+        assertThat(result).contains("## 1. 첫 번째 절").contains("## 2. 세 번째 절");
+        assertThat(result).doesNotContain("## 3.");
+    }
+
+    @Test
+    @DisplayName("reapplyHeadingNumbers — 코드 블록 안의 번호처럼 보이는 줄은 헤딩으로 취급하지 않는다")
+    void reapplyHeadingNumbers_ignoresFencedContent() {
+        String md = "## 1. 첫 번째 절\n"
+                + "```\n"
+                + "## 2. 이건 로그 내용일 뿐\n"
+                + "```\n"
+                + "\n## 2. 두 번째 절\n본문\n";
+
+        String result = service.reapplyHeadingNumbers(md);
+
+        assertThat(result).contains("## 2. 이건 로그 내용일 뿐"); // 펜스 안은 그대로
+        assertThat(result).contains("## 2. 두 번째 절"); // 펜스 밖 헤딩은 정상적으로 2번 유지
+    }
+
     private static int countOccurrences(String haystack, String needle) {
         int count = 0, idx = 0;
         while ((idx = haystack.indexOf(needle, idx)) != -1) {

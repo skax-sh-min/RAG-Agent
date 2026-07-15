@@ -66,6 +66,7 @@ class DocumentIndexerTest {
     private KeywordSearchRepository keywordRepo;
     private AppProperties props;
     private DocumentLoaderService loaderService;
+    private MarkdownCorrectionService correctionService;
 
     @BeforeEach
     void setUp() throws IOException {
@@ -103,9 +104,17 @@ class DocumentIndexerTest {
         when(loaderService.loadFromMarkdown(any())).thenReturn(stubDocs);
 
         // Stub MarkdownCorrectionService / TextToMarkdownService — pass content through unchanged
-        MarkdownCorrectionService correctionService = mock(MarkdownCorrectionService.class);
+        correctionService = mock(MarkdownCorrectionService.class);
         when(correctionService.correct(any(), any(), any(), anyBoolean(), anyBoolean(), any()))
                 .thenAnswer(inv -> inv.getArgument(0));
+        // reapplyHeadingNumbers delegates to a real instance (no LLM call in that method, so a
+        // never-invoked LlmRouter mock is fine) — it's a no-op unless the MD already has a
+        // numbered heading, so this is safe as the shared default for every test while still
+        // letting reindex-renumbering tests exercise genuine behavior.
+        MarkdownCorrectionService realCorrectionForRenumber =
+                new MarkdownCorrectionService(mock(com.example.ragagent.llm.LlmRouter.class), props, 8000);
+        when(correctionService.reapplyHeadingNumbers(any()))
+                .thenAnswer(inv -> realCorrectionForRenumber.reapplyHeadingNumbers(inv.getArgument(0)));
         TextToMarkdownService textToMarkdownService = mock(TextToMarkdownService.class);
         when(textToMarkdownService.convert(any(), any(), any()))
                 .thenAnswer(inv -> inv.getArgument(0));
@@ -252,6 +261,20 @@ class DocumentIndexerTest {
         String mdContent = Files.readString(md);
         assertThat(mdContent).containsPattern("\\[이미지: images/[^\\]]+\\.png]");
         assertThat(info.chunks()).isGreaterThan(0);
+    }
+
+    @Test
+    @DisplayName("PPTX 업로드 — addHeadingNumbers가 체크되어 있어도 소제목 번호를 생성하지 않는다")
+    void index_pptx_ignoresAddHeadingNumbersFlag() throws IOException {
+        Path pptxFile = tmpDir.resolve("deck-numbered.pptx");
+        writeMinimalPptx(pptxFile, "개요");
+
+        indexer.index(IndexRequest.single(pptxFile, "deck-numbered.pptx", "v1", "anonymous",
+                List.of(), false, true, e -> {}));
+
+        // correctionService.correct()의 5번째 인자(addHeadingNumbers)는 요청값(true)과 무관하게
+        // 항상 false로 전달되어야 한다 — PPTX 헤딩은 슬라이드 제목 라벨이지 문서 목차가 아니므로.
+        verify(correctionService).correct(any(), any(), any(), eq(false), eq(false), any());
     }
 
     @Test
@@ -413,6 +436,55 @@ class DocumentIndexerTest {
 
         String cleaned = Files.readString(mdPath);
         assertThat(cleaned).contains("images/cafef00d/real.emf").doesNotContain("images/deadbeef/gone.png");
+    }
+
+    @Test
+    @DisplayName("reindexFromMd — 이미 번호가 있던 소제목이 편집으로 어긋나면 재인덱싱 시 다시 계산되어 파일에도 반영된다")
+    void reindexFromMd_staleHeadingNumbers_recalculatedAndPersisted() throws IOException {
+        Path txtFile = tmpDir.resolve("guide.txt");
+        Files.writeString(txtFile, "## 1. 첫 번째 절\n본문A\n");
+        DocumentInfo info = indexer.index(IndexRequest.single(txtFile, "guide.txt", "v1", "anonymous", e -> {}));
+
+        // 코드 블록 편집 등으로 가운데 헤딩이 사라져 번호가 어긋난 상황을 재현(1., 3.만 남음)
+        Path mdPath = tmpDir.resolve("converted").resolve(info.docId() + ".md");
+        Files.writeString(mdPath, "## 1. 첫 번째 절\n본문A\n\n## 3. 세 번째 절\n본문B\n");
+
+        indexer.reindexFromMd(info.docId());
+
+        String result = Files.readString(mdPath);
+        assertThat(result).contains("## 1. 첫 번째 절").contains("## 2. 세 번째 절");
+        assertThat(result).doesNotContain("## 3.");
+    }
+
+    @Test
+    @DisplayName("reindexFromMd — 소제목 번호가 원래 없던 문서는 재인덱싱해도 번호가 새로 생기지 않는다")
+    void reindexFromMd_noExistingHeadingNumbers_staysUnnumbered() throws IOException {
+        Path txtFile = tmpDir.resolve("guide.txt");
+        Files.writeString(txtFile, "## 첫 번째 절\n본문A\n\n## 두 번째 절\n본문B\n");
+        DocumentInfo info = indexer.index(IndexRequest.single(txtFile, "guide.txt", "v1", "anonymous", e -> {}));
+        Path mdPath = tmpDir.resolve("converted").resolve(info.docId() + ".md");
+        String before = Files.readString(mdPath);
+
+        indexer.reindexFromMd(info.docId());
+
+        assertThat(Files.readString(mdPath)).isEqualTo(before);
+    }
+
+    @Test
+    @DisplayName("reindexFromMd — PPTX 문서는 소제목에 번호가 있어도 재인덱싱 시 건드리지 않는다")
+    void reindexFromMd_pptx_neverTouchesHeadingNumbers() throws IOException {
+        Path pptxFile = tmpDir.resolve("deck.pptx");
+        writeMinimalPptx(pptxFile, "개요");
+        DocumentInfo info = indexer.index(IndexRequest.single(pptxFile, "deck.pptx", "v1", "anonymous", e -> {}));
+
+        Path mdPath = tmpDir.resolve("converted").resolve(info.docId() + ".md");
+        // PPTX는 애초에 번호가 붙지 않지만, 만약 번호처럼 보이는 헤딩이 있어도 손대면 안 된다는 것을
+        // 확인하기 위해 강제로 번호 있는 헤딩을 주입한다.
+        Files.writeString(mdPath, "[페이지: 1]\n## 1. 개요\n본문\n\n[페이지: 2]\n## 3. 결론\n본문\n");
+
+        indexer.reindexFromMd(info.docId());
+
+        assertThat(Files.readString(mdPath)).contains("## 1. 개요").contains("## 3. 결론");
     }
 
     @Test
