@@ -143,7 +143,7 @@ public class DocumentIndexer {
             Files.createDirectories(rawMdPath.getParent());
             Files.writeString(rawMdPath, rawMd);
             String sourceMd = correctionService.correct(rawMd, docId, correctedMdPath,
-                    req.addImageDescriptions(), req.addHeadingNumbers(),
+                    req.addImageDescriptions(), req.addHeadingNumbers(), false,
                     (done, total) -> req.onProgress().accept(
                             IndexingProgressEvent.of("correcting", done, total, req.filename(),
                                     done + "/" + total + " 섹션 교정 중")));
@@ -161,7 +161,7 @@ public class DocumentIndexer {
             Files.createDirectories(rawMdPath.getParent());
             Files.writeString(rawMdPath, structuredMd);
             String sourceMd = correctionService.correct(structuredMd, docId, correctedMdPath,
-                    req.addImageDescriptions(), req.addHeadingNumbers(),
+                    req.addImageDescriptions(), req.addHeadingNumbers(), false,
                     (done, total) -> req.onProgress().accept(
                             IndexingProgressEvent.of("correcting", done, total, req.filename(),
                                     done + "/" + total + " 섹션 교정 중")));
@@ -172,7 +172,7 @@ public class DocumentIndexer {
             Files.createDirectories(rawMdPath.getParent());
             Files.writeString(rawMdPath, rawMd);
             String sourceMd = correctionService.correct(rawMd, docId, correctedMdPath,
-                    req.addImageDescriptions(), req.addHeadingNumbers(),
+                    req.addImageDescriptions(), req.addHeadingNumbers(), false,
                     (done, total) -> req.onProgress().accept(
                             IndexingProgressEvent.of("correcting", done, total, req.filename(),
                                     done + "/" + total + " 섹션 교정 중")));
@@ -190,8 +190,11 @@ public class DocumentIndexer {
             // 제목/부제목 라벨(최대 2단계, calibrateHeadingOrder로 슬라이드별 결정)이지 문서
             // 목차 같은 계층 구조가 아니어서, 순차적으로 "1.1"/"1.2" 번호를 매겨도 실제 구조를
             // 반영하지 못하고 이미 있는 [페이지: N] 마커와도 겹쳐 혼란만 준다.
+            // groupByPage=true — 슬라이드 하나(## + 있으면 ###)가 [페이지: N] 마커 단위로 하나의
+            // 교정 섹션이 되도록 한다. 일반 헤딩 기준 분할(splitBySections)을 쓰면 소제목(###)이
+            // 있는 슬라이드가 두 섹션으로 쪼개진다.
             String sourceMd = correctionService.correct(rawMd, docId, correctedMdPath,
-                    req.addImageDescriptions(), false,
+                    req.addImageDescriptions(), false, true,
                     (done, total) -> req.onProgress().accept(
                             IndexingProgressEvent.of("correcting", done, total, req.filename(),
                                     done + "/" + total + " 섹션 교정 중")));
@@ -224,7 +227,7 @@ public class DocumentIndexer {
                 Files.createDirectories(rawMdPath.getParent());
                 Files.writeString(rawMdPath, rawMd);
                 String sourceMd = correctionService.correct(rawMd, docId, correctedMdPath,
-                        req.addImageDescriptions(), req.addHeadingNumbers(),
+                        req.addImageDescriptions(), req.addHeadingNumbers(), false,
                         (done, total) -> req.onProgress().accept(
                                 IndexingProgressEvent.of("correcting", done, total, req.filename(),
                                         done + "/" + total + " 섹션 교정 중")));

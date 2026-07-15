@@ -105,7 +105,7 @@ class DocumentIndexerTest {
 
         // Stub MarkdownCorrectionService / TextToMarkdownService — pass content through unchanged
         correctionService = mock(MarkdownCorrectionService.class);
-        when(correctionService.correct(any(), any(), any(), anyBoolean(), anyBoolean(), any()))
+        when(correctionService.correct(any(), any(), any(), anyBoolean(), anyBoolean(), anyBoolean(), any()))
                 .thenAnswer(inv -> inv.getArgument(0));
         // reapplyHeadingNumbers delegates to a real instance (no LLM call in that method, so a
         // never-invoked LlmRouter mock is fine) — it's a no-op unless the MD already has a
@@ -274,7 +274,8 @@ class DocumentIndexerTest {
 
         // correctionService.correct()의 5번째 인자(addHeadingNumbers)는 요청값(true)과 무관하게
         // 항상 false로 전달되어야 한다 — PPTX 헤딩은 슬라이드 제목 라벨이지 문서 목차가 아니므로.
-        verify(correctionService).correct(any(), any(), any(), eq(false), eq(false), any());
+        // 6번째 인자(groupByPage)는 PPTX이므로 항상 true — [페이지: N] 마커 단위로만 교정 섹션을 묶는다.
+        verify(correctionService).correct(any(), any(), any(), eq(false), eq(false), eq(true), any());
     }
 
     @Test

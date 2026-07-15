@@ -30,13 +30,16 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiConsumer;
+import java.util.function.Predicate;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
  * LLM-based Markdown format correction.
- * Splits raw MD by H2/H3 headings, corrects each section in parallel (format only,
- * never changes content), then reassembles. Saves corrected file alongside the raw one.
+ * Splits raw MD by H2/H3 headings — or, when {@code groupByPage} (PPTX), strictly by
+ * {@code [페이지: N]} slide markers so a slide's ##/### heading pair never gets torn across two
+ * correction calls — corrects each section in parallel (format only, never changes content), then
+ * reassembles. Saves corrected file alongside the raw one.
  */
 @Service
 public class MarkdownCorrectionService {
@@ -47,10 +50,28 @@ public class MarkdownCorrectionService {
     private static final Pattern IMAGE_MARKER = Pattern.compile("\\[이미지:\\s*([^\\]]+)]");
     private static final Pattern FENCED_BLOCK = Pattern.compile("(?s)```(.*?)\\n(.*?)\\n```");
     private static final Pattern HEADING_NUMBER_PREFIX = Pattern.compile("^(?:\\d+(?:\\.\\d+)*(?:\\.)?|\\d+[\\)])\\s+");
-    /** Lines of the next section sent as read-only forward context during correction (§ code-fence continuity). */
-    private static final int LOOKAHEAD_LINES = 8;
-    /** Sentinel separating a section from its appended lookahead preview; the response is cut here. */
-    private static final String SECTION_BOUNDARY = "<<<SECTION_END>>>";
+    /**
+     * Non-blank lines of an adjacent section sent as read-only boundary context during correction
+     * (§ code-fence continuity) — both forward (lookahead, from the next section) and backward
+     * (lookbehind, from the previous section) use the same budget.
+     */
+    private static final int BOUNDARY_CONTEXT_LINES = 8;
+    /** Sentinel separating a section's LOOKBEHIND preview (previous section's tail) from its real
+     *  content that follows, in the PROMPT INPUT. */
+    private static final String SECTION_START_BOUNDARY = "<<<SECTION_START>>>";
+    /** Sentinel separating a section's real content from its appended LOOKAHEAD preview (next
+     *  section's head), in the PROMPT INPUT. */
+    private static final String SECTION_END_BOUNDARY = "<<<SECTION_END>>>";
+    /**
+     * Wrap the LLM's actual corrected output in its RESPONSE whenever lookahead and/or lookbehind
+     * context is sent. {@link #extractBetweenMarkers} keeps only the text between the pair, so
+     * anything the model writes outside it (a leaked preview from either edge, a preamble, trailing
+     * commentary) is discarded by code rather than trusted to the model's own cleanup. Distinct
+     * tokens from {@link #SECTION_START_BOUNDARY}/{@link #SECTION_END_BOUNDARY} since those mark
+     * input framing and these mark output framing.
+     */
+    private static final String RESULT_START_MARKER = "<<<RESULT_START>>>";
+    private static final String RESULT_END_MARKER = "<<<RESULT_END>>>";
 
     private final LlmRouter llmRouter;
     private final int maxConcurrent;
@@ -72,20 +93,20 @@ public class MarkdownCorrectionService {
      * On any LLM failure the original section text is kept (graceful fallback).
      */
     public String correct(String rawMd, String docId, Path correctedOutputPath) {
-        return correct(rawMd, docId, correctedOutputPath, false, false, null);
+        return correct(rawMd, docId, correctedOutputPath, false, false, false, null);
     }
 
     /** Same as {@link #correct(String, String, Path)} with image-description toggle. */
     public String correct(String rawMd, String docId, Path correctedOutputPath,
                           boolean addImageDescriptions) {
-        return correct(rawMd, docId, correctedOutputPath, addImageDescriptions, false, null);
+        return correct(rawMd, docId, correctedOutputPath, addImageDescriptions, false, false, null);
     }
 
     /** Same as {@link #correct(String, String, Path, boolean)} with heading-number second pass. */
     public String correct(String rawMd, String docId, Path correctedOutputPath,
                           boolean addImageDescriptions,
                           boolean addHeadingNumbers) {
-        return correct(rawMd, docId, correctedOutputPath, addImageDescriptions, addHeadingNumbers, null);
+        return correct(rawMd, docId, correctedOutputPath, addImageDescriptions, addHeadingNumbers, false, null);
     }
 
     /**
@@ -94,15 +115,19 @@ public class MarkdownCorrectionService {
      */
     public String correct(String rawMd, String docId, Path correctedOutputPath,
                           BiConsumer<Integer, Integer> onSectionDone) {
-        return correct(rawMd, docId, correctedOutputPath, false, false, onSectionDone);
+        return correct(rawMd, docId, correctedOutputPath, false, false, false, onSectionDone);
     }
 
     /**
-     * Same as {@link #correct(String, String, Path, boolean)} with section progress callback.
+     * Same as {@link #correct(String, String, Path, boolean, boolean)} with a section-progress
+     * callback plus a section-splitting mode: {@code groupByPage=true} (PPTX) splits strictly at
+     * {@code [페이지: N]} slide markers instead of every H2/H3 heading, so a slide's ##/### heading
+     * pair is never torn into two correction calls (see {@link #splitByPages}).
      */
     public String correct(String rawMd, String docId, Path correctedOutputPath,
                           boolean addImageDescriptions,
                           boolean addHeadingNumbers,
+                          boolean groupByPage,
                           BiConsumer<Integer, Integer> onSectionDone) {
         if (rawMd == null || rawMd.isBlank()) return rawMd;
         log.info("[MD_CORRECT] 시작: docId={}, chars={}", docId, rawMd.length());
@@ -113,8 +138,8 @@ public class MarkdownCorrectionService {
                 ? augmentImageDescriptionsWithLocalVision(rawMd, correctedOutputPath)
                 : rawMd;
 
-        List<String> sections = splitBySections(preprocessed);
-        log.debug("[MD_CORRECT] 섹션 {}개 분할 완료", sections.size());
+        List<String> sections = groupByPage ? splitByPages(preprocessed) : splitBySections(preprocessed);
+        log.debug("[MD_CORRECT] 섹션 {}개 분할 완료 (groupByPage={})", sections.size(), groupByPage);
         int total = sections.size();
 
         Semaphore gate = new Semaphore(maxConcurrent);
@@ -124,16 +149,22 @@ public class MarkdownCorrectionService {
             List<CompletableFuture<String>> futures = new ArrayList<>(sections.size());
             for (int i = 0; i < sections.size(); i++) {
                 final String sec = sections.get(i);
-                // Forward lookahead: the first few lines of the NEXT section, sent as read-only
-                // context so a section that ends mid-code-block (esp. an unfenced one whose "##"
-                // lines were mistaken for headings at the split) can see it continues and fence it
-                // correctly. The lookahead is trimmed back off the LLM response — see correctSection.
+                // Forward lookahead: the first few non-blank lines of the NEXT section, sent as
+                // read-only context so a section that ends mid-code-block (esp. an unfenced one
+                // whose "##" lines were mistaken for headings at the split) can see it continues
+                // and fence it correctly.
                 final String lookahead = (i + 1 < sections.size())
-                        ? lookaheadLines(sections.get(i + 1), LOOKAHEAD_LINES) : "";
+                        ? leadingNonBlankLines(sections.get(i + 1), BOUNDARY_CONTEXT_LINES) : "";
+                // Backward lookbehind: the last few non-blank lines of the PREVIOUS section,
+                // symmetric to lookahead — catches the mirror case, a code block that started
+                // before this section's cut and continues into it. Both previews are trimmed back
+                // off the LLM response — see correctSection.
+                final String lookbehind = (i > 0)
+                        ? trailingNonBlankLines(sections.get(i - 1), BOUNDARY_CONTEXT_LINES) : "";
                 futures.add(CompletableFuture.supplyAsync(() -> {
                     gate.acquireUninterruptibly();
                     try {
-                        String result = correctSection(sec, lookahead);
+                        String result = correctSection(sec, lookahead, lookbehind);
                         int done = doneCount.incrementAndGet();
                         if (onSectionDone != null) onSectionDone.accept(done, total);
                         return result;
@@ -220,6 +251,28 @@ public class MarkdownCorrectionService {
      * section boundaries splits the fence in half, and each half then goes to the LLM with no
      * idea it's inside (or missing) a code block, which reliably produces hallucinated language
      * tags, re-wrapped fences, or leaked prompt delimiters in the corrected output.
+     */
+    List<String> splitBySections(String md) {
+        return splitByBoundary(md, line -> line.startsWith("## ") || line.startsWith("### "));
+    }
+
+    /**
+     * PPTX-only split: one correction section per {@code [페이지: N]} slide marker. A slide can
+     * carry two heading candidates (a {@code ##} chapter label plus a {@code ###} slide subtitle —
+     * see {@code PptxToMarkdownConverter#calibrateHeadingOrder}); splitting on every H2/H3 like
+     * {@link #splitBySections} would tear that one slide into two correction calls. Splitting on
+     * the marker line itself — instead of the {@code ##} heading that follows it — also keeps
+     * {@code [페이지: N]} attached to the front of its own slide's section rather than the tail of
+     * the previous one.
+     */
+    List<String> splitByPages(String md) {
+        return splitByBoundary(md, line -> line.startsWith("[페이지: "));
+    }
+
+    /**
+     * Fence-aware splitter shared by {@link #splitBySections} and {@link #splitByPages}: never
+     * splits while inside a fenced code block (``` / ~~~), regardless of what {@code isBoundaryLine}
+     * matches.
      *
      * <p>When the oversized-section check trips while a fence is still open, the fence is not
      * cut — but it also isn't unconditionally kept in the current (already-full) section. If the
@@ -229,7 +282,7 @@ public class MarkdownCorrectionService {
      * section. If the fence started very early in a (so far small) section, deferring would just
      * leave a tiny orphan section, so it's left alone and allowed to keep growing until it closes.
      */
-    List<String> splitBySections(String md) {
+    private List<String> splitByBoundary(String md, Predicate<String> isBoundaryLine) {
         List<String> sections = new ArrayList<>();
         StringBuilder current = new StringBuilder();
         boolean inFence = false;
@@ -238,9 +291,9 @@ public class MarkdownCorrectionService {
         for (String line : md.split("\n", -1)) {
             String trimmed = line.stripLeading();
             boolean isFenceLine = trimmed.startsWith("```") || trimmed.startsWith("~~~");
-            boolean isHeading = !inFence && (line.startsWith("## ") || line.startsWith("### "));
+            boolean isBoundary = !inFence && isBoundaryLine.test(line);
 
-            if (isHeading && !current.isEmpty()) {
+            if (isBoundary && !current.isEmpty()) {
                 sections.add(current.toString());
                 current = new StringBuilder();
             }
@@ -270,36 +323,51 @@ public class MarkdownCorrectionService {
         return sections;
     }
 
-    /** Package-private for unit testing. Corrects a single section with no lookahead context. */
+    /** Package-private for unit testing. Corrects a single section with no boundary context. */
     String correctSection(String section) {
         return correctSection(section, "");
     }
 
-    /**
-     * Corrects one section's formatting. When {@code lookahead} (the opening lines of the next
-     * section) is non-blank it is appended after a {@link #SECTION_BOUNDARY} marker as read-only
-     * continuity context: it lets the LLM see whether a code block continues past this section's
-     * end so it can fence unfenced code correctly, and is trimmed back off the response at the
-     * marker. If the model drops the marker, we re-correct without lookahead so the preview can
-     * never leak into the stored output. Package-private for unit testing.
-     */
+    /** Same as {@link #correctSection(String, String, String)} with no lookbehind context. */
     String correctSection(String section, String lookahead) {
+        return correctSection(section, lookahead, "");
+    }
+
+    /**
+     * Corrects one section's formatting. {@code lookahead} (the opening lines of the NEXT section)
+     * and {@code lookbehind} (the closing lines of the PREVIOUS section) are read-only boundary
+     * context, framed with {@link #SECTION_END_BOUNDARY}/{@link #SECTION_START_BOUNDARY}
+     * respectively when non-blank: they let the LLM see whether a code block continues across
+     * either edge of this section (e.g. an unfenced block whose "##" lines were mistaken for
+     * headings at the split) so it can fence it correctly. Whenever either is present, the model is
+     * asked to wrap its actual corrected output between {@link #RESULT_START_MARKER}/
+     * {@link #RESULT_END_MARKER}, and {@link #extractBetweenMarkers} pulls out only that span —
+     * nothing outside the pair (a leaked preview from either edge, a preamble) ever reaches the
+     * stored output. If either result marker is missing, we re-correct with no boundary context at
+     * all rather than trust a partial boundary. Package-private for unit testing.
+     */
+    String correctSection(String section, String lookahead, String lookbehind) {
         if (section == null || section.isBlank()) return section;
-        String safeSection = section.replace("[/DOCUMENT]", "");
+        String safeSection = stripReservedMarkers(section);
         boolean hasLookahead = lookahead != null && !lookahead.isBlank();
-        String body = hasLookahead
-                ? safeSection + "\n" + SECTION_BOUNDARY + "\n" + lookahead.replace("[/DOCUMENT]", "")
-                : safeSection;
-        log.debug("[MD_CORRECT] 섹션 교정 시작: {}자 (lookahead={})", safeSection.length(), hasLookahead);
+        boolean hasLookbehind = lookbehind != null && !lookbehind.isBlank();
+        boolean hasBoundaryContext = hasLookahead || hasLookbehind;
 
-        String boundaryNote = hasLookahead ? ("""
+        StringBuilder bodyBuilder = new StringBuilder();
+        if (hasLookbehind) {
+            bodyBuilder.append(stripReservedMarkers(lookbehind)).append("\n")
+                    .append(SECTION_START_BOUNDARY).append("\n");
+        }
+        bodyBuilder.append(safeSection);
+        if (hasLookahead) {
+            bodyBuilder.append("\n").append(SECTION_END_BOUNDARY).append("\n")
+                    .append(stripReservedMarkers(lookahead));
+        }
+        String body = bodyBuilder.toString();
+        log.debug("[MD_CORRECT] 섹션 교정 시작: {}자 (lookbehind={}, lookahead={})",
+                safeSection.length(), hasLookbehind, hasLookahead);
 
-                [미리보기 처리 — 매우 중요]
-                - `%s` 줄 뒤의 텍스트는 '다음 섹션 미리보기'이며 이 섹션의 내용이 아닙니다. 오직 코드 블록이 다음 섹션으로 계속 이어지는지 판단하는 용도로만 참고하세요.
-                - "잘린 문장 연결" 규칙은 `%s` 이전(이 섹션 내부)에만 적용됩니다. 이 섹션의 마지막 문장/줄이 미완성으로 보이더라도 미리보기 쪽 단어를 가져와 이어붙이거나 병합하지 말고, 미완성인 상태 그대로 두세요 — 미리보기와 이어붙이면 다음 섹션을 교정할 때 같은 내용이 다시 나와 문서에 중복이 생깁니다.
-                - 미리보기의 문장이나 단어를 그대로든 재작성해서든 교정 결과에 절대 포함하지 마세요.
-                - 이 섹션의 원본 텍스트가 끝나는 지점 바로 다음 줄에 `%s`만 그대로 한 번 쓰고, 그 뒤에는 아무것도 쓰지 마세요.""")
-                .formatted(SECTION_BOUNDARY, SECTION_BOUNDARY, SECTION_BOUNDARY) : "";
+        String boundaryNote = hasBoundaryContext ? buildBoundaryNote(hasLookbehind, hasLookahead) : "";
 
         String prompt = ("""
                 당신은 문서 편집자입니다. 다음 마크다운 텍스트의 형식(포맷)만 교정하세요.
@@ -327,15 +395,16 @@ public class MarkdownCorrectionService {
                     TaskType.LIGHT_TEXT, RoutingMode.COST_FIRST, BackgroundUsage.MDCORRECT_PREFIX,
                     model -> model.call(new Prompt(prompt)));
             log.debug("[MD_CORRECT] 섹션 교정 완료: {}자 → {}자", safeSection.length(), result.length());
-            if (hasLookahead) {
-                int idx = result.indexOf(SECTION_BOUNDARY);
-                if (idx > 0) {
-                    return result.substring(0, idx).stripTrailing();
+            if (hasBoundaryContext) {
+                String extracted = extractBetweenMarkers(result, RESULT_START_MARKER, RESULT_END_MARKER);
+                if (extracted != null) {
+                    return extracted;
                 }
-                // Marker dropped/misplaced → the response may hold the next-section preview with no
-                // reliable cut point. Re-correct without lookahead so nothing leaks across sections.
-                log.debug("[MD_CORRECT] 경계 마커 누락 — lookahead 없이 재교정");
-                return correctSection(section, "");
+                // Either marker missing → the boundary can't be trusted (may still hold a leaked
+                // preview from either edge, or a preamble). Re-correct with no boundary context at
+                // all instead of guessing which side went wrong.
+                log.debug("[MD_CORRECT] 결과 마커 누락 — 경계 컨텍스트 없이 재교정");
+                return correctSection(section, "", "");
             }
             return result;
         } catch (LlmProviderExhaustedException e) {
@@ -346,17 +415,83 @@ public class MarkdownCorrectionService {
         }
     }
 
-    /** First {@code maxLines} lines of a section — read-only forward context for {@link #correctSection}. */
-    private static String lookaheadLines(String nextSection, int maxLines) {
-        if (nextSection == null || nextSection.isBlank()) return "";
-        String[] lines = nextSection.split("\n", -1);
-        int n = Math.min(maxLines, lines.length);
-        StringBuilder sb = new StringBuilder();
-        for (int i = 0; i < n; i++) {
-            if (i > 0) sb.append('\n');
-            sb.append(lines[i]);
+    /**
+     * Builds the prompt's boundary-handling instructions for whichever preview edge(s) are present.
+     * Both branches funnel into the same "wrap your actual output" instruction, since either edge
+     * can leak into the response the same way.
+     */
+    private String buildBoundaryNote(boolean hasLookbehind, boolean hasLookahead) {
+        StringBuilder note = new StringBuilder("\n[경계 컨텍스트 처리 — 매우 중요]\n");
+        if (hasLookbehind) {
+            note.append("- `").append(SECTION_START_BOUNDARY)
+                    .append("` 줄 앞의 텍스트는 '이전 섹션 미리보기'이며 이 섹션의 내용이 아닙니다. 오직 코드 블록이 이전 섹션에서 이어져 들어오는지 판단하는 용도로만 참고하세요.\n");
         }
-        return sb.toString();
+        if (hasLookahead) {
+            note.append("- `").append(SECTION_END_BOUNDARY)
+                    .append("` 줄 뒤의 텍스트는 '다음 섹션 미리보기'이며 이 섹션의 내용이 아닙니다. 오직 코드 블록이 다음 섹션으로 계속 이어지는지 판단하는 용도로만 참고하세요.\n");
+        }
+        note.append("- \"잘린 문장 연결\" 규칙은 이 섹션 내부에만 적용됩니다. 이 섹션의 첫 줄이나 마지막 줄이 미완성 문장으로 보이더라도 위·아래 미리보기 쪽 단어를 가져와 이어붙이거나 병합하지 말고, 미완성인 상태 그대로 두세요 — 미리보기와 이어붙이면 실제로 그 섹션을 교정할 때 같은 내용이 다시 나와 문서에 중복이 생깁니다.\n");
+        note.append("- 미리보기의 문장이나 단어를 그대로든 재작성해서든 교정 결과에 절대 포함하지 마세요.\n");
+        note.append("- 이 섹션의 교정 결과를 반환할 때는 반드시 이렇게 감싸세요: 첫 줄에 `").append(RESULT_START_MARKER)
+                .append("`만 단독으로 쓰고, 그 다음부터 이 섹션의 교정된 내용만 쓰고, 마지막 줄에 `").append(RESULT_END_MARKER)
+                .append("`만 단독으로 쓰세요. 두 마커 사이에는 이 섹션의 교정 결과 외에 미리보기 내용·설명·다른 텍스트를 절대 넣지 마세요.");
+        return note.toString();
+    }
+
+    /**
+     * Text strictly between the first {@code startMarker} and the first {@code endMarker} after
+     * it, or {@code null} if either is missing. Whatever the model wrote outside the pair (leaked
+     * preview text, a preamble, trailing commentary) is simply never read — deterministic, unlike
+     * trusting the LLM to stop cleanly at a single trailing marker.
+     */
+    private static String extractBetweenMarkers(String text, String startMarker, String endMarker) {
+        int start = text.indexOf(startMarker);
+        if (start < 0) return null;
+        start += startMarker.length();
+        int end = text.indexOf(endMarker, start);
+        if (end < 0) return null;
+        return text.substring(start, end).strip();
+    }
+
+    /** Strips any pre-existing occurrence of a prompt-framing marker from raw input text, in case a document already happens to contain one of these tokens verbatim. */
+    private static String stripReservedMarkers(String text) {
+        return text.replace("[/DOCUMENT]", "")
+                .replace(SECTION_START_BOUNDARY, "")
+                .replace(SECTION_END_BOUNDARY, "")
+                .replace(RESULT_START_MARKER, "")
+                .replace(RESULT_END_MARKER, "");
+    }
+
+    /**
+     * First {@code maxLines} non-blank lines of {@code section} — forward (lookahead) read-only
+     * boundary context. Blank/whitespace-only lines are skipped entirely (not counted, not
+     * included): a section that opens with several empty lines shouldn't burn the line budget on
+     * nothing. Package-private for unit testing.
+     */
+    static String leadingNonBlankLines(String section, int maxLines) {
+        if (section == null || section.isBlank()) return "";
+        String[] lines = section.split("\n", -1);
+        List<String> picked = new ArrayList<>(maxLines);
+        for (String line : lines) {
+            if (picked.size() >= maxLines) break;
+            if (!line.isBlank()) picked.add(line);
+        }
+        return String.join("\n", picked);
+    }
+
+    /**
+     * Last {@code maxLines} non-blank lines of {@code section}, in original reading order —
+     * backward (lookbehind) read-only boundary context. Same blank-line skipping as
+     * {@link #leadingNonBlankLines}. Package-private for unit testing.
+     */
+    static String trailingNonBlankLines(String section, int maxLines) {
+        if (section == null || section.isBlank()) return "";
+        String[] lines = section.split("\n", -1);
+        List<String> picked = new ArrayList<>(maxLines);
+        for (int i = lines.length - 1; i >= 0 && picked.size() < maxLines; i--) {
+            if (!lines[i].isBlank()) picked.add(0, lines[i]);
+        }
+        return String.join("\n", picked);
     }
 
     private String augmentImageDescriptionsWithLocalVision(String md, Path correctedOutputPath) {
