@@ -29,6 +29,8 @@ import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
 /**
@@ -39,6 +41,11 @@ import java.util.stream.Stream;
 public class DocumentIndexer {
 
     private static final Logger log = LoggerFactory.getLogger(DocumentIndexer.class);
+
+    // Matches both [이미지: path] and [이미지(변환불가): path] — see DocumentLoaderService's
+    // IMAGE_PATH_MARKER (only the plain form) and DocxToMarkdownConverter/PptxToMarkdownConverter/
+    // PdfToMarkdownConverter (marker producers). Used by removeMissingImageMarkers() on re-index.
+    private static final Pattern IMAGE_MARKER = Pattern.compile("\\[이미지(?:\\([^)]*\\))?: ([^\\]]+?)]");
 
     private final DocumentLoaderService loaderService;
     private final MarkdownCorrectionService correctionService;
@@ -305,6 +312,7 @@ public class DocumentIndexer {
 
         onProgress.accept(IndexingProgressEvent.of("loading", 0, 0, filename, "MD 파일 로드 중..."));
         String md = Files.readString(mdPath);
+        md = removeMissingImageMarkers(md, mdPath, filename);
         List<Document> rawDocs = loaderService.loadFromMarkdown(md);
         List<Document> chunks  = chunkSplitter.splitDocuments(
             rawDocs, filename, props.chunkSize(), props.chunkOverlap(), props.minChunkSizeSafe(),
@@ -515,6 +523,41 @@ public class DocumentIndexer {
     private List<String> restoreTags(String priorDocId) {
         if (priorDocId == null) return List.of();
         return keywordRepo.tagsByDocIds(List.of(priorDocId)).getOrDefault(priorDocId, List.of());
+    }
+
+    /**
+     * Strips {@code [이미지: path]}/{@code [이미지(변환불가): path]} markers whose referenced file
+     * no longer exists under {@code data/images/} (manually cleaned up, moved, or lost since the MD
+     * was written) before re-indexing from it — otherwise the stale reference is carried forward
+     * into the new chunks' {@code image_paths} metadata, pointing at a file that 404s. Persists the
+     * cleaned content back to {@code mdPath} so the fix survives (self-healing on next re-index
+     * too); a failed write is logged and swallowed since the cleaned string is still used in-memory
+     * for the current pass regardless. No-op (returns {@code md} unchanged) when every referenced
+     * file exists.
+     */
+    private String removeMissingImageMarkers(String md, Path mdPath, String filename) {
+        Matcher m = IMAGE_MARKER.matcher(md);
+        List<String> missing = new ArrayList<>();
+        StringBuilder cleaned = new StringBuilder();
+        int last = 0;
+        while (m.find()) {
+            String path = m.group(1).strip();
+            if (!Files.exists(dataDir.resolve(path))) {
+                cleaned.append(md, last, m.start());
+                last = m.end();
+                missing.add(path);
+            }
+        }
+        if (missing.isEmpty()) return md;
+        cleaned.append(md, last, md.length());
+        String result = cleaned.toString();
+        log.warn("[REINDEX] {} — 존재하지 않는 이미지 참조 {}개 제거: {}", filename, missing.size(), missing);
+        try {
+            Files.writeString(mdPath, result);
+        } catch (IOException e) {
+            log.warn("[REINDEX] {} — 정리된 MD 저장 실패(이번 인덱싱은 계속 진행): {}", filename, e.getMessage());
+        }
+        return result;
     }
 
     private void deleteExistingVectorsAndFiles(String userId, String docId, String version) {

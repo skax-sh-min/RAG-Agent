@@ -349,6 +349,73 @@ class DocumentIndexerTest {
     }
 
     @Test
+    @DisplayName("reindexFromMd — corrected.md의 존재하지 않는 이미지 마커는 제거된 뒤 인덱싱되고, 파일에도 반영된다")
+    void reindexFromMd_missingImageMarker_removedBeforeIndexingAndPersisted() throws IOException {
+        Path txtFile = tmpDir.resolve("guide.txt");
+        Files.writeString(txtFile, "테스트 문서 내용입니다.");
+        DocumentInfo info = indexer.index(IndexRequest.single(txtFile, "guide.txt", "v1", "anonymous", e -> {}));
+
+        // Simulate a corrected.md left pointing at an image that no longer exists on disk
+        // (deleted/moved since the MD was written) — the referenced file is never created here.
+        Path mdPath = tmpDir.resolve("converted").resolve(info.docId() + ".md"); // correctionService is mocked in this suite, so no real _corrected.md is written — reindexFromMd() falls back to the raw .md
+        Files.writeString(mdPath,
+                Files.readString(mdPath) + "\n[이미지: images/deadbeef/missing.png]\n");
+
+        indexer.reindexFromMd(info.docId());
+
+        assertThat(Files.readString(mdPath)).doesNotContain("images/deadbeef/missing.png");
+
+        org.mockito.ArgumentCaptor<String> mdCaptor = org.mockito.ArgumentCaptor.forClass(String.class);
+        verify(loaderService, atLeastOnce()).loadFromMarkdown(mdCaptor.capture());
+        assertThat(mdCaptor.getAllValues()).noneMatch(md -> md.contains("images/deadbeef/missing.png"));
+    }
+
+    @Test
+    @DisplayName("reindexFromMd — 이미지 파일이 실제 존재하면 마커는 그대로 유지된다")
+    void reindexFromMd_existingImageMarker_preserved() throws IOException {
+        Path txtFile = tmpDir.resolve("guide.txt");
+        Files.writeString(txtFile, "테스트 문서 내용입니다.");
+        DocumentInfo info = indexer.index(IndexRequest.single(txtFile, "guide.txt", "v1", "anonymous", e -> {}));
+
+        Path imageDir = tmpDir.resolve("images").resolve("cafef00d");
+        Files.createDirectories(imageDir);
+        Files.writeString(imageDir.resolve("real.png"), "not a real png, just needs to exist");
+
+        Path mdPath = tmpDir.resolve("converted").resolve(info.docId() + ".md"); // correctionService is mocked in this suite, so no real _corrected.md is written — reindexFromMd() falls back to the raw .md
+        Files.writeString(mdPath,
+                Files.readString(mdPath) + "\n[이미지: images/cafef00d/real.png]\n");
+
+        indexer.reindexFromMd(info.docId());
+
+        assertThat(Files.readString(mdPath)).contains("images/cafef00d/real.png");
+        org.mockito.ArgumentCaptor<String> mdCaptor = org.mockito.ArgumentCaptor.forClass(String.class);
+        verify(loaderService, atLeastOnce()).loadFromMarkdown(mdCaptor.capture());
+        assertThat(mdCaptor.getAllValues()).anyMatch(md -> md.contains("images/cafef00d/real.png"));
+    }
+
+    @Test
+    @DisplayName("reindexFromMd — 변환불가 마커·정상 마커 혼재 시 존재하지 않는 것만 선택적으로 제거된다")
+    void reindexFromMd_mixedMarkers_removesOnlyMissingOnes() throws IOException {
+        Path txtFile = tmpDir.resolve("guide.txt");
+        Files.writeString(txtFile, "테스트 문서 내용입니다.");
+        DocumentInfo info = indexer.index(IndexRequest.single(txtFile, "guide.txt", "v1", "anonymous", e -> {}));
+
+        Path imageDir = tmpDir.resolve("images").resolve("cafef00d");
+        Files.createDirectories(imageDir);
+        Files.writeString(imageDir.resolve("real.emf"), "raw unconverted bytes");
+
+        Path mdPath = tmpDir.resolve("converted").resolve(info.docId() + ".md"); // correctionService is mocked in this suite, so no real _corrected.md is written — reindexFromMd() falls back to the raw .md
+        Files.writeString(mdPath, Files.readString(mdPath)
+                + "\n[이미지(변환불가): images/cafef00d/real.emf]\n"
+                + "[이미지: images/deadbeef/gone.png]\n");
+
+        indexer.reindexFromMd(info.docId());
+
+        String cleaned = Files.readString(mdPath);
+        assertThat(cleaned).contains("images/cafef00d/real.emf").doesNotContain("images/deadbeef/gone.png");
+    }
+
+    @Test
     @DisplayName("parallel index — 사전계산된 sha256이 전달되면 파일을 재해싱하지 않고 그대로 사용한다(§10.8.4)")
     void index_parallel_usesPrecomputedSha256WithoutRehashing() throws IOException {
         Path txtFile = tmpDir.resolve("presha.txt");
