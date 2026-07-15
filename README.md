@@ -105,7 +105,7 @@ See [USER_MANUAL.md](documents/USER_MANUAL.md) for usage instructions and [OPERA
 | `LOCAL_LLM_URL` | — | `http://localhost:1234/v1` | LOCAL provider endpoint (also used as embedding fallback) |
 | `LOCAL_LLM_KEY` | — | `lm-studio` | LOCAL provider API key. **Optional for local endpoints** (llama-server needs none) — the LOCAL provider is kept even when blank (`no-key` is substituted) |
 | `LOCAL_LLM_MODEL` | — | `google/gemma-4-e4b` | LOCAL provider model name |
-| `LLM_ROUTING_MODE` | — | `COST_FIRST` | Default routing mode (`app.llm.default-routing-mode`). Air-gapped / local-only: set `LOCAL_ONLY` to block all external provider calls |
+| `LLM_ROUTING_MODE` | — | `COST_FIRST` | Default routing mode (`app.llm.default-routing-mode`). Air-gapped / local-only: set `LOCAL_ONLY` to block all external provider calls — this also hides the routing-strategy dropdown in the chat sidebar entirely, since every mode would resolve to the same provider |
 | `LLM_DEFAULT_PROVIDER_CONCURRENCY` | — | `3` | Query-path per-provider concurrency gate (`app.llm.default-provider-concurrency`) — the app never sends more concurrent requests to one provider than this (match the LLM server's real `--parallel` value). Per-provider override: `app.llm.providers[N].concurrency` |
 | `LLM_PERMIT_WAIT_TIMEOUT_SECONDS` | — | `20` | Max wait for a concurrency slot before failing fast with HTTP 429 + `Retry-After` (`app.llm.permit-wait-timeout-seconds`) instead of hanging until the read timeout. Indexing/background LLM calls are not subject to this cap |
 | `OPENAI_API_KEY` | — | — | Required for OpenAI providers. Providers auto-disabled at startup if unset |
@@ -334,7 +334,7 @@ User question
 - **EMF/WMF conversion** — DOCX Windows Metafile images converted to PNG via Batik (EMF) or LibreOffice headless (WMF)
 - **Multi-turn conversation** — thread-based history persistence (SQLite WAL, survives restarts)
 - **Message bubble restore** — re-entering `/chat/{threadId}` server-renders all previous turn bubbles
-- **Source hover preview** — `SourceRef` record with Bootstrap Popover shows a 200-char chunk text preview on hover
+- **Source hover preview** — `SourceRef` record with Bootstrap Popover shows a 200-char chunk text preview on hover; on non-mobile screens the popover is roughly 2x wider with a slightly smaller font so the excerpt reads with less wrapping
 - **Code syntax highlighting** — highlight.js applied after DOMPurify sanitize, synced with dark mode
 - **LLM usage dashboard** — per-provider daily/weekly/monthly token stats, Chart.js daily history chart, circuit breaker countdown; embedding usage tracked separately (`embed:<model>`, with an approximation fallback when the server omits usage); inactive providers with no history auto-hide, and orphaned records (removed from config) surface as admin-deletable cards
 - **Document versioning** — per-version isolation (chroma: separate collection; sqlite-vec: `version` partition key)

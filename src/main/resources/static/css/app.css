@@ -163,6 +163,16 @@
        at ≥md; restore the sidebar fill. --bg-elevated matches .bg-light in both
        light (#f8f9fa) and dark (#161b22) themes. */
     .sidebar.offcanvas-md { background-color: var(--bg-elevated) !important; }
+
+    /* Source-preview popover (.source-ref hover/focus, see message-assistant*.html).
+       Bootstrap's 276px default wraps a paragraph-length excerpt into a tall, narrow
+       box. Roughly double the width and shrink the font slightly so more of the
+       excerpt is readable without as much wrapping. Mobile keeps Bootstrap's default —
+       a viewport this narrow has no room to spare for a wider popover. */
+    .popover {
+        max-width: 560px;
+        font-size: 0.8rem;
+    }
 }
 
 /* ── Chat input safe-area (notched phones) ───────────────────────────── */

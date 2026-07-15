@@ -324,6 +324,7 @@ CREATE TABLE IF NOT EXISTS llm_usage (
 - **프로바이더 자동 비활성화**: `api-key`가 비어있으면 (`${GEMINI_API_KEY:}` 등 빈 기본값) 시작 시 warn 로그 출력 후 해당 프로바이더를 제외. 키 미설정만으로 providers 블록을 남겨둔 채 비활성화 가능
 - **DUAL 활성 조건**: LOCAL 미등록 → UI에서 드롭다운 `disabled` + "로컬 LLM이 필요합니다" 툴팁
 - **LOCAL_ONLY**: LOCAL 미연결·차단 시 외부 API fallback 없이 즉시 exhausted — UI에서 오류 안내 필요
+- **라우팅 전략 셀렉터 자체 숨김**: 위 두 항목은 DUAL/LOCAL_ONLY "개별 옵션"을 `disabled` 처리하는 것과 달리, `app.llm.default-routing-mode`(=`LLM_ROUTING_MODE`)가 `LOCAL_ONLY`면 채팅 사이드바의 라우팅 전략 드롭다운 **전체**가 렌더링되지 않는다 — 이 배포에서는 프로바이더가 LOCAL 하나뿐이라 어떤 모드를 골라도 결과가 동일하므로, 선택지 자체를 없애는 편이 더 정확하다. `LlmRouter.getDefaultMode()` → `ChatController.populateChatModel()`의 `localOnlyDeployment` 모델 속성 → `chat.html`의 `th:if="${!localOnlyDeployment}"`. 대화별 `routingMode`(스레드 메타에 저장된 현재 선택값)가 아니라 **배포 전체의 기본값**을 기준으로 판단한다 — 그렇지 않으면 사용자가 LOCAL_ONLY를 고르는 순간 셀렉터가 사라져 다시 못 바꾸는 UX 함정이 생긴다.
 - **같은 Gemini API 키 공유**: Flash(NORMAL)와 Pro(PREMIUM) 429가 동시 발생 가능 → OpenAI를 PREMIUM fallback으로 유지 권장
 - **classifyOnly() 토큰 미누적**: `AgentService`가 선행 분류 시 `AgentState` 토큰 집계에서 1회 누락 (허용된 MVP 트레이드오프)
 - **tried 집합 순환 방지**: `executeWithTracking()` 내 tried 집합이 모든 프로바이더를 포함하면 exhausted — 최대 재귀 = 프로바이더 수

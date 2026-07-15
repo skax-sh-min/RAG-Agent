@@ -37,8 +37,10 @@
                 </form>
             </div>
 
-            <!-- Routing strategy selector -->
-            <div class="mb-3">
+            <!-- Routing strategy selector — meaningless when the deployment default is
+                 LOCAL_ONLY (LLM_ROUTING_MODE=LOCAL_ONLY, the operator's local-only-mode
+                 setting), so hidden entirely there -->
+            <div class="mb-3" th:if="${!localOnlyDeployment}">
                 <label class="form-label small text-muted mb-1" for="routing-mode-select"
                        th:text="#{chat.routing.label}">Routing Strategy</label>
                 <select id="routing-mode-select"
@@ -388,18 +390,22 @@
     loadVersionOptions();
     loadChatTagSuggestions();
 
-    /* Sync routing mode → hidden form field + PATCH thread if it exists */
-    document.getElementById('routing-mode-select').addEventListener('change', function () {
-        const mode = this.value;
-        document.getElementById('form-routing-mode').value = mode;
-        if (this.dataset.hasThread === 'true') {
-            fetch('/ui/threads/' + this.dataset.threadId + '/routing-mode', {
-                method: 'PATCH',
-                headers: {'Content-Type': 'application/x-www-form-urlencoded', ...getCsrfHeaders()},
-                body: 'routingMode=' + encodeURIComponent(mode)
-            });
-        }
-    });
+    /* Sync routing mode → hidden form field + PATCH thread if it exists.
+       Selector is absent entirely when the deployment default is LOCAL_ONLY (localOnlyDeployment=true). */
+    const routingModeSelect = document.getElementById('routing-mode-select');
+    if (routingModeSelect) {
+        routingModeSelect.addEventListener('change', function () {
+            const mode = this.value;
+            document.getElementById('form-routing-mode').value = mode;
+            if (this.dataset.hasThread === 'true') {
+                fetch('/ui/threads/' + this.dataset.threadId + '/routing-mode', {
+                    method: 'PATCH',
+                    headers: {'Content-Type': 'application/x-www-form-urlencoded', ...getCsrfHeaders()},
+                    body: 'routingMode=' + encodeURIComponent(mode)
+                });
+            }
+        });
+    }
 
     /* Auto-expand textarea (max 6 lines) */
     function adjustTextarea() {
