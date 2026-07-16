@@ -252,9 +252,47 @@ public record AppProperties(
     }
 
     /** Minimum chunk length used by post-merge compaction. Falls back to chunkOverlap for backward compatibility. */
+    /** Chunk size (chars) used at indexing time. Hot-editable — {@code DocumentIndexer} re-reads it
+     *  per index, so an override applies on the next indexing / ↺ re-index. Clamped to a sane floor. */
+    public int chunkSizeSafe() {
+        Integer o = overrideInt(SettingsKeys.CHUNK_SIZE);
+        int v = (o != null) ? o : chunkSize;
+        return v > 0 ? v : 800;
+    }
+
+    /** Chunk overlap (chars). Hot-editable at indexing time, same lifecycle as {@link #chunkSizeSafe()}. */
+    public int chunkOverlapSafe() {
+        Integer o = overrideInt(SettingsKeys.CHUNK_OVERLAP);
+        int v = (o != null) ? o : chunkOverlap;
+        return Math.max(0, v);
+    }
+
+    /** Minimum chunk size (chars); {@code <= 0} falls back to the (override-aware) overlap. Hot-editable. */
     public int minChunkSizeSafe() {
-        if (minChunkSize > 0) return minChunkSize;
-        return Math.max(1, chunkOverlap);
+        Integer o = overrideInt(SettingsKeys.MIN_CHUNK_SIZE);
+        int v = (o != null) ? o : minChunkSize;
+        if (v > 0) return v;
+        return Math.max(1, chunkOverlapSafe());
+    }
+
+    /** Search top-K (final result count / candidate base). Hot-editable — {@code RetrievalService}
+     *  re-reads it per search. Clamped to {@code >= 1}. */
+    public int searchTopKSafe() {
+        Integer o = overrideInt(SettingsKeys.SEARCH_TOP_K);
+        int v = (o != null) ? o : searchTopK;
+        return v > 0 ? v : 7;
+    }
+
+    /** Multi-query expansion on/off. Hot-editable — {@code RetrievalService.shouldExpand()} re-reads it per search. */
+    public boolean searchMultiqueryEnabledSafe() {
+        Boolean o = overrideBool(SettingsKeys.SEARCH_MULTIQUERY_ENABLED);
+        return o != null ? o : searchMultiqueryEnabled;
+    }
+
+    /** Hybrid (BM25 keyword axis) search on/off. Hot-editable — {@code RetrievalService} re-reads it per search. */
+    public boolean searchHybridEnabledSafe() {
+        Boolean o = overrideBool(SettingsKeys.SEARCH_HYBRID_ENABLED);
+        return o != null ? o : searchHybridEnabled;
     }
 
     /** Candidate pool multiplier for reranking. Clamped to >= 1 to avoid empty pools. */
@@ -323,8 +361,18 @@ public record AppProperties(
     }
 
     public IndexingConfig indexingSafe() {
-        if (indexing == null) return new IndexingConfig(4, 8, 30, 4);
-        int files   = indexing.maxConcurrentFiles() > 0    ? indexing.maxConcurrentFiles()    : 4;
+        // max-concurrent-files is hot-editable (fold the override in here — DocumentIndexer reads it
+        // fresh per sync/index, so the next indexing sees a /settings change without a restart).
+        // The other fields (llm-calls/timeout/batch) stay fixed: llm-calls is cached at construction
+        // by background services (MarkdownCorrectionService), so a live override would apply only
+        // partially and mislead — see SettingsService's read-only indexing note.
+        Integer filesOverride = overrideInt(SettingsKeys.INDEXING_MAX_CONCURRENT_FILES);
+        if (indexing == null) {
+            int f = (filesOverride != null && filesOverride > 0) ? filesOverride : 4;
+            return new IndexingConfig(f, 8, 30, 4);
+        }
+        int files   = (filesOverride != null && filesOverride > 0) ? filesOverride
+                    : (indexing.maxConcurrentFiles() > 0 ? indexing.maxConcurrentFiles() : 4);
         int llm     = indexing.maxConcurrentLlmCalls() > 0 ? indexing.maxConcurrentLlmCalls() : 8;
         int timeout = indexing.keywordTimeoutSeconds() > 0 ? indexing.keywordTimeoutSeconds() : 30;
         int batch   = indexing.keywordBatchSize() > 0      ? indexing.keywordBatchSize()      : 4;

@@ -240,10 +240,10 @@ public class DocumentIndexer {
 
         req.onProgress().accept(IndexingProgressEvent.of("chunking", 0, 0, req.filename(), "청크 분할 중..."));
         List<Document> chunks = chunkSplitter.splitDocuments(
-            rawDocs, req.filename(), props.chunkSize(), props.chunkOverlap(), props.minChunkSizeSafe(),
+            rawDocs, req.filename(), props.chunkSizeSafe(), props.chunkOverlapSafe(), props.minChunkSizeSafe(),
             props.embeddingSafe().maxChunkChars());
         log.debug("[INDEX] {} 청크 분할 완료 → {}개 (chunkSize={}, overlap={}, minChunkSize={})",
-            req.filename(), chunks.size(), props.chunkSize(), props.chunkOverlap(), props.minChunkSizeSafe());
+            req.filename(), chunks.size(), props.chunkSizeSafe(), props.chunkOverlapSafe(), props.minChunkSizeSafe());
         req.onProgress().accept(IndexingProgressEvent.of("chunking", 0, chunks.size(), req.filename(),
                 chunks.size() + "개 청크"));
 
@@ -323,7 +323,7 @@ public class DocumentIndexer {
         md = reapplyHeadingNumbersIfNeeded(md, mdPath, filename);
         List<Document> rawDocs = loaderService.loadFromMarkdown(md);
         List<Document> chunks  = chunkSplitter.splitDocuments(
-            rawDocs, filename, props.chunkSize(), props.chunkOverlap(), props.minChunkSizeSafe(),
+            rawDocs, filename, props.chunkSizeSafe(), props.chunkOverlapSafe(), props.minChunkSizeSafe(),
             props.embeddingSafe().maxChunkChars());
         log.debug("[REINDEX] 청크 분할: {}섹션 → {}청크", rawDocs.size(), chunks.size());
         onProgress.accept(IndexingProgressEvent.of("chunking", 0, chunks.size(), filename,

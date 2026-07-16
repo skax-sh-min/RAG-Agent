@@ -108,7 +108,8 @@ class SettingsServiceTest {
     @Test
     @DisplayName("update — 알 수 없는/비-핫 키는 거부")
     void update_unknownKey_rejected() {
-        assertThatThrownBy(() -> service.update("search-top-k", "10"))
+        // rerank-enabled is surfaced read-only (structural @ConditionalOnProperty bean), never hot
+        assertThatThrownBy(() -> service.update("search-rerank-enabled", "true"))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> service.update("nonsense", "1"))
                 .isInstanceOf(IllegalArgumentException.class);
@@ -144,14 +145,21 @@ class SettingsServiceTest {
     }
 
     @Test
-    @DisplayName("buildView — hot 그룹 7개 + fixed/cache 그룹, 벡터 스토어/라우팅 기본값 노출")
+    @DisplayName("buildView — search_hot/fixed/indexing/cache 4그룹, 모든 핫 키가 편집 가능 항목으로 노출")
     void buildView_structure() {
         SettingsView view = service.buildView();
 
-        assertThat(view.groups()).hasSize(3);
+        assertThat(view.groups()).hasSize(4);
         assertThat(view.groups().get(0).id()).isEqualTo("search_hot");
-        assertThat(view.groups().get(0).items()).hasSize(SettingsKeys.HOT_EDITABLE.size());
         assertThat(view.groups().get(0).items()).allMatch(SettingsView.SettingItem::editable);
+        // indexing group exists (chunk/file-concurrency knobs live here)
+        assertThat(view.groups()).anyMatch(g -> g.id().equals("indexing"));
+        // every hot-editable key is rendered as an editable row somewhere (search_hot + indexing)
+        long editableCount = view.groups().stream()
+                .flatMap(g -> g.items().stream())
+                .filter(SettingsView.SettingItem::editable)
+                .count();
+        assertThat(editableCount).isEqualTo(SettingsKeys.HOT_EDITABLE.size());
         assertThat(view.vectorStoreType()).isEqualTo("chroma");
         assertThat(view.defaultRoutingMode()).isEqualTo("COST_FIRST");
         assertThat(view.providers()).isEmpty();

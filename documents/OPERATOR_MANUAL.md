@@ -1503,9 +1503,9 @@ CPU/메모리 제약이 있는 환경에서는 `INDEXING_MAX_FILES`와 `INDEXING
 **조회 항목 (그룹별)**:
 - **LLM 라우팅**: 등록 프로바이더·역할(role)·우선순위·모델·API 키 설정 여부·서킷브레이커 상태, 기본 라우팅 모드, temperature/max-tokens.
 - **임베딩 / 벡터 스토어**: 임베딩 모델·차원, 벡터 스토어 백엔드(chroma/sqlite-vec).
-- **검색 튜닝 / 캐시**: 아래 핫 수정 항목 + 조회 전용 항목.
+- **검색 튜닝 / 인덱싱 / 캐시**: 아래 핫 수정 항목 + 조회 전용 항목.
 
-**핫 수정 가능 (재기동 불필요, 다음 검색부터 반영)** — 값을 바꾸면 `settings_override` 테이블(`memory.db`)에 저장되고, 다음 검색부터 즉시 적용됩니다:
+**핫 수정 가능 — 검색 (재기동 불필요, 다음 검색부터 반영)** — 값을 바꾸면 `settings_override` 테이블(`memory.db`)에 저장되고, 다음 검색부터 즉시 적용됩니다:
 
 | 항목 | 키 | 범위 |
 |------|----|------|
@@ -1516,11 +1516,23 @@ CPU/메모리 제약이 있는 환경에서는 `INDEXING_MAX_FILES`와 `INDEXING
 | 태그 후보 배수 | `app.search-tag-candidate-multiplier` | 1 ~ 20 |
 | 멀티쿼리 최소 길이 | `app.search-multiquery-min-length` | 0 ~ 1000 |
 | 재시도 시 후보 확대 | `app.search-retry-escalate` | true/false |
+| topK (검색 상위 K) | `app.search-top-k` | 1 ~ 50 |
+| 멀티쿼리 확장 | `app.search-multiquery-enabled` | true/false |
+| 하이브리드 검색 | `app.search-hybrid-enabled` | true/false |
+
+**핫 수정 가능 — 인덱싱/청킹 (재기동 불필요, 다음 인덱싱/↺ 재인덱싱부터 반영)** — 검색 튜닝과 달리 즉시가 아니라 **다음 인덱싱**부터 적용되며, 이미 색인된 청크를 소급 재분할하지는 않습니다(값을 바꾼 뒤 재업로드하거나 `/admin` ↺ 재인덱싱을 눌러야 반영):
+
+| 항목 | 키 | 범위 |
+|------|----|------|
+| 청크 크기(자) | `app.chunk-size` | 100 ~ 8000 |
+| 청크 오버랩(자) | `app.chunk-overlap` | 0 ~ 2000 |
+| 최소 청크 크기(자) | `app.min-chunk-size` | 0 ~ 4000 |
+| 동시 파일 처리 수 | `app.indexing.max-concurrent-files` | 1 ~ 32 |
 
 - **"기본값" 버튼**으로 오버라이드를 삭제하면 `application.properties`/환경변수 값으로 정확히 복귀합니다(오버라이드가 있으면 항상 프로퍼티보다 우선).
 - 오버라이드는 **재기동 후에도 유지**됩니다(테이블에 영속). 배포 기본값 자체를 바꾸려면 여전히 환경변수/`application.properties`를 수정하세요 — 오버라이드는 그 위에 얹히는 런타임 조정 레이어입니다.
 
-**조회 전용(재기동 필요)**: `rerank-enabled`·`hybrid-enabled`·쿼리 임베딩 캐시(모두 빈 생성 시점 결정), 임베딩 차원·벡터 스토어 백엔드(DDL/빈 구성), topK·멀티쿼리 활성화. temperature/max-tokens와 기본 라우팅 모드는 현재 조회 전용입니다(전자는 §6.18 선행 필요, 후자는 대화별 라우팅을 채팅 화면에서 설정).
+**조회 전용(재기동 필요)**: `rerank-enabled`(빈 생성 시점 `@ConditionalOnProperty`로 결정)·쿼리 임베딩 캐시(빈 생성 시점 결정)·`indexing.max-concurrent-llm-calls`(MarkdownCorrectionService 등 백그라운드 서비스가 생성 시점에 캐싱 — 핫 override 시 일부만 반영돼 혼동을 주므로 조회 전용 유지), 임베딩 차원·벡터 스토어 백엔드(DDL/빈 구성). temperature/max-tokens와 기본 라우팅 모드는 현재 조회 전용입니다(전자는 §6.18 선행 필요, 후자는 대화별 라우팅을 채팅 화면에서 설정).
 
 **권한**: 조회는 누구나 가능하지만, **수정은 관리자만** 가능합니다(관리 전용 인증 모드 `AUTH_MANAGEMENT_ONLY=true`에서 `/setup` 관리자 로그인 필요 — §9 참조). 수정 UI(입력/버튼)는 비관리자에게 숨겨지며, 서버도 `/admin/settings/**` 경로로 이중 방어합니다. 모든 변경은 감사 로그(`settings.update`/`settings.reset`, 변경 키·이전값·새값)에 남습니다.
 

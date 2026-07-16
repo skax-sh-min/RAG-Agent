@@ -239,7 +239,7 @@ Assistant 응답에 👍/👎 토글 추가(`conversation_turns.feedback`, `PATC
 
 ### 6.13 설정 페이지 — LLM/RAG 옵션 조회·부분 수정 ✅ 완료 (2026-07-14)
 
-신규 `GET /settings`(게스트 조회 가능, 편집은 `isAdmin` 게이트)에서 LLM/임베딩/RAG 검색 튜닝값을 조회. 검색 튜닝 7개 값과 기본 라우팅 모드는 SQLite `settings_override` 테이블 기반 오버레이 레이어로 **재기동 없이 즉시 반영**(`RetrievalService`가 매 호출 `props.xxxSafe()`로 재조회하도록 변경). 빈 생성 시점에 고정되는 값(rerank-enabled 등)은 조회 전용. 수정은 `/admin/settings/update|reset`(§6.17 ROLE_ADMIN 상속) + 감사 로그 기록.
+신규 `GET /settings`(게스트 조회 가능, 편집은 `isAdmin` 게이트)에서 LLM/임베딩/RAG 설정을 조회. 검색 튜닝 값(초기 7개 → 이후 topK·멀티쿼리 확장·하이브리드까지 10개)은 SQLite `settings_override` 테이블 기반 오버레이 레이어로 **재기동 없이 다음 검색부터 반영**(`RetrievalService`가 매 호출 `props.xxxSafe()`로 재조회하도록 변경). 이후 확장(Tier A/B)으로 인덱싱/청킹 값(청크 크기·오버랩·최소 크기·동시 파일 처리 수)도 핫 수정 대상이 되어, `DocumentIndexer`가 매 인덱싱마다 재조회해 **다음 인덱싱/↺ 재인덱싱부터 반영**된다. 빈 생성 시점에 고정되는 값(rerank-enabled·max-concurrent-llm-calls 등)과 기본 라우팅 모드는 조회 전용. 수정은 `/admin/settings/update|reset`(§6.17 ROLE_ADMIN 상속) + 감사 로그 기록.
 
 ---
 

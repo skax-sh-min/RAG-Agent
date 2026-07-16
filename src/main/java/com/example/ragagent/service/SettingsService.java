@@ -56,21 +56,34 @@ public class SettingsService implements AppProperties.OverrideSource {
     /** One editable setting's validation + input metadata. {@code labelKey} is an i18n message key. */
     private record Spec(String key, Kind kind, double min, double max, double step, String labelKey) {}
 
-    // Insertion order = render order in the "검색 튜닝 (핫 수정)" group.
-    private static final List<Spec> HOT_SPECS = List.of(
+    // Insertion order = render order in the "검색 튜닝 (핫 수정)" group. Apply on the next search.
+    private static final List<Spec> SEARCH_HOT_SPECS = List.of(
             new Spec(SettingsKeys.SEARCH_SIMILARITY_THRESHOLD,     Kind.DOUBLE, 0.0, 1.0,  0.01, "settings.item.similarity-threshold"),
             new Spec(SettingsKeys.SEARCH_RRF_KEYWORD_WEIGHT,       Kind.DOUBLE, 0.0, 10.0, 0.1,  "settings.item.rrf-keyword-weight"),
             new Spec(SettingsKeys.SEARCH_RRF_K,                    Kind.INT,    1,   1000, 1,    "settings.item.rrf-k"),
             new Spec(SettingsKeys.SEARCH_CANDIDATE_MULTIPLIER,     Kind.INT,    1,   20,   1,    "settings.item.candidate-multiplier"),
             new Spec(SettingsKeys.SEARCH_TAG_CANDIDATE_MULTIPLIER, Kind.INT,    1,   20,   1,    "settings.item.tag-candidate-multiplier"),
             new Spec(SettingsKeys.SEARCH_MULTIQUERY_MIN_LENGTH,    Kind.INT,    0,   1000, 1,    "settings.item.multiquery-min-length"),
-            new Spec(SettingsKeys.SEARCH_RETRY_ESCALATE,           Kind.BOOL,   0,   0,    0,    "settings.item.retry-escalate")
+            new Spec(SettingsKeys.SEARCH_RETRY_ESCALATE,           Kind.BOOL,   0,   0,    0,    "settings.item.retry-escalate"),
+            new Spec(SettingsKeys.SEARCH_TOP_K,                    Kind.INT,    1,   50,   1,    "settings.item.top-k"),
+            new Spec(SettingsKeys.SEARCH_MULTIQUERY_ENABLED,       Kind.BOOL,   0,   0,    0,    "settings.item.multiquery-enabled"),
+            new Spec(SettingsKeys.SEARCH_HYBRID_ENABLED,           Kind.BOOL,   0,   0,    0,    "settings.item.hybrid-enabled")
+    );
+
+    // Insertion order = render order in the "인덱싱 튜닝" group. Apply on the next indexing / ↺ re-index
+    // (they don't retro-actively re-chunk already-indexed documents).
+    private static final List<Spec> INDEXING_HOT_SPECS = List.of(
+            new Spec(SettingsKeys.CHUNK_SIZE,                      Kind.INT,    100, 8000, 50,   "settings.item.chunk-size"),
+            new Spec(SettingsKeys.CHUNK_OVERLAP,                   Kind.INT,    0,   2000, 10,   "settings.item.chunk-overlap"),
+            new Spec(SettingsKeys.MIN_CHUNK_SIZE,                  Kind.INT,    0,   4000, 10,   "settings.item.min-chunk-size"),
+            new Spec(SettingsKeys.INDEXING_MAX_CONCURRENT_FILES,   Kind.INT,    1,   32,   1,    "settings.item.max-concurrent-files")
     );
 
     private static final Map<String, Spec> SPECS;
     static {
         Map<String, Spec> m = new LinkedHashMap<>();
-        for (Spec s : HOT_SPECS) m.put(s.key(), s);
+        for (Spec s : SEARCH_HOT_SPECS) m.put(s.key(), s);
+        for (Spec s : INDEXING_HOT_SPECS) m.put(s.key(), s);
         SPECS = Map.copyOf(m);
     }
 
@@ -203,8 +216,9 @@ public class SettingsService implements AppProperties.OverrideSource {
                 .toList();
 
         List<SettingGroup> groups = List.of(
-                new SettingGroup("search_hot", "settings.group.search_hot", hotItems()),
+                new SettingGroup("search_hot", "settings.group.search_hot", searchHotItems()),
                 new SettingGroup("search_fixed", "settings.group.search_fixed", fixedSearchItems()),
+                new SettingGroup("indexing", "settings.group.indexing", indexingItems()),
                 new SettingGroup("cache", "settings.group.cache", cacheItems())
         );
 
@@ -238,19 +252,29 @@ public class SettingsService implements AppProperties.OverrideSource {
                 bool ? null : spec.step());
     }
 
-    private List<SettingItem> hotItems() {
-        List<SettingItem> items = new ArrayList<>(HOT_SPECS.size());
-        for (Spec s : HOT_SPECS) items.add(editableItem(s.key()));
+    private List<SettingItem> searchHotItems() {
+        List<SettingItem> items = new ArrayList<>(SEARCH_HOT_SPECS.size());
+        for (Spec s : SEARCH_HOT_SPECS) items.add(editableItem(s.key()));
         return items;
     }
 
+    /** Only rerank-enabled remains read-only here — it's an {@code @ConditionalOnProperty} bean that
+     *  can't be hot-swapped (topK / multiquery / hybrid moved to the hot group). */
     private List<SettingItem> fixedSearchItems() {
         return List.of(
-                readOnly("settings.item.top-k", Integer.toString(props.searchTopK()), null),
-                readOnly("settings.item.multiquery-enabled", Boolean.toString(props.searchMultiqueryEnabled()), null),
-                readOnly("settings.item.hybrid-enabled", Boolean.toString(props.searchHybridEnabled()), "settings.note.restart"),
                 readOnly("settings.item.rerank-enabled", Boolean.toString(props.searchRerankEnabled()), "settings.note.restart")
         );
+    }
+
+    /** Chunking + file-concurrency: hot-editable but they apply on the NEXT indexing / ↺ re-index,
+     *  not the next search (existing chunks are not re-split), hence a distinct group + note.
+     *  max-concurrent-llm-calls stays read-only — background services cache it at construction. */
+    private List<SettingItem> indexingItems() {
+        List<SettingItem> items = new ArrayList<>(INDEXING_HOT_SPECS.size() + 1);
+        for (Spec s : INDEXING_HOT_SPECS) items.add(editableItem(s.key()));
+        items.add(readOnly("settings.item.max-concurrent-llm-calls",
+                Integer.toString(props.indexingSafe().maxConcurrentLlmCalls()), "settings.note.restart"));
+        return items;
     }
 
     private List<SettingItem> cacheItems() {
@@ -282,6 +306,13 @@ public class SettingsService implements AppProperties.OverrideSource {
             case SettingsKeys.SEARCH_TAG_CANDIDATE_MULTIPLIER -> Integer.toString(props.searchTagCandidateMultiplierSafe());
             case SettingsKeys.SEARCH_MULTIQUERY_MIN_LENGTH    -> Integer.toString(props.searchMultiqueryMinLengthSafe());
             case SettingsKeys.SEARCH_RETRY_ESCALATE           -> Boolean.toString(props.searchRetryEscalateSafe());
+            case SettingsKeys.SEARCH_TOP_K                    -> Integer.toString(props.searchTopKSafe());
+            case SettingsKeys.SEARCH_MULTIQUERY_ENABLED       -> Boolean.toString(props.searchMultiqueryEnabledSafe());
+            case SettingsKeys.SEARCH_HYBRID_ENABLED           -> Boolean.toString(props.searchHybridEnabledSafe());
+            case SettingsKeys.CHUNK_SIZE                      -> Integer.toString(props.chunkSizeSafe());
+            case SettingsKeys.CHUNK_OVERLAP                   -> Integer.toString(props.chunkOverlapSafe());
+            case SettingsKeys.MIN_CHUNK_SIZE                  -> Integer.toString(props.minChunkSizeSafe());
+            case SettingsKeys.INDEXING_MAX_CONCURRENT_FILES   -> Integer.toString(props.indexingSafe().maxConcurrentFiles());
             default -> "";
         };
     }

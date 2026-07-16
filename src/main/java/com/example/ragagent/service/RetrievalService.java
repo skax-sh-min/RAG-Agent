@@ -38,15 +38,12 @@ public class RetrievalService {
     private final RagService ragService;
     private final MultiQueryExpander multiQueryExpander;
     private final AppProperties props;
-    // Structural values decided at startup (restart-required — a runtime change can't take effect
-    // without re-wiring beans/pipeline), so they're cached once. topK is view-only on /settings.
-    private final int defaultTopK;
-    private final boolean multiqueryEnabled;
-    private final boolean hybridEnabled;
+    // rerank-enabled is truly structural — the RerankerService bean only exists when it was true at
+    // startup (@ConditionalOnProperty), so it can't be hot-swapped; cache it once. topK, multiquery-
+    // enabled and hybrid-enabled are now hot-editable and are read fresh from props.xxxSafe() on every
+    // execute()/shouldExpand() (alongside retry-escalate, candidate/tag multipliers, RRF k/weight,
+    // multiquery min-length) so a /settings override applies on the next search — none are cached.
     private final boolean rerankEnabled;
-    // Hot-editable values (retry-escalate, candidate/tag multipliers, RRF k/weight,
-    // multiquery min-length) are deliberately NOT cached — they're read fresh from props.xxxSafe()
-    // on every execute()/shouldExpand() so a /settings override applies on the next search.
     private final LazyVisionService lazyVisionService; // null when disabled
     private final Optional<RerankerService> reranker;
 
@@ -55,9 +52,6 @@ public class RetrievalService {
                             Optional<RerankerService> rerankerOpt) {
         this.ragService = ragService;
         this.props = props;
-        this.defaultTopK = props.searchTopK();
-        this.multiqueryEnabled = props.searchMultiqueryEnabled();
-        this.hybridEnabled = props.searchHybridEnabled();
         this.rerankEnabled = props.searchRerankEnabled();
         this.lazyVisionService = lazyVisionOpt.orElse(null);
         this.reranker = rerankerOpt;
@@ -90,6 +84,8 @@ public class RetrievalService {
         int tagCandidateMultiplier = props.searchTagCandidateMultiplierSafe();
         int rrfK = props.searchRrfKSafe();
         double rrfKeywordWeight = props.searchRrfKeywordWeightSafe();
+        int defaultTopK = props.searchTopKSafe();
+        boolean hybridEnabled = props.searchHybridEnabledSafe();
         List<Document> unique;
         try {
             // Escalate candidate count on retry to surface different documents.
@@ -204,7 +200,7 @@ public class RetrievalService {
      * Package-private for unit testing.
      */
     boolean shouldExpand(String question) {
-        if (!multiqueryEnabled) return false;
+        if (!props.searchMultiqueryEnabledSafe()) return false;
         if (question == null) return false;
         // Hot-editable — read fresh so a /settings override applies without a restart.
         return question.strip().length() >= props.searchMultiqueryMinLengthSafe();

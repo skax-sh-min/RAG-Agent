@@ -71,10 +71,10 @@ class RetrievalServiceMultiQueryParallelTest {
                 .thenReturn(List.of(List.of(doc("variant"))));
 
         AppProperties props = mock(AppProperties.class);
-        when(props.searchTopK()).thenReturn(5);
-        when(props.searchMultiqueryEnabled()).thenReturn(true);
+        when(props.searchTopKSafe()).thenReturn(5);
+        when(props.searchMultiqueryEnabledSafe()).thenReturn(true);
         when(props.searchMultiqueryMinLengthSafe()).thenReturn(0);
-        when(props.searchHybridEnabled()).thenReturn(false);
+        when(props.searchHybridEnabledSafe()).thenReturn(false);
         when(props.searchRetryEscalateSafe()).thenReturn(false);
         when(props.searchRerankEnabled()).thenReturn(false);
         when(props.searchCandidateMultiplierSafe()).thenReturn(3);
