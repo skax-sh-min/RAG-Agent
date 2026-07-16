@@ -40,7 +40,8 @@ public record AppProperties(
         Integer searchQueryEmbedCacheMaxSize,   // 쿼리 임베딩 캐시 최대 엔트리 수 (기본 500)
         Integer searchQueryEmbedCacheTtlSeconds, // 쿼리 임베딩 캐시 TTL 초 (기본 600 = 10분)
         PptxShapeExtractionConfig pptxImage,    // PPTX 그리기 도구 도형 래스터라이즈/클러스터링 튜닝
-        String mdCorrectionDefaultCodeLanguage  // MD 교정 시 LLM이 미펜스 코드를 감쌀 때 언어 판단이 어려우면 붙일 기본 언어 (java/bash/sql, 기본 java)
+        String mdCorrectionDefaultCodeLanguage, // MD 교정 시 LLM이 미펜스 코드를 감쌀 때 언어 판단이 어려우면 붙일 기본 언어 (java/bash/sql, 기본 java)
+        DocxShapeExtractionConfig docxImage     // DOCX 레거시 VML 도형 + 사진 합성 튜닝
 ) {
     public record LlmConfig(
             List<ProviderConfig> providers,
@@ -138,6 +139,16 @@ public record AppProperties(
             Double minShapeDimensionPt,       // 가로/세로 중 큰 쪽이 이 값 미만이면 아이콘/구분선으로 보고 제외 (기본 30)
             Double clusterProximityPaddingPt, // 클러스터링 근접 판정 시 바운딩박스에 적용할 바깥쪽 패딩 (기본 15)
             Boolean mergeAnnotatedPictures    // true(기본): 사진도 근접 클러스터링에 참여해 겹친 주석 도형과 합성 / false: PPTX에서 실제 그룹(XSLFGroupShape)으로 묶인 경우만 합성, 그 외 사진은 항상 원본 그대로 추출
+    ) {}
+
+    /**
+     * DOCX 레거시 VML 도형(v:rect/v:oval/v:roundrect/v:line) + 사진 합성 튜닝 —
+     * {@link com.example.ragagent.service.DocxAnnotationShapeMerger} 참고. PPTX와 달리 POI의
+     * WordprocessingML 모델에는 도형 좌표·렌더러가 없어 진짜 기하학적 겹침 판정이 불가능하므로,
+     * "같은 문단에 사진과 도형이 함께 있으면 합성" 근사 방식만 지원한다.
+     */
+    public record DocxShapeExtractionConfig(
+            Boolean mergeAnnotatedShapes // true(기본): 같은 문단의 VML 도형을 사진과 합성 / false: 항상 원본 사진만 추출
     ) {}
 
     public record ImageDescriptionProperties(
@@ -413,6 +424,16 @@ public record AppProperties(
         boolean mergeAnnotatedPictures = (pptxImage != null && pptxImage.mergeAnnotatedPictures() != null)
                 ? pptxImage.mergeAnnotatedPictures() : true;
         return new PptxShapeExtractionConfig(minDim, padding, mergeAnnotatedPictures);
+    }
+
+    /**
+     * DOCX VML-shape + picture merge tuning, defaulting to true (merge). Only falls back on an
+     * unset (null) field — an explicit false is honored.
+     */
+    public DocxShapeExtractionConfig docxImageSafe() {
+        boolean mergeAnnotatedShapes = (docxImage != null && docxImage.mergeAnnotatedShapes() != null)
+                ? docxImage.mergeAnnotatedShapes() : true;
+        return new DocxShapeExtractionConfig(mergeAnnotatedShapes);
     }
 
     /**

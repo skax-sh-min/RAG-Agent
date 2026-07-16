@@ -227,6 +227,10 @@ PROGRESSIVE 모드 AND sufficient=false AND retryCount >= max
         - 내장 이미지 추출: data/images/{docId}/d{para}_img{n}.{ext}
         - 본문에는 [이미지: images/{docId}/{file}] 마커 삽입
         - EMF/WMF는 설정 시 PNG 변환, 실패/미설정 시 [이미지(변환불가): ...] 마커
+        - 사진과 같은 문단의 레거시 VML 주석 도형(v:rect/v:oval/v:roundrect/v:line)은 사진 위에
+          그려 하나의 합성 PNG로 저장 (app.docx-image.merge-annotated-shapes, 기본 true —
+          DocxAnnotationShapeMerger; POI가 DOCX 도형 좌표를 노출하지 않아 같은-문단 근사 방식,
+          합성 실패 시 원본 사진 폴백. 상세는 IMAGE_PROCESS.md §4.3)
 
   5) 변환 산출물 저장
     - 원본 MD: data/converted/{docId}.md

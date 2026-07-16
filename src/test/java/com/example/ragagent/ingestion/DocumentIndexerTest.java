@@ -5,6 +5,7 @@ import com.example.ragagent.exception.IndexingCancelledException;
 import com.example.ragagent.model.DocumentInfo;
 import com.example.ragagent.model.MetaKey;
 import com.example.ragagent.service.DocumentLoaderService;
+import com.example.ragagent.service.DocxAnnotationShapeMerger;
 import com.example.ragagent.service.DocxToMarkdownConverter;
 import com.example.ragagent.service.ImageExtractorService;
 import com.example.ragagent.service.MarkdownCorrectionService;
@@ -84,6 +85,7 @@ class DocumentIndexerTest {
         when(indexing.maxConcurrentFiles()).thenReturn(2);
         when(props.indexingSafe()).thenReturn(indexing);
         when(props.pptxImageSafe()).thenReturn(new AppProperties.PptxShapeExtractionConfig(30.0, 15.0, true));
+        when(props.docxImageSafe()).thenReturn(new AppProperties.DocxShapeExtractionConfig(false));
 
         // Stub VectorStoreFacade
         vectorStore = mock(VectorStoreFacade.class);
@@ -147,7 +149,9 @@ class DocumentIndexerTest {
 
     private DocumentLoaderService realLoader() {
         return new DocumentLoaderService(
-                new DocxToMarkdownConverter(Optional.empty(), Optional.empty(), props), Optional.empty());
+                new DocxToMarkdownConverter(Optional.empty(), Optional.empty(), props,
+                        new DocxAnnotationShapeMerger(props)),
+                Optional.empty());
     }
 
     private void writeMinimalPptx(Path path, String title) throws IOException {

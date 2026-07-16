@@ -93,6 +93,7 @@
 | `PdfImageExtractor` | PDFBox `PDImageXObject` 기반 PDF 이미지 추출 | 항상 활성 |
 | `PptxImageExtractor` | POI `XSLFPictureShape` 기반 PPTX 이미지 추출 + 그리기 도구 도형 래스터라이즈 + SmartArt/차트/OLE 그래픽 프레임 처리 | 항상 활성 |
 | `DocxToMarkdownConverter` | DOCX → Markdown 변환 + 인라인 이미지 추출 (EMF/WMF 변환 포함) | 항상 활성 |
+| `DocxAnnotationShapeMerger` | DOCX 사진과 같은 문단의 레거시 VML 주석 도형(사각형/원/선)을 하나의 합성 PNG로 병합 (§4.3) | `merge-annotated-shapes=true` |
 | `VisionDescriptionService` | 멀티모달 LLM 호출 → 이미지 설명 텍스트 생성 (L2); 유형별 프롬프트 내장 | 항상 활성 |
 | `LazyVisionService` | 검색 시점 Vision 설명 생성 + SQLite 캐시 | `enabled=true` |
 | `ImageDescriptionRepository` | `image_descriptions` 테이블 CRUD | 항상 활성 |
@@ -267,6 +268,8 @@ for (int i = 0; i < pics.size(); i++) {
 - PNG/JPEG → **L2 Vision** 또는 alt 텍스트 확인 후 **L1**
 
 **제약**: DOCX는 이미지와 단락의 정확한 위치 매핑이 어려움. `getAllPictures()`는 문서 전체 이미지를 반환하므로 섹션 단위 매핑은 `XWPFRun.getEmbeddedPictures()`로 보완 필요.
+
+**사진 위 주석 도형 병합** (`app.docx-image.merge-annotated-shapes`, 기본 `true`): 화면 캡처 위에 강조 원/화살표를 그려 markup을 남기는 패턴은 DOCX에도 흔합니다. PPTX의 동명 기능(§4.2)과 달리 POI의 WordprocessingML 모델에는 도형 좌표 API(`XWPFPicture`에 위치 정보 없음)도 렌더러(`DrawFactory` 상당물)도 없어 진짜 기하학적 겹침 판정이 불가능하므로, **같은 문단에 사진과 레거시 VML 도형(`v:rect`/`v:oval`/`v:roundrect`/`v:line`)이 함께 있으면 겹친 주석으로 간주**하는 근사 방식을 사용합니다(`DocxAnnotationShapeMerger`). 도형의 `style` 속성(`left`/`top`/`width`/`height`, pt) 또는 `from`/`to`(line)를 파싱해 사진 위에 Java2D로 직접 그려 하나의 합성 PNG로 저장합니다 — 도형 위치를 해석할 수 없거나, 사진이 EMF/WMF인데 PNG 변환이 안 되거나, 합성 캔버스가 비정상적으로 크면 조용히 원본 사진만 추출하는 폴백으로 동작합니다. 한 문단에 사진이 여러 장이면 첫 사진에만 합성을 시도하고 나머지는 원본 그대로 추출합니다. **최신 Word "도형 삽입"(DrawingML `wps:wsp`)은 POI에 타입 바인딩이 없어 미지원** — Word가 하위 호환용으로 남긴 레거시 VML 형태만 인식합니다.
 
 ---
 
