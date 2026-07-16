@@ -9,7 +9,7 @@
 
 > 완료/미착수를 한눈에 보도록 상단 대시보드를 신설했다.
 
-### ✅ 완료 — Phase 1 · 2 · 5 · 6 전체, Phase 3 · 7 대부분
+### ✅ 완료 — Phase 1 · 2 · 5 · 6 · 7 전체, Phase 3 대부분
 
 | Phase | 완료 항목 | 상세 |
 |---|---|---|
@@ -18,9 +18,7 @@
 | **Phase 3** — 운영 견고화 (12개 항목) | §6.1 Rate limit · §6.2 업로드 검증(매직바이트, 쿼터는 미착수) · §6.3 예외처리 · §6.4 감사로그 · §6.5 임베딩 사용량 분리 · §6.6 비활성 프로바이더 표시 · §6.7 orphan 기록 삭제 · §6.8 피드백 기반 컨텍스트 제외 · §6.9 요약 선계산 · §6.10 백그라운드 사용량 분리 · §6.11 컨텍스트 예산 정합성 · §6.12 다중 사용자 동시 LLM 처리(동시성 게이트+429 백프레셔+single-flight+서킷브레이커 완화+로드밸런싱) · §6.13 설정 페이지(LLM/RAG 조회+핫 수정 오버라이드 레이어) · §6.14 핵심 채팅 경로 추적 | §6 |
 | **Phase 5** — Vector Store | Step 5.1~5.10 전체(Chroma↔sqlite-vec 런타임 전환, 관리자 페이지, 태그 검색, 운영/벡터 DB 분리) | §8 |
 | **Phase 6** — 폐쇄망/노-도커 | G1~G5(키리스 LOCAL·차원 외부화·라우팅 외부화·런북·무외부호출 인수) | §9 |
-| **Phase 7-A** — 검색 빠른 승리 | §10.2 가중 RRF(벡터축 그룹 정규화 + 키워드축 가중치/k 외부화) · §10.3 쿼리 임베딩 캐시(Caffeine, cache→tracking→delegate 데코레이터) | §10 |
-| **Phase 7-B** — Contextual Retrieval + 임베딩 입력 정규화 | §10.1 청크 맥락 헤더(구조적+LLM) 임베딩/FTS 입력에 prepend, `context:` 사용량 분리 · §10.1-보완 마크다운 장식 제거 정규화(임베딩/FTS/답변프롬프트 3곳 공유), 저장·표시 텍스트는 원문 불변 | §10 |
-| **Phase 7-C** — 한국어 FTS 토크나이저 | §10.4 `chunk_fts`를 `unicode61`→`trigram` 전환(무손실 자동 재구축), 어간-활용형/코드 부분열 매칭 개선. 2글자 단어는 단독 검색 시 실제 BM25 순위를 얻지 못한다는 실측 트레이드오프 확인(벡터 축은 무관) — §10.7.3에서 LIKE 존재-신호 폴백으로 완화 | §10 |
+| **Phase 7** — 검색 품질·성능 고도화 | §10.1~10.9 전체(17건) — 정확도(Contextual Retrieval·가중 RRF·쿼리 임베딩 캐시·한국어 FTS 트라이그램·리랭커 프리뷰 확장·하이브리드 기본화·2글자 LIKE 폴백·임계값 과조회 보정·recall@k/nDCG@k 평가 하네스) · 속도(MultiQuery 병렬화·키워드 배치화·SQLite 트랜잭션화·SHA-256 중복제거·파생텍스트 캐시) · 메모리(Chroma 미사용 임베딩 제외·벡터 BLOB 직렬화·sqlite-vec 스트리밍 삽입·인덱싱-검색 캐시 분리) | §10 |
 | **§6.16.1** — 스트리밍/인덱싱 중단 버튼 | 채팅 SSE 중지(AbortController) + 업로드/동기화 취소(워커 스레드 interrupt, `.join()`→`.get()` 인터럽트 가능화) | §6.16 |
 | **§6.17** — 문서관리·Admin 관리 전용 인증(B안) | `app.auth.management-only` 신규 서브모드, `SecurityConfig` 3번째 필터 체인(`IF_REQUIRED`+쿠키 CSRF), `/admin/**`+문서쓰기 5라우트 `hasRole("ADMIN")` 게이트, `NoAuthAutoLoginFilter` 실로그인 보존, 역할 기반 화면 분기(`isAdmin`) | §6.17 |
 
@@ -39,28 +37,13 @@
 | 3 | §9.4 — CADDY 하위호환 별칭 | 선택, 낮은 우선순위 |
 | 4 | Phase 2 남은 실기기 검증 2건 (키보드 하단 고정 · 홈 화면 standalone) | 좌우 스크롤·다크모드는 자동 검증 완료, 나머지는 실기기 필요 |
 | 5 | **§6.18 Direct 메시지 전용 LLM Temperature 분리** | 미착수 (2026-07-09 요청, 낮은 우선순위). §6.13 설정 페이지 선행 완료 — 이제 진행 가능 |
-| 6 | **Phase 7-E 검색·인덱싱 성능/메모리 최적화 제안**(§10.7~10.9) | §10.7.1~10.7.4·§10.8 전체(10.8.1~10.8.5)·§10.9.2·§10.9.4(2026-07-15) 완료. 나머지 §10.9.1(즉효 저리스크, Chroma 응답에서 미사용 임베딩 제외)·§10.9.3(스트리밍 삽입) 미착수 |
 
-> **Phase 7-A 완료**: §10.2 가중 RRF + §10.3 쿼리 임베딩 캐시. 상세는 아래 §10.2·§10.3 본문 참조.
-> **Phase 7-B 완료**: §10.1 Contextual Retrieval + §10.1-보완 임베딩 입력 정규화. 상세는 아래 §10.1 본문 참조. 재인덱싱은 운영 단계에서 별도 수행.
-> **Phase 7-C 완료**: §10.4 한국어 FTS 트라이그램 토크나이저. 상세는 아래 §10.4 본문 참조. Phase 7-A~C(§10.1~10.4) 전체 완료 — 하이브리드 기본 활성화(`app.search-hybrid-enabled=true`) 전환 여부는 별도 후속 판단으로 남김.
-> **Phase 7-E 제안 추가**: 검색·인덱싱 파이프라인 재검토로 정확도·속도·메모리 최적화 13건 도출, 일부 착수. 상세는 §10.7~10.9 참조.
 > **§6.12 완료**: 다중 사용자 동시 LLM 요청 처리 — 채팅 경로 무제한 동시성(인덱싱만 세마포어 존재) → 슬롯 초과 시 429→서킷브레이커 전면차단·타임아웃 폭주 위험이었던 문제를 5단계로 해결. ① 프로바이더별 동시성 세마포어(`LlmRouter.acquirePermit`/`executeGated`, 채팅/질의 경로 전체 적용) ② 대기상한+429 백프레셔(`LlmBackpressureException`) ③ `CachingEmbeddingModel` in-flight single-flight(동일 텍스트 동시 요청 thundering herd 제거) ④ 폴백 없는 유일 프로바이더의 서킷브레이커 단축 차단(`blockForOverload`, 다중 분 단위 전면 다운 방지) ⑤ 동일 role·priority 프로바이더 로드밸런싱(least-in-flight, 처리량 수평 확장). 인덱싱/백그라운드 경로는 의도적으로 미적용(회귀 방지, 자체 세마포어 유지). 상세는 §6.12 본문 참조.
 > **§6.13 완료**: `/settings` LLM/RAG 설정 조회 + 핫 수정 페이지. 상세는 §6.13 본문 참조.
 > **§6.16.1 완료**: 채팅 스트리밍 중지 + 업로드/동기화 취소 버튼.
 > **§6.17 완료**: 문서 관리·Admin 관리 전용 인증(B안) — `app.auth.management-only`. 상세는 아래 §6.17 본문 참조. (A) 전체 인증 모드는 §6.19와 함께 후속(멀티유저 활성화 시) 유지.
 > **§6.18 추가 (낮은 우선순위)**: Direct(meta) 응답 전용 temperature를 RAG 응답과 분리해 0.0~0.2(기본 0.1) 범위로 화면에서 조정 가능하게. 조사 중 temperature가 현재 어디에서도 실제로 설정 가능하지 않다는(하드코딩) 선행 이슈를 발견 — 상세는 §6.18 본문 참조.
-> **§10.7.1 완료**: 리랭커 프리뷰를 200→500자로 확장 + 구조적 컨텍스트 헤더 추가. 상세는 아래 §10.7.1 본문 참조.
-> **§10.7.2 완료**: `SEARCH_HYBRID_ENABLED` 기본값을 false→true로 전환(평가 하네스 부재로 무측정 트라이얼, 사용자 승인 후 진행). 상세는 아래 §10.7.2 본문 참조.
-> **§10.7.3 완료**: 3자 미만(trigram 최소 단위 미만) 질의어에 `LIKE` 보조 스캔 추가 — "오류"·"문서" 같은 2글자 단독 질의의 BM25측 0건 반환 해소. 상세는 아래 §10.7.3 본문 참조.
-> **§10.7.4 완료**: 유사도 임계값(`similarity-threshold>0`) 활성 시 Chroma/sqlite-vec KNN 조회 k를 topK의 2배로 과조회 후 topK로 재절단 — 필터 후 후보 풀이 topK 미만으로 조용히 축소되던 문제 해소. 상세는 아래 §10.7.4 본문 참조.
-> **§10.8.1 완료**: MultiQuery 확장 최소 길이 기본값 0→15 상향 + 원본 질의 검색을 확장 LLM 호출과 병렬 실행(가상 스레드) — 확장 대기시간에 원본 검색 지연이 가려짐. 상세는 아래 §10.8.1 본문 참조.
-> **§10.8.2 완료**: 청크 N개(기본 4)를 번호가 매겨진 하나의 LLM 호출로 묶어 키워드/맥락을 추출(`app.indexing.keyword-batch-size`) — 왕복 횟수가 `ceil(청크수/N)`로 감소, 파싱/호출 실패 시 청크별 재시도 없이 곧장 TF 폴백. 상세는 아래 §10.8.2 본문 참조.
-> **§10.8.3 완료**: `SqliteVecVectorStoreProvider.add()`의 `vec_embeddings`+`vec_document_chunks` 배치 삽입 2개를 하나의 트랜잭션으로 결합(실 DataSource에서만 활성). 부수로 중간 실패 시 부분 커밋(고아 행) 가능성도 제거. 상세는 아래 §10.8.3 본문 참조.
-> **§10.8.4 완료**: `syncDirectory()` 1단계에서 계산한 sha256을 `IndexRequest`에 실어 2단계 `index()`에 전달 — 동기화 대상 파일마다 있던 이중 해싱 제거. 상세는 아래 §10.8.4 본문 참조.
-> **§10.8.5 완료**: `SearchTextBuilder.precompute()`로 임베딩+FTS 파생 텍스트를 청크당 1회만 계산해 transient 메타키(`SEARCH_TEXT`)에 저장, `build()`가 있으면 재사용 — 벡터 스토어/FTS 호출부는 무수정. 상세는 아래 §10.8.5 본문 참조.
-> **§10.9.2 완료**: sqlite-vec 벡터 직렬화를 JSON 텍스트에서 little-endian float32 BLOB(`toVectorBlob()`)로 전환 — 삽입/KNN 질의 양쪽 적용, 기존 데이터와 호환(백필 불필요). 상세는 아래 §10.9.2 본문 참조.
-> **§10.9.4 완료**: `CachingEmbeddingModel.unwrapForIndexing()`으로 인덱싱 경로(`add()`)가 질의 임베딩 캐시를 우회 — 대량 청크 인덱싱이 더 이상 직전 검색 질의의 캐시를 밀어내지 않음. 캐시 키도 원문 대신 SHA-256 해시로 축소. 상세는 아래 §10.9.4 본문 참조.
+> **Phase 7 완료**: §10.1~10.9(17건) 전체 완료, §10.7.5 검색 품질 평가 하네스(recall@10=0.962 실측, 2026-07-16)로 마무리. 상세는 §10 본문 참조.
 
 **🟣 후속 — 멀티유저(`auth.enabled=true`) 활성화 시에만 착수**
 
@@ -71,7 +54,7 @@
 | 3 | **§6.16.2 계정 잠금 상태 피드백** | auth 모드 로그인 UX — no-auth엔 로그인 자체가 없음 |
 | 4 | **Phase 4** (조건부) — §7.1 OAuth2 소셜 로그인 · §7.2 PostgreSQL 마이그레이션 · §7.3 관리자 페이지 확장 | §3 트리거 참조(가입 마찰·SQLite 한계 신호·다중 사용자 운영 관리 필요 시) |
 
-> 검색 고도화 **Phase 7-D(인프라 투자: sqlite-vec 단일 스캔·cross-encoder 리랭커·시맨틱 응답 캐시)는 2026-07-08 재검토에서 범위 제외**했다(사유는 §10.5). Phase 7은 7-A~C(§10.1~10.4)만 유효.
+> 검색 고도화 **Phase 7-D(인프라 투자: sqlite-vec 단일 스캔·cross-encoder 리랭커·시맨틱 응답 캐시)는 2026-07-08 재검토에서 범위 제외**했다(사유는 §10.5) — Phase 7의 유일한 미착수 항목이며, 그 외 §10.1~10.9는 전체 완료.
 
 > 스키마 관리 실태: **Flyway(V1·V2 baseline) + 런타임 멱등 DDL 혼용**. `SqliteMemoryRepository`/`SqliteUserDetailsService`가 `CREATE TABLE IF NOT EXISTS` + `ALTER TABLE ADD COLUMN`으로 컬럼을 증분 추가한다(§13). 신규 컬럼은 새 Flyway 파일이 아니라 이 런타임 `ALTER TABLE` 패턴으로 추가한다.
 
@@ -483,27 +466,35 @@ G1~G4 코드/문서 완료, G5(라우팅 계층의 외부 무선택)도 완료. 
 
 ---
 
-## 10. Phase 7 — 검색 품질·성능 고도화 ✅ 완료 (7-A · 7-B · 7-C)
+## 10. Phase 7 — 검색 품질·성능 고도화 ✅ 완료
 
-> **배경 (2026-07-07 코드 확인)**: 검색 파이프라인(`RetrievalService`)은 이미 MultiQuery(원본+2) → 배치 임베딩 → 벡터 검색 → RRF 융합 → (옵션)하이브리드 BM25 → (옵션)LLM 리랭크 → 태그 필터로 잘 구성돼 있다. 아래는 "빠진 것"이 아니라 **현 구조 위에서 정확도/성능을 끌어올리는 증분 개선**이며, 자바 관점의 난이도·회귀 리스크와 함께 우선순위화했다. 자체 검색 품질 평가 세트가 없으므로 각 항목의 효과는 도입 후 정성/정량 측정으로 검증하는 것을 전제로 한다.
+> 검색 파이프라인(`RetrievalService`: MultiQuery 확장 → 배치 임베딩 → 벡터 검색 → 가중 RRF 융합 → 하이브리드 BM25 → (opt-in) LLM 리랭크 → 태그 필터) 위에서 정확도·속도·메모리를 끌어올리는 증분 개선 17건. §10.7.5에서 구축한 recall@k/nDCG@k 평가 하네스로 실측 baseline(recall@10=0.962)까지 확보해 전체 종료.
 
-### 10.1 Contextual Retrieval — 청크 맥락 주입 (정확도 ROI 1순위) ✅ 완료
+| 항목 | 개선 | 핵심 산출물 |
+|------|------|------|
+| §10.1 Contextual Retrieval ✅ | 청크 임베딩·FTS 입력에 구조적+LLM 맥락 헤더 주입 | `SearchTextBuilder`, `KeywordExtractor` |
+| §10.1-보완 임베딩 입력 정규화 ✅ | 마크다운 장식 제거, 저장/임베딩/프롬프트 3계층 분리 | `MarkdownNoiseNormalizer` |
+| §10.2 가중 RRF ✅ | 벡터축 그룹 정규화 + 키워드축 가중치 외부화 | `RetrievalService.mergeRrf()` |
+| §10.3 쿼리 임베딩 캐시 ✅ | Caffeine 캐시 데코레이터 | `CachingEmbeddingModel` |
+| §10.4 한국어 FTS 트라이그램 ✅ | `unicode61`→`trigram` 무손실 자동 재구축 | `chunk_fts` |
+| §10.7.1 리랭커 프리뷰 확장 ✅ | 200→500자 + 구조적 컨텍스트 헤더 | `RerankerService` |
+| §10.7.2 하이브리드 기본 활성화 ✅ | `SEARCH_HYBRID_ENABLED` false→true | — |
+| §10.7.3 2글자 질의 LIKE 폴백 ✅ | trigram 미만 질의 존재-신호 보강 | `KeywordSearchRepository` |
+| §10.7.4 유사도 임계값 과조회 ✅ | `topK×2` 조회 후 재절단 | Chroma/sqlite-vec 양쪽 |
+| §10.7.5 검색 품질 평가 하네스 ✅ | 골든셋 26문항 + recall@k/nDCG@k | `evaluation/` (2026-07-16) |
+| §10.8.1 MultiQuery 지연 병렬화 ✅ | min-length 상향 + 원본검색 병렬 실행 | `RetrievalService.execute()` |
+| §10.8.2 키워드 추출 배치화 ✅ | 청크 N개를 LLM 1콜로 | `KeywordExtractor` |
+| §10.8.3 SQLite 배치삽입 트랜잭션화 ✅ | 배치 2개 → 트랜잭션 1개 | `SqliteVecVectorStoreProvider` |
+| §10.8.4 SHA-256 중복 해싱 제거 ✅ | `precomputedSha256` 전달 | `IndexRequest` |
+| §10.8.5 파생 텍스트 중복계산 제거 ✅ | `SEARCH_TEXT` 1회 계산 후 공유 | `SearchTextBuilder` |
+| §10.9.1 Chroma 미사용 임베딩 제외 ✅ | 검색 응답 Include 필드 축소 | `ChromaVectorStoreProvider` |
+| §10.9.2 벡터 BLOB 직렬화 ✅ | JSON 텍스트 → little-endian float32 BLOB | `toVectorBlob()` |
+| §10.9.3 sqlite-vec 스트리밍 삽입 ✅ | 서브배치 임베딩 직후 즉시 삽입 | `SqliteVecVectorStoreProvider.add()` |
+| §10.9.4 인덱싱-검색 캐시 분리 ✅ | `unwrapForIndexing()` + SHA-256 캐시 키 | `CachingEmbeddingModel` |
 
-청크가 자기 텍스트만 임베딩되어 문맥(대명사·표·코드 조각)이 반영되지 않던 문제를, `KeywordExtractor`의 키워드 추출 LLM 호출을 확장해 같은 호출에서 구조적 맥락(`{파일명} > {heading}`, 결정적)+LLM 1~2문장 맥락을 함께 생성해 해결. 신규 `SearchTextBuilder`(`CHUNK_CONTEXT`+정규화 본문)를 임베딩·FTS가 공유하며, 맥락은 검색 전용이라 저장 텍스트에는 남지 않는다.
+### 10.1~10.4 — Phase 7-A·B·C 정확도 기반 개선 ✅ 완료
 
-**10.1-보완 — 임베딩 입력 정규화**: 마크다운 장식 줄 제거 + 강조 마커만 벗기는 정규화(`MarkdownNoiseNormalizer`)를 임베딩·FTS·답변 프롬프트 3곳이 공유. **3계층 분리**: 저장·표시 텍스트(원문) ≠ 임베딩+FTS 입력(맥락+정규화) ≠ 답변 프롬프트 입력(정규화만). 기존 문서는 재인덱싱 필요.
-
-### 10.2 가중 RRF (Weighted RRF) ✅ 완료
-
-`mergeRrf()`가 모든 후보에 동일 가중을 줘 BM25 축(1개)이 벡터 축(MultiQuery로 최대 3개)보다 구조적으로 저평가되던 문제를, 벡터 축은 축 개수와 무관하게 `1/axisCount`로 그룹 정규화하고 키워드축 가중치(`app.search-rrf-keyword-weight`, 기본 1.0)를 외부화해 해결. 하이브리드 기본 비활성 상태라 기본 배포는 무회귀.
-
-### 10.3 쿼리 임베딩 캐시 (성능, 저비용) ✅ 완료
-
-반복·유사 질문마다 재임베딩하던 낭비를 신규 `CachingEmbeddingModel`(Caffeine 기반 `EmbeddingModel` 데코레이터, 정규화 쿼리+모델명을 키로 캐시)로 해결 — 캐시 히트는 usage도 자동 미기록. `app.search-query-embed-cache-*`로 활성화/크기/TTL 외부화(기본 활성).
-
-### 10.4 한국어 FTS 토크나이저 (하이브리드 정확도) ✅ 완료
-
-`chunk_fts`가 `unicode61`이라 한국어 조사·복합어 변형을 못 잡던 문제를 SQLite 내장 `trigram` 토크나이저로 전환해 해결(무손실 자동 재구축). **트레이드오프**: 어간 3자 이상은 활용형/코드 부분열까지 잘 찾지만, 2글자 한국어 단어("문서", "오류" 등)는 trigram이 생성되지 않아 단독 질의 시 BM25 순위 점수를 얻지 못한다(§10.7.3에서 LIKE 폴백으로 보완).
+청크 맥락 헤더 주입(§10.1, ROI 1순위 — 대명사·표·코드 조각처럼 단독으로 모호한 청크의 재현율 개선, 저장 텍스트는 원문 불변)과 임베딩 입력 정규화(§10.1-보완, 재인덱싱 필요), RRF 벡터/키워드축 가중 정규화(§10.2, BM25 구조적 저평가 해소), 반복 질의 재임베딩 제거(§10.3), 한국어 활용형·코드 부분열 매칭을 위한 trigram FTS 전환(§10.4, 2글자 단독어는 무손실 재구축이라도 놓침 — §10.7.3 LIKE 폴백으로 보완).
 
 ### 10.5 검토 후 제외 (Phase 7-D 취소)
 
@@ -515,90 +506,17 @@ G1~G4 코드/문서 완료, G5(라우팅 계층의 외부 무선택)도 완료. 
 | **Cross-Encoder 리랭커** | LLM 리랭커를 ONNX bge-reranker 등 로컬 cross-encoder로 교체 | ONNX 런타임/모델 도입 + 폐쇄망 모델 파일 조달 비용이 크고, 현 opt-in `Optional<RerankerService>` LLM 리랭커로 충분. **인터페이스 유지 구조라 필요 시 구현만 교체 가능**(지금 만들 이유는 없음) | LLM 리랭크 정확도/지연 불만이 실사용에서 반복 보고 |
 | **시맨틱 응답 캐시** | 질문 임베딩 유사도 > 임계값이면 캐시 답변 반환 | stale 답변 위험 + 무효화 복잡도(재인덱싱·버전 변경·§6.8 DISLIKE 연동) 대비 이득이 불확실 | FAQ성 반복 트래픽이 지배적이고 지연이 문제화될 때 |
 
-### 10.6 우선순위 및 단계 계획
+### 10.7 검색 정확도 마무리 (Phase 7-E) ✅ 완료
 
-점수 = (Impact + 회귀리스크의 역) 관점으로 정리. 여기서 리스크는 "미조치 시 손해"가 아니라 **도입 시 회귀 리스크**(낮을수록 안전)로 해석한다.
+리랭커 프리뷰 확장(§10.7.1, 200→500자+구조적 헤더), 하이브리드 검색 기본 활성화(§10.7.2, `SEARCH_HYBRID_ENABLED` false→true — `chunk_fts`는 플래그와 무관하게 항상 채워지고 있었으므로 이미 지불한 인덱싱 비용 회수), 2글자 한국어 질의의 BM25 0건 반환을 `LIKE` 보조 스캔으로 완화(§10.7.3, `KeywordSearchRepository.search()` 내부 국한), 유사도 임계값 활성 시 후보 풀 과조회 보정(§10.7.4, `topK×2`)까지 거친 뒤, §10.7.5에서 실 코퍼스 골든셋(NEXCORE 문서 3종 기반 26문항) + recall@k/nDCG@k 평가 하네스(`src/test/.../evaluation/`, `SqliteVecIntegrationTest`와 동일하게 `-Dsearch-eval.enabled=true` 게이팅, 검색만 호출하는 읽기 전용)를 구축해 **2026-07-16 실측 baseline: mean recall@10=0.962(25/26), nDCG@10=0.810**을 확보했다 — §10.7.2·§10.7.3의 무측정 결정을 데이터로 재검증 완료. 유일한 미스는 `sample-02`("DM 간 호출 가능 여부"), 향후 검색 튜닝 변경의 회귀 비교 baseline으로 이 수치를 기준 삼는다.
 
-| 항목 | Impact | 회귀리스크 | Effort | 성격 |
-|------|:--:|:--:|:--:|------|
-| 10.1 Contextual Retrieval | 5 | 2 | 3 | 정확도(ROI 1위) |
-| 10.2 가중 RRF | 3 | 1 | 1 | 정확도(초저비용) |
-| 10.3 쿼리 임베딩 캐시 | 3 | 1 | 1 | 성능(초저비용) |
-| 10.4 한국어 FTS 토크나이저 | 4 | 2 | 3 | 정확도 |
+### 10.8 검색·인덱싱 속도 개선 (Phase 7-E) ✅ 완료
 
-**단계 계획**:
-- **Phase 7-A (빠른 승리) ✅ 완료**: §10.2 가중 RRF + §10.3 임베딩 캐시 — 코드 변경 작고 회귀 리스크 최소, 즉시 체감. 이후 큰 작업의 효과를 측정할 baseline 확보.
-- **Phase 7-B (정확도 본편) ✅ 완료**: §10.1 Contextual Retrieval — `KeywordExtractor` 파이프라인에 얹어(구조적 맥락 baseline → LLM 강화) 인덱싱 재구성. 정확도 ROI 1위.
-- **Phase 7-C (한국어 최적화) ✅ 완료**: §10.4 `trigram` FTS 토크나이저. 하이브리드 기본 활성화(`app.search-hybrid-enabled`) 전환은 별도 후속 판단으로 남김.
+MultiQuery 확장 최소 길이 상향(0→15, `app.search-multiquery-min-length`) + 원본 질의 검색을 확장 LLM 호출과 가상 스레드로 병렬 실행해 크리티컬 패스 단축(§10.8.1), 청크 N개(기본 4)를 번호 매긴 프롬프트로 묶어 배치당 1회 호출해 인덱싱 LLM 왕복을 `ceil(청크수/N)`로 감소(§10.8.2, `KeywordExtractor.enrichKeywordsBatch()`, 배치 실패 시 곧장 개별 TF 폴백), sqlite-vec의 `vec_embeddings`+`vec_document_chunks` 배치 삽입 2개를 `TransactionTemplate`으로 결합해 중간 실패 시 고아 행 방지(§10.8.3), 디렉터리 동기화의 SHA-256 이중 해싱을 `IndexRequest.precomputedSha256` 전달로 제거(§10.8.4), 임베딩+FTS 파생 텍스트를 청크당 1회만 계산해 `MetaKey.SEARCH_TEXT`로 공유(§10.8.5, 영속 전 제거).
 
-**선결 과제(권장)**: 검색 품질을 정량 비교할 **평가 세트**(질문–정답 청크 쌍 소량 + recall@k/nDCG 측정 스크립트)가 있으면 §10.1·§10.2·§10.4의 효과 검증이 크게 쉬워진다. Phase 7-A와 병행 준비를 권장.
+### 10.9 메모리 최적화 (Phase 7-E) ✅ 완료
 
-### 10.7 Phase 7-E 제안 — 검색 정확도 개선 🟡 일부 완료
-
-**배경**: 검색·인덱싱 파이프라인 전체(`RetrievalService`, `ChromaVectorStoreProvider`/`SqliteVecVectorStoreProvider`, `KeywordSearchRepository`, `RerankerService`)를 다시 정독하며 도출한 후속 제안. Phase 7-A~C(§10.1~10.4)가 이미 반영된 상태 위에서의 증분 개선이며, 10.7.1~10.7.4는 완료, 10.7.5만 미착수다.
-
-**10.7.1 리랭커 입력이 청크 앞 200자로 제한됨 ✅ 완료 (2026-07-14)**
-
-`RerankerService.formatDocList()`가 200자만 LLM에 전달해 긴 청크의 핵심이 잘리던 문제를, 프리뷰를 500자로 확장하고 `(파일명 > 헤딩)` 구조적 컨텍스트 헤더를 붙여 해결 — 이미 영속된 `MetaKey.FILENAME`/`HEADING`만 사용해 재인덱싱 없이 기존 문서에도 즉시 적용된다.
-
-**10.7.2 하이브리드 검색 기본값(off)이 이미 지불한 인덱싱 비용을 낭비 ✅ 완료**
-
-`chunk_fts`는 하이브리드 플래그와 무관하게 항상 채워지는데 검색 시 기본값이 꺼져 있어 혜택을 못 받던 상태를, 정량 평가 하네스(§10.7.5) 없이 리스크 완화책(§10.2·§10.4)이 이미 적용된 상태에서 사용자 승인을 받아 `SEARCH_HYBRID_ENABLED` 기본값을 `false`→`true`로 전환. §10.7.5 완료 시 이 결정을 데이터로 재검증 권장.
-
-**10.7.3 한국어 2글자 질의어가 BM25 축에서 완전히 탈락 ✅ 완료**
-
-`toMatchQuery()`가 3자 미만 토큰을 드롭해 "오류"·"문서" 같은 2글자 단독 질의가 BM25 후보 0건이던 문제를, 3자 미만 질의어에 `content`/`keywords` 대상 `LIKE '%용어%'` 보조 스캔을 추가해 해결(`KeywordSearchRepository.search()` 내부에만 국한, `RetrievalService`/RRF는 무변경). LIKE 결과는 순위가 없어 MATCH 결과 뒤에 배치된다.
-
-**10.7.4 유사도 임계값 적용 시 후보 풀이 topK 미만으로 조용히 축소 ✅ 완료**
-
-`app.search-similarity-threshold > 0`으로 튜닝하면 정확히 `k=topK`로 조회 후 필터링해 후보 풀이 topK보다 작아지던 문제를, 임계값이 0보다 클 때만 `topK × 2.0`으로 과조회한 뒤 다시 topK로 잘라내도록 두 벡터 스토어 프로바이더 모두 수정. 임계값 0.0(기본)이면 과조회 자체가 없어 무해.
-
-**10.7.5 검색 품질 평가 하네스 부재 (§10.6 선결 과제 재확인)**
-- §10.6에 이미 "선결 과제(권장)"로 기록돼 있으나 여전히 미착수. 10.7.1~10.7.4는 모두 코드 레벨 완료 기준(단위테스트로 검증 가능)이라 이 하네스와 무관하게 완료됐지만, 10.7.2(무측정 기본값 전환)·10.7.3(LIKE 폴백이 실제 recall에 얼마나 기여하는지)의 "정말 정확도가 좋아졌는가"는 여전히 미검증 — 이를 데이터로 재검증하려면 질문–정답 청크 쌍 20~50개 + recall@k/nDCG 스크립트가 사실상 선행 조건. 신규 제안 중 우선순위가 가장 높다.
-
-### 10.8 Phase 7-E 제안 — 검색·인덱싱 속도 개선 ✅ 완료
-
-**10.8.1 [검색] MultiQuery 확장 LLM 호출이 모든 질문의 크리티컬 패스에 있음 ✅ 완료**
-
-`app.search-multiquery-min-length` 기본값이 0이라 한 글자짜리 질문도 확장 LLM 왕복을 거치고, 원본 질의 검색도 그 뒤로 직렬화되던 문제를 두 가지로 해결: (a) 기본값을 0→15로 상향해 짧은 키워드형 질의는 확장 자체를 생략 (b) `RetrievalService.execute()`가 원본 질의 벡터 검색을 확장 LLM 호출과 가상 스레드로 병렬 실행 — 원본 검색 지연이 확장 대기 뒤에 숨는다.
-
-**10.8.2 [인덱싱] 청크당 LLM 1회 호출이 인덱싱 시간의 지배 항목 ✅ 완료**
-
-청크마다 독립 LLM 호출이라 300청크 문서면 왕복 300회였던 것을, 청크 N개(기본 4, `app.indexing.keyword-batch-size`)를 번호 매긴 프롬프트로 묶어 배치당 1회 호출하도록 `KeywordExtractor.enrichKeywordsBatch()`로 개선 — 응답은 결과 마커 기준으로 구간 분리해 기존 파싱 로직 재사용. 배치 실패 시 청크별 재시도 없이 배치 전체가 곧장 개별 TF 폴백.
-
-**10.8.3 [인덱싱] SQLite 배치 삽입이 명시적 트랜잭션 밖에서 실행됨 ✅ 완료**
-
-`SqliteVecVectorStoreProvider.add()`의 `vec_embeddings`+`vec_document_chunks` 배치 삽입 2개가 각각 autocommit이던 것을 `TransactionTemplate`으로 묶어 하나의 트랜잭션으로 커밋 — 중간 실패 시 함께 롤백되어 고아 행(embeddings만 커밋되고 매칭 chunks가 없는 상태)이 더 이상 발생하지 않는다. mock 기반 테스트 환경(`DataSource` 없음)에서는 트랜잭션 래핑을 건너뛰고 기존처럼 순차 호출.
-
-**10.8.4 [인덱싱] 디렉터리 동기화가 같은 파일을 두 번 SHA-256 해싱 ✅ 완료**
-
-`syncDirectory()` 1단계에서 계산한 sha256을 버리고 `index()`가 파일을 다시 읽어 재해싱하던 것을, `IndexRequest.precomputedSha256`(nullable)에 실어 전달하도록 수정 — null이면 기존과 동일하게 재계산.
-
-**10.8.5 [인덱싱] 파생 텍스트(정규화) 중복 계산 ✅ 완료**
-
-`SearchTextBuilder.build()`가 임베딩 경로와 FTS 경로에서 청크당 각각 호출되던 것을, 신규 transient 메타키 `MetaKey.SEARCH_TEXT`에 `precompute()` 결과를 저장해 `build()`가 있으면 재계산 없이 반환하는 단축 경로로 개선 — `DocumentIndexer`가 `enrichParallel()` 직후 한 번만 계산해 벡터 스토어·FTS 양쪽에 공유. 영속 직전 메타데이터에서는 제거되어 저장 데이터에 남지 않는다.
-
-### 10.9 Phase 7-E 제안 — 메모리 최적화 🟡 일부 완료
-
-**10.9.1 Chroma 배치 검색이 쓰지 않는 임베딩까지 응답으로 받아옴 (확인 완료 — Spring AI 1.1.8 소스 대조)**
-- 현재: `ChromaVectorStoreProvider.searchBatch()`(`ChromaVectorStoreProvider.java:104`)가 `ChromaApi.QueryRequest.Include.all`을 사용하는데, Spring AI 1.1.8 소스(`spring-ai-chroma-store-1.1.8-sources.jar`) 확인 결과 `Include.all = {METADATAS, DOCUMENTS, DISTANCES, EMBEDDINGS}` — `mapPerQuery()`(`ChromaVectorStoreProvider.java:236`)는 임베딩을 전혀 사용하지 않는다. 리랭크 활성 시 질의 3개 × 후보 21개 × 1536차원이면 검색 1회당 약 1MB의 무의미한 부동소수점 JSON을 전송·파싱·GC하는 셈.
-- 개선안: `List.of(Include.METADATAS, Include.DOCUMENTS, Include.DISTANCES)`로 축소.
-- 완료 기준: 검색 응답에서 임베딩 필드가 요청되지 않음(네트워크 요청 바디로 확인), 기존 검색 단위테스트 회귀 0. 이번 목록에서 가장 즉효가 확실한 수정.
-
-**10.9.2 sqlite-vec 벡터가 텍스트 리터럴로 직렬화됨 ✅ 완료**
-
-`toVectorLiteral()`이 1536차원 벡터를 `[0.123,...]` 문자열(~15KB)로 직렬화하던 것을 `toVectorBlob()`(little-endian float32 raw blob, ~6KB)로 교체 — vec0가 값 타입을 자동 판별해 기존 JSON 텍스트 행과 새 BLOB 행이 같은 테이블에 섞여도 호환되어 백필 불필요.
-
-**리스크 — 문서화**: 폐쇄망 vec0 빌드의 BLOB 바인딩 미지원 가능성은 낮지만(BLOB가 sqlite-vec 근본 포맷), 백엔드 전환/업그레이드 시 문서 1건 인덱싱+검색으로 우선 확인 권장(OPERATOR_MANUAL.md에 기록).
-
-**10.9.3 대형 문서 add()가 전체 임베딩을 힙에 모은 뒤 일괄 삽입**
-- 현재: `SqliteVecVectorStoreProvider.add()`(`SqliteVecVectorStoreProvider.java:132`)가 `embeddingByDocId` 맵에 문서 전체 임베딩과 `chunkRows` 전체를 쌓은 뒤 마지막에 일괄 `batchUpdate`. 500청크×1536차원 ≈ 3MB로 당장 위험하진 않으나, 대용량 문서가 커질수록 피크 메모리가 문서 크기에 비례해 증가.
-- 개선안: 토큰 서브배치(`batchingStrategy.batch()`) 단위로 삽입까지 완료하는 스트리밍 구조로 전환 — 피크 메모리가 서브배치 크기로 고정되고, §10.8.3의 트랜잭션과 배치 단위를 맞추면 자연스럽게 결합된다.
-- 완료 기준: 서브배치 완료마다 해당 배치의 삽입이 끝나고(전체 완료를 기다리지 않음), 진행률 콜백(`onProgress`) 정밀도가 유지되거나 개선.
-
-**10.9.4 인덱싱 청크가 질의 임베딩 캐시를 밀어냄 ✅ 완료**
-
-문서 하나(500+청크) 인덱싱 직후 질의 캐시가 사실상 전멸하던 문제를 두 가지로 해결: (a) `CachingEmbeddingModel.unwrapForIndexing()`으로 인덱싱 경로(`add()`)만 캐시를 우회하고 검색(`search()`/`searchBatch()`)은 기존대로 캐시 적용 (b) 캐시 키를 원문 대신 SHA-256 해시로 바꿔 엔트리 크기를 질의 길이와 무관하게 고정.
+Chroma 배치 검색이 `mapPerQuery()`가 쓰지 않는 임베딩 필드까지 응답으로 받아오던 것을 `RESULT_INCLUDE` 상수로 축소(§10.9.1, 리랭크 활성 시 검색 1회당 ~1MB 절감; 벡터를 그대로 되돌려 쓰는 `updateTags()`는 영향 없음), sqlite-vec 벡터를 JSON 텍스트 리터럴(~15KB) 대신 little-endian float32 BLOB(~6KB, `toVectorBlob()`)로 직렬화(§10.9.2, 기존 데이터와 호환되어 백필 불필요 — 폐쇄망 vec0 빌드의 BLOB 미지원 가능성은 낮지만 백엔드 전환 시 문서 1건으로 우선 확인 권장, OPERATOR_MANUAL.md에 기록), 대형 문서 `add()`가 전체 임베딩을 힙에 모은 뒤 일괄 삽입하던 것을 토큰 서브배치 단위로 임베딩 직후 즉시 삽입하는 스트리밍 구조로 전환해 피크 메모리를 문서 크기 대신 서브배치 크기에 비례하게 함(§10.9.3, §10.8.3의 트랜잭션 결합은 서브배치 단위로 유지), 인덱싱 청크 임베딩이 `CachingEmbeddingModel.unwrapForIndexing()`으로 질의 캐시를 우회해 대량 인덱싱이 직전 검색 캐시를 밀어내지 않도록 함(§10.9.4, 캐시 키도 SHA-256 해시로 고정 크기화).
 
 ---
 

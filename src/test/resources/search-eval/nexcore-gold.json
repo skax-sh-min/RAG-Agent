@@ -1,0 +1,162 @@
+{
+  "version": "latest",
+  "topK": 10,
+  "cases": [
+    {
+      "id": "batch-01",
+      "question": "배치 프로그램 클래스는 어떤 클래스를 상속받아 작성하나?",
+      "mustContainAny": ["AbsBatchComponent"],
+      "sourceHint": "배치 개발가이드 3.2.3 배치 프로그램"
+    },
+    {
+      "id": "batch-02",
+      "question": "배치 프로그램에서 beforeExecute()에서 에러가 발생하면 execute()는 실행되는가?",
+      "mustContainAny": ["에서 에러 발생시", "실행 안 됨"],
+      "sourceHint": "배치 개발가이드 3.2.3 배치 프로그램"
+    },
+    {
+      "id": "batch-03",
+      "question": "IBatchContext 객체는 무엇을 전달하기 위한 것인가?",
+      "mustContainAny": ["IBatchContext"],
+      "sourceHint": "배치 개발가이드 3.2.5 IBatchContext"
+    },
+    {
+      "id": "batch-04",
+      "question": "배치 Job의 처리일자를 조회하는 메소드 이름은?",
+      "mustContainAny": ["getProcDate"],
+      "sourceHint": "배치 개발가이드 3.2.5 IBatchContext"
+    },
+    {
+      "id": "batch-05",
+      "question": "온라인과 배치의 트랜잭션 처리 방식은 어떻게 다른가?",
+      "mustContainAny": ["XA 불가", "수동 Commit"],
+      "sourceHint": "배치 개발가이드 3.2.2 온라인 vs 배치 비교"
+    },
+    {
+      "id": "batch-06",
+      "question": "배치 SQL을 직접 실행하는 방식과 온라인 공유 FM을 호출하는 방식의 장단점은?",
+      "mustContainAny": ["공유FM", "Array 모드"],
+      "sourceHint": "배치 개발가이드 3.2.7 배치 SQL 실행처리 주의사항"
+    },
+    {
+      "id": "arch-01",
+      "question": "NEXCORE 프레임워크는 어떤 3가지 환경으로 구성되는가?",
+      "mustContainAny": ["개발환경, 실행환경, 운영환경", "운영환경"],
+      "sourceHint": "아키텍처 4.1 프레임워크 정의"
+    },
+    {
+      "id": "arch-02",
+      "question": "NEXCORE 프레임워크 자체는 어떤 기술로 구성되며, 어플리케이션도 그 기술에 의존성을 갖는가?",
+      "mustContainAny": ["Spring framework 의존성 없음", "Spring Framework를 사용하여 구성"],
+      "sourceHint": "아키텍처 6. Spring Framework?"
+    },
+    {
+      "id": "arch-03",
+      "question": "PU, FU, DU는 각각 어떤 역할을 담당하는가?",
+      "mustContainAny": ["ProcessUnit", "FunctionUnit", "DataUnit"],
+      "sourceHint": "아키텍처 26.2 유닛, 메소드"
+    },
+    {
+      "id": "arch-04",
+      "question": "NOTX로 실행된 SQL은 본 거래 트랜잭션이 롤백되어도 영향을 받는가?",
+      "mustContainAny": ["NOTX로 실행된 값은 본 거래 트랜잭션이 롤백"],
+      "sourceHint": "아키텍처 74. NOTX 트랜잭션"
+    },
+    {
+      "id": "arch-05",
+      "question": "업무 애플리케이션에서 예외가 발생하면 어떤 예외 클래스로 던져야 하는가?",
+      "mustContainAny": ["KISBException"],
+      "sourceHint": "아키텍처 76. 예외 처리"
+    },
+    {
+      "id": "arch-06",
+      "question": "catch 문 안에서 새 KISBException을 생성할 때 반드시 포함해야 하는 것은?",
+      "mustContainAny": ["하는 경우는 반드시", "를 넣어야 함"],
+      "sourceHint": "아키텍처 76.2 예외 처리"
+    },
+    {
+      "id": "arch-07",
+      "question": "온라인 서비스 메소드의 기본 시그니처는 입력과 출력에 어떤 타입을 사용하는가?",
+      "mustContainAny": ["IDataSet methodName"],
+      "sourceHint": "아키텍처 27. 메소드"
+    },
+    {
+      "id": "arch-08",
+      "question": "로컬 환경에서 onlinelog.level의 기본값은 무엇인가?",
+      "mustContainAny": ["onlinelog.level=TRACE"],
+      "sourceHint": "아키텍처 로그 레벨 설정"
+    },
+    {
+      "id": "arch-09",
+      "question": "업무 로그와 프레임워크 로그는 파일에 어떻게 저장되는가?",
+      "mustContainAny": ["쓰레드별로 별도 파일에 로깅"],
+      "sourceHint": "아키텍처 로그 파일"
+    },
+    {
+      "id": "arch-10",
+      "question": "NEXCORE 메타 로더는 어떤 역할을 하는가?",
+      "mustContainAny": ["애플리케이션 소스 분석 후 DB화"],
+      "sourceHint": "아키텍처 8.2 프레임워크 구성도"
+    },
+    {
+      "id": "arch-11",
+      "question": "노드매니저는 어떤 역할을 하는가?",
+      "mustContainAny": ["노드매니저", "프레임워크 모니터링. 서버별 설치"],
+      "sourceHint": "아키텍처 8.2 프레임워크 구성도"
+    },
+    {
+      "id": "arch-12",
+      "question": "타 DB DataSource가 XA 타입일 경우 2-PC 사용을 권장하는가?",
+      "mustContainAny": ["2-PC가 가능하지만, 성능을 고려하여 권장하지 않습니다"],
+      "sourceHint": "아키텍처 트랜잭션 처리"
+    },
+    {
+      "id": "sample-01",
+      "question": "컴포넌트 내 계층 구조에서 최초 입력 전문을 수신하는 단위는 무엇인가?",
+      "mustContainAny": ["최초 입력 전문을 수신하는 단위는 PM"],
+      "sourceHint": "샘플_v2 Layered 아키텍처"
+    },
+    {
+      "id": "sample-02",
+      "question": "DM(Data Method) 간의 호출이 가능한가?",
+      "mustContainAny": ["DM 간 호출은 불가능하다", "DM 간 호출 금지"],
+      "sourceHint": "샘플_v2 Layered 아키텍처 / 컴포넌트 호출관계"
+    },
+    {
+      "id": "sample-03",
+      "question": "컴포넌트 내 호출에서 FM 간 호출은 허용되는가?",
+      "mustContainAny": ["FM 간 호출 허용"],
+      "sourceHint": "샘플_v2 컴포넌트 호출관계"
+    },
+    {
+      "id": "sample-04",
+      "question": "CommonArea는 어떤 용도의 영역인가?",
+      "mustContainAny": ["거래의 시작에서 끝까지 공유되는 공유 메모리 영역"],
+      "sourceHint": "샘플_v2 CommonArea 구성"
+    },
+    {
+      "id": "sample-05",
+      "question": "CommonArea의 도메인별(업무별) 영역은 어떤 타입으로 구성되는가?",
+      "mustContainAny": ["IDataSet 타입으로 구성"],
+      "sourceHint": "샘플_v2 CommonArea 구성"
+    },
+    {
+      "id": "sample-06",
+      "question": "DU 클래스의 명명규칙은 어떻게 되는가?",
+      "mustContainAny": ["DU + 테이블명 + 일련번호"],
+      "sourceHint": "샘플_v2 주요 명명규칙"
+    },
+    {
+      "id": "sample-07",
+      "question": "EIMS에서 배포받은 UIO는 수동으로 편집할 수 있는가?",
+      "mustContainAny": ["수동 편집 불가"],
+      "sourceHint": "샘플_v2 EIMS 연계"
+    },
+    {
+      "id": "sample-08",
+      "question": "EIMS 배포 시 숫자 데이터는 어떤 타입으로 표현되는가?",
+      "mustContainAny": ["숫자 데이터는 모두", "BigDecimal"],
+      "sourceHint": "샘플_v2 EIMS 연계"
+    }
+  ]
+}

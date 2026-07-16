@@ -37,6 +37,7 @@ RAG Agent 시스템 배포·설정·운영 가이드입니다.
    - 6.3 [데이터 영속성](#63-데이터-영속성)
    - 6.4 [성능](#64-성능)
    - 6.5 [설정 페이지 (/settings) — LLM/RAG 옵션 조회·핫 수정](#65-설정-페이지-settings--llmrag-옵션-조회핫-수정)
+   - 6.6 [검색 품질 평가 하네스 (개발자용)](#66-검색-품질-평가-하네스-개발자용)
 7. [벡터 스토어 관리](#7-벡터-스토어-관리)
 8. [문제 해결](#8-문제-해결)
 9. [보안 설정](#9-보안-설정)
@@ -1510,6 +1511,23 @@ CPU/메모리 제약이 있는 환경에서는 `INDEXING_MAX_FILES`와 `INDEXING
 **조회 전용(재기동 필요)**: `rerank-enabled`·`hybrid-enabled`·쿼리 임베딩 캐시(모두 빈 생성 시점 결정), 임베딩 차원·벡터 스토어 백엔드(DDL/빈 구성), topK·멀티쿼리 활성화. temperature/max-tokens와 기본 라우팅 모드는 현재 조회 전용입니다(전자는 §6.18 선행 필요, 후자는 대화별 라우팅을 채팅 화면에서 설정).
 
 **권한**: 조회는 누구나 가능하지만, **수정은 관리자만** 가능합니다(관리 전용 인증 모드 `AUTH_MANAGEMENT_ONLY=true`에서 `/setup` 관리자 로그인 필요 — §9 참조). 수정 UI(입력/버튼)는 비관리자에게 숨겨지며, 서버도 `/admin/settings/**` 경로로 이중 방어합니다. 모든 변경은 감사 로그(`settings.update`/`settings.reset`, 변경 키·이전값·새값)에 남습니다.
+
+---
+
+### 6.6 검색 품질 평가 하네스 (개발자용)
+
+§6.5의 검색 튜닝 값(유사도 임계값·RRF 가중치·재랭크 등)을 바꾼 뒤 "정말 좋아졌는지" 정량으로 확인하기 위한 하네스입니다. `RetrievalService.execute()`(MultiQuery+하이브리드 BM25+가중 RRF 전체 파이프라인)를 실제 임베딩·LLM 서버와 실제로 색인된 문서에 대해 그대로 실행해 recall@k·nDCG@k를 측정합니다.
+
+```bash
+# .env(또는 OS 환경변수)에 설정된 실제 LLM/임베딩 엔드포인트 + data/의 실제 색인을 사용
+mvn test -Dtest=SearchQualityEvaluationTest -Dsearch-eval.enabled=true
+```
+
+- **기본적으로 skip됩니다** — `-Dsearch-eval.enabled=true`가 없으면 컨텍스트조차 띄우지 않고 즉시 skip되므로(`SqliteVecIntegrationTest`의 `sqlitevec.path` 게이팅과 동일한 패턴) 일반 빌드/CI에는 영향이 없습니다.
+- **읽기 전용**입니다 — `search()`/`searchBatch()`만 호출하며 색인을 추가·삭제하지 않습니다. 실행 전 골든셋 대상 문서가 `version=latest`로 이미 색인되어 있어야 합니다.
+- 골든셋은 `src/test/resources/search-eval/nexcore-gold.json`(질문 26건) — 정답은 chunk id가 아니라 색인 원문(교정본 MD)에서 그대로 가져온 고유 부분 문자열이라 재인덱싱으로 청크 경계가 바뀌어도 깨지지 않습니다. 다른 코퍼스로 검증하려면 같은 형식으로 새 JSON을 만들고 `GOLD_RESOURCE` 상수(`SearchQualityEvaluationTest.java`)를 바꾸면 됩니다.
+- recall@k/nDCG@k 계산 자체(`SearchQualityMetrics`)는 순수 함수라 `SearchQualityMetricsTest`로 항상 검증되며 라이브 서버가 필요 없습니다.
+- **2026-07-16 실측 baseline**(hybrid=true·rerank=false·multiquery=true·topK=7): mean recall@10=0.962, nDCG@10=0.810 — 검색 튜닝 변경 후 이 수치와 비교해 회귀 여부를 판단하세요.
 
 ---
 
