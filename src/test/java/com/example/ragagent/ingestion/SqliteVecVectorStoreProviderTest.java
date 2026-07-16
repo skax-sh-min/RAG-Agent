@@ -205,7 +205,7 @@ class SqliteVecVectorStoreProviderTest {
             }
 
     @Test
-    @DisplayName("add: 대용량 문서는 여러 배치로 나눠 임베딩되고, 결과가 올바른 doc id에 매핑된다")
+    @DisplayName("add: 대용량 문서는 여러 배치로 나눠 임베딩되고, 결과가 올바른 doc id에 매핑된다 (§10.9.3 서브배치별 즉시 삽입)")
     void addMapsEmbeddingsToCorrectDocIdAcrossBatches() {
         SqliteVecVectorStoreProvider p = provider();
         // ~20,000 chars each stays well under TokenCountBatchingStrategy's default per-document
@@ -225,20 +225,24 @@ class SqliteVecVectorStoreProviderTest {
 
         verify(embeddingModel, atLeast(2)).embed(anyList());
 
+        // §10.9.3 — each embedded sub-batch is inserted immediately, so two 20,000-char docs that
+        // land in separate sub-batches produce two separate single-row batchUpdate calls instead
+        // of one combined two-row call.
         ArgumentCaptor<BatchPreparedStatementSetter> captor = ArgumentCaptor.forClass(BatchPreparedStatementSetter.class);
-        verify(jdbc).batchUpdate(
+        verify(jdbc, times(2)).batchUpdate(
                 eq("INSERT INTO vec_embeddings(spring_doc_id, version, embedding) VALUES (?, ?, ?)"),
                 captor.capture());
-        BatchPreparedStatementSetter setter = captor.getValue();
+        List<BatchPreparedStatementSetter> setters = captor.getAllValues();
+        assertThat(setters).hasSize(2);
 
         try {
             PreparedStatement ps0 = mock(PreparedStatement.class);
-            setter.setValues(ps0, 0);
+            setters.get(0).setValues(ps0, 0);
             verify(ps0).setString(1, "d1");
             verify(ps0).setBytes(3, SqliteVecVectorStoreProvider.toVectorBlob(new float[]{1f}));
 
             PreparedStatement ps1 = mock(PreparedStatement.class);
-            setter.setValues(ps1, 1);
+            setters.get(1).setValues(ps1, 0);
             verify(ps1).setString(1, "d2");
             verify(ps1).setBytes(3, SqliteVecVectorStoreProvider.toVectorBlob(new float[]{2f}));
         } catch (java.sql.SQLException e) {

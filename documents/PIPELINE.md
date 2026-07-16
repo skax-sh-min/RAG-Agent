@@ -45,7 +45,7 @@ HTTP 요청
 |------|------|---------|
 | **CLASSIFIER** | 질문 유형 판별 (concept / usage / error / version / meta) | ① — AgentService에서 선실행하므로 그래프 내에서는 스킵 |
 | **DIRECT_ANSWER** | meta 질문 직접 응답 (벡터 검색 없음) | ② |
-| **RETRIEVAL** | 쿼리 확장(조건부 — 15자 미만 질의는 생략, `app.search-multiquery-min-length`) → 확장 LLM 호출과 원본 질의 벡터 검색을 가상 스레드로 병렬 실행(§10.8.1, 원본 검색 지연이 확장 대기 뒤에 숨음) → 배치 임베딩(쿼리 임베딩 캐시 히트 시 스킵) → 벡터 스토어 배치 쿼리(chroma 단일 호출 / sqlite-vec 쿼리별) → 가중 RRF 병합(벡터축 그룹 정규화 + 키워드축 가중치) → 선택적 LLM 리랭킹(opt-in). 재시도 시 후보 풀 ×(retry+1) 에스컬레이션 | ③ 쿼리 확장(조건부), [리랭킹 활성 시 1콜] |
+| **RETRIEVAL** | 쿼리 확장(조건부 — 15자 미만 질의는 생략, `app.search-multiquery-min-length`) → 확장 LLM 호출과 원본 질의 벡터 검색을 가상 스레드로 병렬 실행(§10.8.1, 원본 검색 지연이 확장 대기 뒤에 숨음) → 배치 임베딩(쿼리 임베딩 캐시 히트 시 스킵) → 벡터 스토어 배치 쿼리(chroma 단일 호출, 결과에 쓰지 않는 임베딩 필드는 요청 자체를 생략 §10.9.1 / sqlite-vec 쿼리별) → 가중 RRF 병합(벡터축 그룹 정규화 + 키워드축 가중치) → 선택적 LLM 리랭킹(opt-in). 재시도 시 후보 풀 ×(retry+1) 에스컬레이션 | ③ 쿼리 확장(조건부), [리랭킹 활성 시 1콜] |
 | **ANSWER** | 문서 기반 답변 생성 + 충분도 검사 | ④ 답변, ⑤ 충분도 |
 | **CRITIC** | 답변이 문서에 근거하는지 검증 | ⑥ |
 | **FINALIZE** | 대화 히스토리 저장 (SQLite) | 없음 |
@@ -192,7 +192,9 @@ PROGRESSIVE 모드 AND sufficient=false AND retryCount >= max
   │    저장·표시 텍스트(원문)는 그대로 유지, 임베딩/FTS 입력에만 반영
   │
   ├─ 벡터 스토어 저장 (version별 — chroma 컬렉션 / sqlite-vec partition, content는 원문;
-  │    sqlite-vec는 벡터+청크 배치 삽입 2개를 하나의 트랜잭션으로 커밋, §10.8.3)
+  │    sqlite-vec는 토큰 서브배치 단위로 임베딩 직후 즉시 삽입하는 스트리밍 구조(§10.9.3,
+  │    문서 전체 임베딩을 힙에 모았다가 한 번에 삽입하지 않음 — 피크 메모리가 서브배치 크기로
+  │    고정) — 서브배치별 벡터+청크 배치 삽입 2개는 여전히 하나의 트랜잭션으로 커밋(§10.8.3))
   │    + FTS 인덱스(chunk_fts)에도 동일 맥락+정규화 텍스트 반영 (Contextual BM25 시너지)
   │
   └─ 레지스트리 저장 (SQLite doc_registry 테이블 — memory.db 공유)
@@ -302,10 +304,14 @@ PROGRESSIVE 모드 AND sufficient=false AND retryCount >= max
       - `chromaApi.upsertEmbeddings()`로 수동 upsert(TokenCountBatchingStrategy 서브배치) —
         임베딩은 11)의 파생 텍스트, 저장 content/metadata는 원문(chunk_context/search_text 키 제외)
     b) sqlite-vec 모드
+      - TokenCountBatchingStrategy 서브배치 단위로 임베딩 → 즉시 삽입을 반복하는 스트리밍
+        구조(§10.9.3) — 문서 전체(예: 500+청크)의 임베딩을 모두 힙에 모은 뒤 한 번에 삽입하지
+        않으므로 피크 메모리가 문서 크기가 아니라 서브배치 크기에 비례한다
       - vec_embeddings: spring_doc_id, version, embedding(11의 파생 텍스트로 계산)
       - vec_document_chunks: spring_doc_id, content(원문), metadata(JSON, chunk_context/search_text 제외), version, doc_id, created_at
-      - 두 배치 삽입을 하나의 트랜잭션으로 커밋(§10.8.3) — 중간 실패 시 함께 롤백되어
-        vec_embeddings만 커밋되고 매칭되는 vec_document_chunks가 없는 상태가 생기지 않음
+      - 서브배치마다 두 배치 삽입을 하나의 트랜잭션으로 커밋(§10.8.3) — 중간 실패 시 함께
+        롤백되어 vec_embeddings만 커밋되고 매칭되는 vec_document_chunks가 없는 상태가 생기지
+        않음(트랜잭션 범위는 문서 전체가 아니라 서브배치 단위)
     + FTS 인덱스(chunk_fts)에도 doc_tags/keywords + content(11의 파생 텍스트, Contextual BM25 시너지) 반영
 
   13) 레지스트리 저장

@@ -140,64 +140,69 @@ public class SqliteVecVectorStoreProvider implements VectorStoreProvider {
         // Embed per token-bounded sub-batch (not all of docs in one call) so a large document's
         // chunk count can't turn into a single oversized HTTP request that times out against a
         // slow local embedding server. Keyed by doc id since batchingStrategy.batch() does not
-        // guarantee it preserves docs' original order. Each completed sub-batch reports real
-        // incremental progress instead of the caller only seeing a single 0%→100% jump.
+        // guarantee it preserves docs' original order.
         // Batches over the derived (context+normalized) text, not raw text — that's what actually
         // gets embedded, so that's what the token-count estimate must be sized against (§10.1).
-        int total = docs.size();
-        int done = 0;
-        onProgress.accept(0, total);
-        Map<String, float[]> embeddingByDocId = new HashMap<>(docs.size() * 2);
+        // §10.9.3 — each sub-batch is inserted as soon as it's embedded instead of accumulating
+        // every embedding + chunk row for the whole document before a single insert at the end;
+        // peak heap is now bounded by sub-batch size, not document size, and each completed
+        // sub-batch reports real incremental progress instead of the caller only seeing a single
+        // 0%→100% jump.
+        Map<String, Document> docsById = docs.stream().collect(Collectors.toMap(Document::getId, d -> d));
         List<Document> embedInputDocs = docs.stream()
                 .map(d -> new Document(d.getId(), SearchTextBuilder.build(d), Map.of()))
                 .toList();
+
+        int total = docs.size();
+        int done = 0;
+        onProgress.accept(0, total);
+        String now = Instant.now().toString();
+        TransactionTemplate tx = transactionTemplate();
+
         for (List<Document> batch : batchingStrategy.batch(embedInputDocs)) {
             List<String> texts = batch.stream().map(Document::getText).toList(); // already derived
             List<float[]> batchEmbeddings = embedBatchWithFallback(indexingEmbeddingModel, texts);
-            for (int i = 0; i < batch.size(); i++) {
-                embeddingByDocId.put(batch.get(i).getId(), batchEmbeddings.get(i));
+            List<Document> originals = batch.stream().map(d -> docsById.get(d.getId())).toList();
+
+            BatchPreparedStatementSetter embeddingSetter = new BatchPreparedStatementSetter() {
+                @Override public void setValues(PreparedStatement ps, int i) throws SQLException {
+                    ps.setString(1, originals.get(i).getId());
+                    ps.setString(2, version);
+                    ps.setBytes(3, toVectorBlob(batchEmbeddings.get(i)));
+                }
+                @Override public int getBatchSize() { return originals.size(); }
+            };
+
+            List<Object[]> chunkRows = new ArrayList<>(originals.size());
+            for (Document d : originals) {
+                Map<String, Object> meta = d.getMetadata() == null ? new HashMap<>() : new HashMap<>(d.getMetadata());
+                meta.remove(MetaKey.CHUNK_CONTEXT); // transient — never persisted
+                meta.remove(MetaKey.SEARCH_TEXT);   // transient — never persisted (§10.8.5)
+                chunkRows.add(new Object[]{
+                        d.getId(),
+                        d.getText() == null ? "" : d.getText(),
+                        toJson(meta),
+                        version,
+                        String.valueOf(meta.getOrDefault(MetaKey.DOC_ID, "")),
+                        now
+                });
             }
+
+            // §10.8.3 — both batch inserts for this sub-batch commit together (one round-trip)
+            // instead of two separate autocommit statements, and a mid-write failure no longer
+            // leaves orphaned vec_embeddings rows with no matching vec_document_chunks row.
+            Runnable insertBoth = () -> {
+                jdbc.batchUpdate(INSERT_EMBEDDING, embeddingSetter);
+                jdbc.batchUpdate(INSERT_CHUNK, chunkRows);
+            };
+            if (tx != null) {
+                tx.executeWithoutResult(status -> insertBoth.run());
+            } else {
+                insertBoth.run();
+            }
+
             done += batch.size();
             onProgress.accept(done, total);
-        }
-
-        BatchPreparedStatementSetter embeddingSetter = new BatchPreparedStatementSetter() {
-            @Override public void setValues(PreparedStatement ps, int i) throws SQLException {
-                ps.setString(1, docs.get(i).getId());
-                ps.setString(2, version);
-                ps.setBytes(3, toVectorBlob(embeddingByDocId.get(docs.get(i).getId())));
-            }
-            @Override public int getBatchSize() { return docs.size(); }
-        };
-
-        String now = Instant.now().toString();
-        List<Object[]> chunkRows = new ArrayList<>(docs.size());
-        for (Document d : docs) {
-            Map<String, Object> meta = d.getMetadata() == null ? new HashMap<>() : new HashMap<>(d.getMetadata());
-            meta.remove(MetaKey.CHUNK_CONTEXT); // transient — never persisted
-            meta.remove(MetaKey.SEARCH_TEXT);   // transient — never persisted (§10.8.5)
-            chunkRows.add(new Object[]{
-                    d.getId(),
-                    d.getText() == null ? "" : d.getText(),
-                    toJson(meta),
-                    version,
-                    String.valueOf(meta.getOrDefault(MetaKey.DOC_ID, "")),
-                    now
-            });
-        }
-
-        // §10.8.3 — both batch inserts commit together (one round-trip) instead of two separate
-        // autocommit statements, and a mid-write failure no longer leaves orphaned vec_embeddings
-        // rows with no matching vec_document_chunks row.
-        Runnable insertBoth = () -> {
-            jdbc.batchUpdate(INSERT_EMBEDDING, embeddingSetter);
-            jdbc.batchUpdate(INSERT_CHUNK, chunkRows);
-        };
-        TransactionTemplate tx = transactionTemplate();
-        if (tx != null) {
-            tx.executeWithoutResult(status -> insertBoth.run());
-        } else {
-            insertBoth.run();
         }
     }
 

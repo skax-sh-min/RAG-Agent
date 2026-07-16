@@ -50,6 +50,11 @@ public class ChromaVectorStoreProvider implements VectorStoreProvider {
     // KNN query only ever asks for exactly topK candidates; over-fetch when a threshold is
     // actually active. No-op at the default (0.0, accept-all) — nothing to filter out there.
     private static final double THRESHOLD_OVERFETCH_MULTIPLIER = 2.0;
+    // §10.9.1 — Include.all also requests EMBEDDINGS, which mapPerQuery() never reads.
+    private static final List<ChromaApi.QueryRequest.Include> RESULT_INCLUDE = List.of(
+            ChromaApi.QueryRequest.Include.METADATAS,
+            ChromaApi.QueryRequest.Include.DOCUMENTS,
+            ChromaApi.QueryRequest.Include.DISTANCES);
 
     private final VectorStoreRegistry registry;
     private final ChromaApi chromaApi;
@@ -112,7 +117,9 @@ public class ChromaVectorStoreProvider implements VectorStoreProvider {
         Map<String, Object> where = whereForVersion(version);
         int fetchK = similarityThreshold > 0.0
                 ? (int) Math.ceil(topK * THRESHOLD_OVERFETCH_MULTIPLIER) : topK;
-        var request = new ChromaApi.QueryRequest(embeddings, fetchK, where, ChromaApi.QueryRequest.Include.all);
+        // §10.9.1 — mapPerQuery() never reads embeddings; skip fetching/parsing them (Include.all
+        // includes EMBEDDINGS, which at rerank-scale is ~1MB of dead JSON per search).
+        var request = new ChromaApi.QueryRequest(embeddings, fetchK, where, RESULT_INCLUDE);
         var response = chromaApi.queryCollection(TENANT, DATABASE, collectionId, request);
         return mapPerQuery(response, topK);
     }
