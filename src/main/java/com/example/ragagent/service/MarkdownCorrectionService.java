@@ -36,10 +36,23 @@ import java.util.regex.Pattern;
 
 /**
  * LLM-based Markdown format correction.
- * Splits raw MD by H2/H3 headings — or, when {@code groupByPage} (PPTX), strictly by
- * {@code [페이지: N]} slide markers so a slide's ##/### heading pair never gets torn across two
- * correction calls — corrects each section in parallel (format only, never changes content), then
- * reassembles. Saves corrected file alongside the raw one.
+ *
+ * <p>Two split strategies feed the same parallel per-section corrector:
+ * <ul>
+ *   <li><b>PPTX</b> ({@code groupByPage}) — {@link #splitByPages} bundles up to
+ *       {@link #PPTX_MAX_BUNDLE_PAGES} self-contained {@code [페이지: N]} slides per call (up to
+ *       {@link #maxSectionChars}); an oversized single slide is split on its shape-group blocks
+ *       ({@link #splitOversizedPage}). Slide boundaries are always clean, so no overlap is used.</li>
+ *   <li><b>Everything else</b> — {@link #splitBySections} splits on {@code ## }/{@code ### }/
+ *       {@code #### } chapter headings (fence-aware). Only boundaries flagged
+ *       {@link #isUnnaturalBoundary unnatural} (a malformed/level-jumping heading, or a size-forced
+ *       mid-flow cut) carry a small overlap of the neighbour's lines, corrected in place around a
+ *       boundary marker and then cut back off DETERMINISTICALLY in code
+ *       ({@link #cutOverlap}) — so a code block a converter split across the boundary can be fenced
+ *       coherently without the overlap ever surviving into two sections (the old duplication bug).</li>
+ * </ul>
+ * Corrects each section in parallel (format only, never changes content), then reassembles and
+ * saves the corrected file alongside the raw one.
  */
 @Service
 public class MarkdownCorrectionService {
@@ -51,27 +64,24 @@ public class MarkdownCorrectionService {
     private static final Pattern FENCED_BLOCK = Pattern.compile("(?s)```(.*?)\\n(.*?)\\n```");
     private static final Pattern HEADING_NUMBER_PREFIX = Pattern.compile("^(?:\\d+(?:\\.\\d+)*(?:\\.)?|\\d+[\\)])\\s+");
     /**
-     * Non-blank lines of an adjacent section sent as read-only boundary context during correction
-     * (§ code-fence continuity) — both forward (lookahead, from the next section) and backward
-     * (lookbehind, from the previous section) use the same budget.
+     * Non-blank overlap lines carried across an UNNATURAL section boundary (see
+     * {@link #isUnnaturalBoundary}). The previous section's tail (head overlap) and/or the next
+     * section's head (tail overlap) are prepended/appended around a {@link #SECTION_START_BOUNDARY}/
+     * {@link #SECTION_END_BOUNDARY} marker so the LLM sees across a boundary a converter/code
+     * artifact may have put mid-flow (e.g. an unfenced code block whose "##" lines were mistaken
+     * for headings). The overlap is corrected in place and then cut back off DETERMINISTICALLY by
+     * code at the marker — never trusted to the model to omit — so no content is ever duplicated.
      */
-    private static final int BOUNDARY_CONTEXT_LINES = 8;
-    /** Sentinel separating a section's LOOKBEHIND preview (previous section's tail) from its real
-     *  content that follows, in the PROMPT INPUT. */
+    private static final int OVERLAP_LINES = 5;
+    /** Max PPTX slides bundled into one correction call, subject to {@link #maxSectionChars}. */
+    private static final int PPTX_MAX_BUNDLE_PAGES = 4;
+    /** Marker placed right BEFORE this section's real content, after a prepended previous-section
+     *  overlap. The model reproduces it verbatim; {@link #cutOverlap} drops everything up to and
+     *  including it. */
     private static final String SECTION_START_BOUNDARY = "<<<SECTION_START>>>";
-    /** Sentinel separating a section's real content from its appended LOOKAHEAD preview (next
-     *  section's head), in the PROMPT INPUT. */
+    /** Marker placed right AFTER this section's real content, before an appended next-section
+     *  overlap. The model reproduces it verbatim; {@link #cutOverlap} drops everything from it on. */
     private static final String SECTION_END_BOUNDARY = "<<<SECTION_END>>>";
-    /**
-     * Wrap the LLM's actual corrected output in its RESPONSE whenever lookahead and/or lookbehind
-     * context is sent. {@link #extractBetweenMarkers} keeps only the text between the pair, so
-     * anything the model writes outside it (a leaked preview from either edge, a preamble, trailing
-     * commentary) is discarded by code rather than trusted to the model's own cleanup. Distinct
-     * tokens from {@link #SECTION_START_BOUNDARY}/{@link #SECTION_END_BOUNDARY} since those mark
-     * input framing and these mark output framing.
-     */
-    private static final String RESULT_START_MARKER = "<<<RESULT_START>>>";
-    private static final String RESULT_END_MARKER = "<<<RESULT_END>>>";
 
     private final LlmRouter llmRouter;
     private final int maxConcurrent;
@@ -142,6 +152,17 @@ public class MarkdownCorrectionService {
         log.debug("[MD_CORRECT] 섹션 {}개 분할 완료 (groupByPage={})", sections.size(), groupByPage);
         int total = sections.size();
 
+        // Only UNNATURAL boundaries (converter/code artifacts, size-forced mid-flow cuts) carry
+        // overlap context; clean chapter breaks — and every PPTX page/bundle boundary, since slides
+        // are self-contained — split with no overlap, so most boundaries pay nothing and can never
+        // duplicate. unnaturalAfter[i] == the boundary between section i and section i+1.
+        boolean[] unnaturalAfter = new boolean[sections.size()];
+        if (!groupByPage) {
+            for (int i = 0; i + 1 < sections.size(); i++) {
+                unnaturalAfter[i] = isUnnaturalBoundary(sections.get(i), sections.get(i + 1));
+            }
+        }
+
         Semaphore gate = new Semaphore(maxConcurrent);
         AtomicInteger doneCount = new AtomicInteger(0);
         List<String> corrected;
@@ -149,22 +170,19 @@ public class MarkdownCorrectionService {
             List<CompletableFuture<String>> futures = new ArrayList<>(sections.size());
             for (int i = 0; i < sections.size(); i++) {
                 final String sec = sections.get(i);
-                // Forward lookahead: the first few non-blank lines of the NEXT section, sent as
-                // read-only context so a section that ends mid-code-block (esp. an unfenced one
-                // whose "##" lines were mistaken for headings at the split) can see it continues
-                // and fence it correctly.
-                final String lookahead = (i + 1 < sections.size())
-                        ? leadingNonBlankLines(sections.get(i + 1), BOUNDARY_CONTEXT_LINES) : "";
-                // Backward lookbehind: the last few non-blank lines of the PREVIOUS section,
-                // symmetric to lookahead — catches the mirror case, a code block that started
-                // before this section's cut and continues into it. Both previews are trimmed back
-                // off the LLM response — see correctSection.
-                final String lookbehind = (i > 0)
-                        ? trailingNonBlankLines(sections.get(i - 1), BOUNDARY_CONTEXT_LINES) : "";
+                // Head overlap: the PREVIOUS section's last few non-blank lines, prepended only when
+                // the boundary INTO this section was flagged unnatural. Corrected in place, then cut
+                // back off deterministically by code (see correctSection/cutOverlap).
+                final String headOverlap = (i > 0 && unnaturalAfter[i - 1])
+                        ? trailingNonBlankLines(sections.get(i - 1), OVERLAP_LINES) : "";
+                // Tail overlap: the NEXT section's first few non-blank lines, appended only when the
+                // boundary OUT of this section is unnatural. Same deterministic cut on the other end.
+                final String tailOverlap = (i + 1 < sections.size() && unnaturalAfter[i])
+                        ? leadingNonBlankLines(sections.get(i + 1), OVERLAP_LINES) : "";
                 futures.add(CompletableFuture.supplyAsync(() -> {
                     gate.acquireUninterruptibly();
                     try {
-                        String result = correctSection(sec, lookahead, lookbehind);
+                        String result = correctSection(sec, tailOverlap, headOverlap);
                         int done = doneCount.incrementAndGet();
                         if (onSectionDone != null) onSectionDone.accept(done, total);
                         return result;
@@ -253,36 +271,82 @@ public class MarkdownCorrectionService {
      * tags, re-wrapped fences, or leaked prompt delimiters in the corrected output.
      */
     List<String> splitBySections(String md) {
-        return splitByBoundary(md, line -> line.startsWith("## ") || line.startsWith("### "));
+        return splitByBoundary(md,
+                line -> line.startsWith("## ") || line.startsWith("### ") || line.startsWith("#### "),
+                true);
     }
 
     /**
-     * PPTX-only split: one correction section per {@code [페이지: N]} slide marker. A slide can
-     * carry two heading candidates (a {@code ##} chapter label plus a {@code ###} slide subtitle —
-     * see {@code PptxToMarkdownConverter#calibrateHeadingOrder}); splitting on every H2/H3 like
-     * {@link #splitBySections} would tear that one slide into two correction calls. Splitting on
-     * the marker line itself — instead of the {@code ##} heading that follows it — also keeps
-     * {@code [페이지: N]} attached to the front of its own slide's section rather than the tail of
-     * the previous one.
+     * PPTX-only split: bundle up to {@link #PPTX_MAX_BUNDLE_PAGES} consecutive {@code [페이지: N]}
+     * slides into one correction call, filling each bundle up to {@link #maxSectionChars} before
+     * starting the next. Slides are self-contained (each {@code [페이지: N]} + heading(s) + body),
+     * so every bundle boundary lands cleanly on a page marker and needs no overlap context — and
+     * batching several small slides per call cuts the LLM round-trips a per-slide split would make.
+     *
+     * <p>A single slide larger than {@link #maxSectionChars} can't be bundled; it's split on its
+     * own by {@link #splitOversizedPage} (at shape-group/diagram/chart block boundaries) and its
+     * pieces are emitted un-bundled.
      */
     List<String> splitByPages(String md) {
-        return splitByBoundary(md, line -> line.startsWith("[페이지: "));
+        // Phase 1: cut into raw per-slide blocks (fence-aware, NO size force-split — an oversized
+        // slide must stay whole here so phase 2 can split it on shape-group boundaries, not chars).
+        List<String> pages = splitByBoundary(md, line -> line.startsWith("[페이지: "), false);
+
+        List<String> sections = new ArrayList<>();
+        StringBuilder bundle = new StringBuilder();
+        int bundlePages = 0;
+        for (String page : pages) {
+            if (page.length() > maxSectionChars) {
+                if (bundle.length() > 0) { sections.add(bundle.toString()); bundle.setLength(0); bundlePages = 0; }
+                sections.addAll(splitOversizedPage(page));
+                continue;
+            }
+            if (bundle.length() > 0
+                    && (bundlePages >= PPTX_MAX_BUNDLE_PAGES
+                        || bundle.length() + page.length() > maxSectionChars)) {
+                sections.add(bundle.toString());
+                bundle.setLength(0);
+                bundlePages = 0;
+            }
+            bundle.append(page);
+            bundlePages++;
+        }
+        if (bundle.length() > 0) sections.add(bundle.toString());
+        return sections;
     }
 
     /**
-     * Fence-aware splitter shared by {@link #splitBySections} and {@link #splitByPages}: never
-     * splits while inside a fenced code block (``` / ~~~), regardless of what {@code isBoundaryLine}
-     * matches.
-     *
-     * <p>When the oversized-section check trips while a fence is still open, the fence is not
-     * cut — but it also isn't unconditionally kept in the current (already-full) section. If the
-     * fence started at or after {@code MIN_SECTION_CHARS / 2} chars into the current section (i.e.
-     * this section already had a substantial amount of its own content before the fence began),
-     * everything before the fence is flushed now and the fence is deferred whole to the next
-     * section. If the fence started very early in a (so far small) section, deferring would just
-     * leave a tiny orphan section, so it's left alone and allowed to keep growing until it closes.
+     * Splits a single over-budget PPTX slide at its shape-group / diagram / chart block boundaries
+     * ({@code [도형 그룹]}, {@code [다이어그램]}, {@code [차트]} — each emitted by
+     * {@code PptxToMarkdownConverter} as a self-contained {@code [label] … [/label]} block) so a
+     * grouped-shape block stays whole in one correction call. The {@code [페이지: N]} marker and
+     * heading(s) that precede the first block stay attached to the first piece. A single block still
+     * larger than {@link #maxSectionChars} falls back to the shared char-budget force-split.
      */
-    private List<String> splitByBoundary(String md, Predicate<String> isBoundaryLine) {
+    private List<String> splitOversizedPage(String page) {
+        return splitByBoundary(page, line -> {
+            String t = line.stripLeading();
+            return t.startsWith("[도형 그룹") || t.startsWith("[다이어그램") || t.startsWith("[차트");
+        }, true);
+    }
+
+    /**
+     * Fence-aware splitter shared by {@link #splitBySections}, {@link #splitByPages} and
+     * {@link #splitOversizedPage}: never splits while inside a fenced code block (``` / ~~~),
+     * regardless of what {@code isBoundaryLine} matches.
+     *
+     * <p>When {@code enforceSize} is true and a section grows past {@link #maxSectionChars}, it is
+     * force-split so no single correction call is oversized. If the check trips while a fence is
+     * still open, the fence is not cut — but it also isn't unconditionally kept in the current
+     * (already-full) section. If the fence started at or after {@code MIN_SECTION_CHARS / 2} chars
+     * into the current section, everything before the fence is flushed now and the fence is deferred
+     * whole to the next section; if it started very early in a (so far small) section, deferring
+     * would leave a tiny orphan, so it's left to keep growing until it closes. When
+     * {@code enforceSize} is false the size check is skipped entirely — used by
+     * {@link #splitByPages} phase 1, which must keep each slide whole (even an oversized one) so it
+     * can be split on shape-group boundaries rather than an arbitrary char offset.
+     */
+    private List<String> splitByBoundary(String md, Predicate<String> isBoundaryLine, boolean enforceSize) {
         List<String> sections = new ArrayList<>();
         StringBuilder current = new StringBuilder();
         boolean inFence = false;
@@ -304,7 +368,7 @@ public class MarkdownCorrectionService {
             current.append(line).append("\n");
             if (isFenceLine) inFence = !inFence;
 
-            if (current.length() > maxSectionChars) {
+            if (enforceSize && current.length() > maxSectionChars) {
                 if (!inFence) {
                     sections.add(current.toString());
                     current = new StringBuilder();
@@ -323,51 +387,111 @@ public class MarkdownCorrectionService {
         return sections;
     }
 
-    /** Package-private for unit testing. Corrects a single section with no boundary context. */
+    /**
+     * True when the boundary between {@code before} and {@code after} looks like a converter/code
+     * artifact rather than a clean chapter break, so it should carry deterministic overlap context.
+     * Three signals (all confirmed with the user):
+     * <ol>
+     *   <li><b>Non-heading start</b> — {@code after}'s first non-blank line is not a well-formed
+     *       {@code ## }/{@code ### }/{@code #### } heading. Covers a size-forced mid-flow cut, a
+     *       stray {@code # } (H1) mid-document, and decorative/log lines like {@code #=====} or
+     *       {@code #########} that aren't valid ATX headings.</li>
+     *   <li><b>Heading level jump</b> — a well-formed heading that dives two or more levels below
+     *       the last heading before it (e.g. {@code ##} then {@code ####}, skipping {@code ###}),
+     *       which usually means a skipped level or a {@code ####} mistaken from inside code.</li>
+     * </ol>
+     * Package-private for unit testing.
+     */
+    boolean isUnnaturalBoundary(String before, String after) {
+        int afterLevel = leadingChapterHeadingLevel(after);
+        if (afterLevel == 0) return true;                       // non-heading / malformed start
+        int beforeLevel = lastChapterHeadingLevel(before);
+        return beforeLevel >= 2 && afterLevel - beforeLevel >= 2; // e.g. ## then ####
+    }
+
+    /** Heading level of {@code section}'s first non-blank line if it is a well-formed ATX heading,
+     *  else 0. */
+    private int leadingChapterHeadingLevel(String section) {
+        for (String line : section.split("\n", -1)) {
+            if (line.isBlank()) continue;
+            return chapterHeadingLevel(line);
+        }
+        return 0;
+    }
+
+    /** Level of the last well-formed heading (outside a fenced code block) in {@code section},
+     *  else 0. */
+    private int lastChapterHeadingLevel(String section) {
+        boolean inFence = false;
+        int last = 0;
+        for (String line : section.split("\n", -1)) {
+            String trimmed = line.stripLeading();
+            if (trimmed.startsWith("```") || trimmed.startsWith("~~~")) { inFence = !inFence; continue; }
+            if (inFence) continue;
+            int lvl = chapterHeadingLevel(line);
+            if (lvl > 0) last = lvl;
+        }
+        return last;
+    }
+
+    /**
+     * ATX heading level for a well-formed 2–6 heading ({@code n} '#' then a single space then
+     * non-blank text), else 0. Rejects H1 (a stray mid-document title is itself a signal), 7+ '#',
+     * and a '#' not followed by a space (e.g. {@code #=====}, a decorative/code line) — all of which
+     * {@link #markdownHeadingLevel} already reports as 0 except H1, filtered here.
+     */
+    private int chapterHeadingLevel(String line) {
+        int level = markdownHeadingLevel(line);
+        if (level < 2 || level > 6) return 0;
+        return line.substring(level).isBlank() ? 0 : level;
+    }
+
+    /** Package-private for unit testing. Corrects a single section with no overlap context. */
     String correctSection(String section) {
         return correctSection(section, "");
     }
 
-    /** Same as {@link #correctSection(String, String, String)} with no lookbehind context. */
-    String correctSection(String section, String lookahead) {
-        return correctSection(section, lookahead, "");
+    /** Same as {@link #correctSection(String, String, String)} with no head overlap. */
+    String correctSection(String section, String tailOverlap) {
+        return correctSection(section, tailOverlap, "");
     }
 
     /**
-     * Corrects one section's formatting. {@code lookahead} (the opening lines of the NEXT section)
-     * and {@code lookbehind} (the closing lines of the PREVIOUS section) are read-only boundary
-     * context, framed with {@link #SECTION_END_BOUNDARY}/{@link #SECTION_START_BOUNDARY}
-     * respectively when non-blank: they let the LLM see whether a code block continues across
-     * either edge of this section (e.g. an unfenced block whose "##" lines were mistaken for
-     * headings at the split) so it can fence it correctly. Whenever either is present, the model is
-     * asked to wrap its actual corrected output between {@link #RESULT_START_MARKER}/
-     * {@link #RESULT_END_MARKER}, and {@link #extractBetweenMarkers} pulls out only that span —
-     * nothing outside the pair (a leaked preview from either edge, a preamble) ever reaches the
-     * stored output. If either result marker is missing, we re-correct with no boundary context at
-     * all rather than trust a partial boundary. Package-private for unit testing.
+     * Corrects one section's formatting. {@code tailOverlap} (the opening lines of the NEXT section)
+     * and {@code headOverlap} (the closing lines of the PREVIOUS section) are only supplied when the
+     * corresponding boundary was flagged {@link #isUnnaturalBoundary unnatural}. Each is framed with
+     * a {@link #SECTION_END_BOUNDARY}/{@link #SECTION_START_BOUNDARY} marker line and — unlike a
+     * read-only preview — is corrected in place along with the section, so the LLM can see a code
+     * block continuing across a boundary a converter/code artifact created (e.g. an unfenced block
+     * whose "##" lines were mistaken for headings) and fence each side coherently. The model is told
+     * to keep the marker line(s) verbatim; {@link #cutOverlap} then removes everything on the
+     * overlap side of each marker DETERMINISTICALLY, so the overlap can never survive into two
+     * adjacent sections (the old duplication bug). If a marker the code injected is missing from the
+     * response, the section is re-corrected with no overlap at all — never trust a partial cut.
+     * Package-private for unit testing.
      */
-    String correctSection(String section, String lookahead, String lookbehind) {
+    String correctSection(String section, String tailOverlap, String headOverlap) {
         if (section == null || section.isBlank()) return section;
         String safeSection = stripReservedMarkers(section);
-        boolean hasLookahead = lookahead != null && !lookahead.isBlank();
-        boolean hasLookbehind = lookbehind != null && !lookbehind.isBlank();
-        boolean hasBoundaryContext = hasLookahead || hasLookbehind;
+        boolean hasTail = tailOverlap != null && !tailOverlap.isBlank();
+        boolean hasHead = headOverlap != null && !headOverlap.isBlank();
+        boolean hasOverlap = hasTail || hasHead;
 
         StringBuilder bodyBuilder = new StringBuilder();
-        if (hasLookbehind) {
-            bodyBuilder.append(stripReservedMarkers(lookbehind)).append("\n")
+        if (hasHead) {
+            bodyBuilder.append(stripReservedMarkers(headOverlap)).append("\n")
                     .append(SECTION_START_BOUNDARY).append("\n");
         }
         bodyBuilder.append(safeSection);
-        if (hasLookahead) {
+        if (hasTail) {
             bodyBuilder.append("\n").append(SECTION_END_BOUNDARY).append("\n")
-                    .append(stripReservedMarkers(lookahead));
+                    .append(stripReservedMarkers(tailOverlap));
         }
         String body = bodyBuilder.toString();
-        log.debug("[MD_CORRECT] 섹션 교정 시작: {}자 (lookbehind={}, lookahead={})",
-                safeSection.length(), hasLookbehind, hasLookahead);
+        log.debug("[MD_CORRECT] 섹션 교정 시작: {}자 (headOverlap={}, tailOverlap={})",
+                safeSection.length(), hasHead, hasTail);
 
-        String boundaryNote = hasBoundaryContext ? buildBoundaryNote(hasLookbehind, hasLookahead) : "";
+        String boundaryNote = hasOverlap ? buildBoundaryNote(hasHead, hasTail) : "";
 
         String prompt = ("""
                 당신은 문서 편집자입니다. 다음 마크다운 텍스트의 형식(포맷)만 교정하세요.
@@ -395,15 +519,14 @@ public class MarkdownCorrectionService {
                     TaskType.LIGHT_TEXT, RoutingMode.COST_FIRST, BackgroundUsage.MDCORRECT_PREFIX,
                     model -> model.call(new Prompt(prompt)));
             log.debug("[MD_CORRECT] 섹션 교정 완료: {}자 → {}자", safeSection.length(), result.length());
-            if (hasBoundaryContext) {
-                String extracted = extractBetweenMarkers(result, RESULT_START_MARKER, RESULT_END_MARKER);
-                if (extracted != null) {
-                    return extracted;
+            if (hasOverlap) {
+                String cut = cutOverlap(result, hasHead, hasTail);
+                if (cut != null) {
+                    return cut;
                 }
-                // Either marker missing → the boundary can't be trusted (may still hold a leaked
-                // preview from either edge, or a preamble). Re-correct with no boundary context at
-                // all instead of guessing which side went wrong.
-                log.debug("[MD_CORRECT] 결과 마커 누락 — 경계 컨텍스트 없이 재교정");
+                // A marker the code injected is gone from the response → we can't tell where the
+                // overlap ends, so re-correct with no overlap at all rather than risk keeping it.
+                log.debug("[MD_CORRECT] 경계 마커 누락 — 오버랩 없이 재교정");
                 return correctSection(section, "", "");
             }
             return result;
@@ -416,55 +539,60 @@ public class MarkdownCorrectionService {
     }
 
     /**
-     * Builds the prompt's boundary-handling instructions for whichever preview edge(s) are present.
-     * Both branches funnel into the same "wrap your actual output" instruction, since either edge
-     * can leak into the response the same way.
+     * Removes the corrected overlap from the LLM response by cutting at the boundary marker(s) the
+     * code injected: everything up to and including {@link #SECTION_START_BOUNDARY} (the head
+     * overlap) and everything from {@link #SECTION_END_BOUNDARY} on (the tail overlap). Returns
+     * {@code null} if an expected marker is missing so the caller can fall back to an overlap-free
+     * re-correction. Any stray marker the model may have duplicated is scrubbed from the kept span.
      */
-    private String buildBoundaryNote(boolean hasLookbehind, boolean hasLookahead) {
-        StringBuilder note = new StringBuilder("\n[경계 컨텍스트 처리 — 매우 중요]\n");
-        if (hasLookbehind) {
-            note.append("- `").append(SECTION_START_BOUNDARY)
-                    .append("` 줄 앞의 텍스트는 '이전 섹션 미리보기'이며 이 섹션의 내용이 아닙니다. 오직 코드 블록이 이전 섹션에서 이어져 들어오는지 판단하는 용도로만 참고하세요.\n");
+    private static String cutOverlap(String text, boolean hasHead, boolean hasTail) {
+        String kept = text;
+        if (hasHead) {
+            int idx = kept.indexOf(SECTION_START_BOUNDARY);
+            if (idx < 0) return null;
+            kept = kept.substring(idx + SECTION_START_BOUNDARY.length());
         }
-        if (hasLookahead) {
-            note.append("- `").append(SECTION_END_BOUNDARY)
-                    .append("` 줄 뒤의 텍스트는 '다음 섹션 미리보기'이며 이 섹션의 내용이 아닙니다. 오직 코드 블록이 다음 섹션으로 계속 이어지는지 판단하는 용도로만 참고하세요.\n");
+        if (hasTail) {
+            int idx = kept.indexOf(SECTION_END_BOUNDARY);
+            if (idx < 0) return null;
+            kept = kept.substring(0, idx);
         }
-        note.append("- \"잘린 문장 연결\" 규칙은 이 섹션 내부에만 적용됩니다. 이 섹션의 첫 줄이나 마지막 줄이 미완성 문장으로 보이더라도 위·아래 미리보기 쪽 단어를 가져와 이어붙이거나 병합하지 말고, 미완성인 상태 그대로 두세요 — 미리보기와 이어붙이면 실제로 그 섹션을 교정할 때 같은 내용이 다시 나와 문서에 중복이 생깁니다.\n");
-        note.append("- 미리보기의 문장이나 단어를 그대로든 재작성해서든 교정 결과에 절대 포함하지 마세요.\n");
-        note.append("- 이 섹션의 교정 결과를 반환할 때는 반드시 이렇게 감싸세요: 첫 줄에 `").append(RESULT_START_MARKER)
-                .append("`만 단독으로 쓰고, 그 다음부터 이 섹션의 교정된 내용만 쓰고, 마지막 줄에 `").append(RESULT_END_MARKER)
-                .append("`만 단독으로 쓰세요. 두 마커 사이에는 이 섹션의 교정 결과 외에 미리보기 내용·설명·다른 텍스트를 절대 넣지 마세요.");
-        return note.toString();
+        return stripReservedMarkers(kept).strip();
     }
 
     /**
-     * Text strictly between the first {@code startMarker} and the first {@code endMarker} after
-     * it, or {@code null} if either is missing. Whatever the model wrote outside the pair (leaked
-     * preview text, a preamble, trailing commentary) is simply never read — deterministic, unlike
-     * trusting the LLM to stop cleanly at a single trailing marker.
+     * Builds the prompt's boundary-marker instructions for whichever overlap edge(s) are present.
+     * The model is asked to keep each marker line verbatim and NOT merge text across it — code does
+     * the actual cut afterward ({@link #cutOverlap}), so nothing here relies on the model omitting
+     * the overlap on its own.
      */
-    private static String extractBetweenMarkers(String text, String startMarker, String endMarker) {
-        int start = text.indexOf(startMarker);
-        if (start < 0) return null;
-        start += startMarker.length();
-        int end = text.indexOf(endMarker, start);
-        if (end < 0) return null;
-        return text.substring(start, end).strip();
+    private String buildBoundaryNote(boolean hasHead, boolean hasTail) {
+        StringBuilder note = new StringBuilder("\n[경계 마커 처리 — 매우 중요]\n");
+        if (hasHead) {
+            note.append("- 텍스트 중간에 `").append(SECTION_START_BOUNDARY)
+                    .append("` 라는 줄이 있습니다. 그 줄 앞의 내용은 '이전 섹션의 끝부분'이 이어져 들어온 것입니다.\n");
+        }
+        if (hasTail) {
+            note.append("- 텍스트 중간에 `").append(SECTION_END_BOUNDARY)
+                    .append("` 라는 줄이 있습니다. 그 줄 뒤의 내용은 '다음 섹션의 시작부분'이 미리 들어온 것입니다.\n");
+        }
+        note.append("- 이 경계 마커 줄(들)은 절대 삭제·수정·번역·이동·복제하지 말고, 위치 그대로 각각 한 번씩 단독 줄로 그대로 출력하세요.\n");
+        note.append("- 마커 바깥의 텍스트도 평소처럼 교정하세요. 단, 마커를 사이에 두고 양쪽 내용을 서로 합치거나 문장을 이어붙이지 마세요.\n");
+        note.append("- 코드/로그가 마커를 넘어 이어지는 것으로 보이면, 마커는 그대로 둔 채 마커 양쪽의 코드를 각각 올바르게 코드 블록(```)으로 감싸세요.\n");
+        note.append("- 그 외에는 마커를 포함한 교정 결과 전체를 반환하세요. RESULT 같은 다른 마커나 설명은 절대 추가하지 마세요.");
+        return note.toString();
     }
 
     /** Strips any pre-existing occurrence of a prompt-framing marker from raw input text, in case a document already happens to contain one of these tokens verbatim. */
     private static String stripReservedMarkers(String text) {
         return text.replace("[/DOCUMENT]", "")
                 .replace(SECTION_START_BOUNDARY, "")
-                .replace(SECTION_END_BOUNDARY, "")
-                .replace(RESULT_START_MARKER, "")
-                .replace(RESULT_END_MARKER, "");
+                .replace(SECTION_END_BOUNDARY, "");
     }
 
     /**
-     * First {@code maxLines} non-blank lines of {@code section} — forward (lookahead) read-only
-     * boundary context. Blank/whitespace-only lines are skipped entirely (not counted, not
+     * First {@code maxLines} non-blank lines of {@code section} — used as the next section's
+     * tail-overlap context. Blank/whitespace-only lines are skipped entirely (not counted, not
      * included): a section that opens with several empty lines shouldn't burn the line budget on
      * nothing. Package-private for unit testing.
      */
@@ -480,8 +608,8 @@ public class MarkdownCorrectionService {
     }
 
     /**
-     * Last {@code maxLines} non-blank lines of {@code section}, in original reading order —
-     * backward (lookbehind) read-only boundary context. Same blank-line skipping as
+     * Last {@code maxLines} non-blank lines of {@code section}, in original reading order — used as
+     * the previous section's head-overlap context. Same blank-line skipping as
      * {@link #leadingNonBlankLines}. Package-private for unit testing.
      */
     static String trailingNonBlankLines(String section, int maxLines) {
