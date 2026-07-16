@@ -21,6 +21,7 @@ import org.apache.poi.xslf.usermodel.XSLFPictureData;
 import org.apache.poi.xslf.usermodel.XSLFPictureShape;
 import org.apache.poi.xslf.usermodel.XSLFShape;
 import org.apache.poi.xslf.usermodel.XSLFSlide;
+import org.apache.poi.xslf.usermodel.XSLFTable;
 import org.apache.poi.xslf.usermodel.XSLFTextBox;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -65,21 +66,27 @@ import static org.mockito.Mockito.when;
  */
 class PptxImageExtractorTest {
 
-    // 기존 하드코딩 상수와 동일한 기본값(30pt/15pt/merge=true)으로 대부분의 테스트를 실행한다.
-    private final PptxImageExtractor extractor = extractorWith(30.0, 15.0, true);
+    // 아래 대부분 테스트는 근접 클러스터링 경로를 검증하므로 rasterize-shapes=true로 실행한다
+    // (프로덕션 기본값은 false — 클러스터링 안 함. false 기본 동작·표 합성은 별도 테스트에서 검증).
+    private final PptxImageExtractor extractor = extractorWith(30.0, 15.0, true, true);
     private Path pptxPath;
     private Path imagesDir;
 
     /** app.pptx-image.* 설정값을 다르게 주입한 추출기를 만든다 — 옵션화된 값들이 실제로 동작을 바꾸는지 검증용. */
     private static PptxImageExtractor extractorWith(double minShapeDimensionPt, double clusterProximityPaddingPt) {
-        return extractorWith(minShapeDimensionPt, clusterProximityPaddingPt, true);
+        return extractorWith(minShapeDimensionPt, clusterProximityPaddingPt, true, true);
     }
 
     private static PptxImageExtractor extractorWith(double minShapeDimensionPt, double clusterProximityPaddingPt,
                                                       boolean mergeAnnotatedPictures) {
+        return extractorWith(minShapeDimensionPt, clusterProximityPaddingPt, mergeAnnotatedPictures, true);
+    }
+
+    private static PptxImageExtractor extractorWith(double minShapeDimensionPt, double clusterProximityPaddingPt,
+                                                      boolean mergeAnnotatedPictures, boolean rasterizeShapes) {
         AppProperties props = mock(AppProperties.class);
         when(props.pptxImageSafe()).thenReturn(new AppProperties.PptxShapeExtractionConfig(
-                minShapeDimensionPt, clusterProximityPaddingPt, mergeAnnotatedPictures));
+                minShapeDimensionPt, clusterProximityPaddingPt, mergeAnnotatedPictures, rasterizeShapes));
         return new PptxImageExtractor(props);
     }
 
@@ -632,6 +639,149 @@ class PptxImageExtractorTest {
         assertThat(result).containsKey(1);
         String fileName = fileNameOf(result.get(1).get(0));
         assertThat(containsNonWhitePixel(imagesDir.resolve(fileName))).isTrue();
+    }
+
+    // ── rasterize-shapes 플래그 (기본 false: 느슨한 도형 클러스터링 안 함) ──────────────
+
+    @Test
+    @DisplayName("rasterize-shapes=false(기본): 아무것에도 안 겹친 느슨한 단일 도형은 이미지로 뽑히지 않는다")
+    void rasterizeFalse_looseStandaloneShapeIsNotRasterized() throws IOException {
+        writePptx(pptx -> {
+            XSLFSlide slide = pptx.createSlide();
+            XSLFAutoShape shape = slide.createAutoShape();
+            shape.setAnchor(new Rectangle2D.Double(0, 0, 100, 50));
+            shape.setFillColor(Color.BLUE);
+        });
+
+        PptxImageExtractor def = extractorWith(30.0, 15.0, true, false);
+        Map<Integer, List<String>> result = def.extract(pptxPath, "doc1", imagesDir);
+
+        assertThat(result).doesNotContainKey(1); // 클러스터링 없음 → 느슨한 도형은 드롭
+    }
+
+    @Test
+    @DisplayName("rasterize-shapes=false(기본): 겹친 느슨한 도형들도 하나로 병합되지 않고 전부 드롭된다")
+    void rasterizeFalse_overlappingLooseShapesDoNotMerge() throws IOException {
+        writePptx(pptx -> {
+            XSLFSlide slide = pptx.createSlide();
+            XSLFAutoShape a = slide.createAutoShape();
+            a.setAnchor(new Rectangle2D.Double(0, 0, 100, 50));
+            a.setFillColor(Color.BLUE);
+            XSLFAutoShape b = slide.createAutoShape();
+            b.setAnchor(new Rectangle2D.Double(40, 20, 100, 50)); // a와 겹침
+            b.setFillColor(Color.GREEN);
+        });
+
+        PptxImageExtractor def = extractorWith(30.0, 15.0, true, false);
+        Map<Integer, List<String>> result = def.extract(pptxPath, "doc1", imagesDir);
+
+        assertThat(result).doesNotContainKey(1); // 겹쳐도 병합 안 함 — 둘 다 드롭
+    }
+
+    @Test
+    @DisplayName("rasterize-shapes=true: 겹친 느슨한 도형들은 기존대로 하나의 다이어그램 이미지로 병합된다")
+    void rasterizeTrue_overlappingLooseShapesMergeIntoOne() throws IOException {
+        writePptx(pptx -> {
+            XSLFSlide slide = pptx.createSlide();
+            XSLFAutoShape a = slide.createAutoShape();
+            a.setAnchor(new Rectangle2D.Double(0, 0, 100, 50));
+            a.setFillColor(Color.BLUE);
+            XSLFAutoShape b = slide.createAutoShape();
+            b.setAnchor(new Rectangle2D.Double(40, 20, 100, 50));
+            b.setFillColor(Color.GREEN);
+        });
+
+        PptxImageExtractor on = extractorWith(30.0, 15.0, true, true);
+        Map<Integer, List<String>> result = on.extract(pptxPath, "doc1", imagesDir);
+
+        assertThat(result).containsKey(1);
+        assertThat(result.get(1)).hasSize(1); // union-find 클러스터링 → 한 장
+    }
+
+    @Test
+    @DisplayName("rasterize-shapes=false(기본)여도 그룹(Ctrl+G)은 항상 한 장의 이미지로 유지된다")
+    void rasterizeFalse_groupIsStillRasterizedStandalone() throws IOException {
+        writePptx(pptx -> {
+            XSLFSlide slide = pptx.createSlide();
+            XSLFGroupShape group = slide.createGroup();
+            Rectangle2D bounds = new Rectangle2D.Double(0, 0, 100, 100);
+            group.setAnchor(bounds);
+            group.setInteriorAnchor(bounds);
+            XSLFAutoShape inner = group.createAutoShape();
+            inner.setAnchor(new Rectangle2D.Double(10, 10, 60, 60));
+            inner.setFillColor(Color.BLUE);
+        });
+
+        PptxImageExtractor def = extractorWith(30.0, 15.0, true, false);
+        Map<Integer, List<String>> result = def.extract(pptxPath, "doc1", imagesDir);
+
+        assertThat(result).containsKey(1);
+        assertThat(result.get(1)).hasSize(1);
+        assertThat(containsNonWhitePixel(imagesDir.resolve(fileNameOf(result.get(1).get(0))))).isTrue();
+    }
+
+    @Test
+    @DisplayName("사진+주석도형 병합은 rasterize-shapes와 무관하게 동작한다 (기본 false에서도 합성됨)")
+    void pictureAnnotationMergeIsIndependentOfRasterizeShapes() throws IOException {
+        byte[] realPng = renderPngBytes(Color.RED, 100, 100);
+        writePptx(pptx -> {
+            XSLFSlide slide = pptx.createSlide();
+            XSLFPictureData pd = pptx.addPicture(realPng, PictureData.PictureType.PNG);
+            XSLFPictureShape pic = slide.createPicture(pd);
+            pic.setAnchor(new Rectangle2D.Double(0, 0, 100, 100));
+            XSLFAutoShape mark = slide.createAutoShape();
+            mark.setAnchor(new Rectangle2D.Double(20, 20, 40, 40)); // 사진 위에 겹침
+            mark.setFillColor(Color.BLUE);
+        });
+
+        // merge=true, rasterize-shapes=false(기본) — 그래도 사진+주석은 앵커 기반으로 합성되어야 함
+        PptxImageExtractor def = extractorWith(30.0, 15.0, true, false);
+        Map<Integer, List<String>> result = def.extract(pptxPath, "doc1", imagesDir);
+
+        assertThat(result).containsKey(1);
+        assertThat(result.get(1)).hasSize(1); // 사진+주석 = 합성 1장
+        assertThat(fileNameOf(result.get(1).get(0))).isEqualTo("s1_img1.png"); // 원본이 아니라 래스터라이즈본
+    }
+
+    @Test
+    @DisplayName("표 위에 겹친 시드 도형이 있으면 표+도형이 하나의 합성 이미지로 만들어진다 (rasterize-shapes=false에서도)")
+    void tableWithOverlappingSeedShapeCompositesIntoOneImage() throws IOException {
+        writePptx(pptx -> {
+            XSLFSlide slide = pptx.createSlide();
+            XSLFTable table = slide.createTable(2, 2);
+            table.setAnchor(new Rectangle2D.Double(0, 0, 200, 100));
+            table.getCell(0, 0).setText("A");
+            table.getCell(0, 1).setText("B");
+
+            XSLFAutoShape mark = slide.createAutoShape();
+            mark.setAnchor(new Rectangle2D.Double(20, 20, 50, 40)); // 표 영역 위에 겹침
+            mark.setFillColor(Color.RED);
+        });
+
+        PptxImageExtractor def = extractorWith(30.0, 15.0, true, false);
+        Map<Integer, List<String>> result = def.extract(pptxPath, "doc1", imagesDir);
+
+        assertThat(result).containsKey(1);
+        assertThat(result.get(1)).hasSize(1); // 표+도형 합성 1장 (표는 별도로 MD 파이프 표로도 유지 — 변환기 담당)
+        String fileName = fileNameOf(result.get(1).get(0));
+        assertThat(fileName).isEqualTo("s1_img1.png");
+        assertThat(containsNonWhitePixel(imagesDir.resolve(fileName))).isTrue();
+    }
+
+    @Test
+    @DisplayName("표 위에 겹친 도형이 없으면 표는 이미지로 만들어지지 않는다 (MD 파이프 표로만)")
+    void tableWithoutOverlappingShapeProducesNoImage() throws IOException {
+        writePptx(pptx -> {
+            XSLFSlide slide = pptx.createSlide();
+            XSLFTable table = slide.createTable(2, 2);
+            table.setAnchor(new Rectangle2D.Double(0, 0, 200, 100));
+            table.getCell(0, 0).setText("A");
+        });
+
+        PptxImageExtractor def = extractorWith(30.0, 15.0, true, false);
+        Map<Integer, List<String>> result = def.extract(pptxPath, "doc1", imagesDir);
+
+        assertThat(result).doesNotContainKey(1); // 겹친 도형 없음 → 표 이미지 안 만듦
     }
 
     @Test

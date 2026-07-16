@@ -327,7 +327,7 @@ rag_java/
 - **DUAL 모드** — 로컬·외부 LLM 병렬 실행, 두 답변을 탭으로 비교
 - **속도 제한** — Bucket4j + Caffeine 유저별 토큰버킷; 429 `RAG-RATE-001` + `Retry-After` 헤더; `app.rate-limit.*`로 설정
 - **감사 로그** — Logback 롤링 파일에 구조화된 이벤트 기록; `app.audit.*`로 설정
-- **이미지 처리 파이프라인** — PDF/PPTX/DOCX 이미지 추출 → `data/images/{imageId}/` 저장(문서 SHA-256 기반 해시 키 — 문서 자체의 `docId`와는 별개이며, 긴 파일명이 이미지마다 반복 저장되는 것을 방지); PPTX에서 사진 위/근처에 강조 원·화살표·말풍선 같은 주석 도형이 있으면 기본적으로 하나의 합성 이미지로 병합(`app.pptx-image.merge-annotated-pictures`); DOCX도 사진과 같은 문단의 레거시 VML 주석 도형(사각형/원/선)을 하나로 병합(`app.docx-image.merge-annotated-shapes` — POI가 DOCX 도형 좌표를 노출하지 않아 같은 문단 근사 방식); 검색 시점 Lazy Vision 설명 생성 (SQLite 캐시); 답변 버블에 이미지 썸네일 표시
+- **이미지 처리 파이프라인** — PDF/PPTX/DOCX 이미지 추출 → `data/images/{imageId}/` 저장(문서 SHA-256 기반 해시 키 — 문서 자체의 `docId`와는 별개이며, 긴 파일명이 이미지마다 반복 저장되는 것을 방지); PPTX에서 사진 위에 강조 원·화살표 같은 주석 도형이 겹쳐 있으면 하나의 합성 이미지로 병합(`app.pptx-image.merge-annotated-pictures`), 표 위에 겹친 주석 도형도 표+도형 합성(표는 MD 표로도 유지)하며 실제 Ctrl+G 그룹·SmartArt는 각 한 장으로 유지; 앵커에 안 겹친 느슨한 도형끼리의 병합은 `app.pptx-image.rasterize-shapes=true`일 때만(기본 off). DOCX도 사진과 같은 문단의 레거시 VML 주석 도형(사각형/원/선)을 하나로 병합(`app.docx-image.merge-annotated-shapes` — POI가 DOCX 도형 좌표를 노출하지 않아 같은 문단 근사 방식); 검색 시점 Lazy Vision 설명 생성 (SQLite 캐시); 답변 버블에 이미지 썸네일 표시
 - **이미지 유형 분류** — diagram / screenshot / chart / photo / other 분류 후 유형별 전용 Vision 프롬프트 적용
 - **스캔 PDF OCR** — Tesseract OCR (kor+eng)로 텍스트 없는 페이지 처리 (`app.image-description.ocr-enabled=true`)
 - **EMF/WMF 변환** — DOCX Windows Metafile 이미지를 Batik(EMF) 또는 LibreOffice headless(WMF)로 PNG 변환

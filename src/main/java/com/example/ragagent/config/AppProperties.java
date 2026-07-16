@@ -138,7 +138,8 @@ public record AppProperties(
     public record PptxShapeExtractionConfig(
             Double minShapeDimensionPt,       // 가로/세로 중 큰 쪽이 이 값 미만이면 아이콘/구분선으로 보고 제외 (기본 30)
             Double clusterProximityPaddingPt, // 클러스터링 근접 판정 시 바운딩박스에 적용할 바깥쪽 패딩 (기본 15)
-            Boolean mergeAnnotatedPictures    // true(기본): 사진도 근접 클러스터링에 참여해 겹친 주석 도형과 합성 / false: PPTX에서 실제 그룹(XSLFGroupShape)으로 묶인 경우만 합성, 그 외 사진은 항상 원본 그대로 추출
+            Boolean mergeAnnotatedPictures,   // true(기본): 사진 위/근처에 겹친 시드 도형을 사진과 하나로 합성(앵커 기반, rasterizeShapes와 독립) / false: 사진은 항상 원본 그대로 추출
+            Boolean rasterizeShapes           // 느슨한(아무 앵커에도 안 겹친) 도형끼리의 근접 클러스터링 — true: 겹친 도형을 다이어그램 한 장으로 병합(구 기본 동작) / false(기본): 클러스터링 안 함(느슨한 단일 도형은 이미지로 안 뽑음). 그룹/SmartArt/표+도형 합성은 이 값과 무관하게 항상 유지
     ) {}
 
     /**
@@ -423,7 +424,11 @@ public record AppProperties(
                 ? pptxImage.clusterProximityPaddingPt() : 15.0;
         boolean mergeAnnotatedPictures = (pptxImage != null && pptxImage.mergeAnnotatedPictures() != null)
                 ? pptxImage.mergeAnnotatedPictures() : true;
-        return new PptxShapeExtractionConfig(minDim, padding, mergeAnnotatedPictures);
+        // rasterizeShapes defaults to false — loose overlapping shapes no longer auto-merge into
+        // one blob; only groups/SmartArt/table+shape/picture+annotation composites survive.
+        boolean rasterizeShapes = (pptxImage != null && pptxImage.rasterizeShapes() != null)
+                && pptxImage.rasterizeShapes();
+        return new PptxShapeExtractionConfig(minDim, padding, mergeAnnotatedPictures, rasterizeShapes);
     }
 
     /**
