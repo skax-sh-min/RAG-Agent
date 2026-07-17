@@ -71,6 +71,38 @@ class ChromaVectorStoreProviderTest {
         assertThat(req.getSimilarityThreshold()).isEqualTo(0.0);
     }
 
+    /**
+     * 회귀 방지 — search-similarity-threshold는 생성자에서 캐싱되면 안 된다. 과거 버그: 생성 시점
+     * 값을 {@code private final double} 필드에 저장해, {@code /settings} override를 걸어도 UI에는
+     * "적용됨"으로 보이지만 재기동 전까지 실제 검색에는 반영되지 않았다. 이 테스트는 생성 이후에
+     * mock의 스텁 값을 바꿔(=런타임에 override 값이 바뀐 상황을 재현) 다음 {@code search()} 호출이
+     * 새 값을 즉시 읽는지 검증한다 — 필드 캐싱이 부활하면 이 테스트가 실패한다.
+     */
+    @Test
+    @DisplayName("회귀 방지 — 생성 이후 threshold가 바뀌면 다음 search() 호출에 즉시 반영된다(필드 캐싱 금지)")
+    void threshold_readFreshOnEverySearch_notCachedAtConstruction() {
+        VectorStoreRegistry registry = mock(VectorStoreRegistry.class);
+        VectorStore store = mock(VectorStore.class);
+        when(registry.getStore(any(), any())).thenReturn(store);
+        when(store.similaritySearch(any(SearchRequest.class))).thenReturn(List.of());
+
+        AppProperties props = mock(AppProperties.class);
+        when(props.searchSimilarityThresholdSafe()).thenReturn(0.3);
+        ChromaVectorStoreProvider provider = new ChromaVectorStoreProvider(
+                registry, mock(ChromaApi.class), mock(EmbeddingModel.class), new ObjectMapper(), props);
+
+        provider.search("owner", "질문", "latest", 7);
+        // 생성 이후 스텁 값을 바꿔 "/settings에서 override가 갱신된 상황"을 재현
+        when(props.searchSimilarityThresholdSafe()).thenReturn(0.8);
+        provider.search("owner", "질문", "latest", 7);
+
+        ArgumentCaptor<SearchRequest> captor = ArgumentCaptor.forClass(SearchRequest.class);
+        verify(store, org.mockito.Mockito.times(2)).similaritySearch(captor.capture());
+        List<SearchRequest> requests = captor.getAllValues();
+        assertThat(requests.get(0).getSimilarityThreshold()).isEqualTo(0.3);
+        assertThat(requests.get(1).getSimilarityThreshold()).isEqualTo(0.8);
+    }
+
     // ── batched multi-query search ───────────────────────────────────────
 
     private ChromaVectorStoreProvider batchProvider(EmbeddingModel embeddingModel, ChromaApi chromaApi, double threshold) {

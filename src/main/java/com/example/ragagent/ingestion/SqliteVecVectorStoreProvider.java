@@ -88,7 +88,12 @@ public class SqliteVecVectorStoreProvider implements VectorStoreProvider {
     // doesn't evict query-cache entries that would otherwise serve repeated search questions.
     private final EmbeddingModel indexingEmbeddingModel;
     private final ObjectMapper objectMapper;
-    private final double similarityThreshold;
+    // Hot-editable (search family, SettingsKeys.SEARCH_SIMILARITY_THRESHOLD) — read fresh via
+    // props.searchSimilarityThresholdSafe() in searchByEmbedding(), never cached in a field. Used
+    // to be cached here at construction, which silently defeated the /settings override: the page
+    // showed the new value as "applied" but real searches kept using the startup value until a
+    // restart.
+    private final AppProperties props;
     // §10.8.3 — lazily built from jdbc.getDataSource() (never null in real wiring; null only for
     // fully-mocked JdbcTemplate test doubles, where the transaction wrap is harmlessly skipped —
     // see addBatches()).
@@ -105,7 +110,7 @@ public class SqliteVecVectorStoreProvider implements VectorStoreProvider {
         this.embeddingModel = embeddingModel;
         this.indexingEmbeddingModel = CachingEmbeddingModel.unwrapForIndexing(embeddingModel);
         this.objectMapper = objectMapper;
-        this.similarityThreshold = props.searchSimilarityThresholdSafe();
+        this.props = props;
     }
 
     @Override
@@ -257,6 +262,7 @@ public class SqliteVecVectorStoreProvider implements VectorStoreProvider {
      * {@code topK} that pass the threshold is exactly "closest topK above threshold".
      */
     private List<Document> searchByEmbedding(float[] embedding, String version, int topK) {
+        double similarityThreshold = props.searchSimilarityThresholdSafe();
         byte[] vector = toVectorBlob(embedding);
         int fetchK = similarityThreshold > 0.0
                 ? (int) Math.ceil(topK * THRESHOLD_OVERFETCH_MULTIPLIER) : topK;

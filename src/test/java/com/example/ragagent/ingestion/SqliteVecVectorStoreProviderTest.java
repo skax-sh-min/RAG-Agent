@@ -91,6 +91,37 @@ class SqliteVecVectorStoreProviderTest {
         assertThat(kCaptor.getValue()).isEqualTo(7);
     }
 
+    /**
+     * 회귀 방지 — search-similarity-threshold는 생성자에서 캐싱되면 안 된다(Chroma 쪽과 동일한 과거
+     * 버그). 생성 이후 mock 스텁 값을 바꿔(={@code /settings} override가 런타임에 바뀐 상황) 다음
+     * {@code search()} 호출의 과조회 배수(threshold 활성 여부의 관찰 가능한 대리 신호, fetchK)가
+     * 즉시 갱신되는지로 검증한다.
+     */
+    @Test
+    @DisplayName("회귀 방지 — 생성 이후 threshold가 바뀌면 다음 search() 호출에 즉시 반영된다(필드 캐싱 금지)")
+    void threshold_readFreshOnEverySearch_notCachedAtConstruction() {
+        when(embeddingModel.embed(anyString())).thenReturn(new float[]{0.1f});
+        when(jdbc.query(anyString(), any(org.springframework.jdbc.core.RowMapper.class), any(), any(), any()))
+                .thenReturn(List.of());
+
+        AppProperties props = mock(AppProperties.class);
+        when(props.searchSimilarityThresholdSafe()).thenReturn(0.0); // 시작: 비활성 → 과조회 없음
+        SqliteVecVectorStoreProvider provider =
+                new SqliteVecVectorStoreProvider(jdbc, embeddingModel, new ObjectMapper(), props);
+
+        provider.search("u", "질문", "latest", 7);
+        // 생성 이후 스텁 값을 바꿔 "/settings에서 override가 갱신된 상황"을 재현
+        when(props.searchSimilarityThresholdSafe()).thenReturn(0.5); // 활성화 → 과조회(×2) 기대
+        provider.search("u", "질문", "latest", 7);
+
+        ArgumentCaptor<Integer> kCaptor = ArgumentCaptor.forClass(Integer.class);
+        verify(jdbc, times(2)).query(anyString(), any(org.springframework.jdbc.core.RowMapper.class),
+                any(), kCaptor.capture(), any());
+        List<Integer> fetchKs = kCaptor.getAllValues();
+        assertThat(fetchKs.get(0)).isEqualTo(7);  // threshold=0.0일 때는 과조회 없음
+        assertThat(fetchKs.get(1)).isEqualTo(14); // threshold=0.5로 바뀐 뒤에는 ceil(7 * 2.0)
+    }
+
     @Test
     @DisplayName("search — 결과가 topK보다 많아도 topK로 잘라낸다")
     void search_capsResultsAtTopKEvenWhenMoreSurvive() {

@@ -63,7 +63,12 @@ public class ChromaVectorStoreProvider implements VectorStoreProvider {
     // doesn't evict query-cache entries that would otherwise serve repeated search questions.
     private final EmbeddingModel indexingEmbeddingModel;
     private final ObjectMapper objectMapper;
-    private final double similarityThreshold;
+    // Hot-editable (search family, SettingsKeys.SEARCH_SIMILARITY_THRESHOLD) — read fresh via
+    // props.searchSimilarityThresholdSafe() in search()/searchBatch(), never cached in a field.
+    // Used to be cached here at construction, which silently defeated the /settings override:
+    // the page showed the new value as "applied" but real searches kept using the startup value
+    // until a restart.
+    private final AppProperties props;
 
     private final FilterExpressionConverter filterConverter = new ChromaFilterExpressionConverter();
     private final ConcurrentHashMap<String, String> collectionIdCache = new ConcurrentHashMap<>();
@@ -80,11 +85,12 @@ public class ChromaVectorStoreProvider implements VectorStoreProvider {
         this.embeddingModel = embeddingModel;
         this.indexingEmbeddingModel = CachingEmbeddingModel.unwrapForIndexing(embeddingModel);
         this.objectMapper = objectMapper;
-        this.similarityThreshold = props.searchSimilarityThresholdSafe();
+        this.props = props;
     }
 
     @Override
     public List<Document> search(String userId, String query, String version, int topK) {
+        double similarityThreshold = props.searchSimilarityThresholdSafe();
         VectorStore store = registry.getStore(userId, version);
         FilterExpressionBuilder b = new FilterExpressionBuilder();
         SearchRequest.Builder request = SearchRequest.builder()
@@ -109,6 +115,7 @@ public class ChromaVectorStoreProvider implements VectorStoreProvider {
     @Override
     public List<List<Document>> searchBatch(String userId, List<String> queries, String version, int topK) {
         if (queries == null || queries.isEmpty()) return List.of();
+        double similarityThreshold = props.searchSimilarityThresholdSafe();
         String collectionId = resolveCollectionId(userId, version);
         if (collectionId == null) {
             return queries.stream().map(q -> List.<Document>of()).toList();
@@ -121,7 +128,7 @@ public class ChromaVectorStoreProvider implements VectorStoreProvider {
         // includes EMBEDDINGS, which at rerank-scale is ~1MB of dead JSON per search).
         var request = new ChromaApi.QueryRequest(embeddings, fetchK, where, RESULT_INCLUDE);
         var response = chromaApi.queryCollection(TENANT, DATABASE, collectionId, request);
-        return mapPerQuery(response, topK);
+        return mapPerQuery(response, topK, similarityThreshold);
     }
 
     @Override
@@ -258,7 +265,7 @@ public class ChromaVectorStoreProvider implements VectorStoreProvider {
      * pre-sorted by ascending distance, so taking the first {@code topK} that pass the threshold
      * is exactly "closest topK above threshold".
      */
-    private List<List<Document>> mapPerQuery(ChromaApi.QueryResponse resp, int topK) {
+    private List<List<Document>> mapPerQuery(ChromaApi.QueryResponse resp, int topK, double similarityThreshold) {
         if (resp == null || resp.ids() == null) return List.of();
         List<List<Document>> out = new ArrayList<>(resp.ids().size());
         for (int i = 0; i < resp.ids().size(); i++) {

@@ -363,9 +363,14 @@ public record AppProperties(
     public IndexingConfig indexingSafe() {
         // max-concurrent-files and max-concurrent-llm-calls are hot-editable (fold the overrides in
         // here — every consumer reads them fresh per operation: DocumentIndexer's keyword gate,
-        // MarkdownCorrectionService.correct() and LazyVisionService — so the next indexing sees a
-        // /settings change without a restart). None of them may cache these in a field.
-        // timeout/batch stay fixed (no consumer re-reads them per operation).
+        // MarkdownCorrectionService.correct(), TextToMarkdownService.convert() and
+        // LazyVisionService — so the next indexing sees a /settings change without a restart). None
+        // of them may cache these in a field.
+        // timeout/batch are ALSO read fresh per call (KeywordExtractor reads props.indexingSafe()
+        // directly, not cached), but they stay outside SettingsKeys/HOT_EDITABLE — no override hook
+        // exists for them here, so a /settings entry for them would have nothing to write to. Not a
+        // caching limitation like similarity-threshold used to be (see the two VectorStoreProvider
+        // impls) — just not wired up as hot-editable yet.
         // Fallbacks mirror the application.properties defaults (FILES=1, LLM=3) so a missing/zero
         // config lands on the same conservative peak (FILES × LLM) the shipped config does — they
         // used to drift (4/8), silently tripling the peak whenever the config block was absent.
