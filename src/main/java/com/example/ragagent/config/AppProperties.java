@@ -366,17 +366,20 @@ public record AppProperties(
         // MarkdownCorrectionService.correct() and LazyVisionService — so the next indexing sees a
         // /settings change without a restart). None of them may cache these in a field.
         // timeout/batch stay fixed (no consumer re-reads them per operation).
+        // Fallbacks mirror the application.properties defaults (FILES=1, LLM=3) so a missing/zero
+        // config lands on the same conservative peak (FILES × LLM) the shipped config does — they
+        // used to drift (4/8), silently tripling the peak whenever the config block was absent.
         Integer filesOverride = overrideInt(SettingsKeys.INDEXING_MAX_CONCURRENT_FILES);
         Integer llmOverride   = overrideInt(SettingsKeys.INDEXING_MAX_CONCURRENT_LLM);
         if (indexing == null) {
-            int f = (filesOverride != null && filesOverride > 0) ? filesOverride : 4;
-            int l = (llmOverride != null && llmOverride > 0) ? llmOverride : 8;
+            int f = (filesOverride != null && filesOverride > 0) ? filesOverride : 1;
+            int l = (llmOverride != null && llmOverride > 0) ? llmOverride : 3;
             return new IndexingConfig(f, l, 30, 4);
         }
         int files   = (filesOverride != null && filesOverride > 0) ? filesOverride
-                    : (indexing.maxConcurrentFiles() > 0 ? indexing.maxConcurrentFiles() : 4);
+                    : (indexing.maxConcurrentFiles() > 0 ? indexing.maxConcurrentFiles() : 1);
         int llm     = (llmOverride != null && llmOverride > 0) ? llmOverride
-                    : (indexing.maxConcurrentLlmCalls() > 0 ? indexing.maxConcurrentLlmCalls() : 8);
+                    : (indexing.maxConcurrentLlmCalls() > 0 ? indexing.maxConcurrentLlmCalls() : 3);
         int timeout = indexing.keywordTimeoutSeconds() > 0 ? indexing.keywordTimeoutSeconds() : 30;
         int batch   = indexing.keywordBatchSize() > 0      ? indexing.keywordBatchSize()      : 4;
         return new IndexingConfig(files, llm, timeout, batch);

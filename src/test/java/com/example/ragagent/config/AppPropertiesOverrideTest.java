@@ -147,9 +147,9 @@ class AppPropertiesOverrideTest {
     @DisplayName("indexingSafe() — indexing 설정이 없어도(널 분기) 동시성 오버라이드가 반영된다")
     void indexingOverride_nullIndexingConfig() {
         bind();
-        AppProperties p = base(); // indexing == null
-        assertThat(p.indexingSafe().maxConcurrentFiles()).isEqualTo(4);
-        assertThat(p.indexingSafe().maxConcurrentLlmCalls()).isEqualTo(8);
+        AppProperties p = base(); // indexing == null → application.properties 기본값과 동일한 폴백
+        assertThat(p.indexingSafe().maxConcurrentFiles()).isEqualTo(1);
+        assertThat(p.indexingSafe().maxConcurrentLlmCalls()).isEqualTo(3);
 
         overrides.put(SettingsKeys.INDEXING_MAX_CONCURRENT_FILES, "6");
         overrides.put(SettingsKeys.INDEXING_MAX_CONCURRENT_LLM, "2");

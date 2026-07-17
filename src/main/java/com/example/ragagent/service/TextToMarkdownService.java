@@ -1,5 +1,6 @@
 package com.example.ragagent.service;
 
+import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.exception.LlmProviderExhaustedException;
 import com.example.ragagent.llm.BackgroundUsage;
 import com.example.ragagent.llm.LlmRouter;
@@ -35,13 +36,14 @@ import java.util.function.BiConsumer;
 public class TextToMarkdownService {
 
     private static final Logger log = LoggerFactory.getLogger(TextToMarkdownService.class);
-    private static final int MAX_CONCURRENT = 3;
     private static final int MAX_BLOCK_CHARS = 6_000;
 
     private final LlmRouter llmRouter;
+    private final AppProperties props;
 
-    public TextToMarkdownService(LlmRouter llmRouter) {
+    public TextToMarkdownService(LlmRouter llmRouter, AppProperties props) {
         this.llmRouter = llmRouter;
+        this.props = props;
     }
 
     /** {@link #convert(String, String, BiConsumer)} without progress callback. */
@@ -63,7 +65,13 @@ public class TextToMarkdownService {
         int total = blocks.size();
         log.debug("[TXT2MD] 블록 {}개 분할 완료", total);
 
-        Semaphore gate = new Semaphore(MAX_CONCURRENT);
+        // Hot-editable (indexing family) — read fresh per conversion so a /settings override applies
+        // on the next indexing without a restart, same as DocumentIndexer's keyword gate,
+        // MarkdownCorrectionService.correct() and LazyVisionService. Never cache this in a field.
+        int maxConcurrent = Math.max(1, props.indexingSafe().maxConcurrentLlmCalls());
+        log.debug("[TXT2MD] 설정: maxConcurrent={}", maxConcurrent);
+
+        Semaphore gate = new Semaphore(maxConcurrent);
         AtomicInteger doneCount = new AtomicInteger(0);
         List<String> structured;
         try (var exec = Executors.newVirtualThreadPerTaskExecutor()) {

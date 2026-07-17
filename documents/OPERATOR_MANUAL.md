@@ -235,8 +235,8 @@ copy .env.example .env
 
 | 변수 | 기본값 | 권장 범위 | 설명 |
 |------|--------|----------|------|
-| `INDEXING_MAX_FILES` | `3` | 1 ~ 8 | 파일 병렬 인덱싱 워커 수 |
-| `INDEXING_MAX_LLM` | `4` | 1 ~ 16 | 인덱싱 중 LLM 병렬 호출 수 (키워드 추출) |
+| `INDEXING_MAX_FILES` | `1` | 1 ~ 8 | 파일 병렬 인덱싱 워커 수. **인덱싱 LLM 동시 호출 피크 ≈ `INDEXING_MAX_FILES` × `INDEXING_MAX_LLM`** 이므로, 기본값 `1`은 피크를 정확히 `INDEXING_MAX_LLM`으로 고정한다(§6.5 주석 참고). 올리면 처리량은 늘지만 피크가 곱으로 커진다 |
+| `INDEXING_MAX_LLM` | `3` | 1 ~ 16 | 인덱싱 중 LLM 병렬 호출 수 — 키워드 추출뿐 아니라 MD 교정·TXT 구조화·지연 Vision 설명이 모두 사용. 로컬 LLM 서버의 `--parallel` 값에 맞춘다 |
 | `INDEXING_KEYWORD_TIMEOUT_SECONDS` | `180` | 30 ~ 600 | 청크 키워드 추출 1회당(§10.8.2 배치 시 배치 1회당) 최대 대기 시간. 초과 시 TF fallback |
 | `INDEXING_KEYWORD_BATCH_SIZE` | `4` | 1 ~ 8 | §10.8.2 — 청크 N개를 한 LLM 호출로 묶어 요청(왕복 ≈ ceil(청크수/N)). `1`=배치 없음(청크당 1콜, 이전 동작). 배치가 클수록 응답 길이도 늘어나므로 로컬 모델에서 타임아웃이 잦으면 `INDEXING_KEYWORD_TIMEOUT_SECONDS`를 함께 올리세요 |
 
@@ -1530,7 +1530,12 @@ CPU/메모리 제약이 있는 환경에서는 `INDEXING_MAX_FILES`와 `INDEXING
 | 동시 파일 처리 수 | `app.indexing.max-concurrent-files` | 1 ~ 32 |
 | 동시 LLM 호출 수 | `app.indexing.max-concurrent-llm-calls` (`INDEXING_MAX_LLM`) | 1 ~ 32 |
 
-> **`INDEXING_MAX_LLM`의 적용 범위**: 이 값은 키워드+맥락 추출 전용이 아니라 **인덱싱 계열 LLM 호출의 공통 병렬도**입니다 — 키워드 추출(`DocumentIndexer`), MD 포맷 교정(`MarkdownCorrectionService`), 지연 Vision 설명(`LazyVisionService`)이 모두 이 값을 씁니다. 다만 **세마포어는 소비처마다 별개로 생성**되므로 "앱 전체 동시 LLM 호출 N개"라는 전역 예산이 아닙니다. 같은 파일 안에서는 교정 → 청킹 → 키워드 추출이 순차 단계라 서로 겹치지 않지만, 여러 파일이 병렬(`INDEXING_MAX_FILES`)로 처리되면 단계가 서로 겹칠 수 있으므로 실제 피크 동시 호출 수는 그보다 커질 수 있습니다. 로컬 LLM 서버의 `--parallel` 한도에 맞춰 두 값을 함께 고려하세요. (TXT 구조화 `TextToMarkdownService`만 예외 — 이 값을 쓰지 않고 내부 상수 3으로 고정)
+> **`INDEXING_MAX_LLM`의 적용 범위**: 이 값은 키워드+맥락 추출 전용이 아니라 **인덱싱 계열 LLM 호출의 공통 병렬도**입니다 — 키워드 추출(`DocumentIndexer`), MD 포맷 교정(`MarkdownCorrectionService`), TXT 구조화(`TextToMarkdownService`), 지연 Vision 설명(`LazyVisionService`)이 모두 이 값을 씁니다. 다만 이 값은 "앱 전체 동시 LLM 호출 N개"라는 **전역 예산이 아닙니다**. 소비처마다 규칙이 다릅니다:
+>
+> - **키워드 추출**: `syncDirectory()`가 세마포어를 **1개만 만들어 모든 파일이 공유** → 파일 수와 무관하게 총 `INDEXING_MAX_LLM`개. (파일당 1개씩 배분되는 게 아니라 티켓을 나눠 씁니다)
+> - **MD 교정 / TXT 구조화**: 호출마다 **자기 세마포어를 새로 생성** → 파일 병렬 시 곱으로 증가.
+>
+> 같은 파일 안에서는 구조화/교정 → 청킹 → 키워드 추출이 순차 단계라 겹치지 않지만, 파일끼리는 단계가 동기화되지 않아(A는 키워드, B는 교정) 겹칩니다. 결과적으로 **인덱싱 LLM 동시 호출 피크 ≈ `INDEXING_MAX_FILES` × `INDEXING_MAX_LLM`** 입니다 — 예: 3 × 4 = 최대 12. 그래서 기본값을 `INDEXING_MAX_FILES=1`로 두어 피크를 정확히 `INDEXING_MAX_LLM`(기본 3)으로 고정했습니다. 로컬 LLM 서버의 `--parallel` 한도에 맞추려면 `INDEXING_MAX_LLM`을 그 값으로 두고 `INDEXING_MAX_FILES=1`을 유지하세요. 처리량을 위해 `INDEXING_MAX_FILES`를 올린다면 곱이 `--parallel`을 넘지 않는지 확인하세요.
 
 - **"기본값" 버튼**으로 오버라이드를 삭제하면 `application.properties`/환경변수 값으로 정확히 복귀합니다(오버라이드가 있으면 항상 프로퍼티보다 우선).
 - 오버라이드는 **재기동 후에도 유지**됩니다(테이블에 영속). 배포 기본값 자체를 바꾸려면 여전히 환경변수/`application.properties`를 수정하세요 — 오버라이드는 그 위에 얹히는 런타임 조정 레이어입니다.

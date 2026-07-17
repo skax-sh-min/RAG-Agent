@@ -192,8 +192,10 @@ app.llm.providers[5].role=PREMIUM
 app.llm.providers[5].priority=5
 
 # ── 병렬 인덱싱 제어 ──────────────────────────────────────────────
-app.indexing.max-concurrent-files=${INDEXING_MAX_FILES:3}
-app.indexing.max-concurrent-llm-calls=${INDEXING_MAX_LLM:4}
+# 인덱싱 LLM 동시 호출 피크 ≈ FILES × LLM (파일끼리 단계가 겹칠 수 있고, 교정/구조화 세마포어는
+# 파일마다 별개로 생성됨). FILES=1이면 피크가 정확히 LLM 값으로 고정된다.
+app.indexing.max-concurrent-files=${INDEXING_MAX_FILES:1}
+app.indexing.max-concurrent-llm-calls=${INDEXING_MAX_LLM:3}
 # 키워드+맥락 추출 배치 크기(§10.8.2) — 청크 N개를 한 LLM 호출로 묶어 왕복을 ceil(청크수/N)로 절감.
 # 1=배치 없음(청크당 1콜, 이전 동작). 배치가 클수록 응답도 길어지므로 로컬 모델에서 타임아웃이
 # 잦으면 keyword-timeout-seconds도 함께 올린다.
