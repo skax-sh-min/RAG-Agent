@@ -76,7 +76,8 @@ public class SettingsService implements AppProperties.OverrideSource {
             new Spec(SettingsKeys.CHUNK_SIZE,                      Kind.INT,    100, 8000, 50,   "settings.item.chunk-size"),
             new Spec(SettingsKeys.CHUNK_OVERLAP,                   Kind.INT,    0,   2000, 10,   "settings.item.chunk-overlap"),
             new Spec(SettingsKeys.MIN_CHUNK_SIZE,                  Kind.INT,    0,   4000, 10,   "settings.item.min-chunk-size"),
-            new Spec(SettingsKeys.INDEXING_MAX_CONCURRENT_FILES,   Kind.INT,    1,   32,   1,    "settings.item.max-concurrent-files")
+            new Spec(SettingsKeys.INDEXING_MAX_CONCURRENT_FILES,   Kind.INT,    1,   32,   1,    "settings.item.max-concurrent-files"),
+            new Spec(SettingsKeys.INDEXING_MAX_CONCURRENT_LLM,     Kind.INT,    1,   32,   1,    "settings.item.max-concurrent-llm-calls")
     );
 
     private static final Map<String, Spec> SPECS;
@@ -266,14 +267,11 @@ public class SettingsService implements AppProperties.OverrideSource {
         );
     }
 
-    /** Chunking + file-concurrency: hot-editable but they apply on the NEXT indexing / ↺ re-index,
-     *  not the next search (existing chunks are not re-split), hence a distinct group + note.
-     *  max-concurrent-llm-calls stays read-only — background services cache it at construction. */
+    /** Chunking + indexing concurrency: hot-editable but they apply on the NEXT indexing / ↺ re-index,
+     *  not the next search (existing chunks are not re-split), hence a distinct group + note. */
     private List<SettingItem> indexingItems() {
-        List<SettingItem> items = new ArrayList<>(INDEXING_HOT_SPECS.size() + 1);
+        List<SettingItem> items = new ArrayList<>(INDEXING_HOT_SPECS.size());
         for (Spec s : INDEXING_HOT_SPECS) items.add(editableItem(s.key()));
-        items.add(readOnly("settings.item.max-concurrent-llm-calls",
-                Integer.toString(props.indexingSafe().maxConcurrentLlmCalls()), "settings.note.restart"));
         return items;
     }
 
@@ -313,6 +311,7 @@ public class SettingsService implements AppProperties.OverrideSource {
             case SettingsKeys.CHUNK_OVERLAP                   -> Integer.toString(props.chunkOverlapSafe());
             case SettingsKeys.MIN_CHUNK_SIZE                  -> Integer.toString(props.minChunkSizeSafe());
             case SettingsKeys.INDEXING_MAX_CONCURRENT_FILES   -> Integer.toString(props.indexingSafe().maxConcurrentFiles());
+            case SettingsKeys.INDEXING_MAX_CONCURRENT_LLM     -> Integer.toString(props.indexingSafe().maxConcurrentLlmCalls());
             default -> "";
         };
     }

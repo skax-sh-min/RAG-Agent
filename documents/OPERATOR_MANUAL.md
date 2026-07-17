@@ -1528,11 +1528,14 @@ CPU/메모리 제약이 있는 환경에서는 `INDEXING_MAX_FILES`와 `INDEXING
 | 청크 오버랩(자) | `app.chunk-overlap` | 0 ~ 2000 |
 | 최소 청크 크기(자) | `app.min-chunk-size` | 0 ~ 4000 |
 | 동시 파일 처리 수 | `app.indexing.max-concurrent-files` | 1 ~ 32 |
+| 동시 LLM 호출 수 | `app.indexing.max-concurrent-llm-calls` (`INDEXING_MAX_LLM`) | 1 ~ 32 |
+
+> **`INDEXING_MAX_LLM`의 적용 범위**: 이 값은 키워드+맥락 추출 전용이 아니라 **인덱싱 계열 LLM 호출의 공통 병렬도**입니다 — 키워드 추출(`DocumentIndexer`), MD 포맷 교정(`MarkdownCorrectionService`), 지연 Vision 설명(`LazyVisionService`)이 모두 이 값을 씁니다. 다만 **세마포어는 소비처마다 별개로 생성**되므로 "앱 전체 동시 LLM 호출 N개"라는 전역 예산이 아닙니다. 같은 파일 안에서는 교정 → 청킹 → 키워드 추출이 순차 단계라 서로 겹치지 않지만, 여러 파일이 병렬(`INDEXING_MAX_FILES`)로 처리되면 단계가 서로 겹칠 수 있으므로 실제 피크 동시 호출 수는 그보다 커질 수 있습니다. 로컬 LLM 서버의 `--parallel` 한도에 맞춰 두 값을 함께 고려하세요. (TXT 구조화 `TextToMarkdownService`만 예외 — 이 값을 쓰지 않고 내부 상수 3으로 고정)
 
 - **"기본값" 버튼**으로 오버라이드를 삭제하면 `application.properties`/환경변수 값으로 정확히 복귀합니다(오버라이드가 있으면 항상 프로퍼티보다 우선).
 - 오버라이드는 **재기동 후에도 유지**됩니다(테이블에 영속). 배포 기본값 자체를 바꾸려면 여전히 환경변수/`application.properties`를 수정하세요 — 오버라이드는 그 위에 얹히는 런타임 조정 레이어입니다.
 
-**조회 전용(재기동 필요)**: `rerank-enabled`(빈 생성 시점 `@ConditionalOnProperty`로 결정)·쿼리 임베딩 캐시(빈 생성 시점 결정)·`indexing.max-concurrent-llm-calls`(MarkdownCorrectionService 등 백그라운드 서비스가 생성 시점에 캐싱 — 핫 override 시 일부만 반영돼 혼동을 주므로 조회 전용 유지), 임베딩 차원·벡터 스토어 백엔드(DDL/빈 구성). temperature/max-tokens와 기본 라우팅 모드는 현재 조회 전용입니다(전자는 §6.18 선행 필요, 후자는 대화별 라우팅을 채팅 화면에서 설정).
+**조회 전용(재기동 필요)**: `rerank-enabled`(빈 생성 시점 `@ConditionalOnProperty`로 결정)·쿼리 임베딩 캐시(빈 생성 시점 결정), 임베딩 차원·벡터 스토어 백엔드(DDL/빈 구성). temperature/max-tokens와 기본 라우팅 모드는 현재 조회 전용입니다(전자는 §6.18 선행 필요, 후자는 대화별 라우팅을 채팅 화면에서 설정).
 
 **권한**: 조회는 누구나 가능하지만, **수정은 관리자만** 가능합니다(관리 전용 인증 모드 `AUTH_MANAGEMENT_ONLY=true`에서 `/setup` 관리자 로그인 필요 — §9 참조). 수정 UI(입력/버튼)는 비관리자에게 숨겨지며, 서버도 `/admin/settings/**` 경로로 이중 방어합니다. 모든 변경은 감사 로그(`settings.update`/`settings.reset`, 변경 키·이전값·새값)에 남습니다.
 

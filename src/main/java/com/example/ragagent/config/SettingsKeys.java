@@ -47,6 +47,7 @@ public final class SettingsKeys {
     public static final String CHUNK_OVERLAP                  = "chunk-overlap";
     public static final String MIN_CHUNK_SIZE                 = "min-chunk-size";
     public static final String INDEXING_MAX_CONCURRENT_FILES  = "indexing.max-concurrent-files";
+    public static final String INDEXING_MAX_CONCURRENT_LLM    = "indexing.max-concurrent-llm-calls";
 
     /** All hot-editable keys, in the order they are grouped on the settings page. */
     public static final List<String> HOT_EDITABLE = List.of(
@@ -63,6 +64,7 @@ public final class SettingsKeys {
             CHUNK_SIZE,
             CHUNK_OVERLAP,
             MIN_CHUNK_SIZE,
-            INDEXING_MAX_CONCURRENT_FILES
+            INDEXING_MAX_CONCURRENT_FILES,
+            INDEXING_MAX_CONCURRENT_LLM
     );
 }

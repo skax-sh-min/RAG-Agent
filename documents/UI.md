@@ -114,7 +114,7 @@ REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — �
 | POST | `/admin/settings/update` | `fragments/settings-item :: item` | 핫 수정 가능 항목 하나에 오버라이드 저장(`key`, `value`) — 재기동 없이 다음 검색부터 반영, 감사 로그 기록 |
 | POST | `/admin/settings/reset` | `fragments/settings-item :: item` | 오버라이드 삭제 → 프로퍼티 기본값으로 복귀, 감사 로그 기록 |
 
-- 핫 수정 가능 항목만 `key`를 받아 수정할 수 있다: **검색 튜닝**(유사도 임계값·RRF 가중치/k·후보 배수·태그 후보 배수·멀티쿼리 최소 길이·재시도 시 후보 확대·topK·멀티쿼리 확장·하이브리드 검색 — 다음 검색부터 반영)과 **인덱싱/청킹**(청크 크기·오버랩·최소 크기·동시 파일 처리 수 — 다음 인덱싱/↺ 재인덱싱부터 반영). 그 외 키(조회 전용: `rerank-enabled`·`max-concurrent-llm-calls`·쿼리 임베딩 캐시 등)는 400(`IllegalArgumentException`)으로 거부된다.
+- 핫 수정 가능 항목만 `key`를 받아 수정할 수 있다: **검색 튜닝**(유사도 임계값·RRF 가중치/k·후보 배수·태그 후보 배수·멀티쿼리 최소 길이·재시도 시 후보 확대·topK·멀티쿼리 확장·하이브리드 검색 — 다음 검색부터 반영)과 **인덱싱/청킹**(청크 크기·오버랩·최소 크기·동시 파일 처리 수·동시 LLM 호출 수 — 다음 인덱싱/↺ 재인덱싱부터 반영). 그 외 키(조회 전용: `rerank-enabled`·쿼리 임베딩 캐시 등)는 400(`IllegalArgumentException`)으로 거부된다.
 - 값 검증 실패(범위 초과, 타입 불일치)도 400 — `GlobalExceptionHandler`가 처리.
 - 재기동이 필요한 값(rerank/hybrid 활성화, 벡터 스토어 백엔드, 임베딩 차원 등)과 temperature/max-tokens(§6.18 선행 필요)·기본 라우팅 모드는 조회 전용으로만 노출된다.
 - 상세는 [OPERATOR_MANUAL.md §6.5](OPERATOR_MANUAL.md#65-설정-페이지-settings--llmrag-옵션-조회핫-수정) 참고.

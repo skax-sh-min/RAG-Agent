@@ -28,6 +28,15 @@ class AppPropertiesOverrideTest {
                 null, 1.0, 60, null, null, null, null, null, null);
     }
 
+    /** Same as {@link #base()} but with a configured {@code IndexingConfig} (base() leaves it null). */
+    private static AppProperties withIndexing(AppProperties.IndexingConfig indexing) {
+        return new AppProperties(
+                "./data", 2, 800, 100, 100, 7, 0.0, true, 5, false,
+                true, false, 3, null,
+                null, indexing, null, null, null, null, null, null, null, null, null, 2,
+                null, 1.0, 60, null, null, null, null, null, null);
+    }
+
     private final Map<String, String> overrides = new HashMap<>();
 
     private void bind() {
@@ -86,6 +95,85 @@ class AppPropertiesOverrideTest {
         assertThat(p.searchSimilarityThresholdSafe()).isEqualTo(1.0);
         assertThat(p.searchCandidateMultiplierSafe()).isEqualTo(1);
         assertThat(p.searchMultiqueryMinLengthSafe()).isEqualTo(0);
+    }
+
+    @Test
+    @DisplayName("검색 — topK/멀티쿼리 확장/하이브리드도 오버라이드가 적용된다 (다음 검색부터 반영)")
+    void override_searchTopKMultiqueryHybrid() {
+        bind();
+        AppProperties p = base();
+        assertThat(p.searchTopKSafe()).isEqualTo(7);
+        assertThat(p.searchMultiqueryEnabledSafe()).isTrue();
+        assertThat(p.searchHybridEnabledSafe()).isFalse();
+
+        overrides.put(SettingsKeys.SEARCH_TOP_K, "12");
+        overrides.put(SettingsKeys.SEARCH_MULTIQUERY_ENABLED, "false");
+        overrides.put(SettingsKeys.SEARCH_HYBRID_ENABLED, "true");
+
+        assertThat(p.searchTopKSafe()).isEqualTo(12);
+        assertThat(p.searchMultiqueryEnabledSafe()).isFalse();
+        assertThat(p.searchHybridEnabledSafe()).isTrue();
+    }
+
+    @Test
+    @DisplayName("인덱싱 — 청크 크기/오버랩/최소 크기 오버라이드 (다음 인덱싱부터 반영)")
+    void override_chunkValues() {
+        bind();
+        AppProperties p = base();
+        assertThat(p.chunkSizeSafe()).isEqualTo(800);
+        assertThat(p.chunkOverlapSafe()).isEqualTo(100);
+        assertThat(p.minChunkSizeSafe()).isEqualTo(100);
+
+        overrides.put(SettingsKeys.CHUNK_SIZE, "1500");
+        overrides.put(SettingsKeys.CHUNK_OVERLAP, "250");
+        overrides.put(SettingsKeys.MIN_CHUNK_SIZE, "400");
+
+        assertThat(p.chunkSizeSafe()).isEqualTo(1500);
+        assertThat(p.chunkOverlapSafe()).isEqualTo(250);
+        assertThat(p.minChunkSizeSafe()).isEqualTo(400);
+    }
+
+    @Test
+    @DisplayName("min-chunk-size 오버라이드가 0이면 오버라이드된 오버랩 값으로 폴백")
+    void minChunkSizeOverrideZero_fallsBackToOverriddenOverlap() {
+        bind();
+        overrides.put(SettingsKeys.MIN_CHUNK_SIZE, "0");
+        overrides.put(SettingsKeys.CHUNK_OVERLAP, "250");
+
+        assertThat(base().minChunkSizeSafe()).isEqualTo(250);
+    }
+
+    @Test
+    @DisplayName("indexingSafe() — indexing 설정이 없어도(널 분기) 동시성 오버라이드가 반영된다")
+    void indexingOverride_nullIndexingConfig() {
+        bind();
+        AppProperties p = base(); // indexing == null
+        assertThat(p.indexingSafe().maxConcurrentFiles()).isEqualTo(4);
+        assertThat(p.indexingSafe().maxConcurrentLlmCalls()).isEqualTo(8);
+
+        overrides.put(SettingsKeys.INDEXING_MAX_CONCURRENT_FILES, "6");
+        overrides.put(SettingsKeys.INDEXING_MAX_CONCURRENT_LLM, "2");
+
+        assertThat(p.indexingSafe().maxConcurrentFiles()).isEqualTo(6);
+        assertThat(p.indexingSafe().maxConcurrentLlmCalls()).isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("indexingSafe() — 설정된 값 위에 오버라이드가 우선하고, timeout/batch는 건드리지 않는다")
+    void indexingOverride_overConfiguredValues() {
+        bind();
+        AppProperties p = withIndexing(new AppProperties.IndexingConfig(3, 4, 30, 4));
+        assertThat(p.indexingSafe().maxConcurrentFiles()).isEqualTo(3);
+        assertThat(p.indexingSafe().maxConcurrentLlmCalls()).isEqualTo(4);
+
+        overrides.put(SettingsKeys.INDEXING_MAX_CONCURRENT_FILES, "8");
+        overrides.put(SettingsKeys.INDEXING_MAX_CONCURRENT_LLM, "1");
+
+        assertThat(p.indexingSafe().maxConcurrentFiles()).isEqualTo(8);
+        assertThat(p.indexingSafe().maxConcurrentLlmCalls()).isEqualTo(1);
+        // 오버라이드 대상이 아닌 필드는 그대로 유지
+        assertThat(p.indexingSafe().keywordTimeoutSeconds()).isEqualTo(30);
+        assertThat(p.indexingSafe().keywordBatchSize()).isEqualTo(4);
     }
 
     @Test

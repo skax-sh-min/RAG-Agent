@@ -84,7 +84,7 @@ public class MarkdownCorrectionService {
     private static final String SECTION_END_BOUNDARY = "<<<SECTION_END>>>";
 
     private final LlmRouter llmRouter;
-    private final int maxConcurrent;
+    private final AppProperties props;
     private final int maxSectionChars;
     private final String defaultCodeLanguage;
 
@@ -92,7 +92,7 @@ public class MarkdownCorrectionService {
                                      AppProperties props,
                                      @Value("${spring.ai.openai.chat.options.max-tokens:8000}") int llmMaxTokens) {
         this.llmRouter = llmRouter;
-        this.maxConcurrent = Math.max(1, props.indexingSafe().maxConcurrentLlmCalls());
+        this.props = props;
         this.maxSectionChars = Math.max(MIN_SECTION_CHARS, (llmMaxTokens - MIN_SECTION_CHARS) / 2);
         this.defaultCodeLanguage = props.mdCorrectionDefaultCodeLanguageSafe();
     }
@@ -141,6 +141,10 @@ public class MarkdownCorrectionService {
                           BiConsumer<Integer, Integer> onSectionDone) {
         if (rawMd == null || rawMd.isBlank()) return rawMd;
         log.info("[MD_CORRECT] 시작: docId={}, chars={}", docId, rawMd.length());
+        // Hot-editable (indexing family) — read fresh per correction run so a /settings override
+        // applies on the next indexing without a restart, exactly like DocumentIndexer's keyword
+        // gate and LazyVisionService. Never cache this in a field.
+        int maxConcurrent = Math.max(1, props.indexingSafe().maxConcurrentLlmCalls());
         log.debug("[MD_CORRECT] 설정: maxConcurrent={}, maxSectionChars={}", maxConcurrent, maxSectionChars);
         long t0 = System.currentTimeMillis();
 

@@ -361,19 +361,22 @@ public record AppProperties(
     }
 
     public IndexingConfig indexingSafe() {
-        // max-concurrent-files is hot-editable (fold the override in here — DocumentIndexer reads it
-        // fresh per sync/index, so the next indexing sees a /settings change without a restart).
-        // The other fields (llm-calls/timeout/batch) stay fixed: llm-calls is cached at construction
-        // by background services (MarkdownCorrectionService), so a live override would apply only
-        // partially and mislead — see SettingsService's read-only indexing note.
+        // max-concurrent-files and max-concurrent-llm-calls are hot-editable (fold the overrides in
+        // here — every consumer reads them fresh per operation: DocumentIndexer's keyword gate,
+        // MarkdownCorrectionService.correct() and LazyVisionService — so the next indexing sees a
+        // /settings change without a restart). None of them may cache these in a field.
+        // timeout/batch stay fixed (no consumer re-reads them per operation).
         Integer filesOverride = overrideInt(SettingsKeys.INDEXING_MAX_CONCURRENT_FILES);
+        Integer llmOverride   = overrideInt(SettingsKeys.INDEXING_MAX_CONCURRENT_LLM);
         if (indexing == null) {
             int f = (filesOverride != null && filesOverride > 0) ? filesOverride : 4;
-            return new IndexingConfig(f, 8, 30, 4);
+            int l = (llmOverride != null && llmOverride > 0) ? llmOverride : 8;
+            return new IndexingConfig(f, l, 30, 4);
         }
         int files   = (filesOverride != null && filesOverride > 0) ? filesOverride
                     : (indexing.maxConcurrentFiles() > 0 ? indexing.maxConcurrentFiles() : 4);
-        int llm     = indexing.maxConcurrentLlmCalls() > 0 ? indexing.maxConcurrentLlmCalls() : 8;
+        int llm     = (llmOverride != null && llmOverride > 0) ? llmOverride
+                    : (indexing.maxConcurrentLlmCalls() > 0 ? indexing.maxConcurrentLlmCalls() : 8);
         int timeout = indexing.keywordTimeoutSeconds() > 0 ? indexing.keywordTimeoutSeconds() : 30;
         int batch   = indexing.keywordBatchSize() > 0      ? indexing.keywordBatchSize()      : 4;
         return new IndexingConfig(files, llm, timeout, batch);
