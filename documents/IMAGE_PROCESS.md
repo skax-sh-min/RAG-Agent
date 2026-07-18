@@ -339,14 +339,24 @@ content = content.replaceAll("\\[([^\\]]+)]\\([^)]*\\)", "$1");
 
 ## 5. Vision 설명 생성 (L2)
 
-> 인덱싱 시점 동기 L2는 문서 업로드 화면의 **"이미지 설명 추가" 체크박스**(`addImageDescriptions` 파라미터)로
-> 트리거됩니다. 체크 시 `MarkdownCorrectionService`가 로컬 Vision 프로바이더(`RoutingMode.LOCAL_ONLY`)를
-> 동기 호출해 마크다운에 `[이미지 설명: ...]`을 직접 삽입하며, 마크다운 본문에 `[이미지: ...]` 마커가
+> 인덱싱 시점 L2는 문서 업로드 화면의 **"이미지 설명 추가" 체크박스**(`addImageDescriptions` 파라미터)로
+> 트리거됩니다. 체크 시 `MarkdownCorrectionService`가 로컬 Vision 프로바이더(`RoutingMode.LOCAL_ONLY`)로
+> 마크다운에 `[이미지 설명: ...]`을 직접 삽입하며, 마크다운 본문에 `[이미지: ...]` 마커가
 > 있는 포맷에 적용됩니다 — **DOCX·TXT·MD·PPTX·PDF(스캔 아님) 전부**. `PdfToMarkdownConverter`/
 > `PptxToMarkdownConverter`가 각각 `PdfImageExtractor`/`PptxImageExtractor`를 직접 호출해 DOCX와
 > 동일하게 헤딩 바로 다음에 `[이미지: ...]` 인라인 마커를 삽입하므로(PIPELINE.md §6.3-bis 참고),
 > PPTX/PDF도 이 체크박스로 임베딩에 이미지 설명을 포함시킬 수 있습니다. 이 경로는
 > `VisionDescriptionService`를 거치지 않는 별도 구현입니다.
+>
+> **동시성·사용량 집계**: 문서 하나 안의 이미지들은 예전엔 정규식 루프에서 **한 장씩 순차** 분석돼,
+> 인덱싱 이미지 분석의 실질 동시 실행 수가 `INDEXING_MAX_LLM`이 아니라 `INDEXING_MAX_FILES`(병렬
+> 파일 수)에 매여 있었습니다. 이제 `prewarmImageDescriptions()`가 **distinct 이미지들을
+> `Semaphore(INDEXING_MAX_LLM)` + 가상 스레드로 병렬 분석**해 캐시를 채운 뒤(같은 파일 경로는 1회만),
+> 순차 치환 루프는 캐시만 읽습니다 — MD 교정·키워드 추출·TXT 구조화와 동일한 knob/세마포어 패턴
+> (per-consumer이므로 피크 ≈ `FILES × LLM`, 기본 `FILES=1`에선 `LLM`으로 고정). 또한 이 Vision 호출은
+> `LlmRouter.executeWithTracking(..., BackgroundUsage.IMAGE_PREFIX, ...)`으로 라우팅되어 `/llm-usage`에
+> `image:` 접두사 **BACKGROUND 카드**로 집계됩니다(예전엔 raw `ChatClient` 직접 호출이라 사용량에
+> 전혀 안 잡혔음). 검색 시점 `VisionDescriptionService`(bare 프로바이더명으로 기록)와는 별개 라벨입니다.
 > 12절 Lazy Vision은 이와 독립적으로 검색 시점에 항상 동작하는 별개의 메커니즘이며
 > (`app.image-description.enabled=true`일 때), `VisionDescriptionService`를 사용합니다.
 > 두 경로는 서로 대체 관계가 아니라 함께 동작할 수 있습니다 — 12.1절 참고.
@@ -762,11 +772,11 @@ app.image-description.docx-wmf-convert=true   # LibreOffice 설치 필요
 |------|---------------------|-----------------|
 | 트리거 | 업로드 화면 "이미지 설명 추가" 체크박스(`addImageDescriptions`) | `app.image-description.enabled=true` (프로퍼티) |
 | 적용 대상 | DOCX·TXT·MD·PPTX·PDF(스캔 아님) — 본문에 `[이미지: ...]` 마커가 있는 모든 포맷 (위 §5 참고) | 모든 포맷 (`image_paths` 메타데이터가 있는 모든 청크) |
-| 구현 | `MarkdownCorrectionService.describeImage()` — 자체 구현, `RoutingMode.LOCAL_ONLY` 고정, 유형 분류 없음 | `VisionDescriptionService` + `ImageTypeClassifier`(13절) |
-| 인덱싱 시 LLM 호출 | 체크 시 이미지당 1회 (동기) | 0회 |
+| 구현 | `MarkdownCorrectionService.describeImage()` — `RoutingMode.LOCAL_ONLY` 고정, 유형 분류 없음, `LlmRouter.executeWithTracking(IMAGE_PREFIX)` 경유(사용량 집계됨) | `VisionDescriptionService` + `ImageTypeClassifier`(13절) |
+| 인덱싱 시 LLM 호출 | 체크 시 distinct 이미지당 1회 (문서 내 병렬, `Semaphore(INDEXING_MAX_LLM)`) | 0회 |
 | 결과 반영 위치 | 마크다운 텍스트에 직접 삽입 → 청크 텍스트의 일부로 **임베딩됨** | 검색 시 프롬프트에만 동적 합성 → **임베딩되지 않음** (12.6절) |
 | 첫 검색 응답 시간 | 영향 없음(이미 인덱싱 시 처리됨) | 검색 결과에 신규 이미지 N개 시 +N×Vision 지연 (캐시 후 0) |
-| 캐시 | 없음(업로드 1회성 호출) | `image_descriptions` SQLite 테이블에 영속 캐시 |
+| 캐시 | 문서 처리 1회 내 in-memory 경로 dedup(같은 파일 경로는 1회만 분석); 영속 캐시는 없음 | `image_descriptions` SQLite 테이블에 영속 캐시 |
 
 즉 "체크박스 미체크 + `enabled=true`"로 두면 임베딩에는 설명이 없지만 검색 시점마다 Lazy Vision이 프롬프트에
 설명을 동적으로 얹어 줍니다. "체크박스 체크"는 그와 별개로 임베딩 자체에 설명을 영구히 포함시키는 효과이며,

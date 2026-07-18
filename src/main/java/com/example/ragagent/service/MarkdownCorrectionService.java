@@ -3,14 +3,14 @@ package com.example.ragagent.service;
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.exception.LlmProviderExhaustedException;
 import com.example.ragagent.llm.BackgroundUsage;
-import com.example.ragagent.llm.LlmProvider;
 import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.llm.TaskType;
-import org.springframework.ai.chat.client.ChatClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.prompt.Prompt;
+import org.springframework.ai.content.Media;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.stereotype.Service;
 import org.springframework.util.MimeTypeUtils;
@@ -20,9 +20,10 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.Executors;
@@ -630,9 +631,9 @@ public class MarkdownCorrectionService {
 
     private String augmentImageDescriptionsWithLocalVision(String md, Path correctedOutputPath) {
         if (md == null || md.isBlank()) return md;
-        LlmProvider localVisionProvider;
+        // Gate: skip entirely when no LOCAL vision provider is registered (don't scan/spawn tasks).
         try {
-            localVisionProvider = llmRouter.routeProvider(TaskType.VISION, RoutingMode.LOCAL_ONLY);
+            llmRouter.routeProvider(TaskType.VISION, RoutingMode.LOCAL_ONLY);
         } catch (Exception e) {
             return md;
         }
@@ -640,16 +641,69 @@ public class MarkdownCorrectionService {
         Path baseDir = correctedOutputPath != null && correctedOutputPath.getParent() != null
                 ? correctedOutputPath.getParent() : null;
         Path dataDir = baseDir != null ? baseDir.getParent() : null;
-        Map<String, String> descCache = new HashMap<>();
+        Map<String, String> descCache = new ConcurrentHashMap<>();
 
-        String withMarkerDesc = injectDescriptionsForPattern(md, IMAGE_MARKER, true, localVisionProvider, baseDir, dataDir, descCache);
-        return injectDescriptionsForPattern(withMarkerDesc, MD_IMAGE_LINK, false, localVisionProvider, baseDir, dataDir, descCache);
+        // Describe all distinct images in parallel, bounded by INDEXING_MAX_LLM (same knob and
+        // per-consumer Semaphore pattern as MD correction / keyword extraction / TXT structuring),
+        // then the sequential replacement below only reads cache hits — no per-image LLM call is
+        // made one-at-a-time on the regex loop anymore. Previously each image was described
+        // strictly sequentially per file, so indexing image-analysis concurrency was effectively
+        // bounded by INDEXING_MAX_FILES (files-in-parallel) rather than the LLM knob.
+        prewarmImageDescriptions(md, baseDir, dataDir, descCache);
+
+        String withMarkerDesc = injectDescriptionsForPattern(md, IMAGE_MARKER, true, baseDir, dataDir, descCache);
+        return injectDescriptionsForPattern(withMarkerDesc, MD_IMAGE_LINK, false, baseDir, dataDir, descCache);
+    }
+
+    /**
+     * Fills {@code descCache} for every distinct, resolvable, not-yet-described image referenced by
+     * either pattern, running the Vision calls in parallel under a {@link Semaphore} sized to
+     * {@code app.indexing.max-concurrent-llm-calls} (read fresh so a {@code /settings} override
+     * applies on the next indexing). Best-effort: the replacement loop's own {@code computeIfAbsent}
+     * is the correctness fallback, so a path missed here is still described (just synchronously).
+     */
+    private void prewarmImageDescriptions(String md, Path baseDir, Path dataDir, Map<String, String> cache) {
+        Map<String, Path> toDescribe = new LinkedHashMap<>();
+        collectImagePaths(md, IMAGE_MARKER, true, baseDir, dataDir, toDescribe);
+        collectImagePaths(md, MD_IMAGE_LINK, false, baseDir, dataDir, toDescribe);
+        if (toDescribe.isEmpty()) return;
+
+        int maxConcurrent = Math.max(1, props.indexingSafe().maxConcurrentLlmCalls());
+        log.debug("[MD_CORRECT] 이미지 설명 병렬 생성: {}장, maxConcurrent={}", toDescribe.size(), maxConcurrent);
+        Semaphore gate = new Semaphore(maxConcurrent);
+        try (var exec = Executors.newVirtualThreadPerTaskExecutor()) {
+            List<CompletableFuture<Void>> futures = new ArrayList<>(toDescribe.size());
+            for (Map.Entry<String, Path> e : toDescribe.entrySet()) {
+                futures.add(CompletableFuture.runAsync(() -> {
+                    gate.acquireUninterruptibly();
+                    try {
+                        cache.put(e.getKey(), describeImage(e.getValue()));
+                    } finally {
+                        gate.release();
+                    }
+                }, exec));
+            }
+            futures.forEach(CompletableFuture::join);
+        }
+    }
+
+    /** Collects distinct {@code key → imagePath} for images that would be described — same resolve,
+     *  file-exists, and already-described-skip predicates as {@link #injectDescriptionsForPattern}. */
+    private void collectImagePaths(String input, Pattern pattern, boolean imageMarker,
+                                   Path baseDir, Path dataDir, Map<String, Path> out) {
+        Matcher m = pattern.matcher(input);
+        while (m.find()) {
+            if (hasFollowingImageDescription(input, m.end())) continue;
+            String pathRaw = imageMarker ? m.group(1) : m.group(2);
+            Path imagePath = resolveLocalImagePath(pathRaw, baseDir, dataDir);
+            if (imagePath == null || !Files.exists(imagePath) || !Files.isRegularFile(imagePath)) continue;
+            out.putIfAbsent(imagePath.toAbsolutePath().normalize().toString(), imagePath);
+        }
     }
 
     private String injectDescriptionsForPattern(String input,
                                                 Pattern pattern,
                                                 boolean imageMarker,
-                                                LlmProvider localVisionProvider,
                                                 Path baseDir,
                                                 Path dataDir,
                                                 Map<String, String> cache) {
@@ -671,7 +725,9 @@ public class MarkdownCorrectionService {
             }
 
             String key = imagePath.toAbsolutePath().normalize().toString();
-            String desc = cache.computeIfAbsent(key, k -> describeImage(localVisionProvider, imagePath));
+            // Cache is pre-warmed in parallel by prewarmImageDescriptions(); computeIfAbsent is the
+            // correctness fallback for any path that pre-warm missed (then described synchronously).
+            String desc = cache.computeIfAbsent(key, k -> describeImage(imagePath));
             if (desc == null || desc.isBlank()) {
                 m.appendReplacement(out, Matcher.quoteReplacement(full));
                 continue;
@@ -722,18 +778,26 @@ public class MarkdownCorrectionService {
         return tail.startsWith("[이미지 설명:") || tail.startsWith("> 이미지 설명:");
     }
 
-    private String describeImage(LlmProvider provider, Path imagePath) {
+    /**
+     * Describes one image with the LOCAL vision provider, routed through
+     * {@link LlmRouter#executeWithTracking} so the call is recorded in {@code llm_usage} under
+     * {@link BackgroundUsage#IMAGE_PREFIX} (indexing-time Vision cost, separate from chat). Any
+     * failure (no provider, HTTP error, unsupported vision model) degrades to an empty string so
+     * the marker is left untouched and indexing continues.
+     */
+    private String describeImage(Path imagePath) {
         try {
             byte[] bytes = Files.readAllBytes(imagePath);
             String mimeType = detectMime(imagePath.toString());
-            String prompt = "이 이미지를 한국어 1~2문장으로 간단히 설명하세요.";
-            String response = ChatClient.builder(provider.chatModel()).build()
-                    .prompt()
-                    .user(u -> u.text(prompt)
-                            .media(MimeTypeUtils.parseMimeType(mimeType), new ByteArrayResource(bytes)))
-                .call()
-                .content();
+            Media media = new Media(MimeTypeUtils.parseMimeType(mimeType), new ByteArrayResource(bytes));
+            UserMessage userMessage = UserMessage.builder()
+                    .text("이 이미지를 한국어 1~2문장으로 간단히 설명하세요.")
+                    .media(media).build();
+            String response = llmRouter.executeWithTracking(TaskType.VISION, RoutingMode.LOCAL_ONLY,
+                    BackgroundUsage.IMAGE_PREFIX, model -> model.call(new Prompt(userMessage)));
             return response == null ? "" : response.trim();
+        } catch (LlmProviderExhaustedException e) {
+            return ""; // no LOCAL vision provider (pre-gated; defensive)
         } catch (WebClientResponseException e) {
             log.warn("[MD_CORRECT] 이미지 설명 생성 실패 {}: HTTP {} body={}",
                     imagePath, e.getStatusCode().value(), compactBody(e.getResponseBodyAsString()));

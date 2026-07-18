@@ -1,16 +1,25 @@
 package com.example.ragagent.service;
 
 import com.example.ragagent.config.AppProperties;
+import com.example.ragagent.llm.BackgroundUsage;
+import com.example.ragagent.llm.LlmProvider;
 import com.example.ragagent.llm.LlmRouter;
+import com.example.ragagent.llm.RoutingMode;
+import com.example.ragagent.llm.TaskType;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -360,6 +369,72 @@ class MarkdownCorrectionServiceTest {
 
         assertThat(result).contains("## 2. 이건 로그 내용일 뿐"); // 펜스 안은 그대로
         assertThat(result).contains("## 2. 두 번째 절"); // 펜스 밖 헤딩은 정상적으로 2번 유지
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // 인덱싱 중 이미지 설명(Vision) — LOCAL 프로바이더로 tracked 경로 + distinct 이미지 dedup
+    // ---------------------------------------------------------------------------------------------
+
+    @TempDir
+    Path tmpDir;
+
+    /** describeImage()가 mock을 통해 실제로 호출되도록 최소한의 스텁을 건다. */
+    private void stubVisionAndCorrection(String imageDesc) {
+        when(llmRouter.routeProvider(eq(TaskType.VISION), eq(RoutingMode.LOCAL_ONLY)))
+                .thenReturn(mock(LlmProvider.class)); // 게이트 통과
+        // 섹션 교정 호출(MDCORRECT)은 non-null만 반환하면 됨 — 이 테스트의 관심사가 아님
+        when(llmRouter.executeWithTracking(any(), any(), any(), any())).thenReturn("교정됨");
+        // 이미지 설명 호출(VISION/LOCAL_ONLY/IMAGE_PREFIX)은 별도 값 — 마지막 스텁이 우선
+        when(llmRouter.executeWithTracking(eq(TaskType.VISION), eq(RoutingMode.LOCAL_ONLY),
+                eq(BackgroundUsage.IMAGE_PREFIX), any())).thenReturn(imageDesc);
+    }
+
+    private Path writeImage(String name) throws Exception {
+        Path p = tmpDir.resolve(name);
+        Files.write(p, new byte[]{(byte) 0x89, 'P', 'N', 'G'}); // 내용은 무의미(호출은 mock)
+        return p;
+    }
+
+    @Test
+    @DisplayName("이미지 설명 — VISION·LOCAL_ONLY·IMAGE_PREFIX tracked 경로로 호출된다(사용량 집계됨)")
+    void imageDescription_routedThroughTrackedLocalVisionPath() throws Exception {
+        stubVisionAndCorrection("도표 설명");
+        Path img = writeImage("a.png");
+        String md = "## 절\n[이미지: " + img.toAbsolutePath() + "]\n본문\n";
+
+        service.correct(md, "doc", null, true); // addImageDescriptions=true
+
+        // 핵심: 이미지 분석이 raw ChatClient가 아니라 tracked executeWithTracking(IMAGE_PREFIX)으로 감
+        verify(llmRouter, times(1)).executeWithTracking(
+                eq(TaskType.VISION), eq(RoutingMode.LOCAL_ONLY), eq(BackgroundUsage.IMAGE_PREFIX), any());
+    }
+
+    @Test
+    @DisplayName("이미지 설명 — 같은 이미지를 여러 마커가 가리켜도 Vision 호출은 한 번만(distinct dedup)")
+    void imageDescription_dedupsSameImageAcrossMarkers() throws Exception {
+        stubVisionAndCorrection("설명");
+        Path img = writeImage("shared.png");
+        String abs = img.toAbsolutePath().toString();
+        String md = "## 절1\n[이미지: " + abs + "]\n본문1\n\n## 절2\n[이미지: " + abs + "]\n본문2\n";
+
+        service.correct(md, "doc", null, true);
+
+        // prewarm이 distinct 경로만 모으고 캐시를 공유하므로 동일 파일은 1회만 분석
+        verify(llmRouter, times(1)).executeWithTracking(
+                eq(TaskType.VISION), eq(RoutingMode.LOCAL_ONLY), eq(BackgroundUsage.IMAGE_PREFIX), any());
+    }
+
+    @Test
+    @DisplayName("이미지 설명 — addImageDescriptions=false면 Vision 호출이 전혀 없다")
+    void imageDescription_notInvokedWhenDisabled() throws Exception {
+        when(llmRouter.executeWithTracking(any(), any(), any(), any())).thenReturn("교정됨");
+        Path img = writeImage("b.png");
+        String md = "## 절\n[이미지: " + img.toAbsolutePath() + "]\n본문\n";
+
+        service.correct(md, "doc", null); // addImageDescriptions 기본 false
+
+        verify(llmRouter, never()).executeWithTracking(
+                eq(TaskType.VISION), any(), eq(BackgroundUsage.IMAGE_PREFIX), any());
     }
 
     private static int countOccurrences(String haystack, String needle) {
