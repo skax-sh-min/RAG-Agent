@@ -1,7 +1,7 @@
 package com.example.ragagent.service;
 
+import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.repository.MemoryRepository;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
@@ -18,9 +18,12 @@ public class MemoryService {
     private final int maxConversationChars;
     private final MemoryRepository repository;
 
-    public MemoryService(MemoryRepository repository,
-                         @Value("${spring.ai.openai.chat.options.max-tokens:8000}") int llmMaxTokens) {
-        this.maxConversationChars = Math.max(1_000, llmMaxTokens * 3 / 4);
+    // Single source of truth for "LLM max tokens" (app.llm.max-tokens / LLM_MAX_TOKENS, default
+    // 6000) — used to read the separate, dead spring.ai.openai.chat.options.max-tokens property
+    // (default 8000), which config'd nothing (Spring AI's autoconfigured ChatModel bean is skipped
+    // since LlmConfig.primaryChatModel() already satisfies its @ConditionalOnMissingBean).
+    public MemoryService(MemoryRepository repository, AppProperties props) {
+        this.maxConversationChars = Math.max(1_000, props.llmSafe().maxTokens() * 3 / 4);
         this.repository = repository;
     }
 

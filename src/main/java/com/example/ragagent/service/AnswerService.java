@@ -46,6 +46,7 @@ public class AnswerService {
 
     private final LlmRouter llmRouter;
     private final MessageSource messageSource;
+    private final AppProperties props;
     private final int maxRetryCount;
     private final BeanOutputConverter<EvalOutput> evalConverter =
             new BeanOutputConverter<>(EvalOutput.class);
@@ -53,6 +54,7 @@ public class AnswerService {
     public AnswerService(LlmRouter llmRouter, AppProperties appProperties, MessageSource messageSource) {
         this.llmRouter = llmRouter;
         this.messageSource = messageSource;
+        this.props = appProperties;
         this.maxRetryCount = appProperties.maxRetryCount();
     }
 
@@ -223,8 +225,9 @@ public class AnswerService {
                 new OpenAiApi.ChatCompletionMessage(systemPrompt, OpenAiApi.ChatCompletionMessage.Role.SYSTEM),
                 new OpenAiApi.ChatCompletionMessage(userPrompt, OpenAiApi.ChatCompletionMessage.Role.USER)
         );
+        // §6.18 — general/RAG temperature (app.llm.temperature / LLM_TEMPERATURE), was hardcoded 0.0.
         OpenAiApi.ChatCompletionRequest request =
-                new OpenAiApi.ChatCompletionRequest(messages, provider.model(), 0.0, true);
+                new OpenAiApi.ChatCompletionRequest(messages, provider.model(), props.llmSafe().temperature(), true);
         provider.openAiApi().chatCompletionStream(request)
                 .mapNotNull(chunk -> {
                     if (chunk.choices() == null || chunk.choices().isEmpty()) return null;

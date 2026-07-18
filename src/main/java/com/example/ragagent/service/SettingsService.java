@@ -45,12 +45,6 @@ public class SettingsService implements AppProperties.OverrideSource {
 
     private static final Logger log = LoggerFactory.getLogger(SettingsService.class);
 
-    // Current fixed values baked into LlmConfig.llmRouter() (OpenAiChatOptions). Shown read-only
-    // here — live editing is deferred to §6.18 (temperature must first move off the hardcoded
-    // bean-creation value onto a per-call Prompt option). Keep in sync if LlmConfig changes.
-    private static final String FIXED_TEMPERATURE = "0.0";
-    private static final String FIXED_MAX_TOKENS  = "6000";
-
     private enum Kind { DOUBLE, INT, BOOL }
 
     /** One editable setting's validation + input metadata. {@code labelKey} is an i18n message key. */
@@ -80,11 +74,17 @@ public class SettingsService implements AppProperties.OverrideSource {
             new Spec(SettingsKeys.INDEXING_MAX_CONCURRENT_LLM,     Kind.INT,    1,   32,   1,    "settings.item.max-concurrent-llm-calls")
     );
 
+    // Insertion order = render order in the "LLM 튜닝" group. Apply on the next LLM call (§6.18).
+    private static final List<Spec> LLM_HOT_SPECS = List.of(
+            new Spec(SettingsKeys.LLM_DIRECT_TEMPERATURE,         Kind.DOUBLE, 0.0, 0.2,  0.05, "settings.item.direct-temperature")
+    );
+
     private static final Map<String, Spec> SPECS;
     static {
         Map<String, Spec> m = new LinkedHashMap<>();
         for (Spec s : SEARCH_HOT_SPECS) m.put(s.key(), s);
         for (Spec s : INDEXING_HOT_SPECS) m.put(s.key(), s);
+        for (Spec s : LLM_HOT_SPECS) m.put(s.key(), s);
         SPECS = Map.copyOf(m);
     }
 
@@ -220,15 +220,17 @@ public class SettingsService implements AppProperties.OverrideSource {
                 new SettingGroup("search_hot", "settings.group.search_hot", searchHotItems()),
                 new SettingGroup("search_fixed", "settings.group.search_fixed", fixedSearchItems()),
                 new SettingGroup("indexing", "settings.group.indexing", indexingItems()),
+                new SettingGroup("llm_hot", "settings.group.llm_hot", llmHotItems()),
                 new SettingGroup("cache", "settings.group.cache", cacheItems())
         );
 
+        AppProperties.LlmConfig llm = props.llmSafe();
         Integer dim = props.embeddingSafe().dimensions();
         return new SettingsView(
                 providers,
-                props.llmSafe().defaultRoutingMode(),
-                FIXED_TEMPERATURE,
-                FIXED_MAX_TOKENS,
+                llm.defaultRoutingMode(),
+                trimNum(llm.temperature()),   // general/RAG temperature — now the real effective value
+                Integer.toString(llm.maxTokens()),
                 nullToDash(props.embeddingSafe().model()),
                 dim != null ? dim.toString() : "auto",
                 props.vectorStoreSafe().type(),
@@ -275,6 +277,15 @@ public class SettingsService implements AppProperties.OverrideSource {
         return items;
     }
 
+    /** LLM tuning (§6.18): direct-temperature is hot (DirectAnswerService reads it per call); the
+     *  general temperature + max-tokens sit in the LLM providers card footer as read-only (baked into
+     *  the provider beans at startup — restart to change). */
+    private List<SettingItem> llmHotItems() {
+        List<SettingItem> items = new ArrayList<>(LLM_HOT_SPECS.size());
+        for (Spec s : LLM_HOT_SPECS) items.add(editableItem(s.key()));
+        return items;
+    }
+
     private List<SettingItem> cacheItems() {
         return List.of(
                 readOnly("settings.item.query-embed-cache-enabled",
@@ -312,6 +323,7 @@ public class SettingsService implements AppProperties.OverrideSource {
             case SettingsKeys.MIN_CHUNK_SIZE                  -> Integer.toString(props.minChunkSizeSafe());
             case SettingsKeys.INDEXING_MAX_CONCURRENT_FILES   -> Integer.toString(props.indexingSafe().maxConcurrentFiles());
             case SettingsKeys.INDEXING_MAX_CONCURRENT_LLM     -> Integer.toString(props.indexingSafe().maxConcurrentLlmCalls());
+            case SettingsKeys.LLM_DIRECT_TEMPERATURE          -> trimNum(props.llmSafe().directTemperature());
             default -> "";
         };
     }

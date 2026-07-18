@@ -51,7 +51,10 @@ public record AppProperties(
             String defaultRoutingMode,
             double progressiveThreshold,
             int defaultProviderConcurrency,  // per-provider concurrency gate default (matches the server's --parallel), fallback when a provider omits its own `concurrency`
-            int permitWaitTimeoutSeconds     // max wait for a concurrency slot on the query path before failing fast with 429 (default 20s, well under the 180s read-timeout)
+            int permitWaitTimeoutSeconds,    // max wait for a concurrency slot on the query path before failing fast with 429 (default 20s, well under the 180s read-timeout)
+            Double temperature,              // general/RAG temperature (app.llm.temperature / LLM_TEMPERATURE), default 0.0, clamp [0,2] — VIEW-ONLY (baked into provider defaultOptions at bean creation, restart to change)
+            Double directTemperature,        // Direct(meta) answer temperature (app.llm.direct-temperature / DIRECT_LLM_TEMPERATURE), default 0.1, clamp [0,0.2] — HOT-editable (DirectAnswerService reads it per call, §6.18)
+            Integer maxTokens                // LLM response cap (app.llm.max-tokens / LLM_MAX_TOKENS), default 6000, clamp >0 — VIEW-ONLY (baked at bean creation; streaming chat answers are uncapped by design, bounded by SSE timeouts)
     ) {}
 
     public record ProviderConfig(
@@ -516,7 +519,15 @@ public record AppProperties(
 
     /** Null-safe accessor — returns an empty LlmConfig when app.llm is not configured. */
     public LlmConfig llmSafe() {
-        if (llm == null) return new LlmConfig(List.of(), 2, 10, 180, "COST_FIRST", 0.6, 3, 20);
+        // direct-temperature is hot-editable — fold the /settings override in here (DirectAnswerService
+        // reads props.llmSafe().directTemperature() per call). temperature/maxTokens stay view-only:
+        // they're baked into the provider defaultOptions at bean creation, so an override couldn't take
+        // effect until a restart — no hook for them.
+        Double directOverride = overrideDouble(SettingsKeys.LLM_DIRECT_TEMPERATURE);
+        if (llm == null) {
+            double dt = clamp(directOverride != null ? directOverride : 0.1, 0.0, 0.2);
+            return new LlmConfig(List.of(), 2, 10, 180, "COST_FIRST", 0.6, 3, 20, 0.0, dt, 6000);
+        }
         List<ProviderConfig> providers = llm.providers() != null ? llm.providers() : List.of();
         int minutes = llm.circuitBreakerMinutes() > 0 ? llm.circuitBreakerMinutes() : 2;
                 int connectTimeout = llm.connectTimeoutSeconds() > 0 ? llm.connectTimeoutSeconds() : 10;
@@ -525,7 +536,16 @@ public record AppProperties(
         double threshold = llm.progressiveThreshold() > 0 ? llm.progressiveThreshold() : 0.6;
         int defaultProviderConcurrency = llm.defaultProviderConcurrency() > 0 ? llm.defaultProviderConcurrency() : 3;
         int permitWaitTimeoutSeconds = llm.permitWaitTimeoutSeconds() > 0 ? llm.permitWaitTimeoutSeconds() : 20;
+        double temperature = clamp(llm.temperature() != null ? llm.temperature() : 0.0, 0.0, 2.0);
+        double directBase = directOverride != null ? directOverride
+                : (llm.directTemperature() != null ? llm.directTemperature() : 0.1);
+        double directTemperature = clamp(directBase, 0.0, 0.2);
+        int maxTokens = (llm.maxTokens() != null && llm.maxTokens() > 0) ? llm.maxTokens() : 6000;
                 return new LlmConfig(providers, minutes, connectTimeout, readTimeout, mode, threshold,
-                        defaultProviderConcurrency, permitWaitTimeoutSeconds);
+                        defaultProviderConcurrency, permitWaitTimeoutSeconds, temperature, directTemperature, maxTokens);
+    }
+
+    private static double clamp(double v, double lo, double hi) {
+        return Math.max(lo, Math.min(hi, v));
     }
 }

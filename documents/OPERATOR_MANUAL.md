@@ -217,7 +217,7 @@ copy .env.example .env
 | `SEARCH_RRF_K` | `60` | 20 ~ 100 | 가중 RRF(Phase 7-A) — RRF 순위융합 상수 k(원논문 기본값 60) |
 | `MAX_RETRY_COUNT` | `2` | 0 ~ 4 | 증거 부족 시 재검색 최대 횟수 |
 
-대화 컨텍스트 주입 길이는 `LLM_MAX_TOKENS × 0.75`(최소 1,000자)로 자동 계산됩니다. 원문 그대로 보내는 폴백 경로(`MemoryService.getHistory()`)와 요약 캐시 경로(`ConversationSummarizerService.buildContext()`, §6.1) 모두 이 예산을 동일하게 지키도록 통일되어 있습니다.
+대화 컨텍스트 주입 길이는 `LLM_MAX_TOKENS × 0.75`(최소 1,000자)로 자동 계산됩니다 — 기본값 기준 `6000 × 0.75 = 4500`자(§6.18 이전에는 `MemoryService`가 별도의 죽은 프로퍼티를 통해 기본값 `8000`을 읽어 `6000`자였습니다 — 소스 통일로 기본 예산이 줄었으니, 과거 히스토리 분량에 맞추려면 `LLM_MAX_TOKENS`를 올리세요). 원문 그대로 보내는 폴백 경로(`MemoryService.getHistory()`)와 요약 캐시 경로(`ConversationSummarizerService.buildContext()`, §6.1) 모두 이 예산을 동일하게 지키도록 통일되어 있습니다.
 
 #### 대화 메모리 / 요약 캐시 튜닝
 
@@ -331,8 +331,9 @@ copy .env.example .env
 
 | 변수 | 기본값 | 권장 범위 | 설명 |
 |------|--------|----------|------|
-| `LLM_MAX_TOKENS` | `8000` | 1000 ~ 32000 | LLM이 한 번의 응답에서 생성할 수 있는 최대 토큰 수 (`spring.ai.openai.chat.options.max-tokens`). 이 값을 초과하면 LLM 응답이 중간에서 잘림. 복잡한 질문·긴 문서 요약이 필요한 환경에서는 증가 권장 |
-| `LLM_TEMPERATURE` | `0.0` | 0.0 ~ 2.0 | LLM 응답의 무작위성 제어 (`spring.ai.openai.chat.options.temperature`). `0.0`은 매번 동일한 결정적(deterministic) 답변, 값이 높을수록 다양하고 창의적인 답변. RAG 시스템 특성상 일관성이 중요하므로 `0.0` ~ `0.3` 범위 권장 |
+| `LLM_MAX_TOKENS` | `6000` | 1000 ~ 32000 | 단일 진실 소스(`app.llm.max-tokens`)로 통일되어, 이 값을 바꾸면 **아래 세 곳 모두**가 함께 움직입니다: (1) **블로킹 LLM 응답 토큰 상한** — 인덱싱·분류·키워드·Direct 블로킹 호출에 적용(스트리밍 채팅 답변은 의도적으로 미적용, SSE 타임아웃이 폭주 방지). (2) **대화 컨텍스트 문자 예산**(`MemoryService`, `×0.75`로 히스토리 예산 산출). (3) **MD 교정 섹션 크기**(`MarkdownCorrectionService`). §6.18 이전에는 (1)이 코드에 `6000`으로 하드코딩돼 이 환경변수와 무관하게 동작했고, (2)·(3)은 별도의 죽은 프로퍼티(`spring.ai.openai.chat.options.max-tokens`, 기본 `8000`)를 읽어 (1)과 다른 값을 썼습니다 — 이제 세 곳 모두 `app.llm.max-tokens` 하나만 읽습니다 |
+| `LLM_TEMPERATURE` | `0.0` | 0.0 ~ 2.0 | 일반/RAG 및 Direct를 제외한 모든 LLM 호출의 무작위성 제어(`app.llm.temperature`). `0.0`은 결정적 답변, 높을수록 다양·창의적. **§6.18 이전에는 코드에 `0.0`으로 하드코딩돼 이 값이 무시되는 죽은 설정이었으나, 이제 실제로 적용됩니다** — 과거에 이 값을 설정해 둔 운영자는 이번부터 처음으로 효과가 나타납니다(기본 `0.0`이면 체감 변화 없음). 프로바이더 빈 생성 시점에 고정되므로 변경하려면 재기동 필요 |
+| `DIRECT_LLM_TEMPERATURE` | `0.1` | 0.0 ~ 0.2 | **Direct(meta) 응답 전용** temperature(`app.llm.direct-temperature`) — 인사·잡담 등 RAG를 안 쓰는 직접 응답은 약간의 다양성이 자연스러워 일반 temperature와 분리(§6.18). `[0.0, 0.2]`로 clamp. **핫 수정 가능** — `/settings`에서 재기동 없이 다음 Direct 호출부터 반영(`DirectAnswerService`가 매 호출 재조회) |
 
 #### 로그 레벨
 
@@ -416,7 +417,7 @@ LLM_ROUTING_MODE=QUALITY_FIRST
 
 | 속성 | 기본값 | 설명 |
 |------|--------|------|
-> **temperature와 최대 출력 토큰**은 각각 `LLM_TEMPERATURE`, `LLM_MAX_TOKENS` 환경변수로 설정할 수 있습니다. → [§3.2 LLM 응답 파라미터](#32-환경변수-전체-목록) 참조
+> **temperature와 최대 출력 토큰**은 각각 `LLM_TEMPERATURE`, `LLM_MAX_TOKENS` 환경변수로 설정할 수 있습니다(§6.18로 실제 적용되도록 수정됨). Direct(잡담) 응답만 별도 `DIRECT_LLM_TEMPERATURE`(기본 0.1)를 쓰며 `/settings`에서 핫 수정 가능합니다. → [§3.2 LLM 응답 파라미터](#32-환경변수-전체-목록) 참조
 
 #### 업로드 크기 제한
 
@@ -1501,7 +1502,7 @@ CPU/메모리 제약이 있는 환경에서는 `INDEXING_MAX_FILES`와 `INDEXING
 `/settings`는 현재 **유효** LLM/RAG 설정을 한 화면에서 보여주고, 일부 검색 튜닝 값은 **재기동 없이** 조정할 수 있게 합니다. `application.properties`/환경변수를 고치고 재기동하지 않아도 검색 동작을 실시간으로 미세조정할 수 있습니다.
 
 **조회 항목 (그룹별)**:
-- **LLM 라우팅**: 등록 프로바이더·역할(role)·우선순위·모델·API 키 설정 여부·서킷브레이커 상태, 기본 라우팅 모드, temperature/max-tokens.
+- **LLM 라우팅**: 등록 프로바이더·역할(role)·우선순위·모델·API 키 설정 여부·서킷브레이커 상태, 기본 라우팅 모드, 일반 temperature·max-tokens(조회 전용, 실제 config 값 표시).
 - **임베딩 / 벡터 스토어**: 임베딩 모델·차원, 벡터 스토어 백엔드(chroma/sqlite-vec).
 - **검색 튜닝 / 인덱싱 / 캐시**: 아래 핫 수정 항목 + 조회 전용 항목.
 
@@ -1537,10 +1538,16 @@ CPU/메모리 제약이 있는 환경에서는 `INDEXING_MAX_FILES`와 `INDEXING
 >
 > 같은 파일 안에서는 구조화/교정 → 청킹 → 키워드 추출이 순차 단계라 겹치지 않지만, 파일끼리는 단계가 동기화되지 않아(A는 키워드, B는 교정) 겹칩니다. 결과적으로 **인덱싱 LLM 동시 호출 피크 ≈ `INDEXING_MAX_FILES` × `INDEXING_MAX_LLM`** 입니다 — 예: 3 × 4 = 최대 12. 그래서 기본값을 `INDEXING_MAX_FILES=1`로 두어 피크를 정확히 `INDEXING_MAX_LLM`(기본 3)으로 고정했습니다. 로컬 LLM 서버의 `--parallel` 한도에 맞추려면 `INDEXING_MAX_LLM`을 그 값으로 두고 `INDEXING_MAX_FILES=1`을 유지하세요. 처리량을 위해 `INDEXING_MAX_FILES`를 올린다면 곱이 `--parallel`을 넘지 않는지 확인하세요.
 
+**핫 수정 가능 — LLM (재기동 불필요, 다음 LLM 호출부터 반영)** — §6.18:
+
+| 항목 | 키 | 범위 |
+|------|----|------|
+| Direct(잡담) 응답 temperature | `app.llm.direct-temperature` (`DIRECT_LLM_TEMPERATURE`) | 0.0 ~ 0.2 |
+
 - **"기본값" 버튼**으로 오버라이드를 삭제하면 `application.properties`/환경변수 값으로 정확히 복귀합니다(오버라이드가 있으면 항상 프로퍼티보다 우선).
 - 오버라이드는 **재기동 후에도 유지**됩니다(테이블에 영속). 배포 기본값 자체를 바꾸려면 여전히 환경변수/`application.properties`를 수정하세요 — 오버라이드는 그 위에 얹히는 런타임 조정 레이어입니다.
 
-**조회 전용(재기동 필요)**: `rerank-enabled`(빈 생성 시점 `@ConditionalOnProperty`로 결정)·쿼리 임베딩 캐시(빈 생성 시점 결정), 임베딩 차원·벡터 스토어 백엔드(DDL/빈 구성). temperature/max-tokens와 기본 라우팅 모드는 현재 조회 전용입니다(전자는 §6.18 선행 필요, 후자는 대화별 라우팅을 채팅 화면에서 설정).
+**조회 전용(재기동 필요)**: `rerank-enabled`(빈 생성 시점 `@ConditionalOnProperty`로 결정)·쿼리 임베딩 캐시(빈 생성 시점 결정), 임베딩 차원·벡터 스토어 백엔드(DDL/빈 구성). **일반/RAG temperature**(`LLM_TEMPERATURE`)와 **max-tokens**(`LLM_MAX_TOKENS`)는 §6.18로 이제 실제 config 값을 그대로 반영해 표시되지만, 프로바이더 빈 생성 시점에 고정되므로 조회 전용(변경 시 재기동)입니다 — 호출별로 다르게 줄 수 있는 Direct temperature만 핫 수정 대상입니다. 기본 라우팅 모드도 조회 전용입니다(대화별 라우팅은 채팅 화면에서 설정).
 
 **권한**: 조회는 누구나 가능하지만, **수정은 관리자만** 가능합니다(관리 전용 인증 모드 `AUTH_MANAGEMENT_ONLY=true`에서 `/setup` 관리자 로그인 필요 — §9 참조). 수정 UI(입력/버튼)는 비관리자에게 숨겨지며, 서버도 `/admin/settings/**` 경로로 이중 방어합니다. 모든 변경은 감사 로그(`settings.update`/`settings.reset`, 변경 키·이전값·새값)에 남습니다.
 

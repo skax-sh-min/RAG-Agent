@@ -7,7 +7,6 @@ import com.example.ragagent.llm.LlmProvider;
 import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.llm.TaskType;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.ai.chat.client.ChatClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -88,11 +87,14 @@ public class MarkdownCorrectionService {
     private final int maxSectionChars;
     private final String defaultCodeLanguage;
 
-    public MarkdownCorrectionService(LlmRouter llmRouter,
-                                     AppProperties props,
-                                     @Value("${spring.ai.openai.chat.options.max-tokens:8000}") int llmMaxTokens) {
+    // Single source of truth for "LLM max tokens" (app.llm.max-tokens / LLM_MAX_TOKENS, default
+    // 6000) — used to read the separate, dead spring.ai.openai.chat.options.max-tokens property
+    // (default 8000), which config'd nothing (Spring AI's autoconfigured ChatModel bean is skipped
+    // since LlmConfig.primaryChatModel() already satisfies its @ConditionalOnMissingBean).
+    public MarkdownCorrectionService(LlmRouter llmRouter, AppProperties props) {
         this.llmRouter = llmRouter;
         this.props = props;
+        int llmMaxTokens = props.llmSafe().maxTokens();
         this.maxSectionChars = Math.max(MIN_SECTION_CHARS, (llmMaxTokens - MIN_SECTION_CHARS) / 2);
         this.defaultCodeLanguage = props.mdCorrectionDefaultCodeLanguageSafe();
     }

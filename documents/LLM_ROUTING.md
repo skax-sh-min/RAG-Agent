@@ -99,6 +99,13 @@ public enum RoutingMode {
 app.llm.default-routing-mode=COST_FIRST
 app.llm.circuit-breaker-minutes=4
 app.llm.progressive-threshold=0.6
+# §6.18 — sampling temperature + response cap (were dead/hardcoded before). temperature/max-tokens
+# are baked into each provider bean at startup (view-only, restart to change); direct-temperature
+# is read per-call by DirectAnswerService (hot-editable via /settings). max-tokens applies to
+# blocking calls only — streaming chat answers are uncapped (bounded by app.sse-*-timeout-seconds).
+app.llm.temperature=${LLM_TEMPERATURE:0.0}
+app.llm.direct-temperature=${DIRECT_LLM_TEMPERATURE:0.1}
+app.llm.max-tokens=${LLM_MAX_TOKENS:6000}
 # 질의 경로 동시성 게이트 기본값(서버의 실제 --parallel 값에 맞춘다) + 대기 상한
 app.llm.default-provider-concurrency=${LLM_DEFAULT_PROVIDER_CONCURRENCY:3}
 app.llm.permit-wait-timeout-seconds=${LLM_PERMIT_WAIT_TIMEOUT_SECONDS:20}

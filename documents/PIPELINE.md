@@ -111,6 +111,24 @@ COST_FIRST와 동일하되,
 
 > **동시성 게이트**: ①~⑦ 모두 프로바이더별 동시성 게이트(`LlmRouter.executeGated()`, 서버의 실제 `--parallel` 값에 맞춘 `Semaphore`)를 거친다 — 여러 사용자의 질문이 겹쳐도 앱이 한 프로바이더에 동시 전송하는 요청 수는 이 한도를 넘지 않는다. 대기가 상한(기본 20초)을 넘으면 즉시 HTTP 429로 응답하고 재검색/재시도로 넘어가지 않는다. 문서 인덱싱의 LLM 호출(키워드 추출, MD 포맷 교정 등)은 이 게이트 대상이 아니며 기존 `INDEXING_MAX_LLM` 세마포어만 적용된다 — 상세는 [LLM_ROUTING.md §6](LLM_ROUTING.md#6-동시성-게이트--백프레셔) 참고.
 
+### 4.1 `app.llm.max-tokens`(`LLM_MAX_TOKENS`) 크기 산정 — 로컬 LLM 컨텍스트 윈도우와의 관계
+
+**`max_tokens`(completion 상한) ≠ 컨텍스트 윈도우(n_ctx, 입력+출력 합계).** `LLM_MAX_TOKENS`가 `OpenAiChatOptions.maxTokens()`로 들어가는 값은 LLM이 한 번에 생성할 수 있는 **출력** 토큰 상한일 뿐, 로컬 LLM 서버(예: llama-server)의 컨텍스트 크기(`--ctx-size`, 흔히 기본 8192)와는 별개다. 입력(system prompt + RAG 검색 결과 + 대화 히스토리 + 질문)이 이미 컨텍스트의 상당 부분을 차지하므로, `max_tokens`를 크게 잡아도 실제로 생성 가능한 토큰 수는 `n_ctx - 입력토큰수`로 물리적으로 제한된다 — 서버 구현에 따라 조용히 잘리거나, 입력이 이미 크면 "context length exceeded" 류의 에러가 난다. **컨텍스트 윈도우 자체는 로컬 서버 설정(`--ctx-size`)으로 조절 가능**하므로, 완성 상한을 늘리고 싶다면 `LLM_MAX_TOKENS`만 올리기보다 로컬 서버의 컨텍스트 크기를 함께(또는 우선) 늘리는 것이 근본적인 해법이다.
+
+**스트리밍 답변 경로는 이 값 자체를 전송하지 않는다.** ④(ANSWER 답변 생성)와 ②(DIRECT_ANSWER)의 실제 사용자 대면 스트리밍 경로(`AnswerService`/`DirectAnswerService`가 `OpenAiApi.chatCompletionStream()`을 직접 호출하는 4-arg `ChatCompletionRequest(messages, model, temperature, stream)`, 또는 `ChatClient` 스트리밍 폴백)는 `maxTokens` 필드 자체가 없는 오버로드를 쓴다 — 즉 **사용자가 실제로 보는 채팅 답변 길이는 `LLM_MAX_TOKENS`와 무관**하며, 대신 SSE 타임아웃(`app.sse-idle-timeout-seconds`)이 폭주를 막는다. `LLM_MAX_TOKENS`가 실제로 completion 상한을 거는 곳은 **블로킹** LLM 호출뿐이다 — ①③⑤⑥⑦ 및 인덱싱 계열(분류·쿼리확장·충분도평가·근거검증·PROGRESSIVE 재답변·키워드추출·TXT구조화), Direct의 블로킹(비스트리밍) 모드.
+
+**§6.18 이후, 이 값 하나가 서로 다른 3곳에 결합돼 있다** — `AppProperties.llmSafe().maxTokens()`를 공유하므로 하나를 올리면 셋이 함께 커진다:
+
+| 소비처 | 공식 | 6000(기본) | 8000 | 12000 |
+|---|---|---|---|---|
+| 블로킹 LLM completion 상한 | `LLM_MAX_TOKENS` 그대로 | 6000 | 8000 | 12000 |
+| 대화 히스토리 문자 예산(`MemoryService`) | `LLM_MAX_TOKENS × 0.75` | 4500자 | 6000자 | **9000자** |
+| MD 교정 섹션 크기(`MarkdownCorrectionService`, §6.3 6번) | `(LLM_MAX_TOKENS-500)/2` | 2750자 | 3750자 | **5750자** |
+
+MD 교정 한 번의 LLM 호출은 `섹션(입력) + 시스템 프롬프트/지시문 + 교정 결과(출력, 대체로 입력과 비슷한 크기)`가 전부 **같은 컨텍스트 윈도우 안**에 들어가야 한다. 한글은 토큰당 문자 수가 영어보다 적어(문자당 토큰 소모가 더 큼) 위 문자 수가 실제로는 상당한 토큰량이 되므로, `LLM_MAX_TOKENS=12000`(섹션 5750자)은 `n_ctx=8192`인 로컬 모델에서 컨텍스트 초과 위험이 실질적이다. 대화 히스토리 예산도 다음 답변 생성 프롬프트(RAG 검색 결과 + 질문 + 시스템 프롬프트까지 함께 얹힘)에 그대로 들어가므로 값을 올릴수록 컨텍스트 압박이 커진다.
+
+**권장**: 답변 길이 자체를 늘리려는 목적이라면 `LLM_MAX_TOKENS`는 적합한 손잡이가 아니다(위 스트리밍 경로 설명 참고). 로컬 배포에서 이 값을 정할 때는 컨텍스트 윈도우(`--ctx-size`, 기본 8192지만 모델이 허용하면 늘릴 수 있음)를 기준으로 위 표의 세 소비처가 합쳐도 여유가 남도록 마진을 두고(예: `n_ctx`의 절반 이하), 값을 8000~12000 등으로 올리고 싶다면 `LLM_MAX_TOKENS`를 올리기 전에 로컬 서버의 `--ctx-size`부터 그만큼(또는 그 이상) 늘려야 실제로 여유가 생긴다. 클라우드 프로바이더(Gemini/OpenAI 등)는 컨텍스트가 훨씬 크므로 이 값이 병목이 되지 않지만, `LlmConfig`가 이 값을 모든 프로바이더의 `defaultOptions`에 동일하게 굽기 때문에(뷰 전용, 재기동 필요) 가장 좁은 컨텍스트(보통 LOCAL)를 기준으로 잡아야 안전하다.
+
 ---
 
 ## 5. 재시도 조건
@@ -242,7 +260,9 @@ PROGRESSIVE 모드 AND sufficient=false AND retryCount >= max
       a) H2/H3/H4 챕터 헤딩(줄이 "## "·"### "·"#### "로 시작) — 펜스 안의 "### Job ID : ..." 같은
          로그/배치 실행 결과 줄은 헤딩처럼 보여도 분할 트리거로 취급하지 않음
       b) 섹션 길이가 maxSectionChars 초과 시 강제 분할
-         (maxSectionChars = max(500, (LLM_MAX_TOKENS-500)/2) → 기본 8,000토큰 기준 3,750자)
+         (maxSectionChars = max(500, (LLM_MAX_TOKENS-500)/2) → 기본 6,000토큰 기준 2,750자 —
+          §6.18 이전에는 별도의 죽은 프로퍼티를 통해 기본값 8,000을 읽어 3,750자였음. 이제
+          실제 LLM 응답 상한과 동일한 소스(app.llm.max-tokens)를 공유)
          — 펜스가 열려 있는 동안 초과가 감지되면 펜스는 자르지 않고, 펜스 시작 위치로 처리 분기:
            · 펜스가 이 섹션 안에서 MIN_SECTION_CHARS/2(250자) 이상 지난 뒤에 시작됐다면
              → 펜스 이전 내용까지만 즉시 flush하고, 펜스 전체(지금까지 쌓인 내용 포함)를

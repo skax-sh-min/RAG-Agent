@@ -110,6 +110,9 @@ container system stop
 | `LLM_ROUTING_MODE` | — | `COST_FIRST` | 기본 라우팅 모드 (`app.llm.default-routing-mode`). 폐쇄망/로컬 전용은 `LOCAL_ONLY`로 외부 프로바이더 호출 차단 — `LOCAL_ONLY`로 설정하면 채팅 사이드바의 라우팅 전략 드롭다운 자체가 사라짐(어떤 모드를 골라도 결과가 같으므로) |
 | `LLM_DEFAULT_PROVIDER_CONCURRENCY` | — | `3` | 질의 경로 프로바이더별 동시성 게이트(`app.llm.default-provider-concurrency`) — 앱이 한 프로바이더에 보내는 동시 요청이 이 값을 절대 넘지 않음(LLM 서버의 실제 `--parallel` 값에 맞춤). 프로바이더별 오버라이드: `app.llm.providers[N].concurrency` |
 | `LLM_PERMIT_WAIT_TIMEOUT_SECONDS` | — | `20` | 동시성 슬롯 대기 상한(`app.llm.permit-wait-timeout-seconds`) — 초과 시 read timeout까지 기다리지 않고 즉시 HTTP 429 + `Retry-After` 응답. 인덱싱/백그라운드 LLM 호출에는 적용되지 않음 |
+| `LLM_TEMPERATURE` | — | `0.0` | 일반/RAG 답변 temperature(`app.llm.temperature`) — 빈 생성 시점에 각 프로바이더의 `OpenAiChatOptions`에 고정됨. `/settings`에서 **조회 전용**(변경하려면 재기동) |
+| `LLM_MAX_TOKENS` | — | `6000` | **블로킹** LLM 호출(분류·키워드 추출·MD 교정·충분도/근거 평가·TXT 구조화 등) 전용 completion 길이 상한 — 스트리밍 채팅/Direct 답변은 이 값과 무관(대신 SSE 타임아웃이 제한). 대화 히스토리 예산·MD 교정 섹션 분할 크기도 같은 값을 공유. **모델 컨텍스트 윈도우 자체가 아님** — 실제 LLM 서버 컨텍스트 크기에 여유를 두고 설정할 것 — [PIPELINE.md §4.1](documents/PIPELINE.md#41-appllmmax-tokensllm_max_tokens-크기-산정--로컬-llm-컨텍스트-윈도우와의-관계) 참고 |
+| `DIRECT_LLM_TEMPERATURE` | — | `0.1` | meta/Direct 답변 전용 temperature(`app.llm.direct-temperature`), `LLM_TEMPERATURE`와 별개, `[0.0, 0.2]`로 clamp. **`/settings`에서 핫 수정** — 재기동 없이 다음 Direct 호출부터 적용 |
 | `OPENAI_API_KEY` | — | — | OpenAI providers 사용 시 필요. 미설정 시 해당 providers 자동 비활성화 |
 | `GEMINI_API_KEY` | — | — | Gemini providers 사용 시 필요. 미설정 시 해당 providers 자동 비활성화 |
 | `EMBED_BASE_URL` | — | `LOCAL_LLM_URL` | 임베딩 전용 엔드포인트. 미설정 시 `LOCAL_LLM_URL` 사용 |
@@ -317,7 +320,7 @@ rag_java/
 - **인플라이트 single-flight (임베딩)** — 완전히 동일한(정규화 후) 텍스트를 동시에 요청하면(예: 여러 사용자가 거의 동시에 같은 질문) 첫 호출만 실제로 계산하고 나머지는 그 결과를 공유(`CachingEmbeddingModel`) — 각자 다시 계산하지 않음
 - **과부하 인지 서킷브레이커** — 폴백 프로바이더가 없는 상태에서(예: 단일 LOCAL 배포) 429/402/503을 받으면 기본 다중 분 단위 차단 대신 30초로 짧게 차단해 일시적 용량 초과가 채팅 전체를 다운시키지 않음 — 다른 프로바이더로 넘길 수 있는 상황이면 기존처럼 정상 차단 후 자동 폴백
 - **동일 우선순위 로드밸런싱** — 같은 role·priority로 프로바이더를 여러 대 등록하면(예: 로컬 서버 2대) 동시성 게이트 여유가 더 많은 쪽으로 요청이 자동 분산(least-in-flight) — 코드 변경 없이 배포 설정만으로 처리량 수평 확장
-- **설정 페이지(`/settings`)** — 유효 LLM/RAG 설정(프로바이더·라우팅·임베딩·검색 튜닝)을 한 화면에서 조회하고, 검색 튜닝 값(유사도 임계값·RRF 가중치/k·후보 배수·멀티쿼리 최소 길이·재시도 확대)은 **재기동 없이** 다음 검색부터 적용되는 **핫 수정**이 가능(`settings_override` 테이블에 영속, 삭제 시 프로퍼티 기본값 복귀). 수정은 관리자 전용이며 감사 로그에 기록되고, 재기동 필요 값은 조회 전용으로 표시
+- **설정 페이지(`/settings`)** — 유효 LLM/RAG 설정(프로바이더·라우팅·임베딩·검색 튜닝)을 한 화면에서 조회. 세 그룹의 값이 **재기동 없이 핫 수정** 가능(`settings_override` 테이블에 영속, 삭제 시 프로퍼티 기본값 복귀): 검색 튜닝(유사도 임계값·RRF 가중치/k·후보 배수·멀티쿼리 최소 길이/활성화·재시도 확대·topK·하이브리드 검색 — 다음 검색부터 적용), 인덱싱/청킹(청크 크기/오버랩/최소 크기·동시 파일/LLM 호출 수 제한 — 다음 인덱싱/↺ 재인덱싱부터 적용), Direct 답변 temperature(다음 Direct 호출부터 적용). 수정은 관리자 전용이며 감사 로그에 기록되고, 재기동 필요 값(rerank-enabled·일반 temperature/max-tokens·임베딩 설정 등)은 조회 전용으로 표시
 - **벡터 검색** — `MultiQueryExpander`(3쿼리 병렬, 짧은 키워드형 질문은 확장 생략)로 최적 검색 후 선택된 백엔드(ChromaDB 또는 sqlite-vec)로 유사도 검색. 원본 질문 검색은 쿼리 확장과 병렬로 실행되어 확장 대기 뒤로 밀리지 않음. Chroma 배치 검색은 실제로 읽는 메타데이터/문서/거리 필드만 요청하고 쓰지 않는 임베딩 벡터는 요청하지 않아, 후보 풀이 큰 경우에도 응답이 가볍게 유지됨
 - **Contextual Retrieval** — 청크 임베딩과 키워드 검색(`chunk_fts`) 입력 앞에 맥락 헤더(`{파일명} > {섹션 제목}` + 키워드 추출과 같은 호출에서 생성되는 LLM 1~2문장 요약)를 결합해, 표·코드 조각·대명사 위주 텍스트처럼 단독으로는 모호한 청크의 검색 재현율을 높임. 이 헤더는 저장·표시 텍스트, 출처 미리보기, 답변 프롬프트에는 절대 나타나지 않고 임베딩/키워드 검색 입력에만 반영됨
 - **임베딩 입력 정규화** — 마크다운 장식(구분선, 볼드/이탤릭/밑줄 마커)을 임베딩·`chunk_fts`·답변 프롬프트 입력에서만 제거(저장·표시 텍스트는 원문 유지)해 검색 인덱스 노이즈와 프롬프트 토큰 사용량을 줄임

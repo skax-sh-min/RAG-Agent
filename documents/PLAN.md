@@ -36,7 +36,7 @@
 | 2 | 운영 준비 잔여 — SQLite 백업 자동화(Litestream/cron), Caddy 인증서 만료 모니터링 | 미착수 |
 | 3 | §9.4 — CADDY 하위호환 별칭 | 선택, 낮은 우선순위 |
 | 4 | Phase 2 남은 실기기 검증 2건 (키보드 하단 고정 · 홈 화면 standalone) | 좌우 스크롤·다크모드는 자동 검증 완료, 나머지는 실기기 필요 |
-| 5 | **§6.18 Direct 메시지 전용 LLM Temperature 분리** | 미착수 (2026-07-09 요청, 낮은 우선순위). §6.13 설정 페이지 선행 완료 — 이제 진행 가능 |
+| 5 | **§6.18 Direct 메시지 전용 LLM Temperature 분리** | ✅ 완료 — temperature/max-tokens 하드코딩 제거·config화, Direct temperature 분리 + 핫 수정. 상세는 §6.18 본문 |
 
 > **§6.12 완료**: 다중 사용자 동시 LLM 요청 처리 — 채팅 경로 무제한 동시성(인덱싱만 세마포어 존재) → 슬롯 초과 시 429→서킷브레이커 전면차단·타임아웃 폭주 위험이었던 문제를 5단계로 해결. ① 프로바이더별 동시성 세마포어(`LlmRouter.acquirePermit`/`executeGated`, 채팅/질의 경로 전체 적용) ② 대기상한+429 백프레셔(`LlmBackpressureException`) ③ `CachingEmbeddingModel` in-flight single-flight(동일 텍스트 동시 요청 thundering herd 제거) ④ 폴백 없는 유일 프로바이더의 서킷브레이커 단축 차단(`blockForOverload`, 다중 분 단위 전면 다운 방지) ⑤ 동일 role·priority 프로바이더 로드밸런싱(least-in-flight, 처리량 수평 확장). 인덱싱/백그라운드 경로는 의도적으로 미적용(회귀 방지, 자체 세마포어 유지). 상세는 §6.12 본문 참조.
 > **§6.13 완료**: `/settings` LLM/RAG 설정 조회 + 핫 수정 페이지. 상세는 §6.13 본문 참조.
@@ -290,23 +290,13 @@ no-auth 기본 배포에서 `/documents` 쓰기와 `/admin/**`이 로그인 없�
 
 ---
 
-### 6.18 Direct 메시지 전용 LLM Temperature 분리 🔵 미착수 — 지금 진행, 낮은 우선순위 (2026-07-09 요청)
+### 6.18 Direct 메시지 전용 LLM Temperature 분리 ✅ 완료 (2026-07-09 요청)
 
-**현재 상태 (코드 확인)**: temperature는 겉보기엔 `LLM_TEMPERATURE` 환경변수(`application.properties`의 `spring.ai.openai.chat.options.temperature=${LLM_TEMPERATURE:0.0}`, README.md/OPERATOR_MANUAL.md가 "0.0~2.0 조정 가능"이라 문서화)로 조정 가능해 보이지만, **실제로는 어디서도 이 값을 읽지 않는다** — `LlmRouter`가 실제로 선택하는 모든 provider `ChatModel`은 `LlmConfig.llmRouter()`(`config/LlmConfig.java:66-74`)가 기동 시점에 직접 생성하며, 그 `OpenAiChatOptions`에 `.temperature(0.0)`이 **하드코딩**되어 있다(CLAUDE.md의 "모든 LLM 프로바이더는 LlmRouter를 거쳐야 함" 원칙과 일치하는 구조지만, 결과적으로 `spring.ai.openai.*` 프로퍼티로 만들어지는 Spring AI 오토컨피규레이션 빈은 LlmRouter 경로에서 전혀 쓰이지 않아 `LLM_TEMPERATURE`가 죽은 설정이 됐다). `DirectAnswerService`(meta 질문 직접 응답, `service/DirectAnswerService.java:84-85` `buildPrompt()`)와 `AnswerService`(RAG 답변) 모두 이 하드코딩된 0.0을 그대로 물려받아 애초에 구분 자체가 없다.
+> **완료 요약**: 하드코딩 4곳(`LlmConfig` defaultOptions의 temp/maxTokens + `AnswerService`·`DirectAnswerService` 스트리밍 우회 경로의 temp)을 제거하고 config 기반으로 전환. 신규 `app.llm.temperature`(일반/RAG, `LLM_TEMPERATURE`, 죽은 설정이었으나 이제 실제 적용)·`app.llm.direct-temperature`(Direct 전용, `DIRECT_LLM_TEMPERATURE`, 기본 0.1, `[0,0.2]` clamp)·`app.llm.max-tokens`(`LLM_MAX_TOKENS`, 기본 6000). 일반 temperature·max-tokens는 프로바이더 빈에 baked → 조회 전용(재기동); **direct-temperature만 `DirectAnswerService`가 매 호출 `props.llmSafe().directTemperature()`로 재조회 → 핫 수정**(블로킹은 `Prompt`의 `OpenAiChatOptions`, 스트리밍은 `ChatCompletionRequest` temperature로 주입). §6.13 `/settings`의 새 "LLM 튜닝" 그룹에 슬라이더(0.0~0.2)로 노출. max-tokens는 조회 전용 유지(표시만 정확화) — 스트리밍 채팅 답변은 32-arg 정식 생성자 취약성을 피해 미적용(SSE 타임아웃이 폭주 방지, 기존 동작과 동일). 회귀 테스트: `AppPropertiesOverrideTest`(direct-temperature override+clamp), `DirectAnswerServiceTest`(Prompt에 direct-temperature 실림).
+>
+> **후속 — LLM_MAX_TOKENS 단일화 (2026-07-17 요청)**: `app.llm.max-tokens`(기본 6000, 실제 LLM 상한)와는 별개로 `MemoryService`(대화 컨텍스트 문자 예산)·`MarkdownCorrectionService`(MD 교정 섹션 크기)가 여전히 죽은 `spring.ai.openai.chat.options.max-tokens`(기본 8000, `@Value`로 직접 주입)를 읽고 있어 같은 환경변수 `LLM_MAX_TOKENS`에 서로 다른 기본값 2개가 걸려 있던 문제를 통일. 두 서비스 모두 `AppProperties` 주입으로 전환해 `props.llmSafe().maxTokens()`(6000)를 공유하도록 수정, `spring.ai.openai.chat.options.temperature`/`max-tokens` 프로퍼티 라인 자체를 `application.properties`에서 제거(어차피 `LlmConfig.primaryChatModel()`이 Spring AI의 `@ConditionalOnMissingBean(ChatModel.class)` 자동설정 빈 생성을 막아 두 값 모두 100% 죽은 설정이었음을 바이트코드로 확인). **동작 변경**: 대화 히스토리 문자 예산이 `8000×0.75=6000`자 → `6000×0.75=4500`자로, MD 교정 섹션 크기가 `(8000-500)/2=3750`자 → `(6000-500)/2=2750`자로 기본값이 줄어듦(과거 분량을 유지하려면 `LLM_MAX_TOKENS`를 올릴 것). `spring.ai.openai.api-key`/`base-url`/`chat.options.model` 3줄도 같은 이유로 죽은 설정임을 확인했으나 `app.llm.providers[0].*`와 값이 동일해(같은 env var) 이번엔 그대로 두고 주석으로만 표시 — 완전 제거는 별도 정리 대상.
 
-**요청 배경**: meta 질문(인사·잡담 등, RAG 미사용 직접 응답)은 문서 근거가 없는 자유 응답이라 RAG 답변보다 약간의 다양성이 자연스러울 수 있어, Direct 경로만 별도로 0.0~0.2(기본 0.1) 범위에서 화면 조정 가능하게 하고 싶다는 요청.
-
-**개선안**:
-1. **선결 — temperature를 실제로 살아있는 설정으로 전환**: `LlmConfig.java:70`의 하드코딩된 `.temperature(0.0)`을 제거하고(provider별 `defaultOptions`는 유지하되 특정 고정값을 강제하지 않음), 실제 온도는 **호출 시점에 `Prompt`의 `ChatOptions`로 오버라이드**한다 — Spring AI는 `Prompt(messages, chatOptions)`에 실린 옵션이 모델 `defaultOptions`보다 우선 적용되므로, 같은 라우터/프로바이더 빈을 공유하면서도 호출부(Direct vs RAG)마다 다른 온도를 지정할 수 있다. §6.13의 "temperature/max-tokens 핫 수정 가능" 전제도 이 전환이 선행돼야 실제로 동작한다(지금은 빈 생성 시점에 고정이라 핫 리로드 자체가 물리적으로 불가능).
-2. **신규 프로퍼티**: `app.llm.direct-temperature`(`AppProperties.LlmConfig`에 필드 추가, `DIRECT_LLM_TEMPERATURE` 환경변수) — 기본 `0.1`, `llmSafe()`에서 `[0.0, 0.2]`로 clamp. RAG 경로(`AnswerService`)는 선결 작업으로 "살아있게" 고친 뒤에도 기존 `LLM_TEMPERATURE`(기본 0.0)를 그대로 프로바이더 기본 온도로 계속 사용 — 이번 항목에서 RAG 쪽 값 자체는 새로 건드리지 않는다.
-3. **적용 지점**: `DirectAnswerService`의 블로킹 경로(`buildPrompt()`가 만드는 `Prompt`)와 스트리밍 경로(`ChatClient.builder(provider.chatModel())...`) 양쪽에서 `OpenAiChatOptions.builder().temperature(directTemperature).build()`를 실어 보낸다.
-4. **UI 노출**: 별도 화면을 새로 만들지 않고 §6.13 설정 페이지(신규 `/settings`)의 "핫 수정 가능" LLM 그룹에 슬라이더/숫자 입력(0.0~0.2, step 0.05, 기본 0.1)으로 포함한다 — §6.13이 이미 temperature를 핫 수정 대상으로 지목해뒀으므로 §6.13 구현 시 함께 추가하면 설정 저장·권한·감사 배관(§6.13 3)/4))을 중복 구축하지 않아도 된다. **§6.13 선행이 이 항목의 전제.**
-
-**완료 기준**:
-- Direct(meta) 응답과 RAG 응답이 서로 다른 temperature로 호출된다(`LoggingChatModel`의 curl 재현 로그로 확인 가능).
-- `app.llm.direct-temperature`를 0.0~0.2 범위 밖 값으로 설정해도 clamp되어 기동/응답이 깨지지 않는다.
-- §6.13 설정 페이지에서 값을 조정하면 재기동 없이 다음 Direct 호출부터 반영된다.
-- "선결" 작업(온도 하드코딩 제거) 이후 `LLM_TEMPERATURE`가 RAG 경로에 처음으로 실제 적용되기 시작한다는 점을 동작 변경으로 명시 — 값 자체(기본 0.0)는 바뀌지 않으므로 즉시 체감 회귀는 없지만, 운영자가 과거에 설정해 둔 `LLM_TEMPERATURE`가 있다면 이번에 처음으로 실제 적용된다는 점을 릴리스 노트에 남긴다.
+**배경(착수 전 상태, 참고용)**: temperature는 `LLM_TEMPERATURE` 환경변수로 조정 가능해 보였으나, `LlmRouter`가 실제로 쓰는 provider `ChatModel`은 `LlmConfig.llmRouter()`가 기동 시점에 `.temperature(0.0)`을 하드코딩해 생성했다(Spring AI 오토컨피규레이션 빈은 라우터 경로에서 안 쓰여 `LLM_TEMPERATURE`가 죽은 설정이었음). Direct/RAG 구분 자체가 없었다. 해법은 하드코딩 제거 후 호출 시점 `Prompt`의 `ChatOptions`로 온도를 오버라이드(Spring AI는 `defaultOptions`보다 우선 적용)하는 방식 — 위 "완료 요약"에 반영된 결과가 최종 구현이다.
 
 ---
 
@@ -407,14 +397,7 @@ Google/GitHub 제공자 등록. 가입 흐름은 **기존 폼 가입과 동등**
 
 ### Step 5.1~5.8 — 백엔드 추상화 + sqlite-vec 구현 ✅ 완료
 
-- **5.1** Chroma 호출을 `VectorStoreProvider` 인터페이스 뒤로 이전(동작 변화 없는 순수 리팩토링).
-- **5.2** `load_extension()`으로 운영자 제공 `vec0` 바이너리 로드, `SqliteVecVerifier`가 기동 시 `vec_version()` 확인 후 fail-fast.
-- **5.3** 차원이 DDL 상수라 Flyway 대신 동적 DDL. 벡터(`vec_embeddings`)/텍스트·메타(`vec_document_chunks`) 분리 후 `spring_doc_id` JOIN. 차원 미설정 시 fail-fast.
-- **5.4** `SqliteVecVectorStoreProvider`: version을 partition key로 KNN 필터링, cosine→유사도 변환(Chroma와 동일 스케일). upsert 미지원이라 add=DELETE 후 INSERT.
-- **5.5** `VectorStoreProviderConfig`가 `app.vectorstore.type`으로 택일(기본 chroma), Chroma 전용 빈은 `@ConditionalOnProperty` 가드.
-- **5.6** `chroma` 서비스를 compose profile로 분리, sqlite-vec 모드는 무-Chroma 기동.
-- **5.7** 백엔드 전환=재인덱싱(원본 보존, 무손실). `SqliteVecIntegrationTest`(vec0 없으면 skip)로 E2E 검증.
-- **5.8** sqlite-vec 모드에서 비어있던 청크 브라우징을 `VectorStoreAdminView`로 해결(백엔드 공통 상태 카드 + CRUD 패리티).
+세부 산출물은 위 로드맵 표 참고. 보완 메모: 5.3 차원 미설정 시 fail-fast. 5.4 upsert 미지원이라 add=DELETE 후 INSERT. 5.7 백엔드 전환은 항상 재인덱싱 필요(원본 보존, 무손실).
 
 ### Step 5.9 — 태그 기반 검색 스코프 ✅ 완료
 
@@ -494,7 +477,7 @@ G1~G4 코드/문서 완료, G5(라우팅 계층의 외부 무선택)도 완료. 
 
 ### 10.1~10.4 — Phase 7-A·B·C 정확도 기반 개선 ✅ 완료
 
-청크 맥락 헤더 주입(§10.1, ROI 1순위 — 대명사·표·코드 조각처럼 단독으로 모호한 청크의 재현율 개선, 저장 텍스트는 원문 불변)과 임베딩 입력 정규화(§10.1-보완, 재인덱싱 필요), RRF 벡터/키워드축 가중 정규화(§10.2, BM25 구조적 저평가 해소), 반복 질의 재임베딩 제거(§10.3), 한국어 활용형·코드 부분열 매칭을 위한 trigram FTS 전환(§10.4, 2글자 단독어는 무손실 재구축이라도 놓침 — §10.7.3 LIKE 폴백으로 보완).
+세부 산출물은 위 표 참고. 보완 메모: §10.1 저장 텍스트는 원문 불변(맥락 헤더는 임베딩/FTS 입력에만). §10.1-보완은 재인덱싱 필요. §10.4 trigram 전환은 2글자 단독어를 여전히 놓쳐 §10.7.3 LIKE 폴백으로 별도 보완했다.
 
 ### 10.5 검토 후 제외 (Phase 7-D 취소)
 
@@ -508,15 +491,15 @@ G1~G4 코드/문서 완료, G5(라우팅 계층의 외부 무선택)도 완료. 
 
 ### 10.7 검색 정확도 마무리 (Phase 7-E) ✅ 완료
 
-리랭커 프리뷰 확장(§10.7.1, 200→500자+구조적 헤더), 하이브리드 검색 기본 활성화(§10.7.2, `SEARCH_HYBRID_ENABLED` false→true — `chunk_fts`는 플래그와 무관하게 항상 채워지고 있었으므로 이미 지불한 인덱싱 비용 회수), 2글자 한국어 질의의 BM25 0건 반환을 `LIKE` 보조 스캔으로 완화(§10.7.3, `KeywordSearchRepository.search()` 내부 국한), 유사도 임계값 활성 시 후보 풀 과조회 보정(§10.7.4, `topK×2`)까지 거친 뒤, §10.7.5에서 실 코퍼스 골든셋(NEXCORE 문서 3종 기반 26문항) + recall@k/nDCG@k 평가 하네스(`src/test/.../evaluation/`, `SqliteVecIntegrationTest`와 동일하게 `-Dsearch-eval.enabled=true` 게이팅, 검색만 호출하는 읽기 전용)를 구축해 **2026-07-16 실측 baseline: mean recall@10=0.962(25/26), nDCG@10=0.810**을 확보했다 — §10.7.2·§10.7.3의 무측정 결정을 데이터로 재검증 완료. 유일한 미스는 `sample-02`("DM 간 호출 가능 여부"), 향후 검색 튜닝 변경의 회귀 비교 baseline으로 이 수치를 기준 삼는다.
+세부 산출물은 위 표 참고. §10.7.5에서 실 코퍼스 골든셋(NEXCORE 문서 3종, 26문항) + recall@k/nDCG@k 평가 하네스(`src/test/.../evaluation/`, `-Dsearch-eval.enabled=true` 게이팅)로 **2026-07-16 실측 baseline: mean recall@10=0.962(25/26), nDCG@10=0.810**을 확보 — §10.7.2·§10.7.3의 무측정 결정을 데이터로 재검증했다. 유일한 미스는 `sample-02`("DM 간 호출 가능 여부"); 이 수치를 향후 검색 튜닝 변경의 회귀 비교 baseline으로 삼는다.
 
 ### 10.8 검색·인덱싱 속도 개선 (Phase 7-E) ✅ 완료
 
-MultiQuery 확장 최소 길이 상향(0→15, `app.search-multiquery-min-length`) + 원본 질의 검색을 확장 LLM 호출과 가상 스레드로 병렬 실행해 크리티컬 패스 단축(§10.8.1), 청크 N개(기본 4)를 번호 매긴 프롬프트로 묶어 배치당 1회 호출해 인덱싱 LLM 왕복을 `ceil(청크수/N)`로 감소(§10.8.2, `KeywordExtractor.enrichKeywordsBatch()`, 배치 실패 시 곧장 개별 TF 폴백), sqlite-vec의 `vec_embeddings`+`vec_document_chunks` 배치 삽입 2개를 `TransactionTemplate`으로 결합해 중간 실패 시 고아 행 방지(§10.8.3), 디렉터리 동기화의 SHA-256 이중 해싱을 `IndexRequest.precomputedSha256` 전달로 제거(§10.8.4), 임베딩+FTS 파생 텍스트를 청크당 1회만 계산해 `MetaKey.SEARCH_TEXT`로 공유(§10.8.5, 영속 전 제거).
+세부 산출물은 위 표 참고. 보완 메모: §10.8.2 배치 실패 시 곧장 개별 TF 폴백. §10.8.3 트랜잭션 결합으로 고아 vec_embeddings 행 방지.
 
 ### 10.9 메모리 최적화 (Phase 7-E) ✅ 완료
 
-Chroma 배치 검색이 `mapPerQuery()`가 쓰지 않는 임베딩 필드까지 응답으로 받아오던 것을 `RESULT_INCLUDE` 상수로 축소(§10.9.1, 리랭크 활성 시 검색 1회당 ~1MB 절감; 벡터를 그대로 되돌려 쓰는 `updateTags()`는 영향 없음), sqlite-vec 벡터를 JSON 텍스트 리터럴(~15KB) 대신 little-endian float32 BLOB(~6KB, `toVectorBlob()`)로 직렬화(§10.9.2, 기존 데이터와 호환되어 백필 불필요 — 폐쇄망 vec0 빌드의 BLOB 미지원 가능성은 낮지만 백엔드 전환 시 문서 1건으로 우선 확인 권장, OPERATOR_MANUAL.md에 기록), 대형 문서 `add()`가 전체 임베딩을 힙에 모은 뒤 일괄 삽입하던 것을 토큰 서브배치 단위로 임베딩 직후 즉시 삽입하는 스트리밍 구조로 전환해 피크 메모리를 문서 크기 대신 서브배치 크기에 비례하게 함(§10.9.3, §10.8.3의 트랜잭션 결합은 서브배치 단위로 유지), 인덱싱 청크 임베딩이 `CachingEmbeddingModel.unwrapForIndexing()`으로 질의 캐시를 우회해 대량 인덱싱이 직전 검색 캐시를 밀어내지 않도록 함(§10.9.4, 캐시 키도 SHA-256 해시로 고정 크기화).
+세부 산출물은 위 표 참고. 보완 메모: §10.9.1 벡터를 그대로 되돌려 쓰는 `updateTags()`는 영향 없음. §10.9.2 BLOB 직렬화는 기존 데이터와 호환(백필 불필요) — 폐쇄망 vec0 빌드의 BLOB 미지원 가능성은 낮지만 백엔드 전환 시 문서 1건으로 우선 확인 권장(OPERATOR_MANUAL.md 기록). §10.9.4 캐시 키는 SHA-256 해시로 고정 크기화.
 
 ---
 

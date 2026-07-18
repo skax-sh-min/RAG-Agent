@@ -113,8 +113,10 @@ class DocumentIndexerTest {
         // never-invoked LlmRouter mock is fine) — it's a no-op unless the MD already has a
         // numbered heading, so this is safe as the shared default for every test while still
         // letting reindex-renumbering tests exercise genuine behavior.
+        when(props.llmSafe()).thenReturn(new AppProperties.LlmConfig(
+                java.util.List.of(), 2, 10, 180, "COST_FIRST", 0.6, 3, 20, 0.0, 0.1, 8000));
         MarkdownCorrectionService realCorrectionForRenumber =
-                new MarkdownCorrectionService(mock(com.example.ragagent.llm.LlmRouter.class), props, 8000);
+                new MarkdownCorrectionService(mock(com.example.ragagent.llm.LlmRouter.class), props);
         when(correctionService.reapplyHeadingNumbers(any()))
                 .thenAnswer(inv -> realCorrectionForRenumber.reapplyHeadingNumbers(inv.getArgument(0)));
         TextToMarkdownService textToMarkdownService = mock(TextToMarkdownService.class);

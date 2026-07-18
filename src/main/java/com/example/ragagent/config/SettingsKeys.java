@@ -49,6 +49,9 @@ public final class SettingsKeys {
     public static final String INDEXING_MAX_CONCURRENT_FILES  = "indexing.max-concurrent-files";
     public static final String INDEXING_MAX_CONCURRENT_LLM    = "indexing.max-concurrent-llm-calls";
 
+    // ── LLM (apply on the next LLM call) ─────────────────────────────────────
+    public static final String LLM_DIRECT_TEMPERATURE         = "llm.direct-temperature";
+
     /** All hot-editable keys, in the order they are grouped on the settings page. */
     public static final List<String> HOT_EDITABLE = List.of(
             SEARCH_SIMILARITY_THRESHOLD,
@@ -65,6 +68,7 @@ public final class SettingsKeys {
             CHUNK_OVERLAP,
             MIN_CHUNK_SIZE,
             INDEXING_MAX_CONCURRENT_FILES,
-            INDEXING_MAX_CONCURRENT_LLM
+            INDEXING_MAX_CONCURRENT_LLM,
+            LLM_DIRECT_TEMPERATURE
     );
 }
