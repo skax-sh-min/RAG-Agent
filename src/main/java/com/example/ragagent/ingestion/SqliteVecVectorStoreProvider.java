@@ -32,6 +32,11 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.Semaphore;
 import java.util.function.BiConsumer;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -164,51 +169,140 @@ public class SqliteVecVectorStoreProvider implements VectorStoreProvider {
         String now = Instant.now().toString();
         TransactionTemplate tx = transactionTemplate();
 
-        for (List<Document> batch : batchingStrategy.batch(embedInputDocs)) {
-            List<String> texts = batch.stream().map(Document::getText).toList(); // already derived
-            List<float[]> batchEmbeddings = embedBatchWithFallback(indexingEmbeddingModel, texts);
-            List<Document> originals = batch.stream().map(d -> docsById.get(d.getId())).toList();
-
-            BatchPreparedStatementSetter embeddingSetter = new BatchPreparedStatementSetter() {
-                @Override public void setValues(PreparedStatement ps, int i) throws SQLException {
-                    ps.setString(1, originals.get(i).getId());
-                    ps.setString(2, version);
-                    ps.setBytes(3, toVectorBlob(batchEmbeddings.get(i)));
-                }
-                @Override public int getBatchSize() { return originals.size(); }
-            };
-
-            List<Object[]> chunkRows = new ArrayList<>(originals.size());
-            for (Document d : originals) {
-                Map<String, Object> meta = d.getMetadata() == null ? new HashMap<>() : new HashMap<>(d.getMetadata());
-                meta.remove(MetaKey.CHUNK_CONTEXT); // transient — never persisted
-                meta.remove(MetaKey.SEARCH_TEXT);   // transient — never persisted (§10.8.5)
-                chunkRows.add(new Object[]{
-                        d.getId(),
-                        d.getText() == null ? "" : d.getText(),
-                        toJson(meta),
-                        version,
-                        String.valueOf(meta.getOrDefault(MetaKey.DOC_ID, "")),
-                        now
-                });
+        List<List<Document>> subBatches = batchingStrategy.batch(embedInputDocs);
+        int maxConcurrentBatches = embeddingMaxConcurrentBatches();
+        if (maxConcurrentBatches <= 1 || subBatches.size() <= 1) {
+            // §10.9.3 streaming: embed + insert per sub-batch so peak heap stays bounded by
+            // sub-batch size rather than whole-document size (unchanged default behavior).
+            for (List<Document> batch : subBatches) {
+                List<float[]> batchEmbeddings = embedBatchWithFallback(
+                        indexingEmbeddingModel, batch.stream().map(Document::getText).toList());
+                insertSubBatch(batch, docsById, batchEmbeddings, version, now, tx);
+                done += batch.size();
+                onProgress.accept(done, total);
             }
-
-            // §10.8.3 — both batch inserts for this sub-batch commit together (one round-trip)
-            // instead of two separate autocommit statements, and a mid-write failure no longer
-            // leaves orphaned vec_embeddings rows with no matching vec_document_chunks row.
-            Runnable insertBoth = () -> {
-                jdbc.batchUpdate(INSERT_EMBEDDING, embeddingSetter);
-                jdbc.batchUpdate(INSERT_CHUNK, chunkRows);
-            };
-            if (tx != null) {
-                tx.executeWithoutResult(status -> insertBoth.run());
-            } else {
-                insertBoth.run();
+        } else {
+            // §6.21 E2 — embed all sub-batches in parallel (the E1 load balancer spreads them across
+            // endpoints), then insert serially (SQLite pool=1 requires serial writes). This trades
+            // §10.9.3's streaming memory bound (all embeddings held at once) for indexing throughput,
+            // so it stays strictly opt-in behind app.embedding.max-concurrent-batches.
+            Map<String, float[]> embeddingByDocId = concurrentEmbed(subBatches, maxConcurrentBatches);
+            for (List<Document> batch : subBatches) {
+                List<float[]> batchEmbeddings = batch.stream()
+                        .map(d -> embeddingByDocId.get(d.getId())).toList();
+                insertSubBatch(batch, docsById, batchEmbeddings, version, now, tx);
+                done += batch.size();
+                onProgress.accept(done, total);
             }
-
-            done += batch.size();
-            onProgress.accept(done, total);
         }
+    }
+
+    /**
+     * §10.8.3 — inserts one sub-batch's vec_embeddings + vec_document_chunks rows together in a
+     * single transaction (one round-trip) so a mid-write failure never leaves orphaned vector rows
+     * with no matching chunk row. {@code batchEmbeddings} aligns index-for-index with {@code batch}.
+     */
+    private void insertSubBatch(List<Document> batch, Map<String, Document> docsById,
+                                List<float[]> batchEmbeddings, String version, String now, TransactionTemplate tx) {
+        List<Document> originals = batch.stream().map(d -> docsById.get(d.getId())).toList();
+
+        BatchPreparedStatementSetter embeddingSetter = new BatchPreparedStatementSetter() {
+            @Override public void setValues(PreparedStatement ps, int i) throws SQLException {
+                ps.setString(1, originals.get(i).getId());
+                ps.setString(2, version);
+                ps.setBytes(3, toVectorBlob(batchEmbeddings.get(i)));
+            }
+            @Override public int getBatchSize() { return originals.size(); }
+        };
+
+        List<Object[]> chunkRows = new ArrayList<>(originals.size());
+        for (Document d : originals) {
+            Map<String, Object> meta = d.getMetadata() == null ? new HashMap<>() : new HashMap<>(d.getMetadata());
+            meta.remove(MetaKey.CHUNK_CONTEXT); // transient — never persisted
+            meta.remove(MetaKey.SEARCH_TEXT);   // transient — never persisted (§10.8.5)
+            chunkRows.add(new Object[]{
+                    d.getId(),
+                    d.getText() == null ? "" : d.getText(),
+                    toJson(meta),
+                    version,
+                    String.valueOf(meta.getOrDefault(MetaKey.DOC_ID, "")),
+                    now
+            });
+        }
+
+        Runnable insertBoth = () -> {
+            jdbc.batchUpdate(INSERT_EMBEDDING, embeddingSetter);
+            jdbc.batchUpdate(INSERT_CHUNK, chunkRows);
+        };
+        if (tx != null) {
+            tx.executeWithoutResult(status -> insertBoth.run());
+        } else {
+            insertBoth.run();
+        }
+    }
+
+    /** §6.21 E2 — parallel sub-batch embedding degree (1 = serial streaming, the default). */
+    private int embeddingMaxConcurrentBatches() {
+        AppProperties.EmbeddingConfig ec = props.embeddingSafe();
+        return (ec != null && ec.maxConcurrentBatches() != null && ec.maxConcurrentBatches() > 1)
+                ? ec.maxConcurrentBatches() : 1;
+    }
+
+    /**
+     * §6.21 E2 — embeds every sub-batch concurrently (bounded by {@code maxConcurrent}; the E1 load
+     * balancer distributes the calls across endpoints), returning docId → embedding. Inserts stay
+     * the caller's responsibility so SQLite writes remain serial (pool=1).
+     */
+    private Map<String, float[]> concurrentEmbed(List<List<Document>> subBatches, int maxConcurrent) {
+        Map<String, float[]> out = new ConcurrentHashMap<>();
+        Semaphore gate = new Semaphore(maxConcurrent);
+        try (var exec = Executors.newVirtualThreadPerTaskExecutor()) {
+            List<Future<?>> futures = new ArrayList<>(subBatches.size());
+            for (List<Document> batch : subBatches) {
+                acquire(gate);
+                futures.add(exec.submit(() -> {
+                    try {
+                        List<float[]> emb = embedBatchWithFallback(
+                                indexingEmbeddingModel, batch.stream().map(Document::getText).toList());
+                        for (int i = 0; i < batch.size(); i++) {
+                            out.put(batch.get(i).getId(), emb.get(i));
+                        }
+                    } finally {
+                        gate.release();
+                    }
+                }));
+            }
+            awaitAll(futures);
+        }
+        return out;
+    }
+
+    private static void acquire(Semaphore gate) {
+        try {
+            gate.acquire();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException("Interrupted while waiting to embed a sub-batch", e);
+        }
+    }
+
+    /** Waits for all embedding tasks, propagating the first failure (unwrapped) after awaiting the rest. */
+    private static void awaitAll(List<Future<?>> futures) {
+        RuntimeException failure = null;
+        for (Future<?> f : futures) {
+            try {
+                f.get();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                if (failure == null) failure = new RuntimeException("Interrupted during parallel embedding", e);
+            } catch (ExecutionException e) {
+                Throwable cause = e.getCause();
+                if (failure == null) {
+                    failure = (cause instanceof RuntimeException re) ? re : new RuntimeException(cause);
+                }
+            }
+        }
+        if (failure != null) throw failure;
     }
 
     /**

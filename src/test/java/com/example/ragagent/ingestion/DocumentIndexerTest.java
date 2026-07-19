@@ -77,7 +77,7 @@ class DocumentIndexerTest {
         when(props.chunkSizeSafe()).thenReturn(2000);
         when(props.chunkOverlapSafe()).thenReturn(200);
         when(props.embeddingSafe()).thenReturn(
-                new AppProperties.EmbeddingConfig(null, null, null, null, 10, 120, true, 0));
+                new AppProperties.EmbeddingConfig(null, null, null, null, 10, 120, true, 0, List.of(), 1));
 
         AppProperties.IndexingConfig indexing = mock(AppProperties.IndexingConfig.class);
         when(indexing.maxConcurrentLlmCalls()).thenReturn(2);

@@ -32,7 +32,7 @@
 
 | 순위 | 항목 | 현재 상태 |
 |---|---|---|
-| 1 | **§6.21 소형 LLM 분리 + 멀티 LLM 처리량 확장**(태스크별 모델 라우팅·임베딩 병렬화) | 🟡 A안+B안+작업2 완료(2026-07-19) — `MICRO_TEXT` 신설·잡무 소형 오프로딩. 실측·임베딩 병렬화(E1) 후속 |
+| 1 | **§6.21 소형 LLM 분리 + 멀티 LLM 처리량 확장**(태스크별 모델 라우팅·임베딩 병렬화) | 🟡 A·B·작업2·E1~E3 완료(2026-07-19) — `MICRO_TEXT` 잡무 오프로딩 + 임베딩 다중 엔드포인트 로드밸런싱. 실측·튜닝 후속 |
 | 2 | **§6.15 스토리지 쿼터**(전역 상한 B안, §6.2에서 이관) | 설계 완료, 구현 전. 설정 페이지(§6.13) 이후로 순위 하향 |
 | 3 | 운영 준비 잔여 — SQLite 백업 자동화(Litestream/cron), Caddy 인증서 만료 모니터링 | 미착수 |
 | 4 | §9.4 — CADDY 하위호환 별칭 | 선택, 낮은 우선순위 |
@@ -345,7 +345,7 @@ no-auth 기본 배포에서 `/documents` 쓰기와 `/admin/**`이 로그인 없�
 
 ---
 
-### 6.21 소형(경량) LLM 분리 — 태스크별 모델 라우팅 + 멀티 LLM 처리량 확장 🟡 A안+B안+작업2 완료 (2026-07-19) — 실측·임베딩 병렬화 후속
+### 6.21 소형(경량) LLM 분리 — 태스크별 모델 라우팅 + 멀티 LLM 처리량 확장 🟡 A·B·작업2·E1~E3 완료 (2026-07-19) — 실측·튜닝 후속
 
 > **요청 배경**: 추론이 필요 없는 단순·고빈도 작업(요약·키워드 추출 등)을 500MB급 이하 소형 모델로 분리하고, 멀티 LLM 동시 사용으로 **대화 응답 + 임베딩 처리 속도**를 함께 끌어올린다.
 >
@@ -353,19 +353,16 @@ no-auth 기본 배포에서 `/documents` 쓰기와 `/admin/**`이 로그인 없�
 > - **B안 (정밀 분리)** — 신규 `TaskType.MICRO_TEXT` + `LlmProvider.supports()` 매핑(`MICRO_TEXT`⊂`LIGHT_TEXT`⊂`LIGHT_BOTH`/`BOTH` 폴백). 추론 불필요 4개 백그라운드 호출부(`KeywordExtractor`·`ConversationSummarizerService`·`ThreadMetaService`·`RetrievalService` MultiQuery)를 `MICRO_TEXT`로 재분류 → `type=MICRO_TEXT` 소형 등록 시 **잡무만 소형, 분류(`ClassifierService`)·직답(`DirectAnswerService`)은 큰 모델 유지**.
 > - **작업2 (MultiQuery 소형화)** — `RetrievalService`의 확장 모델 해석 순서를 `MICRO_TEXT→LIGHT_TEXT→TEXT`로(cloud-only 폴백 보존해 구성 실패 방지).
 > - **A안 (설정·문서)** — `application.properties` `local-fast` 주석 예시(`type=MICRO_TEXT` 권장 / `LIGHT_TEXT` 공격적 대안), `LLM_ROUTING.md §1·§2·§9`, `OPERATOR_MANUAL §5.2·§5.4 예제 6` 갱신. 기존 라우팅(`findFirst` priority + 프로바이더별 Semaphore)을 그대로 재사용.
-> - **회귀 0**: 소형 미등록 시 큰 `BOTH`가 `MICRO_TEXT`까지 흡수. 테스트 `LlmProviderTest`(MICRO_TEXT supports 매트릭스) + 3개 백그라운드 서비스 테스트 갱신, 관련 테스트 그린(102건).
+> - **회귀 0**: 소형 미등록 시 큰 `BOTH`가 `MICRO_TEXT`까지 흡수. 테스트 `LlmProviderTest`(MICRO_TEXT supports 매트릭스) + 3개 백그라운드 서비스 테스트 갱신.
+> - **E1~E3 (임베딩 병렬화)** — 신규 `LoadBalancingEmbeddingModel`(다중 임베딩 엔드포인트 least-in-flight, `app.embedding.additional-base-urls`) + 인덱싱 서브배치 병렬 임베딩(`app.embedding.max-concurrent-batches`, 기본 1=직렬, Chroma는 임베딩만 병렬·sqlite-vec는 병렬 임베딩+직렬 삽입) + E3 배치 토폴로지 런북(OPERATOR_MANUAL §3.2). **기본 비활성 → 회귀 0**. 테스트 `LoadBalancingEmbeddingModelTest` 추가, 관련 테스트 그린.
 
-**메커니즘 상세**는 [LLM_ROUTING.md §9](LLM_ROUTING.md)(태스크별 모델 분리 표·폴백·`supports()` 매핑) + [OPERATOR_MANUAL §5.4 예제 6](OPERATOR_MANUAL.md)(2-인스턴스 토폴로지 런북) 참조. 요약: `findFirst()`의 priority 선택 + 프로바이더별 독립 Semaphore(§6.12)를 재사용해, 소형(`type=MICRO_TEXT`·priority 0)과 큰 모델(`type=BOTH`·priority 1)이 별도 슬롯을 쓰고 잡무만 소형으로 오프로딩된다(소형 미등록 시 큰 모델이 흡수 → 회귀 0).
+**메커니즘·설정 상세**: [LLM_ROUTING.md §9](LLM_ROUTING.md)(태스크별 모델 분리 표·폴백·`supports()` 매핑) · [OPERATOR_MANUAL §3.2 "임베딩 병렬화"·§5.4 예제 6](OPERATOR_MANUAL.md)(임베딩 다중 엔드포인트 + 소형·대형 2-인스턴스 토폴로지 런북).
 
 **남은 후속 (미착수)**:
-1. **실측 게이트** — §10.7.5 평가 하네스(recall@10 baseline 0.962)로 소형 모델의 요약·쿼리확장 품질 회귀 측정. 공격적 A안(`type=LIGHT_TEXT`로 분류·직답까지 소형)을 적용할 경우 분류 정확도 회귀도 함께 확인 후 채택/확대 결정.
-2. **임베딩 처리 속도 (별도 경로 — 신규 코드 필요)** — 임베딩은 `EmbeddingModel` 데코레이터 체인이라 `LlmRouter` 로드밸런싱 밖(§6.12).
-   - **E1 (이득 최대)** — 다중 임베딩 엔드포인트 라운드로빈/least-in-flight 데코레이터(LLM `selectWithinTopPriority`의 임베딩판) + `app.embedding.providers[]` 배열화.
-   - **E2** — 대량 인덱싱 시 임베딩 서브배치 병렬 제출(현재 파일당 `add()`가 순차 임베딩). 임베딩 서버 `--parallel` 초과 금지(게이트 필요).
-   - **E3** — 소형 LLM을 임베딩 서버와 다른 장비/포트에 두어 co-located 자원 경합 완화. 우선순위 E1 > E2 > E3.
-3. **대화 처리량 확장 (설정만, §6.12 재사용)** — 소형·큰 모델을 같은 role·priority·다른 base-url로 다중 등록하면 least-in-flight 로드밸런서가 자동 분산(코드 이미 존재). 필요 시 적용.
+1. **실측 게이트** — §10.7.5 평가 하네스(recall@10 baseline 0.962)로 소형 모델의 요약·쿼리확장 품질 회귀 측정. 공격적 A안(`type=LIGHT_TEXT`로 분류·직답까지 소형) 적용 시 분류 정확도 회귀도 함께 확인 후 채택/확대 결정. 임베딩 다중 엔드포인트(E1)·병렬 서브배치(E2)의 실제 처리량 이득도 배포 환경에서 실측.
+2. **대화 처리량 확장 (설정만, §6.12 재사용)** — 소형·큰 모델을 같은 role·priority·다른 base-url로 다중 등록하면 least-in-flight 로드밸런서가 자동 분산(코드 이미 존재). 필요 시 적용.
 
-**주의**: 소형+대형 동시 상주 VRAM/RAM은 500MB급이라 부담이 작지만 co-located면 합산 확인(E3로 완화).
+**주의**: 소형+대형 동시 상주 VRAM/RAM은 500MB급이라 부담이 작지만 co-located면 합산 확인(E3로 완화). 임베딩 다중 엔드포인트(E1)는 모두 **동일 모델·차원**이어야 한다(섞으면 인덱스 손상). sqlite-vec의 E2는 §10.9.3 스트리밍 삽입 메모리 상한을 속도와 맞바꾸므로 opt-in이다.
 
 ---
 

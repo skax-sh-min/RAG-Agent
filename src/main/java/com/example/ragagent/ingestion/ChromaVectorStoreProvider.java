@@ -26,6 +26,11 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiConsumer;
 
 /**
@@ -155,15 +160,38 @@ public class ChromaVectorStoreProvider implements VectorStoreProvider {
         List<Document> embedInputDocs = docs.stream()
                 .map(d -> new Document(d.getId(), SearchTextBuilder.build(d), Map.of()))
                 .toList();
-        Map<String, float[]> embeddingByDocId = new HashMap<>(docs.size() * 2);
-        int done = 0;
-        for (List<Document> batch : batchingStrategy.batch(embedInputDocs)) {
-            List<float[]> batchEmbeddings = indexingEmbeddingModel.embed(batch.stream().map(Document::getText).toList());
-            for (int i = 0; i < batch.size(); i++) {
-                embeddingByDocId.put(batch.get(i).getId(), batchEmbeddings.get(i));
+        int maxConcurrentBatches = embeddingMaxConcurrentBatches();
+        List<List<Document>> subBatches = batchingStrategy.batch(embedInputDocs);
+        Map<String, float[]> embeddingByDocId = new ConcurrentHashMap<>(docs.size() * 2);
+        AtomicInteger done = new AtomicInteger();
+        if (maxConcurrentBatches <= 1 || subBatches.size() <= 1) {
+            for (List<Document> batch : subBatches) {
+                embedInto(batch, embeddingByDocId);
+                onProgress.accept(done.addAndGet(batch.size()), total);
             }
-            done += batch.size();
-            onProgress.accept(done, total);
+        } else {
+            // §6.21 E2 — embed sub-batches in parallel (the E1 load balancer spreads them across
+            // endpoints), bounded by the gate so the embedding server(s) aren't overrun. Chroma
+            // buffers all embeddings before its single upsert below, so parallelizing only the embed
+            // step is safe — order is reconstructed from embeddingByDocId, not iteration order.
+            Semaphore gate = new Semaphore(maxConcurrentBatches);
+            Object progressLock = new Object();
+            try (var exec = Executors.newVirtualThreadPerTaskExecutor()) {
+                List<Future<?>> futures = new ArrayList<>(subBatches.size());
+                for (List<Document> batch : subBatches) {
+                    acquire(gate);
+                    futures.add(exec.submit(() -> {
+                        try {
+                            embedInto(batch, embeddingByDocId);
+                            int d = done.addAndGet(batch.size());
+                            synchronized (progressLock) { onProgress.accept(d, total); }
+                        } finally {
+                            gate.release();
+                        }
+                    }));
+                }
+                awaitAll(futures);
+            }
         }
 
         List<String> ids = new ArrayList<>(docs.size());
@@ -181,6 +209,48 @@ public class ChromaVectorStoreProvider implements VectorStoreProvider {
         }
         chromaApi.upsertEmbeddings(TENANT, DATABASE, collectionName,
                 new ChromaApi.AddEmbeddingsRequest(ids, embeddings, metadatas, contents));
+    }
+
+    /** §6.21 E2 — parallel sub-batch embedding degree (1 = serial, the default; zero regression). */
+    private int embeddingMaxConcurrentBatches() {
+        AppProperties.EmbeddingConfig ec = props.embeddingSafe();
+        return (ec != null && ec.maxConcurrentBatches() != null && ec.maxConcurrentBatches() > 1)
+                ? ec.maxConcurrentBatches() : 1;
+    }
+
+    private void embedInto(List<Document> batch, Map<String, float[]> out) {
+        List<float[]> emb = indexingEmbeddingModel.embed(batch.stream().map(Document::getText).toList());
+        for (int i = 0; i < batch.size(); i++) {
+            out.put(batch.get(i).getId(), emb.get(i));
+        }
+    }
+
+    private static void acquire(Semaphore gate) {
+        try {
+            gate.acquire();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException("Interrupted while waiting to embed a sub-batch", e);
+        }
+    }
+
+    /** Waits for all embedding tasks, propagating the first failure (unwrapped) after awaiting the rest. */
+    private static void awaitAll(List<Future<?>> futures) {
+        RuntimeException failure = null;
+        for (Future<?> f : futures) {
+            try {
+                f.get();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                if (failure == null) failure = new RuntimeException("Interrupted during parallel embedding", e);
+            } catch (ExecutionException e) {
+                Throwable cause = e.getCause();
+                if (failure == null) {
+                    failure = (cause instanceof RuntimeException re) ? re : new RuntimeException(cause);
+                }
+            }
+        }
+        if (failure != null) throw failure;
     }
 
     @Override

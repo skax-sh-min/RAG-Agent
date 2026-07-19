@@ -84,7 +84,9 @@ public record AppProperties(
             Integer connectTimeoutSeconds,
             Integer readTimeoutSeconds,
             Boolean usageFallbackEnabled,
-            Integer maxChunkChars   // hard ceiling per chunk to fit the embedding server batch; 0/null = disabled
+            Integer maxChunkChars,          // hard ceiling per chunk to fit the embedding server batch; 0/null = disabled
+            List<String> additionalBaseUrls, // §6.21 E1 — extra endpoints (same model), load-balanced with base-url
+            Integer maxConcurrentBatches    // §6.21 E2 — parallel sub-batch embeds during indexing; 1/null = serial
     ) {}
 
     public record ChromaHttpConfig(
@@ -401,7 +403,7 @@ public record AppProperties(
     }
 
     public EmbeddingConfig embeddingSafe() {
-        if (embedding == null) return new EmbeddingConfig(null, null, null, null, 10, 120, true, 0);
+        if (embedding == null) return new EmbeddingConfig(null, null, null, null, 10, 120, true, 0, List.of(), 1);
         int connect = (embedding.connectTimeoutSeconds() != null && embedding.connectTimeoutSeconds() > 0)
                 ? embedding.connectTimeoutSeconds() : 10;
         int read = (embedding.readTimeoutSeconds() != null && embedding.readTimeoutSeconds() > 0)
@@ -410,6 +412,11 @@ public record AppProperties(
         // 0 = disabled (no hard cap); negative values are clamped to 0.
         int maxChunkChars = (embedding.maxChunkChars() != null && embedding.maxChunkChars() > 0)
                 ? embedding.maxChunkChars() : 0;
+        // §6.21 E1/E2 — null-safe defaults: no extra endpoints, serial sub-batch embedding.
+        List<String> additionalBaseUrls = embedding.additionalBaseUrls() != null
+                ? embedding.additionalBaseUrls() : List.of();
+        int maxConcurrentBatches = (embedding.maxConcurrentBatches() != null && embedding.maxConcurrentBatches() > 1)
+                ? embedding.maxConcurrentBatches() : 1;
         return new EmbeddingConfig(
                 embedding.baseUrl(),
                 embedding.apiKey(),
@@ -418,7 +425,9 @@ public record AppProperties(
                 connect,
                 read,
                 usageFallback,
-                maxChunkChars
+                maxChunkChars,
+                additionalBaseUrls,
+                maxConcurrentBatches
         );
     }
 

@@ -1,8 +1,11 @@
 package com.example.ragagent.config;
 
 import com.example.ragagent.llm.CachingEmbeddingModel;
+import com.example.ragagent.llm.LoadBalancingEmbeddingModel;
 import com.example.ragagent.llm.TrackingEmbeddingModel;
 import com.example.ragagent.repository.LlmUsageRepository;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.ai.document.MetadataMode;
 import org.springframework.ai.embedding.EmbeddingModel;
 import org.springframework.ai.openai.OpenAiEmbeddingModel;
@@ -13,8 +16,13 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
 import org.springframework.retry.support.RetryTemplate;
 
+import java.util.ArrayList;
+import java.util.List;
+
 @Configuration
 public class EmbeddingBeanConfig {
+
+    private static final Logger log = LoggerFactory.getLogger(EmbeddingBeanConfig.class);
 
     @Bean
     @Primary
@@ -24,8 +32,41 @@ public class EmbeddingBeanConfig {
             throw new IllegalStateException(
                     "app.embedding.base-url (EMBED_BASE_URL) is required but not configured");
         }
+        String model = cfg.model() != null ? cfg.model() : "text-embedding-ada-002";
+
+        // §6.21 E1 — primary base-url + any additional endpoints (must serve the SAME model/dimension,
+        // e.g. N GPU replicas). One raw OpenAiEmbeddingModel per URL; when >1, balance least-in-flight.
+        List<String> urls = new ArrayList<>();
+        urls.add(cfg.baseUrl());
+        if (cfg.additionalBaseUrls() != null) {
+            for (String u : cfg.additionalBaseUrls()) {
+                if (u != null && !u.isBlank()) urls.add(u.trim());
+            }
+        }
+
+        EmbeddingModel base;
+        if (urls.size() == 1) {
+            base = buildRawModel(urls.get(0), cfg, model);
+        } else {
+            List<EmbeddingModel> delegates = urls.stream()
+                    .map(u -> (EmbeddingModel) buildRawModel(u, cfg, model))
+                    .toList();
+            base = new LoadBalancingEmbeddingModel(delegates);
+            log.info("Embedding load balancing (§6.21 E1) across {} endpoints: {}", urls.size(), urls);
+        }
+
+        EmbeddingModel tracked = new TrackingEmbeddingModel(base, usageRepo, model, cfg.usageFallbackEnabled());
+        if (!props.searchQueryEmbedCacheEnabledSafe()) {
+            return tracked;
+        }
+        // Cache sits outside tracking so a cache hit records no usage — no provider call happened.
+        return new CachingEmbeddingModel(tracked, model,
+                props.searchQueryEmbedCacheMaxSizeSafe(), props.searchQueryEmbedCacheTtlSecondsSafe());
+    }
+
+    /** Builds one raw {@link OpenAiEmbeddingModel} pointed at {@code rawUrl}, sharing {@code cfg}'s key/model/timeouts. */
+    private OpenAiEmbeddingModel buildRawModel(String rawUrl, AppProperties.EmbeddingConfig cfg, String model) {
         // OpenAiApi.builder() appends /v1 internally — strip it to avoid /v1/v1/embeddings.
-        String rawUrl = cfg.baseUrl();
         String apiBase = rawUrl.endsWith("/v1/") ? rawUrl.substring(0, rawUrl.length() - 4)
                        : rawUrl.endsWith("/v1")  ? rawUrl.substring(0, rawUrl.length() - 3)
                        : rawUrl;
@@ -43,8 +84,7 @@ public class EmbeddingBeanConfig {
                 .maxAttempts(2)
                 .exponentialBackoff(500, 2.0, 5_000)
                 .build();
-        String model = cfg.model() != null ? cfg.model() : "text-embedding-ada-002";
-        OpenAiEmbeddingModel raw = new OpenAiEmbeddingModel(
+        return new OpenAiEmbeddingModel(
                 api,
                 MetadataMode.EMBED,
                 OpenAiEmbeddingOptions.builder()
@@ -52,12 +92,5 @@ public class EmbeddingBeanConfig {
                         .build(),
                 shortRetry
         );
-        EmbeddingModel tracked = new TrackingEmbeddingModel(raw, usageRepo, model, cfg.usageFallbackEnabled());
-        if (!props.searchQueryEmbedCacheEnabledSafe()) {
-            return tracked;
-        }
-        // Cache sits outside tracking so a cache hit records no usage — no provider call happened.
-        return new CachingEmbeddingModel(tracked, model,
-                props.searchQueryEmbedCacheMaxSizeSafe(), props.searchQueryEmbedCacheTtlSecondsSafe());
     }
 }
