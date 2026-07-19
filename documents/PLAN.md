@@ -32,11 +32,12 @@
 
 | 순위 | 항목 | 현재 상태 |
 |---|---|---|
-| 1 | **§6.15 스토리지 쿼터**(전역 상한 B안, §6.2에서 이관) | 설계 완료, 구현 전. 설정 페이지(§6.13) 이후로 순위 하향 |
-| 2 | 운영 준비 잔여 — SQLite 백업 자동화(Litestream/cron), Caddy 인증서 만료 모니터링 | 미착수 |
-| 3 | §9.4 — CADDY 하위호환 별칭 | 선택, 낮은 우선순위 |
-| 4 | Phase 2 남은 실기기 검증 2건 (키보드 하단 고정 · 홈 화면 standalone) | 좌우 스크롤·다크모드는 자동 검증 완료, 나머지는 실기기 필요 |
-| 5 | **§6.18 Direct 메시지 전용 LLM Temperature 분리** | ✅ 완료 — temperature/max-tokens 하드코딩 제거·config화, Direct temperature 분리 + 핫 수정. 상세는 §6.18 본문 |
+| 1 | **§6.21 소형 LLM 분리 + 멀티 LLM 처리량 확장**(태스크별 모델 라우팅·임베딩 병렬화) | 🟡 A안+B안+작업2 완료(2026-07-19) — `MICRO_TEXT` 신설·잡무 소형 오프로딩. 실측·임베딩 병렬화(E1) 후속 |
+| 2 | **§6.15 스토리지 쿼터**(전역 상한 B안, §6.2에서 이관) | 설계 완료, 구현 전. 설정 페이지(§6.13) 이후로 순위 하향 |
+| 3 | 운영 준비 잔여 — SQLite 백업 자동화(Litestream/cron), Caddy 인증서 만료 모니터링 | 미착수 |
+| 4 | §9.4 — CADDY 하위호환 별칭 | 선택, 낮은 우선순위 |
+| 5 | Phase 2 남은 실기기 검증 2건 (키보드 하단 고정 · 홈 화면 standalone) | 좌우 스크롤·다크모드는 자동 검증 완료, 나머지는 실기기 필요 |
+| 6 | **§6.18 Direct 메시지 전용 LLM Temperature 분리** | ✅ 완료 — temperature/max-tokens 하드코딩 제거·config화, Direct temperature 분리 + 핫 수정. 상세는 §6.18 본문 |
 
 > **§6.12 완료**: 다중 사용자 동시 LLM 요청 처리 — 채팅 경로 무제한 동시성(인덱싱만 세마포어 존재) → 슬롯 초과 시 429→서킷브레이커 전면차단·타임아웃 폭주 위험이었던 문제를 5단계로 해결. ① 프로바이더별 동시성 세마포어(`LlmRouter.acquirePermit`/`executeGated`, 채팅/질의 경로 전체 적용) ② 대기상한+429 백프레셔(`LlmBackpressureException`) ③ `CachingEmbeddingModel` in-flight single-flight(동일 텍스트 동시 요청 thundering herd 제거) ④ 폴백 없는 유일 프로바이더의 서킷브레이커 단축 차단(`blockForOverload`, 다중 분 단위 전면 다운 방지) ⑤ 동일 role·priority 프로바이더 로드밸런싱(least-in-flight, 처리량 수평 확장). 인덱싱/백그라운드 경로는 의도적으로 미적용(회귀 방지, 자체 세마포어 유지). 상세는 §6.12 본문 참조.
 > **§6.13 완료**: `/settings` LLM/RAG 설정 조회 + 핫 수정 페이지. 상세는 §6.13 본문 참조.
@@ -341,6 +342,30 @@ no-auth 기본 배포에서 `/documents` 쓰기와 `/admin/**`이 로그인 없�
 - 사용자의 당일 누적 토큰이 한도 초과 시 채팅이 429로 차단되고 `Retry-After`(자정까지) 안내가 표시된다.
 - `app.quota.enabled=false`(기본)이면 기존 동작 회귀 0.
 - 쿼터 집계가 스트리밍/블로킹 경로 모두에서 일관 적용된다.
+
+---
+
+### 6.21 소형(경량) LLM 분리 — 태스크별 모델 라우팅 + 멀티 LLM 처리량 확장 🟡 A안+B안+작업2 완료 (2026-07-19) — 실측·임베딩 병렬화 후속
+
+> **요청 배경**: 추론이 필요 없는 단순·고빈도 작업(요약·키워드 추출 등)을 500MB급 이하 소형 모델로 분리하고, 멀티 LLM 동시 사용으로 **대화 응답 + 임베딩 처리 속도**를 함께 끌어올린다.
+>
+> **구현 현황 (2026-07-19)**: **A안 + B안 + 작업2 완료**.
+> - **B안 (정밀 분리)** — 신규 `TaskType.MICRO_TEXT` + `LlmProvider.supports()` 매핑(`MICRO_TEXT`⊂`LIGHT_TEXT`⊂`LIGHT_BOTH`/`BOTH` 폴백). 추론 불필요 4개 백그라운드 호출부(`KeywordExtractor`·`ConversationSummarizerService`·`ThreadMetaService`·`RetrievalService` MultiQuery)를 `MICRO_TEXT`로 재분류 → `type=MICRO_TEXT` 소형 등록 시 **잡무만 소형, 분류(`ClassifierService`)·직답(`DirectAnswerService`)은 큰 모델 유지**.
+> - **작업2 (MultiQuery 소형화)** — `RetrievalService`의 확장 모델 해석 순서를 `MICRO_TEXT→LIGHT_TEXT→TEXT`로(cloud-only 폴백 보존해 구성 실패 방지).
+> - **A안 (설정·문서)** — `application.properties` `local-fast` 주석 예시(`type=MICRO_TEXT` 권장 / `LIGHT_TEXT` 공격적 대안), `LLM_ROUTING.md §1·§2·§9`, `OPERATOR_MANUAL §5.2·§5.4 예제 6` 갱신. 기존 라우팅(`findFirst` priority + 프로바이더별 Semaphore)을 그대로 재사용.
+> - **회귀 0**: 소형 미등록 시 큰 `BOTH`가 `MICRO_TEXT`까지 흡수. 테스트 `LlmProviderTest`(MICRO_TEXT supports 매트릭스) + 3개 백그라운드 서비스 테스트 갱신, 관련 테스트 그린(102건).
+
+**메커니즘 상세**는 [LLM_ROUTING.md §9](LLM_ROUTING.md)(태스크별 모델 분리 표·폴백·`supports()` 매핑) + [OPERATOR_MANUAL §5.4 예제 6](OPERATOR_MANUAL.md)(2-인스턴스 토폴로지 런북) 참조. 요약: `findFirst()`의 priority 선택 + 프로바이더별 독립 Semaphore(§6.12)를 재사용해, 소형(`type=MICRO_TEXT`·priority 0)과 큰 모델(`type=BOTH`·priority 1)이 별도 슬롯을 쓰고 잡무만 소형으로 오프로딩된다(소형 미등록 시 큰 모델이 흡수 → 회귀 0).
+
+**남은 후속 (미착수)**:
+1. **실측 게이트** — §10.7.5 평가 하네스(recall@10 baseline 0.962)로 소형 모델의 요약·쿼리확장 품질 회귀 측정. 공격적 A안(`type=LIGHT_TEXT`로 분류·직답까지 소형)을 적용할 경우 분류 정확도 회귀도 함께 확인 후 채택/확대 결정.
+2. **임베딩 처리 속도 (별도 경로 — 신규 코드 필요)** — 임베딩은 `EmbeddingModel` 데코레이터 체인이라 `LlmRouter` 로드밸런싱 밖(§6.12).
+   - **E1 (이득 최대)** — 다중 임베딩 엔드포인트 라운드로빈/least-in-flight 데코레이터(LLM `selectWithinTopPriority`의 임베딩판) + `app.embedding.providers[]` 배열화.
+   - **E2** — 대량 인덱싱 시 임베딩 서브배치 병렬 제출(현재 파일당 `add()`가 순차 임베딩). 임베딩 서버 `--parallel` 초과 금지(게이트 필요).
+   - **E3** — 소형 LLM을 임베딩 서버와 다른 장비/포트에 두어 co-located 자원 경합 완화. 우선순위 E1 > E2 > E3.
+3. **대화 처리량 확장 (설정만, §6.12 재사용)** — 소형·큰 모델을 같은 role·priority·다른 base-url로 다중 등록하면 least-in-flight 로드밸런서가 자동 분산(코드 이미 존재). 필요 시 적용.
+
+**주의**: 소형+대형 동시 상주 VRAM/RAM은 500MB급이라 부담이 작지만 co-located면 합산 확인(E3로 완화).
 
 ---
 

@@ -108,7 +108,7 @@ class ConversationSummarizerServiceTest {
                 turn(1, "질문1", "답변1", null),
                 turn(2, "질문2", "답변2", null));
         when(memoryService.getTurns(UID, TID)).thenReturn(turns);
-        when(llmRouter.executeWithTracking(eq(TaskType.LIGHT_TEXT), eq(RoutingMode.LOCAL_ONLY),
+        when(llmRouter.executeWithTracking(eq(TaskType.MICRO_TEXT), eq(RoutingMode.LOCAL_ONLY),
                 eq(BackgroundUsage.SUMMARY_PREFIX), any()))
                 .thenReturn("요약된 내용");
 
@@ -191,7 +191,7 @@ class ConversationSummarizerServiceTest {
         when(memoryService.getTurns(UID, TID)).thenReturn(List.of(
                 turn(1, "질문1", longAnswer, null),
                 turn(2, "질문2", longAnswer, null)));
-        when(llmRouter.executeWithTracking(eq(TaskType.LIGHT_TEXT), eq(RoutingMode.LOCAL_ONLY),
+        when(llmRouter.executeWithTracking(eq(TaskType.MICRO_TEXT), eq(RoutingMode.LOCAL_ONLY),
                 eq(BackgroundUsage.SUMMARY_PREFIX), any()))
                 .thenReturn("짧은 요약");
 

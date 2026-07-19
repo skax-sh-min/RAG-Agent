@@ -75,7 +75,7 @@ class KeywordExtractorTest {
         extractor.enrichKeywords(new Document("테스트 문서 내용입니다."));
 
         verify(llmRouter).executeWithTracking(
-                eq(TaskType.LIGHT_TEXT), eq(RoutingMode.COST_FIRST), eq(BackgroundUsage.CONTEXT_PREFIX), any());
+                eq(TaskType.MICRO_TEXT), eq(RoutingMode.COST_FIRST), eq(BackgroundUsage.CONTEXT_PREFIX), any());
     }
 
     @Test

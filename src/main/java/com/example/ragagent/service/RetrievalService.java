@@ -57,11 +57,13 @@ public class RetrievalService {
         this.reranker = rerankerOpt;
         // MultiQueryExpander builds its own ChatClient around the model it's given, so the
         // only way to have its calls recorded in llm_usage is to wrap that model (mirrors
-        // TrackingEmbeddingModel's decorator for embeddings). Same TEXT→LIGHT_TEXT fallback
-        // order as LlmConfig.primaryChatModel() so LIGHT_BOTH-only (local, no cloud key)
-        // setups still resolve a model here.
+        // TrackingEmbeddingModel's decorator for embeddings). §6.21 (작업2) — query expansion is a
+        // reasoning-free chore, so prefer MICRO_TEXT (the dedicated small model when a type=MICRO_TEXT
+        // provider is registered) → LIGHT_TEXT → TEXT. Without a small model, MICRO_TEXT/LIGHT_TEXT
+        // resolve to the local BOTH model (unchanged); TEXT is the final fallback for cloud-only
+        // (TEXT-typed providers, no LOCAL) setups so construction never fails.
         LlmProvider expansionProvider = llmRouter.routeProviderWithFallback(
-                List.of(TaskType.TEXT, TaskType.LIGHT_TEXT), RoutingMode.COST_FIRST);
+                List.of(TaskType.MICRO_TEXT, TaskType.LIGHT_TEXT, TaskType.TEXT), RoutingMode.COST_FIRST);
         // Gate this persistent model too: MultiQueryExpander calls it internally at a
         // point RetrievalService doesn't control, so executeGated() can't wrap the call site.
         ChatModel gatedExpansionModel =

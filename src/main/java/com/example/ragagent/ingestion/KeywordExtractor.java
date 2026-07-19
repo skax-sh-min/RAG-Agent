@@ -134,7 +134,7 @@ public class KeywordExtractor {
             // §10.1 — one call now yields keywords + context together; tracked under context:
             // (BackgroundUsage.KEYWORD_PREFIX stays defined only to recognize historical rows).
             String response = llmRouter.executeWithTracking(
-                    TaskType.LIGHT_TEXT, RoutingMode.COST_FIRST, BackgroundUsage.CONTEXT_PREFIX,
+                    TaskType.MICRO_TEXT, RoutingMode.COST_FIRST, BackgroundUsage.CONTEXT_PREFIX,
                     model -> model.call(new Prompt(prompt)));
             log.debug("[ENRICH] LLM 응답: [{}]", response);
             ParsedEnrichment parsed = parseEnrichment(response);
@@ -182,7 +182,7 @@ public class KeywordExtractor {
         ScheduledFuture<?> killer = timeoutScheduler.schedule(self::interrupt, timeoutSec, TimeUnit.SECONDS);
         try {
             String response = llmRouter.executeWithTracking(
-                    TaskType.LIGHT_TEXT, RoutingMode.COST_FIRST, BackgroundUsage.CONTEXT_PREFIX,
+                    TaskType.MICRO_TEXT, RoutingMode.COST_FIRST, BackgroundUsage.CONTEXT_PREFIX,
                     model -> model.call(new Prompt(prompt.toString())));
             log.debug("[ENRICH-BATCH] LLM 응답({}개 청크): [{}]", n, response);
             Map<Integer, String> sections = splitBatchSections(response);
