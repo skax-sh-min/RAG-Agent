@@ -1416,7 +1416,59 @@ app.llm.providers[6].concurrency=4
 - ⚠️ **priority 필수**: 소형(0) < 큰 모델(1). 둘 다 0으로 두면 `MICRO_TEXT`가 두 모델 사이에 로드밸런싱되어 절반만 오프로딩됩니다.
 - ⚠️ **인덱스 연속성**: `providers[N]`은 0부터 연속이어야 바인딩됩니다 — 활성 프로바이더가 [0]~[5]면 소형은 **[6]**. `local-vision`도 함께 쓰면 하나를 [7]로 조정.
 - **더 공격적 오프로딩(A안)**: 분류·직답까지 소형으로 내리려면 `type=MICRO_TEXT` 대신 `type=LIGHT_TEXT`로 등록(`LIGHT_TEXT`가 `MICRO_TEXT`도 흡수). 단 분류 오분류는 라우팅 정확도로, 직답은 사용자 노출로 이어지므로 채택 전 검색 품질 평가 하네스([§6.6](#66-검색-품질-평가-하네스-개발자용))로 분류 정확도 회귀를 확인하세요.
-- 처리량을 더 늘리려면 소형·큰 모델 각각을 [예제 5](#예제-5--로컬-llm-2대-로드밸런싱-처리량-확장)처럼 같은 priority로 다중 등록해 로드밸런싱할 수 있습니다.
+- 처리량을 더 늘리려면 소형·큰 모델 각각을 [예제 5](#예제-5--로컬-llm-2대-로드밸런싱-처리량-확장)처럼 같은 priority로 다중 등록해 로드밸런싱할 수 있습니다 — 구체적인 결합 설정은 아래 예제 7 참고.
+
+---
+
+#### 예제 7 — 소형·대형 두 티어를 각각 수평 확장 (예제 5 + 6 결합, PLAN §6.21)
+
+동시 사용자가 늘어나 잡무(`MICRO_TEXT`)와 답변(`TEXT`) 양쪽 모두에서 처리량이 부족해지면, 예제 6의 2-티어 구조를 유지한 채 **각 티어를 독립적으로 여러 대** 등록합니다. `findFirst()`는 role+priority로 후보 그룹을 고른 뒤 그 그룹 안에서 least-in-flight로 분산하므로(§5.7), 소형 그룹과 큰 모델 그룹이 각자 별도로 로드밸런싱됩니다 — 서로 다른 티어끼리는 섞이지 않습니다(우선순위가 다르므로).
+
+```properties
+# 큰 모델 2대 — 둘 다 priority=1(소형에 MICRO_TEXT 우선권 양보), 같은 priority끼리 로드밸런싱
+app.llm.providers[0].name=local-a
+app.llm.providers[0].base-url=http://gpu-a:1234/v1
+app.llm.providers[0].model=google/gemma-4-e4b
+app.llm.providers[0].type=BOTH
+app.llm.providers[0].role=LOCAL
+app.llm.providers[0].priority=1
+app.llm.providers[0].concurrency=3
+
+app.llm.providers[7].name=local-b
+app.llm.providers[7].base-url=http://gpu-b:1234/v1
+app.llm.providers[7].model=google/gemma-4-e4b
+app.llm.providers[7].type=BOTH
+app.llm.providers[7].role=LOCAL
+app.llm.providers[7].priority=1
+app.llm.providers[7].concurrency=3
+
+# 소형 모델 2대 — 둘 다 priority=0, 같은 priority끼리 로드밸런싱
+app.llm.providers[6].name=local-fast-a
+app.llm.providers[6].base-url=http://cpu-a:1236/v1
+app.llm.providers[6].model=qwen2.5-0.5b-instruct
+app.llm.providers[6].type=MICRO_TEXT
+app.llm.providers[6].role=LOCAL
+app.llm.providers[6].priority=0
+app.llm.providers[6].concurrency=4
+
+app.llm.providers[8].name=local-fast-b
+app.llm.providers[8].base-url=http://cpu-b:1236/v1
+app.llm.providers[8].model=qwen2.5-0.5b-instruct
+app.llm.providers[8].type=MICRO_TEXT
+app.llm.providers[8].role=LOCAL
+app.llm.providers[8].priority=0
+app.llm.providers[8].concurrency=4
+```
+
+라우팅 결과:
+```
+[키워드·요약·제목·쿼리확장] local-fast-a ∥ local-fast-b (MICRO_TEXT, priority 0, least-in-flight 분산)
+[분류·meta 직답·답변·Critic] local-a ∥ local-b            (LIGHT_TEXT→BOTH / TEXT/BOTH, priority 1, least-in-flight 분산)
+```
+
+- 총 잡무 처리량 = 소형 대수 × concurrency(2×4=8), 총 답변 처리량 = 큰 모델 대수 × concurrency(2×3=6) — **두 숫자는 서로 독립**이라 티어별로 필요한 만큼만 대수를 늘리면 됩니다(예: 인덱싱이 병목이면 소형만 증설, 채팅이 병목이면 큰 모델만 증설).
+- 인덱스는 활성 프로바이더 [0]~[5] 이후 연속이어야 합니다. 위 예시는 [6][7][8]을 사용 — `local-vision`(§3의 [6] 예시)도 함께 쓴다면 [9]로 밀어야 합니다.
+- 한쪽 티어의 한 대가 다운돼도 같은 티어 안에서 나머지가 흡수하고, 그래도 전멸하면 상위 티어(큰 모델)로 자동 폴백합니다(예제 6의 폴백 규칙 그대로 유지).
 
 ---
 
