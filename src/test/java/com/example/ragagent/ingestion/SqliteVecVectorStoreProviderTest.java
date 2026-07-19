@@ -6,14 +6,21 @@ import com.example.ragagent.model.MetaKey;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.springframework.ai.document.Document;
 import org.mockito.ArgumentCaptor;
 import org.springframework.ai.embedding.EmbeddingModel;
 import org.springframework.jdbc.core.BatchPreparedStatementSetter;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.datasource.DriverManagerDataSource;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.net.SocketTimeoutException;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.nio.file.Path;
 import java.sql.PreparedStatement;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
@@ -36,22 +43,113 @@ import static org.mockito.Mockito.when;
  */
 class SqliteVecVectorStoreProviderTest {
 
+    @TempDir
+    Path tmpDir;
+
     private final JdbcTemplate jdbc = mock(JdbcTemplate.class);
     private final EmbeddingModel embeddingModel = mock(EmbeddingModel.class);
 
     private SqliteVecVectorStoreProvider provider() {
+        return provider(0.0);
+    }
+
+    private SqliteVecVectorStoreProvider provider(double threshold) {
         AppProperties props = mock(AppProperties.class);
-        when(props.searchSimilarityThresholdSafe()).thenReturn(0.0);
+        when(props.searchSimilarityThresholdSafe()).thenReturn(threshold);
         return new SqliteVecVectorStoreProvider(jdbc, embeddingModel, new ObjectMapper(), props);
     }
 
+    // ── §10.7.4 — threshold-active overfetch ─────────────────────────────
+
     @Test
-    @DisplayName("toVectorLiteral: float[] → sqlite-vec JSON 텍스트")
-    void vectorLiteral() {
-        assertThat(SqliteVecVectorStoreProvider.toVectorLiteral(new float[]{1.0f, -2.5f, 0.0f}))
-                .isEqualTo("[1.0,-2.5,0.0]");
-        assertThat(SqliteVecVectorStoreProvider.toVectorLiteral(new float[]{})).isEqualTo("[]");
-        assertThat(SqliteVecVectorStoreProvider.toVectorLiteral(new float[]{42.0f})).isEqualTo("[42.0]");
+    @DisplayName("search — threshold>0이면 k를 topK의 2배로 과조회한다")
+    void search_overfetchesKWhenThresholdActive() {
+        when(embeddingModel.embed(anyString())).thenReturn(new float[]{0.1f});
+        when(jdbc.query(anyString(), any(org.springframework.jdbc.core.RowMapper.class), any(), any(), any()))
+                .thenReturn(List.of());
+
+        provider(0.5).search("u", "질문", "latest", 7);
+
+        ArgumentCaptor<Integer> kCaptor = ArgumentCaptor.forClass(Integer.class);
+        verify(jdbc).query(anyString(), any(org.springframework.jdbc.core.RowMapper.class),
+                any(), kCaptor.capture(), any());
+        assertThat(kCaptor.getValue()).isEqualTo(14); // ceil(7 * 2.0)
+    }
+
+    @Test
+    @DisplayName("search — threshold=0.0(기본)이면 과조회하지 않는다 (무해)")
+    void search_noOverfetchWhenThresholdZero() {
+        when(embeddingModel.embed(anyString())).thenReturn(new float[]{0.1f});
+        when(jdbc.query(anyString(), any(org.springframework.jdbc.core.RowMapper.class), any(), any(), any()))
+                .thenReturn(List.of());
+
+        provider().search("u", "질문", "latest", 7);
+
+        ArgumentCaptor<Integer> kCaptor = ArgumentCaptor.forClass(Integer.class);
+        verify(jdbc).query(anyString(), any(org.springframework.jdbc.core.RowMapper.class),
+                any(), kCaptor.capture(), any());
+        assertThat(kCaptor.getValue()).isEqualTo(7);
+    }
+
+    /**
+     * 회귀 방지 — search-similarity-threshold는 생성자에서 캐싱되면 안 된다(Chroma 쪽과 동일한 과거
+     * 버그). 생성 이후 mock 스텁 값을 바꿔(={@code /settings} override가 런타임에 바뀐 상황) 다음
+     * {@code search()} 호출의 과조회 배수(threshold 활성 여부의 관찰 가능한 대리 신호, fetchK)가
+     * 즉시 갱신되는지로 검증한다.
+     */
+    @Test
+    @DisplayName("회귀 방지 — 생성 이후 threshold가 바뀌면 다음 search() 호출에 즉시 반영된다(필드 캐싱 금지)")
+    void threshold_readFreshOnEverySearch_notCachedAtConstruction() {
+        when(embeddingModel.embed(anyString())).thenReturn(new float[]{0.1f});
+        when(jdbc.query(anyString(), any(org.springframework.jdbc.core.RowMapper.class), any(), any(), any()))
+                .thenReturn(List.of());
+
+        AppProperties props = mock(AppProperties.class);
+        when(props.searchSimilarityThresholdSafe()).thenReturn(0.0); // 시작: 비활성 → 과조회 없음
+        SqliteVecVectorStoreProvider provider =
+                new SqliteVecVectorStoreProvider(jdbc, embeddingModel, new ObjectMapper(), props);
+
+        provider.search("u", "질문", "latest", 7);
+        // 생성 이후 스텁 값을 바꿔 "/settings에서 override가 갱신된 상황"을 재현
+        when(props.searchSimilarityThresholdSafe()).thenReturn(0.5); // 활성화 → 과조회(×2) 기대
+        provider.search("u", "질문", "latest", 7);
+
+        ArgumentCaptor<Integer> kCaptor = ArgumentCaptor.forClass(Integer.class);
+        verify(jdbc, times(2)).query(anyString(), any(org.springframework.jdbc.core.RowMapper.class),
+                any(), kCaptor.capture(), any());
+        List<Integer> fetchKs = kCaptor.getAllValues();
+        assertThat(fetchKs.get(0)).isEqualTo(7);  // threshold=0.0일 때는 과조회 없음
+        assertThat(fetchKs.get(1)).isEqualTo(14); // threshold=0.5로 바뀐 뒤에는 ceil(7 * 2.0)
+    }
+
+    @Test
+    @DisplayName("search — 결과가 topK보다 많아도 topK로 잘라낸다")
+    void search_capsResultsAtTopKEvenWhenMoreSurvive() {
+        when(embeddingModel.embed(anyString())).thenReturn(new float[]{0.1f});
+        List<Document> tenDocs = java.util.stream.IntStream.range(0, 10)
+                .mapToObj(i -> Document.builder().id("d" + i).text("t").metadata(Map.of()).build())
+                .toList();
+        when(jdbc.query(anyString(), any(org.springframework.jdbc.core.RowMapper.class), any(), any(), any()))
+                .thenReturn(tenDocs);
+
+        List<Document> result = provider().search("u", "질문", "latest", 5);
+
+        assertThat(result).hasSize(5);
+    }
+
+    @Test
+    @DisplayName("toVectorBlob: float[] → little-endian float32 바이트 배열 (§10.9.2)")
+    void vectorBlob() {
+        byte[] blob = SqliteVecVectorStoreProvider.toVectorBlob(new float[]{1.0f, -2.5f, 0.0f});
+
+        assertThat(blob).hasSize(12); // 3 floats * 4 bytes
+        ByteBuffer buf = ByteBuffer.wrap(blob).order(ByteOrder.LITTLE_ENDIAN);
+        assertThat(buf.getFloat()).isEqualTo(1.0f);
+        assertThat(buf.getFloat()).isEqualTo(-2.5f);
+        assertThat(buf.getFloat()).isEqualTo(0.0f);
+
+        assertThat(SqliteVecVectorStoreProvider.toVectorBlob(new float[]{})).isEmpty();
+        assertThat(SqliteVecVectorStoreProvider.toVectorBlob(new float[]{42.0f})).hasSize(4);
     }
 
     @Test
@@ -138,7 +236,7 @@ class SqliteVecVectorStoreProviderTest {
             }
 
     @Test
-    @DisplayName("add: 대용량 문서는 여러 배치로 나눠 임베딩되고, 결과가 올바른 doc id에 매핑된다")
+    @DisplayName("add: 대용량 문서는 여러 배치로 나눠 임베딩되고, 결과가 올바른 doc id에 매핑된다 (§10.9.3 서브배치별 즉시 삽입)")
     void addMapsEmbeddingsToCorrectDocIdAcrossBatches() {
         SqliteVecVectorStoreProvider p = provider();
         // ~20,000 chars each stays well under TokenCountBatchingStrategy's default per-document
@@ -158,22 +256,26 @@ class SqliteVecVectorStoreProviderTest {
 
         verify(embeddingModel, atLeast(2)).embed(anyList());
 
+        // §10.9.3 — each embedded sub-batch is inserted immediately, so two 20,000-char docs that
+        // land in separate sub-batches produce two separate single-row batchUpdate calls instead
+        // of one combined two-row call.
         ArgumentCaptor<BatchPreparedStatementSetter> captor = ArgumentCaptor.forClass(BatchPreparedStatementSetter.class);
-        verify(jdbc).batchUpdate(
+        verify(jdbc, times(2)).batchUpdate(
                 eq("INSERT INTO vec_embeddings(spring_doc_id, version, embedding) VALUES (?, ?, ?)"),
                 captor.capture());
-        BatchPreparedStatementSetter setter = captor.getValue();
+        List<BatchPreparedStatementSetter> setters = captor.getAllValues();
+        assertThat(setters).hasSize(2);
 
         try {
             PreparedStatement ps0 = mock(PreparedStatement.class);
-            setter.setValues(ps0, 0);
+            setters.get(0).setValues(ps0, 0);
             verify(ps0).setString(1, "d1");
-            verify(ps0).setString(3, "[1.0]");
+            verify(ps0).setBytes(3, SqliteVecVectorStoreProvider.toVectorBlob(new float[]{1f}));
 
             PreparedStatement ps1 = mock(PreparedStatement.class);
-            setter.setValues(ps1, 1);
+            setters.get(1).setValues(ps1, 0);
             verify(ps1).setString(1, "d2");
-            verify(ps1).setString(3, "[2.0]");
+            verify(ps1).setBytes(3, SqliteVecVectorStoreProvider.toVectorBlob(new float[]{2f}));
         } catch (java.sql.SQLException e) {
             throw new RuntimeException(e);
         }
@@ -313,5 +415,90 @@ class SqliteVecVectorStoreProviderTest {
         List<String> stmts = sql.getAllValues();
         assertThat(stmts.get(0)).contains("DELETE FROM vec_embeddings").contains("IN (?,?)");
         assertThat(stmts.get(1)).contains("DELETE FROM vec_document_chunks").contains("IN (?,?)");
+    }
+
+    // ── §10.8.3 — transactional batch insert ─────────────────────────────
+
+    @Test
+    @DisplayName("add: 실제 DataSource가 있으면 두 batchUpdate가 하나의 트랜잭션 안에서 실행된다")
+    void add_wrapsBothBatchUpdatesInOneTransactionWhenRealDataSourceAvailable() {
+        DriverManagerDataSource ds = new DriverManagerDataSource();
+        ds.setDriverClassName("org.sqlite.JDBC");
+        ds.setUrl("jdbc:sqlite:" + tmpDir.resolve("tx-test.db"));
+        when(jdbc.getDataSource()).thenReturn(ds);
+
+        List<Boolean> txActiveDuringCall = new ArrayList<>();
+        when(jdbc.batchUpdate(eq("INSERT INTO vec_embeddings(spring_doc_id, version, embedding) VALUES (?, ?, ?)"),
+                any(BatchPreparedStatementSetter.class)))
+                .thenAnswer(inv -> {
+                    txActiveDuringCall.add(TransactionSynchronizationManager.isActualTransactionActive());
+                    return new int[0];
+                });
+        when(jdbc.batchUpdate(eq("INSERT INTO vec_document_chunks(spring_doc_id, content, metadata, version, doc_id, created_at) VALUES (?, ?, ?, ?, ?, ?)"),
+                anyList()))
+                .thenAnswer(inv -> {
+                    txActiveDuringCall.add(TransactionSynchronizationManager.isActualTransactionActive());
+                    return new int[0];
+                });
+
+        SqliteVecVectorStoreProvider p = provider();
+        Document doc = Document.builder().id("d1").text("hello").metadata(Map.of()).build();
+        when(embeddingModel.embed(anyList())).thenReturn(List.of(new float[]{0.1f}));
+
+        p.add("u", "v1", List.of(doc));
+
+        assertThat(txActiveDuringCall).as("both batchUpdate calls should run inside an active transaction")
+                .containsExactly(true, true);
+        assertThat(TransactionSynchronizationManager.isActualTransactionActive())
+                .as("transaction must be closed once add() returns").isFalse();
+    }
+
+    // ── §10.9.4 — indexing bypasses the query-embedding cache ─────────────
+
+    @Test
+    @DisplayName("add: CachingEmbeddingModel이 주입되면 인덱싱 직후에도 직전 검색 질의의 캐시 히트가 유지된다")
+    void add_doesNotEvictOrPopulateQueryCache() {
+        EmbeddingModel delegate = mock(EmbeddingModel.class);
+        when(delegate.call(org.mockito.ArgumentMatchers.argThat(
+                req -> req.getInstructions().equals(List.of("검색 질의")))))
+                .thenReturn(new org.springframework.ai.embedding.EmbeddingResponse(
+                        List.of(new org.springframework.ai.embedding.Embedding(new float[]{0.9f}, 0))));
+        when(delegate.embed(any(List.class))).thenReturn(List.of(new float[]{0.1f}));
+        var cachingModel = new com.example.ragagent.llm.CachingEmbeddingModel(delegate, "test", 500, 600);
+
+        // Warm the query cache first (mirrors a prior search).
+        cachingModel.call(new org.springframework.ai.embedding.EmbeddingRequest(List.of("검색 질의"), null));
+        verify(delegate, times(1)).call(any());
+
+        // Index a chunk — must go through the raw delegate's embed(List), not the cache's call().
+        AppProperties props = mock(AppProperties.class);
+        when(props.searchSimilarityThresholdSafe()).thenReturn(0.0);
+        SqliteVecVectorStoreProvider p = new SqliteVecVectorStoreProvider(jdbc, cachingModel, new ObjectMapper(), props);
+        Document chunk = Document.builder().id("c1").text("인덱싱되는 청크 본문").metadata(Map.of()).build();
+        p.add("u", "v1", List.of(chunk));
+
+        verify(delegate).embed(any(List.class));          // indexing reached the raw delegate directly
+        verify(delegate, times(1)).call(any());            // still just the one warmup call — no extra call() traffic
+
+        // The previously cached query must still be a cache hit (delegate.call() count unchanged).
+        cachingModel.call(new org.springframework.ai.embedding.EmbeddingRequest(List.of("검색 질의"), null));
+        verify(delegate, times(1)).call(any());
+    }
+
+    @Test
+    @DisplayName("add: DataSource가 없으면(목 JdbcTemplate) 트랜잭션 없이 그대로 두 batchUpdate를 호출한다")
+    void add_noDataSource_fallsBackToSequentialBatchUpdates() {
+        // jdbc.getDataSource() defaults to null (unstubbed mock) — same setup every other test in
+        // this file already relies on; this test names that fallback path explicitly.
+        SqliteVecVectorStoreProvider p = provider();
+        Document doc = Document.builder().id("d1").text("hello").metadata(Map.of()).build();
+        when(embeddingModel.embed(anyList())).thenReturn(List.of(new float[]{0.1f}));
+
+        p.add("u", "v1", List.of(doc));
+
+        verify(jdbc).batchUpdate(eq("INSERT INTO vec_embeddings(spring_doc_id, version, embedding) VALUES (?, ?, ?)"),
+                any(BatchPreparedStatementSetter.class));
+        verify(jdbc).batchUpdate(eq("INSERT INTO vec_document_chunks(spring_doc_id, content, metadata, version, doc_id, created_at) VALUES (?, ?, ?, ?, ?, ?)"),
+                anyList());
     }
 }

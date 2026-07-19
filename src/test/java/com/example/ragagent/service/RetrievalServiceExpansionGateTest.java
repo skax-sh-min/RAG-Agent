@@ -24,8 +24,8 @@ class RetrievalServiceExpansionGateTest {
 
     private RetrievalService service(boolean enabled, int minLength) {
         AppProperties props = mock(AppProperties.class);
-        when(props.searchTopK()).thenReturn(7);
-        when(props.searchMultiqueryEnabled()).thenReturn(enabled);
+        when(props.searchTopKSafe()).thenReturn(7);
+        when(props.searchMultiqueryEnabledSafe()).thenReturn(enabled);
         when(props.searchMultiqueryMinLengthSafe()).thenReturn(minLength);
         when(props.searchRetryEscalateSafe()).thenReturn(true);
         when(props.searchRerankEnabled()).thenReturn(false);

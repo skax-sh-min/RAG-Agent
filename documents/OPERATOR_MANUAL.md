@@ -37,6 +37,7 @@ RAG Agent 시스템 배포·설정·운영 가이드입니다.
    - 6.3 [데이터 영속성](#63-데이터-영속성)
    - 6.4 [성능](#64-성능)
    - 6.5 [설정 페이지 (/settings) — LLM/RAG 옵션 조회·핫 수정](#65-설정-페이지-settings--llmrag-옵션-조회핫-수정)
+   - 6.6 [검색 품질 평가 하네스 (개발자용)](#66-검색-품질-평가-하네스-개발자용)
 7. [벡터 스토어 관리](#7-벡터-스토어-관리)
 8. [문제 해결](#8-문제-해결)
 9. [보안 설정](#9-보안-설정)
@@ -151,6 +152,8 @@ rag_java/
 > ```
 
 > **백엔드 전환 = 재인덱싱**: chroma ↔ sqlite-vec 간 벡터는 공유되지 않습니다. 전환 후 문서 재업로드(또는 재동기화)로 재인덱싱해야 합니다 — 원본은 `data/documents/`에 보존됩니다. `/admin` 페이지는 **두 백엔드 모두** 상태 카드·청크 조회/편집/삭제를 제공합니다(§7).
+>
+> **벡터 직렬화 형식(§10.9.2)**: 앱은 벡터를 raw float32 BLOB로 vec0에 바인딩합니다(과거 JSON 텍스트 리터럴 방식 대비 전송/파싱 비용 절감). BLOB는 sqlite-vec의 기본 이진 포맷이라 대부분의 `vec0` 빌드에서 문제없이 동작하지만, 폐쇄망에서 반입한 바이너리는 버전 편차가 있을 수 있으므로 sqlite-vec 백엔드를 처음 켜거나 `vec0` 바이너리를 교체한 직후에는 문서 1건을 인덱싱하고 검색까지 확인하세요. BLOB 바인딩이 지원되지 않는 빌드라면 인덱싱 시점에 vec0가 명확한 오류를 던지므로(데이터가 조용히 깨지지 않음) 바로 알 수 있습니다.
 
 ---
 
@@ -174,7 +177,7 @@ copy .env.example .env
 | `LOCAL_LLM_URL` | — | `http://localhost:1234/v1` | `providers[0]` LOCAL 엔드포인트 기본 URL. 임베딩 설정(`EMBED_BASE_URL`)의 폴백으로도 사용됨 |
 | `LOCAL_LLM_KEY` | — | `lm-studio` | `providers[0]` API 키. **로컬 엔드포인트(llama-server 등)는 키가 불필요** — 비우거나 미설정해도 LOCAL provider는 등록됨(내부적으로 `no-key` 치환). 로컬 LLM이 아예 없으면 미사용 시 첫 호출 1회 실패 후 Circuit Breaker로 우회되며, 완전히 제외하려면 `application.properties`의 `providers[0]`를 주석 처리하거나 `LLM_ROUTING_MODE=QUALITY_FIRST`로 후순위 배치 |
 | `LOCAL_LLM_MODEL` | — | `google/gemma-4-e4b` | `providers[0]` 모델 식별자. 사용 중인 로컬 모델명으로 변경 |
-| `LLM_ROUTING_MODE` | — | `COST_FIRST` | 기본 라우팅 모드 (`app.llm.default-routing-mode`) — `COST_FIRST`/`QUALITY_FIRST`/`PROGRESSIVE`/`DUAL`/`LOCAL_ONLY`. **폐쇄망·로컬 전용은 `LOCAL_ONLY`** 로 외부 프로바이더 호출을 원천 차단 |
+| `LLM_ROUTING_MODE` | — | `COST_FIRST` | 기본 라우팅 모드 (`app.llm.default-routing-mode`) — `COST_FIRST`/`QUALITY_FIRST`/`PROGRESSIVE`/`DUAL`/`LOCAL_ONLY`. **폐쇄망·로컬 전용은 `LOCAL_ONLY`** 로 외부 프로바이더 호출을 원천 차단. `LOCAL_ONLY`로 설정하면 채팅 화면 사이드바의 라우팅 전략 드롭다운 자체가 사라진다(어떤 모드를 골라도 결과가 같으므로) — 상세는 [LLM_ROUTING.md §8](LLM_ROUTING.md#8-제약-및-주의사항) 참고 |
 | `OPENAI_API_KEY` | — | — | OpenAI providers 사용 시 필요. 미설정 또는 빈 값이면 해당 providers 자동 비활성화. providers 설정에서 `${OPENAI_API_KEY}` 형태로 참조 |
 | `OPENAI_BASE_URL` | — | `https://api.openai.com` | OpenAI 호환 엔드포인트 기본 URL. providers 설정에서 `${OPENAI_BASE_URL}` 형태로 참조. Azure OpenAI 등 호환 엔드포인트로 교체 가능 |
 | `GEMINI_API_KEY1` | — | — | Gemini 1번 API 키 — `providers[1]`(gemini-flash-lite) 전용. 미설정 시 해당 provider 자동 비활성화. providers 설정에서 `${GEMINI_API_KEY1}` 형태로 참조 |
@@ -184,6 +187,8 @@ copy .env.example .env
 | `EMBED_API_KEY` | — | `LOCAL_LLM_KEY` 폴백 | 임베딩 전용 API 키. 미설정 시 `LOCAL_LLM_KEY` 사용 |
 | `EMBED_MODEL` | — | `text-embedding-nomic-embed-text-v1.5` | 임베딩 모델 식별자. **인덱싱 후 변경 금지** — 벡터 차원이 달라지면 기존 검색이 깨짐. 변경 시 전체 재인덱싱 필요 (chroma: 컬렉션 삭제 / sqlite-vec: `vec_embeddings` DROP — 차원이 DDL에 고정되며 `app.embedding.dimensions`도 함께 변경) |
 | `EMBED_DIMENSIONS` | sqlite-vec 시 ✅ | — | **sqlite-vec 전용** — 임베딩 모델의 실제 출력 차원 (`app.embedding.dimensions`). vec0 테이블이 `FLOAT[dim]`이라 DDL에 고정 → 모델 실제 차원과 **정확히 일치**해야 함 (nomic-embed-text=768, bge-m3=1024, text-embedding-3-small=1536). chroma 모드에선 무시(빈값→null). sqlite-vec 모드에서 미설정 시 기동 실패(fail-fast) |
+| `EMBED_ADDITIONAL_BASE_URLS` | — | — | §6.21 E1 — 추가 임베딩 엔드포인트(동일 모델·차원, 예: N개 GPU 복제본). 콤마 구분. 설정 시 `EMBED_BASE_URL`+이 목록에 걸쳐 least-in-flight 로드밸런싱. **모두 `EMBED_MODEL`을 같은 차원으로 서빙해야 함** (섞이면 벡터 인덱스 손상). 상세는 아래 "임베딩 병렬화" |
+| `EMBED_MAX_CONCURRENT_BATCHES` | — | `1` | §6.21 E2 — 단일 문서 인덱싱 시 서브배치 병렬 임베딩 수(1=직렬, 기본 → 회귀 0). 대략 (엔드포인트 수 × 엔드포인트별 병렬)로 설정. Chroma는 임베딩만 병렬(버퍼 후 1회 upsert), sqlite-vec는 병렬 임베딩 후 직렬 삽입(pool=1, §10.9.3 스트리밍 메모리 상한을 속도와 맞바꿈). 여러 파일 대량 인덱싱은 `INDEXING_MAX_FILES`로 이미 분산 |
 | `VECTORSTORE_TYPE` | — | `chroma` | 벡터 스토어 백엔드 — `chroma` 또는 `sqlite-vec` (§3.1 "벡터 스토어 백엔드 선택" 참조) |
 | `SQLITE_VEC_EXTENSION_PATH` | — | — | **sqlite-vec 전용** — 운영자가 제공하는 `vec0` 로더블 확장 절대경로 (suffix 생략 가능). 미설정 시 sqlite-vec 모드 기동 실패 |
 | `SQLITE_VEC_ENTRYPOINT` | — | — | sqlite-vec 전용(선택) — `load_extension` 엔트리포인트 강제. 보통 불필요 |
@@ -204,8 +209,8 @@ copy .env.example .env
 | `SEARCH_TOP_K` | `7` | 2 ~ 15 | 벡터 검색 반환 문서 수. 높을수록 재현율↑, 토큰↑ |
 | `SEARCH_SIMILARITY_THRESHOLD` | `0.0` | 0.0 ~ 0.75 | 청크 유지 최소 코사인 유사도. `0.0`=전체 수용. 운영 0.5~0.75 튜닝 시 골든셋 recall 확인 후 적용 |
 | `SEARCH_MULTIQUERY_ENABLED` | `true` | true/false | 검색 전 질의 다중 확장(LLM) 여부. `false`면 임계 경로 첫 LLM 콜 제거 |
-| `SEARCH_MULTIQUERY_MIN_LENGTH` | `0` | 0 ~ 20 | 이 길이(trim) 미만 질의는 확장 생략. `0`=항상 확장. 짧은 키워드 질의 TTFT↓ |
-| `SEARCH_HYBRID_ENABLED` | `false` | true/false | RRF에 BM25(FTS5) 키워드 축 추가. **활성화 시 기존 색인 문서 재인덱싱 필요** |
+| `SEARCH_MULTIQUERY_MIN_LENGTH` | `15` | 0 ~ 20 | 이 길이(trim) 미만 질의는 확장 생략. `0`=항상 확장. 짧은 키워드 질의 TTFT↓(§10.8.1) |
+| `SEARCH_HYBRID_ENABLED` | `true` | true/false | RRF에 BM25(FTS5) 키워드 축 추가(§10.7.2 — 이 플래그와 무관하게 `chunk_fts`는 항상 채워지므로 **활성화해도 기존 색인 문서 재인덱싱 불필요**, FTS5/하이브리드 검색 도입 이전에 색인된 아주 오래된 문서만 예외) |
 | `SEARCH_RETRY_ESCALATE` | `true` | true/false | 재시도마다 후보 풀 확대. `candidateK = min(topK×(retryCount+1), topK×3)`. 동일 검색 반복 회피 |
 | `SEARCH_RERANK_ENABLED` | `false` | true/false | RRF 후 LLM 리랭킹 단계 (opt-in). **턴당 LLM 1콜 추가** → 정밀도↑/레이턴시 트레이드오프 |
 | `SEARCH_CANDIDATE_MULTIPLIER` | `3` | 2 ~ 5 | 리랭킹 전 후보 풀 크기. `topK × N`개 가져와 리랭킹 후 topK로 축소 |
@@ -214,7 +219,7 @@ copy .env.example .env
 | `SEARCH_RRF_K` | `60` | 20 ~ 100 | 가중 RRF(Phase 7-A) — RRF 순위융합 상수 k(원논문 기본값 60) |
 | `MAX_RETRY_COUNT` | `2` | 0 ~ 4 | 증거 부족 시 재검색 최대 횟수 |
 
-대화 컨텍스트 주입 길이는 `LLM_MAX_TOKENS × 0.75`(최소 1,000자)로 자동 계산됩니다. 원문 그대로 보내는 폴백 경로(`MemoryService.getHistory()`)와 요약 캐시 경로(`ConversationSummarizerService.buildContext()`, §6.1) 모두 이 예산을 동일하게 지키도록 통일되어 있습니다.
+대화 컨텍스트 주입 길이는 `LLM_MAX_TOKENS × 0.75`(최소 1,000자)로 자동 계산됩니다 — 기본값 기준 `6000 × 0.75 = 4500`자(§6.18 이전에는 `MemoryService`가 별도의 죽은 프로퍼티를 통해 기본값 `8000`을 읽어 `6000`자였습니다 — 소스 통일로 기본 예산이 줄었으니, 과거 히스토리 분량에 맞추려면 `LLM_MAX_TOKENS`를 올리세요). 원문 그대로 보내는 폴백 경로(`MemoryService.getHistory()`)와 요약 캐시 경로(`ConversationSummarizerService.buildContext()`, §6.1) 모두 이 예산을 동일하게 지키도록 통일되어 있습니다.
 
 #### 대화 메모리 / 요약 캐시 튜닝
 
@@ -232,9 +237,10 @@ copy .env.example .env
 
 | 변수 | 기본값 | 권장 범위 | 설명 |
 |------|--------|----------|------|
-| `INDEXING_MAX_FILES` | `3` | 1 ~ 8 | 파일 병렬 인덱싱 워커 수 |
-| `INDEXING_MAX_LLM` | `4` | 1 ~ 16 | 인덱싱 중 LLM 병렬 호출 수 (키워드 추출) |
-| `INDEXING_KEYWORD_TIMEOUT_SECONDS` | `180` | 30 ~ 600 | 청크 키워드 추출 1회당 최대 대기 시간. 초과 시 TF fallback |
+| `INDEXING_MAX_FILES` | `1` | 1 ~ 8 | 파일 병렬 인덱싱 워커 수. **인덱싱 LLM 동시 호출 피크 ≈ `INDEXING_MAX_FILES` × `INDEXING_MAX_LLM`** 이므로, 기본값 `1`은 피크를 정확히 `INDEXING_MAX_LLM`으로 고정한다(§6.5 주석 참고). 올리면 처리량은 늘지만 피크가 곱으로 커진다 |
+| `INDEXING_MAX_LLM` | `3` | 1 ~ 16 | 인덱싱 중 LLM 병렬 호출 수 — 키워드 추출뿐 아니라 MD 교정·TXT 구조화·지연 Vision 설명이 모두 사용. 로컬 LLM 서버의 `--parallel` 값에 맞춘다 |
+| `INDEXING_KEYWORD_TIMEOUT_SECONDS` | `180` | 30 ~ 600 | 청크 키워드 추출 1회당(§10.8.2 배치 시 배치 1회당) 최대 대기 시간. 초과 시 TF fallback |
+| `INDEXING_KEYWORD_BATCH_SIZE` | `4` | 1 ~ 8 | §10.8.2 — 청크 N개를 한 LLM 호출로 묶어 요청(왕복 ≈ ceil(청크수/N)). `1`=배치 없음(청크당 1콜, 이전 동작). 배치가 클수록 응답 길이도 늘어나므로 로컬 모델에서 타임아웃이 잦으면 `INDEXING_KEYWORD_TIMEOUT_SECONDS`를 함께 올리세요 |
 
 #### 질의 경로 동시성 제어
 
@@ -265,6 +271,28 @@ copy .env.example .env
 | `EMBED_USAGE_FALLBACK_ENABLED` | `true` | 임베딩 사용량은 `llm_usage`에 `embed:<model>`로 채팅과 분리 집계되어 `/llm-usage`에 별도 카드로 표시됩니다(§5.5, §10). 임베딩 서버가 응답에 토큰 사용량을 반환하지 않으면(로컬 llama-server 등 흔함) 입력 텍스트 길이 근사(chars/4)로 대체 기록합니다. `false`로 설정하면 근사 대신 `0`을 기록합니다. 근사 경로 진입 시 서버 로그에 경고가 **최초 1회만** 출력됩니다 |
 | `EMBED_MAX_CHUNK_CHARS` | `0` (비활성) | 청크 1개의 **문자 수 하드 상한**. 임베딩 서버가 `input (N tokens) is too large ... (current batch size: 512)`처럼 배치/토큰 한계로 청크를 거부할 때 사용합니다. 이 값을 넘는 청크는 (의미 단위 청킹이 끝난 뒤) 줄 경계에서 **강제 재분할**되어 서버 한계를 넘지 않도록 보장합니다. 한국어·코드는 대략 1토큰/문자이므로 512토큰 배치라면 `~450` 정도가 안전. **먼저 서버 배치를 키우는 것을 권장**(아래 §8 참조)하고, 이건 최후의 안전장치로 사용하세요 |
 
+#### 임베딩 병렬화 (§6.21 E1~E3)
+
+임베딩 처리량을 여러 엔드포인트·병렬 서브배치로 확장한다. 셋 다 **기본 비활성(회귀 0)**인 opt-in이다.
+
+- **E1 — 다중 엔드포인트 로드밸런싱** (`EMBED_ADDITIONAL_BASE_URLS`): 같은 임베딩 모델을 여러 서버/포트(예: N개 GPU)에 띄우고 콤마로 나열하면 `LoadBalancingEmbeddingModel`이 요청마다 잔여 in-flight가 가장 적은(least-in-flight) 엔드포인트로 보낸다(LLM의 [§5.7](#57-동시성-제어-및-백프레셔) 로드밸런서와 동일 개념). **모든 엔드포인트는 `EMBED_MODEL`을 동일 차원으로 서빙해야 한다** — 다른 모델을 섞으면 벡터가 비교 불가라 인덱스가 깨진다.
+- **E2 — 병렬 서브배치 임베딩** (`EMBED_MAX_CONCURRENT_BATCHES`, 기본 1): 한 문서를 인덱싱할 때 토큰 단위 서브배치들을 동시에 임베딩한다. E1과 결합하면 **단일 대용량 문서**도 여러 엔드포인트를 동시에 채운다. 대략 `(엔드포인트 수 × 엔드포인트별 --parallel)`로 설정.
+  - **chroma**: 임베딩만 병렬화하고 원래대로 마지막에 1회 upsert → 메모리 프로파일 불변, 저위험.
+  - **sqlite-vec**: 병렬 임베딩 후 삽입은 직렬(SQLite `pool=1`). §10.9.3 스트리밍 삽입(서브배치 단위 메모리 상한)을 포기하고 문서 전체 임베딩을 잠깐 메모리에 들고 있게 되는 속도↔메모리 트레이드오프를 아는 상태에서만 켠다(임베딩 벡터는 청크당 수 KB라 실무 부담은 작음).
+  - **여러 파일 동시 인덱싱**은 E2 없이도 `INDEXING_MAX_FILES`가 파일 단위로 E1 엔드포인트에 분산하므로, E2는 주로 "큰 파일 하나"를 빠르게 처리할 때 이득이 크다.
+- **E3 — 배치 토폴로지** (배포 권고, 코드 아님): 소형 LLM(§6.21)·임베딩 서버·대형 LLM을 **서로 다른 장비/포트**에 두면 co-located GPU/CPU 경합이 줄어 임베딩 스루풋이 간접적으로 오른다. 단일 장비라면 각 서버의 `--parallel`·배치 크기 합이 장비 용량을 넘지 않게 조정한다.
+
+**설정 예 (임베딩 서버 2대)**:
+```properties
+# 같은 nomic-embed 모델을 2대(다른 포트/장비)에 서빙
+app.embedding.base-url=http://gpu-a:1234/v1
+app.embedding.additional-base-urls=http://gpu-b:1234/v1
+app.embedding.model=text-embedding-nomic-embed-text-v1.5
+# 단일 문서도 두 서버를 동시에 쓰도록 병렬 서브배치(2대 × 서버별 병렬 2 = 4)
+app.embedding.max-concurrent-batches=4
+```
+환경변수로는 `EMBED_ADDITIONAL_BASE_URLS=http://gpu-b:1234/v1`, `EMBED_MAX_CONCURRENT_BATCHES=4`.
+
 #### 쿼리 임베딩 캐시 (Phase 7-A)
 
 | 변수 | 기본값 | 권장 범위 | 설명 |
@@ -273,7 +301,9 @@ copy .env.example .env
 | `SEARCH_QUERY_EMBED_CACHE_MAX_SIZE` | `500` | 100 ~ 5000 | 캐시 최대 엔트리 수 |
 | `SEARCH_QUERY_EMBED_CACHE_TTL_SECONDS` | `600` | 60 ~ 3600 | 캐시 엔트리 TTL(초, write 기준 만료) |
 
-> 캐시는 인메모리 전용(재시작 시 초기화)이며, 인덱싱 시 청크 텍스트 임베딩도 같은 캐시를 지나가지만 대부분 캐시 미스로 끝나 `MAX_SIZE`/`TTL` 안에서 자연히 흡수됩니다(메모리 누수 없음, 다만 인덱싱 자체는 캐시 이득이 없음). `EMBED_MODEL`을 바꾸면 재시작 시 캐시가 자동으로 비워지므로 별도 무효화 절차는 불필요합니다.
+> 캐시는 인메모리 전용(재시작 시 초기화)입니다. `EMBED_MODEL`을 바꾸면 재시작 시 캐시가 자동으로 비워지므로 별도 무효화 절차는 불필요합니다.
+>
+> **인덱싱은 이 캐시를 우회합니다(§10.9.4)**: 청크 텍스트는 문서당 한 번만 쓰이고 사실상 재사용되지 않으므로, 인덱싱 경로(`add()`)는 캐시를 거치지 않고 임베딩 모델을 직접 호출합니다 — 대량 문서(500+ 청크)를 인덱싱해도 그 직전까지 캐시에 쌓여 있던 검색 질의 임베딩이 밀려나지 않습니다. 캐시는 오직 검색 질의(`search()`/`searchBatch()`)에만 적용됩니다. 캐시 키 자체도 질의 원문 대신 SHA-256 해시를 사용해 엔트리 크기가 질의 길이와 무관하게 고정됩니다.
 
 #### PPTX 이미지 추출 튜닝
 
@@ -283,16 +313,51 @@ copy .env.example .env
 |------|--------|------|
 | `PPTX_IMAGE_MIN_SHAPE_DIMENSION_PT` | `30` | 도형의 가로/세로 중 큰 쪽이 이 값(포인트) 미만이면 아이콘/구분선으로 보고 래스터라이즈 대상에서 제외 |
 | `PPTX_IMAGE_CLUSTER_PROXIMITY_PADDING_PT` | `15` | 근접 클러스터링 판정 시 각 도형 바운딩박스에 적용할 바깥쪽 패딩(포인트). 커넥터가 도형 사이 '틈'에 있어도 하나로 묶이도록 함 |
-| `PPTX_IMAGE_MERGE_ANNOTATED_PICTURES` | `true` | `true`(기본) — 사진(그림)도 근접 클러스터링에 참여해, 사진 위/근처에 겹친 주석 도형(강조 원·화살표·말풍선)이 있으면 사진과 하나의 합성 PNG로 합쳐짐. `false` — 사진은 근접 클러스터링에 참여하지 않고 항상 원본 그대로 추출됨; PPTX에서 실제로 그룹(Ctrl+G)으로 묶인 사진+도형만 여전히 하나로 합쳐짐(POI가 그룹을 통째로 그리는 것은 이 옵션과 무관) |
+| `PPTX_IMAGE_MERGE_ANNOTATED_PICTURES` | `true` | `true`(기본) — 사진 위/근처에 겹친 주석 도형(강조 원·화살표·말풍선)이 있으면 사진과 하나의 합성 PNG로 합쳐짐(앵커 기반, `RASTERIZE_SHAPES`와 **독립**). `false` — 사진은 항상 원본 그대로 추출됨; PPTX에서 실제로 그룹(Ctrl+G)으로 묶인 사진+도형만 여전히 하나로 합쳐짐(POI가 그룹을 통째로 그리는 것은 이 옵션과 무관) |
+| `PPTX_IMAGE_RASTERIZE_SHAPES` | `false` | **"느슨한" 도형(사진/표/그룹 등 앵커에 안 겹친 선·화살표·텍스트없는 도형)끼리의 근접 클러스터링**을 제어. `false`(기본) — 클러스터링 안 함: 겹친 느슨한 도형이 한 덩어리로 뭉치지 않고, 아무것에도 안 겹친 단독 도형은 이미지로 아예 안 뽑힘. `true` — 겹친 느슨한 도형들을 union-find로 묶어 다이어그램 한 장으로 병합(구 기본 동작). **그룹·SmartArt(각 한 장), 표+겹친도형 합성, 사진+주석 합성은 이 값과 무관하게 항상 유지됨** |
 
 > `PPTX_IMAGE_MERGE_ANNOTATED_PICTURES=false`는 화면 캡처 위의 강조 표시를 원본 사진과 분리해서 보관하고 싶을 때(예: 원본 사진을 다른 용도로 재사용) 사용합니다. 변경 후에는 기존 PPTX 문서를 재인덱싱해야 반영됩니다. (PPTX에서 실제로 Ctrl+G로 그룹핑된 사진+도형만 여전히 하나로 합쳐지는데, 이는 POI가 그룹을 통째로 그리는 자체 동작이라 옵션과 무관하게 항상 그렇게 동작합니다.)
+> `PPTX_IMAGE_RASTERIZE_SHAPES`: 기본값 `false`에서는 겹친 도형들이 무의미하게 한 이미지로 뭉치던 동작이 사라집니다 — 대신 저자가 의도적으로 묶은 그룹(Ctrl+G)·SmartArt, 표 위 강조 도형, 사진 위 주석만 이미지로 남습니다. 다이어그램을 여러 도형으로(그룹핑 없이) 그린 슬라이드를 하나의 이미지로 캡처하고 싶으면 `true`로 켜세요. 표는 이 옵션과 무관하게 항상 MD 파이프 표로도 들어갑니다(표 위 겹친 도형이 있으면 그 표+도형 합성 이미지가 **추가로** 생성). 변경 후 재인덱싱 필요.
+
+#### DOCX 이미지 추출 튜닝
+
+`DocxAnnotationShapeMerger`가 DOCX 사진 위에 겹친 주석 도형을 사진과 합성하는 방식을 제어합니다.
+
+| 변수 | 기본값 | 설명 |
+|------|--------|------|
+| `DOCX_IMAGE_MERGE_ANNOTATED_SHAPES` | `true` | `true`(기본) — 사진과 **같은 문단**에 있는 레거시 VML 도형(`v:rect`/`v:oval`/`v:roundrect`/`v:line` — 사각형/원/모서리둥근사각형/선)을 사진 위에 그려 하나의 합성 PNG로 저장. `false` — 항상 원본 사진만 그대로 추출(도형은 무시) |
+
+> **PPTX와의 차이 — 근사 방식**: POI의 WordprocessingML 모델에는 도형 좌표 API도 렌더러도 없어(그림 위치 자체가 노출되지 않음) PPTX처럼 진짜 기하학적 겹침을 판정할 수 없습니다. 대신 "같은 문단에 사진과 도형이 함께 있으면 겹친 주석"으로 간주하는 근사 휴리스틱을 사용합니다 — 화면 캡처 위에 강조 원/화살표를 그리면 Word가 보통 같은 문단에 앵커하므로 실무에서는 대부분 맞아떨어집니다. 최신 Word의 "도형 삽입"(DrawingML `wps:wsp`)은 POI에 타입 바인딩이 아예 없어 지원되지 않고, 레거시 VML 형태만 인식합니다. 도형 위치(`style` 속성)를 해석할 수 없거나 사진이 EMF/WMF인데 PNG 변환이 비활성/실패한 경우에는 합성을 포기하고 원본 사진만 추출합니다(조용한 폴백). 한 문단에 사진이 여러 장이면 첫 사진에만 합성을 시도합니다. 변경 후에는 기존 DOCX 문서를 재인덱싱해야 반영됩니다.
+
+#### PPTX 도형 텍스트 마커
+
+`PptxToMarkdownConverter`가 그룹 도형·SmartArt·차트에서 뽑아낸 텍스트는 별도 설정 없이 항상 대괄호 마커로 감싸져 저장·검색됩니다 — `/admin` 청크 뷰나 검색 결과에서 아래 마커를 보게 되면 도형에서 추출된 텍스트라는 뜻입니다.
+
+| 마커 | 도형 종류 | 설명 |
+|------|----------|------|
+| `[다이어그램]` 또는 `[다이어그램 N]` ... `[/다이어그램]`/`[/다이어그램 N]` | SmartArt(`XSLFDiagram`) | 박스·라벨 텍스트가 여는·닫는 마커 사이에 한 블록으로 묶여 저장됨 |
+| `[도형 그룹]` 또는 `[도형 그룹 N]` ... `[/도형 그룹]`/`[/도형 그룹 N]` | 일반 그룹 도형(`XSLFGroupShape`) | 그룹 안의 텍스트 상자들이 한 블록으로 묶여 저장됨 |
+| `[차트: 제목]` 또는 `[차트 N: 제목]` | 차트 프레임 | 차트 제목만 인라인 라벨로 저장됨(시리즈·축 값은 추출하지 않음) |
+
+한 슬라이드에 같은 종류(그룹/다이어그램/차트)가 2개 이상이면 라벨에 순번(N)이 붙어 서로 구분됩니다(`[도형 그룹 1]`, `[도형 그룹 2]` 등) — 1개뿐이면 번호 없이 기존과 동일하게 표시됩니다. 텍스트가 하나도 없는 순수 장식 그룹은 마커 자체가 생성되지 않습니다. `[이미지: ...]`와 마찬가지로 이 마커는 저장·표시 텍스트에 그대로 남아 임베딩·FTS·답변 프롬프트에 반영되며, `#`가 아니라 `[`로 시작해 섹션 헤딩으로 오인되지 않습니다.
+
+그 도형이 소유한 이미지(래스터라이즈된 PNG 또는 차트의 `mc:Fallback` 미리보기 그림)는 슬라이드 상단이 아니라 해당 마커 블록 안, 여는 마커 바로 다음에 `[이미지: ...]`로 삽입됩니다 — 어떤 이미지가 어떤 도형/차트에서 나왔는지 마커만으로 바로 알 수 있습니다. 소유 도형이 없는 일반 사진(그룹/다이어그램/차트에 속하지 않은 사진, OLE 미리보기 등)은 기존처럼 슬라이드 상단에 모아 표시됩니다. 다음 정리 동작도 별도 설정 없이 항상 적용됩니다:
+- 같은 그룹 안에서 서로 다른 도형의 텍스트 내용이 완전히 같으면(강조 마커·공백 차이 무시) 하나만 남깁니다.
+- 본문에서 직전 줄과 내용이 같은 줄이 연속되면 하나만 남깁니다(비연속 반복은 그대로 유지).
+- 표 셀 안의 줄바꿈(Shift+Enter)은 공백으로 치환되어 파이프 표 행이 깨지지 않습니다.
+- 슬라이드 하나의 최종 본문(본문+표+그룹 텍스트 통합 기준)에 볼드(`**`)가 10개 이상이면 과도한 강조로 보고 전부 제거합니다(이탤릭은 대상 아님).
+- 이와 별개로 도형 그룹·표 하나만 놓고도 같은 판정을 한 번 더 적용합니다 — 그 블록 안의 볼드 스팬이 6개 이상이거나 볼드로 덮인 글자 비율이 50% 이상이면 그 블록만 볼드를 전부 제거합니다. 볼드가 도형 그룹/표 하나에만 몰려 있어 슬라이드 전체 개수는 10 미만인 경우(예: 표 셀 6개만 전부 볼드)를 놓치지 않기 위한 보완 규칙입니다.
+- MD 교정(LLM 포맷 교정) 단계의 섹션 분할도 DOCX와 다릅니다 — 일반 헤딩(`##`/`###`/`####`) 기준이 아니라 `[페이지: N]` 마커 기준으로 나뉘어, 슬라이드 하나가 헤딩을 2개(`##`+`###`) 가져도 한 슬라이드가 쪼개지지 않습니다. 여기에 더해 작은 슬라이드는 최대 4장까지 하나의 교정 호출로 묶어 LLM 왕복을 줄이고, 반대로 한 슬라이드가 너무 크면 그 슬라이드만 `[도형 그룹]`/`[다이어그램]`/`[차트]` 블록 경계로 쪼갭니다.
+
+기존에 인덱싱된 PPTX 문서에는 소급 적용되지 않으므로, 위 동작이 반영되길 원하면 재업로드하거나 `POST /api/v1/documents/sync`로 재동기화하세요. 상세 구현은 [PIPELINE.md §6.3-bis](PIPELINE.md#63-bis-pptxpdf비스캔--md-변환--docx와의-차이점) 참고.
 
 #### LLM 응답 파라미터
 
 | 변수 | 기본값 | 권장 범위 | 설명 |
 |------|--------|----------|------|
-| `LLM_MAX_TOKENS` | `8000` | 1000 ~ 32000 | LLM이 한 번의 응답에서 생성할 수 있는 최대 토큰 수 (`spring.ai.openai.chat.options.max-tokens`). 이 값을 초과하면 LLM 응답이 중간에서 잘림. 복잡한 질문·긴 문서 요약이 필요한 환경에서는 증가 권장 |
-| `LLM_TEMPERATURE` | `0.0` | 0.0 ~ 2.0 | LLM 응답의 무작위성 제어 (`spring.ai.openai.chat.options.temperature`). `0.0`은 매번 동일한 결정적(deterministic) 답변, 값이 높을수록 다양하고 창의적인 답변. RAG 시스템 특성상 일관성이 중요하므로 `0.0` ~ `0.3` 범위 권장 |
+| `LLM_MAX_TOKENS` | `6000` | 1000 ~ 32000 | 단일 진실 소스(`app.llm.max-tokens`)로 통일되어, 이 값을 바꾸면 **아래 세 곳 모두**가 함께 움직입니다: (1) **블로킹 LLM 응답 토큰 상한** — 인덱싱·분류·키워드·Direct 블로킹 호출에 적용(스트리밍 채팅 답변은 의도적으로 미적용, SSE 타임아웃이 폭주 방지). (2) **대화 컨텍스트 문자 예산**(`MemoryService`, `×0.75`로 히스토리 예산 산출). (3) **MD 교정 섹션 크기**(`MarkdownCorrectionService`). §6.18 이전에는 (1)이 코드에 `6000`으로 하드코딩돼 이 환경변수와 무관하게 동작했고, (2)·(3)은 별도의 죽은 프로퍼티(`spring.ai.openai.chat.options.max-tokens`, 기본 `8000`)를 읽어 (1)과 다른 값을 썼습니다 — 이제 세 곳 모두 `app.llm.max-tokens` 하나만 읽습니다 |
+| `LLM_TEMPERATURE` | `0.0` | 0.0 ~ 2.0 | 일반/RAG 및 Direct를 제외한 모든 LLM 호출의 무작위성 제어(`app.llm.temperature`). `0.0`은 결정적 답변, 높을수록 다양·창의적. **§6.18 이전에는 코드에 `0.0`으로 하드코딩돼 이 값이 무시되는 죽은 설정이었으나, 이제 실제로 적용됩니다** — 과거에 이 값을 설정해 둔 운영자는 이번부터 처음으로 효과가 나타납니다(기본 `0.0`이면 체감 변화 없음). 프로바이더 빈 생성 시점에 고정되므로 변경하려면 재기동 필요 |
+| `DIRECT_LLM_TEMPERATURE` | `0.1` | 0.0 ~ 0.2 | **Direct(meta) 응답 전용** temperature(`app.llm.direct-temperature`) — 인사·잡담 등 RAG를 안 쓰는 직접 응답은 약간의 다양성이 자연스러워 일반 temperature와 분리(§6.18). `[0.0, 0.2]`로 clamp. **핫 수정 가능** — `/settings`에서 재기동 없이 다음 Direct 호출부터 반영(`DirectAnswerService`가 매 호출 재조회) |
 
 #### 로그 레벨
 
@@ -354,11 +419,29 @@ LLM_ROUTING_MODE=QUALITY_FIRST
 > (DOCX·TXT·MD 한정). 여기 표의 설정들은 모두 검색 시점 Lazy Vision에 대한 것입니다. 자세한 내용은
 > `documents/IMAGE_PROCESS.md` 5절·12절 참고.
 
+#### 소제목 숫자 생성 (`addHeadingNumbers`)
+
+프로퍼티가 아니라 문서 업로드 화면의 "소제목 숫자 생성" 체크박스로 제어되는 요청 단위 옵션입니다. 켜면 LLM
+섹션 교정이 모두 끝난 뒤 2차 패스로 H2~H6 헤딩에 계층적 번호(`## 1.1 제목`처럼)를 매기고, 라벨 없는 코드
+블록의 언어 태그를 재추론합니다(`MarkdownCorrectionService.addHierarchicalHeadingNumbers()`).
+
+> **PPTX는 항상 무시됩니다**: 체크박스 상태와 무관하게 PPTX 업로드는 이 옵션이 절대 적용되지 않습니다.
+> PPTX의 `##`/`###` 헤딩은 슬라이드 제목·부제목 라벨(최대 2단계, 슬라이드마다 계산)일 뿐 문서 목차 같은
+> 계층 구조가 아니라서, 순번을 매기면 실제 구조와 무관한 숫자만 붙고 이미 있는 `[페이지: N]` 마커와도
+> 겹쳐 혼란을 줍니다.
+
+> **MD 재인덱싱 시 자동 재검증**: `/admin` ↺ 버튼으로 재인덱싱하면, 저장된 MD에 번호 매겨진 헤딩이 하나
+> 라도 있을 때만 현재 헤딩 구조 기준으로 전체 번호를 다시 계산해 파일에도 반영합니다
+> (`MarkdownCorrectionService.reapplyHeadingNumbers()`, LLM 호출 없음) — 코드 블록 편집 등으로 헤딩이
+> 추가·삭제·이동돼 번호가 어긋난 경우를 바로잡습니다. 번호가 원래 없던 문서(체크 해제 상태로 업로드됐거나
+> PPTX)는 재인덱싱해도 새로 번호가 붙지 않습니다. 자세한 내용은 [§7.3 주의사항](#73-주의사항)과
+> [PIPELINE.md §6.3](PIPELINE.md#63-docx--md--임베딩-db-저장-상세-이미지-포함) 참고.
+
 #### LLM 응답 파라미터
 
 | 속성 | 기본값 | 설명 |
 |------|--------|------|
-> **temperature와 최대 출력 토큰**은 각각 `LLM_TEMPERATURE`, `LLM_MAX_TOKENS` 환경변수로 설정할 수 있습니다. → [§3.2 LLM 응답 파라미터](#32-환경변수-전체-목록) 참조
+> **temperature와 최대 출력 토큰**은 각각 `LLM_TEMPERATURE`, `LLM_MAX_TOKENS` 환경변수로 설정할 수 있습니다(§6.18로 실제 적용되도록 수정됨). Direct(잡담) 응답만 별도 `DIRECT_LLM_TEMPERATURE`(기본 0.1)를 쓰며 `/settings`에서 핫 수정 가능합니다. → [§3.2 LLM 응답 파라미터](#32-환경변수-전체-목록) 참조
 
 #### 업로드 크기 제한
 
@@ -1039,11 +1122,12 @@ app.llm.providers[0].stream=false
 
 | type | 처리 가능 태스크 | 권장 모델 유형 |
 |------|----------------|--------------|
-| `LIGHT_BOTH` | 분류·키워드·쿼리 확장 + Vision | 범용 로컬 LLM |
-| `BOTH` | 모든 태스크 (LIGHT_TEXT + TEXT + Vision) | 외부 고성능 모델 |
-| `LIGHT_TEXT` | 분류·키워드·쿼리 확장만 | 텍스트 전용 소형 모델 |
-| `TEXT` | 답변 생성·Critic만 | 텍스트 전용 대형 모델 |
+| `MICRO_TEXT` | 키워드+맥락·요약·제목·쿼리 확장만 (추론 불필요) | 500MB급 소형 모델 (§6.21) |
+| `LIGHT_TEXT` | 분류·직답 + `MICRO_TEXT` 잡무 | 텍스트 전용 소형~중형 모델 |
+| `LIGHT_BOTH` | 분류·직답·`MICRO_TEXT` 잡무 + Vision | 범용 로컬 LLM |
+| `TEXT` | 답변 생성·Critic·Rerank만 | 텍스트 전용 대형 모델 |
 | `VISION` | 이미지 설명만 | Vision 전용 모델 |
+| `BOTH` | 모든 태스크 | 외부 고성능 / 범용 대형 모델 |
 
 #### role 값 (COST_FIRST 기준 시도 순서)
 
@@ -1057,15 +1141,17 @@ app.llm.providers[0].stream=false
 
 | 노드 | TaskType | 설명 |
 |------|----------|------|
-| ClassifierService | `LIGHT_TEXT` | 질문 유형 분류 |
-| RetrievalService | `LIGHT_TEXT` | 쿼리 생성 (MultiQueryExpander) |
+| ClassifierService | `LIGHT_TEXT` | 질문 유형 분류 (품질 민감 — 큰 모델 유지) |
+| RetrievalService | `MICRO_TEXT` | 쿼리 생성 (MultiQueryExpander) — §6.21 작업2로 MICRO_TEXT 전환 |
 | AnswerService | `TEXT` | 답변 생성 |
 | CriticService | `TEXT` | 근거 검증 |
-| DirectAnswerService | `LIGHT_TEXT` | meta 질문 직접 응답 |
+| DirectAnswerService | `LIGHT_TEXT` | meta 질문 직접 응답 (사용자 노출 — 큰 모델 유지) |
 | VisionDescriptionService | `VISION` | 이미지 → 설명 생성 |
 | ImageTypeClassifier | `LIGHT_BOTH` | 이미지 유형 분류 |
-| KeywordExtractor | `LIGHT_TEXT` | 청크 키워드+맥락(Contextual Retrieval, §10.1) 통합 추출 — 한 번의 호출로 `keyword:` 대신 `context:` 사용량 라벨로 기록 |
+| KeywordExtractor | `MICRO_TEXT` | 청크 키워드+맥락(Contextual Retrieval, §10.1) 통합 추출 — `context:` 사용량 라벨. §6.21로 MICRO_TEXT 전환 |
 | RerankerService | `TEXT` (ChatClient) | 검색 후보 LLM 리랭킹 — `SEARCH_RERANK_ENABLED=true`일 때만 동작 |
+
+> **백그라운드 서비스(AgentGraph 밖)**: `ConversationSummarizerService`(대화 요약)·`ThreadMetaService`(제목 생성)도 `MICRO_TEXT`를 사용한다. `type=MICRO_TEXT` 소형 프로바이더 등록 시 위 `MICRO_TEXT` 4개 경로(키워드·요약·제목·쿼리확장)가 소형으로 오프로딩되고, 분류·직답·답변은 큰 모델에 남는다(§5.4 예제 6, §6.21).
 
 ---
 
@@ -1293,6 +1379,99 @@ COST_FIRST 흐름:
 
 ---
 
+#### 예제 6 — 소형(경량) LLM 분리로 잡무 오프로딩 (PLAN §6.21)
+
+추론이 필요 없는 잡무(키워드+맥락 추출·대화 요약·제목 생성·MultiQuery 쿼리 확장 = `MICRO_TEXT`)를 500MB급 소형 모델로 내리고, 답변 생성(`TEXT`)과 품질 민감한 분류·직답(`LIGHT_TEXT`)은 큰 모델이 전담하게 하면 — 두 모델이 **서로 다른 동시성 슬롯(Semaphore)**을 쓰므로 인덱싱 잡무가 채팅 답변의 슬롯을 잠식하지 않습니다(대화 응답 지연 감소).
+
+소형 모델 서버를 큰 모델과 **다른 포트/장비**에 띄운 뒤(예: LM Studio 2번째 인스턴스에 `qwen2.5-0.5b-instruct`를 로드, 포트 1236), `application.properties`:
+```properties
+# 큰 모델 — 답변(TEXT)·분류·직답(LIGHT_TEXT)·Vision 전담. priority를 1로 올려 소형에 MICRO_TEXT 우선권을 넘긴다.
+app.llm.providers[0].name=local
+app.llm.providers[0].base-url=http://localhost:1234/v1
+app.llm.providers[0].model=google/gemma-4-e4b
+app.llm.providers[0].type=BOTH
+app.llm.providers[0].role=LOCAL
+app.llm.providers[0].priority=1
+app.llm.providers[0].concurrency=3
+
+# 소형 모델 — MICRO_TEXT(키워드·요약·제목·쿼리확장) 전담. priority 0으로 우선.
+app.llm.providers[6].name=local-fast
+app.llm.providers[6].base-url=http://localhost:1236/v1
+app.llm.providers[6].model=qwen2.5-0.5b-instruct
+app.llm.providers[6].type=MICRO_TEXT
+app.llm.providers[6].role=LOCAL
+app.llm.providers[6].priority=0
+app.llm.providers[6].concurrency=4
+```
+
+라우팅 결과:
+```
+[키워드·요약·제목·쿼리확장] local-fast (MICRO_TEXT, priority 0)    ← 소형
+[분류·meta 직답]            local        (LIGHT_TEXT→BOTH, p1)      ← 큰 모델(품질 유지)
+[답변·Critic·Rerank]        local        (TEXT/BOTH, priority 1)    ← 큰 모델
+[Vision·이미지 분류]        local        (소형은 이미지 미지원)      ← 큰 모델
+소형 다운/차단 시           → MICRO_TEXT가 local(priority 1)로 자동 폴백
+```
+
+- ⚠️ **priority 필수**: 소형(0) < 큰 모델(1). 둘 다 0으로 두면 `MICRO_TEXT`가 두 모델 사이에 로드밸런싱되어 절반만 오프로딩됩니다.
+- ⚠️ **인덱스 연속성**: `providers[N]`은 0부터 연속이어야 바인딩됩니다 — 활성 프로바이더가 [0]~[5]면 소형은 **[6]**. `local-vision`도 함께 쓰면 하나를 [7]로 조정.
+- **더 공격적 오프로딩(A안)**: 분류·직답까지 소형으로 내리려면 `type=MICRO_TEXT` 대신 `type=LIGHT_TEXT`로 등록(`LIGHT_TEXT`가 `MICRO_TEXT`도 흡수). 단 분류 오분류는 라우팅 정확도로, 직답은 사용자 노출로 이어지므로 채택 전 검색 품질 평가 하네스([§6.6](#66-검색-품질-평가-하네스-개발자용))로 분류 정확도 회귀를 확인하세요.
+- 처리량을 더 늘리려면 소형·큰 모델 각각을 [예제 5](#예제-5--로컬-llm-2대-로드밸런싱-처리량-확장)처럼 같은 priority로 다중 등록해 로드밸런싱할 수 있습니다 — 구체적인 결합 설정은 아래 예제 7 참고.
+
+---
+
+#### 예제 7 — 소형·대형 두 티어를 각각 수평 확장 (예제 5 + 6 결합, PLAN §6.21)
+
+동시 사용자가 늘어나 잡무(`MICRO_TEXT`)와 답변(`TEXT`) 양쪽 모두에서 처리량이 부족해지면, 예제 6의 2-티어 구조를 유지한 채 **각 티어를 독립적으로 여러 대** 등록합니다. `findFirst()`는 role+priority로 후보 그룹을 고른 뒤 그 그룹 안에서 least-in-flight로 분산하므로(§5.7), 소형 그룹과 큰 모델 그룹이 각자 별도로 로드밸런싱됩니다 — 서로 다른 티어끼리는 섞이지 않습니다(우선순위가 다르므로).
+
+```properties
+# 큰 모델 2대 — 둘 다 priority=1(소형에 MICRO_TEXT 우선권 양보), 같은 priority끼리 로드밸런싱
+app.llm.providers[0].name=local-a
+app.llm.providers[0].base-url=http://gpu-a:1234/v1
+app.llm.providers[0].model=google/gemma-4-e4b
+app.llm.providers[0].type=BOTH
+app.llm.providers[0].role=LOCAL
+app.llm.providers[0].priority=1
+app.llm.providers[0].concurrency=3
+
+app.llm.providers[7].name=local-b
+app.llm.providers[7].base-url=http://gpu-b:1234/v1
+app.llm.providers[7].model=google/gemma-4-e4b
+app.llm.providers[7].type=BOTH
+app.llm.providers[7].role=LOCAL
+app.llm.providers[7].priority=1
+app.llm.providers[7].concurrency=3
+
+# 소형 모델 2대 — 둘 다 priority=0, 같은 priority끼리 로드밸런싱
+app.llm.providers[6].name=local-fast-a
+app.llm.providers[6].base-url=http://cpu-a:1236/v1
+app.llm.providers[6].model=qwen2.5-0.5b-instruct
+app.llm.providers[6].type=MICRO_TEXT
+app.llm.providers[6].role=LOCAL
+app.llm.providers[6].priority=0
+app.llm.providers[6].concurrency=4
+
+app.llm.providers[8].name=local-fast-b
+app.llm.providers[8].base-url=http://cpu-b:1236/v1
+app.llm.providers[8].model=qwen2.5-0.5b-instruct
+app.llm.providers[8].type=MICRO_TEXT
+app.llm.providers[8].role=LOCAL
+app.llm.providers[8].priority=0
+app.llm.providers[8].concurrency=4
+```
+
+라우팅 결과:
+```
+[키워드·요약·제목·쿼리확장] local-fast-a ∥ local-fast-b (MICRO_TEXT, priority 0, least-in-flight 분산)
+[분류·meta 직답·답변·Critic] local-a ∥ local-b            (LIGHT_TEXT→BOTH / TEXT/BOTH, priority 1, least-in-flight 분산)
+```
+
+- 총 잡무 처리량 = 소형 대수 × concurrency(2×4=8), 총 답변 처리량 = 큰 모델 대수 × concurrency(2×3=6) — **두 숫자는 서로 독립**이라 티어별로 필요한 만큼만 대수를 늘리면 됩니다(예: 인덱싱이 병목이면 소형만 증설, 채팅이 병목이면 큰 모델만 증설).
+- 인덱스는 활성 프로바이더 [0]~[5] 이후 연속이어야 합니다. 위 예시는 [6][7][8]을 사용 — `local-vision`(§3의 [6] 예시)도 함께 쓴다면 [9]로 밀어야 합니다.
+- 한쪽 티어의 한 대가 다운돼도 같은 티어 안에서 나머지가 흡수하고, 그래도 전멸하면 상위 티어(큰 모델)로 자동 폴백합니다(예제 6의 폴백 규칙 그대로 유지).
+
+---
+
 ### 5.5 Circuit Breaker
 
 프로바이더에서 오류 발생 시 자동으로 일시 차단하고 다음 우선순위 프로바이더로 전환합니다.
@@ -1425,8 +1604,12 @@ curl -X POST http://localhost:8080/api/v1/chat \
 - **Java 21 Virtual Threads** (`spring.threads.virtual.enabled=true`) — LLM I/O 동시 요청을 효율적으로 처리
 - **배치 멀티 쿼리 검색** — `RetrievalService`가 확장 질의를 1회 배치 임베딩 → 단일 쿼리(chroma) 또는 쿼리별 개별 조회(sqlite-vec) → 가중 RRF 융합(Phase 7-A — 벡터 축 그룹 정규화 + 키워드 축 가중치 외부화). 재시도 시 후보 풀 에스컬레이션, 선택적 LLM 리랭킹(opt-in)
 - **쿼리 임베딩 캐시** — 반복·유사 질문은 Caffeine 캐시로 임베딩 재호출 없이 처리 (`SEARCH_QUERY_EMBED_CACHE_*`)
+- **인덱싱-검색 캐시 분리** — 청크 임베딩(인덱싱)은 위 쿼리 임베딩 캐시를 우회해 대량 문서 인덱싱이 직전 검색 질의의 캐시 엔트리를 밀어내지 않는다(§10.9.4). 캐시 키는 질의 원문 대신 SHA-256 해시를 사용해 엔트리 크기가 고정됨
+- **sqlite-vec 벡터 BLOB 직렬화** — 벡터를 JSON 텍스트 리터럴 대신 raw float32 BLOB로 삽입/KNN 질의에 바인딩해 vec0의 파싱 비용과 전송 크기를 줄인다(§10.9.2). 기존에 인덱싱된 데이터와 완전히 호환되어 재인덱싱 불필요
+- **Chroma 배치 검색 응답 축소** — `RetrievalService`의 배치 멀티 쿼리 검색이 Chroma에 결과 재구성 시 실제로 쓰지 않는 임베딩 벡터 필드까지 요청하던 것을 메타데이터·문서·거리 3개 필드만 요청하도록 축소(§10.9.1) — 리랭킹 활성 시(질의 여러 개 × 후보 다수 × 임베딩 차원) 검색 1회당 전송·파싱·GC되는 데이터 크기가 눈에 띄게 줄어든다. sqlite-vec 백엔드는 원래 임베딩을 응답에 포함하지 않으므로 영향 없음
+- **sqlite-vec 인덱싱 스트리밍 삽입** — `SqliteVecVectorStoreProvider.add()`가 문서 전체 청크의 임베딩을 힙에 모은 뒤 한 번에 삽입하던 것을, 토큰 서브배치(§10.8.2와 동일한 배치 단위) 하나가 임베딩되는 즉시 그 서브배치만 삽입하는 구조로 전환(§10.9.3) — 대용량 문서(500+청크)를 인덱싱할 때 피크 메모리가 문서 크기가 아니라 서브배치 크기에 비례하게 된다. 서브배치별 두 테이블 삽입은 여전히 하나의 트랜잭션으로 묶인다(§10.8.3)
 - **Contextual Retrieval + 임베딩 입력 정규화** — 인덱싱 시 청크별로 `{파일명} > {섹션 제목}` 구조적 맥락 + LLM 생성 1~2문장을 임베딩·FTS 입력 앞에 결합(`KeywordExtractor`가 키워드 추출과 한 번에 처리, 사용량은 `context:` 라벨). 마크다운 장식(구분선·강조 마커)은 임베딩/FTS/답변 프롬프트 입력에서만 제거되고 저장·표시 원문은 그대로 유지된다. 설정 프로퍼티 없음(항상 적용) — 기존 문서는 재인덱싱해야 새 맥락/정규화가 반영됨
-- **한국어 FTS 트라이그램 토크나이저** — `chunk_fts`가 `unicode61`(공백 구분 단어) 대신 `trigram`(3자 겹침 윈도우) 토크나이저를 사용해 활용형 종결어미가 붙은 한국어 단어(예: 질의 "인덱싱"이 본문 "인덱싱됩니다"에 매칭)와 코드/식별자 부분 문자열(예: "ERR45"가 "ERR4521"을 찾음)을 더 잘 찾는다. **자동 마이그레이션** — 기존 `unicode61` 테이블은 다음 재기동 시 자동으로 trigram으로 재구축되며(`doc_tags`/`content`/`keywords` 손실 없이 복사) 별도 재인덱싱·재동기화가 필요 없다. 트레이드오프: 2글자 이하 검색어(예: "오류", "문서")는 trigram 최소 매칭 단위(3자) 미만이라 그 질의에서 BM25 키워드 축 기여가 0이 된다(하이브리드 벡터 축은 무관하게 동작) — `SEARCH_HYBRID_ENABLED=true`일 때만 체감. 설정 프로퍼티 없음(항상 적용)
+- **한국어 FTS 트라이그램 토크나이저** — `chunk_fts`가 `unicode61`(공백 구분 단어) 대신 `trigram`(3자 겹침 윈도우) 토크나이저를 사용해 활용형 종결어미가 붙은 한국어 단어(예: 질의 "인덱싱"이 본문 "인덱싱됩니다"에 매칭)와 코드/식별자 부분 문자열(예: "ERR45"가 "ERR4521"을 찾음)을 더 잘 찾는다. **자동 마이그레이션** — 기존 `unicode61` 테이블은 다음 재기동 시 자동으로 trigram으로 재구축되며(`doc_tags`/`content`/`keywords` 손실 없이 복사) 별도 재인덱싱·재동기화가 필요 없다. 트레이드오프: 2글자 이하 검색어(예: "오류", "문서")는 trigram 최소 매칭 단위(3자) 미만이라 진짜 BM25 순위 점수는 얻지 못한다 — §10.7.3에서 `content`/`keywords` `LIKE` 스캔으로 존재 여부 기반 신호(순위 없음, MATCH 결과보다 낮은 우선순위로 배치)를 보충해 완전히 탈락하지는 않는다(하이브리드 벡터 축은 애초에 무관하게 동작) — `SEARCH_HYBRID_ENABLED=true`일 때만 체감. 설정 프로퍼티 없음(항상 적용)
 - **병렬 인덱싱** — `RagService.syncDirectory()`에서 파일별·LLM 호출별 Semaphore 기반 병렬 처리
 - **DUAL 모드** — LOCAL + 외부를 Virtual Thread로 병렬 실행
 
@@ -1439,11 +1622,11 @@ CPU/메모리 제약이 있는 환경에서는 `INDEXING_MAX_FILES`와 `INDEXING
 `/settings`는 현재 **유효** LLM/RAG 설정을 한 화면에서 보여주고, 일부 검색 튜닝 값은 **재기동 없이** 조정할 수 있게 합니다. `application.properties`/환경변수를 고치고 재기동하지 않아도 검색 동작을 실시간으로 미세조정할 수 있습니다.
 
 **조회 항목 (그룹별)**:
-- **LLM 라우팅**: 등록 프로바이더·역할(role)·우선순위·모델·API 키 설정 여부·서킷브레이커 상태, 기본 라우팅 모드, temperature/max-tokens.
+- **LLM 라우팅**: 등록 프로바이더·역할(role)·우선순위·모델·API 키 설정 여부·서킷브레이커 상태, 기본 라우팅 모드, 일반 temperature·max-tokens(조회 전용, 실제 config 값 표시).
 - **임베딩 / 벡터 스토어**: 임베딩 모델·차원, 벡터 스토어 백엔드(chroma/sqlite-vec).
-- **검색 튜닝 / 캐시**: 아래 핫 수정 항목 + 조회 전용 항목.
+- **검색 튜닝 / 인덱싱 / 캐시**: 아래 핫 수정 항목 + 조회 전용 항목.
 
-**핫 수정 가능 (재기동 불필요, 다음 검색부터 반영)** — 값을 바꾸면 `settings_override` 테이블(`memory.db`)에 저장되고, 다음 검색부터 즉시 적용됩니다:
+**핫 수정 가능 — 검색 (재기동 불필요, 다음 검색부터 반영)** — 값을 바꾸면 `settings_override` 테이블(`memory.db`)에 저장되고, 다음 검색부터 즉시 적용됩니다:
 
 | 항목 | 키 | 범위 |
 |------|----|------|
@@ -1454,13 +1637,56 @@ CPU/메모리 제약이 있는 환경에서는 `INDEXING_MAX_FILES`와 `INDEXING
 | 태그 후보 배수 | `app.search-tag-candidate-multiplier` | 1 ~ 20 |
 | 멀티쿼리 최소 길이 | `app.search-multiquery-min-length` | 0 ~ 1000 |
 | 재시도 시 후보 확대 | `app.search-retry-escalate` | true/false |
+| topK (검색 상위 K) | `app.search-top-k` | 1 ~ 50 |
+| 멀티쿼리 확장 | `app.search-multiquery-enabled` | true/false |
+| 하이브리드 검색 | `app.search-hybrid-enabled` | true/false |
+
+**핫 수정 가능 — 인덱싱/청킹 (재기동 불필요, 다음 인덱싱/↺ 재인덱싱부터 반영)** — 검색 튜닝과 달리 즉시가 아니라 **다음 인덱싱**부터 적용되며, 이미 색인된 청크를 소급 재분할하지는 않습니다(값을 바꾼 뒤 재업로드하거나 `/admin` ↺ 재인덱싱을 눌러야 반영):
+
+| 항목 | 키 | 범위 |
+|------|----|------|
+| 청크 크기(자) | `app.chunk-size` | 100 ~ 8000 |
+| 청크 오버랩(자) | `app.chunk-overlap` | 0 ~ 2000 |
+| 최소 청크 크기(자) | `app.min-chunk-size` | 0 ~ 4000 |
+| 동시 파일 처리 수 | `app.indexing.max-concurrent-files` | 1 ~ 32 |
+| 동시 LLM 호출 수 | `app.indexing.max-concurrent-llm-calls` (`INDEXING_MAX_LLM`) | 1 ~ 32 |
+
+> **`INDEXING_MAX_LLM`의 적용 범위**: 이 값은 키워드+맥락 추출 전용이 아니라 **인덱싱 계열 LLM 호출의 공통 병렬도**입니다 — 키워드 추출(`DocumentIndexer`), MD 포맷 교정(`MarkdownCorrectionService`), 인덱싱 중 이미지 설명("이미지 설명 추가" 체크 시, `MarkdownCorrectionService`가 문서 내 이미지를 이 값만큼 병렬 분석 — 예전엔 순차라 사실상 `INDEXING_MAX_FILES`에 매여 있었음), TXT 구조화(`TextToMarkdownService`), 지연 Vision 설명(`LazyVisionService`)이 모두 이 값을 씁니다. 다만 이 값은 "앱 전체 동시 LLM 호출 N개"라는 **전역 예산이 아닙니다**. 소비처마다 규칙이 다릅니다:
+>
+> - **키워드 추출**: `syncDirectory()`가 세마포어를 **1개만 만들어 모든 파일이 공유** → 파일 수와 무관하게 총 `INDEXING_MAX_LLM`개. (파일당 1개씩 배분되는 게 아니라 티켓을 나눠 씁니다)
+> - **MD 교정 / TXT 구조화**: 호출마다 **자기 세마포어를 새로 생성** → 파일 병렬 시 곱으로 증가.
+>
+> 같은 파일 안에서는 구조화/교정 → 청킹 → 키워드 추출이 순차 단계라 겹치지 않지만, 파일끼리는 단계가 동기화되지 않아(A는 키워드, B는 교정) 겹칩니다. 결과적으로 **인덱싱 LLM 동시 호출 피크 ≈ `INDEXING_MAX_FILES` × `INDEXING_MAX_LLM`** 입니다 — 예: 3 × 4 = 최대 12. 그래서 기본값을 `INDEXING_MAX_FILES=1`로 두어 피크를 정확히 `INDEXING_MAX_LLM`(기본 3)으로 고정했습니다. 로컬 LLM 서버의 `--parallel` 한도에 맞추려면 `INDEXING_MAX_LLM`을 그 값으로 두고 `INDEXING_MAX_FILES=1`을 유지하세요. 처리량을 위해 `INDEXING_MAX_FILES`를 올린다면 곱이 `--parallel`을 넘지 않는지 확인하세요.
+
+**핫 수정 가능 — LLM (재기동 불필요, 다음 LLM 호출부터 반영)** — §6.18:
+
+| 항목 | 키 | 범위 |
+|------|----|------|
+| Direct(잡담) 응답 temperature | `app.llm.direct-temperature` (`DIRECT_LLM_TEMPERATURE`) | 0.0 ~ 0.2 |
 
 - **"기본값" 버튼**으로 오버라이드를 삭제하면 `application.properties`/환경변수 값으로 정확히 복귀합니다(오버라이드가 있으면 항상 프로퍼티보다 우선).
 - 오버라이드는 **재기동 후에도 유지**됩니다(테이블에 영속). 배포 기본값 자체를 바꾸려면 여전히 환경변수/`application.properties`를 수정하세요 — 오버라이드는 그 위에 얹히는 런타임 조정 레이어입니다.
 
-**조회 전용(재기동 필요)**: `rerank-enabled`·`hybrid-enabled`·쿼리 임베딩 캐시(모두 빈 생성 시점 결정), 임베딩 차원·벡터 스토어 백엔드(DDL/빈 구성), topK·멀티쿼리 활성화. temperature/max-tokens와 기본 라우팅 모드는 현재 조회 전용입니다(전자는 §6.18 선행 필요, 후자는 대화별 라우팅을 채팅 화면에서 설정).
+**조회 전용(재기동 필요)**: `rerank-enabled`(빈 생성 시점 `@ConditionalOnProperty`로 결정)·쿼리 임베딩 캐시(빈 생성 시점 결정), 임베딩 차원·벡터 스토어 백엔드(DDL/빈 구성). **일반/RAG temperature**(`LLM_TEMPERATURE`)와 **max-tokens**(`LLM_MAX_TOKENS`)는 §6.18로 이제 실제 config 값을 그대로 반영해 표시되지만, 프로바이더 빈 생성 시점에 고정되므로 조회 전용(변경 시 재기동)입니다 — 호출별로 다르게 줄 수 있는 Direct temperature만 핫 수정 대상입니다. 기본 라우팅 모드도 조회 전용입니다(대화별 라우팅은 채팅 화면에서 설정).
 
 **권한**: 조회는 누구나 가능하지만, **수정은 관리자만** 가능합니다(관리 전용 인증 모드 `AUTH_MANAGEMENT_ONLY=true`에서 `/setup` 관리자 로그인 필요 — §9 참조). 수정 UI(입력/버튼)는 비관리자에게 숨겨지며, 서버도 `/admin/settings/**` 경로로 이중 방어합니다. 모든 변경은 감사 로그(`settings.update`/`settings.reset`, 변경 키·이전값·새값)에 남습니다.
+
+---
+
+### 6.6 검색 품질 평가 하네스 (개발자용)
+
+§6.5의 검색 튜닝 값(유사도 임계값·RRF 가중치·재랭크 등)을 바꾼 뒤 "정말 좋아졌는지" 정량으로 확인하기 위한 하네스입니다. `RetrievalService.execute()`(MultiQuery+하이브리드 BM25+가중 RRF 전체 파이프라인)를 실제 임베딩·LLM 서버와 실제로 색인된 문서에 대해 그대로 실행해 recall@k·nDCG@k를 측정합니다.
+
+```bash
+# .env(또는 OS 환경변수)에 설정된 실제 LLM/임베딩 엔드포인트 + data/의 실제 색인을 사용
+mvn test -Dtest=SearchQualityEvaluationTest -Dsearch-eval.enabled=true
+```
+
+- **기본적으로 skip됩니다** — `-Dsearch-eval.enabled=true`가 없으면 컨텍스트조차 띄우지 않고 즉시 skip되므로(`SqliteVecIntegrationTest`의 `sqlitevec.path` 게이팅과 동일한 패턴) 일반 빌드/CI에는 영향이 없습니다.
+- **읽기 전용**입니다 — `search()`/`searchBatch()`만 호출하며 색인을 추가·삭제하지 않습니다. 실행 전 골든셋 대상 문서가 `version=latest`로 이미 색인되어 있어야 합니다.
+- 골든셋은 `src/test/resources/search-eval/nexcore-gold.json`(질문 26건) — 정답은 chunk id가 아니라 색인 원문(교정본 MD)에서 그대로 가져온 고유 부분 문자열이라 재인덱싱으로 청크 경계가 바뀌어도 깨지지 않습니다. 다른 코퍼스로 검증하려면 같은 형식으로 새 JSON을 만들고 `GOLD_RESOURCE` 상수(`SearchQualityEvaluationTest.java`)를 바꾸면 됩니다.
+- recall@k/nDCG@k 계산 자체(`SearchQualityMetrics`)는 순수 함수라 `SearchQualityMetricsTest`로 항상 검증되며 라이브 서버가 필요 없습니다.
+- **2026-07-16 실측 baseline**(hybrid=true·rerank=false·multiquery=true·topK=7): mean recall@10=0.962, nDCG@10=0.810 — 검색 튜닝 변경 후 이 수치와 비교해 회귀 여부를 판단하세요.
 
 ---
 
@@ -1498,6 +1724,7 @@ CPU/메모리 제약이 있는 환경에서는 `INDEXING_MAX_FILES`와 `INDEXING
 
 - **임베딩 미갱신 (청크 편집)**: 청크 텍스트를 편집 패널에서 수정해도 벡터 임베딩은 재계산되지 않습니다. 임베딩까지 갱신하려면 MD 파일 수정 후 ↺ 재인덱싱을 사용하세요.
 - **MD 재인덱싱 대상**: DOCX·TXT·PPTX·PDF(스캔 아님) 업로드 시 생성된 `_corrected.md` 파일이 없으면 `{docId}.md` 원본으로 fallback됩니다. 스캔 PDF처럼 MD 파일 자체가 없는 문서는 재인덱싱 불가 (에러 메시지 표시).
+- **소제목 번호 재검증**: 재인덱싱 시 저장된 MD에 이미 번호 매겨진 헤딩이 있으면 현재 헤딩 구조 기준으로 다시 계산해 파일에도 반영합니다(PPTX 제외 — [§3.3 소제목 숫자 생성](#33-applicationproperties-전용-설정) 참고). 번호가 원래 없던 문서에는 새로 번호를 붙이지 않습니다.
 - **청크 단독 삭제 vs. 문서 삭제**: 청크를 개별 삭제해도 SQLite `doc_registry` 테이블의 레지스트리 항목은 남습니다. 문서 전체 제거는 Documents 페이지 또는 `DELETE /api/v1/documents/{docId}`를 사용하세요.
 - **접근 제어**: `app.auth.enabled=true`(기본)이면 `/admin`도 로그인 필요. 평문 no-auth 모드에서는 누구나 `/admin`에 접근 가능하므로 내부망 또는 리버스 프록시 수준에서 경로를 제한하거나, [§9.4.2 관리 전용 인증](#942-관리-전용-인증-management-only)으로 전환해 애플리케이션 레벨에서 잠그는 것을 권장합니다.
 
@@ -1614,6 +1841,16 @@ docker-compose logs app
 
 ---
 
+### 이미지 파일이 `data/images/`에서 사라진 경우 (수동 정리·백업 복원 누락 등)
+
+MD 재인덱싱(`/admin` ↺ 버튼, `AdminController.reindex()` → `DocumentIndexer.reindexFromMd()`)은 로드 직후 `[이미지: path]`/`[이미지(변환불가): path]` 마커가 가리키는 파일이 `data/images/`에 실제로 존재하는지 확인합니다. 없으면 그 마커만 제거한 뒤 청킹·인덱싱을 진행하고, 정리된 결과를 MD 파일(`{docId}[_corrected].md`)에 다시 저장합니다 — 다음 재인덱싱부터는 같은 마커를 다시 걸러낼 필요가 없습니다. 존재하는 이미지 마커는 영향받지 않습니다.
+
+- 일반 업로드/동기화(`index()`)는 대상이 아닙니다 — 그 경로는 변환과 이미지 추출이 같은 호출 안에서 함께 일어나므로 마커와 파일이 어긋날 여지가 없습니다.
+- 이미지가 사라진 원인 자체(디스크 정리 스크립트, 백업 복원 누락 등)는 운영자가 조사해야 합니다 — 이 동작은 인덱스가 죽은 링크로 오염되는 것만 막을 뿐, 사라진 이미지 파일을 복구하지 않습니다.
+- 상세 구현은 [PIPELINE.md §6.4](PIPELINE.md#64-문서-타입별-처리-상세) "존재하지 않는 이미지 마커 정리" 참고.
+
+---
+
 ### 임베딩 서버 배치/토큰 초과 (`input (N tokens) is too large to process`)
 
 인덱싱 중 임베딩 서버(llama-server 등)에서 아래 같은 에러가 나면, **한 청크의 토큰 수가 서버의 물리 배치(physical batch) 한계를 초과**한 것입니다.
@@ -1651,7 +1888,7 @@ srv send_error: ... error: input (706 tokens) is too large to process. increase 
 
 1. `[TIMEOUT:SSE_IDLE]`이 반복되면 `SSE_IDLE_TIMEOUT_SECONDS` 증가 (기본 120, 예: 120 → 300) — LLM이 첫 토큰을 내기까지 오래 걸리는 환경(느린 하드웨어, 큰 모델)에 해당
 2. `[TIMEOUT:SSE]`가 발생하면 `SSE_TIMEOUT_SECONDS` 증가 (기본 3600, 예: 3600 → 7200)
-3. 인덱싱 중 키워드 추출이 자주 timeout이면 `INDEXING_KEYWORD_TIMEOUT_SECONDS` 증가
+3. 인덱싱 중 키워드 추출이 자주 timeout이면 `INDEXING_KEYWORD_TIMEOUT_SECONDS` 증가 (§10.8.2로 `INDEXING_KEYWORD_BATCH_SIZE`를 올린 경우 배치 1회의 응답 길이도 함께 늘어나므로 우선 검토 — 안 되면 배치 크기를 낮추는 것도 방법)
 4. 외부 LLM이 느린 경우 `LLM_READ_TIMEOUT_SECONDS` 증가
 5. 임베딩 단계 지연 시 `EMBED_READ_TIMEOUT_SECONDS` 증가
 6. Chroma 지연 시 `CHROMA_READ_TIMEOUT_SECONDS` 증가

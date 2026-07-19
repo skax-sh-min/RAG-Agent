@@ -8,8 +8,12 @@ import org.springframework.ai.embedding.EmbeddingModel;
 import org.springframework.ai.embedding.EmbeddingRequest;
 import org.springframework.ai.embedding.EmbeddingResponse;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
@@ -40,9 +44,15 @@ import java.util.concurrent.ConcurrentHashMap;
  *
  * <p>Only {@link #call(EmbeddingRequest)} is overridden; every other {@link EmbeddingModel}
  * method is a default that funnels into {@code this.call(...)}, mirroring
- * {@link TrackingEmbeddingModel}'s approach. Indexing calls (unique chunk text, rarely
- * repeated) pass through the same cache and mostly miss — bounded by maximumSize/TTL, so
- * they don't leak memory, they just don't benefit from caching.
+ * {@link TrackingEmbeddingModel}'s approach.
+ *
+ * <p><b>§10.9.4</b>: indexing chunk text is unique per chunk and essentially never repeated, so
+ * routing it through this cache used to just evict entries that would otherwise serve repeated
+ * search queries (a single 500+-chunk document could wipe the whole query cache). Indexing
+ * callers ({@code ChromaVectorStoreProvider}/{@code SqliteVecVectorStoreProvider}) now call
+ * {@link #unwrapForIndexing(EmbeddingModel)} to embed chunks via the underlying (uncached)
+ * delegate instead, so query-cache entries survive indexing. The cache key itself is a SHA-256
+ * hash of the normalized text rather than the raw text, keeping map entries a fixed small size.
  */
 public class CachingEmbeddingModel implements EmbeddingModel {
 
@@ -148,7 +158,31 @@ public class CachingEmbeddingModel implements EmbeddingModel {
         }
     }
 
+    /**
+     * §10.9.4 — hashed instead of {@code prefix + rawText} so the cache/in-flight maps hold a
+     * fixed-size key (~40 bytes) regardless of query length, rather than retaining full question
+     * text as a live key.
+     */
     private String cacheKey(String text) {
-        return cacheKeyPrefix + (text == null ? "" : text.strip());
+        return sha256Hex(cacheKeyPrefix + (text == null ? "" : text.strip()));
+    }
+
+    private static String sha256Hex(String s) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            return HexFormat.of().formatHex(digest.digest(s.getBytes(StandardCharsets.UTF_8)));
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 unavailable", e); // always present on the JVM
+        }
+    }
+
+    /**
+     * §10.9.4 — unwraps a {@link CachingEmbeddingModel} down to its delegate, or returns
+     * {@code model} unchanged if it isn't one. Used by indexing paths that intentionally bypass
+     * the query-embedding cache: chunk text is rarely reused, so caching it only evicts entries
+     * that would otherwise serve repeated search queries.
+     */
+    public static EmbeddingModel unwrapForIndexing(EmbeddingModel model) {
+        return model instanceof CachingEmbeddingModel cached ? cached.delegate : model;
     }
 }

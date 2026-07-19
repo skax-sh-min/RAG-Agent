@@ -2,6 +2,7 @@ package com.example.ragagent.ingestion;
 
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.exception.VectorStoreException;
+import com.example.ragagent.llm.CachingEmbeddingModel;
 import com.example.ragagent.model.MetaKey;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -13,9 +14,14 @@ import org.springframework.ai.embedding.EmbeddingModel;
 import org.springframework.ai.embedding.TokenCountBatchingStrategy;
 import org.springframework.jdbc.core.BatchPreparedStatementSetter;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.datasource.DataSourceTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
+import javax.sql.DataSource;
 import java.io.InterruptedIOException;
 import java.net.SocketTimeoutException;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.time.Instant;
@@ -26,6 +32,11 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.Semaphore;
 import java.util.function.BiConsumer;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -68,14 +79,30 @@ public class SqliteVecVectorStoreProvider implements VectorStoreProvider {
     private static final int MIN_EMBED_TEXT_LENGTH = 128;
     private static final int MAX_EMBED_RETRY = 8;
     private static final double EMBED_SHRINK_RATIO = 0.8;
+    // §10.7.4 — post-filtering by similarityThreshold can shrink the pool below topK when the
+    // KNN query only ever asks for exactly topK candidates; over-fetch when a threshold is
+    // actually active. No-op at the default (0.0, accept-all) — nothing to filter out there.
+    private static final double THRESHOLD_OVERFETCH_MULTIPLIER = 2.0;
         private static final Pattern TOKEN_LIMIT_PATTERN = Pattern.compile(
             "input \\((\\d+) tokens\\).+?current batch size: (\\d+)",
             Pattern.CASE_INSENSITIVE);
 
     private final JdbcTemplate jdbc;
     private final EmbeddingModel embeddingModel;
+    // §10.9.4 — indexing embeds chunk text (rarely reused) via the uncached delegate so it
+    // doesn't evict query-cache entries that would otherwise serve repeated search questions.
+    private final EmbeddingModel indexingEmbeddingModel;
     private final ObjectMapper objectMapper;
-    private final double similarityThreshold;
+    // Hot-editable (search family, SettingsKeys.SEARCH_SIMILARITY_THRESHOLD) — read fresh via
+    // props.searchSimilarityThresholdSafe() in searchByEmbedding(), never cached in a field. Used
+    // to be cached here at construction, which silently defeated the /settings override: the page
+    // showed the new value as "applied" but real searches kept using the startup value until a
+    // restart.
+    private final AppProperties props;
+    // §10.8.3 — lazily built from jdbc.getDataSource() (never null in real wiring; null only for
+    // fully-mocked JdbcTemplate test doubles, where the transaction wrap is harmlessly skipped —
+    // see addBatches()).
+    private volatile TransactionTemplate transactionTemplate;
     // Same default Spring AI applies internally to ChromaVectorStore.add() — splits by token
     // count (8191 default, 10% reserve) so add() never sends an entire large document's chunks
     // (e.g. 500+) as one unbounded embed() call. Without this, only the Chroma backend got this
@@ -86,19 +113,20 @@ public class SqliteVecVectorStoreProvider implements VectorStoreProvider {
                                         ObjectMapper objectMapper, AppProperties props) {
         this.jdbc = jdbc;
         this.embeddingModel = embeddingModel;
+        this.indexingEmbeddingModel = CachingEmbeddingModel.unwrapForIndexing(embeddingModel);
         this.objectMapper = objectMapper;
-        this.similarityThreshold = props.searchSimilarityThresholdSafe();
+        this.props = props;
     }
 
     @Override
     public List<Document> search(String userId, String query, String version, int topK) {
-        return searchByEmbedding(embedSingleWithFallback(query), version, topK);
+        return searchByEmbedding(embedSingleWithFallback(embeddingModel, query), version, topK);
     }
 
     @Override
     public List<List<Document>> searchBatch(String userId, List<String> queries, String version, int topK) {
         if (queries == null || queries.isEmpty()) return List.of();
-        List<float[]> embeddings = embedBatchWithFallback(queries);
+        List<float[]> embeddings = embedBatchWithFallback(embeddingModel, queries);
         List<List<Document>> out = new ArrayList<>(queries.size());
         for (float[] embedding : embeddings) {
             out.add(searchByEmbedding(embedding, version, topK));
@@ -122,41 +150,76 @@ public class SqliteVecVectorStoreProvider implements VectorStoreProvider {
         // Embed per token-bounded sub-batch (not all of docs in one call) so a large document's
         // chunk count can't turn into a single oversized HTTP request that times out against a
         // slow local embedding server. Keyed by doc id since batchingStrategy.batch() does not
-        // guarantee it preserves docs' original order. Each completed sub-batch reports real
-        // incremental progress instead of the caller only seeing a single 0%→100% jump.
+        // guarantee it preserves docs' original order.
         // Batches over the derived (context+normalized) text, not raw text — that's what actually
         // gets embedded, so that's what the token-count estimate must be sized against (§10.1).
-        int total = docs.size();
-        int done = 0;
-        onProgress.accept(0, total);
-        Map<String, float[]> embeddingByDocId = new HashMap<>(docs.size() * 2);
+        // §10.9.3 — each sub-batch is inserted as soon as it's embedded instead of accumulating
+        // every embedding + chunk row for the whole document before a single insert at the end;
+        // peak heap is now bounded by sub-batch size, not document size, and each completed
+        // sub-batch reports real incremental progress instead of the caller only seeing a single
+        // 0%→100% jump.
+        Map<String, Document> docsById = docs.stream().collect(Collectors.toMap(Document::getId, d -> d));
         List<Document> embedInputDocs = docs.stream()
                 .map(d -> new Document(d.getId(), SearchTextBuilder.build(d), Map.of()))
                 .toList();
-        for (List<Document> batch : batchingStrategy.batch(embedInputDocs)) {
-            List<String> texts = batch.stream().map(Document::getText).toList(); // already derived
-            List<float[]> batchEmbeddings = embedBatchWithFallback(texts);
-            for (int i = 0; i < batch.size(); i++) {
-                embeddingByDocId.put(batch.get(i).getId(), batchEmbeddings.get(i));
-            }
-            done += batch.size();
-            onProgress.accept(done, total);
-        }
 
-        jdbc.batchUpdate(INSERT_EMBEDDING, new BatchPreparedStatementSetter() {
-            @Override public void setValues(PreparedStatement ps, int i) throws SQLException {
-                ps.setString(1, docs.get(i).getId());
-                ps.setString(2, version);
-                ps.setString(3, toVectorLiteral(embeddingByDocId.get(docs.get(i).getId())));
-            }
-            @Override public int getBatchSize() { return docs.size(); }
-        });
-
+        int total = docs.size();
+        int done = 0;
+        onProgress.accept(0, total);
         String now = Instant.now().toString();
-        List<Object[]> chunkRows = new ArrayList<>(docs.size());
-        for (Document d : docs) {
+        TransactionTemplate tx = transactionTemplate();
+
+        List<List<Document>> subBatches = batchingStrategy.batch(embedInputDocs);
+        int maxConcurrentBatches = embeddingMaxConcurrentBatches();
+        if (maxConcurrentBatches <= 1 || subBatches.size() <= 1) {
+            // §10.9.3 streaming: embed + insert per sub-batch so peak heap stays bounded by
+            // sub-batch size rather than whole-document size (unchanged default behavior).
+            for (List<Document> batch : subBatches) {
+                List<float[]> batchEmbeddings = embedBatchWithFallback(
+                        indexingEmbeddingModel, batch.stream().map(Document::getText).toList());
+                insertSubBatch(batch, docsById, batchEmbeddings, version, now, tx);
+                done += batch.size();
+                onProgress.accept(done, total);
+            }
+        } else {
+            // §6.21 E2 — embed all sub-batches in parallel (the E1 load balancer spreads them across
+            // endpoints), then insert serially (SQLite pool=1 requires serial writes). This trades
+            // §10.9.3's streaming memory bound (all embeddings held at once) for indexing throughput,
+            // so it stays strictly opt-in behind app.embedding.max-concurrent-batches.
+            Map<String, float[]> embeddingByDocId = concurrentEmbed(subBatches, maxConcurrentBatches);
+            for (List<Document> batch : subBatches) {
+                List<float[]> batchEmbeddings = batch.stream()
+                        .map(d -> embeddingByDocId.get(d.getId())).toList();
+                insertSubBatch(batch, docsById, batchEmbeddings, version, now, tx);
+                done += batch.size();
+                onProgress.accept(done, total);
+            }
+        }
+    }
+
+    /**
+     * §10.8.3 — inserts one sub-batch's vec_embeddings + vec_document_chunks rows together in a
+     * single transaction (one round-trip) so a mid-write failure never leaves orphaned vector rows
+     * with no matching chunk row. {@code batchEmbeddings} aligns index-for-index with {@code batch}.
+     */
+    private void insertSubBatch(List<Document> batch, Map<String, Document> docsById,
+                                List<float[]> batchEmbeddings, String version, String now, TransactionTemplate tx) {
+        List<Document> originals = batch.stream().map(d -> docsById.get(d.getId())).toList();
+
+        BatchPreparedStatementSetter embeddingSetter = new BatchPreparedStatementSetter() {
+            @Override public void setValues(PreparedStatement ps, int i) throws SQLException {
+                ps.setString(1, originals.get(i).getId());
+                ps.setString(2, version);
+                ps.setBytes(3, toVectorBlob(batchEmbeddings.get(i)));
+            }
+            @Override public int getBatchSize() { return originals.size(); }
+        };
+
+        List<Object[]> chunkRows = new ArrayList<>(originals.size());
+        for (Document d : originals) {
             Map<String, Object> meta = d.getMetadata() == null ? new HashMap<>() : new HashMap<>(d.getMetadata());
             meta.remove(MetaKey.CHUNK_CONTEXT); // transient — never persisted
+            meta.remove(MetaKey.SEARCH_TEXT);   // transient — never persisted (§10.8.5)
             chunkRows.add(new Object[]{
                     d.getId(),
                     d.getText() == null ? "" : d.getText(),
@@ -166,7 +229,96 @@ public class SqliteVecVectorStoreProvider implements VectorStoreProvider {
                     now
             });
         }
-        jdbc.batchUpdate(INSERT_CHUNK, chunkRows);
+
+        Runnable insertBoth = () -> {
+            jdbc.batchUpdate(INSERT_EMBEDDING, embeddingSetter);
+            jdbc.batchUpdate(INSERT_CHUNK, chunkRows);
+        };
+        if (tx != null) {
+            tx.executeWithoutResult(status -> insertBoth.run());
+        } else {
+            insertBoth.run();
+        }
+    }
+
+    /** §6.21 E2 — parallel sub-batch embedding degree (1 = serial streaming, the default). */
+    private int embeddingMaxConcurrentBatches() {
+        AppProperties.EmbeddingConfig ec = props.embeddingSafe();
+        return (ec != null && ec.maxConcurrentBatches() != null && ec.maxConcurrentBatches() > 1)
+                ? ec.maxConcurrentBatches() : 1;
+    }
+
+    /**
+     * §6.21 E2 — embeds every sub-batch concurrently (bounded by {@code maxConcurrent}; the E1 load
+     * balancer distributes the calls across endpoints), returning docId → embedding. Inserts stay
+     * the caller's responsibility so SQLite writes remain serial (pool=1).
+     */
+    private Map<String, float[]> concurrentEmbed(List<List<Document>> subBatches, int maxConcurrent) {
+        Map<String, float[]> out = new ConcurrentHashMap<>();
+        Semaphore gate = new Semaphore(maxConcurrent);
+        try (var exec = Executors.newVirtualThreadPerTaskExecutor()) {
+            List<Future<?>> futures = new ArrayList<>(subBatches.size());
+            for (List<Document> batch : subBatches) {
+                acquire(gate);
+                futures.add(exec.submit(() -> {
+                    try {
+                        List<float[]> emb = embedBatchWithFallback(
+                                indexingEmbeddingModel, batch.stream().map(Document::getText).toList());
+                        for (int i = 0; i < batch.size(); i++) {
+                            out.put(batch.get(i).getId(), emb.get(i));
+                        }
+                    } finally {
+                        gate.release();
+                    }
+                }));
+            }
+            awaitAll(futures);
+        }
+        return out;
+    }
+
+    private static void acquire(Semaphore gate) {
+        try {
+            gate.acquire();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException("Interrupted while waiting to embed a sub-batch", e);
+        }
+    }
+
+    /** Waits for all embedding tasks, propagating the first failure (unwrapped) after awaiting the rest. */
+    private static void awaitAll(List<Future<?>> futures) {
+        RuntimeException failure = null;
+        for (Future<?> f : futures) {
+            try {
+                f.get();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                if (failure == null) failure = new RuntimeException("Interrupted during parallel embedding", e);
+            } catch (ExecutionException e) {
+                Throwable cause = e.getCause();
+                if (failure == null) {
+                    failure = (cause instanceof RuntimeException re) ? re : new RuntimeException(cause);
+                }
+            }
+        }
+        if (failure != null) throw failure;
+    }
+
+    /**
+     * Builds (once) and caches the transaction template around {@code jdbc}'s DataSource. Returns
+     * null when no DataSource is available — a fully-mocked {@code JdbcTemplate} in unit tests,
+     * never the case in real Spring wiring — so {@link #add} falls back to the pre-§10.8.3
+     * sequential (non-transactional) inserts instead of failing.
+     */
+    private TransactionTemplate transactionTemplate() {
+        TransactionTemplate tt = transactionTemplate;
+        if (tt == null) {
+            DataSource ds = jdbc.getDataSource();
+            tt = ds != null ? new TransactionTemplate(new DataSourceTransactionManager(ds)) : null;
+            transactionTemplate = tt;
+        }
+        return tt;
     }
 
     @Override
@@ -197,8 +349,17 @@ public class SqliteVecVectorStoreProvider implements VectorStoreProvider {
 
     // ── helpers ───────────────────────────────────────────────────────────────
 
+    /**
+     * §10.7.4 — over-fetches {@code k} when a similarity threshold is active (post-filtering can
+     * otherwise shrink the pool below {@code topK}) and caps the filtered result back to
+     * {@code topK} — rows arrive pre-sorted by ascending distance, so taking the first
+     * {@code topK} that pass the threshold is exactly "closest topK above threshold".
+     */
     private List<Document> searchByEmbedding(float[] embedding, String version, int topK) {
-        String vector = toVectorLiteral(embedding);
+        double similarityThreshold = props.searchSimilarityThresholdSafe();
+        byte[] vector = toVectorBlob(embedding);
+        int fetchK = similarityThreshold > 0.0
+                ? (int) Math.ceil(topK * THRESHOLD_OVERFETCH_MULTIPLIER) : topK;
         List<Document> rows = jdbc.query(SEARCH, (rs, i) -> {
             double similarity = 1.0 - rs.getDouble("distance");
             if (similarity < similarityThreshold) return null;          // 0.0 = accept all but negatives
@@ -208,8 +369,8 @@ public class SqliteVecVectorStoreProvider implements VectorStoreProvider {
                     .metadata(parseMetadata(rs.getString("metadata")))
                     .score(similarity)
                     .build();
-        }, vector, topK, version);
-        return rows.stream().filter(Objects::nonNull).toList();
+        }, vector, fetchK, version);
+        return rows.stream().filter(Objects::nonNull).limit(topK).toList();
     }
 
     /** spring_doc_id is the global primary key, so a single delete per table covers every version. */
@@ -221,14 +382,20 @@ public class SqliteVecVectorStoreProvider implements VectorStoreProvider {
         jdbc.update("DELETE FROM vec_document_chunks WHERE spring_doc_id IN (" + placeholders + ")", args);
     }
 
-    /** float[] → sqlite-vec JSON text literal {@code [v0,v1,...]} (accepted by vec0 directly). */
-    static String toVectorLiteral(float[] vector) {
-        StringBuilder sb = new StringBuilder(vector.length * 10 + 2).append('[');
-        for (int i = 0; i < vector.length; i++) {
-            if (i > 0) sb.append(',');
-            sb.append(vector[i]);
-        }
-        return sb.append(']').toString();
+    /**
+     * §10.9.2 — float[] → raw little-endian float32 blob, the binary format sqlite-vec's vec0
+     * accepts directly at insert/KNN-query time (auto-detected by SQLite value type — BLOB vs.
+     * the legacy JSON-text literal this replaces). Roughly 2.5x smaller than the JSON form and
+     * skips vec0's per-call text parse on both insert and search. vec0 stores vectors in its own
+     * internal binary representation regardless of which input format was used, so this is a
+     * drop-in replacement — no backfill needed for rows inserted by the old JSON-literal path.
+     * Byte order follows the platform-native convention every vec0 build assumes (little-endian
+     * on the x86/x86_64/ARM64 platforms this project targets).
+     */
+    static byte[] toVectorBlob(float[] vector) {
+        ByteBuffer buf = ByteBuffer.allocate(vector.length * Float.BYTES).order(ByteOrder.LITTLE_ENDIAN);
+        for (float v : vector) buf.putFloat(v);
+        return buf.array();
     }
 
     private String toJson(Map<String, Object> metadata) {
@@ -249,9 +416,9 @@ public class SqliteVecVectorStoreProvider implements VectorStoreProvider {
         }
     }
 
-    private List<float[]> embedBatchWithFallback(List<String> texts) {
+    private List<float[]> embedBatchWithFallback(EmbeddingModel model, List<String> texts) {
         try {
-            return embeddingModel.embed(texts); // fast path: single batched call
+            return model.embed(texts); // fast path: single batched call
         } catch (RuntimeException e) {
             if (isInputTooLargeError(e)) {
                 logInputTooLarge("embed-batch", e, texts == null ? 0 : texts.size(),
@@ -259,7 +426,7 @@ public class SqliteVecVectorStoreProvider implements VectorStoreProvider {
                 log.warn("[sqlite-vec] batched embedding rejected by model token limit, retrying per item with shrinking");
                 List<float[]> out = new ArrayList<>(texts.size());
                 for (String text : texts) {
-                    out.add(embedSingleWithFallback(text));
+                    out.add(embedSingleWithFallback(model, text));
                 }
                 return out;
             }
@@ -271,8 +438,8 @@ public class SqliteVecVectorStoreProvider implements VectorStoreProvider {
                 log.warn("[sqlite-vec] embedding batch timed out (n={}), splitting in half and retrying",
                         texts.size());
                 int mid = texts.size() / 2;
-                List<float[]> left = embedBatchWithFallback(texts.subList(0, mid));
-                List<float[]> right = embedBatchWithFallback(texts.subList(mid, texts.size()));
+                List<float[]> left = embedBatchWithFallback(model, texts.subList(0, mid));
+                List<float[]> right = embedBatchWithFallback(model, texts.subList(mid, texts.size()));
                 List<float[]> combined = new ArrayList<>(texts.size());
                 combined.addAll(left);
                 combined.addAll(right);
@@ -293,14 +460,14 @@ public class SqliteVecVectorStoreProvider implements VectorStoreProvider {
         return false;
     }
 
-    private float[] embedSingleWithFallback(String text) {
+    private float[] embedSingleWithFallback(EmbeddingModel model, String text) {
         String candidate = text == null ? "" : text;
         final int originalLength = candidate.length();
         RuntimeException lastTooLarge = null;
 
         for (int i = 0; i < MAX_EMBED_RETRY; i++) {
             try {
-                return embeddingModel.embed(candidate);
+                return model.embed(candidate);
             } catch (RuntimeException e) {
                 if (!isInputTooLargeError(e)) throw e;
                 logInputTooLarge("embed-single", e, i + 1, candidate.length());

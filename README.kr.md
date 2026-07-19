@@ -39,7 +39,7 @@ java -Djarmode=tools -jar target/rag-agent-*.jar extract --destination target/ex
 
 ### 로컬 실행
 
-> **벡터 스토어 백엔드** — 기본은 ChromaDB. `VECTORSTORE_TYPE=sqlite-vec`로 설정하면 벡터를 SQLite 파일에 저장하고 아래 **"Chroma 서버" 단계를 생략**할 수 있습니다 (운영자가 제공하는 `vec0` 네이티브 확장 필요 — [OPERATOR_MANUAL.md](OPERATOR_MANUAL.md) 참조). 인터넷·Docker 없이 sqlite-vec + 로컬 llama-server로만 돌리는 폐쇄망 구성은 [OPERATOR_MANUAL.md §4.5](OPERATOR_MANUAL.md#45-폐쇄망air-gapped--노-도커-실행) 참조.
+> **벡터 스토어 백엔드** — 기본은 ChromaDB. `VECTORSTORE_TYPE=sqlite-vec`로 설정하면 벡터를 SQLite 파일에 저장하고 아래 **"Chroma 서버" 단계를 생략**할 수 있습니다 (운영자가 제공하는 `vec0` 네이티브 확장 필요 — [OPERATOR_MANUAL.md](documents/OPERATOR_MANUAL.md) 참조). 인터넷·Docker 없이 sqlite-vec + 로컬 llama-server로만 돌리는 폐쇄망 구성은 [OPERATOR_MANUAL.md §4.5](documents/OPERATOR_MANUAL.md#45-폐쇄망air-gapped--노-도커-실행) 참조.
 
 #### 개발 모드 (소스 직접 실행)
 
@@ -95,7 +95,7 @@ container system stop
 
 접속: http://localhost:8080
 
-자세한 사용법은 [USER_MANUAL.md](USER_MANUAL.md)를, 배포·LLM 설정은 [OPERATOR_MANUAL.md](OPERATOR_MANUAL.md)를 참고하세요.
+자세한 사용법은 [USER_MANUAL.md](documents/USER_MANUAL.md)를, 배포·LLM 설정은 [OPERATOR_MANUAL.md](documents/OPERATOR_MANUAL.md)를 참고하세요.
 
 ## 환경 변수
 
@@ -107,9 +107,12 @@ container system stop
 | `LOCAL_LLM_URL` | — | `http://localhost:1234/v1` | LOCAL provider 엔드포인트 (임베딩 폴백으로도 사용) |
 | `LOCAL_LLM_KEY` | — | `lm-studio` | LOCAL provider API 키. **로컬 엔드포인트(llama-server)는 키 불필요** — 비워도 LOCAL provider는 등록됨(`no-key` 치환) |
 | `LOCAL_LLM_MODEL` | — | `google/gemma-4-e4b` | LOCAL provider 모델명 |
-| `LLM_ROUTING_MODE` | — | `COST_FIRST` | 기본 라우팅 모드 (`app.llm.default-routing-mode`). 폐쇄망/로컬 전용은 `LOCAL_ONLY`로 외부 프로바이더 호출 차단 |
+| `LLM_ROUTING_MODE` | — | `COST_FIRST` | 기본 라우팅 모드 (`app.llm.default-routing-mode`). 폐쇄망/로컬 전용은 `LOCAL_ONLY`로 외부 프로바이더 호출 차단 — `LOCAL_ONLY`로 설정하면 채팅 사이드바의 라우팅 전략 드롭다운 자체가 사라짐(어떤 모드를 골라도 결과가 같으므로) |
 | `LLM_DEFAULT_PROVIDER_CONCURRENCY` | — | `3` | 질의 경로 프로바이더별 동시성 게이트(`app.llm.default-provider-concurrency`) — 앱이 한 프로바이더에 보내는 동시 요청이 이 값을 절대 넘지 않음(LLM 서버의 실제 `--parallel` 값에 맞춤). 프로바이더별 오버라이드: `app.llm.providers[N].concurrency` |
 | `LLM_PERMIT_WAIT_TIMEOUT_SECONDS` | — | `20` | 동시성 슬롯 대기 상한(`app.llm.permit-wait-timeout-seconds`) — 초과 시 read timeout까지 기다리지 않고 즉시 HTTP 429 + `Retry-After` 응답. 인덱싱/백그라운드 LLM 호출에는 적용되지 않음 |
+| `LLM_TEMPERATURE` | — | `0.0` | 일반/RAG 답변 temperature(`app.llm.temperature`) — 빈 생성 시점에 각 프로바이더의 `OpenAiChatOptions`에 고정됨. `/settings`에서 **조회 전용**(변경하려면 재기동) |
+| `LLM_MAX_TOKENS` | — | `6000` | **블로킹** LLM 호출(분류·키워드 추출·MD 교정·충분도/근거 평가·TXT 구조화 등) 전용 completion 길이 상한 — 스트리밍 채팅/Direct 답변은 이 값과 무관(대신 SSE 타임아웃이 제한). 대화 히스토리 예산·MD 교정 섹션 분할 크기도 같은 값을 공유. **모델 컨텍스트 윈도우 자체가 아님** — 실제 LLM 서버 컨텍스트 크기에 여유를 두고 설정할 것 — [PIPELINE.md §4.1](documents/PIPELINE.md#41-appllmmax-tokensllm_max_tokens-크기-산정--로컬-llm-컨텍스트-윈도우와의-관계) 참고 |
+| `DIRECT_LLM_TEMPERATURE` | — | `0.1` | meta/Direct 답변 전용 temperature(`app.llm.direct-temperature`), `LLM_TEMPERATURE`와 별개, `[0.0, 0.2]`로 clamp. **`/settings`에서 핫 수정** — 재기동 없이 다음 Direct 호출부터 적용 |
 | `OPENAI_API_KEY` | — | — | OpenAI providers 사용 시 필요. 미설정 시 해당 providers 자동 비활성화 |
 | `GEMINI_API_KEY` | — | — | Gemini providers 사용 시 필요. 미설정 시 해당 providers 자동 비활성화 |
 | `EMBED_BASE_URL` | — | `LOCAL_LLM_URL` | 임베딩 전용 엔드포인트. 미설정 시 `LOCAL_LLM_URL` 사용 |
@@ -118,6 +121,8 @@ container system stop
 | `EMBED_DIMENSIONS` | sqlite-vec 시 | — | 임베딩 모델의 실제 출력 차원 (`app.embedding.dimensions`). `sqlite-vec` 필수 (vec0 DDL에 고정 — 모델 실제 차원과 일치: nomic=768, bge-m3=1024). chroma는 무시 |
 | `EMBED_USAGE_FALLBACK_ENABLED` | — | `true` | 임베딩 서버가 토큰 사용량을 반환하지 않을 때 `/llm-usage` 대시보드에 0 대신 입력 텍스트 길이 근사(chars/4)로 기록 |
 | `EMBED_MAX_CHUNK_CHARS` | — | `0` (비활성) | 임베딩 서버 배치/토큰 한계에 맞추는 청크 문자 수 하드 상한. `input (N tokens) is too large ... (batch size: 512)` 에러 시 설정(예: `450`). 초과 청크는 줄 경계에서 강제 재분할. 먼저 서버 배치를 키우는 것(`llama-server -b/-ub`)을 권장 — [OPERATOR_MANUAL §8](documents/OPERATOR_MANUAL.md#8-문제-해결) 참조 |
+| `EMBED_ADDITIONAL_BASE_URLS` | — | — | §6.21 E1 — 추가 임베딩 엔드포인트(동일 모델·차원, 예: N개 GPU 복제본), 콤마 구분. 설정 시 `EMBED_BASE_URL`+이 목록에 걸쳐 least-in-flight 로드밸런싱 — [OPERATOR_MANUAL §3.2](documents/OPERATOR_MANUAL.md) 참조 |
+| `EMBED_MAX_CONCURRENT_BATCHES` | — | `1` | §6.21 E2 — 단일 문서 인덱싱 시 서브배치 병렬 임베딩 수(`1`=직렬, 기본 → 회귀 0). 대략 (엔드포인트 수 × 엔드포인트별 병렬)로 설정해 단일 대용량 파일이 E1 엔드포인트를 채우게 |
 | `VECTORSTORE_TYPE` | — | `chroma` | 벡터 스토어 백엔드 — `chroma` 또는 `sqlite-vec` |
 | `SQLITE_VEC_EXTENSION_PATH` | — | — | sqlite-vec 전용 — 운영자가 제공하는 `vec0` 로더블 확장 경로 |
 | `CHROMA_HOST` | — | `http://localhost` | Chroma 서버 호스트 (chroma 백엔드) |
@@ -134,8 +139,8 @@ container system stop
 | `SEARCH_TOP_K` | `7` | 2 ~ 15 | 벡터 검색 반환 문서 수 |
 | `SEARCH_SIMILARITY_THRESHOLD` | `0.0` | 0.0 ~ 0.75 | 청크 유지 최소 코사인 유사도 (`0.0`=전체 수용) |
 | `SEARCH_MULTIQUERY_ENABLED` | `true` | true/false | 검색 전 질의 다중 확장 여부 |
-| `SEARCH_MULTIQUERY_MIN_LENGTH` | `0` | 0 ~ 20 | 이 길이 미만 질의는 확장 생략 (`0`=항상 확장) |
-| `SEARCH_HYBRID_ENABLED` | `false` | true/false | RRF에 BM25(FTS5) 키워드 축 추가 (재인덱싱 필요) |
+| `SEARCH_MULTIQUERY_MIN_LENGTH` | `15` | 0 ~ 20 | 이 길이 미만 질의는 확장 생략 (`0`=항상 확장). 확장이 실행될 때도 원본 질의 검색이 그 뒤로 대기하지 않고 병렬 실행됨 |
+| `SEARCH_HYBRID_ENABLED` | `true` | true/false | RRF에 BM25(FTS5) 키워드 축 추가 (§10.7.2 — FTS 인덱스는 이 플래그와 무관하게 인덱싱 시점에 채워지므로 재인덱싱 불필요) |
 | `SEARCH_RETRY_ESCALATE` | `true` | true/false | 재시도마다 후보 풀 확대 — `×(retryCount+1)`, 상한 `×3` |
 | `SEARCH_RERANK_ENABLED` | `false` | true/false | RRF 후 LLM 리랭킹 단계 (턴당 LLM 1콜 추가) |
 | `SEARCH_CANDIDATE_MULTIPLIER` | `3` | 2 ~ 5 | 리랭킹 후보 풀 크기 — `topK × N` |
@@ -159,7 +164,7 @@ container system stop
 | `SUMMARY_RECENT_RAW_TURNS` | `2` | 요약 뒤에 원문 그대로 덧붙일 최근 turn 수 (이 turn들도 예산 안에서 최신 우선으로 채워짐) |
 | `SUMMARY_PRECOMPUTE_TTL_SECONDS` | `15` | 동일 thread에 대한 중복 요약 사전계산(precompute) 억제 창(초) |
 
-> 형식별 분할 전략 상세 → [USER_MANUAL.md §4.1](USER_MANUAL.md#41-형식별-청크-분할-전략)
+> 형식별 분할 전략 상세 → [USER_MANUAL.md §4.1](documents/USER_MANUAL.md#41-형식별-청크-분할-전략)
 
 로컬 LLM (LM Studio, Ollama 등) 사용 시 — `.env`만 설정하면 됩니다:
 ```env
@@ -216,7 +221,8 @@ rag_java/
     │   │   ├── RoutingMode.java           # COST_FIRST|QUALITY_FIRST|PROGRESSIVE|DUAL|LOCAL_ONLY
     │   │   ├── CircuitBreaker.java        # LLM 프로바이더 인메모리 차단 관리 (Retry-After 지원)
     │   │   ├── TrackingEmbeddingModel.java  # EmbeddingModel 데코레이터 — 임베딩 토큰 사용량을 채팅과 분리 기록 (embed:<model>)
-    │   │   └── CachingEmbeddingModel.java   # EmbeddingModel 데코레이터 — Caffeine 쿼리 임베딩 캐시(Phase 7-A) + 인플라이트 single-flight 중복 제거(ConcurrentHashMap<key,CompletableFuture>), tracking 바깥쪽에 합성
+    │   │   ├── CachingEmbeddingModel.java   # EmbeddingModel 데코레이터 — Caffeine 쿼리 임베딩 캐시(Phase 7-A) + 인플라이트 single-flight 중복 제거(ConcurrentHashMap<key,CompletableFuture>), tracking 바깥쪽에 합성
+    │   │   └── LoadBalancingEmbeddingModel.java  # EmbeddingModel 데코레이터 — 다중 임베딩 엔드포인트 least-in-flight 분산 (§6.21 E1)
     │   ├── model/                         # Java 21 record
     │   │   ├── MetaKey.java               # 벡터 스토어 메타데이터 키 상수
     │   │   └── ChatRequest/Response/SourceRef/DocumentInfo/SyncResult/ThreadMeta/ChatForm/LlmProviderReport/IndexingProgressEvent.java
@@ -317,8 +323,10 @@ rag_java/
 - **인플라이트 single-flight (임베딩)** — 완전히 동일한(정규화 후) 텍스트를 동시에 요청하면(예: 여러 사용자가 거의 동시에 같은 질문) 첫 호출만 실제로 계산하고 나머지는 그 결과를 공유(`CachingEmbeddingModel`) — 각자 다시 계산하지 않음
 - **과부하 인지 서킷브레이커** — 폴백 프로바이더가 없는 상태에서(예: 단일 LOCAL 배포) 429/402/503을 받으면 기본 다중 분 단위 차단 대신 30초로 짧게 차단해 일시적 용량 초과가 채팅 전체를 다운시키지 않음 — 다른 프로바이더로 넘길 수 있는 상황이면 기존처럼 정상 차단 후 자동 폴백
 - **동일 우선순위 로드밸런싱** — 같은 role·priority로 프로바이더를 여러 대 등록하면(예: 로컬 서버 2대) 동시성 게이트 여유가 더 많은 쪽으로 요청이 자동 분산(least-in-flight) — 코드 변경 없이 배포 설정만으로 처리량 수평 확장
-- **설정 페이지(`/settings`)** — 유효 LLM/RAG 설정(프로바이더·라우팅·임베딩·검색 튜닝)을 한 화면에서 조회하고, 검색 튜닝 값(유사도 임계값·RRF 가중치/k·후보 배수·멀티쿼리 최소 길이·재시도 확대)은 **재기동 없이** 다음 검색부터 적용되는 **핫 수정**이 가능(`settings_override` 테이블에 영속, 삭제 시 프로퍼티 기본값 복귀). 수정은 관리자 전용이며 감사 로그에 기록되고, 재기동 필요 값은 조회 전용으로 표시
-- **벡터 검색** — `MultiQueryExpander`(3쿼리 병렬)로 최적 검색 후 선택된 백엔드(ChromaDB 또는 sqlite-vec)로 유사도 검색
+- **태스크별 모델 라우팅 (소형 LLM 오프로딩)** — 추론이 필요 없는 잡무(키워드+맥락 추출·대화 요약·제목 생성·MultiQuery 쿼리 확장)는 `TaskType.MICRO_TEXT`로 라우팅됨. `type=MICRO_TEXT` 소형(~500MB) 로컬 모델을 등록하면 이 잡무만 소형으로 내려가고, 답변·품질 민감한 분류/meta 직답은 큰 모델이 전담. 소형 미등록 시 큰 모델이 흡수(회귀 0) — [LLM_ROUTING.md §9](documents/LLM_ROUTING.md) 참고
+- **임베딩 로드밸런싱 + 병렬 서브배치 임베딩** — 다중 임베딩 엔드포인트(`EMBED_ADDITIONAL_BASE_URLS`, 동일 모델·차원)를 least-in-flight로 분산; 인덱싱 시 한 문서의 서브배치를 병렬 임베딩(`EMBED_MAX_CONCURRENT_BATCHES`)해 엔드포인트를 채움. 둘 다 opt-in(기본 단일 엔드포인트·직렬) — [OPERATOR_MANUAL §3.2](documents/OPERATOR_MANUAL.md) 참고
+- **설정 페이지(`/settings`)** — 유효 LLM/RAG 설정(프로바이더·라우팅·임베딩·검색 튜닝)을 한 화면에서 조회. 세 그룹의 값이 **재기동 없이 핫 수정** 가능(`settings_override` 테이블에 영속, 삭제 시 프로퍼티 기본값 복귀): 검색 튜닝(유사도 임계값·RRF 가중치/k·후보 배수·멀티쿼리 최소 길이/활성화·재시도 확대·topK·하이브리드 검색 — 다음 검색부터 적용), 인덱싱/청킹(청크 크기/오버랩/최소 크기·동시 파일/LLM 호출 수 제한 — 다음 인덱싱/↺ 재인덱싱부터 적용), Direct 답변 temperature(다음 Direct 호출부터 적용). 수정은 관리자 전용이며 감사 로그에 기록되고, 재기동 필요 값(rerank-enabled·일반 temperature/max-tokens·임베딩 설정 등)은 조회 전용으로 표시
+- **벡터 검색** — `MultiQueryExpander`(3쿼리 병렬, 짧은 키워드형 질문은 확장 생략)로 최적 검색 후 선택된 백엔드(ChromaDB 또는 sqlite-vec)로 유사도 검색. 원본 질문 검색은 쿼리 확장과 병렬로 실행되어 확장 대기 뒤로 밀리지 않음. Chroma 배치 검색은 실제로 읽는 메타데이터/문서/거리 필드만 요청하고 쓰지 않는 임베딩 벡터는 요청하지 않아, 후보 풀이 큰 경우에도 응답이 가볍게 유지됨
 - **Contextual Retrieval** — 청크 임베딩과 키워드 검색(`chunk_fts`) 입력 앞에 맥락 헤더(`{파일명} > {섹션 제목}` + 키워드 추출과 같은 호출에서 생성되는 LLM 1~2문장 요약)를 결합해, 표·코드 조각·대명사 위주 텍스트처럼 단독으로는 모호한 청크의 검색 재현율을 높임. 이 헤더는 저장·표시 텍스트, 출처 미리보기, 답변 프롬프트에는 절대 나타나지 않고 임베딩/키워드 검색 입력에만 반영됨
 - **임베딩 입력 정규화** — 마크다운 장식(구분선, 볼드/이탤릭/밑줄 마커)을 임베딩·`chunk_fts`·답변 프롬프트 입력에서만 제거(저장·표시 텍스트는 원문 유지)해 검색 인덱스 노이즈와 프롬프트 토큰 사용량을 줄임
 - **ReAct 재검색** — 증거 부족 시 최대 2회 자동 재검색
@@ -327,17 +335,18 @@ rag_java/
 - **DUAL 모드** — 로컬·외부 LLM 병렬 실행, 두 답변을 탭으로 비교
 - **속도 제한** — Bucket4j + Caffeine 유저별 토큰버킷; 429 `RAG-RATE-001` + `Retry-After` 헤더; `app.rate-limit.*`로 설정
 - **감사 로그** — Logback 롤링 파일에 구조화된 이벤트 기록; `app.audit.*`로 설정
-- **이미지 처리 파이프라인** — PDF/PPTX/DOCX 이미지 추출 → `data/images/{imageId}/` 저장(문서 SHA-256 기반 해시 키 — 문서 자체의 `docId`와는 별개이며, 긴 파일명이 이미지마다 반복 저장되는 것을 방지); PPTX에서 사진 위/근처에 강조 원·화살표·말풍선 같은 주석 도형이 있으면 기본적으로 하나의 합성 이미지로 병합(`app.pptx-image.merge-annotated-pictures`); 검색 시점 Lazy Vision 설명 생성 (SQLite 캐시); 답변 버블에 이미지 썸네일 표시
+- **이미지 처리 파이프라인** — PDF/PPTX/DOCX 이미지 추출 → `data/images/{imageId}/` 저장(문서 SHA-256 기반 해시 키 — 문서 자체의 `docId`와는 별개이며, 긴 파일명이 이미지마다 반복 저장되는 것을 방지); PPTX에서 사진 위에 강조 원·화살표 같은 주석 도형이 겹쳐 있으면 하나의 합성 이미지로 병합(`app.pptx-image.merge-annotated-pictures`), 표 위에 겹친 주석 도형도 표+도형 합성(표는 MD 표로도 유지)하며 실제 Ctrl+G 그룹·SmartArt는 각 한 장으로 유지; 앵커에 안 겹친 느슨한 도형끼리의 병합은 `app.pptx-image.rasterize-shapes=true`일 때만(기본 off). DOCX도 사진과 같은 문단의 레거시 VML 주석 도형(사각형/원/선)을 하나로 병합(`app.docx-image.merge-annotated-shapes` — POI가 DOCX 도형 좌표를 노출하지 않아 같은 문단 근사 방식); 검색 시점 Lazy Vision 설명 생성 (SQLite 캐시); 답변 버블에 이미지 썸네일 표시
 - **이미지 유형 분류** — diagram / screenshot / chart / photo / other 분류 후 유형별 전용 Vision 프롬프트 적용
 - **스캔 PDF OCR** — Tesseract OCR (kor+eng)로 텍스트 없는 페이지 처리 (`app.image-description.ocr-enabled=true`)
 - **EMF/WMF 변환** — DOCX Windows Metafile 이미지를 Batik(EMF) 또는 LibreOffice headless(WMF)로 PNG 변환
 - **멀티턴 대화** — `thread_id` 기반 대화 이력 유지 (SQLite WAL, 재시작 후에도 영속)
 - **메시지 버블 복원** — `/chat/{threadId}` 재진입 시 이전 turn 메시지 버블 서버 렌더링
-- **출처 hover 미리보기** — `SourceRef` 구조체 기반 Bootstrap Popover, 출처 hover 시 청크 텍스트 200자 미리보기
+- **출처 hover 미리보기** — `SourceRef` 구조체 기반 Bootstrap Popover, 출처 hover 시 청크 텍스트 200자 미리보기; 모바일이 아닌 화면에서는 팝오버 폭을 약 2배로 넓히고 글자 크기를 살짝 줄여 줄바꿈을 줄임
 - **코드 syntax highlight** — DOMPurify sanitize 후 highlight.js 적용, 다크 모드 연동
 - **LLM 사용량 대시보드** — 프로바이더별 일간·주간·월간 토큰 사용량, Chart.js 일별 히스토리 차트, Circuit Breaker 카운트다운; 임베딩 사용량은 채팅과 분리 집계(`embed:<model>`, usage 미반환 서버는 근사치 폴백); 사용 이력 없는 비활성 프로바이더는 자동 숨김, 설정에서 제거된 orphan 기록은 관리자가 카드에서 삭제 가능
 - **문서 버전 관리** — 버전별 격리 (chroma: 컬렉션 분리 / sqlite-vec: `version` partition key)
-- **증분 인덱싱** — SHA-256 기반 변경 감지, `doc_registry` SQLite 테이블 영속 (유저별)
+- **증분 인덱싱** — SHA-256 기반 변경 감지, `doc_registry` SQLite 테이블 영속 (유저별). sqlite-vec에서는 토큰 서브배치가 임베딩되는 즉시 그 서브배치만 삽입하며 문서 전체 분량을 버퍼링하지 않아, 대용량 문서 인덱싱 시 피크 메모리가 문서 크기가 아니라 서브배치 크기에 비례
+- **키워드 추출 배치화** — 인덱싱 시 청크 N개(기본 4, `INDEXING_KEYWORD_BATCH_SIZE`)를 하나의 LLM 호출로 묶어 처리, 청크당 1콜이던 왕복 횟수를 대략 1/N로 절감. 배치 호출/파싱 실패 시 해당 청크는 개별 TF 키워드 추출로 폴백
 - **다양한 문서 형식** — PDF, PPTX, DOCX, TXT, MD
 - **Java 21 Virtual Threads** — LLM I/O 및 병렬 인덱싱 전체에 경량 스레드 적용
 

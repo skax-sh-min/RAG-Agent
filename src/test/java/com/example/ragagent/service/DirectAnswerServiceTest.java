@@ -1,6 +1,7 @@
 package com.example.ragagent.service;
 
 import com.example.ragagent.agent.AgentState;
+import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.llm.LlmProvider;
 import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.ProviderRole;
@@ -52,7 +53,11 @@ class DirectAnswerServiceTest {
         llmRouter = mock(LlmRouter.class);
         messageSource = mock(MessageSource.class);
         when(messageSource.getMessage(anyString(), any(), any(Locale.class))).thenReturn("prompt");
-        service = new DirectAnswerService(llmRouter, messageSource);
+        AppProperties props = mock(AppProperties.class);
+        // llmSafe() supplies the Direct temperature (§6.18); a real record so directTemperature() works.
+        when(props.llmSafe()).thenReturn(new AppProperties.LlmConfig(
+                List.of(), 2, 10, 180, "COST_FIRST", 0.6, 3, 20, 0.0, 0.1, 6000));
+        service = new DirectAnswerService(llmRouter, messageSource, props);
     }
 
     private AgentState newState(boolean directMode) {
@@ -115,6 +120,30 @@ class DirectAnswerServiceTest {
 
         String userText = promptCaptor.getValue().getUserMessage().getText();
         assertThat(userText).contains("[USER_QUESTION]").contains("[/USER_QUESTION]");
+    }
+
+    /**
+     * §6.18 회귀 방지 — 블로킹 Direct 호출의 Prompt가 direct-temperature(여기선 0.1)를 ChatOptions로
+     * 실어 보내는지 검증한다. RAG 경로(프로바이더 defaultOptions의 일반 temperature)와 구분되는 핵심.
+     */
+    @Test
+    @DisplayName("execute — Prompt에 direct-temperature가 ChatOptions로 실린다 (RAG와 온도 분리)")
+    @SuppressWarnings("unchecked")
+    void execute_attachesDirectTemperatureToPrompt() {
+        ArgumentCaptor<Function<ChatModel, ChatResponse>> callCaptor = ArgumentCaptor.forClass(Function.class);
+        when(llmRouter.executeGated(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), callCaptor.capture()))
+                .thenReturn("답변");
+
+        service.execute(newState(false));
+
+        ChatModel chatModel = mock(ChatModel.class);
+        ArgumentCaptor<Prompt> promptCaptor = ArgumentCaptor.forClass(Prompt.class);
+        when(chatModel.call(promptCaptor.capture())).thenReturn(chatResponse("답변"));
+        callCaptor.getValue().apply(chatModel);
+
+        org.springframework.ai.chat.prompt.ChatOptions opts = promptCaptor.getValue().getOptions();
+        assertThat(opts).isNotNull();
+        assertThat(opts.getTemperature()).isEqualTo(0.1); // llmSafe().directTemperature() (setUp의 mock)
     }
 
     @Test

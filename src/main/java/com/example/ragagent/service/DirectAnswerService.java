@@ -1,6 +1,7 @@
 package com.example.ragagent.service;
 
 import com.example.ragagent.agent.AgentState;
+import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.llm.LlmProvider;
 import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.RoutingMode;
@@ -12,6 +13,7 @@ import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.prompt.Prompt;
+import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.ai.openai.api.OpenAiApi;
 import org.springframework.context.MessageSource;
 
@@ -30,10 +32,12 @@ public class DirectAnswerService {
 
     private final LlmRouter llmRouter;
     private final MessageSource messageSource;
+    private final AppProperties props;
 
-    public DirectAnswerService(LlmRouter llmRouter, MessageSource messageSource) {
+    public DirectAnswerService(LlmRouter llmRouter, MessageSource messageSource, AppProperties props) {
         this.llmRouter = llmRouter;
         this.messageSource = messageSource;
+        this.props = props;
     }
 
     public AgentState execute(AgentState state) {
@@ -42,9 +46,12 @@ public class DirectAnswerService {
                 state.routingMode(), state.conversationHistory().length());
         String userPrompt = buildUserPrompt(state);
 
+        // §6.18 — Direct(meta) answers use their own temperature (hot-editable via /settings), read
+        // fresh per call, distinct from the general/RAG temperature baked into the provider default.
+        double directTemp = props.llmSafe().directTemperature();
         RoutingMode effective = effectiveRoutingMode(state.routingMode());
         String rawAnswer = llmRouter.executeGated(TaskType.TEXT, effective,
-                model -> model.call(buildPrompt(systemPrompt, userPrompt)));
+                model -> model.call(buildPrompt(systemPrompt, userPrompt, directTemp)));
         String answer = (rawAnswer == null || rawAnswer.isEmpty()) ? null : rawAnswer;
         log.debug("[DirectAnswer] answer length={}", answer == null ? -1 : answer.length());
         return state.toBuilder().answer(answer).accumulateTokens(0, 0).build();
@@ -56,12 +63,13 @@ public class DirectAnswerService {
         log.debug("[DirectAnswer] streaming directMode={} routingMode={} historyLen={}", state.directMode(),
                 state.routingMode(), state.conversationHistory().length());
 
+        double directTemp = props.llmSafe().directTemperature();
         RoutingMode effective = effectiveRoutingMode(state.routingMode());
         LlmProvider provider = llmRouter.routeProvider(TaskType.TEXT, effective);
 
         StringBuilder full = new StringBuilder();
         try (var permit = llmRouter.acquirePermit(provider)) {
-            callOrStream(provider, state, systemPrompt,
+            callOrStream(provider, state, systemPrompt, directTemp,
                     t -> { listener.onToken(t); full.append(t); });
         }
 
@@ -83,8 +91,11 @@ public class DirectAnswerService {
         return (mode == RoutingMode.DUAL) ? RoutingMode.COST_FIRST : mode;
     }
 
-    private static Prompt buildPrompt(String systemPrompt, String userPrompt) {
-        return new Prompt(List.of(new SystemMessage(systemPrompt), new UserMessage(userPrompt)));
+    private static Prompt buildPrompt(String systemPrompt, String userPrompt, double temperature) {
+        // Attach temperature as a runtime option — OpenAiChatModel merges it over the provider's
+        // defaultOptions field-by-field, so this overrides only temperature (maxTokens/model stay).
+        return new Prompt(List.of(new SystemMessage(systemPrompt), new UserMessage(userPrompt)),
+                OpenAiChatOptions.builder().temperature(temperature).build());
     }
 
     private static String buildUserPrompt(AgentState state) {
@@ -101,7 +112,8 @@ public class DirectAnswerService {
      * OpenAiChatModel.internalStream()'s buffer(int,int) which holds all tokens until LLM finishes.
      */
     private void callOrStream(LlmProvider provider, AgentState state,
-                              String systemPrompt, java.util.function.Consumer<String> tokenSink) {
+                              String systemPrompt, double temperature,
+                              java.util.function.Consumer<String> tokenSink) {
         if (provider.stream()) {
             // Bypass OpenAiChatModel.internalStream() which buffers ALL chunks via buffer(int,int)
             // before emitting, defeating real-time token delivery to the browser.
@@ -111,7 +123,7 @@ public class DirectAnswerService {
                     new OpenAiApi.ChatCompletionMessage(userPrompt, OpenAiApi.ChatCompletionMessage.Role.USER)
             );
             OpenAiApi.ChatCompletionRequest request =
-                    new OpenAiApi.ChatCompletionRequest(messages, provider.model(), 0.0, true);
+                    new OpenAiApi.ChatCompletionRequest(messages, provider.model(), temperature, true);
             provider.openAiApi().chatCompletionStream(request)
                     .mapNotNull(chunk -> {
                         if (chunk.choices() == null || chunk.choices().isEmpty()) return null;
@@ -130,6 +142,7 @@ public class DirectAnswerService {
             StringBuilder buf = new StringBuilder();
             ChatClient.builder(provider.chatModel()).build()
                     .prompt()
+                    .options(OpenAiChatOptions.builder().temperature(temperature).build())
                     .system(systemPrompt)
                     .user(buildUserPrompt(state))
                     .stream()

@@ -5,6 +5,7 @@ import com.example.ragagent.exception.IndexingCancelledException;
 import com.example.ragagent.model.DocumentInfo;
 import com.example.ragagent.model.MetaKey;
 import com.example.ragagent.service.DocumentLoaderService;
+import com.example.ragagent.service.DocxAnnotationShapeMerger;
 import com.example.ragagent.service.DocxToMarkdownConverter;
 import com.example.ragagent.service.ImageExtractorService;
 import com.example.ragagent.service.MarkdownCorrectionService;
@@ -66,23 +67,25 @@ class DocumentIndexerTest {
     private KeywordSearchRepository keywordRepo;
     private AppProperties props;
     private DocumentLoaderService loaderService;
+    private MarkdownCorrectionService correctionService;
 
     @BeforeEach
     void setUp() throws IOException {
         // Stub AppProperties
         props = mock(AppProperties.class);
         when(props.dataDir()).thenReturn(tmpDir.toString());
-        when(props.chunkSize()).thenReturn(2000);
-        when(props.chunkOverlap()).thenReturn(200);
+        when(props.chunkSizeSafe()).thenReturn(2000);
+        when(props.chunkOverlapSafe()).thenReturn(200);
         when(props.embeddingSafe()).thenReturn(
-                new AppProperties.EmbeddingConfig(null, null, null, null, 10, 120, true, 0));
+                new AppProperties.EmbeddingConfig(null, null, null, null, 10, 120, true, 0, List.of(), 1));
 
         AppProperties.IndexingConfig indexing = mock(AppProperties.IndexingConfig.class);
         when(indexing.maxConcurrentLlmCalls()).thenReturn(2);
         when(indexing.keywordTimeoutSeconds()).thenReturn(5);
         when(indexing.maxConcurrentFiles()).thenReturn(2);
         when(props.indexingSafe()).thenReturn(indexing);
-        when(props.pptxImageSafe()).thenReturn(new AppProperties.PptxShapeExtractionConfig(30.0, 15.0, true));
+        when(props.pptxImageSafe()).thenReturn(new AppProperties.PptxShapeExtractionConfig(30.0, 15.0, true, false));
+        when(props.docxImageSafe()).thenReturn(new AppProperties.DocxShapeExtractionConfig(false));
 
         // Stub VectorStoreFacade
         vectorStore = mock(VectorStoreFacade.class);
@@ -103,9 +106,19 @@ class DocumentIndexerTest {
         when(loaderService.loadFromMarkdown(any())).thenReturn(stubDocs);
 
         // Stub MarkdownCorrectionService / TextToMarkdownService — pass content through unchanged
-        MarkdownCorrectionService correctionService = mock(MarkdownCorrectionService.class);
-        when(correctionService.correct(any(), any(), any(), anyBoolean(), anyBoolean(), any()))
+        correctionService = mock(MarkdownCorrectionService.class);
+        when(correctionService.correct(any(), any(), any(), anyBoolean(), anyBoolean(), anyBoolean(), any()))
                 .thenAnswer(inv -> inv.getArgument(0));
+        // reapplyHeadingNumbers delegates to a real instance (no LLM call in that method, so a
+        // never-invoked LlmRouter mock is fine) — it's a no-op unless the MD already has a
+        // numbered heading, so this is safe as the shared default for every test while still
+        // letting reindex-renumbering tests exercise genuine behavior.
+        when(props.llmSafe()).thenReturn(new AppProperties.LlmConfig(
+                java.util.List.of(), 2, 10, 180, "COST_FIRST", 0.6, 3, 20, 0.0, 0.1, 8000));
+        MarkdownCorrectionService realCorrectionForRenumber =
+                new MarkdownCorrectionService(mock(com.example.ragagent.llm.LlmRouter.class), props);
+        when(correctionService.reapplyHeadingNumbers(any()))
+                .thenAnswer(inv -> realCorrectionForRenumber.reapplyHeadingNumbers(inv.getArgument(0)));
         TextToMarkdownService textToMarkdownService = mock(TextToMarkdownService.class);
         when(textToMarkdownService.convert(any(), any(), any()))
                 .thenAnswer(inv -> inv.getArgument(0));
@@ -138,7 +151,9 @@ class DocumentIndexerTest {
 
     private DocumentLoaderService realLoader() {
         return new DocumentLoaderService(
-                new DocxToMarkdownConverter(Optional.empty(), Optional.empty(), props), Optional.empty());
+                new DocxToMarkdownConverter(Optional.empty(), Optional.empty(), props,
+                        new DocxAnnotationShapeMerger(props)),
+                Optional.empty());
     }
 
     private void writeMinimalPptx(Path path, String title) throws IOException {
@@ -255,6 +270,21 @@ class DocumentIndexerTest {
     }
 
     @Test
+    @DisplayName("PPTX 업로드 — addHeadingNumbers가 체크되어 있어도 소제목 번호를 생성하지 않는다")
+    void index_pptx_ignoresAddHeadingNumbersFlag() throws IOException {
+        Path pptxFile = tmpDir.resolve("deck-numbered.pptx");
+        writeMinimalPptx(pptxFile, "개요");
+
+        indexer.index(IndexRequest.single(pptxFile, "deck-numbered.pptx", "v1", "anonymous",
+                List.of(), false, true, e -> {}));
+
+        // correctionService.correct()의 5번째 인자(addHeadingNumbers)는 요청값(true)과 무관하게
+        // 항상 false로 전달되어야 한다 — PPTX 헤딩은 슬라이드 제목 라벨이지 문서 목차가 아니므로.
+        // 6번째 인자(groupByPage)는 PPTX이므로 항상 true — [페이지: N] 마커 단위로만 교정 섹션을 묶는다.
+        verify(correctionService).correct(any(), any(), any(), eq(false), eq(false), eq(true), any());
+    }
+
+    @Test
     @DisplayName("PDF 업로드(스캔 아님) — 페이지가 MD로 변환되어 converted/ 에 저장되고 페이지 번호가 헤딩으로 반영된다")
     void index_nonScannedPdf_convertsToMarkdownWithPageMarker() throws IOException {
         DocumentLoaderService realLoader = realLoader();
@@ -346,6 +376,152 @@ class DocumentIndexerTest {
         assertThat(keywordRepo.tagsByDocIds(List.of(info.docId())).get(info.docId()))
                 .containsExactlyInAnyOrder("faq", "guide");
         verify(vectorStore, never()).deleteByDocIds(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("reindexFromMd — corrected.md의 존재하지 않는 이미지 마커는 제거된 뒤 인덱싱되고, 파일에도 반영된다")
+    void reindexFromMd_missingImageMarker_removedBeforeIndexingAndPersisted() throws IOException {
+        Path txtFile = tmpDir.resolve("guide.txt");
+        Files.writeString(txtFile, "테스트 문서 내용입니다.");
+        DocumentInfo info = indexer.index(IndexRequest.single(txtFile, "guide.txt", "v1", "anonymous", e -> {}));
+
+        // Simulate a corrected.md left pointing at an image that no longer exists on disk
+        // (deleted/moved since the MD was written) — the referenced file is never created here.
+        Path mdPath = tmpDir.resolve("converted").resolve(info.docId() + ".md"); // correctionService is mocked in this suite, so no real _corrected.md is written — reindexFromMd() falls back to the raw .md
+        Files.writeString(mdPath,
+                Files.readString(mdPath) + "\n[이미지: images/deadbeef/missing.png]\n");
+
+        indexer.reindexFromMd(info.docId());
+
+        assertThat(Files.readString(mdPath)).doesNotContain("images/deadbeef/missing.png");
+
+        org.mockito.ArgumentCaptor<String> mdCaptor = org.mockito.ArgumentCaptor.forClass(String.class);
+        verify(loaderService, atLeastOnce()).loadFromMarkdown(mdCaptor.capture());
+        assertThat(mdCaptor.getAllValues()).noneMatch(md -> md.contains("images/deadbeef/missing.png"));
+    }
+
+    @Test
+    @DisplayName("reindexFromMd — 이미지 파일이 실제 존재하면 마커는 그대로 유지된다")
+    void reindexFromMd_existingImageMarker_preserved() throws IOException {
+        Path txtFile = tmpDir.resolve("guide.txt");
+        Files.writeString(txtFile, "테스트 문서 내용입니다.");
+        DocumentInfo info = indexer.index(IndexRequest.single(txtFile, "guide.txt", "v1", "anonymous", e -> {}));
+
+        Path imageDir = tmpDir.resolve("images").resolve("cafef00d");
+        Files.createDirectories(imageDir);
+        Files.writeString(imageDir.resolve("real.png"), "not a real png, just needs to exist");
+
+        Path mdPath = tmpDir.resolve("converted").resolve(info.docId() + ".md"); // correctionService is mocked in this suite, so no real _corrected.md is written — reindexFromMd() falls back to the raw .md
+        Files.writeString(mdPath,
+                Files.readString(mdPath) + "\n[이미지: images/cafef00d/real.png]\n");
+
+        indexer.reindexFromMd(info.docId());
+
+        assertThat(Files.readString(mdPath)).contains("images/cafef00d/real.png");
+        org.mockito.ArgumentCaptor<String> mdCaptor = org.mockito.ArgumentCaptor.forClass(String.class);
+        verify(loaderService, atLeastOnce()).loadFromMarkdown(mdCaptor.capture());
+        assertThat(mdCaptor.getAllValues()).anyMatch(md -> md.contains("images/cafef00d/real.png"));
+    }
+
+    @Test
+    @DisplayName("reindexFromMd — 변환불가 마커·정상 마커 혼재 시 존재하지 않는 것만 선택적으로 제거된다")
+    void reindexFromMd_mixedMarkers_removesOnlyMissingOnes() throws IOException {
+        Path txtFile = tmpDir.resolve("guide.txt");
+        Files.writeString(txtFile, "테스트 문서 내용입니다.");
+        DocumentInfo info = indexer.index(IndexRequest.single(txtFile, "guide.txt", "v1", "anonymous", e -> {}));
+
+        Path imageDir = tmpDir.resolve("images").resolve("cafef00d");
+        Files.createDirectories(imageDir);
+        Files.writeString(imageDir.resolve("real.emf"), "raw unconverted bytes");
+
+        Path mdPath = tmpDir.resolve("converted").resolve(info.docId() + ".md"); // correctionService is mocked in this suite, so no real _corrected.md is written — reindexFromMd() falls back to the raw .md
+        Files.writeString(mdPath, Files.readString(mdPath)
+                + "\n[이미지(변환불가): images/cafef00d/real.emf]\n"
+                + "[이미지: images/deadbeef/gone.png]\n");
+
+        indexer.reindexFromMd(info.docId());
+
+        String cleaned = Files.readString(mdPath);
+        assertThat(cleaned).contains("images/cafef00d/real.emf").doesNotContain("images/deadbeef/gone.png");
+    }
+
+    @Test
+    @DisplayName("reindexFromMd — 이미 번호가 있던 소제목이 편집으로 어긋나면 재인덱싱 시 다시 계산되어 파일에도 반영된다")
+    void reindexFromMd_staleHeadingNumbers_recalculatedAndPersisted() throws IOException {
+        Path txtFile = tmpDir.resolve("guide.txt");
+        Files.writeString(txtFile, "## 1. 첫 번째 절\n본문A\n");
+        DocumentInfo info = indexer.index(IndexRequest.single(txtFile, "guide.txt", "v1", "anonymous", e -> {}));
+
+        // 코드 블록 편집 등으로 가운데 헤딩이 사라져 번호가 어긋난 상황을 재현(1., 3.만 남음)
+        Path mdPath = tmpDir.resolve("converted").resolve(info.docId() + ".md");
+        Files.writeString(mdPath, "## 1. 첫 번째 절\n본문A\n\n## 3. 세 번째 절\n본문B\n");
+
+        indexer.reindexFromMd(info.docId());
+
+        String result = Files.readString(mdPath);
+        assertThat(result).contains("## 1. 첫 번째 절").contains("## 2. 세 번째 절");
+        assertThat(result).doesNotContain("## 3.");
+    }
+
+    @Test
+    @DisplayName("reindexFromMd — 소제목 번호가 원래 없던 문서는 재인덱싱해도 번호가 새로 생기지 않는다")
+    void reindexFromMd_noExistingHeadingNumbers_staysUnnumbered() throws IOException {
+        Path txtFile = tmpDir.resolve("guide.txt");
+        Files.writeString(txtFile, "## 첫 번째 절\n본문A\n\n## 두 번째 절\n본문B\n");
+        DocumentInfo info = indexer.index(IndexRequest.single(txtFile, "guide.txt", "v1", "anonymous", e -> {}));
+        Path mdPath = tmpDir.resolve("converted").resolve(info.docId() + ".md");
+        String before = Files.readString(mdPath);
+
+        indexer.reindexFromMd(info.docId());
+
+        assertThat(Files.readString(mdPath)).isEqualTo(before);
+    }
+
+    @Test
+    @DisplayName("reindexFromMd — PPTX 문서는 소제목에 번호가 있어도 재인덱싱 시 건드리지 않는다")
+    void reindexFromMd_pptx_neverTouchesHeadingNumbers() throws IOException {
+        Path pptxFile = tmpDir.resolve("deck.pptx");
+        writeMinimalPptx(pptxFile, "개요");
+        DocumentInfo info = indexer.index(IndexRequest.single(pptxFile, "deck.pptx", "v1", "anonymous", e -> {}));
+
+        Path mdPath = tmpDir.resolve("converted").resolve(info.docId() + ".md");
+        // PPTX는 애초에 번호가 붙지 않지만, 만약 번호처럼 보이는 헤딩이 있어도 손대면 안 된다는 것을
+        // 확인하기 위해 강제로 번호 있는 헤딩을 주입한다.
+        Files.writeString(mdPath, "[페이지: 1]\n## 1. 개요\n본문\n\n[페이지: 2]\n## 3. 결론\n본문\n");
+
+        indexer.reindexFromMd(info.docId());
+
+        assertThat(Files.readString(mdPath)).contains("## 1. 개요").contains("## 3. 결론");
+    }
+
+    @Test
+    @DisplayName("parallel index — 사전계산된 sha256이 전달되면 파일을 재해싱하지 않고 그대로 사용한다(§10.8.4)")
+    void index_parallel_usesPrecomputedSha256WithoutRehashing() throws IOException {
+        Path txtFile = tmpDir.resolve("presha.txt");
+        Files.writeString(txtFile, "실제 파일 내용");
+        Semaphore gate = new Semaphore(2);
+        // Deliberately wrong vs. the file's real content hash — if index() actually re-read and
+        // re-hashed the file (bypassing the precomputed value), info.sha256() would NOT equal this.
+        String fakeSha256 = "f".repeat(64);
+
+        DocumentInfo info = indexer.index(
+                IndexRequest.parallel(txtFile, "v1", DocRegistry.SHARED, gate, null, fakeSha256));
+
+        assertThat(info.sha256()).isEqualTo(fakeSha256);
+        assertThat(info.docId()).isEqualTo("presha.txt_" + fakeSha256.substring(0, 8));
+    }
+
+    @Test
+    @DisplayName("parallel index — sha256 미전달(null) 시 기존과 동일하게 파일에서 직접 계산한다")
+    void index_parallel_withoutPrecomputedSha256_computesFromFile() throws IOException {
+        Path txtFile = tmpDir.resolve("nopresha.txt");
+        Files.writeString(txtFile, "실제 파일 내용");
+        Semaphore gate = new Semaphore(2);
+
+        DocumentInfo info = indexer.index(IndexRequest.parallel(txtFile, "v1", DocRegistry.SHARED, gate, null));
+
+        assertThat(info.sha256()).isNotEqualTo("f".repeat(64));
+        assertThat(info.sha256()).isNotBlank();
     }
 
     @Test

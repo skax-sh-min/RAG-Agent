@@ -35,7 +35,7 @@ class SettingsServiceTest {
                 "./data", 2, 800, 100, 100, 7, 0.0, true, 5, false,
                 true, false, 3, null,
                 null, null, null, null, null, null, null, null, null, null, null, 2,
-                null, 1.0, 60, null, null, null, null, null);
+                null, 1.0, 60, null, null, null, null, null, null);
     }
 
     private SettingsOverrideRepositoryStub repo;
@@ -108,7 +108,8 @@ class SettingsServiceTest {
     @Test
     @DisplayName("update — 알 수 없는/비-핫 키는 거부")
     void update_unknownKey_rejected() {
-        assertThatThrownBy(() -> service.update("search-top-k", "10"))
+        // rerank-enabled is surfaced read-only (structural @ConditionalOnProperty bean), never hot
+        assertThatThrownBy(() -> service.update("search-rerank-enabled", "true"))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> service.update("nonsense", "1"))
                 .isInstanceOf(IllegalArgumentException.class);
@@ -144,14 +145,22 @@ class SettingsServiceTest {
     }
 
     @Test
-    @DisplayName("buildView — hot 그룹 7개 + fixed/cache 그룹, 벡터 스토어/라우팅 기본값 노출")
+    @DisplayName("buildView — search_hot/fixed/indexing/llm_hot/cache 5그룹, 모든 핫 키가 편집 가능 항목으로 노출")
     void buildView_structure() {
         SettingsView view = service.buildView();
 
-        assertThat(view.groups()).hasSize(3);
+        assertThat(view.groups()).hasSize(5);
         assertThat(view.groups().get(0).id()).isEqualTo("search_hot");
-        assertThat(view.groups().get(0).items()).hasSize(SettingsKeys.HOT_EDITABLE.size());
         assertThat(view.groups().get(0).items()).allMatch(SettingsView.SettingItem::editable);
+        // indexing + llm_hot groups exist (chunk/file-concurrency + direct-temperature knobs live here)
+        assertThat(view.groups()).anyMatch(g -> g.id().equals("indexing"));
+        assertThat(view.groups()).anyMatch(g -> g.id().equals("llm_hot"));
+        // every hot-editable key is rendered as an editable row somewhere (search_hot + indexing + llm_hot)
+        long editableCount = view.groups().stream()
+                .flatMap(g -> g.items().stream())
+                .filter(SettingsView.SettingItem::editable)
+                .count();
+        assertThat(editableCount).isEqualTo(SettingsKeys.HOT_EDITABLE.size());
         assertThat(view.vectorStoreType()).isEqualTo("chroma");
         assertThat(view.defaultRoutingMode()).isEqualTo("COST_FIRST");
         assertThat(view.providers()).isEmpty();

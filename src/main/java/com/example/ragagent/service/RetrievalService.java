@@ -21,6 +21,8 @@ import org.springframework.ai.rag.preretrieval.query.expansion.MultiQueryExpande
 import org.springframework.stereotype.Service;
 
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executors;
 
 /**
  * Retrieves relevant documents from the vector store.
@@ -36,15 +38,12 @@ public class RetrievalService {
     private final RagService ragService;
     private final MultiQueryExpander multiQueryExpander;
     private final AppProperties props;
-    // Structural values decided at startup (restart-required — a runtime change can't take effect
-    // without re-wiring beans/pipeline), so they're cached once. topK is view-only on /settings.
-    private final int defaultTopK;
-    private final boolean multiqueryEnabled;
-    private final boolean hybridEnabled;
+    // rerank-enabled is truly structural — the RerankerService bean only exists when it was true at
+    // startup (@ConditionalOnProperty), so it can't be hot-swapped; cache it once. topK, multiquery-
+    // enabled and hybrid-enabled are now hot-editable and are read fresh from props.xxxSafe() on every
+    // execute()/shouldExpand() (alongside retry-escalate, candidate/tag multipliers, RRF k/weight,
+    // multiquery min-length) so a /settings override applies on the next search — none are cached.
     private final boolean rerankEnabled;
-    // Hot-editable values (retry-escalate, candidate/tag multipliers, RRF k/weight,
-    // multiquery min-length) are deliberately NOT cached — they're read fresh from props.xxxSafe()
-    // on every execute()/shouldExpand() so a /settings override applies on the next search.
     private final LazyVisionService lazyVisionService; // null when disabled
     private final Optional<RerankerService> reranker;
 
@@ -53,19 +52,18 @@ public class RetrievalService {
                             Optional<RerankerService> rerankerOpt) {
         this.ragService = ragService;
         this.props = props;
-        this.defaultTopK = props.searchTopK();
-        this.multiqueryEnabled = props.searchMultiqueryEnabled();
-        this.hybridEnabled = props.searchHybridEnabled();
         this.rerankEnabled = props.searchRerankEnabled();
         this.lazyVisionService = lazyVisionOpt.orElse(null);
         this.reranker = rerankerOpt;
         // MultiQueryExpander builds its own ChatClient around the model it's given, so the
         // only way to have its calls recorded in llm_usage is to wrap that model (mirrors
-        // TrackingEmbeddingModel's decorator for embeddings). Same TEXT→LIGHT_TEXT fallback
-        // order as LlmConfig.primaryChatModel() so LIGHT_BOTH-only (local, no cloud key)
-        // setups still resolve a model here.
+        // TrackingEmbeddingModel's decorator for embeddings). §6.21 (작업2) — query expansion is a
+        // reasoning-free chore, so prefer MICRO_TEXT (the dedicated small model when a type=MICRO_TEXT
+        // provider is registered) → LIGHT_TEXT → TEXT. Without a small model, MICRO_TEXT/LIGHT_TEXT
+        // resolve to the local BOTH model (unchanged); TEXT is the final fallback for cloud-only
+        // (TEXT-typed providers, no LOCAL) setups so construction never fails.
         LlmProvider expansionProvider = llmRouter.routeProviderWithFallback(
-                List.of(TaskType.TEXT, TaskType.LIGHT_TEXT), RoutingMode.COST_FIRST);
+                List.of(TaskType.MICRO_TEXT, TaskType.LIGHT_TEXT, TaskType.TEXT), RoutingMode.COST_FIRST);
         // Gate this persistent model too: MultiQueryExpander calls it internally at a
         // point RetrievalService doesn't control, so executeGated() can't wrap the call site.
         ChatModel gatedExpansionModel =
@@ -88,6 +86,8 @@ public class RetrievalService {
         int tagCandidateMultiplier = props.searchTagCandidateMultiplierSafe();
         int rrfK = props.searchRrfKSafe();
         double rrfKeywordWeight = props.searchRrfKeywordWeightSafe();
+        int defaultTopK = props.searchTopKSafe();
+        boolean hybridEnabled = props.searchHybridEnabledSafe();
         List<Document> unique;
         try {
             // Escalate candidate count on retry to surface different documents.
@@ -105,17 +105,38 @@ public class RetrievalService {
                 candidateK = Math.max(candidateK, defaultTopK * tagCandidateMultiplier);
             }
 
-            // Skip the expansion LLM call for disabled mode or short keyword-ish queries.
-            List<String> queryTexts = shouldExpand(state.question())
-                    ? multiQueryExpander.expand(new Query(state.question())).stream().map(Query::text).toList()
-                    : List.of(state.question());
-            // Embed all variants in one batched call + a single Chroma query, then RRF-merge.
-            List<List<Document>> ranked = ragService.searchBatch(
-                    state.userId(), queryTexts, state.version(), candidateK);
-            // Add a BM25 keyword axis to the fusion when hybrid search is enabled.
-            List<Document> keywordHits = hybridEnabled
-                    ? ragService.keywordSearch(state.version(), state.question(), candidateK)
-                    : List.of();
+            // §10.8.1: the expansion LLM call used to sit in front of every search, including the
+            // original-question search that doesn't need it. Start the original-query vector search
+            // (and the keyword axis) on virtual threads immediately; expand() still runs on the
+            // calling thread, but its latency is now overlapped instead of serialized in front.
+            // Only the variant queries (which don't exist until expand() returns) search afterward.
+            int fetchK = candidateK;
+            List<List<Document>> ranked;
+            List<Document> keywordHits;
+            try (var exec = Executors.newVirtualThreadPerTaskExecutor()) {
+                CompletableFuture<List<Document>> keywordF = CompletableFuture.supplyAsync(
+                        () -> hybridEnabled
+                                ? ragService.keywordSearch(state.version(), state.question(), fetchK)
+                                : List.<Document>of(),
+                        exec);
+                if (shouldExpand(state.question())) {
+                    CompletableFuture<List<Document>> originalF = CompletableFuture.supplyAsync(
+                            () -> ragService.search(state.userId(), state.question(), state.version(), fetchK),
+                            exec);
+                    List<String> variantTexts = multiQueryExpander.expand(new Query(state.question())).stream()
+                            .map(Query::text)
+                            .filter(t -> !t.equals(state.question()))
+                            .toList();
+                    ranked = new ArrayList<>();
+                    ranked.add(originalF.join());
+                    if (!variantTexts.isEmpty()) {
+                        ranked.addAll(ragService.searchBatch(state.userId(), variantTexts, state.version(), candidateK));
+                    }
+                } else {
+                    ranked = ragService.searchBatch(state.userId(), List.of(state.question()), state.version(), candidateK);
+                }
+                keywordHits = keywordF.join();
+            }
             List<Document> candidates = mergeRrf(ranked, keywordHits, candidateK, rrfK, rrfKeywordWeight);
             // Strict AND tag filter — applied after RRF, before rerank/cut. Covers vector
             // + BM25 axes uniformly (tags travel in chunk metadata). No no-tag fallback on shortfall.
@@ -181,7 +202,7 @@ public class RetrievalService {
      * Package-private for unit testing.
      */
     boolean shouldExpand(String question) {
-        if (!multiqueryEnabled) return false;
+        if (!props.searchMultiqueryEnabledSafe()) return false;
         if (question == null) return false;
         // Hot-editable — read fresh so a /settings override applies without a restart.
         return question.strip().length() >= props.searchMultiqueryMinLengthSafe();

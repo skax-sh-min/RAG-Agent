@@ -46,10 +46,10 @@ class RetrievalServiceEscalationTest {
 
     private RetrievalService serviceWithEscalate(boolean escalate) {
         AppProperties props = mock(AppProperties.class);
-        when(props.searchTopK()).thenReturn(DEFAULT_TOP_K);
-        when(props.searchMultiqueryEnabled()).thenReturn(false);
+        when(props.searchTopKSafe()).thenReturn(DEFAULT_TOP_K);
+        when(props.searchMultiqueryEnabledSafe()).thenReturn(false);
         when(props.searchMultiqueryMinLengthSafe()).thenReturn(0);
-        when(props.searchHybridEnabled()).thenReturn(false);
+        when(props.searchHybridEnabledSafe()).thenReturn(false);
         when(props.searchRetryEscalateSafe()).thenReturn(escalate);
         when(props.searchRerankEnabled()).thenReturn(false);
         when(props.searchCandidateMultiplierSafe()).thenReturn(3);
@@ -111,10 +111,10 @@ class RetrievalServiceEscalationTest {
     @DisplayName("escalate=true, retryCount=2 → 결과 문서 수 defaultTopK(5) 이하")
     void escalate_outputCappedAtDefaultTopK() {
         AppProperties props = mock(AppProperties.class);
-        when(props.searchTopK()).thenReturn(DEFAULT_TOP_K);
-        when(props.searchMultiqueryEnabled()).thenReturn(false);
+        when(props.searchTopKSafe()).thenReturn(DEFAULT_TOP_K);
+        when(props.searchMultiqueryEnabledSafe()).thenReturn(false);
         when(props.searchMultiqueryMinLengthSafe()).thenReturn(0);
-        when(props.searchHybridEnabled()).thenReturn(false);
+        when(props.searchHybridEnabledSafe()).thenReturn(false);
         when(props.searchRetryEscalateSafe()).thenReturn(true);
         when(props.searchRerankEnabled()).thenReturn(false);
         when(props.searchCandidateMultiplierSafe()).thenReturn(3);

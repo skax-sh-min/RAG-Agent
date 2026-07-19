@@ -126,7 +126,7 @@ class ThreadMetaServiceTest {
         service.generateTitleAsync("u1", "t1", "latest", "질문");
 
         verify(llmRouter, timeout(2000)).executeWithTracking(
-                eq(TaskType.LIGHT_TEXT), eq(RoutingMode.COST_FIRST), eq(BackgroundUsage.TITLE_PREFIX), any());
+                eq(TaskType.MICRO_TEXT), eq(RoutingMode.COST_FIRST), eq(BackgroundUsage.TITLE_PREFIX), any());
     }
 
     @Test

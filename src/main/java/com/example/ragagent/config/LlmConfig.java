@@ -67,10 +67,14 @@ public class LlmConfig {
                     // LlmRouter.executeWithTracking() handles retries at the router level instead.
                     ChatModel rawModel = OpenAiChatModel.builder()
                             .openAiApi(api)
+                            // §6.18 — was hardcoded temperature(0.0)/maxTokens(6000); now the effective
+                            // app.llm.temperature / app.llm.max-tokens (LLM_TEMPERATURE / LLM_MAX_TOKENS).
+                            // Baked in here at bean creation → view-only (restart to change). The Direct
+                            // path overrides temperature per call via the Prompt's ChatOptions.
                             .defaultOptions(OpenAiChatOptions.builder()
                                     .model(cfg.model())
-                                    .temperature(0.0)
-                                    .maxTokens(6000)
+                                    .temperature(llmCfg.temperature())
+                                    .maxTokens(llmCfg.maxTokens())
                                     .build())
                             .retryTemplate(RetryTemplate.builder().maxAttempts(1).build())
                             .build();

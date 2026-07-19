@@ -84,7 +84,7 @@ public class ConversationSummarizerService {
 
         try {
             String systemPrompt = messageSource.getMessage("prompt.summary.system", null, locale);
-            String summary = llmRouter.executeWithTracking(TaskType.LIGHT_TEXT, RoutingMode.LOCAL_ONLY,
+            String summary = llmRouter.executeWithTracking(TaskType.MICRO_TEXT, RoutingMode.LOCAL_ONLY,
                     BackgroundUsage.SUMMARY_PREFIX,
                     model -> model.call(new Prompt(List.of(
                             new SystemMessage(systemPrompt),

@@ -219,4 +219,20 @@ class CachingEmbeddingModelTest {
         verify(delegate, org.mockito.Mockito.times(1)).call(captor.capture());
         assertThat(captor.getValue().getInstructions()).containsExactly("dup");
     }
+
+    // ── §10.9.4 — unwrapForIndexing() ────────────────────────────────────
+
+    @Test
+    @DisplayName("unwrapForIndexing — CachingEmbeddingModel이면 delegate를 그대로 반환한다")
+    void unwrapForIndexing_unwrapsCachingModel() {
+        var cached = new CachingEmbeddingModel(delegate, "nomic", 500, 600);
+
+        assertThat(CachingEmbeddingModel.unwrapForIndexing(cached)).isSameAs(delegate);
+    }
+
+    @Test
+    @DisplayName("unwrapForIndexing — CachingEmbeddingModel이 아니면 입력을 그대로 반환한다")
+    void unwrapForIndexing_passesThroughNonCachingModel() {
+        assertThat(CachingEmbeddingModel.unwrapForIndexing(delegate)).isSameAs(delegate);
+    }
 }

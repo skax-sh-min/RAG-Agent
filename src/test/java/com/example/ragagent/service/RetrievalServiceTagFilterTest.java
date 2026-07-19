@@ -36,10 +36,10 @@ class RetrievalServiceTagFilterTest {
     @BeforeEach
     void setup() {
         AppProperties props = mock(AppProperties.class);
-        when(props.searchTopK()).thenReturn(7);
-        when(props.searchMultiqueryEnabled()).thenReturn(false);  // shouldExpand=false → LLM 미호출
+        when(props.searchTopKSafe()).thenReturn(7);
+        when(props.searchMultiqueryEnabledSafe()).thenReturn(false);  // shouldExpand=false → LLM 미호출
         when(props.searchMultiqueryMinLengthSafe()).thenReturn(0);
-        when(props.searchHybridEnabled()).thenReturn(false);
+        when(props.searchHybridEnabledSafe()).thenReturn(false);
         when(props.searchRetryEscalateSafe()).thenReturn(false);
         when(props.searchRerankEnabled()).thenReturn(false);
         when(props.searchCandidateMultiplierSafe()).thenReturn(3);

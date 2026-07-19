@@ -71,6 +71,38 @@ class ChromaVectorStoreProviderTest {
         assertThat(req.getSimilarityThreshold()).isEqualTo(0.0);
     }
 
+    /**
+     * 회귀 방지 — search-similarity-threshold는 생성자에서 캐싱되면 안 된다. 과거 버그: 생성 시점
+     * 값을 {@code private final double} 필드에 저장해, {@code /settings} override를 걸어도 UI에는
+     * "적용됨"으로 보이지만 재기동 전까지 실제 검색에는 반영되지 않았다. 이 테스트는 생성 이후에
+     * mock의 스텁 값을 바꿔(=런타임에 override 값이 바뀐 상황을 재현) 다음 {@code search()} 호출이
+     * 새 값을 즉시 읽는지 검증한다 — 필드 캐싱이 부활하면 이 테스트가 실패한다.
+     */
+    @Test
+    @DisplayName("회귀 방지 — 생성 이후 threshold가 바뀌면 다음 search() 호출에 즉시 반영된다(필드 캐싱 금지)")
+    void threshold_readFreshOnEverySearch_notCachedAtConstruction() {
+        VectorStoreRegistry registry = mock(VectorStoreRegistry.class);
+        VectorStore store = mock(VectorStore.class);
+        when(registry.getStore(any(), any())).thenReturn(store);
+        when(store.similaritySearch(any(SearchRequest.class))).thenReturn(List.of());
+
+        AppProperties props = mock(AppProperties.class);
+        when(props.searchSimilarityThresholdSafe()).thenReturn(0.3);
+        ChromaVectorStoreProvider provider = new ChromaVectorStoreProvider(
+                registry, mock(ChromaApi.class), mock(EmbeddingModel.class), new ObjectMapper(), props);
+
+        provider.search("owner", "질문", "latest", 7);
+        // 생성 이후 스텁 값을 바꿔 "/settings에서 override가 갱신된 상황"을 재현
+        when(props.searchSimilarityThresholdSafe()).thenReturn(0.8);
+        provider.search("owner", "질문", "latest", 7);
+
+        ArgumentCaptor<SearchRequest> captor = ArgumentCaptor.forClass(SearchRequest.class);
+        verify(store, org.mockito.Mockito.times(2)).similaritySearch(captor.capture());
+        List<SearchRequest> requests = captor.getAllValues();
+        assertThat(requests.get(0).getSimilarityThreshold()).isEqualTo(0.3);
+        assertThat(requests.get(1).getSimilarityThreshold()).isEqualTo(0.8);
+    }
+
     // ── batched multi-query search ───────────────────────────────────────
 
     private ChromaVectorStoreProvider batchProvider(EmbeddingModel embeddingModel, ChromaApi chromaApi, double threshold) {
@@ -132,6 +164,62 @@ class ChromaVectorStoreProviderTest {
         assertThat(result.get(0)).hasSize(1);
         assertThat(result.get(0).get(0).getScore()).isEqualTo(0.9);
         assertThat(result.get(1)).hasSize(1);  // distance 0.2 → sim 0.8 유지
+    }
+
+    @Test
+    @DisplayName("threshold>0 → n_results를 topK의 2배로 과조회한다 (§10.7.4)")
+    void searchBatch_overfetchesWhenThresholdActive() {
+        EmbeddingModel embeddingModel = mock(EmbeddingModel.class);
+        when(embeddingModel.embed(any(List.class)))
+                .thenReturn(List.of(new float[]{0.1f}, new float[]{0.2f}));
+        ChromaApi chromaApi = mock(ChromaApi.class);
+        when(chromaApi.queryCollection(anyString(), anyString(), anyString(), any()))
+                .thenReturn(twoQueryResponse());
+
+        batchProvider(embeddingModel, chromaApi, 0.5)
+                .searchBatch("owner", List.of("q1", "q2"), "latest", 7);
+
+        ArgumentCaptor<ChromaApi.QueryRequest> captor = ArgumentCaptor.forClass(ChromaApi.QueryRequest.class);
+        verify(chromaApi).queryCollection(anyString(), anyString(), anyString(), captor.capture());
+        assertThat(captor.getValue().nResults()).isEqualTo(14); // ceil(7 * 2.0)
+    }
+
+    @Test
+    @DisplayName("threshold=0.0(기본) → n_results는 topK 그대로, 과조회 없음 (무해)")
+    void searchBatch_noOverfetchWhenThresholdZero() {
+        EmbeddingModel embeddingModel = mock(EmbeddingModel.class);
+        when(embeddingModel.embed(any(List.class)))
+                .thenReturn(List.of(new float[]{0.1f}, new float[]{0.2f}));
+        ChromaApi chromaApi = mock(ChromaApi.class);
+        when(chromaApi.queryCollection(anyString(), anyString(), anyString(), any()))
+                .thenReturn(twoQueryResponse());
+
+        batchProvider(embeddingModel, chromaApi, 0.0)
+                .searchBatch("owner", List.of("q1", "q2"), "latest", 7);
+
+        ArgumentCaptor<ChromaApi.QueryRequest> captor = ArgumentCaptor.forClass(ChromaApi.QueryRequest.class);
+        verify(chromaApi).queryCollection(anyString(), anyString(), anyString(), captor.capture());
+        assertThat(captor.getValue().nResults()).isEqualTo(7);
+    }
+
+    @Test
+    @DisplayName("필터 통과 결과가 topK보다 많아도 topK로 잘라낸다 (§10.7.4)")
+    void searchBatch_capsPerQueryResultsAtTopK() {
+        EmbeddingModel embeddingModel = mock(EmbeddingModel.class);
+        when(embeddingModel.embed(any(List.class))).thenReturn(List.of(new float[]{0.1f}));
+        ChromaApi chromaApi = mock(ChromaApi.class);
+        ChromaApi.QueryResponse threeHits = new ChromaApi.QueryResponse(
+                List.of(List.of("a1", "a2", "a3")),
+                null,
+                List.of(List.of("t1", "t2", "t3")),
+                List.of(List.of(Map.of("filename", "a.pdf"), Map.of("filename", "b.pdf"), Map.of("filename", "c.pdf"))),
+                List.of(List.of(0.1, 0.2, 0.3)));
+        when(chromaApi.queryCollection(anyString(), anyString(), anyString(), any())).thenReturn(threeHits);
+
+        List<List<Document>> result = batchProvider(embeddingModel, chromaApi, 0.0)
+                .searchBatch("owner", List.of("q1"), "latest", 2);
+
+        assertThat(result.get(0)).hasSize(2);
     }
 
     @Test
@@ -210,6 +298,48 @@ class ChromaVectorStoreProviderTest {
         verify(chromaApi).upsertEmbeddings(anyString(), anyString(), anyString(), captor.capture());
         assertThat(captor.getValue().documents()).containsExactly(original);
         assertThat(captor.getValue().metadata().get(0)).doesNotContainKey(MetaKey.CHUNK_CONTEXT);
+    }
+
+    // ── §10.9.4 — indexing bypasses the query-embedding cache ────────────
+
+    @Test
+    @DisplayName("add: CachingEmbeddingModel이 주입되면 캐시를 우회해 delegate로 직접 임베딩한다")
+    void add_bypassesCachingEmbeddingModelDelegate() {
+        VectorStoreRegistry registry = mock(VectorStoreRegistry.class);
+        EmbeddingModel delegate = mock(EmbeddingModel.class);
+        when(delegate.embed(any(List.class))).thenReturn(List.of(new float[]{0.5f}));
+        var cachingModel = new com.example.ragagent.llm.CachingEmbeddingModel(delegate, "test", 500, 600);
+        ChromaApi chromaApi = mock(ChromaApi.class);
+
+        Document doc = Document.builder().id("d1").text("인덱싱되는 청크 본문").metadata(Map.of()).build();
+        addProvider(registry, chromaApi, cachingModel).add("owner", "latest", List.of(doc));
+
+        verify(delegate).embed(any(List.class));                                  // reached the raw delegate directly
+        verify(delegate, org.mockito.Mockito.never()).call(any());                // the cache's call()-based path never ran
+    }
+
+    @Test
+    @DisplayName("searchBatch: CachingEmbeddingModel이 주입되면 쿼리 캐시가 그대로 적용된다(인덱싱과 무관)")
+    void searchBatch_stillBenefitsFromCache() {
+        EmbeddingModel delegate = mock(EmbeddingModel.class);
+        when(delegate.call(any())).thenAnswer(inv -> {
+            org.springframework.ai.embedding.EmbeddingRequest req = inv.getArgument(0);
+            List<org.springframework.ai.embedding.Embedding> out = new java.util.ArrayList<>();
+            for (int i = 0; i < req.getInstructions().size(); i++) {
+                out.add(new org.springframework.ai.embedding.Embedding(new float[]{0.1f}, i));
+            }
+            return new org.springframework.ai.embedding.EmbeddingResponse(out);
+        });
+        var cachingModel = new com.example.ragagent.llm.CachingEmbeddingModel(delegate, "test", 500, 600);
+        ChromaApi chromaApi = mock(ChromaApi.class);
+        when(chromaApi.queryCollection(anyString(), anyString(), anyString(), any()))
+                .thenReturn(twoQueryResponse());
+
+        ChromaVectorStoreProvider p = batchProvider(cachingModel, chromaApi, 0.0);
+        p.searchBatch("owner", List.of("q1", "q2"), "latest", 7);
+        p.searchBatch("owner", List.of("q1", "q2"), "latest", 7); // same queries — should be a cache hit
+
+        verify(delegate, org.mockito.Mockito.times(1)).call(any()); // only the first call reached the delegate
     }
 
     // ── updateTags ──────────────────────────────────────────────────────

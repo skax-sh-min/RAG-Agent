@@ -18,20 +18,32 @@ class LlmProviderTest {
     }
 
     @Test
-    @DisplayName("LIGHT_TEXT 프로바이더는 LIGHT_TEXT 만 지원")
-    void lightTextSupportsOnlyLightText() {
+    @DisplayName("LIGHT_TEXT 프로바이더는 LIGHT_TEXT + MICRO_TEXT 지원, TEXT/VISION 거부 (§6.21)")
+    void lightTextSupportsLightAndMicro() {
         LlmProvider p = provider(TaskType.LIGHT_TEXT, "k");
         assertThat(p.supports(TaskType.LIGHT_TEXT)).isTrue();
+        assertThat(p.supports(TaskType.MICRO_TEXT)).isTrue(); // §6.21 — light absorbs micro (fallback)
         assertThat(p.supports(TaskType.TEXT)).isFalse();
         assertThat(p.supports(TaskType.VISION)).isFalse();
     }
 
     @Test
-    @DisplayName("TEXT 프로바이더는 TEXT 만 지원")
+    @DisplayName("MICRO_TEXT 프로바이더(소형)는 MICRO_TEXT 만 지원 — 분류·직답(LIGHT_TEXT)은 안 받음 (§6.21 B안)")
+    void microTextSupportsOnlyMicroText() {
+        LlmProvider p = provider(TaskType.MICRO_TEXT, "k");
+        assertThat(p.supports(TaskType.MICRO_TEXT)).isTrue();
+        assertThat(p.supports(TaskType.LIGHT_TEXT)).isFalse(); // classifier/direct stay on the capable model
+        assertThat(p.supports(TaskType.TEXT)).isFalse();
+        assertThat(p.supports(TaskType.VISION)).isFalse();
+    }
+
+    @Test
+    @DisplayName("TEXT 프로바이더는 TEXT 만 지원 (MICRO_TEXT 도 거부)")
     void textSupportsOnlyText() {
         LlmProvider p = provider(TaskType.TEXT, "k");
         assertThat(p.supports(TaskType.TEXT)).isTrue();
         assertThat(p.supports(TaskType.LIGHT_TEXT)).isFalse();
+        assertThat(p.supports(TaskType.MICRO_TEXT)).isFalse();
         assertThat(p.supports(TaskType.VISION)).isFalse();
     }
 
@@ -44,10 +56,11 @@ class LlmProviderTest {
     }
 
     @Test
-    @DisplayName("LIGHT_BOTH 는 LIGHT_TEXT + VISION 지원, TEXT 거부")
+    @DisplayName("LIGHT_BOTH 는 LIGHT_TEXT + MICRO_TEXT + VISION 지원, TEXT 거부")
     void lightBothSupportsLightTextAndVision() {
         LlmProvider p = provider(TaskType.LIGHT_BOTH, "k");
         assertThat(p.supports(TaskType.LIGHT_TEXT)).isTrue();
+        assertThat(p.supports(TaskType.MICRO_TEXT)).isTrue(); // §6.21
         assertThat(p.supports(TaskType.VISION)).isTrue();
         assertThat(p.supports(TaskType.TEXT)).isFalse();
     }

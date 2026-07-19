@@ -67,9 +67,9 @@ class OperationsControllerUsageTest {
         var chatProvider = new AppProperties.ProviderConfig(
                 "local", "http://localhost:1234/v1", "sk-fake", "gemma", "BOTH", "LOCAL", 0, true, null);
         when(props.llmSafe()).thenReturn(new AppProperties.LlmConfig(
-                List.of(chatProvider), 2, 10, 180, "COST_FIRST", 0.6, 3, 20));
+                List.of(chatProvider), 2, 10, 180, "COST_FIRST", 0.6, 3, 20, 0.0, 0.1, 6000));
         when(props.embeddingSafe()).thenReturn(new AppProperties.EmbeddingConfig(
-                "http://localhost:1234/v1", null, "nomic-embed", 768, 10, 120, true, 0));
+                "http://localhost:1234/v1", null, "nomic-embed", 768, 10, 120, true, 0, List.of(), 1));
         when(circuitBreaker.getBlockedProviders()).thenReturn(Map.of());
 
         var zero = new LlmUsageRepository.PeriodSummary(0, 0, 0);
@@ -158,7 +158,7 @@ class OperationsControllerUsageTest {
         var ghost = new AppProperties.ProviderConfig(
                 "ghost", "https://api.example.com", "", "ghost-model", "TEXT", "NORMAL", 1, true, null);
         when(props.llmSafe()).thenReturn(new AppProperties.LlmConfig(
-                List.of(local, ghost), 2, 10, 180, "COST_FIRST", 0.6, 3, 20));
+                List.of(local, ghost), 2, 10, 180, "COST_FIRST", 0.6, 3, 20, 0.0, 0.1, 6000));
     }
 
     @Test

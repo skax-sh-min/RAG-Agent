@@ -93,6 +93,7 @@
 | `PdfImageExtractor` | PDFBox `PDImageXObject` 기반 PDF 이미지 추출 | 항상 활성 |
 | `PptxImageExtractor` | POI `XSLFPictureShape` 기반 PPTX 이미지 추출 + 그리기 도구 도형 래스터라이즈 + SmartArt/차트/OLE 그래픽 프레임 처리 | 항상 활성 |
 | `DocxToMarkdownConverter` | DOCX → Markdown 변환 + 인라인 이미지 추출 (EMF/WMF 변환 포함) | 항상 활성 |
+| `DocxAnnotationShapeMerger` | DOCX 사진과 같은 문단의 레거시 VML 주석 도형(사각형/원/선)을 하나의 합성 PNG로 병합 (§4.3) | `merge-annotated-shapes=true` |
 | `VisionDescriptionService` | 멀티모달 LLM 호출 → 이미지 설명 텍스트 생성 (L2); 유형별 프롬프트 내장 | 항상 활성 |
 | `LazyVisionService` | 검색 시점 Vision 설명 생성 + SQLite 캐시 | `enabled=true` |
 | `ImageDescriptionRepository` | `image_descriptions` 테이블 CRUD | 항상 활성 |
@@ -167,7 +168,7 @@ public record ChatResponse(
 ### 4.1 PDF
 
 > 텍스트 처리(비스캔 PDF는 `PdfToMarkdownConverter`로 MD 변환)는 이 절과 별개입니다 — 상세는
-> [Pipeline.md §6.3-bis](Pipeline.md#63-bis-pptxpdf비스캔--md-변환--docx와의-차이점) 참고.
+> [PIPELINE.md §6.3-bis](PIPELINE.md#63-bis-pptxpdf비스캔--md-변환--docx와의-차이점) 참고.
 > 이미지 추출·저장 방식 자체(`PdfImageExtractor`)는 아래 내용 그대로 변경 없습니다 — 다만 이제
 > `PdfToMarkdownConverter`가 이 추출기를 직접 호출해, 추출된 이미지를 본문 `[이미지: ...]` 인라인
 > 마커로 곧바로 삽입합니다(DOCX와 동일한 방식).
@@ -208,13 +209,20 @@ try (PDDocument pdf = Loader.loadPDF(pdfPath.toFile())) {
 ### 4.2 PPTX
 
 > 텍스트 처리(`PptxToMarkdownConverter`로 MD 변환, 슬라이드 제목만 헤딩 승격)는 이 절과 별개입니다 —
-> 상세는 [Pipeline.md §6.3-bis](Pipeline.md#63-bis-pptxpdf비스캔--md-변환--docx와의-차이점) 참고.
+> 상세는 [PIPELINE.md §6.3-bis](PIPELINE.md#63-bis-pptxpdf비스캔--md-변환--docx와의-차이점) 참고.
 > `PptxToMarkdownConverter`가 이 추출기를 직접 호출해, 추출된 이미지를 본문 `[이미지: ...]` 인라인
 > 마커로 곧바로 삽입합니다(DOCX와 동일한 방식).
 
-**이미지 유형**: `XSLFPictureShape`(그림·스크린샷) 외에, 아래 코드가 다루지 않는 세 부류도 함께 추출됩니다 — 그룹/커넥터/텍스트없는 도형 등 "그리기 도구" 요소(근접 클러스터링 후 PNG로 래스터라이즈), SmartArt(`XSLFDiagram` — 실제 렌더링 레이어인 `getGroupShape()`를 그룹 도형처럼 래스터라이즈), OLE 객체(`XSLFObjectShape` — 내장 미리보기 그림을 그대로 저장). 차트 프레임은 POI가 라이브 렌더링을 지원하지 않아 PowerPoint가 남겨둔 `mc:Fallback` 미리보기가 있을 때만 추출되고, 없으면 제목 텍스트만(§4.2 텍스트 처리 경로) 남습니다. 상세 알고리즘은 [Pipeline.md §6.3-bis 2·4번](Pipeline.md#63-bis-pptxpdf비스캔--md-변환--docx와의-차이점) 참고.
+**이미지 유형**: `XSLFPictureShape`(그림·스크린샷) 외에, 아래 코드가 다루지 않는 세 부류도 함께 추출됩니다 — 그룹/커넥터/텍스트없는 도형 등 "그리기 도구" 요소(아래 `RASTERIZE_SHAPES` 참고), SmartArt(`XSLFDiagram` — 실제 렌더링 레이어인 `getGroupShape()`를 그룹 도형처럼 래스터라이즈), OLE 객체(`XSLFObjectShape` — 내장 미리보기 그림을 그대로 저장). 차트 프레임은 POI가 라이브 렌더링을 지원하지 않아 PowerPoint가 남겨둔 `mc:Fallback` 미리보기가 있을 때만 추출되고, 없으면 제목 텍스트만(§4.2 텍스트 처리 경로) 남습니다. 상세 알고리즘은 [PIPELINE.md §6.3-bis 2·4번](PIPELINE.md#63-bis-pptxpdf비스캔--md-변환--docx와의-차이점) 참고.
 
-**사진 위 주석 도형 병합** (`app.pptx-image.merge-annotated-pictures`, 기본 `true`): 화면 캡처 위에 오류 부분을 동그라미로 표시하거나 화살표로 짚는 등, 사진 위/근처에 별도 도형으로 markup을 남기는 경우가 실무 PPTX에 흔합니다. 이 옵션이 켜져 있으면 `XSLFPictureShape`도 위 "그리기 도구" 요소와 같은 근접 클러스터링에 참여합니다 — 단, 스스로 클러스터를 시작하는 시드는 될 수 없고(그룹/커넥터/텍스트없는 도형만 시드), 시드가 근처에 있을 때만 합류하는 passenger입니다. 합류하면 사진과 주석 도형이 하나의 합성 PNG로 래스터라이즈되어, "깨끗한 사진 한 장 + 맥락 없이 떠 있는 주석 도형 한 장"으로 따로 추출되던 문제를 없앱니다. 근처에 시드가 없는 평범한 사진은 지금까지처럼 원본 바이트 그대로(무손실) 추출됩니다. `false`로 끄면 사진은 절대 근접 클러스터링에 참여하지 않고 항상 원본 그대로 추출되며, PPTX에서 실제로 그룹(Ctrl+G)으로 묶인 사진+도형만 여전히 하나로 합쳐집니다(POI가 그룹을 통째로 그리는 것은 이 옵션과 무관하게 항상 그렇습니다). 자세한 튜닝값은 [OPERATOR_MANUAL.md §3.2 "PPTX 이미지 추출 튜닝"](OPERATOR_MANUAL.md#32-환경변수-전체-목록) 참고.
+**느슨한 도형 클러스터링** (`app.pptx-image.rasterize-shapes`, 기본 `false`): 아무 앵커(사진/표/그룹)에도 안 겹친 "느슨한" 도형(선·화살표·텍스트없는 도형)끼리의 병합을 제어합니다. `false`(기본)이면 클러스터링을 하지 않아 — 겹친 느슨한 도형들이 무의미하게 한 이미지로 뭉치지 않고, 아무것에도 안 겹친 단독 도형은 이미지로 아예 뽑히지 않습니다. `true`이면 각 도형 바운딩박스를 `cluster-proximity-padding-pt`만큼 부풀린 뒤 union-find로 근접한 것끼리 묶어 다이어그램 한 장으로 래스터라이즈합니다(구 기본 동작 — 커넥터가 두 도형 사이 '틈'에 있어도 패딩으로 이어 묶음). **아래 세 가지 앵커 기반 합성은 이 값과 무관하게 항상 유지됩니다.**
+
+**앵커 기반 합성 (항상 유지)**:
+- **그룹(Ctrl+G)·SmartArt** → 각각 한 장의 이미지. 저자가 의도적으로 묶은 단위는 절대 쪼개지 않습니다.
+- **표 위 겹친 시드 도형** → 표+도형을 하나의 합성 PNG로. 표 셀을 강조하는 원·화살표 같은 markup을 표와 함께 시각적으로 보존합니다. 표는 이와 별개로 항상 MD 파이프 표로도 들어갑니다(변환기 담당). 겹친 시드 도형이 없는 표는 이미지로 만들지 않습니다(MD만).
+- **사진 위 겹친 주석 도형** (`app.pptx-image.merge-annotated-pictures`, 기본 `true`, `RASTERIZE_SHAPES`와 **독립**): 화면 캡처 위에 그린 강조 원·화살표 같은 시드 도형을 사진과 하나의 합성 PNG로 만들어, "깨끗한 사진 + 맥락 없이 떠 있는 주석"으로 따로 추출되던 문제를 없앱니다. 겹친 시드가 없는 사진은 원본 바이트 그대로(무손실) 추출됩니다. `false`로 끄면 사진은 항상 원본 그대로 추출되고, PPTX에서 실제로 그룹(Ctrl+G)으로 묶인 사진+도형만 여전히 하나로 합쳐집니다(POI가 그룹을 통째로 그리는 것은 이 옵션과 무관).
+
+자세한 튜닝값은 [OPERATOR_MANUAL.md §3.2 "PPTX 이미지 추출 튜닝"](OPERATOR_MANUAL.md#32-환경변수-전체-목록) 참고.
 
 **추출 방법** (Apache POI — 기존 의존성; 아래는 사진 단독 추출의 단순화한 예시이며, 실제로는 위 병합 로직이 추가로 개입합니다):
 ```java
@@ -267,6 +275,8 @@ for (int i = 0; i < pics.size(); i++) {
 - PNG/JPEG → **L2 Vision** 또는 alt 텍스트 확인 후 **L1**
 
 **제약**: DOCX는 이미지와 단락의 정확한 위치 매핑이 어려움. `getAllPictures()`는 문서 전체 이미지를 반환하므로 섹션 단위 매핑은 `XWPFRun.getEmbeddedPictures()`로 보완 필요.
+
+**사진 위 주석 도형 병합** (`app.docx-image.merge-annotated-shapes`, 기본 `true`): 화면 캡처 위에 강조 원/화살표를 그려 markup을 남기는 패턴은 DOCX에도 흔합니다. PPTX의 동명 기능(§4.2)과 달리 POI의 WordprocessingML 모델에는 도형 좌표 API(`XWPFPicture`에 위치 정보 없음)도 렌더러(`DrawFactory` 상당물)도 없어 진짜 기하학적 겹침 판정이 불가능하므로, **같은 문단에 사진과 레거시 VML 도형(`v:rect`/`v:oval`/`v:roundrect`/`v:line`)이 함께 있으면 겹친 주석으로 간주**하는 근사 방식을 사용합니다(`DocxAnnotationShapeMerger`). 도형의 `style` 속성(`left`/`top`/`width`/`height`, pt) 또는 `from`/`to`(line)를 파싱해 사진 위에 Java2D로 직접 그려 하나의 합성 PNG로 저장합니다 — 도형 위치를 해석할 수 없거나, 사진이 EMF/WMF인데 PNG 변환이 안 되거나, 합성 캔버스가 비정상적으로 크면 조용히 원본 사진만 추출하는 폴백으로 동작합니다. 한 문단에 사진이 여러 장이면 첫 사진에만 합성을 시도하고 나머지는 원본 그대로 추출합니다. **최신 Word "도형 삽입"(DrawingML `wps:wsp`)은 POI에 타입 바인딩이 없어 미지원** — Word가 하위 호환용으로 남긴 레거시 VML 형태만 인식합니다.
 
 ---
 
@@ -329,14 +339,24 @@ content = content.replaceAll("\\[([^\\]]+)]\\([^)]*\\)", "$1");
 
 ## 5. Vision 설명 생성 (L2)
 
-> 인덱싱 시점 동기 L2는 문서 업로드 화면의 **"이미지 설명 추가" 체크박스**(`addImageDescriptions` 파라미터)로
-> 트리거됩니다. 체크 시 `MarkdownCorrectionService`가 로컬 Vision 프로바이더(`RoutingMode.LOCAL_ONLY`)를
-> 동기 호출해 마크다운에 `[이미지 설명: ...]`을 직접 삽입하며, 마크다운 본문에 `[이미지: ...]` 마커가
+> 인덱싱 시점 L2는 문서 업로드 화면의 **"이미지 설명 추가" 체크박스**(`addImageDescriptions` 파라미터)로
+> 트리거됩니다. 체크 시 `MarkdownCorrectionService`가 로컬 Vision 프로바이더(`RoutingMode.LOCAL_ONLY`)로
+> 마크다운에 `[이미지 설명: ...]`을 직접 삽입하며, 마크다운 본문에 `[이미지: ...]` 마커가
 > 있는 포맷에 적용됩니다 — **DOCX·TXT·MD·PPTX·PDF(스캔 아님) 전부**. `PdfToMarkdownConverter`/
 > `PptxToMarkdownConverter`가 각각 `PdfImageExtractor`/`PptxImageExtractor`를 직접 호출해 DOCX와
-> 동일하게 헤딩 바로 다음에 `[이미지: ...]` 인라인 마커를 삽입하므로(Pipeline.md §6.3-bis 참고),
+> 동일하게 헤딩 바로 다음에 `[이미지: ...]` 인라인 마커를 삽입하므로(PIPELINE.md §6.3-bis 참고),
 > PPTX/PDF도 이 체크박스로 임베딩에 이미지 설명을 포함시킬 수 있습니다. 이 경로는
 > `VisionDescriptionService`를 거치지 않는 별도 구현입니다.
+>
+> **동시성·사용량 집계**: 문서 하나 안의 이미지들은 예전엔 정규식 루프에서 **한 장씩 순차** 분석돼,
+> 인덱싱 이미지 분석의 실질 동시 실행 수가 `INDEXING_MAX_LLM`이 아니라 `INDEXING_MAX_FILES`(병렬
+> 파일 수)에 매여 있었습니다. 이제 `prewarmImageDescriptions()`가 **distinct 이미지들을
+> `Semaphore(INDEXING_MAX_LLM)` + 가상 스레드로 병렬 분석**해 캐시를 채운 뒤(같은 파일 경로는 1회만),
+> 순차 치환 루프는 캐시만 읽습니다 — MD 교정·키워드 추출·TXT 구조화와 동일한 knob/세마포어 패턴
+> (per-consumer이므로 피크 ≈ `FILES × LLM`, 기본 `FILES=1`에선 `LLM`으로 고정). 또한 이 Vision 호출은
+> `LlmRouter.executeWithTracking(..., BackgroundUsage.IMAGE_PREFIX, ...)`으로 라우팅되어 `/llm-usage`에
+> `image:` 접두사 **BACKGROUND 카드**로 집계됩니다(예전엔 raw `ChatClient` 직접 호출이라 사용량에
+> 전혀 안 잡혔음). 검색 시점 `VisionDescriptionService`(bare 프로바이더명으로 기록)와는 별개 라벨입니다.
 > 12절 Lazy Vision은 이와 독립적으로 검색 시점에 항상 동작하는 별개의 메커니즘이며
 > (`app.image-description.enabled=true`일 때), `VisionDescriptionService`를 사용합니다.
 > 두 경로는 서로 대체 관계가 아니라 함께 동작할 수 있습니다 — 12.1절 참고.
@@ -752,11 +772,11 @@ app.image-description.docx-wmf-convert=true   # LibreOffice 설치 필요
 |------|---------------------|-----------------|
 | 트리거 | 업로드 화면 "이미지 설명 추가" 체크박스(`addImageDescriptions`) | `app.image-description.enabled=true` (프로퍼티) |
 | 적용 대상 | DOCX·TXT·MD·PPTX·PDF(스캔 아님) — 본문에 `[이미지: ...]` 마커가 있는 모든 포맷 (위 §5 참고) | 모든 포맷 (`image_paths` 메타데이터가 있는 모든 청크) |
-| 구현 | `MarkdownCorrectionService.describeImage()` — 자체 구현, `RoutingMode.LOCAL_ONLY` 고정, 유형 분류 없음 | `VisionDescriptionService` + `ImageTypeClassifier`(13절) |
-| 인덱싱 시 LLM 호출 | 체크 시 이미지당 1회 (동기) | 0회 |
+| 구현 | `MarkdownCorrectionService.describeImage()` — `RoutingMode.LOCAL_ONLY` 고정, 유형 분류 없음, `LlmRouter.executeWithTracking(IMAGE_PREFIX)` 경유(사용량 집계됨) | `VisionDescriptionService` + `ImageTypeClassifier`(13절) |
+| 인덱싱 시 LLM 호출 | 체크 시 distinct 이미지당 1회 (문서 내 병렬, `Semaphore(INDEXING_MAX_LLM)`) | 0회 |
 | 결과 반영 위치 | 마크다운 텍스트에 직접 삽입 → 청크 텍스트의 일부로 **임베딩됨** | 검색 시 프롬프트에만 동적 합성 → **임베딩되지 않음** (12.6절) |
 | 첫 검색 응답 시간 | 영향 없음(이미 인덱싱 시 처리됨) | 검색 결과에 신규 이미지 N개 시 +N×Vision 지연 (캐시 후 0) |
-| 캐시 | 없음(업로드 1회성 호출) | `image_descriptions` SQLite 테이블에 영속 캐시 |
+| 캐시 | 문서 처리 1회 내 in-memory 경로 dedup(같은 파일 경로는 1회만 분석); 영속 캐시는 없음 | `image_descriptions` SQLite 테이블에 영속 캐시 |
 
 즉 "체크박스 미체크 + `enabled=true`"로 두면 임베딩에는 설명이 없지만 검색 시점마다 Lazy Vision이 프롬프트에
 설명을 동적으로 얹어 줍니다. "체크박스 체크"는 그와 별개로 임베딩 자체에 설명을 영구히 포함시키는 효과이며,

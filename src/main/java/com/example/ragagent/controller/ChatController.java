@@ -216,6 +216,7 @@ public class ChatController {
         model.addAttribute("threads", threadMetaService.getAll(userId));
         model.addAttribute("activeThreadId", threadId);
         model.addAttribute("hasLocalProvider", llmRouter.hasLocalProvider());
+        model.addAttribute("localOnlyDeployment", llmRouter.getDefaultMode() == RoutingMode.LOCAL_ONLY);
         model.addAttribute("routingMode", meta != null ? meta.routingMode() : "COST_FIRST");
     }
 }

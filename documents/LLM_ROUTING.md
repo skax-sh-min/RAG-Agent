@@ -45,13 +45,13 @@
 │                                                                      │
 │  AgentGraph 노드 → TaskType 기준:                                    │
 │    ClassifierService        → LIGHT_TEXT                             │
-│    RetrievalService (쿼리)  → LIGHT_TEXT                             │
+│    RetrievalService (쿼리)  → MICRO_TEXT                             │
 │    AnswerService            → TEXT                                   │
 │    CriticService            → TEXT                                   │
 │    DirectAnswerService      → LIGHT_TEXT                             │
 │    VisionDescriptionService → VISION                                 │
 │    ImageTypeClassifier      → LIGHT_BOTH  (분류는 범용 멀티모달로)   │
-│    KeywordExtractor (키워드+맥락) → LIGHT_TEXT                                  │
+│    KeywordExtractor (키워드+맥락) → MICRO_TEXT                                  │
 │    RerankerService (opt-in) → TEXT        (SEARCH_RERANK_ENABLED=true일 때만) │
 └──────────────────────────────────────────────────────────────────────┘
 ```
@@ -64,7 +64,8 @@
 
 ```java
 public enum TaskType {
-    LIGHT_TEXT,   // 분류, 키워드 추출, 쿼리 확장 — LOCAL으로 충분
+    MICRO_TEXT,   // 키워드+맥락·요약·제목·쿼리 확장 — 추론 불필요, 소형 모델로 오프로딩(§6.21 B안)
+    LIGHT_TEXT,   // 분류, meta 직답 — 가볍지만 품질 민감(큰 모델 유지)
     TEXT,         // 답변 생성, Critic — 고추론 모델 선택 가능
     VISION,       // 이미지 설명 — 멀티모달 지원 필수
     LIGHT_BOTH,   // LIGHT_TEXT + VISION (로컬 범용 모델)
@@ -72,7 +73,7 @@ public enum TaskType {
 }
 ```
 
-`supports()` 매핑: `LIGHT_BOTH`→LIGHT_TEXT·VISION 처리, `BOTH`→전체 처리.  
+`supports()` 매핑: `MICRO_TEXT`→MICRO_TEXT만, `LIGHT_TEXT`→LIGHT_TEXT+MICRO_TEXT, `LIGHT_BOTH`→LIGHT_TEXT·MICRO_TEXT·VISION, `BOTH`→전체. MICRO_TEXT는 LIGHT_TEXT의 부분집합이라 소형(`type=MICRO_TEXT`) 미등록 시 상위 모델이 흡수(회귀 0).  
 `type=VISION` 프로바이더는 VISION task에서만 선택됨 — 범용 `LIGHT_BOTH` 모델과 공존 가능.
 
 ### RoutingMode
@@ -99,6 +100,13 @@ public enum RoutingMode {
 app.llm.default-routing-mode=COST_FIRST
 app.llm.circuit-breaker-minutes=4
 app.llm.progressive-threshold=0.6
+# §6.18 — sampling temperature + response cap (were dead/hardcoded before). temperature/max-tokens
+# are baked into each provider bean at startup (view-only, restart to change); direct-temperature
+# is read per-call by DirectAnswerService (hot-editable via /settings). max-tokens applies to
+# blocking calls only — streaming chat answers are uncapped (bounded by app.sse-*-timeout-seconds).
+app.llm.temperature=${LLM_TEMPERATURE:0.0}
+app.llm.direct-temperature=${DIRECT_LLM_TEMPERATURE:0.1}
+app.llm.max-tokens=${LLM_MAX_TOKENS:6000}
 # 질의 경로 동시성 게이트 기본값(서버의 실제 --parallel 값에 맞춘다) + 대기 상한
 app.llm.default-provider-concurrency=${LLM_DEFAULT_PROVIDER_CONCURRENCY:3}
 app.llm.permit-wait-timeout-seconds=${LLM_PERMIT_WAIT_TIMEOUT_SECONDS:20}
@@ -138,6 +146,19 @@ app.llm.providers[0].stream=true
 # app.llm.providers[6].api-key=${LOCAL_LLM_KEY:lm-studio}
 # app.llm.providers[6].model=llava-1.6-34b
 # app.llm.providers[6].type=VISION
+# app.llm.providers[6].role=LOCAL
+# app.llm.providers[6].priority=0
+
+# ── [LOCAL] 경량 전용 소형 LLM (선택, PLAN §6.21 · §9) ────────────
+# 추론 불필요 잡무(키워드+맥락·요약·제목·쿼리확장 = MICRO_TEXT)를 500MB급 소형 모델로 분리.
+# type=MICRO_TEXT·priority 0 → MICRO_TEXT는 소형이, 분류·직답(LIGHT_TEXT)·답변(TEXT)은 큰 BOTH가 처리.
+# ⚠️ 켜면 위 providers[0].priority 를 0→1 로(안 바꾸면 동률 로드밸런싱). 인덱스는 0부터 연속(활성 [0]~[5] → [6]).
+# (분류·직답까지 더 공격적으로 소형에 내리려면 type=LIGHT_TEXT — 소형 분류 정확도 실측 후 권장)
+# app.llm.providers[6].name=local-fast
+# app.llm.providers[6].base-url=${LOCAL_FAST_LLM_URL:http://localhost:1236/v1}
+# app.llm.providers[6].api-key=${LOCAL_FAST_LLM_KEY:}
+# app.llm.providers[6].model=${LOCAL_FAST_LLM_MODEL:qwen2.5-0.5b-instruct}
+# app.llm.providers[6].type=MICRO_TEXT
 # app.llm.providers[6].role=LOCAL
 # app.llm.providers[6].priority=0
 
@@ -192,8 +213,14 @@ app.llm.providers[5].role=PREMIUM
 app.llm.providers[5].priority=5
 
 # ── 병렬 인덱싱 제어 ──────────────────────────────────────────────
-app.indexing.max-concurrent-files=${INDEXING_MAX_FILES:3}
-app.indexing.max-concurrent-llm-calls=${INDEXING_MAX_LLM:4}
+# 인덱싱 LLM 동시 호출 피크 ≈ FILES × LLM (파일끼리 단계가 겹칠 수 있고, 교정/구조화 세마포어는
+# 파일마다 별개로 생성됨). FILES=1이면 피크가 정확히 LLM 값으로 고정된다.
+app.indexing.max-concurrent-files=${INDEXING_MAX_FILES:1}
+app.indexing.max-concurrent-llm-calls=${INDEXING_MAX_LLM:3}
+# 키워드+맥락 추출 배치 크기(§10.8.2) — 청크 N개를 한 LLM 호출로 묶어 왕복을 ceil(청크수/N)로 절감.
+# 1=배치 없음(청크당 1콜, 이전 동작). 배치가 클수록 응답도 길어지므로 로컬 모델에서 타임아웃이
+# 잦으면 keyword-timeout-seconds도 함께 올린다.
+app.indexing.keyword-batch-size=${INDEXING_KEYWORD_BATCH_SIZE:4}
 ```
 
 ---
@@ -259,7 +286,7 @@ CLASSIFIER·RETRIEVAL은 COST_FIRST(공유), ANSWER만 LOCAL∥외부 병렬 실
 
 | 게이트 적용 (질의 경로) | 게이트 미적용 (인덱싱/백그라운드) |
 |---|---|
-| `ClassifierService` (분류) | `KeywordExtractor` (키워드+맥락 추출) |
+| `ClassifierService` (분류) | `KeywordExtractor` (키워드+맥락 추출 — §10.8.2로 청크를 배치 묶음당 1콜로 호출, `app.indexing.keyword-batch-size`) |
 | `AnswerService` (블로킹+스트리밍+PROGRESSIVE+평가) | `MarkdownCorrectionService` (MD 포맷 교정) |
 | `LlmRouter.executeDual()`/`executeDualStream()` (DUAL 양쪽) | `VisionDescriptionService` |
 | `DirectAnswerService` | `ImageTypeClassifier` |
@@ -293,7 +320,7 @@ findFirst(role, priority 오름차순 순회)
 
 - **priority가 다르면 부하와 무관하게 낮은 priority가 항상 우선** — 로드밸런싱은 동일 priority 그룹 내부에서만 일어난다. 부하가 높다고 다음 priority(예: 외부 유료 API)로 자동 전환되지는 않는다 — 그건 프로바이더가 실제로 응답 실패(429/402/503/기타)할 때만 §5 Circuit Breaker가 처리하는 영역이다.
 - **총 동시 처리량 = 등록 대수 × per-provider concurrency** (예: LOCAL 2대 × concurrency 3 = 6).
-- 임베딩 프로바이더는 아직 이 로드밸런싱 대상이 아니다 — `EmbeddingModel` 데코레이터 체인이라 라우팅 지점이 다르며, 우선 LLM 경로부터 적용했다.
+- 임베딩 프로바이더도 이제 로드밸런싱된다(§6.21 E1) — `EmbeddingModel` 체인이라 라우팅 지점은 LLM 경로와 다르지만, `LoadBalancingEmbeddingModel`이 다중 임베딩 엔드포인트(`app.embedding.additional-base-urls`)를 least-in-flight로 분산한다. 인덱싱 시 병렬 서브배치(§6.21 E2, `app.embedding.max-concurrent-batches`)와 결합하면 단일 대용량 문서도 여러 엔드포인트를 동시에 채운다. 설정은 OPERATOR_MANUAL §3.2 "임베딩 병렬화" 참고.
 - `/llm-usage`에서 프로바이더별 사용량 집계로 실제 분산 여부를 확인할 수 있다.
 
 ---
@@ -320,9 +347,33 @@ CREATE TABLE IF NOT EXISTS llm_usage (
 - **프로바이더 자동 비활성화**: `api-key`가 비어있으면 (`${GEMINI_API_KEY:}` 등 빈 기본값) 시작 시 warn 로그 출력 후 해당 프로바이더를 제외. 키 미설정만으로 providers 블록을 남겨둔 채 비활성화 가능
 - **DUAL 활성 조건**: LOCAL 미등록 → UI에서 드롭다운 `disabled` + "로컬 LLM이 필요합니다" 툴팁
 - **LOCAL_ONLY**: LOCAL 미연결·차단 시 외부 API fallback 없이 즉시 exhausted — UI에서 오류 안내 필요
+- **라우팅 전략 셀렉터 자체 숨김**: 위 두 항목은 DUAL/LOCAL_ONLY "개별 옵션"을 `disabled` 처리하는 것과 달리, `app.llm.default-routing-mode`(=`LLM_ROUTING_MODE`)가 `LOCAL_ONLY`면 채팅 사이드바의 라우팅 전략 드롭다운 **전체**가 렌더링되지 않는다 — 이 배포에서는 프로바이더가 LOCAL 하나뿐이라 어떤 모드를 골라도 결과가 동일하므로, 선택지 자체를 없애는 편이 더 정확하다. `LlmRouter.getDefaultMode()` → `ChatController.populateChatModel()`의 `localOnlyDeployment` 모델 속성 → `chat.html`의 `th:if="${!localOnlyDeployment}"`. 대화별 `routingMode`(스레드 메타에 저장된 현재 선택값)가 아니라 **배포 전체의 기본값**을 기준으로 판단한다 — 그렇지 않으면 사용자가 LOCAL_ONLY를 고르는 순간 셀렉터가 사라져 다시 못 바꾸는 UX 함정이 생긴다.
 - **같은 Gemini API 키 공유**: Flash(NORMAL)와 Pro(PREMIUM) 429가 동시 발생 가능 → OpenAI를 PREMIUM fallback으로 유지 권장
 - **classifyOnly() 토큰 미누적**: `AgentService`가 선행 분류 시 `AgentState` 토큰 집계에서 1회 누락 (허용된 MVP 트레이드오프)
 - **tried 집합 순환 방지**: `executeWithTracking()` 내 tried 집합이 모든 프로바이더를 포함하면 exhausted — 최대 재귀 = 프로바이더 수
 - **Vision 라우팅**: `type=VISION` 모델 미등록 시 `LIGHT_BOTH` → `BOTH` 순으로 fallback. Vision 문서 많으면 `local-vision` 등록 권장
 - **동시성 게이트(§6) 크기 설정 실수**: `providers[N].concurrency`를 서버의 실제 `--parallel`보다 크게 잡으면 앱이 스스로 429/타임아웃을 유발할 수 있다(서버가 처리 못 할 요청까지 통과시킴). 반대로 너무 작게 잡으면 여유 용량을 못 씀 — 서버 설정값과 일치시키는 것이 원칙
 - **동일 우선순위 프로바이더 다중 등록 시 자동 로드밸런싱**: `findFirst()`가 같은 role·같은 priority 후보 중 동시성 게이트의 잔여 permit이 가장 많은(least-in-flight) 프로바이더를 선택 — 여러 대 등록하면 실제로 부하가 분산된다. priority가 다르면 부하와 무관하게 낮은 priority가 항상 우선(동일 priority 그룹 내부에서만 분산). 설정 방법은 §3 "LOCAL 로드밸런싱 예시" 참고
+
+---
+
+## 9. 태스크별 모델 분리 — 소형(경량) LLM 오프로딩 (PLAN §6.21)
+
+기본 배포는 단일 LOCAL(`type=BOTH`, priority 0)이 답변부터 잡무까지 전부 처리한다. 추론이 필요 없는 고빈도 잡무를 별도 소형 모델로 내리면 (1) 큰 모델이 답변 생성에 전념하고 (2) 두 모델이 **독립 Semaphore**(§6)를 써 슬롯 경합이 사라진다 → 대화 응답 지연 감소.
+
+**`TaskType.MICRO_TEXT`(§6.21 B안)**: 추론 불필요 잡무 전용 태스크 타입. `KeywordExtractor`·`ConversationSummarizerService`·`ThreadMetaService`·`RetrievalService`(MultiQuery 쿼리 확장, §6.21 작업2) 4개 백그라운드 호출부가 이 타입으로 라우팅된다. **분류(`ClassifierService`)·meta 직답(`DirectAnswerService`)은 품질 민감이라 `LIGHT_TEXT`로 남겨 큰 모델이 처리**한다. 문서 변환 백그라운드(`MarkdownCorrectionService` MD 서식 교정·`TextToMarkdownService` TXT 구조화)도 구조 충실도가 중요해 `LIGHT_TEXT` 유지(공격적 A안에서만 소형으로 내려감).
+
+**메커니즘 — `findFirst()` priority + 프로바이더별 Semaphore 재사용(§6)**. 소형을 `type=MICRO_TEXT`·`role=LOCAL`·`priority=0`, 큰 모델을 `type=BOTH`·`priority=1`로 등록하면:
+
+| 태스크 (TaskType) | 담당 | 이유 |
+|---|---|---|
+| 키워드+맥락·요약·제목·MultiQuery 쿼리확장 (`MICRO_TEXT`) | **소형** | MICRO_TEXT eligible=[소형(p0), 큰(p1)] → 최저 priority=소형 |
+| 분류·meta 직답 (`LIGHT_TEXT`) | **큰 모델** | 소형(MICRO_TEXT)은 `supports(LIGHT_TEXT)=false` → 큰 BOTH만 eligible |
+| 답변·Critic·Rerank (`TEXT`) | **큰 모델** | 소형은 `supports(TEXT)=false` |
+| Vision·이미지 분류 (`VISION`/`LIGHT_BOTH`) | **큰 모델** | 소형은 이미지 미지원 |
+
+- **폴백/회귀 0**: `MICRO_TEXT`는 `LIGHT_TEXT`/`LIGHT_BOTH`/`BOTH`가 모두 지원(부분집합)하므로, 소형 다운·미등록 시 큰 모델이 그대로 흡수한다. `RetrievalService`는 `MICRO_TEXT→LIGHT_TEXT→TEXT` 순 폴백이라 cloud-only(LOCAL 없음)에서도 구성 실패가 없다.
+- **priority 필수**: 소형(0) < 큰(1). 동률이면 §6 로드밸런서가 둘 사이에 분산해 **절반만** 오프로딩된다.
+- **인덱스 연속성**: `providers[N]`은 0부터 연속이어야 바인딩 — 활성 [0]~[5]면 소형은 [6](§3 예시).
+
+**더 공격적 오프로딩(A안)**: 소형을 `type=LIGHT_TEXT`로 등록하면 분류·직답까지 소형이 처리한다(`LIGHT_TEXT`가 MICRO_TEXT도 지원하므로 둘 다 흡수). 분류 오분류는 라우팅 정확도에, 직답은 사용자 노출에 직결되므로 채택 전 검색 품질 평가 하네스(OPERATOR_MANUAL §6.6)로 회귀를 측정할 것. 설정 예제는 OPERATOR_MANUAL §5.4 "예제 6 — 소형(경량) LLM 분리".

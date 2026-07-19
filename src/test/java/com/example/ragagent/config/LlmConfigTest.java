@@ -31,11 +31,11 @@ class LlmConfigTest {
     }
 
     private AppProperties propsWith(String routingMode, AppProperties.ProviderConfig... providers) {
-        var llm = new AppProperties.LlmConfig(List.of(providers), 2, 10, 180, routingMode, 0.6, 3, 20);
+        var llm = new AppProperties.LlmConfig(List.of(providers), 2, 10, 180, routingMode, 0.6, 3, 20, 0.0, 0.1, 6000);
         return new AppProperties(
             "./data", 2, 800, 100, 100, 7, 0.0, true, 0, false, true, false, 3,
                 null, llm, null, null, null, null, null, null, null, null, null, null, null, null,
-                null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null, null);
     }
 
     private AppProperties.ProviderConfig provider(String name, String role, String type, String apiKey) {

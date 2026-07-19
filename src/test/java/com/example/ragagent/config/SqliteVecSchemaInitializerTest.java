@@ -66,7 +66,7 @@ class SqliteVecSchemaInitializerTest {
         private AppProperties propsWithDim(Integer dim) {
             AppProperties props = mock(AppProperties.class);
             when(props.embeddingSafe())
-                    .thenReturn(new AppProperties.EmbeddingConfig(null, null, null, dim, 10, 120, true, 0));
+                    .thenReturn(new AppProperties.EmbeddingConfig(null, null, null, dim, 10, 120, true, 0, List.of(), 1));
             return props;
         }
 

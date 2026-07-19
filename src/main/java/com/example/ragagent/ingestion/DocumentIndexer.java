@@ -29,6 +29,8 @@ import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
 /**
@@ -39,6 +41,11 @@ import java.util.stream.Stream;
 public class DocumentIndexer {
 
     private static final Logger log = LoggerFactory.getLogger(DocumentIndexer.class);
+
+    // Matches both [이미지: path] and [이미지(변환불가): path] — see DocumentLoaderService's
+    // IMAGE_PATH_MARKER (only the plain form) and DocxToMarkdownConverter/PptxToMarkdownConverter/
+    // PdfToMarkdownConverter (marker producers). Used by removeMissingImageMarkers() on re-index.
+    private static final Pattern IMAGE_MARKER = Pattern.compile("\\[이미지(?:\\([^)]*\\))?: ([^\\]]+?)]");
 
     private final DocumentLoaderService loaderService;
     private final MarkdownCorrectionService correctionService;
@@ -98,7 +105,9 @@ public class DocumentIndexer {
         log.info("[INDEX] 시작: {} (version={})", req.filename(), req.version());
         long t0 = System.currentTimeMillis();
 
-        String sha256 = computeSha256(req.path());
+        // §10.8.4 — syncDirectory() already hashed this file during detection; reuse it instead
+        // of re-reading the whole file. Interactive single-upload requests still compute fresh.
+        String sha256 = req.precomputedSha256() != null ? req.precomputedSha256() : computeSha256(req.path());
         String docId = req.filename() + "_" + sha256.substring(0, 8);
         String imageId = imageId(sha256);
         String docType = inferDocType(req.filename());
@@ -134,7 +143,7 @@ public class DocumentIndexer {
             Files.createDirectories(rawMdPath.getParent());
             Files.writeString(rawMdPath, rawMd);
             String sourceMd = correctionService.correct(rawMd, docId, correctedMdPath,
-                    req.addImageDescriptions(), req.addHeadingNumbers(),
+                    req.addImageDescriptions(), req.addHeadingNumbers(), false,
                     (done, total) -> req.onProgress().accept(
                             IndexingProgressEvent.of("correcting", done, total, req.filename(),
                                     done + "/" + total + " 섹션 교정 중")));
@@ -152,7 +161,7 @@ public class DocumentIndexer {
             Files.createDirectories(rawMdPath.getParent());
             Files.writeString(rawMdPath, structuredMd);
             String sourceMd = correctionService.correct(structuredMd, docId, correctedMdPath,
-                    req.addImageDescriptions(), req.addHeadingNumbers(),
+                    req.addImageDescriptions(), req.addHeadingNumbers(), false,
                     (done, total) -> req.onProgress().accept(
                             IndexingProgressEvent.of("correcting", done, total, req.filename(),
                                     done + "/" + total + " 섹션 교정 중")));
@@ -163,7 +172,7 @@ public class DocumentIndexer {
             Files.createDirectories(rawMdPath.getParent());
             Files.writeString(rawMdPath, rawMd);
             String sourceMd = correctionService.correct(rawMd, docId, correctedMdPath,
-                    req.addImageDescriptions(), req.addHeadingNumbers(),
+                    req.addImageDescriptions(), req.addHeadingNumbers(), false,
                     (done, total) -> req.onProgress().accept(
                             IndexingProgressEvent.of("correcting", done, total, req.filename(),
                                     done + "/" + total + " 섹션 교정 중")));
@@ -177,8 +186,15 @@ public class DocumentIndexer {
             String rawMd = pptxConverter.convert(req.path(), imageId, imagesDir);
             Files.createDirectories(rawMdPath.getParent());
             Files.writeString(rawMdPath, rawMd);
+            // addHeadingNumbers는 체크되어 있어도 항상 무시한다 — PPTX의 ##/### 헤딩은 슬라이드
+            // 제목/부제목 라벨(최대 2단계, calibrateHeadingOrder로 슬라이드별 결정)이지 문서
+            // 목차 같은 계층 구조가 아니어서, 순차적으로 "1.1"/"1.2" 번호를 매겨도 실제 구조를
+            // 반영하지 못하고 이미 있는 [페이지: N] 마커와도 겹쳐 혼란만 준다.
+            // groupByPage=true — 슬라이드 하나(## + 있으면 ###)가 [페이지: N] 마커 단위로 하나의
+            // 교정 섹션이 되도록 한다. 일반 헤딩 기준 분할(splitBySections)을 쓰면 소제목(###)이
+            // 있는 슬라이드가 두 섹션으로 쪼개진다.
             String sourceMd = correctionService.correct(rawMd, docId, correctedMdPath,
-                    req.addImageDescriptions(), req.addHeadingNumbers(),
+                    req.addImageDescriptions(), false, true,
                     (done, total) -> req.onProgress().accept(
                             IndexingProgressEvent.of("correcting", done, total, req.filename(),
                                     done + "/" + total + " 섹션 교정 중")));
@@ -211,7 +227,7 @@ public class DocumentIndexer {
                 Files.createDirectories(rawMdPath.getParent());
                 Files.writeString(rawMdPath, rawMd);
                 String sourceMd = correctionService.correct(rawMd, docId, correctedMdPath,
-                        req.addImageDescriptions(), req.addHeadingNumbers(),
+                        req.addImageDescriptions(), req.addHeadingNumbers(), false,
                         (done, total) -> req.onProgress().accept(
                                 IndexingProgressEvent.of("correcting", done, total, req.filename(),
                                         done + "/" + total + " 섹션 교정 중")));
@@ -224,10 +240,10 @@ public class DocumentIndexer {
 
         req.onProgress().accept(IndexingProgressEvent.of("chunking", 0, 0, req.filename(), "청크 분할 중..."));
         List<Document> chunks = chunkSplitter.splitDocuments(
-            rawDocs, req.filename(), props.chunkSize(), props.chunkOverlap(), props.minChunkSizeSafe(),
+            rawDocs, req.filename(), props.chunkSizeSafe(), props.chunkOverlapSafe(), props.minChunkSizeSafe(),
             props.embeddingSafe().maxChunkChars());
         log.debug("[INDEX] {} 청크 분할 완료 → {}개 (chunkSize={}, overlap={}, minChunkSize={})",
-            req.filename(), chunks.size(), props.chunkSize(), props.chunkOverlap(), props.minChunkSizeSafe());
+            req.filename(), chunks.size(), props.chunkSizeSafe(), props.chunkOverlapSafe(), props.minChunkSizeSafe());
         req.onProgress().accept(IndexingProgressEvent.of("chunking", 0, chunks.size(), req.filename(),
                 chunks.size() + "개 청크"));
 
@@ -238,6 +254,10 @@ public class DocumentIndexer {
                 ? req.parallelGate()
                 : new Semaphore(props.indexingSafe().maxConcurrentLlmCalls());
         List<Document> enriched = keywordExtractor.enrichParallel(tagged, gate, req.filename(), req.onProgress());
+        // §10.8.5 — compute the embedding/FTS derived text once here instead of once per consumer
+        // (vectorStore.add() below + keywordRepo.indexChunks()); both read it back via
+        // SearchTextBuilder.build()'s short-circuit and strip it before persisting metadata.
+        enriched = enriched.stream().map(SearchTextBuilder::precompute).toList();
 
         log.debug("[INDEX] {} 벡터 스토어 저장 중 ({}개 청크)...", req.filename(), enriched.size());
         vectorStore.add(DocRegistry.SHARED, req.version(), enriched, (done, total) ->
@@ -299,9 +319,11 @@ public class DocumentIndexer {
 
         onProgress.accept(IndexingProgressEvent.of("loading", 0, 0, filename, "MD 파일 로드 중..."));
         String md = Files.readString(mdPath);
+        md = removeMissingImageMarkers(md, mdPath, filename);
+        md = reapplyHeadingNumbersIfNeeded(md, mdPath, filename);
         List<Document> rawDocs = loaderService.loadFromMarkdown(md);
         List<Document> chunks  = chunkSplitter.splitDocuments(
-            rawDocs, filename, props.chunkSize(), props.chunkOverlap(), props.minChunkSizeSafe(),
+            rawDocs, filename, props.chunkSizeSafe(), props.chunkOverlapSafe(), props.minChunkSizeSafe(),
             props.embeddingSafe().maxChunkChars());
         log.debug("[REINDEX] 청크 분할: {}섹션 → {}청크", rawDocs.size(), chunks.size());
         onProgress.accept(IndexingProgressEvent.of("chunking", 0, chunks.size(), filename,
@@ -313,6 +335,7 @@ public class DocumentIndexer {
         log.debug("[REINDEX] 키워드 추출 시작: {}개 청크", tagged.size());
         Semaphore gate = new Semaphore(props.indexingSafe().maxConcurrentLlmCalls());
         List<Document> enriched = keywordExtractor.enrichParallel(tagged, gate, filename, onProgress);
+        enriched = enriched.stream().map(SearchTextBuilder::precompute).toList(); // §10.8.5
 
         log.debug("[REINDEX] 벡터 스토어 저장 중: {}개 청크", enriched.size());
         vectorStore.add(DocRegistry.SHARED, version, enriched, (done, total) ->
@@ -356,7 +379,8 @@ public class DocumentIndexer {
             }
         }
 
-        record FileEntry(Path path, String staleDocId) {}
+        // §10.8.4 — sha256 carried through to step 2 so index() doesn't re-hash the same file.
+        record FileEntry(Path path, String staleDocId, String sha256) {}
         Map<String, FileEntry> filesToIndex = new HashMap<>();
 
         for (Map.Entry<String, Path> e : filesOnDisk.entrySet()) {
@@ -368,7 +392,7 @@ public class DocumentIndexer {
             if (docRegistry.existsBySha256AndVersion(sha256, version, DocRegistry.SHARED)) continue;
 
             String stale = docRegistry.findStaleDocId(filename, docId, version, DocRegistry.SHARED).orElse(null);
-            filesToIndex.put(filename, new FileEntry(filePath, stale));
+            filesToIndex.put(filename, new FileEntry(filePath, stale, sha256));
         }
         log.info("[SYNC] 1단계 완료: 전체 {}개, 인덱싱 필요 {}개, 스킵 {}개",
                 filesOnDisk.size(), filesToIndex.size(), filesOnDisk.size() - filesToIndex.size());
@@ -394,7 +418,7 @@ public class DocumentIndexer {
                     String errorMsg = null;
                     try {
                         index(IndexRequest.parallel(e.getValue().path(), version,
-                                DocRegistry.SHARED, llmGate, e.getValue().staleDocId()));
+                                DocRegistry.SHARED, llmGate, e.getValue().staleDocId(), e.getValue().sha256()));
                         (e.getValue().staleDocId() != null ? updated : indexed).add(e.getKey());
                     } catch (Exception ex) {
                         log.error("[SYNC] 병렬 인덱싱 실패: {}", e.getKey(), ex);
@@ -507,6 +531,65 @@ public class DocumentIndexer {
     private List<String> restoreTags(String priorDocId) {
         if (priorDocId == null) return List.of();
         return keywordRepo.tagsByDocIds(List.of(priorDocId)).getOrDefault(priorDocId, List.of());
+    }
+
+    /**
+     * Strips {@code [이미지: path]}/{@code [이미지(변환불가): path]} markers whose referenced file
+     * no longer exists under {@code data/images/} (manually cleaned up, moved, or lost since the MD
+     * was written) before re-indexing from it — otherwise the stale reference is carried forward
+     * into the new chunks' {@code image_paths} metadata, pointing at a file that 404s. Persists the
+     * cleaned content back to {@code mdPath} so the fix survives (self-healing on next re-index
+     * too); a failed write is logged and swallowed since the cleaned string is still used in-memory
+     * for the current pass regardless. No-op (returns {@code md} unchanged) when every referenced
+     * file exists.
+     */
+    private String removeMissingImageMarkers(String md, Path mdPath, String filename) {
+        Matcher m = IMAGE_MARKER.matcher(md);
+        List<String> missing = new ArrayList<>();
+        StringBuilder cleaned = new StringBuilder();
+        int last = 0;
+        while (m.find()) {
+            String path = m.group(1).strip();
+            if (!Files.exists(dataDir.resolve(path))) {
+                cleaned.append(md, last, m.start());
+                last = m.end();
+                missing.add(path);
+            }
+        }
+        if (missing.isEmpty()) return md;
+        cleaned.append(md, last, md.length());
+        String result = cleaned.toString();
+        log.warn("[REINDEX] {} — 존재하지 않는 이미지 참조 {}개 제거: {}", filename, missing.size(), missing);
+        try {
+            Files.writeString(mdPath, result);
+        } catch (IOException e) {
+            log.warn("[REINDEX] {} — 정리된 MD 저장 실패(이번 인덱싱은 계속 진행): {}", filename, e.getMessage());
+        }
+        return result;
+    }
+
+    /**
+     * Re-checks and re-computes hierarchical heading numbers on re-index — the saved MD may have
+     * been edited since the numbers were first assigned (e.g. a chunk edit split/merged a code
+     * block, shifting which headings exist), leaving stale numbers behind.
+     * {@link MarkdownCorrectionService#reapplyHeadingNumbers} is a no-op unless the document
+     * already has a numbered heading, so a document that never had numbers stays that way. PPTX is
+     * skipped outright — its headings never get numbered even at upload time (see the {@code
+     * .pptx} branch in {@link #index}), so there's nothing to re-check.
+     */
+    private String reapplyHeadingNumbersIfNeeded(String md, Path mdPath, String filename) {
+        if (filename.toLowerCase().endsWith(".pptx")) return md;
+
+        String result = correctionService.reapplyHeadingNumbers(md);
+        if (result.equals(md)) return md;
+
+        log.debug("[REINDEX] {} — 소제목 번호 재계산", filename);
+        try {
+            Files.writeString(mdPath, result);
+        } catch (IOException e) {
+            log.warn("[REINDEX] {} — 소제목 번호 갱신 MD 저장 실패(이번 인덱싱은 계속 진행): {}", filename, e.getMessage());
+        }
+        return result;
     }
 
     private void deleteExistingVectorsAndFiles(String userId, String docId, String version) {

@@ -20,6 +20,7 @@ import org.apache.poi.xslf.usermodel.XSLFObjectShape;
 import org.apache.poi.xslf.usermodel.XSLFPictureData;
 import org.apache.poi.xslf.usermodel.XSLFSlide;
 import org.apache.poi.xslf.usermodel.XSLFTable;
+import org.apache.poi.xslf.usermodel.XSLFTableCell;
 import org.apache.poi.xslf.usermodel.XSLFTextBox;
 import org.apache.poi.xslf.usermodel.XSLFTextParagraph;
 import org.apache.poi.xslf.usermodel.XSLFTextRun;
@@ -36,6 +37,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.function.Consumer;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -56,7 +59,7 @@ class PptxToMarkdownConverterTest {
 
     private static AppProperties mockAppProperties() {
         AppProperties props = mock(AppProperties.class);
-        when(props.pptxImageSafe()).thenReturn(new AppProperties.PptxShapeExtractionConfig(30.0, 15.0, true));
+        when(props.pptxImageSafe()).thenReturn(new AppProperties.PptxShapeExtractionConfig(30.0, 15.0, true, false));
         return props;
     }
 
@@ -449,7 +452,7 @@ class PptxToMarkdownConverterTest {
     }
 
     @Test
-    @DisplayName("그룹 도형은 하나의 이미지로 래스터라이즈되지만, 내부 텍스트는 Vision 없이도 검색되도록 본문에도 별도로 추출된다")
+    @DisplayName("그룹 도형은 하나의 이미지로 래스터라이즈되지만, 내부 텍스트는 Vision 없이도 검색되도록 [도형 그룹] 마커로 감싸 본문에도 별도로 추출된다")
     void groupInternalTextIsExtractedSeparatelyFromGroupImage() throws IOException {
         writePptx(pptx -> {
             XSLFSlide slide = pptx.createSlide();
@@ -466,7 +469,354 @@ class PptxToMarkdownConverterTest {
         String md = convert();
 
         assertThat(md).contains("승인 처리"); // 그룹 내부 텍스트가 검색 가능한 본문 텍스트로 남는다
+        assertThat(md).contains("[도형 그룹]").contains("[/도형 그룹]"); // 도형에서 추출됐음을 표시하는 마커
         assertThat(md).contains("[이미지:"); // 그룹 자체도 여전히 이미지로 래스터라이즈된다
+    }
+
+    @Test
+    @DisplayName("한 그룹 도형의 여러 텍스트 라벨은 [도형 그룹] 여는/닫는 마커 사이에 하나의 블록으로 묶인다")
+    void multipleGroupLabelsAreBundledInsideOneMarkerBlock() throws IOException {
+        writePptx(pptx -> {
+            XSLFSlide slide = pptx.createSlide();
+            addTitle(slide, "프로세스 슬라이드");
+            XSLFGroupShape group = slide.createGroup();
+            Rectangle2D bounds = new Rectangle2D.Double(0, 0, 300, 100);
+            group.setAnchor(bounds);
+            group.setInteriorAnchor(bounds);
+            XSLFTextBox b1 = group.createTextBox();
+            b1.setAnchor(new Rectangle2D.Double(10, 10, 80, 40));
+            b1.setText("승인 처리");
+            XSLFTextBox b2 = group.createTextBox();
+            b2.setAnchor(new Rectangle2D.Double(110, 10, 80, 40));
+            b2.setText("반려 처리");
+        });
+
+        String md = convert();
+
+        int openIdx = md.indexOf("[도형 그룹]");
+        int label1Idx = md.indexOf("승인 처리");
+        int label2Idx = md.indexOf("반려 처리");
+        int closeIdx = md.indexOf("[/도형 그룹]");
+        // 두 라벨이 모두 여는 마커와 닫는 마커 사이에 온다 = 하나의 도형에서 나온 것으로 묶임
+        assertThat(openIdx).isGreaterThanOrEqualTo(0);
+        assertThat(label1Idx).isGreaterThan(openIdx);
+        assertThat(label2Idx).isGreaterThan(openIdx);
+        assertThat(closeIdx).isGreaterThan(label1Idx).isGreaterThan(label2Idx);
+    }
+
+    @Test
+    @DisplayName("텍스트가 하나도 없는 순수 장식 그룹 도형은 [도형 그룹] 마커를 남기지 않는다(빈 블록 방지)")
+    void textlessGroupDoesNotEmitEmptyMarkerBlock() throws IOException {
+        writePptx(pptx -> {
+            XSLFSlide slide = pptx.createSlide();
+            addTitle(slide, "장식 슬라이드");
+            XSLFGroupShape group = slide.createGroup();
+            Rectangle2D bounds = new Rectangle2D.Double(0, 0, 200, 100);
+            group.setAnchor(bounds);
+            group.setInteriorAnchor(bounds);
+            // 텍스트 박스 없음 — 순수 도형만 있는 장식 그룹
+        });
+
+        String md = convert();
+
+        assertThat(md).doesNotContain("[도형 그룹]");
+        assertThat(md).doesNotContain("[/도형 그룹]");
+    }
+
+    @Test
+    @DisplayName("한 슬라이드에 도형 그룹이 2개 있으면 라벨에 순번이 붙고, 각 그룹의 이미지 마커가 해당 그룹 블록 안에 들어간다")
+    void multipleGroupsOnSameSlideGetNumberedLabelsAndCorrelatedImages() throws IOException {
+        writePptx(pptx -> {
+            XSLFSlide slide = pptx.createSlide();
+            addTitle(slide, "다중 그룹 슬라이드");
+
+            XSLFGroupShape group1 = slide.createGroup();
+            Rectangle2D bounds1 = new Rectangle2D.Double(0, 0, 200, 100);
+            group1.setAnchor(bounds1);
+            group1.setInteriorAnchor(bounds1);
+            XSLFTextBox label1 = group1.createTextBox();
+            label1.setAnchor(new Rectangle2D.Double(10, 10, 80, 40));
+            label1.setText("승인 처리");
+
+            // 클러스터링 패딩(테스트 기본값 15pt)을 훨씬 넘는 거리 — 두 그룹이 하나로 합쳐지지 않는다.
+            XSLFGroupShape group2 = slide.createGroup();
+            Rectangle2D bounds2 = new Rectangle2D.Double(500, 0, 200, 100);
+            group2.setAnchor(bounds2);
+            group2.setInteriorAnchor(bounds2);
+            XSLFTextBox label2 = group2.createTextBox();
+            label2.setAnchor(new Rectangle2D.Double(510, 10, 80, 40));
+            label2.setText("반려 처리");
+        });
+
+        String md = convert();
+
+        assertThat(md).contains("[도형 그룹 1]").contains("[/도형 그룹 1]");
+        assertThat(md).contains("[도형 그룹 2]").contains("[/도형 그룹 2]");
+
+        int open1 = md.indexOf("[도형 그룹 1]");
+        int close1 = md.indexOf("[/도형 그룹 1]");
+        int open2 = md.indexOf("[도형 그룹 2]");
+        int close2 = md.indexOf("[/도형 그룹 2]");
+        String block1 = md.substring(open1, close1);
+        String block2 = md.substring(open2, close2);
+
+        assertThat(block1).contains("[이미지:");
+        assertThat(block2).contains("[이미지:");
+
+        Pattern imageMarker = Pattern.compile("\\[이미지: ([^\\]]+)]");
+        Matcher m1 = imageMarker.matcher(block1);
+        Matcher m2 = imageMarker.matcher(block2);
+        assertThat(m1.find()).isTrue();
+        assertThat(m2.find()).isTrue();
+        assertThat(m1.group(1)).isNotEqualTo(m2.group(1)); // 각 그룹이 서로 다른 이미지 파일과 연결됨
+    }
+
+    @Test
+    @DisplayName("그룹 내 서로 다른 도형의 텍스트 내용이 완전히 같으면 하나만 남긴다")
+    void duplicateShapeTextWithinGroupIsCollapsedToOne() throws IOException {
+        writePptx(pptx -> {
+            XSLFSlide slide = pptx.createSlide();
+            addTitle(slide, "중복 라벨 그룹 슬라이드");
+            XSLFGroupShape group = slide.createGroup();
+            Rectangle2D bounds = new Rectangle2D.Double(0, 0, 300, 100);
+            group.setAnchor(bounds);
+            group.setInteriorAnchor(bounds);
+            XSLFTextBox b1 = group.createTextBox();
+            b1.setAnchor(new Rectangle2D.Double(10, 10, 80, 40));
+            b1.setText("부서 A");
+            XSLFTextBox b2 = group.createTextBox();
+            b2.setAnchor(new Rectangle2D.Double(110, 10, 80, 40));
+            b2.setText("부서 A");
+        });
+
+        String md = convert();
+
+        int firstIdx = md.indexOf("부서 A");
+        int lastIdx = md.lastIndexOf("부서 A");
+        assertThat(firstIdx).isGreaterThanOrEqualTo(0);
+        assertThat(firstIdx).isEqualTo(lastIdx); // 정확히 한 번만 등장 — 중복 도형은 통째로 스킵됨
+    }
+
+    @Test
+    @DisplayName("본문에서 동일한 내용의 줄이 연속으로 중복되면 하나만 남긴다")
+    void consecutiveDuplicateBodyLinesAreCollapsed() throws IOException {
+        writePptx(pptx -> {
+            XSLFSlide slide = pptx.createSlide();
+            addTitle(slide, "중복 줄 슬라이드");
+            XSLFTextBox box = slide.createTextBox();
+            addRun(addParagraph(box, true, 0), "동일한 내용", false, false);
+            addRun(addParagraph(box, true, 0), "동일한 내용", false, false);
+            addRun(addParagraph(box, true, 0), "다른 내용", false, false);
+        });
+
+        String md = convert();
+
+        int firstIdx = md.indexOf("동일한 내용");
+        int lastIdx = md.lastIndexOf("동일한 내용");
+        assertThat(firstIdx).isGreaterThanOrEqualTo(0);
+        assertThat(firstIdx).isEqualTo(lastIdx); // 연속 중복은 하나만 남음
+        assertThat(md).contains("다른 내용");
+    }
+
+    @Test
+    @DisplayName("동일한 내용이라도 다른 줄을 사이에 두고 떨어져 있으면(비연속) 둘 다 남긴다")
+    void nonConsecutiveDuplicateBodyLinesAreBothKept() throws IOException {
+        writePptx(pptx -> {
+            XSLFSlide slide = pptx.createSlide();
+            addTitle(slide, "비연속 중복 슬라이드");
+            XSLFTextBox box = slide.createTextBox();
+            addRun(addParagraph(box, true, 0), "반복 내용", false, false);
+            addRun(addParagraph(box, true, 0), "가운데 내용", false, false);
+            addRun(addParagraph(box, true, 0), "반복 내용", false, false);
+        });
+
+        String md = convert();
+
+        long count = md.split("반복 내용", -1).length - 1;
+        assertThat(count).isEqualTo(2); // 사이에 다른 줄이 있어 "연속"이 아니므로 둘 다 유지
+    }
+
+    @Test
+    @DisplayName("표 셀 안에 줄바꿈이 있어도 파이프 표 행이 깨지지 않는다")
+    void lineBreakInsideTableCellDoesNotBreakPipeTable() throws IOException {
+        writePptx(pptx -> {
+            XSLFSlide slide = pptx.createSlide();
+            addTitle(slide, "줄바꿈 표 슬라이드");
+            XSLFTable table = slide.createTable(2, 2);
+            table.getCell(0, 0).setText("헤더1");
+            table.getCell(0, 1).setText("헤더2");
+
+            XSLFTableCell cell = table.getCell(1, 0);
+            XSLFTextParagraph para = cell.addNewTextParagraph();
+            para.addNewTextRun().setText("첫줄");
+            para.addLineBreak();
+            para.addNewTextRun().setText("둘째줄");
+
+            table.getCell(1, 1).setText("일반셀");
+        });
+
+        String md = convert();
+
+        assertThat(md).contains("| 첫줄 둘째줄 | 일반셀 |");
+        // 표 마크다운은 헤더/구분선/데이터 3줄이어야 한다 — 줄바꿈이 안 지워졌다면 행이 더 생겨 깨진다.
+        long pipeLines = md.lines().filter(l -> l.startsWith("|")).count();
+        assertThat(pipeLines).isEqualTo(3);
+    }
+
+    @Test
+    @DisplayName("슬라이드 하나에 볼드가 10개 이상이면 전부 제거된다")
+    void excessiveBoldMarkersAreStrippedWhenOverThreshold() throws IOException {
+        writePptx(pptx -> {
+            XSLFSlide slide = pptx.createSlide();
+            addTitle(slide, "과도한 볼드 슬라이드");
+            XSLFTextBox box = slide.createTextBox();
+            for (int i = 1; i <= 10; i++) {
+                addRun(addParagraph(box, true, 0), "항목" + i, true, false);
+            }
+        });
+
+        String md = convert();
+
+        assertThat(md).doesNotContain("**");
+        for (int i = 1; i <= 10; i++) {
+            assertThat(md).contains("항목" + i);
+        }
+    }
+
+    @Test
+    @DisplayName("슬라이드 하나에 볼드가 임계값 미만이면 그대로 유지된다")
+    void fewBoldMarkersAreKeptWhenUnderThreshold() throws IOException {
+        writePptx(pptx -> {
+            XSLFSlide slide = pptx.createSlide();
+            addTitle(slide, "적당한 볼드 슬라이드");
+            XSLFTextBox box = slide.createTextBox();
+            for (int i = 1; i <= 9; i++) {
+                addRun(addParagraph(box, true, 0), "항목" + i, true, false);
+            }
+        });
+
+        String md = convert();
+
+        assertThat(md).contains("**항목1**");
+        assertThat(md).contains("**항목9**");
+    }
+
+    @Test
+    @DisplayName("도형 그룹 안에 볼드가 6개 이상이면(슬라이드 전체는 임계값 미만이어도) 그 그룹 안의 볼드만 제거된다")
+    void groupBoldStrippedWhenBlockCountThresholdReachedEvenBelowSlideThreshold() throws IOException {
+        writePptx(pptx -> {
+            XSLFSlide slide = pptx.createSlide();
+            addTitle(slide, "그룹 볼드 슬라이드");
+            XSLFGroupShape group = slide.createGroup();
+            Rectangle2D bounds = new Rectangle2D.Double(0, 0, 300, 200);
+            group.setAnchor(bounds);
+            group.setInteriorAnchor(bounds);
+            XSLFTextBox box = group.createTextBox();
+            box.setAnchor(new Rectangle2D.Double(10, 10, 280, 180));
+            for (int i = 1; i <= 6; i++) {
+                addRun(addParagraph(box, true, 0), "항목" + i, true, false);
+            }
+        });
+
+        String md = convert();
+
+        assertThat(md).doesNotContain("**");
+        for (int i = 1; i <= 6; i++) {
+            assertThat(md).contains("항목" + i);
+        }
+    }
+
+    @Test
+    @DisplayName("도형 그룹 안에 볼드가 임계값(6) 미만이고 비율도 낮으면 그대로 유지된다")
+    void groupBoldKeptWhenBelowBothThresholds() throws IOException {
+        writePptx(pptx -> {
+            XSLFSlide slide = pptx.createSlide();
+            addTitle(slide, "그룹 볼드 슬라이드");
+            XSLFGroupShape group = slide.createGroup();
+            Rectangle2D bounds = new Rectangle2D.Double(0, 0, 300, 200);
+            group.setAnchor(bounds);
+            group.setInteriorAnchor(bounds);
+            XSLFTextBox box = group.createTextBox();
+            box.setAnchor(new Rectangle2D.Double(10, 10, 280, 180));
+            addRun(addParagraph(box, true, 0), "굵게1", true, false);
+            addRun(addParagraph(box, true, 0), "굵게2", true, false);
+            addRun(addParagraph(box, true, 0), "굵게3", true, false);
+            addRun(addParagraph(box, true, 0), "이것은 강조되지 않은 일반 설명 텍스트입니다", false, false);
+            addRun(addParagraph(box, true, 0), "이것도 강조되지 않은 일반 설명 텍스트입니다", false, false);
+        });
+
+        String md = convert();
+
+        assertThat(md).contains("**굵게1**").contains("**굵게2**").contains("**굵게3**");
+    }
+
+    @Test
+    @DisplayName("도형 그룹 안의 볼드 스팬이 6개 미만이라도 볼드로 덮인 비율이 50% 이상이면 그 그룹의 볼드가 제거된다")
+    void groupBoldStrippedWhenRatioThresholdReachedEvenBelowCountThreshold() throws IOException {
+        writePptx(pptx -> {
+            XSLFSlide slide = pptx.createSlide();
+            addTitle(slide, "그룹 볼드 비율 슬라이드");
+            XSLFGroupShape group = slide.createGroup();
+            Rectangle2D bounds = new Rectangle2D.Double(0, 0, 300, 200);
+            group.setAnchor(bounds);
+            group.setInteriorAnchor(bounds);
+            XSLFTextBox box = group.createTextBox();
+            box.setAnchor(new Rectangle2D.Double(10, 10, 280, 180));
+            addRun(addParagraph(box, true, 0), "이 문장은 거의 전부가 볼드로 강조되어 있습니다", true, false);
+            addRun(addParagraph(box, true, 0), "짧음", false, false);
+        });
+
+        String md = convert();
+
+        assertThat(md).doesNotContain("**");
+        assertThat(md).contains("이 문장은 거의 전부가 볼드로 강조되어 있습니다");
+        assertThat(md).contains("짧음");
+    }
+
+    @Test
+    @DisplayName("표 셀 안에 볼드가 6개 이상이면(슬라이드 전체는 임계값 미만이어도) 그 표 안의 볼드만 제거된다")
+    void tableBoldStrippedWhenBlockCountThresholdReached() throws IOException {
+        writePptx(pptx -> {
+            XSLFSlide slide = pptx.createSlide();
+            addTitle(slide, "표 볼드 슬라이드");
+            XSLFTable table = slide.createTable(2, 3);
+            String[][] values = {{"헤더1", "헤더2", "헤더3"}, {"항목1", "항목2", "항목3"}};
+            for (int r = 0; r < 2; r++) {
+                for (int c = 0; c < 3; c++) {
+                    XSLFTableCell cell = table.getCell(r, c);
+                    cell.setText(values[r][c]);
+                    cell.getTextParagraphs().get(0).getTextRuns().get(0).setBold(true);
+                }
+            }
+        });
+
+        String md = convert();
+
+        assertThat(md).doesNotContain("**");
+        assertThat(md).contains("| 헤더1 | 헤더2 | 헤더3 |");
+        assertThat(md).contains("| 항목1 | 항목2 | 항목3 |");
+    }
+
+    @Test
+    @DisplayName("표 셀 안에 볼드가 임계값(6) 미만이고 비율도 낮으면 그대로 유지된다")
+    void tableBoldKeptWhenBelowBothThresholds() throws IOException {
+        writePptx(pptx -> {
+            XSLFSlide slide = pptx.createSlide();
+            addTitle(slide, "표 볼드 슬라이드");
+            XSLFTable table = slide.createTable(2, 3);
+            table.getCell(0, 0).setText("헤더1");
+            table.getCell(0, 1).setText("헤더2");
+            table.getCell(0, 2).setText("헤더3");
+            table.getCell(1, 0).setText("이것은 강조 없는 일반 항목 설명입니다");
+            table.getCell(1, 1).setText("이것도 강조 없는 일반 항목 설명입니다");
+            XSLFTableCell boldCell = table.getCell(1, 2);
+            boldCell.setText("굵게강조");
+            boldCell.getTextParagraphs().get(0).getTextRuns().get(0).setBold(true);
+        });
+
+        String md = convert();
+
+        assertThat(md).contains("**굵게강조**");
     }
 
     @Test
@@ -569,7 +919,7 @@ class PptxToMarkdownConverterTest {
     }
 
     @Test
-    @DisplayName("SmartArt(다이어그램) 도형의 박스 텍스트는 본문에서 검색 가능한 텍스트로 추출된다")
+    @DisplayName("SmartArt(다이어그램) 도형의 박스 텍스트는 [다이어그램] 마커로 감싸 본문에서 검색 가능한 텍스트로 추출된다")
     void smartArtBoxTextIsExtractedAsBodyText() throws IOException {
         PptxSmartArtFixture.write(pptxPath, List.of("기획팀", "개발팀", "운영팀"));
 
@@ -578,10 +928,16 @@ class PptxToMarkdownConverterTest {
         assertThat(md).contains("기획팀");
         assertThat(md).contains("개발팀");
         assertThat(md).contains("운영팀");
+        // SmartArt 박스 라벨들이 [다이어그램] 블록으로 묶여 도형 출처가 드러난다
+        assertThat(md).contains("[다이어그램]").contains("[/다이어그램]");
+        int openIdx = md.indexOf("[다이어그램]");
+        int closeIdx = md.indexOf("[/다이어그램]");
+        assertThat(md.indexOf("기획팀")).isGreaterThan(openIdx).isLessThan(closeIdx);
+        assertThat(md.indexOf("운영팀")).isGreaterThan(openIdx).isLessThan(closeIdx);
     }
 
     @Test
-    @DisplayName("차트 프레임의 제목 텍스트는 본문으로 추출된다")
+    @DisplayName("차트 프레임의 제목 텍스트는 [차트: ...] 라벨로 감싸 본문으로 추출된다")
     void chartTitleIsExtractedAsBodyText() throws IOException {
         writePptx(pptx -> {
             XSLFSlide slide = pptx.createSlide();
@@ -603,7 +959,7 @@ class PptxToMarkdownConverterTest {
 
         String md = convert();
 
-        assertThat(md).contains("연도별 매출 추이");
+        assertThat(md).contains("[차트: 연도별 매출 추이]");
     }
 
     @Test

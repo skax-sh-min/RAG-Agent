@@ -1,5 +1,6 @@
 package com.example.ragagent.service;
 
+import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.exception.LlmProviderExhaustedException;
 import com.example.ragagent.llm.BackgroundUsage;
 import com.example.ragagent.llm.LlmRouter;
@@ -29,7 +30,11 @@ class TextToMarkdownServiceTest {
     @BeforeEach
     void setUp() {
         llmRouter = mock(LlmRouter.class);
-        service = new TextToMarkdownService(llmRouter);
+        AppProperties props = mock(AppProperties.class);
+        AppProperties.IndexingConfig indexing = mock(AppProperties.IndexingConfig.class);
+        when(indexing.maxConcurrentLlmCalls()).thenReturn(3); // 구 하드코딩 상수와 동일한 병렬도
+        when(props.indexingSafe()).thenReturn(indexing);
+        service = new TextToMarkdownService(llmRouter, props);
     }
 
     @Test

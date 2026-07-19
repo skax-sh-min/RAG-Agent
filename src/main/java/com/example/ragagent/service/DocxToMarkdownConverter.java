@@ -46,14 +46,17 @@ public class DocxToMarkdownConverter {
     private final Optional<EmfToPngConverter> emfConverter;
     private final Optional<LibreOfficeConverter> wmfConverter;
     private final AppProperties props;
+    private final DocxAnnotationShapeMerger shapeMerger;
 
     /** 선택적 이미지 변환기와 애플리케이션 변환 옵션을 초기화한다. */
     public DocxToMarkdownConverter(Optional<EmfToPngConverter> emfConverter,
                                    Optional<LibreOfficeConverter> wmfConverter,
-                                   AppProperties props) {
+                                   AppProperties props,
+                                   DocxAnnotationShapeMerger shapeMerger) {
         this.emfConverter = emfConverter;
         this.wmfConverter = wmfConverter;
         this.props = props;
+        this.shapeMerger = shapeMerger;
     }
 
     /**
@@ -140,6 +143,15 @@ public class DocxToMarkdownConverter {
         boolean pendingItalic = false;
         boolean hasPending = false;
 
+        // DOCX shape merge — best-effort proximity heuristic (see DocxAnnotationShapeMerger javadoc
+        // for why this isn't a true geometric overlap test like the PPTX equivalent). Every
+        // legacy-VML annotation shape in this paragraph is collected once up front; the first picture
+        // encountered below tries to absorb all of them into one composite. Attempted at most once
+        // per paragraph regardless of outcome — a second/third picture in the same paragraph is
+        // always extracted verbatim rather than guessing which shape belongs to which picture.
+        List<DocxAnnotationShapeMerger.VmlShape> shapes = shapeMerger.findShapes(para);
+        boolean compositeAttempted = shapes.isEmpty();
+
         for (XWPFRun run : para.getRuns()) {
             List<XWPFPicture> pics = run.getEmbeddedPictures();
             if (!pics.isEmpty()) {
@@ -149,7 +161,14 @@ public class DocxToMarkdownConverter {
                     hasPending = false;
                 }
                 for (XWPFPicture pic : pics) {
-                    sb.append(extractPictureMarker(pic.getPictureData(), imageId, imagesDir, imgCounter, paraIdx));
+                    String marker = null;
+                    if (!compositeAttempted) {
+                        compositeAttempted = true;
+                        marker = tryExtractComposite(pic, shapes, imageId, imagesDir, imgCounter, paraIdx);
+                    }
+                    sb.append(marker != null
+                            ? marker
+                            : extractPictureMarker(pic.getPictureData(), imageId, imagesDir, imgCounter, paraIdx));
                 }
                 continue;
             }
@@ -187,6 +206,26 @@ public class DocxToMarkdownConverter {
         return sb.toString();
     }
 
+    /** EMF/WMF 변환 결과 — 변환 안 됐으면 원본 바이트/확장자 그대로. */
+    private record RasterResult(byte[] bytes, String ext, boolean converted) {}
+
+    /** 필요 시 EMF/WMF를 PNG로 변환한다(변환기 없거나 옵션 비활성이면 원본 그대로 통과). */
+    private RasterResult convertIfNeeded(byte[] imageBytes, String ext) {
+        boolean isEmf = "emf".equalsIgnoreCase(ext);
+        boolean isWmf = "wmf".equalsIgnoreCase(ext);
+        boolean emfConvert = props.imageDescriptionSafe().docxEmfConvert();
+        boolean wmfConvert = props.imageDescriptionSafe().docxWmfConvert();
+
+        if (isEmf && emfConvert && emfConverter.isPresent()) {
+            Optional<byte[]> png = emfConverter.get().convert(imageBytes);
+            if (png.isPresent()) return new RasterResult(png.get(), "png", true);
+        } else if (isWmf && wmfConvert && wmfConverter.isPresent()) {
+            Optional<byte[]> png = wmfConverter.get().convert(imageBytes, ext);
+            if (png.isPresent()) return new RasterResult(png.get(), "png", true);
+        }
+        return new RasterResult(imageBytes, ext, false);
+    }
+
     /** 내장 이미지를 추출하고 필요 시 EMF/WMF를 PNG로 변환한 뒤 이미지 마커를 반환한다. */
     private String extractPictureMarker(XWPFPictureData picData, String imageId, Path imagesDir,
                                         int[] imgCounter, int paraIdx) throws IOException {
@@ -196,36 +235,48 @@ public class DocxToMarkdownConverter {
 
         boolean isEmf = "emf".equalsIgnoreCase(ext);
         boolean isWmf = "wmf".equalsIgnoreCase(ext);
-        byte[] imageBytes = picData.getData();
-        String savedExt = ext;
-        boolean converted = false;
+        RasterResult r = convertIfNeeded(picData.getData(), ext);
 
-        boolean emfConvert = props.imageDescriptionSafe().docxEmfConvert();
-        boolean wmfConvert = props.imageDescriptionSafe().docxWmfConvert();
-
-        if (isEmf && emfConvert && emfConverter.isPresent()) {
-            Optional<byte[]> png = emfConverter.get().convert(imageBytes);
-            if (png.isPresent()) {
-                imageBytes = png.get();
-                savedExt = "png";
-                converted = true;
-            }
-        } else if (isWmf && wmfConvert && wmfConverter.isPresent()) {
-            Optional<byte[]> png = wmfConverter.get().convert(imageBytes, ext);
-            if (png.isPresent()) {
-                imageBytes = png.get();
-                savedExt = "png";
-                converted = true;
-            }
-        }
-
-        String fileName = "d" + paraIdx + "_img" + imgCounter[0] + "." + savedExt;
-        Files.write(imagesDir.resolve(fileName), imageBytes);
+        String fileName = "d" + paraIdx + "_img" + imgCounter[0] + "." + r.ext();
+        Files.write(imagesDir.resolve(fileName), r.bytes());
         String relPath = "images/" + imageId + "/" + fileName;
-        boolean unconvertable = (isEmf || isWmf) && !converted;
+        boolean unconvertable = (isEmf || isWmf) && !r.converted();
         return unconvertable
                 ? "[이미지(변환불가): " + relPath + "]"
                 : "[이미지: " + relPath + "]";
+    }
+
+    /**
+     * 같은 문단에서 발견된 VML 주석 도형들을 사진과 하나의 합성 PNG로 만들어본다.
+     * EMF/WMF를 래스터로 변환할 수 없거나(변환기 부재/비활성), 도형 위치를 하나도 해석하지
+     * 못했거나, 합성 결과가 비정상적으로 크면 {@code null}을 반환해 호출부가 원본 사진만
+     * 그대로 추출하도록 한다(도형은 조용히 버려짐 — 별도의 도형 단독 추출 경로는 없음).
+     */
+    private String tryExtractComposite(XWPFPicture pic, List<DocxAnnotationShapeMerger.VmlShape> shapes,
+                                       String imageId, Path imagesDir,
+                                       int[] imgCounter, int paraIdx) throws IOException {
+        XWPFPictureData picData = pic.getPictureData();
+        String ext = picData.suggestFileExtension();
+        if (ext == null || ext.isBlank()) ext = "bin";
+        boolean isEmf = "emf".equalsIgnoreCase(ext);
+        boolean isWmf = "wmf".equalsIgnoreCase(ext);
+
+        RasterResult r = convertIfNeeded(picData.getData(), ext);
+        if ((isEmf || isWmf) && !r.converted()) return null; // can't decode raw EMF/WMF for compositing
+
+        byte[] composite;
+        try {
+            // getWidth()/getDepth() NPE on a malformed pic (missing spPr/xfrm) — degrade, don't fail.
+            composite = shapeMerger.compose(r.bytes(), pic.getWidth(), pic.getDepth(), shapes);
+        } catch (RuntimeException e) {
+            return null;
+        }
+        if (composite == null) return null;
+
+        imgCounter[0]++;
+        String fileName = "d" + paraIdx + "_img" + imgCounter[0] + ".png";
+        Files.write(imagesDir.resolve(fileName), composite);
+        return "[이미지: " + "images/" + imageId + "/" + fileName + "]";
     }
 
     /**

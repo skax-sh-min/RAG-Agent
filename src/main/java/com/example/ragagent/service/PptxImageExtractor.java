@@ -33,6 +33,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -43,57 +44,58 @@ import java.util.Set;
  * the author's own "these belong together" signal), standalone connectors
  * ({@link XSLFConnectorShape}, which never carry text), and auto/freeform shapes with no text
  * (decorative diagram scaffolding). A shape with real text is normally already captured as body
- * text by {@link PptxToMarkdownConverter}, so it's only rasterized here when it's part of a
- * cluster (see below) — never on its own, to avoid a redundant duplicate image.
+ * text by {@link PptxToMarkdownConverter}, so it's never rasterized on its own (only as a cluster
+ * passenger — see below — to avoid a redundant duplicate image).
  *
- * <b>Proximity clustering</b>: a real diagram is rarely one shape — a connector usually sits in
- * the *gap* between the boxes it links, not overlapping either one, so strict bounding-box
- * intersection would miss it. Each shape's bounding box is padded outward by
- * {@code app.pptx-image.cluster-proximity-padding-pt} ({@link AppProperties.PptxShapeExtractionConfig})
- * before testing intersection, and connected shapes (union-find over that padded-intersection
- * graph) are rasterized together as a single bundled image, preserving each member's relative
- * position and paint order. A cluster is only rasterized if it contains at least one "seed" shape
- * (group/connector/textless auto-shape) — a cluster made up purely of nearby text-bearing shapes
- * with no drawing element isn't a diagram and is left alone. Text-bearing shapes join a cluster as
- * passengers, never as the reason one forms. A cluster larger than {@link #MAX_CLUSTER_SHAPES} (a
- * crowded/busy slide) falls back to rasterizing just its seed members individually, to avoid one
- * giant slide-sized image.
+ * <p><b>Two shape-emission modes, chosen by {@code app.pptx-image.rasterize-shapes}
+ * ({@link AppProperties.PptxShapeExtractionConfig}, default {@code false}):</b>
  *
- * {@link XSLFTable} never joins a cluster — tables stay as structured markdown pipe-tables
- * ({@code PptxToMarkdownConverter.appendTable()}). {@link XSLFPictureShape} is the one exception
- * to "verbatim extraction": authors frequently draw markup (a highlight circle, an arrow, a
- * callout) directly on top of a screenshot/photo, and extracting the picture and that markup as
- * two disconnected images would strand the annotation with no context. A picture therefore also
- * joins the same proximity-clustering pass — as a passenger only, never a seed (a lone picture
- * must never pull in unrelated nearby shapes) — and gets flattened together with any overlapping
- * seed cluster into one composite PNG. A picture with no nearby seed, or whose cluster fails to
- * rasterize, falls back to the original verbatim extraction exactly as before. Plain
- * {@link XSLFTextBox}es are never rasterized when empty — they're just empty text containers, not
- * drawn shapes.
+ * <p><b>{@code rasterize-shapes=true}</b> — the pre-existing <b>proximity clustering</b>: a real
+ * diagram is rarely one shape — a connector usually sits in the *gap* between the boxes it links,
+ * not overlapping either, so each shape's bounding box is padded outward by
+ * {@code app.pptx-image.cluster-proximity-padding-pt} before testing intersection, and connected
+ * shapes (union-find over that padded-intersection graph) are rasterized together as one bundled
+ * image, preserving each member's relative position and paint order. A cluster is only rasterized
+ * if it contains at least one "seed" (group/connector/textless auto-shape); text-bearing shapes and
+ * tables join only as passengers, never as the reason one forms. A cluster larger than
+ * {@link #MAX_CLUSTER_SHAPES} falls back to rasterizing just its seeds individually.
  *
- * <b>{@code app.pptx-image.merge-annotated-pictures}</b> ({@code true} by default) toggles the
- * paragraph above: {@code false} disables proximity-based merging for pictures entirely — a
- * top-level picture always extracts verbatim, and only pictures the author actually grouped in
- * PowerPoint (nested inside a real {@link XSLFGroupShape}, never reaching the top-level shape
- * dispatch below) still merge with their group-mates, since that is POI's own object model and is
- * unaffected by this flag either way.
+ * <p><b>{@code rasterize-shapes=false} (default)</b> — no loose-shape clustering: overlapping loose
+ * shapes are NOT merged into one blob, and a lone standalone connector/auto-shape produces no image
+ * at all. Only "anchor" objects emit: groups / SmartArt (one image each), a table with an
+ * overlapping seed shape (composited — see below), and pictures (with overlapping annotation seeds
+ * composited on, per {@code merge-annotated-pictures}). Loose seeds not consumed by an anchor are
+ * dropped. See {@link #rasterizeAnchorsOnly}; the clustering path is {@link #rasterizeWithClustering}.
  *
- * A minimum bounding-box dimension ({@code app.pptx-image.min-shape-dimension-pt}) filters out
- * trivial icons/dividers before they can seed a cluster. Rendering failures are skipped silently
- * (graceful degradation, like the EMF/WMF converters) rather than failing the whole extraction.
+ * <p><b>Always (both modes):</b>
+ * <ul>
+ *   <li><b>Groups / SmartArt</b> render as one image each — a real author grouping ({@link
+ *       XSLFGroupShape}) or a SmartArt frame ({@link XSLFDiagram}, whose {@code getGroupShape()} is
+ *       the actual drawable layer) is never split apart.</li>
+ *   <li><b>Tables + overlapping seed shape</b>: authors draw markup (a highlight circle, arrow) on
+ *       top of a table to flag a cell — a {@link XSLFTable} with any overlapping seed is composited
+ *       with it into one image. The table is <em>also</em> emitted as a markdown pipe-table by
+ *       {@code PptxToMarkdownConverter.appendTable()} (independent path); a table with no overlapping
+ *       seed produces no image (markdown-only), and never rasterizes on its own.</li>
+ *   <li><b>Pictures + overlapping annotation seed</b> ({@code app.pptx-image.merge-annotated-pictures},
+ *       {@code true} by default, independent of {@code rasterize-shapes}): a highlight/arrow drawn on
+ *       a screenshot composites with it into one PNG rather than stranding the annotation as a
+ *       separate image; a picture with no overlapping seed extracts verbatim. {@code false} disables
+ *       this — pictures always extract verbatim (author-made PowerPoint groups still merge via POI's
+ *       own group rendering, unaffected by any flag).</li>
+ * </ul>
  *
- * <b>{@code XSLFGraphicFrame} variants</b> ({@code XSLFTable} aside) get their own handling since
- * none of them can be drawn "live" by POI: an OLE embed ({@link XSLFObjectShape}) always carries
- * its own embedded preview picture, extracted verbatim like a real picture. A SmartArt frame
- * ({@link XSLFDiagram}) has no drawable frame of its own — {@code getGroupShape()} is the actual
- * rendered box/connector layer, so it's fed into the same proximity-clustering pipeline as an
- * ordinary {@link XSLFGroupShape} (as one seed, not its individual children). A chart frame has no
- * rendering path in POI at all; its only recoverable image is a {@code mc:Fallback} preview
- * picture PowerPoint may or may not have embedded — extracted verbatim when present, silently
- * skipped otherwise (its title text is still captured by {@code PptxToMarkdownConverter}).
+ * <p>A minimum bounding-box dimension ({@code app.pptx-image.min-shape-dimension-pt}) filters out
+ * trivial icons/dividers before they can seed. Empty {@link XSLFTextBox}es are never rasterized.
+ * Rendering failures are skipped silently (graceful degradation, like the EMF/WMF converters).
  *
- * Saves to imagesDir as s{slide}_img{n}.{ext} (real pictures) or s{slide}_img{n}.png (rasterized
- * shapes/clusters) — a single shared per-slide counter, so callers see one flat image list either way.
+ * <p><b>Other {@code XSLFGraphicFrame} variants</b>: an OLE embed ({@link XSLFObjectShape}) carries
+ * its own preview picture, extracted verbatim. A chart frame has no live-rendering path in POI; its
+ * only recoverable image is a {@code mc:Fallback} preview PowerPoint may or may not have embedded —
+ * extracted when present, silently skipped otherwise (its title text is captured by the converter).
+ *
+ * <p>Saves to imagesDir as s{slide}_img{n}.{ext} (real pictures) or s{slide}_img{n}.png (rasterized
+ * shapes/clusters/composites) — a single shared per-slide counter, so callers see one flat list.
  */
 @Component
 public class PptxImageExtractor {
@@ -106,18 +108,42 @@ public class PptxImageExtractor {
     private final double minShapeDimensionPt;
     private final double clusterProximityPaddingPt;
     private final boolean mergeAnnotatedPictures;
+    private final boolean rasterizeShapes;
 
     public PptxImageExtractor(AppProperties props) {
         AppProperties.PptxShapeExtractionConfig config = props.pptxImageSafe();
         this.minShapeDimensionPt = config.minShapeDimensionPt();
         this.clusterProximityPaddingPt = config.clusterProximityPaddingPt();
         this.mergeAnnotatedPictures = config.mergeAnnotatedPictures();
+        this.rasterizeShapes = config.rasterizeShapes();
     }
 
     private enum ShapeRole { SEED, CANDIDATE, NOT_ELIGIBLE }
 
-    /** A shape eligible for clustering, tagged with whether it can seed a cluster on its own. */
-    private record Clusterable(XSLFShape shape, boolean seed) {
+    /**
+     * A shape eligible for clustering, tagged with whether it can seed a cluster on its own, and
+     * (if it's a group/SmartArt shape) which top-level {@code slide.getShapes()} index "owns" it —
+     * see {@link ExtractedImage} for why this index exists. {@code ownerIndex} is {@code -1} for
+     * anything that isn't itself a correlatable group/diagram source (connectors, auto-shapes,
+     * text-bearing passengers, pictures).
+     */
+    private record Clusterable(XSLFShape shape, boolean seed, int ownerIndex) {
+    }
+
+    /**
+     * One extracted/rasterized image, plus the 0-based index/indices (into that slide's
+     * {@code slide.getShapes()} — the same list {@link PptxToMarkdownConverter#extractSlide} can
+     * independently compute, since both classes share one already-open {@link XMLSlideShow}) of
+     * the top-level shape(s) that "own" it: a plain {@code XSLFGroupShape}'s own index, or (for
+     * SmartArt) the outer {@code XSLFDiagram} frame's index — never the inner
+     * {@code getGroupShape()} render layer, which doesn't appear in {@code slide.getShapes()} at
+     * all. Empty for anything {@link PptxToMarkdownConverter} doesn't wrap in its own bracket
+     * block (plain pictures, OLE previews, chart frames aside — see below): those stay hoisted at
+     * the top of the slide exactly as before, unaffected by ownership. A cluster that merges two
+     * adjacent top-level groups (rare — padded bounding boxes happened to intersect) legitimately
+     * reports both indices; the caller may then place the same image marker in both groups' blocks.
+     */
+    public record ExtractedImage(String path, Set<Integer> ownerShapeIndices) {
     }
 
     /** @return {slideNum(1-based) → relative image paths from dataDir} */
@@ -136,116 +162,229 @@ public class PptxImageExtractor {
      */
     public Map<Integer, List<String>> extract(XMLSlideShow pptx, String imageId, Path imagesDir)
             throws IOException {
-        Files.createDirectories(imagesDir);
+        Map<Integer, List<ExtractedImage>> withOwners = extractWithOwners(pptx, imageId, imagesDir);
         Map<Integer, List<String>> result = new LinkedHashMap<>();
-
-        int slideNum = 0;
-        for (XSLFSlide slide : pptx.getSlides()) {
-            slideNum++;
-            List<String> paths = processSlide(slide, slideNum, imageId, imagesDir);
-            if (!paths.isEmpty()) result.put(slideNum, paths);
+        for (Map.Entry<Integer, List<ExtractedImage>> entry : withOwners.entrySet()) {
+            result.put(entry.getKey(), entry.getValue().stream().map(ExtractedImage::path).toList());
         }
         return result;
     }
 
-    private List<String> processSlide(XSLFSlide slide, int slideNum, String imageId, Path imagesDir)
+    /**
+     * Same as {@link #extract(XMLSlideShow, String, Path)} but also reports, for each image,
+     * which top-level shape(s) on that slide "own" it ({@link ExtractedImage}) — used by
+     * {@link PptxToMarkdownConverter} to place a group/diagram/chart's own image marker inside
+     * that shape's bracket block instead of only ever hoisting every image to the top of the
+     * slide.
+     */
+    public Map<Integer, List<ExtractedImage>> extractWithOwners(XMLSlideShow pptx, String imageId, Path imagesDir)
             throws IOException {
-        List<String> paths = new ArrayList<>();
+        Files.createDirectories(imagesDir);
+        Map<Integer, List<ExtractedImage>> result = new LinkedHashMap<>();
+
+        int slideNum = 0;
+        for (XSLFSlide slide : pptx.getSlides()) {
+            slideNum++;
+            List<ExtractedImage> images = processSlide(slide, slideNum, imageId, imagesDir);
+            if (!images.isEmpty()) result.put(slideNum, images);
+        }
+        return result;
+    }
+
+    private List<ExtractedImage> processSlide(XSLFSlide slide, int slideNum, String imageId, Path imagesDir)
+            throws IOException {
+        List<ExtractedImage> images = new ArrayList<>();
         int[] imgIdx = {0};
 
-        // Preserves slide.getShapes() order — needed so clusters render members back-to-front
-        // in their original paint order.
-        List<Clusterable> clusterable = new ArrayList<>();
-        // Real pictures are collected here instead of extracted immediately — a picture that
-        // ends up in a rasterized cluster (see below) is "consumed" and must NOT also be
-        // extracted verbatim; only leftover, unconsumed pictures fall back to that.
+        // Categorize top-level shapes in slide.getShapes() (paint) order. OLE previews and chart
+        // fallback pictures are emitted immediately — they're neither anchors nor cluster members.
         List<XSLFPictureShape> pictures = new ArrayList<>();
+        List<XSLFTable> tables = new ArrayList<>();
+        // "always" seeds (groups / SmartArt) render as one image each regardless of rasterizeShapes;
+        // "loose" seeds (connectors / textless auto-shapes) only cluster (true) or annotate an
+        // anchor (false), and are otherwise dropped.
+        List<Clusterable> alwaysSeeds = new ArrayList<>();
+        List<Clusterable> looseSeeds = new ArrayList<>();
+        List<XSLFShape> candidates = new ArrayList<>(); // text-bearing shapes: true-path passengers only
 
+        int topLevelIndex = -1;
         for (XSLFShape shape : slide.getShapes()) {
+            topLevelIndex++;
             if (shape instanceof XSLFPictureShape pic) {
-                if (mergeAnnotatedPictures) {
-                    pictures.add(pic);
-                    // Never a seed on its own — a picture with no nearby annotation shape must
-                    // not spontaneously pull in unrelated nearby shapes into a merge.
-                    clusterable.add(new Clusterable(pic, false));
-                } else {
-                    // app.pptx-image.merge-annotated-pictures=false: never join proximity
-                    // clustering — a top-level picture always extracts verbatim. A picture that
-                    // is genuinely grouped with other shapes in PowerPoint never reaches this
-                    // branch at all (it's nested inside the XSLFGroupShape below, not a top-level
-                    // shape), so real author-made groups still merge either way.
-                    addPicture(pic, slideNum, imgIdx, imageId, imagesDir, paths);
-                }
+                pictures.add(pic);
             } else if (shape instanceof XSLFObjectShape ole) {
-                // OLE embed: always carries its own preview picture (that's how OOXML lets a
-                // viewer render it without running the source app) — save it directly, no
-                // clustering/rasterization needed.
-                addOlePreview(ole, slideNum, imgIdx, imageId, imagesDir, paths);
+                // OLE embed always carries its own preview picture — save directly.
+                addOlePreview(ole, slideNum, imgIdx, imageId, imagesDir, images);
             } else if (shape instanceof XSLFDiagram diagram) {
-                // SmartArt: getGroupShape() is the real rendered drawing (actual box/connector
-                // shapes with real anchors), unlike the outer XSLFDiagram frame itself — POI's
-                // DrawFactory only knows how to draw the frame's (usually absent) fallback
-                // picture, not the diagram live. Feed the group shape into the same
-                // proximity-clustering/rasterization pipeline as an ordinary XSLFGroupShape.
+                // SmartArt: getGroupShape() is the real rendered layer (the outer XSLFDiagram frame
+                // isn't drawable live). Owner is the OUTER frame's index since diagramGroup never
+                // appears in slide.getShapes().
                 XSLFDiagram.XSLFDiagramGroupShape diagramGroup = diagram.getGroupShape();
                 if (diagramGroup != null && passesSizeFilter(diagramGroup)) {
-                    clusterable.add(new Clusterable(diagramGroup, true));
+                    alwaysSeeds.add(new Clusterable(diagramGroup, true, topLevelIndex));
                 }
             } else if (shape instanceof XSLFGraphicFrame frame && frame.hasChart()) {
-                // Charts have no live-rendering path in POI — only a best-effort mc:Fallback
-                // preview picture that PowerPoint may or may not have embedded.
+                // Charts: only a best-effort mc:Fallback preview picture, if PowerPoint embedded one.
                 XSLFPictureShape fallback = frame.getFallbackPicture();
-                if (fallback != null) addPicture(fallback, slideNum, imgIdx, imageId, imagesDir, paths);
-            } else if (!(shape instanceof XSLFTable)) {
+                if (fallback != null) {
+                    addPicture(fallback, slideNum, imgIdx, imageId, imagesDir, images, Set.of(topLevelIndex));
+                }
+            } else if (shape instanceof XSLFTable table) {
+                tables.add(table);
+            } else {
                 ShapeRole role = classify(shape);
-                if (role != ShapeRole.NOT_ELIGIBLE) {
-                    clusterable.add(new Clusterable(shape, role == ShapeRole.SEED));
+                if (role == ShapeRole.SEED) {
+                    if (shape instanceof XSLFGroupShape) {
+                        alwaysSeeds.add(new Clusterable(shape, true, topLevelIndex));
+                    } else {
+                        // Connectors / textless auto-shapes: never a correlation owner (index -1).
+                        looseSeeds.add(new Clusterable(shape, true, -1));
+                    }
+                } else if (role == ShapeRole.CANDIDATE) {
+                    candidates.add(shape);
                 }
             }
         }
 
-        // Identity-based: two POI shape wrappers are only "the same picture" by reference here,
-        // not by equals()/hashCode() (unspecified for XSLFShape).
+        if (rasterizeShapes) {
+            rasterizeWithClustering(pictures, tables, alwaysSeeds, looseSeeds, candidates,
+                    slideNum, imgIdx, imageId, imagesDir, images);
+        } else {
+            rasterizeAnchorsOnly(pictures, tables, alwaysSeeds, looseSeeds,
+                    slideNum, imgIdx, imageId, imagesDir, images);
+        }
+        return images;
+    }
+
+    /**
+     * {@code rasterize-shapes=true} — the pre-existing union-find proximity clustering. Every seed
+     * (groups, SmartArt, connectors, textless auto-shapes) plus non-seed passengers (text-bearing
+     * shapes, pictures when {@code merge-annotated-pictures}, and tables) is unioned by padded
+     * bounding-box overlap and each connected component with ≥1 seed is rasterized together into
+     * one image. Tables join as passengers only (a table alone forms no cluster → stays
+     * markdown-only), so a shape drawn over a table still composites with it.
+     */
+    private void rasterizeWithClustering(List<XSLFPictureShape> pictures, List<XSLFTable> tables,
+                                         List<Clusterable> alwaysSeeds, List<Clusterable> looseSeeds,
+                                         List<XSLFShape> candidates, int slideNum, int[] imgIdx,
+                                         String imageId, Path imagesDir, List<ExtractedImage> images)
+            throws IOException {
+        List<Clusterable> clusterable = new ArrayList<>();
+        clusterable.addAll(alwaysSeeds);
+        clusterable.addAll(looseSeeds);
+        for (XSLFShape c : candidates) clusterable.add(new Clusterable(c, false, -1));
+        if (mergeAnnotatedPictures) {
+            for (XSLFPictureShape pic : pictures) clusterable.add(new Clusterable(pic, false, -1));
+        }
+        // Tables are always non-seed passengers — a lone table never rasterizes (no seed), but a
+        // shape over a table pulls it into that cluster.
+        for (XSLFTable table : tables) clusterable.add(new Clusterable(table, false, -1));
+
+        // Identity-based: two POI shape wrappers are only "the same picture" by reference here.
         Set<XSLFPictureShape> consumedPictures = Collections.newSetFromMap(new IdentityHashMap<>());
         for (List<Clusterable> cluster : clusterByProximity(clusterable)) {
             if (cluster.size() > MAX_CLUSTER_SHAPES) {
-                // Too crowded to be one coherent diagram — fall back to capturing just the seeds.
-                // Pictures are never seeds, so any picture caught in an oversized cluster is left
-                // unconsumed and extracted verbatim below, same as if it had no cluster at all.
+                // Too crowded to be one coherent diagram — capture just the seeds individually.
                 for (Clusterable c : cluster) {
-                    if (c.seed()) tryRasterize(List.of(c.shape()), slideNum, imgIdx, imageId, imagesDir, paths);
+                    if (c.seed()) {
+                        Set<Integer> owners = c.ownerIndex() >= 0 ? Set.of(c.ownerIndex()) : Set.of();
+                        tryRasterize(List.of(c.shape()), slideNum, imgIdx, imageId, imagesDir, images, owners);
+                    }
                 }
             } else {
                 List<XSLFShape> members = cluster.stream().map(Clusterable::shape).toList();
-                if (tryRasterize(members, slideNum, imgIdx, imageId, imagesDir, paths)) {
+                Set<Integer> owners = new LinkedHashSet<>();
+                for (Clusterable c : cluster) {
+                    if (c.ownerIndex() >= 0) owners.add(c.ownerIndex());
+                }
+                if (tryRasterize(members, slideNum, imgIdx, imageId, imagesDir, images, owners)) {
                     for (Clusterable c : cluster) {
                         if (c.shape() instanceof XSLFPictureShape pic) consumedPictures.add(pic);
                     }
                 }
-                // rasterize() failure (e.g. undecodable picture bytes) leaves every member of
-                // this cluster — including any picture — unconsumed, so pictures still fall back
-                // to verbatim extraction below rather than being silently dropped.
             }
         }
 
         for (XSLFPictureShape pic : pictures) {
             if (!consumedPictures.contains(pic)) {
-                addPicture(pic, slideNum, imgIdx, imageId, imagesDir, paths);
+                addPicture(pic, slideNum, imgIdx, imageId, imagesDir, images, Set.of());
+            }
+        }
+    }
+
+    /**
+     * {@code rasterize-shapes=false} (default) — no loose-shape clustering. Only "anchor" objects
+     * emit images: a picture (with any overlapping loose seed composited on top, when
+     * {@code merge-annotated-pictures}), a table with an overlapping loose seed (table also stays a
+     * markdown pipe-table), and every group / SmartArt on its own. Loose seeds not consumed by an
+     * anchor are dropped — a lone standalone connector/shape produces no image.
+     */
+    private void rasterizeAnchorsOnly(List<XSLFPictureShape> pictures, List<XSLFTable> tables,
+                                      List<Clusterable> alwaysSeeds, List<Clusterable> looseSeeds,
+                                      int slideNum, int[] imgIdx, String imageId, Path imagesDir,
+                                      List<ExtractedImage> images) throws IOException {
+        Set<XSLFShape> consumed = Collections.newSetFromMap(new IdentityHashMap<>());
+
+        // 1) Picture anchors — composite with overlapping loose seeds (annotation markup), else verbatim.
+        for (XSLFPictureShape pic : pictures) {
+            List<XSLFShape> overlapping = mergeAnnotatedPictures
+                    ? overlappingLooseSeeds(pic, looseSeeds, consumed) : List.of();
+            if (!overlapping.isEmpty()) {
+                List<XSLFShape> members = new ArrayList<>();
+                members.add(pic);
+                members.addAll(overlapping);
+                if (tryRasterize(members, slideNum, imgIdx, imageId, imagesDir, images, Set.of())) {
+                    consumed.addAll(overlapping);
+                } else {
+                    addPicture(pic, slideNum, imgIdx, imageId, imagesDir, images, Set.of());
+                }
+            } else {
+                addPicture(pic, slideNum, imgIdx, imageId, imagesDir, images, Set.of());
             }
         }
 
-        return paths;
+        // 2) Table anchors — composite only when a loose seed overlaps (else markdown-only, no image).
+        for (XSLFTable table : tables) {
+            List<XSLFShape> overlapping = overlappingLooseSeeds(table, looseSeeds, consumed);
+            if (!overlapping.isEmpty()) {
+                List<XSLFShape> members = new ArrayList<>();
+                members.add(table);
+                members.addAll(overlapping);
+                if (tryRasterize(members, slideNum, imgIdx, imageId, imagesDir, images, Set.of())) {
+                    consumed.addAll(overlapping);
+                }
+            }
+        }
+
+        // 3) Groups / SmartArt — always one image each, standalone (no clustering with neighbors).
+        for (Clusterable seed : alwaysSeeds) {
+            Set<Integer> owners = seed.ownerIndex() >= 0 ? Set.of(seed.ownerIndex()) : Set.of();
+            tryRasterize(List.of(seed.shape()), slideNum, imgIdx, imageId, imagesDir, images, owners);
+        }
+        // 4) Loose seeds not consumed by any anchor are intentionally dropped.
+    }
+
+    /** Loose seeds whose padded bounding box overlaps the anchor and haven't been consumed yet. */
+    private List<XSLFShape> overlappingLooseSeeds(XSLFShape anchor, List<Clusterable> looseSeeds,
+                                                  Set<XSLFShape> consumed) {
+        Rectangle2D anchorBox = pad(anchor.getAnchor());
+        List<XSLFShape> out = new ArrayList<>();
+        for (Clusterable ls : looseSeeds) {
+            if (consumed.contains(ls.shape())) continue;
+            if (anchorBox.intersects(pad(ls.shape().getAnchor()))) out.add(ls.shape());
+        }
+        return out;
     }
 
     private void addPicture(XSLFPictureShape pic, int slideNum, int[] imgIdx, String imageId,
-                             Path imagesDir, List<String> paths) throws IOException {
-        addPictureData(pic.getPictureData(), slideNum, imgIdx, imageId, imagesDir, paths);
+                             Path imagesDir, List<ExtractedImage> images, Set<Integer> owners) throws IOException {
+        addPictureData(pic.getPictureData(), slideNum, imgIdx, imageId, imagesDir, images, owners);
     }
 
     /** OLE 객체의 내장 미리보기 그림을 저장한다 — 외부 링크 OLE(내장 미리보기 없음)는 addPictureData()가 조용히 건너뛴다. */
     private void addOlePreview(XSLFObjectShape ole, int slideNum, int[] imgIdx, String imageId,
-                                Path imagesDir, List<String> paths) throws IOException {
-        addPictureData(ole.getPictureData(), slideNum, imgIdx, imageId, imagesDir, paths);
+                                Path imagesDir, List<ExtractedImage> images) throws IOException {
+        addPictureData(ole.getPictureData(), slideNum, imgIdx, imageId, imagesDir, images, Set.of());
     }
 
     /**
@@ -255,7 +394,7 @@ public class PptxImageExtractor {
      * 경로가 모두 이 메서드를 거치므로 가드를 한 곳에 두면 셋 다 동일하게 보호된다.
      */
     private void addPictureData(XSLFPictureData pd, int slideNum, int[] imgIdx, String imageId,
-                                 Path imagesDir, List<String> paths) throws IOException {
+                                 Path imagesDir, List<ExtractedImage> images, Set<Integer> owners) throws IOException {
         if (pd == null) return;
         PictureData.PictureType type = pd.getType();
         // PictureType.extension already includes the leading dot (e.g. ".png") — strip it so
@@ -265,16 +404,16 @@ public class PptxImageExtractor {
         imgIdx[0]++;
         String fileName = "s" + slideNum + "_img" + imgIdx[0] + "." + ext;
         Files.write(imagesDir.resolve(fileName), pd.getData());
-        paths.add("images/" + imageId + "/" + fileName);
+        images.add(new ExtractedImage("images/" + imageId + "/" + fileName, owners));
     }
 
     /** @return true if the composite was actually written (members can be treated as "consumed") */
     private boolean tryRasterize(List<XSLFShape> members, int slideNum, int[] imgIdx, String imageId,
-                                  Path imagesDir, List<String> paths) {
+                                  Path imagesDir, List<ExtractedImage> images, Set<Integer> owners) {
         String fileName = "s" + slideNum + "_img" + (imgIdx[0] + 1) + ".png";
         if (rasterize(members, imagesDir.resolve(fileName))) {
             imgIdx[0]++;
-            paths.add("images/" + imageId + "/" + fileName);
+            images.add(new ExtractedImage("images/" + imageId + "/" + fileName, owners));
             return true;
         }
         return false;

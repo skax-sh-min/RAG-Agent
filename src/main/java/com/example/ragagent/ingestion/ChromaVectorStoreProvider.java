@@ -1,6 +1,7 @@
 package com.example.ragagent.ingestion;
 
 import com.example.ragagent.config.AppProperties;
+import com.example.ragagent.llm.CachingEmbeddingModel;
 import com.example.ragagent.model.MetaKey;
 import com.example.ragagent.service.VectorStoreRegistry;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -25,6 +26,11 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiConsumer;
 
 /**
@@ -45,12 +51,29 @@ public class ChromaVectorStoreProvider implements VectorStoreProvider {
 
     private static final String TENANT = ChromaApiConstants.DEFAULT_TENANT_NAME;
     private static final String DATABASE = ChromaApiConstants.DEFAULT_DATABASE_NAME;
+    // §10.7.4 — post-filtering by similarityThreshold can shrink the pool below topK when the
+    // KNN query only ever asks for exactly topK candidates; over-fetch when a threshold is
+    // actually active. No-op at the default (0.0, accept-all) — nothing to filter out there.
+    private static final double THRESHOLD_OVERFETCH_MULTIPLIER = 2.0;
+    // §10.9.1 — Include.all also requests EMBEDDINGS, which mapPerQuery() never reads.
+    private static final List<ChromaApi.QueryRequest.Include> RESULT_INCLUDE = List.of(
+            ChromaApi.QueryRequest.Include.METADATAS,
+            ChromaApi.QueryRequest.Include.DOCUMENTS,
+            ChromaApi.QueryRequest.Include.DISTANCES);
 
     private final VectorStoreRegistry registry;
     private final ChromaApi chromaApi;
     private final EmbeddingModel embeddingModel;
+    // §10.9.4 — indexing embeds chunk text (rarely reused) via the uncached delegate so it
+    // doesn't evict query-cache entries that would otherwise serve repeated search questions.
+    private final EmbeddingModel indexingEmbeddingModel;
     private final ObjectMapper objectMapper;
-    private final double similarityThreshold;
+    // Hot-editable (search family, SettingsKeys.SEARCH_SIMILARITY_THRESHOLD) — read fresh via
+    // props.searchSimilarityThresholdSafe() in search()/searchBatch(), never cached in a field.
+    // Used to be cached here at construction, which silently defeated the /settings override:
+    // the page showed the new value as "applied" but real searches kept using the startup value
+    // until a restart.
+    private final AppProperties props;
 
     private final FilterExpressionConverter filterConverter = new ChromaFilterExpressionConverter();
     private final ConcurrentHashMap<String, String> collectionIdCache = new ConcurrentHashMap<>();
@@ -65,12 +88,14 @@ public class ChromaVectorStoreProvider implements VectorStoreProvider {
         this.registry = registry;
         this.chromaApi = chromaApi;
         this.embeddingModel = embeddingModel;
+        this.indexingEmbeddingModel = CachingEmbeddingModel.unwrapForIndexing(embeddingModel);
         this.objectMapper = objectMapper;
-        this.similarityThreshold = props.searchSimilarityThresholdSafe();
+        this.props = props;
     }
 
     @Override
     public List<Document> search(String userId, String query, String version, int topK) {
+        double similarityThreshold = props.searchSimilarityThresholdSafe();
         VectorStore store = registry.getStore(userId, version);
         FilterExpressionBuilder b = new FilterExpressionBuilder();
         SearchRequest.Builder request = SearchRequest.builder()
@@ -95,15 +120,20 @@ public class ChromaVectorStoreProvider implements VectorStoreProvider {
     @Override
     public List<List<Document>> searchBatch(String userId, List<String> queries, String version, int topK) {
         if (queries == null || queries.isEmpty()) return List.of();
+        double similarityThreshold = props.searchSimilarityThresholdSafe();
         String collectionId = resolveCollectionId(userId, version);
         if (collectionId == null) {
             return queries.stream().map(q -> List.<Document>of()).toList();
         }
         List<float[]> embeddings = embeddingModel.embed(queries);          // single batched HTTP call
         Map<String, Object> where = whereForVersion(version);
-        var request = new ChromaApi.QueryRequest(embeddings, topK, where, ChromaApi.QueryRequest.Include.all);
+        int fetchK = similarityThreshold > 0.0
+                ? (int) Math.ceil(topK * THRESHOLD_OVERFETCH_MULTIPLIER) : topK;
+        // §10.9.1 — mapPerQuery() never reads embeddings; skip fetching/parsing them (Include.all
+        // includes EMBEDDINGS, which at rerank-scale is ~1MB of dead JSON per search).
+        var request = new ChromaApi.QueryRequest(embeddings, fetchK, where, RESULT_INCLUDE);
         var response = chromaApi.queryCollection(TENANT, DATABASE, collectionId, request);
-        return mapPerQuery(response);
+        return mapPerQuery(response, topK, similarityThreshold);
     }
 
     @Override
@@ -130,15 +160,38 @@ public class ChromaVectorStoreProvider implements VectorStoreProvider {
         List<Document> embedInputDocs = docs.stream()
                 .map(d -> new Document(d.getId(), SearchTextBuilder.build(d), Map.of()))
                 .toList();
-        Map<String, float[]> embeddingByDocId = new HashMap<>(docs.size() * 2);
-        int done = 0;
-        for (List<Document> batch : batchingStrategy.batch(embedInputDocs)) {
-            List<float[]> batchEmbeddings = embeddingModel.embed(batch.stream().map(Document::getText).toList());
-            for (int i = 0; i < batch.size(); i++) {
-                embeddingByDocId.put(batch.get(i).getId(), batchEmbeddings.get(i));
+        int maxConcurrentBatches = embeddingMaxConcurrentBatches();
+        List<List<Document>> subBatches = batchingStrategy.batch(embedInputDocs);
+        Map<String, float[]> embeddingByDocId = new ConcurrentHashMap<>(docs.size() * 2);
+        AtomicInteger done = new AtomicInteger();
+        if (maxConcurrentBatches <= 1 || subBatches.size() <= 1) {
+            for (List<Document> batch : subBatches) {
+                embedInto(batch, embeddingByDocId);
+                onProgress.accept(done.addAndGet(batch.size()), total);
             }
-            done += batch.size();
-            onProgress.accept(done, total);
+        } else {
+            // §6.21 E2 — embed sub-batches in parallel (the E1 load balancer spreads them across
+            // endpoints), bounded by the gate so the embedding server(s) aren't overrun. Chroma
+            // buffers all embeddings before its single upsert below, so parallelizing only the embed
+            // step is safe — order is reconstructed from embeddingByDocId, not iteration order.
+            Semaphore gate = new Semaphore(maxConcurrentBatches);
+            Object progressLock = new Object();
+            try (var exec = Executors.newVirtualThreadPerTaskExecutor()) {
+                List<Future<?>> futures = new ArrayList<>(subBatches.size());
+                for (List<Document> batch : subBatches) {
+                    acquire(gate);
+                    futures.add(exec.submit(() -> {
+                        try {
+                            embedInto(batch, embeddingByDocId);
+                            int d = done.addAndGet(batch.size());
+                            synchronized (progressLock) { onProgress.accept(d, total); }
+                        } finally {
+                            gate.release();
+                        }
+                    }));
+                }
+                awaitAll(futures);
+            }
         }
 
         List<String> ids = new ArrayList<>(docs.size());
@@ -150,11 +203,54 @@ public class ChromaVectorStoreProvider implements VectorStoreProvider {
             embeddings.add(embeddingByDocId.get(d.getId()));
             Map<String, Object> meta = new HashMap<>(d.getMetadata());
             meta.remove(MetaKey.CHUNK_CONTEXT);                    // transient — never persisted
+            meta.remove(MetaKey.SEARCH_TEXT);                      // transient — never persisted (§10.8.5)
             metadatas.add(meta);
             contents.add(d.getText() == null ? "" : d.getText()); // untouched original
         }
         chromaApi.upsertEmbeddings(TENANT, DATABASE, collectionName,
                 new ChromaApi.AddEmbeddingsRequest(ids, embeddings, metadatas, contents));
+    }
+
+    /** §6.21 E2 — parallel sub-batch embedding degree (1 = serial, the default; zero regression). */
+    private int embeddingMaxConcurrentBatches() {
+        AppProperties.EmbeddingConfig ec = props.embeddingSafe();
+        return (ec != null && ec.maxConcurrentBatches() != null && ec.maxConcurrentBatches() > 1)
+                ? ec.maxConcurrentBatches() : 1;
+    }
+
+    private void embedInto(List<Document> batch, Map<String, float[]> out) {
+        List<float[]> emb = indexingEmbeddingModel.embed(batch.stream().map(Document::getText).toList());
+        for (int i = 0; i < batch.size(); i++) {
+            out.put(batch.get(i).getId(), emb.get(i));
+        }
+    }
+
+    private static void acquire(Semaphore gate) {
+        try {
+            gate.acquire();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException("Interrupted while waiting to embed a sub-batch", e);
+        }
+    }
+
+    /** Waits for all embedding tasks, propagating the first failure (unwrapped) after awaiting the rest. */
+    private static void awaitAll(List<Future<?>> futures) {
+        RuntimeException failure = null;
+        for (Future<?> f : futures) {
+            try {
+                f.get();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                if (failure == null) failure = new RuntimeException("Interrupted during parallel embedding", e);
+            } catch (ExecutionException e) {
+                Throwable cause = e.getCause();
+                if (failure == null) {
+                    failure = (cause instanceof RuntimeException re) ? re : new RuntimeException(cause);
+                }
+            }
+        }
+        if (failure != null) throw failure;
     }
 
     @Override
@@ -232,8 +328,14 @@ public class ChromaVectorStoreProvider implements VectorStoreProvider {
         }
     }
 
-    /** Maps a batched QueryResponse into one Document list per query (outer index = query). */
-    private List<List<Document>> mapPerQuery(ChromaApi.QueryResponse resp) {
+    /**
+     * Maps a batched QueryResponse into one Document list per query (outer index = query).
+     * §10.7.4 — caps each per-query list at {@code topK} even though the request may have
+     * over-fetched more candidates than that to survive threshold filtering; results arrive
+     * pre-sorted by ascending distance, so taking the first {@code topK} that pass the threshold
+     * is exactly "closest topK above threshold".
+     */
+    private List<List<Document>> mapPerQuery(ChromaApi.QueryResponse resp, int topK, double similarityThreshold) {
         if (resp == null || resp.ids() == null) return List.of();
         List<List<Document>> out = new ArrayList<>(resp.ids().size());
         for (int i = 0; i < resp.ids().size(); i++) {
@@ -243,7 +345,7 @@ public class ChromaVectorStoreProvider implements VectorStoreProvider {
             List<Double> dists = nth(resp.distances(), i);
 
             List<Document> perQuery = new ArrayList<>();
-            for (int j = 0; ids != null && j < ids.size(); j++) {
+            for (int j = 0; ids != null && j < ids.size() && perQuery.size() < topK; j++) {
                 double distance = (dists != null && j < dists.size() && dists.get(j) != null) ? dists.get(j) : 0.0;
                 double similarity = 1.0 - distance;
                 if (similarity < similarityThreshold) continue;

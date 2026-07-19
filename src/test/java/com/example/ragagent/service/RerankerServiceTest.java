@@ -3,6 +3,7 @@ package com.example.ragagent.service;
 import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.llm.TaskType;
+import com.example.ragagent.model.MetaKey;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -101,6 +102,61 @@ class RerankerServiceTest {
         service.rerank("질문", candidates, 2);
 
         verify(llmRouter).executeGated(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), any());
+    }
+
+    // ── formatDocList 단위 테스트 (§10.7.1) ───────────────────────────────────
+
+    @Test
+    @DisplayName("formatDocList — filename+heading 메타 있으면 구조적 컨텍스트 헤더를 프리뷰 앞에 붙인다")
+    void formatDocList_includesStructuralContextHeader() {
+        Document doc = new Document("본문 텍스트", Map.of(
+                MetaKey.FILENAME, "규정집.docx",
+                MetaKey.HEADING, "제3장 휴가"));
+
+        String result = RerankerService.formatDocList(List.of(doc));
+
+        assertThat(result).isEqualTo("[0] (규정집.docx > 제3장 휴가) 본문 텍스트\n");
+    }
+
+    @Test
+    @DisplayName("formatDocList — heading 없이 filename만 있으면 파일명만 헤더로 사용")
+    void formatDocList_headerFallsBackToFilenameOnly() {
+        Document doc = new Document("본문", Map.of(MetaKey.FILENAME, "규정집.docx"));
+
+        String result = RerankerService.formatDocList(List.of(doc));
+
+        assertThat(result).isEqualTo("[0] (규정집.docx) 본문\n");
+    }
+
+    @Test
+    @DisplayName("formatDocList — filename/heading 메타 없으면 헤더 없이 프리뷰만 출력")
+    void formatDocList_omitsHeaderWhenNoStructuralMetadata() {
+        Document doc = new Document("본문 텍스트", Map.of("doc_id", "A"));
+
+        String result = RerankerService.formatDocList(List.of(doc));
+
+        assertThat(result).isEqualTo("[0] 본문 텍스트\n");
+    }
+
+    @Test
+    @DisplayName("formatDocList — 프리뷰는 500자로 잘린다 (기존 200자에서 확장)")
+    void formatDocList_truncatesPreviewTo500Chars() {
+        String longText = "가".repeat(600);
+        Document doc = new Document(longText, Map.of());
+
+        String result = RerankerService.formatDocList(List.of(doc));
+
+        assertThat(result).isEqualTo("[0] " + "가".repeat(500) + "\n");
+    }
+
+    @Test
+    @DisplayName("formatDocList — 500자 이하 텍스트는 잘리지 않고 그대로 출력")
+    void formatDocList_shortTextNotTruncated() {
+        Document doc = new Document("짧은 텍스트", Map.of());
+
+        String result = RerankerService.formatDocList(List.of(doc));
+
+        assertThat(result).isEqualTo("[0] 짧은 텍스트\n");
     }
 
     // ── parseRanking 단위 테스트 ──────────────────────────────────────────────

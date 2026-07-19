@@ -39,7 +39,7 @@ The built JAR is generated at `target/rag-agent-*.jar`.
 
 ### Local Run
 
-> **Vector store backend** — defaults to ChromaDB. Set `VECTORSTORE_TYPE=sqlite-vec` to store vectors in the SQLite file instead and **skip the "Start Chroma" step** below (requires an operator-provided `vec0` native extension — see [OPERATOR_MANUAL.md](OPERATOR_MANUAL.md)). For a fully offline, no-Docker setup (sqlite-vec + local llama-server), see [OPERATOR_MANUAL.md §4.5](OPERATOR_MANUAL.md#45-폐쇄망air-gapped--노-도커-실행).
+> **Vector store backend** — defaults to ChromaDB. Set `VECTORSTORE_TYPE=sqlite-vec` to store vectors in the SQLite file instead and **skip the "Start Chroma" step** below (requires an operator-provided `vec0` native extension — see [OPERATOR_MANUAL.md](documents/OPERATOR_MANUAL.md)). For a fully offline, no-Docker setup (sqlite-vec + local llama-server), see [OPERATOR_MANUAL.md §4.5](documents/OPERATOR_MANUAL.md#45-폐쇄망air-gapped--노-도커-실행).
 
 #### Development mode (run from source)
 
@@ -93,7 +93,7 @@ container system stop
 
 Open: http://localhost:8080
 
-See [USER_MANUAL.md](USER_MANUAL.md) for usage instructions and [OPERATOR_MANUAL.md](OPERATOR_MANUAL.md) for deployment and LLM configuration.
+See [USER_MANUAL.md](documents/USER_MANUAL.md) for usage instructions and [OPERATOR_MANUAL.md](documents/OPERATOR_MANUAL.md) for deployment and LLM configuration.
 
 ## Environment Variables
 
@@ -105,9 +105,12 @@ See [USER_MANUAL.md](USER_MANUAL.md) for usage instructions and [OPERATOR_MANUAL
 | `LOCAL_LLM_URL` | — | `http://localhost:1234/v1` | LOCAL provider endpoint (also used as embedding fallback) |
 | `LOCAL_LLM_KEY` | — | `lm-studio` | LOCAL provider API key. **Optional for local endpoints** (llama-server needs none) — the LOCAL provider is kept even when blank (`no-key` is substituted) |
 | `LOCAL_LLM_MODEL` | — | `google/gemma-4-e4b` | LOCAL provider model name |
-| `LLM_ROUTING_MODE` | — | `COST_FIRST` | Default routing mode (`app.llm.default-routing-mode`). Air-gapped / local-only: set `LOCAL_ONLY` to block all external provider calls |
+| `LLM_ROUTING_MODE` | — | `COST_FIRST` | Default routing mode (`app.llm.default-routing-mode`). Air-gapped / local-only: set `LOCAL_ONLY` to block all external provider calls — this also hides the routing-strategy dropdown in the chat sidebar entirely, since every mode would resolve to the same provider |
 | `LLM_DEFAULT_PROVIDER_CONCURRENCY` | — | `3` | Query-path per-provider concurrency gate (`app.llm.default-provider-concurrency`) — the app never sends more concurrent requests to one provider than this (match the LLM server's real `--parallel` value). Per-provider override: `app.llm.providers[N].concurrency` |
 | `LLM_PERMIT_WAIT_TIMEOUT_SECONDS` | — | `20` | Max wait for a concurrency slot before failing fast with HTTP 429 + `Retry-After` (`app.llm.permit-wait-timeout-seconds`) instead of hanging until the read timeout. Indexing/background LLM calls are not subject to this cap |
+| `LLM_TEMPERATURE` | — | `0.0` | General/RAG answer temperature (`app.llm.temperature`), baked into each provider's `OpenAiChatOptions` at bean creation — **view-only in `/settings`**, restart to change |
+| `LLM_MAX_TOKENS` | — | `6000` | Completion-length cap for **blocking** LLM calls only (classification, keyword extraction, MD correction, sufficiency/critic evaluation, TXT structuring, etc.) — streaming chat/Direct answers are uncapped by design (bounded by SSE timeouts instead). Also sizes the conversation-history budget and MD-correction section-splitting budget (same value, shared across all three). **Not the model's context window** — size it with headroom under your LLM server's actual context size; see [PIPELINE.md §4.1](documents/PIPELINE.md#41-appllmmax-tokensllm_max_tokens-크기-산정--로컬-llm-컨텍스트-윈도우와의-관계) |
+| `DIRECT_LLM_TEMPERATURE` | — | `0.1` | Temperature for meta/Direct answers only (`app.llm.direct-temperature`), separate from `LLM_TEMPERATURE`, clamped to `[0.0, 0.2]`. **Hot-editable via `/settings`** — applies to the next Direct call without a restart |
 | `OPENAI_API_KEY` | — | — | Required for OpenAI providers. Providers auto-disabled at startup if unset |
 | `GEMINI_API_KEY` | — | — | Required for Gemini providers. Providers auto-disabled at startup if unset |
 | `EMBED_BASE_URL` | — | `LOCAL_LLM_URL` | Embedding endpoint. Falls back to `LOCAL_LLM_URL` if unset |
@@ -116,6 +119,8 @@ See [USER_MANUAL.md](USER_MANUAL.md) for usage instructions and [OPERATOR_MANUAL
 | `EMBED_DIMENSIONS` | sqlite-vec only | — | Embedding model's real output dimension (`app.embedding.dimensions`). Required for `sqlite-vec` (baked into the `vec0` DDL — must match the model: nomic=768, bge-m3=1024). Ignored by chroma |
 | `EMBED_USAGE_FALLBACK_ENABLED` | — | `true` | When the embedding server doesn't report token usage, approximate input tokens as chars/4 for the `/llm-usage` dashboard instead of recording 0 |
 | `EMBED_MAX_CHUNK_CHARS` | — | `0` (off) | Hard per-chunk character ceiling to fit the embedding server's batch/token limit. Set (e.g. `450`) when you hit `input (N tokens) is too large ... (batch size: 512)`; oversized chunks are force-split at line boundaries. Prefer raising the server batch (`llama-server -b/-ub`) first — see [OPERATOR_MANUAL §8](documents/OPERATOR_MANUAL.md#8-문제-해결) |
+| `EMBED_ADDITIONAL_BASE_URLS` | — | — | §6.21 E1 — extra embedding endpoints (same model + dimension, e.g. N GPU replicas), comma-separated. When set, embed calls are load-balanced least-in-flight across `EMBED_BASE_URL` + these — see [OPERATOR_MANUAL §3.2](documents/OPERATOR_MANUAL.md) |
+| `EMBED_MAX_CONCURRENT_BATCHES` | — | `1` | §6.21 E2 — parallel sub-batch embeds within one document's indexing (`1` = serial, default → zero regression). Set to ~(endpoints × per-endpoint parallel) to fill the E1 endpoints from a single large file |
 | `VECTORSTORE_TYPE` | — | `chroma` | Vector store backend — `chroma` or `sqlite-vec` |
 | `SQLITE_VEC_EXTENSION_PATH` | — | — | sqlite-vec only — path to the operator-provided `vec0` loadable extension |
 | `CHROMA_HOST` | — | `http://localhost` | Chroma server host (chroma backend) |
@@ -132,8 +137,8 @@ See [USER_MANUAL.md](USER_MANUAL.md) for usage instructions and [OPERATOR_MANUAL
 | `SEARCH_TOP_K` | `7` | 2 ~ 15 | Number of documents returned by vector search |
 | `SEARCH_SIMILARITY_THRESHOLD` | `0.0` | 0.0 ~ 0.75 | Min cosine similarity to keep a chunk (`0.0` = accept all) |
 | `SEARCH_MULTIQUERY_ENABLED` | `true` | true/false | Expand the query into sub-queries before search |
-| `SEARCH_MULTIQUERY_MIN_LENGTH` | `0` | 0 ~ 20 | Skip expansion for queries shorter than this (`0` = always expand) |
-| `SEARCH_HYBRID_ENABLED` | `false` | true/false | Add a BM25 (FTS5) keyword axis to RRF fusion (re-index required) |
+| `SEARCH_MULTIQUERY_MIN_LENGTH` | `15` | 0 ~ 20 | Skip expansion for queries shorter than this (`0` = always expand). When expansion does run, the original-question search executes in parallel with it instead of waiting behind it |
+| `SEARCH_HYBRID_ENABLED` | `true` | true/false | Add a BM25 (FTS5) keyword axis to RRF fusion (§10.7.2 — the FTS index is populated at indexing time regardless of this flag, so no re-index is needed to benefit) |
 | `SEARCH_RETRY_ESCALATE` | `true` | true/false | Grow candidate pool on each retry — `×(retryCount+1)`, capped `×3` |
 | `SEARCH_RERANK_ENABLED` | `false` | true/false | LLM reranking stage after RRF (adds 1 LLM call/turn) |
 | `SEARCH_CANDIDATE_MULTIPLIER` | `3` | 2 ~ 5 | Candidate pool size for reranking — `topK × N` |
@@ -157,7 +162,7 @@ Conversation history budget is auto-derived as `LLM_MAX_TOKENS × 0.75` (floor 1
 | `SUMMARY_RECENT_RAW_TURNS` | `2` | Verbatim recent turns appended after the summary (also budget-trimmed newest-first) |
 | `SUMMARY_PRECOMPUTE_TTL_SECONDS` | `15` | Suppression window for duplicate summary-precompute triggers on the same thread |
 
-> Per-format splitting strategy → [USER_MANUAL.md §4.1](USER_MANUAL.md#41-형식별-청크-분할-전략)
+> Per-format splitting strategy → [USER_MANUAL.md §4.1](documents/USER_MANUAL.md#41-형식별-청크-분할-전략)
 
 Local LLM (LM Studio, Ollama, etc.):
 ```env
@@ -217,7 +222,8 @@ rag_java/
     │   │   ├── RoutingMode.java       # COST_FIRST|QUALITY_FIRST|PROGRESSIVE|DUAL|LOCAL_ONLY
     │   │   ├── CircuitBreaker.java    # In-memory per-provider circuit breaker (Retry-After aware)
     │   │   ├── TrackingEmbeddingModel.java  # EmbeddingModel decorator — records embedding token usage separately (embed:<model>)
-    │   │   └── CachingEmbeddingModel.java   # EmbeddingModel decorator — Caffeine query-embedding cache (Phase 7-A) + in-flight single-flight dedup (ConcurrentHashMap<key,CompletableFuture>), composed outside tracking
+    │   │   ├── CachingEmbeddingModel.java   # EmbeddingModel decorator — Caffeine query-embedding cache (Phase 7-A) + in-flight single-flight dedup (ConcurrentHashMap<key,CompletableFuture>), composed outside tracking
+    │   │   └── LoadBalancingEmbeddingModel.java  # EmbeddingModel decorator — least-in-flight across multiple embedding endpoints (§6.21 E1)
     │   ├── model/                     # Java 21 records
     │   │   ├── MetaKey.java           # Vector store metadata key constants
     │   │   └── ChatRequest/Response/SourceRef/DocumentInfo/SyncResult/ThreadMeta/ChatForm/LlmProviderReport/IndexingProgressEvent.java
@@ -318,8 +324,10 @@ User question
 - **In-flight single-flight (embeddings)** — concurrent requests for the exact same (post-normalization) text — e.g. several users asking the same question at nearly the same moment — collapse into one delegate call; the rest share that result instead of each recomputing it (`CachingEmbeddingModel`)
 - **Overload-aware circuit breaking** — a 429/402/503 with no fallback provider available (e.g. a lone LOCAL deployment) triggers a short 30s block instead of the full multi-minute default, so a transient capacity blip doesn't take chat down for everyone; falls back to normal blocking + auto-failover whenever another provider can pick up the slack
 - **Same-priority load balancing** — registering multiple providers at the same role + priority (e.g. two LOCAL servers) automatically distributes requests to whichever has more free concurrency-gate capacity (least-in-flight), for horizontal throughput scaling — no code changes, just deployment config
-- **Settings page (`/settings`)** — view the effective LLM/RAG configuration (providers, routing, embedding, search tuning) in one place; a set of search-tuning values (similarity threshold, RRF weight/k, candidate multipliers, multi-query min length, retry escalation) are **hot-editable** and apply on the next search **without a restart** (persisted in a `settings_override` table, revert to the property default on delete). Editing is admin-only and audited; restart-required values are shown read-only
-- **Vector search** — LLM generates an optimized search query (`MultiQueryExpander`, 3 parallel queries), then performs vector similarity search via the selected backend (ChromaDB or sqlite-vec)
+- **Task-tier model routing (small-LLM offload)** — reasoning-free chores (keyword+context extraction, conversation summary, thread title, MultiQuery query expansion) route to `TaskType.MICRO_TEXT`; register a dedicated small (~500MB) local model at `type=MICRO_TEXT` and those chores offload to it while the main model stays dedicated to answers and the quality-sensitive classify / meta-direct-answer. Falls back to the main model when no small model is registered (zero regression) — see [LLM_ROUTING.md §9](documents/LLM_ROUTING.md)
+- **Embedding load balancing + parallel sub-batch embedding** — multiple embedding endpoints (`EMBED_ADDITIONAL_BASE_URLS`, same model/dimension) are balanced least-in-flight; indexing can embed a document's sub-batches in parallel (`EMBED_MAX_CONCURRENT_BATCHES`) to fill them. Both opt-in (default single-endpoint, serial) — see [OPERATOR_MANUAL §3.2](documents/OPERATOR_MANUAL.md)
+- **Settings page (`/settings`)** — view the effective LLM/RAG configuration (providers, routing, embedding, search tuning) in one place; three families of values are **hot-editable without a restart** (persisted in `settings_override`, revert to the property default on delete): search tuning (similarity threshold, RRF weight/k, candidate multipliers, multi-query min length/enabled, retry escalation, topK, hybrid search — apply on the next search), indexing/chunking (chunk size/overlap/min, concurrent file/LLM-call limits — apply on the next indexing or ↺ re-index), and Direct-answer temperature (apply on the next Direct call). Editing is admin-only and audited; restart-required values (rerank-enabled, general temperature/max-tokens, embedding config, etc.) are shown read-only
+- **Vector search** — LLM generates an optimized search query (`MultiQueryExpander`, 3 parallel queries; skipped for short keyword-ish questions), then performs vector similarity search via the selected backend (ChromaDB or sqlite-vec); the original-question search runs in parallel with query expansion instead of waiting behind it. Batched Chroma search requests only the metadata/document/distance fields it actually reads, not the (unused) embedding vectors, keeping large-candidate-pool responses lean
 - **Contextual Retrieval** — each chunk's embedding and lexical (`chunk_fts`) index include a prepended context header (`{filename} > {section heading}`, plus an optional LLM-generated 1-2 sentence summary from the same call that extracts keywords) so chunks that read ambiguously alone (tables, code fragments, pronoun-heavy text) are recalled more reliably; the header never appears in stored/displayed text, the source preview, or the answer prompt — only in the embedding/lexical-search input
 - **Embedding input normalization** — decorative markdown (separator lines, bold/italic/underline markers) is stripped from the embedding, `chunk_fts`, and answer-prompt inputs (not from stored/displayed text), reducing noise in the search index and prompt token usage
 - **ReAct re-retrieval** — automatic re-retrieval up to 2 times when evidence is insufficient
@@ -328,17 +336,18 @@ User question
 - **DUAL mode** — runs local and external LLM in parallel, displays results in side-by-side tabs
 - **Rate limiting** — Bucket4j + Caffeine per-user token-bucket; 429 `RAG-RATE-001` + `Retry-After` header; configurable via `app.rate-limit.*`
 - **Audit logging** — structured events written to rolling file via Logback; configurable via `app.audit.*`
-- **Image processing pipeline** — PDF/PPTX/DOCX image extraction → stored under `data/images/{imageId}/` (a content-hash key derived from the document's SHA-256, distinct from the document's own `docId`, so long filenames aren't repeated per image); PPTX pictures with annotation shapes (highlight circle, arrow, callout) drawn on/near them are merged into one composite image by default (`app.pptx-image.merge-annotated-pictures`); Lazy Vision description on first retrieval (cached in SQLite); image thumbnails shown in answer bubble
+- **Image processing pipeline** — PDF/PPTX/DOCX image extraction → stored under `data/images/{imageId}/` (a content-hash key derived from the document's SHA-256, distinct from the document's own `docId`, so long filenames aren't repeated per image); PPTX pictures with annotation shapes (highlight circle, arrow, callout) drawn on them are composited into one image (`app.pptx-image.merge-annotated-pictures`), as are tables with an overlapping annotation shape (table also kept as a markdown table) and real Ctrl+G groups / SmartArt; loose overlapping shapes are only merged into one diagram image when `app.pptx-image.rasterize-shapes=true` (default off). DOCX pictures likewise merge with legacy-VML annotation shapes (rect/oval/line) found in the same paragraph (`app.docx-image.merge-annotated-shapes` — a proximity approximation, since POI exposes no shape coordinates for DOCX); Lazy Vision description on first retrieval (cached in SQLite); image thumbnails shown in answer bubble
 - **Image type classification** — pre-classifies images (diagram / screenshot / chart / photo / other) and uses type-specific Vision prompts for better descriptions
 - **Scanned PDF OCR** — Tesseract OCR (kor+eng) for pages with insufficient text; activated via `app.image-description.ocr-enabled=true`
 - **EMF/WMF conversion** — DOCX Windows Metafile images converted to PNG via Batik (EMF) or LibreOffice headless (WMF)
 - **Multi-turn conversation** — thread-based history persistence (SQLite WAL, survives restarts)
 - **Message bubble restore** — re-entering `/chat/{threadId}` server-renders all previous turn bubbles
-- **Source hover preview** — `SourceRef` record with Bootstrap Popover shows a 200-char chunk text preview on hover
+- **Source hover preview** — `SourceRef` record with Bootstrap Popover shows a 200-char chunk text preview on hover; on non-mobile screens the popover is roughly 2x wider with a slightly smaller font so the excerpt reads with less wrapping
 - **Code syntax highlighting** — highlight.js applied after DOMPurify sanitize, synced with dark mode
 - **LLM usage dashboard** — per-provider daily/weekly/monthly token stats, Chart.js daily history chart, circuit breaker countdown; embedding usage tracked separately (`embed:<model>`, with an approximation fallback when the server omits usage); inactive providers with no history auto-hide, and orphaned records (removed from config) surface as admin-deletable cards
 - **Document versioning** — per-version isolation (chroma: separate collection; sqlite-vec: `version` partition key)
-- **Incremental indexing** — SHA-256 change detection, `doc_registry` SQLite table persistence (per-user)
+- **Incremental indexing** — SHA-256 change detection, `doc_registry` SQLite table persistence (per-user). On sqlite-vec, embeddings are inserted per token sub-batch as soon as each one is embedded rather than buffered for the whole document, so peak memory during a large-document index scales with sub-batch size, not document size
+- **Batched keyword extraction** — chunks are bundled N-at-a-time (default 4, `INDEXING_KEYWORD_BATCH_SIZE`) into one LLM call during indexing instead of one call per chunk, cutting round-trips roughly N-fold; falls back to per-chunk TF extraction if a batch call or its parsing fails
 - **Multiple document formats** — PDF, PPTX, DOCX, TXT, MD
 - **Java 21 Virtual Threads** — lightweight threads for all LLM I/O and parallel indexing
 

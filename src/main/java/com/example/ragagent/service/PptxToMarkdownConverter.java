@@ -27,6 +27,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -66,15 +67,19 @@ import java.util.regex.Pattern;
  *
  * Images are handled inline here, like {@link DocxToMarkdownConverter}: {@link PptxImageExtractor}
  * extracts each slide's pictures to {@code imagesDir} up front, and their relative paths are
- * emitted as {@code [이미지: ...]} markers right after the slide's heading(s). {@code loadFromMarkdown()}
- * then promotes those markers into {@code image_paths} metadata exactly as it does for DOCX — no
- * separate metadata-attachment step is needed downstream. All of a slide's image markers are always
- * hoisted to this one spot, regardless of where the picture actually sits among the slide's shapes
- * (e.g. a picture visually placed below several paragraphs of body text still emits its marker
- * right after the heading, before that text) — an intentional simplification, not a bug: a whole
- * slide is always one chunk (§6.3-bis in Pipeline.md), so exact marker position within that chunk
- * doesn't affect what's retrievable, only how the raw chunk text reads if inspected directly (e.g.
- * in {@code /admin}). Tables ({@code XSLFTable}) are rendered as a markdown pipe table by
+ * emitted as {@code [이미지: ...]} markers. {@code loadFromMarkdown()} then promotes those markers
+ * into {@code image_paths} metadata exactly as it does for DOCX — no separate metadata-attachment
+ * step is needed downstream. An image with no correlatable owner (a plain top-level picture, OLE
+ * preview, ...) is always hoisted right after the slide's heading(s), regardless of where the
+ * picture actually sits among the slide's shapes — an intentional simplification, not a bug: a
+ * whole slide is always one chunk (§6.3-bis in PIPELINE.md), so exact marker position within that
+ * chunk doesn't affect what's retrievable, only how the raw chunk text reads if inspected directly
+ * (e.g. in {@code /admin}). An image {@link PptxImageExtractor} tags with an owner — a group,
+ * SmartArt, or chart's own rasterized/fallback picture (via
+ * {@link PptxImageExtractor#extractWithOwners}, matched here by {@code slide.getShapes()} index —
+ * see {@link #extractSlide}) — is the one exception: its marker is placed inline inside that
+ * shape's own {@code [도형 그룹]}/{@code [다이어그램]}/{@code [차트: ...]} block instead, so the
+ * image-to-text correlation is visible directly in the marker layout. Tables ({@code XSLFTable}) are rendered as a markdown pipe table by
  * {@link #appendTable} wherever they appear in shape order — merge-continuation cells
  * ({@code XSLFTableCell#isMerged()}) render blank, mirroring how {@link DocxToMarkdownConverter}
  * handles merged DOCX table cells.
@@ -88,12 +93,18 @@ import java.util.regex.Pattern;
  *
  * {@code XSLFTable}, {@code XSLFDiagram} (SmartArt), {@code XSLFObjectShape} (OLE embeds), and
  * chart frames are all {@code XSLFGraphicFrame} subclasses/variants that the plain
- * {@code XSLFTextShape} walk above never sees on its own. SmartArt's box/label text is extracted
- * via {@link #appendGroupText} on {@code XSLFDiagram#getGroupShape()} (the rendered drawing
- * layer); a chart frame contributes only its title text (series/category values aren't reliably
- * extractable without re-implementing per-chart-type layout); an OLE embed contributes no text at
- * all — {@link PptxImageExtractor} separately pulls its embedded preview picture and, best-effort,
- * a chart's {@code mc:Fallback} preview picture when PowerPoint included one.
+ * {@code XSLFTextShape} walk above never sees on its own. SmartArt's box/label text and a plain
+ * group's inner text are each wrapped in a {@code [다이어그램] … [/다이어그램]} /
+ * {@code [도형 그룹] … [/도형 그룹]} marker block by {@link #appendShapeGroup} so all labels pulled
+ * from one shape stay bundled together and are visibly marked as shape-extracted (rather than
+ * bleeding into the surrounding body text); a chart frame contributes only its title, rendered as
+ * {@code [차트: 제목]} (series/category values aren't reliably extractable without re-implementing
+ * per-chart-type layout); an OLE embed contributes no text at all — {@link PptxImageExtractor}
+ * separately pulls its embedded preview picture and, best-effort, a chart's {@code mc:Fallback}
+ * preview picture when PowerPoint included one. These bracket markers live in {@code Document.getText()}
+ * itself, so they flow into the embedding/FTS input, the {@code /admin} chunk view, and the answer
+ * prompt (like {@code [이미지: ...]}); they start with '[' not '#', so {@code splitMarkdownBySections()}
+ * never treats them as section boundaries and {@code MarkdownNoiseNormalizer} never strips them.
  *
  * Shapes are walked in reading order, not {@code slide.getShapes()}'s z-order (paint order) —
  * {@link #inReadingOrder} sorts by anchor position (top first, then left) before the body loop
@@ -117,6 +128,16 @@ public class PptxToMarkdownConverter {
     private static final Pattern ITALIC_EMPHASIS_PATTERN = Pattern.compile("(?<!\\w)_(.*?)_(?!\\w)");
     private static final int MAX_HEADING_CANDIDATES = 2;
     private static final int MAX_HEADING_CANDIDATE_LENGTH = 40;
+    /** 슬라이드 하나에 이 값 이상 볼드 스팬이 있으면 강조로서 의미가 없다고 보고 마커를 전부 제거한다. */
+    private static final int EXCESSIVE_BOLD_THRESHOLD = 10;
+    /** 도형 그룹/표 하나 안에 이 값 이상 볼드 스팬이 있으면 그 블록만 볼드 마커를 전부 제거한다
+     *  ({@link #EXCESSIVE_BOLD_THRESHOLD}는 슬라이드 전체 기준이라, 볼드가 한 블록에만 몰려 있고
+     *  슬라이드 전체 개수는 임계값 미만인 경우를 놓친다). */
+    private static final int BLOCK_BOLD_COUNT_THRESHOLD = 6;
+    /** 도형 그룹/표 하나에서 볼드로 덮인 글자 수가 전체 글자 수의 이 비율 이상이면(개수와 무관하게)
+     *  그 블록만 볼드 마커를 전부 제거한다 — 스팬 몇 개뿐이라도 그게 텍스트 대부분을 차지하면
+     *  개수 기준({@link #BLOCK_BOLD_COUNT_THRESHOLD})만으로는 못 잡기 때문. */
+    private static final double BLOCK_BOLD_RATIO_THRESHOLD = 0.5;
 
     private final PptxImageExtractor imageExtractor;
 
@@ -124,8 +145,12 @@ public class PptxToMarkdownConverter {
         this.imageExtractor = imageExtractor;
     }
 
-    /** Pure per-slide extraction result: heading candidates (discovery order) + rendered body. */
-    private record SlideExtract(List<String> headingCandidates, String body) {
+    /**
+     * Pure per-slide extraction result: heading candidates (discovery order) + rendered body +
+     * the image paths already placed inline inside a group/diagram/chart's own bracket block
+     * (excluded from the top-of-slide hoisted image list by the caller).
+     */
+    private record SlideExtract(List<String> headingCandidates, String body, Set<String> consumedImagePaths) {
     }
 
     /**
@@ -141,7 +166,8 @@ public class PptxToMarkdownConverter {
         // deck's XML twice is real, avoidable cost (correctness is unaffected either way, since the
         // two passes don't mutate shared state).
         try (XMLSlideShow pptx = new XMLSlideShow(Files.newInputStream(pptxPath))) {
-            Map<Integer, List<String>> imageMap = imageExtractor.extract(pptx, imageId, imagesDir);
+            Map<Integer, List<PptxImageExtractor.ExtractedImage>> imageMap =
+                    imageExtractor.extractWithOwners(pptx, imageId, imagesDir);
 
             String title = resolveDocumentTitle(pptx, pptxPath);
             if (!title.isBlank()) {
@@ -154,8 +180,9 @@ public class PptxToMarkdownConverter {
             // distinct slides each exact heading text appears on (needed for calibration below).
             List<SlideExtract> extracts = new ArrayList<>(slides.size());
             Map<String, Integer> headingFrequency = new HashMap<>();
-            for (XSLFSlide slide : slides) {
-                SlideExtract extract = extractSlide(slide);
+            for (int i = 0; i < slides.size(); i++) {
+                List<PptxImageExtractor.ExtractedImage> slideImages = imageMap.getOrDefault(i + 1, List.of());
+                SlideExtract extract = extractSlide(slides.get(i), slideImages);
                 extracts.add(extract);
                 for (String heading : new LinkedHashSet<>(extract.headingCandidates())) {
                     headingFrequency.merge(heading, 1, Integer::sum);
@@ -165,8 +192,15 @@ public class PptxToMarkdownConverter {
             // Pass 2: emit, resolving outer/inner heading order per slide from the global counts.
             for (int i = 0; i < slides.size(); i++) {
                 int slideNum = i + 1;
-                List<String> images = imageMap.getOrDefault(slideNum, List.of());
-                appendSlide(sb, extracts.get(i), slideNum, images, headingFrequency);
+                SlideExtract extract = extracts.get(i);
+                // Images this slide's groups/diagrams/charts already placed inline in their own
+                // bracket blocks (extractSlide()) are excluded here — only genuinely unassociated
+                // images (plain pictures, OLE previews, ...) still get hoisted to the top.
+                List<String> hoistedImages = imageMap.getOrDefault(slideNum, List.of()).stream()
+                        .map(PptxImageExtractor.ExtractedImage::path)
+                        .filter(path -> !extract.consumedImagePaths().contains(path))
+                        .toList();
+                appendSlide(sb, extract, slideNum, hoistedImages, headingFrequency);
             }
         }
         return sb.toString();
@@ -179,7 +213,7 @@ public class PptxToMarkdownConverter {
      * 더 이상 헤딩 후보를 찾지 않는다(표지/구분 슬라이드처럼 본문이 프로즈로만 이어지는 경우
      * 오탐을 줄이기 위함).
      */
-    private SlideExtract extractSlide(XSLFSlide slide) {
+    private SlideExtract extractSlide(XSLFSlide slide, List<PptxImageExtractor.ExtractedImage> slideImages) {
         List<String> headingCandidates = new ArrayList<>();
         String slideTitle = slide.getTitle();
         if (slideTitle != null && !slideTitle.isBlank()) {
@@ -192,9 +226,39 @@ public class PptxToMarkdownConverter {
         // positives from a short bold subtitle/caption that isn't meant as a heading).
         boolean slideHasBullets = slideHasAnyBullet(slide);
 
+        // Original z-order shape list — the same index space PptxImageExtractor used to tag each
+        // ExtractedImage's ownerShapeIndices() (see its javadoc). Must NOT be inReadingOrder()'s
+        // resorted view, or indices would disagree between the two components.
+        List<XSLFShape> topLevelShapes = slide.getShapes();
+        IdentityHashMap<XSLFShape, Integer> topLevelIndexOf = new IdentityHashMap<>();
+        for (int i = 0; i < topLevelShapes.size(); i++) {
+            topLevelIndexOf.put(topLevelShapes.get(i), i);
+        }
+        Map<Integer, List<String>> imagesByOwnerIndex = new HashMap<>();
+        for (PptxImageExtractor.ExtractedImage img : slideImages) {
+            for (Integer idx : img.ownerShapeIndices()) {
+                imagesByOwnerIndex.computeIfAbsent(idx, k -> new ArrayList<>()).add(img.path());
+            }
+        }
+        // 같은 종류(그룹/다이어그램/차트)가 슬라이드에 2개 이상일 때만 라벨에 순번을 붙인다 — 1개뿐이면
+        // 기존 라벨("도형 그룹"/"다이어그램"/"차트")을 그대로 유지해 출력/테스트 호환성을 지킨다.
+        long groupCount = topLevelShapes.stream().filter(s -> s instanceof XSLFGroupShape).count();
+        long diagramCount = topLevelShapes.stream().filter(s -> s instanceof XSLFDiagram).count();
+        long chartCount = topLevelShapes.stream()
+                .filter(s -> s instanceof XSLFGraphicFrame f && f.hasChart())
+                .count();
+        int groupSeen = 0;
+        int diagramSeen = 0;
+        int chartSeen = 0;
+        Set<String> consumedImagePaths = new LinkedHashSet<>();
+
         StringBuilder body = new StringBuilder();
         boolean bulletSeen = false;
-        for (XSLFShape shape : inReadingOrder(slide.getShapes())) {
+        // 직전에 추가한 본문 줄(정규화된 텍스트) — shape 경계를 넘어 연속 중복 줄을 잡아내기 위해
+        // 도형 루프 밖(메서드 레벨)에 둔다. 표/그룹/다이어그램/차트를 만나도 리셋하지 않는다 — 흔한
+        // 케이스(복붙으로 같은 줄이 연달아 들어간 경우)만 노린 단순한 규칙으로 충분하다고 본다.
+        String lastBodyLine = null;
+        for (XSLFShape shape : inReadingOrder(topLevelShapes)) {
             if (shape instanceof XSLFTable table) {
                 appendTable(body, table);
                 continue;
@@ -203,9 +267,12 @@ public class PptxToMarkdownConverter {
                 // SmartArt: getGroupShape() is the rendered drawing layer (real box/text shapes),
                 // reused via the same text walk as a plain group — extracting from the diagram's
                 // own data model would require re-implementing POI's layout engine.
+                diagramSeen++;
+                String label = diagramCount > 1 ? "다이어그램 " + diagramSeen : "다이어그램";
+                List<String> owned = imagesByOwnerIndex.getOrDefault(topLevelIndexOf.get(shape), List.of());
                 XSLFShapeContainer diagramGroup = diagram.getGroupShape();
                 if (diagramGroup != null) {
-                    appendGroupText(body, diagramGroup);
+                    appendShapeGroup(body, diagramGroup, label, owned, consumedImagePaths);
                 }
                 continue;
             }
@@ -213,14 +280,20 @@ public class PptxToMarkdownConverter {
                 continue; // OLE 객체 — 텍스트 없음, 미리보기 이미지는 PptxImageExtractor가 별도로 추출
             }
             if (shape instanceof XSLFGraphicFrame frame && frame.hasChart()) {
-                appendChartText(body, frame);
+                chartSeen++;
+                String label = chartCount > 1 ? "차트 " + chartSeen : "차트";
+                List<String> owned = imagesByOwnerIndex.getOrDefault(topLevelIndexOf.get(shape), List.of());
+                appendChartText(body, frame, label, owned, consumedImagePaths);
                 continue;
             }
             if (shape instanceof XSLFGroupShape group) {
                 // The group is also rasterized as one bundled image (PptxImageExtractor), but
                 // that alone is invisible without a Vision-capable LLM — extract its text too so
                 // it stays searchable even when addImageDescriptions/Vision isn't available.
-                appendGroupText(body, group);
+                groupSeen++;
+                String label = groupCount > 1 ? "도형 그룹 " + groupSeen : "도형 그룹";
+                List<String> owned = imagesByOwnerIndex.getOrDefault(topLevelIndexOf.get(shape), List.of());
+                appendShapeGroup(body, group, label, owned, consumedImagePaths);
                 continue;
             }
             if (!(shape instanceof XSLFTextShape textShape)) continue;
@@ -245,11 +318,15 @@ public class PptxToMarkdownConverter {
                 }
 
                 if (isBullet) bulletSeen = true;
-                appendBodyLine(body, para, paragraphText(para));
+                String rendered = paragraphText(para);
+                String normalized = normalizeForDedup(rendered);
+                if (normalized.equals(lastBodyLine)) continue; // 직전 줄과 내용이 같음 — 연속 중복 스킵
+                appendBodyLine(body, para, rendered);
+                lastBodyLine = normalized;
             }
         }
 
-        return new SlideExtract(headingCandidates, body.toString());
+        return new SlideExtract(headingCandidates, stripExcessiveBold(body.toString()), consumedImagePaths);
     }
 
     /** 도형 하나 + 정렬 키(anchor 좌상단 y, x)를 함께 들고 다니기 위한 보조 레코드. */
@@ -292,24 +369,96 @@ public class PptxToMarkdownConverter {
     }
 
     /**
-     * 그룹 도형 내부를 재귀적으로 순회해 텍스트(및 중첩된 표)를 본문에 추가한다 — 그룹 자체는
+     * 그룹/다이어그램 도형 하나에서 추출한 텍스트를 {@code [label] ... [/label]} 마커로 감싸 본문에
+     * 추가한다. 같은 도형에서 나온 여러 라벨(예: 조직도 부서, 프로세스 단계)이 하나의 블록으로
+     * 묶여, 뒤따르는 일반 본문 텍스트와 섞이지 않고 "이 텍스트는 도형에서 뽑은 것"임이 드러난다.
+     * 텍스트가 하나도 없는 도형(순수 장식 그룹 등)은 마커도 붙이지 않는다.
+     *
+     * <p>이 마커는 {@code Document.getText()}에 그대로 남아 검색(임베딩/FTS)·{@code /admin} 표시·
+     * 답변 프롬프트에 모두 흘러간다({@code [이미지: ...]}·코드 연속 마커와 동일한 취급). {@code #}로
+     * 시작하지 않으므로 {@code DocumentLoaderService.splitMarkdownBySections()}가 섹션 경계로
+     * 오인하지 않고, 대괄호 라벨 줄은 {@code MarkdownNoiseNormalizer}가 장식/강조로 지우지 않는다.
+     */
+    private void appendShapeGroup(StringBuilder body, XSLFShapeContainer container, String label,
+                                   List<String> ownedImages, Set<String> consumedImagePaths) {
+        StringBuilder inner = new StringBuilder();
+        appendGroupText(inner, container, new HashSet<>());
+        // 텍스트 없는 도형은 이미지가 있어도 마커 블록 자체를 만들지 않는다(기존 불변식 유지) —
+        // 그 이미지는 소비 처리되지 않은 채 슬라이드 상단 hoist 목록에 그대로 남는다.
+        if (inner.toString().isBlank()) return;
+
+        body.append("[").append(label).append("]\n");
+        for (String path : ownedImages) {
+            body.append("[이미지: ").append(path).append("]\n");
+            consumedImagePaths.add(path);
+        }
+        body.append(stripBoldIfExcessive(inner.toString().strip())).append("\n");
+        body.append("[/").append(label).append("]\n\n");
+    }
+
+    /**
+     * 그룹 도형 내부를 재귀적으로 순회해 텍스트(및 중첩된 표)를 버퍼에 추가한다 — 그룹 자체는
      * 이미지로도 래스터라이즈되지만(PptxImageExtractor), Vision 설명이 없는 환경에서도 검색 가능한
      * 텍스트가 남도록 별도로 추출해 둔다. 그룹 내부 라벨을 슬라이드 제목으로 오인하지 않도록,
-     * 최상위 슬라이드에서만 적용되는 헤딩 후보 승격은 여기서는 적용하지 않는다.
+     * 최상위 슬라이드에서만 적용되는 헤딩 후보 승격은 여기서는 적용하지 않는다. 중첩 그룹은 별도
+     * 마커로 감싸지 않고 그대로 이어붙인다 — 최상위 {@link #appendShapeGroup} 마커 하나가 도형
+     * 전체를 이미 감싸므로, 안쪽까지 매번 마커를 붙이면 오히려 지저분해진다.
+     *
+     * <p>{@code seenShapeTexts}는 도형 하나(모든 문단을 합친 텍스트, {@link #combineShapeText})
+     * 단위의 중복 판정 집합이다 — 같은 그룹(중첩 서브그룹 포함) 안에서 이미 나온 것과 내용이 완전히
+     * 같은 도형은 통째로 건너뛴다({@link #appendShapeGroup}가 그룹 하나당 새 Set을 만들어 넘기므로
+     * 판정 범위는 그 그룹 전체로 한정된다).
      */
-    private void appendGroupText(StringBuilder body, XSLFShapeContainer container) {
+    private void appendGroupText(StringBuilder body, XSLFShapeContainer container, Set<String> seenShapeTexts) {
         for (XSLFShape shape : container.getShapes()) {
             if (shape instanceof XSLFTable table) {
                 appendTable(body, table);
             } else if (shape instanceof XSLFGroupShape nestedGroup) {
-                appendGroupText(body, nestedGroup);
+                appendGroupText(body, nestedGroup, seenShapeTexts);
             } else if (shape instanceof XSLFTextShape textShape) {
+                String combined = combineShapeText(textShape);
+                if (combined.isBlank()) continue;
+                if (!seenShapeTexts.add(normalizeForDedup(combined))) continue; // 그룹 내 다른 도형과 내용 중복 — 스킵
+
                 for (XSLFTextParagraph para : textShape.getTextParagraphs()) {
                     String text = paragraphText(para);
                     if (text.isBlank()) continue;
-                    appendBodyLine(body, para, text);
+                    appendGroupBodyLine(body, para, text);
                 }
             }
+        }
+    }
+
+    /** 도형 하나에 속한 모든 문단을 공백으로 이어붙인다 — 도형 단위 중복 비교를 위한 텍스트 뭉치({@link #tableCellText}와 동일한 접근). */
+    private String combineShapeText(XSLFTextShape textShape) {
+        StringBuilder out = new StringBuilder();
+        for (XSLFTextParagraph para : textShape.getTextParagraphs()) {
+            String text = paragraphText(para).trim();
+            if (text.isEmpty()) continue;
+            if (!out.isEmpty()) out.append(" ");
+            out.append(text);
+        }
+        return out.toString();
+    }
+
+    /** 강조 마커·공백 차이를 무시하고 내용만 비교하기 위한 정규화 ({@link #appendGroupText}·본문 연속중복 제거 공용). */
+    private String normalizeForDedup(String text) {
+        return stripEmphasisMarkers(text).trim().replaceAll("\\s+", " ");
+    }
+
+    /**
+     * 그룹 내부 텍스트 한 줄을 버퍼에 추가한다. 불릿은 {@link #appendBodyLine}과 동일하게
+     * 들여쓰기+마커로 렌더링하되, 비불릿 일반 텍스트는 문단 분리({@code \n\n}) 대신 한 줄 개행
+     * ({@code \n})으로 촘촘하게 이어붙인다 — 도형 내부 라벨들은 서로 관계있는 짧은 항목(노드·단계)이
+     * 대부분이라, 마커 블록 안에서 빈 줄로 벌어지지 않고 하나로 묶여 보이는 편이 낫다.
+     */
+    private void appendGroupBodyLine(StringBuilder body, XSLFTextParagraph para, String text) {
+        if (para.isBullet()) {
+            String indent = "  ".repeat(Math.max(0, para.getIndentLevel()));
+            String marker = para.getAutoNumberingScheme() != null ? "1." : "-";
+            body.append(indent).append(marker).append(" ").append(text).append("\n");
+        } else {
+            body.append(text).append("\n");
         }
     }
 
@@ -319,7 +468,8 @@ public class PptxToMarkdownConverter {
      * 가치가 큰 제목만 추출해 "완전 소실"은 막는다. 시각 자료는 {@code PptxImageExtractor}가
      * {@code mc:Fallback} 미리보기 그림을 발견하면 별도 이미지 마커로 남긴다.
      */
-    private void appendChartText(StringBuilder body, XSLFGraphicFrame frame) {
+    private void appendChartText(StringBuilder body, XSLFGraphicFrame frame, String chartLabel,
+                                  List<String> ownedImages, Set<String> consumedImagePaths) {
         XSLFChart chart = frame.getChart();
         if (chart == null) return;
 
@@ -328,7 +478,15 @@ public class PptxToMarkdownConverter {
 
         String title = titleShape.getText();
         if (title == null || title.isBlank()) return;
-        body.append(title.trim()).append("\n\n");
+
+        // 차트의 mc:Fallback 미리보기 그림(있으면)을 제목 바로 앞에 배치해 상관관계를 드러낸다.
+        for (String path : ownedImages) {
+            body.append("[이미지: ").append(path).append("]\n");
+            consumedImagePaths.add(path);
+        }
+        // "[차트: ...]" 라벨로 감싸 이 텍스트가 차트 제목(도형에서 추출)임을 드러낸다 — 그러지 않으면
+        // 본문에 덩그러니 남은 제목이 일반 문장인지 도형 출처인지 구분되지 않는다.
+        body.append("[").append(chartLabel).append(": ").append(title.trim()).append("]\n\n");
     }
 
     /**
@@ -342,34 +500,43 @@ public class PptxToMarkdownConverter {
         List<XSLFTableRow> rows = table.getRows();
         if (rows.isEmpty()) return;
 
-        body.append("\n");
+        // Assembled into its own buffer (not appended to body directly) so stripBoldIfExcessive can
+        // judge/strip bold over this table alone, not the slide text already in body.
+        StringBuilder tableMd = new StringBuilder("\n");
         for (int r = 0; r < rows.size(); r++) {
             List<XSLFTableCell> cells = rows.get(r).getCells();
             if (cells.isEmpty()) continue;
 
-            body.append("|");
+            tableMd.append("|");
             for (XSLFTableCell cell : cells) {
                 String text = cell.isMerged() ? "" : tableCellText(cell);
-                body.append(" ").append(text.replace("|", "\\|")).append(" |");
+                tableMd.append(" ").append(text.replace("|", "\\|")).append(" |");
             }
-            body.append("\n");
+            tableMd.append("\n");
 
             if (r == 0) {
-                body.append("|");
+                tableMd.append("|");
                 for (int c = 0; c < cells.size(); c++) {
-                    body.append(" --- |");
+                    tableMd.append(" --- |");
                 }
-                body.append("\n");
+                tableMd.append("\n");
             }
         }
-        body.append("\n");
+        tableMd.append("\n");
+        body.append(stripBoldIfExcessive(tableMd.toString()));
     }
 
-    /** 표 셀 내 모든 문단을 공백으로 이어붙인다 — 파이프 표 행 내부이므로 개행을 넣을 수 없다. */
+    /**
+     * 표 셀 내 모든 문단을 공백으로 이어붙인다 — 파이프 표 행 내부이므로 개행을 넣을 수 없다.
+     * 문단 하나 안에 줄바꿈({@code <a:br/>}, Shift+Enter)이 있으면 {@link #paragraphText}가 그
+     * 자리에 리터럴 {@code "\n"}을 그대로 반환하므로(POI {@code XSLFTextRun.getRawText()}가
+     * {@code CTTextLineBreak}를 {@code "\n"}으로 반환), 그걸 공백 하나로 치환해 파이프 테이블 행이
+     * 여러 줄로 쪼개져 깨지는 것을 막는다.
+     */
     private String tableCellText(XSLFTableCell cell) {
         StringBuilder out = new StringBuilder();
         for (XSLFTextParagraph para : cell.getTextParagraphs()) {
-            String text = paragraphText(para).trim();
+            String text = paragraphText(para).replaceAll("\\s*\n\\s*", " ").trim();
             if (text.isEmpty()) continue;
             if (!out.isEmpty()) out.append(" ");
             out.append(text);
@@ -542,6 +709,43 @@ public class PptxToMarkdownConverter {
     private String stripEmphasisMarkers(String text) {
         String result = stripMarkerPattern(text, BOLD_EMPHASIS_PATTERN, 2);
         return stripMarkerPattern(result, ITALIC_EMPHASIS_PATTERN, 1);
+    }
+
+    /**
+     * 슬라이드 하나의 최종 조립된 본문(본문·표·그룹 텍스트가 전부 합쳐진 뒤)에서 볼드 스팬 개수를
+     * 세어 {@link #EXCESSIVE_BOLD_THRESHOLD}개 이상이면 전부 제거한다 — 슬라이드 전체가 볼드로
+     * 처리된 경우 등, 그 정도로 과도하면 강조 표시로서 의미가 없다고 보기 때문. 이탤릭({@code _..._})은
+     * 대상이 아니다.
+     */
+    private String stripExcessiveBold(String body) {
+        Matcher matcher = BOLD_EMPHASIS_PATTERN.matcher(body);
+        int count = 0;
+        while (matcher.find()) count++;
+        if (count < EXCESSIVE_BOLD_THRESHOLD) return body;
+        return stripMarkerPattern(body, BOLD_EMPHASIS_PATTERN, 2);
+    }
+
+    /**
+     * 도형 그룹/표 텍스트 하나({@link #appendShapeGroup}/{@link #appendTable} 전용, 슬라이드 전체가
+     * 아님)에서 볼드 스팬 개수와 볼드로 덮인 글자 비율을 재서, 둘 중 하나라도
+     * {@link #BLOCK_BOLD_COUNT_THRESHOLD}/{@link #BLOCK_BOLD_RATIO_THRESHOLD}를 넘으면 그 블록
+     * 안의 {@code **}과 {@code ***} 마커를 전부 제거한다. {@link #stripExcessiveBold}(슬라이드 전체,
+     * 개수만 판단)와는 독립적으로 작동 — 볼드가 도형 그룹/표 하나에만 몰려 있어서 슬라이드 전체
+     * 개수는 임계값 미만인 경우도 잡아낸다.
+     */
+    private String stripBoldIfExcessive(String text) {
+        if (text == null || text.isEmpty()) return text;
+        Matcher matcher = BOLD_EMPHASIS_PATTERN.matcher(text);
+        int count = 0;
+        int boldChars = 0;
+        while (matcher.find()) {
+            count++;
+            boldChars += matcher.group(2).length();
+        }
+        if (count == 0) return text;
+        boolean excessive = count >= BLOCK_BOLD_COUNT_THRESHOLD
+                || boldChars >= text.length() * BLOCK_BOLD_RATIO_THRESHOLD;
+        return excessive ? stripMarkerPattern(text, BOLD_EMPHASIS_PATTERN, 2) : text;
     }
 
     /** 주어진 패턴의 각 매치에서 {@code contentGroup}(마커 안쪽 내용)만 남기고 마커 문자 자체는 제거한다. */

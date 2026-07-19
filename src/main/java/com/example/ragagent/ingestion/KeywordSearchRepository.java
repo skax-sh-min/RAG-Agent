@@ -7,6 +7,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.ai.document.Document;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
@@ -219,13 +220,50 @@ public class KeywordSearchRepository {
         }
     }
 
+    /** Shared row mapper for both the BM25 MATCH path and the §10.7.3 LIKE fallback path. */
+    private static final RowMapper<Document> CHUNK_ROW_MAPPER = (rs, n) -> {
+        Map<String, Object> meta = new HashMap<>();
+        meta.put(MetaKey.DOC_ID, rs.getString("doc_id"));
+        meta.put(MetaKey.VERSION, rs.getString("version"));
+        meta.put(MetaKey.FILENAME, rs.getString("filename"));
+        meta.put(MetaKey.PAGE_OR_SLIDE, rs.getString("page"));
+        meta.put(MetaKey.CHUNK_INDEX, rs.getString("chunk_index"));
+        meta.put(MetaKey.TAGS, rs.getString("doc_tags"));  // 태그 동행
+        return Document.builder()
+                .id(rs.getString("spring_doc_id"))
+                .text(rs.getString("content"))
+                .metadata(meta)
+                .build();
+    };
+
     /**
      * BM25-ranked lexical search over content + keywords, filtered by version.
      * Returns Documents carrying the same metadata keys vector results use so RRF dedup
      * (via {@code doc_id:chunk_index}) merges the two sources cleanly.
+     *
+     * <p>§10.7.3 — query terms under 3 characters produce no trigram (the {@code trigram}
+     * tokenizer's floor) and are dropped by {@link #toMatchQuery}, so a query like "오류" alone
+     * used to return zero BM25-axis candidates. Any such short terms are supplemented with a
+     * {@code LIKE} scan over content + keywords, appended after the ranked MATCH results (so they
+     * land at a worse RRF position within this axis — no real BM25 score, just an existence
+     * signal) and de-duplicated by {@code spring_doc_id} against the MATCH results.
      */
     public List<Document> search(String version, String question, int topK) {
         if (!available) return List.of();
+        List<Document> results = new ArrayList<>(matchSearch(question, version, topK));
+        List<String> shortTerms = shortTerms(question);
+        int remaining = topK - results.size();
+        if (!shortTerms.isEmpty() && remaining > 0) {
+            Set<String> seen = new java.util.HashSet<>();
+            for (Document d : results) seen.add(d.getId());
+            for (Document d : likeSearch(shortTerms, version, remaining)) {
+                if (seen.add(d.getId())) results.add(d);
+            }
+        }
+        return results;
+    }
+
+    private List<Document> matchSearch(String question, String version, int topK) {
         String match = toMatchQuery(question);
         if (match == null) return List.of();
         try {
@@ -236,23 +274,43 @@ public class KeywordSearchRepository {
                     ORDER BY bm25(chunk_fts)
                     LIMIT ?
                     """,
-                    (rs, n) -> {
-                        Map<String, Object> meta = new HashMap<>();
-                        meta.put(MetaKey.DOC_ID, rs.getString("doc_id"));
-                        meta.put(MetaKey.VERSION, rs.getString("version"));
-                        meta.put(MetaKey.FILENAME, rs.getString("filename"));
-                        meta.put(MetaKey.PAGE_OR_SLIDE, rs.getString("page"));
-                        meta.put(MetaKey.CHUNK_INDEX, rs.getString("chunk_index"));
-                        meta.put(MetaKey.TAGS, rs.getString("doc_tags"));  // 태그 동행
-                        return Document.builder()
-                                .id(rs.getString("spring_doc_id"))
-                                .text(rs.getString("content"))
-                                .metadata(meta)
-                                .build();
-                    },
+                    CHUNK_ROW_MAPPER,
                     match, version, topK);
         } catch (Exception e) {
             log.debug("[KEYWORD] search failed: {}", e.getMessage());
+            return List.of();
+        }
+    }
+
+    /**
+     * §10.7.3 fallback for terms too short to have a trigram — plain substring scan, no BM25 rank
+     * available so results are ordered by {@code rowid} for determinism. Full-table scan, but the
+     * local-SQLite corpus sizes this targets keep it cheap.
+     */
+    private List<Document> likeSearch(List<String> terms, String version, int limit) {
+        String whereClause = terms.stream()
+                .map(t -> "(content LIKE ? OR keywords LIKE ?)")
+                .collect(java.util.stream.Collectors.joining(" OR "));
+        List<Object> params = new ArrayList<>();
+        for (String t : terms) {
+            String pattern = "%" + t + "%";
+            params.add(pattern);
+            params.add(pattern);
+        }
+        params.add(version);
+        params.add(limit);
+        try {
+            return jdbc.query(("""
+                    SELECT spring_doc_id, doc_id, version, filename, page, chunk_index, doc_tags, content
+                    FROM chunk_fts
+                    WHERE (%s) AND version = ?
+                    ORDER BY rowid
+                    LIMIT ?
+                    """).formatted(whereClause),
+                    CHUNK_ROW_MAPPER,
+                    params.toArray());
+        } catch (Exception e) {
+            log.debug("[KEYWORD] short-term LIKE search failed: {}", e.getMessage());
             return List.of();
         }
     }
@@ -322,17 +380,35 @@ public class KeywordSearchRepository {
      * cannot break the query, and so multi-trigram tokens are matched as an adjacent phrase rather
      * than an unordered bag of trigrams) and OR-combined for recall. Terms under 3 characters are
      * dropped — the {@code trigram} tokenizer (§10.4) cannot produce a trigram from fewer than 3
-     * characters, so shorter terms are guaranteed to match nothing.
+     * characters, so shorter terms are guaranteed to match nothing (see {@link #shortTerms} for
+     * the §10.7.3 LIKE-scan fallback that recovers a signal for exactly those terms).
      */
     static String toMatchQuery(String question) {
-        if (question == null || question.isBlank()) return null;
-        String[] tokens = question.split("[\\s\\p{Punct}]+");
-        List<String> terms = new ArrayList<>();
-        for (String t : tokens) {
-            String s = t.trim().replace("\"", "");
-            if (s.length() >= 3) terms.add("\"" + s + "\"");
-        }
+        List<String> terms = tokenize(question).stream()
+                .filter(t -> t.length() >= 3)
+                .map(t -> "\"" + t + "\"")
+                .toList();
         return terms.isEmpty() ? null : String.join(" OR ", terms);
+    }
+
+    /**
+     * §10.7.3 — tokens shorter than the trigram floor (3 chars), which {@link #toMatchQuery} would
+     * otherwise silently drop. De-duplicated; empty when every token is 3+ characters.
+     */
+    static List<String> shortTerms(String question) {
+        return tokenize(question).stream().filter(t -> t.length() < 3).distinct().toList();
+    }
+
+    /** Whitespace/punctuation-delimited tokens, trimmed and stray-quote-stripped. Blank-safe. */
+    private static List<String> tokenize(String question) {
+        if (question == null || question.isBlank()) return List.of();
+        String[] raw = question.split("[\\s\\p{Punct}]+");
+        List<String> tokens = new ArrayList<>();
+        for (String t : raw) {
+            String s = t.trim().replace("\"", "");
+            if (!s.isEmpty()) tokens.add(s);
+        }
+        return tokens;
     }
 
     private static String str(Object o) {

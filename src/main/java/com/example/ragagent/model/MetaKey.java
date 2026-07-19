@@ -18,6 +18,7 @@ public final class MetaKey {
     public static final String HEADING_PAGE    = "heading_page";      // DOCX 헤딩 시작 페이지(명시적 page break 기준)
     public static final String HEADING         = "heading";           // 청크가 속한 섹션 제목 (DocumentLoaderService)
     public static final String CHUNK_CONTEXT   = "chunk_context";     // 임베딩/FTS용 맥락 헤더 (transient — 영속 전 제거, §10.1)
+    public static final String SEARCH_TEXT     = "search_text";       // SearchTextBuilder 결과 캐시 (transient — 영속 전 제거, §10.8.5)
 
     // 미래 확장 — 멀티유저/권한
     public static final String OWNER_ID  = "owner_id";   // 'anonymous' 기본
