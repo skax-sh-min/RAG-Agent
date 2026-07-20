@@ -28,6 +28,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 import java.util.regex.Matcher;
@@ -126,10 +127,16 @@ public class KeywordExtractor {
                 %s
                 [/DOCUMENT]""".formatted(safeText);
         int timeoutSec = props.indexingSafe().keywordTimeoutSeconds();
-        // called inside a VT from enrichParallel — invoke directly, no ForkJoinPool
-        // interrupt this thread on timeout so the blocking HTTP call is actually cancelled
+        // called inside a VT from enrichParallel — invoke directly, no ForkJoinPool.
+        // interrupt this thread on timeout so the blocking HTTP call is actually cancelled;
+        // timedOut is the sole authority for the "[TIMEOUT]" log branch — a plain LLM/provider
+        // failure (e.g. "All providers exhausted") must NOT be mislabeled as a timeout.
         Thread self = Thread.currentThread();
-        ScheduledFuture<?> killer = timeoutScheduler.schedule(self::interrupt, timeoutSec, TimeUnit.SECONDS);
+        AtomicBoolean timedOut = new AtomicBoolean(false);
+        ScheduledFuture<?> killer = timeoutScheduler.schedule(() -> {
+            timedOut.set(true);
+            self.interrupt();
+        }, timeoutSec, TimeUnit.SECONDS);
         try {
             // §10.1 — one call now yields keywords + context together; tracked under context:
             // (BackgroundUsage.KEYWORD_PREFIX stays defined only to recognize historical rows).
@@ -147,11 +154,10 @@ public class KeywordExtractor {
             meta.put(MetaKey.CHUNK_CONTEXT, combineContext(structuralContext, parsed.context()));
             return new Document(chunk.getText(), meta);
         } catch (Exception e) {
-            if (isTimeoutLike(e)) {
-                log.warn("[TIMEOUT:INDEX_KEYWORD] timeout={}s; falling back to TF", timeoutSec);
+            if (timedOut.get()) {
+                log.warn("[TIMEOUT:INDEX_KEYWORD] keyword-extraction timeout ({}s) fired — TF fallback", timeoutSec);
             } else {
-                log.debug("LLM keyword extraction failed (timeout={}s), falling back to TF: {}",
-                        timeoutSec, e.getMessage());
+                log.debug("[ENRICH] LLM keyword extraction failed — TF fallback: {}", e.getMessage());
             }
             return tfFallback(chunk, structuralContext);
         } finally {
@@ -179,8 +185,13 @@ public class KeywordExtractor {
         }
 
         int timeoutSec = props.indexingSafe().keywordTimeoutSeconds();
+        // timedOut distinguishes a genuine timeout from a plain LLM/provider failure — see enrichKeywords().
         Thread self = Thread.currentThread();
-        ScheduledFuture<?> killer = timeoutScheduler.schedule(self::interrupt, timeoutSec, TimeUnit.SECONDS);
+        AtomicBoolean timedOut = new AtomicBoolean(false);
+        ScheduledFuture<?> killer = timeoutScheduler.schedule(() -> {
+            timedOut.set(true);
+            self.interrupt();
+        }, timeoutSec, TimeUnit.SECONDS);
         try {
             String response = llmRouter.executeWithTracking(
                     TaskType.MICRO_TEXT, RoutingMode.COST_FIRST, BackgroundUsage.CONTEXT_PREFIX,
@@ -214,11 +225,11 @@ public class KeywordExtractor {
             }
             return out;
         } catch (Exception e) {
-            if (isTimeoutLike(e)) {
-                log.warn("[TIMEOUT:INDEX_KEYWORD_BATCH] timeout={}s, n={}; falling back to per-chunk TF", timeoutSec, n);
+            if (timedOut.get()) {
+                log.warn("[TIMEOUT:INDEX_KEYWORD_BATCH] keyword-extraction timeout ({}s) fired, n={} — per-chunk TF fallback", timeoutSec, n);
             } else {
-                log.debug("LLM batch keyword extraction failed (timeout={}s, n={}), falling back to per-chunk TF: {}",
-                        timeoutSec, n, e.getMessage());
+                log.debug("[ENRICH-BATCH] LLM batch keyword extraction failed (n={}) — per-chunk TF fallback: {}",
+                        n, e.getMessage());
             }
             return batch.stream().map(c -> tfFallback(c, buildStructuralContext(c))).toList();
         } finally {
@@ -385,18 +396,5 @@ public class KeywordExtractor {
                 .filter(k -> !STOP_WORDS.contains(k.toLowerCase(java.util.Locale.ROOT)))
                 .filter(k -> !HASH_LIKE_TOKEN.matcher(k).matches())
                 .collect(java.util.stream.Collectors.joining(", "));
-    }
-
-    private static boolean isTimeoutLike(Throwable t) {
-        Throwable cur = t;
-        while (cur != null) {
-            if (cur instanceof InterruptedException
-                    || cur instanceof java.io.InterruptedIOException
-                    || cur instanceof java.net.SocketTimeoutException) {
-                return true;
-            }
-            cur = cur.getCause();
-        }
-        return Thread.currentThread().isInterrupted();
     }
 }

@@ -1905,7 +1905,7 @@ srv send_error: ... error: input (706 tokens) is too large to process. increase 
 | `[TIMEOUT:SSE]` | SSE 연결 자체 timeout (브라우저 ↔ 서버) |
 | `[TIMEOUT:ASYNC_MVC]` | Spring MVC async 요청 timeout |
 | `[TIMEOUT:LLM_HTTP]` | LLM API 호출 중 connect/read timeout 계열 예외 |
-| `[TIMEOUT:INDEX_KEYWORD]` | 인덱싱 중 청크 키워드 추출 timeout (TF fallback 동작) |
+| `[TIMEOUT:INDEX_KEYWORD]` / `[TIMEOUT:INDEX_KEYWORD_BATCH]` | 인덱싱 중 청크 키워드 추출 timeout(설정된 초 초과)으로 TF fallback. **주의**: LLM 호출 자체 실패(프로바이더 소진 등)는 이 태그가 아니라 `[ENRICH]`/`[ENRICH-BATCH]` (DEBUG)로 별도 기록 — timeout이 아님 |
 | `[TIMEOUT:LIBREOFFICE]` | DOCX WMF 변환(soffice) timeout |
 
 ---
