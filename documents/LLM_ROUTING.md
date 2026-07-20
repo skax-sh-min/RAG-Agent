@@ -250,7 +250,9 @@ CLASSIFIER·RETRIEVAL은 COST_FIRST(공유), ANSWER만 LOCAL∥외부 병렬 실
 
 ## 5. Circuit Breaker
 
-- HTTP 429/402/503(과부하성 오류): `Retry-After` 헤더 파싱 → 해당 시간 차단. 헤더 없으면 **폴백 가능 여부**에 따라 분기 — 폴백 프로바이더가 있으면 `circuit-breaker-minutes`(기본값) 적용, 폴백이 전혀 없는 유일 프로바이더면 30초로 단축 차단(다중 분 단위 전면 다운 방지).
+- HTTP 429/402/503(과부하성 오류): `Retry-After` 헤더 파싱 → 해당 시간 차단. 헤더 없으면 **폴백 가능 여부**에 따라 분기:
+  - 폴백 프로바이더가 있으면 `circuit-breaker-minutes`(기본값) 적용
+  - 폴백이 전혀 없는 유일 프로바이더면 30초로 단축 차단(다중 분 단위 전면 다운 방지)
 - 그 외 4xx/5xx 및 기타 예외: 30초 차단 후 다음 프로바이더 시도.
 - 차단 만료는 다음 라우팅 시 자동 해제.
 - `/llm-usage` 페이지에서 차단 상태 + 남은 시간 카운트다운 확인 가능 (30초마다 자동 갱신).
@@ -306,7 +308,9 @@ CLASSIFIER·RETRIEVAL은 COST_FIRST(공유), ANSWER만 LOCAL∥외부 병렬 실
 
 SSE 스트리밍에서는 `error.llm.backpressure` 메시지("현재 요청이 몰려 있습니다. 잠시 후 다시 시도해 주세요.")로 우아하게 종료된다(`StreamingAgentService`). REST/HTMX 블로킹 경로는 `GlobalExceptionHandler`가 `RagException.retryAfterSeconds()`를 읽어 `Retry-After` 헤더를 자동 부착한다.
 
-**인플라이트 single-flight (임베딩 전용)**: 위 세마포어 게이트와는 별개로, `CachingEmbeddingModel`(질의 임베딩 캐시, Phase 7-A)이 동시 요청 중복 계산까지 제거한다. 4명이 완전히 동일한 질문을 거의 동시에 물으면, 첫 호출(owner)만 실제로 임베딩 API를 호출하고 나머지(joiner)는 그 결과를 `CompletableFuture.join()`으로 공유한다(`ConcurrentHashMap<key, CompletableFuture<float[]>>` 기반) — thundering herd 방지. owner가 실패하면 joiner에도 동일 예외가 전파되고 in-flight 항목은 정리되어 다음 호출이 새로 재시도한다. 완전 동일한(정규화 후) 텍스트만 병합되며, 근사 질문은 여전히 캐시 미스(§10.5 시맨틱 캐시 영역, 보류). CLASSIFIER 등 다른 텍스트 응답에는 적용되지 않는다 — 오늘 기준 그런 캐시 자체가 없다.
+**인플라이트 single-flight (임베딩 전용)**: 위 세마포어 게이트와는 별개로, `CachingEmbeddingModel`(질의 임베딩 캐시, Phase 7-A)이 동시 요청 중복 계산까지 제거한다. 4명이 완전히 동일한 질문을 거의 동시에 물으면, 첫 호출(owner)만 실제로 임베딩 API를 호출하고 나머지(joiner)는 그 결과를 `CompletableFuture.join()`으로 공유한다(`ConcurrentHashMap<key, CompletableFuture<float[]>>` 기반) — thundering herd 방지.  
+owner가 실패하면 joiner에도 동일 예외가 전파되고 in-flight 항목은 정리되어 다음 호출이 새로 재시도한다.  
+완전 동일한(정규화 후) 텍스트만 병합되며, 근사 질문은 여전히 캐시 미스(§10.5 시맨틱 캐시 영역, 보류). CLASSIFIER 등 다른 텍스트 응답에는 적용되지 않는다 — 오늘 기준 그런 캐시 자체가 없다.
 
 **동일 우선순위 프로바이더 로드밸런싱 (처리량 확장)**: 같은 `role`·같은 `priority`로 프로바이더를 여러 대 등록하면(§3 "LOCAL 로드밸런싱 예시" 참고) `LlmRouter.findFirst()`가 이제 그중 **잔여 permit이 가장 많은(least-in-flight) 프로바이더**를 선택한다 — 각 프로바이더가 위 동시성 게이트의 `Semaphore`를 하나씩 갖고 있으므로 잔여 permit 수를 즉시 조회할 수 있어 별도 상태 없이 "least-connections" 로드밸런싱이 된다.
 
@@ -347,7 +351,9 @@ CREATE TABLE IF NOT EXISTS llm_usage (
 - **프로바이더 자동 비활성화**: `api-key`가 비어있으면 (`${GEMINI_API_KEY:}` 등 빈 기본값) 시작 시 warn 로그 출력 후 해당 프로바이더를 제외. 키 미설정만으로 providers 블록을 남겨둔 채 비활성화 가능
 - **DUAL 활성 조건**: LOCAL 미등록 → UI에서 드롭다운 `disabled` + "로컬 LLM이 필요합니다" 툴팁
 - **LOCAL_ONLY**: LOCAL 미연결·차단 시 외부 API fallback 없이 즉시 exhausted — UI에서 오류 안내 필요
-- **라우팅 전략 셀렉터 자체 숨김**: 위 두 항목은 DUAL/LOCAL_ONLY "개별 옵션"을 `disabled` 처리하는 것과 달리, `app.llm.default-routing-mode`(=`LLM_ROUTING_MODE`)가 `LOCAL_ONLY`면 채팅 사이드바의 라우팅 전략 드롭다운 **전체**가 렌더링되지 않는다 — 이 배포에서는 프로바이더가 LOCAL 하나뿐이라 어떤 모드를 골라도 결과가 동일하므로, 선택지 자체를 없애는 편이 더 정확하다. `LlmRouter.getDefaultMode()` → `ChatController.populateChatModel()`의 `localOnlyDeployment` 모델 속성 → `chat.html`의 `th:if="${!localOnlyDeployment}"`. 대화별 `routingMode`(스레드 메타에 저장된 현재 선택값)가 아니라 **배포 전체의 기본값**을 기준으로 판단한다 — 그렇지 않으면 사용자가 LOCAL_ONLY를 고르는 순간 셀렉터가 사라져 다시 못 바꾸는 UX 함정이 생긴다.
+- **라우팅 전략 셀렉터 자체 숨김**: 위 두 항목은 DUAL/LOCAL_ONLY "개별 옵션"을 `disabled` 처리하는 것과 달리, `app.llm.default-routing-mode`(=`LLM_ROUTING_MODE`)가 `LOCAL_ONLY`면 채팅 사이드바의 라우팅 전략 드롭다운 **전체**가 렌더링되지 않는다 — 이 배포에서는 프로바이더가 LOCAL 하나뿐이라 어떤 모드를 골라도 결과가 동일하므로, 선택지 자체를 없애는 편이 더 정확하다.
+  - 판정 경로: `LlmRouter.getDefaultMode()` → `ChatController.populateChatModel()`의 `localOnlyDeployment` 모델 속성 → `chat.html`의 `th:if="${!localOnlyDeployment}"`.
+  - 대화별 `routingMode`(스레드 메타에 저장된 현재 선택값)가 아니라 **배포 전체의 기본값**을 기준으로 판단한다 — 그렇지 않으면 사용자가 LOCAL_ONLY를 고르는 순간 셀렉터가 사라져 다시 못 바꾸는 UX 함정이 생긴다.
 - **같은 Gemini API 키 공유**: Flash(NORMAL)와 Pro(PREMIUM) 429가 동시 발생 가능 → OpenAI를 PREMIUM fallback으로 유지 권장
 - **classifyOnly() 토큰 미누적**: `AgentService`가 선행 분류 시 `AgentState` 토큰 집계에서 1회 누락 (허용된 MVP 트레이드오프)
 - **tried 집합 순환 방지**: `executeWithTracking()` 내 tried 집합이 모든 프로바이더를 포함하면 exhausted — 최대 재귀 = 프로바이더 수
@@ -361,7 +367,9 @@ CREATE TABLE IF NOT EXISTS llm_usage (
 
 기본 배포는 단일 LOCAL(`type=BOTH`, priority 0)이 답변부터 잡무까지 전부 처리한다. 추론이 필요 없는 고빈도 잡무를 별도 소형 모델로 내리면 (1) 큰 모델이 답변 생성에 전념하고 (2) 두 모델이 **독립 Semaphore**(§6)를 써 슬롯 경합이 사라진다 → 대화 응답 지연 감소.
 
-**`TaskType.MICRO_TEXT`(§6.21 B안)**: 추론 불필요 잡무 전용 태스크 타입. `KeywordExtractor`·`ConversationSummarizerService`·`ThreadMetaService`·`RetrievalService`(MultiQuery 쿼리 확장, §6.21 작업2) 4개 백그라운드 호출부가 이 타입으로 라우팅된다. **분류(`ClassifierService`)·meta 직답(`DirectAnswerService`)은 품질 민감이라 `LIGHT_TEXT`로 남겨 큰 모델이 처리**한다. 문서 변환 백그라운드(`MarkdownCorrectionService` MD 서식 교정·`TextToMarkdownService` TXT 구조화)도 구조 충실도가 중요해 `LIGHT_TEXT` 유지(공격적 A안에서만 소형으로 내려감).
+**`TaskType.MICRO_TEXT`(§6.21 B안)**: 추론 불필요 잡무 전용 태스크 타입. `KeywordExtractor`·`ConversationSummarizerService`·`ThreadMetaService`·`RetrievalService`(MultiQuery 쿼리 확장, §6.21 작업2) 4개 백그라운드 호출부가 이 타입으로 라우팅된다.  
+**분류(`ClassifierService`)·meta 직답(`DirectAnswerService`)은 품질 민감이라 `LIGHT_TEXT`로 남겨 큰 모델이 처리**한다.  
+문서 변환 백그라운드(`MarkdownCorrectionService` MD 서식 교정·`TextToMarkdownService` TXT 구조화)도 구조 충실도가 중요해 `LIGHT_TEXT` 유지(공격적 A안에서만 소형으로 내려감).
 
 **메커니즘 — `findFirst()` priority + 프로바이더별 Semaphore 재사용(§6)**. 소형을 `type=MICRO_TEXT`·`role=LOCAL`·`priority=0`, 큰 모델을 `type=BOTH`·`priority=1`로 등록하면:
 

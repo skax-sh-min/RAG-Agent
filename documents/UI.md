@@ -91,7 +91,12 @@ REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — �
 
 ### 3.4 벡터 스토어 관리 (AdminController)
 
-접근 제어는 인증 모드에 따라 다르다: `app.auth.enabled=true`(전체 인증)면 로그인 필요, 평문 no-auth(`app.auth.enabled=false`, `app.auth.management-only=false`)면 `/admin/**`에 관리자 자동 주입, 관리 전용 인증(`app.auth.management-only=true`, §6.17 B안)이면 게스트 자동 주입 없이 실제 로그인이 필요하다. **chroma·sqlite-vec 두 백엔드 모두** 동작하며, sqlite-vec에선 "collection" 식별자가 version 문자열이다.
+접근 제어는 인증 모드에 따라 다르다:
+- 전체 인증(`app.auth.enabled=true`) — 로그인 필요
+- 평문 no-auth(`app.auth.enabled=false`, `app.auth.management-only=false`) — `/admin/**`에 관리자 자동 주입
+- 관리 전용 인증(`app.auth.management-only=true`, §6.17 B안) — 게스트 자동 주입 없이 실제 로그인 필요
+
+**chroma·sqlite-vec 두 백엔드 모두** 동작하며, sqlite-vec에선 "collection" 식별자가 version 문자열이다.
 
 | Method | Path | 반환 | 설명 |
 |--------|------|------|------|
@@ -106,7 +111,14 @@ REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — �
 
 ### 3.5 설정 관리 (SettingsController)
 
-조회(`GET /settings`)는 게스트에게도 열려 있다 — API 키 자체는 절대 노출하지 않고 "설정됨/없음" 배지만 보여준다. 수정 엔드포인트(`/admin/settings/**`)는 `/admin/**`과 동일한 인가를 상속한다: 평문 no-auth면 관리자 자동 주입, 관리 전용 인증(`app.auth.management-only=true`)이면 실제 로그인이 필요, 전체 인증이면 로그인이 필요하다. 화면에서도 편집 입력·저장/기본값 버튼은 `isAdmin`일 때만 렌더되고(그 외는 값만 표시), 서버 인가가 1차 방어선이다.
+조회(`GET /settings`)는 게스트에게도 열려 있다 — API 키 자체는 절대 노출하지 않고 "설정됨/없음" 배지만 보여준다.
+
+수정 엔드포인트(`/admin/settings/**`)는 `/admin/**`과 동일한 인가를 상속한다:
+- 평문 no-auth — 관리자 자동 주입
+- 관리 전용 인증(`app.auth.management-only=true`) — 실제 로그인 필요
+- 전체 인증 — 로그인 필요
+
+화면에서도 편집 입력·저장/기본값 버튼은 `isAdmin`일 때만 렌더되고(그 외는 값만 표시), 서버 인가가 1차 방어선이다.
 
 | Method | Path | 반환 | 설명 |
 |--------|------|------|------|
@@ -114,7 +126,11 @@ REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — �
 | POST | `/admin/settings/update` | `fragments/settings-item :: item` | 핫 수정 가능 항목 하나에 오버라이드 저장(`key`, `value`) — 재기동 없이 다음 검색부터 반영, 감사 로그 기록 |
 | POST | `/admin/settings/reset` | `fragments/settings-item :: item` | 오버라이드 삭제 → 프로퍼티 기본값으로 복귀, 감사 로그 기록 |
 
-- 핫 수정 가능 항목만 `key`를 받아 수정할 수 있다: **검색 튜닝**(유사도 임계값·RRF 가중치/k·후보 배수·태그 후보 배수·멀티쿼리 최소 길이·재시도 시 후보 확대·topK·멀티쿼리 확장·하이브리드 검색 — 다음 검색부터 반영), **인덱싱/청킹**(청크 크기·오버랩·최소 크기·동시 파일 처리 수·동시 LLM 호출 수 — 다음 인덱싱/↺ 재인덱싱부터 반영), **LLM**(Direct 응답 temperature — 다음 LLM 호출부터 반영, §6.18). 그 외 키(조회 전용: `rerank-enabled`·쿼리 임베딩 캐시 등)는 400(`IllegalArgumentException`)으로 거부된다.
+- 핫 수정 가능 항목만 `key`를 받아 수정할 수 있다:
+  - **검색 튜닝**(다음 검색부터 반영) — 유사도 임계값·RRF 가중치/k·후보 배수·태그 후보 배수·멀티쿼리 최소 길이·재시도 시 후보 확대·topK·멀티쿼리 확장·하이브리드 검색
+  - **인덱싱/청킹**(다음 인덱싱/↺ 재인덱싱부터 반영) — 청크 크기·오버랩·최소 크기·동시 파일 처리 수·동시 LLM 호출 수
+  - **LLM**(다음 LLM 호출부터 반영, §6.18) — Direct 응답 temperature
+  - 그 외 키(조회 전용: `rerank-enabled`·쿼리 임베딩 캐시 등)는 400(`IllegalArgumentException`)으로 거부된다.
 - 값 검증 실패(범위 초과, 타입 불일치)도 400 — `GlobalExceptionHandler`가 처리.
 - 재기동이 필요한 값(rerank/hybrid 활성화, 벡터 스토어 백엔드, 임베딩 차원, 일반 temperature·max-tokens 등)과 기본 라우팅 모드는 조회 전용으로만 노출된다(§6.18로 일반 temperature·max-tokens는 실제 config 값을 반영해 표시).
 - 상세는 [OPERATOR_MANUAL.md §6.5](OPERATOR_MANUAL.md#65-설정-페이지-settings--llmrag-옵션-조회핫-수정) 참고.
@@ -285,7 +301,7 @@ stage(classifier) → stage(retrieval) → sources → stage(answer) → token �
 | 테이블 넘침 | `documents.html` 두 테이블을 `.table-responsive`로 래핑(가로 페이지 스크롤 제거) |
 | 차트 넘침 | `llm-usage.html` 차트를 `height:280px` 컨테이너 + Chart.js `maintainAspectRatio:false` |
 | iOS 자동 확대 | `@media (max-width:767.98px)`에서 모든 폼 컨트롤 `font-size:16px` |
-| 출처 미리보기 팝오버 | `@media (min-width:768px)`에서 `.popover`를 `max-width:560px, font-size:0.8rem`로 확대(Bootstrap 기본 276px/0.875rem 대비 폭 약 2배) — 200자 미리보기가 세로로 길게 줄바꿈되는 문제 완화. `<768px`는 기본값 유지 |
+| 출처 미리보기 팝오버 | `@media (min-width:768px)`에서 팝오버 폭 확대(`max-width:560px`, `<768px`는 기본값 유지) — 배경·수치는 [§4 출처 Hover 미리보기](#출처-hover-미리보기) 참고 |
 
 > ⚠️ Bootstrap `.offcanvas-md`는 ≥md에서 `background-color:transparent!important`를 강제한다. 데스크톱 사이드바 배경은 `app.css`에서 `.sidebar.offcanvas-md { background-color: var(--bg-elevated) !important }`로 복구(라이트/다크 변수 일치).
 

@@ -222,147 +222,147 @@ PROGRESSIVE 모드 AND sufficient=false AND retryCount >= max
 
 > **임베딩 병렬화(§6.21 E1~E3)**: 위 "임베딩 입력 구성 → 벡터 스토어 저장"의 임베딩 호출은 다중 엔드포인트 로드밸런싱(E1, `EMBED_ADDITIONAL_BASE_URLS` — 같은 모델을 N개 서버에 두고 least-in-flight 분산)과 서브배치 병렬 임베딩(E2, `EMBED_MAX_CONCURRENT_BATCHES`, 기본 1=직렬)으로 처리량을 확장할 수 있다(opt-in). Chroma는 임베딩만 병렬화 후 1회 upsert, sqlite-vec는 병렬 임베딩 후 직렬 삽입(pool=1)이라 E2를 켜면 위 §10.9.3 스트리밍 메모리 상한을 속도와 맞바꾼다. 상세는 OPERATOR_MANUAL §3.2 "임베딩 병렬화".
 
-  ### 6.3. DOCX → MD → 임베딩 DB 저장 상세 (이미지 포함)
+### 6.3. DOCX → MD → 임베딩 DB 저장 상세 (이미지 포함)
 
-  아래는 DOCX 파일 1건이 들어와 임베딩 DB(Chroma 또는 sqlite-vec)에 저장될 때의 실제 처리 순서.
+아래는 DOCX 파일 1건이 들어와 임베딩 DB(Chroma 또는 sqlite-vec)에 저장될 때의 실제 처리 순서.
 
-  ```
-  1) 입력 수신
-    filePath(.docx), version, tags
+```
+1) 입력 수신
+  filePath(.docx), version, tags
 
-  2) docId 생성
-    sha256(file) 계산 → docId = "{filename}_{sha256앞8자}"
+2) docId 생성
+  sha256(file) 계산 → docId = "{filename}_{sha256앞8자}"
 
-  3) 기존 아티팩트 정리(동일 docId)
-    - 기존 벡터 청크 삭제
-    - 기존 이미지/converted MD 삭제
+3) 기존 아티팩트 정리(동일 docId)
+  - 기존 벡터 청크 삭제
+  - 기존 이미지/converted MD 삭제
 
-  4) DOCX → Markdown 변환
-    DocumentLoaderService.convertDocxToMd()
-      └─ DocxToMarkdownConverter.convert()
-        - Heading 스타일 → Markdown heading(#/##/###)
-        - 명시적 page break(w:br type=page) 추적
-        - 각 헤딩 앞에 [헤딩페이지: N] 마커 삽입 (헤딩 시작 위치 보존)
-        - 페이지 전환 시 [페이지: N] 앵커 마커 삽입 (비헤딩 구간 근사 페이지 보강)
-        - 표 → pipe table
-        - run 단위 bold/italic 반영
-        - 내장 이미지 추출: data/images/{docId}/d{para}_img{n}.{ext}
-        - 본문에는 [이미지: images/{docId}/{file}] 마커 삽입
-        - EMF/WMF는 설정 시 PNG 변환, 실패/미설정 시 [이미지(변환불가): ...] 마커
-        - 사진과 같은 문단의 레거시 VML 주석 도형(v:rect/v:oval/v:roundrect/v:line)은 사진 위에
-          그려 하나의 합성 PNG로 저장 (app.docx-image.merge-annotated-shapes, 기본 true —
-          DocxAnnotationShapeMerger; POI가 DOCX 도형 좌표를 노출하지 않아 같은-문단 근사 방식,
-          합성 실패 시 원본 사진 폴백. 상세는 IMAGE_PROCESS.md §4.3)
+4) DOCX → Markdown 변환
+  DocumentLoaderService.convertDocxToMd()
+    └─ DocxToMarkdownConverter.convert()
+      - Heading 스타일 → Markdown heading(#/##/###)
+      - 명시적 page break(w:br type=page) 추적
+      - 각 헤딩 앞에 [헤딩페이지: N] 마커 삽입 (헤딩 시작 위치 보존)
+      - 페이지 전환 시 [페이지: N] 앵커 마커 삽입 (비헤딩 구간 근사 페이지 보강)
+      - 표 → pipe table
+      - run 단위 bold/italic 반영
+      - 내장 이미지 추출: data/images/{docId}/d{para}_img{n}.{ext}
+      - 본문에는 [이미지: images/{docId}/{file}] 마커 삽입
+      - EMF/WMF는 설정 시 PNG 변환, 실패/미설정 시 [이미지(변환불가): ...] 마커
+      - 사진과 같은 문단의 레거시 VML 주석 도형(v:rect/v:oval/v:roundrect/v:line)은 사진 위에
+        그려 하나의 합성 PNG로 저장 (app.docx-image.merge-annotated-shapes, 기본 true —
+        DocxAnnotationShapeMerger; POI가 DOCX 도형 좌표를 노출하지 않아 같은-문단 근사 방식,
+        합성 실패 시 원본 사진 폴백. 상세는 IMAGE_PROCESS.md §4.3)
 
-  5) 변환 산출물 저장
-    - 원본 MD: data/converted/{docId}.md
+5) 변환 산출물 저장
+  - 원본 MD: data/converted/{docId}.md
 
-  6) Markdown 교정 [LLM]
-    MarkdownCorrectionService.correct()
-    - 전체 MD 1회 호출이 아니라, splitBySections()로 섹션 분할 후 병렬 교정
-    - 분할 기준 (splitBySections, 모두 코드펜스 ```/~~~ 내부에서는 적용 안 함):
-      a) H2/H3/H4 챕터 헤딩(줄이 "## "·"### "·"#### "로 시작) — 펜스 안의 "### Job ID : ..." 같은
-         로그/배치 실행 결과 줄은 헤딩처럼 보여도 분할 트리거로 취급하지 않음
-      b) 섹션 길이가 maxSectionChars 초과 시 강제 분할
-         (maxSectionChars = max(500, (LLM_MAX_TOKENS-500)/2) → 기본 6,000토큰 기준 2,750자 —
-          §6.18 이전에는 별도의 죽은 프로퍼티를 통해 기본값 8,000을 읽어 3,750자였음. 이제
-          실제 LLM 응답 상한과 동일한 소스(app.llm.max-tokens)를 공유)
-         — 펜스가 열려 있는 동안 초과가 감지되면 펜스는 자르지 않고, 펜스 시작 위치로 처리 분기:
-           · 펜스가 이 섹션 안에서 MIN_SECTION_CHARS/2(250자) 이상 지난 뒤에 시작됐다면
-             → 펜스 이전 내용까지만 즉시 flush하고, 펜스 전체(지금까지 쌓인 내용 포함)를
-               통째로 다음 섹션으로 넘겨 그 섹션에서 계속 자라게 함
-           · 펜스가 섹션 아주 초반(< 250자)에 시작됐다면 → 넘겨봤자 자투리 섹션만 남으므로
-             넘기지 않고, 펜스가 닫힐 때까지 이 섹션에 그대로 누적(섹션이 한도를 넘긴 채로 flush됨)
-      c) 문서 끝까지 펜스가 닫히지 않은 기형 입력은 안전하게 "```"를 붙여 마감
-    - 섹션 경계 오버랩 (부자연스러운 경계에서만, 결정론적 제거): 대부분의 경계(깔끔한 ##/###/####
-      헤딩 전환)에는 아무 것도 덧붙이지 않고 그대로 자른다. 다만 경계가 "부자연스러울" 때만
-      (isUnnaturalBoundary) 인접 섹션의 실제 내용 몇 줄을 오버랩으로 함께 넘긴다 —
-      ① 다음 섹션이 잘 만들어진 헤딩(## / ### / #### + 공백 + 텍스트)이 아닌 줄로 시작(크기 초과로
-      헤딩이 아닌 지점에서 강제 분할된 경계, 또는 "# " H1·"#=====" 배너·"#########" 장식 해시처럼
-      converter/코드 잡음으로 보이는 시작), ② 헤딩 레벨이 직전 헤딩보다 2단계 이상 급강하(## 다음
-      #### 등)하는 경우. 이런 경계에서만 다음 섹션 앞 OVERLAP_LINES(5)줄을 이 섹션 끝에
-      `<<<SECTION_END>>>` 마커와 함께 덧붙이고(tail 오버랩), 이전 섹션 끝 5줄을 이 섹션 앞에
-      `<<<SECTION_START>>>` 마커와 함께 덧붙인다(head 오버랩) — 공백/빈 줄은 세지 않는다
-      (leadingNonBlankLines()/trailingNonBlankLines()). 오버랩은 "읽기 전용 미리보기"가 아니라 교정
-      대상이라, 경계를 넘어 이어지는(예: converter가 코드 안 "##" 줄을 헤딩으로 오인해 자른) 코드
-      블록을 LLM이 양쪽 모두 올바르게 펜스로 감쌀 수 있다. LLM에는 "마커 줄은 그대로 두고, 마커를
-      사이에 두고 양쪽 내용을 서로 합치지 말라"고만 지시하고, 교정 뒤 코드가 마커를 기준으로
-      오버랩을 결정론적으로 잘라낸다(cutOverlap: head 오버랩은 `<<<SECTION_START>>>` 앞까지, tail
-      오버랩은 `<<<SECTION_END>>>` 뒤까지 제거) — 그래서 같은 내용이 인접 두 섹션에 모두 남아
-      중복되는 일이 없다. 이는 예전에 모든 경계에서 lookahead/lookbehind 미리보기를 LLM에게 "결과에
-      넣지 말라"고 맡기고 `<<<RESULT_START>>>`/`<<<RESULT_END>>>`로 추출하던 방식(LLM이 미리보기를
-      결과에 섞으면 중복 발생)을 코드 결정론으로 대체한 것이다. 코드가 넣은 마커가 응답에서 사라졌으면
-      그 섹션은 오버랩 없이 재교정한다(중복 0 보장 폴백).
-    - `addHeadingNumbers=true`(문서 업로드 화면 "소제목 숫자 생성" 체크박스)면 섹션별 병렬 교정이 끝나
-      전체 MD가 재조립된 뒤 2차 패스(`secondPassHeadingAndCodePolish()`)로 H2~H6 헤딩에 계층적 번호를
-      매기고(`addHierarchicalHeadingNumbers()`, 기존 번호 프리픽스는 먼저 제거 후 현재 헤딩 순서로
-      재계산 — 그래서 아래 `reapplyHeadingNumbers()`로 재실행해도 매번 안전) 라벨 없는 코드 블록의
-      언어 태그를 재추론한다(`normalizeCodeBlocks(md, true)`) — **PPTX는 체크박스 상태와 무관하게 이
-      옵션을 항상 무시한다**(§6.3-bis 2번)
-    - 교정본 MD: data/converted/{docId}_corrected.md
-    - 이후 파이프라인은 교정본을 source로 사용
+6) Markdown 교정 [LLM]
+  MarkdownCorrectionService.correct()
+  - 전체 MD 1회 호출이 아니라, splitBySections()로 섹션 분할 후 병렬 교정
+  - 분할 기준 (splitBySections, 모두 코드펜스 ```/~~~ 내부에서는 적용 안 함):
+    a) H2/H3/H4 챕터 헤딩(줄이 "## "·"### "·"#### "로 시작) — 펜스 안의 "### Job ID : ..." 같은
+       로그/배치 실행 결과 줄은 헤딩처럼 보여도 분할 트리거로 취급하지 않음
+    b) 섹션 길이가 maxSectionChars 초과 시 강제 분할
+       (maxSectionChars = max(500, (LLM_MAX_TOKENS-500)/2) → 기본 6,000토큰 기준 2,750자 —
+        §6.18 이전에는 별도의 죽은 프로퍼티를 통해 기본값 8,000을 읽어 3,750자였음. 이제
+        실제 LLM 응답 상한과 동일한 소스(app.llm.max-tokens)를 공유)
+       — 펜스가 열려 있는 동안 초과가 감지되면 펜스는 자르지 않고, 펜스 시작 위치로 처리 분기:
+         · 펜스가 이 섹션 안에서 MIN_SECTION_CHARS/2(250자) 이상 지난 뒤에 시작됐다면
+           → 펜스 이전 내용까지만 즉시 flush하고, 펜스 전체(지금까지 쌓인 내용 포함)를
+             통째로 다음 섹션으로 넘겨 그 섹션에서 계속 자라게 함
+         · 펜스가 섹션 아주 초반(< 250자)에 시작됐다면 → 넘겨봤자 자투리 섹션만 남으므로
+           넘기지 않고, 펜스가 닫힐 때까지 이 섹션에 그대로 누적(섹션이 한도를 넘긴 채로 flush됨)
+    c) 문서 끝까지 펜스가 닫히지 않은 기형 입력은 안전하게 "```"를 붙여 마감
+  - 섹션 경계 오버랩 (부자연스러운 경계에서만, 결정론적 제거): 대부분의 경계(깔끔한 ##/###/####
+    헤딩 전환)에는 아무 것도 덧붙이지 않고 그대로 자른다. 다만 경계가 "부자연스러울" 때만
+    (isUnnaturalBoundary) 인접 섹션의 실제 내용 몇 줄을 오버랩으로 함께 넘긴다 —
+    ① 다음 섹션이 잘 만들어진 헤딩(## / ### / #### + 공백 + 텍스트)이 아닌 줄로 시작(크기 초과로
+    헤딩이 아닌 지점에서 강제 분할된 경계, 또는 "# " H1·"#=====" 배너·"#########" 장식 해시처럼
+    converter/코드 잡음으로 보이는 시작), ② 헤딩 레벨이 직전 헤딩보다 2단계 이상 급강하(## 다음
+    #### 등)하는 경우. 이런 경계에서만 다음 섹션 앞 OVERLAP_LINES(5)줄을 이 섹션 끝에
+    `<<<SECTION_END>>>` 마커와 함께 덧붙이고(tail 오버랩), 이전 섹션 끝 5줄을 이 섹션 앞에
+    `<<<SECTION_START>>>` 마커와 함께 덧붙인다(head 오버랩) — 공백/빈 줄은 세지 않는다
+    (leadingNonBlankLines()/trailingNonBlankLines()). 오버랩은 "읽기 전용 미리보기"가 아니라 교정
+    대상이라, 경계를 넘어 이어지는(예: converter가 코드 안 "##" 줄을 헤딩으로 오인해 자른) 코드
+    블록을 LLM이 양쪽 모두 올바르게 펜스로 감쌀 수 있다. LLM에는 "마커 줄은 그대로 두고, 마커를
+    사이에 두고 양쪽 내용을 서로 합치지 말라"고만 지시하고, 교정 뒤 코드가 마커를 기준으로
+    오버랩을 결정론적으로 잘라낸다(cutOverlap: head 오버랩은 `<<<SECTION_START>>>` 앞까지, tail
+    오버랩은 `<<<SECTION_END>>>` 뒤까지 제거) — 그래서 같은 내용이 인접 두 섹션에 모두 남아
+    중복되는 일이 없다. 이는 예전에 모든 경계에서 lookahead/lookbehind 미리보기를 LLM에게 "결과에
+    넣지 말라"고 맡기고 `<<<RESULT_START>>>`/`<<<RESULT_END>>>`로 추출하던 방식(LLM이 미리보기를
+    결과에 섞으면 중복 발생)을 코드 결정론으로 대체한 것이다. 코드가 넣은 마커가 응답에서 사라졌으면
+    그 섹션은 오버랩 없이 재교정한다(중복 0 보장 폴백).
+  - `addHeadingNumbers=true`(문서 업로드 화면 "소제목 숫자 생성" 체크박스)면 섹션별 병렬 교정이 끝나
+    전체 MD가 재조립된 뒤 2차 패스(`secondPassHeadingAndCodePolish()`)로 H2~H6 헤딩에 계층적 번호를
+    매기고(`addHierarchicalHeadingNumbers()`, 기존 번호 프리픽스는 먼저 제거 후 현재 헤딩 순서로
+    재계산 — 그래서 아래 `reapplyHeadingNumbers()`로 재실행해도 매번 안전) 라벨 없는 코드 블록의
+    언어 태그를 재추론한다(`normalizeCodeBlocks(md, true)`) — **PPTX는 체크박스 상태와 무관하게 이
+    옵션을 항상 무시한다**(§6.3-bis 2번)
+  - 교정본 MD: data/converted/{docId}_corrected.md
+  - 이후 파이프라인은 교정본을 source로 사용
 
-  7) MD 섹션 로드
-    DocumentLoaderService.loadFromMarkdown(sourceMd)
-    - 섹션별 Document 생성
-    - [헤딩페이지: N] 마커 파싱 후 섹션 메타데이터 heading_page/page_or_slide 로 저장
-    - [페이지: N] 앵커를 파싱해 비헤딩 섹션의 page_or_slide 근사값으로 사용
-    - 프롤로그(첫 헤딩 이전 구간)는 첫 헤딩의 [헤딩페이지: N]이 있으면 해당 값을 우선 상속
-    - [이미지: ...] / [이미지(변환불가): ...] 마커 파싱
-    - image_paths 메타데이터에 경로(쉼표 결합) 저장
+7) MD 섹션 로드
+  DocumentLoaderService.loadFromMarkdown(sourceMd)
+  - 섹션별 Document 생성
+  - [헤딩페이지: N] 마커 파싱 후 섹션 메타데이터 heading_page/page_or_slide 로 저장
+  - [페이지: N] 앵커를 파싱해 비헤딩 섹션의 page_or_slide 근사값으로 사용
+  - 프롤로그(첫 헤딩 이전 구간)는 첫 헤딩의 [헤딩페이지: N]이 있으면 해당 값을 우선 상속
+  - [이미지: ...] / [이미지(변환불가): ...] 마커 파싱
+  - image_paths 메타데이터에 경로(쉼표 결합) 저장
 
-  8) 청킹
-    splitDocuments()
-    - DOCX는 섹션 유지 우선
-    - 섹션이 chunkSize 초과 시 sliding window 분할
+8) 청킹
+  splitDocuments()
+  - DOCX는 섹션 유지 우선
+  - 섹션이 chunkSize 초과 시 sliding window 분할
 
-  9) 메타데이터 태깅
-    DocumentIndexer.tagMetadata()
-    - doc_id, filename, version, doc_type, sha256, chunk_index, page_or_slide, tags, image_paths 등
+9) 메타데이터 태깅
+  DocumentIndexer.tagMetadata()
+  - doc_id, filename, version, doc_type, sha256, chunk_index, page_or_slide, tags, image_paths 등
 
-  10) 키워드+맥락 추출(enrich) [LLM] — §10.1 Contextual Retrieval
-    KeywordExtractor.enrichParallel() — 청크를 app.indexing.keyword-batch-size(기본 4)개씩
-    묶어 배치당 1회 LLM 호출(§10.8.2, enrichKeywordsBatch()); 나머지 1개짜리(마지막 배치 등)는
-    기존 단일 청크 경로(enrichKeywords())를 그대로 사용:
-    - excerpt_keywords 메타데이터 추가
-    - chunk_context 메타데이터 추가 ("{filename} > {heading}" 구조적 맥락 + LLM 1~2문장 맥락;
-      LLM 실패/타임아웃 또는 배치 응답에 결과 마커가 모두 없으면(파싱 실패) 해당 청크(들)만
-      구조적 맥락만으로 폴백 — 사용량은 context: 라벨로 기록)
+10) 키워드+맥락 추출(enrich) [LLM] — §10.1 Contextual Retrieval
+  KeywordExtractor.enrichParallel() — 청크를 app.indexing.keyword-batch-size(기본 4)개씩
+  묶어 배치당 1회 LLM 호출(§10.8.2, enrichKeywordsBatch()); 나머지 1개짜리(마지막 배치 등)는
+  기존 단일 청크 경로(enrichKeywords())를 그대로 사용:
+  - excerpt_keywords 메타데이터 추가
+  - chunk_context 메타데이터 추가 ("{filename} > {heading}" 구조적 맥락 + LLM 1~2문장 맥락;
+    LLM 실패/타임아웃 또는 배치 응답에 결과 마커가 모두 없으면(파싱 실패) 해당 청크(들)만
+    구조적 맥락만으로 폴백 — 사용량은 context: 라벨로 기록)
 
-  11) 임베딩 입력 구성 — §10.1-보완 임베딩 입력 정규화
-    SearchTextBuilder.build() = chunk_context + MarkdownNoiseNormalizer.normalize(원문)
-    - 마크다운 장식 줄(구분선 등) 제거, 강조 마커(**bold**/*italic*/<u>)만 제거하고 내용 보존
-    - 코드펜스 내부·표 행은 무변형
-    - 이 파생 텍스트는 임베딩·FTS 입력에만 쓰이고 영속 저장되지 않음(저장/표시는 원문 그대로)
-    - SearchTextBuilder.precompute()가 청크당 1회만 계산해 임시 메타키(search_text)에 담아
-      12)의 두 소비처(임베딩·FTS)에 공유 — 각자 다시 계산하지 않음(§10.8.5)
+11) 임베딩 입력 구성 — §10.1-보완 임베딩 입력 정규화
+  SearchTextBuilder.build() = chunk_context + MarkdownNoiseNormalizer.normalize(원문)
+  - 마크다운 장식 줄(구분선 등) 제거, 강조 마커(**bold**/*italic*/<u>)만 제거하고 내용 보존
+  - 코드펜스 내부·표 행은 무변형
+  - 이 파생 텍스트는 임베딩·FTS 입력에만 쓰이고 영속 저장되지 않음(저장/표시는 원문 그대로)
+  - SearchTextBuilder.precompute()가 청크당 1회만 계산해 임시 메타키(search_text)에 담아
+    12)의 두 소비처(임베딩·FTS)에 공유 — 각자 다시 계산하지 않음(§10.8.5)
 
-  12) 임베딩 DB 저장
-    a) Chroma 모드
-      - `chromaApi.upsertEmbeddings()`로 수동 upsert(TokenCountBatchingStrategy 서브배치) —
-        임베딩은 11)의 파생 텍스트, 저장 content/metadata는 원문(chunk_context/search_text 키 제외)
-    b) sqlite-vec 모드
-      - TokenCountBatchingStrategy 서브배치 단위로 임베딩 → 즉시 삽입을 반복하는 스트리밍
-        구조(§10.9.3) — 문서 전체(예: 500+청크)의 임베딩을 모두 힙에 모은 뒤 한 번에 삽입하지
-        않으므로 피크 메모리가 문서 크기가 아니라 서브배치 크기에 비례한다
-      - vec_embeddings: spring_doc_id, version, embedding(11의 파생 텍스트로 계산)
-      - vec_document_chunks: spring_doc_id, content(원문), metadata(JSON, chunk_context/search_text 제외), version, doc_id, created_at
-      - 서브배치마다 두 배치 삽입을 하나의 트랜잭션으로 커밋(§10.8.3) — 중간 실패 시 함께
-        롤백되어 vec_embeddings만 커밋되고 매칭되는 vec_document_chunks가 없는 상태가 생기지
-        않음(트랜잭션 범위는 문서 전체가 아니라 서브배치 단위)
-    + FTS 인덱스(chunk_fts)에도 doc_tags/keywords + content(11의 파생 텍스트, Contextual BM25 시너지) 반영
+12) 임베딩 DB 저장
+  a) Chroma 모드
+    - `chromaApi.upsertEmbeddings()`로 수동 upsert(TokenCountBatchingStrategy 서브배치) —
+      임베딩은 11)의 파생 텍스트, 저장 content/metadata는 원문(chunk_context/search_text 키 제외)
+  b) sqlite-vec 모드
+    - TokenCountBatchingStrategy 서브배치 단위로 임베딩 → 즉시 삽입을 반복하는 스트리밍
+      구조(§10.9.3) — 문서 전체(예: 500+청크)의 임베딩을 모두 힙에 모은 뒤 한 번에 삽입하지
+      않으므로 피크 메모리가 문서 크기가 아니라 서브배치 크기에 비례한다
+    - vec_embeddings: spring_doc_id, version, embedding(11의 파생 텍스트로 계산)
+    - vec_document_chunks: spring_doc_id, content(원문), metadata(JSON, chunk_context/search_text 제외), version, doc_id, created_at
+    - 서브배치마다 두 배치 삽입을 하나의 트랜잭션으로 커밋(§10.8.3) — 중간 실패 시 함께
+      롤백되어 vec_embeddings만 커밋되고 매칭되는 vec_document_chunks가 없는 상태가 생기지
+      않음(트랜잭션 범위는 문서 전체가 아니라 서브배치 단위)
+  + FTS 인덱스(chunk_fts)에도 doc_tags/keywords + content(11의 파생 텍스트, Contextual BM25 시너지) 반영
 
-  13) 레지스트리 저장
-    doc_registry에 docId/version/chunk수/spring_doc_ids 기록
-  ```
+13) 레지스트리 저장
+  doc_registry에 docId/version/chunk수/spring_doc_ids 기록
+```
 
-  핵심 포인트:
-  - DOCX 이미지 파일은 별도 디렉터리에 저장되고, 청크 본문에는 마커로 남는다.
-  - 마커 경로는 `loadFromMarkdown()`에서 `image_paths` 메타데이터로 승격되어 임베딩 DB metadata(JSON/Map)에 함께 저장된다.
-  - 따라서 검색 결과 청크가 이미지 경로 컨텍스트를 유지한 채 반환된다.
-  - DOCX는 물리 페이지 전체 보전 대신, 헤딩 단위 페이지 위치를 보전한다.
-  - `page_or_slide`는 DOCX에서 헤딩 시작 페이지(명시적 page break 기준)를 우선 사용하고, 없으면 기존 청크 순번 fallback을 사용한다.
-  - **저장·표시 텍스트(원문) ≠ 임베딩·FTS·답변 프롬프트 입력(맥락+정규화)** — 3계층 분리가 §10.1/10.1-보완의 핵심 원칙이며, `AnswerService.buildAnswerPrompt()`도 정규화된(맥락 헤더 없는) 텍스트를 사용한다.
+핵심 포인트:
+- DOCX 이미지 파일은 별도 디렉터리에 저장되고, 청크 본문에는 마커로 남는다.
+- 마커 경로는 `loadFromMarkdown()`에서 `image_paths` 메타데이터로 승격되어 임베딩 DB metadata(JSON/Map)에 함께 저장된다.
+- 따라서 검색 결과 청크가 이미지 경로 컨텍스트를 유지한 채 반환된다.
+- DOCX는 물리 페이지 전체 보전 대신, 헤딩 단위 페이지 위치를 보전한다.
+- `page_or_slide`는 DOCX에서 헤딩 시작 페이지(명시적 page break 기준)를 우선 사용하고, 없으면 기존 청크 순번 fallback을 사용한다.
+- **저장·표시 텍스트(원문) ≠ 임베딩·FTS·답변 프롬프트 입력(맥락+정규화)** — 3계층 분리가 §10.1/10.1-보완의 핵심 원칙이며, `AnswerService.buildAnswerPrompt()`도 정규화된(맥락 헤더 없는) 텍스트를 사용한다.
 
 ### 6.3-bis. PPTX/PDF(비스캔) → MD 변환 — DOCX와의 차이점
 
@@ -370,7 +370,15 @@ PROGRESSIVE 모드 AND sufficient=false AND retryCount >= max
 
 1. **변환기**: `PptxToMarkdownConverter`(PPTX) / `PdfToMarkdownConverter`(PDF, 스캔 아닌 경우만) — `DocxToMarkdownConverter`와 나란히 `service` 패키지에 위치. **각각 `PptxImageExtractor`/`PdfImageExtractor`를 생성자로 주입받아 이미지까지 직접 처리한다**(DOCX와 동일한 소유 구조 — 4번 참고). `convert()`가 맨 먼저 그 추출기로 슬라이드/페이지→경로 맵을 통째로 뽑아 두고, 슬라이드/페이지별 텍스트를 조립하면서 그 맵의 경로를 헤딩 바로 다음에 마커로 삽입한다.
 2. **헤딩 생성 규칙**:
-   - **PPTX** — 슬라이드 제목 placeholder(`TITLE`/`CENTERED_TITLE`)만 `##`로 승격한다. 제목이 없지만 본문(불릿 등) 또는 이미지(`XSLFPictureShape`)가 있는 슬라이드는 `"{N}번 슬라이드"`로 대체 헤딩을 붙인다 — 이미지만 있고 텍스트가 없는 슬라이드까지 건너뛰면 그 슬라이드에 대응하는 섹션 자체가 사라져 추출된 이미지의 `[이미지: ...]` 마커를 심을 자리가 없어지므로(이미지가 고아가 됨) 이미지가 있으면 건너뛰지 않는다. **제목·본문·이미지가 모두 없는 슬라이드(완전 공백 구분 슬라이드 등)만 마커·헤딩·본문 전부 생략하고 통째로 건너뛴다** — 그렇지 않으면 "## 139번 슬라이드"처럼 내용 없는 헤딩만 있는 청크가 그대로 임베딩/검색 인덱스에 남아 노이즈가 된다. 건너뛴 슬라이드는 다음 슬라이드의 `[페이지: N]` 번호에 영향을 주지 않는다(실제 슬라이드 인덱스를 그대로 사용). 본문 불릿은 들여쓰기 레벨(`XSLFTextParagraph.getIndentLevel()`)을 중첩 목록으로만 반영하고, 어떤 경우에도 소제목(`###` 이상)으로 승격하지 않는다 — 슬라이드 하나를 하나의 원자적 섹션으로 다루는 편이 PPTX의 실제 구조에 더 가깝고, 들여쓰기를 헤딩으로 승격하면 평범한 한 줄짜리 불릿 목록도 소제목이 되어 메타데이터가 산만해질 위험이 있기 때문 (검토된 대안 및 채택 근거는 구현 당시 논의 참고). `FOOTER`/`SLIDE_NUMBER`/`DATETIME` placeholder는 매 슬라이드에 반복되는 노이즈(예: "대외비" 문구)라 본문에서 완전히 제외한다. 불릿은 자동 번호 목록(`getAutoNumberingScheme() != null`)이면 `"1. "`, 일반 불릿이면 `"- "`로 렌더링해 DOCX 변환기와 동일하게 순서형/비순서형을 구분한다. 하이퍼링크가 걸린 run은 `XSLFTextRun#getHyperlink()`를 읽어 `[텍스트](URL)`로 렌더링한다. `XSLFTable`·`XSLFDiagram`(SmartArt)·`XSLFObjectShape`(OLE)·차트 프레임은 모두 `XSLFGraphicFrame` 변형으로, 일반 `XSLFTextShape` 순회로는 절대 잡히지 않아 별도 분기로 처리한다 — SmartArt는 `getGroupShape()`(실제 렌더링된 도형 레이어)를 그룹 도형과 동일하게 재귀 추출해 박스 라벨 텍스트를 `appendShapeGroup()`이 `[다이어그램] ... [/다이어그램]` 마커로 감싸 본문에 남기고(일반 그룹 도형도 동일 함수로 `[도형 그룹] ... [/도형 그룹]`으로 감싸짐 — 아래 7번 참고), 차트는 시리즈/축 값 추출이 차트 종류마다 달라 안정적으로 뽑기 어려우므로 제목 텍스트만 `[차트: 제목]` 인라인 라벨로 추출하며, OLE는 POI로 일반화해 파싱할 텍스트가 없어 본문에는 아무것도 남기지 않는다(미리보기 이미지는 아래 4번 참고). 이 세 마커는 같은 도형에서 나온 여러 라벨을 한 블록으로 묶고 "도형에서 추출된 텍스트"임을 표시하기 위한 것으로, `[이미지: ...]`와 동일하게 `Document.getText()`에 그대로 남아 임베딩/FTS·`/admin` 표시·답변 프롬프트에 반영된다 — `#`가 아니라 `[`로 시작해 `splitMarkdownBySections()`의 섹션 경계로 오인되지 않고, 텍스트가 하나도 없는 도형(순수 장식용 그룹 등)은 마커 자체를 생략해 빈 블록을 남기지 않는다. 한 슬라이드에 같은 종류(그룹/다이어그램/차트)가 2개 이상이면(`slide.getShapes()` 기준 개수) 라벨에 발견 순서대로 순번이 붙어(`[도형 그룹 1]`/`[도형 그룹 2]`, `[다이어그램 1]`, `[차트 1: 제목]`) 서로 구분되고, 1개뿐이면 기존과 동일하게 번호 없이 렌더링된다(기존 단일-도형 출력과의 하위 호환). 그 도형이 소유한 이미지(아래 4번의 owner 추적)는 슬라이드 상단이 아니라 해당 마커 블록의 여는 마커 바로 다음에 `[이미지: ...]`로 인라인 삽입되어 어떤 이미지가 어떤 도형/차트에서 나왔는지 드러난다 — 소유 도형이 없는 일반 사진은 기존과 동일하게 슬라이드 상단에 모아 표시된다(§6.3-bis 4번 참고로, `PptxToMarkdownConverter` 클래스 상단 주석의 "이미지 마커는 항상 상단에 hoist" 설명은 그룹/다이어그램/차트가 소유하지 않은 이미지에만 해당하도록 갱신됨). 그룹 내부에서는 서로 다른 도형의 텍스트(문단을 합친 전체 텍스트, `combineShapeText()`)가 강조 마커·공백 차이를 무시하고 완전히 같으면 그 도형을 통째로 스킵해 하나만 남기고(`appendGroupText()`가 그룹 하나당 독립된 판정 범위를 가짐 — 중첩 서브그룹까지 포함해 공유), 슬라이드 본문에서도 직전 줄과 내용이 같은 줄이 연속되면(같은 기준으로 정규화 비교) 하나만 남긴다(비연속 반복은 유지). 슬라이드 하나의 최종 조립된 본문(본문+표+그룹 텍스트가 모두 합쳐진 뒤, 표 6번의 줄바꿈 수정도 반영된 뒤) 볼드(`**`/`***`) 스팬이 10개 이상이면 과도한 강조로 보고 전부 제거한다(`EXCESSIVE_BOLD_THRESHOLD`, 이탤릭은 대상 아님) — 슬라이드 전체가 볼드로 서식된 경우 등에 대응. 이와 별개로 도형 그룹(`appendShapeGroup()`)·표(`appendTable()`) 하나만 놓고도 같은 판정을 한 번 더 적용한다 — 그 블록 안의 볼드 스팬이 `BLOCK_BOLD_COUNT_THRESHOLD`(6)개 이상이거나 볼드로 덮인 글자 비율이 `BLOCK_BOLD_RATIO_THRESHOLD`(50%) 이상이면 그 블록만 볼드 마커를 전부 제거한다 — 볼드가 도형 그룹/표 하나에만 몰려 있어 슬라이드 전체 개수는 10 미만인 경우(예: 표 셀 6개만 전부 볼드)를 놓치지 않기 위한 블록 단위 보완 규칙이다. `addHeadingNumbers`(소제목 숫자 생성) 옵션은 체크박스 상태와 무관하게 PPTX 인덱싱 경로에서 항상 `false`로 강제된다(`DocumentIndexer`의 `.pptx` 분기가 `correctionService.correct()` 호출 시 요청값을 무시하고 고정값을 넘김) — PPTX의 `##`/`###` 헤딩은 슬라이드 제목/부제목 라벨(위에서 설명한 최대 2단계 calibration)이지 문서 목차 같은 계층 구조가 아니라서, 순차적으로 번호를 매겨도 실제 구조와 무관한 숫자만 붙고 이미 있는 `[페이지: N]` 마커와도 겹쳐 혼란만 준다. 같은 이유로 `MarkdownCorrectionService.correct()` 호출 시 섹션 분할 방식도 DOCX와 다르다: PPTX 인덱싱 경로는 `groupByPage=true`를 넘겨, 일반 헤딩 기준 분할(`splitBySections()`, §6.3 참고) 대신 `[페이지: N]` 마커를 경계로 쓰는 `splitByPages()`가 적용된다 — 슬라이드 하나가 `##`+`###` 헤딩을 모두 가진 경우에도 `###`가 별도 분할 트리거가 되지 않고, `[페이지: N]` 마커도 자기 슬라이드 섹션의 맨 앞에 온다(헤딩 기준 분할 시 이전 섹션 꼬리에 잘못 붙던 문제 해결). 다만 "슬라이드 하나 = 교정 호출 하나"는 아니다: 슬라이드는 자족적이라 페이지 경계가 항상 깔끔하므로, `splitByPages()`는 연속된 슬라이드를 문자 예산(`maxSectionChars`) 안에서 최대 `PPTX_MAX_BUNDLE_PAGES`(4)장까지 하나의 교정 호출로 묶는다 — 작은 슬라이드가 많을 때 LLM 왕복 횟수를 크게 줄인다. 반대로 슬라이드 하나가 `maxSectionChars`를 넘으면 묶을 수 없으므로 그 슬라이드만 `[도형 그룹]`/`[다이어그램]`/`[차트]` 블록 경계(`splitOversizedPage()`)로 쪼갠다(그룹 블록 하나는 통째로 유지, 블록 하나가 그래도 크면 문자 예산으로 강제 분할). 슬라이드 경계는 언제나 깔끔하므로 PPTX 경로에는 §6.3의 "부자연 경계 오버랩"이 쓰이지 않는다. DOCX·TXT·MD·PDF(비스캔)는 기존과 동일하게 `groupByPage=false`(일반 헤딩 기준 분할).
+   - **PPTX**: 슬라이드 제목 placeholder(`TITLE`/`CENTERED_TITLE`)만 `##`로 승격한다. 세부 규칙은 아래 하위 항목 참고.
+     - **헤딩·건너뛰기**: 제목이 없지만 본문(불릿 등) 또는 이미지(`XSLFPictureShape`)가 있는 슬라이드는 `"{N}번 슬라이드"`로 대체 헤딩을 붙인다 — 이미지만 있고 텍스트가 없는 슬라이드까지 건너뛰면 그 슬라이드에 대응하는 섹션 자체가 사라져 추출된 이미지의 `[이미지: ...]` 마커를 심을 자리가 없어지므로(이미지가 고아가 됨) 이미지가 있으면 건너뛰지 않는다. **제목·본문·이미지가 모두 없는 슬라이드(완전 공백 구분 슬라이드 등)만 마커·헤딩·본문 전부 생략하고 통째로 건너뛴다** — 그렇지 않으면 "## 139번 슬라이드"처럼 내용 없는 헤딩만 있는 청크가 그대로 임베딩/검색 인덱스에 남아 노이즈가 된다. 건너뛴 슬라이드는 다음 슬라이드의 `[페이지: N]` 번호에 영향을 주지 않는다(실제 슬라이드 인덱스를 그대로 사용).
+     - **본문 렌더링**: 본문 불릿은 들여쓰기 레벨(`XSLFTextParagraph.getIndentLevel()`)을 중첩 목록으로만 반영하고, 어떤 경우에도 소제목(`###` 이상)으로 승격하지 않는다 — 슬라이드 하나를 하나의 원자적 섹션으로 다루는 편이 PPTX의 실제 구조에 더 가깝고, 들여쓰기를 헤딩으로 승격하면 평범한 한 줄짜리 불릿 목록도 소제목이 되어 메타데이터가 산만해질 위험이 있기 때문(검토된 대안 및 채택 근거는 구현 당시 논의 참고). `FOOTER`/`SLIDE_NUMBER`/`DATETIME` placeholder는 매 슬라이드에 반복되는 노이즈(예: "대외비" 문구)라 본문에서 완전히 제외한다. 불릿은 자동 번호 목록(`getAutoNumberingScheme() != null`)이면 `"1. "`, 일반 불릿이면 `"- "`로 렌더링해 DOCX 변환기와 동일하게 순서형/비순서형을 구분한다. 하이퍼링크가 걸린 run은 `XSLFTextRun#getHyperlink()`를 읽어 `[텍스트](URL)`로 렌더링한다.
+     - **그래픽 프레임(표/SmartArt/OLE/차트)**: `XSLFTable`·`XSLFDiagram`(SmartArt)·`XSLFObjectShape`(OLE)·차트 프레임은 모두 `XSLFGraphicFrame` 변형으로, 일반 `XSLFTextShape` 순회로는 절대 잡히지 않아 별도 분기로 처리한다 — SmartArt는 `getGroupShape()`(실제 렌더링된 도형 레이어)를 그룹 도형과 동일하게 재귀 추출해 박스 라벨 텍스트를 `appendShapeGroup()`이 `[다이어그램] ... [/다이어그램]` 마커로 감싸 본문에 남기고(일반 그룹 도형도 동일 함수로 `[도형 그룹] ... [/도형 그룹]`으로 감싸짐 — 아래 7번 참고), 차트는 시리즈/축 값 추출이 차트 종류마다 달라 안정적으로 뽑기 어려우므로 제목 텍스트만 `[차트: 제목]` 인라인 라벨로 추출하며, OLE는 POI로 일반화해 파싱할 텍스트가 없어 본문에는 아무것도 남기지 않는다(미리보기 이미지는 아래 4번 참고).
+     - **마커 규칙**: 이 세 마커는 같은 도형에서 나온 여러 라벨을 한 블록으로 묶고 "도형에서 추출된 텍스트"임을 표시하기 위한 것으로, `[이미지: ...]`와 동일하게 `Document.getText()`에 그대로 남아 임베딩/FTS·`/admin` 표시·답변 프롬프트에 반영된다 — `#`가 아니라 `[`로 시작해 `splitMarkdownBySections()`의 섹션 경계로 오인되지 않고, 텍스트가 하나도 없는 도형(순수 장식용 그룹 등)은 마커 자체를 생략해 빈 블록을 남기지 않는다. 한 슬라이드에 같은 종류(그룹/다이어그램/차트)가 2개 이상이면(`slide.getShapes()` 기준 개수) 라벨에 발견 순서대로 순번이 붙어(`[도형 그룹 1]`/`[도형 그룹 2]`, `[다이어그램 1]`, `[차트 1: 제목]`) 서로 구분되고, 1개뿐이면 기존과 동일하게 번호 없이 렌더링된다(기존 단일-도형 출력과의 하위 호환). 그 도형이 소유한 이미지(아래 4번의 owner 추적)는 슬라이드 상단이 아니라 해당 마커 블록의 여는 마커 바로 다음에 `[이미지: ...]`로 인라인 삽입되어 어떤 이미지가 어떤 도형/차트에서 나왔는지 드러난다 — 소유 도형이 없는 일반 사진은 기존과 동일하게 슬라이드 상단에 모아 표시된다(§6.3-bis 4번 참고로, `PptxToMarkdownConverter` 클래스 상단 주석의 "이미지 마커는 항상 상단에 hoist" 설명은 그룹/다이어그램/차트가 소유하지 않은 이미지에만 해당하도록 갱신됨).
+     - **중복 제거**: 그룹 내부에서는 서로 다른 도형의 텍스트(문단을 합친 전체 텍스트, `combineShapeText()`)가 강조 마커·공백 차이를 무시하고 완전히 같으면 그 도형을 통째로 스킵해 하나만 남기고(`appendGroupText()`가 그룹 하나당 독립된 판정 범위를 가짐 — 중첩 서브그룹까지 포함해 공유), 슬라이드 본문에서도 직전 줄과 내용이 같은 줄이 연속되면(같은 기준으로 정규화 비교) 하나만 남긴다(비연속 반복은 유지).
+     - **과도한 볼드 억제**: 슬라이드 하나의 최종 조립된 본문(본문+표+그룹 텍스트가 모두 합쳐진 뒤, 표 6번의 줄바꿈 수정도 반영된 뒤) 볼드(`**`/`***`) 스팬이 10개 이상이면 과도한 강조로 보고 전부 제거한다(`EXCESSIVE_BOLD_THRESHOLD`, 이탤릭은 대상 아님) — 슬라이드 전체가 볼드로 서식된 경우 등에 대응. 이와 별개로 도형 그룹(`appendShapeGroup()`)·표(`appendTable()`) 하나만 놓고도 같은 판정을 한 번 더 적용한다 — 그 블록 안의 볼드 스팬이 `BLOCK_BOLD_COUNT_THRESHOLD`(6)개 이상이거나 볼드로 덮인 글자 비율이 `BLOCK_BOLD_RATIO_THRESHOLD`(50%) 이상이면 그 블록만 볼드 마커를 전부 제거한다 — 볼드가 도형 그룹/표 하나에만 몰려 있어 슬라이드 전체 개수는 10 미만인 경우(예: 표 셀 6개만 전부 볼드)를 놓치지 않기 위한 블록 단위 보완 규칙이다.
+     - **소제목 번호 매기기 강제 해제**: `addHeadingNumbers`(소제목 숫자 생성) 옵션은 체크박스 상태와 무관하게 PPTX 인덱싱 경로에서 항상 `false`로 강제된다(`DocumentIndexer`의 `.pptx` 분기가 `correctionService.correct()` 호출 시 요청값을 무시하고 고정값을 넘김) — PPTX의 `##`/`###` 헤딩은 슬라이드 제목/부제목 라벨(위에서 설명한 최대 2단계 calibration)이지 문서 목차 같은 계층 구조가 아니라서, 순차적으로 번호를 매겨도 실제 구조와 무관한 숫자만 붙고 이미 있는 `[페이지: N]` 마커와도 겹쳐 혼란만 준다.
+     - **섹션 분할**: 같은 이유로 `MarkdownCorrectionService.correct()` 호출 시 섹션 분할 방식도 DOCX와 다르다: PPTX 인덱싱 경로는 `groupByPage=true`를 넘겨, 일반 헤딩 기준 분할(`splitBySections()`, §6.3 참고) 대신 `[페이지: N]` 마커를 경계로 쓰는 `splitByPages()`가 적용된다 — 슬라이드 하나가 `##`+`###` 헤딩을 모두 가진 경우에도 `###`가 별도 분할 트리거가 되지 않고, `[페이지: N]` 마커도 자기 슬라이드 섹션의 맨 앞에 온다(헤딩 기준 분할 시 이전 섹션 꼬리에 잘못 붙던 문제 해결). 다만 "슬라이드 하나 = 교정 호출 하나"는 아니다: 슬라이드는 자족적이라 페이지 경계가 항상 깔끔하므로, `splitByPages()`는 연속된 슬라이드를 문자 예산(`maxSectionChars`) 안에서 최대 `PPTX_MAX_BUNDLE_PAGES`(4)장까지 하나의 교정 호출로 묶는다 — 작은 슬라이드가 많을 때 LLM 왕복 횟수를 크게 줄인다. 반대로 슬라이드 하나가 `maxSectionChars`를 넘으면 묶을 수 없으므로 그 슬라이드만 `[도형 그룹]`/`[다이어그램]`/`[차트]` 블록 경계(`splitOversizedPage()`)로 쪼갠다(그룹 블록 하나는 통째로 유지, 블록 하나가 그래도 크면 문자 예산으로 강제 분할). 슬라이드 경계는 언제나 깔끔하므로 PPTX 경로에는 §6.3의 "부자연 경계 오버랩"이 쓰이지 않는다. DOCX·TXT·MD·PDF(비스캔)는 기존과 동일하게 `groupByPage=false`(일반 헤딩 기준 분할).
    - **PDF(비스캔)** — 페이지 텍스트만으로는 신뢰할 구조 신호가 없으므로 페이지마다 합성 헤딩 `"## N페이지"`만 부여한다(제목·소제목 추론 없음). 텍스트도 이미지도 없는 페이지만 마커·헤딩 모두 생략하고 건너뛰되(텍스트는 없어도 이미지가 있으면 PPTX와 동일한 이유로 건너뛰지 않음), 다음 페이지 번호는 밀리지 않고 실제 PDF 페이지 인덱스를 그대로 유지한다.
 3. **페이지/슬라이드 마커**: 항상 제네릭 `[페이지: N]` 마커만 사용한다(DOCX 전용의 `[헤딩페이지: N]`은 쓰지 않음) — 실제로 내용을 내보내는 슬라이드/페이지의 헤딩 직전에 위치시켜 `splitMarkdownBySections()`가 그 헤딩의 `page_or_slide`로 정확히 귀속시킨다. **내용이 있는 슬라이드/페이지는 반드시 헤딩 하나씩을 가져야 하는 이유**: 헤딩이 없으면 섹션 경계가 전혀 생기지 않아 문서 전체가 헤딩 없는 섹션 1개로 뭉쳐버리고, 두 번째 슬라이드/페이지부터는 `page_or_slide` 값이 유실된다(완전히 비어 있는 슬라이드/페이지는 애초에 아무것도 내보내지 않고 건너뛴다 — 2번 항목 참고).
 4. **이미지**: DOCX와 동일하게 본문에 `[이미지: ...]` 인라인 마커를 넣는다 — 헤딩 바로 다음(본문 텍스트보다 앞)에 슬라이드/페이지별 이미지 경로를 마커로 삽입한다. 별도의 사후 메타데이터 첨부 단계는 없다 — `DocumentLoaderService.loadFromMarkdown()`이 이미 갖고 있던 `[이미지: ...]` 마커 파싱 로직이 이 마커도 그대로 인식해 `image_paths`로 승격시킨다(DOCX와 완전히 동일한 메커니즘 재사용). 이 덕분에 `addImageDescriptions`(이미지 설명 추가) 옵션도 이제 PPTX/PDF에 정상 적용된다 — [IMAGE_PROCESS.md §5](IMAGE_PROCESS.md#5-vision-설명-생성-l2) 참고.
