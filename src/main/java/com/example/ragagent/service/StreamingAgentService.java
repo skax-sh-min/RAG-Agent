@@ -268,6 +268,20 @@ public class StreamingAgentService {
             sendEvent(emitter, "stage", payload);
         }
 
+        @Override
+        public void onRetry(String reason, int retryCount) {
+            lastActivityNanos.set(System.nanoTime());
+            Map<String, Object> payload = new HashMap<>();
+            payload.put("reason", reason);
+            payload.put("retryCount", retryCount);
+            payload.put("text", "이 답변이 검증 조건을 통과하지 못해, 검색 범위를 넓혀 다시 시도하고 있습니다… (재시도 "
+                    + retryCount + ")");
+            sendEvent(emitter, "retry", payload);
+            // Superseded attempts are never persisted (only the final answer is), so drop the
+            // accumulated buffer here — an error mid-retry then persists only the latest attempt.
+            accumulated.setLength(0);
+        }
+
         private String stageText(String nodeId) {
             return switch (nodeId) {
                 case "classifier" -> "질문 분류 중...";

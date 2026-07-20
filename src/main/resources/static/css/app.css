@@ -15,6 +15,26 @@
     scroll-behavior: smooth;
 }
 
+/* ── Jump-to-latest button ───────────────────────────────────────────────
+   Floats at the bottom-right of the chat area, just above the input bar. Shown
+   only when the user has scrolled up (chat-stream.js toggles .d-none). */
+.scroll-to-bottom-btn {
+    position: absolute;
+    right: 1.25rem;
+    bottom: 5.25rem;
+    z-index: 5;
+    width: 2.5rem;
+    height: 2.5rem;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    opacity: 0.92;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+}
+.scroll-to-bottom-btn:hover { opacity: 1; }
+
 /* ── Message bubbles ─────────────────────────────────────────────────── */
 .bubble-user {
     background: var(--bg-bubble-user);
@@ -35,6 +55,20 @@
     border-radius: 1rem 1rem 1rem 0;
     max-width: 85%;
 }
+
+/* ── Superseded (unverified) retry answers ───────────────────────────────
+   Transient, dimmed, collapsed blocks shown while a verification-failure retry
+   is in progress; removed once a final answer arrives (chat-stream.js). */
+.superseded-answer {
+    border-color: var(--border-default) !important;
+    border-style: dashed !important;
+    opacity: 0.7;
+}
+.superseded-answer > summary {
+    cursor: pointer;
+    list-style: none;
+}
+.superseded-answer > summary::-webkit-details-marker { display: none; }
 
 /* ── Feedback (like/dislike) buttons ─────────────────────────────────── */
 .feedback-controls .feedback-btn {

@@ -114,7 +114,7 @@
         </div>
 
         <!-- ── Chat area ─────────────────────────────────────────────── -->
-        <div class="flex-grow-1 d-flex flex-column overflow-hidden">
+        <div class="flex-grow-1 d-flex flex-column overflow-hidden position-relative">
 
             <!-- Mobile top bar (hamburger → opens thread drawer) -->
             <div class="d-flex d-md-none align-items-center gap-2 border-bottom p-2">
@@ -192,6 +192,15 @@
                     </div>
                 </th:block>
             </div>
+
+            <!-- Jump-to-latest: shown when the user scrolls up (e.g. to read earlier content
+                 while an answer is streaming); auto-scroll is suppressed until they return. -->
+            <button type="button" id="scroll-to-bottom-btn"
+                    class="btn btn-secondary scroll-to-bottom-btn d-none"
+                    th:attr="aria-label=#{chat.scroll.bottom},title=#{chat.scroll.bottom}"
+                    aria-label="Jump to latest">
+                <i class="bi bi-arrow-down"></i>
+            </button>
 
             <!-- Typing indicator (outside scroll area, shown during request) -->
             <div id="typing-indicator" class="d-none align-items-center gap-2 px-3 pb-1">

@@ -9,12 +9,16 @@
 (function () {
     'use strict';
 
-    // ── Per-bubble answer stage counter (tracks RETRIEVAL retries) ──────────
-    const answerCountMap = new Map();
-
     // ── Active stream cancellation — only one stream can be in flight at a time
     // (the send button is repurposed as a stop button while streaming) ──────
     let currentAbort = null;
+
+    // ── Auto-scroll anchoring ────────────────────────────────────────────────
+    // While an answer streams we only stick to the bottom if the user is already
+    // there. If they scroll up (e.g. to re-read earlier content), auto-scroll is
+    // suppressed and a "jump to latest" button appears until they return.
+    let stickToBottom = true;
+    const NEAR_BOTTOM_PX = 80;
 
     // ── Stage label map ──────────────────────────────────────────────────────
     const STAGE_LABELS = {
@@ -41,9 +45,26 @@
         return crypto.randomUUID().replace(/-/g, '').substring(0, 8);
     }
 
-    function scrollToBottom() {
+    function isNearBottom(el) {
+        return el.scrollHeight - el.scrollTop - el.clientHeight <= NEAR_BOTTOM_PX;
+    }
+
+    /**
+     * Scrolls the message list to the bottom, but only while "stuck" — i.e. the user
+     * hasn't scrolled up. Pass force=true (e.g. when the user sends a new message or
+     * clicks the jump button) to re-anchor and jump regardless.
+     */
+    function scrollToBottom(force) {
         const el = document.getElementById('chat-messages');
-        if (el) el.scrollTop = el.scrollHeight;
+        if (!el) return;
+        if (force === true) stickToBottom = true;
+        if (stickToBottom) el.scrollTo({ top: el.scrollHeight, behavior: 'instant' });
+        updateScrollButton();
+    }
+
+    function updateScrollButton() {
+        const btn = document.getElementById('scroll-to-bottom-btn');
+        if (btn) btn.classList.toggle('d-none', stickToBottom);
     }
 
     /** Toggles the send button between "send" and "stop" while a stream is active. */
@@ -125,15 +146,67 @@
             const sourcesEl = document.getElementById(`stream-sources-${bubbleId}`);
             if (sourcesEl) sourcesEl.innerHTML = '';
         }
-        // RETRIEVAL retry: 2nd+ answer stage means prior content was insufficient — clear and re-fill
-        if (data.id === 'answer') {
-            const count = (answerCountMap.get(bubbleId) || 0) + 1;
-            answerCountMap.set(bubbleId, count);
-            if (count > 1) {
-                const contentEl = document.getElementById(`stream-content-${bubbleId}`);
-                if (contentEl) contentEl.textContent = '';
-            }
+        // NOTE: on a verification-failure retry the live content is preserved (not cleared) by
+        // onRetry(), which moves it into a collapsed "미검증" block before the fresh attempt
+        // re-streams — so no answer-stage clearing here.
+    }
+
+    /**
+     * A verification-failure retry (answer insufficient / critic ungrounded). Preserve the
+     * just-streamed unverified answer as a collapsed, 미검증-marked block, leave a retry notice,
+     * then clear the live area so the next (wider-scope) attempt streams fresh. The preserved
+     * block is transient — onDone()/onAborted() remove it once a final answer arrives.
+     */
+    function onRetry(bubbleId, data) {
+        const contentEl = document.getElementById(`stream-content-${bubbleId}`);
+        if (!contentEl) return;
+        const rawText = contentEl.textContent || '';
+
+        // Superseded-answers container, kept above the live content.
+        let container = document.getElementById(`stream-superseded-${bubbleId}`);
+        if (!container) {
+            container = document.createElement('div');
+            container.id = `stream-superseded-${bubbleId}`;
+            contentEl.parentNode.insertBefore(container, contentEl);
         }
+        if (rawText.trim()) {
+            const details = document.createElement('details');
+            details.className = 'superseded-answer border rounded mb-2';
+            const summary = document.createElement('summary');
+            summary.className = 'small text-muted p-2';
+            summary.innerHTML =
+                `<span class="badge bg-warning text-dark me-1">미검증</span>` +
+                `<span aria-label="싫어요">👎</span> 검증 미통과 — 이전 답변 펼쳐보기`;
+            const body = document.createElement('div');
+            body.className = 'md-content p-2 pt-0';
+            body.textContent = rawText;          // textContent → renderMarkdown sanitizes
+            renderMarkdown(body);
+            details.appendChild(summary);
+            details.appendChild(body);
+            container.appendChild(details);
+        }
+
+        // Persistent retry notice (removed on done/abort).
+        let notice = document.getElementById(`stream-retry-notice-${bubbleId}`);
+        if (!notice) {
+            notice = document.createElement('div');
+            notice.id = `stream-retry-notice-${bubbleId}`;
+            notice.className = 'retry-notice small text-warning mb-2 d-flex align-items-center gap-1';
+            contentEl.parentNode.insertBefore(notice, contentEl);
+        }
+        notice.innerHTML =
+            `<i class="bi bi-arrow-repeat"></i>` +
+            `<span>${escHtml(data.text || '검증 미통과 — 검색 범위를 넓혀 재시도 중...')}</span>`;
+
+        // Clear the live area for the fresh attempt.
+        contentEl.textContent = '';
+        scrollToBottom();
+    }
+
+    /** Removes the transient retry UI (superseded answers + notice) once a final state is reached. */
+    function clearRetryArtifacts(bubbleId) {
+        document.getElementById(`stream-superseded-${bubbleId}`)?.remove();
+        document.getElementById(`stream-retry-notice-${bubbleId}`)?.remove();
     }
 
     function onImages(bubbleId, imageRefs) {
@@ -219,8 +292,10 @@
             renderMarkdown(contentEl);
         }
 
-        // 3. Hide stage spinner
+        // 3. Hide stage spinner + drop any superseded (unverified) retry answers — a final
+        //    answer arrived, so the "삭제 예정" attempts are removed (retry succeeded/exhausted).
         if (stageEl) stageEl.remove();
+        clearRetryArtifacts(bubbleId);
 
         // 4. Feedback buttons (like/dislike) + metadata footer, same line — feedback first (left).
         //    Uses the same .feedback-btn/.feedback-controls markup the chat.html delegated
@@ -259,12 +334,10 @@
             htmx.trigger(document.body, 'refreshThreadList');
         }
 
-        answerCountMap.delete(bubbleId);
         scrollToBottom();
     }
 
     function onError(bubbleId, message) {
-        answerCountMap.delete(bubbleId);
         const bubble = document.getElementById(`bubble-${bubbleId}`);
         if (bubble) {
             bubble.outerHTML =
@@ -278,7 +351,7 @@
 
     /** User-initiated stop (AbortController). Keeps whatever partial answer already streamed in. */
     function onAborted(bubbleId) {
-        answerCountMap.delete(bubbleId);
+        clearRetryArtifacts(bubbleId);
         const stageEl = document.getElementById(`stream-stage-${bubbleId}`);
         if (stageEl) stageEl.remove();
 
@@ -311,7 +384,7 @@
 
         appendUserBubble(question);
         appendStreamingBubble(bubbleId);
-        scrollToBottom();
+        scrollToBottom(true);   // user just sent — re-anchor to bottom
 
         const abortController = new AbortController();
         currentAbort = abortController;
@@ -389,6 +462,7 @@
             case 'sources': onSources(bubbleId, data);        break;
             case 'images':  onImages(bubbleId, data);         break;
             case 'token':   onToken(bubbleId, data.tab, data.text);  break;
+            case 'retry':   onRetry(bubbleId, data);          break;
             case 'done':    onDone(bubbleId, data);           break;
             case 'error':   onError(bubbleId, data.message);  break;
         }
@@ -397,6 +471,20 @@
     // ── Form intercept ────────────────────────────────────────────────────────
 
     document.addEventListener('DOMContentLoaded', function () {
+        // Track scroll position: the user scrolling up suppresses auto-scroll and
+        // reveals the jump-to-latest button; returning near the bottom re-anchors.
+        const chatMessages = document.getElementById('chat-messages');
+        if (chatMessages) {
+            chatMessages.addEventListener('scroll', function () {
+                stickToBottom = isNearBottom(chatMessages);
+                updateScrollButton();
+            }, { passive: true });
+        }
+        const scrollBtn = document.getElementById('scroll-to-bottom-btn');
+        if (scrollBtn) {
+            scrollBtn.addEventListener('click', function () { scrollToBottom(true); });
+        }
+
         const form = document.getElementById('chat-form');
         if (!form) return;
 

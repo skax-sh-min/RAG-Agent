@@ -235,4 +235,68 @@ class AgentGraphTest {
         assertThat(captured).hasSize(1);
         assertThat(captured.get(0)).isEqualTo(refs);
     }
+
+    @Test
+    @DisplayName("runStreaming — ANSWER 불충분 재시도 시 listener.onRetry(\"answer\", 1) 발생")
+    void runStreaming_firesOnRetryWhenAnswerInsufficient() {
+        when(classifierService.execute(any()))
+                .thenAnswer(inv -> ((AgentState) inv.getArgument(0)).toBuilder().questionType("manual").build());
+        int[] answerCalls = {0};
+        when(answerService.executeStreaming(any(), any())).thenAnswer(inv -> {
+            AgentState s = inv.getArgument(0);
+            answerCalls[0]++;
+            return answerCalls[0] == 1 ? s.toBuilder().needsRetry(true).build() : s.toBuilder().needsRetry(false).build();
+        });
+
+        List<String> retries = new ArrayList<>();
+        GraphListener listener = new GraphListener() {
+            @Override public void onRetry(String reason, int retryCount) { retries.add(reason + ":" + retryCount); }
+        };
+
+        graph.runStreaming(newState(RoutingMode.COST_FIRST), listener);
+
+        assertThat(retries).containsExactly("answer:1");
+    }
+
+    @Test
+    @DisplayName("runStreaming — CRITIC 미검증 재시도 시 listener.onRetry(\"critic\", 1) 발생")
+    void runStreaming_firesOnRetryWhenCriticUngrounded() {
+        when(classifierService.execute(any()))
+                .thenAnswer(inv -> ((AgentState) inv.getArgument(0)).toBuilder().questionType("manual").build());
+        when(answerService.executeStreaming(any(), any()))
+                .thenAnswer(inv -> ((AgentState) inv.getArgument(0)).toBuilder().needsRetry(false).build());
+        int[] criticCalls = {0};
+        when(criticService.execute(any())).thenAnswer(inv -> {
+            AgentState s = inv.getArgument(0);
+            criticCalls[0]++;
+            return criticCalls[0] == 1 ? s.toBuilder().needsRetry(true).build() : s.toBuilder().needsRetry(false).build();
+        });
+
+        List<String> retries = new ArrayList<>();
+        GraphListener listener = new GraphListener() {
+            @Override public void onRetry(String reason, int retryCount) { retries.add(reason + ":" + retryCount); }
+        };
+
+        graph.runStreaming(newState(RoutingMode.COST_FIRST), listener);
+
+        assertThat(retries).containsExactly("critic:1");
+    }
+
+    @Test
+    @DisplayName("runStreaming — 재시도 없으면 onRetry 미호출")
+    void runStreaming_noRetry_doesNotFireOnRetry() {
+        when(classifierService.execute(any()))
+                .thenAnswer(inv -> ((AgentState) inv.getArgument(0)).toBuilder().questionType("manual").build());
+        when(answerService.executeStreaming(any(), any()))
+                .thenAnswer(inv -> ((AgentState) inv.getArgument(0)).toBuilder().needsRetry(false).build());
+
+        boolean[] fired = {false};
+        GraphListener listener = new GraphListener() {
+            @Override public void onRetry(String reason, int retryCount) { fired[0] = true; }
+        };
+
+        graph.runStreaming(newState(RoutingMode.COST_FIRST), listener);
+
+        assertThat(fired[0]).isFalse();
+    }
 }
