@@ -76,6 +76,29 @@ class SqliteMemoryRepositoryTest {
     }
 
     @Test
+    @DisplayName("getRecentTurns — 50 turn 초과 시 최근 50개만 시간순으로 반환 (FETCH_LIMIT)")
+    void getRecentTurns_respectsFetchLimit() {
+        for (int i = 0; i < 60; i++) {
+            repo.addTurn(UID, "t1", "Q" + i, "A" + i, null, 0, 0, 0, null, 0);
+        }
+
+        var turns = repo.getRecentTurns(UID, "t1");
+
+        assertThat(turns).hasSize(50);
+        assertThat(turns.get(0).question()).isEqualTo("Q10"); // 가장 오래된 Q0~Q9는 잘려나감
+        assertThat(turns.get(turns.size() - 1).question()).isEqualTo("Q59"); // 최신 turn이 마지막(시간순)
+    }
+
+    @Test
+    @DisplayName("getRecentTurns — FETCH_LIMIT 이하면 getTurns와 동일하게 전부 반환")
+    void getRecentTurns_returnsAllWhenUnderLimit() {
+        repo.addTurn(UID, "t1", "Q1", "A1", null, 0, 0, 0, null, 0);
+        repo.addTurn(UID, "t1", "Q2", "A2", null, 0, 0, 0, null, 0);
+
+        assertThat(repo.getRecentTurns(UID, "t1")).isEqualTo(repo.getTurns(UID, "t1"));
+    }
+
+    @Test
     @DisplayName("clearHistory 후 getTurns 빈 리스트")
     void clearHistory() {
         repo.addTurn(UID, "t1", "Q", "A", null, 0, 0, 0, null, 0);

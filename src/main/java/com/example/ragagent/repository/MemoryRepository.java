@@ -16,6 +16,14 @@ public interface MemoryRepository {
     /** Returns all turns for the thread in chronological order (oldest first). */
     List<Turn> getTurns(String userId, String threadId);
 
+    /**
+     * Same as {@link #getTurns}, but capped to the most recent {@code app.memory.fetch-limit-turns}
+     * (the same bound {@link #getHistory} applies) — for callers that feed turns into an LLM call
+     * (e.g. summarization) and must not let cost grow unbounded with conversation length. Still
+     * returned in chronological order (oldest first).
+     */
+    List<Turn> getRecentTurns(String userId, String threadId);
+
     /** Current feedback value for ownership check + audit "from". Empty = turn not found / not owned. */
     Optional<FeedbackRow> getFeedback(String userId, String threadId, long turnId);
 

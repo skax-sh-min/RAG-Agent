@@ -99,7 +99,12 @@ public class ChatController {
         return "redirect:/chat/" + threadId;
     }
 
-    /** §6.10 — fired when the user starts typing; runs in the background, never blocks the caller. */
+    /**
+     * §6.10 — fired when the user starts typing. Cold-start safety net for threads whose summary
+     * cache hasn't been warmed yet (the primary trigger is now right after each answer — see
+     * {@link ConversationSummarizerService#precomputeAfterTurn}). Runs in the background, never
+     * blocks the caller.
+     */
     @PostMapping("/ui/chat/summary/precompute")
     @ResponseStatus(HttpStatus.ACCEPTED)
     public void precomputeSummary(ThreadContext ctx, @RequestParam String threadId) {

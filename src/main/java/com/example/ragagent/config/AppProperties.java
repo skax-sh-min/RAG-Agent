@@ -459,10 +459,10 @@ public record AppProperties(
         return new VectorStoreConfig(vectorstore.type().trim());
     }
 
-    /** Conversation-history fetch limit (fallback path), defaulting to 50 turns. Clamped to >= 1. */
+    /** Conversation-history fetch limit (fallback path), defaulting to 10 turns. Clamped to >= 1. */
     public MemoryConfig memorySafe() {
         int limit = (memory != null && memory.fetchLimitTurns() != null && memory.fetchLimitTurns() > 0)
-                ? memory.fetchLimitTurns() : 50;
+                ? memory.fetchLimitTurns() : 10;
         return new MemoryConfig(limit);
     }
 

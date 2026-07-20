@@ -17,7 +17,7 @@ import static org.mockito.Mockito.when;
  * Every public method besides the constructor is one-line delegation to MemoryRepository
  * (not worth testing individually beyond compile-time wiring). This focuses on the one real
  * piece of logic: the conversation-history char budget derived from app.llm.max-tokens
- * (LLM_MAX_TOKENS, §6.18), which README/CLAUDE.md document as "LLM_MAX_TOKENS × 0.75" with a
+ * (LLM_MAX_TOKENS, §6.18), which README/CLAUDE.md document as "LLM_MAX_TOKENS × 0.5" with a
  * 1,000-char floor.
  */
 class MemoryServiceTest {
@@ -32,13 +32,13 @@ class MemoryServiceTest {
     }
 
     @Test
-    @DisplayName("budget = llmMaxTokens * 0.75, getHistory 에 그대로 전달")
-    void budget_derivedAsThreeQuartersOfMaxTokens() {
+    @DisplayName("budget = llmMaxTokens * 0.5, getHistory 에 그대로 전달")
+    void budget_derivedAsHalfOfMaxTokens() {
         MemoryService service = new MemoryService(repository, propsWithMaxTokens(8000));
 
         service.getHistory("u1", "t1");
 
-        verify(repository).getHistory("u1", "t1", 6000);
+        verify(repository).getHistory("u1", "t1", 4000);
     }
 
     @Test

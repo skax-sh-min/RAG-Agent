@@ -85,7 +85,7 @@ class StreamingAgentServiceTest {
 
         verify(memoryService).addTurn(eq("u1"), eq("t1"), eq("질문"), eq("최종 답변"),
                 anyString(), eq(0), eq(0), anyInt(), eq("local"), anyInt());
-        verify(summarizerService).invalidate("t1");
+        verify(summarizerService).precomputeAfterTurn(eq("u1"), eq("t1"), eq(42L), any());
         verify(emitter).complete();
         verify(emitter, never()).completeWithError(any());
         verify(threadMetaService).generateTitleAsync(eq("u1"), eq("t1"), eq("v1"), eq("질문"));
@@ -128,7 +128,7 @@ class StreamingAgentServiceTest {
     }
 
     @Test
-    @DisplayName("답변이 비어있으면 addTurn 호출 안 함 (요약 캐시 무효화도 스킵)")
+    @DisplayName("답변이 비어있으면 addTurn 호출 안 함 (요약 재생성 트리거도 스킵)")
     void run_blankAnswer_doesNotPersistTurn() {
         when(agentGraph.runStreaming(any(), any())).thenReturn(resultState(null));
 
@@ -136,7 +136,7 @@ class StreamingAgentServiceTest {
 
         verify(memoryService, never())
                 .addTurn(any(), any(), any(), any(), any(), anyInt(), anyInt(), anyInt(), any(), anyInt());
-        verify(summarizerService, never()).invalidate(any());
+        verify(summarizerService, never()).precomputeAfterTurn(any(), any(), any(), any());
         verify(emitter).complete();
     }
 

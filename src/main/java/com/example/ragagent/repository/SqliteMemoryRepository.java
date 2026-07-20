@@ -3,6 +3,7 @@ package com.example.ragagent.repository;
 import com.example.ragagent.config.AppProperties;
 import jakarta.annotation.PostConstruct;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.RowMapper;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
 import org.springframework.jdbc.support.KeyHolder;
 import org.springframework.stereotype.Repository;
@@ -19,6 +20,19 @@ public class SqliteMemoryRepository implements MemoryRepository {
     private final JdbcTemplate jdbc;
     // fetch at most this many recent turns before applying char truncation (§6.11: app.memory.*)
     private final int fetchLimit;
+
+    private static final RowMapper<Turn> TURN_ROW_MAPPER = (rs, n) -> new Turn(
+            rs.getLong("id"),
+            rs.getString("question"),
+            rs.getString("answer"),
+            rs.getString("asked_at"),
+            rs.getString("created_at"),
+            rs.getInt("input_tokens"),
+            rs.getInt("output_tokens"),
+            rs.getInt("elapsed_ms"),
+            rs.getString("provider"),
+            rs.getInt("llm_calls"),
+            rs.getString("feedback"));
 
     public SqliteMemoryRepository(JdbcTemplate jdbc, AppProperties props) {
         this.jdbc = jdbc;
@@ -140,19 +154,22 @@ public class SqliteMemoryRepository implements MemoryRepository {
                 "SELECT id, question, answer, asked_at, created_at, " +
                 "input_tokens, output_tokens, elapsed_ms, provider, llm_calls, feedback " +
                 "FROM conversation_turns WHERE user_id = ? AND thread_id = ? ORDER BY id ASC",
-                (rs, n) -> new Turn(
-                        rs.getLong("id"),
-                        rs.getString("question"),
-                        rs.getString("answer"),
-                        rs.getString("asked_at"),
-                        rs.getString("created_at"),
-                        rs.getInt("input_tokens"),
-                        rs.getInt("output_tokens"),
-                        rs.getInt("elapsed_ms"),
-                        rs.getString("provider"),
-                        rs.getInt("llm_calls"),
-                        rs.getString("feedback")),
+                TURN_ROW_MAPPER,
                 userId, threadId);
+    }
+
+    @Override
+    public List<Turn> getRecentTurns(String userId, String threadId) {
+        // fetch last fetchLimit turns newest-first (same bound as getHistory()), then reverse for
+        // chronological order — bounds LLM-facing callers (summarization) to a constant-size input
+        // regardless of how long the conversation has grown.
+        List<Turn> rows = jdbc.query(
+                "SELECT id, question, answer, asked_at, created_at, " +
+                "input_tokens, output_tokens, elapsed_ms, provider, llm_calls, feedback " +
+                "FROM conversation_turns WHERE user_id = ? AND thread_id = ? ORDER BY id DESC LIMIT ?",
+                TURN_ROW_MAPPER,
+                userId, threadId, fetchLimit);
+        return rows.reversed();
     }
 
     @Override

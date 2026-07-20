@@ -13,10 +13,12 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
 import java.util.List;
+import java.util.Locale;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
@@ -233,14 +235,16 @@ class AgentServiceTest {
     }
 
     @Test
-    @DisplayName("§6.10 — 새 turn 저장 후 summarizerService.invalidate() 호출")
-    void chat_invalidatesSummaryCache_afterNewTurnPersisted() {
+    @DisplayName("새 turn 저장 후 summarizerService.precomputeAfterTurn() 호출 (답변 완료 직후 요약 재생성 트리거)")
+    void chat_precomputesSummary_afterNewTurnPersisted() {
         when(memoryService.getHistory(any(), any())).thenReturn("");
         when(classifierService.classifyOnly(any(), any())).thenReturn("manual");
         when(agentGraph.run(any())).thenReturn(fullResult());
+        when(memoryService.addTurn(any(), any(), any(), any(), any(),
+                anyInt(), anyInt(), anyInt(), any(), anyInt())).thenReturn(42L);
 
         service.chat(CTX, new ChatRequest("질문", "v1", "t1", RoutingMode.COST_FIRST));
 
-        verify(summarizerService, times(1)).invalidate("t1");
+        verify(summarizerService, times(1)).precomputeAfterTurn("anonymous", "t1", 42L, Locale.KOREAN);
     }
 }

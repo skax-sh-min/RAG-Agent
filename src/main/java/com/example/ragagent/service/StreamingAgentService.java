@@ -149,7 +149,7 @@ public class StreamingAgentService {
                 turnId = memoryService.addTurn(userId, form.threadId(), form.question(), result.answer(),
                         askedAt, result.totalInputTokens(), result.totalOutputTokens(),
                         (int) elapsedMs, result.usedProvider(), result.llmCallCount());
-                summarizerService.invalidate(form.threadId());
+                summarizerService.precomputeAfterTurn(userId, form.threadId(), turnId, locale);
             }
 
             sendEvent(emitter, "done", buildDonePayload(result, elapsedMs, turnId));

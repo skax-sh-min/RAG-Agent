@@ -14,6 +14,7 @@ import org.springframework.context.MessageSource;
 
 import java.util.List;
 import java.util.Locale;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -35,6 +36,8 @@ import static org.mockito.Mockito.when;
  *  - precompute(): LOCAL provider 예외/일반 예외 시 캐시에 아무것도 남지 않음(안전 폴백)
  *  - precompute(): TTL 이내 재호출은 LLM 을 다시 부르지 않음
  *  - invalidate(): 캐시 제거 후 buildContext() 는 다시 null
+ *  - precompute(turnId): LLM 응답 도착 시점에 해당 turn 이 DISLIKE면 결과를 캐싱하지 않음
+ *  - precomputeAfterTurn(): 답변 완료 직후 캐시를 무효화하고 백그라운드로 재생성함
  */
 class ConversationSummarizerServiceTest {
 
@@ -93,7 +96,7 @@ class ConversationSummarizerServiceTest {
     @Test
     @DisplayName("precompute — turns 가 비어있으면 LLM 호출 없이 종료")
     void precompute_emptyHistory_skipsLlmCall() {
-        when(memoryService.getTurns(UID, TID)).thenReturn(List.of());
+        when(memoryService.getRecentTurns(UID, TID)).thenReturn(List.of());
 
         service.precompute(UID, TID, Locale.KOREAN);
 
@@ -107,7 +110,7 @@ class ConversationSummarizerServiceTest {
         List<MemoryRepository.Turn> turns = List.of(
                 turn(1, "질문1", "답변1", null),
                 turn(2, "질문2", "답변2", null));
-        when(memoryService.getTurns(UID, TID)).thenReturn(turns);
+        when(memoryService.getRecentTurns(UID, TID)).thenReturn(turns);
         when(llmRouter.executeWithTracking(eq(TaskType.MICRO_TEXT), eq(RoutingMode.LOCAL_ONLY),
                 eq(BackgroundUsage.SUMMARY_PREFIX), any()))
                 .thenReturn("요약된 내용");
@@ -122,7 +125,7 @@ class ConversationSummarizerServiceTest {
     @Test
     @DisplayName("precompute — LOCAL provider 없음(LlmProviderExhaustedException) 시 캐시에 남지 않음")
     void precompute_noLocalProvider_leavesCacheEmpty() {
-        when(memoryService.getTurns(UID, TID)).thenReturn(List.of(turn(1, "질문", "답변", null)));
+        when(memoryService.getRecentTurns(UID, TID)).thenReturn(List.of(turn(1, "질문", "답변", null)));
         when(llmRouter.executeWithTracking(any(), any(), any(), any()))
                 .thenThrow(new LlmProviderExhaustedException("no local provider"));
 
@@ -134,7 +137,7 @@ class ConversationSummarizerServiceTest {
     @Test
     @DisplayName("precompute — 알 수 없는 예외도 전파하지 않고 조용히 실패한다")
     void precompute_unexpectedException_doesNotPropagate() {
-        when(memoryService.getTurns(UID, TID)).thenReturn(List.of(turn(1, "질문", "답변", null)));
+        when(memoryService.getRecentTurns(UID, TID)).thenReturn(List.of(turn(1, "질문", "답변", null)));
         when(llmRouter.executeWithTracking(any(), any(), any(), any()))
                 .thenThrow(new RuntimeException("boom"));
 
@@ -146,7 +149,7 @@ class ConversationSummarizerServiceTest {
     @Test
     @DisplayName("precompute — TTL 이내 재호출은 LLM 을 다시 부르지 않는다")
     void precompute_withinTtl_skipsSecondLlmCall() {
-        when(memoryService.getTurns(anyString(), anyString()))
+        when(memoryService.getRecentTurns(anyString(), anyString()))
                 .thenReturn(List.of(turn(1, "질문", "답변", null)));
         when(llmRouter.executeWithTracking(any(), any(), any(), any())).thenReturn("요약");
 
@@ -159,7 +162,7 @@ class ConversationSummarizerServiceTest {
     @Test
     @DisplayName("invalidate — 캐시 제거 후 buildContext() 는 다시 null")
     void invalidate_clearsCache() {
-        when(memoryService.getTurns(UID, TID)).thenReturn(List.of(turn(1, "질문", "답변", null)));
+        when(memoryService.getRecentTurns(UID, TID)).thenReturn(List.of(turn(1, "질문", "답변", null)));
         when(llmRouter.executeWithTracking(any(), any(), any(), any())).thenReturn("요약");
         service.precompute(UID, TID, Locale.KOREAN);
         assertThat(service.buildContext(UID, TID)).isNotNull();
@@ -172,7 +175,7 @@ class ConversationSummarizerServiceTest {
     @Test
     @DisplayName("invalidate — TTL 도 함께 초기화되어 재호출 즉시 LLM 을 다시 부른다")
     void invalidate_resetsTtlGuardToo() {
-        when(memoryService.getTurns(anyString(), anyString()))
+        when(memoryService.getRecentTurns(anyString(), anyString()))
                 .thenReturn(List.of(turn(1, "질문", "답변", null)));
         when(llmRouter.executeWithTracking(any(), any(), any(), any())).thenReturn("요약");
 
@@ -188,7 +191,7 @@ class ConversationSummarizerServiceTest {
     void buildContext_respectsSameCharBudgetAsFallback() {
         when(memoryService.maxConversationChars()).thenReturn(200);
         String longAnswer = "가".repeat(300);
-        when(memoryService.getTurns(UID, TID)).thenReturn(List.of(
+        when(memoryService.getRecentTurns(UID, TID)).thenReturn(List.of(
                 turn(1, "질문1", longAnswer, null),
                 turn(2, "질문2", longAnswer, null)));
         when(llmRouter.executeWithTracking(eq(TaskType.MICRO_TEXT), eq(RoutingMode.LOCAL_ONLY),
@@ -208,7 +211,7 @@ class ConversationSummarizerServiceTest {
     @DisplayName("buildContext — 요약만으로 예산 초과 시에도 예산 이내로 하드 캡 (아주 작은 LLM_MAX_TOKENS)")
     void buildContext_summaryAloneExceedsBudget_isHardCapped() {
         when(memoryService.maxConversationChars()).thenReturn(50);
-        when(memoryService.getTurns(UID, TID)).thenReturn(List.of(turn(1, "질문", "답변", null)));
+        when(memoryService.getRecentTurns(UID, TID)).thenReturn(List.of(turn(1, "질문", "답변", null)));
         when(llmRouter.executeWithTracking(any(), any(), any(), any())).thenReturn("요".repeat(500));
 
         service.precompute(UID, TID, Locale.KOREAN);
@@ -222,5 +225,92 @@ class ConversationSummarizerServiceTest {
     @DisplayName("buildContext — 아무것도 캐싱되지 않았으면 null (호출자가 getHistory 로 폴백)")
     void buildContext_noCacheEntry_returnsNull() {
         assertThat(service.buildContext(UID, "unknown-thread")).isNull();
+    }
+
+    @Test
+    @DisplayName("precompute(turnId) — 캐싱 시점에 해당 turn 이 DISLIKE면 결과를 버린다")
+    void precompute_withTurnId_discardsResultIfDisliked() {
+        when(memoryService.getRecentTurns(UID, TID)).thenReturn(List.of(turn(1, "질문", "답변", null)));
+        when(llmRouter.executeWithTracking(any(), any(), any(), any())).thenReturn("요약");
+        when(memoryService.getFeedback(UID, TID, 1L))
+                .thenReturn(Optional.of(new MemoryRepository.FeedbackRow("DISLIKE")));
+
+        service.precompute(UID, TID, 1L, Locale.KOREAN);
+
+        assertThat(service.buildContext(UID, TID)).isNull();
+    }
+
+    @Test
+    @DisplayName("precompute(turnId) — DISLIKE 가 아니면 평소처럼 캐싱된다")
+    void precompute_withTurnId_cachesWhenNotDisliked() {
+        when(memoryService.getRecentTurns(UID, TID)).thenReturn(List.of(turn(1, "질문", "답변", null)));
+        when(llmRouter.executeWithTracking(any(), any(), any(), any())).thenReturn("요약");
+        when(memoryService.getFeedback(UID, TID, 1L)).thenReturn(Optional.empty());
+
+        service.precompute(UID, TID, 1L, Locale.KOREAN);
+
+        assertThat(service.buildContext(UID, TID)).contains("요약");
+    }
+
+    @Test
+    @DisplayName("precomputeAfterTurn — 답변 완료 직후 캐시를 무효화하고 백그라운드로 재생성한다")
+    void precomputeAfterTurn_regeneratesCacheInBackground() {
+        // Thread 1's answer left a stale summary cached.
+        when(memoryService.getRecentTurns(UID, TID)).thenReturn(List.of(turn(1, "질문1", "답변1", null)));
+        when(llmRouter.executeWithTracking(any(), any(), any(), any())).thenReturn("옛 요약");
+        service.precompute(UID, TID, Locale.KOREAN);
+        assertThat(service.buildContext(UID, TID)).contains("옛 요약");
+
+        // A new turn (id=2) is persisted; precomputeAfterTurn should invalidate + regenerate.
+        when(memoryService.getRecentTurns(UID, TID)).thenReturn(List.of(
+                turn(1, "질문1", "답변1", null), turn(2, "질문2", "답변2", null)));
+        when(llmRouter.executeWithTracking(any(), any(), any(), any())).thenReturn("새 요약");
+        when(memoryService.getFeedback(UID, TID, 2L)).thenReturn(Optional.empty());
+
+        service.precomputeAfterTurn(UID, TID, 2L, Locale.KOREAN);
+
+        awaitCondition(() -> {
+            String ctx = service.buildContext(UID, TID);
+            return ctx != null && ctx.contains("새 요약");
+        });
+        assertThat(service.buildContext(UID, TID)).contains("새 요약").doesNotContain("옛 요약");
+    }
+
+    @Test
+    @DisplayName("precomputeAfterTurn — 백그라운드 재생성 도중 해당 turn 이 DISLIKE되면 캐시를 비운 채로 둔다")
+    void precomputeAfterTurn_leavesCacheEmptyWhenTurnDisliked() {
+        when(memoryService.getRecentTurns(UID, TID)).thenReturn(List.of(turn(1, "질문", "답변", null)));
+        when(llmRouter.executeWithTracking(any(), any(), any(), any())).thenReturn("요약");
+        when(memoryService.getFeedback(UID, TID, 1L))
+                .thenReturn(Optional.of(new MemoryRepository.FeedbackRow("DISLIKE")));
+
+        service.precomputeAfterTurn(UID, TID, 1L, Locale.KOREAN);
+
+        awaitCondition(() -> {
+            // never() isn't usable here (background thread), so poll for the LLM call to have
+            // happened, then assert the cache stayed empty despite it.
+            try {
+                verify(llmRouter, times(1)).executeWithTracking(any(), any(), any(), any());
+                return true;
+            } catch (AssertionError notYet) {
+                return false;
+            }
+        });
+        assertThat(service.buildContext(UID, TID)).isNull();
+    }
+
+    /** Polls a fast-completing background virtual thread instead of a fixed sleep. */
+    private static void awaitCondition(java.util.function.BooleanSupplier condition) {
+        long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(2);
+        while (System.nanoTime() < deadline) {
+            if (condition.getAsBoolean()) return;
+            try {
+                Thread.sleep(10);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new RuntimeException(e);
+            }
+        }
+        throw new AssertionError("condition not met within timeout");
     }
 }

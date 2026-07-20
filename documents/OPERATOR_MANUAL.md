@@ -222,14 +222,14 @@ copy .env.example .env
 | `SEARCH_RRF_K` | `60` | 20 ~ 100 | 가중 RRF(Phase 7-A) — RRF 순위융합 상수 k(원논문 기본값 60) |
 | `MAX_RETRY_COUNT` | `2` | 0 ~ 4 | 증거 부족 시 재검색 최대 횟수 |
 
-대화 컨텍스트 주입 길이는 `LLM_MAX_TOKENS × 0.75`(최소 1,000자)로 자동 계산됩니다 — 기본값 기준 `6000 × 0.75 = 4500`자(§6.18 이전에는 `MemoryService`가 별도의 죽은 프로퍼티를 통해 기본값 `8000`을 읽어 `6000`자였습니다 — 소스 통일로 기본 예산이 줄었으니, 과거 히스토리 분량에 맞추려면 `LLM_MAX_TOKENS`를 올리세요). 원문 그대로 보내는 폴백 경로(`MemoryService.getHistory()`)와 요약 캐시 경로(`ConversationSummarizerService.buildContext()`, §6.1) 모두 이 예산을 동일하게 지키도록 통일되어 있습니다.
+대화 컨텍스트 주입 길이는 `LLM_MAX_TOKENS × 0.5`(최소 1,000자)로 자동 계산됩니다 — 기본값 기준 `6000 × 0.5 = 3000`자. 원문 그대로 보내는 폴백 경로(`MemoryService.getHistory()`)와 요약 캐시 경로(`ConversationSummarizerService.buildContext()`, §6.1) 모두 이 예산을 동일하게 지키도록 통일되어 있습니다.
 
 #### 대화 메모리 / 요약 캐시 튜닝
 
 | 변수 | 기본값 | 권장 범위 | 설명 |
 |------|--------|----------|------|
-| `MEMORY_FETCH_LIMIT_TURNS` | `50` | 20 ~ 200 | 폴백 경로(`SqliteMemoryRepository.getHistory()`)에서 문자 예산 적용 전 조회할 최근 turn 상한 |
-| `SUMMARY_MAX_CACHED_THREADS` | `3` | 1 ~ 20 | 요약 사전계산 결과를 유지하는 LRU 캐시 크기(동시 활성 thread 수). 초과 시 가장 오래 미사용된 thread부터 축출 |
+| `MEMORY_FETCH_LIMIT_TURNS` | `10` | 5 ~ 200 | 폴백 경로(`SqliteMemoryRepository.getHistory()`)와 요약 대상 조회(`getRecentTurns()`, §6.1)에서 공통으로 적용되는 최근 turn 상한 |
+| `SUMMARY_MAX_CACHED_THREADS` | `3` | 1 ~ 10 | 요약 사전계산 결과를 유지하는 LRU 캐시 크기(동시 활성 thread 수). 초과 시 가장 오래 미사용된 thread부터 축출 |
 | `SUMMARY_MAX_SUMMARY_CHARS` | `2000` | 500 ~ 5000 | LLM이 생성한 요약 문자열의 상한 (초과 시 잘림) |
 | `SUMMARY_RECENT_RAW_TURNS` | `2` | 1 ~ 5 | 요약 뒤에 원문 그대로 덧붙일 최근 turn 수 — 이 turn들도 위 문자 예산 안에서 최신 우선으로 채워지며, 예산 초과분은 잘리지 않고 통째로 드롭됨 |
 | `SUMMARY_PRECOMPUTE_TTL_SECONDS` | `15` | 5 ~ 60 | 동일 thread에 대한 중복 요약 사전계산(precompute) 억제 창(초). 프런트엔드가 이미 debounce하므로 이 값은 안전장치 성격 |
@@ -360,7 +360,7 @@ app.embedding.max-concurrent-batches=4
 
 | 변수 | 기본값 | 권장 범위 | 설명 |
 |------|--------|----------|------|
-| `LLM_MAX_TOKENS` | `6000` | 1000 ~ 32000 | 단일 진실 소스(`app.llm.max-tokens`)로 통일되어, 이 값을 바꾸면 **아래 세 곳 모두**가 함께 움직입니다: (1) **블로킹 LLM 응답 토큰 상한** — 인덱싱·분류·키워드·Direct 블로킹 호출에 적용(스트리밍 채팅 답변은 의도적으로 미적용, SSE 타임아웃이 폭주 방지). (2) **대화 컨텍스트 문자 예산**(`MemoryService`, `×0.75`로 히스토리 예산 산출). (3) **MD 교정 섹션 크기**(`MarkdownCorrectionService`).<br>§6.18 이전에는 (1)이 코드에 `6000`으로 하드코딩돼 이 환경변수와 무관하게 동작했고, (2)·(3)은 별도의 죽은 프로퍼티(`spring.ai.openai.chat.options.max-tokens`, 기본 `8000`)를 읽어 (1)과 다른 값을 썼습니다 — 이제 세 곳 모두 `app.llm.max-tokens` 하나만 읽습니다 |
+| `LLM_MAX_TOKENS` | `6000` | 1000 ~ 32000 | 단일 진실 소스(`app.llm.max-tokens`)로 통일되어, 이 값을 바꾸면 **아래 세 곳 모두**가 함께 움직입니다: (1) **블로킹 LLM 응답 토큰 상한** — 인덱싱·분류·키워드·Direct 블로킹 호출에 적용(스트리밍 채팅 답변은 의도적으로 미적용, SSE 타임아웃이 폭주 방지). (2) **대화 컨텍스트 문자 예산**(`MemoryService`, `×0.5`로 히스토리 예산 산출). (3) **MD 교정 섹션 크기**(`MarkdownCorrectionService`).<br>§6.18 이전에는 (1)이 코드에 `6000`으로 하드코딩돼 이 환경변수와 무관하게 동작했고, (2)·(3)은 별도의 죽은 프로퍼티(`spring.ai.openai.chat.options.max-tokens`, 기본 `8000`)를 읽어 (1)과 다른 값을 썼습니다 — 이제 세 곳 모두 `app.llm.max-tokens` 하나만 읽습니다 |
 | `LLM_TEMPERATURE` | `0.0` | 0.0 ~ 2.0 | 일반/RAG 및 Direct를 제외한 모든 LLM 호출의 무작위성 제어(`app.llm.temperature`). `0.0`은 결정적 답변, 높을수록 다양·창의적.<br>**§6.18 이전에는 코드에 `0.0`으로 하드코딩돼 이 값이 무시되는 죽은 설정이었으나, 이제 실제로 적용됩니다** — 과거에 이 값을 설정해 둔 운영자는 이번부터 처음으로 효과가 나타납니다(기본 `0.0`이면 체감 변화 없음). 프로바이더 빈 생성 시점에 고정되므로 변경하려면 재기동 필요 |
 | `DIRECT_LLM_TEMPERATURE` | `0.1` | 0.0 ~ 0.2 | **Direct(meta) 응답 전용** temperature(`app.llm.direct-temperature`) — 인사·잡담 등 RAG를 안 쓰는 직접 응답은 약간의 다양성이 자연스러워 일반 temperature와 분리(§6.18). `[0.0, 0.2]`로 clamp. **핫 수정 가능** — `/settings`에서 재기동 없이 다음 Direct 호출부터 반영(`DirectAnswerService`가 매 호출 재조회) |
 
@@ -1545,14 +1545,17 @@ app.llm.providers[8].concurrency=4
 `MemoryService`는 **SQLite**(`DATA_DIR/memory.db`)에 대화 이력을 영속합니다.
 
 - WAL 모드로 읽기/쓰기 경합 최소화. SQLite pool size는 반드시 1 유지
-- 스레드별 최근 `MEMORY_FETCH_LIMIT_TURNS`(기본 50)턴 이내에서 `LLM_MAX_TOKENS × 0.75`까지 LLM 컨텍스트 주입
+- 스레드별 최근 `MEMORY_FETCH_LIMIT_TURNS`(기본 10)턴 이내에서 `LLM_MAX_TOKENS × 0.5`까지 LLM 컨텍스트 주입
 - `/chat/{threadId}` 재진입 시 모든 이전 turn을 시간순으로 불러와 메시지 버블 복원
 - `MemoryRepository` 인터페이스로 추상화 — Redis 등으로 교체 시 구현체만 추가
 
-**요약 캐시 (`ConversationSummarizerService`)**: 사용자가 다음 질문을 입력하는 동안 백그라운드에서 스레드 대화 이력을 LOCAL 프로바이더로 미리 요약해 캐싱합니다. 이후 실제 질의 시 원문 전체 대신 "요약 + 최근 N턴 원문"을 컨텍스트로 사용해 토큰을 절약합니다.
+**요약 캐시 (`ConversationSummarizerService`)**: 스레드 대화 이력을 LOCAL 프로바이더로 미리 요약해 캐싱해두고, 실제 질의 시 원문 전체 대신 "요약 + 최근 N턴 원문"을 컨텍스트로 사용해 토큰을 절약합니다.
 
+- **트리거**: 주 트리거는 답변이 완료되고 턴이 저장된 직후(`precomputeAfterTurn()`)입니다 — 사용자가 다음 질문을 입력하기 전부터 백그라운드로 미리 갱신을 시작하므로, 응답을 읽는 동안이 곧 요약 준비 시간이 됩니다. 사용자가 질문창에 첫 글자를 입력할 때 발화되는 기존 트리거(`precompute()`)는 아직 한 번도 요약이 만들어지지 않은 스레드(예: 재시작 후 처음 열어본 오래된 대화)를 위한 콜드스타트 안전망으로 남아 있습니다.
+- **싫어요 처리**: 답변 직후 트리거된 요약 생성이 진행되는 동안(LLM 호출이 아직 끝나지 않은 짧은 시간) 사용자가 방금 그 턴에 싫어요를 누르면, 완성된 요약이라도 캐싱하지 않고 버립니다 — 다음 질문은 자동으로 원문 폴백 경로를 쓰게 되며, 그 경로는 애초에 DISLIKE 턴을 제외합니다. 다음 정상 트리거 때는 dedupe 단계에서 자연스럽게 그 턴이 빠진 채로 다시 요약됩니다.
 - 캐시 미스이거나 LOCAL 프로바이더가 없으면 자동으로 원문 폴백 경로(`MemoryService.getHistory()`) 사용 — best-effort, 실패해도 채팅이 막히지 않음
 - 요약 경로와 폴백 경로는 **동일한 문자 예산**을 지키도록 통일되어 있어(위 참조), 요약 캐시 유무에 따라 LLM에 전달되는 컨텍스트 양이 달라지지 않음
+- **요약 대상 자체도 무제한이 아닙니다**: 요약을 만들 때 읽어오는 원문(`MemoryService.getRecentTurns()`)은 `getHistory()`와 동일하게 `MEMORY_FETCH_LIMIT_TURNS`(기본 10턴)로 상한이 걸려 있습니다. 대화가 길어져도 매번 LLM에 보내는 요약용 입력 크기가 무한정 커지지 않도록 하기 위함이며, 이 턴 수보다 오래된 내용은 이 요약에서도 함께 유실됩니다(스레드를 다시 열었을 때 전체 메시지 버블을 복원하는 `MemoryService.getTurns()`는 이 제한과 무관하게 항상 전체를 반환합니다)
 - 캐시 크기·요약 길이·최근 턴 수·재계산 억제 창은 `MEMORY_FETCH_LIMIT_TURNS`/`SUMMARY_*` 환경변수로 조정 (위 "대화 메모리 / 요약 캐시 튜닝" 참조)
 
 `conversation_turns` 테이블 확장 컬럼 (앱 시작 시 `ALTER TABLE`로 자동 마이그레이션):
