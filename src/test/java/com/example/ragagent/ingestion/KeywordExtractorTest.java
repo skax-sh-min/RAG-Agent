@@ -189,6 +189,72 @@ class KeywordExtractorTest {
         assertThat(KeywordExtractor.extractKeywordsTf(null, 5)).isEmpty();
     }
 
+    @Test
+    @DisplayName("extractKeywordsTf — '이미지'/img/png 등 미디어 필러 단어는 키워드에서 제외된다")
+    void extractKeywordsTf_excludesMediaFillerWords() {
+        String text = "이미지 이미지 이미지 png png png img img img 매출 매출 매출 실적 실적 실적";
+
+        String keywords = KeywordExtractor.extractKeywordsTf(text, 5);
+
+        assertThat(keywords).doesNotContain("이미지", "png", "img");
+        assertThat(keywords).contains("매출", "실적");
+    }
+
+    // ── 키워드 추출 노이즈 필터 (이미지/도형/다이어그램 마커, 해시값) ──────────────
+
+    @Test
+    @DisplayName("stripKeywordNoise — [이미지: 경로] 마커(해시 경로 포함)를 제거한다")
+    void stripKeywordNoise_removesImageMarker() {
+        String text = "본문 시작 [이미지: images/3f2a9c81b7e4d2f1/d1_img1.png] 본문 끝";
+
+        String stripped = KeywordExtractor.stripKeywordNoise(text);
+
+        assertThat(stripped).doesNotContain("이미지", "3f2a9c81b7e4d2f1", "img1", "png");
+        assertThat(stripped).contains("본문 시작").contains("본문 끝");
+    }
+
+    @Test
+    @DisplayName("stripKeywordNoise — 도형 그룹/다이어그램 열고닫는 태그를 제거하되 내부 텍스트는 보존한다")
+    void stripKeywordNoise_removesShapeGroupAndDiagramTags() {
+        String text = "[도형 그룹]\n영업팀 조직도\n[/도형 그룹]\n\n[다이어그램 2]\n프로세스 단계\n[/다이어그램 2]";
+
+        String stripped = KeywordExtractor.stripKeywordNoise(text);
+
+        assertThat(stripped).doesNotContain("도형 그룹", "다이어그램");
+        assertThat(stripped).contains("영업팀 조직도").contains("프로세스 단계");
+    }
+
+    @Test
+    @DisplayName("stripKeywordNoise — [차트: 제목] 라벨은 지우되 제목 텍스트는 남긴다")
+    void stripKeywordNoise_chartLabel_keepsTitleDropsLabel() {
+        String text = "[차트: 분기별 매출 추이]";
+
+        String stripped = KeywordExtractor.stripKeywordNoise(text);
+
+        assertThat(stripped).isEqualTo("분기별 매출 추이");
+    }
+
+    @Test
+    @DisplayName("filterNoiseKeywords — 미디어 필러 단어와 해시형 토큰을 목록에서 제거한다")
+    void filterNoiseKeywords_dropsMediaWordsAndHashTokens() {
+        String keywords = "매출, 이미지, 3f2a9c81, img, 실적";
+
+        String filtered = KeywordExtractor.filterNoiseKeywords(keywords);
+
+        assertThat(filtered).isEqualTo("매출, 실적");
+    }
+
+    @Test
+    @DisplayName("enrichKeywords — LLM이 이미지/해시 노이즈를 포함해 응답해도 최종 키워드에서 제외된다")
+    void enrichKeywords_llmResponseWithNoise_filtersItOut() {
+        when(llmRouter.executeWithTracking(any(), any(), any(), any()))
+                .thenReturn("키워드: 매출, 이미지, 3f2a9c81, png\n맥락: 분기 실적 설명.");
+
+        Document result = extractor.enrichKeywords(new Document("[이미지: images/3f2a9c81/d1_img1.png] 매출 실적"));
+
+        assertThat(result.getMetadata().get(MetaKey.EXCERPT_KEYWORDS)).isEqualTo("매출");
+    }
+
     // ── §10.8.2 — batch keyword extraction ──────────────────────────────
 
     @Test
