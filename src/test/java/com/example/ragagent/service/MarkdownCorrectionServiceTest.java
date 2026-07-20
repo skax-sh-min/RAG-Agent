@@ -331,6 +331,102 @@ class MarkdownCorrectionServiceTest {
     }
 
     // ---------------------------------------------------------------------------------------------
+    // normalizeCodeContent — collapse blank lines except before a multi-line comment or a
+    // comment-less function/class start
+    // ---------------------------------------------------------------------------------------------
+
+    @Test
+    @DisplayName("normalizeCodeContent — 본문 중간의 빈 줄은 전부 제거된다")
+    void normalizeCodeContent_removesOrdinaryBlankLines() {
+        String code = "int a = 1;\n\n\nint b = 2;\n\nint c = 3;";
+
+        String result = service.normalizeCodeContent(code);
+
+        assertThat(result).isEqualTo("int a = 1;\nint b = 2;\nint c = 3;");
+    }
+
+    @Test
+    @DisplayName("normalizeCodeContent — 여러 줄 블록 주석(/** */) 앞에는 빈 줄 1개를 남긴다")
+    void normalizeCodeContent_keepsOneBlankBeforeBlockComment() {
+        String code = "int a = 1;\n\n\n/**\n * 설명\n */\nvoid foo() {}";
+
+        String result = service.normalizeCodeContent(code);
+
+        assertThat(result).isEqualTo("int a = 1;\n\n/**\n * 설명\n */\nvoid foo() {}");
+    }
+
+    @Test
+    @DisplayName("normalizeCodeContent — 연속된 두 줄 이상의 라인 주석(//) 앞에는 빈 줄 1개를 남긴다")
+    void normalizeCodeContent_keepsOneBlankBeforeConsecutiveLineComments() {
+        String code = "int a = 1;\n\n// line1\n// line2\nvoid foo() {}";
+
+        String result = service.normalizeCodeContent(code);
+
+        assertThat(result).isEqualTo("int a = 1;\n\n// line1\n// line2\nvoid foo() {}");
+    }
+
+    @Test
+    @DisplayName("normalizeCodeContent — 단일 줄 주석 하나뿐이면 여러 줄 주석이 아니므로 앞의 빈 줄이 제거된다")
+    void normalizeCodeContent_removesBlankBeforeSingleLineComment() {
+        String code = "int a = 1;\n\n// only one line\nvoid foo() {}";
+
+        String result = service.normalizeCodeContent(code);
+
+        assertThat(result).isEqualTo("int a = 1;\n// only one line\nvoid foo() {}");
+    }
+
+    @Test
+    @DisplayName("normalizeCodeContent — 주석이 없는 함수 시작부 앞에는 빈 줄 1개를 남긴다")
+    void normalizeCodeContent_keepsOneBlankBeforeUncommentedFunction() {
+        String code = "int a = 1;\n\n\npublic void bar() {\n    int x = 1;\n}";
+
+        String result = service.normalizeCodeContent(code);
+
+        assertThat(result).isEqualTo("int a = 1;\n\npublic void bar() {\n    int x = 1;\n}");
+    }
+
+    @Test
+    @DisplayName("normalizeCodeContent — 함수 바로 위에 이미 주석이 있으면 주석-함수 사이의 빈 줄은 추가하지 않는다")
+    void normalizeCodeContent_noExtraBlankBetweenCommentAndFunction() {
+        String code = "int a = 1;\n\n// 설명\n\npublic void bar() {\n}";
+
+        String result = service.normalizeCodeContent(code);
+
+        // 주석 앞에는 빈 줄 1개(다중 주석 아니므로 실제로는 제거), 주석-함수 사이엔 추가 안 함
+        assertThat(result).isEqualTo("int a = 1;\n// 설명\npublic void bar() {\n}");
+    }
+
+    @Test
+    @DisplayName("normalizeCodeContent — 파이썬 def/class와 셸 함수도 함수 시작으로 인식한다")
+    void normalizeCodeContent_recognizesPythonAndShellFunctionStarts() {
+        String python = "x = 1\n\n\ndef foo():\n    pass";
+        String shell = "VAR=1\n\n\ngreet() {\n    echo hi\n}";
+
+        assertThat(service.normalizeCodeContent(python)).isEqualTo("x = 1\n\ndef foo():\n    pass");
+        assertThat(service.normalizeCodeContent(shell)).isEqualTo("VAR=1\n\ngreet() {\n    echo hi\n}");
+    }
+
+    @Test
+    @DisplayName("normalizeCodeContent — if/for 같은 제어문은 함수 시작으로 오인하지 않는다")
+    void normalizeCodeContent_doesNotTreatControlFlowAsFunctionStart() {
+        String code = "int a = 1;\n\n\nif (a > 0) {\n    a++;\n}";
+
+        String result = service.normalizeCodeContent(code);
+
+        assertThat(result).isEqualTo("int a = 1;\nif (a > 0) {\n    a++;\n}");
+    }
+
+    @Test
+    @DisplayName("normalizeCodeContent — 코드 블록 맨 앞의 빈 줄은 절대 추가되지 않는다")
+    void normalizeCodeContent_neverAddsLeadingBlankLine() {
+        String code = "\n\n/**\n * 설명\n */\nvoid foo() {}";
+
+        String result = service.normalizeCodeContent(code);
+
+        assertThat(result).isEqualTo("/**\n * 설명\n */\nvoid foo() {}");
+    }
+
+    // ---------------------------------------------------------------------------------------------
     // reapplyHeadingNumbers (unchanged behaviour)
     // ---------------------------------------------------------------------------------------------
 

@@ -63,6 +63,20 @@ public class MarkdownCorrectionService {
     private static final Pattern IMAGE_MARKER = Pattern.compile("\\[이미지:\\s*([^\\]]+)]");
     private static final Pattern FENCED_BLOCK = Pattern.compile("(?s)```(.*?)\\n(.*?)\\n```");
     private static final Pattern HEADING_NUMBER_PREFIX = Pattern.compile("^(?:\\d+(?:\\.\\d+)*(?:\\.)?|\\d+[\\)])\\s+");
+    /** Any comment-ish line — used to detect "function already has a comment right above it". */
+    private static final Pattern COMMENT_LINE = Pattern.compile("^(?://|#|--|/\\*|\\*|\"\"\"|''')");
+    /** Block-comment / docstring openers — always treated as the start of a "multi-line comment". */
+    private static final Pattern BLOCK_COMMENT_OPEN = Pattern.compile("^(?:/\\*|\"\"\"|''')");
+    /** Line-comment marker, captured so the next line can be checked for the same marker. */
+    private static final Pattern LINE_COMMENT_MARKER = Pattern.compile("^(//|#|--)");
+    /** Heuristic function/class/method signature start across common languages. */
+    private static final Pattern FUNCTION_START = Pattern.compile(
+            "^(?:public|private|protected|static|final|abstract|synchronized|async|export|default|virtual|override|readonly)\\s+.*\\([^;{}]*\\)\\s*\\{?\\s*$"
+          + "|^(?:async\\s+)?def\\s+\\w+\\s*\\(.*\\)\\s*:?\\s*$"
+          + "|^(?:class|interface|enum|struct|trait)\\s+\\w+.*$"
+          + "|^function\\s+\\w*\\s*\\(.*\\)\\s*\\{?\\s*$"
+          + "|^(?:fun|func|fn)\\s+\\w+\\s*\\(.*$"
+          + "|^\\w+\\s*\\(\\)\\s*\\{\\s*$");
     /**
      * Non-blank overlap lines carried across an UNNATURAL section boundary (see
      * {@link #isUnnaturalBoundary}). The previous section's tail (head overlap) and/or the next
@@ -914,23 +928,56 @@ public class MarkdownCorrectionService {
         return t.contains(":") && (t.endsWith("}") || t.endsWith("]"));
     }
 
-    private String normalizeCodeContent(String code) {
+    /**
+     * Collapses blank lines inside a code block to zero, except a single blank line is kept
+     * immediately before (a) the start of a multi-line comment (block-comment/docstring opener, or
+     * the first of two-or-more consecutive line comments), or (b) a function/class/method signature
+     * that isn't already preceded by a comment. No blank line is ever inserted at the very start of
+     * the block (leading blanks stay trimmed).
+     */
+    /** Package-private for unit testing. */
+    String normalizeCodeContent(String code) {
         String[] lines = code.split("\\n", -1);
         List<String> cleaned = new ArrayList<>(lines.length);
-        int blankRun = 0;
-        for (String line : lines) {
-            String trimmedRight = line.replaceAll("[ \\t]+$", "");
-            if (trimmedRight.isBlank()) {
-                blankRun++;
-                if (blankRun > 1) continue;
-                cleaned.add("");
+        String lastEmitted = null;
+        int i = 0;
+        while (i < lines.length) {
+            String trimmedRight = lines[i].replaceAll("[ \\t]+$", "");
+            if (!trimmedRight.isBlank()) {
+                cleaned.add(trimmedRight);
+                lastEmitted = trimmedRight.strip();
+                i++;
                 continue;
             }
-            blankRun = 0;
-            cleaned.add(trimmedRight);
+            int j = i;
+            while (j < lines.length && lines[j].isBlank()) j++;
+            if (j < lines.length && !cleaned.isEmpty()) {
+                String next = lines[j].strip();
+                boolean keepBlank = startsMultiLineComment(lines, j)
+                        || (looksLikeFunctionStart(next) && !isCommentLine(lastEmitted));
+                if (keepBlank) cleaned.add("");
+            }
+            i = j;
         }
         while (!cleaned.isEmpty() && cleaned.get(0).isBlank()) cleaned.remove(0);
         while (!cleaned.isEmpty() && cleaned.get(cleaned.size() - 1).isBlank()) cleaned.remove(cleaned.size() - 1);
         return String.join("\n", cleaned);
+    }
+
+    private boolean startsMultiLineComment(String[] lines, int idx) {
+        String line = lines[idx].strip();
+        if (BLOCK_COMMENT_OPEN.matcher(line).find()) return true;
+        Matcher marker = LINE_COMMENT_MARKER.matcher(line);
+        if (!marker.find()) return false;
+        int next = idx + 1;
+        return next < lines.length && lines[next].strip().startsWith(marker.group(1));
+    }
+
+    private boolean looksLikeFunctionStart(String line) {
+        return FUNCTION_START.matcher(line).find();
+    }
+
+    private boolean isCommentLine(String line) {
+        return line != null && COMMENT_LINE.matcher(line).find();
     }
 }

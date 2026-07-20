@@ -293,12 +293,21 @@ PROGRESSIVE 모드 AND sufficient=false AND retryCount >= max
     넣지 말라"고 맡기고 `<<<RESULT_START>>>`/`<<<RESULT_END>>>`로 추출하던 방식(LLM이 미리보기를
     결과에 섞으면 중복 발생)을 코드 결정론으로 대체한 것이다. 코드가 넣은 마커가 응답에서 사라졌으면
     그 섹션은 오버랩 없이 재교정한다(중복 0 보장 폴백).
-  - `addHeadingNumbers=true`(문서 업로드 화면 "소제목 숫자 생성" 체크박스)면 섹션별 병렬 교정이 끝나
-    전체 MD가 재조립된 뒤 2차 패스(`secondPassHeadingAndCodePolish()`)로 H2~H6 헤딩에 계층적 번호를
-    매기고(`addHierarchicalHeadingNumbers()`, 기존 번호 프리픽스는 먼저 제거 후 현재 헤딩 순서로
-    재계산 — 그래서 아래 `reapplyHeadingNumbers()`로 재실행해도 매번 안전) 라벨 없는 코드 블록의
-    언어 태그를 재추론한다(`normalizeCodeBlocks(md, true)`) — **PPTX는 체크박스 상태와 무관하게 이
-    옵션을 항상 무시한다**(§6.3-bis 2번)
+  - 섹션별 교정이 끝나 전체 MD가 재조립되면(`String.join("\n\n", corrected)`) `addHeadingNumbers`
+    값과 무관하게 항상 `normalizeCodeBlocks(result, false)`가 모든 코드펜스(```)를 정리한다
+    (`normalizeCodeContent()`) — 코드 블록 안의 빈 줄은 기본적으로 전부 제거하고, 다음 두 경우에만
+    빈 줄 1개를 남긴다: ① 여러 줄 주석(블록 주석/독스트링 오프너, 또는 연속 2줄 이상의 라인 주석)
+    시작 직전, ② 바로 위에 주석이 없는 함수·메서드·클래스 시그니처 시작 직전(제어자 키워드·
+    `def`/`class`·`fun`/`func`/`fn`·셸 함수 형태를 인식하는 정규식 휴리스틱이며, `if`/`for` 같은
+    제어문은 대상에서 제외됨). 언어에 무관하게 동작하며 LLM이 섹션 교정 중 흐트러뜨린 코드 블록
+    포맷을 재조립 이후 코드로 결정론적으로 정리하는 안전장치다.
+  - `addHeadingNumbers=true`(문서 업로드 화면 "소제목 숫자 생성" 체크박스)면 위 정리가 끝난 뒤 2차
+    패스(`secondPassHeadingAndCodePolish()`)로 H2~H6 헤딩에 계층적 번호를 매기고
+    (`addHierarchicalHeadingNumbers()`, 기존 번호 프리픽스는 먼저 제거 후 현재 헤딩 순서로 재계산 —
+    그래서 아래 `reapplyHeadingNumbers()`로 재실행해도 매번 안전) 라벨 없는 코드 블록의 언어 태그를
+    재추론한다(`normalizeCodeBlocks(md, true)` — 위와 동일한 빈 줄 정리를 한 번 더 적용하지만
+    멱등적이라 결과는 바뀌지 않는다) — **PPTX는 체크박스 상태와 무관하게 이 옵션을 항상 무시한다**
+    (§6.3-bis 2번)
   - 교정본 MD: data/converted/{docId}_corrected.md
   - 이후 파이프라인은 교정본을 source로 사용
 
