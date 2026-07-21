@@ -1,5 +1,9 @@
 package com.example.ragagent.service;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.example.ragagent.audit.AuditLogger;
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.config.SettingsKeys;
@@ -9,9 +13,11 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
 
 import java.time.Instant;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -164,6 +170,40 @@ class SettingsServiceTest {
         assertThat(view.vectorStoreType()).isEqualTo("chroma");
         assertThat(view.defaultRoutingMode()).isEqualTo("COST_FIRST");
         assertThat(view.providers()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("init — env/properties와 다른 SQLite 오버라이드는 시작 시 WARN 로그로 알린다 (일치하는 오버라이드는 조용히)")
+    void init_warnsWhenPersistedOverrideDivergesFromEnv() {
+        // The @BeforeEach already bound the (empty-store) service. Unbind so the fresh service below
+        // captures its base values while nothing is bound — mirroring a real first-boot.
+        AppProperties.unbindOverrides();
+
+        SettingsOverrideRepositoryStub seeded = new SettingsOverrideRepositoryStub();
+        seeded.store.put(SettingsKeys.SEARCH_RRF_K, "80");  // application.properties default = 60 → diverges → WARN
+        seeded.store.put(SettingsKeys.SEARCH_TOP_K, "7");   // default = 7 → identical → must NOT warn
+        SettingsService fresh = new SettingsService(seeded, base(), audit, circuitBreaker);
+
+        Logger settingsLogger = (Logger) LoggerFactory.getLogger(SettingsService.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        settingsLogger.addAppender(appender);
+        try {
+            fresh.init();
+        } finally {
+            settingsLogger.detachAppender(appender);
+        }
+
+        List<ILoggingEvent> warns = appender.list.stream()
+                .filter(e -> e.getLevel() == Level.WARN)
+                .toList();
+        assertThat(warns).hasSize(1);                       // only the diverging key, not the matching one
+        String msg = warns.getFirst().getFormattedMessage();
+        assertThat(msg)
+                .contains(SettingsKeys.SEARCH_RRF_K)
+                .contains("80")                             // effective (override) value
+                .contains("60")                             // env/properties value
+                .doesNotContain(SettingsKeys.SEARCH_TOP_K); // identical override is not flagged
     }
 
     @Test

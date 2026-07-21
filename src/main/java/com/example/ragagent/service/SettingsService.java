@@ -107,9 +107,40 @@ public class SettingsService implements AppProperties.OverrideSource {
     @PostConstruct
     void init() {
         cache.putAll(repo.findAll());
+        // Capture each override key's effective value BEFORE binding the override source: with nothing
+        // bound yet, xxxSafe() returns the pure env-var/application.properties value. Comparing it to
+        // the post-bind value (override applied) is how warnOnDivergingOverrides() surfaces exactly the
+        // keys where a persisted /settings override silently wins over what the operator configured.
+        Map<String, String> baseValues = new LinkedHashMap<>();
+        for (String key : cache.keySet()) {
+            if (SPECS.containsKey(key)) baseValues.put(key, effectiveValue(key));
+        }
         AppProperties.bindOverrides(this);
         log.info("[SETTINGS] runtime override layer bound — {} override(s) loaded: {}",
                 cache.size(), cache.keySet());
+        warnOnDivergingOverrides(baseValues);
+    }
+
+    /**
+     * Logs a WARN for every persisted override whose effective value differs from what the
+     * environment variable / {@code application.properties} would otherwise supply. A persisted
+     * override always wins (see {@code AppProperties.xxxSafe()}), so without this an operator who set
+     * e.g. {@code SEARCH_TOP_K=10} via an env var has no runtime signal that a stored {@code /settings}
+     * override of 7 is what actually takes effect. Comparison is on the post-clamp effective value, so
+     * an override that clamps to the same number as the env value is (correctly) not flagged.
+     *
+     * @param baseValues each override key's effective value captured while the override source was
+     *                   not yet bound (i.e. the env-var/properties value)
+     */
+    private void warnOnDivergingOverrides(Map<String, String> baseValues) {
+        baseValues.forEach((key, base) -> {
+            String effective = effectiveValue(key);
+            if (!effective.equals(base)) {
+                log.warn("[SETTINGS] '{}' — a persisted /settings override ({}) is overriding the "
+                        + "env-var/application.properties value ({}); the override wins. Reset it in "
+                        + "/settings to fall back to the configured value.", key, effective, base);
+            }
+        });
     }
 
     @PreDestroy
