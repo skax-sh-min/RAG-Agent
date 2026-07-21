@@ -122,6 +122,9 @@ class DocumentIndexerTest {
                 new MarkdownCorrectionService(mock(com.example.ragagent.llm.LlmRouter.class), props);
         when(correctionService.reapplyHeadingNumbers(any()))
                 .thenAnswer(inv -> realCorrectionForRenumber.reapplyHeadingNumbers(inv.getArgument(0)));
+        // postProcess (also no LLM call) — same real-instance delegation as reapplyHeadingNumbers above.
+        when(correctionService.postProcess(any()))
+                .thenAnswer(inv -> realCorrectionForRenumber.postProcess(inv.getArgument(0)));
         TextToMarkdownService textToMarkdownService = mock(TextToMarkdownService.class);
         when(textToMarkdownService.convert(any(), any(), any()))
                 .thenAnswer(inv -> inv.getArgument(0));
@@ -480,11 +483,15 @@ class DocumentIndexerTest {
         Files.writeString(txtFile, "## 첫 번째 절\n본문A\n\n## 두 번째 절\n본문B\n");
         DocumentInfo info = indexer.index(IndexRequest.single(txtFile, "guide.txt", "v1", "anonymous", e -> {}));
         Path mdPath = tmpDir.resolve("converted").resolve(info.docId() + ".md");
-        String before = Files.readString(mdPath);
 
         indexer.reindexFromMd(info.docId());
 
-        assertThat(Files.readString(mdPath)).isEqualTo(before);
+        // postProcessMarkdown (now also applied on reindex) may harmlessly trim trailing blank
+        // lines, so this checks the actual invariant under test — no numbers appear — rather than
+        // byte-for-byte file equality.
+        String after = Files.readString(mdPath);
+        assertThat(after).contains("## 첫 번째 절").contains("## 두 번째 절");
+        assertThat(after).doesNotContain("## 1.").doesNotContain("## 2.");
     }
 
     @Test

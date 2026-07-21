@@ -307,6 +307,16 @@ public class MarkdownCorrectionService {
         return addHierarchicalHeadingNumbers(md);
     }
 
+    /**
+     * Public entry point for {@link #postProcessMarkdown} — deterministic, no-LLM cleanup (blank-line
+     * collapsing, leftover prompt-marker/content-less-dash removal, blank line guarantee around
+     * fences/tables). Used by {@code DocumentIndexer.reindexFromMd()} to re-apply this cleanup to a
+     * saved MD file without re-running the full (LLM section-by-section) {@link #correct} pipeline.
+     */
+    public String postProcess(String md) {
+        return postProcessMarkdown(md);
+    }
+
     /** True if any H2-H6 heading (outside a fenced code block) already starts with a numeric prefix. */
     private boolean hasNumberedHeading(String md) {
         boolean inFence = false;
@@ -888,19 +898,37 @@ public class MarkdownCorrectionService {
         return "image/png";
     }
 
-    private String normalizeCodeBlocks(String md, boolean inferLanguage) {
+    /** Package-private for unit testing (log-capture assertions on the language-tag DEBUG log). */
+    String normalizeCodeBlocks(String md, boolean inferLanguage) {
         Matcher m = FENCED_BLOCK.matcher(md);
         StringBuffer out = new StringBuffer();
         while (m.find()) {
             String lang = m.group(1) == null ? "" : m.group(1).trim();
             String code = m.group(2) == null ? "" : m.group(2);
-            lang = resolveCodeLanguage(lang, code, inferLanguage);
+            String resolvedLang = resolveCodeLanguage(lang, code, inferLanguage);
+            if (!resolvedLang.equals(lang)) {
+                String reason = lang.equalsIgnoreCase("sql")
+                        ? "SQL로 태그됐지만 Java 신호가 강해 오분류로 판단, java로 교정"
+                        : "언어 태그가 없어 코드 내용을 보고 추론";
+                log.debug("[MD_CORRECT] {}행 — 코드 블록 언어 태그 '{}' → '{}' ({})",
+                        lineNumberAt(md, m.start()), lang.isBlank() ? "(없음)" : lang, resolvedLang, reason);
+            }
             String normalized = normalizeCodeContent(code);
-            String replacement = "```" + lang + "\n" + normalized + "\n```";
+            String replacement = "```" + resolvedLang + "\n" + normalized + "\n```";
             m.appendReplacement(out, Matcher.quoteReplacement(replacement));
         }
         m.appendTail(out);
         return out.toString();
+    }
+
+    /** 1-based line number of the character at {@code offset} within {@code text}. */
+    private static int lineNumberAt(String text, int offset) {
+        int line = 1;
+        int limit = Math.min(offset, text.length());
+        for (int i = 0; i < limit; i++) {
+            if (text.charAt(i) == '\n') line++;
+        }
+        return line;
     }
 
     /**
@@ -909,22 +937,67 @@ public class MarkdownCorrectionService {
      * pairing and rendering. Toggles fence state line by line and strips any info string from every
      * closing fence (openers keep theirs). Fence content is otherwise untouched. Run BEFORE
      * {@link #normalizeCodeBlocks} so its regex sees well-formed pairs. Package-private for testing.
+     *
+     * <p>Also heals a fence the LLM left open entirely (no closer at all, mis-tagged or not): if a
+     * well-formed chapter heading ({@link #looksLikeChapterHeadingNotComment}) is reached while
+     * {@code inFence} is still true, a synthetic {@code ```} is inserted right before it. Without
+     * this, every real opening fence later in the document would be misread as a closer instead,
+     * silently stripping its language tag one boundary at a time.
      */
     static String fixClosingFences(String md) {
         if (md == null || md.isEmpty()) return md;
         String[] lines = md.split("\n", -1);
+        List<String> out = new ArrayList<>(lines.length);
         boolean inFence = false;
+        String openingTag = "";
         for (int i = 0; i < lines.length; i++) {
-            String t = lines[i].stripLeading();
+            String rawLine = lines[i];
+            String t = rawLine.stripLeading();
             if (t.startsWith("```")) {
+                String line = rawLine;
                 if (inFence) {
-                    String indent = lines[i].substring(0, lines[i].length() - t.length());
-                    lines[i] = indent + "```";
+                    if (!t.equals("```")) {
+                        String indent = rawLine.substring(0, rawLine.length() - t.length());
+                        line = indent + "```";
+                        log.debug("[MD_CORRECT] {}행 — 닫는 펜스 언어 태그 제거: '{}' → '```' (여는 펜스 '{}' 와 짝을 맞추기 위함)",
+                                i + 1, t, openingTag);
+                    }
+                } else {
+                    openingTag = t;
                 }
+                out.add(line);
                 inFence = !inFence;
+                continue;
             }
+            if (inFence && looksLikeChapterHeadingNotComment(rawLine)) {
+                log.debug("[MD_CORRECT] {}행 — 닫히지 않은 펜스(여는 펜스 '{}') 치유: 챕터 제목 '{}' 앞에 닫는 펜스 삽입",
+                        i + 1, openingTag, rawLine.strip());
+                out.add("```");
+                inFence = false;
+            }
+            out.add(rawLine);
         }
-        return String.join("\n", lines);
+        return String.join("\n", out);
+    }
+
+    /**
+     * True for a well-formed 2–7 level ATX-style chapter heading ({@code "## "} through
+     * {@code "####### "}) — used only by {@link #fixClosingFences} to spot a natural point to heal
+     * a fence the LLM left open. Deliberately looser than {@link #chapterHeadingLevel} (allows
+     * level 7, and doesn't care whether the line sits inside a fence — detecting "still inside one"
+     * is the whole point here). Excludes comment-style lines whose content itself ends in a
+     * trailing {@code #} run (e.g. {@code "### 주석 ###"}, {@code "### ###"}) — several languages
+     * use that shape for banner comments inside code, and it is not a real heading. Package-private
+     * for unit testing.
+     */
+    static boolean looksLikeChapterHeadingNotComment(String line) {
+        int level = 0;
+        while (level < line.length() && line.charAt(level) == '#') level++;
+        if (level < 2 || level > 7) return false;
+        if (level >= line.length() || line.charAt(level) != ' ') return false;
+        String content = line.substring(level + 1);
+        if (content.isBlank()) return false;
+        return !content.stripTrailing().endsWith("#");
     }
 
     /**

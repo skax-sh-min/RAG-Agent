@@ -328,6 +328,7 @@ public class DocumentIndexer {
         String md = Files.readString(mdPath);
         md = removeMissingImageMarkers(md, mdPath, filename);
         md = reapplyHeadingNumbersIfNeeded(md, mdPath, filename);
+        md = postProcessIfNeeded(md, mdPath, filename);
         // skipChapterNumbers: re-derived from the original filename extension (see the live-indexing
         // PPTX/PDF branches above) — both have synthetic (not real chapter) headings, so
         // MetaKey.CHAPTER_NO stays "0". A ".pdf" reaching this point is always non-scanned — scanned
@@ -601,6 +602,29 @@ public class DocumentIndexer {
             Files.writeString(mdPath, result);
         } catch (IOException e) {
             log.warn("[REINDEX] {} — 소제목 번호 갱신 MD 저장 실패(이번 인덱싱은 계속 진행): {}", filename, e.getMessage());
+        }
+        return result;
+    }
+
+    /**
+     * Re-applies {@link MarkdownCorrectionService#postProcess} (deterministic, no-LLM cleanup —
+     * blank-line collapsing, leftover prompt-marker/content-less-dash removal, blank line guarantee
+     * around fences/tables) on re-index. Unlike {@link #reapplyHeadingNumbersIfNeeded} this always
+     * runs — it's format-agnostic and safe for every source type including PPTX. Deliberately does
+     * NOT re-run {@code correctionService.correct()}'s other no-LLM passes ({@code fixClosingFences}/
+     * {@code normalizeCodeBlocks}) here — those can rewrite code-block content (e.g. dropping a
+     * deliberately-placed blank line) if the saved MD was hand-edited since upload, which is a risk
+     * worth taking deliberately, not as a side effect of every re-index.
+     */
+    private String postProcessIfNeeded(String md, Path mdPath, String filename) {
+        String result = correctionService.postProcess(md);
+        if (result.equals(md)) return md;
+
+        log.debug("[REINDEX] {} — 마크다운 후처리(빈 줄/마커 정리) 적용", filename);
+        try {
+            Files.writeString(mdPath, result);
+        } catch (IOException e) {
+            log.warn("[REINDEX] {} — 후처리 MD 저장 실패(이번 인덱싱은 계속 진행): {}", filename, e.getMessage());
         }
         return result;
     }

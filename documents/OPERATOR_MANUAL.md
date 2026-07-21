@@ -1753,7 +1753,7 @@ mvn test -Dtest=SearchQualityEvaluationTest -Dsearch-eval.enabled=true
 |------|------|
 | Vector Store 상태 카드 | 백엔드 종류·정상 여부·청크 수. chroma=컬렉션 수 / sqlite-vec=문서 수·`vec_version`·임베딩 차원 |
 | 컬렉션·버전 목록 | chroma=컬렉션별 / sqlite-vec=버전별 청크 수 표시 (클릭 시 청크 조회) |
-| 청크 조회 | 컬렉션(또는 버전)·문서(docId)별 청크 페이지네이션 (50건 단위) |
+| 청크 조회 | 컬렉션(또는 버전)·문서(docId)별 청크 페이지네이션 (50건 단위) — ID·텍스트 미리보기·크기·파일명·페이지/슬라이드·**챕터**·키워드·작업 컬럼. 챕터 컬럼은 `MetaKey.CHAPTER_NO`(H2~H6 헤딩 기반 계층 번호)를 보여주며 "0"(실제 챕터 없음)이면 빈 칸으로 표시 |
 | 청크 편집 | 텍스트·메타데이터 수정 (원본 임베딩 유지 — 벡터 재계산 안 함) |
 | 청크 삭제 | 개별 청크 즉시 제거. sqlite-vec는 `vec_document_chunks`+`vec_embeddings` 두 테이블 동기 삭제 |
 | 문서 레지스트리 | 인덱싱된 전체 문서 목록 + 문서별 청크 바로 조회 (백엔드 무관, SQLite `doc_registry` 기반) |
@@ -1763,8 +1763,9 @@ mvn test -Dtest=SearchQualityEvaluationTest -Dsearch-eval.enabled=true
 
 1. `data/converted/{docId}_corrected.md` 파일을 텍스트 에디터로 직접 수정
 2. 벡터 스토어 관리 페이지 문서 레지스트리에서 해당 문서의 ↺ 버튼 클릭
-3. 기존 벡터 청크만 삭제 — 활성 백엔드(chroma 또는 sqlite-vec) (MD 파일·이미지 보존)
-4. 수정된 MD 기준으로 청크 분할 → 키워드 추출 → 활성 백엔드에 재등록
+3. 결정적(비-LLM) MD 정리 — 존재하지 않는 이미지 마커 제거 → 소제목 번호 재검증 → 마크다운 후처리 (§7.3 참고, 변경 있으면 MD 파일에도 반영)
+4. 정리된 MD 기준으로 청크 분할 → 키워드 추출(LLM) → 활성 백엔드에 재등록
+5. 신규 청크 저장이 끝난 뒤에야 기존 벡터 청크 삭제 — 활성 백엔드(chroma 또는 sqlite-vec) (MD 파일·이미지 보존, 저장 실패 시 기존 데이터 보존)
 
 > **API 직접 호출**: `POST /admin/documents/{docId}/reindex`
 
@@ -1773,6 +1774,7 @@ mvn test -Dtest=SearchQualityEvaluationTest -Dsearch-eval.enabled=true
 - **임베딩 미갱신 (청크 편집)**: 청크 텍스트를 편집 패널에서 수정해도 벡터 임베딩은 재계산되지 않습니다. 임베딩까지 갱신하려면 MD 파일 수정 후 ↺ 재인덱싱을 사용하세요.
 - **MD 재인덱싱 대상**: DOCX·TXT·PPTX·PDF(스캔 아님) 업로드 시 생성된 `_corrected.md` 파일이 없으면 `{docId}.md` 원본으로 fallback됩니다. 스캔 PDF처럼 MD 파일 자체가 없는 문서는 재인덱싱 불가 (에러 메시지 표시).
 - **소제목 번호 재검증**: 재인덱싱 시 저장된 MD에 이미 번호 매겨진 헤딩이 있으면 현재 헤딩 구조 기준으로 다시 계산해 파일에도 반영합니다(PPTX 제외 — [§3.3 소제목 숫자 생성](#33-applicationproperties-전용-설정) 참고). 번호가 원래 없던 문서에는 새로 번호를 붙이지 않습니다.
+- **마크다운 후처리 재적용**: 재인덱싱 시 결정적(비-LLM) 정리도 다시 적용됩니다 — `[DOCUMENT]` 마커·내용 없는 `-` 줄 제거, 코드 블록·표 앞뒤 빈 줄 보장, 연속 빈 줄을 1개로 축소(모든 형식 대상, PPTX 포함). 코드펜스 언어 보정(`fixClosingFences`/`normalizeCodeBlocks`)은 재인덱싱에 **포함되지 않습니다** — MD를 직접 편집한 뒤 재인덱싱하면 코드 블록 안의 의도된 빈 줄이 지워지거나 펜스 태그가 잘못 벗겨질 위험이 있어, 매번 감수하지 않고 필요할 때(재업로드)만 적용되도록 남겨둔 설계입니다. 상세는 [PIPELINE.md §6.4](PIPELINE.md#64-문서-타입별-처리-상세) 참고.
 - **청크 단독 삭제 vs. 문서 삭제**: 청크를 개별 삭제해도 SQLite `doc_registry` 테이블의 레지스트리 항목은 남습니다. 문서 전체 제거는 Documents 페이지 또는 `DELETE /api/v1/documents/{docId}`를 사용하세요.
 - **접근 제어**: `app.auth.enabled=true`(기본)이면 `/admin`도 로그인 필요. 평문 no-auth 모드에서는 누구나 `/admin`에 접근 가능하므로 내부망 또는 리버스 프록시 수준에서 경로를 제한하거나, [§9.4.2 관리 전용 인증](#942-관리-전용-인증-management-only)으로 전환해 애플리케이션 레벨에서 잠그는 것을 권장합니다.
 

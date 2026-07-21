@@ -1,11 +1,16 @@
 package com.example.ragagent.service;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.llm.BackgroundUsage;
 import com.example.ragagent.llm.LlmProvider;
 import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.llm.TaskType;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -43,6 +48,8 @@ class MarkdownCorrectionServiceTest {
 
     private MarkdownCorrectionService service;
     private LlmRouter llmRouter;
+    private Logger correctionLogger;
+    private ListAppender<ILoggingEvent> logAppender;
 
     @BeforeEach
     void setUp() {
@@ -54,6 +61,20 @@ class MarkdownCorrectionServiceTest {
         when(props.llmSafe()).thenReturn(new AppProperties.LlmConfig(
                 java.util.List.of(), 2, 10, 180, "COST_FIRST", 0.6, 3, 20, 0.0, 0.1, 8000, true));
         service = new MarkdownCorrectionService(llmRouter, props);
+    }
+
+    @BeforeEach
+    void attachLogCapture() {
+        correctionLogger = (Logger) org.slf4j.LoggerFactory.getLogger(MarkdownCorrectionService.class);
+        logAppender = new ListAppender<>();
+        logAppender.start();
+        correctionLogger.addAppender(logAppender);
+        correctionLogger.setLevel(Level.DEBUG);
+    }
+
+    @AfterEach
+    void detachLogCapture() {
+        correctionLogger.detachAppender(logAppender);
     }
 
     // ---------------------------------------------------------------------------------------------
@@ -552,6 +573,116 @@ class MarkdownCorrectionServiceTest {
         String md = "```sql\nSELECT 1;\n```sql\n";
         String fixed = MarkdownCorrectionService.fixClosingFences(md);
         assertThat(fixed).isEqualTo("```sql\nSELECT 1;\n```\n");
+    }
+
+    @Test
+    @DisplayName("fixClosingFences — 닫는 펜스 없이 챕터 제목이 나오면 그 앞에 닫는 펜스를 삽입해 치유한다")
+    void fixClosingFences_healsUnclosedFenceBeforeChapterHeading() {
+        String md = "```java\nint x = 1;\n## 다음 장\n본문";
+        String fixed = MarkdownCorrectionService.fixClosingFences(md);
+        assertThat(fixed).isEqualTo("```java\nint x = 1;\n```\n## 다음 장\n본문");
+    }
+
+    @Test
+    @DisplayName("fixClosingFences — 7단계(#######)까지 챕터 제목으로 인정해 펜스를 치유한다")
+    void fixClosingFences_healsUnclosedFenceAtLevelSeven() {
+        String md = "```\ncode\n####### 레벨7 제목\n";
+        String fixed = MarkdownCorrectionService.fixClosingFences(md);
+        assertThat(fixed).isEqualTo("```\ncode\n```\n####### 레벨7 제목\n");
+    }
+
+    @Test
+    @DisplayName("fixClosingFences — 8단계(########) 이상은 챕터 제목으로 보지 않아 펜스를 치유하지 않는다")
+    void fixClosingFences_doesNotHealAtLevelEightOrMore() {
+        String md = "```\ncode\n######## 아님\nmore code\n```";
+        String fixed = MarkdownCorrectionService.fixClosingFences(md);
+        assertThat(fixed).isEqualTo(md); // unchanged — no premature close inserted
+    }
+
+    @Test
+    @DisplayName("fixClosingFences — 내용이 '#'으로 끝나는 배너 주석(### 주석 ###)은 제목으로 보지 않는다")
+    void fixClosingFences_doesNotHealOnBannerCommentWithTrailingHash() {
+        String md = "```c\n### 주석 ###\nint x = 1;\n```";
+        String fixed = MarkdownCorrectionService.fixClosingFences(md);
+        assertThat(fixed).isEqualTo(md); // unchanged — treated as a comment, not a heading
+    }
+
+    @Test
+    @DisplayName("fixClosingFences — 순수 구분용 배너(### ###)도 제목으로 보지 않는다")
+    void fixClosingFences_doesNotHealOnHashOnlyBanner() {
+        String md = "```c\n### ###\nint x = 1;\n```";
+        String fixed = MarkdownCorrectionService.fixClosingFences(md);
+        assertThat(fixed).isEqualTo(md);
+    }
+
+    @Test
+    @DisplayName("fixClosingFences — 닫는 펜스 언어 태그 제거 시 라인 번호·사유가 DEBUG 로그로 남는다")
+    void fixClosingFences_logsClosingFenceTagStrip() {
+        String md = "```sql\nSELECT 1;\n```sql\n"; // 닫는 펜스는 3행
+
+        MarkdownCorrectionService.fixClosingFences(md);
+
+        assertThat(logAppender.list).anyMatch(e ->
+                e.getLevel() == Level.DEBUG
+                        && e.getFormattedMessage().contains("3행")
+                        && e.getFormattedMessage().contains("```sql")
+                        && e.getFormattedMessage().contains("짝을 맞추기"));
+    }
+
+    @Test
+    @DisplayName("fixClosingFences — 펜스 치유 시 라인 번호·사유가 DEBUG 로그로 남는다")
+    void fixClosingFences_logsFenceHeal() {
+        String md = "```java\nint x = 1;\n## 다음 장\n본문"; // 치유된 펜스는 다음 장 헤딩(3행) 직전
+
+        MarkdownCorrectionService.fixClosingFences(md);
+
+        assertThat(logAppender.list).anyMatch(e ->
+                e.getLevel() == Level.DEBUG
+                        && e.getFormattedMessage().contains("3행")
+                        && e.getFormattedMessage().contains("치유")
+                        && e.getFormattedMessage().contains("다음 장"));
+    }
+
+    @Test
+    @DisplayName("normalizeCodeBlocks — SQL 오분류를 java로 교정 시 라인 번호·사유가 DEBUG 로그로 남는다")
+    void normalizeCodeBlocks_logsSqlToJavaCorrection() {
+        String java = "public class Foo {\n    void bar() { System.out.println(1); }\n}";
+        String md = "설명\n\n```sql\n" + java + "\n```\n"; // 여는 펜스는 3행
+
+        service.normalizeCodeBlocks(md, false);
+
+        assertThat(logAppender.list).anyMatch(e ->
+                e.getLevel() == Level.DEBUG
+                        && e.getFormattedMessage().contains("3행")
+                        && e.getFormattedMessage().contains("'sql' → 'java'")
+                        && e.getFormattedMessage().contains("Java 신호"));
+    }
+
+    @Test
+    @DisplayName("normalizeCodeBlocks — 태그 없는 블록의 언어 추론 시 라인 번호·사유가 DEBUG 로그로 남는다")
+    void normalizeCodeBlocks_logsInferredLanguage() {
+        String json = "{\"a\": 1}";
+        String md = "설명\n\n```\n" + json + "\n```\n"; // 여는 펜스는 3행
+
+        service.normalizeCodeBlocks(md, true);
+
+        assertThat(logAppender.list).anyMatch(e ->
+                e.getLevel() == Level.DEBUG
+                        && e.getFormattedMessage().contains("3행")
+                        && e.getFormattedMessage().contains("(없음)' → 'json'")
+                        && e.getFormattedMessage().contains("추론"));
+    }
+
+    @Test
+    @DisplayName("looksLikeChapterHeadingNotComment — 2~7단계 제목은 true, 그 외/배너주석은 false")
+    void looksLikeChapterHeadingNotComment_heuristic() {
+        assertThat(MarkdownCorrectionService.looksLikeChapterHeadingNotComment("## 제목")).isTrue();
+        assertThat(MarkdownCorrectionService.looksLikeChapterHeadingNotComment("####### 레벨7")).isTrue();
+        assertThat(MarkdownCorrectionService.looksLikeChapterHeadingNotComment("######## 레벨8")).isFalse();
+        assertThat(MarkdownCorrectionService.looksLikeChapterHeadingNotComment("# 레벨1")).isFalse();
+        assertThat(MarkdownCorrectionService.looksLikeChapterHeadingNotComment("### 주석 ###")).isFalse();
+        assertThat(MarkdownCorrectionService.looksLikeChapterHeadingNotComment("### ###")).isFalse();
+        assertThat(MarkdownCorrectionService.looksLikeChapterHeadingNotComment("##제목")).isFalse(); // no space
     }
 
     @Test

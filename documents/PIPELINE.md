@@ -298,7 +298,13 @@ PROGRESSIVE 모드 AND sufficient=false AND retryCount >= max
     ① `fixClosingFences(result)` — 닫는 코드펜스가 언어 태그를 달고 닫히는 경우(여는 ```sql … 닫는
     ```sql)를 순수 ```로 교정한다. fence 상태를 토글하며 **닫는** 펜스의 정보 문자열만 제거하고
     (여는 펜스는 유지), 다음 `normalizeCodeBlocks`의 fence 정규식이 정상 쌍을 보도록 그 **앞**에서
-    실행한다.
+    실행한다. **펜스 치유**: 닫는 펜스 자체가 통째로 빠진 경우(LLM이 마감을 완전히 누락) — 펜스가
+    열린 상태(`inFence=true`)로 2~7단계 챕터형 제목(`## `~`####### `)을 만나면 그 줄 바로 앞에
+    합성 ```` ``` ```` 을 삽입해 닫는다(`looksLikeChapterHeadingNotComment()`). 방치하면 그 뒤로
+    등장하는 모든 진짜 여는 펜스가 닫는 펜스로 오판돼 언어 태그가 연쇄적으로 벗겨지므로, 발견 즉시
+    치유해 상태 꼬임을 끊는다. 다만 `### 주석 ###`·`### ###`처럼 제목 내용 자체가 `#`으로 끝나는
+    줄은 일부 언어의 배너 주석으로 보고 치유 대상에서 제외한다(8단계 이상 `########`도 챕터 제목으로
+    보지 않음).
     ② `addHeadingNumbers` 값과 무관하게 항상 `normalizeCodeBlocks(result, false)`가 모든 코드펜스
     (```)를 정리한다(`normalizeCodeContent()`) — 코드 블록 안의 빈 줄은 기본적으로 전부 제거하고,
     다음 두 경우에만 빈 줄 1개를 남긴다: ⓐ 여러 줄 주석(블록 주석/독스트링 오프너, 또는 연속 2줄
@@ -457,7 +463,8 @@ PROGRESSIVE 모드 AND sufficient=false AND retryCount >= max
 > **PPTX/PDF(비스캔)도 이제 이미지를 `[이미지: ...]` 인라인 마커로 넣으므로**(DOCX와 동일 방식), 업로드 화면의 "이미지 설명 추가"(`addImageDescriptions`) 체크박스가 이 두 포맷에도 정상 적용된다 — [IMAGE_PROCESS.md §5](IMAGE_PROCESS.md#5-vision-설명-생성-l2) 참고.  
 > **MD 재인덱싱(↺)**: `data/converted/{docId}[_corrected].md` 가 존재하는 DOCX·TXT·PPTX·PDF(비스캔) 만 지원(`AdminController` `/admin/documents/{docId}/reindex`). 재변환/재교정 없이 저장된 MD 를 다시 청킹·임베딩한다. 태그는 FTS 인덱스에서 복원. 스캔 PDF는 MD 파일 자체가 없어 미지원.  
 > **존재하지 않는 이미지 마커 정리**: MD 로드 직후, `[이미지: path]`/`[이미지(변환불가): path]` 마커가 가리키는 파일을 `data/images/`에서 실제로 찾아본다 — 수동 정리·이동 등으로 파일이 사라졌다면(`DocumentIndexer.removeMissingImageMarkers()`) 해당 마커만 제거하고 그 결과를 `mdPath`(사용 중인 `[_corrected].md`)에 다시 저장한 뒤 청킹을 진행한다. 존재하는 마커는 그대로 유지되며, 모든 마커가 유효하면 파일을 다시 쓰지 않는다. 인라인 마커(문장 중간의 DOCX 이미지)와 단독 줄 마커(PPTX/PDF) 모두 마커 부분만 제거되고 주변 텍스트는 보존된다.  
-> **소제목 번호 재검증**: 이미지 마커 정리 다음 단계로, 로드한 MD에 이미 번호 매겨진 헤딩(`## 1. 제목`처럼 숫자 프리픽스가 붙은 H2~H6)이 하나라도 있으면 현재 헤딩 구조를 기준으로 전체 번호를 다시 계산해 `mdPath`에 반영한다(`DocumentIndexer.reapplyHeadingNumbersIfNeeded()` → `MarkdownCorrectionService.reapplyHeadingNumbers()`, LLM 호출 없이 순수 텍스트 재계산만 수행) — 청크 편집으로 코드 블록이 분리/병합되는 등 헤딩이 추가·삭제·이동해 번호가 어긋난 경우를 바로잡는다. 번호 매겨진 헤딩이 하나도 없는 문서(체크박스를 끄고 업로드했거나, 위에서 언급한 대로 항상 번호가 붙지 않는 PPTX)는 손대지 않는다 — PPTX는 파일명 확장자로 먼저 걸러 이 단계 자체를 건너뛴다. 재계산 결과가 기존 내용과 같으면(즉 번호가 이미 최신 상태면) 파일을 다시 쓰지 않는다.
+> **소제목 번호 재검증**: 이미지 마커 정리 다음 단계로, 로드한 MD에 이미 번호 매겨진 헤딩(`## 1. 제목`처럼 숫자 프리픽스가 붙은 H2~H6)이 하나라도 있으면 현재 헤딩 구조를 기준으로 전체 번호를 다시 계산해 `mdPath`에 반영한다(`DocumentIndexer.reapplyHeadingNumbersIfNeeded()` → `MarkdownCorrectionService.reapplyHeadingNumbers()`, LLM 호출 없이 순수 텍스트 재계산만 수행) — 청크 편집으로 코드 블록이 분리/병합되는 등 헤딩이 추가·삭제·이동해 번호가 어긋난 경우를 바로잡는다. 번호 매겨진 헤딩이 하나도 없는 문서(체크박스를 끄고 업로드했거나, 위에서 언급한 대로 항상 번호가 붙지 않는 PPTX)는 손대지 않는다 — PPTX는 파일명 확장자로 먼저 걸러 이 단계 자체를 건너뛴다. 재계산 결과가 기존 내용과 같으면(즉 번호가 이미 최신 상태면) 파일을 다시 쓰지 않는다.  
+> **마크다운 후처리 재적용**: 소제목 번호 재검증 다음 단계로, `postProcessMarkdown()`(§6.3 6번 ③④ — `[DOCUMENT]` 마커/내용 없는 `-` 줄 제거, 코드 블록·GFM 표 앞뒤 빈 줄 보장, 펜스 밖 연속 빈 줄을 1개로 축소)을 `DocumentIndexer.postProcessIfNeeded()` → `MarkdownCorrectionService.postProcess()`로 다시 실행하고 변경이 있으면 `mdPath`에 반영한다. LLM 호출 없이 결정적으로 동작하며 PPTX를 포함한 모든 형식에 적용된다. **`fixClosingFences()`/`normalizeCodeBlocks()`는 재인덱싱에 포함하지 않는다** — 저장된 MD를 운영자가 직접 편집한 뒤 재인덱싱하면, 코드 블록 안에 의도적으로 남긴 빈 줄이 `normalizeCodeContent()`에 의해(함수/클래스·여러 줄 주석 시작 직전이 아니면 전부 삭제) 지워지거나, 펜스 짝이 어긋난 입력에서 여는 펜스의 언어 태그가 잘못 벗겨질 수 있어 — 이 위험을 매 재인덱싱마다 자동으로 감수하기보다 필요할 때만(문서 재업로드) 감수하도록 의도적으로 남겨둔 것이다.
 
 ### 6.5. 디렉터리 동기화 — 3단계
 
