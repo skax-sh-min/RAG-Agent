@@ -35,13 +35,16 @@
 ┌──────────────────────────────────────────────────────────────────────┐
 │ 프로바이더 역할(Role) × 유형(TaskType) 매트릭스                       │
 │                                                                      │
-│  LOCAL   (priority 0): local            BOTH       — 범용 로컬 LLM (무료) │
-│  LOCAL   (priority 0): local-vision     VISION     — Vision 전용 (선택) │
-│  NORMAL  (priority 1): gemini-flash-lite TEXT       — 저비용 1순위   │
-│  NORMAL  (priority 2): gemini-flash     TEXT       — 저비용 2순위    │
-│  NORMAL  (priority 3): openai-mini      TEXT       — 저비용 fallback │
-│  PREMIUM (priority 4): gemma-4-31b      TEXT       — 고추론 1순위    │
-│  PREMIUM (priority 5): openai           TEXT       — 고추론 fallback │
+│  LOCAL   (priority 0): local-fast       MICRO_TEXT — 잡무 전담 소형 모델(§6.21) │
+│  LOCAL   (priority 1): local            BOTH       — 로컬 LLM 1 (범용, 무료)   │
+│  LOCAL   (priority 1): local-2          BOTH       — 로컬 LLM 2 (로컬 1과 동일 priority → 로드밸런싱) │
+│  LOCAL   (priority 0): local-vision     VISION     — Vision 전용 (선택, 기본 비활성) │
+│  NORMAL  (priority 2): gemini-flash-lite TEXT       — 저비용 1순위(GEMINI_API_KEY1)     │
+│  NORMAL  (priority 3): gemini-flash     TEXT       — 저비용 2순위(GEMINI_API_KEY2)      │
+│  NORMAL  (priority 4): openai-mini      TEXT       — 저비용 fallback │
+│  PREMIUM (priority 5): gemma-4-31b      TEXT       — 고추론(GEMINI_API_KEY1) — 아래와 동일 priority → 로드밸런싱 │
+│  PREMIUM (priority 5): gemma-4-31b      TEXT       — 고추론(GEMINI_API_KEY2) — 동일 모델, 다른 키로 처리량/쿼터 2배 │
+│  PREMIUM (priority 6): openai           TEXT       — 고추론 fallback │
 │                                                                      │
 │  AgentGraph 노드 → TaskType 기준:                                    │
 │    ClassifierService        → LIGHT_TEXT                             │
@@ -111,106 +114,126 @@ app.llm.max-tokens=${LLM_MAX_TOKENS:6000}
 app.llm.default-provider-concurrency=${LLM_DEFAULT_PROVIDER_CONCURRENCY:3}
 app.llm.permit-wait-timeout-seconds=${LLM_PERMIT_WAIT_TIMEOUT_SECONDS:20}
 
-# ── [LOCAL] 범용 로컬 LLM ──────────────────────────────────────────
-# type=BOTH → TEXT + VISION 태스크 처리
-# 없으면 COST_FIRST 시 NORMAL부터 시작
-app.llm.providers[0].name=local
-app.llm.providers[0].base-url=${LOCAL_LLM_URL:http://localhost:1234/v1}
-app.llm.providers[0].api-key=${LOCAL_LLM_KEY:}
-app.llm.providers[0].model=${LOCAL_LLM_MODEL:google/gemma-4-e4b}
-app.llm.providers[0].type=BOTH
+# 등장 순서 = 인덱스 순서(사람이 읽기 편하도록 맞춤; Spring 바인딩 자체는 파일 내 줄 순서와 무관하고
+# "활성(비주석) 프로바이더의 번호가 0부터 연속"이기만 하면 된다): 소형 로컬(MICRO_TEXT) → 로컬 LLM 1
+# → 로컬 LLM 2(로컬 1과 로드밸런싱) → 외부 NORMAL 3종 + PREMIUM 3종(gemma-4-31b는 서로 다른
+# Gemini 키로 로드밸런싱되는 2대) → Vision 전용(선택, 기본 비활성).
+
+# ── [LOCAL] 소형 로컬 LLM 1 — MICRO_TEXT 잡무 전담(§6.21) ─────────
+# 키워드+맥락·요약·제목·MultiQuery 쿼리확장을 500MB급 소형 모델로 분리. priority=0 → 아래
+# 로컬 LLM 1/2(priority=1)보다 먼저 선택된다. 없어도 BOTH가 MICRO_TEXT를 흡수하므로 회귀 0 —
+# 비활성화하려면 이 블록을 통째로 주석 처리.
+app.llm.providers[0].name=local-fast
+app.llm.providers[0].base-url=${LOCAL_FAST_LLM_URL:http://localhost:8090/v1}
+app.llm.providers[0].api-key=${LOCAL_FAST_LLM_KEY:}
+app.llm.providers[0].model=${LOCAL_FAST_LLM_MODEL:Qwen3.5-0.8B-Q4_K_M.gguf}
+app.llm.providers[0].type=MICRO_TEXT
 app.llm.providers[0].role=LOCAL
 app.llm.providers[0].priority=0
 app.llm.providers[0].stream=true
-# app.llm.providers[0].concurrency=4   # 미설정 시 default-provider-concurrency 사용
+#app.llm.providers[0].concurrency=4
 
-# ── [LOCAL] 로드밸런싱 예시 (선택) ──────────────────────────────────
-# local과 동일 role(LOCAL)·동일 priority(0)·다른 base-url로 등록하면
-# LlmRouter가 잔여 permit이 더 많은(least-in-flight) 쪽으로 자동 분산한다.
-# 총 동시 처리량 = 등록 대수 × concurrency (2대 × 4 = 8).
-# app.llm.providers[7].name=local-2
-# app.llm.providers[7].base-url=http://gpu-b:1234/v1
-# app.llm.providers[7].api-key=lm-studio
-# app.llm.providers[7].model=google/gemma-4-e4b
-# app.llm.providers[7].type=BOTH
-# app.llm.providers[7].role=LOCAL
-# app.llm.providers[7].priority=0
-# app.llm.providers[7].concurrency=4
+# ── [LOCAL] 로컬 LLM 1 — 범용 (TEXT/분류/직답/Vision) ──────────────
+# type=BOTH → 소형이 처리하지 않는 모든 태스크 처리. 없으면 COST_FIRST 시 NORMAL부터 시작.
+app.llm.providers[1].name=local
+app.llm.providers[1].base-url=${LOCAL_LLM_URL:http://localhost:1234/v1}
+app.llm.providers[1].api-key=${LOCAL_LLM_KEY:}
+app.llm.providers[1].model=${LOCAL_LLM_MODEL:google/gemma-4-e4b}
+app.llm.providers[1].type=BOTH
+app.llm.providers[1].role=LOCAL
+app.llm.providers[1].priority=1
+app.llm.providers[1].stream=true
+# app.llm.providers[1].concurrency=3
 
-# ── [LOCAL] Vision 전용 로컬 모델 (선택) ──────────────────────────
-# type=VISION → VISION task에서 BOTH보다 우선 선택됨
-# 등록 시: LLaVA, Qwen2-VL 등 Vision 특화 모델 권장
-# index 6 사용 — index 5는 이미 [PREMIUM] openai가 점유 중이므로 충돌 방지
-# app.llm.providers[6].name=local-vision
-# app.llm.providers[6].base-url=${LOCAL_LLM_URL:http://localhost:1235/v1}
-# app.llm.providers[6].api-key=${LOCAL_LLM_KEY:lm-studio}
-# app.llm.providers[6].model=llava-1.6-34b
-# app.llm.providers[6].type=VISION
-# app.llm.providers[6].role=LOCAL
-# app.llm.providers[6].priority=0
-
-# ── [LOCAL] 경량 전용 소형 LLM (선택, PLAN §6.21 · §9) ────────────
-# 추론 불필요 잡무(키워드+맥락·요약·제목·쿼리확장 = MICRO_TEXT)를 500MB급 소형 모델로 분리.
-# type=MICRO_TEXT·priority 0 → MICRO_TEXT는 소형이, 분류·직답(LIGHT_TEXT)·답변(TEXT)은 큰 BOTH가 처리.
-# ⚠️ 켜면 위 providers[0].priority 를 0→1 로(안 바꾸면 동률 로드밸런싱). 인덱스는 0부터 연속(활성 [0]~[5] → [6]).
-# (분류·직답까지 더 공격적으로 소형에 내리려면 type=LIGHT_TEXT — 소형 분류 정확도 실측 후 권장)
-# app.llm.providers[6].name=local-fast
-# app.llm.providers[6].base-url=${LOCAL_FAST_LLM_URL:http://localhost:1236/v1}
-# app.llm.providers[6].api-key=${LOCAL_FAST_LLM_KEY:}
-# app.llm.providers[6].model=${LOCAL_FAST_LLM_MODEL:qwen2.5-0.5b-instruct}
-# app.llm.providers[6].type=MICRO_TEXT
-# app.llm.providers[6].role=LOCAL
-# app.llm.providers[6].priority=0
+# ── [LOCAL] 로컬 LLM 2 — 로컬 LLM 1과 로드밸런싱 (처리량 확장) ────
+# local과 동일 role(LOCAL)·동일 priority(1)·다른 base-url로 등록 — LlmRouter가 잔여 permit이
+# 더 많은(least-in-flight) 쪽으로 자동 분산한다(§5.4 예제 5/7). 총 동시 처리량 = 등록 대수 × concurrency.
+# 서버가 없으면 한 번 실패 후 같은 요청 안에서 로컬 LLM 1로 자동 폴백(사용자에게는 보이지 않음).
+app.llm.providers[2].name=local-2
+app.llm.providers[2].base-url=${LOCAL_LLM_URL_2:http://localhost:1235/v1}
+app.llm.providers[2].api-key=${LOCAL_LLM_KEY_2:${LOCAL_LLM_KEY:}}
+app.llm.providers[2].model=${LOCAL_LLM_MODEL_2:${LOCAL_LLM_MODEL:google/gemma-4-e4b}}
+app.llm.providers[2].type=BOTH
+app.llm.providers[2].role=LOCAL
+app.llm.providers[2].priority=1
+app.llm.providers[2].stream=true
+# app.llm.providers[2].concurrency=3
 
 # ── [NORMAL] Gemini Flash Lite — 저비용 1순위 ────────────────────
 # GEMINI_API_KEY1 미설정 시 시작 시 warn 로그 후 자동 비활성화
-app.llm.providers[1].name=gemini-flash-lite
-app.llm.providers[1].base-url=${GEMINI_BASE_URL:https://generativelanguage.googleapis.com/v1beta/openai/}
-app.llm.providers[1].api-key=${GEMINI_API_KEY1:}
-app.llm.providers[1].model=gemini-3.1-flash-lite
-app.llm.providers[1].type=TEXT
-app.llm.providers[1].role=NORMAL
-app.llm.providers[1].priority=1
+app.llm.providers[3].name=gemini-flash-lite
+app.llm.providers[3].base-url=${GEMINI_BASE_URL:https://generativelanguage.googleapis.com/v1beta/openai/}
+app.llm.providers[3].api-key=${GEMINI_API_KEY1:}
+app.llm.providers[3].model=gemini-3.1-flash-lite
+app.llm.providers[3].type=TEXT
+app.llm.providers[3].role=NORMAL
+app.llm.providers[3].priority=2
 
 # ── [NORMAL] Gemini Flash — 저비용 2순위 ────────────────────────
 # GEMINI_API_KEY2 미설정 시 시작 시 warn 로그 후 자동 비활성화
-app.llm.providers[2].name=gemini-flash
-app.llm.providers[2].base-url=${GEMINI_BASE_URL:https://generativelanguage.googleapis.com/v1beta/openai/}
-app.llm.providers[2].api-key=${GEMINI_API_KEY2:}
-app.llm.providers[2].model=gemini-2.5-flash
-app.llm.providers[2].type=TEXT
-app.llm.providers[2].role=NORMAL
-app.llm.providers[2].priority=2
+app.llm.providers[4].name=gemini-flash
+app.llm.providers[4].base-url=${GEMINI_BASE_URL:https://generativelanguage.googleapis.com/v1beta/openai/}
+app.llm.providers[4].api-key=${GEMINI_API_KEY2:}
+app.llm.providers[4].model=gemini-2.5-flash
+app.llm.providers[4].type=TEXT
+app.llm.providers[4].role=NORMAL
+app.llm.providers[4].priority=3
 
 # ── [NORMAL] OpenAI Mini (fallback) ──────────────────────────────
 # OPENAI_API_KEY 미설정 시 시작 시 warn 로그 후 자동 비활성화
-app.llm.providers[3].name=openai-mini
-app.llm.providers[3].base-url=${OPENAI_BASE_URL:https://api.openai.com}
-app.llm.providers[3].api-key=${OPENAI_API_KEY:}
-app.llm.providers[3].model=gpt-4o-mini
-app.llm.providers[3].type=TEXT
-app.llm.providers[3].role=NORMAL
-app.llm.providers[3].priority=3
+app.llm.providers[5].name=openai-mini
+app.llm.providers[5].base-url=${OPENAI_BASE_URL:https://api.openai.com}
+app.llm.providers[5].api-key=${OPENAI_API_KEY:}
+app.llm.providers[5].model=gpt-4o-mini
+app.llm.providers[5].type=TEXT
+app.llm.providers[5].role=NORMAL
+app.llm.providers[5].priority=4
 
-# ── [PREMIUM] Gemma 4 31B — 고추론 1순위 ─────────────────────────
+# ── [PREMIUM] Gemma 4 31B — 고추론, GEMINI_API_KEY1 인스턴스 ──────
+# GEMINI_API_KEY1 미설정 시 시작 시 warn 로그 후 자동 비활성화
+app.llm.providers[6].name=gemma-4-31b
+app.llm.providers[6].base-url=${GEMINI_BASE_URL:https://generativelanguage.googleapis.com/v1beta/openai/}
+app.llm.providers[6].api-key=${GEMINI_API_KEY1:}
+app.llm.providers[6].model=gemma-4-31b-it
+app.llm.providers[6].type=TEXT
+app.llm.providers[6].role=PREMIUM
+app.llm.providers[6].priority=5
+
+# ── [PREMIUM] Gemma 4 31B — 고추론, GEMINI_API_KEY2 인스턴스 ──────
+# [6]과 name/model/priority(5)가 모두 동일 — 서로 다른 API 키만 다르므로 findFirst()가 동일
+# priority 그룹으로 묶어 잔여 permit이 더 많은(least-in-flight) 쪽으로 자동 분산한다(§6).
+# 물리적으로 같은 Gemini gemma-4-31b 모델을 두 키로 나눠 호출해 PREMIUM 티어의 실질
+# 처리량/쿼터를 두 배로 늘리는 구성 — 로컬 LLM 2(§3 "로컬 LLM 2" 참고)와 동일한 패턴을
+# PREMIUM 클라우드 티어에 적용한 것.
 # GEMINI_API_KEY2 미설정 시 시작 시 warn 로그 후 자동 비활성화
-app.llm.providers[4].name=gemma-4-31b
-app.llm.providers[4].base-url=${GEMINI_BASE_URL:https://generativelanguage.googleapis.com/v1beta/openai/}
-app.llm.providers[4].api-key=${GEMINI_API_KEY2:}
-app.llm.providers[4].model=gemma-4-31b-it
-app.llm.providers[4].type=TEXT
-app.llm.providers[4].role=PREMIUM
-app.llm.providers[4].priority=4
+app.llm.providers[7].name=gemma-4-31b
+app.llm.providers[7].base-url=${GEMINI_BASE_URL:https://generativelanguage.googleapis.com/v1beta/openai/}
+app.llm.providers[7].api-key=${GEMINI_API_KEY2:}
+app.llm.providers[7].model=gemma-4-31b-it
+app.llm.providers[7].type=TEXT
+app.llm.providers[7].role=PREMIUM
+app.llm.providers[7].priority=5
 
 # ── [PREMIUM] OpenAI GPT-5o (fallback) ───────────────────────────
 # OPENAI_API_KEY 미설정 시 시작 시 warn 로그 후 자동 비활성화
-app.llm.providers[5].name=openai
-app.llm.providers[5].base-url=${OPENAI_BASE_URL:https://api.openai.com}
-app.llm.providers[5].api-key=${OPENAI_API_KEY:}
-app.llm.providers[5].model=gpt-5o
-app.llm.providers[5].type=TEXT
-app.llm.providers[5].role=PREMIUM
-app.llm.providers[5].priority=5
+app.llm.providers[8].name=openai
+app.llm.providers[8].base-url=${OPENAI_BASE_URL:https://api.openai.com}
+app.llm.providers[8].api-key=${OPENAI_API_KEY:}
+app.llm.providers[8].model=gpt-5o
+app.llm.providers[8].type=TEXT
+app.llm.providers[8].role=PREMIUM
+app.llm.providers[8].priority=6
+
+# ── [LOCAL] Vision 전용 로컬 모델 (선택, 기본 비활성) ─────────────
+# type=VISION → VISION task에서 BOTH(로컬 LLM 1/2)보다 우선 선택됨. LLaVA, Qwen2-VL 등 권장.
+# 다음 빈 인덱스 [9] 사용 — 로컬 LLM을 3대 이상으로 늘렸다면 그만큼 밀어서 조정.
+# app.llm.providers[9].name=local-vision
+# app.llm.providers[9].base-url=${LOCAL_LLM_URL:http://localhost:1235/v1}
+# app.llm.providers[9].api-key=${LOCAL_LLM_KEY:}
+# app.llm.providers[9].model=llava-1.6-34b
+# app.llm.providers[9].type=VISION
+# app.llm.providers[9].role=LOCAL
+# app.llm.providers[9].priority=0
 
 # ── 병렬 인덱싱 제어 ──────────────────────────────────────────────
 # 인덱싱 LLM 동시 호출 피크 ≈ FILES × LLM (파일끼리 단계가 겹칠 수 있고, 교정/구조화 세마포어는
@@ -354,12 +377,12 @@ CREATE TABLE IF NOT EXISTS llm_usage (
 - **라우팅 전략 셀렉터 자체 숨김**: 위 두 항목은 DUAL/LOCAL_ONLY "개별 옵션"을 `disabled` 처리하는 것과 달리, `app.llm.default-routing-mode`(=`LLM_ROUTING_MODE`)가 `LOCAL_ONLY`면 채팅 사이드바의 라우팅 전략 드롭다운 **전체**가 렌더링되지 않는다 — 이 배포에서는 프로바이더가 LOCAL 하나뿐이라 어떤 모드를 골라도 결과가 동일하므로, 선택지 자체를 없애는 편이 더 정확하다.
   - 판정 경로: `LlmRouter.getDefaultMode()` → `ChatController.populateChatModel()`의 `localOnlyDeployment` 모델 속성 → `chat.html`의 `th:if="${!localOnlyDeployment}"`.
   - 대화별 `routingMode`(스레드 메타에 저장된 현재 선택값)가 아니라 **배포 전체의 기본값**을 기준으로 판단한다 — 그렇지 않으면 사용자가 LOCAL_ONLY를 고르는 순간 셀렉터가 사라져 다시 못 바꾸는 UX 함정이 생긴다.
-- **같은 Gemini API 키 공유**: Flash(NORMAL)와 Pro(PREMIUM) 429가 동시 발생 가능 → OpenAI를 PREMIUM fallback으로 유지 권장
+- **같은 Gemini API 키 공유**: `GEMINI_API_KEY1`은 gemini-flash-lite(NORMAL)·gemma-4-31b(PREMIUM, `providers[6]`)가, `GEMINI_API_KEY2`는 gemini-flash(NORMAL)·gemma-4-31b(PREMIUM, `providers[7]`)가 각각 공유한다 — 한 키에 Rate Limit이 걸리면 NORMAL과 PREMIUM 양쪽이 동시에 차단될 수 있음. OpenAI를 PREMIUM fallback(`providers[8]`)으로 유지 권장
 - **classifyOnly() 토큰 미누적**: `AgentService`가 선행 분류 시 `AgentState` 토큰 집계에서 1회 누락 (허용된 MVP 트레이드오프)
 - **tried 집합 순환 방지**: `executeWithTracking()` 내 tried 집합이 모든 프로바이더를 포함하면 exhausted — 최대 재귀 = 프로바이더 수
 - **Vision 라우팅**: `type=VISION` 모델 미등록 시 `LIGHT_BOTH` → `BOTH` 순으로 fallback. Vision 문서 많으면 `local-vision` 등록 권장
 - **동시성 게이트(§6) 크기 설정 실수**: `providers[N].concurrency`를 서버의 실제 `--parallel`보다 크게 잡으면 앱이 스스로 429/타임아웃을 유발할 수 있다(서버가 처리 못 할 요청까지 통과시킴). 반대로 너무 작게 잡으면 여유 용량을 못 씀 — 서버 설정값과 일치시키는 것이 원칙
-- **동일 우선순위 프로바이더 다중 등록 시 자동 로드밸런싱**: `findFirst()`가 같은 role·같은 priority 후보 중 동시성 게이트의 잔여 permit이 가장 많은(least-in-flight) 프로바이더를 선택 — 여러 대 등록하면 실제로 부하가 분산된다. priority가 다르면 부하와 무관하게 낮은 priority가 항상 우선(동일 priority 그룹 내부에서만 분산). 설정 방법은 §3 "LOCAL 로드밸런싱 예시" 참고
+- **동일 우선순위 프로바이더 다중 등록 시 자동 로드밸런싱**: `findFirst()`가 같은 role·같은 priority 후보 중 동시성 게이트의 잔여 permit이 가장 많은(least-in-flight) 프로바이더를 선택 — 여러 대 등록하면 실제로 부하가 분산된다. priority가 다르면 부하와 무관하게 낮은 priority가 항상 우선(동일 priority 그룹 내부에서만 분산). 설정 방법은 §3 "로컬 LLM 2 — 로컬 LLM 1과 로드밸런싱" 참고
 
 ---
 
@@ -382,6 +405,6 @@ CREATE TABLE IF NOT EXISTS llm_usage (
 
 - **폴백/회귀 0**: `MICRO_TEXT`는 `LIGHT_TEXT`/`LIGHT_BOTH`/`BOTH`가 모두 지원(부분집합)하므로, 소형 다운·미등록 시 큰 모델이 그대로 흡수한다. `RetrievalService`는 `MICRO_TEXT→LIGHT_TEXT→TEXT` 순 폴백이라 cloud-only(LOCAL 없음)에서도 구성 실패가 없다.
 - **priority 필수**: 소형(0) < 큰(1). 동률이면 §6 로드밸런서가 둘 사이에 분산해 **절반만** 오프로딩된다.
-- **인덱스 연속성**: `providers[N]`은 0부터 연속이어야 바인딩 — 활성 [0]~[5]면 소형은 [6](§3 예시).
+- **인덱스 연속성**: `providers[N]`은 0부터 연속이어야 바인딩(파일 내 줄 순서 자체는 무관). 기본 파일은 `[0]`=소형·`[1]`=로컬 LLM 1·`[2]`=로컬 LLM 2·`[3]~[8]`=외부(PREMIUM gemma-4-31b가 `[6]`·`[7]` 두 키로 로드밸런싱)·`[9]`=Vision(선택, §3 예시).
 
 **더 공격적 오프로딩(A안)**: 소형을 `type=LIGHT_TEXT`로 등록하면 분류·직답까지 소형이 처리한다(`LIGHT_TEXT`가 MICRO_TEXT도 지원하므로 둘 다 흡수). 분류 오분류는 라우팅 정확도에, 직답은 사용자 노출에 직결되므로 채택 전 검색 품질 평가 하네스(OPERATOR_MANUAL §6.6)로 회귀를 측정할 것. 설정 예제는 OPERATOR_MANUAL §5.4 "예제 6 — 소형(경량) LLM 분리".

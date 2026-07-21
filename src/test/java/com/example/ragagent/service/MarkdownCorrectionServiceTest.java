@@ -52,7 +52,7 @@ class MarkdownCorrectionServiceTest {
         when(indexing.maxConcurrentLlmCalls()).thenReturn(2);
         when(props.indexingSafe()).thenReturn(indexing);
         when(props.llmSafe()).thenReturn(new AppProperties.LlmConfig(
-                java.util.List.of(), 2, 10, 180, "COST_FIRST", 0.6, 3, 20, 0.0, 0.1, 8000));
+                java.util.List.of(), 2, 10, 180, "COST_FIRST", 0.6, 3, 20, 0.0, 0.1, 8000, true));
         service = new MarkdownCorrectionService(llmRouter, props);
     }
 

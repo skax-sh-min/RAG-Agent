@@ -104,12 +104,16 @@ container system stop
 | 변수 | 필수 | 기본값 | 설명 |
 |------|------|--------|------|
 | `SERVER_PORT` | — | `8080` | 애플리케이션이 리스닝할 포트. 다른 로컬 서비스와 충돌할 때만 변경 |
-| `LOCAL_LLM_URL` | — | `http://localhost:1234/v1` | LOCAL provider 엔드포인트 (임베딩 폴백으로도 사용) |
-| `LOCAL_LLM_KEY` | — | `lm-studio` | LOCAL provider API 키. **로컬 엔드포인트(llama-server)는 키 불필요** — 비워도 LOCAL provider는 등록됨(`no-key` 치환) |
-| `LOCAL_LLM_MODEL` | — | `google/gemma-4-e4b` | LOCAL provider 모델명 |
-| `LOCAL_FAST_LLM_URL` | — | `http://localhost:8090/v1` | §6.21 태스크별 모델 오프로딩 — `providers[6]`(`local-fast`) 엔드포인트, `application.properties`에 기본 활성화되어 있음. 잡무 전용 소형(~500MB) 모델을 다른 포트/장비에 띄우고 가리킬 것 — 아무것도 안 떠 있으면 `MICRO_TEXT` 잡무(키워드+맥락 추출·요약·제목·쿼리확장)가 1회 실패 후 서킷브레이커로 차단되고 큰 LOCAL 프로바이더로 자동 폴백됨 — [OPERATOR_MANUAL.md §5.4 예제 6](documents/OPERATOR_MANUAL.md) 참고 |
-| `LOCAL_FAST_LLM_KEY` | — | — | `providers[6]` API 키. `LOCAL_LLM_KEY`와 마찬가지로 로컬 엔드포인트는 보통 불필요 |
-| `LOCAL_FAST_LLM_MODEL` | — | `Qwen3.5-0.8B-Q4_K_M.gguf` | `providers[6]` 모델명 |
+| `LOCAL_LLM_URL` | 이 provider 사용 시 ✅ | 없음 | `providers[1]`(`local`) 엔드포인트 (임베딩 폴백으로도 사용, 아래 G3 검증 대상 아님). **미설정·공백이면 이 provider가 통째로 비활성화됨** — 더 이상 `http://localhost:1234/v1`로 조용히 폴백하지 않음. 값을 설정하면 기동 시 `GET {URL}/models`로 접속 가능·모델명 일치 여부를 검증하며, 실패하면 **애플리케이션이 시작되지 않는다**(G3, [OPERATOR_MANUAL.md §5.2](documents/OPERATOR_MANUAL.md#52-프로바이더-속성) 참고) |
+| `LOCAL_LLM_KEY` | — | `lm-studio` | `providers[1]` API 키. **로컬 엔드포인트(llama-server)는 키 불필요** — `LOCAL_LLM_URL`만 설정돼 있다면 키가 비어도 LOCAL provider는 등록됨(`no-key` 치환) |
+| `LOCAL_LLM_MODEL` | — | `google/gemma-4-e4b` | `providers[1]` 모델명 |
+| `LOCAL_LLM_URL_2` | 사용 시 ✅ | 없음 | `providers[2]`(`local-2`) 엔드포인트 — `providers[1]`(`local`)과 동일 role·priority로 등록되는 두 번째 로컬 LLM 인스턴스로, 요청이 둘 사이에 least-in-flight로 로드밸런싱됨 — [OPERATOR_MANUAL.md §5.4 예제 5/7](documents/OPERATOR_MANUAL.md) 참고. **미설정·공백이면 이 provider가 통째로 비활성화됨**(회귀 0 — 2대째가 없으면 그냥 비워두면 `local` 단독으로 동작). **값을 설정하면 기동 시 검증하며(G3) 실패 시 애플리케이션이 시작되지 않는다** — "설정은 했지만 서버가 아직 안 떠 있다"가 예전처럼 런타임 폴백으로 넘어가려면 `LLM_VERIFY_LOCAL_MODELS_ON_STARTUP=false`가 필요함 |
+| `LOCAL_LLM_KEY_2` | — | `LOCAL_LLM_KEY` 폴백 | `providers[2]` API 키 |
+| `LOCAL_LLM_MODEL_2` | — | `LOCAL_LLM_MODEL` 폴백 | `providers[2]` 모델명 — 보통 `providers[1]`과 동일 모델을 다른 서버에 복제 |
+| `LOCAL_FAST_LLM_URL` | 사용 시 ✅ | 없음 | §6.21 태스크별 모델 오프로딩 — `providers[0]`(`local-fast`) 엔드포인트. **미설정·공백이면 이 provider가 통째로 비활성화됨**(회귀 0 — `MICRO_TEXT`는 `local`이 흡수). **값을 설정하면 기동 시 검증하며(G3) 실패 시 애플리케이션이 시작되지 않는다** — [OPERATOR_MANUAL.md §5.4 예제 6](documents/OPERATOR_MANUAL.md) 참고 |
+| `LOCAL_FAST_LLM_KEY` | — | — | `providers[0]` API 키. `LOCAL_LLM_KEY`와 마찬가지로 로컬 엔드포인트는 보통 불필요 |
+| `LOCAL_FAST_LLM_MODEL` | — | `Qwen3.5-0.8B-Q4_K_M.gguf` | `providers[0]` 모델명 |
+| `LLM_VERIFY_LOCAL_MODELS_ON_STARTUP` | — | `true` | (`app.llm.verify-local-models-on-startup`) — G3 토글. `true`면 URL이 설정된 각 LOCAL provider에 대해 기동 시 `GET {URL}/models`를 호출해 접속 가능·모델명 일치를 확인하고, 실패하면 애플리케이션이 시작되지 않는다. 로컬 서버가 앱보다 늦게 뜨는 배포 순서 레이스가 있을 때만 `false`로 끌 것 — 그 경우 예전처럼 첫 요청 실패 후 런타임 폴백된다 |
 | `LLM_ROUTING_MODE` | — | `COST_FIRST` | 기본 라우팅 모드 (`app.llm.default-routing-mode`). 폐쇄망/로컬 전용은 `LOCAL_ONLY`로 외부 프로바이더 호출 차단 — `LOCAL_ONLY`로 설정하면 채팅 사이드바의 라우팅 전략 드롭다운 자체가 사라짐(어떤 모드를 골라도 결과가 같으므로) |
 | `LLM_DEFAULT_PROVIDER_CONCURRENCY` | — | `3` | 질의 경로 프로바이더별 동시성 게이트(`app.llm.default-provider-concurrency`) — 앱이 한 프로바이더에 보내는 동시 요청이 이 값을 절대 넘지 않음(LLM 서버의 실제 `--parallel` 값에 맞춤). 프로바이더별 오버라이드: `app.llm.providers[N].concurrency` |
 | `LLM_PERMIT_WAIT_TIMEOUT_SECONDS` | — | `20` | 동시성 슬롯 대기 상한(`app.llm.permit-wait-timeout-seconds`) — 초과 시 read timeout까지 기다리지 않고 즉시 HTTP 429 + `Retry-After` 응답. 인덱싱/백그라운드 LLM 호출에는 적용되지 않음 |

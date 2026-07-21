@@ -766,7 +766,7 @@ app.image-description.docx-wmf-convert=true   # LibreOffice 설치 필요
 
 ## 11. 제약 및 주의사항
 
-- **Vision LLM 라우팅**: L2 사용 시 `LlmRouter.route(TaskType.VISION)` 호출 → gemma4(LIGHT_BOTH)가 priority=0으로 기본 처리. gemma4 미지원 모델로 교체하는 경우 `app.llm.providers[0].type=LIGHT_TEXT`로 변경하면 VISION 태스크는 gemini-1(BOTH)로 자동 라우팅됨
+- **Vision LLM 라우팅**: L2 사용 시 `LlmRouter.route(TaskType.VISION)` 호출 → gemma4(LIGHT_BOTH)가 priority=0으로 기본 처리. gemma4 미지원 모델로 교체하는 경우 `app.llm.providers[1].type=LIGHT_TEXT`(로컬 LLM 1)로 변경하면 VISION 태스크는 gemini-1(BOTH)로 자동 라우팅됨
 - **인덱싱 시간 증가**: L2 적용 시 이미지가 많은 문서는 청크당 1회 + 이미지당 1회 LLM 호출 발생 — 12절 Lazy Vision으로 대폭 완화 가능
 - **Path Traversal 방어**: `/api/v1/images/{docId}/{filename}` 엔드포인트에서 `..`, `/` 포함 입력 차단 필수 (7.1절 코드 포함)
 - **이미지 저장 용량**: `data/images/` 하위 파일은 문서 삭제 시 반드시 함께 정리 (8절 참조)

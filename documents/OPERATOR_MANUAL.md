@@ -174,17 +174,21 @@ copy .env.example .env
 | 변수 | 필수 | 기본값 | 설명 |
 |------|------|--------|------|
 | `SERVER_PORT` | — | `8080` | 애플리케이션이 리스닝할 포트 (`server.port`). 다른 서비스와 충돌할 때만 변경 — Docker Compose 사용 시 `docker-compose.yml`의 포트 매핑(`127.0.0.1:8080:8080`)과 Caddy `reverse_proxy app:8080`도 함께 맞춰야 함 |
-| `LOCAL_LLM_URL` | — | `http://localhost:1234/v1` | `providers[0]` LOCAL 엔드포인트 기본 URL. 임베딩 설정(`EMBED_BASE_URL`)의 폴백으로도 사용됨 |
-| `LOCAL_LLM_KEY` | — | `lm-studio` | `providers[0]` API 키. **로컬 엔드포인트(llama-server 등)는 키가 불필요** — 비우거나 미설정해도 LOCAL provider는 등록됨(내부적으로 `no-key` 치환). 로컬 LLM이 아예 없으면 미사용 시 첫 호출 1회 실패 후 Circuit Breaker로 우회되며, 완전히 제외하려면 `application.properties`의 `providers[0]`를 주석 처리하거나 `LLM_ROUTING_MODE=QUALITY_FIRST`로 후순위 배치 |
-| `LOCAL_LLM_MODEL` | — | `google/gemma-4-e4b` | `providers[0]` 모델 식별자. 사용 중인 로컬 모델명으로 변경 |
-| `LOCAL_FAST_LLM_URL` | — | `http://localhost:8090/v1` | §6.21 — `providers[6]`(`local-fast`) 엔드포인트. 잡무 전용 소형(~500MB) 모델을 `providers[0]`과 **다른 포트/장비**에 띄우고 가리킨다.<br>`application.properties`에 `providers[6].*`가 기본 활성화되어 있으므로, 이 값이 실제로 뜬 소형 모델 서버를 가리키지 않으면 `MICRO_TEXT` 잡무(키워드+맥락 추출·요약·제목·쿼리확장)가 매번 실패 후 `local`(priority 1)로 폴백한다 — 예제는 [§5.4 예제 6](#예제-6--소형경량-llm-분리로-잡무-오프로딩-plan-621) 참고 |
-| `LOCAL_FAST_LLM_KEY` | — | — | `providers[6]` API 키. `LOCAL_LLM_KEY`와 마찬가지로 로컬 엔드포인트는 보통 불필요 — 비워도 `no-key`가 치환되어 등록됨 |
-| `LOCAL_FAST_LLM_MODEL` | — | `Qwen3.5-0.8B-Q4_K_M.gguf` | `providers[6]` 모델 식별자. 사용 중인 소형 모델명으로 변경 |
+| `LOCAL_LLM_URL` | 이 provider 사용 시 ✅ | — (기본값 없음) | `providers[1]`(`local`, 로컬 LLM 1) 엔드포인트. **미설정·공백이면 이 provider가 통째로 비활성화된다** (`LlmConfig` G2 — 예전처럼 `http://localhost:1234/v1`로 조용히 폴백하지 않음). 값을 설정하면 기동 시 `GET {URL}/models`로 접속 가능·모델명 일치 여부를 검증한다(G3) — 실패하면 **애플리케이션이 시작되지 않는다**, [§5.2 프로바이더 활성화 게이트](#52-프로바이더-속성) 참고. 임베딩 설정(`EMBED_BASE_URL`)의 폴백으로도 별도 사용됨(그쪽은 기존처럼 자체 기본값 보유, G3 대상 아님) |
+| `LOCAL_LLM_KEY` | — | `lm-studio` | `providers[1]` API 키. **로컬 엔드포인트(llama-server 등)는 키가 불필요** — 비우거나 미설정해도(URL만 설정돼 있다면) LOCAL provider는 등록됨(내부적으로 `no-key` 치환, G1). 완전히 제외하려면 `LOCAL_LLM_URL`을 비우거나(G2) `application.properties`의 `providers[1]`를 주석 처리 |
+| `LOCAL_LLM_MODEL` | — | `google/gemma-4-e4b` | `providers[1]` 모델 식별자. 사용 중인 로컬 모델명으로 변경 |
+| `LOCAL_LLM_URL_2` | 사용 시 ✅ | — (기본값 없음) | `providers[2]`(`local-2`, 로컬 LLM 2) 엔드포인트. `local`과 **동일한 role(LOCAL)·동일한 priority(1)**로 등록되어 두 번째 물리 서버로 로드밸런싱된다(least-in-flight — [§5.4 예제 5/7](#예제-5--로컬-llm-2대-로드밸런싱-처리량-확장) 참고). **미설정·공백이면 이 provider가 통째로 비활성화된다**(G2) — 2대째 로컬 서버가 없다면 그냥 비워두면 됨(회귀 0, `local` 단독으로 동작). 값을 설정하면 기동 시 접속 가능·모델명 일치 여부를 검증하며 실패 시 애플리케이션이 시작되지 않는다(G3) — 즉 "설정은 했지만 서버가 아직 안 떠 있다"는 이 변수를 비워두는 것과 결과가 다르다(전자는 기동 실패, 후자는 정상 기동) |
+| `LOCAL_LLM_KEY_2` | — | `LOCAL_LLM_KEY` 폴백 | `providers[2]` API 키. 미설정 시 `LOCAL_LLM_KEY` 값을 그대로 사용 |
+| `LOCAL_LLM_MODEL_2` | — | `LOCAL_LLM_MODEL` 폴백 | `providers[2]` 모델 식별자. 미설정 시 `LOCAL_LLM_MODEL`과 동일한 모델명을 사용(로컬 LLM 1과 동일 모델을 다른 서버에 복제하는 것이 일반적인 사용 사례) |
+| `LOCAL_FAST_LLM_URL` | 사용 시 ✅ | — (기본값 없음) | §6.21 — `providers[0]`(`local-fast`, 소형 로컬 LLM 1) 엔드포인트. 잡무 전용 소형(~500MB) 모델을 `providers[1]`(`local`)과 **다른 포트/장비**에 띄우고 가리킨다.<br>**미설정·공백이면 이 provider가 통째로 비활성화된다**(G2) — 소형 모델 서버가 없다면 그냥 비워두면 됨(회귀 0, `MICRO_TEXT`는 `local`이 흡수). 값을 설정하면 기동 시 접속 가능·모델명 일치 여부를 검증하며(G3, 기본 활성) 실패 시 애플리케이션이 시작되지 않는다 — "URL은 설정했지만 서버가 아직 안 떠 있어 매 요청마다 `local`로 런타임 폴백"되는 예전 동작은 `LLM_VERIFY_LOCAL_MODELS_ON_STARTUP=false`로 G3를 꺼야만 나온다 — 예제는 [§5.4 예제 6](#예제-6--소형경량-llm-분리로-잡무-오프로딩-plan-621) 참고 |
+| `LOCAL_FAST_LLM_KEY` | — | — | `providers[0]` API 키. `LOCAL_LLM_KEY`와 마찬가지로 로컬 엔드포인트는 보통 불필요 — 비워도(URL만 설정돼 있다면) `no-key`가 치환되어 등록됨 |
+| `LOCAL_FAST_LLM_MODEL` | — | `Qwen3.5-0.8B-Q4_K_M.gguf` | `providers[0]` 모델 식별자. 사용 중인 소형 모델명으로 변경 |
+| `LLM_VERIFY_LOCAL_MODELS_ON_STARTUP` | — | `true` | (`app.llm.verify-local-models-on-startup`) — G3 토글. `true`면 `LOCAL_LLM_URL`/`LOCAL_LLM_URL_2`/`LOCAL_FAST_LLM_URL`이 설정된 각 provider에 대해 기동 시 `GET {URL}/models`를 호출해 접속 가능·모델명 일치를 확인하고, 실패하면 애플리케이션이 시작되지 않는다. 로컬 서버가 앱보다 늦게 뜨는 배포 순서 레이스가 있을 때만 `false`로 끌 것 — 그 경우 예전처럼 첫 채팅 요청이 실패한 뒤 다른 provider로 런타임 폴백된다 |
 | `LLM_ROUTING_MODE` | — | `COST_FIRST` | 기본 라우팅 모드 (`app.llm.default-routing-mode`) — `COST_FIRST`/`QUALITY_FIRST`/`PROGRESSIVE`/`DUAL`/`LOCAL_ONLY`.<br>**폐쇄망·로컬 전용은 `LOCAL_ONLY`** 로 외부 프로바이더 호출을 원천 차단. `LOCAL_ONLY`로 설정하면 채팅 화면 사이드바의 라우팅 전략 드롭다운 자체가 사라진다(어떤 모드를 골라도 결과가 같으므로) — 상세는 [LLM_ROUTING.md §8](LLM_ROUTING.md#8-제약-및-주의사항) 참고 |
 | `OPENAI_API_KEY` | — | — | OpenAI providers 사용 시 필요. 미설정 또는 빈 값이면 해당 providers 자동 비활성화. providers 설정에서 `${OPENAI_API_KEY}` 형태로 참조 |
 | `OPENAI_BASE_URL` | — | `https://api.openai.com` | OpenAI 호환 엔드포인트 기본 URL. providers 설정에서 `${OPENAI_BASE_URL}` 형태로 참조. Azure OpenAI 등 호환 엔드포인트로 교체 가능 |
-| `GEMINI_API_KEY1` | — | — | Gemini 1번 API 키 — `providers[1]`(gemini-flash-lite) 전용. 미설정 시 해당 provider 자동 비활성화. providers 설정에서 `${GEMINI_API_KEY1}` 형태로 참조 |
-| `GEMINI_API_KEY2` | — | — | Gemini 2번 API 키 — `providers[2]`(gemini-flash), `providers[4]`(gemma-4-31b) 공유. 미설정 시 해당 providers 자동 비활성화. providers 설정에서 `${GEMINI_API_KEY2}` 형태로 참조. Rate Limit 분산 목적으로 KEY1과 KEY2를 별도 키로 관리 가능 |
+| `GEMINI_API_KEY1` | — | — | Gemini 1번 API 키 — `providers[3]`(gemini-flash-lite, NORMAL), `providers[6]`(gemma-4-31b, PREMIUM) 공유. 미설정 시 해당 providers 자동 비활성화. providers 설정에서 `${GEMINI_API_KEY1}` 형태로 참조 |
+| `GEMINI_API_KEY2` | — | — | Gemini 2번 API 키 — `providers[4]`(gemini-flash, NORMAL), `providers[7]`(gemma-4-31b, PREMIUM) 공유. 미설정 시 해당 providers 자동 비활성화. providers 설정에서 `${GEMINI_API_KEY2}` 형태로 참조. `providers[6]`·`[7]`은 이름·모델·priority(5)가 동일한 gemma-4-31b 2대로, 서로 다른 키를 씀으로써 PREMIUM 티어의 실질 처리량/쿼터를 두 배로 늘리는 로드밸런싱 쌍이다(§5.7 동일 우선순위 로드밸런싱) |
 | `GEMINI_BASE_URL` | — | `https://generativelanguage.googleapis.com/v1beta/openai/` | Gemini API 엔드포인트 URL. 모든 Gemini providers가 `${GEMINI_BASE_URL}` 형태로 참조하므로 이 값 하나로 Gemini 전체 엔드포인트를 일괄 변경 가능 |
 | `EMBED_BASE_URL` | — | `LOCAL_LLM_URL` 폴백 | 임베딩 전용 엔드포인트. 미설정 시 `LOCAL_LLM_URL` 사용. OpenAI 임베딩 사용 시 `https://api.openai.com` 등으로 독립 설정 |
 | `EMBED_API_KEY` | — | `LOCAL_LLM_KEY` 폴백 | 임베딩 전용 API 키. 미설정 시 `LOCAL_LLM_KEY` 사용 |
@@ -389,7 +393,7 @@ EMBED_BASE_URL=https://api.openai.com
 EMBED_MODEL=text-embedding-3-large
 # LOCAL_LLM_KEY를 비워도 LOCAL provider는 등록됩니다(로컬 엔드포인트는 키 불필요).
 # 로컬 LLM이 없으면 외부 우선 라우팅으로 LOCAL을 후순위에 두세요
-# (완전 제외는 application.properties의 providers[0] 주석 처리):
+# (완전 제외는 application.properties의 providers[1] 주석 처리):
 LLM_ROUTING_MODE=QUALITY_FIRST
 ```
 
@@ -1078,8 +1082,8 @@ LLM 호출은 두 레이어가 담당합니다.
 
 > 임베딩과 추론은 완전히 분리되어 있습니다. 로컬 임베딩 모델(Ollama 등)과 외부 추론 모델을 독립적으로 조합할 수 있습니다.
 
-기본값으로 `providers[0]` (LOCAL) 하나만 등록되어 있습니다.  
-멀티 프로바이더를 사용하려면 `application.properties`에 providers 블록을 추가하세요.
+기본값으로 소형 로컬 LLM(`providers[0]`, MICRO_TEXT 전담) + 로컬 LLM 1(`providers[1]`, LOCAL) + 외부 NORMAL/PREMIUM 5종(`providers[3]`~`[7]`)이 함께 등록되어 있습니다(§5.4 예제 6 참고).  
+로컬 서버를 더 추가하거나(로컬 LLM 2, `providers[2]`) Vision 전용 모델을 쓰려면 `application.properties`에 providers 블록을 추가/수정하세요.
 
 모든 프로바이더는 **OpenAI 호환 REST API**를 통해 호출됩니다.  
 Gemini도 `https://generativelanguage.googleapis.com/v1beta/openai/` 엔드포인트를 통해 동일한 방식으로 사용합니다.
@@ -1100,6 +1104,18 @@ Gemini도 `https://generativelanguage.googleapis.com/v1beta/openai/` 엔드포�
 | `stream` | `true` (기본) \| `false` | LLM API 호출 방식. 미설정 시 `true`. 상세는 아래 참조 |
 | `concurrency` | 정수 (예: `3`) | 이 프로바이더의 질의 경로 동시성 게이트 크기. 미설정 시 `LLM_DEFAULT_PROVIDER_CONCURRENCY`(기본 3) 사용. 서버의 실제 `--parallel` 값과 일치시킬 것 |
 
+#### 프로바이더 활성화 게이트 (`LlmConfig`, G1~G3)
+
+시작 시 각 `providers[N]` 항목은 세 단계 게이트를 통과해야 실제로 등록된다:
+
+| 게이트 | 대상 | 조건 | 통과 못하면 |
+|---|---|---|---|
+| **G1** | 모든 역할 | `role=LOCAL`이면 `api-key`가 비어도 통과(로컬 엔드포인트는 키 불필요, `no-key`로 치환) — `NORMAL`/`PREMIUM`은 `api-key` 필수 | 시작 로그에 warn, 해당 프로바이더 미등록 |
+| **G2** | 모든 역할 | `base-url`이 비어 있지 않아야 함 | 시작 로그에 warn, 해당 프로바이더 미등록 |
+| **G3** | `role=LOCAL`만 | `GET {base-url}/v1/models` 호출 성공 + 응답에 `model` 값이 포함 | **애플리케이션 시작 자체가 실패**(Spring Boot가 비정상 종료) |
+
+G1·G2는 "이 프로바이더를 조용히 빼고 계속 진행"이지만, **G3는 다르다** — LOCAL 프로바이더의 `base-url`이 설정돼 있는데 서버가 안 떠 있거나 모델명이 틀리면 앱이 아예 뜨지 않는다. 포트 오타나 모델명 오타를 배포 직후 채팅 중 발견하는 대신 기동 시점에 바로 잡기 위함이다. `app.llm.verify-local-models-on-startup`(`LLM_VERIFY_LOCAL_MODELS_ON_STARTUP`, 기본 `true`)로 끌 수 있다 — 로컬 서버가 앱보다 늦게 뜨는 배포 순서 레이스가 있는 환경 등 예외적인 경우에만 `false`로 설정할 것. `NORMAL`/`PREMIUM`(클라우드) 프로바이더는 G3 대상이 아니다.
+
 #### stream 플래그
 
 `stream` 속성은 서버 ↔ LLM API 구간의 호출 방식을 제어합니다. 브라우저 ↔ 서버 간 SSE 연결은 이 값과 무관하게 유지됩니다.
@@ -1113,11 +1129,11 @@ Gemini도 `https://generativelanguage.googleapis.com/v1beta/openai/` 엔드포�
 
 ```properties
 # 예시: local 프로바이더만 블로킹 방식으로 호출
-app.llm.providers[0].stream=false
+app.llm.providers[1].stream=false
 ```
 
 > 시작 로그에서 각 프로바이더의 stream 설정을 확인할 수 있습니다:  
-> `local(LOCAL/BOTH/p0/stream=false) → http://localhost:1234/v1 [gemma-4-e4b]`
+> `local(LOCAL/BOTH/p1/stream=false) → http://localhost:1234/v1 [gemma-4-e4b]`
 
 #### type 값
 
@@ -1179,7 +1195,7 @@ Web UI 채팅 화면 드롭다운에서 대화별로 변경 가능.
 #### 예제 1 — 로컬 LLM 전용 (LM Studio / Ollama)
 
 `application.properties` 변경 없이 환경변수만 설정합니다.  
-기본 `providers[0]`이 `LOCAL_LLM_*` 값을 사용합니다.
+`providers[1]`(로컬 LLM 1)이 `LOCAL_LLM_*` 값을 사용합니다 — **`LOCAL_LLM_URL`은 반드시 설정해야 합니다**(비어 있으면 이 provider가 통째로 비활성화됨, 더 이상 `http://localhost:1234/v1`로 자동 폴백하지 않음). (`providers[0]`은 잡무 전담 소형 모델 — `LOCAL_FAST_LLM_*`, §5.4 예제 6. `LOCAL_FAST_LLM_URL`을 비워두면 그냥 비활성화되고 `local`이 잡무까지 흡수함)
 
 `.env`:
 ```env
@@ -1384,25 +1400,27 @@ COST_FIRST 흐름:
 
 추론이 필요 없는 잡무(키워드+맥락 추출·대화 요약·제목 생성·MultiQuery 쿼리 확장 = `MICRO_TEXT`)를 500MB급 소형 모델로 내리고, 답변 생성(`TEXT`)과 품질 민감한 분류·직답(`LIGHT_TEXT`)은 큰 모델이 전담하게 하면 — 두 모델이 **서로 다른 동시성 슬롯(Semaphore)**을 쓰므로 인덱싱 잡무가 채팅 답변의 슬롯을 잠식하지 않습니다(대화 응답 지연 감소).
 
+> 이 오프로딩은 `application.properties` 기본 설정에 이미 적용되어 있습니다(`providers[0]`=소형, `providers[1]`=큰 모델) — 아래는 처음부터 구성하는 방법을 보여주는 예제입니다.
+
 소형 모델 서버를 큰 모델과 **다른 포트/장비**에 띄운 뒤(예: LM Studio 2번째 인스턴스에 `qwen2.5-0.5b-instruct`를 로드, 포트 1236), `application.properties`:
 ```properties
 # 큰 모델 — 답변(TEXT)·분류·직답(LIGHT_TEXT)·Vision 전담. priority를 1로 올려 소형에 MICRO_TEXT 우선권을 넘긴다.
-app.llm.providers[0].name=local
-app.llm.providers[0].base-url=http://localhost:1234/v1
-app.llm.providers[0].model=google/gemma-4-e4b
-app.llm.providers[0].type=BOTH
-app.llm.providers[0].role=LOCAL
-app.llm.providers[0].priority=1
-app.llm.providers[0].concurrency=3
+app.llm.providers[1].name=local
+app.llm.providers[1].base-url=http://localhost:1234/v1
+app.llm.providers[1].model=google/gemma-4-e4b
+app.llm.providers[1].type=BOTH
+app.llm.providers[1].role=LOCAL
+app.llm.providers[1].priority=1
+app.llm.providers[1].concurrency=3
 
 # 소형 모델 — MICRO_TEXT(키워드·요약·제목·쿼리확장) 전담. priority 0으로 우선.
-app.llm.providers[6].name=local-fast
-app.llm.providers[6].base-url=http://localhost:1236/v1
-app.llm.providers[6].model=qwen2.5-0.5b-instruct
-app.llm.providers[6].type=MICRO_TEXT
-app.llm.providers[6].role=LOCAL
-app.llm.providers[6].priority=0
-app.llm.providers[6].concurrency=4
+app.llm.providers[0].name=local-fast
+app.llm.providers[0].base-url=http://localhost:1236/v1
+app.llm.providers[0].model=qwen2.5-0.5b-instruct
+app.llm.providers[0].type=MICRO_TEXT
+app.llm.providers[0].role=LOCAL
+app.llm.providers[0].priority=0
+app.llm.providers[0].concurrency=4
 ```
 
 라우팅 결과:
@@ -1415,7 +1433,7 @@ app.llm.providers[6].concurrency=4
 ```
 
 - ⚠️ **priority 필수**: 소형(0) < 큰 모델(1). 둘 다 0으로 두면 `MICRO_TEXT`가 두 모델 사이에 로드밸런싱되어 절반만 오프로딩됩니다.
-- ⚠️ **인덱스 연속성**: `providers[N]`은 0부터 연속이어야 바인딩됩니다 — 활성 프로바이더가 [0]~[5]면 소형은 **[6]**. `local-vision`도 함께 쓰면 하나를 [7]로 조정.
+- ⚠️ **인덱스 연속성**: `providers[N]`은 0부터 연속이어야 바인딩됩니다(파일 내 줄 순서 자체는 무관 — 사람이 읽기 편하도록만 맞춤). 현재 기본 파일은 `[0]`=소형·`[1]`=로컬 LLM 1·`[2]`=로컬 LLM 2·`[3]~[7]`=외부·`[8]`=Vision(선택) 순.
 - **더 공격적 오프로딩(A안)**: 분류·직답까지 소형으로 내리려면 `type=MICRO_TEXT` 대신 `type=LIGHT_TEXT`로 등록(`LIGHT_TEXT`가 `MICRO_TEXT`도 흡수). 단 분류 오분류는 라우팅 정확도로, 직답은 사용자 노출로 이어지므로 채택 전 검색 품질 평가 하네스([§6.6](#66-검색-품질-평가-하네스-개발자용))로 분류 정확도 회귀를 확인하세요.
 - 처리량을 더 늘리려면 소형·큰 모델 각각을 [예제 5](#예제-5--로컬-llm-2대-로드밸런싱-처리량-확장)처럼 같은 priority로 다중 등록해 로드밸런싱할 수 있습니다 — 구체적인 결합 설정은 아래 예제 7 참고.
 
