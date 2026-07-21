@@ -339,13 +339,27 @@ PROGRESSIVE 모드 AND sufficient=false AND retryCount >= max
   - 이후 파이프라인은 교정본을 source로 사용
 
 7) MD 섹션 로드
-  DocumentLoaderService.loadFromMarkdown(sourceMd)
+  DocumentLoaderService.loadFromMarkdown(sourceMd, skipChapterNumbers)
   - 섹션별 Document 생성
   - [헤딩페이지: N] 마커 파싱 후 섹션 메타데이터 heading_page/page_or_slide 로 저장
   - [페이지: N] 앵커를 파싱해 비헤딩 섹션의 page_or_slide 근사값으로 사용
   - 프롤로그(첫 헤딩 이전 구간)는 첫 헤딩의 [헤딩페이지: N]이 있으면 해당 값을 우선 상속
   - [이미지: ...] / [이미지(변환불가): ...] 마커 파싱
   - image_paths 메타데이터에 경로(쉼표 결합) 저장
+  - **챕터 번호(chapter_no)**: H2~H6 ATX 헤딩을 만날 때마다 레벨별 계층 카운터를 증가시켜
+    "1"·"1.1"·"1.5.3" 형태의 문자열을 계산해 그 헤딩 이후 섹션들에 저장한다(같은 레벨의 다음
+    헤딩을 만나면 그 값을 하나 늘리고, 더 깊은 레벨의 카운터는 리셋 — MarkdownCorrectionService.
+    addHierarchicalHeadingNumbers()와 동일한 방식이지만 헤딩 텍스트에 번호를 삽입하는 게 아니라
+    별도 메타데이터로만 기록). H1은 챕터로 세지 않음(직전 값 유지). 코드펜스 안의 "###" 같은 줄은
+    (섹션 분할과 마찬가지로) 카운터에 영향을 주지 않는다. 첫 H2~H6 헤딩 이전(프롤로그) 구간과
+    헤딩이 전혀 없는 문서는 "0". `skipChapterNumbers=true`(DocumentIndexer가 PPTX·비스캔 PDF일 때
+    전달)면 이 계산을 통째로 건너뛰어 항상 "0"으로 남는다 — 두 형식 모두 ##가 진짜 챕터 구조가
+    아니라 **합성 헤딩**이기 때문: PPTX는 슬라이드 제목/부제목 라벨(§6.3-bis 2번), 비스캔 PDF는
+    PdfToMarkdownConverter가 각 페이지마다 붙이는 "## N페이지"(§6.3-bis 3번 유사) — 이걸 그대로
+    챕터로 세면 페이지 번호를 다른 이름으로 중복시킬 뿐 아니라, 텍스트·이미지가 전혀 없어
+    건너뛴 페이지가 하나라도 있으면 헤딩 카운트가 실제 페이지 번호와 어긋난다(PdfToMarkdownConverter
+    참고). 재인덱싱(↺)도 저장된 파일명 확장자(.pptx 또는 .pdf)로 skipChapterNumbers를 다시
+    판단해 동일하게 적용 — 스캔 PDF는 애초에 MD 파일이 없어 재인덱싱 대상에서 제외됨.
 
 8) 청킹
   splitDocuments()
@@ -354,7 +368,8 @@ PROGRESSIVE 모드 AND sufficient=false AND retryCount >= max
 
 9) 메타데이터 태깅
   DocumentIndexer.tagMetadata()
-  - doc_id, filename, version, doc_type, sha256, chunk_index, page_or_slide, tags, image_paths 등
+  - doc_id, filename, version, doc_type, sha256, chunk_index, page_or_slide, chapter_no, tags,
+    image_paths 등
 
 10) 키워드+맥락 추출(enrich) [LLM] — §10.1 Contextual Retrieval
   KeywordExtractor.enrichParallel() — 청크를 app.indexing.keyword-batch-size(기본 2)개씩

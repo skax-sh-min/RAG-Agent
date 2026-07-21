@@ -198,7 +198,9 @@ public class DocumentIndexer {
                     (done, total) -> req.onProgress().accept(
                             IndexingProgressEvent.of("correcting", done, total, req.filename(),
                                     done + "/" + total + " 섹션 교정 중")));
-            rawDocs = loaderService.loadFromMarkdown(sourceMd);
+            // skipChapterNumbers=true — slide title/subtitle headings aren't chapter structure (see
+            // comment above), so every section's MetaKey.CHAPTER_NO stays "0"; only [페이지: N] matters.
+            rawDocs = loaderService.loadFromMarkdown(sourceMd, true);
         } else if (lower.endsWith(".pdf")) {
             DocumentLoaderService.PdfPages pdfPages = loaderService.loadPdfPagesForConversion(req.path());
             if (pdfPages.scanned()) {
@@ -231,7 +233,12 @@ public class DocumentIndexer {
                         (done, total) -> req.onProgress().accept(
                                 IndexingProgressEvent.of("correcting", done, total, req.filename(),
                                         done + "/" + total + " 섹션 교정 중")));
-                rawDocs = loaderService.loadFromMarkdown(sourceMd);
+                // skipChapterNumbers=true — PdfToMarkdownConverter's "## N페이지" heading is a
+                // synthetic per-page container (see its own class comment), never a real chapter;
+                // MetaKey.CHAPTER_NO would otherwise just re-derive the page count under a
+                // different name, and drift from the real page number the first time a page with
+                // no text/image is skipped (see PdfToMarkdownConverter).
+                rawDocs = loaderService.loadFromMarkdown(sourceMd, true);
             }
         } else {
             throw new IllegalArgumentException("Unsupported file type: " + req.filename());
@@ -321,7 +328,13 @@ public class DocumentIndexer {
         String md = Files.readString(mdPath);
         md = removeMissingImageMarkers(md, mdPath, filename);
         md = reapplyHeadingNumbersIfNeeded(md, mdPath, filename);
-        List<Document> rawDocs = loaderService.loadFromMarkdown(md);
+        // skipChapterNumbers: re-derived from the original filename extension (see the live-indexing
+        // PPTX/PDF branches above) — both have synthetic (not real chapter) headings, so
+        // MetaKey.CHAPTER_NO stays "0". A ".pdf" reaching this point is always non-scanned — scanned
+        // PDFs never produce an MD file, so they fail the "MD 파일이 없습니다" check above instead.
+        String lowerFilename = filename.toLowerCase();
+        boolean skipChapterNumbers = lowerFilename.endsWith(".pptx") || lowerFilename.endsWith(".pdf");
+        List<Document> rawDocs = loaderService.loadFromMarkdown(md, skipChapterNumbers);
         List<Document> chunks  = chunkSplitter.splitDocuments(
             rawDocs, filename, props.chunkSizeSafe(), props.chunkOverlapSafe(), props.minChunkSizeSafe(),
             props.embeddingSafe().maxChunkChars());

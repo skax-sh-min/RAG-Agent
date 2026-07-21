@@ -102,8 +102,11 @@ class DocumentIndexerTest {
         List<Document> stubDocs = List.of(new Document("테스트 문서 내용입니다. 청킹과 메타 태깅을 검증합니다."));
         when(loaderService.load(any())).thenReturn(stubDocs);
         when(loaderService.load(any(), any())).thenReturn(stubDocs);
-        // TXT path (structured MD) feeds loadFromMarkdown
+        // TXT path (structured MD) feeds loadFromMarkdown. reindexFromMd() calls the 2-arg
+        // (isPptx) overload — stub both so the shared default covers live-indexing (1-arg) and
+        // reindex (2-arg) call sites alike.
         when(loaderService.loadFromMarkdown(any())).thenReturn(stubDocs);
+        when(loaderService.loadFromMarkdown(any(), anyBoolean())).thenReturn(stubDocs);
 
         // Stub MarkdownCorrectionService / TextToMarkdownService — pass content through unchanged
         correctionService = mock(MarkdownCorrectionService.class);
@@ -224,8 +227,10 @@ class DocumentIndexerTest {
         // Re-stub loadFromMarkdown to genuinely parse — the shared @BeforeEach stub just echoes
         // a canned generic Document, which can't prove [페이지:N]/## 마커가 실제로 파싱되는지 증명 못 함.
         DocumentLoaderService realLoader = realLoader();
-        when(loaderService.loadFromMarkdown(anyString()))
-                .thenAnswer(inv -> realLoader.loadFromMarkdown(inv.getArgument(0)));
+        // PPTX indexing calls the 2-arg (isPptx) overload — delegate both args through so the
+        // real loader genuinely parses [페이지:N]/## markers instead of echoing the generic stub.
+        when(loaderService.loadFromMarkdown(anyString(), anyBoolean()))
+                .thenAnswer(inv -> realLoader.loadFromMarkdown(inv.getArgument(0), inv.getArgument(1)));
 
         Path pptxFile = tmpDir.resolve("deck.pptx");
         writeMinimalPptx(pptxFile, "개요");
@@ -244,8 +249,8 @@ class DocumentIndexerTest {
     @DisplayName("PPTX 업로드 — 슬라이드 이미지가 converted/ 의 MD 본문에 [이미지: ...] 인라인 마커로 남는다 (DOCX와 동일)")
     void index_pptx_inlinesImageMarkerInMarkdown() throws IOException {
         DocumentLoaderService realLoader = realLoader();
-        when(loaderService.loadFromMarkdown(anyString()))
-                .thenAnswer(inv -> realLoader.loadFromMarkdown(inv.getArgument(0)));
+        when(loaderService.loadFromMarkdown(anyString(), anyBoolean()))
+                .thenAnswer(inv -> realLoader.loadFromMarkdown(inv.getArgument(0), inv.getArgument(1)));
 
         Path pptxFile = tmpDir.resolve("deck-with-image.pptx");
         try (XMLSlideShow pptx = new XMLSlideShow()) {
@@ -288,8 +293,10 @@ class DocumentIndexerTest {
     @DisplayName("PDF 업로드(스캔 아님) — 페이지가 MD로 변환되어 converted/ 에 저장되고 페이지 번호가 헤딩으로 반영된다")
     void index_nonScannedPdf_convertsToMarkdownWithPageMarker() throws IOException {
         DocumentLoaderService realLoader = realLoader();
-        when(loaderService.loadFromMarkdown(anyString()))
-                .thenAnswer(inv -> realLoader.loadFromMarkdown(inv.getArgument(0)));
+        // Non-scanned PDF indexing calls the 2-arg (skipChapterNumbers) overload — delegate both
+        // args through so the real loader genuinely parses [페이지:N]/## markers.
+        when(loaderService.loadFromMarkdown(anyString(), anyBoolean()))
+                .thenAnswer(inv -> realLoader.loadFromMarkdown(inv.getArgument(0), inv.getArgument(1)));
         when(loaderService.loadPdfPagesForConversion(any()))
                 .thenAnswer(inv -> realLoader.loadPdfPagesForConversion(inv.getArgument(0)));
 
@@ -396,7 +403,10 @@ class DocumentIndexerTest {
         assertThat(Files.readString(mdPath)).doesNotContain("images/deadbeef/missing.png");
 
         org.mockito.ArgumentCaptor<String> mdCaptor = org.mockito.ArgumentCaptor.forClass(String.class);
-        verify(loaderService, atLeastOnce()).loadFromMarkdown(mdCaptor.capture());
+        // reindexFromMd() calls the 2-arg (isPptx) overload, not the 1-arg one this test used to
+        // capture from — without the boolean matcher below, Mockito never records a match here and
+        // the assertion below degenerates to vacuously true on an empty capture list.
+        verify(loaderService, atLeastOnce()).loadFromMarkdown(mdCaptor.capture(), anyBoolean());
         assertThat(mdCaptor.getAllValues()).noneMatch(md -> md.contains("images/deadbeef/missing.png"));
     }
 
@@ -419,7 +429,7 @@ class DocumentIndexerTest {
 
         assertThat(Files.readString(mdPath)).contains("images/cafef00d/real.png");
         org.mockito.ArgumentCaptor<String> mdCaptor = org.mockito.ArgumentCaptor.forClass(String.class);
-        verify(loaderService, atLeastOnce()).loadFromMarkdown(mdCaptor.capture());
+        verify(loaderService, atLeastOnce()).loadFromMarkdown(mdCaptor.capture(), anyBoolean());
         assertThat(mdCaptor.getAllValues()).anyMatch(md -> md.contains("images/cafef00d/real.png"));
     }
 

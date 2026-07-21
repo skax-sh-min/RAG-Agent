@@ -1648,9 +1648,31 @@ CPU/메모리 제약이 있는 환경에서는 `INDEXING_MAX_FILES`와 `INDEXING
 `/settings`는 현재 **유효** LLM/RAG 설정을 한 화면에서 보여주고, 일부 검색 튜닝 값은 **재기동 없이** 조정할 수 있게 합니다. `application.properties`/환경변수를 고치고 재기동하지 않아도 검색 동작을 실시간으로 미세조정할 수 있습니다.
 
 **조회 항목 (그룹별)**:
-- **LLM 라우팅**: 등록 프로바이더·역할(role)·우선순위·모델·API 키 설정 여부·서킷브레이커 상태, 기본 라우팅 모드, 일반 temperature·max-tokens(조회 전용, 실제 config 값 표시).
+- **LLM 라우팅**: 등록 프로바이더·역할(role)·우선순위·모델·API 키 설정 여부·서킷브레이커 상태·**활성화 여부**(아래 참조), 기본 라우팅 모드, 일반 temperature·max-tokens(조회 전용, 실제 config 값 표시).
 - **임베딩 / 벡터 스토어**: 임베딩 모델·차원, 벡터 스토어 백엔드(chroma/sqlite-vec).
 - **검색 튜닝 / 인덱싱 / 캐시**: 아래 핫 수정 항목 + 조회 전용 항목.
+
+**프로바이더 활성화/비활성화 토글 (재기동 시 초기화)**:
+
+`LLM 라우팅` 표의 각 행에는 활성/비활성 배지와(관리자에게만) **활성화**/**비활성화** 버튼이 있습니다 — `POST /admin/settings/provider/toggle`(`name`, `enabled`). 클릭 즉시 `LlmRouter.findFirst()`가 해당 이름의 프로바이더를 후보에서 제외/재포함하며, ChatModel·동시성 게이트 등 빈(bean) 자체는 건드리지 않으므로 재기동이 필요 없습니다.
+
+- **`app.llm.providers[N]`을 주석 처리/삭제하는 것과는 다른, 별개의 메커니즘**입니다 — `ProviderToggle`이라는 프로세스 메모리 상의 집합(`CircuitBreaker`와 동일한 패턴)일 뿐이며, **`settings_override` 테이블(SQLite)에 저장되지 않습니다.** 즉 **재기동하면 모든 프로바이더가 다시 활성 상태로 돌아갑니다** — 설정 파일/환경변수가 여전히 최종 권위를 가집니다.
+- 이름(`name`)이 같은 프로바이더가 여러 대 등록돼 있으면(§5.4 예제 5/7의 로드밸런싱 쌍, 또는 §5.4 예제 뒤쪽의 PREMIUM Gemini 키 쌍처럼) **같은 이름을 공유하는 모든 인스턴스가 함께** 켜지고 꺼집니다 — 토글은 provider 설정 하나가 아니라 "이름"을 키로 삼기 때문입니다.
+- **마지막으로 남은 활성 프로바이더는 비활성화할 수 없습니다** — 그 요청은 400(`IllegalArgumentException`)으로 거부되어 라우팅이 완전히 막히는 상황을 방지합니다.
+- 모든 토글은 감사 로그(`settings.provider.toggle`, `{"enabled":"true|false"}`)에 남습니다.
+- 임시로 문제가 있는 프로바이더(예: 응답이 계속 이상하거나 비용이 우려될 때)를 재기동 없이 즉시 빼고 싶을 때 사용하세요. **영구적으로** 빼려면 `application.properties`에서 해당 `providers[N].*` 블록을 주석 처리하거나 env var를 비우세요(§5.4).
+
+**시작 시 오버라이드 불일치 경고**:
+
+`SettingsService.init()`은 시작 시 각 핫 수정 키의 **effective 값**을 오버라이드 바인딩 전/후로 비교해, `settings_override`에 저장된 값이 현재 `application.properties`/환경변수 값과 실제로 다르면(클램핑 이후 값 기준) WARN 로그를 남깁니다:
+
+```
+[SETTINGS] '{키}' — a persisted /settings override ({override값}) is overriding the
+env-var/application.properties value ({설정값}); the override wins. Reset it in
+/settings to fall back to the configured value.
+```
+
+배포에서 `SEARCH_TOP_K=10`처럼 환경변수를 새로 설정했는데 실제로는 예전에 `/settings`에서 저장해 둔 오버라이드(예: 7)가 여전히 이기고 있어 "왜 안 바뀌지?"로 헤매는 상황을 시작 로그만 보고 바로 알 수 있게 하기 위함입니다. 오버라이드가 아예 없거나 값이 설정값과 동일하면(우연히 같은 숫자로 클램핑된 경우 포함) 조용히 넘어갑니다 — 항상 남는 로그가 아니라 실제로 "이길 때"만 경고합니다.
 
 **핫 수정 가능 — 검색 (재기동 불필요, 다음 검색부터 반영)** — 값을 바꾸면 `settings_override` 테이블(`memory.db`)에 저장되고, 다음 검색부터 즉시 적용됩니다:
 

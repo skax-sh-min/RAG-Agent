@@ -334,12 +334,22 @@ public class RetrievalService {
         }
     }
 
-    private String formatSource(Document doc) {
+    /**
+     * Citation label: {@code "파일명 | 챕터번호"} when the chunk has a real chapter number
+     * ({@link MetaKey#CHAPTER_NO}, set by {@code DocumentLoaderService} from H2-H6 headings — "0"
+     * means no such heading applies, e.g. PPTX or before the first heading), else falls back to
+     * {@code "파일명 | p.N"} ({@link MetaKey#PAGE_OR_SLIDE}). Static + package-private for unit
+     * testing (touches no instance state, same pattern as {@link #mergeRrf}).
+     */
+    static String formatSource(Document doc) {
         Map<String, Object> meta = doc.getMetadata();
         String filename = String.valueOf(meta.getOrDefault(MetaKey.FILENAME, "unknown"));
-        String version  = String.valueOf(meta.getOrDefault(MetaKey.VERSION, "latest"));
-        Object page     = meta.getOrDefault(MetaKey.PAGE_OR_SLIDE, "?");
-        return "%s | v%s | p.%s".formatted(filename, version, page);
+        Object chapterNo = meta.get(MetaKey.CHAPTER_NO);
+        if (chapterNo != null && !"0".equals(String.valueOf(chapterNo))) {
+            return "%s | %s".formatted(filename, chapterNo);
+        }
+        Object page = meta.getOrDefault(MetaKey.PAGE_OR_SLIDE, "?");
+        return "%s | p.%s".formatted(filename, page);
     }
 
     /**

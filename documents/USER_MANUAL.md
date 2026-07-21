@@ -49,10 +49,11 @@
 | 문서 버전 관리 | 버전별 독립된 검색 컬렉션 |
 | 이미지 처리 | PDF·PPTX·DOCX 이미지 추출(PPTX는 SmartArt·차트 미리보기·첨부 파일 미리보기 포함) → 답변에 썸네일 표시; 스캔 PDF OCR 지원 |
 | 다크 모드 | 시스템 설정 자동 감지 + 사용자 override |
-| 출처 hover 미리보기 | 출처 항목에 마우스를 올리면 관련 문서 청크 200자 미리보기 |
+| 출처 hover 미리보기 | 출처 항목에 마우스를 올리면 관련 문서 청크 500자 미리보기 |
 | 메시지 메타데이터 영속화 | 발송·수신 시간, 프로바이더, 토큰 수, LLM 호출 횟수를 DB에 저장 — 페이지 새로고침 후에도 유지 |
 | DOCX 자동 포맷 교정 | DOCX → MD 변환 후 LLM이 섹션별 포맷(소제목·잘린 문장·오타)을 자동 교정 → 교정본으로 인덱싱 |
 | 소제목 번호 매기기 | 업로드 시 "소제목 숫자 생성" 체크박스로 헤딩에 계층적 번호 부여(예: `1.1`, `1.2`) — **PPTX는 적용되지 않음**. 재인덱싱 시 번호가 어긋나 있으면 자동으로 다시 계산 |
+| 출처 챕터 번호 | 답변 출처(Sources)가 문서 구조(H2~H6 헤딩)에 따라 `p.12` 대신 `1.5.3` 같은 챕터 번호로 표시됨 — **위 체크박스와 무관하게 항상 자동 계산**(헤딩에 보이는 번호를 매기지 않아도 출처에는 챕터 번호가 붙음). 헤딩이 없는 구간과 PPTX·PDF는 페이지/슬라이드 번호로 표시 |
 | 벡터 스토어 관리 | ChromaDB 컬렉션·청크 조회·편집·삭제 + 저장된 MD 파일 기반 재인덱싱 UI (`/admin`) |
 | 인증 모드 | `app.auth.enabled=true`(기본): Spring Security 폼 로그인; `false`: guest/admin 자동 로그인 (로컬 전용) |
 
@@ -336,7 +337,7 @@ curl -X POST http://localhost:8080/api/v1/chat \
   "question_type": "usage",
   "sources": [
     {
-      "label": "spring-security-guide.pdf | vlatest | p.12",
+      "label": "spring-security-guide.pdf | p.12",
       "preview": "Spring Security에서 JWT 인증 필터를 구성하려면...",
       "doc_id": "spring-security-guide.pdf_a1b2c3d4",
       "page_or_slide": 12
@@ -348,6 +349,8 @@ curl -X POST http://localhost:8080/api/v1/chat \
   "elapsed_seconds": 3.2
 }
 ```
+
+> **`sources[].label` 형식**: 청크가 속한 헤딩의 챕터 번호(H2~H6 기준, 예: `1.5.3`)가 있으면 `"파일명 | 1.5.3"`, 없으면(헤딩 이전 구간·PPTX·PDF는 항상 이 경우) `page_or_slide`로 폴백해 위 예시처럼 `"파일명 | p.12"`로 표시됩니다. 문서 버전은 라벨에 포함되지 않습니다 — 필요하면 업로드 시 지정한 `version`을 별도로 관리하세요.
 
 **질문 유형 (`question_type`)**:
 
@@ -443,6 +446,7 @@ MD 재인덱싱 (/admin ↺ 버튼)
 | `doc_id`, `filename`, `version`, `sha256` | 전체 | 공통 식별 정보 |
 | `page_or_slide` | PDF, PPTX | 페이지/슬라이드 번호 (PPTX·PDF[스캔 아님]은 헤딩 단위로도 정확히 귀속됨) |
 | `section`, `heading` | MD, DOCX, PPTX, PDF(스캔 아님) | 섹션 번호·헤더 텍스트 — PPTX는 슬라이드 제목(또는 "N번 슬라이드"), PDF(스캔 아님)는 합성 헤딩("N페이지") |
+| `chapter_no` | 전체 | 계층적 챕터 번호(H2~H6 헤딩마다 레벨별로 증가, 예: `1`·`1.1`·`1.5.3`) — 출처(Sources) 라벨에 표시됨(§3.6 참고). 헤딩 이전 구간과 헤딩이 없는 문서는 `0`. **PPTX·PDF(스캔 아님)는 항상 `0`**(슬라이드 제목/합성 페이지 헤딩일 뿐 실제 챕터 구조가 아니므로) |
 | `excerpt_keywords` | 전체 | LLM이 추출한 핵심 키워드 5개 |
 | `chunk_context` | 전체 | 검색(임베딩+키워드) 전용 맥락 헤더 — "{파일명} > {heading}" + LLM 1~2문장. 화면 표시·저장 텍스트에는 포함되지 않음 (Contextual Retrieval) |
 
