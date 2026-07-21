@@ -118,12 +118,38 @@ class DocumentLoaderMarkdownSectionTest {
     }
 
     @Test
-    @DisplayName("헤딩이 전혀 없는 문서에 [페이지: N] 마커만 있으면, 그 페이지 번호가 유실되지 않도록 " +
-            "전체가 헤딩 없는 단일 섹션으로 남되 첫 페이지 번호를 유지한다")
-    void pageMarkerWithoutAnyHeadingKeepsFirstPageNumber() {
-        // Guards the collapse risk PdfToMarkdownConverter/PptxToMarkdownConverter must avoid by
-        // always emitting a heading per page/slide — without one, splitMarkdownBySections() never
-        // flushes a section boundary and the whole document becomes a single section.
+    @DisplayName("[페이지: N] 마커 자체가 섹션 경계 — 헤딩 없는 여러 페이지가 각각 별도 섹션으로 나뉘고 page_or_slide를 유지한다")
+    void pageMarkerAloneSplitsHeadinglessPages() {
+        // Mirrors what PdfToMarkdownConverter (and title-less PPTX slides) now emit: only a
+        // [페이지: N] marker per page/slide, no synthetic "## N페이지"/"## N번 슬라이드" heading.
+        // The marker itself must act as the section boundary so per-page attribution survives.
+        String md = """
+                [페이지: 1]
+                첫 페이지 본문입니다.
+
+                [페이지: 2]
+                둘째 페이지 본문입니다.
+
+                [페이지: 3]
+                셋째 페이지 본문입니다.
+                """;
+
+        List<Document> sections = loader.loadFromMarkdown(md);
+
+        assertThat(sections).hasSize(3);
+        assertThat(sections.get(0).getMetadata().get(MetaKey.PAGE_OR_SLIDE)).isEqualTo(1);
+        assertThat(sections.get(1).getMetadata().get(MetaKey.PAGE_OR_SLIDE)).isEqualTo(2);
+        assertThat(sections.get(2).getMetadata().get(MetaKey.PAGE_OR_SLIDE)).isEqualTo(3);
+        // heading-less sections carry an empty heading, and the marker never leaks into stored text
+        assertThat(sections.get(0).getMetadata().get(MetaKey.HEADING)).isEqualTo("");
+        assertThat(sections.get(0).getText()).isEqualTo("첫 페이지 본문입니다.").doesNotContain("[페이지:");
+        assertThat(sections.get(1).getText()).isEqualTo("둘째 페이지 본문입니다.");
+        assertThat(sections.get(2).getText()).isEqualTo("셋째 페이지 본문입니다.");
+    }
+
+    @Test
+    @DisplayName("[페이지: N] 마커 하나 + 본문만 있으면 그 페이지 번호를 가진 단일 섹션이 된다")
+    void singlePageMarkerKeepsFirstPageNumber() {
         String md = """
                 [페이지: 1]
                 본문만 있고 헤딩이 없는 문서입니다.
@@ -133,6 +159,27 @@ class DocumentLoaderMarkdownSectionTest {
 
         assertThat(sections).hasSize(1);
         assertThat(sections.get(0).getMetadata().get(MetaKey.PAGE_OR_SLIDE)).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("[페이지: N] 마커 뒤에 실제 제목 헤딩이 오면 빈 섹션 없이 하나의 섹션으로 합쳐진다(PPTX 제목 슬라이드)")
+    void pageMarkerFollowedByRealHeadingDoesNotCreateEmptySection() {
+        String md = """
+                [페이지: 1]
+                첫 페이지 본문.
+
+                [페이지: 2]
+                ## 실제 제목
+                제목 슬라이드 본문.
+                """;
+
+        List<Document> sections = loader.loadFromMarkdown(md);
+
+        assertThat(sections).hasSize(2); // no empty section between the marker and the heading
+        assertThat(sections.get(0).getMetadata().get(MetaKey.HEADING)).isEqualTo("");
+        assertThat(sections.get(0).getMetadata().get(MetaKey.PAGE_OR_SLIDE)).isEqualTo(1);
+        assertThat(sections.get(1).getMetadata().get(MetaKey.HEADING)).isEqualTo("실제 제목");
+        assertThat(sections.get(1).getMetadata().get(MetaKey.PAGE_OR_SLIDE)).isEqualTo(2);
     }
 
     @Test

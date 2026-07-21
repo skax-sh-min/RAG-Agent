@@ -139,8 +139,8 @@ class PptxToMarkdownConverterTest {
     }
 
     @Test
-    @DisplayName("제목 placeholder가 없는 슬라이드는 폴백 헤딩(\"N번 슬라이드\")을 받는다")
-    void slideWithoutTitleGetsFallbackHeading() throws IOException {
+    @DisplayName("제목 placeholder가 없는 슬라이드는 합성 헤딩 없이 [페이지: N] 마커 + 본문만 받는다")
+    void slideWithoutTitleGetsNoSyntheticHeading() throws IOException {
         writePptx(pptx -> {
             XSLFSlide slide = pptx.createSlide();
             XSLFTextBox body = slide.createTextBox();
@@ -150,7 +150,10 @@ class PptxToMarkdownConverterTest {
 
         String md = convert();
 
-        assertThat(md).contains("## 1번 슬라이드");
+        // "## N번 슬라이드" 폴백 헤딩은 더 이상 넣지 않는다 — [페이지: N] 마커가 슬라이드 경계를 겸한다.
+        assertThat(md).doesNotContain("## 1번 슬라이드");
+        assertThat(md).contains("[페이지: 1]");
+        assertThat(md).contains("제목 없는 본문");
     }
 
     @Test
@@ -236,7 +239,7 @@ class PptxToMarkdownConverterTest {
     }
 
     @Test
-    @DisplayName("제목·본문은 없지만 이미지가 있는 슬라이드는 건너뛰지 않고 폴백 헤딩 + [이미지: ...] 마커를 받는다")
+    @DisplayName("제목·본문은 없지만 이미지가 있는 슬라이드는 건너뛰지 않고 [페이지: N] + [이미지: ...] 마커를 받는다")
     void slideWithOnlyPictureIsNotSkippedAndGetsImageMarker() throws IOException {
         writePptx(pptx -> {
             byte[] fakePng = "fake-png-bytes".getBytes();
@@ -249,7 +252,7 @@ class PptxToMarkdownConverterTest {
         String md = convert();
 
         assertThat(md).contains("[페이지: 1]");
-        assertThat(md).contains("## 1번 슬라이드");
+        assertThat(md).doesNotContain("## 1번 슬라이드");
         assertThat(md).contains("[이미지: images/doc1/s1_img1.png]");
         assertThat(Files.exists(imagesDir.resolve("s1_img1.png"))).isTrue();
     }
@@ -391,8 +394,8 @@ class PptxToMarkdownConverterTest {
     }
 
     @Test
-    @DisplayName("중간 표지 슬라이드(제목 없음, 불릿 없음, 굵은 텍스트 2개)는 폴백 헤딩 하나만 받는다 — 회귀")
-    void sectionDividerSlideWithTwoBoldTextsGetsOnlyFallbackHeading() throws IOException {
+    @DisplayName("중간 표지 슬라이드(제목 없음, 불릿 없음, 굵은 텍스트 2개)는 합성 헤딩 없이 [페이지: N] + 굵은 본문만 받는다 — 회귀")
+    void sectionDividerSlideWithTwoBoldTextsGetsNoSyntheticHeading() throws IOException {
         writePptx(pptx -> {
             XSLFSlide slide = pptx.createSlide();
             XSLFTextBox partBox = slide.createTextBox();
@@ -404,7 +407,8 @@ class PptxToMarkdownConverterTest {
 
         String md = convert();
 
-        assertThat(md).contains("## 1번 슬라이드");
+        assertThat(md).contains("[페이지: 1]");
+        assertThat(md).doesNotContain("## 1번 슬라이드");
         assertThat(md).doesNotContain("### PART 2").doesNotContain("### 결제 시스템");
         assertThat(md).contains("**PART 2**").contains("**결제 시스템**");
     }

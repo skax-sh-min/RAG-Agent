@@ -337,16 +337,24 @@ public class MarkdownCorrectionService {
     }
 
     /**
-     * Splits by H2/H3 headings, but never while inside a fenced code block (``` / ~~~). Log
-     * dumps and batch output are often pasted verbatim into a fence and commonly contain lines
-     * like {@code "### Job ID : ..."} that only look like headings — treating them as real
-     * section boundaries splits the fence in half, and each half then goes to the LLM with no
-     * idea it's inside (or missing) a code block, which reliably produces hallucinated language
-     * tags, re-wrapped fences, or leaked prompt delimiters in the corrected output.
+     * Splits by H2/H3/H4 headings <em>and</em> {@code [페이지: N]} markers, but never while inside a
+     * fenced code block (``` / ~~~). Log dumps and batch output are often pasted verbatim into a
+     * fence and commonly contain lines like {@code "### Job ID : ..."} that only look like headings —
+     * treating them as real section boundaries splits the fence in half, and each half then goes to
+     * the LLM with no idea it's inside (or missing) a code block, which reliably produces
+     * hallucinated language tags, re-wrapped fences, or leaked prompt delimiters in the corrected
+     * output.
+     *
+     * <p>The {@code [페이지: N]} boundary matters for non-scanned PDF: {@code PdfToMarkdownConverter}
+     * no longer emits a synthetic {@code ## N페이지} heading, so the page marker is now the only
+     * per-page boundary — without it a whole plain-text PDF would collapse into one oversized
+     * correction section. Only PDF/PPTX ever emit {@code [페이지: N]}; DOCX/TXT/MD never do, so this
+     * is a no-op for them. (PPTX itself uses {@link #splitByPages}, not this method.)
      */
     List<String> splitBySections(String md) {
         return splitByBoundary(md,
-                line -> line.startsWith("## ") || line.startsWith("### ") || line.startsWith("#### "),
+                line -> line.startsWith("## ") || line.startsWith("### ") || line.startsWith("#### ")
+                        || line.startsWith("[페이지: "),
                 true);
     }
 

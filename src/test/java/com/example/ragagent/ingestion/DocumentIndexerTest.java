@@ -293,11 +293,11 @@ class DocumentIndexerTest {
     }
 
     @Test
-    @DisplayName("PDF 업로드(스캔 아님) — 페이지가 MD로 변환되어 converted/ 에 저장되고 페이지 번호가 헤딩으로 반영된다")
+    @DisplayName("PDF 업로드(스캔 아님) — 페이지가 MD로 변환되어 converted/ 에 저장되고 [페이지: N] 마커가 반영된다(합성 헤딩 없음)")
     void index_nonScannedPdf_convertsToMarkdownWithPageMarker() throws IOException {
         DocumentLoaderService realLoader = realLoader();
         // Non-scanned PDF indexing calls the 2-arg (skipChapterNumbers) overload — delegate both
-        // args through so the real loader genuinely parses [페이지:N]/## markers.
+        // args through so the real loader genuinely parses the [페이지:N] markers.
         when(loaderService.loadFromMarkdown(anyString(), anyBoolean()))
                 .thenAnswer(inv -> realLoader.loadFromMarkdown(inv.getArgument(0), inv.getArgument(1)));
         when(loaderService.loadPdfPagesForConversion(any()))
@@ -312,7 +312,8 @@ class DocumentIndexerTest {
         Path md = tmpDir.resolve("converted").resolve(info.docId() + ".md");
         assertThat(Files.exists(md)).isTrue();
         String mdContent = Files.readString(md);
-        assertThat(mdContent).contains("[페이지: 1]").contains("## 1페이지");
+        assertThat(mdContent).contains("[페이지: 1]");
+        assertThat(mdContent).doesNotContain("## 1페이지"); // 합성 페이지 헤딩은 더 이상 생성하지 않는다
         assertThat(info.chunks()).isGreaterThan(0);
     }
 

@@ -135,6 +135,49 @@ class MarkdownCorrectionServiceTest {
     }
 
     @Test
+    @DisplayName("splitBySections — 헤딩 없는 PDF도 [페이지: N] 마커를 경계로 페이지마다 나뉜다")
+    void splitBySections_splitsOnPageMarkerForHeadinglessPdf() {
+        // PdfToMarkdownConverter no longer emits "## N페이지", so the page marker is the only
+        // per-page boundary the correction step can split on.
+        String md = """
+                [페이지: 1]
+                첫 페이지 본문입니다.
+
+                [페이지: 2]
+                둘째 페이지 본문입니다.
+
+                [페이지: 3]
+                셋째 페이지 본문입니다.
+                """;
+
+        List<String> sections = service.splitBySections(md);
+
+        assertThat(sections).hasSize(3);
+        assertThat(sections.get(0)).startsWith("[페이지: 1]").contains("첫 페이지 본문");
+        assertThat(sections.get(1)).startsWith("[페이지: 2]").contains("둘째 페이지 본문");
+        assertThat(sections.get(2)).startsWith("[페이지: 3]").contains("셋째 페이지 본문");
+    }
+
+    @Test
+    @DisplayName("splitBySections — 펜스 안의 [페이지: N] 같은 줄은 경계로 취급하지 않는다")
+    void splitBySections_pageMarkerInsideFenceDoesNotSplit() {
+        String md = """
+                [페이지: 1]
+                로그 예시:
+
+                ```
+                [페이지: 2]
+                (펜스 안 — 진짜 페이지 마커가 아님)
+                ```
+                """;
+
+        List<String> sections = service.splitBySections(md);
+
+        assertThat(sections).hasSize(1); // the fenced [페이지: 2] must not start a new section
+        assertThat(countOccurrences(sections.get(0), "```")).isEqualTo(2);
+    }
+
+    @Test
     @DisplayName("splitBySections — 문서 끝까지 펜스가 닫히지 않으면 안전하게 닫아준다 (기형 입력 방어)")
     void closesUnclosedFenceAtEndOfDocument() {
         String md = "```\n코드 내용\n(닫는 펜스 없음)";

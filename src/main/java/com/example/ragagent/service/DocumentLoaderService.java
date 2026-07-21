@@ -336,9 +336,26 @@ public class DocumentLoaderService {
             if (!skipStructural) {
                 Matcher genericPageMarker = PAGE_MARKER.matcher(trimmed);
                 if (genericPageMarker.matches()) {
-                    currentPage = Integer.parseInt(genericPageMarker.group(1));
-                    if (current.isEmpty()) currentSectionPage = currentPage;
-                    continue; // metadata-only marker
+                    int page = Integer.parseInt(genericPageMarker.group(1));
+                    // [페이지: N] is a hard per-page/slide section boundary. PPTX/PDF no longer emit a
+                    // synthetic "## N페이지"/"## N번 슬라이드" heading, so this marker is the sole
+                    // boundary for title-less pages/slides. Flush the section that just ended; a real
+                    // title heading (PPTX) still follows on its own line and refines heading/section
+                    // without an extra empty section (the guard below is a no-op once current is empty).
+                    if (!current.isEmpty()) {
+                        Integer resolvedPage = resolveSectionPage(currentHeadingPage, currentSectionPage, pendingHeadingPage);
+                        sections.add(sectionDocument(current.toString().strip(), sectionNum, currentHeading,
+                                resolvedPage, currentChapterNo));
+                        current = new StringBuilder();
+                        sectionNum++;
+                        currentHeading = "";
+                        currentHeadingPage = null;
+                        pendingHeadingPage = null;
+                    }
+                    currentPage = page;
+                    currentSectionPage = page;
+                    currentHeadingPage = page; // a heading-less page/slide section still carries page_or_slide
+                    continue; // marker itself is metadata-only, never appended to section body
                 }
 
                 Matcher pageMarker = HEADING_PAGE_MARKER.matcher(trimmed);

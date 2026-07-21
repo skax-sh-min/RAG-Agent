@@ -36,7 +36,11 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Converts a PPTX to Markdown, one {@code [페이지: N]} + heading block per slide.
+ * Converts a PPTX to Markdown, one {@code [페이지: N]} block per slide. The {@code [페이지: N]}
+ * marker is itself the per-slide section boundary (both {@code DocumentLoaderService} and
+ * {@code MarkdownCorrectionService} split on it), so a title-less slide emits the marker alone with
+ * no synthetic heading. A slide WITH a real title still renders it as the {@code ##} (and optional
+ * {@code ###} subtitle) heading.
  *
  * The slide's title placeholder (TITLE/CENTERED_TITLE) becomes the primary {@code ##} heading
  * when present. Many real-world decks also carry a second, non-placeholder "title-like" text box
@@ -628,12 +632,14 @@ public class PptxToMarkdownConverter {
     }
 
     /**
-     * 슬라이드 하나를 [페이지: N] 마커 + 헤딩(들) + 이미지 마커 + 본문(목록/텍스트)으로 출력
-     * 버퍼에 추가한다. 헤딩도, 본문도, 이미지도 없는 슬라이드(완전 공백 구분 슬라이드 등)만
-     * 아무것도 추가하지 않고 건너뛴다 — 그런 슬라이드까지 폴백 헤딩("N번 슬라이드")만 붙여 청크로
-     * 만들면 내용 없는 청크가 임베딩/검색 인덱스에 그대로 남아 노이즈가 된다(PdfToMarkdownConverter의
-     * 빈 페이지 스킵과 동일한 이유). 슬라이드 번호(page_or_slide)는 스킵 여부와 무관하게 실제 슬라이드
-     * 순서를 그대로 유지한다.
+     * 슬라이드 하나를 [페이지: N] 마커 + (있으면) 헤딩(들) + 이미지 마커 + 본문(목록/텍스트)으로
+     * 출력 버퍼에 추가한다. [페이지: N] 마커 자체가 슬라이드 단위 섹션 경계라, 제목이 없는
+     * 슬라이드는 헤딩 없이 마커만 붙는다(예전의 "N번 슬라이드" 폴백 헤딩은 실제 구조가 아니라
+     * page_or_slide로 이미 관리되는 번호를 본문에 노이즈로 남길 뿐이라 제거됨). 헤딩도, 본문도,
+     * 이미지도 없는 슬라이드(완전 공백 구분 슬라이드 등)만 아무것도 추가하지 않고 건너뛴다 — 그런
+     * 슬라이드까지 마커만 붙여 청크로 만들면 내용 없는 청크가 임베딩/검색 인덱스에 그대로 남아
+     * 노이즈가 된다(PdfToMarkdownConverter의 빈 페이지 스킵과 동일한 이유). 슬라이드
+     * 번호(page_or_slide)는 스킵 여부와 무관하게 실제 슬라이드 순서를 그대로 유지한다.
      */
     private void appendSlide(StringBuilder sb, SlideExtract extract, int slideNum, List<String> images,
                               Map<String, Integer> headingFrequency) {
@@ -644,10 +650,13 @@ public class PptxToMarkdownConverter {
             return; // 헤딩·본문·이미지 모두 없음 — 의미 없는 헤딩 전용 청크를 만들지 않는다
         }
 
+        // [페이지: N] is itself the per-slide section boundary (DocumentLoaderService splits on it),
+        // so a title-less slide emits no synthetic "## N번 슬라이드" heading anymore — that heading
+        // carried no real structure (the slide number is already tracked as page_or_slide) and only
+        // showed up as noise in the stored/searched chunk text. Slides WITH a real title still keep
+        // it as the ## (and optional ### subtitle) heading.
         sb.append("[페이지: ").append(slideNum).append("]\n");
-        if (headings.isEmpty()) {
-            sb.append("## ").append(slideNum).append("번 슬라이드\n\n");
-        } else {
+        if (!headings.isEmpty()) {
             sb.append("## ").append(headings.get(0)).append("\n\n");
             if (headings.size() > 1) {
                 sb.append("### ").append(headings.get(1)).append("\n\n");
