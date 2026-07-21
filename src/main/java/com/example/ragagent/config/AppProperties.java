@@ -41,7 +41,9 @@ public record AppProperties(
         Integer searchQueryEmbedCacheTtlSeconds, // 쿼리 임베딩 캐시 TTL 초 (기본 600 = 10분)
         PptxShapeExtractionConfig pptxImage,    // PPTX 그리기 도구 도형 래스터라이즈/클러스터링 튜닝
         String mdCorrectionDefaultCodeLanguage, // MD 교정 시 LLM이 미펜스 코드를 감쌀 때 언어 판단이 어려우면 붙일 기본 언어 (java/bash/sql, 기본 java)
-        DocxShapeExtractionConfig docxImage     // DOCX 레거시 VML 도형 + 사진 합성 튜닝
+        DocxShapeExtractionConfig docxImage,    // DOCX 레거시 VML 도형 + 사진 합성 튜닝
+        Boolean pptxRemoveDuplicateSlides,      // PPTX 변환 시 완전 동일 슬라이드 + 목차형 슬라이드 제거 (기본 true) — PptxToMarkdownConverter
+        Boolean pptxDropDividerSlides           // PPTX 변환 시 본문·이미지 없이 '구분용 제목'만 있는 섹션 구분 슬라이드 제거 (기본 true, 문장형/키 메시지 제목은 유지) — PptxToMarkdownConverter
 ) {
     public record LlmConfig(
             List<ProviderConfig> providers,
@@ -331,6 +333,16 @@ public record AppProperties(
     /** Query embedding cache on/off. Defaults to enabled. */
     public boolean searchQueryEmbedCacheEnabledSafe() {
         return searchQueryEmbedCacheEnabled == null || searchQueryEmbedCacheEnabled;
+    }
+
+    /** PPTX duplicate/table-of-contents slide removal on/off. Defaults to enabled. */
+    public boolean pptxRemoveDuplicateSlidesSafe() {
+        return pptxRemoveDuplicateSlides == null || pptxRemoveDuplicateSlides;
+    }
+
+    /** PPTX section-divider (title-only, no body/image) slide removal on/off. Defaults to enabled. */
+    public boolean pptxDropDividerSlidesSafe() {
+        return pptxDropDividerSlides == null || pptxDropDividerSlides;
     }
 
     /** Query embedding cache max entries. Defaults to 500. */

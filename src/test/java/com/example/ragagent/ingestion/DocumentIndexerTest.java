@@ -149,7 +149,7 @@ class DocumentIndexerTest {
         // loadFromMarkdown()/loadPdfPagesForConversion() to delegate to a real DocumentLoaderService
         // where they need genuine [페이지:N]/heading parsing instead of the generic stubDocs echo.
         indexer = new DocumentIndexer(loaderService, correctionService, textToMarkdownService,
-                new PptxToMarkdownConverter(new PptxImageExtractor(props)),
+                new PptxToMarkdownConverter(new PptxImageExtractor(props), props),
                 new PdfToMarkdownConverter(new PdfImageExtractor()),
                 imageExtractorService, vectorStore, docRegistry, keywordRepo, chunkSplitter, keywordExtractor, props);
         indexer.init();

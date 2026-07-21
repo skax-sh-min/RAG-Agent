@@ -1,5 +1,6 @@
 package com.example.ragagent.service;
 
+import com.example.ragagent.config.AppProperties;
 import org.apache.poi.sl.usermodel.Placeholder;
 import org.apache.poi.xslf.usermodel.XMLSlideShow;
 import org.apache.poi.xslf.usermodel.XSLFChart;
@@ -17,6 +18,8 @@ import org.apache.poi.xslf.usermodel.XSLFTableRow;
 import org.apache.poi.xslf.usermodel.XSLFTextParagraph;
 import org.apache.poi.xslf.usermodel.XSLFTextRun;
 import org.apache.poi.xslf.usermodel.XSLFTextShape;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 import java.awt.geom.Rectangle2D;
@@ -143,10 +146,14 @@ public class PptxToMarkdownConverter {
      *  개수 기준({@link #BLOCK_BOLD_COUNT_THRESHOLD})만으로는 못 잡기 때문. */
     private static final double BLOCK_BOLD_RATIO_THRESHOLD = 0.5;
 
-    private final PptxImageExtractor imageExtractor;
+    private static final Logger log = LoggerFactory.getLogger(PptxToMarkdownConverter.class);
 
-    public PptxToMarkdownConverter(PptxImageExtractor imageExtractor) {
+    private final PptxImageExtractor imageExtractor;
+    private final AppProperties props;
+
+    public PptxToMarkdownConverter(PptxImageExtractor imageExtractor, AppProperties props) {
         this.imageExtractor = imageExtractor;
+        this.props = props;
     }
 
     /**
@@ -193,6 +200,19 @@ public class PptxToMarkdownConverter {
                 }
             }
 
+            // Duplicate/table-of-contents slide removal (§ app.pptx-remove-duplicate-slides, default on):
+            // read fresh per conversion so a /settings-style override applies on the next indexing.
+            boolean dedup = props != null && props.pptxRemoveDuplicateSlidesSafe();
+            // Section-divider (title-only, body-less, image-less) slide removal (§ app.pptx-drop-divider-slides).
+            boolean dropDividers = props != null && props.pptxDropDividerSlidesSafe();
+            // Every heading text across the deck (normalized for comparison) — the reference set the
+            // table-of-contents heuristic matches a slide's bullets against.
+            Set<String> allHeadingsNormalized = headingFrequency.keySet().stream()
+                    .map(this::normalizeForCompare)
+                    .filter(s -> !s.isBlank())
+                    .collect(java.util.stream.Collectors.toSet());
+            Set<String> seenFingerprints = new HashSet<>();
+
             // Pass 2: emit, resolving outer/inner heading order per slide from the global counts.
             for (int i = 0; i < slides.size(); i++) {
                 int slideNum = i + 1;
@@ -204,6 +224,14 @@ public class PptxToMarkdownConverter {
                         .map(PptxImageExtractor.ExtractedImage::path)
                         .filter(path -> !extract.consumedImagePaths().contains(path))
                         .toList();
+                boolean hasImages = !hoistedImages.isEmpty() || !extract.consumedImagePaths().isEmpty();
+                if (dedup && shouldDropSlide(extract, hasImages, seenFingerprints, allHeadingsNormalized, slideNum)) {
+                    continue; // dropped — skipped slide's number never shifts the following slides (slideNum = i+1)
+                }
+                if (dropDividers && isSectionDividerSlide(extract, hasImages)) {
+                    log.debug("[PPTX] {}번 슬라이드 제거 — 본문·이미지 없이 구분용 제목만 있는 섹션 구분 슬라이드", slideNum);
+                    continue;
+                }
                 appendSlide(sb, extract, slideNum, hoistedImages, headingFrequency);
             }
         }
@@ -670,6 +698,124 @@ public class PptxToMarkdownConverter {
         }
         sb.append(stripLeadingDuplicateBullet(body, headings));
         sb.append("\n");
+    }
+
+    // ── 중복/목차 슬라이드 제거 (app.pptx-remove-duplicate-slides) ──────────────────────
+    // 목차형 슬라이드로 판정하려면 본문 줄이 최소 이만큼 다른 슬라이드의 제목과 일치해야 한다.
+    private static final int TOC_MIN_MATCHED_HEADINGS = 3;
+    // 그리고 그 일치 줄이 본문 전체 줄의 이 비율 이상이어야 한다(둘 다 만족해야 목차로 봄).
+    private static final double TOC_MATCH_RATIO = 0.6;
+
+    /**
+     * 이미지가 없는 슬라이드에 한해, (1) 앞서 나온 슬라이드와 정규화 텍스트가 완전히 같으면(중복)
+     * 또는 (2) 본문이 다른 슬라이드 제목들의 목록에 가까우면(목차형) {@code true}. 이미지가 있는
+     * 슬라이드는 절대 제거하지 않는다 — 추출된 이미지가 고아가 되고, 텍스트가 같아도 사진이 다르면
+     * 진짜 중복이 아니기 때문. 지문은 유지/제거 여부와 무관하게 {@code seenFingerprints}에 등록되어
+     * 뒤따르는 동일 슬라이드가 (1)로 걸리게 한다.
+     */
+    private boolean shouldDropSlide(SlideExtract extract, boolean hasImages,
+                                    Set<String> seenFingerprints, Set<String> allHeadingsNormalized, int slideNum) {
+        if (hasImages) return false;
+        String fingerprint = slideFingerprint(extract);
+        if (!fingerprint.isBlank() && !seenFingerprints.add(fingerprint)) {
+            log.debug("[PPTX] {}번 슬라이드 제거 — 앞선 슬라이드와 내용이 완전히 동일(중복 슬라이드)", slideNum);
+            return true;
+        }
+        if (looksLikeTableOfContents(extract, allHeadingsNormalized)) {
+            log.debug("[PPTX] {}번 슬라이드 제거 — 본문이 다른 슬라이드 제목 목록(목차형 슬라이드)", slideNum);
+            return true;
+        }
+        return false;
+    }
+
+    /** 슬라이드의 제목 후보 + 본문을 합쳐 강조 마커·공백 차이를 무시한 비교용 지문으로 만든다. */
+    private String slideFingerprint(SlideExtract extract) {
+        StringBuilder sb = new StringBuilder();
+        for (String h : extract.headingCandidates()) sb.append(h).append('\n');
+        sb.append(extract.body());
+        return normalizeForCompare(sb.toString());
+    }
+
+    /** 강조 마커 제거 + 모든 공백을 공백 하나로 축약해 정규화 — 지문·목차 판정의 공통 비교 형식. */
+    private String normalizeForCompare(String s) {
+        return stripEmphasisMarkers(s).replaceAll("\\s+", " ").strip();
+    }
+
+    /**
+     * 본문 불릿 줄(선두 목록 마커 제거 후)이 {@code allHeadingsNormalized}(덱 전체의 다른 슬라이드
+     * 제목들)와 {@link #TOC_MIN_MATCHED_HEADINGS}개 이상 그리고 전체 줄의 {@link #TOC_MATCH_RATIO}
+     * 이상 일치하면 목차/agenda 슬라이드로 본다 — 섹션 제목을 나열한 항해용 슬라이드는 실제 내용이
+     * 각 섹션 슬라이드에 이미 있으므로 검색 인덱스에 남길 가치가 없다. 두 임계값(절대 개수 + 비율)을
+     * 모두 요구해 우연히 제목 몇 개를 언급하는 진짜 본문 슬라이드를 오탐하지 않도록 한다.
+     */
+    private boolean looksLikeTableOfContents(SlideExtract extract, Set<String> allHeadingsNormalized) {
+        if (allHeadingsNormalized.isEmpty()) return false;
+        List<String> lines = new ArrayList<>();
+        for (String raw : extract.body().split("\n", -1)) {
+            String t = raw.strip();
+            if (t.isEmpty()) continue;
+            if (t.startsWith("- ")) t = t.substring(2);
+            else if (t.startsWith("1. ")) t = t.substring(3);
+            lines.add(normalizeForCompare(t));
+        }
+        if (lines.size() < TOC_MIN_MATCHED_HEADINGS) return false;
+        long matched = lines.stream().filter(allHeadingsNormalized::contains).count();
+        return matched >= TOC_MIN_MATCHED_HEADINGS && matched >= Math.ceil(TOC_MATCH_RATIO * lines.size());
+    }
+
+    // ── 구분용 제목만 있는 섹션 구분 슬라이드 제거 (app.pptx-drop-divider-slides) ──────────
+    // "3장", "PART 2", "제1절", "STEP 3", "II.", "1)", "부록 A" 등 번호/라벨형 섹션 표지 패턴.
+    private static final java.util.regex.Pattern SECTION_LABEL = java.util.regex.Pattern.compile(
+            "^(?:제\\s*)?\\d+\\s*(?:장|절|부|편|과|강)"
+          + "|(?i)^(?:part|chapter|step|section|phase|unit|lesson)\\s*(?:\\d+|[ivxlcm]+)"
+          + "|^[IVXLC]+\\s*[.)]"
+          + "|^\\d+\\s*[.)]"
+          + "|(?i)^(?:부록|appendix)\\b");
+    // 제목이 이 단어(정규화 후) 자체이면 섹션 표지로 본다 — "요"로 끝나 문장 종결로 오인되기 쉬운
+    // "개요" 같은 것을 확실히 잡기 위한 명시적 목록.
+    private static final Set<String> DIVIDER_KEYWORDS = Set.of(
+            "목차", "차례", "개요", "서론", "본론", "결론", "요약", "정리", "부록",
+            "agenda", "overview", "summary", "contents", "index", "introduction", "conclusion", "appendix", "toc");
+    // 번호/라벨/키워드에 해당하지 않는 제목은 "짧은 명사구"일 때만 구분용으로 본다.
+    private static final int DIVIDER_MAX_WORDS = 3;
+    private static final int DIVIDER_MAX_CHARS = 12;
+    // 주어/목적어 조사가 붙어 있으면(예: "가치는", "만족을") 명사구가 아니라 문장/키 메시지로 보고 유지.
+    private static final java.util.regex.Pattern CLAUSE_PARTICLE =
+            java.util.regex.Pattern.compile("(?:은|는|이|가|을|를)(?:\\s|$)");
+    // 서술어 종결(문장) — 이런 제목은 키 메시지일 수 있어 제거하지 않는다.
+    private static final java.util.regex.Pattern SENTENCE_ENDING =
+            java.util.regex.Pattern.compile("(?:니다|습니다|합니다|입니다|됩니다|세요|해요|어요|아요|에요|예요|네요|다|자)$");
+
+    /**
+     * 본문·이미지 없이 제목(들)만 있는 슬라이드 중, 그 제목이 전부 '구분용 제목'(번호/라벨형이거나
+     * 짧은 명사구)일 때만 {@code true} — 섹션 사이 표지/구분 슬라이드로, 검색에 줄 내용이 없다.
+     * 문장형(키 메시지) 제목("… 합니다", "우리는 성장한다")이 하나라도 있으면 유지한다(오탐 방지).
+     * 이미지가 있으면 여기서 다루지 않는다(이미지 있는 슬라이드는 제거 대상 아님).
+     */
+    private boolean isSectionDividerSlide(SlideExtract extract, boolean hasImages) {
+        if (hasImages) return false;
+        if (!extract.body().isBlank()) return false;          // 본문이 있으면 제목만 있는 게 아님
+        if (extract.headingCandidates().isEmpty()) return false; // 제목이 없으면 대상 아님(마커만 있는 슬라이드)
+        for (String heading : extract.headingCandidates()) {
+            if (!looksLikeSectionDivider(heading)) return false; // 하나라도 구분용이 아니면(키 메시지 등) 유지
+        }
+        return true;
+    }
+
+    /** 제목 텍스트가 섹션 구분용 라벨/짧은 명사구인지 — 문장형(서술어 종결·조사 포함)은 제외. */
+    private boolean looksLikeSectionDivider(String heading) {
+        String t = stripEmphasisMarkers(heading).strip();
+        if (t.isEmpty()) return false;
+        if (SECTION_LABEL.matcher(t).find()) return true;
+        String normalized = t.toLowerCase(java.util.Locale.ROOT);
+        if (DIVIDER_KEYWORDS.contains(normalized)) return true;
+        // 문장부호/서술어 종결/조사가 있으면 문장(키 메시지)로 보고 유지
+        if (t.endsWith(".") || t.endsWith("!") || t.endsWith("?") || t.endsWith("…")) return false;
+        if (CLAUSE_PARTICLE.matcher(t).find()) return false;
+        if (SENTENCE_ENDING.matcher(t).find()) return false;
+        // 남은 것은 조사·서술어 없는 명사구 — 짧을 때만 구분용으로 본다
+        int words = t.split("\\s+").length;
+        return words <= DIVIDER_MAX_WORDS && t.length() <= DIVIDER_MAX_CHARS;
     }
 
     /**
