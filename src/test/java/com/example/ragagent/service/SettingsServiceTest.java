@@ -8,6 +8,7 @@ import com.example.ragagent.audit.AuditLogger;
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.config.SettingsKeys;
 import com.example.ragagent.llm.CircuitBreaker;
+import com.example.ragagent.llm.ProviderToggle;
 import com.example.ragagent.model.SettingsView;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -47,8 +48,25 @@ class SettingsServiceTest {
     private SettingsOverrideRepositoryStub repo;
     private AuditLogger audit;
     private CircuitBreaker circuitBreaker;
+    private ProviderToggle toggle;
     private AppProperties props;
     private SettingsService service;
+
+    /** AppProperties with LLM providers (base() has none) — for the enable/disable tests. */
+    private static AppProperties propsWithProviders(String... names) {
+        java.util.List<AppProperties.ProviderConfig> pcs = new java.util.ArrayList<>();
+        for (String n : names) {
+            pcs.add(new AppProperties.ProviderConfig(
+                    n, "http://x/v1", "key", "model", "BOTH", "LOCAL", 1, true, null));
+        }
+        AppProperties.LlmConfig llm = new AppProperties.LlmConfig(
+                pcs, 2, 10, 180, "COST_FIRST", 0.6, 3, 20, 0.0, 0.1, 6000, false);
+        return new AppProperties(
+                "./data", 2, 800, 100, 100, 7, 0.0, true, 5, false,
+                true, false, 3, null,
+                llm, null, null, null, null, null, null, null, null, null, null, 2,
+                null, 1.0, 60, null, null, null, null, null, null);
+    }
 
     /** Lightweight in-memory stand-in for the SQLite repository. */
     private static final class SettingsOverrideRepositoryStub
@@ -66,8 +84,9 @@ class SettingsServiceTest {
         audit = mock(AuditLogger.class);
         circuitBreaker = mock(CircuitBreaker.class);
         when(circuitBreaker.getBlockedProviders()).thenReturn(Map.<String, Instant>of());
+        toggle = new ProviderToggle();
         props = base();
-        service = new SettingsService(repo, props, audit, circuitBreaker);
+        service = new SettingsService(repo, props, audit, circuitBreaker, toggle);
         service.init(); // loads (empty) overrides + binds the static override source to this service
     }
 
@@ -182,7 +201,7 @@ class SettingsServiceTest {
         SettingsOverrideRepositoryStub seeded = new SettingsOverrideRepositoryStub();
         seeded.store.put(SettingsKeys.SEARCH_RRF_K, "80");  // application.properties default = 60 → diverges → WARN
         seeded.store.put(SettingsKeys.SEARCH_TOP_K, "7");   // default = 7 → identical → must NOT warn
-        SettingsService fresh = new SettingsService(seeded, base(), audit, circuitBreaker);
+        SettingsService fresh = new SettingsService(seeded, base(), audit, circuitBreaker, new ProviderToggle());
 
         Logger settingsLogger = (Logger) LoggerFactory.getLogger(SettingsService.class);
         ListAppender<ILoggingEvent> appender = new ListAppender<>();
@@ -204,6 +223,44 @@ class SettingsServiceTest {
                 .contains("80")                             // effective (override) value
                 .contains("60")                             // env/properties value
                 .doesNotContain(SettingsKeys.SEARCH_TOP_K); // identical override is not flagged
+    }
+
+    @Test
+    @DisplayName("setProviderEnabled — 비활성화/재활성화가 ProviderToggle·row·감사로그에 반영된다")
+    void setProviderEnabled_disablesThenEnables() {
+        ProviderToggle tg = new ProviderToggle();
+        SettingsService svc = new SettingsService(repo, propsWithProviders("a", "b"), audit, circuitBreaker, tg);
+
+        List<SettingsView.ProviderRow> afterDisable = svc.setProviderEnabled("a", false);
+        assertThat(tg.isDisabled("a")).isTrue();
+        assertThat(afterDisable.stream().filter(r -> r.name().equals("a")).findFirst().orElseThrow().enabled())
+                .isFalse();
+        assertThat(afterDisable.stream().filter(r -> r.name().equals("b")).findFirst().orElseThrow().enabled())
+                .isTrue();
+        verify(audit).log(eq("settings.provider.toggle"), eq("a"), anyMap());
+
+        svc.setProviderEnabled("a", true);
+        assertThat(tg.isEnabled("a")).isTrue();
+    }
+
+    @Test
+    @DisplayName("setProviderEnabled — 알 수 없는 프로바이더 이름은 거부")
+    void setProviderEnabled_unknownName_rejected() {
+        SettingsService svc = new SettingsService(repo, propsWithProviders("a"), audit, circuitBreaker, new ProviderToggle());
+        assertThatThrownBy(() -> svc.setProviderEnabled("nope", false))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    @DisplayName("setProviderEnabled — 마지막으로 활성화된 프로바이더는 비활성화할 수 없다")
+    void setProviderEnabled_lastEnabled_rejected() {
+        ProviderToggle tg = new ProviderToggle();
+        SettingsService svc = new SettingsService(repo, propsWithProviders("a", "b"), audit, circuitBreaker, tg);
+        svc.setProviderEnabled("a", false);   // one left enabled (b)
+
+        assertThatThrownBy(() -> svc.setProviderEnabled("b", false))  // would disable the last one
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThat(tg.isEnabled("b")).isTrue();                       // still enabled — guard held
     }
 
     @Test

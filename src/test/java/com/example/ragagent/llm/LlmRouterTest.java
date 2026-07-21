@@ -64,6 +64,26 @@ class LlmRouterTest {
     }
 
     @Test
+    @DisplayName("ProviderToggle: 비활성화된 프로바이더는 findFirst에서 제외되고 다음 우선순위로 넘어간다")
+    void disabledProviderIsSkipped() {
+        var local  = p("lm",     ProviderRole.LOCAL,  TaskType.TEXT, 1);
+        var normal = p("openai", ProviderRole.NORMAL, TaskType.TEXT, 2);
+        var toggle = new ProviderToggle();
+        var r = new LlmRouter(List.of(local, normal), null, breaker, RoutingMode.COST_FIRST, 0.6, 180,
+                Map.of(), 3, 20, toggle);
+
+        assertThat(r.findProviderName(TaskType.TEXT, RoutingMode.COST_FIRST)).isEqualTo("lm");
+        assertThat(r.hasLocalProvider()).isTrue();
+
+        toggle.setEnabled("lm", false);
+        assertThat(r.findProviderName(TaskType.TEXT, RoutingMode.COST_FIRST)).isEqualTo("openai"); // fell through
+        assertThat(r.hasLocalProvider()).isFalse();  // the only LOCAL provider is disabled
+
+        toggle.setEnabled("lm", true);
+        assertThat(r.findProviderName(TaskType.TEXT, RoutingMode.COST_FIRST)).isEqualTo("lm"); // re-enabled
+    }
+
+    @Test
     @DisplayName("QUALITY_FIRST: PREMIUM > NORMAL > LOCAL 순으로 선택")
     void qualityFirstPrefersPremium() {
         var local   = p("lm",     ProviderRole.LOCAL,   TaskType.TEXT, 1);

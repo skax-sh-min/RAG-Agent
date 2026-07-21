@@ -4,6 +4,7 @@ import com.example.ragagent.audit.AuditLogger;
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.config.SettingsKeys;
 import com.example.ragagent.llm.CircuitBreaker;
+import com.example.ragagent.llm.ProviderToggle;
 import com.example.ragagent.model.SettingsView;
 import com.example.ragagent.model.SettingsView.ProviderRow;
 import com.example.ragagent.model.SettingsView.SettingGroup;
@@ -92,16 +93,19 @@ public class SettingsService implements AppProperties.OverrideSource {
     private final AppProperties props;
     private final AuditLogger audit;
     private final CircuitBreaker circuitBreaker;
+    private final ProviderToggle providerToggle;
 
     /** Persisted overrides, cached so the {@link #get} hot path never hits SQLite. */
     private final Map<String, String> cache = new ConcurrentHashMap<>();
 
     public SettingsService(SettingsOverrideRepository repo, AppProperties props,
-                           AuditLogger audit, CircuitBreaker circuitBreaker) {
+                           AuditLogger audit, CircuitBreaker circuitBreaker,
+                           ProviderToggle providerToggle) {
         this.repo = repo;
         this.props = props;
         this.audit = audit;
         this.circuitBreaker = circuitBreaker;
+        this.providerToggle = providerToggle;
     }
 
     @PostConstruct
@@ -232,20 +236,7 @@ public class SettingsService implements AppProperties.OverrideSource {
 
     /** Full {@code /settings} model with overrides already applied. */
     public SettingsView buildView() {
-        Map<String, Instant> blocked = circuitBreaker.getBlockedProviders();
-        List<ProviderRow> providers = props.llmSafe().providers().stream()
-                .map(cfg -> {
-                    Instant until = blocked.get(cfg.name());
-                    return new ProviderRow(
-                            cfg.name(),
-                            cfg.role() != null ? cfg.role().toUpperCase() : "NORMAL",
-                            cfg.priority(),
-                            cfg.model(),
-                            cfg.apiKey() != null && !cfg.apiKey().isBlank(),
-                            until != null,
-                            until != null ? until.toString() : null);
-                })
-                .toList();
+        List<ProviderRow> providers = providerRows();
 
         List<SettingGroup> groups = List.of(
                 new SettingGroup("search_hot", "settings.group.search_hot", searchHotItems()),
@@ -266,6 +257,62 @@ public class SettingsService implements AppProperties.OverrideSource {
                 dim != null ? dim.toString() : "auto",
                 props.vectorStoreSafe().type(),
                 groups);
+    }
+
+    /**
+     * Current provider rows (config + circuit-breaker block + operator enable/disable state). Shared by
+     * {@link #buildView()} and the toggle endpoint's HTMX fragment so both render the same table.
+     */
+    public List<ProviderRow> providerRows() {
+        Map<String, Instant> blocked = circuitBreaker.getBlockedProviders();
+        return props.llmSafe().providers().stream()
+                .map(cfg -> {
+                    Instant until = blocked.get(cfg.name());
+                    return new ProviderRow(
+                            cfg.name(),
+                            cfg.role() != null ? cfg.role().toUpperCase() : "NORMAL",
+                            cfg.priority(),
+                            cfg.model(),
+                            cfg.apiKey() != null && !cfg.apiKey().isBlank(),
+                            until != null,
+                            until != null ? until.toString() : null,
+                            providerToggle.isEnabled(cfg.name()));
+                })
+                .toList();
+    }
+
+    /**
+     * Enables/disables a registered provider at runtime (§A, in-memory — resets on restart). Rejects an
+     * unknown provider name, and refuses to disable the last still-enabled provider (which would leave
+     * routing with nothing to select). Audited. Returns the refreshed rows for the HTMX table swap.
+     *
+     * <p>Keyed by name: a load-balanced pair sharing a name toggles together (see {@link ProviderToggle}).
+     */
+    public List<ProviderRow> setProviderEnabled(String name, boolean enabled) {
+        List<AppProperties.ProviderConfig> providers = props.llmSafe().providers();
+        boolean known = providers.stream().anyMatch(c -> name.equals(c.name()));
+        if (!known) {
+            throw new IllegalArgumentException("알 수 없는 프로바이더입니다: " + name);
+        }
+        if (!enabled) {
+            long remaining = providers.stream()
+                    .map(AppProperties.ProviderConfig::name)
+                    .distinct()
+                    .filter(n -> !n.equals(name) && providerToggle.isEnabled(n))
+                    .count();
+            if (remaining == 0) {
+                throw new IllegalArgumentException(
+                        "마지막으로 활성화된 프로바이더는 비활성화할 수 없습니다: " + name);
+            }
+        }
+        boolean was = providerToggle.isEnabled(name);
+        providerToggle.setEnabled(name, enabled);
+        if (was != enabled) {
+            audit.log("settings.provider.toggle", name, Map.of("enabled", Boolean.toString(enabled)));
+            log.info("[SETTINGS] provider [{}] {} at runtime (in-memory — resets to config on restart)",
+                    name, enabled ? "ENABLED" : "DISABLED");
+        }
+        return providerRows();
     }
 
     /** One editable item for {@code key} — used by both the page and the post-update HTMX fragment. */
