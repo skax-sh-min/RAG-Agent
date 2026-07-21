@@ -78,6 +78,43 @@ public class MarkdownCorrectionService {
           + "|^(?:fun|func|fn)\\s+\\w+\\s*\\(.*$"
           + "|^\\w+\\s*\\(\\)\\s*\\{\\s*$");
     /**
+     * Strong, Java/JVM-exclusive signals — none of these appear in a plain SQL script, so a match is
+     * a reliable "this is Java, not SQL". Used both to positively identify untagged Java and to fix
+     * the frequent "Java misdetected as SQL" case (the LLM or the old greedy {@code \bdelete\b}-style
+     * SQL rule tagging a Java block whose {@code .delete(...)}/{@code .select(...)} method calls only
+     * looked SQL-ish).
+     */
+    private static final Pattern JAVA_CODE_SIGNAL = Pattern.compile(
+            "(?m)^\\s*package\\s+[\\w.]+;"
+          + "|(?m)^\\s*import\\s+(?:java|javax|jakarta|org|com)\\."
+          + "|(?m)^\\s*@[A-Z]\\w+"
+          + "|\\b(?:public|private|protected)\\s+(?:static\\s+|final\\s+|abstract\\s+)*(?:class|interface|enum|record)\\b"
+          + "|\\bpublic\\s+static\\s+void\\s+main\\b"
+          + "|\\bSystem\\.(?:out|err)\\."
+          + "|\\.print(?:ln|f)?\\s*\\("
+          + "|\\b(?:void|boolean|int|long|double|float|char|byte|short)\\s+\\w+\\s*\\("
+          + "|\\b(?:String|Integer|Long|Boolean|Double|Object)\\s+\\w+\\s*[=;]"
+          + "|\\bnew\\s+[A-Z]\\w*\\s*[(<]"
+          + "|\\b(?:implements|extends|throws)\\s+[A-Z]\\w*"
+          + "|\\bcatch\\s*\\(|\\btry\\s*\\{"
+          + "|\\b(?:List|Map|Set|Optional|ArrayList|HashMap)\\s*<");
+    /**
+     * A real SQL statement — SELECT/UPDATE anchored at line start (so a Java {@code x.select(...)} /
+     * {@code x.update(...)} method call is NOT matched), and distinctive multi-word forms
+     * ({@code INSERT INTO}, {@code DELETE FROM}, {@code CREATE TABLE}, …) that Java identifiers don't
+     * form. Replaces the old bare {@code \b(select|insert|update|delete)\b} that matched Java method calls.
+     */
+    private static final Pattern SQL_STATEMENT = Pattern.compile(
+            "(?ism)^\\s*select\\b.+?\\bfrom\\b"
+          + "|\\binsert\\s+into\\b"
+          + "|(?ism)^\\s*update\\s+\\S+\\s+set\\b"
+          + "|\\bdelete\\s+from\\b"
+          + "|\\bcreate\\s+(?:table|index|view|sequence|or\\s+replace)\\b"
+          + "|\\balter\\s+table\\b"
+          + "|\\bdrop\\s+(?:table|index|view)\\b"
+          + "|\\bmerge\\s+into\\b"
+          + "|\\btruncate\\s+table\\b");
+    /**
      * Non-blank overlap lines carried across an UNNATURAL section boundary (see
      * {@link #isUnnaturalBoundary}). The previous section's tail (head overlap) and/or the next
      * section's head (tail overlap) are prepended/appended around a {@link #SECTION_START_BOUNDARY}/
@@ -222,10 +259,16 @@ public class MarkdownCorrectionService {
         }
 
         String result = String.join("\n\n", corrected);
+        // FIX: a ```lang-tagged CLOSING fence → bare ``` — must run BEFORE normalizeCodeBlocks so its
+        // fence regex sees well-formed pairs.
+        result = fixClosingFences(result);
         result = normalizeCodeBlocks(result, false);
         if (addHeadingNumbers) {
             result = secondPassHeadingAndCodePolish(result);
         }
+        // FIX: deterministic final cleanup — blank lines around code blocks/tables, drop leftover
+        // [DOCUMENT] markers and content-less '-' lines (all fence-aware). Runs last.
+        result = postProcessMarkdown(result);
         log.info("[MD_CORRECT] 완료: docId={}, {}ms", docId, System.currentTimeMillis() - t0);
 
         if (correctedOutputPath != null) {
@@ -607,6 +650,7 @@ public class MarkdownCorrectionService {
     /** Strips any pre-existing occurrence of a prompt-framing marker from raw input text, in case a document already happens to contain one of these tokens verbatim. */
     private static String stripReservedMarkers(String text) {
         return text.replace("[/DOCUMENT]", "")
+                .replace("[DOCUMENT]", "")
                 .replace(SECTION_START_BOUNDARY, "")
                 .replace(SECTION_END_BOUNDARY, "");
     }
@@ -747,11 +791,19 @@ public class MarkdownCorrectionService {
                 continue;
             }
 
+            // FIX: inside a table row a raw newline splits the cell across two physical lines and
+            // shatters the whole table — append the description with a <br> (valid inside a cell)
+            // instead of a newline so the row stays on one line.
+            boolean inTableRow = looksLikeTableRow(currentLine(input, m.start(), m.end()));
             String decorated;
             if (imageMarker) {
-                decorated = full + "\n[이미지 설명: " + desc + "]";
+                decorated = inTableRow
+                        ? full + "<br>[이미지 설명: " + desc + "]"
+                        : full + "\n[이미지 설명: " + desc + "]";
             } else {
-                decorated = full + "\n> 이미지 설명: " + desc;
+                decorated = inTableRow
+                        ? full + "<br>이미지 설명: " + desc
+                        : full + "\n> 이미지 설명: " + desc;
             }
             m.appendReplacement(out, Matcher.quoteReplacement(decorated));
         }
@@ -842,15 +894,159 @@ public class MarkdownCorrectionService {
         while (m.find()) {
             String lang = m.group(1) == null ? "" : m.group(1).trim();
             String code = m.group(2) == null ? "" : m.group(2);
-            if (inferLanguage && lang.isBlank()) {
-                lang = inferCodeLanguage(code);
-            }
+            lang = resolveCodeLanguage(lang, code, inferLanguage);
             String normalized = normalizeCodeContent(code);
             String replacement = "```" + lang + "\n" + normalized + "\n```";
             m.appendReplacement(out, Matcher.quoteReplacement(replacement));
         }
         m.appendTail(out);
         return out.toString();
+    }
+
+    /**
+     * FIX: a CLOSING code fence must be a bare {@code ```} — the LLM sometimes echoes the language
+     * tag on the closer too (opening {@code ```sql} … closing {@code ```sql}), which breaks fence
+     * pairing and rendering. Toggles fence state line by line and strips any info string from every
+     * closing fence (openers keep theirs). Fence content is otherwise untouched. Run BEFORE
+     * {@link #normalizeCodeBlocks} so its regex sees well-formed pairs. Package-private for testing.
+     */
+    static String fixClosingFences(String md) {
+        if (md == null || md.isEmpty()) return md;
+        String[] lines = md.split("\n", -1);
+        boolean inFence = false;
+        for (int i = 0; i < lines.length; i++) {
+            String t = lines[i].stripLeading();
+            if (t.startsWith("```")) {
+                if (inFence) {
+                    String indent = lines[i].substring(0, lines[i].length() - t.length());
+                    lines[i] = indent + "```";
+                }
+                inFence = !inFence;
+            }
+        }
+        return String.join("\n", lines);
+    }
+
+    /**
+     * Deterministic Markdown cleanup applied once to the fully-corrected document, fixing recurring
+     * LLM formatting slips the per-section correction leaves behind. All rules are fence-aware — code
+     * block <i>contents</i> are never modified:
+     * <ul>
+     *   <li>drops leftover {@code [DOCUMENT]}/{@code [/DOCUMENT]} prompt-framing markers;</li>
+     *   <li>drops content-less bullet lines (a lone {@code -});</li>
+     *   <li>guarantees a blank line before and after every fenced code block and every GFM table, so
+     *       a table/code block touching adjacent text still renders;</li>
+     *   <li>collapses runs of blank lines (outside fences) to a single blank line.</li>
+     * </ul>
+     * Package-private for unit testing.
+     */
+    static String postProcessMarkdown(String md) {
+        if (md == null || md.isEmpty()) return md;
+
+        // Pass A — fence-aware line removal (leftover [DOCUMENT] markers, content-less '-' lines).
+        List<String> lines = new ArrayList<>();
+        boolean inFence = false;
+        for (String raw : md.split("\n", -1)) {
+            if (raw.stripLeading().startsWith("```")) { lines.add(raw); inFence = !inFence; continue; }
+            if (inFence) { lines.add(raw); continue; }
+
+            String line = raw;
+            if (line.contains("[DOCUMENT]") || line.contains("[/DOCUMENT]")) {
+                line = line.replace("[/DOCUMENT]", "").replace("[DOCUMENT]", "");
+                if (line.strip().isEmpty()) continue; // marker-only line
+            }
+            if (line.strip().equals("-")) continue;   // content-less bullet
+            lines.add(line);
+        }
+
+        boolean[] inTable = markTableRows(lines);
+
+        // Pass B — blank lines around fences/tables + blank collapsing (fence-aware).
+        List<String> out = new ArrayList<>();
+        inFence = false;
+        for (int i = 0; i < lines.size(); i++) {
+            String line = lines.get(i);
+            boolean fence = line.stripLeading().startsWith("```");
+            boolean opening = fence && !inFence;
+            boolean closing = fence && inFence;
+            boolean tableStart = !inFence && inTable[i] && (i == 0 || !inTable[i - 1]);
+            boolean tableEnd   = !inFence && inTable[i] && (i == lines.size() - 1 || !inTable[i + 1]);
+
+            if (!inFence && line.isBlank()) {
+                if (!out.isEmpty() && !out.get(out.size() - 1).isBlank()) out.add("");
+                continue;
+            }
+            if ((opening || tableStart) && !out.isEmpty() && !out.get(out.size() - 1).isBlank()) {
+                out.add("");
+            }
+            out.add(line);
+            if (fence) inFence = !inFence;
+            if ((closing || tableEnd) && i + 1 < lines.size() && !lines.get(i + 1).isBlank()) {
+                out.add("");
+            }
+        }
+        while (!out.isEmpty() && out.get(out.size() - 1).isBlank()) out.remove(out.size() - 1);
+        return String.join("\n", out);
+    }
+
+    /** Marks the indices in {@code lines} that belong to a GFM table (a delimiter row plus the
+     *  contiguous pipe rows around it), skipping fenced code. */
+    private static boolean[] markTableRows(List<String> lines) {
+        boolean[] inTable = new boolean[lines.size()];
+        boolean inFence = false;
+        for (int i = 0; i < lines.size(); i++) {
+            if (lines.get(i).stripLeading().startsWith("```")) { inFence = !inFence; continue; }
+            if (inFence || !isTableDelimiterRow(lines.get(i))) continue;
+            int start = i;
+            if (i - 1 >= 0 && !inTable[i - 1] && isPipeRow(lines.get(i - 1))
+                    && !lines.get(i - 1).stripLeading().startsWith("```")) {
+                start = i - 1; // the header row directly above the delimiter
+            }
+            int end = i;
+            for (int j = i + 1; j < lines.size(); j++) {
+                if (lines.get(j).stripLeading().startsWith("```")
+                        || lines.get(j).isBlank() || !isPipeRow(lines.get(j))) break;
+                end = j;
+            }
+            for (int k = start; k <= end; k++) inTable[k] = true;
+        }
+        return inTable;
+    }
+
+    private static boolean isPipeRow(String line) {
+        return line.indexOf('|') >= 0;
+    }
+
+    /** A GFM table delimiter row: only {@code | - :} and spaces, with at least one '-' and one '|'
+     *  (so a thematic break {@code ---} is not mistaken for one). */
+    private static boolean isTableDelimiterRow(String line) {
+        String s = line.strip();
+        if (s.indexOf('|') < 0 || s.indexOf('-') < 0) return false;
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (c != '|' && c != '-' && c != ':' && c != ' ') return false;
+        }
+        return true;
+    }
+
+    /** The full physical line of {@code text} spanning [{@code from}, {@code to}). */
+    private static String currentLine(String text, int from, int to) {
+        int start = text.lastIndexOf('\n', from) + 1;
+        int end = text.indexOf('\n', to);
+        if (end < 0) end = text.length();
+        return text.substring(start, end);
+    }
+
+    /** Heuristic: {@code line} is a GFM table row (leading pipe, or 2+ pipes) — an image description
+     *  appended here must use {@code <br>}, not a newline, or it splits the cell and breaks the table.
+     *  Package-private for unit testing. */
+    static boolean looksLikeTableRow(String line) {
+        String s = line.strip();
+        if (s.indexOf('|') < 0) return false;
+        if (s.startsWith("|")) return true;
+        int pipes = 0;
+        for (int i = 0; i < s.length(); i++) if (s.charAt(i) == '|') pipes++;
+        return pipes >= 2;
     }
 
     private String addHierarchicalHeadingNumbers(String md) {
@@ -903,7 +1099,27 @@ public class MarkdownCorrectionService {
         return sb.toString();
     }
 
-    private String inferCodeLanguage(String code) {
+    /**
+     * Resolves the language tag for a fenced block: (1) deterministically fixes the frequent
+     * "Java misdetected as SQL" case — a {@code sql} tag on code that carries a strong Java signal
+     * ({@link #JAVA_CODE_SIGNAL}) and holds no real SQL statement ({@link #SQL_STATEMENT}) is
+     * rewritten to {@code java}; (2) otherwise keeps an existing tag; (3) infers a tag for an
+     * untagged block when {@code inferWhenBlank}. Runs in both normalize passes, so the sql→java fix
+     * applies even when heading-number inference is off. Package-private for unit testing.
+     */
+    String resolveCodeLanguage(String existingLang, String code, boolean inferWhenBlank) {
+        String lang = existingLang == null ? "" : existingLang.trim();
+        if (lang.equalsIgnoreCase("sql") && looksLikeJava(code) && !looksLikeSql(code)) {
+            return "java";
+        }
+        if (lang.isBlank() && inferWhenBlank) {
+            return inferCodeLanguage(code);
+        }
+        return lang;
+    }
+
+    /** Package-private for unit testing. */
+    String inferCodeLanguage(String code) {
         if (code == null || code.isBlank()) return "";
         String trimmed = code.trim();
         String lower = trimmed.toLowerCase();
@@ -911,15 +1127,29 @@ public class MarkdownCorrectionService {
         if (looksLikeJson(trimmed)) return "json";
         if (lower.startsWith("<?xml") || (lower.contains("<") && lower.contains("</"))) return "xml";
         if (lower.contains("<html") || lower.contains("</html>")) return "html";
+        // Java is checked before yaml/sql: its signals are JVM-exclusive, so this can't steal a real
+        // yaml/sql block, but it does stop a Java method call (.select/.delete/…) from falling through
+        // to the SQL rule below (the reported "Java misdetected as SQL" bug).
+        if (looksLikeJava(trimmed)) return "java";
         if (lower.startsWith("---") || lower.matches("(?s).*^\\s*[a-zA-Z0-9_.-]+:\\s+.+$.*")) return "yaml";
-        if (lower.contains("public class") || lower.contains("import java.") || lower.contains("system.out.println")) return "java";
-        if (lower.matches("(?s).*\\b(select|insert|update|delete|create table|alter table)\\b.*")) return "sql";
+        if (looksLikeSql(trimmed)) return "sql";
         if (lower.startsWith("#!/bin/sh")) return "sh";
         if (lower.startsWith("#!/bin/bash") || lower.startsWith("#!/usr/bin/env bash")
                 || lower.contains(" apt-get ") || lower.contains(" curl ") || lower.contains(" grep ")) return "bash";
         if (lower.matches("(?s).*\\b(def|class|import|from)\\b.*") && lower.contains(":")) return "python";
         if (lower.matches("(?s).*\\b(function|const|let|var|console\\.log|=>)\\b.*")) return "javascript";
         return "";
+    }
+
+    /** True when {@code code} carries a strong, JVM-exclusive Java signal ({@link #JAVA_CODE_SIGNAL}). */
+    private static boolean looksLikeJava(String code) {
+        return code != null && JAVA_CODE_SIGNAL.matcher(code).find();
+    }
+
+    /** True when {@code code} contains a real SQL statement ({@link #SQL_STATEMENT}) — not merely a
+     *  word like "delete"/"select" that a Java method call would also contain. */
+    private static boolean looksLikeSql(String code) {
+        return code != null && SQL_STATEMENT.matcher(code).find();
     }
 
     private boolean looksLikeJson(String code) {

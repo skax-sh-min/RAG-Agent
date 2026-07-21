@@ -541,4 +541,113 @@ class MarkdownCorrectionServiceTest {
         }
         return count;
     }
+
+    // ---------------------------------------------------------------------------------------------
+    // Deterministic post-processing (fixClosingFences / postProcessMarkdown / looksLikeTableRow)
+    // ---------------------------------------------------------------------------------------------
+
+    @Test
+    @DisplayName("fixClosingFences — 언어 태그가 붙은 닫는 펜스(```sql)는 순수 ``` 로 교정, 여는 펜스는 유지")
+    void fixClosingFences_stripsLangFromCloser() {
+        String md = "```sql\nSELECT 1;\n```sql\n";
+        String fixed = MarkdownCorrectionService.fixClosingFences(md);
+        assertThat(fixed).isEqualTo("```sql\nSELECT 1;\n```\n");
+    }
+
+    @Test
+    @DisplayName("postProcessMarkdown — 남아있는 [DOCUMENT]/[/DOCUMENT] 마커 줄 제거")
+    void postProcess_dropsDocumentMarkers() {
+        String md = "[DOCUMENT]\n# 제목\n본문\n[/DOCUMENT]";
+        String out = MarkdownCorrectionService.postProcessMarkdown(md);
+        assertThat(out).doesNotContain("[DOCUMENT]").doesNotContain("[/DOCUMENT]");
+        assertThat(out).contains("# 제목").contains("본문");
+    }
+
+    @Test
+    @DisplayName("postProcessMarkdown — 내용 없는 '-' 줄만 제거하고 '---'(수평선)·'- 항목'·표 구분줄은 보존")
+    void postProcess_dropsContentlessDashOnly() {
+        String md = "본문\n-\n- 실제 항목\n---\n";
+        String out = MarkdownCorrectionService.postProcessMarkdown(md);
+        String[] lines = out.split("\n", -1);
+        assertThat(List.of(lines)).doesNotContain("-");      // lone dash gone
+        assertThat(out).contains("- 실제 항목");             // real bullet kept
+        assertThat(out).contains("---");                     // thematic break kept
+    }
+
+    @Test
+    @DisplayName("postProcessMarkdown — 코드 블록 앞뒤에 빈 줄을 보장한다")
+    void postProcess_blankLinesAroundCodeBlock() {
+        String md = "설명입니다.\n```java\nint x = 1;\n```\n다음 문단.";
+        String out = MarkdownCorrectionService.postProcessMarkdown(md);
+        assertThat(out).isEqualTo("설명입니다.\n\n```java\nint x = 1;\n```\n\n다음 문단.");
+    }
+
+    @Test
+    @DisplayName("postProcessMarkdown — 표 앞뒤에 빈 줄을 보장한다")
+    void postProcess_blankLinesAroundTable() {
+        String md = "앞 문장\n| 항목 | 값 |\n|------|-----|\n| a | b |\n뒤 문장";
+        String out = MarkdownCorrectionService.postProcessMarkdown(md);
+        assertThat(out).isEqualTo(
+                "앞 문장\n\n| 항목 | 값 |\n|------|-----|\n| a | b |\n\n뒤 문장");
+    }
+
+    @Test
+    @DisplayName("postProcessMarkdown — 펜스 안의 '-' 한 줄/빈 줄은 코드 내용이므로 건드리지 않는다")
+    void postProcess_fenceContentUntouched() {
+        String md = "```\n-\n\n-\n```";
+        String out = MarkdownCorrectionService.postProcessMarkdown(md);
+        assertThat(out).contains("```\n-\n\n-\n```"); // 펜스 내부는 그대로
+    }
+
+    @Test
+    @DisplayName("looksLikeTableRow — 표 행(선두 파이프/2개 이상)만 true, 일반 산문은 false")
+    void looksLikeTableRow_heuristic() {
+        assertThat(MarkdownCorrectionService.looksLikeTableRow("| a | [이미지: x] | b |")).isTrue();
+        assertThat(MarkdownCorrectionService.looksLikeTableRow("a | b")).isFalse();      // 산문 속 파이프 1개
+        assertThat(MarkdownCorrectionService.looksLikeTableRow("그냥 문장입니다.")).isFalse();
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // 코드 언어 추론 — Java를 SQL로 오분류하지 않도록 (inferCodeLanguage / resolveCodeLanguage)
+    // ---------------------------------------------------------------------------------------------
+
+    @Test
+    @DisplayName("inferCodeLanguage — select/delete/update 메서드 호출이 든 Java는 SQL이 아니라 java로 판단")
+    void infer_javaMethodCalls_notSql() {
+        String java = "public void run() {\n"
+                + "    repository.delete(entity);\n"
+                + "    var rows = jdbc.select(sql);\n"
+                + "    service.update(dto);\n"
+                + "}";
+        assertThat(service.inferCodeLanguage(java)).isEqualTo("java");
+    }
+
+    @Test
+    @DisplayName("inferCodeLanguage — 실제 SQL 문(SELECT ... FROM, DELETE FROM)은 sql로 판단")
+    void infer_realSql_isSql() {
+        assertThat(service.inferCodeLanguage("SELECT id, name\nFROM users\nWHERE age > 20;")).isEqualTo("sql");
+        assertThat(service.inferCodeLanguage("DELETE FROM orders WHERE status = 'X';")).isEqualTo("sql");
+        assertThat(service.inferCodeLanguage("UPDATE users SET name = 'a' WHERE id = 1;")).isEqualTo("sql");
+    }
+
+    @Test
+    @DisplayName("resolveCodeLanguage — 잘못 붙은 ```sql 태그가 Java 코드면 java로 교정")
+    void resolve_fixesMistaggedSqlOnJava() {
+        String java = "@Override\npublic int deleteById(Long id) {\n    return repository.delete(id);\n}";
+        assertThat(service.resolveCodeLanguage("sql", java, false)).isEqualTo("java");
+    }
+
+    @Test
+    @DisplayName("resolveCodeLanguage — 실제 SQL에 붙은 ```sql 태그는 그대로 유지")
+    void resolve_keepsCorrectSqlTag() {
+        String sql = "SELECT * FROM t WHERE x = 1;";
+        assertThat(service.resolveCodeLanguage("sql", sql, false)).isEqualTo("sql");
+    }
+
+    @Test
+    @DisplayName("resolveCodeLanguage — 이미 java 등 다른 태그가 있으면 건드리지 않는다")
+    void resolve_keepsExistingNonSqlTag() {
+        assertThat(service.resolveCodeLanguage("python", "print('x')", false)).isEqualTo("python");
+        assertThat(service.resolveCodeLanguage("java", "class Foo {}", false)).isEqualTo("java");
+    }
 }

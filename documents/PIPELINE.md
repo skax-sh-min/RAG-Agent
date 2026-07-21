@@ -293,14 +293,31 @@ PROGRESSIVE 모드 AND sufficient=false AND retryCount >= max
     넣지 말라"고 맡기고 `<<<RESULT_START>>>`/`<<<RESULT_END>>>`로 추출하던 방식(LLM이 미리보기를
     결과에 섞으면 중복 발생)을 코드 결정론으로 대체한 것이다. 코드가 넣은 마커가 응답에서 사라졌으면
     그 섹션은 오버랩 없이 재교정한다(중복 0 보장 폴백).
-  - 섹션별 교정이 끝나 전체 MD가 재조립되면(`String.join("\n\n", corrected)`) `addHeadingNumbers`
-    값과 무관하게 항상 `normalizeCodeBlocks(result, false)`가 모든 코드펜스(```)를 정리한다
-    (`normalizeCodeContent()`) — 코드 블록 안의 빈 줄은 기본적으로 전부 제거하고, 다음 두 경우에만
-    빈 줄 1개를 남긴다: ① 여러 줄 주석(블록 주석/독스트링 오프너, 또는 연속 2줄 이상의 라인 주석)
-    시작 직전, ② 바로 위에 주석이 없는 함수·메서드·클래스 시그니처 시작 직전(제어자 키워드·
-    `def`/`class`·`fun`/`func`/`fn`·셸 함수 형태를 인식하는 정규식 휴리스틱이며, `if`/`for` 같은
-    제어문은 대상에서 제외됨). 언어에 무관하게 동작하며 LLM이 섹션 교정 중 흐트러뜨린 코드 블록
-    포맷을 재조립 이후 코드로 결정론적으로 정리하는 안전장치다.
+  - 섹션별 교정이 끝나 전체 MD가 재조립되면(`String.join("\n\n", corrected)`) 결정적(비-LLM) 후처리
+    체인이 이어진다 — LLM 교정은 확률적이라 자주 흐트러뜨리는 포맷을 코드로 확실히 잡는 안전장치:
+    ① `fixClosingFences(result)` — 닫는 코드펜스가 언어 태그를 달고 닫히는 경우(여는 ```sql … 닫는
+    ```sql)를 순수 ```로 교정한다. fence 상태를 토글하며 **닫는** 펜스의 정보 문자열만 제거하고
+    (여는 펜스는 유지), 다음 `normalizeCodeBlocks`의 fence 정규식이 정상 쌍을 보도록 그 **앞**에서
+    실행한다.
+    ② `addHeadingNumbers` 값과 무관하게 항상 `normalizeCodeBlocks(result, false)`가 모든 코드펜스
+    (```)를 정리한다(`normalizeCodeContent()`) — 코드 블록 안의 빈 줄은 기본적으로 전부 제거하고,
+    다음 두 경우에만 빈 줄 1개를 남긴다: ⓐ 여러 줄 주석(블록 주석/독스트링 오프너, 또는 연속 2줄
+    이상의 라인 주석) 시작 직전, ⓑ 바로 위에 주석이 없는 함수·메서드·클래스 시그니처 시작 직전
+    (제어자 키워드·`def`/`class`·`fun`/`func`/`fn`·셸 함수 형태를 인식하는 정규식 휴리스틱이며,
+    `if`/`for` 같은 제어문은 대상에서 제외됨). 이 패스는 또한 `resolveCodeLanguage()`로 **잘못 붙은
+    ```sql 태그를 Java 코드로 교정**한다(아래 "언어 판정" 참조) — `inferLanguage=false`인 이 1차
+    패스에서도 동작하므로 모든 문서에 적용된다. 언어에 무관하게 동작하며 LLM이 섹션 교정 중
+    흐트러뜨린 코드 블록 포맷을 재조립 이후 결정론적으로 정리한다.
+  - **코드 블록 언어 판정** (`resolveCodeLanguage`/`inferCodeLanguage`): Java 코드가 SQL로 오분류되던
+    문제(예: `repository.delete(...)`·`jdbc.select(...)` 메서드 호출을 `\bdelete\b`/`\bselect\b`로
+    SQL로 잡음)를 두 방향으로 고친다 — ⓐ **SQL 판정 엄격화**(`SQL_STATEMENT`): `SELECT … FROM`·
+    `UPDATE … SET`은 줄 시작에 앵커하고, `INSERT INTO`·`DELETE FROM`·`CREATE TABLE` 등 Java 식별자가
+    만들 수 없는 다단어 형태만 SQL로 인정(그래서 `.delete(` 같은 메서드 호출은 매칭 안 됨). ⓑ **Java
+    적극 식별**(`JAVA_CODE_SIGNAL`, JVM 전용 신호 — `public/private class`·`@Override` 등 애노테이션·
+    `System.out.`·`.println(`·`new Foo(`·`implements/extends`·제네릭 `List<` 등): 이 신호는 SQL
+    스크립트엔 없어서 실제 SQL을 가로채지 않으므로 `inferCodeLanguage`에서 SQL보다 먼저 검사한다.
+    라벨 없는 블록은 이 순서로 추론하고, 이미 `sql` 태그가 붙은 블록도 Java 신호가 있고 실제 SQL 문이
+    없으면 `java`로 교정한다(이미 붙은 `python`·`java` 등 다른 태그나 실제 SQL의 `sql` 태그는 보존).
   - `addHeadingNumbers=true`(문서 업로드 화면 "소제목 숫자 생성" 체크박스)면 위 정리가 끝난 뒤 2차
     패스(`secondPassHeadingAndCodePolish()`)로 H2~H6 헤딩에 계층적 번호를 매기고
     (`addHierarchicalHeadingNumbers()`, 기존 번호 프리픽스는 먼저 제거 후 현재 헤딩 순서로 재계산 —
@@ -308,6 +325,16 @@ PROGRESSIVE 모드 AND sufficient=false AND retryCount >= max
     재추론한다(`normalizeCodeBlocks(md, true)` — 위와 동일한 빈 줄 정리를 한 번 더 적용하지만
     멱등적이라 결과는 바뀌지 않는다) — **PPTX는 체크박스 상태와 무관하게 이 옵션을 항상 무시한다**
     (§6.3-bis 2번)
+  - 마지막으로 항상 `postProcessMarkdown(result)`가 fence/table-aware 결정적 정리를 한 번 더 한다
+    (코드 블록 **내부**는 무변형): ① 남은 프롬프트 구분자 `[DOCUMENT]`/`[/DOCUMENT]` 줄 제거, ②
+    내용 없는 `-` 한 줄 제거(수평선 `---`·`- 항목`·표 구분줄 `|---|`은 보존), ③ **코드 블록과 GFM 표
+    앞뒤에 빈 줄 보장**(표 구분줄 `|---|` 기준으로 표 블록을 감지 — 앞뒤 빈 줄이 없어 표/코드가 깨지던
+    문제), ④ 펜스 밖 연속 빈 줄을 1개로 축소.
+  - **표 셀 안 이미지 설명은 `<br>`로 주입**: `addImageDescriptions=true`로 이미지 설명을 넣을 때
+    (`injectDescriptionsForPattern`), 마커가 표 행 안(`looksLikeTableRow`)이면 설명을 개행이 아니라
+    `<br>`로 붙인다 — 셀 안 개행(`[이미지: x]\n[이미지 설명: y]`)이 행을 두 줄로 쪼개 표 전체를 깨뜨리기
+    때문. 이미지 설명 주입은 섹션 교정 **전**에 일어나므로, "표는 변경 금지" 지시를 받은 LLM이 `<br>`가
+    든 행을 그대로 보존한다.
   - 교정본 MD: data/converted/{docId}_corrected.md
   - 이후 파이프라인은 교정본을 source로 사용
 
