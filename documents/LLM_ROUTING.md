@@ -220,7 +220,7 @@ app.indexing.max-concurrent-llm-calls=${INDEXING_MAX_LLM:3}
 # 키워드+맥락 추출 배치 크기(§10.8.2) — 청크 N개를 한 LLM 호출로 묶어 왕복을 ceil(청크수/N)로 절감.
 # 1=배치 없음(청크당 1콜, 이전 동작). 배치가 클수록 응답도 길어지므로 로컬 모델에서 타임아웃이
 # 잦으면 keyword-timeout-seconds도 함께 올린다.
-app.indexing.keyword-batch-size=${INDEXING_KEYWORD_BATCH_SIZE:4}
+app.indexing.keyword-batch-size=${INDEXING_KEYWORD_BATCH_SIZE:2}
 ```
 
 ---

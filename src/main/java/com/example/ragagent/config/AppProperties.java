@@ -384,14 +384,14 @@ public record AppProperties(
         if (indexing == null) {
             int f = (filesOverride != null && filesOverride > 0) ? filesOverride : 1;
             int l = (llmOverride != null && llmOverride > 0) ? llmOverride : 3;
-            return new IndexingConfig(f, l, 30, 4);
+            return new IndexingConfig(f, l, 30, 2);
         }
         int files   = (filesOverride != null && filesOverride > 0) ? filesOverride
                     : (indexing.maxConcurrentFiles() > 0 ? indexing.maxConcurrentFiles() : 1);
         int llm     = (llmOverride != null && llmOverride > 0) ? llmOverride
                     : (indexing.maxConcurrentLlmCalls() > 0 ? indexing.maxConcurrentLlmCalls() : 3);
         int timeout = indexing.keywordTimeoutSeconds() > 0 ? indexing.keywordTimeoutSeconds() : 30;
-        int batch   = indexing.keywordBatchSize() > 0      ? indexing.keywordBatchSize()      : 4;
+        int batch   = indexing.keywordBatchSize() > 0      ? indexing.keywordBatchSize()      : 2;
         return new IndexingConfig(files, llm, timeout, batch);
     }
 

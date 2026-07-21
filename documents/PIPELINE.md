@@ -200,7 +200,7 @@ PROGRESSIVE 모드 AND sufficient=false AND retryCount >= max
   │
   ├─ 기존 청크 삭제 (재인덱싱 시 동일 docId 덮어쓰기)
   │
-  ├─ 키워드+맥락 추출 LLM (§10.1 Contextual Retrieval — 청크 N개(기본 4)를 번호 매긴 프롬프트로
+  ├─ 키워드+맥락 추출 LLM (§10.1 Contextual Retrieval — 청크 N개(기본 2)를 번호 매긴 프롬프트로
   │    묶어 배치당 1콜, §10.8.2. N=1이면 청크당 1콜이던 이전 동작과 동일)
   │    → excerpt_keywords 메타데이터 추가
   │    → chunk_context 메타데이터 추가 ("{파일명} > {heading}" 구조적 맥락 + LLM 1~2문장,
@@ -330,7 +330,7 @@ PROGRESSIVE 모드 AND sufficient=false AND retryCount >= max
   - doc_id, filename, version, doc_type, sha256, chunk_index, page_or_slide, tags, image_paths 등
 
 10) 키워드+맥락 추출(enrich) [LLM] — §10.1 Contextual Retrieval
-  KeywordExtractor.enrichParallel() — 청크를 app.indexing.keyword-batch-size(기본 4)개씩
+  KeywordExtractor.enrichParallel() — 청크를 app.indexing.keyword-batch-size(기본 2)개씩
   묶어 배치당 1회 LLM 호출(§10.8.2, enrichKeywordsBatch()); 나머지 1개짜리(마지막 배치 등)는
   기존 단일 청크 경로(enrichKeywords())를 그대로 사용:
   - excerpt_keywords 메타데이터 추가

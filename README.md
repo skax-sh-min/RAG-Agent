@@ -350,7 +350,7 @@ User question
 - **LLM usage dashboard** — per-provider daily/weekly/monthly token stats, Chart.js daily history chart, circuit breaker countdown; embedding usage tracked separately (`embed:<model>`, with an approximation fallback when the server omits usage); inactive providers with no history auto-hide, and orphaned records (removed from config) surface as admin-deletable cards
 - **Document versioning** — per-version isolation (chroma: separate collection; sqlite-vec: `version` partition key)
 - **Incremental indexing** — SHA-256 change detection, `doc_registry` SQLite table persistence (per-user). On sqlite-vec, embeddings are inserted per token sub-batch as soon as each one is embedded rather than buffered for the whole document, so peak memory during a large-document index scales with sub-batch size, not document size
-- **Batched keyword extraction** — chunks are bundled N-at-a-time (default 4, `INDEXING_KEYWORD_BATCH_SIZE`) into one LLM call during indexing instead of one call per chunk, cutting round-trips roughly N-fold; falls back to per-chunk TF extraction if a batch call or its parsing fails
+- **Batched keyword extraction** — chunks are bundled N-at-a-time (default 2, `INDEXING_KEYWORD_BATCH_SIZE`) into one LLM call during indexing instead of one call per chunk, cutting round-trips roughly N-fold; falls back to per-chunk TF extraction if a batch call or its parsing fails
 - **Multiple document formats** — PDF, PPTX, DOCX, TXT, MD
 - **Java 21 Virtual Threads** — lightweight threads for all LLM I/O and parallel indexing
 
