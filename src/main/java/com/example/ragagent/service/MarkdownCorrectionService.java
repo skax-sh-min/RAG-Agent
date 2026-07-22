@@ -903,6 +903,10 @@ public class MarkdownCorrectionService {
         try {
             byte[] bytes = Files.readAllBytes(imagePath);
             String mimeType = detectMime(imagePath.toString());
+            // [LLM curl] logs (LoggingChatModel) only see the Prompt's text/Media bytes, never the
+            // source file path, so without this line a DEBUG session can't tell which image a given
+            // Vision request/curl log pair belongs to.
+            log.debug("[MD_CORRECT] 이미지 분석 요청: {} ({}, {} bytes)", imagePath, mimeType, bytes.length);
             Media media = new Media(MimeTypeUtils.parseMimeType(mimeType), new ByteArrayResource(bytes));
             UserMessage userMessage = UserMessage.builder()
                     .text("이 이미지를 한국어 1~2문장으로 간단히 설명하세요.")

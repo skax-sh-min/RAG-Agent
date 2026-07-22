@@ -76,6 +76,10 @@ public class LazyVisionService {
                                 if (!Files.exists(fullPath)) return;
                                 byte[] bytes = Files.readAllBytes(fullPath);
                                 String mime = detectMime(imgPath);
+                                // [LLM curl] logs (LoggingChatModel) only see the Prompt's text/Media
+                                // bytes, never the source file path, so without this line a DEBUG
+                                // session can't tell which image a given Vision request belongs to.
+                                log.debug("[VISION] 이미지 분석 요청: {} (mime={}, {} bytes)", imgPath, mime, bytes.length);
 
                                 String imageType = null;
                                 String desc;
