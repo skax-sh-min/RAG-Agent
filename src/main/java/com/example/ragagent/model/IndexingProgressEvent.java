@@ -6,7 +6,7 @@ import com.fasterxml.jackson.annotation.JsonInclude;
  * SSE payload for real-time indexing progress.
  *
  * stage values:
- *   upload flow  — loading | structuring (TXT) | correcting (DOCX/TXT) | chunking | enriching | storing | done | error | cancelled
+ *   upload flow  — loading | structuring (TXT) | describing_images (Vision, addImageDescriptions=true) | correcting (DOCX/TXT) | chunking | enriching | storing | done | error | cancelled
  *   sync flow    — sync_start | sync_file_done | sync_file_error | error | cancelled
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)

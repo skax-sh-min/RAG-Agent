@@ -349,6 +349,14 @@ PROGRESSIVE 모드 AND sufficient=false AND retryCount >= max
     `<br>`로 붙인다 — 셀 안 개행(`[이미지: x]\n[이미지 설명: y]`)이 행을 두 줄로 쪼개 표 전체를 깨뜨리기
     때문. 이미지 설명 주입은 섹션 교정 **전**에 일어나므로, "표는 변경 금지" 지시를 받은 LLM이 `<br>`가
     든 행을 그대로 보존한다.
+  - **진행 상황 보고(SSE `describing_images` 스테이지)**: `MarkdownCorrectionService.
+    prewarmImageDescriptions()`가 distinct 이미지 개수를 파악한 직후 `onImageDescribed(0, total)`을
+    한 번 호출해 총 개수를 알리고, 이후 이미지 1장의 Vision 분석이 끝날 때마다
+    `onImageDescribed(done, total)`을 호출한다 — `DocumentIndexer`가 이를
+    `IndexingProgressEvent(stage="describing_images", ...)`로 감싸 업로드 화면에 "이미지 분석 중
+    (N/M)"을 실시간 표시한다([UI.md §3.2](UI.md#32-문서-관리-documentcontroller) 참고). 섹션 교정
+    진행률(`onSectionDone`, `correcting` 스테이지)과는 별개 콜백이며 항상 먼저 끝난다 — 이 프리패스가
+    오래 걸려도 화면이 직전 단계 메시지(예: "PPTX → Markdown 변환 중...")에 멈춰 있지 않게 하기 위함.
   - 교정본 MD: data/converted/{docId}_corrected.md
   - 이후 파이프라인은 교정본을 source로 사용
 

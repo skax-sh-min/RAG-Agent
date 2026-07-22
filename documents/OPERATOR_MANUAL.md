@@ -432,8 +432,14 @@ LLM_ROUTING_MODE=QUALITY_FIRST
 > **EMF/WMF 변환**: LibreOffice(`soffice`)가 PATH에 있어야 합니다. 없으면 변환이 건너뛰어지며 `[TIMEOUT:LIBREOFFICE]` 로그가 출력됩니다.
 
 > **인덱싱 시점 즉시 설명 생성**은 프로퍼티가 아니라 문서 업로드 화면의 "이미지 설명 추가" 체크박스로 제어됩니다
-> (DOCX·TXT·MD 한정). 여기 표의 설정들은 모두 검색 시점 Lazy Vision에 대한 것입니다. 자세한 내용은
-> `documents/IMAGE_PROCESS.md` 5절·12절 참고.
+> (DOCX·TXT·MD·PPTX·PDF(스캔 아님) 전부 — PPTX/PDF도 `[이미지: ...]` 인라인 마커 방식이 DOCX와 동일해
+> 이 체크박스가 그대로 적용됩니다). 여기 표의 설정들은 모두 검색 시점 Lazy Vision에 대한 것입니다. 자세한
+> 내용은 `documents/IMAGE_PROCESS.md` 5절·12절 참고.
+>
+> **인덱싱 화면 진행 표시**: 이 체크박스를 켜면 이미지 분석(Vision LLM)이 섹션 포맷 교정보다 먼저 실행되는데,
+> 이미지 수가 많으면 시간이 걸릴 수 있어 `/documents` 업로드 화면에 "이미지 분석 중 (N/M)" 진행률이 별도
+> 단계로 표시됩니다(SSE `describing_images` 스테이지) — 직전 단계 메시지(예: "PPTX → Markdown 변환 중...")에
+> 멈춰 있는 것처럼 보이지 않도록 함. 상세는 [PIPELINE.md §6.3](PIPELINE.md#63-docx--md--임베딩-db-저장-상세-이미지-포함), UI는 [UI.md §3.2](UI.md#32-문서-관리-documentcontroller) 참고.
 
 #### 소제목 숫자 생성 (`addHeadingNumbers`)
 

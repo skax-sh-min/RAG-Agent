@@ -496,8 +496,8 @@
     /* ── Per-file indexing event log — in-memory only, so it naturally disappears on page
      * navigation. Lets a failed upload show which stage broke, not just the final message. ── */
     const STAGE_LABELS = {
-        loading: '문서 로드', structuring: 'Markdown 구조화', correcting: 'Markdown 교정',
-        chunking: '청크 분할', enriching: '키워드 추출', storing: '벡터 DB 저장'
+        loading: '문서 로드', structuring: 'Markdown 구조화', describing_images: '이미지 분석',
+        correcting: 'Markdown 교정', chunking: '청크 분할', enriching: '키워드 추출', storing: '벡터 DB 저장'
     };
     const fileEventLogs = {};   // i -> [{stage, message, done, total, time}]
 
@@ -570,6 +570,15 @@
                     <div class="progress-bar bg-warning"
                          style="width:${pct}%; transition:width 0.3s;"></div>
                 </div>` : `<span class="text-info">🧱 Markdown 구조화 중...</span>`,
+            describing_images: () => evt.total > 0 ? `
+                <div class="d-flex justify-content-between align-items-center small mb-1">
+                    <span class="text-info">🖼️ 이미지 분석 중</span>
+                    <span class="text-muted fw-semibold">${pct}% (${evt.done} / ${evt.total})</span>
+                </div>
+                <div class="progress" style="height:5px;">
+                    <div class="progress-bar bg-warning"
+                         style="width:${pct}%; transition:width 0.3s;"></div>
+                </div>` : `<span class="text-info">🖼️ 이미지 분석 중...</span>`,
             correcting: () => evt.total > 0 ? `
                 <div class="d-flex justify-content-between align-items-center small mb-1">
                     <span class="text-info">📝 Markdown 교정 중</span>

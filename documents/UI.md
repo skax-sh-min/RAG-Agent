@@ -79,6 +79,8 @@ src/main/resources/
 | GET | `/ui/documents/list` | `fragments/doc-table-body` | 문서 목록 새로고침 |
 
 > **관리 전용 인증 모드**(`app.auth.management-only=true`, §6.17 B안)에서는 `POST /ui/documents/upload`, `POST /ui/documents/progress/*/cancel`, `DELETE /ui/documents/{docId}`, `PATCH /ui/documents/{id}/tags`, `GET /ui/documents/{id}/tags/edit`가 `hasRole("ADMIN")`로 게이트된다 — 비로그인은 `/login` 리다이렉트, 관리자 아닌 로그인은 403. `GET /documents`·`GET /ui/documents/list`·태그 조회는 게스트에게 그대로 열려 있다. 자세한 내용은 [OPERATOR_MANUAL.md §9.4.2](OPERATOR_MANUAL.md#942-관리-전용-인증-management-only) 참고.
+>
+> **인덱싱 진행 스테이지**(`stage` 값): `loading` → `structuring`(TXT만) → `describing_images`(Vision 이미지 분석, "이미지 설명 추가" 체크 시만 — "이미지 분석 중 (N/M)") → `correcting`(DOCX/TXT/MD/PPTX/PDF[비스캔]) → `chunking` → `enriching` → `storing` → `done`/`error`/`cancelled`. 각 이벤트는 `stage`와 함께 `done`/`total`/`filename`/`message`를 실어 나르며, `documents.html`의 `stageHtml`/`STAGE_LABELS`가 단계별 진행률 바와 오류 로그 라벨을 렌더링한다. 상세는 [PIPELINE.md §6.3](PIPELINE.md#63-docx--md--임베딩-db-저장-상세-이미지-포함) 참고.
 
 ### 3.3 운영 / LLM 사용량 (OperationsController)
 
@@ -251,7 +253,8 @@ PROGRESSIVE 업그레이드 시 `🔝 고추론 재분석 → {premiumProvider}`
 
 [파일 업로드] Fetch API → POST /ui/documents/upload → 202 {taskId}
               → GET /ui/documents/progress/{taskId} SSE 구독
-              → progress 이벤트로 파일별 상태 갱신 → done/error 이벤트 후 목록 자동 새로고침
+              → progress 이벤트로 파일별 상태 갱신(로드→구조화→이미지 분석→교정→청킹→키워드→저장,
+                단계별 진행률 바 + "이미지 분석 중 (N/M)" 등 메시지) → done/error 이벤트 후 목록 자동 새로고침
 
 [문서 삭제]  hx-delete → hx-swap="outerHTML swap:0.3s" (페이드아웃)
 [LLM 카드]   hx-trigger="load, every 30s" → 30초마다 자동 갱신

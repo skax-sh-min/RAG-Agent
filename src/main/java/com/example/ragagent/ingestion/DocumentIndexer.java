@@ -28,6 +28,7 @@ import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -146,7 +147,8 @@ public class DocumentIndexer {
                     req.addImageDescriptions(), req.addHeadingNumbers(), false,
                     (done, total) -> req.onProgress().accept(
                             IndexingProgressEvent.of("correcting", done, total, req.filename(),
-                                    done + "/" + total + " 섹션 교정 중")));
+                                    done + "/" + total + " 섹션 교정 중")),
+                    imageDescribeProgress(req));
             rawDocs = loaderService.loadFromMarkdown(sourceMd);
         } else if (lower.endsWith(".txt")) {
             // Plain text has no inherent structure → let the LLM impose headings/lists + fix grammar,
@@ -164,7 +166,8 @@ public class DocumentIndexer {
                     req.addImageDescriptions(), req.addHeadingNumbers(), false,
                     (done, total) -> req.onProgress().accept(
                             IndexingProgressEvent.of("correcting", done, total, req.filename(),
-                                    done + "/" + total + " 섹션 교정 중")));
+                                    done + "/" + total + " 섹션 교정 중")),
+                    imageDescribeProgress(req));
             rawDocs = loaderService.loadFromMarkdown(sourceMd);
         } else if (lower.endsWith(".md")) {
             req.onProgress().accept(IndexingProgressEvent.of("loading", 0, 0, req.filename(), "Markdown 로드 중..."));
@@ -175,7 +178,8 @@ public class DocumentIndexer {
                     req.addImageDescriptions(), req.addHeadingNumbers(), false,
                     (done, total) -> req.onProgress().accept(
                             IndexingProgressEvent.of("correcting", done, total, req.filename(),
-                                    done + "/" + total + " 섹션 교정 중")));
+                                    done + "/" + total + " 섹션 교정 중")),
+                    imageDescribeProgress(req));
             rawDocs = loaderService.loadFromMarkdown(sourceMd);
         } else if (lower.endsWith(".pptx")) {
             // PPTX has unambiguous slide numbers → convert to MD (title-only heading per slide,
@@ -197,7 +201,8 @@ public class DocumentIndexer {
                     req.addImageDescriptions(), false, true,
                     (done, total) -> req.onProgress().accept(
                             IndexingProgressEvent.of("correcting", done, total, req.filename(),
-                                    done + "/" + total + " 섹션 교정 중")));
+                                    done + "/" + total + " 섹션 교정 중")),
+                    imageDescribeProgress(req));
             // skipChapterNumbers=true — slide title/subtitle headings aren't chapter structure (see
             // comment above), so every section's MetaKey.CHAPTER_NO stays "0"; only [페이지: N] matters.
             rawDocs = loaderService.loadFromMarkdown(sourceMd, true);
@@ -232,7 +237,8 @@ public class DocumentIndexer {
                         req.addImageDescriptions(), req.addHeadingNumbers(), false,
                         (done, total) -> req.onProgress().accept(
                                 IndexingProgressEvent.of("correcting", done, total, req.filename(),
-                                        done + "/" + total + " 섹션 교정 중")));
+                                        done + "/" + total + " 섹션 교정 중")),
+                        imageDescribeProgress(req));
                 // skipChapterNumbers=true — PdfToMarkdownConverter's "## N페이지" heading is a
                 // synthetic per-page container (see its own class comment), never a real chapter;
                 // MetaKey.CHAPTER_NO would otherwise just re-derive the page count under a
@@ -554,6 +560,18 @@ public class DocumentIndexer {
      * tags set at original upload. Returns an empty list when FTS is unavailable or no prior rows
      * exist for {@code priorDocId}. Never throws.
      */
+    /**
+     * Reports Vision image-description progress ("이미지 분석 중 (N/M)") for the given request —
+     * fires while {@code correctionService.correct()}'s image-description pre-pass runs, which
+     * otherwise leaves the last pre-correction "loading" message (e.g. "PPTX → Markdown 변환 중...")
+     * stuck on screen for the whole Vision phase.
+     */
+    private BiConsumer<Integer, Integer> imageDescribeProgress(IndexRequest req) {
+        return (done, total) -> req.onProgress().accept(
+                IndexingProgressEvent.of("describing_images", done, total, req.filename(),
+                        "이미지 분석 중 (" + done + "/" + total + ")"));
+    }
+
     private List<String> restoreTags(String priorDocId) {
         if (priorDocId == null) return List.of();
         return keywordRepo.tagsByDocIds(List.of(priorDocId)).getOrDefault(priorDocId, List.of());

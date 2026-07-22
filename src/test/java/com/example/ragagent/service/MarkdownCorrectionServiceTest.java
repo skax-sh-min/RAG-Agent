@@ -19,6 +19,8 @@ import org.junit.jupiter.api.io.TempDir;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.function.BiConsumer;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -582,6 +584,27 @@ class MarkdownCorrectionServiceTest {
         // prewarm이 distinct 경로만 모으고 캐시를 공유하므로 동일 파일은 1회만 분석
         verify(llmRouter, times(1)).executeWithTracking(
                 eq(TaskType.VISION), eq(RoutingMode.LOCAL_ONLY), eq(BackgroundUsage.IMAGE_PREFIX), any());
+    }
+
+    @Test
+    @DisplayName("이미지 설명 — onImageDescribed 콜백이 (0,total) 시작 신호 후 이미지마다 (N,total)로 호출된다")
+    void imageDescription_reportsProgressViaCallback() throws Exception {
+        stubVisionAndCorrection("설명");
+        Path img1 = writeImage("p1.png");
+        Path img2 = writeImage("p2.png");
+        String md = "## 절1\n[이미지: " + img1.toAbsolutePath() + "]\n본문1\n\n"
+                + "## 절2\n[이미지: " + img2.toAbsolutePath() + "]\n본문2\n";
+
+        List<int[]> calls = new CopyOnWriteArrayList<>();
+        BiConsumer<Integer, Integer> onImageDescribed = (done, total) -> calls.add(new int[]{done, total});
+
+        service.correct(md, "doc", null, true, false, false, null, onImageDescribed);
+
+        // 시작 신호(0,2) + 이미지 2장 완료마다 1회씩(합쳐서 1과 2) — 완료 순서는 병렬이라 비결정적.
+        assertThat(calls).hasSize(3);
+        assertThat(calls).allSatisfy(c -> assertThat(c[1]).isEqualTo(2));
+        assertThat(calls.get(0)[0]).isEqualTo(0); // 시작 신호는 futures 생성 전 동기 호출이라 항상 첫 번째
+        assertThat(calls.stream().map(c -> c[0]).toList()).containsExactlyInAnyOrder(0, 1, 2);
     }
 
     @Test
