@@ -1,5 +1,7 @@
 package com.example.ragagent.llm;
 
+import org.junit.jupiter.api.parallel.ResourceLock;
+
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
@@ -32,6 +34,7 @@ import static org.mockito.Mockito.when;
  * delegate.embed(Document) (so it gets logged too), and the DEBUG log actually names the
  * provider/model/endpoint when isDebugEnabled() — the whole point of this class.
  */
+@ResourceLock("global-state")
 class LoggingEmbeddingModelTest {
 
     private final EmbeddingModel delegate = mock(EmbeddingModel.class);

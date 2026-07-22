@@ -1,5 +1,7 @@
 package com.example.ragagent.config;
 
+import org.junit.jupiter.api.parallel.ResourceLock;
+
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -17,6 +19,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <p>The bound {@link AppProperties.OverrideSource} is process-wide static, so every test unbinds
  * it afterwards to stay isolated from the rest of the suite.
  */
+@ResourceLock("global-state")
 class AppPropertiesOverrideTest {
 
     /** Base props: similarity=0.0, mq-min-len=5, retry-escalate=true, cand-mult=3, tag-mult=2, rrf-weight=1.0, rrf-k=60. */

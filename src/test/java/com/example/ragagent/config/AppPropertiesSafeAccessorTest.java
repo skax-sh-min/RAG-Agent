@@ -1,5 +1,7 @@
 package com.example.ragagent.config;
 
+import org.junit.jupiter.api.parallel.ResourceLock;
+
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -31,6 +33,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * {@code vectorstore} / {@code vectorStoreSafe()} differ in case), so this stays in sync
  * automatically as new safe accessors are added.
  */
+@ResourceLock("global-state")
 class AppPropertiesSafeAccessorTest {
 
     private static final Path SRC_ROOT = Path.of("src/main/java");

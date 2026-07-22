@@ -1,5 +1,7 @@
 package com.example.ragagent.audit;
 
+import org.junit.jupiter.api.parallel.ResourceLock;
+
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
@@ -25,6 +27,7 @@ import static org.mockito.Mockito.when;
  * Logback ListAppender로 "AUDIT" 로거에 실제 기록되는 이벤트를 검증.
  * 파일 I/O 없이 메모리에서 빠르게 실행.
  */
+@ResourceLock("global-state")
 class AuditLoggerTest {
 
     private ListAppender<ILoggingEvent> listAppender;

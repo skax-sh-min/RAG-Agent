@@ -1,5 +1,7 @@
 package com.example.ragagent.security;
 
+import org.junit.jupiter.api.parallel.ResourceLock;
+
 import com.example.ragagent.audit.AuditLogger;
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.context.ThreadContext;
@@ -63,6 +65,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         properties = {"app.auth.enabled=false", "app.auth.management-only=true"})
 @Import({com.example.ragagent.context.WebMvcConfig.class, SecurityConfig.class, NoAuthAutoLoginFilter.class,
         ManagementOnlyAuthorizationTest.TestConfig.class})
+@ResourceLock("global-state")
 class ManagementOnlyAuthorizationTest {
 
     /**

@@ -1,5 +1,7 @@
 package com.example.ragagent.controller;
 
+import org.junit.jupiter.api.parallel.ResourceLock;
+
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.config.SettingsKeys;
 import com.example.ragagent.context.ThreadContextResolver;
@@ -39,6 +41,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @WebMvcTest(value = SettingsController.class, properties = "app.auth.enabled=true")
 @Import({com.example.ragagent.context.WebMvcConfig.class, com.example.ragagent.security.SecurityConfig.class})
 @WithMockUser
+@ResourceLock("global-state")
 class SettingsControllerRenderTest {
 
     @Autowired MockMvc mvc;

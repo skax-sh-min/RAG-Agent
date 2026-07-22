@@ -1,5 +1,7 @@
 package com.example.ragagent.service;
 
+import org.junit.jupiter.api.parallel.ResourceLock;
+
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
@@ -35,6 +37,7 @@ import static org.mockito.Mockito.when;
  * value flowing back through {@code AppProperties.xxxSafe()} (so the page shows what the next
  * search will use).
  */
+@ResourceLock("global-state")
 class SettingsServiceTest {
 
     private static AppProperties base() {

@@ -1,5 +1,7 @@
 package com.example.ragagent.service;
 
+import org.junit.jupiter.api.parallel.ResourceLock;
+
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
@@ -46,6 +48,7 @@ import static org.mockito.Mockito.when;
  *       DETERMINISTICALLY in code, so the overlap never survives into two adjacent sections.</li>
  * </ul>
  */
+@ResourceLock("global-state")
 class MarkdownCorrectionServiceTest {
 
     private MarkdownCorrectionService service;
