@@ -24,6 +24,8 @@ import java.util.Map;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -250,6 +252,29 @@ class LlmRouterTest {
                 m -> m.call(new Prompt("x")));
         assertThat(result).isEqualTo("ok");
         held.close();
+    }
+
+    @Test
+    @DisplayName("executeWithTracking — usageRepo.record() 실패(예: SQLITE_FULL)는 무시되고 성공한 응답이 그대로 반환되며 CircuitBreaker도 차단하지 않는다")
+    void executeWithTracking_usageRecordFailure_isSwallowedAndDoesNotBlockProvider() {
+        ChatModel chatModel = mock(ChatModel.class);
+        when(chatModel.call(any(Prompt.class))).thenReturn(chatResponse("ok"));
+        var local = new LlmProvider("lm", TaskType.TEXT, ProviderRole.LOCAL, 1, "k", null, null, true,
+                chatModel, null);
+        LlmUsageRepository usageRepo = mock(LlmUsageRepository.class);
+        doThrow(new org.springframework.jdbc.UncategorizedSQLException(
+                "insert", "INSERT INTO llm_usage ...", new java.sql.SQLException("database or disk is full")))
+                .when(usageRepo).record(any(), anyLong(), anyLong());
+        var r = new LlmRouter(List.of(local), usageRepo, breaker, RoutingMode.COST_FIRST, 0.6);
+
+        // The LLM call itself succeeded — a bookkeeping-only failure must not be mistaken for a
+        // provider failure (which would discard this response, block the circuit breaker, and
+        // cascade into LlmProviderExhaustedException for other concurrent callers of "lm").
+        String result = r.executeWithTracking(TaskType.TEXT, RoutingMode.COST_FIRST,
+                m -> m.call(new Prompt("x")));
+
+        assertThat(result).isEqualTo("ok");
+        assertThat(breaker.isBlocked("lm")).isFalse();
     }
 
     // ── Overload (429/402/503) circuit-breaker blocking ───────────────────────

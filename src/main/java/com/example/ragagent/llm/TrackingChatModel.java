@@ -1,6 +1,8 @@
 package com.example.ragagent.llm;
 
 import com.example.ragagent.repository.LlmUsageRepository;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.prompt.ChatOptions;
@@ -18,6 +20,8 @@ import reactor.core.publisher.Flux;
  */
 public class TrackingChatModel implements ChatModel {
 
+    private static final Logger log = LoggerFactory.getLogger(TrackingChatModel.class);
+
     private final ChatModel delegate;
     private final String providerName;
     private final LlmUsageRepository usageRepo;
@@ -34,7 +38,13 @@ public class TrackingChatModel implements ChatModel {
         var usage = response.getMetadata().getUsage();
         int in  = (usage != null && usage.getPromptTokens()     != null) ? usage.getPromptTokens()     : 0;
         int out = (usage != null && usage.getCompletionTokens() != null) ? usage.getCompletionTokens() : 0;
-        usageRepo.record(providerName, in, out);
+        try {
+            usageRepo.record(providerName, in, out);
+        } catch (Exception e) {
+            // delegate.call() above already succeeded — a usage-table write failure (e.g.
+            // SQLITE_FULL) must never fail the actual chat call the framework is waiting on.
+            log.warn("[USAGE] Failed to record usage for provider={}: {}", providerName, e.getMessage());
+        }
         return response;
     }
 

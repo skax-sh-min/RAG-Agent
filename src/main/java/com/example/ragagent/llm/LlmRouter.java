@@ -301,7 +301,13 @@ public class LlmRouter {
      */
     public void recordApproxUsage(String providerName, String promptText, String answerText) {
         if (answerText == null || answerText.isBlank()) return;
-        usageRepo.record(providerName, approxTokens(promptText), approxTokens(answerText));
+        try {
+            usageRepo.record(providerName, approxTokens(promptText), approxTokens(answerText));
+        } catch (Exception e) {
+            // Best-effort analytics — the answer was already served to the user, so a usage-table
+            // write failure (e.g. SQLITE_FULL) must never surface as if the call itself failed.
+            log.warn("[USAGE] Failed to record approx usage for provider={}: {}", providerName, e.getMessage());
+        }
     }
 
     private static long approxTokens(String text) {
@@ -512,7 +518,15 @@ public class LlmRouter {
         int in  = (usage != null && usage.getPromptTokens()     != null) ? usage.getPromptTokens()     : 0;
         int out = (usage != null && usage.getCompletionTokens() != null) ? usage.getCompletionTokens() : 0;
         String usageKey = usageLabelPrefix != null ? usageLabelPrefix + provider.name() : provider.name();
-        usageRepo.record(usageKey, in, out);
+        try {
+            usageRepo.record(usageKey, in, out);
+        } catch (Exception e) {
+            // The LLM call above already succeeded — a usage-table write failure (e.g. SQLITE_FULL)
+            // must not be mistaken by the caller's catch(Exception) for a provider failure, which
+            // would discard this response, trip the circuit breaker, and cascade into
+            // "all providers exhausted" for unrelated concurrent calls sharing this provider.
+            log.warn("[USAGE] Failed to record usage for provider={}: {}", provider.name(), e.getMessage());
+        }
         String text = response.getResult().getOutput().getText();
         if (log.isDebugEnabled()) {
             String preview = (text != null && text.length() > 80) ? text.substring(0, 80) + "…" : text;
