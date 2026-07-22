@@ -11,6 +11,7 @@ import com.example.ragagent.repository.MemoryRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.document.Document;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.util.HashMap;
@@ -44,6 +45,7 @@ public class CuratedQaService {
     private final VectorStoreFacade vectorStore;
     private final long embedDebounceMillis;
 
+    @Autowired
     public CuratedQaService(CuratedQaRepository repository, MemoryService memoryService,
                             ThreadMetaService threadMetaService, VectorStoreFacade vectorStore) {
         this(repository, memoryService, threadMetaService, vectorStore, DEFAULT_EMBED_DEBOUNCE_MILLIS);
