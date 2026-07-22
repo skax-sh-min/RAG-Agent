@@ -1,5 +1,7 @@
 package com.example.ragagent.service;
 
+import org.junit.jupiter.api.parallel.ResourceLock;
+
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
@@ -35,6 +37,7 @@ import static org.mockito.Mockito.when;
  * value flowing back through {@code AppProperties.xxxSafe()} (so the page shows what the next
  * search will use).
  */
+@ResourceLock("global-state")
 class SettingsServiceTest {
 
     private static AppProperties base() {
@@ -42,7 +45,7 @@ class SettingsServiceTest {
                 "./data", 2, 800, 100, 100, 7, 0.0, true, 5, false,
                 true, false, 3, null,
                 null, null, null, null, null, null, null, null, null, null, null, 2,
-                null, 1.0, 60, null, null, null, null, null, null, null, null);
+                null, 1.0, 60, null, null, null, null, null, null, null, null, null, null);
     }
 
     private SettingsOverrideRepositoryStub repo;
@@ -65,7 +68,7 @@ class SettingsServiceTest {
                 "./data", 2, 800, 100, 100, 7, 0.0, true, 5, false,
                 true, false, 3, null,
                 llm, null, null, null, null, null, null, null, null, null, null, 2,
-                null, 1.0, 60, null, null, null, null, null, null, null, null);
+                null, 1.0, 60, null, null, null, null, null, null, null, null, null, null);
     }
 
     /** Lightweight in-memory stand-in for the SQLite repository. */

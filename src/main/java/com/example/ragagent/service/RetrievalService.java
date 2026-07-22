@@ -88,6 +88,8 @@ public class RetrievalService {
         double rrfKeywordWeight = props.searchRrfKeywordWeightSafe();
         int defaultTopK = props.searchTopKSafe();
         boolean hybridEnabled = props.searchHybridEnabledSafe();
+        boolean curatedQaEnabled = props.searchCuratedQaEnabledSafe();
+        double curatedQaWeight = props.searchCuratedQaWeightSafe();
         List<Document> unique;
         try {
             // Escalate candidate count on retry to surface different documents.
@@ -113,10 +115,19 @@ public class RetrievalService {
             int fetchK = candidateK;
             List<List<Document>> ranked;
             List<Document> keywordHits;
+            List<Document> curatedHits;
             try (var exec = Executors.newVirtualThreadPerTaskExecutor()) {
                 CompletableFuture<List<Document>> keywordF = CompletableFuture.supplyAsync(
                         () -> hybridEnabled
                                 ? ragService.keywordSearch(state.version(), state.question(), fetchK)
+                                : List.<Document>of(),
+                        exec);
+                // §10.10 — curated-Q&A axis: single search against the original question (not
+                // multi-query variants — the curated pool is small and question-driven matching is
+                // the point), scoped to the reserved "curated" version namespace.
+                CompletableFuture<List<Document>> curatedF = CompletableFuture.supplyAsync(
+                        () -> curatedQaEnabled
+                                ? ragService.search(state.userId(), state.question(), CuratedQaService.CURATED_VERSION, fetchK)
                                 : List.<Document>of(),
                         exec);
                 if (shouldExpand(state.question())) {
@@ -136,8 +147,9 @@ public class RetrievalService {
                     ranked = ragService.searchBatch(state.userId(), List.of(state.question()), state.version(), candidateK);
                 }
                 keywordHits = keywordF.join();
+                curatedHits = curatedF.join();
             }
-            List<Document> candidates = mergeRrf(ranked, keywordHits, candidateK, rrfK, rrfKeywordWeight);
+            List<Document> candidates = mergeRrf(ranked, keywordHits, curatedHits, candidateK, rrfK, rrfKeywordWeight, curatedQaWeight);
             // Strict AND tag filter — applied after RRF, before rerank/cut. Covers vector
             // + BM25 axes uniformly (tags travel in chunk metadata). No no-tag fallback on shortfall.
             candidates = filterByTags(candidates, selectedTags, candidateK);
@@ -275,10 +287,25 @@ public class RetrievalService {
      * carries its own configurable {@code keywordWeight} (default 1.0 = parity with the normalized vector
      * group). When there is no keyword axis (hybrid disabled or no hits), this reduces to unweighted RRF —
      * every vector axis is scaled by the same constant 1/axisCount, so ranking order is unchanged.
-     * Package-private for unit testing.
+     * Kept for callers/tests that don't care about the curated axis (§10.10) — delegates to the 7-arg
+     * overload with an empty curated axis. Package-private for unit testing.
      */
     static List<Document> mergeRrf(List<List<Document>> vectorRanked, List<Document> keywordRanked,
                                     int topK, int k, double keywordWeight) {
+        return mergeRrf(vectorRanked, keywordRanked, List.of(), topK, k, keywordWeight, 0.0);
+    }
+
+    /**
+     * Same as the 5-arg {@link #mergeRrf(List, List, int, int, double)}, plus a third axis for
+     * curated Q&A (§10.10, promoted-by-like answers embedded under the reserved {@code "curated"}
+     * version namespace) — its own configurable {@code curatedWeight}, same treatment as the
+     * keyword axis (flat weight, not group-normalized with the vector axes). Empty/absent axis is
+     * a no-op, so this reduces to the 5-arg behavior when curated search is disabled or has no
+     * hits. Package-private for unit testing.
+     */
+    static List<Document> mergeRrf(List<List<Document>> vectorRanked, List<Document> keywordRanked,
+                                    List<Document> curatedRanked, int topK, int k,
+                                    double keywordWeight, double curatedWeight) {
         Map<String, Double> scores = new LinkedHashMap<>();
         Map<String, Document> byKey = new LinkedHashMap<>();
         double vectorWeight = vectorRanked.isEmpty() ? 0.0 : 1.0 / vectorRanked.size();
@@ -287,6 +314,9 @@ public class RetrievalService {
         }
         if (keywordRanked != null && !keywordRanked.isEmpty()) {
             addRrfAxis(keywordRanked, keywordWeight, k, scores, byKey);
+        }
+        if (curatedRanked != null && !curatedRanked.isEmpty()) {
+            addRrfAxis(curatedRanked, curatedWeight, k, scores, byKey);
         }
         return scores.entrySet().stream()
                 .sorted(Map.Entry.<String, Double>comparingByValue().reversed())
@@ -338,11 +368,17 @@ public class RetrievalService {
      * Citation label: {@code "파일명 | 챕터번호"} when the chunk has a real chapter number
      * ({@link MetaKey#CHAPTER_NO}, set by {@code DocumentLoaderService} from H2-H6 headings — "0"
      * means no such heading applies, e.g. PPTX or before the first heading), else falls back to
-     * {@code "파일명 | p.N"} ({@link MetaKey#PAGE_OR_SLIDE}). Static + package-private for unit
-     * testing (touches no instance state, same pattern as {@link #mergeRrf}).
+     * {@code "파일명 | p.N"} ({@link MetaKey#PAGE_OR_SLIDE}). A curated Q&A hit (§10.10,
+     * {@link MetaKey#DOC_TYPE} = {@code "curated_qa"}) has no real filename/page — it gets a fixed
+     * label instead of the misleading {@code "curated_qa | p.1"} placeholder metadata would
+     * otherwise produce. Static + package-private for unit testing (touches no instance state,
+     * same pattern as {@link #mergeRrf}).
      */
     static String formatSource(Document doc) {
         Map<String, Object> meta = doc.getMetadata();
+        if ("curated_qa".equals(meta.get(MetaKey.DOC_TYPE))) {
+            return "💬 큐레이션 Q&A";
+        }
         String filename = String.valueOf(meta.getOrDefault(MetaKey.FILENAME, "unknown"));
         Object chapterNo = meta.get(MetaKey.CHAPTER_NO);
         if (chapterNo != null && !"0".equals(String.valueOf(chapterNo))) {

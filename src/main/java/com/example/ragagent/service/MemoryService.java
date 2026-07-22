@@ -66,6 +66,11 @@ public class MemoryService {
         return repository.getRecentTurns(userId, threadId);
     }
 
+    /** Single turn lookup — used by {@link CuratedQaService} to snapshot question/answer on like. */
+    public Optional<MemoryRepository.Turn> getTurn(String userId, String threadId, long turnId) {
+        return repository.getTurn(userId, threadId, turnId);
+    }
+
     public Optional<MemoryRepository.FeedbackRow> getFeedback(String userId, String threadId, long turnId) {
         return repository.getFeedback(userId, threadId, turnId);
     }

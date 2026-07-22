@@ -1,10 +1,13 @@
 package com.example.ragagent.controller;
 
+import org.junit.jupiter.api.parallel.ResourceLock;
+
 import com.example.ragagent.audit.AuditLogger;
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.context.ThreadContextResolver;
 import com.example.ragagent.llm.CircuitBreaker;
 import com.example.ragagent.repository.LlmUsageRepository;
+import com.example.ragagent.service.CuratedQaService;
 import com.example.ragagent.service.MemoryService;
 import com.example.ragagent.service.ThreadMetaService;
 import org.junit.jupiter.api.BeforeEach;
@@ -49,6 +52,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @WebMvcTest(value = OperationsController.class, properties = "app.auth.enabled=true")
 @Import({com.example.ragagent.context.WebMvcConfig.class, com.example.ragagent.security.SecurityConfig.class})
 @WithMockUser
+@ResourceLock("global-state")
 class OperationsControllerUsageTest {
 
     @Autowired MockMvc mvc;
@@ -61,6 +65,7 @@ class OperationsControllerUsageTest {
     @MockitoBean ChatModel chatModel;
     @MockitoBean ThreadContextResolver threadContextResolver;
     @MockitoBean AuditLogger auditLogger;
+    @MockitoBean CuratedQaService curatedQaService;
 
     @BeforeEach
     void setUp() {

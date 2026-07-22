@@ -45,7 +45,7 @@ HTTP 요청
 |------|------|---------|
 | **CLASSIFIER** | 질문 유형 판별 (concept / usage / error / version / meta) | ① — AgentService에서 선실행하므로 그래프 내에서는 스킵 |
 | **DIRECT_ANSWER** | meta 질문 직접 응답 (벡터 검색 없음) | ② |
-| **RETRIEVAL** | 쿼리 확장(조건부 — 15자 미만 질의는 생략, `app.search-multiquery-min-length`) → 확장 LLM 호출과 원본 질의 벡터 검색을 가상 스레드로 병렬 실행(§10.8.1, 원본 검색 지연이 확장 대기 뒤에 숨음) → 배치 임베딩(쿼리 임베딩 캐시 히트 시 스킵) → 벡터 스토어 배치 쿼리(chroma 단일 호출, 결과에 쓰지 않는 임베딩 필드는 요청 자체를 생략 §10.9.1 / sqlite-vec 쿼리별) → 가중 RRF 병합(벡터축 그룹 정규화 + 키워드축 가중치) → 선택적 LLM 리랭킹(opt-in). 재시도 시 후보 풀 ×(retry+1) 에스컬레이션 | ③ 쿼리 확장(조건부), [리랭킹 활성 시 1콜] |
+| **RETRIEVAL** | 쿼리 확장(조건부 — 15자 미만 질의는 생략, `app.search-multiquery-min-length`) → 확장 LLM 호출과 원본 질의 벡터 검색을 가상 스레드로 병렬 실행(§10.8.1, 원본 검색 지연이 확장 대기 뒤에 숨음) → 배치 임베딩(쿼리 임베딩 캐시 히트 시 스킵) → 벡터 스토어 배치 쿼리(chroma 단일 호출, 결과에 쓰지 않는 임베딩 필드는 요청 자체를 생략 §10.9.1 / sqlite-vec 쿼리별) + 큐레이션 Q&A 축 병렬 조회(§10.10, 예약 version `"curated"`, `search.curated-qa-enabled`로 게이팅) → 가중 RRF 병합(벡터축 그룹 정규화 + 키워드축 가중치 + 큐레이션축 가중치) → 선택적 LLM 리랭킹(opt-in). 재시도 시 후보 풀 ×(retry+1) 에스컬레이션 | ③ 쿼리 확장(조건부), [리랭킹 활성 시 1콜] |
 | **ANSWER** | 문서 기반 답변 생성 + 충분도 검사 | ④ 답변, ⑤ 충분도 |
 | **CRITIC** | 답변이 문서에 근거하는지 검증 | ⑥ |
 | **FINALIZE** | 대화 히스토리 저장 (SQLite) | 없음 |
@@ -187,6 +187,13 @@ PROGRESSIVE 모드 AND sufficient=false AND retryCount >= max
   │    TXT/MD   → 없음 (평문/마크다운)
   │    → chunk 메타데이터 image_paths 에 경로 기록
   │
+  ├─ [체크포인트] 여기까지(MD 변환+교정, 이미지 추출) 성공 시 doc_registry에 partial row 저장
+  │    (chunks=0, spring_doc_ids=[]) — 이후 청킹~레지스트리 저장 단계 중 실패해도 이 docId가
+  │    레지스트리에 남아, 관리자 화면 "재인덱싱"(↺)으로 이미지 분석/MD 교정을 다시 거치지 않고
+  │    저장된 MD 파일 기준으로 재시도 가능 (스캔 PDF는 MD 파일을 만들지 않아 해당 없음).
+  │    existsBySha256AndVersion()은 chunks>0인 row만 "색인 완료"로 인정하므로, 이 partial row
+  │    때문에 디렉터리 동기화가 미완료 문서를 다음 동기화에서 영구히 건너뛰지는 않는다
+  │
   ├─ 청킹
   │    DOCX/TXT/MD/PPTX/PDF(비스캔) → 섹션(헤딩) 단위 유지, 초과 시 섹션 내부 슬라이딩 윈도우
   │      단, PPTX/PDF(비스캔)는 서로 다른 슬라이드/페이지(page_or_slide) 간 병합은 금지 —
@@ -217,7 +224,8 @@ PROGRESSIVE 모드 AND sufficient=false AND retryCount >= max
   │    고정) — 서브배치별 벡터+청크 배치 삽입 2개는 여전히 하나의 트랜잭션으로 커밋(§10.8.3))
   │    + FTS 인덱스(chunk_fts)에도 동일 맥락+정규화 텍스트 반영 (Contextual BM25 시너지)
   │
-  └─ 레지스트리 저장 (SQLite doc_registry 테이블 — memory.db 공유)
+  └─ 레지스트리 저장 (SQLite doc_registry 테이블 — memory.db 공유; 위 체크포인트에서 남긴
+       partial row를 실제 chunk수/spring_doc_ids로 덮어씀)
 ```
 
 > **임베딩 병렬화(§6.21 E1~E3)**: 위 "임베딩 입력 구성 → 벡터 스토어 저장"의 임베딩 호출은 다중 엔드포인트 로드밸런싱(E1, `EMBED_ADDITIONAL_BASE_URLS` — 같은 모델을 N개 서버에 두고 least-in-flight 분산)과 서브배치 병렬 임베딩(E2, `EMBED_MAX_CONCURRENT_BATCHES`, 기본 1=직렬)으로 처리량을 확장할 수 있다(opt-in). Chroma는 임베딩만 병렬화 후 1회 upsert, sqlite-vec는 병렬 임베딩 후 직렬 삽입(pool=1)이라 E2를 켜면 위 §10.9.3 스트리밍 메모리 상한을 속도와 맞바꾼다. 상세는 OPERATOR_MANUAL §3.2 "임베딩 병렬화".
@@ -341,8 +349,26 @@ PROGRESSIVE 모드 AND sufficient=false AND retryCount >= max
     `<br>`로 붙인다 — 셀 안 개행(`[이미지: x]\n[이미지 설명: y]`)이 행을 두 줄로 쪼개 표 전체를 깨뜨리기
     때문. 이미지 설명 주입은 섹션 교정 **전**에 일어나므로, "표는 변경 금지" 지시를 받은 LLM이 `<br>`가
     든 행을 그대로 보존한다.
+  - **진행 상황 보고(SSE `describing_images` 스테이지)**: `MarkdownCorrectionService.
+    prewarmImageDescriptions()`가 distinct 이미지 개수를 파악한 직후 `onImageDescribed(0, total)`을
+    한 번 호출해 총 개수를 알리고, 이후 이미지 1장의 Vision 분석이 끝날 때마다
+    `onImageDescribed(done, total)`을 호출한다 — `DocumentIndexer`가 이를
+    `IndexingProgressEvent(stage="describing_images", ...)`로 감싸 업로드 화면에 "이미지 분석 중
+    (N/M)"을 실시간 표시한다([UI.md §3.2](UI.md#32-문서-관리-documentcontroller) 참고). 섹션 교정
+    진행률(`onSectionDone`, `correcting` 스테이지)과는 별개 콜백이며 항상 먼저 끝난다 — 이 프리패스가
+    오래 걸려도 화면이 직전 단계 메시지(예: "PPTX → Markdown 변환 중...")에 멈춰 있지 않게 하기 위함.
   - 교정본 MD: data/converted/{docId}_corrected.md
   - 이후 파이프라인은 교정본을 source로 사용
+
+6-bis) 레지스트리 체크포인트
+  MD 교정까지 성공한 시점에 doc_registry에 partial row 저장 (chunks=0, spring_doc_ids=[])
+  - 이후 7)~13) 중 어디서 실패해도 이 docId가 레지스트리에 남아 있어, 관리자 화면의
+    "재인덱싱"(↺)으로 4)~6)(이미지 분석 포함)을 다시 거치지 않고 저장된 MD 파일 기준으로
+    재시도할 수 있다
+  - 13)의 최종 레지스트리 저장이 같은 docId를 실제 chunk수/spring_doc_ids로 덮어쓴다
+  - DocRegistry.existsBySha256AndVersion()은 chunks > 0인 row만 "이미 색인됨"으로 인정하므로,
+    이 partial row 때문에 syncDirectory()가 미완료 문서를 다음 동기화에서 영구히 건너뛰지
+    않는다
 
 7) MD 섹션 로드
   DocumentLoaderService.loadFromMarkdown(sourceMd, skipChapterNumbers)
@@ -412,8 +438,9 @@ PROGRESSIVE 모드 AND sufficient=false AND retryCount >= max
       않음(트랜잭션 범위는 문서 전체가 아니라 서브배치 단위)
   + FTS 인덱스(chunk_fts)에도 doc_tags/keywords + content(11의 파생 텍스트, Contextual BM25 시너지) 반영
 
-13) 레지스트리 저장
-  doc_registry에 docId/version/chunk수/spring_doc_ids 기록
+13) 레지스트리 저장 (최종)
+  doc_registry에 docId/version/chunk수/spring_doc_ids 기록 — 6-bis)에서 남긴 partial row를
+  실제 값으로 덮어씀
 ```
 
 핵심 포인트:
@@ -467,6 +494,7 @@ PROGRESSIVE 모드 AND sufficient=false AND retryCount >= max
 > **TXT 구조화 LLM 호출**: `TaskType.LIGHT_TEXT` · `RoutingMode.COST_FIRST`(로컬 프로바이더 우선). 큰 파일은 6,000자 블록으로 나눠 병렬 처리하며, 병렬도는 다른 인덱싱 LLM 호출과 동일하게 `app.indexing.max-concurrent-llm-calls`(`INDEXING_MAX_LLM`)를 `convert()`마다 다시 읽어 적용한다.  
 > **PPTX/PDF(비스캔)도 이제 이미지를 `[이미지: ...]` 인라인 마커로 넣으므로**(DOCX와 동일 방식), 업로드 화면의 "이미지 설명 추가"(`addImageDescriptions`) 체크박스가 이 두 포맷에도 정상 적용된다 — [IMAGE_PROCESS.md §5](IMAGE_PROCESS.md#5-vision-설명-생성-l2) 참고.  
 > **MD 재인덱싱(↺)**: `data/converted/{docId}[_corrected].md` 가 존재하는 DOCX·TXT·PPTX·PDF(비스캔) 만 지원(`AdminController` `/admin/documents/{docId}/reindex`). 재변환/재교정 없이 저장된 MD 를 다시 청킹·임베딩한다. 태그는 FTS 인덱스에서 복원. 스캔 PDF는 MD 파일 자체가 없어 미지원.  
+> **청킹/임베딩 단계 실패 시 재시도**: MD 변환+교정(4~6, 이미지 분석 포함)이 끝난 시점에 `doc_registry`에 `chunks=0`짜리 partial row가 먼저 저장된다(§6.3 6-bis). 이후 청킹·키워드추출·임베딩 저장(7~12) 중 어디서 실패해도 이 docId가 레지스트리·`/admin` 문서 목록에 남아 있어, 위 "MD 재인덱싱(↺)"으로 이미지 분석/MD 교정을 다시 거치지 않고 재시도할 수 있다 — 이 체크포인트가 없던 예전에는 실패 시 레지스트리에 아무것도 남지 않아 재업로드로 처음부터 다시 거쳐야 했다. `DocRegistry.existsBySha256AndVersion()`이 `chunks > 0`인 row만 "색인 완료"로 인정하므로, 이 partial row 때문에 `syncDirectory()`가 미완료 문서를 다음 동기화에서 영구히 건너뛰지는 않는다.  
 > **존재하지 않는 이미지 마커 정리**: MD 로드 직후, `[이미지: path]`/`[이미지(변환불가): path]` 마커가 가리키는 파일을 `data/images/`에서 실제로 찾아본다 — 수동 정리·이동 등으로 파일이 사라졌다면(`DocumentIndexer.removeMissingImageMarkers()`) 해당 마커만 제거하고 그 결과를 `mdPath`(사용 중인 `[_corrected].md`)에 다시 저장한 뒤 청킹을 진행한다. 존재하는 마커는 그대로 유지되며, 모든 마커가 유효하면 파일을 다시 쓰지 않는다. 인라인 마커(문장 중간의 DOCX 이미지)와 단독 줄 마커(PPTX/PDF) 모두 마커 부분만 제거되고 주변 텍스트는 보존된다.  
 > **소제목 번호 재검증**: 이미지 마커 정리 다음 단계로, 로드한 MD에 이미 번호 매겨진 헤딩(`## 1. 제목`처럼 숫자 프리픽스가 붙은 H2~H6)이 하나라도 있으면 현재 헤딩 구조를 기준으로 전체 번호를 다시 계산해 `mdPath`에 반영한다(`DocumentIndexer.reapplyHeadingNumbersIfNeeded()` → `MarkdownCorrectionService.reapplyHeadingNumbers()`, LLM 호출 없이 순수 텍스트 재계산만 수행) — 청크 편집으로 코드 블록이 분리/병합되는 등 헤딩이 추가·삭제·이동해 번호가 어긋난 경우를 바로잡는다. 번호 매겨진 헤딩이 하나도 없는 문서(체크박스를 끄고 업로드했거나, 위에서 언급한 대로 항상 번호가 붙지 않는 PPTX)는 손대지 않는다 — PPTX는 파일명 확장자로 먼저 걸러 이 단계 자체를 건너뛴다. 재계산 결과가 기존 내용과 같으면(즉 번호가 이미 최신 상태면) 파일을 다시 쓰지 않는다.  
 > **마크다운 후처리 재적용**: 소제목 번호 재검증 다음 단계로, `postProcessMarkdown()`(§6.3 6번 ③④ — `[DOCUMENT]` 마커/내용 없는 `-` 줄 제거, 코드 블록·GFM 표 앞뒤 빈 줄 보장, 펜스 밖 연속 빈 줄을 1개로 축소)을 `DocumentIndexer.postProcessIfNeeded()` → `MarkdownCorrectionService.postProcess()`로 다시 실행하고 변경이 있으면 `mdPath`에 반영한다. LLM 호출 없이 결정적으로 동작하며 PPTX를 포함한 모든 형식에 적용된다. **`fixClosingFences()`/`normalizeCodeBlocks()`는 재인덱싱에 포함하지 않는다** — 저장된 MD를 운영자가 직접 편집한 뒤 재인덱싱하면, 코드 블록 안에 의도적으로 남긴 빈 줄이 `normalizeCodeContent()`에 의해(함수/클래스·여러 줄 주석 시작 직전이 아니면 전부 삭제) 지워지거나, 펜스 짝이 어긋난 입력에서 여는 펜스의 언어 태그가 잘못 벗겨질 수 있어 — 이 위험을 매 재인덱싱마다 자동으로 감수하기보다 필요할 때만(문서 재업로드) 감수하도록 의도적으로 남겨둔 것이다.
@@ -515,4 +543,5 @@ PDF 페이지의 50% 이상이 50자 미만  →  스캔 문서로 판정
 | [LLM_ROUTING.md](LLM_ROUTING.md) | 라우팅 모드, 프로바이더 설정, 회로 차단기, 동시성 게이트+백프레셔 |
 | [IMAGE_PROCESS.md](IMAGE_PROCESS.md) | 이미지 추출, OCR, Vision LLM 설명 생성 |
 | [OPERATOR_MANUAL.md](OPERATOR_MANUAL.md) | 환경변수, 배포, 시나리오별 설정 예제 |
+| [PLAN.md §10.10](PLAN.md) | 큐레이션 Q&A(좋아요 기반 지식 승격) 설계·구현 전체 기록 |
 | [UI.md](UI.md) | 화면 구성, HTMX 엔드포인트 |

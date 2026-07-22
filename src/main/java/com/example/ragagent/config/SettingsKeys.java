@@ -41,6 +41,8 @@ public final class SettingsKeys {
     public static final String SEARCH_TOP_K                   = "search-top-k";
     public static final String SEARCH_MULTIQUERY_ENABLED      = "search-multiquery-enabled";
     public static final String SEARCH_HYBRID_ENABLED          = "search-hybrid-enabled";
+    public static final String SEARCH_CURATED_QA_ENABLED      = "search-curated-qa-enabled"; // §10.10
+    public static final String SEARCH_CURATED_QA_WEIGHT       = "search-curated-qa-weight";  // §10.10
 
     // ── Indexing / chunking (apply on the next indexing / ↺ re-index) ────────
     public static final String CHUNK_SIZE                     = "chunk-size";
@@ -64,6 +66,8 @@ public final class SettingsKeys {
             SEARCH_TOP_K,
             SEARCH_MULTIQUERY_ENABLED,
             SEARCH_HYBRID_ENABLED,
+            SEARCH_CURATED_QA_ENABLED,
+            SEARCH_CURATED_QA_WEIGHT,
             CHUNK_SIZE,
             CHUNK_OVERLAP,
             MIN_CHUNK_SIZE,

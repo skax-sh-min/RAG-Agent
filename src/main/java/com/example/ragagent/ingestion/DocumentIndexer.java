@@ -28,6 +28,7 @@ import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -146,7 +147,8 @@ public class DocumentIndexer {
                     req.addImageDescriptions(), req.addHeadingNumbers(), false,
                     (done, total) -> req.onProgress().accept(
                             IndexingProgressEvent.of("correcting", done, total, req.filename(),
-                                    done + "/" + total + " 섹션 교정 중")));
+                                    done + "/" + total + " 섹션 교정 중")),
+                    imageDescribeProgress(req));
             rawDocs = loaderService.loadFromMarkdown(sourceMd);
         } else if (lower.endsWith(".txt")) {
             // Plain text has no inherent structure → let the LLM impose headings/lists + fix grammar,
@@ -164,7 +166,8 @@ public class DocumentIndexer {
                     req.addImageDescriptions(), req.addHeadingNumbers(), false,
                     (done, total) -> req.onProgress().accept(
                             IndexingProgressEvent.of("correcting", done, total, req.filename(),
-                                    done + "/" + total + " 섹션 교정 중")));
+                                    done + "/" + total + " 섹션 교정 중")),
+                    imageDescribeProgress(req));
             rawDocs = loaderService.loadFromMarkdown(sourceMd);
         } else if (lower.endsWith(".md")) {
             req.onProgress().accept(IndexingProgressEvent.of("loading", 0, 0, req.filename(), "Markdown 로드 중..."));
@@ -175,7 +178,8 @@ public class DocumentIndexer {
                     req.addImageDescriptions(), req.addHeadingNumbers(), false,
                     (done, total) -> req.onProgress().accept(
                             IndexingProgressEvent.of("correcting", done, total, req.filename(),
-                                    done + "/" + total + " 섹션 교정 중")));
+                                    done + "/" + total + " 섹션 교정 중")),
+                    imageDescribeProgress(req));
             rawDocs = loaderService.loadFromMarkdown(sourceMd);
         } else if (lower.endsWith(".pptx")) {
             // PPTX has unambiguous slide numbers → convert to MD (title-only heading per slide,
@@ -197,7 +201,8 @@ public class DocumentIndexer {
                     req.addImageDescriptions(), false, true,
                     (done, total) -> req.onProgress().accept(
                             IndexingProgressEvent.of("correcting", done, total, req.filename(),
-                                    done + "/" + total + " 섹션 교정 중")));
+                                    done + "/" + total + " 섹션 교정 중")),
+                    imageDescribeProgress(req));
             // skipChapterNumbers=true — slide title/subtitle headings aren't chapter structure (see
             // comment above), so every section's MetaKey.CHAPTER_NO stays "0"; only [페이지: N] matters.
             rawDocs = loaderService.loadFromMarkdown(sourceMd, true);
@@ -232,7 +237,8 @@ public class DocumentIndexer {
                         req.addImageDescriptions(), req.addHeadingNumbers(), false,
                         (done, total) -> req.onProgress().accept(
                                 IndexingProgressEvent.of("correcting", done, total, req.filename(),
-                                        done + "/" + total + " 섹션 교정 중")));
+                                        done + "/" + total + " 섹션 교정 중")),
+                        imageDescribeProgress(req));
                 // skipChapterNumbers=true — PdfToMarkdownConverter's "## N페이지" heading is a
                 // synthetic per-page container (see its own class comment), never a real chapter;
                 // MetaKey.CHAPTER_NO would otherwise just re-derive the page count under a
@@ -244,6 +250,18 @@ public class DocumentIndexer {
             throw new IllegalArgumentException("Unsupported file type: " + req.filename());
         }
         log.debug("[INDEX] {} 로드 완료 → 원본 섹션 {}개", req.filename(), rawDocs.size());
+
+        // 이미지 분석 + MD 교정까지 끝난 시점에 최소한의 registry row를 먼저 남겨 둔다. 이후
+        // 청킹/키워드추출/임베딩 단계에서 실패해도 이 docId가 doc_registry에 남아 있으므로,
+        // 관리자 화면의 "재인덱싱"(reindexFromMd)으로 저장된 MD 파일을 그대로 재사용해 재시도할
+        // 수 있다 — 비용이 큰 이미지 분석/MD 교정을 다시 거치지 않아도 된다. chunks=0/
+        // springDocIds=[]는 "MD는 준비됐지만 색인은 아직 완료되지 않음"을 뜻하며, 청킹이 끝까지
+        // 성공하면 아래 최종 docRegistry.put()이 같은 docId를 실제 값으로 덮어쓴다. 스캔 PDF는
+        // MD 파일을 만들지 않으므로(reindexFromMd 미지원 대상) 자동으로 제외된다.
+        if (Files.exists(rawMdPath) || Files.exists(correctedMdPath)) {
+            docRegistry.put(docId, DocRegistry.SHARED, new DocRegistry.DocRegistryEntry(
+                    sha256, req.version(), Instant.now().toString(), 0, List.of(), List.of()));
+        }
 
         req.onProgress().accept(IndexingProgressEvent.of("chunking", 0, 0, req.filename(), "청크 분할 중..."));
         List<Document> chunks = chunkSplitter.splitDocuments(
@@ -542,6 +560,18 @@ public class DocumentIndexer {
      * tags set at original upload. Returns an empty list when FTS is unavailable or no prior rows
      * exist for {@code priorDocId}. Never throws.
      */
+    /**
+     * Reports Vision image-description progress ("이미지 분석 중 (N/M)") for the given request —
+     * fires while {@code correctionService.correct()}'s image-description pre-pass runs, which
+     * otherwise leaves the last pre-correction "loading" message (e.g. "PPTX → Markdown 변환 중...")
+     * stuck on screen for the whole Vision phase.
+     */
+    private BiConsumer<Integer, Integer> imageDescribeProgress(IndexRequest req) {
+        return (done, total) -> req.onProgress().accept(
+                IndexingProgressEvent.of("describing_images", done, total, req.filename(),
+                        "이미지 분석 중 (" + done + "/" + total + ")"));
+    }
+
     private List<String> restoreTags(String priorDocId) {
         if (priorDocId == null) return List.of();
         return keywordRepo.tagsByDocIds(List.of(priorDocId)).getOrDefault(priorDocId, List.of());

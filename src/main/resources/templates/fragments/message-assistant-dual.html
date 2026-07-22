@@ -70,6 +70,11 @@
                         th:attr="aria-label=#{feedback.like},title=#{feedback.like}">👍</button>
                 <button type="button" class="btn btn-sm btn-outline-secondary feedback-btn" data-feedback="DISLIKE"
                         th:attr="aria-label=#{feedback.dislike},title=#{feedback.dislike}">👎</button>
+                <!-- §10.10 — 새로 답변된 turn은 아직 좋아요 상태일 수 없으므로 항상 숨김에서 시작 -->
+                <button type="button" class="btn btn-sm btn-outline-secondary curated-edit-btn" style="display:none;"
+                        th:attr="aria-label=#{curated.edit},title=#{curated.edit}">
+                    <i class="bi bi-pencil"></i>
+                </button>
             </div>
             <div class="text-muted" style="font-size: 0.72rem;">
                 <span>⏱ <span th:text="${#numbers.formatDecimal(elapsedSeconds,1,1)}"></span>

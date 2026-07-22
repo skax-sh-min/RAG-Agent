@@ -1,5 +1,7 @@
 package com.example.ragagent.ingestion;
 
+import org.junit.jupiter.api.parallel.ResourceLock;
+
 import com.example.ragagent.model.MetaKey;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -42,6 +44,7 @@ import static org.mockito.Mockito.when;
                 "app.llm.providers[0].api-key=test-key"
         })
 @EnabledIfSystemProperty(named = "sqlitevec.path", matches = ".+")
+@ResourceLock("global-state")
 class SqliteVecSeparateDbIntegrationTest {
 
     private static final String V = "sepv1";

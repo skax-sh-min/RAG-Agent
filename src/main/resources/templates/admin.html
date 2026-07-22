@@ -201,6 +201,57 @@
         </div>
     </div><!-- /row -->
 
+    <!-- ── §10.10 큐레이션 Q&A 관리 ─────────────────────────────────────── -->
+    <div class="card mt-4" id="curated-qa-card">
+        <div class="card-header d-flex align-items-center py-2">
+            <i class="bi bi-chat-heart me-2"></i>
+            <span class="fw-semibold small">큐레이션 Q&A</span>
+            <span class="badge bg-secondary ms-2" th:text="${#lists.size(curatedEntries)}">0</span>
+            <span class="ms-auto small text-muted">좋아요로 승격된 답변 — 편집 시 재임베딩</span>
+        </div>
+        <div class="card-body p-0">
+            <div th:if="${#lists.isEmpty(curatedEntries)}"
+                 class="text-muted small p-3 text-center">큐레이션된 Q&A가 없습니다.</div>
+            <div class="table-responsive" th:unless="${#lists.isEmpty(curatedEntries)}">
+                <table class="table table-sm table-hover mb-0 small">
+                    <thead class="table-light">
+                    <tr>
+                        <th style="min-width:200px;">질문</th>
+                        <th>답변 (미리보기)</th>
+                        <th style="min-width:120px;">등록일</th>
+                        <th class="text-center" style="width:90px;">작업</th>
+                    </tr>
+                    </thead>
+                    <tbody>
+                    <tr th:each="c : ${curatedEntries}" th:id="'curated-row-' + ${c.id()}">
+                        <td th:text="${c.question()}"></td>
+                        <td>
+                            <div class="text-truncate" style="max-width:420px;"
+                                 th:title="${c.answer()}" th:text="${c.answer()}"></div>
+                        </td>
+                        <td class="text-muted"
+                            th:text="${c.createdAt() != null ? c.createdAt().substring(0,19).replace('T',' ') : ''}"></td>
+                        <td class="text-center">
+                            <button type="button" class="btn btn-sm btn-outline-secondary py-0 px-1 me-1"
+                                    style="font-size:0.7rem;"
+                                    th:attr="data-curated-id=${c.id()}"
+                                    onclick="openCuratedEdit(this.dataset.curatedId)" title="편집">
+                                <i class="bi bi-pencil"></i>
+                            </button>
+                            <button type="button" class="btn btn-sm btn-outline-danger py-0 px-1"
+                                    style="font-size:0.7rem;"
+                                    th:attr="data-curated-id=${c.id()}"
+                                    onclick="deleteCuratedInline(this.dataset.curatedId, this)" title="삭제">
+                                <i class="bi bi-trash"></i>
+                            </button>
+                        </td>
+                    </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
 </div><!-- /container -->
 
 <!-- ── Edit Offcanvas ──────────────────────────────────────────────────── -->
@@ -211,6 +262,17 @@
     </div>
     <div class="offcanvas-body d-flex flex-column gap-3" id="editOffcanvasBody">
         <div class="text-muted small text-center py-5">청크를 선택하세요.</div>
+    </div>
+</div>
+
+<!-- ── §10.10 큐레이션 Q&A 편집 Offcanvas ──────────────────────────────── -->
+<div class="offcanvas offcanvas-end" tabindex="-1" id="curatedEditOffcanvas" style="width:520px; max-width:100%;">
+    <div class="offcanvas-header border-bottom">
+        <h6 class="offcanvas-title"><i class="bi bi-chat-heart me-2"></i>큐레이션 Q&A 편집</h6>
+        <button type="button" class="btn-close" data-bs-dismiss="offcanvas"></button>
+    </div>
+    <div class="offcanvas-body d-flex flex-column gap-3" id="curatedEditOffcanvasBody">
+        <div class="text-muted small text-center py-5">항목을 선택하세요.</div>
     </div>
 </div>
 </th:block>
@@ -313,6 +375,63 @@ function deleteChunkInline(chunkId, collection, row) {
     })
     .then(r => {
         if (r.ok) { row.closest('tr').remove(); showToast('청크 삭제됨', 'success'); }
+        else       { showToast('삭제 실패', 'danger'); }
+    })
+    .catch(() => showToast('삭제 중 오류', 'danger'));
+}
+
+// ── §10.10 큐레이션 Q&A 편집/삭제 ──────────────────────────────────────────
+
+function openCuratedEdit(id) {
+    fetch('/admin/curated/' + encodeURIComponent(id) + '/detail')
+        .then(r => { if (!r.ok) throw new Error(); return r.json(); })
+        .then(data => {
+            const body = document.getElementById('curatedEditOffcanvasBody');
+            body.innerHTML = `
+                <div>
+                    <label class="form-label small fw-semibold">질문</label>
+                    <div class="form-control form-control-sm text-muted" style="font-size:0.8rem;">${escHtml(data.question || '')}</div>
+                </div>
+                <div class="flex-grow-1 d-flex flex-column">
+                    <label class="form-label small fw-semibold">답변</label>
+                    <textarea id="curated-edit-answer" class="form-control form-control-sm flex-grow-1"
+                              style="min-height:280px; font-size:0.82rem; resize:vertical;">${escHtml(data.answer || '')}</textarea>
+                    <div class="form-text small">저장하면 검색 임베딩이 자동으로 다시 계산됩니다.</div>
+                </div>
+                <button class="btn btn-primary btn-sm" onclick="saveCuratedEdit('${escAttr(id)}')">
+                    <i class="bi bi-save me-1"></i>저장
+                </button>`;
+            new bootstrap.Offcanvas(document.getElementById('curatedEditOffcanvas')).show();
+        })
+        .catch(() => showToast('큐레이션 항목을 불러올 수 없습니다.', 'danger'));
+}
+
+function saveCuratedEdit(id) {
+    const answer = document.getElementById('curated-edit-answer').value;
+    fetch('/admin/curated/' + encodeURIComponent(id), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...getCsrfHeaders() },
+        body: JSON.stringify({ answer })
+    })
+    .then(r => {
+        if (r.ok) {
+            showToast('큐레이션 답변이 저장되었습니다.', 'success');
+            bootstrap.Offcanvas.getInstance(document.getElementById('curatedEditOffcanvas')).hide();
+            const row = document.getElementById('curated-row-' + id);
+            if (row) row.children[1].querySelector('div').textContent = answer;
+        } else { showToast('저장 실패', 'danger'); }
+    })
+    .catch(() => showToast('저장 중 오류 발생', 'danger'));
+}
+
+function deleteCuratedInline(id, btn) {
+    if (!confirm('이 큐레이션 Q&A를 삭제하시겠습니까? (검색에서 즉시 제외됩니다)')) return;
+    fetch('/admin/curated/' + encodeURIComponent(id), {
+        method: 'DELETE',
+        headers: getCsrfHeaders()
+    })
+    .then(r => {
+        if (r.ok) { btn.closest('tr').remove(); showToast('큐레이션 Q&A 삭제됨', 'success'); }
         else       { showToast('삭제 실패', 'danger'); }
     })
     .catch(() => showToast('삭제 중 오류', 'danger'));

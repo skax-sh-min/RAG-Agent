@@ -1,5 +1,7 @@
 package com.example.ragagent.evaluation;
 
+import org.junit.jupiter.api.parallel.ResourceLock;
+
 import com.example.ragagent.agent.AgentState;
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.llm.RoutingMode;
@@ -43,6 +45,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE)
 @TestPropertySource(locations = "file:.env", encoding = "UTF-8")
 @EnabledIfSystemProperty(named = "search-eval.enabled", matches = "true")
+@ResourceLock("global-state")
 class SearchQualityEvaluationTest {
 
     private static final String GOLD_RESOURCE = "search-eval/nexcore-gold.json";

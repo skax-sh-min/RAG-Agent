@@ -81,6 +81,17 @@ class DocRegistryTest {
     }
 
     @Test
+    @DisplayName("existsBySha256AndVersion — chunks=0(청킹 실패로 남은 부분 저장 row)는 미존재로 취급된다")
+    void existsBySha256AndVersion_partialEntry_treatedAsNotIndexed() {
+        DocRegistry reg = buildRegistry();
+        DocRegistry.DocRegistryEntry partial = new DocRegistry.DocRegistryEntry(
+                "sha-partial", "v1", "2026-01-01T00:00:00Z", 0, List.of(), List.of());
+        reg.put("doc_partial", "anonymous", partial);
+
+        assertThat(reg.existsBySha256AndVersion("sha-partial", "v1", "anonymous")).isFalse();
+    }
+
+    @Test
     @DisplayName("findStaleDocId — 구버전 docId 탐지")
     void findStaleDocId_detects_old_entry() {
         DocRegistry reg = buildRegistry();

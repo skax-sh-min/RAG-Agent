@@ -79,6 +79,8 @@ src/main/resources/
 | GET | `/ui/documents/list` | `fragments/doc-table-body` | 문서 목록 새로고침 |
 
 > **관리 전용 인증 모드**(`app.auth.management-only=true`, §6.17 B안)에서는 `POST /ui/documents/upload`, `POST /ui/documents/progress/*/cancel`, `DELETE /ui/documents/{docId}`, `PATCH /ui/documents/{id}/tags`, `GET /ui/documents/{id}/tags/edit`가 `hasRole("ADMIN")`로 게이트된다 — 비로그인은 `/login` 리다이렉트, 관리자 아닌 로그인은 403. `GET /documents`·`GET /ui/documents/list`·태그 조회는 게스트에게 그대로 열려 있다. 자세한 내용은 [OPERATOR_MANUAL.md §9.4.2](OPERATOR_MANUAL.md#942-관리-전용-인증-management-only) 참고.
+>
+> **인덱싱 진행 스테이지**(`stage` 값): `loading` → `structuring`(TXT만) → `describing_images`(Vision 이미지 분석, "이미지 설명 추가" 체크 시만 — "이미지 분석 중 (N/M)") → `correcting`(DOCX/TXT/MD/PPTX/PDF[비스캔]) → `chunking` → `enriching` → `storing` → `done`/`error`/`cancelled`. 각 이벤트는 `stage`와 함께 `done`/`total`/`filename`/`message`를 실어 나르며, `documents.html`의 `stageHtml`/`STAGE_LABELS`가 단계별 진행률 바와 오류 로그 라벨을 렌더링한다. 상세는 [PIPELINE.md §6.3](PIPELINE.md#63-docx--md--임베딩-db-저장-상세-이미지-포함) 참고.
 
 ### 3.3 운영 / LLM 사용량 (OperationsController)
 
@@ -87,6 +89,8 @@ src/main/resources/
 | GET | `/llm-usage` | `llm-usage.html` | LLM 사용량 페이지 |
 | GET | `/ui/llm-usage/cards` | `fragments/llm-usage-cards` | 카드 HTMX 자동 갱신(30초). 채팅 프로바이더 + 임베딩(`embed:<model>`, `EMBEDDING` 배지) + orphan(설정에 없는 이름, `ORPHAN` 배지 + 삭제 버튼) 카드 포함 |
 | DELETE | `/admin/llm-usage/{provider}` | `fragments/llm-usage-cards` | orphan 프로바이더의 누적 사용 기록 삭제. `/admin/**` 경로 아래 있어 `ROLE_ADMIN` 전용(no-auth 모드는 관리자 자동 인증 상속) — 컨트롤러는 `OperationsController` 소속, 경로만 admin 네임스페이스 |
+| GET | `/ui/threads/{threadId}/turns/{turnId}/curated` | JSON `{"answer":"..."}` | §10.10 — 본인 좋아요 답변의 현재 큐레이션 텍스트 조회(채팅 인라인 편집창 채우기용). 소유권은 기존 피드백 엔드포인트와 동일하게 `(userId, threadId)` 스코프로 검증 |
+| PATCH | `/ui/threads/{threadId}/turns/{turnId}/curated` | `204` | §10.10 — 본인 좋아요 답변의 큐레이션 텍스트 수정(`answer` 폼 파라미터) → 저장 즉시 백그라운드 재임베딩. 관리자 권한 불필요 — thread 자체가 사용자별로 격리되어 있어 본인 turn만 접근 가능 |
 
 REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — 둘 다 임베딩·orphan 항목 포함(상세는 [OPERATOR_MANUAL.md](OPERATOR_MANUAL.md) 참고)
 
@@ -107,8 +111,13 @@ REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — �
 | POST | `/admin/chunks/{chunkId}` | `200` | 청크 텍스트·메타데이터 수정 (벡터 보존) |
 | DELETE | `/admin/chunks/{chunkId}` | `200` | 청크 삭제 (sqlite-vec는 두 테이블 동기 삭제) |
 | POST | `/admin/documents/{docId}/reindex` | JSON | 저장된 MD로 재인덱싱 (DOCX/TXT/MD/PPTX/PDF 전용, 스캔 PDF 제외 — 스캔 PDF는 MD 변환 없이 OCR로 바로 인덱싱되어 재사용할 MD 파일이 없다) |
+| GET | `/admin/curated/{id}/detail` | JSON | §10.10 — 큐레이션 Q&A 항목의 질문·답변 조회 (편집 패널) |
+| POST | `/admin/curated/{id}` | `200` | §10.10 — 큐레이션 Q&A 답변 수정 → 재임베딩. 좋아요를 누른 사용자와 무관하게 관리자가 어떤 항목이든 편집 가능 |
+| DELETE | `/admin/curated/{id}` | `200` | §10.10 — 큐레이션 Q&A 강제 삭제(비활성화+de-index). 좋아요 주체의 동의 없이도 관리자가 제거 가능(모더레이션) |
 
 > 상태 카드는 `AdminService.vectorStoreView()` → `VectorStoreAdminView`. 백엔드별 표시 차이는 [OPERATOR_MANUAL.md §7.4](OPERATOR_MANUAL.md) 참고.
+>
+> **큐레이션 Q&A 카드**(`/admin` 하단, §10.10): 좋아요로 승격된 질문·답변을 최신순으로 표시(상한 50건). 편집(연필 아이콘)은 저장 시 자동 재임베딩되는 점이 위 청크 편집과 다르다 — 청크 편집은 원본 벡터를 그대로 유지하지만, 큐레이션 Q&A 편집은 검색 정확도가 목적이라 항상 재임베딩된다. 상세는 [OPERATOR_MANUAL.md §7.5](OPERATOR_MANUAL.md#75-큐레이션-qa-관리-1010) 참고.
 
 > **청크 목록 컬럼**(`fragments/admin-chunks :: table`): ID·텍스트 미리보기·크기·파일명·페이지/슬라이드·챕터·키워드·작업. **챕터** 열은 `MetaKey.CHAPTER_NO`(H2~H6 헤딩 기반 계층 번호, 예: `1.5.3`)를 보여주며, "0"(프롤로그·PPTX·스캔 PDF — 실제 챕터 없음)이면 빈 칸으로 표시된다 — [§4 출처 Hover 미리보기](#출처-hover-미리보기)의 인용 라벨 로직과 동일한 컨벤션.
 >
@@ -194,11 +203,30 @@ PROGRESSIVE 업그레이드 시 `🔝 고추론 재분석 → {premiumProvider}`
 
 ### 출처 Hover 미리보기
 
-**출처 라벨 형식**: `RetrievalService.formatSource()`가 청크 메타데이터의 `chapter_no`(H2~H6 헤딩 기반 계층 번호, 예: `1.5.3`)가 "0"이 아니면 `"파일명 | 1.5.3"`, 아니면(프롤로그·PPTX·비스캔 PDF — 이 세 경우는 chapter_no가 항상 "0") `page_or_slide`로 폴백해 `"파일명 | p.12"`로 표시한다 — 문서 버전은 라벨에 포함되지 않는다.
+**출처 라벨 형식**: `RetrievalService.formatSource()`가 청크 메타데이터의 `chapter_no`(H2~H6 헤딩 기반 계층 번호, 예: `1.5.3`)가 "0"이 아니면 `"파일명 | 1.5.3"`, 아니면(프롤로그·PPTX·비스캔 PDF — 이 세 경우는 chapter_no가 항상 "0") `page_or_slide`로 폴백해 `"파일명 | p.12"`로 표시한다 — 문서 버전은 라벨에 포함되지 않는다. **큐레이션 Q&A**(§10.10, 좋아요로 승격된 답변)가 출처로 포함된 경우엔 파일명·페이지가 없으므로 `"💬 큐레이션 Q&A"` 고정 라벨로 표시된다.
 
 출처 목록 항목에 Bootstrap Popover (`hover focus` 트리거). `SourceRef.preview`에 청크 텍스트 앞 500자 포함.
 
 **팝오버 크기 (`app.css`, ≥768px 전용)**: Bootstrap 기본값(`max-width: 276px`, `font-size: 0.875rem`)은 500자 미리보기가 세로로 길게 줄바꿈되어 가독성이 떨어졌다 — `max-width: 560px`(약 2배), `font-size: 0.8rem`으로 넓히고 살짝 줄여 같은 500자가 더 적은 줄로 읽기 좋게 표시된다. `@media (min-width: 768px)` 블록 안에 있어 모바일(<768px)은 Bootstrap 기본값 그대로 — 좁은 화면에서 팝오버를 더 넓히면 화면 밖으로 넘칠 여지가 있기 때문.
+
+### 좋아요 피드백 & 큐레이션 Q&A 편집 (§10.10)
+
+어시스턴트 버블 하단(피드백 컨트롤 영역, `.feedback-controls`)에 👍/👎 버튼과 함께 표시된다.
+
+```
+👍  👎  ✏(좋아요 상태일 때만)
+```
+
+| 동작 | 트리거 | 서버 반영 |
+|------|--------|----------|
+| 좋아요 | 👍 클릭(재클릭 시 취소) | `PATCH /ui/threads/{id}/turns/{turnId}/feedback` → 즉시 큐레이션 스냅샷 생성 + 3초 후 배경 임베딩 |
+| 싫어요 | 👎 클릭 | 동일 엔드포인트 — 다음 대화 컨텍스트에서 해당 turn 제외(§6.8) |
+| 큐레이션 답변 편집 | 좋아요 상태일 때만 노출되는 연필(✏) 아이콘 | `GET`/`PATCH /ui/threads/{id}/turns/{turnId}/curated` → 우측 오프캔버스에서 답변 텍스트 수정, 저장 시 자동 재임베딩 |
+
+- 편집 아이콘은 **본인이 좋아요한 turn에서만** 보인다 — 채팅창은 항상 본인 스레드만 렌더링하므로 별도 권한 UI 분기가 없다.
+- 좋아요/취소 클릭 시 JS가 서버 응답에 따라 편집 아이콘의 표시 여부도 함께 갱신한다(새로고침 불필요).
+- 관리자용 전체 큐레이션 Q&A 관리(모든 사용자 대상)는 `/admin` 페이지에 별도로 있다 — [§3.4](#34-벡터-스토어-관리-admincontroller) 및 [OPERATOR_MANUAL.md §7.5](OPERATOR_MANUAL.md#75-큐레이션-qa-관리-1010) 참고.
+- 동작 원리(디바운스, 재임베딩, 문서 재인덱싱/대화 삭제와의 관계)는 [OPERATOR_MANUAL.md §6.7](OPERATOR_MANUAL.md#67-큐레이션-qa-좋아요-기반-지식-승격-1010) 참고.
 
 ---
 
@@ -225,7 +253,8 @@ PROGRESSIVE 업그레이드 시 `🔝 고추론 재분석 → {premiumProvider}`
 
 [파일 업로드] Fetch API → POST /ui/documents/upload → 202 {taskId}
               → GET /ui/documents/progress/{taskId} SSE 구독
-              → progress 이벤트로 파일별 상태 갱신 → done/error 이벤트 후 목록 자동 새로고침
+              → progress 이벤트로 파일별 상태 갱신(로드→구조화→이미지 분석→교정→청킹→키워드→저장,
+                단계별 진행률 바 + "이미지 분석 중 (N/M)" 등 메시지) → done/error 이벤트 후 목록 자동 새로고침
 
 [문서 삭제]  hx-delete → hx-swap="outerHTML swap:0.3s" (페이드아웃)
 [LLM 카드]   hx-trigger="load, every 30s" → 30초마다 자동 갱신

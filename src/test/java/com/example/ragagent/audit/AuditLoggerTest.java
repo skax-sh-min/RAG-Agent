@@ -1,5 +1,7 @@
 package com.example.ragagent.audit;
 
+import org.junit.jupiter.api.parallel.ResourceLock;
+
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
@@ -25,6 +27,7 @@ import static org.mockito.Mockito.when;
  * Logback ListAppender로 "AUDIT" 로거에 실제 기록되는 이벤트를 검증.
  * 파일 I/O 없이 메모리에서 빠르게 실행.
  */
+@ResourceLock("global-state")
 class AuditLoggerTest {
 
     private ListAppender<ILoggingEvent> listAppender;
@@ -47,7 +50,7 @@ class AuditLoggerTest {
                 true, false, 3,
                 null, null, null, null, null, null, null,
                 new AppProperties.AuditConfig(true, "10MB", 7, "100MB"), null, null, null, null, null, null,
-                null, null, null, null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null, null, null, null, null, null);
 
         logger = new AuditLogger(new ObjectMapper(), props, currentUser);
     }
@@ -98,7 +101,7 @@ class AuditLoggerTest {
                 true, false, 3,
                 null, null, null, null, null, null, null,
                 new AppProperties.AuditConfig(false, "10MB", 7, "100MB"), null, null, null, null, null, null,
-                null, null, null, null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null, null, null, null, null, null);
         AuditLogger disabledLogger = new AuditLogger(new ObjectMapper(), disabledProps, currentUser);
 
         disabledLogger.log("document.upload", "doc-3");
@@ -113,7 +116,7 @@ class AuditLoggerTest {
             "./data", 2, 800, 100, 100, 7, 0.0, true, 0, false,
                 true, false, 3,
                 null, null, null, null, null, null, null, null, null, null, null, null, null, null,
-                null, null, null, null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null, null, null, null, null, null);
         assertThat(propsWithNull.auditSafe().enabled()).isTrue();
         assertThat(propsWithNull.auditSafe().maxHistoryDays()).isEqualTo(7);
         assertThat(propsWithNull.auditSafe().maxFileSize()).isEqualTo("10MB");

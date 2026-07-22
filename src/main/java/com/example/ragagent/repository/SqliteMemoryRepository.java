@@ -173,6 +173,17 @@ public class SqliteMemoryRepository implements MemoryRepository {
     }
 
     @Override
+    public Optional<Turn> getTurn(String userId, String threadId, long turnId) {
+        List<Turn> rows = jdbc.query(
+                "SELECT id, question, answer, asked_at, created_at, " +
+                "input_tokens, output_tokens, elapsed_ms, provider, llm_calls, feedback " +
+                "FROM conversation_turns WHERE id = ? AND user_id = ? AND thread_id = ?",
+                TURN_ROW_MAPPER,
+                turnId, userId, threadId);
+        return rows.isEmpty() ? Optional.empty() : Optional.of(rows.get(0));
+    }
+
+    @Override
     public Optional<FeedbackRow> getFeedback(String userId, String threadId, long turnId) {
         List<FeedbackRow> rows = jdbc.query(
                 "SELECT feedback FROM conversation_turns WHERE id = ? AND user_id = ? AND thread_id = ?",

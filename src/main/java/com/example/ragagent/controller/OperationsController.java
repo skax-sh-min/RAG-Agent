@@ -9,6 +9,7 @@ import com.example.ragagent.llm.TrackingEmbeddingModel;
 import com.example.ragagent.model.LlmProviderReport;
 import com.example.ragagent.repository.LlmUsageRepository;
 import com.example.ragagent.repository.MemoryRepository;
+import com.example.ragagent.service.CuratedQaService;
 import com.example.ragagent.service.MemoryService;
 import com.example.ragagent.service.ThreadMetaService;
 import org.springframework.http.HttpStatus;
@@ -38,19 +39,22 @@ public class OperationsController {
     private final AppProperties props;
     private final CircuitBreaker circuitBreaker;
     private final AuditLogger auditLogger;
+    private final CuratedQaService curatedQaService;
 
     public OperationsController(ThreadMetaService threadMetaService,
                                 MemoryService memoryService,
                                 LlmUsageRepository usageRepo,
                                 AppProperties props,
                                 CircuitBreaker circuitBreaker,
-                                AuditLogger auditLogger) {
+                                AuditLogger auditLogger,
+                                CuratedQaService curatedQaService) {
         this.threadMetaService = threadMetaService;
         this.memoryService = memoryService;
         this.usageRepo = usageRepo;
         this.props = props;
         this.circuitBreaker = circuitBreaker;
         this.auditLogger = auditLogger;
+        this.curatedQaService = curatedQaService;
     }
 
     // ── Page ──────────────────────────────────────────────────────────
@@ -99,7 +103,8 @@ public class OperationsController {
 
     /**
      * DISLIKE is a hard-exclusion signal consumed by MemoryRepository.getHistory() —
-     * disliked turns drop out of future prompt context. LIKE is stored for future use only.
+     * disliked turns drop out of future prompt context. LIKE promotes the turn into the
+     * curated-Q&A search axis via {@link CuratedQaService} (§10.10).
      */
     @PatchMapping("/ui/threads/{threadId}/turns/{turnId}/feedback")
     @ResponseBody
@@ -117,11 +122,60 @@ public class OperationsController {
 
         String dbValue = "NONE".equals(normalized) ? null : normalized;
         memoryService.updateFeedback(userId, threadId, turnId, dbValue);
+
+        // §10.10 — promote/retract the curated-Q&A snapshot on a LIKE transition (either
+        // direction). previous/normalized are both already-uppercased VALID_FEEDBACK members.
+        String previous = existing.get().feedback() == null ? "NONE" : existing.get().feedback();
+        if ("LIKE".equals(normalized) && !"LIKE".equals(previous)) {
+            curatedQaService.onLike(userId, threadId, turnId);
+        } else if (!"LIKE".equals(normalized) && "LIKE".equals(previous)) {
+            curatedQaService.onUnlike(userId, threadId, turnId);
+        }
+
         auditLogger.log("turn.feedback", threadId, Map.of(
                 "turnId", turnId,
-                "from", existing.get().feedback() == null ? "NONE" : existing.get().feedback(),
+                "from", previous,
                 "to", normalized));
         return ResponseEntity.noContent().build();
+    }
+
+    /**
+     * §10.10 step ④ — owner-only inline edit of a turn's curated-Q&A entry (chat window "편집").
+     * Ownership check reuses the exact same {@code getFeedback(userId, threadId, turnId)} scoping
+     * as the feedback endpoint above — a thread only ever contains the current user's own turns,
+     * so no separate authorization mechanism is needed (see PLAN.md §10.10 "UI 분리"). Admin edits
+     * go through the separate {@code /admin/curated/{id}} endpoint (AdminController), which can
+     * reach any user's entry.
+     */
+    @PatchMapping("/ui/threads/{threadId}/turns/{turnId}/curated")
+    @ResponseBody
+    public ResponseEntity<Void> updateCuratedAnswer(ThreadContext ctx, @PathVariable String threadId,
+                                                     @PathVariable long turnId, @RequestParam String answer) {
+        String userId = ctx.userId();
+        if (memoryService.getFeedback(userId, threadId, turnId).isEmpty()) {
+            return ResponseEntity.notFound().build();
+        }
+        boolean updated = curatedQaService.updateAnswerForTurn(userId, threadId, turnId, answer);
+        if (!updated) {
+            return ResponseEntity.notFound().build();
+        }
+        auditLogger.log("curated.edit", threadId, Map.of("turnId", turnId, "by", "owner"));
+        return ResponseEntity.noContent().build();
+    }
+
+    /** Fetches the current curated answer text to populate the chat inline edit box. Same ownership
+     *  scoping as {@link #updateCuratedAnswer}. */
+    @GetMapping("/ui/threads/{threadId}/turns/{turnId}/curated")
+    @ResponseBody
+    public ResponseEntity<Map<String, String>> getCuratedAnswer(ThreadContext ctx, @PathVariable String threadId,
+                                                                  @PathVariable long turnId) {
+        String userId = ctx.userId();
+        if (memoryService.getFeedback(userId, threadId, turnId).isEmpty()) {
+            return ResponseEntity.notFound().build();
+        }
+        return curatedQaService.findActiveByTurn(turnId)
+                .map(row -> ResponseEntity.ok(Map.of("answer", row.answer())))
+                .orElseGet(() -> ResponseEntity.notFound().build());
     }
 
     // ── LLM usage ─────────────────────────────────────────────────────

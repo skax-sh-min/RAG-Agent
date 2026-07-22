@@ -27,6 +27,10 @@ public interface MemoryRepository {
     /** Current feedback value for ownership check + audit "from". Empty = turn not found / not owned. */
     Optional<FeedbackRow> getFeedback(String userId, String threadId, long turnId);
 
+    /** Single turn lookup (question/answer + metadata) for callers that don't need the whole
+     * thread — e.g. curated-Q&A promotion on like. Empty = turn not found / not owned. */
+    Optional<Turn> getTurn(String userId, String threadId, long turnId);
+
     /** {@code feedback}: {@code "LIKE" | "DISLIKE" | null}. No-op if the turn isn't owned by userId/threadId. */
     void updateFeedback(String userId, String threadId, long turnId, String feedback);
 

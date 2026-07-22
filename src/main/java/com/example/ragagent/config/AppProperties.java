@@ -43,7 +43,9 @@ public record AppProperties(
         String mdCorrectionDefaultCodeLanguage, // MD 교정 시 LLM이 미펜스 코드를 감쌀 때 언어 판단이 어려우면 붙일 기본 언어 (java/bash/sql, 기본 java)
         DocxShapeExtractionConfig docxImage,    // DOCX 레거시 VML 도형 + 사진 합성 튜닝
         Boolean pptxRemoveDuplicateSlides,      // PPTX 변환 시 완전 동일 슬라이드 + 목차형 슬라이드 제거 (기본 true) — PptxToMarkdownConverter
-        Boolean pptxDropDividerSlides           // PPTX 변환 시 본문·이미지 없이 '구분용 제목'만 있는 섹션 구분 슬라이드 제거 (기본 true, 문장형/키 메시지 제목은 유지) — PptxToMarkdownConverter
+        Boolean pptxDropDividerSlides,          // PPTX 변환 시 본문·이미지 없이 '구분용 제목'만 있는 섹션 구분 슬라이드 제거 (기본 true, 문장형/키 메시지 제목은 유지) — PptxToMarkdownConverter
+        Boolean searchCuratedQaEnabled,          // §10.10 — 좋아요 기반 큐레이션 Q&A를 RRF 축으로 반영할지 여부 (기본 true). 핫에디터블 — RetrievalService가 매 검색마다 재조회
+        Double searchCuratedQaWeight             // §10.10 — 큐레이션 Q&A 축 RRF 가중치 (기본 1.5 — 벡터축 그룹정규화 1.0보다 약간 높게 잡아 검증된 답변이 우선 노출되되 순위를 독식하진 않음). 핫에디터블
 ) {
     public record LlmConfig(
             List<ProviderConfig> providers,
@@ -328,6 +330,22 @@ public record AppProperties(
         Integer o = overrideInt(SettingsKeys.SEARCH_RRF_K);
         Integer effective = (o != null) ? o : searchRrfK;
         return (effective != null && effective > 0) ? effective : 60;
+    }
+
+    /** §10.10 — curated-Q&A RRF axis on/off. Hot-editable. Defaults to enabled. */
+    public boolean searchCuratedQaEnabledSafe() {
+        Boolean o = overrideBool(SettingsKeys.SEARCH_CURATED_QA_ENABLED);
+        Boolean effective = (o != null) ? o : searchCuratedQaEnabled;
+        return effective == null || effective;
+    }
+
+    /** §10.10 — curated-Q&A RRF axis weight. Defaults to 1.5 (above the group-normalized vector
+     *  axes' effective 1.0, so a verified answer tends to surface without dominating outright —
+     *  RRF's own rank decay still applies). Hot-editable. */
+    public double searchCuratedQaWeightSafe() {
+        Double o = overrideDouble(SettingsKeys.SEARCH_CURATED_QA_WEIGHT);
+        Double effective = (o != null) ? o : searchCuratedQaWeight;
+        return (effective != null && effective > 0) ? effective : 1.5;
     }
 
     /** Query embedding cache on/off. Defaults to enabled. */

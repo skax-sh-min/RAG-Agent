@@ -193,6 +193,23 @@ public class MarkdownCorrectionService {
                           boolean addHeadingNumbers,
                           boolean groupByPage,
                           BiConsumer<Integer, Integer> onSectionDone) {
+        return correct(rawMd, docId, correctedOutputPath, addImageDescriptions, addHeadingNumbers,
+                groupByPage, onSectionDone, null);
+    }
+
+    /**
+     * Same as the 7-arg overload but also reports Vision image-description progress via
+     * {@code onImageDescribed(done, total)} — invoked once per completed image (plus an initial
+     * {@code (0, total)} call as soon as the image count is known), all *before* section
+     * correction/{@code onSectionDone} starts (see {@link #augmentImageDescriptionsWithLocalVision}).
+     * {@code null} is a no-op, so existing callers are unaffected.
+     */
+    public String correct(String rawMd, String docId, Path correctedOutputPath,
+                          boolean addImageDescriptions,
+                          boolean addHeadingNumbers,
+                          boolean groupByPage,
+                          BiConsumer<Integer, Integer> onSectionDone,
+                          BiConsumer<Integer, Integer> onImageDescribed) {
         if (rawMd == null || rawMd.isBlank()) return rawMd;
         log.info("[MD_CORRECT] 시작: docId={}, chars={}", docId, rawMd.length());
         // Hot-editable (indexing family) — read fresh per correction run so a /settings override
@@ -203,7 +220,7 @@ public class MarkdownCorrectionService {
         long t0 = System.currentTimeMillis();
 
         String preprocessed = addImageDescriptions
-                ? augmentImageDescriptionsWithLocalVision(rawMd, correctedOutputPath)
+                ? augmentImageDescriptionsWithLocalVision(rawMd, correctedOutputPath, onImageDescribed)
                 : rawMd;
 
         List<String> sections = groupByPage ? splitByPages(preprocessed) : splitBySections(preprocessed);
@@ -705,7 +722,8 @@ public class MarkdownCorrectionService {
         return String.join("\n", picked);
     }
 
-    private String augmentImageDescriptionsWithLocalVision(String md, Path correctedOutputPath) {
+    private String augmentImageDescriptionsWithLocalVision(String md, Path correctedOutputPath,
+                                                            BiConsumer<Integer, Integer> onImageDescribed) {
         if (md == null || md.isBlank()) return md;
         // Gate: skip entirely when no LOCAL vision provider is registered (don't scan/spawn tasks).
         try {
@@ -725,7 +743,7 @@ public class MarkdownCorrectionService {
         // made one-at-a-time on the regex loop anymore. Previously each image was described
         // strictly sequentially per file, so indexing image-analysis concurrency was effectively
         // bounded by INDEXING_MAX_FILES (files-in-parallel) rather than the LLM knob.
-        prewarmImageDescriptions(md, baseDir, dataDir, descCache);
+        prewarmImageDescriptions(md, baseDir, dataDir, descCache, onImageDescribed);
 
         String withMarkerDesc = injectDescriptionsForPattern(md, IMAGE_MARKER, true, baseDir, dataDir, descCache);
         return injectDescriptionsForPattern(withMarkerDesc, MD_IMAGE_LINK, false, baseDir, dataDir, descCache);
@@ -737,16 +755,26 @@ public class MarkdownCorrectionService {
      * {@code app.indexing.max-concurrent-llm-calls} (read fresh so a {@code /settings} override
      * applies on the next indexing). Best-effort: the replacement loop's own {@code computeIfAbsent}
      * is the correctness fallback, so a path missed here is still described (just synchronously).
+     *
+     * <p>{@code onImageDescribed}, if non-null, is called once with {@code (0, total)} as soon as
+     * the image count is known, then once more per completed image — lets the caller surface
+     * "이미지 분석 중 (N/M)" progress instead of leaving the last pre-correction message (e.g. "PPTX →
+     * Markdown 변환 중...") stuck on screen for the whole Vision phase.
      */
-    private void prewarmImageDescriptions(String md, Path baseDir, Path dataDir, Map<String, String> cache) {
+    private void prewarmImageDescriptions(String md, Path baseDir, Path dataDir, Map<String, String> cache,
+                                          BiConsumer<Integer, Integer> onImageDescribed) {
         Map<String, Path> toDescribe = new LinkedHashMap<>();
         collectImagePaths(md, IMAGE_MARKER, true, baseDir, dataDir, toDescribe);
         collectImagePaths(md, MD_IMAGE_LINK, false, baseDir, dataDir, toDescribe);
         if (toDescribe.isEmpty()) return;
 
+        int total = toDescribe.size();
+        if (onImageDescribed != null) onImageDescribed.accept(0, total);
+
         int maxConcurrent = Math.max(1, props.indexingSafe().maxConcurrentLlmCalls());
-        log.debug("[MD_CORRECT] 이미지 설명 병렬 생성: {}장, maxConcurrent={}", toDescribe.size(), maxConcurrent);
+        log.debug("[MD_CORRECT] 이미지 설명 병렬 생성: {}장, maxConcurrent={}", total, maxConcurrent);
         Semaphore gate = new Semaphore(maxConcurrent);
+        AtomicInteger doneCount = new AtomicInteger(0);
         try (var exec = Executors.newVirtualThreadPerTaskExecutor()) {
             List<CompletableFuture<Void>> futures = new ArrayList<>(toDescribe.size());
             for (Map.Entry<String, Path> e : toDescribe.entrySet()) {
@@ -754,6 +782,8 @@ public class MarkdownCorrectionService {
                     gate.acquireUninterruptibly();
                     try {
                         cache.put(e.getKey(), describeImage(e.getValue()));
+                        int done = doneCount.incrementAndGet();
+                        if (onImageDescribed != null) onImageDescribed.accept(done, total);
                     } finally {
                         gate.release();
                     }
@@ -873,6 +903,10 @@ public class MarkdownCorrectionService {
         try {
             byte[] bytes = Files.readAllBytes(imagePath);
             String mimeType = detectMime(imagePath.toString());
+            // [LLM curl] logs (LoggingChatModel) only see the Prompt's text/Media bytes, never the
+            // source file path, so without this line a DEBUG session can't tell which image a given
+            // Vision request/curl log pair belongs to.
+            log.debug("[MD_CORRECT] 이미지 분석 요청: {} ({}, {} bytes)", imagePath, mimeType, bytes.length);
             Media media = new Media(MimeTypeUtils.parseMimeType(mimeType), new ByteArrayResource(bytes));
             UserMessage userMessage = UserMessage.builder()
                     .text("이 이미지를 한국어 1~2문장으로 간단히 설명하세요.")

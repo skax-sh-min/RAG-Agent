@@ -10,8 +10,10 @@ import com.example.ragagent.model.DocumentInfo;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.mockito.ArgumentCaptor;
 
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.AbstractMap;
 import java.util.LinkedHashSet;
@@ -127,6 +129,43 @@ class RagServiceTest {
 
         verify(indexer).deleteArtifacts(DocRegistry.SHARED, "doc1", "latest");
         verify(docRegistry).save();
+    }
+
+    @Test
+    @DisplayName("deleteDocument — data/documents 의 원본 파일을 backup/ 폴더로 이동하고 파일명에 삭제 시각을 붙인다")
+    void deleteDocument_archivesSourceFileToBackupFolder(@TempDir Path tmpDir) throws Exception {
+        AppProperties props = mock(AppProperties.class);
+        when(props.dataDir()).thenReturn(tmpDir.toString());
+        RagService svc = new RagService(indexer, docRegistry, vectorStore, keywordRepo, props);
+
+        Path documentsDir = tmpDir.resolve("documents");
+        Files.createDirectories(documentsDir);
+        Path source = documentsDir.resolve("manual.pdf");
+        Files.writeString(source, "content");
+
+        svc.deleteDocument("u1", "manual.pdf_a1b2c3d4", "latest");
+
+        assertThat(source).doesNotExist();
+        Path backupDir = documentsDir.resolve("backup");
+        assertThat(backupDir).isDirectory();
+        try (var files = Files.list(backupDir)) {
+            List<Path> backedUp = files.toList();
+            assertThat(backedUp).hasSize(1);
+            assertThat(backedUp.get(0).getFileName().toString()).matches("manual_\\d{8}_\\d{6}\\.pdf");
+            assertThat(Files.readString(backedUp.get(0))).isEqualTo("content");
+        }
+    }
+
+    @Test
+    @DisplayName("deleteDocument — 원본 파일이 이미 없으면 backup/ 폴더를 만들지 않고 조용히 넘어간다")
+    void deleteDocument_sourceFileAlreadyMissing_noBackupFolderCreated(@TempDir Path tmpDir) throws Exception {
+        AppProperties props = mock(AppProperties.class);
+        when(props.dataDir()).thenReturn(tmpDir.toString());
+        RagService svc = new RagService(indexer, docRegistry, vectorStore, keywordRepo, props);
+
+        svc.deleteDocument("u1", "missing.pdf_a1b2c3d4", "latest");
+
+        assertThat(tmpDir.resolve("documents").resolve("backup")).doesNotExist();
     }
 
     @Test

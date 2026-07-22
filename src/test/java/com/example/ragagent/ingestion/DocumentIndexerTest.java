@@ -48,6 +48,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
@@ -68,6 +69,7 @@ class DocumentIndexerTest {
     private AppProperties props;
     private DocumentLoaderService loaderService;
     private MarkdownCorrectionService correctionService;
+    private ChunkSplitter chunkSplitter;
 
     @BeforeEach
     void setUp() throws IOException {
@@ -110,7 +112,7 @@ class DocumentIndexerTest {
 
         // Stub MarkdownCorrectionService / TextToMarkdownService — pass content through unchanged
         correctionService = mock(MarkdownCorrectionService.class);
-        when(correctionService.correct(any(), any(), any(), anyBoolean(), anyBoolean(), anyBoolean(), any()))
+        when(correctionService.correct(any(), any(), any(), anyBoolean(), anyBoolean(), anyBoolean(), any(), any()))
                 .thenAnswer(inv -> inv.getArgument(0));
         // reapplyHeadingNumbers delegates to a real instance (no LLM call in that method, so a
         // never-invoked LlmRouter mock is fine) — it's a no-op unless the MD already has a
@@ -142,7 +144,7 @@ class DocumentIndexerTest {
         keywordRepo = new KeywordSearchRepository(new JdbcTemplate(ds));
         keywordRepo.init();
 
-        ChunkSplitter chunkSplitter = new ChunkSplitter();
+        chunkSplitter = spy(new ChunkSplitter());
         KeywordExtractor keywordExtractor = new KeywordExtractor(llmRouter, props);
 
         // Real, dependency-free converters — pptx/pdf tests below re-stub loaderService's
@@ -207,6 +209,47 @@ class DocumentIndexerTest {
 
         // Vector store received the enriched chunks
         verify(vectorStore, atLeastOnce()).add(eq(DocRegistry.SHARED), eq("v1"), any(), any());
+    }
+
+    @Test
+    @DisplayName("index — MD 교정 후 청킹 실패 시에도 registry에 partial row가 남아 reindexFromMd로 재시도 가능 (이미지 분석/MD 교정 재실행 없이)")
+    void index_chunkingFails_leavesPartialRegistryEntryForReindex() throws IOException {
+        doThrow(new RuntimeException("chunk split failure"))
+                .doCallRealMethod()
+                .when(chunkSplitter).splitDocuments(any(), any(), anyInt(), anyInt(), anyInt(), anyInt());
+
+        Path txt = tmpDir.resolve("plain.txt");
+        Files.writeString(txt, "제목 없는 평문입니다. 청킹 실패 재시도 검증.");
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() ->
+                indexer.index(IndexRequest.single(txt, "plain.txt", "v1", "anonymous", e -> {})))
+                .isInstanceOf(RuntimeException.class)
+                .hasMessageContaining("chunk split failure");
+
+        // MD 교정까지는 성공했으므로 partial registry row(chunks=0)가 남아 있어야 한다.
+        var entries = docRegistry.entries(DocRegistry.SHARED);
+        assertThat(entries).hasSize(1);
+        String docId = entries.iterator().next().getKey();
+        DocRegistry.DocRegistryEntry partial = entries.iterator().next().getValue();
+        assertThat(partial.chunks()).isEqualTo(0);
+        assertThat(partial.springDocIds()).isEmpty();
+
+        // 실패해도 이 partial row 때문에 다음 syncDirectory에서 "이미 색인됨"으로 오인해
+        // 영구히 건너뛰면 안 된다.
+        assertThat(docRegistry.existsBySha256AndVersion(partial.sha256(), "v1", DocRegistry.SHARED)).isFalse();
+
+        Path md = tmpDir.resolve("converted").resolve(docId + ".md");
+        assertThat(md).exists();
+
+        // 재인덱싱 — MD 교정을 다시 거치지 않고도 저장된 MD 파일 기준으로 완주할 수 있어야 한다.
+        indexer.reindexFromMd(docId);
+
+        DocRegistry.DocRegistryEntry finished = docRegistry.findByDocId(docId, DocRegistry.SHARED).orElseThrow();
+        assertThat(finished.chunks()).isGreaterThan(0);
+        assertThat(finished.springDocIds()).isNotEmpty();
+        // correct()는 최초(실패한) index() 호출 때 한 번만 실행되고, reindexFromMd()는 다시 실행하지 않는다.
+        verify(correctionService, times(1))
+                .correct(any(), any(), any(), anyBoolean(), anyBoolean(), anyBoolean(), any(), any());
     }
 
     @Test
@@ -289,7 +332,7 @@ class DocumentIndexerTest {
         // correctionService.correct()의 5번째 인자(addHeadingNumbers)는 요청값(true)과 무관하게
         // 항상 false로 전달되어야 한다 — PPTX 헤딩은 슬라이드 제목 라벨이지 문서 목차가 아니므로.
         // 6번째 인자(groupByPage)는 PPTX이므로 항상 true — [페이지: N] 마커 단위로만 교정 섹션을 묶는다.
-        verify(correctionService).correct(any(), any(), any(), eq(false), eq(false), eq(true), any());
+        verify(correctionService).correct(any(), any(), any(), eq(false), eq(false), eq(true), any(), any());
     }
 
     @Test

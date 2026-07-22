@@ -50,7 +50,13 @@ public class TrackingEmbeddingModel implements EmbeddingModel {
     @Override
     public EmbeddingResponse call(EmbeddingRequest request) {
         EmbeddingResponse response = delegate.call(request);
-        usageRepo.record(providerName, extractInputTokens(response, request), 0);
+        try {
+            usageRepo.record(providerName, extractInputTokens(response, request), 0);
+        } catch (Exception e) {
+            // delegate.call() above already succeeded — a usage-table write failure (e.g.
+            // SQLITE_FULL) must never fail the actual embedding call (would break indexing/search).
+            log.warn("[USAGE] Failed to record usage for provider={}: {}", providerName, e.getMessage());
+        }
         return response;
     }
 

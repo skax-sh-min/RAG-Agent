@@ -1,11 +1,14 @@
 package com.example.ragagent.security;
 
+import org.junit.jupiter.api.parallel.ResourceLock;
+
 import com.example.ragagent.audit.AuditLogger;
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.context.ThreadContextResolver;
 import com.example.ragagent.controller.OperationsController;
 import com.example.ragagent.llm.CircuitBreaker;
 import com.example.ragagent.repository.LlmUsageRepository;
+import com.example.ragagent.service.CuratedQaService;
 import com.example.ragagent.service.MemoryService;
 import com.example.ragagent.service.ThreadMetaService;
 import org.junit.jupiter.api.DisplayName;
@@ -29,6 +32,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @WebMvcTest(value = OperationsController.class, properties = "app.auth.enabled=true")
 @Import({SecurityConfig.class, com.example.ragagent.context.WebMvcConfig.class})
 @WithMockUser
+@ResourceLock("global-state")
 class SecurityHeadersTest {
 
     @Autowired MockMvc mvc;
@@ -41,6 +45,7 @@ class SecurityHeadersTest {
     @MockitoBean ChatModel chatModel;
     @MockitoBean ThreadContextResolver threadContextResolver;
     @MockitoBean AuditLogger auditLogger;
+    @MockitoBean CuratedQaService curatedQaService;
 
     @Test
     @DisplayName("GET 응답에 X-Frame-Options 헤더 존재")

@@ -2,6 +2,7 @@ package com.example.ragagent.config;
 
 import com.example.ragagent.llm.CachingEmbeddingModel;
 import com.example.ragagent.llm.LoadBalancingEmbeddingModel;
+import com.example.ragagent.llm.LoggingEmbeddingModel;
 import com.example.ragagent.llm.TrackingEmbeddingModel;
 import com.example.ragagent.repository.LlmUsageRepository;
 import org.slf4j.Logger;
@@ -49,7 +50,7 @@ public class EmbeddingBeanConfig {
             base = buildRawModel(urls.get(0), cfg, model);
         } else {
             List<EmbeddingModel> delegates = urls.stream()
-                    .map(u -> (EmbeddingModel) buildRawModel(u, cfg, model))
+                    .map(u -> buildRawModel(u, cfg, model))
                     .toList();
             base = new LoadBalancingEmbeddingModel(delegates);
             log.info("Embedding load balancing (§6.21 E1) across {} endpoints: {}", urls.size(), urls);
@@ -64,15 +65,19 @@ public class EmbeddingBeanConfig {
                 props.searchQueryEmbedCacheMaxSizeSafe(), props.searchQueryEmbedCacheTtlSecondsSafe());
     }
 
-    /** Builds one raw {@link OpenAiEmbeddingModel} pointed at {@code rawUrl}, sharing {@code cfg}'s key/model/timeouts. */
-    private OpenAiEmbeddingModel buildRawModel(String rawUrl, AppProperties.EmbeddingConfig cfg, String model) {
+    /** Builds one raw {@link OpenAiEmbeddingModel} pointed at {@code rawUrl}, sharing {@code cfg}'s
+     *  key/model/timeouts — wrapped in {@link LoggingEmbeddingModel} so DEBUG logs show a curl
+     *  reproduction of every embedding call, mirroring {@code LlmConfig}'s {@link
+     *  com.example.ragagent.llm.LoggingChatModel} for chat calls. */
+    private EmbeddingModel buildRawModel(String rawUrl, AppProperties.EmbeddingConfig cfg, String model) {
         // OpenAiApi.builder() appends /v1 internally — strip it to avoid /v1/v1/embeddings.
         String apiBase = rawUrl.endsWith("/v1/") ? rawUrl.substring(0, rawUrl.length() - 4)
                        : rawUrl.endsWith("/v1")  ? rawUrl.substring(0, rawUrl.length() - 3)
                        : rawUrl;
+        String effectiveApiKey = cfg.apiKey() != null && !cfg.apiKey().isBlank() ? cfg.apiKey() : "no-key";
         OpenAiApi api = OpenAiApi.builder()
                 .baseUrl(apiBase)
-                .apiKey(cfg.apiKey() != null && !cfg.apiKey().isBlank() ? cfg.apiKey() : "no-key")
+                .apiKey(effectiveApiKey)
                 .restClientBuilder(HttpClientTimeouts.restClientBuilder(
                         cfg.connectTimeoutSeconds(),
                         cfg.readTimeoutSeconds()))
@@ -84,7 +89,7 @@ public class EmbeddingBeanConfig {
                 .maxAttempts(2)
                 .exponentialBackoff(500, 2.0, 5_000)
                 .build();
-        return new OpenAiEmbeddingModel(
+        OpenAiEmbeddingModel raw = new OpenAiEmbeddingModel(
                 api,
                 MetadataMode.EMBED,
                 OpenAiEmbeddingOptions.builder()
@@ -92,5 +97,7 @@ public class EmbeddingBeanConfig {
                         .build(),
                 shortRetry
         );
+        return new LoggingEmbeddingModel(raw, TrackingEmbeddingModel.PROVIDER_PREFIX + model,
+                rawUrl, effectiveApiKey, model);
     }
 }

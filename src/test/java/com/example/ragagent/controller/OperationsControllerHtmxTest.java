@@ -1,11 +1,14 @@
 package com.example.ragagent.controller;
 
+import org.junit.jupiter.api.parallel.ResourceLock;
+
 import com.example.ragagent.audit.AuditLogger;
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.context.ThreadContextResolver;
 import com.example.ragagent.llm.CircuitBreaker;
 import com.example.ragagent.repository.LlmUsageRepository;
 import com.example.ragagent.repository.MemoryRepository;
+import com.example.ragagent.service.CuratedQaService;
 import com.example.ragagent.service.MemoryService;
 import com.example.ragagent.service.ThreadMetaService;
 import org.junit.jupiter.api.DisplayName;
@@ -22,10 +25,13 @@ import java.util.Optional;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
@@ -38,6 +44,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @WebMvcTest(value = OperationsController.class, properties = "app.auth.enabled=true")
 @Import({com.example.ragagent.context.WebMvcConfig.class, com.example.ragagent.security.SecurityConfig.class})
 @WithMockUser
+@ResourceLock("global-state")
 class OperationsControllerHtmxTest {
 
     @Autowired MockMvc mvc;
@@ -50,6 +57,7 @@ class OperationsControllerHtmxTest {
     @MockitoBean ChatModel chatModel;
     @MockitoBean ThreadContextResolver threadContextResolver;
     @MockitoBean AuditLogger auditLogger;
+    @MockitoBean CuratedQaService curatedQaService;
 
     @Test
     @DisplayName("DELETE /ui/threads/{id} — 200 OK")
@@ -110,5 +118,58 @@ class OperationsControllerHtmxTest {
                         .param("feedback", "MAYBE")
                         .with(csrf()))
                 .andExpect(status().isBadRequest());
+    }
+
+    // ── §10.10 step ④ — 본인 큐레이션 답변 인라인 편집 ────────────────────────
+
+    @Test
+    @DisplayName("GET .../turns/{id}/curated — 소유 turn + 활성 큐레이션 엔트리 → 200 + answer")
+    void getCuratedAnswer_ownedAndActive_returnsAnswer() throws Exception {
+        when(memoryService.getFeedback(any(), any(), anyLong()))
+                .thenReturn(Optional.of(new MemoryRepository.FeedbackRow("LIKE")));
+        when(curatedQaService.findActiveByTurn(42L)).thenReturn(Optional.of(
+                new com.example.ragagent.repository.CuratedQaRepository.CuratedQa(
+                        1L, 42L, "user", "t1", "질문", "답변", "active", "latest", "2026-01-01", "2026-01-01")));
+
+        mvc.perform(get("/ui/threads/t1/turns/42/curated"))
+                .andExpect(status().isOk())
+                .andExpect(content().json("{\"answer\":\"답변\"}"));
+    }
+
+    @Test
+    @DisplayName("GET .../turns/{id}/curated — 소유하지 않은 turn → 404")
+    void getCuratedAnswer_notOwned_returns404() throws Exception {
+        when(memoryService.getFeedback(any(), any(), anyLong())).thenReturn(Optional.empty());
+
+        mvc.perform(get("/ui/threads/t1/turns/42/curated"))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
+    @DisplayName("PATCH .../turns/{id}/curated — 소유 turn + 갱신 성공 → 204 No Content")
+    void updateCuratedAnswer_success_returnsNoContent() throws Exception {
+        when(memoryService.getFeedback(any(), any(), anyLong()))
+                .thenReturn(Optional.of(new MemoryRepository.FeedbackRow("LIKE")));
+        when(curatedQaService.updateAnswerForTurn(any(), any(), eq(42L), any()))
+                .thenReturn(true);
+
+        mvc.perform(patch("/ui/threads/t1/turns/42/curated")
+                        .param("answer", "수정된 답변")
+                        .with(csrf()))
+                .andExpect(status().isNoContent());
+    }
+
+    @Test
+    @DisplayName("PATCH .../turns/{id}/curated — 소유하지 않은 turn → 404 (curatedQaService 호출 자체가 없음)")
+    void updateCuratedAnswer_notOwned_returns404() throws Exception {
+        when(memoryService.getFeedback(any(), any(), anyLong())).thenReturn(Optional.empty());
+
+        mvc.perform(patch("/ui/threads/t1/turns/42/curated")
+                        .param("answer", "수정된 답변")
+                        .with(csrf()))
+                .andExpect(status().isNotFound());
+
+        org.mockito.Mockito.verify(curatedQaService, org.mockito.Mockito.never())
+                .updateAnswerForTurn(any(), any(), anyLong(), any());
     }
 }

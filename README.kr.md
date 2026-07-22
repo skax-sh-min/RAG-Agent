@@ -154,6 +154,8 @@ container system stop
 | `SEARCH_TAG_CANDIDATE_MULTIPLIER` | `2` | 1 ~ 5 | 태그 선택 시 후보 풀 확대 — `candidateK = max(candidateK, topK × N)` |
 | `SEARCH_RRF_KEYWORD_WEIGHT` | `1.0` | 0.5 ~ 3.0 | 가중 RRF(Phase 7-A) — BM25 키워드 축 가중치. 벡터 축(MultiQuery 1~3개)은 항상 `1/축개수`로 그룹 정규화되므로 `1.0`이 정규화된 벡터 그룹과 동일 비중. `SEARCH_HYBRID_ENABLED=false`면 무영향 |
 | `SEARCH_RRF_K` | `60` | 20 ~ 100 | 가중 RRF(Phase 7-A) — RRF 순위융합 상수 k(원논문 기본값 60) |
+| `SEARCH_CURATED_QA_ENABLED` | `true` | true/false | §10.10 — 좋아요 기반 큐레이션 Q&A(예약 version `"curated"` 네임스페이스에 임베딩)를 RRF 융합에 포함할지 여부. `false`면 해당 검색 자체를 생략 |
+| `SEARCH_CURATED_QA_WEIGHT` | `1.5` | 0.5 ~ 5.0 | §10.10 — 큐레이션 Q&A 축 가중치, 키워드축과 동일하게 그룹 정규화 없이 그대로 적용(벡터축은 항상 `1/축개수`) — `1.0`보다 높아 검증된 답변이 우선 노출되되 순위를 독식하지는 않음 |
 | `SEARCH_QUERY_EMBED_CACHE_ENABLED` | `true` | true/false | 쿼리 임베딩 캐시(Phase 7-A) — 정규화된 질의 → 벡터를 Caffeine 인메모리 캐시에 저장해 반복·유사 질문의 임베딩 왕복을 생략. 캐시 히트 시 `embed:<model>` usage도 기록 안 됨 |
 | `SEARCH_QUERY_EMBED_CACHE_MAX_SIZE` | `500` | 100 ~ 5000 | 쿼리 임베딩 캐시 최대 엔트리 수 |
 | `SEARCH_QUERY_EMBED_CACHE_TTL_SECONDS` | `600` | 60 ~ 3600 | 쿼리 임베딩 캐시 TTL(초, write 기준 만료) |
@@ -336,6 +338,7 @@ rag_java/
 - **벡터 검색** — `MultiQueryExpander`(3쿼리 병렬, 짧은 키워드형 질문은 확장 생략)로 최적 검색 후 선택된 백엔드(ChromaDB 또는 sqlite-vec)로 유사도 검색. 원본 질문 검색은 쿼리 확장과 병렬로 실행되어 확장 대기 뒤로 밀리지 않음. Chroma 배치 검색은 실제로 읽는 메타데이터/문서/거리 필드만 요청하고 쓰지 않는 임베딩 벡터는 요청하지 않아, 후보 풀이 큰 경우에도 응답이 가볍게 유지됨
 - **Contextual Retrieval** — 청크 임베딩과 키워드 검색(`chunk_fts`) 입력 앞에 맥락 헤더(`{파일명} > {섹션 제목}` + 키워드 추출과 같은 호출에서 생성되는 LLM 1~2문장 요약)를 결합해, 표·코드 조각·대명사 위주 텍스트처럼 단독으로는 모호한 청크의 검색 재현율을 높임. 이 헤더는 저장·표시 텍스트, 출처 미리보기, 답변 프롬프트에는 절대 나타나지 않고 임베딩/키워드 검색 입력에만 반영됨
 - **임베딩 입력 정규화** — 마크다운 장식(구분선, 볼드/이탤릭/밑줄 마커)을 임베딩·`chunk_fts`·답변 프롬프트 입력에서만 제거(저장·표시 텍스트는 원문 유지)해 검색 인덱스 노이즈와 프롬프트 토큰 사용량을 줄임
+- **좋아요 기반 큐레이션 Q&A (§10.10)** — 답변에 좋아요를 누르면 별도로 임베딩되어(예약 벡터스토어 버전 네임스페이스, 문서 재인덱싱에도 보존) 이후 검색에 가중 RRF 축으로 융합됨(`SEARCH_CURATED_QA_ENABLED`/`SEARCH_CURATED_QA_WEIGHT`, `/settings`에서 핫 수정 가능). 정답을 그대로 반환하지 않고 근거로만 주입해 LLM이 현재 문서와 대조함. 좋아요를 누른 본인은 채팅 버블에서 바로 수정(자동 재임베딩) 가능하고, 관리자는 `/admin` 카드에서 전체 사용자의 큐레이션 항목을 편집·강제 삭제(좋아요 여부와 무관)할 수 있음
 - **ReAct 재검색** — 증거 부족 시 최대 2회 자동 재검색
 - **Critic 검증** — 생성된 답변이 문서에 근거하는지 LLM이 이중 검증
 - **PROGRESSIVE 모드** — COST_FIRST로 시작 → 품질 임계값 미달 시 PREMIUM 프로바이더로 재실행 + 업그레이드 배지 표시

@@ -19,6 +19,10 @@ import org.springframework.stereotype.Service;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.time.Instant;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.function.Consumer;
 
@@ -109,6 +113,42 @@ public class RagService {
     public void deleteDocument(String userId, String docId, String version) throws IOException {
         indexer.deleteArtifacts(DocRegistry.SHARED, docId, version);
         docRegistry.save();
+        archiveSourceFile(userId, docId);
+    }
+
+    private static final DateTimeFormatter BACKUP_TIMESTAMP_FMT =
+            DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss").withZone(ZoneOffset.UTC);
+
+    /**
+     * Moves the original uploaded file ({@code data/documents/{filename}}) into
+     * {@code data/documents/backup/}, renamed to {@code {baseName}_{deletedAtUtc}.{ext}} — deleting
+     * a document currently only removes its vectors/registry entry (see {@link
+     * DocumentIndexer#deleteArtifacts}), leaving the source file behind in the active documents
+     * directory. Archiving it here preserves the file for recovery instead of leaving it an
+     * untracked orphan, and — since {@code backup/} sits below {@code syncDirectory()}'s flat
+     * (non-recursive) {@code Files.list()} scan — it is never re-detected as a "new" file on the
+     * next sync. Best-effort: logged and swallowed on failure (e.g. permissions) so a filesystem
+     * hiccup here never fails the delete itself; no-op if the source file is already gone.
+     */
+    private void archiveSourceFile(String userId, String docId) {
+        try {
+            String filename = DocRegistry.filenameFromDocId(docId);
+            Path source = userDocumentsDir(userId).resolve(filename);
+            if (!Files.exists(source)) return;
+
+            int dot = filename.lastIndexOf('.');
+            String base = dot > 0 ? filename.substring(0, dot) : filename;
+            String ext  = dot > 0 ? filename.substring(dot) : "";
+            Path backupDir = source.getParent().resolve("backup");
+            Path dest = backupDir.resolve(base + "_" + BACKUP_TIMESTAMP_FMT.format(Instant.now()) + ext);
+            Files.createDirectories(backupDir);
+            Files.move(source, dest, StandardCopyOption.REPLACE_EXISTING);
+            log.debug("[DELETE] 원본 파일 백업: {} → {}", source, dest);
+        } catch (Exception e) {
+            // Best-effort — never let an archiving hiccup (permissions, unresolvable data dir in
+            // tests, etc.) fail a delete that has already succeeded.
+            log.warn("[DELETE] 원본 파일 백업 실패 (docId={}): {}", docId, e.getMessage());
+        }
     }
 
     public List<DocumentInfo> listDocuments(String userId) {
