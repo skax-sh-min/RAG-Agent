@@ -6,6 +6,7 @@ import com.example.ragagent.context.ThreadContextResolver;
 import com.example.ragagent.controller.OperationsController;
 import com.example.ragagent.llm.CircuitBreaker;
 import com.example.ragagent.repository.LlmUsageRepository;
+import com.example.ragagent.service.CuratedQaService;
 import com.example.ragagent.service.MemoryService;
 import com.example.ragagent.service.ThreadMetaService;
 import org.junit.jupiter.api.DisplayName;
@@ -41,6 +42,7 @@ class SecurityHeadersTest {
     @MockitoBean ChatModel chatModel;
     @MockitoBean ThreadContextResolver threadContextResolver;
     @MockitoBean AuditLogger auditLogger;
+    @MockitoBean CuratedQaService curatedQaService;
 
     @Test
     @DisplayName("GET 응답에 X-Frame-Options 헤더 존재")

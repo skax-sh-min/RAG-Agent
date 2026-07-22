@@ -9,6 +9,7 @@ import com.example.ragagent.llm.TrackingEmbeddingModel;
 import com.example.ragagent.model.LlmProviderReport;
 import com.example.ragagent.repository.LlmUsageRepository;
 import com.example.ragagent.repository.MemoryRepository;
+import com.example.ragagent.service.CuratedQaService;
 import com.example.ragagent.service.MemoryService;
 import com.example.ragagent.service.ThreadMetaService;
 import org.springframework.http.HttpStatus;
@@ -38,19 +39,22 @@ public class OperationsController {
     private final AppProperties props;
     private final CircuitBreaker circuitBreaker;
     private final AuditLogger auditLogger;
+    private final CuratedQaService curatedQaService;
 
     public OperationsController(ThreadMetaService threadMetaService,
                                 MemoryService memoryService,
                                 LlmUsageRepository usageRepo,
                                 AppProperties props,
                                 CircuitBreaker circuitBreaker,
-                                AuditLogger auditLogger) {
+                                AuditLogger auditLogger,
+                                CuratedQaService curatedQaService) {
         this.threadMetaService = threadMetaService;
         this.memoryService = memoryService;
         this.usageRepo = usageRepo;
         this.props = props;
         this.circuitBreaker = circuitBreaker;
         this.auditLogger = auditLogger;
+        this.curatedQaService = curatedQaService;
     }
 
     // ── Page ──────────────────────────────────────────────────────────
@@ -99,7 +103,8 @@ public class OperationsController {
 
     /**
      * DISLIKE is a hard-exclusion signal consumed by MemoryRepository.getHistory() —
-     * disliked turns drop out of future prompt context. LIKE is stored for future use only.
+     * disliked turns drop out of future prompt context. LIKE promotes the turn into the
+     * curated-Q&A search axis via {@link CuratedQaService} (§10.10).
      */
     @PatchMapping("/ui/threads/{threadId}/turns/{turnId}/feedback")
     @ResponseBody
@@ -117,9 +122,19 @@ public class OperationsController {
 
         String dbValue = "NONE".equals(normalized) ? null : normalized;
         memoryService.updateFeedback(userId, threadId, turnId, dbValue);
+
+        // §10.10 — promote/retract the curated-Q&A snapshot on a LIKE transition (either
+        // direction). previous/normalized are both already-uppercased VALID_FEEDBACK members.
+        String previous = existing.get().feedback() == null ? "NONE" : existing.get().feedback();
+        if ("LIKE".equals(normalized) && !"LIKE".equals(previous)) {
+            curatedQaService.onLike(userId, threadId, turnId);
+        } else if (!"LIKE".equals(normalized) && "LIKE".equals(previous)) {
+            curatedQaService.onUnlike(userId, threadId, turnId);
+        }
+
         auditLogger.log("turn.feedback", threadId, Map.of(
                 "turnId", turnId,
-                "from", existing.get().feedback() == null ? "NONE" : existing.get().feedback(),
+                "from", previous,
                 "to", normalized));
         return ResponseEntity.noContent().build();
     }
