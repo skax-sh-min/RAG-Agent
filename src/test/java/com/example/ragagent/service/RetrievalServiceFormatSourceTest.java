@@ -59,4 +59,15 @@ class RetrievalServiceFormatSourceTest {
     void fallsBackToUnknownDefaults() {
         assertThat(RetrievalService.formatSource(doc(Map.of()))).isEqualTo("unknown | p.?");
     }
+
+    @Test
+    @DisplayName("§10.10 — 큐레이션 Q&A(doc_type=curated_qa)는 파일명/페이지 대신 고정 라벨을 쓴다")
+    void curatedQaUsesFixedLabelInsteadOfPlaceholderFilename() {
+        Document d = doc(Map.of(
+                MetaKey.DOC_TYPE, "curated_qa",
+                MetaKey.FILENAME, "curated_qa",
+                MetaKey.PAGE_OR_SLIDE, 1));
+
+        assertThat(RetrievalService.formatSource(d)).isEqualTo("💬 큐레이션 Q&A");
+    }
 }

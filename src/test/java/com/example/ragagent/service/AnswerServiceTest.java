@@ -68,7 +68,7 @@ class AnswerServiceTest {
                 "./data", MAX_RETRY, 800, 100, 100, 7, 0.0, true, 0, false,
                 true, false, 3,
                 null, null, null, null, null, null, null, null, null, null, null, null, null, null,
-                null, null, null, null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null, null, null, null, null, null);
         MessageSource messageSource = mock(MessageSource.class);
         when(messageSource.getMessage(anyString(), any(), any(Locale.class))).thenReturn("prompt");
         service = new AnswerService(llmRouter, props, messageSource);
@@ -171,6 +171,31 @@ class AnswerServiceTest {
         String answerPrompt = promptCaptor.getAllValues().get(0).getContents();
         assertThat(answerPrompt).contains("중요한 내용");
         assertThat(answerPrompt).doesNotContain("**중요**", "------", "가이드.pdf > 설정");
+    }
+
+    @Test
+    @DisplayName("BLOCKING — §10.10 큐레이션 Q&A 문서는 '[curated_qa | p.1]' 대신 고정 라벨을 쓴다")
+    @SuppressWarnings("unchecked")
+    void blocking_answerPrompt_labelsCuratedQaDocDistinctly() {
+        ArgumentCaptor<Function<ChatModel, ChatResponse>> callCaptor = ArgumentCaptor.forClass(Function.class);
+        when(llmRouter.executeGated(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), callCaptor.capture()))
+                .thenReturn("답변", "{\"sufficient\":true}");
+        when(llmRouter.findProviderName(any(), any())).thenReturn("gemini-flash");
+
+        Document curated = new Document("과거에 좋아요 받은 답변", Map.of(
+                MetaKey.DOC_TYPE, "curated_qa", MetaKey.FILENAME, "curated_qa", MetaKey.PAGE_OR_SLIDE, 1));
+        AgentState state = newState(RoutingMode.COST_FIRST).toBuilder().retrievedDocs(List.of(curated)).build();
+
+        service.execute(state);
+
+        ChatModel chatModel = mock(ChatModel.class);
+        ArgumentCaptor<Prompt> promptCaptor = ArgumentCaptor.forClass(Prompt.class);
+        when(chatModel.call(promptCaptor.capture())).thenReturn(chatResponse("dummy"));
+        callCaptor.getAllValues().forEach(fn -> fn.apply(chatModel));
+
+        String answerPrompt = promptCaptor.getAllValues().get(0).getContents();
+        assertThat(answerPrompt).contains("[큐레이션 Q&A]", "과거에 좋아요 받은 답변");
+        assertThat(answerPrompt).doesNotContain("curated_qa | p.1");
     }
 
     // ── STREAMING 경로 (non-DUAL) ──────────────────────────────────────────

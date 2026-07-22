@@ -287,12 +287,16 @@ public class AnswerService {
 
         String docsContext = state.retrievedDocs().stream()
                 .map(doc -> {
-                    String filename = String.valueOf(doc.getMetadata().getOrDefault(MetaKey.FILENAME, "unknown"));
-                    String page     = String.valueOf(doc.getMetadata().getOrDefault(MetaKey.PAGE_OR_SLIDE, "?"));
+                    // §10.10 — a curated Q&A hit has no real filename/page; label it distinctly
+                    // instead of leaking the "curated_qa | p.1" placeholder metadata into the prompt.
+                    String label = "curated_qa".equals(doc.getMetadata().get(MetaKey.DOC_TYPE))
+                            ? "[큐레이션 Q&A]"
+                            : "[%s | p.%s]".formatted(
+                                    String.valueOf(doc.getMetadata().getOrDefault(MetaKey.FILENAME, "unknown")),
+                                    String.valueOf(doc.getMetadata().getOrDefault(MetaKey.PAGE_OR_SLIDE, "?")));
                     // Normalized (no context header, §10.1) — decorative markdown is stripped so it
                     // doesn't consume prompt tokens; the stored/displayed text elsewhere stays raw.
-                    return "[%s | p.%s]\n%s".formatted(filename, page,
-                            MarkdownNoiseNormalizer.normalize(doc.getText()));
+                    return label + "\n" + MarkdownNoiseNormalizer.normalize(doc.getText());
                 })
                 .collect(Collectors.joining("\n\n---\n\n"));
 

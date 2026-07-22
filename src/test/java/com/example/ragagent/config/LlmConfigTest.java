@@ -38,7 +38,7 @@ class LlmConfigTest {
         return new AppProperties(
             "./data", 2, 800, 100, 100, 7, 0.0, true, 0, false, true, false, 3,
                 null, llm, null, null, null, null, null, null, null, null, null, null, null, null,
-                null, null, null, null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null, null, null, null, null, null);
     }
 
     private AppProperties.ProviderConfig provider(String name, String role, String type, String apiKey) {

@@ -62,7 +62,9 @@ public class SettingsService implements AppProperties.OverrideSource {
             new Spec(SettingsKeys.SEARCH_RETRY_ESCALATE,           Kind.BOOL,   0,   0,    0,    "settings.item.retry-escalate"),
             new Spec(SettingsKeys.SEARCH_TOP_K,                    Kind.INT,    1,   50,   1,    "settings.item.top-k"),
             new Spec(SettingsKeys.SEARCH_MULTIQUERY_ENABLED,       Kind.BOOL,   0,   0,    0,    "settings.item.multiquery-enabled"),
-            new Spec(SettingsKeys.SEARCH_HYBRID_ENABLED,           Kind.BOOL,   0,   0,    0,    "settings.item.hybrid-enabled")
+            new Spec(SettingsKeys.SEARCH_HYBRID_ENABLED,           Kind.BOOL,   0,   0,    0,    "settings.item.hybrid-enabled"),
+            new Spec(SettingsKeys.SEARCH_CURATED_QA_ENABLED,       Kind.BOOL,   0,   0,    0,    "settings.item.curated-qa-enabled"),
+            new Spec(SettingsKeys.SEARCH_CURATED_QA_WEIGHT,        Kind.DOUBLE, 0.0, 10.0, 0.1,  "settings.item.curated-qa-weight")
     );
 
     // Insertion order = render order in the "인덱싱 튜닝" group. Apply on the next indexing / ↺ re-index
@@ -396,6 +398,8 @@ public class SettingsService implements AppProperties.OverrideSource {
             case SettingsKeys.SEARCH_TOP_K                    -> Integer.toString(props.searchTopKSafe());
             case SettingsKeys.SEARCH_MULTIQUERY_ENABLED       -> Boolean.toString(props.searchMultiqueryEnabledSafe());
             case SettingsKeys.SEARCH_HYBRID_ENABLED           -> Boolean.toString(props.searchHybridEnabledSafe());
+            case SettingsKeys.SEARCH_CURATED_QA_ENABLED       -> Boolean.toString(props.searchCuratedQaEnabledSafe());
+            case SettingsKeys.SEARCH_CURATED_QA_WEIGHT        -> trimNum(props.searchCuratedQaWeightSafe());
             case SettingsKeys.CHUNK_SIZE                      -> Integer.toString(props.chunkSizeSafe());
             case SettingsKeys.CHUNK_OVERLAP                   -> Integer.toString(props.chunkOverlapSafe());
             case SettingsKeys.MIN_CHUNK_SIZE                  -> Integer.toString(props.minChunkSizeSafe());

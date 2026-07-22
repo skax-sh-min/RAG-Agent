@@ -160,4 +160,58 @@ class RetrievalServiceRrfTest {
                 .as("legacy preview 키였다면 1개로 충돌, 키로는 2개 모두 보존")
                 .hasSize(2);
     }
+
+    // ── curated-Q&A axis (§10.10) ──────────────────────────────────────────
+
+    @Test
+    @DisplayName("큐레이션 축 — curatedWeight 상향 시 큐레이션 문서가 우선 순위 획득")
+    void weightedRrf_curatedWeightBoostsCuratedAxis() {
+        List<List<Document>> vectorRanked = List.of(List.of(doc("x")));
+        List<Document> curatedRanked = List.of(doc("curated-1"));
+
+        List<Document> result = RetrievalService.mergeRrf(
+                vectorRanked, List.of(), curatedRanked, 1, 60, 1.0, 3.0);
+
+        assertThat(result.get(0).getMetadata().get("filename")).isEqualTo("curated-1");
+    }
+
+    @Test
+    @DisplayName("큐레이션 축 없음(비활성/무히트) → 5-arg 오버로드와 동일 순위")
+    void weightedRrf_noCuratedAxisMatchesFiveArgOverload() {
+        List<List<Document>> vectorRanked = List.of(
+                List.of(doc("a"), doc("b")),
+                List.of(doc("b"), doc("c")));
+        List<Document> keywordRanked = List.of(doc("b"));
+
+        List<Document> withEmptyCurated = RetrievalService.mergeRrf(
+                vectorRanked, keywordRanked, List.of(), 3, 60, 1.0, 5.0);
+        List<Document> fiveArg = RetrievalService.mergeRrf(vectorRanked, keywordRanked, 3, 60, 1.0);
+
+        assertThat(ids(withEmptyCurated)).isEqualTo(ids(fiveArg));
+    }
+
+    @Test
+    @DisplayName("큐레이션 축 — 벡터/키워드/큐레이션 세 축 모두에 등장하는 문서가 최상위 점수 획득")
+    void weightedRrf_docInAllThreeAxesRanksFirst() {
+        List<List<Document>> vectorRanked = List.of(List.of(doc("shared"), doc("only-vector")));
+        List<Document> keywordRanked = List.of(doc("shared"), doc("only-keyword"));
+        List<Document> curatedRanked = List.of(doc("shared"), doc("only-curated"));
+
+        List<Document> result = RetrievalService.mergeRrf(
+                vectorRanked, keywordRanked, curatedRanked, 4, 60, 1.0, 1.0);
+
+        assertThat(result.get(0).getMetadata().get("filename")).isEqualTo("shared");
+    }
+
+    @Test
+    @DisplayName("큐레이션 doc_id 합성 키(curated:{id}:0) — 실제 문서와 충돌하지 않는다")
+    void docKey_curatedSyntheticIdDoesNotCollideWithRealDoc() {
+        Document curated = new Document("답변 본문",
+                Map.<String, Object>of("doc_id", "curated:1", "chunk_index", 0));
+        Document real = new Document("문서 본문",
+                Map.<String, Object>of("doc_id", "D1", "chunk_index", 0));
+
+        assertThat(RetrievalService.docKey(curated)).isEqualTo("curated:1:0");
+        assertThat(RetrievalService.docKey(curated)).isNotEqualTo(RetrievalService.docKey(real));
+    }
 }
