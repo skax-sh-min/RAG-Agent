@@ -37,7 +37,8 @@ src/main/resources/
 │       ├── thread-item.html               # 대화 목록 항목 1건
 │       ├── doc-table-body.html            # 문서 목록 tbody (새로고침용)
 │       ├── llm-usage-cards.html           # 프로바이더 + 임베딩(EMBEDDING) + orphan(ORPHAN, 삭제 가능) 상태 카드 (30초 자동 갱신)
-│       └── settings-item.html             # 설정 항목 1행(조회 또는 편집 입력 + 저장/기본값 버튼) — HTMX 부분 갱신 대상
+│       ├── settings-item.html             # 설정 항목 1행(조회 또는 편집 입력 + 저장/기본값 버튼) — HTMX 부분 갱신 대상
+│       └── settings-providers.html        # LLM providers 표(활성화 배지 + 관리자 활성/비활성 버튼) — settings.html에 인라인 포함 + 토글 응답 시 테이블 전체 교체
 └── static/
     ├── css/app.css                        # 버블·배지·DUAL 탭·타이핑·반응형(오프캔버스/dvh/16px/44px)
     ├── css/theme.css                      # light/dark CSS 변수
@@ -91,7 +92,12 @@ REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — �
 
 ### 3.4 벡터 스토어 관리 (AdminController)
 
-접근 제어는 인증 모드에 따라 다르다: `app.auth.enabled=true`(전체 인증)면 로그인 필요, 평문 no-auth(`app.auth.enabled=false`, `app.auth.management-only=false`)면 `/admin/**`에 관리자 자동 주입, 관리 전용 인증(`app.auth.management-only=true`, §6.17 B안)이면 게스트 자동 주입 없이 실제 로그인이 필요하다. **chroma·sqlite-vec 두 백엔드 모두** 동작하며, sqlite-vec에선 "collection" 식별자가 version 문자열이다.
+접근 제어는 인증 모드에 따라 다르다:
+- 전체 인증(`app.auth.enabled=true`) — 로그인 필요
+- 평문 no-auth(`app.auth.enabled=false`, `app.auth.management-only=false`) — `/admin/**`에 관리자 자동 주입
+- 관리 전용 인증(`app.auth.management-only=true`, §6.17 B안) — 게스트 자동 주입 없이 실제 로그인 필요
+
+**chroma·sqlite-vec 두 백엔드 모두** 동작하며, sqlite-vec에선 "collection" 식별자가 version 문자열이다.
 
 | Method | Path | 반환 | 설명 |
 |--------|------|------|------|
@@ -100,23 +106,42 @@ REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — �
 | GET | `/admin/chunks/{chunkId}/detail` | JSON | 청크 텍스트·메타데이터 (편집 패널) |
 | POST | `/admin/chunks/{chunkId}` | `200` | 청크 텍스트·메타데이터 수정 (벡터 보존) |
 | DELETE | `/admin/chunks/{chunkId}` | `200` | 청크 삭제 (sqlite-vec는 두 테이블 동기 삭제) |
-| POST | `/admin/documents/{docId}/reindex` | JSON | 저장된 MD로 재인덱싱 (DOCX 전용) |
+| POST | `/admin/documents/{docId}/reindex` | JSON | 저장된 MD로 재인덱싱 (DOCX/TXT/MD/PPTX/PDF 전용, 스캔 PDF 제외 — 스캔 PDF는 MD 변환 없이 OCR로 바로 인덱싱되어 재사용할 MD 파일이 없다) |
 
 > 상태 카드는 `AdminService.vectorStoreView()` → `VectorStoreAdminView`. 백엔드별 표시 차이는 [OPERATOR_MANUAL.md §7.4](OPERATOR_MANUAL.md) 참고.
 
+> **청크 목록 컬럼**(`fragments/admin-chunks :: table`): ID·텍스트 미리보기·크기·파일명·페이지/슬라이드·챕터·키워드·작업. **챕터** 열은 `MetaKey.CHAPTER_NO`(H2~H6 헤딩 기반 계층 번호, 예: `1.5.3`)를 보여주며, "0"(프롤로그·PPTX·스캔 PDF — 실제 챕터 없음)이면 빈 칸으로 표시된다 — [§4 출처 Hover 미리보기](#출처-hover-미리보기)의 인용 라벨 로직과 동일한 컨벤션.
+>
+> **재인덱싱 시 수행 작업**(`DocumentIndexer.reindexFromMd()`) — 챕터 번호 재계산뿐 아니라 전체 파이프라인을 다시 돈다: 존재하지 않는 이미지 참조(`[이미지: ...]`) 제거 → 소제목 번호 재계산(PPTX 제외) → 마크다운 후처리(`MarkdownCorrectionService.postProcess()` — 빈 줄 정리·`[DOCUMENT]` 마커/내용 없는 `-` 제거·펜스·표 앞뒤 빈 줄 보장, LLM 미사용) → 전체 재청킹 → 태그 보존 → LLM 키워드+컨텍스트 재추출(§10.1) → 재임베딩 및 벡터 스토어 저장 → FTS 재인덱싱 → 기존 청크 삭제(신규 저장 이후, 실패 시 기존 데이터 보존). 즉 원본 MD가 수정된 이후 상태를 기준으로 사실상 전체를 다시 인덱싱한다.
+>
+> `fixClosingFences`/`normalizeCodeBlocks`(코드 블록 언어 보정)는 의도적으로 재인덱싱에 포함하지 않는다 — 저장된 MD를 운영자가 직접 편집한 뒤 재인덱싱하면 코드 블록 내부의 의도된 빈 줄을 지우거나(`normalizeCodeContent`는 함수/클래스 시작·여러 줄 주석 시작 직전이 아닌 빈 줄은 삭제) 펜스 짝이 어긋난 입력에서 여는 펜스의 언어 태그를 잘못 벗길 수 있어, 매 재인덱싱마다 부작용으로 감수하기보다 필요할 때만 문서를 재업로드하도록 남겨둔 것이다.
+
 ### 3.5 설정 관리 (SettingsController)
 
-조회(`GET /settings`)는 게스트에게도 열려 있다 — API 키 자체는 절대 노출하지 않고 "설정됨/없음" 배지만 보여준다. 수정 엔드포인트(`/admin/settings/**`)는 `/admin/**`과 동일한 인가를 상속한다: 평문 no-auth면 관리자 자동 주입, 관리 전용 인증(`app.auth.management-only=true`)이면 실제 로그인이 필요, 전체 인증이면 로그인이 필요하다. 화면에서도 편집 입력·저장/기본값 버튼은 `isAdmin`일 때만 렌더되고(그 외는 값만 표시), 서버 인가가 1차 방어선이다.
+조회(`GET /settings`)는 게스트에게도 열려 있다 — API 키 자체는 절대 노출하지 않고 "설정됨/없음" 배지만 보여준다.
+
+수정 엔드포인트(`/admin/settings/**`)는 `/admin/**`과 동일한 인가를 상속한다:
+- 평문 no-auth — 관리자 자동 주입
+- 관리 전용 인증(`app.auth.management-only=true`) — 실제 로그인 필요
+- 전체 인증 — 로그인 필요
+
+화면에서도 편집 입력·저장/기본값 버튼은 `isAdmin`일 때만 렌더되고(그 외는 값만 표시), 서버 인가가 1차 방어선이다.
 
 | Method | Path | 반환 | 설명 |
 |--------|------|------|------|
 | GET | `/settings` | `settings.html` | LLM/RAG 유효 설정 조회 페이지(프로바이더, 임베딩, 벡터 스토어, 검색·인덱싱 튜닝) |
 | POST | `/admin/settings/update` | `fragments/settings-item :: item` | 핫 수정 가능 항목 하나에 오버라이드 저장(`key`, `value`) — 재기동 없이 다음 검색부터 반영, 감사 로그 기록 |
 | POST | `/admin/settings/reset` | `fragments/settings-item :: item` | 오버라이드 삭제 → 프로퍼티 기본값으로 복귀, 감사 로그 기록 |
+| POST | `/admin/settings/provider/toggle` | `fragments/settings-providers :: providers` | LLM 프로바이더 활성/비활성 토글(`name`, `enabled`) — `ProviderToggle`(메모리 전용, `settings_override`와 무관)이라 **재기동 시 초기화**됨. 이름이 같은 프로바이더는 함께 토글되고, 마지막 활성 프로바이더는 비활성화 거부(400). 감사 로그 기록 |
 
-- 핫 수정 가능 항목만 `key`를 받아 수정할 수 있다: **검색 튜닝**(유사도 임계값·RRF 가중치/k·후보 배수·태그 후보 배수·멀티쿼리 최소 길이·재시도 시 후보 확대·topK·멀티쿼리 확장·하이브리드 검색 — 다음 검색부터 반영), **인덱싱/청킹**(청크 크기·오버랩·최소 크기·동시 파일 처리 수·동시 LLM 호출 수 — 다음 인덱싱/↺ 재인덱싱부터 반영), **LLM**(Direct 응답 temperature — 다음 LLM 호출부터 반영, §6.18). 그 외 키(조회 전용: `rerank-enabled`·쿼리 임베딩 캐시 등)는 400(`IllegalArgumentException`)으로 거부된다.
+- 핫 수정 가능 항목만 `key`를 받아 수정할 수 있다:
+  - **검색 튜닝**(다음 검색부터 반영) — 유사도 임계값·RRF 가중치/k·후보 배수·태그 후보 배수·멀티쿼리 최소 길이·재시도 시 후보 확대·topK·멀티쿼리 확장·하이브리드 검색
+  - **인덱싱/청킹**(다음 인덱싱/↺ 재인덱싱부터 반영) — 청크 크기·오버랩·최소 크기·동시 파일 처리 수·동시 LLM 호출 수
+  - **LLM**(다음 LLM 호출부터 반영, §6.18) — Direct 응답 temperature
+  - 그 외 키(조회 전용: `rerank-enabled`·쿼리 임베딩 캐시 등)는 400(`IllegalArgumentException`)으로 거부된다.
 - 값 검증 실패(범위 초과, 타입 불일치)도 400 — `GlobalExceptionHandler`가 처리.
 - 재기동이 필요한 값(rerank/hybrid 활성화, 벡터 스토어 백엔드, 임베딩 차원, 일반 temperature·max-tokens 등)과 기본 라우팅 모드는 조회 전용으로만 노출된다(§6.18로 일반 temperature·max-tokens는 실제 config 값을 반영해 표시).
+- **프로바이더 활성/비활성**(`/admin/settings/provider/toggle`)은 위 `key`/`value` 오버라이드 메커니즘과 별개다 — `settings_override`에 저장되지 않는 메모리 전용(`ProviderToggle`) 토글이라 **재기동하면 초기화**된다. LLM 라우팅 표의 각 행에서 관리자에게만 활성화/비활성화 버튼이 보인다.
 - 상세는 [OPERATOR_MANUAL.md §6.5](OPERATOR_MANUAL.md#65-설정-페이지-settings--llmrag-옵션-조회핫-수정) 참고.
 
 ### 3.6 인증 (AuthController)
@@ -169,9 +194,11 @@ PROGRESSIVE 업그레이드 시 `🔝 고추론 재분석 → {premiumProvider}`
 
 ### 출처 Hover 미리보기
 
-출처 목록 항목에 Bootstrap Popover (`hover focus` 트리거). `SourceRef.preview`에 청크 텍스트 앞 200자 포함.
+**출처 라벨 형식**: `RetrievalService.formatSource()`가 청크 메타데이터의 `chapter_no`(H2~H6 헤딩 기반 계층 번호, 예: `1.5.3`)가 "0"이 아니면 `"파일명 | 1.5.3"`, 아니면(프롤로그·PPTX·비스캔 PDF — 이 세 경우는 chapter_no가 항상 "0") `page_or_slide`로 폴백해 `"파일명 | p.12"`로 표시한다 — 문서 버전은 라벨에 포함되지 않는다.
 
-**팝오버 크기 (`app.css`, ≥768px 전용)**: Bootstrap 기본값(`max-width: 276px`, `font-size: 0.875rem`)은 200자 미리보기가 세로로 길게 줄바꿈되어 가독성이 떨어졌다 — `max-width: 560px`(약 2배), `font-size: 0.8rem`으로 넓히고 살짝 줄여 같은 200자가 더 적은 줄로 읽기 좋게 표시된다. `@media (min-width: 768px)` 블록 안에 있어 모바일(<768px)은 Bootstrap 기본값 그대로 — 좁은 화면에서 팝오버를 더 넓히면 화면 밖으로 넘칠 여지가 있기 때문.
+출처 목록 항목에 Bootstrap Popover (`hover focus` 트리거). `SourceRef.preview`에 청크 텍스트 앞 500자 포함.
+
+**팝오버 크기 (`app.css`, ≥768px 전용)**: Bootstrap 기본값(`max-width: 276px`, `font-size: 0.875rem`)은 500자 미리보기가 세로로 길게 줄바꿈되어 가독성이 떨어졌다 — `max-width: 560px`(약 2배), `font-size: 0.8rem`으로 넓히고 살짝 줄여 같은 500자가 더 적은 줄로 읽기 좋게 표시된다. `@media (min-width: 768px)` 블록 안에 있어 모바일(<768px)은 Bootstrap 기본값 그대로 — 좁은 화면에서 팝오버를 더 넓히면 화면 밖으로 넘칠 여지가 있기 때문.
 
 ---
 
@@ -285,7 +312,7 @@ stage(classifier) → stage(retrieval) → sources → stage(answer) → token �
 | 테이블 넘침 | `documents.html` 두 테이블을 `.table-responsive`로 래핑(가로 페이지 스크롤 제거) |
 | 차트 넘침 | `llm-usage.html` 차트를 `height:280px` 컨테이너 + Chart.js `maintainAspectRatio:false` |
 | iOS 자동 확대 | `@media (max-width:767.98px)`에서 모든 폼 컨트롤 `font-size:16px` |
-| 출처 미리보기 팝오버 | `@media (min-width:768px)`에서 `.popover`를 `max-width:560px, font-size:0.8rem`로 확대(Bootstrap 기본 276px/0.875rem 대비 폭 약 2배) — 200자 미리보기가 세로로 길게 줄바꿈되는 문제 완화. `<768px`는 기본값 유지 |
+| 출처 미리보기 팝오버 | `@media (min-width:768px)`에서 팝오버 폭 확대(`max-width:560px`, `<768px`는 기본값 유지) — 배경·수치는 [§4 출처 Hover 미리보기](#출처-hover-미리보기) 참고 |
 
 > ⚠️ Bootstrap `.offcanvas-md`는 ≥md에서 `background-color:transparent!important`를 강제한다. 데스크톱 사이드바 배경은 `app.css`에서 `.sidebar.offcanvas-md { background-color: var(--bg-elevated) !important }`로 복구(라이트/다크 변수 일치).
 

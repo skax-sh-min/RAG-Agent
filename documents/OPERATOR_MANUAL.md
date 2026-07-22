@@ -20,9 +20,9 @@ RAG Agent 시스템 배포·설정·운영 가이드입니다.
       - 4.2.1 [ChromaDB 백엔드](#421-chromadb-백엔드)
       - 4.2.2 [sqlite-vec 백엔드](#422-sqlite-vec-백엔드)
    - 4.3 [접속 확인](#43-접속-확인)
-  - 4.4 [HTTPS 설정 (Caddy 리버스 프록시)](#44-https-설정-caddy-리버스-프록시)
-  - 4.5 [폐쇄망(Air-gapped) / 노-도커 실행](#45-폐쇄망air-gapped--노-도커-실행)
-  - 4.6 [태그 기반 검색 적용 전 수동 초기화 (프리릴리즈)](#46-태그-기반-검색-적용-전-수동-초기화-프리릴리즈)
+   - 4.4 [HTTPS 설정 (Caddy 리버스 프록시)](#44-https-설정-caddy-리버스-프록시)
+   - 4.5 [폐쇄망(Air-gapped) / 노-도커 실행](#45-폐쇄망air-gapped--노-도커-실행)
+   - 4.6 [태그 기반 검색 적용 전 수동 초기화 (프리릴리즈)](#46-태그-기반-검색-적용-전-수동-초기화-프리릴리즈)
 5. [LLM 프로바이더 설정](#5-llm-프로바이더-설정)
    - 5.1 [구조 개요](#51-구조-개요)
    - 5.2 [프로바이더 속성](#52-프로바이더-속성)
@@ -174,21 +174,28 @@ copy .env.example .env
 | 변수 | 필수 | 기본값 | 설명 |
 |------|------|--------|------|
 | `SERVER_PORT` | — | `8080` | 애플리케이션이 리스닝할 포트 (`server.port`). 다른 서비스와 충돌할 때만 변경 — Docker Compose 사용 시 `docker-compose.yml`의 포트 매핑(`127.0.0.1:8080:8080`)과 Caddy `reverse_proxy app:8080`도 함께 맞춰야 함 |
-| `LOCAL_LLM_URL` | — | `http://localhost:1234/v1` | `providers[0]` LOCAL 엔드포인트 기본 URL. 임베딩 설정(`EMBED_BASE_URL`)의 폴백으로도 사용됨 |
-| `LOCAL_LLM_KEY` | — | `lm-studio` | `providers[0]` API 키. **로컬 엔드포인트(llama-server 등)는 키가 불필요** — 비우거나 미설정해도 LOCAL provider는 등록됨(내부적으로 `no-key` 치환). 로컬 LLM이 아예 없으면 미사용 시 첫 호출 1회 실패 후 Circuit Breaker로 우회되며, 완전히 제외하려면 `application.properties`의 `providers[0]`를 주석 처리하거나 `LLM_ROUTING_MODE=QUALITY_FIRST`로 후순위 배치 |
-| `LOCAL_LLM_MODEL` | — | `google/gemma-4-e4b` | `providers[0]` 모델 식별자. 사용 중인 로컬 모델명으로 변경 |
-| `LLM_ROUTING_MODE` | — | `COST_FIRST` | 기본 라우팅 모드 (`app.llm.default-routing-mode`) — `COST_FIRST`/`QUALITY_FIRST`/`PROGRESSIVE`/`DUAL`/`LOCAL_ONLY`. **폐쇄망·로컬 전용은 `LOCAL_ONLY`** 로 외부 프로바이더 호출을 원천 차단. `LOCAL_ONLY`로 설정하면 채팅 화면 사이드바의 라우팅 전략 드롭다운 자체가 사라진다(어떤 모드를 골라도 결과가 같으므로) — 상세는 [LLM_ROUTING.md §8](LLM_ROUTING.md#8-제약-및-주의사항) 참고 |
+| `LOCAL_LLM_URL` | 이 provider 사용 시 ✅ | — (기본값 없음) | `providers[1]`(`local`, 로컬 LLM 1) 엔드포인트. **미설정·공백이면 이 provider가 통째로 비활성화된다** (`LlmConfig` G2 — 예전처럼 `http://localhost:1234/v1`로 조용히 폴백하지 않음). 값을 설정하면 기동 시 `GET {URL}/models`로 접속 가능·모델명 일치 여부를 검증한다(G3) — 실패하면 **애플리케이션이 시작되지 않는다**, [§5.2 프로바이더 활성화 게이트](#52-프로바이더-속성) 참고. 임베딩 설정(`EMBED_BASE_URL`)의 폴백으로도 별도 사용됨(그쪽은 기존처럼 자체 기본값 보유, G3 대상 아님) |
+| `LOCAL_LLM_KEY` | — | `lm-studio` | `providers[1]` API 키. **로컬 엔드포인트(llama-server 등)는 키가 불필요** — 비우거나 미설정해도(URL만 설정돼 있다면) LOCAL provider는 등록됨(내부적으로 `no-key` 치환, G1). 완전히 제외하려면 `LOCAL_LLM_URL`을 비우거나(G2) `application.properties`의 `providers[1]`를 주석 처리 |
+| `LOCAL_LLM_MODEL` | — | `google/gemma-4-e4b` | `providers[1]` 모델 식별자. 사용 중인 로컬 모델명으로 변경 |
+| `LOCAL_LLM_URL_2` | 사용 시 ✅ | — (기본값 없음) | `providers[2]`(`local-2`, 로컬 LLM 2) 엔드포인트. `local`과 **동일한 role(LOCAL)·동일한 priority(1)**로 등록되어 두 번째 물리 서버로 로드밸런싱된다(least-in-flight — [§5.4 예제 5/7](#예제-5--로컬-llm-2대-로드밸런싱-처리량-확장) 참고). **미설정·공백이면 이 provider가 통째로 비활성화된다**(G2) — 2대째 로컬 서버가 없다면 그냥 비워두면 됨(회귀 0, `local` 단독으로 동작). 값을 설정하면 기동 시 접속 가능·모델명 일치 여부를 검증하며 실패 시 애플리케이션이 시작되지 않는다(G3) — 즉 "설정은 했지만 서버가 아직 안 떠 있다"는 이 변수를 비워두는 것과 결과가 다르다(전자는 기동 실패, 후자는 정상 기동) |
+| `LOCAL_LLM_KEY_2` | — | `LOCAL_LLM_KEY` 폴백 | `providers[2]` API 키. 미설정 시 `LOCAL_LLM_KEY` 값을 그대로 사용 |
+| `LOCAL_LLM_MODEL_2` | — | `LOCAL_LLM_MODEL` 폴백 | `providers[2]` 모델 식별자. 미설정 시 `LOCAL_LLM_MODEL`과 동일한 모델명을 사용(로컬 LLM 1과 동일 모델을 다른 서버에 복제하는 것이 일반적인 사용 사례) |
+| `LOCAL_FAST_LLM_URL` | 사용 시 ✅ | — (기본값 없음) | §6.21 — `providers[0]`(`local-fast`, 소형 로컬 LLM 1) 엔드포인트. 잡무 전용 소형(~500MB) 모델을 `providers[1]`(`local`)과 **다른 포트/장비**에 띄우고 가리킨다.<br>**미설정·공백이면 이 provider가 통째로 비활성화된다**(G2) — 소형 모델 서버가 없다면 그냥 비워두면 됨(회귀 0, `MICRO_TEXT`는 `local`이 흡수). 값을 설정하면 기동 시 접속 가능·모델명 일치 여부를 검증하며(G3, 기본 활성) 실패 시 애플리케이션이 시작되지 않는다 — "URL은 설정했지만 서버가 아직 안 떠 있어 매 요청마다 `local`로 런타임 폴백"되는 예전 동작은 `LLM_VERIFY_LOCAL_MODELS_ON_STARTUP=false`로 G3를 꺼야만 나온다 — 예제는 [§5.4 예제 6](#예제-6--소형경량-llm-분리로-잡무-오프로딩-plan-621) 참고 |
+| `LOCAL_FAST_LLM_KEY` | — | — | `providers[0]` API 키. `LOCAL_LLM_KEY`와 마찬가지로 로컬 엔드포인트는 보통 불필요 — 비워도(URL만 설정돼 있다면) `no-key`가 치환되어 등록됨 |
+| `LOCAL_FAST_LLM_MODEL` | — | `Qwen3.5-0.8B-Q4_K_M.gguf` | `providers[0]` 모델 식별자. 사용 중인 소형 모델명으로 변경 |
+| `LLM_VERIFY_LOCAL_MODELS_ON_STARTUP` | — | `true` | (`app.llm.verify-local-models-on-startup`) — G3 토글. `true`면 `LOCAL_LLM_URL`/`LOCAL_LLM_URL_2`/`LOCAL_FAST_LLM_URL`이 설정된 각 provider에 대해 기동 시 `GET {URL}/models`를 호출해 접속 가능·모델명 일치를 확인하고, 실패하면 애플리케이션이 시작되지 않는다. 로컬 서버가 앱보다 늦게 뜨는 배포 순서 레이스가 있을 때만 `false`로 끌 것 — 그 경우 예전처럼 첫 채팅 요청이 실패한 뒤 다른 provider로 런타임 폴백된다 |
+| `LLM_ROUTING_MODE` | — | `COST_FIRST` | 기본 라우팅 모드 (`app.llm.default-routing-mode`) — `COST_FIRST`/`QUALITY_FIRST`/`PROGRESSIVE`/`DUAL`/`LOCAL_ONLY`.<br>**폐쇄망·로컬 전용은 `LOCAL_ONLY`** 로 외부 프로바이더 호출을 원천 차단. `LOCAL_ONLY`로 설정하면 채팅 화면 사이드바의 라우팅 전략 드롭다운 자체가 사라진다(어떤 모드를 골라도 결과가 같으므로) — 상세는 [LLM_ROUTING.md §8](LLM_ROUTING.md#8-제약-및-주의사항) 참고 |
 | `OPENAI_API_KEY` | — | — | OpenAI providers 사용 시 필요. 미설정 또는 빈 값이면 해당 providers 자동 비활성화. providers 설정에서 `${OPENAI_API_KEY}` 형태로 참조 |
 | `OPENAI_BASE_URL` | — | `https://api.openai.com` | OpenAI 호환 엔드포인트 기본 URL. providers 설정에서 `${OPENAI_BASE_URL}` 형태로 참조. Azure OpenAI 등 호환 엔드포인트로 교체 가능 |
-| `GEMINI_API_KEY1` | — | — | Gemini 1번 API 키 — `providers[1]`(gemini-flash-lite) 전용. 미설정 시 해당 provider 자동 비활성화. providers 설정에서 `${GEMINI_API_KEY1}` 형태로 참조 |
-| `GEMINI_API_KEY2` | — | — | Gemini 2번 API 키 — `providers[2]`(gemini-flash), `providers[4]`(gemma-4-31b) 공유. 미설정 시 해당 providers 자동 비활성화. providers 설정에서 `${GEMINI_API_KEY2}` 형태로 참조. Rate Limit 분산 목적으로 KEY1과 KEY2를 별도 키로 관리 가능 |
+| `GEMINI_API_KEY1` | — | — | Gemini 1번 API 키 — `providers[3]`(gemini-flash-lite, NORMAL), `providers[6]`(gemma-4-31b, PREMIUM) 공유. 미설정 시 해당 providers 자동 비활성화. providers 설정에서 `${GEMINI_API_KEY1}` 형태로 참조 |
+| `GEMINI_API_KEY2` | — | — | Gemini 2번 API 키 — `providers[4]`(gemini-flash, NORMAL), `providers[7]`(gemma-4-31b, PREMIUM) 공유. 미설정 시 해당 providers 자동 비활성화. providers 설정에서 `${GEMINI_API_KEY2}` 형태로 참조. `providers[6]`·`[7]`은 이름·모델·priority(5)가 동일한 gemma-4-31b 2대로, 서로 다른 키를 씀으로써 PREMIUM 티어의 실질 처리량/쿼터를 두 배로 늘리는 로드밸런싱 쌍이다(§5.7 동일 우선순위 로드밸런싱) |
 | `GEMINI_BASE_URL` | — | `https://generativelanguage.googleapis.com/v1beta/openai/` | Gemini API 엔드포인트 URL. 모든 Gemini providers가 `${GEMINI_BASE_URL}` 형태로 참조하므로 이 값 하나로 Gemini 전체 엔드포인트를 일괄 변경 가능 |
 | `EMBED_BASE_URL` | — | `LOCAL_LLM_URL` 폴백 | 임베딩 전용 엔드포인트. 미설정 시 `LOCAL_LLM_URL` 사용. OpenAI 임베딩 사용 시 `https://api.openai.com` 등으로 독립 설정 |
 | `EMBED_API_KEY` | — | `LOCAL_LLM_KEY` 폴백 | 임베딩 전용 API 키. 미설정 시 `LOCAL_LLM_KEY` 사용 |
 | `EMBED_MODEL` | — | `text-embedding-nomic-embed-text-v1.5` | 임베딩 모델 식별자. **인덱싱 후 변경 금지** — 벡터 차원이 달라지면 기존 검색이 깨짐. 변경 시 전체 재인덱싱 필요 (chroma: 컬렉션 삭제 / sqlite-vec: `vec_embeddings` DROP — 차원이 DDL에 고정되며 `app.embedding.dimensions`도 함께 변경) |
 | `EMBED_DIMENSIONS` | sqlite-vec 시 ✅ | — | **sqlite-vec 전용** — 임베딩 모델의 실제 출력 차원 (`app.embedding.dimensions`). vec0 테이블이 `FLOAT[dim]`이라 DDL에 고정 → 모델 실제 차원과 **정확히 일치**해야 함 (nomic-embed-text=768, bge-m3=1024, text-embedding-3-small=1536). chroma 모드에선 무시(빈값→null). sqlite-vec 모드에서 미설정 시 기동 실패(fail-fast) |
 | `EMBED_ADDITIONAL_BASE_URLS` | — | — | §6.21 E1 — 추가 임베딩 엔드포인트(동일 모델·차원, 예: N개 GPU 복제본). 콤마 구분. 설정 시 `EMBED_BASE_URL`+이 목록에 걸쳐 least-in-flight 로드밸런싱. **모두 `EMBED_MODEL`을 같은 차원으로 서빙해야 함** (섞이면 벡터 인덱스 손상). 상세는 아래 "임베딩 병렬화" |
-| `EMBED_MAX_CONCURRENT_BATCHES` | — | `1` | §6.21 E2 — 단일 문서 인덱싱 시 서브배치 병렬 임베딩 수(1=직렬, 기본 → 회귀 0). 대략 (엔드포인트 수 × 엔드포인트별 병렬)로 설정. Chroma는 임베딩만 병렬(버퍼 후 1회 upsert), sqlite-vec는 병렬 임베딩 후 직렬 삽입(pool=1, §10.9.3 스트리밍 메모리 상한을 속도와 맞바꿈). 여러 파일 대량 인덱싱은 `INDEXING_MAX_FILES`로 이미 분산 |
+| `EMBED_MAX_CONCURRENT_BATCHES` | — | `1` | §6.21 E2 — 단일 문서 인덱싱 시 서브배치 병렬 임베딩 수(1=직렬, 기본 → 회귀 0). 대략 (엔드포인트 수 × 엔드포인트별 병렬)로 설정.<br>Chroma는 임베딩만 병렬(버퍼 후 1회 upsert), sqlite-vec는 병렬 임베딩 후 직렬 삽입(pool=1, §10.9.3 스트리밍 메모리 상한을 속도와 맞바꿈). 여러 파일 대량 인덱싱은 `INDEXING_MAX_FILES`로 이미 분산 |
 | `VECTORSTORE_TYPE` | — | `chroma` | 벡터 스토어 백엔드 — `chroma` 또는 `sqlite-vec` (§3.1 "벡터 스토어 백엔드 선택" 참조) |
 | `SQLITE_VEC_EXTENSION_PATH` | — | — | **sqlite-vec 전용** — 운영자가 제공하는 `vec0` 로더블 확장 절대경로 (suffix 생략 가능). 미설정 시 sqlite-vec 모드 기동 실패 |
 | `SQLITE_VEC_ENTRYPOINT` | — | — | sqlite-vec 전용(선택) — `load_extension` 엔트리포인트 강제. 보통 불필요 |
@@ -219,14 +226,14 @@ copy .env.example .env
 | `SEARCH_RRF_K` | `60` | 20 ~ 100 | 가중 RRF(Phase 7-A) — RRF 순위융합 상수 k(원논문 기본값 60) |
 | `MAX_RETRY_COUNT` | `2` | 0 ~ 4 | 증거 부족 시 재검색 최대 횟수 |
 
-대화 컨텍스트 주입 길이는 `LLM_MAX_TOKENS × 0.75`(최소 1,000자)로 자동 계산됩니다 — 기본값 기준 `6000 × 0.75 = 4500`자(§6.18 이전에는 `MemoryService`가 별도의 죽은 프로퍼티를 통해 기본값 `8000`을 읽어 `6000`자였습니다 — 소스 통일로 기본 예산이 줄었으니, 과거 히스토리 분량에 맞추려면 `LLM_MAX_TOKENS`를 올리세요). 원문 그대로 보내는 폴백 경로(`MemoryService.getHistory()`)와 요약 캐시 경로(`ConversationSummarizerService.buildContext()`, §6.1) 모두 이 예산을 동일하게 지키도록 통일되어 있습니다.
+대화 컨텍스트 주입 길이는 `LLM_MAX_TOKENS × 0.5`(최소 1,000자)로 자동 계산됩니다 — 기본값 기준 `6000 × 0.5 = 3000`자. 원문 그대로 보내는 폴백 경로(`MemoryService.getHistory()`)와 요약 캐시 경로(`ConversationSummarizerService.buildContext()`, §6.1) 모두 이 예산을 동일하게 지키도록 통일되어 있습니다.
 
 #### 대화 메모리 / 요약 캐시 튜닝
 
 | 변수 | 기본값 | 권장 범위 | 설명 |
 |------|--------|----------|------|
-| `MEMORY_FETCH_LIMIT_TURNS` | `50` | 20 ~ 200 | 폴백 경로(`SqliteMemoryRepository.getHistory()`)에서 문자 예산 적용 전 조회할 최근 turn 상한 |
-| `SUMMARY_MAX_CACHED_THREADS` | `3` | 1 ~ 20 | 요약 사전계산 결과를 유지하는 LRU 캐시 크기(동시 활성 thread 수). 초과 시 가장 오래 미사용된 thread부터 축출 |
+| `MEMORY_FETCH_LIMIT_TURNS` | `10` | 5 ~ 200 | 폴백 경로(`SqliteMemoryRepository.getHistory()`)와 요약 대상 조회(`getRecentTurns()`, §6.1)에서 공통으로 적용되는 최근 turn 상한 |
+| `SUMMARY_MAX_CACHED_THREADS` | `3` | 1 ~ 10 | 요약 사전계산 결과를 유지하는 LRU 캐시 크기(동시 활성 thread 수). 초과 시 가장 오래 미사용된 thread부터 축출 |
 | `SUMMARY_MAX_SUMMARY_CHARS` | `2000` | 500 ~ 5000 | LLM이 생성한 요약 문자열의 상한 (초과 시 잘림) |
 | `SUMMARY_RECENT_RAW_TURNS` | `2` | 1 ~ 5 | 요약 뒤에 원문 그대로 덧붙일 최근 turn 수 — 이 turn들도 위 문자 예산 안에서 최신 우선으로 채워지며, 예산 초과분은 잘리지 않고 통째로 드롭됨 |
 | `SUMMARY_PRECOMPUTE_TTL_SECONDS` | `15` | 5 ~ 60 | 동일 thread에 대한 중복 요약 사전계산(precompute) 억제 창(초). 프런트엔드가 이미 debounce하므로 이 값은 안전장치 성격 |
@@ -268,8 +275,8 @@ copy .env.example .env
 
 | 변수 | 기본값 | 설명 |
 |------|--------|------|
-| `EMBED_USAGE_FALLBACK_ENABLED` | `true` | 임베딩 사용량은 `llm_usage`에 `embed:<model>`로 채팅과 분리 집계되어 `/llm-usage`에 별도 카드로 표시됩니다(§5.5, §10). 임베딩 서버가 응답에 토큰 사용량을 반환하지 않으면(로컬 llama-server 등 흔함) 입력 텍스트 길이 근사(chars/4)로 대체 기록합니다. `false`로 설정하면 근사 대신 `0`을 기록합니다. 근사 경로 진입 시 서버 로그에 경고가 **최초 1회만** 출력됩니다 |
-| `EMBED_MAX_CHUNK_CHARS` | `0` (비활성) | 청크 1개의 **문자 수 하드 상한**. 임베딩 서버가 `input (N tokens) is too large ... (current batch size: 512)`처럼 배치/토큰 한계로 청크를 거부할 때 사용합니다. 이 값을 넘는 청크는 (의미 단위 청킹이 끝난 뒤) 줄 경계에서 **강제 재분할**되어 서버 한계를 넘지 않도록 보장합니다. 한국어·코드는 대략 1토큰/문자이므로 512토큰 배치라면 `~450` 정도가 안전. **먼저 서버 배치를 키우는 것을 권장**(아래 §8 참조)하고, 이건 최후의 안전장치로 사용하세요 |
+| `EMBED_USAGE_FALLBACK_ENABLED` | `true` | 임베딩 사용량은 `llm_usage`에 `embed:<model>`로 채팅과 분리 집계되어 `/llm-usage`에 별도 카드로 표시됩니다(§5.5, §10).<br>임베딩 서버가 응답에 토큰 사용량을 반환하지 않으면(로컬 llama-server 등 흔함) 입력 텍스트 길이 근사(chars/4)로 대체 기록합니다. `false`로 설정하면 근사 대신 `0`을 기록합니다. 근사 경로 진입 시 서버 로그에 경고가 **최초 1회만** 출력됩니다 |
+| `EMBED_MAX_CHUNK_CHARS` | `0` (비활성) | 청크 1개의 **문자 수 하드 상한**. 임베딩 서버가 `input (N tokens) is too large ... (current batch size: 512)`처럼 배치/토큰 한계로 청크를 거부할 때 사용합니다.<br>이 값을 넘는 청크는 (의미 단위 청킹이 끝난 뒤) 줄 경계에서 **강제 재분할**되어 서버 한계를 넘지 않도록 보장합니다. 한국어·코드는 대략 1토큰/문자이므로 512토큰 배치라면 `~450` 정도가 안전. **먼저 서버 배치를 키우는 것을 권장**(아래 §8 참조)하고, 이건 최후의 안전장치로 사용하세요 |
 
 #### 임베딩 병렬화 (§6.21 E1~E3)
 
@@ -293,6 +300,8 @@ app.embedding.max-concurrent-batches=4
 ```
 환경변수로는 `EMBED_ADDITIONAL_BASE_URLS=http://gpu-b:1234/v1`, `EMBED_MAX_CONCURRENT_BATCHES=4`.
 
+> **`INDEXING_MAX_LLM`과의 관계**: 둘 다 인덱싱 파이프라인의 동시성 제한이지만 서로 다른 단계·리소스를 게이팅하는 완전히 독립적인 세마포어라 직접적인 종속 관계는 없다. `INDEXING_MAX_LLM`(`app.indexing.max-concurrent-llm-calls`)은 키워드/컨텍스트 추출·MD 교정·TXT 구조화·Vision 이미지 설명 등 **채팅형 LLM 호출**을 제한하며, 소비자마다 자기 세마포어를 만들어 씀(공유 풀 아님). `EMBED_MAX_CONCURRENT_BATCHES`는 **임베딩** 서브배치 호출만 제한한다. 같은 문서를 인덱싱하는 동안 키워드 추출은 `INDEXING_MAX_LLM`만큼, 그 문서의 임베딩 서브배치는 `EMBED_MAX_CONCURRENT_BATCHES`만큼 각자 병렬로 동작하며, 서로 다른 백엔드 서버(LLM 서버 vs 임베딩 서버)를 겨냥하므로 한쪽 값이 다른 쪽 상한이나 동작에 영향을 주지 않는다. 튜닝도 각각 독립적으로: `INDEXING_MAX_LLM`은 LLM 서버의 `--parallel`에, `EMBED_MAX_CONCURRENT_BATCHES`는 `(임베딩 엔드포인트 수 × 엔드포인트별 병렬)`에 맞춘다.
+
 #### 쿼리 임베딩 캐시 (Phase 7-A)
 
 | 변수 | 기본값 | 권장 범위 | 설명 |
@@ -312,10 +321,14 @@ app.embedding.max-concurrent-batches=4
 | 변수 | 기본값 | 설명 |
 |------|--------|------|
 | `PPTX_IMAGE_MIN_SHAPE_DIMENSION_PT` | `30` | 도형의 가로/세로 중 큰 쪽이 이 값(포인트) 미만이면 아이콘/구분선으로 보고 래스터라이즈 대상에서 제외 |
-| `PPTX_IMAGE_CLUSTER_PROXIMITY_PADDING_PT` | `15` | 근접 클러스터링 판정 시 각 도형 바운딩박스에 적용할 바깥쪽 패딩(포인트). 커넥터가 도형 사이 '틈'에 있어도 하나로 묶이도록 함 |
-| `PPTX_IMAGE_MERGE_ANNOTATED_PICTURES` | `true` | `true`(기본) — 사진 위/근처에 겹친 주석 도형(강조 원·화살표·말풍선)이 있으면 사진과 하나의 합성 PNG로 합쳐짐(앵커 기반, `RASTERIZE_SHAPES`와 **독립**). `false` — 사진은 항상 원본 그대로 추출됨; PPTX에서 실제로 그룹(Ctrl+G)으로 묶인 사진+도형만 여전히 하나로 합쳐짐(POI가 그룹을 통째로 그리는 것은 이 옵션과 무관) |
-| `PPTX_IMAGE_RASTERIZE_SHAPES` | `false` | **"느슨한" 도형(사진/표/그룹 등 앵커에 안 겹친 선·화살표·텍스트없는 도형)끼리의 근접 클러스터링**을 제어. `false`(기본) — 클러스터링 안 함: 겹친 느슨한 도형이 한 덩어리로 뭉치지 않고, 아무것에도 안 겹친 단독 도형은 이미지로 아예 안 뽑힘. `true` — 겹친 느슨한 도형들을 union-find로 묶어 다이어그램 한 장으로 병합(구 기본 동작). **그룹·SmartArt(각 한 장), 표+겹친도형 합성, 사진+주석 합성은 이 값과 무관하게 항상 유지됨** |
+| `PPTX_IMAGE_CLUSTER_PROXIMITY_PADDING_PT` | `5` | 근접 클러스터링 판정 시 각 도형 바운딩박스에 적용할 바깥쪽 패딩(포인트) — 커넥터가 도형 사이 '틈'에 있어도 하나로 묶이도록 함.<br>**`PPTX_IMAGE_RASTERIZE_SHAPES` 값과 무관하게 항상 적용됨** — `true`면 `rasterizeWithClustering()`의 느슨한 도형 근접 클러스터링에, `false`(기본)여도 `mergeAnnotatedPictures=true`일 때 사진/표 앵커에 겹친 loose seed를 찾는 `overlappingLooseSeeds()`가 동일하게 이 패딩을 사용함. 둘 다 꺼졌을 때만(`RASTERIZE_SHAPES=false` **and** `MERGE_ANNOTATED_PICTURES=false`) 미사용 |
+| `PPTX_IMAGE_MERGE_ANNOTATED_PICTURES` | `true` | `true`(기본) — 사진 위/근처에 겹친 주석 도형(강조 원·화살표·말풍선)을 사진과 하나의 합성 PNG로 합침(앵커 기반, `RASTERIZE_SHAPES`와 **독립**). `false` — 사진은 항상 원본 그대로 추출(상세는 아래 참고) |
+| `PPTX_IMAGE_RASTERIZE_SHAPES` | `false` | **"느슨한" 도형(사진/표/그룹 등 앵커에 안 겹친 선·화살표·텍스트없는 도형)끼리의 근접 클러스터링**을 제어. `false`(기본) — 클러스터링 안 함. `true` — 겹친 느슨한 도형들을 하나의 다이어그램 이미지로 병합(구 기본 동작). 그룹·SmartArt·표/사진 합성은 이 값과 무관하게 항상 유지(상세는 아래 참고) |
+| `PPTX_REMOVE_DUPLICATE_SLIDES` | `true` | PPTX → MD 변환 시 **이미지 없는** 슬라이드에 한해 중복/목차형 슬라이드를 제거(`PptxToMarkdownConverter`). `true`(기본) — ① 정규화 텍스트가 앞선 슬라이드와 완전히 같으면 첫 등장만 남기고 드롭, ② 본문 불릿이 다른 슬라이드 제목들과 3개 이상·60% 이상 일치하면 목차/agenda 슬라이드로 보고 드롭. 이미지가 있는 슬라이드는 제거하지 않으며(이미지 고아 방지), `[페이지: N]` 번호는 밀리지 않음. `false` — 모든 슬라이드 유지. 변경 후 재인덱싱 필요 |
+| `PPTX_DROP_DIVIDER_SLIDES` | `true` | PPTX → MD 변환 시 본문·이미지 없이 **구분용 제목만** 있는 섹션 구분 슬라이드를 제거(`PptxToMarkdownConverter`). `true`(기본) — 제목이 번호/라벨형(`3장`·`PART 2`·`제1절`·`STEP 3`·`II.`·`1)`·`부록 A`), 구분 키워드(`목차`·`개요`·`서론`·`결론`·`요약`·`agenda`·`overview`·`summary`…), 또는 짧은 명사구(≤3단어·≤12자, 조사·서술어 없음)일 때만 드롭. 문장형/키 메시지 제목(`… 합니다`·`… 다`·`… 요`·`.`로 끝나거나 `은/는/이/가/을/를` 조사 포함)은 유지. 본문·이미지가 있는 슬라이드는 영향 없음. `false` — 제목만 있는 슬라이드도 유지. 변경 후 재인덱싱 필요 |
 
+> `PPTX_REMOVE_DUPLICATE_SLIDES`: 섹션마다 반복되는 동일 목차 슬라이드나 완전 동일한 백업 슬라이드가 검색 인덱스에 중복 청크로 남는 것을 막습니다. 목차형 판정(②)은 절대 개수(3개)와 비율(60%)을 모두 요구해 보수적이지만, 제목 여러 개를 나열하는 진짜 본문 슬라이드가 드물게 오탐될 수 있으니 그런 경우 `false`로 끄고 재인덱싱하세요. `DEBUG` 로그에 제거된 슬라이드 번호와 사유(중복/목차형)가 남습니다.
+> `PPTX_DROP_DIVIDER_SLIDES`: "PART 2"·"3장 개요"·"결제 시스템"처럼 내용 없는 섹션 표지 슬라이드가 검색에 아무 답도 주지 못한 채 인덱스 슬롯만 차지하는 것을 막습니다. 문장형 제목만 있는 "키 메시지" 슬라이드(예: "고객 만족을 최우선으로 합니다")는 실제 내용으로 보고 유지하지만, 판정은 휴리스틱이라 드물게 어긋날 수 있으니 구분 표지가 검색에 필요하거나 키 메시지가 사라지면 `false`로 끄고 재인덱싱하세요. 제거된 슬라이드는 `DEBUG` 로그에 사유(구분용 제목)와 함께 남습니다.
 > `PPTX_IMAGE_MERGE_ANNOTATED_PICTURES=false`는 화면 캡처 위의 강조 표시를 원본 사진과 분리해서 보관하고 싶을 때(예: 원본 사진을 다른 용도로 재사용) 사용합니다. 변경 후에는 기존 PPTX 문서를 재인덱싱해야 반영됩니다. (PPTX에서 실제로 Ctrl+G로 그룹핑된 사진+도형만 여전히 하나로 합쳐지는데, 이는 POI가 그룹을 통째로 그리는 자체 동작이라 옵션과 무관하게 항상 그렇게 동작합니다.)
 > `PPTX_IMAGE_RASTERIZE_SHAPES`: 기본값 `false`에서는 겹친 도형들이 무의미하게 한 이미지로 뭉치던 동작이 사라집니다 — 대신 저자가 의도적으로 묶은 그룹(Ctrl+G)·SmartArt, 표 위 강조 도형, 사진 위 주석만 이미지로 남습니다. 다이어그램을 여러 도형으로(그룹핑 없이) 그린 슬라이드를 하나의 이미지로 캡처하고 싶으면 `true`로 켜세요. 표는 이 옵션과 무관하게 항상 MD 파이프 표로도 들어갑니다(표 위 겹친 도형이 있으면 그 표+도형 합성 이미지가 **추가로** 생성). 변경 후 재인덱싱 필요.
 
@@ -325,7 +338,7 @@ app.embedding.max-concurrent-batches=4
 
 | 변수 | 기본값 | 설명 |
 |------|--------|------|
-| `DOCX_IMAGE_MERGE_ANNOTATED_SHAPES` | `true` | `true`(기본) — 사진과 **같은 문단**에 있는 레거시 VML 도형(`v:rect`/`v:oval`/`v:roundrect`/`v:line` — 사각형/원/모서리둥근사각형/선)을 사진 위에 그려 하나의 합성 PNG로 저장. `false` — 항상 원본 사진만 그대로 추출(도형은 무시) |
+| `DOCX_IMAGE_MERGE_ANNOTATED_SHAPES` | `false` | **[실험적 기능]** `false`(기본) — 항상 원본 사진만 그대로 추출(도형 무시). `true` — 사진과 **같은 문단**에 있는 레거시 VML 도형(`v:rect`/`v:oval`/`v:roundrect`/`v:line`)을 사진 위에 합성. 좌표 근사 방식이라 위치가 어긋날 수 있어 `false`가 더 안전함(상세는 아래 참고) |
 
 > **PPTX와의 차이 — 근사 방식**: POI의 WordprocessingML 모델에는 도형 좌표 API도 렌더러도 없어(그림 위치 자체가 노출되지 않음) PPTX처럼 진짜 기하학적 겹침을 판정할 수 없습니다. 대신 "같은 문단에 사진과 도형이 함께 있으면 겹친 주석"으로 간주하는 근사 휴리스틱을 사용합니다 — 화면 캡처 위에 강조 원/화살표를 그리면 Word가 보통 같은 문단에 앵커하므로 실무에서는 대부분 맞아떨어집니다. 최신 Word의 "도형 삽입"(DrawingML `wps:wsp`)은 POI에 타입 바인딩이 아예 없어 지원되지 않고, 레거시 VML 형태만 인식합니다. 도형 위치(`style` 속성)를 해석할 수 없거나 사진이 EMF/WMF인데 PNG 변환이 비활성/실패한 경우에는 합성을 포기하고 원본 사진만 추출합니다(조용한 폴백). 한 문단에 사진이 여러 장이면 첫 사진에만 합성을 시도합니다. 변경 후에는 기존 DOCX 문서를 재인덱싱해야 반영됩니다.
 
@@ -355,8 +368,8 @@ app.embedding.max-concurrent-batches=4
 
 | 변수 | 기본값 | 권장 범위 | 설명 |
 |------|--------|----------|------|
-| `LLM_MAX_TOKENS` | `6000` | 1000 ~ 32000 | 단일 진실 소스(`app.llm.max-tokens`)로 통일되어, 이 값을 바꾸면 **아래 세 곳 모두**가 함께 움직입니다: (1) **블로킹 LLM 응답 토큰 상한** — 인덱싱·분류·키워드·Direct 블로킹 호출에 적용(스트리밍 채팅 답변은 의도적으로 미적용, SSE 타임아웃이 폭주 방지). (2) **대화 컨텍스트 문자 예산**(`MemoryService`, `×0.75`로 히스토리 예산 산출). (3) **MD 교정 섹션 크기**(`MarkdownCorrectionService`). §6.18 이전에는 (1)이 코드에 `6000`으로 하드코딩돼 이 환경변수와 무관하게 동작했고, (2)·(3)은 별도의 죽은 프로퍼티(`spring.ai.openai.chat.options.max-tokens`, 기본 `8000`)를 읽어 (1)과 다른 값을 썼습니다 — 이제 세 곳 모두 `app.llm.max-tokens` 하나만 읽습니다 |
-| `LLM_TEMPERATURE` | `0.0` | 0.0 ~ 2.0 | 일반/RAG 및 Direct를 제외한 모든 LLM 호출의 무작위성 제어(`app.llm.temperature`). `0.0`은 결정적 답변, 높을수록 다양·창의적. **§6.18 이전에는 코드에 `0.0`으로 하드코딩돼 이 값이 무시되는 죽은 설정이었으나, 이제 실제로 적용됩니다** — 과거에 이 값을 설정해 둔 운영자는 이번부터 처음으로 효과가 나타납니다(기본 `0.0`이면 체감 변화 없음). 프로바이더 빈 생성 시점에 고정되므로 변경하려면 재기동 필요 |
+| `LLM_MAX_TOKENS` | `6000` | 1000 ~ 32000 | 단일 진실 소스(`app.llm.max-tokens`)로 통일되어, 이 값을 바꾸면 **아래 세 곳 모두**가 함께 움직입니다: (1) **블로킹 LLM 응답 토큰 상한** — 인덱싱·분류·키워드·Direct 블로킹 호출에 적용(스트리밍 채팅 답변은 의도적으로 미적용, SSE 타임아웃이 폭주 방지). (2) **대화 컨텍스트 문자 예산**(`MemoryService`, `×0.5`로 히스토리 예산 산출). (3) **MD 교정 섹션 크기**(`MarkdownCorrectionService`).<br>§6.18 이전에는 (1)이 코드에 `6000`으로 하드코딩돼 이 환경변수와 무관하게 동작했고, (2)·(3)은 별도의 죽은 프로퍼티(`spring.ai.openai.chat.options.max-tokens`, 기본 `8000`)를 읽어 (1)과 다른 값을 썼습니다 — 이제 세 곳 모두 `app.llm.max-tokens` 하나만 읽습니다 |
+| `LLM_TEMPERATURE` | `0.0` | 0.0 ~ 2.0 | 일반/RAG 및 Direct를 제외한 모든 LLM 호출의 무작위성 제어(`app.llm.temperature`). `0.0`은 결정적 답변, 높을수록 다양·창의적.<br>**§6.18 이전에는 코드에 `0.0`으로 하드코딩돼 이 값이 무시되는 죽은 설정이었으나, 이제 실제로 적용됩니다** — 과거에 이 값을 설정해 둔 운영자는 이번부터 처음으로 효과가 나타납니다(기본 `0.0`이면 체감 변화 없음). 프로바이더 빈 생성 시점에 고정되므로 변경하려면 재기동 필요 |
 | `DIRECT_LLM_TEMPERATURE` | `0.1` | 0.0 ~ 0.2 | **Direct(meta) 응답 전용** temperature(`app.llm.direct-temperature`) — 인사·잡담 등 RAG를 안 쓰는 직접 응답은 약간의 다양성이 자연스러워 일반 temperature와 분리(§6.18). `[0.0, 0.2]`로 clamp. **핫 수정 가능** — `/settings`에서 재기동 없이 다음 Direct 호출부터 반영(`DirectAnswerService`가 매 호출 재조회) |
 
 #### 로그 레벨
@@ -384,7 +397,7 @@ EMBED_BASE_URL=https://api.openai.com
 EMBED_MODEL=text-embedding-3-large
 # LOCAL_LLM_KEY를 비워도 LOCAL provider는 등록됩니다(로컬 엔드포인트는 키 불필요).
 # 로컬 LLM이 없으면 외부 우선 라우팅으로 LOCAL을 후순위에 두세요
-# (완전 제외는 application.properties의 providers[0] 주석 처리):
+# (완전 제외는 application.properties의 providers[1] 주석 처리):
 LLM_ROUTING_MODE=QUALITY_FIRST
 ```
 
@@ -439,8 +452,6 @@ LLM_ROUTING_MODE=QUALITY_FIRST
 
 #### LLM 응답 파라미터
 
-| 속성 | 기본값 | 설명 |
-|------|--------|------|
 > **temperature와 최대 출력 토큰**은 각각 `LLM_TEMPERATURE`, `LLM_MAX_TOKENS` 환경변수로 설정할 수 있습니다(§6.18로 실제 적용되도록 수정됨). Direct(잡담) 응답만 별도 `DIRECT_LLM_TEMPERATURE`(기본 0.1)를 쓰며 `/settings`에서 핫 수정 가능합니다. → [§3.2 LLM 응답 파라미터](#32-환경변수-전체-목록) 참조
 
 #### 업로드 크기 제한
@@ -674,8 +685,6 @@ mvn spring-boot:run
 
 - **Web UI**: `http://localhost:8080`
 - **API 헬스 체크**: `http://localhost:8080/api/v1/health` → `{"status":"ok",...}`
-
----
 
 ---
 
@@ -1077,8 +1086,8 @@ LLM 호출은 두 레이어가 담당합니다.
 
 > 임베딩과 추론은 완전히 분리되어 있습니다. 로컬 임베딩 모델(Ollama 등)과 외부 추론 모델을 독립적으로 조합할 수 있습니다.
 
-기본값으로 `providers[0]` (LOCAL) 하나만 등록되어 있습니다.  
-멀티 프로바이더를 사용하려면 `application.properties`에 providers 블록을 추가하세요.
+기본값으로 소형 로컬 LLM(`providers[0]`, MICRO_TEXT 전담) + 로컬 LLM 1(`providers[1]`, LOCAL) + 외부 NORMAL/PREMIUM 5종(`providers[3]`~`[7]`)이 함께 등록되어 있습니다(§5.4 예제 6 참고).  
+로컬 서버를 더 추가하거나(로컬 LLM 2, `providers[2]`) Vision 전용 모델을 쓰려면 `application.properties`에 providers 블록을 추가/수정하세요.
 
 모든 프로바이더는 **OpenAI 호환 REST API**를 통해 호출됩니다.  
 Gemini도 `https://generativelanguage.googleapis.com/v1beta/openai/` 엔드포인트를 통해 동일한 방식으로 사용합니다.
@@ -1099,6 +1108,18 @@ Gemini도 `https://generativelanguage.googleapis.com/v1beta/openai/` 엔드포�
 | `stream` | `true` (기본) \| `false` | LLM API 호출 방식. 미설정 시 `true`. 상세는 아래 참조 |
 | `concurrency` | 정수 (예: `3`) | 이 프로바이더의 질의 경로 동시성 게이트 크기. 미설정 시 `LLM_DEFAULT_PROVIDER_CONCURRENCY`(기본 3) 사용. 서버의 실제 `--parallel` 값과 일치시킬 것 |
 
+#### 프로바이더 활성화 게이트 (`LlmConfig`, G1~G3)
+
+시작 시 각 `providers[N]` 항목은 세 단계 게이트를 통과해야 실제로 등록된다:
+
+| 게이트 | 대상 | 조건 | 통과 못하면 |
+|---|---|---|---|
+| **G1** | 모든 역할 | `role=LOCAL`이면 `api-key`가 비어도 통과(로컬 엔드포인트는 키 불필요, `no-key`로 치환) — `NORMAL`/`PREMIUM`은 `api-key` 필수 | 시작 로그에 warn, 해당 프로바이더 미등록 |
+| **G2** | 모든 역할 | `base-url`이 비어 있지 않아야 함 | 시작 로그에 warn, 해당 프로바이더 미등록 |
+| **G3** | `role=LOCAL`만 | `GET {base-url}/v1/models` 호출 성공 + 응답에 `model` 값이 포함 | **애플리케이션 시작 자체가 실패**(Spring Boot가 비정상 종료) |
+
+G1·G2는 "이 프로바이더를 조용히 빼고 계속 진행"이지만, **G3는 다르다** — LOCAL 프로바이더의 `base-url`이 설정돼 있는데 서버가 안 떠 있거나 모델명이 틀리면 앱이 아예 뜨지 않는다. 포트 오타나 모델명 오타를 배포 직후 채팅 중 발견하는 대신 기동 시점에 바로 잡기 위함이다. `app.llm.verify-local-models-on-startup`(`LLM_VERIFY_LOCAL_MODELS_ON_STARTUP`, 기본 `true`)로 끌 수 있다 — 로컬 서버가 앱보다 늦게 뜨는 배포 순서 레이스가 있는 환경 등 예외적인 경우에만 `false`로 설정할 것. `NORMAL`/`PREMIUM`(클라우드) 프로바이더는 G3 대상이 아니다.
+
 #### stream 플래그
 
 `stream` 속성은 서버 ↔ LLM API 구간의 호출 방식을 제어합니다. 브라우저 ↔ 서버 간 SSE 연결은 이 값과 무관하게 유지됩니다.
@@ -1112,11 +1133,11 @@ Gemini도 `https://generativelanguage.googleapis.com/v1beta/openai/` 엔드포�
 
 ```properties
 # 예시: local 프로바이더만 블로킹 방식으로 호출
-app.llm.providers[0].stream=false
+app.llm.providers[1].stream=false
 ```
 
 > 시작 로그에서 각 프로바이더의 stream 설정을 확인할 수 있습니다:  
-> `local(LOCAL/BOTH/p0/stream=false) → http://localhost:1234/v1 [gemma-4-e4b]`
+> `local(LOCAL/BOTH/p1/stream=false) → http://localhost:1234/v1 [gemma-4-e4b]`
 
 #### type 값
 
@@ -1178,7 +1199,7 @@ Web UI 채팅 화면 드롭다운에서 대화별로 변경 가능.
 #### 예제 1 — 로컬 LLM 전용 (LM Studio / Ollama)
 
 `application.properties` 변경 없이 환경변수만 설정합니다.  
-기본 `providers[0]`이 `LOCAL_LLM_*` 값을 사용합니다.
+`providers[1]`(로컬 LLM 1)이 `LOCAL_LLM_*` 값을 사용합니다 — **`LOCAL_LLM_URL`은 반드시 설정해야 합니다**(비어 있으면 이 provider가 통째로 비활성화됨, 더 이상 `http://localhost:1234/v1`로 자동 폴백하지 않음). (`providers[0]`은 잡무 전담 소형 모델 — `LOCAL_FAST_LLM_*`, §5.4 예제 6. `LOCAL_FAST_LLM_URL`을 비워두면 그냥 비활성화되고 `local`이 잡무까지 흡수함)
 
 `.env`:
 ```env
@@ -1383,25 +1404,27 @@ COST_FIRST 흐름:
 
 추론이 필요 없는 잡무(키워드+맥락 추출·대화 요약·제목 생성·MultiQuery 쿼리 확장 = `MICRO_TEXT`)를 500MB급 소형 모델로 내리고, 답변 생성(`TEXT`)과 품질 민감한 분류·직답(`LIGHT_TEXT`)은 큰 모델이 전담하게 하면 — 두 모델이 **서로 다른 동시성 슬롯(Semaphore)**을 쓰므로 인덱싱 잡무가 채팅 답변의 슬롯을 잠식하지 않습니다(대화 응답 지연 감소).
 
+> 이 오프로딩은 `application.properties` 기본 설정에 이미 적용되어 있습니다(`providers[0]`=소형, `providers[1]`=큰 모델) — 아래는 처음부터 구성하는 방법을 보여주는 예제입니다.
+
 소형 모델 서버를 큰 모델과 **다른 포트/장비**에 띄운 뒤(예: LM Studio 2번째 인스턴스에 `qwen2.5-0.5b-instruct`를 로드, 포트 1236), `application.properties`:
 ```properties
 # 큰 모델 — 답변(TEXT)·분류·직답(LIGHT_TEXT)·Vision 전담. priority를 1로 올려 소형에 MICRO_TEXT 우선권을 넘긴다.
-app.llm.providers[0].name=local
-app.llm.providers[0].base-url=http://localhost:1234/v1
-app.llm.providers[0].model=google/gemma-4-e4b
-app.llm.providers[0].type=BOTH
-app.llm.providers[0].role=LOCAL
-app.llm.providers[0].priority=1
-app.llm.providers[0].concurrency=3
+app.llm.providers[1].name=local
+app.llm.providers[1].base-url=http://localhost:1234/v1
+app.llm.providers[1].model=google/gemma-4-e4b
+app.llm.providers[1].type=BOTH
+app.llm.providers[1].role=LOCAL
+app.llm.providers[1].priority=1
+app.llm.providers[1].concurrency=3
 
 # 소형 모델 — MICRO_TEXT(키워드·요약·제목·쿼리확장) 전담. priority 0으로 우선.
-app.llm.providers[6].name=local-fast
-app.llm.providers[6].base-url=http://localhost:1236/v1
-app.llm.providers[6].model=qwen2.5-0.5b-instruct
-app.llm.providers[6].type=MICRO_TEXT
-app.llm.providers[6].role=LOCAL
-app.llm.providers[6].priority=0
-app.llm.providers[6].concurrency=4
+app.llm.providers[0].name=local-fast
+app.llm.providers[0].base-url=http://localhost:1236/v1
+app.llm.providers[0].model=qwen2.5-0.5b-instruct
+app.llm.providers[0].type=MICRO_TEXT
+app.llm.providers[0].role=LOCAL
+app.llm.providers[0].priority=0
+app.llm.providers[0].concurrency=4
 ```
 
 라우팅 결과:
@@ -1414,7 +1437,7 @@ app.llm.providers[6].concurrency=4
 ```
 
 - ⚠️ **priority 필수**: 소형(0) < 큰 모델(1). 둘 다 0으로 두면 `MICRO_TEXT`가 두 모델 사이에 로드밸런싱되어 절반만 오프로딩됩니다.
-- ⚠️ **인덱스 연속성**: `providers[N]`은 0부터 연속이어야 바인딩됩니다 — 활성 프로바이더가 [0]~[5]면 소형은 **[6]**. `local-vision`도 함께 쓰면 하나를 [7]로 조정.
+- ⚠️ **인덱스 연속성**: `providers[N]`은 0부터 연속이어야 바인딩됩니다(파일 내 줄 순서 자체는 무관 — 사람이 읽기 편하도록만 맞춤). 현재 기본 파일은 `[0]`=소형·`[1]`=로컬 LLM 1·`[2]`=로컬 LLM 2·`[3]~[7]`=외부·`[8]`=Vision(선택) 순.
 - **더 공격적 오프로딩(A안)**: 분류·직답까지 소형으로 내리려면 `type=MICRO_TEXT` 대신 `type=LIGHT_TEXT`로 등록(`LIGHT_TEXT`가 `MICRO_TEXT`도 흡수). 단 분류 오분류는 라우팅 정확도로, 직답은 사용자 노출로 이어지므로 채택 전 검색 품질 평가 하네스([§6.6](#66-검색-품질-평가-하네스-개발자용))로 분류 정확도 회귀를 확인하세요.
 - 처리량을 더 늘리려면 소형·큰 모델 각각을 [예제 5](#예제-5--로컬-llm-2대-로드밸런싱-처리량-확장)처럼 같은 priority로 다중 등록해 로드밸런싱할 수 있습니다 — 구체적인 결합 설정은 아래 예제 7 참고.
 
@@ -1483,7 +1506,11 @@ app.llm.providers[8].concurrency=4
 | HTTP 503 (Service Unavailable) | `Retry-After` 헤더 값 | 헤더 없으면 위와 동일 |
 | 그 외 4xx/5xx, 네트워크 오류 | 30초 고정 | 변경 없음 |
 
-**폴백 없는 프로바이더의 과부하성 오류(429/402/503) 완화**: `Retry-After` 헤더가 없을 때, 이 요청에서 시도 가능한 다른 프로바이더가 남아있으면(폴백 존재) 기존과 동일하게 `circuit-breaker-minutes` 전체를 차단합니다 — 다음 프로바이더로 정상 전환되므로 문제가 없습니다. 반면 **폴백이 전혀 없는 유일한 프로바이더**(전형적으로 단일 LOCAL 프로바이더만 등록된 배포)라면, 전체 시간 차단은 다음 요청부터 만료 시각까지 서비스 전체를 다운시킬 뿐이므로 **30초로 단축 차단**합니다 — 동시성 게이트(§5.7)가 이미 프로바이더에 걸리는 부하를 억제하고 있어 짧게 재시도해도 안전합니다. 서버가 명시적으로 `Retry-After`를 보낸 경우는 폴백 유무와 무관하게 항상 그대로 존중됩니다.
+**폴백 없는 프로바이더의 과부하성 오류(429/402/503) 완화**: `Retry-After` 헤더가 없을 때의 차단 시간은 폴백 가능 여부에 따라 달라집니다.
+
+- **폴백 있음** (이 요청에서 시도 가능한 다른 프로바이더가 남아있는 경우) — 기존과 동일하게 `circuit-breaker-minutes` 전체를 차단합니다. 다음 프로바이더로 정상 전환되므로 문제가 없습니다.
+- **폴백 없음**(전형적으로 단일 LOCAL 프로바이더만 등록된 배포) — 전체 시간 차단은 다음 요청부터 만료 시각까지 서비스 전체를 다운시킬 뿐이므로 **30초로 단축 차단**합니다. 동시성 게이트(§5.7)가 이미 프로바이더에 걸리는 부하를 억제하고 있어 짧게 재시도해도 안전합니다.
+- 서버가 명시적으로 `Retry-After`를 보낸 경우는 폴백 유무와 무관하게 항상 그대로 존중됩니다.
 
 - `app.llm.circuit-breaker-minutes=4` — 기본 차단 시간 (분)
 - 차단 상태는 인메모리(`ConcurrentHashMap`) 유지 — 서버 재시작 시 초기화
@@ -1540,14 +1567,17 @@ app.llm.providers[8].concurrency=4
 `MemoryService`는 **SQLite**(`DATA_DIR/memory.db`)에 대화 이력을 영속합니다.
 
 - WAL 모드로 읽기/쓰기 경합 최소화. SQLite pool size는 반드시 1 유지
-- 스레드별 최근 `MEMORY_FETCH_LIMIT_TURNS`(기본 50)턴 이내에서 `LLM_MAX_TOKENS × 0.75`까지 LLM 컨텍스트 주입
+- 스레드별 최근 `MEMORY_FETCH_LIMIT_TURNS`(기본 10)턴 이내에서 `LLM_MAX_TOKENS × 0.5`까지 LLM 컨텍스트 주입
 - `/chat/{threadId}` 재진입 시 모든 이전 turn을 시간순으로 불러와 메시지 버블 복원
 - `MemoryRepository` 인터페이스로 추상화 — Redis 등으로 교체 시 구현체만 추가
 
-**요약 캐시 (`ConversationSummarizerService`)**: 사용자가 다음 질문을 입력하는 동안 백그라운드에서 스레드 대화 이력을 LOCAL 프로바이더로 미리 요약해 캐싱합니다. 이후 실제 질의 시 원문 전체 대신 "요약 + 최근 N턴 원문"을 컨텍스트로 사용해 토큰을 절약합니다.
+**요약 캐시 (`ConversationSummarizerService`)**: 스레드 대화 이력을 LOCAL 프로바이더로 미리 요약해 캐싱해두고, 실제 질의 시 원문 전체 대신 "요약 + 최근 N턴 원문"을 컨텍스트로 사용해 토큰을 절약합니다.
 
+- **트리거**: 주 트리거는 답변이 완료되고 턴이 저장된 직후(`precomputeAfterTurn()`)입니다 — 사용자가 다음 질문을 입력하기 전부터 백그라운드로 미리 갱신을 시작하므로, 응답을 읽는 동안이 곧 요약 준비 시간이 됩니다. 사용자가 질문창에 첫 글자를 입력할 때 발화되는 기존 트리거(`precompute()`)는 아직 한 번도 요약이 만들어지지 않은 스레드(예: 재시작 후 처음 열어본 오래된 대화)를 위한 콜드스타트 안전망으로 남아 있습니다.
+- **싫어요 처리**: 답변 직후 트리거된 요약 생성이 진행되는 동안(LLM 호출이 아직 끝나지 않은 짧은 시간) 사용자가 방금 그 턴에 싫어요를 누르면, 완성된 요약이라도 캐싱하지 않고 버립니다 — 다음 질문은 자동으로 원문 폴백 경로를 쓰게 되며, 그 경로는 애초에 DISLIKE 턴을 제외합니다. 다음 정상 트리거 때는 dedupe 단계에서 자연스럽게 그 턴이 빠진 채로 다시 요약됩니다.
 - 캐시 미스이거나 LOCAL 프로바이더가 없으면 자동으로 원문 폴백 경로(`MemoryService.getHistory()`) 사용 — best-effort, 실패해도 채팅이 막히지 않음
 - 요약 경로와 폴백 경로는 **동일한 문자 예산**을 지키도록 통일되어 있어(위 참조), 요약 캐시 유무에 따라 LLM에 전달되는 컨텍스트 양이 달라지지 않음
+- **요약 대상 자체도 무제한이 아닙니다**: 요약을 만들 때 읽어오는 원문(`MemoryService.getRecentTurns()`)은 `getHistory()`와 동일하게 `MEMORY_FETCH_LIMIT_TURNS`(기본 10턴)로 상한이 걸려 있습니다. 대화가 길어져도 매번 LLM에 보내는 요약용 입력 크기가 무한정 커지지 않도록 하기 위함이며, 이 턴 수보다 오래된 내용은 이 요약에서도 함께 유실됩니다(스레드를 다시 열었을 때 전체 메시지 버블을 복원하는 `MemoryService.getTurns()`는 이 제한과 무관하게 항상 전체를 반환합니다)
 - 캐시 크기·요약 길이·최근 턴 수·재계산 억제 창은 `MEMORY_FETCH_LIMIT_TURNS`/`SUMMARY_*` 환경변수로 조정 (위 "대화 메모리 / 요약 캐시 튜닝" 참조)
 
 `conversation_turns` 테이블 확장 컬럼 (앱 시작 시 `ALTER TABLE`로 자동 마이그레이션):
@@ -1622,9 +1652,31 @@ CPU/메모리 제약이 있는 환경에서는 `INDEXING_MAX_FILES`와 `INDEXING
 `/settings`는 현재 **유효** LLM/RAG 설정을 한 화면에서 보여주고, 일부 검색 튜닝 값은 **재기동 없이** 조정할 수 있게 합니다. `application.properties`/환경변수를 고치고 재기동하지 않아도 검색 동작을 실시간으로 미세조정할 수 있습니다.
 
 **조회 항목 (그룹별)**:
-- **LLM 라우팅**: 등록 프로바이더·역할(role)·우선순위·모델·API 키 설정 여부·서킷브레이커 상태, 기본 라우팅 모드, 일반 temperature·max-tokens(조회 전용, 실제 config 값 표시).
+- **LLM 라우팅**: 등록 프로바이더·역할(role)·우선순위·모델·API 키 설정 여부·서킷브레이커 상태·**활성화 여부**(아래 참조), 기본 라우팅 모드, 일반 temperature·max-tokens(조회 전용, 실제 config 값 표시).
 - **임베딩 / 벡터 스토어**: 임베딩 모델·차원, 벡터 스토어 백엔드(chroma/sqlite-vec).
 - **검색 튜닝 / 인덱싱 / 캐시**: 아래 핫 수정 항목 + 조회 전용 항목.
+
+**프로바이더 활성화/비활성화 토글 (재기동 시 초기화)**:
+
+`LLM 라우팅` 표의 각 행에는 활성/비활성 배지와(관리자에게만) **활성화**/**비활성화** 버튼이 있습니다 — `POST /admin/settings/provider/toggle`(`name`, `enabled`). 클릭 즉시 `LlmRouter.findFirst()`가 해당 이름의 프로바이더를 후보에서 제외/재포함하며, ChatModel·동시성 게이트 등 빈(bean) 자체는 건드리지 않으므로 재기동이 필요 없습니다.
+
+- **`app.llm.providers[N]`을 주석 처리/삭제하는 것과는 다른, 별개의 메커니즘**입니다 — `ProviderToggle`이라는 프로세스 메모리 상의 집합(`CircuitBreaker`와 동일한 패턴)일 뿐이며, **`settings_override` 테이블(SQLite)에 저장되지 않습니다.** 즉 **재기동하면 모든 프로바이더가 다시 활성 상태로 돌아갑니다** — 설정 파일/환경변수가 여전히 최종 권위를 가집니다.
+- 이름(`name`)이 같은 프로바이더가 여러 대 등록돼 있으면(§5.4 예제 5/7의 로드밸런싱 쌍, 또는 §5.4 예제 뒤쪽의 PREMIUM Gemini 키 쌍처럼) **같은 이름을 공유하는 모든 인스턴스가 함께** 켜지고 꺼집니다 — 토글은 provider 설정 하나가 아니라 "이름"을 키로 삼기 때문입니다.
+- **마지막으로 남은 활성 프로바이더는 비활성화할 수 없습니다** — 그 요청은 400(`IllegalArgumentException`)으로 거부되어 라우팅이 완전히 막히는 상황을 방지합니다.
+- 모든 토글은 감사 로그(`settings.provider.toggle`, `{"enabled":"true|false"}`)에 남습니다.
+- 임시로 문제가 있는 프로바이더(예: 응답이 계속 이상하거나 비용이 우려될 때)를 재기동 없이 즉시 빼고 싶을 때 사용하세요. **영구적으로** 빼려면 `application.properties`에서 해당 `providers[N].*` 블록을 주석 처리하거나 env var를 비우세요(§5.4).
+
+**시작 시 오버라이드 불일치 경고**:
+
+`SettingsService.init()`은 시작 시 각 핫 수정 키의 **effective 값**을 오버라이드 바인딩 전/후로 비교해, `settings_override`에 저장된 값이 현재 `application.properties`/환경변수 값과 실제로 다르면(클램핑 이후 값 기준) WARN 로그를 남깁니다:
+
+```
+[SETTINGS] '{키}' — a persisted /settings override ({override값}) is overriding the
+env-var/application.properties value ({설정값}); the override wins. Reset it in
+/settings to fall back to the configured value.
+```
+
+배포에서 `SEARCH_TOP_K=10`처럼 환경변수를 새로 설정했는데 실제로는 예전에 `/settings`에서 저장해 둔 오버라이드(예: 7)가 여전히 이기고 있어 "왜 안 바뀌지?"로 헤매는 상황을 시작 로그만 보고 바로 알 수 있게 하기 위함입니다. 오버라이드가 아예 없거나 값이 설정값과 동일하면(우연히 같은 숫자로 클램핑된 경우 포함) 조용히 넘어갑니다 — 항상 남는 로그가 아니라 실제로 "이길 때"만 경고합니다.
 
 **핫 수정 가능 — 검색 (재기동 불필요, 다음 검색부터 반영)** — 값을 바꾸면 `settings_override` 테이블(`memory.db`)에 저장되고, 다음 검색부터 즉시 적용됩니다:
 
@@ -1705,7 +1757,7 @@ mvn test -Dtest=SearchQualityEvaluationTest -Dsearch-eval.enabled=true
 |------|------|
 | Vector Store 상태 카드 | 백엔드 종류·정상 여부·청크 수. chroma=컬렉션 수 / sqlite-vec=문서 수·`vec_version`·임베딩 차원 |
 | 컬렉션·버전 목록 | chroma=컬렉션별 / sqlite-vec=버전별 청크 수 표시 (클릭 시 청크 조회) |
-| 청크 조회 | 컬렉션(또는 버전)·문서(docId)별 청크 페이지네이션 (50건 단위) |
+| 청크 조회 | 컬렉션(또는 버전)·문서(docId)별 청크 페이지네이션 (50건 단위) — ID·텍스트 미리보기·크기·파일명·페이지/슬라이드·**챕터**·키워드·작업 컬럼. 챕터 컬럼은 `MetaKey.CHAPTER_NO`(H2~H6 헤딩 기반 계층 번호)를 보여주며 "0"(실제 챕터 없음)이면 빈 칸으로 표시 |
 | 청크 편집 | 텍스트·메타데이터 수정 (원본 임베딩 유지 — 벡터 재계산 안 함) |
 | 청크 삭제 | 개별 청크 즉시 제거. sqlite-vec는 `vec_document_chunks`+`vec_embeddings` 두 테이블 동기 삭제 |
 | 문서 레지스트리 | 인덱싱된 전체 문서 목록 + 문서별 청크 바로 조회 (백엔드 무관, SQLite `doc_registry` 기반) |
@@ -1715,8 +1767,9 @@ mvn test -Dtest=SearchQualityEvaluationTest -Dsearch-eval.enabled=true
 
 1. `data/converted/{docId}_corrected.md` 파일을 텍스트 에디터로 직접 수정
 2. 벡터 스토어 관리 페이지 문서 레지스트리에서 해당 문서의 ↺ 버튼 클릭
-3. 기존 벡터 청크만 삭제 — 활성 백엔드(chroma 또는 sqlite-vec) (MD 파일·이미지 보존)
-4. 수정된 MD 기준으로 청크 분할 → 키워드 추출 → 활성 백엔드에 재등록
+3. 결정적(비-LLM) MD 정리 — 존재하지 않는 이미지 마커 제거 → 소제목 번호 재검증 → 마크다운 후처리 (§7.3 참고, 변경 있으면 MD 파일에도 반영)
+4. 정리된 MD 기준으로 청크 분할 → 키워드 추출(LLM) → 활성 백엔드에 재등록
+5. 신규 청크 저장이 끝난 뒤에야 기존 벡터 청크 삭제 — 활성 백엔드(chroma 또는 sqlite-vec) (MD 파일·이미지 보존, 저장 실패 시 기존 데이터 보존)
 
 > **API 직접 호출**: `POST /admin/documents/{docId}/reindex`
 
@@ -1725,6 +1778,7 @@ mvn test -Dtest=SearchQualityEvaluationTest -Dsearch-eval.enabled=true
 - **임베딩 미갱신 (청크 편집)**: 청크 텍스트를 편집 패널에서 수정해도 벡터 임베딩은 재계산되지 않습니다. 임베딩까지 갱신하려면 MD 파일 수정 후 ↺ 재인덱싱을 사용하세요.
 - **MD 재인덱싱 대상**: DOCX·TXT·PPTX·PDF(스캔 아님) 업로드 시 생성된 `_corrected.md` 파일이 없으면 `{docId}.md` 원본으로 fallback됩니다. 스캔 PDF처럼 MD 파일 자체가 없는 문서는 재인덱싱 불가 (에러 메시지 표시).
 - **소제목 번호 재검증**: 재인덱싱 시 저장된 MD에 이미 번호 매겨진 헤딩이 있으면 현재 헤딩 구조 기준으로 다시 계산해 파일에도 반영합니다(PPTX 제외 — [§3.3 소제목 숫자 생성](#33-applicationproperties-전용-설정) 참고). 번호가 원래 없던 문서에는 새로 번호를 붙이지 않습니다.
+- **마크다운 후처리 재적용**: 재인덱싱 시 결정적(비-LLM) 정리도 다시 적용됩니다 — `[DOCUMENT]` 마커·내용 없는 `-` 줄 제거, 코드 블록·표 앞뒤 빈 줄 보장, 연속 빈 줄을 1개로 축소(모든 형식 대상, PPTX 포함). 코드펜스 언어 보정(`fixClosingFences`/`normalizeCodeBlocks`)은 재인덱싱에 **포함되지 않습니다** — MD를 직접 편집한 뒤 재인덱싱하면 코드 블록 안의 의도된 빈 줄이 지워지거나 펜스 태그가 잘못 벗겨질 위험이 있어, 매번 감수하지 않고 필요할 때(재업로드)만 적용되도록 남겨둔 설계입니다. 상세는 [PIPELINE.md §6.4](PIPELINE.md#64-문서-타입별-처리-상세) 참고.
 - **청크 단독 삭제 vs. 문서 삭제**: 청크를 개별 삭제해도 SQLite `doc_registry` 테이블의 레지스트리 항목은 남습니다. 문서 전체 제거는 Documents 페이지 또는 `DELETE /api/v1/documents/{docId}`를 사용하세요.
 - **접근 제어**: `app.auth.enabled=true`(기본)이면 `/admin`도 로그인 필요. 평문 no-auth 모드에서는 누구나 `/admin`에 접근 가능하므로 내부망 또는 리버스 프록시 수준에서 경로를 제한하거나, [§9.4.2 관리 전용 인증](#942-관리-전용-인증-management-only)으로 전환해 애플리케이션 레벨에서 잠그는 것을 권장합니다.
 
@@ -1900,7 +1954,7 @@ srv send_error: ... error: input (706 tokens) is too large to process. increase 
 | `[TIMEOUT:SSE]` | SSE 연결 자체 timeout (브라우저 ↔ 서버) |
 | `[TIMEOUT:ASYNC_MVC]` | Spring MVC async 요청 timeout |
 | `[TIMEOUT:LLM_HTTP]` | LLM API 호출 중 connect/read timeout 계열 예외 |
-| `[TIMEOUT:INDEX_KEYWORD]` | 인덱싱 중 청크 키워드 추출 timeout (TF fallback 동작) |
+| `[TIMEOUT:INDEX_KEYWORD]` / `[TIMEOUT:INDEX_KEYWORD_BATCH]` | 인덱싱 중 청크 키워드 추출 timeout(설정된 초 초과)으로 TF fallback. **주의**: LLM 호출 자체 실패(프로바이더 소진 등)는 이 태그가 아니라 `[ENRICH]`/`[ENRICH-BATCH]` (DEBUG)로 별도 기록 — timeout이 아님 |
 | `[TIMEOUT:LIBREOFFICE]` | DOCX WMF 변환(soffice) timeout |
 
 ---

@@ -83,7 +83,7 @@ public class AgentService {
             turnId = memoryService.addTurn(userId, request.threadId(), request.question(), result.answer(),
                     askedAt, result.totalInputTokens(), result.totalOutputTokens(),
                     (int) elapsedMs, result.usedProvider(), result.llmCallCount());
-            summarizerService.invalidate(request.threadId());
+            summarizerService.precomputeAfterTurn(userId, request.threadId(), turnId, ctx.locale());
         }
 
         return new ChatResponse(

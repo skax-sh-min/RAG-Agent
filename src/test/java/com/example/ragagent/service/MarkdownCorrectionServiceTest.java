@@ -1,11 +1,16 @@
 package com.example.ragagent.service;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.llm.BackgroundUsage;
 import com.example.ragagent.llm.LlmProvider;
 import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.llm.TaskType;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -43,6 +48,8 @@ class MarkdownCorrectionServiceTest {
 
     private MarkdownCorrectionService service;
     private LlmRouter llmRouter;
+    private Logger correctionLogger;
+    private ListAppender<ILoggingEvent> logAppender;
 
     @BeforeEach
     void setUp() {
@@ -52,8 +59,22 @@ class MarkdownCorrectionServiceTest {
         when(indexing.maxConcurrentLlmCalls()).thenReturn(2);
         when(props.indexingSafe()).thenReturn(indexing);
         when(props.llmSafe()).thenReturn(new AppProperties.LlmConfig(
-                java.util.List.of(), 2, 10, 180, "COST_FIRST", 0.6, 3, 20, 0.0, 0.1, 8000));
+                java.util.List.of(), 2, 10, 180, "COST_FIRST", 0.6, 3, 20, 0.0, 0.1, 8000, true));
         service = new MarkdownCorrectionService(llmRouter, props);
+    }
+
+    @BeforeEach
+    void attachLogCapture() {
+        correctionLogger = (Logger) org.slf4j.LoggerFactory.getLogger(MarkdownCorrectionService.class);
+        logAppender = new ListAppender<>();
+        logAppender.start();
+        correctionLogger.addAppender(logAppender);
+        correctionLogger.setLevel(Level.DEBUG);
+    }
+
+    @AfterEach
+    void detachLogCapture() {
+        correctionLogger.detachAppender(logAppender);
     }
 
     // ---------------------------------------------------------------------------------------------
@@ -111,6 +132,49 @@ class MarkdownCorrectionServiceTest {
         assertThat(sections.get(0)).contains("첫 번째 절").contains("본문A");
         assertThat(sections.get(1)).contains("하위 절").contains("본문B");
         assertThat(sections.get(2)).startsWith("#### 더 하위 절").contains("본문C");
+    }
+
+    @Test
+    @DisplayName("splitBySections — 헤딩 없는 PDF도 [페이지: N] 마커를 경계로 페이지마다 나뉜다")
+    void splitBySections_splitsOnPageMarkerForHeadinglessPdf() {
+        // PdfToMarkdownConverter no longer emits "## N페이지", so the page marker is the only
+        // per-page boundary the correction step can split on.
+        String md = """
+                [페이지: 1]
+                첫 페이지 본문입니다.
+
+                [페이지: 2]
+                둘째 페이지 본문입니다.
+
+                [페이지: 3]
+                셋째 페이지 본문입니다.
+                """;
+
+        List<String> sections = service.splitBySections(md);
+
+        assertThat(sections).hasSize(3);
+        assertThat(sections.get(0)).startsWith("[페이지: 1]").contains("첫 페이지 본문");
+        assertThat(sections.get(1)).startsWith("[페이지: 2]").contains("둘째 페이지 본문");
+        assertThat(sections.get(2)).startsWith("[페이지: 3]").contains("셋째 페이지 본문");
+    }
+
+    @Test
+    @DisplayName("splitBySections — 펜스 안의 [페이지: N] 같은 줄은 경계로 취급하지 않는다")
+    void splitBySections_pageMarkerInsideFenceDoesNotSplit() {
+        String md = """
+                [페이지: 1]
+                로그 예시:
+
+                ```
+                [페이지: 2]
+                (펜스 안 — 진짜 페이지 마커가 아님)
+                ```
+                """;
+
+        List<String> sections = service.splitBySections(md);
+
+        assertThat(sections).hasSize(1); // the fenced [페이지: 2] must not start a new section
+        assertThat(countOccurrences(sections.get(0), "```")).isEqualTo(2);
     }
 
     @Test
@@ -331,6 +395,102 @@ class MarkdownCorrectionServiceTest {
     }
 
     // ---------------------------------------------------------------------------------------------
+    // normalizeCodeContent — collapse blank lines except before a multi-line comment or a
+    // comment-less function/class start
+    // ---------------------------------------------------------------------------------------------
+
+    @Test
+    @DisplayName("normalizeCodeContent — 본문 중간의 빈 줄은 전부 제거된다")
+    void normalizeCodeContent_removesOrdinaryBlankLines() {
+        String code = "int a = 1;\n\n\nint b = 2;\n\nint c = 3;";
+
+        String result = service.normalizeCodeContent(code);
+
+        assertThat(result).isEqualTo("int a = 1;\nint b = 2;\nint c = 3;");
+    }
+
+    @Test
+    @DisplayName("normalizeCodeContent — 여러 줄 블록 주석(/** */) 앞에는 빈 줄 1개를 남긴다")
+    void normalizeCodeContent_keepsOneBlankBeforeBlockComment() {
+        String code = "int a = 1;\n\n\n/**\n * 설명\n */\nvoid foo() {}";
+
+        String result = service.normalizeCodeContent(code);
+
+        assertThat(result).isEqualTo("int a = 1;\n\n/**\n * 설명\n */\nvoid foo() {}");
+    }
+
+    @Test
+    @DisplayName("normalizeCodeContent — 연속된 두 줄 이상의 라인 주석(//) 앞에는 빈 줄 1개를 남긴다")
+    void normalizeCodeContent_keepsOneBlankBeforeConsecutiveLineComments() {
+        String code = "int a = 1;\n\n// line1\n// line2\nvoid foo() {}";
+
+        String result = service.normalizeCodeContent(code);
+
+        assertThat(result).isEqualTo("int a = 1;\n\n// line1\n// line2\nvoid foo() {}");
+    }
+
+    @Test
+    @DisplayName("normalizeCodeContent — 단일 줄 주석 하나뿐이면 여러 줄 주석이 아니므로 앞의 빈 줄이 제거된다")
+    void normalizeCodeContent_removesBlankBeforeSingleLineComment() {
+        String code = "int a = 1;\n\n// only one line\nvoid foo() {}";
+
+        String result = service.normalizeCodeContent(code);
+
+        assertThat(result).isEqualTo("int a = 1;\n// only one line\nvoid foo() {}");
+    }
+
+    @Test
+    @DisplayName("normalizeCodeContent — 주석이 없는 함수 시작부 앞에는 빈 줄 1개를 남긴다")
+    void normalizeCodeContent_keepsOneBlankBeforeUncommentedFunction() {
+        String code = "int a = 1;\n\n\npublic void bar() {\n    int x = 1;\n}";
+
+        String result = service.normalizeCodeContent(code);
+
+        assertThat(result).isEqualTo("int a = 1;\n\npublic void bar() {\n    int x = 1;\n}");
+    }
+
+    @Test
+    @DisplayName("normalizeCodeContent — 함수 바로 위에 이미 주석이 있으면 주석-함수 사이의 빈 줄은 추가하지 않는다")
+    void normalizeCodeContent_noExtraBlankBetweenCommentAndFunction() {
+        String code = "int a = 1;\n\n// 설명\n\npublic void bar() {\n}";
+
+        String result = service.normalizeCodeContent(code);
+
+        // 주석 앞에는 빈 줄 1개(다중 주석 아니므로 실제로는 제거), 주석-함수 사이엔 추가 안 함
+        assertThat(result).isEqualTo("int a = 1;\n// 설명\npublic void bar() {\n}");
+    }
+
+    @Test
+    @DisplayName("normalizeCodeContent — 파이썬 def/class와 셸 함수도 함수 시작으로 인식한다")
+    void normalizeCodeContent_recognizesPythonAndShellFunctionStarts() {
+        String python = "x = 1\n\n\ndef foo():\n    pass";
+        String shell = "VAR=1\n\n\ngreet() {\n    echo hi\n}";
+
+        assertThat(service.normalizeCodeContent(python)).isEqualTo("x = 1\n\ndef foo():\n    pass");
+        assertThat(service.normalizeCodeContent(shell)).isEqualTo("VAR=1\n\ngreet() {\n    echo hi\n}");
+    }
+
+    @Test
+    @DisplayName("normalizeCodeContent — if/for 같은 제어문은 함수 시작으로 오인하지 않는다")
+    void normalizeCodeContent_doesNotTreatControlFlowAsFunctionStart() {
+        String code = "int a = 1;\n\n\nif (a > 0) {\n    a++;\n}";
+
+        String result = service.normalizeCodeContent(code);
+
+        assertThat(result).isEqualTo("int a = 1;\nif (a > 0) {\n    a++;\n}");
+    }
+
+    @Test
+    @DisplayName("normalizeCodeContent — 코드 블록 맨 앞의 빈 줄은 절대 추가되지 않는다")
+    void normalizeCodeContent_neverAddsLeadingBlankLine() {
+        String code = "\n\n/**\n * 설명\n */\nvoid foo() {}";
+
+        String result = service.normalizeCodeContent(code);
+
+        assertThat(result).isEqualTo("/**\n * 설명\n */\nvoid foo() {}");
+    }
+
+    // ---------------------------------------------------------------------------------------------
     // reapplyHeadingNumbers (unchanged behaviour)
     // ---------------------------------------------------------------------------------------------
 
@@ -444,5 +604,224 @@ class MarkdownCorrectionServiceTest {
             idx += needle.length();
         }
         return count;
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // Deterministic post-processing (fixClosingFences / postProcessMarkdown / looksLikeTableRow)
+    // ---------------------------------------------------------------------------------------------
+
+    @Test
+    @DisplayName("fixClosingFences — 언어 태그가 붙은 닫는 펜스(```sql)는 순수 ``` 로 교정, 여는 펜스는 유지")
+    void fixClosingFences_stripsLangFromCloser() {
+        String md = "```sql\nSELECT 1;\n```sql\n";
+        String fixed = MarkdownCorrectionService.fixClosingFences(md);
+        assertThat(fixed).isEqualTo("```sql\nSELECT 1;\n```\n");
+    }
+
+    @Test
+    @DisplayName("fixClosingFences — 닫는 펜스 없이 챕터 제목이 나오면 그 앞에 닫는 펜스를 삽입해 치유한다")
+    void fixClosingFences_healsUnclosedFenceBeforeChapterHeading() {
+        String md = "```java\nint x = 1;\n## 다음 장\n본문";
+        String fixed = MarkdownCorrectionService.fixClosingFences(md);
+        assertThat(fixed).isEqualTo("```java\nint x = 1;\n```\n## 다음 장\n본문");
+    }
+
+    @Test
+    @DisplayName("fixClosingFences — 7단계(#######)까지 챕터 제목으로 인정해 펜스를 치유한다")
+    void fixClosingFences_healsUnclosedFenceAtLevelSeven() {
+        String md = "```\ncode\n####### 레벨7 제목\n";
+        String fixed = MarkdownCorrectionService.fixClosingFences(md);
+        assertThat(fixed).isEqualTo("```\ncode\n```\n####### 레벨7 제목\n");
+    }
+
+    @Test
+    @DisplayName("fixClosingFences — 8단계(########) 이상은 챕터 제목으로 보지 않아 펜스를 치유하지 않는다")
+    void fixClosingFences_doesNotHealAtLevelEightOrMore() {
+        String md = "```\ncode\n######## 아님\nmore code\n```";
+        String fixed = MarkdownCorrectionService.fixClosingFences(md);
+        assertThat(fixed).isEqualTo(md); // unchanged — no premature close inserted
+    }
+
+    @Test
+    @DisplayName("fixClosingFences — 내용이 '#'으로 끝나는 배너 주석(### 주석 ###)은 제목으로 보지 않는다")
+    void fixClosingFences_doesNotHealOnBannerCommentWithTrailingHash() {
+        String md = "```c\n### 주석 ###\nint x = 1;\n```";
+        String fixed = MarkdownCorrectionService.fixClosingFences(md);
+        assertThat(fixed).isEqualTo(md); // unchanged — treated as a comment, not a heading
+    }
+
+    @Test
+    @DisplayName("fixClosingFences — 순수 구분용 배너(### ###)도 제목으로 보지 않는다")
+    void fixClosingFences_doesNotHealOnHashOnlyBanner() {
+        String md = "```c\n### ###\nint x = 1;\n```";
+        String fixed = MarkdownCorrectionService.fixClosingFences(md);
+        assertThat(fixed).isEqualTo(md);
+    }
+
+    @Test
+    @DisplayName("fixClosingFences — 닫는 펜스 언어 태그 제거 시 라인 번호·사유가 DEBUG 로그로 남는다")
+    void fixClosingFences_logsClosingFenceTagStrip() {
+        String md = "```sql\nSELECT 1;\n```sql\n"; // 닫는 펜스는 3행
+
+        MarkdownCorrectionService.fixClosingFences(md);
+
+        assertThat(logAppender.list).anyMatch(e ->
+                e.getLevel() == Level.DEBUG
+                        && e.getFormattedMessage().contains("3행")
+                        && e.getFormattedMessage().contains("```sql")
+                        && e.getFormattedMessage().contains("짝을 맞추기"));
+    }
+
+    @Test
+    @DisplayName("fixClosingFences — 펜스 치유 시 라인 번호·사유가 DEBUG 로그로 남는다")
+    void fixClosingFences_logsFenceHeal() {
+        String md = "```java\nint x = 1;\n## 다음 장\n본문"; // 치유된 펜스는 다음 장 헤딩(3행) 직전
+
+        MarkdownCorrectionService.fixClosingFences(md);
+
+        assertThat(logAppender.list).anyMatch(e ->
+                e.getLevel() == Level.DEBUG
+                        && e.getFormattedMessage().contains("3행")
+                        && e.getFormattedMessage().contains("치유")
+                        && e.getFormattedMessage().contains("다음 장"));
+    }
+
+    @Test
+    @DisplayName("normalizeCodeBlocks — SQL 오분류를 java로 교정 시 라인 번호·사유가 DEBUG 로그로 남는다")
+    void normalizeCodeBlocks_logsSqlToJavaCorrection() {
+        String java = "public class Foo {\n    void bar() { System.out.println(1); }\n}";
+        String md = "설명\n\n```sql\n" + java + "\n```\n"; // 여는 펜스는 3행
+
+        service.normalizeCodeBlocks(md, false);
+
+        assertThat(logAppender.list).anyMatch(e ->
+                e.getLevel() == Level.DEBUG
+                        && e.getFormattedMessage().contains("3행")
+                        && e.getFormattedMessage().contains("'sql' → 'java'")
+                        && e.getFormattedMessage().contains("Java 신호"));
+    }
+
+    @Test
+    @DisplayName("normalizeCodeBlocks — 태그 없는 블록의 언어 추론 시 라인 번호·사유가 DEBUG 로그로 남는다")
+    void normalizeCodeBlocks_logsInferredLanguage() {
+        String json = "{\"a\": 1}";
+        String md = "설명\n\n```\n" + json + "\n```\n"; // 여는 펜스는 3행
+
+        service.normalizeCodeBlocks(md, true);
+
+        assertThat(logAppender.list).anyMatch(e ->
+                e.getLevel() == Level.DEBUG
+                        && e.getFormattedMessage().contains("3행")
+                        && e.getFormattedMessage().contains("(없음)' → 'json'")
+                        && e.getFormattedMessage().contains("추론"));
+    }
+
+    @Test
+    @DisplayName("looksLikeChapterHeadingNotComment — 2~7단계 제목은 true, 그 외/배너주석은 false")
+    void looksLikeChapterHeadingNotComment_heuristic() {
+        assertThat(MarkdownCorrectionService.looksLikeChapterHeadingNotComment("## 제목")).isTrue();
+        assertThat(MarkdownCorrectionService.looksLikeChapterHeadingNotComment("####### 레벨7")).isTrue();
+        assertThat(MarkdownCorrectionService.looksLikeChapterHeadingNotComment("######## 레벨8")).isFalse();
+        assertThat(MarkdownCorrectionService.looksLikeChapterHeadingNotComment("# 레벨1")).isFalse();
+        assertThat(MarkdownCorrectionService.looksLikeChapterHeadingNotComment("### 주석 ###")).isFalse();
+        assertThat(MarkdownCorrectionService.looksLikeChapterHeadingNotComment("### ###")).isFalse();
+        assertThat(MarkdownCorrectionService.looksLikeChapterHeadingNotComment("##제목")).isFalse(); // no space
+    }
+
+    @Test
+    @DisplayName("postProcessMarkdown — 남아있는 [DOCUMENT]/[/DOCUMENT] 마커 줄 제거")
+    void postProcess_dropsDocumentMarkers() {
+        String md = "[DOCUMENT]\n# 제목\n본문\n[/DOCUMENT]";
+        String out = MarkdownCorrectionService.postProcessMarkdown(md);
+        assertThat(out).doesNotContain("[DOCUMENT]").doesNotContain("[/DOCUMENT]");
+        assertThat(out).contains("# 제목").contains("본문");
+    }
+
+    @Test
+    @DisplayName("postProcessMarkdown — 내용 없는 '-' 줄만 제거하고 '---'(수평선)·'- 항목'·표 구분줄은 보존")
+    void postProcess_dropsContentlessDashOnly() {
+        String md = "본문\n-\n- 실제 항목\n---\n";
+        String out = MarkdownCorrectionService.postProcessMarkdown(md);
+        String[] lines = out.split("\n", -1);
+        assertThat(List.of(lines)).doesNotContain("-");      // lone dash gone
+        assertThat(out).contains("- 실제 항목");             // real bullet kept
+        assertThat(out).contains("---");                     // thematic break kept
+    }
+
+    @Test
+    @DisplayName("postProcessMarkdown — 코드 블록 앞뒤에 빈 줄을 보장한다")
+    void postProcess_blankLinesAroundCodeBlock() {
+        String md = "설명입니다.\n```java\nint x = 1;\n```\n다음 문단.";
+        String out = MarkdownCorrectionService.postProcessMarkdown(md);
+        assertThat(out).isEqualTo("설명입니다.\n\n```java\nint x = 1;\n```\n\n다음 문단.");
+    }
+
+    @Test
+    @DisplayName("postProcessMarkdown — 표 앞뒤에 빈 줄을 보장한다")
+    void postProcess_blankLinesAroundTable() {
+        String md = "앞 문장\n| 항목 | 값 |\n|------|-----|\n| a | b |\n뒤 문장";
+        String out = MarkdownCorrectionService.postProcessMarkdown(md);
+        assertThat(out).isEqualTo(
+                "앞 문장\n\n| 항목 | 값 |\n|------|-----|\n| a | b |\n\n뒤 문장");
+    }
+
+    @Test
+    @DisplayName("postProcessMarkdown — 펜스 안의 '-' 한 줄/빈 줄은 코드 내용이므로 건드리지 않는다")
+    void postProcess_fenceContentUntouched() {
+        String md = "```\n-\n\n-\n```";
+        String out = MarkdownCorrectionService.postProcessMarkdown(md);
+        assertThat(out).contains("```\n-\n\n-\n```"); // 펜스 내부는 그대로
+    }
+
+    @Test
+    @DisplayName("looksLikeTableRow — 표 행(선두 파이프/2개 이상)만 true, 일반 산문은 false")
+    void looksLikeTableRow_heuristic() {
+        assertThat(MarkdownCorrectionService.looksLikeTableRow("| a | [이미지: x] | b |")).isTrue();
+        assertThat(MarkdownCorrectionService.looksLikeTableRow("a | b")).isFalse();      // 산문 속 파이프 1개
+        assertThat(MarkdownCorrectionService.looksLikeTableRow("그냥 문장입니다.")).isFalse();
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // 코드 언어 추론 — Java를 SQL로 오분류하지 않도록 (inferCodeLanguage / resolveCodeLanguage)
+    // ---------------------------------------------------------------------------------------------
+
+    @Test
+    @DisplayName("inferCodeLanguage — select/delete/update 메서드 호출이 든 Java는 SQL이 아니라 java로 판단")
+    void infer_javaMethodCalls_notSql() {
+        String java = "public void run() {\n"
+                + "    repository.delete(entity);\n"
+                + "    var rows = jdbc.select(sql);\n"
+                + "    service.update(dto);\n"
+                + "}";
+        assertThat(service.inferCodeLanguage(java)).isEqualTo("java");
+    }
+
+    @Test
+    @DisplayName("inferCodeLanguage — 실제 SQL 문(SELECT ... FROM, DELETE FROM)은 sql로 판단")
+    void infer_realSql_isSql() {
+        assertThat(service.inferCodeLanguage("SELECT id, name\nFROM users\nWHERE age > 20;")).isEqualTo("sql");
+        assertThat(service.inferCodeLanguage("DELETE FROM orders WHERE status = 'X';")).isEqualTo("sql");
+        assertThat(service.inferCodeLanguage("UPDATE users SET name = 'a' WHERE id = 1;")).isEqualTo("sql");
+    }
+
+    @Test
+    @DisplayName("resolveCodeLanguage — 잘못 붙은 ```sql 태그가 Java 코드면 java로 교정")
+    void resolve_fixesMistaggedSqlOnJava() {
+        String java = "@Override\npublic int deleteById(Long id) {\n    return repository.delete(id);\n}";
+        assertThat(service.resolveCodeLanguage("sql", java, false)).isEqualTo("java");
+    }
+
+    @Test
+    @DisplayName("resolveCodeLanguage — 실제 SQL에 붙은 ```sql 태그는 그대로 유지")
+    void resolve_keepsCorrectSqlTag() {
+        String sql = "SELECT * FROM t WHERE x = 1;";
+        assertThat(service.resolveCodeLanguage("sql", sql, false)).isEqualTo("sql");
+    }
+
+    @Test
+    @DisplayName("resolveCodeLanguage — 이미 java 등 다른 태그가 있으면 건드리지 않는다")
+    void resolve_keepsExistingNonSqlTag() {
+        assertThat(service.resolveCodeLanguage("python", "print('x')", false)).isEqualTo("python");
+        assertThat(service.resolveCodeLanguage("java", "class Foo {}", false)).isEqualTo("java");
     }
 }

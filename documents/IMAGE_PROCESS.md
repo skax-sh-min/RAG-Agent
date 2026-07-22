@@ -117,7 +117,9 @@ data/
 
 파일명 규칙: `{prefix}{pageOrSlideOrParaIdx}_img{순번}.{ext}` (순번은 슬라이드/페이지/문단마다 1부터 시작)
 
-> **`imageId`**: `DocumentIndexer.imageId()`가 `sha256.substring(0, 16)`으로 계산하는, 문서 내용 자체에서 파생된 짧은 키입니다. `docId`(원본 파일명 + 해시 8자리)를 그대로 디렉터리명으로 쓰면 이미지 1장마다 그 문자열 전체가 `[이미지: ...]` 마커와 `image_paths` 메타데이터에 반복 저장되어, 파일명이 긴 문서(특히 긴 한글 파일명)에 이미지가 많으면 청크 크기·DB 용량에 영향을 주기 때문에 분리했습니다. **부수 효과**: 내용이 완전히 동일한(byte-for-byte) 두 문서는 같은 `imageId`를 가지므로 이미지 디렉터리를 공유합니다 — `DocRegistry.existsOtherBySha256()`이 삭제 시 이를 확인해, 다른 문서가 아직 참조 중이면 공유 디렉터리를 지우지 않습니다(§8). 파일명 자체의 해시 기반 중복 제거는 없습니다 — 같은 슬라이드/페이지 안에서 순번은 항상 새로 매겨집니다.
+> **`imageId`**: `DocumentIndexer.imageId()`가 `sha256.substring(0, 16)`으로 계산하는, 문서 내용 자체에서 파생된 짧은 키입니다. `docId`(원본 파일명 + 해시 8자리)를 그대로 디렉터리명으로 쓰면 이미지 1장마다 그 문자열 전체가 `[이미지: ...]` 마커와 `image_paths` 메타데이터에 반복 저장되어, 파일명이 긴 문서(특히 긴 한글 파일명)에 이미지가 많으면 청크 크기·DB 용량에 영향을 주기 때문에 분리했습니다.
+>
+> **부수 효과**: 내용이 완전히 동일한(byte-for-byte) 두 문서는 같은 `imageId`를 가지므로 이미지 디렉터리를 공유합니다 — `DocRegistry.existsOtherBySha256()`이 삭제 시 이를 확인해, 다른 문서가 아직 참조 중이면 공유 디렉터리를 지우지 않습니다(§8). 파일명 자체의 해시 기반 중복 제거는 없습니다 — 같은 슬라이드/페이지 안에서 순번은 항상 새로 매겨집니다.
 
 ### 3.4 메타데이터 확장
 
@@ -213,7 +215,13 @@ try (PDDocument pdf = Loader.loadPDF(pdfPath.toFile())) {
 > `PptxToMarkdownConverter`가 이 추출기를 직접 호출해, 추출된 이미지를 본문 `[이미지: ...]` 인라인
 > 마커로 곧바로 삽입합니다(DOCX와 동일한 방식).
 
-**이미지 유형**: `XSLFPictureShape`(그림·스크린샷) 외에, 아래 코드가 다루지 않는 세 부류도 함께 추출됩니다 — 그룹/커넥터/텍스트없는 도형 등 "그리기 도구" 요소(아래 `RASTERIZE_SHAPES` 참고), SmartArt(`XSLFDiagram` — 실제 렌더링 레이어인 `getGroupShape()`를 그룹 도형처럼 래스터라이즈), OLE 객체(`XSLFObjectShape` — 내장 미리보기 그림을 그대로 저장). 차트 프레임은 POI가 라이브 렌더링을 지원하지 않아 PowerPoint가 남겨둔 `mc:Fallback` 미리보기가 있을 때만 추출되고, 없으면 제목 텍스트만(§4.2 텍스트 처리 경로) 남습니다. 상세 알고리즘은 [PIPELINE.md §6.3-bis 2·4번](PIPELINE.md#63-bis-pptxpdf비스캔--md-변환--docx와의-차이점) 참고.
+**이미지 유형**: `XSLFPictureShape`(그림·스크린샷) 외에, 아래 코드가 다루지 않는 세 부류도 함께 추출됩니다.
+- 그룹/커넥터/텍스트없는 도형 등 "그리기 도구" 요소(아래 `RASTERIZE_SHAPES` 참고)
+- SmartArt(`XSLFDiagram` — 실제 렌더링 레이어인 `getGroupShape()`를 그룹 도형처럼 래스터라이즈)
+- OLE 객체(`XSLFObjectShape` — 내장 미리보기 그림을 그대로 저장)
+- 차트 프레임 — POI가 라이브 렌더링을 지원하지 않아 PowerPoint가 남겨둔 `mc:Fallback` 미리보기가 있을 때만 추출되고, 없으면 제목 텍스트만(§4.2 텍스트 처리 경로) 남습니다
+
+상세 알고리즘은 [PIPELINE.md §6.3-bis 2·4번](PIPELINE.md#63-bis-pptxpdf비스캔--md-변환--docx와의-차이점) 참고.
 
 **느슨한 도형 클러스터링** (`app.pptx-image.rasterize-shapes`, 기본 `false`): 아무 앵커(사진/표/그룹)에도 안 겹친 "느슨한" 도형(선·화살표·텍스트없는 도형)끼리의 병합을 제어합니다. `false`(기본)이면 클러스터링을 하지 않아 — 겹친 느슨한 도형들이 무의미하게 한 이미지로 뭉치지 않고, 아무것에도 안 겹친 단독 도형은 이미지로 아예 뽑히지 않습니다. `true`이면 각 도형 바운딩박스를 `cluster-proximity-padding-pt`만큼 부풀린 뒤 union-find로 근접한 것끼리 묶어 다이어그램 한 장으로 래스터라이즈합니다(구 기본 동작 — 커넥터가 두 도형 사이 '틈'에 있어도 패딩으로 이어 묶음). **아래 세 가지 앵커 기반 합성은 이 값과 무관하게 항상 유지됩니다.**
 
@@ -276,7 +284,10 @@ for (int i = 0; i < pics.size(); i++) {
 
 **제약**: DOCX는 이미지와 단락의 정확한 위치 매핑이 어려움. `getAllPictures()`는 문서 전체 이미지를 반환하므로 섹션 단위 매핑은 `XWPFRun.getEmbeddedPictures()`로 보완 필요.
 
-**사진 위 주석 도형 병합** (`app.docx-image.merge-annotated-shapes`, 기본 `true`): 화면 캡처 위에 강조 원/화살표를 그려 markup을 남기는 패턴은 DOCX에도 흔합니다. PPTX의 동명 기능(§4.2)과 달리 POI의 WordprocessingML 모델에는 도형 좌표 API(`XWPFPicture`에 위치 정보 없음)도 렌더러(`DrawFactory` 상당물)도 없어 진짜 기하학적 겹침 판정이 불가능하므로, **같은 문단에 사진과 레거시 VML 도형(`v:rect`/`v:oval`/`v:roundrect`/`v:line`)이 함께 있으면 겹친 주석으로 간주**하는 근사 방식을 사용합니다(`DocxAnnotationShapeMerger`). 도형의 `style` 속성(`left`/`top`/`width`/`height`, pt) 또는 `from`/`to`(line)를 파싱해 사진 위에 Java2D로 직접 그려 하나의 합성 PNG로 저장합니다 — 도형 위치를 해석할 수 없거나, 사진이 EMF/WMF인데 PNG 변환이 안 되거나, 합성 캔버스가 비정상적으로 크면 조용히 원본 사진만 추출하는 폴백으로 동작합니다. 한 문단에 사진이 여러 장이면 첫 사진에만 합성을 시도하고 나머지는 원본 그대로 추출합니다. **최신 Word "도형 삽입"(DrawingML `wps:wsp`)은 POI에 타입 바인딩이 없어 미지원** — Word가 하위 호환용으로 남긴 레거시 VML 형태만 인식합니다.
+**사진 위 주석 도형 병합** (`app.docx-image.merge-annotated-shapes`, 기본 `true`): 화면 캡처 위에 강조 원/화살표를 그려 markup을 남기는 패턴은 DOCX에도 흔합니다. PPTX의 동명 기능(§4.2)과 달리 POI의 WordprocessingML 모델에는 도형 좌표 API(`XWPFPicture`에 위치 정보 없음)도 렌더러(`DrawFactory` 상당물)도 없어 진짜 기하학적 겹침 판정이 불가능하므로, **같은 문단에 사진과 레거시 VML 도형(`v:rect`/`v:oval`/`v:roundrect`/`v:line`)이 함께 있으면 겹친 주석으로 간주**하는 근사 방식을 사용합니다(`DocxAnnotationShapeMerger`).
+도형의 `style` 속성(`left`/`top`/`width`/`height`, pt) 또는 `from`/`to`(line)를 파싱해 사진 위에 Java2D로 직접 그려 하나의 합성 PNG로 저장합니다 — 도형 위치를 해석할 수 없거나, 사진이 EMF/WMF인데 PNG 변환이 안 되거나, 합성 캔버스가 비정상적으로 크면 조용히 원본 사진만 추출하는 폴백으로 동작합니다. 한 문단에 사진이 여러 장이면 첫 사진에만 합성을 시도하고 나머지는 원본 그대로 추출합니다.
+
+**최신 Word "도형 삽입"(DrawingML `wps:wsp`)은 POI에 타입 바인딩이 없어 미지원** — Word가 하위 호환용으로 남긴 레거시 VML 형태만 인식합니다.
 
 ---
 
@@ -350,13 +361,18 @@ content = content.replaceAll("\\[([^\\]]+)]\\([^)]*\\)", "$1");
 >
 > **동시성·사용량 집계**: 문서 하나 안의 이미지들은 예전엔 정규식 루프에서 **한 장씩 순차** 분석돼,
 > 인덱싱 이미지 분석의 실질 동시 실행 수가 `INDEXING_MAX_LLM`이 아니라 `INDEXING_MAX_FILES`(병렬
-> 파일 수)에 매여 있었습니다. 이제 `prewarmImageDescriptions()`가 **distinct 이미지들을
+> 파일 수)에 매여 있었습니다.
+>
+> 이제 `prewarmImageDescriptions()`가 **distinct 이미지들을
 > `Semaphore(INDEXING_MAX_LLM)` + 가상 스레드로 병렬 분석**해 캐시를 채운 뒤(같은 파일 경로는 1회만),
 > 순차 치환 루프는 캐시만 읽습니다 — MD 교정·키워드 추출·TXT 구조화와 동일한 knob/세마포어 패턴
-> (per-consumer이므로 피크 ≈ `FILES × LLM`, 기본 `FILES=1`에선 `LLM`으로 고정). 또한 이 Vision 호출은
+> (per-consumer이므로 피크 ≈ `FILES × LLM`, 기본 `FILES=1`에선 `LLM`으로 고정).
+>
+> 또한 이 Vision 호출은
 > `LlmRouter.executeWithTracking(..., BackgroundUsage.IMAGE_PREFIX, ...)`으로 라우팅되어 `/llm-usage`에
 > `image:` 접두사 **BACKGROUND 카드**로 집계됩니다(예전엔 raw `ChatClient` 직접 호출이라 사용량에
 > 전혀 안 잡혔음). 검색 시점 `VisionDescriptionService`(bare 프로바이더명으로 기록)와는 별개 라벨입니다.
+>
 > 12절 Lazy Vision은 이와 독립적으로 검색 시점에 항상 동작하는 별개의 메커니즘이며
 > (`app.image-description.enabled=true`일 때), `VisionDescriptionService`를 사용합니다.
 > 두 경로는 서로 대체 관계가 아니라 함께 동작할 수 있습니다 — 12.1절 참고.
@@ -750,7 +766,7 @@ app.image-description.docx-wmf-convert=true   # LibreOffice 설치 필요
 
 ## 11. 제약 및 주의사항
 
-- **Vision LLM 라우팅**: L2 사용 시 `LlmRouter.route(TaskType.VISION)` 호출 → gemma4(LIGHT_BOTH)가 priority=0으로 기본 처리. gemma4 미지원 모델로 교체하는 경우 `app.llm.providers[0].type=LIGHT_TEXT`로 변경하면 VISION 태스크는 gemini-1(BOTH)로 자동 라우팅됨
+- **Vision LLM 라우팅**: L2 사용 시 `LlmRouter.route(TaskType.VISION)` 호출 → gemma4(LIGHT_BOTH)가 priority=0으로 기본 처리. gemma4 미지원 모델로 교체하는 경우 `app.llm.providers[1].type=LIGHT_TEXT`(로컬 LLM 1)로 변경하면 VISION 태스크는 gemini-1(BOTH)로 자동 라우팅됨
 - **인덱싱 시간 증가**: L2 적용 시 이미지가 많은 문서는 청크당 1회 + 이미지당 1회 LLM 호출 발생 — 12절 Lazy Vision으로 대폭 완화 가능
 - **Path Traversal 방어**: `/api/v1/images/{docId}/{filename}` 엔드포인트에서 `..`, `/` 포함 입력 차단 필수 (7.1절 코드 포함)
 - **이미지 저장 용량**: `data/images/` 하위 파일은 문서 삭제 시 반드시 함께 정리 (8절 참조)

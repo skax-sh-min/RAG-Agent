@@ -167,12 +167,35 @@ public class DocumentLoaderService {
     }
 
     /**
+     * Same as {@link #loadFromMarkdown(String, boolean)} — chapter numbers computed normally
+     * (real, author-written headings; see the other overload for when to pass {@code true} instead).
+     */
+    public List<Document> loadFromMarkdown(String md) {
+        return loadFromMarkdown(md, false);
+    }
+
+    /**
      * Splits a Markdown string into section-level Spring AI Documents and extracts
      * [이미지: ...] path markers into image_paths metadata.
      * Used both after DOCX→MD conversion and during MD re-indexing.
+     *
+     * @param skipChapterNumbers true for a document whose ##/### headings are synthetic
+     *                           per-page/per-slide labels rather than a real table-of-contents —
+     *                           PPTX ({@code DocumentIndexer}'s PPTX branch: slide title/subtitle)
+     *                           and non-scanned PDF (its PDF branch: {@code PdfToMarkdownConverter}
+     *                           emits one synthetic {@code "## N페이지"} H2 heading per page, purely
+     *                           so each page gets its own section — never a real chapter). Treating
+     *                           either as real chapter structure would make every section's
+     *                           {@link MetaKey#CHAPTER_NO} a near-duplicate of the page/slide number
+     *                           at best, and for PDF actively WRONG at worst (a page with neither
+     *                           text nor an image is skipped entirely — see
+     *                           {@code PdfToMarkdownConverter} — so the heading-count-based chapter
+     *                           number silently drifts from the real page number after any gap).
+     *                           When true, every section's {@link MetaKey#CHAPTER_NO} stays
+     *                           {@code "0"} and only {@link MetaKey#PAGE_OR_SLIDE} is meaningful.
      */
-    public List<Document> loadFromMarkdown(String md) {
-        List<Document> result = splitMarkdownBySections(md).stream()
+    public List<Document> loadFromMarkdown(String md, boolean skipChapterNumbers) {
+        List<Document> result = splitMarkdownBySections(md, skipChapterNumbers).stream()
                 .map(doc -> {
                     List<String> imgs = extractImagePaths(doc.getText());
                     if (imgs.isEmpty()) return doc;
@@ -261,7 +284,7 @@ public class DocumentLoaderService {
         String content = Files.readString(filePath);
         String lower = filePath.getFileName().toString().toLowerCase();
         if (lower.endsWith(".md")) {
-            List<Document> sections = splitMarkdownBySections(preprocessMarkdown(content));
+            List<Document> sections = splitMarkdownBySections(preprocessMarkdown(content), false);
             log.debug("[LOADER:MD] {} → {}섹션", filePath.getFileName(), sections.size());
             return sections;
         }
@@ -277,7 +300,11 @@ public class DocumentLoaderService {
         return content;
     }
 
-    private List<Document> splitMarkdownBySections(String content) {
+    /**
+     * @param skipChapterNumbers see {@link #loadFromMarkdown(String, boolean)} — true skips
+     *                           chapter-number computation (kept at {@code "0"} for every section).
+     */
+    private List<Document> splitMarkdownBySections(String content, boolean skipChapterNumbers) {
         List<Document> sections = new ArrayList<>();
         StringBuilder current = new StringBuilder();
         String currentHeading = "";
@@ -287,6 +314,13 @@ public class DocumentLoaderService {
         int currentSectionPage = 1;
         int sectionNum = 0;
         boolean insideFence = false;
+
+        // Chapter numbering (H2-H6 → "1"/"1.1"/"1.5.3", same hierarchical-counter scheme as
+        // MarkdownCorrectionService.addHierarchicalHeadingNumbers()). Starts at "0" for the prologue
+        // (before the first such heading) and only advances past a well-formed H2-H6 ATX heading —
+        // an H1 or malformed heading doesn't touch it, the section just inherits the current value.
+        int[] chapterCounters = new int[5]; // ##..###### => 5 levels
+        String currentChapterNo = "0";
 
         for (String line : content.split("\n", -1)) {
             String trimmed = line.strip();
@@ -302,9 +336,26 @@ public class DocumentLoaderService {
             if (!skipStructural) {
                 Matcher genericPageMarker = PAGE_MARKER.matcher(trimmed);
                 if (genericPageMarker.matches()) {
-                    currentPage = Integer.parseInt(genericPageMarker.group(1));
-                    if (current.isEmpty()) currentSectionPage = currentPage;
-                    continue; // metadata-only marker
+                    int page = Integer.parseInt(genericPageMarker.group(1));
+                    // [페이지: N] is a hard per-page/slide section boundary. PPTX/PDF no longer emit a
+                    // synthetic "## N페이지"/"## N번 슬라이드" heading, so this marker is the sole
+                    // boundary for title-less pages/slides. Flush the section that just ended; a real
+                    // title heading (PPTX) still follows on its own line and refines heading/section
+                    // without an extra empty section (the guard below is a no-op once current is empty).
+                    if (!current.isEmpty()) {
+                        Integer resolvedPage = resolveSectionPage(currentHeadingPage, currentSectionPage, pendingHeadingPage);
+                        sections.add(sectionDocument(current.toString().strip(), sectionNum, currentHeading,
+                                resolvedPage, currentChapterNo));
+                        current = new StringBuilder();
+                        sectionNum++;
+                        currentHeading = "";
+                        currentHeadingPage = null;
+                        pendingHeadingPage = null;
+                    }
+                    currentPage = page;
+                    currentSectionPage = page;
+                    currentHeadingPage = page; // a heading-less page/slide section still carries page_or_slide
+                    continue; // marker itself is metadata-only, never appended to section body
                 }
 
                 Matcher pageMarker = HEADING_PAGE_MARKER.matcher(trimmed);
@@ -316,7 +367,8 @@ public class DocumentLoaderService {
                 if (isAtxHeading(line)) {
                     if (!current.isEmpty()) {
                         Integer resolvedPage = resolveSectionPage(currentHeadingPage, currentSectionPage, pendingHeadingPage);
-                        sections.add(sectionDocument(current.toString().strip(), sectionNum, currentHeading, resolvedPage));
+                        sections.add(sectionDocument(current.toString().strip(), sectionNum, currentHeading,
+                                resolvedPage, currentChapterNo));
                         current = new StringBuilder();
                         sectionNum++;
                     }
@@ -324,6 +376,16 @@ public class DocumentLoaderService {
                     currentHeadingPage = pendingHeadingPage != null ? pendingHeadingPage : currentPage;
                     currentSectionPage = currentHeadingPage;
                     pendingHeadingPage = null;
+
+                    if (!skipChapterNumbers) {
+                        int level = markdownHeadingLevel(line);
+                        if (level >= 2 && level <= 6) {
+                            int idx = level - 2;
+                            chapterCounters[idx]++;
+                            for (int j = idx + 1; j < chapterCounters.length; j++) chapterCounters[j] = 0;
+                            currentChapterNo = buildChapterNumber(chapterCounters, idx);
+                        }
+                    }
                 }
             }
 
@@ -334,10 +396,11 @@ public class DocumentLoaderService {
         }
         if (!current.isEmpty()) {
             Integer resolvedPage = currentHeadingPage != null ? currentHeadingPage : currentSectionPage;
-            sections.add(sectionDocument(current.toString().strip(), sectionNum, currentHeading, resolvedPage));
+            sections.add(sectionDocument(current.toString().strip(), sectionNum, currentHeading,
+                    resolvedPage, currentChapterNo));
         }
         return sections.isEmpty()
-                ? List.of(new Document(content, Map.of(MetaKey.SOURCE_TYPE, "file")))
+                ? List.of(new Document(content, Map.of(MetaKey.SOURCE_TYPE, "file", MetaKey.CHAPTER_NO, "0")))
                 : sections;
     }
 
@@ -354,6 +417,28 @@ public class DocumentLoaderService {
         return i == line.length() || Character.isWhitespace(line.charAt(i));
     }
 
+    /**
+     * ATX heading level (1-6) for a line already confirmed by {@link #isAtxHeading} — bounds the
+     * '#' run to 1-6 (7+ isn't a valid heading level, only used for chapter-number bookkeeping since
+     * {@link #isAtxHeading} itself has no upper bound and still splits on it).
+     */
+    private int markdownHeadingLevel(String line) {
+        int i = 0;
+        while (i < line.length() && line.charAt(i) == '#') i++;
+        if (i < 1 || i > 6) return 0;
+        return i;
+    }
+
+    /** Dot-joined chapter number from hierarchical counters, e.g. counters=[1,5,3,0,0], idx=2 → "1.5.3". */
+    private static String buildChapterNumber(int[] counters, int idx) {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i <= idx; i++) {
+            if (i > 0) sb.append('.');
+            sb.append(Math.max(counters[i], 1));
+        }
+        return sb.toString();
+    }
+
     private Integer resolveSectionPage(Integer currentHeadingPage, int currentSectionPage, Integer pendingHeadingPage) {
         if (currentHeadingPage != null) return currentHeadingPage;
         // Prologue fallback: if the first heading has an anchor, apply it to the pre-heading block.
@@ -361,11 +446,12 @@ public class DocumentLoaderService {
         return currentSectionPage;
     }
 
-    private Document sectionDocument(String text, int sectionNum, String heading, Integer headingPage) {
+    private Document sectionDocument(String text, int sectionNum, String heading, Integer headingPage, String chapterNo) {
         Map<String, Object> meta = new HashMap<>();
         meta.put(MetaKey.SOURCE_TYPE, "file");
         meta.put("section", sectionNum);
         meta.put(MetaKey.HEADING, heading);
+        meta.put(MetaKey.CHAPTER_NO, chapterNo);
         if (headingPage != null) {
             meta.put(MetaKey.HEADING_PAGE, headingPage);
             meta.put(MetaKey.PAGE_OR_SLIDE, headingPage);

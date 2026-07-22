@@ -13,11 +13,13 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
 import org.springframework.retry.support.RetryTemplate;
+import org.springframework.web.client.RestClient;
 
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 @Configuration
 public class LlmConfig {
@@ -26,7 +28,7 @@ public class LlmConfig {
 
     @Bean
     public LlmRouter llmRouter(AppProperties props, LlmUsageRepository usageRepo,
-                                CircuitBreaker circuitBreaker) {
+                                CircuitBreaker circuitBreaker, ProviderToggle providerToggle) {
         AppProperties.LlmConfig llmCfg = props.llmSafe();
                 int connectTimeoutSeconds = llmCfg.connectTimeoutSeconds();
                 int readTimeoutSeconds = llmCfg.readTimeoutSeconds();
@@ -37,9 +39,28 @@ public class LlmConfig {
                 .filter(cfg -> (cfg.apiKey() == null || cfg.apiKey().isBlank()) && !isLocalRole(cfg))
                 .forEach(cfg -> log.warn(
                         "Provider [{}] disabled — api-key is empty (set the corresponding env var)", cfg.name()));
+        // G2: ANY provider (LOCAL included) with no base-url configured is disabled. LOCAL providers
+        // are exempt from the api-key check above (G1) but not from this one — with multiple optional
+        // LOCAL slots (small/local 1/local 2, §6.21), each needs its own explicit env var
+        // (LOCAL_FAST_LLM_URL / LOCAL_LLM_URL / LOCAL_LLM_URL_2) or it silently registers a provider
+        // pointing at nothing. Cloud providers already have a real default base-url (GEMINI_BASE_URL /
+        // OPENAI_BASE_URL), so this is a no-op for them in practice.
+        llmCfg.providers().stream()
+                .filter(cfg -> cfg.baseUrl() == null || cfg.baseUrl().isBlank())
+                .forEach(cfg -> log.warn(
+                        "Provider [{}] disabled — base-url is empty (set the corresponding env var)", cfg.name()));
+
+        // G3: verify every registered LOCAL-role provider actually answers GET {base}/v1/models and
+        // that the configured model name is among the results — a wrong port or a typo'd model name
+        // (LOCAL_LLM_MODEL / LOCAL_FAST_LLM_MODEL / LOCAL_LLM_MODEL_2) would otherwise surface only as
+        // a confusing runtime chat failure much later. Fails startup entirely on mismatch/unreachable
+        // (Spring Boot exits non-zero) — see AppProperties.LlmConfig.verifyLocalModelsOnStartup(),
+        // default true. Cloud (NORMAL/PREMIUM) providers are not checked here.
+        boolean verifyLocalModels = llmCfg.verifyLocalModelsOnStartup() == null || llmCfg.verifyLocalModelsOnStartup();
 
         List<LlmProvider> providers = llmCfg.providers().stream()
                 .filter(cfg -> (cfg.apiKey() != null && !cfg.apiKey().isBlank()) || isLocalRole(cfg))
+                .filter(cfg -> cfg.baseUrl() != null && !cfg.baseUrl().isBlank())
                 .map(cfg -> {
                     String roleStr = cfg.role() != null ? cfg.role().toUpperCase() : "NORMAL";
                     String typeStr = cfg.type() != null ? cfg.type().toUpperCase() : "BOTH";
@@ -47,13 +68,16 @@ public class LlmConfig {
                     // LlmProvider.hasValidApiKey() passes in LlmRouter (mirrors EmbeddingBeanConfig's "no-key").
                     String effectiveApiKey = (cfg.apiKey() != null && !cfg.apiKey().isBlank())
                             ? cfg.apiKey() : "no-key";
-                    String resolvedUrl = cfg.baseUrl() != null ? cfg.baseUrl() : "https://api.openai.com";
+                    String resolvedUrl = cfg.baseUrl(); // non-blank, guaranteed by the G2 filter above
                     boolean providerStream = !Boolean.FALSE.equals(cfg.stream()); // default: true
                     // OpenAiApi.builder() appends /v1 internally, so strip it to avoid /v1/v1.
                     // resolvedUrl (with /v1) is kept for LlmProvider.baseUrl() and LoggingChatModel curl logs.
                     String apiBase = resolvedUrl.endsWith("/v1/") ? resolvedUrl.substring(0, resolvedUrl.length() - 4)
                                    : resolvedUrl.endsWith("/v1")  ? resolvedUrl.substring(0, resolvedUrl.length() - 3)
                                    : resolvedUrl;
+                    if (isLocalRole(cfg) && verifyLocalModels) {
+                        verifyLocalModel(cfg.name(), apiBase, cfg.model(), connectTimeoutSeconds, readTimeoutSeconds);
+                    }
                     OpenAiApi api = OpenAiApi.builder()
                             .baseUrl(apiBase)
                             .apiKey(effectiveApiKey)
@@ -125,7 +149,8 @@ public class LlmConfig {
                 llmCfg.permitWaitTimeoutSeconds());
 
         return new LlmRouter(providers, usageRepo, circuitBreaker, defaultMode, threshold, readTimeoutSeconds,
-                providerConcurrency, llmCfg.defaultProviderConcurrency(), llmCfg.permitWaitTimeoutSeconds());
+                providerConcurrency, llmCfg.defaultProviderConcurrency(), llmCfg.permitWaitTimeoutSeconds(),
+                providerToggle);
     }
 
     @Bean
@@ -150,4 +175,44 @@ public class LlmConfig {
     private static boolean isLocalRole(AppProperties.ProviderConfig cfg) {
         return cfg.role() != null && "LOCAL".equalsIgnoreCase(cfg.role().trim());
     }
+
+    /**
+     * G3: calls the OpenAI-compatible {@code GET {apiBase}/v1/models} endpoint and throws if the
+     * server is unreachable or the configured model isn't in the returned list. Called at bean
+     * creation time — any exception here fails {@code llmRouter()} construction, which fails Spring
+     * Boot startup (see caller for rationale). Reuses the same connect/read timeouts as the chat
+     * calls; a slow-to-boot local server should raise {@code LLM_CONNECT_TIMEOUT_SECONDS} rather than
+     * disable this check.
+     */
+    private void verifyLocalModel(String providerName, String apiBase, String model,
+                                  int connectTimeoutSeconds, int readTimeoutSeconds) {
+        List<String> availableModels;
+        try {
+            ModelsResponse response = HttpClientTimeouts.restClientBuilder(connectTimeoutSeconds, readTimeoutSeconds)
+                    .baseUrl(apiBase)
+                    .build()
+                    .get()
+                    .uri("/v1/models")
+                    .retrieve()
+                    .body(ModelsResponse.class);
+            availableModels = (response != null && response.data() != null)
+                    ? response.data().stream().map(ModelEntry::id).filter(Objects::nonNull).toList()
+                    : List.of();
+        } catch (Exception e) {
+            throw new IllegalStateException(
+                    "Local LLM provider [%s] is unreachable at %s/v1/models — is the server running and is the URL correct? (%s: %s)"
+                            .formatted(providerName, apiBase, e.getClass().getSimpleName(), e.getMessage()), e);
+        }
+        if (!availableModels.contains(model)) {
+            throw new IllegalStateException(
+                    "Local LLM provider [%s]: configured model '%s' was not found at %s/v1/models. Available models: %s"
+                            .formatted(providerName, model, apiBase, availableModels));
+        }
+        log.info("Local LLM provider [{}] verified — model '{}' confirmed available at {}/v1/models",
+                providerName, model, apiBase);
+    }
+
+    /** OpenAI-compatible {@code GET /v1/models} response shape — only the fields G3 needs. */
+    private record ModelsResponse(List<ModelEntry> data) {}
+    private record ModelEntry(String id) {}
 }

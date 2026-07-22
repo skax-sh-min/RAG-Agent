@@ -28,6 +28,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 import java.util.regex.Matcher;
@@ -114,7 +115,7 @@ public class KeywordExtractor {
 
     Document enrichKeywords(Document chunk) {
         // Wrap in [DOCUMENT] tags so LLM cannot treat file content as a prompt instruction.
-        String safeText = chunk.getText().replace("[/DOCUMENT]", "");
+        String safeText = stripKeywordNoise(chunk.getText()).replace("[/DOCUMENT]", "");
         String structuralContext = buildStructuralContext(chunk);
         String prompt = """
                 다음 [DOCUMENT] 블록의 텍스트를 분석하여 아래 두 줄의 형식으로만 응답하세요. 그 외 설명은 추가하지 마세요.
@@ -126,10 +127,16 @@ public class KeywordExtractor {
                 %s
                 [/DOCUMENT]""".formatted(safeText);
         int timeoutSec = props.indexingSafe().keywordTimeoutSeconds();
-        // called inside a VT from enrichParallel — invoke directly, no ForkJoinPool
-        // interrupt this thread on timeout so the blocking HTTP call is actually cancelled
+        // called inside a VT from enrichParallel — invoke directly, no ForkJoinPool.
+        // interrupt this thread on timeout so the blocking HTTP call is actually cancelled;
+        // timedOut is the sole authority for the "[TIMEOUT]" log branch — a plain LLM/provider
+        // failure (e.g. "All providers exhausted") must NOT be mislabeled as a timeout.
         Thread self = Thread.currentThread();
-        ScheduledFuture<?> killer = timeoutScheduler.schedule(self::interrupt, timeoutSec, TimeUnit.SECONDS);
+        AtomicBoolean timedOut = new AtomicBoolean(false);
+        ScheduledFuture<?> killer = timeoutScheduler.schedule(() -> {
+            timedOut.set(true);
+            self.interrupt();
+        }, timeoutSec, TimeUnit.SECONDS);
         try {
             // §10.1 — one call now yields keywords + context together; tracked under context:
             // (BackgroundUsage.KEYWORD_PREFIX stays defined only to recognize historical rows).
@@ -141,16 +148,16 @@ public class KeywordExtractor {
             // No "키워드:" marker → legacy plain-response shape, treat the whole reply as keywords.
             String keywords = (parsed.keywords() != null && !parsed.keywords().isBlank())
                     ? parsed.keywords() : (response == null ? "" : response.strip());
+            keywords = filterNoiseKeywords(keywords);
             Map<String, Object> meta = new HashMap<>(chunk.getMetadata());
             meta.put(MetaKey.EXCERPT_KEYWORDS, keywords);
             meta.put(MetaKey.CHUNK_CONTEXT, combineContext(structuralContext, parsed.context()));
             return new Document(chunk.getText(), meta);
         } catch (Exception e) {
-            if (isTimeoutLike(e)) {
-                log.warn("[TIMEOUT:INDEX_KEYWORD] timeout={}s; falling back to TF", timeoutSec);
+            if (timedOut.get()) {
+                log.warn("[TIMEOUT:INDEX_KEYWORD] keyword-extraction timeout ({}s) fired — TF fallback", timeoutSec);
             } else {
-                log.debug("LLM keyword extraction failed (timeout={}s), falling back to TF: {}",
-                        timeoutSec, e.getMessage());
+                log.debug("[ENRICH] LLM keyword extraction failed — TF fallback: {}", e.getMessage());
             }
             return tfFallback(chunk, structuralContext);
         } finally {
@@ -172,14 +179,19 @@ public class KeywordExtractor {
         int n = batch.size();
         StringBuilder prompt = new StringBuilder(BATCH_PROMPT_HEADER.formatted(n));
         for (int i = 0; i < n; i++) {
-            String text = batch.get(i).getText();
-            String safeText = DOCUMENT_CLOSE_TAG.matcher(text == null ? "" : text).replaceAll("");
+            String text = stripKeywordNoise(batch.get(i).getText());
+            String safeText = DOCUMENT_CLOSE_TAG.matcher(text).replaceAll("");
             prompt.append("\n[DOCUMENT %d]\n%s\n[/DOCUMENT %d]\n".formatted(i + 1, safeText, i + 1));
         }
 
         int timeoutSec = props.indexingSafe().keywordTimeoutSeconds();
+        // timedOut distinguishes a genuine timeout from a plain LLM/provider failure — see enrichKeywords().
         Thread self = Thread.currentThread();
-        ScheduledFuture<?> killer = timeoutScheduler.schedule(self::interrupt, timeoutSec, TimeUnit.SECONDS);
+        AtomicBoolean timedOut = new AtomicBoolean(false);
+        ScheduledFuture<?> killer = timeoutScheduler.schedule(() -> {
+            timedOut.set(true);
+            self.interrupt();
+        }, timeoutSec, TimeUnit.SECONDS);
         try {
             String response = llmRouter.executeWithTracking(
                     TaskType.MICRO_TEXT, RoutingMode.COST_FIRST, BackgroundUsage.CONTEXT_PREFIX,
@@ -204,7 +216,8 @@ public class KeywordExtractor {
                 // this chunk, mirroring enrichKeywords()'s single-response fallback.
                 String keywords = (parsed.keywords() != null && !parsed.keywords().isBlank())
                         ? parsed.keywords() : sectionText.strip();
-                if (keywords.isBlank()) keywords = extractKeywordsTf(chunk.getText(), 5);
+                keywords = filterNoiseKeywords(keywords);
+                if (keywords.isBlank()) keywords = extractKeywordsTf(stripKeywordNoise(chunk.getText()), 5);
                 Map<String, Object> meta = new HashMap<>(chunk.getMetadata());
                 meta.put(MetaKey.EXCERPT_KEYWORDS, keywords);
                 meta.put(MetaKey.CHUNK_CONTEXT, combineContext(structuralContext, parsed.context()));
@@ -212,11 +225,11 @@ public class KeywordExtractor {
             }
             return out;
         } catch (Exception e) {
-            if (isTimeoutLike(e)) {
-                log.warn("[TIMEOUT:INDEX_KEYWORD_BATCH] timeout={}s, n={}; falling back to per-chunk TF", timeoutSec, n);
+            if (timedOut.get()) {
+                log.warn("[TIMEOUT:INDEX_KEYWORD_BATCH] keyword-extraction timeout ({}s) fired, n={} — per-chunk TF fallback", timeoutSec, n);
             } else {
-                log.debug("LLM batch keyword extraction failed (timeout={}s, n={}), falling back to per-chunk TF: {}",
-                        timeoutSec, n, e.getMessage());
+                log.debug("[ENRICH-BATCH] LLM batch keyword extraction failed (n={}) — per-chunk TF fallback: {}",
+                        n, e.getMessage());
             }
             return batch.stream().map(c -> tfFallback(c, buildStructuralContext(c))).toList();
         } finally {
@@ -226,7 +239,7 @@ public class KeywordExtractor {
     }
 
     private static Document tfFallback(Document chunk, String structuralContext) {
-        String keywords = extractKeywordsTf(chunk.getText(), 5);
+        String keywords = extractKeywordsTf(stripKeywordNoise(chunk.getText()), 5);
         Map<String, Object> meta = new HashMap<>(chunk.getMetadata());
         meta.put(MetaKey.EXCERPT_KEYWORDS, keywords);
         meta.put(MetaKey.CHUNK_CONTEXT, structuralContext); // LLM context unavailable — structural-only fallback
@@ -249,6 +262,22 @@ public class KeywordExtractor {
     private static String combineContext(String structural, String llmContext) {
         if (llmContext == null || llmContext.isBlank()) return structural;
         return structural.isBlank() ? llmContext : structural + "\n" + llmContext;
+    }
+
+    // Indexing scaffolding markers (image paths, shape-group/diagram boundaries, chart labels —
+    // see PptxToMarkdownConverter/DocxToMarkdownConverter) live inside chunk.getText() itself but
+    // carry no searchable meaning; stripped from a local copy before the text feeds an LLM prompt
+    // or the TF fallback (chunk.getText() itself, the stored/displayed text, is never touched).
+    private static final Pattern IMAGE_PATH_MARKER = Pattern.compile("\\[이미지:[^]]*]");
+    private static final Pattern SHAPE_GROUP_TAG = Pattern.compile("\\[/?(?:다이어그램|도형 그룹)(?:\\s*\\d+)?]");
+    private static final Pattern CHART_LABEL_TAG = Pattern.compile("\\[차트(?:\\s*\\d+)?:\\s*([^]]*)]");
+
+    static String stripKeywordNoise(String text) {
+        if (text == null) return "";
+        String out = IMAGE_PATH_MARKER.matcher(text).replaceAll(" ");
+        out = SHAPE_GROUP_TAG.matcher(out).replaceAll(" ");
+        out = CHART_LABEL_TAG.matcher(out).replaceAll("$1");
+        return out;
     }
 
     private static final Pattern KEYWORDS_BLOCK =
@@ -342,22 +371,30 @@ public class KeywordExtractor {
             "있다", "없다", "하다", "된다", "한다", "있습니다", "합니다", "됩니다",
             "입니다", "대한", "하여", "으로", "에서", "에게",
             "부터", "까지", "에도", "로서", "이며", "이고", "이나",
+            "이미지", "이미지들", "img", "png", "images", "image",
             "the", "and", "for", "are", "but", "not", "you", "all", "can",
             "has", "her", "was", "one", "our", "out", "day", "get", "use",
             "with", "this", "that", "from", "they", "will", "have", "been",
             "more", "also", "into", "than", "then", "its", "when", "there"
     );
 
-    private static boolean isTimeoutLike(Throwable t) {
-        Throwable cur = t;
-        while (cur != null) {
-            if (cur instanceof InterruptedException
-                    || cur instanceof java.io.InterruptedIOException
-                    || cur instanceof java.net.SocketTimeoutException) {
-                return true;
-            }
-            cur = cur.getCause();
-        }
-        return Thread.currentThread().isInterrupted();
+    // sha256-derived image ids (see DocumentIndexer.imageId) are hex-only and carry no search
+    // meaning; a defensive backstop in case one survives into the LLM's free-text response.
+    private static final Pattern HASH_LIKE_TOKEN = Pattern.compile("^[0-9a-fA-F]{6,}$");
+
+    /**
+     * Drops generic media filler words and hash-like tokens from a comma-separated keyword list
+     * (the LLM path isn't mechanically tokenized like {@link #extractKeywordsTf}, so noise can
+     * still surface in free-text output even after {@link #stripKeywordNoise} cleans the source).
+     */
+    static String filterNoiseKeywords(String keywords) {
+        if (keywords == null) return "";
+        if (keywords.isBlank()) return keywords;
+        return Arrays.stream(keywords.split(","))
+                .map(String::strip)
+                .filter(k -> !k.isEmpty())
+                .filter(k -> !STOP_WORDS.contains(k.toLowerCase(java.util.Locale.ROOT)))
+                .filter(k -> !HASH_LIKE_TOKEN.matcher(k).matches())
+                .collect(java.util.stream.Collectors.joining(", "));
     }
 }

@@ -72,6 +72,11 @@ public class AdminService {
         public String docId()     { return metadata.getOrDefault(MetaKey.DOC_ID, ""); }
         public String filename()  { return metadata.getOrDefault(MetaKey.FILENAME, ""); }
         public String pageSlide() { return metadata.getOrDefault(MetaKey.PAGE_OR_SLIDE, ""); }
+        /** "0" means no real chapter (pre-heading text, PPTX, scanned PDF) — shown blank, mirroring RetrievalService's citation logic. */
+        public String chapterNo() {
+            String v = metadata.getOrDefault(MetaKey.CHAPTER_NO, "");
+            return "0".equals(v) ? "" : v;
+        }
         public String keywords()  { return metadata.getOrDefault("excerpt_keywords", ""); }
         public int chunkSize()    { return fullText == null ? 0 : fullText.length(); }
     }

@@ -49,6 +49,13 @@ public class LlmRouter {
     private final int defaultProviderConcurrency;
     private final int permitWaitTimeoutSeconds;
 
+    /**
+     * Runtime operator enable/disable state (§A). Consulted as an extra eligibility filter in
+     * {@link #findFirst} and {@link #hasLocalProvider} — a disabled provider is invisible to routing
+     * until re-enabled or the app restarts (the toggle is in-memory, see {@link ProviderToggle}).
+     */
+    private final ProviderToggle providerToggle;
+
     /** A held concurrency slot from {@link #acquirePermit}; release via try-with-resources. */
     public interface Permit extends AutoCloseable {
         @Override void close();
@@ -83,6 +90,18 @@ public class LlmRouter {
                      double progressiveThreshold, int readTimeoutSeconds,
                      Map<String, Integer> providerConcurrency,
                      int defaultProviderConcurrency, int permitWaitTimeoutSeconds) {
+        // Existing callers (incl. tests) get a fresh empty toggle → nothing disabled, zero behavior
+        // change. Only LlmConfig injects the shared @Component so /settings toggles affect this router.
+        this(providers, usageRepo, circuitBreaker, defaultMode, progressiveThreshold, readTimeoutSeconds,
+                providerConcurrency, defaultProviderConcurrency, permitWaitTimeoutSeconds, new ProviderToggle());
+    }
+
+    public LlmRouter(List<LlmProvider> providers, LlmUsageRepository usageRepo,
+                     CircuitBreaker circuitBreaker, RoutingMode defaultMode,
+                     double progressiveThreshold, int readTimeoutSeconds,
+                     Map<String, Integer> providerConcurrency,
+                     int defaultProviderConcurrency, int permitWaitTimeoutSeconds,
+                     ProviderToggle providerToggle) {
         this.providers = providers;
         this.usageRepo = usageRepo;
         this.circuitBreaker = circuitBreaker;
@@ -91,6 +110,7 @@ public class LlmRouter {
         this.readTimeoutSeconds = readTimeoutSeconds;
         this.defaultProviderConcurrency = defaultProviderConcurrency > 0 ? defaultProviderConcurrency : 3;
         this.permitWaitTimeoutSeconds = permitWaitTimeoutSeconds > 0 ? permitWaitTimeoutSeconds : 20;
+        this.providerToggle = providerToggle;
         for (LlmProvider p : providers) {
             int concurrency = (providerConcurrency != null && providerConcurrency.containsKey(p.name()))
                     ? providerConcurrency.get(p.name()) : this.defaultProviderConcurrency;
@@ -290,7 +310,9 @@ public class LlmRouter {
 
     public boolean hasLocalProvider() {
         return providers.stream()
-                .anyMatch(p -> p.role() == LOCAL && !circuitBreaker.isBlocked(p.name()));
+                .anyMatch(p -> p.role() == LOCAL
+                        && !circuitBreaker.isBlocked(p.name())
+                        && !providerToggle.isDisabled(p.name()));
     }
 
     /** Returns the name of the first available provider for the given routing, or "unknown". */
@@ -324,6 +346,7 @@ public class LlmRouter {
                             && x.supports(taskType)
                             && x.hasValidApiKey()
                             && !circuitBreaker.isBlocked(x.name())
+                            && !providerToggle.isDisabled(x.name())
                             && !excluded.contains(x.name())
                             && !(imageTask && visionUnsupportedProviders.contains(x.name())))
                     .toList();

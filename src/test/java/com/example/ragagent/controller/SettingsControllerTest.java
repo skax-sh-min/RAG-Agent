@@ -82,4 +82,17 @@ class SettingsControllerTest {
         assertThatThrownBy(() -> controller.update(SettingsKeys.SEARCH_RRF_K, "0", new ExtendedModelMap()))
                 .isInstanceOf(IllegalArgumentException.class);
     }
+
+    @Test
+    @DisplayName("POST /admin/settings/provider/toggle — 서비스 위임 + providers 프래그먼트 반환")
+    void toggleProvider_delegatesAndReturnsFragment() {
+        when(service.setProviderEnabled("local", false)).thenReturn(List.of());
+
+        Model model = new ExtendedModelMap();
+        String name = controller.toggleProvider("local", false, model);
+
+        verify(service).setProviderEnabled("local", false);
+        assertThat(name).isEqualTo("fragments/settings-providers :: providers");
+        assertThat(model.getAttribute("providers")).isNotNull();
+    }
 }

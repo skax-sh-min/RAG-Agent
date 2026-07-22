@@ -118,12 +118,38 @@ class DocumentLoaderMarkdownSectionTest {
     }
 
     @Test
-    @DisplayName("헤딩이 전혀 없는 문서에 [페이지: N] 마커만 있으면, 그 페이지 번호가 유실되지 않도록 " +
-            "전체가 헤딩 없는 단일 섹션으로 남되 첫 페이지 번호를 유지한다")
-    void pageMarkerWithoutAnyHeadingKeepsFirstPageNumber() {
-        // Guards the collapse risk PdfToMarkdownConverter/PptxToMarkdownConverter must avoid by
-        // always emitting a heading per page/slide — without one, splitMarkdownBySections() never
-        // flushes a section boundary and the whole document becomes a single section.
+    @DisplayName("[페이지: N] 마커 자체가 섹션 경계 — 헤딩 없는 여러 페이지가 각각 별도 섹션으로 나뉘고 page_or_slide를 유지한다")
+    void pageMarkerAloneSplitsHeadinglessPages() {
+        // Mirrors what PdfToMarkdownConverter (and title-less PPTX slides) now emit: only a
+        // [페이지: N] marker per page/slide, no synthetic "## N페이지"/"## N번 슬라이드" heading.
+        // The marker itself must act as the section boundary so per-page attribution survives.
+        String md = """
+                [페이지: 1]
+                첫 페이지 본문입니다.
+
+                [페이지: 2]
+                둘째 페이지 본문입니다.
+
+                [페이지: 3]
+                셋째 페이지 본문입니다.
+                """;
+
+        List<Document> sections = loader.loadFromMarkdown(md);
+
+        assertThat(sections).hasSize(3);
+        assertThat(sections.get(0).getMetadata().get(MetaKey.PAGE_OR_SLIDE)).isEqualTo(1);
+        assertThat(sections.get(1).getMetadata().get(MetaKey.PAGE_OR_SLIDE)).isEqualTo(2);
+        assertThat(sections.get(2).getMetadata().get(MetaKey.PAGE_OR_SLIDE)).isEqualTo(3);
+        // heading-less sections carry an empty heading, and the marker never leaks into stored text
+        assertThat(sections.get(0).getMetadata().get(MetaKey.HEADING)).isEqualTo("");
+        assertThat(sections.get(0).getText()).isEqualTo("첫 페이지 본문입니다.").doesNotContain("[페이지:");
+        assertThat(sections.get(1).getText()).isEqualTo("둘째 페이지 본문입니다.");
+        assertThat(sections.get(2).getText()).isEqualTo("셋째 페이지 본문입니다.");
+    }
+
+    @Test
+    @DisplayName("[페이지: N] 마커 하나 + 본문만 있으면 그 페이지 번호를 가진 단일 섹션이 된다")
+    void singlePageMarkerKeepsFirstPageNumber() {
         String md = """
                 [페이지: 1]
                 본문만 있고 헤딩이 없는 문서입니다.
@@ -133,6 +159,27 @@ class DocumentLoaderMarkdownSectionTest {
 
         assertThat(sections).hasSize(1);
         assertThat(sections.get(0).getMetadata().get(MetaKey.PAGE_OR_SLIDE)).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("[페이지: N] 마커 뒤에 실제 제목 헤딩이 오면 빈 섹션 없이 하나의 섹션으로 합쳐진다(PPTX 제목 슬라이드)")
+    void pageMarkerFollowedByRealHeadingDoesNotCreateEmptySection() {
+        String md = """
+                [페이지: 1]
+                첫 페이지 본문.
+
+                [페이지: 2]
+                ## 실제 제목
+                제목 슬라이드 본문.
+                """;
+
+        List<Document> sections = loader.loadFromMarkdown(md);
+
+        assertThat(sections).hasSize(2); // no empty section between the marker and the heading
+        assertThat(sections.get(0).getMetadata().get(MetaKey.HEADING)).isEqualTo("");
+        assertThat(sections.get(0).getMetadata().get(MetaKey.PAGE_OR_SLIDE)).isEqualTo(1);
+        assertThat(sections.get(1).getMetadata().get(MetaKey.HEADING)).isEqualTo("실제 제목");
+        assertThat(sections.get(1).getMetadata().get(MetaKey.PAGE_OR_SLIDE)).isEqualTo(2);
     }
 
     @Test
@@ -175,5 +222,181 @@ class DocumentLoaderMarkdownSectionTest {
         assertThat(sections).hasSize(2);
         assertThat(sections.get(1).getMetadata().get("heading")).isEqualTo("");
         assertThat(sections.get(1).getText()).contains("다음 섹션 본문");
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // 챕터 번호 (chapter_no) — H2~H6 계층 카운터, 1부터. 헤딩 이전(프롤로그)은 "0"
+    // ---------------------------------------------------------------------------------------------
+
+    @Test
+    @DisplayName("챕터 번호 — H2는 1부터, H3는 1.1처럼 부모 아래에서 카운트")
+    void chapterNo_h2AndH3_hierarchical() {
+        String md = """
+                ## 첫 장
+                본문1
+
+                ### 첫 절
+                본문1-1
+
+                ### 둘째 절
+                본문1-2
+
+                ## 둘째 장
+                본문2
+                """;
+
+        List<Document> sections = loader.loadFromMarkdown(md);
+
+        assertThat(sections).hasSize(4);
+        assertThat(sections.get(0).getMetadata().get(MetaKey.CHAPTER_NO)).isEqualTo("1");
+        assertThat(sections.get(1).getMetadata().get(MetaKey.CHAPTER_NO)).isEqualTo("1.1");
+        assertThat(sections.get(2).getMetadata().get(MetaKey.CHAPTER_NO)).isEqualTo("1.2");
+        assertThat(sections.get(3).getMetadata().get(MetaKey.CHAPTER_NO)).isEqualTo("2");
+    }
+
+    @Test
+    @DisplayName("챕터 번호 — 3단계 깊이(H2>H3>H4)는 1.5.3처럼 표시된다")
+    void chapterNo_threeLevelsDeep() {
+        String md = """
+                ## 장
+                a
+
+                ## 장
+                b
+
+                ## 장
+                c
+
+                ## 장
+                d
+
+                ## 장
+                e
+
+                ### 절
+                f
+
+                #### 항
+                g
+                """;
+
+        List<Document> sections = loader.loadFromMarkdown(md);
+
+        assertThat(sections).hasSize(7);
+        assertThat(sections.get(4).getMetadata().get(MetaKey.CHAPTER_NO)).isEqualTo("5");
+        assertThat(sections.get(5).getMetadata().get(MetaKey.CHAPTER_NO)).isEqualTo("5.1");
+        assertThat(sections.get(6).getMetadata().get(MetaKey.CHAPTER_NO)).isEqualTo("5.1.1");
+    }
+
+    @Test
+    @DisplayName("챕터 번호 — 첫 H2 헤딩 이전(프롤로그) 구간은 \"0\"")
+    void chapterNo_prologueIsZero() {
+        String md = """
+                프롤로그 본문(헤딩 없음)
+
+                ## 첫 장
+                본문
+                """;
+
+        List<Document> sections = loader.loadFromMarkdown(md);
+
+        assertThat(sections).hasSize(2);
+        assertThat(sections.get(0).getMetadata().get(MetaKey.CHAPTER_NO)).isEqualTo("0");
+        assertThat(sections.get(1).getMetadata().get(MetaKey.CHAPTER_NO)).isEqualTo("1");
+    }
+
+    @Test
+    @DisplayName("챕터 번호 — H1은 챕터로 세지 않는다(값이 바뀌지 않고 이전 상태를 유지)")
+    void chapterNo_h1DoesNotAdvanceCounter() {
+        String md = """
+                # 문서 제목
+                본문
+
+                ## 첫 장
+                본문
+                """;
+
+        List<Document> sections = loader.loadFromMarkdown(md);
+
+        assertThat(sections).hasSize(2);
+        assertThat(sections.get(0).getMetadata().get(MetaKey.CHAPTER_NO)).isEqualTo("0"); // H1 — 프롤로그와 동일 취급
+        assertThat(sections.get(1).getMetadata().get(MetaKey.CHAPTER_NO)).isEqualTo("1");
+    }
+
+    @Test
+    @DisplayName("챕터 번호 — 헤딩이 전혀 없는 문서(단일 섹션)도 \"0\"을 갖는다")
+    void chapterNo_noHeadingsAtAll() {
+        List<Document> sections = loader.loadFromMarkdown("그냥 평문입니다. 헤딩이 전혀 없습니다.");
+
+        assertThat(sections).hasSize(1);
+        assertThat(sections.get(0).getMetadata().get(MetaKey.CHAPTER_NO)).isEqualTo("0");
+    }
+
+    @Test
+    @DisplayName("챕터 번호 — PPTX(skipChapterNumbers=true)는 헤딩이 있어도 항상 \"0\" (슬라이드 제목일 뿐, 목차 구조 아님)")
+    void chapterNo_pptxAlwaysZero() {
+        String md = """
+                [페이지: 1]
+                ## 첫 슬라이드
+                내용 A
+
+                [페이지: 2]
+                ## 둘째 슬라이드
+                내용 B
+                """;
+
+        List<Document> sections = loader.loadFromMarkdown(md, true); // skipChapterNumbers=true
+
+        assertThat(sections).hasSize(2);
+        assertThat(sections.get(0).getMetadata().get(MetaKey.CHAPTER_NO)).isEqualTo("0");
+        assertThat(sections.get(1).getMetadata().get(MetaKey.CHAPTER_NO)).isEqualTo("0");
+        // page_or_slide is still tracked normally for PPTX
+        assertThat(sections.get(0).getMetadata().get(MetaKey.PAGE_OR_SLIDE)).isEqualTo(1);
+        assertThat(sections.get(1).getMetadata().get(MetaKey.PAGE_OR_SLIDE)).isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("챕터 번호 — 비스캔 PDF의 합성 페이지 헤딩(\"## N페이지\")도 skipChapterNumbers=true면 항상 \"0\" "
+            + "(진짜 챕터가 아니라 페이지당 1개씩 붙는 합성 헤딩이므로, 세면 사실상 페이지 번호를 다른 이름으로 중복시킬 뿐)")
+    void chapterNo_nonScannedPdfSyntheticPageHeadingAlwaysZero() {
+        // Mirrors PdfToMarkdownConverter's exact output shape: "[페이지: N]" + "## N페이지" per page.
+        String md = """
+                [페이지: 1]
+                ## 1페이지
+                내용 A
+
+                [페이지: 2]
+                ## 2페이지
+                내용 B
+                """;
+
+        List<Document> sections = loader.loadFromMarkdown(md, true); // skipChapterNumbers=true
+
+        assertThat(sections).hasSize(2);
+        assertThat(sections.get(0).getMetadata().get(MetaKey.CHAPTER_NO)).isEqualTo("0");
+        assertThat(sections.get(1).getMetadata().get(MetaKey.CHAPTER_NO)).isEqualTo("0");
+        assertThat(sections.get(0).getMetadata().get(MetaKey.PAGE_OR_SLIDE)).isEqualTo(1);
+        assertThat(sections.get(1).getMetadata().get(MetaKey.PAGE_OR_SLIDE)).isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("챕터 번호 — 코드펜스 안의 '### ...' 로그 줄은 챕터 카운터를 증가시키지 않는다")
+    void chapterNo_fencedContentDoesNotAdvanceCounter() {
+        String md = """
+                ## 첫 장
+
+                ```
+                ### 이건 로그일 뿐
+                ```
+
+                ## 둘째 장
+                본문
+                """;
+
+        List<Document> sections = loader.loadFromMarkdown(md);
+
+        assertThat(sections).hasSize(2);
+        assertThat(sections.get(0).getMetadata().get(MetaKey.CHAPTER_NO)).isEqualTo("1");
+        assertThat(sections.get(1).getMetadata().get(MetaKey.CHAPTER_NO)).isEqualTo("2"); // not "1.1" or similar
     }
 }

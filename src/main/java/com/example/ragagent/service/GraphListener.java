@@ -27,4 +27,15 @@ public interface GraphListener {
 
     /** Fired when PROGRESSIVE mode triggers a PREMIUM provider upgrade. */
     default void onUpgrade(String provider) {}
+
+    /**
+     * Fired when the graph decides the just-streamed answer failed verification (answer
+     * insufficiency or critic ungroundedness) and is about to loop back to RETRIEVAL with an
+     * expanded scope. Lets the streaming client preserve the unverified answer (marked 미검증)
+     * and show a retry notice before the fresh attempt re-streams.
+     *
+     * @param reason     "answer" (insufficient) or "critic" (ungrounded)
+     * @param retryCount the upcoming attempt's retry number (1-based)
+     */
+    default void onRetry(String reason, int retryCount) {}
 }

@@ -68,6 +68,28 @@ class SettingsControllerRenderTest {
     }
 
     @Test
+    @DisplayName("POST /admin/settings/provider/toggle — 프로바이더 테이블 프래그먼트가 활성 상태로 렌더된다")
+    void toggleProviderFragmentRenders() throws Exception {
+        // service reports the provider now disabled → the fragment should show the "enable" control
+        when(settingsService.setProviderEnabled("local", false)).thenReturn(
+                List.of(new ProviderRow("local", "LOCAL", 1, "qwen", true, false, null, false)));
+
+        AppUserDetails admin = new AppUserDetails(
+                "id-1", "admin@local", "", "Admin", "ADMIN", true, false);
+
+        mvc.perform(post("/admin/settings/provider/toggle")
+                        .param("name", "local")
+                        .param("enabled", "false")
+                        .with(user(admin)).with(csrf()))
+                .andExpect(status().isOk())
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("id=\"llm-providers\"")))
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("/admin/settings/provider/toggle")))
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("local")));
+
+        verify(settingsService).setProviderEnabled("local", false);
+    }
+
+    @Test
     @DisplayName("GET /settings — 전체 페이지(레이아웃+그룹+프로바이더)가 렌더된다")
     void settingsPageRenders() throws Exception {
         SettingItem hot = new SettingItem(SettingsKeys.SEARCH_RRF_K, "settings.item.rrf-k", "60",
@@ -75,7 +97,7 @@ class SettingsControllerRenderTest {
         SettingItem fixed = new SettingItem(null, "settings.item.top-k", "7",
                 "text", false, false, null, null, null, null);
         SettingsView view = new SettingsView(
-                List.of(new ProviderRow("local", "LOCAL", 0, "qwen", true, false, null)),
+                List.of(new ProviderRow("local", "LOCAL", 0, "qwen", true, false, null, true)),
                 "COST_FIRST", "0.0", "6000", "bge-m3", "1024", "chroma",
                 List.of(new SettingGroup("search_hot", "settings.group.search_hot", List.of(hot)),
                         new SettingGroup("search_fixed", "settings.group.search_fixed", List.of(fixed))));

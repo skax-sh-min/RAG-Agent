@@ -46,4 +46,15 @@ public class SettingsController {
         model.addAttribute("item", settingsService.editableItem(key));
         return "fragments/settings-item :: item";
     }
+
+    /**
+     * Enable/disable a registered LLM provider at runtime (§A, in-memory — resets on restart).
+     * Unknown name / disabling the last enabled provider → IllegalArgumentException → 400. Returns the
+     * refreshed providers table so the whole block (incl. any name-shared load-balanced pair) stays in sync.
+     */
+    @PostMapping("/admin/settings/provider/toggle")
+    public String toggleProvider(@RequestParam String name, @RequestParam boolean enabled, Model model) {
+        model.addAttribute("providers", settingsService.setProviderEnabled(name, enabled));
+        return "fragments/settings-providers :: providers";
+    }
 }

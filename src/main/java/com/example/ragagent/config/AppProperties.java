@@ -41,7 +41,9 @@ public record AppProperties(
         Integer searchQueryEmbedCacheTtlSeconds, // 쿼리 임베딩 캐시 TTL 초 (기본 600 = 10분)
         PptxShapeExtractionConfig pptxImage,    // PPTX 그리기 도구 도형 래스터라이즈/클러스터링 튜닝
         String mdCorrectionDefaultCodeLanguage, // MD 교정 시 LLM이 미펜스 코드를 감쌀 때 언어 판단이 어려우면 붙일 기본 언어 (java/bash/sql, 기본 java)
-        DocxShapeExtractionConfig docxImage     // DOCX 레거시 VML 도형 + 사진 합성 튜닝
+        DocxShapeExtractionConfig docxImage,    // DOCX 레거시 VML 도형 + 사진 합성 튜닝
+        Boolean pptxRemoveDuplicateSlides,      // PPTX 변환 시 완전 동일 슬라이드 + 목차형 슬라이드 제거 (기본 true) — PptxToMarkdownConverter
+        Boolean pptxDropDividerSlides           // PPTX 변환 시 본문·이미지 없이 '구분용 제목'만 있는 섹션 구분 슬라이드 제거 (기본 true, 문장형/키 메시지 제목은 유지) — PptxToMarkdownConverter
 ) {
     public record LlmConfig(
             List<ProviderConfig> providers,
@@ -54,7 +56,8 @@ public record AppProperties(
             int permitWaitTimeoutSeconds,    // max wait for a concurrency slot on the query path before failing fast with 429 (default 20s, well under the 180s read-timeout)
             Double temperature,              // general/RAG temperature (app.llm.temperature / LLM_TEMPERATURE), default 0.0, clamp [0,2] — VIEW-ONLY (baked into provider defaultOptions at bean creation, restart to change)
             Double directTemperature,        // Direct(meta) answer temperature (app.llm.direct-temperature / DIRECT_LLM_TEMPERATURE), default 0.1, clamp [0,0.2] — HOT-editable (DirectAnswerService reads it per call, §6.18)
-            Integer maxTokens                // LLM response cap (app.llm.max-tokens / LLM_MAX_TOKENS), default 6000, clamp >0 — VIEW-ONLY (baked at bean creation; streaming chat answers are uncapped by design, bounded by SSE timeouts)
+            Integer maxTokens,               // LLM response cap (app.llm.max-tokens / LLM_MAX_TOKENS), default 6000, clamp >0 — VIEW-ONLY (baked at bean creation; streaming chat answers are uncapped by design, bounded by SSE timeouts)
+            Boolean verifyLocalModelsOnStartup // GET {base-url}/v1/models for every registered LOCAL-role provider at boot — fails startup (throws, Spring exits) if unreachable or the configured model isn't in the response. Default true (app.llm.verify-local-models-on-startup / LLM_VERIFY_LOCAL_MODELS_ON_STARTUP)
     ) {}
 
     public record ProviderConfig(
@@ -142,7 +145,7 @@ public record AppProperties(
      */
     public record PptxShapeExtractionConfig(
             Double minShapeDimensionPt,       // 가로/세로 중 큰 쪽이 이 값 미만이면 아이콘/구분선으로 보고 제외 (기본 30)
-            Double clusterProximityPaddingPt, // 클러스터링 근접 판정 시 바운딩박스에 적용할 바깥쪽 패딩 (기본 15)
+            Double clusterProximityPaddingPt, // 클러스터링 근접 판정 시 바운딩박스에 적용할 바깥쪽 패딩 (기본 5)
             Boolean mergeAnnotatedPictures,   // true(기본): 사진 위/근처에 겹친 시드 도형을 사진과 하나로 합성(앵커 기반, rasterizeShapes와 독립) / false: 사진은 항상 원본 그대로 추출
             Boolean rasterizeShapes           // 느슨한(아무 앵커에도 안 겹친) 도형끼리의 근접 클러스터링 — true: 겹친 도형을 다이어그램 한 장으로 병합(구 기본 동작) / false(기본): 클러스터링 안 함(느슨한 단일 도형은 이미지로 안 뽑음). 그룹/SmartArt/표+도형 합성은 이 값과 무관하게 항상 유지
     ) {}
@@ -154,7 +157,7 @@ public record AppProperties(
      * "같은 문단에 사진과 도형이 함께 있으면 합성" 근사 방식만 지원한다.
      */
     public record DocxShapeExtractionConfig(
-            Boolean mergeAnnotatedShapes // true(기본): 같은 문단의 VML 도형을 사진과 합성 / false: 항상 원본 사진만 추출
+            Boolean mergeAnnotatedShapes // [실험적] true: 같은 문단의 VML 도형을 사진과 합성(합성 위치가 실제 문서와 어긋날 수 있음) / false(기본): 항상 원본 사진만 추출
     ) {}
 
     public record ImageDescriptionProperties(
@@ -332,6 +335,16 @@ public record AppProperties(
         return searchQueryEmbedCacheEnabled == null || searchQueryEmbedCacheEnabled;
     }
 
+    /** PPTX duplicate/table-of-contents slide removal on/off. Defaults to enabled. */
+    public boolean pptxRemoveDuplicateSlidesSafe() {
+        return pptxRemoveDuplicateSlides == null || pptxRemoveDuplicateSlides;
+    }
+
+    /** PPTX section-divider (title-only, no body/image) slide removal on/off. Defaults to enabled. */
+    public boolean pptxDropDividerSlidesSafe() {
+        return pptxDropDividerSlides == null || pptxDropDividerSlides;
+    }
+
     /** Query embedding cache max entries. Defaults to 500. */
     public int searchQueryEmbedCacheMaxSizeSafe() {
         return (searchQueryEmbedCacheMaxSize != null && searchQueryEmbedCacheMaxSize > 0)
@@ -384,14 +397,14 @@ public record AppProperties(
         if (indexing == null) {
             int f = (filesOverride != null && filesOverride > 0) ? filesOverride : 1;
             int l = (llmOverride != null && llmOverride > 0) ? llmOverride : 3;
-            return new IndexingConfig(f, l, 30, 4);
+            return new IndexingConfig(f, l, 30, 2);
         }
         int files   = (filesOverride != null && filesOverride > 0) ? filesOverride
                     : (indexing.maxConcurrentFiles() > 0 ? indexing.maxConcurrentFiles() : 1);
         int llm     = (llmOverride != null && llmOverride > 0) ? llmOverride
                     : (indexing.maxConcurrentLlmCalls() > 0 ? indexing.maxConcurrentLlmCalls() : 3);
         int timeout = indexing.keywordTimeoutSeconds() > 0 ? indexing.keywordTimeoutSeconds() : 30;
-        int batch   = indexing.keywordBatchSize() > 0      ? indexing.keywordBatchSize()      : 4;
+        int batch   = indexing.keywordBatchSize() > 0      ? indexing.keywordBatchSize()      : 2;
         return new IndexingConfig(files, llm, timeout, batch);
     }
 
@@ -459,10 +472,10 @@ public record AppProperties(
         return new VectorStoreConfig(vectorstore.type().trim());
     }
 
-    /** Conversation-history fetch limit (fallback path), defaulting to 50 turns. Clamped to >= 1. */
+    /** Conversation-history fetch limit (fallback path), defaulting to 10 turns. Clamped to >= 1. */
     public MemoryConfig memorySafe() {
         int limit = (memory != null && memory.fetchLimitTurns() != null && memory.fetchLimitTurns() > 0)
-                ? memory.fetchLimitTurns() : 50;
+                ? memory.fetchLimitTurns() : 10;
         return new MemoryConfig(limit);
     }
 
@@ -492,7 +505,7 @@ public record AppProperties(
         double minDim = (pptxImage != null && pptxImage.minShapeDimensionPt() != null && pptxImage.minShapeDimensionPt() >= 0)
                 ? pptxImage.minShapeDimensionPt() : 30.0;
         double padding = (pptxImage != null && pptxImage.clusterProximityPaddingPt() != null && pptxImage.clusterProximityPaddingPt() >= 0)
-                ? pptxImage.clusterProximityPaddingPt() : 15.0;
+                ? pptxImage.clusterProximityPaddingPt() : 5.0;
         boolean mergeAnnotatedPictures = (pptxImage != null && pptxImage.mergeAnnotatedPictures() != null)
                 ? pptxImage.mergeAnnotatedPictures() : true;
         // rasterizeShapes defaults to false — loose overlapping shapes no longer auto-merge into
@@ -503,12 +516,14 @@ public record AppProperties(
     }
 
     /**
-     * DOCX VML-shape + picture merge tuning, defaulting to true (merge). Only falls back on an
-     * unset (null) field — an explicit false is honored.
+     * DOCX VML-shape + picture merge tuning. [Experimental] Defaults to false (no merge) — the
+     * merged shape's position can drift from the actual document layout, so verbatim extraction is
+     * currently the safer default. Only falls back on an unset (null) field — an explicit true is
+     * honored.
      */
     public DocxShapeExtractionConfig docxImageSafe() {
         boolean mergeAnnotatedShapes = (docxImage != null && docxImage.mergeAnnotatedShapes() != null)
-                ? docxImage.mergeAnnotatedShapes() : true;
+                && docxImage.mergeAnnotatedShapes();
         return new DocxShapeExtractionConfig(mergeAnnotatedShapes);
     }
 
@@ -535,7 +550,7 @@ public record AppProperties(
         Double directOverride = overrideDouble(SettingsKeys.LLM_DIRECT_TEMPERATURE);
         if (llm == null) {
             double dt = clamp(directOverride != null ? directOverride : 0.1, 0.0, 0.2);
-            return new LlmConfig(List.of(), 2, 10, 180, "COST_FIRST", 0.6, 3, 20, 0.0, dt, 6000);
+            return new LlmConfig(List.of(), 2, 10, 180, "COST_FIRST", 0.6, 3, 20, 0.0, dt, 6000, true);
         }
         List<ProviderConfig> providers = llm.providers() != null ? llm.providers() : List.of();
         int minutes = llm.circuitBreakerMinutes() > 0 ? llm.circuitBreakerMinutes() : 2;
@@ -550,8 +565,10 @@ public record AppProperties(
                 : (llm.directTemperature() != null ? llm.directTemperature() : 0.1);
         double directTemperature = clamp(directBase, 0.0, 0.2);
         int maxTokens = (llm.maxTokens() != null && llm.maxTokens() > 0) ? llm.maxTokens() : 6000;
+        boolean verifyLocalModels = llm.verifyLocalModelsOnStartup() == null || llm.verifyLocalModelsOnStartup();
                 return new LlmConfig(providers, minutes, connectTimeout, readTimeout, mode, threshold,
-                        defaultProviderConcurrency, permitWaitTimeoutSeconds, temperature, directTemperature, maxTokens);
+                        defaultProviderConcurrency, permitWaitTimeoutSeconds, temperature, directTemperature, maxTokens,
+                        verifyLocalModels);
     }
 
     private static double clamp(double v, double lo, double hi) {

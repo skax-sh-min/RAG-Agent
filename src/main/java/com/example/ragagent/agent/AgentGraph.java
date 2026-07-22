@@ -102,6 +102,7 @@ public class AgentGraph {
                         state = state.toBuilder().incrementRetry().build();
                         log.debug("[AgentGraph] retry #{} reason=ANSWER_INSUFFICIENT thread={}",
                                 state.retryCount(), state.threadId());
+                        listener.onRetry("answer", state.retryCount());
                         yield Node.RETRIEVAL;
                     }
                     yield Node.CRITIC;
@@ -113,6 +114,7 @@ public class AgentGraph {
                         state = state.toBuilder().incrementRetry().build();
                         log.debug("[AgentGraph] retry #{} reason=CRITIC_UNGROUNDED thread={}",
                                 state.retryCount(), state.threadId());
+                        listener.onRetry("critic", state.retryCount());
                         yield Node.RETRIEVAL;
                     }
                     yield Node.FINALIZE;

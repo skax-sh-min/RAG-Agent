@@ -45,7 +45,7 @@ services:
       - EMBED_MODEL=${EMBED_MODEL:-text-embedding-ada-002}
       # sqlite-vec 전용: 임베딩 모델 실제 출력 차원과 일치시켜야 함 (chroma 모드에선 비워둠)
       - EMBED_DIMENSIONS=${EMBED_DIMENSIONS:-}
-      # Local LLM provider (providers[0]) — separate from OPENAI_* above
+      # Local LLM provider (providers[1], "local") — separate from OPENAI_* above
       - LOCAL_LLM_URL=${LOCAL_LLM_URL:-http://localhost:1234/v1}
       - LOCAL_LLM_KEY=${LOCAL_LLM_KEY:-lm-studio}
       - LOCAL_LLM_MODEL=${LOCAL_LLM_MODEL:-gemma-4-27b-it}

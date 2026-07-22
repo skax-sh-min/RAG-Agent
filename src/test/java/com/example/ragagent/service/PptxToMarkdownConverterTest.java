@@ -60,11 +60,13 @@ class PptxToMarkdownConverterTest {
     private static AppProperties mockAppProperties() {
         AppProperties props = mock(AppProperties.class);
         when(props.pptxImageSafe()).thenReturn(new AppProperties.PptxShapeExtractionConfig(30.0, 15.0, true, false));
+        when(props.pptxRemoveDuplicateSlidesSafe()).thenReturn(true); // 운영 기본값(on)과 동일하게
         return props;
     }
 
+    private final AppProperties props = mockAppProperties();
     private final PptxToMarkdownConverter converter =
-            new PptxToMarkdownConverter(new PptxImageExtractor(mockAppProperties()));
+            new PptxToMarkdownConverter(new PptxImageExtractor(props), props);
     private Path pptxPath;
     private Path imagesDir;
 
@@ -139,8 +141,8 @@ class PptxToMarkdownConverterTest {
     }
 
     @Test
-    @DisplayName("제목 placeholder가 없는 슬라이드는 폴백 헤딩(\"N번 슬라이드\")을 받는다")
-    void slideWithoutTitleGetsFallbackHeading() throws IOException {
+    @DisplayName("제목 placeholder가 없는 슬라이드는 합성 헤딩 없이 [페이지: N] 마커 + 본문만 받는다")
+    void slideWithoutTitleGetsNoSyntheticHeading() throws IOException {
         writePptx(pptx -> {
             XSLFSlide slide = pptx.createSlide();
             XSLFTextBox body = slide.createTextBox();
@@ -150,7 +152,10 @@ class PptxToMarkdownConverterTest {
 
         String md = convert();
 
-        assertThat(md).contains("## 1번 슬라이드");
+        // "## N번 슬라이드" 폴백 헤딩은 더 이상 넣지 않는다 — [페이지: N] 마커가 슬라이드 경계를 겸한다.
+        assertThat(md).doesNotContain("## 1번 슬라이드");
+        assertThat(md).contains("[페이지: 1]");
+        assertThat(md).contains("제목 없는 본문");
     }
 
     @Test
@@ -236,7 +241,7 @@ class PptxToMarkdownConverterTest {
     }
 
     @Test
-    @DisplayName("제목·본문은 없지만 이미지가 있는 슬라이드는 건너뛰지 않고 폴백 헤딩 + [이미지: ...] 마커를 받는다")
+    @DisplayName("제목·본문은 없지만 이미지가 있는 슬라이드는 건너뛰지 않고 [페이지: N] + [이미지: ...] 마커를 받는다")
     void slideWithOnlyPictureIsNotSkippedAndGetsImageMarker() throws IOException {
         writePptx(pptx -> {
             byte[] fakePng = "fake-png-bytes".getBytes();
@@ -249,7 +254,7 @@ class PptxToMarkdownConverterTest {
         String md = convert();
 
         assertThat(md).contains("[페이지: 1]");
-        assertThat(md).contains("## 1번 슬라이드");
+        assertThat(md).doesNotContain("## 1번 슬라이드");
         assertThat(md).contains("[이미지: images/doc1/s1_img1.png]");
         assertThat(Files.exists(imagesDir.resolve("s1_img1.png"))).isTrue();
     }
@@ -391,8 +396,8 @@ class PptxToMarkdownConverterTest {
     }
 
     @Test
-    @DisplayName("중간 표지 슬라이드(제목 없음, 불릿 없음, 굵은 텍스트 2개)는 폴백 헤딩 하나만 받는다 — 회귀")
-    void sectionDividerSlideWithTwoBoldTextsGetsOnlyFallbackHeading() throws IOException {
+    @DisplayName("중간 표지 슬라이드(제목 없음, 불릿 없음, 굵은 텍스트 2개)는 합성 헤딩 없이 [페이지: N] + 굵은 본문만 받는다 — 회귀")
+    void sectionDividerSlideWithTwoBoldTextsGetsNoSyntheticHeading() throws IOException {
         writePptx(pptx -> {
             XSLFSlide slide = pptx.createSlide();
             XSLFTextBox partBox = slide.createTextBox();
@@ -404,9 +409,169 @@ class PptxToMarkdownConverterTest {
 
         String md = convert();
 
-        assertThat(md).contains("## 1번 슬라이드");
+        assertThat(md).contains("[페이지: 1]");
+        assertThat(md).doesNotContain("## 1번 슬라이드");
         assertThat(md).doesNotContain("### PART 2").doesNotContain("### 결제 시스템");
         assertThat(md).contains("**PART 2**").contains("**결제 시스템**");
+    }
+
+    // ── 중복/목차 슬라이드 제거 (app.pptx-remove-duplicate-slides, 기본 on) ──────────────
+
+    /** 제목 + 불릿 본문을 가진 콘텐츠 슬라이드를 추가한다(이미지 없음). */
+    private static void addContentSlide(XMLSlideShow pptx, String title, String... bullets) {
+        XSLFSlide slide = pptx.createSlide();
+        addTitle(slide, title);
+        XSLFTextBox body = slide.createTextBox();
+        for (String b : bullets) addRun(addParagraph(body, true, 0), b, false, false);
+    }
+
+    private static int count(String haystack, String needle) {
+        return haystack.split(Pattern.quote(needle), -1).length - 1;
+    }
+
+    @Test
+    @DisplayName("중복 제거 — 내용이 완전히 동일한 이미지 없는 슬라이드는 첫 등장만 남기고 제거된다")
+    void exactDuplicateSlideIsDroppedKeepingFirst() throws IOException {
+        writePptx(pptx -> {
+            addContentSlide(pptx, "반복 제목", "항목 A", "항목 B");
+            addContentSlide(pptx, "반복 제목", "항목 A", "항목 B"); // 슬라이드 1과 완전히 동일
+            addContentSlide(pptx, "고유 제목", "고유 내용 하나");
+        });
+
+        String md = convert();
+
+        assertThat(md).contains("[페이지: 1]");
+        assertThat(md).doesNotContain("[페이지: 2]"); // 중복 슬라이드 2 제거 — 마커도 나오지 않음
+        assertThat(md).contains("[페이지: 3]");        // 슬라이드 번호는 밀리지 않고 실제 인덱스 유지
+        assertThat(count(md, "## 반복 제목")).isEqualTo(1);
+        assertThat(md).contains("## 고유 제목");
+    }
+
+    @Test
+    @DisplayName("목차 휴리스틱 — 본문이 다른 슬라이드 제목들의 목록인 슬라이드는 제거된다")
+    void tableOfContentsSlideIsDropped() throws IOException {
+        writePptx(pptx -> {
+            // 슬라이드 1 = 목차: 불릿이 뒤 섹션들의 제목과 일치
+            addContentSlide(pptx, "목차", "1장 개요", "2장 설계", "3장 구현");
+            addContentSlide(pptx, "1장 개요", "개요 본문입니다.");
+            addContentSlide(pptx, "2장 설계", "설계 본문입니다.");
+            addContentSlide(pptx, "3장 구현", "구현 본문입니다.");
+        });
+
+        String md = convert();
+
+        assertThat(md).doesNotContain("## 목차");
+        assertThat(md).doesNotContain("[페이지: 1]"); // 목차 슬라이드(1) 제거
+        assertThat(md).contains("[페이지: 2]").contains("[페이지: 3]").contains("[페이지: 4]");
+        assertThat(md).contains("## 1장 개요").contains("## 2장 설계").contains("## 3장 구현");
+    }
+
+    @Test
+    @DisplayName("중복 제거 — 이미지가 있는 슬라이드는 내용이 같아도 제거하지 않는다(이미지 고아 방지)")
+    void duplicateSlideWithImageIsKept() throws IOException {
+        writePptx(pptx -> {
+            byte[] fakePng = "fake-png-bytes".getBytes();
+            for (int i = 0; i < 2; i++) {
+                XSLFPictureData pd = pptx.addPicture(fakePng, PictureData.PictureType.PNG);
+                XSLFSlide slide = pptx.createSlide();
+                addTitle(slide, "동일 제목");
+                slide.createPicture(pd);
+            }
+        });
+
+        String md = convert();
+
+        // 두 슬라이드 모두 이미지가 있어 제거 대상에서 제외 — 둘 다 남는다
+        assertThat(md).contains("[페이지: 1]").contains("[페이지: 2]");
+        assertThat(count(md, "## 동일 제목")).isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("중복 제거 OFF — 플래그가 꺼져 있으면 완전 동일 슬라이드도 그대로 둔다")
+    void duplicatesKeptWhenFlagDisabled() throws IOException {
+        AppProperties offProps = mockAppProperties();
+        when(offProps.pptxRemoveDuplicateSlidesSafe()).thenReturn(false);
+        PptxToMarkdownConverter noDedup =
+                new PptxToMarkdownConverter(new PptxImageExtractor(offProps), offProps);
+
+        writePptx(pptx -> {
+            addContentSlide(pptx, "반복 제목", "항목 A", "항목 B");
+            addContentSlide(pptx, "반복 제목", "항목 A", "항목 B");
+        });
+
+        String md = noDedup.convert(pptxPath, "doc1", imagesDir);
+
+        assertThat(md).contains("[페이지: 1]").contains("[페이지: 2]");
+        assertThat(count(md, "## 반복 제목")).isEqualTo(2);
+    }
+
+    // ── 구분용 제목만 있는 섹션 구분 슬라이드 제거 (app.pptx-drop-divider-slides, 기본 on) ──────
+    // 공유 converter는 이 플래그가 꺼져 있으므로(제목만 슬라이드 테스트 보존), 켠 전용 converter를 만든다.
+    private PptxToMarkdownConverter dividerRemovingConverter() {
+        AppProperties p = mockAppProperties();
+        when(p.pptxDropDividerSlidesSafe()).thenReturn(true);
+        return new PptxToMarkdownConverter(new PptxImageExtractor(p), p);
+    }
+
+    /** 제목만 있는(본문·이미지 없음) 슬라이드를 추가한다. */
+    private static void addTitleOnlySlide(XMLSlideShow pptx, String title) {
+        addTitle(pptx.createSlide(), title);
+    }
+
+    @Test
+    @DisplayName("구분용 제목 제거 — 번호/라벨형·키워드·짧은 명사구 제목만 있는 슬라이드는 제거된다")
+    void sectionDividerTitleOnlySlidesAreDropped() throws IOException {
+        PptxToMarkdownConverter conv = dividerRemovingConverter();
+        writePptx(pptx -> {
+            addTitleOnlySlide(pptx, "3장 개요");          // 번호/라벨형
+            addTitleOnlySlide(pptx, "개요");               // 키워드
+            addTitleOnlySlide(pptx, "결제 시스템");        // 짧은 명사구
+            addContentSlide(pptx, "결제 흐름", "결제 본문입니다."); // 유지될 콘텐츠 슬라이드
+        });
+
+        String md = conv.convert(pptxPath, "doc1", imagesDir);
+
+        assertThat(md).doesNotContain("## 3장").doesNotContain("## 개요").doesNotContain("## 결제 시스템");
+        assertThat(md).doesNotContain("[페이지: 1]").doesNotContain("[페이지: 2]").doesNotContain("[페이지: 3]");
+        assertThat(md).contains("[페이지: 4]").contains("## 결제 흐름"); // 슬라이드 번호는 실제 인덱스 유지
+    }
+
+    @Test
+    @DisplayName("구분용 제목 제거 — 문장형(키 메시지) 제목만 있는 슬라이드는 유지된다")
+    void keyMessageTitleOnlySlideIsKept() throws IOException {
+        PptxToMarkdownConverter conv = dividerRemovingConverter();
+        writePptx(pptx -> {
+            addTitleOnlySlide(pptx, "고객 만족을 최우선으로 합니다"); // 서술어 종결 → 키 메시지
+            addTitleOnlySlide(pptx, "우리의 목표는 지속 성장");        // 조사(는) 포함 → 문장형
+        });
+
+        String md = conv.convert(pptxPath, "doc1", imagesDir);
+
+        assertThat(md).contains("## 고객 만족을 최우선으로 합니다");
+        assertThat(md).contains("## 우리의 목표는 지속 성장");
+        assertThat(md).contains("[페이지: 1]").contains("[페이지: 2]");
+    }
+
+    @Test
+    @DisplayName("구분용 제목 제거 — 본문이 있으면 제목이 구분용이라도 제거하지 않는다")
+    void dividerLikeTitleWithBodyIsKept() throws IOException {
+        PptxToMarkdownConverter conv = dividerRemovingConverter();
+        writePptx(pptx -> addContentSlide(pptx, "결제 시스템", "본문 내용이 있습니다."));
+
+        String md = conv.convert(pptxPath, "doc1", imagesDir);
+
+        assertThat(md).contains("## 결제 시스템").contains("본문 내용이 있습니다").contains("[페이지: 1]");
+    }
+
+    @Test
+    @DisplayName("구분용 제목 제거 OFF — 플래그가 꺼져 있으면 구분용 제목만 있는 슬라이드도 유지된다")
+    void dividerSlidesKeptWhenFlagDisabled() throws IOException {
+        // 공유 converter는 divider 플래그 off(기본 미스텁) — 별도 스텁 없이 그대로 사용
+        writePptx(pptx -> addTitleOnlySlide(pptx, "3장 개요"));
+
+        String md = convert();
+
+        assertThat(md).contains("## 3장 개요").contains("[페이지: 1]");
     }
 
     @Test

@@ -11,24 +11,25 @@ import java.util.function.BiConsumer;
 import java.util.regex.Pattern;
 
 /**
- * Converts extracted PDF page text into Markdown: one {@code [페이지: N]} marker + synthetic
- * {@code ## N페이지} heading per page with any text or image (N = 1-based page number,
- * independent of whether earlier pages were skipped, so numbering always matches the real PDF
- * page).
+ * Converts extracted PDF page text into Markdown: one {@code [페이지: N]} marker per page with any
+ * text or image (N = 1-based page number, independent of whether earlier pages were skipped, so
+ * numbering always matches the real PDF page).
  *
- * A synthetic per-page heading is required even though plain PDF text carries no reliable
- * structural signal of its own — {@code DocumentLoaderService.splitMarkdownBySections()} only
- * starts a new section on a heading line, so without one a whole multi-page PDF would collapse
- * into a single section and lose per-page attribution for every page after the first. Pages with
- * neither text nor an image are skipped entirely (no marker, no heading) so they neither waste a
+ * The {@code [페이지: N]} marker is itself the per-page section boundary —
+ * {@code DocumentLoaderService.splitMarkdownBySections()} starts a new section on it and
+ * {@code MarkdownCorrectionService.splitBySections()} splits correction sections on it, so no
+ * synthetic {@code ## N페이지} heading is emitted anymore. That heading carried no real structural
+ * meaning (the page number is already tracked as {@code page_or_slide}) and only showed up as noise
+ * in the stored/searched chunk text, the {@code /admin} chunk view, and the answer prompt. Pages
+ * with neither text nor an image are skipped entirely (no marker) so they neither waste a
  * near-empty chunk nor shift the page numbering of the pages around them.
  *
- * No further heading synthesis (e.g. from font size/layout analysis) is attempted here — plain
- * PDF text extraction has no structural signal comparably reliable to PPTX's title placeholder.
+ * No heading synthesis (e.g. from font size/layout analysis) is attempted here — plain PDF text
+ * extraction has no structural signal comparably reliable to PPTX's title placeholder.
  *
  * Images are handled inline here, like {@link DocxToMarkdownConverter}: {@link PdfImageExtractor}
  * extracts each page's embedded images to {@code imagesDir} up front, and their relative paths
- * are emitted as {@code [이미지: ...]} markers right after the page's heading. {@code
+ * are emitted as {@code [이미지: ...]} markers right after the page's marker. {@code
  * loadFromMarkdown()} then promotes those markers into {@code image_paths} metadata exactly as it
  * does for DOCX — no separate metadata-attachment step is needed downstream.
  */
@@ -55,8 +56,9 @@ public class PdfToMarkdownConverter {
      *                 fallback from its filename
      * @param imageId  content-hash key for the images subdirectory (see DocumentIndexer.imageId)
      * @param imagesDir directory where extracted images are saved
-     * @return full markdown text with a {@code [페이지: N]}-tagged {@code ##} heading per
-     *         non-blank page, with {@code [이미지: ...]} markers for any images on that page
+     * @return full markdown text with a {@code [페이지: N]} marker per non-blank page (the marker
+     *         is the section boundary — no synthetic heading), with {@code [이미지: ...]} markers
+     *         for any images on that page
      */
     public String convert(List<Document> pages, Path pdfPath, String imageId, Path imagesDir,
                           BiConsumer<Integer, Integer> onProgress) throws IOException {
@@ -76,7 +78,6 @@ public class PdfToMarkdownConverter {
             if (!hasText && images.isEmpty()) continue; // 텍스트도 이미지도 없는 페이지 — 건너뜀
 
             sb.append("[페이지: ").append(pageNum).append("]\n");
-            sb.append("## ").append(pageNum).append("페이지\n\n");
             for (String path : images) {
                 sb.append("[이미지: ").append(path).append("]\n");
             }

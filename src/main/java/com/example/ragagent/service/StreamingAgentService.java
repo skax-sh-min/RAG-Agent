@@ -149,7 +149,7 @@ public class StreamingAgentService {
                 turnId = memoryService.addTurn(userId, form.threadId(), form.question(), result.answer(),
                         askedAt, result.totalInputTokens(), result.totalOutputTokens(),
                         (int) elapsedMs, result.usedProvider(), result.llmCallCount());
-                summarizerService.invalidate(form.threadId());
+                summarizerService.precomputeAfterTurn(userId, form.threadId(), turnId, locale);
             }
 
             sendEvent(emitter, "done", buildDonePayload(result, elapsedMs, turnId));
@@ -266,6 +266,20 @@ public class StreamingAgentService {
                     "id", "upgrade",
                     "text", "고추론 재분석 중: " + provider);
             sendEvent(emitter, "stage", payload);
+        }
+
+        @Override
+        public void onRetry(String reason, int retryCount) {
+            lastActivityNanos.set(System.nanoTime());
+            Map<String, Object> payload = new HashMap<>();
+            payload.put("reason", reason);
+            payload.put("retryCount", retryCount);
+            payload.put("text", "이 답변이 검증 조건을 통과하지 못해, 검색 범위를 넓혀 다시 시도하고 있습니다… (재시도 "
+                    + retryCount + ")");
+            sendEvent(emitter, "retry", payload);
+            // Superseded attempts are never persisted (only the final answer is), so drop the
+            // accumulated buffer here — an error mid-retry then persists only the latest attempt.
+            accumulated.setLength(0);
         }
 
         private String stageText(String nodeId) {

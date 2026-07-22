@@ -9,42 +9,31 @@
 
 > 완료/미착수를 한눈에 보도록 상단 대시보드를 신설했다.
 
-### ✅ 완료 — Phase 1 · 2 · 5 · 6 · 7 전체, Phase 3 대부분
+### ✅ 완료 — Phase 1·2·5·6·7 전체, Phase 3 전체(§6.15·6.16.2·6.19·6.20 제외)
 
 | Phase | 완료 항목 | 상세 |
 |---|---|---|
 | **Phase 1** — 보안 기반 | Step 1.1~1.6 전체(Caddy·Flyway·Spring Security·멀티유저 격리·CSRF·로그인/회원가입 UI) + `app.auth.enabled` no-auth 토글 | §4 |
 | **Phase 2** — 모바일 UI | 반응형 레이아웃(Offcanvas) · PWA(manifest/SW/오프라인) · 다크모드·접근성 | §5 |
-| **Phase 3** — 운영 견고화 (12개 항목) | §6.1 Rate limit · §6.2 업로드 검증(매직바이트, 쿼터는 미착수) · §6.3 예외처리 · §6.4 감사로그 · §6.5 임베딩 사용량 분리 · §6.6 비활성 프로바이더 표시 · §6.7 orphan 기록 삭제 · §6.8 피드백 기반 컨텍스트 제외 · §6.9 요약 선계산 · §6.10 백그라운드 사용량 분리 · §6.11 컨텍스트 예산 정합성 · §6.12 다중 사용자 동시 LLM 처리(동시성 게이트+429 백프레셔+single-flight+서킷브레이커 완화+로드밸런싱) · §6.13 설정 페이지(LLM/RAG 조회+핫 수정 오버라이드 레이어) · §6.14 핵심 채팅 경로 추적 | §6 |
+| **Phase 3** — 운영 견고화 | §6.1 Rate limit · §6.2 업로드 검증(매직바이트, 쿼터는 §6.15로 이관) · §6.3 예외처리 · §6.4 감사로그 · §6.5 임베딩 사용량 분리 · §6.6 비활성 프로바이더 표시 · §6.7 orphan 기록 삭제 · §6.8 피드백 기반 컨텍스트 제외 · §6.9 요약 선계산 · §6.10 백그라운드 사용량 분리 · §6.11 컨텍스트 예산 정합성 · §6.12 다중 사용자 동시 LLM 처리(동시성 게이트+백프레셔+로드밸런싱) · §6.13 설정 페이지(핫 수정 오버라이드) · §6.14 핵심 채팅 경로 추적 · §6.16.1 스트리밍/인덱싱 중단 버튼 · §6.17 관리 전용 인증(B안) · §6.18 Direct temperature 분리 · §6.21 소형 LLM 분리+멀티 LLM 처리량 확장 | §6 |
 | **Phase 5** — Vector Store | Step 5.1~5.10 전체(Chroma↔sqlite-vec 런타임 전환, 관리자 페이지, 태그 검색, 운영/벡터 DB 분리) | §8 |
 | **Phase 6** — 폐쇄망/노-도커 | G1~G5(키리스 LOCAL·차원 외부화·라우팅 외부화·런북·무외부호출 인수) | §9 |
-| **Phase 7** — 검색 품질·성능 고도화 | §10.1~10.9 전체(17건) — 정확도(Contextual Retrieval·가중 RRF·쿼리 임베딩 캐시·한국어 FTS 트라이그램·리랭커 프리뷰 확장·하이브리드 기본화·2글자 LIKE 폴백·임계값 과조회 보정·recall@k/nDCG@k 평가 하네스) · 속도(MultiQuery 병렬화·키워드 배치화·SQLite 트랜잭션화·SHA-256 중복제거·파생텍스트 캐시) · 메모리(Chroma 미사용 임베딩 제외·벡터 BLOB 직렬화·sqlite-vec 스트리밍 삽입·인덱싱-검색 캐시 분리) | §10 |
-| **§6.16.1** — 스트리밍/인덱싱 중단 버튼 | 채팅 SSE 중지(AbortController) + 업로드/동기화 취소(워커 스레드 interrupt, `.join()`→`.get()` 인터럽트 가능화) | §6.16 |
-| **§6.17** — 문서관리·Admin 관리 전용 인증(B안) | `app.auth.management-only` 신규 서브모드, `SecurityConfig` 3번째 필터 체인(`IF_REQUIRED`+쿠키 CSRF), `/admin/**`+문서쓰기 5라우트 `hasRole("ADMIN")` 게이트, `NoAuthAutoLoginFilter` 실로그인 보존, 역할 기반 화면 분기(`isAdmin`) | §6.17 |
+| **Phase 7** — 검색 품질·성능 고도화 | §10.1~10.9 전체(17건) — 정확도·속도·메모리 개선 + recall@k/nDCG@k 평가 하네스(baseline recall@10=0.962) | §10 |
 
-추가로 Phase 3 초기에 완료된 항목(문서화되지 않았던 픽스 포함): ChromaDB v2 API 컬렉션명→UUID 자동 변환, 문서 저장 경로 공유 구조 단순화(`DocRegistry.SHARED`), 인덱싱 SSE 진행 단계별 표시, 키워드 추출 타임아웃 시 CircuitBreaker 오동작 수정, DOCX 변환 전 구버전 아티팩트 삭제 순서 수정, `LOGGING_LEVEL`/`LLM_TEMPERATURE`/`LLM_MAX_TOKENS`/`SPRING_SECURITY_LOGGING_LEVEL` 환경변수 외부화, 의존성 최신 stable 일괄 업데이트(Spring Boot 3.5.15·Spring AI 1.1.8, 정확한 버전은 pom.xml 참조).
+추가로 Phase 3 초기에 완료된 항목(문서화되지 않았던 픽스 포함): ChromaDB v2 API 컬렉션명→UUID 자동 변환, 문서 저장 경로 공유 구조 단순화(`DocRegistry.SHARED`), 인덱싱 SSE 진행 단계별 표시, 키워드 추출 타임아웃 시 CircuitBreaker 오동작 수정, DOCX 변환 전 구버전 아티팩트 삭제 순서 수정, 환경변수 외부화 4건, 의존성 최신 stable 일괄 업데이트(정확한 버전은 pom.xml 참조).
 
 ### 🔵 진행할 것 (우선순위 순)
 
-> **2026-07-08 재우선순위화**: 현재 실배포 기준(폐쇄망·no-auth 단일 운영자)에서 가치가 없는 **멀티유저(`auth.enabled=true`) 전용 작업은 전부 후속으로 내렸다** — §6.19(보안 하드닝 3건 전부 auth 모드 전용), §6.20(사용자별 LLM 쿼터, "사용자별" 구분 자체가 다중 사용자 전제), §6.16.2(계정 잠금 피드백, no-auth엔 로그인이 없음), Phase 4 전체(OAuth2·Postgres·관리자 확장 모두 다중 사용자/스케일 트리거). §6.15(스토리지 쿼터)은 이름과 달리 설계상 (B) 전역 상한이 1차 권장이라 단일 운영자에도 그대로 적용되므로 즉시 그룹에 남겼다.
+> **2026-07-08 재우선순위화**: 실배포 기준(폐쇄망·no-auth 단일 운영자)에서 가치가 없는 **멀티유저(`auth.enabled=true`) 전용 작업**(§6.19·§6.20·§6.16.2·Phase 4)은 전부 후속으로 내렸다(사유는 아래 후속 표의 트리거 열 참조). §6.15(스토리지 쿼터)만 설계상 전역 상한이 1차 권장이라 단일 운영자에도 적용되므로 지금 진행 그룹에 남겼다.
 
 **🟢 지금 진행 (no-auth 단일 운영자 배포에도 바로 적용)**
 
 | 순위 | 항목 | 현재 상태 |
 |---|---|---|
-| 1 | **§6.21 소형 LLM 분리 + 멀티 LLM 처리량 확장**(태스크별 모델 라우팅·임베딩 병렬화) | 🟡 A·B·작업2·E1~E3·처리량확장 완료(2026-07-19) — `MICRO_TEXT` 잡무 오프로딩 + 임베딩/대화 양쪽 다중 엔드포인트 로드밸런싱. 실측만 후속 |
-| 2 | **§6.15 스토리지 쿼터**(전역 상한 B안, §6.2에서 이관) | 설계 완료, 구현 전. 설정 페이지(§6.13) 이후로 순위 하향 |
-| 3 | 운영 준비 잔여 — SQLite 백업 자동화(Litestream/cron), Caddy 인증서 만료 모니터링 | 미착수 |
-| 4 | §9.4 — CADDY 하위호환 별칭 | 선택, 낮은 우선순위 |
-| 5 | Phase 2 남은 실기기 검증 2건 (키보드 하단 고정 · 홈 화면 standalone) | 좌우 스크롤·다크모드는 자동 검증 완료, 나머지는 실기기 필요 |
-| 6 | **§6.18 Direct 메시지 전용 LLM Temperature 분리** | ✅ 완료 — temperature/max-tokens 하드코딩 제거·config화, Direct temperature 분리 + 핫 수정. 상세는 §6.18 본문 |
-
-> **§6.12 완료**: 다중 사용자 동시 LLM 요청 처리 — 채팅 경로 무제한 동시성(인덱싱만 세마포어 존재) → 슬롯 초과 시 429→서킷브레이커 전면차단·타임아웃 폭주 위험이었던 문제를 5단계로 해결. ① 프로바이더별 동시성 세마포어(`LlmRouter.acquirePermit`/`executeGated`, 채팅/질의 경로 전체 적용) ② 대기상한+429 백프레셔(`LlmBackpressureException`) ③ `CachingEmbeddingModel` in-flight single-flight(동일 텍스트 동시 요청 thundering herd 제거) ④ 폴백 없는 유일 프로바이더의 서킷브레이커 단축 차단(`blockForOverload`, 다중 분 단위 전면 다운 방지) ⑤ 동일 role·priority 프로바이더 로드밸런싱(least-in-flight, 처리량 수평 확장). 인덱싱/백그라운드 경로는 의도적으로 미적용(회귀 방지, 자체 세마포어 유지). 상세는 §6.12 본문 참조.
-> **§6.13 완료**: `/settings` LLM/RAG 설정 조회 + 핫 수정 페이지. 상세는 §6.13 본문 참조.
-> **§6.16.1 완료**: 채팅 스트리밍 중지 + 업로드/동기화 취소 버튼.
-> **§6.17 완료**: 문서 관리·Admin 관리 전용 인증(B안) — `app.auth.management-only`. 상세는 아래 §6.17 본문 참조. (A) 전체 인증 모드는 §6.19와 함께 후속(멀티유저 활성화 시) 유지.
-> **§6.18 추가 (낮은 우선순위)**: Direct(meta) 응답 전용 temperature를 RAG 응답과 분리해 0.0~0.2(기본 0.1) 범위로 화면에서 조정 가능하게. 조사 중 temperature가 현재 어디에서도 실제로 설정 가능하지 않다는(하드코딩) 선행 이슈를 발견 — 상세는 §6.18 본문 참조.
-> **Phase 7 완료**: §10.1~10.9(17건) 전체 완료, §10.7.5 검색 품질 평가 하네스(recall@10=0.962 실측, 2026-07-16)로 마무리. 상세는 §10 본문 참조.
+| 1 | **§6.15 스토리지 쿼터**(전역 상한 B안, §6.2에서 이관) | 설계 완료, 구현 전 |
+| 2 | 운영 준비 잔여 — SQLite 백업 자동화(Litestream/cron), Caddy 인증서 만료 모니터링 | 미착수 |
+| 3 | §9.4 — CADDY 하위호환 별칭 | 선택, 낮은 우선순위 |
+| 4 | Phase 2 남은 실기기 검증 2건 (키보드 하단 고정 · 홈 화면 standalone) | 좌우 스크롤·다크모드는 자동 검증 완료, 나머지는 실기기 필요 |
 
 **🟣 후속 — 멀티유저(`auth.enabled=true`) 활성화 시에만 착수**
 
@@ -55,9 +44,9 @@
 | 3 | **§6.16.2 계정 잠금 상태 피드백** | auth 모드 로그인 UX — no-auth엔 로그인 자체가 없음 |
 | 4 | **Phase 4** (조건부) — §7.1 OAuth2 소셜 로그인 · §7.2 PostgreSQL 마이그레이션 · §7.3 관리자 페이지 확장 | §3 트리거 참조(가입 마찰·SQLite 한계 신호·다중 사용자 운영 관리 필요 시) |
 
-> 검색 고도화 **Phase 7-D(인프라 투자: sqlite-vec 단일 스캔·cross-encoder 리랭커·시맨틱 응답 캐시)는 2026-07-08 재검토에서 범위 제외**했다(사유는 §10.5) — Phase 7의 유일한 미착수 항목이며, 그 외 §10.1~10.9는 전체 완료.
-
-> 스키마 관리 실태: **Flyway(V1·V2 baseline) + 런타임 멱등 DDL 혼용**. `SqliteMemoryRepository`/`SqliteUserDetailsService`가 `CREATE TABLE IF NOT EXISTS` + `ALTER TABLE ADD COLUMN`으로 컬럼을 증분 추가한다(§13). 신규 컬럼은 새 Flyway 파일이 아니라 이 런타임 `ALTER TABLE` 패턴으로 추가한다.
+> 검색 고도화 **Phase 7-D**(sqlite-vec 단일 스캔·cross-encoder 리랭커·시맨틱 응답 캐시)는 2026-07-08 재검토에서 범위 제외(사유·재개 신호는 §10.5) — Phase 7의 유일한 미착수였던 항목.
+>
+> 스키마 관리: **Flyway(V1·V2 baseline) + 런타임 멱등 DDL 혼용** — 신규 컬럼은 새 Flyway 파일이 아니라 런타임 `ALTER TABLE ADD COLUMN` 패턴으로 추가한다(§13).
 
 ---
 
@@ -291,13 +280,11 @@ no-auth 기본 배포에서 `/documents` 쓰기와 `/admin/**`이 로그인 없�
 
 ---
 
-### 6.18 Direct 메시지 전용 LLM Temperature 분리 ✅ 완료 (2026-07-09 요청)
+### 6.18 Direct 메시지 전용 LLM Temperature 분리 ✅ 완료 (2026-07-09)
 
-> **완료 요약**: 하드코딩 4곳(`LlmConfig` defaultOptions의 temp/maxTokens + `AnswerService`·`DirectAnswerService` 스트리밍 우회 경로의 temp)을 제거하고 config 기반으로 전환. 신규 `app.llm.temperature`(일반/RAG, `LLM_TEMPERATURE`, 죽은 설정이었으나 이제 실제 적용)·`app.llm.direct-temperature`(Direct 전용, `DIRECT_LLM_TEMPERATURE`, 기본 0.1, `[0,0.2]` clamp)·`app.llm.max-tokens`(`LLM_MAX_TOKENS`, 기본 6000). 일반 temperature·max-tokens는 프로바이더 빈에 baked → 조회 전용(재기동); **direct-temperature만 `DirectAnswerService`가 매 호출 `props.llmSafe().directTemperature()`로 재조회 → 핫 수정**(블로킹은 `Prompt`의 `OpenAiChatOptions`, 스트리밍은 `ChatCompletionRequest` temperature로 주입). §6.13 `/settings`의 새 "LLM 튜닝" 그룹에 슬라이더(0.0~0.2)로 노출. max-tokens는 조회 전용 유지(표시만 정확화) — 스트리밍 채팅 답변은 32-arg 정식 생성자 취약성을 피해 미적용(SSE 타임아웃이 폭주 방지, 기존 동작과 동일). 회귀 테스트: `AppPropertiesOverrideTest`(direct-temperature override+clamp), `DirectAnswerServiceTest`(Prompt에 direct-temperature 실림).
->
-> **후속 — LLM_MAX_TOKENS 단일화 (2026-07-17 요청)**: `app.llm.max-tokens`(기본 6000, 실제 LLM 상한)와는 별개로 `MemoryService`(대화 컨텍스트 문자 예산)·`MarkdownCorrectionService`(MD 교정 섹션 크기)가 여전히 죽은 `spring.ai.openai.chat.options.max-tokens`(기본 8000, `@Value`로 직접 주입)를 읽고 있어 같은 환경변수 `LLM_MAX_TOKENS`에 서로 다른 기본값 2개가 걸려 있던 문제를 통일. 두 서비스 모두 `AppProperties` 주입으로 전환해 `props.llmSafe().maxTokens()`(6000)를 공유하도록 수정, `spring.ai.openai.chat.options.temperature`/`max-tokens` 프로퍼티 라인 자체를 `application.properties`에서 제거(어차피 `LlmConfig.primaryChatModel()`이 Spring AI의 `@ConditionalOnMissingBean(ChatModel.class)` 자동설정 빈 생성을 막아 두 값 모두 100% 죽은 설정이었음을 바이트코드로 확인). **동작 변경**: 대화 히스토리 문자 예산이 `8000×0.75=6000`자 → `6000×0.75=4500`자로, MD 교정 섹션 크기가 `(8000-500)/2=3750`자 → `(6000-500)/2=2750`자로 기본값이 줄어듦(과거 분량을 유지하려면 `LLM_MAX_TOKENS`를 올릴 것). `spring.ai.openai.api-key`/`base-url`/`chat.options.model` 3줄도 같은 이유로 죽은 설정임을 확인했으나 `app.llm.providers[0].*`와 값이 동일해(같은 env var) 이번엔 그대로 두고 주석으로만 표시 — 완전 제거는 별도 정리 대상.
+라우터 경로가 Spring AI 오토컨피규레이션을 우회해 `LLM_TEMPERATURE` 등 기존 환경변수가 전부 죽은 설정이던 문제 — `LlmConfig`/`AnswerService`/`DirectAnswerService`의 하드코딩 4곳을 제거하고 config 기반으로 전환. 신규 `app.llm.temperature`(일반/RAG)·`app.llm.direct-temperature`(Direct 전용, 기본 0.1, `[0,0.2]` clamp)·`app.llm.max-tokens`(기본 6000). **direct-temperature만 `DirectAnswerService`가 매 호출 재조회해 핫 수정**(블로킹은 `Prompt`, 스트리밍은 `ChatCompletionRequest`에 주입), §6.13 `/settings`에 슬라이더로 노출. 일반 temperature/max-tokens는 프로바이더 빈에 baked라 조회 전용(재기동 필요). 회귀 테스트: `AppPropertiesOverrideTest`·`DirectAnswerServiceTest`.
 
-**배경(착수 전 상태, 참고용)**: temperature는 `LLM_TEMPERATURE` 환경변수로 조정 가능해 보였으나, `LlmRouter`가 실제로 쓰는 provider `ChatModel`은 `LlmConfig.llmRouter()`가 기동 시점에 `.temperature(0.0)`을 하드코딩해 생성했다(Spring AI 오토컨피규레이션 빈은 라우터 경로에서 안 쓰여 `LLM_TEMPERATURE`가 죽은 설정이었음). Direct/RAG 구분 자체가 없었다. 해법은 하드코딩 제거 후 호출 시점 `Prompt`의 `ChatOptions`로 온도를 오버라이드(Spring AI는 `defaultOptions`보다 우선 적용)하는 방식 — 위 "완료 요약"에 반영된 결과가 최종 구현이다.
+**후속(2026-07-17)**: `MemoryService`(대화 컨텍스트 예산)·`MarkdownCorrectionService`(MD 교정 섹션 크기)가 여전히 죽은 `spring.ai.openai.chat.options.max-tokens`(기본 8000, `LLM_MAX_TOKENS`와 별개 기본값)를 읽던 중복을 발견해 `props.llmSafe().maxTokens()`(6000) 공유로 통일, 죽은 `application.properties` 라인 제거. **동작 변경**: 대화 히스토리 예산 6000→4500자, MD 교정 섹션 크기 3750→2750자로 기본값이 줄어듦(과거 분량을 유지하려면 `LLM_MAX_TOKENS` 상향).
 
 ---
 
@@ -345,18 +332,13 @@ no-auth 기본 배포에서 `/documents` 쓰기와 `/admin/**`이 로그인 없�
 
 ---
 
-### 6.21 소형(경량) LLM 분리 — 태스크별 모델 라우팅 + 멀티 LLM 처리량 확장 🟡 A·B·작업2·E1~E3·처리량확장 완료 (2026-07-19) — 실측만 후속
+### 6.21 소형(경량) LLM 분리 — 태스크별 모델 라우팅 + 멀티 LLM 처리량 확장 ✅ 완료 (2026-07-20)
 
-> **요청 배경**: 추론이 필요 없는 단순·고빈도 작업(요약·키워드 추출 등)을 500MB급 이하 소형 모델로 분리하고, 멀티 LLM 동시 사용으로 **대화 응답 + 임베딩 처리 속도**를 함께 끌어올린다.
->
-> **구현 현황 (2026-07-19)**: 신규 `TaskType.MICRO_TEXT`(잡무 전용, `LIGHT_TEXT`/`BOTH`에 폴백)를 도입해 추론 불필요 4개 백그라운드 호출부(키워드+맥락 추출·대화 요약·제목 생성·MultiQuery 쿼리 확장)를 재분류하고, 분류·직답은 품질 유지를 위해 큰 모델에 남김(B안+작업2). `application.properties`/`LLM_ROUTING.md`/`OPERATOR_MANUAL.md`에 설정 예시·매트릭스·런북(예제 6/7) 추가(A안). 임베딩도 `LoadBalancingEmbeddingModel`(다중 엔드포인트 least-in-flight)과 서브배치 병렬화로 처리량 확장(E1~E3), 대화 응답 쪽 다중 티어 로드밸런싱도 §6.12 재사용으로 문서화(처리량확장). **전부 opt-in·기본값 미변경 → 회귀 0**(소형/추가 엔드포인트 미등록 시 기존 동작 그대로 흡수). 테스트: `LlmProviderTest`(MICRO_TEXT supports 매트릭스)·`LoadBalancingEmbeddingModelTest` 신규 + 백그라운드 서비스 테스트 3건 갱신, 그린.
+추론이 필요 없는 고빈도 백그라운드 호출(키워드+맥락 추출·대화 요약·제목 생성·MultiQuery 확장)을 신규 `TaskType.MICRO_TEXT`(`LIGHT_TEXT`/`BOTH`에 폴백)로 분리해 500MB급 소형 로컬 모델로 오프로딩 — 분류·직답은 품질 유지를 위해 큰 모델에 남김. 임베딩은 `LoadBalancingEmbeddingModel`(다중 엔드포인트 least-in-flight)+서브배치 병렬화로 처리량 확장, 대화 응답 쪽 로드밸런싱은 §6.12 재사용. **전부 opt-in(소형/추가 엔드포인트 미등록 시 기존 동작 그대로) → 회귀 0**. 설정·런북: [LLM_ROUTING.md §9](LLM_ROUTING.md) · [OPERATOR_MANUAL §3.2·§5.4](OPERATOR_MANUAL.md). 테스트: `LlmProviderTest`·`LoadBalancingEmbeddingModelTest` 신규 + 백그라운드 서비스 테스트 3건 갱신.
 
-**메커니즘·설정 상세**: [LLM_ROUTING.md §9](LLM_ROUTING.md)(태스크별 모델 분리 표·폴백·`supports()` 매핑) · [OPERATOR_MANUAL §3.2 "임베딩 병렬화"·§5.4 예제 6/7](OPERATOR_MANUAL.md)(임베딩 다중 엔드포인트 + 소형·대형 2-인스턴스 토폴로지 + 두 티어 각각 수평 확장 런북).
+**실측 게이트 — 부분 검증으로 종료 (2026-07-20)**: 라이브 듀얼티어(local-fast=Qwen3.5-0.8B/MICRO_TEXT + local=gemma-4-E4B/TEXT)로 §10.7.5 하네스 실행 — 색인된 문서(batch 골든셋 6건) 전부 recall@10=1.0으로 **소형 모델 라우팅이 검색 품질을 회귀시키지 않음을 확인**. 전체 baseline(0.962) 정식 대조는 현재 코퍼스에 arch/sample 문서가 미색인이라 보류(§6.21과 무관한 코퍼스 갭, 원인 상세는 git 이력 참조) — 재색인 후 `mvn test -Dtest=SearchQualityEvaluationTest -Dsearch-eval.enabled=true`로 언제든 재현 가능.
 
-**남은 후속 (미착수)**:
-1. **실측 게이트** — §10.7.5 평가 하네스(recall@10 baseline 0.962)로 소형 모델의 요약·쿼리확장 품질 회귀 측정. 공격적 A안(`type=LIGHT_TEXT`로 분류·직답까지 소형) 적용 시 분류 정확도 회귀도 함께 확인 후 채택/확대 결정. 임베딩 다중 엔드포인트(E1)·병렬 서브배치(E2)의 실제 처리량 이득도 배포 환경에서 실측.
-
-**주의**: 소형+대형 동시 상주 VRAM/RAM은 500MB급이라 부담이 작지만 co-located면 합산 확인(E3로 완화). 임베딩 다중 엔드포인트(E1)는 모두 **동일 모델·차원**이어야 한다(섞으면 인덱스 손상). sqlite-vec의 E2는 §10.9.3 스트리밍 삽입 메모리 상한을 속도와 맞바꾸므로 opt-in이다.
+**주의**: 소형+대형 동시 상주 VRAM/RAM은 500MB급이라 부담이 작지만 co-located면 합산 확인. 임베딩 다중 엔드포인트는 동일 모델·차원이어야 한다(섞으면 인덱스 손상). sqlite-vec 스트리밍 삽입은 §10.9.3 메모리 상한과 속도의 트레이드오프라 opt-in이다.
 
 ---
 

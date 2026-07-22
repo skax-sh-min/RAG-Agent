@@ -23,7 +23,7 @@ public class MemoryService {
     // (default 8000), which config'd nothing (Spring AI's autoconfigured ChatModel bean is skipped
     // since LlmConfig.primaryChatModel() already satisfies its @ConditionalOnMissingBean).
     public MemoryService(MemoryRepository repository, AppProperties props) {
-        this.maxConversationChars = Math.max(1_000, props.llmSafe().maxTokens() * 3 / 4);
+        this.maxConversationChars = Math.max(1_000, props.llmSafe().maxTokens() / 2);
         this.repository = repository;
     }
 
@@ -32,7 +32,7 @@ public class MemoryService {
     }
 
     /**
-     * Char budget applied to conversation history (LLM_MAX_TOKENS × 0.75, floor 1,000).
+     * Char budget applied to conversation history (LLM_MAX_TOKENS × 0.5, floor 1,000).
      * Exposed so the summary path ({@code ConversationSummarizerService.buildContext()}) can
      * respect the exact same ceiling as this fallback path — single source of truth (§6.11).
      */
@@ -54,6 +54,16 @@ public class MemoryService {
 
     public List<MemoryRepository.Turn> getTurns(String userId, String threadId) {
         return repository.getTurns(userId, threadId);
+    }
+
+    /**
+     * Same as {@link #getTurns}, capped to the most recent {@code app.memory.fetch-limit-turns}
+     * turns. Use this instead of {@link #getTurns} for anything that feeds the result into an LLM
+     * call (e.g. {@code ConversationSummarizerService}) — {@link #getTurns} is unbounded and only
+     * safe for UI-only uses (like restoring a thread's full message history on page load).
+     */
+    public List<MemoryRepository.Turn> getRecentTurns(String userId, String threadId) {
+        return repository.getRecentTurns(userId, threadId);
     }
 
     public Optional<MemoryRepository.FeedbackRow> getFeedback(String userId, String threadId, long turnId) {

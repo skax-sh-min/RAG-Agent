@@ -22,10 +22,10 @@ import java.util.stream.Stream;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * QA — PdfToMarkdownConverter: one [페이지: N] marker + synthetic "## N페이지" heading per
- * non-blank page, page numbers matching the true (1-based) page index even when earlier pages
- * were blank and skipped, inline [이미지: ...] markers per page (like DOCX — image_paths
- * metadata is promoted downstream by loadFromMarkdown()).
+ * QA — PdfToMarkdownConverter: one [페이지: N] marker per non-blank page (the marker is the
+ * section boundary — no synthetic "## N페이지" heading), page numbers matching the true (1-based)
+ * page index even when earlier pages were blank and skipped, inline [이미지: ...] markers per page
+ * (like DOCX — image_paths metadata is promoted downstream by loadFromMarkdown()).
  */
 class PdfToMarkdownConverterTest {
 
@@ -91,7 +91,7 @@ class PdfToMarkdownConverterTest {
     }
 
     @Test
-    @DisplayName("페이지마다 [페이지: N] 마커와 페이지 헤딩이 순서대로 생성된다")
+    @DisplayName("페이지마다 [페이지: N] 마커가 순서대로 생성되고, 합성 페이지 헤딩은 넣지 않는다")
     void multiplePagesGetOrderedPageMarkers() throws IOException {
         writeBlankPdf(3);
         List<Document> pages = List.of(
@@ -107,7 +107,8 @@ class PdfToMarkdownConverterTest {
         assertThat(idx1).isGreaterThanOrEqualTo(0);
         assertThat(idx2).isGreaterThan(idx1);
         assertThat(idx3).isGreaterThan(idx2);
-        assertThat(md).contains("## 1페이지").contains("## 2페이지").contains("## 3페이지");
+        // 합성 "## N페이지" 헤딩은 더 이상 넣지 않는다 — [페이지: N] 마커가 섹션 경계 역할을 겸한다.
+        assertThat(md).doesNotContain("## 1페이지").doesNotContain("## 2페이지").doesNotContain("## 3페이지");
         assertThat(md).contains("첫 페이지 내용").contains("둘째 페이지 내용").contains("셋째 페이지 내용");
     }
 
@@ -124,8 +125,8 @@ class PdfToMarkdownConverterTest {
 
         assertThat(md).doesNotContain("[페이지: 2]");
         assertThat(md).contains("[페이지: 1]");
-        assertThat(md).contains("[페이지: 3]");
-        assertThat(md).contains("## 3페이지"); // real page index, not a re-numbered "2페이지"
+        assertThat(md).contains("[페이지: 3]"); // real page index, not a re-numbered "[페이지: 2]"
+        assertThat(md).doesNotContain("## 3페이지");
     }
 
     @Test
@@ -149,7 +150,7 @@ class PdfToMarkdownConverterTest {
     }
 
     @Test
-    @DisplayName("텍스트 없이 이미지만 있는 페이지도 건너뛰지 않고 헤딩 + [이미지: ...] 마커를 받는다")
+    @DisplayName("텍스트 없이 이미지만 있는 페이지도 건너뛰지 않고 [페이지: N] + [이미지: ...] 마커를 받는다")
     void pageWithOnlyImageIsNotSkippedAndGetsImageMarker() throws IOException {
         writePdfWithImageOnPage(1, 0);
         List<Document> pages = List.of(new Document("   ", Map.of())); // no extractable text, image only
@@ -157,24 +158,24 @@ class PdfToMarkdownConverterTest {
         String md = convert(pages);
 
         assertThat(md).contains("[페이지: 1]");
-        assertThat(md).contains("## 1페이지");
+        assertThat(md).doesNotContain("## 1페이지");
         assertThat(md).contains("[이미지: images/doc1/p1_img1.png]");
         assertThat(Files.exists(imagesDir.resolve("p1_img1.png"))).isTrue();
     }
 
     @Test
-    @DisplayName("텍스트와 이미지가 모두 있는 페이지는 헤딩 다음 이미지 마커, 그다음 본문 순서로 나온다")
+    @DisplayName("텍스트와 이미지가 모두 있는 페이지는 [페이지: N] 다음 이미지 마커, 그다음 본문 순서로 나온다")
     void pageWithTextAndImageOrdersImageMarkerBeforeText() throws IOException {
         writePdfWithImageOnPage(1, 0);
         List<Document> pages = List.of(new Document("페이지 본문 내용", Map.of()));
 
         String md = convert(pages);
 
-        int headingIdx = md.indexOf("## 1페이지");
+        int pageMarkerIdx = md.indexOf("[페이지: 1]");
         int imageIdx = md.indexOf("[이미지:");
         int textIdx = md.indexOf("페이지 본문 내용");
-        assertThat(headingIdx).isGreaterThanOrEqualTo(0);
-        assertThat(imageIdx).isGreaterThan(headingIdx);
+        assertThat(pageMarkerIdx).isGreaterThanOrEqualTo(0);
+        assertThat(imageIdx).isGreaterThan(pageMarkerIdx);
         assertThat(textIdx).isGreaterThan(imageIdx);
     }
 }

@@ -18,7 +18,12 @@ public record SettingsView(
         List<SettingGroup> groups
 ) {
 
-    /** One registered chat/vision LLM provider. API keys are never included (only a configured flag). */
+    /**
+     * One registered chat/vision LLM provider. API keys are never included (only a configured flag).
+     *
+     * @param enabled false when an operator has disabled this provider at runtime (§A) — routing skips
+     *                it until re-enabled or the app restarts (the toggle is in-memory/volatile)
+     */
     public record ProviderRow(
             String name,
             String role,
@@ -26,7 +31,8 @@ public record SettingsView(
             String model,
             boolean configured,
             boolean blocked,
-            String blockedUntil
+            String blockedUntil,
+            boolean enabled
     ) {}
 
     /** A titled group of settings on the page (e.g. "검색 튜닝 (핫 수정)"). */

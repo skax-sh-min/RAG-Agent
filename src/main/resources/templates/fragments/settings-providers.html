@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<body>
+
+<!-- ── LLM providers table ─────────────────────────────────────────────────────
+     Rendered inline by settings.html and returned whole by
+     POST /admin/settings/provider/toggle (hx-target=#llm-providers, hx-swap=outerHTML),
+     so a name-shared load-balanced pair updates together. `isAdmin` comes from GlobalModelAdvice. -->
+<div th:fragment="providers(providers)" id="llm-providers" class="table-responsive">
+    <table class="table table-sm mb-0 align-middle">
+        <thead class="table-light">
+        <tr>
+            <th class="ps-3" th:text="#{settings.col.provider}">Provider</th>
+            <th th:text="#{settings.col.role}">Role</th>
+            <th class="text-end" th:text="#{settings.col.priority}">Priority</th>
+            <th th:text="#{settings.col.model}">Model</th>
+            <th th:text="#{settings.col.key}">API Key</th>
+            <th th:text="#{settings.col.status}">Status</th>
+            <th class="pe-3" th:text="#{settings.col.enabled}">Enabled</th>
+        </tr>
+        </thead>
+        <tbody>
+        <tr th:each="p, iter : ${providers}" th:classappend="${!p.enabled} ? 'opacity-50'">
+            <td class="ps-3 fw-semibold" th:text="${p.name}">local</td>
+            <td><span class="badge bg-secondary" th:text="${p.role}">LOCAL</span></td>
+            <td class="text-end" th:text="${p.priority}">0</td>
+            <td class="small" th:text="${p.model}">model</td>
+            <td>
+                <span th:if="${p.configured}" class="badge bg-success"
+                      th:text="#{settings.key.set}">set</span>
+                <span th:unless="${p.configured}" class="badge bg-light text-dark border"
+                      th:text="#{settings.key.none}">none</span>
+            </td>
+            <td>
+                <span th:if="${p.blocked}" class="badge bg-danger"
+                      th:text="#{llm.status.blocked}">Blocked</span>
+                <span th:unless="${p.blocked}" class="badge bg-success"
+                      th:text="#{llm.status.normal}">Normal</span>
+            </td>
+            <td class="pe-3">
+                <!-- name travels with the toggle button via hx-include; unique id avoids clashes
+                     when a load-balanced pair shares a name -->
+                <input type="hidden" th:id="'prov-' + ${iter.index}" name="name" th:value="${p.name}"/>
+                <span th:if="${p.enabled}" class="badge bg-success-subtle text-success-emphasis border border-success-subtle"
+                      th:text="#{settings.status.enabled}">Enabled</span>
+                <span th:unless="${p.enabled}" class="badge bg-secondary"
+                      th:text="#{settings.status.disabled}">Disabled</span>
+
+                <button th:if="${isAdmin and p.enabled}" type="button"
+                        class="btn btn-sm btn-outline-danger ms-2"
+                        hx-post="/admin/settings/provider/toggle" hx-vals='{"enabled": false}'
+                        th:attr="hx-include='#prov-' + ${iter.index}"
+                        hx-target="#llm-providers" hx-swap="outerHTML"
+                        th:text="#{settings.btn.disable}">Disable</button>
+                <button th:if="${isAdmin and !p.enabled}" type="button"
+                        class="btn btn-sm btn-outline-success ms-2"
+                        hx-post="/admin/settings/provider/toggle" hx-vals='{"enabled": true}'
+                        th:attr="hx-include='#prov-' + ${iter.index}"
+                        hx-target="#llm-providers" hx-swap="outerHTML"
+                        th:text="#{settings.btn.enable}">Enable</button>
+            </td>
+        </tr>
+        <tr th:if="${providers.isEmpty()}">
+            <td colspan="7" class="text-center text-muted py-3" th:text="#{llm.no.providers}">
+                No providers configured.
+            </td>
+        </tr>
+        </tbody>
+    </table>
+</div>
+
+</body>
+</html>
