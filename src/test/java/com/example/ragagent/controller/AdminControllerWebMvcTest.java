@@ -185,4 +185,41 @@ class AdminControllerWebMvcTest {
         mvc.perform(delete("/admin/curated/99").with(user(ADMIN)).with(csrf()))
                 .andExpect(status().isNotFound());
     }
+
+    // ── 청크 재인덱싱 (재임베딩 + FTS 재색인) ──────────────────────────────────
+
+    @Test
+    @DisplayName("POST /admin/chunks/{id}/reindex — 본문 없이 호출해도 regenerateKeywords=false로 처리(200)")
+    void reindexChunk_noBody_defaultsToKeepKeywords() throws Exception {
+        when(adminService.reindexChunk(anyString(), anyString(), org.mockito.ArgumentMatchers.eq(false)))
+                .thenReturn(true);
+
+        mvc.perform(post("/admin/chunks/c1/reindex").with(user(ADMIN)).with(csrf())
+                        .param("collection", "manual_latest"))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("POST /admin/chunks/{id}/reindex — regenerateKeywords=true가 서비스로 그대로 전달됨")
+    void reindexChunk_regenerateKeywordsTrue_passedThrough() throws Exception {
+        when(adminService.reindexChunk(anyString(), anyString(), org.mockito.ArgumentMatchers.eq(true)))
+                .thenReturn(true);
+
+        mvc.perform(post("/admin/chunks/c1/reindex").with(user(ADMIN)).with(csrf())
+                        .param("collection", "manual_latest")
+                        .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                        .content("{\"regenerateKeywords\":true}"))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("POST /admin/chunks/{id}/reindex — 청크가 없거나 재색인 실패 시 404")
+    void reindexChunk_failure_returns404() throws Exception {
+        when(adminService.reindexChunk(anyString(), anyString(), org.mockito.ArgumentMatchers.anyBoolean()))
+                .thenReturn(false);
+
+        mvc.perform(post("/admin/chunks/missing/reindex").with(user(ADMIN)).with(csrf())
+                        .param("collection", "manual_latest"))
+                .andExpect(status().isNotFound());
+    }
 }

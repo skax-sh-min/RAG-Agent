@@ -1798,6 +1798,7 @@ mvn test -Dtest=SearchQualityEvaluationTest -Dsearch-eval.enabled=true
 | 컬렉션·버전 목록 | chroma=컬렉션별 / sqlite-vec=버전별 청크 수 표시 (클릭 시 청크 조회) |
 | 청크 조회 | 컬렉션(또는 버전)·문서(docId)별 청크 페이지네이션 (50건 단위) — ID·텍스트 미리보기·크기·파일명·페이지/슬라이드·**챕터**·키워드·작업 컬럼. 챕터 컬럼은 `MetaKey.CHAPTER_NO`(H2~H6 헤딩 기반 계층 번호)를 보여주며 "0"(실제 챕터 없음)이면 빈 칸으로 표시 |
 | 청크 편집 | 텍스트·메타데이터 수정 (원본 임베딩 유지 — 벡터 재계산 안 함) |
+| 청크 재인덱싱 | 편집 패널의 **이 청크만 재인덱싱** 버튼(`AdminService.reindexChunk()`) — 저장된 텍스트 기준으로 그 청크만 재임베딩 + FTS 재색인(id 보존, upsert). "키워드 재생성" 체크 시 `KeywordExtractor`를 그 청크에만 다시 실행(LLM 1회) |
 | 청크 삭제 | 개별 청크 즉시 제거. sqlite-vec는 `vec_document_chunks`+`vec_embeddings` 두 테이블 동기 삭제 |
 | 문서 레지스트리 | 인덱싱된 전체 문서 목록 + 문서별 청크 바로 조회 (백엔드 무관, SQLite `doc_registry` 기반) |
 | MD 재인덱싱 (↺ 버튼) | `{docId}_corrected.md`(없으면 `{docId}.md`)를 읽어 청크 재생성·재인덱싱 — DOCX·TXT·PPTX·PDF(스캔 아님) 지원, 원본 재업로드 불필요 (스캔 PDF는 MD 파일이 없어 미지원) |
@@ -1812,9 +1813,19 @@ mvn test -Dtest=SearchQualityEvaluationTest -Dsearch-eval.enabled=true
 
 > **API 직접 호출**: `POST /admin/documents/{docId}/reindex`
 
+### 7.2-bis 청크 단위 재인덱싱 (`POST /admin/chunks/{chunkId}/reindex`)
+
+문서 전체 재인덱싱 없이 **청크 하나만** 재임베딩·FTS 재색인합니다. Body: `{"regenerateKeywords": true|false}`(생략 시 `false`).
+
+- **동작**: 벡터 스토어 id를 그대로 유지한 채 upsert합니다(Chroma: `upsertEmbeddings`가 같은 id를 덮어씀 / sqlite-vec: `add()`가 같은 id를 delete-then-insert) — 새 청크가 생기는 게 아니라 기존 청크가 그 자리에서 갱신됩니다.
+- **`regenerateKeywords=false`(기본)**: 현재 저장된 `excerpt_keywords` 등 메타데이터를 그대로 두고, 현재 텍스트로만 재임베딩 + FTS 재색인합니다. LLM 호출 없음, 즉시 처리. 단, `chunk_context`(LLM이 생성한 1~2문장 맥락)는 §10.1 설계상 애초에 영속 저장되지 않으므로 "그대로 유지"할 방법이 없고, 이 경로에서는 구조적 맥락(`"{파일명} > {헤딩}"`)만으로 임베딩/FTS 입력이 구성됩니다.
+- **`regenerateKeywords=true`**: 이 청크에 한해 `KeywordExtractor`를 다시 실행해(LLM 1회, TF 타임아웃 폴백 동일 적용) `excerpt_keywords`/`chunk_context`를 재생성한 뒤 그 결과로 재임베딩·재색인합니다. 문서 전체 ↺ 재인덱싱과 동일한 품질을 청크 단위로 얻을 수 있습니다.
+- **동기 처리**: 청크 1개 단위라 문서 재인덱싱(SSE 진행률 추적)과 달리 응답이 올 때까지 대기합니다.
+- 존재하지 않는 청크이거나 임베딩 API 호출이 실패하면 404를 반환하고, 이 경우 FTS 재색인은 시도하지 않습니다(부분 반영 방지).
+
 ### 7.3 주의사항
 
-- **임베딩 미갱신 (청크 편집)**: 청크 텍스트를 편집 패널에서 수정해도 벡터 임베딩은 재계산되지 않습니다. 임베딩까지 갱신하려면 MD 파일 수정 후 ↺ 재인덱싱을 사용하세요.
+- **임베딩 미갱신 (청크 편집만)**: 청크 텍스트를 편집 패널의 "저장" 버튼으로만 수정하면 벡터 임베딩과 FTS 키워드 인덱스가 재계산되지 않습니다. 검색에도 반영하려면 위 §7.2-bis "이 청크만 재인덱싱" 버튼을 사용하거나, 문서 전체를 갱신하려면 MD 파일 수정 후 ↺ 재인덱싱을 사용하세요.
 - **MD 재인덱싱 대상**: DOCX·TXT·PPTX·PDF(스캔 아님) 업로드 시 생성된 `_corrected.md` 파일이 없으면 `{docId}.md` 원본으로 fallback됩니다. 스캔 PDF처럼 MD 파일 자체가 없는 문서는 재인덱싱 불가 (에러 메시지 표시).
 - **소제목 번호 재검증**: 재인덱싱 시 저장된 MD에 이미 번호 매겨진 헤딩이 있으면 현재 헤딩 구조 기준으로 다시 계산해 파일에도 반영합니다(PPTX 제외 — [§3.3 소제목 숫자 생성](#33-applicationproperties-전용-설정) 참고). 번호가 원래 없던 문서에는 새로 번호를 붙이지 않습니다.
 - **마크다운 후처리 재적용**: 재인덱싱 시 결정적(비-LLM) 정리도 다시 적용됩니다 — `[DOCUMENT]` 마커·내용 없는 `-` 줄 제거, 코드 블록·표 앞뒤 빈 줄 보장, 연속 빈 줄을 1개로 축소(모든 형식 대상, PPTX 포함). 코드펜스 언어 보정(`fixClosingFences`/`normalizeCodeBlocks`)은 재인덱싱에 **포함되지 않습니다** — MD를 직접 편집한 뒤 재인덱싱하면 코드 블록 안의 의도된 빈 줄이 지워지거나 펜스 태그가 잘못 벗겨질 위험이 있어, 매번 감수하지 않고 필요할 때(재업로드)만 적용되도록 남겨둔 설계입니다. 상세는 [PIPELINE.md §6.4](PIPELINE.md#64-문서-타입별-처리-상세) 참고.

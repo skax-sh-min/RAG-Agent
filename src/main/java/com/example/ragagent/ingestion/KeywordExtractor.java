@@ -113,6 +113,18 @@ public class KeywordExtractor {
         return out;
     }
 
+    /**
+     * Public entry point for re-extracting keywords+context for a single ALREADY-INDEXED chunk
+     * (e.g. {@code AdminService.reindexChunk()}'s "키워드 재생성" option) — same LLM call + TF
+     * timeout fallback as indexing, just without {@link #enrichParallel}'s batch/progress wiring.
+     * The returned Document's id is unrelated to {@code chunk}'s (see {@link #enrichKeywords}) —
+     * callers care only about its {@link MetaKey#EXCERPT_KEYWORDS}/{@link MetaKey#CHUNK_CONTEXT}
+     * metadata, not its identity.
+     */
+    public Document enrichSingle(Document chunk) {
+        return enrichKeywords(chunk);
+    }
+
     Document enrichKeywords(Document chunk) {
         // Wrap in [DOCUMENT] tags so LLM cannot treat file content as a prompt instruction.
         String safeText = stripKeywordNoise(chunk.getText()).replace("[/DOCUMENT]", "");

@@ -1,6 +1,11 @@
 package com.example.ragagent.service;
 
 import com.example.ragagent.config.AppProperties;
+import com.example.ragagent.ingestion.DocRegistry;
+import com.example.ragagent.ingestion.KeywordExtractor;
+import com.example.ragagent.ingestion.KeywordSearchRepository;
+import com.example.ragagent.ingestion.SearchTextBuilder;
+import com.example.ragagent.ingestion.VectorStoreFacade;
 import com.example.ragagent.model.MetaKey;
 import com.example.ragagent.model.VectorStoreAdminView;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -15,6 +20,7 @@ import org.springframework.ai.chroma.vectorstore.ChromaApi.GetEmbeddingResponse;
 import org.springframework.ai.chroma.vectorstore.ChromaApi.GetEmbeddingsRequest;
 import org.springframework.ai.chroma.vectorstore.ChromaApi.QueryRequest.Include;
 import org.springframework.ai.chroma.vectorstore.common.ChromaApiConstants;
+import org.springframework.ai.document.Document;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -40,6 +46,9 @@ public class AdminService {
     private final JdbcTemplate jdbc;
     private final AppProperties props;
     private final ObjectMapper objectMapper;
+    private final VectorStoreFacade vectorStore;
+    private final KeywordSearchRepository keywordRepo;
+    private final KeywordExtractor keywordExtractor;
 
     // shown on /admin to disambiguate operational vs vector DB files. Field-injected
     // (not constructor) so unit tests that build AdminService directly stay unaffected (null → hidden).
@@ -50,11 +59,16 @@ public class AdminService {
 
     // vec_document_chunks/vec_embeddings live with the vector tables → same template as the provider.
     public AdminService(Optional<ChromaApi> chromaApi, @Qualifier("vectorJdbcTemplate") JdbcTemplate jdbc,
-                        AppProperties props, ObjectMapper objectMapper) {
+                        AppProperties props, ObjectMapper objectMapper,
+                        VectorStoreFacade vectorStore, KeywordSearchRepository keywordRepo,
+                        KeywordExtractor keywordExtractor) {
         this.chromaApi = chromaApi.orElse(null);
         this.jdbc = jdbc;
         this.props = props;
         this.objectMapper = objectMapper;
+        this.vectorStore = vectorStore;
+        this.keywordRepo = keywordRepo;
+        this.keywordExtractor = keywordExtractor;
     }
 
     /** Active backend is sqlite-vec? Null-safe so unit tests with mocked props don't NPE. */
@@ -77,7 +91,7 @@ public class AdminService {
             String v = metadata.getOrDefault(MetaKey.CHAPTER_NO, "");
             return "0".equals(v) ? "" : v;
         }
-        public String keywords()  { return metadata.getOrDefault("excerpt_keywords", ""); }
+        public String keywords()  { return metadata.getOrDefault(MetaKey.EXCERPT_KEYWORDS, ""); }
         public int chunkSize()    { return fullText == null ? 0 : fullText.length(); }
     }
 
@@ -304,6 +318,58 @@ public class AdminService {
         } catch (Exception e) {
             log.error("updateChunk upsert failed id={}: {}", chunkId, e.getMessage());
         }
+    }
+
+    /**
+     * Re-embeds and re-indexes (FTS) a single chunk IN PLACE — the chunk's own id is preserved,
+     * so this overwrites the existing vector/row rather than creating a duplicate (Chroma:
+     * {@code upsertEmbeddings} by id; sqlite-vec: {@code add()} deletes-then-inserts by id, see
+     * {@code SqliteVecVectorStoreProvider}). Unlike {@link #updateChunk} (metadata/text-only, the
+     * original embedding is kept verbatim), this calls the real embedding API against the chunk's
+     * CURRENT stored text — so a prior {@link #updateChunk} text edit now actually participates in
+     * vector search, and the keyword (BM25) axis is refreshed too (which {@link #updateChunk} never
+     * touches at all).
+     *
+     * @param regenerateKeywords false — keep the chunk's current {@code excerpt_keywords}/other
+     *        metadata as-is (e.g. a value the operator just hand-edited via {@link #updateChunk})
+     *        and only re-embed + re-index FTS against the current text. No LLM call, immediate.
+     *        Note: {@link MetaKey#CHUNK_CONTEXT} (the LLM-authored 1-2 sentence summary) is never
+     *        persisted (§10.1 — stripped before storage in both providers), so it can't be "kept"
+     *        either way; this path's embedding/FTS input falls back to the structural-only context
+     *        ({@code "{filename} > {heading}"}) until a {@code true} call regenerates it.
+     *        true — re-run {@link KeywordExtractor} for just this chunk first (one LLM call,
+     *        same TF-timeout-fallback as indexing) to regenerate {@code excerpt_keywords}/
+     *        {@code chunk_context} from the current text, THEN re-embed + re-index with that result
+     *        — mirrors document-level {@code ↺ 재인덱싱} quality for a single chunk.
+     * @return false if the chunk doesn't exist or the vector-store/FTS write failed.
+     */
+    public boolean reindexChunk(String collectionName, String chunkId, boolean regenerateKeywords) {
+        ChunkRow row = getChunk(collectionName, chunkId);
+        if (row == null) {
+            log.warn("reindexChunk — chunk not found id={}", chunkId);
+            return false;
+        }
+
+        Map<String, Object> meta = new HashMap<>(row.metadata());
+        if (regenerateKeywords) {
+            Document reEnriched = keywordExtractor.enrichSingle(new Document(row.fullText(), meta));
+            meta.put(MetaKey.EXCERPT_KEYWORDS, reEnriched.getMetadata().get(MetaKey.EXCERPT_KEYWORDS));
+            meta.put(MetaKey.CHUNK_CONTEXT, reEnriched.getMetadata().get(MetaKey.CHUNK_CONTEXT));
+        }
+
+        // §10.8.5 — precompute once so vectorStore.add()/keywordRepo.indexChunks() below both reuse
+        // the same derived (context+normalized) text instead of each recomputing it independently.
+        Document doc = SearchTextBuilder.precompute(new Document(chunkId, row.fullText(), meta));
+        try {
+            vectorStore.add(DocRegistry.SHARED, row.metadata().get(MetaKey.VERSION), List.of(doc));
+        } catch (Exception e) {
+            log.error("reindexChunk embed failed id={}: {}", chunkId, e.getMessage());
+            return false;
+        }
+        keywordRepo.deleteBySpringDocIds(List.of(chunkId));
+        keywordRepo.indexChunks(List.of(doc));
+        log.info("[ADMIN] chunk reindexed id={} regenerateKeywords={}", chunkId, regenerateKeywords);
+        return true;
     }
 
     // ── sqlite-vec chunk browsing ────────────────────────────

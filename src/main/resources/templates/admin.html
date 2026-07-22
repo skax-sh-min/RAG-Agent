@@ -140,7 +140,7 @@
     <div class="row g-4">
 
         <!-- ── Left: Collections / Versions ────────────────────────────── -->
-        <div class="col-md-4 col-lg-3">
+        <div class="col-md-3 col-lg-2">
             <div class="card h-100">
                 <div class="card-header d-flex align-items-center justify-content-between py-2">
                     <span class="fw-semibold small">
@@ -179,7 +179,7 @@
         </div>
 
         <!-- ── Right: Chunk Panel ─────────────────────────────────────── -->
-        <div class="col-md-8 col-lg-9 position-relative">
+        <div class="col-md-9 col-lg-10 position-relative">
 
             <!-- Loading spinner -->
             <div id="chunk-spinner"
@@ -341,7 +341,22 @@ function openChunkEdit(chunkId, collection) {
                 </div>
                 <button class="btn btn-primary btn-sm" onclick="saveChunkEdit('${escAttr(chunkId)}', '${escAttr(collection)}')">
                     <i class="bi bi-save me-1"></i>저장
-                </button>`;
+                </button>
+                <hr class="my-1">
+                <div>
+                    <div class="form-check form-switch">
+                        <input class="form-check-input" type="checkbox" id="edit-regen-keywords">
+                        <label class="form-check-label small" for="edit-regen-keywords">키워드 재생성 (LLM 1회 호출)</label>
+                    </div>
+                    <div class="form-text small">
+                        저장된(위 "저장" 버튼으로 반영한) 텍스트 기준으로 재임베딩 + 키워드 검색(FTS) 인덱스를 다시 만듭니다.
+                        체크 해제 시 현재 키워드를 그대로 두고 재임베딩·FTS만 갱신합니다(LLM 미사용, 즉시).
+                    </div>
+                    <button class="btn btn-outline-warning btn-sm mt-2" id="reindex-chunk-btn"
+                            onclick="reindexChunkInline('${escAttr(chunkId)}', '${escAttr(collection)}')">
+                        <i class="bi bi-arrow-repeat me-1"></i>이 청크만 재인덱싱
+                    </button>
+                </div>`;
             new bootstrap.Offcanvas(document.getElementById('editOffcanvas')).show();
         })
         .catch(() => showToast('청크 정보를 불러올 수 없습니다.', 'danger'));
@@ -365,6 +380,34 @@ function saveChunkEdit(chunkId, collection) {
         } else { showToast('저장 실패', 'danger'); }
     })
     .catch(() => showToast('저장 중 오류 발생', 'danger'));
+}
+
+// 이 청크만 재임베딩 + FTS 재색인 — "저장"(텍스트/메타만 갱신, 벡터·FTS는 그대로)과 달리 실제
+// 임베딩 API를 호출해 검색에 반영한다. 키워드 재생성 체크 시 LLM 1회 추가 호출.
+function reindexChunkInline(chunkId, collection) {
+    const regenerate = document.getElementById('edit-regen-keywords').checked;
+    const btn = document.getElementById('reindex-chunk-btn');
+    const originalHtml = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>재인덱싱 중...';
+
+    fetch('/admin/chunks/' + encodeURIComponent(chunkId) + '/reindex?collection=' + encodeURIComponent(collection), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...getCsrfHeaders() },
+        body: JSON.stringify({ regenerateKeywords: regenerate })
+    })
+    .then(r => {
+        if (!r.ok) { showToast('재인덱싱 실패', 'danger'); return null; }
+        showToast('청크가 재인덱싱되었습니다.', 'success');
+        // 키워드 재생성 시 메타데이터(excerpt_keywords 등)가 서버에서 바뀌었으므로 패널에 다시 반영
+        return fetch('/admin/chunks/' + encodeURIComponent(chunkId) + '/detail?collection=' + encodeURIComponent(collection))
+                .then(r2 => r2.ok ? r2.json() : null);
+    })
+    .then(data => {
+        if (data) document.getElementById('edit-meta').value = JSON.stringify(data.metadata, null, 2);
+    })
+    .catch(() => showToast('재인덱싱 중 오류 발생', 'danger'))
+    .finally(() => { btn.disabled = false; btn.innerHTML = originalHtml; });
 }
 
 function deleteChunkInline(chunkId, collection, row) {

@@ -119,6 +119,23 @@ public class AdminController {
         return ResponseEntity.ok().build();
     }
 
+    /**
+     * Re-embed + re-index (FTS) a single chunk against its current stored text — unlike
+     * {@link #updateChunk}, this actually calls the embedding API (and optionally the keyword-
+     * extraction LLM) so search results reflect a prior text/keyword edit. Synchronous: single-chunk
+     * cost is low enough that the admin button can just wait for the result (contrast with the
+     * document-level {@code /admin/documents/{docId}/reindex}, which is async + SSE-tracked).
+     */
+    @PostMapping("/admin/chunks/{chunkId}/reindex")
+    @ResponseBody
+    public ResponseEntity<Void> reindexChunk(@PathVariable String chunkId,
+                                              @RequestParam String collection,
+                                              @RequestBody(required = false) Map<String, Object> body) {
+        boolean regenerateKeywords = body != null && Boolean.TRUE.equals(body.get("regenerateKeywords"));
+        boolean ok = adminService.reindexChunk(collection, chunkId, regenerateKeywords);
+        return ok ? ResponseEntity.ok().build() : ResponseEntity.notFound().build();
+    }
+
     // ── §10.10 Curated Q&A moderation ───────────────────────────────────────────
 
     /** Get full curated entry data for the edit panel. */
