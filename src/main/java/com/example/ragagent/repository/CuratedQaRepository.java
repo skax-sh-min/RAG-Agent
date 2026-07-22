@@ -124,6 +124,24 @@ public class CuratedQaRepository {
         return rows.isEmpty() ? Optional.empty() : Optional.of(rows.get(0));
     }
 
+    /** §10.10 step ④ — updates the answer text only (question/status/version untouched). No-op
+     *  if the row doesn't exist. Callers re-embed separately (this is a pure storage write). */
+    public void updateAnswer(long id, String answer) {
+        jdbc.update("UPDATE curated_qa SET answer=?, updated_at=? WHERE id=?", answer, now(), id);
+    }
+
+    /** §10.10 step ④ — admin curated-Q&A browser listing, most recently created first. Only
+     *  {@code active} rows (the ones actually contributing to search) — a deactivated entry is
+     *  already out of the index and not actionable from this view. {@code id DESC} as a tiebreaker
+     *  since {@code created_at} only has second-level precision (two rows upserted within the same
+     *  second would otherwise tie). */
+    public List<CuratedQa> findAllActive(int limit) {
+        return jdbc.query(
+                "SELECT " + COLUMNS + "FROM curated_qa WHERE status = 'active' " +
+                "ORDER BY created_at DESC, id DESC LIMIT ?",
+                ROW_MAPPER, limit);
+    }
+
     private static String now() {
         return LocalDateTime.now().format(DT_FMT);
     }

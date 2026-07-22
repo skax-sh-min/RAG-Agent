@@ -9,6 +9,7 @@ import org.springframework.jdbc.datasource.DriverManagerDataSource;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -100,5 +101,33 @@ class CuratedQaRepositoryTest {
     void find_returnsEmptyWhenMissing() {
         assertThat(repo.findBySourceTurnId(42L)).isEmpty();
         assertThat(repo.findById(42L)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("§10.10 step④ — updateAnswer는 answer만 갱신하고 question/status는 보존한다")
+    void updateAnswer_updatesAnswerOnlyKeepsRest() {
+        long id = repo.upsertActive(1L, "u1", "t1", "질문", "원래 답변", "latest");
+
+        repo.updateAnswer(id, "수정된 답변");
+
+        CuratedQaRepository.CuratedQa row = repo.findById(id).orElseThrow();
+        assertThat(row.answer()).isEqualTo("수정된 답변");
+        assertThat(row.question()).isEqualTo("질문");
+        assertThat(row.status()).isEqualTo("active");
+    }
+
+    @Test
+    @DisplayName("§10.10 step④ — findAllActive는 active 항목만, 최신(id 역순)으로 반환한다")
+    void findAllActive_returnsOnlyActiveNewestFirst() {
+        long older = repo.upsertActive(1L, "u1", "t1", "질문1", "답변1", "latest");
+        long newer = repo.upsertActive(2L, "u1", "t1", "질문2", "답변2", "latest");
+        long deactivated = repo.upsertActive(3L, "u1", "t1", "질문3", "답변3", "latest");
+        repo.deactivate(3L);
+
+        List<CuratedQaRepository.CuratedQa> active = repo.findAllActive(50);
+
+        List<Long> ids = active.stream().map(CuratedQaRepository.CuratedQa::id).toList();
+        assertThat(ids).containsExactly(newer, older); // id DESC 타이브레이커로 결정적 순서
+        assertThat(ids).doesNotContain(deactivated);
     }
 }

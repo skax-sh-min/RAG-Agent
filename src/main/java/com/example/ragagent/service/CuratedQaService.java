@@ -118,6 +118,74 @@ public class CuratedQaService {
                 deleteVector(curatedId));
     }
 
+    /**
+     * §10.10 step ④ — looked up by the originating turn (all the chat UI knows — threadId/turnId,
+     * not the curated row's own id). The caller (controller) is responsible for the ownership
+     * check — {@code memoryService.getFeedback} already scopes by (userId, threadId), same as the
+     * existing feedback-toggle endpoint. Used by both the GET (populate the edit box) and PATCH
+     * (save) chat-inline-edit endpoints.
+     */
+    public Optional<CuratedQa> findActiveByTurn(long turnId) {
+        return repository.findBySourceTurnId(turnId).filter(r -> "active".equals(r.status()));
+    }
+
+    /** §10.10 step ④ — owner edit path (chat inline "편집"), see {@link #findActiveByTurn}. */
+    public boolean updateAnswerForTurn(String userId, String threadId, long turnId, String newAnswer) {
+        Optional<CuratedQa> rowOpt = findActiveByTurn(turnId);
+        if (rowOpt.isEmpty()) return false;
+        return updateAnswer(rowOpt.get().id(), newAnswer);
+    }
+
+    /**
+     * §10.10 step ④ — edit path shared by both the owner (via {@link #updateAnswerForTurn}) and
+     * the {@code /admin} curated tab (looked up directly by id there). Re-embeds on a background
+     * thread — no debounce and no like-state re-check here: unlike {@link #onLike}, an edit is an
+     * explicit save action, not a promotion that can race with an accidental unlike.
+     */
+    public boolean updateAnswer(long curatedId, String newAnswer) {
+        if (newAnswer == null || newAnswer.isBlank()) return false;
+        if (repository.findById(curatedId).isEmpty()) return false;
+        repository.updateAnswer(curatedId, newAnswer);
+        Thread.ofVirtual().name("curated-reembed-" + curatedId).start(() -> reembedAfterEdit(curatedId));
+        return true;
+    }
+
+    /**
+     * §10.10 step ④ — admin moderation path: deactivates + de-indexes regardless of the original
+     * asker's own feedback state (separate authorization from {@link #onUnlike}'s ownership check
+     * — the admin curated tab looks entries up by curated id, not by thread/turn).
+     */
+    public boolean forceRemove(long curatedId) {
+        Optional<CuratedQa> rowOpt = repository.findById(curatedId);
+        if (rowOpt.isEmpty() || !"active".equals(rowOpt.get().status())) return false;
+        repository.deactivate(rowOpt.get().sourceTurnId());
+        Thread.ofVirtual().name("curated-deindex-" + curatedId).start(() -> deleteVector(curatedId));
+        return true;
+    }
+
+    /** §10.10 step ④ — admin curated-Q&A browser listing. */
+    public List<CuratedQa> listActive(int limit) {
+        return repository.findAllActive(limit);
+    }
+
+    /** §10.10 step ④ — direct id lookup for the admin edit panel (chat's owner-edit path looks
+     *  up by turn instead, see {@link #updateAnswerForTurn}). */
+    public Optional<CuratedQa> findById(long id) {
+        return repository.findById(id);
+    }
+
+    /** Re-embeds an already-active row after an edit — no like-state re-check (see {@link #updateAnswer}). */
+    private void reembedAfterEdit(long curatedId) {
+        Optional<CuratedQa> rowOpt = repository.findById(curatedId);
+        if (rowOpt.isEmpty() || !"active".equals(rowOpt.get().status())) return;
+        try {
+            vectorStore.add(DocRegistry.SHARED, CURATED_VERSION, List.of(buildDocument(rowOpt.get())));
+            log.info("[CURATED] re-embedded after edit curatedId={}", curatedId);
+        } catch (Exception e) {
+            log.warn("[CURATED] re-embed after edit failed curatedId={}: {}", curatedId, e.getMessage());
+        }
+    }
+
     private void embed(long curatedId, String userId, String threadId, long turnId) {
         Optional<CuratedQa> rowOpt = repository.findById(curatedId);
         if (rowOpt.isEmpty() || !"active".equals(rowOpt.get().status())) return;

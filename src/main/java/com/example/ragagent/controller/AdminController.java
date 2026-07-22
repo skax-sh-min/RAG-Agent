@@ -3,6 +3,7 @@ package com.example.ragagent.controller;
 import com.example.ragagent.context.ThreadContext;
 import com.example.ragagent.model.IndexingProgressEvent;
 import com.example.ragagent.service.AdminService;
+import com.example.ragagent.service.CuratedQaService;
 import com.example.ragagent.service.IndexingProgressService;
 import com.example.ragagent.service.RagService;
 import org.slf4j.Logger;
@@ -16,22 +17,26 @@ import java.util.HashMap;
 import java.util.Map;
 
 /**
- * Admin UI: vector-store collection/chunk viewer and editor (Chroma and sqlite-vec backends).
+ * Admin UI: vector-store collection/chunk viewer and editor (Chroma and sqlite-vec backends),
+ * plus the §10.10 curated-Q&A moderation tab.
  */
 @Controller
 public class AdminController {
 
     private static final Logger log = LoggerFactory.getLogger(AdminController.class);
+    private static final int CURATED_LIST_LIMIT = 50; // §10.10 — small expected volume, no paging yet
 
     private final AdminService adminService;
     private final RagService   ragService;
     private final IndexingProgressService progressService;
+    private final CuratedQaService curatedQaService;
 
     public AdminController(AdminService adminService, RagService ragService,
-                            IndexingProgressService progressService) {
+                            IndexingProgressService progressService, CuratedQaService curatedQaService) {
         this.adminService = adminService;
         this.ragService   = ragService;
         this.progressService = progressService;
+        this.curatedQaService = curatedQaService;
     }
 
     // ── Page ─────────────────────────────────────────────────────────────────
@@ -43,6 +48,7 @@ public class AdminController {
         model.addAttribute("chromaAvailable", result.available());
         model.addAttribute("vectorStore",     adminService.vectorStoreView());
         model.addAttribute("documents",       ragService.listDocuments(ctx.userId()));
+        model.addAttribute("curatedEntries",  curatedQaService.listActive(CURATED_LIST_LIMIT));
         return "admin";
     }
 
@@ -111,6 +117,37 @@ public class AdminController {
         }
         adminService.updateChunk(collection, chunkId, newText, newMeta);
         return ResponseEntity.ok().build();
+    }
+
+    // ── §10.10 Curated Q&A moderation ───────────────────────────────────────────
+
+    /** Get full curated entry data for the edit panel. */
+    @GetMapping("/admin/curated/{id}/detail")
+    @ResponseBody
+    public ResponseEntity<?> curatedDetail(@PathVariable long id) {
+        return curatedQaService.findById(id)
+                .<ResponseEntity<?>>map(row -> ResponseEntity.ok(Map.of(
+                        "id",       row.id(),
+                        "question", row.question(),
+                        "answer",   row.answer())))
+                .orElseGet(() -> ResponseEntity.notFound().build());
+    }
+
+    /** Update a curated entry's answer text (re-embeds) — admin can edit any user's entry. */
+    @PostMapping("/admin/curated/{id}")
+    @ResponseBody
+    public ResponseEntity<Void> updateCurated(@PathVariable long id, @RequestBody Map<String, Object> body) {
+        String newAnswer = body.get("answer") instanceof String s ? s : null;
+        boolean updated = curatedQaService.updateAnswer(id, newAnswer);
+        return updated ? ResponseEntity.ok().build() : ResponseEntity.notFound().build();
+    }
+
+    /** Force-remove a curated entry regardless of the original asker's own feedback state (moderation). */
+    @DeleteMapping("/admin/curated/{id}")
+    @ResponseBody
+    public ResponseEntity<Void> deleteCurated(@PathVariable long id) {
+        boolean removed = curatedQaService.forceRemove(id);
+        return removed ? ResponseEntity.ok().build() : ResponseEntity.notFound().build();
     }
 
     /**

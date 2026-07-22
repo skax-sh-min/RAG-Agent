@@ -9,6 +9,7 @@ import com.example.ragagent.controller.DocumentController;
 import com.example.ragagent.model.SyncResult;
 import com.example.ragagent.model.VectorStoreAdminView;
 import com.example.ragagent.service.AdminService;
+import com.example.ragagent.service.CuratedQaService;
 import com.example.ragagent.service.IndexingProgressService;
 import com.example.ragagent.service.RagService;
 import org.junit.jupiter.api.BeforeEach;
@@ -33,6 +34,7 @@ import java.util.Locale;
 import java.util.Optional;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -106,6 +108,7 @@ class ManagementOnlyAuthorizationTest {
     @MockitoBean IndexingProgressService progressService;
     @MockitoBean AuditLogger auditLogger;
     @MockitoBean AdminService adminService;
+    @MockitoBean CuratedQaService curatedQaService;
 
     private AppUserDetails adminUser() {
         return new AppUserDetails("admin-id", "admin@local", "hash", "Admin", "ADMIN", true, false);
@@ -123,6 +126,7 @@ class ManagementOnlyAuthorizationTest {
         when(adminService.listCollections()).thenReturn(new AdminService.CollectionsResult(List.of(), true));
         when(adminService.vectorStoreView()).thenReturn(new VectorStoreAdminView(
                 "chroma", true, -1, 0, 0, null, null, "memory.db", "memory.db"));
+        when(curatedQaService.listActive(anyInt())).thenReturn(List.of());
     }
 
     // ── 게이트 경로: 익명 접근 → 로그인으로 리다이렉트 ──────────────────────────

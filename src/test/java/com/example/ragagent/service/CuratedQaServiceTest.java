@@ -182,4 +182,84 @@ class CuratedQaServiceTest {
         verify(repository, never()).deactivate(anyLong());
         verify(vectorStore, never()).deleteByDocIds(any(), any(), any());
     }
+
+    // ── §10.10 step ④ — 편집/관리 ────────────────────────────────────────────
+
+    @Test
+    @DisplayName("updateAnswerForTurn — 활성 엔트리가 있으면 answer를 갱신하고 재임베딩한다")
+    void updateAnswerForTurn_activeEntry_updatesAndReembeds() {
+        when(repository.findBySourceTurnId(TURN_ID)).thenReturn(Optional.of(curatedQa(1L, "active", "질문", "답변")));
+        when(repository.findById(1L)).thenReturn(Optional.of(curatedQa(1L, "active", "질문", "수정된 답변")));
+
+        boolean result = service.updateAnswerForTurn(UID, TID, TURN_ID, "수정된 답변");
+
+        assertThat(result).isTrue();
+        verify(repository, times(1)).updateAnswer(1L, "수정된 답변");
+        verify(vectorStore, timeout(2000)).add(eq("shared"), eq(CuratedQaService.CURATED_VERSION), any());
+    }
+
+    @Test
+    @DisplayName("updateAnswerForTurn — 엔트리가 없거나 비활성이면 false, 갱신하지 않는다")
+    void updateAnswerForTurn_noActiveEntry_returnsFalse() {
+        when(repository.findBySourceTurnId(TURN_ID)).thenReturn(Optional.empty());
+
+        boolean result = service.updateAnswerForTurn(UID, TID, TURN_ID, "수정된 답변");
+
+        assertThat(result).isFalse();
+        verify(repository, never()).updateAnswer(anyLong(), any());
+    }
+
+    @Test
+    @DisplayName("updateAnswer — 빈 답변은 거부한다")
+    void updateAnswer_blankAnswer_returnsFalse() {
+        boolean result = service.updateAnswer(1L, "   ");
+
+        assertThat(result).isFalse();
+        verify(repository, never()).updateAnswer(anyLong(), any());
+    }
+
+    @Test
+    @DisplayName("forceRemove — 활성 엔트리를 소유자 상태와 무관하게 비활성화·de-index한다")
+    void forceRemove_activeEntry_deactivatesAndDeletesVectorRegardlessOfLikeState() {
+        when(repository.findById(1L)).thenReturn(Optional.of(curatedQa(1L, "active", "질문", "답변")));
+
+        boolean result = service.forceRemove(1L);
+
+        assertThat(result).isTrue();
+        verify(repository, times(1)).deactivate(TURN_ID); // curatedQa()의 sourceTurnId=TURN_ID
+        verify(vectorStore, timeout(2000)).deleteByDocIds("shared", CuratedQaService.CURATED_VERSION, List.of("curated-1"));
+        // onUnlike의 소유권 체크(getFeedback)는 전혀 거치지 않는다 — 별도 인가 경로.
+        verify(memoryService, never()).getFeedback(any(), any(), anyLong());
+    }
+
+    @Test
+    @DisplayName("forceRemove — 이미 비활성이거나 존재하지 않으면 false")
+    void forceRemove_inactiveOrMissing_returnsFalse() {
+        when(repository.findById(1L)).thenReturn(Optional.of(curatedQa(1L, "inactive", "질문", "답변")));
+        when(repository.findById(2L)).thenReturn(Optional.empty());
+
+        assertThat(service.forceRemove(1L)).isFalse();
+        assertThat(service.forceRemove(2L)).isFalse();
+        verify(repository, never()).deactivate(anyLong());
+    }
+
+    @Test
+    @DisplayName("listActive / findById / findActiveByTurn — repository로 위임한다")
+    void readMethods_delegateToRepository() {
+        when(repository.findAllActive(50)).thenReturn(List.of(curatedQa(1L, "active", "질문", "답변")));
+        when(repository.findById(1L)).thenReturn(Optional.of(curatedQa(1L, "active", "질문", "답변")));
+        when(repository.findBySourceTurnId(TURN_ID)).thenReturn(Optional.of(curatedQa(1L, "active", "질문", "답변")));
+
+        assertThat(service.listActive(50)).hasSize(1);
+        assertThat(service.findById(1L)).isPresent();
+        assertThat(service.findActiveByTurn(TURN_ID)).isPresent();
+    }
+
+    @Test
+    @DisplayName("findActiveByTurn — 비활성 엔트리는 empty를 반환한다")
+    void findActiveByTurn_inactiveEntry_returnsEmpty() {
+        when(repository.findBySourceTurnId(TURN_ID)).thenReturn(Optional.of(curatedQa(1L, "inactive", "질문", "답변")));
+
+        assertThat(service.findActiveByTurn(TURN_ID)).isEmpty();
+    }
 }

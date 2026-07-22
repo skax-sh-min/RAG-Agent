@@ -7,6 +7,7 @@ import com.example.ragagent.model.VectorStoreAdminView;
 import com.example.ragagent.security.AppUserDetails;
 import com.example.ragagent.service.AdminService;
 import com.example.ragagent.service.AdminService.CollectionsResult;
+import com.example.ragagent.service.CuratedQaService;
 import com.example.ragagent.service.IndexingProgressService;
 import com.example.ragagent.service.RagService;
 import org.junit.jupiter.api.BeforeEach;
@@ -20,13 +21,19 @@ import org.springframework.test.web.servlet.MockMvc;
 
 import java.util.List;
 import java.util.Locale;
+import java.util.Optional;
 
 import static org.hamcrest.Matchers.containsString;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.when;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.model;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -49,6 +56,7 @@ class AdminControllerWebMvcTest {
     @MockitoBean AdminService adminService;
     @MockitoBean RagService ragService;
     @MockitoBean IndexingProgressService progressService;
+    @MockitoBean CuratedQaService curatedQaService;
     @MockitoBean AppProperties props;                 // SecurityConfig 의존
     @MockitoBean ThreadContextResolver threadContextResolver;
     @MockitoBean org.springframework.ai.chat.model.ChatModel chatModel;  // WebConfig.chatClient 의존
@@ -61,6 +69,7 @@ class AdminControllerWebMvcTest {
                 .thenReturn(new ThreadContext("t1", "u1", Locale.KOREAN));
         when(adminService.listCollections()).thenReturn(new CollectionsResult(List.of(), true));
         when(ragService.listDocuments(anyString())).thenReturn(List.of());
+        when(curatedQaService.listActive(anyInt())).thenReturn(List.of());
     }
 
     @Test
@@ -92,5 +101,85 @@ class AdminControllerWebMvcTest {
                 .andExpect(model().attributeExists("vectorStore"))
                 .andExpect(content().string(containsString("버전 (sqlite-vec)")))
                 .andExpect(content().string(containsString("vec_version")));
+    }
+
+    // ── §10.10 step ④ — 큐레이션 Q&A 관리 ────────────────────────────────────
+
+    @Test
+    @DisplayName("GET /admin — curatedEntries 모델 속성과 항목 렌더")
+    void adminPage_rendersCuratedEntries() throws Exception {
+        when(adminService.vectorStoreView()).thenReturn(
+                new VectorStoreAdminView("chroma", true, -1, 0, 0, null, null, "/data/memory.db", null));
+        when(curatedQaService.listActive(anyInt())).thenReturn(List.of(
+                new com.example.ragagent.repository.CuratedQaRepository.CuratedQa(
+                        1L, 42L, "u1", "t1", "질문입니다", "답변입니다", "active", "latest",
+                        "2026-01-01T00:00:00", "2026-01-01T00:00:00")));
+
+        mvc.perform(get("/admin").with(user(ADMIN)))
+                .andExpect(status().isOk())
+                .andExpect(model().attributeExists("curatedEntries"))
+                .andExpect(content().string(containsString("질문입니다")));
+    }
+
+    @Test
+    @DisplayName("GET /admin/curated/{id}/detail — 존재하면 200 + question/answer")
+    void curatedDetail_found_returnsOk() throws Exception {
+        when(curatedQaService.findById(1L)).thenReturn(Optional.of(
+                new com.example.ragagent.repository.CuratedQaRepository.CuratedQa(
+                        1L, 42L, "u1", "t1", "질문", "답변", "active", "latest",
+                        "2026-01-01T00:00:00", "2026-01-01T00:00:00")));
+
+        mvc.perform(get("/admin/curated/1/detail").with(user(ADMIN)))
+                .andExpect(status().isOk())
+                .andExpect(content().json("{\"id\":1,\"question\":\"질문\",\"answer\":\"답변\"}"));
+    }
+
+    @Test
+    @DisplayName("GET /admin/curated/{id}/detail — 없으면 404")
+    void curatedDetail_missing_returns404() throws Exception {
+        when(curatedQaService.findById(99L)).thenReturn(Optional.empty());
+
+        mvc.perform(get("/admin/curated/99/detail").with(user(ADMIN)))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
+    @DisplayName("POST /admin/curated/{id} — 갱신 성공 시 200")
+    void updateCurated_success_returnsOk() throws Exception {
+        when(curatedQaService.updateAnswer(anyLong(), anyString())).thenReturn(true);
+
+        mvc.perform(post("/admin/curated/1").with(user(ADMIN)).with(csrf())
+                        .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                        .content("{\"answer\":\"관리자가 수정한 답변\"}"))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("POST /admin/curated/{id} — 존재하지 않으면 404")
+    void updateCurated_missing_returns404() throws Exception {
+        when(curatedQaService.updateAnswer(anyLong(), anyString())).thenReturn(false);
+
+        mvc.perform(post("/admin/curated/99").with(user(ADMIN)).with(csrf())
+                        .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                        .content("{\"answer\":\"x\"}"))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
+    @DisplayName("DELETE /admin/curated/{id} — 강제 삭제 성공 시 200, 좋아요 주체와 무관")
+    void deleteCurated_success_returnsOk() throws Exception {
+        when(curatedQaService.forceRemove(1L)).thenReturn(true);
+
+        mvc.perform(delete("/admin/curated/1").with(user(ADMIN)).with(csrf()))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("DELETE /admin/curated/{id} — 없으면 404")
+    void deleteCurated_missing_returns404() throws Exception {
+        when(curatedQaService.forceRemove(99L)).thenReturn(false);
+
+        mvc.perform(delete("/admin/curated/99").with(user(ADMIN)).with(csrf()))
+                .andExpect(status().isNotFound());
     }
 }

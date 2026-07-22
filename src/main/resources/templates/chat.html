@@ -168,6 +168,12 @@
                                     <button type="button" class="btn btn-sm feedback-btn" data-feedback="DISLIKE"
                                             th:classappend="${turn.feedback == 'DISLIKE'} ? 'btn-danger' : 'btn-outline-secondary'"
                                             th:attr="aria-label=#{feedback.dislike},title=#{feedback.dislike}">👎</button>
+                                    <!-- §10.10 — 좋아요한 답변만 편집 가능(본인 소유 turn, 채팅창은 항상 본인 스레드만 보여줌) -->
+                                    <button type="button" class="btn btn-sm btn-outline-secondary curated-edit-btn"
+                                            th:style="${turn.feedback == 'LIKE'} ? '' : 'display:none;'"
+                                            th:attr="aria-label=#{curated.edit},title=#{curated.edit}">
+                                        <i class="bi bi-pencil"></i>
+                                    </button>
                                 </div>
                                 <div class="text-muted"
                                      style="font-size:0.68rem;"
@@ -272,6 +278,22 @@
                 </form>
             </div>
         </div>
+    </div>
+</div>
+
+<!-- ── §10.10 큐레이션 Q&A 편집 Offcanvas (본인 좋아요 답변) ──────────────── -->
+<div class="offcanvas offcanvas-end" tabindex="-1" id="curatedEditOffcanvas" style="width:480px; max-width:100%;">
+    <div class="offcanvas-header border-bottom">
+        <h6 class="offcanvas-title"><i class="bi bi-pencil-square me-2"></i><span th:text="#{curated.edit.title}">큐레이션 답변 편집</span></h6>
+        <button type="button" class="btn-close" data-bs-dismiss="offcanvas"></button>
+    </div>
+    <div class="offcanvas-body d-flex flex-column gap-3" id="curatedEditOffcanvasBody">
+        <textarea id="curated-edit-chat-answer" class="form-control flex-grow-1"
+                  style="min-height:280px; font-size:0.9rem; resize:vertical;"></textarea>
+        <div class="form-text small" th:text="#{curated.edit.hint}">저장하면 검색 임베딩이 자동으로 다시 계산됩니다.</div>
+        <button class="btn btn-primary btn-sm" id="curated-edit-save-btn">
+            <i class="bi bi-save me-1"></i><span th:text="#{action.save}">저장</span>
+        </button>
     </div>
 </div>
 
@@ -649,6 +671,47 @@
                 btn.classList.remove('btn-outline-secondary');
                 btn.classList.add(activeClass);
             }
+            // §10.10 — 편집 아이콘은 LIKE 상태일 때만 노출(승격 즉시 임베딩되므로 그 즉시부터 편집 가능).
+            const editBtn = container.querySelector('.curated-edit-btn');
+            if (editBtn) editBtn.style.display = (newValue === 'LIKE') ? '' : 'none';
+        }).catch(function () { showToast(I18N.requestFailed, 'danger'); });
+    });
+
+    /* ── §10.10 큐레이션 Q&A 인라인 편집 (본인 좋아요 답변) ─────────────────── */
+    let curatedEditTarget = null; // { threadId, turnId, container }
+
+    document.getElementById('chat-messages').addEventListener('click', function (e) {
+        const editBtn = e.target.closest('.curated-edit-btn');
+        if (!editBtn) return;
+        const container = editBtn.closest('.feedback-controls');
+        if (!container) return;
+        const threadId = container.dataset.threadId;
+        const turnId = container.dataset.turnId;
+        if (!threadId || !turnId) return;
+
+        fetch(`/ui/threads/${threadId}/turns/${turnId}/curated`)
+            .then(function (r) { if (!r.ok) throw new Error(); return r.json(); })
+            .then(function (data) {
+                curatedEditTarget = { threadId, turnId };
+                document.getElementById('curated-edit-chat-answer').value = data.answer || '';
+                new bootstrap.Offcanvas(document.getElementById('curatedEditOffcanvas')).show();
+            })
+            .catch(function () { showToast(I18N.requestFailed, 'danger'); });
+    });
+
+    document.getElementById('curated-edit-save-btn').addEventListener('click', function () {
+        if (!curatedEditTarget) return;
+        const { threadId, turnId } = curatedEditTarget;
+        const answer = document.getElementById('curated-edit-chat-answer').value;
+
+        fetch(`/ui/threads/${threadId}/turns/${turnId}/curated`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded', ...getCsrfHeaders() },
+            body: 'answer=' + encodeURIComponent(answer)
+        }).then(function (r) {
+            if (!r.ok) { showToast(I18N.requestFailed, 'danger'); return; }
+            showToast(I18N.curatedSaved, 'success');
+            bootstrap.Offcanvas.getInstance(document.getElementById('curatedEditOffcanvas')).hide();
         }).catch(function () { showToast(I18N.requestFailed, 'danger'); });
     });
 
