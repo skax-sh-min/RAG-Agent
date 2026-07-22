@@ -245,6 +245,18 @@ public class DocumentIndexer {
         }
         log.debug("[INDEX] {} 로드 완료 → 원본 섹션 {}개", req.filename(), rawDocs.size());
 
+        // 이미지 분석 + MD 교정까지 끝난 시점에 최소한의 registry row를 먼저 남겨 둔다. 이후
+        // 청킹/키워드추출/임베딩 단계에서 실패해도 이 docId가 doc_registry에 남아 있으므로,
+        // 관리자 화면의 "재인덱싱"(reindexFromMd)으로 저장된 MD 파일을 그대로 재사용해 재시도할
+        // 수 있다 — 비용이 큰 이미지 분석/MD 교정을 다시 거치지 않아도 된다. chunks=0/
+        // springDocIds=[]는 "MD는 준비됐지만 색인은 아직 완료되지 않음"을 뜻하며, 청킹이 끝까지
+        // 성공하면 아래 최종 docRegistry.put()이 같은 docId를 실제 값으로 덮어쓴다. 스캔 PDF는
+        // MD 파일을 만들지 않으므로(reindexFromMd 미지원 대상) 자동으로 제외된다.
+        if (Files.exists(rawMdPath) || Files.exists(correctedMdPath)) {
+            docRegistry.put(docId, DocRegistry.SHARED, new DocRegistry.DocRegistryEntry(
+                    sha256, req.version(), Instant.now().toString(), 0, List.of(), List.of()));
+        }
+
         req.onProgress().accept(IndexingProgressEvent.of("chunking", 0, 0, req.filename(), "청크 분할 중..."));
         List<Document> chunks = chunkSplitter.splitDocuments(
             rawDocs, req.filename(), props.chunkSizeSafe(), props.chunkOverlapSafe(), props.minChunkSizeSafe(),

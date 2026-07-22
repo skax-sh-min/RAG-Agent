@@ -138,9 +138,15 @@ public class DocRegistry {
 
     // ── Query helpers ──────────────────────────────────────────────────────
 
+    /**
+     * {@code chunks > 0} excludes a partial row left behind by {@code DocumentIndexer.index()}
+     * when MD conversion/correction succeeded but chunking/embedding failed afterward — otherwise
+     * {@code syncDirectory()}'s detection step would treat that unfinished document as already
+     * indexed (matching sha256+version) and skip it on every future sync, forever.
+     */
     public boolean existsBySha256AndVersion(String sha256, String version, String userId) {
         Integer count = jdbc.queryForObject(
-                "SELECT count(*) FROM doc_registry WHERE sha256 = ? AND version = ? AND user_id = ?",
+                "SELECT count(*) FROM doc_registry WHERE sha256 = ? AND version = ? AND user_id = ? AND chunks > 0",
                 Integer.class, sha256, version, userId);
         return count != null && count > 0;
     }
