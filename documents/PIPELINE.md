@@ -45,7 +45,7 @@ HTTP 요청
 |------|------|---------|
 | **CLASSIFIER** | 질문 유형 판별 (concept / usage / error / version / meta) | ① — AgentService에서 선실행하므로 그래프 내에서는 스킵 |
 | **DIRECT_ANSWER** | meta 질문 직접 응답 (벡터 검색 없음) | ② |
-| **RETRIEVAL** | 쿼리 확장(조건부 — 15자 미만 질의는 생략, `app.search-multiquery-min-length`) → 확장 LLM 호출과 원본 질의 벡터 검색을 가상 스레드로 병렬 실행(§10.8.1, 원본 검색 지연이 확장 대기 뒤에 숨음) → 배치 임베딩(쿼리 임베딩 캐시 히트 시 스킵) → 벡터 스토어 배치 쿼리(chroma 단일 호출, 결과에 쓰지 않는 임베딩 필드는 요청 자체를 생략 §10.9.1 / sqlite-vec 쿼리별) → 가중 RRF 병합(벡터축 그룹 정규화 + 키워드축 가중치) → 선택적 LLM 리랭킹(opt-in). 재시도 시 후보 풀 ×(retry+1) 에스컬레이션 | ③ 쿼리 확장(조건부), [리랭킹 활성 시 1콜] |
+| **RETRIEVAL** | 쿼리 확장(조건부 — 15자 미만 질의는 생략, `app.search-multiquery-min-length`) → 확장 LLM 호출과 원본 질의 벡터 검색을 가상 스레드로 병렬 실행(§10.8.1, 원본 검색 지연이 확장 대기 뒤에 숨음) → 배치 임베딩(쿼리 임베딩 캐시 히트 시 스킵) → 벡터 스토어 배치 쿼리(chroma 단일 호출, 결과에 쓰지 않는 임베딩 필드는 요청 자체를 생략 §10.9.1 / sqlite-vec 쿼리별) + 큐레이션 Q&A 축 병렬 조회(§10.10, 예약 version `"curated"`, `search.curated-qa-enabled`로 게이팅) → 가중 RRF 병합(벡터축 그룹 정규화 + 키워드축 가중치 + 큐레이션축 가중치) → 선택적 LLM 리랭킹(opt-in). 재시도 시 후보 풀 ×(retry+1) 에스컬레이션 | ③ 쿼리 확장(조건부), [리랭킹 활성 시 1콜] |
 | **ANSWER** | 문서 기반 답변 생성 + 충분도 검사 | ④ 답변, ⑤ 충분도 |
 | **CRITIC** | 답변이 문서에 근거하는지 검증 | ⑥ |
 | **FINALIZE** | 대화 히스토리 저장 (SQLite) | 없음 |
@@ -515,4 +515,5 @@ PDF 페이지의 50% 이상이 50자 미만  →  스캔 문서로 판정
 | [LLM_ROUTING.md](LLM_ROUTING.md) | 라우팅 모드, 프로바이더 설정, 회로 차단기, 동시성 게이트+백프레셔 |
 | [IMAGE_PROCESS.md](IMAGE_PROCESS.md) | 이미지 추출, OCR, Vision LLM 설명 생성 |
 | [OPERATOR_MANUAL.md](OPERATOR_MANUAL.md) | 환경변수, 배포, 시나리오별 설정 예제 |
+| [PLAN.md §10.10](PLAN.md) | 큐레이션 Q&A(좋아요 기반 지식 승격) 설계·구현 전체 기록 |
 | [UI.md](UI.md) | 화면 구성, HTMX 엔드포인트 |

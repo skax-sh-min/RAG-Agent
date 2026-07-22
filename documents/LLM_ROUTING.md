@@ -348,6 +348,7 @@ findFirst(role, priority 오름차순 순회)
 - **priority가 다르면 부하와 무관하게 낮은 priority가 항상 우선** — 로드밸런싱은 동일 priority 그룹 내부에서만 일어난다. 부하가 높다고 다음 priority(예: 외부 유료 API)로 자동 전환되지는 않는다 — 그건 프로바이더가 실제로 응답 실패(429/402/503/기타)할 때만 §5 Circuit Breaker가 처리하는 영역이다.
 - **총 동시 처리량 = 등록 대수 × per-provider concurrency** (예: LOCAL 2대 × concurrency 3 = 6).
 - 임베딩 프로바이더도 이제 로드밸런싱된다(§6.21 E1) — `EmbeddingModel` 체인이라 라우팅 지점은 LLM 경로와 다르지만, `LoadBalancingEmbeddingModel`이 다중 임베딩 엔드포인트(`app.embedding.additional-base-urls`)를 least-in-flight로 분산한다. 인덱싱 시 병렬 서브배치(§6.21 E2, `app.embedding.max-concurrent-batches`)와 결합하면 단일 대용량 문서도 여러 엔드포인트를 동시에 채운다. 설정은 OPERATOR_MANUAL §3.2 "임베딩 병렬화" 참고.
+- **좋아요 기반 큐레이션 Q&A 임베딩(§10.10)**은 이 표의 LLM 채팅 게이트(위 표)와 무관하다 — `VectorStoreFacade.add()`를 통해 인덱싱과 동일한 임베딩 파이프라인(uncached, §10.9.4)을 타므로 여기 §6의 임베딩 로드밸런싱·병렬 서브배치 대상에 자연히 포함된다. 좋아요 즉시가 아니라 3초 디바운스 후 배경 가상 스레드에서 실행되므로 채팅 응답 지연에는 영향이 없다. 별도의 라우팅/동시성 설정은 필요 없다.
 - `/llm-usage`에서 프로바이더별 사용량 집계로 실제 분산 여부를 확인할 수 있다.
 
 ---
