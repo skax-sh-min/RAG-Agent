@@ -67,13 +67,14 @@ Flow:
 | `service/RagService.java` | 3-phase `syncDirectory()`: detect → parallel index → delete; `enrichParallel()` with Semaphore |
 | `service/SettingsService.java` | §6.13 — implements `AppProperties.OverrideSource`, binds it at `@PostConstruct`; catalog (hot-editable vs restart-required), `update()`/`reset()` with type+range validation + `AuditLogger`, `buildView()`; in-memory override cache (read hot-path never hits SQLite); backed by `SettingsOverrideRepository` (`settings_override` in memory.db) |
 | `service/VisionDescriptionService.java` | Image bytes → Korean description via `LlmRouter.route(VISION, COST_FIRST)` |
+| `service/CuratedQaService.java` | §10.10 — liked chat answers promoted to a shared curated-Q&A knowledge axis (embedded under a reserved `"curated"` vector-store version namespace, survives doc re-indexing); fused into search via weighted RRF (`app.search-curated-qa-enabled`/`-weight`, hot); owner edits inline (re-embeds), admin moderates all entries from `/admin`. Backed by `repository/CuratedQaRepository.java` |
 
 ## Conventions
 
 - **Records everywhere**: `AgentState`, `ThreadMeta`, `ChatResponse`, `SourceRef`, `LlmProvider` — all immutable records
 - **No Spring Data JPA**: raw `JdbcTemplate` for all DB access (SQLite incompatibility)
 - **HTMX fragments**: endpoints return `"fragments/xxx :: selector"` strings
-- **ChromaDB auto-config excluded**: `spring.autoconfigure.exclude=...ChromaVectorStoreAutoConfiguration` — `ChromaConfig` manages beans manually
+- **Spring AI auto-config excluded**: `spring.autoconfigure.exclude` drops `ChromaVectorStoreAutoConfiguration` (`ChromaConfig` manages beans manually) **and all six OpenAI model auto-configs** — `OpenAiChat`/`OpenAiEmbedding`/`OpenAiAudioSpeech`/`OpenAiAudioTranscription`/`OpenAiImage`/`OpenAiModeration`AutoConfiguration. The app builds its own chat (`LlmConfig.llmRouter`/`primaryChatModel`), embedding (`EmbeddingBeanConfig`) and per-provider `OpenAiApi` (`OpenAiApi.builder()`) beans, so it never uses a Spring AI OpenAI autoconfig bean. Left active, each of these eagerly creates an `openAiApi` bean that runs `Assert.hasText(spring.ai.openai.api-key)` and crashes startup with `OpenAI API key must be set` when `LOCAL_LLM_KEY` is blank (the normal local-only setup) — this hits the chat/embedding ones too (their *model* bean is skipped via `@ConditionalOnMissingBean`, but their `openAiApi` bean is not)
 - **Null-safe config**: always use `props.llmSafe()` / `props.indexingSafe()` / `props.authSafe()` / `props.imageDescriptionSafe()` / `props.memorySafe()` / `props.summarySafe()` — never access the raw getters directly (`AppPropertiesSafeAccessorTest` enforces this for every `xxxSafe()`)
 - **Korean prompts**: all LLM system/user prompts are Korean
 - **MetaKey constants**: all vector store metadata access goes through `MetaKey.*` — never inline strings
@@ -81,6 +82,7 @@ Flow:
 - **Upload validation**: call `FileTypeDetector.matches(path, ext)` after writing to temp file; return 422 on mismatch
 - **Input validation**: `PromptInjectionGuard.validate()` must be the first call in any public chat entry point
 - **AgentState mutation**: use `state.toBuilder().xxx().build()` — the old `state.withXxx()` methods were removed (were deprecated since 0.2.0)
+- **Parallel tests**: `src/test/resources/junit-platform.properties` runs test CLASSES concurrently (methods within a class stay serial). Any test that loads a Spring context (`@WebMvcTest`/`@SpringBootTest` — Spring Boot re-inits Logback on context start + `@MockitoBean` reset isn't concurrency-safe), attaches a Logback appender (`ListAppender` log capture), or mutates `AppProperties`' static override source **must** carry `@ResourceLock("global-state")` so it doesn't run concurrently with the others. `ParallelIsolationConventionTest` fails the build if one is missing the lock
 
 ## Running Locally
 
@@ -94,7 +96,7 @@ docker-compose up chroma
 
 ## Key Constraints
 
-- `spring.autoconfigure.exclude` for Chroma must stay — do not remove
+- `spring.autoconfigure.exclude` must keep the Chroma exclusion and all six OpenAI model exclusions (chat/embedding/audio-speech/audio-transcription/image/moderation) — do not remove (see the "Spring AI auto-config excluded" convention above; dropping any OpenAI one lets its `openAiApi` bean crash local-only startup on a blank `LOCAL_LLM_KEY`)
 - SQLite pool size must stay at 1
 - All new LLM providers must go through `LlmRouter`, not direct `ChatClient` injection
 - DUAL mode requires LOCAL provider registered; throw `LlmProviderExhaustedException` otherwise
@@ -103,6 +105,7 @@ docker-compose up chroma
 - `DocumentIndexer.syncDirectory()` calls `saveRegistry()` once after all parallel work — never call it from parallel threads
 - `DocumentIndexer.index(IndexRequest)` is the single entry point for both bulk sync (`IndexRequest.parallel(...)`) and interactive single-file upload (`IndexRequest.single(...)`) — neither call shape calls `saveRegistry()` itself (caller's responsibility); only `reindexFromMd()` (at its end) and `syncDirectory()` (once after all parallel work) call it
 - Document storage is shared (no per-user isolation): `data/documents/`, `data/images/{docId}/`, `data/converted/{docId}.md`; DocRegistry and Chroma collection use `DocRegistry.SHARED` as the owner key
+- PPTX / non-scanned PDF → Markdown: the `[페이지: N]` marker (NOT a synthetic heading) is the per-slide/page section boundary — `PptxToMarkdownConverter`/`PdfToMarkdownConverter` no longer emit `## N번 슬라이드`/`## N페이지`, and both `DocumentLoaderService.splitMarkdownBySections()` and `MarkdownCorrectionService.splitBySections()`/`splitByPages()` split on the marker. Only PPTX/PDF emit `[페이지: N]`; DOCX/TXT/MD never do (so the marker-as-boundary logic is a no-op for them). At PPTX conversion time, image-less duplicate + agenda/TOC slides are dropped (`app.pptx-remove-duplicate-slides`, default on) and title-only section-divider slides are dropped (`app.pptx-drop-divider-slides`, default on, keeping sentence-like key-message titles); dropped slides never shift `page_or_slide` numbering (`slideNum = i+1`). `MetaKey.CHAPTER_NO` stays `"0"` for PPTX/PDF (`skipChapterNumbers=true`) — real hierarchical chapter numbers come only from DOCX/MD/TXT H2–H6 headings
 - Rate limiting: `RateLimitFilter` uses Bucket4j + Caffeine per-user token-bucket; `app.rate-limit.enabled` (default `true`)
 - Audit logging: `AuditLogger` writes to Logback AUDIT_FILE appender; `app.audit.enabled` (default `true`)
 - Search tuning props (all `app.search-*`): `retry-escalate` (default `true`), `rerank-enabled` (default `false`/opt-in, the only non-hot one — see §6.13), `candidate-multiplier` (rerank pool size, default `3`), `hybrid-enabled` (default `true`), `multiquery-enabled`/`multiquery-min-length`, `similarity-threshold`. Always read via `props.searchCandidateMultiplierSafe()` etc., never the raw getter

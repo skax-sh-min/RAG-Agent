@@ -103,11 +103,13 @@ See [USER_MANUAL.md](documents/USER_MANUAL.md) for usage instructions and [OPERA
 |----------|----------|---------|-------------|
 | `SERVER_PORT` | — | `8080` | Port the application listens on. Change only on conflict with another local service |
 | `LOCAL_LLM_URL` | to use this provider ✅ | none | `providers[1]` (`local`) endpoint (also used as embedding fallback, which is not gated by G3 below). **If unset or blank, this provider is disabled entirely** — no longer silently falls back to `http://localhost:1234/v1`. If set, startup calls `GET {URL}/models` to confirm it's reachable and the configured model is in the response — **the app refuses to start** if that check fails (G3, see [OPERATOR_MANUAL.md §5.2](documents/OPERATOR_MANUAL.md#52-프로바이더-속성)) |
-| `LOCAL_LLM_KEY` | — | `lm-studio` | `providers[1]` API key. **Optional for local endpoints** (llama-server needs none) — as long as `LOCAL_LLM_URL` is set, the provider is kept even when the key is blank (`no-key` is substituted) |
+| `LOCAL_LLM_KEY` | — | `no-key` | `providers[1]` API key. **Optional for local endpoints** (llama-server needs none) — as long as `LOCAL_LLM_URL` is set, the provider is kept even when the key is blank (`no-key` is substituted) |
 | `LOCAL_LLM_MODEL` | — | `google/gemma-4-e4b` | `providers[1]` model name |
+| `LOCAL_LLM_TYPE` | — | `BOTH` | `providers[1]` task type (`app.llm.providers[1].type`): `MICRO_TEXT`/`LIGHT_TEXT`/`TEXT`/`VISION`/`LIGHT_BOTH`/`BOTH`. `BOTH` handles everything; set e.g. `TEXT` to limit the local model to chat answers |
 | `LOCAL_LLM_URL_2` | to use this provider ✅ | none | `providers[2]` (`local-2`) endpoint — a second local LLM instance registered with the same role/priority as `providers[1]` (`local`), so requests are load-balanced least-in-flight across the two (see [OPERATOR_MANUAL.md §5.4 Example 5/7](documents/OPERATOR_MANUAL.md)). **If unset or blank, this provider is disabled entirely** (zero regression — `local` alone handles everything, same as before this tier existed). **If set, startup verifies it via `GET {URL}/models` (G3) and the app refuses to start if that fails** — "set but nothing's listening yet" no longer degrades gracefully to a runtime fallback unless `LLM_VERIFY_LOCAL_MODELS_ON_STARTUP=false` |
-| `LOCAL_LLM_KEY_2` | — | falls back to `LOCAL_LLM_KEY` | `providers[2]` API key |
+| `LOCAL_LLM_KEY_2` | — | `no-key` | `providers[2]` API key (local endpoints ignore it; `no-key` substituted when blank — no longer inherits `LOCAL_LLM_KEY`) |
 | `LOCAL_LLM_MODEL_2` | — | falls back to `LOCAL_LLM_MODEL` | `providers[2]` model name — usually the same model as `providers[1]`, replicated on a second server |
+| `LOCAL_LLM_TYPE_2` | — | `BOTH` | `providers[2]` task type (`app.llm.providers[2].type`). Same value set as `LOCAL_LLM_TYPE`; usually `BOTH` |
 | `LOCAL_FAST_LLM_URL` | to use this provider ✅ | none | §6.21 task-tier offload — `providers[0]` (`local-fast`) endpoint. **If unset or blank, this provider is disabled entirely** (zero regression — `MICRO_TEXT` chores are absorbed by `local`). **If set, startup verifies it via `GET {URL}/models` (G3) and the app refuses to start if that fails** — see [OPERATOR_MANUAL.md §5.4 Example 6](documents/OPERATOR_MANUAL.md) |
 | `LOCAL_FAST_LLM_KEY` | — | — | `providers[0]` API key. Optional for local endpoints, same as `LOCAL_LLM_KEY` |
 | `LOCAL_FAST_LLM_MODEL` | — | `Qwen3.5-0.8B-Q4_K_M.gguf` | `providers[0]` model name |
@@ -119,7 +121,8 @@ See [USER_MANUAL.md](documents/USER_MANUAL.md) for usage instructions and [OPERA
 | `LLM_MAX_TOKENS` | — | `6000` | Completion-length cap for **blocking** LLM calls only (classification, keyword extraction, MD correction, sufficiency/critic evaluation, TXT structuring, etc.) — streaming chat/Direct answers are uncapped by design (bounded by SSE timeouts instead). Also sizes the conversation-history budget and MD-correction section-splitting budget (same value, shared across all three). **Not the model's context window** — size it with headroom under your LLM server's actual context size; see [PIPELINE.md §4.1](documents/PIPELINE.md#41-appllmmax-tokensllm_max_tokens-크기-산정--로컬-llm-컨텍스트-윈도우와의-관계) |
 | `DIRECT_LLM_TEMPERATURE` | — | `0.1` | Temperature for meta/Direct answers only (`app.llm.direct-temperature`), separate from `LLM_TEMPERATURE`, clamped to `[0.0, 0.2]`. **Hot-editable via `/settings`** — applies to the next Direct call without a restart |
 | `OPENAI_API_KEY` | — | — | Required for OpenAI providers. Providers auto-disabled at startup if unset |
-| `GEMINI_API_KEY` | — | — | Required for Gemini providers. Providers auto-disabled at startup if unset |
+| `GEMINI_API_KEY1` / `GEMINI_API_KEY2` | — | — | Required for Gemini providers (one key per NORMAL/PREMIUM pair — see [OPERATOR_MANUAL.md §5](documents/OPERATOR_MANUAL.md#5-llm-프로바이더-설정)). Providers auto-disabled at startup if unset |
+| `GEMINI_MODEL` | — | per-provider | Overrides the model for both Gemini NORMAL-tier providers (`providers[3]` gemini-flash-lite, `providers[4]` gemini-flash). ⚠ Both read this one var, so setting it collapses them to the same model — leave unset to keep their distinct defaults |
 | `EMBED_BASE_URL` | — | `LOCAL_LLM_URL` | Embedding endpoint. Falls back to `LOCAL_LLM_URL` if unset |
 | `EMBED_API_KEY` | — | `LOCAL_LLM_KEY` | Embedding API key. Falls back to `LOCAL_LLM_KEY` if unset |
 | `EMBED_MODEL` | — | `text-embedding-nomic-embed-text-v1.5` | Embedding model name |
@@ -178,7 +181,8 @@ Local LLM (LM Studio, Ollama, etc.):
 EMBED_BASE_URL=http://localhost:1234/v1
 EMBED_MODEL=text-embedding-nomic-embed-text-v1.5
 LOCAL_LLM_URL=http://localhost:1234/v1
-LOCAL_LLM_KEY=lm-studio
+# LOCAL_LLM_KEY is optional for local endpoints (no-key substituted when blank)
+LOCAL_LLM_KEY=
 LOCAL_LLM_MODEL=google/gemma-4-e4b
 ```
 
@@ -262,8 +266,8 @@ rag_java/
     │       ├── MarkdownCorrectionService.java # Post-process LLM markdown output
     │       ├── DocumentLoaderService.java     # PDF/DOCX/TXT/MD loader + Markdown section parser; scanned PDF OCR
     │       ├── DocxToMarkdownConverter.java   # DOCX → Markdown with inline image extraction
-    │       ├── PptxToMarkdownConverter.java   # PPTX → Markdown (title heading per slide, [페이지: N] marker, SmartArt/chart-title/hyperlink text)
-    │       ├── PdfToMarkdownConverter.java    # Non-scanned PDF → Markdown (synthetic per-page heading, [페이지: N] marker)
+    │       ├── PptxToMarkdownConverter.java   # PPTX → Markdown ([페이지: N] per-slide marker = section boundary; real title → ## heading; SmartArt/chart/hyperlink text; duplicate/TOC/divider-slide removal)
+    │       ├── PdfToMarkdownConverter.java    # Non-scanned PDF → Markdown ([페이지: N] per-page marker = section boundary; no synthetic heading)
     │       ├── ImageExtractorService.java     # Scanned-PDF-only image extraction orchestrator (other formats extract inline in their own converter)
     │       ├── PdfImageExtractor.java         # PDFBox PDImageXObject-based PDF image extractor
     │       ├── PptxImageExtractor.java        # POI XSLFPictureShape-based PPTX image extractor + drawing-tool rasterization + SmartArt/chart/OLE graphic frames
@@ -359,6 +363,7 @@ User question
 - **Incremental indexing** — SHA-256 change detection, `doc_registry` SQLite table persistence (per-user). On sqlite-vec, embeddings are inserted per token sub-batch as soon as each one is embedded rather than buffered for the whole document, so peak memory during a large-document index scales with sub-batch size, not document size
 - **Batched keyword extraction** — chunks are bundled N-at-a-time (default 2, `INDEXING_KEYWORD_BATCH_SIZE`) into one LLM call during indexing instead of one call per chunk, cutting round-trips roughly N-fold; falls back to per-chunk TF extraction if a batch call or its parsing fails
 - **Multiple document formats** — PDF, PPTX, DOCX, TXT, MD
+- **PPTX/PDF → Markdown conversion cleanup** — non-scanned PDF and PPTX convert to Markdown where a `[페이지: N]` marker (not a synthetic heading) is the per-page/slide section boundary; PPTX additionally drops image-less duplicate slides, agenda/table-of-contents slides (bullets that mostly match other slides' titles), and title-only section-divider slides — numbered/keyword/short-noun-phrase titles like "PART 2"/"목차"/"결제 시스템", while sentence-like key-message titles are kept (`app.pptx-remove-duplicate-slides`, `app.pptx-drop-divider-slides`, both default on) — so content-free slides stay out of the search index
 - **Java 21 Virtual Threads** — lightweight threads for all LLM I/O and parallel indexing
 
 ## Endpoints

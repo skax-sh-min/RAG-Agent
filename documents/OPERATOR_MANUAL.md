@@ -176,11 +176,13 @@ copy .env.example .env
 |------|------|--------|------|
 | `SERVER_PORT` | — | `8080` | 애플리케이션이 리스닝할 포트 (`server.port`). 다른 서비스와 충돌할 때만 변경 — Docker Compose 사용 시 `docker-compose.yml`의 포트 매핑(`127.0.0.1:8080:8080`)과 Caddy `reverse_proxy app:8080`도 함께 맞춰야 함 |
 | `LOCAL_LLM_URL` | 이 provider 사용 시 ✅ | — (기본값 없음) | `providers[1]`(`local`, 로컬 LLM 1) 엔드포인트. **미설정·공백이면 이 provider가 통째로 비활성화된다** (`LlmConfig` G2 — 예전처럼 `http://localhost:1234/v1`로 조용히 폴백하지 않음). 값을 설정하면 기동 시 `GET {URL}/models`로 접속 가능·모델명 일치 여부를 검증한다(G3) — 실패하면 **애플리케이션이 시작되지 않는다**, [§5.2 프로바이더 활성화 게이트](#52-프로바이더-속성) 참고. 임베딩 설정(`EMBED_BASE_URL`)의 폴백으로도 별도 사용됨(그쪽은 기존처럼 자체 기본값 보유, G3 대상 아님) |
-| `LOCAL_LLM_KEY` | — | `lm-studio` | `providers[1]` API 키. **로컬 엔드포인트(llama-server 등)는 키가 불필요** — 비우거나 미설정해도(URL만 설정돼 있다면) LOCAL provider는 등록됨(내부적으로 `no-key` 치환, G1). 완전히 제외하려면 `LOCAL_LLM_URL`을 비우거나(G2) `application.properties`의 `providers[1]`를 주석 처리 |
+| `LOCAL_LLM_KEY` | — | `no-key` | `providers[1]` API 키. **로컬 엔드포인트(llama-server 등)는 키가 불필요** — 비우거나 미설정해도(URL만 설정돼 있다면) LOCAL provider는 등록됨(미설정 시 내부적으로 `no-key` 치환, G1). 완전히 제외하려면 `LOCAL_LLM_URL`을 비우거나(G2) `application.properties`의 `providers[1]`를 주석 처리 |
 | `LOCAL_LLM_MODEL` | — | `google/gemma-4-e4b` | `providers[1]` 모델 식별자. 사용 중인 로컬 모델명으로 변경 |
+| `LOCAL_LLM_TYPE` | — | `BOTH` | `providers[1]`(로컬 LLM 1) 작업 유형 (`app.llm.providers[1].type`) — `MICRO_TEXT`/`LIGHT_TEXT`/`TEXT`/`VISION`/`LIGHT_BOTH`/`BOTH` 중 하나. 기본 `BOTH`(모든 작업 처리). 예: 로컬 모델을 채팅 텍스트 전용으로 한정하려면 `TEXT` |
 | `LOCAL_LLM_URL_2` | 사용 시 ✅ | — (기본값 없음) | `providers[2]`(`local-2`, 로컬 LLM 2) 엔드포인트. `local`과 **동일한 role(LOCAL)·동일한 priority(1)**로 등록되어 두 번째 물리 서버로 로드밸런싱된다(least-in-flight — [§5.4 예제 5/7](#예제-5--로컬-llm-2대-로드밸런싱-처리량-확장) 참고). **미설정·공백이면 이 provider가 통째로 비활성화된다**(G2) — 2대째 로컬 서버가 없다면 그냥 비워두면 됨(회귀 0, `local` 단독으로 동작). 값을 설정하면 기동 시 접속 가능·모델명 일치 여부를 검증하며 실패 시 애플리케이션이 시작되지 않는다(G3) — 즉 "설정은 했지만 서버가 아직 안 떠 있다"는 이 변수를 비워두는 것과 결과가 다르다(전자는 기동 실패, 후자는 정상 기동) |
-| `LOCAL_LLM_KEY_2` | — | `LOCAL_LLM_KEY` 폴백 | `providers[2]` API 키. 미설정 시 `LOCAL_LLM_KEY` 값을 그대로 사용 |
+| `LOCAL_LLM_KEY_2` | — | `no-key` | `providers[2]` API 키. 로컬 엔드포인트는 키가 불필요 — 미설정 시 `no-key`가 치환되어 등록됨(`LOCAL_LLM_KEY`를 상속하지 않음). 모델명(`LOCAL_LLM_MODEL_2`)은 여전히 `LOCAL_LLM_MODEL`로 폴백 |
 | `LOCAL_LLM_MODEL_2` | — | `LOCAL_LLM_MODEL` 폴백 | `providers[2]` 모델 식별자. 미설정 시 `LOCAL_LLM_MODEL`과 동일한 모델명을 사용(로컬 LLM 1과 동일 모델을 다른 서버에 복제하는 것이 일반적인 사용 사례) |
+| `LOCAL_LLM_TYPE_2` | — | `BOTH` | `providers[2]`(로컬 LLM 2) 작업 유형 (`app.llm.providers[2].type`). 값 집합은 `LOCAL_LLM_TYPE`과 동일. 보통 로컬 LLM 1과 같은 `BOTH`를 사용 |
 | `LOCAL_FAST_LLM_URL` | 사용 시 ✅ | — (기본값 없음) | §6.21 — `providers[0]`(`local-fast`, 소형 로컬 LLM 1) 엔드포인트. 잡무 전용 소형(~500MB) 모델을 `providers[1]`(`local`)과 **다른 포트/장비**에 띄우고 가리킨다.<br>**미설정·공백이면 이 provider가 통째로 비활성화된다**(G2) — 소형 모델 서버가 없다면 그냥 비워두면 됨(회귀 0, `MICRO_TEXT`는 `local`이 흡수). 값을 설정하면 기동 시 접속 가능·모델명 일치 여부를 검증하며(G3, 기본 활성) 실패 시 애플리케이션이 시작되지 않는다 — "URL은 설정했지만 서버가 아직 안 떠 있어 매 요청마다 `local`로 런타임 폴백"되는 예전 동작은 `LLM_VERIFY_LOCAL_MODELS_ON_STARTUP=false`로 G3를 꺼야만 나온다 — 예제는 [§5.4 예제 6](#예제-6--소형경량-llm-분리로-잡무-오프로딩-plan-621) 참고 |
 | `LOCAL_FAST_LLM_KEY` | — | — | `providers[0]` API 키. `LOCAL_LLM_KEY`와 마찬가지로 로컬 엔드포인트는 보통 불필요 — 비워도(URL만 설정돼 있다면) `no-key`가 치환되어 등록됨 |
 | `LOCAL_FAST_LLM_MODEL` | — | `Qwen3.5-0.8B-Q4_K_M.gguf` | `providers[0]` 모델 식별자. 사용 중인 소형 모델명으로 변경 |
@@ -191,6 +193,7 @@ copy .env.example .env
 | `GEMINI_API_KEY1` | — | — | Gemini 1번 API 키 — `providers[3]`(gemini-flash-lite, NORMAL), `providers[6]`(gemma-4-31b, PREMIUM) 공유. 미설정 시 해당 providers 자동 비활성화. providers 설정에서 `${GEMINI_API_KEY1}` 형태로 참조 |
 | `GEMINI_API_KEY2` | — | — | Gemini 2번 API 키 — `providers[4]`(gemini-flash, NORMAL), `providers[7]`(gemma-4-31b, PREMIUM) 공유. 미설정 시 해당 providers 자동 비활성화. providers 설정에서 `${GEMINI_API_KEY2}` 형태로 참조. `providers[6]`·`[7]`은 이름·모델·priority(5)가 동일한 gemma-4-31b 2대로, 서로 다른 키를 씀으로써 PREMIUM 티어의 실질 처리량/쿼터를 두 배로 늘리는 로드밸런싱 쌍이다(§5.7 동일 우선순위 로드밸런싱) |
 | `GEMINI_BASE_URL` | — | `https://generativelanguage.googleapis.com/v1beta/openai/` | Gemini API 엔드포인트 URL. 모든 Gemini providers가 `${GEMINI_BASE_URL}` 형태로 참조하므로 이 값 하나로 Gemini 전체 엔드포인트를 일괄 변경 가능 |
+| `GEMINI_MODEL` | — | provider별 상이 | `providers[3]`(gemini-flash-lite)·`providers[4]`(gemini-flash)의 모델명 오버라이드 (`app.llm.providers[3]/[4].model`). 미설정 시 각자의 기본값(`gemini-3.1-flash-lite`/`gemini-2.5-flash`) 사용. **주의**: 두 provider가 같은 변수를 참조하므로, 설정하면 둘 다 같은 모델이 되어 NORMAL 티어의 2모델 폴백이 하나로 합쳐진다 — 서로 다른 모델을 유지하려면 이 변수 대신 `application.properties`에서 각 `providers[N].model` 줄을 직접 지정할 것 |
 | `EMBED_BASE_URL` | — | `LOCAL_LLM_URL` 폴백 | 임베딩 전용 엔드포인트. 미설정 시 `LOCAL_LLM_URL` 사용. OpenAI 임베딩 사용 시 `https://api.openai.com` 등으로 독립 설정 |
 | `EMBED_API_KEY` | — | `LOCAL_LLM_KEY` 폴백 | 임베딩 전용 API 키. 미설정 시 `LOCAL_LLM_KEY` 사용 |
 | `EMBED_MODEL` | — | `text-embedding-nomic-embed-text-v1.5` | 임베딩 모델 식별자. **인덱싱 후 변경 금지** — 벡터 차원이 달라지면 기존 검색이 깨짐. 변경 시 전체 재인덱싱 필요 (chroma: 컬렉션 삭제 / sqlite-vec: `vec_embeddings` DROP — 차원이 DDL에 고정되며 `app.embedding.dimensions`도 함께 변경) |
@@ -1869,6 +1872,7 @@ curl http://localhost:8001/api/v1/heartbeat
 | Chroma 연결 실패 | Chroma 컨테이너 실행 확인 (`docker ps` 또는 `container ls`) |
 | 포트 충돌 | `lsof -i :8080`으로 점유 프로세스 확인 후 종료 |
 | JDK 버전 | `java -version` → 21 이상인지 확인 |
+| `OpenAI API key must be set` (`openAiApi`/`OpenAiAudioSpeechModel` 등 빈 생성 실패) | 앱은 채팅·임베딩·`OpenAiApi`를 전부 직접 만들고(`LlmConfig`/`EmbeddingBeanConfig`) Spring AI의 OpenAI 자동설정 빈은 **하나도 쓰지 않는다**. 자동설정을 켜두면 각 autoconfig가 기동 시 `openAiApi` 빈을 무조건 만들고 `spring.ai.openai.api-key`에 `Assert.hasText`를 걸어, `LOCAL_LLM_KEY`가 비어 있으면 죽는다(채팅·임베딩 자동설정도 마찬가지 — 모델 빈은 `@ConditionalOnMissingBean`으로 스킵되지만 `openAiApi` 빈은 아님). `application.properties`의 `spring.autoconfigure.exclude`에 **OpenAI 모델 자동설정 6종**(`OpenAiChat`/`OpenAiEmbedding`/`OpenAiAudioSpeech`/`OpenAiAudioTranscription`/`OpenAiImage`/`OpenAiModeration`AutoConfiguration)이 모두 제외돼 있어야 한다. 이 줄이 지워졌는지 확인 |
 
 ---
 
