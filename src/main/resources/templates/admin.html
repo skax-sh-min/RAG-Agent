@@ -266,6 +266,39 @@ document.querySelectorAll('.collection-btn').forEach(function (btn) {
     });
 });
 
+// applyDocFilter/applyLimitFilter/loadChunks live here (page-level script, loaded once) rather than
+// inside fragments/admin-chunks.html's own markup — a <script> tag inserted via plain
+// element.innerHTML = html (as loadChunks() below does) never executes in the browser, so if it were
+// fragment-embedded these functions would only exist after the one path that swaps via htmx
+// (hx-swap, which does execute scripts) and stay undefined — silently breaking 다음/페이지당 건수 —
+// whenever the panel is first populated via 청크 보기 (loadChunksByDoc) instead of a collection click.
+function currentChunkCollection() {
+    const el = document.querySelector('#chunk-panel [data-collection]');
+    return el ? el.dataset.collection : '';
+}
+
+function applyDocFilter(sel) {
+    loadChunks(currentChunkCollection(), sel.value, 0, +document.getElementById('limit-select').value);
+}
+
+function applyLimitFilter(sel) {
+    loadChunks(currentChunkCollection(), document.getElementById('docId-select').value, 0, +sel.value);
+}
+
+function loadChunks(collection, docId, offset, limit) {
+    let url = '/admin/chunks?collection=' + encodeURIComponent(collection)
+            + '&offset=' + offset + '&limit=' + limit;
+    if (docId) url += '&docId=' + encodeURIComponent(docId);
+    document.getElementById('chunk-spinner').style.display = 'block';
+    fetch(url, { headers: { 'HX-Request': 'true' } })
+        .then(r => r.text())
+        .then(html => {
+            document.getElementById('chunk-panel').innerHTML = html;
+            document.getElementById('chunk-spinner').style.display = 'none';
+        })
+        .catch(() => { document.getElementById('chunk-spinner').style.display = 'none'; });
+}
+
 // Load chunks filtered by docId from the registry table
 function loadChunksByDoc(btn) {
     const docId   = btn.getAttribute('data-doc-id');
@@ -438,6 +471,19 @@ function saveCuratedEdit(id) {
         } else { showToast('저장 실패', 'danger'); }
     })
     .catch(() => showToast('저장 중 오류 발생', 'danger'));
+}
+
+// Pagination/page-size — page-level function for the same reason applyDocFilter/loadChunks above
+// live here rather than in fragments/admin-curated.html: it re-fetches via plain innerHTML, which
+// never executes a fragment-embedded <script>.
+function applyCuratedLimitFilter(sel) {
+    loadCurated(0, +sel.value);
+}
+
+function loadCurated(offset, limit) {
+    fetch('/admin/curated?offset=' + offset + '&limit=' + limit, { headers: { 'HX-Request': 'true' } })
+        .then(r => r.text())
+        .then(html => { document.getElementById('curated-qa-body').innerHTML = html; });
 }
 
 function deleteCuratedInline(id, btn) {

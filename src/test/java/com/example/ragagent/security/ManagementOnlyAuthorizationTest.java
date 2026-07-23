@@ -129,7 +129,7 @@ class ManagementOnlyAuthorizationTest {
         when(adminService.listCollections()).thenReturn(new AdminService.CollectionsResult(List.of(), true));
         when(adminService.vectorStoreView()).thenReturn(new VectorStoreAdminView(
                 "chroma", true, -1, 0, 0, null, null, "memory.db", "memory.db"));
-        when(curatedQaService.listActive(anyInt())).thenReturn(List.of());
+        when(curatedQaService.listActive(anyInt(), anyInt())).thenReturn(List.of());
     }
 
     // ── 게이트 경로: 익명 접근 → 로그인으로 리다이렉트 ──────────────────────────

@@ -3,7 +3,7 @@
 <body>
 
 <th:block th:fragment="table">
-<div class="card">
+<div class="card" th:data-collection="${collection}">
     <div class="card-header py-2">
         <div class="d-flex align-items-center justify-content-between flex-wrap gap-2">
             <!-- Title -->
@@ -173,35 +173,6 @@
         </button>
     </div>
 </div>
-
-<script>
-function applyDocFilter(sel) {
-    const collection = /*[[${collection}]]*/ '';
-    const docId = sel.value;
-    loadChunks(collection, docId, 0, +document.getElementById('limit-select').value);
-}
-
-function applyLimitFilter(sel) {
-    const collection = /*[[${collection}]]*/ '';
-    const docId = document.getElementById('docId-select').value;
-    loadChunks(collection, docId, 0, +sel.value);
-}
-
-function loadChunks(collection, docId, offset, limit) {
-    let url = '/admin/chunks?collection=' + encodeURIComponent(collection)
-            + '&offset=' + offset + '&limit=' + limit;
-    if (docId) url += '&docId=' + encodeURIComponent(docId);
-    document.getElementById('chunk-spinner').style.display = 'block';
-    fetch(url, { headers: { 'HX-Request': 'true' } })
-        .then(r => r.text())
-        .then(html => {
-            document.getElementById('chunk-panel').innerHTML = html;
-            document.getElementById('chunk-spinner').style.display = 'none';
-            htmx.process(document.getElementById('chunk-panel'));
-        })
-        .catch(() => { document.getElementById('chunk-spinner').style.display = 'none'; });
-}
-</script>
 </th:block>
 
 </body>

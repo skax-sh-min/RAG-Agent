@@ -256,6 +256,14 @@ class CuratedQaServiceTest {
     }
 
     @Test
+    @DisplayName("listActive(offset, limit) — repository의 페이지네이션 오버로드로 위임한다")
+    void listActive_paginated_delegatesToRepository() {
+        when(repository.findAllActive(20, 20)).thenReturn(List.of(curatedQa(2L, "active", "질문2", "답변2")));
+
+        assertThat(service.listActive(20, 20)).hasSize(1);
+    }
+
+    @Test
     @DisplayName("findActiveByTurn — 비활성 엔트리는 empty를 반환한다")
     void findActiveByTurn_inactiveEntry_returnsEmpty() {
         when(repository.findBySourceTurnId(TURN_ID)).thenReturn(Optional.of(curatedQa(1L, "inactive", "질문", "답변")));

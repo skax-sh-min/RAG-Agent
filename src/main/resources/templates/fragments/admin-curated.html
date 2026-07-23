@@ -2,12 +2,45 @@
 <html xmlns:th="http://www.thymeleaf.org" lang="ko">
 <body>
 
-<!-- §10.10 큐레이션 Q&A 패널 — /admin/curated 로 지연 로딩되는 카드 본문 -->
+<!-- §10.10 큐레이션 Q&A 패널 — /admin/curated 로 지연 로딩되는 카드 본문. 페이지네이션 컨트롤은
+     onclick="loadCurated(...)"로 admin.html의 페이지 레벨 스크립트를 호출한다 — 이 프래그먼트
+     자체에는 <script>를 두지 않는다(청크 목록과 동일한 이유: 재조회 시 plain innerHTML로 삽입되어
+     프래그먼트 내장 <script>는 실행되지 않는다). -->
 <th:block th:fragment="panel">
 <div class="card-body p-0">
-    <div class="px-3 py-2 border-bottom small text-muted">
+    <div class="px-3 py-2 border-bottom d-flex align-items-center flex-wrap gap-2 small text-muted">
         <span class="badge bg-secondary me-1" th:text="${#lists.size(curatedEntries)}">0</span>건
+        <select class="form-select form-select-sm ms-auto" id="curated-limit-select" style="max-width:100px;"
+                onchange="applyCuratedLimitFilter(this)">
+            <option value="20"  th:selected="${limit == 20}">20건</option>
+            <option value="50"  th:selected="${limit == 50}">50건</option>
+            <option value="100" th:selected="${limit == 100}">100건</option>
+        </select>
     </div>
+
+    <!-- Pagination controls (top) -->
+    <div class="px-3 py-2 border-bottom d-flex align-items-center gap-2 small text-muted"
+         th:if="${#lists.size(curatedEntries) > 0 or offset > 0}">
+        <button class="btn btn-sm btn-outline-secondary py-0 px-2"
+                th:disabled="${offset == 0}"
+                th:data-offset="${offset - limit}"
+                th:data-limit="${limit}"
+                onclick="loadCurated(+this.dataset.offset, +this.dataset.limit)">
+            ‹ 이전
+        </button>
+        <span>
+            <span th:text="${offset + 1}">1</span> –
+            <span th:text="${offset + #lists.size(curatedEntries)}">20</span>
+        </span>
+        <button class="btn btn-sm btn-outline-secondary py-0 px-2"
+                th:disabled="${#lists.size(curatedEntries) < limit}"
+                th:data-offset="${offset + limit}"
+                th:data-limit="${limit}"
+                onclick="loadCurated(+this.dataset.offset, +this.dataset.limit)">
+            다음 ›
+        </button>
+    </div>
+
     <div th:if="${#lists.isEmpty(curatedEntries)}"
          class="text-muted small p-3 text-center">큐레이션된 Q&A가 없습니다.</div>
     <div class="table-responsive" th:unless="${#lists.isEmpty(curatedEntries)}">
@@ -46,6 +79,29 @@
             </tr>
             </tbody>
         </table>
+    </div>
+
+    <!-- Pagination controls (bottom) -->
+    <div class="px-3 py-2 border-top d-flex align-items-center gap-2 small text-muted"
+         th:if="${#lists.size(curatedEntries) > 0 or offset > 0}">
+        <button class="btn btn-sm btn-outline-secondary py-0 px-2"
+                th:disabled="${offset == 0}"
+                th:data-offset="${offset - limit}"
+                th:data-limit="${limit}"
+                onclick="loadCurated(+this.dataset.offset, +this.dataset.limit)">
+            ‹ 이전
+        </button>
+        <span>
+            <span th:text="${offset + 1}">1</span> –
+            <span th:text="${offset + #lists.size(curatedEntries)}">20</span>
+        </span>
+        <button class="btn btn-sm btn-outline-secondary py-0 px-2"
+                th:disabled="${#lists.size(curatedEntries) < limit}"
+                th:data-offset="${offset + limit}"
+                th:data-limit="${limit}"
+                onclick="loadCurated(+this.dataset.offset, +this.dataset.limit)">
+            다음 ›
+        </button>
     </div>
 </div>
 </th:block>

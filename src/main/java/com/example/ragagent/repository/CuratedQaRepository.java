@@ -130,16 +130,21 @@ public class CuratedQaRepository {
         jdbc.update("UPDATE curated_qa SET answer=?, updated_at=? WHERE id=?", answer, now(), id);
     }
 
-    /** §10.10 step ④ — admin curated-Q&A browser listing, most recently created first. Only
-     *  {@code active} rows (the ones actually contributing to search) — a deactivated entry is
+    /** Same as {@link #findAllActive(int, int)} with {@code offset=0}. */
+    public List<CuratedQa> findAllActive(int limit) {
+        return findAllActive(0, limit);
+    }
+
+    /** §10.10 step ④ — admin curated-Q&A browser listing, most recently created first, paginated.
+     *  Only {@code active} rows (the ones actually contributing to search) — a deactivated entry is
      *  already out of the index and not actionable from this view. {@code id DESC} as a tiebreaker
      *  since {@code created_at} only has second-level precision (two rows upserted within the same
      *  second would otherwise tie). */
-    public List<CuratedQa> findAllActive(int limit) {
+    public List<CuratedQa> findAllActive(int offset, int limit) {
         return jdbc.query(
                 "SELECT " + COLUMNS + "FROM curated_qa WHERE status = 'active' " +
-                "ORDER BY created_at DESC, id DESC LIMIT ?",
-                ROW_MAPPER, limit);
+                "ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?",
+                ROW_MAPPER, limit, offset);
     }
 
     private static String now() {

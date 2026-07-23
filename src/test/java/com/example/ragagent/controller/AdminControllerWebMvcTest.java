@@ -31,8 +31,8 @@ import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
@@ -135,13 +135,13 @@ class AdminControllerWebMvcTest {
                 .andExpect(model().attributeDoesNotExist("curatedEntries"))
                 .andExpect(content().string(containsString("펼치면 조회")));
 
-        verify(curatedQaService, never()).listActive(anyInt());
+        verifyNoInteractions(curatedQaService);
     }
 
     @Test
     @DisplayName("GET /admin/curated — curatedEntries 모델 속성과 항목 렌더 (패널 펼침 시 호출되는 지연 로딩 프래그먼트)")
     void curatedPanel_rendersCuratedEntries() throws Exception {
-        when(curatedQaService.listActive(anyInt())).thenReturn(List.of(
+        when(curatedQaService.listActive(anyInt(), anyInt())).thenReturn(List.of(
                 new com.example.ragagent.repository.CuratedQaRepository.CuratedQa(
                         1L, 42L, "u1", "t1", "질문입니다", "답변입니다", "active", "latest",
                         "2026-01-01T00:00:00", "2026-01-01T00:00:00")));
@@ -150,6 +150,17 @@ class AdminControllerWebMvcTest {
                 .andExpect(status().isOk())
                 .andExpect(model().attributeExists("curatedEntries"))
                 .andExpect(content().string(containsString("질문입니다")));
+    }
+
+    @Test
+    @DisplayName("GET /admin/curated — offset/limit 파라미터 생략 시 기본값 0/20으로 서비스 호출")
+    void curatedPanel_defaultsOffsetZeroLimitTwenty() throws Exception {
+        when(curatedQaService.listActive(anyInt(), anyInt())).thenReturn(List.of());
+
+        mvc.perform(get("/admin/curated").with(user(ADMIN)))
+                .andExpect(status().isOk());
+
+        verify(curatedQaService).listActive(0, 20);
     }
 
     @Test

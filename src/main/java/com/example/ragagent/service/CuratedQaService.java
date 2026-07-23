@@ -165,9 +165,14 @@ public class CuratedQaService {
         return true;
     }
 
-    /** §10.10 step ④ — admin curated-Q&A browser listing. */
+    /** Same as {@link #listActive(int, int)} with {@code offset=0}. */
     public List<CuratedQa> listActive(int limit) {
         return repository.findAllActive(limit);
+    }
+
+    /** §10.10 step ④ — admin curated-Q&A browser listing, paginated. */
+    public List<CuratedQa> listActive(int offset, int limit) {
+        return repository.findAllActive(offset, limit);
     }
 
     /** §10.10 step ④ — direct id lookup for the admin edit panel (chat's owner-edit path looks

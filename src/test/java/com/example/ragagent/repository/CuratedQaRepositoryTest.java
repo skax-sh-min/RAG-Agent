@@ -130,4 +130,18 @@ class CuratedQaRepositoryTest {
         assertThat(ids).containsExactly(newer, older); // id DESC 타이브레이커로 결정적 순서
         assertThat(ids).doesNotContain(deactivated);
     }
+
+    @Test
+    @DisplayName("§10.10 step④ — findAllActive(offset, limit)로 페이지네이션한다")
+    void findAllActive_paginated() {
+        long first  = repo.upsertActive(1L, "u1", "t1", "질문1", "답변1", "latest");
+        long second = repo.upsertActive(2L, "u1", "t1", "질문2", "답변2", "latest");
+        long third  = repo.upsertActive(3L, "u1", "t1", "질문3", "답변3", "latest");
+
+        List<Long> page1 = repo.findAllActive(0, 2).stream().map(CuratedQaRepository.CuratedQa::id).toList();
+        List<Long> page2 = repo.findAllActive(2, 2).stream().map(CuratedQaRepository.CuratedQa::id).toList();
+
+        assertThat(page1).containsExactly(third, second); // newest first
+        assertThat(page2).containsExactly(first);
+    }
 }

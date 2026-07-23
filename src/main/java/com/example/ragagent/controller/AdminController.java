@@ -24,7 +24,6 @@ import java.util.Map;
 public class AdminController {
 
     private static final Logger log = LoggerFactory.getLogger(AdminController.class);
-    private static final int CURATED_LIST_LIMIT = 50; // §10.10 — small expected volume, no paging yet
 
     private final AdminService adminService;
     private final RagService   ragService;
@@ -140,11 +139,16 @@ public class AdminController {
     /**
      * Curated Q&A panel fragment — lazy-loaded only when the admin expands the section
      * (the section is collapsed by default so {@code listActive()} doesn't run a DB query
-     * on every {@code /admin} page load).
+     * on every {@code /admin} page load). Paginated (20/50/100 per page, default 20) so the
+     * panel stays usable as the curated set grows past the old 50-row cap.
      */
     @GetMapping("/admin/curated")
-    public String curatedPanel(Model model) {
-        model.addAttribute("curatedEntries", curatedQaService.listActive(CURATED_LIST_LIMIT));
+    public String curatedPanel(@RequestParam(defaultValue = "0")  int offset,
+                                @RequestParam(defaultValue = "20") int limit,
+                                Model model) {
+        model.addAttribute("curatedEntries", curatedQaService.listActive(offset, limit));
+        model.addAttribute("offset", offset);
+        model.addAttribute("limit",  limit);
         return "fragments/admin-curated :: panel";
     }
 
