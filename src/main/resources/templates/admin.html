@@ -63,19 +63,18 @@
                     <div class="text-muted">차원</div>
                     <div class="fs-5 fw-semibold" th:text="${vectorStore.dimension() ?: '—'}">—</div>
                 </div>
-            </div>
-
-            <!-- 운영 DB / 벡터 DB 경로 (오인 방지) -->
-            <div th:if="${vectorStore.operationalDbPath() != null}" class="mt-3 small">
-                <div class="d-flex flex-wrap gap-3">
-                    <span class="text-muted">
-                        운영 DB:
-                        <span class="font-monospace" th:text="${vectorStore.operationalDbPath()}">memory.db</span>
-                    </span>
-                    <span th:if="${vectorStore.vectorDbPath() != null}" class="text-muted">
-                        벡터 DB:
-                        <span class="font-monospace" th:text="${vectorStore.vectorDbPath()}">vector.db</span>
-                        <span th:if="${vectorStore.isDbSeparated()}" class="badge bg-info text-dark ms-1">분리됨</span>
+                <!-- 운영 DB / 벡터 DB — 파일명만 표시, 전체 경로는 마우스 오버 팝오버로 (오인 방지) -->
+                <div class="col-6 col-md-3" th:if="${vectorStore.operationalDbPath() != null}">
+                    <div class="text-muted">DB 파일</div>
+                    <span class="fs-6 lh-sm d-inline-block db-path-info" tabindex="0" style="cursor:default;"
+                          th:attr="data-bs-content=${vectorStore.dbPathsPopoverHtml()}"
+                          data-bs-toggle="popover" data-bs-trigger="hover focus"
+                          data-bs-placement="bottom" data-bs-html="true">
+                        운영 DB: <span th:text="${vectorStore.operationalDbFileName()}">memory.db</span><br>
+                        <th:block th:if="${vectorStore.vectorDbPath() != null}">
+                            벡터 DB: <span th:text="${vectorStore.vectorDbFileName()}">vector.db</span>
+                            <span th:if="${vectorStore.isDbSeparated()}" class="badge bg-info text-dark ms-1" style="font-size:0.62rem;">분리됨</span>
+                        </th:block>
                     </span>
                 </div>
             </div>
@@ -258,6 +257,11 @@
 const IS_SQLITE_VEC = /*[[${vectorStore.isSqliteVec()}]]*/ false;
 </script>
 <script>
+// DB 파일 경로 hover 팝오버 (Vector Store 상태 카드) — 관례는 message-assistant.html의 출처 팝오버와 동일
+document.querySelectorAll('.db-path-info[data-bs-toggle="popover"]').forEach(function (el) {
+    new bootstrap.Popover(el);
+});
+
 // Highlight selected collection button
 document.querySelectorAll('.collection-btn').forEach(function (btn) {
     btn.addEventListener('click', function () {

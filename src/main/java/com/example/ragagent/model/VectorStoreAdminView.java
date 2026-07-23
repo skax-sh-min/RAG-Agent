@@ -1,5 +1,6 @@
 package com.example.ragagent.model;
 
+import java.nio.file.Path;
 import java.util.List;
 
 /**
@@ -31,5 +32,24 @@ public record VectorStoreAdminView(
     /** True when the vector tables live in a dedicated file distinct from memory.db (active). */
     public boolean isDbSeparated() {
         return vectorDbPath != null && !vectorDbPath.equals(operationalDbPath);
+    }
+
+    /** Bare filename (no directory) for the compact /admin status-card display — full path moves to a hover popover. */
+    public String operationalDbFileName() {
+        return operationalDbPath == null ? null : Path.of(operationalDbPath).getFileName().toString();
+    }
+
+    /** Same as {@link #operationalDbFileName()} for the vector DB file. */
+    public String vectorDbFileName() {
+        return vectorDbPath == null ? null : Path.of(vectorDbPath).getFileName().toString();
+    }
+
+    /** HTML content (line break, no escaping) for the /admin status card's DB-path hover popover. */
+    public String dbPathsPopoverHtml() {
+        String html = "운영 DB: " + operationalDbPath;
+        if (vectorDbPath != null) {
+            html += "<br>벡터 DB: " + vectorDbPath;
+        }
+        return html;
     }
 }
