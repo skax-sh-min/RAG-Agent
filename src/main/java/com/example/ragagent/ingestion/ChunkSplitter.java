@@ -48,14 +48,20 @@ public class ChunkSplitter {
                                           int chunkSize, int overlap, int minChunkSize, int maxChunkChars) {
         String lower = filename.toLowerCase();
 
-        // .txt/.pptx/non-scanned .pdf are all converted to structured MD before this point, so
-        // they split section-wise too. Scanned PDF (source_type=ocr) never goes through MD
-        // conversion, so it stays on the plain sliding-window path below.
-        boolean structuredMd = lower.endsWith(".md") || lower.endsWith(".docx") || lower.endsWith(".txt")
-                || lower.endsWith(".pptx")
-                || (lower.endsWith(".pdf") && !isOcrSourced(docs));
+        // Two structured strategies split section-wise; scanned PDF (source_type=ocr) never goes
+        // through MD conversion, so it stays on the plain sliding-window path below.
+        //   chapter-structured (md/docx/txt): real author headings → minChunkSize-based chapter
+        //     merge (mergeSectionsByChapter) + parent-heading breadcrumb + backward-merge.
+        //   page-structured (pptx / non-scanned pdf): synthetic per-page/slide sections → legacy
+        //     mergeShortSections, keeping the "1 chunk = 1 slide/page" page_or_slide guarantee.
+        boolean chapterStructured = lower.endsWith(".md") || lower.endsWith(".docx") || lower.endsWith(".txt");
+        boolean pageStructured = lower.endsWith(".pptx") || (lower.endsWith(".pdf") && !isOcrSourced(docs));
 
-        if (structuredMd) {
+        if (chapterStructured) {
+            return splitChapterStructured(docs, filename, chunkSize, overlap, minChunkSize, maxChunkChars);
+        }
+
+        if (pageStructured) {
             List<Document> sectionMerged = mergeShortSections(docs, chunkSize);
             List<Document> result = new ArrayList<>();
             for (Document doc : sectionMerged) {
@@ -69,7 +75,7 @@ public class ChunkSplitter {
                     result.addAll(reinjectHeadingForSplitPieces(doc.getText(), pieces));
                 }
             }
-            log.debug("[SPLIT] {} → 섹션 분할 전략, {}섹션 → 병합 {}섹션 → {}청크",
+            log.debug("[SPLIT] {} → 페이지 섹션 전략, {}섹션 → 병합 {}섹션 → {}청크",
                     filename, docs.size(), sectionMerged.size(), result.size());
             return enforceMaxChars(result, maxChunkChars, filename);
         }
@@ -80,6 +86,50 @@ public class ChunkSplitter {
         }
         log.debug("[SPLIT] {} → 슬라이딩 윈도우 전략, {}섹션 → {}청크", filename, docs.size(), result.size());
         return enforceMaxChars(result, maxChunkChars, filename);
+    }
+
+    /**
+     * Chapter-structured (md/docx/txt) split pipeline (see {@link #splitDocuments}):
+     * <ol>
+     *   <li>{@link #mergeSectionsByChapter} — forward-merge sections below {@code minChunkSize} into
+     *       chapter groups (parent-heading merges forbidden), each group tracking its starting
+     *       original-section index for parent lookup;</li>
+     *   <li>per group: sliding-window split when over {@code chunkSize} + own-heading reinjection,
+     *       then a parent-chapter breadcrumb on the first (non-tail) piece of a child chapter;</li>
+     *   <li>{@link #backwardMergeShortChunks} — pull any still-tiny chunk into the previous one;</li>
+     *   <li>{@link #enforceMaxChars} final ceiling.</li>
+     * </ol>
+     */
+    private List<Document> splitChapterStructured(List<Document> docs, String filename,
+                                                  int chunkSize, int overlap, int minChunkSize, int maxChunkChars) {
+        List<SectionGroup> groups = mergeSectionsByChapter(docs, chunkSize, overlap, minChunkSize);
+
+        List<Document> result = new ArrayList<>();
+        for (SectionGroup group : groups) {
+            Document doc = group.doc();
+            if (doc.getText() == null || doc.getText().isBlank()) continue;
+
+            List<Document> pieces;
+            if (doc.getText().length() <= chunkSize) {
+                pieces = List.of(doc);
+            } else {
+                log.debug("[SPLIT] 섹션 {}자 > chunkSize={}, 슬라이딩 윈도우 적용",
+                        doc.getText().length(), chunkSize);
+                List<Document> raw = slidingWindow(doc, chunkSize, overlap, minChunkSize);
+                pieces = reinjectHeadingForSplitPieces(doc.getText(), raw);
+            }
+            result.addAll(prependParentBreadcrumb(docs, group.startIndex(), pieces));
+        }
+
+        result = backwardMergeShortChunks(result, minChunkSize);
+        log.debug("[SPLIT] {} → 챕터 섹션 전략, {}섹션 → 병합 {}그룹 → {}청크",
+                filename, docs.size(), groups.size(), result.size());
+        return enforceMaxChars(result, maxChunkChars, filename);
+    }
+
+    /** A forward-merged chapter group plus the index of its first section in the original list
+     *  (used to look up the parent-chapter heading — see {@link #prependParentBreadcrumb}). */
+    record SectionGroup(Document doc, int startIndex) {
     }
 
     /** True when the (non-empty) raw doc list is tagged as OCR output — i.e. a scanned PDF. */
@@ -218,6 +268,183 @@ public class ChunkSplitter {
     }
 
     /**
+     * Chapter-aware forward merge for md/docx/txt (replaces the 40%/75%-threshold
+     * {@link #mergeShortSections} on that path). Only a section still below {@code minChunkSize}
+     * pulls in the following one, and never across a heading that opens a <em>higher</em> (parent)
+     * chapter. When the current group is tiny, the next section's size decides:
+     * <ol>
+     *   <li><b>규칙1</b> current+next fits in {@code chunkSize} → merge, keep accumulating;</li>
+     *   <li><b>규칙2</b> next alone fits in {@code chunkSize} → stop (next stays a clean chunk);</li>
+     *   <li><b>규칙3</b> next exceeds {@code chunkSize} (will be sliding-split) → merge only if
+     *       prepending current keeps the split's last piece ≥ {@code minChunkSize * 1.5}
+     *       (avoids leaving an awkward tail), otherwise stop.</li>
+     * </ol>
+     * Size is normalized length (§10.1-보완). Each returned {@link SectionGroup} keeps the first
+     * section's metadata and its original index (for {@link #prependParentBreadcrumb}). A tiny
+     * group that could not merge forward is later pulled backward by {@link #backwardMergeShortChunks}.
+     */
+    List<SectionGroup> mergeSectionsByChapter(List<Document> docs, int chunkSize, int overlap, int minChunkSize) {
+        List<SectionGroup> groups = new ArrayList<>();
+        if (docs == null || docs.isEmpty()) return groups;
+
+        int n = docs.size();
+        int[] size = new int[n];
+        int[] level = new int[n];
+        for (int k = 0; k < n; k++) {
+            String t = docs.get(k).getText();
+            size[k] = t == null ? 0 : MarkdownNoiseNormalizer.normalize(t).length();
+            level[k] = sectionHeadingLevel(docs.get(k));
+        }
+
+        int i = 0;
+        while (i < n) {
+            int start = i;
+            StringBuilder acc = new StringBuilder(docs.get(i).getText() == null ? "" : docs.get(i).getText());
+            Map<String, Object> metadata = new HashMap<>(docs.get(i).getMetadata());
+            int accSize = size[i];
+            int accLevel = level[i]; // group's top (most-senior) heading level; 0 = no heading yet
+            int j = i;
+
+            while (accSize < minChunkSize && j + 1 < n) {
+                int next = j + 1;
+                String nextText = docs.get(next).getText();
+                if (nextText == null || nextText.isBlank()) { // absorb blank section, keep going
+                    j = next;
+                    continue;
+                }
+
+                // 상위 챕터로의 병합 금지: next가 더 상위(작은 레벨) 헤딩이면 중단.
+                if (accLevel > 0 && level[next] > 0 && level[next] < accLevel) break;
+                if (isMergeForbiddenByPageMismatch(pageOrSlideOf(docs.get(start)), pageOrSlideOf(docs.get(next)))) break;
+
+                int combined = accSize + 2 + size[next];
+                if (combined <= chunkSize) {                 // 규칙1: 합쳐도 chunkSize 이내 → 병합
+                    appendSection(acc, nextText);
+                    accSize = combined;
+                    accLevel = mergedTopLevel(accLevel, level[next]);
+                    j = next;
+                    continue;
+                }
+                if (size[next] <= chunkSize) break;          // 규칙2: next 단독이 chunkSize 이내 → 분리
+
+                // 규칙3: next가 chunkSize 초과 → prepend 후 분할 시 마지막 조각이 너무 작아지면 병합 안 함.
+                String combinedText = acc + "\n\n" + nextText;
+                List<String> pieces = rawSlidingPieces(combinedText, chunkSize, overlap);
+                int lastLen = pieces.isEmpty() ? 0 : pieces.get(pieces.size() - 1).strip().length();
+                if (lastLen < minChunkSize * 1.5) break;
+                appendSection(acc, nextText);
+                accSize = combined;
+                accLevel = mergedTopLevel(accLevel, level[next]);
+                j = next;
+                break;                                       // next는 이미 큼 → 그 뒤로는 병합 시도 안 함
+            }
+
+            groups.add(new SectionGroup(new Document(acc.toString(), metadata), start));
+            i = j + 1;
+        }
+        return groups;
+    }
+
+    private static void appendSection(StringBuilder acc, String text) {
+        if (acc.length() > 0) acc.append("\n\n");
+        acc.append(text);
+    }
+
+    /** Group's representative (most-senior) heading level: the min of the non-zero levels seen,
+     *  0 only while no section in the group has a heading. */
+    private static int mergedTopLevel(int accLevel, int nextLevel) {
+        if (nextLevel <= 0) return accLevel;
+        if (accLevel <= 0) return nextLevel;
+        return Math.min(accLevel, nextLevel);
+    }
+
+    /**
+     * Prepends the immediate parent-chapter heading (one level up) as a single breadcrumb line to
+     * the <em>first (non-tail) piece only</em> of a child-chapter group — giving that chunk its
+     * chapter context. No-op unless the group's leading section is a child chapter (heading level
+     * ≥ 3; a top-level {@code ##} or heading-less section is skipped). The parent heading is the
+     * nearest preceding section (in the original ordered list) whose heading level is lower;
+     * skipped when none exists. Tail pieces (2nd+) already carry their own reinjected heading
+     * ({@link #reinjectHeadingForSplitPieces}) and are left untouched.
+     */
+    List<Document> prependParentBreadcrumb(List<Document> sections, int startIndex, List<Document> pieces) {
+        if (pieces.isEmpty()) return pieces;
+
+        int ownLevel = sectionHeadingLevel(sections.get(startIndex));
+        if (ownLevel < 3) return pieces; // 조건2: ## 최상위(또는 헤딩 없음/#)는 대상 아님
+
+        HeadingInfo parent = null;
+        for (int k = startIndex - 1; k >= 0; k--) {
+            int lvl = sectionHeadingLevel(sections.get(k));
+            if (lvl > 0 && lvl < ownLevel) {
+                parent = extractLeadingHeading(sections.get(k).getText());
+                break;
+            }
+        }
+        if (parent == null) return pieces;
+
+        String parentLine = parent.marker() + " " + parent.text();
+        List<Document> out = new ArrayList<>(pieces);
+        Document first = out.get(0);
+        out.set(0, new Document(parentLine + "\n" + first.getText(), new HashMap<>(first.getMetadata())));
+        return out;
+    }
+
+    /**
+     * Cross-section analog of {@link #mergeTinyChunks}: any emitted chunk still below
+     * {@code minChunkSize} (normalized) is merged into the previous chunk; a tiny leading chunk with
+     * no predecessor is prepended to the following one instead. This is what pulls a small section
+     * that could not merge forward (next was a parent chapter, or 규칙2 kept next clean) backward
+     * into its natural home. The {@code page_or_slide} guard is a safety no-op for md/docx/txt.
+     */
+    List<Document> backwardMergeShortChunks(List<Document> chunks, int minChunkSize) {
+        if (chunks == null || chunks.isEmpty()) return chunks;
+
+        List<Document> out = new ArrayList<>();
+        String pendingPrefix = "";
+        Map<String, Object> pendingMeta = null;
+
+        for (Document chunk : chunks) {
+            String text = chunk.getText() == null ? "" : chunk.getText();
+            if (text.isBlank()) continue;
+
+            Map<String, Object> meta = new HashMap<>(chunk.getMetadata());
+            if (!pendingPrefix.isEmpty()) {           // flush leading orphan(s) into this chunk
+                text = pendingPrefix + "\n\n" + text;
+                pendingPrefix = "";
+                pendingMeta = null;
+            }
+
+            if (MarkdownNoiseNormalizer.normalize(text).length() < minChunkSize) {
+                if (!out.isEmpty()) {
+                    Document prev = out.get(out.size() - 1);
+                    if (isMergeForbiddenByPageMismatch(pageOrSlideOf(prev), pageOrSlideOf(chunk))) {
+                        out.add(new Document(text, meta));
+                    } else {
+                        out.set(out.size() - 1,
+                                new Document(prev.getText() + "\n\n" + text, new HashMap<>(prev.getMetadata())));
+                    }
+                } else {
+                    pendingPrefix = text;
+                    pendingMeta = meta;
+                }
+                continue;
+            }
+            out.add(new Document(text, meta));
+        }
+
+        if (!pendingPrefix.isEmpty()) { // every chunk was tiny, or a tiny tail never found a successor
+            if (!out.isEmpty()) {
+                Document first = out.get(0);
+                out.set(0, new Document(pendingPrefix + "\n\n" + first.getText(), new HashMap<>(first.getMetadata())));
+            } else {
+                out.add(new Document(pendingPrefix, pendingMeta != null ? pendingMeta : new HashMap<>()));
+            }
+        }
+        return out;
+    }
+
+    /**
      * Blocks merging across a slide/page boundary. PPTX/non-scanned-PDF sections are always
      * tagged with {@link MetaKey#PAGE_OR_SLIDE}; letting them merge across a different value would
      * silently drop every merged-in slide/page number but the first ({@link #mergeShortSections}
@@ -304,9 +531,23 @@ public class ChunkSplitter {
 
     List<Document> slidingWindow(Document doc, int chunkSize, int overlap, int minChunkSize) {
         List<Document> result = new ArrayList<>();
+        List<String> rawChunks = rawSlidingPieces(doc.getText(), chunkSize, overlap);
+        for (String merged : mergeTinyChunks(rawChunks, minChunkSize)) {
+            result.add(new Document(merged, new HashMap<>(doc.getMetadata())));
+        }
+        return result;
+    }
+
+    /**
+     * The raw sliding-window boundary pass (code-fence/table-aware, with {@link #reopenTruncatedBlock}
+     * re-wrapping) BEFORE the tiny-chunk merge — extracted from {@link #slidingWindow} so the
+     * chapter-merge rule-3 look-ahead ({@link #mergeSectionsByChapter}) measures the exact same
+     * boundaries the real split will produce. {@link #slidingWindow} is now this plus
+     * {@link #mergeTinyChunks} plus metadata mapping (behavior unchanged).
+     */
+    List<String> rawSlidingPieces(String text, int chunkSize, int overlap) {
         List<String> rawChunks = new ArrayList<>();
-        String text = doc.getText();
-        if (text == null || text.isBlank()) return result;
+        if (text == null || text.isBlank()) return rawChunks;
         int start = 0;
         while (start < text.length()) {
             int end = Math.min(start + chunkSize, text.length());
@@ -331,11 +572,7 @@ public class ChunkSplitter {
             if (end >= text.length()) break;
             start = Math.max(start + 1, end - overlap);
         }
-
-        for (String merged : mergeTinyChunks(rawChunks, minChunkSize)) {
-            result.add(new Document(merged, new HashMap<>(doc.getMetadata())));
-        }
-        return result;
+        return rawChunks;
     }
 
     /**

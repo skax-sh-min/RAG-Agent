@@ -216,7 +216,7 @@ copy .env.example .env
 |------|--------|----------|------|
 | `CHUNK_SIZE` | `800` | 300 ~ 2000 | 청크 크기 (문자 수). 작을수록 정밀, 클수록 문맥 풍부 |
 | `CHUNK_OVERLAP` | `100` | 0 ~ CHUNK_SIZE × 0.25 | 청크 간 중복 (문자 수). 청크 경계 문맥 보완 전용 |
-| `MIN_CHUNK_SIZE` | `300` | 50 ~ CHUNK_SIZE × 0.25 | 너무 작은 청크를 인접 청크와 병합할 최소 길이 기준 |
+| `MIN_CHUNK_SIZE` | `300` | 50 ~ CHUNK_SIZE × 0.25 | 청크/섹션 병합 최소 길이 기준. DOCX·TXT·MD는 이 값 미만인 챕터(헤딩) 섹션을 다음 섹션과 병합하고(단 상위=부모 헤딩 방향은 금지), 슬라이딩 분할 뒤에도 이보다 작은 청크는 직전 청크로 뒤로 병합한다(§청킹 상세는 PIPELINE.md §6.4) |
 | `SEARCH_TOP_K` | `7` | 2 ~ 15 | 벡터 검색 반환 문서 수. 높을수록 재현율↑, 토큰↑ |
 | `SEARCH_SIMILARITY_THRESHOLD` | `0.0` | 0.0 ~ 0.75 | 청크 유지 최소 코사인 유사도. `0.0`=전체 수용. 운영 0.5~0.75 튜닝 시 골든셋 recall 확인 후 적용 |
 | `SEARCH_MULTIQUERY_ENABLED` | `true` | true/false | 검색 전 질의 다중 확장(LLM) 여부. `false`면 임계 경로 첫 LLM 콜 제거 |

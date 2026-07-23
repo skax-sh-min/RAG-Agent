@@ -418,4 +418,153 @@ class ChunkSplitterTest {
         assertThat(cut).allSatisfy(p -> assertThat(p.length()).isLessThanOrEqualTo(100));
         assertThat(String.join("", cut)).isEqualTo("X".repeat(250)); // 손실 없이 재구성
     }
+
+    // ── 챕터 기반 병합(md/docx/txt) ────────────────────────────────────────────
+
+    @Test
+    @DisplayName("mergeSectionsByChapter — 규칙1: 작은 현재 + 하위 레벨 다음의 합이 chunkSize 이내면 한 청크로 병합")
+    void chapterMerge_rule1_mergesWhenCombinedFits() {
+        List<Document> docs = List.of(
+                new Document("## 챕터A\n짧은 본문"),
+                new Document("### 챕터A-1\n짧은 하위 본문"));
+
+        List<Document> result = splitter.splitDocuments(docs, "doc.md", 1000, 100, 100);
+
+        assertThat(result).hasSize(1);
+        assertThat(result.get(0).getText()).contains("## 챕터A").contains("### 챕터A-1");
+    }
+
+    @Test
+    @DisplayName("mergeSectionsByChapter — 다음이 더 상위(##) 챕터면 병합 금지, 작은 ###는 이전 청크로 뒤로 병합")
+    void chapterMerge_parentForbidden_tinyChildFoldsBackward() {
+        List<Document> docs = List.of(
+                new Document("## 챕터A\n" + "가".repeat(200)),
+                new Document("### 챕터A-1\n짧은 내용"),
+                new Document("## 챕터B\n" + "나".repeat(200)));
+
+        List<Document> result = splitter.splitDocuments(docs, "doc.md", 1000, 100, 100);
+
+        assertThat(result).hasSize(2);
+        assertThat(result.get(0).getText()).contains("챕터A-1"); // 상위 ##로 못 가고 이전(A)으로 뒤로 병합
+        assertThat(result.get(1).getText()).contains("챕터B");
+    }
+
+    @Test
+    @DisplayName("mergeSectionsByChapter — 규칙2: 합은 chunkSize 초과지만 다음 단독은 이내면 전방 분리, 작은 현재는 뒤로 병합")
+    void chapterMerge_rule2_separatesThenFoldsBackward() {
+        List<Document> docs = List.of(
+                new Document("## A\n" + "가".repeat(250)),
+                new Document("## B\n" + "나".repeat(50)),
+                new Document("## C\n" + "다".repeat(250)));
+
+        List<Document> result = splitter.splitDocuments(docs, "doc.md", 300, 30, 100);
+
+        assertThat(result).hasSize(2);
+        assertThat(result.get(0).getText()).contains("B"); // B는 C로 전방 병합되지 않고 A로 뒤로 병합
+        assertThat(result.get(1).getText()).contains("C");
+    }
+
+    @Test
+    @DisplayName("mergeSectionsByChapter — 규칙3: 큰 다음에 prepend 후 마지막 조각이 min*1.5 이상이면 병합(1그룹)")
+    void chapterMerge_rule3_mergesWhenLastPieceLargeEnough() {
+        List<Document> docs = List.of(
+                new Document("가".repeat(20)),
+                new Document("나".repeat(800)));
+
+        List<ChunkSplitter.SectionGroup> groups = splitter.mergeSectionsByChapter(docs, 300, 30, 100);
+
+        assertThat(groups).hasSize(1);
+        assertThat(groups.get(0).doc().getText()).contains("가").contains("나");
+    }
+
+    @Test
+    @DisplayName("mergeSectionsByChapter — 규칙3: prepend 후 마지막 조각이 min*1.5 미만이면 병합 안 함(2그룹)")
+    void chapterMerge_rule3_splitsWhenLastPieceTooSmall() {
+        List<Document> docs = List.of(
+                new Document("가".repeat(20)),
+                new Document("나".repeat(610)));
+
+        List<ChunkSplitter.SectionGroup> groups = splitter.mergeSectionsByChapter(docs, 300, 30, 100);
+
+        assertThat(groups).hasSize(2);
+    }
+
+    @Test
+    @DisplayName("mergeSectionsByChapter — 헤딩 없는(level 0) 다음 섹션은 상위 챕터가 아니므로 병합 허용")
+    void chapterMerge_headinglessNextIsNotParent_allowsMerge() {
+        List<Document> docs = List.of(
+                new Document("### 하위\n짧음"),
+                new Document("본문만 있고 헤딩 없음"));
+
+        List<ChunkSplitter.SectionGroup> groups = splitter.mergeSectionsByChapter(docs, 1000, 100, 100);
+
+        assertThat(groups).hasSize(1);
+    }
+
+    // ── 부모 챕터 브레드크럼 ──────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("부모 브레드크럼 — ### 하위 챕터 청크 맨 앞에 바로 위 부모 ## 헤딩 1줄이 붙는다")
+    void breadcrumb_childChapterGetsParentHeadingPrepended() {
+        List<Document> docs = List.of(
+                new Document("## 큰챕터\n" + "가".repeat(200)),
+                new Document("### 소챕터\n" + "나".repeat(200)));
+
+        List<Document> result = splitter.splitDocuments(docs, "doc.md", 1000, 100, 100);
+
+        assertThat(result).hasSize(2);
+        assertThat(result.get(1).getText()).startsWith("## 큰챕터\n### 소챕터");
+    }
+
+    @Test
+    @DisplayName("부모 브레드크럼 — ## 최상위 챕터 청크에는 아무 헤딩도 붙지 않는다")
+    void breadcrumb_topLevelChapterGetsNothing() {
+        List<Document> docs = List.of(
+                new Document("# 문서\n" + "머".repeat(200)),
+                new Document("## 챕터\n" + "가".repeat(200)));
+
+        List<Document> result = splitter.splitDocuments(docs, "doc.md", 1000, 100, 100);
+
+        assertThat(result).hasSize(2);
+        assertThat(result.get(1).getText()).startsWith("## 챕터");
+        assertThat(result.get(1).getText()).doesNotContain("문서");
+    }
+
+    @Test
+    @DisplayName("부모 브레드크럼 — #### 청크에는 최상위 ##가 아니라 바로 위 ### 부모가 붙는다")
+    void breadcrumb_usesImmediateParentNotTopLevel() {
+        List<Document> docs = List.of(
+                new Document("## 대\n" + "가".repeat(200)),
+                new Document("### 중\n" + "나".repeat(200)),
+                new Document("#### 소\n" + "다".repeat(200)));
+
+        List<Document> result = splitter.splitDocuments(docs, "doc.md", 1000, 100, 100);
+
+        assertThat(result).hasSize(3);
+        assertThat(result.get(2).getText()).startsWith("### 중\n#### 소");
+        assertThat(result.get(2).getText()).doesNotContain("대"); // 최상위 ## 대는 붙지 않음
+    }
+
+    @Test
+    @DisplayName("부모 브레드크럼 — 긴 하위 섹션이 여러 조각으로 나뉘면 첫 조각에만 부모가 붙고 꼬리 조각엔 자기 헤딩(N)만")
+    void breadcrumb_onlyFirstPieceOfSplitChildGetsParent() {
+        List<Document> docs = List.of(
+                new Document("## 큰챕터\n" + "가".repeat(200)),
+                new Document("### 소챕터\n" + "나".repeat(3000)));
+
+        List<Document> result = splitter.splitDocuments(docs, "doc.md", 2000, 200, 100);
+
+        // 첫 조각(부모 프리펜드) 이후 소챕터가 슬라이딩 분할되어 꼬리 조각이 하나 이상 존재
+        Document firstChildPiece = result.stream()
+                .filter(d -> d.getText().contains("### 소챕터"))
+                .findFirst().orElseThrow();
+        assertThat(firstChildPiece.getText()).startsWith("## 큰챕터\n### 소챕터");
+
+        // 꼬리 조각은 자기 헤딩 "### 소챕터 (N)"만 갖고 부모(## 큰챕터)는 없음
+        List<Document> tailPieces = result.stream()
+                .filter(d -> d.getText().startsWith("### 소챕터 ("))
+                .toList();
+        assertThat(tailPieces).isNotEmpty();
+        assertThat(tailPieces).allSatisfy(d -> assertThat(d.getText()).doesNotContain("큰챕터"));
+    }
 }
