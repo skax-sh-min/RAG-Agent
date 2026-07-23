@@ -30,6 +30,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -106,6 +107,19 @@ class AdminControllerWebMvcTest {
                 .andExpect(model().attributeExists("vectorStore"))
                 .andExpect(content().string(containsString("버전 (sqlite-vec)")))
                 .andExpect(content().string(containsString("vec_version")));
+    }
+
+    // ── 청크 목록 조회 — 페이지당 건수 ────────────────────────────────────────
+
+    @Test
+    @DisplayName("GET /admin/chunks — limit 파라미터 생략 시 기본값 20건")
+    void chunks_defaultLimitIsTwenty() throws Exception {
+        when(adminService.getChunks(anyString(), any(), eq(0), eq(20))).thenReturn(List.of());
+
+        mvc.perform(get("/admin/chunks").with(user(ADMIN)).param("collection", "manual_latest"))
+                .andExpect(status().isOk());
+
+        verify(adminService).getChunks("manual_latest", null, 0, 20);
     }
 
     // ── §10.10 step ④ — 큐레이션 Q&A 관리 ────────────────────────────────────

@@ -127,6 +127,49 @@ class AdminServiceTest {
     }
 
     @Test
+    @DisplayName("getChunks(chroma) — 응답이 뒤섞여 와도 문서별 content order(doc_id, chunk_index)로 정렬 후 페이지네이션")
+    @SuppressWarnings("unchecked")
+    void getChunks_chroma_sortsByContentOrderAndPaginates() {
+        ChromaApi api = mock(ChromaApi.class);
+        // Chroma가 문서/청크 순서와 무관한 임의 순서로 반환한다고 가정 (예: id 기준).
+        List<String> ids  = List.of("zid", "aid", "mid", "bid");
+        List<String> docs = List.of("d1c1", "d2c0", "d1c0", "d2c1");
+        List<Map<String, String>> metas = List.of(
+                Map.of(MetaKey.DOC_ID, "doc1", MetaKey.CHUNK_INDEX, "1"),
+                Map.of(MetaKey.DOC_ID, "doc2", MetaKey.CHUNK_INDEX, "0"),
+                Map.of(MetaKey.DOC_ID, "doc1", MetaKey.CHUNK_INDEX, "0"),
+                Map.of(MetaKey.DOC_ID, "doc2", MetaKey.CHUNK_INDEX, "1"));
+        when(api.getEmbeddings(anyString(), anyString(), anyString(), any()))
+                .thenReturn(new ChromaApi.GetEmbeddingResponse(ids, List.of(), docs, metas));
+        AdminService svc = new AdminService(Optional.of(api), mock(JdbcTemplate.class), mock(AppProperties.class),
+                OM, mock(VectorStoreFacade.class), mock(KeywordSearchRepository.class), mock(KeywordExtractor.class));
+
+        List<AdminService.ChunkRow> page1 = svc.getChunks("col", null, 0, 2);
+        List<AdminService.ChunkRow> page2 = svc.getChunks("col", null, 2, 2);
+
+        assertThat(page1).extracting(AdminService.ChunkRow::fullText).containsExactly("d1c0", "d1c1");
+        assertThat(page2).extracting(AdminService.ChunkRow::fullText).containsExactly("d2c0", "d2c1");
+    }
+
+    @Test
+    @DisplayName("getChunks(sqlite-vec) — doc_id + chunk_index(json_extract) 기준으로 정렬하는 SQL 사용 (더 이상 spring_doc_id 우선 정렬 아님)")
+    @SuppressWarnings("unchecked")
+    void getChunks_sqliteVec_ordersByDocIdAndChunkIndex() {
+        JdbcTemplate jdbc = mock(JdbcTemplate.class);
+        when(jdbc.query(anyString(), any(RowMapper.class), any(Object[].class))).thenReturn(List.of());
+        AppProperties props = mock(AppProperties.class);
+        when(props.vectorStoreSafe()).thenReturn(new VectorStoreConfig("sqlite-vec"));
+
+        AdminService svc = new AdminService(Optional.empty(), jdbc, props, OM, mock(VectorStoreFacade.class), mock(KeywordSearchRepository.class), mock(KeywordExtractor.class));
+        svc.getChunks("latest", null, 0, 20);
+
+        ArgumentCaptor<String> sqlCaptor = ArgumentCaptor.forClass(String.class);
+        verify(jdbc).query(sqlCaptor.capture(), any(RowMapper.class), any(Object[].class));
+        assertThat(sqlCaptor.getValue())
+                .contains("ORDER BY doc_id, CAST(json_extract(metadata, '$.chunk_index') AS INTEGER), spring_doc_id");
+    }
+
+    @Test
     @DisplayName("sqlite-vec: listCollections가 version 그룹을 pseudo-collection으로 반환(ChromaApi 미사용)")
     @SuppressWarnings("unchecked")
     void sqliteVec_listCollections_groupsByVersion() {

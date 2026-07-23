@@ -40,6 +40,11 @@ public class AdminService {
     private static final Logger log = LoggerFactory.getLogger(AdminService.class);
     private static final String TENANT   = ChromaApiConstants.DEFAULT_TENANT_NAME;
     private static final String DATABASE = ChromaApiConstants.DEFAULT_DATABASE_NAME;
+    /** Chroma's get() has no server-side ORDER BY — fetch up to this many matches, then sort/paginate in Java. */
+    private static final int CHUNK_FETCH_CAP = 10_000;
+    /** Document content order: group by document, then by each chunk's stable position within it. */
+    private static final Comparator<ChunkRow> CONTENT_ORDER =
+            Comparator.comparing(ChunkRow::docId).thenComparingInt(AdminService::chunkIndexOf);
 
     /** Nullable — sqlite-vec 백엔드에서는 ChromaApi 빈이 없으므로 Optional로 주입된다. */
     private final ChromaApi chromaApi;
@@ -93,6 +98,17 @@ public class AdminService {
         }
         public String keywords()  { return metadata.getOrDefault(MetaKey.EXCERPT_KEYWORDS, ""); }
         public int chunkSize()    { return fullText == null ? 0 : fullText.length(); }
+    }
+
+    /** Unparseable/missing chunk_index (legacy pre-§ chunks) sorts last within its document. */
+    private static int chunkIndexOf(ChunkRow row) {
+        try { return Integer.parseInt(row.metadata().getOrDefault(MetaKey.CHUNK_INDEX, "")); }
+        catch (NumberFormatException e) { return Integer.MAX_VALUE; }
+    }
+
+    private static List<ChunkRow> paginate(List<ChunkRow> rows, int offset, int limit) {
+        if (offset >= rows.size()) return List.of();
+        return new ArrayList<>(rows.subList(offset, Math.min(rows.size(), offset + limit)));
     }
 
     // ── DTOs (public) ─────────────────────────────────────────────────────────
@@ -189,8 +205,10 @@ public class AdminService {
         if (docId != null && !docId.isBlank()) {
             where = Map.of(MetaKey.DOC_ID, Map.of("$eq", docId));
         }
+        // Chroma's get() has no ORDER BY, so the requested offset/limit can't be pushed down —
+        // fetch the full (capped) match set, sort into document content order, then slice in Java.
         GetEmbeddingsRequest req = new GetEmbeddingsRequest(
-                null, where, limit, offset,
+                null, where, CHUNK_FETCH_CAP, 0,
                 List.of(Include.DOCUMENTS, Include.METADATAS));
         try {
             GetEmbeddingResponse resp = chromaApi.getEmbeddings(TENANT, DATABASE, resolveId(collectionName), req);
@@ -208,7 +226,8 @@ public class AdminService {
                         ? text.substring(0, 250) + "…" : Objects.requireNonNullElse(text, "");
                 rows.add(new ChunkRow(ids.get(i), preview, text, meta));
             }
-            return rows;
+            rows.sort(CONTENT_ORDER);
+            return paginate(rows, offset, limit);
         } catch (Exception e) {
             log.error("getChunks failed collection={} docId={}: {}", collectionName, docId, e.getMessage());
             return List.of();
@@ -223,7 +242,7 @@ public class AdminService {
             catch (Exception e) { return 0; }
         }
         // Approximate: fetch limit=0 with where filter → real count not possible via get, return chunk list size
-        List<ChunkRow> all = getChunks(collectionName, docId, 0, 10_000);
+        List<ChunkRow> all = getChunks(collectionName, docId, 0, CHUNK_FETCH_CAP);
         return all.size();
     }
 
@@ -397,7 +416,10 @@ public class AdminService {
         List<Object> args = new ArrayList<>();
         args.add(version);
         if (docId != null && !docId.isBlank()) { sql.append(" AND doc_id = ?"); args.add(docId); }
-        sql.append(" ORDER BY created_at, spring_doc_id LIMIT ? OFFSET ?");
+        // Document content order: group by document, then by each chunk's stable position within
+        // it (metadata.chunk_index, set at index time — see MetaKey.CHUNK_INDEX) instead of the
+        // meaningless spring_doc_id (random per-chunk id) the old ORDER BY effectively sorted by.
+        sql.append(" ORDER BY doc_id, CAST(json_extract(metadata, '$.chunk_index') AS INTEGER), spring_doc_id LIMIT ? OFFSET ?");
         args.add(limit);
         args.add(offset);
         try {

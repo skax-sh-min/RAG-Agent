@@ -59,7 +59,7 @@ public class AdminController {
                          @RequestParam String collection,
                          @RequestParam(required = false) String docId,
                          @RequestParam(defaultValue = "0")  int offset,
-                         @RequestParam(defaultValue = "50") int limit,
+                         @RequestParam(defaultValue = "20") int limit,
                          Model model) {
         model.addAttribute("chunks",     adminService.getChunks(collection, docId, offset, limit));
         model.addAttribute("collection", collection);

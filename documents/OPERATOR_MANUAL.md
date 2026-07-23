@@ -1796,12 +1796,14 @@ mvn test -Dtest=SearchQualityEvaluationTest -Dsearch-eval.enabled=true
 |------|------|
 | Vector Store 상태 카드 | 백엔드 종류·정상 여부·청크 수. chroma=컬렉션 수 / sqlite-vec=문서 수·`vec_version`·임베딩 차원 |
 | 컬렉션·버전 목록 | chroma=컬렉션별 / sqlite-vec=버전별 청크 수 표시 (클릭 시 청크 조회) |
-| 청크 조회 | 컬렉션(또는 버전)·문서(docId)별 청크 페이지네이션 (50건 단위) — ID·텍스트 미리보기·크기·파일명·페이지/슬라이드·**챕터**·키워드·작업 컬럼. 챕터 컬럼은 `MetaKey.CHAPTER_NO`(H2~H6 헤딩 기반 계층 번호)를 보여주며 "0"(실제 챕터 없음)이면 빈 칸으로 표시 |
+| 청크 조회 | 컬렉션(또는 버전)·문서(docId)별 청크 페이지네이션 — 페이지당 20/50/100건 선택 가능(기본 20건, `AdminController.chunks()`의 `limit` 기본값). ID·텍스트 미리보기·크기·파일명·페이지/슬라이드·**챕터**·키워드·작업 컬럼. 챕터 컬럼은 `MetaKey.CHAPTER_NO`(H2~H6 헤딩 기반 계층 번호)를 보여주며 "0"(실제 챕터 없음)이면 빈 칸으로 표시 |
 | 청크 편집 | 텍스트·메타데이터 수정 (원본 임베딩 유지 — 벡터 재계산 안 함) |
 | 청크 재인덱싱 | 편집 패널의 **이 청크만 재인덱싱** 버튼(`AdminService.reindexChunk()`) — 저장된 텍스트 기준으로 그 청크만 재임베딩 + FTS 재색인(id 보존, upsert). "키워드 재생성" 체크 시 `KeywordExtractor`를 그 청크에만 다시 실행(LLM 1회) |
 | 청크 삭제 | 개별 청크 즉시 제거. sqlite-vec는 `vec_document_chunks`+`vec_embeddings` 두 테이블 동기 삭제 |
 | 문서 레지스트리 | 인덱싱된 전체 문서 목록 + 문서별 청크 바로 조회 (백엔드 무관, SQLite `doc_registry` 기반) |
 | MD 재인덱싱 (↺ 버튼) | `{docId}_corrected.md`(없으면 `{docId}.md`)를 읽어 청크 재생성·재인덱싱 — DOCX·TXT·PPTX·PDF(스캔 아님) 지원, 원본 재업로드 불필요 (스캔 PDF는 MD 파일이 없어 미지원) |
+
+> **청크 정렬**: 두 백엔드 모두 `doc_id` → `chunk_index`(인덱싱 시 각 청크에 부여되는 0-based 문서 내 위치, `MetaKey.CHUNK_INDEX`) 순으로 정렬됩니다 — 청크 id가 아니라 문서 원본 내용 순서 그대로 표시됩니다. sqlite-vec는 `ORDER BY doc_id, CAST(json_extract(metadata, '$.chunk_index') AS INTEGER), spring_doc_id`로 DB에서 직접 정렬합니다. Chroma의 `get()` API는 서버 측 ORDER BY를 지원하지 않으므로, 매치되는 청크 전체를 최대 `AdminService.CHUNK_FETCH_CAP`(10,000건)까지 가져온 뒤 애플리케이션(Java)에서 정렬·페이지네이션합니다 — 컬렉션(또는 docId 필터 결과)이 이 상한을 넘으면 뒤쪽 청크는 조회되지 않습니다.
 
 ### 7.2 MD 재인덱싱 흐름
 
@@ -1850,6 +1852,8 @@ mvn test -Dtest=SearchQualityEvaluationTest -Dsearch-eval.enabled=true
 ### 7.5 큐레이션 Q&A 관리 (§10.10)
 
 `/admin` 페이지 하단에 **큐레이션 Q&A** 카드가 있습니다 — 좋아요로 승격된 질문·답변 목록(질문·답변 미리보기·등록일)을 최신순으로 보여줍니다(현재 상한 50건, 페이지네이션 없음).
+
+카드는 `<details>` 요소로 구현되어 기본적으로 접혀 있으며, 펼칠 때만(`GET /admin/curated`, HTMX `toggle[this.open] once` 트리거) 목록을 서버에서 조회합니다 — `AdminController.adminPage()`는 더 이상 `curatedQaService.listActive()`를 즉시 호출하지 않으므로, `/admin` 페이지를 열기만 해서는 이 DB 조회가 발생하지 않습니다. 카드를 한 번 펼치면 그 세션에서는 다시 접었다 펴도 재조회되지 않습니다(새로고침하면 다시 접힌 상태로 초기화).
 
 | 기능 | 방법 |
 |------|------|

@@ -25,6 +25,12 @@
                             th:text="${doc.filename() + ' (' + doc.version() + ')'}"
                             th:selected="${doc.docId() == docId}"></option>
                 </select>
+                <select class="form-select form-select-sm" id="limit-select" style="max-width:100px;"
+                        onchange="applyLimitFilter(this)">
+                    <option value="20"  th:selected="${limit == 20}">20건</option>
+                    <option value="50"  th:selected="${limit == 50}">50건</option>
+                    <option value="100" th:selected="${limit == 100}">100건</option>
+                </select>
                 <span class="badge bg-secondary" th:text="${#lists.size(chunks) + '건'}">0건</span>
             </form>
         </div>
@@ -172,7 +178,13 @@
 function applyDocFilter(sel) {
     const collection = /*[[${collection}]]*/ '';
     const docId = sel.value;
-    loadChunks(collection, docId, 0, /*[[${limit}]]*/ 50);
+    loadChunks(collection, docId, 0, +document.getElementById('limit-select').value);
+}
+
+function applyLimitFilter(sel) {
+    const collection = /*[[${collection}]]*/ '';
+    const docId = document.getElementById('docId-select').value;
+    loadChunks(collection, docId, 0, +sel.value);
 }
 
 function loadChunks(collection, docId, offset, limit) {
