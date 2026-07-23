@@ -20,9 +20,11 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
@@ -53,6 +55,15 @@ import java.util.regex.Pattern;
  * </ul>
  * Corrects each section in parallel (format only, never changes content), then reassembles and
  * saves the corrected file alongside the raw one.
+ *
+ * <p>After reassembly, {@link #postProcessMarkdown} runs a final deterministic (no-LLM) cleanup pass
+ * that, for PPTX only ({@code isPptx=true}), also applies {@link #applyPptxShapeFormatting} — a set
+ * of shape-group/image-anchor formatting fixes for artifacts {@code PptxToMarkdownConverter} and the
+ * LLM correction pass above tend to leave behind (missing blank lines around {@code [도형 그룹]}
+ * blocks and image anchors, duplicate single-token lines from SmartArt/grouped-shape extraction,
+ * stray blank lines between bullets). This same pass also re-runs unconditionally on re-index
+ * ({@code DocumentIndexer.reindexFromMd()} → {@link #postProcess(String, boolean)}), so hand-editing
+ * a saved PPTX MD file and re-indexing gets the same formatting guarantees as the original upload.
  */
 @Service
 public class MarkdownCorrectionService {
@@ -61,6 +72,15 @@ public class MarkdownCorrectionService {
     private static final int MIN_SECTION_CHARS = 500;
     private static final Pattern MD_IMAGE_LINK = Pattern.compile("!\\[([^\\]]*)]\\(([^)]+)\\)");
     private static final Pattern IMAGE_MARKER = Pattern.compile("\\[이미지:\\s*([^\\]]+)]");
+    /** Whole-line variants of the above, used by the PPTX-only shape-group formatting passes
+     *  ({@link #applyPptxShapeFormatting}) — these only ever match a marker sitting alone on its
+     *  own line, which is how {@code PptxToMarkdownConverter} always emits them. */
+    private static final Pattern IMAGE_LINE_FULL = Pattern.compile("^\\[이미지:\\s*[^\\]]+]$");
+    private static final Pattern IMAGE_DESC_LINE_FULL = Pattern.compile("^\\[이미지 설명:.*]$");
+    /** {@code [도형 그룹]} / {@code [도형 그룹 N]} (numbered only when 2+ groups share a slide —
+     *  see {@code PptxToMarkdownConverter.appendShapeGroup}) open/close marker lines. */
+    private static final Pattern SHAPE_GROUP_OPEN  = Pattern.compile("^\\[도형 그룹(?: \\d+)?]$");
+    private static final Pattern SHAPE_GROUP_CLOSE = Pattern.compile("^\\[/도형 그룹(?: \\d+)?]$");
     private static final Pattern FENCED_BLOCK = Pattern.compile("(?s)```(.*?)\\n(.*?)\\n```");
     private static final Pattern HEADING_NUMBER_PREFIX = Pattern.compile("^(?:\\d+(?:\\.\\d+)*(?:\\.)?|\\d+[\\)])\\s+");
     /** Any comment-ish line — used to detect "function already has a comment right above it". */
@@ -284,8 +304,9 @@ public class MarkdownCorrectionService {
             result = secondPassHeadingAndCodePolish(result);
         }
         // FIX: deterministic final cleanup — blank lines around code blocks/tables, drop leftover
-        // [DOCUMENT] markers and content-less '-' lines (all fence-aware). Runs last.
-        result = postProcessMarkdown(result);
+        // [DOCUMENT] markers and content-less '-' lines (all fence-aware). Runs last. groupByPage is
+        // true only for PPTX (see class javadoc), so it doubles as the isPptx flag here.
+        result = postProcessMarkdown(result, groupByPage);
         log.info("[MD_CORRECT] 완료: docId={}, {}ms", docId, System.currentTimeMillis() - t0);
 
         if (correctedOutputPath != null) {
@@ -329,9 +350,20 @@ public class MarkdownCorrectionService {
      * collapsing, leftover prompt-marker/content-less-dash removal, blank line guarantee around
      * fences/tables). Used by {@code DocumentIndexer.reindexFromMd()} to re-apply this cleanup to a
      * saved MD file without re-running the full (LLM section-by-section) {@link #correct} pipeline.
+     * Equivalent to {@code postProcess(md, false)} — no PPTX-only shape-group formatting.
      */
     public String postProcess(String md) {
-        return postProcessMarkdown(md);
+        return postProcessMarkdown(md, false);
+    }
+
+    /**
+     * Same as {@link #postProcess(String)} but also applies the PPTX-only shape-group/image-anchor
+     * formatting fixes ({@link #applyPptxShapeFormatting}) when {@code isPptx} is true. Used by
+     * {@code DocumentIndexer.postProcessIfNeeded()} on re-index, where the source filename (and
+     * therefore format) is known.
+     */
+    public String postProcess(String md, boolean isPptx) {
+        return postProcessMarkdown(md, isPptx);
     }
 
     /** True if any H2-H6 heading (outside a fenced code block) already starts with a numeric prefix. */
@@ -1042,11 +1074,20 @@ public class MarkdownCorrectionService {
         return !content.stripTrailing().endsWith("#");
     }
 
+    /** Same as {@link #postProcessMarkdown(String, boolean)} with {@code isPptx=false} — no
+     *  PPTX-only shape-group formatting. Package-private for unit testing. */
+    static String postProcessMarkdown(String md) {
+        return postProcessMarkdown(md, false);
+    }
+
     /**
      * Deterministic Markdown cleanup applied once to the fully-corrected document, fixing recurring
      * LLM formatting slips the per-section correction leaves behind. All rules are fence-aware — code
      * block <i>contents</i> are never modified:
      * <ul>
+     *   <li>({@code isPptx} only) {@link #applyPptxShapeFormatting} — shape-group/image-anchor
+     *       blank-line and dedup fixes, run first so the passes below normalize/trim whatever blank
+     *       lines it inserts;</li>
      *   <li>drops leftover {@code [DOCUMENT]}/{@code [/DOCUMENT]} prompt-framing markers;</li>
      *   <li>drops content-less bullet lines (a lone {@code -});</li>
      *   <li>guarantees a blank line before and after every fenced code block and every GFM table, so
@@ -1055,13 +1096,14 @@ public class MarkdownCorrectionService {
      * </ul>
      * Package-private for unit testing.
      */
-    static String postProcessMarkdown(String md) {
+    static String postProcessMarkdown(String md, boolean isPptx) {
         if (md == null || md.isEmpty()) return md;
+        String preprocessed = isPptx ? applyPptxShapeFormatting(md) : md;
 
         // Pass A — fence-aware line removal (leftover [DOCUMENT] markers, content-less '-' lines).
         List<String> lines = new ArrayList<>();
         boolean inFence = false;
-        for (String raw : md.split("\n", -1)) {
+        for (String raw : preprocessed.split("\n", -1)) {
             if (raw.stripLeading().startsWith("```")) { lines.add(raw); inFence = !inFence; continue; }
             if (inFence) { lines.add(raw); continue; }
 
@@ -1102,6 +1144,252 @@ public class MarkdownCorrectionService {
         }
         while (!out.isEmpty() && out.get(out.size() - 1).isBlank()) out.remove(out.size() - 1);
         return String.join("\n", out);
+    }
+
+    /**
+     * PPTX-only deterministic formatting fixes for {@code [도형 그룹]}/image-anchor artifacts left by
+     * {@code PptxToMarkdownConverter} (and sometimes reshuffled by the per-section LLM correction
+     * pass). Applied before {@link #postProcessMarkdown}'s generic Pass A/B so this pass's own
+     * blank-line insertions/removals are normalized (never doubled, trailing blanks trimmed) by the
+     * passes that follow. Fence-aware throughout — code block contents are never touched. Order
+     * matters: {@link #ensureImageAnchorBoundaryBlankLines} must run before
+     * {@link #ensureBlankBetweenConsecutiveImages}, otherwise the blank lines the latter inserts
+     * between individual image lines would break the former's "contiguous image run" detection.
+     * Package-private for unit testing.
+     */
+    static String applyPptxShapeFormatting(String md) {
+        String result = md;
+        result = normalizeBulletGaps(result);
+        result = dedupSingleTokenLinesInShapeGroups(result);
+        result = ensureImageAnchorBoundaryBlankLines(result);
+        result = ensureBlankBetweenConsecutiveImages(result);
+        result = ensureBlankAroundShapeGroupMarkers(result);
+        return result;
+    }
+
+    /**
+     * Blank line immediately before every {@code [도형 그룹]}/{@code [도형 그룹 N]} opening marker and
+     * immediately after every matching closing marker — so a shape-group block never touches
+     * adjacent slide content. Package-private for unit testing.
+     */
+    static String ensureBlankAroundShapeGroupMarkers(String md) {
+        String[] lines = md.split("\n", -1);
+        List<String> out = new ArrayList<>(lines.length);
+        boolean inFence = false;
+        for (int i = 0; i < lines.length; i++) {
+            String line = lines[i];
+            boolean fence = line.stripLeading().startsWith("```");
+            String trimmed = line.strip();
+            boolean isOpen  = !inFence && SHAPE_GROUP_OPEN.matcher(trimmed).matches();
+            boolean isClose = !inFence && SHAPE_GROUP_CLOSE.matcher(trimmed).matches();
+
+            if (isOpen && !out.isEmpty() && !out.get(out.size() - 1).isBlank()) {
+                out.add("");
+            }
+            out.add(line);
+            if (fence) inFence = !inFence;
+            if (isClose && i + 1 < lines.length && !lines[i + 1].isBlank()) {
+                out.add("");
+            }
+        }
+        return String.join("\n", out);
+    }
+
+    /**
+     * Within each {@code [도형 그룹]...[/도형 그룹]} block, the leading run of image-anchor lines
+     * (one or more {@code [이미지: ...]}, each optionally followed by its own {@code [이미지 설명: ...]}
+     * — always emitted right after the opening marker, before any inner text, by
+     * {@code PptxToMarkdownConverter.appendShapeGroup}) gets a blank line before the run and a blank
+     * line after it, separating the anchors from the marker line and from the group's inner text.
+     * Must run before {@link #ensureBlankBetweenConsecutiveImages} — see
+     * {@link #applyPptxShapeFormatting}. Package-private for unit testing.
+     */
+    static String ensureImageAnchorBoundaryBlankLines(String md) {
+        List<String> lines = new ArrayList<>(List.of(md.split("\n", -1)));
+        List<String> out = new ArrayList<>();
+        boolean inFence = false;
+        int i = 0;
+        while (i < lines.size()) {
+            String line = lines.get(i);
+            if (line.stripLeading().startsWith("```")) {
+                out.add(line);
+                inFence = !inFence;
+                i++;
+                continue;
+            }
+            if (inFence) {
+                out.add(line);
+                i++;
+                continue;
+            }
+
+            out.add(line);
+            boolean isOpen = SHAPE_GROUP_OPEN.matcher(line.strip()).matches();
+            i++;
+            if (!isOpen) continue;
+
+            int runStart = i;
+            while (i < lines.size() && isImageAnchorLine(lines.get(i))) i++;
+            if (i > runStart) {
+                out.add("");
+                for (int k = runStart; k < i; k++) out.add(lines.get(k));
+                if (i < lines.size() && !lines.get(i).isBlank()) out.add("");
+            }
+        }
+        return String.join("\n", out);
+    }
+
+    private static boolean isImageAnchorLine(String line) {
+        String t = line.strip();
+        return IMAGE_LINE_FULL.matcher(t).matches() || IMAGE_DESC_LINE_FULL.matcher(t).matches();
+    }
+
+    /**
+     * A blank line between every pair of consecutive image-anchor units (a {@code [이미지: ...]} line
+     * plus its optional {@code [이미지 설명: ...]} line) that currently touch with no blank line
+     * between them — anywhere in the document, not just inside shape groups. A lone image unit with
+     * no neighbouring image unit is left untouched. Package-private for unit testing.
+     */
+    static String ensureBlankBetweenConsecutiveImages(String md) {
+        List<String> lines = new ArrayList<>(List.of(md.split("\n", -1)));
+        List<String> out = new ArrayList<>();
+        boolean inFence = false;
+        int i = 0;
+        while (i < lines.size()) {
+            String line = lines.get(i);
+            if (line.stripLeading().startsWith("```")) {
+                out.add(line);
+                inFence = !inFence;
+                i++;
+                continue;
+            }
+            if (inFence) {
+                out.add(line);
+                i++;
+                continue;
+            }
+
+            if (IMAGE_LINE_FULL.matcher(line.strip()).matches()) {
+                out.add(line);
+                i++;
+                if (i < lines.size() && IMAGE_DESC_LINE_FULL.matcher(lines.get(i).strip()).matches()) {
+                    out.add(lines.get(i));
+                    i++;
+                }
+                if (i < lines.size() && IMAGE_LINE_FULL.matcher(lines.get(i).strip()).matches()) {
+                    out.add(""); // next unit follows immediately — separate with a blank line
+                }
+                continue;
+            }
+            out.add(line);
+            i++;
+        }
+        return String.join("\n", out);
+    }
+
+    /**
+     * Bullet-to-bullet blank-line gaps ({@code "- 내용"} lines, dash bullets only): a single blank
+     * line between two consecutive bullets is almost always an LLM/converter artifact, not an
+     * intentional break, so it is removed entirely; two or more blank lines are treated as a
+     * deliberate separator and collapsed to exactly one. A blank-line run that is NOT followed by
+     * another bullet (body text, a heading, a shape-group marker, end of document, …) is left exactly
+     * as-is. Package-private for unit testing.
+     */
+    static String normalizeBulletGaps(String md) {
+        List<String> lines = new ArrayList<>(List.of(md.split("\n", -1)));
+        List<String> out = new ArrayList<>();
+        boolean inFence = false;
+        int i = 0;
+        while (i < lines.size()) {
+            String line = lines.get(i);
+            if (line.stripLeading().startsWith("```")) {
+                out.add(line);
+                inFence = !inFence;
+                i++;
+                continue;
+            }
+            if (inFence) {
+                out.add(line);
+                i++;
+                continue;
+            }
+
+            out.add(line);
+            i++;
+            if (!isDashBullet(line)) continue;
+
+            int blankStart = i;
+            while (i < lines.size() && lines.get(i).isBlank()) i++;
+            int blankCount = i - blankStart;
+            if (blankCount == 0) continue;
+
+            if (i < lines.size() && isDashBullet(lines.get(i))) {
+                if (blankCount >= 2) out.add(""); // 1 blank -> removed entirely, 2+ -> collapsed to 1
+            } else {
+                for (int k = 0; k < blankCount; k++) out.add(""); // not bullet-to-bullet — leave as-is
+            }
+        }
+        return String.join("\n", out);
+    }
+
+    private static boolean isDashBullet(String line) {
+        String t = line.strip();
+        return t.startsWith("- ") && t.length() > 2;
+    }
+
+    /**
+     * Within each {@code [도형 그룹]...[/도형 그룹]} block, a line whose entire trimmed content is a
+     * single token (a lone number or word, no internal whitespace) is dropped if the exact same line
+     * already appeared earlier in that block — a recurring SmartArt/grouped-shape extraction artifact
+     * (e.g. a step number or label repeated across overlapping text runs). Structural marker lines
+     * (anything starting with {@code [}, e.g. {@code [이미지: ...]}) and any line containing {@code {}
+     * or {@code }} are never deduped — the former to never risk dropping an image reference, the
+     * latter per explicit requirement (e.g. template/placeholder tokens that legitimately repeat).
+     * Deduplication is scoped per shape-group block, not document-wide. Package-private for unit
+     * testing.
+     */
+    static String dedupSingleTokenLinesInShapeGroups(String md) {
+        String[] lines = md.split("\n", -1);
+        List<String> out = new ArrayList<>(lines.length);
+        boolean inFence = false;
+        boolean inGroup = false;
+        Set<String> seenInGroup = null;
+        for (String line : lines) {
+            if (line.stripLeading().startsWith("```")) {
+                out.add(line);
+                inFence = !inFence;
+                continue;
+            }
+            if (inFence) {
+                out.add(line);
+                continue;
+            }
+
+            String trimmed = line.strip();
+            if (!inGroup && SHAPE_GROUP_OPEN.matcher(trimmed).matches()) {
+                inGroup = true;
+                seenInGroup = new HashSet<>();
+                out.add(line);
+                continue;
+            }
+            if (inGroup && SHAPE_GROUP_CLOSE.matcher(trimmed).matches()) {
+                inGroup = false;
+                seenInGroup = null;
+                out.add(line);
+                continue;
+            }
+            if (inGroup && isSingleTokenLine(trimmed) && !seenInGroup.add(trimmed)) {
+                continue; // duplicate single-token line within this shape group — drop it
+            }
+            out.add(line);
+        }
+        return String.join("\n", out);
+    }
+
+    private static boolean isSingleTokenLine(String trimmed) {
+        if (trimmed.isEmpty() || trimmed.startsWith("[")) return false;
+        if (trimmed.contains("{") || trimmed.contains("}")) return false;
+        return !trimmed.contains(" ") && !trimmed.contains("\t");
     }
 
     /** Marks the indices in {@code lines} that belong to a GFM table (a delimiter row plus the

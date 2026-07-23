@@ -339,11 +339,34 @@ PROGRESSIVE 모드 AND sufficient=false AND retryCount >= max
     재추론한다(`normalizeCodeBlocks(md, true)` — 위와 동일한 빈 줄 정리를 한 번 더 적용하지만
     멱등적이라 결과는 바뀌지 않는다) — **PPTX는 체크박스 상태와 무관하게 이 옵션을 항상 무시한다**
     (§6.3-bis 2번)
-  - 마지막으로 항상 `postProcessMarkdown(result)`가 fence/table-aware 결정적 정리를 한 번 더 한다
-    (코드 블록 **내부**는 무변형): ① 남은 프롬프트 구분자 `[DOCUMENT]`/`[/DOCUMENT]` 줄 제거, ②
-    내용 없는 `-` 한 줄 제거(수평선 `---`·`- 항목`·표 구분줄 `|---|`은 보존), ③ **코드 블록과 GFM 표
-    앞뒤에 빈 줄 보장**(표 구분줄 `|---|` 기준으로 표 블록을 감지 — 앞뒤 빈 줄이 없어 표/코드가 깨지던
-    문제), ④ 펜스 밖 연속 빈 줄을 1개로 축소.
+  - 마지막으로 항상 `postProcessMarkdown(result, isPptx)`가 fence/table-aware 결정적 정리를 한 번 더
+    한다(코드 블록 **내부**는 무변형). `isPptx`는 이 호출 시 이미 넘어온 `groupByPage`를 그대로
+    재사용한다 — PPTX 전용이라는 의미가 같기 때문이다(§6.3-bis 2번). **PPTX일 때만**
+    (`isPptx=true`) `applyPptxShapeFormatting()`이 아래 ①~④보다 먼저 실행된다 —
+    `PptxToMarkdownConverter`와 위 섹션별 LLM 교정이 남기는 도형 그룹/이미지 앵커 서식 문제를
+    정리하는 5개 규칙:
+      a) 불릿(`- `) 사이 빈 줄 정규화(`normalizeBulletGaps`) — 빈 줄 1개는 삭제(우발적 잡음으로
+         간주), 2개 이상은 1개로 축소(의도된 구분으로 간주). 불릿 뒤가 다른 불릿이 아니면(본문·
+         헤딩·문서 끝 등) 빈 줄 개수를 그대로 둔다.
+      b) `[도형 그룹]` 블록 안에서 완전히 같은 한 줄(숫자 1개 또는 단어 1개 — 공백 없는 단일
+         토큰, 예: SmartArt에서 겹친 텍스트 런 때문에 중복되는 단계 번호·라벨)이 반복되면 첫
+         등장만 남기고 이후 중복은 드롭(`dedupSingleTokenLinesInShapeGroups`, 블록 단위로 스코프).
+         `[`로 시작하는 구조 마커 줄(`[이미지: ...]` 등 — 이미지 참조를 실수로도 지우지 않기 위해)과
+         `{`/`}`를 포함한 줄(플레이스홀더 등)은 절대 건드리지 않는다.
+      c) `[도형 그룹]` 여는 마커 바로 다음에 오는 이미지 앵커(`[이미지: ...]`/`[이미지 설명: ...]`)
+         묶음 — 항상 그룹 내부 텍스트보다 먼저 나온다(`appendShapeGroup()`) — 앞뒤에 빈 줄을
+         보장해 마커·그룹 내부 텍스트와 분리한다(`ensureImageAnchorBoundaryBlankLines`).
+      d) 그룹 안팎 어디서든 이미지 앵커 단위(`[이미지: ...]` + 선택적 `[이미지 설명: ...]`)가
+         2개 이상 빈 줄 없이 연속하면 그 사이에 빈 줄을 삽입한다(`ensureBlankBetweenConsecutiveImages`)
+         — 이미지 하나뿐이면 손대지 않는다.
+      e) `[도형 그룹]` 여는 마커 앞, `[/도형 그룹]` 닫는 마커 뒤에 빈 줄을 보장한다
+         (`ensureBlankAroundShapeGroupMarkers`) — 이미 빈 줄이 있으면 중복 삽입하지 않는다.
+    다섯 규칙 모두 fence-aware(코드 블록 내부는 절대 건드리지 않음)이고, 이미 조건이 맞으면
+    아무것도 바꾸지 않는다 — 이 패스가 새로 넣은 빈 줄은 뒤이어 항상 실행되는 아래 ①~④가 함께
+    정규화한다(중복 축소·말미 트림 포함): ① 남은 프롬프트 구분자 `[DOCUMENT]`/`[/DOCUMENT]` 줄
+    제거, ② 내용 없는 `-` 한 줄 제거(수평선 `---`·`- 항목`·표 구분줄 `|---|`은 보존), ③ **코드
+    블록과 GFM 표 앞뒤에 빈 줄 보장**(표 구분줄 `|---|` 기준으로 표 블록을 감지 — 앞뒤 빈 줄이 없어
+    표/코드가 깨지던 문제), ④ 펜스 밖 연속 빈 줄을 1개로 축소.
   - **표 셀 안 이미지 설명은 `<br>`로 주입**: `addImageDescriptions=true`로 이미지 설명을 넣을 때
     (`injectDescriptionsForPattern`), 마커가 표 행 안(`looksLikeTableRow`)이면 설명을 개행이 아니라
     `<br>`로 붙인다 — 셀 안 개행(`[이미지: x]\n[이미지 설명: y]`)이 행을 두 줄로 쪼개 표 전체를 깨뜨리기
@@ -497,7 +520,7 @@ PROGRESSIVE 모드 AND sufficient=false AND retryCount >= max
 > **청킹/임베딩 단계 실패 시 재시도**: MD 변환+교정(4~6, 이미지 분석 포함)이 끝난 시점에 `doc_registry`에 `chunks=0`짜리 partial row가 먼저 저장된다(§6.3 6-bis). 이후 청킹·키워드추출·임베딩 저장(7~12) 중 어디서 실패해도 이 docId가 레지스트리·`/admin` 문서 목록에 남아 있어, 위 "MD 재인덱싱(↺)"으로 이미지 분석/MD 교정을 다시 거치지 않고 재시도할 수 있다 — 이 체크포인트가 없던 예전에는 실패 시 레지스트리에 아무것도 남지 않아 재업로드로 처음부터 다시 거쳐야 했다. `DocRegistry.existsBySha256AndVersion()`이 `chunks > 0`인 row만 "색인 완료"로 인정하므로, 이 partial row 때문에 `syncDirectory()`가 미완료 문서를 다음 동기화에서 영구히 건너뛰지는 않는다.  
 > **존재하지 않는 이미지 마커 정리**: MD 로드 직후, `[이미지: path]`/`[이미지(변환불가): path]` 마커가 가리키는 파일을 `data/images/`에서 실제로 찾아본다 — 수동 정리·이동 등으로 파일이 사라졌다면(`DocumentIndexer.removeMissingImageMarkers()`) 해당 마커만 제거하고 그 결과를 `mdPath`(사용 중인 `[_corrected].md`)에 다시 저장한 뒤 청킹을 진행한다. 존재하는 마커는 그대로 유지되며, 모든 마커가 유효하면 파일을 다시 쓰지 않는다. 인라인 마커(문장 중간의 DOCX 이미지)와 단독 줄 마커(PPTX/PDF) 모두 마커 부분만 제거되고 주변 텍스트는 보존된다.  
 > **소제목 번호 재검증**: 이미지 마커 정리 다음 단계로, 로드한 MD에 이미 번호 매겨진 헤딩(`## 1. 제목`처럼 숫자 프리픽스가 붙은 H2~H6)이 하나라도 있으면 현재 헤딩 구조를 기준으로 전체 번호를 다시 계산해 `mdPath`에 반영한다(`DocumentIndexer.reapplyHeadingNumbersIfNeeded()` → `MarkdownCorrectionService.reapplyHeadingNumbers()`, LLM 호출 없이 순수 텍스트 재계산만 수행) — 청크 편집으로 코드 블록이 분리/병합되는 등 헤딩이 추가·삭제·이동해 번호가 어긋난 경우를 바로잡는다. 번호 매겨진 헤딩이 하나도 없는 문서(체크박스를 끄고 업로드했거나, 위에서 언급한 대로 항상 번호가 붙지 않는 PPTX)는 손대지 않는다 — PPTX는 파일명 확장자로 먼저 걸러 이 단계 자체를 건너뛴다. 재계산 결과가 기존 내용과 같으면(즉 번호가 이미 최신 상태면) 파일을 다시 쓰지 않는다.  
-> **마크다운 후처리 재적용**: 소제목 번호 재검증 다음 단계로, `postProcessMarkdown()`(§6.3 6번 ③④ — `[DOCUMENT]` 마커/내용 없는 `-` 줄 제거, 코드 블록·GFM 표 앞뒤 빈 줄 보장, 펜스 밖 연속 빈 줄을 1개로 축소)을 `DocumentIndexer.postProcessIfNeeded()` → `MarkdownCorrectionService.postProcess()`로 다시 실행하고 변경이 있으면 `mdPath`에 반영한다. LLM 호출 없이 결정적으로 동작하며 PPTX를 포함한 모든 형식에 적용된다. **`fixClosingFences()`/`normalizeCodeBlocks()`는 재인덱싱에 포함하지 않는다** — 저장된 MD를 운영자가 직접 편집한 뒤 재인덱싱하면, 코드 블록 안에 의도적으로 남긴 빈 줄이 `normalizeCodeContent()`에 의해(함수/클래스·여러 줄 주석 시작 직전이 아니면 전부 삭제) 지워지거나, 펜스 짝이 어긋난 입력에서 여는 펜스의 언어 태그가 잘못 벗겨질 수 있어 — 이 위험을 매 재인덱싱마다 자동으로 감수하기보다 필요할 때만(문서 재업로드) 감수하도록 의도적으로 남겨둔 것이다.
+> **마크다운 후처리 재적용**: 소제목 번호 재검증 다음 단계로, `postProcessMarkdown()`(§6.3 6번 ①~④ — `[DOCUMENT]` 마커/내용 없는 `-` 줄 제거, 코드 블록·GFM 표 앞뒤 빈 줄 보장, 펜스 밖 연속 빈 줄을 1개로 축소)을 `DocumentIndexer.postProcessIfNeeded()` → `MarkdownCorrectionService.postProcess(md, isPptx)`로 다시 실행하고 변경이 있으면 `mdPath`에 반영한다. `isPptx`는 파일 확장자로 다시 판별한다(`filename.toLowerCase().endsWith(".pptx")` — 업로드 시의 `groupByPage`와 같은 신호). LLM 호출 없이 결정적으로 동작하며 모든 형식에 적용되고, **PPTX면 §6.3 6번의 `applyPptxShapeFormatting()`(도형 그룹/이미지 앵커 빈 줄·중복 정리 5규칙)도 업로드 때와 동일하게 다시 실행된다** — 그래서 저장된 PPTX MD 파일을 손으로 편집한 뒤 재인덱싱해도 최초 업로드와 같은 서식 보정을 다시 받는다. **`fixClosingFences()`/`normalizeCodeBlocks()`는 재인덱싱에 포함하지 않는다** — 저장된 MD를 운영자가 직접 편집한 뒤 재인덱싱하면, 코드 블록 안에 의도적으로 남긴 빈 줄이 `normalizeCodeContent()`에 의해(함수/클래스·여러 줄 주석 시작 직전이 아니면 전부 삭제) 지워지거나, 펜스 짝이 어긋난 입력에서 여는 펜스의 언어 태그가 잘못 벗겨질 수 있어 — 이 위험을 매 재인덱싱마다 자동으로 감수하기보다 필요할 때만(문서 재업로드) 감수하도록 의도적으로 남겨둔 것이다.
 
 ### 6.5. 디렉터리 동기화 — 3단계
 

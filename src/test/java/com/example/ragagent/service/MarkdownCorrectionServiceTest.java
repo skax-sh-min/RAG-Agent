@@ -799,6 +799,178 @@ class MarkdownCorrectionServiceTest {
         assertThat(out).contains("```\n-\n\n-\n```"); // 펜스 내부는 그대로
     }
 
+    // ---------------------------------------------------------------------------------------------
+    // PPTX-only shape-group formatting (postProcessMarkdown(md, isPptx=true) / applyPptxShapeFormatting)
+    // ---------------------------------------------------------------------------------------------
+
+    @Test
+    @DisplayName("postProcessMarkdown — isPptx=false면 PPTX 전용 규칙이 전혀 적용되지 않는다")
+    void postProcess_pptxRulesSkippedWhenNotPptx() {
+        String md = "본문\n[도형 그룹]\n1\n1\n[/도형 그룹]\n다음 문단";
+        String out = MarkdownCorrectionService.postProcessMarkdown(md, false);
+        // 그룹 전후 빈 줄도, 중복 제거도 적용되지 않아야 함 — 원본 그대로(개행만 기존 로직대로 유지)
+        assertThat(out).isEqualTo(md);
+    }
+
+    @Test
+    @DisplayName("ensureBlankAroundShapeGroupMarkers — [도형 그룹] 앞뒤에 빈 줄을 보장한다")
+    void ensureBlankAroundShapeGroupMarkers_addsBlankLines() {
+        String md = "슬라이드 본문\n[도형 그룹]\n내용\n[/도형 그룹]\n다음 줄";
+        String out = MarkdownCorrectionService.ensureBlankAroundShapeGroupMarkers(md);
+        assertThat(out).isEqualTo("슬라이드 본문\n\n[도형 그룹]\n내용\n[/도형 그룹]\n\n다음 줄");
+    }
+
+    @Test
+    @DisplayName("ensureBlankAroundShapeGroupMarkers — 이미 빈 줄이 있으면 중복으로 추가하지 않는다")
+    void ensureBlankAroundShapeGroupMarkers_idempotent() {
+        String md = "슬라이드 본문\n\n[도형 그룹]\n내용\n[/도형 그룹]\n\n다음 줄";
+        String out = MarkdownCorrectionService.ensureBlankAroundShapeGroupMarkers(md);
+        assertThat(out).isEqualTo(md);
+    }
+
+    @Test
+    @DisplayName("ensureBlankAroundShapeGroupMarkers — 번호 붙은 [도형 그룹 2]도 동일하게 처리한다")
+    void ensureBlankAroundShapeGroupMarkers_numberedLabel() {
+        String md = "본문\n[도형 그룹 2]\n내용\n[/도형 그룹 2]\n뒤 문장";
+        String out = MarkdownCorrectionService.ensureBlankAroundShapeGroupMarkers(md);
+        assertThat(out).isEqualTo("본문\n\n[도형 그룹 2]\n내용\n[/도형 그룹 2]\n\n뒤 문장");
+    }
+
+    @Test
+    @DisplayName("ensureImageAnchorBoundaryBlankLines — 그룹 안 이미지 앵커 묶음 앞뒤에 빈 줄을 넣는다")
+    void ensureImageAnchorBoundaryBlankLines_wrapsAnchorRun() {
+        String md = "[도형 그룹]\n[이미지: a.png]\n[이미지: b.png]\n그룹 내부 텍스트\n[/도형 그룹]";
+        String out = MarkdownCorrectionService.ensureImageAnchorBoundaryBlankLines(md);
+        assertThat(out).isEqualTo(
+                "[도형 그룹]\n\n[이미지: a.png]\n[이미지: b.png]\n\n그룹 내부 텍스트\n[/도형 그룹]");
+    }
+
+    @Test
+    @DisplayName("ensureImageAnchorBoundaryBlankLines — 그룹 밖 이미지 마커는 건드리지 않는다")
+    void ensureImageAnchorBoundaryBlankLines_ignoresImagesOutsideGroup() {
+        String md = "본문\n[이미지: a.png]\n뒤 문장";
+        String out = MarkdownCorrectionService.ensureImageAnchorBoundaryBlankLines(md);
+        assertThat(out).isEqualTo(md);
+    }
+
+    @Test
+    @DisplayName("ensureBlankBetweenConsecutiveImages — 연속된 [이미지] 사이에 빈 줄을 넣는다")
+    void ensureBlankBetweenConsecutiveImages_separatesAdjacentImages() {
+        String md = "[이미지: a.png]\n[이미지: b.png]\n[이미지: c.png]";
+        String out = MarkdownCorrectionService.ensureBlankBetweenConsecutiveImages(md);
+        assertThat(out).isEqualTo("[이미지: a.png]\n\n[이미지: b.png]\n\n[이미지: c.png]");
+    }
+
+    @Test
+    @DisplayName("ensureBlankBetweenConsecutiveImages — [이미지 설명]이 붙은 이미지도 한 단위로 취급해 사이에 빈 줄을 넣는다")
+    void ensureBlankBetweenConsecutiveImages_treatsDescriptionAsPartOfUnit() {
+        String md = "[이미지: a.png]\n[이미지 설명: 설명A]\n[이미지: b.png]\n[이미지 설명: 설명B]";
+        String out = MarkdownCorrectionService.ensureBlankBetweenConsecutiveImages(md);
+        assertThat(out).isEqualTo(
+                "[이미지: a.png]\n[이미지 설명: 설명A]\n\n[이미지: b.png]\n[이미지 설명: 설명B]");
+    }
+
+    @Test
+    @DisplayName("ensureBlankBetweenConsecutiveImages — 이미지가 하나뿐이면 아무것도 바꾸지 않는다")
+    void ensureBlankBetweenConsecutiveImages_singleImageUntouched() {
+        String md = "본문\n[이미지: a.png]\n다음 문장";
+        String out = MarkdownCorrectionService.ensureBlankBetweenConsecutiveImages(md);
+        assertThat(out).isEqualTo(md);
+    }
+
+    @Test
+    @DisplayName("normalizeBulletGaps — 연속된 불릿 사이 빈 줄 1개는 제거된다")
+    void normalizeBulletGaps_removesSingleBlankBetweenBullets() {
+        String md = "- 항목1\n\n- 항목2";
+        String out = MarkdownCorrectionService.normalizeBulletGaps(md);
+        assertThat(out).isEqualTo("- 항목1\n- 항목2");
+    }
+
+    @Test
+    @DisplayName("normalizeBulletGaps — 연속된 불릿 사이 빈 줄 2개 이상은 1개로 축소된다")
+    void normalizeBulletGaps_collapsesMultipleBlanksToOne() {
+        String md = "- 항목1\n\n\n\n- 항목2";
+        String out = MarkdownCorrectionService.normalizeBulletGaps(md);
+        assertThat(out).isEqualTo("- 항목1\n\n- 항목2");
+    }
+
+    @Test
+    @DisplayName("normalizeBulletGaps — 불릿 뒤에 일반 본문이 이어지면 빈 줄 개수를 그대로 둔다")
+    void normalizeBulletGaps_leavesNonBulletGapUntouched() {
+        String md = "- 항목1\n\n일반 본문";
+        String out = MarkdownCorrectionService.normalizeBulletGaps(md);
+        assertThat(out).isEqualTo(md);
+    }
+
+    @Test
+    @DisplayName("dedupSingleTokenLinesInShapeGroups — 그룹 안 중복된 숫자/단어 한 줄은 첫 번째만 남긴다")
+    void dedupSingleTokenLinesInShapeGroups_dropsDuplicates() {
+        String md = "[도형 그룹]\n1\n합계\n1\n합계\n[/도형 그룹]";
+        String out = MarkdownCorrectionService.dedupSingleTokenLinesInShapeGroups(md);
+        assertThat(out).isEqualTo("[도형 그룹]\n1\n합계\n[/도형 그룹]");
+    }
+
+    @Test
+    @DisplayName("dedupSingleTokenLinesInShapeGroups — 중괄호가 포함된 줄은 중복이어도 제외하지 않는다")
+    void dedupSingleTokenLinesInShapeGroups_keepsBraceLines() {
+        String md = "[도형 그룹]\n{n}\n{n}\n[/도형 그룹]";
+        String out = MarkdownCorrectionService.dedupSingleTokenLinesInShapeGroups(md);
+        assertThat(out).isEqualTo(md);
+    }
+
+    @Test
+    @DisplayName("dedupSingleTokenLinesInShapeGroups — 이미지 마커 줄은 중복이어도 절대 제거하지 않는다")
+    void dedupSingleTokenLinesInShapeGroups_neverDropsImageMarkers() {
+        String md = "[도형 그룹]\n[이미지: a.png]\n[이미지: a.png]\n[/도형 그룹]";
+        String out = MarkdownCorrectionService.dedupSingleTokenLinesInShapeGroups(md);
+        assertThat(out).isEqualTo(md);
+    }
+
+    @Test
+    @DisplayName("dedupSingleTokenLinesInShapeGroups — 그룹 밖의 동일한 중복 줄은 건드리지 않는다")
+    void dedupSingleTokenLinesInShapeGroups_ignoresOutsideGroup() {
+        String md = "합계\n합계\n[도형 그룹]\n내용\n[/도형 그룹]";
+        String out = MarkdownCorrectionService.dedupSingleTokenLinesInShapeGroups(md);
+        assertThat(out).isEqualTo(md);
+    }
+
+    @Test
+    @DisplayName("applyPptxShapeFormatting — 다섯 규칙이 순서대로 조합되어 하나의 그룹 블록에 함께 적용된다")
+    void applyPptxShapeFormatting_combinesAllRules() {
+        String md = "슬라이드 본문\n"
+                + "[도형 그룹]\n"
+                + "[이미지: a.png]\n"
+                + "[이미지: b.png]\n"
+                + "1\n"
+                + "합계\n"
+                + "1\n"
+                + "- 항목1\n"
+                + "\n"
+                + "- 항목2\n"
+                + "[/도형 그룹]\n"
+                + "다음 문단";
+        String out = MarkdownCorrectionService.applyPptxShapeFormatting(md);
+        assertThat(out).isEqualTo(
+                "슬라이드 본문\n\n"
+                        + "[도형 그룹]\n\n"
+                        + "[이미지: a.png]\n\n"
+                        + "[이미지: b.png]\n\n"
+                        + "1\n"
+                        + "합계\n"
+                        + "- 항목1\n"
+                        + "- 항목2\n"
+                        + "[/도형 그룹]\n\n"
+                        + "다음 문단");
+    }
+
+    @Test
+    @DisplayName("postProcessMarkdown — isPptx=true면 PPTX 전용 규칙이 일반 정리보다 먼저 적용된다")
+    void postProcess_appliesPptxRulesWhenPptx() {
+        String md = "본문\n[도형 그룹]\n1\n1\n[/도형 그룹]\n다음 문단";
+        String out = MarkdownCorrectionService.postProcessMarkdown(md, true);
+        assertThat(out).isEqualTo("본문\n\n[도형 그룹]\n1\n[/도형 그룹]\n\n다음 문단");
+    }
+
     @Test
     @DisplayName("looksLikeTableRow — 표 행(선두 파이프/2개 이상)만 true, 일반 산문은 false")
     void looksLikeTableRow_heuristic() {
