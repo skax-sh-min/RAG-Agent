@@ -240,11 +240,12 @@ public class SettingsService implements AppProperties.OverrideSource {
     public SettingsView buildView() {
         List<ProviderRow> providers = providerRows();
 
+        // Editable groups first, read-only (조회 전용) groups last.
         List<SettingGroup> groups = List.of(
                 new SettingGroup("search_hot", "settings.group.search_hot", searchHotItems()),
-                new SettingGroup("search_fixed", "settings.group.search_fixed", fixedSearchItems()),
                 new SettingGroup("indexing", "settings.group.indexing", indexingItems()),
                 new SettingGroup("llm_hot", "settings.group.llm_hot", llmHotItems()),
+                new SettingGroup("search_fixed", "settings.group.search_fixed", fixedSearchItems()),
                 new SettingGroup("cache", "settings.group.cache", cacheItems())
         );
 
@@ -275,7 +276,8 @@ public class SettingsService implements AppProperties.OverrideSource {
                             cfg.role() != null ? cfg.role().toUpperCase() : "NORMAL",
                             cfg.priority(),
                             cfg.model(),
-                            cfg.apiKey() != null && !cfg.apiKey().isBlank(),
+                            cfg.baseUrl(),
+                            cfg.isEnabled(), // real registration gate — see ProviderRow#configured javadoc
                             until != null,
                             until != null ? until.toString() : null,
                             providerToggle.isEnabled(cfg.name()));

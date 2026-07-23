@@ -19,16 +19,21 @@ public record SettingsView(
 ) {
 
     /**
-     * One registered chat/vision LLM provider. API keys are never included (only a configured flag).
+     * One registered chat/vision LLM provider. API keys are never included.
      *
-     * @param enabled false when an operator has disabled this provider at runtime (§A) — routing skips
-     *                it until re-enabled or the app restarts (the toggle is in-memory/volatile)
+     * @param baseUrl    the configured endpoint address (not a secret — safe to display)
+     * @param configured true when this provider passes {@code AppProperties.ProviderConfig#isEnabled()}
+     *                   (LlmConfig's actual G1+G2 registration gate) — false means it was never wired
+     *                   up as a live {@code LlmProvider} regardless of what its api-key/toggle look like
+     * @param enabled    false when an operator has disabled this provider at runtime (§A) — routing skips
+     *                   it until re-enabled or the app restarts (the toggle is in-memory/volatile)
      */
     public record ProviderRow(
             String name,
             String role,
             int priority,
             String model,
+            String baseUrl,
             boolean configured,
             boolean blocked,
             String blockedUntil,

@@ -12,8 +12,9 @@
         <tr>
             <th class="ps-3" th:text="#{settings.col.provider}">Provider</th>
             <th th:text="#{settings.col.role}">Role</th>
-            <th class="text-end" th:text="#{settings.col.priority}">Priority</th>
+            <th class="text-center" th:text="#{settings.col.priority}">Priority</th>
             <th th:text="#{settings.col.model}">Model</th>
+            <th th:text="#{settings.col.base-url}">Endpoint URL</th>
             <th th:text="#{settings.col.key}">API Key</th>
             <th th:text="#{settings.col.status}">Status</th>
             <th class="pe-3" th:text="#{settings.col.enabled}">Enabled</th>
@@ -23,8 +24,10 @@
         <tr th:each="p, iter : ${providers}" th:classappend="${!p.enabled} ? 'opacity-50'">
             <td class="ps-3 fw-semibold" th:text="${p.name}">local</td>
             <td><span class="badge bg-secondary" th:text="${p.role}">LOCAL</span></td>
-            <td class="text-end" th:text="${p.priority}">0</td>
+            <td class="text-center" th:text="${p.priority}">0</td>
             <td class="small" th:text="${p.model}">model</td>
+            <td class="small text-truncate d-inline-block" style="max-width:180px;" tabindex="0"
+                th:text="${p.baseUrl}" th:title="${p.baseUrl}">http://localhost:1234/v1</td>
             <td>
                 <span th:if="${p.configured}" class="badge bg-success"
                       th:text="#{settings.key.set}">set</span>
@@ -32,9 +35,11 @@
                       th:text="#{settings.key.none}">none</span>
             </td>
             <td>
-                <span th:if="${p.blocked}" class="badge bg-danger"
+                <span th:if="${!p.configured}" class="badge bg-secondary"
+                      th:text="#{settings.status.not-configured}">Not configured</span>
+                <span th:if="${p.configured and p.blocked}" class="badge bg-danger"
                       th:text="#{llm.status.blocked}">Blocked</span>
-                <span th:unless="${p.blocked}" class="badge bg-success"
+                <span th:if="${p.configured and !p.blocked}" class="badge bg-success"
                       th:text="#{llm.status.normal}">Normal</span>
             </td>
             <td class="pe-3">
@@ -46,8 +51,11 @@
                 <span th:unless="${p.enabled}" class="badge bg-secondary"
                       th:text="#{settings.status.disabled}">Disabled</span>
 
-                <button th:if="${isAdmin and p.enabled}" type="button"
-                        class="btn btn-sm btn-outline-danger ms-2"
+                <!-- disable is only actionable on a truly live provider: registered (configured) +
+                     not circuit-broken (정상) + currently toggled on (활성) -->
+                <button th:if="${isAdmin and p.enabled and p.configured and !p.blocked}" type="button"
+                        class="btn btn-outline-danger ms-2"
+                        style="font-size:.6rem;padding:.15rem .35rem;"
                         hx-post="/admin/settings/provider/toggle" hx-vals='{"enabled": false}'
                         th:attr="hx-include='#prov-' + ${iter.index}"
                         hx-target="#llm-providers" hx-swap="outerHTML"
@@ -61,7 +69,7 @@
             </td>
         </tr>
         <tr th:if="${providers.isEmpty()}">
-            <td colspan="7" class="text-center text-muted py-3" th:text="#{llm.no.providers}">
+            <td colspan="8" class="text-center text-muted py-3" th:text="#{llm.no.providers}">
                 No providers configured.
             </td>
         </tr>
