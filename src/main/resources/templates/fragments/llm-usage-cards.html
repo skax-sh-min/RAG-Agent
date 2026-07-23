@@ -38,14 +38,8 @@
 
             <div class="card-body py-2 px-3">
 
-                <!-- Model name -->
-                <div class="text-muted small mb-2">
-                    <i class="bi bi-cpu me-1"></i>
-                    <span th:text="${r.model}">model-name</span>
-                </div>
-
-                <!-- Circuit Breaker / Configuration status -->
-                <div class="mb-3">
+                <!-- Circuit Breaker / Configuration status, with the model name right beside it -->
+                <div class="mb-3 d-flex align-items-center flex-wrap gap-2">
                     <!-- API key not configured -->
                     <span th:if="${!r.configured}"
                           class="badge bg-secondary">
@@ -65,8 +59,13 @@
                         <span th:text="#{llm.status.blocked}">Blocked</span>
                         <span class="blocked-countdown ms-1 font-monospace">--:--</span>
                     </span>
+                    <!-- Model name (for BACKGROUND rows: comma-joined local/local-fast provider keywords) -->
+                    <span th:if="${r.model != null and !#strings.isEmpty(r.model)}"
+                          class="text-muted small">
+                        <i class="bi bi-cpu me-1"></i><span th:text="${r.model}">model-name</span>
+                    </span>
                     <div th:if="${r.configured and r.blocked}"
-                         class="text-muted mt-1"
+                         class="text-muted w-100"
                          style="font-size:.72rem;"
                          th:text="#{llm.blocked.until} + ' ' + ${r.blockedUntil}">
                     </div>

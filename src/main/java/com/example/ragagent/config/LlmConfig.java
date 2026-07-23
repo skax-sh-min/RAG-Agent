@@ -59,8 +59,7 @@ public class LlmConfig {
         boolean verifyLocalModels = llmCfg.verifyLocalModelsOnStartup() == null || llmCfg.verifyLocalModelsOnStartup();
 
         List<LlmProvider> providers = llmCfg.providers().stream()
-                .filter(cfg -> (cfg.apiKey() != null && !cfg.apiKey().isBlank()) || isLocalRole(cfg))
-                .filter(cfg -> cfg.baseUrl() != null && !cfg.baseUrl().isBlank())
+                .filter(AppProperties.ProviderConfig::isEnabled) // G1+G2 combined — see its javadoc
                 .map(cfg -> {
                     String roleStr = cfg.role() != null ? cfg.role().toUpperCase() : "NORMAL";
                     String typeStr = cfg.type() != null ? cfg.type().toUpperCase() : "BOTH";
@@ -68,7 +67,7 @@ public class LlmConfig {
                     // LlmProvider.hasValidApiKey() passes in LlmRouter (mirrors EmbeddingBeanConfig's "no-key").
                     String effectiveApiKey = (cfg.apiKey() != null && !cfg.apiKey().isBlank())
                             ? cfg.apiKey() : "no-key";
-                    String resolvedUrl = cfg.baseUrl(); // non-blank, guaranteed by the G2 filter above
+                    String resolvedUrl = cfg.baseUrl(); // non-blank, guaranteed by isEnabled() above (G2)
                     boolean providerStream = !Boolean.FALSE.equals(cfg.stream()); // default: true
                     // OpenAiApi.builder() appends /v1 internally, so strip it to avoid /v1/v1.
                     // resolvedUrl (with /v1) is kept for LlmProvider.baseUrl() and LoggingChatModel curl logs.

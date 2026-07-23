@@ -83,6 +83,14 @@ class OperationsControllerUsageTest {
         when(usageRepo.getMonthly(org.mockito.ArgumentMatchers.anyString())).thenReturn(zero);
         when(usageRepo.getDailyHistory(org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.anyInt()))
                 .thenReturn(List.of());
+        // Prefix-based aggregation (BACKGROUND category merging) — same "anyString → zero" default
+        // as the exact-name stubs above, so any test whose usedProviders() happens to include a
+        // background-prefixed name doesn't NPE rendering a card/row for it.
+        when(usageRepo.getDailyByPrefix(org.mockito.ArgumentMatchers.anyString())).thenReturn(zero);
+        when(usageRepo.getWeeklyByPrefix(org.mockito.ArgumentMatchers.anyString())).thenReturn(zero);
+        when(usageRepo.getMonthlyByPrefix(org.mockito.ArgumentMatchers.anyString())).thenReturn(zero);
+        when(usageRepo.getDailyHistoryByPrefix(org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.anyInt()))
+                .thenReturn(List.of());
     }
 
     @Test
@@ -118,24 +126,34 @@ class OperationsControllerUsageTest {
     // ── Background/non-chat LLM usage (summarization, keyword extraction, etc.) ───────────────
 
     @Test
-    @DisplayName("summary:/keyword:/title: 등 백그라운드 사용량은 type=BACKGROUND 로 노출(ORPHAN 아님)")
-    void backgroundUsage_surfacedWithTypeBackground_notOrphan() throws Exception {
-        when(usageRepo.usedProviders()).thenReturn(Set.of("summary:local", "keyword:local", "title:local"));
+    @DisplayName("summary:/keyword:/title: 등 백그라운드 사용량은 카테고리별로 병합되어 type=BACKGROUND 로 노출(ORPHAN 아님)")
+    void backgroundUsage_mergedByCategory_surfacedWithTypeBackground_notOrphan() throws Exception {
+        when(usageRepo.usedProviders()).thenReturn(
+                Set.of("summary:local", "keyword:local", "title:local", "title:local-fast"));
+        when(usageRepo.usedProviderNamesWithPrefix("title:"))
+                .thenReturn(Set.of("title:local", "title:local-fast"));
 
         mvc.perform(get("/api/v1/llm/usage"))
                 .andExpect(status().isOk())
+                // provider is now the bare category label — the local/local-fast split collapses
+                // into one "title" row instead of two ("title:local"/"title:local-fast")
                 .andExpect(jsonPath("$[*].provider", org.hamcrest.Matchers.hasItems(
-                        "summary:local", "keyword:local", "title:local")))
-                .andExpect(jsonPath("$[?(@.provider=='summary:local')].type").value("BACKGROUND"))
-                .andExpect(jsonPath("$[?(@.provider=='keyword:local')].type").value("BACKGROUND"))
-                .andExpect(jsonPath("$[?(@.provider=='title:local')].type").value("BACKGROUND"));
+                        "summary", "keyword", "title")))
+                .andExpect(jsonPath("$[*].provider", not(org.hamcrest.Matchers.hasItem("title:local"))))
+                .andExpect(jsonPath("$[?(@.provider=='summary')].type").value("BACKGROUND"))
+                .andExpect(jsonPath("$[?(@.provider=='keyword')].type").value("BACKGROUND"))
+                .andExpect(jsonPath("$[?(@.provider=='title')].type").value("BACKGROUND"))
+                // model slot repurposed to list which underlying LOCAL provider(s) served the category
+                .andExpect(jsonPath("$[?(@.provider=='title')].model").value("local, local-fast"));
         mvc.perform(get("/api/v1/llm/usage/history"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$['summary:local']").exists());
+                .andExpect(jsonPath("$.summary").exists())
+                .andExpect(jsonPath("$.title").exists());
         mvc.perform(get("/ui/llm-usage/cards"))
                 .andExpect(status().isOk())
-                .andExpect(content().string(containsString("summary:local")))
-                .andExpect(content().string(containsString("BACKGROUND")));
+                .andExpect(content().string(containsString("summary")))
+                .andExpect(content().string(containsString("BACKGROUND")))
+                .andExpect(content().string(containsString("local, local-fast")));
     }
 
     @Test

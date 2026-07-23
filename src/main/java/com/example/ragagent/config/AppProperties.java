@@ -72,7 +72,24 @@ public record AppProperties(
             int priority,
             Boolean stream,
             Integer concurrency  // this provider's own concurrency slots; null/<=0 falls back to LlmConfig.defaultProviderConcurrency
-    ) {}
+    ) {
+        /**
+         * True when this provider will actually be registered as a live {@code LlmProvider} by
+         * {@code LlmConfig.llmRouter()} (its G1+G2 gates) — a LOCAL-role provider is exempt from
+         * needing an api-key (it defaults to the "no-key" placeholder), but every role, LOCAL
+         * included, still needs a non-blank base-url. The single source of truth for "is this
+         * provider usable", shared by the bean-registration filter and the /llm-usage status
+         * badge — before this existed, /llm-usage only checked api-key and showed a LOCAL slot
+         * (e.g. local-fast/local-2) as "정상" even with no base-url configured, since its api-key
+         * always defaults to a non-blank "no-key" placeholder regardless of base-url.
+         */
+        public boolean isEnabled() {
+            boolean hasKey     = apiKey != null && !apiKey.isBlank();
+            boolean isLocal    = role != null && "LOCAL".equalsIgnoreCase(role.trim());
+            boolean hasBaseUrl = baseUrl != null && !baseUrl.isBlank();
+            return (hasKey || isLocal) && hasBaseUrl;
+        }
+    }
 
     public record IndexingConfig(
             int maxConcurrentFiles,
