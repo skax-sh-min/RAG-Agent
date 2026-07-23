@@ -43,29 +43,29 @@
         </div>
         <div class="card-body py-3">
             <div class="row g-3 text-center small">
-                <div class="col-6 col-md-3" th:if="${vectorStore.hasDocCount()}">
+                <div class="col-6 col-md" th:if="${vectorStore.hasDocCount()}">
                     <div class="text-muted">문서 수</div>
                     <div class="fs-5 fw-semibold" th:text="${vectorStore.totalDocs()}">0</div>
                 </div>
-                <div class="col-6 col-md-3">
+                <div class="col-6 col-md">
                     <div class="text-muted">청크 수</div>
                     <div class="fs-5 fw-semibold" th:text="${vectorStore.totalChunks()}">0</div>
                 </div>
-                <div class="col-6 col-md-3" th:if="${vectorStore.isChroma()}">
+                <div class="col-6 col-md" th:if="${vectorStore.isChroma()}">
                     <div class="text-muted">컬렉션 수</div>
                     <div class="fs-5 fw-semibold" th:text="${vectorStore.collectionCount()}">0</div>
                 </div>
-                <div class="col-6 col-md-3" th:if="${vectorStore.isSqliteVec()}">
+                <div class="col-6 col-md" th:if="${vectorStore.isSqliteVec()}">
                     <div class="text-muted">vec_version</div>
                     <div class="fs-6 fw-semibold font-monospace" th:text="${vectorStore.vecVersion() ?: '—'}">—</div>
                 </div>
-                <div class="col-6 col-md-3" th:if="${vectorStore.isSqliteVec()}">
+                <div class="col-6 col-md" th:if="${vectorStore.isSqliteVec()}">
                     <div class="text-muted">차원</div>
                     <div class="fs-5 fw-semibold" th:text="${vectorStore.dimension() ?: '—'}">—</div>
                 </div>
                 <!-- 운영 DB / 벡터 DB — 파일명만 표시, 전체 경로는 마우스 오버 팝오버로 (오인 방지) -->
-                <div class="col-6 col-md-3" th:if="${vectorStore.operationalDbPath() != null}">
-                    <div class="text-muted">DB 파일</div>
+                <div class="col-6 col-md" th:if="${vectorStore.operationalDbPath() != null}">
+                    <div class="text-muted">DB 파일<span th:if="${vectorStore.isDbSeparated()}" class="badge bg-info text-dark ms-1" style="font-size:0.62rem;">분리됨</span></div>
                     <span class="fs-6 lh-sm d-inline-block db-path-info" tabindex="0" style="cursor:default;"
                           th:attr="data-bs-content=${vectorStore.dbPathsPopoverHtml()}"
                           data-bs-toggle="popover" data-bs-trigger="hover focus"
@@ -73,7 +73,6 @@
                         운영 DB: <span th:text="${vectorStore.operationalDbFileName()}">memory.db</span><br>
                         <th:block th:if="${vectorStore.vectorDbPath() != null}">
                             벡터 DB: <span th:text="${vectorStore.vectorDbFileName()}">vector.db</span>
-                            <span th:if="${vectorStore.isDbSeparated()}" class="badge bg-info text-dark ms-1" style="font-size:0.62rem;">분리됨</span>
                         </th:block>
                     </span>
                 </div>
@@ -142,11 +141,13 @@
         <div class="col-md-3 col-lg-2">
             <div class="card h-100">
                 <div class="card-header d-flex align-items-center justify-content-between py-2">
-                    <span class="fw-semibold small">
+                    <div><span class="fw-semibold small">
                         <i class="bi bi-database me-1"></i>
                         <span th:text="${vectorStore.isSqliteVec()} ? '버전 (sqlite-vec)' : 'ChromaDB 컬렉션'">컬렉션</span>
-                    </span>
-                    <a href="/admin" class="btn btn-sm btn-outline-secondary py-0 px-2 small">새로고침</a>
+                    </span></div>
+                    <div class="align-items-right">
+                        <a href="/admin" class="btn btn-sm btn-outline-secondary py-0 px-2 small">새로고침</a>
+                    </div>
                 </div>
                 <div class="card-body p-0">
                     <div th:if="${#lists.isEmpty(collections)}"
