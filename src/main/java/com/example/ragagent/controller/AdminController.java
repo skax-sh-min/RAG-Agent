@@ -48,7 +48,6 @@ public class AdminController {
         model.addAttribute("chromaAvailable", result.available());
         model.addAttribute("vectorStore",     adminService.vectorStoreView());
         model.addAttribute("documents",       ragService.listDocuments(ctx.userId()));
-        model.addAttribute("curatedEntries",  curatedQaService.listActive(CURATED_LIST_LIMIT));
         return "admin";
     }
 
@@ -137,6 +136,17 @@ public class AdminController {
     }
 
     // ── §10.10 Curated Q&A moderation ───────────────────────────────────────────
+
+    /**
+     * Curated Q&A panel fragment — lazy-loaded only when the admin expands the section
+     * (the section is collapsed by default so {@code listActive()} doesn't run a DB query
+     * on every {@code /admin} page load).
+     */
+    @GetMapping("/admin/curated")
+    public String curatedPanel(Model model) {
+        model.addAttribute("curatedEntries", curatedQaService.listActive(CURATED_LIST_LIMIT));
+        return "fragments/admin-curated :: panel";
+    }
 
     /** Get full curated entry data for the edit panel. */
     @GetMapping("/admin/curated/{id}/detail")

@@ -30,6 +30,8 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
@@ -109,16 +111,28 @@ class AdminControllerWebMvcTest {
     // ── §10.10 step ④ — 큐레이션 Q&A 관리 ────────────────────────────────────
 
     @Test
-    @DisplayName("GET /admin — curatedEntries 모델 속성과 항목 렌더")
-    void adminPage_rendersCuratedEntries() throws Exception {
+    @DisplayName("GET /admin — 큐레이션 패널은 접혀 있고, listActive()는 호출되지 않음 (지연 로딩)")
+    void adminPage_doesNotEagerlyLoadCuratedEntries() throws Exception {
         when(adminService.vectorStoreView()).thenReturn(
                 new VectorStoreAdminView("chroma", true, -1, 0, 0, null, null, "/data/memory.db", null));
+
+        mvc.perform(get("/admin").with(user(ADMIN)))
+                .andExpect(status().isOk())
+                .andExpect(model().attributeDoesNotExist("curatedEntries"))
+                .andExpect(content().string(containsString("펼치면 조회")));
+
+        verify(curatedQaService, never()).listActive(anyInt());
+    }
+
+    @Test
+    @DisplayName("GET /admin/curated — curatedEntries 모델 속성과 항목 렌더 (패널 펼침 시 호출되는 지연 로딩 프래그먼트)")
+    void curatedPanel_rendersCuratedEntries() throws Exception {
         when(curatedQaService.listActive(anyInt())).thenReturn(List.of(
                 new com.example.ragagent.repository.CuratedQaRepository.CuratedQa(
                         1L, 42L, "u1", "t1", "질문입니다", "답변입니다", "active", "latest",
                         "2026-01-01T00:00:00", "2026-01-01T00:00:00")));
 
-        mvc.perform(get("/admin").with(user(ADMIN)))
+        mvc.perform(get("/admin/curated").with(user(ADMIN)))
                 .andExpect(status().isOk())
                 .andExpect(model().attributeExists("curatedEntries"))
                 .andExpect(content().string(containsString("질문입니다")));

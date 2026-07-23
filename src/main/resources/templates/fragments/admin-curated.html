@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" lang="ko">
+<body>
+
+<!-- §10.10 큐레이션 Q&A 패널 — /admin/curated 로 지연 로딩되는 카드 본문 -->
+<th:block th:fragment="panel">
+<div class="card-body p-0">
+    <div class="px-3 py-2 border-bottom small text-muted">
+        <span class="badge bg-secondary me-1" th:text="${#lists.size(curatedEntries)}">0</span>건
+    </div>
+    <div th:if="${#lists.isEmpty(curatedEntries)}"
+         class="text-muted small p-3 text-center">큐레이션된 Q&A가 없습니다.</div>
+    <div class="table-responsive" th:unless="${#lists.isEmpty(curatedEntries)}">
+        <table class="table table-sm table-hover mb-0 small">
+            <thead class="table-light">
+            <tr>
+                <th style="min-width:200px;">질문</th>
+                <th>답변 (미리보기)</th>
+                <th style="min-width:120px;">등록일</th>
+                <th class="text-center" style="width:90px;">작업</th>
+            </tr>
+            </thead>
+            <tbody>
+            <tr th:each="c : ${curatedEntries}" th:id="'curated-row-' + ${c.id()}">
+                <td th:text="${c.question()}"></td>
+                <td>
+                    <div class="text-truncate" style="max-width:420px;"
+                         th:title="${c.answer()}" th:text="${c.answer()}"></div>
+                </td>
+                <td class="text-muted"
+                    th:text="${c.createdAt() != null ? c.createdAt().substring(0,19).replace('T',' ') : ''}"></td>
+                <td class="text-center">
+                    <button type="button" class="btn btn-sm btn-outline-secondary py-0 px-1 me-1"
+                            style="font-size:0.7rem;"
+                            th:attr="data-curated-id=${c.id()}"
+                            onclick="openCuratedEdit(this.dataset.curatedId)" title="편집">
+                        <i class="bi bi-pencil"></i>
+                    </button>
+                    <button type="button" class="btn btn-sm btn-outline-danger py-0 px-1"
+                            style="font-size:0.7rem;"
+                            th:attr="data-curated-id=${c.id()}"
+                            onclick="deleteCuratedInline(this.dataset.curatedId, this)" title="삭제">
+                        <i class="bi bi-trash"></i>
+                    </button>
+                </td>
+            </tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+</th:block>
+
+</body>
+</html>
