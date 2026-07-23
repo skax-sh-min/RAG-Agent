@@ -1,6 +1,5 @@
 package com.example.ragagent.model;
 
-import java.nio.file.Path;
 import java.util.List;
 
 /**
@@ -36,12 +35,21 @@ public record VectorStoreAdminView(
 
     /** Bare filename (no directory) for the compact /admin status-card display — full path moves to a hover popover. */
     public String operationalDbFileName() {
-        return operationalDbPath == null ? null : Path.of(operationalDbPath).getFileName().toString();
+        return extractFileName(operationalDbPath);
     }
 
     /** Same as {@link #operationalDbFileName()} for the vector DB file. */
     public String vectorDbFileName() {
-        return vectorDbPath == null ? null : Path.of(vectorDbPath).getFileName().toString();
+        return extractFileName(vectorDbPath);
+    }
+
+    /** Splits on both '/' and '\' regardless of the running OS, since a configured path may use either separator. */
+    private static String extractFileName(String path) {
+        if (path == null) {
+            return null;
+        }
+        int idx = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'));
+        return idx >= 0 ? path.substring(idx + 1) : path;
     }
 
     /** HTML content (line break, no escaping) for the /admin status card's DB-path hover popover. */
