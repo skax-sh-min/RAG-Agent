@@ -186,25 +186,52 @@ REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — �
 
 > **드롭다운 전체 숨김**: 위 표는 DUAL/LOCAL_ONLY 개별 옵션이 `disabled`되는 경우고, `app.llm.default-routing-mode`(`LLM_ROUTING_MODE`)가 `LOCAL_ONLY`면 드롭다운 컨테이너 자체가 렌더링되지 않는다 — 배포에 LOCAL 프로바이더만 있어 어떤 모드를 골라도 결과가 동일하기 때문. 판단 기준은 대화별 `routingMode`가 아니라 **배포 전체의 기본 모드**다(`ChatController`의 `localOnlyDeployment` 모델 속성, `chat.html` `th:if="${!localOnlyDeployment}"`).
 
-### 응답 모드 셀렉터 (입력 바, S/M/L)
+### 입력 바 상단 행 (버전 · 태그 칩 · 응답 모드)
 
-버전 셀렉터 오른쪽 드롭다운(`#response-mode-select`)으로 답변 분량을 고른다. 선택은 hidden 필드
-`#form-response-mode`(`name="responseMode"`)에 동기화되고 `localStorage['chatResponseMode']`에 저장되어
-재방문 시 복원된다 — HTMX 폼 전송과 SSE(`new FormData(form)`) 둘 다 이 hidden 필드를 그대로 집어간다.
+한 행에 좌측부터 **버전 셀렉터 → 태그 칩 → (여백) → 응답 모드 토글**을 배치한다(`flex-grow-1` 스페이서로
+응답 모드를 행 오른쪽 끝에 붙임).
+
+> **태그 입력창은 없다**: 검색 스코프 태그는 이 행의 **칩을 클릭해서만** 토글한다(별도 텍스트 입력창 없음).
+> 칩 토글 결과는 hidden 필드 `#chat-tags-input`(`name="tags"`)에 쉼표로 모여 전송되므로 서버 계약은 그대로다.
+
+**태그 칩 목록의 `All`**: 칩 목록 맨 앞에 항상 `All` 칩이 붙는다. `All`을 클릭하면 태그 선택을 모두
+비운다 — 태그가 하나도 선택되지 않은 기존 "미선택 = 전체 문서 검색" 의미론을 그대로 재사용하는 UI일 뿐,
+서버에 별도의 "all" 태그가 존재하는 게 아니다. `chatSyncTagChips()`가 현재 선택 개수(0 = `All` 활성,
+1개 이상 = `All` 비활성)로 매번 다시 계산하므로, 새 대화의 기본 상태(hidden 필드가 비어 있음)에서 `All`이
+자동으로 활성 표시되고, 다른 태그를 하나라도 고르면 `All`이 자동으로 꺼진다 — 별도의 "기본 선택" 로직은
+없다. 목록 자체는 `GET /api/v1/tags?excludeCommon=true`로 받아온다 — 스코프(버전) 내 **모든 문서에 공통인
+태그**는 어차피 아무것도 좁히지 못하는 필터라 애초에 응답에서 빠진다(`KeywordSearchRepository
+.distinctTagsExcludingCommon()` — doc_id별 태그 집합의 교집합을 계산해 제외; 태그가 하나도 없는 문서가
+스코프에 있으면 교집합이 비어 아무것도 제외되지 않는다). 문서 업로드/편집 화면(`documents.html`)의 태그
+제안 입력은 이 필터를 타지 않는 `excludeCommon` 없는 기본 호출을 그대로 쓴다 — 태그를 붙이는 쪽은 흔한
+태그일수록 오히려 더 봐야 하기 때문이다.
+
+**응답 모드 토글 (S/M/L)**: 콤보박스가 아니라 `.btn-check` 기반 3버튼 토글 그룹(`#response-mode-group` 안의
+`#response-mode-s/m/l`) — 왼쪽에 `응답옵션`(`chat.response.group.label`) 라벨이 붙는다. 버튼 폭은 기본
+`btn-group-sm`의 약 1.5배(`.response-mode-btn { min-width: 2.6rem }`, `app.css`)로 넓히고 `font-weight:700`으로
+굵게 표시한다. 버튼에는 `S`/`M`/`L` 글자만 표시하고, 마우스를 올리면 상세 설명이 뜬다 — 단 네이티브 `title`
+속성이 아니라 **Bootstrap Tooltip**(`data-bs-toggle="tooltip"` + `new bootstrap.Tooltip(el, {delay:{show:100,
+hide:0}})`, 하단 스크립트에서 초기화)이다. 네이티브 title 툴팁은 브라우저 기본 지연(~1.5초)이 있어 체감상
+너무 늦게 뜨는 문제가 있었고, `bootstrap.bundle.min.js`가 `layout/base.html`에 이미 로드돼 있어(Popper 포함)
+추가 의존성 없이 전환 가능했다. 선택은 hidden 필드 `#form-response-mode`(`name="responseMode"`)에 동기화되고
+`localStorage['chatResponseMode']`에 저장되어 재방문 시 복원된다 — HTMX 폼 전송과 SSE(`new FormData(form)`)
+둘 다 이 hidden 필드를 그대로 집어간다.
 
 | 선택지 | ResponseMode | 답변 성격 | 토큰 상한(`LLM_MAX_TOKENS` 대비) |
 |--------|-------------|----------|------------------------------|
-| S · 간단히 | `S` | 요약적이고 간단하게 | 15% |
-| M · 자세히 | `M` | 쉽고 자세하게 | 40% (기본값) |
-| L · 원문 최대 | `L` | 원문 최대한 살려 최대한 많이 | 90% |
+| S | `S` | 요약적이고 간단하게 | 15% |
+| M | `M` | 쉽고 자세하게 | 40% (기본값) |
+| L | `L` | 원문 최대한 살려 최대한 많이 | 90% |
 
 **글자수 상한은 두지 않는다** — 답변 성격은 프롬프트 지시문(`prompt.answer.style.{s,m,l}`)이, 분량은 모드별
 토큰 상한이 맡는다. 토큰 상한은 **블로킹 호출에만** 붙으므로(스트리밍은 기존 설계대로 무제한 — CLAUDE.md
 참고) 스트리밍 채팅에서는 지시문이 유일한 조절 수단이다. `AnswerService.truncate()`의 20,000자 컷은 모드와
 무관한 절대 상한으로 그대로 유지된다.
 
-> **태그 입력창은 없다**: 검색 스코프 태그는 입력 바 아래 **칩을 클릭해서만** 토글한다. 칩 토글 결과는
-> hidden 필드 `#chat-tags-input`(`name="tags"`)에 쉼표로 모여 전송되므로 서버 계약은 그대로다.
+> **L은 RAG 전용**: `L`(원문 최대)은 검색된 문서 컨텍스트를 최대한 살리는 모드라 Direct(RAG 미사용) 모드에서는
+> 의미가 없다 — RAG/Direct 토글(`#direct-mode-toggle`)이 켜지면 `#response-mode-l`이 `disabled`되어
+> Bootstrap의 `.btn-check:disabled` 스타일로 흐리게 표시된다. 이 시점에 `L`이 선택돼 있었다면 자동으로
+> `M`으로 되돌리고(`localStorage`도 갱신) 다시 RAG로 돌아가도 `L`을 자동 재선택하지는 않는다.
 
 ### 응답 메타데이터 (어시스턴트 버블 하단)
 

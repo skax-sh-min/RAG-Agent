@@ -228,31 +228,46 @@
                     <input type="hidden" id="form-version" name="version" th:value="${version}"/>
                     <input type="hidden" id="form-routing-mode" name="routingMode" th:value="${routingMode}"/>
                     <input type="hidden" id="form-direct-mode" name="directMode" value="false"/>
-                    <div class="input-group input-group-sm mb-1">
-                        <!-- 버전: 하나만 선택 (태그 입력 왼쪽) -->
-                        <span class="input-group-text">Version</span>
-                        <select id="version-input" class="form-select" style="max-width: 100px;">
-                            <option th:value="${version}" th:text="${version}" selected>latest</option>
-                        </select>
+                    <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
+                        <!-- 버전: 하나만 선택 -->
+                        <div class="input-group input-group-sm w-auto">
+                            <span class="input-group-text">Version</span>
+                            <select id="version-input" class="form-select" style="max-width: 100px;">
+                                <option th:value="${version}" th:text="${version}" selected>latest</option>
+                            </select>
+                        </div>
 
-                        <!-- 검색 스코프 태그: 아래 칩으로만 선택한다(별도 입력창 없음).
+                        <!-- 검색 스코프 태그: 칩으로만 선택한다(별도 입력창 없음).
                              칩 토글 결과는 이 hidden 필드에 쉼표로 모여 폼/SSE로 전송된다. -->
                         <input type="hidden" id="chat-tags-input" name="tags"/>
+                        <div id="chat-tag-suggest" class="d-none d-flex flex-wrap align-items-center gap-1">
+                            <span id="chat-tag-suggest-chips" class="d-inline-flex flex-wrap gap-1"></span>
+                        </div>
 
-                        <!-- 응답 모드 S/M/L — 답변 길이·상세도 (기본 M) -->
-                        <span class="input-group-text" th:title="#{chat.response.tooltip}">
-                            <i class="bi bi-textarea-resize"></i>
-                        </span>
-                        <select id="response-mode-select" class="form-select" style="max-width: 190px;">
-                            <option value="S" th:text="#{chat.response.s}">S · 간단히</option>
-                            <option value="M" selected th:text="#{chat.response.m}">M · 자세히</option>
-                            <option value="L" th:text="#{chat.response.l}">L · 원문 최대</option>
-                        </select>
+                        <div class="flex-grow-1"></div>
+
+                        <!-- 응답 모드 S/M/L 토글 — 답변 길이·상세도 (기본 M).
+                             L(원문 최대)은 RAG 검색 컨텍스트가 있을 때만 의미가 있어 Direct 모드에서 비활성화.
+                             툴팁은 네이티브 title(브라우저 기본 지연 ~1.5s)이 아니라 Bootstrap Tooltip(짧은 delay)로 표시 — 하단 스크립트에서 초기화. -->
+                        <span class="small text-muted" th:text="#{chat.response.group.label}">응답옵션</span>
+                        <div id="response-mode-group" class="btn-group btn-group-sm" role="group"
+                             th:attr="aria-label=#{chat.response.tooltip}">
+                            <input type="radio" class="btn-check" name="response-mode-radio"
+                                   id="response-mode-s" value="S" autocomplete="off"/>
+                            <label class="btn btn-outline-secondary response-mode-btn" for="response-mode-s"
+                                   data-bs-toggle="tooltip" th:title="#{chat.response.s}">S</label>
+
+                            <input type="radio" class="btn-check" name="response-mode-radio"
+                                   id="response-mode-m" value="M" checked autocomplete="off"/>
+                            <label class="btn btn-outline-secondary response-mode-btn" for="response-mode-m"
+                                   data-bs-toggle="tooltip" th:title="#{chat.response.m}">M</label>
+
+                            <input type="radio" class="btn-check" name="response-mode-radio"
+                                   id="response-mode-l" value="L" autocomplete="off"/>
+                            <label class="btn btn-outline-secondary response-mode-btn" for="response-mode-l"
+                                   id="response-mode-l-label" data-bs-toggle="tooltip" th:title="#{chat.response.l}">L</label>
+                        </div>
                         <input type="hidden" id="form-response-mode" name="responseMode" value="M"/>
-                    </div>
-                    <!-- 등록된 태그 칩 (클릭하면 검색 범위에 토글) -->
-                    <div id="chat-tag-suggest" class="d-none mb-2">
-                        <span id="chat-tag-suggest-chips" class="d-inline-flex flex-wrap gap-1"></span>
                     </div>
                     <div class="input-group">
                         <textarea id="question-input" name="question"
@@ -324,6 +339,7 @@
         directLabel.textContent = isDirect ? labelDirect : labelRag;
         directLabel.classList.toggle('text-primary', isDirect);
         directLabel.classList.toggle('text-muted', !isDirect);
+        updateResponseModeAvailability(isDirect);
     });
 
     const versionInput  = document.getElementById('version-input');
@@ -356,7 +372,9 @@
     }
 
     /* ── 등록된 태그 칩 (버전 스코프, 클릭하면 검색 범위 토글) ──────────────── */
-    const chatTagsInput = document.getElementById('chat-tags-input');
+    const chatTagsInput   = document.getElementById('chat-tags-input');
+    const chatAllLabel    = /*[[#{chat.tags.all}]]*/ 'All';
+    const chatAllTooltip  = /*[[#{chat.tags.all.tooltip}]]*/ 'Search all documents';
 
     function chatCurrentTags() {
         return (chatTagsInput.value || '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
@@ -376,8 +394,20 @@
         chatTagsInput.value = tags.join(', ');
         chatSyncTagChips();
     }
+    /* 'All' 칩: 태그 선택을 모두 비워 전체 문서를 검색한다(기존 "태그 미선택 = 전체 검색" 의미론
+       그대로 재사용 — 서버 계약 변경 없음). 새 대화의 기본 상태(hidden 필드가 비어있음)와 같으므로
+       별도 "기본 선택" 처리 없이 chatSyncTagChips()가 태그 0개일 때 자동으로 All을 활성 표시한다. */
+    function chatSelectAllTags() {
+        chatTagsInput.value = '';
+        chatSyncTagChips();
+    }
     function chatSyncTagChips() {
         const sel = chatCurrentTags();
+        const allBtn = document.querySelector('#chat-tag-suggest-chips [data-tag-all]');
+        if (allBtn) {
+            allBtn.classList.toggle('btn-primary', sel.length === 0);
+            allBtn.classList.toggle('btn-outline-secondary', sel.length > 0);
+        }
         document.querySelectorAll('#chat-tag-suggest-chips [data-tag]').forEach(el => {
             el.classList.toggle('btn-primary', sel.includes(el.dataset.tag));
             el.classList.toggle('btn-outline-secondary', !sel.includes(el.dataset.tag));
@@ -385,8 +415,9 @@
     }
     function loadChatTagSuggestions() {
         const ver = (document.getElementById('form-version').value || '').trim();
-        const url = '/api/v1/tags' + (ver ? ('?version=' + encodeURIComponent(ver)) : '');
-        fetch(url)
+        const params = new URLSearchParams({excludeCommon: 'true'});
+        if (ver) params.set('version', ver);
+        fetch('/api/v1/tags?' + params.toString())
             .then(r => r.ok ? r.json() : [])
             .then(tags => {
                 const wrap  = document.getElementById('chat-tag-suggest');
@@ -399,9 +430,12 @@
                     }
                     return;
                 }
-                chips.innerHTML = tags.map(t =>
+                const allChip = `<button type="button" class="btn btn-sm py-0 px-2"
+                         style="font-size:0.72rem;" data-tag-all="true" title="${escHtml(chatAllTooltip)}">${escHtml(chatAllLabel)}</button>`;
+                chips.innerHTML = allChip + tags.map(t =>
                     `<button type="button" class="btn btn-sm btn-outline-secondary py-0 px-2"
                              style="font-size:0.72rem;" data-tag="${escHtml(t)}">${escHtml(t)}</button>`).join('');
+                chips.querySelector('[data-tag-all]').addEventListener('click', chatSelectAllTags);
                 chips.querySelectorAll('[data-tag]').forEach(btn =>
                     btn.addEventListener('click', () => chatToggleTag(btn.dataset.tag)));
 
@@ -426,20 +460,39 @@
     loadVersionOptions();
     loadChatTagSuggestions();
 
-    /* ── 응답 모드 S/M/L → hidden 폼 필드 + localStorage 유지 ─────────────────── */
-    const responseModeSelect = document.getElementById('response-mode-select');
+    /* ── 응답 모드 S/M/L 토글 버튼 → hidden 폼 필드 + localStorage 유지 ───────── */
+    const responseModeRadios = document.querySelectorAll('input[name="response-mode-radio"]');
     const responseModeInput  = document.getElementById('form-response-mode');
+    const responseModeLRadio = document.getElementById('response-mode-l');
     const RESPONSE_MODE_KEY  = 'chatResponseMode';
 
     function applyResponseMode(mode) {
-        const m = ['S', 'M', 'L'].includes(mode) ? mode : 'M';
-        responseModeSelect.value = m;
-        responseModeInput.value  = m;
+        const requested = ['S', 'M', 'L'].includes(mode) ? mode : 'M';
+        const m = (requested === 'L' && responseModeLRadio.disabled) ? 'M' : requested;
+        responseModeRadios.forEach(r => { r.checked = (r.value === m); });
+        responseModeInput.value = m;
     }
+    /* Direct 모드에서는 L(원문 최대)이 의미가 없으므로 버튼 자체를 비활성화하고,
+       현재 선택이 L이었다면 M으로 되돌린다. RAG로 돌아가도 L은 자동 재선택하지 않는다. */
+    function updateResponseModeAvailability(isDirect) {
+        responseModeLRadio.disabled = isDirect;
+        if (isDirect && responseModeInput.value === 'L') {
+            applyResponseMode('M');
+            localStorage.setItem(RESPONSE_MODE_KEY, 'M');
+        }
+    }
+    updateResponseModeAvailability(directToggle.checked);
     applyResponseMode(localStorage.getItem(RESPONSE_MODE_KEY));
-    responseModeSelect.addEventListener('change', function () {
-        applyResponseMode(this.value);
-        localStorage.setItem(RESPONSE_MODE_KEY, responseModeInput.value);
+    responseModeRadios.forEach(radio => radio.addEventListener('change', function () {
+        if (!this.checked) return;
+        responseModeInput.value = this.value;
+        localStorage.setItem(RESPONSE_MODE_KEY, this.value);
+    }));
+
+    /* 네이티브 title 툴팁은 브라우저 기본 지연(~1.5s)이 있어 체감상 너무 늦게 뜬다 —
+       Bootstrap Tooltip으로 대체해 짧은 delay로 표시한다. */
+    document.querySelectorAll('#response-mode-group [data-bs-toggle="tooltip"]').forEach(el => {
+        new bootstrap.Tooltip(el, {delay: {show: 100, hide: 0}});
     });
 
     /* Sync routing mode → hidden form field + PATCH thread if it exists.

@@ -205,4 +205,24 @@ class DocumentControllerHtmxTest {
                 .andExpect(status().isOk())
                 .andExpect(header().string("Content-Type", "image/png"));
     }
+
+    @Test
+    @DisplayName("GET /api/v1/tags — 기본(excludeCommon 없음)은 전체 태그 목록 (업로드 태그 제안용)")
+    void listTags_defaultsToFullList() throws Exception {
+        when(ragService.listTags("v1")).thenReturn(List.of("billing", "common", "policy"));
+
+        mvc.perform(get("/api/v1/tags").param("version", "v1"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$", org.hamcrest.Matchers.containsInAnyOrder("billing", "common", "policy")));
+    }
+
+    @Test
+    @DisplayName("GET /api/v1/tags?excludeCommon=true — 채팅 칩용 공통 태그 제외 목록")
+    void listTags_excludeCommon_usesFilteredList() throws Exception {
+        when(ragService.listTagsExcludingCommon("v1")).thenReturn(List.of("billing", "policy"));
+
+        mvc.perform(get("/api/v1/tags").param("version", "v1").param("excludeCommon", "true"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$", org.hamcrest.Matchers.containsInAnyOrder("billing", "policy")));
+    }
 }
