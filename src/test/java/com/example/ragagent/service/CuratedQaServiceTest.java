@@ -60,7 +60,7 @@ class CuratedQaServiceTest {
         service = new CuratedQaService(repository, memoryService, threadMetaService, vectorStore, SHORT_DEBOUNCE_MS);
 
         when(threadMetaService.findById(UID, TID)).thenReturn(Optional.of(
-                new ThreadMeta(TID, UID, "제목", "v1", "2026-01-01", "2026-01-01", "COST_FIRST")));
+                new ThreadMeta(TID, UID, "제목", "v1", "2026-01-01", "2026-01-01", "COST_FIRST", "")));
     }
 
     private static MemoryRepository.Turn turn(String question, String answer) {

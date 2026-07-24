@@ -172,4 +172,41 @@ class ChatControllerHtmxTest {
                         .with(csrf()))
                 .andExpect(status().isAccepted());
     }
+
+    @Test
+    @DisplayName("POST /ui/chat — 전송된 태그 선택을 스레드에 스냅샷 저장 (사이드바 목록용)")
+    void postChat_snapshotsSelectedTagsOntoThread() throws Exception {
+        when(agentService.chat(any(), any())).thenReturn(sampleResponse());
+
+        mvc.perform(post("/ui/chat")
+                        .param("question", "테스트 질문")
+                        .param("threadId", "t1")
+                        .param("version", "latest")
+                        .param("tags", "billing, policy")
+                        .with(csrf()))
+                .andExpect(status().isOk());
+
+        org.mockito.Mockito.verify(threadMetaService)
+                .updateTags(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.eq("t1"),
+                        org.mockito.ArgumentMatchers.eq(List.of("billing", "policy")));
+    }
+
+    @Test
+    @DisplayName("POST /ui/chat/stream — 전송된 태그 선택을 스레드에 스냅샷 저장 (사이드바 목록용)")
+    void streamChat_snapshotsSelectedTagsOntoThread() throws Exception {
+        when(props.sseTimeoutMs()).thenReturn(300_000L);
+
+        mvc.perform(post("/ui/chat/stream")
+                        .param("question", "테스트")
+                        .param("threadId", "t1")
+                        .param("version", "latest")
+                        .param("tags", "onboarding")
+                        .with(csrf()))
+                .andExpect(status().isOk())
+                .andExpect(request().asyncStarted());
+
+        org.mockito.Mockito.verify(threadMetaService)
+                .updateTags(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.eq("t1"),
+                        org.mockito.ArgumentMatchers.eq(List.of("onboarding")));
+    }
 }

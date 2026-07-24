@@ -8,10 +8,16 @@
      th:classappend="${thread.threadId == activeThreadId} ? ' active'"
      th:attr="data-href=@{/chat/{id}(id=${thread.threadId})}"
      onclick="window.location.href=this.dataset.href">
-    <div class="text-truncate small" th:text="${thread.title}">제목</div>
-    <div class="thread-date text-muted" style="font-size: 0.72rem;"
-         th:attr="data-date=${thread.updatedAt}"
-         th:text="${thread.updatedAt}"></div>
+    <div class="d-flex justify-content-between align-items-baseline gap-2">
+        <div class="text-truncate small" th:text="${thread.displayTitle()}">제목</div>
+        <div class="thread-date text-muted flex-shrink-0" style="font-size: 0.72rem;"
+             th:attr="data-date=${thread.updatedAt}"
+             th:text="${thread.updatedAt}"></div>
+    </div>
+    <div class="text-muted text-truncate" style="font-size: 0.72rem;">
+        <span th:text="'[' + ${thread.version} + ']'">[latest]</span>
+        <span th:if="${!thread.tagsDisplay().isEmpty()}" th:text="${thread.tagsDisplay()}"></span>
+    </div>
 </div>
 </body>
 </html>

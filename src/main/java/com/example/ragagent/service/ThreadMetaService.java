@@ -4,6 +4,7 @@ import com.example.ragagent.llm.BackgroundUsage;
 import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.llm.TaskType;
+import com.example.ragagent.model.TagUtils;
 import com.example.ragagent.model.ThreadMeta;
 import com.example.ragagent.repository.ThreadMetaRepository;
 import com.example.ragagent.security.PromptInjectionGuard;
@@ -52,7 +53,8 @@ public class ThreadMetaService {
                     "[%s] 새 대화".formatted(version),
                     version,
                     now, now,
-                    "COST_FIRST");
+                    "COST_FIRST",
+                    "");
             repository.save(meta);
             return meta;
         });
@@ -64,6 +66,15 @@ public class ThreadMetaService {
 
     public void updateRoutingMode(String userId, String threadId, String routingMode) {
         repository.updateRoutingMode(userId, threadId, routingMode);
+    }
+
+    /**
+     * Snapshots the tag selection that accompanied the message just sent — called on every
+     * chat send (not gated like {@link #generateTitleAsync}), so the sidebar always reflects
+     * the tags last used in that thread.
+     */
+    public void updateTags(String userId, String threadId, List<String> tags) {
+        repository.updateTags(userId, threadId, TagUtils.toMetaValue(tags));
     }
 
     public void delete(String userId, String threadId) {

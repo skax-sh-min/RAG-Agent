@@ -170,6 +170,32 @@ REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — �
 
 ---
 
+## 3.9 사이드바 대화 목록 항목 (thread-list.html / thread-item.html)
+
+두 줄 구조 — `fragments/thread-list.html`(전체 목록, `GET /ui/threads`)과 `fragments/thread-item.html`
+(항목 1건, `PATCH /ui/threads/{id}/title` 응답)이 **동일한 마크업**을 각자 들고 있어(부분 갱신 대상이 다름)
+수정 시 항상 함께 바꿔야 한다:
+
+```
+{제목, 왼쪽 정렬}                              {날짜, 오른쪽 정렬}
+[{버전}] {선택된 태그, 쉼표 구분 — 없으면 생략}
+```
+
+- **1행**: `justify-content-between` flex — 제목(`text-truncate small`, 기존 스타일 그대로)과 날짜
+  (`.thread-date.text-muted`, `font-size:0.72rem`, 기존 스타일 그대로)를 양끝 정렬.
+- **2행**: 버전 `[latest]` + 태그(있으면), 둘 다 1행의 날짜와 같은 폰트(`text-muted`, `0.72rem`)로 통일.
+  태그가 없으면 두 번째 `<span>`이 아예 렌더링되지 않고 버전만 보인다(`th:if="${!thread.tagsDisplay().isEmpty()}"`).
+- **제목의 `[버전]` 접두사 제거**: `ThreadMetaService`는 여전히 `title` 컬럼에 `"[{version}] {summary}"`를
+  그대로 저장한다(하위 호환, DB 마이그레이션 없음) — 화면에는 `ThreadMeta.displayTitle()`이 선행
+  `[..]` 브래킷을 정규식으로 잘라낸 값을 쓴다. 버전은 `ThreadMeta.version` 필드를 2행에서 직접 표시하므로
+  중복되지 않는다.
+- **태그는 스레드에 스냅샷 저장**: `thread_meta.tags`(`V3__thread_tags.sql`)는 그 스레드에서 **가장 최근에
+  보낸 메시지의 태그 선택**을 담는다 — `ChatController`가 `/ui/chat`·`/ui/chat/stream` 양쪽에서 매 전송마다
+  `ThreadMetaService.updateTags()`를 호출해 무조건 덮어쓴다(제목 생성과 달리 "커스텀이면 건너뛰기" 가드 없음).
+  `ThreadMeta.tagsDisplay()`가 CSV를 `"tag1, tag2"`로 재조인해 보여준다.
+
+---
+
 ## 4. 라우팅 전략 UI
 
 ### 사이드바 드롭다운

@@ -122,6 +122,7 @@ public class ChatController {
         }
         String userId = ctx.userId();
         threadMetaService.getOrCreate(userId, form.threadId(), form.version());
+        threadMetaService.updateTags(userId, form.threadId(), form.selectedTags());
         Thread worker = Thread.ofVirtual().start(() -> streamingAgentService.run(userId, form, emitter));
         emitter.onTimeout(() -> {
             log.warn("[TIMEOUT:SSE] thread={} timeoutMs={} (app.sse-timeout-seconds={}s)",
@@ -150,6 +151,7 @@ public class ChatController {
         String userId = ctx.userId();
         try {
             threadMetaService.getOrCreate(userId, form.threadId(), form.version());
+            threadMetaService.updateTags(userId, form.threadId(), form.selectedTags());
 
             RoutingMode rm = null;
             if (form.routingMode() != null && !form.routingMode().isBlank()) {

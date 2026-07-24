@@ -17,7 +17,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  * QA — ThreadMetaRepository
  *
  * Covers:
- *  - save() UPSERT 가 routing_mode 갱신 누락하는지 회귀 검사
+ *  - save() UPSERT 가 routing_mode/tags 갱신 누락하는지 회귀 검사
+ *  - updateTags() 단일 갱신
  */
 class ThreadMetaRepositoryTest {
 
@@ -44,8 +45,8 @@ class ThreadMetaRepositoryTest {
     @DisplayName("save → save 두 번째 호출에서 routing_mode 가 갱신되어야 함")
     void upsertShouldUpdateRoutingMode() {
         String now = ThreadMetaRepository.now();
-        repo.save(new ThreadMeta("t1", UID, "first",  "v1", now, now, "COST_FIRST"));
-        repo.save(new ThreadMeta("t1", UID, "second", "v1", now, now, "QUALITY_FIRST"));
+        repo.save(new ThreadMeta("t1", UID, "first",  "v1", now, now, "COST_FIRST", ""));
+        repo.save(new ThreadMeta("t1", UID, "second", "v1", now, now, "QUALITY_FIRST", ""));
 
         var meta = repo.findById(UID, "t1").orElseThrow();
         assertThat(meta.title()).isEqualTo("second");
@@ -57,8 +58,8 @@ class ThreadMetaRepositoryTest {
     @Test
     @DisplayName("findAllRecent 가 updated_at 내림차순")
     void findAllRecentOrder() {
-        repo.save(new ThreadMeta("old", UID, "t", "v", "2025-01-01 00:00:00", "2025-01-01 00:00:00", "COST_FIRST"));
-        repo.save(new ThreadMeta("new", UID, "t", "v", "2026-01-01 00:00:00", "2026-01-01 00:00:00", "COST_FIRST"));
+        repo.save(new ThreadMeta("old", UID, "t", "v", "2025-01-01 00:00:00", "2025-01-01 00:00:00", "COST_FIRST", ""));
+        repo.save(new ThreadMeta("new", UID, "t", "v", "2026-01-01 00:00:00", "2026-01-01 00:00:00", "COST_FIRST", ""));
         var all = repo.findAllRecent(UID, 10);
         assertThat(all.get(0).threadId()).isEqualTo("new");
     }
@@ -67,8 +68,27 @@ class ThreadMetaRepositoryTest {
     @DisplayName("updateRoutingMode 단일 갱신")
     void updateRoutingMode() {
         String now = ThreadMetaRepository.now();
-        repo.save(new ThreadMeta("t1", UID, "t", "v", now, now, "COST_FIRST"));
+        repo.save(new ThreadMeta("t1", UID, "t", "v", now, now, "COST_FIRST", ""));
         repo.updateRoutingMode(UID, "t1", "DUAL");
         assertThat(repo.findById(UID, "t1").orElseThrow().routingMode()).isEqualTo("DUAL");
+    }
+
+    @Test
+    @DisplayName("updateTags — 마지막 전송 시점의 태그 선택으로 덮어씀")
+    void updateTags_overwritesWithLatestSelection() {
+        String now = ThreadMetaRepository.now();
+        repo.save(new ThreadMeta("t1", UID, "t", "v", now, now, "COST_FIRST", "billing"));
+        repo.updateTags(UID, "t1", "policy,onboarding");
+        assertThat(repo.findById(UID, "t1").orElseThrow().tags()).isEqualTo("policy,onboarding");
+    }
+
+    @Test
+    @DisplayName("save() UPSERT가 두 번째 호출에서 tags도 갱신해야 함")
+    void upsertShouldUpdateTags() {
+        String now = ThreadMetaRepository.now();
+        repo.save(new ThreadMeta("t1", UID, "first", "v1", now, now, "COST_FIRST", "billing"));
+        repo.save(new ThreadMeta("t1", UID, "second", "v1", now, now, "COST_FIRST", "policy"));
+
+        assertThat(repo.findById(UID, "t1").orElseThrow().tags()).isEqualTo("policy");
     }
 }
