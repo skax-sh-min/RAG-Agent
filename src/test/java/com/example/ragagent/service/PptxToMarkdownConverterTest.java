@@ -943,6 +943,77 @@ class PptxToMarkdownConverterTest {
         assertThat(md).doesNotContain("[/도형 그룹]");
     }
 
+    @Test
+    @DisplayName("도형 그룹 안의 순번 배지(\"1\" 같은 숫자만 있는 라벨)는 본문 텍스트에서 제외되지만 나머지 라벨은 유지된다")
+    void bareNumberBadgeInGroupIsExcludedFromText() throws IOException {
+        writePptx(pptx -> {
+            XSLFSlide slide = pptx.createSlide();
+            addTitle(slide, "프로세스 슬라이드");
+            XSLFGroupShape group = slide.createGroup();
+            Rectangle2D bounds = new Rectangle2D.Double(0, 0, 300, 100);
+            group.setAnchor(bounds);
+            group.setInteriorAnchor(bounds);
+            XSLFTextBox badge = group.createTextBox();
+            badge.setAnchor(new Rectangle2D.Double(10, 10, 20, 20));
+            badge.setText("1");
+            XSLFTextBox label = group.createTextBox();
+            label.setAnchor(new Rectangle2D.Double(40, 10, 80, 40));
+            label.setText("승인 처리");
+        });
+
+        String md = convert();
+
+        assertThat(md).contains("승인 처리");
+        assertThat(md).contains("[도형 그룹]").contains("[/도형 그룹]");
+        // "1"이 라벨 그대로 남아 있으면 안 된다(배지 텍스트만 걸러내고 실제 라벨은 보존됐는지 확인).
+        String group = md.substring(md.indexOf("[도형 그룹]"), md.indexOf("[/도형 그룹]"));
+        assertThat(group.lines().map(String::strip)).doesNotContain("1");
+    }
+
+    @Test
+    @DisplayName("도형 그룹 안에 순번 배지만 있고 다른 텍스트가 없으면 [도형 그룹] 마커 자체를 남기지 않는다")
+    void groupWithOnlyBareNumberBadgesEmitsNoMarkerBlock() throws IOException {
+        writePptx(pptx -> {
+            XSLFSlide slide = pptx.createSlide();
+            addTitle(slide, "숫자만 있는 그룹");
+            XSLFGroupShape group = slide.createGroup();
+            Rectangle2D bounds = new Rectangle2D.Double(0, 0, 200, 100);
+            group.setAnchor(bounds);
+            group.setInteriorAnchor(bounds);
+            XSLFTextBox badge1 = group.createTextBox();
+            badge1.setAnchor(new Rectangle2D.Double(10, 10, 20, 20));
+            badge1.setText("1.");
+            XSLFTextBox badge2 = group.createTextBox();
+            badge2.setAnchor(new Rectangle2D.Double(40, 10, 20, 20));
+            badge2.setText("(2)");
+        });
+
+        String md = convert();
+
+        assertThat(md).doesNotContain("[도형 그룹]");
+        assertThat(md).doesNotContain("[/도형 그룹]");
+    }
+
+    @Test
+    @DisplayName("숫자로 시작하지만 다른 글자가 붙은 라벨(\"1단계\" 등)은 순번 배지로 오인해 제거하지 않는다")
+    void numberWithTrailingTextIsNotTreatedAsBadge() throws IOException {
+        writePptx(pptx -> {
+            XSLFSlide slide = pptx.createSlide();
+            addTitle(slide, "단계 슬라이드");
+            XSLFGroupShape group = slide.createGroup();
+            Rectangle2D bounds = new Rectangle2D.Double(0, 0, 200, 100);
+            group.setAnchor(bounds);
+            group.setInteriorAnchor(bounds);
+            XSLFTextBox label = group.createTextBox();
+            label.setAnchor(new Rectangle2D.Double(10, 10, 80, 40));
+            label.setText("1단계");
+        });
+
+        String md = convert();
+
+        assertThat(md).contains("1단계");
+    }
+
     // ── 도형 여러 줄 텍스트: 코드 블록 / 문단 블록 처리 ──────────────────────────────────────
 
     /** 그룹 도형 하나를 만들어 반환한다(호출자가 텍스트 박스를 붙인다). */

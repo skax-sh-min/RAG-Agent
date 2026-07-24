@@ -153,6 +153,9 @@ public class MarkdownCorrectionService {
     /** Marker placed right AFTER this section's real content, before an appended next-section
      *  overlap. The model reproduces it verbatim; {@link #cutOverlap} drops everything from it on. */
     private static final String SECTION_END_BOUNDARY = "<<<SECTION_END>>>";
+    /** Prefix/suffix of the per-table placeholder marker — see {@link #extractTables}. */
+    private static final String TABLE_PLACEHOLDER_PREFIX = "[TABLE_PLACEHOLDER_";
+    private static final String TABLE_PLACEHOLDER_SUFFIX = "]";
 
     private final LlmRouter llmRouter;
     private final AppProperties props;
@@ -624,6 +627,12 @@ public class MarkdownCorrectionService {
         log.debug("[MD_CORRECT] 섹션 교정 시작: {}자 (headOverlap={}, tailOverlap={})",
                 safeSection.length(), hasHead, hasTail);
 
+        // 표는 LLM에게 아예 보여주지 않는다 — "표는 변경 금지"라는 프롬프트 지시만으로는 로컬 모델이
+        // 셀 안의 ':' 를 '|' 로 바꾸는 등 표를 훼손하는 사례가 있었다. [TABLE_PLACEHOLDER_N] 자리표시자로
+        // 치환해 보내고, 응답에서 그대로 복원한다(같은 종류의 [이미지: ...] 류 대괄호 마커는 이미
+        // 안정적으로 보존되는 것으로 검증됨).
+        TableExtraction tableExtraction = extractTables(body);
+
         String boundaryNote = hasOverlap ? buildBoundaryNote(hasHead, hasTail) : "";
 
         String prompt = ("""
@@ -633,8 +642,7 @@ public class MarkdownCorrectionService {
                 교정 항목:
                 - 잘린 문장 연결 (줄바꿈으로 끊긴 문장을 이어붙이기)
                 - 명백한 오타 수정
-                - 표(table)는 변경 금지
-                - 마커 형식 유지: [이미지: ...], [이미지(변환불가): ...], [헤딩페이지: N], [페이지: N]을 그대로 둘 것
+                - 마커 형식 유지: [이미지: ...], [이미지(변환불가): ...], [헤딩페이지: N], [페이지: N], [TABLE_PLACEHOLDER_N](표를 대신하는 자리표시자, N은 숫자)을 그대로 둘 것 — 특히 [TABLE_PLACEHOLDER_N]은 절대 표 형식으로 채우거나 다른 형태로 바꾸지 말고 그 줄 그대로 둘 것
                 - 코드/로그/명령어(CLI)/설정 파일처럼 보이지만 코드 블록(```)으로 감싸이지 않은 부분은 반드시 코드 블록으로 감싸세요. 언어를 알 수 있으면 그 언어 태그를, 판단이 어려우면 `%s` 태그를 사용하세요.
                 - 코드/로그 안에서 "#", "##", "###"으로 시작하는 줄은 마크다운 제목이 아니라 코드 내용(주석·배너·출력)입니다. 반드시 코드 블록 안에 두고 제목으로 바꾸지 마세요.
                 - 이미 코드 블록(```)으로 감싸인 내용은 그대로 유지: 언어 태그가 이미 있으면 유지 (코드 블록 안의 로그·일반 텍스트 출력은 그대로 유지)
@@ -646,12 +654,24 @@ public class MarkdownCorrectionService {
 
                 [DOCUMENT]
                 %s
-                [/DOCUMENT]""").formatted(defaultCodeLanguage, boundaryNote, body);
+                [/DOCUMENT]""").formatted(defaultCodeLanguage, boundaryNote, tableExtraction.protectedText());
         try {
             String result = llmRouter.executeWithTracking(
                     TaskType.LIGHT_TEXT, RoutingMode.COST_FIRST, BackgroundUsage.MDCORRECT_PREFIX,
                     model -> model.call(new Prompt(prompt)));
             log.debug("[MD_CORRECT] 섹션 교정 완료: {}자 → {}자", safeSection.length(), result.length());
+
+            if (!tableExtraction.tables().isEmpty()) {
+                String restored = restoreTables(result, tableExtraction.tables());
+                if (restored == null) {
+                    // 자리표시자가 유실됨 — 응답을 신뢰할 수 없으므로 표 위치를 추측해 끼워 넣지 않고
+                    // 이 섹션은 교정 없이 원본을 그대로 유지한다.
+                    log.warn("[MD_CORRECT] 표 자리표시자 유실 — 섹션 교정을 건너뛰고 원본 유지");
+                    return section;
+                }
+                result = restored;
+            }
+
             if (hasOverlap) {
                 String cut = cutOverlap(result, hasHead, hasTail);
                 if (cut != null) {
@@ -669,6 +689,46 @@ public class MarkdownCorrectionService {
             log.warn("[MD_CORRECT] 섹션 교정 실패, 원본 유지: {}", e.getMessage());
             return section;
         }
+    }
+
+    /** {@code protectedText} = {@code original} with every GFM table block ({@link #markTableRows})
+     *  replaced by a {@code [TABLE_PLACEHOLDER_N]} marker line; {@code tables} holds each table's
+     *  original text, indexed by N, for {@link #restoreTables}. */
+    private record TableExtraction(String protectedText, List<String> tables) {}
+
+    private static TableExtraction extractTables(String text) {
+        List<String> lines = new ArrayList<>(List.of(text.split("\n", -1)));
+        boolean[] inTable = markTableRows(lines);
+        List<String> tables = new ArrayList<>();
+        List<String> out = new ArrayList<>();
+        int i = 0;
+        while (i < lines.size()) {
+            if (!inTable[i]) {
+                out.add(lines.get(i));
+                i++;
+                continue;
+            }
+            int start = i;
+            while (i < lines.size() && inTable[i]) i++;
+            tables.add(String.join("\n", lines.subList(start, i)));
+            out.add(TABLE_PLACEHOLDER_PREFIX + (tables.size() - 1) + TABLE_PLACEHOLDER_SUFFIX);
+        }
+        return new TableExtraction(String.join("\n", out), tables);
+    }
+
+    /** Replaces each {@code [TABLE_PLACEHOLDER_N]} marker in {@code text} with the original table
+     *  text at index N. Returns {@code null} if any expected marker is missing from {@code text} —
+     *  the model dropped or mangled it, so the response can't be trusted (same discipline as the
+     *  overlap-boundary marker check in {@link #cutOverlap}); the caller falls back to the
+     *  untouched original section rather than guess where the table belongs. */
+    private static String restoreTables(String text, List<String> tables) {
+        String result = text;
+        for (int i = 0; i < tables.size(); i++) {
+            String placeholder = TABLE_PLACEHOLDER_PREFIX + i + TABLE_PLACEHOLDER_SUFFIX;
+            if (!result.contains(placeholder)) return null;
+            result = result.replace(placeholder, tables.get(i));
+        }
+        return result;
     }
 
     /**

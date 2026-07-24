@@ -17,12 +17,17 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.mockito.ArgumentCaptor;
+import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.ai.chat.model.ChatResponse;
+import org.springframework.ai.chat.prompt.Prompt;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.BiConsumer;
+import java.util.function.Function;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -373,6 +378,106 @@ class MarkdownCorrectionServiceTest {
         String result = service.correctSection(section);
 
         assertThat(result).isEqualTo(corrected);
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // correctSection — table protection (LLM must never see/touch table content)
+    // ---------------------------------------------------------------------------------------------
+
+    @Test
+    @DisplayName("correctSection — 표 셀 내용은 LLM 프롬프트에 그대로 노출되지 않고 [TABLE_PLACEHOLDER_N]으로만 전달된다")
+    void correctSection_withTable_neverExposesTableContentToLlm() {
+        String section = """
+                ## 설정값
+
+                | 항목 | 설명 |
+                | --- | --- |
+                | 포트: 8080 | 서버 포트 |
+                """;
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Function<ChatModel, ChatResponse>> callCaptor = ArgumentCaptor.forClass(Function.class);
+        when(llmRouter.executeWithTracking(any(), any(), any(), callCaptor.capture())).thenReturn(section);
+
+        service.correctSection(section);
+
+        ChatModel mockModel = mock(ChatModel.class);
+        ArgumentCaptor<Prompt> promptCaptor = ArgumentCaptor.forClass(Prompt.class);
+        when(mockModel.call(promptCaptor.capture())).thenReturn(null);
+        callCaptor.getValue().apply(mockModel);
+
+        String sentPrompt = promptCaptor.getValue().getContents();
+        assertThat(sentPrompt).doesNotContain("포트: 8080");
+        assertThat(sentPrompt).doesNotContain("| 항목 | 설명 |");
+        assertThat(sentPrompt).contains("[TABLE_PLACEHOLDER_0]");
+    }
+
+    @Test
+    @DisplayName("correctSection — LLM이 자리표시자를 그대로 두면 원본 표가 정확히 복원된다(셀 안 ':' 보존, '|'로 오염되지 않음)")
+    void correctSection_withTable_restoresOriginalTableVerbatim() {
+        String section = """
+                ## 설정값
+
+                | 항목 | 값 |
+                | --- | --- |
+                | 포트: 8080 | 기본값 |
+                | 제한: 100 | 초당 요청 |
+                """;
+        // LLM이 표를 [TABLE_PLACEHOLDER_0]로 받아 그대로 반환했다고 가정(정상 동작).
+        String llmResponse = "## 설정값\n\n[TABLE_PLACEHOLDER_0]\n";
+        when(llmRouter.executeWithTracking(any(), any(), any(), any())).thenReturn(llmResponse);
+
+        String result = service.correctSection(section);
+
+        assertThat(result).contains("| 포트: 8080 | 기본값 |", "| 제한: 100 | 초당 요청 |");
+        assertThat(result).doesNotContain("[TABLE_PLACEHOLDER_0]");
+    }
+
+    @Test
+    @DisplayName("correctSection — 표가 여러 개면 각각 독립된 자리표시자로 보호되고 순서대로 복원된다")
+    void correctSection_withMultipleTables_eachRestoredIndependently() {
+        String section = """
+                ## 첫 번째 표
+
+                | A | B |
+                | --- | --- |
+                | 시간: 10:00 | 첫 번째 |
+
+                본문 설명입니다.
+
+                ## 두 번째 표
+
+                | C | D |
+                | --- | --- |
+                | 비율: 50% | 두 번째 |
+                """;
+        String llmResponse = "## 첫 번째 표\n\n[TABLE_PLACEHOLDER_0]\n\n본문 설명입니다.\n\n"
+                + "## 두 번째 표\n\n[TABLE_PLACEHOLDER_1]\n";
+        when(llmRouter.executeWithTracking(any(), any(), any(), any())).thenReturn(llmResponse);
+
+        String result = service.correctSection(section);
+
+        assertThat(result).contains("| 시간: 10:00 | 첫 번째 |", "| 비율: 50% | 두 번째 |");
+        assertThat(result).doesNotContain("[TABLE_PLACEHOLDER_0]", "[TABLE_PLACEHOLDER_1]");
+    }
+
+    @Test
+    @DisplayName("correctSection — 응답에서 표 자리표시자가 유실되면 신뢰할 수 없으므로 원본 섹션을 그대로 반환한다")
+    void correctSection_tablePlaceholderMissing_fallsBackToOriginalSection() {
+        String section = """
+                ## 설정값
+
+                | 항목 | 값 |
+                | --- | --- |
+                | 포트: 8080 | 기본값 |
+                """;
+        // 자리표시자를 지워버리거나 다른 형태로 바꿔버린 응답 — 표 위치를 신뢰할 수 없다.
+        String llmResponse = "## 설정값\n\n(표가 사라짐)\n";
+        when(llmRouter.executeWithTracking(any(), any(), any(), any())).thenReturn(llmResponse);
+
+        String result = service.correctSection(section);
+
+        assertThat(result).isEqualTo(section);
     }
 
     // ---------------------------------------------------------------------------------------------

@@ -510,11 +510,21 @@ public class PptxToMarkdownConverter {
             } else if (shape instanceof XSLFTextShape textShape) {
                 String combined = combineShapeText(textShape);
                 if (combined.isBlank()) continue;
+                if (isBareNumberLabel(combined)) continue; // 순번 배지("1", "(2)" 등) — 그룹은 이미지로도 남으니 텍스트로는 무의미
                 if (!seenShapeTexts.add(normalizeForDedup(combined))) continue; // 그룹 내 다른 도형과 내용 중복 — 스킵
 
                 appendShapeTextBlock(body, textShape);
             }
         }
+    }
+
+    // 그룹 내부의 순번/단계 배지(원형 도형 안의 "1", "2." 같은 라벨)를 걸러내는 패턴. 도형 그룹은
+    // 어차피 PptxImageExtractor가 통째로 이미지로도 래스터라이즈하므로, 문맥 없는 숫자 한 줄만
+    // appendGroupText()의 텍스트 추출에 남으면 "1"이라는 의미 없는 줄만 본문에 남는다.
+    private static final Pattern BARE_NUMBER_LABEL = Pattern.compile("^[(\\[]?[0-9]{1,3}[.)\\]]?$");
+
+    private boolean isBareNumberLabel(String text) {
+        return BARE_NUMBER_LABEL.matcher(text.strip()).matches();
     }
 
     /** 도형 하나에 속한 모든 문단을 공백으로 이어붙인다 — 도형 단위 중복 비교를 위한 텍스트 뭉치({@link #tableCellText}와 동일한 접근). */
