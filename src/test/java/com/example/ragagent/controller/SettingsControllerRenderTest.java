@@ -101,7 +101,7 @@ class SettingsControllerRenderTest {
                 "text", false, false, null, null, null, null);
         SettingsView view = new SettingsView(
                 List.of(new ProviderRow("local", "LOCAL", 0, "qwen", "http://localhost:1234/v1", true, false, null, true)),
-                "COST_FIRST", "0.0", "6000", "bge-m3", "1024", "chroma",
+                "COST_FIRST", "0.0", "6000", "bge-m3", "http://localhost:1234/v1", "1024", "chroma",
                 List.of(new SettingGroup("search_hot", "settings.group.search_hot", List.of(hot)),
                         new SettingGroup("search_fixed", "settings.group.search_fixed", List.of(fixed))));
         when(settingsService.buildView()).thenReturn(view);

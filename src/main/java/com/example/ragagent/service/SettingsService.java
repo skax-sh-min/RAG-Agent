@@ -257,6 +257,7 @@ public class SettingsService implements AppProperties.OverrideSource {
                 trimNum(llm.temperature()),   // general/RAG temperature — now the real effective value
                 Integer.toString(llm.maxTokens()),
                 nullToDash(props.embeddingSafe().model()),
+                nullToDash(props.embeddingSafe().baseUrl()),
                 dim != null ? dim.toString() : "auto",
                 props.vectorStoreSafe().type(),
                 groups);

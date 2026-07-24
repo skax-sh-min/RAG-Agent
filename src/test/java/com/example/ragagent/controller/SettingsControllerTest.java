@@ -38,7 +38,7 @@ class SettingsControllerTest {
     @DisplayName("GET /settings — settings 뷰 + settings 모델 속성")
     void settingsPage_returnsViewAndModel() {
         SettingsView view = new SettingsView(List.of(), "COST_FIRST", "0.0", "6000",
-                "bge-m3", "1024", "chroma", List.of());
+                "bge-m3", "http://localhost:1234/v1", "1024", "chroma", List.of());
         when(service.buildView()).thenReturn(view);
 
         Model model = new ExtendedModelMap();

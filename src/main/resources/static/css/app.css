@@ -220,6 +220,11 @@
     font-weight: 700;
 }
 
+/* ── 설정 페이지: LLM 프로바이더 표 — 행 사이 구분선 숨김 (헤더 밑줄은 유지) ──── */
+#llm-providers tbody > tr > * {
+    border-bottom-width: 0;
+}
+
 /* ── Mobile tweaks ───────────────────────────────────────────────────── */
 @media (max-width: 767.98px) {
     /* iOS zooms any input whose font-size < 16px on focus. Force 16px on

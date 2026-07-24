@@ -13,6 +13,7 @@ public record SettingsView(
         String temperature,
         String maxTokens,
         String embeddingModel,
+        String embeddingBaseUrl,
         String embeddingDimensions,
         String vectorStoreType,
         List<SettingGroup> groups

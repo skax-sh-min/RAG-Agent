@@ -47,10 +47,15 @@
                     <span class="badge bg-warning text-dark ms-1" th:text="#{settings.note.restart}">restart</span>
                 </div>
             </div>
-            <div class="row g-2 mt-1">
+            <hr class="my-2"/>
+            <div class="row g-2">
                 <div class="col-6 col-md-4">
                     <span class="text-secondary" th:text="#{settings.item.embedding-model}">Embedding model</span>:
                     <span class="font-monospace" th:text="${settings.embeddingModel}">bge-m3</span>
+                </div>
+                <div class="col-12 col-md-4">
+                    <span class="text-secondary" th:text="#{settings.item.embedding-base-url}">Embedding endpoint URL</span>:
+                    <span class="font-monospace" th:text="${settings.embeddingBaseUrl}">http://localhost:1234/v1</span>
                 </div>
                 <div class="col-6 col-md-4">
                     <span class="text-secondary" th:text="#{settings.item.embedding-dimensions}">Embedding dimensions</span>:
