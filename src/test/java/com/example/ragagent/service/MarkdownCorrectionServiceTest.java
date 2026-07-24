@@ -623,6 +623,34 @@ class MarkdownCorrectionServiceTest {
                 eq(TaskType.VISION), any(), eq(BackgroundUsage.IMAGE_PREFIX), any());
     }
 
+    @Test
+    @DisplayName("코드 언어 추론 — addHeadingNumbers=false 여도(PPTX·체크박스 off) 라벨 없는 코드 블록에 언어 태그가 붙는다")
+    void codeLanguageInference_runsEvenWhenHeadingNumbersDisabled() {
+        String section = "## 코드\n```\npublic class Foo {\n    private int x;\n}\n```\n";
+        // LLM 교정은 섹션을 그대로 돌려주도록 스텁 — 관심사는 교정 이후의 언어 추론 패스다.
+        when(llmRouter.executeWithTracking(any(), any(), any(), any())).thenReturn(section);
+
+        String withoutHeadingNumbers = service.correct(section, "doc", null, false, false, false, null);
+        String withHeadingNumbers = service.correct(section, "doc", null, false, true, false, null);
+
+        assertThat(withoutHeadingNumbers).contains("```java");
+        assertThat(withHeadingNumbers).contains("```java"); // 기존 경로도 그대로 동작
+    }
+
+    @Test
+    @DisplayName("코드 언어 추론 — 이미 태그가 있으면 보존하고, 소제목 번호는 addHeadingNumbers=true 일 때만 붙는다")
+    void codeLanguageInference_keepsExistingTagAndHeadingNumbersStayGated() {
+        String section = "## 코드\n```python\nprint('hi')\n```\n";
+        when(llmRouter.executeWithTracking(any(), any(), any(), any())).thenReturn(section);
+
+        String withoutHeadingNumbers = service.correct(section, "doc", null, false, false, false, null);
+        String withHeadingNumbers = service.correct(section, "doc", null, false, true, false, null);
+
+        assertThat(withoutHeadingNumbers).contains("```python").contains("## 코드");
+        assertThat(withoutHeadingNumbers).doesNotContain("## 1. 코드"); // 번호는 여전히 붙지 않는다
+        assertThat(withHeadingNumbers).contains("```python").contains("## 1. 코드");
+    }
+
     private static int countOccurrences(String haystack, String needle) {
         int count = 0, idx = 0;
         while ((idx = haystack.indexOf(needle, idx)) != -1) {

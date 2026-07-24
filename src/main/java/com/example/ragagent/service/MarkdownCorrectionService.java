@@ -299,9 +299,16 @@ public class MarkdownCorrectionService {
         // FIX: a ```lang-tagged CLOSING fence → bare ``` — must run BEFORE normalizeCodeBlocks so its
         // fence regex sees well-formed pairs.
         result = fixClosingFences(result);
-        result = normalizeCodeBlocks(result, false);
+        // inferLanguage=true unconditionally: a code block's language tag has nothing to do with the
+        // "소제목 숫자 생성" checkbox, but used to ride along on it (inference only ran inside the
+        // addHeadingNumbers-gated second pass). That left every PPTX — which always forces
+        // addHeadingNumbers=false (see DocumentIndexer's .pptx branch) — and every DOCX/TXT/MD
+        // uploaded with the box unchecked with untagged fences.
+        result = normalizeCodeBlocks(result, true);
         if (addHeadingNumbers) {
-            result = secondPassHeadingAndCodePolish(result);
+            // Heading numbering only — code blocks are already normalized + tagged above, and this
+            // pass is fence-aware (skips fence interiors), so there is nothing left for it to polish.
+            result = addHierarchicalHeadingNumbers(result);
         }
         // FIX: deterministic final cleanup — blank lines around code blocks/tables, drop leftover
         // [DOCUMENT] markers and content-less '-' lines (all fence-aware). Runs last. groupByPage is
@@ -319,11 +326,6 @@ public class MarkdownCorrectionService {
             }
         }
         return result;
-    }
-
-    private String secondPassHeadingAndCodePolish(String md) {
-        String numbered = addHierarchicalHeadingNumbers(md);
-        return normalizeCodeBlocks(numbered, true);
     }
 
     /**
