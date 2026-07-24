@@ -36,11 +36,12 @@ import static org.mockito.Mockito.when;
 /**
  * QA — DirectAnswerService (meta / directMode, blocking + streaming) — EDIT.md #1
  *
- * execute() now routes through LlmRouter.executeGated() (concurrency-gated; a real, blocking .call() —
- * previously a streaming .stream().content().blockLast() that discarded ChatResponse usage
- * metadata entirely) so /llm-usage sees real token counts for the blocking direct-answer path.
- * executeStreaming() still can't read real ChatResponse usage (token-by-token SSE UX), so it
- * records an approximate (chars/4) usage entry via LlmRouter.recordApproxUsage() instead.
+ * execute() now routes through LlmRouter.executeGatedWithUsage() (concurrency-gated; a real,
+ * blocking .call() — previously a streaming .stream().content().blockLast() that discarded
+ * ChatResponse usage metadata entirely) so both /llm-usage and the per-turn AgentState token
+ * totals see real counts for the blocking direct-answer path. executeStreaming() still can't
+ * read real ChatResponse usage (token-by-token SSE UX), so it records an approximate (chars/4)
+ * usage entry via LlmRouter.recordApproxUsage() and folds the same estimate into AgentState.
  */
 class DirectAnswerServiceTest {
 
@@ -69,23 +70,23 @@ class DirectAnswerServiceTest {
     }
 
     @Test
-    @DisplayName("execute — meta 질문 답변 생성 (블로킹 .call() 이라 실제 사용량 추적)")
+    @DisplayName("execute — meta 질문 답변 생성, LlmResult의 실제 토큰 사용량이 그대로 누적된다")
     void execute_generatesAnswer() {
-        when(llmRouter.executeGated(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), any()))
-                .thenReturn("안녕하세요");
+        when(llmRouter.executeGatedWithUsage(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), any()))
+                .thenReturn(new LlmRouter.LlmResult("안녕하세요", 80, 15));
 
         AgentState result = service.execute(newState(false));
 
         assertThat(result.answer()).isEqualTo("안녕하세요");
-        assertThat(result.totalInputTokens()).isZero();
-        assertThat(result.totalOutputTokens()).isZero();
+        assertThat(result.totalInputTokens()).isEqualTo(80);
+        assertThat(result.totalOutputTokens()).isEqualTo(15);
     }
 
     @Test
     @DisplayName("execute — directMode=true 는 prompt.direct.system 키 사용")
     void execute_directMode_usesDirectSystemPromptKey() {
-        when(llmRouter.executeGated(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), any()))
-                .thenReturn("답변");
+        when(llmRouter.executeGatedWithUsage(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), any()))
+                .thenReturn(new LlmRouter.LlmResult("답변", 0, 0));
 
         service.execute(newState(true));
 
@@ -95,8 +96,8 @@ class DirectAnswerServiceTest {
     @Test
     @DisplayName("execute — directMode=false(meta) 는 prompt.direct.meta.system 키 사용")
     void execute_metaMode_usesMetaSystemPromptKey() {
-        when(llmRouter.executeGated(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), any()))
-                .thenReturn("답변");
+        when(llmRouter.executeGatedWithUsage(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), any()))
+                .thenReturn(new LlmRouter.LlmResult("답변", 0, 0));
 
         service.execute(newState(false));
 
@@ -108,8 +109,8 @@ class DirectAnswerServiceTest {
     @SuppressWarnings("unchecked")
     void execute_wrapsQuestionInUserQuestionDelimiters() {
         ArgumentCaptor<Function<ChatModel, ChatResponse>> callCaptor = ArgumentCaptor.forClass(Function.class);
-        when(llmRouter.executeGated(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), callCaptor.capture()))
-                .thenReturn("답변");
+        when(llmRouter.executeGatedWithUsage(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), callCaptor.capture()))
+                .thenReturn(new LlmRouter.LlmResult("답변", 0, 0));
 
         service.execute(newState(false));
 
@@ -131,8 +132,8 @@ class DirectAnswerServiceTest {
     @SuppressWarnings("unchecked")
     void execute_attachesDirectTemperatureToPrompt() {
         ArgumentCaptor<Function<ChatModel, ChatResponse>> callCaptor = ArgumentCaptor.forClass(Function.class);
-        when(llmRouter.executeGated(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), callCaptor.capture()))
-                .thenReturn("답변");
+        when(llmRouter.executeGatedWithUsage(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), callCaptor.capture()))
+                .thenReturn(new LlmRouter.LlmResult("답변", 0, 0));
 
         service.execute(newState(false));
 

@@ -49,11 +49,13 @@ public class DirectAnswerService {
         // fresh per call, distinct from the general/RAG temperature baked into the provider default.
         double directTemp = props.llmSafe().directTemperature();
         int maxTokens = state.responseMode().maxTokens(props.llmSafe().maxTokens());
-        String rawAnswer = llmRouter.executeGated(TaskType.TEXT, state.routingMode(),
+        LlmRouter.LlmResult result = llmRouter.executeGatedWithUsage(TaskType.TEXT, state.routingMode(),
                 model -> model.call(buildPrompt(systemPrompt, userPrompt, directTemp, maxTokens)));
+        String rawAnswer = result.text();
         String answer = (rawAnswer == null || rawAnswer.isEmpty()) ? null : rawAnswer;
         log.debug("[DirectAnswer] answer length={}", answer == null ? -1 : answer.length());
-        return state.toBuilder().answer(answer).accumulateTokens(0, 0).build();
+        return state.toBuilder().answer(answer)
+                .accumulateTokens(result.inputTokens(), result.outputTokens()).build();
     }
 
     /** Streaming variant — pushes tokens via listener.onToken() instead of blocking. */
@@ -74,9 +76,13 @@ public class DirectAnswerService {
         String answer = full.toString();
         log.debug("[DirectAnswer] streaming answer length={}", answer.length());
         // Streaming mode has no ChatResponse to read real usage from — record an approximate
-        // (chars/4) usage entry so /llm-usage isn't blind to the entire direct-answer stream path.
-        llmRouter.recordApproxUsage(provider.name(), systemPrompt + buildUserPrompt(state), answer);
-        return state.toBuilder().answer(answer).accumulateTokens(0, 0).build();
+        // (chars/4) usage entry so /llm-usage isn't blind to the entire direct-answer stream path,
+        // and reflect the same estimate in the per-turn total so the chat UI isn't stuck at 0/0.
+        String promptText = systemPrompt + buildUserPrompt(state);
+        llmRouter.recordApproxUsage(provider.name(), promptText, answer);
+        int approxIn = (int) LlmRouter.approxTokens(promptText);
+        int approxOut = (int) LlmRouter.approxTokens(answer);
+        return state.toBuilder().answer(answer).accumulateTokens(approxIn, approxOut).build();
     }
 
     private String resolveSystemPrompt(AgentState state) {

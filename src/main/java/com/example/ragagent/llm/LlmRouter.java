@@ -191,7 +191,7 @@ public class LlmRouter {
      */
     public String executeWithTracking(TaskType taskType, RoutingMode mode, String usageLabelPrefix,
                                       Function<ChatModel, ChatResponse> call) {
-        return executeWithTracking(taskType, roleOrder(mode), usageLabelPrefix, call, new HashSet<>(), false);
+        return executeWithTracking(taskType, roleOrder(mode), usageLabelPrefix, call, new HashSet<>(), false).text();
     }
 
     /**
@@ -209,7 +209,21 @@ public class LlmRouter {
 
     public String executeGated(TaskType taskType, RoutingMode mode, String usageLabelPrefix,
                                Function<ChatModel, ChatResponse> call) {
-        return executeWithTracking(taskType, roleOrder(mode), usageLabelPrefix, call, new HashSet<>(), true);
+        return executeWithTracking(taskType, roleOrder(mode), usageLabelPrefix, call, new HashSet<>(), true).text();
+    }
+
+    /** Answer text plus the real input/output token usage read from the LLM response's metadata. */
+    public record LlmResult(String text, int inputTokens, int outputTokens) {}
+
+    /**
+     * Same as {@link #executeGated(TaskType, RoutingMode, Function)}, but also returns the real
+     * input/output token usage from the response — for callers that need to surface per-turn
+     * totals to the user (as opposed to only the aggregate {@code /llm-usage} dashboard, which
+     * every {@code executeGated}/{@code executeWithTracking} call already records regardless).
+     */
+    public LlmResult executeGatedWithUsage(TaskType taskType, RoutingMode mode,
+                                           Function<ChatModel, ChatResponse> call) {
+        return executeWithTracking(taskType, roleOrder(mode), null, call, new HashSet<>(), true);
     }
 
     /**
@@ -230,7 +244,11 @@ public class LlmRouter {
         }
     }
 
-    private static long approxTokens(String text) {
+    /** Rough token estimate (chars/4) for text whose real usage isn't available (streaming
+     *  answers, whose caller reads only content deltas, never a {@link ChatResponse}) — same
+     *  heuristic {@link #recordApproxUsage} records to the aggregate usage table, exposed so
+     *  streaming callers can also reflect it in their own per-turn {@code AgentState} totals. */
+    public static long approxTokens(String text) {
         return text == null ? 0 : text.length() / 4;
     }
 
@@ -318,7 +336,7 @@ public class LlmRouter {
         return taskType == TaskType.VISION || taskType == TaskType.LIGHT_BOTH;
     }
 
-    private String executeWithTracking(TaskType taskType, List<ProviderRole> roleOrder, String usageLabelPrefix,
+    private LlmResult executeWithTracking(TaskType taskType, List<ProviderRole> roleOrder, String usageLabelPrefix,
                                        Function<ChatModel, ChatResponse> call,
                                        Set<String> tried, boolean gated) {
         LlmProvider provider = findFirst(taskType, roleOrder, tried)
@@ -420,7 +438,7 @@ public class LlmRouter {
         return false;
     }
 
-    private String executeSingleTracked(LlmProvider provider, TaskType taskType, String usageLabelPrefix,
+    private LlmResult executeSingleTracked(LlmProvider provider, TaskType taskType, String usageLabelPrefix,
                                         Function<ChatModel, ChatResponse> call, boolean gated) {
         log.debug("[LLM →] provider={} task={} endpoint={}/chat/completions model={}", provider.name(), taskType, provider.baseUrl(), provider.model());
         long t0 = System.currentTimeMillis();
@@ -452,6 +470,6 @@ public class LlmRouter {
             log.debug("[LLM ←] provider={} task={} in={} out={} {}ms | {}",
                     provider.name(), taskType, in, out, elapsed, preview);
         }
-        return text;
+        return new LlmResult(text, in, out);
     }
 }

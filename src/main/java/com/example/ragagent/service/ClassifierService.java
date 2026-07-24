@@ -54,11 +54,11 @@ public class ClassifierService {
     public AgentState execute(AgentState state) {
         String systemPrompt = messageSource.getMessage("prompt.classifier.system", null, state.locale());
         String userPrompt = PromptInjectionGuard.wrap(state.question()) + "\n\n" + converter.getFormat();
-        String response = llmRouter.executeGated(TaskType.TEXT, RoutingMode.COST_FIRST,
+        LlmRouter.LlmResult result = llmRouter.executeGatedWithUsage(TaskType.TEXT, RoutingMode.COST_FIRST,
                 model -> model.call(buildPrompt(systemPrompt, userPrompt)));
         return state.toBuilder()
-                    .accumulateTokens(0, 0)
-                    .questionType(parseType(response))
+                    .accumulateTokens(result.inputTokens(), result.outputTokens())
+                    .questionType(parseType(result.text()))
                     .build();
     }
 
