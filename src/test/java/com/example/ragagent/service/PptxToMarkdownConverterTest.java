@@ -943,6 +943,215 @@ class PptxToMarkdownConverterTest {
         assertThat(md).doesNotContain("[/도형 그룹]");
     }
 
+    // ── 도형 여러 줄 텍스트: 코드 블록 / 문단 블록 처리 ──────────────────────────────────────
+
+    /** 그룹 도형 하나를 만들어 반환한다(호출자가 텍스트 박스를 붙인다). */
+    private static XSLFGroupShape newGroup(XSLFSlide slide) {
+        XSLFGroupShape group = slide.createGroup();
+        Rectangle2D bounds = new Rectangle2D.Double(0, 0, 400, 300);
+        group.setAnchor(bounds);
+        group.setInteriorAnchor(bounds);
+        return group;
+    }
+
+    /** 그룹 안에 여러 문단짜리 텍스트 박스를 추가한다. {@code y}로 읽기 순서(inReadingOrder)를 정한다. */
+    private static void addBoxWithLines(XSLFGroupShape group, double y, boolean bullet, String... lines) {
+        XSLFTextBox box = group.createTextBox();
+        box.setAnchor(new Rectangle2D.Double(10, y, 380, 80));
+        for (String line : lines) addRun(addParagraph(box, bullet, 0), line, false, false);
+    }
+
+    @Test
+    @DisplayName("도형 여러 줄 — 코드로 판정되면 위아래에 ``` 펜스를 둘러 원문 그대로 보존한다")
+    void multilineShapeTextDetectedAsCodeIsFenced() throws IOException {
+        writePptx(pptx -> {
+            XSLFSlide slide = pptx.createSlide();
+            addTitle(slide, "코드 슬라이드");
+            addBoxWithLines(newGroup(slide), 10, false,
+                    "public void run() {", "    service.execute();", "}");
+        });
+
+        String md = convert();
+
+        assertThat(md).contains("```\npublic void run() {\n    service.execute();\n}\n```");
+    }
+
+    @Test
+    @DisplayName("도형 여러 줄 — 코드가 아니면 펜스 없이 앞뒤 빈 줄로 하나의 문단 블록으로 분리된다")
+    void multilineShapeTextNotCodeIsSeparatedByBlankLines() throws IOException {
+        writePptx(pptx -> {
+            XSLFSlide slide = pptx.createSlide();
+            addTitle(slide, "설명 슬라이드");
+            XSLFGroupShape group = newGroup(slide);
+            addBoxWithLines(group, 10, false, "승인 처리");                        // 단일 라벨(앞)
+            addBoxWithLines(group, 100, false, "첫째 줄입니다", "둘째 줄입니다");   // 여러 줄 블록
+        });
+
+        String md = convert();
+
+        assertThat(md).doesNotContain("```");
+        // 단일 라벨과 여러 줄 블록 사이에 빈 줄이 들어가 서로 다른 덩어리로 분리된다
+        assertThat(md).contains("승인 처리\n\n첫째 줄입니다\n둘째 줄입니다");
+    }
+
+    @Test
+    @DisplayName("도형 여러 줄 — 줄이 하나뿐인 도형은 기존처럼 빈 줄 없이 촘촘하게 이어붙인다(회귀)")
+    void singleLineShapesStayTightlyPacked() throws IOException {
+        writePptx(pptx -> {
+            XSLFSlide slide = pptx.createSlide();
+            addTitle(slide, "프로세스 슬라이드");
+            XSLFGroupShape group = newGroup(slide);
+            addBoxWithLines(group, 10, false, "승인 처리");
+            addBoxWithLines(group, 100, false, "반려 처리");
+        });
+
+        String md = convert();
+
+        assertThat(md).contains("승인 처리\n반려 처리");
+    }
+
+    @Test
+    @DisplayName("도형 여러 줄 — PPTX 불릿 문단이 섞여 있으면 코드로 보지 않고 목록으로 렌더링한다")
+    void multilineShapeTextWithPptxBulletsIsNeverCode() throws IOException {
+        writePptx(pptx -> {
+            XSLFSlide slide = pptx.createSlide();
+            addTitle(slide, "목록 슬라이드");
+            addBoxWithLines(newGroup(slide), 10, true,
+                    "public void run() {", "service.execute();");
+        });
+
+        String md = convert();
+
+        assertThat(md).doesNotContain("```");
+        assertThat(md).contains("- public void run() {").contains("- service.execute();");
+    }
+
+    @Test
+    @DisplayName("looksLikeCodeBlock — 자바/SQL 코드는 true, 한국어 평문은 false")
+    void looksLikeCodeBlock_detectsCodeAndRejectsProse() {
+        assertThat(converter.looksLikeCodeBlock(List.of(
+                "public void run() {", "    service.execute();", "}"))).isTrue();
+        assertThat(converter.looksLikeCodeBlock(List.of(
+                "SELECT id, name", "FROM users WHERE age >= 20"))).isTrue();
+        assertThat(converter.looksLikeCodeBlock(List.of(
+                "승인 절차는 다음과 같습니다", "담당자가 검토한 뒤 결재합니다"))).isFalse();
+    }
+
+    @Test
+    @DisplayName("looksLikeCodeBlock — -/*/1. 로 시작하는 줄이 하나라도 있으면 코드 신호가 있어도 false (요구사항 2)")
+    void looksLikeCodeBlock_bulletPrefixedLinesAreNeverCode() {
+        assertThat(converter.looksLikeCodeBlock(List.of(
+                "- public void run() {", "- return x;"))).isFalse();
+        assertThat(converter.looksLikeCodeBlock(List.of(
+                "* int x = 1;", "* int y = 2;"))).isFalse();
+        assertThat(converter.looksLikeCodeBlock(List.of(
+                "1. int x = 1;", "2. int y = 2;"))).isFalse();
+    }
+
+    @Test
+    @DisplayName("looksLikeCodeBlock — 줄이 하나뿐이거나 이미 ```가 들어 있으면 false")
+    void looksLikeCodeBlock_singleLineOrExistingFenceIsFalse() {
+        assertThat(converter.looksLikeCodeBlock(List.of("x = 1;"))).isFalse();
+        assertThat(converter.looksLikeCodeBlock(List.of("```java", "x = 1;", "```"))).isFalse();
+    }
+
+    @Test
+    @DisplayName("looksLikeCodeBlock — 코드 신호 비율이 60% 미만이면 false, 이상이면 true")
+    void looksLikeCodeBlock_appliesSignalRatioThreshold() {
+        // 2줄 중 1줄만 코드 신호(50%) → 코드 아님
+        assertThat(converter.looksLikeCodeBlock(List.of("x = 1;", "설명입니다"))).isFalse();
+        // 3줄 중 2줄이 코드 신호(66%) → 코드
+        assertThat(converter.looksLikeCodeBlock(List.of(
+                "int x = 1;", "int y = 2;", "결과를 계산합니다"))).isTrue();
+    }
+
+    @Test
+    @DisplayName("looksLikeCodeBlock — 다이어그램에 흔한 '요청 -> 응답' 화살표 라벨은 코드로 오탐하지 않는다")
+    void looksLikeCodeBlock_arrowLabelsAreNotCode() {
+        assertThat(converter.looksLikeCodeBlock(List.of("요청 -> 검증", "검증 -> 응답"))).isFalse();
+    }
+
+    @Test
+    @DisplayName("looksLikeCodeBlock — 빈 줄은 분자·분모 어디에도 세지 않는다(중간 빈 줄이 적중률을 떨어뜨리지 않음)")
+    void looksLikeCodeBlock_blankLinesAreExcludedFromRatio() {
+        // 코드 3줄 + 중간 빈 줄 2줄. 빈 줄을 분모에 세면 3/5=60%로 아슬아슬하지만, 제외하면 3/3=100%
+        assertThat(converter.looksLikeCodeBlock(List.of(
+                "int x = 1;", "", "int y = 2;", "", "return x + y;"))).isTrue();
+        // 빈 줄을 뺀 내용이 1줄뿐이면 여러 줄로 보지 않는다
+        assertThat(converter.looksLikeCodeBlock(List.of("", "x = 1;", ""))).isFalse();
+        // 빈 줄이 섞여도 적중률 판정은 내용 줄 기준 그대로 (1/2 = 50% → false)
+        assertThat(converter.looksLikeCodeBlock(List.of("x = 1;", "", "설명입니다"))).isFalse();
+    }
+
+    // ── 그룹에 속하지 않은 단독 텍스트 상자 ────────────────────────────────────────────────
+
+    /** 슬라이드에 그룹 없이 단독 텍스트 상자 하나를 추가한다(불릿 여부 지정). */
+    private static void addStandaloneBox(XSLFSlide slide, boolean bullet, String... lines) {
+        XSLFTextBox box = slide.createTextBox();
+        box.setAnchor(new Rectangle2D.Double(10, 100, 380, 200));
+        for (String line : lines) addRun(addParagraph(box, bullet, 0), line, false, false);
+    }
+
+    @Test
+    @DisplayName("단독 텍스트 상자 — 여러 줄이 코드로 판정되면 ``` 펜스로 감싸고 들여쓰기를 보존한다")
+    void standaloneTextBoxCodeIsFenced() throws IOException {
+        writePptx(pptx -> {
+            XSLFSlide slide = pptx.createSlide();
+            addTitle(slide, "코드 슬라이드");
+            addStandaloneBox(slide, false,
+                    "public void run() {", "    service.execute();", "}");
+        });
+
+        String md = convert();
+
+        assertThat(md).contains("```\npublic void run() {\n    service.execute();\n}\n```");
+    }
+
+    @Test
+    @DisplayName("단독 텍스트 상자 — 코드 스니펫 중간의 빈 줄은 펜스 안에 그대로 보존된다")
+    void standaloneTextBoxCodeKeepsInteriorBlankLines() throws IOException {
+        writePptx(pptx -> {
+            XSLFSlide slide = pptx.createSlide();
+            addTitle(slide, "코드 슬라이드");
+            addStandaloneBox(slide, false,
+                    "int x = 1;", "", "int y = 2;", "", "return x + y;");
+        });
+
+        String md = convert();
+
+        assertThat(md).contains("```\nint x = 1;\n\nint y = 2;\n\nreturn x + y;\n```");
+    }
+
+    @Test
+    @DisplayName("단독 텍스트 상자 — 코드가 아닌 평문은 기존처럼 문단(\\n\\n) 분리로 남는다(회귀)")
+    void standaloneTextBoxProseKeepsParagraphSeparation() throws IOException {
+        writePptx(pptx -> {
+            XSLFSlide slide = pptx.createSlide();
+            addTitle(slide, "설명 슬라이드");
+            addStandaloneBox(slide, false, "첫째 문단입니다", "둘째 문단입니다");
+        });
+
+        String md = convert();
+
+        assertThat(md).doesNotContain("```");
+        assertThat(md).contains("첫째 문단입니다\n\n둘째 문단입니다");
+    }
+
+    @Test
+    @DisplayName("단독 텍스트 상자 — 불릿 문단은 코드 신호가 있어도 펜스로 감싸지 않는다")
+    void standaloneTextBoxBulletsAreNeverFenced() throws IOException {
+        writePptx(pptx -> {
+            XSLFSlide slide = pptx.createSlide();
+            addTitle(slide, "목록 슬라이드");
+            addStandaloneBox(slide, true, "int x = 1;", "int y = 2;");
+        });
+
+        String md = convert();
+
+        assertThat(md).doesNotContain("```");
+        assertThat(md).contains("- int x = 1;").contains("- int y = 2;");
+    }
+
     @Test
     @DisplayName("한 슬라이드에 도형 그룹이 2개 있으면 라벨에 순번이 붙고, 각 그룹의 이미지 마커가 해당 그룹 블록 안에 들어간다")
     void multipleGroupsOnSameSlideGetNumberedLabelsAndCorrelatedImages() throws IOException {
