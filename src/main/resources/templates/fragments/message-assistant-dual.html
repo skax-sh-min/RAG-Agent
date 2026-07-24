@@ -91,6 +91,10 @@
                 &nbsp;·&nbsp;
                 <span>🔄 <span th:text="#{meta.llm.calls}">LLM calls</span>
                       <span th:text="${llmCallCount}"></span></span>
+                &nbsp;·&nbsp;
+                <span>📝 <span th:text="${#strings.length(answer)}"></span>/<span
+                      th:text="${#strings.length(dualLocalAnswer)}"></span>
+                      <span th:text="#{meta.answer.length}">chars</span></span>
                 <span th:if="${receivedAt != null}">&nbsp;·&nbsp;🕐 <span th:text="${receivedAt}"></span></span>
             </div>
         </div>

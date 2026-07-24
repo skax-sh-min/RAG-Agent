@@ -196,6 +196,7 @@
                                         &nbsp;·&nbsp;
                                     </span>
                                     <span th:if="${turn.llmCalls > 0}">🔄 <span th:text="${turn.llmCalls}"></span> &nbsp;·&nbsp;</span>
+                                    <span>📝 <span th:text="${#strings.length(turn.answer)}"></span>자 &nbsp;·&nbsp;</span>
                                     <span class="msg-time"
                                           th:if="${turn.answeredAt != null}"
                                           th:attr="data-utc-time=${turn.answeredAt}">🕐</span>

@@ -284,6 +284,16 @@
             document.getElementById(`stream-loc-${bubbleId}`)?.classList.remove('stream-cursor');
         }
 
+        // Capture raw (pre-render) answer length for the char-count metadata below —
+        // must happen before markdown rendering replaces textContent with rendered HTML.
+        let answerLen = 0, answerLenLocal = 0;
+        if (isDual) {
+            answerLen      = (document.getElementById(`stream-ext-${bubbleId}`)?.textContent || '').length;
+            answerLenLocal = (document.getElementById(`stream-loc-${bubbleId}`)?.textContent || '').length;
+        } else {
+            answerLen = (contentEl?.textContent || '').length;
+        }
+
         // 2. Render markdown
         if (isDual) {
             renderMarkdown(document.getElementById(`stream-ext-${bubbleId}`));
@@ -323,6 +333,8 @@
             const out = data.outputTokens || 0;
             if (inp || out)               parts.push(`📥 ${inp} · 📤 ${out} · 합계 ${inp + out} tok`);
             if (data.llmCalls)            parts.push(`🔄 ${data.llmCalls}`);
+            if (isDual)                   parts.push(`📝 ${answerLen}/${answerLenLocal}자`);
+            else if (answerLen)          parts.push(`📝 ${answerLen}자`);
             parts.push(`🕐 ${nowTimeStr()}`);
             html += `<span class="text-muted">${parts.join(' · ')}</span>`;
 
