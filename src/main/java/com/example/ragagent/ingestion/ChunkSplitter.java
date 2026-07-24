@@ -62,7 +62,8 @@ public class ChunkSplitter {
         }
 
         if (pageStructured) {
-            List<Document> sectionMerged = mergeShortSections(docs, chunkSize);
+            List<Document> dualHeadingMerged = mergeIdenticalHeadingSlides(docs, chunkSize);
+            List<Document> sectionMerged = mergeShortSections(dualHeadingMerged, chunkSize);
             List<Document> result = new ArrayList<>();
             for (Document doc : sectionMerged) {
                 if (doc.getText() == null || doc.getText().isBlank()) continue;
@@ -202,6 +203,156 @@ public class ChunkSplitter {
     private static void addIfNotBlank(List<String> pieces, String s) {
         String stripped = s.strip();
         if (!stripped.isBlank()) pieces.add(stripped);
+    }
+
+    /** Cap on how many consecutive identical-heading slides {@link #mergeIdenticalHeadingSlides}
+     *  will fold into one chunk — unbounded chaining risked pulling long unrelated runs of slides
+     *  into a single oversized-feeling chunk, so a merge group tops out at a pair of slides. */
+    private static final int MAX_IDENTICAL_HEADING_MERGE_SLIDES = 2;
+
+    /**
+     * PPTX/PDF page-structured pre-pass, run before {@link #mergeShortSections}: when the current
+     * slide and the immediately following slide carry an <em>exactly identical</em> {@code ##}+
+     * {@code ###} heading pair — the common "same sub-chapter continued across a couple of physical
+     * slides" pattern — merges them into one chunk, up to {@link #MAX_IDENTICAL_HEADING_MERGE_SLIDES}
+     * (default 2) slides per group. Stops (even short of the cap) once the combined (deduplicated,
+     * normalized) size would exceed {@code chunkSize}, or the next slide is missing either heading
+     * level, or its headings differ even slightly — the remaining slides then fall through to
+     * {@link #mergeShortSections}'s normal per-slide handling. Once a merge group hits the cap, the
+     * NEXT slide starts a fresh group of its own (so four consecutive identical-heading slides yield
+     * two 2-slide chunks, not one 4-slide chunk). Every slide after the first in a group has its
+     * duplicate {@code ##}/{@code ###} heading lines dropped from the merged body, but a
+     * {@code [페이지: N]} marker is inserted in their place so the merged chunk still shows where
+     * each slide's content began — like {@link #mergeShortSections}, the merged {@link Document}'s
+     * {@link MetaKey#PAGE_OR_SLIDE} metadata itself still only reflects the first slide. No-op for
+     * DOCX/TXT/MD (never emit a {@code ###} alongside a matching {@code ##}, or
+     * {@link MetaKey#PAGE_OR_SLIDE} at all) and for non-scanned PDF (never emits any heading), so
+     * this only ever fires for PPTX in practice.
+     */
+    List<Document> mergeIdenticalHeadingSlides(List<Document> docs, int chunkSize) {
+        if (docs == null || docs.isEmpty()) return docs;
+
+        List<List<Document>> bundles = groupByPageOrSlide(docs);
+        List<Document> result = new ArrayList<>();
+
+        int i = 0;
+        while (i < bundles.size()) {
+            List<Document> bundle = bundles.get(i);
+            String mergedText = joinBundleText(bundle);
+            HeadingPair headings = extractDualHeading(mergedText);
+
+            int j = i;
+            int mergedSlideCount = 1;
+            if (headings != null) {
+                while (mergedSlideCount < MAX_IDENTICAL_HEADING_MERGE_SLIDES && j + 1 < bundles.size()) {
+                    List<Document> nextBundle = bundles.get(j + 1);
+                    String nextText = joinBundleText(nextBundle);
+                    HeadingPair nextHeadings = extractDualHeading(nextText);
+                    if (nextHeadings == null || !nextHeadings.equals(headings)) break;
+
+                    Integer nextPage = pageOrSlideOf(nextBundle.get(0));
+                    String pageMarker = nextPage != null ? "[페이지: " + nextPage + "]\n\n" : "";
+                    String candidate = mergedText + "\n\n" + pageMarker + stripDualHeadingLines(nextText);
+                    if (MarkdownNoiseNormalizer.normalize(candidate).length() > chunkSize) break;
+
+                    mergedText = candidate;
+                    j++;
+                    mergedSlideCount++;
+                }
+            }
+
+            if (j > i) {
+                result.add(new Document(mergedText, new HashMap<>(bundle.get(0).getMetadata())));
+            } else {
+                result.addAll(bundle);
+            }
+            i = j + 1;
+        }
+        return result;
+    }
+
+    /** Groups consecutive docs sharing the same {@link MetaKey#PAGE_OR_SLIDE} value into per-slide
+     *  bundles — a dual-heading PPTX slide's raw {@code ##}-only section and its {@code ###}+body
+     *  section land in the same bundle. A doc without the metadata always starts its own singleton
+     *  bundle (never grouped — matches {@link #isMergeForbiddenByPageMismatch}'s null handling). */
+    private List<List<Document>> groupByPageOrSlide(List<Document> docs) {
+        List<List<Document>> bundles = new ArrayList<>();
+        Integer currentPage = null;
+        List<Document> current = null;
+        for (Document doc : docs) {
+            Integer page = pageOrSlideOf(doc);
+            if (current == null || page == null || !page.equals(currentPage)) {
+                current = new ArrayList<>();
+                bundles.add(current);
+                currentPage = page;
+            }
+            current.add(doc);
+        }
+        return bundles;
+    }
+
+    private String joinBundleText(List<Document> bundle) {
+        StringBuilder sb = new StringBuilder();
+        for (Document doc : bundle) {
+            String text = doc.getText();
+            if (text == null || text.isBlank()) continue;
+            if (sb.length() > 0) sb.append("\n\n");
+            sb.append(text);
+        }
+        return sb.toString();
+    }
+
+    record HeadingPair(String outer, String inner) {
+    }
+
+    /** Extracts the ({@code ##}, {@code ###}) heading-text pair from a slide bundle's assembled
+     *  text — both levels must be present as their own ATX heading lines (matches
+     *  {@code PptxToMarkdownConverter}'s emission order: {@code ##} first, then {@code ###}).
+     *  {@code null} when either level is missing (e.g. a single-heading or heading-less slide). */
+    HeadingPair extractDualHeading(String text) {
+        if (text == null) return null;
+        String outer = null;
+        String inner = null;
+        for (String line : text.split("\n", -1)) {
+            String trimmed = line.strip();
+            int level = headingLevelOf(trimmed);
+            if (level == 2 && outer == null) {
+                outer = normalizeHeadingForCompare(trimmed.substring(level + 1));
+            } else if (level == 3 && inner == null) {
+                inner = normalizeHeadingForCompare(trimmed.substring(level + 1));
+            }
+        }
+        return (outer != null && inner != null) ? new HeadingPair(outer, inner) : null;
+    }
+
+    /** Removes the first {@code ##}-level and first {@code ###}-level heading lines from
+     *  {@code text} (plus the blank lines they leave behind), returning just the remaining body.
+     *  Only called after {@link #extractDualHeading} has already confirmed both levels exist. */
+    String stripDualHeadingLines(String text) {
+        List<String> out = new ArrayList<>();
+        boolean outerRemoved = false;
+        boolean innerRemoved = false;
+        for (String line : text.split("\n", -1)) {
+            int level = headingLevelOf(line.strip());
+            if (!outerRemoved && level == 2) { outerRemoved = true; continue; }
+            if (!innerRemoved && level == 3) { innerRemoved = true; continue; }
+            out.add(line);
+        }
+        return String.join("\n", out).strip();
+    }
+
+    /** ATX heading level (1–6) of an already-{@code strip()}ped line, or 0 if not a valid heading. */
+    private int headingLevelOf(String trimmedLine) {
+        int level = 0;
+        while (level < trimmedLine.length() && trimmedLine.charAt(level) == '#') level++;
+        if (level < 1 || level > 6 || level >= trimmedLine.length() || trimmedLine.charAt(level) != ' ') return 0;
+        return level;
+    }
+
+    /** Trim + internal-whitespace collapse so incidental spacing differences don't defeat the
+     *  "완전히 동일" (exactly identical) heading-pair comparison in {@link #mergeIdenticalHeadingSlides}. */
+    private String normalizeHeadingForCompare(String s) {
+        return s == null ? "" : s.strip().replaceAll("\\s+", " ");
     }
 
     List<Document> mergeShortSections(List<Document> docs, int chunkSize) {
