@@ -10,13 +10,9 @@ import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.web.client.HttpStatusCodeException;
 
 import java.util.*;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.Executors;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
-import java.util.function.BiConsumer;
-import java.util.function.Consumer;
 import java.util.function.Function;
 
 import static com.example.ragagent.llm.ProviderRole.*;
@@ -37,7 +33,7 @@ public class LlmRouter {
 
     /**
      * Per-provider concurrency gate for the interactive query/chat path (CLASSIFIER,
-     * ANSWER, CRITIC-feeding evaluation, DUAL, DirectAnswer, reranking, multi-query expansion).
+     * ANSWER, CRITIC-feeding evaluation, DirectAnswer, reranking, multi-query expansion).
      * Sized from {@code AppProperties.ProviderConfig.concurrency()} (falls back to
      * {@code defaultProviderConcurrency}) so the app never sends more concurrent requests to a
      * single physical LLM server than it can actually serve (e.g. llama-server --parallel).
@@ -217,82 +213,6 @@ public class LlmRouter {
     }
 
     /**
-     * DUAL 모드 병렬 실행 (두 프로바이더 모두 동시성 게이트 적용).
-     * LOCAL 프로바이더 미등록 시 즉시 LlmProviderExhaustedException.
-     */
-    public DualResult executeDual(TaskType taskType,
-                                  Function<ChatModel, ChatResponse> call) {
-        LlmProvider local = findFirst(taskType, List.of(LOCAL), Set.of())
-                .orElseThrow(() -> new LlmProviderExhaustedException(
-                        "DUAL requires a LOCAL provider. Register a LOCAL provider or switch mode."));
-        LlmProvider external = findFirst(taskType, List.of(NORMAL, PREMIUM), Set.of())
-                .orElseThrow(() -> new LlmProviderExhaustedException(
-                        "DUAL requires at least one external provider (NORMAL or PREMIUM)."));
-
-        try (var exec = Executors.newVirtualThreadPerTaskExecutor()) {
-            // exceptionally() ensures one side's failure never cancels the other via exec.close()
-            CompletableFuture<String> localF = CompletableFuture
-                    .supplyAsync(() -> executeSingleTracked(local, taskType, null, call, true), exec)
-                    .exceptionally(t -> {
-                        log.warn("[DUAL] LOCAL call failed ({}): {}", local.name(), t.getMessage());
-                        return "";
-                    });
-            CompletableFuture<String> externalF = CompletableFuture
-                    .supplyAsync(() -> executeSingleTracked(external, taskType, null, call, true), exec)
-                    .exceptionally(t -> {
-                        log.warn("[DUAL] external call failed ({}): {}", external.name(), t.getMessage());
-                        return "";
-                    });
-            return new DualResult(localF.join(), local.name(), externalF.join(), external.name());
-        }
-    }
-
-    /** Provider names returned by executeDualStream. */
-    public record DualProviders(String localProvider, String externalProvider) {}
-
-    /**
-     * DUAL 스트리밍: LOCAL과 외부 프로바이더를 Virtual Thread로 병렬 실행.
-     * callFn은 (provider, tokenSink) → void 형태. provider.stream() 에 따라 호출자가 스트림/블로킹 분기.
-     */
-    public DualProviders executeDualStream(TaskType taskType,
-                                            BiConsumer<LlmProvider, Consumer<String>> callFn,
-                                            Consumer<String> localTokenSink,
-                                            Consumer<String> externalTokenSink) {
-        LlmProvider local = findFirst(taskType, List.of(LOCAL), Set.of())
-                .orElseThrow(() -> new LlmProviderExhaustedException(
-                        "DUAL requires a LOCAL provider. Register a LOCAL provider or switch mode."));
-        LlmProvider external = findFirst(taskType, List.of(NORMAL, PREMIUM), Set.of())
-                .orElseThrow(() -> new LlmProviderExhaustedException(
-                        "DUAL requires at least one external provider (NORMAL or PREMIUM)."));
-
-        try (var exec = Executors.newVirtualThreadPerTaskExecutor()) {
-            // exceptionally() ensures one side's failure never cancels the other via exec.close()
-            CompletableFuture<Void> localF = CompletableFuture
-                    .runAsync(() -> {
-                        try (Permit permit = acquirePermit(local)) {
-                            callFn.accept(local, localTokenSink);
-                        }
-                    }, exec)
-                    .exceptionally(t -> {
-                        log.warn("[DUAL] LOCAL call failed ({}): {}", local.name(), t.getMessage());
-                        return null;
-                    });
-            CompletableFuture<Void> externalF = CompletableFuture
-                    .runAsync(() -> {
-                        try (Permit permit = acquirePermit(external)) {
-                            callFn.accept(external, externalTokenSink);
-                        }
-                    }, exec)
-                    .exceptionally(t -> {
-                        log.warn("[DUAL] external call failed ({}): {}", external.name(), t.getMessage());
-                        return null;
-                    });
-            CompletableFuture.allOf(localF, externalF).join();
-        }
-        return new DualProviders(local.name(), external.name());
-    }
-
-    /**
      * Records approximate usage (chars/4, mirrors {@code TrackingEmbeddingModel}'s embedding
      * fallback) for calls whose real token count isn't available — real-time SSE token streaming
      * reads only content deltas, never a {@link ChatResponse} with usage metadata, and reading
@@ -337,7 +257,6 @@ public class LlmRouter {
         return switch (mode) {
             case COST_FIRST, PROGRESSIVE -> List.of(LOCAL, NORMAL, PREMIUM);
             case QUALITY_FIRST           -> List.of(PREMIUM, NORMAL, LOCAL);
-            case DUAL                    -> List.of(LOCAL, NORMAL, PREMIUM);
             case LOCAL_ONLY              -> List.of(LOCAL);
         };
     }

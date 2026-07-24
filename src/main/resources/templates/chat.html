@@ -55,12 +55,6 @@
                     <option value="PROGRESSIVE"
                             th:selected="${routingMode == 'PROGRESSIVE'}"
                             th:text="#{routing.progressive}">Progressive</option>
-                    <option value="DUAL"
-                            th:with="reqLocal=#{routing.requires_local}"
-                            th:selected="${routingMode == 'DUAL'}"
-                            th:disabled="${!hasLocalProvider}"
-                            th:title="${!hasLocalProvider ? reqLocal : ''}"
-                            th:text="#{routing.dual}">Parallel Compare</option>
                     <option value="LOCAL_ONLY"
                             th:with="reqLocal=#{routing.requires_local}"
                             th:selected="${routingMode == 'LOCAL_ONLY'}"

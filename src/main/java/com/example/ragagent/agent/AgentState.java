@@ -33,8 +33,6 @@ public record AgentState(
         RoutingMode routingMode,
         String usedProvider,
         String premiumUpgraded,   // PROGRESSIVE: PREMIUM 프로바이더명 (null=미적용)
-        String dualLocalAnswer,   // DUAL: LOCAL 모델 답변
-        String dualLocalProvider, // DUAL: LOCAL 프로바이더명
         Boolean grounded,         // CRITIC 결과 (null=CRITIC 미실행)
         boolean directMode,       // RAG 없이 LLM 직접 호출
         Locale locale,            // UI 언어 설정 — LLM 시스템 프롬프트 언어 선택에 사용
@@ -81,13 +79,12 @@ public record AgentState(
                 null, 0, false,
                 conversationHistory,
                 0, 0, 0,
-                routingMode, null, null, null, null, null,
+                routingMode, null, null, null,
                 directMode, locale, List.of(), ResponseMode.DEFAULT);
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────
 
-    public boolean isDualMode()  { return routingMode == RoutingMode.DUAL; }
     public boolean wasUpgraded() { return premiumUpgraded != null; }
 
     // ── Builder factory ───────────────────────────────────────────────────────
@@ -117,8 +114,6 @@ public record AgentState(
         private RoutingMode routingMode          = RoutingMode.COST_FIRST;
         private String usedProvider;
         private String premiumUpgraded;
-        private String dualLocalAnswer;
-        private String dualLocalProvider;
         private Boolean grounded;
         private boolean directMode;
         private Locale locale                    = Locale.KOREAN;
@@ -147,8 +142,6 @@ public record AgentState(
             this.routingMode        = s.routingMode;
             this.usedProvider       = s.usedProvider;
             this.premiumUpgraded    = s.premiumUpgraded;
-            this.dualLocalAnswer    = s.dualLocalAnswer;
-            this.dualLocalProvider  = s.dualLocalProvider;
             this.grounded           = s.grounded;
             this.directMode         = s.directMode;
             this.locale             = s.locale;
@@ -179,12 +172,6 @@ public record AgentState(
         public Builder selectedTags(List<String> v)        { this.selectedTags = v;       return this; }
         public Builder responseMode(ResponseMode v)        { this.responseMode = v;       return this; }
 
-        public Builder dualResult(String localAnswer, String localProvider) {
-            this.dualLocalAnswer   = localAnswer;
-            this.dualLocalProvider = localProvider;
-            return this;
-        }
-
         public Builder accumulateTokens(int inputTokens, int outputTokens) {
             this.totalInputTokens  += inputTokens;
             this.totalOutputTokens += outputTokens;
@@ -198,8 +185,7 @@ public record AgentState(
                     retrievedDocs, sources, retrievalWarnings, imageRefs,
                     answer, retryCount, needsRetry, conversationHistory,
                     totalInputTokens, totalOutputTokens, llmCallCount,
-                    routingMode, usedProvider, premiumUpgraded,
-                    dualLocalAnswer, dualLocalProvider, grounded,
+                    routingMode, usedProvider, premiumUpgraded, grounded,
                     directMode, locale, selectedTags, responseMode);
         }
     }

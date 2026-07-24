@@ -19,8 +19,7 @@ public record AnswerShape(
         boolean tokensRecorded,
         int llmCallCount,
         String questionType,
-        boolean premiumUpgraded,
-        boolean dualPresent
+        boolean premiumUpgraded
 ) {
     public static AnswerShape of(ChatResponse r) {
         return new AnswerShape(
@@ -31,8 +30,7 @@ public record AnswerShape(
                 r.totalInputTokens() > 0,
                 r.llmCallCount(),
                 r.questionType(),
-                r.premiumUpgraded() != null,
-                r.dualLocalAnswer() != null);
+                r.premiumUpgraded() != null);
     }
 
     /** "## 요약", "## 상세 설명" 등 H2 헤더만 추출. */

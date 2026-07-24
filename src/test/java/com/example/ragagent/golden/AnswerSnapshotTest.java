@@ -106,7 +106,6 @@ class AnswerSnapshotTest {
         }
 
         if (g.premiumUpgraded() != null) b.premiumUpgraded(g.premiumUpgraded());
-        if (g.dualLocalAnswer()  != null) b.dualResult(g.dualLocalAnswer(), g.dualLocalProvider());
 
         return b.build();
     }

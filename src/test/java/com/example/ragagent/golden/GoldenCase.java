@@ -25,8 +25,6 @@ public record GoldenCase(
             @JsonProperty("output_tokens") int outputTokens,
             @JsonProperty("llm_call_count") int llmCallCount,
             @JsonProperty("premium_upgraded") String premiumUpgraded,
-            @JsonProperty("dual_local_answer") String dualLocalAnswer,
-            @JsonProperty("dual_local_provider") String dualLocalProvider,
             @JsonProperty("used_provider") String usedProvider
     ) {}
 }

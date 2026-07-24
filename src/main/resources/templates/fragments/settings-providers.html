@@ -53,7 +53,7 @@
 
                 <!-- disable is only actionable on a truly live provider: registered (configured) +
                      not circuit-broken (정상) + currently toggled on (활성). LOCAL providers are excluded —
-                     DUAL mode and other local-only paths depend on at least one staying available. -->
+                     LOCAL_ONLY routing and other local-only paths depend on at least one staying available. -->
                 <button th:if="${isAdmin and p.enabled and p.configured and !p.blocked and p.role != 'LOCAL'}" type="button"
                         class="btn btn-outline-danger ms-2"
                         style="font-size:.6rem;padding:.15rem .35rem;"

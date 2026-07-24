@@ -231,7 +231,7 @@ rag_java/
     │   ├── llm/
     │   │   ├── LlmRouter.java             # 멀티 프로바이더 라우팅: TaskType × RoutingMode; executeGated()/acquirePermit() — 채팅/질의 경로 프로바이더별 동시성 게이트 + 429 백프레셔
     │   │   ├── ConcurrencyLimitingChatModel.java  # ChatModel 데코레이터 — executeGated()를 우회하는 프레임워크 내부 호출자(MultiQueryExpander)에 동시성 게이트 적용
-    │   │   ├── RoutingMode.java           # COST_FIRST|QUALITY_FIRST|PROGRESSIVE|DUAL|LOCAL_ONLY
+    │   │   ├── RoutingMode.java           # COST_FIRST|QUALITY_FIRST|PROGRESSIVE|LOCAL_ONLY
     │   │   ├── CircuitBreaker.java        # LLM 프로바이더 인메모리 차단 관리 (Retry-After 지원)
     │   │   ├── TrackingEmbeddingModel.java  # EmbeddingModel 데코레이터 — 임베딩 토큰 사용량을 채팅과 분리 기록 (embed:<model>)
     │   │   ├── CachingEmbeddingModel.java   # EmbeddingModel 데코레이터 — Caffeine 쿼리 임베딩 캐시(Phase 7-A) + 인플라이트 single-flight 중복 제거(ConcurrentHashMap<key,CompletableFuture>), tracking 바깥쪽에 합성
@@ -326,11 +326,11 @@ rag_java/
 
 - **인증** — Spring Security 폼 로그인, BCrypt(12) 비밀번호 해싱, 5회 실패 시 15분 계정 잠금, `/login`·`/signup`·`/setup`. `app.auth.enabled=false`로 로컬 no-login 배포 가능; `app.auth.management-only=true`는 채팅·조회는 게스트에 열어두고 문서 관리·`/admin`만 로그인 요구 — [OPERATOR_MANUAL.md §9.4.2](documents/OPERATOR_MANUAL.md#942-관리-전용-인증-management-only) 참고
 - **Web UI** — Thymeleaf + HTMX 기반 채팅·문서 관리·LLM 사용량 화면, KO/EN 언어 전환
-- **SSE 실시간 스트리밍** — 노드별 단계 배지(classifier→retrieval→answer→critic) + 토큰 실시간 표시; DUAL 모드는 두 탭 동시 스트리밍 (`chat-stream.js`, fetch + ReadableStream)
+- **SSE 실시간 스트리밍** — 노드별 단계 배지(classifier→retrieval→answer→critic) + 토큰 실시간 표시 (`chat-stream.js`, fetch + ReadableStream)
 - **다크 모드** — CSS 변수 기반 라이트/다크 전환, `prefers-color-scheme` 자동 감지 + `localStorage` 사용자 override
 - **모바일 & PWA** — 반응형 오프캔버스 대화 드로어, `100dvh` 하단 고정 입력창, `table-responsive` 가로 넘침 처리, iOS 16px 자동 확대 방지; 설치형 PWA(`manifest.webmanifest`, 인증/RAG/SSE 응답을 캐시하지 않는 오프라인 fallback 서비스 워커, iOS "홈 화면에 추가" 힌트); 아이콘 버튼 i18n `aria-label`·44px 터치 영역·`:focus-visible` 표시
 - **질문 분류 + 라우팅** — meta(인사·잡담)는 RAG 없이 직접 응답, 나머지는 풀 파이프라인
-- **멀티 LLM 라우팅** — `LlmRouter`가 `TaskType × RoutingMode` 기준으로 프로바이더 선택: COST_FIRST / QUALITY_FIRST / PROGRESSIVE / DUAL (로컬+외부 병렬) / LOCAL_ONLY
+- **멀티 LLM 라우팅** — `LlmRouter`가 `TaskType × RoutingMode` 기준으로 프로바이더 선택: COST_FIRST / QUALITY_FIRST / PROGRESSIVE / LOCAL_ONLY
 - **Circuit Breaker** — HTTP 429/오류 시 프로바이더 자동 차단 (Retry-After 지원), 우선순위 기반 failover; LLM 사용량 대시보드에서 차단 상태 확인
 - **프로바이더별 동시성 게이트 + 백프레셔** — 채팅/질의 경로가 한 프로바이더에 보내는 동시 요청은 그 서버가 처리 가능한 만큼(`--parallel`)을 절대 넘지 않음; `LLM_PERMIT_WAIT_TIMEOUT_SECONDS`(기본 20초)를 넘겨 대기하면 180초 read timeout까지 기다리지 않고 즉시 HTTP 429 + `Retry-After` 응답. 인덱싱/백그라운드 LLM 호출은 영향받지 않음(자체 세마포어 유지)
 - **인플라이트 single-flight (임베딩)** — 완전히 동일한(정규화 후) 텍스트를 동시에 요청하면(예: 여러 사용자가 거의 동시에 같은 질문) 첫 호출만 실제로 계산하고 나머지는 그 결과를 공유(`CachingEmbeddingModel`) — 각자 다시 계산하지 않음
@@ -346,7 +346,6 @@ rag_java/
 - **ReAct 재검색** — 증거 부족 시 최대 2회 자동 재검색
 - **Critic 검증** — 생성된 답변이 문서에 근거하는지 LLM이 이중 검증
 - **PROGRESSIVE 모드** — COST_FIRST로 시작 → 품질 임계값 미달 시 PREMIUM 프로바이더로 재실행 + 업그레이드 배지 표시
-- **DUAL 모드** — 로컬·외부 LLM 병렬 실행, 두 답변을 탭으로 비교
 - **속도 제한** — Bucket4j + Caffeine 유저별 토큰버킷; 429 `RAG-RATE-001` + `Retry-After` 헤더; `app.rate-limit.*`로 설정
 - **감사 로그** — Logback 롤링 파일에 구조화된 이벤트 기록; `app.audit.*`로 설정
 - **이미지 처리 파이프라인** — PDF/PPTX/DOCX 이미지 추출 → `data/images/{imageId}/` 저장(문서 SHA-256 기반 해시 키 — 문서 자체의 `docId`와는 별개이며, 긴 파일명이 이미지마다 반복 저장되는 것을 방지); PPTX에서 사진 위에 강조 원·화살표 같은 주석 도형이 겹쳐 있으면 하나의 합성 이미지로 병합(`app.pptx-image.merge-annotated-pictures`), 표 위에 겹친 주석 도형도 표+도형 합성(표는 MD 표로도 유지)하며 실제 Ctrl+G 그룹·SmartArt는 각 한 장으로 유지; 앵커에 안 겹친 느슨한 도형끼리의 병합은 `app.pptx-image.rasterize-shapes=true`일 때만(기본 off). DOCX도 사진과 같은 문단의 레거시 VML 주석 도형(사각형/원/선)을 하나로 병합(`app.docx-image.merge-annotated-shapes` — POI가 DOCX 도형 좌표를 노출하지 않아 같은 문단 근사 방식); 검색 시점 Lazy Vision 설명 생성 (SQLite 캐시); 답변 버블에 이미지 썸네일 표시

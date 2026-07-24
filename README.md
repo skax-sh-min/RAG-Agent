@@ -232,7 +232,7 @@ rag_java/
     │   ├── llm/
     │   │   ├── LlmRouter.java         # Multi-provider routing: TaskType × RoutingMode; executeGated()/acquirePermit() — per-provider concurrency gate + 429 backpressure for the chat/query path
     │   │   ├── ConcurrencyLimitingChatModel.java  # ChatModel decorator — applies the concurrency gate to framework-internal callers (MultiQueryExpander) that bypass executeGated()
-    │   │   ├── RoutingMode.java       # COST_FIRST|QUALITY_FIRST|PROGRESSIVE|DUAL|LOCAL_ONLY
+    │   │   ├── RoutingMode.java       # COST_FIRST|QUALITY_FIRST|PROGRESSIVE|LOCAL_ONLY
     │   │   ├── CircuitBreaker.java    # In-memory per-provider circuit breaker (Retry-After aware)
     │   │   ├── TrackingEmbeddingModel.java  # EmbeddingModel decorator — records embedding token usage separately (embed:<model>)
     │   │   ├── CachingEmbeddingModel.java   # EmbeddingModel decorator — Caffeine query-embedding cache (Phase 7-A) + in-flight single-flight dedup (ConcurrentHashMap<key,CompletableFuture>), composed outside tracking
@@ -327,11 +327,11 @@ User question
 
 - **Authentication** — Spring Security form login with BCrypt(12) password hashing; account lockout after 5 failed attempts (15-min lock); `/login`, `/signup`, `/setup`; toggle off with `app.auth.enabled=false` for local no-login deployments; `app.auth.management-only=true` keeps chat/browsing guest-open while requiring login for document management and `/admin` — see [OPERATOR_MANUAL.md §9.4.2](documents/OPERATOR_MANUAL.md#942-관리-전용-인증-management-only)
 - **Web UI** — Thymeleaf + HTMX chat, document management, and LLM usage interface with KO/EN language switcher
-- **SSE real-time streaming** — per-node stage badges (classifier → retrieval → answer → critic), token-level streaming via `chat-stream.js` (fetch + ReadableStream); DUAL mode streams both tabs simultaneously
+- **SSE real-time streaming** — per-node stage badges (classifier → retrieval → answer → critic), token-level streaming via `chat-stream.js` (fetch + ReadableStream)
 - **Dark mode** — CSS variable–based light/dark toggle, auto-detects `prefers-color-scheme` with `localStorage` user override
 - **Mobile & PWA** — responsive offcanvas thread drawer, `100dvh` bottom-pinned input, `table-responsive` overflow handling, iOS 16px no-zoom inputs; installable PWA (`manifest.webmanifest`, service worker with offline fallback that never caches authenticated/RAG/SSE responses, iOS "Add to Home Screen" hint); icon buttons carry i18n `aria-label`, 44px touch targets, `:focus-visible` outlines
 - **Question classification + routing** — meta (greetings/small talk) answered directly without RAG; all others go through the full pipeline
-- **Multi-LLM routing** — `LlmRouter` selects providers by `TaskType × RoutingMode`; COST_FIRST / QUALITY_FIRST / PROGRESSIVE / DUAL (parallel local + external) / LOCAL_ONLY
+- **Multi-LLM routing** — `LlmRouter` selects providers by `TaskType × RoutingMode`; COST_FIRST / QUALITY_FIRST / PROGRESSIVE / LOCAL_ONLY
 - **Circuit Breaker** — automatic provider blocking on HTTP 429/errors (Retry-After aware), priority-based failover, status visible in LLM usage dashboard
 - **Per-provider concurrency gate + backpressure** — the chat/query path never sends more concurrent requests to a provider than it can serve (sized to the LLM server's `--parallel`); a request that waits past `LLM_PERMIT_WAIT_TIMEOUT_SECONDS` (default 20s) fails fast with HTTP 429 + `Retry-After` instead of hanging until the 180s read timeout. Indexing/background LLM calls are unaffected (they keep their own semaphore)
 - **In-flight single-flight (embeddings)** — concurrent requests for the exact same (post-normalization) text — e.g. several users asking the same question at nearly the same moment — collapse into one delegate call; the rest share that result instead of each recomputing it (`CachingEmbeddingModel`)
@@ -347,7 +347,6 @@ User question
 - **ReAct re-retrieval** — automatic re-retrieval up to 2 times when evidence is insufficient
 - **Critic verification** — LLM double-checks whether the generated answer is grounded in documents
 - **PROGRESSIVE mode** — starts with COST_FIRST; if quality score < threshold, re-runs Answer with PREMIUM provider and marks response with upgrade badge
-- **DUAL mode** — runs local and external LLM in parallel, displays results in side-by-side tabs
 - **Rate limiting** — Bucket4j + Caffeine per-user token-bucket; 429 `RAG-RATE-001` + `Retry-After` header; configurable via `app.rate-limit.*`
 - **Audit logging** — structured events written to rolling file via Logback; configurable via `app.audit.*`
 - **Image processing pipeline** — PDF/PPTX/DOCX image extraction → stored under `data/images/{imageId}/` (a content-hash key derived from the document's SHA-256, distinct from the document's own `docId`, so long filenames aren't repeated per image); PPTX pictures with annotation shapes (highlight circle, arrow, callout) drawn on them are composited into one image (`app.pptx-image.merge-annotated-pictures`), as are tables with an overlapping annotation shape (table also kept as a markdown table) and real Ctrl+G groups / SmartArt; loose overlapping shapes are only merged into one diagram image when `app.pptx-image.rasterize-shapes=true` (default off). DOCX pictures likewise merge with legacy-VML annotation shapes (rect/oval/line) found in the same paragraph (`app.docx-image.merge-annotated-shapes` — a proximity approximation, since POI exposes no shape coordinates for DOCX); Lazy Vision description on first retrieval (cached in SQLite); image thumbnails shown in answer bubble

@@ -180,7 +180,7 @@ Navbar 우측 상단 **KO | EN** 링크를 클릭하면 즉시 언어가 전환�
 | 대화 제목 변경 | 스레드 옆 연필 아이콘 클릭 → 인라인 편집 |
 | 대화 삭제 | 스레드 옆 휴지통 아이콘 |
 
-> **라우팅 모드** (채팅 화면 드롭다운): `COST_FIRST` · `QUALITY_FIRST` · `PROGRESSIVE` · `DUAL` · `LOCAL_ONLY`  
+> **라우팅 모드** (채팅 화면 드롭다운): `COST_FIRST` · `QUALITY_FIRST` · `PROGRESSIVE` · `LOCAL_ONLY`  
 > 각 모드의 동작 방식은 [OPERATOR_MANUAL.md §5.3](OPERATOR_MANUAL.md)을 참고하세요.  
 > 이 드롭다운이 아예 보이지 않는다면 운영자가 이 서비스를 로컬 LLM 전용으로 구성한 것입니다(어떤 모드를 골라도 결과가 같아 선택지 자체를 제공하지 않음) — 정상 동작입니다.
 

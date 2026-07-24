@@ -100,8 +100,6 @@ public class AgentService {
                 elapsedSeconds,
                 result.premiumUpgraded(),
                 result.usedProvider(),
-                result.dualLocalAnswer(),
-                result.dualLocalProvider(),
                 turnId
         );
     }

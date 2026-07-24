@@ -16,7 +16,6 @@
 │    COST_FIRST    — LOCAL → NORMAL → PREMIUM (기본)                   │
 │    QUALITY_FIRST — PREMIUM → NORMAL → LOCAL                         │
 │    PROGRESSIVE   — COST_FIRST 시작 → 품질 임계값 미달 시 PREMIUM 재실행│
-│    DUAL          — LOCAL + 외부(NORMAL→PREMIUM) 병렬 → 두 결과 표시  │
 │    LOCAL_ONLY    — LOCAL 전용, 외부 API 호출 없음                    │
 │                                                                      │
 │  필터 체인 (각 역할 내):                                             │
@@ -86,7 +85,6 @@ public enum RoutingMode {
     COST_FIRST,    // LOCAL → NORMAL → PREMIUM
     QUALITY_FIRST, // PREMIUM → NORMAL → LOCAL
     PROGRESSIVE,   // COST_FIRST 먼저 → qualityScore < threshold 시 PREMIUM 재실행
-    DUAL,          // LOCAL + 외부(NORMAL→PREMIUM) 병렬 (LOCAL 등록 필수)
     LOCAL_ONLY     // LOCAL 전용 (미연결 시 LlmProviderExhaustedException)
 }
 ```
@@ -250,13 +248,13 @@ app.indexing.keyword-batch-size=${INDEXING_KEYWORD_BATCH_SIZE:2}
 
 ## 4. 라우팅 시나리오
 
-| 상황 | COST_FIRST | QUALITY_FIRST | PROGRESSIVE | DUAL | LOCAL_ONLY |
-|------|-----------|--------------|------------|------|-----------|
-| 로컬 LLM 정상 | local→normal→premium | premium→normal→local | local/normal 먼저 | **local∥normal** | **local 단독** |
-| 로컬 LLM 없음 | normal→premium | premium→normal | normal 먼저 | **exhausted** | **exhausted** |
-| gemini-flash 429 | openai-mini→premium | premium→openai-mini | openai-mini 먼저 | local∥openai-mini | local 단독 |
-| 모든 NORMAL 차단 | PREMIUM fallback | PREMIUM 정상 | PREMIUM 재실행 | local∥premium | local 단독 |
-| 전체 소진 | `LlmProviderExhaustedException` | 동일 | 동일 | 동일 | 동일 |
+| 상황 | COST_FIRST | QUALITY_FIRST | PROGRESSIVE | LOCAL_ONLY |
+|------|-----------|--------------|------------|-----------|
+| 로컬 LLM 정상 | local→normal→premium | premium→normal→local | local/normal 먼저 | **local 단독** |
+| 로컬 LLM 없음 | normal→premium | premium→normal | normal 먼저 | **exhausted** |
+| gemini-flash 429 | openai-mini→premium | premium→openai-mini | openai-mini 먼저 | local 단독 |
+| 모든 NORMAL 차단 | PREMIUM fallback | PREMIUM 정상 | PREMIUM 재실행 | local 단독 |
+| 전체 소진 | `LlmProviderExhaustedException` | 동일 | 동일 | 동일 |
 
 **PROGRESSIVE 흐름**:
 1. COST_FIRST로 Answer 실행
@@ -265,9 +263,6 @@ app.indexing.keyword-batch-size=${INDEXING_KEYWORD_BATCH_SIZE:2}
 4. 응답 메타에 `🔝 고추론 재분석 → {providerName}` 배지 표시
 
 > 현재 `qualityScore`는 sufficient=true→1.0, false→0.0 이진값. 추후 스칼라 점수로 확장 가능.
-
-**DUAL 전제 조건**: LOCAL 등록 필수. 미등록 시 즉시 exhausted.  
-CLASSIFIER·RETRIEVAL은 COST_FIRST(공유), ANSWER만 LOCAL∥외부 병렬 실행.
 
 ---
 
@@ -313,10 +308,10 @@ CLASSIFIER·RETRIEVAL은 COST_FIRST(공유), ANSWER만 LOCAL∥외부 병렬 실
 |---|---|
 | `ClassifierService` (분류) | `KeywordExtractor` (키워드+맥락 추출 — §10.8.2로 청크를 배치 묶음당 1콜로 호출, `app.indexing.keyword-batch-size`) |
 | `AnswerService` (블로킹+스트리밍+PROGRESSIVE+평가) | `MarkdownCorrectionService` (MD 포맷 교정) |
-| `LlmRouter.executeDual()`/`executeDualStream()` (DUAL 양쪽) | `VisionDescriptionService` |
-| `DirectAnswerService` | `ImageTypeClassifier` |
-| `RerankerService` (opt-in) | `TextToMarkdownService` (TXT 구조화) |
-| `RetrievalService`의 MultiQuery 확장 모델(`ConcurrencyLimitingChatModel` 데코레이터 경유) | `ConversationSummarizerService.precompute()`(fire-and-forget) |
+| `DirectAnswerService` | `VisionDescriptionService` |
+| `RerankerService` (opt-in) | `ImageTypeClassifier` |
+| `RetrievalService`의 MultiQuery 확장 모델(`ConcurrencyLimitingChatModel` 데코레이터 경유) | `TextToMarkdownService` (TXT 구조화) |
+| | `ConversationSummarizerService.precompute()`(fire-and-forget) |
 | | `ThreadMetaService.generateTitleAsync()`(fire-and-forget) |
 
 인덱싱 경로는 이미 자체 세마포어(`app.indexing.max-concurrent-llm-calls`)로 동시성을 제어하고 있고, 마감시한 있는 동기 HTTP 호출자가 없으므로 이중 게이팅을 피하기 위해 의도적으로 제외했다 — `LlmRouter.executeWithTracking()`(게이트 미적용, 기존 동작 그대로)을 그대로 사용한다.
@@ -373,9 +368,8 @@ CREATE TABLE IF NOT EXISTS llm_usage (
 ## 8. 제약 및 주의사항
 
 - **프로바이더 자동 비활성화**: `api-key`가 비어있으면 (`${GEMINI_API_KEY:}` 등 빈 기본값) 시작 시 warn 로그 출력 후 해당 프로바이더를 제외. 키 미설정만으로 providers 블록을 남겨둔 채 비활성화 가능
-- **DUAL 활성 조건**: LOCAL 미등록 → UI에서 드롭다운 `disabled` + "로컬 LLM이 필요합니다" 툴팁
 - **LOCAL_ONLY**: LOCAL 미연결·차단 시 외부 API fallback 없이 즉시 exhausted — UI에서 오류 안내 필요
-- **라우팅 전략 셀렉터 자체 숨김**: 위 두 항목은 DUAL/LOCAL_ONLY "개별 옵션"을 `disabled` 처리하는 것과 달리, `app.llm.default-routing-mode`(=`LLM_ROUTING_MODE`)가 `LOCAL_ONLY`면 채팅 사이드바의 라우팅 전략 드롭다운 **전체**가 렌더링되지 않는다 — 이 배포에서는 프로바이더가 LOCAL 하나뿐이라 어떤 모드를 골라도 결과가 동일하므로, 선택지 자체를 없애는 편이 더 정확하다.
+- **라우팅 전략 셀렉터 자체 숨김**: 위 항목은 LOCAL_ONLY "개별 옵션"을 `disabled` 처리하는 것과 달리, `app.llm.default-routing-mode`(=`LLM_ROUTING_MODE`)가 `LOCAL_ONLY`면 채팅 사이드바의 라우팅 전략 드롭다운 **전체**가 렌더링되지 않는다 — 이 배포에서는 프로바이더가 LOCAL 하나뿐이라 어떤 모드를 골라도 결과가 동일하므로, 선택지 자체를 없애는 편이 더 정확하다.
   - 판정 경로: `LlmRouter.getDefaultMode()` → `ChatController.populateChatModel()`의 `localOnlyDeployment` 모델 속성 → `chat.html`의 `th:if="${!localOnlyDeployment}"`.
   - 대화별 `routingMode`(스레드 메타에 저장된 현재 선택값)가 아니라 **배포 전체의 기본값**을 기준으로 판단한다 — 그렇지 않으면 사용자가 LOCAL_ONLY를 고르는 순간 셀렉터가 사라져 다시 못 바꾸는 UX 함정이 생긴다.
 - **같은 Gemini API 키 공유**: `GEMINI_API_KEY1`은 gemini-flash-lite(NORMAL)·gemma-4-31b(PREMIUM, `providers[6]`)가, `GEMINI_API_KEY2`는 gemini-flash(NORMAL)·gemma-4-31b(PREMIUM, `providers[7]`)가 각각 공유한다 — 한 키에 Rate Limit이 걸리면 NORMAL과 PREMIUM 양쪽이 동시에 차단될 수 있음. OpenAI를 PREMIUM fallback(`providers[8]`)으로 유지 권장

@@ -14,11 +14,7 @@ public interface GraphListener {
 
     default void onNodeEnter(String nodeName) {}
 
-    /** Single-stream token (COST_FIRST / QUALITY_FIRST / PROGRESSIVE). */
     default void onToken(String text) {}
-
-    /** DUAL-mode token with tab routing ("local" | "external"). */
-    default void onToken(String tab, String text) {}
 
     default void onSourcesReady(List<SourceRef> sources) {}
 

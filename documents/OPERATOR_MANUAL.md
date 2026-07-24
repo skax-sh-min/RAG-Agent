@@ -187,7 +187,7 @@ copy .env.example .env
 | `LOCAL_FAST_LLM_KEY` | — | — | `providers[0]` API 키. `LOCAL_LLM_KEY`와 마찬가지로 로컬 엔드포인트는 보통 불필요 — 비워도(URL만 설정돼 있다면) `no-key`가 치환되어 등록됨 |
 | `LOCAL_FAST_LLM_MODEL` | — | `Qwen3.5-0.8B-Q4_K_M.gguf` | `providers[0]` 모델 식별자. 사용 중인 소형 모델명으로 변경 |
 | `LLM_VERIFY_LOCAL_MODELS_ON_STARTUP` | — | `true` | (`app.llm.verify-local-models-on-startup`) — G3 토글. `true`면 `LOCAL_LLM_URL`/`LOCAL_LLM_URL_2`/`LOCAL_FAST_LLM_URL`이 설정된 각 provider에 대해 기동 시 `GET {URL}/models`를 호출해 접속 가능·모델명 일치를 확인하고, 실패하면 애플리케이션이 시작되지 않는다. 로컬 서버가 앱보다 늦게 뜨는 배포 순서 레이스가 있을 때만 `false`로 끌 것 — 그 경우 예전처럼 첫 채팅 요청이 실패한 뒤 다른 provider로 런타임 폴백된다 |
-| `LLM_ROUTING_MODE` | — | `COST_FIRST` | 기본 라우팅 모드 (`app.llm.default-routing-mode`) — `COST_FIRST`/`QUALITY_FIRST`/`PROGRESSIVE`/`DUAL`/`LOCAL_ONLY`.<br>**폐쇄망·로컬 전용은 `LOCAL_ONLY`** 로 외부 프로바이더 호출을 원천 차단. `LOCAL_ONLY`로 설정하면 채팅 화면 사이드바의 라우팅 전략 드롭다운 자체가 사라진다(어떤 모드를 골라도 결과가 같으므로) — 상세는 [LLM_ROUTING.md §8](LLM_ROUTING.md#8-제약-및-주의사항) 참고 |
+| `LLM_ROUTING_MODE` | — | `COST_FIRST` | 기본 라우팅 모드 (`app.llm.default-routing-mode`) — `COST_FIRST`/`QUALITY_FIRST`/`PROGRESSIVE`/`LOCAL_ONLY`.<br>**폐쇄망·로컬 전용은 `LOCAL_ONLY`** 로 외부 프로바이더 호출을 원천 차단. `LOCAL_ONLY`로 설정하면 채팅 화면 사이드바의 라우팅 전략 드롭다운 자체가 사라진다(어떤 모드를 골라도 결과가 같으므로) — 상세는 [LLM_ROUTING.md §8](LLM_ROUTING.md#8-제약-및-주의사항) 참고 |
 | `OPENAI_API_KEY` | — | — | OpenAI providers 사용 시 필요. 미설정 또는 빈 값이면 해당 providers 자동 비활성화. providers 설정에서 `${OPENAI_API_KEY}` 형태로 참조 |
 | `OPENAI_BASE_URL` | — | `https://api.openai.com` | OpenAI 호환 엔드포인트 기본 URL. providers 설정에서 `${OPENAI_BASE_URL}` 형태로 참조. Azure OpenAI 등 호환 엔드포인트로 교체 가능 |
 | `GEMINI_API_KEY1` | — | — | Gemini 1번 API 키 — `providers[3]`(gemini-flash-lite, NORMAL), `providers[6]`(gemma-4-31b, PREMIUM) 공유. 미설정 시 해당 providers 자동 비활성화. providers 설정에서 `${GEMINI_API_KEY1}` 형태로 참조 |
@@ -1206,10 +1206,8 @@ Web UI 채팅 화면 드롭다운에서 대화별로 변경 가능.
 | `COST_FIRST` | LOCAL → NORMAL → PREMIUM 순 시도 | **기본값**. 비용 절감 우선 |
 | `QUALITY_FIRST` | PREMIUM → NORMAL → LOCAL 순 시도 | 최고 품질 응답 필요 시 |
 | `PROGRESSIVE` | COST_FIRST로 먼저 답변 → 품질 점수 미달 시 PREMIUM으로 재실행 | 품질·비용 균형 |
-| `DUAL` | LOCAL + 외부를 **동시 병렬** 실행 → 두 결과를 탭으로 비교 | 로컬 vs 외부 품질 비교 |
 | `LOCAL_ONLY` | LOCAL만 사용, 외부 API 미호출 | 오프라인 / 보안 환경 |
 
-> **DUAL 전제 조건**: LOCAL role 프로바이더 등록 필수. 미등록 시 즉시 오류.  
 > **PROGRESSIVE 임계값**: `app.llm.progressive-threshold=0.6` (기본). 현재 sufficient=true(1.0) / false(0.0) 이진값.
 
 ---
@@ -1564,7 +1562,7 @@ app.llm.providers[8].concurrency=4
 3. 슬롯이 나면 즉시 LLM 호출 → 완료 후 슬롯 반환.
 4. 대기 상한을 넘기면 HTTP 429 + `Retry-After` 헤더로 즉시 응답(`RAG-LLM-002`) — Circuit Breaker 차단이나 다른 프로바이더로의 자동 전환은 하지 않습니다(§5.5 참고). SSE 스트리밍 응답에서는 "현재 요청이 몰려 있습니다. 잠시 후 다시 시도해 주세요." 메시지로 우아하게 종료됩니다.
 
-**적용 범위**: 분류(Classifier)·답변 생성(블로킹+스트리밍+PROGRESSIVE 업그레이드+충분도 평가)·DUAL(양쪽 프로바이더)·DirectAnswer·리랭킹(opt-in)·MultiQuery 확장까지 채팅/질의 경로 전체에 적용됩니다. **인덱싱/백그라운드 LLM 호출(키워드 추출, MD 포맷 교정, Vision 설명, TXT 구조화, 대화 요약 사전계산, 스레드 제목 생성)은 이 게이트의 대상이 아닙니다** — 이미 `INDEXING_MAX_LLM`으로 자체 동시성을 제어하고 있고, 마감시한 있는 동기 HTTP 호출자가 없기 때문입니다.
+**적용 범위**: 분류(Classifier)·답변 생성(블로킹+스트리밍+PROGRESSIVE 업그레이드+충분도 평가)·DirectAnswer·리랭킹(opt-in)·MultiQuery 확장까지 채팅/질의 경로 전체에 적용됩니다. **인덱싱/백그라운드 LLM 호출(키워드 추출, MD 포맷 교정, Vision 설명, TXT 구조화, 대화 요약 사전계산, 스레드 제목 생성)은 이 게이트의 대상이 아닙니다** — 이미 `INDEXING_MAX_LLM`으로 자체 동시성을 제어하고 있고, 마감시한 있는 동기 HTTP 호출자가 없기 때문입니다.
 
 **튜닝 가이드**:
 - **기본 원칙**: `LLM_DEFAULT_PROVIDER_CONCURRENCY`(또는 프로바이더별 `concurrency`)는 그 LLM 서버의 실제 `--parallel`(또는 동급) 설정값과 일치시키세요. 너무 크게 잡으면 앱이 서버가 처리 못 할 요청까지 통과시켜 결국 서버 쪽에서 429/타임아웃이 발생하고, 너무 작게 잡으면 서버 여유 용량을 못 씁니다.
@@ -1662,7 +1660,6 @@ curl -X POST http://localhost:8080/api/v1/chat \
 - **Contextual Retrieval + 임베딩 입력 정규화** — 인덱싱 시 청크별로 `{파일명} > {섹션 제목}` 구조적 맥락 + LLM 생성 1~2문장을 임베딩·FTS 입력 앞에 결합(`KeywordExtractor`가 키워드 추출과 한 번에 처리, 사용량은 `context:` 라벨). 마크다운 장식(구분선·강조 마커)은 임베딩/FTS/답변 프롬프트 입력에서만 제거되고 저장·표시 원문은 그대로 유지된다. 설정 프로퍼티 없음(항상 적용) — 기존 문서는 재인덱싱해야 새 맥락/정규화가 반영됨
 - **한국어 FTS 트라이그램 토크나이저** — `chunk_fts`가 `unicode61`(공백 구분 단어) 대신 `trigram`(3자 겹침 윈도우) 토크나이저를 사용해 활용형 종결어미가 붙은 한국어 단어(예: 질의 "인덱싱"이 본문 "인덱싱됩니다"에 매칭)와 코드/식별자 부분 문자열(예: "ERR45"가 "ERR4521"을 찾음)을 더 잘 찾는다. **자동 마이그레이션** — 기존 `unicode61` 테이블은 다음 재기동 시 자동으로 trigram으로 재구축되며(`doc_tags`/`content`/`keywords` 손실 없이 복사) 별도 재인덱싱·재동기화가 필요 없다. 트레이드오프: 2글자 이하 검색어(예: "오류", "문서")는 trigram 최소 매칭 단위(3자) 미만이라 진짜 BM25 순위 점수는 얻지 못한다 — §10.7.3에서 `content`/`keywords` `LIKE` 스캔으로 존재 여부 기반 신호(순위 없음, MATCH 결과보다 낮은 우선순위로 배치)를 보충해 완전히 탈락하지는 않는다(하이브리드 벡터 축은 애초에 무관하게 동작) — `SEARCH_HYBRID_ENABLED=true`일 때만 체감. 설정 프로퍼티 없음(항상 적용)
 - **병렬 인덱싱** — `RagService.syncDirectory()`에서 파일별·LLM 호출별 Semaphore 기반 병렬 처리
-- **DUAL 모드** — LOCAL + 외부를 Virtual Thread로 병렬 실행
 
 CPU/메모리 제약이 있는 환경에서는 `INDEXING_MAX_FILES`와 `INDEXING_MAX_LLM`을 줄이세요.
 

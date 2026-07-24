@@ -57,7 +57,6 @@ HTTP 요청
 | questionType == "meta" | CLASSIFIER → DIRECT_ANSWER |
 | 그 외 | CLASSIFIER → RETRIEVAL |
 | ANSWER sufficient=false, retryCount < max | ANSWER → RETRIEVAL |
-| ANSWER isDualMode | ANSWER → FINALIZE (CRITIC 건너뜀) |
 | CRITIC grounded=false, retryCount < max | CRITIC → RETRIEVAL |
 | 그 외 | CRITIC → FINALIZE |
 
@@ -76,13 +75,6 @@ HTTP 요청
 ```
 COST_FIRST와 동일하되,
 재시도 소진 후에도 답변 불충분 → PREMIUM 모델로 자동 업그레이드 후 재답변
-```
-
-### DUAL
-```
-검색 → LOCAL + 외부 모델 동시 답변 생성
-     → 외부 답변 채택 (LOCAL 답변은 비교용으로 함께 반환)
-     → CRITIC 없이 종료
 ```
 
 ### meta 질문

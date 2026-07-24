@@ -69,8 +69,8 @@ class ThreadMetaRepositoryTest {
     void updateRoutingMode() {
         String now = ThreadMetaRepository.now();
         repo.save(new ThreadMeta("t1", UID, "t", "v", now, now, "COST_FIRST", ""));
-        repo.updateRoutingMode(UID, "t1", "DUAL");
-        assertThat(repo.findById(UID, "t1").orElseThrow().routingMode()).isEqualTo("DUAL");
+        repo.updateRoutingMode(UID, "t1", "QUALITY_FIRST");
+        assertThat(repo.findById(UID, "t1").orElseThrow().routingMode()).isEqualTo("QUALITY_FIRST");
     }
 
     @Test

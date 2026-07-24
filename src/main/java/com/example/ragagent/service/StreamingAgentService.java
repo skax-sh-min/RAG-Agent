@@ -236,17 +236,6 @@ public class StreamingAgentService {
             accumulated.append(text);
             Map<String, Object> payload = new HashMap<>();
             payload.put("text", text);
-            payload.put("tab", null);
-            sendEvent(emitter, "token", payload);
-        }
-
-        @Override
-        public void onToken(String tab, String text) {
-            lastActivityNanos.set(System.nanoTime());
-            accumulated.append(text);
-            Map<String, Object> payload = new HashMap<>();
-            payload.put("text", text);
-            payload.put("tab", tab);
             sendEvent(emitter, "token", payload);
         }
 
@@ -320,7 +309,6 @@ public class StreamingAgentService {
     private Map<String, Object> buildDonePayload(AgentState result, long elapsedMs, Long turnId) {
         Map<String, Object> m = new HashMap<>();
         m.put("usedProvider",      result.usedProvider());
-        m.put("dualLocalProvider", result.dualLocalProvider());
         m.put("inputTokens",       result.totalInputTokens());
         m.put("outputTokens",      result.totalOutputTokens());
         m.put("llmCalls",          result.llmCallCount());

@@ -33,7 +33,7 @@ import static org.mockito.Mockito.when;
  * QA — LlmRouter routing & guard behaviour
  *
  * Focuses mainly on the side-effect-free surface: findFirst() priority by RoutingMode,
- * hasLocalProvider(), findProviderName(), and DUAL preconditions — plus targeted
+ * hasLocalProvider(), findProviderName() — plus targeted
  * Mockito-based coverage of executeWithTracking()'s circuit-breaker/backpressure branches
  * (mmproj detection, concurrency gate, overload-without-fallback blocking).
  */
@@ -126,28 +126,6 @@ class LlmRouterTest {
         assertThat(r.hasLocalProvider()).isTrue();
         breaker.block("lm", null);
         assertThat(r.hasLocalProvider()).isFalse();
-    }
-
-    @Test
-    @DisplayName("DUAL 모드: LOCAL 부재 시 executeDual 즉시 LlmProviderExhaustedException")
-    void dualRequiresLocal() {
-        var normal = p("openai", ProviderRole.NORMAL, TaskType.TEXT, 1);
-        var r = router(RoutingMode.DUAL, normal);
-
-        assertThatThrownBy(() -> r.executeDual(TaskType.TEXT, model -> null))
-                .isInstanceOf(LlmProviderExhaustedException.class)
-                .hasMessageContaining("LOCAL");
-    }
-
-    @Test
-    @DisplayName("DUAL 모드: external 부재 시 executeDual 즉시 LlmProviderExhaustedException")
-    void dualRequiresExternal() {
-        var local = p("lm", ProviderRole.LOCAL, TaskType.TEXT, 1);
-        var r = router(RoutingMode.DUAL, local);
-
-        assertThatThrownBy(() -> r.executeDual(TaskType.TEXT, model -> null))
-                .isInstanceOf(LlmProviderExhaustedException.class)
-                .hasMessageContaining("external");
     }
 
     @Test

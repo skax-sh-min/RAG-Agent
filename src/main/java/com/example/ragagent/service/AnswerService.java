@@ -5,7 +5,6 @@ import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.ingestion.MarkdownNoiseNormalizer;
 import com.example.ragagent.model.MetaKey;
 import com.example.ragagent.model.ResponseMode;
-import com.example.ragagent.llm.DualResult;
 import com.example.ragagent.llm.LlmProvider;
 import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.RoutingMode;
@@ -26,7 +25,6 @@ import org.springframework.stereotype.Service;
 
 import java.util.List;
 import java.util.Locale;
-import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
 
@@ -62,12 +60,10 @@ public class AnswerService {
     }
 
     public AgentState execute(AgentState state) {
-        if (state.isDualMode()) return executeDualBlocking(state);
         return executeBlocking(state);
     }
 
     public AgentState executeStreaming(AgentState state, GraphListener listener) {
-        if (state.isDualMode()) return executeDualStreaming(state, listener);
         return executeStreamingNormal(state, listener);
     }
 
@@ -88,18 +84,6 @@ public class AnswerService {
         return checkSufficiencyAndMaybeUpgrade(state, answer, null);
     }
 
-    private AgentState executeDualBlocking(AgentState state) {
-        String systemPrompt = answerSystemPrompt(state.locale());
-        String userPrompt = buildAnswerPrompt(state);
-        DualResult dual = llmRouter.executeDual(
-                TaskType.TEXT,
-                model -> model.call(buildPrompt(systemPrompt, userPrompt, answerOptions(state)))
-        );
-        return buildDualResultState(state,
-                truncate(dual.externalAnswer()), dual.externalProvider(),
-                truncate(dual.localAnswer()), dual.localProvider());
-    }
-
     // ── Streaming paths ─────────────────────────────────────────────────────
 
     private AgentState executeStreamingNormal(AgentState state, GraphListener listener) {
@@ -115,37 +99,6 @@ public class AnswerService {
         llmRouter.recordApproxUsage(provider.name(), systemPrompt + buildAnswerPrompt(state), answer);
         state = state.toBuilder().accumulateTokens(0, 0).usedProvider(provider.name()).answer(answer).build();
         return checkSufficiencyAndMaybeUpgrade(state, answer, listener);
-    }
-
-    private AgentState executeDualStreaming(AgentState state, GraphListener listener) {
-        String systemPrompt = answerSystemPrompt(state.locale());
-        String userPrompt = buildAnswerPrompt(state);
-        AgentState capturedState = state;
-        StringBuilder localBuf = new StringBuilder(), extBuf = new StringBuilder();
-        BiConsumer<LlmProvider, Consumer<String>> callFn =
-                (prov, sink) -> callOrStream(prov, capturedState, systemPrompt, sink);
-        LlmRouter.DualProviders dp = llmRouter.executeDualStream(
-                TaskType.TEXT,
-                callFn,
-                t -> { localBuf.append(t); listener.onToken("local", t); },
-                t -> { extBuf.append(t);   listener.onToken("external", t); }
-        );
-        llmRouter.recordApproxUsage(dp.localProvider(), systemPrompt + userPrompt, localBuf.toString());
-        llmRouter.recordApproxUsage(dp.externalProvider(), systemPrompt + userPrompt, extBuf.toString());
-        return buildDualResultState(state,
-                truncate(extBuf.toString()), dp.externalProvider(),
-                truncate(localBuf.toString()), dp.localProvider());
-    }
-
-    /** Shared DUAL result assembly for both blocking and streaming — CRITIC is bypassed (needsRetry=false). */
-    private AgentState buildDualResultState(AgentState state, String extAnswer, String extProvider,
-                                             String localAnswer, String localProvider) {
-        return state.toBuilder()
-                    .answer(extAnswer)
-                    .usedProvider(extProvider)
-                    .dualResult(localAnswer, localAnswer.isBlank() ? null : localProvider)
-                    .needsRetry(false)
-                    .build();
     }
 
     // ── Evaluation (sufficiency + grounding) + PROGRESSIVE ───────────────────
@@ -186,7 +139,7 @@ public class AnswerService {
                           .build();
     }
 
-    /** Shared raw Prompt construction for the non-fluent LlmRouter call sites (DUAL, PROGRESSIVE).
+    /** Shared raw Prompt construction for the non-fluent LlmRouter call sites (evaluation, PROGRESSIVE).
      *  {@code options} is null for calls that should keep the provider defaults (the sufficiency
      *  evaluation), and carries the response mode's maxTokens for the answer calls. */
     private static Prompt buildPrompt(String systemPrompt, String userPrompt, ChatOptions options) {

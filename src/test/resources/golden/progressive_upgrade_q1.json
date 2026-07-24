@@ -12,8 +12,6 @@
     "output_tokens": 200,
     "llm_call_count": 5,
     "premium_upgraded": "gemini-pro",
-    "dual_local_answer": null,
-    "dual_local_provider": null,
     "used_provider": "gemini-pro"
   },
   "expected": {
@@ -24,7 +22,6 @@
     "tokensRecorded": true,
     "llmCallCount": 5,
     "questionType": "manual",
-    "premiumUpgraded": true,
-    "dualPresent": false
+    "premiumUpgraded": true
   }
 }

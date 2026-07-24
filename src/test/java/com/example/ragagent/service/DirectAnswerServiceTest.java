@@ -147,19 +147,6 @@ class DirectAnswerServiceTest {
     }
 
     @Test
-    @DisplayName("execute — DUAL 라우팅 모드는 COST_FIRST 로 폴백(DirectAnswer 는 DUAL 미지원)")
-    void execute_dualMode_fallsBackToCostFirst() {
-        when(llmRouter.executeGated(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), any()))
-                .thenReturn("답변");
-
-        AgentState dualState = AgentState.of("질문", "v1", "t1", "", RoutingMode.DUAL, false);
-        AgentState result = service.execute(dualState);
-
-        assertThat(result.answer()).isEqualTo("답변");
-        verify(llmRouter).executeGated(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), any());
-    }
-
-    @Test
     @DisplayName("executeStreaming — stream=false 프로바이더는 ChatClient 경유, listener.onToken 으로 전달 + 근사 사용량 기록")
     void executeStreaming_nonStreamingProvider_deliversTokensViaListener() {
         ChatModel chatModel = mock(ChatModel.class);

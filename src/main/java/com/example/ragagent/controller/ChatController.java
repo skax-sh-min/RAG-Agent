@@ -193,13 +193,6 @@ public class ChatController {
             model.addAttribute("elapsedSeconds", resp.elapsedSeconds());
             model.addAttribute("premiumUpgraded", resp.premiumUpgraded());
             model.addAttribute("usedProvider", resp.usedProvider());
-            if (resp.dualLocalAnswer() != null) {
-                model.addAttribute("dualLocalAnswer", resp.dualLocalAnswer());
-                model.addAttribute("dualLocalProvider", resp.dualLocalProvider());
-                model.addAttribute("tabId", UUID.randomUUID().toString().replace("-", "").substring(0, 8));
-                response.setHeader("HX-Trigger", "refreshThreadList");
-                return "fragments/message-assistant-dual :: message";
-            }
         } catch (LlmProviderExhaustedException e) {
             log.warn("LLM providers exhausted: {}", e.getMessage());
             model.addAttribute("errorMessage", messageSource.getMessage(

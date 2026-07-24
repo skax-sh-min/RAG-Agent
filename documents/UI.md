@@ -31,7 +31,6 @@ src/main/resources/
 │   └── fragments/
 │       ├── message-user.html              # 사용자 메시지 버블
 │       ├── message-assistant.html         # 어시스턴트 버블 (메타데이터 포함)
-│       ├── message-assistant-dual.html    # DUAL 모드 탭 버블
 │       ├── message-error.html             # 오류 버블
 │       ├── thread-list.html               # 대화 목록 사이드바
 │       ├── thread-item.html               # 대화 목록 항목 1건
@@ -40,7 +39,7 @@ src/main/resources/
 │       ├── settings-item.html             # 설정 항목 1행(조회 또는 편집 입력 + 저장/기본값 버튼) — HTMX 부분 갱신 대상
 │       └── settings-providers.html        # LLM providers 표(활성화 배지 + 관리자 활성/비활성 버튼) — settings.html에 인라인 포함 + 토글 응답 시 테이블 전체 교체
 └── static/
-    ├── css/app.css                        # 버블·배지·DUAL 탭·타이핑·반응형(오프캔버스/dvh/16px/44px)
+    ├── css/app.css                        # 버블·배지·타이핑·반응형(오프캔버스/dvh/16px/44px)
     ├── css/theme.css                      # light/dark CSS 변수
     ├── manifest.webmanifest               # PWA 매니페스트 (이름·아이콘·standalone)
     ├── sw.js                              # 서비스 워커 (NETWORK-FIRST, 오프라인 fallback 전용)
@@ -60,7 +59,7 @@ src/main/resources/
 |--------|------|------|------|
 | GET | `/` | `chat.html` | 새 대화 |
 | GET | `/chat/{threadId}` | `chat.html` | 기존 대화 이어하기 (이전 turn 서버 렌더) |
-| POST | `/ui/chat` | `fragments/message-assistant` 또는 `message-assistant-dual` | 질문 전송 (동기 fallback) |
+| POST | `/ui/chat` | `fragments/message-assistant` | 질문 전송 (동기 fallback) |
 | POST | `/ui/chat/stream` | `text/event-stream` (SseEmitter) | SSE 스트리밍 응답 — `chat-stream.js`가 사용 |
 | POST | `/ui/chat/new` | redirect `/chat/{newId}` | 새 대화 생성 |
 | PATCH | `/ui/threads/{threadId}/title` | `fragments/thread-item` | 대화 제목 수정 |
@@ -206,12 +205,11 @@ REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — �
 | 비용 우선 | COST_FIRST | 기본값 (`app.llm.default-routing-mode`) |
 | 품질 우선 | QUALITY_FIRST | |
 | 단계적 | PROGRESSIVE | 품질 미달 시 PREMIUM 자동 전환 |
-| 병렬 비교 | DUAL | LOCAL 미연결 시 `disabled` |
 | 로컬 전용 | LOCAL_ONLY | LOCAL 미연결 시 오류 발생 경고 |
 
 변경 시 `PATCH /ui/threads/{threadId}/routing-mode` → `thread_meta.routing_mode` 저장.
 
-> **드롭다운 전체 숨김**: 위 표는 DUAL/LOCAL_ONLY 개별 옵션이 `disabled`되는 경우고, `app.llm.default-routing-mode`(`LLM_ROUTING_MODE`)가 `LOCAL_ONLY`면 드롭다운 컨테이너 자체가 렌더링되지 않는다 — 배포에 LOCAL 프로바이더만 있어 어떤 모드를 골라도 결과가 동일하기 때문. 판단 기준은 대화별 `routingMode`가 아니라 **배포 전체의 기본 모드**다(`ChatController`의 `localOnlyDeployment` 모델 속성, `chat.html` `th:if="${!localOnlyDeployment}"`).
+> **드롭다운 전체 숨김**: 위 표는 LOCAL_ONLY 옵션이 `disabled`되는 경우고, `app.llm.default-routing-mode`(`LLM_ROUTING_MODE`)가 `LOCAL_ONLY`면 드롭다운 컨테이너 자체가 렌더링되지 않는다 — 배포에 LOCAL 프로바이더만 있어 어떤 모드를 골라도 결과가 동일하기 때문. 판단 기준은 대화별 `routingMode`가 아니라 **배포 전체의 기본 모드**다(`ChatController`의 `localOnlyDeployment` 모델 속성, `chat.html` `th:if="${!localOnlyDeployment}"`).
 
 ### 입력 바 상단 행 (버전 · 태그 칩 · 응답 모드)
 
@@ -268,18 +266,6 @@ hide:0}})`, 하단 스크립트에서 초기화)이다. 네이티브 title 툴�
 
 PROGRESSIVE 업그레이드 시 `🔝 고추론 재분석 → {premiumProvider}` 배지 추가.
 
-### DUAL 모드 탭 버블
-
-```
-[로컬 답변  local]  [외부 답변  gemini-flash]
-────────────────────────────────────────────
-(활성 탭 내용 + 출처 accordion + 메타데이터)
-```
-
-- `tabId` = UUID 앞 8자리 (다중 버블 충돌 방지, WebController에서 생성)
-- 기본 탭: 로컬 답변 활성 / Bootstrap Tabs (서버 재요청 없음)
-- LOCAL 미등록 시 드롭다운 `disabled` + "로컬 LLM이 필요합니다" 툴팁
-
 ### 출처 Hover 미리보기
 
 **출처 라벨 형식**: `RetrievalService.formatSource()`가 청크 메타데이터의 `chapter_no`(H2~H6 헤딩 기반 계층 번호, 예: `1.5.3`)가 "0"이 아니면 `"파일명 | 1.5.3"`, 아니면(프롤로그·PPTX·비스캔 PDF — 이 세 경우는 chapter_no가 항상 "0") `page_or_slide`로 폴백해 `"파일명 | p.12"`로 표시한다 — 문서 버전은 라벨에 포함되지 않는다. **큐레이션 Q&A**(§10.10, 좋아요로 승격된 답변)가 출처로 포함된 경우엔 파일명·페이지가 없으므로 `"💬 큐레이션 Q&A"` 고정 라벨로 표시된다.
@@ -317,12 +303,12 @@ PROGRESSIVE 업그레이드 시 `🔝 고추론 재분석 → {premiumProvider}`
               → ReadableStream으로 SSE 이벤트 파싱
               → stage 이벤트: 단계 배지 교체 (classifier/retrieval/answer/critic/upgrade)
               → sources 이벤트: Bootstrap Popover 출처 배지 삽입
-              → token 이벤트: 텍스트 실시간 누적 (DUAL: tab 라우팅)
+              → token 이벤트: 텍스트 실시간 누적
               → done 이벤트: marked.js 마크다운 렌더 + 메타데이터 footer 표시
                              + htmx.trigger(body, "refreshThreadList")
               → error 이벤트: 오류 버블 교체
               hx-post="/ui/chat" 속성은 JS 비활성 시 fallback으로 유지
-              → DUAL: message-assistant-dual / 단일: message-assistant
+              → message-assistant fragment 반환
               → HX-Trigger: "refreshThreadList" (사이드바 자동 갱신)
 
 [제목 수정]  더블클릭 → 인라인 input → 포커스 아웃/Enter
@@ -372,7 +358,6 @@ PROGRESSIVE 업그레이드 시 `🔝 고추론 재분석 → {premiumProvider}`
 | 채팅 API 오류 | `message-error.html` fragment (빨간 버블) |
 | 파일 업로드 실패 | 파일 행 상태 ❌ + 오류 토스트 |
 | 문서 삭제 실패 | `htmx:responseError` → 오류 토스트 |
-| DUAL, LOCAL 미연결 | 드롭다운 `disabled` + 툴팁 |
 | LOCAL_ONLY, LOCAL 미연결 | 빨간 버블 + `LlmProviderExhaustedException` 메시지 |
 | 동시 사용자 급증으로 프로바이더 용량 초과 (§6.12, 429) | 빨간 버블 + "현재 요청이 몰려 있습니다. 잠시 후 다시 시도해 주세요." — 서킷브레이커 전면차단이 아니라 일시적 대기 상한 초과이므로 잠시 후 재시도하면 대개 성공 |
 | 빈 질문 전송 | 클라이언트 validation, API 호출 차단 |
@@ -395,7 +380,7 @@ stage(classifier) → stage(retrieval) → sources → stage(answer) → token �
 |-------|------|------|
 | `stage` | `{"id":"retrieval","text":"관련 문서 검색 중..."}` | 노드 진입 시 배지 교체 |
 | `sources` | `[{"label":"...","preview":"..."}]` JSON 배열 | RETRIEVAL 완료 후 출처 배지 삽입 |
-| `token` | `{"tab":null,"text":"텍스트 조각"}` | ANSWER 스트리밍 토큰; DUAL은 tab="local"/"external" |
+| `token` | `{"text":"텍스트 조각"}` | ANSWER 스트리밍 토큰 |
 | `done` | 메타데이터 JSON (`usedProvider`, `inputTokens`, `elapsedMs` 등) | 완료 시 마크다운 렌더 |
 | `error` | `{"message":"오류 설명"}` | 오류 버블로 교체 |
 
@@ -409,10 +394,9 @@ stage(classifier) → stage(retrieval) → sources → stage(answer) → token �
 | `service/AnswerService.java` | `executeStreaming(state, listener)` — `ChatClient.stream()` Flux 구독 → `listener.onToken()` |
 | `static/js/chat-stream.js` | 클라이언트 SSE 파서; form submit capture, 버블 DOM 생성, 이벤트별 핸들러 |
 
-### PROGRESSIVE / DUAL / 재시도 처리
+### PROGRESSIVE / 재시도 처리
 
 - **PROGRESSIVE 업그레이드**: `listener.onUpgrade(provider)` → `stage(id=upgrade)` 이벤트, 콘텐츠 div 초기화 후 premium 답변 재채움
-- **DUAL 모드**: `onToken(tab, text)` → `stream-ext-{id}` / `stream-loc-{id}` 탭 div로 분리 라우팅
 - **재시도**: ANSWER 노드 2회 이상 진입 → 콘텐츠 div 초기화 → 새 답변으로 채움
 
 ---

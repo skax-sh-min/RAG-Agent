@@ -97,7 +97,6 @@ public class AgentGraph {
                     state = (listener == GraphListener.NOOP)
                             ? answerService.execute(state)
                             : answerService.executeStreaming(state, listener);
-                    if (state.isDualMode()) yield Node.FINALIZE;
                     if (state.needsRetry() && state.retryCount() < maxRetryCount) {
                         state = state.toBuilder().incrementRetry().build();
                         log.debug("[AgentGraph] retry #{} reason=ANSWER_INSUFFICIENT thread={}",

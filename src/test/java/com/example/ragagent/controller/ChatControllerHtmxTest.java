@@ -49,7 +49,6 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * Covers (per refactoring/01-test-safety-net.md):
  *  - POST /ui/chat 가 정상 응답 시 'fragments/message-assistant :: message' 반환
  *  - 빈 질문 → 'fragments/message-error :: message'
- *  - DUAL 응답 시 'fragments/message-assistant-dual :: message'
  *  - 서비스 예외 → 'fragments/message-error :: message'
  *  - directMode 누락 시 400 방지
  */
@@ -79,17 +78,7 @@ class ChatControllerHtmxTest {
                 List.of(new SourceRef("doc.pdf | v1 | p.3", "snippet preview", "doc_abc", 3)),
                 List.of(),
                 120, 80, 2, 0.42,
-                null, "gemini-flash", null, null, 1L);
-    }
-
-    private ChatResponse dualResponse() {
-        return new ChatResponse(
-                "외부 답변",
-                "manual",
-                List.of(),
-                List.of(),
-                100, 50, 2, 0.5,
-                null, "gemini-flash", "로컬 답변", "local", 2L);
+                null, "gemini-flash", 1L);
     }
 
     @Test
@@ -117,21 +106,6 @@ class ChatControllerHtmxTest {
                         .with(csrf()))
                 .andExpect(status().isOk())
                 .andExpect(view().name("fragments/message-error :: message"));
-    }
-
-    @Test
-    @DisplayName("POST /ui/chat — DUAL 응답 → message-assistant-dual fragment")
-    void postChat_dualResponse_returnsDualFragment() throws Exception {
-        when(agentService.chat(any(), any())).thenReturn(dualResponse());
-
-        mvc.perform(post("/ui/chat")
-                        .param("question", "DUAL 질문")
-                        .param("threadId", "t1")
-                        .param("version", "latest")
-                        .param("routingMode", "DUAL")
-                        .with(csrf()))
-                .andExpect(status().isOk())
-                .andExpect(view().name("fragments/message-assistant-dual :: message"));
     }
 
     @Test

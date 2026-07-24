@@ -4,7 +4,7 @@
   "routing_mode": "QUALITY_FIRST",
   "version": "latest",
   "given": {
-    "answer": "## 요약\nCOST_FIRST, QUALITY_FIRST, PROGRESSIVE, DUAL, LOCAL_ONLY 5가지 모드 지원.",
+    "answer": "## 요약\nCOST_FIRST, QUALITY_FIRST, PROGRESSIVE, LOCAL_ONLY 4가지 모드 지원.",
     "question_type": "meta",
     "sources_count": 0,
     "image_refs_count": 0,
@@ -12,8 +12,6 @@
     "output_tokens": 40,
     "llm_call_count": 1,
     "premium_upgraded": null,
-    "dual_local_answer": null,
-    "dual_local_provider": null,
     "used_provider": "gemini-pro"
   },
   "expected": {
@@ -24,7 +22,6 @@
     "tokensRecorded": true,
     "llmCallCount": 1,
     "questionType": "meta",
-    "premiumUpgraded": false,
-    "dualPresent": false
+    "premiumUpgraded": false
   }
 }

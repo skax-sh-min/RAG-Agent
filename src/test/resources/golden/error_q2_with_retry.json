@@ -12,8 +12,6 @@
     "output_tokens": 100,
     "llm_call_count": 5,
     "premium_upgraded": null,
-    "dual_local_answer": null,
-    "dual_local_provider": null,
     "used_provider": "gemini-flash"
   },
   "expected": {
@@ -24,7 +22,6 @@
     "tokensRecorded": true,
     "llmCallCount": 5,
     "questionType": "error",
-    "premiumUpgraded": false,
-    "dualPresent": false
+    "premiumUpgraded": false
   }
 }

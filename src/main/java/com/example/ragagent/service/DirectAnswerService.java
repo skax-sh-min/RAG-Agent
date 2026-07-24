@@ -4,7 +4,6 @@ import com.example.ragagent.agent.AgentState;
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.llm.LlmProvider;
 import com.example.ragagent.llm.LlmRouter;
-import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.llm.TaskType;
 import com.example.ragagent.security.PromptInjectionGuard;
 import org.slf4j.Logger;
@@ -49,9 +48,8 @@ public class DirectAnswerService {
         // §6.18 — Direct(meta) answers use their own temperature (hot-editable via /settings), read
         // fresh per call, distinct from the general/RAG temperature baked into the provider default.
         double directTemp = props.llmSafe().directTemperature();
-        RoutingMode effective = effectiveRoutingMode(state.routingMode());
         int maxTokens = state.responseMode().maxTokens(props.llmSafe().maxTokens());
-        String rawAnswer = llmRouter.executeGated(TaskType.TEXT, effective,
+        String rawAnswer = llmRouter.executeGated(TaskType.TEXT, state.routingMode(),
                 model -> model.call(buildPrompt(systemPrompt, userPrompt, directTemp, maxTokens)));
         String answer = (rawAnswer == null || rawAnswer.isEmpty()) ? null : rawAnswer;
         log.debug("[DirectAnswer] answer length={}", answer == null ? -1 : answer.length());
@@ -65,8 +63,7 @@ public class DirectAnswerService {
                 state.routingMode(), state.conversationHistory().length());
 
         double directTemp = props.llmSafe().directTemperature();
-        RoutingMode effective = effectiveRoutingMode(state.routingMode());
-        LlmProvider provider = llmRouter.routeProvider(TaskType.TEXT, effective);
+        LlmProvider provider = llmRouter.routeProvider(TaskType.TEXT, state.routingMode());
 
         StringBuilder full = new StringBuilder();
         try (var permit = llmRouter.acquirePermit(provider)) {
@@ -85,11 +82,6 @@ public class DirectAnswerService {
     private String resolveSystemPrompt(AgentState state) {
         String key = state.directMode() ? "prompt.direct.system" : "prompt.direct.meta.system";
         return messageSource.getMessage(key, null, state.locale());
-    }
-
-    /** DUAL is not implemented in DirectAnswer; fall back to COST_FIRST (LOCAL preferred). */
-    private static RoutingMode effectiveRoutingMode(RoutingMode mode) {
-        return (mode == RoutingMode.DUAL) ? RoutingMode.COST_FIRST : mode;
     }
 
     private static Prompt buildPrompt(String systemPrompt, String userPrompt,

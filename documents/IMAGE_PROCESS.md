@@ -551,9 +551,7 @@ public record ChatResponse(
     @JsonProperty("llm_call_count") int llmCallCount,
     @JsonProperty("elapsed_seconds") double elapsedSeconds,
     @JsonProperty("premium_upgraded") String premiumUpgraded,   // PROGRESSIVE: 업그레이드된 PREMIUM provider명
-    @JsonProperty("used_provider") String usedProvider,
-    @JsonProperty("dual_local_answer") String dualLocalAnswer,   // DUAL: LOCAL 모델 답변
-    @JsonProperty("dual_local_provider") String dualLocalProvider
+    @JsonProperty("used_provider") String usedProvider
 ) {}
 ```
 

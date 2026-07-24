@@ -2,7 +2,6 @@ package com.example.ragagent.service;
 
 import com.example.ragagent.agent.AgentState;
 import com.example.ragagent.config.AppProperties;
-import com.example.ragagent.llm.DualResult;
 import com.example.ragagent.llm.LlmProvider;
 import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.ProviderRole;
@@ -26,7 +25,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.function.Consumer;
 import java.util.function.Function;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -39,13 +37,11 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * QA — AnswerService 4가지 경로
+ * QA — AnswerService 경로
  *
  * Covers (per refactoring/01-test-safety-net.md):
  *  - BLOCKING (COST_FIRST)
  *  - STREAMING (GraphListener token 전달)
- *  - DUAL BLOCKING (LOCAL + 외부 둘 다 호출)
- *  - DUAL STREAMING (token sink 양쪽 분기)
  *  - PROGRESSIVE 업그레이드 (sufficient=false 후 PREMIUM 호출)
  *
  * executeBlocking()/evaluate() now route through LlmRouter.executeGated() (TaskType.TEXT,
@@ -198,7 +194,7 @@ class AnswerServiceTest {
         assertThat(answerPrompt).doesNotContain("curated_qa | p.1");
     }
 
-    // ── STREAMING 경로 (non-DUAL) ──────────────────────────────────────────
+    // ── STREAMING 경로 ───────────────────────────────────────────────────
     // ChatModel.stream()에는 call()로 위임하는 default 구현이 없어(UnsupportedOperationException)
     // ChatModel을 직접 mock 해야 한다 (DirectAnswerServiceTest와 동일 패턴).
     // sufficiency(evaluate)는 블로킹 호출이므로 executeGated으로 스텁한다.
@@ -226,68 +222,6 @@ class AnswerServiceTest {
         assertThat(result.needsRetry()).isFalse();
         assertThat(result.llmCallCount()).isEqualTo(2);
         verify(llmRouter).recordApproxUsage(eq("local"), anyString(), eq("스트리밍 답변"));
-    }
-
-    // ── DUAL BLOCKING 경로 ───────────────────────────────────────────────
-
-    @Test
-    @DisplayName("DUAL BLOCKING — local+external 답변 + needsRetry=false")
-    @SuppressWarnings("unchecked")
-    void dual_blocking_capturesLocalAndExternal() {
-        DualResult dual = new DualResult(
-                "로컬 답변", "local",
-                "외부 답변", "gemini-flash");
-        when(llmRouter.executeDual(eq(TaskType.TEXT), any(Function.class))).thenReturn(dual);
-
-        AgentState result = service.execute(newState(RoutingMode.DUAL));
-
-        assertThat(result.answer()).isEqualTo("외부 답변");
-        assertThat(result.usedProvider()).isEqualTo("gemini-flash");
-        assertThat(result.dualLocalAnswer()).isEqualTo("로컬 답변");
-        assertThat(result.dualLocalProvider()).isEqualTo("local");
-        assertThat(result.needsRetry()).isFalse();
-        verify(llmRouter, times(1)).executeDual(eq(TaskType.TEXT), any(Function.class));
-    }
-
-    // ── DUAL STREAMING 경로 ──────────────────────────────────────────────
-
-    @Test
-    @DisplayName("DUAL STREAMING — listener 가 local/external 두 채널 토큰 모두 수신 + 양쪽 근사 사용량 기록")
-    @SuppressWarnings("unchecked")
-    void dual_streaming_emitsBothChannelTokens() {
-        List<String> localTokens = new ArrayList<>();
-        List<String> externalTokens = new ArrayList<>();
-        GraphListener listener = new GraphListener() {
-            @Override public void onToken(String tab, String text) {
-                if ("local".equals(tab)) localTokens.add(text);
-                else externalTokens.add(text);
-            }
-        };
-
-        // executeDualStream 은 양쪽 sink 에 토큰을 푸시하고 DualProviders 반환하도록 stub.
-        when(llmRouter.executeDualStream(eq(TaskType.TEXT), any(), any(), any()))
-                .thenAnswer(inv -> {
-                    Consumer<String> localSink = inv.getArgument(2);
-                    Consumer<String> externalSink = inv.getArgument(3);
-                    localSink.accept("L1");
-                    localSink.accept("L2");
-                    externalSink.accept("X1");
-                    externalSink.accept("X2");
-                    externalSink.accept("X3");
-                    return new LlmRouter.DualProviders("local", "gemini-flash");
-                });
-
-        AgentState result = service.executeStreaming(newState(RoutingMode.DUAL), listener);
-
-        assertThat(localTokens).containsExactly("L1", "L2");
-        assertThat(externalTokens).containsExactly("X1", "X2", "X3");
-        assertThat(result.answer()).isEqualTo("X1X2X3");
-        assertThat(result.dualLocalAnswer()).isEqualTo("L1L2");
-        assertThat(result.usedProvider()).isEqualTo("gemini-flash");
-        assertThat(result.dualLocalProvider()).isEqualTo("local");
-        assertThat(result.needsRetry()).isFalse();
-        verify(llmRouter).recordApproxUsage(eq("local"), anyString(), eq("L1L2"));
-        verify(llmRouter).recordApproxUsage(eq("gemini-flash"), anyString(), eq("X1X2X3"));
     }
 
     // ── PROGRESSIVE 업그레이드 경로 ───────────────────────────────────────

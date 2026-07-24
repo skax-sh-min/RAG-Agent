@@ -106,20 +106,6 @@
                     <span id="stream-stage-text-${bubbleId}">질문 분석 중...</span>
                 </div>
                 <div id="stream-content-${bubbleId}" class="md-content stream-content stream-cursor"></div>
-                <div id="stream-dual-${bubbleId}" class="dual-bubble d-none">
-                    <ul class="nav nav-tabs mb-2" role="tablist">
-                        <li class="nav-item" role="presentation">
-                            <button class="nav-link active" data-bs-target="#stream-ext-${bubbleId}" data-bs-toggle="tab" type="button">외부 답변</button>
-                        </li>
-                        <li class="nav-item" role="presentation">
-                            <button class="nav-link" data-bs-target="#stream-loc-${bubbleId}" data-bs-toggle="tab" type="button">로컬 답변</button>
-                        </li>
-                    </ul>
-                    <div class="tab-content">
-                        <div class="tab-pane fade show active md-content stream-cursor" id="stream-ext-${bubbleId}"></div>
-                        <div class="tab-pane fade md-content stream-cursor" id="stream-loc-${bubbleId}"></div>
-                    </div>
-                </div>
                 <div id="stream-images-${bubbleId}"></div>
                 <div id="stream-sources-${bubbleId}"></div>
                 <div id="stream-meta-${bubbleId}" class="mt-2 d-flex align-items-center flex-wrap gap-2" style="font-size:0.72rem;"></div>
@@ -251,56 +237,26 @@
         }
     }
 
-    function onToken(bubbleId, tab, text) {
-        if (tab) {
-            // DUAL mode: first token activates tab layout
-            const dualEl = document.getElementById(`stream-dual-${bubbleId}`);
-            if (dualEl && dualEl.classList.contains('d-none')) {
-                dualEl.classList.remove('d-none');
-                const contentEl = document.getElementById(`stream-content-${bubbleId}`);
-                if (contentEl) { contentEl.classList.remove('stream-cursor'); contentEl.classList.add('d-none'); }
-            }
-            const targetId = tab === 'local' ? `stream-loc-${bubbleId}` : `stream-ext-${bubbleId}`;
-            const el = document.getElementById(targetId);
-            if (el) el.textContent += text;
-        } else {
-            const el = document.getElementById(`stream-content-${bubbleId}`);
-            if (el) el.textContent += text;
-        }
+    function onToken(bubbleId, text) {
+        const el = document.getElementById(`stream-content-${bubbleId}`);
+        if (el) el.textContent += text;
         scrollToBottom();
     }
 
     function onDone(bubbleId, data) {
         const contentEl = document.getElementById(`stream-content-${bubbleId}`);
-        const dualEl    = document.getElementById(`stream-dual-${bubbleId}`);
         const stageEl   = document.getElementById(`stream-stage-${bubbleId}`);
         const metaEl    = document.getElementById(`stream-meta-${bubbleId}`);
-        const isDual    = dualEl && !dualEl.classList.contains('d-none');
 
-        // 1. Remove streaming cursors
+        // 1. Remove streaming cursor
         if (contentEl) contentEl.classList.remove('stream-cursor');
-        if (isDual) {
-            document.getElementById(`stream-ext-${bubbleId}`)?.classList.remove('stream-cursor');
-            document.getElementById(`stream-loc-${bubbleId}`)?.classList.remove('stream-cursor');
-        }
 
         // Capture raw (pre-render) answer length for the char-count metadata below —
         // must happen before markdown rendering replaces textContent with rendered HTML.
-        let answerLen = 0, answerLenLocal = 0;
-        if (isDual) {
-            answerLen      = (document.getElementById(`stream-ext-${bubbleId}`)?.textContent || '').length;
-            answerLenLocal = (document.getElementById(`stream-loc-${bubbleId}`)?.textContent || '').length;
-        } else {
-            answerLen = (contentEl?.textContent || '').length;
-        }
+        const answerLen = (contentEl?.textContent || '').length;
 
         // 2. Render markdown
-        if (isDual) {
-            renderMarkdown(document.getElementById(`stream-ext-${bubbleId}`));
-            renderMarkdown(document.getElementById(`stream-loc-${bubbleId}`));
-        } else {
-            renderMarkdown(contentEl);
-        }
+        renderMarkdown(contentEl);
 
         // 3. Hide stage spinner + drop any superseded (unverified) retry answers — a final
         //    answer arrived, so the "삭제 예정" attempts are removed (retry succeeded/exhausted).
@@ -333,8 +289,7 @@
             const out = data.outputTokens || 0;
             if (inp || out)               parts.push(`📥 ${inp} · 📤 ${out} · 합계 ${inp + out} tok`);
             if (data.llmCalls)            parts.push(`🔄 ${data.llmCalls}`);
-            if (isDual)                   parts.push(`📝 ${answerLen}/${answerLenLocal}자`);
-            else if (answerLen)          parts.push(`📝 ${answerLen}자`);
+            if (answerLen)                parts.push(`📝 ${answerLen}자`);
             parts.push(`🕐 ${nowTimeStr()}`);
             html += `<span class="text-muted">${parts.join(' · ')}</span>`;
 
@@ -368,17 +323,7 @@
         if (stageEl) stageEl.remove();
 
         const contentEl = document.getElementById(`stream-content-${bubbleId}`);
-        const dualEl = document.getElementById(`stream-dual-${bubbleId}`);
-        const isDual = dualEl && !dualEl.classList.contains('d-none');
-
-        if (isDual) {
-            const extEl = document.getElementById(`stream-ext-${bubbleId}`);
-            const locEl = document.getElementById(`stream-loc-${bubbleId}`);
-            extEl?.classList.remove('stream-cursor');
-            locEl?.classList.remove('stream-cursor');
-            renderMarkdown(extEl);
-            renderMarkdown(locEl);
-        } else if (contentEl) {
+        if (contentEl) {
             contentEl.classList.remove('stream-cursor');
             renderMarkdown(contentEl);
         }
@@ -473,7 +418,7 @@
             case 'stage':   onStage(bubbleId, data);          break;
             case 'sources': onSources(bubbleId, data);        break;
             case 'images':  onImages(bubbleId, data);         break;
-            case 'token':   onToken(bubbleId, data.tab, data.text);  break;
+            case 'token':   onToken(bubbleId, data.text);     break;
             case 'retry':   onRetry(bubbleId, data);          break;
             case 'done':    onDone(bubbleId, data);           break;
             case 'error':   onError(bubbleId, data.message);  break;
