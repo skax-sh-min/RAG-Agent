@@ -205,6 +205,11 @@ public class PptxToMarkdownConverter {
             boolean dedup = props != null && props.pptxRemoveDuplicateSlidesSafe();
             // Section-divider (title-only, body-less, image-less) slide removal (§ app.pptx-drop-divider-slides).
             boolean dropDividers = props != null && props.pptxDropDividerSlidesSafe();
+            // "Preview title" slide removal — title-only slide whose text is restated on the next slide
+            // (§ app.pptx-drop-redundant-title-slides).
+            boolean dropRedundantTitles = props != null && props.pptxDropRedundantTitleSlidesSafe();
+            // Last-slide ending-marker (끝/END/The End) removal (§ app.pptx-drop-ending-slide).
+            boolean dropEndingSlide = props != null && props.pptxDropEndingSlideSafe();
             // Every heading text across the deck (normalized for comparison) — the reference set the
             // table-of-contents heuristic matches a slide's bullets against.
             Set<String> allHeadingsNormalized = headingFrequency.keySet().stream()
@@ -230,6 +235,17 @@ public class PptxToMarkdownConverter {
                 }
                 if (dropDividers && isSectionDividerSlide(extract, hasImages)) {
                     log.debug("[PPTX] {}번 슬라이드 제거 — 본문·이미지 없이 구분용 제목만 있는 섹션 구분 슬라이드", slideNum);
+                    continue;
+                }
+                if (dropRedundantTitles) {
+                    SlideExtract nextExtract = (i + 1 < slides.size()) ? extracts.get(i + 1) : null;
+                    if (isRedundantTitlePreviewSlide(extract, hasImages, nextExtract)) {
+                        log.debug("[PPTX] {}번 슬라이드 제거 — 이미지·도형 없이 제목만 있고 다음 슬라이드에 같은 내용이 포함됨(예고 제목 슬라이드)", slideNum);
+                        continue;
+                    }
+                }
+                if (dropEndingSlide && i == slides.size() - 1 && isEndingOnlySlide(extract, hasImages)) {
+                    log.debug("[PPTX] {}번 슬라이드 제거 — 마지막 슬라이드이고 종료 표시('끝'/'END' 등)만 있음", slideNum);
                     continue;
                 }
                 appendSlide(sb, extract, slideNum, hoistedImages, headingFrequency);
@@ -816,6 +832,71 @@ public class PptxToMarkdownConverter {
         // 남은 것은 조사·서술어 없는 명사구 — 짧을 때만 구분용으로 본다
         int words = t.split("\\s+").length;
         return words <= DIVIDER_MAX_WORDS && t.length() <= DIVIDER_MAX_CHARS;
+    }
+
+    // ── 예고 제목 슬라이드 제거 (app.pptx-drop-redundant-title-slides) ─────────────────────
+
+    /**
+     * 이미지·도형(표/그룹/다이어그램/차트 텍스트는 전부 {@link SlideExtract#body()}로 들어가므로
+     * 본문 없음이 곧 "추가 정보 없음"이다) 없이 짧은 제목 한 줄만 있는 슬라이드 중, 그 제목이 바로
+     * 다음 슬라이드의 내용(제목+본문)에 그대로 포함되어 있으면 {@code true} — 다음 슬라이드가 같은
+     * 제목을 헤딩으로 다시 쓰며 실제 내용을 담는 흔한 "예고" 패턴으로, 앞 슬라이드는 실질적으로
+     * 빈 예고편이라 검색 인덱스에 남길 가치가 없다. 마지막 슬라이드(다음이 없음)는 항상 유지된다.
+     * 정규화된 제목이 1글자뿐이면(우연한 부분 일치 위험) 대상에서 제외한다.
+     */
+    private boolean isRedundantTitlePreviewSlide(SlideExtract extract, boolean hasImages, SlideExtract nextExtract) {
+        if (hasImages) return false;
+        if (!extract.body().isBlank()) return false;
+        if (extract.headingCandidates().isEmpty()) return false;
+        if (nextExtract == null) return false;
+
+        String nextText = normalizeForCompare(
+                String.join(" ", nextExtract.headingCandidates()) + " " + nextExtract.body());
+        if (nextText.isBlank()) return false;
+
+        for (String heading : extract.headingCandidates()) {
+            String normalizedHeading = normalizeForCompare(heading);
+            if (normalizedHeading.length() >= 2 && nextText.contains(normalizedHeading)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // ── 마지막 종료 슬라이드 제거 (app.pptx-drop-ending-slide) ─────────────────────────────
+    // 정규화(공백/구두점 제거 + 소문자화) 후 이 값들 중 하나를 포함하면 종료 표시로 본다.
+    private static final Set<String> ENDING_MARKERS =
+            Set.of("끝", "end", "theend", "감사합니다", "thankyou");
+    // 종료 표시를 뺀 나머지 글자가 이 값 이하이면(인사말 뒤 짧은 서명 등) 여전히 종료 슬라이드로 본다.
+    private static final int ENDING_SLIDE_MAX_EXTRA_CHARS = 10;
+
+    /**
+     * 덱의 마지막 슬라이드이고, 이미지 없이 내용 전체(제목+본문)를 정규화했을 때 '끝'/'END'/
+     * 'The End'/'감사합니다'/'Thank you' 중 하나를 포함하며, 그 표시를 뺀 나머지 글자 수가
+     * {@link #ENDING_SLIDE_MAX_EXTRA_CHARS} 이하이면 {@code true} — 실질적 내용이 없는 마무리
+     * 슬라이드라 검색 인덱스에 남길 가치가 없다(짧은 서명·이모지 등은 허용하되, 연락처처럼 긴
+     * 추가 내용이 있으면 유지). 마지막 슬라이드인지는 호출자가 먼저 판단한다.
+     */
+    private boolean isEndingOnlySlide(SlideExtract extract, boolean hasImages) {
+        if (hasImages) return false;
+        String combined = String.join(" ", extract.headingCandidates()) + " " + extract.body();
+        String normalized = normalizeForEndingCompare(combined);
+        if (normalized.isEmpty()) return false;
+
+        for (String marker : ENDING_MARKERS) {
+            if (normalized.contains(marker)
+                    && normalized.length() - marker.length() <= ENDING_SLIDE_MAX_EXTRA_CHARS) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** 공백·구두점을 전부 제거하고 소문자화해 '끝'/'END'/'The End' 같은 종료 표시를 비교하기
+     *  위한 정규화 — 문자(한글 포함)·숫자만 남긴다. */
+    private String normalizeForEndingCompare(String text) {
+        String stripped = stripEmphasisMarkers(text).toLowerCase(java.util.Locale.ROOT);
+        return stripped.replaceAll("[^\\p{L}\\p{N}]", "");
     }
 
     /**

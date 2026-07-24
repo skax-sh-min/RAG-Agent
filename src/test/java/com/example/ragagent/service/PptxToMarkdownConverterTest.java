@@ -574,6 +574,261 @@ class PptxToMarkdownConverterTest {
         assertThat(md).contains("## 3장 개요").contains("[페이지: 1]");
     }
 
+    // ── 예고 제목 슬라이드 제거 (app.pptx-drop-redundant-title-slides, 기본 on) ────────────
+    private PptxToMarkdownConverter redundantTitleRemovingConverter() {
+        AppProperties p = mockAppProperties();
+        when(p.pptxDropRedundantTitleSlidesSafe()).thenReturn(true);
+        return new PptxToMarkdownConverter(new PptxImageExtractor(p), p);
+    }
+
+    @Test
+    @DisplayName("예고 제목 제거 — 제목만 있는 슬라이드의 제목이 다음 슬라이드 헤딩과 같으면 제거된다")
+    void redundantTitlePreviewSlideIsDropped() throws IOException {
+        PptxToMarkdownConverter conv = redundantTitleRemovingConverter();
+        writePptx(pptx -> {
+            addTitleOnlySlide(pptx, "결제 시스템");                   // 예고 제목만
+            addContentSlide(pptx, "결제 시스템", "실제 내용입니다."); // 다음 슬라이드가 같은 제목 + 본문
+        });
+
+        String md = conv.convert(pptxPath, "doc1", imagesDir);
+
+        assertThat(md).doesNotContain("[페이지: 1]");
+        assertThat(md).contains("[페이지: 2]").contains("실제 내용입니다");
+        assertThat(count(md, "## 결제 시스템")).isEqualTo(1); // 예고 슬라이드 쪽 헤딩은 제거됨
+    }
+
+    @Test
+    @DisplayName("예고 제목 제거 — 다음 슬라이드 본문에 제목이 포함되어 있어도 제거된다")
+    void redundantTitlePreviewSlideDroppedWhenContainedInNextBody() throws IOException {
+        PptxToMarkdownConverter conv = redundantTitleRemovingConverter();
+        writePptx(pptx -> {
+            addTitleOnlySlide(pptx, "결제 시스템");
+            addContentSlide(pptx, "다음 장", "결제 시스템 소개 및 상세 설명입니다.");
+        });
+
+        String md = conv.convert(pptxPath, "doc1", imagesDir);
+
+        assertThat(md).doesNotContain("[페이지: 1]");
+        assertThat(md).contains("[페이지: 2]").contains("## 다음 장");
+    }
+
+    @Test
+    @DisplayName("예고 제목 제거 — 마지막 슬라이드(다음이 없음)는 대상이 아니다")
+    void redundantTitlePreviewNotAppliedToLastSlide() throws IOException {
+        PptxToMarkdownConverter conv = redundantTitleRemovingConverter();
+        writePptx(pptx -> addTitleOnlySlide(pptx, "결제 시스템"));
+
+        String md = conv.convert(pptxPath, "doc1", imagesDir);
+
+        assertThat(md).contains("[페이지: 1]").contains("## 결제 시스템");
+    }
+
+    @Test
+    @DisplayName("예고 제목 제거 — 본문이 있으면 다음 슬라이드와 제목이 같아도 제거하지 않는다")
+    void redundantTitlePreviewNotAppliedWhenBodyPresent() throws IOException {
+        PptxToMarkdownConverter conv = redundantTitleRemovingConverter();
+        writePptx(pptx -> {
+            addContentSlide(pptx, "결제 시스템", "이미 내용이 있는 슬라이드입니다.");
+            addContentSlide(pptx, "결제 시스템", "실제 내용입니다.");
+        });
+
+        String md = conv.convert(pptxPath, "doc1", imagesDir);
+
+        assertThat(md).contains("[페이지: 1]").contains("[페이지: 2]");
+        assertThat(count(md, "## 결제 시스템")).isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("예고 제목 제거 — 이미지가 있으면 다음 슬라이드와 제목이 같아도 제거하지 않는다")
+    void redundantTitlePreviewNotAppliedWhenImagePresent() throws IOException {
+        PptxToMarkdownConverter conv = redundantTitleRemovingConverter();
+        writePptx(pptx -> {
+            byte[] fakePng = "fake-png-bytes".getBytes();
+            XSLFPictureData pd = pptx.addPicture(fakePng, PictureData.PictureType.PNG);
+            XSLFSlide slide = pptx.createSlide();
+            addTitle(slide, "결제 시스템");
+            slide.createPicture(pd);
+
+            addContentSlide(pptx, "결제 시스템", "실제 내용입니다.");
+        });
+
+        String md = conv.convert(pptxPath, "doc1", imagesDir);
+
+        assertThat(md).contains("[페이지: 1]").contains("[페이지: 2]");
+    }
+
+    @Test
+    @DisplayName("예고 제목 제거 OFF — 플래그가 꺼져 있으면 다음 슬라이드와 제목이 같아도 유지된다")
+    void redundantTitlePreviewKeptWhenFlagDisabled() throws IOException {
+        // 공유 converter는 이 플래그 off(기본 미스텁) — 별도 스텁 없이 그대로 사용
+        writePptx(pptx -> {
+            addTitleOnlySlide(pptx, "결제 시스템");
+            addContentSlide(pptx, "결제 시스템", "실제 내용입니다.");
+        });
+
+        String md = convert();
+
+        assertThat(md).contains("[페이지: 1]").contains("[페이지: 2]");
+    }
+
+    // ── 마지막 종료 슬라이드 제거 (app.pptx-drop-ending-slide, 기본 on) ────────────────────
+    private PptxToMarkdownConverter endingSlideRemovingConverter() {
+        AppProperties p = mockAppProperties();
+        when(p.pptxDropEndingSlideSafe()).thenReturn(true);
+        return new PptxToMarkdownConverter(new PptxImageExtractor(p), p);
+    }
+
+    @Test
+    @DisplayName("종료 슬라이드 제거 — 마지막 슬라이드가 '끝'만 있으면 제거된다")
+    void endingSlideWithKoreanMarkerIsDropped() throws IOException {
+        PptxToMarkdownConverter conv = endingSlideRemovingConverter();
+        writePptx(pptx -> {
+            addContentSlide(pptx, "본문 슬라이드", "실제 내용입니다.");
+            addTitleOnlySlide(pptx, "끝");
+        });
+
+        String md = conv.convert(pptxPath, "doc1", imagesDir);
+
+        assertThat(md).contains("[페이지: 1]").contains("## 본문 슬라이드");
+        assertThat(md).doesNotContain("[페이지: 2]").doesNotContain("## 끝");
+    }
+
+    @Test
+    @DisplayName("종료 슬라이드 제거 — 대소문자·구두점과 무관하게 'The End.'도 제거된다")
+    void endingSlideWithEnglishVariantIsDropped() throws IOException {
+        PptxToMarkdownConverter conv = endingSlideRemovingConverter();
+        writePptx(pptx -> {
+            addContentSlide(pptx, "본문", "내용");
+            addTitleOnlySlide(pptx, "The End.");
+        });
+
+        String md = conv.convert(pptxPath, "doc1", imagesDir);
+
+        assertThat(md).doesNotContain("[페이지: 2]");
+    }
+
+    @Test
+    @DisplayName("종료 슬라이드 제거 — 마지막 슬라이드에 종료 표시 외 다른 내용이 있으면 유지된다")
+    void endingSlideWithExtraContentIsKept() throws IOException {
+        PptxToMarkdownConverter conv = endingSlideRemovingConverter();
+        writePptx(pptx -> addContentSlide(pptx, "끝", "감사합니다. 문의: contact@example.com"));
+
+        String md = conv.convert(pptxPath, "doc1", imagesDir);
+
+        assertThat(md).contains("[페이지: 1]").contains("## 끝");
+    }
+
+    @Test
+    @DisplayName("종료 슬라이드 제거 — '감사합니다'만 있어도 제거된다")
+    void endingSlideWithThanksMarkerIsDropped() throws IOException {
+        PptxToMarkdownConverter conv = endingSlideRemovingConverter();
+        writePptx(pptx -> {
+            addContentSlide(pptx, "본문", "내용");
+            addTitleOnlySlide(pptx, "감사합니다");
+        });
+
+        String md = conv.convert(pptxPath, "doc1", imagesDir);
+
+        assertThat(md).doesNotContain("[페이지: 2]");
+    }
+
+    @Test
+    @DisplayName("종료 슬라이드 제거 — 'Thank you'만 있어도 제거된다")
+    void endingSlideWithEnglishThanksMarkerIsDropped() throws IOException {
+        PptxToMarkdownConverter conv = endingSlideRemovingConverter();
+        writePptx(pptx -> {
+            addContentSlide(pptx, "본문", "내용");
+            addTitleOnlySlide(pptx, "Thank you");
+        });
+
+        String md = conv.convert(pptxPath, "doc1", imagesDir);
+
+        assertThat(md).doesNotContain("[페이지: 2]");
+    }
+
+    @Test
+    @DisplayName("종료 슬라이드 제거 — 종료 표시 외 나머지 글자가 10자 이내면(짧은 서명 등) 제거된다")
+    void endingSlideWithShortExtraContentIsDropped() throws IOException {
+        PptxToMarkdownConverter conv = endingSlideRemovingConverter();
+        writePptx(pptx -> {
+            addContentSlide(pptx, "본문", "내용");
+            addTitleOnlySlide(pptx, "감사합니다 여러분"); // "감사합니다" 제외 나머지 "여러분" 3자
+        });
+
+        String md = conv.convert(pptxPath, "doc1", imagesDir);
+
+        assertThat(md).doesNotContain("[페이지: 2]");
+    }
+
+    @Test
+    @DisplayName("종료 슬라이드 제거 — 경계값: 나머지 글자가 정확히 10자면 제거된다")
+    void endingSlideWithExactlyTenExtraCharsIsDropped() throws IOException {
+        PptxToMarkdownConverter conv = endingSlideRemovingConverter();
+        writePptx(pptx -> addContentSlide(pptx, "END", "abcdefghij")); // "end" 제외 나머지 10자
+
+        String md = conv.convert(pptxPath, "doc1", imagesDir);
+
+        assertThat(md).doesNotContain("[페이지: 1]");
+    }
+
+    @Test
+    @DisplayName("종료 슬라이드 제거 — 경계값: 나머지 글자가 11자면 유지된다")
+    void endingSlideWithElevenExtraCharsIsKept() throws IOException {
+        PptxToMarkdownConverter conv = endingSlideRemovingConverter();
+        writePptx(pptx -> addContentSlide(pptx, "END", "abcdefghijk")); // "end" 제외 나머지 11자
+
+        String md = conv.convert(pptxPath, "doc1", imagesDir);
+
+        assertThat(md).contains("[페이지: 1]").contains("## END");
+    }
+
+    @Test
+    @DisplayName("종료 슬라이드 제거 — 마지막이 아닌 슬라이드의 '끝'은 제거되지 않는다")
+    void endingMarkerNotAppliedToNonLastSlide() throws IOException {
+        PptxToMarkdownConverter conv = endingSlideRemovingConverter();
+        writePptx(pptx -> {
+            addTitleOnlySlide(pptx, "끝");
+            addContentSlide(pptx, "실제 마지막", "내용입니다.");
+        });
+
+        String md = conv.convert(pptxPath, "doc1", imagesDir);
+
+        assertThat(md).contains("[페이지: 1]").contains("## 끝");
+        assertThat(md).contains("[페이지: 2]").contains("## 실제 마지막");
+    }
+
+    @Test
+    @DisplayName("종료 슬라이드 제거 — 이미지가 있으면 제거하지 않는다")
+    void endingSlideWithImageIsKept() throws IOException {
+        PptxToMarkdownConverter conv = endingSlideRemovingConverter();
+        writePptx(pptx -> {
+            addContentSlide(pptx, "본문", "내용");
+            byte[] fakePng = "fake-png-bytes".getBytes();
+            XSLFPictureData pd = pptx.addPicture(fakePng, PictureData.PictureType.PNG);
+            XSLFSlide slide = pptx.createSlide();
+            addTitle(slide, "끝");
+            slide.createPicture(pd);
+        });
+
+        String md = conv.convert(pptxPath, "doc1", imagesDir);
+
+        assertThat(md).contains("[페이지: 2]").contains("## 끝");
+    }
+
+    @Test
+    @DisplayName("종료 슬라이드 제거 OFF — 플래그가 꺼져 있으면 마지막 '끝' 슬라이드도 유지된다")
+    void endingSlideKeptWhenFlagDisabled() throws IOException {
+        // 공유 converter는 이 플래그 off(기본 미스텁) — 별도 스텁 없이 그대로 사용
+        writePptx(pptx -> {
+            addContentSlide(pptx, "본문", "내용");
+            addTitleOnlySlide(pptx, "끝");
+        });
+
+        String md = convert();
+
+        assertThat(md).contains("[페이지: 2]").contains("## 끝");
+    }
+
     @Test
     @DisplayName("슬라이드의 표(XSLFTable)는 마크다운 파이프 표로 변환된다")
     void tableConvertsToMarkdownPipeTable() throws IOException {
