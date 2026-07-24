@@ -7,8 +7,12 @@ import com.example.ragagent.context.ThreadContextResolver;
 import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.model.ChatResponse;
 import com.example.ragagent.model.SourceRef;
+import com.example.ragagent.model.ThreadMeta;
+import com.example.ragagent.repository.MemoryRepository;
+import com.example.ragagent.security.AppUserDetails;
 import com.example.ragagent.service.AgentService;
 import com.example.ragagent.service.ConversationSummarizerService;
+import com.example.ragagent.service.CuratedQaService;
 import com.example.ragagent.service.MemoryService;
 import com.example.ragagent.service.StreamingAgentService;
 import com.example.ragagent.service.ThreadMetaService;
@@ -23,11 +27,18 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
 import java.util.List;
+import java.util.Optional;
+import java.util.Set;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.model;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.request;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.view;
@@ -55,6 +66,7 @@ class ChatControllerHtmxTest {
     @MockitoBean ThreadMetaService threadMetaService;
     @MockitoBean MemoryService memoryService;
     @MockitoBean ConversationSummarizerService summarizerService;
+    @MockitoBean CuratedQaService curatedQaService;
     @MockitoBean AppProperties props;
     @MockitoBean LlmRouter llmRouter;
     @MockitoBean ChatModel chatModel;
@@ -208,5 +220,26 @@ class ChatControllerHtmxTest {
         org.mockito.Mockito.verify(threadMetaService)
                 .updateTags(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.eq("t1"),
                         org.mockito.ArgumentMatchers.eq(List.of("onboarding")));
+    }
+
+    @Test
+    @DisplayName("GET /chat/{threadId} — 히스토리 turn id들로 curatedQaService.findFailedTurnIds를 호출해 모델에 노출")
+    void chat_existingThread_exposesCuratedEmbedFailedTurnIds() throws Exception {
+        when(threadMetaService.findById(any(), eq("thread-01"))).thenReturn(Optional.of(
+                new ThreadMeta("thread-01", "user", "제목", "latest", "now", "now", "COST_FIRST", "")));
+        List<MemoryRepository.Turn> turns = List.of(
+                new MemoryRepository.Turn(1L, "q1", "a1", null, null, 0, 0, 0, "local", 1, "LIKE"),
+                new MemoryRepository.Turn(2L, "q2", "a2", null, null, 0, 0, 0, "local", 1, null));
+        when(memoryService.getTurns(any(), eq("thread-01"))).thenReturn(turns);
+        when(curatedQaService.findFailedTurnIds(List.of(1L, 2L))).thenReturn(Set.of(1L));
+
+        // base.html reads principal.displayName — needs a real AppUserDetails, not @WithMockUser's default.
+        AppUserDetails principal = new AppUserDetails("id-1", "user@local", "", "User", "USER", true, false);
+
+        mvc.perform(get("/chat/thread-01").with(user(principal)))
+                .andExpect(status().isOk())
+                .andExpect(model().attribute("curatedEmbedFailedTurnIds", Set.of(1L)));
+
+        verify(curatedQaService).findFailedTurnIds(List.of(1L, 2L));
     }
 }

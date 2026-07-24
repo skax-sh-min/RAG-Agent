@@ -23,6 +23,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  *  - deactivate: status=inactive 전환, id/스냅샷은 보존
  *  - deactivate: 존재하지 않는 turn → no-op
  *  - findBySourceTurnId / findById: 없는 경우 empty
+ *  - embed_status: 신규 행 기본값 'ok', markEmbedFailed/markEmbedOk 전환, findFailedTurnIds 필터링
  */
 class CuratedQaRepositoryTest {
 
@@ -143,5 +144,45 @@ class CuratedQaRepositoryTest {
 
         assertThat(page1).containsExactly(third, second); // newest first
         assertThat(page2).containsExactly(first);
+    }
+
+    @Test
+    @DisplayName("§10.10 embedding-fallback — 신규 행은 embed_status='ok'로 시작한다")
+    void newRow_defaultsToEmbedStatusOk() {
+        long id = repo.upsertActive(1L, "u1", "t1", "질문", "답변", "latest");
+
+        assertThat(repo.findById(id).orElseThrow().embedStatus()).isEqualTo("ok");
+    }
+
+    @Test
+    @DisplayName("§10.10 embedding-fallback — markEmbedFailed/markEmbedOk가 embed_status를 전환한다")
+    void markEmbedFailedAndOk_flipEmbedStatus() {
+        long id = repo.upsertActive(1L, "u1", "t1", "질문", "답변", "latest");
+
+        repo.markEmbedFailed(id);
+        assertThat(repo.findById(id).orElseThrow().embedStatus()).isEqualTo("failed");
+
+        repo.markEmbedOk(id);
+        assertThat(repo.findById(id).orElseThrow().embedStatus()).isEqualTo("ok");
+    }
+
+    @Test
+    @DisplayName("§10.10 embedding-fallback — findFailedTurnIds는 active+failed인 turn만 반환한다")
+    void findFailedTurnIds_returnsOnlyActiveAndFailed() {
+        repo.upsertActive(1L, "u1", "t1", "질문1", "답변1", "latest"); // active, ok
+        long id2 = repo.upsertActive(2L, "u1", "t1", "질문2", "답변2", "latest");
+        repo.markEmbedFailed(id2); // active, failed
+        long id3 = repo.upsertActive(3L, "u1", "t1", "질문3", "답변3", "latest");
+        repo.markEmbedFailed(id3);
+        repo.deactivate(3L); // inactive, failed — should NOT be reported
+
+        assertThat(repo.findFailedTurnIds(List.of(1L, 2L, 3L, 999L))).containsExactly(2L);
+    }
+
+    @Test
+    @DisplayName("§10.10 embedding-fallback — findFailedTurnIds는 빈 입력에 빈 Set을 반환한다")
+    void findFailedTurnIds_emptyInput_returnsEmptySet() {
+        assertThat(repo.findFailedTurnIds(List.of())).isEmpty();
+        assertThat(repo.findFailedTurnIds(null)).isEmpty();
     }
 }

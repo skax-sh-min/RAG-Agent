@@ -14,6 +14,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  *  - 문장 속 "참고"라는 단어는 오탐 없이 보존
  *  - 섹션이 없으면 원문 그대로(strip만 적용)
  *  - null 입력 → 빈 문자열
+ *  - extractCoreSections: 상세 설명~설정/주의사항만 남기고 요약/참고 제거, 강조 마커 제거,
+ *    "## 상세 설명" 헤딩이 없는 답변(Direct 모드 등)은 빈 문자열
  */
 class CuratedTextUtilsTest {
 
@@ -68,5 +70,64 @@ class CuratedTextUtilsTest {
     @DisplayName("null 입력 → 빈 문자열")
     void nullInputReturnsEmpty() {
         assertThat(CuratedTextUtils.stripReferenceSection(null)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("extractCoreSections — 상세 설명부터 끝까지(참고 제외)만 남기고 요약은 버린다")
+    void extractCoreSections_keepsDetailOnward_dropsSummaryAndReferences() {
+        String answer = """
+                ## 요약
+                핵심 한 줄 요약.
+
+                ## 상세 설명
+                자세한 설명입니다.
+
+                ## 예시/코드
+                ```java
+                System.out.println("hi");
+                ```
+
+                ## 설정/주의사항
+                주의할 점입니다.
+
+                ## 참고
+                 - [파일.docx | p.1] (섹션)""";
+
+        String result = CuratedTextUtils.extractCoreSections(answer);
+
+        assertThat(result).startsWith("## 상세 설명");
+        assertThat(result).contains("자세한 설명입니다.", "## 예시/코드", "System.out.println",
+                "## 설정/주의사항", "주의할 점입니다.");
+        assertThat(result).doesNotContain("## 요약", "핵심 한 줄 요약", "## 참고", "파일.docx");
+    }
+
+    @Test
+    @DisplayName("extractCoreSections — '**'/'__' 강조 마커를 제거하되 내부 텍스트는 보존한다")
+    void extractCoreSections_stripsEmphasisMarkers() {
+        String answer = """
+                ## 요약
+                요약.
+
+                ## 상세 설명
+                **중요한** 내용과 __강조된__ 문구가 있습니다.""";
+
+        String result = CuratedTextUtils.extractCoreSections(answer);
+
+        assertThat(result).contains("중요한 내용과 강조된 문구가 있습니다.");
+        assertThat(result).doesNotContain("**", "__");
+    }
+
+    @Test
+    @DisplayName("extractCoreSections — '## 상세 설명' 헤딩이 없으면 빈 문자열 (Direct 모드 답변 등)")
+    void extractCoreSections_noDetailHeading_returnsEmpty() {
+        String answer = "안녕하세요! 무엇을 도와드릴까요?";
+
+        assertThat(CuratedTextUtils.extractCoreSections(answer)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("extractCoreSections — null 입력 → 빈 문자열")
+    void extractCoreSections_nullInput_returnsEmpty() {
+        assertThat(CuratedTextUtils.extractCoreSections(null)).isEmpty();
     }
 }

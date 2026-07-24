@@ -13,11 +13,13 @@ import org.springframework.ai.document.Document;
 
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -37,6 +39,10 @@ import static org.mockito.Mockito.when;
  *  - onLike → 임베딩 호출 자체는 성공했지만 그 사이 좋아요가 취소됨 → 보정 삭제(커밋 후 체크포인트)
  *  - onUnlike: 활성 엔트리 존재 → 비활성화 + 벡터 삭제
  *  - onUnlike: 엔트리 없음 / 이미 비활성 → no-op
+ *  - embed 임베딩 실패 fallback: 전체 텍스트 실패 시 상세 섹션만으로 재시도 → 성공하면 markEmbedOk,
+ *    둘 다 실패하거나 애초에 상세 섹션이 없으면(Direct 모드 등) markEmbedFailed
+ *  - updateAnswer 재임베딩도 동일한 fallback/마킹 로직 공유
+ *  - findFailedTurnIds — repository 위임
  */
 class CuratedQaServiceTest {
 
@@ -69,7 +75,7 @@ class CuratedQaServiceTest {
 
     private static CuratedQaRepository.CuratedQa curatedQa(long id, String status, String question, String answer) {
         return new CuratedQaRepository.CuratedQa(id, TURN_ID, UID, TID, question, answer, status, "v1",
-                "2026-01-01", "2026-01-01");
+                "2026-01-01", "2026-01-01", "ok");
     }
 
     @Test
@@ -269,5 +275,110 @@ class CuratedQaServiceTest {
         when(repository.findBySourceTurnId(TURN_ID)).thenReturn(Optional.of(curatedQa(1L, "inactive", "질문", "답변")));
 
         assertThat(service.findActiveByTurn(TURN_ID)).isEmpty();
+    }
+
+    // ── §10.10 embedding-fallback (재시도 + embed_status 마킹) ─────────────────
+
+    private static final String RAG_FORMAT_ANSWER = """
+            ## 요약
+            핵심 요약입니다.
+
+            ## 상세 설명
+            자세한 설명 내용입니다.
+
+            ## 참고
+            - [파일.docx | p.1] (섹션)""";
+
+    @Test
+    @DisplayName("embed — 전체 텍스트 임베딩이 바로 성공하면 재시도 없이 markEmbedOk")
+    void embed_fullTextSucceeds_singleCallAndMarksOk() {
+        when(memoryService.getTurn(UID, TID, TURN_ID)).thenReturn(Optional.of(turn("질문", RAG_FORMAT_ANSWER)));
+        when(repository.upsertActive(anyLong(), any(), any(), any(), any(), any())).thenReturn(1L);
+        when(repository.findById(1L)).thenReturn(Optional.of(curatedQa(1L, "active", "질문", RAG_FORMAT_ANSWER)));
+        when(memoryService.getFeedback(UID, TID, TURN_ID))
+                .thenReturn(Optional.of(new MemoryRepository.FeedbackRow("LIKE")));
+
+        service.onLike(UID, TID, TURN_ID);
+
+        verify(vectorStore, timeout(2000).times(1)).add(any(), any(), any());
+        verify(repository, timeout(2000)).markEmbedOk(1L);
+        verify(repository, never()).markEmbedFailed(anyLong());
+    }
+
+    @Test
+    @DisplayName("embed — 전체 임베딩 실패 시 상세 섹션만으로 재시도해 성공하면 markEmbedOk")
+    void embed_fullTextFails_retriesWithCoreSectionsAndSucceeds() {
+        when(memoryService.getTurn(UID, TID, TURN_ID)).thenReturn(Optional.of(turn("질문", RAG_FORMAT_ANSWER)));
+        when(repository.upsertActive(anyLong(), any(), any(), any(), any(), any())).thenReturn(1L);
+        when(repository.findById(1L)).thenReturn(Optional.of(curatedQa(1L, "active", "질문", RAG_FORMAT_ANSWER)));
+        when(memoryService.getFeedback(UID, TID, TURN_ID))
+                .thenReturn(Optional.of(new MemoryRepository.FeedbackRow("LIKE")));
+        doThrow(new RuntimeException("input too long")).doNothing()
+                .when(vectorStore).add(any(), any(), any());
+
+        service.onLike(UID, TID, TURN_ID);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<Document>> docsCaptor = ArgumentCaptor.forClass(List.class);
+        verify(vectorStore, timeout(2000).times(2)).add(any(), any(), docsCaptor.capture());
+        String fallbackSearchText = String.valueOf(
+                docsCaptor.getAllValues().get(1).get(0).getMetadata().get(MetaKey.SEARCH_TEXT));
+        assertThat(fallbackSearchText).contains("질문", "상세 설명", "자세한 설명 내용").doesNotContain("요약", "참고");
+        verify(repository, timeout(2000)).markEmbedOk(1L);
+        verify(repository, never()).markEmbedFailed(anyLong());
+    }
+
+    @Test
+    @DisplayName("embed — 전체+재시도 모두 실패하면 markEmbedFailed, markEmbedOk는 호출 안 함")
+    void embed_bothAttemptsFail_marksFailed() {
+        when(memoryService.getTurn(UID, TID, TURN_ID)).thenReturn(Optional.of(turn("질문", RAG_FORMAT_ANSWER)));
+        when(repository.upsertActive(anyLong(), any(), any(), any(), any(), any())).thenReturn(1L);
+        when(repository.findById(1L)).thenReturn(Optional.of(curatedQa(1L, "active", "질문", RAG_FORMAT_ANSWER)));
+        when(memoryService.getFeedback(UID, TID, TURN_ID))
+                .thenReturn(Optional.of(new MemoryRepository.FeedbackRow("LIKE")));
+        doThrow(new RuntimeException("input too long")).when(vectorStore).add(any(), any(), any());
+
+        service.onLike(UID, TID, TURN_ID);
+
+        verify(vectorStore, timeout(2000).times(2)).add(any(), any(), any());
+        verify(repository, timeout(2000)).markEmbedFailed(1L);
+        verify(repository, never()).markEmbedOk(anyLong());
+    }
+
+    @Test
+    @DisplayName("embed — 답변에 '## 상세 설명'이 없으면(Direct 모드 등) 재시도 없이 바로 markEmbedFailed")
+    void embed_noCoreSectionFallback_failsWithoutRetry() {
+        String directAnswer = "안녕하세요! 무엇을 도와드릴까요?";
+        when(memoryService.getTurn(UID, TID, TURN_ID)).thenReturn(Optional.of(turn("질문", directAnswer)));
+        when(repository.upsertActive(anyLong(), any(), any(), any(), any(), any())).thenReturn(1L);
+        when(repository.findById(1L)).thenReturn(Optional.of(curatedQa(1L, "active", "질문", directAnswer)));
+        when(memoryService.getFeedback(UID, TID, TURN_ID))
+                .thenReturn(Optional.of(new MemoryRepository.FeedbackRow("LIKE")));
+        doThrow(new RuntimeException("input too long")).when(vectorStore).add(any(), any(), any());
+
+        service.onLike(UID, TID, TURN_ID);
+
+        verify(vectorStore, timeout(2000).times(1)).add(any(), any(), any()); // 재시도 자체를 안 함
+        verify(repository, timeout(2000)).markEmbedFailed(1L);
+    }
+
+    @Test
+    @DisplayName("updateAnswer — 재임베딩이 전체+재시도 모두 실패하면 markEmbedFailed (DB 저장 자체는 성공)")
+    void updateAnswer_reembedFails_marksFailed() {
+        when(repository.findById(1L)).thenReturn(Optional.of(curatedQa(1L, "active", "질문", RAG_FORMAT_ANSWER)));
+        doThrow(new RuntimeException("too long")).when(vectorStore).add(any(), any(), any());
+
+        boolean result = service.updateAnswer(1L, "새 답변");
+
+        assertThat(result).isTrue();
+        verify(repository, timeout(2000)).markEmbedFailed(1L);
+    }
+
+    @Test
+    @DisplayName("findFailedTurnIds — repository로 위임한다")
+    void findFailedTurnIds_delegatesToRepository() {
+        when(repository.findFailedTurnIds(List.of(1L, 2L))).thenReturn(Set.of(2L));
+
+        assertThat(service.findFailedTurnIds(List.of(1L, 2L))).containsExactly(2L);
     }
 }

@@ -24,7 +24,7 @@
 
 ### 🔵 진행할 것 (우선순위 순)
 
-> **2026-07-08 재우선순위화**: 실배포 기준(폐쇄망·no-auth 단일 운영자)에서 가치가 없는 **멀티유저(`auth.enabled=true`) 전용 작업**(§6.19·§6.20·§6.16.2·Phase 4)은 전부 후속으로 내렸다(사유는 아래 후속 표의 트리거 열 참조). §6.15(스토리지 쿼터)만 설계상 전역 상한이 1차 권장이라 단일 운영자에도 적용되므로 지금 진행 그룹에 남겼다.
+> **재우선순위화**: 실배포 기준(폐쇄망·no-auth 단일 운영자)에서 가치가 없는 **멀티유저(`auth.enabled=true`) 전용 작업**(§6.19·§6.20·§6.16.2·Phase 4)은 전부 후속으로 내렸다(사유는 아래 후속 표의 트리거 열 참조). §6.15(스토리지 쿼터)만 설계상 전역 상한이 1차 권장이라 단일 운영자에도 적용되므로 지금 진행 그룹에 남겼다.
 
 **🟢 지금 진행 (no-auth 단일 운영자 배포에도 바로 적용)**
 
@@ -44,7 +44,7 @@
 | 3 | **§6.16.2 계정 잠금 상태 피드백** | auth 모드 로그인 UX — no-auth엔 로그인 자체가 없음 |
 | 4 | **Phase 4** (조건부) — §7.1 OAuth2 소셜 로그인 · §7.2 PostgreSQL 마이그레이션 · §7.3 관리자 페이지 확장 | §3 트리거 참조(가입 마찰·SQLite 한계 신호·다중 사용자 운영 관리 필요 시) |
 
-> 검색 고도화 **Phase 7-D**(sqlite-vec 단일 스캔·cross-encoder 리랭커·시맨틱 응답 캐시)는 2026-07-08 재검토에서 범위 제외(사유·재개 신호는 §10.5) — Phase 7의 유일한 미착수였던 항목.
+> 검색 고도화 **Phase 7-D**(sqlite-vec 단일 스캔·cross-encoder 리랭커·시맨틱 응답 캐시)는 재검토에서 범위 제외(사유·재개 신호는 §10.5) — Phase 7의 유일한 미착수였던 항목.
 >
 > 스키마 관리: **Flyway(V1·V2 baseline) + 런타임 멱등 DDL 혼용** — 신규 컬럼은 새 Flyway 파일이 아니라 런타임 `ALTER TABLE ADD COLUMN` 패턴으로 추가한다(§13).
 
@@ -161,7 +161,7 @@ Caddy(자동 TLS·HTTP/2)로 `app:8080` 프록시 + 보안 헤더(HSTS 등). Spr
 
 ## 6. Phase 3 — 운영 견고화 🟡 일부 완료
 
-> **2026-07-05 재배열**: 완료 항목을 앞쪽에(기반 운영 항목 → LLM 사용량 클러스터 → 대화/컨텍스트 클러스터), 미착수 항목을 뒤쪽에 우선순위 순으로 재배치했다. 번호가 이 문서 다른 곳(§7·§12·§13)에서도 참조되므로 교차 참조는 전부 새 번호로 갱신됨.
+> **재배열**: 완료 항목을 앞쪽에(기반 운영 항목 → LLM 사용량 클러스터 → 대화/컨텍스트 클러스터), 미착수 항목을 뒤쪽에 우선순위 순으로 재배치했다. 번호가 이 문서 다른 곳(§7·§12·§13)에서도 참조되므로 교차 참조는 전부 새 번호로 갱신됨.
 
 ### 6.1 Rate Limiting — Bucket4j ✅ 완료
 
@@ -209,13 +209,13 @@ Assistant 응답에 👍/👎 토글 추가(`conversation_turns.feedback`, `PATC
 
 입력 시작 시(첫 글자) `ConversationSummarizerService`가 이전 대화를 LOCAL 프로바이더로 미리 요약해 스레드별 LRU 캐시(최대 3개, TTL 15초)에 저장 — 캐시 있으면 "요약+최근 2턴", 없으면 기존 `getHistory()`로 조용히 폴백.
 
-### 6.10 LLM 사용량 — 백그라운드(비-채팅) 사용량 분리 기록 ✅ 완료 (2026-07-05)
+### 6.10 LLM 사용량 — 백그라운드(비-채팅) 사용량 분리 기록 ✅ 완료
 
 채팅 외 LLM 호출(요약·키워드추출·서식교정·TXT→MD·제목생성)을 `BackgroundUsage` 접두사(`summary:`/`keyword:`/`mdcorrect:`/`txt2md:`/`title:`)로 채팅과 분리 기록, `/llm-usage`에 `type=BACKGROUND` 카드로 노출. 조사 중 발견한 핵심 채팅 경로 자체의 추적 공백은 §6.14로 분리했다.
 
 ---
 
-### 6.11 대화 컨텍스트 예산 정합성 + 설정 외부화 ✅ 완료 (2026-07-07)
+### 6.11 대화 컨텍스트 예산 정합성 + 설정 외부화 ✅ 완료
 
 §6.9 도입 후 요약 경로에는 없던 문자 예산 체크를 `MemoryService.maxConversationChars()`(단일 진실 원천, `max(1000, LLM_MAX_TOKENS × 0.75)`)로 통일하고, `FETCH_LIMIT` 등 하드코딩 5개 값을 `app.memory.*`/`app.summary.*` 프로퍼티로 외부화.
 
@@ -227,13 +227,13 @@ Assistant 응답에 👍/👎 토글 추가(`conversation_turns.feedback`, `PATC
 
 ---
 
-### 6.13 설정 페이지 — LLM/RAG 옵션 조회·부분 수정 ✅ 완료 (2026-07-14)
+### 6.13 설정 페이지 — LLM/RAG 옵션 조회·부분 수정 ✅ 완료
 
 신규 `GET /settings`(게스트 조회 가능, 편집은 `isAdmin` 게이트)에서 LLM/임베딩/RAG 설정을 조회. 검색 튜닝 값(초기 7개 → 이후 topK·멀티쿼리 확장·하이브리드까지 10개)은 SQLite `settings_override` 테이블 기반 오버레이 레이어로 **재기동 없이 다음 검색부터 반영**(`RetrievalService`가 매 호출 `props.xxxSafe()`로 재조회하도록 변경). 이후 확장(Tier A/B)으로 인덱싱/청킹 값(청크 크기·오버랩·최소 크기·동시 파일 처리 수·동시 LLM 호출 수)도 핫 수정 대상이 되어, 소비처(`DocumentIndexer`·`MarkdownCorrectionService.correct()`·`LazyVisionService`)가 매 작업마다 재조회해 **다음 인덱싱/↺ 재인덱싱부터 반영**된다(`MarkdownCorrectionService`의 생성자 캐시를 제거해 세 소비처의 동작을 일치시킴). 빈 생성 시점에 고정되는 값(rerank-enabled·쿼리 임베딩 캐시 등)과 기본 라우팅 모드는 조회 전용. 수정은 `/admin/settings/update|reset`(§6.17 ROLE_ADMIN 상속) + 감사 로그 기록.
 
 ---
 
-### 6.14 LLM 사용량 — 핵심 채팅 경로 추적 확장 ✅ 완료 (2026-07-06)
+### 6.14 LLM 사용량 — 핵심 채팅 경로 추적 확장 ✅ 완료
 
 `AnswerService`/`DirectAnswerService`/`ClassifierService`/`RerankerService`/`VisionDescriptionService`/`ImageTypeClassifier`/`RetrievalService`의 `MultiQueryExpander` 7곳이 `LlmRouter`를 거치지 않아 실제 채팅 사용량이 `/llm-usage`에 전혀 안 잡히던 문제(사용자 실사용 중 보고)를 발견·수정 — 블로킹 호출은 `executeWithTracking()`으로, 스트리밍은 `LlmRouter.recordApproxUsage()`로, 프레임워크가 내부에서 자체 `ChatClient`를 구성해 가로챌 수 없는 `MultiQueryExpander`는 신규 `TrackingChatModel` 데코레이터로 해결.
 
@@ -261,7 +261,7 @@ Assistant 응답에 👍/👎 토글 추가(`conversation_turns.feedback`, `PATC
 
 ---
 
-### 6.16 사용자 경험(UX) 개선 (2026-07-08 리뷰 도출) 🟡 일부 완료 (6.16.1)
+### 6.16 사용자 경험(UX) 개선 🟡 일부 완료 (6.16.1)
 
 **6.16.1 스트리밍 답변·인덱싱 중단(취소) 컨트롤 부재 ✅ 완료**
 
@@ -280,15 +280,15 @@ no-auth 기본 배포에서 `/documents` 쓰기와 `/admin/**`이 로그인 없�
 
 ---
 
-### 6.18 Direct 메시지 전용 LLM Temperature 분리 ✅ 완료 (2026-07-09)
+### 6.18 Direct 메시지 전용 LLM Temperature 분리 ✅ 완료
 
 라우터 경로가 Spring AI 오토컨피규레이션을 우회해 `LLM_TEMPERATURE` 등 기존 환경변수가 전부 죽은 설정이던 문제 — `LlmConfig`/`AnswerService`/`DirectAnswerService`의 하드코딩 4곳을 제거하고 config 기반으로 전환. 신규 `app.llm.temperature`(일반/RAG)·`app.llm.direct-temperature`(Direct 전용, 기본 0.1, `[0,0.2]` clamp)·`app.llm.max-tokens`(기본 6000). **direct-temperature만 `DirectAnswerService`가 매 호출 재조회해 핫 수정**(블로킹은 `Prompt`, 스트리밍은 `ChatCompletionRequest`에 주입), §6.13 `/settings`에 슬라이더로 노출. 일반 temperature/max-tokens는 프로바이더 빈에 baked라 조회 전용(재기동 필요). 회귀 테스트: `AppPropertiesOverrideTest`·`DirectAnswerServiceTest`.
 
-**후속(2026-07-17)**: `MemoryService`(대화 컨텍스트 예산)·`MarkdownCorrectionService`(MD 교정 섹션 크기)가 여전히 죽은 `spring.ai.openai.chat.options.max-tokens`(기본 8000, `LLM_MAX_TOKENS`와 별개 기본값)를 읽던 중복을 발견해 `props.llmSafe().maxTokens()`(6000) 공유로 통일, 죽은 `application.properties` 라인 제거. **동작 변경**: 대화 히스토리 예산 6000→4500자, MD 교정 섹션 크기 3750→2750자로 기본값이 줄어듦(과거 분량을 유지하려면 `LLM_MAX_TOKENS` 상향).
+**후속**: `MemoryService`(대화 컨텍스트 예산)·`MarkdownCorrectionService`(MD 교정 섹션 크기)가 여전히 죽은 `spring.ai.openai.chat.options.max-tokens`(기본 8000, `LLM_MAX_TOKENS`와 별개 기본값)를 읽던 중복을 발견해 `props.llmSafe().maxTokens()`(6000) 공유로 통일, 죽은 `application.properties` 라인 제거. **동작 변경**: 대화 히스토리 예산 6000→4500자, MD 교정 섹션 크기 3750→2750자로 기본값이 줄어듦(과거 분량을 유지하려면 `LLM_MAX_TOKENS` 상향).
 
 ---
 
-### 6.19 보안 하드닝 (2026-07-08 코드 리뷰 도출) 🔵 미착수 — 인증 활성 배포 시 우선순위(후속 1순위)
+### 6.19 보안 하드닝 🔵 미착수 — 인증 활성 배포 시 우선순위(후속 1순위)
 
 > **범위 주의**: 아래 3건은 **`app.auth.enabled=true`(멀티유저 인증) 배포에서만** 의미가 있다. 폐쇄망 단일 운영자(no-auth) 기본 배포에는 노출면이 없다 — 그래서 §6.20/6.15(쿼터)보다 뒤가 아니라 "인증 켜고 다중 사용자로 열 때 반드시 선행"으로 조건부 우선순위다. 각 항목은 실제 코드 위치와 재현 조건을 명시했다.
 
@@ -332,11 +332,11 @@ no-auth 기본 배포에서 `/documents` 쓰기와 `/admin/**`이 로그인 없�
 
 ---
 
-### 6.21 소형(경량) LLM 분리 — 태스크별 모델 라우팅 + 멀티 LLM 처리량 확장 ✅ 완료 (2026-07-20)
+### 6.21 소형(경량) LLM 분리 — 태스크별 모델 라우팅 + 멀티 LLM 처리량 확장 ✅ 완료
 
 추론이 필요 없는 고빈도 백그라운드 호출(키워드+맥락 추출·대화 요약·제목 생성·MultiQuery 확장)을 신규 `TaskType.MICRO_TEXT`(`LIGHT_TEXT`/`BOTH`에 폴백)로 분리해 500MB급 소형 로컬 모델로 오프로딩 — 분류·직답은 품질 유지를 위해 큰 모델에 남김. 임베딩은 `LoadBalancingEmbeddingModel`(다중 엔드포인트 least-in-flight)+서브배치 병렬화로 처리량 확장, 대화 응답 쪽 로드밸런싱은 §6.12 재사용. **전부 opt-in(소형/추가 엔드포인트 미등록 시 기존 동작 그대로) → 회귀 0**. 설정·런북: [LLM_ROUTING.md §9](LLM_ROUTING.md) · [OPERATOR_MANUAL §3.2·§5.4](OPERATOR_MANUAL.md). 테스트: `LlmProviderTest`·`LoadBalancingEmbeddingModelTest` 신규 + 백그라운드 서비스 테스트 3건 갱신.
 
-**실측 게이트 — 부분 검증으로 종료 (2026-07-20)**: 라이브 듀얼티어(local-fast=Qwen3.5-0.8B/MICRO_TEXT + local=gemma-4-E4B/TEXT)로 §10.7.5 하네스 실행 — 색인된 문서(batch 골든셋 6건) 전부 recall@10=1.0으로 **소형 모델 라우팅이 검색 품질을 회귀시키지 않음을 확인**. 전체 baseline(0.962) 정식 대조는 현재 코퍼스에 arch/sample 문서가 미색인이라 보류(§6.21과 무관한 코퍼스 갭, 원인 상세는 git 이력 참조) — 재색인 후 `mvn test -Dtest=SearchQualityEvaluationTest -Dsearch-eval.enabled=true`로 언제든 재현 가능.
+**실측 게이트 — 부분 검증으로 종료**: 라이브 듀얼티어(local-fast=Qwen3.5-0.8B/MICRO_TEXT + local=gemma-4-E4B/TEXT)로 §10.7.5 하네스 실행 — 색인된 문서(batch 골든셋 6건) 전부 recall@10=1.0으로 **소형 모델 라우팅이 검색 품질을 회귀시키지 않음을 확인**. 전체 baseline(0.962) 정식 대조는 현재 코퍼스에 arch/sample 문서가 미색인이라 보류(§6.21과 무관한 코퍼스 갭, 원인 상세는 git 이력 참조) — 재색인 후 `mvn test -Dtest=SearchQualityEvaluationTest -Dsearch-eval.enabled=true`로 언제든 재현 가능.
 
 **주의**: 소형+대형 동시 상주 VRAM/RAM은 500MB급이라 부담이 작지만 co-located면 합산 확인. 임베딩 다중 엔드포인트는 동일 모델·차원이어야 한다(섞으면 인덱스 손상). sqlite-vec 스트리밍 삽입은 §10.9.3 메모리 상한과 속도의 트레이드오프라 opt-in이다.
 
@@ -363,8 +363,6 @@ Google/GitHub 제공자 등록. 가입 흐름은 **기존 폼 가입과 동등**
 4. Spring 프로파일 분리: `application-sqlite.properties` / `application-postgres.properties`
 
 ### 7.3 관리자 페이지 (부분 존재 → 확장)
-
-> **현재 코드 확인 (2026-07-02)**: `/admin`·`/admin/chunks`는 **이미 존재**(`AdminController`/`AdminService`, Phase 5.8) — Vector Store 상태 카드 + 청크 브라우징/수정/삭제(두 백엔드). 아래는 **운영 관리 기능 확장**으로 범위 재정의.
 
 - `ROLE_ADMIN` 전용 경로 확장(현재 청크 관리 위주 → 사용자/운영 관리 추가). ※ DB `role` 값은 `ADMIN` 문자열, 인증은 `NoAuthAutoLoginFilter`가 no-auth 모드에서 첫 `ADMIN` 사용자로 자동 인증.
 - 사용자 목록·상태(잠금/활성), 전체 LLM 사용량(§6.5~6.7과 연계), 감사 로그(`data/audit/audit.log` NDJSON) 조회 뷰.
@@ -462,7 +460,7 @@ G1~G4 코드/문서 완료, G5(라우팅 계층의 외부 무선택)도 완료. 
 | §10.7.2 하이브리드 기본 활성화 ✅ | `SEARCH_HYBRID_ENABLED` false→true | — |
 | §10.7.3 2글자 질의 LIKE 폴백 ✅ | trigram 미만 질의 존재-신호 보강 | `KeywordSearchRepository` |
 | §10.7.4 유사도 임계값 과조회 ✅ | `topK×2` 조회 후 재절단 | Chroma/sqlite-vec 양쪽 |
-| §10.7.5 검색 품질 평가 하네스 ✅ | 골든셋 26문항 + recall@k/nDCG@k | `evaluation/` (2026-07-16) |
+| §10.7.5 검색 품질 평가 하네스 ✅ | 골든셋 26문항 + recall@k/nDCG@k | `evaluation/` |
 | §10.8.1 MultiQuery 지연 병렬화 ✅ | min-length 상향 + 원본검색 병렬 실행 | `RetrievalService.execute()` |
 | §10.8.2 키워드 추출 배치화 ✅ | 청크 N개를 LLM 1콜로 | `KeywordExtractor` |
 | §10.8.3 SQLite 배치삽입 트랜잭션화 ✅ | 배치 2개 → 트랜잭션 1개 | `SqliteVecVectorStoreProvider` |
@@ -501,7 +499,7 @@ G1~G4 코드/문서 완료, G5(라우팅 계층의 외부 무선택)도 완료. 
 
 세부 산출물은 위 표 참고. 보완 메모: §10.9.1 벡터를 그대로 되돌려 쓰는 `updateTags()`는 영향 없음. §10.9.2 BLOB 직렬화는 기존 데이터와 호환(백필 불필요) — 폐쇄망 vec0 빌드의 BLOB 미지원 가능성은 낮지만 백엔드 전환 시 문서 1건으로 우선 확인 권장(OPERATOR_MANUAL.md 기록). §10.9.4 캐시 키는 SHA-256 해시로 고정 크기화.
 
-### 10.10 좋아요 기반 큐레이션 Q&A 지식화 ✅ ①②③④ 전체 완료(2026-07-22)
+### 10.10 좋아요 기반 큐레이션 Q&A 지식화 ✅ ①②③④ 전체 완료
 
 > Phase 7의 원래 17건(§10.1~10.9) 완료 **이후** 추가된 신규 설계다. 채팅 응답 중 **좋아요(LIKE)** 받은 답변을 (편집 가능한) 큐레이션 Q&A로 승격→별도 임베딩하고, 다음 검색부터 **가중 RRF 축**으로 활용해 반복·FAQ성 질문의 정확도를 높인다. §10.5에서 범위 제외한 "시맨틱 응답 캐시"의 **인간 검수·편집 가능 버전** — 답변을 그대로 반환(캐시)하는 대신 검색 축의 근거로 주입하므로 stale 위험·무효화 복잡도를 낮춘다.
 
@@ -515,6 +513,7 @@ G1~G4 코드/문서 완료, G5(라우팅 계층의 외부 무선택)도 완료. 
 | ② 임베딩 | `CuratedQaService`(신규), `CuratedTextUtils`(신규) | `onLike()`/`onUnlike()` — 3초 디바운스 + 2-체크포인트 레이스 가드(즉시 취소 시 임베딩 API 호출 자체 생략, 호출 도중 취소 시 보정 삭제) |
 | ③ 검색 융합 | `RetrievalService.mergeRrf()` 7-arg 오버로드, `AppProperties`/`SettingsKeys`/`SettingsService` | 예약 version `"curated"` 축을 가중 RRF에 병합. `search.curated-qa-enabled`(기본 true)/`search.curated-qa-weight`(기본 1.5) — `/settings` 핫 수정 + `SEARCH_CURATED_QA_ENABLED`/`SEARCH_CURATED_QA_WEIGHT` 환경변수. `formatSource()`/`buildAnswerPrompt()`에 고정 라벨 분기 |
 | ④ 관리 UI | `OperationsController`/`AdminController`(수정) | 본인: 채팅 버블 편집 아이콘 → `GET`/`PATCH /ui/threads/{id}/turns/{id}/curated`(기존 소유권 체크 재사용). 관리자: `/admin` 큐레이션 카드 → `GET/POST/DELETE /admin/curated/{id}`(강제 삭제 가능). 두 경로 모두 `CuratedQaService.updateAnswer()` 공유(중복 로직 없음) |
+| ⑤ 임베딩 실패 대응 | `CuratedQaService.tryEmbedWithFallback()`, `CuratedTextUtils.extractCoreSections()`, `curated_qa.embed_status` 컬럼(신규) | 전체 질문+답변 임베딩이 실패(주로 임베딩 서버 입력 한도 초과)하면 답변의 핵심 섹션(상세 설명/예시·코드/설정·주의사항 — 요약·참고 제외, `**`/`__` 강조 마커 제거)만으로 1회 재시도. 그래도 실패하거나 애초에 이 RAG 5단 형식이 아닌 답변(Direct 모드 등)이면 `embed_status='failed'`로 기록 — 채팅 버블(본인)과 `/admin` 큐레이션 패널(관리자) 양쪽에 "임베딩 실패" 배지로 노출(다음 페이지 로드 시; 백그라운드 임베딩이라 실시간 알림은 불가) |
 
 **확정된 정책**:
 - 가시성=전체 공유, 답변은 verbatim 반환이 아닌 LLM 근거로 주입(오답 증폭 방지, `/admin`에서 가중치·편집·삭제로 통제)
@@ -556,7 +555,7 @@ G1~G4 코드/문서 완료, G5(라우팅 계층의 외부 무선택)도 완료. 
 
 ## 12. 의존성 변경 사항 (pom.xml)
 
-> **2026-07-08 대폭 압축**: 완료된 Phase의 의존성 이력·설정 덤프는 **pom.xml/application.properties 자체가 단일 출처**라 여기 중복 유지는 드리프트 위험만 키운다. 코드에서 바로 확인 안 되는, 실제로 유용한 사실만 남긴다.
+> **압축**: 완료된 Phase의 의존성 이력·설정 덤프는 **pom.xml/application.properties 자체가 단일 출처**라 여기 중복 유지는 드리프트 위험만 키운다. 코드에서 바로 확인 안 되는, 실제로 유용한 사실만 남긴다.
 
 - **`flyway-database-sqlite`는 불필요로 판명** — SQLite 마이그레이션 지원은 `flyway-core`에 이미 내장되어 있다. 다시 검토할 필요 없음.
 - **`app.security.*` 외부화는 미착수** — BCrypt cost(12)는 `SecurityConfig.java`에, 로그인 잠금(5회/15분)은 `AuthEventListener.java`(`MAX_ATTEMPTS`/`LOCK_MINUTES`)에 상수로 하드코딩되어 있다. 외부화 필요 시 `AppProperties`에 `SecurityConfig` record + `securitySafe()` 가드를 추가하고 이 두 지점을 프로퍼티 참조로 교체.

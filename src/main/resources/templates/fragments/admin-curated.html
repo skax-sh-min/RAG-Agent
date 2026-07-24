@@ -55,7 +55,11 @@
             </thead>
             <tbody>
             <tr th:each="c : ${curatedEntries}" th:id="'curated-row-' + ${c.id()}">
-                <td th:text="${c.question()}"></td>
+                <td>
+                    <span th:if="${c.embedStatus() == 'failed'}" class="badge bg-warning text-dark me-1"
+                          th:title="#{curated.embed.failed.hint}">⚠</span>
+                    <span th:text="${c.question()}"></span>
+                </td>
                 <td>
                     <div class="text-truncate" style="max-width:420px;"
                          th:title="${c.answer()}" th:text="${c.answer()}"></div>
