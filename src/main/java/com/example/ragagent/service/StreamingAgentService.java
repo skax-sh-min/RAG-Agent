@@ -136,8 +136,11 @@ public class StreamingAgentService {
                             .toBuilder().questionType(typeF.join()).build();
                 }
             }
-            // carry the selected search-scope tags into the graph state.
-            initial = initial.toBuilder().selectedTags(form.selectedTags()).build();
+            // carry the selected search-scope tags + answer-length mode into the graph state.
+            initial = initial.toBuilder()
+                    .selectedTags(form.selectedTags())
+                    .responseMode(form.responseModeOrDefault())
+                    .build();
 
             listener = new SseGraphListener(emitter, lastActivityNanos);
             AgentState result = agentGraph.runStreaming(initial, listener);

@@ -50,8 +50,9 @@ public class DirectAnswerService {
         // fresh per call, distinct from the general/RAG temperature baked into the provider default.
         double directTemp = props.llmSafe().directTemperature();
         RoutingMode effective = effectiveRoutingMode(state.routingMode());
+        int maxTokens = state.responseMode().maxTokens(props.llmSafe().maxTokens());
         String rawAnswer = llmRouter.executeGated(TaskType.TEXT, effective,
-                model -> model.call(buildPrompt(systemPrompt, userPrompt, directTemp)));
+                model -> model.call(buildPrompt(systemPrompt, userPrompt, directTemp, maxTokens)));
         String answer = (rawAnswer == null || rawAnswer.isEmpty()) ? null : rawAnswer;
         log.debug("[DirectAnswer] answer length={}", answer == null ? -1 : answer.length());
         return state.toBuilder().answer(answer).accumulateTokens(0, 0).build();
@@ -91,12 +92,17 @@ public class DirectAnswerService {
         return (mode == RoutingMode.DUAL) ? RoutingMode.COST_FIRST : mode;
     }
 
-    private static Prompt buildPrompt(String systemPrompt, String userPrompt, double temperature) {
-        // Attach temperature as a runtime option — OpenAiChatModel merges it over the provider's
-        // defaultOptions field-by-field, so this overrides only temperature (maxTokens/model stay).
+    private static Prompt buildPrompt(String systemPrompt, String userPrompt,
+                                      double temperature, int maxTokens) {
+        // Attach temperature + the response mode's token budget as runtime options —
+        // OpenAiChatModel merges them over the provider's defaultOptions field-by-field, so only
+        // these two are overridden (model etc. stay). maxTokens<=0 leaves the provider default.
+        OpenAiChatOptions.Builder opts = OpenAiChatOptions.builder().temperature(temperature);
+        if (maxTokens > 0) opts.maxTokens(maxTokens);
         return new Prompt(List.of(new SystemMessage(systemPrompt), new UserMessage(userPrompt)),
-                OpenAiChatOptions.builder().temperature(temperature).build());
+                opts.build());
     }
+
 
     private static String buildUserPrompt(AgentState state) {
         String history = state.conversationHistory();

@@ -235,14 +235,20 @@
                             <option th:value="${version}" th:text="${version}" selected>latest</option>
                         </select>
 
-                        <!-- 검색 스코프 태그 입력 (쉼표 구분, 비우면 전체 검색) -->
-                        <span class="input-group-text" th:title="#{chat.tags.tooltip}">
-                            <i class="bi bi-tags"></i>
+                        <!-- 검색 스코프 태그: 아래 칩으로만 선택한다(별도 입력창 없음).
+                             칩 토글 결과는 이 hidden 필드에 쉼표로 모여 폼/SSE로 전송된다. -->
+                        <input type="hidden" id="chat-tags-input" name="tags"/>
+
+                        <!-- 응답 모드 S/M/L — 답변 길이·상세도 (기본 M) -->
+                        <span class="input-group-text" th:title="#{chat.response.tooltip}">
+                            <i class="bi bi-textarea-resize"></i>
                         </span>
-                        <input type="text" id="chat-tags-input" name="tags"
-                               class="form-control"
-                               th:placeholder="#{chat.tags.placeholder}"
-                               autocomplete="off"/>
+                        <select id="response-mode-select" class="form-select" style="max-width: 190px;">
+                            <option value="S" th:text="#{chat.response.s}">S · 간단히</option>
+                            <option value="M" selected th:text="#{chat.response.m}">M · 자세히</option>
+                            <option value="L" th:text="#{chat.response.l}">L · 원문 최대</option>
+                        </select>
+                        <input type="hidden" id="form-response-mode" name="responseMode" value="M"/>
                     </div>
                     <!-- 등록된 태그 칩 (클릭하면 검색 범위에 토글) -->
                     <div id="chat-tag-suggest" class="d-none mb-2">
@@ -417,9 +423,24 @@
             this.value = '';
         });
     }
-    chatTagsInput.addEventListener('input', chatSyncTagChips);
     loadVersionOptions();
     loadChatTagSuggestions();
+
+    /* ── 응답 모드 S/M/L → hidden 폼 필드 + localStorage 유지 ─────────────────── */
+    const responseModeSelect = document.getElementById('response-mode-select');
+    const responseModeInput  = document.getElementById('form-response-mode');
+    const RESPONSE_MODE_KEY  = 'chatResponseMode';
+
+    function applyResponseMode(mode) {
+        const m = ['S', 'M', 'L'].includes(mode) ? mode : 'M';
+        responseModeSelect.value = m;
+        responseModeInput.value  = m;
+    }
+    applyResponseMode(localStorage.getItem(RESPONSE_MODE_KEY));
+    responseModeSelect.addEventListener('change', function () {
+        applyResponseMode(this.value);
+        localStorage.setItem(RESPONSE_MODE_KEY, responseModeInput.value);
+    });
 
     /* Sync routing mode → hidden form field + PATCH thread if it exists.
        Selector is absent entirely when the deployment default is LOCAL_ONLY (localOnlyDeployment=true). */

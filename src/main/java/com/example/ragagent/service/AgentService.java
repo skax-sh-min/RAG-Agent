@@ -68,8 +68,11 @@ public class AgentService {
                     .toBuilder().questionType(typeF.join()).build();
             }
         }
-        // carry the selected search-scope tags into the graph state.
-        initial = initial.toBuilder().selectedTags(request.selectedTags()).build();
+        // carry the selected search-scope tags + answer-length mode into the graph state.
+        initial = initial.toBuilder()
+                .selectedTags(request.selectedTags())
+                .responseMode(request.responseMode())
+                .build();
 
         String askedAt = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
                 .withZone(ZoneOffset.UTC).format(Instant.now());

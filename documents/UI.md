@@ -186,6 +186,26 @@ REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — �
 
 > **드롭다운 전체 숨김**: 위 표는 DUAL/LOCAL_ONLY 개별 옵션이 `disabled`되는 경우고, `app.llm.default-routing-mode`(`LLM_ROUTING_MODE`)가 `LOCAL_ONLY`면 드롭다운 컨테이너 자체가 렌더링되지 않는다 — 배포에 LOCAL 프로바이더만 있어 어떤 모드를 골라도 결과가 동일하기 때문. 판단 기준은 대화별 `routingMode`가 아니라 **배포 전체의 기본 모드**다(`ChatController`의 `localOnlyDeployment` 모델 속성, `chat.html` `th:if="${!localOnlyDeployment}"`).
 
+### 응답 모드 셀렉터 (입력 바, S/M/L)
+
+버전 셀렉터 오른쪽 드롭다운(`#response-mode-select`)으로 답변 분량을 고른다. 선택은 hidden 필드
+`#form-response-mode`(`name="responseMode"`)에 동기화되고 `localStorage['chatResponseMode']`에 저장되어
+재방문 시 복원된다 — HTMX 폼 전송과 SSE(`new FormData(form)`) 둘 다 이 hidden 필드를 그대로 집어간다.
+
+| 선택지 | ResponseMode | 답변 성격 | 토큰 상한(`LLM_MAX_TOKENS` 대비) |
+|--------|-------------|----------|------------------------------|
+| S · 간단히 | `S` | 요약적이고 간단하게 | 15% |
+| M · 자세히 | `M` | 쉽고 자세하게 | 40% (기본값) |
+| L · 원문 최대 | `L` | 원문 최대한 살려 최대한 많이 | 90% |
+
+**글자수 상한은 두지 않는다** — 답변 성격은 프롬프트 지시문(`prompt.answer.style.{s,m,l}`)이, 분량은 모드별
+토큰 상한이 맡는다. 토큰 상한은 **블로킹 호출에만** 붙으므로(스트리밍은 기존 설계대로 무제한 — CLAUDE.md
+참고) 스트리밍 채팅에서는 지시문이 유일한 조절 수단이다. `AnswerService.truncate()`의 20,000자 컷은 모드와
+무관한 절대 상한으로 그대로 유지된다.
+
+> **태그 입력창은 없다**: 검색 스코프 태그는 입력 바 아래 **칩을 클릭해서만** 토글한다. 칩 토글 결과는
+> hidden 필드 `#chat-tags-input`(`name="tags"`)에 쉼표로 모여 전송되므로 서버 계약은 그대로다.
+
 ### 응답 메타데이터 (어시스턴트 버블 하단)
 
 ```

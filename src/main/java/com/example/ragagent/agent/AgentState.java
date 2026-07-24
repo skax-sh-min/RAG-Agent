@@ -1,6 +1,7 @@
 package com.example.ragagent.agent;
 
 import com.example.ragagent.llm.RoutingMode;
+import com.example.ragagent.model.ResponseMode;
 import com.example.ragagent.model.SourceRef;
 import org.springframework.ai.document.Document;
 
@@ -37,7 +38,8 @@ public record AgentState(
         Boolean grounded,         // CRITIC 결과 (null=CRITIC 미실행)
         boolean directMode,       // RAG 없이 LLM 직접 호출
         Locale locale,            // UI 언어 설정 — LLM 시스템 프롬프트 언어 선택에 사용
-        List<String> selectedTags // 검색 스코프 태그 (빈 리스트 = version-only 검색)
+        List<String> selectedTags, // 검색 스코프 태그 (빈 리스트 = version-only 검색)
+        ResponseMode responseMode // 답변 길이/상세도 (S/M/L, 기본 M) — AnswerService/DirectAnswerService가 사용
 ) {
     public AgentState {
         retrievedDocs     = retrievedDocs     == null ? List.of() : List.copyOf(retrievedDocs);
@@ -48,6 +50,7 @@ public record AgentState(
         if (userId      == null) userId      = "anonymous";
         if (routingMode == null) routingMode = RoutingMode.COST_FIRST;
         if (locale      == null) locale      = Locale.KOREAN;
+        if (responseMode == null) responseMode = ResponseMode.DEFAULT;
     }
 
     // ── Factory ──────────────────────────────────────────────────────────────
@@ -79,7 +82,7 @@ public record AgentState(
                 conversationHistory,
                 0, 0, 0,
                 routingMode, null, null, null, null, null,
-                directMode, locale, List.of());
+                directMode, locale, List.of(), ResponseMode.DEFAULT);
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────
@@ -120,6 +123,7 @@ public record AgentState(
         private boolean directMode;
         private Locale locale                    = Locale.KOREAN;
         private List<String> selectedTags        = List.of();
+        private ResponseMode responseMode        = ResponseMode.DEFAULT;
 
         Builder() {}
 
@@ -149,6 +153,7 @@ public record AgentState(
             this.directMode         = s.directMode;
             this.locale             = s.locale;
             this.selectedTags       = s.selectedTags;
+            this.responseMode       = s.responseMode;
         }
 
         public Builder question(String v)                  { this.question = v;           return this; }
@@ -172,6 +177,7 @@ public record AgentState(
         public Builder directMode(boolean v)               { this.directMode = v;         return this; }
         public Builder locale(Locale v)                    { this.locale = v;             return this; }
         public Builder selectedTags(List<String> v)        { this.selectedTags = v;       return this; }
+        public Builder responseMode(ResponseMode v)        { this.responseMode = v;       return this; }
 
         public Builder dualResult(String localAnswer, String localProvider) {
             this.dualLocalAnswer   = localAnswer;
@@ -194,7 +200,7 @@ public record AgentState(
                     totalInputTokens, totalOutputTokens, llmCallCount,
                     routingMode, usedProvider, premiumUpgraded,
                     dualLocalAnswer, dualLocalProvider, grounded,
-                    directMode, locale, selectedTags);
+                    directMode, locale, selectedTags, responseMode);
         }
     }
 }

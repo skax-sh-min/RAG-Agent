@@ -68,7 +68,11 @@ class StreamingAgentServiceTest {
     }
 
     private ChatForm form(boolean directMode, String tags) {
-        return new ChatForm("질문", "t1", "v1", "COST_FIRST", directMode, tags);
+        return form(directMode, tags, null); // responseMode 미지정 → ResponseMode.DEFAULT(M)
+    }
+
+    private ChatForm form(boolean directMode, String tags, String responseMode) {
+        return new ChatForm("질문", "t1", "v1", "COST_FIRST", directMode, tags, responseMode);
     }
 
     private AgentState resultState(String answer) {
@@ -125,6 +129,30 @@ class StreamingAgentServiceTest {
         service.run("u1", form(false, "faq,guide"), emitter);
 
         assertThat(stateCaptor.getValue().selectedTags()).containsExactly("faq", "guide");
+    }
+
+    @Test
+    @DisplayName("응답 모드(S/M/L)가 그래프 상태로 전달된다")
+    void run_carriesResponseModeIntoState() {
+        ArgumentCaptor<AgentState> stateCaptor = ArgumentCaptor.forClass(AgentState.class);
+        when(agentGraph.runStreaming(stateCaptor.capture(), any())).thenReturn(resultState("답변"));
+
+        service.run("u1", form(false, null, "L"), emitter);
+
+        assertThat(stateCaptor.getValue().responseMode())
+                .isEqualTo(com.example.ragagent.model.ResponseMode.L);
+    }
+
+    @Test
+    @DisplayName("응답 모드가 없거나 알 수 없는 값이면 기본값 M으로 전달된다")
+    void run_responseModeDefaultsToM() {
+        ArgumentCaptor<AgentState> stateCaptor = ArgumentCaptor.forClass(AgentState.class);
+        when(agentGraph.runStreaming(stateCaptor.capture(), any())).thenReturn(resultState("답변"));
+
+        service.run("u1", form(false, null, "XL"), emitter);
+
+        assertThat(stateCaptor.getValue().responseMode())
+                .isEqualTo(com.example.ragagent.model.ResponseMode.M);
     }
 
     @Test

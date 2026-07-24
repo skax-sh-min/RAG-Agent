@@ -4,6 +4,7 @@ import com.example.ragagent.agent.AgentState;
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.ingestion.MarkdownNoiseNormalizer;
 import com.example.ragagent.model.MetaKey;
+import com.example.ragagent.model.ResponseMode;
 import com.example.ragagent.llm.DualResult;
 import com.example.ragagent.llm.LlmProvider;
 import com.example.ragagent.llm.LlmRouter;
@@ -15,8 +16,10 @@ import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.UserMessage;
+import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.converter.BeanOutputConverter;
+import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.ai.openai.api.OpenAiApi;
 import org.springframework.context.MessageSource;
 import org.springframework.stereotype.Service;
@@ -73,8 +76,9 @@ public class AnswerService {
     private AgentState executeBlocking(AgentState state) {
         String systemPrompt = answerSystemPrompt(state.locale());
         String userPrompt = buildAnswerPrompt(state);
+        ChatOptions options = answerOptions(state);
         String rawAnswer = llmRouter.executeGated(TaskType.TEXT, state.routingMode(),
-                model -> model.call(buildPrompt(systemPrompt, userPrompt)));
+                model -> model.call(buildPrompt(systemPrompt, userPrompt, options)));
         String answer = truncate(rawAnswer == null ? "" : rawAnswer);
         state = state.toBuilder()
                      .accumulateTokens(0, 0)
@@ -89,7 +93,7 @@ public class AnswerService {
         String userPrompt = buildAnswerPrompt(state);
         DualResult dual = llmRouter.executeDual(
                 TaskType.TEXT,
-                model -> model.call(buildPrompt(systemPrompt, userPrompt))
+                model -> model.call(buildPrompt(systemPrompt, userPrompt, answerOptions(state)))
         );
         return buildDualResultState(state,
                 truncate(dual.externalAnswer()), dual.externalProvider(),
@@ -171,7 +175,7 @@ public class AnswerService {
             String userPrompt = buildAnswerPrompt(state);
             premiumAnswer = llmRouter.executeGated(
                     TaskType.TEXT, RoutingMode.QUALITY_FIRST,
-                    model -> model.call(buildPrompt(systemPrompt, userPrompt))
+                    model -> model.call(buildPrompt(systemPrompt, userPrompt, answerOptions(state)))
             );
         }
         return resultState.toBuilder()
@@ -182,9 +186,13 @@ public class AnswerService {
                           .build();
     }
 
-    /** Shared raw Prompt construction for the non-fluent LlmRouter call sites (DUAL, PROGRESSIVE). */
-    private static Prompt buildPrompt(String systemPrompt, String userPrompt) {
-        return new Prompt(List.of(new SystemMessage(systemPrompt), new UserMessage(userPrompt)));
+    /** Shared raw Prompt construction for the non-fluent LlmRouter call sites (DUAL, PROGRESSIVE).
+     *  {@code options} is null for calls that should keep the provider defaults (the sufficiency
+     *  evaluation), and carries the response mode's maxTokens for the answer calls. */
+    private static Prompt buildPrompt(String systemPrompt, String userPrompt, ChatOptions options) {
+        List<org.springframework.ai.chat.messages.Message> messages =
+                List.of(new SystemMessage(systemPrompt), new UserMessage(userPrompt));
+        return options == null ? new Prompt(messages) : new Prompt(messages, options);
     }
 
     // ── Stream helpers ──────────────────────────────────────────────────────
@@ -207,8 +215,10 @@ public class AnswerService {
             // stream=false: still use streaming HTTP to stay compatible with local LLM servers
             // that do not support stream:false. Buffer all tokens and deliver as one chunk.
             StringBuilder buf = new StringBuilder();
-            ChatClient.builder(provider.chatModel()).build()
-                    .prompt()
+            ChatClient.ChatClientRequestSpec spec = ChatClient.builder(provider.chatModel()).build().prompt();
+            ChatOptions options = answerOptions(state);
+            if (options != null) spec = spec.options(options);
+            spec
                     .system(systemPrompt)
                     .user(buildAnswerPrompt(state))
                     .stream()
@@ -261,7 +271,7 @@ public class AnswerService {
                     .formatted(PromptInjectionGuard.wrap(state.question()), answer, excerpts, evalConverter.getFormat());
 
             String response = llmRouter.executeGated(TaskType.TEXT, state.routingMode(),
-                    model -> model.call(buildPrompt(systemPrompt, evalPrompt)));
+                    model -> model.call(buildPrompt(systemPrompt, evalPrompt, null)));
             EvalOutput out = evalConverter.convert(response == null ? "" : response);
             boolean grounded = !docsPresent || out.grounded();
             return state.toBuilder()
@@ -277,6 +287,27 @@ public class AnswerService {
 
     private String answerSystemPrompt(Locale locale) {
         return messageSource.getMessage("prompt.answer.system", null, locale);
+    }
+
+    /**
+     * The S/M/L answer-style instruction for this turn (summary / detailed / source-preserving).
+     * Appended to the user prompt just before the question so the question stays last (the system
+     * prompt's injection warning assumes that ordering).
+     */
+    private String responseStyleInstruction(AgentState state) {
+        return messageSource.getMessage(state.responseMode().promptKey(), null, state.locale());
+    }
+
+    /**
+     * Per-call {@code maxTokens} for this turn's answer, derived from the response mode's share of
+     * the configured {@code app.llm.max-tokens}. Only attached on the <b>blocking</b> call paths —
+     * streaming answers stay uncapped by design (see CLAUDE.md / PIPELINE.md §4.1); there the mode's
+     * budget is enforced by the prompt instruction plus {@link #truncate}.
+     */
+    private ChatOptions answerOptions(AgentState state) {
+        int configured = props.llmSafe().maxTokens();
+        int max = state.responseMode().maxTokens(configured);
+        return max > 0 ? OpenAiChatOptions.builder().maxTokens(max).build() : null;
     }
 
     private String buildAnswerPrompt(AgentState state) {
@@ -310,10 +341,14 @@ public class AnswerService {
             sb.append("[경고]\n").append(String.join("\n", state.retrievalWarnings())).append("\n\n");
         }
 
+        sb.append(responseStyleInstruction(state)).append("\n\n");
+
         sb.append("[질문]\n").append(PromptInjectionGuard.wrap(state.question()));
         return sb.toString();
     }
 
+    /** Absolute ceiling protecting storage/rendering — independent of the response mode, whose
+     *  budget is expressed as the call's maxTokens instead of a character cap. */
     private static String truncate(String answer) {
         if (answer == null || answer.length() <= MAX_ANSWER_LEN) return answer;
         return answer.substring(0, MAX_ANSWER_LEN) + "\n\n…(응답이 너무 길어 잘렸습니다)";

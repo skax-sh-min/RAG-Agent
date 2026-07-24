@@ -158,7 +158,7 @@ public class ChatController {
             log.debug("[postChat] threadId={} directMode={} routingMode={} question={}",
                     form.threadId(), form.isDirectMode(), rm, form.question());
             ChatRequest req = new ChatRequest(form.question(), form.version(), form.threadId(), rm,
-                    form.isDirectMode(), form.selectedTags());
+                    form.isDirectMode(), form.selectedTags(), form.responseModeOrDefault());
             ChatResponse resp = agentService.chat(ctx, req);
             log.debug("[postChat] done — provider={} tokens={}/{} directMode={}",
                     resp.usedProvider(), resp.totalInputTokens(), resp.totalOutputTokens(), form.isDirectMode());
