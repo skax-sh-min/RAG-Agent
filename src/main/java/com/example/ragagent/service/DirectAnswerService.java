@@ -5,6 +5,7 @@ import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.llm.LlmProvider;
 import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.TaskType;
+import com.example.ragagent.model.ResponseMode;
 import com.example.ragagent.security.PromptInjectionGuard;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -102,12 +103,34 @@ public class DirectAnswerService {
     }
 
 
-    private static String buildUserPrompt(AgentState state) {
+    /**
+     * directMode (RAG 없이 직접 질문) answers get the same S/M/L length instruction as the RAG path
+     * (see AnswerService.responseStyleInstruction) — meta/greeting answers keep their own fixed
+     * "2-3 sentences" instruction (prompt.direct.meta.system) unchanged, since S/M/L differentiation
+     * doesn't make sense for a greeting.
+     */
+    private String buildUserPrompt(AgentState state) {
         String history = state.conversationHistory();
         String question = PromptInjectionGuard.wrap(state.question());
-        return history.isBlank()
-                ? question
-                : "[이전 대화]\n%s\n\n[현재 질문]\n%s".formatted(history, question);
+        if (!state.directMode()) {
+            return history.isBlank()
+                    ? question
+                    : "[이전 대화]\n%s\n\n[현재 질문]\n%s".formatted(history, question);
+        }
+        StringBuilder sb = new StringBuilder();
+        if (!history.isBlank()) {
+            sb.append("[이전 대화]\n").append(history).append("\n\n");
+        }
+        sb.append(responseStyleInstruction(state)).append("\n\n[현재 질문]\n").append(question);
+        return sb.toString();
+    }
+
+    /** Same character-target instruction as AnswerService.responseStyleInstruction — see ResponseMode javadoc. */
+    private String responseStyleInstruction(AgentState state) {
+        ResponseMode mode = state.responseMode();
+        int tokens = mode.maxTokens(props.llmSafe().maxTokens());
+        int targetChars = tokens > 0 ? tokens : mode.minChars();
+        return messageSource.getMessage(mode.promptKey(), new Object[]{targetChars}, state.locale());
     }
 
     /**

@@ -65,7 +65,7 @@ class ConversationSummarizerServiceTest {
     }
 
     private static MemoryRepository.Turn turn(long id, String q, String a, String feedback) {
-        return new MemoryRepository.Turn(id, q, a, null, null, 0, 0, 0, "local", 1, feedback);
+        return new MemoryRepository.Turn(id, q, a, null, null, 0, 0, 0, "local", 1, feedback, "M");
     }
 
     @Test

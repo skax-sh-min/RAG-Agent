@@ -8,6 +8,7 @@ import com.example.ragagent.llm.ProviderRole;
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.llm.TaskType;
 import com.example.ragagent.model.MetaKey;
+import com.example.ragagent.model.ResponseMode;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -58,6 +59,7 @@ class AnswerServiceTest {
     private static final int MAX_RETRY = 2;
 
     private LlmRouter llmRouter;
+    private MessageSource messageSource;
     private AnswerService service;
 
     @BeforeEach
@@ -68,7 +70,7 @@ class AnswerServiceTest {
                 true, false, 3,
                 null, null, null, null, null, null, null, null, null, null, null, null, null, null,
                 null, null, null, null, null, null, null, null, null, null, null, null, null, null);
-        MessageSource messageSource = mock(MessageSource.class);
+        messageSource = mock(MessageSource.class);
         when(messageSource.getMessage(anyString(), any(), any(Locale.class))).thenReturn("prompt");
         service = new AnswerService(llmRouter, props, messageSource);
     }
@@ -201,6 +203,19 @@ class AnswerServiceTest {
         String answerPrompt = promptCaptor.getAllValues().get(0).getContents();
         assertThat(answerPrompt).contains("[큐레이션 Q&A]", "과거에 좋아요 받은 답변");
         assertThat(answerPrompt).doesNotContain("curated_qa | p.1");
+    }
+
+    @Test
+    @DisplayName("BLOCKING — 응답 스타일 지침에 모드별 글자수 목표(minChars, 기본 6000토큰 설정에서는 바닥값)가 전달된다")
+    void blocking_answerPrompt_passesResponseModeCharTarget() {
+        when(llmRouter.executeGatedWithUsage(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), any()))
+                .thenReturn(new LlmRouter.LlmResult("답변", 0, 0),
+                            new LlmRouter.LlmResult("{\"sufficient\":true}", 0, 0));
+        when(llmRouter.findProviderName(any(), any())).thenReturn("gemini-flash");
+
+        service.execute(newState(RoutingMode.COST_FIRST).toBuilder().responseMode(ResponseMode.S).build());
+
+        verify(messageSource).getMessage(eq("prompt.answer.style.s"), eq(new Object[]{2_000}), any(Locale.class));
     }
 
     // ── STREAMING 경로 ───────────────────────────────────────────────────

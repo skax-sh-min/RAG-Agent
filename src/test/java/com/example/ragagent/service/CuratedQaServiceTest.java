@@ -70,7 +70,11 @@ class CuratedQaServiceTest {
     }
 
     private static MemoryRepository.Turn turn(String question, String answer) {
-        return new MemoryRepository.Turn(TURN_ID, question, answer, null, null, 0, 0, 0, "local", 1, "LIKE");
+        return turn(question, answer, "M");
+    }
+
+    private static MemoryRepository.Turn turn(String question, String answer, String responseMode) {
+        return new MemoryRepository.Turn(TURN_ID, question, answer, null, null, 0, 0, 0, "local", 1, "LIKE", responseMode);
     }
 
     private static CuratedQaRepository.CuratedQa curatedQa(long id, String status, String question, String answer) {
@@ -122,6 +126,21 @@ class CuratedQaServiceTest {
         // 임베딩용 SEARCH_TEXT 오버라이드는 참고 섹션이 제외된다(질문은 포함).
         String searchText = String.valueOf(doc.getMetadata().get(MetaKey.SEARCH_TEXT));
         assertThat(searchText).contains("질문").doesNotContain("참고", "파일.docx");
+    }
+
+    @Test
+    @DisplayName("onLike — L모드 답변은 curated_qa 행은 생성하되 임베딩은 아예 시도하지 않는다(원문과 거의 동일하므로)")
+    void onLike_lMode_skipsEmbedEntirely() {
+        when(memoryService.getTurn(UID, TID, TURN_ID)).thenReturn(Optional.of(turn("질문", "답변", "L")));
+        when(repository.upsertActive(anyLong(), any(), any(), any(), any(), any())).thenReturn(1L);
+
+        service.onLike(UID, TID, TURN_ID);
+
+        // curated_qa 스냅샷 행은 그대로 생성된다(좋아요 취소/수정/관리자 목록이 계속 동작하도록).
+        verify(repository, times(1)).upsertActive(TURN_ID, UID, TID, "질문", "답변", "v1");
+        // 하지만 임베딩 스레드 자체가 생성되지 않으므로 findById(재조회)도, vectorStore.add도 절대 호출되지 않는다.
+        verify(repository, never()).findById(anyLong());
+        verify(vectorStore, never()).add(any(), any(), any());
     }
 
     @Test

@@ -85,7 +85,8 @@ public class AgentService {
         if (result.answer() != null && !result.answer().isBlank()) {
             turnId = memoryService.addTurn(userId, request.threadId(), request.question(), result.answer(),
                     askedAt, result.totalInputTokens(), result.totalOutputTokens(),
-                    (int) elapsedMs, result.usedProvider(), result.llmCallCount());
+                    (int) elapsedMs, result.usedProvider(), result.llmCallCount(),
+                    request.responseMode().name());
             summarizerService.precomputeAfterTurn(userId, request.threadId(), turnId, ctx.locale());
         }
 

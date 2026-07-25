@@ -7,6 +7,7 @@ import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.ProviderRole;
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.llm.TaskType;
+import com.example.ragagent.model.ResponseMode;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -29,7 +30,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.startsWith;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -102,6 +105,31 @@ class DirectAnswerServiceTest {
         service.execute(newState(false));
 
         verify(messageSource).getMessage(eq("prompt.direct.meta.system"), any(), any(Locale.class));
+    }
+
+    @Test
+    @DisplayName("execute — directMode=true 는 응답 스타일 지침(모드별 글자수 목표)이 사용자 프롬프트에 포함된다")
+    void execute_directMode_includesResponseStyleInstructionWithCharTarget() {
+        when(llmRouter.executeGatedWithUsage(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), any()))
+                .thenReturn(new LlmRouter.LlmResult("답변", 0, 0));
+
+        AgentState state = newState(true).toBuilder().responseMode(ResponseMode.M).build();
+        service.execute(state);
+
+        // llmSafe().maxTokens()=6000 → M.maxTokens(6000)=max(2400,5000)=5000 (바닥값)
+        verify(messageSource).getMessage(eq("prompt.answer.style.m"), eq(new Object[]{5_000}), any(Locale.class));
+    }
+
+    @Test
+    @DisplayName("execute — directMode=false(meta)는 응답 스타일 지침을 넣지 않는다(2-3문장 고정 유지)")
+    void execute_metaMode_neverIncludesResponseStyleInstruction() {
+        when(llmRouter.executeGatedWithUsage(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), any()))
+                .thenReturn(new LlmRouter.LlmResult("답변", 0, 0));
+
+        service.execute(newState(false));
+
+        verify(messageSource, never())
+                .getMessage(startsWith("prompt.answer.style"), any(), any(Locale.class));
     }
 
     @Test

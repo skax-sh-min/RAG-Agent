@@ -43,9 +43,9 @@ public class MemoryService {
     /** Returns the generated turn id (conversation_turns.id). */
     public long addTurn(String userId, String threadId, String question, String answer,
                         String askedAt, int inputTokens, int outputTokens,
-                        int elapsedMs, String provider, int llmCalls) {
+                        int elapsedMs, String provider, int llmCalls, String responseMode) {
         return repository.addTurn(userId, threadId, question, answer,
-                askedAt, inputTokens, outputTokens, elapsedMs, provider, llmCalls);
+                askedAt, inputTokens, outputTokens, elapsedMs, provider, llmCalls, responseMode);
     }
 
     public void clearHistory(String userId, String threadId) {

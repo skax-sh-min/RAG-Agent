@@ -254,19 +254,23 @@ public class AnswerService {
     }
 
     /**
-     * The S/M/L answer-style instruction for this turn (summary / detailed / source-preserving).
-     * Appended to the user prompt just before the question so the question stays last (the system
-     * prompt's injection warning assumes that ordering).
+     * The S/M/L answer-style instruction for this turn (summary / detailed / source-preserving),
+     * naming a concrete character target (see {@link ResponseMode} javadoc). Appended to the user
+     * prompt just before the question so the question stays last (the system prompt's injection
+     * warning assumes that ordering).
      */
     private String responseStyleInstruction(AgentState state) {
-        return messageSource.getMessage(state.responseMode().promptKey(), null, state.locale());
+        ResponseMode mode = state.responseMode();
+        int tokens = mode.maxTokens(props.llmSafe().maxTokens());
+        int targetChars = tokens > 0 ? tokens : mode.minChars();
+        return messageSource.getMessage(mode.promptKey(), new Object[]{targetChars}, state.locale());
     }
 
     /**
      * Per-call {@code maxTokens} for this turn's answer, derived from the response mode's share of
      * the configured {@code app.llm.max-tokens}. Only attached on the <b>blocking</b> call paths —
-     * streaming answers stay uncapped by design (see CLAUDE.md / PIPELINE.md §4.1); there the mode's
-     * budget is enforced by the prompt instruction plus {@link #truncate}.
+     * streaming calls have no hard per-call cap (token-by-token UX), so there the same character
+     * target is instead named in {@link #responseStyleInstruction} as the model's only length control.
      */
     private ChatOptions answerOptions(AgentState state) {
         int configured = props.llmSafe().maxTokens();

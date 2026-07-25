@@ -27,26 +27,48 @@ class ResponseModeTest {
     }
 
     @Test
-    @DisplayName("tokenRatio — S/M/L 각각 15% / 40% / 90%")
+    @DisplayName("tokenRatio — S/M/L 각각 15% / 40% / 70%")
     void tokenRatios() {
         assertThat(ResponseMode.S.tokenRatio()).isEqualTo(0.15);
         assertThat(ResponseMode.M.tokenRatio()).isEqualTo(0.40);
-        assertThat(ResponseMode.L.tokenRatio()).isEqualTo(0.90);
+        assertThat(ResponseMode.L.tokenRatio()).isEqualTo(0.70);
     }
 
     @Test
-    @DisplayName("maxTokens — 설정된 LLM_MAX_TOKENS의 15% / 40% / 90%")
-    void maxTokens_appliesConfiguredRatio() {
-        assertThat(ResponseMode.S.maxTokens(16_000)).isEqualTo(2_400);
-        assertThat(ResponseMode.M.maxTokens(16_000)).isEqualTo(6_400);
-        assertThat(ResponseMode.L.maxTokens(16_000)).isEqualTo(14_400);
+    @DisplayName("minChars — S/M/L 각각 2000 / 5000 / 10000")
+    void minChars() {
+        assertThat(ResponseMode.S.minChars()).isEqualTo(2_000);
+        assertThat(ResponseMode.M.minChars()).isEqualTo(5_000);
+        assertThat(ResponseMode.L.minChars()).isEqualTo(10_000);
     }
 
     @Test
-    @DisplayName("maxTokens — 설정값이 아주 작아도 256 밑으로는 내려가지 않는다")
-    void maxTokens_flooredAt256() {
-        assertThat(ResponseMode.S.maxTokens(100)).isEqualTo(256);
-        assertThat(ResponseMode.L.maxTokens(100)).isEqualTo(256);
+    @DisplayName("maxTokens — 설정값이 커서 비율항이 minChars를 넘으면 비율이 채택된다")
+    void maxTokens_appliesConfiguredRatioWhenLargerThanFloor() {
+        assertThat(ResponseMode.S.maxTokens(16_000)).isEqualTo(2_400); // 15% = 2400 > 2000
+        assertThat(ResponseMode.M.maxTokens(16_000)).isEqualTo(6_400); // 40% = 6400 > 5000
+        assertThat(ResponseMode.L.maxTokens(16_000)).isEqualTo(11_200); // 70% = 11200 > 10000
+    }
+
+    @Test
+    @DisplayName("maxTokens — 현실적인 설정 범위(6000~12000)에서는 minChars 바닥값이 채택된다(항상 두 값 중 큰 값)")
+    void maxTokens_flooredAtMinCharsForTypicalConfig() {
+        // default LLM_MAX_TOKENS=6000: ratio항(900/2400/4200)이 모두 minChars보다 작음
+        assertThat(ResponseMode.S.maxTokens(6_000)).isEqualTo(2_000);
+        assertThat(ResponseMode.M.maxTokens(6_000)).isEqualTo(5_000);
+        assertThat(ResponseMode.L.maxTokens(6_000)).isEqualTo(10_000);
+        // 12000으로 올려도 ratio항(1800/4800/8400)이 여전히 minChars보다 작음
+        assertThat(ResponseMode.S.maxTokens(12_000)).isEqualTo(2_000);
+        assertThat(ResponseMode.M.maxTokens(12_000)).isEqualTo(5_000);
+        assertThat(ResponseMode.L.maxTokens(12_000)).isEqualTo(10_000);
+    }
+
+    @Test
+    @DisplayName("maxTokens — 설정값이 아주 작아도 각 모드의 minChars 밑으로는 내려가지 않는다")
+    void maxTokens_flooredAtMinChars() {
+        assertThat(ResponseMode.S.maxTokens(100)).isEqualTo(2_000);
+        assertThat(ResponseMode.M.maxTokens(100)).isEqualTo(5_000);
+        assertThat(ResponseMode.L.maxTokens(100)).isEqualTo(10_000);
     }
 
     @Test

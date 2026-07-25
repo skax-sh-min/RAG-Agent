@@ -5,6 +5,7 @@ import com.example.ragagent.ingestion.DocRegistry;
 import com.example.ragagent.ingestion.MarkdownNoiseNormalizer;
 import com.example.ragagent.ingestion.VectorStoreFacade;
 import com.example.ragagent.model.MetaKey;
+import com.example.ragagent.model.ResponseMode;
 import com.example.ragagent.repository.CuratedQaRepository;
 import com.example.ragagent.repository.CuratedQaRepository.CuratedQa;
 import com.example.ragagent.repository.MemoryRepository;
@@ -74,6 +75,11 @@ public class CuratedQaService {
      *       was unliked while the call was in flight</li>
      * </ol>
      * Mirrors the DISLIKE-discard guard in {@link ConversationSummarizerService#precompute}.
+     *
+     * <p>L-mode answers (§ ResponseMode) are skipped entirely — an L answer already preserves the
+     * source document's own wording almost verbatim, so embedding it again would just duplicate a
+     * vector that's already in the index under the real document. The curated_qa row is still
+     * created (unlike/edit/admin-listing keep working), only the embed call is skipped.
      */
     public void onLike(String userId, String threadId, long turnId) {
         Optional<MemoryRepository.Turn> turnOpt = memoryService.getTurn(userId, threadId, turnId);
@@ -88,6 +94,11 @@ public class CuratedQaService {
 
         long curatedId = repository.upsertActive(turnId, userId, threadId,
                 turn.question(), turn.answer(), version);
+
+        if (ResponseMode.parse(turn.responseMode()) == ResponseMode.L) {
+            log.debug("[CURATED] embed skipped (L-mode answer already mirrors source content) turnId={}", turnId);
+            return;
+        }
 
         Thread.ofVirtual().name("curated-embed-" + curatedId).start(() -> {
             try {

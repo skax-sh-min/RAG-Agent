@@ -151,7 +151,8 @@ public class StreamingAgentService {
             if (result.answer() != null && !result.answer().isBlank()) {
                 turnId = memoryService.addTurn(userId, form.threadId(), form.question(), result.answer(),
                         askedAt, result.totalInputTokens(), result.totalOutputTokens(),
-                        (int) elapsedMs, result.usedProvider(), result.llmCallCount());
+                        (int) elapsedMs, result.usedProvider(), result.llmCallCount(),
+                        form.responseModeOrDefault().name());
                 summarizerService.precomputeAfterTurn(userId, form.threadId(), turnId, locale);
             }
 
@@ -192,7 +193,7 @@ public class StreamingAgentService {
                     try {
                         memoryService.addTurn(userId, form.threadId(), form.question(),
                                 partial + "\n[오류로 중단됨]",
-                                askedAt, 0, 0, 0, null, 0);
+                                askedAt, 0, 0, 0, null, 0, form.responseModeOrDefault().name());
                         log.debug("partial answer persisted ({} chars) thread={}",
                                 partial.length(), form.threadId());
                     } catch (Exception persistEx) {

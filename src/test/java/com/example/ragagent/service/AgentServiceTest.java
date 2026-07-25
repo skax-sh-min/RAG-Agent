@@ -219,7 +219,7 @@ class AgentServiceTest {
         when(classifierService.classifyOnly(any(), any())).thenReturn("manual");
         when(agentGraph.run(any())).thenReturn(fullResult());
         when(memoryService.addTurn(any(), any(), any(), any(), any(),
-                anyInt(), anyInt(), anyInt(), any(), anyInt())).thenReturn(42L);
+                anyInt(), anyInt(), anyInt(), any(), anyInt(), any())).thenReturn(42L);
 
         service.chat(CTX, new ChatRequest("질문", "v1", "t1", RoutingMode.COST_FIRST));
 
