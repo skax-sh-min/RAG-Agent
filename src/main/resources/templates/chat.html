@@ -302,21 +302,21 @@
             </div>
         </div>
     </div>
-</div>
 
-<!-- ── §10.10 큐레이션 Q&A 편집 Offcanvas (본인 좋아요 답변) ──────────────── -->
-<div class="offcanvas offcanvas-end" tabindex="-1" id="curatedEditOffcanvas" style="width:480px; max-width:100%;">
-    <div class="offcanvas-header border-bottom">
-        <h6 class="offcanvas-title"><i class="bi bi-pencil-square me-2"></i><span th:text="#{curated.edit.title}">큐레이션 답변 편집</span></h6>
-        <button type="button" class="btn-close" data-bs-dismiss="offcanvas"></button>
-    </div>
-    <div class="offcanvas-body d-flex flex-column gap-3" id="curatedEditOffcanvasBody">
-        <textarea id="curated-edit-chat-answer" class="form-control flex-grow-1"
-                  style="min-height:280px; font-size:0.9rem; resize:vertical;"></textarea>
-        <div class="form-text small" th:text="#{curated.edit.hint}">저장하면 검색 임베딩이 자동으로 다시 계산됩니다.</div>
-        <button class="btn btn-primary btn-sm" id="curated-edit-save-btn">
-            <i class="bi bi-save me-1"></i><span th:text="#{action.save}">저장</span>
-        </button>
+    <!-- ── §10.10 큐레이션 Q&A 편집 Offcanvas (본인 좋아요 답변) ──────────────── -->
+    <div class="offcanvas offcanvas-end" tabindex="-1" id="curatedEditOffcanvas" style="width:480px; max-width:100%;">
+        <div class="offcanvas-header border-bottom">
+            <h6 class="offcanvas-title"><i class="bi bi-pencil-square me-2"></i><span th:text="#{curated.edit.title}">큐레이션 답변 편집</span></h6>
+            <button type="button" class="btn-close" data-bs-dismiss="offcanvas"></button>
+        </div>
+        <div class="offcanvas-body d-flex flex-column gap-3" id="curatedEditOffcanvasBody">
+            <textarea id="curated-edit-chat-answer" class="form-control flex-grow-1"
+                      style="min-height:280px; font-size:0.9rem; resize:vertical;"></textarea>
+            <div class="form-text small" th:text="#{curated.edit.hint}">저장하면 검색 임베딩이 자동으로 다시 계산됩니다.</div>
+            <button class="btn btn-primary btn-sm" id="curated-edit-save-btn">
+                <i class="bi bi-save me-1"></i><span th:text="#{action.save}">저장</span>
+            </button>
+        </div>
     </div>
 </div>
 
@@ -554,8 +554,12 @@
         }
     });
 
+    /* #chat-messages has CSS scroll-behavior:smooth (app.css) for in-stream scrolling, but that
+       makes a plain `.scrollTop = x` assignment an animated scroll instead of an instant jump —
+       unreliable here (the animation can get interrupted/never finish). scrollTo({behavior:
+       'instant'}) explicitly overrides the CSS behavior, same as chat-stream.js's own version. */
     function scrollToBottom() {
-        chatMessages.scrollTop = chatMessages.scrollHeight;
+        chatMessages.scrollTo({ top: chatMessages.scrollHeight, behavior: 'instant' });
     }
 
     function escHtml(s) {
