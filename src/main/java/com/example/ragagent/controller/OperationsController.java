@@ -5,6 +5,7 @@ import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.context.ThreadContext;
 import com.example.ragagent.llm.BackgroundUsage;
 import com.example.ragagent.llm.CircuitBreaker;
+import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.TrackingEmbeddingModel;
 import com.example.ragagent.model.LlmProviderReport;
 import com.example.ragagent.repository.LlmUsageRepository;
@@ -40,6 +41,7 @@ public class OperationsController {
     private final CircuitBreaker circuitBreaker;
     private final AuditLogger auditLogger;
     private final CuratedQaService curatedQaService;
+    private final LlmRouter llmRouter;
 
     public OperationsController(ThreadMetaService threadMetaService,
                                 MemoryService memoryService,
@@ -47,7 +49,8 @@ public class OperationsController {
                                 AppProperties props,
                                 CircuitBreaker circuitBreaker,
                                 AuditLogger auditLogger,
-                                CuratedQaService curatedQaService) {
+                                CuratedQaService curatedQaService,
+                                LlmRouter llmRouter) {
         this.threadMetaService = threadMetaService;
         this.memoryService = memoryService;
         this.usageRepo = usageRepo;
@@ -55,6 +58,7 @@ public class OperationsController {
         this.circuitBreaker = circuitBreaker;
         this.auditLogger = auditLogger;
         this.curatedQaService = curatedQaService;
+        this.llmRouter = llmRouter;
     }
 
     // ── Page ──────────────────────────────────────────────────────────
@@ -203,6 +207,23 @@ public class OperationsController {
                 "service", "rag-agent",
                 "timestamp", Instant.now().toString()
         );
+    }
+
+    /**
+     * In-flight vs. capacity for the "main" LOCAL LLM tier ({@code role=LOCAL, priority=1}),
+     * polled by the header's {@code LLM: inUse/capacity} indicator every ~3s. {@code available=false}
+     * (no {@code inUse}/{@code capacity}) when no such provider is currently available — the
+     * indicator hides itself in that case rather than showing a meaningless {@code 0/0}.
+     */
+    @GetMapping("/api/v1/llm/concurrency")
+    @ResponseBody
+    public Map<String, Object> getLlmConcurrency() {
+        return llmRouter.localTier1Concurrency()
+                .<Map<String, Object>>map(s -> Map.of(
+                        "available", true,
+                        "inUse", s.inUse(),
+                        "capacity", s.capacity()))
+                .orElseGet(() -> Map.of("available", false));
     }
 
     /** Provider-level daily / weekly / monthly summary + Circuit Breaker state, plus one embedding row (§6.6) and orphan rows (§6.8). */

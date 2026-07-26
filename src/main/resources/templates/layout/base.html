@@ -100,6 +100,12 @@
                 <span id="api-label" th:text="#{nav.api.checking}">Checking</span>
             </span>
 
+            <!-- LOCAL LLM concurrency indicator (role=LOCAL, priority=1 tier) — hidden until the
+                 first poll confirms such a provider exists; refreshed every ~3s (script below) -->
+            <span id="llm-concurrency" class="small text-secondary d-none">
+                <span th:text="#{nav.llm.label}">LLM</span>: <span id="llm-concurrency-value">0/0</span>
+            </span>
+
             <!-- Language switcher -->
             <div class="d-flex align-items-center gap-1 small">
                 <a th:href="@{''(lang=ko)}"
@@ -295,6 +301,28 @@ const I18N = {
                 dot.className     = 'status-dot dot-error';
                 label.textContent = I18N.apiError;
             });
+    })();
+
+    /* LOCAL LLM concurrency indicator (role=LOCAL, priority=1 tier) — polled every ~3s.
+       Hidden whenever no such provider is available (never shown as a stale/meaningless 0/0). */
+    (function () {
+        const wrap  = document.getElementById('llm-concurrency');
+        const value = document.getElementById('llm-concurrency-value');
+        function refreshLlmConcurrency() {
+            fetch('/api/v1/llm/concurrency')
+                .then(r => r.ok ? r.json() : Promise.reject())
+                .then(d => {
+                    if (d.available) {
+                        value.textContent = d.inUse + '/' + d.capacity;
+                        wrap.classList.remove('d-none');
+                    } else {
+                        wrap.classList.add('d-none');
+                    }
+                })
+                .catch(() => wrap.classList.add('d-none'));
+        }
+        refreshLlmConcurrency();
+        setInterval(refreshLlmConcurrency, 3000);
     })();
 
     /* Global toast helper — called by child pages */

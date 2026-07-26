@@ -403,4 +403,79 @@ class LlmRouterTest {
         assertThat(result).isEqualTo("from-2");
         held.close();
     }
+
+    @Test
+    @DisplayName("localTier1Concurrency — LOCAL priority=1 프로바이더가 없으면 empty (priority=0 이나 non-LOCAL 은 집계 제외)")
+    void localTier1Concurrency_noPriority1LocalProvider_empty() {
+        var localFast = p("local-fast", ProviderRole.LOCAL, TaskType.MICRO_TEXT, 0); // priority=0 → 제외
+        var normal = p("openai", ProviderRole.NORMAL, TaskType.TEXT, 1); // priority=1 이지만 LOCAL 아님 → 제외
+        var r = router(RoutingMode.COST_FIRST, localFast, normal);
+
+        assertThat(r.localTier1Concurrency()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("localTier1Concurrency — 단일 LOCAL priority=1 프로바이더의 capacity 를 그대로 반환한다")
+    void localTier1Concurrency_singleProvider_reportsCapacity() {
+        var local = p("local", ProviderRole.LOCAL, TaskType.BOTH, 1);
+        var r = new LlmRouter(List.of(local), null, breaker, RoutingMode.COST_FIRST, 0.6, 180,
+                Map.of("local", 5), 3, 20);
+
+        var snap = r.localTier1Concurrency();
+
+        assertThat(snap).isPresent();
+        assertThat(snap.get().capacity()).isEqualTo(5);
+        assertThat(snap.get().inUse()).isEqualTo(0);
+    }
+
+    @Test
+    @DisplayName("localTier1Concurrency — 동일 role+priority 로 등록된 프로바이더 여러 대의 capacity 를 합산한다")
+    void localTier1Concurrency_multipleProviders_sumsCapacity() {
+        var local1 = p("local", ProviderRole.LOCAL, TaskType.BOTH, 1);
+        var local2 = p("local-2", ProviderRole.LOCAL, TaskType.BOTH, 1);
+        var r = new LlmRouter(List.of(local1, local2), null, breaker, RoutingMode.COST_FIRST, 0.6, 180,
+                Map.of("local", 3, "local-2", 4), 3, 20);
+
+        var snap = r.localTier1Concurrency().orElseThrow();
+
+        assertThat(snap.capacity()).isEqualTo(7);
+        assertThat(snap.inUse()).isEqualTo(0);
+    }
+
+    @Test
+    @DisplayName("localTier1Concurrency — 획득한 permit 만큼 inUse 가 증가하고, 반환하면 다시 줄어든다")
+    void localTier1Concurrency_reflectsAcquiredPermits() {
+        var local = p("local", ProviderRole.LOCAL, TaskType.BOTH, 1);
+        var r = new LlmRouter(List.of(local), null, breaker, RoutingMode.COST_FIRST, 0.6, 180,
+                Map.of("local", 3), 3, 20);
+
+        LlmRouter.Permit permit = r.acquirePermit(local);
+        try {
+            var snap = r.localTier1Concurrency().orElseThrow();
+            assertThat(snap.inUse()).isEqualTo(1);
+            assertThat(snap.capacity()).isEqualTo(3);
+        } finally {
+            permit.close();
+        }
+
+        assertThat(r.localTier1Concurrency().orElseThrow().inUse()).isEqualTo(0);
+    }
+
+    @Test
+    @DisplayName("localTier1Concurrency — 서킷브레이커 차단·런타임 비활성화된 프로바이더는 집계에서 제외한다")
+    void localTier1Concurrency_excludesBlockedOrDisabledProviders() {
+        var local1 = p("local", ProviderRole.LOCAL, TaskType.BOTH, 1);
+        var local2 = p("local-2", ProviderRole.LOCAL, TaskType.BOTH, 1);
+        var toggle = new ProviderToggle();
+        var r = new LlmRouter(List.of(local1, local2), null, breaker, RoutingMode.COST_FIRST, 0.6, 180,
+                Map.of("local", 3, "local-2", 4), 3, 20, toggle);
+
+        assertThat(r.localTier1Concurrency().orElseThrow().capacity()).isEqualTo(7);
+
+        breaker.block("local", null);
+        assertThat(r.localTier1Concurrency().orElseThrow().capacity()).isEqualTo(4); // local-2만 남음
+
+        toggle.setEnabled("local-2", false);
+        assertThat(r.localTier1Concurrency()).isEmpty(); // 둘 다 제외됨
+    }
 }

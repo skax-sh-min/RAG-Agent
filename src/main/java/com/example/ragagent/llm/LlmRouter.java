@@ -42,6 +42,12 @@ public class LlmRouter {
      * no synchronous HTTP caller waiting on a deadline — see {@link #executeGated}.
      */
     private final Map<String, Semaphore> providerGates = new ConcurrentHashMap<>();
+    /** Each provider's total configured permits — {@code Semaphore} itself only exposes the free
+     *  count ({@link Semaphore#availablePermits()}), so in-use has to be derived as capacity minus
+     *  that (see {@link #localTier1Concurrency()}). Fixed at construction time (concurrency is a
+     *  restart-required, non-hot-editable setting), so a plain map is enough — no need to keep it
+     *  in sync with anything at runtime. */
+    private final Map<String, Integer> providerCapacity = new ConcurrentHashMap<>();
     private final int defaultProviderConcurrency;
     private final int permitWaitTimeoutSeconds;
 
@@ -110,7 +116,9 @@ public class LlmRouter {
         for (LlmProvider p : providers) {
             int concurrency = (providerConcurrency != null && providerConcurrency.containsKey(p.name()))
                     ? providerConcurrency.get(p.name()) : this.defaultProviderConcurrency;
-            providerGates.put(p.name(), new Semaphore(Math.max(1, concurrency)));
+            int capacity = Math.max(1, concurrency);
+            providerGates.put(p.name(), new Semaphore(capacity));
+            providerCapacity.put(p.name(), capacity);
         }
     }
 
@@ -257,6 +265,40 @@ public class LlmRouter {
                 .anyMatch(p -> p.role() == LOCAL
                         && !circuitBreaker.isBlocked(p.name())
                         && !providerToggle.isDisabled(p.name()));
+    }
+
+    /** {@code inUse}/{@code capacity} snapshot for {@link #localTier1Concurrency()}. */
+    public record ConcurrencySnapshot(int inUse, int capacity) {}
+
+    /**
+     * In-flight vs. capacity for the "main" LOCAL tier — {@code role=LOCAL, priority=1}, the
+     * answer-serving local model(s) (LLM_ROUTING.md §9's {@code priority=0} MICRO_TEXT offload
+     * model, e.g. {@code local-fast}, is deliberately excluded — it's not the tier users' chat
+     * requests actually wait on). Summed across every currently *available* provider at that
+     * role+priority — registered, not circuit-broken, not runtime-disabled via {@code /settings} —
+     * so a horizontally load-balanced pair (e.g. {@code local} + {@code local-2}) reports combined
+     * capacity. Empty when no such provider is available, so the header's LLM indicator can hide
+     * itself entirely instead of showing a meaningless {@code 0/0}.
+     */
+    public Optional<ConcurrencySnapshot> localTier1Concurrency() {
+        List<LlmProvider> matches = providers.stream()
+                .filter(p -> p.role() == LOCAL && p.priority() == 1)
+                .filter(p -> !circuitBreaker.isBlocked(p.name()))
+                .filter(p -> !providerToggle.isDisabled(p.name()))
+                .toList();
+        if (matches.isEmpty()) {
+            return Optional.empty();
+        }
+        int capacity = 0;
+        int inUse = 0;
+        for (LlmProvider p : matches) {
+            int cap = providerCapacity.getOrDefault(p.name(), defaultProviderConcurrency);
+            Semaphore gate = providerGates.get(p.name());
+            int free = gate != null ? gate.availablePermits() : cap;
+            capacity += cap;
+            inUse += Math.max(0, cap - free);
+        }
+        return Optional.of(new ConcurrencySnapshot(inUse, capacity));
     }
 
     /** Returns the name of the first available provider for the given routing, or "unknown". */

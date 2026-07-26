@@ -6,6 +6,7 @@ import com.example.ragagent.audit.AuditLogger;
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.context.ThreadContextResolver;
 import com.example.ragagent.llm.CircuitBreaker;
+import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.repository.LlmUsageRepository;
 import com.example.ragagent.service.CuratedQaService;
 import com.example.ragagent.service.MemoryService;
@@ -23,6 +24,7 @@ import org.springframework.test.web.servlet.MockMvc;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 
 import static org.hamcrest.Matchers.containsString;
@@ -66,6 +68,7 @@ class OperationsControllerUsageTest {
     @MockitoBean ThreadContextResolver threadContextResolver;
     @MockitoBean AuditLogger auditLogger;
     @MockitoBean CuratedQaService curatedQaService;
+    @MockitoBean LlmRouter llmRouter;
 
     @BeforeEach
     void setUp() {
@@ -103,6 +106,31 @@ class OperationsControllerUsageTest {
                 .andExpect(jsonPath("$[1].type").value("EMBEDDING"))
                 .andExpect(jsonPath("$[1].model").value("nomic-embed"))
                 .andExpect(jsonPath("$[1].blockedUntil").doesNotExist());
+    }
+
+    @Test
+    @DisplayName("GET /api/v1/llm/concurrency — LOCAL priority=1 프로바이더가 있으면 inUse/capacity 를 반환한다")
+    void concurrency_available_returnsInUseAndCapacity() throws Exception {
+        when(llmRouter.localTier1Concurrency())
+                .thenReturn(Optional.of(new LlmRouter.ConcurrencySnapshot(2, 6)));
+
+        mvc.perform(get("/api/v1/llm/concurrency"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.available").value(true))
+                .andExpect(jsonPath("$.inUse").value(2))
+                .andExpect(jsonPath("$.capacity").value(6));
+    }
+
+    @Test
+    @DisplayName("GET /api/v1/llm/concurrency — LOCAL priority=1 프로바이더가 없으면 available=false 만 반환한다")
+    void concurrency_unavailable_returnsAvailableFalse() throws Exception {
+        when(llmRouter.localTier1Concurrency()).thenReturn(Optional.empty());
+
+        mvc.perform(get("/api/v1/llm/concurrency"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.available").value(false))
+                .andExpect(jsonPath("$.inUse").doesNotExist())
+                .andExpect(jsonPath("$.capacity").doesNotExist());
     }
 
     @Test
