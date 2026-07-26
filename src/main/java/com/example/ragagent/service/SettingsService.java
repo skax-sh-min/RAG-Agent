@@ -266,10 +266,16 @@ public class SettingsService implements AppProperties.OverrideSource {
     /**
      * Current provider rows (config + circuit-breaker block + operator enable/disable state). Shared by
      * {@link #buildView()} and the toggle endpoint's HTMX fragment so both render the same table.
+     *
+     * <p>In a {@code LOCAL_ONLY} deployment (see {@link #isLocalOnlyDeployment()}), NORMAL/PREMIUM rows
+     * are filtered out — routing never selects them in that mode, so listing them on the settings page
+     * would just be confusing config-vs-reality noise (a NORMAL/PREMIUM entry can still be present in
+     * {@code application.properties} even when the deployment is pinned to LOCAL_ONLY, e.g. kept around
+     * for a future mode switch).
      */
     public List<ProviderRow> providerRows() {
         Map<String, Instant> blocked = circuitBreaker.getBlockedProviders();
-        return props.llmSafe().providers().stream()
+        return visibleProviders().stream()
                 .map(cfg -> {
                     Instant until = blocked.get(cfg.name());
                     return new ProviderRow(
@@ -286,6 +292,27 @@ public class SettingsService implements AppProperties.OverrideSource {
                 .toList();
     }
 
+    /** {@code app.llm.default-routing-mode} pinned to {@code LOCAL_ONLY} for this whole deployment. */
+    private boolean isLocalOnlyDeployment() {
+        return "LOCAL_ONLY".equals(props.llmSafe().defaultRoutingMode());
+    }
+
+    /**
+     * All configured providers, or only the {@code LOCAL}-role ones when this deployment is
+     * {@code LOCAL_ONLY} (see {@link #providerRows()}). Shared with {@link #setProviderEnabled(String,
+     * boolean)} so a hidden NORMAL/PREMIUM provider can't be toggled through the endpoint either — if
+     * it's not on the page, it's not "known" to it.
+     */
+    private List<AppProperties.ProviderConfig> visibleProviders() {
+        List<AppProperties.ProviderConfig> all = props.llmSafe().providers();
+        if (!isLocalOnlyDeployment()) {
+            return all;
+        }
+        return all.stream()
+                .filter(cfg -> "LOCAL".equalsIgnoreCase(cfg.role()))
+                .toList();
+    }
+
     /**
      * Enables/disables a registered provider at runtime (§A, in-memory — resets on restart). Rejects an
      * unknown provider name, and refuses to disable the last still-enabled provider (which would leave
@@ -294,7 +321,7 @@ public class SettingsService implements AppProperties.OverrideSource {
      * <p>Keyed by name: a load-balanced pair sharing a name toggles together (see {@link ProviderToggle}).
      */
     public List<ProviderRow> setProviderEnabled(String name, boolean enabled) {
-        List<AppProperties.ProviderConfig> providers = props.llmSafe().providers();
+        List<AppProperties.ProviderConfig> providers = visibleProviders();
         boolean known = providers.stream().anyMatch(c -> name.equals(c.name()));
         if (!known) {
             throw new IllegalArgumentException("알 수 없는 프로바이더입니다: " + name);

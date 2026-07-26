@@ -1670,7 +1670,7 @@ CPU/메모리 제약이 있는 환경에서는 `INDEXING_MAX_FILES`와 `INDEXING
 `/settings`는 현재 **유효** LLM/RAG 설정을 한 화면에서 보여주고, 일부 검색 튜닝 값은 **재기동 없이** 조정할 수 있게 합니다. `application.properties`/환경변수를 고치고 재기동하지 않아도 검색 동작을 실시간으로 미세조정할 수 있습니다.
 
 **조회 항목 (그룹별)**:
-- **LLM 라우팅**: 등록 프로바이더·역할(role)·우선순위·모델·API 키 설정 여부·서킷브레이커 상태·**활성화 여부**(아래 참조), 기본 라우팅 모드, 일반 temperature·max-tokens(조회 전용, 실제 config 값 표시).
+- **LLM 라우팅**: 등록 프로바이더·역할(role)·우선순위·모델·API 키 설정 여부·서킷브레이커 상태·**활성화 여부**(아래 참조), 기본 라우팅 모드, 일반 temperature·max-tokens(조회 전용, 실제 config 값 표시). **`app.llm.default-routing-mode`(`LLM_ROUTING_MODE`)가 `LOCAL_ONLY`인 배포에서는 이 표에 `LOCAL` 역할 프로바이더만 표시됩니다** — 이 모드에서는 라우팅이 NORMAL/PREMIUM을 절대 선택하지 않으므로, `application.properties`에 여전히 등록돼 있더라도(예: 나중에 모드를 바꿀 때를 대비해 남겨둔 설정) 표에서는 숨겨져 혼동을 줄입니다. 표 위에 이 사실을 알리는 안내 문구가 함께 표시됩니다. 숨겨진 프로바이더는 `POST /admin/settings/provider/toggle`로도 조작할 수 없습니다(알 수 없는 프로바이더로 거부).
 - **임베딩 / 벡터 스토어**: 임베딩 모델·차원, 벡터 스토어 백엔드(chroma/sqlite-vec).
 - **검색 튜닝 / 인덱싱 / 캐시**: 아래 핫 수정 항목 + 조회 전용 항목.
 
