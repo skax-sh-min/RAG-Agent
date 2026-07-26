@@ -237,12 +237,14 @@ public class CuratedQaService {
     }
 
     /**
-     * §10.10 embedding-fallback — attempts the full question+answer first; on failure (typically:
-     * the combined text exceeds the embedding server's input limit) retries with just the
-     * answer's core RAG sections (상세 설명/예시·코드/설정·주의사항, emphasis markers stripped —
-     * {@link CuratedTextUtils#extractCoreSections}). Returns {@code false} only when both attempts
-     * fail, or when the answer has no core-section structure to fall back to at all (e.g. a
-     * Direct-mode/meta answer) — callers mark the row {@code embed_status='failed'} in that case.
+     * §10.10 embedding-fallback — attempts {@link #defaultSearchText} first (question + answer,
+     * minus the "요약"/"참고" structural sections — see that method); on failure (typically: the
+     * combined text still exceeds the embedding server's input limit) retries with a narrower
+     * slice: just the answer's core RAG sections (상세 설명/예시·코드/설정·주의사항, emphasis markers
+     * additionally stripped — {@link CuratedTextUtils#extractCoreSections}). Returns {@code false}
+     * only when both attempts fail, or when the answer has no core-section structure to fall back
+     * to at all (e.g. a Direct-mode/meta answer) — callers mark the row {@code embed_status='failed'}
+     * in that case.
      */
     private boolean tryEmbedWithFallback(CuratedQa row) {
         try {
@@ -270,9 +272,18 @@ public class CuratedQaService {
         }
     }
 
+    /**
+     * Question + answer minus the "## 참고" (citation noise) and "## 요약" (redundant once "##
+     * 상세 설명" carries the same content) structural sections — both are a net negative for
+     * question-driven semantic matching, so neither should reach the embedding call. Falls back
+     * to the narrower {@link CuratedTextUtils#extractCoreSections} slice only if this text is
+     * still too large for the embedding server (see {@link #tryEmbedWithFallback}); a Direct-mode/
+     * meta answer has neither heading to strip, so this is a no-op for it and the full text is
+     * used as-is.
+     */
     private static String defaultSearchText(CuratedQa row) {
-        return row.question() + "\n\n"
-                + MarkdownNoiseNormalizer.normalize(CuratedTextUtils.stripReferenceSection(row.answer()));
+        String core = CuratedTextUtils.stripStructuralSections(row.answer());
+        return row.question() + "\n\n" + MarkdownNoiseNormalizer.normalize(core);
     }
 
     /**

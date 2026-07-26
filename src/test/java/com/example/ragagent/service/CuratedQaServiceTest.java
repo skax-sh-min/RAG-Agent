@@ -129,6 +129,31 @@ class CuratedQaServiceTest {
     }
 
     @Test
+    @DisplayName("onLike — 임베딩용 SEARCH_TEXT는 '## 요약'도 제외한다(저장 텍스트엔 그대로 유지)")
+    void onLike_stillLikedAfterDebounce_embedTextExcludesSummaryToo() {
+        String fullAnswer = "## 요약\n핵심 한 줄 요약.\n\n## 상세 설명\n자세한 설명입니다.\n\n## 참고\n- [파일.docx | p.1]";
+        when(memoryService.getTurn(UID, TID, TURN_ID)).thenReturn(Optional.of(turn("질문", fullAnswer)));
+        when(repository.upsertActive(anyLong(), any(), any(), any(), any(), any())).thenReturn(1L);
+        when(repository.findById(1L)).thenReturn(Optional.of(curatedQa(1L, "active", "질문", fullAnswer)));
+        when(memoryService.getFeedback(UID, TID, TURN_ID))
+                .thenReturn(Optional.of(new MemoryRepository.FeedbackRow("LIKE")));
+
+        service.onLike(UID, TID, TURN_ID);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<Document>> docsCaptor = ArgumentCaptor.forClass(List.class);
+        verify(vectorStore, timeout(2000)).add(eq("shared"), eq(CuratedQaService.CURATED_VERSION), docsCaptor.capture());
+
+        Document doc = docsCaptor.getValue().get(0);
+        // 저장/표시용 텍스트는 요약·참고 섹션 모두 그대로 유지된다.
+        assertThat(doc.getText()).contains("## 요약", "핵심 한 줄 요약", "## 참고", "파일.docx");
+        // 임베딩용 SEARCH_TEXT 오버라이드는 요약·참고 섹션 모두 제외된다(질문·상세 설명은 포함).
+        String searchText = String.valueOf(doc.getMetadata().get(MetaKey.SEARCH_TEXT));
+        assertThat(searchText).contains("질문", "상세 설명", "자세한 설명입니다.")
+                .doesNotContain("요약", "핵심 한 줄", "참고", "파일.docx");
+    }
+
+    @Test
     @DisplayName("onLike — L모드 답변은 curated_qa 행은 생성하되 임베딩은 아예 시도하지 않는다(원문과 거의 동일하므로)")
     void onLike_lMode_skipsEmbedEntirely() {
         when(memoryService.getTurn(UID, TID, TURN_ID)).thenReturn(Optional.of(turn("질문", "답변", "L")));
