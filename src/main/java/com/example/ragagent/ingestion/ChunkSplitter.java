@@ -490,10 +490,29 @@ public class ChunkSplitter {
                 break;                                       // next는 이미 큼 → 그 뒤로는 병합 시도 안 함
             }
 
+            // "0"인 CHAPTER_NO는 아직 실제 챕터를 못 만난 프롤로그 플레이스홀더(H1 제목만 있거나
+            // 헤딩이 아예 없는 경우 — DocumentLoaderService#splitMarkdownBySections 참고: 챕터
+            // 카운터는 H2부터만 증가한다)일 뿐 "0장"이 실재하는 게 아니다. 이런 그룹이 forward-merge
+            // 로 실제 챕터 헤딩(예: "## 1장")을 흡수했다면 병합된 청크는 사실상 그 챕터 안에서
+            // 시작하는 것이므로, 그룹 내에서 처음 발견되는 진짜 챕터 번호로 교체한다. 시작 섹션이
+            // 이미 실제 챕터 번호를 갖고 있으면(또는 병합된 어떤 섹션에도 실제 번호가 없으면) 기존
+            // "첫 섹션 메타데이터 우선" 관례를 그대로 따른다.
+            if ("0".equals(metadata.get(MetaKey.CHAPTER_NO))) {
+                metadata.put(MetaKey.CHAPTER_NO, firstRealChapterNo(docs, start, j));
+            }
             groups.add(new SectionGroup(new Document(acc.toString(), metadata), start));
             i = j + 1;
         }
         return groups;
+    }
+
+    /** First non-"0" {@link MetaKey#CHAPTER_NO} among {@code docs[start..end]}, or "0" if none. */
+    private static String firstRealChapterNo(List<Document> docs, int start, int end) {
+        for (int k = start; k <= end; k++) {
+            Object v = docs.get(k).getMetadata().get(MetaKey.CHAPTER_NO);
+            if (v instanceof String s && !"0".equals(s)) return s;
+        }
+        return "0";
     }
 
     private static void appendSection(StringBuilder acc, String text) {

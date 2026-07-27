@@ -632,6 +632,50 @@ class ChunkSplitterTest {
         assertThat(groups).hasSize(1);
     }
 
+    @Test
+    @DisplayName("mergeSectionsByChapter — 첫 섹션이 H1(챕터번호 '0')이라 실제 '## 1장'과 병합되면 " +
+            "그 실제 챕터번호를 그룹 메타데이터로 사용한다")
+    void chapterMerge_prologueChapterNoIsReplacedByFirstRealChapterFound() {
+        List<Document> docs = List.of(
+                new Document("# 문서 제목\n짧은 인트로",
+                        Map.of(MetaKey.CHAPTER_NO, "0")),
+                new Document("## 1장 개요\n짧은 본문",
+                        Map.of(MetaKey.CHAPTER_NO, "1")));
+
+        List<ChunkSplitter.SectionGroup> groups = splitter.mergeSectionsByChapter(docs, 1000, 100, 100);
+
+        assertThat(groups).hasSize(1); // 프롤로그가 작아서 전방 병합됨
+        assertThat(groups.get(0).doc().getMetadata().get(MetaKey.CHAPTER_NO)).isEqualTo("1");
+    }
+
+    @Test
+    @DisplayName("mergeSectionsByChapter — 병합된 섹션 전부 챕터번호가 '0'이면(진짜 프롤로그) '0'을 유지한다")
+    void chapterMerge_allZeroChapterNo_staysZero() {
+        List<Document> docs = List.of(
+                new Document("# 문서 제목\n짧은 인트로",
+                        Map.of(MetaKey.CHAPTER_NO, "0")),
+                new Document("헤딩 없는 본문",
+                        Map.of(MetaKey.CHAPTER_NO, "0")));
+
+        List<ChunkSplitter.SectionGroup> groups = splitter.mergeSectionsByChapter(docs, 1000, 100, 100);
+
+        assertThat(groups).hasSize(1);
+        assertThat(groups.get(0).doc().getMetadata().get(MetaKey.CHAPTER_NO)).isEqualTo("0");
+    }
+
+    @Test
+    @DisplayName("mergeSectionsByChapter — 시작 섹션이 이미 실제 챕터번호면 병합 뒤에도 그대로 유지된다(첫 섹션 메타데이터 우선 관례)")
+    void chapterMerge_startSectionAlreadyRealChapterNo_isPreserved() {
+        List<Document> docs = List.of(
+                new Document("### 하위\n짧음", Map.of(MetaKey.CHAPTER_NO, "1.1")),
+                new Document("본문만 있고 헤딩 없음", Map.of(MetaKey.CHAPTER_NO, "1.1")));
+
+        List<ChunkSplitter.SectionGroup> groups = splitter.mergeSectionsByChapter(docs, 1000, 100, 100);
+
+        assertThat(groups).hasSize(1);
+        assertThat(groups.get(0).doc().getMetadata().get(MetaKey.CHAPTER_NO)).isEqualTo("1.1");
+    }
+
     // ── 부모 챕터 브레드크럼 ──────────────────────────────────────────────────
 
     @Test

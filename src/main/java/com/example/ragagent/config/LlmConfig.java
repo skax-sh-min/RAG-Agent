@@ -198,17 +198,53 @@ public class LlmConfig {
                     ? response.data().stream().map(ModelEntry::id).filter(Objects::nonNull).toList()
                     : List.of();
         } catch (Exception e) {
+            log.error("""
+                    [LLM STARTUP CHECK FAILED] provider=[{}] could not reach {}/v1/models — {}: {}
+                      -> Is the server (e.g. LM Studio / llama-server) actually running at that address?
+                      -> If the address/port is wrong, fix {} and restart.
+                      -> If the server just starts later than this app, set LLM_VERIFY_LOCAL_MODELS_ON_STARTUP=false to skip this check.""",
+                    providerName, apiBase, e.getClass().getSimpleName(), e.getMessage(), baseUrlEnvVarHint(providerName));
             throw new IllegalStateException(
                     "Local LLM provider [%s] is unreachable at %s/v1/models — is the server running and is the URL correct? (%s: %s)"
                             .formatted(providerName, apiBase, e.getClass().getSimpleName(), e.getMessage()), e);
         }
         if (!availableModels.contains(model)) {
+            log.error("""
+                    [LLM STARTUP CHECK FAILED] provider=[{}] configured model '{}' was not found at {}/v1/models
+                      -> Models actually available there: {}
+                      -> Fix {} to one of the models above, or load the intended model on that server.""",
+                    providerName, model, apiBase, availableModels, modelEnvVarHint(providerName));
             throw new IllegalStateException(
                     "Local LLM provider [%s]: configured model '%s' was not found at %s/v1/models. Available models: %s"
                             .formatted(providerName, model, apiBase, availableModels));
         }
         log.info("Local LLM provider [{}] verified — model '{}' confirmed available at {}/v1/models",
                 providerName, model, apiBase);
+    }
+
+    /**
+     * Best-effort env var name for a G3 failure log — matches this file's default provider wiring
+     * (providers[0]=local-fast/[1]=local/[2]=local-2 below) so an operator sees exactly which env
+     * var to fix instead of having to cross-reference application.properties by hand. Any other
+     * provider name (e.g. a custom local-vision slot) falls back to a generic pointer.
+     */
+    private static String baseUrlEnvVarHint(String providerName) {
+        return switch (providerName) {
+            case "local-fast" -> "LOCAL_FAST_LLM_URL";
+            case "local" -> "LOCAL_LLM_URL";
+            case "local-2" -> "LOCAL_LLM_URL_2";
+            default -> "this provider's base-url env var (see application.properties app.llm.providers[].base-url)";
+        };
+    }
+
+    /** Same convention as {@link #baseUrlEnvVarHint}, for the model-name env var instead. */
+    private static String modelEnvVarHint(String providerName) {
+        return switch (providerName) {
+            case "local-fast" -> "LOCAL_FAST_LLM_MODEL";
+            case "local" -> "LOCAL_LLM_MODEL";
+            case "local-2" -> "LOCAL_LLM_MODEL_2";
+            default -> "this provider's model env var (see application.properties app.llm.providers[].model)";
+        };
     }
 
     /** OpenAI-compatible {@code GET /v1/models} response shape — only the fields G3 needs. */
