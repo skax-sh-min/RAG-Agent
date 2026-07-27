@@ -79,6 +79,33 @@ public final class CuratedTextUtils {
     }
 
     /**
+     * The inverse of {@link #stripSummarySection} — returns just the BODY of the leading "## 요약"
+     * section (heading line excluded, up to the next heading or the end of the answer), or
+     * {@code ""} when the answer has no "## 요약" heading (Direct-mode/meta answers, which never
+     * follow the fixed RAG-answer format) or when that section is empty.
+     *
+     * <p>Used by {@code ConversationSummarizerService}: a RAG answer already opens with an
+     * LLM-written recap of itself, so the conversation-history summarizer can reuse it verbatim
+     * instead of paying for a second LLM call to re-summarize the same content. Shares this
+     * class's heading regexes on purpose so the "what counts as the 요약 section" definition can
+     * never drift between the two consumers.
+     */
+    public static String extractSummarySection(String answer) {
+        if (answer == null) return "";
+        Matcher summaryMatch = SUMMARY_HEADING.matcher(answer);
+        if (!summaryMatch.find()) return "";
+        Matcher nextHeading = ANY_HEADING.matcher(answer);
+        int end = answer.length();
+        while (nextHeading.find()) {
+            if (nextHeading.start() > summaryMatch.end()) {
+                end = nextHeading.start();
+                break;
+            }
+        }
+        return answer.substring(summaryMatch.end(), end).strip();
+    }
+
+    /**
      * Strips both structural sections that dilute question-driven semantic matching: the leading
      * "## 요약" ({@link #stripSummarySection}) and the trailing "## 참고" ({@link
      * #stripReferenceSection}). This is the whole of {@code CuratedQaService}'s default embed

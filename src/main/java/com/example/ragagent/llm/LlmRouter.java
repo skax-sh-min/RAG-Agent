@@ -267,6 +267,26 @@ public class LlmRouter {
                         && !providerToggle.isDisabled(p.name()));
     }
 
+    /**
+     * Whether the dedicated MICRO_TEXT offload model ({@code role=LOCAL, priority=0}, i.e. the
+     * {@code local-fast} provider behind {@code LOCAL_FAST_LLM_URL} — LLM_ROUTING.md §9) is
+     * currently available: registered (a blank base-url disables it outright at startup, LlmConfig
+     * G2), not circuit-broken, not runtime-disabled via {@code /settings}.
+     *
+     * <p>Callers use this to skip an optional background chore entirely rather than let it fall
+     * through to the answer-serving {@code priority=1} tier — {@code MICRO_TEXT} routing does fall
+     * back to that tier by design ({@code BOTH} absorbs {@code MICRO_TEXT}), which is right for
+     * chores the app can't do any other way, but wrong for ones with a free non-LLM alternative
+     * (see {@code ConversationSummarizerService}, which reuses the answer's own "## 요약" section).
+     */
+    public boolean hasMicroTextOffloadProvider() {
+        return providers.stream()
+                .anyMatch(p -> p.role() == LOCAL
+                        && p.priority() == 0
+                        && !circuitBreaker.isBlocked(p.name())
+                        && !providerToggle.isDisabled(p.name()));
+    }
+
     /** {@code inUse}/{@code capacity} snapshot for {@link #localTier1Concurrency()}. */
     public record ConcurrencySnapshot(int inUse, int capacity) {}
 

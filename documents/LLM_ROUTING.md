@@ -398,7 +398,7 @@ CREATE TABLE IF NOT EXISTS llm_usage (
 | 답변·Critic·Rerank (`TEXT`) | **큰 모델** | 소형은 `supports(TEXT)=false` |
 | Vision·이미지 분류 (`VISION`/`LIGHT_BOTH`) | **큰 모델** | 소형은 이미지 미지원 |
 
-- **폴백/회귀 0**: `MICRO_TEXT`는 `LIGHT_TEXT`/`LIGHT_BOTH`/`BOTH`가 모두 지원(부분집합)하므로, 소형 다운·미등록 시 큰 모델이 그대로 흡수한다. `RetrievalService`는 `MICRO_TEXT→LIGHT_TEXT→TEXT` 순 폴백이라 cloud-only(LOCAL 없음)에서도 구성 실패가 없다.
+- **폴백/회귀 0**: `MICRO_TEXT`는 `LIGHT_TEXT`/`LIGHT_BOTH`/`BOTH`가 모두 지원(부분집합)하므로, 소형 다운·미등록 시 큰 모델이 그대로 흡수한다. **예외: 대화 요약**(`ConversationSummarizerService`)만은 이 폴백을 타지 않는다 — 소형(`role=LOCAL, priority=0`)이 없으면(`LlmRouter.hasMicroTextOffloadProvider()=false`) LLM 요약 자체를 생략하고 원본 history로 폴백한다(부가 기능이 답변용 모델의 동시성 슬롯을 잠식하지 않게 하려는 의도적 게이팅. 답변이 이미 `## 요약` 섹션을 갖고 있으면 소형 유무와 무관하게 그 내용을 그대로 재사용하므로 LLM 호출 0회). `RetrievalService`는 `MICRO_TEXT→LIGHT_TEXT→TEXT` 순 폴백이라 cloud-only(LOCAL 없음)에서도 구성 실패가 없다.
 - **priority 필수**: 소형(0) < 큰(1). 동률이면 §6 로드밸런서가 둘 사이에 분산해 **절반만** 오프로딩된다.
 - **인덱스 연속성**: `providers[N]`은 0부터 연속이어야 바인딩(파일 내 줄 순서 자체는 무관). 기본 파일은 `[0]`=소형·`[1]`=로컬 LLM 1·`[2]`=로컬 LLM 2·`[3]~[8]`=외부(PREMIUM gemma-4-31b가 `[6]`·`[7]` 두 키로 로드밸런싱)·`[9]`=Vision(선택, §3 예시).
 

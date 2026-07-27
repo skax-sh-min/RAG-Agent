@@ -16,6 +16,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  *  - null 입력 → 빈 문자열
  *  - stripSummarySection: "## 요약" 섹션(다음 헤딩 전까지) 제거, 헤딩 없으면 원문 그대로,
  *    요약이 마지막 내용이면 끝까지 제거, 헤딩 변형 문구도 인식
+ *  - extractSummarySection: "## 요약" 본문만 반환(헤딩 제외), 헤딩 변형 인식, 없으면 빈 문자열
  *  - stripStructuralSections: 요약+참고를 함께 제거(stripSummarySection∘stripReferenceSection),
  *    CuratedQaService의 기본 임베딩 텍스트와 동일한 파이프라인
  *  - extractCoreSections: 상세 설명~설정/주의사항만 남기고 요약/참고 제거, 강조 마커 제거,
@@ -136,6 +137,44 @@ class CuratedTextUtilsTest {
     @DisplayName("stripSummarySection — null 입력 → 빈 문자열")
     void stripSummarySection_nullInput_returnsEmpty() {
         assertThat(CuratedTextUtils.stripSummarySection(null)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("extractSummarySection — '## 요약' 본문만(헤딩 제외, 다음 헤딩 전까지) 반환한다")
+    void extractSummarySection_returnsSummaryBodyOnly() {
+        String answer = """
+                ## 요약
+                핵심 한 줄 요약.
+
+                ## 상세 설명
+                자세한 설명입니다.
+
+                ## 참고
+                 - [파일.docx | p.1]""";
+
+        assertThat(CuratedTextUtils.extractSummarySection(answer)).isEqualTo("핵심 한 줄 요약.");
+    }
+
+    @Test
+    @DisplayName("extractSummarySection — 요약이 마지막 내용이면(다음 헤딩 없음) 끝까지 반환한다")
+    void extractSummarySection_summaryIsLastSection_readsToEnd() {
+        assertThat(CuratedTextUtils.extractSummarySection("## 요약\n핵심 한 줄 요약."))
+                .isEqualTo("핵심 한 줄 요약.");
+    }
+
+    @Test
+    @DisplayName("extractSummarySection — 헤딩 변형 문구도 인식한다 ('## 요약 및 결론' 등)")
+    void extractSummarySection_headingVariant() {
+        assertThat(CuratedTextUtils.extractSummarySection("## 요약 및 결론\n핵심 요약.\n\n## 상세 설명\n설명."))
+                .isEqualTo("핵심 요약.");
+    }
+
+    @Test
+    @DisplayName("extractSummarySection — 요약 헤딩이 없거나(Direct 답변) 본문이 비면 빈 문자열")
+    void extractSummarySection_noSummarySection_returnsEmpty() {
+        assertThat(CuratedTextUtils.extractSummarySection("안녕하세요! 무엇을 도와드릴까요?")).isEmpty();
+        assertThat(CuratedTextUtils.extractSummarySection("## 요약\n\n## 상세 설명\n설명.")).isEmpty();
+        assertThat(CuratedTextUtils.extractSummarySection(null)).isEmpty();
     }
 
     @Test

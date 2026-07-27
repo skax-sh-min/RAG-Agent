@@ -209,6 +209,8 @@ Assistant 응답에 👍/👎 토글 추가(`conversation_turns.feedback`, `PATC
 
 입력 시작 시(첫 글자) `ConversationSummarizerService`가 이전 대화를 LOCAL 프로바이더로 미리 요약해 스레드별 LRU 캐시(최대 3개, TTL 15초)에 저장 — 캐시 있으면 "요약+최근 2턴", 없으면 기존 `getHistory()`로 조용히 폴백.
 
+**이후 개선 — 답변의 `## 요약` 재사용 + LLM 요약 게이팅**: RAG 답변은 `prompt.answer.system`의 고정 5-섹션 형식상 이미 자기 자신의 요약(`## 요약`)을 첫 섹션으로 갖고 있으므로, 그 내용을 그대로 쓰고 LLM 재요약은 하지 않는다(`CuratedTextUtils.extractSummarySection()` — §10.10의 `stripSummarySection()`과 헤딩 정규식 공유). ① 모든 turn 의 답변에 `## 요약`이 있으면 **LLM 호출 0회**로 요약 완성 ② 일부에 없으면(Direct 모드·meta 답변 등) 그 요약본으로 축약된 입력에 대해 기존과 같이 LLM 1회 호출 ③ 단, LLM 요약은 **MICRO_TEXT 전담 소형 모델(`LOCAL_FAST_LLM_URL`, `role=LOCAL priority=0`)이 등록되어 있을 때만** 수행한다(`LlmRouter.hasMicroTextOffloadProvider()`) — 미설정이면 요약을 만들지 않고 원본 history 폴백으로 둔다. 부가 기능인 대화 요약이 `MICRO_TEXT`의 기본 폴백 경로를 타고 답변 생성용 `priority=1` 로컬 모델의 슬롯을 잠식하지 않게 하려는 것.
+
 ### 6.10 LLM 사용량 — 백그라운드(비-채팅) 사용량 분리 기록 ✅ 완료
 
 채팅 외 LLM 호출(요약·키워드추출·서식교정·TXT→MD·제목생성)을 `BackgroundUsage` 접두사(`summary:`/`keyword:`/`mdcorrect:`/`txt2md:`/`title:`)로 채팅과 분리 기록, `/llm-usage`에 `type=BACKGROUND` 카드로 노출. 조사 중 발견한 핵심 채팅 경로 자체의 추적 공백은 §6.14로 분리했다.

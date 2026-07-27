@@ -112,7 +112,7 @@ container system stop
 | `LOCAL_LLM_KEY_2` | — | `no-key` | `providers[2]` API 키 (로컬 엔드포인트는 무시 — 비우면 `no-key` 치환, `LOCAL_LLM_KEY`를 상속하지 않음) |
 | `LOCAL_LLM_MODEL_2` | — | `LOCAL_LLM_MODEL` 폴백 | `providers[2]` 모델명 — 보통 `providers[1]`과 동일 모델을 다른 서버에 복제 |
 | `LOCAL_LLM_TYPE_2` | — | `BOTH` | `providers[2]` 작업 유형(`app.llm.providers[2].type`). 값 집합은 `LOCAL_LLM_TYPE`과 동일. 보통 `BOTH` |
-| `LOCAL_FAST_LLM_URL` | 사용 시 ✅ | 없음 | §6.21 태스크별 모델 오프로딩 — `providers[0]`(`local-fast`) 엔드포인트. **미설정·공백이면 이 provider가 통째로 비활성화됨**(회귀 0 — `MICRO_TEXT`는 `local`이 흡수). **값을 설정하면 기동 시 검증하며(G3) 실패 시 애플리케이션이 시작되지 않는다** — [OPERATOR_MANUAL.md §5.4 예제 6](documents/OPERATOR_MANUAL.md) 참고 |
+| `LOCAL_FAST_LLM_URL` | 사용 시 ✅ | 없음 | §6.21 태스크별 모델 오프로딩 — `providers[0]`(`local-fast`) 엔드포인트. **미설정·공백이면 이 provider가 통째로 비활성화됨** — `MICRO_TEXT`는 `local`이 흡수하되, **대화 요약만은 흡수하지 않고 생략**(채팅은 원본 history 폴백). **값을 설정하면 기동 시 검증하며(G3) 실패 시 애플리케이션이 시작되지 않는다** — [OPERATOR_MANUAL.md §5.4 예제 6](documents/OPERATOR_MANUAL.md) 참고 |
 | `LOCAL_FAST_LLM_KEY` | — | — | `providers[0]` API 키. `LOCAL_LLM_KEY`와 마찬가지로 로컬 엔드포인트는 보통 불필요 |
 | `LOCAL_FAST_LLM_MODEL` | — | `Qwen3.5-0.8B-Q4_K_M.gguf` | `providers[0]` 모델명 |
 | `LLM_VERIFY_LOCAL_MODELS_ON_STARTUP` | — | `true` | (`app.llm.verify-local-models-on-startup`) — G3 토글. `true`면 URL이 설정된 각 LOCAL provider에 대해 기동 시 `GET {URL}/models`를 호출해 접속 가능·모델명 일치를 확인하고, 실패하면 애플리케이션이 시작되지 않는다. 로컬 서버가 앱보다 늦게 뜨는 배포 순서 레이스가 있을 때만 `false`로 끌 것 — 그 경우 예전처럼 첫 요청 실패 후 런타임 폴백된다 |

@@ -129,6 +129,28 @@ class LlmRouterTest {
     }
 
     @Test
+    @DisplayName("hasMicroTextOffloadProvider — LOCAL priority=0(local-fast) 등록 여부/차단·비활성화까지 반영")
+    void hasMicroTextOffloadProvider() {
+        var fast  = p("local-fast", ProviderRole.LOCAL, TaskType.MICRO_TEXT, 0);
+        var local = p("local",      ProviderRole.LOCAL, TaskType.BOTH,       1);
+        var toggle = new ProviderToggle();
+        var r = new LlmRouter(List.of(fast, local), null, breaker, RoutingMode.COST_FIRST, 0.6, 180,
+                Map.of(), 3, 20, toggle);
+
+        assertThat(r.hasMicroTextOffloadProvider()).isTrue();
+
+        toggle.setEnabled("local-fast", false);
+        assertThat(r.hasMicroTextOffloadProvider()).isFalse();   // 런타임 비활성화
+        toggle.setEnabled("local-fast", true);
+
+        breaker.block("local-fast", null);
+        assertThat(r.hasMicroTextOffloadProvider()).isFalse();   // 서킷 차단
+
+        // LOCAL_FAST_LLM_URL 미설정 → LlmConfig G2 가 아예 등록하지 않는 상태
+        assertThat(router(RoutingMode.COST_FIRST, local).hasMicroTextOffloadProvider()).isFalse();
+    }
+
+    @Test
     @DisplayName("executeWithTracking — mmproj 미지원 에러는 CircuitBreaker 를 차단하지 않음 (TEXT 작업은 계속 이용 가능)")
     void visionUnsupportedError_doesNotBlockCircuitBreaker() {
         ChatModel chatModel = mock(ChatModel.class);

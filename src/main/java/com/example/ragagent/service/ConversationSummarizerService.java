@@ -1,6 +1,7 @@
 package com.example.ragagent.service;
 
 import com.example.ragagent.config.AppProperties;
+import com.example.ragagent.ingestion.CuratedTextUtils;
 import com.example.ragagent.llm.BackgroundUsage;
 import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.RoutingMode;
@@ -30,6 +31,10 @@ import java.util.concurrent.ConcurrentHashMap;
  * safety net for threads whose cache hasn't been warmed yet. Best-effort only — every public
  * method fails open (returns null / no-ops) so a slow or unavailable LOCAL provider never blocks
  * or degrades chat.
+ *
+ * <p>The summary itself is built without an LLM whenever the turns' answers already carry their
+ * own "## 요약" section, and the LLM path is used only when some answer doesn't — and only when
+ * the dedicated MICRO_TEXT offload model is configured. See {@link #summarize}.
  */
 @Service
 public class ConversationSummarizerService {
@@ -112,22 +117,17 @@ public class ConversationSummarizerService {
         if (last != null && now - last < precomputeTtlMillis) return;
         lastPrecomputeAt.put(threadId, now);
 
-        String deduped = dedupe(memoryService.getRecentTurns(userId, threadId));
-        if (deduped.isBlank()) return;
+        List<MemoryRepository.Turn> turns = dedupeTurns(memoryService.getRecentTurns(userId, threadId));
+        if (turns.isEmpty()) return;
 
         try {
-            String systemPrompt = messageSource.getMessage("prompt.summary.system", null, locale);
-            String summary = llmRouter.executeWithTracking(TaskType.MICRO_TEXT, RoutingMode.LOCAL_ONLY,
-                    BackgroundUsage.SUMMARY_PREFIX,
-                    model -> model.call(new Prompt(List.of(
-                            new SystemMessage(systemPrompt),
-                            new UserMessage(deduped)))));
+            String summary = summarize(turns, threadId, locale);
             if (summary == null || summary.isBlank()) return;
 
-            // The LLM call above can take a few seconds; if the user disliked this exact turn
-            // while it was in flight, the summary text may have been generated from (and may
+            // Summarizing can take a few seconds (when it goes to the LLM at all); if the user
+            // disliked this exact turn meanwhile, the summary may have been built from (and may
             // reference) the now-disliked answer. Discard it rather than cache it — the next
-            // precompute will naturally exclude the disliked turn via dedupe()'s own filter.
+            // precompute will naturally exclude the disliked turn via dedupeTurns()' own filter.
             if (turnId != null && isDisliked(userId, threadId, turnId)) {
                 log.debug("[SUMMARY] discarded for thread={} — turnId={} disliked during precompute",
                         threadId, turnId);
@@ -140,6 +140,67 @@ public class ConversationSummarizerService {
             // LOCAL provider missing/unavailable/timed out — leave no cache entry, caller falls back.
             log.debug("[SUMMARY] precompute skipped for thread={}: {}", threadId, e.getMessage());
         }
+    }
+
+    /**
+     * Produces the thread summary, preferring the answers' own "## 요약" sections over an LLM call.
+     *
+     * <p>A RAG answer already opens with an LLM-written recap of itself
+     * ({@code prompt.answer.system}'s fixed 요약 → 상세 설명 → … format), so re-summarizing it is
+     * paying a second time for text the first call already produced. {@link #buildSummaryInput}
+     * therefore substitutes each answer with its own 요약 section where one exists:
+     * <ul>
+     *   <li>every turn has one → return the assembled text as the summary, no LLM call at all;</li>
+     *   <li>some turn has none (Direct-mode/meta answers, older turns) → one LLM call as before,
+     *       but over the already-shrunk input, so the model is effectively only summarizing the
+     *       answers that lacked a 요약 section;</li>
+     *   <li>…unless the dedicated MICRO_TEXT offload model is not configured
+     *       ({@code LOCAL_FAST_LLM_URL} unset → {@link LlmRouter#hasMicroTextOffloadProvider()}
+     *       false), in which case this returns null and the caller falls back to raw history —
+     *       summarization is an optional nicety and must never borrow the answer-serving tier
+     *       (MICRO_TEXT would otherwise fall through to it) to compute itself.</li>
+     * </ul>
+     */
+    private String summarize(List<MemoryRepository.Turn> turns, String threadId, Locale locale) {
+        SummaryInput input = buildSummaryInput(turns);
+        if (input.text().isBlank()) return null;
+
+        if (input.fullyPreSummarized()) {
+            log.debug("[SUMMARY] thread={} — all {} turn(s) carry a '## 요약' section, LLM call skipped",
+                    threadId, turns.size());
+            return input.text();
+        }
+        if (!llmRouter.hasMicroTextOffloadProvider()) {
+            log.debug("[SUMMARY] thread={} — LLM summarization disabled (no LOCAL_FAST_LLM_URL provider)",
+                    threadId);
+            return null;
+        }
+
+        String systemPrompt = messageSource.getMessage("prompt.summary.system", null, locale);
+        return llmRouter.executeWithTracking(TaskType.MICRO_TEXT, RoutingMode.LOCAL_ONLY,
+                BackgroundUsage.SUMMARY_PREFIX,
+                model -> model.call(new Prompt(List.of(
+                        new SystemMessage(systemPrompt),
+                        new UserMessage(input.text())))));
+    }
+
+    /**
+     * Rendered Q/A history for {@link #summarize}, plus whether EVERY turn's answer carried its own
+     * "## 요약" section (i.e. nothing is left that still needs an LLM to be summarized).
+     */
+    private record SummaryInput(String text, boolean fullyPreSummarized) {}
+
+    private static SummaryInput buildSummaryInput(List<MemoryRepository.Turn> turns) {
+        StringBuilder sb = new StringBuilder();
+        boolean fullyPreSummarized = true;
+        for (MemoryRepository.Turn t : turns) {
+            String ownSummary = CuratedTextUtils.extractSummarySection(t.answer());
+            if (ownSummary.isBlank()) fullyPreSummarized = false;
+            sb.append("Q: ").append(t.question())
+              .append("\nA: ").append(ownSummary.isBlank() ? t.answer() : ownSummary)
+              .append("\n\n");
+        }
+        return new SummaryInput(sb.toString().strip(), fullyPreSummarized);
     }
 
     private boolean isDisliked(String userId, String threadId, long turnId) {
@@ -202,18 +263,15 @@ public class ConversationSummarizerService {
 
     // Normalizes + keeps only the latest occurrence of each distinct question (drops repeated/
     // resent questions), and honors the same DISLIKE hard-exclusion getHistory() applies (§6.9).
-    // Package-private for unit testing.
-    String dedupe(List<MemoryRepository.Turn> turns) {
+    // Returns turns (not rendered text) so buildSummaryInput() can decide per answer whether it
+    // already carries its own "## 요약" section. Package-private for unit testing.
+    List<MemoryRepository.Turn> dedupeTurns(List<MemoryRepository.Turn> turns) {
         Map<String, MemoryRepository.Turn> byNormalizedQuestion = new LinkedHashMap<>();
         for (MemoryRepository.Turn t : turns) {
             if ("DISLIKE".equals(t.feedback())) continue;
             byNormalizedQuestion.put(normalize(t.question()), t);
         }
-        StringBuilder sb = new StringBuilder();
-        for (MemoryRepository.Turn t : byNormalizedQuestion.values()) {
-            sb.append("Q: ").append(t.question()).append("\nA: ").append(t.answer()).append("\n\n");
-        }
-        return sb.toString().strip();
+        return List.copyOf(byNormalizedQuestion.values());
     }
 
     private static String normalize(String s) {
