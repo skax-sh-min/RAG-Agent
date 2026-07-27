@@ -27,11 +27,6 @@
     <!-- ── LLM providers ─────────────────────────────────────────────────── -->
     <div class="card mb-4">
         <div class="card-header fw-semibold" th:text="#{settings.group.llm}">LLM Routing</div>
-        <div th:if="${settings.defaultRoutingMode == 'LOCAL_ONLY'}"
-             class="alert alert-secondary py-2 small mx-3 mt-3 mb-0" role="alert">
-            <i class="bi bi-info-circle me-1"></i>
-            <span th:text="#{settings.hint.local-only-providers}">This deployment is LOCAL_ONLY — NORMAL/PREMIUM providers are hidden below (routing never selects them in this mode).</span>
-        </div>
         <div class="card-body p-0">
             <div th:replace="~{fragments/settings-providers :: providers(${settings.providers})}"></div>
         </div>
@@ -67,9 +62,6 @@
                     <span class="font-monospace" th:text="${settings.embeddingDimensions}">1024</span>
                     <span class="badge bg-warning text-dark ms-1" th:text="#{settings.note.restart}">restart</span>
                 </div>
-            </div>
-            <div th:if="${isAdmin}" class="text-secondary mt-2" th:text="#{settings.note.toggle-volatile}">
-                Enable/disable takes effect immediately but is in-memory — a restart re-enables every provider.
             </div>
         </div>
     </div>

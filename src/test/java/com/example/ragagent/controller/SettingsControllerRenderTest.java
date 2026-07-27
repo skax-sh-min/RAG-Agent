@@ -116,4 +116,27 @@ class SettingsControllerRenderTest {
                 .andExpect(content().string(org.hamcrest.Matchers.containsString("app.search-rrf-k")))
                 .andExpect(content().string(org.hamcrest.Matchers.containsString("local")));
     }
+
+    @Test
+    @DisplayName("GET /settings — LOCAL_ONLY + 관리자여도 'LLM 라우팅' 안내 배너/휘발성 안내 문구는 더 이상 렌더되지 않는다")
+    void settingsPage_doesNotRenderRemovedLlmRoutingHints() throws Exception {
+        SettingItem hot = new SettingItem(SettingsKeys.SEARCH_RRF_K, "settings.item.rrf-k", "60",
+                "number", true, false, null, 1.0, 1000.0, 1.0);
+        SettingsView view = new SettingsView(
+                List.of(new ProviderRow("local", "LOCAL", 0, "qwen", "http://localhost:1234/v1", true, false, null, true)),
+                "LOCAL_ONLY", "0.0", "6000", "bge-m3", "http://localhost:1234/v1", "1024", "chroma",
+                List.of(new SettingGroup("search_hot", "settings.group.search_hot", List.of(hot))));
+        when(settingsService.buildView()).thenReturn(view);
+
+        AppUserDetails principal = new AppUserDetails(
+                "id-1", "admin@local", "", "Admin", "ADMIN", true, false);
+
+        mvc.perform(get("/settings").with(user(principal)))
+                .andExpect(status().isOk())
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("LOCAL_ONLY")))
+                .andExpect(content().string(org.hamcrest.Matchers.not(
+                        org.hamcrest.Matchers.containsString("NORMAL/PREMIUM"))))
+                .andExpect(content().string(org.hamcrest.Matchers.not(
+                        org.hamcrest.Matchers.containsString("re-enables every provider"))));
+    }
 }
