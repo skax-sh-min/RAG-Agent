@@ -205,6 +205,11 @@ public class PptxToMarkdownConverter {
             boolean dedup = props != null && props.pptxRemoveDuplicateSlidesSafe();
             // Section-divider (title-only, body-less, image-less) slide removal (§ app.pptx-drop-divider-slides).
             boolean dropDividers = props != null && props.pptxDropDividerSlidesSafe();
+            // "Preview title" slide removal — title-only slide whose text is restated on the next slide
+            // (§ app.pptx-drop-redundant-title-slides).
+            boolean dropRedundantTitles = props != null && props.pptxDropRedundantTitleSlidesSafe();
+            // Last-slide ending-marker (끝/END/The End) removal (§ app.pptx-drop-ending-slide).
+            boolean dropEndingSlide = props != null && props.pptxDropEndingSlideSafe();
             // Every heading text across the deck (normalized for comparison) — the reference set the
             // table-of-contents heuristic matches a slide's bullets against.
             Set<String> allHeadingsNormalized = headingFrequency.keySet().stream()
@@ -230,6 +235,17 @@ public class PptxToMarkdownConverter {
                 }
                 if (dropDividers && isSectionDividerSlide(extract, hasImages)) {
                     log.debug("[PPTX] {}번 슬라이드 제거 — 본문·이미지 없이 구분용 제목만 있는 섹션 구분 슬라이드", slideNum);
+                    continue;
+                }
+                if (dropRedundantTitles) {
+                    SlideExtract nextExtract = (i + 1 < slides.size()) ? extracts.get(i + 1) : null;
+                    if (isRedundantTitlePreviewSlide(extract, hasImages, nextExtract)) {
+                        log.debug("[PPTX] {}번 슬라이드 제거 — 이미지·도형 없이 제목만 있고 다음 슬라이드에 같은 내용이 포함됨(예고 제목 슬라이드)", slideNum);
+                        continue;
+                    }
+                }
+                if (dropEndingSlide && i == slides.size() - 1 && isEndingOnlySlide(extract, hasImages)) {
+                    log.debug("[PPTX] {}번 슬라이드 제거 — 마지막 슬라이드이고 종료 표시('끝'/'END' 등)만 있음", slideNum);
                     continue;
                 }
                 appendSlide(sb, extract, slideNum, hoistedImages, headingFrequency);
@@ -337,9 +353,17 @@ public class PptxToMarkdownConverter {
                 continue; // footer/slide-number/date-time placeholders repeat on every slide — noise, not content
             }
 
+            // 도형 하나의 살아남은 줄을 모은 뒤 한꺼번에 렌더링한다 — 여러 줄이 코드면 통째로 펜스로
+            // 감싸야 하므로(appendSlideBodyShape), 줄 단위로 즉시 append 할 수 없다. 헤딩 승격·연속
+            // 중복 판정은 기존과 똑같이 문단 순서대로 진행해 동작을 그대로 유지한다.
+            List<BodyLine> shapeLines = new ArrayList<>();
             for (XSLFTextParagraph para : textShape.getTextParagraphs()) {
-                String raw = rawParagraphText(para).trim();
-                if (raw.isBlank()) continue;
+                String rawFull = rawParagraphText(para);
+                String raw = rawFull.trim();
+                if (raw.isBlank()) {
+                    if (!shapeLines.isEmpty()) shapeLines.add(BodyLine.blank()); // 중간 빈 줄만 보존
+                    continue;
+                }
 
                 boolean isBullet = para.isBullet();
                 if (!isBullet && !bulletSeen && slideHasBullets
@@ -353,12 +377,48 @@ public class PptxToMarkdownConverter {
                 String rendered = paragraphText(para);
                 String normalized = normalizeForDedup(rendered);
                 if (normalized.equals(lastBodyLine)) continue; // 직전 줄과 내용이 같음 — 연속 중복 스킵
-                appendBodyLine(body, para, rendered);
+                shapeLines.add(new BodyLine(para, rendered, rawFull.stripTrailing()));
                 lastBodyLine = normalized;
             }
+            appendSlideBodyShape(body, shapeLines);
         }
 
         return new SlideExtract(headingCandidates, stripExcessiveBold(body.toString()), consumedImagePaths);
+    }
+
+    /** 슬라이드 본문 한 줄. {@code para}가 {@code null}이면 문단 사이 빈 줄로, 코드 펜스 경로에서만
+     *  원문 재현을 위해 보존되고 일반 경로에서는 기존처럼 버려진다. */
+    private record BodyLine(XSLFTextParagraph para, String rendered, String raw) {
+        static BodyLine blank() { return new BodyLine(null, "", ""); }
+    }
+
+    /**
+     * 그룹에 속하지 않은 <b>단독 텍스트 상자</b> 하나의 본문을 버퍼에 추가한다 —
+     * {@link #appendShapeTextBlock}(그룹 내부 도형)의 슬라이드 본문 판. 여러 줄이고 불릿이 없으며
+     * {@link #looksLikeCodeBlock}가 코드로 판정하면 통째로 {@code ```} 펜스로 감싸고(원문
+     * {@link #rawParagraphText} 사용 — 들여쓰기 보존), 그 외에는 줄마다 {@link #appendBodyLine}로
+     * 넘겨 기존 동작(비불릿은 {@code \n\n} 문단 분리, 불릿은 들여쓰기+마커)을 그대로 유지한다.
+     *
+     * <p>코드가 아닌 경우 그룹 경로와 달리 별도의 빈 줄 블록 처리를 하지 않는다 —
+     * {@link #appendBodyLine}가 이미 비불릿 문단마다 {@code \n\n}를 넣어 문단으로 갈라놓기 때문.
+     */
+    private void appendSlideBodyShape(StringBuilder body, List<BodyLine> shapeLines) {
+        while (!shapeLines.isEmpty() && shapeLines.get(shapeLines.size() - 1).para() == null) {
+            shapeLines.remove(shapeLines.size() - 1); // 꼬리 빈 줄 제거
+        }
+        List<BodyLine> content = shapeLines.stream().filter(l -> l.para() != null).toList();
+        if (content.isEmpty()) return;
+
+        boolean anyBullet = content.stream().anyMatch(l -> l.para().isBullet());
+        if (content.size() > 1 && !anyBullet
+                && looksLikeCodeBlock(shapeLines.stream().map(BodyLine::raw).toList())) {
+            appendBlankLineIfNeeded(body);
+            body.append("```\n");
+            for (BodyLine line : shapeLines) body.append(line.raw()).append("\n");
+            body.append("```\n\n");
+            return;
+        }
+        for (BodyLine line : content) appendBodyLine(body, line.para(), line.rendered());
     }
 
     /** 도형 하나 + 정렬 키(anchor 좌상단 y, x)를 함께 들고 다니기 위한 보조 레코드. */
@@ -450,15 +510,21 @@ public class PptxToMarkdownConverter {
             } else if (shape instanceof XSLFTextShape textShape) {
                 String combined = combineShapeText(textShape);
                 if (combined.isBlank()) continue;
+                if (isBareNumberLabel(combined)) continue; // 순번 배지("1", "(2)" 등) — 그룹은 이미지로도 남으니 텍스트로는 무의미
                 if (!seenShapeTexts.add(normalizeForDedup(combined))) continue; // 그룹 내 다른 도형과 내용 중복 — 스킵
 
-                for (XSLFTextParagraph para : textShape.getTextParagraphs()) {
-                    String text = paragraphText(para);
-                    if (text.isBlank()) continue;
-                    appendGroupBodyLine(body, para, text);
-                }
+                appendShapeTextBlock(body, textShape);
             }
         }
+    }
+
+    // 그룹 내부의 순번/단계 배지(원형 도형 안의 "1", "2." 같은 라벨)를 걸러내는 패턴. 도형 그룹은
+    // 어차피 PptxImageExtractor가 통째로 이미지로도 래스터라이즈하므로, 문맥 없는 숫자 한 줄만
+    // appendGroupText()의 텍스트 추출에 남으면 "1"이라는 의미 없는 줄만 본문에 남는다.
+    private static final Pattern BARE_NUMBER_LABEL = Pattern.compile("^[(\\[]?[0-9]{1,3}[.)\\]]?$");
+
+    private boolean isBareNumberLabel(String text) {
+        return BARE_NUMBER_LABEL.matcher(text.strip()).matches();
     }
 
     /** 도형 하나에 속한 모든 문단을 공백으로 이어붙인다 — 도형 단위 중복 비교를 위한 텍스트 뭉치({@link #tableCellText}와 동일한 접근). */
@@ -479,19 +545,134 @@ public class PptxToMarkdownConverter {
     }
 
     /**
-     * 그룹 내부 텍스트 한 줄을 버퍼에 추가한다. 불릿은 {@link #appendBodyLine}과 동일하게
-     * 들여쓰기+마커로 렌더링하되, 비불릿 일반 텍스트는 문단 분리({@code \n\n}) 대신 한 줄 개행
+     * 그룹 내부 텍스트 한 줄을 렌더링한다. 불릿은 {@link #appendBodyLine}과 동일하게 들여쓰기+마커를
+     * 붙이고, 비불릿 일반 텍스트는 그대로 둔다. 줄 사이는 문단 분리({@code \n\n}) 대신 한 줄 개행
      * ({@code \n})으로 촘촘하게 이어붙인다 — 도형 내부 라벨들은 서로 관계있는 짧은 항목(노드·단계)이
      * 대부분이라, 마커 블록 안에서 빈 줄로 벌어지지 않고 하나로 묶여 보이는 편이 낫다.
      */
-    private void appendGroupBodyLine(StringBuilder body, XSLFTextParagraph para, String text) {
-        if (para.isBullet()) {
-            String indent = "  ".repeat(Math.max(0, para.getIndentLevel()));
-            String marker = para.getAutoNumberingScheme() != null ? "1." : "-";
-            body.append(indent).append(marker).append(" ").append(text).append("\n");
-        } else {
-            body.append(text).append("\n");
+    private String renderGroupLine(XSLFTextParagraph para, String text) {
+        if (!para.isBullet()) return text;
+        String indent = "  ".repeat(Math.max(0, para.getIndentLevel()));
+        String marker = para.getAutoNumberingScheme() != null ? "1." : "-";
+        return indent + marker + " " + text;
+    }
+
+    /**
+     * 도형 하나의 텍스트를 버퍼에 추가한다. 줄이 하나뿐이면 {@link #renderGroupLine} 결과를 그대로
+     * (짧은 노드/단계 라벨이 대부분이라 촘촘하게 이어붙이는 기존 동작 유지). <b>여러 줄</b>이면
+     * 도형 하나가 곧 하나의 덩어리이므로 아래처럼 블록으로 묶어, 인접한 다른 도형의 라벨과
+     * 뒤섞여 한 문단으로 읽히지 않게 한다:
+     * <ul>
+     *   <li>{@link #looksLikeCodeBlock}가 코드로 판정하면 앞뒤에 {@code ```} 펜스를 두른다 —
+     *       펜스 안은 {@code MarkdownNoiseNormalizer}가 손대지 않고
+     *       {@code DocumentLoaderService.splitMarkdownBySections()}도 구조로 파싱하지 않아,
+     *       들여쓰기·{@code ---} 같은 줄이 장식으로 오인돼 지워지는 일이 없다. 펜스 안에는 강조
+     *       마커가 없는 원문({@link #rawParagraphText})을 넣어 코드가 그대로 재현되게 한다.</li>
+     *   <li>코드가 아니면 앞뒤에 빈 줄만 넣어 하나의 문단 블록으로 분리한다(줄 사이는 기존처럼
+     *       한 줄 개행 유지).</li>
+     * </ul>
+     */
+    private void appendShapeTextBlock(StringBuilder body, XSLFTextShape textShape) {
+        List<String> rendered = new ArrayList<>(); // 빈 줄 제외 — 문단 블록 경로용(기존 동작)
+        List<String> raw = new ArrayList<>();      // 중간 빈 줄 보존 — 코드 펜스 경로용(원문 재현)
+        boolean anyBullet = false;
+
+        for (XSLFTextParagraph para : textShape.getTextParagraphs()) {
+            String text = paragraphText(para);
+            if (text.isBlank()) {
+                if (!raw.isEmpty()) raw.add(""); // 선두 빈 줄은 버리고 중간 빈 줄만 남긴다
+                continue;
+            }
+            if (para.isBullet()) anyBullet = true;
+            rendered.add(renderGroupLine(para, text));
+            raw.add(rawParagraphText(para).stripTrailing());
         }
+        while (!raw.isEmpty() && raw.get(raw.size() - 1).isBlank()) raw.remove(raw.size() - 1);
+        if (rendered.isEmpty()) return;
+
+        if (rendered.size() == 1) {
+            body.append(rendered.get(0)).append("\n"); // 단일 라벨 — 기존 동작 그대로
+            return;
+        }
+
+        appendBlankLineIfNeeded(body);
+        if (!anyBullet && looksLikeCodeBlock(raw)) {
+            body.append("```\n");
+            for (String line : raw) body.append(line).append("\n");
+            body.append("```\n\n");
+            return;
+        }
+        for (String line : rendered) body.append(line).append("\n");
+        body.append("\n");
+    }
+
+    /** 버퍼가 이미 빈 줄로 끝나 있지 않으면 빈 줄 하나를 만들어 준다(선두에서는 아무것도 하지 않음). */
+    private void appendBlankLineIfNeeded(StringBuilder body) {
+        if (body.isEmpty()) return;
+        if (body.charAt(body.length() - 1) != '\n') {
+            body.append("\n\n");
+        } else if (body.length() >= 2 && body.charAt(body.length() - 2) != '\n') {
+            body.append("\n");
+        }
+    }
+
+    // ── 도형 여러 줄 텍스트의 코드 여부 판정 ────────────────────────────────────────────────
+    /** 목록 표시로 시작하는 줄 — 하나라도 있으면 코드가 아니라 목록으로 본다(요구사항). */
+    private static final Pattern BULLET_LINE = Pattern.compile("^\\s*(?:[-*+•·‧]\\s+|\\d+[.)]\\s+)");
+    /**
+     * 한 줄이 '코드스러운지' 보는 신호. 다이어그램 라벨에 흔한 화살표({@code ->}/{@code =>})는
+     * 일부러 신호에서 뺐다 — 도형 그룹 안에서는 "요청 -> 응답" 같은 평범한 흐름 라벨이 훨씬 흔해
+     * 오탐 위험이 크기 때문.
+     */
+    private static final Pattern CODE_LINE_SIGNAL = Pattern.compile(
+            "[;{}]\\s*$"                                              // 문장/블록 종결
+          + "|^\\s*(?://|/\\*|\\*/|#include\\b|#define\\b)"           // 주석/전처리기
+          + "|\\b(?:public|private|protected|static|final|void|class|interface|enum"
+          + "|extends|implements|import|package|return|throw|throws|new"
+          + "|function|def|var|let|const|async|await|lambda|elif|except)\\b"
+          + "|\\b(?:SELECT|INSERT|UPDATE|DELETE|FROM|WHERE|JOIN|VALUES)\\b"
+          + "|(?:::|&&|\\|\\||!=|==|<=|>=)"
+          + "|^\\s*</?[A-Za-z][\\w.:-]*(?:\\s[^>]*)?/?>\\s*$"         // XML/HTML 태그 한 줄
+          + "|^\\s*[\\w.$\\[\\]]+\\s*=[^=]"                           // 대입문
+    );
+    /** 코드로 보려면 (빈 줄 제외) 전체 줄의 이 비율 이상이 코드 신호를 가져야 한다. */
+    private static final int CODE_LINE_RATIO_PERCENT = 60;
+
+    /**
+     * 도형에서 뽑은 여러 줄 텍스트가 코드 블록인지 보수적으로 판정한다. 오탐(평문을 펜스로 감쌈)은
+     * 검색·표시 품질을 해치는 반면 미탐은 기존 동작(빈 줄 블록)으로 남을 뿐이라, 애매하면 코드가
+     * 아니라고 본다.
+     *
+     * <p><b>빈 줄은 판정에서 완전히 제외한다</b> — 분자(코드 신호 적중 줄)에도, 분모(전체 줄 수)에도
+     * 세지 않는다. 코드 스니펫 중간의 논리 구분용 빈 줄이 분모만 키워 적중률을 떨어뜨리면(예: 코드
+     * 3줄 + 빈 줄 2줄 → 3/5 = 60%로 아슬아슬해짐) 멀쩡한 코드가 평문으로 새기 때문. 호출자가 빈 줄을
+     * 걸러 넘기든 그대로 넘기든 같은 결과가 나오도록 여기서 직접 거른다.
+     *
+     * <p>{@code false}로 즉시 확정하는 경우: ① 줄 하나라도 {@code -}/{@code *}/{@code 1.} 같은 목록
+     * 표시로 시작(요구사항 2 — 불릿이 섞여 있으면 코드가 아니다), ② 본문에 {@code ```}가 이미 들어
+     * 있어 펜스를 두르면 마크다운이 깨지는 경우, ③ 빈 줄을 뺀 내용이 한 줄 이하인 경우. 그 외에는
+     * 줄별 {@link #CODE_LINE_SIGNAL} 적중률이 {@link #CODE_LINE_RATIO_PERCENT}% 이상일 때만 코드로
+     * 본다(2줄짜리는 둘 다 맞아야 함).
+     */
+    boolean looksLikeCodeBlock(List<String> lines) {
+        if (lines == null) return false;
+
+        List<String> content = new ArrayList<>();
+        for (String line : lines) {
+            if (line != null && !line.isBlank()) content.add(line);
+        }
+        if (content.size() < 2) return false;
+
+        for (String line : content) {
+            if (line.contains("```")) return false;
+            if (BULLET_LINE.matcher(line).find()) return false;
+        }
+
+        int signals = 0;
+        for (String line : content) {
+            if (CODE_LINE_SIGNAL.matcher(line).find()) signals++;
+        }
+        return signals * 100 >= content.size() * CODE_LINE_RATIO_PERCENT;
     }
 
     /**
@@ -816,6 +997,71 @@ public class PptxToMarkdownConverter {
         // 남은 것은 조사·서술어 없는 명사구 — 짧을 때만 구분용으로 본다
         int words = t.split("\\s+").length;
         return words <= DIVIDER_MAX_WORDS && t.length() <= DIVIDER_MAX_CHARS;
+    }
+
+    // ── 예고 제목 슬라이드 제거 (app.pptx-drop-redundant-title-slides) ─────────────────────
+
+    /**
+     * 이미지·도형(표/그룹/다이어그램/차트 텍스트는 전부 {@link SlideExtract#body()}로 들어가므로
+     * 본문 없음이 곧 "추가 정보 없음"이다) 없이 짧은 제목 한 줄만 있는 슬라이드 중, 그 제목이 바로
+     * 다음 슬라이드의 내용(제목+본문)에 그대로 포함되어 있으면 {@code true} — 다음 슬라이드가 같은
+     * 제목을 헤딩으로 다시 쓰며 실제 내용을 담는 흔한 "예고" 패턴으로, 앞 슬라이드는 실질적으로
+     * 빈 예고편이라 검색 인덱스에 남길 가치가 없다. 마지막 슬라이드(다음이 없음)는 항상 유지된다.
+     * 정규화된 제목이 1글자뿐이면(우연한 부분 일치 위험) 대상에서 제외한다.
+     */
+    private boolean isRedundantTitlePreviewSlide(SlideExtract extract, boolean hasImages, SlideExtract nextExtract) {
+        if (hasImages) return false;
+        if (!extract.body().isBlank()) return false;
+        if (extract.headingCandidates().isEmpty()) return false;
+        if (nextExtract == null) return false;
+
+        String nextText = normalizeForCompare(
+                String.join(" ", nextExtract.headingCandidates()) + " " + nextExtract.body());
+        if (nextText.isBlank()) return false;
+
+        for (String heading : extract.headingCandidates()) {
+            String normalizedHeading = normalizeForCompare(heading);
+            if (normalizedHeading.length() >= 2 && nextText.contains(normalizedHeading)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // ── 마지막 종료 슬라이드 제거 (app.pptx-drop-ending-slide) ─────────────────────────────
+    // 정규화(공백/구두점 제거 + 소문자화) 후 이 값들 중 하나를 포함하면 종료 표시로 본다.
+    private static final Set<String> ENDING_MARKERS =
+            Set.of("끝", "end", "theend", "감사합니다", "thankyou");
+    // 종료 표시를 뺀 나머지 글자가 이 값 이하이면(인사말 뒤 짧은 서명 등) 여전히 종료 슬라이드로 본다.
+    private static final int ENDING_SLIDE_MAX_EXTRA_CHARS = 10;
+
+    /**
+     * 덱의 마지막 슬라이드이고, 이미지 없이 내용 전체(제목+본문)를 정규화했을 때 '끝'/'END'/
+     * 'The End'/'감사합니다'/'Thank you' 중 하나를 포함하며, 그 표시를 뺀 나머지 글자 수가
+     * {@link #ENDING_SLIDE_MAX_EXTRA_CHARS} 이하이면 {@code true} — 실질적 내용이 없는 마무리
+     * 슬라이드라 검색 인덱스에 남길 가치가 없다(짧은 서명·이모지 등은 허용하되, 연락처처럼 긴
+     * 추가 내용이 있으면 유지). 마지막 슬라이드인지는 호출자가 먼저 판단한다.
+     */
+    private boolean isEndingOnlySlide(SlideExtract extract, boolean hasImages) {
+        if (hasImages) return false;
+        String combined = String.join(" ", extract.headingCandidates()) + " " + extract.body();
+        String normalized = normalizeForEndingCompare(combined);
+        if (normalized.isEmpty()) return false;
+
+        for (String marker : ENDING_MARKERS) {
+            if (normalized.contains(marker)
+                    && normalized.length() - marker.length() <= ENDING_SLIDE_MAX_EXTRA_CHARS) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** 공백·구두점을 전부 제거하고 소문자화해 '끝'/'END'/'The End' 같은 종료 표시를 비교하기
+     *  위한 정규화 — 문자(한글 포함)·숫자만 남긴다. */
+    private String normalizeForEndingCompare(String text) {
+        String stripped = stripEmphasisMarkers(text).toLowerCase(java.util.Locale.ROOT);
+        return stripped.replaceAll("[^\\p{L}\\p{N}]", "");
     }
 
     /**

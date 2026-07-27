@@ -57,7 +57,6 @@ HTTP 요청
 | questionType == "meta" | CLASSIFIER → DIRECT_ANSWER |
 | 그 외 | CLASSIFIER → RETRIEVAL |
 | ANSWER sufficient=false, retryCount < max | ANSWER → RETRIEVAL |
-| ANSWER isDualMode | ANSWER → FINALIZE (CRITIC 건너뜀) |
 | CRITIC grounded=false, retryCount < max | CRITIC → RETRIEVAL |
 | 그 외 | CRITIC → FINALIZE |
 
@@ -76,13 +75,6 @@ HTTP 요청
 ```
 COST_FIRST와 동일하되,
 재시도 소진 후에도 답변 불충분 → PREMIUM 모델로 자동 업그레이드 후 재답변
-```
-
-### DUAL
-```
-검색 → LOCAL + 외부 모델 동시 답변 생성
-     → 외부 답변 채택 (LOCAL 답변은 비교용으로 함께 반환)
-     → CRITIC 없이 종료
 ```
 
 ### meta 질문
@@ -195,9 +187,17 @@ PROGRESSIVE 모드 AND sufficient=false AND retryCount >= max
   │    때문에 디렉터리 동기화가 미완료 문서를 다음 동기화에서 영구히 건너뛰지는 않는다
   │
   ├─ 청킹
-  │    DOCX/TXT/MD/PPTX/PDF(비스캔) → 섹션(헤딩) 단위 유지, 초과 시 섹션 내부 슬라이딩 윈도우
-  │      단, PPTX/PDF(비스캔)는 서로 다른 슬라이드/페이지(page_or_slide) 간 병합은 금지 —
-  │      "청크 1개 = 슬라이드/페이지 1개 = 정확한 인용" 보장을 유지하기 위함
+  │    DOCX/TXT/MD → 챕터(헤딩) 단위 유지(mergeSectionsByChapter). minChunkSize 미만 섹션만
+  │      다음 섹션과 병합하되 다음이 상위(부모) 헤딩이면 금지, 크기별 규칙으로 병합 방향 결정
+  │      (합≤chunkSize 병합 / next 단독≤chunkSize 분리 / 초과분은 prepend 후 마지막 조각
+  │      ≥minChunkSize×1.5일 때만 병합). 하위 챕터(레벨≥3) 청크 첫 조각엔 바로 위 부모 헤딩
+  │      1줄을 브레드크럼으로 덧붙이고(prependParentBreadcrumb), 그래도 minChunkSize 미만인
+  │      청크는 직전 청크로 뒤로 병합(backwardMergeShortChunks). 초과 섹션은 섹션 내부 슬라이딩 윈도우
+  │    PPTX/PDF(비스캔) → (사전 패스) 연속 슬라이드의 ##+### 헤딩이 완전히 같으면 chunkSize
+  │      이내에서 최대 2장까지 하나로 합침(mergeIdenticalHeadingSlides) — 두 번째부터는 중복
+  │      헤딩 제거, 대신 [페이지: N] 마커 삽입. 이후 슬라이드/페이지 섹션 단위 유지(mergeShortSections),
+  │      초과 시 섹션 내부 슬라이딩 윈도우. 그 외에는 서로 다른 슬라이드/페이지(page_or_slide)
+  │      간 병합 금지 — "청크 1개 = 슬라이드/페이지 1개 = 정확한 인용" 보장을 유지하기 위함
   │    PDF(스캔) → 슬라이딩 윈도우만 적용 (chunkSize / chunkOverlap, 섹션 병합 없음 — 기존 동작 그대로)
   │
   ├─ 메타데이터 태깅
@@ -319,9 +319,9 @@ PROGRESSIVE 모드 AND sufficient=false AND retryCount >= max
     이상의 라인 주석) 시작 직전, ⓑ 바로 위에 주석이 없는 함수·메서드·클래스 시그니처 시작 직전
     (제어자 키워드·`def`/`class`·`fun`/`func`/`fn`·셸 함수 형태를 인식하는 정규식 휴리스틱이며,
     `if`/`for` 같은 제어문은 대상에서 제외됨). 이 패스는 또한 `resolveCodeLanguage()`로 **잘못 붙은
-    ```sql 태그를 Java 코드로 교정**한다(아래 "언어 판정" 참조) — `inferLanguage=false`인 이 1차
-    패스에서도 동작하므로 모든 문서에 적용된다. 언어에 무관하게 동작하며 LLM이 섹션 교정 중
-    흐트러뜨린 코드 블록 포맷을 재조립 이후 결정론적으로 정리한다.
+    ```sql 태그를 Java 코드로 교정**하고, 라벨이 아예 없는 블록은 내용을 보고 언어를 추론해 채운다
+    (아래 "언어 판정" 참조 — `inferLanguage=true`, 모든 문서에 적용). 언어에 무관하게 동작하며 LLM이
+    섹션 교정 중 흐트러뜨린 코드 블록 포맷을 재조립 이후 결정론적으로 정리한다.
   - **코드 블록 언어 판정** (`resolveCodeLanguage`/`inferCodeLanguage`): Java 코드가 SQL로 오분류되던
     문제(예: `repository.delete(...)`·`jdbc.select(...)` 메서드 호출을 `\bdelete\b`/`\bselect\b`로
     SQL로 잡음)를 두 방향으로 고친다 — ⓐ **SQL 판정 엄격화**(`SQL_STATEMENT`): `SELECT … FROM`·
@@ -332,18 +332,44 @@ PROGRESSIVE 모드 AND sufficient=false AND retryCount >= max
     스크립트엔 없어서 실제 SQL을 가로채지 않으므로 `inferCodeLanguage`에서 SQL보다 먼저 검사한다.
     라벨 없는 블록은 이 순서로 추론하고, 이미 `sql` 태그가 붙은 블록도 Java 신호가 있고 실제 SQL 문이
     없으면 `java`로 교정한다(이미 붙은 `python`·`java` 등 다른 태그나 실제 SQL의 `sql` 태그는 보존).
-  - `addHeadingNumbers=true`(문서 업로드 화면 "소제목 숫자 생성" 체크박스)면 위 정리가 끝난 뒤 2차
-    패스(`secondPassHeadingAndCodePolish()`)로 H2~H6 헤딩에 계층적 번호를 매기고
-    (`addHierarchicalHeadingNumbers()`, 기존 번호 프리픽스는 먼저 제거 후 현재 헤딩 순서로 재계산 —
-    그래서 아래 `reapplyHeadingNumbers()`로 재실행해도 매번 안전) 라벨 없는 코드 블록의 언어 태그를
-    재추론한다(`normalizeCodeBlocks(md, true)` — 위와 동일한 빈 줄 정리를 한 번 더 적용하지만
-    멱등적이라 결과는 바뀌지 않는다) — **PPTX는 체크박스 상태와 무관하게 이 옵션을 항상 무시한다**
-    (§6.3-bis 2번)
-  - 마지막으로 항상 `postProcessMarkdown(result)`가 fence/table-aware 결정적 정리를 한 번 더 한다
-    (코드 블록 **내부**는 무변형): ① 남은 프롬프트 구분자 `[DOCUMENT]`/`[/DOCUMENT]` 줄 제거, ②
-    내용 없는 `-` 한 줄 제거(수평선 `---`·`- 항목`·표 구분줄 `|---|`은 보존), ③ **코드 블록과 GFM 표
-    앞뒤에 빈 줄 보장**(표 구분줄 `|---|` 기준으로 표 블록을 감지 — 앞뒤 빈 줄이 없어 표/코드가 깨지던
-    문제), ④ 펜스 밖 연속 빈 줄을 1개로 축소.
+  - `addHeadingNumbers=true`(문서 업로드 화면 "소제목 숫자 생성" 체크박스)면 위 정리가 끝난 뒤
+    `addHierarchicalHeadingNumbers()`로 H2~H6 헤딩에 계층적 번호를 매긴다(기존 번호 프리픽스는 먼저
+    제거 후 현재 헤딩 순서로 재계산 — 그래서 아래 `reapplyHeadingNumbers()`로 재실행해도 매번 안전).
+    이 패스는 펜스 내부를 건너뛰므로 코드 블록에는 영향이 없다 — **PPTX는 체크박스 상태와 무관하게
+    이 옵션을 항상 무시한다**(§6.3-bis 2번)
+  - **코드 블록 언어 추론은 이 체크박스와 무관하게 항상 실행된다**(`normalizeCodeBlocks(result, true)`).
+    예전에는 추론이 위 `addHeadingNumbers` 게이트 안쪽 2차 패스(`secondPassHeadingAndCodePolish()`)에만
+    들어 있어, 체크박스를 끄고 올린 DOCX/TXT/MD와 (항상 `addHeadingNumbers=false`로 강제되는) **PPTX
+    전체**가 언어 태그 없는 펜스로 남았다 — 코드의 언어는 소제목 번호 옵션과 아무 상관이 없으므로
+    분리했다. 이제 1차 정리 시점에 바로 추론까지 끝내고, 2차 패스는 헤딩 번호만 담당한다
+  - 마지막으로 항상 `postProcessMarkdown(result, isPptx)`가 fence/table-aware 결정적 정리를 한 번 더
+    한다(코드 블록 **내부**는 무변형). `isPptx`는 이 호출 시 이미 넘어온 `groupByPage`를 그대로
+    재사용한다 — PPTX 전용이라는 의미가 같기 때문이다(§6.3-bis 2번). **PPTX일 때만**
+    (`isPptx=true`) `applyPptxShapeFormatting()`이 아래 ①~④보다 먼저 실행된다 —
+    `PptxToMarkdownConverter`와 위 섹션별 LLM 교정이 남기는 도형 그룹/이미지 앵커 서식 문제를
+    정리하는 5개 규칙:
+      a) 불릿(`- `) 사이 빈 줄 정규화(`normalizeBulletGaps`) — 빈 줄 1개는 삭제(우발적 잡음으로
+         간주), 2개 이상은 1개로 축소(의도된 구분으로 간주). 불릿 뒤가 다른 불릿이 아니면(본문·
+         헤딩·문서 끝 등) 빈 줄 개수를 그대로 둔다.
+      b) `[도형 그룹]` 블록 안에서 완전히 같은 한 줄(숫자 1개 또는 단어 1개 — 공백 없는 단일
+         토큰, 예: SmartArt에서 겹친 텍스트 런 때문에 중복되는 단계 번호·라벨)이 반복되면 첫
+         등장만 남기고 이후 중복은 드롭(`dedupSingleTokenLinesInShapeGroups`, 블록 단위로 스코프).
+         `[`로 시작하는 구조 마커 줄(`[이미지: ...]` 등 — 이미지 참조를 실수로도 지우지 않기 위해)과
+         `{`/`}`를 포함한 줄(플레이스홀더 등)은 절대 건드리지 않는다.
+      c) `[도형 그룹]` 여는 마커 바로 다음에 오는 이미지 앵커(`[이미지: ...]`/`[이미지 설명: ...]`)
+         묶음 — 항상 그룹 내부 텍스트보다 먼저 나온다(`appendShapeGroup()`) — 앞뒤에 빈 줄을
+         보장해 마커·그룹 내부 텍스트와 분리한다(`ensureImageAnchorBoundaryBlankLines`).
+      d) 그룹 안팎 어디서든 이미지 앵커 단위(`[이미지: ...]` + 선택적 `[이미지 설명: ...]`)가
+         2개 이상 빈 줄 없이 연속하면 그 사이에 빈 줄을 삽입한다(`ensureBlankBetweenConsecutiveImages`)
+         — 이미지 하나뿐이면 손대지 않는다.
+      e) `[도형 그룹]` 여는 마커 앞, `[/도형 그룹]` 닫는 마커 뒤에 빈 줄을 보장한다
+         (`ensureBlankAroundShapeGroupMarkers`) — 이미 빈 줄이 있으면 중복 삽입하지 않는다.
+    다섯 규칙 모두 fence-aware(코드 블록 내부는 절대 건드리지 않음)이고, 이미 조건이 맞으면
+    아무것도 바꾸지 않는다 — 이 패스가 새로 넣은 빈 줄은 뒤이어 항상 실행되는 아래 ①~④가 함께
+    정규화한다(중복 축소·말미 트림 포함): ① 남은 프롬프트 구분자 `[DOCUMENT]`/`[/DOCUMENT]` 줄
+    제거, ② 내용 없는 `-` 한 줄 제거(수평선 `---`·`- 항목`·표 구분줄 `|---|`은 보존), ③ **코드
+    블록과 GFM 표 앞뒤에 빈 줄 보장**(표 구분줄 `|---|` 기준으로 표 블록을 감지 — 앞뒤 빈 줄이 없어
+    표/코드가 깨지던 문제), ④ 펜스 밖 연속 빈 줄을 1개로 축소.
   - **표 셀 안 이미지 설명은 `<br>`로 주입**: `addImageDescriptions=true`로 이미지 설명을 넣을 때
     (`injectDescriptionsForPattern`), 마커가 표 행 안(`looksLikeTableRow`)이면 설명을 개행이 아니라
     `<br>`로 붙인다 — 셀 안 개행(`[이미지: x]\n[이미지 설명: y]`)이 행을 두 줄로 쪼개 표 전체를 깨뜨리기
@@ -462,9 +488,15 @@ PROGRESSIVE 모드 AND sufficient=false AND retryCount >= max
      - **본문 렌더링**: 본문 불릿은 들여쓰기 레벨(`XSLFTextParagraph.getIndentLevel()`)을 중첩 목록으로만 반영하고, 어떤 경우에도 소제목(`###` 이상)으로 승격하지 않는다 — 슬라이드 하나를 하나의 원자적 섹션으로 다루는 편이 PPTX의 실제 구조에 더 가깝고, 들여쓰기를 헤딩으로 승격하면 평범한 한 줄짜리 불릿 목록도 소제목이 되어 메타데이터가 산만해질 위험이 있기 때문(검토된 대안 및 채택 근거는 구현 당시 논의 참고). `FOOTER`/`SLIDE_NUMBER`/`DATETIME` placeholder는 매 슬라이드에 반복되는 노이즈(예: "대외비" 문구)라 본문에서 완전히 제외한다. 불릿은 자동 번호 목록(`getAutoNumberingScheme() != null`)이면 `"1. "`, 일반 불릿이면 `"- "`로 렌더링해 DOCX 변환기와 동일하게 순서형/비순서형을 구분한다. 하이퍼링크가 걸린 run은 `XSLFTextRun#getHyperlink()`를 읽어 `[텍스트](URL)`로 렌더링한다.
      - **그래픽 프레임(표/SmartArt/OLE/차트)**: `XSLFTable`·`XSLFDiagram`(SmartArt)·`XSLFObjectShape`(OLE)·차트 프레임은 모두 `XSLFGraphicFrame` 변형으로, 일반 `XSLFTextShape` 순회로는 절대 잡히지 않아 별도 분기로 처리한다 — SmartArt는 `getGroupShape()`(실제 렌더링된 도형 레이어)를 그룹 도형과 동일하게 재귀 추출해 박스 라벨 텍스트를 `appendShapeGroup()`이 `[다이어그램] ... [/다이어그램]` 마커로 감싸 본문에 남기고(일반 그룹 도형도 동일 함수로 `[도형 그룹] ... [/도형 그룹]`으로 감싸짐 — 아래 7번 참고), 차트는 시리즈/축 값 추출이 차트 종류마다 달라 안정적으로 뽑기 어려우므로 제목 텍스트만 `[차트: 제목]` 인라인 라벨로 추출하며, OLE는 POI로 일반화해 파싱할 텍스트가 없어 본문에는 아무것도 남기지 않는다(미리보기 이미지는 아래 4번 참고).
      - **마커 규칙**: 이 세 마커는 같은 도형에서 나온 여러 라벨을 한 블록으로 묶고 "도형에서 추출된 텍스트"임을 표시하기 위한 것으로, `[이미지: ...]`와 동일하게 `Document.getText()`에 그대로 남아 임베딩/FTS·`/admin` 표시·답변 프롬프트에 반영된다 — `#`가 아니라 `[`로 시작해 `splitMarkdownBySections()`의 섹션 경계로 오인되지 않고, 텍스트가 하나도 없는 도형(순수 장식용 그룹 등)은 마커 자체를 생략해 빈 블록을 남기지 않는다. 한 슬라이드에 같은 종류(그룹/다이어그램/차트)가 2개 이상이면(`slide.getShapes()` 기준 개수) 라벨에 발견 순서대로 순번이 붙어(`[도형 그룹 1]`/`[도형 그룹 2]`, `[다이어그램 1]`, `[차트 1: 제목]`) 서로 구분되고, 1개뿐이면 기존과 동일하게 번호 없이 렌더링된다(기존 단일-도형 출력과의 하위 호환). 그 도형이 소유한 이미지(아래 4번의 owner 추적)는 슬라이드 상단이 아니라 해당 마커 블록의 여는 마커 바로 다음에 `[이미지: ...]`로 인라인 삽입되어 어떤 이미지가 어떤 도형/차트에서 나왔는지 드러난다 — 소유 도형이 없는 일반 사진은 기존과 동일하게 슬라이드 상단에 모아 표시된다(§6.3-bis 4번 참고로, `PptxToMarkdownConverter` 클래스 상단 주석의 "이미지 마커는 항상 상단에 hoist" 설명은 그룹/다이어그램/차트가 소유하지 않은 이미지에만 해당하도록 갱신됨).
+     - **도형 여러 줄 텍스트의 블록 처리(`appendShapeTextBlock()`)**: 그룹/다이어그램 안의 텍스트 도형은 **도형 하나가 곧 하나의 덩어리**다. 줄이 하나뿐이면 예전처럼 빈 줄 없이 촘촘하게 이어붙이지만(짧은 노드/단계 라벨이 대부분), **여러 줄이면** 인접한 다른 도형의 라벨과 뒤섞여 한 문단으로 읽히지 않도록 블록으로 묶는다 — ⓐ `looksLikeCodeBlock()`이 코드로 판정하면 앞뒤에 ```` ``` ```` 펜스를 두르고(펜스 안에는 강조 마커가 없는 원문 `rawParagraphText()`를 넣어 코드를 그대로 재현), ⓑ 코드가 아니면 앞뒤에 빈 줄만 넣어 하나의 문단 블록으로 분리한다(줄 사이는 기존처럼 한 줄 개행 유지). 펜스로 감싸면 `MarkdownNoiseNormalizer`가 안쪽을 건드리지 않고 `splitMarkdownBySections()`도 구조로 파싱하지 않아, 들여쓰기나 `---` 같은 줄이 장식으로 오인돼 지워지는 일이 없다(§6.3의 코드펜스 취급과 동일).
+     - **변환기가 만든 펜스와 이후 후처리의 관계**: 변환기는 언어 태그 없는 맨 ```` ``` ```` 펜스를 내보내고, 그 뒤 `MarkdownCorrectionService.correct()`가 이어서 다듬는다 — ⓐ `normalizeCodeBlocks(md, false)` → `normalizeCodeContent()`가 **펜스 안 빈 줄을 원칙적으로 전부 제거**하되 여러 줄 주석 시작 앞과 함수/클래스 시그니처 앞의 빈 줄 하나는 남긴다(그래서 변환기가 중간 빈 줄을 보존해 넘기는 것이 의미가 있다 — 지워도 될 빈 줄만 정리되고 의미 있는 구분은 살아남는다), ⓑ 같은 패스가 라벨 없는 펜스의 **언어 태그를 내용 기준으로 추론해 채우고**(`inferLanguage=true` — 이 추론은 `addHeadingNumbers` 체크박스와 분리되어 있어 PPTX에도 적용된다, §6.3 참고), ⓒ `postProcessMarkdown(md, isPptx=true)`가 펜스 **앞뒤에 빈 줄을 보장**해 앞 문장과 붙어 렌더링이 깨지지 않게 한다.
+     - **코드 판정(`looksLikeCodeBlock()`)**: 오탐(평문을 펜스로 감쌈)이 미탐보다 훨씬 해로우므로 보수적이다. **빈 줄은 분자(신호 적중 줄)에도 분모(전체 줄 수)에도 세지 않는다** — 코드 중간의 논리 구분용 빈 줄이 분모만 키워 적중률을 떨어뜨리면(예: 코드 3줄 + 빈 줄 2줄 → 3/5=60%로 아슬아슬) 멀쩡한 코드가 평문으로 새기 때문이며, 호출자가 빈 줄을 걸러 넘기든 그대로 넘기든 같은 결과가 나오도록 판정 함수 안에서 직접 거른다. **즉시 코드가 아니라고 확정**하는 경우 — ① 줄 하나라도 `-`/`*`/`+`/`•`/`1.` 같은 목록 표시로 시작(불릿이 섞여 있으면 코드가 아니다), PPTX 네이티브 불릿 문단(`para.isBullet()`)도 동일 취급, ② 본문에 이미 ```` ``` ````가 들어 있어 펜스를 두르면 마크다운이 깨지는 경우, ③ 빈 줄을 뺀 내용이 한 줄 이하인 경우. 그 외에는 줄별 코드 신호(`CODE_LINE_SIGNAL` — `;`/`{`/`}` 종결, `//`·`/*` 주석, `public`/`class`/`return`/`function`/`def` 등 키워드, `SELECT`/`FROM`/`WHERE` 등 SQL, `::`/`&&`/`==`/`<=` 등 연산자, XML/HTML 태그 한 줄, 대입문) 적중률이 `CODE_LINE_RATIO_PERCENT`(60%) 이상일 때만 코드로 본다 — 2줄짜리는 둘 다 맞아야 하고, 3줄이면 2줄이면 된다. 다이어그램 라벨에 흔한 화살표(`->`/`=>`)는 "요청 -> 응답" 같은 평범한 흐름 표기가 훨씬 흔해 오탐 위험이 커서 **일부러 신호에서 제외**했다.
+     - **단독 텍스트 상자에도 동일 적용(`appendSlideBodyShape()`)**: 위 블록 처리는 그룹 안의 도형뿐 아니라 **그룹에 속하지 않은 슬라이드 본문 텍스트 상자**에도 똑같이 적용된다(코드는 그룹보다 단독 상자에 들어 있는 경우가 더 흔하다). 도형 하나의 문단을 먼저 모은 뒤(`BodyLine` 리스트) 한꺼번에 렌더링하는데, 헤딩 후보 승격·연속 중복 제거는 기존과 똑같이 문단 순서대로 진행하므로 판정 결과가 달라지지 않는다. 여러 줄이고 불릿이 없으며 코드로 판정되면 통째로 펜스로 감싸고(들여쓰기 보존 위해 `trim()` 대신 `stripTrailing()`한 원문 사용, 중간 빈 줄도 그대로 유지), 그 외에는 줄마다 기존 `appendBodyLine()`으로 넘겨 동작이 그대로다 — 코드가 아닐 때 그룹 경로처럼 별도 빈 줄 블록을 만들지 않는 이유는 `appendBodyLine()`이 이미 비불릿 문단마다 `\n\n`를 넣어 문단으로 갈라놓기 때문.
      - **중복 제거(도형/줄 단위)**: 그룹 내부에서는 서로 다른 도형의 텍스트(문단을 합친 전체 텍스트, `combineShapeText()`)가 강조 마커·공백 차이를 무시하고 완전히 같으면 그 도형을 통째로 스킵해 하나만 남기고(`appendGroupText()`가 그룹 하나당 독립된 판정 범위를 가짐 — 중첩 서브그룹까지 포함해 공유), 슬라이드 본문에서도 직전 줄과 내용이 같은 줄이 연속되면(같은 기준으로 정규화 비교) 하나만 남긴다(비연속 반복은 유지).
      - **중복/목차 슬라이드 제거(슬라이드 단위, `app.pptx-remove-duplicate-slides`/`PPTX_REMOVE_DUPLICATE_SLIDES`, 기본 `true`)**: Pass 2에서 슬라이드를 출력하기 전에, **이미지가 없는** 슬라이드에 한해 두 가지로 제거한다 — ① **완전 동일**: 제목 후보 + 본문을 강조 마커·공백 무시로 정규화한 지문(`slideFingerprint()`)이 앞선 슬라이드와 같으면 첫 등장만 남기고 드롭(섹션마다 반복되는 동일 목차·백업 슬라이드 등). ② **목차형**: 본문 불릿(선두 목록 마커 제거 후)이 덱 전체의 **다른 슬라이드 제목**들과 `TOC_MIN_MATCHED_HEADINGS`(3)개 이상 **그리고** 전체 줄의 `TOC_MATCH_RATIO`(60%) 이상 일치하면 항해용 목차/agenda 슬라이드로 보고 드롭(실제 내용은 각 섹션 슬라이드에 이미 있으므로 검색 인덱스에 남길 가치가 없다). 두 임계값을 모두 요구해 제목 몇 개를 우연히 언급하는 진짜 본문 슬라이드의 오탐을 줄인다. **이미지가 있는 슬라이드는 절대 드롭하지 않는다**(추출 이미지가 고아가 되고, 텍스트가 같아도 사진이 다르면 진짜 중복이 아님). 드롭된 슬라이드는 빈 슬라이드 스킵과 동일하게 뒤 슬라이드의 `[페이지: N]` 번호를 밀지 않는다(`slideNum = i+1`). 플래그를 `false`로 두면 모든 슬라이드를 그대로 유지한다. 오탐이 의심되면 이 플래그를 끄고 재인덱싱하면 된다.
      - **구분용 제목 슬라이드 제거(`app.pptx-drop-divider-slides`/`PPTX_DROP_DIVIDER_SLIDES`, 기본 `true`)**: 위 중복/목차 제거 다음 단계로, **본문·이미지 없이 제목(들)만** 있는 슬라이드(`isSectionDividerSlide()`)를 그 제목이 전부 '구분용'일 때만 드롭한다 — 내용 없는 섹션 표지 청크는 검색되어도 LLM에 줄 내용이 없고 인덱스 슬롯만 차지하기 때문. '구분용' 판정(`looksLikeSectionDivider()`)은 ⓐ 번호/라벨형 패턴(`SECTION_LABEL`: `3장`·`제1절`·`PART 2`·`STEP 3`·`II.`·`1)`·`부록 A` 등), ⓑ 구분 키워드(`DIVIDER_KEYWORDS`: `목차`·`개요`·`서론`·`결론`·`요약`·`agenda`·`overview`… — `개요`처럼 `요`로 끝나 서술어로 오인되기 쉬운 것을 명시적으로 포함), ⓒ 짧은 명사구(`DIVIDER_MAX_WORDS`(3)단어·`DIVIDER_MAX_CHARS`(12)자 이하이고 주어/목적어 조사 `은/는/이/가/을/를`(`CLAUSE_PARTICLE`)도 서술어 종결(`SENTENCE_ENDING`)도 없음) 중 하나. 서술어로 끝나거나 조사를 포함한 **문장형/키 메시지 제목**("고객 만족을 최우선으로 합니다", "우리의 목표는 성장")은 실제 내용으로 보고 **유지**한다(오탐 방지). 제목이 둘이면 **모두** 구분용일 때만 드롭한다. 본문이나 이미지가 있는 슬라이드는 (제목이 구분용처럼 보여도) 대상이 아니다. 드롭 시 뒤 슬라이드 번호는 밀리지 않으며, `DEBUG` 로그에 사유가 남는다.
+     - **예고 제목 슬라이드 제거(`app.pptx-drop-redundant-title-slides`/`PPTX_DROP_REDUNDANT_TITLE_SLIDES`, 기본 `true`)**: 위 구분용 제목 제거와 같은 전제(이미지 없음, 본문 없음 — 표/그룹/다이어그램/차트 텍스트도 전부 본문으로 들어가므로 "본문 없음"이 곧 "추가 정보 없음") 아래, 그 제목(`headingCandidates`)이 **바로 다음 슬라이드**의 내용(제목+본문, 강조 마커 제거·공백 정규화 후 비교)에 부분 문자열로 그대로 포함되면 드롭한다(`isRedundantTitlePreviewSlide()`) — 다음 슬라이드가 같은 제목을 헤딩으로 다시 쓰며 실제 내용을 담는 흔한 "예고" 패턴으로, 앞 슬라이드는 실질적으로 빈 예고편이다. 구분용 제목 제거와 달리 제목의 형태(번호/키워드/명사구 등)는 보지 않고 **다음 슬라이드와의 실제 내용 일치**만 본다 — 문장형 제목이라도 다음 슬라이드에 그대로 반복되면 대상이다. 정규화된 제목이 1글자면(우연한 부분 일치 위험) 대상에서 제외한다. 덱의 마지막 슬라이드는 다음이 없어 항상 유지된다.
+     - **마지막 종료 슬라이드 제거(`app.pptx-drop-ending-slide`/`PPTX_DROP_ENDING_SLIDE`, 기본 `true`)**: 덱의 **마지막 슬라이드에만** 적용 — 이미지가 없고, 슬라이드 전체 내용(제목+본문)을 공백·구두점 제거 + 소문자화로 정규화한 결과가 `끝`/`end`/`theend`/`감사합니다`/`thankyou`(`ENDING_MARKERS`) 중 하나를 **포함**하며, 그 표시를 뺀 나머지 글자 수가 `ENDING_SLIDE_MAX_EXTRA_CHARS`(10) 이하이면 드롭한다(`isEndingOnlySlide()`) — "감사합니다 여러분"처럼 짧은 서명이 덧붙어도 여전히 대상이지만, 이메일·전화번호 같은 연락처가 함께 있는 마무리 슬라이드는 나머지 글자 수가 10을 넘어 유지된다. 마지막이 아닌 슬라이드의 '끝'/'END'/'감사합니다'는 이 규칙의 대상이 아니다(중간에 나오는 정상적인 소제목일 수 있음).
      - **과도한 볼드 억제**: 슬라이드 하나의 최종 조립된 본문(본문+표+그룹 텍스트가 모두 합쳐진 뒤, 표 6번의 줄바꿈 수정도 반영된 뒤) 볼드(`**`/`***`) 스팬이 10개 이상이면 과도한 강조로 보고 전부 제거한다(`EXCESSIVE_BOLD_THRESHOLD`, 이탤릭은 대상 아님) — 슬라이드 전체가 볼드로 서식된 경우 등에 대응. 이와 별개로 도형 그룹(`appendShapeGroup()`)·표(`appendTable()`) 하나만 놓고도 같은 판정을 한 번 더 적용한다 — 그 블록 안의 볼드 스팬이 `BLOCK_BOLD_COUNT_THRESHOLD`(6)개 이상이거나 볼드로 덮인 글자 비율이 `BLOCK_BOLD_RATIO_THRESHOLD`(50%) 이상이면 그 블록만 볼드 마커를 전부 제거한다 — 볼드가 도형 그룹/표 하나에만 몰려 있어 슬라이드 전체 개수는 10 미만인 경우(예: 표 셀 6개만 전부 볼드)를 놓치지 않기 위한 블록 단위 보완 규칙이다.
      - **소제목 번호 매기기 강제 해제**: `addHeadingNumbers`(소제목 숫자 생성) 옵션은 체크박스 상태와 무관하게 PPTX 인덱싱 경로에서 항상 `false`로 강제된다(`DocumentIndexer`의 `.pptx` 분기가 `correctionService.correct()` 호출 시 요청값을 무시하고 고정값을 넘김) — PPTX의 `##`/`###` 헤딩은 슬라이드 제목/부제목 라벨(위에서 설명한 최대 2단계 calibration)이지 문서 목차 같은 계층 구조가 아니라서, 순차적으로 번호를 매겨도 실제 구조와 무관한 숫자만 붙고 이미 있는 `[페이지: N]` 마커와도 겹쳐 혼란만 준다.
      - **섹션 분할**: 같은 이유로 `MarkdownCorrectionService.correct()` 호출 시 섹션 분할 방식도 DOCX와 다르다: PPTX 인덱싱 경로는 `groupByPage=true`를 넘겨, 일반 헤딩 기준 분할(`splitBySections()`, §6.3 참고) 대신 `[페이지: N]` 마커를 경계로 쓰는 `splitByPages()`가 적용된다 — 슬라이드 하나가 `##`+`###` 헤딩을 모두 가진 경우에도 `###`가 별도 분할 트리거가 되지 않고, `[페이지: N]` 마커도 자기 슬라이드 섹션의 맨 앞에 온다(헤딩 기준 분할 시 이전 섹션 꼬리에 잘못 붙던 문제 해결). 다만 "슬라이드 하나 = 교정 호출 하나"는 아니다: 슬라이드는 자족적이라 페이지 경계가 항상 깔끔하므로, `splitByPages()`는 연속된 슬라이드를 문자 예산(`maxSectionChars`) 안에서 최대 `PPTX_MAX_BUNDLE_PAGES`(4)장까지 하나의 교정 호출로 묶는다 — 작은 슬라이드가 많을 때 LLM 왕복 횟수를 크게 줄인다. 반대로 슬라이드 하나가 `maxSectionChars`를 넘으면 묶을 수 없으므로 그 슬라이드만 `[도형 그룹]`/`[다이어그램]`/`[차트]` 블록 경계(`splitOversizedPage()`)로 쪼갠다(그룹 블록 하나는 통째로 유지, 블록 하나가 그래도 크면 문자 예산으로 강제 분할). 슬라이드 경계는 언제나 깔끔하므로 PPTX 경로에는 §6.3의 "부자연 경계 오버랩"이 쓰이지 않는다. DOCX·TXT·MD·PDF(비스캔)는 기존과 동일하게 `groupByPage=false`(일반 헤딩 기준 분할).
@@ -474,7 +506,7 @@ PROGRESSIVE 모드 AND sufficient=false AND retryCount >= max
    - **PPTX 전용 — 그리기 도구 도형 래스터라이즈 (`app.pptx-image.rasterize-shapes`, 기본 `false`)**: `PptxImageExtractor`는 실제 삽입 이미지(`XSLFPictureShape`)뿐 아니라, 텍스트 도형 순회에서 잡히지 않는 "그리기 도구" 요소도 PNG로 래스터라이즈할 수 있다 — 그룹 도형(`XSLFGroupShape`), 독립 커넥터(`XSLFConnectorShape`, 화살표/선), 텍스트 없는 일반/자유형 도형이 "시드"가 된다. **`rasterize-shapes=true`일 때만** 아무 앵커(사진/표/그룹)에도 안 겹친 "느슨한" 시드들끼리 각 바운딩박스를 `app.pptx-image.cluster-proximity-padding-pt`(기본 15pt)만큼 바깥으로 부풀린 뒤 교차 여부로 연결 요소를 구하는 union-find 클러스터링을 적용해 다이어그램 한 장으로 묶는다 — 커넥터는 보통 두 도형이 겹치지 않는 "틈"에 놓이므로 순수 bbox 교차만으로는 다이어그램을 못 묶기 때문. **`rasterize-shapes=false`(기본)이면 이 느슨한-도형 클러스터링을 하지 않는다** — 겹친 느슨한 도형이 한 덩어리로 뭉치지 않고, 아무것에도 안 겹친 단독 도형은 이미지로 아예 안 뽑힌다. 단 아래 앵커 기반 합성(그룹·SmartArt 각 한 장 / 표+겹친도형 / 사진+주석)은 이 플래그와 무관하게 항상 유지된다. 시드가 하나도 없는 클러스터(텍스트 도형끼리만 우연히 근접한 경우)는 다이어그램이 아니므로 버린다. 텍스트가 있는 도형(텍스트 상자 포함)은 시드 근처에 있을 때만 함께 묶이는 승객으로 참여하고 — 이때도 그 텍스트는 `PptxToMarkdownConverter`가 `[도형 그룹] ... [/도형 그룹]` 마커로 감싸 별도로 본문에 추출해 Vision 미사용 환경에서도 검색 가능하다(그룹 내부 텍스트는 `appendGroupText()`가 재귀적으로 추출하고 `appendShapeGroup()`이 그 결과를 마커로 감쌈) — 시드 없이 혼자 있으면 절대 래스터라이즈되지 않는다. 순수 텍스트 상자는 비어 있으면 대상에서 제외한다. 가로/세로 중 큰 쪽이 `app.pptx-image.min-shape-dimension-pt`(기본 30pt) 미만인 도형은 아이콘/구분선으로 보고 시드가 될 수 없다 — 두 값 모두 `AppProperties.pptxImageSafe()`로 설정 가능(패딩을 넓히면 더 먼 도형까지 묶이고, 임계값을 높이면 더 큰 도형도 아이콘 취급되어 제외된다). 클러스터가 25개 도형을 넘으면(너무 어수선한 슬라이드) 번들 대신 시드만 개별 래스터라이즈하는 것으로 폴백한다. 렌더링은 클러스터 전체를 감싸는 바운딩박스를 캔버스로 잡고 좌표축을 한 번만 이동/확대한 뒤 각 도형을 원래 순서(z-order)대로 그리는 방식(`DrawFactory`)이며, 실패는 EMF/WMF 변환과 동일하게 조용히 건너뛴다.
    - **PPTX 전용 — 이미지-도형 상관관계(owner 추적)**: `PptxImageExtractor.extractWithOwners()`는 추출/래스터라이즈된 이미지마다 그 이미지를 만든 최상위 도형의 `slide.getShapes()` 인덱스(0-based, z-order — 클러스터링에 쓰이는 것과 동일한 인덱스 공간)를 `ExtractedImage.ownerShapeIndices()`로 태깅해 반환한다. 일반 그룹은 자기 자신의 인덱스, SmartArt는 (클러스터링에 실제로 투입되는 내부 `getGroupShape()` 렌더 도형이 아니라) `slide.getShapes()`에 나타나는 바깥쪽 `XSLFDiagram` 프레임 자신의 인덱스, 차트 fallback 그림은 그 차트 프레임의 인덱스를 owner로 갖는다 — 그룹/다이어그램/차트가 아닌 커넥터·자유형 도형·사진 등은 owner가 없다(빈 Set). `PptxToMarkdownConverter`는 `inReadingOrder()`로 재정렬하기 전의 원본 `slide.getShapes()`로 동일한 인덱스 공간을 독립적으로 계산해 도형별 소유 이미지를 찾고, 위 2번 항목처럼 해당 마커 블록 안에 인라인으로 배치한다(그렇게 소비된 이미지는 상단 hoist 목록에서 제외된다). 드물게 인접한 두 그룹의 패딩된 바운딩박스가 겹쳐 하나의 클러스터로 합쳐지면 그 이미지의 owner가 2개 이상이 되어 두 그룹 블록 모두에 동일한 이미지 마커가 나타날 수 있다(의도된 동작 — 실제로 두 그룹이 하나의 이미지로 합쳐졌다는 사실을 그대로 반영). 기존 `extract()`/`extract(XMLSlideShow, ...)` API(경로 문자열 리스트만 반환)는 하위 호환을 위해 그대로 유지되며, 내부적으로 `extractWithOwners()`를 감싸 owner 정보만 제거한다.
    - **PPTX 전용 — 그래픽 프레임 변형(SmartArt·차트·OLE) 이미지 처리**: `XSLFTable`을 제외한 `XSLFGraphicFrame` 변형은 POI가 "라이브"로 그릴 수 없어(`DrawGraphicalFrame`은 내부적으로 프레임의 `mc:Fallback` 미리보기 그림만 그리고, 없으면 아무것도 그리지 않음) 그리기 도구 래스터라이즈와는 다른 경로를 탄다. **OLE 객체**(`XSLFObjectShape`)는 OOXML 스펙상 항상 자체 미리보기 그림을 내장하므로(`getPictureData()`) 일반 픽처와 동일하게 그대로 저장한다. **SmartArt**(`XSLFDiagram`)는 프레임 자체가 아니라 `getGroupShape()`(실제 렌더링된 박스/커넥터 도형 레이어)를 그룹 도형과 동일한 근접 클러스터링 파이프라인의 시드 하나로 투입해 래스터라이즈한다 — 이 그룹은 진짜 도형들로 구성돼 있어 POI가 정상적으로 그릴 수 있다. **차트**는 POI에 라이브 렌더링 경로가 전혀 없어 `getFallbackPicture()`(PowerPoint가 하위 호환용으로 남겨둔 `mc:Fallback` 미리보기)가 있을 때만 그대로 저장하고, 없으면 조용히 건너뛴다(제목 텍스트는 위 2번 항목처럼 본문에 남는다).
-5. **청킹**: DOCX/TXT/MD와 같은 섹션 병합(`mergeShortSections`) 전략을 타지만, 서로 다른 `page_or_slide`를 가진 인접 섹션끼리는 병합을 금지한다(`ChunkSplitter.isMergeForbiddenByPageMismatch()`, 기존 헤딩-레벨-점프 금지 규칙과 나란히 적용) — "청크 1개 = 슬라이드/페이지 1개 = 정확한 인용" 보장을 DOCX보다 더 엄격하게 유지한다. 값이 없는 DOCX/TXT/MD는 항상 no-op.
+5. **청킹**: PPTX/PDF(비스캔)는 슬라이드/페이지 섹션 병합(`mergeShortSections`) 전략을 타며, 서로 다른 `page_or_slide`를 가진 인접 섹션끼리는 병합을 금지한다(`ChunkSplitter.isMergeForbiddenByPageMismatch()`) — "청크 1개 = 슬라이드/페이지 1개 = 정확한 인용" 보장을 유지한다. 단, 그 앞 사전 패스(`mergeIdenticalHeadingSlides`, PPTX 전용 — 자세히는 아래 챕터 청킹 주석 다음 문단 참고)가 연속 슬라이드의 `##`+`###` 헤딩이 완전히 같을 때만 이 경계를 넘어 병합한다. **DOCX/TXT/MD는 이와 별개로 챕터 기반 병합(`mergeSectionsByChapter`, §6.4 표 아래 주석)을 탄다** — `page_or_slide` 값이 없어 이 페이지-경계 금지 규칙은 어차피 no-op이고, 대신 minChunkSize·부모 헤딩 기준의 챕터 병합이 적용된다.
 6. **표(테이블)**: PPTX의 `XSLFTable`은 나타나는 위치에 마크다운 파이프 표로 변환된다(`PptxToMarkdownConverter.appendTable()`) — DOCX와 달리 PPTX 표 모델은 병합된 셀도 행의 셀 목록에서 빠지지 않고 그대로 남아 각 행이 항상 같은 셀 수를 가지므로, DOCX처럼 gridSpan 기반으로 셀 목록을 재구성할 필요 없이 병합 연속 셀(`XSLFTableCell.isMerged()`)만 빈 칸으로 렌더링하면 된다. **표 위에 겹친 시드 도형(강조 원·화살표 등)이 있으면**, 위 MD 변환과 별개로 `PptxImageExtractor`가 표+도형을 하나의 합성 PNG로도 만든다(`rasterize-shapes`와 무관하게 항상 — 표는 이미지 추출 시 앵커로 취급, `DrawFactory`가 `DrawTableShape`로 표를 렌더링) — 표 셀을 짚는 markup의 시각 맥락을 보존하기 위함. 겹친 시드 도형이 없는 표는 이미지로 만들지 않는다(MD 파이프 표로만). 셀 안에 `<a:br/>`(Shift+Enter) 줄바꿈이 있으면 POI `XSLFTextRun.getRawText()`가 그 자리에 리터럴 `"\n"`을 반환해 파이프 표 행이 여러 줄로 쪼개지며 마크다운이 깨질 수 있었는데, `tableCellText()`가 셀 텍스트를 조립할 때 그 줄바꿈(및 주변 공백)을 공백 하나로 치환해 항상 한 줄로 유지되도록 수정됐다 — 이 수정은 최상위 표와 그룹 내부 표(`appendGroupText()`가 호출하는 `appendTable()`) 모두에 적용된다.
 7. **스캔 판정**: `DocumentLoaderService.loadPdfPagesForConversion()`이 페이지 텍스트 추출과 스캔 판정(§6.6, 빈 페이지 50% 초과)을 함께 반환해, 스캔 PDF는 기존 `ocrWithPdfRenderer()` OCR 경로로, 비스캔 PDF는 위 MD 변환 경로로 분기한다 — 스캔 판정 로직 자체(임계값·휴리스틱)는 변경되지 않았다.
 8. **MD 재인덱싱(↺)**: 위 변환기들도 `converted/{docId}.md`(+`_corrected.md`)를 남기므로 PPTX·비스캔 PDF도 DOCX·TXT와 동일하게 `/admin` 재인덱싱을 지원한다(스캔 PDF는 MD 파일이 없어 미지원).
@@ -486,10 +518,14 @@ PROGRESSIVE 모드 AND sufficient=false AND retryCount >= max
 | **PDF(스캔)** | `PagePdfDocumentReader` 페이지 단위. 50% 이상 페이지가 50자 미만이면 스캔 판정 → Tesseract(kor+eng) OCR (`source_type=ocr`). **MD 변환 없음** | 없음 | 없음 | 슬라이딩 윈도우(섹션 병합 없음) | 페이지 이미지 추출 → `data/images/{docId}/` | 미지원 |
 | **PDF(비스캔)** | `PdfToMarkdownConverter` 로 MD 변환 (페이지별 `[페이지: N]` 마커만 — 합성 헤딩 없음, `[이미지: ...]` 인라인, 텍스트·이미지 모두 없는 페이지는 건너뜀) | `MarkdownCorrectionService.correct()` — 섹션 병렬 **포맷 교정** (DOCX·TXT 와 동일 파이프라인, `splitBySections()`가 `[페이지: N]`도 경계로 사용, 페이지/이미지 마커 보존) | `{docId}.md`(원본) + `{docId}_corrected.md`(교정) | **`[페이지: N]`(페이지) 섹션 우선 유지**, 초과 시 섹션 내부 슬라이딩 윈도우 — 단, 서로 다른 페이지끼리는 병합되지 않음(§6.3-bis) | `PdfImageExtractor`를 변환기가 직접 호출해 추출 + 본문에 `[이미지: ...]` 인라인(DOCX와 동일) | **지원** |
 | **PPTX** | `PptxToMarkdownConverter` 로 MD 변환 (슬라이드별 `[페이지: N]` + 제목 있으면 제목 헤딩 `##`(제목 없으면 마커만) + `[이미지: ...]` 인라인, 본문 불릿은 중첩 목록만) | `MarkdownCorrectionService.correct()` — 섹션 병렬 **포맷 교정** (DOCX·TXT 와 동일 파이프라인이되, 섹션 분할만 `splitByPages()`로 `[페이지: N]` 단위 + 연속 슬라이드 최대 4장 묶음, 초대형 슬라이드는 `[도형 그룹]` 등 블록 경계로 분할 — §6.3-bis 2번) | `{docId}.md`(원본) + `{docId}_corrected.md`(교정) | **`[페이지: N]`(슬라이드) 섹션 우선 유지**, 초과 시 섹션 내부 슬라이딩 윈도우 — 단, 서로 다른 슬라이드끼리는 병합되지 않음(§6.3-bis) | `PptxImageExtractor`를 변환기가 직접 호출해 추출 + 본문에 `[이미지: ...]` 인라인(DOCX와 동일) | **지원** |
-| **DOCX** | `DocxToMarkdownConverter` 로 MD 변환 (제목 스타일 → `##/###`, `[헤딩페이지: N]`/`[페이지: N]` + 이미지 `[이미지: ...]` 인라인) | `MarkdownCorrectionService.correct()` — 섹션 병렬 **포맷 교정**(끊긴 문장 연결·오타·헤딩 정규화, 내용 불변, 페이지/이미지 마커 보존) | `{docId}.md`(원본) + `{docId}_corrected.md`(교정) | **헤딩 섹션 우선 유지**, 초과 시 섹션 내부 슬라이딩 윈도우 | 변환 단계에서 인라인 처리 | **지원** |
-| **TXT** | 평문 → `TextToMarkdownService.convert()` — 로컬 LLM 이 **구조화**(제목/목록/표 부여) + **문법 교정**(맞춤법·띄어쓰기·끊긴 문장), 내용 불변 → MD | 위 구조화에 이어 `MarkdownCorrectionService.correct()` **포맷 교정** 한 번 더 (DOCX 와 동일 파이프라인) | `{docId}.md`(구조화) + `{docId}_corrected.md`(교정) | 섹션 단위, 초과 시 슬라이딩 윈도우 | 없음 | **지원** |
-| **MD** | 이미지/링크 마커 전처리 후 `#` 헤딩 기준 섹션 분할 | 없음 | 없음 | 섹션 단위, 초과 시 슬라이딩 윈도우 | `[이미지: ...]` 마커 → image_paths | 미지원 |
+| **DOCX** | `DocxToMarkdownConverter` 로 MD 변환 (제목 스타일 → `##/###`, `[헤딩페이지: N]`/`[페이지: N]` + 이미지 `[이미지: ...]` 인라인) | `MarkdownCorrectionService.correct()` — 섹션 병렬 **포맷 교정**(끊긴 문장 연결·오타·헤딩 정규화, 내용 불변, 페이지/이미지 마커 보존) | `{docId}.md`(원본) + `{docId}_corrected.md`(교정) | **챕터(헤딩) 섹션 병합**(minChunkSize 기반 + 부모 브레드크럼, 표 아래 주석), 초과 시 섹션 내부 슬라이딩 윈도우 | 변환 단계에서 인라인 처리 | **지원** |
+| **TXT** | 평문 → `TextToMarkdownService.convert()` — 로컬 LLM 이 **구조화**(제목/목록/표 부여) + **문법 교정**(맞춤법·띄어쓰기·끊긴 문장), 내용 불변 → MD | 위 구조화에 이어 `MarkdownCorrectionService.correct()` **포맷 교정** 한 번 더 (DOCX 와 동일 파이프라인) | `{docId}.md`(구조화) + `{docId}_corrected.md`(교정) | 챕터(헤딩) 섹션 병합(표 아래 주석), 초과 시 슬라이딩 윈도우 | 없음 | **지원** |
+| **MD** | 이미지/링크 마커 전처리 후 `#` 헤딩 기준 섹션 분할 | 없음 | 없음 | 챕터(헤딩) 섹션 병합(표 아래 주석), 초과 시 슬라이딩 윈도우 | `[이미지: ...]` 마커 → image_paths | 미지원 |
 
+> **포맷 교정 중 표 보호(`MarkdownCorrectionService.correctSection()`)**: DOCX/TXT/PPTX/PDF(비스캔) 공통 — GFM 표(`markTableRows()`로 탐지)는 프롬프트에 원문 그대로 실어 보내지 않는다. 예전에는 "표는 변경 금지" 지시문 하나에만 의존했는데, 로컬 모델이 셀 안의 `:`를 `|`로 바꾸는 등 표를 훼손하는 사례가 있었다. 지금은 표 블록을 `[TABLE_PLACEHOLDER_N]` 자리표시자로 치환해 보내고(다른 대괄호 마커처럼 그대로 보존하도록 지시), 응답에서 원문으로 복원한다. 자리표시자가 응답에서 사라지면(모델이 지웠거나 표 형식으로 채워 넣으려 함) 그 결과를 신뢰하지 않고 위치를 추측하는 대신 **그 섹션 전체를 교정 없이 원본 그대로 반환**한다 — 오버랩 경계 마커(`<<<SECTION_START/END>>>`)가 유실됐을 때 오버랩 없이 재교정하는 것과 같은 방어 원칙.
+
+> **DOCX·TXT·MD 챕터 청킹(`ChunkSplitter.mergeSectionsByChapter`)**: 챕터(헤딩) 하나가 기본 청크 단위다. 섹션이 `MIN_CHUNK_SIZE`(정규화 길이) 미만일 때만 다음 섹션과 병합하되, 다음이 **상위(부모) 헤딩**(`#` 개수가 더 적음)이면 병합하지 않는다. 크기별로 ① 합이 `CHUNK_SIZE` 이내면 병합, ② 다음 섹션 단독이 `CHUNK_SIZE` 이내면 분리, ③ 다음이 `CHUNK_SIZE` 초과면 앞에 붙여 슬라이딩 분할했을 때 마지막 조각이 `MIN_CHUNK_SIZE`×1.5 이상일 때만 병합한다. 앞으로 못 붙인 작은 섹션은 **직전 청크로 뒤로 병합**된다(`backwardMergeShortChunks`). 또한 하위 챕터(`###` 이상, 즉 `##` 최상위가 아님) 청크의 **첫 조각 맨 앞**에는 바로 위 부모 헤딩 한 줄을 브레드크럼으로 덧붙여 문맥을 준다 — 슬라이딩으로 쪼개진 꼬리 조각은 자기 헤딩 `(N)`만 갖고 부모는 붙지 않는다. PPTX/PDF(비스캔)는 이 전략 대신 슬라이드/페이지 경계를 지키는 `mergeShortSections`를 쓴다(§6.3-bis 5번).  
+> **PPTX 동일 헤딩 슬라이드 병합(`ChunkSplitter.mergeIdenticalHeadingSlides`, `mergeShortSections` 앞에 실행)**: 연속된 슬라이드의 `##`+`###` 헤딩이 **둘 다 존재하고 완전히 같으면**(정규화 비교 — 좌우 공백/내부 연속 공백 차이만 무시), 합쳤을 때 정규화 길이가 `CHUNK_SIZE` 이내인 동안 슬라이드 단위 경계(`page_or_slide` 불일치 금지 규칙)를 넘어 하나의 청크로 합친다. 단, 한 그룹당 최대 `MAX_IDENTICAL_HEADING_MERGE_SLIDES`(기본값 **2**)장까지만 합쳐진다 — 3장 이상 연속으로 헤딩이 같아도 앞 2장만 합치고, 그다음 슬라이드는 (헤딩이 같더라도) 새 그룹으로 다시 시작한다(예: 4장이 모두 같으면 2장씩 두 청크가 된다). 헤딩이 다르거나 합친 크기가 `CHUNK_SIZE`를 넘으면 캡에 도달하기 전이라도 그 자리에서 체인이 끊긴다. 두 번째 슬라이드부터는 중복된 `##`/`###` 헤딩 줄이 제거되지만, 그 자리에 `[페이지: N]` 마커를 삽입해 어느 슬라이드의 내용이 이어지는지 구분할 수 있게 한다. 병합된 청크의 `page_or_slide` 메타데이터는 (다른 병합 규칙들과 동일하게) 첫 슬라이드 것만 유지된다 — 두 번째 이후 슬라이드의 정확한 페이지는 본문에 남은 `[페이지: N]` 마커로만 확인 가능하다. PDF(비스캔)는 헤딩 자체를 만들지 않으므로 이 규칙이 적용될 일이 없다.  
 > **DOCX·TXT·PPTX·PDF(비스캔)의 LLM 전처리는 graceful**: LLM 사용 불가 시 원본(변환 전) 텍스트를 그대로 사용해 인덱싱은 계속된다.  
 > **TXT 구조화 LLM 호출**: `TaskType.LIGHT_TEXT` · `RoutingMode.COST_FIRST`(로컬 프로바이더 우선). 큰 파일은 6,000자 블록으로 나눠 병렬 처리하며, 병렬도는 다른 인덱싱 LLM 호출과 동일하게 `app.indexing.max-concurrent-llm-calls`(`INDEXING_MAX_LLM`)를 `convert()`마다 다시 읽어 적용한다.  
 > **PPTX/PDF(비스캔)도 이제 이미지를 `[이미지: ...]` 인라인 마커로 넣으므로**(DOCX와 동일 방식), 업로드 화면의 "이미지 설명 추가"(`addImageDescriptions`) 체크박스가 이 두 포맷에도 정상 적용된다 — [IMAGE_PROCESS.md §5](IMAGE_PROCESS.md#5-vision-설명-생성-l2) 참고.  
@@ -497,7 +533,7 @@ PROGRESSIVE 모드 AND sufficient=false AND retryCount >= max
 > **청킹/임베딩 단계 실패 시 재시도**: MD 변환+교정(4~6, 이미지 분석 포함)이 끝난 시점에 `doc_registry`에 `chunks=0`짜리 partial row가 먼저 저장된다(§6.3 6-bis). 이후 청킹·키워드추출·임베딩 저장(7~12) 중 어디서 실패해도 이 docId가 레지스트리·`/admin` 문서 목록에 남아 있어, 위 "MD 재인덱싱(↺)"으로 이미지 분석/MD 교정을 다시 거치지 않고 재시도할 수 있다 — 이 체크포인트가 없던 예전에는 실패 시 레지스트리에 아무것도 남지 않아 재업로드로 처음부터 다시 거쳐야 했다. `DocRegistry.existsBySha256AndVersion()`이 `chunks > 0`인 row만 "색인 완료"로 인정하므로, 이 partial row 때문에 `syncDirectory()`가 미완료 문서를 다음 동기화에서 영구히 건너뛰지는 않는다.  
 > **존재하지 않는 이미지 마커 정리**: MD 로드 직후, `[이미지: path]`/`[이미지(변환불가): path]` 마커가 가리키는 파일을 `data/images/`에서 실제로 찾아본다 — 수동 정리·이동 등으로 파일이 사라졌다면(`DocumentIndexer.removeMissingImageMarkers()`) 해당 마커만 제거하고 그 결과를 `mdPath`(사용 중인 `[_corrected].md`)에 다시 저장한 뒤 청킹을 진행한다. 존재하는 마커는 그대로 유지되며, 모든 마커가 유효하면 파일을 다시 쓰지 않는다. 인라인 마커(문장 중간의 DOCX 이미지)와 단독 줄 마커(PPTX/PDF) 모두 마커 부분만 제거되고 주변 텍스트는 보존된다.  
 > **소제목 번호 재검증**: 이미지 마커 정리 다음 단계로, 로드한 MD에 이미 번호 매겨진 헤딩(`## 1. 제목`처럼 숫자 프리픽스가 붙은 H2~H6)이 하나라도 있으면 현재 헤딩 구조를 기준으로 전체 번호를 다시 계산해 `mdPath`에 반영한다(`DocumentIndexer.reapplyHeadingNumbersIfNeeded()` → `MarkdownCorrectionService.reapplyHeadingNumbers()`, LLM 호출 없이 순수 텍스트 재계산만 수행) — 청크 편집으로 코드 블록이 분리/병합되는 등 헤딩이 추가·삭제·이동해 번호가 어긋난 경우를 바로잡는다. 번호 매겨진 헤딩이 하나도 없는 문서(체크박스를 끄고 업로드했거나, 위에서 언급한 대로 항상 번호가 붙지 않는 PPTX)는 손대지 않는다 — PPTX는 파일명 확장자로 먼저 걸러 이 단계 자체를 건너뛴다. 재계산 결과가 기존 내용과 같으면(즉 번호가 이미 최신 상태면) 파일을 다시 쓰지 않는다.  
-> **마크다운 후처리 재적용**: 소제목 번호 재검증 다음 단계로, `postProcessMarkdown()`(§6.3 6번 ③④ — `[DOCUMENT]` 마커/내용 없는 `-` 줄 제거, 코드 블록·GFM 표 앞뒤 빈 줄 보장, 펜스 밖 연속 빈 줄을 1개로 축소)을 `DocumentIndexer.postProcessIfNeeded()` → `MarkdownCorrectionService.postProcess()`로 다시 실행하고 변경이 있으면 `mdPath`에 반영한다. LLM 호출 없이 결정적으로 동작하며 PPTX를 포함한 모든 형식에 적용된다. **`fixClosingFences()`/`normalizeCodeBlocks()`는 재인덱싱에 포함하지 않는다** — 저장된 MD를 운영자가 직접 편집한 뒤 재인덱싱하면, 코드 블록 안에 의도적으로 남긴 빈 줄이 `normalizeCodeContent()`에 의해(함수/클래스·여러 줄 주석 시작 직전이 아니면 전부 삭제) 지워지거나, 펜스 짝이 어긋난 입력에서 여는 펜스의 언어 태그가 잘못 벗겨질 수 있어 — 이 위험을 매 재인덱싱마다 자동으로 감수하기보다 필요할 때만(문서 재업로드) 감수하도록 의도적으로 남겨둔 것이다.
+> **마크다운 후처리 재적용**: 소제목 번호 재검증 다음 단계로, `postProcessMarkdown()`(§6.3 6번 ①~④ — `[DOCUMENT]` 마커/내용 없는 `-` 줄 제거, 코드 블록·GFM 표 앞뒤 빈 줄 보장, 펜스 밖 연속 빈 줄을 1개로 축소)을 `DocumentIndexer.postProcessIfNeeded()` → `MarkdownCorrectionService.postProcess(md, isPptx)`로 다시 실행하고 변경이 있으면 `mdPath`에 반영한다. `isPptx`는 파일 확장자로 다시 판별한다(`filename.toLowerCase().endsWith(".pptx")` — 업로드 시의 `groupByPage`와 같은 신호). LLM 호출 없이 결정적으로 동작하며 모든 형식에 적용되고, **PPTX면 §6.3 6번의 `applyPptxShapeFormatting()`(도형 그룹/이미지 앵커 빈 줄·중복 정리 5규칙)도 업로드 때와 동일하게 다시 실행된다** — 그래서 저장된 PPTX MD 파일을 손으로 편집한 뒤 재인덱싱해도 최초 업로드와 같은 서식 보정을 다시 받는다. **`fixClosingFences()`/`normalizeCodeBlocks()`는 재인덱싱에 포함하지 않는다** — 저장된 MD를 운영자가 직접 편집한 뒤 재인덱싱하면, 코드 블록 안에 의도적으로 남긴 빈 줄이 `normalizeCodeContent()`에 의해(함수/클래스·여러 줄 주석 시작 직전이 아니면 전부 삭제) 지워지거나, 펜스 짝이 어긋난 입력에서 여는 펜스의 언어 태그가 잘못 벗겨질 수 있어 — 이 위험을 매 재인덱싱마다 자동으로 감수하기보다 필요할 때만(문서 재업로드) 감수하도록 의도적으로 남겨둔 것이다.
 
 ### 6.5. 디렉터리 동기화 — 3단계
 

@@ -136,8 +136,11 @@ public class StreamingAgentService {
                             .toBuilder().questionType(typeF.join()).build();
                 }
             }
-            // carry the selected search-scope tags into the graph state.
-            initial = initial.toBuilder().selectedTags(form.selectedTags()).build();
+            // carry the selected search-scope tags + answer-length mode into the graph state.
+            initial = initial.toBuilder()
+                    .selectedTags(form.selectedTags())
+                    .responseMode(form.responseModeOrDefault())
+                    .build();
 
             listener = new SseGraphListener(emitter, lastActivityNanos);
             AgentState result = agentGraph.runStreaming(initial, listener);
@@ -148,7 +151,8 @@ public class StreamingAgentService {
             if (result.answer() != null && !result.answer().isBlank()) {
                 turnId = memoryService.addTurn(userId, form.threadId(), form.question(), result.answer(),
                         askedAt, result.totalInputTokens(), result.totalOutputTokens(),
-                        (int) elapsedMs, result.usedProvider(), result.llmCallCount());
+                        (int) elapsedMs, result.usedProvider(), result.llmCallCount(),
+                        form.responseModeOrDefault().name());
                 summarizerService.precomputeAfterTurn(userId, form.threadId(), turnId, locale);
             }
 
@@ -189,7 +193,7 @@ public class StreamingAgentService {
                     try {
                         memoryService.addTurn(userId, form.threadId(), form.question(),
                                 partial + "\n[오류로 중단됨]",
-                                askedAt, 0, 0, 0, null, 0);
+                                askedAt, 0, 0, 0, null, 0, form.responseModeOrDefault().name());
                         log.debug("partial answer persisted ({} chars) thread={}",
                                 partial.length(), form.threadId());
                     } catch (Exception persistEx) {
@@ -233,17 +237,6 @@ public class StreamingAgentService {
             accumulated.append(text);
             Map<String, Object> payload = new HashMap<>();
             payload.put("text", text);
-            payload.put("tab", null);
-            sendEvent(emitter, "token", payload);
-        }
-
-        @Override
-        public void onToken(String tab, String text) {
-            lastActivityNanos.set(System.nanoTime());
-            accumulated.append(text);
-            Map<String, Object> payload = new HashMap<>();
-            payload.put("text", text);
-            payload.put("tab", tab);
             sendEvent(emitter, "token", payload);
         }
 
@@ -317,7 +310,6 @@ public class StreamingAgentService {
     private Map<String, Object> buildDonePayload(AgentState result, long elapsedMs, Long turnId) {
         Map<String, Object> m = new HashMap<>();
         m.put("usedProvider",      result.usedProvider());
-        m.put("dualLocalProvider", result.dualLocalProvider());
         m.put("inputTokens",       result.totalInputTokens());
         m.put("outputTokens",      result.totalOutputTokens());
         m.put("llmCalls",          result.llmCallCount());

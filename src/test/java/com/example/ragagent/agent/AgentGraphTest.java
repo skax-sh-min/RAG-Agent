@@ -33,7 +33,6 @@ import static org.mockito.Mockito.when;
  *  - answer_needsRetry_loopsBackToRetrieval
  *  - critic_needsRetry_loopsBackToRetrieval
  *  - retry_capped_at_maxRetryCount
- *  - dualMode_skipsCritic
  *  - existingQuestionType_skipsClassifier (AgentService 사전 분류 경로)
  */
 class AgentGraphTest {
@@ -69,7 +68,7 @@ class AgentGraphTest {
             "./data", MAX_RETRY, 800, 100, 100, 7, 0.0, true, 0, false,
                 true, false, 3,
                 null, null, null, null, null, null, null, null, null, null, null, null, null, null,
-                null, null, null, null, null, null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null, null, null, null, null, null, null, null);
 
         graph = new AgentGraph(classifierService, directAnswerService, retrievalService,
                                answerService, criticService, finalizeService, props);
@@ -183,35 +182,6 @@ class AgentGraphTest {
         verify(answerService, times(3)).execute(any());
         verify(criticService, times(1)).execute(any());
         verify(finalizeService, times(1)).execute(any());
-    }
-
-    @Test
-    @DisplayName("DUAL 모드는 ANSWER 후 CRITIC 건너뛰고 바로 FINALIZE")
-    void dualMode_skipsCritic() {
-        when(classifierService.execute(any()))
-                .thenAnswer(inv -> ((AgentState) inv.getArgument(0)).toBuilder().questionType("manual").build());
-
-        graph.run(newState(RoutingMode.DUAL));
-
-        verify(retrievalService, times(1)).execute(any());
-        verify(answerService, times(1)).execute(any());
-        verify(criticService, never()).execute(any());
-        verify(finalizeService, times(1)).execute(any());
-    }
-
-    @Test
-    @DisplayName("DUAL 모드는 needsRetry 가 true 여도 retry 안 함 (CRITIC 건너뛰기 보장)")
-    void dualMode_ignoresNeedsRetry() {
-        when(classifierService.execute(any()))
-                .thenAnswer(inv -> ((AgentState) inv.getArgument(0)).toBuilder().questionType("manual").build());
-        when(answerService.execute(any()))
-                .thenAnswer(inv -> ((AgentState) inv.getArgument(0)).toBuilder().needsRetry(true).build());
-
-        graph.run(newState(RoutingMode.DUAL));
-
-        verify(answerService, times(1)).execute(any());
-        verify(retrievalService, times(1)).execute(any());
-        verify(criticService, never()).execute(any());
     }
 
     @Test

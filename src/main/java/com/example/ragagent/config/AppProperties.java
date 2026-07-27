@@ -45,7 +45,9 @@ public record AppProperties(
         Boolean pptxRemoveDuplicateSlides,      // PPTX 변환 시 완전 동일 슬라이드 + 목차형 슬라이드 제거 (기본 true) — PptxToMarkdownConverter
         Boolean pptxDropDividerSlides,          // PPTX 변환 시 본문·이미지 없이 '구분용 제목'만 있는 섹션 구분 슬라이드 제거 (기본 true, 문장형/키 메시지 제목은 유지) — PptxToMarkdownConverter
         Boolean searchCuratedQaEnabled,          // §10.10 — 좋아요 기반 큐레이션 Q&A를 RRF 축으로 반영할지 여부 (기본 true). 핫에디터블 — RetrievalService가 매 검색마다 재조회
-        Double searchCuratedQaWeight             // §10.10 — 큐레이션 Q&A 축 RRF 가중치 (기본 1.5 — 벡터축 그룹정규화 1.0보다 약간 높게 잡아 검증된 답변이 우선 노출되되 순위를 독식하진 않음). 핫에디터블
+        Double searchCuratedQaWeight,            // §10.10 — 큐레이션 Q&A 축 RRF 가중치 (기본 1.5 — 벡터축 그룹정규화 1.0보다 약간 높게 잡아 검증된 답변이 우선 노출되되 순위를 독식하진 않음). 핫에디터블
+        Boolean pptxDropRedundantTitleSlides,    // PPTX 변환 시 이미지·도형 없이 짧은 제목 한 줄만 있고 그 내용이 바로 다음 슬라이드에 그대로 포함되는 "예고 제목" 슬라이드 제거 (기본 true) — PptxToMarkdownConverter
+        Boolean pptxDropEndingSlide              // PPTX 변환 시 마지막 슬라이드가 이미지 없이 '끝'/'END'/'The End' 같은 종료 표시만 담고 있으면 제거 (기본 true) — PptxToMarkdownConverter
 ) {
     public record LlmConfig(
             List<ProviderConfig> providers,
@@ -72,7 +74,24 @@ public record AppProperties(
             int priority,
             Boolean stream,
             Integer concurrency  // this provider's own concurrency slots; null/<=0 falls back to LlmConfig.defaultProviderConcurrency
-    ) {}
+    ) {
+        /**
+         * True when this provider will actually be registered as a live {@code LlmProvider} by
+         * {@code LlmConfig.llmRouter()} (its G1+G2 gates) — a LOCAL-role provider is exempt from
+         * needing an api-key (it defaults to the "no-key" placeholder), but every role, LOCAL
+         * included, still needs a non-blank base-url. The single source of truth for "is this
+         * provider usable", shared by the bean-registration filter and the /llm-usage status
+         * badge — before this existed, /llm-usage only checked api-key and showed a LOCAL slot
+         * (e.g. local-fast/local-2) as "정상" even with no base-url configured, since its api-key
+         * always defaults to a non-blank "no-key" placeholder regardless of base-url.
+         */
+        public boolean isEnabled() {
+            boolean hasKey     = apiKey != null && !apiKey.isBlank();
+            boolean isLocal    = role != null && "LOCAL".equalsIgnoreCase(role.trim());
+            boolean hasBaseUrl = baseUrl != null && !baseUrl.isBlank();
+            return (hasKey || isLocal) && hasBaseUrl;
+        }
+    }
 
     public record IndexingConfig(
             int maxConcurrentFiles,
@@ -361,6 +380,17 @@ public record AppProperties(
     /** PPTX section-divider (title-only, no body/image) slide removal on/off. Defaults to enabled. */
     public boolean pptxDropDividerSlidesSafe() {
         return pptxDropDividerSlides == null || pptxDropDividerSlides;
+    }
+
+    /** PPTX redundant "preview title" slide removal (title-only slide whose text also appears on
+     *  the immediately following slide) on/off. Defaults to enabled. */
+    public boolean pptxDropRedundantTitleSlidesSafe() {
+        return pptxDropRedundantTitleSlides == null || pptxDropRedundantTitleSlides;
+    }
+
+    /** PPTX last-slide "ending marker" (끝/END/The End) removal on/off. Defaults to enabled. */
+    public boolean pptxDropEndingSlideSafe() {
+        return pptxDropEndingSlide == null || pptxDropEndingSlide;
     }
 
     /** Query embedding cache max entries. Defaults to 500. */

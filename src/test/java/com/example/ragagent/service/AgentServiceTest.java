@@ -113,28 +113,6 @@ class AgentServiceTest {
     }
 
     @Test
-    @DisplayName("DUAL 모드 응답 — dualLocalAnswer/Provider 가 ChatResponse 에 노출")
-    void chat_dualMode_exposesLocalAnswer() {
-        AgentState dualResult = AgentState.of("q", "v1", "t1", "", RoutingMode.DUAL)
-                .toBuilder()
-                .questionType("manual")
-                .answer("외부 답변")
-                .usedProvider("gemini-flash")
-                .dualResult("로컬 답변", "local")
-                .build();
-
-        when(memoryService.getHistory(any(), any())).thenReturn("");
-        when(classifierService.classifyOnly(any(), any())).thenReturn("manual");
-        when(agentGraph.run(any())).thenReturn(dualResult);
-
-        ChatResponse resp = service.chat(CTX, new ChatRequest("질문", "v1", "t1", RoutingMode.DUAL));
-
-        assertThat(resp.dualLocalAnswer()).isEqualTo("로컬 답변");
-        assertThat(resp.dualLocalProvider()).isEqualTo("local");
-        assertThat(resp.usedProvider()).isEqualTo("gemini-flash");
-    }
-
-    @Test
     @DisplayName("PROGRESSIVE 모드 응답 — premiumUpgraded 가 ChatResponse 에 노출")
     void chat_progressiveUpgrade_exposesPremiumProvider() {
         AgentState upgradedResult = fullResult().toBuilder().premiumUpgraded("gemini-pro").build();
@@ -241,7 +219,7 @@ class AgentServiceTest {
         when(classifierService.classifyOnly(any(), any())).thenReturn("manual");
         when(agentGraph.run(any())).thenReturn(fullResult());
         when(memoryService.addTurn(any(), any(), any(), any(), any(),
-                anyInt(), anyInt(), anyInt(), any(), anyInt())).thenReturn(42L);
+                anyInt(), anyInt(), anyInt(), any(), anyInt(), any())).thenReturn(42L);
 
         service.chat(CTX, new ChatRequest("질문", "v1", "t1", RoutingMode.COST_FIRST));
 

@@ -13,14 +13,14 @@ import java.util.Map;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * QA — AgentState.Builder: 24-field copy-constructor + partial-modify invariant
+ * QA — AgentState.Builder: 22-field copy-constructor + partial-modify invariant
  *
  * Covers (per refactoring/04-agent-state-builder.md):
  *  - builder() 팩토리로 신규 상태 구성
  *  - toBuilder() copy-constructor 가 모든 필드를 보존
- *  - 단일 필드 수정 시 나머지 23개 필드 불변 유지
+ *  - 단일 필드 수정 시 나머지 21개 필드 불변 유지
  *  - accumulateTokens 누적 동작
- *  - dualResult / incrementRetry 편의 메서드
+ *  - incrementRetry 편의 메서드
  */
 class AgentStateBuilderTest {
 
@@ -40,10 +40,9 @@ class AgentStateBuilderTest {
                 .conversationHistory("이전 대화")
                 .accumulateTokens(100, 200)
                 .accumulateTokens(50, 60)
-                .routingMode(RoutingMode.DUAL)
+                .routingMode(RoutingMode.QUALITY_FIRST)
                 .usedProvider("gemini-flash")
                 .premiumUpgraded("gemini-pro")
-                .dualResult("로컬 답변", "local")
                 .grounded(true)
                 .directMode(false)
                 .locale(Locale.KOREAN)
@@ -51,7 +50,7 @@ class AgentStateBuilderTest {
     }
 
     @Test
-    @DisplayName("builder() 팩토리 — 24개 필드 직접 설정 후 build() 정확히 반영")
+    @DisplayName("builder() 팩토리 — 22개 필드 직접 설정 후 build() 정확히 반영")
     void builder_setsAllFields() {
         AgentState s = fullState();
 
@@ -70,18 +69,16 @@ class AgentStateBuilderTest {
         assertThat(s.totalInputTokens()).isEqualTo(150);
         assertThat(s.totalOutputTokens()).isEqualTo(260);
         assertThat(s.llmCallCount()).isEqualTo(2);
-        assertThat(s.routingMode()).isEqualTo(RoutingMode.DUAL);
+        assertThat(s.routingMode()).isEqualTo(RoutingMode.QUALITY_FIRST);
         assertThat(s.usedProvider()).isEqualTo("gemini-flash");
         assertThat(s.premiumUpgraded()).isEqualTo("gemini-pro");
-        assertThat(s.dualLocalAnswer()).isEqualTo("로컬 답변");
-        assertThat(s.dualLocalProvider()).isEqualTo("local");
         assertThat(s.grounded()).isTrue();
         assertThat(s.directMode()).isFalse();
         assertThat(s.locale()).isEqualTo(Locale.KOREAN);
     }
 
     @Test
-    @DisplayName("toBuilder() copy-constructor — 24개 필드 모두 보존")
+    @DisplayName("toBuilder() copy-constructor — 22개 필드 모두 보존")
     void toBuilder_copyConstructor_preservesAllFields() {
         AgentState original = fullState();
         AgentState copy = original.toBuilder().build();
@@ -104,15 +101,13 @@ class AgentStateBuilderTest {
         assertThat(copy.routingMode()).isEqualTo(original.routingMode());
         assertThat(copy.usedProvider()).isEqualTo(original.usedProvider());
         assertThat(copy.premiumUpgraded()).isEqualTo(original.premiumUpgraded());
-        assertThat(copy.dualLocalAnswer()).isEqualTo(original.dualLocalAnswer());
-        assertThat(copy.dualLocalProvider()).isEqualTo(original.dualLocalProvider());
         assertThat(copy.grounded()).isEqualTo(original.grounded());
         assertThat(copy.directMode()).isEqualTo(original.directMode());
         assertThat(copy.locale()).isEqualTo(original.locale());
     }
 
     @Test
-    @DisplayName("단일 필드 수정 — 나머지 23개 필드 불변")
+    @DisplayName("단일 필드 수정 — 나머지 21개 필드 불변")
     void toBuilder_modifySingleField_otherFieldsPreserved() {
         AgentState original = fullState();
         AgentState modified = original.toBuilder().answer("새 답변").build();
@@ -122,7 +117,6 @@ class AgentStateBuilderTest {
         assertThat(modified.totalInputTokens()).isEqualTo(original.totalInputTokens());
         assertThat(modified.llmCallCount()).isEqualTo(original.llmCallCount());
         assertThat(modified.routingMode()).isEqualTo(original.routingMode());
-        assertThat(modified.dualLocalAnswer()).isEqualTo(original.dualLocalAnswer());
         assertThat(modified.locale()).isEqualTo(original.locale());
     }
 
@@ -155,17 +149,5 @@ class AgentStateBuilderTest {
         assertThat(incremented.retryCount()).isEqualTo(3);
         assertThat(incremented.answer()).isEqualTo("기존 답변");
         assertThat(incremented.totalInputTokens()).isEqualTo(0);
-    }
-
-    @Test
-    @DisplayName("dualResult — localAnswer/Provider 동시 설정")
-    void dualResult_setsBothFields() {
-        AgentState s = AgentState.builder()
-                .question("q").version("v").threadId("t")
-                .dualResult("로컬 답변", "local-model")
-                .build();
-
-        assertThat(s.dualLocalAnswer()).isEqualTo("로컬 답변");
-        assertThat(s.dualLocalProvider()).isEqualTo("local-model");
     }
 }

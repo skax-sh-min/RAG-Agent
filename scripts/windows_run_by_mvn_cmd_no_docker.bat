@@ -1,5 +1,5 @@
 @echo off
-setlocal
+setlocal enabledelayedexpansion
 echo =======================================================
 echo 현재 경로: %CD%
 
@@ -13,8 +13,9 @@ if exist "%ENV_FILE%" (
     echo Loading...
     for /f "usebackq tokens=1,* delims==" %%A in (`findstr /v "^#" .env`) do SET %%A=%%B
 
+    set "SERVER_PORT=8081"
     echo =======================================================
-    echo Starting...
+    echo Starting... port: !SERVER_PORT!
     echo =======================================================
     mvn spring-boot:run
     REM run.log 파일에 로그를 남기고 싶다면 아래 주석을 제거하고 사용하세요.

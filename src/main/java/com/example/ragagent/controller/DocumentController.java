@@ -206,11 +206,17 @@ public class DocumentController {
         return "fragments/doc-table-body :: body";
     }
 
-    /** Distinct tags in use (optional version scope) — powers tag-suggestion chips on upload/chat. */
+    /**
+     * Distinct tags in use (optional version scope) — powers tag-suggestion chips on upload/chat.
+     * {@code excludeCommon=true} (chat search-scope chips only) drops tags present on every
+     * document in scope, since selecting one is a no-op filter; the upload-tagging suggestion
+     * list (documents.html) always wants the full set, so it never sets this flag.
+     */
     @GetMapping("/api/v1/tags")
     @ResponseBody
-    public List<String> listTags(@RequestParam(required = false) String version) {
-        return ragService.listTags(version);
+    public List<String> listTags(@RequestParam(required = false) String version,
+                                  @RequestParam(defaultValue = "false") boolean excludeCommon) {
+        return excludeCommon ? ragService.listTagsExcludingCommon(version) : ragService.listTags(version);
     }
 
     /** Distinct versions in use for version-selector UI. */

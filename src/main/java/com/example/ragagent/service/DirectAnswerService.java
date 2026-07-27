@@ -4,8 +4,8 @@ import com.example.ragagent.agent.AgentState;
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.llm.LlmProvider;
 import com.example.ragagent.llm.LlmRouter;
-import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.llm.TaskType;
+import com.example.ragagent.model.ResponseMode;
 import com.example.ragagent.security.PromptInjectionGuard;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -49,12 +49,14 @@ public class DirectAnswerService {
         // §6.18 — Direct(meta) answers use their own temperature (hot-editable via /settings), read
         // fresh per call, distinct from the general/RAG temperature baked into the provider default.
         double directTemp = props.llmSafe().directTemperature();
-        RoutingMode effective = effectiveRoutingMode(state.routingMode());
-        String rawAnswer = llmRouter.executeGated(TaskType.TEXT, effective,
-                model -> model.call(buildPrompt(systemPrompt, userPrompt, directTemp)));
+        int maxTokens = state.responseMode().maxTokens(props.llmSafe().maxTokens());
+        LlmRouter.LlmResult result = llmRouter.executeGatedWithUsage(TaskType.TEXT, state.routingMode(),
+                model -> model.call(buildPrompt(systemPrompt, userPrompt, directTemp, maxTokens)));
+        String rawAnswer = result.text();
         String answer = (rawAnswer == null || rawAnswer.isEmpty()) ? null : rawAnswer;
         log.debug("[DirectAnswer] answer length={}", answer == null ? -1 : answer.length());
-        return state.toBuilder().answer(answer).accumulateTokens(0, 0).build();
+        return state.toBuilder().answer(answer)
+                .accumulateTokens(result.inputTokens(), result.outputTokens()).build();
     }
 
     /** Streaming variant — pushes tokens via listener.onToken() instead of blocking. */
@@ -64,8 +66,7 @@ public class DirectAnswerService {
                 state.routingMode(), state.conversationHistory().length());
 
         double directTemp = props.llmSafe().directTemperature();
-        RoutingMode effective = effectiveRoutingMode(state.routingMode());
-        LlmProvider provider = llmRouter.routeProvider(TaskType.TEXT, effective);
+        LlmProvider provider = llmRouter.routeProvider(TaskType.TEXT, state.routingMode());
 
         StringBuilder full = new StringBuilder();
         try (var permit = llmRouter.acquirePermit(provider)) {
@@ -76,9 +77,13 @@ public class DirectAnswerService {
         String answer = full.toString();
         log.debug("[DirectAnswer] streaming answer length={}", answer.length());
         // Streaming mode has no ChatResponse to read real usage from — record an approximate
-        // (chars/4) usage entry so /llm-usage isn't blind to the entire direct-answer stream path.
-        llmRouter.recordApproxUsage(provider.name(), systemPrompt + buildUserPrompt(state), answer);
-        return state.toBuilder().answer(answer).accumulateTokens(0, 0).build();
+        // (chars/4) usage entry so /llm-usage isn't blind to the entire direct-answer stream path,
+        // and reflect the same estimate in the per-turn total so the chat UI isn't stuck at 0/0.
+        String promptText = systemPrompt + buildUserPrompt(state);
+        llmRouter.recordApproxUsage(provider.name(), promptText, answer);
+        int approxIn = (int) LlmRouter.approxTokens(promptText);
+        int approxOut = (int) LlmRouter.approxTokens(answer);
+        return state.toBuilder().answer(answer).accumulateTokens(approxIn, approxOut).build();
     }
 
     private String resolveSystemPrompt(AgentState state) {
@@ -86,24 +91,46 @@ public class DirectAnswerService {
         return messageSource.getMessage(key, null, state.locale());
     }
 
-    /** DUAL is not implemented in DirectAnswer; fall back to COST_FIRST (LOCAL preferred). */
-    private static RoutingMode effectiveRoutingMode(RoutingMode mode) {
-        return (mode == RoutingMode.DUAL) ? RoutingMode.COST_FIRST : mode;
-    }
-
-    private static Prompt buildPrompt(String systemPrompt, String userPrompt, double temperature) {
-        // Attach temperature as a runtime option — OpenAiChatModel merges it over the provider's
-        // defaultOptions field-by-field, so this overrides only temperature (maxTokens/model stay).
+    private static Prompt buildPrompt(String systemPrompt, String userPrompt,
+                                      double temperature, int maxTokens) {
+        // Attach temperature + the response mode's token budget as runtime options —
+        // OpenAiChatModel merges them over the provider's defaultOptions field-by-field, so only
+        // these two are overridden (model etc. stay). maxTokens<=0 leaves the provider default.
+        OpenAiChatOptions.Builder opts = OpenAiChatOptions.builder().temperature(temperature);
+        if (maxTokens > 0) opts.maxTokens(maxTokens);
         return new Prompt(List.of(new SystemMessage(systemPrompt), new UserMessage(userPrompt)),
-                OpenAiChatOptions.builder().temperature(temperature).build());
+                opts.build());
     }
 
-    private static String buildUserPrompt(AgentState state) {
+
+    /**
+     * directMode (RAG 없이 직접 질문) answers get the same S/M/L length instruction as the RAG path
+     * (see AnswerService.responseStyleInstruction) — meta/greeting answers keep their own fixed
+     * "2-3 sentences" instruction (prompt.direct.meta.system) unchanged, since S/M/L differentiation
+     * doesn't make sense for a greeting.
+     */
+    private String buildUserPrompt(AgentState state) {
         String history = state.conversationHistory();
         String question = PromptInjectionGuard.wrap(state.question());
-        return history.isBlank()
-                ? question
-                : "[이전 대화]\n%s\n\n[현재 질문]\n%s".formatted(history, question);
+        if (!state.directMode()) {
+            return history.isBlank()
+                    ? question
+                    : "[이전 대화]\n%s\n\n[현재 질문]\n%s".formatted(history, question);
+        }
+        StringBuilder sb = new StringBuilder();
+        if (!history.isBlank()) {
+            sb.append("[이전 대화]\n").append(history).append("\n\n");
+        }
+        sb.append(responseStyleInstruction(state)).append("\n\n[현재 질문]\n").append(question);
+        return sb.toString();
+    }
+
+    /** Same character-target instruction as AnswerService.responseStyleInstruction — see ResponseMode javadoc. */
+    private String responseStyleInstruction(AgentState state) {
+        ResponseMode mode = state.responseMode();
+        int tokens = mode.maxTokens(props.llmSafe().maxTokens());
+        int targetChars = tokens > 0 ? tokens : mode.minChars();
+        return messageSource.getMessage(mode.promptKey(), new Object[]{targetChars}, state.locale());
     }
 
     /**

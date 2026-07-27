@@ -59,7 +59,8 @@ class ChatResponseNullSafetyTest {
     @DisplayName("ClassifierService.execute — LlmRouter가 null 반환 → concept 폴백")
     void classifier_nullText_fallsToConcept() {
         LlmRouter llmRouter = mock(LlmRouter.class);
-        when(llmRouter.executeWithTracking(any(), any(), any())).thenReturn(null);
+        when(llmRouter.executeGatedWithUsage(any(), any(), any()))
+                .thenReturn(new LlmRouter.LlmResult(null, 0, 0));
 
         MessageSource messageSource = mock(MessageSource.class);
         when(messageSource.getMessage(anyString(), any(), any(Locale.class))).thenReturn("prompt");
@@ -112,8 +113,8 @@ class ChatResponseNullSafetyTest {
     @DisplayName("ClassifierService — VALID_TYPES 외 응답 시 'concept' 폴백")
     void classifier_invalidType_fallsToConcept() {
         LlmRouter llmRouter = mock(LlmRouter.class);
-        when(llmRouter.executeWithTracking(any(), any(), any()))
-                .thenReturn("{\"question_type\": \"unknown_garbage\"}");
+        when(llmRouter.executeGatedWithUsage(any(), any(), any()))
+                .thenReturn(new LlmRouter.LlmResult("{\"question_type\": \"unknown_garbage\"}", 0, 0));
 
         MessageSource messageSource = mock(MessageSource.class);
         when(messageSource.getMessage(anyString(), any(), any(Locale.class))).thenReturn("prompt");

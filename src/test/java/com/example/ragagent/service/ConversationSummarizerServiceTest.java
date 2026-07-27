@@ -10,11 +10,16 @@ import com.example.ragagent.repository.MemoryRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
+import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.ai.chat.model.ChatResponse;
+import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.context.MessageSource;
 
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
+import java.util.function.Function;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -30,8 +35,11 @@ import static org.mockito.Mockito.when;
  * QA — ConversationSummarizerService (§6.10 in PLAN.md)
  *
  * Covers:
- *  - dedupe(): DISLIKE 하드 제외, 정규화 후 중복 질문은 최신 답변만 유지
+ *  - dedupeTurns(): DISLIKE 하드 제외, 정규화 후 중복 질문은 최신 답변만 유지
  *  - precompute() → buildContext(): 정상 캐싱 및 "요약 + 최근 N턴" 조합
+ *  - precompute(): 모든 답변에 "## 요약" 섹션이 있으면 LLM 없이 그 내용을 그대로 사용
+ *  - precompute(): 일부 답변에만 "## 요약" 이 있으면 LLM 입력이 그 요약으로 축약된 채 1회 호출
+ *  - precompute(): LOCAL_FAST(MICRO_TEXT offload) provider 가 없으면 LLM 요약은 아예 생략
  *  - precompute(): turns 비어있으면(또는 dedupe 결과 blank) LLM 호출 없이 종료
  *  - precompute(): LOCAL provider 예외/일반 예외 시 캐시에 아무것도 남지 않음(안전 폴백)
  *  - precompute(): TTL 이내 재호출은 LLM 을 다시 부르지 않음
@@ -59,38 +67,40 @@ class ConversationSummarizerServiceTest {
         // Generous budget so buildContext() keeps the summary + recent turns intact by default;
         // the budget-trim behavior is exercised explicitly in its own test.
         when(memoryService.maxConversationChars()).thenReturn(6_000);
+        // Default for the existing cases: the MICRO_TEXT offload model (LOCAL_FAST_LLM_URL) is
+        // configured, so the LLM summarization path is allowed to run.
+        when(llmRouter.hasMicroTextOffloadProvider()).thenReturn(true);
         AppProperties props = mock(AppProperties.class);
         when(props.summarySafe()).thenReturn(new AppProperties.SummaryConfig(3, 2_000, 2, 15));
         service = new ConversationSummarizerService(memoryService, llmRouter, messageSource, props);
     }
 
     private static MemoryRepository.Turn turn(long id, String q, String a, String feedback) {
-        return new MemoryRepository.Turn(id, q, a, null, null, 0, 0, 0, "local", 1, feedback);
+        return new MemoryRepository.Turn(id, q, a, null, null, 0, 0, 0, "local", 1, feedback, "M");
     }
 
     @Test
-    @DisplayName("dedupe — DISLIKE turn 은 제외된다")
+    @DisplayName("dedupeTurns — DISLIKE turn 은 제외된다")
     void dedupe_excludesDislikedTurns() {
         List<MemoryRepository.Turn> turns = List.of(
                 turn(1, "질문A", "답변A", null),
                 turn(2, "질문B", "답변B", "DISLIKE"));
 
-        String result = service.dedupe(turns);
+        List<MemoryRepository.Turn> result = service.dedupeTurns(turns);
 
-        assertThat(result).contains("질문A").doesNotContain("질문B");
+        assertThat(result).extracting(MemoryRepository.Turn::question).containsExactly("질문A");
     }
 
     @Test
-    @DisplayName("dedupe — 정규화 후 동일 질문은 최신 답변만 유지된다")
+    @DisplayName("dedupeTurns — 정규화 후 동일 질문은 최신 답변만 유지된다")
     void dedupe_keepsLatestAnswerForRepeatedQuestion() {
         List<MemoryRepository.Turn> turns = List.of(
                 turn(1, "  질문A  ", "옛날 답변", null),
                 turn(2, "질문a", "최신 답변", null));
 
-        String result = service.dedupe(turns);
+        List<MemoryRepository.Turn> result = service.dedupeTurns(turns);
 
-        assertThat(result).contains("최신 답변").doesNotContain("옛날 답변");
-        assertThat(result.lines().filter(l -> l.startsWith("Q:")).count()).isEqualTo(1);
+        assertThat(result).extracting(MemoryRepository.Turn::answer).containsExactly("최신 답변");
     }
 
     @Test
@@ -120,6 +130,91 @@ class ConversationSummarizerServiceTest {
 
         assertThat(context).contains("요약된 내용");
         assertThat(context).contains("질문2").contains("답변2"); // last-N raw turn preserved verbatim
+    }
+
+    @Test
+    @DisplayName("precompute — 모든 답변에 '## 요약' 섹션이 있으면 LLM 없이 그 내용을 요약으로 쓴다")
+    void precompute_allAnswersCarrySummarySection_skipsLlmEntirely() {
+        when(memoryService.getRecentTurns(UID, TID)).thenReturn(List.of(
+                turn(1, "질문1", ragAnswer("첫 답변 한 줄 요약", "첫 답변 장황한 본문"), null),
+                turn(2, "질문2", ragAnswer("둘째 답변 한 줄 요약", "둘째 답변 장황한 본문"), null)));
+
+        service.precompute(UID, TID, Locale.KOREAN);
+
+        verify(llmRouter, never()).executeWithTracking(any(), any(), any(), any());
+        String context = service.buildContext(UID, TID);
+        assertThat(context).isNotNull();
+        String summaryBlock = context.substring(0, context.indexOf("[Recent]"));
+        assertThat(summaryBlock)
+                .contains("첫 답변 한 줄 요약").contains("둘째 답변 한 줄 요약")
+                .doesNotContain("장황한 본문");   // 본문은 요약에 들어가지 않는다
+    }
+
+    @Test
+    @DisplayName("precompute — 일부 답변만 '## 요약' 이면 그 요약으로 축약된 입력으로 LLM 1회 호출")
+    @SuppressWarnings("unchecked")
+    void precompute_partialSummarySections_callsLlmWithShrunkInput() {
+        ArgumentCaptor<Function<ChatModel, ChatResponse>> callCaptor = ArgumentCaptor.forClass(Function.class);
+        when(memoryService.getRecentTurns(UID, TID)).thenReturn(List.of(
+                turn(1, "질문1", ragAnswer("첫 답변 한 줄 요약", "첫 답변 장황한 본문"), null),
+                turn(2, "질문2", "요약 섹션이 없는 Direct 답변", null)));
+        when(llmRouter.executeWithTracking(eq(TaskType.MICRO_TEXT), eq(RoutingMode.LOCAL_ONLY),
+                eq(BackgroundUsage.SUMMARY_PREFIX), callCaptor.capture()))
+                .thenReturn("LLM 요약");
+
+        service.precompute(UID, TID, Locale.KOREAN);
+
+        ChatModel chatModel = mock(ChatModel.class);
+        ArgumentCaptor<Prompt> promptCaptor = ArgumentCaptor.forClass(Prompt.class);
+        when(chatModel.call(promptCaptor.capture())).thenReturn(mock(ChatResponse.class));
+        callCaptor.getValue().apply(chatModel);
+
+        String llmInput = promptCaptor.getValue().getUserMessage().getText();
+        assertThat(llmInput)
+                .contains("첫 답변 한 줄 요약")            // 이미 요약된 답변은 요약본으로 대체
+                .doesNotContain("첫 답변 장황한 본문")
+                .contains("요약 섹션이 없는 Direct 답변");  // 요약 없는 답변만 원문 그대로 LLM 몫
+        assertThat(service.buildContext(UID, TID)).contains("LLM 요약");
+    }
+
+    @Test
+    @DisplayName("precompute — LOCAL_FAST(MICRO_TEXT 오프로드) provider 가 없으면 LLM 요약을 만들지 않는다")
+    void precompute_withoutMicroTextOffloadProvider_skipsLlmSummary() {
+        when(llmRouter.hasMicroTextOffloadProvider()).thenReturn(false);
+        when(memoryService.getRecentTurns(UID, TID))
+                .thenReturn(List.of(turn(1, "질문", "요약 섹션이 없는 답변", null)));
+
+        service.precompute(UID, TID, Locale.KOREAN);
+
+        verify(llmRouter, never()).executeWithTracking(any(), any(), any(), any());
+        assertThat(service.buildContext(UID, TID)).isNull(); // 호출자는 원본 history 로 폴백
+    }
+
+    @Test
+    @DisplayName("precompute — LOCAL_FAST 가 없어도 '## 요약' 기반 요약은 그대로 동작한다")
+    void precompute_withoutMicroTextOffloadProvider_stillUsesSummarySections() {
+        when(llmRouter.hasMicroTextOffloadProvider()).thenReturn(false);
+        when(memoryService.getRecentTurns(UID, TID)).thenReturn(List.of(
+                turn(1, "질문1", ragAnswer("첫 답변 한 줄 요약", "첫 답변 장황한 본문"), null)));
+
+        service.precompute(UID, TID, Locale.KOREAN);
+
+        verify(llmRouter, never()).executeWithTracking(any(), any(), any(), any());
+        assertThat(service.buildContext(UID, TID)).contains("첫 답변 한 줄 요약");
+    }
+
+    /** prompt.answer.system 이 지시하는 고정 5-섹션 RAG 답변 형식(요약 → 상세 설명 → … → 참고). */
+    private static String ragAnswer(String summary, String detail) {
+        return """
+                ## 요약
+                %s
+
+                ## 상세 설명
+                %s
+
+                ## 참고
+                - [doc.md | p.1] (제목)
+                """.formatted(summary, detail);
     }
 
     @Test

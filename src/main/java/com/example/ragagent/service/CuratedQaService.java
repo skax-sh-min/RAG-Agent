@@ -5,6 +5,7 @@ import com.example.ragagent.ingestion.DocRegistry;
 import com.example.ragagent.ingestion.MarkdownNoiseNormalizer;
 import com.example.ragagent.ingestion.VectorStoreFacade;
 import com.example.ragagent.model.MetaKey;
+import com.example.ragagent.model.ResponseMode;
 import com.example.ragagent.repository.CuratedQaRepository;
 import com.example.ragagent.repository.CuratedQaRepository.CuratedQa;
 import com.example.ragagent.repository.MemoryRepository;
@@ -18,6 +19,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * §10.10 — promotes 👍'd chat turns into a separately embedded, shared knowledge axis (reserved
@@ -73,6 +75,11 @@ public class CuratedQaService {
      *       was unliked while the call was in flight</li>
      * </ol>
      * Mirrors the DISLIKE-discard guard in {@link ConversationSummarizerService#precompute}.
+     *
+     * <p>L-mode answers (§ ResponseMode) are skipped entirely — an L answer already preserves the
+     * source document's own wording almost verbatim, so embedding it again would just duplicate a
+     * vector that's already in the index under the real document. The curated_qa row is still
+     * created (unlike/edit/admin-listing keep working), only the embed call is skipped.
      */
     public void onLike(String userId, String threadId, long turnId) {
         Optional<MemoryRepository.Turn> turnOpt = memoryService.getTurn(userId, threadId, turnId);
@@ -87,6 +94,11 @@ public class CuratedQaService {
 
         long curatedId = repository.upsertActive(turnId, userId, threadId,
                 turn.question(), turn.answer(), version);
+
+        if (ResponseMode.parse(turn.responseMode()) == ResponseMode.L) {
+            log.debug("[CURATED] embed skipped (L-mode answer already mirrors source content) turnId={}", turnId);
+            return;
+        }
 
         Thread.ofVirtual().name("curated-embed-" + curatedId).start(() -> {
             try {
@@ -165,9 +177,14 @@ public class CuratedQaService {
         return true;
     }
 
-    /** §10.10 step ④ — admin curated-Q&A browser listing. */
+    /** Same as {@link #listActive(int, int)} with {@code offset=0}. */
     public List<CuratedQa> listActive(int limit) {
         return repository.findAllActive(limit);
+    }
+
+    /** §10.10 step ④ — admin curated-Q&A browser listing, paginated. */
+    public List<CuratedQa> listActive(int offset, int limit) {
+        return repository.findAllActive(offset, limit);
     }
 
     /** §10.10 step ④ — direct id lookup for the admin edit panel (chat's owner-edit path looks
@@ -176,15 +193,24 @@ public class CuratedQaService {
         return repository.findById(id);
     }
 
+    /**
+     * §10.10 embedding-fallback — turn ids (among the given set) whose active curated row is
+     * currently stuck in {@code embed_status='failed'}. chat.html's turn-history render uses this
+     * to show a "임베딩 실패" badge next to the curated-edit pencil icon.
+     */
+    public Set<Long> findFailedTurnIds(List<Long> turnIds) {
+        return repository.findFailedTurnIds(turnIds);
+    }
+
     /** Re-embeds an already-active row after an edit — no like-state re-check (see {@link #updateAnswer}). */
     private void reembedAfterEdit(long curatedId) {
         Optional<CuratedQa> rowOpt = repository.findById(curatedId);
         if (rowOpt.isEmpty() || !"active".equals(rowOpt.get().status())) return;
-        try {
-            vectorStore.add(DocRegistry.SHARED, CURATED_VERSION, List.of(buildDocument(rowOpt.get())));
+        if (tryEmbedWithFallback(rowOpt.get())) {
+            repository.markEmbedOk(curatedId);
             log.info("[CURATED] re-embedded after edit curatedId={}", curatedId);
-        } catch (Exception e) {
-            log.warn("[CURATED] re-embed after edit failed curatedId={}: {}", curatedId, e.getMessage());
+        } else {
+            repository.markEmbedFailed(curatedId);
         }
     }
 
@@ -193,13 +219,11 @@ public class CuratedQaService {
         if (rowOpt.isEmpty() || !"active".equals(rowOpt.get().status())) return;
         CuratedQa row = rowOpt.get();
 
-        Document doc = buildDocument(row);
-        try {
-            vectorStore.add(DocRegistry.SHARED, CURATED_VERSION, List.of(doc));
-        } catch (Exception e) {
-            log.warn("[CURATED] embed failed curatedId={} turnId={}: {}", curatedId, turnId, e.getMessage());
+        if (!tryEmbedWithFallback(row)) {
+            repository.markEmbedFailed(curatedId);
             return;
         }
+        repository.markEmbedOk(curatedId);
 
         // Compensating re-check: an unlike that raced during the (network) embed call itself gets
         // undone immediately instead of left as a dangling active-in-vectorstore/inactive-in-DB
@@ -213,17 +237,65 @@ public class CuratedQaService {
     }
 
     /**
+     * §10.10 embedding-fallback — attempts {@link #defaultSearchText} first (question + answer,
+     * minus the "요약"/"참고" structural sections — see that method); on failure (typically: the
+     * combined text still exceeds the embedding server's input limit) retries with a narrower
+     * slice: just the answer's core RAG sections (상세 설명/예시·코드/설정·주의사항, emphasis markers
+     * additionally stripped — {@link CuratedTextUtils#extractCoreSections}). Returns {@code false}
+     * only when both attempts fail, or when the answer has no core-section structure to fall back
+     * to at all (e.g. a Direct-mode/meta answer) — callers mark the row {@code embed_status='failed'}
+     * in that case.
+     */
+    private boolean tryEmbedWithFallback(CuratedQa row) {
+        try {
+            vectorStore.add(DocRegistry.SHARED, CURATED_VERSION, List.of(buildDocument(row, defaultSearchText(row))));
+            return true;
+        } catch (Exception e) {
+            log.warn("[CURATED] embed failed, retrying with core sections only curatedId={}: {}",
+                    row.id(), e.getMessage());
+        }
+
+        String core = CuratedTextUtils.extractCoreSections(row.answer());
+        if (core.isBlank()) {
+            log.warn("[CURATED] no core-section fallback available curatedId={} (answer isn't in the RAG format)",
+                    row.id());
+            return false;
+        }
+        String fallbackSearchText = row.question() + "\n\n" + MarkdownNoiseNormalizer.normalize(core);
+        try {
+            vectorStore.add(DocRegistry.SHARED, CURATED_VERSION, List.of(buildDocument(row, fallbackSearchText)));
+            log.info("[CURATED] embedded with core-sections fallback curatedId={}", row.id());
+            return true;
+        } catch (Exception e) {
+            log.warn("[CURATED] core-sections fallback embed also failed curatedId={}: {}", row.id(), e.getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * Question + answer minus the "## 참고" (citation noise) and "## 요약" (redundant once "##
+     * 상세 설명" carries the same content) structural sections — both are a net negative for
+     * question-driven semantic matching, so neither should reach the embedding call. Falls back
+     * to the narrower {@link CuratedTextUtils#extractCoreSections} slice only if this text is
+     * still too large for the embedding server (see {@link #tryEmbedWithFallback}); a Direct-mode/
+     * meta answer has neither heading to strip, so this is a no-op for it and the full text is
+     * used as-is.
+     */
+    private static String defaultSearchText(CuratedQa row) {
+        String core = CuratedTextUtils.stripStructuralSections(row.answer());
+        return row.question() + "\n\n" + MarkdownNoiseNormalizer.normalize(core);
+    }
+
+    /**
      * Builds the curated Document: {@code getText()} = full answer (participates/§10.1 stored
      * text, "## 참고" section intact — useful for a human reading the curated entry). The search
-     * vector is a separately precomputed override under {@link MetaKey#SEARCH_TEXT} — question +
-     * normalize(answer with the "## 참고" citation section stripped, see {@link CuratedTextUtils})
-     * — which {@code SearchTextBuilder.build()} already prefers over recomputing from
-     * {@code getText()} (§10.8.5), so no changes are needed to either {@code VectorStoreProvider}.
+     * vector is a separately precomputed override under {@link MetaKey#SEARCH_TEXT} passed in by
+     * the caller ({@link #defaultSearchText} normally, a shrunk fallback on retry — see
+     * {@link #tryEmbedWithFallback}) — which {@code SearchTextBuilder.build()} already prefers
+     * over recomputing from {@code getText()} (§10.8.5), so no changes are needed to either
+     * {@code VectorStoreProvider}.
      */
-    private Document buildDocument(CuratedQa row) {
-        String searchText = row.question() + "\n\n"
-                + MarkdownNoiseNormalizer.normalize(CuratedTextUtils.stripReferenceSection(row.answer()));
-
+    private Document buildDocument(CuratedQa row, String searchText) {
         Map<String, Object> meta = new HashMap<>();
         meta.put(MetaKey.DOC_ID, "curated:" + row.id());
         meta.put(MetaKey.FILENAME, "curated_qa");

@@ -72,6 +72,15 @@ public class LlmUsageRepository {
         return jdbc.update("DELETE FROM llm_usage WHERE provider_name = ?", provider);
     }
 
+    /** Distinct provider names with usage whose name starts with {@code prefix} — used to find which
+     *  underlying LOCAL provider(s) (local/local-fast/local-2, §6.21) served a given background-usage
+     *  category (e.g. {@code "title:"} → {@code "title:local"}, {@code "title:local-fast"}). */
+    public Set<String> usedProviderNamesWithPrefix(String prefix) {
+        return new HashSet<>(jdbc.queryForList(
+                "SELECT DISTINCT provider_name FROM llm_usage WHERE provider_name LIKE ? AND call_count > 0",
+                String.class, prefix + "%"));
+    }
+
     // ── Period aggregation ─────────────────────────────────────────────────
 
     public PeriodSummary getByPeriod(String provider, LocalDate from, LocalDate to) {
@@ -100,6 +109,38 @@ public class LlmUsageRepository {
         return getByPeriod(provider, today.withDayOfMonth(1), today);
     }
 
+    /**
+     * Same as {@link #getByPeriod} but sums across every provider name starting with {@code prefix}
+     * (a LIKE match) — used to merge a background-usage category's rows across whichever underlying
+     * LOCAL provider(s) actually served each call, e.g. {@code "title:local"} + {@code
+     * "title:local-fast"} both roll into one {@code "title:"} total.
+     */
+    public PeriodSummary getByPeriodPrefix(String prefix, LocalDate from, LocalDate to) {
+        return jdbc.queryForObject("""
+                SELECT COALESCE(SUM(input_tokens), 0),
+                       COALESCE(SUM(output_tokens), 0),
+                       COALESCE(SUM(call_count), 0)
+                FROM llm_usage
+                WHERE provider_name LIKE ? AND usage_date BETWEEN ? AND ?
+                """,
+                (rs, i) -> new PeriodSummary(rs.getLong(1), rs.getLong(2), rs.getLong(3)),
+                prefix + "%", from.toString(), to.toString());
+    }
+
+    public PeriodSummary getDailyByPrefix(String prefix) {
+        return getByPeriodPrefix(prefix, LocalDate.now(ZoneOffset.UTC), LocalDate.now(ZoneOffset.UTC));
+    }
+
+    public PeriodSummary getWeeklyByPrefix(String prefix) {
+        LocalDate today = LocalDate.now(ZoneOffset.UTC);
+        return getByPeriodPrefix(prefix, today.minusDays(6), today);
+    }
+
+    public PeriodSummary getMonthlyByPrefix(String prefix) {
+        LocalDate today = LocalDate.now(ZoneOffset.UTC);
+        return getByPeriodPrefix(prefix, today.withDayOfMonth(1), today);
+    }
+
     // ── Daily history (for Chart.js) ───────────────────────────────────────
 
     public List<DailyRow> getDailyHistory(String provider, int days) {
@@ -116,6 +157,29 @@ public class LlmUsageRepository {
                         rs.getLong("output_tokens"),
                         rs.getLong("call_count")),
                 provider, from);
+    }
+
+    /** Same as {@link #getDailyHistory} but sums across every provider name starting with {@code
+     *  prefix} per day (a LIKE + GROUP BY), for the same category-merging reason as {@link
+     *  #getByPeriodPrefix}. */
+    public List<DailyRow> getDailyHistoryByPrefix(String prefix, int days) {
+        String from = LocalDate.now(ZoneOffset.UTC).minusDays(days - 1).toString();
+        return jdbc.query("""
+                SELECT usage_date,
+                       SUM(input_tokens)  AS input_tokens,
+                       SUM(output_tokens) AS output_tokens,
+                       SUM(call_count)    AS call_count
+                FROM llm_usage
+                WHERE provider_name LIKE ? AND usage_date >= ?
+                GROUP BY usage_date
+                ORDER BY usage_date
+                """,
+                (rs, i) -> new DailyRow(
+                        rs.getString("usage_date"),
+                        rs.getLong("input_tokens"),
+                        rs.getLong("output_tokens"),
+                        rs.getLong("call_count")),
+                prefix + "%", from);
     }
 
     // ── Record types ───────────────────────────────────────────────────────

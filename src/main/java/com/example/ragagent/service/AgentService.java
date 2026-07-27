@@ -68,8 +68,11 @@ public class AgentService {
                     .toBuilder().questionType(typeF.join()).build();
             }
         }
-        // carry the selected search-scope tags into the graph state.
-        initial = initial.toBuilder().selectedTags(request.selectedTags()).build();
+        // carry the selected search-scope tags + answer-length mode into the graph state.
+        initial = initial.toBuilder()
+                .selectedTags(request.selectedTags())
+                .responseMode(request.responseMode())
+                .build();
 
         String askedAt = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
                 .withZone(ZoneOffset.UTC).format(Instant.now());
@@ -82,7 +85,8 @@ public class AgentService {
         if (result.answer() != null && !result.answer().isBlank()) {
             turnId = memoryService.addTurn(userId, request.threadId(), request.question(), result.answer(),
                     askedAt, result.totalInputTokens(), result.totalOutputTokens(),
-                    (int) elapsedMs, result.usedProvider(), result.llmCallCount());
+                    (int) elapsedMs, result.usedProvider(), result.llmCallCount(),
+                    request.responseMode().name());
             summarizerService.precomputeAfterTurn(userId, request.threadId(), turnId, ctx.locale());
         }
 
@@ -97,8 +101,6 @@ public class AgentService {
                 elapsedSeconds,
                 result.premiumUpgraded(),
                 result.usedProvider(),
-                result.dualLocalAnswer(),
-                result.dualLocalProvider(),
                 turnId
         );
     }

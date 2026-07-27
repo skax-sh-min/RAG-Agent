@@ -85,6 +85,137 @@ class ChunkSplitterTest {
         assertThat(result).hasSize(2); // both short, but different slides — merge is blocked
     }
 
+    // ── mergeIdenticalHeadingSlides — 동일 ##+### 헤딩 연속 슬라이드 병합 ───────────────────
+
+    @Test
+    @DisplayName("mergeIdenticalHeadingSlides — ##+### 헤딩이 완전히 같은 연속 슬라이드는 하나로 합쳐지고, 두 번째 슬라이드의 헤딩은 제거되되 페이지 마커는 남는다")
+    void mergeIdenticalHeadingSlides_mergesMatchingSlides_dedupesHeadingKeepsPageMarker() {
+        List<Document> docs = List.of(
+                new Document("## 큰챕터\n\n### 소챕터\n\n본문1", Map.of(MetaKey.PAGE_OR_SLIDE, 1)),
+                new Document("## 큰챕터\n\n### 소챕터\n\n본문2", Map.of(MetaKey.PAGE_OR_SLIDE, 2)));
+
+        List<Document> result = splitter.mergeIdenticalHeadingSlides(docs, 2000);
+
+        assertThat(result).hasSize(1);
+        assertThat(result.get(0).getText())
+                .isEqualTo("## 큰챕터\n\n### 소챕터\n\n본문1\n\n[페이지: 2]\n\n본문2");
+    }
+
+    @Test
+    @DisplayName("mergeIdenticalHeadingSlides — 합친 크기가 chunkSize를 넘으면 병합하지 않는다")
+    void mergeIdenticalHeadingSlides_notMergedWhenCombinedExceedsChunkSize() {
+        List<Document> docs = List.of(
+                new Document("## 큰챕터\n\n### 소챕터\n\n" + "가".repeat(600), Map.of(MetaKey.PAGE_OR_SLIDE, 1)),
+                new Document("## 큰챕터\n\n### 소챕터\n\n" + "나".repeat(600), Map.of(MetaKey.PAGE_OR_SLIDE, 2)));
+
+        List<Document> result = splitter.mergeIdenticalHeadingSlides(docs, 1000);
+
+        assertThat(result).hasSize(2);
+    }
+
+    @Test
+    @DisplayName("mergeIdenticalHeadingSlides — 헤딩이 조금이라도 다르면 병합하지 않는다")
+    void mergeIdenticalHeadingSlides_notMergedWhenHeadingsDiffer() {
+        List<Document> docs = List.of(
+                new Document("## 큰챕터\n\n### 소챕터A\n\n본문1", Map.of(MetaKey.PAGE_OR_SLIDE, 1)),
+                new Document("## 큰챕터\n\n### 소챕터B\n\n본문2", Map.of(MetaKey.PAGE_OR_SLIDE, 2)));
+
+        List<Document> result = splitter.mergeIdenticalHeadingSlides(docs, 2000);
+
+        assertThat(result).hasSize(2);
+    }
+
+    @Test
+    @DisplayName("mergeIdenticalHeadingSlides — 한쪽에라도 ##/### 중 하나가 없으면 병합하지 않는다")
+    void mergeIdenticalHeadingSlides_notMergedWhenHeadingLevelMissing() {
+        List<Document> docs = List.of(
+                new Document("## 큰챕터\n\n본문1", Map.of(MetaKey.PAGE_OR_SLIDE, 1)), // ### 없음
+                new Document("## 큰챕터\n\n### 소챕터\n\n본문2", Map.of(MetaKey.PAGE_OR_SLIDE, 2)));
+
+        List<Document> result = splitter.mergeIdenticalHeadingSlides(docs, 2000);
+
+        assertThat(result).hasSize(2);
+    }
+
+    @Test
+    @DisplayName("mergeIdenticalHeadingSlides — 3개 이상 연속으로 헤딩이 같아도 기본값 2개까지만 합쳐진다")
+    void mergeIdenticalHeadingSlides_cappedAtTwoSlidesEvenWhenThirdAlsoMatches() {
+        List<Document> docs = List.of(
+                new Document("## 큰챕터\n\n### 소챕터\n\n본문1", Map.of(MetaKey.PAGE_OR_SLIDE, 1)),
+                new Document("## 큰챕터\n\n### 소챕터\n\n본문2", Map.of(MetaKey.PAGE_OR_SLIDE, 2)),
+                new Document("## 큰챕터\n\n### 소챕터\n\n본문3", Map.of(MetaKey.PAGE_OR_SLIDE, 3)));
+
+        List<Document> result = splitter.mergeIdenticalHeadingSlides(docs, 2000);
+
+        assertThat(result).hasSize(2); // 1+2만 합쳐지고, 3은 그 자체로 새 그룹(다음이 없어 단독)
+        assertThat(result.get(0).getText()).isEqualTo(
+                "## 큰챕터\n\n### 소챕터\n\n본문1\n\n[페이지: 2]\n\n본문2");
+        assertThat(result.get(1).getText()).isEqualTo("## 큰챕터\n\n### 소챕터\n\n본문3");
+    }
+
+    @Test
+    @DisplayName("mergeIdenticalHeadingSlides — 4개 연속으로 헤딩이 같으면 2개씩 두 그룹으로 나뉜다")
+    void mergeIdenticalHeadingSlides_fourMatchingSlidesFormTwoIndependentPairs() {
+        List<Document> docs = List.of(
+                new Document("## 큰챕터\n\n### 소챕터\n\n본문1", Map.of(MetaKey.PAGE_OR_SLIDE, 1)),
+                new Document("## 큰챕터\n\n### 소챕터\n\n본문2", Map.of(MetaKey.PAGE_OR_SLIDE, 2)),
+                new Document("## 큰챕터\n\n### 소챕터\n\n본문3", Map.of(MetaKey.PAGE_OR_SLIDE, 3)),
+                new Document("## 큰챕터\n\n### 소챕터\n\n본문4", Map.of(MetaKey.PAGE_OR_SLIDE, 4)));
+
+        List<Document> result = splitter.mergeIdenticalHeadingSlides(docs, 2000);
+
+        assertThat(result).hasSize(2);
+        assertThat(result.get(0).getText()).isEqualTo(
+                "## 큰챕터\n\n### 소챕터\n\n본문1\n\n[페이지: 2]\n\n본문2");
+        assertThat(result.get(1).getText()).isEqualTo(
+                "## 큰챕터\n\n### 소챕터\n\n본문3\n\n[페이지: 4]\n\n본문4");
+    }
+
+    @Test
+    @DisplayName("mergeIdenticalHeadingSlides — 세 번째 슬라이드부터 헤딩이 다르면 앞의 두 개만 합쳐진다")
+    void mergeIdenticalHeadingSlides_stopsChainWhenLaterSlideDiffers() {
+        List<Document> docs = List.of(
+                new Document("## 큰챕터\n\n### 소챕터\n\n본문1", Map.of(MetaKey.PAGE_OR_SLIDE, 1)),
+                new Document("## 큰챕터\n\n### 소챕터\n\n본문2", Map.of(MetaKey.PAGE_OR_SLIDE, 2)),
+                new Document("## 다른챕터\n\n### 다른소챕터\n\n본문3", Map.of(MetaKey.PAGE_OR_SLIDE, 3)));
+
+        List<Document> result = splitter.mergeIdenticalHeadingSlides(docs, 2000);
+
+        assertThat(result).hasSize(2);
+        assertThat(result.get(0).getText()).contains("본문1").contains("[페이지: 2]").contains("본문2");
+        assertThat(result.get(1).getText()).contains("다른챕터").contains("본문3");
+    }
+
+    @Test
+    @DisplayName("mergeIdenticalHeadingSlides — 병합된 청크의 메타데이터는 첫 슬라이드 것을 유지한다")
+    void mergeIdenticalHeadingSlides_keepsFirstSlideMetadata() {
+        List<Document> docs = List.of(
+                new Document("## 큰챕터\n\n### 소챕터\n\n본문1", Map.of(MetaKey.PAGE_OR_SLIDE, 1)),
+                new Document("## 큰챕터\n\n### 소챕터\n\n본문2", Map.of(MetaKey.PAGE_OR_SLIDE, 2)));
+
+        List<Document> result = splitter.mergeIdenticalHeadingSlides(docs, 2000);
+
+        assertThat(result).hasSize(1);
+        assertThat(result.get(0).getMetadata().get(MetaKey.PAGE_OR_SLIDE)).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("splitDocuments — pptx에서 ##+### 헤딩이 완전히 같은 연속 슬라이드는 mergeShortSections 이전에 하나로 합쳐진다")
+    void splitDocuments_pptx_mergesIdenticalDualHeadingSlidesBeforeSectionMerge() {
+        List<Document> docs = List.of(
+                new Document("## 큰챕터\n\n### 소챕터\n\n" + "본문 ".repeat(80), Map.of(MetaKey.PAGE_OR_SLIDE, 1)),
+                new Document("## 큰챕터\n\n### 소챕터\n\n" + "본문 ".repeat(80), Map.of(MetaKey.PAGE_OR_SLIDE, 2)),
+                new Document("## 다른 슬라이드\n\n짧음", Map.of(MetaKey.PAGE_OR_SLIDE, 3)));
+
+        List<Document> result = splitter.splitDocuments(docs, "deck.pptx", 2000, 200, 100);
+
+        // 1·2번 슬라이드는 하나로 합쳐지고, 서로 다른 3번 슬라이드는 병합되지 않고 남는다
+        assertThat(result).hasSize(2);
+        assertThat(result.get(0).getText()).contains("[페이지: 2]");
+        assertThat(countOccurrences(result.get(0).getText(), "## 큰챕터")).isEqualTo(1);
+        assertThat(result.get(1).getText()).contains("다른 슬라이드");
+    }
+
     @Test
     @DisplayName("splitDocuments — chunkSize를 넘는 단일 슬라이드는 슬라이딩 윈도우로 분할된다 (더 이상 무조건 유지되지 않음)")
     void splitDocuments_pptx_splitsOversizedSingleSlide() {
@@ -417,5 +548,198 @@ class ChunkSplitterTest {
         List<String> cut = splitter.hardSplitByLines("X".repeat(250), 100);
         assertThat(cut).allSatisfy(p -> assertThat(p.length()).isLessThanOrEqualTo(100));
         assertThat(String.join("", cut)).isEqualTo("X".repeat(250)); // 손실 없이 재구성
+    }
+
+    // ── 챕터 기반 병합(md/docx/txt) ────────────────────────────────────────────
+
+    @Test
+    @DisplayName("mergeSectionsByChapter — 규칙1: 작은 현재 + 하위 레벨 다음의 합이 chunkSize 이내면 한 청크로 병합")
+    void chapterMerge_rule1_mergesWhenCombinedFits() {
+        List<Document> docs = List.of(
+                new Document("## 챕터A\n짧은 본문"),
+                new Document("### 챕터A-1\n짧은 하위 본문"));
+
+        List<Document> result = splitter.splitDocuments(docs, "doc.md", 1000, 100, 100);
+
+        assertThat(result).hasSize(1);
+        assertThat(result.get(0).getText()).contains("## 챕터A").contains("### 챕터A-1");
+    }
+
+    @Test
+    @DisplayName("mergeSectionsByChapter — 다음이 더 상위(##) 챕터면 병합 금지, 작은 ###는 이전 청크로 뒤로 병합")
+    void chapterMerge_parentForbidden_tinyChildFoldsBackward() {
+        List<Document> docs = List.of(
+                new Document("## 챕터A\n" + "가".repeat(200)),
+                new Document("### 챕터A-1\n짧은 내용"),
+                new Document("## 챕터B\n" + "나".repeat(200)));
+
+        List<Document> result = splitter.splitDocuments(docs, "doc.md", 1000, 100, 100);
+
+        assertThat(result).hasSize(2);
+        assertThat(result.get(0).getText()).contains("챕터A-1"); // 상위 ##로 못 가고 이전(A)으로 뒤로 병합
+        assertThat(result.get(1).getText()).contains("챕터B");
+    }
+
+    @Test
+    @DisplayName("mergeSectionsByChapter — 규칙2: 합은 chunkSize 초과지만 다음 단독은 이내면 전방 분리, 작은 현재는 뒤로 병합")
+    void chapterMerge_rule2_separatesThenFoldsBackward() {
+        List<Document> docs = List.of(
+                new Document("## A\n" + "가".repeat(250)),
+                new Document("## B\n" + "나".repeat(50)),
+                new Document("## C\n" + "다".repeat(250)));
+
+        List<Document> result = splitter.splitDocuments(docs, "doc.md", 300, 30, 100);
+
+        assertThat(result).hasSize(2);
+        assertThat(result.get(0).getText()).contains("B"); // B는 C로 전방 병합되지 않고 A로 뒤로 병합
+        assertThat(result.get(1).getText()).contains("C");
+    }
+
+    @Test
+    @DisplayName("mergeSectionsByChapter — 규칙3: 큰 다음에 prepend 후 마지막 조각이 min*1.5 이상이면 병합(1그룹)")
+    void chapterMerge_rule3_mergesWhenLastPieceLargeEnough() {
+        List<Document> docs = List.of(
+                new Document("가".repeat(20)),
+                new Document("나".repeat(800)));
+
+        List<ChunkSplitter.SectionGroup> groups = splitter.mergeSectionsByChapter(docs, 300, 30, 100);
+
+        assertThat(groups).hasSize(1);
+        assertThat(groups.get(0).doc().getText()).contains("가").contains("나");
+    }
+
+    @Test
+    @DisplayName("mergeSectionsByChapter — 규칙3: prepend 후 마지막 조각이 min*1.5 미만이면 병합 안 함(2그룹)")
+    void chapterMerge_rule3_splitsWhenLastPieceTooSmall() {
+        List<Document> docs = List.of(
+                new Document("가".repeat(20)),
+                new Document("나".repeat(610)));
+
+        List<ChunkSplitter.SectionGroup> groups = splitter.mergeSectionsByChapter(docs, 300, 30, 100);
+
+        assertThat(groups).hasSize(2);
+    }
+
+    @Test
+    @DisplayName("mergeSectionsByChapter — 헤딩 없는(level 0) 다음 섹션은 상위 챕터가 아니므로 병합 허용")
+    void chapterMerge_headinglessNextIsNotParent_allowsMerge() {
+        List<Document> docs = List.of(
+                new Document("### 하위\n짧음"),
+                new Document("본문만 있고 헤딩 없음"));
+
+        List<ChunkSplitter.SectionGroup> groups = splitter.mergeSectionsByChapter(docs, 1000, 100, 100);
+
+        assertThat(groups).hasSize(1);
+    }
+
+    @Test
+    @DisplayName("mergeSectionsByChapter — 첫 섹션이 H1(챕터번호 '0')이라 실제 '## 1장'과 병합되면 " +
+            "그 실제 챕터번호를 그룹 메타데이터로 사용한다")
+    void chapterMerge_prologueChapterNoIsReplacedByFirstRealChapterFound() {
+        List<Document> docs = List.of(
+                new Document("# 문서 제목\n짧은 인트로",
+                        Map.of(MetaKey.CHAPTER_NO, "0")),
+                new Document("## 1장 개요\n짧은 본문",
+                        Map.of(MetaKey.CHAPTER_NO, "1")));
+
+        List<ChunkSplitter.SectionGroup> groups = splitter.mergeSectionsByChapter(docs, 1000, 100, 100);
+
+        assertThat(groups).hasSize(1); // 프롤로그가 작아서 전방 병합됨
+        assertThat(groups.get(0).doc().getMetadata().get(MetaKey.CHAPTER_NO)).isEqualTo("1");
+    }
+
+    @Test
+    @DisplayName("mergeSectionsByChapter — 병합된 섹션 전부 챕터번호가 '0'이면(진짜 프롤로그) '0'을 유지한다")
+    void chapterMerge_allZeroChapterNo_staysZero() {
+        List<Document> docs = List.of(
+                new Document("# 문서 제목\n짧은 인트로",
+                        Map.of(MetaKey.CHAPTER_NO, "0")),
+                new Document("헤딩 없는 본문",
+                        Map.of(MetaKey.CHAPTER_NO, "0")));
+
+        List<ChunkSplitter.SectionGroup> groups = splitter.mergeSectionsByChapter(docs, 1000, 100, 100);
+
+        assertThat(groups).hasSize(1);
+        assertThat(groups.get(0).doc().getMetadata().get(MetaKey.CHAPTER_NO)).isEqualTo("0");
+    }
+
+    @Test
+    @DisplayName("mergeSectionsByChapter — 시작 섹션이 이미 실제 챕터번호면 병합 뒤에도 그대로 유지된다(첫 섹션 메타데이터 우선 관례)")
+    void chapterMerge_startSectionAlreadyRealChapterNo_isPreserved() {
+        List<Document> docs = List.of(
+                new Document("### 하위\n짧음", Map.of(MetaKey.CHAPTER_NO, "1.1")),
+                new Document("본문만 있고 헤딩 없음", Map.of(MetaKey.CHAPTER_NO, "1.1")));
+
+        List<ChunkSplitter.SectionGroup> groups = splitter.mergeSectionsByChapter(docs, 1000, 100, 100);
+
+        assertThat(groups).hasSize(1);
+        assertThat(groups.get(0).doc().getMetadata().get(MetaKey.CHAPTER_NO)).isEqualTo("1.1");
+    }
+
+    // ── 부모 챕터 브레드크럼 ──────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("부모 브레드크럼 — ### 하위 챕터 청크 맨 앞에 바로 위 부모 ## 헤딩 1줄이 붙는다")
+    void breadcrumb_childChapterGetsParentHeadingPrepended() {
+        List<Document> docs = List.of(
+                new Document("## 큰챕터\n" + "가".repeat(200)),
+                new Document("### 소챕터\n" + "나".repeat(200)));
+
+        List<Document> result = splitter.splitDocuments(docs, "doc.md", 1000, 100, 100);
+
+        assertThat(result).hasSize(2);
+        assertThat(result.get(1).getText()).startsWith("## 큰챕터\n### 소챕터");
+    }
+
+    @Test
+    @DisplayName("부모 브레드크럼 — ## 최상위 챕터 청크에는 아무 헤딩도 붙지 않는다")
+    void breadcrumb_topLevelChapterGetsNothing() {
+        List<Document> docs = List.of(
+                new Document("# 문서\n" + "머".repeat(200)),
+                new Document("## 챕터\n" + "가".repeat(200)));
+
+        List<Document> result = splitter.splitDocuments(docs, "doc.md", 1000, 100, 100);
+
+        assertThat(result).hasSize(2);
+        assertThat(result.get(1).getText()).startsWith("## 챕터");
+        assertThat(result.get(1).getText()).doesNotContain("문서");
+    }
+
+    @Test
+    @DisplayName("부모 브레드크럼 — #### 청크에는 최상위 ##가 아니라 바로 위 ### 부모가 붙는다")
+    void breadcrumb_usesImmediateParentNotTopLevel() {
+        List<Document> docs = List.of(
+                new Document("## 대\n" + "가".repeat(200)),
+                new Document("### 중\n" + "나".repeat(200)),
+                new Document("#### 소\n" + "다".repeat(200)));
+
+        List<Document> result = splitter.splitDocuments(docs, "doc.md", 1000, 100, 100);
+
+        assertThat(result).hasSize(3);
+        assertThat(result.get(2).getText()).startsWith("### 중\n#### 소");
+        assertThat(result.get(2).getText()).doesNotContain("대"); // 최상위 ## 대는 붙지 않음
+    }
+
+    @Test
+    @DisplayName("부모 브레드크럼 — 긴 하위 섹션이 여러 조각으로 나뉘면 첫 조각에만 부모가 붙고 꼬리 조각엔 자기 헤딩(N)만")
+    void breadcrumb_onlyFirstPieceOfSplitChildGetsParent() {
+        List<Document> docs = List.of(
+                new Document("## 큰챕터\n" + "가".repeat(200)),
+                new Document("### 소챕터\n" + "나".repeat(3000)));
+
+        List<Document> result = splitter.splitDocuments(docs, "doc.md", 2000, 200, 100);
+
+        // 첫 조각(부모 프리펜드) 이후 소챕터가 슬라이딩 분할되어 꼬리 조각이 하나 이상 존재
+        Document firstChildPiece = result.stream()
+                .filter(d -> d.getText().contains("### 소챕터"))
+                .findFirst().orElseThrow();
+        assertThat(firstChildPiece.getText()).startsWith("## 큰챕터\n### 소챕터");
+
+        // 꼬리 조각은 자기 헤딩 "### 소챕터 (N)"만 갖고 부모(## 큰챕터)는 없음
+        List<Document> tailPieces = result.stream()
+                .filter(d -> d.getText().startsWith("### 소챕터 ("))
+                .toList();
+        assertThat(tailPieces).isNotEmpty();
+        assertThat(tailPieces).allSatisfy(d -> assertThat(d.getText()).doesNotContain("큰챕터"));
     }
 }

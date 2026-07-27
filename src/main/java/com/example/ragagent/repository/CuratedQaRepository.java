@@ -11,8 +11,11 @@ import java.sql.PreparedStatement;
 import java.sql.Statement;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.Collection;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * §10.10 — Q&A snapshot for turns promoted by a 👍. Independent of {@code conversation_turns}:
@@ -27,7 +30,7 @@ public class CuratedQaRepository {
 
     private static final String COLUMNS =
             "id, source_turn_id, source_user_id, source_thread_id, question, answer, " +
-            "status, source_doc_version, created_at, updated_at ";
+            "status, source_doc_version, created_at, updated_at, embed_status ";
 
     private final JdbcTemplate jdbc;
 
@@ -41,7 +44,8 @@ public class CuratedQaRepository {
             rs.getString("status"),
             rs.getString("source_doc_version"),
             rs.getString("created_at"),
-            rs.getString("updated_at"));
+            rs.getString("updated_at"),
+            rs.getString("embed_status"));
 
     public CuratedQaRepository(JdbcTemplate jdbc) {
         this.jdbc = jdbc;
@@ -60,11 +64,18 @@ public class CuratedQaRepository {
                     status              TEXT NOT NULL DEFAULT 'active',
                     source_doc_version  TEXT,
                     created_at          TEXT NOT NULL,
-                    updated_at          TEXT NOT NULL
+                    updated_at          TEXT NOT NULL,
+                    embed_status        TEXT NOT NULL DEFAULT 'ok'
                 )
                 """);
         jdbc.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_curated_qa_turn ON curated_qa(source_turn_id)");
         jdbc.execute("CREATE INDEX IF NOT EXISTS idx_curated_qa_status ON curated_qa(status)");
+        // Migration: add column for existing databases (this repository predates Flyway management
+        // for curated_qa — same defensive pattern as ThreadMetaRepository).
+        var cols = jdbc.queryForList("PRAGMA table_info(curated_qa)");
+        if (cols.stream().noneMatch(c -> "embed_status".equals(c.get("name")))) {
+            jdbc.execute("ALTER TABLE curated_qa ADD COLUMN embed_status TEXT NOT NULL DEFAULT 'ok'");
+        }
     }
 
     /**
@@ -130,16 +141,46 @@ public class CuratedQaRepository {
         jdbc.update("UPDATE curated_qa SET answer=?, updated_at=? WHERE id=?", answer, now(), id);
     }
 
-    /** §10.10 step ④ — admin curated-Q&A browser listing, most recently created first. Only
-     *  {@code active} rows (the ones actually contributing to search) — a deactivated entry is
+    /** Same as {@link #findAllActive(int, int)} with {@code offset=0}. */
+    public List<CuratedQa> findAllActive(int limit) {
+        return findAllActive(0, limit);
+    }
+
+    /** §10.10 step ④ — admin curated-Q&A browser listing, most recently created first, paginated.
+     *  Only {@code active} rows (the ones actually contributing to search) — a deactivated entry is
      *  already out of the index and not actionable from this view. {@code id DESC} as a tiebreaker
      *  since {@code created_at} only has second-level precision (two rows upserted within the same
      *  second would otherwise tie). */
-    public List<CuratedQa> findAllActive(int limit) {
+    public List<CuratedQa> findAllActive(int offset, int limit) {
         return jdbc.query(
                 "SELECT " + COLUMNS + "FROM curated_qa WHERE status = 'active' " +
-                "ORDER BY created_at DESC, id DESC LIMIT ?",
-                ROW_MAPPER, limit);
+                "ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?",
+                ROW_MAPPER, limit, offset);
+    }
+
+    /** §10.10 embedding-fallback — marks a row's last embed attempt as failed (both the full-text
+     *  and core-sections-only attempts errored out). Surfaced as a badge in chat.html (owner) and
+     *  the /admin curated panel. */
+    public void markEmbedFailed(long id) {
+        jdbc.update("UPDATE curated_qa SET embed_status='failed', updated_at=? WHERE id=?", now(), id);
+    }
+
+    /** Clears the failed badge after a (re-)embed attempt succeeds. */
+    public void markEmbedOk(long id) {
+        jdbc.update("UPDATE curated_qa SET embed_status='ok', updated_at=? WHERE id=?", now(), id);
+    }
+
+    /** Turn ids (among the given set) whose active curated row is currently stuck in
+     *  {@code embed_status='failed'} — chat.html's turn-history render uses this to show a badge
+     *  without threading a new column through {@code MemoryRepository.Turn}. */
+    public Set<Long> findFailedTurnIds(Collection<Long> turnIds) {
+        if (turnIds == null || turnIds.isEmpty()) return Set.of();
+        String placeholders = String.join(",", java.util.Collections.nCopies(turnIds.size(), "?"));
+        List<Long> rows = jdbc.queryForList(
+                "SELECT source_turn_id FROM curated_qa WHERE status='active' AND embed_status='failed' " +
+                "AND source_turn_id IN (" + placeholders + ")",
+                Long.class, turnIds.toArray());
+        return new HashSet<>(rows);
     }
 
     private static String now() {
@@ -148,5 +189,5 @@ public class CuratedQaRepository {
 
     public record CuratedQa(long id, long sourceTurnId, String sourceUserId, String sourceThreadId,
                             String question, String answer, String status, String sourceDocVersion,
-                            String createdAt, String updatedAt) {}
+                            String createdAt, String updatedAt, String embedStatus) {}
 }

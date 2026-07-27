@@ -125,8 +125,12 @@ class DocumentIndexerTest {
         when(correctionService.reapplyHeadingNumbers(any()))
                 .thenAnswer(inv -> realCorrectionForRenumber.reapplyHeadingNumbers(inv.getArgument(0)));
         // postProcess (also no LLM call) — same real-instance delegation as reapplyHeadingNumbers above.
+        // DocumentIndexer.postProcessIfNeeded() calls the 2-arg (isPptx) overload — stub both so the
+        // shared default covers any 1-arg caller too.
         when(correctionService.postProcess(any()))
                 .thenAnswer(inv -> realCorrectionForRenumber.postProcess(inv.getArgument(0)));
+        when(correctionService.postProcess(any(), anyBoolean()))
+                .thenAnswer(inv -> realCorrectionForRenumber.postProcess(inv.getArgument(0), inv.getArgument(1)));
         TextToMarkdownService textToMarkdownService = mock(TextToMarkdownService.class);
         when(textToMarkdownService.convert(any(), any(), any()))
                 .thenAnswer(inv -> inv.getArgument(0));

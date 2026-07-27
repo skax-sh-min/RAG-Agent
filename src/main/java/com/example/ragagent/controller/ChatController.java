@@ -7,6 +7,7 @@ import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.model.*;
 import com.example.ragagent.service.AgentService;
 import com.example.ragagent.service.ConversationSummarizerService;
+import com.example.ragagent.service.CuratedQaService;
 import com.example.ragagent.service.MemoryService;
 import com.example.ragagent.service.StreamingAgentService;
 import com.example.ragagent.service.ThreadMetaService;
@@ -44,6 +45,7 @@ public class ChatController {
     private final ThreadMetaService threadMetaService;
     private final MemoryService memoryService;
     private final ConversationSummarizerService summarizerService;
+    private final CuratedQaService curatedQaService;
     private final AppProperties props;
     private final LlmRouter llmRouter;
     private final MessageSource messageSource;
@@ -53,6 +55,7 @@ public class ChatController {
                           ThreadMetaService threadMetaService,
                           MemoryService memoryService,
                           ConversationSummarizerService summarizerService,
+                          CuratedQaService curatedQaService,
                           AppProperties props,
                           LlmRouter llmRouter,
                           MessageSource messageSource) {
@@ -61,6 +64,7 @@ public class ChatController {
         this.threadMetaService = threadMetaService;
         this.memoryService = memoryService;
         this.summarizerService = summarizerService;
+        this.curatedQaService = curatedQaService;
         this.props = props;
         this.llmRouter = llmRouter;
         this.messageSource = messageSource;
@@ -85,7 +89,14 @@ public class ChatController {
         populateChatModel(model, userId, threadId, version, meta);
         if (meta != null) {
             model.addAttribute("historyCount", threadMetaService.countTurns(userId, threadId));
-            model.addAttribute("turns", memoryService.getTurns(userId, threadId));
+            var turns = memoryService.getTurns(userId, threadId);
+            model.addAttribute("turns", turns);
+            // §10.10 embedding-fallback — badge for turns whose curated Q&A promotion never
+            // managed to embed (surfaced here since it can only be known after the fact; the
+            // background embed attempt runs seconds after the like, long past this page's
+            // original response).
+            model.addAttribute("curatedEmbedFailedTurnIds",
+                    curatedQaService.findFailedTurnIds(turns.stream().map(t -> t.id()).toList()));
         }
         return "chat";
     }
@@ -122,6 +133,7 @@ public class ChatController {
         }
         String userId = ctx.userId();
         threadMetaService.getOrCreate(userId, form.threadId(), form.version());
+        threadMetaService.updateTags(userId, form.threadId(), form.selectedTags());
         Thread worker = Thread.ofVirtual().start(() -> streamingAgentService.run(userId, form, emitter));
         emitter.onTimeout(() -> {
             log.warn("[TIMEOUT:SSE] thread={} timeoutMs={} (app.sse-timeout-seconds={}s)",
@@ -150,6 +162,7 @@ public class ChatController {
         String userId = ctx.userId();
         try {
             threadMetaService.getOrCreate(userId, form.threadId(), form.version());
+            threadMetaService.updateTags(userId, form.threadId(), form.selectedTags());
 
             RoutingMode rm = null;
             if (form.routingMode() != null && !form.routingMode().isBlank()) {
@@ -158,7 +171,7 @@ public class ChatController {
             log.debug("[postChat] threadId={} directMode={} routingMode={} question={}",
                     form.threadId(), form.isDirectMode(), rm, form.question());
             ChatRequest req = new ChatRequest(form.question(), form.version(), form.threadId(), rm,
-                    form.isDirectMode(), form.selectedTags());
+                    form.isDirectMode(), form.selectedTags(), form.responseModeOrDefault());
             ChatResponse resp = agentService.chat(ctx, req);
             log.debug("[postChat] done — provider={} tokens={}/{} directMode={}",
                     resp.usedProvider(), resp.totalInputTokens(), resp.totalOutputTokens(), form.isDirectMode());
@@ -180,13 +193,6 @@ public class ChatController {
             model.addAttribute("elapsedSeconds", resp.elapsedSeconds());
             model.addAttribute("premiumUpgraded", resp.premiumUpgraded());
             model.addAttribute("usedProvider", resp.usedProvider());
-            if (resp.dualLocalAnswer() != null) {
-                model.addAttribute("dualLocalAnswer", resp.dualLocalAnswer());
-                model.addAttribute("dualLocalProvider", resp.dualLocalProvider());
-                model.addAttribute("tabId", UUID.randomUUID().toString().replace("-", "").substring(0, 8));
-                response.setHeader("HX-Trigger", "refreshThreadList");
-                return "fragments/message-assistant-dual :: message";
-            }
         } catch (LlmProviderExhaustedException e) {
             log.warn("LLM providers exhausted: {}", e.getMessage());
             model.addAttribute("errorMessage", messageSource.getMessage(

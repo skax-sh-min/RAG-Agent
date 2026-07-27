@@ -640,14 +640,17 @@ public class DocumentIndexer {
      * Re-applies {@link MarkdownCorrectionService#postProcess} (deterministic, no-LLM cleanup —
      * blank-line collapsing, leftover prompt-marker/content-less-dash removal, blank line guarantee
      * around fences/tables) on re-index. Unlike {@link #reapplyHeadingNumbersIfNeeded} this always
-     * runs — it's format-agnostic and safe for every source type including PPTX. Deliberately does
-     * NOT re-run {@code correctionService.correct()}'s other no-LLM passes ({@code fixClosingFences}/
-     * {@code normalizeCodeBlocks}) here — those can rewrite code-block content (e.g. dropping a
-     * deliberately-placed blank line) if the saved MD was hand-edited since upload, which is a risk
-     * worth taking deliberately, not as a side effect of every re-index.
+     * runs — it's format-agnostic and safe for every source type including PPTX. For PPTX specifically
+     * it also re-applies the shape-group/image-anchor formatting fixes
+     * ({@link MarkdownCorrectionService#applyPptxShapeFormatting}), same as at upload time. Deliberately
+     * does NOT re-run {@code correctionService.correct()}'s other no-LLM passes ({@code
+     * fixClosingFences}/{@code normalizeCodeBlocks}) here — those can rewrite code-block content (e.g.
+     * dropping a deliberately-placed blank line) if the saved MD was hand-edited since upload, which is
+     * a risk worth taking deliberately, not as a side effect of every re-index.
      */
     private String postProcessIfNeeded(String md, Path mdPath, String filename) {
-        String result = correctionService.postProcess(md);
+        boolean isPptx = filename.toLowerCase().endsWith(".pptx");
+        String result = correctionService.postProcess(md, isPptx);
         if (result.equals(md)) return md;
 
         log.debug("[REINDEX] {} — 마크다운 후처리(빈 줄/마커 정리) 적용", filename);

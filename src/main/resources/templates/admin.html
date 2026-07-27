@@ -43,39 +43,37 @@
         </div>
         <div class="card-body py-3">
             <div class="row g-3 text-center small">
-                <div class="col-6 col-md-3" th:if="${vectorStore.hasDocCount()}">
+                <div class="col-6 col-md" th:if="${vectorStore.hasDocCount()}">
                     <div class="text-muted">문서 수</div>
                     <div class="fs-5 fw-semibold" th:text="${vectorStore.totalDocs()}">0</div>
                 </div>
-                <div class="col-6 col-md-3">
+                <div class="col-6 col-md">
                     <div class="text-muted">청크 수</div>
                     <div class="fs-5 fw-semibold" th:text="${vectorStore.totalChunks()}">0</div>
                 </div>
-                <div class="col-6 col-md-3" th:if="${vectorStore.isChroma()}">
+                <div class="col-6 col-md" th:if="${vectorStore.isChroma()}">
                     <div class="text-muted">컬렉션 수</div>
                     <div class="fs-5 fw-semibold" th:text="${vectorStore.collectionCount()}">0</div>
                 </div>
-                <div class="col-6 col-md-3" th:if="${vectorStore.isSqliteVec()}">
+                <div class="col-6 col-md" th:if="${vectorStore.isSqliteVec()}">
                     <div class="text-muted">vec_version</div>
                     <div class="fs-6 fw-semibold font-monospace" th:text="${vectorStore.vecVersion() ?: '—'}">—</div>
                 </div>
-                <div class="col-6 col-md-3" th:if="${vectorStore.isSqliteVec()}">
+                <div class="col-6 col-md" th:if="${vectorStore.isSqliteVec()}">
                     <div class="text-muted">차원</div>
                     <div class="fs-5 fw-semibold" th:text="${vectorStore.dimension() ?: '—'}">—</div>
                 </div>
-            </div>
-
-            <!-- 운영 DB / 벡터 DB 경로 (오인 방지) -->
-            <div th:if="${vectorStore.operationalDbPath() != null}" class="mt-3 small">
-                <div class="d-flex flex-wrap gap-3">
-                    <span class="text-muted">
-                        운영 DB:
-                        <span class="font-monospace" th:text="${vectorStore.operationalDbPath()}">memory.db</span>
-                    </span>
-                    <span th:if="${vectorStore.vectorDbPath() != null}" class="text-muted">
-                        벡터 DB:
-                        <span class="font-monospace" th:text="${vectorStore.vectorDbPath()}">vector.db</span>
-                        <span th:if="${vectorStore.isDbSeparated()}" class="badge bg-info text-dark ms-1">분리됨</span>
+                <!-- 운영 DB / 벡터 DB — 파일명만 표시, 전체 경로는 마우스 오버 팝오버로 (오인 방지) -->
+                <div class="col-6 col-md" th:if="${vectorStore.operationalDbPath() != null}">
+                    <div class="text-muted">DB 파일<span th:if="${vectorStore.isDbSeparated()}" class="badge bg-info text-dark ms-1" style="font-size:0.62rem;">분리됨</span></div>
+                    <span class="fs-6 lh-sm d-inline-block db-path-info" tabindex="0" style="cursor:default;"
+                          th:attr="data-bs-content=${vectorStore.dbPathsPopoverHtml()}"
+                          data-bs-toggle="popover" data-bs-trigger="hover focus"
+                          data-bs-placement="bottom" data-bs-html="true">
+                        운영 DB: <span th:text="${vectorStore.operationalDbFileName()}">memory.db</span><br>
+                        <th:block th:if="${vectorStore.vectorDbPath() != null}">
+                            벡터 DB: <span th:text="${vectorStore.vectorDbFileName()}">vector.db</span>
+                        </th:block>
                     </span>
                 </div>
             </div>
@@ -140,14 +138,16 @@
     <div class="row g-4">
 
         <!-- ── Left: Collections / Versions ────────────────────────────── -->
-        <div class="col-md-4 col-lg-3">
+        <div class="col-md-3 col-lg-2">
             <div class="card h-100">
                 <div class="card-header d-flex align-items-center justify-content-between py-2">
-                    <span class="fw-semibold small">
+                    <div><span class="fw-semibold small">
                         <i class="bi bi-database me-1"></i>
                         <span th:text="${vectorStore.isSqliteVec()} ? '버전 (sqlite-vec)' : 'ChromaDB 컬렉션'">컬렉션</span>
-                    </span>
-                    <a href="/admin" class="btn btn-sm btn-outline-secondary py-0 px-2 small">새로고침</a>
+                    </span></div>
+                    <div class="align-items-right">
+                        <a href="/admin" class="btn btn-sm btn-outline-secondary py-0 px-2 small">새로고침</a>
+                    </div>
                 </div>
                 <div class="card-body p-0">
                     <div th:if="${#lists.isEmpty(collections)}"
@@ -179,7 +179,7 @@
         </div>
 
         <!-- ── Right: Chunk Panel ─────────────────────────────────────── -->
-        <div class="col-md-8 col-lg-9 position-relative">
+        <div class="col-md-9 col-lg-10 position-relative">
 
             <!-- Loading spinner -->
             <div id="chunk-spinner"
@@ -201,56 +201,29 @@
         </div>
     </div><!-- /row -->
 
-    <!-- ── §10.10 큐레이션 Q&A 관리 ─────────────────────────────────────── -->
-    <div class="card mt-4" id="curated-qa-card">
-        <div class="card-header d-flex align-items-center py-2">
+    <!-- ── §10.10 큐레이션 Q&A 관리 (펼칠 때만 조회 — 항상 DB 조회하지 않음) ──── -->
+    <details class="card mt-4" id="curated-qa-card"
+              hx-get="/admin/curated" hx-trigger="toggle[this.open] once"
+              hx-target="#curated-qa-body" hx-swap="innerHTML">
+        <summary class="card-header d-flex align-items-center py-2" style="cursor:pointer; list-style:none;">
             <i class="bi bi-chat-heart me-2"></i>
             <span class="fw-semibold small">큐레이션 Q&A</span>
-            <span class="badge bg-secondary ms-2" th:text="${#lists.size(curatedEntries)}">0</span>
-            <span class="ms-auto small text-muted">좋아요로 승격된 답변 — 편집 시 재임베딩</span>
-        </div>
-        <div class="card-body p-0">
-            <div th:if="${#lists.isEmpty(curatedEntries)}"
-                 class="text-muted small p-3 text-center">큐레이션된 Q&A가 없습니다.</div>
-            <div class="table-responsive" th:unless="${#lists.isEmpty(curatedEntries)}">
-                <table class="table table-sm table-hover mb-0 small">
-                    <thead class="table-light">
-                    <tr>
-                        <th style="min-width:200px;">질문</th>
-                        <th>답변 (미리보기)</th>
-                        <th style="min-width:120px;">등록일</th>
-                        <th class="text-center" style="width:90px;">작업</th>
-                    </tr>
-                    </thead>
-                    <tbody>
-                    <tr th:each="c : ${curatedEntries}" th:id="'curated-row-' + ${c.id()}">
-                        <td th:text="${c.question()}"></td>
-                        <td>
-                            <div class="text-truncate" style="max-width:420px;"
-                                 th:title="${c.answer()}" th:text="${c.answer()}"></div>
-                        </td>
-                        <td class="text-muted"
-                            th:text="${c.createdAt() != null ? c.createdAt().substring(0,19).replace('T',' ') : ''}"></td>
-                        <td class="text-center">
-                            <button type="button" class="btn btn-sm btn-outline-secondary py-0 px-1 me-1"
-                                    style="font-size:0.7rem;"
-                                    th:attr="data-curated-id=${c.id()}"
-                                    onclick="openCuratedEdit(this.dataset.curatedId)" title="편집">
-                                <i class="bi bi-pencil"></i>
-                            </button>
-                            <button type="button" class="btn btn-sm btn-outline-danger py-0 px-1"
-                                    style="font-size:0.7rem;"
-                                    th:attr="data-curated-id=${c.id()}"
-                                    onclick="deleteCuratedInline(this.dataset.curatedId, this)" title="삭제">
-                                <i class="bi bi-trash"></i>
-                            </button>
-                        </td>
-                    </tr>
-                    </tbody>
-                </table>
+            <span class="ms-auto small text-muted d-flex align-items-center gap-1">
+                좋아요로 승격된 답변 — 편집 시 재임베딩 — 펼치면 조회
+                <i class="bi bi-chevron-down curated-qa-chevron"></i>
+            </span>
+        </summary>
+        <div id="curated-qa-body">
+            <div class="card-body text-center text-muted py-4 small">
+                <span class="spinner-border spinner-border-sm me-2"></span>불러오는 중...
             </div>
         </div>
-    </div>
+    </details>
+    <style>
+        #curated-qa-card > summary::-webkit-details-marker { display: none; }
+        #curated-qa-card[open] .curated-qa-chevron { transform: rotate(180deg); }
+        .curated-qa-chevron { transition: transform .15s ease; }
+    </style>
 
 </div><!-- /container -->
 
@@ -285,6 +258,11 @@
 const IS_SQLITE_VEC = /*[[${vectorStore.isSqliteVec()}]]*/ false;
 </script>
 <script>
+// DB 파일 경로 hover 팝오버 (Vector Store 상태 카드) — 관례는 message-assistant.html의 출처 팝오버와 동일
+document.querySelectorAll('.db-path-info[data-bs-toggle="popover"]').forEach(function (el) {
+    new bootstrap.Popover(el);
+});
+
 // Highlight selected collection button
 document.querySelectorAll('.collection-btn').forEach(function (btn) {
     btn.addEventListener('click', function () {
@@ -292,6 +270,39 @@ document.querySelectorAll('.collection-btn').forEach(function (btn) {
         btn.classList.add('active');
     });
 });
+
+// applyDocFilter/applyLimitFilter/loadChunks live here (page-level script, loaded once) rather than
+// inside fragments/admin-chunks.html's own markup — a <script> tag inserted via plain
+// element.innerHTML = html (as loadChunks() below does) never executes in the browser, so if it were
+// fragment-embedded these functions would only exist after the one path that swaps via htmx
+// (hx-swap, which does execute scripts) and stay undefined — silently breaking 다음/페이지당 건수 —
+// whenever the panel is first populated via 청크 보기 (loadChunksByDoc) instead of a collection click.
+function currentChunkCollection() {
+    const el = document.querySelector('#chunk-panel [data-collection]');
+    return el ? el.dataset.collection : '';
+}
+
+function applyDocFilter(sel) {
+    loadChunks(currentChunkCollection(), sel.value, 0, +document.getElementById('limit-select').value);
+}
+
+function applyLimitFilter(sel) {
+    loadChunks(currentChunkCollection(), document.getElementById('docId-select').value, 0, +sel.value);
+}
+
+function loadChunks(collection, docId, offset, limit) {
+    let url = '/admin/chunks?collection=' + encodeURIComponent(collection)
+            + '&offset=' + offset + '&limit=' + limit;
+    if (docId) url += '&docId=' + encodeURIComponent(docId);
+    document.getElementById('chunk-spinner').style.display = 'block';
+    fetch(url, { headers: { 'HX-Request': 'true' } })
+        .then(r => r.text())
+        .then(html => {
+            document.getElementById('chunk-panel').innerHTML = html;
+            document.getElementById('chunk-spinner').style.display = 'none';
+        })
+        .catch(() => { document.getElementById('chunk-spinner').style.display = 'none'; });
+}
 
 // Load chunks filtered by docId from the registry table
 function loadChunksByDoc(btn) {
@@ -341,7 +352,22 @@ function openChunkEdit(chunkId, collection) {
                 </div>
                 <button class="btn btn-primary btn-sm" onclick="saveChunkEdit('${escAttr(chunkId)}', '${escAttr(collection)}')">
                     <i class="bi bi-save me-1"></i>저장
-                </button>`;
+                </button>
+                <hr class="my-1">
+                <div>
+                    <div class="form-check form-switch">
+                        <input class="form-check-input" type="checkbox" id="edit-regen-keywords">
+                        <label class="form-check-label small" for="edit-regen-keywords">키워드 재생성 (LLM 1회 호출)</label>
+                    </div>
+                    <div class="form-text small">
+                        저장된(위 "저장" 버튼으로 반영한) 텍스트 기준으로 재임베딩 + 키워드 검색(FTS) 인덱스를 다시 만듭니다.
+                        체크 해제 시 현재 키워드를 그대로 두고 재임베딩·FTS만 갱신합니다(LLM 미사용, 즉시).
+                    </div>
+                    <button class="btn btn-outline-warning btn-sm mt-2" id="reindex-chunk-btn"
+                            onclick="reindexChunkInline('${escAttr(chunkId)}', '${escAttr(collection)}')">
+                        <i class="bi bi-arrow-repeat me-1"></i>이 청크만 재인덱싱
+                    </button>
+                </div>`;
             new bootstrap.Offcanvas(document.getElementById('editOffcanvas')).show();
         })
         .catch(() => showToast('청크 정보를 불러올 수 없습니다.', 'danger'));
@@ -365,6 +391,34 @@ function saveChunkEdit(chunkId, collection) {
         } else { showToast('저장 실패', 'danger'); }
     })
     .catch(() => showToast('저장 중 오류 발생', 'danger'));
+}
+
+// 이 청크만 재임베딩 + FTS 재색인 — "저장"(텍스트/메타만 갱신, 벡터·FTS는 그대로)과 달리 실제
+// 임베딩 API를 호출해 검색에 반영한다. 키워드 재생성 체크 시 LLM 1회 추가 호출.
+function reindexChunkInline(chunkId, collection) {
+    const regenerate = document.getElementById('edit-regen-keywords').checked;
+    const btn = document.getElementById('reindex-chunk-btn');
+    const originalHtml = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>재인덱싱 중...';
+
+    fetch('/admin/chunks/' + encodeURIComponent(chunkId) + '/reindex?collection=' + encodeURIComponent(collection), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...getCsrfHeaders() },
+        body: JSON.stringify({ regenerateKeywords: regenerate })
+    })
+    .then(r => {
+        if (!r.ok) { showToast('재인덱싱 실패', 'danger'); return null; }
+        showToast('청크가 재인덱싱되었습니다.', 'success');
+        // 키워드 재생성 시 메타데이터(excerpt_keywords 등)가 서버에서 바뀌었으므로 패널에 다시 반영
+        return fetch('/admin/chunks/' + encodeURIComponent(chunkId) + '/detail?collection=' + encodeURIComponent(collection))
+                .then(r2 => r2.ok ? r2.json() : null);
+    })
+    .then(data => {
+        if (data) document.getElementById('edit-meta').value = JSON.stringify(data.metadata, null, 2);
+    })
+    .catch(() => showToast('재인덱싱 중 오류 발생', 'danger'))
+    .finally(() => { btn.disabled = false; btn.innerHTML = originalHtml; });
 }
 
 function deleteChunkInline(chunkId, collection, row) {
@@ -422,6 +476,19 @@ function saveCuratedEdit(id) {
         } else { showToast('저장 실패', 'danger'); }
     })
     .catch(() => showToast('저장 중 오류 발생', 'danger'));
+}
+
+// Pagination/page-size — page-level function for the same reason applyDocFilter/loadChunks above
+// live here rather than in fragments/admin-curated.html: it re-fetches via plain innerHTML, which
+// never executes a fragment-embedded <script>.
+function applyCuratedLimitFilter(sel) {
+    loadCurated(0, +sel.value);
+}
+
+function loadCurated(offset, limit) {
+    fetch('/admin/curated?offset=' + offset + '&limit=' + limit, { headers: { 'HX-Request': 'true' } })
+        .then(r => r.text())
+        .then(html => { document.getElementById('curated-qa-body').innerHTML = html; });
 }
 
 function deleteCuratedInline(id, btn) {

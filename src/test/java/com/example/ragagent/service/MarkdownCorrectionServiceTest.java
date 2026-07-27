@@ -17,12 +17,17 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.mockito.ArgumentCaptor;
+import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.ai.chat.model.ChatResponse;
+import org.springframework.ai.chat.prompt.Prompt;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.BiConsumer;
+import java.util.function.Function;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -376,6 +381,106 @@ class MarkdownCorrectionServiceTest {
     }
 
     // ---------------------------------------------------------------------------------------------
+    // correctSection — table protection (LLM must never see/touch table content)
+    // ---------------------------------------------------------------------------------------------
+
+    @Test
+    @DisplayName("correctSection — 표 셀 내용은 LLM 프롬프트에 그대로 노출되지 않고 [TABLE_PLACEHOLDER_N]으로만 전달된다")
+    void correctSection_withTable_neverExposesTableContentToLlm() {
+        String section = """
+                ## 설정값
+
+                | 항목 | 설명 |
+                | --- | --- |
+                | 포트: 8080 | 서버 포트 |
+                """;
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Function<ChatModel, ChatResponse>> callCaptor = ArgumentCaptor.forClass(Function.class);
+        when(llmRouter.executeWithTracking(any(), any(), any(), callCaptor.capture())).thenReturn(section);
+
+        service.correctSection(section);
+
+        ChatModel mockModel = mock(ChatModel.class);
+        ArgumentCaptor<Prompt> promptCaptor = ArgumentCaptor.forClass(Prompt.class);
+        when(mockModel.call(promptCaptor.capture())).thenReturn(null);
+        callCaptor.getValue().apply(mockModel);
+
+        String sentPrompt = promptCaptor.getValue().getContents();
+        assertThat(sentPrompt).doesNotContain("포트: 8080");
+        assertThat(sentPrompt).doesNotContain("| 항목 | 설명 |");
+        assertThat(sentPrompt).contains("[TABLE_PLACEHOLDER_0]");
+    }
+
+    @Test
+    @DisplayName("correctSection — LLM이 자리표시자를 그대로 두면 원본 표가 정확히 복원된다(셀 안 ':' 보존, '|'로 오염되지 않음)")
+    void correctSection_withTable_restoresOriginalTableVerbatim() {
+        String section = """
+                ## 설정값
+
+                | 항목 | 값 |
+                | --- | --- |
+                | 포트: 8080 | 기본값 |
+                | 제한: 100 | 초당 요청 |
+                """;
+        // LLM이 표를 [TABLE_PLACEHOLDER_0]로 받아 그대로 반환했다고 가정(정상 동작).
+        String llmResponse = "## 설정값\n\n[TABLE_PLACEHOLDER_0]\n";
+        when(llmRouter.executeWithTracking(any(), any(), any(), any())).thenReturn(llmResponse);
+
+        String result = service.correctSection(section);
+
+        assertThat(result).contains("| 포트: 8080 | 기본값 |", "| 제한: 100 | 초당 요청 |");
+        assertThat(result).doesNotContain("[TABLE_PLACEHOLDER_0]");
+    }
+
+    @Test
+    @DisplayName("correctSection — 표가 여러 개면 각각 독립된 자리표시자로 보호되고 순서대로 복원된다")
+    void correctSection_withMultipleTables_eachRestoredIndependently() {
+        String section = """
+                ## 첫 번째 표
+
+                | A | B |
+                | --- | --- |
+                | 시간: 10:00 | 첫 번째 |
+
+                본문 설명입니다.
+
+                ## 두 번째 표
+
+                | C | D |
+                | --- | --- |
+                | 비율: 50% | 두 번째 |
+                """;
+        String llmResponse = "## 첫 번째 표\n\n[TABLE_PLACEHOLDER_0]\n\n본문 설명입니다.\n\n"
+                + "## 두 번째 표\n\n[TABLE_PLACEHOLDER_1]\n";
+        when(llmRouter.executeWithTracking(any(), any(), any(), any())).thenReturn(llmResponse);
+
+        String result = service.correctSection(section);
+
+        assertThat(result).contains("| 시간: 10:00 | 첫 번째 |", "| 비율: 50% | 두 번째 |");
+        assertThat(result).doesNotContain("[TABLE_PLACEHOLDER_0]", "[TABLE_PLACEHOLDER_1]");
+    }
+
+    @Test
+    @DisplayName("correctSection — 응답에서 표 자리표시자가 유실되면 신뢰할 수 없으므로 원본 섹션을 그대로 반환한다")
+    void correctSection_tablePlaceholderMissing_fallsBackToOriginalSection() {
+        String section = """
+                ## 설정값
+
+                | 항목 | 값 |
+                | --- | --- |
+                | 포트: 8080 | 기본값 |
+                """;
+        // 자리표시자를 지워버리거나 다른 형태로 바꿔버린 응답 — 표 위치를 신뢰할 수 없다.
+        String llmResponse = "## 설정값\n\n(표가 사라짐)\n";
+        when(llmRouter.executeWithTracking(any(), any(), any(), any())).thenReturn(llmResponse);
+
+        String result = service.correctSection(section);
+
+        assertThat(result).isEqualTo(section);
+    }
+
+    // ---------------------------------------------------------------------------------------------
     // leading/trailing non-blank line helpers
     // ---------------------------------------------------------------------------------------------
 
@@ -623,6 +728,34 @@ class MarkdownCorrectionServiceTest {
                 eq(TaskType.VISION), any(), eq(BackgroundUsage.IMAGE_PREFIX), any());
     }
 
+    @Test
+    @DisplayName("코드 언어 추론 — addHeadingNumbers=false 여도(PPTX·체크박스 off) 라벨 없는 코드 블록에 언어 태그가 붙는다")
+    void codeLanguageInference_runsEvenWhenHeadingNumbersDisabled() {
+        String section = "## 코드\n```\npublic class Foo {\n    private int x;\n}\n```\n";
+        // LLM 교정은 섹션을 그대로 돌려주도록 스텁 — 관심사는 교정 이후의 언어 추론 패스다.
+        when(llmRouter.executeWithTracking(any(), any(), any(), any())).thenReturn(section);
+
+        String withoutHeadingNumbers = service.correct(section, "doc", null, false, false, false, null);
+        String withHeadingNumbers = service.correct(section, "doc", null, false, true, false, null);
+
+        assertThat(withoutHeadingNumbers).contains("```java");
+        assertThat(withHeadingNumbers).contains("```java"); // 기존 경로도 그대로 동작
+    }
+
+    @Test
+    @DisplayName("코드 언어 추론 — 이미 태그가 있으면 보존하고, 소제목 번호는 addHeadingNumbers=true 일 때만 붙는다")
+    void codeLanguageInference_keepsExistingTagAndHeadingNumbersStayGated() {
+        String section = "## 코드\n```python\nprint('hi')\n```\n";
+        when(llmRouter.executeWithTracking(any(), any(), any(), any())).thenReturn(section);
+
+        String withoutHeadingNumbers = service.correct(section, "doc", null, false, false, false, null);
+        String withHeadingNumbers = service.correct(section, "doc", null, false, true, false, null);
+
+        assertThat(withoutHeadingNumbers).contains("```python").contains("## 코드");
+        assertThat(withoutHeadingNumbers).doesNotContain("## 1. 코드"); // 번호는 여전히 붙지 않는다
+        assertThat(withHeadingNumbers).contains("```python").contains("## 1. 코드");
+    }
+
     private static int countOccurrences(String haystack, String needle) {
         int count = 0, idx = 0;
         while ((idx = haystack.indexOf(needle, idx)) != -1) {
@@ -797,6 +930,178 @@ class MarkdownCorrectionServiceTest {
         String md = "```\n-\n\n-\n```";
         String out = MarkdownCorrectionService.postProcessMarkdown(md);
         assertThat(out).contains("```\n-\n\n-\n```"); // 펜스 내부는 그대로
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // PPTX-only shape-group formatting (postProcessMarkdown(md, isPptx=true) / applyPptxShapeFormatting)
+    // ---------------------------------------------------------------------------------------------
+
+    @Test
+    @DisplayName("postProcessMarkdown — isPptx=false면 PPTX 전용 규칙이 전혀 적용되지 않는다")
+    void postProcess_pptxRulesSkippedWhenNotPptx() {
+        String md = "본문\n[도형 그룹]\n1\n1\n[/도형 그룹]\n다음 문단";
+        String out = MarkdownCorrectionService.postProcessMarkdown(md, false);
+        // 그룹 전후 빈 줄도, 중복 제거도 적용되지 않아야 함 — 원본 그대로(개행만 기존 로직대로 유지)
+        assertThat(out).isEqualTo(md);
+    }
+
+    @Test
+    @DisplayName("ensureBlankAroundShapeGroupMarkers — [도형 그룹] 앞뒤에 빈 줄을 보장한다")
+    void ensureBlankAroundShapeGroupMarkers_addsBlankLines() {
+        String md = "슬라이드 본문\n[도형 그룹]\n내용\n[/도형 그룹]\n다음 줄";
+        String out = MarkdownCorrectionService.ensureBlankAroundShapeGroupMarkers(md);
+        assertThat(out).isEqualTo("슬라이드 본문\n\n[도형 그룹]\n내용\n[/도형 그룹]\n\n다음 줄");
+    }
+
+    @Test
+    @DisplayName("ensureBlankAroundShapeGroupMarkers — 이미 빈 줄이 있으면 중복으로 추가하지 않는다")
+    void ensureBlankAroundShapeGroupMarkers_idempotent() {
+        String md = "슬라이드 본문\n\n[도형 그룹]\n내용\n[/도형 그룹]\n\n다음 줄";
+        String out = MarkdownCorrectionService.ensureBlankAroundShapeGroupMarkers(md);
+        assertThat(out).isEqualTo(md);
+    }
+
+    @Test
+    @DisplayName("ensureBlankAroundShapeGroupMarkers — 번호 붙은 [도형 그룹 2]도 동일하게 처리한다")
+    void ensureBlankAroundShapeGroupMarkers_numberedLabel() {
+        String md = "본문\n[도형 그룹 2]\n내용\n[/도형 그룹 2]\n뒤 문장";
+        String out = MarkdownCorrectionService.ensureBlankAroundShapeGroupMarkers(md);
+        assertThat(out).isEqualTo("본문\n\n[도형 그룹 2]\n내용\n[/도형 그룹 2]\n\n뒤 문장");
+    }
+
+    @Test
+    @DisplayName("ensureImageAnchorBoundaryBlankLines — 그룹 안 이미지 앵커 묶음 앞뒤에 빈 줄을 넣는다")
+    void ensureImageAnchorBoundaryBlankLines_wrapsAnchorRun() {
+        String md = "[도형 그룹]\n[이미지: a.png]\n[이미지: b.png]\n그룹 내부 텍스트\n[/도형 그룹]";
+        String out = MarkdownCorrectionService.ensureImageAnchorBoundaryBlankLines(md);
+        assertThat(out).isEqualTo(
+                "[도형 그룹]\n\n[이미지: a.png]\n[이미지: b.png]\n\n그룹 내부 텍스트\n[/도형 그룹]");
+    }
+
+    @Test
+    @DisplayName("ensureImageAnchorBoundaryBlankLines — 그룹 밖 이미지 마커는 건드리지 않는다")
+    void ensureImageAnchorBoundaryBlankLines_ignoresImagesOutsideGroup() {
+        String md = "본문\n[이미지: a.png]\n뒤 문장";
+        String out = MarkdownCorrectionService.ensureImageAnchorBoundaryBlankLines(md);
+        assertThat(out).isEqualTo(md);
+    }
+
+    @Test
+    @DisplayName("ensureBlankBetweenConsecutiveImages — 연속된 [이미지] 사이에 빈 줄을 넣는다")
+    void ensureBlankBetweenConsecutiveImages_separatesAdjacentImages() {
+        String md = "[이미지: a.png]\n[이미지: b.png]\n[이미지: c.png]";
+        String out = MarkdownCorrectionService.ensureBlankBetweenConsecutiveImages(md);
+        assertThat(out).isEqualTo("[이미지: a.png]\n\n[이미지: b.png]\n\n[이미지: c.png]");
+    }
+
+    @Test
+    @DisplayName("ensureBlankBetweenConsecutiveImages — [이미지 설명]이 붙은 이미지도 한 단위로 취급해 사이에 빈 줄을 넣는다")
+    void ensureBlankBetweenConsecutiveImages_treatsDescriptionAsPartOfUnit() {
+        String md = "[이미지: a.png]\n[이미지 설명: 설명A]\n[이미지: b.png]\n[이미지 설명: 설명B]";
+        String out = MarkdownCorrectionService.ensureBlankBetweenConsecutiveImages(md);
+        assertThat(out).isEqualTo(
+                "[이미지: a.png]\n[이미지 설명: 설명A]\n\n[이미지: b.png]\n[이미지 설명: 설명B]");
+    }
+
+    @Test
+    @DisplayName("ensureBlankBetweenConsecutiveImages — 이미지가 하나뿐이면 아무것도 바꾸지 않는다")
+    void ensureBlankBetweenConsecutiveImages_singleImageUntouched() {
+        String md = "본문\n[이미지: a.png]\n다음 문장";
+        String out = MarkdownCorrectionService.ensureBlankBetweenConsecutiveImages(md);
+        assertThat(out).isEqualTo(md);
+    }
+
+    @Test
+    @DisplayName("normalizeBulletGaps — 연속된 불릿 사이 빈 줄 1개는 제거된다")
+    void normalizeBulletGaps_removesSingleBlankBetweenBullets() {
+        String md = "- 항목1\n\n- 항목2";
+        String out = MarkdownCorrectionService.normalizeBulletGaps(md);
+        assertThat(out).isEqualTo("- 항목1\n- 항목2");
+    }
+
+    @Test
+    @DisplayName("normalizeBulletGaps — 연속된 불릿 사이 빈 줄 2개 이상은 1개로 축소된다")
+    void normalizeBulletGaps_collapsesMultipleBlanksToOne() {
+        String md = "- 항목1\n\n\n\n- 항목2";
+        String out = MarkdownCorrectionService.normalizeBulletGaps(md);
+        assertThat(out).isEqualTo("- 항목1\n\n- 항목2");
+    }
+
+    @Test
+    @DisplayName("normalizeBulletGaps — 불릿 뒤에 일반 본문이 이어지면 빈 줄 개수를 그대로 둔다")
+    void normalizeBulletGaps_leavesNonBulletGapUntouched() {
+        String md = "- 항목1\n\n일반 본문";
+        String out = MarkdownCorrectionService.normalizeBulletGaps(md);
+        assertThat(out).isEqualTo(md);
+    }
+
+    @Test
+    @DisplayName("dedupSingleTokenLinesInShapeGroups — 그룹 안 중복된 숫자/단어 한 줄은 첫 번째만 남긴다")
+    void dedupSingleTokenLinesInShapeGroups_dropsDuplicates() {
+        String md = "[도형 그룹]\n1\n합계\n1\n합계\n[/도형 그룹]";
+        String out = MarkdownCorrectionService.dedupSingleTokenLinesInShapeGroups(md);
+        assertThat(out).isEqualTo("[도형 그룹]\n1\n합계\n[/도형 그룹]");
+    }
+
+    @Test
+    @DisplayName("dedupSingleTokenLinesInShapeGroups — 중괄호가 포함된 줄은 중복이어도 제외하지 않는다")
+    void dedupSingleTokenLinesInShapeGroups_keepsBraceLines() {
+        String md = "[도형 그룹]\n{n}\n{n}\n[/도형 그룹]";
+        String out = MarkdownCorrectionService.dedupSingleTokenLinesInShapeGroups(md);
+        assertThat(out).isEqualTo(md);
+    }
+
+    @Test
+    @DisplayName("dedupSingleTokenLinesInShapeGroups — 이미지 마커 줄은 중복이어도 절대 제거하지 않는다")
+    void dedupSingleTokenLinesInShapeGroups_neverDropsImageMarkers() {
+        String md = "[도형 그룹]\n[이미지: a.png]\n[이미지: a.png]\n[/도형 그룹]";
+        String out = MarkdownCorrectionService.dedupSingleTokenLinesInShapeGroups(md);
+        assertThat(out).isEqualTo(md);
+    }
+
+    @Test
+    @DisplayName("dedupSingleTokenLinesInShapeGroups — 그룹 밖의 동일한 중복 줄은 건드리지 않는다")
+    void dedupSingleTokenLinesInShapeGroups_ignoresOutsideGroup() {
+        String md = "합계\n합계\n[도형 그룹]\n내용\n[/도형 그룹]";
+        String out = MarkdownCorrectionService.dedupSingleTokenLinesInShapeGroups(md);
+        assertThat(out).isEqualTo(md);
+    }
+
+    @Test
+    @DisplayName("applyPptxShapeFormatting — 다섯 규칙이 순서대로 조합되어 하나의 그룹 블록에 함께 적용된다")
+    void applyPptxShapeFormatting_combinesAllRules() {
+        String md = "슬라이드 본문\n"
+                + "[도형 그룹]\n"
+                + "[이미지: a.png]\n"
+                + "[이미지: b.png]\n"
+                + "1\n"
+                + "합계\n"
+                + "1\n"
+                + "- 항목1\n"
+                + "\n"
+                + "- 항목2\n"
+                + "[/도형 그룹]\n"
+                + "다음 문단";
+        String out = MarkdownCorrectionService.applyPptxShapeFormatting(md);
+        assertThat(out).isEqualTo(
+                "슬라이드 본문\n\n"
+                        + "[도형 그룹]\n\n"
+                        + "[이미지: a.png]\n\n"
+                        + "[이미지: b.png]\n\n"
+                        + "1\n"
+                        + "합계\n"
+                        + "- 항목1\n"
+                        + "- 항목2\n"
+                        + "[/도형 그룹]\n\n"
+                        + "다음 문단");
+    }
+
+    @Test
+    @DisplayName("postProcessMarkdown — isPptx=true면 PPTX 전용 규칙이 일반 정리보다 먼저 적용된다")
+    void postProcess_appliesPptxRulesWhenPptx() {
+        String md = "본문\n[도형 그룹]\n1\n1\n[/도형 그룹]\n다음 문단";
+        String out = MarkdownCorrectionService.postProcessMarkdown(md, true);
+        assertThat(out).isEqualTo("본문\n\n[도형 그룹]\n1\n[/도형 그룹]\n\n다음 문단");
     }
 
     @Test

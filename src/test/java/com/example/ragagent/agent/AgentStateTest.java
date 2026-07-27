@@ -74,14 +74,6 @@ class AgentStateTest {
     }
 
     @Test
-    @DisplayName("isDualMode 는 routingMode 가 DUAL 일 때만 true")
-    void isDualMode() {
-        assertThat(newState().isDualMode()).isFalse();
-        AgentState dual = AgentState.of("q", "v", "t", "", RoutingMode.DUAL);
-        assertThat(dual.isDualMode()).isTrue();
-    }
-
-    @Test
     @DisplayName("wasUpgraded 는 premiumUpgraded 가 null 이 아닐 때 true")
     void wasUpgraded() {
         assertThat(newState().wasUpgraded()).isFalse();

@@ -63,12 +63,16 @@ class StreamingAgentServiceTest {
 
         when(memoryService.getHistory(any(), any())).thenReturn("");
         when(classifierService.classifyOnly(any(), any())).thenReturn("usage");
-        when(memoryService.addTurn(any(), any(), any(), any(), any(), anyInt(), anyInt(), anyInt(), any(), anyInt()))
+        when(memoryService.addTurn(any(), any(), any(), any(), any(), anyInt(), anyInt(), anyInt(), any(), anyInt(), any()))
                 .thenReturn(42L);
     }
 
     private ChatForm form(boolean directMode, String tags) {
-        return new ChatForm("질문", "t1", "v1", "COST_FIRST", directMode, tags);
+        return form(directMode, tags, null); // responseMode 미지정 → ResponseMode.DEFAULT(M)
+    }
+
+    private ChatForm form(boolean directMode, String tags, String responseMode) {
+        return new ChatForm("질문", "t1", "v1", "COST_FIRST", directMode, tags, responseMode);
     }
 
     private AgentState resultState(String answer) {
@@ -84,7 +88,7 @@ class StreamingAgentServiceTest {
         service.run("u1", form(false, null), emitter);
 
         verify(memoryService).addTurn(eq("u1"), eq("t1"), eq("질문"), eq("최종 답변"),
-                anyString(), eq(0), eq(0), anyInt(), eq("local"), anyInt());
+                anyString(), eq(0), eq(0), anyInt(), eq("local"), anyInt(), eq("M"));
         verify(summarizerService).precomputeAfterTurn(eq("u1"), eq("t1"), eq(42L), any());
         verify(emitter).complete();
         verify(emitter, never()).completeWithError(any());
@@ -128,6 +132,30 @@ class StreamingAgentServiceTest {
     }
 
     @Test
+    @DisplayName("응답 모드(S/M/L)가 그래프 상태로 전달된다")
+    void run_carriesResponseModeIntoState() {
+        ArgumentCaptor<AgentState> stateCaptor = ArgumentCaptor.forClass(AgentState.class);
+        when(agentGraph.runStreaming(stateCaptor.capture(), any())).thenReturn(resultState("답변"));
+
+        service.run("u1", form(false, null, "L"), emitter);
+
+        assertThat(stateCaptor.getValue().responseMode())
+                .isEqualTo(com.example.ragagent.model.ResponseMode.L);
+    }
+
+    @Test
+    @DisplayName("응답 모드가 없거나 알 수 없는 값이면 기본값 M으로 전달된다")
+    void run_responseModeDefaultsToM() {
+        ArgumentCaptor<AgentState> stateCaptor = ArgumentCaptor.forClass(AgentState.class);
+        when(agentGraph.runStreaming(stateCaptor.capture(), any())).thenReturn(resultState("답변"));
+
+        service.run("u1", form(false, null, "XL"), emitter);
+
+        assertThat(stateCaptor.getValue().responseMode())
+                .isEqualTo(com.example.ragagent.model.ResponseMode.M);
+    }
+
+    @Test
     @DisplayName("답변이 비어있으면 addTurn 호출 안 함 (요약 재생성 트리거도 스킵)")
     void run_blankAnswer_doesNotPersistTurn() {
         when(agentGraph.runStreaming(any(), any())).thenReturn(resultState(null));
@@ -135,7 +163,7 @@ class StreamingAgentServiceTest {
         service.run("u1", form(false, null), emitter);
 
         verify(memoryService, never())
-                .addTurn(any(), any(), any(), any(), any(), anyInt(), anyInt(), anyInt(), any(), anyInt());
+                .addTurn(any(), any(), any(), any(), any(), anyInt(), anyInt(), anyInt(), any(), anyInt(), any());
         verify(summarizerService, never()).precomputeAfterTurn(any(), any(), any(), any());
         verify(emitter).complete();
     }
@@ -167,7 +195,7 @@ class StreamingAgentServiceTest {
         service.run("u1", form(false, null), emitter);
 
         verify(memoryService).addTurn(eq("u1"), eq("t1"), eq("질문"), eq("부분 답변\n[오류로 중단됨]"),
-                anyString(), eq(0), eq(0), eq(0), isNull(), eq(0));
+                anyString(), eq(0), eq(0), eq(0), isNull(), eq(0), eq("M"));
         verify(emitter).completeWithError(boom);
         verify(emitter, never()).complete();
     }
@@ -181,7 +209,7 @@ class StreamingAgentServiceTest {
         service.run("u1", form(false, null), emitter);
 
         verify(memoryService, never())
-                .addTurn(any(), any(), any(), any(), any(), anyInt(), anyInt(), anyInt(), any(), anyInt());
+                .addTurn(any(), any(), any(), any(), any(), anyInt(), anyInt(), anyInt(), any(), anyInt(), any());
         verify(emitter).completeWithError(boom);
     }
 

@@ -24,7 +24,6 @@ import java.util.Map;
 public class AdminController {
 
     private static final Logger log = LoggerFactory.getLogger(AdminController.class);
-    private static final int CURATED_LIST_LIMIT = 50; // §10.10 — small expected volume, no paging yet
 
     private final AdminService adminService;
     private final RagService   ragService;
@@ -48,7 +47,6 @@ public class AdminController {
         model.addAttribute("chromaAvailable", result.available());
         model.addAttribute("vectorStore",     adminService.vectorStoreView());
         model.addAttribute("documents",       ragService.listDocuments(ctx.userId()));
-        model.addAttribute("curatedEntries",  curatedQaService.listActive(CURATED_LIST_LIMIT));
         return "admin";
     }
 
@@ -60,7 +58,7 @@ public class AdminController {
                          @RequestParam String collection,
                          @RequestParam(required = false) String docId,
                          @RequestParam(defaultValue = "0")  int offset,
-                         @RequestParam(defaultValue = "50") int limit,
+                         @RequestParam(defaultValue = "20") int limit,
                          Model model) {
         model.addAttribute("chunks",     adminService.getChunks(collection, docId, offset, limit));
         model.addAttribute("collection", collection);
@@ -119,7 +117,40 @@ public class AdminController {
         return ResponseEntity.ok().build();
     }
 
+    /**
+     * Re-embed + re-index (FTS) a single chunk against its current stored text — unlike
+     * {@link #updateChunk}, this actually calls the embedding API (and optionally the keyword-
+     * extraction LLM) so search results reflect a prior text/keyword edit. Synchronous: single-chunk
+     * cost is low enough that the admin button can just wait for the result (contrast with the
+     * document-level {@code /admin/documents/{docId}/reindex}, which is async + SSE-tracked).
+     */
+    @PostMapping("/admin/chunks/{chunkId}/reindex")
+    @ResponseBody
+    public ResponseEntity<Void> reindexChunk(@PathVariable String chunkId,
+                                              @RequestParam String collection,
+                                              @RequestBody(required = false) Map<String, Object> body) {
+        boolean regenerateKeywords = body != null && Boolean.TRUE.equals(body.get("regenerateKeywords"));
+        boolean ok = adminService.reindexChunk(collection, chunkId, regenerateKeywords);
+        return ok ? ResponseEntity.ok().build() : ResponseEntity.notFound().build();
+    }
+
     // ── §10.10 Curated Q&A moderation ───────────────────────────────────────────
+
+    /**
+     * Curated Q&A panel fragment — lazy-loaded only when the admin expands the section
+     * (the section is collapsed by default so {@code listActive()} doesn't run a DB query
+     * on every {@code /admin} page load). Paginated (20/50/100 per page, default 20) so the
+     * panel stays usable as the curated set grows past the old 50-row cap.
+     */
+    @GetMapping("/admin/curated")
+    public String curatedPanel(@RequestParam(defaultValue = "0")  int offset,
+                                @RequestParam(defaultValue = "20") int limit,
+                                Model model) {
+        model.addAttribute("curatedEntries", curatedQaService.listActive(offset, limit));
+        model.addAttribute("offset", offset);
+        model.addAttribute("limit",  limit);
+        return "fragments/admin-curated :: panel";
+    }
 
     /** Get full curated entry data for the edit panel. */
     @GetMapping("/admin/curated/{id}/detail")

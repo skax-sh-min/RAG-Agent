@@ -47,43 +47,20 @@
                     <span class="badge bg-warning text-dark ms-1" th:text="#{settings.note.restart}">restart</span>
                 </div>
             </div>
-            <div th:if="${isAdmin}" class="text-secondary mt-2" th:text="#{settings.note.toggle-volatile}">
-                Enable/disable takes effect immediately but is in-memory — a restart re-enables every provider.
-            </div>
-        </div>
-    </div>
-
-    <!-- ── Embedding / Vector store ──────────────────────────────────────── -->
-    <div class="row g-4 mb-4">
-        <div class="col-12 col-md-6">
-            <div class="card h-100">
-                <div class="card-header fw-semibold" th:text="#{settings.group.embedding}">Embedding</div>
-                <div class="card-body">
-                    <div class="d-flex justify-content-between py-1 border-bottom">
-                        <span class="text-secondary" th:text="#{settings.item.embedding-model}">Model</span>
-                        <span class="font-monospace" th:text="${settings.embeddingModel}">bge-m3</span>
-                    </div>
-                    <div class="d-flex justify-content-between align-items-center py-1">
-                        <span class="text-secondary">
-                            <span th:text="#{settings.item.embedding-dimensions}">Dimensions</span>
-                            <span class="badge bg-warning text-dark ms-1" th:text="#{settings.note.restart}">restart</span>
-                        </span>
-                        <span class="font-monospace" th:text="${settings.embeddingDimensions}">1024</span>
-                    </div>
+            <hr class="my-2"/>
+            <div class="row g-2">
+                <div class="col-6 col-md-4">
+                    <span class="text-secondary" th:text="#{settings.item.embedding-model}">Embedding model</span>:
+                    <span class="font-monospace" th:text="${settings.embeddingModel}">bge-m3</span>
                 </div>
-            </div>
-        </div>
-        <div class="col-12 col-md-6">
-            <div class="card h-100">
-                <div class="card-header fw-semibold" th:text="#{settings.group.vectorstore}">Vector Store</div>
-                <div class="card-body">
-                    <div class="d-flex justify-content-between align-items-center py-1">
-                        <span class="text-secondary">
-                            <span th:text="#{settings.item.vectorstore-type}">Backend</span>
-                            <span class="badge bg-warning text-dark ms-1" th:text="#{settings.note.restart}">restart</span>
-                        </span>
-                        <span class="font-monospace" th:text="${settings.vectorStoreType}">chroma</span>
-                    </div>
+                <div class="col-12 col-md-4">
+                    <span class="text-secondary" th:text="#{settings.item.embedding-base-url}">Embedding endpoint URL</span>:
+                    <span class="font-monospace" th:text="${settings.embeddingBaseUrl}">http://localhost:1234/v1</span>
+                </div>
+                <div class="col-6 col-md-4">
+                    <span class="text-secondary" th:text="#{settings.item.embedding-dimensions}">Embedding dimensions</span>:
+                    <span class="font-monospace" th:text="${settings.embeddingDimensions}">1024</span>
+                    <span class="badge bg-warning text-dark ms-1" th:text="#{settings.note.restart}">restart</span>
                 </div>
             </div>
         </div>
@@ -92,10 +69,12 @@
     <!-- ── Setting groups (search hot / fixed / cache) ───────────────────── -->
     <div class="card mb-4" th:each="group : ${settings.groups}">
         <div class="card-header fw-semibold" th:text="#{__${group.title}__}">Group</div>
-        <div class="card-body py-2">
-            <th:block th:each="item : ${group.items}">
-                <div th:replace="~{fragments/settings-item :: item}"></div>
-            </th:block>
+        <div class="card-body py-2" style="font-size:.92rem;">
+            <div class="row">
+                <div class="col-12 col-md-6" th:each="item : ${group.items}">
+                    <div th:replace="~{fragments/settings-item :: item}"></div>
+                </div>
+            </div>
         </div>
     </div>
 

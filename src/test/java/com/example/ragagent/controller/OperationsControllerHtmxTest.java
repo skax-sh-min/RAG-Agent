@@ -6,6 +6,7 @@ import com.example.ragagent.audit.AuditLogger;
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.context.ThreadContextResolver;
 import com.example.ragagent.llm.CircuitBreaker;
+import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.repository.LlmUsageRepository;
 import com.example.ragagent.repository.MemoryRepository;
 import com.example.ragagent.service.CuratedQaService;
@@ -58,6 +59,7 @@ class OperationsControllerHtmxTest {
     @MockitoBean ThreadContextResolver threadContextResolver;
     @MockitoBean AuditLogger auditLogger;
     @MockitoBean CuratedQaService curatedQaService;
+    @MockitoBean LlmRouter llmRouter;
 
     @Test
     @DisplayName("DELETE /ui/threads/{id} — 200 OK")
@@ -129,7 +131,7 @@ class OperationsControllerHtmxTest {
                 .thenReturn(Optional.of(new MemoryRepository.FeedbackRow("LIKE")));
         when(curatedQaService.findActiveByTurn(42L)).thenReturn(Optional.of(
                 new com.example.ragagent.repository.CuratedQaRepository.CuratedQa(
-                        1L, 42L, "user", "t1", "질문", "답변", "active", "latest", "2026-01-01", "2026-01-01")));
+                        1L, 42L, "user", "t1", "질문", "답변", "active", "latest", "2026-01-01", "2026-01-01", "ok")));
 
         mvc.perform(get("/ui/threads/t1/turns/42/curated"))
                 .andExpect(status().isOk())

@@ -10,13 +10,9 @@ import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.web.client.HttpStatusCodeException;
 
 import java.util.*;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.Executors;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
-import java.util.function.BiConsumer;
-import java.util.function.Consumer;
 import java.util.function.Function;
 
 import static com.example.ragagent.llm.ProviderRole.*;
@@ -37,7 +33,7 @@ public class LlmRouter {
 
     /**
      * Per-provider concurrency gate for the interactive query/chat path (CLASSIFIER,
-     * ANSWER, CRITIC-feeding evaluation, DUAL, DirectAnswer, reranking, multi-query expansion).
+     * ANSWER, CRITIC-feeding evaluation, DirectAnswer, reranking, multi-query expansion).
      * Sized from {@code AppProperties.ProviderConfig.concurrency()} (falls back to
      * {@code defaultProviderConcurrency}) so the app never sends more concurrent requests to a
      * single physical LLM server than it can actually serve (e.g. llama-server --parallel).
@@ -46,6 +42,12 @@ public class LlmRouter {
      * no synchronous HTTP caller waiting on a deadline — see {@link #executeGated}.
      */
     private final Map<String, Semaphore> providerGates = new ConcurrentHashMap<>();
+    /** Each provider's total configured permits — {@code Semaphore} itself only exposes the free
+     *  count ({@link Semaphore#availablePermits()}), so in-use has to be derived as capacity minus
+     *  that (see {@link #localTier1Concurrency()}). Fixed at construction time (concurrency is a
+     *  restart-required, non-hot-editable setting), so a plain map is enough — no need to keep it
+     *  in sync with anything at runtime. */
+    private final Map<String, Integer> providerCapacity = new ConcurrentHashMap<>();
     private final int defaultProviderConcurrency;
     private final int permitWaitTimeoutSeconds;
 
@@ -114,7 +116,9 @@ public class LlmRouter {
         for (LlmProvider p : providers) {
             int concurrency = (providerConcurrency != null && providerConcurrency.containsKey(p.name()))
                     ? providerConcurrency.get(p.name()) : this.defaultProviderConcurrency;
-            providerGates.put(p.name(), new Semaphore(Math.max(1, concurrency)));
+            int capacity = Math.max(1, concurrency);
+            providerGates.put(p.name(), new Semaphore(capacity));
+            providerCapacity.put(p.name(), capacity);
         }
     }
 
@@ -195,7 +199,7 @@ public class LlmRouter {
      */
     public String executeWithTracking(TaskType taskType, RoutingMode mode, String usageLabelPrefix,
                                       Function<ChatModel, ChatResponse> call) {
-        return executeWithTracking(taskType, roleOrder(mode), usageLabelPrefix, call, new HashSet<>(), false);
+        return executeWithTracking(taskType, roleOrder(mode), usageLabelPrefix, call, new HashSet<>(), false).text();
     }
 
     /**
@@ -213,83 +217,21 @@ public class LlmRouter {
 
     public String executeGated(TaskType taskType, RoutingMode mode, String usageLabelPrefix,
                                Function<ChatModel, ChatResponse> call) {
-        return executeWithTracking(taskType, roleOrder(mode), usageLabelPrefix, call, new HashSet<>(), true);
+        return executeWithTracking(taskType, roleOrder(mode), usageLabelPrefix, call, new HashSet<>(), true).text();
     }
 
-    /**
-     * DUAL 모드 병렬 실행 (두 프로바이더 모두 동시성 게이트 적용).
-     * LOCAL 프로바이더 미등록 시 즉시 LlmProviderExhaustedException.
-     */
-    public DualResult executeDual(TaskType taskType,
-                                  Function<ChatModel, ChatResponse> call) {
-        LlmProvider local = findFirst(taskType, List.of(LOCAL), Set.of())
-                .orElseThrow(() -> new LlmProviderExhaustedException(
-                        "DUAL requires a LOCAL provider. Register a LOCAL provider or switch mode."));
-        LlmProvider external = findFirst(taskType, List.of(NORMAL, PREMIUM), Set.of())
-                .orElseThrow(() -> new LlmProviderExhaustedException(
-                        "DUAL requires at least one external provider (NORMAL or PREMIUM)."));
-
-        try (var exec = Executors.newVirtualThreadPerTaskExecutor()) {
-            // exceptionally() ensures one side's failure never cancels the other via exec.close()
-            CompletableFuture<String> localF = CompletableFuture
-                    .supplyAsync(() -> executeSingleTracked(local, taskType, null, call, true), exec)
-                    .exceptionally(t -> {
-                        log.warn("[DUAL] LOCAL call failed ({}): {}", local.name(), t.getMessage());
-                        return "";
-                    });
-            CompletableFuture<String> externalF = CompletableFuture
-                    .supplyAsync(() -> executeSingleTracked(external, taskType, null, call, true), exec)
-                    .exceptionally(t -> {
-                        log.warn("[DUAL] external call failed ({}): {}", external.name(), t.getMessage());
-                        return "";
-                    });
-            return new DualResult(localF.join(), local.name(), externalF.join(), external.name());
-        }
-    }
-
-    /** Provider names returned by executeDualStream. */
-    public record DualProviders(String localProvider, String externalProvider) {}
+    /** Answer text plus the real input/output token usage read from the LLM response's metadata. */
+    public record LlmResult(String text, int inputTokens, int outputTokens) {}
 
     /**
-     * DUAL 스트리밍: LOCAL과 외부 프로바이더를 Virtual Thread로 병렬 실행.
-     * callFn은 (provider, tokenSink) → void 형태. provider.stream() 에 따라 호출자가 스트림/블로킹 분기.
+     * Same as {@link #executeGated(TaskType, RoutingMode, Function)}, but also returns the real
+     * input/output token usage from the response — for callers that need to surface per-turn
+     * totals to the user (as opposed to only the aggregate {@code /llm-usage} dashboard, which
+     * every {@code executeGated}/{@code executeWithTracking} call already records regardless).
      */
-    public DualProviders executeDualStream(TaskType taskType,
-                                            BiConsumer<LlmProvider, Consumer<String>> callFn,
-                                            Consumer<String> localTokenSink,
-                                            Consumer<String> externalTokenSink) {
-        LlmProvider local = findFirst(taskType, List.of(LOCAL), Set.of())
-                .orElseThrow(() -> new LlmProviderExhaustedException(
-                        "DUAL requires a LOCAL provider. Register a LOCAL provider or switch mode."));
-        LlmProvider external = findFirst(taskType, List.of(NORMAL, PREMIUM), Set.of())
-                .orElseThrow(() -> new LlmProviderExhaustedException(
-                        "DUAL requires at least one external provider (NORMAL or PREMIUM)."));
-
-        try (var exec = Executors.newVirtualThreadPerTaskExecutor()) {
-            // exceptionally() ensures one side's failure never cancels the other via exec.close()
-            CompletableFuture<Void> localF = CompletableFuture
-                    .runAsync(() -> {
-                        try (Permit permit = acquirePermit(local)) {
-                            callFn.accept(local, localTokenSink);
-                        }
-                    }, exec)
-                    .exceptionally(t -> {
-                        log.warn("[DUAL] LOCAL call failed ({}): {}", local.name(), t.getMessage());
-                        return null;
-                    });
-            CompletableFuture<Void> externalF = CompletableFuture
-                    .runAsync(() -> {
-                        try (Permit permit = acquirePermit(external)) {
-                            callFn.accept(external, externalTokenSink);
-                        }
-                    }, exec)
-                    .exceptionally(t -> {
-                        log.warn("[DUAL] external call failed ({}): {}", external.name(), t.getMessage());
-                        return null;
-                    });
-            CompletableFuture.allOf(localF, externalF).join();
-        }
-        return new DualProviders(local.name(), external.name());
+    public LlmResult executeGatedWithUsage(TaskType taskType, RoutingMode mode,
+                                           Function<ChatModel, ChatResponse> call) {
+        return executeWithTracking(taskType, roleOrder(mode), null, call, new HashSet<>(), true);
     }
 
     /**
@@ -310,7 +252,11 @@ public class LlmRouter {
         }
     }
 
-    private static long approxTokens(String text) {
+    /** Rough token estimate (chars/4) for text whose real usage isn't available (streaming
+     *  answers, whose caller reads only content deltas, never a {@link ChatResponse}) — same
+     *  heuristic {@link #recordApproxUsage} records to the aggregate usage table, exposed so
+     *  streaming callers can also reflect it in their own per-turn {@code AgentState} totals. */
+    public static long approxTokens(String text) {
         return text == null ? 0 : text.length() / 4;
     }
 
@@ -319,6 +265,60 @@ public class LlmRouter {
                 .anyMatch(p -> p.role() == LOCAL
                         && !circuitBreaker.isBlocked(p.name())
                         && !providerToggle.isDisabled(p.name()));
+    }
+
+    /**
+     * Whether the dedicated MICRO_TEXT offload model ({@code role=LOCAL, priority=0}, i.e. the
+     * {@code local-fast} provider behind {@code LOCAL_FAST_LLM_URL} — LLM_ROUTING.md §9) is
+     * currently available: registered (a blank base-url disables it outright at startup, LlmConfig
+     * G2), not circuit-broken, not runtime-disabled via {@code /settings}.
+     *
+     * <p>Callers use this to skip an optional background chore entirely rather than let it fall
+     * through to the answer-serving {@code priority=1} tier — {@code MICRO_TEXT} routing does fall
+     * back to that tier by design ({@code BOTH} absorbs {@code MICRO_TEXT}), which is right for
+     * chores the app can't do any other way, but wrong for ones with a free non-LLM alternative
+     * (see {@code ConversationSummarizerService}, which reuses the answer's own "## 요약" section).
+     */
+    public boolean hasMicroTextOffloadProvider() {
+        return providers.stream()
+                .anyMatch(p -> p.role() == LOCAL
+                        && p.priority() == 0
+                        && !circuitBreaker.isBlocked(p.name())
+                        && !providerToggle.isDisabled(p.name()));
+    }
+
+    /** {@code inUse}/{@code capacity} snapshot for {@link #localTier1Concurrency()}. */
+    public record ConcurrencySnapshot(int inUse, int capacity) {}
+
+    /**
+     * In-flight vs. capacity for the "main" LOCAL tier — {@code role=LOCAL, priority=1}, the
+     * answer-serving local model(s) (LLM_ROUTING.md §9's {@code priority=0} MICRO_TEXT offload
+     * model, e.g. {@code local-fast}, is deliberately excluded — it's not the tier users' chat
+     * requests actually wait on). Summed across every currently *available* provider at that
+     * role+priority — registered, not circuit-broken, not runtime-disabled via {@code /settings} —
+     * so a horizontally load-balanced pair (e.g. {@code local} + {@code local-2}) reports combined
+     * capacity. Empty when no such provider is available, so the header's LLM indicator can hide
+     * itself entirely instead of showing a meaningless {@code 0/0}.
+     */
+    public Optional<ConcurrencySnapshot> localTier1Concurrency() {
+        List<LlmProvider> matches = providers.stream()
+                .filter(p -> p.role() == LOCAL && p.priority() == 1)
+                .filter(p -> !circuitBreaker.isBlocked(p.name()))
+                .filter(p -> !providerToggle.isDisabled(p.name()))
+                .toList();
+        if (matches.isEmpty()) {
+            return Optional.empty();
+        }
+        int capacity = 0;
+        int inUse = 0;
+        for (LlmProvider p : matches) {
+            int cap = providerCapacity.getOrDefault(p.name(), defaultProviderConcurrency);
+            Semaphore gate = providerGates.get(p.name());
+            int free = gate != null ? gate.availablePermits() : cap;
+            capacity += cap;
+            inUse += Math.max(0, cap - free);
+        }
+        return Optional.of(new ConcurrencySnapshot(inUse, capacity));
     }
 
     /** Returns the name of the first available provider for the given routing, or "unknown". */
@@ -337,7 +337,6 @@ public class LlmRouter {
         return switch (mode) {
             case COST_FIRST, PROGRESSIVE -> List.of(LOCAL, NORMAL, PREMIUM);
             case QUALITY_FIRST           -> List.of(PREMIUM, NORMAL, LOCAL);
-            case DUAL                    -> List.of(LOCAL, NORMAL, PREMIUM);
             case LOCAL_ONLY              -> List.of(LOCAL);
         };
     }
@@ -399,7 +398,7 @@ public class LlmRouter {
         return taskType == TaskType.VISION || taskType == TaskType.LIGHT_BOTH;
     }
 
-    private String executeWithTracking(TaskType taskType, List<ProviderRole> roleOrder, String usageLabelPrefix,
+    private LlmResult executeWithTracking(TaskType taskType, List<ProviderRole> roleOrder, String usageLabelPrefix,
                                        Function<ChatModel, ChatResponse> call,
                                        Set<String> tried, boolean gated) {
         LlmProvider provider = findFirst(taskType, roleOrder, tried)
@@ -501,7 +500,7 @@ public class LlmRouter {
         return false;
     }
 
-    private String executeSingleTracked(LlmProvider provider, TaskType taskType, String usageLabelPrefix,
+    private LlmResult executeSingleTracked(LlmProvider provider, TaskType taskType, String usageLabelPrefix,
                                         Function<ChatModel, ChatResponse> call, boolean gated) {
         log.debug("[LLM →] provider={} task={} endpoint={}/chat/completions model={}", provider.name(), taskType, provider.baseUrl(), provider.model());
         long t0 = System.currentTimeMillis();
@@ -533,6 +532,6 @@ public class LlmRouter {
             log.debug("[LLM ←] provider={} task={} in={} out={} {}ms | {}",
                     provider.name(), taskType, in, out, elapsed, preview);
         }
-        return text;
+        return new LlmResult(text, in, out);
     }
 }

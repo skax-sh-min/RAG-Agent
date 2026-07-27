@@ -240,11 +240,12 @@ public class SettingsService implements AppProperties.OverrideSource {
     public SettingsView buildView() {
         List<ProviderRow> providers = providerRows();
 
+        // Editable groups first, read-only (조회 전용) groups last.
         List<SettingGroup> groups = List.of(
                 new SettingGroup("search_hot", "settings.group.search_hot", searchHotItems()),
-                new SettingGroup("search_fixed", "settings.group.search_fixed", fixedSearchItems()),
                 new SettingGroup("indexing", "settings.group.indexing", indexingItems()),
                 new SettingGroup("llm_hot", "settings.group.llm_hot", llmHotItems()),
+                new SettingGroup("search_fixed", "settings.group.search_fixed", fixedSearchItems()),
                 new SettingGroup("cache", "settings.group.cache", cacheItems())
         );
 
@@ -256,6 +257,7 @@ public class SettingsService implements AppProperties.OverrideSource {
                 trimNum(llm.temperature()),   // general/RAG temperature — now the real effective value
                 Integer.toString(llm.maxTokens()),
                 nullToDash(props.embeddingSafe().model()),
+                nullToDash(props.embeddingSafe().baseUrl()),
                 dim != null ? dim.toString() : "auto",
                 props.vectorStoreSafe().type(),
                 groups);
@@ -264,10 +266,16 @@ public class SettingsService implements AppProperties.OverrideSource {
     /**
      * Current provider rows (config + circuit-breaker block + operator enable/disable state). Shared by
      * {@link #buildView()} and the toggle endpoint's HTMX fragment so both render the same table.
+     *
+     * <p>In a {@code LOCAL_ONLY} deployment (see {@link #isLocalOnlyDeployment()}), NORMAL/PREMIUM rows
+     * are filtered out — routing never selects them in that mode, so listing them on the settings page
+     * would just be confusing config-vs-reality noise (a NORMAL/PREMIUM entry can still be present in
+     * {@code application.properties} even when the deployment is pinned to LOCAL_ONLY, e.g. kept around
+     * for a future mode switch).
      */
     public List<ProviderRow> providerRows() {
         Map<String, Instant> blocked = circuitBreaker.getBlockedProviders();
-        return props.llmSafe().providers().stream()
+        return visibleProviders().stream()
                 .map(cfg -> {
                     Instant until = blocked.get(cfg.name());
                     return new ProviderRow(
@@ -275,11 +283,33 @@ public class SettingsService implements AppProperties.OverrideSource {
                             cfg.role() != null ? cfg.role().toUpperCase() : "NORMAL",
                             cfg.priority(),
                             cfg.model(),
-                            cfg.apiKey() != null && !cfg.apiKey().isBlank(),
+                            cfg.baseUrl(),
+                            cfg.isEnabled(), // real registration gate — see ProviderRow#configured javadoc
                             until != null,
                             until != null ? until.toString() : null,
                             providerToggle.isEnabled(cfg.name()));
                 })
+                .toList();
+    }
+
+    /** {@code app.llm.default-routing-mode} pinned to {@code LOCAL_ONLY} for this whole deployment. */
+    private boolean isLocalOnlyDeployment() {
+        return "LOCAL_ONLY".equals(props.llmSafe().defaultRoutingMode());
+    }
+
+    /**
+     * All configured providers, or only the {@code LOCAL}-role ones when this deployment is
+     * {@code LOCAL_ONLY} (see {@link #providerRows()}). Shared with {@link #setProviderEnabled(String,
+     * boolean)} so a hidden NORMAL/PREMIUM provider can't be toggled through the endpoint either — if
+     * it's not on the page, it's not "known" to it.
+     */
+    private List<AppProperties.ProviderConfig> visibleProviders() {
+        List<AppProperties.ProviderConfig> all = props.llmSafe().providers();
+        if (!isLocalOnlyDeployment()) {
+            return all;
+        }
+        return all.stream()
+                .filter(cfg -> "LOCAL".equalsIgnoreCase(cfg.role()))
                 .toList();
     }
 
@@ -291,7 +321,7 @@ public class SettingsService implements AppProperties.OverrideSource {
      * <p>Keyed by name: a load-balanced pair sharing a name toggles together (see {@link ProviderToggle}).
      */
     public List<ProviderRow> setProviderEnabled(String name, boolean enabled) {
-        List<AppProperties.ProviderConfig> providers = props.llmSafe().providers();
+        List<AppProperties.ProviderConfig> providers = visibleProviders();
         boolean known = providers.stream().anyMatch(c -> name.equals(c.name()));
         if (!known) {
             throw new IllegalArgumentException("알 수 없는 프로바이더입니다: " + name);

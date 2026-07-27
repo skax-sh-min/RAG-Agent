@@ -38,9 +38,10 @@ import static org.mockito.Mockito.when;
  * interactive chat/query path.
  *
  * Covers: valid type parse, out-of-enum fallback to "concept", malformed-JSON fallback,
- * case-insensitivity, and that execute() accumulates a (0,0) token call while setting
- * questionType (classifyOnly() intentionally does not, per CLAUDE.md's documented
- * llmCallCount under-reporting trade-off — it has no AgentState to update).
+ * case-insensitivity, and that execute() accumulates the real input/output token usage
+ * returned by executeGatedWithUsage() while setting questionType (classifyOnly()
+ * intentionally does not accumulate at all, per CLAUDE.md's documented llmCallCount
+ * under-reporting trade-off — it has no AgentState to update).
  */
 class ClassifierServiceTest {
 
@@ -61,6 +62,8 @@ class ClassifierServiceTest {
 
     private void stubResponse(String text) {
         when(llmRouter.executeGated(any(), any(), any())).thenReturn(text);
+        when(llmRouter.executeGatedWithUsage(any(), any(), any()))
+                .thenReturn(new LlmRouter.LlmResult(text, 0, 0));
     }
 
     private AgentState newState() {
@@ -118,15 +121,16 @@ class ClassifierServiceTest {
     }
 
     @Test
-    @DisplayName("execute — llmCallCount 는 (0,0) 토큰으로 1회 누적")
-    void execute_accumulatesZeroTokenCall() {
-        stubResponse("{\"question_type\": \"meta\"}");
+    @DisplayName("execute — LlmResult의 input/output 토큰이 그대로 누적된다")
+    void execute_accumulatesRealTokenUsage() {
+        when(llmRouter.executeGatedWithUsage(any(), any(), any()))
+                .thenReturn(new LlmRouter.LlmResult("{\"question_type\": \"meta\"}", 120, 30));
 
         AgentState result = service.execute(newState());
 
         assertThat(result.llmCallCount()).isEqualTo(1);
-        assertThat(result.totalInputTokens()).isZero();
-        assertThat(result.totalOutputTokens()).isZero();
+        assertThat(result.totalInputTokens()).isEqualTo(120);
+        assertThat(result.totalOutputTokens()).isEqualTo(30);
     }
 
     @Test
@@ -140,14 +144,16 @@ class ClassifierServiceTest {
     }
 
     @Test
-    @DisplayName("execute/classifyOnly — LlmRouter.executeGated()을 TaskType.TEXT/COST_FIRST로 호출")
+    @DisplayName("execute/classifyOnly — LlmRouter를 TaskType.TEXT/COST_FIRST로 호출")
     void routesViaTextTaskTypeAndCostFirst() {
         stubResponse("{\"question_type\": \"concept\"}");
 
         service.execute(newState());
         service.classifyOnly("질문", Locale.KOREAN);
 
-        verify(llmRouter, times(2))
+        verify(llmRouter, times(1))
+                .executeGatedWithUsage(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), any());
+        verify(llmRouter, times(1))
                 .executeGated(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), any());
     }
 
@@ -155,9 +161,12 @@ class ClassifierServiceTest {
     @DisplayName("execute/classifyOnly — 질문이 PromptInjectionGuard.wrap()으로 감싸져 전달됨 (EDIT.md #5)")
     @SuppressWarnings("unchecked")
     void wrapsQuestionInUserQuestionDelimiters() {
-        ArgumentCaptor<Function<ChatModel, ChatResponse>> callCaptor = ArgumentCaptor.forClass(Function.class);
-        when(llmRouter.executeGated(any(), any(), callCaptor.capture()))
+        ArgumentCaptor<Function<ChatModel, ChatResponse>> gatedCaptor = ArgumentCaptor.forClass(Function.class);
+        ArgumentCaptor<Function<ChatModel, ChatResponse>> gatedWithUsageCaptor = ArgumentCaptor.forClass(Function.class);
+        when(llmRouter.executeGated(any(), any(), gatedCaptor.capture()))
                 .thenReturn("{\"question_type\": \"concept\"}");
+        when(llmRouter.executeGatedWithUsage(any(), any(), gatedWithUsageCaptor.capture()))
+                .thenReturn(new LlmRouter.LlmResult("{\"question_type\": \"concept\"}", 0, 0));
 
         service.execute(newState());
         service.classifyOnly("질문", Locale.KOREAN);
@@ -165,7 +174,8 @@ class ClassifierServiceTest {
         ChatModel chatModel = mock(ChatModel.class);
         ArgumentCaptor<Prompt> promptCaptor = ArgumentCaptor.forClass(Prompt.class);
         when(chatModel.call(promptCaptor.capture())).thenReturn(chatResponse("{\"question_type\": \"concept\"}"));
-        callCaptor.getAllValues().forEach(fn -> fn.apply(chatModel));
+        gatedCaptor.getAllValues().forEach(fn -> fn.apply(chatModel));
+        gatedWithUsageCaptor.getAllValues().forEach(fn -> fn.apply(chatModel));
 
         assertThat(promptCaptor.getAllValues()).hasSize(2).allSatisfy(prompt ->
                 assertThat(prompt.getContents()).contains("[USER_QUESTION]").contains("[/USER_QUESTION]"));

@@ -343,6 +343,53 @@ public class KeywordSearchRepository {
     }
 
     /**
+     * Same as {@link #distinctTags(String)}, but drops any tag present on <b>every</b> document
+     * in scope. Such a tag adds no filtering value as a suggestion chip (selecting it is
+     * equivalent to selecting nothing), and the set grows only more useless as more documents
+     * are tagged consistently. A document that itself carries no tags makes this intersection
+     * empty by definition (there is no tag it shares with the others).
+     */
+    public List<String> distinctTagsExcludingCommon(String version) {
+        if (!available) return List.of();
+        String sql = "SELECT DISTINCT doc_id, doc_tags FROM chunk_fts WHERE doc_id IS NOT NULL"
+                + (version != null && !version.isBlank() ? " AND version = ?" : "");
+        try {
+            Map<String, Set<String>> perDoc = new HashMap<>();
+            jdbc.query(sql, rs -> {
+                String docId = rs.getString("doc_id");
+                if (docId == null) return;
+                Set<String> tags = perDoc.computeIfAbsent(docId, __ -> new TreeSet<>());
+                String row = rs.getString("doc_tags");
+                if (row == null) return;
+                for (String t : row.split(",")) {
+                    String s = t.strip();
+                    if (!s.isEmpty()) tags.add(s);
+                }
+            }, (version != null && !version.isBlank()) ? new Object[]{version} : new Object[]{});
+
+            if (perDoc.isEmpty()) return List.of();
+
+            Set<String> common = null;
+            TreeSet<String> all = new TreeSet<>();
+            for (Set<String> tags : perDoc.values()) {
+                all.addAll(tags);
+                common = (common == null) ? new TreeSet<>(tags) : intersect(common, tags);
+            }
+            all.removeAll(common);
+            return List.copyOf(all);
+        } catch (Exception e) {
+            log.debug("[KEYWORD] distinctTagsExcludingCommon failed: {}", e.getMessage());
+            return List.of();
+        }
+    }
+
+    private static Set<String> intersect(Set<String> a, Set<String> b) {
+        Set<String> out = new TreeSet<>(a);
+        out.retainAll(b);
+        return out;
+    }
+
+    /**
      * Returns distinct tags per doc_id (comma-split from doc_tags), sorted and de-duplicated.
      * No-op (empty map) when FTS5 is unavailable or docIds is empty.
      */

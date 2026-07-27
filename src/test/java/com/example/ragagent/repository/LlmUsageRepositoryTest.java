@@ -118,4 +118,65 @@ class LlmUsageRepositoryTest {
     void deleteByProviderNonexistentReturnsZero() {
         assertThat(repo.deleteByProvider("never-existed")).isZero();
     }
+
+    // ── Prefix aggregation (BACKGROUND category merging) ────────────────────────
+
+    @Test
+    @DisplayName("getDailyByPrefix — 같은 prefix의 여러 provider(local/local-fast) 행을 합산한다")
+    void getDailyByPrefixSumsAcrossMatchingProviders() {
+        repo.record("title:local", 100, 50);
+        repo.record("title:local-fast", 30, 20);
+        repo.record("summary:local", 999, 999); // different prefix — must not leak in
+
+        var daily = repo.getDailyByPrefix("title:");
+
+        assertThat(daily.callCount()).isEqualTo(2);
+        assertThat(daily.inputTokens()).isEqualTo(130);
+        assertThat(daily.outputTokens()).isEqualTo(70);
+    }
+
+    @Test
+    @DisplayName("getWeeklyByPrefix/getMonthlyByPrefix 도 오늘 기록을 포함해 합산한다")
+    void weeklyAndMonthlyByPrefixIncludeToday() {
+        repo.record("keyword:local", 1, 1);
+        repo.record("keyword:local-fast", 1, 1);
+
+        assertThat(repo.getWeeklyByPrefix("keyword:").callCount()).isEqualTo(2);
+        assertThat(repo.getMonthlyByPrefix("keyword:").callCount()).isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("getByPeriodPrefix — 일치하는 provider가 없으면 0/0/0")
+    void getByPeriodPrefixEmptyWhenNoMatch() {
+        var d = repo.getDailyByPrefix("nonexistent:");
+        assertThat(d.callCount()).isZero();
+        assertThat(d.inputTokens()).isZero();
+        assertThat(d.outputTokens()).isZero();
+    }
+
+    @Test
+    @DisplayName("getDailyHistoryByPrefix — 같은 날짜의 여러 provider 기록을 날짜별로 합산한다")
+    void getDailyHistoryByPrefixSumsPerDay() {
+        repo.record("title:local", 100, 50);
+        repo.record("title:local-fast", 30, 20);
+
+        var history = repo.getDailyHistoryByPrefix("title:", 7);
+
+        assertThat(history).hasSize(1); // both recorded today — one merged row
+        assertThat(history.get(0).inputTokens()).isEqualTo(130);
+        assertThat(history.get(0).outputTokens()).isEqualTo(70);
+        assertThat(history.get(0).callCount()).isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("usedProviderNamesWithPrefix — prefix로 시작하는 이름만, 정확 일치 다른 provider는 제외")
+    void usedProviderNamesWithPrefixFiltersCorrectly() {
+        repo.record("title:local", 1, 1);
+        repo.record("title:local-fast", 1, 1);
+        repo.record("titleX:local", 1, 1); // shares no ':' boundary — should not match "title:" prefix... actually LIKE 'title:%' excludes this since it lacks the literal ':'
+        repo.record("summary:local", 1, 1);
+
+        assertThat(repo.usedProviderNamesWithPrefix("title:"))
+                .containsExactlyInAnyOrder("title:local", "title:local-fast");
+    }
 }

@@ -3,7 +3,7 @@
 <body>
 
 <th:block th:fragment="table">
-<div class="card">
+<div class="card" th:data-collection="${collection}">
     <div class="card-header py-2">
         <div class="d-flex align-items-center justify-content-between flex-wrap gap-2">
             <!-- Title -->
@@ -24,6 +24,12 @@
                             th:value="${doc.docId()}"
                             th:text="${doc.filename() + ' (' + doc.version() + ')'}"
                             th:selected="${doc.docId() == docId}"></option>
+                </select>
+                <select class="form-select form-select-sm" id="limit-select" style="max-width:100px;"
+                        onchange="applyLimitFilter(this)">
+                    <option value="20"  th:selected="${limit == 20}">20건</option>
+                    <option value="50"  th:selected="${limit == 50}">50건</option>
+                    <option value="100" th:selected="${limit == 100}">100건</option>
                 </select>
                 <span class="badge bg-secondary" th:text="${#lists.size(chunks) + '건'}">0건</span>
             </form>
@@ -167,29 +173,6 @@
         </button>
     </div>
 </div>
-
-<script>
-function applyDocFilter(sel) {
-    const collection = /*[[${collection}]]*/ '';
-    const docId = sel.value;
-    loadChunks(collection, docId, 0, /*[[${limit}]]*/ 50);
-}
-
-function loadChunks(collection, docId, offset, limit) {
-    let url = '/admin/chunks?collection=' + encodeURIComponent(collection)
-            + '&offset=' + offset + '&limit=' + limit;
-    if (docId) url += '&docId=' + encodeURIComponent(docId);
-    document.getElementById('chunk-spinner').style.display = 'block';
-    fetch(url, { headers: { 'HX-Request': 'true' } })
-        .then(r => r.text())
-        .then(html => {
-            document.getElementById('chunk-panel').innerHTML = html;
-            document.getElementById('chunk-spinner').style.display = 'none';
-            htmx.process(document.getElementById('chunk-panel'));
-        })
-        .catch(() => { document.getElementById('chunk-spinner').style.display = 'none'; });
-}
-</script>
 </th:block>
 
 </body>

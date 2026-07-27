@@ -7,6 +7,7 @@ import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.ProviderRole;
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.llm.TaskType;
+import com.example.ragagent.model.ResponseMode;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -29,18 +30,21 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.startsWith;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
  * QA — DirectAnswerService (meta / directMode, blocking + streaming) — EDIT.md #1
  *
- * execute() now routes through LlmRouter.executeGated() (concurrency-gated; a real, blocking .call() —
- * previously a streaming .stream().content().blockLast() that discarded ChatResponse usage
- * metadata entirely) so /llm-usage sees real token counts for the blocking direct-answer path.
- * executeStreaming() still can't read real ChatResponse usage (token-by-token SSE UX), so it
- * records an approximate (chars/4) usage entry via LlmRouter.recordApproxUsage() instead.
+ * execute() now routes through LlmRouter.executeGatedWithUsage() (concurrency-gated; a real,
+ * blocking .call() — previously a streaming .stream().content().blockLast() that discarded
+ * ChatResponse usage metadata entirely) so both /llm-usage and the per-turn AgentState token
+ * totals see real counts for the blocking direct-answer path. executeStreaming() still can't
+ * read real ChatResponse usage (token-by-token SSE UX), so it records an approximate (chars/4)
+ * usage entry via LlmRouter.recordApproxUsage() and folds the same estimate into AgentState.
  */
 class DirectAnswerServiceTest {
 
@@ -69,23 +73,23 @@ class DirectAnswerServiceTest {
     }
 
     @Test
-    @DisplayName("execute — meta 질문 답변 생성 (블로킹 .call() 이라 실제 사용량 추적)")
+    @DisplayName("execute — meta 질문 답변 생성, LlmResult의 실제 토큰 사용량이 그대로 누적된다")
     void execute_generatesAnswer() {
-        when(llmRouter.executeGated(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), any()))
-                .thenReturn("안녕하세요");
+        when(llmRouter.executeGatedWithUsage(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), any()))
+                .thenReturn(new LlmRouter.LlmResult("안녕하세요", 80, 15));
 
         AgentState result = service.execute(newState(false));
 
         assertThat(result.answer()).isEqualTo("안녕하세요");
-        assertThat(result.totalInputTokens()).isZero();
-        assertThat(result.totalOutputTokens()).isZero();
+        assertThat(result.totalInputTokens()).isEqualTo(80);
+        assertThat(result.totalOutputTokens()).isEqualTo(15);
     }
 
     @Test
     @DisplayName("execute — directMode=true 는 prompt.direct.system 키 사용")
     void execute_directMode_usesDirectSystemPromptKey() {
-        when(llmRouter.executeGated(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), any()))
-                .thenReturn("답변");
+        when(llmRouter.executeGatedWithUsage(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), any()))
+                .thenReturn(new LlmRouter.LlmResult("답변", 0, 0));
 
         service.execute(newState(true));
 
@@ -95,8 +99,8 @@ class DirectAnswerServiceTest {
     @Test
     @DisplayName("execute — directMode=false(meta) 는 prompt.direct.meta.system 키 사용")
     void execute_metaMode_usesMetaSystemPromptKey() {
-        when(llmRouter.executeGated(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), any()))
-                .thenReturn("답변");
+        when(llmRouter.executeGatedWithUsage(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), any()))
+                .thenReturn(new LlmRouter.LlmResult("답변", 0, 0));
 
         service.execute(newState(false));
 
@@ -104,12 +108,37 @@ class DirectAnswerServiceTest {
     }
 
     @Test
+    @DisplayName("execute — directMode=true 는 응답 스타일 지침(모드별 글자수 목표)이 사용자 프롬프트에 포함된다")
+    void execute_directMode_includesResponseStyleInstructionWithCharTarget() {
+        when(llmRouter.executeGatedWithUsage(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), any()))
+                .thenReturn(new LlmRouter.LlmResult("답변", 0, 0));
+
+        AgentState state = newState(true).toBuilder().responseMode(ResponseMode.M).build();
+        service.execute(state);
+
+        // llmSafe().maxTokens()=6000 → M.maxTokens(6000)=max(2400,5000)=5000 (바닥값)
+        verify(messageSource).getMessage(eq("prompt.answer.style.m"), eq(new Object[]{5_000}), any(Locale.class));
+    }
+
+    @Test
+    @DisplayName("execute — directMode=false(meta)는 응답 스타일 지침을 넣지 않는다(2-3문장 고정 유지)")
+    void execute_metaMode_neverIncludesResponseStyleInstruction() {
+        when(llmRouter.executeGatedWithUsage(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), any()))
+                .thenReturn(new LlmRouter.LlmResult("답변", 0, 0));
+
+        service.execute(newState(false));
+
+        verify(messageSource, never())
+                .getMessage(startsWith("prompt.answer.style"), any(), any(Locale.class));
+    }
+
+    @Test
     @DisplayName("execute — 질문이 PromptInjectionGuard.wrap()으로 감싸져 전달됨 (EDIT.md #5)")
     @SuppressWarnings("unchecked")
     void execute_wrapsQuestionInUserQuestionDelimiters() {
         ArgumentCaptor<Function<ChatModel, ChatResponse>> callCaptor = ArgumentCaptor.forClass(Function.class);
-        when(llmRouter.executeGated(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), callCaptor.capture()))
-                .thenReturn("답변");
+        when(llmRouter.executeGatedWithUsage(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), callCaptor.capture()))
+                .thenReturn(new LlmRouter.LlmResult("답변", 0, 0));
 
         service.execute(newState(false));
 
@@ -131,8 +160,8 @@ class DirectAnswerServiceTest {
     @SuppressWarnings("unchecked")
     void execute_attachesDirectTemperatureToPrompt() {
         ArgumentCaptor<Function<ChatModel, ChatResponse>> callCaptor = ArgumentCaptor.forClass(Function.class);
-        when(llmRouter.executeGated(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), callCaptor.capture()))
-                .thenReturn("답변");
+        when(llmRouter.executeGatedWithUsage(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), callCaptor.capture()))
+                .thenReturn(new LlmRouter.LlmResult("답변", 0, 0));
 
         service.execute(newState(false));
 
@@ -144,19 +173,6 @@ class DirectAnswerServiceTest {
         org.springframework.ai.chat.prompt.ChatOptions opts = promptCaptor.getValue().getOptions();
         assertThat(opts).isNotNull();
         assertThat(opts.getTemperature()).isEqualTo(0.1); // llmSafe().directTemperature() (setUp의 mock)
-    }
-
-    @Test
-    @DisplayName("execute — DUAL 라우팅 모드는 COST_FIRST 로 폴백(DirectAnswer 는 DUAL 미지원)")
-    void execute_dualMode_fallsBackToCostFirst() {
-        when(llmRouter.executeGated(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), any()))
-                .thenReturn("답변");
-
-        AgentState dualState = AgentState.of("질문", "v1", "t1", "", RoutingMode.DUAL, false);
-        AgentState result = service.execute(dualState);
-
-        assertThat(result.answer()).isEqualTo("답변");
-        verify(llmRouter).executeGated(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), any());
     }
 
     @Test

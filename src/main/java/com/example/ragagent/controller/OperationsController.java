@@ -5,6 +5,7 @@ import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.context.ThreadContext;
 import com.example.ragagent.llm.BackgroundUsage;
 import com.example.ragagent.llm.CircuitBreaker;
+import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.TrackingEmbeddingModel;
 import com.example.ragagent.model.LlmProviderReport;
 import com.example.ragagent.repository.LlmUsageRepository;
@@ -40,6 +41,7 @@ public class OperationsController {
     private final CircuitBreaker circuitBreaker;
     private final AuditLogger auditLogger;
     private final CuratedQaService curatedQaService;
+    private final LlmRouter llmRouter;
 
     public OperationsController(ThreadMetaService threadMetaService,
                                 MemoryService memoryService,
@@ -47,7 +49,8 @@ public class OperationsController {
                                 AppProperties props,
                                 CircuitBreaker circuitBreaker,
                                 AuditLogger auditLogger,
-                                CuratedQaService curatedQaService) {
+                                CuratedQaService curatedQaService,
+                                LlmRouter llmRouter) {
         this.threadMetaService = threadMetaService;
         this.memoryService = memoryService;
         this.usageRepo = usageRepo;
@@ -55,6 +58,7 @@ public class OperationsController {
         this.circuitBreaker = circuitBreaker;
         this.auditLogger = auditLogger;
         this.curatedQaService = curatedQaService;
+        this.llmRouter = llmRouter;
     }
 
     // ── Page ──────────────────────────────────────────────────────────
@@ -205,6 +209,23 @@ public class OperationsController {
         );
     }
 
+    /**
+     * In-flight vs. capacity for the "main" LOCAL LLM tier ({@code role=LOCAL, priority=1}),
+     * polled by the header's {@code LLM: inUse/capacity} indicator every ~3s. {@code available=false}
+     * (no {@code inUse}/{@code capacity}) when no such provider is currently available — the
+     * indicator hides itself in that case rather than showing a meaningless {@code 0/0}.
+     */
+    @GetMapping("/api/v1/llm/concurrency")
+    @ResponseBody
+    public Map<String, Object> getLlmConcurrency() {
+        return llmRouter.localTier1Concurrency()
+                .<Map<String, Object>>map(s -> Map.of(
+                        "available", true,
+                        "inUse", s.inUse(),
+                        "capacity", s.capacity()))
+                .orElseGet(() -> Map.of("available", false));
+    }
+
     /** Provider-level daily / weekly / monthly summary + Circuit Breaker state, plus one embedding row (§6.6) and orphan rows (§6.8). */
     @GetMapping("/api/v1/llm/usage")
     @ResponseBody
@@ -234,14 +255,14 @@ public class OperationsController {
                 usageRepo.getMonthly(embedName),
                 null
         );
-        Stream<UsageReport> backgroundUsage = backgroundUsageNames().stream()
-                .map(name -> new UsageReport(
-                        name,
+        Stream<UsageReport> backgroundUsage = backgroundCategories().stream()
+                .map(prefix -> new UsageReport(
+                        BackgroundUsage.label(prefix),
                         "BACKGROUND",
-                        null,
-                        usageRepo.getDaily(name),
-                        usageRepo.getWeekly(name),
-                        usageRepo.getMonthly(name),
+                        backgroundModelLabel(prefix),
+                        usageRepo.getDailyByPrefix(prefix),
+                        usageRepo.getWeeklyByPrefix(prefix),
+                        usageRepo.getMonthlyByPrefix(prefix),
                         null
                 ));
         Stream<UsageReport> orphanUsage = orphanProviderNames().stream().sorted()
@@ -270,8 +291,8 @@ public class OperationsController {
         }
         String embedName = embeddingProviderName();
         history.put(embedName, usageRepo.getDailyHistory(embedName, safeDays));
-        for (String name : backgroundUsageNames()) {
-            history.put(name, usageRepo.getDailyHistory(name, safeDays));
+        for (String prefix : backgroundCategories()) {
+            history.put(BackgroundUsage.label(prefix), usageRepo.getDailyHistoryByPrefix(prefix, safeDays));
         }
         for (String name : orphanProviderNames()) {
             history.put(name, usageRepo.getDailyHistory(name, safeDays));
@@ -350,15 +371,15 @@ public class OperationsController {
                 true,
                 false
         );
-        Stream<LlmProviderReport> backgroundReports = backgroundUsageNames().stream()
-                .map(name -> new LlmProviderReport(
-                        name,
+        Stream<LlmProviderReport> backgroundReports = backgroundCategories().stream()
+                .map(prefix -> new LlmProviderReport(
+                        BackgroundUsage.label(prefix),
                         "BACKGROUND",
                         null,
-                        null,
-                        usageRepo.getDaily(name),
-                        usageRepo.getWeekly(name),
-                        usageRepo.getMonthly(name),
+                        backgroundModelLabel(prefix),
+                        usageRepo.getDailyByPrefix(prefix),
+                        usageRepo.getWeeklyByPrefix(prefix),
+                        usageRepo.getMonthlyByPrefix(prefix),
                         null,
                         true,
                         false
@@ -381,11 +402,13 @@ public class OperationsController {
     }
 
     /**
-     * Chat providers to surface in the cards/table/chart (§6.7). Configured providers always
-     * show, even with zero usage. Unconfigured (no API key) providers show only if they have
-     * historical usage — hides never-used placeholder providers while preserving history for
-     * ones that were used and later had their key removed. Applied once here so all three
-     * usage surfaces (cards, REST usage, REST history) agree on the same visible set.
+     * Chat providers to surface in the cards/table/chart (§6.7). Configured (§isEnabled) providers
+     * always show, even with zero usage. Unconfigured providers (missing api-key for a cloud
+     * provider, or a blank base-url for any provider including LOCAL — see {@link
+     * AppProperties.ProviderConfig#isEnabled()}) show only if they have historical usage — hides
+     * never-used placeholder providers while preserving history for ones that were used and later
+     * had their key/url removed. Applied once here so all three usage surfaces (cards, REST usage,
+     * REST history) agree on the same visible set.
      */
     private List<AppProperties.ProviderConfig> visibleChatProviders() {
         Set<String> used = usageRepo.usedProviders();
@@ -394,8 +417,12 @@ public class OperationsController {
                 .toList();
     }
 
+    /** Delegates to {@link AppProperties.ProviderConfig#isEnabled()} — the same LOCAL-exempt
+     *  api-key + always-required base-url check {@code LlmConfig.llmRouter()} uses to decide
+     *  which providers actually get registered, so a provider never shows "정상" here unless
+     *  it would truly answer a chat call. */
     private static boolean isConfigured(AppProperties.ProviderConfig cfg) {
-        return cfg.apiKey() != null && !cfg.apiKey().isBlank();
+        return cfg.isEnabled();
     }
 
     /** {@code "embed:" + model} — matches the key TrackingEmbeddingModel records under. */
@@ -405,18 +432,40 @@ public class OperationsController {
     }
 
     /**
-     * Provider names recorded under a {@link BackgroundUsage} prefix — conversation
-     * summarization, indexing keyword extraction/format correction, thread title generation.
-     * Only names with actual history are shown (unlike embedding's always-shown single row,
-     * there's no single "current" background provider to default to, and several prefixes
-     * exist), sorted for stable rendering.
+     * {@link BackgroundUsage} categories (prefix, e.g. {@code "title:"}) with at least one recorded
+     * call — conversation summarization, indexing keyword extraction/format correction, thread
+     * title generation. One card/row per category, merged across whichever underlying LOCAL
+     * provider(s) actually served each call (local/local-fast/local-2, §6.21) — an operator cares
+     * about "how much did title generation cost", not which local slot happened to answer each
+     * call, and splitting by provider name here previously produced confusing duplicate cards
+     * (e.g. both {@code title:local} and {@code title:local-fast}) for what is really one workload.
+     * Only categories with actual history are shown (unlike embedding's always-shown single row,
+     * there's no single "current" background provider to default to, and several prefixes exist),
+     * sorted for stable rendering.
      */
-    private Set<String> backgroundUsageNames() {
-        Set<String> names = new java.util.TreeSet<>();
-        for (String name : usageRepo.usedProviders()) {
-            if (BackgroundUsage.isBackground(name)) names.add(name);
+    private Set<String> backgroundCategories() {
+        Set<String> used = usageRepo.usedProviders();
+        Set<String> categories = new java.util.TreeSet<>();
+        for (String prefix : BackgroundUsage.prefixes()) {
+            if (used.stream().anyMatch(name -> name.startsWith(prefix))) {
+                categories.add(prefix);
+            }
         }
-        return names;
+        return categories;
+    }
+
+    /**
+     * Comma-joined underlying provider names (the part after the prefix) that contributed to a
+     * background category, e.g. {@code "title:"} → {@code "local, local-fast"}. Shown in the
+     * card/row's model-name slot in place of a real model name, since a merged category has no
+     * single model — this is what actually answered the calls (LOCAL only; background calls never
+     * route to a cloud provider).
+     */
+    private String backgroundModelLabel(String prefix) {
+        return usageRepo.usedProviderNamesWithPrefix(prefix).stream()
+                .map(name -> name.substring(prefix.length()))
+                .sorted()
+                .collect(java.util.stream.Collectors.joining(", "));
     }
 
     /**

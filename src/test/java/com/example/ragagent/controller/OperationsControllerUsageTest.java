@@ -6,6 +6,7 @@ import com.example.ragagent.audit.AuditLogger;
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.context.ThreadContextResolver;
 import com.example.ragagent.llm.CircuitBreaker;
+import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.repository.LlmUsageRepository;
 import com.example.ragagent.service.CuratedQaService;
 import com.example.ragagent.service.MemoryService;
@@ -23,6 +24,7 @@ import org.springframework.test.web.servlet.MockMvc;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 
 import static org.hamcrest.Matchers.containsString;
@@ -66,6 +68,7 @@ class OperationsControllerUsageTest {
     @MockitoBean ThreadContextResolver threadContextResolver;
     @MockitoBean AuditLogger auditLogger;
     @MockitoBean CuratedQaService curatedQaService;
+    @MockitoBean LlmRouter llmRouter;
 
     @BeforeEach
     void setUp() {
@@ -83,6 +86,14 @@ class OperationsControllerUsageTest {
         when(usageRepo.getMonthly(org.mockito.ArgumentMatchers.anyString())).thenReturn(zero);
         when(usageRepo.getDailyHistory(org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.anyInt()))
                 .thenReturn(List.of());
+        // Prefix-based aggregation (BACKGROUND category merging) — same "anyString → zero" default
+        // as the exact-name stubs above, so any test whose usedProviders() happens to include a
+        // background-prefixed name doesn't NPE rendering a card/row for it.
+        when(usageRepo.getDailyByPrefix(org.mockito.ArgumentMatchers.anyString())).thenReturn(zero);
+        when(usageRepo.getWeeklyByPrefix(org.mockito.ArgumentMatchers.anyString())).thenReturn(zero);
+        when(usageRepo.getMonthlyByPrefix(org.mockito.ArgumentMatchers.anyString())).thenReturn(zero);
+        when(usageRepo.getDailyHistoryByPrefix(org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.anyInt()))
+                .thenReturn(List.of());
     }
 
     @Test
@@ -95,6 +106,31 @@ class OperationsControllerUsageTest {
                 .andExpect(jsonPath("$[1].type").value("EMBEDDING"))
                 .andExpect(jsonPath("$[1].model").value("nomic-embed"))
                 .andExpect(jsonPath("$[1].blockedUntil").doesNotExist());
+    }
+
+    @Test
+    @DisplayName("GET /api/v1/llm/concurrency — LOCAL priority=1 프로바이더가 있으면 inUse/capacity 를 반환한다")
+    void concurrency_available_returnsInUseAndCapacity() throws Exception {
+        when(llmRouter.localTier1Concurrency())
+                .thenReturn(Optional.of(new LlmRouter.ConcurrencySnapshot(2, 6)));
+
+        mvc.perform(get("/api/v1/llm/concurrency"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.available").value(true))
+                .andExpect(jsonPath("$.inUse").value(2))
+                .andExpect(jsonPath("$.capacity").value(6));
+    }
+
+    @Test
+    @DisplayName("GET /api/v1/llm/concurrency — LOCAL priority=1 프로바이더가 없으면 available=false 만 반환한다")
+    void concurrency_unavailable_returnsAvailableFalse() throws Exception {
+        when(llmRouter.localTier1Concurrency()).thenReturn(Optional.empty());
+
+        mvc.perform(get("/api/v1/llm/concurrency"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.available").value(false))
+                .andExpect(jsonPath("$.inUse").doesNotExist())
+                .andExpect(jsonPath("$.capacity").doesNotExist());
     }
 
     @Test
@@ -118,24 +154,34 @@ class OperationsControllerUsageTest {
     // ── Background/non-chat LLM usage (summarization, keyword extraction, etc.) ───────────────
 
     @Test
-    @DisplayName("summary:/keyword:/title: 등 백그라운드 사용량은 type=BACKGROUND 로 노출(ORPHAN 아님)")
-    void backgroundUsage_surfacedWithTypeBackground_notOrphan() throws Exception {
-        when(usageRepo.usedProviders()).thenReturn(Set.of("summary:local", "keyword:local", "title:local"));
+    @DisplayName("summary:/keyword:/title: 등 백그라운드 사용량은 카테고리별로 병합되어 type=BACKGROUND 로 노출(ORPHAN 아님)")
+    void backgroundUsage_mergedByCategory_surfacedWithTypeBackground_notOrphan() throws Exception {
+        when(usageRepo.usedProviders()).thenReturn(
+                Set.of("summary:local", "keyword:local", "title:local", "title:local-fast"));
+        when(usageRepo.usedProviderNamesWithPrefix("title:"))
+                .thenReturn(Set.of("title:local", "title:local-fast"));
 
         mvc.perform(get("/api/v1/llm/usage"))
                 .andExpect(status().isOk())
+                // provider is now the bare category label — the local/local-fast split collapses
+                // into one "title" row instead of two ("title:local"/"title:local-fast")
                 .andExpect(jsonPath("$[*].provider", org.hamcrest.Matchers.hasItems(
-                        "summary:local", "keyword:local", "title:local")))
-                .andExpect(jsonPath("$[?(@.provider=='summary:local')].type").value("BACKGROUND"))
-                .andExpect(jsonPath("$[?(@.provider=='keyword:local')].type").value("BACKGROUND"))
-                .andExpect(jsonPath("$[?(@.provider=='title:local')].type").value("BACKGROUND"));
+                        "summary", "keyword", "title")))
+                .andExpect(jsonPath("$[*].provider", not(org.hamcrest.Matchers.hasItem("title:local"))))
+                .andExpect(jsonPath("$[?(@.provider=='summary')].type").value("BACKGROUND"))
+                .andExpect(jsonPath("$[?(@.provider=='keyword')].type").value("BACKGROUND"))
+                .andExpect(jsonPath("$[?(@.provider=='title')].type").value("BACKGROUND"))
+                // model slot repurposed to list which underlying LOCAL provider(s) served the category
+                .andExpect(jsonPath("$[?(@.provider=='title')].model").value("local, local-fast"));
         mvc.perform(get("/api/v1/llm/usage/history"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$['summary:local']").exists());
+                .andExpect(jsonPath("$.summary").exists())
+                .andExpect(jsonPath("$.title").exists());
         mvc.perform(get("/ui/llm-usage/cards"))
                 .andExpect(status().isOk())
-                .andExpect(content().string(containsString("summary:local")))
-                .andExpect(content().string(containsString("BACKGROUND")));
+                .andExpect(content().string(containsString("summary")))
+                .andExpect(content().string(containsString("BACKGROUND")))
+                .andExpect(content().string(containsString("local, local-fast")));
     }
 
     @Test

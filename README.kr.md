@@ -105,12 +105,14 @@ container system stop
 |------|------|--------|------|
 | `SERVER_PORT` | — | `8080` | 애플리케이션이 리스닝할 포트. 다른 로컬 서비스와 충돌할 때만 변경 |
 | `LOCAL_LLM_URL` | 이 provider 사용 시 ✅ | 없음 | `providers[1]`(`local`) 엔드포인트 (임베딩 폴백으로도 사용, 아래 G3 검증 대상 아님). **미설정·공백이면 이 provider가 통째로 비활성화됨** — 더 이상 `http://localhost:1234/v1`로 조용히 폴백하지 않음. 값을 설정하면 기동 시 `GET {URL}/models`로 접속 가능·모델명 일치 여부를 검증하며, 실패하면 **애플리케이션이 시작되지 않는다**(G3, [OPERATOR_MANUAL.md §5.2](documents/OPERATOR_MANUAL.md#52-프로바이더-속성) 참고) |
-| `LOCAL_LLM_KEY` | — | `lm-studio` | `providers[1]` API 키. **로컬 엔드포인트(llama-server)는 키 불필요** — `LOCAL_LLM_URL`만 설정돼 있다면 키가 비어도 LOCAL provider는 등록됨(`no-key` 치환) |
+| `LOCAL_LLM_KEY` | — | `no-key` | `providers[1]` API 키. **로컬 엔드포인트(llama-server)는 키 불필요** — `LOCAL_LLM_URL`만 설정돼 있다면 키가 비어도 LOCAL provider는 등록됨(`no-key` 치환) |
 | `LOCAL_LLM_MODEL` | — | `google/gemma-4-e4b` | `providers[1]` 모델명 |
+| `LOCAL_LLM_TYPE` | — | `BOTH` | `providers[1]` 작업 유형(`app.llm.providers[1].type`): `MICRO_TEXT`/`LIGHT_TEXT`/`TEXT`/`VISION`/`LIGHT_BOTH`/`BOTH`. 기본 `BOTH`(전 작업 처리); 예: 로컬 모델을 채팅 텍스트 전용으로 한정하려면 `TEXT` |
 | `LOCAL_LLM_URL_2` | 사용 시 ✅ | 없음 | `providers[2]`(`local-2`) 엔드포인트 — `providers[1]`(`local`)과 동일 role·priority로 등록되는 두 번째 로컬 LLM 인스턴스로, 요청이 둘 사이에 least-in-flight로 로드밸런싱됨 — [OPERATOR_MANUAL.md §5.4 예제 5/7](documents/OPERATOR_MANUAL.md) 참고. **미설정·공백이면 이 provider가 통째로 비활성화됨**(회귀 0 — 2대째가 없으면 그냥 비워두면 `local` 단독으로 동작). **값을 설정하면 기동 시 검증하며(G3) 실패 시 애플리케이션이 시작되지 않는다** — "설정은 했지만 서버가 아직 안 떠 있다"가 예전처럼 런타임 폴백으로 넘어가려면 `LLM_VERIFY_LOCAL_MODELS_ON_STARTUP=false`가 필요함 |
-| `LOCAL_LLM_KEY_2` | — | `LOCAL_LLM_KEY` 폴백 | `providers[2]` API 키 |
+| `LOCAL_LLM_KEY_2` | — | `no-key` | `providers[2]` API 키 (로컬 엔드포인트는 무시 — 비우면 `no-key` 치환, `LOCAL_LLM_KEY`를 상속하지 않음) |
 | `LOCAL_LLM_MODEL_2` | — | `LOCAL_LLM_MODEL` 폴백 | `providers[2]` 모델명 — 보통 `providers[1]`과 동일 모델을 다른 서버에 복제 |
-| `LOCAL_FAST_LLM_URL` | 사용 시 ✅ | 없음 | §6.21 태스크별 모델 오프로딩 — `providers[0]`(`local-fast`) 엔드포인트. **미설정·공백이면 이 provider가 통째로 비활성화됨**(회귀 0 — `MICRO_TEXT`는 `local`이 흡수). **값을 설정하면 기동 시 검증하며(G3) 실패 시 애플리케이션이 시작되지 않는다** — [OPERATOR_MANUAL.md §5.4 예제 6](documents/OPERATOR_MANUAL.md) 참고 |
+| `LOCAL_LLM_TYPE_2` | — | `BOTH` | `providers[2]` 작업 유형(`app.llm.providers[2].type`). 값 집합은 `LOCAL_LLM_TYPE`과 동일. 보통 `BOTH` |
+| `LOCAL_FAST_LLM_URL` | 사용 시 ✅ | 없음 | §6.21 태스크별 모델 오프로딩 — `providers[0]`(`local-fast`) 엔드포인트. **미설정·공백이면 이 provider가 통째로 비활성화됨** — `MICRO_TEXT`는 `local`이 흡수하되, **대화 요약만은 흡수하지 않고 생략**(채팅은 원본 history 폴백). **값을 설정하면 기동 시 검증하며(G3) 실패 시 애플리케이션이 시작되지 않는다** — [OPERATOR_MANUAL.md §5.4 예제 6](documents/OPERATOR_MANUAL.md) 참고 |
 | `LOCAL_FAST_LLM_KEY` | — | — | `providers[0]` API 키. `LOCAL_LLM_KEY`와 마찬가지로 로컬 엔드포인트는 보통 불필요 |
 | `LOCAL_FAST_LLM_MODEL` | — | `Qwen3.5-0.8B-Q4_K_M.gguf` | `providers[0]` 모델명 |
 | `LLM_VERIFY_LOCAL_MODELS_ON_STARTUP` | — | `true` | (`app.llm.verify-local-models-on-startup`) — G3 토글. `true`면 URL이 설정된 각 LOCAL provider에 대해 기동 시 `GET {URL}/models`를 호출해 접속 가능·모델명 일치를 확인하고, 실패하면 애플리케이션이 시작되지 않는다. 로컬 서버가 앱보다 늦게 뜨는 배포 순서 레이스가 있을 때만 `false`로 끌 것 — 그 경우 예전처럼 첫 요청 실패 후 런타임 폴백된다 |
@@ -121,7 +123,8 @@ container system stop
 | `LLM_MAX_TOKENS` | — | `6000` | **블로킹** LLM 호출(분류·키워드 추출·MD 교정·충분도/근거 평가·TXT 구조화 등) 전용 completion 길이 상한 — 스트리밍 채팅/Direct 답변은 이 값과 무관(대신 SSE 타임아웃이 제한). 대화 히스토리 예산·MD 교정 섹션 분할 크기도 같은 값을 공유. **모델 컨텍스트 윈도우 자체가 아님** — 실제 LLM 서버 컨텍스트 크기에 여유를 두고 설정할 것 — [PIPELINE.md §4.1](documents/PIPELINE.md#41-appllmmax-tokensllm_max_tokens-크기-산정--로컬-llm-컨텍스트-윈도우와의-관계) 참고 |
 | `DIRECT_LLM_TEMPERATURE` | — | `0.1` | meta/Direct 답변 전용 temperature(`app.llm.direct-temperature`), `LLM_TEMPERATURE`와 별개, `[0.0, 0.2]`로 clamp. **`/settings`에서 핫 수정** — 재기동 없이 다음 Direct 호출부터 적용 |
 | `OPENAI_API_KEY` | — | — | OpenAI providers 사용 시 필요. 미설정 시 해당 providers 자동 비활성화 |
-| `GEMINI_API_KEY` | — | — | Gemini providers 사용 시 필요. 미설정 시 해당 providers 자동 비활성화 |
+| `GEMINI_API_KEY1` / `GEMINI_API_KEY2` | — | — | Gemini providers 사용 시 필요(NORMAL/PREMIUM 쌍마다 키 1개 — [OPERATOR_MANUAL.md §5](documents/OPERATOR_MANUAL.md#5-llm-프로바이더-설정) 참고). 미설정 시 해당 providers 자동 비활성화 |
+| `GEMINI_MODEL` | — | provider별 상이 | Gemini NORMAL 티어 두 provider(`providers[3]` gemini-flash-lite, `providers[4]` gemini-flash) 모델명 오버라이드. ⚠ 두 provider가 같은 변수를 참조하므로 설정 시 둘이 같은 모델로 합쳐짐 — 각자 기본값을 유지하려면 비워둘 것 |
 | `EMBED_BASE_URL` | — | `LOCAL_LLM_URL` | 임베딩 전용 엔드포인트. 미설정 시 `LOCAL_LLM_URL` 사용 |
 | `EMBED_API_KEY` | — | `LOCAL_LLM_KEY` | 임베딩 API 키. 미설정 시 `LOCAL_LLM_KEY` 사용 |
 | `EMBED_MODEL` | — | `text-embedding-nomic-embed-text-v1.5` | 임베딩 모델명 |
@@ -178,7 +181,8 @@ container system stop
 로컬 LLM (LM Studio, Ollama 등) 사용 시 — `.env`만 설정하면 됩니다:
 ```env
 LOCAL_LLM_URL=http://localhost:1234/v1
-LOCAL_LLM_KEY=lm-studio
+# LOCAL_LLM_KEY는 로컬 엔드포인트에선 선택 (비우면 no-key 치환)
+LOCAL_LLM_KEY=
 LOCAL_LLM_MODEL=google/gemma-4-e4b
 EMBED_MODEL=text-embedding-nomic-embed-text-v1.5
 ```
@@ -227,7 +231,7 @@ rag_java/
     │   ├── llm/
     │   │   ├── LlmRouter.java             # 멀티 프로바이더 라우팅: TaskType × RoutingMode; executeGated()/acquirePermit() — 채팅/질의 경로 프로바이더별 동시성 게이트 + 429 백프레셔
     │   │   ├── ConcurrencyLimitingChatModel.java  # ChatModel 데코레이터 — executeGated()를 우회하는 프레임워크 내부 호출자(MultiQueryExpander)에 동시성 게이트 적용
-    │   │   ├── RoutingMode.java           # COST_FIRST|QUALITY_FIRST|PROGRESSIVE|DUAL|LOCAL_ONLY
+    │   │   ├── RoutingMode.java           # COST_FIRST|QUALITY_FIRST|PROGRESSIVE|LOCAL_ONLY
     │   │   ├── CircuitBreaker.java        # LLM 프로바이더 인메모리 차단 관리 (Retry-After 지원)
     │   │   ├── TrackingEmbeddingModel.java  # EmbeddingModel 데코레이터 — 임베딩 토큰 사용량을 채팅과 분리 기록 (embed:<model>)
     │   │   ├── CachingEmbeddingModel.java   # EmbeddingModel 데코레이터 — Caffeine 쿼리 임베딩 캐시(Phase 7-A) + 인플라이트 single-flight 중복 제거(ConcurrentHashMap<key,CompletableFuture>), tracking 바깥쪽에 합성
@@ -261,8 +265,8 @@ rag_java/
     │       ├── MarkdownCorrectionService.java # LLM 마크다운 출력 후처리
     │       ├── DocumentLoaderService.java     # PDF/DOCX/TXT/MD 로더 + 마크다운 섹션 파서; 스캔 PDF OCR
     │       ├── DocxToMarkdownConverter.java   # DOCX → Markdown + 인라인 이미지 추출
-    │       ├── PptxToMarkdownConverter.java   # PPTX → Markdown (슬라이드별 제목 헤딩, [페이지: N] 마커, SmartArt/차트제목/하이퍼링크 텍스트)
-    │       ├── PdfToMarkdownConverter.java    # 비스캔 PDF → Markdown (페이지별 합성 헤딩, [페이지: N] 마커)
+    │       ├── PptxToMarkdownConverter.java   # PPTX → Markdown (슬라이드별 [페이지: N] 마커=섹션 경계; 제목 있으면 ## 헤딩; SmartArt/차트/하이퍼링크 텍스트; 중복/목차/구분 슬라이드 제거)
+    │       ├── PdfToMarkdownConverter.java    # 비스캔 PDF → Markdown (페이지별 [페이지: N] 마커=섹션 경계; 합성 헤딩 없음)
     │       ├── ImageExtractorService.java     # 스캔 PDF 전용 이미지 추출 오케스트레이터(다른 포맷은 각자 변환기에서 인라인 처리)
     │       ├── PdfImageExtractor.java         # PDFBox PDImageXObject 기반 PDF 이미지 추출
     │       ├── PptxImageExtractor.java        # POI XSLFPictureShape 기반 PPTX 이미지 추출 + 그리기 도구 래스터라이즈 + SmartArt/차트/OLE 그래픽 프레임
@@ -322,11 +326,11 @@ rag_java/
 
 - **인증** — Spring Security 폼 로그인, BCrypt(12) 비밀번호 해싱, 5회 실패 시 15분 계정 잠금, `/login`·`/signup`·`/setup`. `app.auth.enabled=false`로 로컬 no-login 배포 가능; `app.auth.management-only=true`는 채팅·조회는 게스트에 열어두고 문서 관리·`/admin`만 로그인 요구 — [OPERATOR_MANUAL.md §9.4.2](documents/OPERATOR_MANUAL.md#942-관리-전용-인증-management-only) 참고
 - **Web UI** — Thymeleaf + HTMX 기반 채팅·문서 관리·LLM 사용량 화면, KO/EN 언어 전환
-- **SSE 실시간 스트리밍** — 노드별 단계 배지(classifier→retrieval→answer→critic) + 토큰 실시간 표시; DUAL 모드는 두 탭 동시 스트리밍 (`chat-stream.js`, fetch + ReadableStream)
+- **SSE 실시간 스트리밍** — 노드별 단계 배지(classifier→retrieval→answer→critic) + 토큰 실시간 표시 (`chat-stream.js`, fetch + ReadableStream)
 - **다크 모드** — CSS 변수 기반 라이트/다크 전환, `prefers-color-scheme` 자동 감지 + `localStorage` 사용자 override
 - **모바일 & PWA** — 반응형 오프캔버스 대화 드로어, `100dvh` 하단 고정 입력창, `table-responsive` 가로 넘침 처리, iOS 16px 자동 확대 방지; 설치형 PWA(`manifest.webmanifest`, 인증/RAG/SSE 응답을 캐시하지 않는 오프라인 fallback 서비스 워커, iOS "홈 화면에 추가" 힌트); 아이콘 버튼 i18n `aria-label`·44px 터치 영역·`:focus-visible` 표시
 - **질문 분류 + 라우팅** — meta(인사·잡담)는 RAG 없이 직접 응답, 나머지는 풀 파이프라인
-- **멀티 LLM 라우팅** — `LlmRouter`가 `TaskType × RoutingMode` 기준으로 프로바이더 선택: COST_FIRST / QUALITY_FIRST / PROGRESSIVE / DUAL (로컬+외부 병렬) / LOCAL_ONLY
+- **멀티 LLM 라우팅** — `LlmRouter`가 `TaskType × RoutingMode` 기준으로 프로바이더 선택: COST_FIRST / QUALITY_FIRST / PROGRESSIVE / LOCAL_ONLY
 - **Circuit Breaker** — HTTP 429/오류 시 프로바이더 자동 차단 (Retry-After 지원), 우선순위 기반 failover; LLM 사용량 대시보드에서 차단 상태 확인
 - **프로바이더별 동시성 게이트 + 백프레셔** — 채팅/질의 경로가 한 프로바이더에 보내는 동시 요청은 그 서버가 처리 가능한 만큼(`--parallel`)을 절대 넘지 않음; `LLM_PERMIT_WAIT_TIMEOUT_SECONDS`(기본 20초)를 넘겨 대기하면 180초 read timeout까지 기다리지 않고 즉시 HTTP 429 + `Retry-After` 응답. 인덱싱/백그라운드 LLM 호출은 영향받지 않음(자체 세마포어 유지)
 - **인플라이트 single-flight (임베딩)** — 완전히 동일한(정규화 후) 텍스트를 동시에 요청하면(예: 여러 사용자가 거의 동시에 같은 질문) 첫 호출만 실제로 계산하고 나머지는 그 결과를 공유(`CachingEmbeddingModel`) — 각자 다시 계산하지 않음
@@ -338,11 +342,11 @@ rag_java/
 - **벡터 검색** — `MultiQueryExpander`(3쿼리 병렬, 짧은 키워드형 질문은 확장 생략)로 최적 검색 후 선택된 백엔드(ChromaDB 또는 sqlite-vec)로 유사도 검색. 원본 질문 검색은 쿼리 확장과 병렬로 실행되어 확장 대기 뒤로 밀리지 않음. Chroma 배치 검색은 실제로 읽는 메타데이터/문서/거리 필드만 요청하고 쓰지 않는 임베딩 벡터는 요청하지 않아, 후보 풀이 큰 경우에도 응답이 가볍게 유지됨
 - **Contextual Retrieval** — 청크 임베딩과 키워드 검색(`chunk_fts`) 입력 앞에 맥락 헤더(`{파일명} > {섹션 제목}` + 키워드 추출과 같은 호출에서 생성되는 LLM 1~2문장 요약)를 결합해, 표·코드 조각·대명사 위주 텍스트처럼 단독으로는 모호한 청크의 검색 재현율을 높임. 이 헤더는 저장·표시 텍스트, 출처 미리보기, 답변 프롬프트에는 절대 나타나지 않고 임베딩/키워드 검색 입력에만 반영됨
 - **임베딩 입력 정규화** — 마크다운 장식(구분선, 볼드/이탤릭/밑줄 마커)을 임베딩·`chunk_fts`·답변 프롬프트 입력에서만 제거(저장·표시 텍스트는 원문 유지)해 검색 인덱스 노이즈와 프롬프트 토큰 사용량을 줄임
-- **좋아요 기반 큐레이션 Q&A (§10.10)** — 답변에 좋아요를 누르면 별도로 임베딩되어(예약 벡터스토어 버전 네임스페이스, 문서 재인덱싱에도 보존) 이후 검색에 가중 RRF 축으로 융합됨(`SEARCH_CURATED_QA_ENABLED`/`SEARCH_CURATED_QA_WEIGHT`, `/settings`에서 핫 수정 가능). 정답을 그대로 반환하지 않고 근거로만 주입해 LLM이 현재 문서와 대조함. 좋아요를 누른 본인은 채팅 버블에서 바로 수정(자동 재임베딩) 가능하고, 관리자는 `/admin` 카드에서 전체 사용자의 큐레이션 항목을 편집·강제 삭제(좋아요 여부와 무관)할 수 있음
+- **응답 길이 모드 (S/M/L)** — 메시지별 토글로 답변 분량을 조절. 각 모드의 목표치는 `LLM_MAX_TOKENS` 비율(15%/40%/70%)과 고정 글자수 하한(2,000/5,000/10,000자) 중 큰 값이라, 설정값이 작아도 S와 M이 뚜렷이 구분됨. 이 값은 블로킹 호출의 `maxTokens`로도, 프롬프트의 "약 N자" 스타일 지시문으로도 그대로 재사용됨 — 스트리밍 응답은 설계상 호출당 토큰 상한이 없어 지시문이 유일한 조절 수단. `L`(원문 최대)은 검색 컨텍스트가 있을 때만 의미가 있어 Direct 모드에서는 비활성화됨
+- **좋아요 기반 큐레이션 Q&A (§10.10)** — 답변에 좋아요를 누르면 별도로 임베딩되어(예약 벡터스토어 버전 네임스페이스, 문서 재인덱싱에도 보존) 이후 검색에 가중 RRF 축으로 융합됨(`SEARCH_CURATED_QA_ENABLED`/`SEARCH_CURATED_QA_WEIGHT`, `/settings`에서 핫 수정 가능). 정답을 그대로 반환하지 않고 근거로만 주입해 LLM이 현재 문서와 대조함. 좋아요를 누른 본인은 채팅 버블에서 바로 수정(자동 재임베딩) 가능하고, 관리자는 `/admin` 카드에서 전체 사용자의 큐레이션 항목을 편집·강제 삭제(좋아요 여부와 무관)할 수 있음. **L모드** 답변은 좋아요를 눌러도 임베딩되지 않음 — 이미 인덱싱된 원본 문서 내용과 사실상 동일해 재임베딩이 불필요하기 때문(좋아요 자체는 정상 기록됨)
 - **ReAct 재검색** — 증거 부족 시 최대 2회 자동 재검색
 - **Critic 검증** — 생성된 답변이 문서에 근거하는지 LLM이 이중 검증
 - **PROGRESSIVE 모드** — COST_FIRST로 시작 → 품질 임계값 미달 시 PREMIUM 프로바이더로 재실행 + 업그레이드 배지 표시
-- **DUAL 모드** — 로컬·외부 LLM 병렬 실행, 두 답변을 탭으로 비교
 - **속도 제한** — Bucket4j + Caffeine 유저별 토큰버킷; 429 `RAG-RATE-001` + `Retry-After` 헤더; `app.rate-limit.*`로 설정
 - **감사 로그** — Logback 롤링 파일에 구조화된 이벤트 기록; `app.audit.*`로 설정
 - **이미지 처리 파이프라인** — PDF/PPTX/DOCX 이미지 추출 → `data/images/{imageId}/` 저장(문서 SHA-256 기반 해시 키 — 문서 자체의 `docId`와는 별개이며, 긴 파일명이 이미지마다 반복 저장되는 것을 방지); PPTX에서 사진 위에 강조 원·화살표 같은 주석 도형이 겹쳐 있으면 하나의 합성 이미지로 병합(`app.pptx-image.merge-annotated-pictures`), 표 위에 겹친 주석 도형도 표+도형 합성(표는 MD 표로도 유지)하며 실제 Ctrl+G 그룹·SmartArt는 각 한 장으로 유지; 앵커에 안 겹친 느슨한 도형끼리의 병합은 `app.pptx-image.rasterize-shapes=true`일 때만(기본 off). DOCX도 사진과 같은 문단의 레거시 VML 주석 도형(사각형/원/선)을 하나로 병합(`app.docx-image.merge-annotated-shapes` — POI가 DOCX 도형 좌표를 노출하지 않아 같은 문단 근사 방식); 검색 시점 Lazy Vision 설명 생성 (SQLite 캐시); 답변 버블에 이미지 썸네일 표시
@@ -358,6 +362,7 @@ rag_java/
 - **증분 인덱싱** — SHA-256 기반 변경 감지, `doc_registry` SQLite 테이블 영속 (유저별). sqlite-vec에서는 토큰 서브배치가 임베딩되는 즉시 그 서브배치만 삽입하며 문서 전체 분량을 버퍼링하지 않아, 대용량 문서 인덱싱 시 피크 메모리가 문서 크기가 아니라 서브배치 크기에 비례
 - **키워드 추출 배치화** — 인덱싱 시 청크 N개(기본 2, `INDEXING_KEYWORD_BATCH_SIZE`)를 하나의 LLM 호출로 묶어 처리, 청크당 1콜이던 왕복 횟수를 대략 1/N로 절감. 배치 호출/파싱 실패 시 해당 청크는 개별 TF 키워드 추출로 폴백
 - **다양한 문서 형식** — PDF, PPTX, DOCX, TXT, MD
+- **PPTX/PDF → Markdown 변환 정리** — 비스캔 PDF·PPTX는 Markdown으로 변환되며 `[페이지: N]` 마커(합성 헤딩이 아님)가 페이지/슬라이드 단위 섹션 경계 역할을 함. PPTX는 추가로 이미지 없는 중복 슬라이드, 목차/agenda 슬라이드(불릿이 다른 슬라이드 제목들과 대부분 일치), 제목만 있는 섹션 구분 슬라이드("PART 2"·"목차"·"결제 시스템" 같은 번호/키워드/짧은 명사구 제목)를 제거해 내용 없는 슬라이드가 검색 인덱스에 남지 않게 함(문장형 키 메시지 제목은 유지 — `app.pptx-remove-duplicate-slides`·`app.pptx-drop-divider-slides`, 둘 다 기본 on)
 - **Java 21 Virtual Threads** — LLM I/O 및 병렬 인덱싱 전체에 경량 스레드 적용
 
 ## 엔드포인트

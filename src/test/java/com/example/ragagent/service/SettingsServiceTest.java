@@ -45,7 +45,7 @@ class SettingsServiceTest {
                 "./data", 2, 800, 100, 100, 7, 0.0, true, 5, false,
                 true, false, 3, null,
                 null, null, null, null, null, null, null, null, null, null, null, 2,
-                null, 1.0, 60, null, null, null, null, null, null, null, null, null, null);
+                null, 1.0, 60, null, null, null, null, null, null, null, null, null, null, null, null);
     }
 
     private SettingsOverrideRepositoryStub repo;
@@ -68,7 +68,21 @@ class SettingsServiceTest {
                 "./data", 2, 800, 100, 100, 7, 0.0, true, 5, false,
                 true, false, 3, null,
                 llm, null, null, null, null, null, null, null, null, null, null, 2,
-                null, 1.0, 60, null, null, null, null, null, null, null, null, null, null);
+                null, 1.0, 60, null, null, null, null, null, null, null, null, null, null, null, null);
+    }
+
+    /** AppProperties with LLM providers of specific roles under a given default routing mode. */
+    private static AppProperties propsWithProvidersOfRoles(String routingMode, Map<String, String> nameToRole) {
+        List<AppProperties.ProviderConfig> pcs = new java.util.ArrayList<>();
+        nameToRole.forEach((name, role) -> pcs.add(new AppProperties.ProviderConfig(
+                name, "http://x/v1", "key", "model", "BOTH", role, 1, true, null)));
+        AppProperties.LlmConfig llm = new AppProperties.LlmConfig(
+                pcs, 2, 10, 180, routingMode, 0.6, 3, 20, 0.0, 0.1, 6000, false);
+        return new AppProperties(
+                "./data", 2, 800, 100, 100, 7, 0.0, true, 5, false,
+                true, false, 3, null,
+                llm, null, null, null, null, null, null, null, null, null, null, 2,
+                null, 1.0, 60, null, null, null, null, null, null, null, null, null, null, null, null);
     }
 
     /** Lightweight in-memory stand-in for the SQLite repository. */
@@ -264,6 +278,49 @@ class SettingsServiceTest {
         assertThatThrownBy(() -> svc.setProviderEnabled("b", false))  // would disable the last one
                 .isInstanceOf(IllegalArgumentException.class);
         assertThat(tg.isEnabled("b")).isTrue();                       // still enabled — guard held
+    }
+
+    @Test
+    @DisplayName("providerRows — LOCAL_ONLY 배포에서는 LOCAL 역할 프로바이더만 노출된다")
+    void providerRows_localOnlyDeployment_showsOnlyLocalRoleProviders() {
+        Map<String, String> nameToRole = new LinkedHashMap<>();
+        nameToRole.put("local", "LOCAL");
+        nameToRole.put("gemini-flash", "NORMAL");
+        nameToRole.put("openai", "PREMIUM");
+        SettingsService svc = new SettingsService(
+                repo, propsWithProvidersOfRoles("LOCAL_ONLY", nameToRole), audit, circuitBreaker, new ProviderToggle());
+
+        List<SettingsView.ProviderRow> rows = svc.providerRows();
+
+        assertThat(rows).extracting(SettingsView.ProviderRow::name).containsExactly("local");
+    }
+
+    @Test
+    @DisplayName("providerRows — LOCAL_ONLY 가 아니면 모든 역할의 프로바이더가 그대로 노출된다")
+    void providerRows_nonLocalOnlyDeployment_showsAllRoles() {
+        Map<String, String> nameToRole = new LinkedHashMap<>();
+        nameToRole.put("local", "LOCAL");
+        nameToRole.put("gemini-flash", "NORMAL");
+        SettingsService svc = new SettingsService(
+                repo, propsWithProvidersOfRoles("COST_FIRST", nameToRole), audit, circuitBreaker, new ProviderToggle());
+
+        List<SettingsView.ProviderRow> rows = svc.providerRows();
+
+        assertThat(rows).extracting(SettingsView.ProviderRow::name)
+                .containsExactlyInAnyOrder("local", "gemini-flash");
+    }
+
+    @Test
+    @DisplayName("setProviderEnabled — LOCAL_ONLY 배포에서는 숨겨진 비-LOCAL 프로바이더 토글이 거부된다")
+    void setProviderEnabled_localOnlyDeployment_rejectsHiddenNonLocalProvider() {
+        Map<String, String> nameToRole = new LinkedHashMap<>();
+        nameToRole.put("local", "LOCAL");
+        nameToRole.put("gemini-flash", "NORMAL");
+        SettingsService svc = new SettingsService(
+                repo, propsWithProvidersOfRoles("LOCAL_ONLY", nameToRole), audit, circuitBreaker, new ProviderToggle());
+
+        assertThatThrownBy(() -> svc.setProviderEnabled("gemini-flash", false))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test

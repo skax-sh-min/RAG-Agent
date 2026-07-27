@@ -4,7 +4,7 @@ import com.example.ragagent.agent.AgentState;
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.ingestion.MarkdownNoiseNormalizer;
 import com.example.ragagent.model.MetaKey;
-import com.example.ragagent.llm.DualResult;
+import com.example.ragagent.model.ResponseMode;
 import com.example.ragagent.llm.LlmProvider;
 import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.RoutingMode;
@@ -15,15 +15,16 @@ import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.UserMessage;
+import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.converter.BeanOutputConverter;
+import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.ai.openai.api.OpenAiApi;
 import org.springframework.context.MessageSource;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
 import java.util.Locale;
-import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
 
@@ -59,12 +60,10 @@ public class AnswerService {
     }
 
     public AgentState execute(AgentState state) {
-        if (state.isDualMode()) return executeDualBlocking(state);
         return executeBlocking(state);
     }
 
     public AgentState executeStreaming(AgentState state, GraphListener listener) {
-        if (state.isDualMode()) return executeDualStreaming(state, listener);
         return executeStreamingNormal(state, listener);
     }
 
@@ -73,27 +72,16 @@ public class AnswerService {
     private AgentState executeBlocking(AgentState state) {
         String systemPrompt = answerSystemPrompt(state.locale());
         String userPrompt = buildAnswerPrompt(state);
-        String rawAnswer = llmRouter.executeGated(TaskType.TEXT, state.routingMode(),
-                model -> model.call(buildPrompt(systemPrompt, userPrompt)));
-        String answer = truncate(rawAnswer == null ? "" : rawAnswer);
+        ChatOptions options = answerOptions(state);
+        LlmRouter.LlmResult result = llmRouter.executeGatedWithUsage(TaskType.TEXT, state.routingMode(),
+                model -> model.call(buildPrompt(systemPrompt, userPrompt, options)));
+        String answer = truncate(result.text() == null ? "" : result.text());
         state = state.toBuilder()
-                     .accumulateTokens(0, 0)
+                     .accumulateTokens(result.inputTokens(), result.outputTokens())
                      .usedProvider(llmRouter.findProviderName(TaskType.TEXT, state.routingMode()))
                      .answer(answer)
                      .build();
         return checkSufficiencyAndMaybeUpgrade(state, answer, null);
-    }
-
-    private AgentState executeDualBlocking(AgentState state) {
-        String systemPrompt = answerSystemPrompt(state.locale());
-        String userPrompt = buildAnswerPrompt(state);
-        DualResult dual = llmRouter.executeDual(
-                TaskType.TEXT,
-                model -> model.call(buildPrompt(systemPrompt, userPrompt))
-        );
-        return buildDualResultState(state,
-                truncate(dual.externalAnswer()), dual.externalProvider(),
-                truncate(dual.localAnswer()), dual.localProvider());
     }
 
     // ── Streaming paths ─────────────────────────────────────────────────────
@@ -107,41 +95,14 @@ public class AnswerService {
         }
         String answer = truncate(streamed);
         // streaming has no ChatResponse to read real usage from — record an approximate
-        // (chars/4) usage entry so /llm-usage isn't blind to the entire streaming chat path.
-        llmRouter.recordApproxUsage(provider.name(), systemPrompt + buildAnswerPrompt(state), answer);
-        state = state.toBuilder().accumulateTokens(0, 0).usedProvider(provider.name()).answer(answer).build();
+        // (chars/4) usage entry so /llm-usage isn't blind to the entire streaming chat path, and
+        // reflect the same estimate in the per-turn total so the chat UI isn't stuck at 0/0.
+        String promptText = systemPrompt + buildAnswerPrompt(state);
+        llmRouter.recordApproxUsage(provider.name(), promptText, answer);
+        int approxIn = (int) LlmRouter.approxTokens(promptText);
+        int approxOut = (int) LlmRouter.approxTokens(answer);
+        state = state.toBuilder().accumulateTokens(approxIn, approxOut).usedProvider(provider.name()).answer(answer).build();
         return checkSufficiencyAndMaybeUpgrade(state, answer, listener);
-    }
-
-    private AgentState executeDualStreaming(AgentState state, GraphListener listener) {
-        String systemPrompt = answerSystemPrompt(state.locale());
-        String userPrompt = buildAnswerPrompt(state);
-        AgentState capturedState = state;
-        StringBuilder localBuf = new StringBuilder(), extBuf = new StringBuilder();
-        BiConsumer<LlmProvider, Consumer<String>> callFn =
-                (prov, sink) -> callOrStream(prov, capturedState, systemPrompt, sink);
-        LlmRouter.DualProviders dp = llmRouter.executeDualStream(
-                TaskType.TEXT,
-                callFn,
-                t -> { localBuf.append(t); listener.onToken("local", t); },
-                t -> { extBuf.append(t);   listener.onToken("external", t); }
-        );
-        llmRouter.recordApproxUsage(dp.localProvider(), systemPrompt + userPrompt, localBuf.toString());
-        llmRouter.recordApproxUsage(dp.externalProvider(), systemPrompt + userPrompt, extBuf.toString());
-        return buildDualResultState(state,
-                truncate(extBuf.toString()), dp.externalProvider(),
-                truncate(localBuf.toString()), dp.localProvider());
-    }
-
-    /** Shared DUAL result assembly for both blocking and streaming — CRITIC is bypassed (needsRetry=false). */
-    private AgentState buildDualResultState(AgentState state, String extAnswer, String extProvider,
-                                             String localAnswer, String localProvider) {
-        return state.toBuilder()
-                    .answer(extAnswer)
-                    .usedProvider(extProvider)
-                    .dualResult(localAnswer, localAnswer.isBlank() ? null : localProvider)
-                    .needsRetry(false)
-                    .build();
     }
 
     // ── Evaluation (sufficiency + grounding) + PROGRESSIVE ───────────────────
@@ -161,30 +122,41 @@ public class AnswerService {
         LlmProvider premiumProvider = llmRouter.routeProvider(TaskType.TEXT, RoutingMode.QUALITY_FIRST);
         if (listener != null) listener.onUpgrade(premiumProvider.name());
         String premiumAnswer;
+        int inputTokens, outputTokens;
         if (listener != null) {
             try (var permit = llmRouter.acquirePermit(premiumProvider)) {
                 premiumAnswer = streamAnswer(premiumProvider, state, systemPrompt, listener::onToken);
             }
-            llmRouter.recordApproxUsage(premiumProvider.name(),
-                    systemPrompt + buildAnswerPrompt(state), premiumAnswer);
+            String promptText = systemPrompt + buildAnswerPrompt(state);
+            llmRouter.recordApproxUsage(premiumProvider.name(), promptText, premiumAnswer);
+            inputTokens = (int) LlmRouter.approxTokens(promptText);
+            outputTokens = (int) LlmRouter.approxTokens(premiumAnswer);
         } else {
             String userPrompt = buildAnswerPrompt(state);
-            premiumAnswer = llmRouter.executeGated(
+            LlmRouter.LlmResult result = llmRouter.executeGatedWithUsage(
                     TaskType.TEXT, RoutingMode.QUALITY_FIRST,
-                    model -> model.call(buildPrompt(systemPrompt, userPrompt))
+                    model -> model.call(buildPrompt(systemPrompt, userPrompt, answerOptions(state)))
             );
+            premiumAnswer = result.text();
+            inputTokens = result.inputTokens();
+            outputTokens = result.outputTokens();
         }
         return resultState.toBuilder()
                           .answer(truncate(premiumAnswer))
                           .usedProvider(premiumProvider.name())
                           .premiumUpgraded(premiumProvider.name())
+                          .accumulateTokens(inputTokens, outputTokens)
                           .needsRetry(false)
                           .build();
     }
 
-    /** Shared raw Prompt construction for the non-fluent LlmRouter call sites (DUAL, PROGRESSIVE). */
-    private static Prompt buildPrompt(String systemPrompt, String userPrompt) {
-        return new Prompt(List.of(new SystemMessage(systemPrompt), new UserMessage(userPrompt)));
+    /** Shared raw Prompt construction for the non-fluent LlmRouter call sites (evaluation, PROGRESSIVE).
+     *  {@code options} is null for calls that should keep the provider defaults (the sufficiency
+     *  evaluation), and carries the response mode's maxTokens for the answer calls. */
+    private static Prompt buildPrompt(String systemPrompt, String userPrompt, ChatOptions options) {
+        List<org.springframework.ai.chat.messages.Message> messages =
+                List.of(new SystemMessage(systemPrompt), new UserMessage(userPrompt));
+        return options == null ? new Prompt(messages) : new Prompt(messages, options);
     }
 
     // ── Stream helpers ──────────────────────────────────────────────────────
@@ -207,8 +179,10 @@ public class AnswerService {
             // stream=false: still use streaming HTTP to stay compatible with local LLM servers
             // that do not support stream:false. Buffer all tokens and deliver as one chunk.
             StringBuilder buf = new StringBuilder();
-            ChatClient.builder(provider.chatModel()).build()
-                    .prompt()
+            ChatClient.ChatClientRequestSpec spec = ChatClient.builder(provider.chatModel()).build().prompt();
+            ChatOptions options = answerOptions(state);
+            if (options != null) spec = spec.options(options);
+            spec
                     .system(systemPrompt)
                     .user(buildAnswerPrompt(state))
                     .stream()
@@ -260,12 +234,12 @@ public class AnswerService {
             String evalPrompt = "[질문]\n%s\n\n[답변]\n%s\n\n[문서 발췌]\n%s\n\n%s"
                     .formatted(PromptInjectionGuard.wrap(state.question()), answer, excerpts, evalConverter.getFormat());
 
-            String response = llmRouter.executeGated(TaskType.TEXT, state.routingMode(),
-                    model -> model.call(buildPrompt(systemPrompt, evalPrompt)));
-            EvalOutput out = evalConverter.convert(response == null ? "" : response);
+            LlmRouter.LlmResult result = llmRouter.executeGatedWithUsage(TaskType.TEXT, state.routingMode(),
+                    model -> model.call(buildPrompt(systemPrompt, evalPrompt, null)));
+            EvalOutput out = evalConverter.convert(result.text() == null ? "" : result.text());
             boolean grounded = !docsPresent || out.grounded();
             return state.toBuilder()
-                    .accumulateTokens(0, 0)
+                    .accumulateTokens(result.inputTokens(), result.outputTokens())
                     .needsRetry(!out.sufficient())
                     .grounded(grounded)
                     .build();
@@ -277,6 +251,31 @@ public class AnswerService {
 
     private String answerSystemPrompt(Locale locale) {
         return messageSource.getMessage("prompt.answer.system", null, locale);
+    }
+
+    /**
+     * The S/M/L answer-style instruction for this turn (summary / detailed / source-preserving),
+     * naming a concrete character target (see {@link ResponseMode} javadoc). Appended to the user
+     * prompt just before the question so the question stays last (the system prompt's injection
+     * warning assumes that ordering).
+     */
+    private String responseStyleInstruction(AgentState state) {
+        ResponseMode mode = state.responseMode();
+        int tokens = mode.maxTokens(props.llmSafe().maxTokens());
+        int targetChars = tokens > 0 ? tokens : mode.minChars();
+        return messageSource.getMessage(mode.promptKey(), new Object[]{targetChars}, state.locale());
+    }
+
+    /**
+     * Per-call {@code maxTokens} for this turn's answer, derived from the response mode's share of
+     * the configured {@code app.llm.max-tokens}. Only attached on the <b>blocking</b> call paths —
+     * streaming calls have no hard per-call cap (token-by-token UX), so there the same character
+     * target is instead named in {@link #responseStyleInstruction} as the model's only length control.
+     */
+    private ChatOptions answerOptions(AgentState state) {
+        int configured = props.llmSafe().maxTokens();
+        int max = state.responseMode().maxTokens(configured);
+        return max > 0 ? OpenAiChatOptions.builder().maxTokens(max).build() : null;
     }
 
     private String buildAnswerPrompt(AgentState state) {
@@ -310,10 +309,14 @@ public class AnswerService {
             sb.append("[경고]\n").append(String.join("\n", state.retrievalWarnings())).append("\n\n");
         }
 
+        sb.append(responseStyleInstruction(state)).append("\n\n");
+
         sb.append("[질문]\n").append(PromptInjectionGuard.wrap(state.question()));
         return sb.toString();
     }
 
+    /** Absolute ceiling protecting storage/rendering — independent of the response mode, whose
+     *  budget is expressed as the call's maxTokens instead of a character cap. */
     private static String truncate(String answer) {
         if (answer == null || answer.length() <= MAX_ANSWER_LEN) return answer;
         return answer.substring(0, MAX_ANSWER_LEN) + "\n\n…(응답이 너무 길어 잘렸습니다)";

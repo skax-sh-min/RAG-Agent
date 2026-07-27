@@ -176,21 +176,24 @@ copy .env.example .env
 |------|------|--------|------|
 | `SERVER_PORT` | — | `8080` | 애플리케이션이 리스닝할 포트 (`server.port`). 다른 서비스와 충돌할 때만 변경 — Docker Compose 사용 시 `docker-compose.yml`의 포트 매핑(`127.0.0.1:8080:8080`)과 Caddy `reverse_proxy app:8080`도 함께 맞춰야 함 |
 | `LOCAL_LLM_URL` | 이 provider 사용 시 ✅ | — (기본값 없음) | `providers[1]`(`local`, 로컬 LLM 1) 엔드포인트. **미설정·공백이면 이 provider가 통째로 비활성화된다** (`LlmConfig` G2 — 예전처럼 `http://localhost:1234/v1`로 조용히 폴백하지 않음). 값을 설정하면 기동 시 `GET {URL}/models`로 접속 가능·모델명 일치 여부를 검증한다(G3) — 실패하면 **애플리케이션이 시작되지 않는다**, [§5.2 프로바이더 활성화 게이트](#52-프로바이더-속성) 참고. 임베딩 설정(`EMBED_BASE_URL`)의 폴백으로도 별도 사용됨(그쪽은 기존처럼 자체 기본값 보유, G3 대상 아님) |
-| `LOCAL_LLM_KEY` | — | `lm-studio` | `providers[1]` API 키. **로컬 엔드포인트(llama-server 등)는 키가 불필요** — 비우거나 미설정해도(URL만 설정돼 있다면) LOCAL provider는 등록됨(내부적으로 `no-key` 치환, G1). 완전히 제외하려면 `LOCAL_LLM_URL`을 비우거나(G2) `application.properties`의 `providers[1]`를 주석 처리 |
+| `LOCAL_LLM_KEY` | — | `no-key` | `providers[1]` API 키. **로컬 엔드포인트(llama-server 등)는 키가 불필요** — 비우거나 미설정해도(URL만 설정돼 있다면) LOCAL provider는 등록됨(미설정 시 내부적으로 `no-key` 치환, G1). 완전히 제외하려면 `LOCAL_LLM_URL`을 비우거나(G2) `application.properties`의 `providers[1]`를 주석 처리 |
 | `LOCAL_LLM_MODEL` | — | `google/gemma-4-e4b` | `providers[1]` 모델 식별자. 사용 중인 로컬 모델명으로 변경 |
+| `LOCAL_LLM_TYPE` | — | `BOTH` | `providers[1]`(로컬 LLM 1) 작업 유형 (`app.llm.providers[1].type`) — `MICRO_TEXT`/`LIGHT_TEXT`/`TEXT`/`VISION`/`LIGHT_BOTH`/`BOTH` 중 하나. 기본 `BOTH`(모든 작업 처리). 예: 로컬 모델을 채팅 텍스트 전용으로 한정하려면 `TEXT` |
 | `LOCAL_LLM_URL_2` | 사용 시 ✅ | — (기본값 없음) | `providers[2]`(`local-2`, 로컬 LLM 2) 엔드포인트. `local`과 **동일한 role(LOCAL)·동일한 priority(1)**로 등록되어 두 번째 물리 서버로 로드밸런싱된다(least-in-flight — [§5.4 예제 5/7](#예제-5--로컬-llm-2대-로드밸런싱-처리량-확장) 참고). **미설정·공백이면 이 provider가 통째로 비활성화된다**(G2) — 2대째 로컬 서버가 없다면 그냥 비워두면 됨(회귀 0, `local` 단독으로 동작). 값을 설정하면 기동 시 접속 가능·모델명 일치 여부를 검증하며 실패 시 애플리케이션이 시작되지 않는다(G3) — 즉 "설정은 했지만 서버가 아직 안 떠 있다"는 이 변수를 비워두는 것과 결과가 다르다(전자는 기동 실패, 후자는 정상 기동) |
-| `LOCAL_LLM_KEY_2` | — | `LOCAL_LLM_KEY` 폴백 | `providers[2]` API 키. 미설정 시 `LOCAL_LLM_KEY` 값을 그대로 사용 |
+| `LOCAL_LLM_KEY_2` | — | `no-key` | `providers[2]` API 키. 로컬 엔드포인트는 키가 불필요 — 미설정 시 `no-key`가 치환되어 등록됨(`LOCAL_LLM_KEY`를 상속하지 않음). 모델명(`LOCAL_LLM_MODEL_2`)은 여전히 `LOCAL_LLM_MODEL`로 폴백 |
 | `LOCAL_LLM_MODEL_2` | — | `LOCAL_LLM_MODEL` 폴백 | `providers[2]` 모델 식별자. 미설정 시 `LOCAL_LLM_MODEL`과 동일한 모델명을 사용(로컬 LLM 1과 동일 모델을 다른 서버에 복제하는 것이 일반적인 사용 사례) |
-| `LOCAL_FAST_LLM_URL` | 사용 시 ✅ | — (기본값 없음) | §6.21 — `providers[0]`(`local-fast`, 소형 로컬 LLM 1) 엔드포인트. 잡무 전용 소형(~500MB) 모델을 `providers[1]`(`local`)과 **다른 포트/장비**에 띄우고 가리킨다.<br>**미설정·공백이면 이 provider가 통째로 비활성화된다**(G2) — 소형 모델 서버가 없다면 그냥 비워두면 됨(회귀 0, `MICRO_TEXT`는 `local`이 흡수). 값을 설정하면 기동 시 접속 가능·모델명 일치 여부를 검증하며(G3, 기본 활성) 실패 시 애플리케이션이 시작되지 않는다 — "URL은 설정했지만 서버가 아직 안 떠 있어 매 요청마다 `local`로 런타임 폴백"되는 예전 동작은 `LLM_VERIFY_LOCAL_MODELS_ON_STARTUP=false`로 G3를 꺼야만 나온다 — 예제는 [§5.4 예제 6](#예제-6--소형경량-llm-분리로-잡무-오프로딩-plan-621) 참고 |
+| `LOCAL_LLM_TYPE_2` | — | `BOTH` | `providers[2]`(로컬 LLM 2) 작업 유형 (`app.llm.providers[2].type`). 값 집합은 `LOCAL_LLM_TYPE`과 동일. 보통 로컬 LLM 1과 같은 `BOTH`를 사용 |
+| `LOCAL_FAST_LLM_URL` | 사용 시 ✅ | — (기본값 없음) | §6.21 — `providers[0]`(`local-fast`, 소형 로컬 LLM 1) 엔드포인트. 잡무 전용 소형(~500MB) 모델을 `providers[1]`(`local`)과 **다른 포트/장비**에 띄우고 가리킨다.<br>**미설정·공백이면 이 provider가 통째로 비활성화된다**(G2) — 소형 모델 서버가 없다면 그냥 비워두면 됨(`MICRO_TEXT`는 `local`이 흡수. 단 **대화 요약만은 흡수하지 않고 생략**되어 채팅이 원본 history 폴백으로 동작한다 — 부가 기능인 요약이 답변용 모델의 동시성 슬롯을 잠식하지 않게 하려는 의도적 게이팅). 값을 설정하면 기동 시 접속 가능·모델명 일치 여부를 검증하며(G3, 기본 활성) 실패 시 애플리케이션이 시작되지 않는다 — "URL은 설정했지만 서버가 아직 안 떠 있어 매 요청마다 `local`로 런타임 폴백"되는 예전 동작은 `LLM_VERIFY_LOCAL_MODELS_ON_STARTUP=false`로 G3를 꺼야만 나온다 — 예제는 [§5.4 예제 6](#예제-6--소형경량-llm-분리로-잡무-오프로딩-plan-621) 참고 |
 | `LOCAL_FAST_LLM_KEY` | — | — | `providers[0]` API 키. `LOCAL_LLM_KEY`와 마찬가지로 로컬 엔드포인트는 보통 불필요 — 비워도(URL만 설정돼 있다면) `no-key`가 치환되어 등록됨 |
 | `LOCAL_FAST_LLM_MODEL` | — | `Qwen3.5-0.8B-Q4_K_M.gguf` | `providers[0]` 모델 식별자. 사용 중인 소형 모델명으로 변경 |
 | `LLM_VERIFY_LOCAL_MODELS_ON_STARTUP` | — | `true` | (`app.llm.verify-local-models-on-startup`) — G3 토글. `true`면 `LOCAL_LLM_URL`/`LOCAL_LLM_URL_2`/`LOCAL_FAST_LLM_URL`이 설정된 각 provider에 대해 기동 시 `GET {URL}/models`를 호출해 접속 가능·모델명 일치를 확인하고, 실패하면 애플리케이션이 시작되지 않는다. 로컬 서버가 앱보다 늦게 뜨는 배포 순서 레이스가 있을 때만 `false`로 끌 것 — 그 경우 예전처럼 첫 채팅 요청이 실패한 뒤 다른 provider로 런타임 폴백된다 |
-| `LLM_ROUTING_MODE` | — | `COST_FIRST` | 기본 라우팅 모드 (`app.llm.default-routing-mode`) — `COST_FIRST`/`QUALITY_FIRST`/`PROGRESSIVE`/`DUAL`/`LOCAL_ONLY`.<br>**폐쇄망·로컬 전용은 `LOCAL_ONLY`** 로 외부 프로바이더 호출을 원천 차단. `LOCAL_ONLY`로 설정하면 채팅 화면 사이드바의 라우팅 전략 드롭다운 자체가 사라진다(어떤 모드를 골라도 결과가 같으므로) — 상세는 [LLM_ROUTING.md §8](LLM_ROUTING.md#8-제약-및-주의사항) 참고 |
+| `LLM_ROUTING_MODE` | — | `COST_FIRST` | 기본 라우팅 모드 (`app.llm.default-routing-mode`) — `COST_FIRST`/`QUALITY_FIRST`/`PROGRESSIVE`/`LOCAL_ONLY`.<br>**폐쇄망·로컬 전용은 `LOCAL_ONLY`** 로 외부 프로바이더 호출을 원천 차단. `LOCAL_ONLY`로 설정하면 채팅 화면 사이드바의 라우팅 전략 드롭다운 자체가 사라진다(어떤 모드를 골라도 결과가 같으므로) — 상세는 [LLM_ROUTING.md §8](LLM_ROUTING.md#8-제약-및-주의사항) 참고 |
 | `OPENAI_API_KEY` | — | — | OpenAI providers 사용 시 필요. 미설정 또는 빈 값이면 해당 providers 자동 비활성화. providers 설정에서 `${OPENAI_API_KEY}` 형태로 참조 |
 | `OPENAI_BASE_URL` | — | `https://api.openai.com` | OpenAI 호환 엔드포인트 기본 URL. providers 설정에서 `${OPENAI_BASE_URL}` 형태로 참조. Azure OpenAI 등 호환 엔드포인트로 교체 가능 |
 | `GEMINI_API_KEY1` | — | — | Gemini 1번 API 키 — `providers[3]`(gemini-flash-lite, NORMAL), `providers[6]`(gemma-4-31b, PREMIUM) 공유. 미설정 시 해당 providers 자동 비활성화. providers 설정에서 `${GEMINI_API_KEY1}` 형태로 참조 |
 | `GEMINI_API_KEY2` | — | — | Gemini 2번 API 키 — `providers[4]`(gemini-flash, NORMAL), `providers[7]`(gemma-4-31b, PREMIUM) 공유. 미설정 시 해당 providers 자동 비활성화. providers 설정에서 `${GEMINI_API_KEY2}` 형태로 참조. `providers[6]`·`[7]`은 이름·모델·priority(5)가 동일한 gemma-4-31b 2대로, 서로 다른 키를 씀으로써 PREMIUM 티어의 실질 처리량/쿼터를 두 배로 늘리는 로드밸런싱 쌍이다(§5.7 동일 우선순위 로드밸런싱) |
 | `GEMINI_BASE_URL` | — | `https://generativelanguage.googleapis.com/v1beta/openai/` | Gemini API 엔드포인트 URL. 모든 Gemini providers가 `${GEMINI_BASE_URL}` 형태로 참조하므로 이 값 하나로 Gemini 전체 엔드포인트를 일괄 변경 가능 |
+| `GEMINI_MODEL` | — | provider별 상이 | `providers[3]`(gemini-flash-lite)·`providers[4]`(gemini-flash)의 모델명 오버라이드 (`app.llm.providers[3]/[4].model`). 미설정 시 각자의 기본값(`gemini-3.1-flash-lite`/`gemini-2.5-flash`) 사용. **주의**: 두 provider가 같은 변수를 참조하므로, 설정하면 둘 다 같은 모델이 되어 NORMAL 티어의 2모델 폴백이 하나로 합쳐진다 — 서로 다른 모델을 유지하려면 이 변수 대신 `application.properties`에서 각 `providers[N].model` 줄을 직접 지정할 것 |
 | `EMBED_BASE_URL` | — | `LOCAL_LLM_URL` 폴백 | 임베딩 전용 엔드포인트. 미설정 시 `LOCAL_LLM_URL` 사용. OpenAI 임베딩 사용 시 `https://api.openai.com` 등으로 독립 설정 |
 | `EMBED_API_KEY` | — | `LOCAL_LLM_KEY` 폴백 | 임베딩 전용 API 키. 미설정 시 `LOCAL_LLM_KEY` 사용 |
 | `EMBED_MODEL` | — | `text-embedding-nomic-embed-text-v1.5` | 임베딩 모델 식별자. **인덱싱 후 변경 금지** — 벡터 차원이 달라지면 기존 검색이 깨짐. 변경 시 전체 재인덱싱 필요 (chroma: 컬렉션 삭제 / sqlite-vec: `vec_embeddings` DROP — 차원이 DDL에 고정되며 `app.embedding.dimensions`도 함께 변경) |
@@ -213,7 +216,7 @@ copy .env.example .env
 |------|--------|----------|------|
 | `CHUNK_SIZE` | `800` | 300 ~ 2000 | 청크 크기 (문자 수). 작을수록 정밀, 클수록 문맥 풍부 |
 | `CHUNK_OVERLAP` | `100` | 0 ~ CHUNK_SIZE × 0.25 | 청크 간 중복 (문자 수). 청크 경계 문맥 보완 전용 |
-| `MIN_CHUNK_SIZE` | `300` | 50 ~ CHUNK_SIZE × 0.25 | 너무 작은 청크를 인접 청크와 병합할 최소 길이 기준 |
+| `MIN_CHUNK_SIZE` | `300` | 50 ~ CHUNK_SIZE × 0.25 | 청크/섹션 병합 최소 길이 기준. DOCX·TXT·MD는 이 값 미만인 챕터(헤딩) 섹션을 다음 섹션과 병합하고(단 상위=부모 헤딩 방향은 금지), 슬라이딩 분할 뒤에도 이보다 작은 청크는 직전 청크로 뒤로 병합한다(§청킹 상세는 PIPELINE.md §6.4) |
 | `SEARCH_TOP_K` | `7` | 2 ~ 15 | 벡터 검색 반환 문서 수. 높을수록 재현율↑, 토큰↑ |
 | `SEARCH_SIMILARITY_THRESHOLD` | `0.0` | 0.0 ~ 0.75 | 청크 유지 최소 코사인 유사도. `0.0`=전체 수용. 운영 0.5~0.75 튜닝 시 골든셋 recall 확인 후 적용 |
 | `SEARCH_MULTIQUERY_ENABLED` | `true` | true/false | 검색 전 질의 다중 확장(LLM) 여부. `false`면 임계 경로 첫 LLM 콜 제거 |
@@ -329,9 +332,13 @@ app.embedding.max-concurrent-batches=4
 | `PPTX_IMAGE_RASTERIZE_SHAPES` | `false` | **"느슨한" 도형(사진/표/그룹 등 앵커에 안 겹친 선·화살표·텍스트없는 도형)끼리의 근접 클러스터링**을 제어. `false`(기본) — 클러스터링 안 함. `true` — 겹친 느슨한 도형들을 하나의 다이어그램 이미지로 병합(구 기본 동작). 그룹·SmartArt·표/사진 합성은 이 값과 무관하게 항상 유지(상세는 아래 참고) |
 | `PPTX_REMOVE_DUPLICATE_SLIDES` | `true` | PPTX → MD 변환 시 **이미지 없는** 슬라이드에 한해 중복/목차형 슬라이드를 제거(`PptxToMarkdownConverter`). `true`(기본) — ① 정규화 텍스트가 앞선 슬라이드와 완전히 같으면 첫 등장만 남기고 드롭, ② 본문 불릿이 다른 슬라이드 제목들과 3개 이상·60% 이상 일치하면 목차/agenda 슬라이드로 보고 드롭. 이미지가 있는 슬라이드는 제거하지 않으며(이미지 고아 방지), `[페이지: N]` 번호는 밀리지 않음. `false` — 모든 슬라이드 유지. 변경 후 재인덱싱 필요 |
 | `PPTX_DROP_DIVIDER_SLIDES` | `true` | PPTX → MD 변환 시 본문·이미지 없이 **구분용 제목만** 있는 섹션 구분 슬라이드를 제거(`PptxToMarkdownConverter`). `true`(기본) — 제목이 번호/라벨형(`3장`·`PART 2`·`제1절`·`STEP 3`·`II.`·`1)`·`부록 A`), 구분 키워드(`목차`·`개요`·`서론`·`결론`·`요약`·`agenda`·`overview`·`summary`…), 또는 짧은 명사구(≤3단어·≤12자, 조사·서술어 없음)일 때만 드롭. 문장형/키 메시지 제목(`… 합니다`·`… 다`·`… 요`·`.`로 끝나거나 `은/는/이/가/을/를` 조사 포함)은 유지. 본문·이미지가 있는 슬라이드는 영향 없음. `false` — 제목만 있는 슬라이드도 유지. 변경 후 재인덱싱 필요 |
+| `PPTX_DROP_REDUNDANT_TITLE_SLIDES` | `true` | PPTX → MD 변환 시 본문·이미지 없이 **제목 한 줄만** 있는 슬라이드 중, 그 제목이 **바로 다음 슬라이드**의 제목+본문에 그대로 포함되는 "예고 제목" 슬라이드를 제거(`PptxToMarkdownConverter`). `true`(기본) — 제목의 형태(번호/키워드/명사구 등)는 보지 않고 다음 슬라이드와의 실제 내용 일치만 판정 — 문장형 제목도 다음 슬라이드에 반복되면 대상. 정규화된 제목이 1글자면 대상 제외. 덱의 마지막 슬라이드(다음이 없음)는 항상 유지. `false` — 그런 슬라이드도 유지. 변경 후 재인덱싱 필요 |
+| `PPTX_DROP_ENDING_SLIDE` | `true` | PPTX → MD 변환 시 **덱의 마지막 슬라이드에만** 적용 — 이미지 없이 내용 전체(제목+본문)를 공백·구두점 제거 + 소문자화로 정규화한 결과가 `끝`/`end`/`the end`/`감사합니다`/`thank you` 중 하나를 포함하고, 그 표시를 뺀 나머지 글자가 10자 이하이면 제거(`PptxToMarkdownConverter`). `true`(기본) — 짧은 서명 정도는 함께 있어도 제거되지만, 연락처처럼 10자를 넘는 내용이 있으면 유지. 마지막이 아닌 슬라이드의 '끝'/'END'/'감사합니다'는 영향 없음. `false` — 마지막 슬라이드도 유지. 변경 후 재인덱싱 필요 |
 
 > `PPTX_REMOVE_DUPLICATE_SLIDES`: 섹션마다 반복되는 동일 목차 슬라이드나 완전 동일한 백업 슬라이드가 검색 인덱스에 중복 청크로 남는 것을 막습니다. 목차형 판정(②)은 절대 개수(3개)와 비율(60%)을 모두 요구해 보수적이지만, 제목 여러 개를 나열하는 진짜 본문 슬라이드가 드물게 오탐될 수 있으니 그런 경우 `false`로 끄고 재인덱싱하세요. `DEBUG` 로그에 제거된 슬라이드 번호와 사유(중복/목차형)가 남습니다.
 > `PPTX_DROP_DIVIDER_SLIDES`: "PART 2"·"3장 개요"·"결제 시스템"처럼 내용 없는 섹션 표지 슬라이드가 검색에 아무 답도 주지 못한 채 인덱스 슬롯만 차지하는 것을 막습니다. 문장형 제목만 있는 "키 메시지" 슬라이드(예: "고객 만족을 최우선으로 합니다")는 실제 내용으로 보고 유지하지만, 판정은 휴리스틱이라 드물게 어긋날 수 있으니 구분 표지가 검색에 필요하거나 키 메시지가 사라지면 `false`로 끄고 재인덱싱하세요. 제거된 슬라이드는 `DEBUG` 로그에 사유(구분용 제목)와 함께 남습니다.
+> `PPTX_DROP_REDUNDANT_TITLE_SLIDES`: 저자가 챕터를 "예고 제목 슬라이드 + 같은 제목으로 본문을 채운 슬라이드" 2장으로 나눠 만드는 경우, 앞의 빈 예고 슬라이드가 실질적 내용 없이 인덱스 슬롯만 차지하는 것을 막습니다. `PPTX_DROP_DIVIDER_SLIDES`와 달리 제목의 생김새가 아니라 **다음 슬라이드와의 실제 텍스트 일치**를 보므로, 겹치는 짧은 제목이 우연히 다음 슬라이드에도 등장하면 드물게 오탐될 수 있습니다 — 그런 경우 `false`로 끄고 재인덱싱하세요. 제거된 슬라이드는 `DEBUG` 로그에 사유(예고 제목 슬라이드)와 함께 남습니다.
+> `PPTX_DROP_ENDING_SLIDE`: "끝"/"END"/"The End"/"감사합니다"/"Thank you"만 있거나 짧은 서명 정도만 덧붙은 마무리 슬라이드가 검색에 아무 내용도 주지 못한 채 인덱스 슬롯만 차지하는 것을 막습니다. 마지막 슬라이드에만 적용되므로 중간에 등장하는 정상적인 "끝"·"감사합니다" 소제목에는 영향이 없습니다. 이메일·전화번호 같은 연락처가 함께 있는 마무리 슬라이드는(나머지 글자가 10자 초과) 자동으로 유지됩니다. 제거된 슬라이드는 `DEBUG` 로그에 사유(종료 표시)와 함께 남습니다.
 > `PPTX_IMAGE_MERGE_ANNOTATED_PICTURES=false`는 화면 캡처 위의 강조 표시를 원본 사진과 분리해서 보관하고 싶을 때(예: 원본 사진을 다른 용도로 재사용) 사용합니다. 변경 후에는 기존 PPTX 문서를 재인덱싱해야 반영됩니다. (PPTX에서 실제로 Ctrl+G로 그룹핑된 사진+도형만 여전히 하나로 합쳐지는데, 이는 POI가 그룹을 통째로 그리는 자체 동작이라 옵션과 무관하게 항상 그렇게 동작합니다.)
 > `PPTX_IMAGE_RASTERIZE_SHAPES`: 기본값 `false`에서는 겹친 도형들이 무의미하게 한 이미지로 뭉치던 동작이 사라집니다 — 대신 저자가 의도적으로 묶은 그룹(Ctrl+G)·SmartArt, 표 위 강조 도형, 사진 위 주석만 이미지로 남습니다. 다이어그램을 여러 도형으로(그룹핑 없이) 그린 슬라이드를 하나의 이미지로 캡처하고 싶으면 `true`로 켜세요. 표는 이 옵션과 무관하게 항상 MD 파이프 표로도 들어갑니다(표 위 겹친 도형이 있으면 그 표+도형 합성 이미지가 **추가로** 생성). 변경 후 재인덱싱 필요.
 
@@ -371,7 +378,7 @@ app.embedding.max-concurrent-batches=4
 
 | 변수 | 기본값 | 권장 범위 | 설명 |
 |------|--------|----------|------|
-| `LLM_MAX_TOKENS` | `6000` | 1000 ~ 32000 | 단일 진실 소스(`app.llm.max-tokens`)로 통일되어, 이 값을 바꾸면 **아래 세 곳 모두**가 함께 움직입니다: (1) **블로킹 LLM 응답 토큰 상한** — 인덱싱·분류·키워드·Direct 블로킹 호출에 적용(스트리밍 채팅 답변은 의도적으로 미적용, SSE 타임아웃이 폭주 방지). (2) **대화 컨텍스트 문자 예산**(`MemoryService`, `×0.5`로 히스토리 예산 산출). (3) **MD 교정 섹션 크기**(`MarkdownCorrectionService`).<br>§6.18 이전에는 (1)이 코드에 `6000`으로 하드코딩돼 이 환경변수와 무관하게 동작했고, (2)·(3)은 별도의 죽은 프로퍼티(`spring.ai.openai.chat.options.max-tokens`, 기본 `8000`)를 읽어 (1)과 다른 값을 썼습니다 — 이제 세 곳 모두 `app.llm.max-tokens` 하나만 읽습니다 |
+| `LLM_MAX_TOKENS` | `6000` | 1000 ~ 32000 | 단일 진실 소스(`app.llm.max-tokens`)로 통일되어, 이 값을 바꾸면 **아래 세 곳 모두**가 함께 움직입니다: (1) **블로킹 LLM 응답 토큰 상한** — 인덱싱·분류·키워드·Direct 블로킹 호출에 적용(스트리밍 채팅 답변은 의도적으로 미적용, SSE 타임아웃이 폭주 방지). (2) **대화 컨텍스트 문자 예산**(`MemoryService`, `×0.5`로 히스토리 예산 산출). (3) **MD 교정 섹션 크기**(`MarkdownCorrectionService`).<br>§6.18 이전에는 (1)이 코드에 `6000`으로 하드코딩돼 이 환경변수와 무관하게 동작했고, (2)·(3)은 별도의 죽은 프로퍼티(`spring.ai.openai.chat.options.max-tokens`, 기본 `8000`)를 읽어 (1)과 다른 값을 썼습니다 — 이제 세 곳 모두 `app.llm.max-tokens` 하나만 읽습니다.<br>**응답 모드(S/M/L)와의 관계**: (1)의 실제 상한은 이 값 그대로가 아니라 `ResponseMode`별 비율(S 15%/M 40%/L 70%)과 고정 글자수 하한(S 2,000/M 5,000/L 10,000자) 중 **큰 값**입니다 — 그래서 이 값을 기본 `6000`~`12000` 수준으로 두는 한 S/M/L 모두 사실상 고정 하한이 실제 분량을 결정하고, 이 환경변수를 훨씬 크게(예: 20,000 이상) 올려야 비율 항이 하한을 넘어서기 시작합니다. 한글은 1토큰≈1글자라 이 숫자는 별도 환산 없이 "약 N자" 프롬프트 지시문에도 그대로 쓰입니다 — 상세는 CLAUDE.md와 [§6.7 큐레이션 Q&A](#67-큐레이션-qa-좋아요-기반-지식-승격-1010)의 L모드 임베딩 스킵 항목 참고 |
 | `LLM_TEMPERATURE` | `0.0` | 0.0 ~ 2.0 | 일반/RAG 및 Direct를 제외한 모든 LLM 호출의 무작위성 제어(`app.llm.temperature`). `0.0`은 결정적 답변, 높을수록 다양·창의적.<br>**§6.18 이전에는 코드에 `0.0`으로 하드코딩돼 이 값이 무시되는 죽은 설정이었으나, 이제 실제로 적용됩니다** — 과거에 이 값을 설정해 둔 운영자는 이번부터 처음으로 효과가 나타납니다(기본 `0.0`이면 체감 변화 없음). 프로바이더 빈 생성 시점에 고정되므로 변경하려면 재기동 필요 |
 | `DIRECT_LLM_TEMPERATURE` | `0.1` | 0.0 ~ 0.2 | **Direct(meta) 응답 전용** temperature(`app.llm.direct-temperature`) — 인사·잡담 등 RAG를 안 쓰는 직접 응답은 약간의 다양성이 자연스러워 일반 temperature와 분리(§6.18). `[0.0, 0.2]`로 clamp. **핫 수정 가능** — `/settings`에서 재기동 없이 다음 Direct 호출부터 반영(`DirectAnswerService`가 매 호출 재조회) |
 
@@ -444,8 +451,12 @@ LLM_ROUTING_MODE=QUALITY_FIRST
 #### 소제목 숫자 생성 (`addHeadingNumbers`)
 
 프로퍼티가 아니라 문서 업로드 화면의 "소제목 숫자 생성" 체크박스로 제어되는 요청 단위 옵션입니다. 켜면 LLM
-섹션 교정이 모두 끝난 뒤 2차 패스로 H2~H6 헤딩에 계층적 번호(`## 1.1 제목`처럼)를 매기고, 라벨 없는 코드
-블록의 언어 태그를 재추론합니다(`MarkdownCorrectionService.addHierarchicalHeadingNumbers()`).
+섹션 교정이 모두 끝난 뒤 H2~H6 헤딩에 계층적 번호(`## 1.1 제목`처럼)를 매깁니다
+(`MarkdownCorrectionService.addHierarchicalHeadingNumbers()`).
+
+> **코드 블록 언어 태그는 이 옵션과 무관합니다**: 라벨 없는 코드 블록의 언어 추론은 체크박스를 꺼도, PPTX
+> 에서도 항상 실행됩니다. 예전에는 이 옵션 안쪽에 묶여 있어 체크박스를 끄면 언어 태그가 붙지 않았으나,
+> 코드의 언어는 소제목 번호와 무관하므로 분리했습니다.
 
 > **PPTX는 항상 무시됩니다**: 체크박스 상태와 무관하게 PPTX 업로드는 이 옵션이 절대 적용되지 않습니다.
 > PPTX의 `##`/`###` 헤딩은 슬라이드 제목·부제목 라벨(최대 2단계, 슬라이드마다 계산)일 뿐 문서 목차 같은
@@ -1195,10 +1206,8 @@ Web UI 채팅 화면 드롭다운에서 대화별로 변경 가능.
 | `COST_FIRST` | LOCAL → NORMAL → PREMIUM 순 시도 | **기본값**. 비용 절감 우선 |
 | `QUALITY_FIRST` | PREMIUM → NORMAL → LOCAL 순 시도 | 최고 품질 응답 필요 시 |
 | `PROGRESSIVE` | COST_FIRST로 먼저 답변 → 품질 점수 미달 시 PREMIUM으로 재실행 | 품질·비용 균형 |
-| `DUAL` | LOCAL + 외부를 **동시 병렬** 실행 → 두 결과를 탭으로 비교 | 로컬 vs 외부 품질 비교 |
 | `LOCAL_ONLY` | LOCAL만 사용, 외부 API 미호출 | 오프라인 / 보안 환경 |
 
-> **DUAL 전제 조건**: LOCAL role 프로바이더 등록 필수. 미등록 시 즉시 오류.  
 > **PROGRESSIVE 임계값**: `app.llm.progressive-threshold=0.6` (기본). 현재 sufficient=true(1.0) / false(0.0) 이진값.
 
 ---
@@ -1553,7 +1562,7 @@ app.llm.providers[8].concurrency=4
 3. 슬롯이 나면 즉시 LLM 호출 → 완료 후 슬롯 반환.
 4. 대기 상한을 넘기면 HTTP 429 + `Retry-After` 헤더로 즉시 응답(`RAG-LLM-002`) — Circuit Breaker 차단이나 다른 프로바이더로의 자동 전환은 하지 않습니다(§5.5 참고). SSE 스트리밍 응답에서는 "현재 요청이 몰려 있습니다. 잠시 후 다시 시도해 주세요." 메시지로 우아하게 종료됩니다.
 
-**적용 범위**: 분류(Classifier)·답변 생성(블로킹+스트리밍+PROGRESSIVE 업그레이드+충분도 평가)·DUAL(양쪽 프로바이더)·DirectAnswer·리랭킹(opt-in)·MultiQuery 확장까지 채팅/질의 경로 전체에 적용됩니다. **인덱싱/백그라운드 LLM 호출(키워드 추출, MD 포맷 교정, Vision 설명, TXT 구조화, 대화 요약 사전계산, 스레드 제목 생성)은 이 게이트의 대상이 아닙니다** — 이미 `INDEXING_MAX_LLM`으로 자체 동시성을 제어하고 있고, 마감시한 있는 동기 HTTP 호출자가 없기 때문입니다.
+**적용 범위**: 분류(Classifier)·답변 생성(블로킹+스트리밍+PROGRESSIVE 업그레이드+충분도 평가)·DirectAnswer·리랭킹(opt-in)·MultiQuery 확장까지 채팅/질의 경로 전체에 적용됩니다. **인덱싱/백그라운드 LLM 호출(키워드 추출, MD 포맷 교정, Vision 설명, TXT 구조화, 대화 요약 사전계산, 스레드 제목 생성)은 이 게이트의 대상이 아닙니다** — 이미 `INDEXING_MAX_LLM`으로 자체 동시성을 제어하고 있고, 마감시한 있는 동기 HTTP 호출자가 없기 때문입니다.
 
 **튜닝 가이드**:
 - **기본 원칙**: `LLM_DEFAULT_PROVIDER_CONCURRENCY`(또는 프로바이더별 `concurrency`)는 그 LLM 서버의 실제 `--parallel`(또는 동급) 설정값과 일치시키세요. 너무 크게 잡으면 앱이 서버가 처리 못 할 요청까지 통과시켜 결국 서버 쪽에서 429/타임아웃이 발생하고, 너무 작게 잡으면 서버 여유 용량을 못 씁니다.
@@ -1651,7 +1660,6 @@ curl -X POST http://localhost:8080/api/v1/chat \
 - **Contextual Retrieval + 임베딩 입력 정규화** — 인덱싱 시 청크별로 `{파일명} > {섹션 제목}` 구조적 맥락 + LLM 생성 1~2문장을 임베딩·FTS 입력 앞에 결합(`KeywordExtractor`가 키워드 추출과 한 번에 처리, 사용량은 `context:` 라벨). 마크다운 장식(구분선·강조 마커)은 임베딩/FTS/답변 프롬프트 입력에서만 제거되고 저장·표시 원문은 그대로 유지된다. 설정 프로퍼티 없음(항상 적용) — 기존 문서는 재인덱싱해야 새 맥락/정규화가 반영됨
 - **한국어 FTS 트라이그램 토크나이저** — `chunk_fts`가 `unicode61`(공백 구분 단어) 대신 `trigram`(3자 겹침 윈도우) 토크나이저를 사용해 활용형 종결어미가 붙은 한국어 단어(예: 질의 "인덱싱"이 본문 "인덱싱됩니다"에 매칭)와 코드/식별자 부분 문자열(예: "ERR45"가 "ERR4521"을 찾음)을 더 잘 찾는다. **자동 마이그레이션** — 기존 `unicode61` 테이블은 다음 재기동 시 자동으로 trigram으로 재구축되며(`doc_tags`/`content`/`keywords` 손실 없이 복사) 별도 재인덱싱·재동기화가 필요 없다. 트레이드오프: 2글자 이하 검색어(예: "오류", "문서")는 trigram 최소 매칭 단위(3자) 미만이라 진짜 BM25 순위 점수는 얻지 못한다 — §10.7.3에서 `content`/`keywords` `LIKE` 스캔으로 존재 여부 기반 신호(순위 없음, MATCH 결과보다 낮은 우선순위로 배치)를 보충해 완전히 탈락하지는 않는다(하이브리드 벡터 축은 애초에 무관하게 동작) — `SEARCH_HYBRID_ENABLED=true`일 때만 체감. 설정 프로퍼티 없음(항상 적용)
 - **병렬 인덱싱** — `RagService.syncDirectory()`에서 파일별·LLM 호출별 Semaphore 기반 병렬 처리
-- **DUAL 모드** — LOCAL + 외부를 Virtual Thread로 병렬 실행
 
 CPU/메모리 제약이 있는 환경에서는 `INDEXING_MAX_FILES`와 `INDEXING_MAX_LLM`을 줄이세요.
 
@@ -1662,7 +1670,7 @@ CPU/메모리 제약이 있는 환경에서는 `INDEXING_MAX_FILES`와 `INDEXING
 `/settings`는 현재 **유효** LLM/RAG 설정을 한 화면에서 보여주고, 일부 검색 튜닝 값은 **재기동 없이** 조정할 수 있게 합니다. `application.properties`/환경변수를 고치고 재기동하지 않아도 검색 동작을 실시간으로 미세조정할 수 있습니다.
 
 **조회 항목 (그룹별)**:
-- **LLM 라우팅**: 등록 프로바이더·역할(role)·우선순위·모델·API 키 설정 여부·서킷브레이커 상태·**활성화 여부**(아래 참조), 기본 라우팅 모드, 일반 temperature·max-tokens(조회 전용, 실제 config 값 표시).
+- **LLM 라우팅**: 등록 프로바이더·역할(role)·우선순위·모델·API 키 설정 여부·서킷브레이커 상태·**활성화 여부**(아래 참조), 기본 라우팅 모드, 일반 temperature·max-tokens(조회 전용, 실제 config 값 표시). **`app.llm.default-routing-mode`(`LLM_ROUTING_MODE`)가 `LOCAL_ONLY`인 배포에서는 이 표에 `LOCAL` 역할 프로바이더만 표시됩니다** — 이 모드에서는 라우팅이 NORMAL/PREMIUM을 절대 선택하지 않으므로, `application.properties`에 여전히 등록돼 있더라도(예: 나중에 모드를 바꿀 때를 대비해 남겨둔 설정) 표에서는 숨겨져 혼동을 줄입니다. 표 위에 이 사실을 알리는 안내 문구가 함께 표시됩니다. 숨겨진 프로바이더는 `POST /admin/settings/provider/toggle`로도 조작할 수 없습니다(알 수 없는 프로바이더로 거부).
 - **임베딩 / 벡터 스토어**: 임베딩 모델·차원, 벡터 스토어 백엔드(chroma/sqlite-vec).
 - **검색 튜닝 / 인덱싱 / 캐시**: 아래 핫 수정 항목 + 조회 전용 항목.
 
@@ -1760,6 +1768,7 @@ mvn test -Dtest=SearchQualityEvaluationTest -Dsearch-eval.enabled=true
 
 **동작 원리**:
 - 좋아요를 누르면 `curated_qa` 테이블(`memory.db`)에 질문·답변 스냅샷이 즉시 저장되고, 백그라운드에서 **3초 디바운스** 후 임베딩됩니다 — 3초 안에 좋아요를 취소하면 임베딩 API 호출 자체가 생략됩니다(실수 클릭 비용 절감).
+- **응답 모드가 `L`(원문 최대)이었던 turn은 좋아요를 눌러도 임베딩 자체가 시작되지 않습니다** — L모드 답변은 검색된 원문 표현을 최대한 그대로 보존하므로 이미 인덱싱된 원본 문서 내용과 사실상 동일하며, 다시 임베딩하는 것은 불필요한 API 호출입니다. `curated_qa` 행은 다른 모드와 동일하게 생성되어 좋아요 취소·본인 편집·관리자 목록/강제삭제가 정상 동작하고, `embed_status`도 "실패"가 아닌 기본값(`ok`)으로 남습니다 — 시도 자체를 하지 않았기 때문입니다. 이 판정은 `conversation_turns.response_mode`(turn 생성 시 저장된 값)를 기준으로 합니다. S/M/L 응답 모드가 `LLM_MAX_TOKENS`를 어떻게 활용하는지는 [§3.2 `LLM_MAX_TOKENS`](#32-환경변수-전체-목록)를 참고하세요.
 - 임베딩은 예약된 벡터 스토어 버전 네임스페이스 `"curated"`에 저장됩니다 — 실제 문서 버전과 완전히 분리되어 있어 **문서를 재인덱싱해도 큐레이션 지식은 사라지지 않습니다.**
 - 검색 시 이 축은 기존 벡터/키워드(BM25) 축과 함께 가중 RRF로 융합됩니다(§6.5 "큐레이션 Q&A 검색 반영/가중치" 참고) — 큐레이션 답변이 검색되면 **정답을 그대로 반환하는 것이 아니라 LLM이 참고할 근거로 주입**되므로, 현재 문서 내용과 다르면 LLM이 최신 문서를 우선하도록 설계되어 있습니다.
 - 답변 텍스트 끝에 LLM이 자동으로 붙이는 "## 참고"(출처 인용) 섹션은 저장·표시에는 그대로 남지만, 임베딩(검색 매칭)에는 포함되지 않습니다 — 파일명·페이지 번호가 질문 의도와 무관한 노이즈이기 때문입니다.
@@ -1793,11 +1802,14 @@ mvn test -Dtest=SearchQualityEvaluationTest -Dsearch-eval.enabled=true
 |------|------|
 | Vector Store 상태 카드 | 백엔드 종류·정상 여부·청크 수. chroma=컬렉션 수 / sqlite-vec=문서 수·`vec_version`·임베딩 차원 |
 | 컬렉션·버전 목록 | chroma=컬렉션별 / sqlite-vec=버전별 청크 수 표시 (클릭 시 청크 조회) |
-| 청크 조회 | 컬렉션(또는 버전)·문서(docId)별 청크 페이지네이션 (50건 단위) — ID·텍스트 미리보기·크기·파일명·페이지/슬라이드·**챕터**·키워드·작업 컬럼. 챕터 컬럼은 `MetaKey.CHAPTER_NO`(H2~H6 헤딩 기반 계층 번호)를 보여주며 "0"(실제 챕터 없음)이면 빈 칸으로 표시 |
+| 청크 조회 | 컬렉션(또는 버전)·문서(docId)별 청크 페이지네이션 — 페이지당 20/50/100건 선택 가능(기본 20건, `AdminController.chunks()`의 `limit` 기본값). ID·텍스트 미리보기·크기·파일명·페이지/슬라이드·**챕터**·키워드·작업 컬럼. 챕터 컬럼은 `MetaKey.CHAPTER_NO`(H2~H6 헤딩 기반 계층 번호)를 보여주며 "0"(실제 챕터 없음)이면 빈 칸으로 표시 |
 | 청크 편집 | 텍스트·메타데이터 수정 (원본 임베딩 유지 — 벡터 재계산 안 함) |
+| 청크 재인덱싱 | 편집 패널의 **이 청크만 재인덱싱** 버튼(`AdminService.reindexChunk()`) — 저장된 텍스트 기준으로 그 청크만 재임베딩 + FTS 재색인(id 보존, upsert). "키워드 재생성" 체크 시 `KeywordExtractor`를 그 청크에만 다시 실행(LLM 1회) |
 | 청크 삭제 | 개별 청크 즉시 제거. sqlite-vec는 `vec_document_chunks`+`vec_embeddings` 두 테이블 동기 삭제 |
 | 문서 레지스트리 | 인덱싱된 전체 문서 목록 + 문서별 청크 바로 조회 (백엔드 무관, SQLite `doc_registry` 기반) |
 | MD 재인덱싱 (↺ 버튼) | `{docId}_corrected.md`(없으면 `{docId}.md`)를 읽어 청크 재생성·재인덱싱 — DOCX·TXT·PPTX·PDF(스캔 아님) 지원, 원본 재업로드 불필요 (스캔 PDF는 MD 파일이 없어 미지원) |
+
+> **청크 정렬**: 두 백엔드 모두 `doc_id` → `chunk_index`(인덱싱 시 각 청크에 부여되는 0-based 문서 내 위치, `MetaKey.CHUNK_INDEX`) 순으로 정렬됩니다 — 청크 id가 아니라 문서 원본 내용 순서 그대로 표시됩니다. sqlite-vec는 `ORDER BY doc_id, CAST(json_extract(metadata, '$.chunk_index') AS INTEGER), spring_doc_id`로 DB에서 직접 정렬합니다. Chroma의 `get()` API는 서버 측 ORDER BY를 지원하지 않으므로, 매치되는 청크 전체를 최대 `AdminService.CHUNK_FETCH_CAP`(10,000건)까지 가져온 뒤 애플리케이션(Java)에서 정렬·페이지네이션합니다 — 컬렉션(또는 docId 필터 결과)이 이 상한을 넘으면 뒤쪽 청크는 조회되지 않습니다.
 
 ### 7.2 MD 재인덱싱 흐름
 
@@ -1809,9 +1821,19 @@ mvn test -Dtest=SearchQualityEvaluationTest -Dsearch-eval.enabled=true
 
 > **API 직접 호출**: `POST /admin/documents/{docId}/reindex`
 
+### 7.2-bis 청크 단위 재인덱싱 (`POST /admin/chunks/{chunkId}/reindex`)
+
+문서 전체 재인덱싱 없이 **청크 하나만** 재임베딩·FTS 재색인합니다. Body: `{"regenerateKeywords": true|false}`(생략 시 `false`).
+
+- **동작**: 벡터 스토어 id를 그대로 유지한 채 upsert합니다(Chroma: `upsertEmbeddings`가 같은 id를 덮어씀 / sqlite-vec: `add()`가 같은 id를 delete-then-insert) — 새 청크가 생기는 게 아니라 기존 청크가 그 자리에서 갱신됩니다.
+- **`regenerateKeywords=false`(기본)**: 현재 저장된 `excerpt_keywords` 등 메타데이터를 그대로 두고, 현재 텍스트로만 재임베딩 + FTS 재색인합니다. LLM 호출 없음, 즉시 처리. 단, `chunk_context`(LLM이 생성한 1~2문장 맥락)는 §10.1 설계상 애초에 영속 저장되지 않으므로 "그대로 유지"할 방법이 없고, 이 경로에서는 구조적 맥락(`"{파일명} > {헤딩}"`)만으로 임베딩/FTS 입력이 구성됩니다.
+- **`regenerateKeywords=true`**: 이 청크에 한해 `KeywordExtractor`를 다시 실행해(LLM 1회, TF 타임아웃 폴백 동일 적용) `excerpt_keywords`/`chunk_context`를 재생성한 뒤 그 결과로 재임베딩·재색인합니다. 문서 전체 ↺ 재인덱싱과 동일한 품질을 청크 단위로 얻을 수 있습니다.
+- **동기 처리**: 청크 1개 단위라 문서 재인덱싱(SSE 진행률 추적)과 달리 응답이 올 때까지 대기합니다.
+- 존재하지 않는 청크이거나 임베딩 API 호출이 실패하면 404를 반환하고, 이 경우 FTS 재색인은 시도하지 않습니다(부분 반영 방지).
+
 ### 7.3 주의사항
 
-- **임베딩 미갱신 (청크 편집)**: 청크 텍스트를 편집 패널에서 수정해도 벡터 임베딩은 재계산되지 않습니다. 임베딩까지 갱신하려면 MD 파일 수정 후 ↺ 재인덱싱을 사용하세요.
+- **임베딩 미갱신 (청크 편집만)**: 청크 텍스트를 편집 패널의 "저장" 버튼으로만 수정하면 벡터 임베딩과 FTS 키워드 인덱스가 재계산되지 않습니다. 검색에도 반영하려면 위 §7.2-bis "이 청크만 재인덱싱" 버튼을 사용하거나, 문서 전체를 갱신하려면 MD 파일 수정 후 ↺ 재인덱싱을 사용하세요.
 - **MD 재인덱싱 대상**: DOCX·TXT·PPTX·PDF(스캔 아님) 업로드 시 생성된 `_corrected.md` 파일이 없으면 `{docId}.md` 원본으로 fallback됩니다. 스캔 PDF처럼 MD 파일 자체가 없는 문서는 재인덱싱 불가 (에러 메시지 표시).
 - **소제목 번호 재검증**: 재인덱싱 시 저장된 MD에 이미 번호 매겨진 헤딩이 있으면 현재 헤딩 구조 기준으로 다시 계산해 파일에도 반영합니다(PPTX 제외 — [§3.3 소제목 숫자 생성](#33-applicationproperties-전용-설정) 참고). 번호가 원래 없던 문서에는 새로 번호를 붙이지 않습니다.
 - **마크다운 후처리 재적용**: 재인덱싱 시 결정적(비-LLM) 정리도 다시 적용됩니다 — `[DOCUMENT]` 마커·내용 없는 `-` 줄 제거, 코드 블록·표 앞뒤 빈 줄 보장, 연속 빈 줄을 1개로 축소(모든 형식 대상, PPTX 포함). 코드펜스 언어 보정(`fixClosingFences`/`normalizeCodeBlocks`)은 재인덱싱에 **포함되지 않습니다** — MD를 직접 편집한 뒤 재인덱싱하면 코드 블록 안의 의도된 빈 줄이 지워지거나 펜스 태그가 잘못 벗겨질 위험이 있어, 매번 감수하지 않고 필요할 때(재업로드)만 적용되도록 남겨둔 설계입니다. 상세는 [PIPELINE.md §6.4](PIPELINE.md#64-문서-타입별-처리-상세) 참고.
@@ -1836,6 +1858,8 @@ mvn test -Dtest=SearchQualityEvaluationTest -Dsearch-eval.enabled=true
 ### 7.5 큐레이션 Q&A 관리 (§10.10)
 
 `/admin` 페이지 하단에 **큐레이션 Q&A** 카드가 있습니다 — 좋아요로 승격된 질문·답변 목록(질문·답변 미리보기·등록일)을 최신순으로 보여줍니다(현재 상한 50건, 페이지네이션 없음).
+
+카드는 `<details>` 요소로 구현되어 기본적으로 접혀 있으며, 펼칠 때만(`GET /admin/curated`, HTMX `toggle[this.open] once` 트리거) 목록을 서버에서 조회합니다 — `AdminController.adminPage()`는 더 이상 `curatedQaService.listActive()`를 즉시 호출하지 않으므로, `/admin` 페이지를 열기만 해서는 이 DB 조회가 발생하지 않습니다. 카드를 한 번 펼치면 그 세션에서는 다시 접었다 펴도 재조회되지 않습니다(새로고침하면 다시 접힌 상태로 초기화).
 
 | 기능 | 방법 |
 |------|------|
@@ -1869,6 +1893,7 @@ curl http://localhost:8001/api/v1/heartbeat
 | Chroma 연결 실패 | Chroma 컨테이너 실행 확인 (`docker ps` 또는 `container ls`) |
 | 포트 충돌 | `lsof -i :8080`으로 점유 프로세스 확인 후 종료 |
 | JDK 버전 | `java -version` → 21 이상인지 확인 |
+| `OpenAI API key must be set` (`openAiApi`/`OpenAiAudioSpeechModel` 등 빈 생성 실패) | 앱은 채팅·임베딩·`OpenAiApi`를 전부 직접 만들고(`LlmConfig`/`EmbeddingBeanConfig`) Spring AI의 OpenAI 자동설정 빈은 **하나도 쓰지 않는다**. 자동설정을 켜두면 각 autoconfig가 기동 시 `openAiApi` 빈을 무조건 만들고 `spring.ai.openai.api-key`에 `Assert.hasText`를 걸어, `LOCAL_LLM_KEY`가 비어 있으면 죽는다(채팅·임베딩 자동설정도 마찬가지 — 모델 빈은 `@ConditionalOnMissingBean`으로 스킵되지만 `openAiApi` 빈은 아님). `application.properties`의 `spring.autoconfigure.exclude`에 **OpenAI 모델 자동설정 6종**(`OpenAiChat`/`OpenAiEmbedding`/`OpenAiAudioSpeech`/`OpenAiAudioTranscription`/`OpenAiImage`/`OpenAiModeration`AutoConfiguration)이 모두 제외돼 있어야 한다. 이 줄이 지워졌는지 확인 |
 
 ---
 

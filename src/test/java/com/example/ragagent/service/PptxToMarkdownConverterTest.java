@@ -574,6 +574,261 @@ class PptxToMarkdownConverterTest {
         assertThat(md).contains("## 3장 개요").contains("[페이지: 1]");
     }
 
+    // ── 예고 제목 슬라이드 제거 (app.pptx-drop-redundant-title-slides, 기본 on) ────────────
+    private PptxToMarkdownConverter redundantTitleRemovingConverter() {
+        AppProperties p = mockAppProperties();
+        when(p.pptxDropRedundantTitleSlidesSafe()).thenReturn(true);
+        return new PptxToMarkdownConverter(new PptxImageExtractor(p), p);
+    }
+
+    @Test
+    @DisplayName("예고 제목 제거 — 제목만 있는 슬라이드의 제목이 다음 슬라이드 헤딩과 같으면 제거된다")
+    void redundantTitlePreviewSlideIsDropped() throws IOException {
+        PptxToMarkdownConverter conv = redundantTitleRemovingConverter();
+        writePptx(pptx -> {
+            addTitleOnlySlide(pptx, "결제 시스템");                   // 예고 제목만
+            addContentSlide(pptx, "결제 시스템", "실제 내용입니다."); // 다음 슬라이드가 같은 제목 + 본문
+        });
+
+        String md = conv.convert(pptxPath, "doc1", imagesDir);
+
+        assertThat(md).doesNotContain("[페이지: 1]");
+        assertThat(md).contains("[페이지: 2]").contains("실제 내용입니다");
+        assertThat(count(md, "## 결제 시스템")).isEqualTo(1); // 예고 슬라이드 쪽 헤딩은 제거됨
+    }
+
+    @Test
+    @DisplayName("예고 제목 제거 — 다음 슬라이드 본문에 제목이 포함되어 있어도 제거된다")
+    void redundantTitlePreviewSlideDroppedWhenContainedInNextBody() throws IOException {
+        PptxToMarkdownConverter conv = redundantTitleRemovingConverter();
+        writePptx(pptx -> {
+            addTitleOnlySlide(pptx, "결제 시스템");
+            addContentSlide(pptx, "다음 장", "결제 시스템 소개 및 상세 설명입니다.");
+        });
+
+        String md = conv.convert(pptxPath, "doc1", imagesDir);
+
+        assertThat(md).doesNotContain("[페이지: 1]");
+        assertThat(md).contains("[페이지: 2]").contains("## 다음 장");
+    }
+
+    @Test
+    @DisplayName("예고 제목 제거 — 마지막 슬라이드(다음이 없음)는 대상이 아니다")
+    void redundantTitlePreviewNotAppliedToLastSlide() throws IOException {
+        PptxToMarkdownConverter conv = redundantTitleRemovingConverter();
+        writePptx(pptx -> addTitleOnlySlide(pptx, "결제 시스템"));
+
+        String md = conv.convert(pptxPath, "doc1", imagesDir);
+
+        assertThat(md).contains("[페이지: 1]").contains("## 결제 시스템");
+    }
+
+    @Test
+    @DisplayName("예고 제목 제거 — 본문이 있으면 다음 슬라이드와 제목이 같아도 제거하지 않는다")
+    void redundantTitlePreviewNotAppliedWhenBodyPresent() throws IOException {
+        PptxToMarkdownConverter conv = redundantTitleRemovingConverter();
+        writePptx(pptx -> {
+            addContentSlide(pptx, "결제 시스템", "이미 내용이 있는 슬라이드입니다.");
+            addContentSlide(pptx, "결제 시스템", "실제 내용입니다.");
+        });
+
+        String md = conv.convert(pptxPath, "doc1", imagesDir);
+
+        assertThat(md).contains("[페이지: 1]").contains("[페이지: 2]");
+        assertThat(count(md, "## 결제 시스템")).isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("예고 제목 제거 — 이미지가 있으면 다음 슬라이드와 제목이 같아도 제거하지 않는다")
+    void redundantTitlePreviewNotAppliedWhenImagePresent() throws IOException {
+        PptxToMarkdownConverter conv = redundantTitleRemovingConverter();
+        writePptx(pptx -> {
+            byte[] fakePng = "fake-png-bytes".getBytes();
+            XSLFPictureData pd = pptx.addPicture(fakePng, PictureData.PictureType.PNG);
+            XSLFSlide slide = pptx.createSlide();
+            addTitle(slide, "결제 시스템");
+            slide.createPicture(pd);
+
+            addContentSlide(pptx, "결제 시스템", "실제 내용입니다.");
+        });
+
+        String md = conv.convert(pptxPath, "doc1", imagesDir);
+
+        assertThat(md).contains("[페이지: 1]").contains("[페이지: 2]");
+    }
+
+    @Test
+    @DisplayName("예고 제목 제거 OFF — 플래그가 꺼져 있으면 다음 슬라이드와 제목이 같아도 유지된다")
+    void redundantTitlePreviewKeptWhenFlagDisabled() throws IOException {
+        // 공유 converter는 이 플래그 off(기본 미스텁) — 별도 스텁 없이 그대로 사용
+        writePptx(pptx -> {
+            addTitleOnlySlide(pptx, "결제 시스템");
+            addContentSlide(pptx, "결제 시스템", "실제 내용입니다.");
+        });
+
+        String md = convert();
+
+        assertThat(md).contains("[페이지: 1]").contains("[페이지: 2]");
+    }
+
+    // ── 마지막 종료 슬라이드 제거 (app.pptx-drop-ending-slide, 기본 on) ────────────────────
+    private PptxToMarkdownConverter endingSlideRemovingConverter() {
+        AppProperties p = mockAppProperties();
+        when(p.pptxDropEndingSlideSafe()).thenReturn(true);
+        return new PptxToMarkdownConverter(new PptxImageExtractor(p), p);
+    }
+
+    @Test
+    @DisplayName("종료 슬라이드 제거 — 마지막 슬라이드가 '끝'만 있으면 제거된다")
+    void endingSlideWithKoreanMarkerIsDropped() throws IOException {
+        PptxToMarkdownConverter conv = endingSlideRemovingConverter();
+        writePptx(pptx -> {
+            addContentSlide(pptx, "본문 슬라이드", "실제 내용입니다.");
+            addTitleOnlySlide(pptx, "끝");
+        });
+
+        String md = conv.convert(pptxPath, "doc1", imagesDir);
+
+        assertThat(md).contains("[페이지: 1]").contains("## 본문 슬라이드");
+        assertThat(md).doesNotContain("[페이지: 2]").doesNotContain("## 끝");
+    }
+
+    @Test
+    @DisplayName("종료 슬라이드 제거 — 대소문자·구두점과 무관하게 'The End.'도 제거된다")
+    void endingSlideWithEnglishVariantIsDropped() throws IOException {
+        PptxToMarkdownConverter conv = endingSlideRemovingConverter();
+        writePptx(pptx -> {
+            addContentSlide(pptx, "본문", "내용");
+            addTitleOnlySlide(pptx, "The End.");
+        });
+
+        String md = conv.convert(pptxPath, "doc1", imagesDir);
+
+        assertThat(md).doesNotContain("[페이지: 2]");
+    }
+
+    @Test
+    @DisplayName("종료 슬라이드 제거 — 마지막 슬라이드에 종료 표시 외 다른 내용이 있으면 유지된다")
+    void endingSlideWithExtraContentIsKept() throws IOException {
+        PptxToMarkdownConverter conv = endingSlideRemovingConverter();
+        writePptx(pptx -> addContentSlide(pptx, "끝", "감사합니다. 문의: contact@example.com"));
+
+        String md = conv.convert(pptxPath, "doc1", imagesDir);
+
+        assertThat(md).contains("[페이지: 1]").contains("## 끝");
+    }
+
+    @Test
+    @DisplayName("종료 슬라이드 제거 — '감사합니다'만 있어도 제거된다")
+    void endingSlideWithThanksMarkerIsDropped() throws IOException {
+        PptxToMarkdownConverter conv = endingSlideRemovingConverter();
+        writePptx(pptx -> {
+            addContentSlide(pptx, "본문", "내용");
+            addTitleOnlySlide(pptx, "감사합니다");
+        });
+
+        String md = conv.convert(pptxPath, "doc1", imagesDir);
+
+        assertThat(md).doesNotContain("[페이지: 2]");
+    }
+
+    @Test
+    @DisplayName("종료 슬라이드 제거 — 'Thank you'만 있어도 제거된다")
+    void endingSlideWithEnglishThanksMarkerIsDropped() throws IOException {
+        PptxToMarkdownConverter conv = endingSlideRemovingConverter();
+        writePptx(pptx -> {
+            addContentSlide(pptx, "본문", "내용");
+            addTitleOnlySlide(pptx, "Thank you");
+        });
+
+        String md = conv.convert(pptxPath, "doc1", imagesDir);
+
+        assertThat(md).doesNotContain("[페이지: 2]");
+    }
+
+    @Test
+    @DisplayName("종료 슬라이드 제거 — 종료 표시 외 나머지 글자가 10자 이내면(짧은 서명 등) 제거된다")
+    void endingSlideWithShortExtraContentIsDropped() throws IOException {
+        PptxToMarkdownConverter conv = endingSlideRemovingConverter();
+        writePptx(pptx -> {
+            addContentSlide(pptx, "본문", "내용");
+            addTitleOnlySlide(pptx, "감사합니다 여러분"); // "감사합니다" 제외 나머지 "여러분" 3자
+        });
+
+        String md = conv.convert(pptxPath, "doc1", imagesDir);
+
+        assertThat(md).doesNotContain("[페이지: 2]");
+    }
+
+    @Test
+    @DisplayName("종료 슬라이드 제거 — 경계값: 나머지 글자가 정확히 10자면 제거된다")
+    void endingSlideWithExactlyTenExtraCharsIsDropped() throws IOException {
+        PptxToMarkdownConverter conv = endingSlideRemovingConverter();
+        writePptx(pptx -> addContentSlide(pptx, "END", "abcdefghij")); // "end" 제외 나머지 10자
+
+        String md = conv.convert(pptxPath, "doc1", imagesDir);
+
+        assertThat(md).doesNotContain("[페이지: 1]");
+    }
+
+    @Test
+    @DisplayName("종료 슬라이드 제거 — 경계값: 나머지 글자가 11자면 유지된다")
+    void endingSlideWithElevenExtraCharsIsKept() throws IOException {
+        PptxToMarkdownConverter conv = endingSlideRemovingConverter();
+        writePptx(pptx -> addContentSlide(pptx, "END", "abcdefghijk")); // "end" 제외 나머지 11자
+
+        String md = conv.convert(pptxPath, "doc1", imagesDir);
+
+        assertThat(md).contains("[페이지: 1]").contains("## END");
+    }
+
+    @Test
+    @DisplayName("종료 슬라이드 제거 — 마지막이 아닌 슬라이드의 '끝'은 제거되지 않는다")
+    void endingMarkerNotAppliedToNonLastSlide() throws IOException {
+        PptxToMarkdownConverter conv = endingSlideRemovingConverter();
+        writePptx(pptx -> {
+            addTitleOnlySlide(pptx, "끝");
+            addContentSlide(pptx, "실제 마지막", "내용입니다.");
+        });
+
+        String md = conv.convert(pptxPath, "doc1", imagesDir);
+
+        assertThat(md).contains("[페이지: 1]").contains("## 끝");
+        assertThat(md).contains("[페이지: 2]").contains("## 실제 마지막");
+    }
+
+    @Test
+    @DisplayName("종료 슬라이드 제거 — 이미지가 있으면 제거하지 않는다")
+    void endingSlideWithImageIsKept() throws IOException {
+        PptxToMarkdownConverter conv = endingSlideRemovingConverter();
+        writePptx(pptx -> {
+            addContentSlide(pptx, "본문", "내용");
+            byte[] fakePng = "fake-png-bytes".getBytes();
+            XSLFPictureData pd = pptx.addPicture(fakePng, PictureData.PictureType.PNG);
+            XSLFSlide slide = pptx.createSlide();
+            addTitle(slide, "끝");
+            slide.createPicture(pd);
+        });
+
+        String md = conv.convert(pptxPath, "doc1", imagesDir);
+
+        assertThat(md).contains("[페이지: 2]").contains("## 끝");
+    }
+
+    @Test
+    @DisplayName("종료 슬라이드 제거 OFF — 플래그가 꺼져 있으면 마지막 '끝' 슬라이드도 유지된다")
+    void endingSlideKeptWhenFlagDisabled() throws IOException {
+        // 공유 converter는 이 플래그 off(기본 미스텁) — 별도 스텁 없이 그대로 사용
+        writePptx(pptx -> {
+            addContentSlide(pptx, "본문", "내용");
+            addTitleOnlySlide(pptx, "끝");
+        });
+
+        String md = convert();
+
+        assertThat(md).contains("[페이지: 2]").contains("## 끝");
+    }
+
     @Test
     @DisplayName("슬라이드의 표(XSLFTable)는 마크다운 파이프 표로 변환된다")
     void tableConvertsToMarkdownPipeTable() throws IOException {
@@ -686,6 +941,286 @@ class PptxToMarkdownConverterTest {
 
         assertThat(md).doesNotContain("[도형 그룹]");
         assertThat(md).doesNotContain("[/도형 그룹]");
+    }
+
+    @Test
+    @DisplayName("도형 그룹 안의 순번 배지(\"1\" 같은 숫자만 있는 라벨)는 본문 텍스트에서 제외되지만 나머지 라벨은 유지된다")
+    void bareNumberBadgeInGroupIsExcludedFromText() throws IOException {
+        writePptx(pptx -> {
+            XSLFSlide slide = pptx.createSlide();
+            addTitle(slide, "프로세스 슬라이드");
+            XSLFGroupShape group = slide.createGroup();
+            Rectangle2D bounds = new Rectangle2D.Double(0, 0, 300, 100);
+            group.setAnchor(bounds);
+            group.setInteriorAnchor(bounds);
+            XSLFTextBox badge = group.createTextBox();
+            badge.setAnchor(new Rectangle2D.Double(10, 10, 20, 20));
+            badge.setText("1");
+            XSLFTextBox label = group.createTextBox();
+            label.setAnchor(new Rectangle2D.Double(40, 10, 80, 40));
+            label.setText("승인 처리");
+        });
+
+        String md = convert();
+
+        assertThat(md).contains("승인 처리");
+        assertThat(md).contains("[도형 그룹]").contains("[/도형 그룹]");
+        // "1"이 라벨 그대로 남아 있으면 안 된다(배지 텍스트만 걸러내고 실제 라벨은 보존됐는지 확인).
+        String group = md.substring(md.indexOf("[도형 그룹]"), md.indexOf("[/도형 그룹]"));
+        assertThat(group.lines().map(String::strip)).doesNotContain("1");
+    }
+
+    @Test
+    @DisplayName("도형 그룹 안에 순번 배지만 있고 다른 텍스트가 없으면 [도형 그룹] 마커 자체를 남기지 않는다")
+    void groupWithOnlyBareNumberBadgesEmitsNoMarkerBlock() throws IOException {
+        writePptx(pptx -> {
+            XSLFSlide slide = pptx.createSlide();
+            addTitle(slide, "숫자만 있는 그룹");
+            XSLFGroupShape group = slide.createGroup();
+            Rectangle2D bounds = new Rectangle2D.Double(0, 0, 200, 100);
+            group.setAnchor(bounds);
+            group.setInteriorAnchor(bounds);
+            XSLFTextBox badge1 = group.createTextBox();
+            badge1.setAnchor(new Rectangle2D.Double(10, 10, 20, 20));
+            badge1.setText("1.");
+            XSLFTextBox badge2 = group.createTextBox();
+            badge2.setAnchor(new Rectangle2D.Double(40, 10, 20, 20));
+            badge2.setText("(2)");
+        });
+
+        String md = convert();
+
+        assertThat(md).doesNotContain("[도형 그룹]");
+        assertThat(md).doesNotContain("[/도형 그룹]");
+    }
+
+    @Test
+    @DisplayName("숫자로 시작하지만 다른 글자가 붙은 라벨(\"1단계\" 등)은 순번 배지로 오인해 제거하지 않는다")
+    void numberWithTrailingTextIsNotTreatedAsBadge() throws IOException {
+        writePptx(pptx -> {
+            XSLFSlide slide = pptx.createSlide();
+            addTitle(slide, "단계 슬라이드");
+            XSLFGroupShape group = slide.createGroup();
+            Rectangle2D bounds = new Rectangle2D.Double(0, 0, 200, 100);
+            group.setAnchor(bounds);
+            group.setInteriorAnchor(bounds);
+            XSLFTextBox label = group.createTextBox();
+            label.setAnchor(new Rectangle2D.Double(10, 10, 80, 40));
+            label.setText("1단계");
+        });
+
+        String md = convert();
+
+        assertThat(md).contains("1단계");
+    }
+
+    // ── 도형 여러 줄 텍스트: 코드 블록 / 문단 블록 처리 ──────────────────────────────────────
+
+    /** 그룹 도형 하나를 만들어 반환한다(호출자가 텍스트 박스를 붙인다). */
+    private static XSLFGroupShape newGroup(XSLFSlide slide) {
+        XSLFGroupShape group = slide.createGroup();
+        Rectangle2D bounds = new Rectangle2D.Double(0, 0, 400, 300);
+        group.setAnchor(bounds);
+        group.setInteriorAnchor(bounds);
+        return group;
+    }
+
+    /** 그룹 안에 여러 문단짜리 텍스트 박스를 추가한다. {@code y}로 읽기 순서(inReadingOrder)를 정한다. */
+    private static void addBoxWithLines(XSLFGroupShape group, double y, boolean bullet, String... lines) {
+        XSLFTextBox box = group.createTextBox();
+        box.setAnchor(new Rectangle2D.Double(10, y, 380, 80));
+        for (String line : lines) addRun(addParagraph(box, bullet, 0), line, false, false);
+    }
+
+    @Test
+    @DisplayName("도형 여러 줄 — 코드로 판정되면 위아래에 ``` 펜스를 둘러 원문 그대로 보존한다")
+    void multilineShapeTextDetectedAsCodeIsFenced() throws IOException {
+        writePptx(pptx -> {
+            XSLFSlide slide = pptx.createSlide();
+            addTitle(slide, "코드 슬라이드");
+            addBoxWithLines(newGroup(slide), 10, false,
+                    "public void run() {", "    service.execute();", "}");
+        });
+
+        String md = convert();
+
+        assertThat(md).contains("```\npublic void run() {\n    service.execute();\n}\n```");
+    }
+
+    @Test
+    @DisplayName("도형 여러 줄 — 코드가 아니면 펜스 없이 앞뒤 빈 줄로 하나의 문단 블록으로 분리된다")
+    void multilineShapeTextNotCodeIsSeparatedByBlankLines() throws IOException {
+        writePptx(pptx -> {
+            XSLFSlide slide = pptx.createSlide();
+            addTitle(slide, "설명 슬라이드");
+            XSLFGroupShape group = newGroup(slide);
+            addBoxWithLines(group, 10, false, "승인 처리");                        // 단일 라벨(앞)
+            addBoxWithLines(group, 100, false, "첫째 줄입니다", "둘째 줄입니다");   // 여러 줄 블록
+        });
+
+        String md = convert();
+
+        assertThat(md).doesNotContain("```");
+        // 단일 라벨과 여러 줄 블록 사이에 빈 줄이 들어가 서로 다른 덩어리로 분리된다
+        assertThat(md).contains("승인 처리\n\n첫째 줄입니다\n둘째 줄입니다");
+    }
+
+    @Test
+    @DisplayName("도형 여러 줄 — 줄이 하나뿐인 도형은 기존처럼 빈 줄 없이 촘촘하게 이어붙인다(회귀)")
+    void singleLineShapesStayTightlyPacked() throws IOException {
+        writePptx(pptx -> {
+            XSLFSlide slide = pptx.createSlide();
+            addTitle(slide, "프로세스 슬라이드");
+            XSLFGroupShape group = newGroup(slide);
+            addBoxWithLines(group, 10, false, "승인 처리");
+            addBoxWithLines(group, 100, false, "반려 처리");
+        });
+
+        String md = convert();
+
+        assertThat(md).contains("승인 처리\n반려 처리");
+    }
+
+    @Test
+    @DisplayName("도형 여러 줄 — PPTX 불릿 문단이 섞여 있으면 코드로 보지 않고 목록으로 렌더링한다")
+    void multilineShapeTextWithPptxBulletsIsNeverCode() throws IOException {
+        writePptx(pptx -> {
+            XSLFSlide slide = pptx.createSlide();
+            addTitle(slide, "목록 슬라이드");
+            addBoxWithLines(newGroup(slide), 10, true,
+                    "public void run() {", "service.execute();");
+        });
+
+        String md = convert();
+
+        assertThat(md).doesNotContain("```");
+        assertThat(md).contains("- public void run() {").contains("- service.execute();");
+    }
+
+    @Test
+    @DisplayName("looksLikeCodeBlock — 자바/SQL 코드는 true, 한국어 평문은 false")
+    void looksLikeCodeBlock_detectsCodeAndRejectsProse() {
+        assertThat(converter.looksLikeCodeBlock(List.of(
+                "public void run() {", "    service.execute();", "}"))).isTrue();
+        assertThat(converter.looksLikeCodeBlock(List.of(
+                "SELECT id, name", "FROM users WHERE age >= 20"))).isTrue();
+        assertThat(converter.looksLikeCodeBlock(List.of(
+                "승인 절차는 다음과 같습니다", "담당자가 검토한 뒤 결재합니다"))).isFalse();
+    }
+
+    @Test
+    @DisplayName("looksLikeCodeBlock — -/*/1. 로 시작하는 줄이 하나라도 있으면 코드 신호가 있어도 false (요구사항 2)")
+    void looksLikeCodeBlock_bulletPrefixedLinesAreNeverCode() {
+        assertThat(converter.looksLikeCodeBlock(List.of(
+                "- public void run() {", "- return x;"))).isFalse();
+        assertThat(converter.looksLikeCodeBlock(List.of(
+                "* int x = 1;", "* int y = 2;"))).isFalse();
+        assertThat(converter.looksLikeCodeBlock(List.of(
+                "1. int x = 1;", "2. int y = 2;"))).isFalse();
+    }
+
+    @Test
+    @DisplayName("looksLikeCodeBlock — 줄이 하나뿐이거나 이미 ```가 들어 있으면 false")
+    void looksLikeCodeBlock_singleLineOrExistingFenceIsFalse() {
+        assertThat(converter.looksLikeCodeBlock(List.of("x = 1;"))).isFalse();
+        assertThat(converter.looksLikeCodeBlock(List.of("```java", "x = 1;", "```"))).isFalse();
+    }
+
+    @Test
+    @DisplayName("looksLikeCodeBlock — 코드 신호 비율이 60% 미만이면 false, 이상이면 true")
+    void looksLikeCodeBlock_appliesSignalRatioThreshold() {
+        // 2줄 중 1줄만 코드 신호(50%) → 코드 아님
+        assertThat(converter.looksLikeCodeBlock(List.of("x = 1;", "설명입니다"))).isFalse();
+        // 3줄 중 2줄이 코드 신호(66%) → 코드
+        assertThat(converter.looksLikeCodeBlock(List.of(
+                "int x = 1;", "int y = 2;", "결과를 계산합니다"))).isTrue();
+    }
+
+    @Test
+    @DisplayName("looksLikeCodeBlock — 다이어그램에 흔한 '요청 -> 응답' 화살표 라벨은 코드로 오탐하지 않는다")
+    void looksLikeCodeBlock_arrowLabelsAreNotCode() {
+        assertThat(converter.looksLikeCodeBlock(List.of("요청 -> 검증", "검증 -> 응답"))).isFalse();
+    }
+
+    @Test
+    @DisplayName("looksLikeCodeBlock — 빈 줄은 분자·분모 어디에도 세지 않는다(중간 빈 줄이 적중률을 떨어뜨리지 않음)")
+    void looksLikeCodeBlock_blankLinesAreExcludedFromRatio() {
+        // 코드 3줄 + 중간 빈 줄 2줄. 빈 줄을 분모에 세면 3/5=60%로 아슬아슬하지만, 제외하면 3/3=100%
+        assertThat(converter.looksLikeCodeBlock(List.of(
+                "int x = 1;", "", "int y = 2;", "", "return x + y;"))).isTrue();
+        // 빈 줄을 뺀 내용이 1줄뿐이면 여러 줄로 보지 않는다
+        assertThat(converter.looksLikeCodeBlock(List.of("", "x = 1;", ""))).isFalse();
+        // 빈 줄이 섞여도 적중률 판정은 내용 줄 기준 그대로 (1/2 = 50% → false)
+        assertThat(converter.looksLikeCodeBlock(List.of("x = 1;", "", "설명입니다"))).isFalse();
+    }
+
+    // ── 그룹에 속하지 않은 단독 텍스트 상자 ────────────────────────────────────────────────
+
+    /** 슬라이드에 그룹 없이 단독 텍스트 상자 하나를 추가한다(불릿 여부 지정). */
+    private static void addStandaloneBox(XSLFSlide slide, boolean bullet, String... lines) {
+        XSLFTextBox box = slide.createTextBox();
+        box.setAnchor(new Rectangle2D.Double(10, 100, 380, 200));
+        for (String line : lines) addRun(addParagraph(box, bullet, 0), line, false, false);
+    }
+
+    @Test
+    @DisplayName("단독 텍스트 상자 — 여러 줄이 코드로 판정되면 ``` 펜스로 감싸고 들여쓰기를 보존한다")
+    void standaloneTextBoxCodeIsFenced() throws IOException {
+        writePptx(pptx -> {
+            XSLFSlide slide = pptx.createSlide();
+            addTitle(slide, "코드 슬라이드");
+            addStandaloneBox(slide, false,
+                    "public void run() {", "    service.execute();", "}");
+        });
+
+        String md = convert();
+
+        assertThat(md).contains("```\npublic void run() {\n    service.execute();\n}\n```");
+    }
+
+    @Test
+    @DisplayName("단독 텍스트 상자 — 코드 스니펫 중간의 빈 줄은 펜스 안에 그대로 보존된다")
+    void standaloneTextBoxCodeKeepsInteriorBlankLines() throws IOException {
+        writePptx(pptx -> {
+            XSLFSlide slide = pptx.createSlide();
+            addTitle(slide, "코드 슬라이드");
+            addStandaloneBox(slide, false,
+                    "int x = 1;", "", "int y = 2;", "", "return x + y;");
+        });
+
+        String md = convert();
+
+        assertThat(md).contains("```\nint x = 1;\n\nint y = 2;\n\nreturn x + y;\n```");
+    }
+
+    @Test
+    @DisplayName("단독 텍스트 상자 — 코드가 아닌 평문은 기존처럼 문단(\\n\\n) 분리로 남는다(회귀)")
+    void standaloneTextBoxProseKeepsParagraphSeparation() throws IOException {
+        writePptx(pptx -> {
+            XSLFSlide slide = pptx.createSlide();
+            addTitle(slide, "설명 슬라이드");
+            addStandaloneBox(slide, false, "첫째 문단입니다", "둘째 문단입니다");
+        });
+
+        String md = convert();
+
+        assertThat(md).doesNotContain("```");
+        assertThat(md).contains("첫째 문단입니다\n\n둘째 문단입니다");
+    }
+
+    @Test
+    @DisplayName("단독 텍스트 상자 — 불릿 문단은 코드 신호가 있어도 펜스로 감싸지 않는다")
+    void standaloneTextBoxBulletsAreNeverFenced() throws IOException {
+        writePptx(pptx -> {
+            XSLFSlide slide = pptx.createSlide();
+            addTitle(slide, "목록 슬라이드");
+            addStandaloneBox(slide, true, "int x = 1;", "int y = 2;");
+        });
+
+        String md = convert();
+
+        assertThat(md).doesNotContain("```");
+        assertThat(md).contains("- int x = 1;").contains("- int y = 2;");
     }
 
     @Test

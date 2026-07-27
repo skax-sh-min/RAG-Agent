@@ -8,7 +8,8 @@ public record ChatForm(
         String version,
         String routingMode,
         Boolean directMode,
-        String tags
+        String tags,
+        String responseMode
 ) {
     public boolean isDirectMode() {
         return Boolean.TRUE.equals(directMode);
@@ -17,5 +18,10 @@ public record ChatForm(
     /** Lenient parse of the comma-separated tag input (never throws — empty on blank/invalid). */
     public List<String> selectedTags() {
         return TagUtils.parseTagList(tags);
+    }
+
+    /** Lenient parse of the S/M/L selector (never throws — {@link ResponseMode#DEFAULT} on blank/unknown). */
+    public ResponseMode responseModeOrDefault() {
+        return ResponseMode.parse(responseMode);
     }
 }

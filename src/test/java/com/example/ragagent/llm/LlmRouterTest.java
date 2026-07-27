@@ -33,7 +33,7 @@ import static org.mockito.Mockito.when;
  * QA — LlmRouter routing & guard behaviour
  *
  * Focuses mainly on the side-effect-free surface: findFirst() priority by RoutingMode,
- * hasLocalProvider(), findProviderName(), and DUAL preconditions — plus targeted
+ * hasLocalProvider(), findProviderName() — plus targeted
  * Mockito-based coverage of executeWithTracking()'s circuit-breaker/backpressure branches
  * (mmproj detection, concurrency gate, overload-without-fallback blocking).
  */
@@ -129,25 +129,25 @@ class LlmRouterTest {
     }
 
     @Test
-    @DisplayName("DUAL 모드: LOCAL 부재 시 executeDual 즉시 LlmProviderExhaustedException")
-    void dualRequiresLocal() {
-        var normal = p("openai", ProviderRole.NORMAL, TaskType.TEXT, 1);
-        var r = router(RoutingMode.DUAL, normal);
+    @DisplayName("hasMicroTextOffloadProvider — LOCAL priority=0(local-fast) 등록 여부/차단·비활성화까지 반영")
+    void hasMicroTextOffloadProvider() {
+        var fast  = p("local-fast", ProviderRole.LOCAL, TaskType.MICRO_TEXT, 0);
+        var local = p("local",      ProviderRole.LOCAL, TaskType.BOTH,       1);
+        var toggle = new ProviderToggle();
+        var r = new LlmRouter(List.of(fast, local), null, breaker, RoutingMode.COST_FIRST, 0.6, 180,
+                Map.of(), 3, 20, toggle);
 
-        assertThatThrownBy(() -> r.executeDual(TaskType.TEXT, model -> null))
-                .isInstanceOf(LlmProviderExhaustedException.class)
-                .hasMessageContaining("LOCAL");
-    }
+        assertThat(r.hasMicroTextOffloadProvider()).isTrue();
 
-    @Test
-    @DisplayName("DUAL 모드: external 부재 시 executeDual 즉시 LlmProviderExhaustedException")
-    void dualRequiresExternal() {
-        var local = p("lm", ProviderRole.LOCAL, TaskType.TEXT, 1);
-        var r = router(RoutingMode.DUAL, local);
+        toggle.setEnabled("local-fast", false);
+        assertThat(r.hasMicroTextOffloadProvider()).isFalse();   // 런타임 비활성화
+        toggle.setEnabled("local-fast", true);
 
-        assertThatThrownBy(() -> r.executeDual(TaskType.TEXT, model -> null))
-                .isInstanceOf(LlmProviderExhaustedException.class)
-                .hasMessageContaining("external");
+        breaker.block("local-fast", null);
+        assertThat(r.hasMicroTextOffloadProvider()).isFalse();   // 서킷 차단
+
+        // LOCAL_FAST_LLM_URL 미설정 → LlmConfig G2 가 아예 등록하지 않는 상태
+        assertThat(router(RoutingMode.COST_FIRST, local).hasMicroTextOffloadProvider()).isFalse();
     }
 
     @Test
@@ -424,5 +424,80 @@ class LlmRouterTest {
 
         assertThat(result).isEqualTo("from-2");
         held.close();
+    }
+
+    @Test
+    @DisplayName("localTier1Concurrency — LOCAL priority=1 프로바이더가 없으면 empty (priority=0 이나 non-LOCAL 은 집계 제외)")
+    void localTier1Concurrency_noPriority1LocalProvider_empty() {
+        var localFast = p("local-fast", ProviderRole.LOCAL, TaskType.MICRO_TEXT, 0); // priority=0 → 제외
+        var normal = p("openai", ProviderRole.NORMAL, TaskType.TEXT, 1); // priority=1 이지만 LOCAL 아님 → 제외
+        var r = router(RoutingMode.COST_FIRST, localFast, normal);
+
+        assertThat(r.localTier1Concurrency()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("localTier1Concurrency — 단일 LOCAL priority=1 프로바이더의 capacity 를 그대로 반환한다")
+    void localTier1Concurrency_singleProvider_reportsCapacity() {
+        var local = p("local", ProviderRole.LOCAL, TaskType.BOTH, 1);
+        var r = new LlmRouter(List.of(local), null, breaker, RoutingMode.COST_FIRST, 0.6, 180,
+                Map.of("local", 5), 3, 20);
+
+        var snap = r.localTier1Concurrency();
+
+        assertThat(snap).isPresent();
+        assertThat(snap.get().capacity()).isEqualTo(5);
+        assertThat(snap.get().inUse()).isEqualTo(0);
+    }
+
+    @Test
+    @DisplayName("localTier1Concurrency — 동일 role+priority 로 등록된 프로바이더 여러 대의 capacity 를 합산한다")
+    void localTier1Concurrency_multipleProviders_sumsCapacity() {
+        var local1 = p("local", ProviderRole.LOCAL, TaskType.BOTH, 1);
+        var local2 = p("local-2", ProviderRole.LOCAL, TaskType.BOTH, 1);
+        var r = new LlmRouter(List.of(local1, local2), null, breaker, RoutingMode.COST_FIRST, 0.6, 180,
+                Map.of("local", 3, "local-2", 4), 3, 20);
+
+        var snap = r.localTier1Concurrency().orElseThrow();
+
+        assertThat(snap.capacity()).isEqualTo(7);
+        assertThat(snap.inUse()).isEqualTo(0);
+    }
+
+    @Test
+    @DisplayName("localTier1Concurrency — 획득한 permit 만큼 inUse 가 증가하고, 반환하면 다시 줄어든다")
+    void localTier1Concurrency_reflectsAcquiredPermits() {
+        var local = p("local", ProviderRole.LOCAL, TaskType.BOTH, 1);
+        var r = new LlmRouter(List.of(local), null, breaker, RoutingMode.COST_FIRST, 0.6, 180,
+                Map.of("local", 3), 3, 20);
+
+        LlmRouter.Permit permit = r.acquirePermit(local);
+        try {
+            var snap = r.localTier1Concurrency().orElseThrow();
+            assertThat(snap.inUse()).isEqualTo(1);
+            assertThat(snap.capacity()).isEqualTo(3);
+        } finally {
+            permit.close();
+        }
+
+        assertThat(r.localTier1Concurrency().orElseThrow().inUse()).isEqualTo(0);
+    }
+
+    @Test
+    @DisplayName("localTier1Concurrency — 서킷브레이커 차단·런타임 비활성화된 프로바이더는 집계에서 제외한다")
+    void localTier1Concurrency_excludesBlockedOrDisabledProviders() {
+        var local1 = p("local", ProviderRole.LOCAL, TaskType.BOTH, 1);
+        var local2 = p("local-2", ProviderRole.LOCAL, TaskType.BOTH, 1);
+        var toggle = new ProviderToggle();
+        var r = new LlmRouter(List.of(local1, local2), null, breaker, RoutingMode.COST_FIRST, 0.6, 180,
+                Map.of("local", 3, "local-2", 4), 3, 20, toggle);
+
+        assertThat(r.localTier1Concurrency().orElseThrow().capacity()).isEqualTo(7);
+
+        breaker.block("local", null);
+        assertThat(r.localTier1Concurrency().orElseThrow().capacity()).isEqualTo(4); // local-2만 남음
+
+        toggle.setEnabled("local-2", false);
+        assertThat(r.localTier1Concurrency()).isEmpty(); // 둘 다 제외됨
     }
 }

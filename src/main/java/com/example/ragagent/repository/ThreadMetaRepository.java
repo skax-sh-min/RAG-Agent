@@ -30,7 +30,8 @@ public class ThreadMetaRepository {
                     version      TEXT NOT NULL DEFAULT 'latest',
                     created_at   TEXT NOT NULL,
                     updated_at   TEXT NOT NULL,
-                    routing_mode TEXT NOT NULL DEFAULT 'COST_FIRST'
+                    routing_mode TEXT NOT NULL DEFAULT 'COST_FIRST',
+                    tags         TEXT NOT NULL DEFAULT ''
                 )
                 """);
         // Migration: add columns for existing databases
@@ -42,6 +43,9 @@ public class ThreadMetaRepository {
             jdbc.execute("ALTER TABLE thread_meta ADD COLUMN user_id TEXT NOT NULL DEFAULT 'anonymous'");
             jdbc.execute("CREATE INDEX IF NOT EXISTS idx_thread_meta_user ON thread_meta(user_id)");
         }
+        if (cols.stream().noneMatch(c -> "tags".equals(c.get("name")))) {
+            jdbc.execute("ALTER TABLE thread_meta ADD COLUMN tags TEXT NOT NULL DEFAULT ''");
+        }
     }
 
     private static ThreadMeta mapRow(java.sql.ResultSet rs, int n) throws java.sql.SQLException {
@@ -52,12 +56,13 @@ public class ThreadMetaRepository {
                 rs.getString("version"),
                 rs.getString("created_at"),
                 rs.getString("updated_at"),
-                rs.getString("routing_mode"));
+                rs.getString("routing_mode"),
+                rs.getString("tags"));
     }
 
     public Optional<ThreadMeta> findById(String userId, String threadId) {
         List<ThreadMeta> rows = jdbc.query(
-                "SELECT thread_id, user_id, title, version, created_at, updated_at, routing_mode " +
+                "SELECT thread_id, user_id, title, version, created_at, updated_at, routing_mode, tags " +
                 "FROM thread_meta WHERE thread_id = ? AND user_id = ?",
                 ThreadMetaRepository::mapRow,
                 threadId, userId);
@@ -66,7 +71,7 @@ public class ThreadMetaRepository {
 
     public List<ThreadMeta> findAllRecent(String userId, int limit) {
         return jdbc.query(
-                "SELECT thread_id, user_id, title, version, created_at, updated_at, routing_mode " +
+                "SELECT thread_id, user_id, title, version, created_at, updated_at, routing_mode, tags " +
                 "FROM thread_meta WHERE user_id = ? ORDER BY updated_at DESC LIMIT ?",
                 ThreadMetaRepository::mapRow,
                 userId, limit);
@@ -74,16 +79,17 @@ public class ThreadMetaRepository {
 
     public void save(ThreadMeta meta) {
         jdbc.update("""
-                INSERT INTO thread_meta (thread_id, user_id, title, version, created_at, updated_at, routing_mode)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO thread_meta (thread_id, user_id, title, version, created_at, updated_at, routing_mode, tags)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(thread_id) DO UPDATE SET
                     title        = excluded.title,
                     version      = excluded.version,
                     updated_at   = excluded.updated_at,
-                    routing_mode = excluded.routing_mode
+                    routing_mode = excluded.routing_mode,
+                    tags         = excluded.tags
                 """,
                 meta.threadId(), meta.userId(), meta.title(), meta.version(),
-                meta.createdAt(), meta.updatedAt(), meta.routingMode());
+                meta.createdAt(), meta.updatedAt(), meta.routingMode(), meta.tags());
     }
 
     public void updateTitle(String userId, String threadId, String title) {
@@ -96,6 +102,13 @@ public class ThreadMetaRepository {
         jdbc.update(
                 "UPDATE thread_meta SET routing_mode = ? WHERE thread_id = ? AND user_id = ?",
                 routingMode, threadId, userId);
+    }
+
+    /** Snapshots the tag selection used for the most recent message sent in this thread. */
+    public void updateTags(String userId, String threadId, String tagsCsv) {
+        jdbc.update(
+                "UPDATE thread_meta SET tags = ? WHERE thread_id = ? AND user_id = ?",
+                tagsCsv, threadId, userId);
     }
 
     public void delete(String userId, String threadId) {

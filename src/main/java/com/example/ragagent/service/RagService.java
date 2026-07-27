@@ -224,6 +224,15 @@ public class RagService {
         return keywordRepo.distinctTags(version);
     }
 
+    /**
+     * Same as {@link #listTags(String)}, but drops tags common to every document in scope —
+     * used by the chat search-scope chip list, where such a tag is a no-op filter and just
+     * adds clutter (see {@link com.example.ragagent.ingestion.KeywordSearchRepository#distinctTagsExcludingCommon}).
+     */
+    public List<String> listTagsExcludingCommon(String version) {
+        return keywordRepo.distinctTagsExcludingCommon(version);
+    }
+
     /** Distinct versions in use for version-selector UI. */
     public List<String> listVersions() {
         Set<String> versions = new HashSet<>();

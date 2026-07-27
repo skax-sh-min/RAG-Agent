@@ -55,8 +55,8 @@ class SqliteMemoryRepositoryTest {
     @Test
     @DisplayName("addTurn 후 getTurns 가 시간순으로 반환")
     void addAndRetrieveTurns() {
-        repo.addTurn(UID, "t1", "Q1", "A1", null, 0, 0, 0, null, 0);
-        repo.addTurn(UID, "t1", "Q2", "A2", null, 0, 0, 0, null, 0);
+        repo.addTurn(UID, "t1", "Q1", "A1", null, 0, 0, 0, null, 0, "M");
+        repo.addTurn(UID, "t1", "Q2", "A2", null, 0, 0, 0, null, 0, "M");
         var turns = repo.getTurns(UID, "t1");
         assertThat(turns).hasSize(2);
         assertThat(turns.get(0).question()).isEqualTo("Q1");
@@ -64,10 +64,21 @@ class SqliteMemoryRepositoryTest {
     }
 
     @Test
+    @DisplayName("addTurn 의 response_mode 가 getTurn(s)/getRecentTurns 모두에서 그대로 되돌아온다")
+    void responseModeRoundTrips() {
+        long id = repo.addTurn(UID, "t1", "Q", "A", null, 0, 0, 0, null, 0, "L");
+
+        assertThat(repo.getTurns(UID, "t1").get(0).responseMode()).isEqualTo("L");
+        assertThat(repo.getRecentTurns(UID, "t1").get(0).responseMode()).isEqualTo("L");
+        assertThat(repo.getTurn(UID, "t1", id)).isPresent()
+                .get().extracting(MemoryRepository.Turn::responseMode).isEqualTo("L");
+    }
+
+    @Test
     @DisplayName("50 turn 초과 시 최근 50개만 반영 (FETCH_LIMIT)")
     void respectsFetchLimit() {
         for (int i = 0; i < 60; i++) {
-            repo.addTurn(UID, "t1", "Q" + i, "A" + i, null, 0, 0, 0, null, 0);
+            repo.addTurn(UID, "t1", "Q" + i, "A" + i, null, 0, 0, 0, null, 0, "M");
         }
         String history = repo.getHistory(UID, "t1", 1_000_000);
         // 가장 오래된 Q0~Q9 (10개) 는 잘려나가야 함
@@ -79,7 +90,7 @@ class SqliteMemoryRepositoryTest {
     @DisplayName("getRecentTurns — 50 turn 초과 시 최근 50개만 시간순으로 반환 (FETCH_LIMIT)")
     void getRecentTurns_respectsFetchLimit() {
         for (int i = 0; i < 60; i++) {
-            repo.addTurn(UID, "t1", "Q" + i, "A" + i, null, 0, 0, 0, null, 0);
+            repo.addTurn(UID, "t1", "Q" + i, "A" + i, null, 0, 0, 0, null, 0, "M");
         }
 
         var turns = repo.getRecentTurns(UID, "t1");
@@ -92,8 +103,8 @@ class SqliteMemoryRepositoryTest {
     @Test
     @DisplayName("getRecentTurns — FETCH_LIMIT 이하면 getTurns와 동일하게 전부 반환")
     void getRecentTurns_returnsAllWhenUnderLimit() {
-        repo.addTurn(UID, "t1", "Q1", "A1", null, 0, 0, 0, null, 0);
-        repo.addTurn(UID, "t1", "Q2", "A2", null, 0, 0, 0, null, 0);
+        repo.addTurn(UID, "t1", "Q1", "A1", null, 0, 0, 0, null, 0, "M");
+        repo.addTurn(UID, "t1", "Q2", "A2", null, 0, 0, 0, null, 0, "M");
 
         assertThat(repo.getRecentTurns(UID, "t1")).isEqualTo(repo.getTurns(UID, "t1"));
     }
@@ -101,7 +112,7 @@ class SqliteMemoryRepositoryTest {
     @Test
     @DisplayName("clearHistory 후 getTurns 빈 리스트")
     void clearHistory() {
-        repo.addTurn(UID, "t1", "Q", "A", null, 0, 0, 0, null, 0);
+        repo.addTurn(UID, "t1", "Q", "A", null, 0, 0, 0, null, 0, "M");
         repo.clearHistory(UID, "t1");
         assertThat(repo.getTurns(UID, "t1")).isEmpty();
     }
@@ -110,7 +121,7 @@ class SqliteMemoryRepositoryTest {
     @DisplayName("단일 turn 이 maxChars 초과해도 잘라서라도 컨텍스트 제공")
     void singleTurnLargerThanBudget() {
         String huge = "x".repeat(10_000);
-        repo.addTurn(UID, "t1", huge, huge, null, 0, 0, 0, null, 0);
+        repo.addTurn(UID, "t1", huge, huge, null, 0, 0, 0, null, 0, "M");
         // 현재 구현: 첫 entry 가 budget 초과 → 즉시 break → 빈 문자열
         String result = repo.getHistory(UID, "t1", 1_000);
         assertThat(result)
@@ -121,8 +132,8 @@ class SqliteMemoryRepositoryTest {
     @Test
     @DisplayName("addTurn 은 생성된 turn id 를 반환한다")
     void addTurnReturnsGeneratedId() {
-        long id1 = repo.addTurn(UID, "t1", "Q1", "A1", null, 0, 0, 0, null, 0);
-        long id2 = repo.addTurn(UID, "t1", "Q2", "A2", null, 0, 0, 0, null, 0);
+        long id1 = repo.addTurn(UID, "t1", "Q1", "A1", null, 0, 0, 0, null, 0, "M");
+        long id2 = repo.addTurn(UID, "t1", "Q2", "A2", null, 0, 0, 0, null, 0, "M");
         assertThat(id1).isPositive();
         assertThat(id2).isGreaterThan(id1);
     }
@@ -130,8 +141,8 @@ class SqliteMemoryRepositoryTest {
     @Test
     @DisplayName("DISLIKE 로 표시된 turn 은 getHistory 컨텍스트에서 제외된다")
     void dislikedTurnExcludedFromHistory() {
-        long keep = repo.addTurn(UID, "t1", "keep-question", "keep-answer", null, 0, 0, 0, null, 0);
-        long drop = repo.addTurn(UID, "t1", "drop-question", "drop-answer", null, 0, 0, 0, null, 0);
+        long keep = repo.addTurn(UID, "t1", "keep-question", "keep-answer", null, 0, 0, 0, null, 0, "M");
+        long drop = repo.addTurn(UID, "t1", "drop-question", "drop-answer", null, 0, 0, 0, null, 0, "M");
         repo.updateFeedback(UID, "t1", drop, "DISLIKE");
 
         String history = repo.getHistory(UID, "t1", 1_000_000);
@@ -144,7 +155,7 @@ class SqliteMemoryRepositoryTest {
     @Test
     @DisplayName("LIKE 로 표시된 turn 은 getHistory 컨텍스트에 그대로 남는다")
     void likedTurnStaysInHistory() {
-        long id = repo.addTurn(UID, "t1", "liked-question", "liked-answer", null, 0, 0, 0, null, 0);
+        long id = repo.addTurn(UID, "t1", "liked-question", "liked-answer", null, 0, 0, 0, null, 0, "M");
         repo.updateFeedback(UID, "t1", id, "LIKE");
 
         assertThat(repo.getHistory(UID, "t1", 1_000_000)).contains("liked-question");
@@ -153,7 +164,7 @@ class SqliteMemoryRepositoryTest {
     @Test
     @DisplayName("getFeedback — 존재하지 않는 turn/타 유저는 Optional.empty()")
     void getFeedbackOwnershipCheck() {
-        long id = repo.addTurn(UID, "t1", "Q", "A", null, 0, 0, 0, null, 0);
+        long id = repo.addTurn(UID, "t1", "Q", "A", null, 0, 0, 0, null, 0, "M");
 
         assertThat(repo.getFeedback(UID, "t1", id)).isPresent();
         assertThat(repo.getFeedback(UID, "t1", id).get().feedback()).isNull();
@@ -164,7 +175,7 @@ class SqliteMemoryRepositoryTest {
     @Test
     @DisplayName("updateFeedback 후 getFeedback 이 새 값을 반영한다")
     void updateFeedbackReflectedInGetFeedback() {
-        long id = repo.addTurn(UID, "t1", "Q", "A", null, 0, 0, 0, null, 0);
+        long id = repo.addTurn(UID, "t1", "Q", "A", null, 0, 0, 0, null, 0, "M");
         repo.updateFeedback(UID, "t1", id, "DISLIKE");
         assertThat(repo.getFeedback(UID, "t1", id).get().feedback()).isEqualTo("DISLIKE");
 

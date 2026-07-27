@@ -12,7 +12,9 @@ public record LlmProviderReport(
         String name,
         String type,
         String role,           // LOCAL | NORMAL | PREMIUM
-        String model,
+        String model,           // for type=BACKGROUND: comma-joined underlying LOCAL provider names
+                                 // (e.g. "local, local-fast") instead of a real model name — a
+                                 // merged category (title/keyword/context/...) has no single model
         LlmUsageRepository.PeriodSummary daily,
         LlmUsageRepository.PeriodSummary weekly,
         LlmUsageRepository.PeriodSummary monthly,

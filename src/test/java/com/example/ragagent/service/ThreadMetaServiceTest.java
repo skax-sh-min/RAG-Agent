@@ -39,7 +39,8 @@ import static org.mockito.Mockito.when;
  * Other methods (getAll/findById/countTurns/updateTitle/updateRoutingMode/delete) are
  * one-line delegation, not covered here. generateTitleAsync() runs on a virtual thread, so
  * assertions on its outcome use Mockito's timeout() to await the async completion instead
- * of racing it.
+ * of racing it. updateTags() is covered separately since it isn't a pure pass-through — it
+ * joins the tag list to the repository's CSV storage form via TagUtils.
  */
 class ThreadMetaServiceTest {
 
@@ -54,7 +55,7 @@ class ThreadMetaServiceTest {
     @Test
     @DisplayName("getOrCreate — 이미 존재하면 그대로 반환, save() 호출 안 함")
     void getOrCreate_existingThread_returnsWithoutSaving() {
-        ThreadMeta existing = new ThreadMeta("t1", "u1", "기존 제목", "latest", "now", "now", "COST_FIRST");
+        ThreadMeta existing = new ThreadMeta("t1", "u1", "기존 제목", "latest", "now", "now", "COST_FIRST", "");
         when(repository.findById("u1", "t1")).thenReturn(Optional.of(existing));
 
         ThreadMeta result = service.getOrCreate("u1", "t1", "latest");
@@ -90,7 +91,7 @@ class ThreadMetaServiceTest {
     @Test
     @DisplayName("generateTitleAsync — 이미 커스텀 제목이면 LLM 호출 없이 no-op")
     void generateTitleAsync_customTitleAlreadySet_noOp() {
-        ThreadMeta custom = new ThreadMeta("t1", "u1", "이미 지정된 제목", "latest", "now", "now", "COST_FIRST");
+        ThreadMeta custom = new ThreadMeta("t1", "u1", "이미 지정된 제목", "latest", "now", "now", "COST_FIRST", "");
         when(repository.findById("u1", "t1")).thenReturn(Optional.of(custom));
 
         service.generateTitleAsync("u1", "t1", "latest", "질문");
@@ -101,7 +102,7 @@ class ThreadMetaServiceTest {
     @Test
     @DisplayName("generateTitleAsync — 기본 제목이면 LLM 요약을 20자로 잘라 저장")
     void generateTitleAsync_defaultTitle_generatesAndTruncatesTitle() {
-        ThreadMeta fresh = new ThreadMeta("t1", "u1", "[latest] 새 대화", "latest", "now", "now", "COST_FIRST");
+        ThreadMeta fresh = new ThreadMeta("t1", "u1", "[latest] 새 대화", "latest", "now", "now", "COST_FIRST", "");
         when(repository.findById("u1", "t1")).thenReturn(Optional.of(fresh));
         when(llmRouter.executeWithTracking(any(), any(), any(), any()))
                 .thenReturn("이것은 20자를 초과하는 아주 긴 요약 문장입니다 정말로");
@@ -119,7 +120,7 @@ class ThreadMetaServiceTest {
     @Test
     @DisplayName("generateTitleAsync — LlmRouter.executeWithTracking()을 title: 접두사로 호출 (백그라운드 사용량 분리)")
     void generateTitleAsync_tracksUsageUnderTitlePrefix() {
-        ThreadMeta fresh = new ThreadMeta("t1", "u1", "[latest] 새 대화", "latest", "now", "now", "COST_FIRST");
+        ThreadMeta fresh = new ThreadMeta("t1", "u1", "[latest] 새 대화", "latest", "now", "now", "COST_FIRST", "");
         when(repository.findById("u1", "t1")).thenReturn(Optional.of(fresh));
         when(llmRouter.executeWithTracking(any(), any(), any(), any())).thenReturn("요약");
 
@@ -133,7 +134,7 @@ class ThreadMetaServiceTest {
     @DisplayName("generateTitleAsync — 질문이 PromptInjectionGuard.wrap()으로 감싸져 전달됨 (EDIT.md #5)")
     @SuppressWarnings("unchecked")
     void generateTitleAsync_wrapsQuestionInUserQuestionDelimiters() {
-        ThreadMeta fresh = new ThreadMeta("t1", "u1", "[latest] 새 대화", "latest", "now", "now", "COST_FIRST");
+        ThreadMeta fresh = new ThreadMeta("t1", "u1", "[latest] 새 대화", "latest", "now", "now", "COST_FIRST", "");
         when(repository.findById("u1", "t1")).thenReturn(Optional.of(fresh));
         ArgumentCaptor<Function<ChatModel, ChatResponse>> callCaptor = ArgumentCaptor.forClass(Function.class);
         when(llmRouter.executeWithTracking(any(), any(), any(), callCaptor.capture())).thenReturn("요약");
@@ -153,7 +154,7 @@ class ThreadMetaServiceTest {
     @Test
     @DisplayName("generateTitleAsync — LLM 실패해도 예외 전파 없이 조용히 무시")
     void generateTitleAsync_llmFailure_failsSilently() {
-        ThreadMeta fresh = new ThreadMeta("t1", "u1", "[latest] 새 대화", "latest", "now", "now", "COST_FIRST");
+        ThreadMeta fresh = new ThreadMeta("t1", "u1", "[latest] 새 대화", "latest", "now", "now", "COST_FIRST", "");
         when(repository.findById("u1", "t1")).thenReturn(Optional.of(fresh));
         when(llmRouter.executeWithTracking(any(), any(), any(), any()))
                 .thenThrow(new RuntimeException("LLM down"));
@@ -162,5 +163,21 @@ class ThreadMetaServiceTest {
 
         // 잠시 대기해 백그라운드 가상 스레드가 예외를 조용히 삼키는지 확인 (updateTitle 미호출)
         verify(repository, timeout(1000).times(0)).updateTitle(anyString(), anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("updateTags — 태그 목록을 정규화된 CSV로 합쳐 repository에 전달")
+    void updateTags_joinsTagListToCsv() {
+        service.updateTags("u1", "t1", List.of("Billing", "policy"));
+
+        verify(repository).updateTags("u1", "t1", "billing,policy");
+    }
+
+    @Test
+    @DisplayName("updateTags — 빈 목록은 빈 문자열로 저장 (태그 미선택 = 전체 검색)")
+    void updateTags_emptyList_storesEmptyString() {
+        service.updateTags("u1", "t1", List.of());
+
+        verify(repository).updateTags("u1", "t1", "");
     }
 }

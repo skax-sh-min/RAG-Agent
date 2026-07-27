@@ -7,8 +7,12 @@ import com.example.ragagent.context.ThreadContextResolver;
 import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.model.ChatResponse;
 import com.example.ragagent.model.SourceRef;
+import com.example.ragagent.model.ThreadMeta;
+import com.example.ragagent.repository.MemoryRepository;
+import com.example.ragagent.security.AppUserDetails;
 import com.example.ragagent.service.AgentService;
 import com.example.ragagent.service.ConversationSummarizerService;
+import com.example.ragagent.service.CuratedQaService;
 import com.example.ragagent.service.MemoryService;
 import com.example.ragagent.service.StreamingAgentService;
 import com.example.ragagent.service.ThreadMetaService;
@@ -23,11 +27,18 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
 import java.util.List;
+import java.util.Optional;
+import java.util.Set;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.model;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.request;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.view;
@@ -38,7 +49,6 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * Covers (per refactoring/01-test-safety-net.md):
  *  - POST /ui/chat 가 정상 응답 시 'fragments/message-assistant :: message' 반환
  *  - 빈 질문 → 'fragments/message-error :: message'
- *  - DUAL 응답 시 'fragments/message-assistant-dual :: message'
  *  - 서비스 예외 → 'fragments/message-error :: message'
  *  - directMode 누락 시 400 방지
  */
@@ -55,6 +65,7 @@ class ChatControllerHtmxTest {
     @MockitoBean ThreadMetaService threadMetaService;
     @MockitoBean MemoryService memoryService;
     @MockitoBean ConversationSummarizerService summarizerService;
+    @MockitoBean CuratedQaService curatedQaService;
     @MockitoBean AppProperties props;
     @MockitoBean LlmRouter llmRouter;
     @MockitoBean ChatModel chatModel;
@@ -67,17 +78,7 @@ class ChatControllerHtmxTest {
                 List.of(new SourceRef("doc.pdf | v1 | p.3", "snippet preview", "doc_abc", 3)),
                 List.of(),
                 120, 80, 2, 0.42,
-                null, "gemini-flash", null, null, 1L);
-    }
-
-    private ChatResponse dualResponse() {
-        return new ChatResponse(
-                "외부 답변",
-                "manual",
-                List.of(),
-                List.of(),
-                100, 50, 2, 0.5,
-                null, "gemini-flash", "로컬 답변", "local", 2L);
+                null, "gemini-flash", 1L);
     }
 
     @Test
@@ -105,21 +106,6 @@ class ChatControllerHtmxTest {
                         .with(csrf()))
                 .andExpect(status().isOk())
                 .andExpect(view().name("fragments/message-error :: message"));
-    }
-
-    @Test
-    @DisplayName("POST /ui/chat — DUAL 응답 → message-assistant-dual fragment")
-    void postChat_dualResponse_returnsDualFragment() throws Exception {
-        when(agentService.chat(any(), any())).thenReturn(dualResponse());
-
-        mvc.perform(post("/ui/chat")
-                        .param("question", "DUAL 질문")
-                        .param("threadId", "t1")
-                        .param("version", "latest")
-                        .param("routingMode", "DUAL")
-                        .with(csrf()))
-                .andExpect(status().isOk())
-                .andExpect(view().name("fragments/message-assistant-dual :: message"));
     }
 
     @Test
@@ -171,5 +157,63 @@ class ChatControllerHtmxTest {
                         .param("threadId", "t1")
                         .with(csrf()))
                 .andExpect(status().isAccepted());
+    }
+
+    @Test
+    @DisplayName("POST /ui/chat — 전송된 태그 선택을 스레드에 스냅샷 저장 (사이드바 목록용)")
+    void postChat_snapshotsSelectedTagsOntoThread() throws Exception {
+        when(agentService.chat(any(), any())).thenReturn(sampleResponse());
+
+        mvc.perform(post("/ui/chat")
+                        .param("question", "테스트 질문")
+                        .param("threadId", "t1")
+                        .param("version", "latest")
+                        .param("tags", "billing, policy")
+                        .with(csrf()))
+                .andExpect(status().isOk());
+
+        org.mockito.Mockito.verify(threadMetaService)
+                .updateTags(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.eq("t1"),
+                        org.mockito.ArgumentMatchers.eq(List.of("billing", "policy")));
+    }
+
+    @Test
+    @DisplayName("POST /ui/chat/stream — 전송된 태그 선택을 스레드에 스냅샷 저장 (사이드바 목록용)")
+    void streamChat_snapshotsSelectedTagsOntoThread() throws Exception {
+        when(props.sseTimeoutMs()).thenReturn(300_000L);
+
+        mvc.perform(post("/ui/chat/stream")
+                        .param("question", "테스트")
+                        .param("threadId", "t1")
+                        .param("version", "latest")
+                        .param("tags", "onboarding")
+                        .with(csrf()))
+                .andExpect(status().isOk())
+                .andExpect(request().asyncStarted());
+
+        org.mockito.Mockito.verify(threadMetaService)
+                .updateTags(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.eq("t1"),
+                        org.mockito.ArgumentMatchers.eq(List.of("onboarding")));
+    }
+
+    @Test
+    @DisplayName("GET /chat/{threadId} — 히스토리 turn id들로 curatedQaService.findFailedTurnIds를 호출해 모델에 노출")
+    void chat_existingThread_exposesCuratedEmbedFailedTurnIds() throws Exception {
+        when(threadMetaService.findById(any(), eq("thread-01"))).thenReturn(Optional.of(
+                new ThreadMeta("thread-01", "user", "제목", "latest", "now", "now", "COST_FIRST", "")));
+        List<MemoryRepository.Turn> turns = List.of(
+                new MemoryRepository.Turn(1L, "q1", "a1", null, null, 0, 0, 0, "local", 1, "LIKE", "M"),
+                new MemoryRepository.Turn(2L, "q2", "a2", null, null, 0, 0, 0, "local", 1, null, "M"));
+        when(memoryService.getTurns(any(), eq("thread-01"))).thenReturn(turns);
+        when(curatedQaService.findFailedTurnIds(List.of(1L, 2L))).thenReturn(Set.of(1L));
+
+        // base.html reads principal.displayName — needs a real AppUserDetails, not @WithMockUser's default.
+        AppUserDetails principal = new AppUserDetails("id-1", "user@local", "", "User", "USER", true, false);
+
+        mvc.perform(get("/chat/thread-01").with(user(principal)))
+                .andExpect(status().isOk())
+                .andExpect(model().attribute("curatedEmbedFailedTurnIds", Set.of(1L)));
+
+        verify(curatedQaService).findFailedTurnIds(List.of(1L, 2L));
     }
 }

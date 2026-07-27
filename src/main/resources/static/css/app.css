@@ -214,6 +214,17 @@
     padding-bottom: calc(0.5rem + env(safe-area-inset-bottom));
 }
 
+/* ── 응답 모드 토글 버튼 (S/M/L) — 기본 btn-group-sm 폭의 1.5배 + 굵게 ──── */
+.response-mode-btn {
+    min-width: 2.6rem;
+    font-weight: 700;
+}
+
+/* ── 설정 페이지: LLM 프로바이더 표 — 행 사이 구분선 숨김 (헤더 밑줄은 유지) ──── */
+#llm-providers tbody > tr > * {
+    border-bottom-width: 0;
+}
+
 /* ── Mobile tweaks ───────────────────────────────────────────────────── */
 @media (max-width: 767.98px) {
     /* iOS zooms any input whose font-size < 16px on focus. Force 16px on
@@ -250,11 +261,6 @@
 .htmx-indicator               { opacity: 0; transition: opacity 150ms ease-in; }
 .htmx-request .htmx-indicator,
 .htmx-request.htmx-indicator  { opacity: 1; }
-
-/* ── DUAL bubble tabs ────────────────────────────────────────────────── */
-.dual-bubble .nav-tabs              { border-bottom: 1px solid var(--border-default); }
-.dual-bubble .nav-link              { color: var(--fg-muted); font-size: 0.8rem; padding: 4px 10px; }
-.dual-bubble .nav-link.active       { font-weight: 600; }
 
 /* ── Message bubble word-wrap ─────────────────────────────────────────── */
 .bubble-user,

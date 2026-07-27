@@ -34,5 +34,17 @@ public final class BackgroundUsage {
         return PREFIXES.stream().anyMatch(providerName::startsWith);
     }
 
+    /** All known background-usage prefixes (each ending in {@code ':'}) — /llm-usage iterates these
+     *  to find which categories have any recorded usage, merged across whichever underlying LOCAL
+     *  provider(s) actually served each call (see {@link #label}). */
+    public static Set<String> prefixes() {
+        return PREFIXES;
+    }
+
+    /** Display label for a prefix — the prefix without its trailing {@code ':'} (e.g. {@code "title:"} → {@code "title"}). */
+    public static String label(String prefix) {
+        return prefix.endsWith(":") ? prefix.substring(0, prefix.length() - 1) : prefix;
+    }
+
     private BackgroundUsage() {}
 }

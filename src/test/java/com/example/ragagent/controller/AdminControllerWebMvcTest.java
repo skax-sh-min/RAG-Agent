@@ -30,6 +30,9 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
@@ -106,22 +109,58 @@ class AdminControllerWebMvcTest {
                 .andExpect(content().string(containsString("vec_version")));
     }
 
+    // ── 청크 목록 조회 — 페이지당 건수 ────────────────────────────────────────
+
+    @Test
+    @DisplayName("GET /admin/chunks — limit 파라미터 생략 시 기본값 20건")
+    void chunks_defaultLimitIsTwenty() throws Exception {
+        when(adminService.getChunks(anyString(), any(), eq(0), eq(20))).thenReturn(List.of());
+
+        mvc.perform(get("/admin/chunks").with(user(ADMIN)).param("collection", "manual_latest"))
+                .andExpect(status().isOk());
+
+        verify(adminService).getChunks("manual_latest", null, 0, 20);
+    }
+
     // ── §10.10 step ④ — 큐레이션 Q&A 관리 ────────────────────────────────────
 
     @Test
-    @DisplayName("GET /admin — curatedEntries 모델 속성과 항목 렌더")
-    void adminPage_rendersCuratedEntries() throws Exception {
+    @DisplayName("GET /admin — 큐레이션 패널은 접혀 있고, listActive()는 호출되지 않음 (지연 로딩)")
+    void adminPage_doesNotEagerlyLoadCuratedEntries() throws Exception {
         when(adminService.vectorStoreView()).thenReturn(
                 new VectorStoreAdminView("chroma", true, -1, 0, 0, null, null, "/data/memory.db", null));
-        when(curatedQaService.listActive(anyInt())).thenReturn(List.of(
-                new com.example.ragagent.repository.CuratedQaRepository.CuratedQa(
-                        1L, 42L, "u1", "t1", "질문입니다", "답변입니다", "active", "latest",
-                        "2026-01-01T00:00:00", "2026-01-01T00:00:00")));
 
         mvc.perform(get("/admin").with(user(ADMIN)))
                 .andExpect(status().isOk())
+                .andExpect(model().attributeDoesNotExist("curatedEntries"))
+                .andExpect(content().string(containsString("펼치면 조회")));
+
+        verifyNoInteractions(curatedQaService);
+    }
+
+    @Test
+    @DisplayName("GET /admin/curated — curatedEntries 모델 속성과 항목 렌더 (패널 펼침 시 호출되는 지연 로딩 프래그먼트)")
+    void curatedPanel_rendersCuratedEntries() throws Exception {
+        when(curatedQaService.listActive(anyInt(), anyInt())).thenReturn(List.of(
+                new com.example.ragagent.repository.CuratedQaRepository.CuratedQa(
+                        1L, 42L, "u1", "t1", "질문입니다", "답변입니다", "active", "latest",
+                        "2026-01-01T00:00:00", "2026-01-01T00:00:00", "ok")));
+
+        mvc.perform(get("/admin/curated").with(user(ADMIN)))
+                .andExpect(status().isOk())
                 .andExpect(model().attributeExists("curatedEntries"))
                 .andExpect(content().string(containsString("질문입니다")));
+    }
+
+    @Test
+    @DisplayName("GET /admin/curated — offset/limit 파라미터 생략 시 기본값 0/20으로 서비스 호출")
+    void curatedPanel_defaultsOffsetZeroLimitTwenty() throws Exception {
+        when(curatedQaService.listActive(anyInt(), anyInt())).thenReturn(List.of());
+
+        mvc.perform(get("/admin/curated").with(user(ADMIN)))
+                .andExpect(status().isOk());
+
+        verify(curatedQaService).listActive(0, 20);
     }
 
     @Test
@@ -130,7 +169,7 @@ class AdminControllerWebMvcTest {
         when(curatedQaService.findById(1L)).thenReturn(Optional.of(
                 new com.example.ragagent.repository.CuratedQaRepository.CuratedQa(
                         1L, 42L, "u1", "t1", "질문", "답변", "active", "latest",
-                        "2026-01-01T00:00:00", "2026-01-01T00:00:00")));
+                        "2026-01-01T00:00:00", "2026-01-01T00:00:00", "ok")));
 
         mvc.perform(get("/admin/curated/1/detail").with(user(ADMIN)))
                 .andExpect(status().isOk())
@@ -183,6 +222,43 @@ class AdminControllerWebMvcTest {
         when(curatedQaService.forceRemove(99L)).thenReturn(false);
 
         mvc.perform(delete("/admin/curated/99").with(user(ADMIN)).with(csrf()))
+                .andExpect(status().isNotFound());
+    }
+
+    // ── 청크 재인덱싱 (재임베딩 + FTS 재색인) ──────────────────────────────────
+
+    @Test
+    @DisplayName("POST /admin/chunks/{id}/reindex — 본문 없이 호출해도 regenerateKeywords=false로 처리(200)")
+    void reindexChunk_noBody_defaultsToKeepKeywords() throws Exception {
+        when(adminService.reindexChunk(anyString(), anyString(), org.mockito.ArgumentMatchers.eq(false)))
+                .thenReturn(true);
+
+        mvc.perform(post("/admin/chunks/c1/reindex").with(user(ADMIN)).with(csrf())
+                        .param("collection", "manual_latest"))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("POST /admin/chunks/{id}/reindex — regenerateKeywords=true가 서비스로 그대로 전달됨")
+    void reindexChunk_regenerateKeywordsTrue_passedThrough() throws Exception {
+        when(adminService.reindexChunk(anyString(), anyString(), org.mockito.ArgumentMatchers.eq(true)))
+                .thenReturn(true);
+
+        mvc.perform(post("/admin/chunks/c1/reindex").with(user(ADMIN)).with(csrf())
+                        .param("collection", "manual_latest")
+                        .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                        .content("{\"regenerateKeywords\":true}"))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("POST /admin/chunks/{id}/reindex — 청크가 없거나 재색인 실패 시 404")
+    void reindexChunk_failure_returns404() throws Exception {
+        when(adminService.reindexChunk(anyString(), anyString(), org.mockito.ArgumentMatchers.anyBoolean()))
+                .thenReturn(false);
+
+        mvc.perform(post("/admin/chunks/missing/reindex").with(user(ADMIN)).with(csrf())
+                        .param("collection", "manual_latest"))
                 .andExpect(status().isNotFound());
     }
 }
