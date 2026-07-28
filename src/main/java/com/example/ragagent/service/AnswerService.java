@@ -5,6 +5,7 @@ import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.ingestion.MarkdownNoiseNormalizer;
 import com.example.ragagent.model.MetaKey;
 import com.example.ragagent.model.ResponseMode;
+import com.example.ragagent.llm.LlmCurlLogger;
 import com.example.ragagent.llm.LlmProvider;
 import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.RoutingMode;
@@ -202,6 +203,7 @@ public class AnswerService {
         // §6.18 — general/RAG temperature (app.llm.temperature / LLM_TEMPERATURE), was hardcoded 0.0.
         OpenAiApi.ChatCompletionRequest request =
                 new OpenAiApi.ChatCompletionRequest(messages, provider.model(), props.llmSafe().temperature(), true);
+        logDirectRequest(provider, request);
         provider.openAiApi().chatCompletionStream(request)
                 .mapNotNull(chunk -> {
                     if (chunk.choices() == null || chunk.choices().isEmpty()) return null;
@@ -215,6 +217,24 @@ public class AnswerService {
                         signal, provider.name(), threadId))
                 .toIterable()
                 .forEach(tokenSink);
+    }
+
+    /**
+     * streamDirect() calls {@link OpenAiApi} directly, bypassing {@code ChatModel} (and therefore
+     * {@link com.example.ragagent.llm.LoggingChatModel}) entirely — see the class javadoc for why.
+     * Without this, the actual RAG answer request (the one carrying the retrieved-document
+     * context) never showed up in logs at any level. Mirrors LoggingChatModel's TRACE(full
+     * curl)/DEBUG(endpoint+body) split via the shared {@link LlmCurlLogger}.
+     */
+    private void logDirectRequest(LlmProvider provider, OpenAiApi.ChatCompletionRequest request) {
+        if (!log.isDebugEnabled()) return;
+        try {
+            String endpoint = provider.baseUrl().replaceAll("/+$", "") + "/chat/completions";
+            String json = LlmCurlLogger.toCurlBodyJson(request);
+            LlmCurlLogger.log(log, "LLM", provider.name(), endpoint, provider.apiKey(), json);
+        } catch (Exception e) {
+            log.debug("[LLM curl] serialization error: {}", e.getMessage());
+        }
     }
 
     /**

@@ -1,5 +1,9 @@
 package com.example.ragagent.service;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.example.ragagent.agent.AgentState;
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.llm.LlmProvider;
@@ -12,6 +16,7 @@ import com.example.ragagent.model.ResponseMode;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.parallel.ResourceLock;
 import org.mockito.ArgumentCaptor;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.model.ChatModel;
@@ -19,6 +24,7 @@ import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.document.Document;
+import org.springframework.ai.openai.api.OpenAiApi;
 import org.springframework.context.MessageSource;
 import reactor.core.publisher.Flux;
 
@@ -54,6 +60,7 @@ import static org.mockito.Mockito.when;
  * (chars/4) usage entry via LlmRouter.recordApproxUsage() and fold the same estimate into
  * AgentState's totals.
  */
+@ResourceLock("global-state")
 class AnswerServiceTest {
 
     private static final int MAX_RETRY = 2;
@@ -248,6 +255,48 @@ class AnswerServiceTest {
         // 스트리밍 답변 자체는 real ChatResponse usage가 없어 chars/4 근사치가 누적된다 (evaluate() 몫은 0).
         assertThat(result.totalOutputTokens()).isEqualTo((int) LlmRouter.approxTokens("스트리밍 답변"));
         verify(llmRouter).recordApproxUsage(eq("local"), anyString(), eq("스트리밍 답변"));
+    }
+
+    @Test
+    @DisplayName("STREAMING — provider.stream()=true 인 네이티브 OpenAiApi 우회 경로(streamDirect)도 DEBUG 로그(엔드포인트+body)를 남긴다")
+    void streaming_streamDirectPath_logsRequestAtDebugLevel() {
+        Logger logbackLogger = (Logger) org.slf4j.LoggerFactory.getLogger(AnswerService.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        logbackLogger.addAppender(appender);
+        Level previousLevel = logbackLogger.getLevel();
+        logbackLogger.setLevel(Level.DEBUG);
+        try {
+            OpenAiApi openAiApi = mock(OpenAiApi.class);
+            var delta = new OpenAiApi.ChatCompletionMessage("스트리밍 답변", OpenAiApi.ChatCompletionMessage.Role.ASSISTANT);
+            var choice = new OpenAiApi.ChatCompletionChunk.ChunkChoice(null, 0, delta, null);
+            var chunk = new OpenAiApi.ChatCompletionChunk("id", List.of(choice), null, "model", null, null, null, null);
+            when(openAiApi.chatCompletionStream(any())).thenReturn(Flux.just(chunk));
+
+            LlmProvider provider = new LlmProvider("local", TaskType.TEXT, ProviderRole.LOCAL, 0,
+                    "sk-test-key-123456", "http://localhost:1234/v1", "model", true, mock(ChatModel.class), openAiApi);
+            when(llmRouter.routeProvider(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST))).thenReturn(provider);
+            when(llmRouter.executeGatedWithUsage(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), any()))
+                    .thenReturn(new LlmRouter.LlmResult("{\"sufficient\":true}", 0, 0));
+
+            GraphListener listener = new GraphListener() {
+                @Override public void onToken(String text) { }
+            };
+            service.executeStreaming(newState(RoutingMode.COST_FIRST), listener);
+
+            assertThat(appender.list).anySatisfy(event -> {
+                assertThat(event.getLevel()).isEqualTo(Level.DEBUG);
+                String msg = event.getFormattedMessage();
+                assertThat(msg).contains("local")
+                        .contains("http://localhost:1234/v1/chat/completions")
+                        .doesNotContain("curl -s -X POST")
+                        .doesNotContain("Authorization")
+                        .doesNotContain("sk-test-key-123456");
+            });
+        } finally {
+            logbackLogger.detachAppender(appender);
+            logbackLogger.setLevel(previousLevel);
+        }
     }
 
     // ── PROGRESSIVE 업그레이드 경로 ───────────────────────────────────────
