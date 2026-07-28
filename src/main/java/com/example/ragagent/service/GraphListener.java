@@ -25,6 +25,15 @@ public interface GraphListener {
     default void onUpgrade(String provider) {}
 
     /**
+     * Fired once, right before the blocking sufficiency+grounded evaluation call
+     * ({@code AnswerService.evaluate()}) — the answer has finished streaming but the turn isn't
+     * done yet, and that evaluation call can take several seconds to tens of seconds with no
+     * token/stage event of its own. Lets a streaming client show a "verifying" indicator instead
+     * of going silent until the next event ({@link #onRetry} or the terminal "done").
+     */
+    default void onVerifying() {}
+
+    /**
      * Fired when the graph decides the just-streamed answer failed verification (answer
      * insufficiency or critic ungroundedness) and is about to loop back to RETRIEVAL with an
      * expanded scope. Lets the streaming client preserve the unverified answer (marked 미검증)

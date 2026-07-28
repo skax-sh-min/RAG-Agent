@@ -245,6 +245,23 @@ class StreamingAgentServiceTest {
         verify(emitter, org.mockito.Mockito.times(2)).send(any(SseEmitter.SseEventBuilder.class));
     }
 
+    // ── verifying 이벤트 (스트리밍 종료 ~ sufficiency evaluate() 사이 무음 구간 표시) ──────
+
+    @Test
+    @DisplayName("onVerifying() — done 이벤트 외에 verifying 이벤트가 추가로 1회 전송된다")
+    void run_onVerifying_sendsExtraEvent() throws Exception {
+        when(agentGraph.runStreaming(any(), any())).thenAnswer(inv -> {
+            GraphListener listener = inv.getArgument(1);
+            listener.onVerifying();
+            return resultState("답변");
+        });
+
+        service.run("u1", form(false, null), emitter);
+
+        // "done" 이벤트 + "verifying" 이벤트 = 2건.
+        verify(emitter, org.mockito.Mockito.times(2)).send(any(SseEmitter.SseEventBuilder.class));
+    }
+
     // ── Idle watchdog ───────────────────────────────────────────────────────
     // props.sseIdleTimeoutMs() is deliberately small here so the watchdog's own background
     // scheduled thread genuinely fires (and interrupts the calling thread, since run() is
@@ -286,6 +303,26 @@ class StreamingAgentServiceTest {
 
         assertThat(Thread.currentThread().isInterrupted())
                 .as("active token stream (total > idle timeout) must not be cut off").isFalse();
+        verify(emitter).complete();
+        verify(emitter, never()).completeWithError(any());
+    }
+
+    @Test
+    @DisplayName("idle watchdog — onVerifying() 호출도 진행 신호로 간주되어 idle timeout을 리셋한다")
+    void run_onVerifying_resetsIdleTimeout() {
+        when(props.sseIdleTimeoutMs()).thenReturn(300L);
+        when(agentGraph.runStreaming(any(), any())).thenAnswer(inv -> {
+            GraphListener listener = inv.getArgument(1);
+            Thread.sleep(200); // under the 300ms idle timeout
+            listener.onVerifying(); // resets the clock — the slow evaluate() call this represents
+            Thread.sleep(200); // would otherwise trip the watchdog on its own (200+200 > 300)
+            return resultState("답변");
+        });
+
+        service.run("u1", form(false, null), emitter);
+
+        assertThat(Thread.currentThread().isInterrupted())
+                .as("onVerifying() should count as progress, not idle").isFalse();
         verify(emitter).complete();
         verify(emitter, never()).completeWithError(any());
     }

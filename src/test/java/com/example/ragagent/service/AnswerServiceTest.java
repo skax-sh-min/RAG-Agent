@@ -32,6 +32,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -255,6 +256,34 @@ class AnswerServiceTest {
         // 스트리밍 답변 자체는 real ChatResponse usage가 없어 chars/4 근사치가 누적된다 (evaluate() 몫은 0).
         assertThat(result.totalOutputTokens()).isEqualTo((int) LlmRouter.approxTokens("스트리밍 답변"));
         verify(llmRouter).recordApproxUsage(eq("local"), anyString(), eq("스트리밍 답변"));
+    }
+
+    @Test
+    @DisplayName("STREAMING — 답변 스트리밍이 끝난 직후, sufficiency evaluate() 호출 전에 onVerifying()이 정확히 1회 호출된다")
+    void streaming_callsOnVerifyingBeforeSufficiencyEvaluation() {
+        ChatModel chatModel = mock(ChatModel.class);
+        when(chatModel.stream(any(Prompt.class))).thenReturn(Flux.just(chatResponse("스트리밍 답변")));
+        LlmProvider provider = new LlmProvider(
+                "local", TaskType.TEXT, ProviderRole.LOCAL, 0, "key", null, "model", false, chatModel, null);
+        when(llmRouter.routeProvider(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST))).thenReturn(provider);
+
+        List<String> callOrder = new ArrayList<>();
+        when(llmRouter.executeGatedWithUsage(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), any()))
+                .thenAnswer(inv -> {
+                    callOrder.add("evaluate");
+                    return new LlmRouter.LlmResult("{\"sufficient\":true}", 0, 0);
+                });
+
+        AtomicInteger verifyingCalls = new AtomicInteger();
+        GraphListener listener = new GraphListener() {
+            @Override public void onToken(String text) { callOrder.add("token"); }
+            @Override public void onVerifying() { verifyingCalls.incrementAndGet(); callOrder.add("verifying"); }
+        };
+
+        service.executeStreaming(newState(RoutingMode.COST_FIRST), listener);
+
+        assertThat(verifyingCalls.get()).isEqualTo(1);
+        assertThat(callOrder).containsSubsequence("token", "verifying", "evaluate");
     }
 
     @Test

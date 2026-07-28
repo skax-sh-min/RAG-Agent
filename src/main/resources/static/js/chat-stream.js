@@ -146,6 +146,7 @@
     function onRetry(bubbleId, data) {
         const contentEl = document.getElementById(`stream-content-${bubbleId}`);
         if (!contentEl) return;
+        removeVerifyingIndicator(bubbleId); // strip before reading raw text below
         const rawText = contentEl.textContent || '';
 
         // Superseded-answers container, kept above the live content.
@@ -243,13 +244,40 @@
         scrollToBottom();
     }
 
+    /**
+     * Streaming has finished but the turn isn't done — a blocking sufficiency+grounded LLM
+     * check (several seconds to tens of seconds) runs before the next event. Append a small
+     * indicator as the last child of the content element so the existing .stream-cursor
+     * ::after pseudo-element (still on the parent) keeps blinking right after it, same as
+     * during token streaming. The indicator is a real DOM node (not raw text appended to
+     * contentEl directly) precisely so removeVerifyingIndicator() can strip it cleanly before
+     * onRetry()/onDone()/onAborted() read/render the raw answer text.
+     */
+    function onVerifying(bubbleId) {
+        const contentEl = document.getElementById(`stream-content-${bubbleId}`);
+        if (!contentEl || document.getElementById(`stream-verifying-${bubbleId}`)) return;
+        const indicator = document.createElement('span');
+        indicator.id = `stream-verifying-${bubbleId}`;
+        indicator.className = 'text-muted small ms-1';
+        indicator.textContent = '(응답결과 검증 중)';
+        contentEl.appendChild(indicator);
+        scrollToBottom();
+    }
+
+    /** Strips the "verifying" indicator span before anything reads contentEl's raw text. */
+    function removeVerifyingIndicator(bubbleId) {
+        document.getElementById(`stream-verifying-${bubbleId}`)?.remove();
+    }
+
     function onDone(bubbleId, data) {
         const contentEl = document.getElementById(`stream-content-${bubbleId}`);
         const stageEl   = document.getElementById(`stream-stage-${bubbleId}`);
         const metaEl    = document.getElementById(`stream-meta-${bubbleId}`);
 
-        // 1. Remove streaming cursor
+        // 1. Remove streaming cursor + the "verifying" indicator (if the turn ended right after
+        //    a verification pass, before markdown rendering picks up contentEl's raw text below).
         if (contentEl) contentEl.classList.remove('stream-cursor');
+        removeVerifyingIndicator(bubbleId);
 
         // Capture raw (pre-render) answer length for the char-count metadata below —
         // must happen before markdown rendering replaces textContent with rendered HTML.
@@ -319,6 +347,7 @@
     /** User-initiated stop (AbortController). Keeps whatever partial answer already streamed in. */
     function onAborted(bubbleId) {
         clearRetryArtifacts(bubbleId);
+        removeVerifyingIndicator(bubbleId);
         const stageEl = document.getElementById(`stream-stage-${bubbleId}`);
         if (stageEl) stageEl.remove();
 
@@ -415,13 +444,14 @@
             return;
         }
         switch (name) {
-            case 'stage':   onStage(bubbleId, data);          break;
-            case 'sources': onSources(bubbleId, data);        break;
-            case 'images':  onImages(bubbleId, data);         break;
-            case 'token':   onToken(bubbleId, data.text);     break;
-            case 'retry':   onRetry(bubbleId, data);          break;
-            case 'done':    onDone(bubbleId, data);           break;
-            case 'error':   onError(bubbleId, data.message);  break;
+            case 'stage':     onStage(bubbleId, data);          break;
+            case 'sources':   onSources(bubbleId, data);        break;
+            case 'images':    onImages(bubbleId, data);         break;
+            case 'token':     onToken(bubbleId, data.text);     break;
+            case 'verifying': onVerifying(bubbleId);            break;
+            case 'retry':     onRetry(bubbleId, data);          break;
+            case 'done':      onDone(bubbleId, data);           break;
+            case 'error':     onError(bubbleId, data.message);  break;
         }
     }
 

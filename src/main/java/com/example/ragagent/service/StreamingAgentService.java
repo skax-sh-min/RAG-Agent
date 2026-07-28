@@ -262,6 +262,12 @@ public class StreamingAgentService {
         }
 
         @Override
+        public void onVerifying() {
+            lastActivityNanos.set(System.nanoTime());
+            sendEvent(emitter, "verifying", Map.of());
+        }
+
+        @Override
         public void onRetry(String reason, int retryCount) {
             lastActivityNanos.set(System.nanoTime());
             Map<String, Object> payload = new HashMap<>();

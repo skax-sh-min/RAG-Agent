@@ -109,6 +109,10 @@ public class AnswerService {
     // ── Evaluation (sufficiency + grounding) + PROGRESSIVE ───────────────────
 
     private AgentState checkSufficiencyAndMaybeUpgrade(AgentState state, String answer, GraphListener listener) {
+        // The blocking evaluate() call below can take several seconds to tens of seconds with no
+        // token/stage event of its own — tell the streaming client to show a "verifying" indicator
+        // instead of going silent between the last answer token and the next event.
+        if (listener != null) listener.onVerifying();
         AgentState resultState = evaluate(state, answer, state.locale());
         if (state.routingMode() == RoutingMode.PROGRESSIVE
                 && resultState.needsRetry()
