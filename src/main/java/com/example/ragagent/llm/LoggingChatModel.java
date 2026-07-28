@@ -68,11 +68,18 @@ public class LoggingChatModel implements ChatModel {
             }
 
             String json = MAPPER.writerWithDefaultPrettyPrinter().writeValueAsString(body);
-            log.debug("[LLM curl] provider={}\ncurl -s -X POST '{}' \\\n"
-                    + "  -H 'Content-Type: application/json' \\\n"
-                    + "  -H 'Authorization: Bearer {}' \\\n"
-                    + "  -d @- << 'EOF'\n{}\nEOF",
-                    providerName, endpoint, maskKey(apiKey), json);
+            // TRACE: full replayable curl command (headers, auth, heredoc). DEBUG: just the
+            // endpoint + body — the curl wrapper text adds little signal but roughly doubles the
+            // line length, which was making DEBUG logs unwieldy for large RAG prompts.
+            if (log.isTraceEnabled()) {
+                log.trace("[LLM curl] provider={}\ncurl -s -X POST '{}' \\\n"
+                        + "  -H 'Content-Type: application/json' \\\n"
+                        + "  -H 'Authorization: Bearer {}' \\\n"
+                        + "  -d @- << 'EOF'\n{}\nEOF",
+                        providerName, endpoint, maskKey(apiKey), json);
+            } else {
+                log.debug("[LLM] provider={} endpoint={}\n{}", providerName, endpoint, json);
+            }
         } catch (Exception e) {
             log.debug("[LLM curl] serialization error: {}", e.getMessage());
         }

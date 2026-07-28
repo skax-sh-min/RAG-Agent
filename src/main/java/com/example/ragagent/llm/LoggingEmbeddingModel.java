@@ -70,11 +70,17 @@ public class LoggingEmbeddingModel implements EmbeddingModel {
             for (String text : texts) input.add(text);
 
             String json = MAPPER.writerWithDefaultPrettyPrinter().writeValueAsString(body);
-            log.debug("[EMBED curl] provider={} texts={}\ncurl -s -X POST '{}' \\\n"
-                    + "  -H 'Content-Type: application/json' \\\n"
-                    + "  -H 'Authorization: Bearer {}' \\\n"
-                    + "  -d @- << 'EOF'\n{}\nEOF",
-                    providerName, texts.size(), endpoint, maskKey(apiKey), json);
+            // TRACE: full replayable curl command. DEBUG: just endpoint + body — see
+            // LoggingChatModel.logCurl() for why (same DEBUG-log-too-long complaint applies here).
+            if (log.isTraceEnabled()) {
+                log.trace("[EMBED curl] provider={} texts={}\ncurl -s -X POST '{}' \\\n"
+                        + "  -H 'Content-Type: application/json' \\\n"
+                        + "  -H 'Authorization: Bearer {}' \\\n"
+                        + "  -d @- << 'EOF'\n{}\nEOF",
+                        providerName, texts.size(), endpoint, maskKey(apiKey), json);
+            } else {
+                log.debug("[EMBED] provider={} texts={} endpoint={}\n{}", providerName, texts.size(), endpoint, json);
+            }
         } catch (Exception e) {
             log.debug("[EMBED curl] serialization error: {}", e.getMessage());
         }
