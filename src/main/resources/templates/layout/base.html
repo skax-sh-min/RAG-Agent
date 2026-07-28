@@ -101,8 +101,11 @@
             </span>
 
             <!-- LOCAL LLM concurrency indicator (role=LOCAL, priority=1 tier) — hidden until the
-                 first poll confirms such a provider exists; refreshed every ~3s (script below) -->
-            <span id="llm-concurrency" class="small text-secondary d-none">
+                 first poll confirms such a provider exists; refreshed every ~3s (script below).
+                 Bootstrap Tooltip (not native title) for the same fast-appearance reason as the
+                 S/M/L response-mode buttons in chat.html — see that file's tooltip init comment. -->
+            <span id="llm-concurrency" class="small text-secondary d-none"
+                  data-bs-toggle="tooltip" th:title="#{nav.llm.tooltip}">
                 <span th:text="#{nav.llm.label}">LLM</span>: <span id="llm-concurrency-value">0/0</span>
             </span>
 
@@ -304,7 +307,10 @@ const I18N = {
     })();
 
     /* LOCAL LLM concurrency indicator (role=LOCAL, priority=1 tier) — polled every ~3s.
-       Hidden whenever no such provider is available (never shown as a stale/meaningless 0/0). */
+       Hidden whenever no such provider is available (never shown as a stale/meaningless 0/0).
+       inUse already folds in embedding activity + fully-counts circuit-broken providers and is
+       clamped to capacity server-side (OperationsController.getLlmConcurrency), so inUse ===
+       capacity here reliably means "fully saturated" — styled bold red as a busy/backpressure cue. */
     (function () {
         const wrap  = document.getElementById('llm-concurrency');
         const value = document.getElementById('llm-concurrency-value');
@@ -314,6 +320,9 @@ const I18N = {
                 .then(d => {
                     if (d.available) {
                         value.textContent = d.inUse + '/' + d.capacity;
+                        const saturated = d.inUse >= d.capacity;
+                        value.classList.toggle('text-danger', saturated);
+                        value.classList.toggle('fw-bold', saturated);
                         wrap.classList.remove('d-none');
                     } else {
                         wrap.classList.add('d-none');
@@ -323,6 +332,9 @@ const I18N = {
         }
         refreshLlmConcurrency();
         setInterval(refreshLlmConcurrency, 3000);
+        // Same fast-appearance rationale as chat.html's S/M/L tooltip init — native title's
+        // ~1.5s browser default delay reads as unresponsive for a quick-glance header hint.
+        new bootstrap.Tooltip(wrap, { delay: { show: 100, hide: 0 } });
     })();
 
     /* Global toast helper — called by child pages */

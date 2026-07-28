@@ -484,20 +484,41 @@ class LlmRouterTest {
     }
 
     @Test
-    @DisplayName("localTier1Concurrency — 서킷브레이커 차단·런타임 비활성화된 프로바이더는 집계에서 제외한다")
-    void localTier1Concurrency_excludesBlockedOrDisabledProviders() {
+    @DisplayName("localTier1Concurrency — 서킷브레이커 차단된 프로바이더는 capacity엔 남고 전체가 inUse로 집계된다(완전히 제외되지 않음)")
+    void localTier1Concurrency_blockedProviderCountsFullyAsInUse() {
+        var local1 = p("local", ProviderRole.LOCAL, TaskType.BOTH, 1);
+        var local2 = p("local-2", ProviderRole.LOCAL, TaskType.BOTH, 1);
+        var r = new LlmRouter(List.of(local1, local2), null, breaker, RoutingMode.COST_FIRST, 0.6, 180,
+                Map.of("local", 3, "local-2", 4), 3, 20);
+
+        var before = r.localTier1Concurrency().orElseThrow();
+        assertThat(before.capacity()).isEqualTo(7);
+        assertThat(before.inUse()).isEqualTo(0);
+
+        breaker.block("local", null);
+        var afterBlock = r.localTier1Concurrency().orElseThrow();
+        assertThat(afterBlock.capacity()).isEqualTo(7); // 차단돼도 capacity 합계에는 그대로 남는다
+        assertThat(afterBlock.inUse()).isEqualTo(3); // local의 capacity(3) 전체가 "사용 중"으로 집계됨
+
+        breaker.block("local-2", null);
+        var bothBlocked = r.localTier1Concurrency().orElseThrow();
+        assertThat(bothBlocked.capacity()).isEqualTo(7);
+        assertThat(bothBlocked.inUse()).isEqualTo(7); // 전부 차단 → 완전 포화로 표시(사라지지 않음)
+    }
+
+    @Test
+    @DisplayName("localTier1Concurrency — 런타임 비활성화(/settings 토글)된 프로바이더는 여전히 집계에서 완전히 제외한다")
+    void localTier1Concurrency_disabledProviderStillExcluded() {
         var local1 = p("local", ProviderRole.LOCAL, TaskType.BOTH, 1);
         var local2 = p("local-2", ProviderRole.LOCAL, TaskType.BOTH, 1);
         var toggle = new ProviderToggle();
         var r = new LlmRouter(List.of(local1, local2), null, breaker, RoutingMode.COST_FIRST, 0.6, 180,
                 Map.of("local", 3, "local-2", 4), 3, 20, toggle);
 
-        assertThat(r.localTier1Concurrency().orElseThrow().capacity()).isEqualTo(7);
-
-        breaker.block("local", null);
-        assertThat(r.localTier1Concurrency().orElseThrow().capacity()).isEqualTo(4); // local-2만 남음
-
         toggle.setEnabled("local-2", false);
-        assertThat(r.localTier1Concurrency()).isEmpty(); // 둘 다 제외됨
+        assertThat(r.localTier1Concurrency().orElseThrow().capacity()).isEqualTo(3); // local-2만 제외
+
+        toggle.setEnabled("local", false);
+        assertThat(r.localTier1Concurrency()).isEmpty(); // 남은 프로바이더가 없으면 empty
     }
 }

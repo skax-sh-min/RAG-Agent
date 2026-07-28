@@ -15,6 +15,7 @@ import org.springframework.ai.embedding.EmbeddingResponseMetadata;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -89,6 +90,34 @@ class TrackingEmbeddingModelTest {
         assertThat(out).isNotNull();
         verify(usageRepo).record("embed:nomic", 5, 0);
         verify(delegate, never()).embed(any(Document.class));
+    }
+
+    @Test
+    @DisplayName("call() — 위임 호출이 실행되는 동안만 EmbeddingConcurrencyTracker 가 증가하고, 끝나면 0으로 돌아온다")
+    void tracksInFlightAroundDelegateCall() {
+        var tracker = new EmbeddingConcurrencyTracker();
+        when(delegate.call(any())).thenAnswer(inv -> {
+            assertThat(tracker.get()).isEqualTo(1); // 위임 호출 도중엔 반드시 1
+            return responseWithUsage(1);
+        });
+        var model = new TrackingEmbeddingModel(delegate, usageRepo, "nomic", true, tracker);
+
+        model.call(new EmbeddingRequest(List.of("hi"), null));
+
+        assertThat(tracker.get()).isEqualTo(0);
+    }
+
+    @Test
+    @DisplayName("call() — 위임 호출이 예외를 던져도 EmbeddingConcurrencyTracker 는 반드시 감소한다")
+    void decrementsTrackerEvenOnDelegateFailure() {
+        var tracker = new EmbeddingConcurrencyTracker();
+        when(delegate.call(any())).thenThrow(new RuntimeException("boom"));
+        var model = new TrackingEmbeddingModel(delegate, usageRepo, "nomic", true, tracker);
+
+        assertThatThrownBy(() -> model.call(new EmbeddingRequest(List.of("hi"), null)))
+                .isInstanceOf(RuntimeException.class);
+
+        assertThat(tracker.get()).isEqualTo(0);
     }
 
     @Test

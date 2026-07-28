@@ -294,16 +294,22 @@ public class LlmRouter {
      * In-flight vs. capacity for the "main" LOCAL tier — {@code role=LOCAL, priority=1}, the
      * answer-serving local model(s) (LLM_ROUTING.md §9's {@code priority=0} MICRO_TEXT offload
      * model, e.g. {@code local-fast}, is deliberately excluded — it's not the tier users' chat
-     * requests actually wait on). Summed across every currently *available* provider at that
-     * role+priority — registered, not circuit-broken, not runtime-disabled via {@code /settings} —
-     * so a horizontally load-balanced pair (e.g. {@code local} + {@code local-2}) reports combined
-     * capacity. Empty when no such provider is available, so the header's LLM indicator can hide
-     * itself entirely instead of showing a meaningless {@code 0/0}.
+     * requests actually wait on). Summed across every provider at that role+priority that isn't
+     * runtime-disabled via {@code /settings} — a horizontally load-balanced pair (e.g. {@code
+     * local} + {@code local-2}) reports combined capacity. Empty only when no such provider is
+     * registered/enabled at all, so the header's LLM indicator can hide itself entirely instead of
+     * showing a meaningless {@code 0/0}.
+     *
+     * <p>A circuit-broken provider still contributes its full {@code concurrency} to {@code
+     * capacity} — but that whole amount counts as {@code inUse} rather than being excluded: it
+     * isn't accepting any request right now, so from the indicator's point of view its slots are
+     * just as "unavailable" as ones genuinely occupied by an in-flight call. (Excluding it
+     * entirely was the old behavior — for a lone LOCAL provider that's blocked, this used to make
+     * the whole indicator vanish instead of showing e.g. a fully-saturated {@code 3/3}.)
      */
     public Optional<ConcurrencySnapshot> localTier1Concurrency() {
         List<LlmProvider> matches = providers.stream()
                 .filter(p -> p.role() == LOCAL && p.priority() == 1)
-                .filter(p -> !circuitBreaker.isBlocked(p.name()))
                 .filter(p -> !providerToggle.isDisabled(p.name()))
                 .toList();
         if (matches.isEmpty()) {
@@ -313,10 +319,14 @@ public class LlmRouter {
         int inUse = 0;
         for (LlmProvider p : matches) {
             int cap = providerCapacity.getOrDefault(p.name(), defaultProviderConcurrency);
-            Semaphore gate = providerGates.get(p.name());
-            int free = gate != null ? gate.availablePermits() : cap;
             capacity += cap;
-            inUse += Math.max(0, cap - free);
+            if (circuitBreaker.isBlocked(p.name())) {
+                inUse += cap;
+            } else {
+                Semaphore gate = providerGates.get(p.name());
+                int free = gate != null ? gate.availablePermits() : cap;
+                inUse += Math.max(0, cap - free);
+            }
         }
         return Optional.of(new ConcurrencySnapshot(inUse, capacity));
     }

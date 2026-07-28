@@ -5,6 +5,7 @@ import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.context.ThreadContext;
 import com.example.ragagent.llm.BackgroundUsage;
 import com.example.ragagent.llm.CircuitBreaker;
+import com.example.ragagent.llm.EmbeddingConcurrencyTracker;
 import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.TrackingEmbeddingModel;
 import com.example.ragagent.model.LlmProviderReport;
@@ -42,6 +43,7 @@ public class OperationsController {
     private final AuditLogger auditLogger;
     private final CuratedQaService curatedQaService;
     private final LlmRouter llmRouter;
+    private final EmbeddingConcurrencyTracker embeddingConcurrencyTracker;
 
     public OperationsController(ThreadMetaService threadMetaService,
                                 MemoryService memoryService,
@@ -50,7 +52,8 @@ public class OperationsController {
                                 CircuitBreaker circuitBreaker,
                                 AuditLogger auditLogger,
                                 CuratedQaService curatedQaService,
-                                LlmRouter llmRouter) {
+                                LlmRouter llmRouter,
+                                EmbeddingConcurrencyTracker embeddingConcurrencyTracker) {
         this.threadMetaService = threadMetaService;
         this.memoryService = memoryService;
         this.usageRepo = usageRepo;
@@ -59,6 +62,7 @@ public class OperationsController {
         this.auditLogger = auditLogger;
         this.curatedQaService = curatedQaService;
         this.llmRouter = llmRouter;
+        this.embeddingConcurrencyTracker = embeddingConcurrencyTracker;
     }
 
     // ── Page ──────────────────────────────────────────────────────────
@@ -214,15 +218,26 @@ public class OperationsController {
      * polled by the header's {@code LLM: inUse/capacity} indicator every ~3s. {@code available=false}
      * (no {@code inUse}/{@code capacity}) when no such provider is currently available — the
      * indicator hides itself in that case rather than showing a meaningless {@code 0/0}.
+     *
+     * <p>{@code inUse} folds in {@link EmbeddingConcurrencyTracker#get()} — embedding calls
+     * (indexing or query-time) never acquire {@link LlmRouter}'s chat concurrency permits, so
+     * without this the indicator would sit at 0 during embedding no matter how busy the endpoint
+     * actually is. The combined total is clamped to {@code capacity} so the display never shows
+     * something like {@code 5/3} — embedding concurrency is governed by separate limits
+     * (`EMBED_MAX_CONCURRENT_BATCHES`, possibly a different endpoint entirely) that don't share
+     * the chat tier's budget, so a raw sum could otherwise exceed it.
      */
     @GetMapping("/api/v1/llm/concurrency")
     @ResponseBody
     public Map<String, Object> getLlmConcurrency() {
         return llmRouter.localTier1Concurrency()
-                .<Map<String, Object>>map(s -> Map.of(
-                        "available", true,
-                        "inUse", s.inUse(),
-                        "capacity", s.capacity()))
+                .<Map<String, Object>>map(s -> {
+                    int inUse = Math.min(s.capacity(), s.inUse() + embeddingConcurrencyTracker.get());
+                    return Map.of(
+                            "available", true,
+                            "inUse", inUse,
+                            "capacity", s.capacity());
+                })
                 .orElseGet(() -> Map.of("available", false));
     }
 

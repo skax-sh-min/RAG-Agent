@@ -1,6 +1,7 @@
 package com.example.ragagent.config;
 
 import com.example.ragagent.llm.CachingEmbeddingModel;
+import com.example.ragagent.llm.EmbeddingConcurrencyTracker;
 import com.example.ragagent.llm.LoadBalancingEmbeddingModel;
 import com.example.ragagent.llm.LoggingEmbeddingModel;
 import com.example.ragagent.llm.TrackingEmbeddingModel;
@@ -27,7 +28,8 @@ public class EmbeddingBeanConfig {
 
     @Bean
     @Primary
-    public EmbeddingModel embeddingModel(AppProperties props, LlmUsageRepository usageRepo) {
+    public EmbeddingModel embeddingModel(AppProperties props, LlmUsageRepository usageRepo,
+                                         EmbeddingConcurrencyTracker concurrencyTracker) {
         AppProperties.EmbeddingConfig cfg = props.embeddingSafe();
         if (cfg == null || cfg.baseUrl() == null || cfg.baseUrl().isBlank()) {
             throw new IllegalStateException(
@@ -56,7 +58,8 @@ public class EmbeddingBeanConfig {
             log.info("Embedding load balancing (§6.21 E1) across {} endpoints: {}", urls.size(), urls);
         }
 
-        EmbeddingModel tracked = new TrackingEmbeddingModel(base, usageRepo, model, cfg.usageFallbackEnabled());
+        EmbeddingModel tracked = new TrackingEmbeddingModel(base, usageRepo, model,
+                cfg.usageFallbackEnabled(), concurrencyTracker);
         if (!props.searchQueryEmbedCacheEnabledSafe()) {
             return tracked;
         }
