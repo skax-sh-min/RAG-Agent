@@ -871,11 +871,18 @@ public class MarkdownCorrectionService {
         AtomicInteger doneCount = new AtomicInteger(0);
         try (var exec = Executors.newVirtualThreadPerTaskExecutor()) {
             List<CompletableFuture<Void>> futures = new ArrayList<>(toDescribe.size());
+            int seq = 0;
             for (Map.Entry<String, Path> e : toDescribe.entrySet()) {
+                // seq = submission order (doc order), not completion order — the semaphore
+                // (maxConcurrent slots, 180 virtual threads racing to acquire) makes completion
+                // order effectively random, so a raw "이미지 분석 요청" log looks like some images
+                // are skipped when they're really just still queued. Tagging each request with its
+                // submission index lets that be told apart from an actual skip.
+                String seqLabel = (++seq) + "/" + total;
                 futures.add(CompletableFuture.runAsync(() -> {
                     gate.acquireUninterruptibly();
                     try {
-                        cache.put(e.getKey(), describeImage(e.getValue()));
+                        cache.put(e.getKey(), describeImage(e.getValue(), seqLabel));
                         int done = doneCount.incrementAndGet();
                         if (onImageDescribed != null) onImageDescribed.accept(done, total);
                     } finally {
@@ -994,13 +1001,21 @@ public class MarkdownCorrectionService {
      * the marker is left untouched and indexing continues.
      */
     private String describeImage(Path imagePath) {
+        return describeImage(imagePath, null);
+    }
+
+    private String describeImage(Path imagePath, String seqLabel) {
         try {
             byte[] bytes = Files.readAllBytes(imagePath);
             String mimeType = detectMime(imagePath.toString());
             // [LLM curl] logs (LoggingChatModel) only see the Prompt's text/Media bytes, never the
             // source file path, so without this line a DEBUG session can't tell which image a given
-            // Vision request/curl log pair belongs to.
-            log.debug("[MD_CORRECT] 이미지 분석 요청: {} ({}, {} bytes)", imagePath, mimeType, bytes.length);
+            // Vision request/curl log pair belongs to. seqLabel (submission order, set only from the
+            // prewarm/parallel path) disambiguates a still-queued image from one that never ran —
+            // with maxConcurrent << total, 180 virtual threads race for the gate and completion order
+            // has no relation to this number.
+            log.debug("[MD_CORRECT] 이미지 분석 요청{}: {} ({}, {} bytes)",
+                    seqLabel != null ? " (" + seqLabel + ")" : "", imagePath, mimeType, bytes.length);
             Media media = new Media(MimeTypeUtils.parseMimeType(mimeType), new ByteArrayResource(bytes));
             UserMessage userMessage = UserMessage.builder()
                     .text("이 이미지를 한국어 1~2문장으로 간단히 설명하세요.")
