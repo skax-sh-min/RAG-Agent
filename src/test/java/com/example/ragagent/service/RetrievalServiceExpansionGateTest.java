@@ -9,11 +9,14 @@ import com.example.ragagent.repository.LlmUsageRepository;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.context.MessageSource;
 
+import java.util.Locale;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -34,8 +37,10 @@ class RetrievalServiceExpansionGateTest {
         LlmProvider expansionProvider = new LlmProvider(
                 "local", TaskType.TEXT, ProviderRole.LOCAL, 0, "key", null, "model", true, mock(ChatModel.class), null);
         when(llmRouter.routeProviderWithFallback(any(), any())).thenReturn(expansionProvider);
+        MessageSource messageSource = mock(MessageSource.class);
+        when(messageSource.getMessage(anyString(), any(), any(Locale.class))).thenReturn("{query} {number}");
         return new RetrievalService(llmRouter, mock(LlmUsageRepository.class), mock(RagService.class), props,
-                Optional.empty(), Optional.empty());
+                Optional.empty(), Optional.empty(), messageSource);
     }
 
     @Test

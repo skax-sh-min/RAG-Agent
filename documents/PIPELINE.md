@@ -99,7 +99,8 @@ COST_FIRST와 동일하되,
 | ⑦ | ANSWER (PROGRESSIVE) | PREMIUM 재답변 | ✓ |
 
 > ①은 `AgentState`에 누적되지 않아 `llmCallCount`가 실제보다 1 낮게 표시됨 — 허용된 tradeoff.  
-> ③ (MultiQueryExpander)도 토큰 미누적. 15자 미만 질의는 생략되며(기본값), 실행될 때도 원본 질의 검색과 병렬로 진행되어(§10.8.1) 검색 전체 지연에 그대로 더해지지 않는다.
+> ③ (MultiQueryExpander)도 토큰 미누적. 15자 미만 질의는 생략되며(기본값), 실행될 때도 원본 질의 검색과 병렬로 진행되어(§10.8.1) 검색 전체 지연에 그대로 더해지지 않는다.  
+> ③의 프롬프트는 Spring AI 기본값(영어, 관점 다양화만 요청)이 아니라 `RetrievalService` 생성자가 `messages(_ko).properties`의 `prompt.retrieval.expansion`으로 교체한 커스텀 한국어 프롬프트 — 관점만 다양화하는 게 아니라 인사말·존댓말 어미·군더더기 제거, 지시어/대명사를 구체적 용어로 풀어쓰기 등 **임베딩 벡터 검색에 더 적합한 형태로 정규화**하도록 함께 요청한다. LLM에 넘기는 질문 텍스트는 다른 프롬프트 구성 지점과 동일하게 `PromptInjectionGuard.wrap()`으로 감싸며, 벡터 검색 자체(원본 질의 축)는 감싸지 않은 원문을 그대로 임베딩한다.
 
 > **동시성 게이트**: ①~⑦ 모두 프로바이더별 동시성 게이트(`LlmRouter.executeGated()`, 서버의 실제 `--parallel` 값에 맞춘 `Semaphore`)를 거친다 — 여러 사용자의 질문이 겹쳐도 앱이 한 프로바이더에 동시 전송하는 요청 수는 이 한도를 넘지 않는다. 대기가 상한(기본 20초)을 넘으면 즉시 HTTP 429로 응답하고 재검색/재시도로 넘어가지 않는다. 문서 인덱싱의 LLM 호출(키워드 추출, MD 포맷 교정 등)은 이 게이트 대상이 아니며 기존 `INDEXING_MAX_LLM` 세마포어만 적용된다 — 상세는 [LLM_ROUTING.md §6](LLM_ROUTING.md#6-동시성-게이트--백프레셔) 참고.
 

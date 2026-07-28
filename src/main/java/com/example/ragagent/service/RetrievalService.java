@@ -11,13 +11,16 @@ import com.example.ragagent.llm.TrackingChatModel;
 import com.example.ragagent.model.MetaKey;
 import com.example.ragagent.model.SourceRef;
 import com.example.ragagent.repository.LlmUsageRepository;
+import com.example.ragagent.security.PromptInjectionGuard;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.ai.chat.prompt.PromptTemplate;
 import org.springframework.ai.document.Document;
 import org.springframework.ai.rag.Query;
 import org.springframework.ai.rag.preretrieval.query.expansion.MultiQueryExpander;
+import org.springframework.context.MessageSource;
 import org.springframework.stereotype.Service;
 
 import java.util.*;
@@ -49,7 +52,7 @@ public class RetrievalService {
 
     public RetrievalService(LlmRouter llmRouter, LlmUsageRepository usageRepo, RagService ragService,
                             AppProperties props, Optional<LazyVisionService> lazyVisionOpt,
-                            Optional<RerankerService> rerankerOpt) {
+                            Optional<RerankerService> rerankerOpt, MessageSource messageSource) {
         this.ragService = ragService;
         this.props = props;
         this.rerankEnabled = props.searchRerankEnabled();
@@ -70,8 +73,17 @@ public class RetrievalService {
                 new ConcurrencyLimitingChatModel(expansionProvider.chatModel(), expansionProvider, llmRouter);
         ChatModel trackedExpansionModel =
                 new TrackingChatModel(gatedExpansionModel, expansionProvider.name(), usageRepo);
+        // Swap Spring AI's default (English, diversity-only) expansion prompt for a Korean one that
+        // also asks the model to normalize the question toward embedding-search-friendly phrasing
+        // (strip filler/honorifics, resolve pronouns) — not just paraphrase it. The app has no
+        // per-request locale variance in practice (ThreadContext defaults to Locale.KOREAN), and this
+        // expander is built once at bean construction, so a fixed locale here is fine.
+        PromptTemplate expansionPromptTemplate = PromptTemplate.builder()
+                .template(messageSource.getMessage("prompt.retrieval.expansion", null, Locale.KOREAN))
+                .build();
         this.multiQueryExpander = MultiQueryExpander.builder()
                 .chatClientBuilder(ChatClient.builder(trackedExpansionModel))
+                .promptTemplate(expansionPromptTemplate)
                 .includeOriginal(true)
                 .numberOfQueries(2)
                 .build();
@@ -134,9 +146,15 @@ public class RetrievalService {
                     CompletableFuture<List<Document>> originalF = CompletableFuture.supplyAsync(
                             () -> ragService.search(state.userId(), state.question(), state.version(), fetchK),
                             exec);
-                    List<String> variantTexts = multiQueryExpander.expand(new Query(state.question())).stream()
+                    // Wrap for the LLM-facing expansion prompt only (delimiter isolation, same as every
+                    // other prompt-construction site) — the vector search axes above still embed the
+                    // raw state.question() untouched. includeOriginal(true) echoes back exactly the
+                    // wrapped string as one "variant", so filter against that same wrapped string
+                    // (not the raw question) to strip it before the variant-only batch search below.
+                    String expansionInput = PromptInjectionGuard.wrap(state.question());
+                    List<String> variantTexts = multiQueryExpander.expand(new Query(expansionInput)).stream()
                             .map(Query::text)
-                            .filter(t -> !t.equals(state.question()))
+                            .filter(t -> !t.equals(expansionInput))
                             .toList();
                     ranked = new ArrayList<>();
                     ranked.add(originalF.join());
