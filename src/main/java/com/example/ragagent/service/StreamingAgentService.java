@@ -8,6 +8,7 @@ import com.example.ragagent.exception.LlmProviderExhaustedException;
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.model.ChatForm;
 import com.example.ragagent.model.SourceRef;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.MessageSource;
 import org.springframework.context.i18n.LocaleContextHolder;
 
@@ -68,6 +69,11 @@ public class StreamingAgentService {
      */
     private final LongSupplier nanoTimeSource;
 
+    // Required now that the class has two constructors — Spring's "single public constructor"
+    // auto-detection only fires when exactly one is visible; with two, autowiring needs an
+    // explicit @Autowired on the one Spring should call, or bean creation fails at startup
+    // (NoSuchMethodException: <init>() — Spring falls back to looking for a no-arg constructor).
+    @Autowired
     public StreamingAgentService(AgentGraph agentGraph,
                                   MemoryService memoryService,
                                   ClassifierService classifierService,
