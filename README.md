@@ -41,13 +41,15 @@ The built JAR is generated at `target/rag-agent-*.jar`.
 
 > **Vector store backend** — defaults to ChromaDB. Set `VECTORSTORE_TYPE=sqlite-vec` to store vectors in the SQLite file instead and **skip the "Start Chroma" step** below (requires an operator-provided `vec0` native extension — see [OPERATOR_MANUAL.md](documents/OPERATOR_MANUAL.md)). For a fully offline, no-Docker setup (sqlite-vec + local llama-server), see [OPERATOR_MANUAL.md §4.5](documents/OPERATOR_MANUAL.md#45-폐쇄망air-gapped--노-도커-실행).
 
+> **Chroma version — v2 API required.** Spring AI 1.1.8's `ChromaApi` calls only `/api/v2/tenants/{tenant}/databases/{database}/…`, and tenants/databases don't exist in Chroma's v1 API, so a v1-era server (0.5.x and earlier) is **not** compatible. The commands below and `docker-compose.yml` pin `chromadb/chroma:1.0.21` rather than `:latest`, since Chroma has changed its HTTP API across major versions before. Bump the pin deliberately, not implicitly.
+
 #### Development mode (run from source)
 
 ```bash
 # 1. Start Chroma (separate terminal)
 docker run --rm -p 8001:8000 \
   -v "$(pwd)/data/chroma:/data" \
-  chromadb/chroma:latest
+  chromadb/chroma:1.0.21
 
 # 2. Configure environment variables
 cp .env.example .env
@@ -62,7 +64,7 @@ mvn spring-boot:run
 # 1. Start Chroma (separate terminal)
 docker run --rm -p 8001:8000 \
   -v "$(pwd)/data/chroma:/data" \
-  chromadb/chroma:latest
+  chromadb/chroma:1.0.21
 
 # 2. Load env vars and run JAR
 export $(grep -v '^#' .env | xargs)
@@ -80,7 +82,7 @@ container system start
 # 2. Start Chroma (separate terminal)
 container run --rm -p 8001:8000 \
   -v "$(pwd)/data/chroma:/data" \
-  chromadb/chroma:latest
+  chromadb/chroma:1.0.21
 
 # 3. Load env vars and run
 export $(grep -v '^#' .env | xargs)
@@ -136,6 +138,29 @@ See [USER_MANUAL.md](documents/USER_MANUAL.md) for usage instructions and [OPERA
 | `CHROMA_HOST` | — | `http://localhost` | Chroma server host (chroma backend) |
 | `CHROMA_PORT` | — | `8001` | Chroma server port (chroma backend) |
 | `DATA_DIR` | — | `./data` | Storage path for documents, registry, and SQLite DB |
+
+### Image Processing / Rate Limiting / Audit
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `IMAGE_DESCRIPTION_ENABLED` | `true` | `LazyVisionService` on/off (`app.image-description.enabled`). A `@ConditionalOnProperty` bean gate — **restart required**; `false` stores image markers without ever calling Vision at query time |
+| `IMAGE_OCR_ENABLED` | `true` | Tesseract OCR for scanned PDF pages (`OcrService`, same structural bean gate) |
+| `IMAGE_OCR_TESSDATA_PATH` | (blank) | Absolute path to the Tesseract `tessdata` directory. Blank → falls back to `TESSDATA_PREFIX` or the system default path |
+| `IMAGE_CLASSIFY_TYPE` | `true` | Classify image type (diagram/screenshot/chart/photo) before describing, to pick a type-specific Vision prompt |
+| `DOCX_EMF_CONVERT` | `true` | Rasterize DOCX EMF vector images to PNG via Batik (no extra install) |
+| `DOCX_WMF_CONVERT` | `false` | Rasterize DOCX WMF images via LibreOffice headless (needs `soffice` on PATH — hence off by default). When off, the image is kept as a `[이미지(변환불가): …]` marker |
+| `RATE_LIMIT_ENABLED` | `true` | Master switch for the per-user token bucket (`app.rate-limit.*`) |
+| `RATE_LIMIT_CHAT_PER_MINUTE` | `60` | `/chat` requests per minute per user |
+| `RATE_LIMIT_UPLOAD_PER_MINUTE` | `10` | Document upload requests per minute |
+| `RATE_LIMIT_SYNC_PER_MINUTE` | `3` | Folder-sync requests per minute |
+| `RATE_LIMIT_IMAGE_PER_MINUTE` | `300` | `/images/` requests per minute |
+| `RATE_LIMIT_DEFAULT_PER_MINUTE` | `120` | Default for every other path |
+| `AUDIT_ENABLED` | `true` | Write audit events to `data/audit/audit.log` (`app.audit.*`) |
+| `AUDIT_MAX_FILE_SIZE` | `10MB` | Rolling size threshold — also the Logback `AUDIT_FILE` appender's rollover trigger |
+| `AUDIT_MAX_HISTORY_DAYS` | `7` | Retention for compressed audit files |
+| `AUDIT_TOTAL_SIZE_CAP` | `100MB` | Total size cap for `data/audit/` |
+
+> `app.image-description.mode` and `app.image-description.min-image-bytes` still bind but **nothing reads them** — the strip/describe decision now lives in the upload-time "이미지 설명 추가" checkbox plus `LazyVisionService`'s query-time cache. They have no env var on purpose.
 
 ### RAG Tuning
 
@@ -360,7 +385,7 @@ User question
 - **Source hover preview** — `SourceRef` record with Bootstrap Popover shows a 200-char chunk text preview on hover; on non-mobile screens the popover is roughly 2x wider with a slightly smaller font so the excerpt reads with less wrapping
 - **Chunk editor live preview** — on wide desktop screens, the `/admin` chunk-edit offcanvas splits into a live Markdown preview (rendering images and tables) alongside the text editor, updating as you type; narrow screens keep the existing single-column editor
 - **Smart heading-number default** — the upload "generate heading numbers" checkbox auto-unchecks whenever a PPTX is selected (the option is never applied to PPTX server-side; PDF is unaffected and stays checked) and warns when PPTX is mixed with other formats in one upload, since the option applies per-batch, not per-file
-- **Document export (MD/TXT/DOCX)** — the document list's per-row **Export** button (admin-only) rebuilds a document from its currently indexed chunks (not the saved converted MD), so `/admin` chunk edits are reflected; `ChunkReassembler` undoes the retrieval-oriented duplication `ChunkSplitter` introduces (reinjected subheadings, parent-chapter breadcrumbs, split code-fence markers, repeated table headers, sliding-window overlap) before rendering, so the result reads like the original document rather than concatenated search chunks — validated against a real 335-chunk document at 0.001% character-count deviation from the source. MD downloads bundle images as a ZIP when present; DOCX embeds images via POI; each document's actual `CHUNK_OVERLAP` at index time is recorded in `doc_registry` (backfilled at startup for older rows) so later retuning the setting can't corrupt an older document's export. PPTX export isn't supported yet
+- **Document export (MD/TXT/DOCX)** — the document list's per-row **Export** button (admin-only) rebuilds a document from its currently indexed chunks (not the saved converted MD), so `/admin` chunk edits are reflected; `ChunkReassembler` undoes the retrieval-oriented duplication `ChunkSplitter` introduces (reinjected subheadings, parent-chapter breadcrumbs, split code-fence markers, repeated table headers, sliding-window overlap) before rendering, so the result reads like the original document rather than concatenated search chunks — validated against a real 335-chunk document at 0.001% character-count deviation from the source. MD downloads bundle images as a ZIP when present (an image file that no longer exists degrades to a `(이미지 없음: …)` note rather than a broken link). DOCX embeds images via POI wherever they sit — a marker after a bullet or mid-sentence gets its own centered picture paragraph, one inside a table cell is embedded in place at column width — and renders fenced code blocks as a bordered 1×1 table, left-aligned and monospaced, with `//`, `#` and `/* … */` comments colored (string literals are tracked, so `"http://…"` stays uncolored). Each document's actual `CHUNK_OVERLAP` at index time is recorded in `doc_registry` (backfilled at startup for older rows) so later retuning the setting can't corrupt an older document's export. PPTX export isn't supported yet
 - **Code syntax highlighting** — highlight.js applied after DOMPurify sanitize, synced with dark mode
 - **LLM usage dashboard** — per-provider daily/weekly/monthly token stats, Chart.js daily history chart, circuit breaker countdown; embedding usage tracked separately (`embed:<model>`, with an approximation fallback when the server omits usage); inactive providers with no history auto-hide, and orphaned records (removed from config) surface as admin-deletable cards
 - **Document versioning** — per-version isolation (chroma: separate collection; sqlite-vec: `version` partition key)

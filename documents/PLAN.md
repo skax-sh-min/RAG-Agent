@@ -555,6 +555,40 @@ G1~G4 코드/문서 완료, G5(라우팅 계층의 외부 무선택)도 완료. 
 
 ---
 
+## 11.1 예정 — Spring AI 2.0 업그레이드 & Chroma 버전 정책 🔜 미착수
+
+### 배경 (현황 정정)
+
+**Chroma v2 API는 이미 적용된 상태다.** Spring AI 1.1.8의 `ChromaApi`는 `/api/v2/tenants/{tenant}/databases/{database}/collections…` 경로만 호출하며(디스어셈블로 확인), tenant/database 개념 자체가 v1 API에는 없다. 즉 이 앱은 **v1 전용 Chroma 서버(0.5.x 이하)에서는 동작하지 않는다** — "앞으로 v2로 올린다"가 아니라 "이미 v2만 쓴다"가 정확한 현황이다.
+
+남아 있던 v1 잔재는 애플리케이션 코드가 아니라 배포 설정이었다:
+
+- `docker-compose.yml`의 헬스체크가 `/api/v1/heartbeat` → 1.x 서버에서 404 → 컨테이너가 영영 `unhealthy` → `app`의 `depends_on: service_healthy`가 통과되지 않음. **→ `/api/v2/heartbeat`로 수정 완료.**
+- 이미지 태그가 `chromadb/chroma:latest` → 메이저 업그레이드에서 HTTP API가 바뀌는 전례가 있는 제품이라 무방비. **→ `chromadb/chroma:1.0.21` 고정 완료** (README 3곳의 `docker run`/`container run` 예시도 동일 태그로 통일).
+
+### 예정 작업
+
+| 항목 | 내용 | 상태 |
+|------|------|------|
+| Chroma 태그 고정 | `:latest` → `1.0.21`, 헬스체크 v2 경로 | ✅ 완료 |
+| Chroma 1.1.x 검증 | Docker Hub에 `1.1.0` 계열 존재. `ChromaApi`가 쓰는 v2 엔드포인트 스키마가 그대로인지 실기동 확인 후 태그 상향 | 🔜 |
+| Spring AI 2.0 업그레이드 | `spring-ai.version` 1.1.8 → 2.0.x. 로컬 m2에 `spring-ai-chroma-store:2.0.0`이 이미 받아져 있어 API 차이 비교는 즉시 가능 | 🔜 |
+
+### Spring AI 2.0 업그레이드 시 점검 포인트
+
+이 프로젝트는 Spring AI의 자동설정을 대부분 **끄고** 직접 빈을 만들기 때문에, 업그레이드 리스크가 일반적인 경우와 다르다:
+
+1. **`spring.autoconfigure.exclude` 클래스명 7종** — Chroma 1종 + OpenAI 모델 6종의 FQCN이 2.0에서 바뀌면 exclude가 조용히 무효가 되고, `LOCAL_LLM_KEY`가 빈 로컬 구성에서 `OpenAI API key must be set`로 기동이 깨진다(현재도 이 실패 클래스를 막으려고 넣은 설정).
+2. **`ChromaApi`/`ChromaVectorStore` 빌더 시그니처** — `ChromaConfig`·`VectorStoreRegistry`·`ChromaVectorStoreProvider`가 직접 호출한다. 특히 `upsertEmbeddings()`(§10.1 embed≠store 분리를 위해 `VectorStore.add()`를 우회하는 지점)와 `QueryRequest.Include` 필드 선택.
+3. **`OpenAiApi.builder()` / `OpenAiChatOptions`** — `LlmConfig`가 프로바이더마다 직접 조립. `ChatCompletionRequest` 직접 조립(`DirectAnswerService`의 스트리밍 우회 경로)도 동일.
+4. **`MultiQueryExpander` / `spring-ai-rag`** — 프롬프트 템플릿 주입 방식(`promptTemplate`, `numberOfQueries`, `includeOriginal`) 변경 여부.
+5. **`EmbeddingModel` 데코레이터 체인** — `Tracking`/`Caching`/`LoadBalancing` 3중 래핑이 인터페이스 변경에 직접 노출된다.
+6. **`TokenCountBatchingStrategy`** — Chroma 경로의 서브배치 분할에 사용.
+
+> 업그레이드는 별도 브랜치에서 `mvn -o test`(현재 1,232개) 전체 통과 + Chroma/sqlite-vec 양쪽 실기동 확인을 완료 조건으로 한다.
+
+---
+
 ## 12. 의존성 변경 사항 (pom.xml)
 
 > **압축**: 완료된 Phase의 의존성 이력·설정 덤프는 **pom.xml/application.properties 자체가 단일 출처**라 여기 중복 유지는 드리프트 위험만 키운다. 코드에서 바로 확인 안 되는, 실제로 유용한 사실만 남긴다.

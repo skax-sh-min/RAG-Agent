@@ -635,32 +635,30 @@ private void deleteImagesQuietly(Path dir) {
 
 ## 9. 설정
 
-`application.properties` 추가:
+`application.properties` — 모든 값이 환경변수로 주입 가능하므로 `.env`만 고쳐도 된다(재기동 필요):
 
 ```properties
-# 이미지 처리 모드 (strip | describe)
-app.image-description.mode=strip
-
 # Vision 파이프라인 활성화 (LazyVisionService, ImageTypeClassifier)
-app.image-description.enabled=true
+app.image-description.enabled=${IMAGE_DESCRIPTION_ENABLED:true}
 
 # PDF OCR 활성화 (OcrService)
-app.image-description.ocr-enabled=true
+app.image-description.ocr-enabled=${IMAGE_OCR_ENABLED:true}
 
 # Tesseract tessdata 경로 — 미설정 시 TESSDATA_PREFIX 환경변수 또는 시스템 기본 경로 사용
-# app.image-description.tessdata-path=/usr/share/tesseract-ocr/5/tessdata
-
-# 이미지 크기 필터 — 이 값 미만(bytes) 이미지는 L0(무시)
-app.image-description.min-image-bytes=1000
+app.image-description.tessdata-path=${IMAGE_OCR_TESSDATA_PATH:}
 
 # 이미지 유형 분류기 활성화 여부 — Vision 호출이 2회로 증가
-app.image-description.classify-type=true
+app.image-description.classify-type=${IMAGE_CLASSIFY_TYPE:true}
 
 # DOCX EMF→PNG 변환 (Batik — 추가 설치 불필요)
-app.image-description.docx-emf-convert=true
+app.image-description.docx-emf-convert=${DOCX_EMF_CONVERT:true}
 
 # DOCX WMF→PNG 변환 (LibreOffice headless 필요)
-app.image-description.docx-wmf-convert=false
+app.image-description.docx-wmf-convert=${DOCX_WMF_CONVERT:false}
+
+# ⚠ 아래 두 값은 바인딩만 남아 있고 읽는 코드가 없다(9.1 참고). 환경변수도 두지 않았다.
+app.image-description.mode=strip
+app.image-description.min-image-bytes=1000
 ```
 
 `AppProperties` 레코드 확장:
@@ -677,11 +675,11 @@ public record AppProperties(
     ImageDescriptionProperties imageDescription
 ) {
     public record ImageDescriptionProperties(
-        String mode,                 // none | strip | vision | ocr
+        String mode,                 // 바인딩만 유지 — 읽는 코드 없음 (9.1 참고)
         boolean enabled,
         boolean ocrEnabled,
         String tessdataPath,
-        int minImageBytes,
+        int minImageBytes,           // 바인딩만 유지 — 읽는 코드 없음 (9.1 참고)
         boolean classifyType,        // 13절
         boolean docxEmfConvert,      // 14절
         boolean docxWmfConvert       // 14절
@@ -691,16 +689,16 @@ public record AppProperties(
 
 ### 9.1 옵션 상세
 
-| 옵션 | 기본값 | 설명 |
-|------|--------|------|
-| `mode` | `strip` | 이미지 참조 처리 방식. `strip`: 이미지 마커 제거(L0). `describe`: Vision 설명 포함(L2). 현재 코드에서 실질적 분기는 `enabled` 플래그가 담당하므로 이 값은 참고용 |
-| `enabled` | `true` | `true`이면 `LazyVisionService`와 `ImageTypeClassifier` 빈이 등록됨. `false`이면 이미지는 추출·저장되지만 검색 시 Vision 설명이 프롬프트에 합성되지 않음 |
-| `ocr-enabled` | `true` | `true`이면 `OcrService` 빈이 등록됨. 스캔 PDF 판정(페이지 텍스트 50자 미만) 시 Tesseract OCR로 텍스트를 추출하여 청크에 `source_type=ocr` 태깅. Tesseract(`tesseract-ocr`, `tesseract-ocr-data-kor`)가 시스템에 설치되어 있어야 함 |
-| `tessdata-path` | _(없음)_ | Tesseract tessdata 디렉터리 절대 경로. 미설정 시 `TESSDATA_PREFIX` 환경변수 → 시스템 기본 경로(`/usr/share/tesseract-ocr/…`) 순으로 탐색. Docker 이미지에서는 `apk add tesseract-ocr-data-kor` 설치 후 미설정해도 동작 |
-| `min-image-bytes` | `1000` | 이 크기(bytes) 미만 이미지는 아이콘·구분선으로 간주하여 L0(무시) 처리. Vision 호출 낭비 방지. 값을 높이면 더 많은 이미지가 무시되고, `0`으로 설정하면 모든 이미지를 처리 |
-| `classify-type` | `true` | `true`: 이미지를 Vision으로 먼저 분류(`diagram`·`screenshot`·`chart`·`photo`·`other`) 후 유형별 전용 프롬프트로 설명 생성(13절). 이미지당 LLM 호출이 2회로 증가. 비용 절감 시 `false`로 설정 |
-| `docx-emf-convert` | `true` | `true`: DOCX 내 EMF(Enhanced Metafile) 이미지를 Apache Batik으로 PNG 변환 후 저장. 변환 실패 시 원본 `.emf` 보존. Batik 의존성은 `pom.xml`에 이미 포함되어 있어 별도 설치 불필요 |
-| `docx-wmf-convert` | `false` | `true`: DOCX 내 WMF(Windows Metafile) 이미지를 LibreOffice headless로 PNG 변환(14절). `soffice` 명령이 PATH에 있어야 하며 변환 타임아웃은 20s. LibreOffice 미설치 환경에서는 `false`로 유지하면 WMF 원본만 저장되고 Vision 설명은 건너뜀 |
+| 옵션 | 환경변수 | 기본값 | 설명 |
+|------|----------|--------|------|
+| `enabled` | `IMAGE_DESCRIPTION_ENABLED` | `true` | `true`이면 `LazyVisionService`와 `ImageTypeClassifier` 빈이 등록됨. `false`이면 이미지는 추출·저장되지만 검색 시 Vision 설명이 프롬프트에 합성되지 않음. `@ConditionalOnProperty` 빈 게이트라 **재기동 필요**(핫 수정 불가) |
+| `ocr-enabled` | `IMAGE_OCR_ENABLED` | `true` | `true`이면 `OcrService` 빈이 등록됨. 스캔 PDF 판정(페이지 텍스트 50자 미만) 시 Tesseract OCR로 텍스트를 추출하여 청크에 `source_type=ocr` 태깅. Tesseract(`tesseract-ocr`, `tesseract-ocr-data-kor`)가 시스템에 설치되어 있어야 함. 역시 빈 게이트라 재기동 필요 |
+| `tessdata-path` | `IMAGE_OCR_TESSDATA_PATH` | _(빈 값)_ | Tesseract tessdata 디렉터리 절대 경로. 미설정 시 `TESSDATA_PREFIX` 환경변수 → 시스템 기본 경로(`/usr/share/tesseract-ocr/…`) 순으로 탐색. Docker 이미지에서는 `apk add tesseract-ocr-data-kor` 설치 후 미설정해도 동작. 폐쇄망에서 언어 데이터를 임의 경로에 둔 경우 여기서 지정 |
+| `classify-type` | `IMAGE_CLASSIFY_TYPE` | `true` | `true`: 이미지를 Vision으로 먼저 분류(`diagram`·`screenshot`·`chart`·`photo`·`other`) 후 유형별 전용 프롬프트로 설명 생성(13절). 이미지당 LLM 호출이 2회로 증가. 비용 절감 시 `false`로 설정 |
+| `docx-emf-convert` | `DOCX_EMF_CONVERT` | `true` | `true`: DOCX 내 EMF(Enhanced Metafile) 이미지를 Apache Batik으로 PNG 변환 후 저장. 변환 실패 시 원본 `.emf` 보존. Batik 의존성은 `pom.xml`에 이미 포함되어 있어 별도 설치 불필요 |
+| `docx-wmf-convert` | `DOCX_WMF_CONVERT` | `false` | `true`: DOCX 내 WMF(Windows Metafile) 이미지를 LibreOffice headless로 PNG 변환(14절). `soffice` 명령이 PATH에 있어야 하며 변환 타임아웃은 20s. LibreOffice 미설치 환경에서는 `false`로 유지하면 WMF 원본만 저장되고 Vision 설명은 건너뜀 |
+| ~~`mode`~~ | _(없음)_ | `strip` | **현재 코드에서 읽지 않음.** `ImageDescriptionProperties`에 바인딩만 되어 있고 소비처가 없다 — strip/describe 판단은 업로드 시 "이미지 설명 추가" 체크박스(5절)와 `LazyVisionService`의 질의 시점 캐시(12절)로 옮겨갔다. 값을 바꿔도 동작이 달라지지 않으므로 환경변수도 두지 않았다 |
+| ~~`min-image-bytes`~~ | _(없음)_ | `1000` | **현재 코드에서 읽지 않음.** 위와 같은 이유로 바인딩 호환을 위해서만 남아 있다. 작은 아이콘을 걸러내고 싶다면 지금은 PPTX의 `app.pptx-image.min-shape-dimension-pt`(도형 크기 기준)가 실제로 동작하는 유일한 필터다 |
 
 > **인덱싱 시점 동기 L2는 프로퍼티가 아니라 업로드 화면의 체크박스로 제어됩니다.** 문서 업로드 시
 > "이미지 설명 추가"(`addImageDescriptions`)를 체크하면 DOCX·TXT·MD에 한해 업로드 건별로 동기 L2가

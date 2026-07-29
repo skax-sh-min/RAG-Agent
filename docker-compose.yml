@@ -15,7 +15,12 @@ services:
       - app
 
   chroma:
-    image: chromadb/chroma:latest
+    # 태그 고정(:latest 금지) — Chroma는 메이저 업그레이드에서 HTTP API를 바꾼 전례가 있어
+    # :latest 는 어느 날 조용히 앱을 깨뜨릴 수 있다.
+    # 이 앱은 Spring AI 1.1.8의 ChromaApi 를 쓰고, 그 구현은 /api/v2/tenants/{t}/databases/{d}/...
+    # 경로만 호출한다(tenant/database 개념은 v1에 없음). 따라서 **v1 전용 서버(0.5.x 이하)로는
+    # 동작하지 않으며**, v2를 서빙하는 1.x 계열을 써야 한다.
+    image: chromadb/chroma:1.0.21
     # Phase 5: chroma 프로파일에서만 기동 — sqlite-vec 모드(VECTORSTORE_TYPE=sqlite-vec)에선 띄우지 않음
     profiles: ["chroma"]
     ports:
@@ -24,7 +29,9 @@ services:
       - chroma_data:/data
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/heartbeat"]
+      # v2 경로 — 구 /api/v1/heartbeat 는 1.x 서버에서 404 라 컨테이너가 영영 unhealthy 로 남고,
+      # app 서비스의 depends_on: service_healthy 가 통과되지 않는다.
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v2/heartbeat"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -36,45 +43,33 @@ services:
     # 디버깅 시 직접 접근이 필요하면 "127.0.0.1:8080:8080" 으로 변경
     ports:
       - "127.0.0.1:8080:8080"
+    # .env 를 통째로 컨테이너에 전달한다. 예전처럼 environment: 에 나열한 변수만 넘기면,
+    # .env.example 에 문서화돼 있어도 여기 빠진 변수(LOCAL_FAST_LLM_URL, LOCAL_LLM_URL_2,
+    # EMBED_BASE_URL, AUTH_MANAGEMENT_ONLY, MIN_CHUNK_SIZE, SQLITE_VEC_DB_PATH, RRF/캐시 튜닝 등)는
+    # Docker 배포에서 조용히 무시된다. 값의 기본값은 application.properties 가 이미 갖고 있으므로
+    # 여기서 다시 적지 않는다(중복 기본값이 어긋나는 것이 기존 문제의 원인이었다).
+    # required: false — .env 없이도 기동 가능(전부 application.properties 기본값으로 동작).
+    # 이 long syntax 는 Compose v2.24+ 필요. 더 낮은 버전이면 `env_file: [.env]` 로 바꾸고
+    # .env 파일을 반드시 만들어 둘 것(없으면 기동 실패).
+    env_file:
+      - path: .env
+        required: false
     environment:
-      # Spring AI global (embedding + fallback)
-      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.openai.com}
-      - OPENAI_API_KEY=${OPENAI_API_KEY:-sk-fake}
-      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
-      - LLM_MODEL=${LLM_MODEL:-gpt-4o}
-      - EMBED_MODEL=${EMBED_MODEL:-text-embedding-ada-002}
-      # sqlite-vec 전용: 임베딩 모델 실제 출력 차원과 일치시켜야 함 (chroma 모드에선 비워둠)
-      - EMBED_DIMENSIONS=${EMBED_DIMENSIONS:-}
-      # Local LLM provider (providers[1], "local") — separate from OPENAI_* above
-      - LOCAL_LLM_URL=${LOCAL_LLM_URL:-http://localhost:1234/v1}
-      - LOCAL_LLM_KEY=${LOCAL_LLM_KEY:-lm-studio}
-      - LOCAL_LLM_MODEL=${LOCAL_LLM_MODEL:-gemma-4-27b-it}
+      # 아래는 "컨테이너에서만 달라야 하는" 값 — env_file 보다 우선한다.
+      # 호스트 기준 경로/포트를 .env 에 적어두더라도 컨테이너 안에서는 이 값이 이긴다.
       - CHROMA_HOST=chroma
       - CHROMA_PORT=8000
-      # Phase 5 — vector store 백엔드 (chroma 기본 | sqlite-vec)
-      - VECTORSTORE_TYPE=${VECTORSTORE_TYPE:-chroma}
-      - SQLITE_VEC_EXTENSION_PATH=${SQLITE_VEC_EXTENSION_PATH:-}
-      - SQLITE_VEC_ENTRYPOINT=${SQLITE_VEC_ENTRYPOINT:-}
-      # 폐쇄망/로컬 전용: LOCAL_ONLY 로 외부 프로바이더 호출 차단
-      - LLM_ROUTING_MODE=${LLM_ROUTING_MODE:-COST_FIRST}
-      - AUTH_ENABLED=${AUTH_ENABLED:-true}
       - DATA_DIR=/app/data
-      - CHUNK_SIZE=${CHUNK_SIZE:-800}
-      - CHUNK_OVERLAP=${CHUNK_OVERLAP:-100}
-      - SEARCH_TOP_K=${SEARCH_TOP_K:-7}
-      - SEARCH_SIMILARITY_THRESHOLD=${SEARCH_SIMILARITY_THRESHOLD:-0.0}
-      - SEARCH_MULTIQUERY_ENABLED=${SEARCH_MULTIQUERY_ENABLED:-true}
-      - SEARCH_MULTIQUERY_MIN_LENGTH=${SEARCH_MULTIQUERY_MIN_LENGTH:-15}
-      - SEARCH_HYBRID_ENABLED=${SEARCH_HYBRID_ENABLED:-true}
-      - SEARCH_RETRY_ESCALATE=${SEARCH_RETRY_ESCALATE:-true}
-      - SEARCH_RERANK_ENABLED=${SEARCH_RERANK_ENABLED:-false}
-      - SEARCH_CANDIDATE_MULTIPLIER=${SEARCH_CANDIDATE_MULTIPLIER:-3}
-      - MAX_RETRY_COUNT=${MAX_RETRY_COUNT:-2}
-      - MAX_CONVERSATION_CHARS=${MAX_CONVERSATION_CHARS:-8000}
+      # 컨테이너에서 host 의 LM Studio / llama-server 를 부르려면 .env 에서 localhost 대신
+      # host.docker.internal 을 쓸 것 (Linux 는 extra_hosts 또는 network_mode: host 필요).
+      #   예) LOCAL_LLM_URL=http://host.docker.internal:1234/v1
     volumes:
       - ./data:/app/data
       # sqlite-vec 모드: 컨테이너 아키텍처(linux)용 vec0 로더블 바이너리를 마운트하고
       # SQLITE_VEC_EXTENSION_PATH=/opt/sqlite-vec/vec0 로 지정 (운영자 제공 — OPERATOR_MANUAL 참조)
+      # 주의: env_file 로 .env 가 그대로 전달되므로, 호스트용 경로(예: ./lib/macos/vec0.dylib)가
+      # .env 에 남아 있으면 컨테이너 안에서 로드에 실패한다 — Docker 로 띄울 땐 반드시 위 컨테이너
+      # 경로로 덮어쓸 것.
       # - ./sqlite-vec/vec0.so:/opt/sqlite-vec/vec0.so:ro
     restart: unless-stopped
     depends_on:

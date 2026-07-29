@@ -41,13 +41,15 @@ java -Djarmode=tools -jar target/rag-agent-*.jar extract --destination target/ex
 
 > **벡터 스토어 백엔드** — 기본은 ChromaDB. `VECTORSTORE_TYPE=sqlite-vec`로 설정하면 벡터를 SQLite 파일에 저장하고 아래 **"Chroma 서버" 단계를 생략**할 수 있습니다 (운영자가 제공하는 `vec0` 네이티브 확장 필요 — [OPERATOR_MANUAL.md](documents/OPERATOR_MANUAL.md) 참조). 인터넷·Docker 없이 sqlite-vec + 로컬 llama-server로만 돌리는 폐쇄망 구성은 [OPERATOR_MANUAL.md §4.5](documents/OPERATOR_MANUAL.md#45-폐쇄망air-gapped--노-도커-실행) 참조.
 
+> **Chroma 버전 — v2 API 필수.** Spring AI 1.1.8의 `ChromaApi`는 `/api/v2/tenants/{tenant}/databases/{database}/…` 경로만 호출하는데 tenant/database 개념은 Chroma v1 API에 존재하지 않으므로, **v1 시절 서버(0.5.x 이하)와는 호환되지 않습니다**. 아래 명령과 `docker-compose.yml`은 `:latest` 대신 `chromadb/chroma:1.0.21`로 태그를 고정합니다 — Chroma는 메이저 업그레이드에서 HTTP API를 바꾼 전례가 있어 `:latest`는 어느 날 조용히 앱을 깨뜨릴 수 있습니다. 버전을 올릴 땐 의도적으로 이 태그를 바꾸세요.
+
 #### 개발 모드 (소스 직접 실행)
 
 ```bash
 # 1. Chroma 서버 (별도 터미널)
 docker run --rm -p 8001:8000 \
   -v "$(pwd)/data/chroma:/data" \
-  chromadb/chroma:latest
+  chromadb/chroma:1.0.21
 
 # 2. 환경변수 설정
 cp .env.example .env
@@ -62,7 +64,7 @@ mvn spring-boot:run
 # 1. Chroma 서버 (별도 터미널)
 docker run --rm -p 8001:8000 \
   -v "$(pwd)/data/chroma:/data" \
-  chromadb/chroma:latest
+  chromadb/chroma:1.0.21
 
 # 2. 환경변수 로드 후 JAR 실행
 export $(grep -v '^#' .env | xargs)
@@ -80,7 +82,7 @@ container system start
 # 2. Chroma 시작 (별도 터미널)
 container run --rm -p 8001:8000 \
   -v "$(pwd)/data/chroma:/data" \
-  chromadb/chroma:latest
+  chromadb/chroma:1.0.21
 
 # 3. 환경변수 로드 후 실행
 export $(grep -v '^#' .env | xargs)
@@ -138,6 +140,29 @@ container system stop
 | `CHROMA_HOST` | — | `http://localhost` | Chroma 서버 호스트 (chroma 백엔드) |
 | `CHROMA_PORT` | — | `8001` | Chroma 서버 포트 (chroma 백엔드) |
 | `DATA_DIR` | — | `./data` | 문서·레지스트리·SQLite DB 저장 경로 |
+
+### 이미지 처리 / 속도 제한 / 감사 로그
+
+| 변수 | 기본값 | 설명 |
+|------|--------|------|
+| `IMAGE_DESCRIPTION_ENABLED` | `true` | `LazyVisionService` on/off (`app.image-description.enabled`). `@ConditionalOnProperty` 빈 게이트라 **재기동 필요**. `false`면 이미지 마커만 저장하고 검색 시 Vision 호출 없음 |
+| `IMAGE_OCR_ENABLED` | `true` | 스캔 PDF 페이지의 Tesseract OCR (`OcrService`, 동일한 구조적 빈 게이트) |
+| `IMAGE_OCR_TESSDATA_PATH` | (빈 값) | Tesseract `tessdata` 디렉터리 절대경로. 비우면 `TESSDATA_PREFIX` 환경변수 → 시스템 기본 경로 순으로 탐색 |
+| `IMAGE_CLASSIFY_TYPE` | `true` | 설명 생성 전 이미지 유형(다이어그램/스크린샷/차트/사진) 분류 후 유형별 Vision 프롬프트 선택 |
+| `DOCX_EMF_CONVERT` | `true` | DOCX EMF 벡터 이미지를 Batik으로 PNG 변환 (추가 설치 불필요) |
+| `DOCX_WMF_CONVERT` | `false` | DOCX WMF 이미지를 LibreOffice headless로 변환 (`soffice`가 PATH에 있어야 해서 기본 off). 끄면 해당 이미지는 `[이미지(변환불가): …]` 마커로 남음 |
+| `RATE_LIMIT_ENABLED` | `true` | 사용자별 토큰 버킷 전체 스위치 (`app.rate-limit.*`) |
+| `RATE_LIMIT_CHAT_PER_MINUTE` | `60` | 사용자당 `/chat` 분당 요청 수 |
+| `RATE_LIMIT_UPLOAD_PER_MINUTE` | `10` | 문서 업로드 분당 요청 수 |
+| `RATE_LIMIT_SYNC_PER_MINUTE` | `3` | 폴더 동기화 분당 요청 수 |
+| `RATE_LIMIT_IMAGE_PER_MINUTE` | `300` | `/images/` 분당 요청 수 |
+| `RATE_LIMIT_DEFAULT_PER_MINUTE` | `120` | 그 외 경로 기본값 |
+| `AUDIT_ENABLED` | `true` | 감사 이벤트를 `data/audit/audit.log`에 기록 (`app.audit.*`) |
+| `AUDIT_MAX_FILE_SIZE` | `10MB` | 롤링 크기 기준 — Logback `AUDIT_FILE` appender의 롤오버 기준이기도 함 |
+| `AUDIT_MAX_HISTORY_DAYS` | `7` | 압축된 감사 파일 보관 일수 |
+| `AUDIT_TOTAL_SIZE_CAP` | `100MB` | `data/audit/` 전체 크기 상한 |
+
+> `app.image-description.mode`·`app.image-description.min-image-bytes`는 바인딩만 남아 있고 **읽는 코드가 없습니다** — strip/describe 판단은 업로드 시 "이미지 설명 추가" 체크박스와 `LazyVisionService`의 질의 시점 캐시로 옮겨갔습니다. 그래서 환경변수도 일부러 만들지 않았습니다.
 
 ### RAG 튜닝
 
@@ -359,7 +384,7 @@ rag_java/
 - **출처 hover 미리보기** — `SourceRef` 구조체 기반 Bootstrap Popover, 출처 hover 시 청크 텍스트 200자 미리보기; 모바일이 아닌 화면에서는 팝오버 폭을 약 2배로 넓히고 글자 크기를 살짝 줄여 줄바꿈을 줄임
 - **청크 편집기 실시간 미리보기** — 넓은 PC 화면에서는 `/admin` 청크 편집 오프캔버스가 마크다운(이미지·표 포함) 실시간 미리보기와 텍스트 편집창으로 나뉘어 표시되며, 입력하는 대로 미리보기가 갱신됨. 좁은 화면은 기존처럼 편집창만 표시
 - **소제목 번호 생성 기본값 자동 조정** — 업로드 시 "소제목 숫자 생성" 체크박스가 PPTX를 선택하면 자동으로 해제됨(PPTX에는 서버에서 애초에 적용되지 않음; PDF는 영향 없이 체크 유지), PPTX와 다른 형식을 함께 선택하면 옵션이 파일별이 아니라 배치 전체에 하나만 적용되는 구조상 나눠서 업로드하라는 경고가 표시됨
-- **문서 내보내기 (MD/TXT/DOCX)** — 문서 목록 각 행의 **내보내기** 버튼(관리자 전용)이 저장된 변환 MD가 아니라 현재 색인된 청크를 기준으로 문서를 재구성함 — `/admin` 청크 편집이 그대로 반영됨. `ChunkReassembler`가 `ChunkSplitter`가 검색을 위해 일부러 벌여 놓은 중복(재주입된 소제목, 부모 챕터 breadcrumb, 잘린 코드펜스 마커, 반복된 표 헤더, 슬라이딩 윈도우 overlap)을 렌더링 전에 걷어내 원문에 가까운 결과를 만듦 — 실제 335청크 문서로 검증한 결과 원본 대비 글자 수 오차 0.001%. MD는 이미지가 있으면 ZIP으로 함께 받고, DOCX는 POI로 이미지를 직접 임베드함. 문서별 실제 인덱싱 당시 `CHUNK_OVERLAP` 값이 `doc_registry`에 기록되어(기존 문서는 기동 시 자동 백필) 이후 설정을 바꿔도 예전 문서의 내보내기 결과가 틀어지지 않음. PPTX 내보내기는 아직 미지원
+- **문서 내보내기 (MD/TXT/DOCX)** — 문서 목록 각 행의 **내보내기** 버튼(관리자 전용)이 저장된 변환 MD가 아니라 현재 색인된 청크를 기준으로 문서를 재구성함 — `/admin` 청크 편집이 그대로 반영됨. `ChunkReassembler`가 `ChunkSplitter`가 검색을 위해 일부러 벌여 놓은 중복(재주입된 소제목, 부모 챕터 breadcrumb, 잘린 코드펜스 마커, 반복된 표 헤더, 슬라이딩 윈도우 overlap)을 렌더링 전에 걷어내 원문에 가까운 결과를 만듦 — 실제 335청크 문서로 검증한 결과 원본 대비 글자 수 오차 0.001%. MD는 이미지가 있으면 ZIP으로 함께 받고(원본 파일이 사라진 이미지는 깨진 링크 대신 `(이미지 없음: …)` 안내), DOCX는 POI로 이미지를 위치에 맞게 임베드함 — 글머리표 뒤·문장 중간 마커는 가운데 정렬된 그림 문단으로 내려가고, 표 셀 안 마커는 그 칸 안에 칸 너비로 삽입됨. 코드 블록은 테두리가 있는 1×1 표 안에 좌측 정렬·고정폭으로 렌더링되며 `//`·`#`·`/* … */` 주석만 초록색으로 표시(문자열 리터럴을 추적하므로 `"http://…"`는 칠하지 않음). 문서별 실제 인덱싱 당시 `CHUNK_OVERLAP` 값이 `doc_registry`에 기록되어(기존 문서는 기동 시 자동 백필) 이후 설정을 바꿔도 예전 문서의 내보내기 결과가 틀어지지 않음. PPTX 내보내기는 아직 미지원
 - **코드 syntax highlight** — DOMPurify sanitize 후 highlight.js 적용, 다크 모드 연동
 - **LLM 사용량 대시보드** — 프로바이더별 일간·주간·월간 토큰 사용량, Chart.js 일별 히스토리 차트, Circuit Breaker 카운트다운; 임베딩 사용량은 채팅과 분리 집계(`embed:<model>`, usage 미반환 서버는 근사치 폴백); 사용 이력 없는 비활성 프로바이더는 자동 숨김, 설정에서 제거된 orphan 기록은 관리자가 카드에서 삭제 가능
 - **문서 버전 관리** — 버전별 격리 (chroma: 컬렉션 분리 / sqlite-vec: `version` partition key)

@@ -424,18 +424,21 @@ LLM_ROUTING_MODE=QUALITY_FIRST
 
 #### 이미지 처리 (`app.image-description.*`)
 
-| 속성 | 기본값 | 설명 |
-|------|--------|------|
-| `app.image-description.enabled` | `true` | 검색 시점 Lazy Vision(`LazyVisionService`) 활성화 여부. `false`이면 이미지 마커만 저장하고 검색 시 LLM 호출 없음 |
-| `app.image-description.mode` | `strip` | `strip`: 이미지 마커를 텍스트에서 제거 / `describe`: Vision LLM으로 설명 생성 후 삽입 |
-| `app.image-description.classify-type` | `true` | 이미지 설명 전 유형(사진/도표/스크린샷 등) 분류 여부. 분류 결과를 프롬프트에 주입 |
-| `app.image-description.ocr-enabled` | `true` | 스캔 PDF 페이지에 대해 OCR 처리 활성화 여부 |
-| `app.image-description.min-image-bytes` | `1000` | 이 크기 미만의 이미지는 아이콘·구분선으로 간주하고 설명 생성 건너뜀 (바이트) |
-| `app.image-description.docx-emf-convert` | `true` | DOCX 내 EMF 벡터 이미지를 PNG로 변환 (Apache Batik — 추가 설치 불필요) |
-| `app.image-description.docx-wmf-convert` | `false` | DOCX 내 WMF 벡터 이미지를 PNG로 변환 (LibreOffice headless 필요 — EMF보다 변환 품질이 낮아 기본 비활성) |
+| 속성 | 환경변수 | 기본값 | 설명 |
+|------|----------|--------|------|
+| `app.image-description.enabled` | `IMAGE_DESCRIPTION_ENABLED` | `true` | 검색 시점 Lazy Vision(`LazyVisionService`) 활성화 여부. `false`이면 이미지 마커만 저장하고 검색 시 LLM 호출 없음. `@ConditionalOnProperty` 빈 게이트라 **재시작 필요** |
+| `app.image-description.classify-type` | `IMAGE_CLASSIFY_TYPE` | `true` | 이미지 설명 전 유형(사진/도표/스크린샷 등) 분류 여부. 분류 결과를 프롬프트에 주입 |
+| `app.image-description.ocr-enabled` | `IMAGE_OCR_ENABLED` | `true` | 스캔 PDF 페이지에 대해 OCR 처리 활성화 여부. `OcrService`의 빈 게이트라 **재시작 필요** |
+| `app.image-description.tessdata-path` | `IMAGE_OCR_TESSDATA_PATH` | (빈 값) | Tesseract `tessdata` 디렉터리 절대경로. 비우면 `TESSDATA_PREFIX` 환경변수 또는 시스템 기본 경로를 따름 |
+| `app.image-description.docx-emf-convert` | `DOCX_EMF_CONVERT` | `true` | DOCX 내 EMF 벡터 이미지를 PNG로 변환 (Apache Batik — 추가 설치 불필요) |
+| `app.image-description.docx-wmf-convert` | `DOCX_WMF_CONVERT` | `false` | DOCX 내 WMF 벡터 이미지를 PNG로 변환 (LibreOffice headless 필요 — EMF보다 변환 품질이 낮아 기본 비활성) |
 
-> **`mode=describe` 전제 조건**: `enabled=true` + Vision 모델 프로바이더 등록 (`type=VISION` 또는 `type=LIGHT_BOTH`).  
-> 프로바이더가 없으면 `strip`으로 자동 fallback됩니다.
+> **`mode` / `min-image-bytes`는 현재 코드에서 읽지 않습니다.** `ImageDescriptionProperties`에 바인딩만 되어 있고
+> 소비처가 없어(strip/describe 판단은 업로드 시 "이미지 설명 추가" 체크박스와 `LazyVisionService`의 질의 시점
+> 캐시로 옮겨감) 값을 바꿔도 동작이 달라지지 않습니다. 바인딩 호환을 위해 남겨둔 것이라 환경변수도 두지 않았습니다.
+
+> **이미지 설명 전제 조건**: `enabled=true` + Vision 모델 프로바이더 등록 (`type=VISION` 또는 `type=LIGHT_BOTH`).
+> 프로바이더가 없으면 설명 없이 마커만 남습니다.
 
 > **EMF/WMF 변환**: LibreOffice(`soffice`)가 PATH에 있어야 합니다. 없으면 변환이 건너뛰어지며 `[TIMEOUT:LIBREOFFICE]` 로그가 출력됩니다.
 
@@ -509,14 +512,14 @@ LLM_ROUTING_MODE=QUALITY_FIRST
 
 애플리케이션 레벨 Rate Limiter (Bucket4j + Caffeine). 사용자 인증 시 userId, 미인증 시 IP 기준으로 버킷 분리.
 
-| 속성 | 기본값 | 설명 |
-|------|--------|------|
-| `app.rate-limit.enabled` | `true` | `false`로 설정하면 전체 비활성화 |
-| `app.rate-limit.chat-per-minute` | `60` | `/chat` 경로 — 분당 요청 수 |
-| `app.rate-limit.upload-per-minute` | `10` | `/documents` (업로드) 경로 — 분당 요청 수 |
-| `app.rate-limit.sync-per-minute` | `3` | `/documents/sync` 경로 — 분당 요청 수 |
-| `app.rate-limit.image-per-minute` | `300` | `/images/` 경로 — 분당 요청 수 |
-| `app.rate-limit.default-per-minute` | `120` | 그 외 경로 기본값 |
+| 속성 | 환경변수 | 기본값 | 설명 |
+|------|----------|--------|------|
+| `app.rate-limit.enabled` | `RATE_LIMIT_ENABLED` | `true` | `false`로 설정하면 전체 비활성화 |
+| `app.rate-limit.chat-per-minute` | `RATE_LIMIT_CHAT_PER_MINUTE` | `60` | `/chat` 경로 — 분당 요청 수 |
+| `app.rate-limit.upload-per-minute` | `RATE_LIMIT_UPLOAD_PER_MINUTE` | `10` | `/documents` (업로드) 경로 — 분당 요청 수 |
+| `app.rate-limit.sync-per-minute` | `RATE_LIMIT_SYNC_PER_MINUTE` | `3` | `/documents/sync` 경로 — 분당 요청 수 |
+| `app.rate-limit.image-per-minute` | `RATE_LIMIT_IMAGE_PER_MINUTE` | `300` | `/images/` 경로 — 분당 요청 수 |
+| `app.rate-limit.default-per-minute` | `RATE_LIMIT_DEFAULT_PER_MINUTE` | `120` | 그 외 경로 기본값 |
 
 초과 시 429 응답 + `Retry-After: {초}` 헤더 + `{"errorCode":"RAG-RATE-001","message":"..."}` body.
 
@@ -524,12 +527,15 @@ LLM_ROUTING_MODE=QUALITY_FIRST
 
 민감 작업(문서 업로드·삭제·동기화, 스레드 삭제 등)을 `data/audit/audit.log`에 JSON Lines 형식으로 기록.
 
-| 속성 | 기본값 | 설명 |
-|------|--------|------|
-| `app.audit.enabled` | `true` | `false`로 설정하면 감사 로그 미기록 |
-| `app.audit.max-file-size` | `10MB` | 롤링 전 최대 파일 크기 (Logback SizeAndTimeBasedRolling) |
-| `app.audit.max-history-days` | `7` | 압축 파일 보관 일수. 초과된 파일 자동 삭제 |
-| `app.audit.total-size-cap` | `100MB` | `data/audit/` 디렉터리 전체 상한. 초과 시 오래된 파일 삭제 |
+| 속성 | 환경변수 | 기본값 | 설명 |
+|------|----------|--------|------|
+| `app.audit.enabled` | `AUDIT_ENABLED` | `true` | `false`로 설정하면 감사 로그 미기록 |
+| `app.audit.max-file-size` | `AUDIT_MAX_FILE_SIZE` | `10MB` | 롤링 전 최대 파일 크기 (Logback SizeAndTimeBasedRolling) |
+| `app.audit.max-history-days` | `AUDIT_MAX_HISTORY_DAYS` | `7` | 압축 파일 보관 일수. 초과된 파일 자동 삭제 |
+| `app.audit.total-size-cap` | `AUDIT_TOTAL_SIZE_CAP` | `100MB` | `data/audit/` 디렉터리 전체 상한. 초과 시 오래된 파일 삭제 |
+
+> 크기·보관 3개 값은 `logback-spring.xml`이 `springProperty`로 읽어 `AUDIT_FILE` appender의 롤링 기준으로도
+> 쓰이므로, 환경변수로 바꾸면 로거 쪽에도 그대로 반영됩니다.
 
 #### 인증 (`app.auth.*`)
 
@@ -612,7 +618,7 @@ docker compose down
 # 1. Chroma 서버 실행 (별도 터미널)
 docker run -d --name chroma-server -p 8001:8000 \
   -v "$(pwd)/data/chroma:/chroma/chroma" \
-  chromadb/chroma:latest
+  chromadb/chroma:1.0.21
 
 # 2. 로그 확인
 docker logs -f chroma-server
@@ -638,7 +644,7 @@ container system start
 # 2. Chroma 서버 실행 (별도 터미널)
 container run -d --name chroma-server -p 8001:8000 \
   -v "$(pwd)/data/chroma:/chroma/chroma" \
-  chromadb/chroma:latest
+  chromadb/chroma:1.0.21
 
 # 3. 환경변수 로드 및 실행
 export $(grep -v '^#' .env | xargs)
@@ -654,7 +660,7 @@ container system stop
 ```bash
 docker run -d --name chroma-server -p 8001:8000 \
   -v "$(pwd)/data/chroma:/chroma/chroma" \
-  chromadb/chroma:latest &
+  chromadb/chroma:1.0.21 &
 set -a && source .env && set +a
 mvn spring-boot:run
 ```
@@ -663,7 +669,7 @@ mvn spring-boot:run
 
 ```cmd
 REM 1. Chroma 서버 (별도 CMD 창)
-docker run -d --name chroma-server -p 8001:8000 -v "%cd%\data\chroma:/chroma/chroma" chromadb/chroma:latest
+docker run -d --name chroma-server -p 8001:8000 -v "%cd%\data\chroma:/chroma/chroma" chromadb/chroma:1.0.21
 
 REM 2. 환경변수 로드
 for /f "usebackq tokens=1,* delims==" %A in (`findstr /v "^#" .env`) do SET %A=%B

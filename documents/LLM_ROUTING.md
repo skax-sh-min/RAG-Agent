@@ -41,8 +41,8 @@
 │  NORMAL  (priority 2): gemini-flash-lite TEXT       — 저비용 1순위(GEMINI_API_KEY1)     │
 │  NORMAL  (priority 3): gemini-flash     TEXT       — 저비용 2순위(GEMINI_API_KEY2)      │
 │  NORMAL  (priority 4): openai-mini      TEXT       — 저비용 fallback │
-│  PREMIUM (priority 5): gemma-4-31b      TEXT       — 고추론(GEMINI_API_KEY1) — 아래와 동일 priority → 로드밸런싱 │
-│  PREMIUM (priority 5): gemma-4-31b      TEXT       — 고추론(GEMINI_API_KEY2) — 동일 모델, 다른 키로 처리량/쿼터 2배 │
+│  PREMIUM (priority 5): gemma-4-31b-1    TEXT       — 고추론(GEMINI_API_KEY1) — 아래와 동일 priority → 로드밸런싱 │
+│  PREMIUM (priority 5): gemma-4-31b-2    TEXT       — 동일 모델, 다른 키로 처리량/쿼터 2배 (name은 반드시 달라야 함) │
 │  PREMIUM (priority 6): openai           TEXT       — 고추론 fallback │
 │                                                                      │
 │  AgentGraph 노드 → TaskType 기준:                                    │
@@ -114,7 +114,7 @@ app.llm.permit-wait-timeout-seconds=${LLM_PERMIT_WAIT_TIMEOUT_SECONDS:20}
 
 # 등장 순서 = 인덱스 순서(사람이 읽기 편하도록 맞춤; Spring 바인딩 자체는 파일 내 줄 순서와 무관하고
 # "활성(비주석) 프로바이더의 번호가 0부터 연속"이기만 하면 된다): 소형 로컬(MICRO_TEXT) → 로컬 LLM 1
-# → 로컬 LLM 2(로컬 1과 로드밸런싱) → 외부 NORMAL 3종 + PREMIUM 3종(gemma-4-31b는 서로 다른
+# → 로컬 LLM 2(로컬 1과 로드밸런싱) → 외부 NORMAL 3종 + PREMIUM 3종(gemma-4-31b-1/-2는 서로 다른
 # Gemini 키로 로드밸런싱되는 2대) → Vision 전용(선택, 기본 비활성).
 
 # ── [LOCAL] 소형 로컬 LLM 1 — MICRO_TEXT 잡무 전담(§6.21) ─────────
@@ -189,7 +189,7 @@ app.llm.providers[5].priority=4
 
 # ── [PREMIUM] Gemma 4 31B — 고추론, GEMINI_API_KEY1 인스턴스 ──────
 # GEMINI_API_KEY1 미설정 시 시작 시 warn 로그 후 자동 비활성화
-app.llm.providers[6].name=gemma-4-31b
+app.llm.providers[6].name=gemma-4-31b-1
 app.llm.providers[6].base-url=${GEMINI_BASE_URL:https://generativelanguage.googleapis.com/v1beta/openai/}
 app.llm.providers[6].api-key=${GEMINI_API_KEY1:}
 app.llm.providers[6].model=gemma-4-31b-it
@@ -198,13 +198,17 @@ app.llm.providers[6].role=PREMIUM
 app.llm.providers[6].priority=5
 
 # ── [PREMIUM] Gemma 4 31B — 고추론, GEMINI_API_KEY2 인스턴스 ──────
-# [6]과 name/model/priority(5)가 모두 동일 — 서로 다른 API 키만 다르므로 findFirst()가 동일
-# priority 그룹으로 묶어 잔여 permit이 더 많은(least-in-flight) 쪽으로 자동 분산한다(§6).
+# [6]과 model/role/priority(5)가 동일 — API 키와 name만 다르므로 findFirst()가 동일 priority
+# 그룹으로 묶어 잔여 permit이 더 많은(least-in-flight) 쪽으로 자동 분산한다(§6).
 # 물리적으로 같은 Gemini gemma-4-31b 모델을 두 키로 나눠 호출해 PREMIUM 티어의 실질
 # 처리량/쿼터를 두 배로 늘리는 구성 — 로컬 LLM 2(§3 "로컬 LLM 2" 참고)와 동일한 패턴을
 # PREMIUM 클라우드 티어에 적용한 것.
+# ⚠️ name은 반드시 서로 달라야 한다. 동시성 게이트 세마포어·서킷브레이커·/settings 토글·
+# 호출 내 "이미 시도함" 집합·llm_usage 라벨이 모두 name을 키로 쓰기 때문에, 이름이 같으면
+# 세마포어 하나를 나눠 쓰고(처리량 2배가 안 됨) 한쪽이 429로 차단될 때 다른 쪽도 함께 차단돼
+# 두 키를 둔 목적 자체가 사라진다. 기동 시 중복 검사는 없다.
 # GEMINI_API_KEY2 미설정 시 시작 시 warn 로그 후 자동 비활성화
-app.llm.providers[7].name=gemma-4-31b
+app.llm.providers[7].name=gemma-4-31b-2
 app.llm.providers[7].base-url=${GEMINI_BASE_URL:https://generativelanguage.googleapis.com/v1beta/openai/}
 app.llm.providers[7].api-key=${GEMINI_API_KEY2:}
 app.llm.providers[7].model=gemma-4-31b-it
@@ -372,7 +376,7 @@ CREATE TABLE IF NOT EXISTS llm_usage (
 - **라우팅 전략 셀렉터 자체 숨김**: 위 항목은 LOCAL_ONLY "개별 옵션"을 `disabled` 처리하는 것과 달리, `app.llm.default-routing-mode`(=`LLM_ROUTING_MODE`)가 `LOCAL_ONLY`면 채팅 사이드바의 라우팅 전략 드롭다운 **전체**가 렌더링되지 않는다 — 이 배포에서는 프로바이더가 LOCAL 하나뿐이라 어떤 모드를 골라도 결과가 동일하므로, 선택지 자체를 없애는 편이 더 정확하다.
   - 판정 경로: `LlmRouter.getDefaultMode()` → `ChatController.populateChatModel()`의 `localOnlyDeployment` 모델 속성 → `chat.html`의 `th:if="${!localOnlyDeployment}"`.
   - 대화별 `routingMode`(스레드 메타에 저장된 현재 선택값)가 아니라 **배포 전체의 기본값**을 기준으로 판단한다 — 그렇지 않으면 사용자가 LOCAL_ONLY를 고르는 순간 셀렉터가 사라져 다시 못 바꾸는 UX 함정이 생긴다.
-- **같은 Gemini API 키 공유**: `GEMINI_API_KEY1`은 gemini-flash-lite(NORMAL)·gemma-4-31b(PREMIUM, `providers[6]`)가, `GEMINI_API_KEY2`는 gemini-flash(NORMAL)·gemma-4-31b(PREMIUM, `providers[7]`)가 각각 공유한다 — 한 키에 Rate Limit이 걸리면 NORMAL과 PREMIUM 양쪽이 동시에 차단될 수 있음. OpenAI를 PREMIUM fallback(`providers[8]`)으로 유지 권장
+- **같은 Gemini API 키 공유**: `GEMINI_API_KEY1`은 gemini-flash-lite(NORMAL)·gemma-4-31b-1(PREMIUM, `providers[6]`)가, `GEMINI_API_KEY2`는 gemini-flash(NORMAL)·gemma-4-31b-2(PREMIUM, `providers[7]`)가 각각 공유한다 — 한 키에 Rate Limit이 걸리면 NORMAL과 PREMIUM 양쪽이 동시에 차단될 수 있음. OpenAI를 PREMIUM fallback(`providers[8]`)으로 유지 권장
 - **classifyOnly() 토큰 미누적**: `AgentService`가 선행 분류 시 `AgentState` 토큰 집계에서 1회 누락 (허용된 MVP 트레이드오프)
 - **tried 집합 순환 방지**: `executeWithTracking()` 내 tried 집합이 모든 프로바이더를 포함하면 exhausted — 최대 재귀 = 프로바이더 수
 - **Vision 라우팅**: `type=VISION` 모델 미등록 시 `LIGHT_BOTH` → `BOTH` 순으로 fallback. Vision 문서 많으면 `local-vision` 등록 권장
@@ -400,6 +404,6 @@ CREATE TABLE IF NOT EXISTS llm_usage (
 
 - **폴백/회귀 0**: `MICRO_TEXT`는 `LIGHT_TEXT`/`LIGHT_BOTH`/`BOTH`가 모두 지원(부분집합)하므로, 소형 다운·미등록 시 큰 모델이 그대로 흡수한다. **예외: 대화 요약**(`ConversationSummarizerService`)만은 이 폴백을 타지 않는다 — 소형(`role=LOCAL, priority=0`)이 없으면(`LlmRouter.hasMicroTextOffloadProvider()=false`) LLM 요약 자체를 생략하고 원본 history로 폴백한다(부가 기능이 답변용 모델의 동시성 슬롯을 잠식하지 않게 하려는 의도적 게이팅. 답변이 이미 `## 요약` 섹션을 갖고 있으면 소형 유무와 무관하게 그 내용을 그대로 재사용하므로 LLM 호출 0회). `RetrievalService`는 `MICRO_TEXT→LIGHT_TEXT→TEXT` 순 폴백이라 cloud-only(LOCAL 없음)에서도 구성 실패가 없다.
 - **priority 필수**: 소형(0) < 큰(1). 동률이면 §6 로드밸런서가 둘 사이에 분산해 **절반만** 오프로딩된다.
-- **인덱스 연속성**: `providers[N]`은 0부터 연속이어야 바인딩(파일 내 줄 순서 자체는 무관). 기본 파일은 `[0]`=소형·`[1]`=로컬 LLM 1·`[2]`=로컬 LLM 2·`[3]~[8]`=외부(PREMIUM gemma-4-31b가 `[6]`·`[7]` 두 키로 로드밸런싱)·`[9]`=Vision(선택, §3 예시).
+- **인덱스 연속성**: `providers[N]`은 0부터 연속이어야 바인딩(파일 내 줄 순서 자체는 무관). 기본 파일은 `[0]`=소형·`[1]`=로컬 LLM 1·`[2]`=로컬 LLM 2·`[3]~[8]`=외부(PREMIUM gemma-4-31b-1/-2가 `[6]`·`[7]` 두 키로 로드밸런싱)·`[9]`=Vision(선택, §3 예시).
 
 **더 공격적 오프로딩(A안)**: 소형을 `type=LIGHT_TEXT`로 등록하면 분류·직답까지 소형이 처리한다(`LIGHT_TEXT`가 MICRO_TEXT도 지원하므로 둘 다 흡수). 분류 오분류는 라우팅 정확도에, 직답은 사용자 노출에 직결되므로 채택 전 검색 품질 평가 하네스(OPERATOR_MANUAL §6.6)로 회귀를 측정할 것. 설정 예제는 OPERATOR_MANUAL §5.4 "예제 6 — 소형(경량) LLM 분리".
