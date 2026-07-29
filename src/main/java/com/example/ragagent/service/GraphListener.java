@@ -21,6 +21,17 @@ public interface GraphListener {
     /** Fired alongside onSourcesReady when the retrieved documents reference extracted images. */
     default void onImagesReady(List<String> imageRefs) {}
 
+    /**
+     * Fired during query-time Lazy Vision image description ({@code RetrievalService} →
+     * {@code LazyVisionService}) — once with {@code (0, total)} as soon as the miss count is known,
+     * then once more per completed image. Vision calls can take tens of seconds for several misses
+     * with no other event in that window, so a streaming client would otherwise sit on the plain
+     * "관련 문서 검색 중..." badge for the whole wait. {@code total} counts only cache misses —
+     * already-described images resolve instantly and never reach the LLM, so they don't move this
+     * counter. Never fired when every referenced image is already cached (nothing to wait for).
+     */
+    default void onImageAnalysisProgress(int done, int total) {}
+
     /** Fired when PROGRESSIVE mode triggers a PREMIUM provider upgrade. */
     default void onUpgrade(String provider) {}
 

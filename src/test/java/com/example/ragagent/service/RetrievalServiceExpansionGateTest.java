@@ -40,7 +40,7 @@ class RetrievalServiceExpansionGateTest {
         MessageSource messageSource = mock(MessageSource.class);
         when(messageSource.getMessage(anyString(), any(), any(Locale.class))).thenReturn("{query} {number}");
         return new RetrievalService(llmRouter, mock(LlmUsageRepository.class), mock(RagService.class), props,
-                Optional.empty(), Optional.empty(), messageSource);
+                Optional.empty(), Optional.empty(), messageSource, new ChatImageAnalysisSkipRegistry());
     }
 
     @Test

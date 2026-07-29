@@ -112,7 +112,7 @@ class RetrievalServiceImageDescriptionTest {
             when(messageSource.getMessage(anyString(), any(), any(Locale.class))).thenReturn("{query} {number}");
 
             svc = new RetrievalService(llmRouter, mock(LlmUsageRepository.class), rag, props,
-                    Optional.of(lazyVision), Optional.empty(), messageSource);
+                    Optional.of(lazyVision), Optional.empty(), messageSource, new ChatImageAnalysisSkipRegistry());
         }
 
         private static Document docWithImage(String id, String imagePath, boolean withEmbeddedDesc) {
@@ -138,7 +138,7 @@ class RetrievalServiceImageDescriptionTest {
 
             AgentState result = svc.execute(state());
 
-            verify(lazyVision, never()).describeIfNeeded(any(), any(BiConsumer.class));
+            verify(lazyVision, never()).describeIfNeeded(any(), any(BiConsumer.class), any());
             // 텍스트도 그대로 유지되어야 한다 — 중복 "설명:" 추가 없음
             assertThat(result.retrievedDocs().get(0).getText()).contains("이미 인덱싱 시점에 생성된 설명");
             assertThat(result.retrievedDocs().get(0).getText().split("이미지 설명", -1)).hasSize(2); // 딱 1회만
@@ -149,12 +149,12 @@ class RetrievalServiceImageDescriptionTest {
         void callsLazyVisionWhenNoEmbeddedDescription() {
             Document d = docWithImage("d1", "images/a/1.png", false);
             when(rag.searchBatch(any(), any(), any(), anyInt())).thenReturn(List.of(List.of(d)));
-            when(lazyVision.describeIfNeeded(any(), any(BiConsumer.class)))
+            when(lazyVision.describeIfNeeded(any(), any(BiConsumer.class), any()))
                     .thenReturn(Map.of("images/a/1.png", "새로 생성된 설명"));
 
             AgentState result = svc.execute(state());
 
-            verify(lazyVision).describeIfNeeded(eqList("images/a/1.png"), any(BiConsumer.class));
+            verify(lazyVision).describeIfNeeded(eqList("images/a/1.png"), any(BiConsumer.class), any());
             assertThat(result.retrievedDocs().get(0).getText()).contains("새로 생성된 설명");
         }
 
@@ -169,12 +169,12 @@ class RetrievalServiceImageDescriptionTest {
                     + "[이미지: images/a/2.png]\n본문";
             Document d = new Document(text, m);
             when(rag.searchBatch(any(), any(), any(), anyInt())).thenReturn(List.of(List.of(d)));
-            when(lazyVision.describeIfNeeded(any(), any(BiConsumer.class)))
+            when(lazyVision.describeIfNeeded(any(), any(BiConsumer.class), any()))
                     .thenReturn(Map.of("images/a/2.png", "새 설명"));
 
             svc.execute(state());
 
-            verify(lazyVision).describeIfNeeded(eqList("images/a/2.png"), any(BiConsumer.class));
+            verify(lazyVision).describeIfNeeded(eqList("images/a/2.png"), any(BiConsumer.class), any());
         }
 
         /** Mockito's List content matcher, kept local to avoid an extra static import clash. */

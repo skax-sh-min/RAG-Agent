@@ -104,6 +104,8 @@
                 <div id="stream-stage-${bubbleId}" class="stream-stage small text-muted mb-1">
                     <span class="spinner-border spinner-border-sm me-1" role="status"></span>
                     <span id="stream-stage-text-${bubbleId}">질문 분석 중...</span>
+                    <button type="button" id="stream-skip-images-${bubbleId}"
+                            class="btn btn-sm btn-link p-0 ms-2 d-none" style="font-size:0.75rem; vertical-align:baseline;">건너뛰기</button>
                 </div>
                 <div id="stream-content-${bubbleId}" class="md-content stream-content stream-cursor"></div>
                 <div id="stream-images-${bubbleId}"></div>
@@ -111,6 +113,31 @@
                 <div id="stream-meta-${bubbleId}" class="mt-2 d-flex align-items-center flex-wrap gap-2" style="font-size:0.72rem;"></div>
             </div>`;
         document.getElementById('chat-messages').appendChild(wrap);
+
+        const skipBtn = document.getElementById(`stream-skip-images-${bubbleId}`);
+        if (skipBtn) skipBtn.addEventListener('click', () => skipImageAnalysis(bubbleId));
+    }
+
+    /**
+     * "건너뛰기" click during the "이미지 분석 중 (N/M)" stage — tells the server (still running
+     * this same turn) to stop waiting on the remaining Lazy Vision calls, not to abort the turn
+     * (that's the separate 중지/stop button — see setStreamingUiState). Fire-and-forget: the next
+     * stage event (however the server proceeds) is what actually updates the badge, this call
+     * just disables the button so a slow double-click can't double-fire it.
+     */
+    function skipImageAnalysis(bubbleId) {
+        const skipBtn = document.getElementById(`stream-skip-images-${bubbleId}`);
+        if (skipBtn) skipBtn.disabled = true;
+
+        const threadIdInput = document.querySelector('#chat-form input[name="threadId"]');
+        const threadId = threadIdInput ? threadIdInput.value : '';
+        if (!threadId) return;
+
+        fetch('/ui/chat/stream/skip-images', {
+            method: 'POST',
+            headers: typeof getCsrfHeaders === 'function' ? getCsrfHeaders() : {},
+            body: new URLSearchParams({ threadId }),
+        }).catch(() => {}); // best-effort — a failed skip request just means the wait continues
     }
 
     // ── SSE event handlers ────────────────────────────────────────────────────
@@ -118,6 +145,11 @@
     function onStage(bubbleId, data) {
         const el = document.getElementById(`stream-stage-text-${bubbleId}`);
         if (el) el.textContent = data.text || STAGE_LABELS[data.id] || data.id;
+        // "건너뛰기" only makes sense while the server is actually waiting on image analysis —
+        // every other stage (including the very next one once analysis finishes or is skipped)
+        // hides it again, so it can never linger on an unrelated stage badge.
+        const skipBtn = document.getElementById(`stream-skip-images-${bubbleId}`);
+        if (skipBtn) skipBtn.classList.toggle('d-none', data.id !== 'image_analysis');
         // PROGRESSIVE upgrade: clear accumulated content so premium answer re-fills
         if (data.id === 'upgrade') {
             const contentEl = document.getElementById(`stream-content-${bubbleId}`);

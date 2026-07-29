@@ -61,6 +61,7 @@ src/main/resources/
 | GET | `/chat/{threadId}` | `chat.html` | 기존 대화 이어하기 (이전 turn 서버 렌더) |
 | POST | `/ui/chat` | `fragments/message-assistant` | 질문 전송 (동기 fallback) |
 | POST | `/ui/chat/stream` | `text/event-stream` (SseEmitter) | SSE 스트리밍 응답 — `chat-stream.js`가 사용 |
+| POST | `/ui/chat/stream/skip-images` | `204` | 현재 스트리밍 중인 턴의 쿼리 시점 이미지 분석(Lazy Vision) 대기를 건너뜀(`threadId` 파라미터) — 턴 전체를 끊는 `/ui/chat/stream`의 abort/중지와는 별개, 아래 §8 참고 |
 | POST | `/ui/chat/new` | redirect `/chat/{newId}` | 새 대화 생성 |
 | PATCH | `/ui/threads/{threadId}/title` | `fragments/thread-item` | 대화 제목 수정 |
 | PATCH | `/ui/threads/{threadId}/routing-mode` | `204` | 대화별 라우팅 모드 저장 |
@@ -404,15 +405,25 @@ stage(classifier) → stage(retrieval) → sources → stage(answer) → token �
 | `done` | 메타데이터 JSON (`usedProvider`, `inputTokens`, `elapsedMs` 등) | 완료 시 마크다운 렌더 |
 | `error` | `{"message":"오류 설명"}` | 오류 버블로 교체 |
 
+> **이미지 분석 진행 표시도 `stage` 이벤트를 재사용한다**: RETRIEVAL 중 쿼리 시점 Lazy Vision이 실행되면
+> `{"id":"image_analysis","text":"이미지 분석 중 (2/5)"}`가 여러 번 발행된다 — 새 이벤트 타입을 만들지 않고
+> 기존 `onStage()` 핸들러가 그대로 텍스트만 갱신하도록 재사용했다(단, `id`가 `"retrieval"`이 아니므로
+> `onStage()`의 출처/이미지 패널 초기화 분기는 타지 않는다). 이 단계에서만 `chat-stream.js`가 배지 옆에
+> **건너뛰기** 버튼(`#stream-skip-images-{bubbleId}`)을 노출하며, 클릭 시 `POST /ui/chat/stream/skip-images`를
+> 호출한다(§3.1). 이미지 분석이 끝나거나 다음 단계(`answer` 등)로 넘어가면 버튼은 자동으로 다시 숨겨진다.
+
 ### 컴포넌트
 
 | 파일 | 역할 |
 |------|------|
-| `service/StreamingAgentService.java` | SSE 파이프라인 오케스트레이터; `AgentGraph.runStreaming()` 호출 |
-| `service/GraphListener.java` | 노드/토큰/출처 이벤트 hook 인터페이스 (`NOOP` 상수로 동기 경로 오버헤드 0) |
+| `service/StreamingAgentService.java` | SSE 파이프라인 오케스트레이터; `AgentGraph.runStreaming()` 호출; 턴 시작/종료에 `ChatImageAnalysisSkipRegistry.begin()`/`end()` |
+| `service/GraphListener.java` | 노드/토큰/출처 이벤트 hook 인터페이스 (`NOOP` 상수로 동기 경로 오버헤드 0); `onImageAnalysisProgress(done, total)` — 쿼리 시점 Lazy Vision 진행 |
 | `agent/AgentGraph.java` | `runStreaming(state, listener)` 메서드 — `AnswerService.executeStreaming()` 호출 |
+| `service/RetrievalService.java` | `execute(state, listener)` — `LazyVisionService.describeIfNeeded()`에 진행 콜백 + 건너뛰기 신호(`BooleanSupplier`) 전달; 이미 설명이 임베드된 이미지는 애초에 제외 |
+| `service/LazyVisionService.java` | 쿼리 시점 이미지 설명 캐시 조회 + 미스만 Vision 호출; `describeIfNeeded(paths, onProgress, skipRequested)` — 건너뛰기 시 대기만 중단, 이미 제출된 백그라운드 작업은 계속 진행돼 캐시에 저장됨 |
+| `service/ChatImageAnalysisSkipRegistry.java` | threadId별 건너뛰기 플래그(`ConcurrentHashMap<String, AtomicBoolean>`) — `ChatController`의 `/ui/chat/stream/skip-images`가 설정, `RetrievalService`가 폴링 |
 | `service/AnswerService.java` | `executeStreaming(state, listener)` — `ChatClient.stream()` Flux 구독 → `listener.onToken()` |
-| `static/js/chat-stream.js` | 클라이언트 SSE 파서; form submit capture, 버블 DOM 생성, 이벤트별 핸들러 |
+| `static/js/chat-stream.js` | 클라이언트 SSE 파서; form submit capture, 버블 DOM 생성, 이벤트별 핸들러; 이미지 분석 건너뛰기 버튼 |
 
 ### PROGRESSIVE / 재시도 처리
 

@@ -59,7 +59,7 @@ class AgentGraphTest {
         // 모든 서비스 기본 stub: 입력 state 그대로 반환 (각 테스트가 필요 시 override)
         when(classifierService.execute(any())).thenAnswer(inv -> inv.getArgument(0));
         when(directAnswerService.execute(any())).thenAnswer(inv -> inv.getArgument(0));
-        when(retrievalService.execute(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(retrievalService.execute(any(), any())).thenAnswer(inv -> inv.getArgument(0));
         when(answerService.execute(any())).thenAnswer(inv -> inv.getArgument(0));
         when(criticService.execute(any())).thenAnswer(inv -> inv.getArgument(0));
         when(finalizeService.execute(any())).thenAnswer(inv -> inv.getArgument(0));
@@ -88,7 +88,7 @@ class AgentGraphTest {
 
         verify(classifierService, times(1)).execute(any());
         verify(directAnswerService, times(1)).execute(any());
-        verify(retrievalService, never()).execute(any());
+        verify(retrievalService, never()).execute(any(), any());
         verify(answerService, never()).execute(any());
         verify(criticService, never()).execute(any());
         verify(finalizeService, times(1)).execute(any());
@@ -103,7 +103,7 @@ class AgentGraphTest {
 
         graph.run(newState(RoutingMode.COST_FIRST));
 
-        verify(retrievalService, times(1)).execute(any());
+        verify(retrievalService, times(1)).execute(any(), any());
         verify(answerService, times(1)).execute(any());
         verify(directAnswerService, never()).execute(any());
         verify(criticService, times(1)).execute(any());
@@ -118,7 +118,7 @@ class AgentGraphTest {
         graph.run(pre);
 
         verify(classifierService, never()).execute(any());
-        verify(retrievalService, times(1)).execute(any());
+        verify(retrievalService, times(1)).execute(any(), any());
         verify(answerService, times(1)).execute(any());
     }
 
@@ -138,7 +138,7 @@ class AgentGraphTest {
 
         graph.run(newState(RoutingMode.COST_FIRST));
 
-        verify(retrievalService, times(2)).execute(any());
+        verify(retrievalService, times(2)).execute(any(), any());
         verify(answerService, times(2)).execute(any());
         verify(criticService, times(1)).execute(any());
         verify(finalizeService, times(1)).execute(any());
@@ -161,7 +161,7 @@ class AgentGraphTest {
 
         graph.run(newState(RoutingMode.COST_FIRST));
 
-        verify(retrievalService, times(2)).execute(any());
+        verify(retrievalService, times(2)).execute(any(), any());
         verify(answerService, times(2)).execute(any());
         verify(criticService, times(2)).execute(any());
         verify(finalizeService, times(1)).execute(any());
@@ -178,7 +178,7 @@ class AgentGraphTest {
         graph.run(newState(RoutingMode.COST_FIRST));
 
         // 흐름: ANSWER(retry=0→1) → ANSWER(1→2) → ANSWER(2, no more retry) → CRITIC → FINALIZE
-        verify(retrievalService, times(3)).execute(any());
+        verify(retrievalService, times(3)).execute(any(), any());
         verify(answerService, times(3)).execute(any());
         verify(criticService, times(1)).execute(any());
         verify(finalizeService, times(1)).execute(any());
@@ -190,7 +190,7 @@ class AgentGraphTest {
         List<String> refs = List.of("images/doc1/p1_img1.png");
         when(classifierService.execute(any()))
                 .thenAnswer(inv -> ((AgentState) inv.getArgument(0)).toBuilder().questionType("manual").build());
-        when(retrievalService.execute(any()))
+        when(retrievalService.execute(any(), any()))
                 .thenAnswer(inv -> ((AgentState) inv.getArgument(0)).toBuilder().imageRefs(refs).build());
         // non-NOOP listener → AgentGraph calls answerService.executeStreaming(), not execute().
         when(answerService.executeStreaming(any(), any())).thenAnswer(inv -> inv.getArgument(0));

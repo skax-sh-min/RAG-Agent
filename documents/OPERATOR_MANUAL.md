@@ -448,6 +448,21 @@ LLM_ROUTING_MODE=QUALITY_FIRST
 > 이미지 수가 많으면 시간이 걸릴 수 있어 `/documents` 업로드 화면에 "이미지 분석 중 (N/M)" 진행률이 별도
 > 단계로 표시됩니다(SSE `describing_images` 스테이지) — 직전 단계 메시지(예: "PPTX → Markdown 변환 중...")에
 > 멈춰 있는 것처럼 보이지 않도록 함. 상세는 [PIPELINE.md §6.3](PIPELINE.md#63-docx--md--임베딩-db-저장-상세-이미지-포함), UI는 [UI.md §3.2](UI.md#32-문서-관리-documentcontroller) 참고.
+>
+> **채팅 화면의 쿼리 시점 Lazy Vision — 진행 표시 + 건너뛰기**: 인덱싱 시점과 별개로, 검색된 청크가 아직
+> 설명 없는 이미지를 참조하면 답변 생성 전에 `LazyVisionService`가 그 이미지를 분석합니다(`RetrievalService`).
+> 이 대기 동안 채팅 화면 상단 배지에 "이미지 분석 중 (N/M)"이 표시되고(`GraphListener.onImageAnalysisProgress()`
+> → `stage` SSE 이벤트를 `id="image_analysis"`로 재사용), 사용자가 **건너뛰기**를 클릭하면
+> `POST /ui/chat/stream/skip-images`(`threadId` 파라미터)가 `ChatImageAnalysisSkipRegistry`에 신호를 보냅니다.
+> `LazyVisionService`는 이미 시작된 Vision 호출을 취소하지 않고 **대기만 멈춥니다** — 나머지는 백그라운드에서
+> 계속 진행돼 `image_descriptions` 캐시에 정상 저장되므로, 다음 검색에서 같은 이미지를 다시 만나면 즉시
+> 캐시 히트로 처리됩니다. 인덱싱 진행 표시(위 항목)와는 SSE 채널·스테이지 id가 다른 완전히 별개의 경로입니다.
+>
+> **이미 인덱싱 시점에 설명이 박힌 이미지는 재분석하지 않습니다**: 업로드 시 "이미지 설명 추가"를 체크해
+> 청크 텍스트에 `[이미지: ...]` 바로 뒤에 `[이미지 설명: ...]`이 이미 삽입돼 있으면, `RetrievalService`가
+> 그 이미지를 Lazy Vision 대상에서 아예 제외합니다(`RetrievalService.hasEmbeddedDescription()`). 이 설명은
+> `MarkdownCorrectionService`가 만드는 순간부터 청크 텍스트에만 존재하고 `image_descriptions` 테이블에는
+> 저장되지 않으므로, 이 필터가 없으면 매 턴 이 이미지를 캐시 미스로 오인해 불필요하게 재분석했을 것입니다.
 
 #### 소제목 숫자 생성 (`addHeadingNumbers`)
 

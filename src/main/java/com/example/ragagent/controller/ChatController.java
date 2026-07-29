@@ -6,6 +6,7 @@ import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.model.*;
 import com.example.ragagent.service.AgentService;
+import com.example.ragagent.service.ChatImageAnalysisSkipRegistry;
 import com.example.ragagent.service.ConversationSummarizerService;
 import com.example.ragagent.service.CuratedQaService;
 import com.example.ragagent.service.MemoryService;
@@ -49,6 +50,7 @@ public class ChatController {
     private final AppProperties props;
     private final LlmRouter llmRouter;
     private final MessageSource messageSource;
+    private final ChatImageAnalysisSkipRegistry imageSkipRegistry;
 
     public ChatController(AgentService agentService,
                           StreamingAgentService streamingAgentService,
@@ -58,7 +60,8 @@ public class ChatController {
                           CuratedQaService curatedQaService,
                           AppProperties props,
                           LlmRouter llmRouter,
-                          MessageSource messageSource) {
+                          MessageSource messageSource,
+                          ChatImageAnalysisSkipRegistry imageSkipRegistry) {
         this.agentService = agentService;
         this.streamingAgentService = streamingAgentService;
         this.threadMetaService = threadMetaService;
@@ -68,6 +71,7 @@ public class ChatController {
         this.props = props;
         this.llmRouter = llmRouter;
         this.messageSource = messageSource;
+        this.imageSkipRegistry = imageSkipRegistry;
     }
 
     // ── Page routes ───────────────────────────────────────────────────
@@ -151,6 +155,20 @@ public class ChatController {
             worker.interrupt();
         });
         return emitter;
+    }
+
+    /**
+     * User clicked "건너뛰기" on the "이미지 분석 중 (N/M)" indicator — stop waiting for the
+     * remaining Lazy Vision calls and let the answer proceed with whatever's already described.
+     * Distinct from the full "중지" button (which aborts the SSE connection outright, see
+     * {@link #streamChat}): this keeps the turn running, so it's a plain 204, not a stream
+     * teardown. A no-op (still 204) if the turn isn't currently in the image-analysis phase — the
+     * click race (button clicked just as analysis finishes) is harmless either way.
+     */
+    @PostMapping("/ui/chat/stream/skip-images")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void skipImageAnalysis(@RequestParam String threadId) {
+        imageSkipRegistry.requestSkip(threadId);
     }
 
     @PostMapping("/ui/chat")

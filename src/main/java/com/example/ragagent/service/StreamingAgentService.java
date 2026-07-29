@@ -60,6 +60,7 @@ public class StreamingAgentService {
     private final MessageSource messageSource;
     private final ConversationSummarizerService summarizerService;
     private final AppProperties props;
+    private final ChatImageAnalysisSkipRegistry imageSkipRegistry;
 
     /**
      * Clock backing the idle watchdog (below). Production passes {@code System::nanoTime}; tests
@@ -81,9 +82,10 @@ public class StreamingAgentService {
                                   ObjectMapper objectMapper,
                                   MessageSource messageSource,
                                   ConversationSummarizerService summarizerService,
-                                  AppProperties props) {
+                                  AppProperties props,
+                                  ChatImageAnalysisSkipRegistry imageSkipRegistry) {
         this(agentGraph, memoryService, classifierService, threadMetaService, objectMapper,
-                messageSource, summarizerService, props, System::nanoTime);
+                messageSource, summarizerService, props, imageSkipRegistry, System::nanoTime);
     }
 
     /** Test seam — see {@link #nanoTimeSource}. */
@@ -95,6 +97,7 @@ public class StreamingAgentService {
                           MessageSource messageSource,
                           ConversationSummarizerService summarizerService,
                           AppProperties props,
+                          ChatImageAnalysisSkipRegistry imageSkipRegistry,
                           LongSupplier nanoTimeSource) {
         this.agentGraph = agentGraph;
         this.memoryService = memoryService;
@@ -104,6 +107,7 @@ public class StreamingAgentService {
         this.messageSource = messageSource;
         this.summarizerService = summarizerService;
         this.props = props;
+        this.imageSkipRegistry = imageSkipRegistry;
         this.nanoTimeSource = nanoTimeSource;
     }
 
@@ -123,6 +127,10 @@ public class StreamingAgentService {
         Thread worker = Thread.currentThread();
         AtomicLong lastActivityNanos = new AtomicLong(nanoTimeSource.getAsLong());
         long idleTimeoutNanos = TimeUnit.MILLISECONDS.toNanos(props.sseIdleTimeoutMs());
+        // Resets any stale flag a prior turn on this same thread might have left set — the registry
+        // is keyed by threadId, not per-turn, so a fresh begin() here is what makes a leftover skip
+        // click from turn N harmless to turn N+1.
+        imageSkipRegistry.begin(form.threadId());
 
         ScheduledFuture<?> heartbeat = heartbeatScheduler.scheduleAtFixedRate(() -> {
             try { emitter.send(SseEmitter.event().comment("heartbeat")); }
@@ -236,6 +244,7 @@ public class StreamingAgentService {
         } finally {
             heartbeat.cancel(false);
             idleWatchdog.cancel(false);
+            imageSkipRegistry.end(form.threadId());
         }
     }
 
@@ -280,6 +289,20 @@ public class StreamingAgentService {
         public void onImagesReady(List<String> imageRefs) {
             lastActivityNanos.set(nanoTimeSource.getAsLong());
             if (!imageRefs.isEmpty()) sendEvent(emitter, "images", imageRefs);
+        }
+
+        @Override
+        public void onImageAnalysisProgress(int done, int total) {
+            lastActivityNanos.set(nanoTimeSource.getAsLong());
+            // Reuses the "stage" event (id="image_analysis", distinct from "retrieval") rather than
+            // a dedicated event type — chat-stream.js's onStage() already renders whatever text the
+            // server sends into the same stage badge, so no new client handler is needed. A distinct
+            // id (not "retrieval") matters: onStage() clears the images/sources panels on id="retrieval"
+            // re-entry (retry semantics), and this fires several times per turn.
+            Map<String, String> payload = Map.of(
+                    "id", "image_analysis",
+                    "text", "이미지 분석 중 (" + done + "/" + total + ")");
+            sendEvent(emitter, "stage", payload);
         }
 
         @Override

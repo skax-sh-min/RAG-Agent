@@ -92,7 +92,7 @@ class StreamingAgentServiceTest {
         // CPU stall would otherwise be indistinguishable from a genuinely idle pipeline.
         service = new StreamingAgentService(agentGraph, memoryService, classifierService,
                 threadMetaService, new ObjectMapper(), messageSource, summarizerService, props,
-                fakeNanos::get);
+                new ChatImageAnalysisSkipRegistry(), fakeNanos::get);
 
         when(memoryService.getHistory(any(), any())).thenReturn("");
         when(classifierService.classifyOnly(any(), any())).thenReturn("usage");

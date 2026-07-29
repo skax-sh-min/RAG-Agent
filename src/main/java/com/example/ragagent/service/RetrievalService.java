@@ -49,15 +49,18 @@ public class RetrievalService {
     private final boolean rerankEnabled;
     private final LazyVisionService lazyVisionService; // null when disabled
     private final Optional<RerankerService> reranker;
+    private final ChatImageAnalysisSkipRegistry imageSkipRegistry;
 
     public RetrievalService(LlmRouter llmRouter, LlmUsageRepository usageRepo, RagService ragService,
                             AppProperties props, Optional<LazyVisionService> lazyVisionOpt,
-                            Optional<RerankerService> rerankerOpt, MessageSource messageSource) {
+                            Optional<RerankerService> rerankerOpt, MessageSource messageSource,
+                            ChatImageAnalysisSkipRegistry imageSkipRegistry) {
         this.ragService = ragService;
         this.props = props;
         this.rerankEnabled = props.searchRerankEnabled();
         this.lazyVisionService = lazyVisionOpt.orElse(null);
         this.reranker = rerankerOpt;
+        this.imageSkipRegistry = imageSkipRegistry;
         // MultiQueryExpander builds its own ChatClient around the model it's given, so the
         // only way to have its calls recorded in llm_usage is to wrap that model (mirrors
         // TrackingEmbeddingModel's decorator for embeddings). §6.21 (작업2) — query expansion is a
@@ -228,8 +231,10 @@ public class RetrievalService {
                     .filter(path -> retrieved.stream().noneMatch(d -> hasEmbeddedDescription(d.getText(), path)))
                     .toList();
             if (!needsAnalysis.isEmpty()) {
+                String threadId = state.threadId();
                 Map<String, String> descs = lazyVisionService.describeIfNeeded(needsAnalysis,
-                        (done, total) -> listener.onImageAnalysisProgress(done, total));
+                        (done, total) -> listener.onImageAnalysisProgress(done, total),
+                        () -> imageSkipRegistry.isSkipRequested(threadId));
                 if (!descs.isEmpty()) contextDocs = augmentWithDescriptions(unique, descs);
             }
         }

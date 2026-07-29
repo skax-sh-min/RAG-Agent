@@ -90,7 +90,7 @@ class RetrievalServiceMultiQueryParallelTest {
         when(messageSource.getMessage(anyString(), any(), any(Locale.class))).thenReturn("{query} {number}");
 
         RetrievalService svc = new RetrievalService(llmRouter, mock(LlmUsageRepository.class), ragService, props,
-                Optional.empty(), Optional.empty(), messageSource);
+                Optional.empty(), Optional.empty(), messageSource, new ChatImageAnalysisSkipRegistry());
 
         testStartNanos.set(System.nanoTime());
         AgentState result = svc.execute(

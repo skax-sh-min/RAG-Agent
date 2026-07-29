@@ -68,7 +68,7 @@ class RetrievalServiceEscalationTest {
                 .thenReturn(List.of(List.of(new Document("d", Map.of()))));
 
         return new RetrievalService(stubLlmRouter(), mock(LlmUsageRepository.class), ragService, props,
-                Optional.empty(), Optional.empty(), stubMessageSource());
+                Optional.empty(), Optional.empty(), stubMessageSource(), new ChatImageAnalysisSkipRegistry());
     }
 
     private static AgentState stateWithRetry(int retryCount) {
@@ -136,7 +136,7 @@ class RetrievalServiceEscalationTest {
                 .thenReturn(List.of(bigList));
 
         RetrievalService svc = new RetrievalService(stubLlmRouter(), mock(LlmUsageRepository.class), rs, props,
-                Optional.empty(), Optional.empty(), stubMessageSource());
+                Optional.empty(), Optional.empty(), stubMessageSource(), new ChatImageAnalysisSkipRegistry());
 
         AgentState result = svc.execute(stateWithRetry(2));
         assertThat(result.retrievedDocs()).hasSizeLessThanOrEqualTo(DEFAULT_TOP_K);
