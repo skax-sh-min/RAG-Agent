@@ -33,6 +33,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.LongSupplier;
 
 /**
  * SSE streaming pipeline orchestrator.
@@ -59,6 +60,14 @@ public class StreamingAgentService {
     private final ConversationSummarizerService summarizerService;
     private final AppProperties props;
 
+    /**
+     * Clock backing the idle watchdog (below). Production passes {@code System::nanoTime}; tests
+     * substitute a hand-advanced source so the watchdog's verdict depends only on simulated
+     * progress, not on how much wall-clock time the JVM actually spent — under a parallel test
+     * suite a CPU stall would otherwise look exactly like an idle pipeline.
+     */
+    private final LongSupplier nanoTimeSource;
+
     public StreamingAgentService(AgentGraph agentGraph,
                                   MemoryService memoryService,
                                   ClassifierService classifierService,
@@ -67,6 +76,20 @@ public class StreamingAgentService {
                                   MessageSource messageSource,
                                   ConversationSummarizerService summarizerService,
                                   AppProperties props) {
+        this(agentGraph, memoryService, classifierService, threadMetaService, objectMapper,
+                messageSource, summarizerService, props, System::nanoTime);
+    }
+
+    /** Test seam — see {@link #nanoTimeSource}. */
+    StreamingAgentService(AgentGraph agentGraph,
+                          MemoryService memoryService,
+                          ClassifierService classifierService,
+                          ThreadMetaService threadMetaService,
+                          ObjectMapper objectMapper,
+                          MessageSource messageSource,
+                          ConversationSummarizerService summarizerService,
+                          AppProperties props,
+                          LongSupplier nanoTimeSource) {
         this.agentGraph = agentGraph;
         this.memoryService = memoryService;
         this.classifierService = classifierService;
@@ -75,6 +98,7 @@ public class StreamingAgentService {
         this.messageSource = messageSource;
         this.summarizerService = summarizerService;
         this.props = props;
+        this.nanoTimeSource = nanoTimeSource;
     }
 
     /**
@@ -91,7 +115,7 @@ public class StreamingAgentService {
         // run() executes as the body of the worker virtual thread (see ChatController),
         // so this IS the thread to interrupt when the pipeline goes idle too long.
         Thread worker = Thread.currentThread();
-        AtomicLong lastActivityNanos = new AtomicLong(System.nanoTime());
+        AtomicLong lastActivityNanos = new AtomicLong(nanoTimeSource.getAsLong());
         long idleTimeoutNanos = TimeUnit.MILLISECONDS.toNanos(props.sseIdleTimeoutMs());
 
         ScheduledFuture<?> heartbeat = heartbeatScheduler.scheduleAtFixedRate(() -> {
@@ -106,7 +130,7 @@ public class StreamingAgentService {
         // shorter-than-default idle timeout is still detected promptly.
         long checkIntervalMs = Math.max(100, props.sseIdleTimeoutMs() / 6);
         ScheduledFuture<?> idleWatchdog = heartbeatScheduler.scheduleWithFixedDelay(() -> {
-            long idleNanos = System.nanoTime() - lastActivityNanos.get();
+            long idleNanos = nanoTimeSource.getAsLong() - lastActivityNanos.get();
             if (idleNanos > idleTimeoutNanos) {
                 log.warn("[TIMEOUT:SSE_IDLE] thread={} idleMs={} (app.sse-idle-timeout-seconds={}s)",
                         form.threadId(), TimeUnit.NANOSECONDS.toMillis(idleNanos), props.sseIdleTimeoutMs() / 1000);
@@ -226,14 +250,14 @@ public class StreamingAgentService {
 
         @Override
         public void onNodeEnter(String nodeName) {
-            lastActivityNanos.set(System.nanoTime());
+            lastActivityNanos.set(nanoTimeSource.getAsLong());
             Map<String, String> payload = Map.of("id", nodeName, "text", stageText(nodeName));
             sendEvent(emitter, "stage", payload);
         }
 
         @Override
         public void onToken(String text) {
-            lastActivityNanos.set(System.nanoTime());
+            lastActivityNanos.set(nanoTimeSource.getAsLong());
             accumulated.append(text);
             Map<String, Object> payload = new HashMap<>();
             payload.put("text", text);
@@ -242,19 +266,19 @@ public class StreamingAgentService {
 
         @Override
         public void onSourcesReady(List<SourceRef> sources) {
-            lastActivityNanos.set(System.nanoTime());
+            lastActivityNanos.set(nanoTimeSource.getAsLong());
             sendEvent(emitter, "sources", sources);
         }
 
         @Override
         public void onImagesReady(List<String> imageRefs) {
-            lastActivityNanos.set(System.nanoTime());
+            lastActivityNanos.set(nanoTimeSource.getAsLong());
             if (!imageRefs.isEmpty()) sendEvent(emitter, "images", imageRefs);
         }
 
         @Override
         public void onUpgrade(String provider) {
-            lastActivityNanos.set(System.nanoTime());
+            lastActivityNanos.set(nanoTimeSource.getAsLong());
             Map<String, String> payload = Map.of(
                     "id", "upgrade",
                     "text", "고추론 재분석 중: " + provider);
@@ -263,13 +287,13 @@ public class StreamingAgentService {
 
         @Override
         public void onVerifying() {
-            lastActivityNanos.set(System.nanoTime());
+            lastActivityNanos.set(nanoTimeSource.getAsLong());
             sendEvent(emitter, "verifying", Map.of());
         }
 
         @Override
         public void onRetry(String reason, int retryCount) {
-            lastActivityNanos.set(System.nanoTime());
+            lastActivityNanos.set(nanoTimeSource.getAsLong());
             Map<String, Object> payload = new HashMap<>();
             payload.put("reason", reason);
             payload.put("retryCount", retryCount);
