@@ -90,6 +90,16 @@ public class RetrievalService {
     }
 
     public AgentState execute(AgentState state) {
+        return execute(state, GraphListener.NOOP);
+    }
+
+    /**
+     * Same as {@link #execute(AgentState)}, but reports Lazy Vision progress through
+     * {@code listener} (see {@link GraphListener#onImageAnalysisProgress}) — {@code AgentGraph}
+     * passes {@link GraphListener#NOOP} on the blocking path, same zero-overhead convention as
+     * the other nodes.
+     */
+    public AgentState execute(AgentState state, GraphListener listener) {
         // normalized search-scope tags (empty → version-only behavior, unchanged).
         List<String> selectedTags = com.example.ragagent.model.TagUtils.parseTagList(state.selectedTags());
         // Read hot-editable tuning fresh each call so /settings overrides apply live.
@@ -205,8 +215,23 @@ public class RetrievalService {
 
         List<Document> contextDocs = unique;
         if (!imageRefs.isEmpty() && lazyVisionService != null) {
-            Map<String, String> descs = lazyVisionService.describeIfNeeded(imageRefs);
-            if (!descs.isEmpty()) contextDocs = augmentWithDescriptions(unique, descs);
+            // Skip any image whose description is already embedded in the chunk text — DOCX/PPTX/PDF
+            // uploads with "이미지 설명 추가" checked get a "[이미지 설명: ...]" line injected right
+            // after the "[이미지: ...]" marker at indexing time (MarkdownCorrectionService), but that
+            // description only ever lives in the markdown text — it's never written to the
+            // image_descriptions table LazyVisionService/ImageDescriptionRepository read from. Without
+            // this filter, every such image looks like a cache miss on every single turn that
+            // retrieves it: a wasted Vision call plus a duplicate "설명: ..." appended right next to
+            // the one already in the text (see augmentWithDescriptions() below).
+            List<Document> retrieved = unique; // effectively-final capture for the lambda below
+            List<String> needsAnalysis = imageRefs.stream()
+                    .filter(path -> retrieved.stream().noneMatch(d -> hasEmbeddedDescription(d.getText(), path)))
+                    .toList();
+            if (!needsAnalysis.isEmpty()) {
+                Map<String, String> descs = lazyVisionService.describeIfNeeded(needsAnalysis,
+                        (done, total) -> listener.onImageAnalysisProgress(done, total));
+                if (!descs.isEmpty()) contextDocs = augmentWithDescriptions(unique, descs);
+            }
         }
 
         List<String> warnings = new ArrayList<>(state.retrievalWarnings());
@@ -411,6 +436,22 @@ public class RetrievalService {
      * comma-joined paths as either a String or a List depending on writer/version;
      * a blind (String) cast crashes the entire retrieval on the latter.
      */
+    /**
+     * True when {@code text} already has a "[이미지 설명: ...]" line immediately following the
+     * "[이미지: {imagePath}]" marker — i.e. this exact chunk was indexed with "이미지 설명 추가"
+     * checked, so a fresh Lazy Vision call would be redundant. Only a match right after the marker
+     * counts (not merely "the text contains a description somewhere") — an unrelated image's
+     * description elsewhere in a merged chunk must not suppress analysis of this one.
+     */
+    static boolean hasEmbeddedDescription(String text, String imagePath) {
+        if (text == null) return false;
+        String marker = "[이미지: " + imagePath + "]";
+        int idx = text.indexOf(marker);
+        if (idx < 0) return false;
+        String after = text.substring(idx + marker.length()).stripLeading();
+        return after.startsWith("[이미지 설명:");
+    }
+
     private static String imagePathsMeta(Map<String, Object> meta) {
         Object raw = meta.get(MetaKey.IMAGE_PATHS);
         if (raw instanceof String s) return s;
