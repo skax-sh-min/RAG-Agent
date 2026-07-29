@@ -34,6 +34,75 @@ class DocRegistryTest {
                 List.of("id1", "id2"), List.of());
     }
 
+    @org.junit.jupiter.api.Nested
+    @DisplayName("chunk_overlap 기록 (문서 내보내기 재조립용)")
+    class ChunkOverlapColumn {
+
+        @Test
+        @DisplayName("인덱싱 시점 overlap이 저장되고 그대로 조회된다")
+        void persistsRecordedOverlap() {
+            DocRegistry reg = buildRegistry();
+            reg.put("doc_a", "anonymous", new DocRegistry.DocRegistryEntry(
+                    "sha", "v1", "2026-01-01T00:00:00Z", 3, List.of("id1"), List.of(), 250));
+
+            assertThat(reg.findByDocId("doc_a", "anonymous").orElseThrow().chunkOverlap())
+                    .isEqualTo(250);
+        }
+
+        @Test
+        @DisplayName("overlap=0도 '미기록'이 아니라 유효한 값으로 구분된다")
+        void zeroIsDistinctFromUnknown() {
+            DocRegistry reg = buildRegistry();
+            reg.put("doc_zero", "anonymous", new DocRegistry.DocRegistryEntry(
+                    "sha", "v1", "2026-01-01T00:00:00Z", 3, List.of("id1"), List.of(), 0));
+            reg.put("doc_null", "anonymous", entry("sha", "v1"));   // 6-arg 레거시 형태 → null
+
+            assertThat(reg.findByDocId("doc_zero", "anonymous").orElseThrow().chunkOverlap()).isZero();
+            assertThat(reg.findByDocId("doc_null", "anonymous").orElseThrow().chunkOverlap()).isNull();
+        }
+
+        @Test
+        @DisplayName("백필은 미기록 행만 채우고 이미 기록된 값은 건드리지 않는다")
+        void backfillOnlyFillsNulls() {
+            DocRegistry reg = buildRegistry();
+            reg.put("doc_known", "anonymous", new DocRegistry.DocRegistryEntry(
+                    "sha", "v1", "2026-01-01T00:00:00Z", 3, List.of("id1"), List.of(), 250));
+            reg.put("doc_legacy", "anonymous", entry("sha", "v1"));
+
+            assertThat(reg.backfillMissingChunkOverlap(100)).isEqualTo(1);
+            assertThat(reg.findByDocId("doc_known", "anonymous").orElseThrow().chunkOverlap())
+                    .as("이미 기록된 값은 덮어쓰지 않아야 한다").isEqualTo(250);
+            assertThat(reg.findByDocId("doc_legacy", "anonymous").orElseThrow().chunkOverlap())
+                    .isEqualTo(100);
+        }
+
+        @Test
+        @DisplayName("백필은 멱등 — 재기동해도 두 번 적용되지 않는다")
+        void backfillIsIdempotent() {
+            DocRegistry reg = buildRegistry();
+            reg.put("doc_legacy", "anonymous", entry("sha", "v1"));
+
+            assertThat(reg.backfillMissingChunkOverlap(100)).isEqualTo(1);
+            assertThat(reg.backfillMissingChunkOverlap(999))
+                    .as("두 번째 실행은 채울 행이 없어야 한다").isZero();
+            assertThat(reg.findByDocId("doc_legacy", "anonymous").orElseThrow().chunkOverlap())
+                    .isEqualTo(100);
+        }
+
+        @Test
+        @DisplayName("init()을 다시 실행해도 컬럼 추가가 실패하지 않는다 (재기동 안전)")
+        void initIsRerunnable() {
+            DocRegistry reg = buildRegistry();
+            reg.put("doc_a", "anonymous", new DocRegistry.DocRegistryEntry(
+                    "sha", "v1", "2026-01-01T00:00:00Z", 3, List.of("id1"), List.of(), 42));
+
+            reg.init();   // 두 번째 기동 — ALTER TABLE은 이미 컬럼이 있어 무시되어야 한다
+
+            assertThat(reg.findByDocId("doc_a", "anonymous").orElseThrow().chunkOverlap())
+                    .isEqualTo(42);
+        }
+    }
+
     @Test
     @DisplayName("put → findByDocId → 조회 성공")
     void put_and_find() {

@@ -50,7 +50,8 @@ public class NoAuthAutoLoginFilter extends OncePerRequestFilter {
             new GatedRoute("POST", "/ui/documents/progress/*/cancel"),
             new GatedRoute("DELETE", "/ui/documents/*"),
             new GatedRoute("PATCH", "/ui/documents/*/tags"),
-            new GatedRoute("GET", "/ui/documents/*/tags/edit")
+            new GatedRoute("GET", "/ui/documents/*/tags/edit"),
+            new GatedRoute("GET", "/ui/documents/*/export")
     );
 
     private final SqliteUserDetailsService userDetailsService;

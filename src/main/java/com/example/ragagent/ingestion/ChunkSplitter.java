@@ -30,8 +30,10 @@ public class ChunkSplitter {
      * also flow into {@link SearchTextBuilder}'s embedding/FTS input like any other chunk text, a
      * query such as "함수 뒷부분" can still surface the neighboring chunk.
      */
-    static final String CODE_CONTINUATION_BEFORE = "[코드 이어짐: 이전 청크에서 계속]";
-    static final String CODE_CONTINUATION_AFTER  = "[코드 이어짐: 다음 청크로 계속]";
+    // public: the export-side reassembler (ChunkReassembler) strips these exact markers to rejoin a
+    // fence that was cut across chunks — one source of truth so the two sides can't drift.
+    public static final String CODE_CONTINUATION_BEFORE = "[코드 이어짐: 이전 청크에서 계속]";
+    public static final String CODE_CONTINUATION_AFTER  = "[코드 이어짐: 다음 청크로 계속]";
 
     public List<Document> splitDocuments(List<Document> docs, String filename,
                                           int chunkSize, int overlap, int minChunkSize) {

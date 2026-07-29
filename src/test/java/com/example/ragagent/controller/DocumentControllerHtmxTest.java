@@ -5,6 +5,7 @@ import org.junit.jupiter.api.parallel.ResourceLock;
 import com.example.ragagent.audit.AuditLogger;
 import com.example.ragagent.context.ThreadContextResolver;
 import com.example.ragagent.model.DocumentInfo;
+import com.example.ragagent.service.DocumentExportService;
 import com.example.ragagent.service.IndexingProgressService;
 import com.example.ragagent.service.RagService;
 import org.junit.jupiter.api.BeforeEach;
@@ -62,6 +63,7 @@ class DocumentControllerHtmxTest {
     @MockitoBean ChatModel chatModel;
     @MockitoBean ThreadContextResolver threadContextResolver;
     @MockitoBean AuditLogger auditLogger;
+    @MockitoBean DocumentExportService documentExportService;
 
     @TempDir Path tempDir;
 

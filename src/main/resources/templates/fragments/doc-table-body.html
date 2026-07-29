@@ -28,6 +28,10 @@
                     hx-target="closest tr"
                     hx-swap="outerHTML swap:0.3s"
                     th:text="#{doc.btn.delete}">Delete</button>
+            <button th:if="${isAdmin}" type="button" class="btn btn-sm btn-outline-secondary ms-1"
+                    th:attr="data-doc-id=${doc.docId},data-version=${doc.version},data-filename=${doc.filename}"
+                    onclick="openExportDialog(this)"
+                    th:text="#{doc.btn.export}">Export</button>
         </td>
     </tr>
 </tbody>

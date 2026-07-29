@@ -141,10 +141,10 @@ See [USER_MANUAL.md](documents/USER_MANUAL.md) for usage instructions and [OPERA
 
 | Variable | Default | Recommended Range | Description |
 |----------|---------|-------------------|-------------|
-| `CHUNK_SIZE` | `800` | 300 ~ 2000 | Document chunk size (characters) |
-| `CHUNK_OVERLAP` | `100` | 0 ~ CHUNK_SIZE × 0.25 | Overlap between chunks (characters, boundary context only) |
-| `MIN_CHUNK_SIZE` | `300` | 50 ~ CHUNK_SIZE × 0.25 | Minimum chunk size threshold for tiny-chunk merge |
-| `SEARCH_TOP_K` | `7` | 2 ~ 15 | Number of documents returned by vector search |
+| `CHUNK_SIZE` | `1500` | 300 ~ 2000 | Document chunk size (characters) |
+| `CHUNK_OVERLAP` | `0` | 0 ~ CHUNK_SIZE × 0.25 | Overlap between chunks (characters, boundary context only). Defaults to `0` — section-aware splitting already carries heading/breadcrumb context into each chunk, and `0` keeps document export exact (see the Document export feature below) |
+| `MIN_CHUNK_SIZE` | `500` | 50 ~ CHUNK_SIZE × 0.25 | Minimum chunk size threshold for tiny-chunk merge |
+| `SEARCH_TOP_K` | `8` | 2 ~ 15 | Number of documents returned by vector search |
 | `SEARCH_SIMILARITY_THRESHOLD` | `0.0` | 0.0 ~ 0.75 | Min cosine similarity to keep a chunk (`0.0` = accept all) |
 | `SEARCH_MULTIQUERY_ENABLED` | `true` | true/false | Expand the query into sub-queries before search |
 | `SEARCH_MULTIQUERY_MIN_LENGTH` | `15` | 0 ~ 20 | Skip expansion for queries shorter than this (`0` = always expand). When expansion does run, the original-question search executes in parallel with it instead of waiting behind it |
@@ -359,6 +359,7 @@ User question
 - **Source hover preview** — `SourceRef` record with Bootstrap Popover shows a 200-char chunk text preview on hover; on non-mobile screens the popover is roughly 2x wider with a slightly smaller font so the excerpt reads with less wrapping
 - **Chunk editor live preview** — on wide desktop screens, the `/admin` chunk-edit offcanvas splits into a live Markdown preview (rendering images and tables) alongside the text editor, updating as you type; narrow screens keep the existing single-column editor
 - **Smart heading-number default** — the upload "generate heading numbers" checkbox auto-unchecks whenever a PPTX is selected (the option is never applied to PPTX server-side; PDF is unaffected and stays checked) and warns when PPTX is mixed with other formats in one upload, since the option applies per-batch, not per-file
+- **Document export (MD/TXT/DOCX)** — the document list's per-row **Export** button (admin-only) rebuilds a document from its currently indexed chunks (not the saved converted MD), so `/admin` chunk edits are reflected; `ChunkReassembler` undoes the retrieval-oriented duplication `ChunkSplitter` introduces (reinjected subheadings, parent-chapter breadcrumbs, split code-fence markers, repeated table headers, sliding-window overlap) before rendering, so the result reads like the original document rather than concatenated search chunks — validated against a real 335-chunk document at 0.001% character-count deviation from the source. MD downloads bundle images as a ZIP when present; DOCX embeds images via POI; each document's actual `CHUNK_OVERLAP` at index time is recorded in `doc_registry` (backfilled at startup for older rows) so later retuning the setting can't corrupt an older document's export. PPTX export isn't supported yet
 - **Code syntax highlighting** — highlight.js applied after DOMPurify sanitize, synced with dark mode
 - **LLM usage dashboard** — per-provider daily/weekly/monthly token stats, Chart.js daily history chart, circuit breaker countdown; embedding usage tracked separately (`embed:<model>`, with an approximation fallback when the server omits usage); inactive providers with no history auto-hide, and orphaned records (removed from config) surface as admin-deletable cards
 - **Document versioning** — per-version isolation (chroma: separate collection; sqlite-vec: `version` partition key)

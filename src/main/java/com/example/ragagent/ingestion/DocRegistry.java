@@ -5,9 +5,12 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
+import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.util.*;
 
 /**
@@ -48,27 +51,62 @@ public class DocRegistry {
                 "CREATE INDEX IF NOT EXISTS idx_doc_registry_user_version ON doc_registry(user_id, version)");
         jdbc.execute(
                 "CREATE INDEX IF NOT EXISTS idx_doc_registry_sha_version ON doc_registry(sha256, version, user_id)");
+        addChunkOverlapColumn();
         log.debug("[REGISTRY] SQLite 초기화 완료");
+    }
+
+    /**
+     * Defensive ALTER for the {@code chunk_overlap} column (same precedent as
+     * {@code SqliteMemoryRepository.init()}'s added columns — {@code V1__baseline.sql} is never
+     * edited). Nullable on purpose: a pre-existing row's real overlap is genuinely unknown until
+     * {@link #backfillMissingChunkOverlap} fills it in at startup.
+     */
+    private void addChunkOverlapColumn() {
+        try {
+            jdbc.execute("ALTER TABLE doc_registry ADD COLUMN chunk_overlap INTEGER");
+            log.info("[REGISTRY] doc_registry.chunk_overlap 컬럼 추가");
+        } catch (DataAccessException e) {
+            log.debug("[REGISTRY] chunk_overlap 컬럼이 이미 존재함");   // duplicate column name
+        }
+    }
+
+    /**
+     * Stamps the currently configured overlap onto rows indexed before the column existed. The
+     * value is a best guess — the true one wasn't recorded — but it is the only defensible one:
+     * these documents were indexed by a build whose overlap came from this same setting. Runs once
+     * at startup and never overwrites a known value.
+     *
+     * @return number of rows backfilled
+     */
+    public int backfillMissingChunkOverlap(int currentOverlap) {
+        int updated = jdbc.update(
+                "UPDATE doc_registry SET chunk_overlap = ? WHERE chunk_overlap IS NULL", currentOverlap);
+        if (updated > 0) {
+            log.info("[REGISTRY] chunk_overlap 미기록 문서 {}건에 현재 설정값({}) 적용", updated, currentOverlap);
+        }
+        return updated;
     }
 
     // ── CRUD ──────────────────────────────────────────────────────────────
 
     public void put(String docId, String userId, DocRegistryEntry entry) {
         jdbc.update("""
-                INSERT INTO doc_registry (doc_id, user_id, sha256, version, indexed_at, chunks, spring_doc_ids, errors)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO doc_registry (doc_id, user_id, sha256, version, indexed_at, chunks, spring_doc_ids, errors, chunk_overlap)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(doc_id, user_id) DO UPDATE SET
                   sha256=excluded.sha256, version=excluded.version,
                   indexed_at=excluded.indexed_at, chunks=excluded.chunks,
-                  spring_doc_ids=excluded.spring_doc_ids, errors=excluded.errors
+                  spring_doc_ids=excluded.spring_doc_ids, errors=excluded.errors,
+                  chunk_overlap=excluded.chunk_overlap
                 """,
                 docId, userId, entry.sha256(), entry.version(), entry.indexedAt(),
-                entry.chunks(), toJson(entry.springDocIds()), toJson(entry.errors()));
+                entry.chunks(), toJson(entry.springDocIds()), toJson(entry.errors()),
+                entry.chunkOverlap());
     }
 
     public Optional<DocRegistryEntry> findByDocId(String docId, String userId) {
         List<DocRegistryEntry> rows = jdbc.query(
-                "SELECT sha256, version, indexed_at, chunks, spring_doc_ids, errors " +
+                "SELECT sha256, version, indexed_at, chunks, spring_doc_ids, errors, chunk_overlap " +
                 "FROM doc_registry WHERE doc_id = ? AND user_id = ?",
                 (rs, n) -> new DocRegistryEntry(
                         rs.getString("sha256"),
@@ -76,7 +114,8 @@ public class DocRegistry {
                         rs.getString("indexed_at"),
                         rs.getInt("chunks"),
                         fromJsonList(rs.getString("spring_doc_ids")),
-                        fromJsonList(rs.getString("errors"))),
+                        fromJsonList(rs.getString("errors")),
+                        nullableInt(rs, "chunk_overlap")),
                 docId, userId);
         return rows.isEmpty() ? Optional.empty() : Optional.of(rows.get(0));
     }
@@ -84,7 +123,7 @@ public class DocRegistry {
     /** Finds by docId ignoring owner — for admin/reindex operations. */
     public Optional<DocRegistryEntry> findByDocId(String docId) {
         List<DocRegistryEntry> rows = jdbc.query(
-                "SELECT sha256, version, indexed_at, chunks, spring_doc_ids, errors " +
+                "SELECT sha256, version, indexed_at, chunks, spring_doc_ids, errors, chunk_overlap " +
                 "FROM doc_registry WHERE doc_id = ? LIMIT 1",
                 (rs, n) -> new DocRegistryEntry(
                         rs.getString("sha256"),
@@ -92,7 +131,8 @@ public class DocRegistry {
                         rs.getString("indexed_at"),
                         rs.getInt("chunks"),
                         fromJsonList(rs.getString("spring_doc_ids")),
-                        fromJsonList(rs.getString("errors"))),
+                        fromJsonList(rs.getString("errors")),
+                        nullableInt(rs, "chunk_overlap")),
                 docId);
         return rows.isEmpty() ? Optional.empty() : Optional.of(rows.get(0));
     }
@@ -110,27 +150,29 @@ public class DocRegistry {
 
     public Collection<DocRegistryEntry> values(String userId) {
         return jdbc.query(
-                "SELECT sha256, version, indexed_at, chunks, spring_doc_ids, errors " +
+                "SELECT sha256, version, indexed_at, chunks, spring_doc_ids, errors, chunk_overlap " +
                 "FROM doc_registry WHERE user_id = ?",
                 (rs, n) -> new DocRegistryEntry(
                         rs.getString("sha256"), rs.getString("version"),
                         rs.getString("indexed_at"), rs.getInt("chunks"),
                         fromJsonList(rs.getString("spring_doc_ids")),
-                        fromJsonList(rs.getString("errors"))),
+                        fromJsonList(rs.getString("errors")),
+                        nullableInt(rs, "chunk_overlap")),
                 userId);
     }
 
     public Set<Map.Entry<String, DocRegistryEntry>> entries(String userId) {
         Map<String, DocRegistryEntry> map = new LinkedHashMap<>();
         jdbc.query(
-                "SELECT doc_id, sha256, version, indexed_at, chunks, spring_doc_ids, errors " +
+                "SELECT doc_id, sha256, version, indexed_at, chunks, spring_doc_ids, errors, chunk_overlap " +
                 "FROM doc_registry WHERE user_id = ? ORDER BY indexed_at DESC",
                 rs -> {
                     map.put(rs.getString("doc_id"), new DocRegistryEntry(
                             rs.getString("sha256"), rs.getString("version"),
                             rs.getString("indexed_at"), rs.getInt("chunks"),
                             fromJsonList(rs.getString("spring_doc_ids")),
-                            fromJsonList(rs.getString("errors"))));
+                            fromJsonList(rs.getString("errors")),
+                            nullableInt(rs, "chunk_overlap")));
                 },
                 userId);
         return map.entrySet();
@@ -205,6 +247,12 @@ public class DocRegistry {
         }
     }
 
+    /** {@code getInt()} maps SQL NULL to 0, which is a valid overlap — read it as null instead. */
+    private static Integer nullableInt(ResultSet rs, String column) throws SQLException {
+        int value = rs.getInt(column);
+        return rs.wasNull() ? null : value;
+    }
+
     // ── Registry entry ─────────────────────────────────────────────────────
 
     public record DocRegistryEntry(
@@ -213,6 +261,22 @@ public class DocRegistry {
             String indexedAt,
             int chunks,
             List<String> springDocIds,
-            List<String> errors
-    ) {}
+            List<String> errors,
+            /**
+             * {@code app.chunk-overlap} this document was actually indexed with. Document export
+             * needs the value in force when the chunks were cut, not today's setting — the two
+             * differ whenever the operator retunes chunking after indexing, and feeding the wrong
+             * one to {@code ChunkReassembler} makes its overlap-removal step look for text that
+             * isn't there (or miss text that is). {@code null} only for a row written before this
+             * column existed and not yet backfilled ({@link #backfillMissingChunkOverlap}).
+             */
+            Integer chunkOverlap
+    ) {
+        /** Legacy 6-arg form — overlap unknown. Kept so existing call sites and older fixtures
+         *  don't have to state a value they never had. */
+        public DocRegistryEntry(String sha256, String version, String indexedAt, int chunks,
+                                List<String> springDocIds, List<String> errors) {
+            this(sha256, version, indexedAt, chunks, springDocIds, errors, null);
+        }
+    }
 }

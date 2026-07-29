@@ -264,11 +264,15 @@ public class DocumentIndexer {
         }
 
         req.onProgress().accept(IndexingProgressEvent.of("chunking", 0, 0, req.filename(), "청크 분할 중..."));
+        // Read once and reuse: chunk-overlap is hot-editable (§6.13), so re-reading it for the
+        // registry entry below could record a different value than the one that actually cut these
+        // chunks — exactly the mismatch the stored value exists to prevent.
+        int usedOverlap = props.chunkOverlapSafe();
         List<Document> chunks = chunkSplitter.splitDocuments(
-            rawDocs, req.filename(), props.chunkSizeSafe(), props.chunkOverlapSafe(), props.minChunkSizeSafe(),
+            rawDocs, req.filename(), props.chunkSizeSafe(), usedOverlap, props.minChunkSizeSafe(),
             props.embeddingSafe().maxChunkChars());
         log.debug("[INDEX] {} 청크 분할 완료 → {}개 (chunkSize={}, overlap={}, minChunkSize={})",
-            req.filename(), chunks.size(), props.chunkSizeSafe(), props.chunkOverlapSafe(), props.minChunkSizeSafe());
+            req.filename(), chunks.size(), props.chunkSizeSafe(), usedOverlap, props.minChunkSizeSafe());
         req.onProgress().accept(IndexingProgressEvent.of("chunking", 0, chunks.size(), req.filename(),
                 chunks.size() + "개 청크"));
 
@@ -292,7 +296,8 @@ public class DocumentIndexer {
 
         List<String> docIds = enriched.stream().map(Document::getId).toList();
         DocRegistry.DocRegistryEntry entry = new DocRegistry.DocRegistryEntry(
-                sha256, req.version(), Instant.now().toString(), tagged.size(), docIds, List.of());
+                sha256, req.version(), Instant.now().toString(), tagged.size(), docIds, List.of(),
+                usedOverlap);
         docRegistry.put(docId, DocRegistry.SHARED, entry);
 
         if (req.staleDocId() != null) {
@@ -354,8 +359,11 @@ public class DocumentIndexer {
         String lowerFilename = filename.toLowerCase();
         boolean skipChapterNumbers = lowerFilename.endsWith(".pptx") || lowerFilename.endsWith(".pdf");
         List<Document> rawDocs = loaderService.loadFromMarkdown(md, skipChapterNumbers);
+        // Captured for the registry entry below — re-reading the hot setting later could record an
+        // overlap these chunks were not actually cut with (see index()).
+        int usedOverlap = props.chunkOverlapSafe();
         List<Document> chunks  = chunkSplitter.splitDocuments(
-            rawDocs, filename, props.chunkSizeSafe(), props.chunkOverlapSafe(), props.minChunkSizeSafe(),
+            rawDocs, filename, props.chunkSizeSafe(), usedOverlap, props.minChunkSizeSafe(),
             props.embeddingSafe().maxChunkChars());
         log.debug("[REINDEX] 청크 분할: {}섹션 → {}청크", rawDocs.size(), chunks.size());
         onProgress.accept(IndexingProgressEvent.of("chunking", 0, chunks.size(), filename,
@@ -385,7 +393,8 @@ public class DocumentIndexer {
 
         List<String> springIds = enriched.stream().map(Document::getId).toList();
         docRegistry.put(docId, DocRegistry.SHARED, new DocRegistry.DocRegistryEntry(
-                sha256, version, Instant.now().toString(), tagged.size(), springIds, List.of()));
+                sha256, version, Instant.now().toString(), tagged.size(), springIds, List.of(),
+                usedOverlap));
         docRegistry.save();
 
         log.info("[REINDEX] 완료: {} → {}개 청크, {}ms", filename, tagged.size(), System.currentTimeMillis() - t0);

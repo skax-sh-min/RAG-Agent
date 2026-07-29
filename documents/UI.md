@@ -75,13 +75,16 @@ src/main/resources/
 | POST | `/ui/documents/upload` | 202 `{"taskId":"..."}` | 파일 업로드 수신 → 비동기 인덱싱 시작 |
 | GET | `/ui/documents/progress/{taskId}` | `text/event-stream` (SSE) | 인덱싱 진행 이벤트 (`stage`, `done`, `error`) |
 | DELETE | `/ui/documents/{docId}` | `200` | 문서 삭제 |
+| GET | `/ui/documents/{docId}/export` | 바이너리(MD/TXT/DOCX, MD+이미지는 ZIP) | 현재 색인된 청크로 문서를 재구성해 다운로드(§ 문서 내보내기, [OPERATOR_MANUAL.md §6.8](OPERATOR_MANUAL.md#68-문서-내보내기) 참고) — 관리자 전용 |
 | GET | `/ui/documents/list` | `fragments/doc-table-body` | 문서 목록 새로고침 |
 
-> **관리 전용 인증 모드**(`app.auth.management-only=true`, §6.17 B안)에서는 `POST /ui/documents/upload`, `POST /ui/documents/progress/*/cancel`, `DELETE /ui/documents/{docId}`, `PATCH /ui/documents/{id}/tags`, `GET /ui/documents/{id}/tags/edit`가 `hasRole("ADMIN")`로 게이트된다 — 비로그인은 `/login` 리다이렉트, 관리자 아닌 로그인은 403. `GET /documents`·`GET /ui/documents/list`·태그 조회는 게스트에게 그대로 열려 있다. 자세한 내용은 [OPERATOR_MANUAL.md §9.4.2](OPERATOR_MANUAL.md#942-관리-전용-인증-management-only) 참고.
+> **관리 전용 인증 모드**(`app.auth.management-only=true`, §6.17 B안)에서는 `POST /ui/documents/upload`, `POST /ui/documents/progress/*/cancel`, `DELETE /ui/documents/{docId}`, `PATCH /ui/documents/{id}/tags`, `GET /ui/documents/{id}/tags/edit`, `GET /ui/documents/{id}/export`가 `hasRole("ADMIN")`로 게이트된다 — 비로그인은 `/login` 리다이렉트, 관리자 아닌 로그인은 403. `GET /documents`·`GET /ui/documents/list`·태그 조회는 게스트에게 그대로 열려 있다. 자세한 내용은 [OPERATOR_MANUAL.md §9.4.2](OPERATOR_MANUAL.md#942-관리-전용-인증-management-only) 참고. 내보내기는 읽기 동작이지만 문서 전체를 한 번에 반출하는 벌크 기능이라 이 그룹에 포함됐다.
 >
 > **인덱싱 진행 스테이지**(`stage` 값): `loading` → `structuring`(TXT만) → `describing_images`(Vision 이미지 분석, "이미지 설명 추가" 체크 시만 — "이미지 분석 중 (N/M)") → `correcting`(DOCX/TXT/MD/PPTX/PDF[비스캔]) → `chunking` → `enriching` → `storing` → `done`/`error`/`cancelled`. 각 이벤트는 `stage`와 함께 `done`/`total`/`filename`/`message`를 실어 나르며, `documents.html`의 `stageHtml`/`STAGE_LABELS`가 단계별 진행률 바와 오류 로그 라벨을 렌더링한다. 상세는 [PIPELINE.md §6.3](PIPELINE.md#63-docx--md--임베딩-db-저장-상세-이미지-포함) 참고.
 >
 > **"소제목 숫자 생성" 체크박스 자동 기본값**(`documents.html`, 순수 클라이언트 로직, 서버 API 변경 없음): 파일을 선택할 때마다(드래그앤드롭·파일 선택창 둘 다 `handleFiles()` 경유) `syncHeadingNumbersCheckbox()`가 재계산한다 — 선택된 파일에 PPTX가 하나라도 있으면 체크 해제, 없으면(PDF 포함) 체크. 파일을 지울 때(`removeFile()`)도 남은 구성 기준으로 다시 계산된다. 이 기본값은 `DocumentIndexer`의 `.pptx` 분기가 체크박스 상태와 무관하게 항상 `addHeadingNumbers=false`를 넘기는 서버 동작(§3.3 [OPERATOR_MANUAL.md](OPERATOR_MANUAL.md#소제목-숫자-생성-addheadingnumbers) 참고)을 UI에 미리 반영한 것이며, PDF는 `PdfToMarkdownConverter`가 헤딩 자체를 만들지 않아 체크해도 무해하므로 자동 해제 대상에서 제외된다. PPTX와 다른 형식이 같은 배치에 섞이면 업로드가 배치 전체에 값 하나만 전송하는 구조라 `warnIfPptxMixed()`가 토스트 경고를 띄운다(업로드 자체는 막지 않음). 둘 다 기본값 제안일 뿐이라 체크박스는 언제든 수동으로 바꿀 수 있다.
+>
+> **문서 내보내기 다이얼로그**(`documents.html`, `openExportDialog()`/`runExport()`): 행의 **내보내기** 버튼(`fragments/doc-table-body.html`, `th:if="${isAdmin}"`)을 누르면 형식(MD/TXT/DOCX 라디오, 기본 MD)과 옵션(이미지 설명 포함 — 기본 켬, 소제목 번호·목차 추가 — 기본 끔) 선택 모달이 뜬다. 파일명이 `.pptx`로 끝나면 소제목 번호·목차 체크박스가 `disabled`되고 이유가 `form-text`로 표시된다(서버의 PPTX 제외 규칙을 UI에 미리 반영 — §3.3의 소제목 번호 체크박스 자동 해제와 같은 패턴). **내보내기** 클릭 시 `fetch()`로 `GET /ui/documents/{docId}/export`를 호출해 응답을 `Blob`으로 받아 `<a download>`로 저장한다 — `location.href` 이동 대신 `fetch`를 쓴 이유는 실패 시(예: `IllegalArgumentException` → 400) 브라우저가 오류 페이지로 넘어가는 대신 `ProblemDetail` JSON의 `detail`을 읽어 토스트로 보여주기 위해서다. 다운로드 파일명은 `Content-Disposition` 헤더에서 RFC 5987 `filename*=UTF-8''...` 형식을 우선 파싱하고(한글 파일명 대응), 없으면 `filename="..."` 폴백을 쓴다.
 
 ### 3.3 운영 / LLM 사용량 (OperationsController)
 
@@ -374,6 +377,7 @@ PROGRESSIVE 업그레이드 시 `🔝 고추론 재분석 → {premiumProvider}`
 | 채팅 API 오류 | `message-error.html` fragment (빨간 버블) |
 | 파일 업로드 실패 | 파일 행 상태 ❌ + 오류 토스트 |
 | 문서 삭제 실패 | `htmx:responseError` → 오류 토스트 |
+| 문서 내보내기 실패 | `fetch` 응답이 실패(`!res.ok`)면 `ProblemDetail`(JSON)의 `detail`을 파싱해 오류 토스트로 표시(§3.2 문서 내보내기 다이얼로그 참고) — 저장 다이얼로그가 뜨지 않고 조용히 실패하는 대신 사유가 보임 |
 | LOCAL_ONLY, LOCAL 미연결 | 빨간 버블 + `LlmProviderExhaustedException` 메시지 |
 | 동시 사용자 급증으로 프로바이더 용량 초과 (§6.12, 429) | 빨간 버블 + "현재 요청이 몰려 있습니다. 잠시 후 다시 시도해 주세요." — 서킷브레이커 전면차단이 아니라 일시적 대기 상한 초과이므로 잠시 후 재시도하면 대개 성공 |
 | 빈 질문 전송 | 클라이언트 validation, API 호출 차단 |
