@@ -37,22 +37,42 @@ public final class ExportPreprocessor {
     /** A heading number already applied at upload time, e.g. {@code "## 1.2 제목"}. */
     private static final Pattern EXISTING_NUMBER  = Pattern.compile("^\\d+(?:\\.\\d+)*\\.?\\s+");
 
+    /** A bare list bullet / quote marker with no content of its own, e.g. {@code "- "}, {@code "> "}. */
+    private static final Pattern BARE_LINE_PREFIX =
+            Pattern.compile("^(?:>\\s*)*(?:(?:[-*+]|\\d+[.)])\\s*)?$");
+
     private ExportPreprocessor() {}
 
+    /** Where an image marker sits in the reassembled markdown, as seen by the rewriter. */
+    public enum ImageSpot {
+        /** Nothing but whitespace precedes it on the line. */
+        LINE_START,
+        /** Text precedes it on the line — a bullet, a sentence — but it is not in a table. */
+        INLINE,
+        /** Inside a pipe-table row, where a line break would split the row. */
+        TABLE_CELL
+    }
+
     /**
-     * @param imageRewriter maps an image path (as written in the marker) to the replacement line;
-     *                      returning {@code null} drops the image line entirely
+     * What a rewriter puts in an image marker's place.
+     *
+     * @param text     replacement text; {@code null}/blank drops the image entirely
+     * @param ownLine  move the replacement onto a line of its own, dropping a bare bullet/quote
+     *                 marker that would otherwise be left behind. Honored everywhere except
+     *                 {@link ImageSpot#TABLE_CELL}, where breaking the line would split the row.
      */
+    public record ImageReplacement(String text, boolean ownLine) {
+        public static ImageReplacement inline(String text)  { return new ImageReplacement(text, false); }
+        public static ImageReplacement ownLine(String text) { return new ImageReplacement(text, true); }
+    }
+
     /**
-     * @param imageRewriter {@code (imagePath, atLineStart) -> replacement}. {@code atLineStart} is
-     *                      false when the marker sits mid-line (typically inside a table cell,
-     *                      where {@code MarkdownCorrectionService} joins with {@code <br>}) — a
-     *                      renderer must not emit block-level output there or it breaks the table.
-     *                      Returning {@code null}/blank drops the image.
+     * @param imageRewriter {@code (imagePath, spot) -> replacement}; see {@link ImageSpot} and
+     *                      {@link ImageReplacement}
      */
     public static String preprocess(String markdown, boolean includeImageDescriptions,
                                     boolean addHeadingNumbersAndToc,
-                                    BiFunction<String, Boolean, String> imageRewriter) {
+                                    BiFunction<String, ImageSpot, ImageReplacement> imageRewriter) {
         if (markdown == null || markdown.isBlank()) return "";
 
         // Image + description markers first, document-wide: both occur inline as well as on their
@@ -74,7 +94,7 @@ public final class ExportPreprocessor {
      * lines and often runs for many lines (or is glued mid-line after a {@code <br>}).
      */
     private static String rewriteImageMarkers(String markdown, boolean includeDescriptions,
-                                              BiFunction<String, Boolean, String> imageRewriter) {
+                                              BiFunction<String, ImageSpot, ImageReplacement> imageRewriter) {
         StringBuilder out = new StringBuilder(markdown.length());
         int i = 0;
         while (i < markdown.length()) {
@@ -97,20 +117,29 @@ public final class ExportPreprocessor {
                 continue;
             }
             String inner = markdown.substring(i, close + 1);
-            boolean atLineStart = isAtLineStart(out);
+            ImageSpot spot = spotOf(out);
 
             if (kind == MarkerKind.DESCRIPTION) {
                 if (includeDescriptions) {
                     String body = inner.substring(inner.indexOf(':') + 1, inner.length() - 1).strip();
                     trimTrailingBreak(out);        // drop the <br>/whitespace that glued the marker on
-                    out.append(atLineStart ? asBlockquote(body) : "(이미지 설명: " + oneLine(body) + ")");
+                    out.append(spot == ImageSpot.LINE_START
+                            ? asBlockquote(body)
+                            : "(이미지 설명: " + oneLine(body) + ")");
                 } else {
                     trimTrailingBreak(out);
                 }
             } else {
                 String path = inner.substring(inner.indexOf(':') + 1, inner.length() - 1).strip();
-                String replacement = imageRewriter.apply(path, atLineStart);
-                if (replacement != null && !replacement.isBlank()) out.append(replacement);
+                ImageReplacement replacement = imageRewriter.apply(path, spot);
+                if (replacement != null && replacement.text() != null && !replacement.text().isBlank()) {
+                    if (replacement.ownLine() && spot != ImageSpot.TABLE_CELL) {
+                        breakToOwnLine(out);
+                        out.append(replacement.text()).append('\n');
+                    } else {
+                        out.append(replacement.text());
+                    }
+                }
             }
             i = close + 1;
         }
@@ -142,14 +171,42 @@ public final class ExportPreprocessor {
         return -1;
     }
 
-    /** True when nothing but whitespace has been emitted since the last newline. */
-    private static boolean isAtLineStart(CharSequence out) {
+    /**
+     * Classifies the marker's position from what has been emitted on the current line so far. A
+     * table row is recognized by its leading {@code |} — the one case where the replacement must
+     * stay strictly inline; a bullet or a half-written sentence is not, even though neither is at
+     * the start of the line (that used to demote a list item's image to a plain text note).
+     */
+    private static ImageSpot spotOf(CharSequence out) {
+        String prefix = out.subSequence(lineStartIndex(out), out.length()).toString();
+        if (prefix.isBlank()) return ImageSpot.LINE_START;
+        return prefix.stripLeading().startsWith("|") ? ImageSpot.TABLE_CELL : ImageSpot.INLINE;
+    }
+
+    /** Index just after the last newline in {@code out} — i.e. where the current line begins. */
+    private static int lineStartIndex(CharSequence out) {
         for (int i = out.length() - 1; i >= 0; i--) {
-            char c = out.charAt(i);
-            if (c == '\n') return true;
-            if (!Character.isWhitespace(c)) return false;
+            if (out.charAt(i) == '\n') return i + 1;
         }
-        return true;
+        return 0;
+    }
+
+    /**
+     * Makes the current line empty so the replacement can start one of its own: a line holding
+     * nothing but a bullet/quote marker is dropped (it would render as an empty bullet), anything
+     * else keeps its content and the replacement moves to the next line.
+     */
+    private static void breakToOwnLine(StringBuilder out) {
+        int start = lineStartIndex(out);
+        String prefix = out.substring(start);
+        if (prefix.isBlank() || BARE_LINE_PREFIX.matcher(prefix).matches()) {
+            out.setLength(start);
+        } else {
+            while (out.length() > start && Character.isWhitespace(out.charAt(out.length() - 1))) {
+                out.setLength(out.length() - 1);            // no trailing space before the break
+            }
+            out.append('\n');
+        }
     }
 
     /** Removes the {@code <br>} / trailing spaces that attached a marker to the preceding text. */

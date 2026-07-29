@@ -11,12 +11,28 @@ import static org.assertj.core.api.Assertions.assertThat;
 /** Marker rewriting, heading numbering/TOC, and plain-text conversion for document export. */
 class ExportPreprocessorTest {
 
-    /** Mirrors the MD renderer's rewriter. */
-    private static final BiFunction<String, Boolean, String> MD_IMAGES =
-            (path, atLineStart) -> "![img](images/" + path.substring(path.lastIndexOf('/') + 1) + ")";
+    /** Mirrors the MD renderer's rewriter — always inline, valid anywhere in markdown. */
+    private static final BiFunction<String, ExportPreprocessor.ImageSpot,
+            ExportPreprocessor.ImageReplacement> MD_IMAGES =
+            (path, spot) -> ExportPreprocessor.ImageReplacement.inline(
+                    "![img](images/" + path.substring(path.lastIndexOf('/') + 1) + ")");
+
+    /** Mirrors the DOCX rewriter: its own paragraph everywhere except inside a table cell. */
+    private static final BiFunction<String, ExportPreprocessor.ImageSpot,
+            ExportPreprocessor.ImageReplacement> DOCX_IMAGES =
+            (path, spot) -> {
+                String token = "<IMG:" + path.substring(path.lastIndexOf('/') + 1) + ">";
+                return spot == ExportPreprocessor.ImageSpot.TABLE_CELL
+                        ? ExportPreprocessor.ImageReplacement.inline(token)
+                        : ExportPreprocessor.ImageReplacement.ownLine(token);
+            };
 
     private static String run(String md, boolean descriptions) {
         return ExportPreprocessor.preprocess(md, descriptions, false, MD_IMAGES);
+    }
+
+    private static String runDocx(String md, boolean descriptions) {
+        return ExportPreprocessor.preprocess(md, descriptions, false, DOCX_IMAGES);
     }
 
     @Nested
@@ -48,6 +64,35 @@ class ExportPreprocessorTest {
             assertThat(run("[이미지(변환불가): images/abc/y.emf]", true))
                     .contains("![img](images/y.emf)")
                     .doesNotContain("변환불가");
+        }
+
+        @Test
+        @DisplayName("글머리 기호 뒤 이미지는 별도 줄로 옮기고 빈 불릿을 남기지 않는다")
+        void promotesImageInsideListItemToOwnLine() {
+            String out = runDocx("- [이미지: images/abc/d1458_img57.png]\n다음 본문", true);
+
+            assertThat(out.lines().toList()).contains("<IMG:d1458_img57.png>");
+            assertThat(out).doesNotContain("- <IMG:");   // 불릿 뒤에 붙어 텍스트로 남지 않음
+            assertThat(out.lines().filter(l -> l.strip().equals("-")).count()).isZero();
+            assertThat(out).contains("다음 본문");
+        }
+
+        @Test
+        @DisplayName("문장 중간 이미지는 앞 문장을 살린 채 다음 줄로 내려간다")
+        void promotesMidSentenceImageToOwnLine() {
+            String out = runDocx("설명 문장 [이미지: images/abc/x.png] 뒷말", true);
+
+            assertThat(out.lines().toList()).containsSubsequence("설명 문장", "<IMG:x.png>");
+            assertThat(out).contains("뒷말");
+        }
+
+        @Test
+        @DisplayName("표 셀 안 이미지는 줄을 바꾸지 않고 셀에 그대로 남는다")
+        void keepsTableCellImageInline() {
+            String out = runDocx("| A | [이미지: images/abc/x.png] |", true);
+
+            assertThat(out.lines().count()).isEqualTo(1);
+            assertThat(out).contains("| A | <IMG:x.png> |");
         }
     }
 

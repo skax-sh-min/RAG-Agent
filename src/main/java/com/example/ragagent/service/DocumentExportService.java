@@ -15,7 +15,6 @@ import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
@@ -100,15 +99,22 @@ public class DocumentExportService {
 
     private Result renderMarkdown(String rebuilt, Options options, boolean numbering,
                                   String baseName, String docId) {
-        Set<String> used = new LinkedHashSet<>();
+        Set<Path> used = new LinkedHashSet<>();
         String md = ExportPreprocessor.preprocess(rebuilt, options.includeImageDescriptions(), numbering,
-                (path, atLineStart) -> {
-                    used.add(path);
+                (path, spot) -> {
+                    // A link to a file that won't be in the ZIP renders as a broken image in every
+                    // viewer — name it instead, the same note the DOCX export writes.
+                    Path resolved = resolveImage(path);
+                    if (resolved == null) {
+                        return ExportPreprocessor.ImageReplacement.inline("(이미지 없음: " + fileNameOf(path) + ")");
+                    }
+                    used.add(resolved);
                     // Inline markdown image syntax is valid mid-line too, so a table cell keeps working.
-                    return "![" + fileNameOf(path) + "](images/" + fileNameOf(path) + ")";
+                    return ExportPreprocessor.ImageReplacement.inline(
+                            "![" + fileNameOf(path) + "](images/" + fileNameOf(path) + ")");
                 });
 
-        List<Path> images = resolveImages(used);
+        List<Path> images = List.copyOf(used);
         if (images.isEmpty()) {
             return new Result(md.getBytes(StandardCharsets.UTF_8),
                     baseName + ".md", ExportFormat.MD.contentType());
@@ -120,7 +126,7 @@ public class DocumentExportService {
 
     private Result renderText(String rebuilt, Options options, boolean numbering, String baseName) {
         String md = ExportPreprocessor.preprocess(rebuilt, options.includeImageDescriptions(), numbering,
-                (path, atLineStart) -> "(이미지: " + fileNameOf(path) + ")");
+                (path, spot) -> ExportPreprocessor.ImageReplacement.inline("(이미지: " + fileNameOf(path) + ")"));
         return new Result(PlainTextRenderer.render(md).getBytes(StandardCharsets.UTF_8),
                 baseName + ".txt", ExportFormat.TXT.contentType());
     }
@@ -128,15 +134,19 @@ public class DocumentExportService {
     private Result renderDocx(String rebuilt, Options options, boolean numbering,
                               String baseName, String docId) {
         String md = ExportPreprocessor.preprocess(rebuilt, options.includeImageDescriptions(), numbering,
-                (path, atLineStart) -> {
+                (path, spot) -> {
                     Path resolved = resolveImage(path);
-                    if (resolved == null) return "(이미지 없음: " + fileNameOf(path) + ")";
-                    // The renderer only embeds a picture from a token on its own line; a mid-line
-                    // marker lives in a table cell, where injecting a line break would split the
-                    // row — name the image inline there instead of embedding it.
-                    return atLineStart
-                            ? DocxRenderer.IMAGE_TOKEN + resolved.toAbsolutePath()
-                            : "(이미지: " + fileNameOf(path) + ")";
+                    if (resolved == null) {
+                        return ExportPreprocessor.ImageReplacement.inline("(이미지 없음: " + fileNameOf(path) + ")");
+                    }
+                    String token = DocxRenderer.imageToken(resolved.toAbsolutePath().toString());
+                    // Inside a table cell the picture is embedded in place (a line break there would
+                    // split the row); everywhere else it gets a paragraph of its own, including after
+                    // a bullet or mid-sentence — a Word picture run can't share a line with a bullet
+                    // and used to degrade to a "(이미지: …)" text note there.
+                    return spot == ExportPreprocessor.ImageSpot.TABLE_CELL
+                            ? ExportPreprocessor.ImageReplacement.inline(token)
+                            : ExportPreprocessor.ImageReplacement.ownLine(token);
                 });
         try {
             byte[] bytes = DocxRenderer.render(md, baseName);
@@ -172,15 +182,6 @@ public class DocumentExportService {
         return "sqlite-vec".equals(props.vectorStoreSafe().type()) ? v : "manual_" + v;
     }
 
-    private List<Path> resolveImages(Set<String> markerPaths) {
-        List<Path> found = new ArrayList<>();
-        for (String p : markerPaths) {
-            Path resolved = resolveImage(p);
-            if (resolved != null) found.add(resolved);
-        }
-        return found;
-    }
-
     /**
      * Resolves an {@code images/{imageId}/{file}} marker path under the data directory. Returns
      * {@code null} when the file is gone (manually cleaned up), which every caller renders as a
@@ -202,8 +203,14 @@ public class DocumentExportService {
             zos.putNextEntry(new ZipEntry(mdName));
             zos.write(markdown.getBytes(StandardCharsets.UTF_8));
             zos.closeEntry();
+            // Entries are named by filename only (that's what the links point at), so two images
+            // from different subdirectories sharing a name must not open a duplicate entry — that
+            // throws and would fail the whole export.
+            Set<String> written = new LinkedHashSet<>();
             for (Path img : images) {
-                zos.putNextEntry(new ZipEntry("images/" + img.getFileName()));
+                String entry = "images/" + img.getFileName();
+                if (!written.add(entry)) continue;
+                zos.putNextEntry(new ZipEntry(entry));
                 Files.copy(img, zos);
                 zos.closeEntry();
             }
