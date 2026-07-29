@@ -462,6 +462,14 @@ LLM_ROUTING_MODE=QUALITY_FIRST
 > PPTX의 `##`/`###` 헤딩은 슬라이드 제목·부제목 라벨(최대 2단계, 슬라이드마다 계산)일 뿐 문서 목차 같은
 > 계층 구조가 아니라서, 순번을 매기면 실제 구조와 무관한 숫자만 붙고 이미 있는 `[페이지: N]` 마커와도
 > 겹쳐 혼란을 줍니다.
+>
+> **업로드 화면의 자동 기본값**: 위 동작을 UI에도 그대로 반영해, `/documents` 업로드 화면은 선택된 파일에
+> PPTX가 하나라도 있으면 체크박스를 자동으로 해제합니다(순수 클라이언트 로직, 서버 검증과 무관). PDF는
+> 자동 해제 대상이 **아닙니다** — `PdfToMarkdownConverter`가 H2~H6 헤딩 자체를 만들지 않아 체크해도
+> 사실상 무해하기 때문입니다. PPTX와 다른 형식이 같은 배치에 섞이면 업로드가 배치 전체에 값 하나만
+> 전달하는 구조라 화면에 경고 토스트가 뜹니다(업로드 자체는 막지 않음). 이 기본값은 어디까지나 제안이라
+> 사용자가 업로드 직전 자유롭게 재설정할 수 있습니다 — 클라이언트 구현 상세는
+> [UI.md §3.2](UI.md#32-문서-관리-documentcontroller) 참고.
 
 > **MD 재인덱싱 시 자동 재검증**: `/admin` ↺ 버튼으로 재인덱싱하면, 저장된 MD에 번호 매겨진 헤딩이 하나
 > 라도 있을 때만 현재 헤딩 구조 기준으로 전체 번호를 다시 계산해 파일에도 반영합니다
@@ -1816,6 +1824,8 @@ mvn test -Dtest=SearchQualityEvaluationTest -Dsearch-eval.enabled=true
 | MD 재인덱싱 (↺ 버튼) | `{docId}_corrected.md`(없으면 `{docId}.md`)를 읽어 청크 재생성·재인덱싱 — DOCX·TXT·PPTX·PDF(스캔 아님) 지원, 원본 재업로드 불필요 (스캔 PDF는 MD 파일이 없어 미지원) |
 
 > **청크 정렬**: 두 백엔드 모두 `doc_id` → `chunk_index`(인덱싱 시 각 청크에 부여되는 0-based 문서 내 위치, `MetaKey.CHUNK_INDEX`) 순으로 정렬됩니다 — 청크 id가 아니라 문서 원본 내용 순서 그대로 표시됩니다. sqlite-vec는 `ORDER BY doc_id, CAST(json_extract(metadata, '$.chunk_index') AS INTEGER), spring_doc_id`로 DB에서 직접 정렬합니다. Chroma의 `get()` API는 서버 측 ORDER BY를 지원하지 않으므로, 매치되는 청크 전체를 최대 `AdminService.CHUNK_FETCH_CAP`(10,000건)까지 가져온 뒤 애플리케이션(Java)에서 정렬·페이지네이션합니다 — 컬렉션(또는 docId 필터 결과)이 이 상한을 넘으면 뒤쪽 청크는 조회되지 않습니다.
+
+> **넓은 화면 미리보기**: 청크 편집 오프캔버스를 열 때 창 폭이 충분히 넓으면(오프캔버스 기본 폭의 2배 이상) 왼쪽에 마크다운·표·이미지 미리보기, 오른쪽에 기존 편집 입력창을 나란히 표시합니다(`admin.html`, `renderChunkPreview()`). 별도 API 호출 없이 이미 받아온 `GET /admin/chunks/{chunkId}/detail` 응답을 클라이언트에서 marked.js + DOMPurify + hljs로 렌더링하는 순수 프런트엔드 기능이라 서버 부하는 없습니다. 판정은 오프캔버스를 여는 시점 1회이며, 좁은 화면(모바일 등)에서는 기존과 동일하게 편집 입력창만 표시됩니다 — 상세는 [UI.md §3.4](UI.md#34-벡터-스토어-관리-admincontroller) 참고.
 
 ### 7.2 MD 재인덱싱 흐름
 

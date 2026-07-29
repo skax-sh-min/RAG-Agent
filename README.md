@@ -357,6 +357,8 @@ User question
 - **Multi-turn conversation** — thread-based history persistence (SQLite WAL, survives restarts)
 - **Message bubble restore** — re-entering `/chat/{threadId}` server-renders all previous turn bubbles
 - **Source hover preview** — `SourceRef` record with Bootstrap Popover shows a 200-char chunk text preview on hover; on non-mobile screens the popover is roughly 2x wider with a slightly smaller font so the excerpt reads with less wrapping
+- **Chunk editor live preview** — on wide desktop screens, the `/admin` chunk-edit offcanvas splits into a live Markdown preview (rendering images and tables) alongside the text editor, updating as you type; narrow screens keep the existing single-column editor
+- **Smart heading-number default** — the upload "generate heading numbers" checkbox auto-unchecks whenever a PPTX is selected (the option is never applied to PPTX server-side; PDF is unaffected and stays checked) and warns when PPTX is mixed with other formats in one upload, since the option applies per-batch, not per-file
 - **Code syntax highlighting** — highlight.js applied after DOMPurify sanitize, synced with dark mode
 - **LLM usage dashboard** — per-provider daily/weekly/monthly token stats, Chart.js daily history chart, circuit breaker countdown; embedding usage tracked separately (`embed:<model>`, with an approximation fallback when the server omits usage); inactive providers with no history auto-hide, and orphaned records (removed from config) surface as admin-deletable cards
 - **Document versioning** — per-version isolation (chroma: separate collection; sqlite-vec: `version` partition key)

@@ -197,7 +197,48 @@
         });
 
         renderFileList();
+        syncHeadingNumbersCheckbox();
+        warnIfPptxMixed();
         document.getElementById('upload-btn').disabled = false;
+    }
+
+    function extOf(filename) {
+        return (filename.split('.').pop() || '').toLowerCase();
+    }
+
+    function isPptx(file) {
+        return extOf(file.name) === 'pptx';
+    }
+
+    /**
+     * 선택된 파일 구성에 맞춰 '소제목 숫자 생성' 체크박스를 자동으로 맞춘다 — PPTX가 하나라도
+     * 섞여 있으면 해제, 그 외(DOCX/TXT/MD/PDF)만 있으면 체크(기본값).
+     *
+     * PPTX만 대상인 이유: DocumentIndexer의 .pptx 분기가 체크 여부와 무관하게 항상
+     * addHeadingNumbers=false를 넘긴다(슬라이드 제목/부제목 헤딩은 문서 목차 같은 계층 구조가
+     * 아니라서). 즉 PPTX에서는 체크해도 아무 효과가 없으므로 체크된 UI가 오히려 오해를 준다.
+     * PDF는 반대로 체크 값이 그대로 전달되고, PdfToMarkdownConverter가 H2~H6를 아예 만들지
+     * 않으므로 켜두어도 사실상 무해하다(LLM 교정이 헤딩을 만들어낸 경우에만 번호가 붙는다).
+     *
+     * 어디까지나 기본값 제안일 뿐이라 사용자가 업로드 직전에 직접 바꾸는 것은 그대로 가능하다
+     * (선택이 다시 바뀌면 재계산됨).
+     */
+    function syncHeadingNumbersCheckbox() {
+        const box = document.getElementById('add-heading-numbers-checkbox');
+        if (!box) return;
+        box.checked = !selectedFiles.some(isPptx);
+    }
+
+    /**
+     * 업로드는 배치 전체에 addHeadingNumbers 값 하나만 전송하므로, PPTX와 다른 형식을 함께
+     * 고르면 둘 중 하나는 원하는 설정으로 처리할 수 없다(PPTX에 맞춰 해제하면 DOCX/TXT/MD가
+     * 소제목 번호를 잃는다). 나누어 올리도록 경고만 띄우고 업로드 자체는 막지 않는다.
+     */
+    function warnIfPptxMixed() {
+        const pptxCount = selectedFiles.filter(isPptx).length;
+        if (pptxCount > 0 && pptxCount < selectedFiles.length) {
+            showToast(I18N.pptxMixedUpload, 'warning');
+        }
     }
 
     /** Filenames of documents already indexed — scraped from the live doc table, no extra round trip. */
@@ -289,6 +330,10 @@
         } else {
             renderFileList();
         }
+        // 남은 파일 구성이 바뀌었으므로 재계산 — 마지막 PPTX를 지우면 다시 체크되고,
+        // 혼합 상태가 해소되면 경고도 더 이상 뜨지 않는다.
+        syncHeadingNumbersCheckbox();
+        warnIfPptxMixed();
     }
 
     document.getElementById('upload-btn').addEventListener('click', () => {

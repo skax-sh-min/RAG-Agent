@@ -80,6 +80,8 @@ src/main/resources/
 > **관리 전용 인증 모드**(`app.auth.management-only=true`, §6.17 B안)에서는 `POST /ui/documents/upload`, `POST /ui/documents/progress/*/cancel`, `DELETE /ui/documents/{docId}`, `PATCH /ui/documents/{id}/tags`, `GET /ui/documents/{id}/tags/edit`가 `hasRole("ADMIN")`로 게이트된다 — 비로그인은 `/login` 리다이렉트, 관리자 아닌 로그인은 403. `GET /documents`·`GET /ui/documents/list`·태그 조회는 게스트에게 그대로 열려 있다. 자세한 내용은 [OPERATOR_MANUAL.md §9.4.2](OPERATOR_MANUAL.md#942-관리-전용-인증-management-only) 참고.
 >
 > **인덱싱 진행 스테이지**(`stage` 값): `loading` → `structuring`(TXT만) → `describing_images`(Vision 이미지 분석, "이미지 설명 추가" 체크 시만 — "이미지 분석 중 (N/M)") → `correcting`(DOCX/TXT/MD/PPTX/PDF[비스캔]) → `chunking` → `enriching` → `storing` → `done`/`error`/`cancelled`. 각 이벤트는 `stage`와 함께 `done`/`total`/`filename`/`message`를 실어 나르며, `documents.html`의 `stageHtml`/`STAGE_LABELS`가 단계별 진행률 바와 오류 로그 라벨을 렌더링한다. 상세는 [PIPELINE.md §6.3](PIPELINE.md#63-docx--md--임베딩-db-저장-상세-이미지-포함) 참고.
+>
+> **"소제목 숫자 생성" 체크박스 자동 기본값**(`documents.html`, 순수 클라이언트 로직, 서버 API 변경 없음): 파일을 선택할 때마다(드래그앤드롭·파일 선택창 둘 다 `handleFiles()` 경유) `syncHeadingNumbersCheckbox()`가 재계산한다 — 선택된 파일에 PPTX가 하나라도 있으면 체크 해제, 없으면(PDF 포함) 체크. 파일을 지울 때(`removeFile()`)도 남은 구성 기준으로 다시 계산된다. 이 기본값은 `DocumentIndexer`의 `.pptx` 분기가 체크박스 상태와 무관하게 항상 `addHeadingNumbers=false`를 넘기는 서버 동작(§3.3 [OPERATOR_MANUAL.md](OPERATOR_MANUAL.md#소제목-숫자-생성-addheadingnumbers) 참고)을 UI에 미리 반영한 것이며, PDF는 `PdfToMarkdownConverter`가 헤딩 자체를 만들지 않아 체크해도 무해하므로 자동 해제 대상에서 제외된다. PPTX와 다른 형식이 같은 배치에 섞이면 업로드가 배치 전체에 값 하나만 전송하는 구조라 `warnIfPptxMixed()`가 토스트 경고를 띄운다(업로드 자체는 막지 않음). 둘 다 기본값 제안일 뿐이라 체크박스는 언제든 수동으로 바꿀 수 있다.
 
 ### 3.3 운영 / LLM 사용량 (OperationsController)
 
@@ -133,6 +135,8 @@ REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — �
 > **재인덱싱 시 수행 작업**(`DocumentIndexer.reindexFromMd()`) — 챕터 번호 재계산뿐 아니라 전체 파이프라인을 다시 돈다: 존재하지 않는 이미지 참조(`[이미지: ...]`) 제거 → 소제목 번호 재계산(PPTX 제외) → 마크다운 후처리(`MarkdownCorrectionService.postProcess()` — 빈 줄 정리·`[DOCUMENT]` 마커/내용 없는 `-` 제거·펜스·표 앞뒤 빈 줄 보장, LLM 미사용) → 전체 재청킹 → 태그 보존 → LLM 키워드+컨텍스트 재추출(§10.1) → 재임베딩 및 벡터 스토어 저장 → FTS 재인덱싱 → 기존 청크 삭제(신규 저장 이후, 실패 시 기존 데이터 보존). 즉 원본 MD가 수정된 이후 상태를 기준으로 사실상 전체를 다시 인덱싱한다.
 >
 > `fixClosingFences`/`normalizeCodeBlocks`(코드 블록 언어 보정)는 의도적으로 재인덱싱에 포함하지 않는다 — 저장된 MD를 운영자가 직접 편집한 뒤 재인덱싱하면 코드 블록 내부의 의도된 빈 줄을 지우거나(`normalizeCodeContent`는 함수/클래스 시작·여러 줄 주석 시작 직전이 아닌 빈 줄은 삭제) 펜스 짝이 어긋난 입력에서 여는 펜스의 언어 태그를 잘못 벗길 수 있어, 매 재인덱싱마다 부작용으로 감수하기보다 필요할 때만 문서를 재업로드하도록 남겨둔 것이다.
+>
+> **청크 편집 오프캔버스 — 넓은 화면 미리보기**(`admin.html`, `openChunkEdit()`/`renderChunkPreview()`): 오프캔버스를 여는 시점의 `window.innerWidth`가 기본 폭(520px)의 2배 이상이면 오프캔버스 폭을 최대 1300px까지 넓히고 `flex-row`로 좌(미리보기)·우(편집 입력) 2컬럼 배치한다. 좁으면 기존과 동일한 단일 컬럼(`flex-column`, 520px). 미리보기는 `chat-stream.js`가 이미 쓰는 marked.js → DOMPurify → hljs.js 파이프라인을 그대로 재사용하되, 앞단에서 `[이미지: images/{id}/{file}]` 마커를 `<img src="/api/v1/images/...">`로 치환한다(인라인 렌더링이 안 되는 확장자나 `[이미지(변환불가): ...]`는 텍스트 placeholder로 대체). 텍스트 입력창을 편집하면 200ms debounce로 왼쪽 미리보기가 다시 렌더링된다. 폭 판정은 오프캔버스를 여는 시점 1회뿐이라, 열어둔 채로 창 크기를 바꿔도 레이아웃은 즉시 바뀌지 않는다(닫았다 다시 열면 재판정). 새 API 호출은 없다 — 이미 받아온 `GET /admin/chunks/{chunkId}/detail` 응답을 그대로 클라이언트에서 렌더링한다.
 
 ### 3.5 설정 관리 (SettingsController)
 
