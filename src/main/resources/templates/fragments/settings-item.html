@@ -29,10 +29,13 @@
     <!-- Value / editor -->
     <div class="col-12 col-md-7">
         <!-- Admin editor for hot-editable items -->
-        <div th:if="${item.editable and isAdmin}" class="input-group input-group-sm" style="max-width: 22rem;">
-            <input th:if="${item.type == 'number'}" type="number" name="value" class="form-control"
+        <!-- The value field is capped narrow (.setting-value): every editable setting is a short
+             number (0.0~1.0, 60, 1500) or a true/false select, so a wide box only added dead space.
+             The group max-width just keeps the buttons next to it instead of stretching the column. -->
+        <div th:if="${item.editable and isAdmin}" class="input-group input-group-sm" style="max-width: 16rem;">
+            <input th:if="${item.type == 'number'}" type="number" name="value" class="form-control setting-value"
                    th:value="${item.value}" th:min="${item.min}" th:max="${item.max}" th:step="${item.step}"/>
-            <select th:if="${item.type == 'bool'}" name="value" class="form-select">
+            <select th:if="${item.type == 'bool'}" name="value" class="form-select setting-value">
                 <option value="true"  th:selected="${item.value == 'true'}">true</option>
                 <option value="false" th:selected="${item.value == 'false'}">false</option>
             </select>

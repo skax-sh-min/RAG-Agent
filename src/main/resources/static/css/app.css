@@ -282,3 +282,13 @@
     0%, 100% { opacity: 1; }
     50%       { opacity: 0; }
 }
+
+/* ── /settings value editor ───────────────────────────────────────────── */
+/* Every hot-editable setting is a short number (0.0~1.0, 60, 1500) or a true/false
+   select, so the field is capped instead of filling the column. flex-grow:0 keeps
+   the input-group from stretching it back out. */
+.setting-value {
+    flex: 0 0 auto;
+    width: 7rem;
+    max-width: 7rem;
+}
