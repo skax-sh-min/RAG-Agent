@@ -1018,7 +1018,8 @@ public class MarkdownCorrectionService {
                     seqLabel != null ? " (" + seqLabel + ")" : "", imagePath, mimeType, bytes.length);
             Media media = new Media(MimeTypeUtils.parseMimeType(mimeType), new ByteArrayResource(bytes));
             UserMessage userMessage = UserMessage.builder()
-                    .text("이 이미지를 한국어 1~2문장으로 간단히 설명하세요.")
+                    .text("이 이미지를 한국어 2~3문장으로 간단히 설명하세요. "
+                            + "여러 선택지나 후보 설명을 나열하지 말고, 하나의 완성된 설명 문장만 작성하세요.")
                     .media(media).build();
             String response = llmRouter.executeWithTracking(TaskType.VISION, RoutingMode.LOCAL_ONLY,
                     BackgroundUsage.IMAGE_PREFIX, model -> model.call(new Prompt(userMessage)));

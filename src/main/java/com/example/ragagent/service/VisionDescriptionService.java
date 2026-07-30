@@ -28,12 +28,15 @@ public class VisionDescriptionService {
     private static final Logger log = LoggerFactory.getLogger(VisionDescriptionService.class);
     private static final AtomicBoolean UNSUPPORTED_VISION_LOGGED = new AtomicBoolean(false);
 
+    private static final String NO_OPTIONS_SUFFIX =
+            " 여러 선택지나 후보 설명을 나열하지 말고, 하나의 완성된 설명 문장만 작성하세요.";
+
     public static final Map<String, String> PROMPTS = Map.of(
-            "diagram",    "이 다이어그램을 한국어로 설명하세요. 구성 요소와 흐름을 포함하여 최대 4문장.",
-            "screenshot", "이 스크린샷의 내용을 한국어로 설명하세요. 화면에 표시된 주요 정보를 최대 3문장.",
-            "chart",      "이 차트/그래프를 한국어로 분석하세요. 데이터 추세와 주요 수치를 포함하여 최대 4문장.",
-            "photo",      "이 사진을 한국어로 간결하게 설명하세요. 최대 2문장.",
-            "other",      "이 이미지를 한국어로 간결하게 설명하세요. 최대 3문장."
+            "diagram",    "이 다이어그램을 한국어로 설명하세요. 구성 요소와 흐름을 포함하여 최대 4문장." + NO_OPTIONS_SUFFIX,
+            "screenshot", "이 스크린샷의 내용을 한국어로 설명하세요. 화면에 표시된 주요 정보를 최대 3문장." + NO_OPTIONS_SUFFIX,
+            "chart",      "이 차트/그래프를 한국어로 분석하세요. 데이터 추세와 주요 수치를 포함하여 최대 4문장." + NO_OPTIONS_SUFFIX,
+            "photo",      "이 사진을 한국어로 간결하게 설명하세요. 최대 2문장." + NO_OPTIONS_SUFFIX,
+            "other",      "이 이미지를 한국어로 간결하게 설명하세요. 최대 3문장." + NO_OPTIONS_SUFFIX
     );
 
     private final LlmRouter llmRouter;
