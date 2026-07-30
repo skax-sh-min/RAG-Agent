@@ -37,6 +37,13 @@ class DocxRendererTest {
         return new XWPFDocument(new ByteArrayInputStream(DocxRenderer.render(markdown, "제목")));
     }
 
+    /** The declared column widths (twips) of a table's {@code <w:tblGrid>}. */
+    private static List<Integer> gridWidths(XWPFTable table) {
+        return table.getCTTbl().getTblGrid().getGridColList().stream()
+                .map(col -> ((java.math.BigInteger) col.getW()).intValue())
+                .toList();
+    }
+
     /** Every picture in the document, wherever it sits (body paragraph or table cell). */
     private static long pictureCount(XWPFDocument doc) {
         long body = doc.getParagraphs().stream().flatMap(p -> p.getRuns().stream())
@@ -170,6 +177,76 @@ class DocxRendererTest {
 
             assertThat(greenText).contains("# 설치", "# 주석");
             assertThat(greenText).doesNotContain("a#b");
+        }
+
+        @Test
+        @DisplayName("tblGrid와 셀 너비가 열 수만큼 기록된다 — Pages에서 표가 1열로 무너지지 않도록")
+        void writesTableGrid() throws Exception {
+            // POI 의 createTable() 은 <w:tblGrid> 를 아예 쓰지 않는다. Word 는 <w:tc> 개수로 열을
+            // 복원하지만 Apple Pages 는 그러지 않아 모든 셀이 한 열에 세로로 쌓인다.
+            XWPFDocument doc = render("| A | B | C |\n| --- | --- | --- |\n| 1 | 2 | 3 |");
+
+            XWPFTable table = doc.getTables().get(0);
+            assertThat(table.getCTTbl().getTblGrid()).isNotNull();
+            assertThat(table.getCTTbl().getTblGrid().getGridColList()).hasSize(3);
+            // 각 셀도 같은 너비를 들고 있어야 한다(그리드만 있고 tcW 가 없으면 뷰어별 해석이 또 갈린다)
+            assertThat(table.getRow(0).getCell(0).getWidth()).isPositive();
+            assertThat(table.getRow(1).getCell(2).getWidth()).isPositive();
+        }
+
+        @Test
+        @DisplayName("열 너비가 내용 길이에 비례한다 — 라벨 열이 설명 열만큼 넓어지지 않도록")
+        void distributesColumnWidthByContent() throws Exception {
+            XWPFDocument doc = render("""
+                    | 옵션 | 설명 |
+                    | --- | --- |
+                    | mode | 이미지 참조 처리 방식을 정한다. strip 이면 마커를 제거하고 describe 면 설명을 포함한다. |
+                    | ocr | 스캔 PDF 페이지에 대해 Tesseract OCR 처리를 활성화할지 여부를 지정한다. |""");
+
+            List<Integer> w = gridWidths(doc.getTables().get(0));
+            assertThat(w).hasSize(2);
+            assertThat(w.get(1)).isGreaterThan(w.get(0) * 2);      // 설명 열이 확실히 넓다
+            assertThat(w.get(0) + w.get(1)).isEqualTo(451 * 20);   // 합계 = 본문 폭
+        }
+
+        @Test
+        @DisplayName("내용 길이가 비슷하면 거의 균등하게 나뉜다")
+        void keepsSimilarColumnsEven() throws Exception {
+            XWPFDocument doc = render("| a | b | c |\n| --- | --- | --- |\n| 111 | 222 | 333 |");
+
+            List<Integer> w = gridWidths(doc.getTables().get(0));
+            int even = 451 * 20 / 3;
+            assertThat(w).allSatisfy(x -> assertThat(x).isBetween((int) (even * 0.9), (int) (even * 1.1)));
+            assertThat(w.stream().mapToInt(Integer::intValue).sum()).isEqualTo(451 * 20);
+        }
+
+        @Test
+        @DisplayName("한 셀이 지나치게 길어도 나머지 열이 최소 폭을 유지한다")
+        void keepsMinimumWidthForShortColumns() throws Exception {
+            XWPFDocument doc = render("| A | B |\n| --- | --- |\n| 1 | " + "아주 긴 설명 ".repeat(40) + " |");
+
+            List<Integer> w = gridWidths(doc.getTables().get(0));
+            assertThat(w.get(0)).isGreaterThanOrEqualTo((int) (451 * 20 * 0.09));  // 최소 10% 바닥
+            assertThat(w.get(0) + w.get(1)).isEqualTo(451 * 20);
+        }
+
+        @Test
+        @DisplayName("테두리에 굵기(w:sz)가 명시된다 — Word 외 뷰어에서 선이 사라지지 않도록")
+        void writesExplicitBorderWidth() throws Exception {
+            // POI 의 createTable() 은 <w:top w:val="single"/> 처럼 선 스타일만 쓰고 w:sz 를 빼먹는다.
+            // Word 는 기본 굵기를 채워 그리지만 Google Docs·Pages·LibreOffice 는 0 으로 읽어 아무것도
+            // 그리지 않는다 — 코드 블록의 "박스"가 통째로 사라지는 원인.
+            XWPFDocument doc = render("```java\nint a = 1;\n```\n\n| A | B |\n| --- | --- |\n| 1 | 2 |");
+
+            assertThat(doc.getTables()).hasSize(2);
+            for (XWPFTable table : doc.getTables()) {
+                assertThat(table.getTopBorderSize()).isPositive();
+                assertThat(table.getBottomBorderSize()).isPositive();
+                assertThat(table.getLeftBorderSize()).isPositive();
+                assertThat(table.getRightBorderSize()).isPositive();
+                assertThat(table.getInsideHBorderSize()).isPositive();
+                assertThat(table.getInsideVBorderSize()).isPositive();
+            }
         }
 
         @Test

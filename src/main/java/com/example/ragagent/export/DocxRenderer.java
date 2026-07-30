@@ -9,12 +9,14 @@ import org.apache.poi.xwpf.usermodel.XWPFRun;
 import org.apache.poi.xwpf.usermodel.XWPFTable;
 import org.apache.poi.xwpf.usermodel.XWPFTableCell;
 import org.apache.poi.xwpf.usermodel.XWPFTableRow;
+import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTTblGrid;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayOutputStream;
+import java.math.BigInteger;
 import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -63,6 +65,20 @@ public final class DocxRenderer {
     /** Max picture width in EMU — A4 (595pt) minus 1" margins each side, i.e. the text column. */
     private static final int MAX_IMAGE_WIDTH_EMU = Units.toEMU(451);
     private static final int MAX_IMAGE_HEIGHT_EMU = Units.toEMU(600);
+
+    /** Text-column width in twips (1pt = 20 twips) — A4 minus 1" margins, matching MAX_IMAGE_WIDTH_EMU. */
+    private static final int TEXT_WIDTH_TWIPS = 451 * 20;
+
+    /** Column-width heuristics — see columnWidths(). Shares are of the text column. */
+    private static final double MIN_COL_SHARE = 0.10;
+    /** Per-cell length cap (in display units) before averaging, so one long cell can't swallow the table. */
+    private static final int CELL_WIDTH_CAP = 80;
+    /** How much column width an embedded image asks for, in the same display units. */
+    private static final int IMAGE_WIDTH_UNITS = 12;
+
+    /** Table border width in eighths of a point (4 = 0.5pt) and color; see applyVisibleBorders(). */
+    private static final int BORDER_SIZE = 4;
+    private static final String BORDER_COLOR = "auto";
 
     private static final String CODE_FONT = "Consolas";
     private static final int CODE_FONT_SIZE = 9;
@@ -215,6 +231,8 @@ public final class DocxRenderer {
 
         XWPFTable table = doc.createTable(1, 1);
         table.setWidth("100%");
+        applyGrid(table, new int[]{TEXT_WIDTH_TWIPS});
+        applyVisibleBorders(table);
         XWPFParagraph p = table.getRow(0).getCell(0).getParagraphs().get(0);
         p.setAlignment(ParagraphAlignment.LEFT);
         p.setSpacingBefore(0);
@@ -308,6 +326,151 @@ public final class DocxRenderer {
         }
     }
 
+    /**
+     * Writes the {@code <w:tblGrid>} POI omits, plus a matching width on every cell.
+     *
+     * <p>{@code createTable()} emits {@code <w:tbl>} with no {@code <w:tblGrid>} and no
+     * {@code <w:tcW>} at all, even though the schema lists the grid as a required child of
+     * {@code CT_Tbl}. Word reconstructs the columns from the {@code <w:tc>} count, but Apple Pages
+     * does not — with no grid it renders every cell in a single column, so a 2-column table comes
+     * out as one long vertical strip. Declaring the grid explicitly fixes it everywhere.
+     *
+     * @param widths per-column width in twips; the sum should equal {@link #TEXT_WIDTH_TWIPS}
+     */
+    private static void applyGrid(XWPFTable table, int[] widths) {
+        // null check rather than isSetTblGrid() — poi-ooxml-lite trims the isSet* accessors.
+        CTTblGrid existing = table.getCTTbl().getTblGrid();
+        CTTblGrid grid = (existing != null) ? existing : table.getCTTbl().addNewTblGrid();
+        for (int w : widths) {
+            grid.addNewGridCol().setW(BigInteger.valueOf(w));
+        }
+        for (XWPFTableRow row : table.getRows()) {
+            for (int c = 0; c < row.getTableCells().size() && c < widths.length; c++) {
+                row.getCell(c).setWidth(String.valueOf(widths[c]));   // dxa, matching the grid
+            }
+        }
+    }
+
+    /**
+     * Splits the text column across {@code cols} proportionally to how much each column actually
+     * holds, so a "label | long description" table doesn't waste half the page on the labels.
+     *
+     * <p>The weight per column is the mean {@link #displayWidth} of its cells (header included),
+     * with each cell capped at {@link #CELL_WIDTH_CAP} first — one runaway paragraph should widen a
+     * column, not swallow the table.
+     *
+     * <p>A column whose share falls under {@code minShare} is pinned at that floor and the rest are
+     * re-proportioned over what's left (repeatedly, since pinning one can push another under). Doing
+     * it this way rather than clamping once matters: a single pass that clamps and then dumps the
+     * leftover on the widest column silently undoes its own floor/ceiling. The final rounding
+     * remainder goes to the widest un-pinned column so the grid sums exactly to the text width.
+     *
+     * @implNote These widths are a hint, not a contract — without {@code <w:tblLayout w:type="fixed"/>}
+     *           both Word and Pages autofit to content and will adjust them. The point is to start
+     *           from a sane proportion instead of forcing every column to be equal.
+     */
+    private static int[] columnWidths(List<List<String>> rows, int cols) {
+        if (cols <= 1) return new int[]{TEXT_WIDTH_TWIPS};
+
+        double[] weight = new double[cols];
+        for (int c = 0; c < cols; c++) {
+            double sum = 0;
+            for (List<String> row : rows) {
+                String cell = c < row.size() ? row.get(c) : "";
+                sum += Math.min(CELL_WIDTH_CAP, displayWidth(cell));
+            }
+            weight[c] = Math.max(1.0, sum / rows.size());        // never 0 — an empty column still needs room
+        }
+
+        // With many columns the floor has to shrink, or the minimums alone would exceed 100%.
+        double minShare = Math.min(MIN_COL_SHARE, 0.5 / cols);
+        double[] share = new double[cols];
+        boolean[] pinned = new boolean[cols];
+        double remaining = 1.0;
+
+        for (int pass = 0; pass <= cols; pass++) {
+            double freeWeight = 0;
+            for (int c = 0; c < cols; c++) if (!pinned[c]) freeWeight += weight[c];
+            if (freeWeight <= 0) break;
+
+            boolean pinnedAny = false;
+            for (int c = 0; c < cols; c++) {
+                if (pinned[c]) continue;
+                share[c] = weight[c] / freeWeight * remaining;
+                if (share[c] < minShare) {
+                    share[c] = minShare;
+                    pinned[c] = true;
+                    remaining -= minShare;
+                    pinnedAny = true;
+                }
+            }
+            if (!pinnedAny) break;
+        }
+
+        int[] widths = new int[cols];
+        int assigned = 0, widest = -1;
+        for (int c = 0; c < cols; c++) {
+            widths[c] = Math.max(1, (int) Math.round(TEXT_WIDTH_TWIPS * share[c]));
+            assigned += widths[c];
+            if (!pinned[c] && (widest < 0 || weight[c] > weight[widest])) widest = c;
+        }
+        if (widest < 0) widest = 0;
+        widths[widest] = Math.max(1, widths[widest] + (TEXT_WIDTH_TWIPS - assigned));
+        return widths;
+    }
+
+    /**
+     * Rough rendered width of a cell in "character units": CJK counts double (a Hangul glyph is
+     * about twice a latin one), markdown emphasis markers don't count at all, an embedded image
+     * counts as a nominal block, and a {@code <br>}-separated cell is measured by its longest line
+     * rather than its total length — that line is what actually has to fit.
+     */
+    private static double displayWidth(String cell) {
+        if (cell == null || cell.isBlank()) return 0;
+        String text = IMAGE_TOKEN.matcher(cell).replaceAll("x".repeat(IMAGE_WIDTH_UNITS));
+        text = text.replaceAll("\\*\\*|\\*|`", "");
+        double widest = 0;
+        for (String line : LINE_BREAK.split(text, -1)) {
+            double w = 0;
+            for (int i = 0; i < line.length(); i++) {
+                w += isWide(line.charAt(i)) ? 2 : 1;
+            }
+            widest = Math.max(widest, w);
+        }
+        return widest;
+    }
+
+    /** Hangul / Han / Kana — the ranges this pipeline actually sees in double-width form. */
+    private static boolean isWide(char c) {
+        return (c >= 0xAC00 && c <= 0xD7A3)     // Hangul syllables
+                || (c >= 0x1100 && c <= 0x11FF) // Hangul Jamo
+                || (c >= 0x3130 && c <= 0x318F) // Hangul compatibility Jamo
+                || (c >= 0x4E00 && c <= 0x9FFF) // CJK unified ideographs
+                || (c >= 0x3040 && c <= 0x30FF) // Kana
+                || (c >= 0xFF01 && c <= 0xFF60);// fullwidth forms
+    }
+
+    /**
+     * Restates every border with an explicit width and color.
+     *
+     * <p>{@code XWPFDocument.createTable()} emits {@code <w:top w:val="single"/>} — the line style
+     * only, with no {@code w:sz}. Word fills in a default width there and draws the line, but Google
+     * Docs, Apple Pages and LibreOffice read the missing width as 0 and draw nothing, so a table
+     * that looks correct in Word arrives borderless everywhere else (and the fenced-code box, which
+     * IS a 1x1 table's border, disappears entirely). Writing the width explicitly is the fix.
+     *
+     * @implNote size is in eighths of a point, so {@code 4} is a 0.5pt hairline; {@code "auto"}
+     *           lets the consumer pick a theme-appropriate color (black on a default document).
+     */
+    private static void applyVisibleBorders(XWPFTable table) {
+        table.setTopBorder(XWPFTable.XWPFBorderType.SINGLE, BORDER_SIZE, 0, BORDER_COLOR);
+        table.setBottomBorder(XWPFTable.XWPFBorderType.SINGLE, BORDER_SIZE, 0, BORDER_COLOR);
+        table.setLeftBorder(XWPFTable.XWPFBorderType.SINGLE, BORDER_SIZE, 0, BORDER_COLOR);
+        table.setRightBorder(XWPFTable.XWPFBorderType.SINGLE, BORDER_SIZE, 0, BORDER_COLOR);
+        table.setInsideHBorder(XWPFTable.XWPFBorderType.SINGLE, BORDER_SIZE, 0, BORDER_COLOR);
+        table.setInsideVBorder(XWPFTable.XWPFBorderType.SINGLE, BORDER_SIZE, 0, BORDER_COLOR);
+    }
+
     private static boolean isTableRow(String t) {
         return t.startsWith("|") && t.length() > 1;
     }
@@ -323,10 +486,11 @@ public final class DocxRenderer {
         }
 
         int cols = rows.stream().mapToInt(List::size).max().orElse(1);
+        int[] widths = columnWidths(rows, cols);
         XWPFTable table = doc.createTable(rows.size(), cols);
         table.setWidth("100%");
-        // A picture in a cell must fit that cell, not the page — columns share the text width.
-        int cellImageWidth = Math.max(Units.toEMU(60), MAX_IMAGE_WIDTH_EMU / cols - Units.toEMU(10));
+        applyGrid(table, widths);
+        applyVisibleBorders(table);
 
         for (int r = 0; r < rows.size(); r++) {
             XWPFTableRow row = table.getRow(r);
@@ -334,6 +498,8 @@ public final class DocxRenderer {
                 String cell = c < rows.get(r).size() ? rows.get(r).get(c) : "";
                 XWPFTableCell tableCell = row.getCell(c);
                 XWPFParagraph p = tableCell.getParagraphs().get(0);
+                // A picture must fit its own column, which is no longer an equal share.
+                int cellImageWidth = Math.max(Units.toEMU(40), Units.toEMU(widths[c] / 20.0 - 10));
                 writeInline(p, cell, false, cellImageWidth);
                 if (r == 0) p.getRuns().forEach(run -> run.setBold(true));
             }
