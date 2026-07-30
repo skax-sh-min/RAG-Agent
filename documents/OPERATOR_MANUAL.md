@@ -49,6 +49,7 @@ RAG Agent 시스템 배포·설정·운영 가이드입니다.
    - 9.4 [인증 토글 (no-auth 모드)](#94-인증-토글-no-auth-모드)
       - 9.4.1 [평문 no-auth 모드](#941-평문-no-auth-모드)
       - 9.4.2 [관리 전용 인증 (management-only)](#942-관리-전용-인증-management-only)
+      - 9.4.3 [접속자별 채팅 개인화 (`app.auth.guest-identity`)](#943-접속자별-채팅-개인화-appauthguest-identity)
 10. [운영 체크리스트](#10-운영-체크리스트)
 
 ---
@@ -2312,7 +2313,35 @@ AUTH_MANAGEMENT_ONLY=true
 3. 로그인 세션이 유지되는 동안 `/documents`에서 업로드·삭제, `/admin`에서 청크 관리 가능
 4. 다른 탭/시크릿 창은 여전히 게스트 — 관리 기능은 로그인한 브라우저 세션에서만 보임
 
-> **주의**: 평문 no-auth와 마찬가지로 채팅·문서 조회는 guest 파티션을 공유합니다. 이 모드는 "누가 관리할 수 있는가"만 잠그며 사용자별 데이터 격리는 제공하지 않습니다 — 멀티유저 격리가 필요하면 전체 인증 모드(`app.auth.enabled=true`)를 사용하세요.
+> **주의**: 이 모드는 "누가 관리할 수 있는가"만 잠급니다. 채팅 개인화가 필요하면 아래 §9.4.3을, 계정 기반의 진짜 격리가 필요하면 전체 인증 모드(`app.auth.enabled=true`)를 사용하세요.
+
+#### 9.4.3 접속자별 채팅 개인화 (`app.auth.guest-identity`)
+
+`app.auth.enabled=false`일 때만 의미 있습니다. 기본값에서는 **모든 방문자가 하나의 게스트 계정을 공유**하므로 사이드바 스레드 목록·대화 이력이 전부 섞여 보입니다. 이 값을 바꾸면 방문자를 구분해 각자의 채팅 화면을 갖게 할 수 있습니다.
+
+| 값 | 방식 | NAT(사무실 공인 IP 공유) | DHCP 갱신 | 쿠키 차단 |
+|---|---|---|---|---|
+| `shared` (기본) | 고정 게스트 1개 | — | — | ✅ |
+| `ip` | 접속 IP의 HMAC 해시 | ❌ 전원 뭉침 | ❌ 이력 유실 | ✅ |
+| `cookie` | 장수 HttpOnly 서명 쿠키 | ✅ | ✅ | ❌ 매번 새 방문자 |
+| **`hybrid`** (권장) | 쿠키 우선, 없으면 IP로 유도해 쿠키에 저장 | ✅ | ✅ | ✅ IP로 폴백 |
+
+```bash
+AUTH_GUEST_IDENTITY=hybrid
+TRUST_FORWARDED_FOR=true   # 리버스 프록시(Caddy) 뒤라면 필수 — 아래 참조
+```
+
+**⚠️ `TRUST_FORWARDED_FOR`를 반드시 함께 맞추세요** (`ip`/`hybrid` 사용 시):
+
+- **프록시 뒤(Caddy 등) → `true` 필수**. 끄면 모든 요청이 프록시 IP 하나로 보여 **개인화가 무효**가 되고, per-IP 속도 제한도 전원이 한 버킷을 공유합니다.
+- **프록시 없이 직접 노출 → `false` 유지**. `X-Forwarded-For`는 클라이언트가 임의로 넣을 수 있는 헤더라, 신뢰하면 공격자가 매 요청 헤더만 바꿔 속도 제한을 무한 우회하거나 **다른 방문자의 게스트 신원을 가로채 대화 목록을 열람**할 수 있습니다(PLAN §6.19.3).
+
+**동작 세부**:
+- 방문자 id는 `guest-<12자리 hex>` 형식입니다. IP 원문은 저장되지 않고, 서버가 최초 기동 시 생성해 `app_secret` 테이블에 보관하는 키로 HMAC 해싱됩니다(재기동해도 id가 바뀌지 않도록 영속화).
+- 쿠키 이름은 `rag_visitor`(HttpOnly, SameSite=Lax, 1년). HTTPS 접속이면 `Secure`도 붙습니다.
+- **문서는 여전히 공유**입니다(`DocRegistry.SHARED`). 개인화되는 것은 채팅 스레드·대화 이력·좋아요(큐레이션 Q&A) 소유권뿐입니다.
+- 오타 등 알 수 없는 값은 `shared`로 폴백합니다(설정 실수가 "반쪽만 분리된" 상태로 이어지지 않도록). 기동 로그의 `[GUEST_ID] 방문자 식별 전략: ...` 줄로 실제 적용값을 확인하세요.
+- **기존 대화는 보이지 않게 됩니다.** 이 설정을 켜기 전에 쌓인 스레드는 예전 공용 게스트 id(`00000000-…-0001`)에 묶여 있어 새 방문자 id로는 조회되지 않습니다(삭제되지는 않음). 되돌리려면 `shared`로 다시 바꾸면 그대로 다시 보입니다.
 
 **인증 재활성화 (전체 인증 모드로 전환)**:
 1. `app.auth.enabled=true`로 변경 후 재시작 (`app.auth.management-only`는 자동으로 무시됨)
@@ -2329,6 +2358,8 @@ AUTH_MANAGEMENT_ONLY=true
 - [ ] `sh scripts/install-hooks.sh` — pre-commit 훅 설치 (팀원 각자 1회)
 - [ ] 인증 모드 설정 확인 — `.env`의 `AUTH_ENABLED` 또는 `application.properties`의 `app.auth.enabled` (기본 `true` = 로그인 필요 / `false` = no-auth 모드)
 - [ ] (no-auth 모드) 문서 관리·`/admin`도 로그인 없이 열어둘지, 관리 전용으로 잠글지 결정 — 잠그려면 `AUTH_MANAGEMENT_ONLY=true` (§9.4.2)
+- [ ] (no-auth 모드) 여러 사람이 접속한다면 채팅을 방문자별로 나눌지 결정 — 나누려면 `AUTH_GUEST_IDENTITY=hybrid` (§9.4.3)
+- [ ] 리버스 프록시(Caddy) 뒤라면 `TRUST_FORWARDED_FOR=true`, 직접 노출이면 `false` 확인 (§9.4.3) — 잘못 설정하면 속도 제한·방문자 식별이 모두 어긋남
 - [ ] (no-auth 모드) 첫 접속 시 `/setup` 페이지에서 admin 계정 생성 완료 확인
 - [ ] (관리 전용 인증 모드) `/setup` 계정 생성 후 `/login`으로 별도 로그인 확인(자동 로그인되지 않음)
 - [ ] (auth 모드) `/signup`에서 첫 계정 생성 후 `/login` 접속 확인

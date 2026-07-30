@@ -15,7 +15,7 @@
 |---|---|---|
 | **Phase 1** — 보안 기반 | Step 1.1~1.6 전체(Caddy·Flyway·Spring Security·멀티유저 격리·CSRF·로그인/회원가입 UI) + `app.auth.enabled` no-auth 토글 | §4 |
 | **Phase 2** — 모바일 UI | 반응형 레이아웃(Offcanvas) · PWA(manifest/SW/오프라인) · 다크모드·접근성 | §5 |
-| **Phase 3** — 운영 견고화 | §6.1 Rate limit · §6.2 업로드 검증(매직바이트, 쿼터는 §6.15로 이관) · §6.3 예외처리 · §6.4 감사로그 · §6.5 임베딩 사용량 분리 · §6.6 비활성 프로바이더 표시 · §6.7 orphan 기록 삭제 · §6.8 피드백 기반 컨텍스트 제외 · §6.9 요약 선계산 · §6.10 백그라운드 사용량 분리 · §6.11 컨텍스트 예산 정합성 · §6.12 다중 사용자 동시 LLM 처리(동시성 게이트+백프레셔+로드밸런싱) · §6.13 설정 페이지(핫 수정 오버라이드) · §6.14 핵심 채팅 경로 추적 · §6.16.1 스트리밍/인덱싱 중단 버튼 · §6.17 관리 전용 인증(B안) · §6.18 Direct temperature 분리 · §6.21 소형 LLM 분리+멀티 LLM 처리량 확장 | §6 |
+| **Phase 3** — 운영 견고화 | §6.1 Rate limit · §6.2 업로드 검증(매직바이트, 쿼터는 §6.15로 이관) · §6.3 예외처리 · §6.4 감사로그 · §6.5 임베딩 사용량 분리 · §6.6 비활성 프로바이더 표시 · §6.7 orphan 기록 삭제 · §6.8 피드백 기반 컨텍스트 제외 · §6.9 요약 선계산 · §6.10 백그라운드 사용량 분리 · §6.11 컨텍스트 예산 정합성 · §6.12 다중 사용자 동시 LLM 처리(동시성 게이트+백프레셔+로드밸런싱) · §6.13 설정 페이지(핫 수정 오버라이드) · §6.14 핵심 채팅 경로 추적 · §6.16.1 스트리밍/인덱싱 중단 버튼 · §6.17 관리 전용 인증(B안) · §6.18 Direct temperature 분리 · §6.19.3 XFF 신뢰 옵트인 · §6.21 소형 LLM 분리+멀티 LLM 처리량 확장 · §6.22 접속자별 채팅 개인화(no-auth) | §6 |
 | **Phase 5** — Vector Store | Step 5.1~5.10 전체(Chroma↔sqlite-vec 런타임 전환, 관리자 페이지, 태그 검색, 운영/벡터 DB 분리) | §8 |
 | **Phase 6** — 폐쇄망/노-도커 | G1~G5(키리스 LOCAL·차원 외부화·라우팅 외부화·런북·무외부호출 인수) | §9 |
 | **Phase 7** — 검색 품질·성능 고도화 | §10.1~10.9 전체(17건) — 정확도·속도·메모리 개선 + recall@k/nDCG@k 평가 하네스(baseline recall@10=0.962). **+ §10.10** — 좋아요 기반 큐레이션 Q&A 지식화(스냅샷·임베딩·검색 융합·관리 UI) 완료 | §10 |
@@ -39,7 +39,7 @@
 
 | 순위 | 항목 | 트리거 |
 |---|---|---|
-| 1 | **§6.19 보안 하드닝** — API CSRF/세션 혼용(6.19.1) · `/admin/**` ROLE_ADMIN 게이트(6.19.2) · XFF 무검증 rate limit(6.19.3) | **auth 모드 여는 시점에 반드시 선행**(게이트) — no-auth엔 노출면 없음 |
+| 1 | **§6.19 보안 하드닝** — API CSRF/세션 혼용(6.19.1) · `/admin/**` ROLE_ADMIN 게이트(6.19.2) ※ **6.19.3(XFF)은 §6.22와 함께 완료** | **auth 모드 여는 시점에 반드시 선행**(게이트) — no-auth엔 노출면 없음 |
 | 2 | **§6.20 사용자별 LLM 토큰 쿼터** | 실사용자가 여럿 생겨 사용량 격리가 필요해질 때 |
 | 3 | **§6.16.2 계정 잠금 상태 피드백** | auth 모드 로그인 UX — no-auth엔 로그인 자체가 없음 |
 | 4 | **Phase 4** (조건부) — §7.1 OAuth2 소셜 로그인 · §7.2 PostgreSQL 마이그레이션 · §7.3 관리자 페이지 확장 | §3 트리거 참조(가입 마찰·SQLite 한계 신호·다중 사용자 운영 관리 필요 시) |
@@ -304,10 +304,30 @@ no-auth 기본 배포에서 `/documents` 쓰기와 `/admin/**`이 로그인 없�
 - **개선안**: `/admin/**` 전체를 `hasRole("ADMIN")`으로 게이트. no-auth 모드는 `NoAuthAutoLoginFilter`가 `/admin` 요청을 첫 ADMIN으로 자동 인증하므로 무영향. 단, `AdminController`/`AdminService` 테스트에 비관리자 403 케이스 추가 필요.
 - **완료 기준**: 인증 모드에서 비-ADMIN 사용자의 `/admin/**` 접근이 403. no-auth 모드 관리자 자동 인증 회귀 0.
 
-**6.19.3 Rate limit — `X-Forwarded-For` 무검증 신뢰 (per-IP 제한 우회)**
-- **현재 코드**: `RateLimitFilter.clientKey()`가 익명 요청에서 `X-Forwarded-For`의 첫 값을 무조건 클라이언트 IP로 사용. 리버스 프록시가 이 헤더를 덮어쓰지 않으면 공격자가 매 요청 XFF를 바꿔 **로그인 per-IP 브루트포스 제한(분당 10회/IP)을 우회**할 수 있다.
-- **개선안**: Tomcat `RemoteIpValve`(이미 `server.tomcat.remoteip.protocol-header` 설정 존재)로 신뢰 프록시 홉만 XFF를 해석하게 하고 `req.getRemoteAddr()`를 신뢰 원천으로 사용, 또는 `app.rate-limit.trust-forwarded-for`(기본 false) 플래그로 XFF 신뢰를 명시적 옵트인. 폐쇄망 직노출(프록시 없음) 시엔 XFF 신뢰 끄기가 안전 기본값.
-- **완료 기준**: 프록시 없는 배포에서 XFF 조작으로 per-IP 제한이 뚫리지 않음. Caddy 배포에서 실제 클라이언트 IP 정상 인식(기능 회귀 0).
+**6.19.3 Rate limit — `X-Forwarded-For` 무검증 신뢰 (per-IP 제한 우회)** ✅ **완료** (§6.22와 함께 선행 처리)
+- **현재 코드**: ~~`RateLimitFilter.clientKey()`가 익명 요청에서 `X-Forwarded-For`의 첫 값을 무조건 클라이언트 IP로 사용~~ → `ClientIpResolver`(신규)로 일원화. `app.trust-forwarded-for`(기본 `false`) 옵트인일 때만 XFF를 신뢰하고, 아니면 `req.getRemoteAddr()`만 사용한다.
+- **당초 계획과의 차이**: 프로퍼티명을 `app.rate-limit.trust-forwarded-for`가 아니라 **최상위 `app.trust-forwarded-for`**로 뒀다 — §6.22(방문자 식별)가 같은 판정을 필요로 하면서 속도 제한 전용 관심사가 아니게 됐기 때문. 두 소비자가 같은 `ClientIpResolver` 한 곳을 쓴다.
+- **우선순위 승격 사유**: 원래 "멀티유저 활성화 시 후속"이었으나, §6.22에서 IP가 **식별자**가 되는 순간 XFF 위조는 속도 제한 우회를 넘어 **남의 대화 목록 열람**이 된다. no-auth 단일 배포에서도 선행 필수로 올라갔다.
+- **완료 기준 충족**: 프록시 없는 배포에서 XFF 조작이 무시됨(`RateLimitFilterTest.x_forwarded_for_ignored_by_default`, `GuestIdentityResolverTest.forgedForwardedForCannotImpersonate`). 프록시 배포는 `TRUST_FORWARDED_FOR=true`로 실제 클라이언트 IP 인식(`x_forwarded_for_used_when_trusted`, `behindProxySplitsByForwardedFor`).
+
+---
+
+### 6.22 접속자별 채팅 개인화 (no-auth) ✅ 완료
+
+**배경**: no-auth 배포에서 모든 방문자가 고정 게스트 id 하나를 공유해 사이드바 스레드 목록·대화 이력이 전부 섞여 보였다.
+
+**설계**: 저장 계층은 이미 Phase 1 Step 1.4에서 `user_id` 축으로 격리돼 있었고(`thread_meta`/`conversation_turns`/`curated_qa`, Repository 시그니처가 `(userId, …)` 강제) **상수를 먹고 있었을 뿐**이다. 따라서 `NoAuthAutoLoginFilter`가 주입하는 게스트 principal의 id 한 곳만 방문자별로 파생하면 저장·서비스 계층 변경 0으로 개인화된다.
+
+- `app.auth.guest-identity` = `shared`(기본, 회귀 0) / `ip` / `cookie` / `hybrid`(권장) — `GuestIdentityResolver`
+- id 형식 `guest-<12 hex>` = HMAC-SHA256(영속 시크릿, 방문자 키). 원문 IP 미저장, 접두사로 후속 정리·이관 대상 식별 가능
+- 시크릿은 `app_secret` 테이블(신규, 런타임 멱등 DDL)에 영속 — 부팅마다 랜덤이면 재기동 시 전원 이력이 고아가 됨
+- 문서 저장은 공유 유지(`DocRegistry.SHARED`) — 개인화 대상은 채팅 스레드·이력·좋아요 소유권뿐
+
+**멀티유저 전환 정합성**: `GuestIdentityResolver`는 `NoAuthAutoLoginFilter`와 동일한 `@ConditionalOnProperty(app.auth.enabled=false)`라 인증을 켜면 컨텍스트에서 통째로 사라진다 — 파생 게스트 id와 실제 로그인 id가 동시에 살아 있는 경로가 없다. §3.4 Row-level 멀티테넌시 모델과 같은 축을 재사용하므로 모델 변경도 없다. 전환 시 기존 게스트 스레드는 `guest-%` 접두사로 일괄 삭제하거나 실계정에 귀속시킬 수 있다.
+
+**부수 효과**: §6.20(사용자별 토큰 쿼터)의 (A)안(`conversation_turns` 기반 집계)이 no-auth 배포에서도 의미를 갖게 됐다(기존엔 전원 동일 id라 무의미). 큐레이션 Q&A의 "본인만 편집"(`source_user_id`)도 비로소 실제로 동작한다.
+
+**주의**: 이 설정을 켜기 전 쌓인 스레드는 예전 공용 게스트 id에 묶여 조회되지 않는다(삭제되지는 않으며 `shared`로 되돌리면 다시 보임). 채택 시 운영자에게 고지 필요 — OPERATOR_MANUAL §9.4.3.
 
 ---
 

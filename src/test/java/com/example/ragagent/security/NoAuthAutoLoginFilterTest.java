@@ -1,6 +1,7 @@
 package com.example.ragagent.security;
 
 import com.example.ragagent.config.AppProperties;
+import com.example.ragagent.repository.AppSecretRepository;
 import jakarta.servlet.FilterChain;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -30,7 +31,12 @@ class NoAuthAutoLoginFilterTest {
 
     private final SqliteUserDetailsService userDetailsService = mock(SqliteUserDetailsService.class);
     private final AppProperties props = mock(AppProperties.class);
-    private final NoAuthAutoLoginFilter filter = new NoAuthAutoLoginFilter(userDetailsService, props);
+    // Real resolver, not a mock: every case here runs the default 'shared' strategy, which returns the
+    // fixed id without ever touching the secret store — so this also pins "shared changes nothing".
+    private final GuestIdentityResolver guestIdentityResolver = new GuestIdentityResolver(
+            props, new ClientIpResolver(false), mock(AppSecretRepository.class));
+    private final NoAuthAutoLoginFilter filter =
+            new NoAuthAutoLoginFilter(userDetailsService, props, guestIdentityResolver);
 
     @BeforeEach
     void setUp() {

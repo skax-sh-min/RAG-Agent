@@ -1,6 +1,7 @@
 package com.example.ragagent.ratelimit;
 
 import com.example.ragagent.config.AppProperties;
+import com.example.ragagent.security.ClientIpResolver;
 import com.example.ragagent.security.CurrentUser;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
@@ -26,10 +27,12 @@ public class RateLimitFilter extends OncePerRequestFilter {
 
     private final AppProperties appProperties;
     private final CurrentUser currentUser;
+    private final ClientIpResolver clientIpResolver;
 
-    RateLimitFilter(AppProperties appProperties, CurrentUser currentUser) {
+    RateLimitFilter(AppProperties appProperties, CurrentUser currentUser, ClientIpResolver clientIpResolver) {
         this.appProperties = appProperties;
         this.currentUser = currentUser;
+        this.clientIpResolver = clientIpResolver;
     }
 
     @Override
@@ -84,8 +87,8 @@ public class RateLimitFilter extends OncePerRequestFilter {
 
     String clientKey(HttpServletRequest req) {
         if (currentUser.isAuthenticated()) return "user:" + currentUser.userId();
-        String forwarded = req.getHeader("X-Forwarded-For");
-        if (forwarded != null && !forwarded.isBlank()) return "ip:" + forwarded.split(",")[0].trim();
-        return "ip:" + req.getRemoteAddr();
+        // PLAN §6.19.3 — X-Forwarded-For is only honored when the operator opts in, otherwise an
+        // attacker could vary the header per request and refill their own bucket indefinitely.
+        return "ip:" + clientIpResolver.resolve(req);
     }
 }

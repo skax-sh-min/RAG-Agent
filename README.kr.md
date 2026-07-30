@@ -372,6 +372,8 @@ rag_java/
 - **ReAct 재검색** — 증거 부족 시 최대 2회 자동 재검색
 - **Critic 검증** — 생성된 답변이 문서에 근거하는지 LLM이 이중 검증
 - **PROGRESSIVE 모드** — COST_FIRST로 시작 → 품질 임계값 미달 시 PREMIUM 프로바이더로 재실행 + 업그레이드 배지 표시
+- **no-auth 모드 방문자별 채팅 분리** — `app.auth.guest-identity`(`shared`/`ip`/`cookie`/`hybrid`)로 접속자마다 사이드바 스레드·대화 이력을 분리. 저장 계층 변경 0 — 모든 테이블이 이미 `user_id` 축으로 격리돼 있어 인증 필터가 주입하는 id 한 곳만 방문자별로 바꾸면 됨. `hybrid`(권장)는 장수 `rag_visitor` 쿠키가 있으면 그것을, 없으면 접속 IP에서 유도해 쿠키로 저장 — DHCP 갱신(쿠키가 이김)과 쿠키 삭제(같은 IP면 복구)를 모두 견딤. id는 영속 서버 키로 HMAC한 `guest-<hex>`라 원문 IP가 DB에 남지 않고, 접두사 덕분에 나중에 실계정으로 이관·정리할 대상을 식별할 수 있음. 업로드 문서는 공유 유지. 기본값 `shared`(회귀 0)
+- **클라이언트 IP 신뢰 판정 일원화** — `app.trust-forwarded-for`(기본 `false`)가 속도 제한과 방문자 식별 양쪽에서 `X-Forwarded-For` 신뢰 여부를 결정. 끄면 헤더를 위조해도 속도 제한을 리필하거나 다른 방문자 신원을 가로챌 수 없고, 켜면(Caddy 등 프록시 뒤에서는 필수) 모든 방문자가 프록시 IP 하나로 뭉치지 않고 실제 IP로 식별됨
 - **속도 제한** — Bucket4j + Caffeine 유저별 토큰버킷; 429 `RAG-RATE-001` + `Retry-After` 헤더; `app.rate-limit.*`로 설정
 - **감사 로그** — Logback 롤링 파일에 구조화된 이벤트 기록; `app.audit.*`로 설정
 - **이미지 처리 파이프라인** — PDF/PPTX/DOCX 이미지 추출 → `data/images/{imageId}/` 저장(문서 SHA-256 기반 해시 키 — 문서 자체의 `docId`와는 별개이며, 긴 파일명이 이미지마다 반복 저장되는 것을 방지); PPTX에서 사진 위에 강조 원·화살표 같은 주석 도형이 겹쳐 있으면 하나의 합성 이미지로 병합(`app.pptx-image.merge-annotated-pictures`), 표 위에 겹친 주석 도형도 표+도형 합성(표는 MD 표로도 유지)하며 실제 Ctrl+G 그룹·SmartArt는 각 한 장으로 유지; 앵커에 안 겹친 느슨한 도형끼리의 병합은 `app.pptx-image.rasterize-shapes=true`일 때만(기본 off). DOCX도 사진과 같은 문단의 레거시 VML 주석 도형(사각형/원/선)을 하나로 병합(`app.docx-image.merge-annotated-shapes` — POI가 DOCX 도형 좌표를 노출하지 않아 같은 문단 근사 방식); 검색 시점 Lazy Vision 설명 생성 (SQLite 캐시); 답변 버블에 이미지 썸네일 표시

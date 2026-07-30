@@ -87,6 +87,18 @@ class ManagementOnlyAuthorizationTest {
         }
 
         /**
+         * NoAuthAutoLoginFilter's collaborator. Needed explicitly because @WebMvcTest doesn't scan
+         * @Component beans (same reason the filter itself is @Import-ed above). The strategy here is
+         * the default 'shared' — see props() — so the resolver returns the fixed guest id without ever
+         * reading the secret store, which is why a mock repository suffices.
+         */
+        @Bean
+        GuestIdentityResolver guestIdentityResolver(AppProperties props) {
+            return new GuestIdentityResolver(props, new ClientIpResolver(false),
+                    mock(com.example.ragagent.repository.AppSecretRepository.class));
+        }
+
+        /**
          * Spring Boot's UserDetailsServiceAutoConfiguration still registers its
          * inMemoryUserDetailsManager fallback alongside the mocked SqliteUserDetailsService in
          * this slice (two UserDetailsService beans → "Global Authentication Manager will not use

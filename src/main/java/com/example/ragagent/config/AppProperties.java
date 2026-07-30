@@ -1,6 +1,7 @@
 package com.example.ragagent.config;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.boot.context.properties.bind.ConstructorBinding;
 
 import java.util.List;
 import java.util.Locale;
@@ -136,12 +137,58 @@ public record AppProperties(
 
     public record AuthConfig(
             boolean enabled,         // false → no-auth mode (guest/admin auto-login)
-            boolean managementOnly   // §6.17 B안 — only meaningful when enabled=false; authSafe() normalizes
+            boolean managementOnly,  // §6.17 B안 — only meaningful when enabled=false; authSafe() normalizes
                                      // this to false whenever enabled=true, so it's the only place that rule
                                      // needs to be known. true → /admin/** + document-write UI require a real
                                      // login (NoAuthAutoLoginFilter/SecurityConfig), everything else stays
                                      // guest-auto-authenticated exactly like plain no-auth mode.
-    ) {}
+            String guestIdentity     // How no-auth mode separates visitors from each other — see GuestIdentity.
+                                     // Only meaningful when enabled=false (GuestIdentityResolver, which reads
+                                     // it, is @ConditionalOnProperty on the same flag). authSafe() normalizes
+                                     // null/blank/unknown to GuestIdentity.SHARED (= the pre-existing single
+                                     // shared guest), so a config typo degrades to old behavior, never to a
+                                     // half-applied split.
+    ) {
+        /**
+         * MANDATORY once this record has more than one constructor: without it Spring Boot cannot tell
+         * which one to bind with and silently picks the 2-arg convenience form below, leaving
+         * {@code guestIdentity} at its default no matter what {@code app.auth.guest-identity} says —
+         * a failure that looks exactly like a valid {@code shared} configuration.
+         */
+        @ConstructorBinding
+        public AuthConfig {
+        }
+
+        /** Back-compat 2-arg form — defaults to the single shared guest identity. Test convenience;
+         *  never used for property binding (see {@code @ConstructorBinding} above). */
+        public AuthConfig(boolean enabled, boolean managementOnly) {
+            this(enabled, managementOnly, GuestIdentity.SHARED);
+        }
+    }
+
+    /**
+     * Valid {@code app.auth.guest-identity} values — how no-auth mode decides which visitor a request
+     * belongs to. The resulting id lands in {@code ThreadContext.userId()}, which every repository is
+     * already keyed by ({@code thread_meta}, {@code conversation_turns}, {@code curated_qa}), so chat
+     * personalization needs no storage change. Document storage stays shared ({@code DocRegistry.SHARED}).
+     */
+    public static final class GuestIdentity {
+        /** One fixed guest for everyone — the pre-existing behavior, and the default. */
+        public static final String SHARED = "shared";
+        /** Derive from the client IP alone. No cookie needed, but NAT collapses visitors and a DHCP
+         *  lease change orphans history. Requires {@code app.trust-forwarded-for} to be set correctly. */
+        public static final String IP = "ip";
+        /** Derive from a long-lived signed cookie alone. Accurate regardless of IP, but a visitor who
+         *  blocks or clears cookies gets a brand-new identity every time. */
+        public static final String COOKIE = "cookie";
+        /** Cookie when present, otherwise derive from IP and persist that as the cookie. Survives both
+         *  an IP change (cookie wins) and a cookie wipe (same IP re-derives the same id). Recommended. */
+        public static final String HYBRID = "hybrid";
+
+        static final java.util.Set<String> ALL = java.util.Set.of(SHARED, IP, COOKIE, HYBRID);
+
+        private GuestIdentity() {}
+    }
 
     /** 벡터 스토어 백엔드 선택. {@code type}: chroma (기본값) | sqlite-vec. */
     public record VectorStoreConfig(String type) {}
@@ -510,7 +557,17 @@ public record AppProperties(
         // managementOnly is only meaningful when auth is disabled — normalize here so every
         // downstream consumer (SecurityConfig, NoAuthAutoLoginFilter, GlobalModelAdvice, ...)
         // can trust authSafe().managementOnly() directly without re-deriving this rule.
-        return new AuthConfig(auth.enabled(), !auth.enabled() && auth.managementOnly());
+        return new AuthConfig(auth.enabled(),
+                !auth.enabled() && auth.managementOnly(),
+                normalizeGuestIdentity(auth.guestIdentity()));
+    }
+
+    /** Unknown/blank → SHARED: a typo must fall back to the pre-existing single-guest behavior rather
+     *  than to some partially-applied split. GuestIdentityResolver logs the raw value when it differs. */
+    private static String normalizeGuestIdentity(String raw) {
+        if (raw == null || raw.isBlank()) return GuestIdentity.SHARED;
+        String v = raw.strip().toLowerCase(Locale.ROOT);
+        return GuestIdentity.ALL.contains(v) ? v : GuestIdentity.SHARED;
     }
 
     /** Vector store backend, defaulting to {@code chroma}. (Bean wiring uses raw @ConditionalOnProperty.) */

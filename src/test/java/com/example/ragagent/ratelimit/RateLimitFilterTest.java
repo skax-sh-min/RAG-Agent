@@ -1,6 +1,7 @@
 package com.example.ragagent.ratelimit;
 
 import com.example.ragagent.config.AppProperties;
+import com.example.ragagent.security.ClientIpResolver;
 import com.example.ragagent.security.CurrentUser;
 import jakarta.servlet.FilterChain;
 import org.junit.jupiter.api.BeforeEach;
@@ -23,7 +24,7 @@ class RateLimitFilterTest {
         appProperties = mock(AppProperties.class);
         currentUser = mock(CurrentUser.class);
         when(currentUser.isAuthenticated()).thenReturn(false);
-        filter = new RateLimitFilter(appProperties, currentUser);
+        filter = new RateLimitFilter(appProperties, currentUser, new ClientIpResolver(false));
     }
 
     private AppProperties.RateLimitConfig cfg(boolean enabled, int chat, int upload, int sync, int image, int def) {
@@ -117,14 +118,28 @@ class RateLimitFilterTest {
     }
 
     @Test
-    @DisplayName("X-Forwarded-For 첫 번째 IP를 클라이언트 키로 사용")
-    void x_forwarded_for_first_ip_is_client_key() {
+    @DisplayName("PLAN §6.19.3 — 기본값(trust-forwarded-for=false)에서는 XFF를 무시하고 remoteAddr 사용")
+    void x_forwarded_for_ignored_by_default() {
         MockHttpServletRequest req = reqFor("/api/v1/chat");
         req.addHeader("X-Forwarded-For", "203.0.113.1, 10.0.0.1");
         req.setRemoteAddr("10.0.0.1");
         when(currentUser.isAuthenticated()).thenReturn(false);
 
-        assertThat(filter.clientKey(req)).isEqualTo("ip:203.0.113.1");
+        // 프록시 없는 배포에서 XFF는 클라이언트가 마음대로 바꿀 수 있으므로, 이를 신뢰하면
+        // 매 요청 헤더만 바꿔 per-IP 한도를 무한히 리필할 수 있다.
+        assertThat(filter.clientKey(req)).isEqualTo("ip:10.0.0.1");
+    }
+
+    @Test
+    @DisplayName("trust-forwarded-for=true(프록시 뒤)로 옵트인하면 XFF 첫 번째 IP를 사용")
+    void x_forwarded_for_used_when_trusted() {
+        RateLimitFilter trusting = new RateLimitFilter(appProperties, currentUser, new ClientIpResolver(true));
+        MockHttpServletRequest req = reqFor("/api/v1/chat");
+        req.addHeader("X-Forwarded-For", "203.0.113.1, 10.0.0.1");
+        req.setRemoteAddr("10.0.0.1");
+        when(currentUser.isAuthenticated()).thenReturn(false);
+
+        assertThat(trusting.clientKey(req)).isEqualTo("ip:203.0.113.1");
     }
 
     @Test

@@ -31,7 +31,7 @@ import java.util.List;
 @ConditionalOnProperty(name = "app.auth.enabled", havingValue = "false")
 public class NoAuthAutoLoginFilter extends OncePerRequestFilter {
 
-    static final String GUEST_ID = "00000000-0000-0000-0000-000000000001";
+    static final String GUEST_ID = GuestIdentityResolver.SHARED_ID;
     private static final AppUserDetails GUEST_PRINCIPAL = new AppUserDetails(
             GUEST_ID, "guest@local", "", "Guest", "USER", true, false
     );
@@ -56,10 +56,14 @@ public class NoAuthAutoLoginFilter extends OncePerRequestFilter {
 
     private final SqliteUserDetailsService userDetailsService;
     private final AppProperties props;
+    private final GuestIdentityResolver guestIdentityResolver;
 
-    public NoAuthAutoLoginFilter(SqliteUserDetailsService userDetailsService, AppProperties props) {
+    public NoAuthAutoLoginFilter(SqliteUserDetailsService userDetailsService,
+                                 AppProperties props,
+                                 GuestIdentityResolver guestIdentityResolver) {
         this.userDetailsService = userDetailsService;
         this.props = props;
+        this.guestIdentityResolver = guestIdentityResolver;
     }
 
     @Override
@@ -100,12 +104,26 @@ public class NoAuthAutoLoginFilter extends OncePerRequestFilter {
             return;
         }
 
-        AppUserDetails principal = (!managementOnly && path.startsWith("/admin")) ? adminOpt.get() : GUEST_PRINCIPAL;
+        AppUserDetails principal = (!managementOnly && path.startsWith("/admin"))
+                ? adminOpt.get()
+                : guestPrincipal(request, response);
         var auth = UsernamePasswordAuthenticationToken.authenticated(
                 principal, null, principal.getAuthorities());
         SecurityContextHolder.getContext().setAuthentication(auth);
 
         chain.doFilter(request, response);
+    }
+
+    /**
+     * The guest identity for this request. Under the default {@code shared} strategy this is the same
+     * constant principal every time (allocation-free, byte-for-byte the pre-existing behavior); other
+     * strategies mint a per-visitor principal so chat threads separate — see {@link GuestIdentityResolver}.
+     */
+    private AppUserDetails guestPrincipal(HttpServletRequest request, HttpServletResponse response) {
+        String id = guestIdentityResolver.resolve(request, response);
+        return GUEST_ID.equals(id)
+                ? GUEST_PRINCIPAL
+                : new AppUserDetails(id, "guest@local", "", "Guest", "USER", true, false);
     }
 
     /** True when a real (non-anonymous) authenticated principal is already in the security context —
