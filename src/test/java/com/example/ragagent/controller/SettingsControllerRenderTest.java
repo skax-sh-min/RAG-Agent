@@ -22,6 +22,7 @@ import org.springframework.test.web.servlet.MockMvc;
 
 import java.util.List;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
@@ -68,6 +69,28 @@ class SettingsControllerRenderTest {
                 .andExpect(content().string(org.hamcrest.Matchers.containsString("/admin/settings/reset")));
 
         verify(settingsService).update(SettingsKeys.SEARCH_RRF_K, "70");
+    }
+
+    @Test
+    @DisplayName("점(.)이 든 키도 hx-include가 행 전체를 가리켜야 한다 — id 셀렉터면 key/value가 전송되지 않음")
+    void dottedKeyRowIncludesWholeRow() throws Exception {
+        // llm.direct-temperature / indexing.max-concurrent-* 처럼 키에 점이 있으면
+        // '#setting-llm.direct-temperature' 는 "id=setting-llm 이면서 class=direct-temperature"로 파싱돼
+        // 아무것도 매치되지 않는다 → hx-include가 비어 key·value 둘 다 누락 → 400/500.
+        SettingItem item = new SettingItem(SettingsKeys.LLM_DIRECT_TEMPERATURE, "settings.item.direct-temperature",
+                "0.1", "number", true, true, null, 0.0, 0.2, 0.01);
+        when(settingsService.editableItem(SettingsKeys.LLM_DIRECT_TEMPERATURE)).thenReturn(item);
+
+        String html = mvc.perform(post("/admin/settings/update")
+                        .param("key", SettingsKeys.LLM_DIRECT_TEMPERATURE)
+                        .param("value", "0.1")
+                        .with(csrf()))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        assertThat(html).contains("hx-include=\"closest .setting-row\"");
+        assertThat(html).doesNotContain("hx-include=\"#setting-");   // id 셀렉터로 되돌아가면 실패
+        assertThat(html).contains("name=\"key\"").contains("name=\"value\"");
     }
 
     @Test

@@ -9,7 +9,10 @@
      class="setting-row row g-2 align-items-center py-2 border-bottom"
      th:id="'setting-' + (${item.key} ?: ${item.label})">
 
-    <!-- Hidden key travels with the editor's hx-include -->
+    <!-- Hidden key travels with the editor's hx-include (see the buttons below: the row is selected
+         with `closest .setting-row`, NOT by this element's id — a key containing a dot, e.g.
+         llm.direct-temperature, makes `#setting-llm.direct-temperature` parse as
+         "#setting-llm with class .max-…", which matches nothing and posts neither key nor value). -->
     <input th:if="${item.editable}" type="hidden" name="key" th:value="${item.key}"/>
 
     <!-- Label + technical key + badges -->
@@ -35,12 +38,12 @@
             </select>
             <button type="button" class="btn btn-primary"
                     hx-post="/admin/settings/update"
-                    th:attr="hx-include='#setting-' + ${item.key}"
+                    hx-include="closest .setting-row"
                     hx-target="closest .setting-row" hx-swap="outerHTML"
                     th:text="#{settings.btn.save}">Save</button>
             <button type="button" class="btn btn-outline-secondary" th:if="${item.overridden}"
                     hx-post="/admin/settings/reset"
-                    th:attr="hx-include='#setting-' + ${item.key}"
+                    hx-include="closest .setting-row"
                     hx-target="closest .setting-row" hx-swap="outerHTML"
                     th:text="#{settings.btn.reset}">Reset</button>
         </div>
