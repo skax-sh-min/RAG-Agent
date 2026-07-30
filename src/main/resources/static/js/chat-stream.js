@@ -41,8 +41,21 @@
         return new Date().toLocaleTimeString('ko-KR', {hour: '2-digit', minute: '2-digit', hour12: false});
     }
 
+    let idSeq = 0;
+
+    /**
+     * Unique-within-this-page id for a streaming bubble's DOM element.
+     *
+     * Deliberately does NOT use crypto.randomUUID(): that API only exists in a secure context
+     * (HTTPS or localhost). Served over plain HTTP from a LAN address — e.g. a colleague opening
+     * http://10.x.x.x:8080 while the host itself works fine on localhost — it is undefined, and
+     * this threw on the first line of submitStream(), before the user's own bubble was appended.
+     * The rejection was never awaited or caught, so the send silently did nothing: no bubble, no
+     * request, no server log. This id only has to be unique within one page, so a counter plus a
+     * random suffix is sufficient and works everywhere.
+     */
     function genId() {
-        return crypto.randomUUID().replace(/-/g, '').substring(0, 8);
+        return 'b' + (idSeq++).toString(36) + Math.random().toString(36).slice(2, 10);
     }
 
     function isNearBottom(el) {

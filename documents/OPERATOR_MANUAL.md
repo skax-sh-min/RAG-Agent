@@ -756,6 +756,10 @@ Caddy는 Let's Encrypt 인증서를 자동으로 발급·갱신하므로 별도�
 
 외부에 8080 포트는 노출되지 않습니다. Caddy만 80/443을 받습니다.
 
+TLS를 앞단에서 종료하는 모든 구성(Caddy·nginx 등)에서는 앱 쪽에 **`TRUST_FORWARDED_FOR=true`가 필요합니다.** 켜지 않으면 앱이 보는 클라이언트 IP가 전부 프록시 주소가 되어, per-IP 속도 제한과 방문자 식별(`AUTH_GUEST_IDENTITY`)이 모든 사용자를 한 명으로 취급합니다 — [§9.4.3](#943-접속자별-채팅-개인화-appauthguest-identity) 참조.
+
+> **인터넷이 없는 환경**에서는 Let's Encrypt(ACME) 자동 발급만 불가능하며, Caddy 자체는 사내 CA 인증서나 내장 로컬 CA(`tls internal`)로 정상 동작합니다 — [§4.5-4](#45-폐쇄망air-gapped--노-도커-실행) 참조.
+
 ---
 
 #### 전제: Spring Boot 측 설정 (이미 적용됨)
@@ -1002,17 +1006,102 @@ export EMBED_DIMENSIONS=768          # ★ sqlite-vec 필수: 임베딩 모델 �
 
 # 외부 호출 차단(권장) + 비-TLS HTTP 직노출
 export LLM_ROUTING_MODE=LOCAL_ONLY
-export USE_CADDY_REVERSE_PROXY_HTTPS=false
+export USE_CADDY_REVERSE_PROXY_HTTPS=false   # ★ HTTP로 열 때 필수 — 아래 4) 참조
+                                             #   (true면 다른 PC에서 세션 쿠키가 폐기됨)
+# TRUST_FORWARDED_FOR는 프록시 없는 직노출이므로 기본값 false 유지 — 켜면 헤더 위조로
+# per-IP 제한 우회·타 방문자 신원 가로채기가 가능해집니다.
 
 java -jar target/rag-agent-*.jar
 ```
 
 #### 4) TLS / 리버스 프록시
 
-Caddy는 Docker 컨테이너이자 Let's Encrypt(인터넷)에 의존하므로 폐쇄망·노-도커에 부적합합니다. 택일:
+폐쇄망에서 **불가능한 것은 Let's Encrypt(ACME) 자동 발급뿐**입니다 — 도메인 소유를 인터넷으로 검증해야 하기 때문입니다. Caddy 자체는 단일 정적 바이너리라 Docker 없이 반입할 수 있고, 인증서만 다른 방법으로 조달하면 오프라인에서 정상 동작합니다.
 
-- **HTTP 직노출** — `USE_CADDY_REVERSE_PROXY_HTTPS=false`(세션 쿠키 `Secure` 해제, 안 그러면 HTTP에서 로그인 불가). 신뢰망 한정 권장.
-- **사내 역프록시 / 사설 CA** — 조직 표준 프록시(nginx 등)에서 TLS 종료 후 `:8080`으로 포워딩. `server.forward-headers-strategy=framework`(기본)로 `X-Forwarded-*` 인식.
+| 방식 | 인터넷 | 클라이언트 경고 | 비고 |
+|---|---|---|---|
+| Let's Encrypt (기본 `Caddyfile`) | **필요** | 없음 | ❌ 폐쇄망 불가 — 기동 시 ACME 실패 |
+| **사내 CA 발급 인증서** | 불필요 | 없음(이미 신뢰) | ✅ 사내 PKI가 있으면 최선 |
+| Caddy 내장 CA (`tls internal`) | 불필요 | root CA 배포 후 없음 | ✅ 사내 PKI가 없을 때 |
+| HTTP 직노출 | — | — | 신뢰망 한정. 아래 제약 참조 |
+
+기본 [`Caddyfile`](../Caddyfile)은 `{$DOMAIN:localhost}` 한 줄이라 실도메인을 넣으면 ACME를 시도합니다. 폐쇄망에서는 `tls` 지시자를 명시해 이를 우회합니다.
+
+```caddyfile
+# 사내 CA 발급 인증서 (권장 — 클라이언트가 이미 루트를 신뢰하므로 배포할 것이 없음)
+rag.내부도메인 {
+    tls /etc/caddy/cert.pem /etc/caddy/key.pem
+    reverse_proxy 127.0.0.1:8080
+}
+
+# 사내 PKI가 없을 때 — Caddy 내장 로컬 CA (완전 오프라인)
+rag.내부도메인 {
+    tls internal
+    reverse_proxy 127.0.0.1:8080
+}
+```
+
+`tls internal` 사용 시 Caddy가 생성한 루트(`/data/caddy/pki/authorities/local/root.crt`, 노-도커는 `$XDG_DATA_HOME/caddy/pki/...`)를 **각 클라이언트 PC 신뢰 저장소에 1회 설치**해야 경고가 사라집니다.
+
+**앱 쪽에 함께 필요한 설정** (TLS를 앞단에서 종료하는 모든 구성 공통 — nginx 등 조직 표준 프록시도 동일):
+
+```bash
+export USE_CADDY_REVERSE_PROXY_HTTPS=true   # 세션 쿠키 Secure 활성화
+export TRUST_FORWARDED_FOR=true             # ★ 프록시 뒤에서는 필수 — §9.4.3
+```
+
+`TRUST_FORWARDED_FOR`는 **TLS 옵션이 아니라 그 결과로 따라오는 설정**입니다. 프록시를 앞에 두면 앱이 보는 IP가 전부 프록시 주소가 되므로, 이 값을 켜지 않으면 per-IP 속도 제한과 방문자 식별(`AUTH_GUEST_IDENTITY`)이 **모든 사용자를 한 명으로 취급**합니다. 반대로 프록시 없이 직노출하는 구성에서는 반드시 `false`여야 합니다(헤더 위조로 우회·가로채기 가능). `server.forward-headers-strategy=framework`는 기본값이라 `X-Forwarded-*` 인식은 그대로 동작합니다.
+
+> **주의 1 — IP 직접 접속.** `https://10.x.x.x` 형태로 쓰려면 인증서에 IP SAN이 필요합니다. **호스트명 + 내부 DNS(또는 각 PC의 `hosts` 파일)** 방식이 훨씬 간단합니다.
+>
+> **주의 2 — HSTS.** 기본 `Caddyfile`은 `Strict-Transport-Security max-age=31536000`을 내보냅니다. 한 번 HTTPS로 접속한 호스트명은 브라우저가 1년간 HTTP 접속을 거부하므로, 자체 서명으로 시험할 때는 임시 호스트명을 쓰고 되돌릴 때 브라우저별 HSTS 항목을 삭제하세요.
+
+**HTTP 직노출을 선택하는 경우** — `USE_CADDY_REVERSE_PROXY_HTTPS=false`가 **반드시** 필요합니다. 세션 쿠키의 `Secure` 플래그가 남아 있으면 브라우저가 쿠키를 저장하지 않아 로그인이 되지 않고, no-auth 모드에서도 요청마다 세션이 새로 생겨 `threadId`가 계속 바뀝니다. 단, 이 문제는 **`http://localhost`에서는 드러나지 않습니다** — 브라우저가 localhost만 secure context로 취급하기 때문에, 서버 호스트에서 직접 열어보면 멀쩡하고 다른 PC에서만 깨집니다.
+
+같은 이유로 평문 HTTP LAN 접속에서는 브라우저의 secure-context 전용 기능이 비활성화됩니다 — **PWA 설치·서비스워커가 동작하지 않습니다**(채팅·문서 관리 등 핵심 기능은 정상). PWA가 필요하면 위 TLS 구성 중 하나를 택하세요.
+
+##### 전체 예시 — 폐쇄망 HTTPS + 접속자별 채팅 분리
+
+여러 사람이 각자의 대화 목록을 갖도록 하려면 **TLS 설정만으로는 부족합니다.** 실제 분리 스위치는 `AUTH_GUEST_IDENTITY`이고, 기본값 `shared`는 전원이 하나의 게스트를 공유합니다. 아래는 두 요구사항을 함께 만족하는 완전한 설정입니다.
+
+```bash
+# ── 방문자별 채팅 분리 ─────────────────────────────────────────────
+export AUTH_ENABLED=false            # 필수: 이 값이 false여야 게스트 식별이 동작
+export AUTH_GUEST_IDENTITY=hybrid    # ★ 실제 분리 스위치 (기본 shared = 전원 공유)
+#export AUTH_MANAGEMENT_ONLY=true    # 선택: 채팅은 열되 /admin·문서 관리만 로그인 요구
+
+# ── TLS를 Caddy에서 종료하는 구성 ──────────────────────────────────
+export USE_CADDY_REVERSE_PROXY_HTTPS=true   # 세션 쿠키 Secure 활성화
+export TRUST_FORWARDED_FOR=true             # ★ 프록시 뒤에서는 필수 (아래 설명)
+
+# ── 폐쇄망 공통 (위 3) 항목과 동일) ────────────────────────────────
+export LLM_ROUTING_MODE=LOCAL_ONLY
+export VECTORSTORE_TYPE=sqlite-vec
+```
+
+**두 옵션이 함께 필요한 이유**: `AUTH_GUEST_IDENTITY=hybrid`는 쿠키가 없는 첫 방문자를 **IP로 식별**합니다. 그런데 Caddy 뒤에서는 앱이 보는 IP가 전부 Caddy 주소이므로, `TRUST_FORWARDED_FOR=true`가 없으면 **모든 신규 방문자가 같은 id를 받아** 분리가 무너집니다. 반대로 프록시가 없는 직노출 구성이라면 이 값은 `false`여야 하며, 그때는 `getRemoteAddr()`가 이미 실제 클라이언트 IP이므로 분리가 정상 동작합니다.
+
+**`ip`가 아니라 `hybrid`를 권하는 이유** — 사내망에서 순수 IP 식별은 두 지점에서 깨집니다.
+
+| 상황 | `ip` | `hybrid` |
+|---|---|---|
+| DHCP 임대 갱신으로 IP 변경 | ❌ 이력 유실 | ✅ 쿠키가 이력 유지 |
+| NAT 뒤 여러 PC가 같은 IP | ❌ 한 명으로 뭉침 | ✅ 쿠키로 분리 |
+| 사용자가 쿠키 삭제 | — | ✅ 같은 IP면 원래 id로 복구 |
+
+**적용 후 확인** — 기동 로그에 다음 줄이 있어야 합니다:
+
+```
+[GUEST_ID] 방문자 식별 전략: hybrid
+```
+
+`shared (전 방문자가 하나의 게스트를 공유)`로 찍히면 값이 반영되지 않은 것입니다(오타는 조용히 `shared`로 폴백하므로 이 줄로 확인하세요).
+
+> **분리 범위**: 채팅 스레드 목록·대화 이력·좋아요 소유권만 방문자별로 나뉩니다. **업로드된 문서는 설계상 전원 공유**(`DocRegistry.SHARED`)이며, 문서까지 사용자별로 격리하려면 정식 인증(`AUTH_ENABLED=true`)이 필요합니다.
+>
+> **기존 대화 주의**: 이 설정을 켜기 전에 쌓인 스레드는 예전 공용 게스트 id에 묶여 있어 **더 이상 보이지 않습니다**(삭제되지는 않으며 `shared`로 되돌리면 복구). 운영 중 전환이라면 사용자 공지가 필요합니다.
+
+자세한 전략별 비교는 [§9.4.3](#943-접속자별-채팅-개인화-appauthguest-identity)을 참조하세요.
 
 #### 5) 이미지 · OCR (로컬 모델 전제)
 
@@ -1983,6 +2072,52 @@ curl $LOCAL_LLM_URL/models -H "Authorization: Bearer $LOCAL_LLM_KEY"
 | LOCAL LLM 서버 미실행 | LM Studio / Ollama 실행 확인 |
 | 로컬 LLM 없이 실행 | `LOCAL_LLM_KEY=` (빈 값)으로 LOCAL 비활성화 후 NORMAL/PREMIUM 등록 |
 | 모든 프로바이더 소진 | `/llm-usage`에서 차단 상태 확인; circuit-breaker-minutes 경과 후 자동 해제 |
+
+---
+
+### 서버 PC에서는 되는데 다른 PC에서 접속하면 채팅이 안 됨
+
+서버를 띄운 PC(`http://localhost:8080`)에서는 정상인데, 같은 망의 다른 PC(`http://10.x.x.x:8080`)에서는 **전송 후 아무 반응이 없고 보낸 메시지조차 표시되지 않는** 경우입니다.
+
+원인은 브라우저의 **secure context** 규칙입니다. `http://localhost`는 예외적으로 secure context로 취급되지만 `http://10.x.x.x`는 아니며, 이때 `crypto.randomUUID()`·`navigator.clipboard` 같은 API가 아예 존재하지 않습니다. **서버 문제가 아니므로 서버 로그에도 아무것도 남지 않습니다.**
+
+먼저 브라우저 콘솔(F12)을 확인하세요:
+
+| 콘솔 메시지 | 원인 | 조치 |
+|---|---|---|
+| `crypto.randomUUID is not a function` | 구버전 `chat-stream.js` | **수정 완료** — 최신 버전으로 갱신. 브라우저 강력 새로고침(Ctrl+F5)으로 캐시된 구버전 JS 제거 |
+| `navigator.clipboard` 관련 오류 | 구버전 `chat.html` | 동일 — 스레드 ID 복사 버튼에만 영향 |
+| 오류 없음 · 응답만 안 옴 | 서버/LLM 문제 | 아래 "채팅 응답이 오지 않음" 참조 |
+
+> **로그가 없다고 요청이 안 온 것은 아닙니다.** 정상 처리된 채팅은 INFO 레벨에서 아무 로그도 남기지 않습니다(성공 경로에 `log.info`가 없음). 요청 도달 여부를 확인하려면 DEBUG를 켜세요:
+> ```bash
+> curl -X POST http://localhost:8080/actuator/loggers/com.example.ragagent -H "Content-Type: application/json" -d '{"configuredLevel":"DEBUG"}'
+> ```
+
+**함께 확인할 것** — 위 증상이 해결돼도 평문 HTTP LAN 접속에는 다음 제약이 남습니다:
+
+- `USE_CADDY_REVERSE_PROXY_HTTPS=true`(기본값!)이면 세션 쿠키에 `Secure`가 붙어 **다른 PC의 브라우저가 쿠키를 버립니다** → 요청마다 세션이 새로 생겨 `threadId`가 계속 바뀌고 대화 맥락이 끊깁니다. 평문 HTTP로 운영한다면 반드시 `false`로 두세요. (localhost에서는 이 문제가 드러나지 않습니다.)
+- PWA 설치·서비스워커가 동작하지 않습니다. 필요하면 HTTPS를 적용하세요(§4.4, 폐쇄망은 §4.5-4).
+
+---
+
+### 채팅 응답이 오지 않음 (요청은 도달, 답변만 안 옴)
+
+버블은 정상적으로 생기는데 답변 토큰이 오지 않는 경우로, 위 항목(요청 자체가 안 나감)과는 다릅니다. 대부분 **로컬 LLM이 느리거나 멈춘 것**입니다.
+
+```bash
+# LLM이 실제로 응답하는지 · 얼마나 걸리는지 직접 측정
+time curl -m 30 -X POST $LOCAL_LLM_URL/chat/completions -H "Content-Type: application/json" \
+  -d '{"model":"'"$LOCAL_LLM_MODEL"'","messages":[{"role":"user","content":"hi"}],"max_tokens":50}'
+```
+
+| 관측 | 원인 | 조치 |
+|---|---|---|
+| 위 curl이 수십 초~타임아웃 | LLM 서버가 CPU 추론 중이거나 VRAM 부족으로 스왑 | GPU offload 설정 확인. 모델을 더 작은 양자화로 교체 |
+| 첫 요청만 매우 느리고 이후 정상 | 최초 요청이 모델 로딩(JIT)을 유발 | 기동 후 워밍업 요청을 한 번 보내두기 |
+| 토큰은 오는데 매우 느림(예: 1 tok/s) | 추론 속도 자체가 느림 | 한국어는 대략 1토큰≈1글자라 "약 2,000자" 응답에 30분 이상 걸릴 수 있음 → 응답 길이 모드를 S로, 또는 더 빠른 모델 사용 |
+| 로그에 `[TIMEOUT:SSE_IDLE]` | 120초 동안 진행이 없어 유휴 타임아웃 | 위 원인 해소. 느린 모델이 불가피하면 `SSE_IDLE_TIMEOUT_SECONDS` 상향 |
+| 로그에 `[TIMEOUT:LLM_HTTP]` | `LLM_READ_TIMEOUT_SECONDS`(기본 180초) 초과 | 동일. 프로바이더 장애가 아니므로 Circuit Breaker는 차단하지 않음 |
 
 ---
 

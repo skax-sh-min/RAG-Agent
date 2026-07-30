@@ -625,13 +625,35 @@
 
     /* ── Thread ID copy ────────────────────────────────────────────── */
     function copyThreadId(btn, id) {
-        navigator.clipboard.writeText(id).then(() => {
+        // navigator.clipboard is secure-context only (HTTPS or localhost) — undefined when the app
+        // is opened over plain HTTP from a LAN address, where this used to throw and the button did
+        // nothing. Fall back to the legacy execCommand path so copying still works there.
+        const done = () => {
             const icon = btn.querySelector('i');
             if (icon) {
                 icon.className = 'bi bi-check';
                 setTimeout(() => { icon.className = 'bi bi-clipboard'; }, 1500);
             }
-        });
+        };
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(id).then(done).catch(() => legacyCopy(id) && done());
+        } else if (legacyCopy(id)) {
+            done();
+        }
+    }
+
+    function legacyCopy(text) {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.setAttribute('readonly', '');
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        let ok = false;
+        try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+        document.body.removeChild(ta);
+        return ok;
     }
 
     /* ── Inline title edit ─────────────────────────────────────────── */
