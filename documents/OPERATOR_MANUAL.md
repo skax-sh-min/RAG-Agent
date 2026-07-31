@@ -254,8 +254,8 @@ copy .env.example .env
 |------|--------|----------|------|
 | `INDEXING_MAX_FILES` | `1` | 1 ~ 8 | 파일 병렬 인덱싱 워커 수. **인덱싱 LLM 동시 호출 피크 ≈ `INDEXING_MAX_FILES` × `INDEXING_MAX_LLM`** 이므로, 기본값 `1`은 피크를 정확히 `INDEXING_MAX_LLM`으로 고정한다(§6.5 주석 참고). 올리면 처리량은 늘지만 피크가 곱으로 커진다 |
 | `INDEXING_MAX_LLM` | `3` | 1 ~ 16 | 인덱싱 중 LLM 병렬 호출 수 — 키워드 추출뿐 아니라 MD 교정·TXT 구조화·지연 Vision 설명이 모두 사용. 로컬 LLM 서버의 `--parallel` 값에 맞춘다 |
-| `INDEXING_KEYWORD_TIMEOUT_SECONDS` | `180` | 30 ~ 600 | 청크 키워드 추출 1회당(§10.8.2 배치 시 배치 1회당) 최대 대기 시간. 초과 시 TF fallback |
-| `INDEXING_KEYWORD_BATCH_SIZE` | `4` | 1 ~ 8 | §10.8.2 — 청크 N개를 한 LLM 호출로 묶어 요청(왕복 ≈ ceil(청크수/N)). `1`=배치 없음(청크당 1콜, 이전 동작). 배치가 클수록 응답 길이도 늘어나므로 로컬 모델에서 타임아웃이 잦으면 `INDEXING_KEYWORD_TIMEOUT_SECONDS`를 함께 올리세요 |
+| `INDEXING_KEYWORD_TIMEOUT_SECONDS` | `600` | 30 ~ 1800 | 청크 키워드 추출 1회당(§10.8.2 배치 시 배치 1회당) 최대 대기 시간. 초과 시 TF fallback |
+| `INDEXING_KEYWORD_BATCH_SIZE` | `2` | 1 ~ 8 | §10.8.2 — 청크 N개를 한 LLM 호출로 묶어 요청(왕복 ≈ ceil(청크수/N)). `1`=배치 없음(청크당 1콜, 이전 동작). 배치가 클수록 응답 길이도 늘어나므로 로컬 모델에서 타임아웃이 잦으면 `INDEXING_KEYWORD_TIMEOUT_SECONDS`를 함께 올리세요 |
 
 #### 질의 경로 동시성 제어
 
@@ -264,20 +264,20 @@ copy .env.example .env
 | 변수 | 기본값 | 권장 범위 | 설명 |
 |------|--------|----------|------|
 | `LLM_DEFAULT_PROVIDER_CONCURRENCY` | `3` | 1 ~ 16 | 프로바이더별 동시 처리 상한 기본값(`app.llm.default-provider-concurrency`) — LLM 서버의 실제 `--parallel` 값과 일치시키는 것이 원칙. 개별 프로바이더는 `application.properties`의 `app.llm.providers[N].concurrency`로 오버라이드 가능 |
-| `LLM_PERMIT_WAIT_TIMEOUT_SECONDS` | `20` | 5 ~ 60 | 동시성 슬롯 대기 상한(초, `app.llm.permit-wait-timeout-seconds`). 초과 시 `LLM_READ_TIMEOUT_SECONDS`(기본 180초)까지 기다리지 않고 즉시 HTTP 429 + `Retry-After` 응답 |
+| `LLM_PERMIT_WAIT_TIMEOUT_SECONDS` | `60` | 5 ~ 120 | 동시성 슬롯 대기 상한(초, `app.llm.permit-wait-timeout-seconds`). 초과 시 `LLM_READ_TIMEOUT_SECONDS`(기본 600초)까지 기다리지 않고 즉시 HTTP 429 + `Retry-After` 응답 |
 
 #### HTTP Timeout 튜닝
 
 | 변수 | 기본값 | 권장 범위 | 설명 |
 |------|--------|----------|------|
-| `SSE_IDLE_TIMEOUT_SECONDS` | `120` | 30 ~ 600 | 에이전트 그래프의 진행 신호(노드 전환·토큰·소스 준비)가 이 시간만큼 전혀 없으면 중단 (`app.sse-idle-timeout-seconds`). 매 신호마다 리셋되므로 느리지만 계속 응답 중인 로컬 LLM은 끊기지 않음 — 실제로 "멈춘" 요청을 감지하는 주 타임아웃 |
-| `SSE_TIMEOUT_SECONDS` | `3600` | 600 ~ 7200 | 브라우저 ↔ 서버 SSE 연결의 절대 상한(활동 여부 무관, `app.sse-timeout-seconds`) — 응답이 영원히 끝나지 않는 극단적 상황에 대한 안전장치일 뿐, 평소엔 `SSE_IDLE_TIMEOUT_SECONDS`가 먼저 작동함 |
+| `SSE_IDLE_TIMEOUT_SECONDS` | `300` | 30 ~ 1800 | 에이전트 그래프의 진행 신호(노드 전환·토큰·소스 준비)가 이 시간만큼 전혀 없으면 중단 (`app.sse-idle-timeout-seconds`). 매 신호마다 리셋되므로 느리지만 계속 응답 중인 로컬 LLM은 끊기지 않음 — 실제로 "멈춘" 요청을 감지하는 주 타임아웃 |
+| `SSE_TIMEOUT_SECONDS` | `7200` | 600 ~ 14400 | 브라우저 ↔ 서버 SSE 연결의 절대 상한(활동 여부 무관, `app.sse-timeout-seconds`) — 응답이 영원히 끝나지 않는 극단적 상황에 대한 안전장치일 뿐, 평소엔 `SSE_IDLE_TIMEOUT_SECONDS`가 먼저 작동함 |
 | `LLM_CONNECT_TIMEOUT_SECONDS` | `10` | 2 ~ 30 | LLM API 연결 타임아웃 (`app.llm.connect-timeout-seconds`) |
-| `LLM_READ_TIMEOUT_SECONDS` | `180` | 30 ~ 600 | LLM API 응답 읽기 타임아웃 (`app.llm.read-timeout-seconds`) |
+| `LLM_READ_TIMEOUT_SECONDS` | `600` | 30 ~ 1800 | LLM API 응답 읽기 타임아웃 (`app.llm.read-timeout-seconds`) |
 | `EMBED_CONNECT_TIMEOUT_SECONDS` | `10` | 2 ~ 30 | 임베딩 API 연결 타임아웃 (`app.embedding.connect-timeout-seconds`) |
-| `EMBED_READ_TIMEOUT_SECONDS` | `120` | 30 ~ 600 | 임베딩 API 응답 읽기 타임아웃 (`app.embedding.read-timeout-seconds`) |
+| `EMBED_READ_TIMEOUT_SECONDS` | `180` | 30 ~ 600 | 임베딩 API 응답 읽기 타임아웃 (`app.embedding.read-timeout-seconds`) |
 | `CHROMA_CONNECT_TIMEOUT_SECONDS` | `5` | 1 ~ 15 | Chroma API 연결 타임아웃 (`app.chroma.connect-timeout-seconds`) |
-| `CHROMA_READ_TIMEOUT_SECONDS` | `60` | 10 ~ 300 | Chroma API 응답 읽기 타임아웃 (`app.chroma.read-timeout-seconds`) |
+| `CHROMA_READ_TIMEOUT_SECONDS` | `120` | 10 ~ 300 | Chroma API 응답 읽기 타임아웃 (`app.chroma.read-timeout-seconds`) |
 
 #### 임베딩 사용량 추적
 
@@ -1678,7 +1678,7 @@ app.llm.providers[8].concurrency=4
 
 **동작 방식**:
 1. 프로바이더마다 `concurrency`(§5.2, 미설정 시 `LLM_DEFAULT_PROVIDER_CONCURRENCY`) 크기의 슬롯 풀을 가짐.
-2. 요청이 슬롯을 요청하면 최대 `LLM_PERMIT_WAIT_TIMEOUT_SECONDS`(기본 20초) 동안 대기.
+2. 요청이 슬롯을 요청하면 최대 `LLM_PERMIT_WAIT_TIMEOUT_SECONDS`(기본 60초) 동안 대기.
 3. 슬롯이 나면 즉시 LLM 호출 → 완료 후 슬롯 반환.
 4. 대기 상한을 넘기면 HTTP 429 + `Retry-After` 헤더로 즉시 응답(`RAG-LLM-002`) — Circuit Breaker 차단이나 다른 프로바이더로의 자동 전환은 하지 않습니다(§5.5 참고). SSE 스트리밍 응답에서는 "현재 요청이 몰려 있습니다. 잠시 후 다시 시도해 주세요." 메시지로 우아하게 종료됩니다.
 
@@ -2116,8 +2116,8 @@ time curl -m 30 -X POST $LOCAL_LLM_URL/chat/completions -H "Content-Type: applic
 | 위 curl이 수십 초~타임아웃 | LLM 서버가 CPU 추론 중이거나 VRAM 부족으로 스왑 | GPU offload 설정 확인. 모델을 더 작은 양자화로 교체 |
 | 첫 요청만 매우 느리고 이후 정상 | 최초 요청이 모델 로딩(JIT)을 유발 | 기동 후 워밍업 요청을 한 번 보내두기 |
 | 토큰은 오는데 매우 느림(예: 1 tok/s) | 추론 속도 자체가 느림 | 한국어는 대략 1토큰≈1글자라 "약 2,000자" 응답에 30분 이상 걸릴 수 있음 → 응답 길이 모드를 S로, 또는 더 빠른 모델 사용 |
-| 로그에 `[TIMEOUT:SSE_IDLE]` | 120초 동안 진행이 없어 유휴 타임아웃 | 위 원인 해소. 느린 모델이 불가피하면 `SSE_IDLE_TIMEOUT_SECONDS` 상향 |
-| 로그에 `[TIMEOUT:LLM_HTTP]` | `LLM_READ_TIMEOUT_SECONDS`(기본 180초) 초과 | 동일. 프로바이더 장애가 아니므로 Circuit Breaker는 차단하지 않음 |
+| 로그에 `[TIMEOUT:SSE_IDLE]` | 300초 동안 진행이 없어 유휴 타임아웃 | 위 원인 해소. 느린 모델이 불가피하면 `SSE_IDLE_TIMEOUT_SECONDS` 상향 |
+| 로그에 `[TIMEOUT:LLM_HTTP]` | `LLM_READ_TIMEOUT_SECONDS`(기본 600초) 초과 | 동일. 프로바이더 장애가 아니므로 Circuit Breaker는 차단하지 않음 |
 
 ---
 
@@ -2134,7 +2134,7 @@ grep "\[BACKPRESSURE\]" logs/*.log | tail -20
 |------|------|
 | 가끔 1~2회 발생, 재시도하면 바로 성공 | 정상 동작 — 순간적인 동시 접속 피크. 조치 불필요 |
 | 특정 프로바이더에서 지속 반복 | `LLM_DEFAULT_PROVIDER_CONCURRENCY`(또는 해당 프로바이더의 `concurrency`)가 실제 서버 `--parallel`보다 낮게 설정됐는지 확인 후 상향 — 단, 서버가 실제로 그만큼 처리 가능한 경우에만 |
-| 사용자 대기 시간이 너무 김 | `LLM_PERMIT_WAIT_TIMEOUT_SECONDS`(기본 20초)를 늘려 대기 상한을 확대 — 단, `LLM_READ_TIMEOUT_SECONDS`(기본 180초)보다는 충분히 짧게 유지 |
+| 사용자 대기 시간이 너무 김 | `LLM_PERMIT_WAIT_TIMEOUT_SECONDS`(기본 60초)를 늘려 대기 상한을 확대 — 단, `LLM_READ_TIMEOUT_SECONDS`(기본 600초)보다는 충분히 짧게 유지 |
 | 물리 서버 자체가 상시 포화 | 동일 role·동일 priority로 프로바이더를 추가 등록하면(§5.4 예제 5) 잔여 permit이 가장 많은 쪽으로 자동 분산됩니다. 그래도 부족하면 NORMAL/PREMIUM 외부 fallback을 함께 구성해 부하를 분산하세요 |
 
 상세 동작 원리는 [§5.7 동시성 제어 및 백프레셔](#57-동시성-제어-및-백프레셔)를 참고하세요.
@@ -2222,8 +2222,8 @@ srv send_error: ... error: input (706 tokens) is too large to process. increase 
 
 두 가지 다른 원인이 같은 로그 패턴(`SSE worker cancelled`)으로 나타납니다.
 
-- **`[TIMEOUT:SSE_IDLE]`** — 에이전트 그래프가 `app.sse-idle-timeout-seconds`(기본 120초) 동안 노드 전환·토큰·소스 준비 신호를 전혀 못 받음. 로컬 LLM 서버(LM Studio 등)가 요청을 받고도 응답을 전혀 생성하지 못하는(멈춘) 경우가 전형적입니다. **응답이 느리더라도 토큰이 계속 나오고 있다면 이 타임아웃에 걸리지 않습니다** — 매 신호마다 리셋되기 때문입니다.
-- **`[TIMEOUT:SSE]`** — `app.sse-timeout-seconds`(기본 3600초) 절대 상한 초과. 응답이 활동 중이어도(토큰이 계속 나와도) 총 소요 시간이 이 값을 넘으면 발생 — 극히 드묾, 안전장치 성격.
+- **`[TIMEOUT:SSE_IDLE]`** — 에이전트 그래프가 `app.sse-idle-timeout-seconds`(기본 300초) 동안 노드 전환·토큰·소스 준비 신호를 전혀 못 받음. 로컬 LLM 서버(LM Studio 등)가 요청을 받고도 응답을 전혀 생성하지 못하는(멈춘) 경우가 전형적입니다. **응답이 느리더라도 토큰이 계속 나오고 있다면 이 타임아웃에 걸리지 않습니다** — 매 신호마다 리셋되기 때문입니다.
+- **`[TIMEOUT:SSE]`** — `app.sse-timeout-seconds`(기본 7200초) 절대 상한 초과. 응답이 활동 중이어도(토큰이 계속 나와도) 총 소요 시간이 이 값을 넘으면 발생 — 극히 드묾, 안전장치 성격.
 
 | 원인 | 확인 방법 | 조치 |
 |------|----------|------|
@@ -2233,8 +2233,8 @@ srv send_error: ... error: input (706 tokens) is too large to process. increase 
 
 타임아웃이 반복되면 아래 순서로 조정하세요.
 
-1. `[TIMEOUT:SSE_IDLE]`이 반복되면 `SSE_IDLE_TIMEOUT_SECONDS` 증가 (기본 120, 예: 120 → 300) — LLM이 첫 토큰을 내기까지 오래 걸리는 환경(느린 하드웨어, 큰 모델)에 해당
-2. `[TIMEOUT:SSE]`가 발생하면 `SSE_TIMEOUT_SECONDS` 증가 (기본 3600, 예: 3600 → 7200)
+1. `[TIMEOUT:SSE_IDLE]`이 반복되면 `SSE_IDLE_TIMEOUT_SECONDS` 증가 (기본 300, 예: 300 → 600) — LLM이 첫 토큰을 내기까지 오래 걸리는 환경(느린 하드웨어, 큰 모델)에 해당
+2. `[TIMEOUT:SSE]`가 발생하면 `SSE_TIMEOUT_SECONDS` 증가 (기본 7200, 예: 7200 → 14400)
 3. 인덱싱 중 키워드 추출이 자주 timeout이면 `INDEXING_KEYWORD_TIMEOUT_SECONDS` 증가 (§10.8.2로 `INDEXING_KEYWORD_BATCH_SIZE`를 올린 경우 배치 1회의 응답 길이도 함께 늘어나므로 우선 검토 — 안 되면 배치 크기를 낮추는 것도 방법)
 4. 외부 LLM이 느린 경우 `LLM_READ_TIMEOUT_SECONDS` 증가
 5. 임베딩 단계 지연 시 `EMBED_READ_TIMEOUT_SECONDS` 증가

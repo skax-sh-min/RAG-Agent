@@ -110,7 +110,7 @@ app.llm.direct-temperature=${DIRECT_LLM_TEMPERATURE:0.1}
 app.llm.max-tokens=${LLM_MAX_TOKENS:6000}
 # 질의 경로 동시성 게이트 기본값(서버의 실제 --parallel 값에 맞춘다) + 대기 상한
 app.llm.default-provider-concurrency=${LLM_DEFAULT_PROVIDER_CONCURRENCY:3}
-app.llm.permit-wait-timeout-seconds=${LLM_PERMIT_WAIT_TIMEOUT_SECONDS:20}
+app.llm.permit-wait-timeout-seconds=${LLM_PERMIT_WAIT_TIMEOUT_SECONDS:60}
 
 # 등장 순서 = 인덱스 순서(사람이 읽기 편하도록 맞춤; Spring 바인딩 자체는 파일 내 줄 순서와 무관하고
 # "활성(비주석) 프로바이더의 번호가 0부터 연속"이기만 하면 된다): 소형 로컬(MICRO_TEXT) → 로컬 LLM 1
@@ -279,7 +279,7 @@ app.indexing.keyword-batch-size=${INDEXING_KEYWORD_BATCH_SIZE:2}
 - 차단 만료는 다음 라우팅 시 자동 해제.
 - `/llm-usage` 페이지에서 차단 상태 + 남은 시간 카운트다운 확인 가능 (30초마다 자동 갱신).
 - **동시성 백프레셔(§6, 아래)는 Circuit Breaker와 별개**다 — 용량 초과는 프로바이더 장애가 아니므로 차단하지 않는다.
-- **"30초"의 근거**: `LlmRouter.SHORT_BLOCK_SECONDS`("30") 하드코딩 상수 하나를 **세 갈래**(폴백 없는 과부하 차단·기타 4xx/5xx·일반 예외)가 공유한다. 이 값은 폴백 없는 프로바이더 완화 로직을 구현하며 새로 정한 게 아니라, 그 이전부터 "기타 4xx/5xx·일반 예외" 차단에 쓰이던 기존 값을 그대로 재사용한 것 — `permit-wait-timeout-seconds`(기본 20초)와 비슷한 수준이라 재사용에 무리가 없었다. `app.llm.default-provider-concurrency`/`app.llm.permit-wait-timeout-seconds`와 달리 **프로퍼티로 외부화되어 있지 않다** — 값을 바꾸려면 코드 수정이 필요하다.
+- **"30초"의 근거**: `LlmRouter.SHORT_BLOCK_SECONDS`("30") 하드코딩 상수 하나를 **세 갈래**(폴백 없는 과부하 차단·기타 4xx/5xx·일반 예외)가 공유한다. 이 값은 폴백 없는 프로바이더 완화 로직을 구현하며 새로 정한 게 아니라, 그 이전부터 "기타 4xx/5xx·일반 예외" 차단에 쓰이던 기존 값을 그대로 재사용한 것 — `permit-wait-timeout-seconds`(기본 60초)와 비슷한 수준이라 재사용에 무리가 없었다. `app.llm.default-provider-concurrency`/`app.llm.permit-wait-timeout-seconds`와 달리 **프로퍼티로 외부화되어 있지 않다** — 값을 바꾸려면 코드 수정이 필요하다.
   - 더 짧게(예: 10~20초) 바꾸면 일시적 장애에서 더 빨리 회복되지만, 실제 서버 복구가 그보다 오래 걸리는 상황이면 재시도가 더 잦아져(연결·요청·로그 비용만 반복) 실질적인 다운타임 단축 효과 없이 노이즈만 늘 수 있다.
   - 세 갈래가 상수 하나를 공유하므로, 폴백 없는 과부하 차단만 다르게(예: 10초) 가져가고 싶다면 상수를 분리해야 한다.
 
@@ -297,7 +297,7 @@ app.indexing.keyword-batch-size=${INDEXING_KEYWORD_BATCH_SIZE:2}
 │    크기 = providers[N].concurrency, 미설정 시 default-provider-    │
 │           concurrency(기본 3)                                      │
 │                                                                     │
-│  요청 도착 → tryAcquire(permit-wait-timeout-seconds, 기본 20초)     │
+│  요청 도착 → tryAcquire(permit-wait-timeout-seconds, 기본 60초)     │
 │    ├─ 획득 성공 → LLM 호출 → 응답 후 permit 반환                    │
 │    └─ 대기 상한 초과 → LlmBackpressureException                    │
 │          → HTTP 429 + Retry-After (RAG-LLM-002)                    │
@@ -326,7 +326,7 @@ app.indexing.keyword-batch-size=${INDEXING_KEYWORD_BATCH_SIZE:2}
 |---|---|---|---|
 | `app.llm.default-provider-concurrency` | `LLM_DEFAULT_PROVIDER_CONCURRENCY` | `3` | 프로바이더별 동시 처리 상한 기본값(개별 프로바이더가 `concurrency`를 지정하지 않을 때) |
 | `app.llm.providers[N].concurrency` | — (인덱스 프로퍼티) | 위 기본값 | 프로바이더별 개별 오버라이드 — 서버의 실제 `--parallel` 값에 맞춘다 |
-| `app.llm.permit-wait-timeout-seconds` | `LLM_PERMIT_WAIT_TIMEOUT_SECONDS` | `20` | 슬롯 대기 상한(초). `LLM_READ_TIMEOUT_SECONDS`(기본 180)보다 훨씬 짧게 유지해 사용자가 오래 기다리지 않고 빠른 429를 받도록 함 |
+| `app.llm.permit-wait-timeout-seconds` | `LLM_PERMIT_WAIT_TIMEOUT_SECONDS` | `60` | 슬롯 대기 상한(초). `LLM_READ_TIMEOUT_SECONDS`(기본 600)보다 훨씬 짧게 유지해 사용자가 오래 기다리지 않고 빠른 429를 받도록 함 |
 
 SSE 스트리밍에서는 `error.llm.backpressure` 메시지("현재 요청이 몰려 있습니다. 잠시 후 다시 시도해 주세요.")로 우아하게 종료된다(`StreamingAgentService`). REST/HTMX 블로킹 경로는 `GlobalExceptionHandler`가 `RagException.retryAfterSeconds()`를 읽어 `Retry-After` 헤더를 자동 부착한다.
 
