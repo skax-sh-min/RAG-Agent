@@ -41,13 +41,15 @@ java -Djarmode=tools -jar target/rag-agent-*.jar extract --destination target/ex
 
 > **벡터 스토어 백엔드** — 기본은 ChromaDB. `VECTORSTORE_TYPE=sqlite-vec`로 설정하면 벡터를 SQLite 파일에 저장하고 아래 **"Chroma 서버" 단계를 생략**할 수 있습니다 (운영자가 제공하는 `vec0` 네이티브 확장 필요 — [OPERATOR_MANUAL.md](documents/OPERATOR_MANUAL.md) 참조). 인터넷·Docker 없이 sqlite-vec + 로컬 llama-server로만 돌리는 폐쇄망 구성은 [OPERATOR_MANUAL.md §4.5](documents/OPERATOR_MANUAL.md#45-폐쇄망air-gapped--노-도커-실행) 참조.
 
+> **Chroma 버전 — v2 API 필수.** Spring AI 1.1.8의 `ChromaApi`는 `/api/v2/tenants/{tenant}/databases/{database}/…` 경로만 호출하는데 tenant/database 개념은 Chroma v1 API에 존재하지 않으므로, **v1 시절 서버(0.5.x 이하)와는 호환되지 않습니다**. 아래 명령과 `docker-compose.yml`은 `:latest` 대신 `chromadb/chroma:1.0.21`로 태그를 고정합니다 — Chroma는 메이저 업그레이드에서 HTTP API를 바꾼 전례가 있어 `:latest`는 어느 날 조용히 앱을 깨뜨릴 수 있습니다. 버전을 올릴 땐 의도적으로 이 태그를 바꾸세요.
+
 #### 개발 모드 (소스 직접 실행)
 
 ```bash
 # 1. Chroma 서버 (별도 터미널)
 docker run --rm -p 8001:8000 \
   -v "$(pwd)/data/chroma:/data" \
-  chromadb/chroma:latest
+  chromadb/chroma:1.0.21
 
 # 2. 환경변수 설정
 cp .env.example .env
@@ -62,7 +64,7 @@ mvn spring-boot:run
 # 1. Chroma 서버 (별도 터미널)
 docker run --rm -p 8001:8000 \
   -v "$(pwd)/data/chroma:/data" \
-  chromadb/chroma:latest
+  chromadb/chroma:1.0.21
 
 # 2. 환경변수 로드 후 JAR 실행
 export $(grep -v '^#' .env | xargs)
@@ -80,7 +82,7 @@ container system start
 # 2. Chroma 시작 (별도 터미널)
 container run --rm -p 8001:8000 \
   -v "$(pwd)/data/chroma:/data" \
-  chromadb/chroma:latest
+  chromadb/chroma:1.0.21
 
 # 3. 환경변수 로드 후 실행
 export $(grep -v '^#' .env | xargs)
@@ -139,14 +141,37 @@ container system stop
 | `CHROMA_PORT` | — | `8001` | Chroma 서버 포트 (chroma 백엔드) |
 | `DATA_DIR` | — | `./data` | 문서·레지스트리·SQLite DB 저장 경로 |
 
+### 이미지 처리 / 속도 제한 / 감사 로그
+
+| 변수 | 기본값 | 설명 |
+|------|--------|------|
+| `IMAGE_DESCRIPTION_ENABLED` | `true` | `LazyVisionService` on/off (`app.image-description.enabled`). `@ConditionalOnProperty` 빈 게이트라 **재기동 필요**. `false`면 이미지 마커만 저장하고 검색 시 Vision 호출 없음 |
+| `IMAGE_OCR_ENABLED` | `true` | 스캔 PDF 페이지의 Tesseract OCR (`OcrService`, 동일한 구조적 빈 게이트) |
+| `IMAGE_OCR_TESSDATA_PATH` | (빈 값) | Tesseract `tessdata` 디렉터리 절대경로. 비우면 `TESSDATA_PREFIX` 환경변수 → 시스템 기본 경로 순으로 탐색 |
+| `IMAGE_CLASSIFY_TYPE` | `true` | 설명 생성 전 이미지 유형(다이어그램/스크린샷/차트/사진) 분류 후 유형별 Vision 프롬프트 선택 |
+| `DOCX_EMF_CONVERT` | `true` | DOCX EMF 벡터 이미지를 Batik으로 PNG 변환 (추가 설치 불필요) |
+| `DOCX_WMF_CONVERT` | `false` | DOCX WMF 이미지를 LibreOffice headless로 변환 (`soffice`가 PATH에 있어야 해서 기본 off). 끄면 해당 이미지는 `[이미지(변환불가): …]` 마커로 남음 |
+| `RATE_LIMIT_ENABLED` | `true` | 사용자별 토큰 버킷 전체 스위치 (`app.rate-limit.*`) |
+| `RATE_LIMIT_CHAT_PER_MINUTE` | `60` | 사용자당 `/chat` 분당 요청 수 |
+| `RATE_LIMIT_UPLOAD_PER_MINUTE` | `10` | 문서 업로드 분당 요청 수 |
+| `RATE_LIMIT_SYNC_PER_MINUTE` | `3` | 폴더 동기화 분당 요청 수 |
+| `RATE_LIMIT_IMAGE_PER_MINUTE` | `300` | `/images/` 분당 요청 수 |
+| `RATE_LIMIT_DEFAULT_PER_MINUTE` | `120` | 그 외 경로 기본값 |
+| `AUDIT_ENABLED` | `true` | 감사 이벤트를 `data/audit/audit.log`에 기록 (`app.audit.*`) |
+| `AUDIT_MAX_FILE_SIZE` | `10MB` | 롤링 크기 기준 — Logback `AUDIT_FILE` appender의 롤오버 기준이기도 함 |
+| `AUDIT_MAX_HISTORY_DAYS` | `7` | 압축된 감사 파일 보관 일수 |
+| `AUDIT_TOTAL_SIZE_CAP` | `100MB` | `data/audit/` 전체 크기 상한 |
+
+> `app.image-description.mode`·`app.image-description.min-image-bytes`는 바인딩만 남아 있고 **읽는 코드가 없습니다** — strip/describe 판단은 업로드 시 "이미지 설명 추가" 체크박스와 `LazyVisionService`의 질의 시점 캐시로 옮겨갔습니다. 그래서 환경변수도 일부러 만들지 않았습니다.
+
 ### RAG 튜닝
 
 | 변수 | 기본값 | 권장 범위 | 설명 |
 |------|--------|-----------|------|
-| `CHUNK_SIZE` | `800` | 300 ~ 2000 | 문서 청크 크기 (문자 수) |
-| `CHUNK_OVERLAP` | `100` | 0 ~ CHUNK_SIZE × 0.25 | 청크 경계 문맥 보완용 중복 문자 수 |
-| `MIN_CHUNK_SIZE` | `300` | 50 ~ CHUNK_SIZE × 0.25 | 너무 작은 청크를 인접 청크와 병합할 최소 길이 기준 |
-| `SEARCH_TOP_K` | `7` | 2 ~ 15 | 벡터 검색 반환 문서 수 |
+| `CHUNK_SIZE` | `1500` | 300 ~ 2000 | 문서 청크 크기 (문자 수) |
+| `CHUNK_OVERLAP` | `0` | 0 ~ CHUNK_SIZE × 0.25 | 청크 경계 문맥 보완용 중복 문자 수. 기본값 `0` — 섹션 인식 분할이 이미 소제목·부모 헤딩 컨텍스트를 청크에 붙여 주고, `0`이면 문서 내보내기(아래 참고)의 재조립 결과가 원본과 정확히 일치함 |
+| `MIN_CHUNK_SIZE` | `500` | 50 ~ CHUNK_SIZE × 0.25 | 너무 작은 청크를 인접 청크와 병합할 최소 길이 기준 |
+| `SEARCH_TOP_K` | `8` | 2 ~ 15 | 벡터 검색 반환 문서 수 |
 | `SEARCH_SIMILARITY_THRESHOLD` | `0.0` | 0.0 ~ 0.75 | 청크 유지 최소 코사인 유사도 (`0.0`=전체 수용) |
 | `SEARCH_MULTIQUERY_ENABLED` | `true` | true/false | 검색 전 질의 다중 확장 여부 |
 | `SEARCH_MULTIQUERY_MIN_LENGTH` | `15` | 0 ~ 20 | 이 길이 미만 질의는 확장 생략 (`0`=항상 확장). 확장이 실행될 때도 원본 질의 검색이 그 뒤로 대기하지 않고 병렬 실행됨 |
@@ -347,15 +372,21 @@ rag_java/
 - **ReAct 재검색** — 증거 부족 시 최대 2회 자동 재검색
 - **Critic 검증** — 생성된 답변이 문서에 근거하는지 LLM이 이중 검증
 - **PROGRESSIVE 모드** — COST_FIRST로 시작 → 품질 임계값 미달 시 PREMIUM 프로바이더로 재실행 + 업그레이드 배지 표시
+- **no-auth 모드 방문자별 채팅 분리** — `app.auth.guest-identity`(`shared`/`ip`/`cookie`/`hybrid`)로 접속자마다 사이드바 스레드·대화 이력을 분리. 저장 계층 변경 0 — 모든 테이블이 이미 `user_id` 축으로 격리돼 있어 인증 필터가 주입하는 id 한 곳만 방문자별로 바꾸면 됨. `hybrid`(권장)는 장수 `rag_visitor` 쿠키가 있으면 그것을, 없으면 접속 IP에서 유도해 쿠키로 저장 — DHCP 갱신(쿠키가 이김)과 쿠키 삭제(같은 IP면 복구)를 모두 견딤. id는 영속 서버 키로 HMAC한 `guest-<hex>`라 원문 IP가 DB에 남지 않고, 접두사 덕분에 나중에 실계정으로 이관·정리할 대상을 식별할 수 있음. 업로드 문서는 공유 유지. 기본값 `shared`(회귀 0)
+- **클라이언트 IP 신뢰 판정 일원화** — `app.trust-forwarded-for`(기본 `false`)가 속도 제한과 방문자 식별 양쪽에서 `X-Forwarded-For` 신뢰 여부를 결정. 끄면 헤더를 위조해도 속도 제한을 리필하거나 다른 방문자 신원을 가로챌 수 없고, 켜면(Caddy 등 프록시 뒤에서는 필수) 모든 방문자가 프록시 IP 하나로 뭉치지 않고 실제 IP로 식별됨
 - **속도 제한** — Bucket4j + Caffeine 유저별 토큰버킷; 429 `RAG-RATE-001` + `Retry-After` 헤더; `app.rate-limit.*`로 설정
 - **감사 로그** — Logback 롤링 파일에 구조화된 이벤트 기록; `app.audit.*`로 설정
 - **이미지 처리 파이프라인** — PDF/PPTX/DOCX 이미지 추출 → `data/images/{imageId}/` 저장(문서 SHA-256 기반 해시 키 — 문서 자체의 `docId`와는 별개이며, 긴 파일명이 이미지마다 반복 저장되는 것을 방지); PPTX에서 사진 위에 강조 원·화살표 같은 주석 도형이 겹쳐 있으면 하나의 합성 이미지로 병합(`app.pptx-image.merge-annotated-pictures`), 표 위에 겹친 주석 도형도 표+도형 합성(표는 MD 표로도 유지)하며 실제 Ctrl+G 그룹·SmartArt는 각 한 장으로 유지; 앵커에 안 겹친 느슨한 도형끼리의 병합은 `app.pptx-image.rasterize-shapes=true`일 때만(기본 off). DOCX도 사진과 같은 문단의 레거시 VML 주석 도형(사각형/원/선)을 하나로 병합(`app.docx-image.merge-annotated-shapes` — POI가 DOCX 도형 좌표를 노출하지 않아 같은 문단 근사 방식); 검색 시점 Lazy Vision 설명 생성 (SQLite 캐시); 답변 버블에 이미지 썸네일 표시
+- **채팅 중 이미지 분석 진행 표시 + 건너뛰기** — 검색 결과에 아직 청크 텍스트에 설명이 임베딩되지 않은 이미지가 포함돼 있으면 답변 생성 전에 Lazy Vision이 해당 이미지를 분석하며, 헤더 배지에 "이미지 분석 중 (2/5)"처럼 분석 완료 개수가 실시간으로 표시됨. 옆의 **건너뛰기** 링크는 *대기*만 중단할 뿐 — 분석 자체는 백그라운드에서 계속 진행되어 SQLite 캐시에 저장되므로 다음에 같은 이미지가 다시 검색되면 즉시 재사용됨. 업로드 시 "이미지 설명 추가"로 이미 `[이미지 설명: ...]`이 청크에 임베딩된 이미지는 쿼리 시점에 재분석하지 않음
 - **이미지 유형 분류** — diagram / screenshot / chart / photo / other 분류 후 유형별 전용 Vision 프롬프트 적용
 - **스캔 PDF OCR** — Tesseract OCR (kor+eng)로 텍스트 없는 페이지 처리 (`app.image-description.ocr-enabled=true`)
 - **EMF/WMF 변환** — DOCX Windows Metafile 이미지를 Batik(EMF) 또는 LibreOffice headless(WMF)로 PNG 변환
 - **멀티턴 대화** — `thread_id` 기반 대화 이력 유지 (SQLite WAL, 재시작 후에도 영속)
 - **메시지 버블 복원** — `/chat/{threadId}` 재진입 시 이전 turn 메시지 버블 서버 렌더링
 - **출처 hover 미리보기** — `SourceRef` 구조체 기반 Bootstrap Popover, 출처 hover 시 청크 텍스트 200자 미리보기; 모바일이 아닌 화면에서는 팝오버 폭을 약 2배로 넓히고 글자 크기를 살짝 줄여 줄바꿈을 줄임
+- **청크 편집기 실시간 미리보기** — 넓은 PC 화면에서는 `/admin` 청크 편집 오프캔버스가 마크다운(이미지·표 포함) 실시간 미리보기와 텍스트 편집창으로 나뉘어 표시되며, 입력하는 대로 미리보기가 갱신됨. 좁은 화면은 기존처럼 편집창만 표시
+- **소제목 번호 생성 기본값 자동 조정** — 업로드 시 "소제목 숫자 생성" 체크박스가 PPTX를 선택하면 자동으로 해제됨(PPTX에는 서버에서 애초에 적용되지 않음; PDF는 영향 없이 체크 유지), PPTX와 다른 형식을 함께 선택하면 옵션이 파일별이 아니라 배치 전체에 하나만 적용되는 구조상 나눠서 업로드하라는 경고가 표시됨
+- **문서 내보내기 (MD/TXT/DOCX)** — 문서 목록 각 행의 **내보내기** 버튼(관리자 전용)이 저장된 변환 MD가 아니라 현재 색인된 청크를 기준으로 문서를 재구성함 — `/admin` 청크 편집이 그대로 반영됨. `ChunkReassembler`가 `ChunkSplitter`가 검색을 위해 일부러 벌여 놓은 중복(재주입된 소제목, 부모 챕터 breadcrumb, 잘린 코드펜스 마커, 반복된 표 헤더, 슬라이딩 윈도우 overlap)을 렌더링 전에 걷어내 원문에 가까운 결과를 만듦 — 실제 335청크 문서로 검증한 결과 원본 대비 글자 수 오차 0.001%. MD는 이미지가 있으면 ZIP으로 함께 받고(원본 파일이 사라진 이미지는 깨진 링크 대신 `(이미지 없음: …)` 안내), DOCX는 POI로 이미지를 위치에 맞게 임베드함 — 글머리표 뒤·문장 중간 마커는 가운데 정렬된 그림 문단으로 내려가고, 표 셀 안 마커는 그 칸 안에 칸 너비로 삽입됨. 코드 블록은 테두리가 있는 1×1 표 안에 좌측 정렬·고정폭으로 렌더링되며 `//`·`#`·`/* … */` 주석만 초록색으로 표시(문자열 리터럴을 추적하므로 `"http://…"`는 칠하지 않음). 문서별 실제 인덱싱 당시 `CHUNK_OVERLAP` 값이 `doc_registry`에 기록되어(기존 문서는 기동 시 자동 백필) 이후 설정을 바꿔도 예전 문서의 내보내기 결과가 틀어지지 않음. PPTX 내보내기는 아직 미지원
 - **코드 syntax highlight** — DOMPurify sanitize 후 highlight.js 적용, 다크 모드 연동
 - **LLM 사용량 대시보드** — 프로바이더별 일간·주간·월간 토큰 사용량, Chart.js 일별 히스토리 차트, Circuit Breaker 카운트다운; 임베딩 사용량은 채팅과 분리 집계(`embed:<model>`, usage 미반환 서버는 근사치 폴백); 사용 이력 없는 비활성 프로바이더는 자동 숨김, 설정에서 제거된 orphan 기록은 관리자가 카드에서 삭제 가능
 - **문서 버전 관리** — 버전별 격리 (chroma: 컬렉션 분리 / sqlite-vec: `version` partition key)

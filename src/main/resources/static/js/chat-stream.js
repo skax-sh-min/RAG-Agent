@@ -41,8 +41,21 @@
         return new Date().toLocaleTimeString('ko-KR', {hour: '2-digit', minute: '2-digit', hour12: false});
     }
 
+    let idSeq = 0;
+
+    /**
+     * Unique-within-this-page id for a streaming bubble's DOM element.
+     *
+     * Deliberately does NOT use crypto.randomUUID(): that API only exists in a secure context
+     * (HTTPS or localhost). Served over plain HTTP from a LAN address — e.g. a colleague opening
+     * http://10.x.x.x:8080 while the host itself works fine on localhost — it is undefined, and
+     * this threw on the first line of submitStream(), before the user's own bubble was appended.
+     * The rejection was never awaited or caught, so the send silently did nothing: no bubble, no
+     * request, no server log. This id only has to be unique within one page, so a counter plus a
+     * random suffix is sufficient and works everywhere.
+     */
     function genId() {
-        return crypto.randomUUID().replace(/-/g, '').substring(0, 8);
+        return 'b' + (idSeq++).toString(36) + Math.random().toString(36).slice(2, 10);
     }
 
     function isNearBottom(el) {
@@ -104,6 +117,8 @@
                 <div id="stream-stage-${bubbleId}" class="stream-stage small text-muted mb-1">
                     <span class="spinner-border spinner-border-sm me-1" role="status"></span>
                     <span id="stream-stage-text-${bubbleId}">질문 분석 중...</span>
+                    <button type="button" id="stream-skip-images-${bubbleId}"
+                            class="btn btn-sm btn-link p-0 ms-2 d-none" style="font-size:0.75rem; vertical-align:baseline;">건너뛰기</button>
                 </div>
                 <div id="stream-content-${bubbleId}" class="md-content stream-content stream-cursor"></div>
                 <div id="stream-images-${bubbleId}"></div>
@@ -111,6 +126,31 @@
                 <div id="stream-meta-${bubbleId}" class="mt-2 d-flex align-items-center flex-wrap gap-2" style="font-size:0.72rem;"></div>
             </div>`;
         document.getElementById('chat-messages').appendChild(wrap);
+
+        const skipBtn = document.getElementById(`stream-skip-images-${bubbleId}`);
+        if (skipBtn) skipBtn.addEventListener('click', () => skipImageAnalysis(bubbleId));
+    }
+
+    /**
+     * "건너뛰기" click during the "이미지 분석 중 (N/M)" stage — tells the server (still running
+     * this same turn) to stop waiting on the remaining Lazy Vision calls, not to abort the turn
+     * (that's the separate 중지/stop button — see setStreamingUiState). Fire-and-forget: the next
+     * stage event (however the server proceeds) is what actually updates the badge, this call
+     * just disables the button so a slow double-click can't double-fire it.
+     */
+    function skipImageAnalysis(bubbleId) {
+        const skipBtn = document.getElementById(`stream-skip-images-${bubbleId}`);
+        if (skipBtn) skipBtn.disabled = true;
+
+        const threadIdInput = document.querySelector('#chat-form input[name="threadId"]');
+        const threadId = threadIdInput ? threadIdInput.value : '';
+        if (!threadId) return;
+
+        fetch('/ui/chat/stream/skip-images', {
+            method: 'POST',
+            headers: typeof getCsrfHeaders === 'function' ? getCsrfHeaders() : {},
+            body: new URLSearchParams({ threadId }),
+        }).catch(() => {}); // best-effort — a failed skip request just means the wait continues
     }
 
     // ── SSE event handlers ────────────────────────────────────────────────────
@@ -118,6 +158,11 @@
     function onStage(bubbleId, data) {
         const el = document.getElementById(`stream-stage-text-${bubbleId}`);
         if (el) el.textContent = data.text || STAGE_LABELS[data.id] || data.id;
+        // "건너뛰기" only makes sense while the server is actually waiting on image analysis —
+        // every other stage (including the very next one once analysis finishes or is skipped)
+        // hides it again, so it can never linger on an unrelated stage badge.
+        const skipBtn = document.getElementById(`stream-skip-images-${bubbleId}`);
+        if (skipBtn) skipBtn.classList.toggle('d-none', data.id !== 'image_analysis');
         // PROGRESSIVE upgrade: clear accumulated content so premium answer re-fills
         if (data.id === 'upgrade') {
             const contentEl = document.getElementById(`stream-content-${bubbleId}`);
@@ -146,6 +191,7 @@
     function onRetry(bubbleId, data) {
         const contentEl = document.getElementById(`stream-content-${bubbleId}`);
         if (!contentEl) return;
+        removeVerifyingIndicator(bubbleId); // strip before reading raw text below
         const rawText = contentEl.textContent || '';
 
         // Superseded-answers container, kept above the live content.
@@ -243,13 +289,40 @@
         scrollToBottom();
     }
 
+    /**
+     * Streaming has finished but the turn isn't done — a blocking sufficiency+grounded LLM
+     * check (several seconds to tens of seconds) runs before the next event. Append a small
+     * indicator as the last child of the content element so the existing .stream-cursor
+     * ::after pseudo-element (still on the parent) keeps blinking right after it, same as
+     * during token streaming. The indicator is a real DOM node (not raw text appended to
+     * contentEl directly) precisely so removeVerifyingIndicator() can strip it cleanly before
+     * onRetry()/onDone()/onAborted() read/render the raw answer text.
+     */
+    function onVerifying(bubbleId) {
+        const contentEl = document.getElementById(`stream-content-${bubbleId}`);
+        if (!contentEl || document.getElementById(`stream-verifying-${bubbleId}`)) return;
+        const indicator = document.createElement('span');
+        indicator.id = `stream-verifying-${bubbleId}`;
+        indicator.className = 'text-muted small ms-1';
+        indicator.textContent = '(응답결과 검증 중)';
+        contentEl.appendChild(indicator);
+        scrollToBottom();
+    }
+
+    /** Strips the "verifying" indicator span before anything reads contentEl's raw text. */
+    function removeVerifyingIndicator(bubbleId) {
+        document.getElementById(`stream-verifying-${bubbleId}`)?.remove();
+    }
+
     function onDone(bubbleId, data) {
         const contentEl = document.getElementById(`stream-content-${bubbleId}`);
         const stageEl   = document.getElementById(`stream-stage-${bubbleId}`);
         const metaEl    = document.getElementById(`stream-meta-${bubbleId}`);
 
-        // 1. Remove streaming cursor
+        // 1. Remove streaming cursor + the "verifying" indicator (if the turn ended right after
+        //    a verification pass, before markdown rendering picks up contentEl's raw text below).
         if (contentEl) contentEl.classList.remove('stream-cursor');
+        removeVerifyingIndicator(bubbleId);
 
         // Capture raw (pre-render) answer length for the char-count metadata below —
         // must happen before markdown rendering replaces textContent with rendered HTML.
@@ -319,6 +392,7 @@
     /** User-initiated stop (AbortController). Keeps whatever partial answer already streamed in. */
     function onAborted(bubbleId) {
         clearRetryArtifacts(bubbleId);
+        removeVerifyingIndicator(bubbleId);
         const stageEl = document.getElementById(`stream-stage-${bubbleId}`);
         if (stageEl) stageEl.remove();
 
@@ -415,13 +489,14 @@
             return;
         }
         switch (name) {
-            case 'stage':   onStage(bubbleId, data);          break;
-            case 'sources': onSources(bubbleId, data);        break;
-            case 'images':  onImages(bubbleId, data);         break;
-            case 'token':   onToken(bubbleId, data.text);     break;
-            case 'retry':   onRetry(bubbleId, data);          break;
-            case 'done':    onDone(bubbleId, data);           break;
-            case 'error':   onError(bubbleId, data.message);  break;
+            case 'stage':     onStage(bubbleId, data);          break;
+            case 'sources':   onSources(bubbleId, data);        break;
+            case 'images':    onImages(bubbleId, data);         break;
+            case 'token':     onToken(bubbleId, data.text);     break;
+            case 'verifying': onVerifying(bubbleId);            break;
+            case 'retry':     onRetry(bubbleId, data);          break;
+            case 'done':      onDone(bubbleId, data);           break;
+            case 'error':     onError(bubbleId, data.message);  break;
         }
     }
 

@@ -11,6 +11,7 @@ import com.example.ragagent.model.ThreadMeta;
 import com.example.ragagent.repository.MemoryRepository;
 import com.example.ragagent.security.AppUserDetails;
 import com.example.ragagent.service.AgentService;
+import com.example.ragagent.service.ChatImageAnalysisSkipRegistry;
 import com.example.ragagent.service.ConversationSummarizerService;
 import com.example.ragagent.service.CuratedQaService;
 import com.example.ragagent.service.MemoryService;
@@ -70,6 +71,7 @@ class ChatControllerHtmxTest {
     @MockitoBean LlmRouter llmRouter;
     @MockitoBean ChatModel chatModel;
     @MockitoBean ThreadContextResolver threadContextResolver;
+    @MockitoBean ChatImageAnalysisSkipRegistry imageSkipRegistry;
 
     private ChatResponse sampleResponse() {
         return new ChatResponse(
@@ -215,5 +217,16 @@ class ChatControllerHtmxTest {
                 .andExpect(model().attribute("curatedEmbedFailedTurnIds", Set.of(1L)));
 
         verify(curatedQaService).findFailedTurnIds(List.of(1L, 2L));
+    }
+
+    @Test
+    @DisplayName("POST /ui/chat/stream/skip-images — registry.requestSkip(threadId) 호출 + 204")
+    void skipImageAnalysis_forwardsThreadIdToRegistry() throws Exception {
+        mvc.perform(post("/ui/chat/stream/skip-images")
+                        .param("threadId", "t1")
+                        .with(csrf()))
+                .andExpect(status().isNoContent());
+
+        verify(imageSkipRegistry).requestSkip("t1");
     }
 }

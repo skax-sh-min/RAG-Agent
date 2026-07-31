@@ -16,6 +16,8 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.util.List;
 import java.util.Locale;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -46,6 +48,32 @@ class StreamingAgentServiceTest {
     private AppProperties props;
     private SseEmitter emitter;
     private StreamingAgentService service;
+    /** Simulated nanosecond clock driving the idle watchdog — advanced explicitly by each test. */
+    private AtomicLong fakeNanos;
+
+    /** Moves the watchdog's clock forward by {@code ms} without sleeping. */
+    private void advanceMs(long ms) {
+        fakeNanos.addAndGet(TimeUnit.MILLISECONDS.toNanos(ms));
+    }
+
+    /**
+     * Gives the watchdog (a real scheduled task, ~{@code idleTimeout/6} ms period) time to sample
+     * the simulated clock at least once. Only affects how many times it runs, never its verdict —
+     * that comes solely from {@link #fakeNanos}, so extra delay under load can't flip the result.
+     * Used by the "must NOT abort" tests, where a watchdog that never got scheduled is also a pass.
+     */
+    private static void letWatchdogTick() throws InterruptedException {
+        Thread.sleep(250);
+    }
+
+    /**
+     * Waits for the watchdog to interrupt this (worker) thread. The generous ceiling costs nothing
+     * in practice — the interrupt aborts the sleep at the first watchdog tick — but means a
+     * scheduler starved by the parallel suite delays the test instead of failing it.
+     */
+    private static void awaitWatchdogInterrupt() throws InterruptedException {
+        Thread.sleep(5_000);
+    }
 
     @BeforeEach
     void setUp() {
@@ -58,8 +86,13 @@ class StreamingAgentServiceTest {
         props = mock(AppProperties.class);
         when(props.sseIdleTimeoutMs()).thenReturn(120_000L);
         emitter = mock(SseEmitter.class);
+        fakeNanos = new AtomicLong(0);
+        // Idle-watchdog clock is hand-advanced (see advanceMs) so these tests assert on simulated
+        // progress instead of wall-clock time — the suite runs test classes in parallel, where a
+        // CPU stall would otherwise be indistinguishable from a genuinely idle pipeline.
         service = new StreamingAgentService(agentGraph, memoryService, classifierService,
-                threadMetaService, new ObjectMapper(), messageSource, summarizerService, props);
+                threadMetaService, new ObjectMapper(), messageSource, summarizerService, props,
+                new ChatImageAnalysisSkipRegistry(), fakeNanos::get);
 
         when(memoryService.getHistory(any(), any())).thenReturn("");
         when(classifierService.classifyOnly(any(), any())).thenReturn("usage");
@@ -245,6 +278,23 @@ class StreamingAgentServiceTest {
         verify(emitter, org.mockito.Mockito.times(2)).send(any(SseEmitter.SseEventBuilder.class));
     }
 
+    // ── verifying 이벤트 (스트리밍 종료 ~ sufficiency evaluate() 사이 무음 구간 표시) ──────
+
+    @Test
+    @DisplayName("onVerifying() — done 이벤트 외에 verifying 이벤트가 추가로 1회 전송된다")
+    void run_onVerifying_sendsExtraEvent() throws Exception {
+        when(agentGraph.runStreaming(any(), any())).thenAnswer(inv -> {
+            GraphListener listener = inv.getArgument(1);
+            listener.onVerifying();
+            return resultState("답변");
+        });
+
+        service.run("u1", form(false, null), emitter);
+
+        // "done" 이벤트 + "verifying" 이벤트 = 2건.
+        verify(emitter, org.mockito.Mockito.times(2)).send(any(SseEmitter.SseEventBuilder.class));
+    }
+
     // ── Idle watchdog ───────────────────────────────────────────────────────
     // props.sseIdleTimeoutMs() is deliberately small here so the watchdog's own background
     // scheduled thread genuinely fires (and interrupts the calling thread, since run() is
@@ -254,9 +304,10 @@ class StreamingAgentServiceTest {
     @Test
     @DisplayName("idle watchdog — 진행 신호 없이 idle timeout 경과 시 실행 스레드를 인터럽트")
     void run_idleTimeout_interruptsWorkerWhenNoProgress() {
-        when(props.sseIdleTimeoutMs()).thenReturn(100L);
+        when(props.sseIdleTimeoutMs()).thenReturn(600L);
         when(agentGraph.runStreaming(any(), any())).thenAnswer(inv -> {
-            Thread.sleep(1000); // no listener activity during this — watchdog should fire well before 1s
+            advanceMs(5_000);   // no listener activity — simulated clock alone puts us far past idle
+            awaitWatchdogInterrupt();
             return resultState("답변");
         });
 
@@ -272,13 +323,16 @@ class StreamingAgentServiceTest {
     @Test
     @DisplayName("idle watchdog — 토큰이 계속 도착하면 누적 시간이 idle timeout을 넘겨도 인터럽트되지 않음")
     void run_activeProgress_doesNotTriggerIdleTimeout() throws Exception {
-        when(props.sseIdleTimeoutMs()).thenReturn(300L);
+        when(props.sseIdleTimeoutMs()).thenReturn(600L);
         when(agentGraph.runStreaming(any(), any())).thenAnswer(inv -> {
             GraphListener listener = inv.getArgument(1);
+            // 10 × 200ms = 2,000ms total, far past the 600ms idle window, but no single gap
+            // reaches it — each token resets the clock, which is exactly what must not abort.
             for (int i = 0; i < 10; i++) {
-                Thread.sleep(60); // well under the 300ms idle timeout — resets the clock each time
+                advanceMs(200);
                 listener.onToken("chunk" + i);
             }
+            letWatchdogTick();   // watchdog must sample and still find the stream healthy
             return resultState("최종 답변");
         });
 
@@ -286,6 +340,27 @@ class StreamingAgentServiceTest {
 
         assertThat(Thread.currentThread().isInterrupted())
                 .as("active token stream (total > idle timeout) must not be cut off").isFalse();
+        verify(emitter).complete();
+        verify(emitter, never()).completeWithError(any());
+    }
+
+    @Test
+    @DisplayName("idle watchdog — onVerifying() 호출도 진행 신호로 간주되어 idle timeout을 리셋한다")
+    void run_onVerifying_resetsIdleTimeout() {
+        when(props.sseIdleTimeoutMs()).thenReturn(600L);
+        when(agentGraph.runStreaming(any(), any())).thenAnswer(inv -> {
+            GraphListener listener = inv.getArgument(1);
+            advanceMs(400);          // under the 600ms idle window
+            listener.onVerifying();  // resets the clock — the slow evaluate() call this represents
+            advanceMs(400);          // 400+400 > 600 would trip the watchdog without that reset
+            letWatchdogTick();
+            return resultState("답변");
+        });
+
+        service.run("u1", form(false, null), emitter);
+
+        assertThat(Thread.currentThread().isInterrupted())
+                .as("onVerifying() should count as progress, not idle").isFalse();
         verify(emitter).complete();
         verify(emitter, never()).completeWithError(any());
     }

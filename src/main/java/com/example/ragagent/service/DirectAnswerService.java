@@ -2,6 +2,7 @@ package com.example.ragagent.service;
 
 import com.example.ragagent.agent.AgentState;
 import com.example.ragagent.config.AppProperties;
+import com.example.ragagent.llm.LlmCurlLogger;
 import com.example.ragagent.llm.LlmProvider;
 import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.TaskType;
@@ -151,6 +152,7 @@ public class DirectAnswerService {
             );
             OpenAiApi.ChatCompletionRequest request =
                     new OpenAiApi.ChatCompletionRequest(messages, provider.model(), temperature, true);
+            logDirectRequest(provider, request);
             provider.openAiApi().chatCompletionStream(request)
                     .mapNotNull(chunk -> {
                         if (chunk.choices() == null || chunk.choices().isEmpty()) return null;
@@ -182,6 +184,24 @@ public class DirectAnswerService {
                     .doOnNext(buf::append)
                     .blockLast();
             if (!buf.isEmpty()) tokenSink.accept(buf.toString());
+        }
+    }
+
+    /**
+     * The provider.stream()=true branch above calls {@link OpenAiApi} directly, bypassing
+     * {@code ChatModel} (and therefore {@code LoggingChatModel}) entirely to avoid
+     * {@code OpenAiChatModel.internalStream()}'s buffering — so it never showed up in logs at any
+     * level. Mirrors LoggingChatModel's TRACE(full curl)/DEBUG(endpoint+body) split via the shared
+     * {@link LlmCurlLogger}.
+     */
+    private void logDirectRequest(LlmProvider provider, OpenAiApi.ChatCompletionRequest request) {
+        if (!log.isDebugEnabled()) return;
+        try {
+            String endpoint = provider.baseUrl().replaceAll("/+$", "") + "/chat/completions";
+            String json = LlmCurlLogger.toCurlBodyJson(request);
+            LlmCurlLogger.log(log, "LLM", provider.name(), endpoint, provider.apiKey(), json);
+        } catch (Exception e) {
+            log.debug("[LLM curl] serialization error: {}", e.getMessage());
         }
     }
 }

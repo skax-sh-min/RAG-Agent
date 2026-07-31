@@ -39,6 +39,7 @@ RAG Agent 시스템 배포·설정·운영 가이드입니다.
    - 6.5 [설정 페이지 (/settings) — LLM/RAG 옵션 조회·핫 수정](#65-설정-페이지-settings--llmrag-옵션-조회핫-수정)
    - 6.6 [검색 품질 평가 하네스 (개발자용)](#66-검색-품질-평가-하네스-개발자용)
    - 6.7 [큐레이션 Q&A (좋아요 기반 지식 승격, §10.10)](#67-큐레이션-qa-좋아요-기반-지식-승격-1010)
+   - 6.8 [문서 내보내기](#68-문서-내보내기)
 7. [벡터 스토어 관리](#7-벡터-스토어-관리)
 8. [문제 해결](#8-문제-해결)
 9. [보안 설정](#9-보안-설정)
@@ -48,6 +49,7 @@ RAG Agent 시스템 배포·설정·운영 가이드입니다.
    - 9.4 [인증 토글 (no-auth 모드)](#94-인증-토글-no-auth-모드)
       - 9.4.1 [평문 no-auth 모드](#941-평문-no-auth-모드)
       - 9.4.2 [관리 전용 인증 (management-only)](#942-관리-전용-인증-management-only)
+      - 9.4.3 [접속자별 채팅 개인화 (`app.auth.guest-identity`)](#943-접속자별-채팅-개인화-appauthguest-identity)
 10. [운영 체크리스트](#10-운영-체크리스트)
 
 ---
@@ -214,10 +216,10 @@ copy .env.example .env
 
 | 변수 | 기본값 | 권장 범위 | 설명 |
 |------|--------|----------|------|
-| `CHUNK_SIZE` | `800` | 300 ~ 2000 | 청크 크기 (문자 수). 작을수록 정밀, 클수록 문맥 풍부 |
-| `CHUNK_OVERLAP` | `100` | 0 ~ CHUNK_SIZE × 0.25 | 청크 간 중복 (문자 수). 청크 경계 문맥 보완 전용 |
-| `MIN_CHUNK_SIZE` | `300` | 50 ~ CHUNK_SIZE × 0.25 | 청크/섹션 병합 최소 길이 기준. DOCX·TXT·MD는 이 값 미만인 챕터(헤딩) 섹션을 다음 섹션과 병합하고(단 상위=부모 헤딩 방향은 금지), 슬라이딩 분할 뒤에도 이보다 작은 청크는 직전 청크로 뒤로 병합한다(§청킹 상세는 PIPELINE.md §6.4) |
-| `SEARCH_TOP_K` | `7` | 2 ~ 15 | 벡터 검색 반환 문서 수. 높을수록 재현율↑, 토큰↑ |
+| `CHUNK_SIZE` | `1500` | 300 ~ 2000 | 청크 크기 (문자 수). 작을수록 정밀, 클수록 문맥 풍부 |
+| `CHUNK_OVERLAP` | `0` | 0 ~ CHUNK_SIZE × 0.25 | 청크 간 중복 (문자 수). 청크 경계 문맥 보완 전용. **기본값 0**은 §6.8 문서 내보내기의 유일한 휴리스틱 단계(overlap 제거)를 애초에 불필요하게 만들고, 섹션 인식 분할이 이미 소제목·부모 헤딩 컨텍스트를 청크에 붙여 주므로 문자 단위 중복의 실익이 크지 않다는 판단 |
+| `MIN_CHUNK_SIZE` | `500` | 50 ~ CHUNK_SIZE × 0.25 | 청크/섹션 병합 최소 길이 기준. DOCX·TXT·MD는 이 값 미만인 챕터(헤딩) 섹션을 다음 섹션과 병합하고(단 상위=부모 헤딩 방향은 금지), 슬라이딩 분할 뒤에도 이보다 작은 청크는 직전 청크로 뒤로 병합한다(§청킹 상세는 PIPELINE.md §6.4) |
+| `SEARCH_TOP_K` | `8` | 2 ~ 15 | 벡터 검색 반환 문서 수. 높을수록 재현율↑, 토큰↑ |
 | `SEARCH_SIMILARITY_THRESHOLD` | `0.0` | 0.0 ~ 0.75 | 청크 유지 최소 코사인 유사도. `0.0`=전체 수용. 운영 0.5~0.75 튜닝 시 골든셋 recall 확인 후 적용 |
 | `SEARCH_MULTIQUERY_ENABLED` | `true` | true/false | 검색 전 질의 다중 확장(LLM) 여부. `false`면 임계 경로 첫 LLM 콜 제거 |
 | `SEARCH_MULTIQUERY_MIN_LENGTH` | `15` | 0 ~ 20 | 이 길이(trim) 미만 질의는 확장 생략. `0`=항상 확장. 짧은 키워드 질의 TTFT↓(§10.8.1) |
@@ -423,18 +425,21 @@ LLM_ROUTING_MODE=QUALITY_FIRST
 
 #### 이미지 처리 (`app.image-description.*`)
 
-| 속성 | 기본값 | 설명 |
-|------|--------|------|
-| `app.image-description.enabled` | `true` | 검색 시점 Lazy Vision(`LazyVisionService`) 활성화 여부. `false`이면 이미지 마커만 저장하고 검색 시 LLM 호출 없음 |
-| `app.image-description.mode` | `strip` | `strip`: 이미지 마커를 텍스트에서 제거 / `describe`: Vision LLM으로 설명 생성 후 삽입 |
-| `app.image-description.classify-type` | `true` | 이미지 설명 전 유형(사진/도표/스크린샷 등) 분류 여부. 분류 결과를 프롬프트에 주입 |
-| `app.image-description.ocr-enabled` | `true` | 스캔 PDF 페이지에 대해 OCR 처리 활성화 여부 |
-| `app.image-description.min-image-bytes` | `1000` | 이 크기 미만의 이미지는 아이콘·구분선으로 간주하고 설명 생성 건너뜀 (바이트) |
-| `app.image-description.docx-emf-convert` | `true` | DOCX 내 EMF 벡터 이미지를 PNG로 변환 (Apache Batik — 추가 설치 불필요) |
-| `app.image-description.docx-wmf-convert` | `false` | DOCX 내 WMF 벡터 이미지를 PNG로 변환 (LibreOffice headless 필요 — EMF보다 변환 품질이 낮아 기본 비활성) |
+| 속성 | 환경변수 | 기본값 | 설명 |
+|------|----------|--------|------|
+| `app.image-description.enabled` | `IMAGE_DESCRIPTION_ENABLED` | `true` | 검색 시점 Lazy Vision(`LazyVisionService`) 활성화 여부. `false`이면 이미지 마커만 저장하고 검색 시 LLM 호출 없음. `@ConditionalOnProperty` 빈 게이트라 **재시작 필요** |
+| `app.image-description.classify-type` | `IMAGE_CLASSIFY_TYPE` | `true` | 이미지 설명 전 유형(사진/도표/스크린샷 등) 분류 여부. 분류 결과를 프롬프트에 주입 |
+| `app.image-description.ocr-enabled` | `IMAGE_OCR_ENABLED` | `true` | 스캔 PDF 페이지에 대해 OCR 처리 활성화 여부. `OcrService`의 빈 게이트라 **재시작 필요** |
+| `app.image-description.tessdata-path` | `IMAGE_OCR_TESSDATA_PATH` | (빈 값) | Tesseract `tessdata` 디렉터리 절대경로. 비우면 `TESSDATA_PREFIX` 환경변수 또는 시스템 기본 경로를 따름 |
+| `app.image-description.docx-emf-convert` | `DOCX_EMF_CONVERT` | `true` | DOCX 내 EMF 벡터 이미지를 PNG로 변환 (Apache Batik — 추가 설치 불필요) |
+| `app.image-description.docx-wmf-convert` | `DOCX_WMF_CONVERT` | `false` | DOCX 내 WMF 벡터 이미지를 PNG로 변환 (LibreOffice headless 필요 — EMF보다 변환 품질이 낮아 기본 비활성) |
 
-> **`mode=describe` 전제 조건**: `enabled=true` + Vision 모델 프로바이더 등록 (`type=VISION` 또는 `type=LIGHT_BOTH`).  
-> 프로바이더가 없으면 `strip`으로 자동 fallback됩니다.
+> **`mode` / `min-image-bytes`는 현재 코드에서 읽지 않습니다.** `ImageDescriptionProperties`에 바인딩만 되어 있고
+> 소비처가 없어(strip/describe 판단은 업로드 시 "이미지 설명 추가" 체크박스와 `LazyVisionService`의 질의 시점
+> 캐시로 옮겨감) 값을 바꿔도 동작이 달라지지 않습니다. 바인딩 호환을 위해 남겨둔 것이라 환경변수도 두지 않았습니다.
+
+> **이미지 설명 전제 조건**: `enabled=true` + Vision 모델 프로바이더 등록 (`type=VISION` 또는 `type=LIGHT_BOTH`).
+> 프로바이더가 없으면 설명 없이 마커만 남습니다.
 
 > **EMF/WMF 변환**: LibreOffice(`soffice`)가 PATH에 있어야 합니다. 없으면 변환이 건너뛰어지며 `[TIMEOUT:LIBREOFFICE]` 로그가 출력됩니다.
 
@@ -447,6 +452,21 @@ LLM_ROUTING_MODE=QUALITY_FIRST
 > 이미지 수가 많으면 시간이 걸릴 수 있어 `/documents` 업로드 화면에 "이미지 분석 중 (N/M)" 진행률이 별도
 > 단계로 표시됩니다(SSE `describing_images` 스테이지) — 직전 단계 메시지(예: "PPTX → Markdown 변환 중...")에
 > 멈춰 있는 것처럼 보이지 않도록 함. 상세는 [PIPELINE.md §6.3](PIPELINE.md#63-docx--md--임베딩-db-저장-상세-이미지-포함), UI는 [UI.md §3.2](UI.md#32-문서-관리-documentcontroller) 참고.
+>
+> **채팅 화면의 쿼리 시점 Lazy Vision — 진행 표시 + 건너뛰기**: 인덱싱 시점과 별개로, 검색된 청크가 아직
+> 설명 없는 이미지를 참조하면 답변 생성 전에 `LazyVisionService`가 그 이미지를 분석합니다(`RetrievalService`).
+> 이 대기 동안 채팅 화면 상단 배지에 "이미지 분석 중 (N/M)"이 표시되고(`GraphListener.onImageAnalysisProgress()`
+> → `stage` SSE 이벤트를 `id="image_analysis"`로 재사용), 사용자가 **건너뛰기**를 클릭하면
+> `POST /ui/chat/stream/skip-images`(`threadId` 파라미터)가 `ChatImageAnalysisSkipRegistry`에 신호를 보냅니다.
+> `LazyVisionService`는 이미 시작된 Vision 호출을 취소하지 않고 **대기만 멈춥니다** — 나머지는 백그라운드에서
+> 계속 진행돼 `image_descriptions` 캐시에 정상 저장되므로, 다음 검색에서 같은 이미지를 다시 만나면 즉시
+> 캐시 히트로 처리됩니다. 인덱싱 진행 표시(위 항목)와는 SSE 채널·스테이지 id가 다른 완전히 별개의 경로입니다.
+>
+> **이미 인덱싱 시점에 설명이 박힌 이미지는 재분석하지 않습니다**: 업로드 시 "이미지 설명 추가"를 체크해
+> 청크 텍스트에 `[이미지: ...]` 바로 뒤에 `[이미지 설명: ...]`이 이미 삽입돼 있으면, `RetrievalService`가
+> 그 이미지를 Lazy Vision 대상에서 아예 제외합니다(`RetrievalService.hasEmbeddedDescription()`). 이 설명은
+> `MarkdownCorrectionService`가 만드는 순간부터 청크 텍스트에만 존재하고 `image_descriptions` 테이블에는
+> 저장되지 않으므로, 이 필터가 없으면 매 턴 이 이미지를 캐시 미스로 오인해 불필요하게 재분석했을 것입니다.
 
 #### 소제목 숫자 생성 (`addHeadingNumbers`)
 
@@ -462,6 +482,14 @@ LLM_ROUTING_MODE=QUALITY_FIRST
 > PPTX의 `##`/`###` 헤딩은 슬라이드 제목·부제목 라벨(최대 2단계, 슬라이드마다 계산)일 뿐 문서 목차 같은
 > 계층 구조가 아니라서, 순번을 매기면 실제 구조와 무관한 숫자만 붙고 이미 있는 `[페이지: N]` 마커와도
 > 겹쳐 혼란을 줍니다.
+>
+> **업로드 화면의 자동 기본값**: 위 동작을 UI에도 그대로 반영해, `/documents` 업로드 화면은 선택된 파일에
+> PPTX가 하나라도 있으면 체크박스를 자동으로 해제합니다(순수 클라이언트 로직, 서버 검증과 무관). PDF는
+> 자동 해제 대상이 **아닙니다** — `PdfToMarkdownConverter`가 H2~H6 헤딩 자체를 만들지 않아 체크해도
+> 사실상 무해하기 때문입니다. PPTX와 다른 형식이 같은 배치에 섞이면 업로드가 배치 전체에 값 하나만
+> 전달하는 구조라 화면에 경고 토스트가 뜹니다(업로드 자체는 막지 않음). 이 기본값은 어디까지나 제안이라
+> 사용자가 업로드 직전 자유롭게 재설정할 수 있습니다 — 클라이언트 구현 상세는
+> [UI.md §3.2](UI.md#32-문서-관리-documentcontroller) 참고.
 
 > **MD 재인덱싱 시 자동 재검증**: `/admin` ↺ 버튼으로 재인덱싱하면, 저장된 MD에 번호 매겨진 헤딩이 하나
 > 라도 있을 때만 현재 헤딩 구조 기준으로 전체 번호를 다시 계산해 파일에도 반영합니다
@@ -485,14 +513,14 @@ LLM_ROUTING_MODE=QUALITY_FIRST
 
 애플리케이션 레벨 Rate Limiter (Bucket4j + Caffeine). 사용자 인증 시 userId, 미인증 시 IP 기준으로 버킷 분리.
 
-| 속성 | 기본값 | 설명 |
-|------|--------|------|
-| `app.rate-limit.enabled` | `true` | `false`로 설정하면 전체 비활성화 |
-| `app.rate-limit.chat-per-minute` | `60` | `/chat` 경로 — 분당 요청 수 |
-| `app.rate-limit.upload-per-minute` | `10` | `/documents` (업로드) 경로 — 분당 요청 수 |
-| `app.rate-limit.sync-per-minute` | `3` | `/documents/sync` 경로 — 분당 요청 수 |
-| `app.rate-limit.image-per-minute` | `300` | `/images/` 경로 — 분당 요청 수 |
-| `app.rate-limit.default-per-minute` | `120` | 그 외 경로 기본값 |
+| 속성 | 환경변수 | 기본값 | 설명 |
+|------|----------|--------|------|
+| `app.rate-limit.enabled` | `RATE_LIMIT_ENABLED` | `true` | `false`로 설정하면 전체 비활성화 |
+| `app.rate-limit.chat-per-minute` | `RATE_LIMIT_CHAT_PER_MINUTE` | `60` | `/chat` 경로 — 분당 요청 수 |
+| `app.rate-limit.upload-per-minute` | `RATE_LIMIT_UPLOAD_PER_MINUTE` | `10` | `/documents` (업로드) 경로 — 분당 요청 수 |
+| `app.rate-limit.sync-per-minute` | `RATE_LIMIT_SYNC_PER_MINUTE` | `3` | `/documents/sync` 경로 — 분당 요청 수 |
+| `app.rate-limit.image-per-minute` | `RATE_LIMIT_IMAGE_PER_MINUTE` | `300` | `/images/` 경로 — 분당 요청 수 |
+| `app.rate-limit.default-per-minute` | `RATE_LIMIT_DEFAULT_PER_MINUTE` | `120` | 그 외 경로 기본값 |
 
 초과 시 429 응답 + `Retry-After: {초}` 헤더 + `{"errorCode":"RAG-RATE-001","message":"..."}` body.
 
@@ -500,12 +528,15 @@ LLM_ROUTING_MODE=QUALITY_FIRST
 
 민감 작업(문서 업로드·삭제·동기화, 스레드 삭제 등)을 `data/audit/audit.log`에 JSON Lines 형식으로 기록.
 
-| 속성 | 기본값 | 설명 |
-|------|--------|------|
-| `app.audit.enabled` | `true` | `false`로 설정하면 감사 로그 미기록 |
-| `app.audit.max-file-size` | `10MB` | 롤링 전 최대 파일 크기 (Logback SizeAndTimeBasedRolling) |
-| `app.audit.max-history-days` | `7` | 압축 파일 보관 일수. 초과된 파일 자동 삭제 |
-| `app.audit.total-size-cap` | `100MB` | `data/audit/` 디렉터리 전체 상한. 초과 시 오래된 파일 삭제 |
+| 속성 | 환경변수 | 기본값 | 설명 |
+|------|----------|--------|------|
+| `app.audit.enabled` | `AUDIT_ENABLED` | `true` | `false`로 설정하면 감사 로그 미기록 |
+| `app.audit.max-file-size` | `AUDIT_MAX_FILE_SIZE` | `10MB` | 롤링 전 최대 파일 크기 (Logback SizeAndTimeBasedRolling) |
+| `app.audit.max-history-days` | `AUDIT_MAX_HISTORY_DAYS` | `7` | 압축 파일 보관 일수. 초과된 파일 자동 삭제 |
+| `app.audit.total-size-cap` | `AUDIT_TOTAL_SIZE_CAP` | `100MB` | `data/audit/` 디렉터리 전체 상한. 초과 시 오래된 파일 삭제 |
+
+> 크기·보관 3개 값은 `logback-spring.xml`이 `springProperty`로 읽어 `AUDIT_FILE` appender의 롤링 기준으로도
+> 쓰이므로, 환경변수로 바꾸면 로거 쪽에도 그대로 반영됩니다.
 
 #### 인증 (`app.auth.*`)
 
@@ -588,7 +619,7 @@ docker compose down
 # 1. Chroma 서버 실행 (별도 터미널)
 docker run -d --name chroma-server -p 8001:8000 \
   -v "$(pwd)/data/chroma:/chroma/chroma" \
-  chromadb/chroma:latest
+  chromadb/chroma:1.0.21
 
 # 2. 로그 확인
 docker logs -f chroma-server
@@ -614,7 +645,7 @@ container system start
 # 2. Chroma 서버 실행 (별도 터미널)
 container run -d --name chroma-server -p 8001:8000 \
   -v "$(pwd)/data/chroma:/chroma/chroma" \
-  chromadb/chroma:latest
+  chromadb/chroma:1.0.21
 
 # 3. 환경변수 로드 및 실행
 export $(grep -v '^#' .env | xargs)
@@ -630,7 +661,7 @@ container system stop
 ```bash
 docker run -d --name chroma-server -p 8001:8000 \
   -v "$(pwd)/data/chroma:/chroma/chroma" \
-  chromadb/chroma:latest &
+  chromadb/chroma:1.0.21 &
 set -a && source .env && set +a
 mvn spring-boot:run
 ```
@@ -639,7 +670,7 @@ mvn spring-boot:run
 
 ```cmd
 REM 1. Chroma 서버 (별도 CMD 창)
-docker run -d --name chroma-server -p 8001:8000 -v "%cd%\data\chroma:/chroma/chroma" chromadb/chroma:latest
+docker run -d --name chroma-server -p 8001:8000 -v "%cd%\data\chroma:/chroma/chroma" chromadb/chroma:1.0.21
 
 REM 2. 환경변수 로드
 for /f "usebackq tokens=1,* delims==" %A in (`findstr /v "^#" .env`) do SET %A=%B
@@ -724,6 +755,10 @@ Caddy는 Let's Encrypt 인증서를 자동으로 발급·갱신하므로 별도�
 ```
 
 외부에 8080 포트는 노출되지 않습니다. Caddy만 80/443을 받습니다.
+
+TLS를 앞단에서 종료하는 모든 구성(Caddy·nginx 등)에서는 앱 쪽에 **`TRUST_FORWARDED_FOR=true`가 필요합니다.** 켜지 않으면 앱이 보는 클라이언트 IP가 전부 프록시 주소가 되어, per-IP 속도 제한과 방문자 식별(`AUTH_GUEST_IDENTITY`)이 모든 사용자를 한 명으로 취급합니다 — [§9.4.3](#943-접속자별-채팅-개인화-appauthguest-identity) 참조.
+
+> **인터넷이 없는 환경**에서는 Let's Encrypt(ACME) 자동 발급만 불가능하며, Caddy 자체는 사내 CA 인증서나 내장 로컬 CA(`tls internal`)로 정상 동작합니다 — [§4.5-4](#45-폐쇄망air-gapped--노-도커-실행) 참조.
 
 ---
 
@@ -971,17 +1006,102 @@ export EMBED_DIMENSIONS=768          # ★ sqlite-vec 필수: 임베딩 모델 �
 
 # 외부 호출 차단(권장) + 비-TLS HTTP 직노출
 export LLM_ROUTING_MODE=LOCAL_ONLY
-export USE_CADDY_REVERSE_PROXY_HTTPS=false
+export USE_CADDY_REVERSE_PROXY_HTTPS=false   # ★ HTTP로 열 때 필수 — 아래 4) 참조
+                                             #   (true면 다른 PC에서 세션 쿠키가 폐기됨)
+# TRUST_FORWARDED_FOR는 프록시 없는 직노출이므로 기본값 false 유지 — 켜면 헤더 위조로
+# per-IP 제한 우회·타 방문자 신원 가로채기가 가능해집니다.
 
 java -jar target/rag-agent-*.jar
 ```
 
 #### 4) TLS / 리버스 프록시
 
-Caddy는 Docker 컨테이너이자 Let's Encrypt(인터넷)에 의존하므로 폐쇄망·노-도커에 부적합합니다. 택일:
+폐쇄망에서 **불가능한 것은 Let's Encrypt(ACME) 자동 발급뿐**입니다 — 도메인 소유를 인터넷으로 검증해야 하기 때문입니다. Caddy 자체는 단일 정적 바이너리라 Docker 없이 반입할 수 있고, 인증서만 다른 방법으로 조달하면 오프라인에서 정상 동작합니다.
 
-- **HTTP 직노출** — `USE_CADDY_REVERSE_PROXY_HTTPS=false`(세션 쿠키 `Secure` 해제, 안 그러면 HTTP에서 로그인 불가). 신뢰망 한정 권장.
-- **사내 역프록시 / 사설 CA** — 조직 표준 프록시(nginx 등)에서 TLS 종료 후 `:8080`으로 포워딩. `server.forward-headers-strategy=framework`(기본)로 `X-Forwarded-*` 인식.
+| 방식 | 인터넷 | 클라이언트 경고 | 비고 |
+|---|---|---|---|
+| Let's Encrypt (기본 `Caddyfile`) | **필요** | 없음 | ❌ 폐쇄망 불가 — 기동 시 ACME 실패 |
+| **사내 CA 발급 인증서** | 불필요 | 없음(이미 신뢰) | ✅ 사내 PKI가 있으면 최선 |
+| Caddy 내장 CA (`tls internal`) | 불필요 | root CA 배포 후 없음 | ✅ 사내 PKI가 없을 때 |
+| HTTP 직노출 | — | — | 신뢰망 한정. 아래 제약 참조 |
+
+기본 [`Caddyfile`](../Caddyfile)은 `{$DOMAIN:localhost}` 한 줄이라 실도메인을 넣으면 ACME를 시도합니다. 폐쇄망에서는 `tls` 지시자를 명시해 이를 우회합니다.
+
+```caddyfile
+# 사내 CA 발급 인증서 (권장 — 클라이언트가 이미 루트를 신뢰하므로 배포할 것이 없음)
+rag.내부도메인 {
+    tls /etc/caddy/cert.pem /etc/caddy/key.pem
+    reverse_proxy 127.0.0.1:8080
+}
+
+# 사내 PKI가 없을 때 — Caddy 내장 로컬 CA (완전 오프라인)
+rag.내부도메인 {
+    tls internal
+    reverse_proxy 127.0.0.1:8080
+}
+```
+
+`tls internal` 사용 시 Caddy가 생성한 루트(`/data/caddy/pki/authorities/local/root.crt`, 노-도커는 `$XDG_DATA_HOME/caddy/pki/...`)를 **각 클라이언트 PC 신뢰 저장소에 1회 설치**해야 경고가 사라집니다.
+
+**앱 쪽에 함께 필요한 설정** (TLS를 앞단에서 종료하는 모든 구성 공통 — nginx 등 조직 표준 프록시도 동일):
+
+```bash
+export USE_CADDY_REVERSE_PROXY_HTTPS=true   # 세션 쿠키 Secure 활성화
+export TRUST_FORWARDED_FOR=true             # ★ 프록시 뒤에서는 필수 — §9.4.3
+```
+
+`TRUST_FORWARDED_FOR`는 **TLS 옵션이 아니라 그 결과로 따라오는 설정**입니다. 프록시를 앞에 두면 앱이 보는 IP가 전부 프록시 주소가 되므로, 이 값을 켜지 않으면 per-IP 속도 제한과 방문자 식별(`AUTH_GUEST_IDENTITY`)이 **모든 사용자를 한 명으로 취급**합니다. 반대로 프록시 없이 직노출하는 구성에서는 반드시 `false`여야 합니다(헤더 위조로 우회·가로채기 가능). `server.forward-headers-strategy=framework`는 기본값이라 `X-Forwarded-*` 인식은 그대로 동작합니다.
+
+> **주의 1 — IP 직접 접속.** `https://10.x.x.x` 형태로 쓰려면 인증서에 IP SAN이 필요합니다. **호스트명 + 내부 DNS(또는 각 PC의 `hosts` 파일)** 방식이 훨씬 간단합니다.
+>
+> **주의 2 — HSTS.** 기본 `Caddyfile`은 `Strict-Transport-Security max-age=31536000`을 내보냅니다. 한 번 HTTPS로 접속한 호스트명은 브라우저가 1년간 HTTP 접속을 거부하므로, 자체 서명으로 시험할 때는 임시 호스트명을 쓰고 되돌릴 때 브라우저별 HSTS 항목을 삭제하세요.
+
+**HTTP 직노출을 선택하는 경우** — `USE_CADDY_REVERSE_PROXY_HTTPS=false`가 **반드시** 필요합니다. 세션 쿠키의 `Secure` 플래그가 남아 있으면 브라우저가 쿠키를 저장하지 않아 로그인이 되지 않고, no-auth 모드에서도 요청마다 세션이 새로 생겨 `threadId`가 계속 바뀝니다. 단, 이 문제는 **`http://localhost`에서는 드러나지 않습니다** — 브라우저가 localhost만 secure context로 취급하기 때문에, 서버 호스트에서 직접 열어보면 멀쩡하고 다른 PC에서만 깨집니다.
+
+같은 이유로 평문 HTTP LAN 접속에서는 브라우저의 secure-context 전용 기능이 비활성화됩니다 — **PWA 설치·서비스워커가 동작하지 않습니다**(채팅·문서 관리 등 핵심 기능은 정상). PWA가 필요하면 위 TLS 구성 중 하나를 택하세요.
+
+##### 전체 예시 — 폐쇄망 HTTPS + 접속자별 채팅 분리
+
+여러 사람이 각자의 대화 목록을 갖도록 하려면 **TLS 설정만으로는 부족합니다.** 실제 분리 스위치는 `AUTH_GUEST_IDENTITY`이고, 기본값 `shared`는 전원이 하나의 게스트를 공유합니다. 아래는 두 요구사항을 함께 만족하는 완전한 설정입니다.
+
+```bash
+# ── 방문자별 채팅 분리 ─────────────────────────────────────────────
+export AUTH_ENABLED=false            # 필수: 이 값이 false여야 게스트 식별이 동작
+export AUTH_GUEST_IDENTITY=hybrid    # ★ 실제 분리 스위치 (기본 shared = 전원 공유)
+#export AUTH_MANAGEMENT_ONLY=true    # 선택: 채팅은 열되 /admin·문서 관리만 로그인 요구
+
+# ── TLS를 Caddy에서 종료하는 구성 ──────────────────────────────────
+export USE_CADDY_REVERSE_PROXY_HTTPS=true   # 세션 쿠키 Secure 활성화
+export TRUST_FORWARDED_FOR=true             # ★ 프록시 뒤에서는 필수 (아래 설명)
+
+# ── 폐쇄망 공통 (위 3) 항목과 동일) ────────────────────────────────
+export LLM_ROUTING_MODE=LOCAL_ONLY
+export VECTORSTORE_TYPE=sqlite-vec
+```
+
+**두 옵션이 함께 필요한 이유**: `AUTH_GUEST_IDENTITY=hybrid`는 쿠키가 없는 첫 방문자를 **IP로 식별**합니다. 그런데 Caddy 뒤에서는 앱이 보는 IP가 전부 Caddy 주소이므로, `TRUST_FORWARDED_FOR=true`가 없으면 **모든 신규 방문자가 같은 id를 받아** 분리가 무너집니다. 반대로 프록시가 없는 직노출 구성이라면 이 값은 `false`여야 하며, 그때는 `getRemoteAddr()`가 이미 실제 클라이언트 IP이므로 분리가 정상 동작합니다.
+
+**`ip`가 아니라 `hybrid`를 권하는 이유** — 사내망에서 순수 IP 식별은 두 지점에서 깨집니다.
+
+| 상황 | `ip` | `hybrid` |
+|---|---|---|
+| DHCP 임대 갱신으로 IP 변경 | ❌ 이력 유실 | ✅ 쿠키가 이력 유지 |
+| NAT 뒤 여러 PC가 같은 IP | ❌ 한 명으로 뭉침 | ✅ 쿠키로 분리 |
+| 사용자가 쿠키 삭제 | — | ✅ 같은 IP면 원래 id로 복구 |
+
+**적용 후 확인** — 기동 로그에 다음 줄이 있어야 합니다:
+
+```
+[GUEST_ID] 방문자 식별 전략: hybrid
+```
+
+`shared (전 방문자가 하나의 게스트를 공유)`로 찍히면 값이 반영되지 않은 것입니다(오타는 조용히 `shared`로 폴백하므로 이 줄로 확인하세요).
+
+> **분리 범위**: 채팅 스레드 목록·대화 이력·좋아요 소유권만 방문자별로 나뉩니다. **업로드된 문서는 설계상 전원 공유**(`DocRegistry.SHARED`)이며, 문서까지 사용자별로 격리하려면 정식 인증(`AUTH_ENABLED=true`)이 필요합니다.
+>
+> **기존 대화 주의**: 이 설정을 켜기 전에 쌓인 스레드는 예전 공용 게스트 id에 묶여 있어 **더 이상 보이지 않습니다**(삭제되지는 않으며 `shared`로 되돌리면 복구). 운영 중 전환이라면 사용자 공지가 필요합니다.
+
+자세한 전략별 비교는 [§9.4.3](#943-접속자별-채팅-개인화-appauthguest-identity)을 참조하세요.
 
 #### 5) 이미지 · OCR (로컬 모델 전제)
 
@@ -1576,6 +1696,12 @@ app.llm.providers[8].concurrency=4
 - `/llm-usage`에서 프로바이더별 사용량이 실제로 분산되는지 확인할 수 있습니다.
 - 임베딩 프로바이더는 아직 이 로드밸런싱 대상이 아닙니다(라우팅 지점이 다른 `EmbeddingModel` 데코레이터 체인) — 향후 과제로 남아 있습니다.
 
+**헤더 LLM 동시성 표시기**: 웹 UI 우측 상단에 `LLM: {사용중}/{용량}`으로 실시간 포화도를 보여줍니다(`GET /api/v1/llm/concurrency`, ~3초마다 폴링). `사용중` 값이 `용량`에 도달하면(완전 포화) 숫자가 굵은 빨간색으로 강조됩니다 — 위 429/`[BACKPRESSURE]` 로그를 매번 찾아보지 않아도 한눈에 확인할 수 있는 보조 지표입니다.
+- `role=LOCAL, priority=1`(주 응답용 로컬 티어 — MICRO_TEXT 전용 소형 오프로딩 모델은 제외) 프로바이더들의 `concurrency` 합계가 용량이고, 실제 게이트에서 점유 중인 슬롯 수가 사용중 값입니다.
+- **임베딩 활동도 함께 반영됩니다**: 인덱싱·검색 임베딩 호출은 이 채팅 동시성 게이트를 전혀 거치지 않는 별도 `EmbeddingModel` 데코레이터 체인이라, 별도 in-flight 카운터(`EmbeddingConcurrencyTracker`)를 채팅 사용량에 합산합니다 — 그래서 임베딩만 바쁠 때도 지표가 0에 머무르지 않습니다. 합산값은 용량을 넘지 않게 잘립니다(임베딩 동시성은 `EMBED_MAX_CONCURRENT_BATCHES` 등 별도 한도라 합이 용량을 초과할 수 있기 때문).
+- **서킷브레이커로 차단된 프로바이더는 용량에는 남고 그 전체가 "사용중"으로 집계됩니다** — 제외돼서 지표 자체가 사라지는 대신, 로컬 프로바이더가 하나뿐인 배포에서 그게 차단되면 예컨대 `3/3`(완전 포화)으로 표시됩니다.
+- 로컬 티어 프로바이더가 하나도 등록/활성화돼 있지 않으면 지표 자체가 숨겨집니다.
+
 ---
 
 ## 6. 운영 팁
@@ -1645,6 +1771,8 @@ curl -X POST http://localhost:8080/api/v1/chat \
 
 > Docker Compose 사용 시 `./data` 디렉터리를 컨테이너에 바인드 마운트합니다.  
 > 데이터 백업 시 `data/` 디렉터리와 Chroma 볼륨을 함께 보존하세요.
+
+> **`doc_registry.chunk_overlap`**: 문서를 인덱싱(또는 ↺ 재인덱싱)한 시점에 실제로 적용된 `app.chunk-overlap` 값을 문서별로 함께 기록합니다 — §6.8 문서 내보내기가 이 값을 읽어 청크 재조립 시 overlap을 정확히 제거하는 데 씁니다. 이 컬럼이 추가되기 전에 인덱싱된 문서는 `NULL`로 남아 있다가, 기동 시 `ChunkOverlapBackfill`이 한 번 그 시점의 `app.chunk-overlap` 현재값으로 채웁니다(이미 값이 있는 행은 건드리지 않음 — 멱등). 운영자가 직접 조작할 일은 없는 내부 컬럼입니다.
 
 ---
 
@@ -1787,6 +1915,34 @@ mvn test -Dtest=SearchQualityEvaluationTest -Dsearch-eval.enabled=true
 
 ---
 
+### 6.8 문서 내보내기
+
+`/documents` 문서 목록 각 행의 **내보내기** 버튼(관리자 전용)으로 인덱싱된 문서를 MD·TXT·DOCX 파일로 다시 뽑아낼 수 있습니다. `GET /ui/documents/{docId}/export`는 `/admin/**`과 별개로 `SecurityConfig`/`NoAuthAutoLoginFilter` 양쪽에 직접 `hasRole("ADMIN")`로 게이팅됩니다(§9.4.2 관리 전용 인증 모드의 문서 관리 게이트 목록에도 포함) — 문서 전체 내용을 한 번에 반출하는 벌크 기능이라 게스트에게 열린 조회 경로(`/documents`, `/ui/documents/list`)와는 다르게 취급합니다.
+
+**소스는 저장된 원본 MD가 아니라 현재 색인된 청크입니다** — `/admin`에서 청크를 편집·삭제했다면 그 내용이 그대로 반영됩니다. 그 대신 검색을 위해 `ChunkSplitter`가 일부러 벌여 놓은 청크 간 중복을 다시 걷어내야 하는데, `ChunkReassembler`(`src/main/java/.../export/ChunkReassembler.java`)가 다섯 가지를 역순으로 제거합니다: 재주입된 소제목(`## 소제목 (2)`), 부모 챕터 breadcrumb 복제, 코드펜스 이어짐 마커(`[코드 이어짐: ...]`), 표 헤더 복제, 슬라이딩 윈도우 overlap. 앞의 넷은 마커·구조를 정확히 식별해 제거하는 결정적 로직이고, **overlap 제거만 유일한 휴리스틱**입니다(직전 청크 끝부분과 글자 단위로 일치하는 가장 긴 접두사를 찾되, 16자 미만의 우연한 일치는 무시). 실제 335청크 문서로 검증한 결과 원본 대비 글자 수 오차 0.001%, 헤딩 총 개수·중복 헤딩 개수 완전 일치.
+
+> **overlap 값은 문서별로 실제 인덱싱 당시 값을 씁니다, 현재 설정값이 아니라**: `app.chunk-overlap`은 §6.5 설정 페이지에서 재기동 없이 바뀌는 핫 설정이라, 내보내기 시점의 현재값을 그대로 쓰면 인덱싱 이후 값이 바뀐 문서에서 overlap 제거가 엉뚱한 지점을 잘라내거나 놓칠 수 있습니다. 그래서 인덱싱/재인덱싱이 청크를 실제로 자른 overlap 값을 `doc_registry.chunk_overlap`에 함께 기록해 두고(§6.3), 내보내기는 그 저장된 값을 우선 사용합니다 — 레지스트리에 값이 아예 없을 때만(예: 이 컬럼 자체가 없던 아주 오래된 배포에서 백필도 아직 안 된 순간) 현재 설정값으로 폴백합니다. `app.chunk-overlap` 기본값이 `0`으로 바뀌었으므로(§3.2), 새로 인덱싱하는 문서는 애초에 이 휴리스틱이 개입할 일이 없는 상태로 시작합니다.
+
+**옵션**:
+
+| 옵션 | 기본값 | 설명 |
+|---|---|---|
+| 형식 | MD | MD / TXT / DOCX 중 선택. **PPTX는 지원하지 않습니다** — 재조립된 청크에서 슬라이드 경계·레이아웃을 되짚어 재구성할 뾰족한 방법이 없어 향후 과제로 남겨둠 |
+| 이미지 설명 포함 | 켜짐 | Vision LLM이 생성한 `[이미지 설명: ...]` 마커를 MD는 인용문, DOCX는 이탤릭 캡션, TXT는 괄호 텍스트로 포함할지 여부 |
+| 소제목 번호·목차 추가 | 꺼짐 | H2~H6에 계층 번호(`1`, `1.1`)를 매기고 문서 맨 앞에 목차를 붙임. 이미 번호가 있어도 먼저 벗겨낸 뒤 다시 매기므로 멱등. **PPTX 원본 문서에는 적용되지 않음**(체크박스가 비활성화되고 이유가 표시됨) — §3.3 "소제목 숫자 생성"과 같은 이유로, PPTX 슬라이드 제목은 챕터 구조가 아니기 때문 |
+
+**형식별 처리**:
+
+| 형식 | 이미지 마커 처리 | 산출물 |
+|---|---|---|
+| MD | `![파일명](images/파일명)` 링크로 치환 | 문서에 이미지가 하나라도 있으면 `{파일명}.md` + `images/`를 담은 ZIP, 없으면 `.md` 파일 그대로 |
+| TXT | `(이미지: 파일명)` 텍스트로 치환 | 마크다운 문법(헤딩·강조·펜스·링크)을 모두 걷어낸 평문 `.txt` |
+| DOCX | POI(`XWPFDocument`)로 실제 이미지를 임베드 — 단, 표 셀 안에 있는 인라인 마커는 파일명 텍스트로 대체(줄바꿈을 넣으면 그 표 행이 깨지므로) | 헤딩·표·펜스 코드블록·굵게/기울임/인라인코드를 그대로 렌더링한 `.docx` — `MarkdownCorrectionService.postProcess()`로 빈 줄·마커 정리까지 거친 뒤 렌더링 |
+
+파일명은 원본 업로드 파일명(확장자 제외, 경로에 위험한 문자는 `_`로 치환)을 그대로 사용합니다. 해당 문서에 청크가 하나도 없으면 400을 반환합니다.
+
+---
+
 ## 7. 벡터 스토어 관리
 
 `/admin` 페이지(네비게이션 라벨: **벡터 스토어 관리**)의 접근 제어는 인증 모드에 따라 다릅니다.  
@@ -1810,6 +1966,8 @@ mvn test -Dtest=SearchQualityEvaluationTest -Dsearch-eval.enabled=true
 | MD 재인덱싱 (↺ 버튼) | `{docId}_corrected.md`(없으면 `{docId}.md`)를 읽어 청크 재생성·재인덱싱 — DOCX·TXT·PPTX·PDF(스캔 아님) 지원, 원본 재업로드 불필요 (스캔 PDF는 MD 파일이 없어 미지원) |
 
 > **청크 정렬**: 두 백엔드 모두 `doc_id` → `chunk_index`(인덱싱 시 각 청크에 부여되는 0-based 문서 내 위치, `MetaKey.CHUNK_INDEX`) 순으로 정렬됩니다 — 청크 id가 아니라 문서 원본 내용 순서 그대로 표시됩니다. sqlite-vec는 `ORDER BY doc_id, CAST(json_extract(metadata, '$.chunk_index') AS INTEGER), spring_doc_id`로 DB에서 직접 정렬합니다. Chroma의 `get()` API는 서버 측 ORDER BY를 지원하지 않으므로, 매치되는 청크 전체를 최대 `AdminService.CHUNK_FETCH_CAP`(10,000건)까지 가져온 뒤 애플리케이션(Java)에서 정렬·페이지네이션합니다 — 컬렉션(또는 docId 필터 결과)이 이 상한을 넘으면 뒤쪽 청크는 조회되지 않습니다.
+
+> **넓은 화면 미리보기**: 청크 편집 오프캔버스를 열 때 창 폭이 충분히 넓으면(오프캔버스 기본 폭의 2배 이상) 왼쪽에 마크다운·표·이미지 미리보기, 오른쪽에 기존 편집 입력창을 나란히 표시합니다(`admin.html`, `renderChunkPreview()`). 별도 API 호출 없이 이미 받아온 `GET /admin/chunks/{chunkId}/detail` 응답을 클라이언트에서 marked.js + DOMPurify + hljs로 렌더링하는 순수 프런트엔드 기능이라 서버 부하는 없습니다. 판정은 오프캔버스를 여는 시점 1회이며, 좁은 화면(모바일 등)에서는 기존과 동일하게 편집 입력창만 표시됩니다 — 상세는 [UI.md §3.4](UI.md#34-벡터-스토어-관리-admincontroller) 참고.
 
 ### 7.2 MD 재인덱싱 흐름
 
@@ -1914,6 +2072,52 @@ curl $LOCAL_LLM_URL/models -H "Authorization: Bearer $LOCAL_LLM_KEY"
 | LOCAL LLM 서버 미실행 | LM Studio / Ollama 실행 확인 |
 | 로컬 LLM 없이 실행 | `LOCAL_LLM_KEY=` (빈 값)으로 LOCAL 비활성화 후 NORMAL/PREMIUM 등록 |
 | 모든 프로바이더 소진 | `/llm-usage`에서 차단 상태 확인; circuit-breaker-minutes 경과 후 자동 해제 |
+
+---
+
+### 서버 PC에서는 되는데 다른 PC에서 접속하면 채팅이 안 됨
+
+서버를 띄운 PC(`http://localhost:8080`)에서는 정상인데, 같은 망의 다른 PC(`http://10.x.x.x:8080`)에서는 **전송 후 아무 반응이 없고 보낸 메시지조차 표시되지 않는** 경우입니다.
+
+원인은 브라우저의 **secure context** 규칙입니다. `http://localhost`는 예외적으로 secure context로 취급되지만 `http://10.x.x.x`는 아니며, 이때 `crypto.randomUUID()`·`navigator.clipboard` 같은 API가 아예 존재하지 않습니다. **서버 문제가 아니므로 서버 로그에도 아무것도 남지 않습니다.**
+
+먼저 브라우저 콘솔(F12)을 확인하세요:
+
+| 콘솔 메시지 | 원인 | 조치 |
+|---|---|---|
+| `crypto.randomUUID is not a function` | 구버전 `chat-stream.js` | **수정 완료** — 최신 버전으로 갱신. 브라우저 강력 새로고침(Ctrl+F5)으로 캐시된 구버전 JS 제거 |
+| `navigator.clipboard` 관련 오류 | 구버전 `chat.html` | 동일 — 스레드 ID 복사 버튼에만 영향 |
+| 오류 없음 · 응답만 안 옴 | 서버/LLM 문제 | 아래 "채팅 응답이 오지 않음" 참조 |
+
+> **로그가 없다고 요청이 안 온 것은 아닙니다.** 정상 처리된 채팅은 INFO 레벨에서 아무 로그도 남기지 않습니다(성공 경로에 `log.info`가 없음). 요청 도달 여부를 확인하려면 DEBUG를 켜세요:
+> ```bash
+> curl -X POST http://localhost:8080/actuator/loggers/com.example.ragagent -H "Content-Type: application/json" -d '{"configuredLevel":"DEBUG"}'
+> ```
+
+**함께 확인할 것** — 위 증상이 해결돼도 평문 HTTP LAN 접속에는 다음 제약이 남습니다:
+
+- `USE_CADDY_REVERSE_PROXY_HTTPS=true`(기본값!)이면 세션 쿠키에 `Secure`가 붙어 **다른 PC의 브라우저가 쿠키를 버립니다** → 요청마다 세션이 새로 생겨 `threadId`가 계속 바뀌고 대화 맥락이 끊깁니다. 평문 HTTP로 운영한다면 반드시 `false`로 두세요. (localhost에서는 이 문제가 드러나지 않습니다.)
+- PWA 설치·서비스워커가 동작하지 않습니다. 필요하면 HTTPS를 적용하세요(§4.4, 폐쇄망은 §4.5-4).
+
+---
+
+### 채팅 응답이 오지 않음 (요청은 도달, 답변만 안 옴)
+
+버블은 정상적으로 생기는데 답변 토큰이 오지 않는 경우로, 위 항목(요청 자체가 안 나감)과는 다릅니다. 대부분 **로컬 LLM이 느리거나 멈춘 것**입니다.
+
+```bash
+# LLM이 실제로 응답하는지 · 얼마나 걸리는지 직접 측정
+time curl -m 30 -X POST $LOCAL_LLM_URL/chat/completions -H "Content-Type: application/json" \
+  -d '{"model":"'"$LOCAL_LLM_MODEL"'","messages":[{"role":"user","content":"hi"}],"max_tokens":50}'
+```
+
+| 관측 | 원인 | 조치 |
+|---|---|---|
+| 위 curl이 수십 초~타임아웃 | LLM 서버가 CPU 추론 중이거나 VRAM 부족으로 스왑 | GPU offload 설정 확인. 모델을 더 작은 양자화로 교체 |
+| 첫 요청만 매우 느리고 이후 정상 | 최초 요청이 모델 로딩(JIT)을 유발 | 기동 후 워밍업 요청을 한 번 보내두기 |
+| 토큰은 오는데 매우 느림(예: 1 tok/s) | 추론 속도 자체가 느림 | 한국어는 대략 1토큰≈1글자라 "약 2,000자" 응답에 30분 이상 걸릴 수 있음 → 응답 길이 모드를 S로, 또는 더 빠른 모델 사용 |
+| 로그에 `[TIMEOUT:SSE_IDLE]` | 120초 동안 진행이 없어 유휴 타임아웃 | 위 원인 해소. 느린 모델이 불가피하면 `SSE_IDLE_TIMEOUT_SECONDS` 상향 |
+| 로그에 `[TIMEOUT:LLM_HTTP]` | `LLM_READ_TIMEOUT_SECONDS`(기본 180초) 초과 | 동일. 프로바이더 장애가 아니므로 Circuit Breaker는 차단하지 않음 |
 
 ---
 
@@ -2232,7 +2436,7 @@ AUTH_MANAGEMENT_ONLY=true
 | `/setup` | 관리자 이메일·비밀번호 입력 → DB에 `ROLE_ADMIN` 계정 생성. **생성 직후 자동 로그인은 되지 않음** — `/login`으로 별도 로그인 필요 |
 | 채팅(`/`, `/chat/**`) | 로그인 없이 게스트 자동 인증 (평문 no-auth와 동일) |
 | `GET /documents`, `GET /ui/documents/list`, `GET /api/v1/documents` | 로그인 없이 조회 가능 |
-| 문서 관리 쓰기(업로드, 업로드취소, 삭제, 태그 수정·편집) | **로그인 필요** — 비로그인 시 `/login` 리다이렉트, `ROLE_ADMIN` 아닌 로그인은 403 |
+| 문서 관리 쓰기(업로드, 업로드취소, 삭제, 태그 수정·편집, **내보내기**) | **로그인 필요** — 비로그인 시 `/login` 리다이렉트, `ROLE_ADMIN` 아닌 로그인은 403. 내보내기는 읽기 동작이지만 문서 전체 내용을 한 번에 반출하는 벌크 기능이라 이 그룹에 포함(§6.8) |
 | `/admin/**` | **로그인 필요** — 게스트/첫 관리자 자동 주입 없음(평문 no-auth와의 핵심 차이) |
 | `/api/v1/documents/**` REST 엔드포인트 | **의도적으로 그대로 열어둠 + CSRF 예외** — `POST /api/v1/documents/sync` 등 curl 자동화([§6.2](#62-문서-버전-관리) 참조)가 그대로 인증 없이 동작 |
 | Web UI 게스트 화면 | 업로드 카드·삭제 버튼·Admin 내비가 숨겨짐(관리자로 로그인해야 노출) |
@@ -2244,7 +2448,35 @@ AUTH_MANAGEMENT_ONLY=true
 3. 로그인 세션이 유지되는 동안 `/documents`에서 업로드·삭제, `/admin`에서 청크 관리 가능
 4. 다른 탭/시크릿 창은 여전히 게스트 — 관리 기능은 로그인한 브라우저 세션에서만 보임
 
-> **주의**: 평문 no-auth와 마찬가지로 채팅·문서 조회는 guest 파티션을 공유합니다. 이 모드는 "누가 관리할 수 있는가"만 잠그며 사용자별 데이터 격리는 제공하지 않습니다 — 멀티유저 격리가 필요하면 전체 인증 모드(`app.auth.enabled=true`)를 사용하세요.
+> **주의**: 이 모드는 "누가 관리할 수 있는가"만 잠급니다. 채팅 개인화가 필요하면 아래 §9.4.3을, 계정 기반의 진짜 격리가 필요하면 전체 인증 모드(`app.auth.enabled=true`)를 사용하세요.
+
+#### 9.4.3 접속자별 채팅 개인화 (`app.auth.guest-identity`)
+
+`app.auth.enabled=false`일 때만 의미 있습니다. 기본값에서는 **모든 방문자가 하나의 게스트 계정을 공유**하므로 사이드바 스레드 목록·대화 이력이 전부 섞여 보입니다. 이 값을 바꾸면 방문자를 구분해 각자의 채팅 화면을 갖게 할 수 있습니다.
+
+| 값 | 방식 | NAT(사무실 공인 IP 공유) | DHCP 갱신 | 쿠키 차단 |
+|---|---|---|---|---|
+| `shared` (기본) | 고정 게스트 1개 | — | — | ✅ |
+| `ip` | 접속 IP의 HMAC 해시 | ❌ 전원 뭉침 | ❌ 이력 유실 | ✅ |
+| `cookie` | 장수 HttpOnly 서명 쿠키 | ✅ | ✅ | ❌ 매번 새 방문자 |
+| **`hybrid`** (권장) | 쿠키 우선, 없으면 IP로 유도해 쿠키에 저장 | ✅ | ✅ | ✅ IP로 폴백 |
+
+```bash
+AUTH_GUEST_IDENTITY=hybrid
+TRUST_FORWARDED_FOR=true   # 리버스 프록시(Caddy) 뒤라면 필수 — 아래 참조
+```
+
+**⚠️ `TRUST_FORWARDED_FOR`를 반드시 함께 맞추세요** (`ip`/`hybrid` 사용 시):
+
+- **프록시 뒤(Caddy 등) → `true` 필수**. 끄면 모든 요청이 프록시 IP 하나로 보여 **개인화가 무효**가 되고, per-IP 속도 제한도 전원이 한 버킷을 공유합니다.
+- **프록시 없이 직접 노출 → `false` 유지**. `X-Forwarded-For`는 클라이언트가 임의로 넣을 수 있는 헤더라, 신뢰하면 공격자가 매 요청 헤더만 바꿔 속도 제한을 무한 우회하거나 **다른 방문자의 게스트 신원을 가로채 대화 목록을 열람**할 수 있습니다(PLAN §6.19.3).
+
+**동작 세부**:
+- 방문자 id는 `guest-<12자리 hex>` 형식입니다. IP 원문은 저장되지 않고, 서버가 최초 기동 시 생성해 `app_secret` 테이블에 보관하는 키로 HMAC 해싱됩니다(재기동해도 id가 바뀌지 않도록 영속화).
+- 쿠키 이름은 `rag_visitor`(HttpOnly, SameSite=Lax, 1년). HTTPS 접속이면 `Secure`도 붙습니다.
+- **문서는 여전히 공유**입니다(`DocRegistry.SHARED`). 개인화되는 것은 채팅 스레드·대화 이력·좋아요(큐레이션 Q&A) 소유권뿐입니다.
+- 오타 등 알 수 없는 값은 `shared`로 폴백합니다(설정 실수가 "반쪽만 분리된" 상태로 이어지지 않도록). 기동 로그의 `[GUEST_ID] 방문자 식별 전략: ...` 줄로 실제 적용값을 확인하세요.
+- **기존 대화는 보이지 않게 됩니다.** 이 설정을 켜기 전에 쌓인 스레드는 예전 공용 게스트 id(`00000000-…-0001`)에 묶여 있어 새 방문자 id로는 조회되지 않습니다(삭제되지는 않음). 되돌리려면 `shared`로 다시 바꾸면 그대로 다시 보입니다.
 
 **인증 재활성화 (전체 인증 모드로 전환)**:
 1. `app.auth.enabled=true`로 변경 후 재시작 (`app.auth.management-only`는 자동으로 무시됨)
@@ -2261,6 +2493,8 @@ AUTH_MANAGEMENT_ONLY=true
 - [ ] `sh scripts/install-hooks.sh` — pre-commit 훅 설치 (팀원 각자 1회)
 - [ ] 인증 모드 설정 확인 — `.env`의 `AUTH_ENABLED` 또는 `application.properties`의 `app.auth.enabled` (기본 `true` = 로그인 필요 / `false` = no-auth 모드)
 - [ ] (no-auth 모드) 문서 관리·`/admin`도 로그인 없이 열어둘지, 관리 전용으로 잠글지 결정 — 잠그려면 `AUTH_MANAGEMENT_ONLY=true` (§9.4.2)
+- [ ] (no-auth 모드) 여러 사람이 접속한다면 채팅을 방문자별로 나눌지 결정 — 나누려면 `AUTH_GUEST_IDENTITY=hybrid` (§9.4.3)
+- [ ] 리버스 프록시(Caddy) 뒤라면 `TRUST_FORWARDED_FOR=true`, 직접 노출이면 `false` 확인 (§9.4.3) — 잘못 설정하면 속도 제한·방문자 식별이 모두 어긋남
 - [ ] (no-auth 모드) 첫 접속 시 `/setup` 페이지에서 admin 계정 생성 완료 확인
 - [ ] (관리 전용 인증 모드) `/setup` 계정 생성 후 `/login`으로 별도 로그인 확인(자동 로그인되지 않음)
 - [ ] (auth 모드) `/signup`에서 첫 계정 생성 후 `/login` 접속 확인

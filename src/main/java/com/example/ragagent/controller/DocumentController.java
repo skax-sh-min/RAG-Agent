@@ -6,7 +6,9 @@ import com.example.ragagent.model.*;
 import com.example.ragagent.exception.DocumentIndexingException;
 import com.example.ragagent.exception.IndexingCancelledException;
 import com.example.ragagent.exception.UnsupportedFileTypeException;
+import com.example.ragagent.export.ExportFormat;
 import com.example.ragagent.security.UploadValidator;
+import com.example.ragagent.service.DocumentExportService;
 import com.example.ragagent.service.IndexingProgressService;
 import com.example.ragagent.service.RagService;
 import org.slf4j.Logger;
@@ -26,6 +28,7 @@ import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.security.DigestInputStream;
 import java.security.MessageDigest;
@@ -50,13 +53,16 @@ public class DocumentController {
     private final RagService ragService;
     private final IndexingProgressService progressService;
     private final AuditLogger auditLogger;
+    private final DocumentExportService exportService;
 
     public DocumentController(RagService ragService,
                                IndexingProgressService progressService,
-                               AuditLogger auditLogger) {
+                               AuditLogger auditLogger,
+                               DocumentExportService exportService) {
         this.ragService = ragService;
         this.progressService = progressService;
         this.auditLogger = auditLogger;
+        this.exportService = exportService;
     }
 
     // ── Page ──────────────────────────────────────────────────────────
@@ -168,6 +174,38 @@ public class DocumentController {
         ragService.deleteDocument(ctx.userId(), docId, version);
         auditLogger.log("document.delete", docId, Map.of("version", version));
         return ResponseEntity.ok().build();
+    }
+
+    /**
+     * Exports a document's indexed chunks as a downloadable MD / TXT / DOCX file (§ 문서 내보내기).
+     * Chunks are the source (not the saved converted MD), so the download reflects the current
+     * index including {@code /admin} chunk edits — {@code ChunkReassembler} undoes the
+     * retrieval-oriented duplication first. An MD export with images is delivered as a ZIP.
+     */
+    @GetMapping("/ui/documents/{docId}/export")
+    @ResponseBody
+    public ResponseEntity<byte[]> exportDocument(
+            @PathVariable String docId,
+            @RequestParam(defaultValue = "latest") String version,
+            @RequestParam(defaultValue = "md") String format,
+            @RequestParam(defaultValue = "true") boolean includeImageDescriptions,
+            @RequestParam(defaultValue = "false") boolean addHeadingNumbersAndToc) {
+
+        ExportFormat target = ExportFormat.parse(format);   // unknown → 400 via GlobalExceptionHandler
+        DocumentExportService.Result result = exportService.export(
+                docId, version, target,
+                new DocumentExportService.Options(includeImageDescriptions, addHeadingNumbersAndToc));
+
+        auditLogger.log("document.export", docId, Map.of(
+                "version", version, "format", target.name(), "bytes", result.content().length));
+
+        ContentDisposition disposition = ContentDisposition.attachment()
+                .filename(result.filename(), StandardCharsets.UTF_8)   // RFC 5987 — Korean filenames
+                .build();
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION, disposition.toString())
+                .header(HttpHeaders.CONTENT_TYPE, result.contentType())
+                .body(result.content());
     }
 
     /** Tags-cell edit form (HTMX fragment) — pre-filled with the document's current tags. */

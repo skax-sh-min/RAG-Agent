@@ -1,5 +1,9 @@
 package com.example.ragagent.service;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.example.ragagent.agent.AgentState;
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.llm.LlmProvider;
@@ -11,6 +15,7 @@ import com.example.ragagent.model.ResponseMode;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.parallel.ResourceLock;
 import org.mockito.ArgumentCaptor;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.model.ChatModel;
@@ -46,6 +51,7 @@ import static org.mockito.Mockito.when;
  * read real ChatResponse usage (token-by-token SSE UX), so it records an approximate (chars/4)
  * usage entry via LlmRouter.recordApproxUsage() and folds the same estimate into AgentState.
  */
+@ResourceLock("global-state")
 class DirectAnswerServiceTest {
 
     private LlmRouter llmRouter;
@@ -222,5 +228,45 @@ class DirectAnswerServiceTest {
         assertThat(result.answer()).isEqualTo("안녕");
         assertThat(tokens).containsExactly("안", "녕");
         verify(llmRouter).recordApproxUsage(eq("openai"), anyString(), eq("안녕"));
+    }
+
+    @Test
+    @DisplayName("executeStreaming — stream=true 네이티브 OpenAiApi 우회 경로도 DEBUG 로그(엔드포인트+body)를 남긴다")
+    void executeStreaming_streamingProvider_logsRequestAtDebugLevel() {
+        Logger logbackLogger = com.example.ragagent.LogbackTestSupport.logger(DirectAnswerService.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        logbackLogger.addAppender(appender);
+        Level previousLevel = logbackLogger.getLevel();
+        logbackLogger.setLevel(Level.DEBUG);
+        try {
+            OpenAiApi openAiApi = mock(OpenAiApi.class);
+            var delta = new OpenAiApi.ChatCompletionMessage("답변", OpenAiApi.ChatCompletionMessage.Role.ASSISTANT);
+            var choice = new OpenAiApi.ChatCompletionChunk.ChunkChoice(null, 0, delta, null);
+            var chunk = new OpenAiApi.ChatCompletionChunk("id", List.of(choice), null, "model", null, null, null, null);
+            when(openAiApi.chatCompletionStream(any())).thenReturn(Flux.just(chunk));
+
+            LlmProvider provider = new LlmProvider("openai", TaskType.TEXT, ProviderRole.NORMAL, 1,
+                    "sk-test-key-123456", "http://localhost:1234/v1", "gpt-4o", true, null, openAiApi);
+            when(llmRouter.routeProvider(eq(TaskType.TEXT), any())).thenReturn(provider);
+
+            GraphListener listener = new GraphListener() {
+                @Override public void onToken(String text) { }
+            };
+            service.executeStreaming(newState(false), listener);
+
+            assertThat(appender.list).anySatisfy(event -> {
+                assertThat(event.getLevel()).isEqualTo(Level.DEBUG);
+                String msg = event.getFormattedMessage();
+                assertThat(msg).contains("openai")
+                        .contains("http://localhost:1234/v1/chat/completions")
+                        .doesNotContain("curl -s -X POST")
+                        .doesNotContain("Authorization")
+                        .doesNotContain("sk-test-key-123456");
+            });
+        } finally {
+            logbackLogger.detachAppender(appender);
+            logbackLogger.setLevel(previousLevel);
+        }
     }
 }

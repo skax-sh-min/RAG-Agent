@@ -75,7 +75,7 @@ class MarkdownCorrectionServiceTest {
 
     @BeforeEach
     void attachLogCapture() {
-        correctionLogger = (Logger) org.slf4j.LoggerFactory.getLogger(MarkdownCorrectionService.class);
+        correctionLogger = com.example.ragagent.LogbackTestSupport.logger(MarkdownCorrectionService.class);
         logAppender = new ListAppender<>();
         logAppender.start();
         correctionLogger.addAppender(logAppender);
@@ -756,6 +756,23 @@ class MarkdownCorrectionServiceTest {
         assertThat(withHeadingNumbers).contains("```python").contains("## 1. 코드");
     }
 
+    @Test
+    @DisplayName("correctSection — 응답의 펜스 개수가 홀수면 그 섹션은 교정을 버리고 원본을 유지한다")
+    void correctSection_keepsOriginalWhenResponseFencesUnbalanced() {
+        String section = "## 1장\n\n```java\nint a = 1;\n```\n";
+        // 모델이 닫는 펜스를 빠뜨린 응답 — 그대로 두면 이어붙인 문서 전체의 펜스 짝이 밀린다.
+        when(llmRouter.executeWithTracking(any(), any(), any(), any()))
+                .thenReturn("## 1장\n\n```java\nint a = 1;\n모델이 덧붙인 줄\n");
+
+        String out = service.correct(section, "doc", null, false, false, false, null);
+
+        assertThat(out).doesNotContain("모델이 덧붙인 줄");
+        assertThat(out).contains("## 1장").contains("```java").contains("int a = 1;");
+        assertThat(logAppender.list).anyMatch(e ->
+                e.getLevel() == Level.WARN
+                        && e.getFormattedMessage().contains("응답의 코드 펜스 개수가 홀수"));
+    }
+
     private static int countOccurrences(String haystack, String needle) {
         int count = 0, idx = 0;
         while ((idx = haystack.indexOf(needle, idx)) != -1) {
@@ -815,6 +832,144 @@ class MarkdownCorrectionServiceTest {
         String md = "```c\n### ###\nint x = 1;\n```";
         String fixed = MarkdownCorrectionService.fixClosingFences(md);
         assertThat(fixed).isEqualTo(md);
+    }
+
+    @Test
+    @DisplayName("fixClosingFences — 문서 끝에서 열린 채 끝난 펜스는 닫는 펜스를 붙여 치유한다")
+    void fixClosingFences_healsUnclosedFenceAtEndOfInput() {
+        String md = "## 1장\n\n본문\n\n```java\nint x = 1;\n";
+        String fixed = MarkdownCorrectionService.fixClosingFences(md);
+        assertThat(fixed).isEqualTo("## 1장\n\n본문\n\n```java\nint x = 1;\n\n```");
+        assertThat(fenceLines(fixed) % 2).isZero();
+    }
+
+    @Test
+    @DisplayName("fixClosingFences — [페이지: N] 마커도 치유 지점 (PPTX/PDF는 ## 소제목이 없다)")
+    void fixClosingFences_healsUnclosedFenceBeforePageMarker() {
+        // 소제목이 전혀 없는 PPTX/비스캔 PDF 형태 — 치유가 없으면 뒤따르는 진짜 여는 펜스가
+        // 닫는 펜스로 오인돼 문서 나머지 전체의 펜스 짝이 밀린다.
+        String md = "[페이지: 1]\n\n```text\n설명 줄\n\n[페이지: 2]\n\n```java\nint a = 1;\n```java\n\n마무리\n";
+        String fixed = MarkdownCorrectionService.fixClosingFences(md);
+
+        assertThat(fixed).isEqualTo(
+                "[페이지: 1]\n\n```text\n설명 줄\n\n```\n[페이지: 2]\n\n```java\nint a = 1;\n```\n\n마무리\n");
+        assertThat(fenceLines(fixed) % 2).isZero();
+        // 진짜 여는 펜스는 태그를 지켰고, 에코된 닫는 펜스만 순수 ``` 로 바뀌었다
+        assertThat(countOccurrences(fixed, "```java\n")).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("fixClosingFences — 펜스 안의 [페이지: N]처럼 보이는 줄은 들여쓰기되어 있으면 치유 지점이 아니다")
+    void fixClosingFences_pageMarkerHealingRequiresLineStart() {
+        String md = "```text\n  [페이지: 2] 는 마커가 아니라 코드 내용\n```";
+        assertThat(MarkdownCorrectionService.fixClosingFences(md)).isEqualTo(md);
+    }
+
+    @Test
+    @DisplayName("normalizeCodeBlocks — 펜스 개수가 홀수면 언어 태그를 쓰지 않고 원본을 그대로 둔다")
+    void normalizeCodeBlocks_skipsWhenFenceCountIsOdd() {
+        // 닫는 펜스가 없는 문서 — 정규식이 짝을 한 칸 밀어 잡으면 '닫는 펜스'에 태그를 찍게 된다.
+        String md = "```\n{\"a\": 1}\n```\n\n```\nint b = 2;\n";
+        String out = service.normalizeCodeBlocks(md, true);
+        assertThat(out).isEqualTo(md);
+        assertThat(logAppender.list).anyMatch(e ->
+                e.getLevel() == Level.WARN
+                        && e.getFormattedMessage().contains("코드 펜스 짝을 확정할 수 없어"));
+    }
+
+    @Test
+    @DisplayName("normalizeCodeBlocks — 줄 중간 ``` 이 있으면(줄 단위 뷰와 정규식 뷰 불일치) 건너뛴다")
+    void normalizeCodeBlocks_skipsWhenMidLineFencePresent() {
+        // "…감쌉니다: ```" 의 ``` 는 줄 단위 패스에는 안 보이지만 FENCED_BLOCK 정규식에는 보인다.
+        // 가드가 없으면 이 ``` 가 아래 ```java 를 닫는 펜스로 삼아 짝을 밀어버린다.
+        String md = "코드는 다음처럼 감쌉니다: ```\n\n본문 문단\n\n```java\nint a = 1;\n```\n\n끝 문장\n";
+        String out = service.normalizeCodeBlocks(md, true);
+        assertThat(out).isEqualTo(md);
+        assertThat(logAppender.list).anyMatch(e ->
+                e.getLevel() == Level.WARN
+                        && e.getFormattedMessage().contains("코드 펜스 짝을 확정할 수 없어"));
+    }
+
+    @Test
+    @DisplayName("재현 — 소제목 없는 문서의 미닫힘 펜스가 '```java 다음에 ```java'로 번지지 않는다")
+    void unclosedFenceDoesNotPropagateDuplicateLanguageTag() {
+        // 보고된 증상: 저장된 md에서 ```java 의 짝이 ``` 가 아니라 ```java 였다.
+        // 원인은 앞쪽 미닫힘 펜스로 짝이 밀린 뒤 normalizeCodeBlocks 가 '닫는 펜스'에 태그를 써넣는 것.
+        String joined = "[페이지: 1]\n\n```text\n설명 줄\n\n[페이지: 2]\n\n```java\nint a = 1;\n```java\n\n마무리\n";
+
+        String saved = service.normalizeCodeBlocks(MarkdownCorrectionService.fixClosingFences(joined), true);
+
+        assertThat(fenceLines(saved) % 2).isZero();               // 짝이 맞는다
+        assertThat(countOccurrences(saved, "```java")).isEqualTo(1); // 여는 펜스 하나뿐
+        assertThat(saved).contains("\n[페이지: 2]");               // 산문이 코드 블록에 삼켜지지 않았다
+    }
+
+    @Test
+    @DisplayName("findFenceProblems — 언어 태그가 붙은 닫는 펜스를 몇 행인지와 함께 보고한다")
+    void findFenceProblems_reportsTaggedCloserWithLine() {
+        String md = "## 1장\n\n```java\nint a = 1;\n```java\n\n본문\n"; // 닫는 펜스는 5행
+        var problems = MarkdownCorrectionService.findFenceProblems(md);
+
+        assertThat(problems).hasSize(1);
+        assertThat(problems.get(0).line()).isEqualTo(5);
+        assertThat(problems.get(0).kind()).isEqualTo("tagged_closer");
+        assertThat(problems.get(0).message()).contains("```java").contains("3행"); // 짝인 여는 펜스 위치
+    }
+
+    @Test
+    @DisplayName("findFenceProblems — 닫히지 않은 펜스는 '여는 펜스' 행 번호로 보고한다")
+    void findFenceProblems_reportsUnclosedAtOpeningLine() {
+        String md = "본문\n\n```sql\nSELECT 1;\n더 많은 본문\n"; // 여는 펜스는 3행
+        var problems = MarkdownCorrectionService.findFenceProblems(md);
+
+        assertThat(problems).hasSize(1);
+        assertThat(problems.get(0).line()).isEqualTo(3);
+        assertThat(problems.get(0).kind()).isEqualTo("unclosed");
+    }
+
+    @Test
+    @DisplayName("findFenceProblems — 줄 중간 ``` 도 보고한다(줄 단위 패스가 못 보는 자리)")
+    void findFenceProblems_reportsMidLineFence() {
+        String md = "코드는 다음처럼 감쌉니다: ```\n\n```java\nint a = 1;\n```\n"; // 1행이 줄 중간 펜스
+        var problems = MarkdownCorrectionService.findFenceProblems(md);
+
+        assertThat(problems).extracting("kind").contains("mid_line");
+        assertThat(problems).extracting("line").contains(1);
+    }
+
+    @Test
+    @DisplayName("findFenceProblems — 여러 건은 행 번호 오름차순으로 정렬해 반환한다")
+    void findFenceProblems_sortedByLine() {
+        String md = "```java\nint a = 1;\n```java\n\n```sql\nSELECT 1;\n"; // 3행 tagged_closer, 5행 unclosed
+        var problems = MarkdownCorrectionService.findFenceProblems(md);
+
+        assertThat(problems).extracting("line").containsExactly(3, 5);
+        assertThat(problems).extracting("kind").containsExactly("tagged_closer", "unclosed");
+    }
+
+    @Test
+    @DisplayName("findFenceProblems — 정상 문서·빈 입력은 빈 목록이고 원본을 바꾸지 않는다")
+    void findFenceProblems_cleanDocumentReportsNothing() {
+        String md = "## 1장\n\n```java\nint a = 1;\n```\n\n본문\n";
+        assertThat(MarkdownCorrectionService.findFenceProblems(md)).isEmpty();
+        assertThat(MarkdownCorrectionService.findFenceProblems("")).isEmpty();
+        assertThat(MarkdownCorrectionService.findFenceProblems(null)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("normalizeCodeBlocks — 펜스 짝이 정상이면 기존대로 언어 태그를 추론한다(가드 회귀 없음)")
+    void normalizeCodeBlocks_stillNormalizesBalancedDocument() {
+        String md = "설명\n\n```\n{\"a\": 1}\n```\n";
+        assertThat(service.normalizeCodeBlocks(md, true)).isEqualTo("설명\n\n```json\n{\"a\": 1}\n```\n");
+    }
+
+    /** 펜스 줄(앞 공백 제외하고 ``` 로 시작하는 줄) 개수 — 짝이 맞는지 확인용. */
+    private static int fenceLines(String text) {
+        int count = 0;
+        for (String line : text.split("\n", -1)) {
+            if (line.stripLeading().startsWith("```")) count++;
+        }
+        return count;
     }
 
     @Test
@@ -922,6 +1077,52 @@ class MarkdownCorrectionServiceTest {
         String out = MarkdownCorrectionService.postProcessMarkdown(md);
         assertThat(out).isEqualTo(
                 "앞 문장\n\n| 항목 | 값 |\n|------|-----|\n| a | b |\n\n뒤 문장");
+    }
+
+    @Test
+    @DisplayName("postProcessMarkdown — 소제목(##~#######) 앞뒤에 빈 줄을 보장한다")
+    void postProcess_blankLinesAroundHeading() {
+        String md = "앞 문단\n## 소제목\n본문입니다.";
+        String out = MarkdownCorrectionService.postProcessMarkdown(md);
+        assertThat(out).isEqualTo("앞 문단\n\n## 소제목\n\n본문입니다.");
+    }
+
+    @Test
+    @DisplayName("postProcessMarkdown — 문서 첫 줄/마지막 줄 소제목에는 불필요한 빈 줄을 넣지 않는다")
+    void postProcess_headingAtDocumentEdgesNoStrayBlank() {
+        assertThat(MarkdownCorrectionService.postProcessMarkdown("## 첫 소제목\n본문"))
+                .isEqualTo("## 첫 소제목\n\n본문");
+        assertThat(MarkdownCorrectionService.postProcessMarkdown("본문\n## 마지막 소제목"))
+                .isEqualTo("본문\n\n## 마지막 소제목");
+    }
+
+    @Test
+    @DisplayName("postProcessMarkdown — 연속된 소제목 사이 빈 줄은 1개만, 이미 있으면 그대로")
+    void postProcess_consecutiveHeadingsSingleBlank() {
+        String md = "## 상위\n### 하위\n\n본문";
+        String out = MarkdownCorrectionService.postProcessMarkdown(md);
+        assertThat(out).isEqualTo("## 상위\n\n### 하위\n\n본문");
+    }
+
+    @Test
+    @DisplayName("postProcessMarkdown — 펜스 안의 '#' 주석/배너는 소제목이 아니므로 빈 줄을 넣지 않는다")
+    void postProcess_headingRuleSkipsFenceAndBannerComments() {
+        String fenced = "설명\n\n```bash\n## 설치 단계\napt install foo\n```";
+        assertThat(MarkdownCorrectionService.postProcessMarkdown(fenced)).isEqualTo(fenced);
+
+        // '### 주석 ###' 형태의 배너 주석은 헤딩으로 보지 않는다(looksLikeChapterHeadingNotComment).
+        String banner = "앞 문장\n### 주석 ###\n뒤 문장";
+        assertThat(MarkdownCorrectionService.postProcessMarkdown(banner)).isEqualTo(banner);
+    }
+
+    @Test
+    @DisplayName("postProcessMarkdown — H1과 들여쓰기된 '##'은 소제목 빈 줄 규칙 대상이 아니다")
+    void postProcess_headingRuleScopedToTopLevelH2Plus() {
+        String h1 = "앞 문장\n# 문서 제목\n뒤 문장";
+        assertThat(MarkdownCorrectionService.postProcessMarkdown(h1)).isEqualTo(h1);
+
+        String indented = "- 항목\n  ## 목록 안 내용\n뒤 문장";
+        assertThat(MarkdownCorrectionService.postProcessMarkdown(indented)).isEqualTo(indented);
     }
 
     @Test

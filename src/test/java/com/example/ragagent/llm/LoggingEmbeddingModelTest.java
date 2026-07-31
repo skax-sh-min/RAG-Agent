@@ -31,8 +31,9 @@ import static org.mockito.Mockito.when;
  * Embedding requests previously had no DEBUG curl log at all (unlike chat requests), so this
  * covers: delegation is transparent (response/exception pass through unchanged, dimensions()
  * bypasses call() entirely), embed(Document) still routes through call() rather than
- * delegate.embed(Document) (so it gets logged too), and the DEBUG log actually names the
- * provider/model/endpoint when isDebugEnabled() — the whole point of this class.
+ * delegate.embed(Document) (so it gets logged too), and the DEBUG/TRACE split — DEBUG gets the
+ * condensed endpoint+body form (no curl wrapper/auth header, since the full form was making
+ * DEBUG logs unwieldy for large prompts), TRACE gets the full replayable curl command.
  */
 @ResourceLock("global-state")
 class LoggingEmbeddingModelTest {
@@ -43,7 +44,7 @@ class LoggingEmbeddingModelTest {
 
     @BeforeEach
     void attachLogCapture() {
-        logbackLogger = (Logger) org.slf4j.LoggerFactory.getLogger(LoggingEmbeddingModel.class);
+        logbackLogger = com.example.ragagent.LogbackTestSupport.logger(LoggingEmbeddingModel.class);
         logAppender = new ListAppender<>();
         logAppender.start();
         logbackLogger.addAppender(logAppender);
@@ -75,8 +76,8 @@ class LoggingEmbeddingModelTest {
     }
 
     @Test
-    @DisplayName("DEBUG 활성 시 provider/endpoint/model/텍스트 개수가 로그에 남는다")
-    void logsCurlReproductionAtDebugLevel() {
+    @DisplayName("DEBUG 활성 시 provider/endpoint/텍스트 개수 + body만 남고, curl/인증 헤더는 없다")
+    void logsEndpointAndBodyAtDebugLevel() {
         when(delegate.call(any())).thenReturn(response());
         var model = new LoggingEmbeddingModel(delegate, "embed:nomic",
                 "http://localhost:1234/v1", "sk-test-key-123456", "nomic-embed-text");
@@ -84,14 +85,54 @@ class LoggingEmbeddingModelTest {
         model.call(new EmbeddingRequest(List.of("first chunk", "second chunk"), null));
 
         assertThat(logAppender.list).anySatisfy(event -> {
+            assertThat(event.getLevel()).isEqualTo(Level.DEBUG);
             String msg = event.getFormattedMessage();
             assertThat(msg).contains("embed:nomic")
                     .contains("texts=2")
                     .contains("http://localhost:1234/v1/embeddings")
                     .contains("nomic-embed-text")
+                    // DEBUG is the condensed form (endpoint + body only) — no curl wrapper/auth
+                    // header, since that was making DEBUG logs unwieldy for large prompts.
+                    .doesNotContain("curl -s -X POST")
+                    .doesNotContain("Authorization")
+                    .doesNotContain("sk-t****")
+                    .doesNotContain("sk-test-key-123456");
+        });
+    }
+
+    @Test
+    @DisplayName("TRACE 활성 시 재현 가능한 전체 curl 명령(인증 헤더 마스킹 포함)이 남는다")
+    void logsFullCurlAtTraceLevel() {
+        logbackLogger.setLevel(Level.TRACE);
+        when(delegate.call(any())).thenReturn(response());
+        var model = new LoggingEmbeddingModel(delegate, "embed:nomic",
+                "http://localhost:1234/v1", "sk-test-key-123456", "nomic-embed-text");
+
+        model.call(new EmbeddingRequest(List.of("first chunk", "second chunk"), null));
+
+        assertThat(logAppender.list).anySatisfy(event -> {
+            assertThat(event.getLevel()).isEqualTo(Level.TRACE);
+            String msg = event.getFormattedMessage();
+            assertThat(msg).contains("embed:nomic")
+                    .contains("texts=2")
+                    .contains("curl -s -X POST")
+                    .contains("http://localhost:1234/v1/embeddings")
+                    .contains("nomic-embed-text")
                     .contains("sk-t****") // masked, not the raw key
                     .doesNotContain("sk-test-key-123456");
         });
+    }
+
+    @Test
+    @DisplayName("DEBUG만 활성이고 TRACE는 비활성이면 TRACE 레벨 로그는 남지 않는다")
+    void debugOnly_neverLogsAtTraceLevel() {
+        when(delegate.call(any())).thenReturn(response());
+        var model = new LoggingEmbeddingModel(delegate, "embed:nomic",
+                "http://localhost:1234/v1", "sk-test-key-123456", "nomic-embed-text");
+
+        model.call(new EmbeddingRequest(List.of("x"), null));
+
+        assertThat(logAppender.list).noneMatch(event -> event.getLevel() == Level.TRACE);
     }
 
     @Test

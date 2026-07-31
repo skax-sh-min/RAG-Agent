@@ -6,6 +6,7 @@ import com.example.ragagent.audit.AuditLogger;
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.context.ThreadContextResolver;
 import com.example.ragagent.llm.CircuitBreaker;
+import com.example.ragagent.llm.EmbeddingConcurrencyTracker;
 import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.repository.LlmUsageRepository;
 import com.example.ragagent.service.CuratedQaService;
@@ -69,6 +70,7 @@ class OperationsControllerUsageTest {
     @MockitoBean AuditLogger auditLogger;
     @MockitoBean CuratedQaService curatedQaService;
     @MockitoBean LlmRouter llmRouter;
+    @MockitoBean EmbeddingConcurrencyTracker embeddingConcurrencyTracker;
 
     @BeforeEach
     void setUp() {
@@ -131,6 +133,34 @@ class OperationsControllerUsageTest {
                 .andExpect(jsonPath("$.available").value(false))
                 .andExpect(jsonPath("$.inUse").doesNotExist())
                 .andExpect(jsonPath("$.capacity").doesNotExist());
+    }
+
+    @Test
+    @DisplayName("GET /api/v1/llm/concurrency — 임베딩 in-flight 값이 inUse 에 합산된다")
+    void concurrency_foldsInEmbeddingActivity() throws Exception {
+        when(llmRouter.localTier1Concurrency())
+                .thenReturn(Optional.of(new LlmRouter.ConcurrencySnapshot(1, 6)));
+        when(embeddingConcurrencyTracker.get()).thenReturn(2);
+
+        mvc.perform(get("/api/v1/llm/concurrency"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.available").value(true))
+                .andExpect(jsonPath("$.inUse").value(3)) // 1(chat) + 2(embedding)
+                .andExpect(jsonPath("$.capacity").value(6));
+    }
+
+    @Test
+    @DisplayName("GET /api/v1/llm/concurrency — chat+임베딩 합계가 capacity 를 넘으면 capacity 로 clamp 된다")
+    void concurrency_clampsCombinedTotalAtCapacity() throws Exception {
+        when(llmRouter.localTier1Concurrency())
+                .thenReturn(Optional.of(new LlmRouter.ConcurrencySnapshot(2, 3)));
+        when(embeddingConcurrencyTracker.get()).thenReturn(5); // 2+5=7 > capacity(3)
+
+        mvc.perform(get("/api/v1/llm/concurrency"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.available").value(true))
+                .andExpect(jsonPath("$.inUse").value(3)) // capacity 로 clamp
+                .andExpect(jsonPath("$.capacity").value(3));
     }
 
     @Test

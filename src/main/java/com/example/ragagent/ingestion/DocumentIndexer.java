@@ -264,11 +264,15 @@ public class DocumentIndexer {
         }
 
         req.onProgress().accept(IndexingProgressEvent.of("chunking", 0, 0, req.filename(), "청크 분할 중..."));
+        // Read once and reuse: chunk-overlap is hot-editable (§6.13), so re-reading it for the
+        // registry entry below could record a different value than the one that actually cut these
+        // chunks — exactly the mismatch the stored value exists to prevent.
+        int usedOverlap = props.chunkOverlapSafe();
         List<Document> chunks = chunkSplitter.splitDocuments(
-            rawDocs, req.filename(), props.chunkSizeSafe(), props.chunkOverlapSafe(), props.minChunkSizeSafe(),
+            rawDocs, req.filename(), props.chunkSizeSafe(), usedOverlap, props.minChunkSizeSafe(),
             props.embeddingSafe().maxChunkChars());
         log.debug("[INDEX] {} 청크 분할 완료 → {}개 (chunkSize={}, overlap={}, minChunkSize={})",
-            req.filename(), chunks.size(), props.chunkSizeSafe(), props.chunkOverlapSafe(), props.minChunkSizeSafe());
+            req.filename(), chunks.size(), props.chunkSizeSafe(), usedOverlap, props.minChunkSizeSafe());
         req.onProgress().accept(IndexingProgressEvent.of("chunking", 0, chunks.size(), req.filename(),
                 chunks.size() + "개 청크"));
 
@@ -292,7 +296,8 @@ public class DocumentIndexer {
 
         List<String> docIds = enriched.stream().map(Document::getId).toList();
         DocRegistry.DocRegistryEntry entry = new DocRegistry.DocRegistryEntry(
-                sha256, req.version(), Instant.now().toString(), tagged.size(), docIds, List.of());
+                sha256, req.version(), Instant.now().toString(), tagged.size(), docIds, List.of(),
+                usedOverlap);
         docRegistry.put(docId, DocRegistry.SHARED, entry);
 
         if (req.staleDocId() != null) {
@@ -315,6 +320,37 @@ public class DocumentIndexer {
         reindexFromMd(docId, event -> {});
     }
 
+    /**
+     * Read-only pre-flight for {@link #reindexFromMd}: reports code-fence defects in the saved MD
+     * ({@link MarkdownCorrectionService#findFenceProblems}) so the operator can decide to proceed or
+     * stop before any work starts. Nothing is modified and no LLM/embedding call is made.
+     *
+     * <p>Needed because this path never re-runs {@code correct()}'s repairing passes
+     * ({@code fixClosingFences}/{@code normalizeCodeBlocks} — see {@link #postProcessIfNeeded}), so a
+     * broken fence in a hand-edited MD is carried straight into the new chunks instead of being
+     * healed. Returns an empty list when the document has no MD file at all or it cannot be read —
+     * those are not fence problems, and {@link #reindexFromMd} reports them properly on its own.
+     */
+    public List<MarkdownCorrectionService.FenceProblem> checkFenceHealth(String docId) {
+        Path mdPath = resolveMdPath(docId);
+        if (mdPath == null) return List.of();
+        try {
+            return MarkdownCorrectionService.findFenceProblems(Files.readString(mdPath));
+        } catch (IOException e) {
+            log.warn("[REINDEX] 펜스 사전 점검용 MD 읽기 실패: docId={}, {}", docId, e.getMessage());
+            return List.of();
+        }
+    }
+
+    /** The MD file {@link #reindexFromMd} would read — corrected one first, raw fallback — or
+     *  {@code null} when neither exists (scanned PDF/image documents never produce one). */
+    private Path resolveMdPath(String docId) {
+        Path corrected = dataDir.resolve("converted").resolve(docId + "_corrected.md");
+        if (Files.exists(corrected)) return corrected;
+        Path raw = dataDir.resolve("converted").resolve(docId + ".md");
+        return Files.exists(raw) ? raw : null;
+    }
+
     /** Same as {@link #reindexFromMd(String)}, reporting per-stage progress via {@code onProgress}. */
     public void reindexFromMd(String docId, Consumer<IndexingProgressEvent> onProgress) throws IOException {
         DocRegistry.DocRegistryEntry existing = docRegistry.findByDocId(docId)
@@ -325,10 +361,8 @@ public class DocumentIndexer {
         String sha256   = existing.sha256();
         String docType  = inferDocType(filename);
 
-        Path correctedPath = dataDir.resolve("converted").resolve(docId + "_corrected.md");
-        Path rawPath       = dataDir.resolve("converted").resolve(docId + ".md");
-        Path mdPath = Files.exists(correctedPath) ? correctedPath : rawPath;
-        if (!Files.exists(mdPath)) {
+        Path mdPath = resolveMdPath(docId);
+        if (mdPath == null) {
             throw new IllegalStateException(
                     "MD 파일이 없습니다 (DOCX/TXT/PPTX/PDF 문서만 MD 재인덱싱 지원): " + docId);
         }
@@ -344,6 +378,17 @@ public class DocumentIndexer {
 
         onProgress.accept(IndexingProgressEvent.of("loading", 0, 0, filename, "MD 파일 로드 중..."));
         String md = Files.readString(mdPath);
+        // Fence defects are only reported, never repaired here — this path deliberately does not
+        // re-run the rewriting passes (see postProcessIfNeeded). The operator has already been asked
+        // to proceed or stop by the pre-flight check (checkFenceHealth); this log is the record of
+        // what they proceeded with.
+        List<MarkdownCorrectionService.FenceProblem> fenceProblems =
+                MarkdownCorrectionService.findFenceProblems(md);
+        if (!fenceProblems.isEmpty()) {
+            log.warn("[REINDEX] {} — 코드 펜스 문제 {}건을 안고 진행합니다: {}", filename, fenceProblems.size(),
+                    String.join(", ", fenceProblems.stream()
+                            .map(p -> p.line() + "행(" + p.kind() + ")").toList()));
+        }
         md = removeMissingImageMarkers(md, mdPath, filename);
         md = reapplyHeadingNumbersIfNeeded(md, mdPath, filename);
         md = postProcessIfNeeded(md, mdPath, filename);
@@ -354,8 +399,11 @@ public class DocumentIndexer {
         String lowerFilename = filename.toLowerCase();
         boolean skipChapterNumbers = lowerFilename.endsWith(".pptx") || lowerFilename.endsWith(".pdf");
         List<Document> rawDocs = loaderService.loadFromMarkdown(md, skipChapterNumbers);
+        // Captured for the registry entry below — re-reading the hot setting later could record an
+        // overlap these chunks were not actually cut with (see index()).
+        int usedOverlap = props.chunkOverlapSafe();
         List<Document> chunks  = chunkSplitter.splitDocuments(
-            rawDocs, filename, props.chunkSizeSafe(), props.chunkOverlapSafe(), props.minChunkSizeSafe(),
+            rawDocs, filename, props.chunkSizeSafe(), usedOverlap, props.minChunkSizeSafe(),
             props.embeddingSafe().maxChunkChars());
         log.debug("[REINDEX] 청크 분할: {}섹션 → {}청크", rawDocs.size(), chunks.size());
         onProgress.accept(IndexingProgressEvent.of("chunking", 0, chunks.size(), filename,
@@ -385,7 +433,8 @@ public class DocumentIndexer {
 
         List<String> springIds = enriched.stream().map(Document::getId).toList();
         docRegistry.put(docId, DocRegistry.SHARED, new DocRegistry.DocRegistryEntry(
-                sha256, version, Instant.now().toString(), tagged.size(), springIds, List.of()));
+                sha256, version, Instant.now().toString(), tagged.size(), springIds, List.of(),
+                usedOverlap));
         docRegistry.save();
 
         log.info("[REINDEX] 완료: {} → {}개 청크, {}ms", filename, tagged.size(), System.currentTimeMillis() - t0);

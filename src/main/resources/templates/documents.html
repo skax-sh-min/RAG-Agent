@@ -157,6 +157,62 @@
         </div>
 
     </div>
+
+<!-- ── 문서 내보내기 다이얼로그 (§ 문서 내보내기) ─────────────────────────────
+     layout:fragment="content" 안에 있어야 한다 — Layout Dialect는 fragment 바깥의
+     마크업을 렌더링에서 통째로 버리므로, 밖에 두면 모달이 DOM에 아예 나타나지 않는다. -->
+<div class="modal fade" id="exportModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header py-2">
+        <h6 class="modal-title mb-0">
+          <i class="bi bi-download me-1"></i>
+          <span th:text="#{doc.export.title}">Export document</span>
+        </h6>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"
+                th:attr="aria-label=#{doc.btn.cancel}"></button>
+      </div>
+      <div class="modal-body">
+        <div class="small text-muted mb-2" id="export-filename"></div>
+
+        <label class="form-label small fw-semibold mb-1" th:text="#{doc.export.format}">Format</label>
+        <div class="btn-group w-100 mb-3" role="group">
+          <input type="radio" class="btn-check" name="export-format" id="export-format-md" value="md" checked/>
+          <label class="btn btn-sm btn-outline-primary" for="export-format-md"
+                 th:text="#{doc.export.format.md}">MD</label>
+          <input type="radio" class="btn-check" name="export-format" id="export-format-txt" value="txt"/>
+          <label class="btn btn-sm btn-outline-primary" for="export-format-txt"
+                 th:text="#{doc.export.format.txt}">TXT</label>
+          <input type="radio" class="btn-check" name="export-format" id="export-format-docx" value="docx"/>
+          <label class="btn btn-sm btn-outline-primary" for="export-format-docx"
+                 th:text="#{doc.export.format.docx}">DOCX</label>
+        </div>
+
+        <div class="form-check">
+          <input class="form-check-input" type="checkbox" id="export-image-desc" checked/>
+          <label class="form-check-label small" for="export-image-desc"
+                 th:text="#{doc.export.opt.image_desc}">Include image descriptions</label>
+        </div>
+        <div class="form-check">
+          <input class="form-check-input" type="checkbox" id="export-toc"/>
+          <label class="form-check-label small" for="export-toc"
+                 th:text="#{doc.export.opt.toc}">Add heading numbers &amp; TOC</label>
+          <div id="export-toc-hint" class="form-text d-none"
+               th:text="#{doc.export.opt.toc_pptx_hint}">Not applied to PPTX.</div>
+        </div>
+
+        <div class="alert alert-light border small mt-3 mb-0 py-2"
+             th:text="#{doc.export.hint}">Rebuilt from indexed chunks.</div>
+      </div>
+      <div class="modal-footer py-2">
+        <button type="button" class="btn btn-sm btn-secondary" data-bs-dismiss="modal"
+                th:text="#{doc.btn.cancel}">Cancel</button>
+        <button type="button" class="btn btn-sm btn-primary" id="export-submit"
+                onclick="runExport()" th:text="#{doc.export.submit}">Export</button>
+      </div>
+    </div>
+  </div>
+</div>
 </div>
 
 <th:block layout:fragment="scripts">
@@ -164,7 +220,10 @@
     /* Page-level i18n (complements global I18N from base.html) */
     const PAGE_I18N = {
         statusDone:   /*[[#{status.done}]]*/ 'Done',
-        chunks:       /*[[#{toast.upload.chunks}]]*/ 'chunks'
+        chunks:       /*[[#{toast.upload.chunks}]]*/ 'chunks',
+        exportPreparing: /*[[#{doc.export.preparing}]]*/ 'Exporting...',
+        exportSubmit:    /*[[#{doc.export.submit}]]*/ 'Export',
+        exportFailed:    /*[[#{doc.export.failed}]]*/ 'Export failed.'
     };
 </script>
 <script>
@@ -197,7 +256,48 @@
         });
 
         renderFileList();
+        syncHeadingNumbersCheckbox();
+        warnIfPptxMixed();
         document.getElementById('upload-btn').disabled = false;
+    }
+
+    function extOf(filename) {
+        return (filename.split('.').pop() || '').toLowerCase();
+    }
+
+    function isPptx(file) {
+        return extOf(file.name) === 'pptx';
+    }
+
+    /**
+     * 선택된 파일 구성에 맞춰 '소제목 숫자 생성' 체크박스를 자동으로 맞춘다 — PPTX가 하나라도
+     * 섞여 있으면 해제, 그 외(DOCX/TXT/MD/PDF)만 있으면 체크(기본값).
+     *
+     * PPTX만 대상인 이유: DocumentIndexer의 .pptx 분기가 체크 여부와 무관하게 항상
+     * addHeadingNumbers=false를 넘긴다(슬라이드 제목/부제목 헤딩은 문서 목차 같은 계층 구조가
+     * 아니라서). 즉 PPTX에서는 체크해도 아무 효과가 없으므로 체크된 UI가 오히려 오해를 준다.
+     * PDF는 반대로 체크 값이 그대로 전달되고, PdfToMarkdownConverter가 H2~H6를 아예 만들지
+     * 않으므로 켜두어도 사실상 무해하다(LLM 교정이 헤딩을 만들어낸 경우에만 번호가 붙는다).
+     *
+     * 어디까지나 기본값 제안일 뿐이라 사용자가 업로드 직전에 직접 바꾸는 것은 그대로 가능하다
+     * (선택이 다시 바뀌면 재계산됨).
+     */
+    function syncHeadingNumbersCheckbox() {
+        const box = document.getElementById('add-heading-numbers-checkbox');
+        if (!box) return;
+        box.checked = !selectedFiles.some(isPptx);
+    }
+
+    /**
+     * 업로드는 배치 전체에 addHeadingNumbers 값 하나만 전송하므로, PPTX와 다른 형식을 함께
+     * 고르면 둘 중 하나는 원하는 설정으로 처리할 수 없다(PPTX에 맞춰 해제하면 DOCX/TXT/MD가
+     * 소제목 번호를 잃는다). 나누어 올리도록 경고만 띄우고 업로드 자체는 막지 않는다.
+     */
+    function warnIfPptxMixed() {
+        const pptxCount = selectedFiles.filter(isPptx).length;
+        if (pptxCount > 0 && pptxCount < selectedFiles.length) {
+            showToast(I18N.pptxMixedUpload, 'warning');
+        }
     }
 
     /** Filenames of documents already indexed — scraped from the live doc table, no extra round trip. */
@@ -289,6 +389,10 @@
         } else {
             renderFileList();
         }
+        // 남은 파일 구성이 바뀌었으므로 재계산 — 마지막 PPTX를 지우면 다시 체크되고,
+        // 혼합 상태가 해소되면 경고도 더 이상 뜨지 않는다.
+        syncHeadingNumbersCheckbox();
+        warnIfPptxMixed();
     }
 
     document.getElementById('upload-btn').addEventListener('click', () => {
@@ -298,6 +402,87 @@
         const addHeadingNumbers = document.getElementById('add-heading-numbers-checkbox').checked;
         uploadFiles([...selectedFiles], version, tags, addImageDescriptions, addHeadingNumbers);
     });
+
+    /* ── 문서 내보내기 (§ 문서 내보내기) ──────────────────────────────────────
+     * 행의 '내보내기' 버튼 → 형식/옵션 선택 모달 → GET /ui/documents/{id}/export.
+     * 응답을 Blob으로 받아 다운로드하는 이유는 실패 시 서버의 오류 메시지를 토스트로
+     * 보여주기 위함이다(단순 location 이동은 오류 페이지로 넘어가 버린다).
+     */
+    let exportTarget = null;
+
+    function openExportDialog(btn) {
+        exportTarget = {
+            docId:    btn.dataset.docId,
+            version:  btn.dataset.version,
+            filename: btn.dataset.filename || ''
+        };
+        document.getElementById('export-filename').textContent = exportTarget.filename;
+
+        // PPTX는 슬라이드 제목이 목차 구조가 아니라 서버에서 번호/목차를 적용하지 않는다
+        // (DocumentIndexer의 .pptx 분기와 동일한 규칙) → 체크박스를 비활성화하고 이유를 보여준다.
+        const isPptx = exportTarget.filename.toLowerCase().endsWith('.pptx');
+        const toc = document.getElementById('export-toc');
+        toc.disabled = isPptx;
+        if (isPptx) toc.checked = false;
+        document.getElementById('export-toc-hint').classList.toggle('d-none', !isPptx);
+
+        bootstrap.Modal.getOrCreateInstance(document.getElementById('exportModal')).show();
+    }
+
+    async function runExport() {
+        if (!exportTarget) return;
+        const btn = document.getElementById('export-submit');
+        const format = document.querySelector('input[name="export-format"]:checked').value;
+        const params = new URLSearchParams({
+            version: exportTarget.version,
+            format,
+            includeImageDescriptions: document.getElementById('export-image-desc').checked,
+            addHeadingNumbersAndToc:  document.getElementById('export-toc').checked
+        });
+
+        btn.disabled = true;
+        btn.textContent = PAGE_I18N.exportPreparing;
+        try {
+            const res = await fetch(`/ui/documents/${encodeURIComponent(exportTarget.docId)}/export?${params}`);
+            if (!res.ok) throw new Error(await extractError(res));
+
+            const blob = await res.blob();
+            const url  = URL.createObjectURL(blob);
+            const a    = document.createElement('a');
+            a.href = url;
+            a.download = filenameFromDisposition(res.headers.get('Content-Disposition'))
+                         || `${exportTarget.docId}.${format}`;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            URL.revokeObjectURL(url);
+            bootstrap.Modal.getOrCreateInstance(document.getElementById('exportModal')).hide();
+        } catch (e) {
+            showToast(`${PAGE_I18N.exportFailed} ${escHtml(e.message || '')}`, 'danger');
+        } finally {
+            btn.disabled = false;
+            btn.textContent = PAGE_I18N.exportSubmit;
+        }
+    }
+
+    /** RFC 5987 filename*=UTF-8''... 우선, 없으면 filename="..." 폴백. */
+    function filenameFromDisposition(header) {
+        if (!header) return null;
+        const star = header.match(/filename\*=UTF-8''([^;]+)/i);
+        if (star) { try { return decodeURIComponent(star[1]); } catch (_) { /* fall through */ } }
+        const plain = header.match(/filename="?([^";]+)"?/i);
+        return plain ? plain[1] : null;
+    }
+
+    /** ProblemDetail(JSON)의 detail 필드를 우선 사용하고, 아니면 상태 코드를 보여준다. */
+    async function extractError(res) {
+        try {
+            const body = await res.json();
+            return body.detail || body.title || `HTTP ${res.status}`;
+        } catch (_) {
+            return `HTTP ${res.status}`;
+        }
+    }
 
     /* ── Upload orchestration ────────────────────────────────────────────── */
     async function uploadFiles(files, version, tags, addImageDescriptions, addHeadingNumbers) {

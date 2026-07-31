@@ -25,6 +25,10 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * route through {@code this.call(...)} rather than delegating directly (which would bypass
  * tracking). {@link #dimensions()} delegates straight through since it's not a usage-generating
  * call and the delegate may cache/short-circuit it.
+ *
+ * <p>Also wraps the delegate call with an {@link EmbeddingConcurrencyTracker} increment/decrement
+ * (see that class) so embedding activity — invisible to {@link LlmRouter}'s chat-only concurrency
+ * gate — still registers on the header's LLM concurrency indicator.
  */
 public class TrackingEmbeddingModel implements EmbeddingModel {
 
@@ -37,19 +41,39 @@ public class TrackingEmbeddingModel implements EmbeddingModel {
     private final LlmUsageRepository usageRepo;
     private final String providerName;
     private final boolean approximateFallback;
+    private final EmbeddingConcurrencyTracker concurrencyTracker;
     private final AtomicBoolean fallbackWarned = new AtomicBoolean(false);
 
     public TrackingEmbeddingModel(EmbeddingModel delegate, LlmUsageRepository usageRepo,
                                   String modelName, boolean approximateFallback) {
+        this(delegate, usageRepo, modelName, approximateFallback, new EmbeddingConcurrencyTracker());
+    }
+
+    /**
+     * @param concurrencyTracker shared in-flight counter (see {@link EmbeddingConcurrencyTracker})
+     *                           folded into the header's LLM concurrency indicator — increments
+     *                           around {@link #call} below, the one layer common to both the
+     *                           query-time cached path and the uncached index-time path.
+     */
+    public TrackingEmbeddingModel(EmbeddingModel delegate, LlmUsageRepository usageRepo,
+                                  String modelName, boolean approximateFallback,
+                                  EmbeddingConcurrencyTracker concurrencyTracker) {
         this.delegate = delegate;
         this.usageRepo = usageRepo;
         this.providerName = PROVIDER_PREFIX + modelName;
         this.approximateFallback = approximateFallback;
+        this.concurrencyTracker = concurrencyTracker;
     }
 
     @Override
     public EmbeddingResponse call(EmbeddingRequest request) {
-        EmbeddingResponse response = delegate.call(request);
+        EmbeddingResponse response;
+        concurrencyTracker.increment();
+        try {
+            response = delegate.call(request);
+        } finally {
+            concurrencyTracker.decrement();
+        }
         try {
             usageRepo.record(providerName, extractInputTokens(response, request), 0);
         } catch (Exception e) {

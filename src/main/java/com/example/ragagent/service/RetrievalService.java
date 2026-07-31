@@ -11,13 +11,16 @@ import com.example.ragagent.llm.TrackingChatModel;
 import com.example.ragagent.model.MetaKey;
 import com.example.ragagent.model.SourceRef;
 import com.example.ragagent.repository.LlmUsageRepository;
+import com.example.ragagent.security.PromptInjectionGuard;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.ai.chat.prompt.PromptTemplate;
 import org.springframework.ai.document.Document;
 import org.springframework.ai.rag.Query;
 import org.springframework.ai.rag.preretrieval.query.expansion.MultiQueryExpander;
+import org.springframework.context.MessageSource;
 import org.springframework.stereotype.Service;
 
 import java.util.*;
@@ -46,15 +49,18 @@ public class RetrievalService {
     private final boolean rerankEnabled;
     private final LazyVisionService lazyVisionService; // null when disabled
     private final Optional<RerankerService> reranker;
+    private final ChatImageAnalysisSkipRegistry imageSkipRegistry;
 
     public RetrievalService(LlmRouter llmRouter, LlmUsageRepository usageRepo, RagService ragService,
                             AppProperties props, Optional<LazyVisionService> lazyVisionOpt,
-                            Optional<RerankerService> rerankerOpt) {
+                            Optional<RerankerService> rerankerOpt, MessageSource messageSource,
+                            ChatImageAnalysisSkipRegistry imageSkipRegistry) {
         this.ragService = ragService;
         this.props = props;
         this.rerankEnabled = props.searchRerankEnabled();
         this.lazyVisionService = lazyVisionOpt.orElse(null);
         this.reranker = rerankerOpt;
+        this.imageSkipRegistry = imageSkipRegistry;
         // MultiQueryExpander builds its own ChatClient around the model it's given, so the
         // only way to have its calls recorded in llm_usage is to wrap that model (mirrors
         // TrackingEmbeddingModel's decorator for embeddings). §6.21 (작업2) — query expansion is a
@@ -70,14 +76,33 @@ public class RetrievalService {
                 new ConcurrencyLimitingChatModel(expansionProvider.chatModel(), expansionProvider, llmRouter);
         ChatModel trackedExpansionModel =
                 new TrackingChatModel(gatedExpansionModel, expansionProvider.name(), usageRepo);
+        // Swap Spring AI's default (English, diversity-only) expansion prompt for a Korean one that
+        // also asks the model to normalize the question toward embedding-search-friendly phrasing
+        // (strip filler/honorifics, resolve pronouns) — not just paraphrase it. The app has no
+        // per-request locale variance in practice (ThreadContext defaults to Locale.KOREAN), and this
+        // expander is built once at bean construction, so a fixed locale here is fine.
+        PromptTemplate expansionPromptTemplate = PromptTemplate.builder()
+                .template(messageSource.getMessage("prompt.retrieval.expansion", null, Locale.KOREAN))
+                .build();
         this.multiQueryExpander = MultiQueryExpander.builder()
                 .chatClientBuilder(ChatClient.builder(trackedExpansionModel))
+                .promptTemplate(expansionPromptTemplate)
                 .includeOriginal(true)
                 .numberOfQueries(2)
                 .build();
     }
 
     public AgentState execute(AgentState state) {
+        return execute(state, GraphListener.NOOP);
+    }
+
+    /**
+     * Same as {@link #execute(AgentState)}, but reports Lazy Vision progress through
+     * {@code listener} (see {@link GraphListener#onImageAnalysisProgress}) — {@code AgentGraph}
+     * passes {@link GraphListener#NOOP} on the blocking path, same zero-overhead convention as
+     * the other nodes.
+     */
+    public AgentState execute(AgentState state, GraphListener listener) {
         // normalized search-scope tags (empty → version-only behavior, unchanged).
         List<String> selectedTags = com.example.ragagent.model.TagUtils.parseTagList(state.selectedTags());
         // Read hot-editable tuning fresh each call so /settings overrides apply live.
@@ -134,9 +159,15 @@ public class RetrievalService {
                     CompletableFuture<List<Document>> originalF = CompletableFuture.supplyAsync(
                             () -> ragService.search(state.userId(), state.question(), state.version(), fetchK),
                             exec);
-                    List<String> variantTexts = multiQueryExpander.expand(new Query(state.question())).stream()
+                    // Wrap for the LLM-facing expansion prompt only (delimiter isolation, same as every
+                    // other prompt-construction site) — the vector search axes above still embed the
+                    // raw state.question() untouched. includeOriginal(true) echoes back exactly the
+                    // wrapped string as one "variant", so filter against that same wrapped string
+                    // (not the raw question) to strip it before the variant-only batch search below.
+                    String expansionInput = PromptInjectionGuard.wrap(state.question());
+                    List<String> variantTexts = multiQueryExpander.expand(new Query(expansionInput)).stream()
                             .map(Query::text)
-                            .filter(t -> !t.equals(state.question()))
+                            .filter(t -> !t.equals(expansionInput))
                             .toList();
                     ranked = new ArrayList<>();
                     ranked.add(originalF.join());
@@ -187,8 +218,25 @@ public class RetrievalService {
 
         List<Document> contextDocs = unique;
         if (!imageRefs.isEmpty() && lazyVisionService != null) {
-            Map<String, String> descs = lazyVisionService.describeIfNeeded(imageRefs);
-            if (!descs.isEmpty()) contextDocs = augmentWithDescriptions(unique, descs);
+            // Skip any image whose description is already embedded in the chunk text — DOCX/PPTX/PDF
+            // uploads with "이미지 설명 추가" checked get a "[이미지 설명: ...]" line injected right
+            // after the "[이미지: ...]" marker at indexing time (MarkdownCorrectionService), but that
+            // description only ever lives in the markdown text — it's never written to the
+            // image_descriptions table LazyVisionService/ImageDescriptionRepository read from. Without
+            // this filter, every such image looks like a cache miss on every single turn that
+            // retrieves it: a wasted Vision call plus a duplicate "설명: ..." appended right next to
+            // the one already in the text (see augmentWithDescriptions() below).
+            List<Document> retrieved = unique; // effectively-final capture for the lambda below
+            List<String> needsAnalysis = imageRefs.stream()
+                    .filter(path -> retrieved.stream().noneMatch(d -> hasEmbeddedDescription(d.getText(), path)))
+                    .toList();
+            if (!needsAnalysis.isEmpty()) {
+                String threadId = state.threadId();
+                Map<String, String> descs = lazyVisionService.describeIfNeeded(needsAnalysis,
+                        (done, total) -> listener.onImageAnalysisProgress(done, total),
+                        () -> imageSkipRegistry.isSkipRequested(threadId));
+                if (!descs.isEmpty()) contextDocs = augmentWithDescriptions(unique, descs);
+            }
         }
 
         List<String> warnings = new ArrayList<>(state.retrievalWarnings());
@@ -393,6 +441,22 @@ public class RetrievalService {
      * comma-joined paths as either a String or a List depending on writer/version;
      * a blind (String) cast crashes the entire retrieval on the latter.
      */
+    /**
+     * True when {@code text} already has a "[이미지 설명: ...]" line immediately following the
+     * "[이미지: {imagePath}]" marker — i.e. this exact chunk was indexed with "이미지 설명 추가"
+     * checked, so a fresh Lazy Vision call would be redundant. Only a match right after the marker
+     * counts (not merely "the text contains a description somewhere") — an unrelated image's
+     * description elsewhere in a merged chunk must not suppress analysis of this one.
+     */
+    static boolean hasEmbeddedDescription(String text, String imagePath) {
+        if (text == null) return false;
+        String marker = "[이미지: " + imagePath + "]";
+        int idx = text.indexOf(marker);
+        if (idx < 0) return false;
+        String after = text.substring(idx + marker.length()).stripLeading();
+        return after.startsWith("[이미지 설명:");
+    }
+
     private static String imagePathsMeta(Map<String, Object> meta) {
         Object raw = meta.get(MetaKey.IMAGE_PATHS);
         if (raw instanceof String s) return s;

@@ -12,8 +12,10 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.document.Document;
+import org.springframework.context.MessageSource;
 
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 
@@ -44,6 +46,13 @@ class RetrievalServiceEscalationTest {
         return llmRouter;
     }
 
+    /** RetrievalService's ctor eagerly builds a PromptTemplate from this — always needs a stub. */
+    private static MessageSource stubMessageSource() {
+        MessageSource messageSource = mock(MessageSource.class);
+        when(messageSource.getMessage(anyString(), any(), any(Locale.class))).thenReturn("{query} {number}");
+        return messageSource;
+    }
+
     private RetrievalService serviceWithEscalate(boolean escalate) {
         AppProperties props = mock(AppProperties.class);
         when(props.searchTopKSafe()).thenReturn(DEFAULT_TOP_K);
@@ -59,7 +68,7 @@ class RetrievalServiceEscalationTest {
                 .thenReturn(List.of(List.of(new Document("d", Map.of()))));
 
         return new RetrievalService(stubLlmRouter(), mock(LlmUsageRepository.class), ragService, props,
-                Optional.empty(), Optional.empty());
+                Optional.empty(), Optional.empty(), stubMessageSource(), new ChatImageAnalysisSkipRegistry());
     }
 
     private static AgentState stateWithRetry(int retryCount) {
@@ -127,7 +136,7 @@ class RetrievalServiceEscalationTest {
                 .thenReturn(List.of(bigList));
 
         RetrievalService svc = new RetrievalService(stubLlmRouter(), mock(LlmUsageRepository.class), rs, props,
-                Optional.empty(), Optional.empty());
+                Optional.empty(), Optional.empty(), stubMessageSource(), new ChatImageAnalysisSkipRegistry());
 
         AgentState result = svc.execute(stateWithRetry(2));
         assertThat(result.retrievedDocs()).hasSizeLessThanOrEqualTo(DEFAULT_TOP_K);

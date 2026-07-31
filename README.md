@@ -41,13 +41,15 @@ The built JAR is generated at `target/rag-agent-*.jar`.
 
 > **Vector store backend** — defaults to ChromaDB. Set `VECTORSTORE_TYPE=sqlite-vec` to store vectors in the SQLite file instead and **skip the "Start Chroma" step** below (requires an operator-provided `vec0` native extension — see [OPERATOR_MANUAL.md](documents/OPERATOR_MANUAL.md)). For a fully offline, no-Docker setup (sqlite-vec + local llama-server), see [OPERATOR_MANUAL.md §4.5](documents/OPERATOR_MANUAL.md#45-폐쇄망air-gapped--노-도커-실행).
 
+> **Chroma version — v2 API required.** Spring AI 1.1.8's `ChromaApi` calls only `/api/v2/tenants/{tenant}/databases/{database}/…`, and tenants/databases don't exist in Chroma's v1 API, so a v1-era server (0.5.x and earlier) is **not** compatible. The commands below and `docker-compose.yml` pin `chromadb/chroma:1.0.21` rather than `:latest`, since Chroma has changed its HTTP API across major versions before. Bump the pin deliberately, not implicitly.
+
 #### Development mode (run from source)
 
 ```bash
 # 1. Start Chroma (separate terminal)
 docker run --rm -p 8001:8000 \
   -v "$(pwd)/data/chroma:/data" \
-  chromadb/chroma:latest
+  chromadb/chroma:1.0.21
 
 # 2. Configure environment variables
 cp .env.example .env
@@ -62,7 +64,7 @@ mvn spring-boot:run
 # 1. Start Chroma (separate terminal)
 docker run --rm -p 8001:8000 \
   -v "$(pwd)/data/chroma:/data" \
-  chromadb/chroma:latest
+  chromadb/chroma:1.0.21
 
 # 2. Load env vars and run JAR
 export $(grep -v '^#' .env | xargs)
@@ -80,7 +82,7 @@ container system start
 # 2. Start Chroma (separate terminal)
 container run --rm -p 8001:8000 \
   -v "$(pwd)/data/chroma:/data" \
-  chromadb/chroma:latest
+  chromadb/chroma:1.0.21
 
 # 3. Load env vars and run
 export $(grep -v '^#' .env | xargs)
@@ -137,14 +139,37 @@ See [USER_MANUAL.md](documents/USER_MANUAL.md) for usage instructions and [OPERA
 | `CHROMA_PORT` | — | `8001` | Chroma server port (chroma backend) |
 | `DATA_DIR` | — | `./data` | Storage path for documents, registry, and SQLite DB |
 
+### Image Processing / Rate Limiting / Audit
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `IMAGE_DESCRIPTION_ENABLED` | `true` | `LazyVisionService` on/off (`app.image-description.enabled`). A `@ConditionalOnProperty` bean gate — **restart required**; `false` stores image markers without ever calling Vision at query time |
+| `IMAGE_OCR_ENABLED` | `true` | Tesseract OCR for scanned PDF pages (`OcrService`, same structural bean gate) |
+| `IMAGE_OCR_TESSDATA_PATH` | (blank) | Absolute path to the Tesseract `tessdata` directory. Blank → falls back to `TESSDATA_PREFIX` or the system default path |
+| `IMAGE_CLASSIFY_TYPE` | `true` | Classify image type (diagram/screenshot/chart/photo) before describing, to pick a type-specific Vision prompt |
+| `DOCX_EMF_CONVERT` | `true` | Rasterize DOCX EMF vector images to PNG via Batik (no extra install) |
+| `DOCX_WMF_CONVERT` | `false` | Rasterize DOCX WMF images via LibreOffice headless (needs `soffice` on PATH — hence off by default). When off, the image is kept as a `[이미지(변환불가): …]` marker |
+| `RATE_LIMIT_ENABLED` | `true` | Master switch for the per-user token bucket (`app.rate-limit.*`) |
+| `RATE_LIMIT_CHAT_PER_MINUTE` | `60` | `/chat` requests per minute per user |
+| `RATE_LIMIT_UPLOAD_PER_MINUTE` | `10` | Document upload requests per minute |
+| `RATE_LIMIT_SYNC_PER_MINUTE` | `3` | Folder-sync requests per minute |
+| `RATE_LIMIT_IMAGE_PER_MINUTE` | `300` | `/images/` requests per minute |
+| `RATE_LIMIT_DEFAULT_PER_MINUTE` | `120` | Default for every other path |
+| `AUDIT_ENABLED` | `true` | Write audit events to `data/audit/audit.log` (`app.audit.*`) |
+| `AUDIT_MAX_FILE_SIZE` | `10MB` | Rolling size threshold — also the Logback `AUDIT_FILE` appender's rollover trigger |
+| `AUDIT_MAX_HISTORY_DAYS` | `7` | Retention for compressed audit files |
+| `AUDIT_TOTAL_SIZE_CAP` | `100MB` | Total size cap for `data/audit/` |
+
+> `app.image-description.mode` and `app.image-description.min-image-bytes` still bind but **nothing reads them** — the strip/describe decision now lives in the upload-time "이미지 설명 추가" checkbox plus `LazyVisionService`'s query-time cache. They have no env var on purpose.
+
 ### RAG Tuning
 
 | Variable | Default | Recommended Range | Description |
 |----------|---------|-------------------|-------------|
-| `CHUNK_SIZE` | `800` | 300 ~ 2000 | Document chunk size (characters) |
-| `CHUNK_OVERLAP` | `100` | 0 ~ CHUNK_SIZE × 0.25 | Overlap between chunks (characters, boundary context only) |
-| `MIN_CHUNK_SIZE` | `300` | 50 ~ CHUNK_SIZE × 0.25 | Minimum chunk size threshold for tiny-chunk merge |
-| `SEARCH_TOP_K` | `7` | 2 ~ 15 | Number of documents returned by vector search |
+| `CHUNK_SIZE` | `1500` | 300 ~ 2000 | Document chunk size (characters) |
+| `CHUNK_OVERLAP` | `0` | 0 ~ CHUNK_SIZE × 0.25 | Overlap between chunks (characters, boundary context only). Defaults to `0` — section-aware splitting already carries heading/breadcrumb context into each chunk, and `0` keeps document export exact (see the Document export feature below) |
+| `MIN_CHUNK_SIZE` | `500` | 50 ~ CHUNK_SIZE × 0.25 | Minimum chunk size threshold for tiny-chunk merge |
+| `SEARCH_TOP_K` | `8` | 2 ~ 15 | Number of documents returned by vector search |
 | `SEARCH_SIMILARITY_THRESHOLD` | `0.0` | 0.0 ~ 0.75 | Min cosine similarity to keep a chunk (`0.0` = accept all) |
 | `SEARCH_MULTIQUERY_ENABLED` | `true` | true/false | Expand the query into sub-queries before search |
 | `SEARCH_MULTIQUERY_MIN_LENGTH` | `15` | 0 ~ 20 | Skip expansion for queries shorter than this (`0` = always expand). When expansion does run, the original-question search executes in parallel with it instead of waiting behind it |
@@ -348,15 +373,21 @@ User question
 - **ReAct re-retrieval** — automatic re-retrieval up to 2 times when evidence is insufficient
 - **Critic verification** — LLM double-checks whether the generated answer is grounded in documents
 - **PROGRESSIVE mode** — starts with COST_FIRST; if quality score < threshold, re-runs Answer with PREMIUM provider and marks response with upgrade badge
+- **Per-visitor chat in no-auth mode** — `app.auth.guest-identity` (`shared`/`ip`/`cookie`/`hybrid`) gives each visitor their own sidebar threads and history instead of one shared guest, with no storage change: every table is already `user_id`-keyed, so only the id the auth filter injects had to become per-visitor. `hybrid` (recommended) uses a long-lived `rag_visitor` cookie when present and otherwise derives the id from the client IP and stores it as that cookie — surviving both a DHCP lease change and a cookie wipe. Ids are `guest-<hex>` HMACs over a persisted server key, so raw IPs never land in the DB and guest rows stay identifiable for a later hand-off to real accounts. Uploaded documents stay shared. Defaults to `shared` (zero regression)
+- **Trusted client IP resolution** — `app.trust-forwarded-for` (default `false`) gates whether `X-Forwarded-For` is believed, for both rate limiting and guest identity. Off, a forged header can't refill an attacker's rate-limit bucket or impersonate another visitor; on (required behind Caddy/nginx), real client IPs are recovered instead of every visitor collapsing into the proxy address
 - **Rate limiting** — Bucket4j + Caffeine per-user token-bucket; 429 `RAG-RATE-001` + `Retry-After` header; configurable via `app.rate-limit.*`
 - **Audit logging** — structured events written to rolling file via Logback; configurable via `app.audit.*`
 - **Image processing pipeline** — PDF/PPTX/DOCX image extraction → stored under `data/images/{imageId}/` (a content-hash key derived from the document's SHA-256, distinct from the document's own `docId`, so long filenames aren't repeated per image); PPTX pictures with annotation shapes (highlight circle, arrow, callout) drawn on them are composited into one image (`app.pptx-image.merge-annotated-pictures`), as are tables with an overlapping annotation shape (table also kept as a markdown table) and real Ctrl+G groups / SmartArt; loose overlapping shapes are only merged into one diagram image when `app.pptx-image.rasterize-shapes=true` (default off). DOCX pictures likewise merge with legacy-VML annotation shapes (rect/oval/line) found in the same paragraph (`app.docx-image.merge-annotated-shapes` — a proximity approximation, since POI exposes no shape coordinates for DOCX); Lazy Vision description on first retrieval (cached in SQLite); image thumbnails shown in answer bubble
+- **Chat-time image analysis progress + skip** — when a search result includes an image whose description isn't already embedded in the chunk text, Lazy Vision analyzes it before the answer is generated; the header badge shows "이미지 분석 중 (2/5)" and counts up as each analysis completes, with a **건너뛰기** (skip) link that stops the *wait* only — the analysis keeps running in the background and lands in the SQLite cache for the next turn that needs it, so nothing is wasted. A chunk indexed with "이미지 설명 추가" (its `[이미지 설명: ...]` already embedded) is never re-analyzed at query time
 - **Image type classification** — pre-classifies images (diagram / screenshot / chart / photo / other) and uses type-specific Vision prompts for better descriptions
 - **Scanned PDF OCR** — Tesseract OCR (kor+eng) for pages with insufficient text; activated via `app.image-description.ocr-enabled=true`
 - **EMF/WMF conversion** — DOCX Windows Metafile images converted to PNG via Batik (EMF) or LibreOffice headless (WMF)
 - **Multi-turn conversation** — thread-based history persistence (SQLite WAL, survives restarts)
 - **Message bubble restore** — re-entering `/chat/{threadId}` server-renders all previous turn bubbles
 - **Source hover preview** — `SourceRef` record with Bootstrap Popover shows a 200-char chunk text preview on hover; on non-mobile screens the popover is roughly 2x wider with a slightly smaller font so the excerpt reads with less wrapping
+- **Chunk editor live preview** — on wide desktop screens, the `/admin` chunk-edit offcanvas splits into a live Markdown preview (rendering images and tables) alongside the text editor, updating as you type; narrow screens keep the existing single-column editor
+- **Smart heading-number default** — the upload "generate heading numbers" checkbox auto-unchecks whenever a PPTX is selected (the option is never applied to PPTX server-side; PDF is unaffected and stays checked) and warns when PPTX is mixed with other formats in one upload, since the option applies per-batch, not per-file
+- **Document export (MD/TXT/DOCX)** — the document list's per-row **Export** button (admin-only) rebuilds a document from its currently indexed chunks (not the saved converted MD), so `/admin` chunk edits are reflected; `ChunkReassembler` undoes the retrieval-oriented duplication `ChunkSplitter` introduces (reinjected subheadings, parent-chapter breadcrumbs, split code-fence markers, repeated table headers, sliding-window overlap) before rendering, so the result reads like the original document rather than concatenated search chunks — validated against a real 335-chunk document at 0.001% character-count deviation from the source. MD downloads bundle images as a ZIP when present (an image file that no longer exists degrades to a `(이미지 없음: …)` note rather than a broken link). DOCX embeds images via POI wherever they sit — a marker after a bullet or mid-sentence gets its own centered picture paragraph, one inside a table cell is embedded in place at column width — and renders fenced code blocks as a bordered 1×1 table, left-aligned and monospaced, with `//`, `#` and `/* … */` comments colored (string literals are tracked, so `"http://…"` stays uncolored). Each document's actual `CHUNK_OVERLAP` at index time is recorded in `doc_registry` (backfilled at startup for older rows) so later retuning the setting can't corrupt an older document's export. PPTX export isn't supported yet
 - **Code syntax highlighting** — highlight.js applied after DOMPurify sanitize, synced with dark mode
 - **LLM usage dashboard** — per-provider daily/weekly/monthly token stats, Chart.js daily history chart, circuit breaker countdown; embedding usage tracked separately (`embed:<model>`, with an approximation fallback when the server omits usage); inactive providers with no history auto-hide, and orphaned records (removed from config) surface as admin-deletable cards
 - **Document versioning** — per-version isolation (chroma: separate collection; sqlite-vec: `version` partition key)

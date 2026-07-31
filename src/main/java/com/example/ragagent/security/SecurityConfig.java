@@ -78,6 +78,10 @@ public class SecurityConfig {
                     .requestMatchers(HttpMethod.DELETE, "/ui/documents/*").hasRole("ADMIN")
                     .requestMatchers(HttpMethod.PATCH, "/ui/documents/*/tags").hasRole("ADMIN")
                     .requestMatchers(HttpMethod.GET, "/ui/documents/*/tags/edit").hasRole("ADMIN")
+                    // Export is a read, but it hands back the document's full reconstructed content
+                    // in one request — a bulk-extraction capability guest chat/browsing doesn't
+                    // provide — so it is gated with the management surface rather than left open.
+                    .requestMatchers(HttpMethod.GET, "/ui/documents/*/export").hasRole("ADMIN")
                     // Deliberately .hasRole("ADMIN"), not .authenticated() — NoAuthAutoLoginFilter's
                     // GUEST_PRINCIPAL is a real (non-anonymous) authenticated principal with ROLE_USER,
                     // so .authenticated() would silently accept it if this matcher list and the

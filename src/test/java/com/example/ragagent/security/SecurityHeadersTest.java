@@ -7,6 +7,7 @@ import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.context.ThreadContextResolver;
 import com.example.ragagent.controller.OperationsController;
 import com.example.ragagent.llm.CircuitBreaker;
+import com.example.ragagent.llm.EmbeddingConcurrencyTracker;
 import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.repository.LlmUsageRepository;
 import com.example.ragagent.service.CuratedQaService;
@@ -48,6 +49,7 @@ class SecurityHeadersTest {
     @MockitoBean AuditLogger auditLogger;
     @MockitoBean CuratedQaService curatedQaService;
     @MockitoBean LlmRouter llmRouter;
+    @MockitoBean EmbeddingConcurrencyTracker embeddingConcurrencyTracker;
 
     @Test
     @DisplayName("GET 응답에 X-Frame-Options 헤더 존재")

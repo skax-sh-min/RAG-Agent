@@ -16,8 +16,10 @@ import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.document.Document;
+import org.springframework.context.MessageSource;
 
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicLong;
@@ -84,9 +86,11 @@ class RetrievalServiceMultiQueryParallelTest {
         LlmProvider expansionProvider = new LlmProvider(
                 "local", TaskType.TEXT, ProviderRole.LOCAL, 0, "key", null, "model", true, chatModel, null);
         when(llmRouter.routeProviderWithFallback(any(), any())).thenReturn(expansionProvider);
+        MessageSource messageSource = mock(MessageSource.class);
+        when(messageSource.getMessage(anyString(), any(), any(Locale.class))).thenReturn("{query} {number}");
 
         RetrievalService svc = new RetrievalService(llmRouter, mock(LlmUsageRepository.class), ragService, props,
-                Optional.empty(), Optional.empty());
+                Optional.empty(), Optional.empty(), messageSource, new ChatImageAnalysisSkipRegistry());
 
         testStartNanos.set(System.nanoTime());
         AgentState result = svc.execute(

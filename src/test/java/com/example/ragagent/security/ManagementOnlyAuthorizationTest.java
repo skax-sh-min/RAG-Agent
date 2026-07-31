@@ -12,6 +12,7 @@ import com.example.ragagent.model.SyncResult;
 import com.example.ragagent.model.VectorStoreAdminView;
 import com.example.ragagent.service.AdminService;
 import com.example.ragagent.service.CuratedQaService;
+import com.example.ragagent.service.DocumentExportService;
 import com.example.ragagent.service.IndexingProgressService;
 import com.example.ragagent.service.RagService;
 import org.junit.jupiter.api.BeforeEach;
@@ -86,6 +87,18 @@ class ManagementOnlyAuthorizationTest {
         }
 
         /**
+         * NoAuthAutoLoginFilter's collaborator. Needed explicitly because @WebMvcTest doesn't scan
+         * @Component beans (same reason the filter itself is @Import-ed above). The strategy here is
+         * the default 'shared' — see props() — so the resolver returns the fixed guest id without ever
+         * reading the secret store, which is why a mock repository suffices.
+         */
+        @Bean
+        GuestIdentityResolver guestIdentityResolver(AppProperties props) {
+            return new GuestIdentityResolver(props, new ClientIpResolver(false),
+                    mock(com.example.ragagent.repository.AppSecretRepository.class));
+        }
+
+        /**
          * Spring Boot's UserDetailsServiceAutoConfiguration still registers its
          * inMemoryUserDetailsManager fallback alongside the mocked SqliteUserDetailsService in
          * this slice (two UserDetailsService beans → "Global Authentication Manager will not use
@@ -112,6 +125,7 @@ class ManagementOnlyAuthorizationTest {
     @MockitoBean AuditLogger auditLogger;
     @MockitoBean AdminService adminService;
     @MockitoBean CuratedQaService curatedQaService;
+    @MockitoBean DocumentExportService documentExportService;
 
     private AppUserDetails adminUser() {
         return new AppUserDetails("admin-id", "admin@local", "hash", "Admin", "ADMIN", true, false);
@@ -146,6 +160,29 @@ class ManagementOnlyAuthorizationTest {
     void anonymousUpload_redirectsToLogin() throws Exception {
         mvc.perform(post("/ui/documents/upload").with(csrf()))
                 .andExpect(status().is3xxRedirection());
+    }
+
+    /**
+     * Export is a GET, but it returns the document's full reconstructed content in one response —
+     * bulk extraction that guest chat/browsing doesn't offer — so it is gated with the management
+     * surface rather than left open like /ui/documents/list.
+     */
+    @Test
+    void anonymousExport_redirectsToLogin() throws Exception {
+        mvc.perform(get("/ui/documents/x/export").param("format", "md"))
+                .andExpect(status().is3xxRedirection());
+    }
+
+    @Test
+    void adminRole_export_succeeds() throws Exception {
+        when(documentExportService.export(any(), any(), any(), any()))
+                .thenReturn(new DocumentExportService.Result(
+                        "# 문서".getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                        "doc.md", "text/markdown; charset=UTF-8"));
+
+        mvc.perform(get("/ui/documents/x/export").param("format", "md")
+                        .with(user("admin").roles("ADMIN")))
+                .andExpect(status().isOk());
     }
 
     // ── 게이트 경로: 잘못된 역할은 403, ADMIN은 통과 ──────────────────────────

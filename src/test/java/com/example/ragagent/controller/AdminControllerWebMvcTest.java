@@ -261,4 +261,48 @@ class AdminControllerWebMvcTest {
                         .param("collection", "manual_latest"))
                 .andExpect(status().isNotFound());
     }
+
+    // ── 문서 재인덱싱 — 코드 펜스 사전 점검 ────────────────────────────────────
+
+    @Test
+    @DisplayName("POST /admin/documents/{docId}/reindex — 펜스 문제가 있으면 409 + 라인 번호 목록, 작업은 시작하지 않는다")
+    void reindexFromMd_fenceProblems_returns409WithLines() throws Exception {
+        when(ragService.checkReindexFenceHealth("doc1")).thenReturn(List.of(
+                new com.example.ragagent.service.MarkdownCorrectionService.FenceProblem(
+                        12, "tagged_closer", "닫는 펜스에 언어 태그가 붙어 있습니다: '```java'"),
+                new com.example.ragagent.service.MarkdownCorrectionService.FenceProblem(
+                        40, "unclosed", "'```sql' 로 열린 코드 블록이 문서 끝까지 닫히지 않았습니다")));
+
+        mvc.perform(post("/admin/documents/doc1/reindex").with(user(ADMIN)).with(csrf()))
+                .andExpect(status().isConflict())
+                .andExpect(content().string(containsString("fence_problems")))
+                .andExpect(content().string(containsString("\"line\":12")))
+                .andExpect(content().string(containsString("\"line\":40")));
+
+        verifyNoInteractions(progressService);   // 아무 작업도 시작되지 않았다
+    }
+
+    @Test
+    @DisplayName("POST /admin/documents/{docId}/reindex?force=true — 점검을 건너뛰고 바로 시작한다(202)")
+    void reindexFromMd_force_skipsCheckAndStarts() throws Exception {
+        when(progressService.newTaskId()).thenReturn("task-1");
+
+        mvc.perform(post("/admin/documents/doc1/reindex").with(user(ADMIN)).with(csrf())
+                        .param("force", "true"))
+                .andExpect(status().isAccepted())
+                .andExpect(content().string(containsString("task-1")));
+
+        verify(ragService, org.mockito.Mockito.never()).checkReindexFenceHealth(anyString());
+    }
+
+    @Test
+    @DisplayName("POST /admin/documents/{docId}/reindex — 펜스 문제가 없으면 기존대로 202 + taskId")
+    void reindexFromMd_noProblems_startsNormally() throws Exception {
+        when(ragService.checkReindexFenceHealth("doc1")).thenReturn(List.of());
+        when(progressService.newTaskId()).thenReturn("task-2");
+
+        mvc.perform(post("/admin/documents/doc1/reindex").with(user(ADMIN)).with(csrf()))
+                .andExpect(status().isAccepted())
+                .andExpect(content().string(containsString("task-2")));
+    }
 }

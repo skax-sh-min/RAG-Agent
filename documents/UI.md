@@ -61,6 +61,7 @@ src/main/resources/
 | GET | `/chat/{threadId}` | `chat.html` | 기존 대화 이어하기 (이전 turn 서버 렌더) |
 | POST | `/ui/chat` | `fragments/message-assistant` | 질문 전송 (동기 fallback) |
 | POST | `/ui/chat/stream` | `text/event-stream` (SseEmitter) | SSE 스트리밍 응답 — `chat-stream.js`가 사용 |
+| POST | `/ui/chat/stream/skip-images` | `204` | 현재 스트리밍 중인 턴의 쿼리 시점 이미지 분석(Lazy Vision) 대기를 건너뜀(`threadId` 파라미터) — 턴 전체를 끊는 `/ui/chat/stream`의 abort/중지와는 별개, 아래 §8 참고 |
 | POST | `/ui/chat/new` | redirect `/chat/{newId}` | 새 대화 생성 |
 | PATCH | `/ui/threads/{threadId}/title` | `fragments/thread-item` | 대화 제목 수정 |
 | PATCH | `/ui/threads/{threadId}/routing-mode` | `204` | 대화별 라우팅 모드 저장 |
@@ -75,11 +76,16 @@ src/main/resources/
 | POST | `/ui/documents/upload` | 202 `{"taskId":"..."}` | 파일 업로드 수신 → 비동기 인덱싱 시작 |
 | GET | `/ui/documents/progress/{taskId}` | `text/event-stream` (SSE) | 인덱싱 진행 이벤트 (`stage`, `done`, `error`) |
 | DELETE | `/ui/documents/{docId}` | `200` | 문서 삭제 |
+| GET | `/ui/documents/{docId}/export` | 바이너리(MD/TXT/DOCX, MD+이미지는 ZIP) | 현재 색인된 청크로 문서를 재구성해 다운로드(§ 문서 내보내기, [OPERATOR_MANUAL.md §6.8](OPERATOR_MANUAL.md#68-문서-내보내기) 참고) — 관리자 전용 |
 | GET | `/ui/documents/list` | `fragments/doc-table-body` | 문서 목록 새로고침 |
 
-> **관리 전용 인증 모드**(`app.auth.management-only=true`, §6.17 B안)에서는 `POST /ui/documents/upload`, `POST /ui/documents/progress/*/cancel`, `DELETE /ui/documents/{docId}`, `PATCH /ui/documents/{id}/tags`, `GET /ui/documents/{id}/tags/edit`가 `hasRole("ADMIN")`로 게이트된다 — 비로그인은 `/login` 리다이렉트, 관리자 아닌 로그인은 403. `GET /documents`·`GET /ui/documents/list`·태그 조회는 게스트에게 그대로 열려 있다. 자세한 내용은 [OPERATOR_MANUAL.md §9.4.2](OPERATOR_MANUAL.md#942-관리-전용-인증-management-only) 참고.
+> **관리 전용 인증 모드**(`app.auth.management-only=true`, §6.17 B안)에서는 `POST /ui/documents/upload`, `POST /ui/documents/progress/*/cancel`, `DELETE /ui/documents/{docId}`, `PATCH /ui/documents/{id}/tags`, `GET /ui/documents/{id}/tags/edit`, `GET /ui/documents/{id}/export`가 `hasRole("ADMIN")`로 게이트된다 — 비로그인은 `/login` 리다이렉트, 관리자 아닌 로그인은 403. `GET /documents`·`GET /ui/documents/list`·태그 조회는 게스트에게 그대로 열려 있다. 자세한 내용은 [OPERATOR_MANUAL.md §9.4.2](OPERATOR_MANUAL.md#942-관리-전용-인증-management-only) 참고. 내보내기는 읽기 동작이지만 문서 전체를 한 번에 반출하는 벌크 기능이라 이 그룹에 포함됐다.
 >
 > **인덱싱 진행 스테이지**(`stage` 값): `loading` → `structuring`(TXT만) → `describing_images`(Vision 이미지 분석, "이미지 설명 추가" 체크 시만 — "이미지 분석 중 (N/M)") → `correcting`(DOCX/TXT/MD/PPTX/PDF[비스캔]) → `chunking` → `enriching` → `storing` → `done`/`error`/`cancelled`. 각 이벤트는 `stage`와 함께 `done`/`total`/`filename`/`message`를 실어 나르며, `documents.html`의 `stageHtml`/`STAGE_LABELS`가 단계별 진행률 바와 오류 로그 라벨을 렌더링한다. 상세는 [PIPELINE.md §6.3](PIPELINE.md#63-docx--md--임베딩-db-저장-상세-이미지-포함) 참고.
+>
+> **"소제목 숫자 생성" 체크박스 자동 기본값**(`documents.html`, 순수 클라이언트 로직, 서버 API 변경 없음): 파일을 선택할 때마다(드래그앤드롭·파일 선택창 둘 다 `handleFiles()` 경유) `syncHeadingNumbersCheckbox()`가 재계산한다 — 선택된 파일에 PPTX가 하나라도 있으면 체크 해제, 없으면(PDF 포함) 체크. 파일을 지울 때(`removeFile()`)도 남은 구성 기준으로 다시 계산된다. 이 기본값은 `DocumentIndexer`의 `.pptx` 분기가 체크박스 상태와 무관하게 항상 `addHeadingNumbers=false`를 넘기는 서버 동작(§3.3 [OPERATOR_MANUAL.md](OPERATOR_MANUAL.md#소제목-숫자-생성-addheadingnumbers) 참고)을 UI에 미리 반영한 것이며, PDF는 `PdfToMarkdownConverter`가 헤딩 자체를 만들지 않아 체크해도 무해하므로 자동 해제 대상에서 제외된다. PPTX와 다른 형식이 같은 배치에 섞이면 업로드가 배치 전체에 값 하나만 전송하는 구조라 `warnIfPptxMixed()`가 토스트 경고를 띄운다(업로드 자체는 막지 않음). 둘 다 기본값 제안일 뿐이라 체크박스는 언제든 수동으로 바꿀 수 있다.
+>
+> **문서 내보내기 다이얼로그**(`documents.html`, `openExportDialog()`/`runExport()`): 행의 **내보내기** 버튼(`fragments/doc-table-body.html`, `th:if="${isAdmin}"`)을 누르면 형식(MD/TXT/DOCX 라디오, 기본 MD)과 옵션(이미지 설명 포함 — 기본 켬, 소제목 번호·목차 추가 — 기본 끔) 선택 모달이 뜬다. 파일명이 `.pptx`로 끝나면 소제목 번호·목차 체크박스가 `disabled`되고 이유가 `form-text`로 표시된다(서버의 PPTX 제외 규칙을 UI에 미리 반영 — §3.3의 소제목 번호 체크박스 자동 해제와 같은 패턴). **내보내기** 클릭 시 `fetch()`로 `GET /ui/documents/{docId}/export`를 호출해 응답을 `Blob`으로 받아 `<a download>`로 저장한다 — `location.href` 이동 대신 `fetch`를 쓴 이유는 실패 시(예: `IllegalArgumentException` → 400) 브라우저가 오류 페이지로 넘어가는 대신 `ProblemDetail` JSON의 `detail`을 읽어 토스트로 보여주기 위해서다. 다운로드 파일명은 `Content-Disposition` 헤더에서 RFC 5987 `filename*=UTF-8''...` 형식을 우선 파싱하고(한글 파일명 대응), 없으면 `filename="..."` 폴백을 쓴다.
 
 ### 3.3 운영 / LLM 사용량 (OperationsController)
 
@@ -95,6 +101,8 @@ src/main/resources/
 REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — 둘 다 임베딩·orphan 항목 포함(상세는 [OPERATOR_MANUAL.md](OPERATOR_MANUAL.md) 참고)
 
 > **네비게이션 바 상태 표시**(`layout/base.html`, 모든 페이지 공통 헤더): 우측 상단에 **API 상태**(`#api-status`)와 그 옆 **LLM 동시성**(`#llm-concurrency`, `LLM: {inUse}/{capacity}`) 두 지표가 나란히 표시된다. API 상태는 페이지 로드 시 `GET /api/v1/health`를 딱 1회만 확인하고 이후 재확인하지 않는 반면, LLM 동시성은 `setInterval`로 위 엔드포인트를 **~3초마다** 재조회해 값을 갱신한다 — 이 문서의 다른 폴링(HTMX `hx-trigger="every Ns"`)과 달리 재사용할 만한 3초 간격 폴링이 기존에 없어 `base.html` 자체의 순수 JS `fetch`+`setInterval`로 새로 구현했다. 응답이 `available:false`면 `.d-none`으로 엘리먼트 자체를 감춘다(값이 없는데 `0/0`처럼 표시되는 것을 방지) — `fetch` 실패 시에도 동일하게 숨김 처리된다.
+>
+> **`inUse`가 채팅 요청만이 아니라 임베딩 활동·서킷브레이커 차단까지 반영한다**: `inUse`는 채팅 동시성 게이트 사용량 + `EmbeddingConcurrencyTracker`(인덱싱·검색 임베딩 in-flight 카운터, 채팅 게이트와 완전히 별개의 `EmbeddingModel` 데코레이터 체인이라 이게 없으면 임베딩 중에도 항상 0으로 보였다)를 합산하고, `capacity`를 넘지 않게 clamp된 값이다(임베딩 동시성은 `EMBED_MAX_CONCURRENT_BATCHES` 등 별도 한도라 합산 결과가 capacity를 초과할 수 있음). 서킷브레이커로 차단된 로컬 프로바이더는 `capacity`에는 그대로 남되 전체 용량이 `inUse`로 집계된다(제외되는 게 아니라 "완전 포화"로 표시됨). `inUse`가 `capacity`에 도달하면(즉 값이 같아지면) 헤더 스크립트가 숫자에 Bootstrap `text-danger`+`fw-bold`를 토글해 굵은 빨간 글씨로 강조한다.
 
 ### 3.4 벡터 스토어 관리 (AdminController)
 
@@ -131,6 +139,8 @@ REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — �
 > **재인덱싱 시 수행 작업**(`DocumentIndexer.reindexFromMd()`) — 챕터 번호 재계산뿐 아니라 전체 파이프라인을 다시 돈다: 존재하지 않는 이미지 참조(`[이미지: ...]`) 제거 → 소제목 번호 재계산(PPTX 제외) → 마크다운 후처리(`MarkdownCorrectionService.postProcess()` — 빈 줄 정리·`[DOCUMENT]` 마커/내용 없는 `-` 제거·펜스·표 앞뒤 빈 줄 보장, LLM 미사용) → 전체 재청킹 → 태그 보존 → LLM 키워드+컨텍스트 재추출(§10.1) → 재임베딩 및 벡터 스토어 저장 → FTS 재인덱싱 → 기존 청크 삭제(신규 저장 이후, 실패 시 기존 데이터 보존). 즉 원본 MD가 수정된 이후 상태를 기준으로 사실상 전체를 다시 인덱싱한다.
 >
 > `fixClosingFences`/`normalizeCodeBlocks`(코드 블록 언어 보정)는 의도적으로 재인덱싱에 포함하지 않는다 — 저장된 MD를 운영자가 직접 편집한 뒤 재인덱싱하면 코드 블록 내부의 의도된 빈 줄을 지우거나(`normalizeCodeContent`는 함수/클래스 시작·여러 줄 주석 시작 직전이 아닌 빈 줄은 삭제) 펜스 짝이 어긋난 입력에서 여는 펜스의 언어 태그를 잘못 벗길 수 있어, 매 재인덱싱마다 부작용으로 감수하기보다 필요할 때만 문서를 재업로드하도록 남겨둔 것이다.
+>
+> **청크 편집 오프캔버스 — 넓은 화면 미리보기**(`admin.html`, `openChunkEdit()`/`renderChunkPreview()`): 오프캔버스를 여는 시점의 `window.innerWidth`가 기본 폭(520px)의 2배 이상이면 오프캔버스 폭을 최대 1300px까지 넓히고 `flex-row`로 좌(미리보기)·우(편집 입력) 2컬럼 배치한다. 좁으면 기존과 동일한 단일 컬럼(`flex-column`, 520px). 미리보기는 `chat-stream.js`가 이미 쓰는 marked.js → DOMPurify → hljs.js 파이프라인을 그대로 재사용하되, 앞단에서 `[이미지: images/{id}/{file}]` 마커를 `<img src="/api/v1/images/...">`로 치환한다(인라인 렌더링이 안 되는 확장자나 `[이미지(변환불가): ...]`는 텍스트 placeholder로 대체). 텍스트 입력창을 편집하면 200ms debounce로 왼쪽 미리보기가 다시 렌더링된다. 폭 판정은 오프캔버스를 여는 시점 1회뿐이라, 열어둔 채로 창 크기를 바꿔도 레이아웃은 즉시 바뀌지 않는다(닫았다 다시 열면 재판정). 새 API 호출은 없다 — 이미 받아온 `GET /admin/chunks/{chunkId}/detail` 응답을 그대로 클라이언트에서 렌더링한다.
 
 ### 3.5 설정 관리 (SettingsController)
 
@@ -368,6 +378,7 @@ PROGRESSIVE 업그레이드 시 `🔝 고추론 재분석 → {premiumProvider}`
 | 채팅 API 오류 | `message-error.html` fragment (빨간 버블) |
 | 파일 업로드 실패 | 파일 행 상태 ❌ + 오류 토스트 |
 | 문서 삭제 실패 | `htmx:responseError` → 오류 토스트 |
+| 문서 내보내기 실패 | `fetch` 응답이 실패(`!res.ok`)면 `ProblemDetail`(JSON)의 `detail`을 파싱해 오류 토스트로 표시(§3.2 문서 내보내기 다이얼로그 참고) — 저장 다이얼로그가 뜨지 않고 조용히 실패하는 대신 사유가 보임 |
 | LOCAL_ONLY, LOCAL 미연결 | 빨간 버블 + `LlmProviderExhaustedException` 메시지 |
 | 동시 사용자 급증으로 프로바이더 용량 초과 (§6.12, 429) | 빨간 버블 + "현재 요청이 몰려 있습니다. 잠시 후 다시 시도해 주세요." — 서킷브레이커 전면차단이 아니라 일시적 대기 상한 초과이므로 잠시 후 재시도하면 대개 성공 |
 | 빈 질문 전송 | 클라이언트 validation, API 호출 차단 |
@@ -394,15 +405,25 @@ stage(classifier) → stage(retrieval) → sources → stage(answer) → token �
 | `done` | 메타데이터 JSON (`usedProvider`, `inputTokens`, `elapsedMs` 등) | 완료 시 마크다운 렌더 |
 | `error` | `{"message":"오류 설명"}` | 오류 버블로 교체 |
 
+> **이미지 분석 진행 표시도 `stage` 이벤트를 재사용한다**: RETRIEVAL 중 쿼리 시점 Lazy Vision이 실행되면
+> `{"id":"image_analysis","text":"이미지 분석 중 (2/5)"}`가 여러 번 발행된다 — 새 이벤트 타입을 만들지 않고
+> 기존 `onStage()` 핸들러가 그대로 텍스트만 갱신하도록 재사용했다(단, `id`가 `"retrieval"`이 아니므로
+> `onStage()`의 출처/이미지 패널 초기화 분기는 타지 않는다). 이 단계에서만 `chat-stream.js`가 배지 옆에
+> **건너뛰기** 버튼(`#stream-skip-images-{bubbleId}`)을 노출하며, 클릭 시 `POST /ui/chat/stream/skip-images`를
+> 호출한다(§3.1). 이미지 분석이 끝나거나 다음 단계(`answer` 등)로 넘어가면 버튼은 자동으로 다시 숨겨진다.
+
 ### 컴포넌트
 
 | 파일 | 역할 |
 |------|------|
-| `service/StreamingAgentService.java` | SSE 파이프라인 오케스트레이터; `AgentGraph.runStreaming()` 호출 |
-| `service/GraphListener.java` | 노드/토큰/출처 이벤트 hook 인터페이스 (`NOOP` 상수로 동기 경로 오버헤드 0) |
+| `service/StreamingAgentService.java` | SSE 파이프라인 오케스트레이터; `AgentGraph.runStreaming()` 호출; 턴 시작/종료에 `ChatImageAnalysisSkipRegistry.begin()`/`end()` |
+| `service/GraphListener.java` | 노드/토큰/출처 이벤트 hook 인터페이스 (`NOOP` 상수로 동기 경로 오버헤드 0); `onImageAnalysisProgress(done, total)` — 쿼리 시점 Lazy Vision 진행 |
 | `agent/AgentGraph.java` | `runStreaming(state, listener)` 메서드 — `AnswerService.executeStreaming()` 호출 |
+| `service/RetrievalService.java` | `execute(state, listener)` — `LazyVisionService.describeIfNeeded()`에 진행 콜백 + 건너뛰기 신호(`BooleanSupplier`) 전달; 이미 설명이 임베드된 이미지는 애초에 제외 |
+| `service/LazyVisionService.java` | 쿼리 시점 이미지 설명 캐시 조회 + 미스만 Vision 호출; `describeIfNeeded(paths, onProgress, skipRequested)` — 건너뛰기 시 대기만 중단, 이미 제출된 백그라운드 작업은 계속 진행돼 캐시에 저장됨 |
+| `service/ChatImageAnalysisSkipRegistry.java` | threadId별 건너뛰기 플래그(`ConcurrentHashMap<String, AtomicBoolean>`) — `ChatController`의 `/ui/chat/stream/skip-images`가 설정, `RetrievalService`가 폴링 |
 | `service/AnswerService.java` | `executeStreaming(state, listener)` — `ChatClient.stream()` Flux 구독 → `listener.onToken()` |
-| `static/js/chat-stream.js` | 클라이언트 SSE 파서; form submit capture, 버블 DOM 생성, 이벤트별 핸들러 |
+| `static/js/chat-stream.js` | 클라이언트 SSE 파서; form submit capture, 버블 DOM 생성, 이벤트별 핸들러; 이미지 분석 건너뛰기 버튼 |
 
 ### PROGRESSIVE / 재시도 처리
 

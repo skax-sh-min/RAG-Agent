@@ -87,7 +87,7 @@ public class AgentGraph {
                 }
                 case RETRIEVAL -> {
                     listener.onNodeEnter("retrieval");
-                    state = retrievalService.execute(state);
+                    state = retrievalService.execute(state, listener);
                     listener.onSourcesReady(state.sources());
                     listener.onImagesReady(state.imageRefs());
                     yield Node.ANSWER;

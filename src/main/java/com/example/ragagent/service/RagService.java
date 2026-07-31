@@ -257,6 +257,12 @@ public class RagService {
         indexer.reindexFromMd(docId, onProgress);
     }
 
+    /** Read-only code-fence pre-flight for {@link #reindexFromMd} — see
+     *  {@link DocumentIndexer#checkFenceHealth}. Nothing is modified. */
+    public List<MarkdownCorrectionService.FenceProblem> checkReindexFenceHealth(String docId) {
+        return indexer.checkFenceHealth(docId);
+    }
+
     // ── Path helpers ───────────────────────────────────────────────────────
 
     /** Shared documents directory: {dataDir}/documents */
