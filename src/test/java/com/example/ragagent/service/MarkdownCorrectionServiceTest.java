@@ -905,6 +905,58 @@ class MarkdownCorrectionServiceTest {
     }
 
     @Test
+    @DisplayName("findFenceProblems — 언어 태그가 붙은 닫는 펜스를 몇 행인지와 함께 보고한다")
+    void findFenceProblems_reportsTaggedCloserWithLine() {
+        String md = "## 1장\n\n```java\nint a = 1;\n```java\n\n본문\n"; // 닫는 펜스는 5행
+        var problems = MarkdownCorrectionService.findFenceProblems(md);
+
+        assertThat(problems).hasSize(1);
+        assertThat(problems.get(0).line()).isEqualTo(5);
+        assertThat(problems.get(0).kind()).isEqualTo("tagged_closer");
+        assertThat(problems.get(0).message()).contains("```java").contains("3행"); // 짝인 여는 펜스 위치
+    }
+
+    @Test
+    @DisplayName("findFenceProblems — 닫히지 않은 펜스는 '여는 펜스' 행 번호로 보고한다")
+    void findFenceProblems_reportsUnclosedAtOpeningLine() {
+        String md = "본문\n\n```sql\nSELECT 1;\n더 많은 본문\n"; // 여는 펜스는 3행
+        var problems = MarkdownCorrectionService.findFenceProblems(md);
+
+        assertThat(problems).hasSize(1);
+        assertThat(problems.get(0).line()).isEqualTo(3);
+        assertThat(problems.get(0).kind()).isEqualTo("unclosed");
+    }
+
+    @Test
+    @DisplayName("findFenceProblems — 줄 중간 ``` 도 보고한다(줄 단위 패스가 못 보는 자리)")
+    void findFenceProblems_reportsMidLineFence() {
+        String md = "코드는 다음처럼 감쌉니다: ```\n\n```java\nint a = 1;\n```\n"; // 1행이 줄 중간 펜스
+        var problems = MarkdownCorrectionService.findFenceProblems(md);
+
+        assertThat(problems).extracting("kind").contains("mid_line");
+        assertThat(problems).extracting("line").contains(1);
+    }
+
+    @Test
+    @DisplayName("findFenceProblems — 여러 건은 행 번호 오름차순으로 정렬해 반환한다")
+    void findFenceProblems_sortedByLine() {
+        String md = "```java\nint a = 1;\n```java\n\n```sql\nSELECT 1;\n"; // 3행 tagged_closer, 5행 unclosed
+        var problems = MarkdownCorrectionService.findFenceProblems(md);
+
+        assertThat(problems).extracting("line").containsExactly(3, 5);
+        assertThat(problems).extracting("kind").containsExactly("tagged_closer", "unclosed");
+    }
+
+    @Test
+    @DisplayName("findFenceProblems — 정상 문서·빈 입력은 빈 목록이고 원본을 바꾸지 않는다")
+    void findFenceProblems_cleanDocumentReportsNothing() {
+        String md = "## 1장\n\n```java\nint a = 1;\n```\n\n본문\n";
+        assertThat(MarkdownCorrectionService.findFenceProblems(md)).isEmpty();
+        assertThat(MarkdownCorrectionService.findFenceProblems("")).isEmpty();
+        assertThat(MarkdownCorrectionService.findFenceProblems(null)).isEmpty();
+    }
+
+    @Test
     @DisplayName("normalizeCodeBlocks — 펜스 짝이 정상이면 기존대로 언어 태그를 추론한다(가드 회귀 없음)")
     void normalizeCodeBlocks_stillNormalizesBalancedDocument() {
         String md = "설명\n\n```\n{\"a\": 1}\n```\n";

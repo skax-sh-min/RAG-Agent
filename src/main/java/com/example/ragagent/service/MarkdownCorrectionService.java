@@ -1188,6 +1188,80 @@ public class MarkdownCorrectionService {
         return String.join("\n", out);
     }
 
+    /**
+     * One code-fence defect found by {@link #findFenceProblems}. {@code line} is 1-based;
+     * {@code kind} is a stable machine token ({@code unclosed} / {@code tagged_closer} /
+     * {@code mid_line}) and {@code message} the Korean text shown to the operator.
+     */
+    public record FenceProblem(int line, String kind, String message) {}
+
+    /**
+     * Reports every code-fence defect in {@code md} WITHOUT changing it — the read-only counterpart
+     * to {@link #fixClosingFences}, used by the re-index pre-flight check (that path deliberately
+     * never re-runs the rewriting passes, so the operator decides whether to proceed).
+     *
+     * <p>Detects the three defects that make fence pairing ambiguous downstream (see the fence-parity
+     * invariant on {@link #normalizeCodeBlocks}):
+     * <ul>
+     *   <li>{@code tagged_closer} — a closing fence carrying an info string ({@code ```java} where a
+     *       bare {@code ```} belongs), the originally reported corruption;</li>
+     *   <li>{@code unclosed} — a fence still open at end of input (reported at the OPENING line, the
+     *       one the operator has to go fix);</li>
+     *   <li>{@code mid_line} — a {@code ```} that is not the start of its line, which the line-based
+     *       passes cannot see but the anchorless {@link #FENCED_BLOCK} regex still pairs on.</li>
+     * </ul>
+     * Returns an empty list for null/blank input. Results are ordered by line number.
+     */
+    public static List<FenceProblem> findFenceProblems(String md) {
+        if (md == null || md.isEmpty()) return List.of();
+        List<FenceProblem> problems = new ArrayList<>();
+        String[] lines = md.split("\n", -1);
+        boolean inFence = false;
+        int openedAtLine = 0;
+        String openingTag = "";
+
+        for (int i = 0; i < lines.length; i++) {
+            String raw = lines[i];
+            String t = raw.stripLeading();
+            boolean isFenceLine = t.startsWith("```");
+
+            if (isFenceLine) {
+                if (inFence) {
+                    if (!t.equals("```")) {
+                        problems.add(new FenceProblem(i + 1, "tagged_closer",
+                                "닫는 펜스에 언어 태그가 붙어 있습니다: '%s' — %d행의 '%s' 와 짝이므로 순수 ``` 여야 합니다"
+                                        .formatted(t.strip(), openedAtLine, openingTag.strip())));
+                    }
+                } else {
+                    openedAtLine = i + 1;
+                    openingTag = t;
+                }
+                inFence = !inFence;
+            }
+
+            // A fence line legitimately holds exactly one ```; anything beyond that (or any ``` on a
+            // non-fence line) is a mid-line occurrence the line-based passes are blind to.
+            int extra = fenceMarkCount(raw) - (isFenceLine ? 1 : 0);
+            if (extra > 0) {
+                problems.add(new FenceProblem(i + 1, "mid_line",
+                        "줄 중간에 ``` 이 있습니다: '%s' — 펜스는 줄 맨 앞에 있어야 합니다".formatted(abbreviate(raw))));
+            }
+        }
+
+        if (inFence) {
+            problems.add(new FenceProblem(openedAtLine, "unclosed",
+                    "'%s' 로 열린 코드 블록이 문서 끝까지 닫히지 않았습니다".formatted(openingTag.strip())));
+        }
+        problems.sort(java.util.Comparator.comparingInt(FenceProblem::line));
+        return List.copyOf(problems);
+    }
+
+    /** Single-line, length-capped rendering of a source line for an operator-facing message. */
+    private static String abbreviate(String line) {
+        String oneLine = line.strip().replaceAll("\\s+", " ");
+        return oneLine.length() > 60 ? oneLine.substring(0, 60) + "…" : oneLine;
+    }
+
     /** A {@code [페이지: N]} slide/page boundary marker line — the only per-page boundary PPTX and
      *  non-scanned PDF emit (they produce no {@code ##} headings). Matches {@link #splitBySections}'
      *  own boundary test, so fence healing and section splitting agree on where a page starts. */

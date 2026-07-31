@@ -186,10 +186,32 @@ public class AdminController {
      * work on a virtual thread and returns {@code {taskId}} immediately (202); progress and the
      * terminal outcome are reported via the shared SSE endpoint (same one uploads/sync use):
      * {@code GET /ui/documents/progress/{taskId}}.
+     *
+     * <p>Pre-flight: unless {@code force=true}, the saved MD is checked for code-fence defects first
+     * and a {@code 409} listing them (with line numbers) is returned <em>without starting any work</em>,
+     * so the operator can fix the MD, proceed anyway ({@code force=true}), or stop. This path never
+     * repairs fences itself — it does not re-run the rewriting correction passes (see
+     * {@code DocumentIndexer.postProcessIfNeeded}) — so a defect found here would otherwise be baked
+     * into the new chunks silently.
      */
     @PostMapping("/admin/documents/{docId}/reindex")
     @ResponseBody
-    public ResponseEntity<Map<String, String>> reindexFromMd(@PathVariable String docId) {
+    public ResponseEntity<Map<String, Object>> reindexFromMd(
+            @PathVariable String docId,
+            @RequestParam(defaultValue = "false") boolean force) {
+
+        if (!force) {
+            var problems = ragService.checkReindexFenceHealth(docId);
+            if (!problems.isEmpty()) {
+                log.info("[REINDEX] 코드 펜스 문제 {}건으로 사전 확인 요청: docId={}", problems.size(), docId);
+                return ResponseEntity.status(409).body(Map.of(
+                        "status", "fence_problems",
+                        "docId", docId,
+                        "problems", problems.stream().map(p -> Map.of(
+                                "line", p.line(), "kind", p.kind(), "message", p.message())).toList()));
+            }
+        }
+
         String taskId = progressService.newTaskId();
 
         Thread worker = Thread.ofVirtual().name("idx-reindex-" + taskId).start(() -> {

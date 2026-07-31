@@ -320,6 +320,37 @@ public class DocumentIndexer {
         reindexFromMd(docId, event -> {});
     }
 
+    /**
+     * Read-only pre-flight for {@link #reindexFromMd}: reports code-fence defects in the saved MD
+     * ({@link MarkdownCorrectionService#findFenceProblems}) so the operator can decide to proceed or
+     * stop before any work starts. Nothing is modified and no LLM/embedding call is made.
+     *
+     * <p>Needed because this path never re-runs {@code correct()}'s repairing passes
+     * ({@code fixClosingFences}/{@code normalizeCodeBlocks} — see {@link #postProcessIfNeeded}), so a
+     * broken fence in a hand-edited MD is carried straight into the new chunks instead of being
+     * healed. Returns an empty list when the document has no MD file at all or it cannot be read —
+     * those are not fence problems, and {@link #reindexFromMd} reports them properly on its own.
+     */
+    public List<MarkdownCorrectionService.FenceProblem> checkFenceHealth(String docId) {
+        Path mdPath = resolveMdPath(docId);
+        if (mdPath == null) return List.of();
+        try {
+            return MarkdownCorrectionService.findFenceProblems(Files.readString(mdPath));
+        } catch (IOException e) {
+            log.warn("[REINDEX] 펜스 사전 점검용 MD 읽기 실패: docId={}, {}", docId, e.getMessage());
+            return List.of();
+        }
+    }
+
+    /** The MD file {@link #reindexFromMd} would read — corrected one first, raw fallback — or
+     *  {@code null} when neither exists (scanned PDF/image documents never produce one). */
+    private Path resolveMdPath(String docId) {
+        Path corrected = dataDir.resolve("converted").resolve(docId + "_corrected.md");
+        if (Files.exists(corrected)) return corrected;
+        Path raw = dataDir.resolve("converted").resolve(docId + ".md");
+        return Files.exists(raw) ? raw : null;
+    }
+
     /** Same as {@link #reindexFromMd(String)}, reporting per-stage progress via {@code onProgress}. */
     public void reindexFromMd(String docId, Consumer<IndexingProgressEvent> onProgress) throws IOException {
         DocRegistry.DocRegistryEntry existing = docRegistry.findByDocId(docId)
@@ -330,10 +361,8 @@ public class DocumentIndexer {
         String sha256   = existing.sha256();
         String docType  = inferDocType(filename);
 
-        Path correctedPath = dataDir.resolve("converted").resolve(docId + "_corrected.md");
-        Path rawPath       = dataDir.resolve("converted").resolve(docId + ".md");
-        Path mdPath = Files.exists(correctedPath) ? correctedPath : rawPath;
-        if (!Files.exists(mdPath)) {
+        Path mdPath = resolveMdPath(docId);
+        if (mdPath == null) {
             throw new IllegalStateException(
                     "MD 파일이 없습니다 (DOCX/TXT/PPTX/PDF 문서만 MD 재인덱싱 지원): " + docId);
         }
@@ -349,6 +378,17 @@ public class DocumentIndexer {
 
         onProgress.accept(IndexingProgressEvent.of("loading", 0, 0, filename, "MD 파일 로드 중..."));
         String md = Files.readString(mdPath);
+        // Fence defects are only reported, never repaired here — this path deliberately does not
+        // re-run the rewriting passes (see postProcessIfNeeded). The operator has already been asked
+        // to proceed or stop by the pre-flight check (checkFenceHealth); this log is the record of
+        // what they proceeded with.
+        List<MarkdownCorrectionService.FenceProblem> fenceProblems =
+                MarkdownCorrectionService.findFenceProblems(md);
+        if (!fenceProblems.isEmpty()) {
+            log.warn("[REINDEX] {} — 코드 펜스 문제 {}건을 안고 진행합니다: {}", filename, fenceProblems.size(),
+                    String.join(", ", fenceProblems.stream()
+                            .map(p -> p.line() + "행(" + p.kind() + ")").toList()));
+        }
         md = removeMissingImageMarkers(md, mdPath, filename);
         md = reapplyHeadingNumbersIfNeeded(md, mdPath, filename);
         md = postProcessIfNeeded(md, mdPath, filename);

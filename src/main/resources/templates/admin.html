@@ -596,6 +596,20 @@ function formatReindexStatus(evt) {
     return `[REINDEX] ${evt.message || (label + ' 중...')}`;
 }
 
+/** 코드 펜스 문제 목록을 확인 대화상자용 텍스트로 — 너무 길어지지 않게 최대 10건까지만 나열. */
+const FENCE_PROBLEMS_SHOWN = 10;
+
+function formatFenceProblems(problems) {
+    const shown = problems.slice(0, FENCE_PROBLEMS_SHOWN)
+        .map(p => '  · ' + p.line + '행: ' + p.message).join('\n');
+    const rest = problems.length > FENCE_PROBLEMS_SHOWN
+        ? '\n  … 외 ' + (problems.length - FENCE_PROBLEMS_SHOWN) + '건' : '';
+    return '저장된 MD 파일에서 코드 블록(```) 문제 ' + problems.length + '건이 발견되었습니다.\n\n'
+        + shown + rest
+        + '\n\n재인덱싱은 MD 파일을 교정하지 않으므로 이 상태 그대로 청크에 반영됩니다.'
+        + '\n\n[확인] 무시하고 진행   /   [취소] 중지';
+}
+
 function reindexFromMd(btn) {
     const docId = btn.getAttribute('data-doc-id');
     const filename = btn.getAttribute('data-filename') || docId;
@@ -605,14 +619,38 @@ function reindexFromMd(btn) {
     setRegistryBusy(true, '[REINDEX] 준비 중: ' + filename);
     btn.innerHTML = '<span class="spinner-border spinner-border-sm" style="width:.7rem;height:.7rem;"></span>';
 
-    fetch('/admin/documents/' + encodeURIComponent(docId) + '/reindex', { method: 'POST', headers: getCsrfHeaders() })
-        .then(r => r.json())
-        .then(({ taskId }) => subscribeReindexProgress(taskId, btn, icon))
+    // 1차 요청은 force 없이 — 서버가 펜스 사전 점검에서 문제를 찾으면 409로 목록을 돌려주고
+    // 아무 작업도 시작하지 않는다. 사용자가 "무시하고 진행"을 고르면 force=true 로 재요청.
+    postReindex(docId, false)
+        .then(res => {
+            if (res.status === 409) {
+                return res.json().then(body => {
+                    if (!confirm(formatFenceProblems(body.problems || []))) {
+                        showToast('재인덱싱을 중지했습니다', 'info');
+                        btn.innerHTML = icon;
+                        setRegistryBusy(false, '');
+                        return null;
+                    }
+                    setRegistryBusy(true, '[REINDEX] 준비 중(펜스 문제 무시): ' + filename);
+                    return postReindex(docId, true).then(r => r.json());
+                });
+            }
+            return res.json();
+        })
+        .then(body => {
+            if (!body || !body.taskId) return;
+            subscribeReindexProgress(body.taskId, btn, icon);
+        })
         .catch(() => {
             showToast('재인덱싱 요청 실패', 'danger');
             btn.innerHTML = icon;
             setRegistryBusy(false, '');
         });
+}
+
+function postReindex(docId, force) {
+    return fetch('/admin/documents/' + encodeURIComponent(docId) + '/reindex?force=' + (force ? 'true' : 'false'),
+        { method: 'POST', headers: getCsrfHeaders() });
 }
 
 function subscribeReindexProgress(taskId, btn, icon) {
