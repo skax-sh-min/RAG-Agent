@@ -5,6 +5,7 @@ import org.junit.jupiter.api.parallel.ResourceLock;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
+import com.example.ragagent.LogbackTestSupport;
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.security.CurrentUser;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -12,7 +13,6 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.slf4j.LoggerFactory;
 
 import java.util.Map;
 
@@ -37,7 +37,7 @@ class AuditLoggerTest {
 
     @BeforeEach
     void setUp() {
-        auditLogger = (Logger) LoggerFactory.getLogger("AUDIT");
+        auditLogger = LogbackTestSupport.logger("AUDIT");
         listAppender = new ListAppender<>();
         listAppender.start();
         auditLogger.addAppender(listAppender);

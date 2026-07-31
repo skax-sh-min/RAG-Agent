@@ -39,7 +39,7 @@ class LoggingChatModelTest {
 
     @BeforeEach
     void attachLogCapture() {
-        logbackLogger = (Logger) org.slf4j.LoggerFactory.getLogger(LoggingChatModel.class);
+        logbackLogger = com.example.ragagent.LogbackTestSupport.logger(LoggingChatModel.class);
         logAppender = new ListAppender<>();
         logAppender.start();
         logbackLogger.addAppender(logAppender);

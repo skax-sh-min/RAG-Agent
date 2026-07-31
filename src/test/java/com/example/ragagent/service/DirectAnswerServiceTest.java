@@ -233,7 +233,7 @@ class DirectAnswerServiceTest {
     @Test
     @DisplayName("executeStreaming — stream=true 네이티브 OpenAiApi 우회 경로도 DEBUG 로그(엔드포인트+body)를 남긴다")
     void executeStreaming_streamingProvider_logsRequestAtDebugLevel() {
-        Logger logbackLogger = (Logger) org.slf4j.LoggerFactory.getLogger(DirectAnswerService.class);
+        Logger logbackLogger = com.example.ragagent.LogbackTestSupport.logger(DirectAnswerService.class);
         ListAppender<ILoggingEvent> appender = new ListAppender<>();
         appender.start();
         logbackLogger.addAppender(appender);

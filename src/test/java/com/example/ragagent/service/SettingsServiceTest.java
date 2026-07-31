@@ -16,7 +16,6 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.slf4j.LoggerFactory;
 
 import java.time.Instant;
 import java.util.LinkedHashMap;
@@ -220,7 +219,7 @@ class SettingsServiceTest {
         seeded.store.put(SettingsKeys.SEARCH_TOP_K, "7");   // default = 7 → identical → must NOT warn
         SettingsService fresh = new SettingsService(seeded, base(), audit, circuitBreaker, new ProviderToggle());
 
-        Logger settingsLogger = (Logger) LoggerFactory.getLogger(SettingsService.class);
+        Logger settingsLogger = com.example.ragagent.LogbackTestSupport.logger(SettingsService.class);
         ListAppender<ILoggingEvent> appender = new ListAppender<>();
         appender.start();
         settingsLogger.addAppender(appender);

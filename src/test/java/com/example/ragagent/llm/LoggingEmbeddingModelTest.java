@@ -44,7 +44,7 @@ class LoggingEmbeddingModelTest {
 
     @BeforeEach
     void attachLogCapture() {
-        logbackLogger = (Logger) org.slf4j.LoggerFactory.getLogger(LoggingEmbeddingModel.class);
+        logbackLogger = com.example.ragagent.LogbackTestSupport.logger(LoggingEmbeddingModel.class);
         logAppender = new ListAppender<>();
         logAppender.start();
         logbackLogger.addAppender(logAppender);

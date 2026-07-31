@@ -62,4 +62,39 @@ class ParallelIsolationConventionTest {
                 .as("병렬 실행에서 플래키를 유발하는 테스트입니다 — 클래스에 %s 를 추가하세요", LOCK)
                 .isEmpty();
     }
+
+    /**
+     * Casting {@code LoggerFactory.getLogger(...)} straight to a Logback {@code Logger} is a cold-start
+     * race: while SLF4J is still binding, every caller gets a {@code SubstituteLogger} and the cast
+     * throws {@code ClassCastException}. {@code @ResourceLock} does not cover it — the thread doing the
+     * initialization is some other, unlocked class. {@link LogbackTestSupport} waits for the binding
+     * first, so every log-capture test must go through it.
+     */
+    @Test
+    @DisplayName("로그 캡처 테스트는 LoggerFactory 캐스팅 대신 LogbackTestSupport 를 써야 한다 (SLF4J 바인딩 레이스)")
+    void logCaptureTestsUseLogbackTestSupport() throws IOException {
+        List<String> violations = new ArrayList<>();
+        try (Stream<Path> files = Files.walk(TEST_ROOT)) {
+            files.filter(p -> p.toString().endsWith(".java"))
+                    .filter(p -> !p.getFileName().toString().equals("ParallelIsolationConventionTest.java"))
+                    .filter(p -> !p.getFileName().toString().equals("LogbackTestSupport.java"))
+                    .forEach(p -> {
+                        String src;
+                        try {
+                            src = Files.readString(p);
+                        } catch (IOException e) {
+                            throw new UncheckedIOException(e);
+                        }
+                        // whitespace-insensitive so "(Logger)  LoggerFactory" is caught too
+                        String compact = src.replace(" ", "");
+                        if (compact.contains("(Logger)LoggerFactory.getLogger")
+                                || compact.contains("(Logger)org.slf4j.LoggerFactory.getLogger")) {
+                            violations.add(p.toString().replace("src/test/java/", ""));
+                        }
+                    });
+        }
+        assertThat(violations)
+                .as("SLF4J 바인딩 전이면 SubstituteLogger 라 캐스팅이 깨집니다 — LogbackTestSupport.logger(...) 를 쓰세요")
+                .isEmpty();
+    }
 }

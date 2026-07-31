@@ -75,7 +75,7 @@ class MarkdownCorrectionServiceTest {
 
     @BeforeEach
     void attachLogCapture() {
-        correctionLogger = (Logger) org.slf4j.LoggerFactory.getLogger(MarkdownCorrectionService.class);
+        correctionLogger = com.example.ragagent.LogbackTestSupport.logger(MarkdownCorrectionService.class);
         logAppender = new ListAppender<>();
         logAppender.start();
         correctionLogger.addAppender(logAppender);
