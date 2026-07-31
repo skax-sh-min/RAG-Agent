@@ -1134,10 +1134,12 @@ public class MarkdownCorrectionService {
 
     /**
      * True for a well-formed 2–7 level ATX-style chapter heading ({@code "## "} through
-     * {@code "####### "}) — used only by {@link #fixClosingFences} to spot a natural point to heal
-     * a fence the LLM left open. Deliberately looser than {@link #chapterHeadingLevel} (allows
-     * level 7, and doesn't care whether the line sits inside a fence — detecting "still inside one"
-     * is the whole point here). Excludes comment-style lines whose content itself ends in a
+     * {@code "####### "}) — used by {@link #fixClosingFences} to spot a natural point to heal
+     * a fence the LLM left open, and by {@link #postProcessMarkdown}'s Pass B to decide which lines
+     * get a guaranteed blank line on both sides. Deliberately looser than
+     * {@link #chapterHeadingLevel} (allows level 7, and doesn't care whether the line sits inside a
+     * fence — detecting "still inside one" is the whole point in {@code fixClosingFences}; Pass B
+     * adds its own {@code inFence} guard). Excludes comment-style lines whose content itself ends in a
      * trailing {@code #} run (e.g. {@code "### 주석 ###"}, {@code "### ###"}) — several languages
      * use that shape for banner comments inside code, and it is not a real heading. Package-private
      * for unit testing.
@@ -1170,6 +1172,9 @@ public class MarkdownCorrectionService {
      *   <li>drops content-less bullet lines (a lone {@code -});</li>
      *   <li>guarantees a blank line before and after every fenced code block and every GFM table, so
      *       a table/code block touching adjacent text still renders;</li>
+     *   <li>guarantees a blank line before and after every H2–H7 heading
+     *       ({@link #looksLikeChapterHeadingNotComment}), so a subheading never touches the previous
+     *       paragraph/bullet or its own body text;</li>
      *   <li>collapses runs of blank lines (outside fences) to a single blank line.</li>
      * </ul>
      * Package-private for unit testing.
@@ -1196,7 +1201,7 @@ public class MarkdownCorrectionService {
 
         boolean[] inTable = markTableRows(lines);
 
-        // Pass B — blank lines around fences/tables + blank collapsing (fence-aware).
+        // Pass B — blank lines around fences/tables/headings + blank collapsing (fence-aware).
         List<String> out = new ArrayList<>();
         inFence = false;
         for (int i = 0; i < lines.size(); i++) {
@@ -1206,17 +1211,20 @@ public class MarkdownCorrectionService {
             boolean closing = fence && inFence;
             boolean tableStart = !inFence && inTable[i] && (i == 0 || !inTable[i - 1]);
             boolean tableEnd   = !inFence && inTable[i] && (i == lines.size() - 1 || !inTable[i + 1]);
+            // 소제목은 앞뒤 모두 빈 줄을 보장한다. 들여쓰기된 '##'은 목록 안 내용/코드일 수 있으므로
+            // 원본 줄 그대로 판정하고(stripLeading 하지 않음), '### 주석 ###' 류 배너 주석은 제외된다.
+            boolean heading = !inFence && looksLikeChapterHeadingNotComment(line);
 
             if (!inFence && line.isBlank()) {
                 if (!out.isEmpty() && !out.get(out.size() - 1).isBlank()) out.add("");
                 continue;
             }
-            if ((opening || tableStart) && !out.isEmpty() && !out.get(out.size() - 1).isBlank()) {
+            if ((opening || tableStart || heading) && !out.isEmpty() && !out.get(out.size() - 1).isBlank()) {
                 out.add("");
             }
             out.add(line);
             if (fence) inFence = !inFence;
-            if ((closing || tableEnd) && i + 1 < lines.size() && !lines.get(i + 1).isBlank()) {
+            if ((closing || tableEnd || heading) && i + 1 < lines.size() && !lines.get(i + 1).isBlank()) {
                 out.add("");
             }
         }

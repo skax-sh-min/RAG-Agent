@@ -925,6 +925,52 @@ class MarkdownCorrectionServiceTest {
     }
 
     @Test
+    @DisplayName("postProcessMarkdown — 소제목(##~#######) 앞뒤에 빈 줄을 보장한다")
+    void postProcess_blankLinesAroundHeading() {
+        String md = "앞 문단\n## 소제목\n본문입니다.";
+        String out = MarkdownCorrectionService.postProcessMarkdown(md);
+        assertThat(out).isEqualTo("앞 문단\n\n## 소제목\n\n본문입니다.");
+    }
+
+    @Test
+    @DisplayName("postProcessMarkdown — 문서 첫 줄/마지막 줄 소제목에는 불필요한 빈 줄을 넣지 않는다")
+    void postProcess_headingAtDocumentEdgesNoStrayBlank() {
+        assertThat(MarkdownCorrectionService.postProcessMarkdown("## 첫 소제목\n본문"))
+                .isEqualTo("## 첫 소제목\n\n본문");
+        assertThat(MarkdownCorrectionService.postProcessMarkdown("본문\n## 마지막 소제목"))
+                .isEqualTo("본문\n\n## 마지막 소제목");
+    }
+
+    @Test
+    @DisplayName("postProcessMarkdown — 연속된 소제목 사이 빈 줄은 1개만, 이미 있으면 그대로")
+    void postProcess_consecutiveHeadingsSingleBlank() {
+        String md = "## 상위\n### 하위\n\n본문";
+        String out = MarkdownCorrectionService.postProcessMarkdown(md);
+        assertThat(out).isEqualTo("## 상위\n\n### 하위\n\n본문");
+    }
+
+    @Test
+    @DisplayName("postProcessMarkdown — 펜스 안의 '#' 주석/배너는 소제목이 아니므로 빈 줄을 넣지 않는다")
+    void postProcess_headingRuleSkipsFenceAndBannerComments() {
+        String fenced = "설명\n\n```bash\n## 설치 단계\napt install foo\n```";
+        assertThat(MarkdownCorrectionService.postProcessMarkdown(fenced)).isEqualTo(fenced);
+
+        // '### 주석 ###' 형태의 배너 주석은 헤딩으로 보지 않는다(looksLikeChapterHeadingNotComment).
+        String banner = "앞 문장\n### 주석 ###\n뒤 문장";
+        assertThat(MarkdownCorrectionService.postProcessMarkdown(banner)).isEqualTo(banner);
+    }
+
+    @Test
+    @DisplayName("postProcessMarkdown — H1과 들여쓰기된 '##'은 소제목 빈 줄 규칙 대상이 아니다")
+    void postProcess_headingRuleScopedToTopLevelH2Plus() {
+        String h1 = "앞 문장\n# 문서 제목\n뒤 문장";
+        assertThat(MarkdownCorrectionService.postProcessMarkdown(h1)).isEqualTo(h1);
+
+        String indented = "- 항목\n  ## 목록 안 내용\n뒤 문장";
+        assertThat(MarkdownCorrectionService.postProcessMarkdown(indented)).isEqualTo(indented);
+    }
+
+    @Test
     @DisplayName("postProcessMarkdown — 펜스 안의 '-' 한 줄/빈 줄은 코드 내용이므로 건드리지 않는다")
     void postProcess_fenceContentUntouched() {
         String md = "```\n-\n\n-\n```";
