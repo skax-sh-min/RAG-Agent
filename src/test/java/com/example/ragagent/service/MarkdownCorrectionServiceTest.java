@@ -756,6 +756,23 @@ class MarkdownCorrectionServiceTest {
         assertThat(withHeadingNumbers).contains("```python").contains("## 1. 코드");
     }
 
+    @Test
+    @DisplayName("correctSection — 응답의 펜스 개수가 홀수면 그 섹션은 교정을 버리고 원본을 유지한다")
+    void correctSection_keepsOriginalWhenResponseFencesUnbalanced() {
+        String section = "## 1장\n\n```java\nint a = 1;\n```\n";
+        // 모델이 닫는 펜스를 빠뜨린 응답 — 그대로 두면 이어붙인 문서 전체의 펜스 짝이 밀린다.
+        when(llmRouter.executeWithTracking(any(), any(), any(), any()))
+                .thenReturn("## 1장\n\n```java\nint a = 1;\n모델이 덧붙인 줄\n");
+
+        String out = service.correct(section, "doc", null, false, false, false, null);
+
+        assertThat(out).doesNotContain("모델이 덧붙인 줄");
+        assertThat(out).contains("## 1장").contains("```java").contains("int a = 1;");
+        assertThat(logAppender.list).anyMatch(e ->
+                e.getLevel() == Level.WARN
+                        && e.getFormattedMessage().contains("응답의 코드 펜스 개수가 홀수"));
+    }
+
     private static int countOccurrences(String haystack, String needle) {
         int count = 0, idx = 0;
         while ((idx = haystack.indexOf(needle, idx)) != -1) {
@@ -815,6 +832,92 @@ class MarkdownCorrectionServiceTest {
         String md = "```c\n### ###\nint x = 1;\n```";
         String fixed = MarkdownCorrectionService.fixClosingFences(md);
         assertThat(fixed).isEqualTo(md);
+    }
+
+    @Test
+    @DisplayName("fixClosingFences — 문서 끝에서 열린 채 끝난 펜스는 닫는 펜스를 붙여 치유한다")
+    void fixClosingFences_healsUnclosedFenceAtEndOfInput() {
+        String md = "## 1장\n\n본문\n\n```java\nint x = 1;\n";
+        String fixed = MarkdownCorrectionService.fixClosingFences(md);
+        assertThat(fixed).isEqualTo("## 1장\n\n본문\n\n```java\nint x = 1;\n\n```");
+        assertThat(fenceLines(fixed) % 2).isZero();
+    }
+
+    @Test
+    @DisplayName("fixClosingFences — [페이지: N] 마커도 치유 지점 (PPTX/PDF는 ## 소제목이 없다)")
+    void fixClosingFences_healsUnclosedFenceBeforePageMarker() {
+        // 소제목이 전혀 없는 PPTX/비스캔 PDF 형태 — 치유가 없으면 뒤따르는 진짜 여는 펜스가
+        // 닫는 펜스로 오인돼 문서 나머지 전체의 펜스 짝이 밀린다.
+        String md = "[페이지: 1]\n\n```text\n설명 줄\n\n[페이지: 2]\n\n```java\nint a = 1;\n```java\n\n마무리\n";
+        String fixed = MarkdownCorrectionService.fixClosingFences(md);
+
+        assertThat(fixed).isEqualTo(
+                "[페이지: 1]\n\n```text\n설명 줄\n\n```\n[페이지: 2]\n\n```java\nint a = 1;\n```\n\n마무리\n");
+        assertThat(fenceLines(fixed) % 2).isZero();
+        // 진짜 여는 펜스는 태그를 지켰고, 에코된 닫는 펜스만 순수 ``` 로 바뀌었다
+        assertThat(countOccurrences(fixed, "```java\n")).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("fixClosingFences — 펜스 안의 [페이지: N]처럼 보이는 줄은 들여쓰기되어 있으면 치유 지점이 아니다")
+    void fixClosingFences_pageMarkerHealingRequiresLineStart() {
+        String md = "```text\n  [페이지: 2] 는 마커가 아니라 코드 내용\n```";
+        assertThat(MarkdownCorrectionService.fixClosingFences(md)).isEqualTo(md);
+    }
+
+    @Test
+    @DisplayName("normalizeCodeBlocks — 펜스 개수가 홀수면 언어 태그를 쓰지 않고 원본을 그대로 둔다")
+    void normalizeCodeBlocks_skipsWhenFenceCountIsOdd() {
+        // 닫는 펜스가 없는 문서 — 정규식이 짝을 한 칸 밀어 잡으면 '닫는 펜스'에 태그를 찍게 된다.
+        String md = "```\n{\"a\": 1}\n```\n\n```\nint b = 2;\n";
+        String out = service.normalizeCodeBlocks(md, true);
+        assertThat(out).isEqualTo(md);
+        assertThat(logAppender.list).anyMatch(e ->
+                e.getLevel() == Level.WARN
+                        && e.getFormattedMessage().contains("코드 펜스 짝을 확정할 수 없어"));
+    }
+
+    @Test
+    @DisplayName("normalizeCodeBlocks — 줄 중간 ``` 이 있으면(줄 단위 뷰와 정규식 뷰 불일치) 건너뛴다")
+    void normalizeCodeBlocks_skipsWhenMidLineFencePresent() {
+        // "…감쌉니다: ```" 의 ``` 는 줄 단위 패스에는 안 보이지만 FENCED_BLOCK 정규식에는 보인다.
+        // 가드가 없으면 이 ``` 가 아래 ```java 를 닫는 펜스로 삼아 짝을 밀어버린다.
+        String md = "코드는 다음처럼 감쌉니다: ```\n\n본문 문단\n\n```java\nint a = 1;\n```\n\n끝 문장\n";
+        String out = service.normalizeCodeBlocks(md, true);
+        assertThat(out).isEqualTo(md);
+        assertThat(logAppender.list).anyMatch(e ->
+                e.getLevel() == Level.WARN
+                        && e.getFormattedMessage().contains("코드 펜스 짝을 확정할 수 없어"));
+    }
+
+    @Test
+    @DisplayName("재현 — 소제목 없는 문서의 미닫힘 펜스가 '```java 다음에 ```java'로 번지지 않는다")
+    void unclosedFenceDoesNotPropagateDuplicateLanguageTag() {
+        // 보고된 증상: 저장된 md에서 ```java 의 짝이 ``` 가 아니라 ```java 였다.
+        // 원인은 앞쪽 미닫힘 펜스로 짝이 밀린 뒤 normalizeCodeBlocks 가 '닫는 펜스'에 태그를 써넣는 것.
+        String joined = "[페이지: 1]\n\n```text\n설명 줄\n\n[페이지: 2]\n\n```java\nint a = 1;\n```java\n\n마무리\n";
+
+        String saved = service.normalizeCodeBlocks(MarkdownCorrectionService.fixClosingFences(joined), true);
+
+        assertThat(fenceLines(saved) % 2).isZero();               // 짝이 맞는다
+        assertThat(countOccurrences(saved, "```java")).isEqualTo(1); // 여는 펜스 하나뿐
+        assertThat(saved).contains("\n[페이지: 2]");               // 산문이 코드 블록에 삼켜지지 않았다
+    }
+
+    @Test
+    @DisplayName("normalizeCodeBlocks — 펜스 짝이 정상이면 기존대로 언어 태그를 추론한다(가드 회귀 없음)")
+    void normalizeCodeBlocks_stillNormalizesBalancedDocument() {
+        String md = "설명\n\n```\n{\"a\": 1}\n```\n";
+        assertThat(service.normalizeCodeBlocks(md, true)).isEqualTo("설명\n\n```json\n{\"a\": 1}\n```\n");
+    }
+
+    /** 펜스 줄(앞 공백 제외하고 ``` 로 시작하는 줄) 개수 — 짝이 맞는지 확인용. */
+    private static int fenceLines(String text) {
+        int count = 0;
+        for (String line : text.split("\n", -1)) {
+            if (line.stripLeading().startsWith("```")) count++;
+        }
+        return count;
     }
 
     @Test

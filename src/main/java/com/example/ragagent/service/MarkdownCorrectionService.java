@@ -675,20 +675,39 @@ public class MarkdownCorrectionService {
             if (hasOverlap) {
                 String cut = cutOverlap(result, hasHead, hasTail);
                 if (cut != null) {
-                    return cut;
+                    return acceptIfFencesBalanced(cut, section);
                 }
                 // A marker the code injected is gone from the response → we can't tell where the
                 // overlap ends, so re-correct with no overlap at all rather than risk keeping it.
                 log.debug("[MD_CORRECT] 경계 마커 누락 — 오버랩 없이 재교정");
                 return correctSection(section, "", "");
             }
-            return result;
+            return acceptIfFencesBalanced(result, section);
         } catch (LlmProviderExhaustedException e) {
             throw e;
         } catch (Exception e) {
             log.warn("[MD_CORRECT] 섹션 교정 실패, 원본 유지: {}", e.getMessage());
             return section;
         }
+    }
+
+    /**
+     * Accepts the corrected section only if the span that will actually land in the document has an
+     * even number of fence lines; otherwise keeps {@code original} untouched — the same "never guess"
+     * discipline as the table-placeholder and boundary-marker guards above.
+     *
+     * <p>Two things can leave an odd count here even though every input section is balanced by
+     * construction ({@code splitByBoundary} never cuts inside a fence and closes a malformed trailing
+     * fence): the model dropping/adding a lone fence, and {@link #cutOverlap} slicing at the boundary
+     * marker when the model wrapped code spanning that marker in ONE fence instead of one per side
+     * (which {@link #buildBoundaryNote} asks for, but that is prompt compliance, not a guarantee) —
+     * the cut then takes half the pair with it. A single unbalanced section desyncs fence pairing for
+     * the rest of the joined document, so it is worth losing one section's formatting fixes over.
+     */
+    private static String acceptIfFencesBalanced(String corrected, String original) {
+        if (fenceLineCount(corrected) % 2 == 0) return corrected;
+        log.warn("[MD_CORRECT] 응답의 코드 펜스 개수가 홀수 — 섹션 교정을 건너뛰고 원본 유지");
+        return original;
     }
 
     /** {@code protectedText} = {@code original} with every GFM table block ({@link #markTableRows})
@@ -1050,8 +1069,37 @@ public class MarkdownCorrectionService {
         return "image/png";
     }
 
-    /** Package-private for unit testing (log-capture assertions on the language-tag DEBUG log). */
+    /**
+     * Re-tags and re-indents every fenced code block. {@link #FENCED_BLOCK} pairs fences positionally
+     * (1-2, 3-4, …) and the replacement <em>writes</em> {@code "```" + resolvedLang}, so a document
+     * whose fence pairing is ambiguous would get an inferred language tag stamped onto a line that is
+     * really a <em>closing</em> fence — the {@code ```java … ```java} corruption this pass is supposed
+     * to be downstream of. Two cheap checks refuse the whole document in that case (same discipline as
+     * {@code correctSection}'s table-placeholder guard — never guess):
+     * <ul>
+     *   <li><b>odd fence count</b> — some block is unclosed, so every pairing after it is shifted.
+     *       {@link #fixClosingFences} runs first and now heals at headings/page markers/EOF, so this
+     *       should be unreachable from {@link #correct}; it still guards direct/unit callers;</li>
+     *   <li><b>mid-line fence</b> ({@link #fenceLineCount} ≠ {@link #fenceMarkCount}) — e.g. prose
+     *       ending in {@code "다음처럼 감쌉니다: ```"} or a table cell holding a fence. The regex counts
+     *       those as fences and the line-based passes do not, so the two disagree about which fence is
+     *       an opener.</li>
+     * </ul>
+     * Skipping means untagged blocks stay untagged and {@link #normalizeCodeContent} does not run —
+     * a visible but harmless degradation, unlike rewriting the document around a wrong pairing.
+     *
+     * <p>Package-private for unit testing (log-capture assertions on the language-tag DEBUG log).
+     */
     String normalizeCodeBlocks(String md, boolean inferLanguage) {
+        if (md == null || md.isEmpty()) return md;
+        int fenceLines = fenceLineCount(md);
+        int fenceMarks = fenceMarkCount(md);
+        if (fenceLines % 2 != 0 || fenceLines != fenceMarks) {
+            log.warn("[MD_CORRECT] 코드 펜스 짝을 확정할 수 없어 언어 태그·코드 정리를 건너뜀 "
+                    + "(펜스 줄 {}개, 텍스트 내 ``` {}회 — 홀수이거나 줄 중간 펜스가 있음)",
+                    fenceLines, fenceMarks);
+            return md;
+        }
         Matcher m = FENCED_BLOCK.matcher(md);
         StringBuffer out = new StringBuffer();
         while (m.find()) {
@@ -1090,11 +1138,15 @@ public class MarkdownCorrectionService {
      * closing fence (openers keep theirs). Fence content is otherwise untouched. Run BEFORE
      * {@link #normalizeCodeBlocks} so its regex sees well-formed pairs. Package-private for testing.
      *
-     * <p>Also heals a fence the LLM left open entirely (no closer at all, mis-tagged or not): if a
-     * well-formed chapter heading ({@link #looksLikeChapterHeadingNotComment}) is reached while
-     * {@code inFence} is still true, a synthetic {@code ```} is inserted right before it. Without
-     * this, every real opening fence later in the document would be misread as a closer instead,
-     * silently stripping its language tag one boundary at a time.
+     * <p>Also heals a fence the LLM left open entirely (no closer at all, mis-tagged or not) at three
+     * points: a well-formed chapter heading ({@link #looksLikeChapterHeadingNotComment}), a
+     * {@code [페이지: N]} marker, and end of input. Without this, every real opening fence later in
+     * the document would be misread as a closer instead, silently stripping its language tag one
+     * boundary at a time — and once that parity is off, {@link #normalizeCodeBlocks} pairs fences the
+     * same wrong way and <em>writes</em> an inferred language tag onto a line that is really a closer
+     * (the reported {@code ```java … ```java} corruption). The page marker matters because PPTX and
+     * non-scanned PDF emit no {@code ##} headings at all (see {@link #splitBySections}), so a heading
+     * is never reached in those formats and the desync would run to the end of the document.
      */
     static String fixClosingFences(String md) {
         if (md == null || md.isEmpty()) return md;
@@ -1121,15 +1173,46 @@ public class MarkdownCorrectionService {
                 inFence = !inFence;
                 continue;
             }
-            if (inFence && looksLikeChapterHeadingNotComment(rawLine)) {
-                log.debug("[MD_CORRECT] {}행 — 닫히지 않은 펜스(여는 펜스 '{}') 치유: 챕터 제목 '{}' 앞에 닫는 펜스 삽입",
+            if (inFence && (looksLikeChapterHeadingNotComment(rawLine) || isPageMarkerLine(rawLine))) {
+                log.debug("[MD_CORRECT] {}행 — 닫히지 않은 펜스(여는 펜스 '{}') 치유: 경계 '{}' 앞에 닫는 펜스 삽입",
                         i + 1, openingTag, rawLine.strip());
                 out.add("```");
                 inFence = false;
             }
             out.add(rawLine);
         }
+        if (inFence) {
+            log.debug("[MD_CORRECT] 문서 끝 — 닫히지 않은 펜스(여는 펜스 '{}') 치유: 닫는 펜스 추가", openingTag);
+            out.add("```");
+        }
         return String.join("\n", out);
+    }
+
+    /** A {@code [페이지: N]} slide/page boundary marker line — the only per-page boundary PPTX and
+     *  non-scanned PDF emit (they produce no {@code ##} headings). Matches {@link #splitBySections}'
+     *  own boundary test, so fence healing and section splitting agree on where a page starts. */
+    private static boolean isPageMarkerLine(String line) {
+        return line.startsWith("[페이지: ");
+    }
+
+    /** Number of lines that open or close a fenced code block (leading whitespace ignored) — the
+     *  line-based view {@link #fixClosingFences} and {@link #postProcessMarkdown} both use. */
+    private static int fenceLineCount(String text) {
+        int count = 0;
+        for (String line : text.split("\n", -1)) {
+            if (line.stripLeading().startsWith("```")) count++;
+        }
+        return count;
+    }
+
+    /** Total {@code ```} occurrences anywhere in {@code text}, including mid-line ones that
+     *  {@link #fenceLineCount} does not see — {@link #FENCED_BLOCK} has no line anchors and pairs on
+     *  these too, so a difference between the two counts means the line-based and regex-based views
+     *  of "where the fences are" disagree. */
+    private static int fenceMarkCount(String text) {
+        int count = 0;
+        for (int i = text.indexOf("```"); i >= 0; i = text.indexOf("```", i + 3)) count++;
+        return count;
     }
 
     /**
