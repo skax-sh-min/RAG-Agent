@@ -241,7 +241,8 @@ rag_java/
     │   │   ├── ChatController.java             # REST POST /api/v1/chat; HTMX /ui/chat, /ui/chat/stream, thread management
     │   │   ├── DocumentController.java         # REST /api/v1/documents, /api/v1/images; async upload (202+taskId)
     │   │   ├── OperationsController.java       # REST GET /api/v1/health, /api/v1/llm/usage; HTMX thread list + LLM cards
-    │   │   ├── AdminController.java            # /admin, /admin/chunks; document re-index
+    │   │   ├── AdminController.java            # /admin, /admin/chunks; document re-index; curated-Q&A + submission review
+    │   │   ├── CuratedSubmissionController.java # /curated/submissions — user-submitted chunk board (post, withdraw, unread badge)
     │   │   ├── SettingsController.java         # /settings view + /admin/settings/update|reset
     │   │   ├── AuthController.java             # /login, /signup, /setup page controllers; auto-login after signup
     │   │   ├── GlobalExceptionHandler.java     # RFC 9457 ProblemDetail; 400/413 handling
@@ -272,6 +273,8 @@ rag_java/
     │   │   ├── MemoryRepository.java              # Conversation memory interface (includes getTurns)
     │   │   ├── SqliteMemoryRepository.java        # SQLite WAL-based implementation
     │   │   ├── LlmUsageRepository.java            # LLM token usage SQLite repository
+    │   │   ├── CuratedQaRepository.java           # curated_qa — liked answers + approved user submissions (origin=like|manual)
+    │   │   ├── CuratedSubmissionRepository.java   # curated_submission — the proposal board (pending/approved/rejected)
     │   │   └── ImageDescriptionRepository.java    # image_descriptions table CRUD (Vision cache)
     │   └── service/
     │       ├── AgentService.java              # Agent pipeline entry point
@@ -286,6 +289,8 @@ rag_java/
     │       ├── MemoryService.java             # Multi-turn memory — SQLite persistence
     │       ├── RagService.java                # Document indexing + sync + image cleanup
     │       ├── AdminService.java              # Admin UI data (chunk browse/edit + vector store status) — chroma & sqlite-vec
+    │       ├── CuratedQaService.java          # Curated-Q&A axis: like promotion + admin-approved submissions, embed/de-index
+    │       ├── CuratedSubmissionService.java  # Proposal board: validation (title/body/pending caps), approve, reject, notification counts
     │       ├── SettingsService.java           # runtime settings-override layer (AppProperties.OverrideSource) + /settings view/validation/audit
     │       ├── IndexingProgressService.java   # SSE emitter registry for async upload/sync progress
     │       ├── MarkdownCorrectionService.java # Post-process LLM markdown output
@@ -322,8 +327,11 @@ rag_java/
             ├── layout/base.html           # Shared layout (Thymeleaf Layout Dialect; PWA meta + SW register)
             ├── chat.html                  # Chat page (server-renders previous turns)
             ├── documents.html             # Document management page
+            ├── curated-submissions.html   # Knowledge-proposal board (post form + "my proposals" status list)
             ├── llm-usage.html             # LLM usage statistics page
             └── fragments/
+                ├── admin-curated.html     # Admin curated-Q&A panel (lazy-loaded on expand)
+                ├── admin-submissions.html # Admin proposal-review panel (lazy-loaded, status-filtered)
                 ├── llm-usage-cards.html   # Provider cards (HTMX 30s auto-refresh)
                 ├── thread-list.html       # HTMX thread list fragment
                 ├── thread-item.html       # HTMX thread item fragment
@@ -370,6 +378,7 @@ User question
 - **Embedding input normalization** — decorative markdown (separator lines, bold/italic/underline markers) is stripped from the embedding, `chunk_fts`, and answer-prompt inputs (not from stored/displayed text), reducing noise in the search index and prompt token usage
 - **Response length modes (S/M/L)** — a per-message chat toggle picks how much detail the answer includes; each mode's target is the larger of a ratio of `LLM_MAX_TOKENS` (15%/40%/70%) and a fixed character floor (2,000/5,000/10,000), so S and M stay clearly distinct even on a small configured ceiling. The same number is applied both as `maxTokens` on blocking calls and as a "~N characters" target in the style-instruction prompt — streaming answers rely on the prompt alone, since they have no per-call token cap by design. `L` (verbatim-max) only makes sense with retrieved context and is disabled while Direct mode is on
 - **Curated Q&A from likes (§10.10)** — liking a chat answer promotes it into a separately embedded, shared knowledge axis (reserved vector-store version namespace, survives document re-indexing) that future searches fuse in via a weighted RRF axis (`SEARCH_CURATED_QA_ENABLED`/`SEARCH_CURATED_QA_WEIGHT`, hot-editable via `/settings`); the answer is injected as grounding evidence, not returned verbatim, so the LLM still reconciles against current documents. The turn's own asker can edit it inline in the chat bubble (re-embeds automatically); admins moderate every user's curated entries from a dedicated `/admin` card (edit or force-remove, independent of the original like). Liking an **L**-mode answer skips the embed entirely — its content already mirrors indexed source material closely enough that re-embedding it would be redundant (the like itself is still recorded)
+- **User-submitted chunks (청크 추가 게시판)** — users post a proposal (title + body) at `/curated/submissions`; an admin reviews it from a dedicated `/admin` card and either runs the embedding or rejects it with a mandatory reason. Approved proposals land in the same curated-Q&A axis as liked answers (so `SEARCH_CURATED_QA_*` applies unchanged); the submission board itself is a separate table, keeping `curated_qa.status='active'` meaning exactly "contributing to search". **Admin approval is the only gate between user-authored text and the `[검색된 문서]` block of an answer prompt** — the review panel always shows the body in full, and there is deliberately no bulk/auto-approve path. Notifications are 60s header-badge polls in both directions: pending count for the admin (first poll fires right after login), review outcome for the author (cleared by opening "내 제안"). One submission is always exactly one chunk — the body is capped at `CHUNK_SIZE` measured after markdown normalization, because the curated "input too large" retry narrows to answer sections a hand-written post doesn't have. See [OPERATOR_MANUAL.md §6.9](documents/OPERATOR_MANUAL.md#69-청크-추가-게시판-사용자-제안--관리자-임베딩)
 - **ReAct re-retrieval** — automatic re-retrieval up to 2 times when evidence is insufficient
 - **Critic verification** — LLM double-checks whether the generated answer is grounded in documents
 - **PROGRESSIVE mode** — starts with COST_FIRST; if quality score < threshold, re-runs Answer with PREMIUM provider and marks response with upgrade badge
@@ -406,6 +415,7 @@ User question
 | `GET` | `/` | Chat home (creates a new thread) |
 | `GET` | `/chat/{threadId}` | Resume an existing thread (restores previous message bubbles) |
 | `GET` | `/documents` | Document management page |
+| `GET/POST` | `/curated/submissions` | Knowledge-proposal board — post a chunk, track its review outcome |
 | `GET` | `/llm-usage` | LLM usage statistics page |
 | `GET/POST` | `/login` | Login page (auth mode, or no-auth management-only submode) |
 | `GET/POST` | `/signup` | Sign-up page (auth mode only) |

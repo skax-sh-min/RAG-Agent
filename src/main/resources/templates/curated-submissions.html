@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org"
+      xmlns:layout="http://www.ultraq.net.nz/thymeleaf/layout"
+      layout:decorate="~{layout/base}"
+      th:lang="${#locale.language}">
+<head>
+    <title th:text="#{nav.submissions}">Knowledge proposals</title>
+</head>
+<body>
+
+<!-- 청크 추가 게시판 (사용자) — 등록 폼 + 내가 낸 제안의 처리 결과.
+     이 페이지를 여는 것 자체가 "확인"으로 처리되어(컨트롤러의 markAllReadForAuthor)
+     헤더의 처리 알림 배지가 사라진다. -->
+<section layout:fragment="content" class="container py-4" style="max-width: 900px;">
+
+    <h5 class="fw-semibold mb-1">
+        <i class="bi bi-journal-plus me-2"></i>
+        <span th:text="#{submission.title}">지식 제안</span>
+    </h5>
+    <p class="text-secondary small mb-4" th:text="#{submission.subtitle}">
+        검색에 추가하고 싶은 내용을 등록하면 관리자가 검토 후 임베딩을 실행합니다.
+    </p>
+
+    <div th:if="${submitSuccess}" class="alert alert-success py-2 small" role="alert">
+        <i class="bi bi-check-circle me-1"></i><span th:text="${submitSuccess}"></span>
+    </div>
+    <div th:if="${submitError}" class="alert alert-danger py-2 small" role="alert">
+        <i class="bi bi-exclamation-triangle me-1"></i><span th:text="${submitError}"></span>
+    </div>
+
+    <!-- ── 등록 폼 ────────────────────────────────────────────────────────── -->
+    <div class="card mb-4">
+        <div class="card-header py-2 fw-semibold small" th:text="#{submission.form.header}">새 제안 등록</div>
+        <div class="card-body">
+            <form th:action="@{/curated/submissions}" method="post" id="submission-form">
+                <input type="hidden" th:name="${_csrf != null ? _csrf.parameterName : '_csrf'}"
+                       th:value="${_csrf != null ? _csrf.token : ''}"/>
+
+                <div class="mb-3">
+                    <label class="form-label small fw-semibold" for="submission-title"
+                           th:text="#{submission.field.title}">제목</label>
+                    <input type="text" class="form-control form-control-sm" id="submission-title"
+                           name="title" required
+                           th:maxlength="${maxTitleLength}"
+                           th:value="${draftTitle}"
+                           th:placeholder="#{submission.field.title.placeholder}"/>
+                    <!-- 제목은 curated_qa.question 컬럼에 그대로 저장되어 임베딩 입력의 앞부분이 된다.
+                         즉 "무엇에 대한 내용인지"가 드러나는 제목일수록 검색에 잘 걸린다. -->
+                    <div class="form-text small" th:text="#{submission.field.title.hint}">
+                        검색될 때 질문처럼 매칭되는 부분입니다. 내용을 요약한 제목을 권장합니다.
+                    </div>
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label small fw-semibold" for="submission-body"
+                           th:text="#{submission.field.body}">본문</label>
+                    <textarea class="form-control form-control-sm" id="submission-body" name="body"
+                              rows="12" required style="font-size:0.85rem; resize:vertical;"
+                              th:text="${draftBody}"
+                              th:placeholder="#{submission.field.body.placeholder}"></textarea>
+                    <div class="d-flex justify-content-between form-text small">
+                        <span th:text="#{submission.field.body.hint}">
+                            마크다운을 쓸 수 있습니다. 한 건은 청크 하나로 등록됩니다.
+                        </span>
+                        <span id="body-counter" class="text-muted">
+                            <span id="body-count">0</span> / <span th:text="${maxBodyLength}">800</span>
+                        </span>
+                    </div>
+                </div>
+
+                <button type="submit" class="btn btn-primary btn-sm">
+                    <i class="bi bi-send me-1"></i><span th:text="#{submission.btn.submit}">등록</span>
+                </button>
+            </form>
+        </div>
+    </div>
+
+    <!-- ── 내 제안 목록 ───────────────────────────────────────────────────── -->
+    <div class="card">
+        <div class="card-header py-2 fw-semibold small d-flex align-items-center">
+            <span th:text="#{submission.list.header}">내 제안</span>
+            <span class="badge bg-secondary ms-2" th:text="${#lists.size(submissions)}">0</span>
+        </div>
+
+        <div th:if="${#lists.isEmpty(submissions)}" class="card-body text-center text-muted small py-4"
+             th:text="#{submission.list.empty}">등록한 제안이 없습니다.</div>
+
+        <div class="list-group list-group-flush" th:unless="${#lists.isEmpty(submissions)}">
+            <div class="list-group-item" th:each="s : ${submissions}">
+                <div class="d-flex align-items-start gap-2">
+                    <div class="flex-grow-1 min-w-0">
+                        <div class="fw-semibold small text-truncate" th:text="${s.title()}"></div>
+                        <div class="text-muted small text-truncate" th:text="${s.bodyPreview()}"></div>
+                        <!-- 반려 사유는 잘라내지 않고 전문을 노출한다 — 사용자가 받는 유일한 피드백. -->
+                        <div th:if="${s.reviewNote() != null and s.displayStatus() == 'rejected'}"
+                             class="alert alert-warning py-1 px-2 mt-2 mb-0 small">
+                            <span class="fw-semibold" th:text="#{submission.reject.reason}">거부 사유</span>:
+                            <span th:text="${s.reviewNote()}"></span>
+                        </div>
+                        <div th:if="${s.embedFailed()}"
+                             class="alert alert-warning py-1 px-2 mt-2 mb-0 small"
+                             th:text="#{submission.embed.failed.hint}">
+                            등록됐지만 임베딩에 실패했습니다. 내용을 줄여 다시 등록하거나 관리자에게 문의하세요.
+                        </div>
+                    </div>
+
+                    <div class="text-end flex-shrink-0" style="min-width:132px;">
+                        <span th:switch="${s.displayStatus()}">
+                            <span th:case="'pending'"   class="badge bg-secondary"
+                                  th:text="#{submission.status.pending}">검토 대기</span>
+                            <span th:case="'approved'"  class="badge bg-success"
+                                  th:text="#{submission.status.approved}">등록 완료</span>
+                            <span th:case="'rejected'"  class="badge bg-danger"
+                                  th:text="#{submission.status.rejected}">반려</span>
+                            <span th:case="'withdrawn'" class="badge bg-light text-dark border"
+                                  th:text="#{submission.status.withdrawn}">철회함</span>
+                            <span th:case="'revoked'"   class="badge bg-warning text-dark"
+                                  th:text="#{submission.status.revoked}">회수됨</span>
+                            <span th:case="*"           class="badge bg-secondary"
+                                  th:text="${s.displayStatus()}"></span>
+                        </span>
+                        <div class="text-muted mt-1" style="font-size:0.72rem;"
+                             th:text="${s.createdAt()}"></div>
+                        <form th:if="${s.isPending()}" method="post" class="mt-1"
+                              th:action="@{'/curated/submissions/' + ${s.id()} + '/withdraw'}"
+                              onsubmit="return confirm('이 제안을 철회하시겠습니까?');">
+                            <input type="hidden" th:name="${_csrf != null ? _csrf.parameterName : '_csrf'}"
+                                   th:value="${_csrf != null ? _csrf.token : ''}"/>
+                            <button type="submit" class="btn btn-outline-secondary btn-sm py-0 px-2"
+                                    style="font-size:0.72rem;" th:text="#{submission.btn.withdraw}">철회</button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="card-footer d-flex align-items-center gap-2 small text-muted py-2"
+             th:if="${#lists.size(submissions) > 0 or offset > 0}">
+            <a class="btn btn-sm btn-outline-secondary py-0 px-2"
+               th:classappend="${offset == 0} ? ' disabled'"
+               th:href="@{/curated/submissions(offset=${offset - pageSize})}">‹ 이전</a>
+            <a class="btn btn-sm btn-outline-secondary py-0 px-2"
+               th:classappend="${#lists.size(submissions) < pageSize} ? ' disabled'"
+               th:href="@{/curated/submissions(offset=${offset + pageSize})}">다음 ›</a>
+        </div>
+    </div>
+
+</section>
+
+<th:block layout:fragment="scripts">
+<script th:inline="javascript">
+/* 본문 길이 카운터 — 서버는 MarkdownNoiseNormalizer 로 정규화한 길이를 재므로 여기 원문 길이는
+   상한선(정규화 후에는 같거나 줄어듦)이다. 초과하면 빨갛게 표시하되 전송은 막지 않는다:
+   최종 판정은 서버가 하고, 정규화 덕분에 통과하는 경우도 있기 때문. */
+(function () {
+    const MAX = /*[[${maxBodyLength}]]*/ 800;
+    const box   = document.getElementById('submission-body');
+    const count = document.getElementById('body-count');
+    if (!box || !count) return;
+    function refresh() {
+        const n = box.value.length;
+        count.textContent = n;
+        count.parentElement.classList.toggle('text-danger', n > MAX);
+        count.parentElement.classList.toggle('text-muted',  n <= MAX);
+    }
+    box.addEventListener('input', refresh);
+    refresh();
+})();
+</script>
+</th:block>
+
+</body>
+</html>

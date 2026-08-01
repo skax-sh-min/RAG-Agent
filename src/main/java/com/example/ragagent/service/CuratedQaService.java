@@ -160,8 +160,26 @@ public class CuratedQaService {
         if (newAnswer == null || newAnswer.isBlank()) return false;
         if (repository.findById(curatedId).isEmpty()) return false;
         repository.updateAnswer(curatedId, newAnswer);
-        Thread.ofVirtual().name("curated-reembed-" + curatedId).start(() -> reembedAfterEdit(curatedId));
+        Thread.ofVirtual().name("curated-reembed-" + curatedId).start(() ->
+                embedActiveRow(curatedId, "edit"));
         return true;
+    }
+
+    /**
+     * 청크 추가 — admin approval of a user-submitted chunk. Creates the {@code curated_qa} row
+     * synchronously (so the approving request can report success and link the submission to it),
+     * then embeds on a background virtual thread exactly like the edit path: no debounce and no
+     * feedback re-check, since an approval is an explicit one-way action with no unlike to race.
+     *
+     * <p>{@code title} lands in the {@code question} column on purpose — {@code defaultSearchText()}
+     * embeds {@code question + answer}, so a descriptive title is what makes a manually written
+     * chunk retrievable by a question-shaped query at all. Returns the new curated row id.
+     */
+    public long createFromSubmission(long submissionId, String authorUserId, String title, String body) {
+        long curatedId = repository.insertManual(submissionId, authorUserId, title, body);
+        Thread.ofVirtual().name("curated-embed-" + curatedId).start(() ->
+                embedActiveRow(curatedId, "submission"));
+        return curatedId;
     }
 
     /**
@@ -172,7 +190,9 @@ public class CuratedQaService {
     public boolean forceRemove(long curatedId) {
         Optional<CuratedQa> rowOpt = repository.findById(curatedId);
         if (rowOpt.isEmpty() || !"active".equals(rowOpt.get().status())) return false;
-        repository.deactivate(rowOpt.get().sourceTurnId());
+        // By id, not by turn — a manual (user-submitted) row has source_turn_id = NULL, which no
+        // WHERE source_turn_id = ? can ever match.
+        repository.deactivateById(curatedId);
         Thread.ofVirtual().name("curated-deindex-" + curatedId).start(() -> deleteVector(curatedId));
         return true;
     }
@@ -202,13 +222,17 @@ public class CuratedQaService {
         return repository.findFailedTurnIds(turnIds);
     }
 
-    /** Re-embeds an already-active row after an edit — no like-state re-check (see {@link #updateAnswer}). */
-    private void reembedAfterEdit(long curatedId) {
+    /**
+     * Embeds an already-active row and records the outcome in {@code embed_status} — used by both
+     * the owner/admin edit path and the submission-approval path. No like-state re-check (unlike
+     * {@link #embed}): both callers are explicit save/approve actions that can't race an unlike.
+     */
+    private void embedActiveRow(long curatedId, String reason) {
         Optional<CuratedQa> rowOpt = repository.findById(curatedId);
         if (rowOpt.isEmpty() || !"active".equals(rowOpt.get().status())) return;
         if (tryEmbedWithFallback(rowOpt.get())) {
             repository.markEmbedOk(curatedId);
-            log.info("[CURATED] re-embedded after edit curatedId={}", curatedId);
+            log.info("[CURATED] embedded curatedId={} reason={}", curatedId, reason);
         } else {
             repository.markEmbedFailed(curatedId);
         }

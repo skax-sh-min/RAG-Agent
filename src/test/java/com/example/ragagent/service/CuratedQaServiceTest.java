@@ -79,7 +79,7 @@ class CuratedQaServiceTest {
 
     private static CuratedQaRepository.CuratedQa curatedQa(long id, String status, String question, String answer) {
         return new CuratedQaRepository.CuratedQa(id, TURN_ID, UID, TID, question, answer, status, "v1",
-                "2026-01-01", "2026-01-01", "ok");
+                "2026-01-01", "2026-01-01", "ok", CuratedQaRepository.ORIGIN_LIKE, null);
     }
 
     @Test
@@ -276,7 +276,9 @@ class CuratedQaServiceTest {
         boolean result = service.forceRemove(1L);
 
         assertThat(result).isTrue();
-        verify(repository, times(1)).deactivate(TURN_ID); // curatedQa()의 sourceTurnId=TURN_ID
+        // id 기준 — 사용자 제안(수동) 행은 source_turn_id 가 NULL 이라 turn 기준으로는 못 지운다.
+        verify(repository, times(1)).deactivateById(1L);
+        verify(repository, never()).deactivate(anyLong());
         verify(vectorStore, timeout(2000)).deleteByDocIds("shared", CuratedQaService.CURATED_VERSION, List.of("curated-1"));
         // onUnlike의 소유권 체크(getFeedback)는 전혀 거치지 않는다 — 별도 인가 경로.
         verify(memoryService, never()).getFeedback(any(), any(), anyLong());
@@ -290,7 +292,7 @@ class CuratedQaServiceTest {
 
         assertThat(service.forceRemove(1L)).isFalse();
         assertThat(service.forceRemove(2L)).isFalse();
-        verify(repository, never()).deactivate(anyLong());
+        verify(repository, never()).deactivateById(anyLong());
     }
 
     @Test

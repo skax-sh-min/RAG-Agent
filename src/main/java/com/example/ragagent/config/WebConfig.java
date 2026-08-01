@@ -62,9 +62,14 @@ public class WebConfig implements WebMvcConfigurer {
             @Override
             public void postHandle(HttpServletRequest request, HttpServletResponse response,
                                    Object handler, ModelAndView mav) {
-                if (mav != null) {
-                    mav.addObject("requestURI", request.getRequestURI());
-                }
+                if (mav == null) return;
+                // Never on a redirect: RedirectView appends simple model attributes to the target
+                // URL as query parameters, so this would turn every "redirect:/x" into
+                // "/x?requestURI=%2Fold%2Fpath". Only the rendered layout (base.html's nav
+                // highlighting) ever reads it, and a redirect renders nothing.
+                String viewName = mav.getViewName();
+                if (viewName != null && viewName.startsWith("redirect:")) return;
+                mav.addObject("requestURI", request.getRequestURI());
             }
         });
     }

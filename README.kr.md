@@ -240,7 +240,8 @@ rag_java/
     │   │   ├── ChatController.java             # REST POST /api/v1/chat; HTMX /ui/chat, /ui/chat/stream, 스레드 관리
     │   │   ├── DocumentController.java         # REST /api/v1/documents, /api/v1/images; 비동기 업로드 (202+taskId)
     │   │   ├── OperationsController.java       # REST GET /api/v1/health, /api/v1/llm/usage; HTMX 스레드 목록 + LLM 카드
-    │   │   ├── AdminController.java            # /admin, /admin/chunks; 문서 재인덱스
+    │   │   ├── AdminController.java            # /admin, /admin/chunks; 문서 재인덱스; 큐레이션 Q&A + 청크 추가 제안 검토
+    │   │   ├── CuratedSubmissionController.java # /curated/submissions — 청크 추가 게시판(등록·철회·미확인 배지)
     │   │   ├── SettingsController.java         # /settings 조회 + /admin/settings/update|reset
     │   │   ├── AuthController.java             # /login, /signup, /setup 페이지 컨트롤러; 회원가입 후 자동 로그인
     │   │   ├── GlobalExceptionHandler.java     # RFC 9457 ProblemDetail; 400/413 처리
@@ -271,6 +272,8 @@ rag_java/
     │   │   ├── MemoryRepository.java              # 대화 메모리 추상 인터페이스 (getTurns 포함)
     │   │   ├── SqliteMemoryRepository.java        # SQLite WAL 기반 구현
     │   │   ├── LlmUsageRepository.java            # LLM 토큰 사용량 SQLite 저장소
+    │   │   ├── CuratedQaRepository.java           # curated_qa — 좋아요 승격 + 승인된 사용자 제안(origin=like|manual)
+    │   │   ├── CuratedSubmissionRepository.java   # curated_submission — 청크 추가 게시판(검토 대기/등록/반려)
     │   │   └── ImageDescriptionRepository.java    # image_descriptions 테이블 CRUD (Vision 캐시)
     │   └── service/
     │       ├── AgentService.java              # 에이전트 파이프라인 진입점
@@ -285,6 +288,8 @@ rag_java/
     │       ├── MemoryService.java             # 멀티턴 메모리 — SQLite 영속
     │       ├── RagService.java                # 문서 인덱싱 + 동기화 + 이미지 정리
     │       ├── AdminService.java              # Admin UI 데이터 (청크 조회/편집 + 벡터 스토어 상태) — chroma·sqlite-vec
+    │       ├── CuratedQaService.java          # 큐레이션 Q&A 축: 좋아요 승격 + 관리자 승인 제안, 임베딩/de-index
+    │       ├── CuratedSubmissionService.java  # 청크 추가 게시판: 입력 검증(제목·본문·대기 상한), 승인, 거부, 알림 카운트
     │       ├── SettingsService.java           # 런타임 설정 오버라이드 레이어(AppProperties.OverrideSource) + /settings 조회/검증/감사
     │       ├── IndexingProgressService.java   # 비동기 업로드/동기화 SSE 진행 이벤트 관리
     │       ├── MarkdownCorrectionService.java # LLM 마크다운 출력 후처리
@@ -321,8 +326,11 @@ rag_java/
             ├── layout/base.html           # 공통 레이아웃 (Thymeleaf Layout Dialect; PWA meta + SW 등록)
             ├── chat.html                  # 채팅 페이지 (이전 turn 서버 렌더 포함)
             ├── documents.html             # 문서 관리 페이지
+            ├── curated-submissions.html   # 지식 제안 게시판 (등록 폼 + "내 제안" 상태 목록)
             ├── llm-usage.html             # LLM 사용량 통계 페이지
             └── fragments/
+                ├── admin-curated.html     # 관리자 큐레이션 Q&A 패널 (펼칠 때 지연 로딩)
+                ├── admin-submissions.html # 관리자 청크 추가 제안 검토 패널 (지연 로딩, 상태 필터)
                 ├── llm-usage-cards.html   # 프로바이더 카드 (HTMX 30초 자동 갱신)
                 ├── thread-list.html       # HTMX 스레드 목록 fragment
                 ├── thread-item.html       # HTMX 스레드 아이템 fragment
@@ -369,6 +377,7 @@ rag_java/
 - **임베딩 입력 정규화** — 마크다운 장식(구분선, 볼드/이탤릭/밑줄 마커)을 임베딩·`chunk_fts`·답변 프롬프트 입력에서만 제거(저장·표시 텍스트는 원문 유지)해 검색 인덱스 노이즈와 프롬프트 토큰 사용량을 줄임
 - **응답 길이 모드 (S/M/L)** — 메시지별 토글로 답변 분량을 조절. 각 모드의 목표치는 `LLM_MAX_TOKENS` 비율(15%/40%/70%)과 고정 글자수 하한(2,000/5,000/10,000자) 중 큰 값이라, 설정값이 작아도 S와 M이 뚜렷이 구분됨. 이 값은 블로킹 호출의 `maxTokens`로도, 프롬프트의 "약 N자" 스타일 지시문으로도 그대로 재사용됨 — 스트리밍 응답은 설계상 호출당 토큰 상한이 없어 지시문이 유일한 조절 수단. `L`(원문 최대)은 검색 컨텍스트가 있을 때만 의미가 있어 Direct 모드에서는 비활성화됨
 - **좋아요 기반 큐레이션 Q&A (§10.10)** — 답변에 좋아요를 누르면 별도로 임베딩되어(예약 벡터스토어 버전 네임스페이스, 문서 재인덱싱에도 보존) 이후 검색에 가중 RRF 축으로 융합됨(`SEARCH_CURATED_QA_ENABLED`/`SEARCH_CURATED_QA_WEIGHT`, `/settings`에서 핫 수정 가능). 정답을 그대로 반환하지 않고 근거로만 주입해 LLM이 현재 문서와 대조함. 좋아요를 누른 본인은 채팅 버블에서 바로 수정(자동 재임베딩) 가능하고, 관리자는 `/admin` 카드에서 전체 사용자의 큐레이션 항목을 편집·강제 삭제(좋아요 여부와 무관)할 수 있음. **L모드** 답변은 좋아요를 눌러도 임베딩되지 않음 — 이미 인덱싱된 원본 문서 내용과 사실상 동일해 재임베딩이 불필요하기 때문(좋아요 자체는 정상 기록됨)
+- **청크 추가 게시판 (사용자 제안 → 관리자 임베딩)** — 사용자가 `/curated/submissions`에서 제목+본문으로 지식을 등록하면, 관리자가 `/admin` 전용 카드에서 검토해 **임베딩 실행**하거나 **사유를 적어 거부**한다. 승인된 제안은 좋아요 큐레이션 Q&A와 같은 검색 축으로 들어가므로 `SEARCH_CURATED_QA_*` 설정이 그대로 적용되고, 게시판 자체는 별도 테이블이라 `curated_qa.status='active'`가 "지금 검색에 기여 중"이라는 의미를 그대로 유지한다. **관리자 승인이 사용자 작성 텍스트와 답변 프롬프트의 `[검색된 문서]` 블록 사이의 유일한 관문**이라, 검토 화면은 항상 본문 전문을 보여주고 일괄·자동 승인 경로는 의도적으로 만들지 않았다. 알림은 양방향 60초 헤더 배지 폴링 — 관리자에게는 검토 대기 건수(로그인 직후 첫 폴링에 바로 표시), 작성자에게는 처리 결과("내 제안"을 열면 읽음 처리). 한 건은 항상 청크 하나이며 본문 상한은 마크다운 정규화 후 길이 기준 `CHUNK_SIZE` — 큐레이션 쪽의 "입력이 너무 큼" 재시도는 손으로 쓴 글에 없는 답변 섹션 구조에 의존하므로 여기서는 폴백이 없기 때문. [OPERATOR_MANUAL.md §6.9](documents/OPERATOR_MANUAL.md#69-청크-추가-게시판-사용자-제안--관리자-임베딩) 참고
 - **ReAct 재검색** — 증거 부족 시 최대 2회 자동 재검색
 - **Critic 검증** — 생성된 답변이 문서에 근거하는지 LLM이 이중 검증
 - **PROGRESSIVE 모드** — COST_FIRST로 시작 → 품질 임계값 미달 시 PREMIUM 프로바이더로 재실행 + 업그레이드 배지 표시
@@ -405,6 +414,7 @@ rag_java/
 | `GET` | `/` | 채팅 홈 (새 스레드 생성) |
 | `GET` | `/chat/{threadId}` | 기존 스레드 채팅 화면 (이전 메시지 버블 복원) |
 | `GET` | `/documents` | 문서 관리 화면 |
+| `GET/POST` | `/curated/submissions` | 지식 제안 게시판 — 청크 직접 등록 + 처리 결과 확인 |
 | `GET` | `/llm-usage` | LLM 사용량 통계 페이지 |
 
 ### REST API

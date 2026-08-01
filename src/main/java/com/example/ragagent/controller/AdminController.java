@@ -2,8 +2,10 @@ package com.example.ragagent.controller;
 
 import com.example.ragagent.context.ThreadContext;
 import com.example.ragagent.model.IndexingProgressEvent;
+import com.example.ragagent.security.CurrentUser;
 import com.example.ragagent.service.AdminService;
 import com.example.ragagent.service.CuratedQaService;
+import com.example.ragagent.service.CuratedSubmissionService;
 import com.example.ragagent.service.IndexingProgressService;
 import com.example.ragagent.service.RagService;
 import org.slf4j.Logger;
@@ -18,7 +20,7 @@ import java.util.Map;
 
 /**
  * Admin UI: vector-store collection/chunk viewer and editor (Chroma and sqlite-vec backends),
- * plus the §10.10 curated-Q&A moderation tab.
+ * the §10.10 curated-Q&A moderation tab, and the 청크 추가 submission-review tab.
  */
 @Controller
 public class AdminController {
@@ -29,13 +31,18 @@ public class AdminController {
     private final RagService   ragService;
     private final IndexingProgressService progressService;
     private final CuratedQaService curatedQaService;
+    private final CuratedSubmissionService submissionService;
+    private final CurrentUser currentUser;
 
     public AdminController(AdminService adminService, RagService ragService,
-                            IndexingProgressService progressService, CuratedQaService curatedQaService) {
+                            IndexingProgressService progressService, CuratedQaService curatedQaService,
+                            CuratedSubmissionService submissionService, CurrentUser currentUser) {
         this.adminService = adminService;
         this.ragService   = ragService;
         this.progressService = progressService;
         this.curatedQaService = curatedQaService;
+        this.submissionService = submissionService;
+        this.currentUser = currentUser;
     }
 
     // ── Page ─────────────────────────────────────────────────────────────────
@@ -179,6 +186,85 @@ public class AdminController {
     public ResponseEntity<Void> deleteCurated(@PathVariable long id) {
         boolean removed = curatedQaService.forceRemove(id);
         return removed ? ResponseEntity.ok().build() : ResponseEntity.notFound().build();
+    }
+
+    // ── 청크 추가 게시판 — 제안 검토 ────────────────────────────────────────────
+
+    /**
+     * Submission panel fragment — same lazy-load-on-expand pattern as {@link #curatedPanel}.
+     * Defaults to {@code pending} (the actionable set: "아직 등록되지 않은 청크").
+     */
+    @GetMapping("/admin/submissions")
+    public String submissionPanel(@RequestParam(defaultValue = "pending") String status,
+                                  @RequestParam(defaultValue = "0")  int offset,
+                                  @RequestParam(defaultValue = "20") int limit,
+                                  Model model) {
+        // "all" is the UI's word for "no filter"; the repository's is null/blank.
+        String filter = "all".equals(status) ? null : status;
+        model.addAttribute("submissions", submissionService.listForAdmin(filter, offset, limit));
+        model.addAttribute("submissionStatus", status);
+        model.addAttribute("offset", offset);
+        model.addAttribute("limit",  limit);
+        return "fragments/admin-submissions :: panel";
+    }
+
+    /**
+     * Drives the header badge (polled ~60 s). Deliberately under {@code /admin/**} rather than
+     * {@code /api/v1/**}: the latter is CSRF-exempt and guest-open in management-only mode, which
+     * would hand the pending count to anyone; here it inherits the {@code ROLE_ADMIN} gate.
+     */
+    @GetMapping("/admin/submissions/pending-count")
+    @ResponseBody
+    public Map<String, Integer> pendingSubmissionCount() {
+        return Map.of("count", submissionService.countPending());
+    }
+
+    /** Full submission text for the review panel — never truncated (see below). */
+    @GetMapping("/admin/submissions/{id}/detail")
+    @ResponseBody
+    public ResponseEntity<?> submissionDetail(@PathVariable long id) {
+        return submissionService.findById(id)
+                .<ResponseEntity<?>>map(s -> ResponseEntity.ok(Map.of(
+                        "id",     s.id(),
+                        "title",  s.title(),
+                        "body",   s.body(),
+                        "author", s.authorUserId(),
+                        "status", s.displayStatus())))
+                .orElseGet(() -> ResponseEntity.notFound().build());
+    }
+
+    /**
+     * 임베딩 실행 — approves the submission and indexes it as a curated chunk. The optional
+     * {@code title}/{@code body} in the request body are the admin's edits; they replace the
+     * author's text on both the curated row and the submission itself.
+     *
+     * <p>This is the only checkpoint between user-authored text and the {@code [검색된 문서]} block
+     * of an answer prompt — the review UI shows the body in full for exactly that reason, and there
+     * is deliberately no bulk-approve or auto-approve path.
+     */
+    @PostMapping("/admin/submissions/{id}/approve")
+    @ResponseBody
+    public ResponseEntity<Map<String, Object>> approveSubmission(
+            @PathVariable long id, @RequestBody(required = false) Map<String, Object> body) {
+
+        String title = (body != null && body.get("title") instanceof String s) ? s : null;
+        String text  = (body != null && body.get("body")  instanceof String s) ? s : null;
+
+        return submissionService.approve(id, currentUser.userId(), title, text)
+                .map(curatedId -> ResponseEntity.ok(Map.<String, Object>of("curatedId", curatedId)))
+                .orElseGet(() -> ResponseEntity.status(409).body(Map.<String, Object>of(
+                        "status", "not_pending",
+                        "message", "이미 처리되었거나 철회된 제안입니다.")));
+    }
+
+    /** 거부 — {@code reason} is required (it is the author's only feedback). */
+    @PostMapping("/admin/submissions/{id}/reject")
+    @ResponseBody
+    public ResponseEntity<Void> rejectSubmission(@PathVariable long id,
+                                                 @RequestBody Map<String, Object> body) {
+        String reason = body.get("reason") instanceof String s ? s : null;
+        boolean ok = submissionService.reject(id, currentUser.userId(), reason);
+        return ok ? ResponseEntity.ok().build() : ResponseEntity.status(409).build();
     }
 
     /**

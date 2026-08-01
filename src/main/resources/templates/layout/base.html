@@ -83,12 +83,26 @@
                     <span th:text="#{nav.settings}">Settings</span>
                 </a>
             </li>
+            <!-- 청크 추가 게시판 — 처리(등록/반려)된 내 제안 중 아직 확인하지 않은 건수를 배지로.
+                 목록 페이지를 여는 순간 서버에서 읽음 처리되므로 별도 "확인" 조작은 없다. -->
+            <li class="nav-item">
+                <a class="nav-link"
+                   th:href="@{/curated/submissions}"
+                   th:classappend="${#strings.startsWith(requestURI, '/curated/submissions')} ? ' active'">
+                    <i class="bi bi-journal-plus me-1"></i>
+                    <span th:text="#{nav.submissions}">Proposals</span>
+                    <span id="my-submission-badge" class="badge bg-danger ms-1 d-none">0</span>
+                </a>
+            </li>
             <li class="nav-item" th:if="${isAdmin}">
                 <a class="nav-link"
                    th:href="@{/admin}"
                    th:classappend="${#strings.startsWith(requestURI, '/admin')} ? ' active'">
                     <i class="bi bi-gear me-1"></i>
                     <span th:text="#{nav.admin}">Vector Store</span>
+                    <!-- 검토 대기 중인 사용자 제안 건수. isAdmin 일 때만 렌더링되고, 폴링 스크립트도
+                         같은 조건으로만 내려간다(비관리자에게는 요청 자체가 나가지 않음). -->
+                    <span id="pending-submission-badge" class="badge bg-danger ms-1 d-none">0</span>
                 </a>
             </li>
         </ul>
@@ -336,6 +350,29 @@ const I18N = {
         // Same fast-appearance rationale as chat.html's S/M/L tooltip init — native title's
         // ~1.5s browser default delay reads as unresponsive for a quick-glance header hint.
         new bootstrap.Tooltip(wrap, { delay: { show: 100, hide: 0 } });
+    })();
+
+    /* 청크 추가 게시판 배지 — 60초 폴링. LLM 동시성(3초)과 달리 게시글은 초 단위 신선도가
+       필요 없고, 로그인 직후에도 첫 호출이 즉시 나가므로 "로그인 시 알림"이 함께 해결된다.
+       두 배지 모두 0 이면 감춘다(0 을 띄워두면 알림이 아니라 장식이 된다). */
+    (function () {
+        function pollBadge(el, url) {
+            if (!el) return;
+            function refresh() {
+                fetch(url)
+                    .then(r => r.ok ? r.json() : Promise.reject())
+                    .then(d => {
+                        el.textContent = d.count;
+                        el.classList.toggle('d-none', !d.count);
+                    })
+                    .catch(() => el.classList.add('d-none'));
+            }
+            refresh();
+            setInterval(refresh, 60000);
+        }
+        pollBadge(document.getElementById('my-submission-badge'), '/curated/submissions/unread-count');
+        // 관리자에게만 존재하는 엘리먼트 — 없으면 폴링도 시작되지 않는다.
+        pollBadge(document.getElementById('pending-submission-badge'), '/admin/submissions/pending-count');
     })();
 
     /* Global toast helper — called by child pages */
