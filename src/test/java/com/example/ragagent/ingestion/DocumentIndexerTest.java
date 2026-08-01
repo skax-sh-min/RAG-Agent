@@ -220,7 +220,7 @@ class DocumentIndexerTest {
     void index_chunkingFails_leavesPartialRegistryEntryForReindex() throws IOException {
         doThrow(new RuntimeException("chunk split failure"))
                 .doCallRealMethod()
-                .when(chunkSplitter).splitDocuments(any(), any(), anyInt(), anyInt(), anyInt(), anyInt());
+                .when(chunkSplitter).splitDocuments(any(), any(), anyInt(), anyInt(), anyInt(), anyInt(), anyBoolean());
 
         Path txt = tmpDir.resolve("plain.txt");
         Files.writeString(txt, "제목 없는 평문입니다. 청킹 실패 재시도 검증.");

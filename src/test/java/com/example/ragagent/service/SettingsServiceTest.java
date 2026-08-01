@@ -44,7 +44,7 @@ class SettingsServiceTest {
                 "./data", 2, 800, 100, 100, 7, 0.0, true, 5, false,
                 true, false, 3, null,
                 null, null, null, null, null, null, null, null, null, null, null, 2,
-                null, 1.0, 60, null, null, null, null, null, null, null, null, null, null, null, null);
+                null, 1.0, 60, null, null, null, null, null, null, null, null, null, null, null, null, null);
     }
 
     private SettingsOverrideRepositoryStub repo;
@@ -67,7 +67,7 @@ class SettingsServiceTest {
                 "./data", 2, 800, 100, 100, 7, 0.0, true, 5, false,
                 true, false, 3, null,
                 llm, null, null, null, null, null, null, null, null, null, null, 2,
-                null, 1.0, 60, null, null, null, null, null, null, null, null, null, null, null, null);
+                null, 1.0, 60, null, null, null, null, null, null, null, null, null, null, null, null, null);
     }
 
     /** AppProperties with LLM providers of specific roles under a given default routing mode. */
@@ -81,7 +81,7 @@ class SettingsServiceTest {
                 "./data", 2, 800, 100, 100, 7, 0.0, true, 5, false,
                 true, false, 3, null,
                 llm, null, null, null, null, null, null, null, null, null, null, 2,
-                null, 1.0, 60, null, null, null, null, null, null, null, null, null, null, null, null);
+                null, 1.0, 60, null, null, null, null, null, null, null, null, null, null, null, null, null);
     }
 
     /** Lightweight in-memory stand-in for the SQLite repository. */

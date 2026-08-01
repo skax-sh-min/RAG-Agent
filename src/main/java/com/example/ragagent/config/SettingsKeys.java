@@ -48,6 +48,7 @@ public final class SettingsKeys {
     public static final String CHUNK_SIZE                     = "chunk-size";
     public static final String CHUNK_OVERLAP                  = "chunk-overlap";
     public static final String MIN_CHUNK_SIZE                 = "min-chunk-size";
+    public static final String CHUNK_SPLIT_GRANULAR           = "chunk-split-granular";
     public static final String INDEXING_MAX_CONCURRENT_FILES  = "indexing.max-concurrent-files";
     public static final String INDEXING_MAX_CONCURRENT_LLM    = "indexing.max-concurrent-llm-calls";
 
@@ -71,6 +72,7 @@ public final class SettingsKeys {
             CHUNK_SIZE,
             CHUNK_OVERLAP,
             MIN_CHUNK_SIZE,
+            CHUNK_SPLIT_GRANULAR,
             INDEXING_MAX_CONCURRENT_FILES,
             INDEXING_MAX_CONCURRENT_LLM,
             LLM_DIRECT_TEMPERATURE

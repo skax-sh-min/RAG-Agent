@@ -48,7 +48,8 @@ public record AppProperties(
         Boolean searchCuratedQaEnabled,          // §10.10 — 좋아요 기반 큐레이션 Q&A를 RRF 축으로 반영할지 여부 (기본 true). 핫에디터블 — RetrievalService가 매 검색마다 재조회
         Double searchCuratedQaWeight,            // §10.10 — 큐레이션 Q&A 축 RRF 가중치 (기본 1.5 — 벡터축 그룹정규화 1.0보다 약간 높게 잡아 검증된 답변이 우선 노출되되 순위를 독식하진 않음). 핫에디터블
         Boolean pptxDropRedundantTitleSlides,    // PPTX 변환 시 이미지·도형 없이 짧은 제목 한 줄만 있고 그 내용이 바로 다음 슬라이드에 그대로 포함되는 "예고 제목" 슬라이드 제거 (기본 true) — PptxToMarkdownConverter
-        Boolean pptxDropEndingSlide              // PPTX 변환 시 마지막 슬라이드가 이미지 없이 '끝'/'END'/'The End' 같은 종료 표시만 담고 있으면 제거 (기본 true) — PptxToMarkdownConverter
+        Boolean pptxDropEndingSlide,             // PPTX 변환 시 마지막 슬라이드가 이미지 없이 '끝'/'END'/'The End' 같은 종료 표시만 담고 있으면 제거 (기본 true) — PptxToMarkdownConverter
+        Boolean chunkSplitGranular               // 청크 분할 전략: true=소제목 기준 최대 분할(min-chunk-size 무시), false=크기 기준 병합(기본, 기존 동작). 핫에디터블 — 다음 인덱싱/↺ 재인덱싱부터 적용
 ) {
     public record LlmConfig(
             List<ProviderConfig> providers,
@@ -341,6 +342,23 @@ public record AppProperties(
         Integer o = overrideInt(SettingsKeys.CHUNK_OVERLAP);
         int v = (o != null) ? o : chunkOverlap;
         return Math.max(0, v);
+    }
+
+    /**
+     * Chunk-splitting strategy. {@code false} (default, and the value used when unset) keeps the
+     * size-driven merge that bundles short chapters together; {@code true} selects 최대 분할 —
+     * split at every heading, ignore {@code min-chunk-size}, fold only heading+≤2-sentence lead-ins
+     * into the chapters below them (see {@code ChunkSplitter#splitChapterGranular}).
+     *
+     * <p>Hot-editable: read per index call, so flipping it in {@code /settings} and running ↺
+     * re-index re-chunks that document under the other strategy without a restart. Documents indexed
+     * before the flip keep their existing chunks until they are re-indexed — the two strategies can
+     * coexist in one collection.
+     */
+    public boolean chunkSplitGranularSafe() {
+        Boolean o = overrideBool(SettingsKeys.CHUNK_SPLIT_GRANULAR);
+        if (o != null) return o;
+        return chunkSplitGranular != null && chunkSplitGranular;
     }
 
     /** Minimum chunk size (chars); {@code <= 0} falls back to the (override-aware) overlap. Hot-editable. */

@@ -268,11 +268,12 @@ public class DocumentIndexer {
         // registry entry below could record a different value than the one that actually cut these
         // chunks — exactly the mismatch the stored value exists to prevent.
         int usedOverlap = props.chunkOverlapSafe();
+        boolean granular = props.chunkSplitGranularSafe();
         List<Document> chunks = chunkSplitter.splitDocuments(
             rawDocs, req.filename(), props.chunkSizeSafe(), usedOverlap, props.minChunkSizeSafe(),
-            props.embeddingSafe().maxChunkChars());
-        log.debug("[INDEX] {} 청크 분할 완료 → {}개 (chunkSize={}, overlap={}, minChunkSize={})",
-            req.filename(), chunks.size(), props.chunkSizeSafe(), usedOverlap, props.minChunkSizeSafe());
+            props.embeddingSafe().maxChunkChars(), granular);
+        log.debug("[INDEX] {} 청크 분할 완료 → {}개 (chunkSize={}, overlap={}, minChunkSize={}, granular={})",
+            req.filename(), chunks.size(), props.chunkSizeSafe(), usedOverlap, props.minChunkSizeSafe(), granular);
         req.onProgress().accept(IndexingProgressEvent.of("chunking", 0, chunks.size(), req.filename(),
                 chunks.size() + "개 청크"));
 
@@ -402,10 +403,13 @@ public class DocumentIndexer {
         // Captured for the registry entry below — re-reading the hot setting later could record an
         // overlap these chunks were not actually cut with (see index()).
         int usedOverlap = props.chunkOverlapSafe();
+        // ↺ 재인덱싱은 전략 전환의 공식 경로다 — /settings에서 app.chunk-split-granular를 바꾼 뒤
+        // 이 버튼을 누르면 해당 문서만 반대 전략으로 다시 잘린다(다른 문서는 그대로).
+        boolean granular = props.chunkSplitGranularSafe();
         List<Document> chunks  = chunkSplitter.splitDocuments(
             rawDocs, filename, props.chunkSizeSafe(), usedOverlap, props.minChunkSizeSafe(),
-            props.embeddingSafe().maxChunkChars());
-        log.debug("[REINDEX] 청크 분할: {}섹션 → {}청크", rawDocs.size(), chunks.size());
+            props.embeddingSafe().maxChunkChars(), granular);
+        log.debug("[REINDEX] 청크 분할: {}섹션 → {}청크 (granular={})", rawDocs.size(), chunks.size(), granular);
         onProgress.accept(IndexingProgressEvent.of("chunking", 0, chunks.size(), filename,
                 chunks.size() + "개 청크로 분할 완료"));
         // Keep tags across re-index (same docId): read from FTS before the old rows are removed.

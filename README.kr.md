@@ -170,7 +170,8 @@ container system stop
 |------|--------|-----------|------|
 | `CHUNK_SIZE` | `1500` | 300 ~ 2000 | 문서 청크 크기 (문자 수) |
 | `CHUNK_OVERLAP` | `0` | 0 ~ CHUNK_SIZE × 0.25 | 청크 경계 문맥 보완용 중복 문자 수. 기본값 `0` — 섹션 인식 분할이 이미 소제목·부모 헤딩 컨텍스트를 청크에 붙여 주고, `0`이면 문서 내보내기(아래 참고)의 재조립 결과가 원본과 정확히 일치함 |
-| `MIN_CHUNK_SIZE` | `500` | 50 ~ CHUNK_SIZE × 0.25 | 너무 작은 청크를 인접 청크와 병합할 최소 길이 기준 |
+| `MIN_CHUNK_SIZE` | `500` | 50 ~ CHUNK_SIZE × 0.25 | 너무 작은 청크를 인접 청크와 병합할 최소 길이 기준 (`CHUNK_SPLIT_GRANULAR=true`면 아예 무시됨) |
+| `CHUNK_SPLIT_GRANULAR` | `false` | true/false | 청크 분할 전략. `false`=크기 기준 병합(짧은 챕터를 묶어 `CHUNK_SIZE`를 채움). `true`=**소제목마다 분할**, `MIN_CHUNK_SIZE` 무시 — 단 "제목+2문장 이내" 도입부 챕터만 아래 하위 챕터와 통합. 표·코드 블록은 경계를 `CHUNK_SIZE`의 ±50%까지 옮겨 통째로 유지하고(기본 경로는 `CHUNK_OVERLAP`만큼만 옮길 수 있는데 그 기본값이 0), PPTX/PDF는 슬라이드를 넘는 병합을 하지 않음(1슬라이드=1청크 — 슬라이드 내부 섹션은 합치므로 제목만의 청크는 생기지 않음). 핫 수정 가능하지만 **이미 인덱싱된 문서는 재인덱싱해야 전환** — 켠 뒤 문서 하나에 ↺를 눌러 두 전략을 나란히 비교할 수 있음. [OPERATOR_MANUAL.md §6.10](documents/OPERATOR_MANUAL.md#610-청크-분할-전략-크기-기준-병합--소제목-최대-분할) 참고 |
 | `SEARCH_TOP_K` | `8` | 2 ~ 15 | 벡터 검색 반환 문서 수 |
 | `SEARCH_SIMILARITY_THRESHOLD` | `0.0` | 0.0 ~ 0.75 | 청크 유지 최소 코사인 유사도 (`0.0`=전체 수용) |
 | `SEARCH_MULTIQUERY_ENABLED` | `true` | true/false | 검색 전 질의 다중 확장 여부 |

@@ -168,7 +168,8 @@ See [USER_MANUAL.md](documents/USER_MANUAL.md) for usage instructions and [OPERA
 |----------|---------|-------------------|-------------|
 | `CHUNK_SIZE` | `1500` | 300 ~ 2000 | Document chunk size (characters) |
 | `CHUNK_OVERLAP` | `0` | 0 ~ CHUNK_SIZE × 0.25 | Overlap between chunks (characters, boundary context only). Defaults to `0` — section-aware splitting already carries heading/breadcrumb context into each chunk, and `0` keeps document export exact (see the Document export feature below) |
-| `MIN_CHUNK_SIZE` | `500` | 50 ~ CHUNK_SIZE × 0.25 | Minimum chunk size threshold for tiny-chunk merge |
+| `MIN_CHUNK_SIZE` | `500` | 50 ~ CHUNK_SIZE × 0.25 | Minimum chunk size threshold for tiny-chunk merge (ignored entirely when `CHUNK_SPLIT_GRANULAR=true`) |
+| `CHUNK_SPLIT_GRANULAR` | `false` | true/false | Chunking strategy. `false` = size-driven merge (bundles short chapters up toward `CHUNK_SIZE`). `true` = **split at every heading**, ignoring `MIN_CHUNK_SIZE`, with one exception: a heading plus ≤2 content units (a lead-in) folds into the deeper chapters below it. Also keeps tables/code fences whole by moving the boundary up to ±50% of `CHUNK_SIZE` (the default path can only move it by `CHUNK_OVERLAP`, which is now 0), and stops merging PPTX/PDF slides across slide boundaries (1 slide = 1 chunk — sections *within* one slide are still joined, so a title-only slide heading never becomes its own chunk). Hot-editable, but **existing documents keep their chunks until re-indexed** — flip it and hit ↺ on one document to compare the two side by side. See [OPERATOR_MANUAL.md §6.10](documents/OPERATOR_MANUAL.md#610-청크-분할-전략-크기-기준-병합--소제목-최대-분할) |
 | `SEARCH_TOP_K` | `8` | 2 ~ 15 | Number of documents returned by vector search |
 | `SEARCH_SIMILARITY_THRESHOLD` | `0.0` | 0.0 ~ 0.75 | Min cosine similarity to keep a chunk (`0.0` = accept all) |
 | `SEARCH_MULTIQUERY_ENABLED` | `true` | true/false | Expand the query into sub-queries before search |
