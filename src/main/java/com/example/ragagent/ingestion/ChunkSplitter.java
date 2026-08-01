@@ -935,7 +935,7 @@ public class ChunkSplitter {
     List<Document> slidingWindow(Document doc, int chunkSize, int overlap, int minChunkSize, int blockTolerance) {
         List<Document> result = new ArrayList<>();
         List<String> rawChunks = rawSlidingPieces(doc.getText(), chunkSize, overlap, blockTolerance);
-        for (String merged : mergeTinyChunks(rawChunks, minChunkSize)) {
+        for (String merged : mergeTinyChunks(rawChunks, minChunkSize, overlap)) {
             result.add(new Document(merged, new HashMap<>(doc.getMetadata())));
         }
         return result;
@@ -1044,7 +1044,22 @@ public class ChunkSplitter {
         return headerBlock.isBlank() ? chunk : headerBlock + "\n" + chunk;
     }
 
-    List<String> mergeTinyChunks(List<String> chunks, int minLength) {
+    /**
+     * Folds pieces shorter than {@code minLength} into their neighbour.
+     *
+     * @param maxOverlap how many characters of the join may be treated as duplicated text and
+     *                   dropped — must be the <b>actual sliding-window overlap</b> these pieces were
+     *                   cut with, which is the only text that can legitimately be duplicated across
+     *                   them. It used to be {@code minLength}, which was wrong in both directions and
+     *                   silently destructive: {@code app.chunk-overlap} now defaults to <b>0</b>
+     *                   (pieces are disjoint, so nothing is ever duplicated), yet the join still
+     *                   scanned up to {@code min-chunk-size} (default 500) characters for a matching
+     *                   suffix/prefix and deleted whatever it found. On repetitive content — repeated
+     *                   table rows, uniformly formatted list items — that match is a coincidence, not
+     *                   a duplication, and the text was lost. Passing the real overlap makes the
+     *                   de-duplication a no-op exactly when there is no overlap to remove.
+     */
+    List<String> mergeTinyChunks(List<String> chunks, int minLength, int maxOverlap) {
         if (chunks == null || chunks.isEmpty()) return List.of();
 
         List<String> merged = new ArrayList<>();
@@ -1055,14 +1070,14 @@ public class ChunkSplitter {
             if (text.isBlank()) continue;
 
             if (!pendingPrefix.isEmpty()) {
-                text = mergeAdjacentText(pendingPrefix, text, minLength);
+                text = mergeAdjacentText(pendingPrefix, text, maxOverlap);
                 pendingPrefix = "";
             }
 
             if (text.length() < minLength) {
                 if (!merged.isEmpty()) {
                     int last = merged.size() - 1;
-                    merged.set(last, mergeAdjacentText(merged.get(last), text, minLength));
+                    merged.set(last, mergeAdjacentText(merged.get(last), text, maxOverlap));
                 } else {
                     pendingPrefix = text;
                 }
@@ -1074,7 +1089,7 @@ public class ChunkSplitter {
 
         if (!pendingPrefix.isEmpty()) {
             if (!merged.isEmpty()) {
-                merged.set(0, mergeAdjacentText(pendingPrefix, merged.get(0), minLength));
+                merged.set(0, mergeAdjacentText(pendingPrefix, merged.get(0), maxOverlap));
             } else {
                 merged.add(pendingPrefix);
             }
@@ -1083,9 +1098,16 @@ public class ChunkSplitter {
         return merged;
     }
 
+    /**
+     * Joins two adjacent pieces, dropping at most {@code maxOverlap} characters of text duplicated
+     * across the seam (the sliding window's overlap region). {@code maxOverlap <= 0} joins verbatim —
+     * see {@link #mergeTinyChunks} for why that is the correct behavior at zero overlap rather than a
+     * missed optimization.
+     */
     String mergeAdjacentText(String left, String right, int maxOverlap) {
         if (left == null || left.isBlank()) return right == null ? "" : right;
         if (right == null || right.isBlank()) return left;
+        if (maxOverlap <= 0) return left + "\n\n" + right;
 
         int limit = Math.min(Math.min(maxOverlap, left.length()), right.length());
         int overlapLen = 0;
