@@ -26,6 +26,8 @@ src/main/resources/
 │   ├── layout/base.html                   # navbar, dark mode toggle, scripts
 │   ├── chat.html                          # 채팅 페이지 (이전 turn 서버 렌더 포함)
 │   ├── documents.html                     # 문서 관리 페이지
+│   ├── admin.html                         # 벡터 스토어 관리 (청크 브라우저 + 큐레이션 Q&A + 청크 추가 제안)
+│   ├── curated-submissions.html           # 청크 추가 게시판 (등록 폼 + "내 제안" 목록)
 │   ├── llm-usage.html                     # LLM 사용량 통계 페이지
 │   ├── settings.html                      # LLM/RAG 설정 조회·핫 수정 페이지
 │   └── fragments/
@@ -35,6 +37,9 @@ src/main/resources/
 │       ├── thread-list.html               # 대화 목록 사이드바
 │       ├── thread-item.html               # 대화 목록 항목 1건
 │       ├── doc-table-body.html            # 문서 목록 tbody (새로고침용)
+│       ├── admin-chunks.html              # 청크 테이블 (컬렉션/문서 필터 + 페이지네이션)
+│       ├── admin-curated.html             # 큐레이션 Q&A 패널 (펼칠 때 지연 로딩)
+│       ├── admin-submissions.html         # 청크 추가 제안 검토 패널 (지연 로딩, 상태 필터)
 │       ├── llm-usage-cards.html           # 프로바이더 + 임베딩(EMBEDDING) + orphan(ORPHAN, 삭제 가능) 상태 카드 (30초 자동 갱신)
 │       ├── settings-item.html             # 설정 항목 1행(조회 또는 편집 입력 + 저장/기본값 버튼) — HTMX 부분 갱신 대상
 │       └── settings-providers.html        # LLM providers 표(활성화 배지 + 관리자 활성/비활성 버튼) — settings.html에 인라인 포함 + 토글 응답 시 테이블 전체 교체
@@ -102,6 +107,8 @@ REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — �
 
 > **네비게이션 바 상태 표시**(`layout/base.html`, 모든 페이지 공통 헤더): 우측 상단에 **API 상태**(`#api-status`)와 그 옆 **LLM 동시성**(`#llm-concurrency`, `LLM: {inUse}/{capacity}`) 두 지표가 나란히 표시된다. API 상태는 페이지 로드 시 `GET /api/v1/health`를 딱 1회만 확인하고 이후 재확인하지 않는 반면, LLM 동시성은 `setInterval`로 위 엔드포인트를 **~3초마다** 재조회해 값을 갱신한다 — 이 문서의 다른 폴링(HTMX `hx-trigger="every Ns"`)과 달리 재사용할 만한 3초 간격 폴링이 기존에 없어 `base.html` 자체의 순수 JS `fetch`+`setInterval`로 새로 구현했다. 응답이 `available:false`면 `.d-none`으로 엘리먼트 자체를 감춘다(값이 없는데 `0/0`처럼 표시되는 것을 방지) — `fetch` 실패 시에도 동일하게 숨김 처리된다.
 >
+> **헤더 알림 배지 2종**(`layout/base.html`, 청크 추가 게시판): 네비의 **지식 제안** 링크 옆에 작성자 본인의 미확인 처리 건수(`#my-submission-badge` ← `GET /curated/submissions/unread-count`), **관리자** 링크 옆에 검토 대기 건수(`#pending-submission-badge` ← `GET /admin/submissions/pending-count`)가 빨간 배지로 붙는다. 둘 다 **60초 폴링**이며(위 LLM 동시성 지표의 3초와 달리 게시글은 초 단위 신선도가 불필요) 0건이면 `.d-none`으로 감춘다. 관리자 배지는 `isAdmin`일 때만 렌더링되고, 폴링 스크립트는 **엘리먼트가 있을 때만** 시작하므로 비관리자 브라우저에서는 요청 자체가 나가지 않는다. 로그인 직후 첫 폴링이 바로 실행되므로 "관리자가 로그인하면 알림"이 함께 충족된다.
+>
 > **`inUse`가 채팅 요청만이 아니라 임베딩 활동·서킷브레이커 차단까지 반영한다**: `inUse`는 채팅 동시성 게이트 사용량 + `EmbeddingConcurrencyTracker`(인덱싱·검색 임베딩 in-flight 카운터, 채팅 게이트와 완전히 별개의 `EmbeddingModel` 데코레이터 체인이라 이게 없으면 임베딩 중에도 항상 0으로 보였다)를 합산하고, `capacity`를 넘지 않게 clamp된 값이다(임베딩 동시성은 `EMBED_MAX_CONCURRENT_BATCHES` 등 별도 한도라 합산 결과가 capacity를 초과할 수 있음). 서킷브레이커로 차단된 로컬 프로바이더는 `capacity`에는 그대로 남되 전체 용량이 `inUse`로 집계된다(제외되는 게 아니라 "완전 포화"로 표시됨). `inUse`가 `capacity`에 도달하면(즉 값이 같아지면) 헤더 스크립트가 숫자에 Bootstrap `text-danger`+`fw-bold`를 토글해 굵은 빨간 글씨로 강조한다.
 
 ### 3.4 벡터 스토어 관리 (AdminController)
@@ -124,12 +131,21 @@ REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — �
 | GET | `/admin/curated` | `fragments/admin-curated :: panel` | §10.10 — 큐레이션 Q&A 패널 지연 로딩 프래그먼트. `offset`(기본 0)·`limit`(기본 20, 20/50/100) 쿼리 파라미터로 페이지네이션. `/admin` 페이지 자체는 이 데이터를 조회하지 않고, 카드를 처음 펼칠 때만(`<details>` `toggle` 이벤트) HTMX로 호출되며, 이후 페이지 이동·페이지당 건수 변경은 `loadCurated()`(페이지 레벨 JS, plain fetch)가 같은 엔드포인트를 다시 호출함 |
 | GET | `/admin/curated/{id}/detail` | JSON | §10.10 — 큐레이션 Q&A 항목의 질문·답변 조회 (편집 패널) |
 | POST | `/admin/curated/{id}` | `200` | §10.10 — 큐레이션 Q&A 답변 수정 → 재임베딩. 좋아요를 누른 사용자와 무관하게 관리자가 어떤 항목이든 편집 가능 |
-| DELETE | `/admin/curated/{id}` | `200` | §10.10 — 큐레이션 Q&A 강제 삭제(비활성화+de-index). 좋아요 주체의 동의 없이도 관리자가 제거 가능(모더레이션) |
+| DELETE | `/admin/curated/{id}` | `200` | §10.10 — 큐레이션 Q&A 강제 삭제(비활성화+de-index). 좋아요 주체의 동의 없이도 관리자가 제거 가능(모더레이션). 사용자 제안에서 온 행이면 **같은 제안의 모든 청크가 함께** 내려간다(전부/전무) |
+| GET | `/admin/submissions` | `fragments/admin-submissions :: panel` | 청크 추가 제안 검토 패널 지연 로딩. `status`(기본 `pending`, `all`=전체)·`offset`·`limit` 파라미터. 큐레이션 패널과 동일한 `<details>` + `toggle once` 패턴 |
+| GET | `/admin/submissions/pending-count` | JSON `{"count":N}` | 검토 대기 건수 — 헤더 배지·카드 pill이 60초마다 폴링. **`/api/v1/**`이 아니라 `/admin/**` 아래**에 둔 이유는 아래 참고 |
+| GET | `/admin/submissions/{id}/detail` | JSON | 제안 전문(제목·본문·태그·작성자·상태·예상 청크 수) — 검토 오프캔버스 채우기용 |
+| POST | `/admin/submissions/{id}/approve` | `200 {"curatedId":N}` / `409` | 임베딩 실행. body의 `title`/`body`/`tags`는 관리자 수정본(생략 시 작성자 원문 유지). 이미 처리된 제안이면 409 |
+| POST | `/admin/submissions/{id}/reject` | `200` / `409` | 거부 — body의 `reason` 필수(작성자에게 전문 노출) |
 
 > 상태 카드는 `AdminService.vectorStoreView()` → `VectorStoreAdminView`. 백엔드별 표시 차이는 [OPERATOR_MANUAL.md §7.4](OPERATOR_MANUAL.md) 참고.
 >
 > **큐레이션 Q&A 카드**(`/admin` 하단, §10.10): 기본적으로 접힌 `<details>` 카드이며, 처음 펼칠 때만(`hx-trigger="toggle[this.open] once"` → `GET /admin/curated`) 좋아요로 승격된 질문·답변을 최신순으로 조회해 표시한다 — `AdminController.adminPage()`는 더 이상 `curatedQaService.listActive()`를 즉시 호출하지 않으므로 `/admin` 페이지 로드 자체는 이 조회를 하지 않는다. 페이지당 건수는 20/50/100 중 선택(기본 20 — `AdminController.curatedPanel()`의 `limit` 기본값), 이전/다음 버튼으로 페이지 이동한다(`CuratedQaRepository.findAllActive(offset, limit)`) — 이전의 고정 상한 50건·페이지네이션 없음 방식에서, 큐레이션 항목이 계속 쌓여도 패널이 무거워지지 않도록 청크 목록과 동일한 페이지네이션 UI로 전환됐다. 편집(연필 아이콘)은 저장 시 자동 재임베딩되는 점이 위 청크 편집과 다르다 — 청크 편집은 원본 벡터를 그대로 유지하지만, 큐레이션 Q&A 편집은 검색 정확도가 목적이라 항상 재임베딩된다. 질문 앞에 노란 ⚠ 배지가 보이면 `embed_status='failed'`(전체+핵심 섹션 재시도 모두 실패, `CuratedQaService.tryEmbedWithFallback()`) — 해당 항목은 검색에 전혀 반영되지 않고 있다는 뜻이며, 답변을 편집해 저장하면 재시도된다. 채팅 화면에서도 본인 소유 turn에 한해 같은 배지(`"임베딩 실패"` 텍스트)가 좋아요/편집 아이콘 옆에 뜬다(백그라운드 임베딩이 몇 초 뒤 실패하는 구조라 실시간 토스트는 없고, 다음 페이지 로드 시 표시). 상세는 [OPERATOR_MANUAL.md §7.5](OPERATOR_MANUAL.md#75-큐레이션-qa-관리-1010) 참고.
 
+> **청크 추가 제안 카드**(`/admin` 하단, 큐레이션 Q&A 카드 바로 아래): 같은 `<details>` 지연 로딩 구조(`hx-trigger="toggle[this.open] once"` → `GET /admin/submissions`)이며, 카드 제목 옆에 검토 대기 건수 pill(`#submission-pending-pill`)이 붙는다(0건이면 `.d-none`). 기본 필터는 `pending` — 상태 드롭다운으로 등록 완료/반려/철회됨/전체 전환. 행의 아이콘을 누르면 검토 오프캔버스(`#submissionReviewOffcanvas`)가 열려 제목·태그·본문을 **전문 그대로** 보여주고 수정한 뒤 **임베딩 실행**/**거부**할 수 있다 — 승인된 본문이 곧 답변 프롬프트의 검색 컨텍스트가 되므로 본문을 잘라 보여주지 않고, 일괄·자동 승인 버튼도 없다([OPERATOR_MANUAL.md §7.6](OPERATOR_MANUAL.md#76-청크-추가-제안-검토-69) 참고). 본문 영역은 **원문/미리보기 탭**으로 전환되며 미리보기는 `marked` → `DOMPurify.sanitize()`를 거친다(사용자가 작성한 마크다운을 관리자 화면에서 렌더하므로 sanitize가 필수). 오프캔버스 상단에는 **승인 시 몇 개 청크로 나뉘는지**(승인 후에는 실제 생성 개수)가 표시된다 — 본문 길이 제한이 없어진 대신 `ChunkSplitter`가 분할하기 때문. 페이지 레벨 JS(`loadSubmissions()`/`openSubmissionReview()`/`approveSubmission()`/`rejectSubmission()`)는 큐레이션 패널과 같은 이유로 `admin.html`에 둔다.
+>
+> **`pending-count`가 `/api/v1/**`이 아닌 이유**: 관리 전용 인증 모드(§6.17)에서 `/api/v1/**`은 CSRF 예외 + 게스트 개방이라 거기 두면 검토 대기 건수가 누구에게나 노출된다. `/admin/**` 아래 두면 `ROLE_ADMIN` 게이트를 그대로 상속한다.
+>
 > **청크 목록 컬럼**(`fragments/admin-chunks :: table`): ID·텍스트 미리보기·크기·파일명·페이지/슬라이드·챕터·키워드·작업. **챕터** 열은 `MetaKey.CHAPTER_NO`(H2~H6 헤딩 기반 계층 번호, 예: `1.5.3`)를 보여주며, "0"(프롤로그·PPTX·스캔 PDF — 실제 챕터 없음)이면 빈 칸으로 표시된다 — [§4 출처 Hover 미리보기](#출처-hover-미리보기)의 인용 라벨 로직과 동일한 컨벤션.
 >
 > **청크 목록 페이지네이션·정렬**: 페이지당 건수는 20/50/100 중 선택(기본 20 — `AdminController.chunks()`의 `limit` 기본값), 필터 폼의 드롭다운 변경 시 `offset=0`으로 다시 조회한다. 정렬은 `doc_id` → `MetaKey.CHUNK_INDEX`(인덱싱 시 부여되는 0-based 문서 내 위치) 순 — 두 백엔드 모두 문서 원본 순서 그대로 표시된다(청크 id 순서 아님). sqlite-vec는 `ORDER BY doc_id, json_extract(metadata,'$.chunk_index'), spring_doc_id`로 DB에서 정렬하고, Chroma는 `get()`에 서버 측 정렬이 없어 매치 전체(최대 `AdminService.CHUNK_FETCH_CAP`=10,000건)를 가져와 애플리케이션에서 정렬 후 페이지네이션한다.
@@ -171,6 +187,29 @@ REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — �
 - **LOCAL_ONLY 배포에서는 NORMAL/PREMIUM 프로바이더가 표에서 통째로 숨겨진다**: `app.llm.default-routing-mode=LOCAL_ONLY`일 때 `SettingsService.visibleProviders()`가 `role != LOCAL`인 프로바이더를 필터링한다(`providerRows()`/`setProviderEnabled()` 둘 다 동일하게 적용) — NORMAL/PREMIUM 항목이 향후 모드 전환에 대비해 `application.properties`에 여전히 남아있을 수 있다. 숨겨진 프로바이더는 토글 엔드포인트로도 조작할 수 없다(이름이 "알 수 없는 프로바이더"로 거부됨) — 표시 범위와 조작 가능 범위가 항상 일치한다. (안내 배너·토글 휘발성 안내 문구는 UX 정리 차원에서 제거됨 — 동작 자체는 그대로.)
 - LLM 라우팅 카드는 `<hr>`로 두 구역을 나눈다: 위쪽은 라우팅 모드·temperature·max-tokens(LLM 자체), 아래쪽은 임베딩(모델·**접속 주소**(`settings.embeddingBaseUrl`, `app.embedding.base-url`/`EMBED_BASE_URL` 조회 전용)·차원). 임베딩 접속 주소는 채팅 LLM과 별도 엔드포인트일 수 있어(§6.21 로드밸런싱 등) 조회 전용으로만 노출된다.
 - 상세는 [OPERATOR_MANUAL.md §6.5](OPERATOR_MANUAL.md#65-설정-페이지-settings--llmrag-옵션-조회핫-수정) 참고.
+
+### 3.5-bis 청크 추가 게시판 (CuratedSubmissionController)
+
+사용자가 검색에 넣고 싶은 내용을 직접 등록하는 게시판. **모든 인증 모드에서 게스트에게 열려 있다** —
+등록이 만드는 것은 검색에 영향을 주지 않는 `pending` 행 하나뿐이고, 실제 색인은 관리자 승인(§3.4)을 거친다.
+모든 조회·쓰기가 `CurrentUser.userId()` 스코프이며, no-auth 모드에서 "내 제안"이 방문자별로 갈리려면
+`app.auth.guest-identity`가 기본값 `shared`가 아니어야 한다([OPERATOR_MANUAL.md §9.4.3](OPERATOR_MANUAL.md#943-접속자별-채팅-개인화-appauthguest-identity)).
+
+| Method | Path | 반환 | 설명 |
+|--------|------|------|------|
+| GET | `/curated/submissions` | `curated-submissions.html` | 등록 폼 + "내 제안" 목록. **페이지를 여는 것 자체가 읽음 처리**(`markAllReadForAuthor`)라 헤더 배지가 사라진다 |
+| POST | `/curated/submissions` | redirect + flash | 등록(`title`/`body`/`tags`). HTMX가 아니라 **평범한 폼 POST + 플래시 리다이렉트** — HTML 폼이므로 검증 실패가 `GlobalExceptionHandler`의 JSON으로 나가면 안 된다. 실패 시 입력 초안(`draftTitle`/`draftBody`/`draftTags`)을 되돌려준다 |
+| POST | `/curated/submissions/{id}/withdraw` | redirect + flash | 작성자 본인의 `pending` 제안 철회 |
+| GET | `/curated/submissions/unread-count` | JSON `{"count":N}` | 헤더 배지 폴링(60초) — 처리됐지만 아직 확인하지 않은 내 제안 수. **읽음 처리는 하지 않는다**(폴링이 지우면 보기도 전에 사라짐) |
+
+**폼 구성**(`curated-submissions.html`):
+
+- **제목** — `curated_qa.question` 컬럼에 그대로 저장되어 임베딩 입력의 앞부분이 된다. 질문형 제목일수록 검색이 잘 걸린다.
+- **태그**(선택) — 자유 입력 + 아래 **기존 태그** 칩 클릭 추가. `documents.html` 업로드 태그와 동일한 패턴이며, 목록은 `GET /api/v1/tags?includeCurated=true`로 **문서 태그 ∪ 큐레이션 태그**를 받는다 — 큐레이션 항목은 `chunk_fts`에 색인되지 않아(벡터 축 전용) 합집합이 아니면 제안에서만 쓴 태그가 다음 사람에게 안 보이고 표기가 갈린다. 비워 두면 모든 태그 스코프에서 검색된다(§4 "큐레이션 태그 스코프" 참고).
+- **본문** — **길이 제한 없음**. 오른쪽 위 **작성/미리보기** 탭으로 전환하며, 미리보기는 `marked` → `DOMPurify.sanitize()`(관리자 검토 화면과 동일 파이프라인). 입력창 아래에 글자 수와 **예상 청크 수**(`chunkSize`로 나눈 클라이언트 추정치 — 정확한 값은 소제목 위치에 따라 달라지므로 관리자 검토 화면이 서버 계산으로 보여준다)가 표시된다.
+- **내 제안 목록** — 상태 뱃지(검토 대기/등록 완료/반려/철회함/회수됨), 반려 사유 **전문**, 임베딩 실패 경고, 태그 뱃지, 등록된 청크 수. 상태는 전부/전무로 파생된다(청크가 하나라도 살아 있으면 등록 완료).
+
+---
 
 ### 3.6 인증 (AuthController)
 
@@ -243,7 +282,9 @@ REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — �
 .distinctTagsExcludingCommon()` — doc_id별 태그 집합의 교집합을 계산해 제외; 태그가 하나도 없는 문서가
 스코프에 있으면 교집합이 비어 아무것도 제외되지 않는다). 문서 업로드/편집 화면(`documents.html`)의 태그
 제안 입력은 이 필터를 타지 않는 `excludeCommon` 없는 기본 호출을 그대로 쓴다 — 태그를 붙이는 쪽은 흔한
-태그일수록 오히려 더 봐야 하기 때문이다.
+태그일수록 오히려 더 봐야 하기 때문이다. 청크 추가 게시판(§3.5-bis)은 여기에 더해
+`includeCurated=true`를 붙여 **문서 태그 ∪ 큐레이션 태그**를 받는다(큐레이션 항목은 `chunk_fts`에
+색인되지 않아 기본 호출로는 잡히지 않는다).
 
 **응답 모드 토글 (S/M/L)**: 콤보박스가 아니라 `.btn-check` 기반 3버튼 토글 그룹(`#response-mode-group` 안의
 `#response-mode-s/m/l`) — 왼쪽에 `응답옵션`(`chat.response.group.label`) 라벨이 붙는다. 버튼 폭은 기본
@@ -313,6 +354,8 @@ PROGRESSIVE 업그레이드 시 `🔝 고추론 재분석 → {premiumProvider}`
 - 관리자용 전체 큐레이션 Q&A 관리(모든 사용자 대상)는 `/admin` 페이지에 별도로 있다 — [§3.4](#34-벡터-스토어-관리-admincontroller) 및 [OPERATOR_MANUAL.md §7.5](OPERATOR_MANUAL.md#75-큐레이션-qa-관리-1010) 참고.
 - 동작 원리(디바운스, 재임베딩, 문서 재인덱싱/대화 삭제와의 관계)는 [OPERATOR_MANUAL.md §6.7](OPERATOR_MANUAL.md#67-큐레이션-qa-좋아요-기반-지식-승격-1010) 참고.
 
+**큐레이션 태그 스코프**: 좋아요를 누른 시점에 **그 질문이 검색된 태그 스코프**(입력 바의 태그 칩 선택값)가 `curated_qa.tags`로 승계된다 — 그 태그로 좁혀 얻은 답변이므로 이후 같은 스코프 검색에서 살아남아야 하기 때문. `RetrievalService.filterByTags()`가 벡터·키워드·큐레이션이 합쳐진 후보 풀 **전체**에 걸리므로, 태그 메타데이터가 없던 이전에는 사용자가 태그 칩을 하나라도 켜는 순간 좋아요한 답변이 전부 결과에서 빠졌다. 태그 없이(= `All` 칩) 물은 질문은 스코프가 비어 승계되고, **스코프를 알 수 없는 큐레이션 항목은 어느 스코프에도 속하지 않는 대신 모든 스코프를 통과**한다(문서 청크는 엄격 AND 그대로 — 태그 없는 문서는 여전히 탈락). 사용자 제안(§3.5-bis)의 태그도 같은 컬럼·같은 판정을 쓴다.
+
 ---
 
 ## 5. HTMX 인터랙션 흐름
@@ -354,6 +397,14 @@ PROGRESSIVE 업그레이드 시 `🔝 고추론 재분석 → {premiumProvider}`
 [큐레이션 Q&A 페이지네이션] 이전/다음 버튼, 페이지당 건수 드롭다운 → loadCurated(offset, limit)
               (페이지 레벨 JS, htmx 아닌 plain fetch) → GET /admin/curated?offset=&limit=
               → #curated-qa-body.innerHTML 교체 (몇 번이든 재호출 가능, 위 최초-1회 제약과 무관)
+
+[청크 추가 제안 카드] <details id="submission-card"> 첫 펼침 → hx-trigger="toggle[this.open] once"
+              → GET /admin/submissions (기본 status=pending) → #submission-body 삽입
+[제안 검토/승인]  행 아이콘 → openSubmissionReview(id) → GET /admin/submissions/{id}/detail
+              → 오프캔버스 렌더(원문/미리보기 탭, DOMPurify) → 임베딩 실행/거부
+              → POST /admin/submissions/{id}/approve|reject → loadSubmissions()로 목록 재조회
+[헤더 알림 배지]  setInterval 60초 → GET /curated/submissions/unread-count (전체 사용자)
+              + GET /admin/submissions/pending-count (isAdmin 일 때만 엘리먼트가 존재 → 폴링도 그때만)
 ```
 
 ---
@@ -364,7 +415,8 @@ PROGRESSIVE 업그레이드 시 `🔝 고추론 재분석 → {premiumProvider}`
 |--------|----------|---------|
 | `threadId` (현재 선택) | HTTP 세션 (`HttpSession`) | 브라우저 세션 |
 | 대화 이력 텍스트 | SQLite `conversation_turns` | 영속 |
-| 대화 제목·버전·라우팅 모드 | SQLite `thread_meta` | 영속 |
+| 대화 제목·버전·라우팅 모드·태그 | SQLite `thread_meta` | 영속 |
+| turn별 응답 모드·검색 스코프 태그 | SQLite `conversation_turns` (`response_mode`, `selected_tags`) | 영속 — 좋아요 승격 시 재사용(§4) |
 | 선택 테마 (light/dark) | `localStorage` | 브라우저 영속 |
 
 대화 제목은 첫 질문 직후 비동기(Virtual Thread)로 LLM 요약 생성 후 업데이트.
@@ -381,6 +433,7 @@ PROGRESSIVE 업그레이드 시 `🔝 고추론 재분석 → {premiumProvider}`
 | 문서 내보내기 실패 | `fetch` 응답이 실패(`!res.ok`)면 `ProblemDetail`(JSON)의 `detail`을 파싱해 오류 토스트로 표시(§3.2 문서 내보내기 다이얼로그 참고) — 저장 다이얼로그가 뜨지 않고 조용히 실패하는 대신 사유가 보임 |
 | LOCAL_ONLY, LOCAL 미연결 | 빨간 버블 + `LlmProviderExhaustedException` 메시지 |
 | 동시 사용자 급증으로 프로바이더 용량 초과 (§6.12, 429) | 빨간 버블 + "현재 요청이 몰려 있습니다. 잠시 후 다시 시도해 주세요." — 서킷브레이커 전면차단이 아니라 일시적 대기 상한 초과이므로 잠시 후 재시도하면 대개 성공 |
+| 제안 등록 검증 실패 | 폼 POST → 플래시 리다이렉트로 페이지 상단 빨간 안내 + 입력 초안 복원(제목 200자 초과·태그 정책 위반·대기 20건 초과). 본문 길이는 애초에 제한이 없다 |
 | 빈 질문 전송 | 클라이언트 validation, API 호출 차단 |
 | 대용량 파일 | 업로드 전 200 MB 초과 감지 → 즉시 오류 표시 |
 
