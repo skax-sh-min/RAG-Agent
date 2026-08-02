@@ -148,7 +148,7 @@ class AdminControllerWebMvcTest {
         when(curatedQaService.listActive(anyInt(), anyInt())).thenReturn(List.of(
                 new com.example.ragagent.repository.CuratedQaRepository.CuratedQa(
                         1L, 42L, "u1", "t1", "질문입니다", "답변입니다", "active", "latest",
-                        "2026-01-01T00:00:00", "2026-01-01T00:00:00", "ok", "like", null, null)));
+                        "2026-01-01T00:00:00", "2026-01-01T00:00:00", "ok", "like", null, null, 1)));
 
         mvc.perform(get("/admin/curated").with(user(ADMIN)))
                 .andExpect(status().isOk())
@@ -251,7 +251,7 @@ class AdminControllerWebMvcTest {
         when(curatedQaService.findById(1L)).thenReturn(Optional.of(
                 new com.example.ragagent.repository.CuratedQaRepository.CuratedQa(
                         1L, 42L, "u1", "t1", "질문", "답변", "active", "latest",
-                        "2026-01-01T00:00:00", "2026-01-01T00:00:00", "ok", "like", null, null)));
+                        "2026-01-01T00:00:00", "2026-01-01T00:00:00", "ok", "like", null, null, 1)));
 
         mvc.perform(get("/admin/curated/1/detail").with(user(ADMIN)))
                 .andExpect(status().isOk())

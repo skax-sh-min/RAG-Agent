@@ -42,7 +42,7 @@ public class CuratedQaRepository {
     private static final String COLUMNS =
             "id, source_turn_id, source_user_id, source_thread_id, question, answer, " +
             "status, source_doc_version, created_at, updated_at, embed_status, " +
-            "origin, source_submission_id, tags ";
+            "origin, source_submission_id, tags, chunk_count ";
 
     private final JdbcTemplate jdbc;
 
@@ -65,7 +65,8 @@ public class CuratedQaRepository {
                 rs.getString("embed_status"),
                 rs.getString("origin"),
                 sourceSubmissionId,
-                rs.getString("tags"));
+                rs.getString("tags"),
+                rs.getInt("chunk_count"));
     };
 
     public CuratedQaRepository(JdbcTemplate jdbc) {
@@ -88,7 +89,8 @@ public class CuratedQaRepository {
                     embed_status          TEXT NOT NULL DEFAULT 'ok',
                     origin                TEXT NOT NULL DEFAULT 'like',
                     source_submission_id  INTEGER,
-                    tags                  TEXT
+                    tags                  TEXT,
+                    chunk_count           INTEGER NOT NULL DEFAULT 1
                 )
             """;
 
@@ -111,6 +113,12 @@ public class CuratedQaRepository {
         if (jdbc.queryForList("PRAGMA table_info(curated_qa)").stream()
                 .noneMatch(c -> "tags".equals(c.get("name")))) {
             jdbc.execute("ALTER TABLE curated_qa ADD COLUMN tags TEXT");
+        }
+        // `chunk_count` shipped with 임베딩 분할. Existing rows hold exactly one vector, which is
+        // what the DEFAULT 1 encodes — so de-indexing an old row keeps removing the single id it has.
+        if (jdbc.queryForList("PRAGMA table_info(curated_qa)").stream()
+                .noneMatch(c -> "chunk_count".equals(c.get("name")))) {
+            jdbc.execute("ALTER TABLE curated_qa ADD COLUMN chunk_count INTEGER NOT NULL DEFAULT 1");
         }
         createIndexes();
     }
@@ -136,10 +144,10 @@ public class CuratedQaRepository {
                         INSERT INTO curated_qa_new
                             (id, source_turn_id, source_user_id, source_thread_id, question, answer,
                              status, source_doc_version, created_at, updated_at, embed_status,
-                             origin, source_submission_id, tags)
+                             origin, source_submission_id, tags, chunk_count)
                         SELECT id, source_turn_id, source_user_id, source_thread_id, question, answer,
                                status, source_doc_version, created_at, updated_at, embed_status,
-                               'like', NULL, NULL
+                               'like', NULL, NULL, 1
                           FROM curated_qa
                         """);
                 st.executeUpdate("DROP TABLE curated_qa");
@@ -305,6 +313,13 @@ public class CuratedQaRepository {
         jdbc.update("UPDATE curated_qa SET embed_status='failed', updated_at=? WHERE id=?", now(), id);
     }
 
+    /** How many vectors this row currently owns in the store — the ids are
+     *  {@code curated-<id>} (first) plus {@code curated-<id>-<i>} for the rest, so the count is what
+     *  lets de-index/re-embed find every one of them. */
+    public void updateChunkCount(long id, int chunkCount) {
+        jdbc.update("UPDATE curated_qa SET chunk_count=? WHERE id=?", Math.max(1, chunkCount), id);
+    }
+
     /** Clears the failed badge after a (re-)embed attempt succeeds. */
     public void markEmbedOk(long id) {
         jdbc.update("UPDATE curated_qa SET embed_status='ok', updated_at=? WHERE id=?", now(), id);
@@ -355,7 +370,7 @@ public class CuratedQaRepository {
     public record CuratedQa(long id, Long sourceTurnId, String sourceUserId, String sourceThreadId,
                             String question, String answer, String status, String sourceDocVersion,
                             String createdAt, String updatedAt, String embedStatus,
-                            String origin, Long sourceSubmissionId, String tags) {
+                            String origin, Long sourceSubmissionId, String tags, int chunkCount) {
 
         public boolean isManual() { return ORIGIN_MANUAL.equals(origin); }
     }

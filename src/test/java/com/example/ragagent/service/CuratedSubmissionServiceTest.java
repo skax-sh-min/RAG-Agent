@@ -58,8 +58,7 @@ class CuratedSubmissionServiceTest {
         when(props.embeddingSafe()).thenReturn(new AppProperties.EmbeddingConfig(
                 null, null, null, null, null, null, false, 0, null, 1));
         // 실제 ChunkSplitter — 승인 시 본문 분할이 문서 인덱싱과 같은 기계를 쓰는지까지 함께 검증한다.
-        service = new CuratedSubmissionService(repository, curatedQaService,
-                new com.example.ragagent.ingestion.ChunkSplitter(), props, auditLogger);
+        service = new CuratedSubmissionService(repository, curatedQaService, props, auditLogger);
     }
 
     private static Submission submission(long id, String status) {
@@ -117,23 +116,12 @@ class CuratedSubmissionServiceTest {
     }
 
     @Test
-    @DisplayName("splitBody — chunkSize 이하면 1개, 넘으면 여러 개로 나뉜다")
-    void splitBody_dividesLongBodies() {
-        when(props.chunkSizeSafe()).thenReturn(400);
-        when(props.minChunkSizeSafe()).thenReturn(120);
+    @DisplayName("splitBody/previewChunkCount — 분할은 CuratedQaService에 위임한다 (두 경로가 같은 규칙)")
+    void splitBody_delegatesToCuratedQaService() {
+        when(curatedQaService.splitForEmbedding("긴 본문")).thenReturn(List.of("A", "B", "C"));
 
-        assertThat(service.splitBody("짧은 본문.")).hasSize(1);
-
-        List<String> many = service.splitBody(("문장입니다. ".repeat(20) + "\n").repeat(10));
-        assertThat(many).hasSizeGreaterThan(1);
-        assertThat(service.previewChunkCount("짧은 본문.")).isEqualTo(1);
-    }
-
-    @Test
-    @DisplayName("splitBody — 빈 본문은 빈 목록, 공백만 있어도 빈 목록")
-    void splitBody_blankBody() {
-        assertThat(service.splitBody(null)).isEmpty();
-        assertThat(service.splitBody("   ")).isEmpty();
+        assertThat(service.splitBody("긴 본문")).containsExactly("A", "B", "C");
+        assertThat(service.previewChunkCount("긴 본문")).isEqualTo(3);
     }
 
     @Test
@@ -250,11 +238,9 @@ class CuratedSubmissionServiceTest {
     @Test
     @DisplayName("approve — 긴 본문은 여러 청크로 나뉘어 등록되고, 첫 청크 id 가 반환된다")
     void approve_splitsLongBodyIntoSeveralChunks() {
-        // chunkSize 와 minChunkSize 가 붙어 있으면(예: 둘 다 200) 잘린 조각이 다시 mergeTinyChunks 로
-        // 합쳐져 분할이 사라진다 — 기본 설정(1500/500)과 같은 비율로 둔다.
-        when(props.chunkSizeSafe()).thenReturn(400);
-        when(props.minChunkSizeSafe()).thenReturn(120);
         String longBody = ("이것은 충분히 긴 문장입니다. ".repeat(10) + "\n\n").repeat(5);
+        when(curatedQaService.splitForEmbedding(longBody))
+                .thenReturn(List.of("조각1", "조각2", "조각3"));
         Submission row = new Submission(1L, AUTHOR, "제목", longBody, "pending", null, null,
                 null, "2026-01-01", "2026-01-01", null, null, "인프라", 0, 0, 0);
         when(repository.findById(1L)).thenReturn(Optional.of(row));
@@ -269,7 +255,7 @@ class CuratedSubmissionServiceTest {
         ArgumentCaptor<List<String>> chunks = ArgumentCaptor.forClass(List.class);
         verify(curatedQaService).createFromSubmission(eq(1L), eq(AUTHOR), eq("제목"),
                 chunks.capture(), eq("인프라"));
-        assertThat(chunks.getValue()).hasSizeGreaterThan(1);
+        assertThat(chunks.getValue()).containsExactly("조각1", "조각2", "조각3");
         // 첫 청크 id 가 제안의 대표 포인터로 저장된다.
         verify(repository).markApproved(eq(1L), eq(ADMIN), eq("제목"), eq(longBody), eq("인프라"), eq(10L));
     }

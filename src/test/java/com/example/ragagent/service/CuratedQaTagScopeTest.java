@@ -49,7 +49,7 @@ class CuratedQaTagScopeTest {
         memoryService = mock(MemoryService.class);
         threadMetaService = mock(ThreadMetaService.class);
         vectorStore = mock(VectorStoreFacade.class);
-        service = new CuratedQaService(repository, memoryService, threadMetaService, vectorStore, 10L);
+        service = new CuratedQaService(repository, memoryService, threadMetaService, vectorStore, new com.example.ragagent.ingestion.ChunkSplitter(), splitProps(), 10L);
 
         when(threadMetaService.findById(UID, TID)).thenReturn(Optional.of(
                 new ThreadMeta(TID, UID, "제목", "v1", "2026-01-01", "2026-01-01", "COST_FIRST", "")));
@@ -64,7 +64,7 @@ class CuratedQaTagScopeTest {
 
     private static CuratedQaRepository.CuratedQa curated(String tags) {
         return new CuratedQaRepository.CuratedQa(1L, TURN_ID, UID, TID, "질문", "답변", "active", "v1",
-                "2026-01-01", "2026-01-01", "ok", CuratedQaRepository.ORIGIN_LIKE, null, tags);
+                "2026-01-01", "2026-01-01", "ok", CuratedQaRepository.ORIGIN_LIKE, null, tags, 1);
     }
 
     @Test
@@ -119,5 +119,17 @@ class CuratedQaTagScopeTest {
         verify(vectorStore, timeout(2000))
                 .add(eq("shared"), eq(CuratedQaService.CURATED_VERSION), captor.capture());
         return captor.getValue().get(0);
+    }
+
+    /** 분할 파이프라인이 실제로 도는 최소 설정 — 기본 배포와 같은 1500/500 비율. */
+    private static com.example.ragagent.config.AppProperties splitProps() {
+        var p = mock(com.example.ragagent.config.AppProperties.class);
+        when(p.chunkSizeSafe()).thenReturn(1500);
+        when(p.chunkOverlapSafe()).thenReturn(0);
+        when(p.minChunkSizeSafe()).thenReturn(500);
+        when(p.chunkSplitGranularSafe()).thenReturn(false);
+        when(p.embeddingSafe()).thenReturn(new com.example.ragagent.config.AppProperties.EmbeddingConfig(
+                null, null, null, null, null, null, false, 0, null, 1));
+        return p;
     }
 }

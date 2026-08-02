@@ -2,13 +2,10 @@ package com.example.ragagent.service;
 
 import com.example.ragagent.audit.AuditLogger;
 import com.example.ragagent.config.AppProperties;
-import com.example.ragagent.ingestion.ChunkSplitter;
-import com.example.ragagent.model.MetaKey;
 import com.example.ragagent.model.TagUtils;
 import com.example.ragagent.repository.CuratedSubmissionRepository;
 import com.example.ragagent.repository.CuratedSubmissionRepository.Submission;
 import com.example.ragagent.security.PromptInjectionGuard;
-import org.springframework.ai.document.Document;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -38,18 +35,15 @@ public class CuratedSubmissionService {
 
     private final CuratedSubmissionRepository repository;
     private final CuratedQaService curatedQaService;
-    private final ChunkSplitter chunkSplitter;
     private final AppProperties props;
     private final AuditLogger auditLogger;
 
     public CuratedSubmissionService(CuratedSubmissionRepository repository,
                                     CuratedQaService curatedQaService,
-                                    ChunkSplitter chunkSplitter,
                                     AppProperties props,
                                     AuditLogger auditLogger) {
         this.repository = repository;
         this.curatedQaService = curatedQaService;
-        this.chunkSplitter = chunkSplitter;
         this.props = props;
         this.auditLogger = auditLogger;
     }
@@ -72,23 +66,12 @@ public class CuratedSubmissionService {
 
     /**
      * Splits a submission body the same way a document is chunked, so an arbitrarily long proposal
-     * becomes N embeddable chunks. Reuses {@link ChunkSplitter} wholesale — including the
-     * {@code app.chunk-split-granular} strategy and the table/code-block boundary protection — by
-     * feeding it a single {@code .md} "document", which is exactly what a markdown-authored
-     * submission is. Returns at least one chunk for any non-blank body.
+     * becomes N embeddable chunks. Delegates to {@link CuratedQaService#splitForEmbedding} — the
+     * liked-answer path splits with exactly the same rules, and having one implementation is what
+     * keeps the two curated origins producing comparably sized vectors.
      */
     public List<String> splitBody(String body) {
-        if (body == null || body.isBlank()) return List.of();
-        Document doc = new Document(body.strip(), new java.util.HashMap<>(Map.of(MetaKey.CHAPTER_NO, "0")));
-        List<Document> chunks = chunkSplitter.splitDocuments(
-                List.of(doc), "submission.md",
-                props.chunkSizeSafe(), props.chunkOverlapSafe(), props.minChunkSizeSafe(),
-                props.embeddingSafe().maxChunkChars(), props.chunkSplitGranularSafe());
-        List<String> texts = chunks.stream()
-                .map(Document::getText)
-                .filter(t -> t != null && !t.isBlank())
-                .toList();
-        return texts.isEmpty() ? List.of(body.strip()) : texts;
+        return curatedQaService.splitForEmbedding(body);
     }
 
     /** How many chunks this body would become — the form's "약 N개 청크" hint. */

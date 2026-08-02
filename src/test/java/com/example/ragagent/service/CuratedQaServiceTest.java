@@ -63,7 +63,7 @@ class CuratedQaServiceTest {
         memoryService = mock(MemoryService.class);
         threadMetaService = mock(ThreadMetaService.class);
         vectorStore = mock(VectorStoreFacade.class);
-        service = new CuratedQaService(repository, memoryService, threadMetaService, vectorStore, SHORT_DEBOUNCE_MS);
+        service = new CuratedQaService(repository, memoryService, threadMetaService, vectorStore, new com.example.ragagent.ingestion.ChunkSplitter(), splitProps(), SHORT_DEBOUNCE_MS);
 
         when(threadMetaService.findById(UID, TID)).thenReturn(Optional.of(
                 new ThreadMeta(TID, UID, "제목", "v1", "2026-01-01", "2026-01-01", "COST_FIRST", "")));
@@ -79,7 +79,7 @@ class CuratedQaServiceTest {
 
     private static CuratedQaRepository.CuratedQa curatedQa(long id, String status, String question, String answer) {
         return new CuratedQaRepository.CuratedQa(id, TURN_ID, UID, TID, question, answer, status, "v1",
-                "2026-01-01", "2026-01-01", "ok", CuratedQaRepository.ORIGIN_LIKE, null, null);
+                "2026-01-01", "2026-01-01", "ok", CuratedQaRepository.ORIGIN_LIKE, null, null, 1);
     }
 
     @Test
@@ -121,9 +121,11 @@ class CuratedQaServiceTest {
         verify(vectorStore, timeout(2000)).add(eq("shared"), eq(CuratedQaService.CURATED_VERSION), docsCaptor.capture());
 
         Document doc = docsCaptor.getValue().get(0);
-        // 저장/표시용 텍스트는 참고 섹션이 그대로 유지된다.
-        assertThat(doc.getText()).contains("## 참고", "파일.docx");
-        // 임베딩용 SEARCH_TEXT 오버라이드는 참고 섹션이 제외된다(질문은 포함).
+        // 벡터 텍스트는 '## 참고'를 제거한 뒤의 내용이다 — 분할이 도입되면서 스트립이 자르기 '전'으로
+        // 옮겨졌기 때문(인용 목록이 청크 경계를 넘으면 뒤 조각에서 헤딩이 사라져 스트립을 못 한다).
+        // 원문 전체는 curated_qa.answer 에 그대로 남아 채팅 버블·관리자 편집기가 보여준다.
+        assertThat(doc.getText()).doesNotContain("## 참고", "파일.docx");
+        // 임베딩용 SEARCH_TEXT 오버라이드도 동일하게 참고 섹션이 제외된다(질문은 포함).
         String searchText = String.valueOf(doc.getMetadata().get(MetaKey.SEARCH_TEXT));
         assertThat(searchText).contains("질문").doesNotContain("참고", "파일.docx");
     }
@@ -145,9 +147,10 @@ class CuratedQaServiceTest {
         verify(vectorStore, timeout(2000)).add(eq("shared"), eq(CuratedQaService.CURATED_VERSION), docsCaptor.capture());
 
         Document doc = docsCaptor.getValue().get(0);
-        // 저장/표시용 텍스트는 요약·참고 섹션 모두 그대로 유지된다.
-        assertThat(doc.getText()).contains("## 요약", "핵심 한 줄 요약", "## 참고", "파일.docx");
-        // 임베딩용 SEARCH_TEXT 오버라이드는 요약·참고 섹션 모두 제외된다(질문·상세 설명은 포함).
+        // 벡터 텍스트에서 요약·참고 섹션이 모두 빠진다(위 테스트와 같은 이유 — 스트립이 분할보다 앞선다).
+        assertThat(doc.getText()).contains("상세 설명", "자세한 설명입니다.")
+                .doesNotContain("## 요약", "핵심 한 줄 요약", "## 참고", "파일.docx");
+        // 임베딩용 SEARCH_TEXT 오버라이드도 요약·참고 섹션이 제외된다(질문·상세 설명은 포함).
         String searchText = String.valueOf(doc.getMetadata().get(MetaKey.SEARCH_TEXT));
         assertThat(searchText).contains("질문", "상세 설명", "자세한 설명입니다.")
                 .doesNotContain("요약", "핵심 한 줄", "참고", "파일.docx");
@@ -426,5 +429,17 @@ class CuratedQaServiceTest {
         when(repository.findFailedTurnIds(List.of(1L, 2L))).thenReturn(Set.of(2L));
 
         assertThat(service.findFailedTurnIds(List.of(1L, 2L))).containsExactly(2L);
+    }
+
+    /** 분할 파이프라인이 실제로 도는 최소 설정 — 기본 배포와 같은 1500/500 비율. */
+    private static com.example.ragagent.config.AppProperties splitProps() {
+        var p = mock(com.example.ragagent.config.AppProperties.class);
+        when(p.chunkSizeSafe()).thenReturn(1500);
+        when(p.chunkOverlapSafe()).thenReturn(0);
+        when(p.minChunkSizeSafe()).thenReturn(500);
+        when(p.chunkSplitGranularSafe()).thenReturn(false);
+        when(p.embeddingSafe()).thenReturn(new com.example.ragagent.config.AppProperties.EmbeddingConfig(
+                null, null, null, null, null, null, false, 0, null, 1));
+        return p;
     }
 }
