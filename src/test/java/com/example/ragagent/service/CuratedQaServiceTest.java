@@ -378,7 +378,7 @@ class CuratedQaServiceTest {
     }
 
     @Test
-    @DisplayName("embed — 전체+재시도 모두 실패하면 markEmbedFailed, markEmbedOk는 호출 안 함")
+    @DisplayName("embed — 크기 사다리(2×/1.5×/1×)와 핵심 섹션 재시도까지 모두 실패하면 markEmbedFailed")
     void embed_bothAttemptsFail_marksFailed() {
         when(memoryService.getTurn(UID, TID, TURN_ID)).thenReturn(Optional.of(turn("질문", RAG_FORMAT_ANSWER)));
         when(repository.upsertActive(anyLong(), any(), any(), any(), any(), any(), any())).thenReturn(1L);
@@ -389,13 +389,14 @@ class CuratedQaServiceTest {
 
         service.onLike(UID, TID, TURN_ID);
 
-        verify(vectorStore, timeout(2000).times(2)).add(any(), any(), any());
+        // 2× → 1.5× → 1× (3회) + 핵심 섹션 폴백 1회 = 4회
+        verify(vectorStore, timeout(2000).times(4)).add(any(), any(), any());
         verify(repository, timeout(2000)).markEmbedFailed(1L);
         verify(repository, never()).markEmbedOk(anyLong());
     }
 
     @Test
-    @DisplayName("embed — 답변에 '## 상세 설명'이 없으면(Direct 모드 등) 재시도 없이 바로 markEmbedFailed")
+    @DisplayName("embed — '## 상세 설명'이 없으면(Direct 모드 등) 크기 사다리만 돌고 핵심 섹션 재시도는 생략")
     void embed_noCoreSectionFallback_failsWithoutRetry() {
         String directAnswer = "안녕하세요! 무엇을 도와드릴까요?";
         when(memoryService.getTurn(UID, TID, TURN_ID)).thenReturn(Optional.of(turn("질문", directAnswer)));
@@ -407,7 +408,9 @@ class CuratedQaServiceTest {
 
         service.onLike(UID, TID, TURN_ID);
 
-        verify(vectorStore, timeout(2000).times(1)).add(any(), any(), any()); // 재시도 자체를 안 함
+        // 짧은 답변이라 세 배수 모두 같은 1청크지만 크기 사다리는 그대로 3회 시도하고,
+        // 핵심 섹션이 없으므로 그 폴백은 시도조차 하지 않는다.
+        verify(vectorStore, timeout(2000).times(3)).add(any(), any(), any());
         verify(repository, timeout(2000)).markEmbedFailed(1L);
     }
 

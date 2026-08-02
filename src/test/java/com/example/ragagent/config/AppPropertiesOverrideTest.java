@@ -28,7 +28,7 @@ class AppPropertiesOverrideTest {
                 "./data", 2, 800, 100, 100, 7, 0.0, true, 5, false,
                 true, false, 3, null,
                 null, null, null, null, null, null, null, null, null, null, null, 2,
-                null, 1.0, 60, null, null, null, null, null, null, null, null, null, null, null, null, null);
+                null, 1.0, 60, null, null, null, null, null, null, null, null, null, null, null, null, null, null);
     }
 
     /** Same as {@link #base()} but with a configured {@code IndexingConfig} (base() leaves it null). */
@@ -37,7 +37,7 @@ class AppPropertiesOverrideTest {
                 "./data", 2, 800, 100, 100, 7, 0.0, true, 5, false,
                 true, false, 3, null,
                 null, indexing, null, null, null, null, null, null, null, null, null, 2,
-                null, 1.0, 60, null, null, null, null, null, null, null, null, null, null, null, null, null);
+                null, 1.0, 60, null, null, null, null, null, null, null, null, null, null, null, null, null, null);
     }
 
     private final Map<String, String> overrides = new HashMap<>();

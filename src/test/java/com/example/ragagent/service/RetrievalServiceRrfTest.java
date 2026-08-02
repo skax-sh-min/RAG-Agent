@@ -214,4 +214,36 @@ class RetrievalServiceRrfTest {
         assertThat(RetrievalService.docKey(curated)).isEqualTo("curated:1:0");
         assertThat(RetrievalService.docKey(curated)).isNotEqualTo(RetrievalService.docKey(real));
     }
+
+    // ── 큐레이션 / 지식 제안 축 분리 ──────────────────────────────────────────
+
+    @Test
+    @DisplayName("두 큐레이션 축은 각자의 가중치로 계산된다 — 같은 순위면 가중치 큰 쪽이 앞선다")
+    void curatedAndSubmissionAxesUseTheirOwnWeights() {
+        Document like = doc("like");
+        Document submission = doc("submission");
+
+        // 각 축에서 1위인 동점 상황 — 순위가 같으니 가중치만으로 갈린다.
+        List<Document> higherSubmission = RetrievalService.mergeRrf(
+                List.of(), List.of(), List.of(like), List.of(submission), 5, 60, 0.0, 1.2, 1.5);
+        assertThat(ids(higherSubmission)).containsExactly("submission", "like");
+
+        // 가중치를 뒤집으면 순서도 뒤집힌다 — 값이 실제로 반영된다는 증거.
+        List<Document> higherLike = RetrievalService.mergeRrf(
+                List.of(), List.of(), List.of(like), List.of(submission), 5, 60, 0.0, 1.5, 1.2);
+        assertThat(ids(higherLike)).containsExactly("like", "submission");
+    }
+
+    @Test
+    @DisplayName("제안 축이 비어 있으면 기존 7-인자 동작과 완전히 같다 (회귀 없음)")
+    void emptySubmissionAxis_matchesLegacyBehavior() {
+        List<List<Document>> vectorRanked = List.of(List.of(doc("a"), doc("b")));
+        List<Document> curated = List.of(doc("c"));
+
+        List<Document> legacy = RetrievalService.mergeRrf(vectorRanked, List.of(), curated, 5, 60, 1.0, 1.5);
+        List<Document> withEmptyAxis = RetrievalService.mergeRrf(
+                vectorRanked, List.of(), curated, List.of(), 5, 60, 1.0, 1.5, 1.5);
+
+        assertThat(ids(withEmptyAxis)).isEqualTo(ids(legacy));
+    }
 }

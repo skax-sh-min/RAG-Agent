@@ -21,6 +21,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.timeout;
@@ -73,8 +74,9 @@ class CuratedQaChunkingTest {
                 .thenReturn(CURATED_ID);
     }
 
+    /** chunkSize=400 이지만 임베딩은 2배(800자)부터 시도하므로, 나뉘려면 그보다 훨씬 길어야 한다. */
     private static String longAnswer() {
-        return ("## 섹션\n\n" + "충분히 긴 설명 문장입니다. ".repeat(12) + "\n\n").repeat(4);
+        return ("## 섹션\n\n" + "충분히 긴 설명 문장입니다. ".repeat(20) + "\n\n").repeat(8);
     }
 
     private void likeWith(String answer, int existingChunkCount) {
@@ -213,5 +215,61 @@ class CuratedQaChunkingTest {
             assertThat(searchText).doesNotContain("파일.docx");
             assertThat(searchText.replace("질문", "").strip()).isNotBlank();
         });
+    }
+
+    // ── 크기 사다리 (2× → 1.5× → 1×) ─────────────────────────────────────────
+
+    @Test
+    @DisplayName("사다리 — 기본은 chunk-size의 2배로 자른다 (문서보다 큰 청크)")
+    void ladder_startsAtTwiceChunkSize() {
+        String text = longAnswer();
+
+        // 2배(800자) 기준 조각 수 < 1배(400자) 기준 조각 수 — 실제로 더 크게 자른다는 뜻.
+        int atTwo = service.splitForEmbedding(text).size();
+        int atOne = service.splitForEmbedding(text, 1.0).size();
+        assertThat(atTwo).isLessThan(atOne);
+        assertThat(service.splitForEmbedding(text, 2.0)).hasSize(atTwo);
+    }
+
+    @Test
+    @DisplayName("사다리 — 2배가 실패하면 1.5배, 그것도 실패하면 1배로 재시도한다")
+    void ladder_shrinksOnFailure() {
+        // 앞 두 번은 실패, 세 번째(1×)에 성공.
+        doThrow(new RuntimeException("input too large"))
+                .doThrow(new RuntimeException("input too large"))
+                .doNothing()
+                .when(vectorStore).add(any(), any(), any());
+
+        likeWith(longAnswer(), 1);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<Document>> captor = ArgumentCaptor.forClass(List.class);
+        verify(vectorStore, timeout(2000).times(3))
+                .add(eq("shared"), eq(CuratedQaService.CURATED_VERSION), captor.capture());
+
+        List<List<Document>> attempts = captor.getAllValues();
+        // 재시도할수록 청크 크기가 줄므로 개수는 절대 줄지 않고, 마지막(1×)은 첫 시도(2×)보다 많다.
+        // (섹션 구조가 크기보다 먼저 경계를 정하는 구간이 있어 인접 두 시도가 같은 개수일 수는 있다.)
+        assertThat(attempts.get(1).size()).isGreaterThanOrEqualTo(attempts.get(0).size());
+        assertThat(attempts.get(2).size()).isGreaterThan(attempts.get(0).size());
+        // 성공한 마지막 시도의 개수가 기록된다.
+        verify(repository, timeout(2000)).updateChunkCount(CURATED_ID, attempts.get(2).size());
+        verify(repository, timeout(2000)).markEmbedOk(CURATED_ID);
+    }
+
+    @Test
+    @DisplayName("사다리 — 배수 순서는 2.0 → 1.5 → 1.0")
+    void ladder_multiplierOrder() {
+        assertThat(CuratedQaService.EMBED_CHUNK_SIZE_MULTIPLIERS).containsExactly(2.0, 1.5, 1.0);
+    }
+
+    @Test
+    @DisplayName("출처 표식 — 좋아요 벡터에는 curated_origin=like 가 실린다")
+    void vectorsCarryOriginMarker() {
+        likeWith("짧은 답변입니다.", 1);
+
+        assertThat(capturedDocs()).allSatisfy(d ->
+                assertThat(d.getMetadata().get(MetaKey.CURATED_ORIGIN))
+                        .isEqualTo(CuratedQaRepository.ORIGIN_LIKE));
     }
 }

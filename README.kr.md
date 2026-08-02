@@ -184,7 +184,8 @@ container system stop
 | `SEARCH_RRF_KEYWORD_WEIGHT` | `1.0` | 0.5 ~ 3.0 | 가중 RRF(Phase 7-A) — BM25 키워드 축 가중치. 벡터 축(MultiQuery 1~3개)은 항상 `1/축개수`로 그룹 정규화되므로 `1.0`이 정규화된 벡터 그룹과 동일 비중. `SEARCH_HYBRID_ENABLED=false`면 무영향 |
 | `SEARCH_RRF_K` | `60` | 20 ~ 100 | 가중 RRF(Phase 7-A) — RRF 순위융합 상수 k(원논문 기본값 60) |
 | `SEARCH_CURATED_QA_ENABLED` | `true` | true/false | §10.10 — 좋아요 기반 큐레이션 Q&A(예약 version `"curated"` 네임스페이스에 임베딩)를 RRF 융합에 포함할지 여부. `false`면 해당 검색 자체를 생략 |
-| `SEARCH_CURATED_QA_WEIGHT` | `1.5` | 0.5 ~ 5.0 | §10.10 — 큐레이션 Q&A 축 가중치, 키워드축과 동일하게 그룹 정규화 없이 그대로 적용(벡터축은 항상 `1/축개수`) — `1.0`보다 높아 검증된 답변이 우선 노출되되 순위를 독식하지는 않음 |
+| `SEARCH_CURATED_QA_WEIGHT` | `1.2` | 0.5 ~ 5.0 | §10.10 — **좋아요 승격** 큐레이션 축 가중치, 키워드축과 동일하게 그룹 정규화 없이 그대로 적용(벡터축은 항상 `1/축개수`) — `1.0`보다 높아 검증된 답변이 우선 노출되되 순위를 독식하지는 않음 |
+| `SEARCH_SUBMISSION_WEIGHT` | `1.5` | 0.5 ~ 5.0 | **지식 제안**(승인된 사용자 제출) 축 가중치. 두 출처는 벡터 네임스페이스와 검색을 공유하되 `MetaKey.CURATED_ORIGIN` 으로 **서로 다른 RRF 축**으로 갈라져, 사람이 직접 쓰고 관리자가 검토한 항목을 좋아요보다 높게(또는 낮게) 따로 조절할 수 있음 |
 | `SEARCH_QUERY_EMBED_CACHE_ENABLED` | `true` | true/false | 쿼리 임베딩 캐시(Phase 7-A) — 정규화된 질의 → 벡터를 Caffeine 인메모리 캐시에 저장해 반복·유사 질문의 임베딩 왕복을 생략. 캐시 히트 시 `embed:<model>` usage도 기록 안 됨 |
 | `SEARCH_QUERY_EMBED_CACHE_MAX_SIZE` | `500` | 100 ~ 5000 | 쿼리 임베딩 캐시 최대 엔트리 수 |
 | `SEARCH_QUERY_EMBED_CACHE_TTL_SECONDS` | `600` | 60 ~ 3600 | 쿼리 임베딩 캐시 TTL(초, write 기준 만료) |

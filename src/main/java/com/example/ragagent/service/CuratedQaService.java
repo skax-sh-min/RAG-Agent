@@ -43,6 +43,18 @@ public class CuratedQaService {
 
     private static final long DEFAULT_EMBED_DEBOUNCE_MILLIS = 3_000L;
 
+    /**
+     * Chunk-size multipliers tried, in order, when embedding a curated entry.
+     *
+     * <p>Curated text is answer-shaped, not document-shaped: a liked answer or a knowledge
+     * proposal reads as one argument, so cutting it at the document {@code chunk-size} splits
+     * reasoning that belongs together. Starting at <b>2× chunk-size</b> keeps such an entry whole
+     * far more often; the smaller sizes exist only because the embedding server may reject the
+     * larger input (batch/token limit), and shrinking is the one thing that reliably fixes that.
+     * Landing on 1× means the entry is chunked exactly like a document.
+     */
+    static final double[] EMBED_CHUNK_SIZE_MULTIPLIERS = {2.0, 1.5, 1.0};
+
     private final CuratedQaRepository repository;
     private final MemoryService memoryService;
     private final ThreadMetaService threadMetaService;
@@ -82,11 +94,23 @@ public class CuratedQaService {
      * Returns a single-element list for anything already within {@code chunk-size}.
      */
     public List<String> splitForEmbedding(String text) {
+        return splitForEmbedding(text, EMBED_CHUNK_SIZE_MULTIPLIERS[0]);
+    }
+
+    /**
+     * @param chunkSizeMultiplier scales {@code app.chunk-size} for this attempt — see
+     *                            {@link #EMBED_CHUNK_SIZE_MULTIPLIERS}. {@code minChunkSize} is
+     *                            scaled with it so the two keep their configured ratio; leaving it
+     *                            at the unscaled value would let the tiny-chunk merge undo the split.
+     */
+    public List<String> splitForEmbedding(String text, double chunkSizeMultiplier) {
         if (text == null || text.isBlank()) return List.of();
+        int chunkSize = Math.max(1, (int) Math.round(props.chunkSizeSafe() * chunkSizeMultiplier));
+        int minChunkSize = Math.max(1, (int) Math.round(props.minChunkSizeSafe() * chunkSizeMultiplier));
         Document doc = new Document(text.strip(), new HashMap<>(Map.of(MetaKey.CHAPTER_NO, "0")));
         List<String> pieces = chunkSplitter.splitDocuments(
                         List.of(doc), "curated.md",
-                        props.chunkSizeSafe(), props.chunkOverlapSafe(), props.minChunkSizeSafe(),
+                        chunkSize, props.chunkOverlapSafe(), minChunkSize,
                         props.embeddingSafe().maxChunkChars(), props.chunkSplitGranularSafe())
                 .stream()
                 .map(Document::getText)
@@ -347,7 +371,12 @@ public class CuratedQaService {
      * query still matches the 2nd piece onward (the same reason document splitting reinjects
      * headings, and the 게시판 repeats the title on every chunk).
      *
-     * <p>The core-sections fallback is kept for the case splitting can't help with: the embedding
+     * <p>Chunk size walks {@link #EMBED_CHUNK_SIZE_MULTIPLIERS} — 2× the document chunk size first,
+     * then 1.5×, then 1× — retrying the embedding call at each step. Curated text is one continuous
+     * argument, so the biggest chunks that the server will accept are the ones that keep it
+     * readable as evidence; shrinking is purely a response to rejection, never the default.
+     *
+     * <p>The core-sections fallback is kept for the case shrinking can't help with: the embedding
      * call failing for a reason other than size. It retries the whole row as a single vector built
      * from just the answer's core RAG sections ({@link CuratedTextUtils#extractCoreSections}).
      *
@@ -356,15 +385,24 @@ public class CuratedQaService {
      * then leaves the old vectors searchable instead of silently dropping the entry from the index.
      */
     private int tryEmbedWithFallback(CuratedQa row) {
-        List<Document> docs = buildChunkedDocuments(row);
-        if (!docs.isEmpty()) {
+        // 크기 사다리: 2× → 1.5× → 1×. 실패의 압도적 다수는 "입력이 너무 큼"이고, 그건 더 잘게
+        // 자르는 것으로만 풀린다 — 그래서 재시도할 때마다 청크를 줄인다.
+        List<Document> docs = List.of();
+        for (double multiplier : EMBED_CHUNK_SIZE_MULTIPLIERS) {
+            docs = buildChunkedDocuments(row, multiplier);
+            // 내용이 없어서 비었다면 더 잘게 잘라도 마찬가지다 — 사다리를 계속 내려갈 이유가 없다.
+            if (docs.isEmpty()) break;
             try {
                 vectorStore.add(DocRegistry.SHARED, CURATED_VERSION, docs);
                 pruneStaleVectors(row, docs.size());
+                if (multiplier != EMBED_CHUNK_SIZE_MULTIPLIERS[0]) {
+                    log.info("[CURATED] embedded at {}× chunk-size ({} chunks) curatedId={}",
+                            multiplier, docs.size(), row.id());
+                }
                 return docs.size();
             } catch (Exception e) {
-                log.warn("[CURATED] embed failed ({} chunks), retrying with core sections only curatedId={}: {}",
-                        docs.size(), row.id(), e.getMessage());
+                log.warn("[CURATED] embed failed at {}× chunk-size ({} chunks) curatedId={}: {}",
+                        multiplier, docs.size(), row.id(), e.getMessage());
             }
         }
 
@@ -422,12 +460,12 @@ public class CuratedQaService {
      * <p>Returns empty when the answer is entirely structural, which sends the caller to the
      * whole-row fallback.
      */
-    private List<Document> buildChunkedDocuments(CuratedQa row) {
+    private List<Document> buildChunkedDocuments(CuratedQa row, double chunkSizeMultiplier) {
         String searchableAnswer = CuratedTextUtils.stripStructuralSections(row.answer());
         if (!hasSubstantiveContent(searchableAnswer)) return List.of();
 
         List<Document> docs = new java.util.ArrayList<>();
-        for (String piece : splitForEmbedding(searchableAnswer)) {
+        for (String piece : splitForEmbedding(searchableAnswer, chunkSizeMultiplier)) {
             // 조각이 재주입된 헤딩 한 줄뿐인 경우를 거른다 — 질문만 담긴 벡터가 되어 모든 질의에서
             // 진짜 내용 청크와 경쟁하게 된다.
             if (!hasSubstantiveContent(piece)) continue;
@@ -494,6 +532,11 @@ public class CuratedQaService {
         meta.put(MetaKey.FILENAME, "curated_qa");
         meta.put(MetaKey.VERSION, CURATED_VERSION);
         meta.put(MetaKey.DOC_TYPE, "curated_qa");
+        // 검색 시 좋아요 큐레이션과 지식 제안을 서로 다른 가중치의 RRF 축으로 나누기 위한 표식.
+        // DOC_TYPE 을 갈라 쓰지 않는 이유: 출처 라벨("💬 큐레이션 Q&A")과 태그 면제 판정이 모두
+        // DOC_TYPE="curated_qa" 를 보고 있어, 그쪽을 바꾸면 둘 다 조용히 깨진다.
+        meta.put(MetaKey.CURATED_ORIGIN,
+                row.isManual() ? CuratedQaRepository.ORIGIN_MANUAL : CuratedQaRepository.ORIGIN_LIKE);
         meta.put(MetaKey.SOURCE_TYPE, "curated_qa");
         meta.put(MetaKey.CHUNK_INDEX, chunkIndex);
         meta.put(MetaKey.PAGE_OR_SLIDE, 1);
