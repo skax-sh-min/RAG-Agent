@@ -179,12 +179,40 @@ public class CuratedQaService {
      * embeds {@code question + answer}, so a descriptive title is what makes a manually written
      * chunk retrievable by a question-shaped query at all. Returns the new curated row id.
      */
-    public long createFromSubmission(long submissionId, String authorUserId, String title, String body,
-                                     String tags) {
-        long curatedId = repository.insertManual(submissionId, authorUserId, title, body, tags);
-        Thread.ofVirtual().name("curated-embed-" + curatedId).start(() ->
-                embedActiveRow(curatedId, "submission"));
-        return curatedId;
+    public List<Long> createFromSubmission(long submissionId, String authorUserId, String title,
+                                           List<String> bodyChunks, String tags) {
+        List<Long> curatedIds = new java.util.ArrayList<>(bodyChunks.size());
+        for (String chunk : bodyChunks) {
+            // 제목은 모든 청크에 반복 부여한다 — defaultSearchText()가 question+answer를 임베딩하므로
+            // 2번째 청크부터 제목이 없으면 질문형 질의와의 매칭이 급격히 나빠진다(문서 인덱싱의
+            // reinjectHeadingForSplitPieces와 같은 이유).
+            curatedIds.add(repository.insertManual(submissionId, authorUserId, title, chunk, tags));
+        }
+        for (long curatedId : curatedIds) {
+            Thread.ofVirtual().name("curated-embed-" + curatedId).start(() ->
+                    embedActiveRow(curatedId, "submission"));
+        }
+        return List.copyOf(curatedIds);
+    }
+
+    /**
+     * 청크 추가 — takes down every curated row belonging to one submission, together. Approval can
+     * create N rows, and a submission is 등록 완료/회수됨 as a whole (전부/전무), so a partial removal
+     * would leave the author looking at a half-registered proposal. Used by the admin curated panel
+     * (via {@link #forceRemove}) and by the approval-race rollback in {@code CuratedSubmissionService}.
+     * Returns how many rows were deactivated.
+     */
+    public int forceRemoveBySubmission(long submissionId) {
+        List<CuratedQa> rows = repository.findActiveBySubmissionId(submissionId);
+        for (CuratedQa row : rows) {
+            repository.deactivateById(row.id());
+            long curatedId = row.id();
+            Thread.ofVirtual().name("curated-deindex-" + curatedId).start(() -> deleteVector(curatedId));
+        }
+        if (!rows.isEmpty()) {
+            log.info("[CURATED] 제안 {}의 청크 {}건 회수", submissionId, rows.size());
+        }
+        return rows.size();
     }
 
     /**
@@ -195,6 +223,14 @@ public class CuratedQaService {
     public boolean forceRemove(long curatedId) {
         Optional<CuratedQa> rowOpt = repository.findById(curatedId);
         if (rowOpt.isEmpty() || !"active".equals(rowOpt.get().status())) return false;
+
+        // 사용자 제안에서 온 행이면 같은 제안의 나머지 청크도 함께 내린다 — 제안은 전부/전무이므로
+        // 한 청크만 지워 반쪽 등록 상태를 만들지 않는다(Submission.displayStatus 참고).
+        Long submissionId = rowOpt.get().sourceSubmissionId();
+        if (submissionId != null) {
+            return forceRemoveBySubmission(submissionId) > 0;
+        }
+
         // By id, not by turn — a manual (user-submitted) row has source_turn_id = NULL, which no
         // WHERE source_turn_id = ? can ever match.
         repository.deactivateById(curatedId);

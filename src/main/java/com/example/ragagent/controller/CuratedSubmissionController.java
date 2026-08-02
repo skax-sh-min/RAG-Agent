@@ -44,8 +44,9 @@ public class CuratedSubmissionController {
         model.addAttribute("submissions", service.listMine(userId, offset, PAGE_SIZE));
         model.addAttribute("offset", offset);
         model.addAttribute("pageSize", PAGE_SIZE);
-        model.addAttribute("maxBodyLength", service.maxBodyLength());
+        model.addAttribute("chunkSize", service.chunkSizeForBody());
         model.addAttribute("maxTitleLength", CuratedSubmissionService.MAX_TITLE_LEN);
+        model.addAttribute("maxTags", com.example.ragagent.model.TagUtils.MAX_TAGS);
         return "curated-submissions";
     }
 
@@ -57,16 +58,19 @@ public class CuratedSubmissionController {
     @PostMapping
     public String submit(@RequestParam String title,
                          @RequestParam String body,
+                         @RequestParam(required = false) String tags,
                          RedirectAttributes flash) {
         try {
-            service.submit(currentUser.userId(), title, body);
+            service.submit(currentUser.userId(), title, body,
+                    com.example.ragagent.model.TagUtils.parseTagList(tags));
             flash.addFlashAttribute("submitSuccess",
                     "제안이 등록되었습니다. 관리자가 검토 후 임베딩을 실행하면 검색에 반영됩니다.");
         } catch (IllegalArgumentException e) {
             flash.addFlashAttribute("submitError", e.getMessage());
-            // Hand the draft back so a length rejection doesn't wipe what the user typed.
+            // Hand the draft back so a rejection doesn't wipe what the user typed.
             flash.addFlashAttribute("draftTitle", title);
             flash.addFlashAttribute("draftBody", body);
+            flash.addFlashAttribute("draftTags", tags);
         }
         return "redirect:/curated/submissions";
     }

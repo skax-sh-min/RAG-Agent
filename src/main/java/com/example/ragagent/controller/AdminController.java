@@ -16,6 +16,7 @@ import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -228,8 +229,12 @@ public class AdminController {
                         "id",     s.id(),
                         "title",  s.title(),
                         "body",   s.body(),
+                        "tags",   s.tags() == null ? "" : s.tags(),
                         "author", s.authorUserId(),
-                        "status", s.displayStatus())))
+                        "status", s.displayStatus(),
+                        // 승인 시 몇 개 청크로 나뉘는지 미리 보여준다(승인 후에는 실제 생성된 개수).
+                        "chunkPreview", s.chunkCount() > 0
+                                ? s.chunkCount() : submissionService.previewChunkCount(s.body()))))
                 .orElseGet(() -> ResponseEntity.notFound().build());
     }
 
@@ -249,8 +254,11 @@ public class AdminController {
 
         String title = (body != null && body.get("title") instanceof String s) ? s : null;
         String text  = (body != null && body.get("body")  instanceof String s) ? s : null;
+        // null tags = "관리자가 태그를 건드리지 않음" → 제안에 저장된 값 유지. 빈 문자열은 "모두 해제".
+        List<String> tags = (body != null && body.get("tags") instanceof String s)
+                ? com.example.ragagent.model.TagUtils.parseTagList(s) : null;
 
-        return submissionService.approve(id, currentUser.userId(), title, text)
+        return submissionService.approve(id, currentUser.userId(), title, text, tags)
                 .map(curatedId -> ResponseEntity.ok(Map.<String, Object>of("curatedId", curatedId)))
                 .orElseGet(() -> ResponseEntity.status(409).body(Map.<String, Object>of(
                         "status", "not_pending",

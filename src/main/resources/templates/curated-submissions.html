@@ -51,19 +51,51 @@
                     </div>
                 </div>
 
+                <!-- 태그: documents.html 업로드 태그와 같은 패턴 — 자유 입력 + 기존 태그 칩 클릭 추가.
+                     목록은 문서 태그 ∪ 큐레이션 태그(includeCurated=true)라, 다른 사용자가 제안에서만
+                     쓴 태그도 재사용되어 표기가 갈리지 않는다. -->
                 <div class="mb-3">
-                    <label class="form-label small fw-semibold" for="submission-body"
-                           th:text="#{submission.field.body}">본문</label>
+                    <label class="form-label small fw-semibold" for="submission-tags"
+                           th:text="#{submission.field.tags}">태그</label>
+                    <div class="input-group input-group-sm">
+                        <span class="input-group-text"><i class="bi bi-tags"></i></span>
+                        <input type="text" class="form-control" id="submission-tags" name="tags"
+                               autocomplete="off" th:value="${draftTags}"
+                               th:placeholder="#{submission.field.tags.placeholder}"/>
+                    </div>
+                    <div class="form-text small" th:text="#{submission.field.tags.hint}">
+                        쉼표로 구분합니다. 채팅에서 이 태그를 고른 검색에만 이 내용이 반영됩니다.
+                    </div>
+                    <div id="existing-tags" class="d-flex flex-wrap gap-1 mt-1"></div>
+                </div>
+
+                <div class="mb-3">
+                    <div class="d-flex align-items-center mb-1">
+                        <label class="form-label small fw-semibold mb-0" for="submission-body"
+                               th:text="#{submission.field.body}">본문</label>
+                        <div class="btn-group btn-group-sm ms-auto" role="group">
+                            <input type="radio" class="btn-check" name="body-view" id="body-view-edit" checked/>
+                            <label class="btn btn-outline-secondary py-0 px-2" for="body-view-edit"
+                                   style="font-size:0.75rem;" th:text="#{submission.body.tab.write}">작성</label>
+                            <input type="radio" class="btn-check" name="body-view" id="body-view-preview"/>
+                            <label class="btn btn-outline-secondary py-0 px-2" for="body-view-preview"
+                                   style="font-size:0.75rem;" th:text="#{submission.body.tab.preview}">미리보기</label>
+                        </div>
+                    </div>
                     <textarea class="form-control form-control-sm" id="submission-body" name="body"
-                              rows="12" required style="font-size:0.85rem; resize:vertical;"
+                              rows="14" required style="font-size:0.85rem; resize:vertical;"
                               th:text="${draftBody}"
                               th:placeholder="#{submission.field.body.placeholder}"></textarea>
+                    <!-- 미리보기는 항상 DOMPurify 를 거친다 (관리자 검토 화면도 동일) -->
+                    <div id="submission-preview" class="form-control d-none markdown-body"
+                         style="min-height:340px; overflow:auto; font-size:0.88rem;"></div>
                     <div class="d-flex justify-content-between form-text small">
                         <span th:text="#{submission.field.body.hint}">
-                            마크다운을 쓸 수 있습니다. 한 건은 청크 하나로 등록됩니다.
+                            마크다운을 쓸 수 있습니다. 길이 제한은 없으며 등록 시 자동으로 나뉩니다.
                         </span>
                         <span id="body-counter" class="text-muted">
-                            <span id="body-count">0</span> / <span th:text="${maxBodyLength}">800</span>
+                            <span id="body-count">0</span>자 ·
+                            <span id="chunk-estimate">1</span><span th:text="#{submission.chunk.unit}">개 청크 예상</span>
                         </span>
                     </div>
                 </div>
@@ -91,6 +123,15 @@
                     <div class="flex-grow-1 min-w-0">
                         <div class="fw-semibold small text-truncate" th:text="${s.title()}"></div>
                         <div class="text-muted small text-truncate" th:text="${s.bodyPreview()}"></div>
+                        <div class="mt-1 d-flex flex-wrap gap-1 align-items-center"
+                             th:if="${s.tags() != null and !s.tags().isEmpty()} or ${s.chunkCount() > 0}">
+                            <span th:if="${s.tags() != null and !s.tags().isEmpty()}"
+                                  th:each="t : ${#strings.arraySplit(s.tags(), ',')}"
+                                  class="badge bg-light text-dark border" style="font-size:0.68rem;"
+                                  th:text="${t}"></span>
+                            <span th:if="${s.chunkCount() > 0}" class="text-muted" style="font-size:0.68rem;"
+                                  th:text="${s.chunkCount()} + '개 청크로 등록됨'"></span>
+                        </div>
                         <!-- 반려 사유는 잘라내지 않고 전문을 노출한다 — 사용자가 받는 유일한 피드백. -->
                         <div th:if="${s.reviewNote() != null and s.displayStatus() == 'rejected'}"
                              class="alert alert-warning py-1 px-2 mt-2 mb-0 small">
@@ -149,22 +190,81 @@
 
 <th:block layout:fragment="scripts">
 <script th:inline="javascript">
-/* 본문 길이 카운터 — 서버는 MarkdownNoiseNormalizer 로 정규화한 길이를 재므로 여기 원문 길이는
-   상한선(정규화 후에는 같거나 줄어듦)이다. 초과하면 빨갛게 표시하되 전송은 막지 않는다:
-   최종 판정은 서버가 하고, 정규화 덕분에 통과하는 경우도 있기 때문. */
+/* 본문 글자수 + 예상 청크 수. 길이 제한이 없어졌으므로 경고가 아니라 안내다 — 서버는 등록 시
+   ChunkSplitter 로 본문을 나누므로 "몇 개로 나뉘는지"가 사용자에게 의미 있는 정보다.
+   여기 추정은 헤딩을 무시한 단순 나눗셈이라 실제 개수와 다를 수 있다(정확한 값은 관리자 검토
+   화면이 서버 계산으로 보여준다). */
 (function () {
-    const MAX = /*[[${maxBodyLength}]]*/ 800;
-    const box   = document.getElementById('submission-body');
-    const count = document.getElementById('body-count');
+    const CHUNK_SIZE = /*[[${chunkSize}]]*/ 1500;
+    const box      = document.getElementById('submission-body');
+    const count    = document.getElementById('body-count');
+    const estimate = document.getElementById('chunk-estimate');
     if (!box || !count) return;
     function refresh() {
         const n = box.value.length;
         count.textContent = n;
-        count.parentElement.classList.toggle('text-danger', n > MAX);
-        count.parentElement.classList.toggle('text-muted',  n <= MAX);
+        if (estimate) estimate.textContent = Math.max(1, Math.ceil(n / CHUNK_SIZE));
     }
     box.addEventListener('input', refresh);
     refresh();
+})();
+
+/* 작성/미리보기 전환 — marked + DOMPurify 는 base.html 에서 이미 전역 로드된다.
+   sanitize 는 필수: 같은 본문이 관리자 검토 화면에서도 렌더되므로 저장형 XSS 경로가 된다. */
+(function () {
+    const box     = document.getElementById('submission-body');
+    const preview = document.getElementById('submission-preview');
+    const tabEdit = document.getElementById('body-view-edit');
+    const tabView = document.getElementById('body-view-preview');
+    if (!box || !preview || !tabEdit || !tabView) return;
+
+    function showPreview(on) {
+        if (on) {
+            preview.innerHTML = DOMPurify.sanitize(marked.parse(box.value || ''));
+            preview.style.minHeight = box.offsetHeight + 'px';
+        }
+        box.classList.toggle('d-none', on);
+        preview.classList.toggle('d-none', !on);
+    }
+    tabEdit.addEventListener('change', () => showPreview(false));
+    tabView.addEventListener('change', () => showPreview(true));
+})();
+
+/* 기존 태그 칩 — documents.html 업로드 태그와 동일한 동작(클릭하면 입력창에 추가).
+   includeCurated=true 로 문서 태그와 큐레이션 태그의 합집합을 받는다. */
+(function () {
+    const input = document.getElementById('submission-tags');
+    const box   = document.getElementById('existing-tags');
+    if (!input || !box) return;
+
+    function currentTags() {
+        return (input.value || '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+    }
+    function addTag(t) {
+        const tags = currentTags();
+        if (!tags.includes(t)) tags.push(t);
+        input.value = tags.join(', ');
+    }
+    fetch('/api/v1/tags?includeCurated=true')
+        .then(r => r.ok ? r.json() : [])
+        .then(tags => {
+            if (!Array.isArray(tags) || tags.length === 0) return;
+            box.innerHTML = '';
+            const label = document.createElement('span');
+            label.className = 'small text-muted me-1';
+            label.textContent = /*[[#{tags.existing}]]*/ '기존 태그';
+            box.appendChild(label);
+            tags.forEach(t => {
+                const chip = document.createElement('button');
+                chip.type = 'button';
+                chip.className = 'btn btn-sm btn-outline-secondary py-0 px-2';
+                chip.style.fontSize = '0.72rem';
+                chip.textContent = t;
+                chip.addEventListener('click', () => addTag(t));
+                box.appendChild(chip);
+            });
+        })
+        .catch(() => { /* 태그 제안은 부가 기능 — 실패해도 등록에는 영향 없음 */ });
 })();
 </script>
 </th:block>

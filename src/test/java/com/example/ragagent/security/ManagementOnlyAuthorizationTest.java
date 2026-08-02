@@ -124,6 +124,7 @@ class ManagementOnlyAuthorizationTest {
     @MockitoBean ChatModel chatModel;
     @MockitoBean ThreadContextResolver threadContextResolver;
     @MockitoBean RagService ragService;
+    @MockitoBean com.example.ragagent.repository.CuratedQaRepository curatedQaRepository;
     @MockitoBean IndexingProgressService progressService;
     @MockitoBean AuditLogger auditLogger;
     @MockitoBean AdminService adminService;
@@ -231,7 +232,7 @@ class ManagementOnlyAuthorizationTest {
     @DisplayName("익명 GET /curated/submissions — 200 (제안 등록/조회는 게스트에게 열려 있음)")
     void anonymousSubmissionPage_staysOpen() throws Exception {
         when(submissionService.listMine(anyString(), anyInt(), anyInt())).thenReturn(List.of());
-        when(submissionService.maxBodyLength()).thenReturn(800);
+        when(submissionService.chunkSizeForBody()).thenReturn(800);
 
         mvc.perform(get("/curated/submissions")).andExpect(status().isOk());
     }
@@ -261,7 +262,7 @@ class ManagementOnlyAuthorizationTest {
     @Test
     @DisplayName("ROLE_ADMIN POST /admin/submissions/{id}/approve — CSRF 포함 시 통과")
     void adminApproveSubmission_succeeds() throws Exception {
-        when(submissionService.approve(anyLong(), anyString(), any(), any()))
+        when(submissionService.approve(anyLong(), anyString(), any(), any(), any()))
                 .thenReturn(Optional.of(55L));
 
         mvc.perform(post("/admin/submissions/1/approve").with(csrf())

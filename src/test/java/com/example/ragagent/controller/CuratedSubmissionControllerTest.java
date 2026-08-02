@@ -19,6 +19,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import java.util.List;
 
 import static org.hamcrest.Matchers.containsString;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -62,14 +63,16 @@ class CuratedSubmissionControllerTest {
     @BeforeEach
     void setUp() {
         when(currentUser.userId()).thenReturn(USER);
-        when(service.maxBodyLength()).thenReturn(800);
+        when(service.chunkSizeForBody()).thenReturn(800);
         when(service.listMine(anyString(), anyInt(), anyInt())).thenReturn(List.of());
     }
 
+    /** {@code curatedActive}/{@code curatedFailed} 로 전부/전무 상태를 만든다(총 청크 2개 기준). */
     private static Submission submission(String status, String reviewNote,
-                                         String curatedStatus, String embedStatus) {
+                                         int curatedActive, int curatedFailed) {
         return new Submission(1L, USER, "제안 제목", "제안 본문", status, "admin", reviewNote,
-                7L, "2026-01-01", "2026-01-01", "2026-01-02", null, curatedStatus, embedStatus);
+                7L, "2026-01-01", "2026-01-01", "2026-01-02", null, "인프라",
+                "approved".equals(status) ? 2 : 0, curatedActive, curatedFailed);
     }
 
     @Test
@@ -87,7 +90,7 @@ class CuratedSubmissionControllerTest {
     @DisplayName("GET — 반려 건은 사유 전문과 반려 뱃지를 함께 렌더한다")
     void page_rendersRejectionReason() throws Exception {
         when(service.listMine(anyString(), anyInt(), anyInt()))
-                .thenReturn(List.of(submission("rejected", "출처가 불분명합니다", null, null)));
+                .thenReturn(List.of(submission("rejected", "출처가 불분명합니다", 0, 0)));
 
         mvc.perform(get("/curated/submissions").with(user(PRINCIPAL)).param("lang", "ko"))
                 .andExpect(status().isOk())
@@ -99,7 +102,7 @@ class CuratedSubmissionControllerTest {
     @DisplayName("GET — 승인 후 회수된 건은 '회수됨'으로 표시된다")
     void page_rendersRevokedStatus() throws Exception {
         when(service.listMine(anyString(), anyInt(), anyInt()))
-                .thenReturn(List.of(submission("approved", null, "inactive", "ok")));
+                .thenReturn(List.of(submission("approved", null, 0, 0)));
 
         mvc.perform(get("/curated/submissions").with(user(PRINCIPAL)).param("lang", "ko"))
                 .andExpect(status().isOk())
@@ -110,7 +113,7 @@ class CuratedSubmissionControllerTest {
     @DisplayName("GET — 임베딩 실패 건은 경고 안내가 붙는다")
     void page_rendersEmbedFailureHint() throws Exception {
         when(service.listMine(anyString(), anyInt(), anyInt()))
-                .thenReturn(List.of(submission("approved", null, "active", "failed")));
+                .thenReturn(List.of(submission("approved", null, 2, 1)));
 
         mvc.perform(get("/curated/submissions").with(user(PRINCIPAL)).param("lang", "ko"))
                 .andExpect(status().isOk())
@@ -120,7 +123,7 @@ class CuratedSubmissionControllerTest {
     @Test
     @DisplayName("POST — 등록 성공 시 성공 플래시와 함께 목록으로 리다이렉트")
     void submit_success_redirectsWithFlash() throws Exception {
-        when(service.submit(USER, "제목", "본문")).thenReturn(3L);
+        when(service.submit(USER, "제목", "본문", java.util.List.of())).thenReturn(3L);
 
         mvc.perform(post("/curated/submissions").with(csrf()).with(user(PRINCIPAL))
                         .param("title", "제목").param("body", "본문"))
@@ -132,7 +135,7 @@ class CuratedSubmissionControllerTest {
     @Test
     @DisplayName("POST — 검증 실패 시 오류 메시지와 입력 초안을 되돌려준다 (JSON 오류가 아니라 플래시)")
     void submit_validationFailure_returnsDraft() throws Exception {
-        when(service.submit(anyString(), anyString(), anyString()))
+        when(service.submit(anyString(), anyString(), anyString(), any()))
                 .thenThrow(new IllegalArgumentException("본문이 너무 깁니다 (최대 800자, 입력: 900자)"));
 
         mvc.perform(post("/curated/submissions").with(csrf()).with(user(PRINCIPAL))
@@ -181,7 +184,7 @@ class CuratedSubmissionControllerTest {
                         .param("title", "제목").param("body", "본문"))
                 .andExpect(status().isForbidden());
 
-        verify(service, never()).submit(anyString(), anyString(), anyString());
+        verify(service, never()).submit(anyString(), anyString(), anyString(), any());
     }
 
     @Test

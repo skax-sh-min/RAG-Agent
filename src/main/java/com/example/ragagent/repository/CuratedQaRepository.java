@@ -261,6 +261,14 @@ public class CuratedQaRepository {
         return rows.isEmpty() ? Optional.empty() : Optional.of(rows.get(0));
     }
 
+    /** Every still-active chunk of one submission, in creation order — the 전부/전무 unit for
+     *  {@code CuratedQaService.forceRemoveBySubmission}. */
+    public List<CuratedQa> findActiveBySubmissionId(long submissionId) {
+        return jdbc.query("SELECT " + COLUMNS +
+                        "FROM curated_qa WHERE source_submission_id = ? AND status = 'active' ORDER BY id",
+                ROW_MAPPER, submissionId);
+    }
+
     public Optional<CuratedQa> findById(long id) {
         List<CuratedQa> rows = jdbc.query(
                 "SELECT " + COLUMNS + "FROM curated_qa WHERE id = ?", ROW_MAPPER, id);
@@ -313,6 +321,26 @@ public class CuratedQaRepository {
                 "AND source_turn_id IN (" + placeholders + ")",
                 Long.class, turnIds.toArray());
         return new HashSet<>(rows);
+    }
+
+    /**
+     * Distinct tags used by active curated rows (comma-joined column → flattened, lowercased).
+     * Unioned into the tag-suggestion list because curated entries are <b>not</b> indexed into
+     * {@code chunk_fts} (they live on the vector axis only), so a tag that only ever appeared on a
+     * user submission would otherwise be invisible to the next author and the vocabulary would split.
+     */
+    public List<String> distinctActiveTags() {
+        List<String> rows = jdbc.queryForList(
+                "SELECT DISTINCT tags FROM curated_qa WHERE status='active' AND tags IS NOT NULL AND tags <> ''",
+                String.class);
+        Set<String> out = new java.util.LinkedHashSet<>();
+        for (String row : rows) {
+            for (String t : row.split(",")) {
+                String s = t.strip().toLowerCase(java.util.Locale.ROOT);
+                if (!s.isEmpty()) out.add(s);
+            }
+        }
+        return List.copyOf(out);
     }
 
     private static String now() {

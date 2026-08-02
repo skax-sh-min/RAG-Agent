@@ -164,7 +164,7 @@ class AdminControllerWebMvcTest {
         when(submissionService.listForAdmin(anyString(), anyInt(), anyInt())).thenReturn(List.of(
                 new com.example.ragagent.repository.CuratedSubmissionRepository.Submission(
                         1L, "u1", "제안 제목", "제안 본문", "pending", null, null, null,
-                        "2026-01-01", "2026-01-01", null, null, null, null)));
+                        "2026-01-01", "2026-01-01", null, null, "인프라", 0, 0, 0)));
 
         mvc.perform(get("/admin/submissions").with(user(ADMIN)))
                 .andExpect(status().isOk())
@@ -189,7 +189,7 @@ class AdminControllerWebMvcTest {
     @Test
     @DisplayName("POST /admin/submissions/{id}/approve — 승인되면 200 + curatedId")
     void approveSubmission_returnsCuratedId() throws Exception {
-        when(submissionService.approve(anyLong(), any(), any(), any())).thenReturn(Optional.of(55L));
+        when(submissionService.approve(anyLong(), any(), any(), any(), any())).thenReturn(Optional.of(55L));
 
         mvc.perform(post("/admin/submissions/1/approve").with(csrf()).with(user(ADMIN))
                         .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
@@ -197,13 +197,13 @@ class AdminControllerWebMvcTest {
                 .andExpect(status().isOk())
                 .andExpect(content().string(containsString("55")));
 
-        verify(submissionService).approve(eq(1L), any(), eq("고친 제목"), eq("고친 본문"));
+        verify(submissionService).approve(eq(1L), any(), eq("고친 제목"), eq("고친 본문"), any());
     }
 
     @Test
     @DisplayName("POST /admin/submissions/{id}/approve — 이미 처리된 제안이면 409")
     void approveSubmission_notPending_returns409() throws Exception {
-        when(submissionService.approve(anyLong(), any(), any(), any())).thenReturn(Optional.empty());
+        when(submissionService.approve(anyLong(), any(), any(), any(), any())).thenReturn(Optional.empty());
 
         mvc.perform(post("/admin/submissions/1/approve").with(csrf()).with(user(ADMIN))
                         .contentType(org.springframework.http.MediaType.APPLICATION_JSON)

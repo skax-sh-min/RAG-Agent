@@ -2,10 +2,13 @@ package com.example.ragagent.service;
 
 import com.example.ragagent.audit.AuditLogger;
 import com.example.ragagent.config.AppProperties;
-import com.example.ragagent.ingestion.MarkdownNoiseNormalizer;
+import com.example.ragagent.ingestion.ChunkSplitter;
+import com.example.ragagent.model.MetaKey;
+import com.example.ragagent.model.TagUtils;
 import com.example.ragagent.repository.CuratedSubmissionRepository;
 import com.example.ragagent.repository.CuratedSubmissionRepository.Submission;
 import com.example.ragagent.security.PromptInjectionGuard;
+import org.springframework.ai.document.Document;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -35,38 +38,72 @@ public class CuratedSubmissionService {
 
     private final CuratedSubmissionRepository repository;
     private final CuratedQaService curatedQaService;
+    private final ChunkSplitter chunkSplitter;
     private final AppProperties props;
     private final AuditLogger auditLogger;
 
     public CuratedSubmissionService(CuratedSubmissionRepository repository,
                                     CuratedQaService curatedQaService,
+                                    ChunkSplitter chunkSplitter,
                                     AppProperties props,
                                     AuditLogger auditLogger) {
         this.repository = repository;
         this.curatedQaService = curatedQaService;
+        this.chunkSplitter = chunkSplitter;
         this.props = props;
         this.auditLogger = auditLogger;
     }
 
     /**
-     * The body length ceiling, in normalized characters. One submission is exactly one chunk (no
-     * auto-splitting — a split would spread approve/reject/withdraw across several vectors), so the
-     * indexing chunk size is the natural bound. Hot-editable via /settings, hence read per call.
+     * The chunk size a body is measured against — <b>not a limit</b>. There is deliberately no
+     * ceiling on submission length any more: a body longer than this is split into several curated
+     * chunks at approval time ({@link #splitBody}), exactly the way a document is. The form shows
+     * this number only so the author can see how their text will be divided.
      *
-     * <p>This check is load-bearing rather than cosmetic: {@code CuratedQaService}'s "input too
-     * large" retry narrows the text down to the answer's {@code ## 상세 설명}/{@code ## 예시·코드}
-     * sections, a structure a hand-written submission doesn't have — so for these rows there is no
-     * fallback and an over-long body simply fails to embed.
+     * <p>Splitting is what removes the "임베딩 불가능한 본문" failure mode entirely. Before, an
+     * over-long body reached the embedding API whole and failed there, and {@code CuratedQaService}'s
+     * "input too large" retry could not help — it narrows to the {@code ## 상세 설명} sections a
+     * hand-written post doesn't have. Now every stored chunk is bounded by the same
+     * {@code chunk-size} / {@code embedding.max-chunk-chars} the document pipeline respects.
      */
-    public int maxBodyLength() {
+    public int chunkSizeForBody() {
         return props.chunkSizeSafe();
+    }
+
+    /**
+     * Splits a submission body the same way a document is chunked, so an arbitrarily long proposal
+     * becomes N embeddable chunks. Reuses {@link ChunkSplitter} wholesale — including the
+     * {@code app.chunk-split-granular} strategy and the table/code-block boundary protection — by
+     * feeding it a single {@code .md} "document", which is exactly what a markdown-authored
+     * submission is. Returns at least one chunk for any non-blank body.
+     */
+    public List<String> splitBody(String body) {
+        if (body == null || body.isBlank()) return List.of();
+        Document doc = new Document(body.strip(), new java.util.HashMap<>(Map.of(MetaKey.CHAPTER_NO, "0")));
+        List<Document> chunks = chunkSplitter.splitDocuments(
+                List.of(doc), "submission.md",
+                props.chunkSizeSafe(), props.chunkOverlapSafe(), props.minChunkSizeSafe(),
+                props.embeddingSafe().maxChunkChars(), props.chunkSplitGranularSafe());
+        List<String> texts = chunks.stream()
+                .map(Document::getText)
+                .filter(t -> t != null && !t.isBlank())
+                .toList();
+        return texts.isEmpty() ? List.of(body.strip()) : texts;
+    }
+
+    /** How many chunks this body would become — the form's "약 N개 청크" hint. */
+    public int previewChunkCount(String body) {
+        return splitBody(body).size();
     }
 
     /**
      * Validates and stores a new submission. Throws {@link IllegalArgumentException} (→ 400) with a
      * user-facing Korean message on any rule violation. Returns the new submission id.
+     *
+     * <p>Body length is <b>not</b> validated — see {@link #chunkSizeForBody}. Title length and the
+     * per-user pending cap still are.
      */
-    public long submit(String authorUserId, String title, String body) {
+    public long submit(String authorUserId, String title, String body, List<String> tags) {
         String cleanTitle = PromptInjectionGuard.validate(title == null ? null : title.trim());
         if (cleanTitle.length() > MAX_TITLE_LEN) {
             throw new IllegalArgumentException(
@@ -76,22 +113,17 @@ public class CuratedSubmissionService {
             throw new IllegalArgumentException("본문을 입력해 주세요.");
         }
         String cleanBody = body.strip();
-        int normalized = MarkdownNoiseNormalizer.normalize(cleanBody).length();
-        int limit = maxBodyLength();
-        if (normalized > limit) {
-            throw new IllegalArgumentException(
-                    "본문이 너무 깁니다 (최대 " + limit + "자, 입력: " + normalized + "자). " +
-                    "한 건은 청크 하나로 등록되므로 내용을 나눠서 등록해 주세요.");
-        }
+        // TagUtils.normalize throws on policy violation (최대 10개 / 32자) — the message is user-facing.
+        String tagsCsv = TagUtils.toMetaValue(TagUtils.normalize(tags));
         if (repository.countPendingByAuthor(authorUserId) >= MAX_PENDING_PER_USER) {
             throw new IllegalArgumentException(
                     "검토 대기 중인 제안이 이미 " + MAX_PENDING_PER_USER + "건입니다. 처리된 뒤 다시 등록해 주세요.");
         }
 
-        long id = repository.insert(authorUserId, cleanTitle, cleanBody);
+        long id = repository.insert(authorUserId, cleanTitle, cleanBody, tagsCsv);
         auditLogger.log("curated.submission.create", "submission:" + id,
-                Map.of("title", cleanTitle, "chars", normalized));
-        log.info("[SUBMISSION] 신규 청크 제안 등록 id={} author={}", id, authorUserId);
+                Map.of("title", cleanTitle, "chars", cleanBody.length(), "tags", tagsCsv));
+        log.info("[SUBMISSION] 신규 청크 제안 등록 id={} author={} chars={}", id, authorUserId, cleanBody.length());
         return id;
     }
 
@@ -104,30 +136,35 @@ public class CuratedSubmissionService {
      * withdrawn, or won by a concurrent approval — {@code markApproved} is a compare-and-set).
      */
     public Optional<Long> approve(long submissionId, String reviewerUserId,
-                                  String editedTitle, String editedBody) {
+                                  String editedTitle, String editedBody, List<String> editedTags) {
         Optional<Submission> rowOpt = repository.findById(submissionId);
         if (rowOpt.isEmpty() || !rowOpt.get().isPending()) return Optional.empty();
         Submission row = rowOpt.get();
 
         String title = (editedTitle == null || editedTitle.isBlank()) ? row.title() : editedTitle.trim();
         String body  = (editedBody  == null || editedBody.isBlank())  ? row.body()  : editedBody.strip();
+        String tagsCsv = (editedTags == null) ? row.tags() : TagUtils.toMetaValue(TagUtils.normalize(editedTags));
 
-        // tags=null: 제안 게시판의 태그 입력은 아직 없다(다음 단계). 태그 없는 큐레이션 항목은
-        // 어떤 태그 스코프에서도 걸러지지 않으므로(RetrievalService의 큐레이션 면제) 그때까지도
-        // 승인된 제안은 정상적으로 검색된다.
-        long curatedId = curatedQaService.createFromSubmission(submissionId, row.authorUserId(), title, body, null);
-        if (!repository.markApproved(submissionId, reviewerUserId, title, body, curatedId)) {
-            // Lost the CAS — another request approved it first. Undo the row we just created so the
-            // submission keeps exactly one curated entry (forceRemove also de-indexes it).
-            curatedQaService.forceRemove(curatedId);
-            log.info("[SUBMISSION] 승인 경합으로 취소 id={} curatedId={}", submissionId, curatedId);
+        // 본문을 문서와 같은 방식으로 분할해 N개 청크로 등록한다 — 길이 제한이 없어진 대신 각 청크가
+        // 임베딩 가능한 크기로 보장된다. 태그는 모든 청크에 동일하게 부여한다(제안 하나 = 한 스코프).
+        List<String> bodyChunks = splitBody(body);
+        List<Long> curatedIds = curatedQaService.createFromSubmission(
+                submissionId, row.authorUserId(), title, bodyChunks, tagsCsv);
+        long firstCuratedId = curatedIds.get(0);
+
+        if (!repository.markApproved(submissionId, reviewerUserId, title, body, tagsCsv, firstCuratedId)) {
+            // Lost the CAS — another request approved it first. Undo every chunk we just created
+            // (전부/전무: a half-rolled-back submission would show as partially registered).
+            curatedQaService.forceRemoveBySubmission(submissionId);
+            log.info("[SUBMISSION] 승인 경합으로 취소 id={} 청크 {}건", submissionId, curatedIds.size());
             return Optional.empty();
         }
 
         auditLogger.log("curated.submission.approve", "submission:" + submissionId,
-                Map.of("curatedId", curatedId, "author", row.authorUserId()));
-        log.info("[SUBMISSION] 승인·임베딩 실행 id={} curatedId={}", submissionId, curatedId);
-        return Optional.of(curatedId);
+                Map.of("curatedIds", curatedIds, "chunks", curatedIds.size(),
+                        "author", row.authorUserId(), "tags", tagsCsv == null ? "" : tagsCsv));
+        log.info("[SUBMISSION] 승인·임베딩 실행 id={} → 청크 {}건 {}", submissionId, curatedIds.size(), curatedIds);
+        return Optional.of(firstCuratedId);
     }
 
     /** Admin 거부. The note is mandatory — it is the only feedback the author gets. */

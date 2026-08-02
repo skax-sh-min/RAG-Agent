@@ -54,15 +54,20 @@ public class DocumentController {
     private final IndexingProgressService progressService;
     private final AuditLogger auditLogger;
     private final DocumentExportService exportService;
+    /** Only for the {@code includeCurated} union in {@link #listTags} — curated rows never reach
+     *  {@code chunk_fts}, so their tags have to come straight from the table. */
+    private final com.example.ragagent.repository.CuratedQaRepository curatedQaRepository;
 
     public DocumentController(RagService ragService,
                                IndexingProgressService progressService,
                                AuditLogger auditLogger,
-                               DocumentExportService exportService) {
+                               DocumentExportService exportService,
+                               com.example.ragagent.repository.CuratedQaRepository curatedQaRepository) {
         this.ragService = ragService;
         this.progressService = progressService;
         this.auditLogger = auditLogger;
         this.exportService = exportService;
+        this.curatedQaRepository = curatedQaRepository;
     }
 
     // ── Page ──────────────────────────────────────────────────────────
@@ -253,8 +258,18 @@ public class DocumentController {
     @GetMapping("/api/v1/tags")
     @ResponseBody
     public List<String> listTags(@RequestParam(required = false) String version,
-                                  @RequestParam(defaultValue = "false") boolean excludeCommon) {
-        return excludeCommon ? ragService.listTagsExcludingCommon(version) : ragService.listTags(version);
+                                  @RequestParam(defaultValue = "false") boolean excludeCommon,
+                                  @RequestParam(defaultValue = "false") boolean includeCurated) {
+        List<String> docTags = excludeCommon
+                ? ragService.listTagsExcludingCommon(version)
+                : ragService.listTags(version);
+        if (!includeCurated) return docTags;
+
+        // 큐레이션 항목은 chunk_fts 에 색인되지 않으므로(벡터 축 전용) 문서 태그 목록에 잡히지 않는다.
+        // 제안 등록 폼은 합집합을 써야 다른 사용자가 만든 태그를 재사용할 수 있고 표기가 갈리지 않는다.
+        java.util.LinkedHashSet<String> merged = new java.util.LinkedHashSet<>(docTags);
+        merged.addAll(curatedQaRepository.distinctActiveTags());
+        return List.copyOf(merged);
     }
 
     /** Distinct versions in use for version-selector UI. */

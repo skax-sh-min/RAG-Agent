@@ -656,8 +656,10 @@ function openSubmissionReview(id) {
             const pending = data.status === 'pending';
             const body = document.getElementById('submissionReviewOffcanvasBody');
             body.innerHTML = `
-                <div class="small text-muted">
-                    작성자: <span class="fw-semibold">${escHtml(data.author || '')}</span>
+                <div class="small text-muted d-flex flex-wrap gap-2">
+                    <span>작성자: <span class="fw-semibold">${escHtml(data.author || '')}</span></span>
+                    <span class="ms-auto">${pending ? '승인 시' : '등록된'} 청크
+                        <span class="fw-semibold">${data.chunkPreview}</span>개</span>
                 </div>
                 <div>
                     <label class="form-label small fw-semibold">제목</label>
@@ -665,14 +667,36 @@ function openSubmissionReview(id) {
                            class="form-control form-control-sm"
                            value="${escHtml(data.title || '')}" ${pending ? '' : 'readonly'}/>
                 </div>
+                <div>
+                    <label class="form-label small fw-semibold">태그</label>
+                    <input id="submission-review-tags" type="text"
+                           class="form-control form-control-sm" autocomplete="off"
+                           value="${escHtml(data.tags || '')}" ${pending ? '' : 'readonly'}
+                           placeholder="쉼표로 구분 · 비우면 모든 검색에 반영"/>
+                    <div class="form-text small">
+                        태그를 지정하면 채팅에서 그 태그를 고른 검색에만 반영됩니다.
+                    </div>
+                </div>
                 <div class="flex-grow-1 d-flex flex-column">
-                    <label class="form-label small fw-semibold">본문</label>
+                    <div class="d-flex align-items-center mb-1">
+                        <label class="form-label small fw-semibold mb-0">본문</label>
+                        <div class="btn-group btn-group-sm ms-auto" role="group">
+                            <input type="radio" class="btn-check" name="review-view" id="review-view-edit" checked/>
+                            <label class="btn btn-outline-secondary py-0 px-2" for="review-view-edit"
+                                   style="font-size:0.72rem;">원문</label>
+                            <input type="radio" class="btn-check" name="review-view" id="review-view-preview"/>
+                            <label class="btn btn-outline-secondary py-0 px-2" for="review-view-preview"
+                                   style="font-size:0.72rem;">미리보기</label>
+                        </div>
+                    </div>
                     <textarea id="submission-review-body" class="form-control form-control-sm flex-grow-1"
                               style="min-height:320px; font-size:0.82rem; resize:vertical;"
                               ${pending ? '' : 'readonly'}>${escHtml(data.body || '')}</textarea>
+                    <div id="submission-review-preview" class="form-control d-none"
+                         style="min-height:320px; overflow:auto; font-size:0.85rem;"></div>
                     <div class="form-text small">
                         ${pending
-                            ? '여기서 수정한 내용이 그대로 임베딩되고, 작성자에게도 이 내용이 보입니다.'
+                            ? '여기서 수정한 내용이 그대로 임베딩되고, 작성자에게도 이 내용이 보입니다. 긴 본문은 위 개수만큼 청크로 나뉘어 등록됩니다.'
                             : '이미 처리된 제안입니다 (읽기 전용).'}
                     </div>
                 </div>
@@ -687,20 +711,38 @@ function openSubmissionReview(id) {
                         <i class="bi bi-x-circle me-1"></i>거부
                     </button>
                 </div>` : ''}`;
+            wireReviewPreview();
             new bootstrap.Offcanvas(document.getElementById('submissionReviewOffcanvas')).show();
         })
         .catch(() => showToast('제안을 불러올 수 없습니다.', 'danger'));
 }
 
+/** 원문/미리보기 전환. 사용자가 쓴 마크다운이므로 렌더 전 반드시 DOMPurify 를 거친다. */
+function wireReviewPreview() {
+    const box     = document.getElementById('submission-review-body');
+    const preview = document.getElementById('submission-review-preview');
+    const tabEdit = document.getElementById('review-view-edit');
+    const tabView = document.getElementById('review-view-preview');
+    if (!box || !preview || !tabEdit || !tabView) return;
+    function show(on) {
+        if (on) preview.innerHTML = DOMPurify.sanitize(marked.parse(box.value || ''));
+        box.classList.toggle('d-none', on);
+        preview.classList.toggle('d-none', !on);
+    }
+    tabEdit.addEventListener('change', () => show(false));
+    tabView.addEventListener('change', () => show(true));
+}
+
 function approveSubmission(id) {
     const title = document.getElementById('submission-review-title').value;
     const body  = document.getElementById('submission-review-body').value;
+    const tags  = document.getElementById('submission-review-tags').value;
     if (!title.trim() || !body.trim()) { showToast('제목과 본문을 모두 입력하세요.', 'warning'); return; }
 
     fetch('/admin/submissions/' + encodeURIComponent(id) + '/approve', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...getCsrfHeaders() },
-        body: JSON.stringify({ title, body })
+        body: JSON.stringify({ title, body, tags })
     })
     .then(r => {
         if (r.ok) {

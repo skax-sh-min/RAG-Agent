@@ -50,7 +50,7 @@ class CuratedSubmissionRepositoryTest {
     @Test
     @DisplayName("insert — pending 상태로 저장되고 작성자 목록에 나온다")
     void insert_createsPendingRow() {
-        long id = repo.insert("u1", "제목", "본문");
+        long id = repo.insert("u1", "제목", "본문", null);
 
         Submission row = repo.findById(id).orElseThrow();
         assertThat(row.status()).isEqualTo(CuratedSubmissionRepository.STATUS_PENDING);
@@ -66,12 +66,12 @@ class CuratedSubmissionRepositoryTest {
     @Test
     @DisplayName("markApproved — pending 일 때만 성공하고, 관리자가 고친 본문이 저장된다")
     void markApproved_onlyFromPending() {
-        long id = repo.insert("u1", "원래 제목", "원래 본문");
+        long id = repo.insert("u1", "원래 제목", "원래 본문", null);
         long curatedId = curatedRepo.insertManual(id, "u1", "수정 제목", "수정 본문", null);
 
-        assertThat(repo.markApproved(id, "admin", "수정 제목", "수정 본문", curatedId)).isTrue();
+        assertThat(repo.markApproved(id, "admin", "수정 제목", "수정 본문", null, curatedId)).isTrue();
         // 두 번째 호출은 이미 approved 라 CAS 실패 — 중복 curated 행이 생기지 않는 근거
-        assertThat(repo.markApproved(id, "admin", "또 수정", "또 수정", curatedId)).isFalse();
+        assertThat(repo.markApproved(id, "admin", "또 수정", "또 수정", null, curatedId)).isFalse();
 
         Submission row = repo.findById(id).orElseThrow();
         assertThat(row.status()).isEqualTo(CuratedSubmissionRepository.STATUS_APPROVED);
@@ -87,9 +87,9 @@ class CuratedSubmissionRepositoryTest {
     @Test
     @DisplayName("displayStatus — 승인 후 curated_qa 가 비활성화되면 revoked 로 보인다")
     void displayStatus_derivesRevokedFromCuratedRow() {
-        long id = repo.insert("u1", "제목", "본문");
+        long id = repo.insert("u1", "제목", "본문", null);
         long curatedId = curatedRepo.insertManual(id, "u1", "제목", "본문", null);
-        repo.markApproved(id, "admin", "제목", "본문", curatedId);
+        repo.markApproved(id, "admin", "제목", "본문", null, curatedId);
 
         assertThat(repo.findById(id).orElseThrow().displayStatus()).isEqualTo("approved");
 
@@ -104,9 +104,9 @@ class CuratedSubmissionRepositoryTest {
     @Test
     @DisplayName("embedFailed — 승인된 제안의 curated_qa 임베딩이 실패하면 true")
     void embedFailed_reflectsCuratedEmbedStatus() {
-        long id = repo.insert("u1", "제목", "본문");
+        long id = repo.insert("u1", "제목", "본문", null);
         long curatedId = curatedRepo.insertManual(id, "u1", "제목", "본문", null);
-        repo.markApproved(id, "admin", "제목", "본문", curatedId);
+        repo.markApproved(id, "admin", "제목", "본문", null, curatedId);
 
         assertThat(repo.findById(id).orElseThrow().embedFailed()).isFalse();
 
@@ -120,7 +120,7 @@ class CuratedSubmissionRepositoryTest {
     @Test
     @DisplayName("markRejected — 사유가 저장되고 pending 이 아니면 실패")
     void markRejected_storesNote() {
-        long id = repo.insert("u1", "제목", "본문");
+        long id = repo.insert("u1", "제목", "본문", null);
 
         assertThat(repo.markRejected(id, "admin", "출처가 불분명합니다")).isTrue();
         assertThat(repo.markRejected(id, "admin", "두 번째")).isFalse();
@@ -133,7 +133,7 @@ class CuratedSubmissionRepositoryTest {
     @Test
     @DisplayName("markWithdrawn — 작성자 본인의 pending 제안만 철회된다")
     void markWithdrawn_scopedToAuthorAndPending() {
-        long id = repo.insert("u1", "제목", "본문");
+        long id = repo.insert("u1", "제목", "본문", null);
 
         assertThat(repo.markWithdrawn(id, "someone-else")).isFalse();
         assertThat(repo.markWithdrawn(id, "u1")).isTrue();
@@ -145,17 +145,17 @@ class CuratedSubmissionRepositoryTest {
     @Test
     @DisplayName("알림 카운트 — 검토된 건만 세고, 목록을 열면(읽음 처리) 0이 된다")
     void unreadCount_countsReviewedOnlyAndClears() {
-        long pending  = repo.insert("u1", "대기", "본문");
-        long approved = repo.insert("u1", "승인", "본문");
-        long rejected = repo.insert("u1", "반려", "본문");
-        long other    = repo.insert("u2", "남의 글", "본문");
+        long pending  = repo.insert("u1", "대기", "본문", null);
+        long approved = repo.insert("u1", "승인", "본문", null);
+        long rejected = repo.insert("u1", "반려", "본문", null);
+        long other    = repo.insert("u2", "남의 글", "본문", null);
         repo.markRejected(other, "admin", "사유");
 
         // 검토 전에는 알림이 없다
         assertThat(repo.countUnreviewedNotificationsForAuthor("u1")).isZero();
 
         long curatedId = curatedRepo.insertManual(approved, "u1", "승인", "본문", null);
-        repo.markApproved(approved, "admin", "승인", "본문", curatedId);
+        repo.markApproved(approved, "admin", "승인", "본문", null, curatedId);
         repo.markRejected(rejected, "admin", "사유");
 
         assertThat(repo.countUnreviewedNotificationsForAuthor("u1")).isEqualTo(2);
@@ -171,8 +171,8 @@ class CuratedSubmissionRepositoryTest {
     @Test
     @DisplayName("findByStatus — status 필터, null 이면 전체")
     void findByStatus_filtersOrReturnsAll() {
-        long a = repo.insert("u1", "A", "본문");
-        long b = repo.insert("u1", "B", "본문");
+        long a = repo.insert("u1", "A", "본문", null);
+        long b = repo.insert("u1", "B", "본문", null);
         repo.markRejected(b, "admin", "사유");
 
         assertThat(repo.findByStatus("pending", 0, 10)).extracting(Submission::id).containsExactly(a);
@@ -185,10 +185,10 @@ class CuratedSubmissionRepositoryTest {
     @Test
     @DisplayName("countPendingByAuthor — 사용자별 대기 건수만 센다")
     void countPendingByAuthor_scoped() {
-        repo.insert("u1", "A", "본문");
-        repo.insert("u1", "B", "본문");
-        long c = repo.insert("u1", "C", "본문");
-        repo.insert("u2", "D", "본문");
+        repo.insert("u1", "A", "본문", null);
+        repo.insert("u1", "B", "본문", null);
+        long c = repo.insert("u1", "C", "본문", null);
+        repo.insert("u2", "D", "본문", null);
         repo.markRejected(c, "admin", "사유");
 
         assertThat(repo.countPendingByAuthor("u1")).isEqualTo(2);
@@ -198,11 +198,71 @@ class CuratedSubmissionRepositoryTest {
     @Test
     @DisplayName("bodyPreview — 한 줄로 접고 120자에서 자른다")
     void bodyPreview_flattensAndTruncates() {
-        long id = repo.insert("u1", "제목", "첫 줄\n\n둘째 줄");
+        long id = repo.insert("u1", "제목", "첫 줄\n\n둘째 줄", null);
         assertThat(repo.findById(id).orElseThrow().bodyPreview()).isEqualTo("첫 줄 둘째 줄");
 
-        long longId = repo.insert("u1", "제목", "가".repeat(200));
+        long longId = repo.insert("u1", "제목", "가".repeat(200), null);
         String preview = repo.findById(longId).orElseThrow().bodyPreview();
         assertThat(preview).hasSize(121).endsWith("…");
+    }
+
+    // ── 1:N 분할 · 전부/전무 ─────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("displayStatus — 청크가 여러 개여도 하나라도 살아 있으면 '등록 완료'")
+    void displayStatus_anyActiveChunkKeepsApproved() {
+        long id = repo.insert("u1", "제목", "본문", "인프라");
+        long c1 = curatedRepo.insertManual(id, "u1", "제목", "본문 1", "인프라");
+        long c2 = curatedRepo.insertManual(id, "u1", "제목", "본문 2", "인프라");
+        long c3 = curatedRepo.insertManual(id, "u1", "제목", "본문 3", "인프라");
+        repo.markApproved(id, "admin", "제목", "본문", "인프라", c1);
+
+        assertThat(repo.findById(id).orElseThrow().chunkCount()).isEqualTo(3);
+        assertThat(repo.findById(id).orElseThrow().displayStatus()).isEqualTo("approved");
+
+        curatedRepo.deactivateById(c1);
+        curatedRepo.deactivateById(c2);
+        // 아직 c3 가 살아 있다 → 여전히 등록 완료
+        assertThat(repo.findById(id).orElseThrow().displayStatus()).isEqualTo("approved");
+
+        curatedRepo.deactivateById(c3);
+        // 전부 내려가야 회수됨
+        assertThat(repo.findById(id).orElseThrow().displayStatus()).isEqualTo("revoked");
+    }
+
+    @Test
+    @DisplayName("embedFailed — 여러 청크 중 하나만 실패해도 true")
+    void embedFailed_anyFailedChunk() {
+        long id = repo.insert("u1", "제목", "본문", null);
+        long c1 = curatedRepo.insertManual(id, "u1", "제목", "본문 1", null);
+        long c2 = curatedRepo.insertManual(id, "u1", "제목", "본문 2", null);
+        repo.markApproved(id, "admin", "제목", "본문", null, c1);
+
+        assertThat(repo.findById(id).orElseThrow().embedFailed()).isFalse();
+
+        curatedRepo.markEmbedFailed(c2);
+        assertThat(repo.findById(id).orElseThrow().embedFailed()).isTrue();
+
+        curatedRepo.markEmbedOk(c2);
+        assertThat(repo.findById(id).orElseThrow().embedFailed()).isFalse();
+    }
+
+    @Test
+    @DisplayName("tags — 등록 시 저장되고 승인 시 관리자 수정본으로 덮어써진다")
+    void tags_storedAndOverwrittenOnApproval() {
+        long id = repo.insert("u1", "제목", "본문", "인프라,vpn");
+        assertThat(repo.findById(id).orElseThrow().tags()).isEqualTo("인프라,vpn");
+
+        long c1 = curatedRepo.insertManual(id, "u1", "제목", "본문", "인프라");
+        repo.markApproved(id, "admin", "제목", "본문", "인프라", c1);
+
+        assertThat(repo.findById(id).orElseThrow().tags()).isEqualTo("인프라");
+    }
+
+    @Test
+    @DisplayName("chunkCount — 승인 전에는 0")
+    void chunkCount_zeroBeforeApproval() {
+        long id = repo.insert("u1", "제목", "본문", null);
+        assertThat(repo.findById(id).orElseThrow().chunkCount()).isZero();
     }
 }

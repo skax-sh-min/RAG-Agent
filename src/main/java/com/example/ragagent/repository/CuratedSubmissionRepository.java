@@ -42,15 +42,28 @@ public class CuratedSubmissionRepository {
     public static final String STATUS_REVOKED = "revoked";
 
     /**
-     * The linked curated row's own state travels with every read so the caller can show "검색에
-     * 반영됨" / "임베딩 실패" / "회수됨" without a second query.
+     * The linked curated rows' aggregate state travels with every read, so the caller can show
+     * "검색에 반영됨" / "임베딩 실패" / "회수됨" without a second query.
+     *
+     * <p>A submission maps to <b>N</b> curated rows, not one — an over-long body is split into
+     * chunks at approval time ({@code CuratedSubmissionService.approve}). So the join is a
+     * correlated aggregate over {@code source_submission_id} rather than a lookup of the single
+     * {@code curated_qa_id} FK (which is kept only as the "first chunk" pointer for the admin
+     * edit panel). Counting active/failed rows separately is what lets
+     * {@link Submission#displayStatus()} enforce the 전부/전무 rule.
      */
     private static final String SELECT_BASE = """
             SELECT s.id, s.author_user_id, s.title, s.body, s.status, s.reviewer_user_id,
                    s.review_note, s.curated_qa_id, s.created_at, s.updated_at, s.reviewed_at,
-                   s.author_read_at, c.status AS curated_status, c.embed_status AS curated_embed_status
+                   s.author_read_at, s.tags,
+                   (SELECT COUNT(*) FROM curated_qa c
+                     WHERE c.source_submission_id = s.id) AS curated_total,
+                   (SELECT COUNT(*) FROM curated_qa c
+                     WHERE c.source_submission_id = s.id AND c.status = 'active') AS curated_active,
+                   (SELECT COUNT(*) FROM curated_qa c
+                     WHERE c.source_submission_id = s.id AND c.status = 'active'
+                       AND c.embed_status = 'failed') AS curated_failed
               FROM curated_submission s
-              LEFT JOIN curated_qa c ON c.id = s.curated_qa_id
             """;
 
     private final JdbcTemplate jdbc;
@@ -71,8 +84,10 @@ public class CuratedSubmissionRepository {
                 rs.getString("updated_at"),
                 rs.getString("reviewed_at"),
                 rs.getString("author_read_at"),
-                rs.getString("curated_status"),
-                rs.getString("curated_embed_status"));
+                rs.getString("tags"),
+                rs.getInt("curated_total"),
+                rs.getInt("curated_active"),
+                rs.getInt("curated_failed"));
     };
 
     public CuratedSubmissionRepository(JdbcTemplate jdbc) {
@@ -94,9 +109,15 @@ public class CuratedSubmissionRepository {
                     created_at        TEXT NOT NULL,
                     updated_at        TEXT NOT NULL,
                     reviewed_at       TEXT,
-                    author_read_at    TEXT
+                    author_read_at    TEXT,
+                    tags              TEXT
                 )
                 """);
+        // `tags` shipped after the initial table — plain ADD COLUMN (nullable TEXT).
+        if (jdbc.queryForList("PRAGMA table_info(curated_submission)").stream()
+                .noneMatch(c -> "tags".equals(c.get("name")))) {
+            jdbc.execute("ALTER TABLE curated_submission ADD COLUMN tags TEXT");
+        }
         // (status, id DESC) — the admin panel's default "pending, newest first" listing.
         jdbc.execute("CREATE INDEX IF NOT EXISTS idx_curated_sub_status " +
                 "ON curated_submission(status, id DESC)");
@@ -105,20 +126,22 @@ public class CuratedSubmissionRepository {
                 "ON curated_submission(author_user_id, id DESC)");
     }
 
-    /** Returns the new submission id. Always starts {@code pending}. */
-    public long insert(String authorUserId, String title, String body) {
+    /** Returns the new submission id. Always starts {@code pending}. {@code tags} is the
+     *  comma-joined search scope the author picked (nullable). */
+    public long insert(String authorUserId, String title, String body, String tags) {
         String now = now();
         KeyHolder keyHolder = new GeneratedKeyHolder();
         jdbc.update(connection -> {
             PreparedStatement ps = connection.prepareStatement(
                     "INSERT INTO curated_submission (author_user_id, title, body, status, " +
-                    "created_at, updated_at) VALUES (?, ?, ?, '" + STATUS_PENDING + "', ?, ?)",
+                    "created_at, updated_at, tags) VALUES (?, ?, ?, '" + STATUS_PENDING + "', ?, ?, ?)",
                     Statement.RETURN_GENERATED_KEYS);
             ps.setString(1, authorUserId);
             ps.setString(2, title);
             ps.setString(3, body);
             ps.setString(4, now);
             ps.setString(5, now);
+            ps.setString(6, tags);
             return ps;
         }, keyHolder);
         Number key = keyHolder.getKey();
@@ -178,13 +201,15 @@ public class CuratedSubmissionRepository {
      * two admins clicking 임베딩 실행 at once produce one approval, not two curated rows (the loser
      * gets {@code false} back and its already-created curated row is rolled back by the caller).
      */
-    public boolean markApproved(long id, String reviewerUserId, String title, String body, long curatedQaId) {
+    public boolean markApproved(long id, String reviewerUserId, String title, String body,
+                                String tags, long firstCuratedQaId) {
         String now = now();
         return jdbc.update(
                 "UPDATE curated_submission SET status = ?, reviewer_user_id = ?, title = ?, body = ?, " +
-                "curated_qa_id = ?, reviewed_at = ?, updated_at = ?, author_read_at = NULL " +
+                "tags = ?, curated_qa_id = ?, reviewed_at = ?, updated_at = ?, author_read_at = NULL " +
                 "WHERE id = ? AND status = ?",
-                STATUS_APPROVED, reviewerUserId, title, body, curatedQaId, now, now, id, STATUS_PENDING) > 0;
+                STATUS_APPROVED, reviewerUserId, title, body, tags, firstCuratedQaId, now, now,
+                id, STATUS_PENDING) > 0;
     }
 
     /** pending → rejected. Same compare-and-set guard as {@link #markApproved}. */
@@ -217,31 +242,44 @@ public class CuratedSubmissionRepository {
     }
 
     /**
-     * {@code curatedStatus}/{@code curatedEmbedStatus} come from the linked {@code curated_qa} row
-     * (null while pending/rejected/withdrawn, or if the row was hard-deleted).
+     * @param curatedQaId    first chunk's curated row id — the admin edit panel's entry point.
+     *                       Prefer the counts below for status; this is a pointer, not the whole set.
+     * @param curatedTotal   curated rows created for this submission (chunks), 0 until approved
+     * @param curatedActive  how many of those are still contributing to search
+     * @param curatedFailed  how many active ones are stuck in {@code embed_status='failed'}
      */
     public record Submission(long id, String authorUserId, String title, String body,
                              String status, String reviewerUserId, String reviewNote,
                              Long curatedQaId, String createdAt, String updatedAt,
-                             String reviewedAt, String authorReadAt,
-                             String curatedStatus, String curatedEmbedStatus) {
+                             String reviewedAt, String authorReadAt, String tags,
+                             int curatedTotal, int curatedActive, int curatedFailed) {
 
         /**
          * The status to show. Everything is the stored value except an approved submission whose
-         * curated row is no longer active — an admin removed it from the curated panel afterwards,
+         * curated rows are no longer active — an admin removed it from the curated panel afterwards,
          * which the author should see as 회수됨 rather than as a still-live 등록 완료.
+         *
+         * <p><b>전부/전무</b>: an approved submission is 등록 완료 while <em>any</em> of its chunks is
+         * still active, and 회수됨 once none are. There is deliberately no "N개 중 M개" partial state
+         * — {@code CuratedQaService.forceRemove} takes down every chunk of a submission together, so
+         * a partial set can only arise from direct DB surgery, and reporting a half-registered
+         * proposal to its author would be more confusing than useful.
          */
         public String displayStatus() {
-            if (STATUS_APPROVED.equals(status) && curatedStatus != null
-                    && !"active".equals(curatedStatus)) {
+            if (STATUS_APPROVED.equals(status) && curatedTotal > 0 && curatedActive == 0) {
                 return STATUS_REVOKED;
             }
             return status;
         }
 
-        /** Approved and indexed, but the embedding call failed — needs a shorter body or a retry. */
+        /** Approved and indexed, but at least one chunk's embedding failed — needs a retry. */
         public boolean embedFailed() {
-            return STATUS_APPROVED.equals(displayStatus()) && "failed".equals(curatedEmbedStatus);
+            return STATUS_APPROVED.equals(displayStatus()) && curatedFailed > 0;
+        }
+
+        /** How many chunks this submission was split into (0 until approved). */
+        public int chunkCount() {
+            return curatedTotal;
         }
 
         public boolean isPending()  { return STATUS_PENDING.equals(status); }

@@ -113,7 +113,7 @@ class GuestIdentitySubmissionIsolationTest {
 
     @BeforeEach
     void setUp() {
-        when(service.maxBodyLength()).thenReturn(800);
+        when(service.chunkSizeForBody()).thenReturn(800);
         when(service.listMine(anyString(), anyInt(), anyInt())).thenReturn(List.of());
     }
 
@@ -148,7 +148,7 @@ class GuestIdentitySubmissionIsolationTest {
                 .andExpect(status().isOk());
 
         assertThat(listedUserIds()).containsExactly("guest-abcdef123456");
-        verify(service).submit("guest-abcdef123456", "제목", "본문");
+        verify(service).submit("guest-abcdef123456", "제목", "본문", java.util.List.of());
         verify(service).countUnreadForAuthor("guest-abcdef123456");
     }
 
