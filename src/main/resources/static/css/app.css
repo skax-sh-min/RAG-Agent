@@ -284,11 +284,34 @@
 }
 
 /* ── /settings value editor ───────────────────────────────────────────── */
-/* Every hot-editable setting is a short number (0.0~1.0, 60, 1500) or a true/false
-   select, so the field is capped instead of filling the column. flex-grow:0 keeps
-   the input-group from stretching it back out. */
-.setting-value {
+/* The value column is a fixed width on EVERY row (editable, read-only, override or
+   not) so the editors line up vertically; the label column next to it is `col-md`
+   and absorbs whatever the window adds. Wide enough for 값 + 기본값 + 저장 side by
+   side ("Default"/"Save" in English being the longer pair). */
+.setting-value-col {
     flex: 0 0 auto;
-    width: 7rem;
-    max-width: 7rem;
+    width: 17rem;
+    max-width: 100%;
+}
+/* The field is the only flexible part of the group, so a row WITHOUT an override —
+   no 기본값 button — grows the input into that space instead of shrinking the group. */
+/* `.input-group` is flex-wrap:wrap by default — the buttons drop to a second line as soon
+   as the field's natural width doesn't leave room for them. */
+.setting-value-col .input-group {
+    flex-wrap: nowrap;
+}
+/* flex-basis 0 (not auto): a number input's default intrinsic width is ~20 characters, which
+   as a basis would shove the buttons out; basis 0 makes it take exactly what's left over.
+   Selector kept at 3 classes on purpose: Bootstrap's own `.input-group > .form-control`
+   (2 classes) sets width:1%/min-width:0 and would otherwise win over a bare .setting-value. */
+.setting-value-col .input-group > .setting-value {
+    flex: 1 1 0;
+    width: auto;
+    min-width: 3.5rem;
+}
+/* Buttons keep their natural width; without this they'd shrink and wrap their label
+   when the number input claims space. */
+.setting-value-col .input-group > .btn {
+    flex: 0 0 auto;
+    white-space: nowrap;
 }
