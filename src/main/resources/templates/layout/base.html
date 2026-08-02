@@ -67,24 +67,9 @@
                     <span th:text="#{nav.documents}">Documents</span>
                 </a>
             </li>
-            <li class="nav-item">
-                <a class="nav-link"
-                   th:href="@{/llm-usage}"
-                   th:classappend="${#strings.startsWith(requestURI, '/llm-usage')} ? ' active'">
-                    <i class="bi bi-bar-chart-line me-1"></i>
-                    <span th:text="#{nav.llm_usage}">LLM Usage</span>
-                </a>
-            </li>
-            <li class="nav-item">
-                <a class="nav-link"
-                   th:href="@{/settings}"
-                   th:classappend="${#strings.startsWith(requestURI, '/settings')} ? ' active'">
-                    <i class="bi bi-sliders me-1"></i>
-                    <span th:text="#{nav.settings}">Settings</span>
-                </a>
-            </li>
             <!-- 청크 추가 게시판 — 처리(등록/반려)된 내 제안 중 아직 확인하지 않은 건수를 배지로.
-                 목록 페이지를 여는 순간 서버에서 읽음 처리되므로 별도 "확인" 조작은 없다. -->
+                 목록 페이지를 여는 순간 서버에서 읽음 처리되므로 별도 "확인" 조작은 없다.
+                 채팅/문서 다음(3번째)에 두어 일상적으로 쓰는 메뉴끼리 붙여 놓는다. -->
             <li class="nav-item">
                 <a class="nav-link"
                    th:href="@{/curated/submissions}"
@@ -92,6 +77,14 @@
                     <i class="bi bi-journal-plus me-1"></i>
                     <span th:text="#{nav.submissions}">Proposals</span>
                     <span id="my-submission-badge" class="badge bg-danger ms-1 d-none">0</span>
+                </a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link"
+                   th:href="@{/llm-usage}"
+                   th:classappend="${#strings.startsWith(requestURI, '/llm-usage')} ? ' active'">
+                    <i class="bi bi-bar-chart-line me-1"></i>
+                    <span th:text="#{nav.llm_usage}">LLM Usage</span>
                 </a>
             </li>
             <li class="nav-item" th:if="${isAdmin}">
@@ -103,6 +96,15 @@
                     <!-- 검토 대기 중인 사용자 제안 건수. isAdmin 일 때만 렌더링되고, 폴링 스크립트도
                          같은 조건으로만 내려간다(비관리자에게는 요청 자체가 나가지 않음). -->
                     <span id="pending-submission-badge" class="badge bg-danger ms-1 d-none">0</span>
+                </a>
+            </li>
+            <!-- 설정은 자주 열지 않으므로 맨 끝에 둔다. -->
+            <li class="nav-item">
+                <a class="nav-link"
+                   th:href="@{/settings}"
+                   th:classappend="${#strings.startsWith(requestURI, '/settings')} ? ' active'">
+                    <i class="bi bi-sliders me-1"></i>
+                    <span th:text="#{nav.settings}">Settings</span>
                 </a>
             </li>
         </ul>

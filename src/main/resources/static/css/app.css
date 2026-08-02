@@ -286,11 +286,12 @@
 /* ── /settings value editor ───────────────────────────────────────────── */
 /* The value column is a fixed width on EVERY row (editable, read-only, override or
    not) so the editors line up vertically; the label column next to it is `col-md`
-   and absorbs whatever the window adds. Wide enough for 값 + 기본값 + 저장 side by
-   side ("Default"/"Save" in English being the longer pair). */
+   and absorbs whatever the window adds. Just wide enough for 값 + 기본값 + 저장 side by
+   side ("Default"/"Save" in English being the longer pair) — every editable setting is a
+   short number (0.35, 60, 1500) or a true/false select, so anything more is dead space. */
 .setting-value-col {
     flex: 0 0 auto;
-    width: 17rem;
+    width: 12rem;
     max-width: 100%;
 }
 /* The field is the only flexible part of the group, so a row WITHOUT an override —
@@ -307,11 +308,32 @@
 .setting-value-col .input-group > .setting-value {
     flex: 1 1 0;
     width: auto;
-    min-width: 3.5rem;
+    min-width: 3rem;
+}
+/* `.form-select-sm` reserves 2.25rem on the right for the caret — over a third of the
+   field at this width, which clipped `true`/`false` down to a single letter. */
+.setting-value-col .input-group > select.setting-value {
+    padding-right: 1.5rem;
+    background-position: right 0.4rem center;
+    min-width: 4.25rem;
 }
 /* Buttons keep their natural width; without this they'd shrink and wrap their label
-   when the number input claims space. */
+   when the number input claims space. The horizontal padding is tightened from btn-sm's
+   .5rem so the worst case — an overridden bool row in English, where "Default"+"Save" are
+   the widest pair and the select still needs to read `false` — fits 12rem exactly. */
 .setting-value-col .input-group > .btn {
     flex: 0 0 auto;
     white-space: nowrap;
+    padding-left: 0.35rem;
+    padding-right: 0.35rem;
+}
+
+/* ── min-width:0 utility ──────────────────────────────────────────────── */
+/* Bootstrap ships no `.min-w-*` utility at all, so templates using `min-w-0`
+   (curated-submissions.html's 내 제안 rows) were silently getting nothing: a flex
+   item defaults to min-width:auto, so a `text-truncate` child — white-space:nowrap —
+   made the growing column as wide as its untruncated text and pushed the status
+   badge / 일시 / 철회 button right out of the card. */
+.min-w-0 {
+    min-width: 0;
 }
