@@ -67,7 +67,7 @@ class CuratedSubmissionRepositoryTest {
     @DisplayName("markApproved — pending 일 때만 성공하고, 관리자가 고친 본문이 저장된다")
     void markApproved_onlyFromPending() {
         long id = repo.insert("u1", "원래 제목", "원래 본문");
-        long curatedId = curatedRepo.insertManual(id, "u1", "수정 제목", "수정 본문");
+        long curatedId = curatedRepo.insertManual(id, "u1", "수정 제목", "수정 본문", null);
 
         assertThat(repo.markApproved(id, "admin", "수정 제목", "수정 본문", curatedId)).isTrue();
         // 두 번째 호출은 이미 approved 라 CAS 실패 — 중복 curated 행이 생기지 않는 근거
@@ -88,7 +88,7 @@ class CuratedSubmissionRepositoryTest {
     @DisplayName("displayStatus — 승인 후 curated_qa 가 비활성화되면 revoked 로 보인다")
     void displayStatus_derivesRevokedFromCuratedRow() {
         long id = repo.insert("u1", "제목", "본문");
-        long curatedId = curatedRepo.insertManual(id, "u1", "제목", "본문");
+        long curatedId = curatedRepo.insertManual(id, "u1", "제목", "본문", null);
         repo.markApproved(id, "admin", "제목", "본문", curatedId);
 
         assertThat(repo.findById(id).orElseThrow().displayStatus()).isEqualTo("approved");
@@ -105,7 +105,7 @@ class CuratedSubmissionRepositoryTest {
     @DisplayName("embedFailed — 승인된 제안의 curated_qa 임베딩이 실패하면 true")
     void embedFailed_reflectsCuratedEmbedStatus() {
         long id = repo.insert("u1", "제목", "본문");
-        long curatedId = curatedRepo.insertManual(id, "u1", "제목", "본문");
+        long curatedId = curatedRepo.insertManual(id, "u1", "제목", "본문", null);
         repo.markApproved(id, "admin", "제목", "본문", curatedId);
 
         assertThat(repo.findById(id).orElseThrow().embedFailed()).isFalse();
@@ -154,7 +154,7 @@ class CuratedSubmissionRepositoryTest {
         // 검토 전에는 알림이 없다
         assertThat(repo.countUnreviewedNotificationsForAuthor("u1")).isZero();
 
-        long curatedId = curatedRepo.insertManual(approved, "u1", "승인", "본문");
+        long curatedId = curatedRepo.insertManual(approved, "u1", "승인", "본문", null);
         repo.markApproved(approved, "admin", "승인", "본문", curatedId);
         repo.markRejected(rejected, "admin", "사유");
 

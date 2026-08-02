@@ -7,6 +7,7 @@ import com.example.ragagent.exception.LlmBackpressureException;
 import com.example.ragagent.exception.LlmProviderExhaustedException;
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.model.ChatForm;
+import com.example.ragagent.model.TagUtils;
 import com.example.ragagent.model.SourceRef;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.MessageSource;
@@ -190,7 +191,7 @@ public class StreamingAgentService {
                 turnId = memoryService.addTurn(userId, form.threadId(), form.question(), result.answer(),
                         askedAt, result.totalInputTokens(), result.totalOutputTokens(),
                         (int) elapsedMs, result.usedProvider(), result.llmCallCount(),
-                        form.responseModeOrDefault().name());
+                        form.responseModeOrDefault().name(), TagUtils.toMetaValue(form.selectedTags()));
                 summarizerService.precomputeAfterTurn(userId, form.threadId(), turnId, locale);
             }
 
@@ -231,7 +232,8 @@ public class StreamingAgentService {
                     try {
                         memoryService.addTurn(userId, form.threadId(), form.question(),
                                 partial + "\n[오류로 중단됨]",
-                                askedAt, 0, 0, 0, null, 0, form.responseModeOrDefault().name());
+                                askedAt, 0, 0, 0, null, 0, form.responseModeOrDefault().name(),
+                                TagUtils.toMetaValue(form.selectedTags()));
                         log.debug("partial answer persisted ({} chars) thread={}",
                                 partial.length(), form.threadId());
                     } catch (Exception persistEx) {

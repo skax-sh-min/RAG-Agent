@@ -48,8 +48,8 @@ class CuratedQaManualRowTest {
     void insertManual_multipleNullTurnRows_coexist() {
         repo.init();
 
-        long a = repo.insertManual(1L, "u1", "제목 A", "본문 A");
-        long b = repo.insertManual(2L, "u2", "제목 B", "본문 B");
+        long a = repo.insertManual(1L, "u1", "제목 A", "본문 A", null);
+        long b = repo.insertManual(2L, "u2", "제목 B", "본문 B", null);
 
         assertThat(a).isPositive();
         assertThat(b).isNotEqualTo(a);
@@ -70,7 +70,7 @@ class CuratedQaManualRowTest {
     @DisplayName("deactivateById — 수동 행을 비활성화한다 (deactivate(turnId)로는 불가능)")
     void deactivateById_worksForManualRow() {
         repo.init();
-        long id = repo.insertManual(7L, "u1", "제목", "본문");
+        long id = repo.insertManual(7L, "u1", "제목", "본문", null);
 
         // source_turn_id 가 NULL 이므로 turn 기준 UPDATE 는 어떤 값으로도 매칭되지 않는다.
         repo.deactivate(0L);
@@ -112,8 +112,8 @@ class CuratedQaManualRowTest {
         repo.init();
         repo.init();   // 두 번째 호출은 origin 컬럼이 이미 있으므로 재생성하지 않는다
 
-        long first  = repo.upsertActive(9L, "u1", "t1", "질문", "답변", "v1");
-        long second = repo.upsertActive(9L, "u1", "t1", "질문 수정", "답변 수정", "v1");
+        long first  = repo.upsertActive(9L, "u1", "t1", "질문", "답변", "v1", null);
+        long second = repo.upsertActive(9L, "u1", "t1", "질문 수정", "답변 수정", "v1", null);
 
         // 같은 turn → 새 행이 아니라 기존 행 갱신 (부분 UNIQUE 인덱스가 살아 있다는 증거)
         assertThat(second).isEqualTo(first);

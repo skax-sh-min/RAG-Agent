@@ -113,4 +113,39 @@ class RetrievalServiceTagFilterTest {
         assertThat(svc.filterByTags(List.of(d1, d2), List.of("a", "b"), 10)).containsExactly(d1);
         assertThat(svc.filterByTags(List.of(d1, d2), List.of(), 10)).hasSize(2);
     }
+
+    /** DOC_TYPE=curated_qa 힌트를 단 큐레이션 히트 (태그가 null 이면 키 자체를 넣지 않는다). */
+    private static Document curatedHit(String tagsCsv) {
+        Map<String, Object> m = new HashMap<>();
+        m.put(MetaKey.DOC_TYPE, "curated_qa");
+        m.put(MetaKey.DOC_ID, "curated:1");
+        if (tagsCsv != null) m.put(MetaKey.TAGS, tagsCsv);
+        return new Document("큐레이션 답변", m);
+    }
+
+    @Test
+    @DisplayName("filterByTags — 태그 없는 큐레이션 항목은 통과시키되, 태그 없는 문서 청크는 그대로 탈락시킨다")
+    void filterByTags_exemptsScopelessCuratedEntriesOnly() {
+        // 이전에는 큐레이션 항목에 태그 메타데이터가 아예 없어, 태그를 하나라도 고르면
+        // 좋아요한 답변이 전부 사라졌다.
+        List<Document> candidates = List.of(
+                curatedHit(null),        // 스코프 미상 → 통과
+                curatedHit("설계"),       // 일치 → 통과
+                curatedHit("운영"),       // 불일치 → 탈락
+                doc("d1", null),         // 태그 없는 문서 → 탈락(엄격 AND 유지)
+                doc("d2", "설계"));       // 일치 문서 → 통과
+
+        List<Document> out = svc.filterByTags(candidates, List.of("설계"), 10);
+
+        assertThat(out).extracting(d -> d.getMetadata().get(MetaKey.DOC_ID))
+                .containsExactly("curated:1", "curated:1", "d2");
+    }
+
+    @Test
+    @DisplayName("filterByTags — 선택 태그가 없으면 큐레이션·문서 모두 통과(기존 동작)")
+    void filterByTags_emptySelectionPassesEverything() {
+        List<Document> candidates = List.of(curatedHit(null), doc("d1", null));
+
+        assertThat(svc.filterByTags(candidates, List.of(), 10)).hasSize(2);
+    }
 }

@@ -133,7 +133,7 @@ class OperationsControllerHtmxTest {
                 .thenReturn(Optional.of(new MemoryRepository.FeedbackRow("LIKE")));
         when(curatedQaService.findActiveByTurn(42L)).thenReturn(Optional.of(
                 new com.example.ragagent.repository.CuratedQaRepository.CuratedQa(
-                        1L, 42L, "user", "t1", "질문", "답변", "active", "latest", "2026-01-01", "2026-01-01", "ok", "like", null)));
+                        1L, 42L, "user", "t1", "질문", "답변", "active", "latest", "2026-01-01", "2026-01-01", "ok", "like", null, null)));
 
         mvc.perform(get("/ui/threads/t1/turns/42/curated"))
                 .andExpect(status().isOk())

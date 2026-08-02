@@ -33,7 +33,8 @@ public class SqliteMemoryRepository implements MemoryRepository {
             rs.getString("provider"),
             rs.getInt("llm_calls"),
             rs.getString("feedback"),
-            rs.getString("response_mode"));
+            rs.getString("response_mode"),
+            rs.getString("selected_tags"));
 
     public SqliteMemoryRepository(JdbcTemplate jdbc, AppProperties props) {
         this.jdbc = jdbc;
@@ -65,7 +66,8 @@ public class SqliteMemoryRepository implements MemoryRepository {
                 "ALTER TABLE conversation_turns ADD COLUMN llm_calls INTEGER DEFAULT 0",
                 "ALTER TABLE conversation_turns ADD COLUMN user_id TEXT NOT NULL DEFAULT 'anonymous'",
                 "ALTER TABLE conversation_turns ADD COLUMN feedback TEXT",
-                "ALTER TABLE conversation_turns ADD COLUMN response_mode TEXT"
+                "ALTER TABLE conversation_turns ADD COLUMN response_mode TEXT",
+                "ALTER TABLE conversation_turns ADD COLUMN selected_tags TEXT"
         )) {
             try { jdbc.execute(ddl); } catch (Exception ignored) {}
         }
@@ -121,13 +123,14 @@ public class SqliteMemoryRepository implements MemoryRepository {
     @Override
     public long addTurn(String userId, String threadId, String question, String answer,
                         String askedAt, int inputTokens, int outputTokens,
-                        int elapsedMs, String provider, int llmCalls, String responseMode) {
+                        int elapsedMs, String provider, int llmCalls, String responseMode,
+                        String selectedTags) {
         KeyHolder keyHolder = new GeneratedKeyHolder();
         jdbc.update(connection -> {
             PreparedStatement ps = connection.prepareStatement(
                     "INSERT INTO conversation_turns " +
-                    "(user_id, thread_id, question, answer, asked_at, input_tokens, output_tokens, elapsed_ms, provider, llm_calls, response_mode) " +
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "(user_id, thread_id, question, answer, asked_at, input_tokens, output_tokens, elapsed_ms, provider, llm_calls, response_mode, selected_tags) " +
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     Statement.RETURN_GENERATED_KEYS);
             ps.setString(1, userId);
             ps.setString(2, threadId);
@@ -140,6 +143,7 @@ public class SqliteMemoryRepository implements MemoryRepository {
             ps.setString(9, provider);
             ps.setInt(10, llmCalls);
             ps.setString(11, responseMode);
+            ps.setString(12, selectedTags);
             return ps;
         }, keyHolder);
         Number key = keyHolder.getKey();
@@ -155,7 +159,7 @@ public class SqliteMemoryRepository implements MemoryRepository {
     public List<Turn> getTurns(String userId, String threadId) {
         return jdbc.query(
                 "SELECT id, question, answer, asked_at, created_at, " +
-                "input_tokens, output_tokens, elapsed_ms, provider, llm_calls, feedback, response_mode " +
+                "input_tokens, output_tokens, elapsed_ms, provider, llm_calls, feedback, response_mode, selected_tags " +
                 "FROM conversation_turns WHERE user_id = ? AND thread_id = ? ORDER BY id ASC",
                 TURN_ROW_MAPPER,
                 userId, threadId);
@@ -168,7 +172,7 @@ public class SqliteMemoryRepository implements MemoryRepository {
         // regardless of how long the conversation has grown.
         List<Turn> rows = jdbc.query(
                 "SELECT id, question, answer, asked_at, created_at, " +
-                "input_tokens, output_tokens, elapsed_ms, provider, llm_calls, feedback, response_mode " +
+                "input_tokens, output_tokens, elapsed_ms, provider, llm_calls, feedback, response_mode, selected_tags " +
                 "FROM conversation_turns WHERE user_id = ? AND thread_id = ? ORDER BY id DESC LIMIT ?",
                 TURN_ROW_MAPPER,
                 userId, threadId, fetchLimit);
@@ -179,7 +183,7 @@ public class SqliteMemoryRepository implements MemoryRepository {
     public Optional<Turn> getTurn(String userId, String threadId, long turnId) {
         List<Turn> rows = jdbc.query(
                 "SELECT id, question, answer, asked_at, created_at, " +
-                "input_tokens, output_tokens, elapsed_ms, provider, llm_calls, feedback, response_mode " +
+                "input_tokens, output_tokens, elapsed_ms, provider, llm_calls, feedback, response_mode, selected_tags " +
                 "FROM conversation_turns WHERE id = ? AND user_id = ? AND thread_id = ?",
                 TURN_ROW_MAPPER,
                 turnId, userId, threadId);

@@ -4,6 +4,7 @@ import com.example.ragagent.agent.AgentGraph;
 import com.example.ragagent.agent.AgentState;
 import com.example.ragagent.context.ThreadContext;
 import com.example.ragagent.model.ChatRequest;
+import com.example.ragagent.model.TagUtils;
 import com.example.ragagent.model.ChatResponse;
 import com.example.ragagent.security.PromptInjectionGuard;
 import org.slf4j.Logger;
@@ -86,7 +87,7 @@ public class AgentService {
             turnId = memoryService.addTurn(userId, request.threadId(), request.question(), result.answer(),
                     askedAt, result.totalInputTokens(), result.totalOutputTokens(),
                     (int) elapsedMs, result.usedProvider(), result.llmCallCount(),
-                    request.responseMode().name());
+                    request.responseMode().name(), TagUtils.toMetaValue(request.selectedTags()));
             summarizerService.precomputeAfterTurn(userId, request.threadId(), turnId, ctx.locale());
         }
 

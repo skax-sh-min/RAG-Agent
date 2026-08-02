@@ -92,8 +92,12 @@ public class CuratedQaService {
                 .map(t -> t.version())
                 .orElse(null);
 
+        // 질문 당시의 검색 스코프(태그)를 그대로 승계한다 — 그 태그로 좁혀 얻은 답변이므로 이후
+        // 같은 스코프에서 다시 검색될 때 살아남아야 한다. 태그 없이(전체 검색) 물은 질문이면 빈 값이
+        // 되고, 그 경우 buildDocument()가 태그 메타데이터를 아예 붙이지 않아 어떤 태그 스코프에서도
+        // 걸러지지 않는다(RetrievalService.filterByTags의 큐레이션 면제).
         long curatedId = repository.upsertActive(turnId, userId, threadId,
-                turn.question(), turn.answer(), version);
+                turn.question(), turn.answer(), version, turn.selectedTags());
 
         if (ResponseMode.parse(turn.responseMode()) == ResponseMode.L) {
             log.debug("[CURATED] embed skipped (L-mode answer already mirrors source content) turnId={}", turnId);
@@ -175,8 +179,9 @@ public class CuratedQaService {
      * embeds {@code question + answer}, so a descriptive title is what makes a manually written
      * chunk retrievable by a question-shaped query at all. Returns the new curated row id.
      */
-    public long createFromSubmission(long submissionId, String authorUserId, String title, String body) {
-        long curatedId = repository.insertManual(submissionId, authorUserId, title, body);
+    public long createFromSubmission(long submissionId, String authorUserId, String title, String body,
+                                     String tags) {
+        long curatedId = repository.insertManual(submissionId, authorUserId, title, body, tags);
         Thread.ofVirtual().name("curated-embed-" + curatedId).start(() ->
                 embedActiveRow(curatedId, "submission"));
         return curatedId;
@@ -328,6 +333,13 @@ public class CuratedQaService {
         meta.put(MetaKey.SOURCE_TYPE, "curated_qa");
         meta.put(MetaKey.CHUNK_INDEX, 0);
         meta.put(MetaKey.PAGE_OR_SLIDE, 1);
+        // 태그가 있으면 문서 청크와 동일한 키로 실어 RetrievalService.filterByTags가 그대로 판정한다.
+        // 비어 있으면 키 자체를 넣지 않는다 — 그래야 "스코프를 알 수 없는 큐레이션 항목"으로 취급되어
+        // 어떤 태그 선택에서도 탈락하지 않는다(같은 메서드의 큐레이션 면제 분기).
+        String tagsCsv = row.tags();
+        if (tagsCsv != null && !tagsCsv.isBlank()) {
+            meta.put(MetaKey.TAGS, tagsCsv);
+        }
         meta.put(MetaKey.SEARCH_TEXT, searchText); // transient override — stripped before persistence
 
         return new Document(springDocId(row.id()), row.answer(), meta);

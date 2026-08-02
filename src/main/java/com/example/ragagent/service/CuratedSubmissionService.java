@@ -112,7 +112,10 @@ public class CuratedSubmissionService {
         String title = (editedTitle == null || editedTitle.isBlank()) ? row.title() : editedTitle.trim();
         String body  = (editedBody  == null || editedBody.isBlank())  ? row.body()  : editedBody.strip();
 
-        long curatedId = curatedQaService.createFromSubmission(submissionId, row.authorUserId(), title, body);
+        // tags=null: 제안 게시판의 태그 입력은 아직 없다(다음 단계). 태그 없는 큐레이션 항목은
+        // 어떤 태그 스코프에서도 걸러지지 않으므로(RetrievalService의 큐레이션 면제) 그때까지도
+        // 승인된 제안은 정상적으로 검색된다.
+        long curatedId = curatedQaService.createFromSubmission(submissionId, row.authorUserId(), title, body, null);
         if (!repository.markApproved(submissionId, reviewerUserId, title, body, curatedId)) {
             // Lost the CAS — another request approved it first. Undo the row we just created so the
             // submission keeps exactly one curated entry (forceRemove also de-indexes it).

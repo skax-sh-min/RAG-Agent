@@ -273,18 +273,35 @@ public class RetrievalService {
      * its {@code tags} metadata contains every selected tag. Empty selection → pass-through
      * (version-only behavior). Never falls back to unfiltered results on shortfall.
      * Package-private for unit testing.
+     *
+     * <p><b>Curated exemption</b>: this filter runs on the <em>merged</em> pool, which includes the
+     * curated-Q&A axis (§10.10), so an untagged curated entry would be dropped by every tag-scoped
+     * search — that is what used to make liked answers silently vanish the moment a user touched a
+     * tag chip. A curated entry now carries the tags of the question it was promoted from
+     * ({@code CuratedQaService.onLike}) or the ones its submitter chose; when it has none, its scope
+     * is genuinely unknown and it is treated as belonging to all scopes rather than to none.
+     * Document chunks keep the strict behavior — an untagged document is still excluded, since there
+     * the tag selection is precisely a corpus filter.
      */
     List<Document> filterByTags(List<Document> candidates, List<String> selectedTags, int candidateK) {
         if (selectedTags == null || selectedTags.isEmpty()) return candidates;
         int before = candidates.size();
         List<Document> filtered = candidates.stream()
-                .filter(d -> com.example.ragagent.model.TagUtils.matchesAnd(
+                .filter(d -> isScopelessCuratedEntry(d)
+                        || com.example.ragagent.model.TagUtils.matchesAnd(
                         com.example.ragagent.model.TagUtils.parseTagList(d.getMetadata().get(MetaKey.TAGS)),
                         selectedTags))
                 .toList();
         log.debug("[TAG] selectedTags={} candidateK={} postFilter={}/{}",
                 selectedTags, candidateK, filtered.size(), before);
         return filtered;
+    }
+
+    /** A curated-Q&A hit carrying no tags at all — see {@link #filterByTags}'s curated exemption. */
+    private static boolean isScopelessCuratedEntry(Document d) {
+        if (!"curated_qa".equals(d.getMetadata().get(MetaKey.DOC_TYPE))) return false;
+        return com.example.ragagent.model.TagUtils
+                .parseTagList(d.getMetadata().get(MetaKey.TAGS)).isEmpty();
     }
 
     private List<Document> augmentWithDescriptions(List<Document> docs, Map<String, String> descriptions) {

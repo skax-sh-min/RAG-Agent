@@ -42,7 +42,7 @@ public class CuratedQaRepository {
     private static final String COLUMNS =
             "id, source_turn_id, source_user_id, source_thread_id, question, answer, " +
             "status, source_doc_version, created_at, updated_at, embed_status, " +
-            "origin, source_submission_id ";
+            "origin, source_submission_id, tags ";
 
     private final JdbcTemplate jdbc;
 
@@ -64,7 +64,8 @@ public class CuratedQaRepository {
                 rs.getString("updated_at"),
                 rs.getString("embed_status"),
                 rs.getString("origin"),
-                sourceSubmissionId);
+                sourceSubmissionId,
+                rs.getString("tags"));
     };
 
     public CuratedQaRepository(JdbcTemplate jdbc) {
@@ -86,7 +87,8 @@ public class CuratedQaRepository {
                     updated_at            TEXT NOT NULL,
                     embed_status          TEXT NOT NULL DEFAULT 'ok',
                     origin                TEXT NOT NULL DEFAULT 'like',
-                    source_submission_id  INTEGER
+                    source_submission_id  INTEGER,
+                    tags                  TEXT
                 )
             """;
 
@@ -102,6 +104,13 @@ public class CuratedQaRepository {
         }
         if (cols.stream().noneMatch(c -> "origin".equals(c.get("name")))) {
             migrateLegacySchema();
+        }
+        // `tags` shipped one release after `origin`, so a database that already went through the
+        // rebuild above still lacks it — plain ADD COLUMN suffices (nullable TEXT). Re-reads
+        // PRAGMA because migrateLegacySchema() may have just replaced the table.
+        if (jdbc.queryForList("PRAGMA table_info(curated_qa)").stream()
+                .noneMatch(c -> "tags".equals(c.get("name")))) {
+            jdbc.execute("ALTER TABLE curated_qa ADD COLUMN tags TEXT");
         }
         createIndexes();
     }
@@ -127,10 +136,10 @@ public class CuratedQaRepository {
                         INSERT INTO curated_qa_new
                             (id, source_turn_id, source_user_id, source_thread_id, question, answer,
                              status, source_doc_version, created_at, updated_at, embed_status,
-                             origin, source_submission_id)
+                             origin, source_submission_id, tags)
                         SELECT id, source_turn_id, source_user_id, source_thread_id, question, answer,
                                status, source_doc_version, created_at, updated_at, embed_status,
-                               'like', NULL
+                               'like', NULL, NULL
                           FROM curated_qa
                         """);
                 st.executeUpdate("DROP TABLE curated_qa");
@@ -166,12 +175,12 @@ public class CuratedQaRepository {
      * id, so reusing the row keeps re-embedding idempotent). Returns the row id.
      */
     public long upsertActive(long turnId, String userId, String threadId,
-                             String question, String answer, String sourceDocVersion) {
+                             String question, String answer, String sourceDocVersion, String tags) {
         String now = now();
         int updated = jdbc.update(
                 "UPDATE curated_qa SET status='active', question=?, answer=?, " +
-                "source_doc_version=?, updated_at=? WHERE source_turn_id=?",
-                question, answer, sourceDocVersion, now, turnId);
+                "source_doc_version=?, tags=?, updated_at=? WHERE source_turn_id=?",
+                question, answer, sourceDocVersion, tags, now, turnId);
         if (updated > 0) {
             return jdbc.queryForObject(
                     "SELECT id FROM curated_qa WHERE source_turn_id=?", Long.class, turnId);
@@ -181,8 +190,8 @@ public class CuratedQaRepository {
         jdbc.update(connection -> {
             PreparedStatement ps = connection.prepareStatement(
                     "INSERT INTO curated_qa (source_turn_id, source_user_id, source_thread_id, " +
-                    "question, answer, status, source_doc_version, created_at, updated_at) " +
-                    "VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?)",
+                    "question, answer, status, source_doc_version, created_at, updated_at, tags) " +
+                    "VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?, ?)",
                     Statement.RETURN_GENERATED_KEYS);
             ps.setLong(1, turnId);
             ps.setString(2, userId);
@@ -192,6 +201,7 @@ public class CuratedQaRepository {
             ps.setString(6, sourceDocVersion);
             ps.setString(7, now);
             ps.setString(8, now);
+            ps.setString(9, tags);
             return ps;
         }, keyHolder);
         Number key = keyHolder.getKey();
@@ -206,15 +216,16 @@ public class CuratedQaRepository {
      * be approved, so a second row for the same submission can't be created by the normal flow.
      * Returns the new row id.
      */
-    public long insertManual(long submissionId, String authorUserId, String question, String answer) {
+    public long insertManual(long submissionId, String authorUserId, String question, String answer,
+                             String tags) {
         String now = now();
         KeyHolder keyHolder = new GeneratedKeyHolder();
         jdbc.update(connection -> {
             PreparedStatement ps = connection.prepareStatement(
                     "INSERT INTO curated_qa (source_turn_id, source_user_id, source_thread_id, " +
                     "question, answer, status, source_doc_version, created_at, updated_at, " +
-                    "origin, source_submission_id) " +
-                    "VALUES (NULL, ?, '', ?, ?, 'active', NULL, ?, ?, '" + ORIGIN_MANUAL + "', ?)",
+                    "origin, source_submission_id, tags) " +
+                    "VALUES (NULL, ?, '', ?, ?, 'active', NULL, ?, ?, '" + ORIGIN_MANUAL + "', ?, ?)",
                     Statement.RETURN_GENERATED_KEYS);
             ps.setString(1, authorUserId);
             ps.setString(2, question);
@@ -222,6 +233,7 @@ public class CuratedQaRepository {
             ps.setString(4, now);
             ps.setString(5, now);
             ps.setLong(6, submissionId);
+            ps.setString(7, tags);
             return ps;
         }, keyHolder);
         Number key = keyHolder.getKey();
@@ -315,7 +327,7 @@ public class CuratedQaRepository {
     public record CuratedQa(long id, Long sourceTurnId, String sourceUserId, String sourceThreadId,
                             String question, String answer, String status, String sourceDocVersion,
                             String createdAt, String updatedAt, String embedStatus,
-                            String origin, Long sourceSubmissionId) {
+                            String origin, Long sourceSubmissionId, String tags) {
 
         public boolean isManual() { return ORIGIN_MANUAL.equals(origin); }
     }

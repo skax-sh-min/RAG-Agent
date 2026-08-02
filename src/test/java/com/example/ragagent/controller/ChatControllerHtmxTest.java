@@ -204,8 +204,8 @@ class ChatControllerHtmxTest {
         when(threadMetaService.findById(any(), eq("thread-01"))).thenReturn(Optional.of(
                 new ThreadMeta("thread-01", "user", "제목", "latest", "now", "now", "COST_FIRST", "")));
         List<MemoryRepository.Turn> turns = List.of(
-                new MemoryRepository.Turn(1L, "q1", "a1", null, null, 0, 0, 0, "local", 1, "LIKE", "M"),
-                new MemoryRepository.Turn(2L, "q2", "a2", null, null, 0, 0, 0, "local", 1, null, "M"));
+                new MemoryRepository.Turn(1L, "q1", "a1", null, null, 0, 0, 0, "local", 1, "LIKE", "M", null),
+                new MemoryRepository.Turn(2L, "q2", "a2", null, null, 0, 0, 0, "local", 1, null, "M", null));
         when(memoryService.getTurns(any(), eq("thread-01"))).thenReturn(turns);
         when(curatedQaService.findFailedTurnIds(List.of(1L, 2L))).thenReturn(Set.of(1L));
 

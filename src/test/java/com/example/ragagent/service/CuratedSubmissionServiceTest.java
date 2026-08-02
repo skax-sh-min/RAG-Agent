@@ -137,13 +137,13 @@ class CuratedSubmissionServiceTest {
     @DisplayName("approve — 관리자 수정본으로 curated 행을 만들고 제안을 승인 처리한다")
     void approve_usesAdminEdits() {
         when(repository.findById(1L)).thenReturn(Optional.of(submission(1L, "pending")));
-        when(curatedQaService.createFromSubmission(1L, AUTHOR, "고친 제목", "고친 본문")).thenReturn(55L);
+        when(curatedQaService.createFromSubmission(1L, AUTHOR, "고친 제목", "고친 본문", null)).thenReturn(55L);
         when(repository.markApproved(1L, ADMIN, "고친 제목", "고친 본문", 55L)).thenReturn(true);
 
         Optional<Long> result = service.approve(1L, ADMIN, "고친 제목", "고친 본문");
 
         assertThat(result).contains(55L);
-        verify(curatedQaService).createFromSubmission(1L, AUTHOR, "고친 제목", "고친 본문");
+        verify(curatedQaService).createFromSubmission(1L, AUTHOR, "고친 제목", "고친 본문", null);
         verify(auditLogger).log(eq("curated.submission.approve"), eq("submission:1"), any());
     }
 
@@ -151,11 +151,11 @@ class CuratedSubmissionServiceTest {
     @DisplayName("approve — 수정본이 비면 작성자 원문을 그대로 쓴다")
     void approve_fallsBackToOriginalText() {
         when(repository.findById(1L)).thenReturn(Optional.of(submission(1L, "pending")));
-        when(curatedQaService.createFromSubmission(1L, AUTHOR, "원래 제목", "원래 본문")).thenReturn(55L);
+        when(curatedQaService.createFromSubmission(1L, AUTHOR, "원래 제목", "원래 본문", null)).thenReturn(55L);
         when(repository.markApproved(1L, ADMIN, "원래 제목", "원래 본문", 55L)).thenReturn(true);
 
         assertThat(service.approve(1L, ADMIN, null, "  ")).contains(55L);
-        verify(curatedQaService).createFromSubmission(1L, AUTHOR, "원래 제목", "원래 본문");
+        verify(curatedQaService).createFromSubmission(1L, AUTHOR, "원래 제목", "원래 본문", null);
     }
 
     @Test
@@ -166,14 +166,14 @@ class CuratedSubmissionServiceTest {
 
         assertThat(service.approve(1L, ADMIN, null, null)).isEmpty();
         assertThat(service.approve(2L, ADMIN, null, null)).isEmpty();
-        verify(curatedQaService, never()).createFromSubmission(anyLong(), anyString(), anyString(), anyString());
+        verify(curatedQaService, never()).createFromSubmission(anyLong(), anyString(), anyString(), anyString(), any());
     }
 
     @Test
     @DisplayName("approve — 동시 승인으로 CAS에 지면 방금 만든 curated 행을 되돌린다")
     void approve_lostRace_rollsBackCuratedRow() {
         when(repository.findById(1L)).thenReturn(Optional.of(submission(1L, "pending")));
-        when(curatedQaService.createFromSubmission(anyLong(), anyString(), anyString(), anyString()))
+        when(curatedQaService.createFromSubmission(anyLong(), anyString(), anyString(), anyString(), any()))
                 .thenReturn(55L);
         when(repository.markApproved(anyLong(), anyString(), anyString(), anyString(), anyLong()))
                 .thenReturn(false);
