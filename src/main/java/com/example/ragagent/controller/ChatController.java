@@ -210,6 +210,8 @@ public class ChatController {
             model.addAttribute("llmCallCount", resp.llmCallCount());
             model.addAttribute("elapsedSeconds", resp.elapsedSeconds());
             model.addAttribute("premiumUpgraded", resp.premiumUpgraded());
+            model.addAttribute("grounded", resp.grounded());
+            model.addAttribute("evalReason", resp.evalReason());
             model.addAttribute("usedProvider", resp.usedProvider());
         } catch (LlmProviderExhaustedException e) {
             log.warn("LLM providers exhausted: {}", e.getMessage());

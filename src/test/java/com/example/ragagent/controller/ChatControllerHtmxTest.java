@@ -80,7 +80,8 @@ class ChatControllerHtmxTest {
                 List.of(new SourceRef("doc.pdf | v1 | p.3", "snippet preview", "doc_abc", 3)),
                 List.of(),
                 120, 80, 2, 0.42,
-                null, "gemini-flash", 1L);
+                null, "gemini-flash", 1L,
+                true, null);   // 검증 통과 → 사유 없음
     }
 
     @Test

@@ -43,8 +43,15 @@ public class AnswerService {
 
     private static final int MAX_ANSWER_LEN = 20_000;
 
-    /** single evaluation call returns both gates. */
-    private record EvalOutput(boolean sufficient, boolean grounded) {}
+    /** Cap for the evaluator's explanation — see {@link #normalizeReason}. */
+    private static final int MAX_EVAL_REASON_LEN = 200;
+
+    /**
+     * single evaluation call returns both gates, plus one sentence explaining a failure.
+     * {@code reason} is advisory only — it never affects routing or retry decisions, so a model
+     * that returns it empty (or omits it) degrades to today's behavior rather than breaking.
+     */
+    private record EvalOutput(boolean sufficient, boolean grounded, String reason) {}
 
     private final LlmRouter llmRouter;
     private final MessageSource messageSource;
@@ -246,6 +253,14 @@ public class AnswerService {
      * needsRetry is driven by sufficiency (the ANSWER-node gate); grounded is stored for the
      * CRITIC node to consume without a second LLM round-trip. When no docs were retrieved,
      * grounding is trivially true (CRITIC short-circuits on empty docs anyway).
+     *
+     * <p>The same call also returns {@code reason} — one sentence naming what was missing. Without
+     * it a failed verification is only ever observable as a boolean, so neither the user (who sees
+     * a retry, or a 미검증 badge on the final answer) nor an operator reading the log can tell
+     * whether the corpus lacks the content, the question was ambiguous, or the model over-claimed.
+     * Asking for it in the evaluation call that is already being made costs no extra round-trip.
+     * Only stored when a gate actually failed — a passing turn keeps {@code evalReason} null so
+     * downstream code can treat non-null as "this turn has something to explain".
      */
     private AgentState evaluate(AgentState state, String answer, Locale locale) {
         boolean docsPresent = !state.retrievedDocs().isEmpty();
@@ -262,15 +277,37 @@ public class AnswerService {
                     model -> model.call(buildPrompt(systemPrompt, evalPrompt, null)));
             EvalOutput out = evalConverter.convert(result.text() == null ? "" : result.text());
             boolean grounded = !docsPresent || out.grounded();
+            boolean passed = out.sufficient() && grounded;
+            String reason = passed ? null : normalizeReason(out.reason());
+            if (!passed) {
+                log.info("[EVAL] 검증 미통과 thread={} sufficient={} grounded={} reason={}",
+                        state.threadId(), out.sufficient(), grounded, reason);
+            }
             return state.toBuilder()
                     .accumulateTokens(result.inputTokens(), result.outputTokens())
                     .needsRetry(!out.sufficient())
                     .grounded(grounded)
+                    .evalReason(reason)
                     .build();
         } catch (Exception e) {
             log.warn("Evaluation parse failed, treating as sufficient + grounded: {}", e.getMessage());
-            return state.toBuilder().needsRetry(false).grounded(true).build();
+            return state.toBuilder().needsRetry(false).grounded(true).evalReason(null).build();
         }
+    }
+
+    /**
+     * Keeps the model's explanation to one short line. It lands in an SSE payload, a log line and a
+     * tooltip, none of which want a paragraph — and a model that ignores the "one sentence" ask
+     * would otherwise leak the whole chain of thought into all three. Blank → null, so callers can
+     * test one thing ("is there a reason?") instead of two.
+     */
+    private static String normalizeReason(String raw) {
+        if (raw == null) return null;
+        String oneLine = raw.replaceAll("\\s+", " ").strip();
+        if (oneLine.isEmpty()) return null;
+        return oneLine.length() > MAX_EVAL_REASON_LEN
+                ? oneLine.substring(0, MAX_EVAL_REASON_LEN).strip() + "…"
+                : oneLine;
     }
 
     private String answerSystemPrompt(Locale locale) {

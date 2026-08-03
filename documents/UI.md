@@ -473,8 +473,11 @@ stage(classifier) → stage(retrieval) → sources → stage(answer) → token �
 | `stage` | `{"id":"retrieval","text":"관련 문서 검색 중..."}` | 노드 진입 시 배지 교체 |
 | `sources` | `[{"label":"...","preview":"..."}]` JSON 배열 | RETRIEVAL 완료 후 출처 배지 삽입 |
 | `token` | `{"text":"텍스트 조각"}` | ANSWER 스트리밍 토큰 |
-| `done` | 메타데이터 JSON (`usedProvider`, `inputTokens`, `elapsedMs` 등) | 완료 시 마크다운 렌더 |
+| `done` | 메타데이터 JSON (`usedProvider`, `inputTokens`, `elapsedMs`, `grounded`, `evalReason` 등) | 완료 시 마크다운 렌더 |
+| `retry` | `{"reason":"answer\|critic","retryCount":1,"detail":"...","text":"..."}` | 검증 미통과 → 이전 답변을 미검증 블록으로 접고 재시도 안내 |
 | `error` | `{"message":"오류 설명"}` | 오류 버블로 교체 |
+
+> **검증 미통과 사유(`detail` / `evalReason`)**: `AnswerService.evaluate()`의 평가 LLM 호출이 `sufficient`/`grounded`와 함께 `reason`(한 문장)을 돌려주고, 그 값이 `AgentState.evalReason` → `GraphListener.onRetry(reason, retryCount, detail)` → `retry` 이벤트의 `detail`, 그리고 최종 `done` 이벤트의 `evalReason`으로 흐른다. 두 게이트가 모두 통과하면 `null`이라 UI가 알아서 생략한다. 표시 지점은 세 곳 — 재시도 안내 줄 아래("사유: …"), 접힌 미검증 블록의 요약줄, 그리고 재시도를 다 쓰고도 통과하지 못한 최종 답변의 메타데이터 줄(배지 `title` + 경고 한 줄). **툴팁만으로 끝내지 않는 이유**는 모바일에서 hover가 없기 때문이다. 블로킹/REST 경로도 같은 값을 `ChatResponse.grounded`/`eval_reason`으로 내보내고 `fragments/message-assistant.html`이 동일하게 렌더한다.
 
 > **이미지 분석 진행 표시도 `stage` 이벤트를 재사용한다**: RETRIEVAL 중 쿼리 시점 Lazy Vision이 실행되면
 > `{"id":"image_analysis","text":"이미지 분석 중 (2/5)"}`가 여러 번 발행된다 — 새 이벤트 타입을 만들지 않고

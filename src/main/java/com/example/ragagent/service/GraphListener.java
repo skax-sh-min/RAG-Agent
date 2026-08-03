@@ -50,8 +50,12 @@ public interface GraphListener {
      * expanded scope. Lets the streaming client preserve the unverified answer (marked 미검증)
      * and show a retry notice before the fresh attempt re-streams.
      *
-     * @param reason     "answer" (insufficient) or "critic" (ungrounded)
+     * @param reason     which gate failed — "answer" (insufficient) or "critic" (ungrounded)
      * @param retryCount the upcoming attempt's retry number (1-based)
+     * @param detail     the evaluator's one-sentence explanation of <em>why</em> it failed
+     *                   ({@code AgentState.evalReason}), or null when the model returned none.
+     *                   {@code reason} says which gate; this says what was actually missing —
+     *                   the difference between "재시도 중" and "포트 설정 값이 문서에 없음".
      */
-    default void onRetry(String reason, int retryCount) {}
+    default void onRetry(String reason, int retryCount, String detail) {}
 }

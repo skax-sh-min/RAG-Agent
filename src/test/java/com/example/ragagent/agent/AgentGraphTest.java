@@ -207,7 +207,7 @@ class AgentGraphTest {
     }
 
     @Test
-    @DisplayName("runStreaming — ANSWER 불충분 재시도 시 listener.onRetry(\"answer\", 1) 발생")
+    @DisplayName("runStreaming — ANSWER 불충분 재시도 시 listener.onRetry(\"answer\", 1) + 평가 사유 전달")
     void runStreaming_firesOnRetryWhenAnswerInsufficient() {
         when(classifierService.execute(any()))
                 .thenAnswer(inv -> ((AgentState) inv.getArgument(0)).toBuilder().questionType("manual").build());
@@ -215,17 +215,23 @@ class AgentGraphTest {
         when(answerService.executeStreaming(any(), any())).thenAnswer(inv -> {
             AgentState s = inv.getArgument(0);
             answerCalls[0]++;
-            return answerCalls[0] == 1 ? s.toBuilder().needsRetry(true).build() : s.toBuilder().needsRetry(false).build();
+            return answerCalls[0] == 1
+                    ? s.toBuilder().needsRetry(true).evalReason("질문한 포트 설정 값이 문서에 없음").build()
+                    : s.toBuilder().needsRetry(false).build();
         });
 
         List<String> retries = new ArrayList<>();
         GraphListener listener = new GraphListener() {
-            @Override public void onRetry(String reason, int retryCount) { retries.add(reason + ":" + retryCount); }
+            @Override public void onRetry(String reason, int retryCount, String detail) {
+                retries.add(reason + ":" + retryCount + ":" + detail);
+            }
         };
 
         graph.runStreaming(newState(RoutingMode.COST_FIRST), listener);
 
-        assertThat(retries).containsExactly("answer:1");
+        // 평가 LLM 이 준 사유가 그래프를 거쳐 리스너까지 그대로 전달돼야 한다 —
+        // 이게 끊기면 UI 는 "재시도 중"까지만 알고 이유는 영영 보이지 않는다.
+        assertThat(retries).containsExactly("answer:1:질문한 포트 설정 값이 문서에 없음");
     }
 
     @Test
@@ -244,7 +250,9 @@ class AgentGraphTest {
 
         List<String> retries = new ArrayList<>();
         GraphListener listener = new GraphListener() {
-            @Override public void onRetry(String reason, int retryCount) { retries.add(reason + ":" + retryCount); }
+            @Override public void onRetry(String reason, int retryCount, String detail) {
+                retries.add(reason + ":" + retryCount);
+            }
         };
 
         graph.runStreaming(newState(RoutingMode.COST_FIRST), listener);
@@ -262,7 +270,7 @@ class AgentGraphTest {
 
         boolean[] fired = {false};
         GraphListener listener = new GraphListener() {
-            @Override public void onRetry(String reason, int retryCount) { fired[0] = true; }
+            @Override public void onRetry(String reason, int retryCount, String detail) { fired[0] = true; }
         };
 
         graph.runStreaming(newState(RoutingMode.COST_FIRST), listener);

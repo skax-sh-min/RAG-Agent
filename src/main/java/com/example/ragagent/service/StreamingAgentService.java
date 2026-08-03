@@ -323,11 +323,12 @@ public class StreamingAgentService {
         }
 
         @Override
-        public void onRetry(String reason, int retryCount) {
+        public void onRetry(String reason, int retryCount, String detail) {
             lastActivityNanos.set(nanoTimeSource.getAsLong());
             Map<String, Object> payload = new HashMap<>();
             payload.put("reason", reason);
             payload.put("retryCount", retryCount);
+            payload.put("detail", detail);
             payload.put("text", "이 답변이 검증 조건을 통과하지 못해, 검색 범위를 넓혀 다시 시도하고 있습니다… (재시도 "
                     + retryCount + ")");
             sendEvent(emitter, "retry", payload);
@@ -378,6 +379,9 @@ public class StreamingAgentService {
         m.put("premiumUpgraded",   result.premiumUpgraded());
         m.put("questionType",      result.questionType());
         m.put("grounded",          result.grounded());
+        // 재시도를 다 쓰고도 검증을 통과하지 못한 채 전달되는 답변이 있다 — 그 경우 미검증 배지만
+        // 띄우고 이유를 감추면 사용자가 할 수 있는 게 없다. 통과했으면 null 이라 UI가 그냥 생략한다.
+        m.put("evalReason",        result.evalReason());
         m.put("refreshThreadList", true);
         m.put("turnId",            turnId);
         return m;

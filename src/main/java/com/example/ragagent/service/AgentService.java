@@ -102,7 +102,9 @@ public class AgentService {
                 elapsedSeconds,
                 result.premiumUpgraded(),
                 result.usedProvider(),
-                turnId
+                turnId,
+                result.grounded(),
+                result.evalReason()
         );
     }
 
