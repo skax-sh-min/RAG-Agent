@@ -70,6 +70,9 @@ class GuestIdentitySubmissionIsolationTest {
     @Autowired MockMvc mvc;
 
     @MockitoBean CuratedSubmissionService service;
+    // 본문 이미지 업로드 엔드포인트의 협력자 — @WebMvcTest 는 @Service 를 스캔하지 않으므로
+    // 명시하지 않으면 컨트롤러 생성 자체가 실패해 컨텍스트 로드가 깨진다.
+    @MockitoBean com.example.ragagent.service.CuratedImageStore imageStore;
     @MockitoBean ChatModel chatModel;
 
     @TestConfiguration
