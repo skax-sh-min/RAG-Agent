@@ -201,26 +201,9 @@
         </div>
     </div><!-- /row -->
 
-    <!-- ── §10.10 큐레이션 Q&A 관리 (펼칠 때만 조회 — 항상 DB 조회하지 않음) ──── -->
-    <details class="card mt-4" id="curated-qa-card"
-              hx-get="/admin/curated" hx-trigger="toggle[this.open] once"
-              hx-target="#curated-qa-body" hx-swap="innerHTML">
-        <summary class="card-header d-flex align-items-center py-2" style="cursor:pointer; list-style:none;">
-            <i class="bi bi-chat-heart me-2"></i>
-            <span class="fw-semibold small">큐레이션 Q&A</span>
-            <span class="ms-auto small text-muted d-flex align-items-center gap-1">
-                좋아요로 승격된 답변 — 편집 시 재임베딩 — 펼치면 조회
-                <i class="bi bi-chevron-down curated-qa-chevron"></i>
-            </span>
-        </summary>
-        <div id="curated-qa-body">
-            <div class="card-body text-center text-muted py-4 small">
-                <span class="spinner-border spinner-border-sm me-2"></span>불러오는 중...
-            </div>
-        </div>
-    </details>
-
     <!-- ── 청크 추가 게시판 — 사용자 제안 검토 (펼칠 때만 조회) ──────────────── -->
+    <!-- 큐레이션 Q&A 카드보다 위: 이쪽은 관리자의 조치를 기다리는 대기열(검토 대기 배지가 붙는다)이고,
+         아래 큐레이션 카드는 이미 반영된 것을 확인·회수하는 용도라 열어볼 일이 드물다. -->
     <details class="card mt-4" id="submission-card"
               hx-get="/admin/submissions" hx-trigger="toggle[this.open] once"
               hx-target="#submission-body" hx-swap="innerHTML">
@@ -234,6 +217,27 @@
             </span>
         </summary>
         <div id="submission-body">
+            <div class="card-body text-center text-muted py-4 small">
+                <span class="spinner-border spinner-border-sm me-2"></span>불러오는 중...
+            </div>
+        </div>
+    </details>
+
+    <!-- ── §10.10 큐레이션 Q&A 관리 (펼칠 때만 조회 — 항상 DB 조회하지 않음) ──── -->
+    <!-- 페이지 최하단: 위 제안 카드가 조치를 기다리는 대기열인 반면 이쪽은 이미 반영된 것을
+         확인·수정·회수하는 용도라 상시 확인 대상이 아니다. -->
+    <details class="card mt-4" id="curated-qa-card"
+              hx-get="/admin/curated" hx-trigger="toggle[this.open] once"
+              hx-target="#curated-qa-body" hx-swap="innerHTML">
+        <summary class="card-header d-flex align-items-center py-2" style="cursor:pointer; list-style:none;">
+            <i class="bi bi-chat-heart me-2"></i>
+            <span class="fw-semibold small">큐레이션 Q&A</span>
+            <span class="ms-auto small text-muted d-flex align-items-center gap-1">
+                좋아요로 승격된 답변 — 편집 시 재임베딩 — 펼치면 조회
+                <i class="bi bi-chevron-down curated-qa-chevron"></i>
+            </span>
+        </summary>
+        <div id="curated-qa-body">
             <div class="card-body text-center text-muted py-4 small">
                 <span class="spinner-border spinner-border-sm me-2"></span>불러오는 중...
             </div>
@@ -269,6 +273,8 @@
 </div>
 
 <!-- ── §10.10 큐레이션 Q&A 편집 Offcanvas ──────────────────────────────── -->
+<!-- 너비는 청크 편집과 동일하게 openCuratedEdit()이 화면 폭에 따라 다시 지정한다(좁은 화면에서만
+     여기 적힌 기본값이 그대로 쓰인다). -->
 <div class="offcanvas offcanvas-end" tabindex="-1" id="curatedEditOffcanvas" style="width:520px; max-width:100%;">
     <div class="offcanvas-header border-bottom">
         <h6 class="offcanvas-title"><i class="bi bi-chat-heart me-2"></i>큐레이션 Q&A 편집</h6>
@@ -521,12 +527,23 @@ function deleteChunkInline(chunkId, collection, row) {
 
 // ── §10.10 큐레이션 Q&A 편집/삭제 ──────────────────────────────────────────
 
+// 청크 편집(openChunkEdit)과 같은 조건·같은 렌더러를 쓴다: 가용 뷰포트가 EDIT_BASE_WIDTH의 2배
+// 이상일 때만 좌측에 미리보기 컬럼을 띄우고 오프캔버스를 넓힌다. 큐레이션 답변은 검색 근거로
+// 쓰이는 마크다운이라(표·코드블록·이미지 마커 포함) 원문 텍스트만 보고 편집하면 서식이 깨진 걸
+// 알아채기 어렵다 — 청크 편집에서 미리보기를 붙인 것과 같은 이유다.
 function openCuratedEdit(id) {
     fetch('/admin/curated/' + encodeURIComponent(id) + '/detail')
         .then(r => { if (!r.ok) throw new Error(); return r.json(); })
         .then(data => {
+            const offcanvasEl = document.getElementById('curatedEditOffcanvas');
             const body = document.getElementById('curatedEditOffcanvasBody');
-            body.innerHTML = `
+            const isWide = window.innerWidth >= EDIT_BASE_WIDTH * 2;
+            offcanvasEl.style.width = isWide
+                ? Math.max(EDIT_BASE_WIDTH * 2,
+                           Math.min(EDIT_BASE_WIDTH * 2.5, window.innerWidth - 100)) + 'px'
+                : EDIT_BASE_WIDTH + 'px';
+
+            const editFields = `
                 <div>
                     <label class="form-label small fw-semibold">질문</label>
                     <div class="form-control form-control-sm text-muted" style="font-size:0.8rem;">${escHtml(data.question || '')}</div>
@@ -540,7 +557,29 @@ function openCuratedEdit(id) {
                 <button class="btn btn-primary btn-sm" onclick="saveCuratedEdit('${escAttr(id)}')">
                     <i class="bi bi-save me-1"></i>저장
                 </button>`;
-            new bootstrap.Offcanvas(document.getElementById('curatedEditOffcanvas')).show();
+
+            if (isWide) {
+                body.className = 'offcanvas-body d-flex flex-row gap-3';
+                body.innerHTML = `
+                    <div class="chunk-preview-pane flex-grow-1 overflow-auto">
+                        <div class="text-muted small fw-semibold mb-2"><i class="bi bi-eye me-1"></i>미리보기</div>
+                        <div class="md-content" id="curated-preview-content"></div>
+                    </div>
+                    <div class="d-flex flex-column gap-3 overflow-auto"
+                         style="width:${EDIT_FIELDS_WIDTH}px; flex-shrink:0;">${editFields}</div>`;
+                const preview = document.getElementById('curated-preview-content');
+                renderChunkPreview(preview, data.answer);
+                let previewTimer = null;
+                document.getElementById('curated-edit-answer').addEventListener('input', function () {
+                    clearTimeout(previewTimer);
+                    const value = this.value;
+                    previewTimer = setTimeout(() => renderChunkPreview(preview, value), 200);
+                });
+            } else {
+                body.className = 'offcanvas-body d-flex flex-column gap-3';
+                body.innerHTML = editFields;
+            }
+            new bootstrap.Offcanvas(offcanvasEl).show();
         })
         .catch(() => showToast('큐레이션 항목을 불러올 수 없습니다.', 'danger'));
 }
