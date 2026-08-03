@@ -52,6 +52,17 @@ public class ConversationSummarizerService {
      */
     private static final int UNSUMMARIZED_ANSWER_CAP = 300;
 
+    /**
+     * Per-answer cap for a Direct/meta answer kept verbatim in {@link #buildContext}'s
+     * {@code [Recent]} block — see {@link #renderRecentAnswer}. Deliberately far larger than
+     * {@link #UNSUMMARIZED_ANSWER_CAP}: that one packs many turns into a 2,000-char summary, this
+     * one holds the last couple of turns at full fidelity so a follow-up's pronouns
+     * ("그거", "위에서 두 번째") still have something to resolve against. Sized so that
+     * {@code app.summary.recent-raw-turns}=2 actually fits two turns inside the history budget
+     * (LLM_MAX_TOKENS/2, 3,000 chars by default) instead of the first one crowding out the second.
+     */
+    private static final int RECENT_DIRECT_ANSWER_CAP = 1_200;
+
     private final MemoryService memoryService;
     private final LlmRouter llmRouter;
     private final MessageSource messageSource;
@@ -131,9 +142,24 @@ public class ConversationSummarizerService {
         List<MemoryRepository.Turn> turns = dedupeTurns(memoryService.getRecentTurns(userId, threadId));
         if (turns.isEmpty()) return;
 
+        // 요약과 [Recent] 는 서로 겹치지 않게 나눈다: 뒤쪽 recentRawTurns 개는 buildContext() 가
+        // 직접 담당하므로 요약 대상에서 뺀다. 안 빼면 같은 턴이 양쪽에 들어가는데, RAG 턴은 이제
+        // [Recent] 도 '## 요약' 을 쓰므로 문자 그대로 동일한 중복이 된다(3턴 대화 기준 문맥의 약 40%).
+        List<MemoryRepository.Turn> older =
+                turns.subList(0, Math.max(0, turns.size() - recentRawTurns));
+
         try {
-            String summary = summarize(turns, threadId, locale);
-            if (summary == null || summary.isBlank()) return;
+            String summary;
+            if (older.isEmpty()) {
+                // 요약할 이전 턴이 없다 — 실패가 아니라 "최근 창이 곧 대화 전체"인 상태다.
+                // 빈 문자열을 캐시해 buildContext() 가 [Recent] 만으로 문맥을 만들게 한다.
+                // 여기서 캐시를 비워 두면 원본 폴백(getHistory())으로 떨어져, 방금 요약/절단으로
+                // 줄인 답변 전문이 그대로 되돌아온다.
+                summary = "";
+            } else {
+                summary = summarize(older, threadId, locale);
+                if (summary == null || summary.isBlank()) return;
+            }
 
             // Summarizing can take a few seconds (when it goes to the LLM at all); if the user
             // disliked this exact turn meanwhile, the summary may have been built from (and may
@@ -234,6 +260,34 @@ public class ConversationSummarizerService {
         return new SummaryInput(sb.toString().strip(), fullyPreSummarized);
     }
 
+    /**
+     * How a turn's answer is rendered inside {@link #buildContext}'s verbatim {@code [Recent]}
+     * block. The two answer kinds are worth different amounts here:
+     *
+     * <ul>
+     *   <li><b>RAG answer</b> (has a {@code ## 요약} section) → the 요약 only. Its full text is a
+     *       restatement of document chunks that the <em>next</em> turn re-retrieves anyway — every
+     *       turn runs its own search — so feeding the whole thing back duplicates
+     *       {@code [검색된 문서]} at several thousand chars, and does it with the model's own
+     *       unverified prose rather than the source. A 2,700-char answer collapses to ~250.</li>
+     *   <li><b>Direct/meta answer</b> (no such section) → the answer, capped at
+     *       {@link #RECENT_DIRECT_ANSWER_CAP}. There is no retrieval behind it, so this text is the
+     *       only record of what was said; dropping it would lose the exchange entirely. Capping
+     *       bounds the cost without erasing it.</li>
+     * </ul>
+     *
+     * <p>The discriminator is "does the answer carry a {@code ## 요약} heading", not a persisted
+     * direct-mode flag ({@code conversation_turns} has none) — the same proxy
+     * {@link #buildSummaryInput} already relies on, and accurate because
+     * {@code prompt.answer.system} mandates that section while {@code prompt.direct.system} never
+     * asks for it. A RAG answer where the model ignored the format degrades to the capped branch,
+     * which is the safe direction.
+     */
+    private static String renderRecentAnswer(String answer) {
+        String ownSummary = CuratedTextUtils.extractSummarySection(answer);
+        return ownSummary.isBlank() ? capAnswer(answer, RECENT_DIRECT_ANSWER_CAP) : ownSummary;
+    }
+
     private static String capAnswer(String answer, int cap) {
         if (answer == null) return "";
         if (cap <= 0 || answer.length() <= cap) return answer;
@@ -261,11 +315,18 @@ public class ConversationSummarizerService {
         String summary = summaryCache.get(threadId);
         if (summary == null) return null;
 
-        List<MemoryRepository.Turn> turns = memoryService.getRecentTurns(userId, threadId);
+        // dedupeTurns() 필수 — getRecentTurns()의 SQL 에는 feedback 조건이 없다. 이걸 빠뜨리면
+        // 싫어요를 누른 턴이 요약(dedupeTurns 경유)에서는 빠지면서 아래 [Recent] 에는 **원문 그대로**
+        // 들어간다. UI 가 "다음 대화 컨텍스트에서 제외"라고 약속한 것의 정반대이고, 원본 폴백
+        // 경로(getHistory() 의 WHERE feedback <> 'DISLIKE')와도 어긋난다. 게다가 RAG 답변은
+        // 2~3천 자라 그 한 건이 아래 문자 예산을 통째로 먹고 정상 턴을 밀어낸다.
+        List<MemoryRepository.Turn> turns = dedupeTurns(memoryService.getRecentTurns(userId, threadId));
         if (turns.isEmpty()) return null;
 
         int budget = memoryService.maxConversationChars();
-        String summaryBlock = "[Conversation Summary]\n" + summary;
+        // 빈 요약 = 요약할 이전 턴이 없음(precompute 참고). 헤더만 남기면 LLM 에게 빈 섹션을
+        // 보여주는 꼴이라 통째로 생략한다.
+        String summaryBlock = summary.isEmpty() ? "" : "[Conversation Summary]\n" + summary;
 
         List<MemoryRepository.Turn> recent =
                 turns.subList(Math.max(0, turns.size() - recentRawTurns), turns.size());
@@ -277,7 +338,7 @@ public class ConversationSummarizerService {
         StringBuilder recentSb = new StringBuilder();
         for (int i = recent.size() - 1; i >= 0; i--) {
             MemoryRepository.Turn t = recent.get(i);
-            String entry = "Q: " + t.question() + "\nA: " + t.answer() + "\n\n";
+            String entry = "Q: " + t.question() + "\nA: " + renderRecentAnswer(t.answer()) + "\n\n";
             if (used + entry.length() > budget) break;
             recentSb.insert(0, entry);
             used += entry.length();
@@ -286,6 +347,10 @@ public class ConversationSummarizerService {
         StringBuilder sb = new StringBuilder(summaryBlock);
         if (recentSb.length() > 0) sb.append(recentHeader).append(recentSb);
         String result = sb.toString().strip();
+
+        // 요약도 비고 예산에 들어간 최근 턴도 없으면 줄 게 없다 — null 을 돌려 호출자가 원본
+        // 폴백을 쓰게 한다(빈 문자열을 주면 "이력 없음"으로 확정돼 폴백 기회가 사라진다).
+        if (result.isBlank()) return null;
 
         // Hard-cap guard: only reachable when the summary alone already exceeds the budget
         // (e.g. a very small LLM_MAX_TOKENS). Truncate so the invariant "never exceeds budget" holds.
@@ -302,6 +367,11 @@ public class ConversationSummarizerService {
     // resent questions), and honors the same DISLIKE hard-exclusion getHistory() applies (§6.9).
     // Returns turns (not rendered text) so buildSummaryInput() can decide per answer whether it
     // already carries its own "## 요약" section. Package-private for unit testing.
+    //
+    // **Every consumer of getRecentTurns() in this class must go through here.** That method's SQL
+    // deliberately has no feedback filter (other callers want the raw rows), so this is the only
+    // place the DISLIKE exclusion is applied on the summary path — both for the summary itself and
+    // for buildContext()'s verbatim [Recent] block.
     List<MemoryRepository.Turn> dedupeTurns(List<MemoryRepository.Turn> turns) {
         Map<String, MemoryRepository.Turn> byNormalizedQuestion = new LinkedHashMap<>();
         for (MemoryRepository.Turn t : turns) {

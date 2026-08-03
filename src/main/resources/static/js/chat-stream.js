@@ -235,8 +235,7 @@
             `<div class="d-flex align-items-center gap-1">` +
                 `<i class="bi bi-arrow-repeat"></i>` +
                 `<span>${escHtml(data.text || '검증 미통과 — 검색 범위를 넓혀 재시도 중...')}</span>` +
-            `</div>` +
-            (data.detail ? `<div class="ms-4">사유: ${escHtml(data.detail)}</div>` : '');
+            `</div>`;
 
         // Clear the live area for the fresh attempt.
         contentEl.textContent = '';
