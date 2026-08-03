@@ -358,6 +358,19 @@ public class CuratedQaRepository {
         return List.copyOf(out);
     }
 
+    /**
+     * Answers of active rows that still reference a 지식 제안 본문 이미지 — the curated half of
+     * {@code CuratedImageStore}'s reference check (an approved submission's text lives here, not
+     * only on the submission row). The {@code LIKE} is a pre-filter; the caller re-scans with the
+     * real path pattern.
+     */
+    public List<String> activeAnswersWithImages() {
+        return jdbc.queryForList(
+                "SELECT answer FROM curated_qa WHERE status = 'active' " +
+                "AND answer LIKE '%images/submissions/%'",
+                String.class);
+    }
+
     private static String now() {
         return LocalDateTime.now().format(DT_FMT);
     }

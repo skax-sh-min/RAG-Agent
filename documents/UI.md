@@ -23,11 +23,13 @@
 ```
 src/main/resources/
 ├── templates/
-│   ├── layout/base.html                   # navbar, dark mode toggle, scripts
+│   ├── layout/base.html                   # navbar, dark mode toggle, scripts, showToast(),
+│   │                                      #   renderMarkdownWithImageMarkers() — [이미지: …] 마커를
+│   │                                      #   <img>로 치환해 marked→DOMPurify 렌더하는 전역 유틸(§3.5-bis)
 │   ├── chat.html                          # 채팅 페이지 (이전 turn 서버 렌더 포함)
 │   ├── documents.html                     # 문서 관리 페이지
 │   ├── admin.html                         # 벡터 스토어 관리 (청크 브라우저 + 큐레이션 Q&A + 청크 추가 제안)
-│   ├── curated-submissions.html           # 청크 추가 게시판 (등록 폼 + "내 제안" 목록)
+│   ├── curated-submissions.html           # 청크 추가 게시판 (등록 폼 + 이미지 업로드 + "내 제안" 목록)
 │   ├── llm-usage.html                     # LLM 사용량 통계 페이지
 │   ├── settings.html                      # LLM/RAG 설정 조회·핫 수정 페이지
 │   └── fragments/
@@ -135,7 +137,7 @@ REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — �
 | GET | `/admin/submissions` | `fragments/admin-submissions :: panel` | 청크 추가 제안 검토 패널 지연 로딩. `status`(기본 `pending`, `all`=전체)·`offset`·`limit` 파라미터. 큐레이션 패널과 동일한 `<details>` + `toggle once` 패턴 |
 | GET | `/admin/submissions/pending-count` | JSON `{"count":N}` | 검토 대기 건수 — 헤더 배지·카드 pill이 60초마다 폴링. **`/api/v1/**`이 아니라 `/admin/**` 아래**에 둔 이유는 아래 참고 |
 | GET | `/admin/submissions/{id}/detail` | JSON | 제안 전문(제목·본문·태그·작성자·상태·예상 청크 수) — 검토 오프캔버스 채우기용 |
-| POST | `/admin/submissions/{id}/approve` | `200 {"curatedId":N}` / `409` | 임베딩 실행. body의 `title`/`body`/`tags`는 관리자 수정본(생략 시 작성자 원문 유지). 이미 처리된 제안이면 409 |
+| POST | `/admin/submissions/{id}/approve` | `200 {"curatedId":N}` / `400` / `409` | 임베딩 실행. body의 `title`/`body`/`tags`는 관리자 수정본(생략 시 작성자 원문 유지). 이미 처리된 제안이면 409, 이미지 개수 상한 초과면 400(메시지 포함 — UI가 서버 문구를 그대로 토스트로 띄운다). **본문에 이미지가 있으면 이 요청이 이미지 수만큼의 Vision 호출을 동기로 기다린다**(설명이 임베딩되는 텍스트의 일부여야 해서 배경으로 미룰 수 없다) — 그동안 `임베딩 실행` 버튼은 잠기고 스피너로 바뀐다 |
 | POST | `/admin/submissions/{id}/reject` | `200` / `409` | 거부 — body의 `reason` 필수(작성자에게 전문 노출) |
 
 > 상태 카드는 `AdminService.vectorStoreView()` → `VectorStoreAdminView`. 백엔드별 표시 차이는 [OPERATOR_MANUAL.md §7.4](OPERATOR_MANUAL.md) 참고.
@@ -200,14 +202,18 @@ REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — �
 | GET | `/curated/submissions` | `curated-submissions.html` | 등록 폼 + "내 제안" 목록. **페이지를 여는 것 자체가 읽음 처리**(`markAllReadForAuthor`)라 헤더 배지가 사라진다 |
 | POST | `/curated/submissions` | redirect + flash | 등록(`title`/`body`/`tags`). HTMX가 아니라 **평범한 폼 POST + 플래시 리다이렉트** — HTML 폼이므로 검증 실패가 `GlobalExceptionHandler`의 JSON으로 나가면 안 된다. 실패 시 입력 초안(`draftTitle`/`draftBody`/`draftTags`)을 되돌려준다 |
 | POST | `/curated/submissions/{id}/withdraw` | redirect + flash | 작성자 본인의 `pending` 제안 철회 |
+| POST | `/curated/submissions/images` | JSON `{"path","marker"}` / `400` / `422` | 본문 이미지 업로드(multipart `file`). 위 등록 POST와 달리 **진짜 API 호출**(폼 JS의 `fetch`)이라 오류를 JSON으로 돌려주는 것이 맞다 — 크기/빈 파일은 `GlobalExceptionHandler` 경유 400, 확장자·매직바이트 불일치는 422 |
 | GET | `/curated/submissions/unread-count` | JSON `{"count":N}` | 헤더 배지 폴링(60초) — 처리됐지만 아직 확인하지 않은 내 제안 수. **읽음 처리는 하지 않는다**(폴링이 지우면 보기도 전에 사라짐) |
 
 **폼 구성**(`curated-submissions.html`):
 
 - **제목** — `curated_qa.question` 컬럼에 그대로 저장되어 임베딩 입력의 앞부분이 된다. 질문형 제목일수록 검색이 잘 걸린다.
 - **태그**(선택) — 자유 입력 + 아래 **기존 태그** 칩 클릭 추가. `documents.html` 업로드 태그와 동일한 패턴이며, 목록은 `GET /api/v1/tags?includeCurated=true`로 **문서 태그 ∪ 큐레이션 태그**를 받는다 — 큐레이션 항목은 `chunk_fts`에 색인되지 않아(벡터 축 전용) 합집합이 아니면 제안에서만 쓴 태그가 다음 사람에게 안 보이고 표기가 갈린다. 비워 두면 모든 태그 스코프에서 검색된다(§4 "큐레이션 태그 스코프" 참고).
-- **본문** — **길이 제한 없음**. 오른쪽 위 **작성/미리보기** 탭으로 전환하며, 미리보기는 `marked` → `DOMPurify.sanitize()`(관리자 검토 화면과 동일 파이프라인). 입력창 아래에 글자 수와 **예상 청크 수**(`chunkSize`로 나눈 클라이언트 추정치 — 정확한 값은 소제목 위치에 따라 달라지므로 관리자 검토 화면이 서버 계산으로 보여준다)가 표시된다.
+- **본문** — **길이 제한 없음**. 오른쪽 위 **작성/미리보기** 탭으로 전환하며, 미리보기는 `renderMarkdownWithImageMarkers()` → `marked` → `DOMPurify.sanitize()`(관리자 검토 화면과 동일 파이프라인). 입력창 아래에 글자 수와 **예상 청크 수**(`chunkSize`로 나눈 클라이언트 추정치 — 정확한 값은 소제목 위치에 따라 달라지므로 관리자 검토 화면이 서버 계산으로 보여준다)가 표시된다.
+- **이미지 추가** — 본문 라벨 옆 버튼. 파일을 고르면 즉시 `POST /curated/submissions/images`로 올라가고, 응답의 `[이미지: images/submissions/{해시}.png]` 마커가 **textarea의 커서 위치**에 삽입된다(앞뒤 빈 줄 포함, 삽입 후 `input` 이벤트를 발생시켜 글자 수·예상 청크 수를 갱신). **마커의 위치가 곧 이미지의 위치**이므로 그 뒤의 이동·복사·삭제는 전부 평범한 텍스트 편집이고, 승인 시 본문이 청크로 나뉠 때 이미지가 자기가 설명하는 문단을 따라간다. png·jpg·gif·webp / 파일당 5MB / 본문당 10장. CSRF 토큰은 폼의 히든 인풋에서 읽어 `FormData`에 실으므로 세 인증 모드에서 분기가 필요 없다(no-auth에서는 값이 비어 생략).
 - **내 제안 목록** — 상태 뱃지(검토 대기/등록 완료/반려/철회함/회수됨), 반려 사유 **전문**, 임베딩 실패 경고, 태그 뱃지, 등록된 청크 수. 상태는 전부/전무로 파생된다(청크가 하나라도 살아 있으면 등록 완료).
+
+> **이미지 마커 렌더링은 전역 1벌**(`layout/base.html`의 `renderMarkdownWithImageMarkers()`) — `/admin` 청크 뷰(`renderChunkPreview()`)·제안 작성 미리보기·관리자 검토 미리보기가 모두 같은 본문 형식을 그린다. `CHUNK_IMAGE_MARKER`/`PREVIEWABLE_IMAGE_EXT`는 이제 전역 상수이므로 **페이지 스크립트에서 다시 선언하면 안 된다**(최상위 `const` 중복 = 그 페이지 스크립트 전체가 죽는 `SyntaxError`).
 
 ---
 
@@ -401,7 +407,9 @@ PROGRESSIVE 업그레이드 시 `🔝 고추론 재분석 → {premiumProvider}`
 [청크 추가 제안 카드] <details id="submission-card"> 첫 펼침 → hx-trigger="toggle[this.open] once"
               → GET /admin/submissions (기본 status=pending) → #submission-body 삽입
 [제안 검토/승인]  행 아이콘 → openSubmissionReview(id) → GET /admin/submissions/{id}/detail
-              → 오프캔버스 렌더(원문/미리보기 탭, DOMPurify) → 임베딩 실행/거부
+              → 오프캔버스 렌더(원문/미리보기 탭 — 미리보기는 renderMarkdownWithImageMarkers()라
+                본문 이미지가 실제 그림으로 보인다. 승인은 그 그림까지 검색에 넣는 허가다)
+              → 임베딩 실행 시 버튼 잠금 + 스피너(이미지가 있으면 Vision 호출을 기다린다)
               → POST /admin/submissions/{id}/approve|reject → loadSubmissions()로 목록 재조회
 [헤더 알림 배지]  setInterval 60초 → GET /curated/submissions/unread-count (전체 사용자)
               + GET /admin/submissions/pending-count (isAdmin 일 때만 엘리먼트가 존재 → 폴링도 그때만)
@@ -472,7 +480,7 @@ stage(classifier) → stage(retrieval) → sources → stage(answer) → token �
 | `service/StreamingAgentService.java` | SSE 파이프라인 오케스트레이터; `AgentGraph.runStreaming()` 호출; 턴 시작/종료에 `ChatImageAnalysisSkipRegistry.begin()`/`end()` |
 | `service/GraphListener.java` | 노드/토큰/출처 이벤트 hook 인터페이스 (`NOOP` 상수로 동기 경로 오버헤드 0); `onImageAnalysisProgress(done, total)` — 쿼리 시점 Lazy Vision 진행 |
 | `agent/AgentGraph.java` | `runStreaming(state, listener)` 메서드 — `AnswerService.executeStreaming()` 호출 |
-| `service/RetrievalService.java` | `execute(state, listener)` — `LazyVisionService.describeIfNeeded()`에 진행 콜백 + 건너뛰기 신호(`BooleanSupplier`) 전달; 이미 설명이 임베드된 이미지는 애초에 제외 |
+| `service/RetrievalService.java` | `execute(state, listener)` — `LazyVisionService.describeIfNeeded()`에 진행 콜백 + 건너뛰기 신호(`BooleanSupplier`) 전달; 이미 설명이 임베드된 이미지는 애초에 제외(`hasEmbeddedDescription()` — 줄바꿈 형태와 **표 셀의 `<br>` 형태를 모두** 인식한다. 표 안에서는 개행이 행을 깨뜨려 두 주입 지점(`MarkdownCorrectionService`·`CuratedImageStore`)이 `<br>`를 쓰기 때문이며, 이걸 놓치면 표에 들어간 이미지는 매 턴 캐시 미스로 잡혀 같은 설명이 한 번 더 덧붙는다) |
 | `service/LazyVisionService.java` | 쿼리 시점 이미지 설명 캐시 조회 + 미스만 Vision 호출; `describeIfNeeded(paths, onProgress, skipRequested)` — 건너뛰기 시 대기만 중단, 이미 제출된 백그라운드 작업은 계속 진행돼 캐시에 저장됨 |
 | `service/ChatImageAnalysisSkipRegistry.java` | threadId별 건너뛰기 플래그(`ConcurrentHashMap<String, AtomicBoolean>`) — `ChatController`의 `/ui/chat/stream/skip-images`가 설정, `RetrievalService`가 폴링 |
 | `service/AnswerService.java` | `executeStreaming(state, listener)` — `ChatClient.stream()` Flux 구독 → `listener.onToken()` |

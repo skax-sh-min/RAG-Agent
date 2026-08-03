@@ -145,7 +145,7 @@ container system stop
 
 | 변수 | 기본값 | 설명 |
 |------|--------|------|
-| `IMAGE_DESCRIPTION_ENABLED` | `true` | `LazyVisionService` on/off (`app.image-description.enabled`). `@ConditionalOnProperty` 빈 게이트라 **재기동 필요**. `false`면 이미지 마커만 저장하고 검색 시 Vision 호출 없음 |
+| `IMAGE_DESCRIPTION_ENABLED` | `true` | `LazyVisionService` on/off (`app.image-description.enabled`). `@ConditionalOnProperty` 빈 게이트라 **재기동 필요**. `false`면 이미지 마커만 저장하고 검색 시 Vision 호출 없음. 지식 제안 본문 이미지의 승인 시점 설명 생성도 같은 스위치가 막는다 — 꺼두면 이미지는 표시만 되고 검색에는 기여하지 않음 |
 | `IMAGE_OCR_ENABLED` | `true` | 스캔 PDF 페이지의 Tesseract OCR (`OcrService`, 동일한 구조적 빈 게이트) |
 | `IMAGE_OCR_TESSDATA_PATH` | (빈 값) | Tesseract `tessdata` 디렉터리 절대경로. 비우면 `TESSDATA_PREFIX` 환경변수 → 시스템 기본 경로 순으로 탐색 |
 | `IMAGE_CLASSIFY_TYPE` | `true` | 설명 생성 전 이미지 유형(다이어그램/스크린샷/차트/사진) 분류 후 유형별 Vision 프롬프트 선택 |
@@ -243,7 +243,7 @@ rag_java/
     │   │   ├── DocumentController.java         # REST /api/v1/documents, /api/v1/images; 비동기 업로드 (202+taskId)
     │   │   ├── OperationsController.java       # REST GET /api/v1/health, /api/v1/llm/usage; HTMX 스레드 목록 + LLM 카드
     │   │   ├── AdminController.java            # /admin, /admin/chunks; 문서 재인덱스; 큐레이션 Q&A + 청크 추가 제안 검토
-    │   │   ├── CuratedSubmissionController.java # /curated/submissions — 청크 추가 게시판(등록·철회·미확인 배지)
+    │   │   ├── CuratedSubmissionController.java # /curated/submissions — 청크 추가 게시판(등록·철회·본문 이미지 업로드·미확인 배지)
     │   │   ├── SettingsController.java         # /settings 조회 + /admin/settings/update|reset
     │   │   ├── AuthController.java             # /login, /signup, /setup 페이지 컨트롤러; 회원가입 후 자동 로그인
     │   │   ├── GlobalExceptionHandler.java     # RFC 9457 ProblemDetail; 400/413 처리
@@ -268,7 +268,7 @@ rag_java/
     │   │   ├── MetaKey.java               # 벡터 스토어 메타데이터 키 상수
     │   │   └── ChatRequest/Response/SourceRef/DocumentInfo/SyncResult/ThreadMeta/ChatForm/LlmProviderReport/IndexingProgressEvent.java
     │   ├── security/
-    │   │   ├── FileTypeDetector.java      # 매직바이트 검증 (PDF, DOCX/PPTX, TXT/MD)
+    │   │   ├── FileTypeDetector.java      # 매직바이트 검증 (PDF, DOCX/PPTX, TXT/MD, PNG/JPG/GIF/WebP)
     │   │   └── PromptInjectionGuard.java  # 입력 검증 + API 키 마스킹
     │   ├── repository/
     │   │   ├── MemoryRepository.java              # 대화 메모리 추상 인터페이스 (getTurns 포함)
@@ -292,6 +292,7 @@ rag_java/
     │       ├── AdminService.java              # Admin UI 데이터 (청크 조회/편집 + 벡터 스토어 상태) — chroma·sqlite-vec
     │       ├── CuratedQaService.java          # 큐레이션 Q&A 축: 좋아요 승격 + 관리자 승인 제안, 임베딩/de-index
     │       ├── CuratedSubmissionService.java  # 청크 추가 게시판: 입력 검증+태그, 승인 시 분할(1:N), 거부, 알림 카운트
+    │       ├── CuratedImageStore.java         # 제안 본문 이미지: 업로드(허용목록/크기/매직바이트/내용해시 파일명), [이미지: …] 마커 관리, 승인 시 Vision 설명 주입, 참조 세기 정리 + 기동 시 고아 스윕
     │       ├── SettingsService.java           # 런타임 설정 오버라이드 레이어(AppProperties.OverrideSource) + /settings 조회/검증/감사
     │       ├── IndexingProgressService.java   # 비동기 업로드/동기화 SSE 진행 이벤트 관리
     │       ├── MarkdownCorrectionService.java # LLM 마크다운 출력 후처리
@@ -380,6 +381,7 @@ rag_java/
 - **응답 길이 모드 (S/M/L)** — 메시지별 토글로 답변 분량을 조절. 각 모드의 목표치는 `LLM_MAX_TOKENS` 비율(15%/40%/70%)과 고정 글자수 하한(2,000/5,000/10,000자) 중 큰 값이라, 설정값이 작아도 S와 M이 뚜렷이 구분됨. 이 값은 블로킹 호출의 `maxTokens`로도, 프롬프트의 "약 N자" 스타일 지시문으로도 그대로 재사용됨 — 스트리밍 응답은 설계상 호출당 토큰 상한이 없어 지시문이 유일한 조절 수단. `L`(원문 최대)은 검색 컨텍스트가 있을 때만 의미가 있어 Direct 모드에서는 비활성화됨
 - **좋아요 기반 큐레이션 Q&A (§10.10)** — 답변에 좋아요를 누르면 별도로 임베딩되어(예약 벡터스토어 버전 네임스페이스, 문서 재인덱싱에도 보존) 이후 검색에 가중 RRF 축으로 융합됨(`SEARCH_CURATED_QA_ENABLED`/`SEARCH_CURATED_QA_WEIGHT`, `/settings`에서 핫 수정 가능). 정답을 그대로 반환하지 않고 근거로만 주입해 LLM이 현재 문서와 대조함. 좋아요를 누른 본인은 채팅 버블에서 바로 수정(자동 재임베딩) 가능하고, 관리자는 `/admin` 카드에서 전체 사용자의 큐레이션 항목을 편집·강제 삭제(좋아요 여부와 무관)할 수 있음. **L모드** 답변은 좋아요를 눌러도 임베딩되지 않음 — 이미 인덱싱된 원본 문서 내용과 사실상 동일해 재임베딩이 불필요하기 때문(좋아요 자체는 정상 기록됨). 승격된 답변은 **질문 당시의 검색 스코프(태그)를 승계**해(turn 단위로 저장) 태그를 좁힌 검색에서도 살아남고, 스코프를 알 수 없는 항목은 어느 스코프에도 속하지 않는 대신 **모든 스코프에 속한 것으로** 취급된다 — 이 처리가 없던 때는 태그 칩을 하나라도 켜면 큐레이션 항목이 전부 결과에서 사라졌다
 - **청크 추가 게시판 (사용자 제안 → 관리자 임베딩)** — 사용자가 `/curated/submissions`에서 제목+본문으로 지식을 등록하면, 관리자가 `/admin` 전용 카드에서 검토해 **임베딩 실행**하거나 **사유를 적어 거부**한다. 승인된 제안은 좋아요 큐레이션 Q&A와 같은 검색 축으로 들어가므로 `SEARCH_CURATED_QA_*` 설정이 그대로 적용되고, 게시판 자체는 별도 테이블이라 `curated_qa.status='active'`가 "지금 검색에 기여 중"이라는 의미를 그대로 유지한다. **관리자 승인이 사용자 작성 텍스트와 답변 프롬프트의 `[검색된 문서]` 블록 사이의 유일한 관문**이라, 검토 화면은 항상 본문 전문을 보여주고 일괄·자동 승인 경로는 의도적으로 만들지 않았다. 알림은 양방향 60초 헤더 배지 폴링 — 관리자에게는 검토 대기 건수(로그인 직후 첫 폴링에 바로 표시), 작성자에게는 처리 결과("내 제안"을 열면 읽음 처리). **본문 길이 제한은 없다**: 승인 시 본문이 `ChunkSplitter`를 그대로 통과해 N개 큐레이션 행으로 등록되므로(문서 인덱싱과 같은 기계라 `CHUNK_SPLIT_GRANULAR`·표/코드 블록 보호까지 적용) "너무 길어 임베딩 불가"라는 실패 모드가 입력을 거부하는 대신 구조적으로 사라진다. 상태는 **전부/전무** — 청크가 하나라도 살아 있으면 등록 완료, 전부 내려가면 회수됨이며 청크 하나를 지우면 제안 전체가 함께 내려간다(반쪽 등록 상태가 생기지 않음). 본문은 마크다운으로 작성·미리보기하고(등록 폼·관리자 검토 화면 모두 DOMPurify 경유), 태그를 달면 그 태그를 고른 검색에만 반영되며 태그가 없으면 모든 스코프에서 검색된다. [OPERATOR_MANUAL.md §6.9](documents/OPERATOR_MANUAL.md#69-청크-추가-게시판-사용자-제안--관리자-임베딩) 참고
+- **지식 제안 본문 이미지 (마커 자리 = 이미지 자리)** — 폼의 **이미지 추가** 버튼이 파일을 즉시 업로드하고 `[이미지: images/submissions/{해시}.png]` 마커를 **커서 위치에** 끼워 넣는다. **마커의 위치가 곧 이미지의 위치**이므로 그 뒤의 이동·복사·삭제는 전부 평범한 텍스트 편집이고, 승인 시 본문이 청크로 나뉠 때 이미지가 자기가 설명하는 문단을 따라간다. 표준 마크다운 대신 **문서 파이프라인이 이미 쓰는 마커를 재사용**한 덕분에 하위 경로가 그대로 동작한다 — `/api/v1/images/**`가 이미 서빙하고, `RetrievalService`가 이미 `image_paths` 메타데이터를 답변 썸네일로 바꾸므로 큐레이션 청크도 문서 청크와 똑같이 썸네일이 붙는다. 승인 시 **분할하기 전에**(마커와 설명이 다른 청크로 갈라지지 않도록) `LazyVisionService`로 이미지마다 설명을 만들어 `[이미지 설명: ...]`을 본문에 주입하는데, 이것이 그림의 *내용*까지 검색되게 하는 핵심이다(설명은 공용 캐시에도 남아 질의 시점에 재분석되지 않는다). 승인 요청은 그 Vision 호출을 동기로 기다리며 그동안 관리자 버튼은 잠기고 스피너로 바뀐다. 게시판이 모든 인증 모드에서 게스트에게 열려 있어 여기가 **미인증 사용자가 디스크에 바이너리를 쓰는 유일한 지점**이라 확장자 허용목록 → 5MB → 매직바이트 → 내용 해시 파일명(클라이언트가 경로의 어느 조각도 정하지 못함)의 4겹 검증을 거치고, 본문당 10장으로 제한된다. 파일명이 내용 해시라 두 제안이 같은 파일을 공유할 수 있으므로 삭제는 소유권이 아니라 **참조 세기** 방식이다 — 반려·철회 시 정리 + 등록되지 않은 초안 이미지는 기동 시 스윕
 - **ReAct 재검색** — 증거 부족 시 최대 2회 자동 재검색
 - **Critic 검증** — 생성된 답변이 문서에 근거하는지 LLM이 이중 검증
 - **PROGRESSIVE 모드** — COST_FIRST로 시작 → 품질 임계값 미달 시 PREMIUM 프로바이더로 재실행 + 업그레이드 배지 표시
@@ -417,6 +419,7 @@ rag_java/
 | `GET` | `/chat/{threadId}` | 기존 스레드 채팅 화면 (이전 메시지 버블 복원) |
 | `GET` | `/documents` | 문서 관리 화면 |
 | `GET/POST` | `/curated/submissions` | 지식 제안 게시판 — 청크 직접 등록 + 처리 결과 확인 |
+| `POST` | `/curated/submissions/images` | 제안 본문 이미지 업로드 → 커서 위치에 끼워 넣을 `[이미지: …]` 마커 반환 |
 | `GET` | `/llm-usage` | LLM 사용량 통계 페이지 |
 
 ### REST API

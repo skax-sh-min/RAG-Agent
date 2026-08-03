@@ -1,12 +1,19 @@
 package com.example.ragagent.controller;
 
+import com.example.ragagent.exception.UnsupportedFileTypeException;
 import com.example.ragagent.security.CurrentUser;
+import com.example.ragagent.service.CuratedImageStore;
 import com.example.ragagent.service.CuratedSubmissionService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 
+import java.io.IOException;
 import java.util.Map;
 
 /**
@@ -22,13 +29,19 @@ import java.util.Map;
 @RequestMapping("/curated/submissions")
 public class CuratedSubmissionController {
 
+    private static final Logger log = LoggerFactory.getLogger(CuratedSubmissionController.class);
+
     private static final int PAGE_SIZE = 20;
 
     private final CuratedSubmissionService service;
+    private final CuratedImageStore imageStore;
     private final CurrentUser currentUser;
 
-    public CuratedSubmissionController(CuratedSubmissionService service, CurrentUser currentUser) {
+    public CuratedSubmissionController(CuratedSubmissionService service,
+                                       CuratedImageStore imageStore,
+                                       CurrentUser currentUser) {
         this.service = service;
+        this.imageStore = imageStore;
         this.currentUser = currentUser;
     }
 
@@ -73,6 +86,28 @@ public class CuratedSubmissionController {
             flash.addFlashAttribute("draftTags", tags);
         }
         return "redirect:/curated/submissions";
+    }
+
+    /**
+     * 본문 이미지 업로드. Unlike {@link #submit} this <em>is</em> an API call (the form's JS posts
+     * it and splices the returned marker into the textarea at the caret), so a JSON error body is
+     * the right shape and {@code IllegalArgumentException} is left to
+     * {@code GlobalExceptionHandler} → 400.
+     *
+     * <p>Uploading is deliberately eager — it happens while the author is still typing, before any
+     * submission row exists — so that 미리보기 can show the real picture. The cost is drafts that
+     * are never posted; {@code CuratedImageStore.sweepOrphans} collects those.
+     */
+    @PostMapping("/images")
+    @ResponseBody
+    public ResponseEntity<Map<String, String>> uploadImage(@RequestParam MultipartFile file) throws IOException {
+        try {
+            String path = imageStore.store(file);
+            return ResponseEntity.ok(Map.of("path", path, "marker", "[이미지: " + path + "]"));
+        } catch (UnsupportedFileTypeException e) {
+            log.warn("[SUBMISSION] 이미지 업로드 거부 user={}: {}", currentUser.userId(), e.getMessage());
+            return ResponseEntity.unprocessableEntity().body(Map.of("message", e.getMessage()));
+        }
     }
 
     @PostMapping("/{id}/withdraw")

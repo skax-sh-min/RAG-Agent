@@ -376,28 +376,11 @@ const EDIT_BASE_WIDTH = 520;
 const EDIT_FIELDS_WIDTH = 500;
 
 // 청크 원문의 이미지 참조는 표준 마크다운이 아니라 [이미지: images/{id}/{file}] 커스텀 마커
-// (DocumentIndexer.IMAGE_MARKER와 동일한 형태) — marked가 인식하지 못하므로 파싱 전에 <img>로 바꾼다.
-const CHUNK_IMAGE_MARKER = /\[이미지(?:\(([^)]*)\))?: ([^\]]+?)\]/g;
-// /api/v1/images/** 가 inline(image/*)으로 내려주는 확장자. 그 외(SVG·EMF/WMF, 변환불가 마커)는
-// 강제 다운로드되므로 <img>로 만들면 깨진 아이콘만 남는다 → 텍스트 placeholder로 대체.
-const PREVIEWABLE_IMAGE_EXT = ['png', 'jpg', 'jpeg', 'gif', 'webp'];
-
-// marked → DOMPurify → hljs: chat-stream.js의 renderMarkdown()과 동일한 파이프라인.
+// (DocumentIndexer.IMAGE_MARKER와 동일한 형태)라 marked가 인식하지 못한다. 치환+렌더는
+// layout/base.html 의 renderMarkdownWithImageMarkers() 가 담당한다 — 지식 제안 작성/검토
+// 미리보기도 같은 본문 형식을 렌더하므로 구현이 한 벌만 있어야 한다.
 function renderChunkPreview(container, rawText) {
-    const source = rawText || '';
-    if (typeof marked === 'undefined') { container.textContent = source; return; }
-    const withImages = source.replace(CHUNK_IMAGE_MARKER, function (_m, unconvertibleTag, path) {
-        const ext = (path.split('.').pop() || '').toLowerCase();
-        if (unconvertibleTag || PREVIEWABLE_IMAGE_EXT.indexOf(ext) === -1) {
-            return `<span class="text-muted small">📎 ${escHtml(path)} (미리보기 불가)</span>`;
-        }
-        return `<img src="/api/v1/${escHtml(path)}" loading="lazy" style="max-width:100%;">`;
-    });
-    const html = marked.parse(withImages);
-    container.innerHTML = typeof DOMPurify !== 'undefined' ? DOMPurify.sanitize(html) : html;
-    if (typeof hljs !== 'undefined') {
-        container.querySelectorAll('pre code').forEach(block => hljs.highlightElement(block));
-    }
+    renderMarkdownWithImageMarkers(container, rawText);
 }
 
 // Open edit offcanvas: fetch full chunk detail
@@ -702,7 +685,7 @@ function openSubmissionReview(id) {
                 </div>
                 ${pending ? `
                 <div class="d-flex gap-2">
-                    <button class="btn btn-primary btn-sm flex-grow-1"
+                    <button class="btn btn-primary btn-sm flex-grow-1" id="submission-approve-btn"
                             onclick="approveSubmission('${escAttr(id)}')">
                         <i class="bi bi-database-add me-1"></i>임베딩 실행
                     </button>
@@ -717,7 +700,9 @@ function openSubmissionReview(id) {
         .catch(() => showToast('제안을 불러올 수 없습니다.', 'danger'));
 }
 
-/** 원문/미리보기 전환. 사용자가 쓴 마크다운이므로 렌더 전 반드시 DOMPurify 를 거친다. */
+/** 원문/미리보기 전환. 사용자가 쓴 마크다운이므로 렌더 전 반드시 DOMPurify 를 거친다
+ *  (renderMarkdownWithImageMarkers 안에서 처리). 본문 이미지 마커도 여기서 실제 그림으로
+ *  보여야 한다 — 승인은 그 그림까지 포함해 검색에 들어가는 것을 허가하는 행위다. */
 function wireReviewPreview() {
     const box     = document.getElementById('submission-review-body');
     const preview = document.getElementById('submission-review-preview');
@@ -725,7 +710,7 @@ function wireReviewPreview() {
     const tabView = document.getElementById('review-view-preview');
     if (!box || !preview || !tabEdit || !tabView) return;
     function show(on) {
-        if (on) preview.innerHTML = DOMPurify.sanitize(marked.parse(box.value || ''));
+        if (on) renderMarkdownWithImageMarkers(preview, box.value);
         box.classList.toggle('d-none', on);
         preview.classList.toggle('d-none', !on);
     }
@@ -739,25 +724,44 @@ function approveSubmission(id) {
     const tags  = document.getElementById('submission-review-tags').value;
     if (!title.trim() || !body.trim()) { showToast('제목과 본문을 모두 입력하세요.', 'warning'); return; }
 
+    // 본문에 이미지가 있으면 승인 요청이 이미지 수만큼의 Vision 호출을 동기로 기다린다(설명은
+    // 임베딩되는 텍스트의 일부여야 하므로 백그라운드로 미룰 수 없다) — 수십 초가 걸릴 수 있어
+    // 버튼을 잠그고 진행 중임을 보여준다. 잠그지 않으면 두 번 눌러 CAS 경합을 자초하게 된다.
+    const btn = document.getElementById('submission-approve-btn');
+    const restore = btn ? btn.innerHTML : null;
+    if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>등록 중...';
+    }
+
     fetch('/admin/submissions/' + encodeURIComponent(id) + '/approve', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...getCsrfHeaders() },
         body: JSON.stringify({ title, body, tags })
     })
-    .then(r => {
+    .then(async r => {
         if (r.ok) {
             // 임베딩 자체는 백그라운드라 여기서는 "등록됨"까지만 확정할 수 있다 —
             // 실패 여부는 목록의 ⚠ 배지로 뒤늦게 드러난다.
             showToast('청크로 등록했습니다. 임베딩은 백그라운드에서 진행됩니다.', 'success');
             closeSubmissionReview();
             loadSubmissions(submissionFilter.offset, submissionFilter.limit);
-        } else if (r.status === 409) {
+            return;
+        }
+        if (r.status === 409) {
             showToast('이미 처리된 제안입니다.', 'warning');
             closeSubmissionReview();
             loadSubmissions(submissionFilter.offset, submissionFilter.limit);
-        } else { showToast('등록 실패', 'danger'); }
+            return;
+        }
+        // 400(예: 이미지 개수 초과)은 서버가 사람이 읽을 이유를 담아 준다 — 삼키면 관리자가
+        // 무엇을 고쳐야 할지 알 수 없다.
+        let d = {};
+        try { d = await r.json(); } catch (e) { /* 비-JSON 오류 응답 */ }
+        showToast(d.detail || d.message || '등록 실패', 'danger');
     })
-    .catch(() => showToast('등록 중 오류 발생', 'danger'));
+    .catch(() => showToast('등록 중 오류 발생', 'danger'))
+    .finally(() => { if (btn) { btn.disabled = false; btn.innerHTML = restore; } });
 }
 
 function rejectSubmission(id) {

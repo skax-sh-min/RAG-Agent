@@ -55,10 +55,17 @@ class CuratedSubmissionServiceTest {
         when(props.chunkOverlapSafe()).thenReturn(0);
         when(props.minChunkSizeSafe()).thenReturn(200);
         when(props.chunkSplitGranularSafe()).thenReturn(false);
+        when(props.dataDir()).thenReturn("target/test-data");
         when(props.embeddingSafe()).thenReturn(new AppProperties.EmbeddingConfig(
                 null, null, null, null, null, null, false, 0, null, 1));
+        // 실제 CuratedImageStore 를 Vision 없이(null) 쓴다 — 이미지가 없는 본문에서는
+        // describeImages()/releaseImages() 가 모두 무동작이므로, 목을 세우는 것보다 실제 구현이
+        // "이미지가 없으면 아무 일도 하지 않는다"는 계약까지 함께 지켜준다.
+        CuratedImageStore imageStore = new CuratedImageStore(
+                props, repository, mock(com.example.ragagent.repository.CuratedQaRepository.class),
+                Optional.empty());
         // 실제 ChunkSplitter — 승인 시 본문 분할이 문서 인덱싱과 같은 기계를 쓰는지까지 함께 검증한다.
-        service = new CuratedSubmissionService(repository, curatedQaService, props, auditLogger);
+        service = new CuratedSubmissionService(repository, curatedQaService, imageStore, props, auditLogger);
     }
 
     private static Submission submission(long id, String status) {

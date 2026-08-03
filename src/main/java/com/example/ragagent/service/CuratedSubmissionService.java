@@ -35,15 +35,18 @@ public class CuratedSubmissionService {
 
     private final CuratedSubmissionRepository repository;
     private final CuratedQaService curatedQaService;
+    private final CuratedImageStore imageStore;
     private final AppProperties props;
     private final AuditLogger auditLogger;
 
     public CuratedSubmissionService(CuratedSubmissionRepository repository,
                                     CuratedQaService curatedQaService,
+                                    CuratedImageStore imageStore,
                                     AppProperties props,
                                     AuditLogger auditLogger) {
         this.repository = repository;
         this.curatedQaService = curatedQaService;
+        this.imageStore = imageStore;
         this.props = props;
         this.auditLogger = auditLogger;
     }
@@ -96,6 +99,9 @@ public class CuratedSubmissionService {
             throw new IllegalArgumentException("본문을 입력해 주세요.");
         }
         String cleanBody = body.strip();
+        // 본문 길이는 제한하지 않지만 이미지 개수는 제한한다 — 승인 한 번이 이미지 수만큼 Vision 호출을
+        // 부채질하기 때문(describeImages). 길이와 달리 분할로 흡수되지 않는 비용이다.
+        imageStore.validateImageCount(cleanBody);
         // TagUtils.normalize throws on policy violation (최대 10개 / 32자) — the message is user-facing.
         String tagsCsv = TagUtils.toMetaValue(TagUtils.normalize(tags));
         if (repository.countPendingByAuthor(authorUserId) >= MAX_PENDING_PER_USER) {
@@ -112,8 +118,9 @@ public class CuratedSubmissionService {
 
     /**
      * Admin 임베딩 실행: copies the (possibly edited) text into a real curated row and flips the
-     * submission to approved. The admin's edits are saved back onto the submission too, so the
-     * author sees what was actually indexed rather than their original draft.
+     * submission to approved. The admin's edits are saved back onto the submission too — as are the
+     * Vision descriptions injected below — so the author sees what was actually indexed rather than
+     * their original draft.
      *
      * <p>Returns empty when the submission doesn't exist or is no longer pending (already handled,
      * withdrawn, or won by a concurrent approval — {@code markApproved} is a compare-and-set).
@@ -127,6 +134,12 @@ public class CuratedSubmissionService {
         String title = (editedTitle == null || editedTitle.isBlank()) ? row.title() : editedTitle.trim();
         String body  = (editedBody  == null || editedBody.isBlank())  ? row.body()  : editedBody.strip();
         String tagsCsv = (editedTags == null) ? row.tags() : TagUtils.toMetaValue(TagUtils.normalize(editedTags));
+        imageStore.validateImageCount(body);
+
+        // 본문 이미지에 Vision 설명을 주입한 뒤 자른다. 순서가 중요하다 — 설명은 임베딩되는 텍스트의
+        // 일부여야 이미지 내용이 검색에 걸리고, 임베딩은 지금 이 승인 시점에 딱 한 번 일어난다.
+        // 나중에(분할 후) 주입하면 마커와 설명이 서로 다른 청크로 갈라질 수 있다.
+        body = imageStore.describeImages(body);
 
         // 본문을 문서와 같은 방식으로 분할해 N개 청크로 등록한다 — 길이 제한이 없어진 대신 각 청크가
         // 임베딩 가능한 크기로 보장된다. 태그는 모든 청크에 동일하게 부여한다(제안 하나 = 한 스코프).
@@ -155,8 +168,12 @@ public class CuratedSubmissionService {
         if (reviewNote == null || reviewNote.isBlank()) {
             throw new IllegalArgumentException("거부 사유를 입력해 주세요.");
         }
+        Optional<Submission> rowOpt = repository.findById(submissionId);
         boolean ok = repository.markRejected(submissionId, reviewerUserId, reviewNote.trim());
         if (ok) {
+            // 상태를 먼저 바꾸고 정리한다 — releaseImages()가 "아직 살아 있는 제안"을 훑어 참조 여부를
+            // 판단하므로, 이 행이 rejected 로 바뀐 뒤에야 자기 자신을 참조로 세지 않는다.
+            rowOpt.ifPresent(row -> imageStore.releaseImages(row.body()));
             auditLogger.log("curated.submission.reject", "submission:" + submissionId,
                     Map.of("note", reviewNote.trim()));
             log.info("[SUBMISSION] 거부 id={}", submissionId);
@@ -166,7 +183,12 @@ public class CuratedSubmissionService {
 
     /** Author-initiated withdrawal of a still-pending submission. */
     public boolean withdraw(long submissionId, String authorUserId) {
-        return repository.markWithdrawn(submissionId, authorUserId);
+        Optional<Submission> rowOpt = repository.findById(submissionId);
+        boolean ok = repository.markWithdrawn(submissionId, authorUserId);
+        if (ok) {
+            rowOpt.ifPresent(row -> imageStore.releaseImages(row.body()));
+        }
+        return ok;
     }
 
     public List<Submission> listForAdmin(String status, int offset, int limit) {

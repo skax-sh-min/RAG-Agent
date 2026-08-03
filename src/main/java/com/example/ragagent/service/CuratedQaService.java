@@ -547,6 +547,14 @@ public class CuratedQaService {
         if (tagsCsv != null && !tagsCsv.isBlank()) {
             meta.put(MetaKey.TAGS, tagsCsv);
         }
+        // 지식 제안 본문 이미지 — 이 청크에 실제로 남아 있는 마커만 싣는다. 분할 뒤에 계산하므로
+        // 이미지가 3장인 제안이 2청크로 나뉘면 각 청크는 자기 몫만 갖는다(문서 인덱싱의
+        // DocumentLoaderService.loadFromMarkdown 과 같은 규칙). 이 키가 있어야 답변 말풍선의
+        // 썸네일(RetrievalService → imageRefs)이 큐레이션 청크에도 붙는다.
+        List<String> imagePaths = CuratedImageStore.markerPaths(storedText);
+        if (!imagePaths.isEmpty()) {
+            meta.put(MetaKey.IMAGE_PATHS, String.join(",", new java.util.LinkedHashSet<>(imagePaths)));
+        }
         meta.put(MetaKey.SEARCH_TEXT, searchText); // transient override — stripped before persistence
 
         return new Document(springDocId(row.id(), chunkIndex), storedText, meta);

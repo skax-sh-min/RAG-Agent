@@ -55,6 +55,7 @@ class CuratedSubmissionControllerTest {
     @Autowired MockMvc mvc;
 
     @MockitoBean CuratedSubmissionService service;
+    @MockitoBean com.example.ragagent.service.CuratedImageStore imageStore;
     @MockitoBean CurrentUser currentUser;
     @MockitoBean AppProperties props;                          // GlobalModelAdvice + SecurityConfig
     @MockitoBean ThreadContextResolver threadContextResolver;  // WebMvcConfig

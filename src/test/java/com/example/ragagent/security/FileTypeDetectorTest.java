@@ -76,4 +76,61 @@ class FileTypeDetectorTest {
         Files.write(f, "some content here".getBytes());
         assertThat(FileTypeDetector.matches(f, ".xyz")).isFalse();
     }
+
+    // ── 지식 제안 본문 이미지 (CuratedImageStore) ────────────────────────────────
+
+    @Test
+    void png_magic_bytes_accepted() throws Exception {
+        Path f = tmp.resolve("shot.png");
+        Files.write(f, new byte[]{(byte) 0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A});
+        assertThat(FileTypeDetector.matches(f, ".png")).isTrue();
+    }
+
+    @Test
+    void jpeg_magic_bytes_accepted() throws Exception {
+        Path f = tmp.resolve("photo.jpg");
+        Files.write(f, new byte[]{(byte) 0xFF, (byte) 0xD8, (byte) 0xFF, (byte) 0xE0, 0x00, 0x10});
+        assertThat(FileTypeDetector.matches(f, ".jpg")).isTrue();
+        assertThat(FileTypeDetector.matches(f, ".jpeg")).isTrue();
+    }
+
+    @Test
+    void gif_magic_bytes_accepted() throws Exception {
+        Path f = tmp.resolve("anim.gif");
+        Files.write(f, "GIF89a...".getBytes());
+        assertThat(FileTypeDetector.matches(f, ".gif")).isTrue();
+    }
+
+    @Test
+    void webp_needs_both_riff_and_webp_halves() throws Exception {
+        Path ok = tmp.resolve("pic.webp");
+        Files.write(ok, "RIFF????WEBPVP8 ".getBytes());
+        assertThat(FileTypeDetector.matches(ok, ".webp")).isTrue();
+
+        // RIFF container, but a WAV payload — the 8-11 half is what tells them apart, which is
+        // the whole reason the header read is 12 bytes rather than 8.
+        Path wav = tmp.resolve("sound.webp");
+        Files.write(wav, "RIFF????WAVEfmt ".getBytes());
+        assertThat(FileTypeDetector.matches(wav, ".webp")).isFalse();
+    }
+
+    @Test
+    void executable_renamed_to_png_rejected() throws Exception {
+        Path f = tmp.resolve("payload.png");
+        Files.write(f, new byte[]{'M', 'Z', (byte) 0x90, 0x00, 0x03, 0x00, 0x00, 0x00});
+        assertThat(FileTypeDetector.matches(f, ".png")).isFalse();
+    }
+
+    @Test
+    void short_text_file_accepted() throws Exception {
+        // 12바이트 미만이라 버퍼 뒤쪽이 0으로 남는다 — 그 패딩까지 NUL 로 세면 짧은 텍스트 파일이
+        // 전부 거부된다(헤더를 12바이트로 늘리면서 실제로 문제가 될 수 있었던 경계).
+        Path f = tmp.resolve("tiny.txt");
+        Files.write(f, "hi".getBytes());
+        assertThat(FileTypeDetector.matches(f, ".txt")).isFalse();   // 4바이트 미만은 여전히 거부
+
+        Path five = tmp.resolve("five.md");
+        Files.write(five, "hello".getBytes());
+        assertThat(FileTypeDetector.matches(five, ".md")).isTrue();
+    }
 }

@@ -498,10 +498,18 @@ public class RetrievalService {
      */
     /**
      * True when {@code text} already has a "[이미지 설명: ...]" line immediately following the
-     * "[이미지: {imagePath}]" marker — i.e. this exact chunk was indexed with "이미지 설명 추가"
-     * checked, so a fresh Lazy Vision call would be redundant. Only a match right after the marker
-     * counts (not merely "the text contains a description somewhere") — an unrelated image's
-     * description elsewhere in a merged chunk must not suppress analysis of this one.
+     * "[이미지: {imagePath}]" marker — i.e. the description was injected when the chunk was created
+     * ("이미지 설명 추가" on a document upload, or 지식 제안 승인), so a fresh Lazy Vision call would
+     * be redundant. Only a match right after the marker counts (not merely "the text contains a
+     * description somewhere") — an unrelated image's description elsewhere in a merged chunk must
+     * not suppress analysis of this one.
+     *
+     * <p>The {@code <br>} form counts too: inside a GFM table row a raw newline would split the
+     * cell and shatter the table, so both injection sites ({@code MarkdownCorrectionService},
+     * {@code CuratedImageStore}) separate with {@code <br>} there instead. Without accepting it
+     * here, every table-embedded image looks like a cache miss on every turn and
+     * {@link #augmentWithDescriptions} appends a second copy of the same description next to the
+     * one already in the text.
      */
     static boolean hasEmbeddedDescription(String text, String imagePath) {
         if (text == null) return false;
@@ -509,6 +517,7 @@ public class RetrievalService {
         int idx = text.indexOf(marker);
         if (idx < 0) return false;
         String after = text.substring(idx + marker.length()).stripLeading();
+        if (after.startsWith("<br>")) after = after.substring("<br>".length()).stripLeading();
         return after.startsWith("[이미지 설명:");
     }
 

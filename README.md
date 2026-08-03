@@ -143,7 +143,7 @@ See [USER_MANUAL.md](documents/USER_MANUAL.md) for usage instructions and [OPERA
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `IMAGE_DESCRIPTION_ENABLED` | `true` | `LazyVisionService` on/off (`app.image-description.enabled`). A `@ConditionalOnProperty` bean gate — **restart required**; `false` stores image markers without ever calling Vision at query time |
+| `IMAGE_DESCRIPTION_ENABLED` | `true` | `LazyVisionService` on/off (`app.image-description.enabled`). A `@ConditionalOnProperty` bean gate — **restart required**; `false` stores image markers without ever calling Vision at query time. Also gates the approval-time description of 지식 제안 body images — with it off, those images still display but contribute nothing to search |
 | `IMAGE_OCR_ENABLED` | `true` | Tesseract OCR for scanned PDF pages (`OcrService`, same structural bean gate) |
 | `IMAGE_OCR_TESSDATA_PATH` | (blank) | Absolute path to the Tesseract `tessdata` directory. Blank → falls back to `TESSDATA_PREFIX` or the system default path |
 | `IMAGE_CLASSIFY_TYPE` | `true` | Classify image type (diagram/screenshot/chart/photo) before describing, to pick a type-specific Vision prompt |
@@ -244,7 +244,7 @@ rag_java/
     │   │   ├── DocumentController.java         # REST /api/v1/documents, /api/v1/images; async upload (202+taskId)
     │   │   ├── OperationsController.java       # REST GET /api/v1/health, /api/v1/llm/usage; HTMX thread list + LLM cards
     │   │   ├── AdminController.java            # /admin, /admin/chunks; document re-index; curated-Q&A + submission review
-    │   │   ├── CuratedSubmissionController.java # /curated/submissions — user-submitted chunk board (post, withdraw, unread badge)
+    │   │   ├── CuratedSubmissionController.java # /curated/submissions — user-submitted chunk board (post, withdraw, body-image upload, unread badge)
     │   │   ├── SettingsController.java         # /settings view + /admin/settings/update|reset
     │   │   ├── AuthController.java             # /login, /signup, /setup page controllers; auto-login after signup
     │   │   ├── GlobalExceptionHandler.java     # RFC 9457 ProblemDetail; 400/413 handling
@@ -269,7 +269,7 @@ rag_java/
     │   │   ├── MetaKey.java           # Vector store metadata key constants
     │   │   └── ChatRequest/Response/SourceRef/DocumentInfo/SyncResult/ThreadMeta/ChatForm/LlmProviderReport/IndexingProgressEvent.java
     │   ├── security/
-    │   │   ├── FileTypeDetector.java  # Magic-byte validation (PDF, DOCX/PPTX, TXT/MD)
+    │   │   ├── FileTypeDetector.java  # Magic-byte validation (PDF, DOCX/PPTX, TXT/MD, PNG/JPG/GIF/WebP)
     │   │   └── PromptInjectionGuard.java  # Input validation + API key masking
     │   ├── repository/
     │   │   ├── MemoryRepository.java              # Conversation memory interface (includes getTurns)
@@ -293,6 +293,7 @@ rag_java/
     │       ├── AdminService.java              # Admin UI data (chunk browse/edit + vector store status) — chroma & sqlite-vec
     │       ├── CuratedQaService.java          # Curated-Q&A axis: like promotion + admin-approved submissions, embed/de-index
     │       ├── CuratedSubmissionService.java  # Proposal board: validation + tags, split-on-approve (1:N), reject, notification counts
+    │       ├── CuratedImageStore.java         # Proposal body images: upload (allowlist/size/magic-byte/content-hash name), [이미지: …] marker bookkeeping, approval-time Vision description, reference-counted cleanup + startup orphan sweep
     │       ├── SettingsService.java           # runtime settings-override layer (AppProperties.OverrideSource) + /settings view/validation/audit
     │       ├── IndexingProgressService.java   # SSE emitter registry for async upload/sync progress
     │       ├── MarkdownCorrectionService.java # Post-process LLM markdown output
@@ -381,6 +382,7 @@ User question
 - **Response length modes (S/M/L)** — a per-message chat toggle picks how much detail the answer includes; each mode's target is the larger of a ratio of `LLM_MAX_TOKENS` (15%/40%/70%) and a fixed character floor (2,000/5,000/10,000), so S and M stay clearly distinct even on a small configured ceiling. The same number is applied both as `maxTokens` on blocking calls and as a "~N characters" target in the style-instruction prompt — streaming answers rely on the prompt alone, since they have no per-call token cap by design. `L` (verbatim-max) only makes sense with retrieved context and is disabled while Direct mode is on
 - **Curated Q&A from likes (§10.10)** — liking a chat answer promotes it into a separately embedded, shared knowledge axis (reserved vector-store version namespace, survives document re-indexing) that future searches fuse in via a weighted RRF axis (`SEARCH_CURATED_QA_ENABLED`/`SEARCH_CURATED_QA_WEIGHT`, hot-editable via `/settings`); the answer is injected as grounding evidence, not returned verbatim, so the LLM still reconciles against current documents. The turn's own asker can edit it inline in the chat bubble (re-embeds automatically); admins moderate every user's curated entries from a dedicated `/admin` card (edit or force-remove, independent of the original like). Liking an **L**-mode answer skips the embed entirely — its content already mirrors indexed source material closely enough that re-embedding it would be redundant (the like itself is still recorded). A promoted answer inherits the search-scope tags its question was asked under (persisted per turn), so it survives a tag-scoped search; one whose scope is unknown is treated as belonging to every scope rather than none — without that, ticking any tag chip used to drop every curated entry from the results
 - **User-submitted chunks (청크 추가 게시판)** — users post a proposal (title + body) at `/curated/submissions`; an admin reviews it from a dedicated `/admin` card and either runs the embedding or rejects it with a mandatory reason. Approved proposals land in the same curated-Q&A axis as liked answers (so `SEARCH_CURATED_QA_*` applies unchanged); the submission board itself is a separate table, keeping `curated_qa.status='active'` meaning exactly "contributing to search". **Admin approval is the only gate between user-authored text and the `[검색된 문서]` block of an answer prompt** — the review panel always shows the body in full, and there is deliberately no bulk/auto-approve path. Notifications are 60s header-badge polls in both directions: pending count for the admin (first poll fires right after login), review outcome for the author (cleared by opening "내 제안"). **There is no body length limit**: approval runs the body through `ChunkSplitter` and creates N curated rows, the same way a document is indexed (so `CHUNK_SPLIT_GRANULAR` and the table/code-block boundary protection apply) — which removes the "too long to embed" failure mode structurally instead of rejecting input. The submission is then 등록 완료 while any of its chunks lives and 회수됨 once none do; removing one chunk takes down the whole submission, so a partially-registered proposal never appears. Body is authored and previewed as Markdown (rendered through DOMPurify on both the form and the admin review panel), and optional tags scope the entry to matching tag selections — an untagged one stays visible in every scope. See [OPERATOR_MANUAL.md §6.9](documents/OPERATOR_MANUAL.md#69-청크-추가-게시판-사용자-제안--관리자-임베딩)
+- **Images in proposals, positioned by an inline marker** — the form's **이미지 추가** button uploads the file immediately and splices a `[이미지: images/submissions/{sha16}.png]` marker in at the caret. **The marker's position is the image's position**, so everything after that is ordinary text editing and an image travels with the paragraph it illustrates when approval splits the body into chunks. Reusing the marker the document pipeline already emits is what makes the rest work unchanged: `/api/v1/images/**` already serves the path, and `RetrievalService` already turns `image_paths` metadata into answer thumbnails, so a curated chunk gets the same thumbnails a document chunk does. At approval — **before** splitting, so a marker can never be cut away from its description — each image is described via `LazyVisionService` and a `[이미지 설명: ...]` line is injected into the body, which is what makes the picture's *content* searchable (it also lands in the shared description cache, so query-time Lazy Vision never re-analyzes it). The approve request waits on those Vision calls synchronously and the admin button locks with a spinner meanwhile. Since the board is guest-open in every auth mode, this is the one place an unauthenticated caller writes a binary to disk: extension allowlist → 5MB → magic bytes → content-hash filename (the client picks no part of the path), max 10 per body. Cleanup is reference-counted rather than ownership-based — filenames are content hashes, so two proposals can share one file — on reject/withdraw plus a startup sweep for drafts that were never posted
 - **ReAct re-retrieval** — automatic re-retrieval up to 2 times when evidence is insufficient
 - **Critic verification** — LLM double-checks whether the generated answer is grounded in documents
 - **PROGRESSIVE mode** — starts with COST_FIRST; if quality score < threshold, re-runs Answer with PREMIUM provider and marks response with upgrade badge
@@ -418,6 +420,7 @@ User question
 | `GET` | `/chat/{threadId}` | Resume an existing thread (restores previous message bubbles) |
 | `GET` | `/documents` | Document management page |
 | `GET/POST` | `/curated/submissions` | Knowledge-proposal board — post a chunk, track its review outcome |
+| `POST` | `/curated/submissions/images` | Upload a proposal body image → returns the `[이미지: …]` marker to splice in at the caret |
 | `GET` | `/llm-usage` | LLM usage statistics page |
 | `GET/POST` | `/login` | Login page (auth mode, or no-auth management-only submode) |
 | `GET/POST` | `/signup` | Sign-up page (auth mode only) |

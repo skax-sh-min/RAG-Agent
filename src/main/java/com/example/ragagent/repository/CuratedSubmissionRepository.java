@@ -229,6 +229,19 @@ public class CuratedSubmissionRepository {
                 STATUS_WITHDRAWN, now(), id, authorUserId, STATUS_PENDING) > 0;
     }
 
+    /**
+     * Bodies that still lay claim to a 지식 제안 본문 이미지 — drives {@code CuratedImageStore}'s
+     * "is this file still referenced?" check. Rejected/withdrawn rows are excluded: their images
+     * are precisely what the cleanup is releasing. The {@code LIKE} is a cheap pre-filter; the
+     * caller re-scans each body with the real path pattern.
+     */
+    public List<String> liveBodiesWithImages() {
+        return jdbc.queryForList(
+                "SELECT body FROM curated_submission WHERE status IN (?, ?) " +
+                "AND body LIKE '%images/submissions/%'",
+                String.class, STATUS_PENDING, STATUS_APPROVED);
+    }
+
     /** Anti-flood guard — see {@code CuratedSubmissionService.MAX_PENDING_PER_USER}. */
     public int countPendingByAuthor(String authorUserId) {
         Integer n = jdbc.queryForObject(

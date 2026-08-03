@@ -377,6 +377,38 @@ const I18N = {
         pollBadge(document.getElementById('pending-submission-badge'), '/admin/submissions/pending-count');
     })();
 
+    /* ── 이미지 마커 렌더링 ────────────────────────────────────────────────────
+       본문 속 이미지 참조는 표준 마크다운이 아니라 인덱싱 파이프라인의 커스텀 마커
+       [이미지: images/{id}/{file}] (DocumentIndexer.IMAGE_MARKER) 라서 marked 가 인식하지 못한다.
+       /admin 청크 뷰와 지식 제안의 작성·검토 미리보기가 모두 같은 본문 형식을 렌더하므로,
+       각 페이지가 따로 들고 있던 치환 로직을 여기 한 곳으로 모았다. */
+    const CHUNK_IMAGE_MARKER = /\[이미지(?:\(([^)]*)\))?: ([^\]]+?)\]/g;
+    /* /api/v1/images/** 가 inline(image/*)으로 내려주는 확장자. 그 외(SVG·EMF/WMF, 변환불가 마커)는
+       강제 다운로드되므로 <img> 로 만들면 깨진 아이콘만 남는다 → 텍스트 placeholder 로 대체. */
+    const PREVIEWABLE_IMAGE_EXT = ['png', 'jpg', 'jpeg', 'gif', 'webp'];
+
+    /* marked → DOMPurify → hljs: chat-stream.js 의 renderMarkdown() 과 동일한 파이프라인.
+       sanitize 는 선택이 아니다 — 여기 들어오는 본문은 사용자가 직접 쓴 마크다운이고, 같은 글이
+       관리자 검토 화면에서도 렌더되므로 저장형 XSS 경로가 된다. */
+    function renderMarkdownWithImageMarkers(container, rawText) {
+        const source = rawText || '';
+        if (typeof marked === 'undefined') { container.textContent = source; return; }
+        const esc = s => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;')
+                                        .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        const withImages = source.replace(CHUNK_IMAGE_MARKER, function (_m, unconvertible, path) {
+            const ext = (path.split('.').pop() || '').toLowerCase();
+            if (unconvertible || PREVIEWABLE_IMAGE_EXT.indexOf(ext) === -1) {
+                return '<span class="text-muted small">📎 ' + esc(path) + ' (미리보기 불가)</span>';
+            }
+            return '<img src="/api/v1/' + esc(path) + '" loading="lazy" style="max-width:100%;">';
+        });
+        const html = marked.parse(withImages);
+        container.innerHTML = typeof DOMPurify !== 'undefined' ? DOMPurify.sanitize(html) : html;
+        if (typeof hljs !== 'undefined') {
+            container.querySelectorAll('pre code').forEach(block => hljs.highlightElement(block));
+        }
+    }
+
     /* Global toast helper — called by child pages */
     function showToast(message, type) {
         type = type || 'info';
