@@ -33,13 +33,24 @@ import java.util.concurrent.ConcurrentHashMap;
  * or degrades chat.
  *
  * <p>The summary itself is built without an LLM whenever the turns' answers already carry their
- * own "## 요약" section, and the LLM path is used only when some answer doesn't — and only when
- * the dedicated MICRO_TEXT offload model is configured. See {@link #summarize}.
+ * own "## 요약" section — a RAG answer always does ({@code prompt.answer.system} mandates it), so
+ * in practice the LLM path only ever exists to compress Direct-mode/meta answers, which have no
+ * such section. And even then it runs only when the dedicated MICRO_TEXT offload model is
+ * configured; without it the text is still assembled from the 요약 sections, with un-summarized
+ * answers capped instead. See {@link #summarize}.
  */
 @Service
 public class ConversationSummarizerService {
 
     private static final Logger log = LoggerFactory.getLogger(ConversationSummarizerService.class);
+
+    /**
+     * Per-answer cap for an answer that has no "## 요약" section, used only when assembling the
+     * summary without an LLM (see {@link #summarize}). A real RAG 요약 is 2-4 sentences, so a
+     * Direct-mode answer standing in for one has to be held to roughly that size — otherwise a
+     * single long answer would dominate a summary that is supposed to be a per-turn digest.
+     */
+    private static final int UNSUMMARIZED_ANSWER_CAP = 300;
 
     private final MemoryService memoryService;
     private final LlmRouter llmRouter;
@@ -156,13 +167,17 @@ public class ConversationSummarizerService {
      *       answers that lacked a 요약 section;</li>
      *   <li>…unless the dedicated MICRO_TEXT offload model is not configured
      *       ({@code LOCAL_FAST_LLM_URL} unset → {@link LlmRouter#hasMicroTextOffloadProvider()}
-     *       false), in which case this returns null and the caller falls back to raw history —
-     *       summarization is an optional nicety and must never borrow the answer-serving tier
-     *       (MICRO_TEXT would otherwise fall through to it) to compute itself.</li>
+     *       false) — summarization is an optional nicety and must never borrow the answer-serving
+     *       tier (MICRO_TEXT would otherwise fall through to it) to compute itself. In that case
+     *       the text is still assembled <em>without</em> an LLM, with each un-summarized answer
+     *       capped at {@link #UNSUMMARIZED_ANSWER_CAP} chars. Returning null here instead would
+     *       throw away every {@code ## 요약} already extracted just because one Direct-mode turn
+     *       couldn't be compressed — and since {@code LOCAL_FAST_LLM_URL} has no default, that is
+     *       the common deployment, not an edge case.</li>
      * </ul>
      */
     private String summarize(List<MemoryRepository.Turn> turns, String threadId, Locale locale) {
-        SummaryInput input = buildSummaryInput(turns);
+        SummaryInput input = buildSummaryInput(turns, 0);
         if (input.text().isBlank()) return null;
 
         if (input.fullyPreSummarized()) {
@@ -171,9 +186,11 @@ public class ConversationSummarizerService {
             return input.text();
         }
         if (!llmRouter.hasMicroTextOffloadProvider()) {
-            log.debug("[SUMMARY] thread={} — LLM summarization disabled (no LOCAL_FAST_LLM_URL provider)",
-                    threadId);
-            return null;
+            String assembled = buildSummaryInput(turns, UNSUMMARIZED_ANSWER_CAP).text();
+            log.debug("[SUMMARY] thread={} — no MICRO_TEXT offload provider; assembled from the "
+                            + "'## 요약' sections without an LLM ({}자 초과 답변은 절단)",
+                    threadId, UNSUMMARIZED_ANSWER_CAP);
+            return assembled.isBlank() ? null : assembled;
         }
 
         String systemPrompt = messageSource.getMessage("prompt.summary.system", null, locale);
@@ -190,17 +207,37 @@ public class ConversationSummarizerService {
      */
     private record SummaryInput(String text, boolean fullyPreSummarized) {}
 
-    private static SummaryInput buildSummaryInput(List<MemoryRepository.Turn> turns) {
+    /**
+     * @param rawAnswerCap when &gt; 0, an answer with no "## 요약" section is cut to this many
+     *        chars. Used only by the no-LLM assembly path — {@link #truncate} caps the finished
+     *        summary from the <em>front</em>, so one long Direct-mode answer early in the thread
+     *        would otherwise consume the whole {@code app.summary.max-summary-chars} budget and
+     *        push the newest (most relevant) turns out of it entirely. The LLM path passes 0 and
+     *        keeps seeing the full text — compressing it is exactly that call's job.
+     */
+    private static SummaryInput buildSummaryInput(List<MemoryRepository.Turn> turns, int rawAnswerCap) {
         StringBuilder sb = new StringBuilder();
         boolean fullyPreSummarized = true;
         for (MemoryRepository.Turn t : turns) {
             String ownSummary = CuratedTextUtils.extractSummarySection(t.answer());
-            if (ownSummary.isBlank()) fullyPreSummarized = false;
+            String rendered;
+            if (ownSummary.isBlank()) {
+                fullyPreSummarized = false;
+                rendered = capAnswer(t.answer(), rawAnswerCap);
+            } else {
+                rendered = ownSummary;
+            }
             sb.append("Q: ").append(t.question())
-              .append("\nA: ").append(ownSummary.isBlank() ? t.answer() : ownSummary)
+              .append("\nA: ").append(rendered)
               .append("\n\n");
         }
         return new SummaryInput(sb.toString().strip(), fullyPreSummarized);
+    }
+
+    private static String capAnswer(String answer, int cap) {
+        if (answer == null) return "";
+        if (cap <= 0 || answer.length() <= cap) return answer;
+        return answer.substring(0, cap).strip() + "…";
     }
 
     private boolean isDisliked(String userId, String threadId, long turnId) {

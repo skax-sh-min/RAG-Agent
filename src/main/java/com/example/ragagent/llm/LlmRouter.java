@@ -278,11 +278,24 @@ public class LlmRouter {
      * back to that tier by design ({@code BOTH} absorbs {@code MICRO_TEXT}), which is right for
      * chores the app can't do any other way, but wrong for ones with a free non-LLM alternative
      * (see {@code ConversationSummarizerService}, which reuses the answer's own "## 요약" section).
+     *
+     * <p><b>{@code supports(MICRO_TEXT)} is part of the test, not just role+priority.</b>
+     * {@code role=LOCAL, priority=0} is not by itself proof that a MICRO_TEXT chore has somewhere
+     * to go: the commented-out {@code local-vision} example in {@code application.properties} —
+     * which LLM_ROUTING.md §8 actively recommends registering for image-heavy corpora — is
+     * {@code type=VISION} at exactly that role+priority, and {@code VISION} serves only
+     * {@code VISION}. Without this check, enabling a Vision model made this method report an
+     * offload tier that {@code findFirst} would then skip, sending the chore straight to the
+     * {@code priority=1} answer model — the precise outcome the gate exists to prevent, and one
+     * that shows up as an unexplained {@code summary:} LLM call on a deployment with no small
+     * model. ({@code type=LIGHT_TEXT} — LLM_ROUTING.md §9's more aggressive "A안" — still passes,
+     * correctly: it does serve MICRO_TEXT and is still a dedicated priority-0 tier.)
      */
     public boolean hasMicroTextOffloadProvider() {
         return providers.stream()
                 .anyMatch(p -> p.role() == LOCAL
                         && p.priority() == 0
+                        && p.supports(TaskType.MICRO_TEXT)
                         && !circuitBreaker.isBlocked(p.name())
                         && !providerToggle.isDisabled(p.name()));
     }

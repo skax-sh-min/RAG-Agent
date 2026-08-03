@@ -178,7 +178,7 @@ class ConversationSummarizerServiceTest {
     }
 
     @Test
-    @DisplayName("precompute — LOCAL_FAST(MICRO_TEXT 오프로드) provider 가 없으면 LLM 요약을 만들지 않는다")
+    @DisplayName("precompute — LOCAL_FAST(MICRO_TEXT 오프로드) provider 가 없으면 LLM 을 부르지 않는다")
     void precompute_withoutMicroTextOffloadProvider_skipsLlmSummary() {
         when(llmRouter.hasMicroTextOffloadProvider()).thenReturn(false);
         when(memoryService.getRecentTurns(UID, TID))
@@ -187,7 +187,48 @@ class ConversationSummarizerServiceTest {
         service.precompute(UID, TID, Locale.KOREAN);
 
         verify(llmRouter, never()).executeWithTracking(any(), any(), any(), any());
-        assertThat(service.buildContext(UID, TID)).isNull(); // 호출자는 원본 history 로 폴백
+    }
+
+    // 아래 두 테스트는 buildContext() 결과로 요약 내용을 확인한다 — 캐시에 직접 접근할 수단이
+    // 없기 때문. buildContext()는 요약 뒤에 최근 recentRawTurns(=2)개 턴의 *원문*을 덧붙이므로,
+    // "요약에는 없어야 한다"를 검증하려는 턴은 반드시 그 창 밖(=3번째 이전)에 두어야 한다.
+    // 그러지 않으면 원문 구간에 걸려 doesNotContain 이 항상 실패한다.
+
+    @Test
+    @DisplayName("precompute — LOCAL_FAST 가 없어도 이미 뽑아둔 '## 요약' 은 버리지 않는다 "
+            + "(요약 없는 답변 하나 때문에 전체를 포기하지 않음)")
+    void precompute_withoutMicroTextOffloadProvider_keepsExistingSummarySections() {
+        when(llmRouter.hasMicroTextOffloadProvider()).thenReturn(false);
+        when(memoryService.getRecentTurns(UID, TID)).thenReturn(List.of(
+                turn(1, "질문1", ragAnswer("첫 답변 한 줄 요약", "첫 답변 장황한 본문"), null),
+                turn(2, "질문2", ragAnswer("둘째 답변 요약", "둘째 답변 본문"), null),
+                turn(3, "질문3", "요약 섹션이 없는 Direct 답변", null)));
+
+        service.precompute(UID, TID, Locale.KOREAN);
+
+        verify(llmRouter, never()).executeWithTracking(any(), any(), any(), any());
+        assertThat(service.buildContext(UID, TID))
+                .contains("첫 답변 한 줄 요약")             // RAG 턴은 자기 요약으로 들어가고
+                .doesNotContain("첫 답변 장황한 본문")      // 본문은 빠진다(원문 창 밖이므로)
+                .contains("요약 섹션이 없는 Direct 답변");  // 요약 없는 턴도 (상한 내에서) 담긴다
+    }
+
+    @Test
+    @DisplayName("precompute — LLM 없이 조립할 때 요약 없는 답변은 상한만큼만 담긴다 "
+            + "(긴 Direct 답변 하나가 요약 예산을 독식하지 않도록)")
+    void precompute_withoutMicroTextOffloadProvider_capsUnsummarizedAnswer() {
+        when(llmRouter.hasMicroTextOffloadProvider()).thenReturn(false);
+        String longDirect = "가".repeat(1200) + "꼬리표";
+        when(memoryService.getRecentTurns(UID, TID)).thenReturn(List.of(
+                turn(1, "질문1", longDirect, null),
+                turn(2, "질문2", ragAnswer("둘째 답변 요약", "둘째 답변 본문"), null),
+                turn(3, "질문3", ragAnswer("셋째 답변 요약", "셋째 답변 본문"), null)));
+
+        service.precompute(UID, TID, Locale.KOREAN);
+
+        assertThat(service.buildContext(UID, TID))
+                .doesNotContain("꼬리표")        // 앞쪽 긴 답변은 300자에서 잘리고
+                .contains("셋째 답변 요약");      // 최신 턴의 요약은 살아남는다
     }
 
     @Test
