@@ -77,7 +77,7 @@ class AnswerServiceTest {
                 "./data", MAX_RETRY, 800, 100, 100, 7, 0.0, true, 0, false,
                 true, false, 3,
                 null, null, null, null, null, null, null, null, null, null, null, null, null, null,
-                null, null, null, null, null, null, null, null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null);
         messageSource = mock(MessageSource.class);
         when(messageSource.getMessage(anyString(), any(), any(Locale.class))).thenReturn("prompt");
         service = new AnswerService(llmRouter, props, messageSource);
@@ -124,6 +124,51 @@ class AnswerServiceTest {
         AgentState result = service.execute(newState(RoutingMode.COST_FIRST));
 
         assertThat(result.needsRetry()).isTrue();
+    }
+
+    @Test
+    @DisplayName("BLOCKING — 검증 미통과 시 평가 LLM 의 reason 이 evalReason 으로 담긴다")
+    void blocking_evalReason_capturedOnFailure() {
+        when(llmRouter.executeGatedWithUsage(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), any()))
+                .thenReturn(new LlmRouter.LlmResult("불완전 답변", 0, 0),
+                            new LlmRouter.LlmResult(
+                                    "{\"sufficient\":false,\"grounded\":true,"
+                                    + "\"reason\":\"설치 절차는 있으나 질문한 포트 설정 값이 문서에 없음\"}", 0, 0));
+        when(llmRouter.findProviderName(any(), any())).thenReturn("gemini-flash");
+
+        AgentState result = service.execute(newState(RoutingMode.COST_FIRST));
+
+        assertThat(result.needsRetry()).isTrue();
+        assertThat(result.evalReason()).isEqualTo("설치 절차는 있으나 질문한 포트 설정 값이 문서에 없음");
+    }
+
+    @Test
+    @DisplayName("BLOCKING — 검증 통과면 reason 을 줬더라도 evalReason 은 null (설명할 게 없음)")
+    void blocking_evalReason_nullWhenPassed() {
+        when(llmRouter.executeGatedWithUsage(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), any()))
+                .thenReturn(new LlmRouter.LlmResult("답변", 0, 0),
+                            new LlmRouter.LlmResult(
+                                    "{\"sufficient\":true,\"grounded\":true,\"reason\":\"문제 없음\"}", 0, 0));
+        when(llmRouter.findProviderName(any(), any())).thenReturn("gemini-flash");
+
+        AgentState result = service.execute(newState(RoutingMode.COST_FIRST));
+
+        assertThat(result.needsRetry()).isFalse();
+        assertThat(result.evalReason()).isNull();
+    }
+
+    @Test
+    @DisplayName("BLOCKING — reason 이 비었거나 없으면 evalReason 은 null (모델이 안 줘도 깨지지 않음)")
+    void blocking_evalReason_nullWhenModelOmitsIt() {
+        when(llmRouter.executeGatedWithUsage(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), any()))
+                .thenReturn(new LlmRouter.LlmResult("불완전 답변", 0, 0),
+                            new LlmRouter.LlmResult("{\"sufficient\":false,\"reason\":\"   \"}", 0, 0));
+        when(llmRouter.findProviderName(any(), any())).thenReturn("gemini-flash");
+
+        AgentState result = service.execute(newState(RoutingMode.COST_FIRST));
+
+        assertThat(result.needsRetry()).isTrue();
+        assertThat(result.evalReason()).isNull();
     }
 
     @Test

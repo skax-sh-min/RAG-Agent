@@ -79,6 +79,24 @@ class RetrievalServiceImageDescriptionTest {
         void falseForNullText() {
             assertThat(RetrievalService.hasEmbeddedDescription(null, "images/a/1.png")).isFalse();
         }
+
+        @Test
+        @DisplayName("표 셀 안의 <br> 구분 설명도 true — 표에서는 개행 대신 <br>로 붙인다")
+        void trueWhenDescriptionFollowsAfterBrInTableCell() {
+            // MarkdownCorrectionService(문서 업로드)와 CuratedImageStore(지식 제안 승인)가 모두
+            // 표 행 안에서는 이 형태로 주입한다. 여기서 인식하지 못하면 매 턴 캐시 미스로 보여
+            // augmentWithDescriptions()가 같은 설명을 한 번 더 덧붙인다.
+            String text = "| 단계 | 화면 |\n|---|---|\n"
+                    + "| 1 | [이미지: images/a/1.png]<br>[이미지 설명: 로그인 화면] |";
+            assertThat(RetrievalService.hasEmbeddedDescription(text, "images/a/1.png")).isTrue();
+        }
+
+        @Test
+        @DisplayName("<br> 뒤가 설명이 아니면 여전히 false")
+        void falseWhenBrIsFollowedByOrdinaryText() {
+            String text = "| 1 | [이미지: images/a/1.png]<br>그냥 캡션 |";
+            assertThat(RetrievalService.hasEmbeddedDescription(text, "images/a/1.png")).isFalse();
+        }
     }
 
     @Nested

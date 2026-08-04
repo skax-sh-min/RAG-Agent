@@ -15,8 +15,10 @@
          "#setting-llm with class .max-…", which matches nothing and posts neither key nor value). -->
     <input th:if="${item.editable}" type="hidden" name="key" th:value="${item.key}"/>
 
-    <!-- Label + technical key + badges -->
-    <div class="col-12 col-md-5">
+    <!-- Label + technical key + badges.
+         `col-md` (no number) takes every column the value doesn't need, so a long Korean
+         label gets the width instead of wrapping while dead space sits right of the value. -->
+    <div class="col-12 col-md">
         <span class="fw-semibold" th:text="#{__${item.label}__}">label</span>
         <span th:if="${item.overridden}" class="badge bg-info ms-1"
               th:text="#{settings.badge.overridden}">overridden</span>
@@ -26,29 +28,30 @@
               th:text="'app.' + ${item.key}">app.key</code>
     </div>
 
-    <!-- Value / editor -->
-    <div class="col-12 col-md-7">
-        <!-- Admin editor for hot-editable items -->
-        <!-- The value field is capped narrow (.setting-value): every editable setting is a short
-             number (0.0~1.0, 60, 1500) or a true/false select, so a wide box only added dead space.
-             The group max-width just keeps the buttons next to it instead of stretching the column. -->
-        <div th:if="${item.editable and isAdmin}" class="input-group input-group-sm" style="max-width: 16rem;">
+    <!-- Value / editor — `.setting-value-col` is a FIXED width (see app.css), identical on every
+         row so the editors line up in a column, and the label column (`col-md`) absorbs the rest
+         of the width instead of leaving a gap right of the value. -->
+    <div class="col-12 col-md-auto ps-md-3 setting-value-col">
+        <!-- Admin editor for hot-editable items. Order is 값 → [기본값] → 저장; the field itself
+             flexes (.setting-value), so on a row with no override — where the 기본값 button is
+             absent — the input simply grows into that space and the group stays the same width. -->
+        <div th:if="${item.editable and isAdmin}" class="input-group input-group-sm">
             <input th:if="${item.type == 'number'}" type="number" name="value" class="form-control setting-value"
                    th:value="${item.value}" th:min="${item.min}" th:max="${item.max}" th:step="${item.step}"/>
             <select th:if="${item.type == 'bool'}" name="value" class="form-select setting-value">
                 <option value="true"  th:selected="${item.value == 'true'}">true</option>
                 <option value="false" th:selected="${item.value == 'false'}">false</option>
             </select>
-            <button type="button" class="btn btn-primary"
-                    hx-post="/admin/settings/update"
-                    hx-include="closest .setting-row"
-                    hx-target="closest .setting-row" hx-swap="outerHTML"
-                    th:text="#{settings.btn.save}">Save</button>
             <button type="button" class="btn btn-outline-secondary" th:if="${item.overridden}"
                     hx-post="/admin/settings/reset"
                     hx-include="closest .setting-row"
                     hx-target="closest .setting-row" hx-swap="outerHTML"
                     th:text="#{settings.btn.reset}">Reset</button>
+            <button type="button" class="btn btn-primary"
+                    hx-post="/admin/settings/update"
+                    hx-include="closest .setting-row"
+                    hx-target="closest .setting-row" hx-swap="outerHTML"
+                    th:text="#{settings.btn.save}">Save</button>
         </div>
         <!-- Read-only value (non-editable rows, or guests on editable rows) -->
         <span th:unless="${item.editable and isAdmin}" class="font-monospace"

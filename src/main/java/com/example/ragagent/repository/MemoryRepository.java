@@ -7,10 +7,14 @@ public interface MemoryRepository {
     String getHistory(String userId, String threadId, int maxChars);
 
     /** Returns the generated turn id (conversation_turns.id). {@code responseMode}: the turn's
-     *  S/M/L answer-length mode ({@code ResponseMode.name()}), null-safe (nullable column). */
+     *  S/M/L answer-length mode ({@code ResponseMode.name()}), null-safe (nullable column).
+     *  {@code selectedTags}: the search-scope tags this question was asked under (comma-joined,
+     *  null/blank = 전체 검색) — read back by {@code CuratedQaService.onLike} so a 👍-promoted
+     *  answer inherits the scope it was actually answered in. */
     long addTurn(String userId, String threadId, String question, String answer,
                  String askedAt, int inputTokens, int outputTokens,
-                 int elapsedMs, String provider, int llmCalls, String responseMode);
+                 int elapsedMs, String provider, int llmCalls, String responseMode,
+                 String selectedTags);
 
     void clearHistory(String userId, String threadId);
 
@@ -39,7 +43,7 @@ public interface MemoryRepository {
                 String askedAt, String answeredAt,
                 int inputTokens, int outputTokens,
                 int elapsedMs, String provider, int llmCalls,
-                String feedback, String responseMode) {}
+                String feedback, String responseMode, String selectedTags) {}
 
     /** Wraps a nullable feedback value so "found with NULL feedback" is distinguishable from "not found". */
     record FeedbackRow(String feedback) {}

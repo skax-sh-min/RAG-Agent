@@ -151,6 +151,28 @@ class LlmRouterTest {
     }
 
     @Test
+    @DisplayName("hasMicroTextOffloadProvider — LOCAL priority=0 이어도 MICRO_TEXT 를 못 받는 타입이면 false "
+            + "(local-vision 이 소형 모델로 오인되던 버그)")
+    void hasMicroTextOffloadProvider_visionAtPriorityZeroIsNotAnOffloadTier() {
+        // application.properties 의 주석 처리된 local-vision 예제와 동일한 조합 —
+        // role=LOCAL, priority=0, type=VISION. VISION 은 VISION 만 지원하므로 findFirst 는
+        // 이 프로바이더를 건너뛰고 priority=1 답변 모델로 내려간다. 게이트가 true 를 주면
+        // "소형 모델이 있다"고 믿고 요약 LLM 호출을 내보내 답변 티어를 잠식하게 된다.
+        var vision = p("local-vision", ProviderRole.LOCAL, TaskType.VISION,    0);
+        var local  = p("local",        ProviderRole.LOCAL, TaskType.BOTH,      1);
+        var r = new LlmRouter(List.of(vision, local), null, breaker, RoutingMode.COST_FIRST, 0.6, 180,
+                Map.of(), 3, 20, new ProviderToggle());
+
+        assertThat(r.hasMicroTextOffloadProvider()).isFalse();
+
+        // 반대로 §9 "A안"(소형을 LIGHT_TEXT 로 등록)은 MICRO_TEXT 를 실제로 처리하므로 true.
+        var lightFast = p("local-fast", ProviderRole.LOCAL, TaskType.LIGHT_TEXT, 0);
+        assertThat(new LlmRouter(List.of(vision, lightFast, local), null, breaker, RoutingMode.COST_FIRST,
+                0.6, 180, Map.of(), 3, 20, new ProviderToggle())
+                .hasMicroTextOffloadProvider()).isTrue();
+    }
+
+    @Test
     @DisplayName("executeWithTracking — mmproj 미지원 에러는 CircuitBreaker 를 차단하지 않음 (TEXT 작업은 계속 이용 가능)")
     void visionUnsupportedError_doesNotBlockCircuitBreaker() {
         ChatModel chatModel = mock(ChatModel.class);

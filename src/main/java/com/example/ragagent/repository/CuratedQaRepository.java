@@ -1,6 +1,9 @@
 package com.example.ragagent.repository;
 
 import jakarta.annotation.PostConstruct;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.jdbc.core.ConnectionCallback;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
@@ -8,6 +11,7 @@ import org.springframework.jdbc.support.KeyHolder;
 import org.springframework.stereotype.Repository;
 
 import java.sql.PreparedStatement;
+import java.sql.SQLException;
 import java.sql.Statement;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
@@ -26,56 +30,150 @@ import java.util.Set;
 @Repository
 public class CuratedQaRepository {
 
+    private static final Logger log = LoggerFactory.getLogger(CuratedQaRepository.class);
+
     private static final DateTimeFormatter DT_FMT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+
+    /** {@code origin} value for a 👍-promoted row (the original §10.10 path). */
+    public static final String ORIGIN_LIKE = "like";
+    /** {@code origin} value for a row created by admin approval of a user-submitted chunk. */
+    public static final String ORIGIN_MANUAL = "manual";
 
     private static final String COLUMNS =
             "id, source_turn_id, source_user_id, source_thread_id, question, answer, " +
-            "status, source_doc_version, created_at, updated_at, embed_status ";
+            "status, source_doc_version, created_at, updated_at, embed_status, " +
+            "origin, source_submission_id, tags, chunk_count ";
 
     private final JdbcTemplate jdbc;
 
-    private static final RowMapper<CuratedQa> ROW_MAPPER = (rs, n) -> new CuratedQa(
-            rs.getLong("id"),
-            rs.getLong("source_turn_id"),
-            rs.getString("source_user_id"),
-            rs.getString("source_thread_id"),
-            rs.getString("question"),
-            rs.getString("answer"),
-            rs.getString("status"),
-            rs.getString("source_doc_version"),
-            rs.getString("created_at"),
-            rs.getString("updated_at"),
-            rs.getString("embed_status"));
+    private static final RowMapper<CuratedQa> ROW_MAPPER = (rs, n) -> {
+        long turnId = rs.getLong("source_turn_id");
+        Long sourceTurnId = rs.wasNull() ? null : turnId;
+        long submissionId = rs.getLong("source_submission_id");
+        Long sourceSubmissionId = rs.wasNull() ? null : submissionId;
+        return new CuratedQa(
+                rs.getLong("id"),
+                sourceTurnId,
+                rs.getString("source_user_id"),
+                rs.getString("source_thread_id"),
+                rs.getString("question"),
+                rs.getString("answer"),
+                rs.getString("status"),
+                rs.getString("source_doc_version"),
+                rs.getString("created_at"),
+                rs.getString("updated_at"),
+                rs.getString("embed_status"),
+                rs.getString("origin"),
+                sourceSubmissionId,
+                rs.getString("tags"),
+                rs.getInt("chunk_count"));
+    };
 
     public CuratedQaRepository(JdbcTemplate jdbc) {
         this.jdbc = jdbc;
     }
 
+    /** Fresh-install schema. Legacy databases are brought here by {@link #migrateLegacySchema()}. */
+    private static final String CREATE_TABLE_BODY = """
+                (
+                    id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+                    source_turn_id        INTEGER,
+                    source_user_id        TEXT NOT NULL,
+                    source_thread_id      TEXT NOT NULL,
+                    question              TEXT NOT NULL,
+                    answer                TEXT NOT NULL,
+                    status                TEXT NOT NULL DEFAULT 'active',
+                    source_doc_version    TEXT,
+                    created_at            TEXT NOT NULL,
+                    updated_at            TEXT NOT NULL,
+                    embed_status          TEXT NOT NULL DEFAULT 'ok',
+                    origin                TEXT NOT NULL DEFAULT 'like',
+                    source_submission_id  INTEGER,
+                    tags                  TEXT,
+                    chunk_count           INTEGER NOT NULL DEFAULT 1
+                )
+            """;
+
     @PostConstruct
     void init() {
-        jdbc.execute("""
-                CREATE TABLE IF NOT EXISTS curated_qa (
-                    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
-                    source_turn_id      INTEGER NOT NULL,
-                    source_user_id      TEXT NOT NULL,
-                    source_thread_id    TEXT NOT NULL,
-                    question            TEXT NOT NULL,
-                    answer              TEXT NOT NULL,
-                    status              TEXT NOT NULL DEFAULT 'active',
-                    source_doc_version  TEXT,
-                    created_at          TEXT NOT NULL,
-                    updated_at          TEXT NOT NULL,
-                    embed_status        TEXT NOT NULL DEFAULT 'ok'
-                )
-                """);
-        jdbc.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_curated_qa_turn ON curated_qa(source_turn_id)");
-        jdbc.execute("CREATE INDEX IF NOT EXISTS idx_curated_qa_status ON curated_qa(status)");
+        jdbc.execute("CREATE TABLE IF NOT EXISTS curated_qa " + CREATE_TABLE_BODY);
         // Migration: add column for existing databases (this repository predates Flyway management
-        // for curated_qa — same defensive pattern as ThreadMetaRepository).
+        // for curated_qa — same defensive pattern as ThreadMetaRepository). Must run BEFORE
+        // migrateLegacySchema(), whose INSERT...SELECT references embed_status by name.
         var cols = jdbc.queryForList("PRAGMA table_info(curated_qa)");
         if (cols.stream().noneMatch(c -> "embed_status".equals(c.get("name")))) {
             jdbc.execute("ALTER TABLE curated_qa ADD COLUMN embed_status TEXT NOT NULL DEFAULT 'ok'");
         }
+        if (cols.stream().noneMatch(c -> "origin".equals(c.get("name")))) {
+            migrateLegacySchema();
+        }
+        // `tags` shipped one release after `origin`, so a database that already went through the
+        // rebuild above still lacks it — plain ADD COLUMN suffices (nullable TEXT). Re-reads
+        // PRAGMA because migrateLegacySchema() may have just replaced the table.
+        if (jdbc.queryForList("PRAGMA table_info(curated_qa)").stream()
+                .noneMatch(c -> "tags".equals(c.get("name")))) {
+            jdbc.execute("ALTER TABLE curated_qa ADD COLUMN tags TEXT");
+        }
+        // `chunk_count` shipped with 임베딩 분할. Existing rows hold exactly one vector, which is
+        // what the DEFAULT 1 encodes — so de-indexing an old row keeps removing the single id it has.
+        if (jdbc.queryForList("PRAGMA table_info(curated_qa)").stream()
+                .noneMatch(c -> "chunk_count".equals(c.get("name")))) {
+            jdbc.execute("ALTER TABLE curated_qa ADD COLUMN chunk_count INTEGER NOT NULL DEFAULT 1");
+        }
+        createIndexes();
+    }
+
+    /**
+     * User-submitted chunks (the 게시판 → admin approval path) have no originating chat turn, so
+     * {@code source_turn_id} must be nullable — which SQLite cannot express as an {@code ALTER}.
+     * Rebuilds the table once (guarded by the absence of the {@code origin} column) inside a single
+     * transaction: a crash mid-rebuild rolls back rather than leaving the table dropped. Existing
+     * rows are all {@link #ORIGIN_LIKE} by definition — the manual path didn't exist before this.
+     *
+     * <p>The {@code UNIQUE(source_turn_id)} constraint that keeps like→unlike→like idempotent
+     * ({@link #upsertActive}) becomes a <em>partial</em> index so the many NULLs of manual rows
+     * don't collide — see {@link #createIndexes()}.
+     */
+    private void migrateLegacySchema() {
+        jdbc.execute((ConnectionCallback<Void>) con -> {
+            boolean autoCommit = con.getAutoCommit();
+            con.setAutoCommit(false);
+            try (Statement st = con.createStatement()) {
+                st.executeUpdate("CREATE TABLE curated_qa_new " + CREATE_TABLE_BODY);
+                st.executeUpdate("""
+                        INSERT INTO curated_qa_new
+                            (id, source_turn_id, source_user_id, source_thread_id, question, answer,
+                             status, source_doc_version, created_at, updated_at, embed_status,
+                             origin, source_submission_id, tags, chunk_count)
+                        SELECT id, source_turn_id, source_user_id, source_thread_id, question, answer,
+                               status, source_doc_version, created_at, updated_at, embed_status,
+                               'like', NULL, NULL, 1
+                          FROM curated_qa
+                        """);
+                st.executeUpdate("DROP TABLE curated_qa");
+                st.executeUpdate("ALTER TABLE curated_qa_new RENAME TO curated_qa");
+                con.commit();
+                log.info("[CURATED] curated_qa 스키마 마이그레이션 완료 (source_turn_id nullable, origin 추가)");
+            } catch (SQLException e) {
+                con.rollback();
+                throw e;
+            } finally {
+                con.setAutoCommit(autoCommit);
+            }
+            return null;
+        });
+    }
+
+    /** Recreated after {@link #migrateLegacySchema()} too — {@code DROP TABLE} takes its indexes. */
+    private void createIndexes() {
+        // Partial: manual rows all carry source_turn_id IS NULL, and SQLite's plain UNIQUE index
+        // would already tolerate them (NULL != NULL), but the WHERE clause states the intent and
+        // keeps the index free of the NULL entries entirely.
+        jdbc.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_curated_qa_turn " +
+                "ON curated_qa(source_turn_id) WHERE source_turn_id IS NOT NULL");
+        jdbc.execute("CREATE INDEX IF NOT EXISTS idx_curated_qa_status ON curated_qa(status)");
+        jdbc.execute("CREATE INDEX IF NOT EXISTS idx_curated_qa_submission " +
+                "ON curated_qa(source_submission_id) WHERE source_submission_id IS NOT NULL");
     }
 
     /**
@@ -85,12 +183,12 @@ public class CuratedQaRepository {
      * id, so reusing the row keeps re-embedding idempotent). Returns the row id.
      */
     public long upsertActive(long turnId, String userId, String threadId,
-                             String question, String answer, String sourceDocVersion) {
+                             String question, String answer, String sourceDocVersion, String tags) {
         String now = now();
         int updated = jdbc.update(
                 "UPDATE curated_qa SET status='active', question=?, answer=?, " +
-                "source_doc_version=?, updated_at=? WHERE source_turn_id=?",
-                question, answer, sourceDocVersion, now, turnId);
+                "source_doc_version=?, tags=?, updated_at=? WHERE source_turn_id=?",
+                question, answer, sourceDocVersion, tags, now, turnId);
         if (updated > 0) {
             return jdbc.queryForObject(
                     "SELECT id FROM curated_qa WHERE source_turn_id=?", Long.class, turnId);
@@ -100,8 +198,8 @@ public class CuratedQaRepository {
         jdbc.update(connection -> {
             PreparedStatement ps = connection.prepareStatement(
                     "INSERT INTO curated_qa (source_turn_id, source_user_id, source_thread_id, " +
-                    "question, answer, status, source_doc_version, created_at, updated_at) " +
-                    "VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?)",
+                    "question, answer, status, source_doc_version, created_at, updated_at, tags) " +
+                    "VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?, ?)",
                     Statement.RETURN_GENERATED_KEYS);
             ps.setLong(1, turnId);
             ps.setString(2, userId);
@@ -111,6 +209,39 @@ public class CuratedQaRepository {
             ps.setString(6, sourceDocVersion);
             ps.setString(7, now);
             ps.setString(8, now);
+            ps.setString(9, tags);
+            return ps;
+        }, keyHolder);
+        Number key = keyHolder.getKey();
+        return key != null ? key.longValue() : -1L;
+    }
+
+    /**
+     * Inserts a row for an admin-approved user submission — no originating chat turn, so
+     * {@code source_turn_id} stays NULL (the partial UNIQUE index tolerates any number of these)
+     * and {@code source_thread_id} is an empty string rather than a fake id. Always an INSERT,
+     * never an upsert: {@link CuratedSubmissionRepository} only lets a {@code pending} submission
+     * be approved, so a second row for the same submission can't be created by the normal flow.
+     * Returns the new row id.
+     */
+    public long insertManual(long submissionId, String authorUserId, String question, String answer,
+                             String tags) {
+        String now = now();
+        KeyHolder keyHolder = new GeneratedKeyHolder();
+        jdbc.update(connection -> {
+            PreparedStatement ps = connection.prepareStatement(
+                    "INSERT INTO curated_qa (source_turn_id, source_user_id, source_thread_id, " +
+                    "question, answer, status, source_doc_version, created_at, updated_at, " +
+                    "origin, source_submission_id, tags) " +
+                    "VALUES (NULL, ?, '', ?, ?, 'active', NULL, ?, ?, '" + ORIGIN_MANUAL + "', ?, ?)",
+                    Statement.RETURN_GENERATED_KEYS);
+            ps.setString(1, authorUserId);
+            ps.setString(2, question);
+            ps.setString(3, answer);
+            ps.setString(4, now);
+            ps.setString(5, now);
+            ps.setLong(6, submissionId);
+            ps.setString(7, tags);
             return ps;
         }, keyHolder);
         Number key = keyHolder.getKey();
@@ -123,10 +254,27 @@ public class CuratedQaRepository {
                 now(), turnId);
     }
 
+    /**
+     * Deactivates by the curated row's own id — the only form that works for a manual row, whose
+     * {@code source_turn_id} is NULL (a {@code WHERE source_turn_id = NULL} match is never true, so
+     * {@link #deactivate(long)} would silently no-op on those).
+     */
+    public void deactivateById(long id) {
+        jdbc.update("UPDATE curated_qa SET status='inactive', updated_at=? WHERE id=?", now(), id);
+    }
+
     public Optional<CuratedQa> findBySourceTurnId(long turnId) {
         List<CuratedQa> rows = jdbc.query(
                 "SELECT " + COLUMNS + "FROM curated_qa WHERE source_turn_id = ?", ROW_MAPPER, turnId);
         return rows.isEmpty() ? Optional.empty() : Optional.of(rows.get(0));
+    }
+
+    /** Every still-active chunk of one submission, in creation order — the 전부/전무 unit for
+     *  {@code CuratedQaService.forceRemoveBySubmission}. */
+    public List<CuratedQa> findActiveBySubmissionId(long submissionId) {
+        return jdbc.query("SELECT " + COLUMNS +
+                        "FROM curated_qa WHERE source_submission_id = ? AND status = 'active' ORDER BY id",
+                ROW_MAPPER, submissionId);
     }
 
     public Optional<CuratedQa> findById(long id) {
@@ -165,6 +313,13 @@ public class CuratedQaRepository {
         jdbc.update("UPDATE curated_qa SET embed_status='failed', updated_at=? WHERE id=?", now(), id);
     }
 
+    /** How many vectors this row currently owns in the store — the ids are
+     *  {@code curated-<id>} (first) plus {@code curated-<id>-<i>} for the rest, so the count is what
+     *  lets de-index/re-embed find every one of them. */
+    public void updateChunkCount(long id, int chunkCount) {
+        jdbc.update("UPDATE curated_qa SET chunk_count=? WHERE id=?", Math.max(1, chunkCount), id);
+    }
+
     /** Clears the failed badge after a (re-)embed attempt succeeds. */
     public void markEmbedOk(long id) {
         jdbc.update("UPDATE curated_qa SET embed_status='ok', updated_at=? WHERE id=?", now(), id);
@@ -183,11 +338,53 @@ public class CuratedQaRepository {
         return new HashSet<>(rows);
     }
 
+    /**
+     * Distinct tags used by active curated rows (comma-joined column → flattened, lowercased).
+     * Unioned into the tag-suggestion list because curated entries are <b>not</b> indexed into
+     * {@code chunk_fts} (they live on the vector axis only), so a tag that only ever appeared on a
+     * user submission would otherwise be invisible to the next author and the vocabulary would split.
+     */
+    public List<String> distinctActiveTags() {
+        List<String> rows = jdbc.queryForList(
+                "SELECT DISTINCT tags FROM curated_qa WHERE status='active' AND tags IS NOT NULL AND tags <> ''",
+                String.class);
+        Set<String> out = new java.util.LinkedHashSet<>();
+        for (String row : rows) {
+            for (String t : row.split(",")) {
+                String s = t.strip().toLowerCase(java.util.Locale.ROOT);
+                if (!s.isEmpty()) out.add(s);
+            }
+        }
+        return List.copyOf(out);
+    }
+
+    /**
+     * Answers of active rows that still reference a 지식 제안 본문 이미지 — the curated half of
+     * {@code CuratedImageStore}'s reference check (an approved submission's text lives here, not
+     * only on the submission row). The {@code LIKE} is a pre-filter; the caller re-scans with the
+     * real path pattern.
+     */
+    public List<String> activeAnswersWithImages() {
+        return jdbc.queryForList(
+                "SELECT answer FROM curated_qa WHERE status = 'active' " +
+                "AND answer LIKE '%images/submissions/%'",
+                String.class);
+    }
+
     private static String now() {
         return LocalDateTime.now().format(DT_FMT);
     }
 
-    public record CuratedQa(long id, long sourceTurnId, String sourceUserId, String sourceThreadId,
+    /**
+     * {@code sourceTurnId}/{@code sourceSubmissionId} are mutually exclusive and either may be
+     * null: a 👍-promoted row has a turn id, an admin-approved user submission has a submission id.
+     * {@code origin} says which ({@link #ORIGIN_LIKE} / {@link #ORIGIN_MANUAL}).
+     */
+    public record CuratedQa(long id, Long sourceTurnId, String sourceUserId, String sourceThreadId,
                             String question, String answer, String status, String sourceDocVersion,
-                            String createdAt, String updatedAt, String embedStatus) {}
+                            String createdAt, String updatedAt, String embedStatus,
+                            String origin, Long sourceSubmissionId, String tags, int chunkCount) {
+
+        public boolean isManual() { return ORIGIN_MANUAL.equals(origin); }
+    }
 }

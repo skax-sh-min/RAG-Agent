@@ -7,9 +7,11 @@ import com.example.ragagent.context.ThreadContext;
 import com.example.ragagent.context.ThreadContextResolver;
 import com.example.ragagent.model.VectorStoreAdminView;
 import com.example.ragagent.security.AppUserDetails;
+import com.example.ragagent.security.CurrentUser;
 import com.example.ragagent.service.AdminService;
 import com.example.ragagent.service.AdminService.CollectionsResult;
 import com.example.ragagent.service.CuratedQaService;
+import com.example.ragagent.service.CuratedSubmissionService;
 import com.example.ragagent.service.IndexingProgressService;
 import com.example.ragagent.service.RagService;
 import org.junit.jupiter.api.BeforeEach;
@@ -63,6 +65,8 @@ class AdminControllerWebMvcTest {
     @MockitoBean RagService ragService;
     @MockitoBean IndexingProgressService progressService;
     @MockitoBean CuratedQaService curatedQaService;
+    @MockitoBean CuratedSubmissionService submissionService;
+    @MockitoBean CurrentUser currentUser;             // 승인/거부 시 reviewer id
     @MockitoBean AppProperties props;                 // SecurityConfig 의존
     @MockitoBean ThreadContextResolver threadContextResolver;
     @MockitoBean org.springframework.ai.chat.model.ChatModel chatModel;  // WebConfig.chatClient 의존
@@ -144,12 +148,90 @@ class AdminControllerWebMvcTest {
         when(curatedQaService.listActive(anyInt(), anyInt())).thenReturn(List.of(
                 new com.example.ragagent.repository.CuratedQaRepository.CuratedQa(
                         1L, 42L, "u1", "t1", "질문입니다", "답변입니다", "active", "latest",
-                        "2026-01-01T00:00:00", "2026-01-01T00:00:00", "ok")));
+                        "2026-01-01T00:00:00", "2026-01-01T00:00:00", "ok", "like", null, null, 1)));
 
         mvc.perform(get("/admin/curated").with(user(ADMIN)))
                 .andExpect(status().isOk())
                 .andExpect(model().attributeExists("curatedEntries"))
                 .andExpect(content().string(containsString("질문입니다")));
+    }
+
+    // ── 청크 추가 게시판 — 검토 패널 ──────────────────────────────────────────
+
+    @Test
+    @DisplayName("GET /admin/submissions — 기본 pending 필터로 조회하고 프래그먼트가 렌더된다")
+    void submissionPanel_rendersPendingByDefault() throws Exception {
+        when(submissionService.listForAdmin(anyString(), anyInt(), anyInt())).thenReturn(List.of(
+                new com.example.ragagent.repository.CuratedSubmissionRepository.Submission(
+                        1L, "u1", "제안 제목", "제안 본문", "pending", null, null, null,
+                        "2026-01-01", "2026-01-01", null, null, "인프라", 0, 0, 0)));
+
+        mvc.perform(get("/admin/submissions").with(user(ADMIN)))
+                .andExpect(status().isOk())
+                .andExpect(model().attributeExists("submissions"))
+                .andExpect(content().string(containsString("제안 제목")))
+                .andExpect(content().string(containsString("검토 대기")));
+
+        verify(submissionService).listForAdmin("pending", 0, 20);
+    }
+
+    @Test
+    @DisplayName("GET /admin/submissions?status=all — 'all'은 필터 없음(null)으로 서비스에 전달된다")
+    void submissionPanel_allMapsToNullFilter() throws Exception {
+        when(submissionService.listForAdmin(any(), anyInt(), anyInt())).thenReturn(List.of());
+
+        mvc.perform(get("/admin/submissions").param("status", "all").with(user(ADMIN)))
+                .andExpect(status().isOk());
+
+        verify(submissionService).listForAdmin(null, 0, 20);
+    }
+
+    @Test
+    @DisplayName("POST /admin/submissions/{id}/approve — 승인되면 200 + curatedId")
+    void approveSubmission_returnsCuratedId() throws Exception {
+        when(submissionService.approve(anyLong(), any(), any(), any(), any())).thenReturn(Optional.of(55L));
+
+        mvc.perform(post("/admin/submissions/1/approve").with(csrf()).with(user(ADMIN))
+                        .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                        .content("{\"title\":\"고친 제목\",\"body\":\"고친 본문\"}"))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("55")));
+
+        verify(submissionService).approve(eq(1L), any(), eq("고친 제목"), eq("고친 본문"), any());
+    }
+
+    @Test
+    @DisplayName("POST /admin/submissions/{id}/approve — 이미 처리된 제안이면 409")
+    void approveSubmission_notPending_returns409() throws Exception {
+        when(submissionService.approve(anyLong(), any(), any(), any(), any())).thenReturn(Optional.empty());
+
+        mvc.perform(post("/admin/submissions/1/approve").with(csrf()).with(user(ADMIN))
+                        .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                        .content("{}"))
+                .andExpect(status().isConflict());
+    }
+
+    @Test
+    @DisplayName("POST /admin/submissions/{id}/reject — 사유를 서비스로 전달한다")
+    void rejectSubmission_passesReason() throws Exception {
+        when(submissionService.reject(anyLong(), any(), anyString())).thenReturn(true);
+
+        mvc.perform(post("/admin/submissions/1/reject").with(csrf()).with(user(ADMIN))
+                        .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                        .content("{\"reason\":\"출처 불명\"}"))
+                .andExpect(status().isOk());
+
+        verify(submissionService).reject(eq(1L), any(), eq("출처 불명"));
+    }
+
+    @Test
+    @DisplayName("GET /admin/submissions/pending-count — 대기 건수를 JSON으로 반환")
+    void pendingCount_returnsJson() throws Exception {
+        when(submissionService.countPending()).thenReturn(3);
+
+        mvc.perform(get("/admin/submissions/pending-count").with(user(ADMIN)))
+                .andExpect(status().isOk())
+                .andExpect(content().json("{\"count\":3}"));
     }
 
     @Test
@@ -169,7 +251,7 @@ class AdminControllerWebMvcTest {
         when(curatedQaService.findById(1L)).thenReturn(Optional.of(
                 new com.example.ragagent.repository.CuratedQaRepository.CuratedQa(
                         1L, 42L, "u1", "t1", "질문", "답변", "active", "latest",
-                        "2026-01-01T00:00:00", "2026-01-01T00:00:00", "ok")));
+                        "2026-01-01T00:00:00", "2026-01-01T00:00:00", "ok", "like", null, null, 1)));
 
         mvc.perform(get("/admin/curated/1/detail").with(user(ADMIN)))
                 .andExpect(status().isOk())

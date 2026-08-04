@@ -201,7 +201,31 @@
         </div>
     </div><!-- /row -->
 
+    <!-- ── 청크 추가 게시판 — 사용자 제안 검토 (펼칠 때만 조회) ──────────────── -->
+    <!-- 큐레이션 Q&A 카드보다 위: 이쪽은 관리자의 조치를 기다리는 대기열(검토 대기 배지가 붙는다)이고,
+         아래 큐레이션 카드는 이미 반영된 것을 확인·회수하는 용도라 열어볼 일이 드물다. -->
+    <details class="card mt-4" id="submission-card"
+              hx-get="/admin/submissions" hx-trigger="toggle[this.open] once"
+              hx-target="#submission-body" hx-swap="innerHTML">
+        <summary class="card-header d-flex align-items-center py-2" style="cursor:pointer; list-style:none;">
+            <i class="bi bi-journal-plus me-2"></i>
+            <span class="fw-semibold small">청크 추가 제안</span>
+            <span id="submission-pending-pill" class="badge bg-danger ms-2 d-none">0</span>
+            <span class="ms-auto small text-muted d-flex align-items-center gap-1">
+                사용자가 등록한 청크 — 임베딩 실행 또는 거부 — 펼치면 조회
+                <i class="bi bi-chevron-down curated-qa-chevron"></i>
+            </span>
+        </summary>
+        <div id="submission-body">
+            <div class="card-body text-center text-muted py-4 small">
+                <span class="spinner-border spinner-border-sm me-2"></span>불러오는 중...
+            </div>
+        </div>
+    </details>
+
     <!-- ── §10.10 큐레이션 Q&A 관리 (펼칠 때만 조회 — 항상 DB 조회하지 않음) ──── -->
+    <!-- 페이지 최하단: 위 제안 카드가 조치를 기다리는 대기열인 반면 이쪽은 이미 반영된 것을
+         확인·수정·회수하는 용도라 상시 확인 대상이 아니다. -->
     <details class="card mt-4" id="curated-qa-card"
               hx-get="/admin/curated" hx-trigger="toggle[this.open] once"
               hx-target="#curated-qa-body" hx-swap="innerHTML">
@@ -219,9 +243,12 @@
             </div>
         </div>
     </details>
+
     <style>
         #curated-qa-card > summary::-webkit-details-marker { display: none; }
         #curated-qa-card[open] .curated-qa-chevron { transform: rotate(180deg); }
+        #submission-card > summary::-webkit-details-marker { display: none; }
+        #submission-card[open] .curated-qa-chevron { transform: rotate(180deg); }
         .curated-qa-chevron { transition: transform .15s ease; }
 
         /* 청크 편집 오프캔버스의 좌측 미리보기 컬럼 (넓은 화면에서만 렌더링됨) */
@@ -229,6 +256,15 @@
             min-width: 280px;
             border-right: 1px solid var(--border-default);
             padding-right: 1rem;
+        }
+
+        /* 설명형 툴팁 — 기본 200px 폭에서는 두 문장짜리 안내가 세로로 길게 찢어진다.
+           CSS 변수는 Bootstrap 5.3+ 경로, .tooltip-inner 규칙은 그 이전 버전용 폴백. */
+        .tooltip-wide { --bs-tooltip-max-width: 320px; }
+        .tooltip-wide .tooltip-inner {
+            max-width: 320px;
+            text-align: left;
+            line-height: 1.45;
         }
     </style>
 
@@ -246,12 +282,27 @@
 </div>
 
 <!-- ── §10.10 큐레이션 Q&A 편집 Offcanvas ──────────────────────────────── -->
+<!-- 너비는 청크 편집과 동일하게 openCuratedEdit()이 화면 폭에 따라 다시 지정한다(좁은 화면에서만
+     여기 적힌 기본값이 그대로 쓰인다). -->
 <div class="offcanvas offcanvas-end" tabindex="-1" id="curatedEditOffcanvas" style="width:520px; max-width:100%;">
     <div class="offcanvas-header border-bottom">
         <h6 class="offcanvas-title"><i class="bi bi-chat-heart me-2"></i>큐레이션 Q&A 편집</h6>
         <button type="button" class="btn-close" data-bs-dismiss="offcanvas"></button>
     </div>
     <div class="offcanvas-body d-flex flex-column gap-3" id="curatedEditOffcanvasBody">
+        <div class="text-muted small text-center py-5">항목을 선택하세요.</div>
+    </div>
+</div>
+
+<!-- ── 청크 추가 제안 검토 Offcanvas ────────────────────────────────────── -->
+<!-- 승인된 본문은 그대로 검색 컨텍스트가 되어 답변 프롬프트에 주입된다 — 따라서 본문은
+     항상 잘라내지 않고 전체를 보여준다(일괄 승인·자동 승인 경로를 두지 않는 이유도 같다). -->
+<div class="offcanvas offcanvas-end" tabindex="-1" id="submissionReviewOffcanvas" style="width:640px; max-width:100%;">
+    <div class="offcanvas-header border-bottom">
+        <h6 class="offcanvas-title"><i class="bi bi-clipboard-check me-2"></i>청크 추가 제안 검토</h6>
+        <button type="button" class="btn-close" data-bs-dismiss="offcanvas"></button>
+    </div>
+    <div class="offcanvas-body d-flex flex-column gap-3" id="submissionReviewOffcanvasBody">
         <div class="text-muted small text-center py-5">항목을 선택하세요.</div>
     </div>
 </div>
@@ -340,28 +391,11 @@ const EDIT_BASE_WIDTH = 520;
 const EDIT_FIELDS_WIDTH = 500;
 
 // 청크 원문의 이미지 참조는 표준 마크다운이 아니라 [이미지: images/{id}/{file}] 커스텀 마커
-// (DocumentIndexer.IMAGE_MARKER와 동일한 형태) — marked가 인식하지 못하므로 파싱 전에 <img>로 바꾼다.
-const CHUNK_IMAGE_MARKER = /\[이미지(?:\(([^)]*)\))?: ([^\]]+?)\]/g;
-// /api/v1/images/** 가 inline(image/*)으로 내려주는 확장자. 그 외(SVG·EMF/WMF, 변환불가 마커)는
-// 강제 다운로드되므로 <img>로 만들면 깨진 아이콘만 남는다 → 텍스트 placeholder로 대체.
-const PREVIEWABLE_IMAGE_EXT = ['png', 'jpg', 'jpeg', 'gif', 'webp'];
-
-// marked → DOMPurify → hljs: chat-stream.js의 renderMarkdown()과 동일한 파이프라인.
+// (DocumentIndexer.IMAGE_MARKER와 동일한 형태)라 marked가 인식하지 못한다. 치환+렌더는
+// layout/base.html 의 renderMarkdownWithImageMarkers() 가 담당한다 — 지식 제안 작성/검토
+// 미리보기도 같은 본문 형식을 렌더하므로 구현이 한 벌만 있어야 한다.
 function renderChunkPreview(container, rawText) {
-    const source = rawText || '';
-    if (typeof marked === 'undefined') { container.textContent = source; return; }
-    const withImages = source.replace(CHUNK_IMAGE_MARKER, function (_m, unconvertibleTag, path) {
-        const ext = (path.split('.').pop() || '').toLowerCase();
-        if (unconvertibleTag || PREVIEWABLE_IMAGE_EXT.indexOf(ext) === -1) {
-            return `<span class="text-muted small">📎 ${escHtml(path)} (미리보기 불가)</span>`;
-        }
-        return `<img src="/api/v1/${escHtml(path)}" loading="lazy" style="max-width:100%;">`;
-    });
-    const html = marked.parse(withImages);
-    container.innerHTML = typeof DOMPurify !== 'undefined' ? DOMPurify.sanitize(html) : html;
-    if (typeof hljs !== 'undefined') {
-        container.querySelectorAll('pre code').forEach(block => hljs.highlightElement(block));
-    }
+    renderMarkdownWithImageMarkers(container, rawText);
 }
 
 // Open edit offcanvas: fetch full chunk detail
@@ -378,34 +412,38 @@ function openChunkEdit(chunkId, collection) {
                 : EDIT_BASE_WIDTH + 'px';
 
             const metaJson = JSON.stringify(data.metadata, null, 2);
+            // 순서는 Chunk ID → 메타데이터 → 텍스트. 텍스트가 마지막인 이유는 두 가지 —
+            // (1) 바로 아래 "저장" 버튼과 붙어 있어야 편집→저장 동선이 짧고, (2) flex-grow-1을
+            // 가진 유일한 필드라 남는 세로 공간을 전부 가져가므로 맨 아래에 두는 편이 자연스럽다.
             const editFields = `
                 <div>
                     <label class="form-label small fw-semibold">Chunk ID</label>
                     <div class="form-control form-control-sm text-muted" style="font-size:0.72rem; word-break:break-all;">${escHtml(chunkId)}</div>
                 </div>
-                <div class="flex-grow-1 d-flex flex-column">
-                    <label class="form-label small fw-semibold">텍스트</label>
-                    <textarea id="edit-text" class="form-control form-control-sm flex-grow-1"
-                              style="min-height:180px; font-size:0.82rem; resize:vertical;">${escHtml(data.text || '')}</textarea>
-                </div>
                 <div>
                     <label class="form-label small fw-semibold">메타데이터 (JSON)</label>
                     <textarea id="edit-meta" class="form-control form-control-sm font-monospace"
-                              style="min-height:200px; font-size:0.78rem; resize:vertical;">${escHtml(metaJson)}</textarea>
-                    <div class="form-text text-warning small">※ 텍스트 변경 시 벡터 임베딩은 갱신되지 않음 (원본 벡터 유지)</div>
+                              style="min-height:135px; font-size:0.78rem; resize:vertical;">${escHtml(metaJson)}</textarea>
+                </div>
+                <div class="flex-grow-1 d-flex flex-column">
+                    <label class="form-label small fw-semibold">텍스트</label>
+                    <textarea id="edit-text" class="form-control form-control-sm flex-grow-1"
+                              style="min-height:230px; font-size:0.82rem; resize:vertical;">${escHtml(data.text || '')}</textarea>
+                    <div class="form-text text-warning small">※ 저장해도 벡터 임베딩은 갱신되지 않음 (원본 벡터 유지)</div>
                 </div>
                 <button class="btn btn-primary btn-sm" onclick="saveChunkEdit('${escAttr(chunkId)}', '${escAttr(collection)}')">
                     <i class="bi bi-save me-1"></i>저장
                 </button>
                 <hr class="my-1">
                 <div>
+                    <!-- .form-check 는 input을 float 시키고 컨테이너에 padding-left를 주는 구조라
+                         d-flex 를 얹으면 스위치 정렬이 틀어진다 — 아이콘은 라벨 뒤에 인라인으로 둔다. -->
                     <div class="form-check form-switch">
                         <input class="form-check-input" type="checkbox" id="edit-regen-keywords">
                         <label class="form-check-label small" for="edit-regen-keywords">키워드 재생성 (LLM 1회 호출)</label>
-                    </div>
-                    <div class="form-text small">
-                        저장된(위 "저장" 버튼으로 반영한) 텍스트 기준으로 재임베딩 + 키워드 검색(FTS) 인덱스를 다시 만듭니다.
-                        체크 해제 시 현재 키워드를 그대로 두고 재임베딩·FTS만 갱신합니다(LLM 미사용, 즉시).
+                        <i class="bi bi-info-circle text-secondary ms-1 small" style="cursor:help;"
+                           data-bs-toggle="tooltip" data-bs-custom-class="tooltip-wide"
+                           title="저장된(위 &quot;저장&quot; 버튼으로 반영한) 텍스트 기준으로 재임베딩 + 키워드 검색(FTS) 인덱스를 다시 만듭니다. 체크 해제 시 현재 키워드를 그대로 두고 재임베딩·FTS만 갱신합니다(LLM 미사용, 즉시)."></i>
                     </div>
                     <button class="btn btn-outline-warning btn-sm mt-2" id="reindex-chunk-btn"
                             onclick="reindexChunkInline('${escAttr(chunkId)}', '${escAttr(collection)}')">
@@ -434,9 +472,24 @@ function openChunkEdit(chunkId, collection) {
                 body.className = 'offcanvas-body d-flex flex-column gap-3';
                 body.innerHTML = editFields;
             }
+            initTooltipsIn(body);
             new bootstrap.Offcanvas(offcanvasEl).show();
         })
         .catch(() => showToast('청크 정보를 불러올 수 없습니다.', 'danger'));
+}
+
+/**
+ * innerHTML로 새로 그린 영역의 Bootstrap 툴팁을 활성화한다. 오프캔버스 본문은 열 때마다
+ * 통째로 교체되므로 페이지 로드 시점의 일괄 초기화로는 잡히지 않는다.
+ * 네이티브 title의 ~1.5초 지연을 피하는 이유는 chat.html의 S/M/L 툴팁 주석과 동일.
+ * 교체 전 인스턴스는 dispose 해 둔다 — 안 하면 이전 엘리먼트에 붙은 팝업이 열린 채로 남을 수 있다.
+ */
+function initTooltipsIn(container) {
+    container.querySelectorAll('[data-bs-toggle="tooltip"]').forEach(el => {
+        const existing = bootstrap.Tooltip.getInstance(el);
+        if (existing) existing.dispose();
+        new bootstrap.Tooltip(el, { delay: { show: 100, hide: 0 } });
+    });
 }
 
 function saveChunkEdit(chunkId, collection) {
@@ -502,12 +555,23 @@ function deleteChunkInline(chunkId, collection, row) {
 
 // ── §10.10 큐레이션 Q&A 편집/삭제 ──────────────────────────────────────────
 
+// 청크 편집(openChunkEdit)과 같은 조건·같은 렌더러를 쓴다: 가용 뷰포트가 EDIT_BASE_WIDTH의 2배
+// 이상일 때만 좌측에 미리보기 컬럼을 띄우고 오프캔버스를 넓힌다. 큐레이션 답변은 검색 근거로
+// 쓰이는 마크다운이라(표·코드블록·이미지 마커 포함) 원문 텍스트만 보고 편집하면 서식이 깨진 걸
+// 알아채기 어렵다 — 청크 편집에서 미리보기를 붙인 것과 같은 이유다.
 function openCuratedEdit(id) {
     fetch('/admin/curated/' + encodeURIComponent(id) + '/detail')
         .then(r => { if (!r.ok) throw new Error(); return r.json(); })
         .then(data => {
+            const offcanvasEl = document.getElementById('curatedEditOffcanvas');
             const body = document.getElementById('curatedEditOffcanvasBody');
-            body.innerHTML = `
+            const isWide = window.innerWidth >= EDIT_BASE_WIDTH * 2;
+            offcanvasEl.style.width = isWide
+                ? Math.max(EDIT_BASE_WIDTH * 2,
+                           Math.min(EDIT_BASE_WIDTH * 2.5, window.innerWidth - 100)) + 'px'
+                : EDIT_BASE_WIDTH + 'px';
+
+            const editFields = `
                 <div>
                     <label class="form-label small fw-semibold">질문</label>
                     <div class="form-control form-control-sm text-muted" style="font-size:0.8rem;">${escHtml(data.question || '')}</div>
@@ -521,7 +585,29 @@ function openCuratedEdit(id) {
                 <button class="btn btn-primary btn-sm" onclick="saveCuratedEdit('${escAttr(id)}')">
                     <i class="bi bi-save me-1"></i>저장
                 </button>`;
-            new bootstrap.Offcanvas(document.getElementById('curatedEditOffcanvas')).show();
+
+            if (isWide) {
+                body.className = 'offcanvas-body d-flex flex-row gap-3';
+                body.innerHTML = `
+                    <div class="chunk-preview-pane flex-grow-1 overflow-auto">
+                        <div class="text-muted small fw-semibold mb-2"><i class="bi bi-eye me-1"></i>미리보기</div>
+                        <div class="md-content" id="curated-preview-content"></div>
+                    </div>
+                    <div class="d-flex flex-column gap-3 overflow-auto"
+                         style="width:${EDIT_FIELDS_WIDTH}px; flex-shrink:0;">${editFields}</div>`;
+                const preview = document.getElementById('curated-preview-content');
+                renderChunkPreview(preview, data.answer);
+                let previewTimer = null;
+                document.getElementById('curated-edit-answer').addEventListener('input', function () {
+                    clearTimeout(previewTimer);
+                    const value = this.value;
+                    previewTimer = setTimeout(() => renderChunkPreview(preview, value), 200);
+                });
+            } else {
+                body.className = 'offcanvas-body d-flex flex-column gap-3';
+                body.innerHTML = editFields;
+            }
+            new bootstrap.Offcanvas(offcanvasEl).show();
         })
         .catch(() => showToast('큐레이션 항목을 불러올 수 없습니다.', 'danger'));
 }
@@ -568,6 +654,206 @@ function deleteCuratedInline(id, btn) {
         else       { showToast('삭제 실패', 'danger'); }
     })
     .catch(() => showToast('삭제 중 오류', 'danger'));
+}
+
+// ── 청크 추가 제안 검토 ────────────────────────────────────────────────────
+// 페이지 레벨에 두는 이유는 위 loadCurated/loadChunks 와 동일 — 프래그먼트는 plain innerHTML 로
+// 갈아끼워지므로 프래그먼트에 넣은 <script> 는 실행되지 않는다.
+
+/** 현재 패널이 보고 있는 필터 — 승인/거부 후 같은 조건으로 다시 그리기 위해 유지한다. */
+let submissionFilter = { status: 'pending', offset: 0, limit: 20 };
+
+function applySubmissionStatusFilter(sel) {
+    submissionFilter.status = sel.value;
+    loadSubmissions(0, submissionFilter.limit);
+}
+
+function applySubmissionLimitFilter(sel) {
+    loadSubmissions(0, +sel.value);
+}
+
+function loadSubmissions(offset, limit) {
+    submissionFilter.offset = offset;
+    submissionFilter.limit  = limit;
+    const qs = 'status=' + encodeURIComponent(submissionFilter.status) +
+               '&offset=' + offset + '&limit=' + limit;
+    return fetch('/admin/submissions?' + qs, { headers: { 'HX-Request': 'true' } })
+        .then(r => r.text())
+        .then(html => {
+            document.getElementById('submission-body').innerHTML = html;
+            refreshSubmissionPendingPill();
+        });
+}
+
+/** 카드 헤더의 대기 건수 pill — 헤더 네비의 배지와 같은 엔드포인트를 쓴다. */
+function refreshSubmissionPendingPill() {
+    const pill = document.getElementById('submission-pending-pill');
+    if (!pill) return;
+    fetch('/admin/submissions/pending-count')
+        .then(r => r.ok ? r.json() : Promise.reject())
+        .then(d => {
+            pill.textContent = d.count;
+            pill.classList.toggle('d-none', !d.count);
+        })
+        .catch(() => pill.classList.add('d-none'));
+}
+refreshSubmissionPendingPill();
+
+function openSubmissionReview(id) {
+    fetch('/admin/submissions/' + encodeURIComponent(id) + '/detail')
+        .then(r => { if (!r.ok) throw new Error(); return r.json(); })
+        .then(data => {
+            const pending = data.status === 'pending';
+            const body = document.getElementById('submissionReviewOffcanvasBody');
+            body.innerHTML = `
+                <div class="small text-muted d-flex flex-wrap gap-2">
+                    <span>작성자: <span class="fw-semibold">${escHtml(data.author || '')}</span></span>
+                    <span class="ms-auto">${pending ? '승인 시' : '등록된'} 청크
+                        <span class="fw-semibold">${data.chunkPreview}</span>개</span>
+                </div>
+                <div>
+                    <label class="form-label small fw-semibold">제목</label>
+                    <input id="submission-review-title" type="text"
+                           class="form-control form-control-sm"
+                           value="${escHtml(data.title || '')}" ${pending ? '' : 'readonly'}/>
+                </div>
+                <div>
+                    <label class="form-label small fw-semibold">태그</label>
+                    <input id="submission-review-tags" type="text"
+                           class="form-control form-control-sm" autocomplete="off"
+                           value="${escHtml(data.tags || '')}" ${pending ? '' : 'readonly'}
+                           placeholder="쉼표로 구분 · 비우면 모든 검색에 반영"/>
+                    <div class="form-text small">
+                        태그를 지정하면 채팅에서 그 태그를 고른 검색에만 반영됩니다.
+                    </div>
+                </div>
+                <div class="flex-grow-1 d-flex flex-column">
+                    <div class="d-flex align-items-center mb-1">
+                        <label class="form-label small fw-semibold mb-0">본문</label>
+                        <div class="btn-group btn-group-sm ms-auto" role="group">
+                            <input type="radio" class="btn-check" name="review-view" id="review-view-edit" checked/>
+                            <label class="btn btn-outline-secondary py-0 px-2" for="review-view-edit"
+                                   style="font-size:0.72rem;">원문</label>
+                            <input type="radio" class="btn-check" name="review-view" id="review-view-preview"/>
+                            <label class="btn btn-outline-secondary py-0 px-2" for="review-view-preview"
+                                   style="font-size:0.72rem;">미리보기</label>
+                        </div>
+                    </div>
+                    <textarea id="submission-review-body" class="form-control form-control-sm flex-grow-1"
+                              style="min-height:320px; font-size:0.82rem; resize:vertical;"
+                              ${pending ? '' : 'readonly'}>${escHtml(data.body || '')}</textarea>
+                    <div id="submission-review-preview" class="form-control d-none"
+                         style="min-height:320px; overflow:auto; font-size:0.85rem;"></div>
+                    <div class="form-text small">
+                        ${pending
+                            ? '여기서 수정한 내용이 그대로 임베딩되고, 작성자에게도 이 내용이 보입니다. 긴 본문은 위 개수만큼 청크로 나뉘어 등록됩니다.'
+                            : '이미 처리된 제안입니다 (읽기 전용).'}
+                    </div>
+                </div>
+                ${pending ? `
+                <div class="d-flex gap-2">
+                    <button class="btn btn-primary btn-sm flex-grow-1" id="submission-approve-btn"
+                            onclick="approveSubmission('${escAttr(id)}')">
+                        <i class="bi bi-database-add me-1"></i>임베딩 실행
+                    </button>
+                    <button class="btn btn-outline-danger btn-sm"
+                            onclick="rejectSubmission('${escAttr(id)}')">
+                        <i class="bi bi-x-circle me-1"></i>거부
+                    </button>
+                </div>` : ''}`;
+            wireReviewPreview();
+            new bootstrap.Offcanvas(document.getElementById('submissionReviewOffcanvas')).show();
+        })
+        .catch(() => showToast('제안을 불러올 수 없습니다.', 'danger'));
+}
+
+/** 원문/미리보기 전환. 사용자가 쓴 마크다운이므로 렌더 전 반드시 DOMPurify 를 거친다
+ *  (renderMarkdownWithImageMarkers 안에서 처리). 본문 이미지 마커도 여기서 실제 그림으로
+ *  보여야 한다 — 승인은 그 그림까지 포함해 검색에 들어가는 것을 허가하는 행위다. */
+function wireReviewPreview() {
+    const box     = document.getElementById('submission-review-body');
+    const preview = document.getElementById('submission-review-preview');
+    const tabEdit = document.getElementById('review-view-edit');
+    const tabView = document.getElementById('review-view-preview');
+    if (!box || !preview || !tabEdit || !tabView) return;
+    function show(on) {
+        if (on) renderMarkdownWithImageMarkers(preview, box.value);
+        box.classList.toggle('d-none', on);
+        preview.classList.toggle('d-none', !on);
+    }
+    tabEdit.addEventListener('change', () => show(false));
+    tabView.addEventListener('change', () => show(true));
+}
+
+function approveSubmission(id) {
+    const title = document.getElementById('submission-review-title').value;
+    const body  = document.getElementById('submission-review-body').value;
+    const tags  = document.getElementById('submission-review-tags').value;
+    if (!title.trim() || !body.trim()) { showToast('제목과 본문을 모두 입력하세요.', 'warning'); return; }
+
+    // 본문에 이미지가 있으면 승인 요청이 이미지 수만큼의 Vision 호출을 동기로 기다린다(설명은
+    // 임베딩되는 텍스트의 일부여야 하므로 백그라운드로 미룰 수 없다) — 수십 초가 걸릴 수 있어
+    // 버튼을 잠그고 진행 중임을 보여준다. 잠그지 않으면 두 번 눌러 CAS 경합을 자초하게 된다.
+    const btn = document.getElementById('submission-approve-btn');
+    const restore = btn ? btn.innerHTML : null;
+    if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>등록 중...';
+    }
+
+    fetch('/admin/submissions/' + encodeURIComponent(id) + '/approve', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...getCsrfHeaders() },
+        body: JSON.stringify({ title, body, tags })
+    })
+    .then(async r => {
+        if (r.ok) {
+            // 임베딩 자체는 백그라운드라 여기서는 "등록됨"까지만 확정할 수 있다 —
+            // 실패 여부는 목록의 ⚠ 배지로 뒤늦게 드러난다.
+            showToast('청크로 등록했습니다. 임베딩은 백그라운드에서 진행됩니다.', 'success');
+            closeSubmissionReview();
+            loadSubmissions(submissionFilter.offset, submissionFilter.limit);
+            return;
+        }
+        if (r.status === 409) {
+            showToast('이미 처리된 제안입니다.', 'warning');
+            closeSubmissionReview();
+            loadSubmissions(submissionFilter.offset, submissionFilter.limit);
+            return;
+        }
+        // 400(예: 이미지 개수 초과)은 서버가 사람이 읽을 이유를 담아 준다 — 삼키면 관리자가
+        // 무엇을 고쳐야 할지 알 수 없다.
+        let d = {};
+        try { d = await r.json(); } catch (e) { /* 비-JSON 오류 응답 */ }
+        showToast(d.detail || d.message || '등록 실패', 'danger');
+    })
+    .catch(() => showToast('등록 중 오류 발생', 'danger'))
+    .finally(() => { if (btn) { btn.disabled = false; btn.innerHTML = restore; } });
+}
+
+function rejectSubmission(id) {
+    const reason = prompt('거부 사유를 입력하세요 (작성자에게 그대로 표시됩니다):');
+    if (reason === null) return;                 // 취소
+    if (!reason.trim()) { showToast('거부 사유는 필수입니다.', 'warning'); return; }
+
+    fetch('/admin/submissions/' + encodeURIComponent(id) + '/reject', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...getCsrfHeaders() },
+        body: JSON.stringify({ reason })
+    })
+    .then(r => {
+        if (r.ok) {
+            showToast('제안을 거부했습니다.', 'success');
+            closeSubmissionReview();
+            loadSubmissions(submissionFilter.offset, submissionFilter.limit);
+        } else { showToast('거부 실패', 'danger'); }
+    })
+    .catch(() => showToast('거부 중 오류 발생', 'danger'));
+}
+
+function closeSubmissionReview() {
+    const oc = bootstrap.Offcanvas.getInstance(document.getElementById('submissionReviewOffcanvas'));
+    if (oc) oc.hide();
 }
 
 /** Disables/re-enables every button in the 문서 레지스트리 card and shows/clears its status text. */

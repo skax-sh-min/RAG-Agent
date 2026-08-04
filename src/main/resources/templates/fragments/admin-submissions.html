@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" lang="ko">
+<body>
+
+<!-- 청크 추가 게시판 — 관리자 검토 패널. /admin/submissions 로 지연 로딩된다.
+     admin-curated.html 과 같은 이유로 이 프래그먼트에는 <script>를 두지 않는다(재조회 시
+     plain innerHTML 로 삽입되어 내장 <script>가 실행되지 않음) — 동작은 admin.html 의
+     loadSubmissions()/openSubmissionReview() 등 페이지 레벨 함수가 담당한다. -->
+<th:block th:fragment="panel">
+<div class="card-body p-0">
+    <div class="px-3 py-2 border-bottom d-flex align-items-center flex-wrap gap-2 small text-muted">
+        <span class="badge bg-secondary me-1" th:text="${#lists.size(submissions)}">0</span>건
+        <select class="form-select form-select-sm" id="submission-status-select" style="max-width:130px;"
+                onchange="applySubmissionStatusFilter(this)">
+            <option value="pending"   th:selected="${submissionStatus == 'pending'}">검토 대기</option>
+            <option value="approved"  th:selected="${submissionStatus == 'approved'}">등록 완료</option>
+            <option value="rejected"  th:selected="${submissionStatus == 'rejected'}">반려</option>
+            <option value="withdrawn" th:selected="${submissionStatus == 'withdrawn'}">철회됨</option>
+            <option value="all"       th:selected="${submissionStatus == 'all'}">전체</option>
+        </select>
+        <select class="form-select form-select-sm ms-auto" id="submission-limit-select" style="max-width:100px;"
+                onchange="applySubmissionLimitFilter(this)">
+            <option value="20"  th:selected="${limit == 20}">20건</option>
+            <option value="50"  th:selected="${limit == 50}">50건</option>
+            <option value="100" th:selected="${limit == 100}">100건</option>
+        </select>
+    </div>
+
+    <div th:if="${#lists.isEmpty(submissions)}"
+         class="text-muted small p-3 text-center">해당 상태의 제안이 없습니다.</div>
+
+    <div class="table-responsive" th:unless="${#lists.isEmpty(submissions)}">
+        <table class="table table-sm table-hover mb-0 small">
+            <thead class="table-light">
+            <tr>
+                <th style="min-width:180px;">제목</th>
+                <th>본문 (미리보기)</th>
+                <th style="width:110px;">작성자</th>
+                <th style="width:90px;">상태</th>
+                <th style="min-width:120px;">등록일</th>
+                <th class="text-center" style="width:70px;">작업</th>
+            </tr>
+            </thead>
+            <tbody>
+            <tr th:each="s : ${submissions}" th:id="'submission-row-' + ${s.id()}">
+                <td>
+                    <span th:if="${s.embedFailed()}" class="badge bg-warning text-dark me-1"
+                          title="임베딩에 실패한 항목입니다 — 큐레이션 Q&A 탭에서 본문을 줄여 저장하면 재시도됩니다.">⚠</span>
+                    <span th:text="${s.title()}"></span>
+                </td>
+                <td>
+                    <div class="text-truncate" style="max-width:360px;"
+                         th:title="${s.body()}" th:text="${s.bodyPreview()}"></div>
+                </td>
+                <td class="text-muted text-truncate" style="max-width:110px;"
+                    th:title="${s.authorUserId()}" th:text="${s.authorUserId()}"></td>
+                <td>
+                    <span th:switch="${s.displayStatus()}">
+                        <span th:case="'pending'"   class="badge bg-secondary">검토 대기</span>
+                        <span th:case="'approved'"  class="badge bg-success">등록 완료</span>
+                        <span th:case="'rejected'"  class="badge bg-danger">반려</span>
+                        <span th:case="'withdrawn'" class="badge bg-light text-dark border">철회됨</span>
+                        <span th:case="'revoked'"   class="badge bg-warning text-dark">회수됨</span>
+                        <span th:case="*"           class="badge bg-secondary"
+                              th:text="${s.displayStatus()}"></span>
+                    </span>
+                </td>
+                <td class="text-muted" th:text="${s.createdAt()}"></td>
+                <td class="text-center">
+                    <button type="button" class="btn btn-sm btn-outline-primary py-0 px-1"
+                            style="font-size:0.7rem;"
+                            th:attr="data-submission-id=${s.id()}"
+                            onclick="openSubmissionReview(this.dataset.submissionId)"
+                            th:title="${s.isPending()} ? '검토 (임베딩 실행 / 거부)' : '내용 보기'">
+                        <i class="bi" th:classappend="${s.isPending()} ? ' bi-clipboard-check' : ' bi-eye'"></i>
+                    </button>
+                </td>
+            </tr>
+            </tbody>
+        </table>
+    </div>
+
+    <div class="px-3 py-2 border-top d-flex align-items-center gap-2 small text-muted"
+         th:if="${#lists.size(submissions) > 0 or offset > 0}">
+        <button class="btn btn-sm btn-outline-secondary py-0 px-2"
+                th:disabled="${offset == 0}"
+                th:data-offset="${offset - limit}"
+                th:data-limit="${limit}"
+                onclick="loadSubmissions(+this.dataset.offset, +this.dataset.limit)">
+            ‹ 이전
+        </button>
+        <span>
+            <span th:text="${offset + 1}">1</span> –
+            <span th:text="${offset + #lists.size(submissions)}">20</span>
+        </span>
+        <button class="btn btn-sm btn-outline-secondary py-0 px-2"
+                th:disabled="${#lists.size(submissions) < limit}"
+                th:data-offset="${offset + limit}"
+                th:data-limit="${limit}"
+                onclick="loadSubmissions(+this.dataset.offset, +this.dataset.limit)">
+            다음 ›
+        </button>
+    </div>
+</div>
+</th:block>
+
+</body>
+</html>

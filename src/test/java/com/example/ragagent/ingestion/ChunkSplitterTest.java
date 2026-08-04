@@ -30,7 +30,7 @@ class ChunkSplitterTest {
     @DisplayName("작은 중간 청크(< overlap)는 앞 청크로 병합된다")
     void mergeTinyChunks_mergesMiddleTinyChunkIntoPrevious() {
         List<String> out = splitter.mergeTinyChunks(
-                List.of("A".repeat(220), "B".repeat(90), "C".repeat(210)), 200);
+                List.of("A".repeat(220), "B".repeat(90), "C".repeat(210)), 200, 0);
 
         assertThat(out).hasSize(2);
         assertThat(out.get(0)).contains("A".repeat(220)).contains("B".repeat(90));
@@ -41,7 +41,7 @@ class ChunkSplitterTest {
     @DisplayName("시작부 작은 청크(< overlap)는 다음 청크 앞에 병합된다")
     void mergeTinyChunks_mergesLeadingTinyChunkIntoNext() {
         List<String> out = splitter.mergeTinyChunks(
-                List.of("X".repeat(80), "Y".repeat(230), "Z".repeat(220)), 200);
+                List.of("X".repeat(80), "Y".repeat(230), "Z".repeat(220)), 200, 0);
 
         assertThat(out).hasSize(2);
         assertThat(out.get(0)).startsWith("X".repeat(80));
@@ -53,10 +53,41 @@ class ChunkSplitterTest {
     @DisplayName("청크 길이가 overlap과 같으면 병합하지 않는다")
     void mergeTinyChunks_doesNotMergeWhenLengthEqualsOverlap() {
         List<String> out = splitter.mergeTinyChunks(
-                List.of("A".repeat(220), "B".repeat(200), "C".repeat(220)), 200);
+                List.of("A".repeat(220), "B".repeat(200), "C".repeat(220)), 200, 0);
 
         assertThat(out).hasSize(3);
         assertThat(out.get(1)).isEqualTo("B".repeat(200));
+    }
+
+    @Test
+    @DisplayName("overlap=0이면 우연히 일치하는 접미/접두사를 중복으로 오인해 지우지 않는다")
+    void mergeTinyChunks_atZeroOverlap_neverDropsCoincidentallyMatchingText() {
+        // 반복적인 내용(같은 형식의 표 행·목록 등)에서는 앞 조각의 끝과 뒤 조각의 시작이 길게
+        // 일치할 수 있다. overlap=0이면 조각들은 애초에 겹치지 않으므로 이 일치는 우연이며,
+        // 지우면 본문이 사라진다(예전에는 min-chunk-size만큼 스캔해 실제로 지웠다).
+        String repeated = "| 항목 | 값 |\n".repeat(12);          // 앞 조각
+        String tinyTail = "| 항목 | 값 |\n| 마지막 | 값 |";      // min 미만이라 앞으로 병합됨
+
+        List<String> out = splitter.mergeTinyChunks(List.of(repeated, tinyTail), 200, 0);
+
+        assertThat(out).hasSize(1);
+        assertThat(out.get(0)).contains("| 마지막 | 값 |");
+        // 두 입력의 문자 수가 (구분자 제외하고) 모두 보존된다.
+        assertThat(out.get(0).replace("\n", "").length())
+                .isEqualTo(repeated.replace("\n", "").length() + tinyTail.replace("\n", "").length());
+    }
+
+    @Test
+    @DisplayName("slidingWindow — overlap=0에서 반복 텍스트가 재병합돼도 내용이 유실되지 않는다")
+    void slidingWindow_atZeroOverlap_preservesRepetitiveTextThroughTinyChunkMerge() {
+        // 조각이 minChunkSize보다 작아 mergeTinyChunks 경로를 반드시 타도록 chunkSize == minChunkSize.
+        String body = "## 반복 표\n\n" + ("내".repeat(79) + "\n").repeat(20);
+        Document doc = new Document(body, new java.util.HashMap<>(Map.of(MetaKey.CHAPTER_NO, "0")));
+
+        List<Document> pieces = splitter.slidingWindow(doc, 500, 0, 500);
+
+        int totalChars = pieces.stream().mapToInt(d -> d.getText().replace("\n", "").length()).sum();
+        assertThat(totalChars).isGreaterThanOrEqualTo(body.replace("\n", "").length());
     }
 
     @Test
@@ -65,7 +96,7 @@ class ChunkSplitterTest {
         String overlap = "__OVERLAP__";
         String first = "A".repeat(220) + overlap;
         String tiny = overlap + "B".repeat(60);
-        List<String> out = splitter.mergeTinyChunks(List.of(first, tiny), 200);
+        List<String> out = splitter.mergeTinyChunks(List.of(first, tiny), 200, overlap.length());
 
         assertThat(out).hasSize(1);
         String merged = out.get(0);

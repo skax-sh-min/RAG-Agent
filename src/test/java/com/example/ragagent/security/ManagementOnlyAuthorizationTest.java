@@ -7,11 +7,13 @@ import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.context.ThreadContext;
 import com.example.ragagent.context.ThreadContextResolver;
 import com.example.ragagent.controller.AdminController;
+import com.example.ragagent.controller.CuratedSubmissionController;
 import com.example.ragagent.controller.DocumentController;
 import com.example.ragagent.model.SyncResult;
 import com.example.ragagent.model.VectorStoreAdminView;
 import com.example.ragagent.service.AdminService;
 import com.example.ragagent.service.CuratedQaService;
+import com.example.ragagent.service.CuratedSubmissionService;
 import com.example.ragagent.service.DocumentExportService;
 import com.example.ragagent.service.IndexingProgressService;
 import com.example.ragagent.service.RagService;
@@ -38,6 +40,7 @@ import java.util.Optional;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -62,10 +65,10 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * without it, the "open surface" assertions below would trivially pass for the wrong reason
  * (no filter running at all) rather than proving the real guest path works.
  */
-@WebMvcTest(value = {DocumentController.class, AdminController.class},
+@WebMvcTest(value = {DocumentController.class, AdminController.class, CuratedSubmissionController.class},
         properties = {"app.auth.enabled=false", "app.auth.management-only=true"})
 @Import({com.example.ragagent.context.WebMvcConfig.class, SecurityConfig.class, NoAuthAutoLoginFilter.class,
-        ManagementOnlyAuthorizationTest.TestConfig.class})
+        SessionCurrentUser.class, ManagementOnlyAuthorizationTest.TestConfig.class})
 @ResourceLock("global-state")
 class ManagementOnlyAuthorizationTest {
 
@@ -121,10 +124,15 @@ class ManagementOnlyAuthorizationTest {
     @MockitoBean ChatModel chatModel;
     @MockitoBean ThreadContextResolver threadContextResolver;
     @MockitoBean RagService ragService;
+    @MockitoBean com.example.ragagent.repository.CuratedQaRepository curatedQaRepository;
     @MockitoBean IndexingProgressService progressService;
     @MockitoBean AuditLogger auditLogger;
     @MockitoBean AdminService adminService;
     @MockitoBean CuratedQaService curatedQaService;
+    @MockitoBean CuratedSubmissionService submissionService;
+    // 본문 이미지 업로드 엔드포인트의 협력자 — @WebMvcTest 는 @Service 를 스캔하지 않으므로
+    // 명시하지 않으면 CuratedSubmissionController 생성이 실패해 컨텍스트 로드가 깨진다.
+    @MockitoBean com.example.ragagent.service.CuratedImageStore curatedImageStore;
     @MockitoBean DocumentExportService documentExportService;
 
     private AppUserDetails adminUser() {
@@ -219,6 +227,62 @@ class ManagementOnlyAuthorizationTest {
     @DisplayName("익명 GET /api/v1/documents — 200")
     void anonymousDocumentsApi_staysOpen() throws Exception {
         mvc.perform(get("/api/v1/documents")).andExpect(status().isOk());
+    }
+
+    // ── 청크 추가 게시판 ────────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("익명 GET /curated/submissions — 200 (제안 등록/조회는 게스트에게 열려 있음)")
+    void anonymousSubmissionPage_staysOpen() throws Exception {
+        when(submissionService.listMine(anyString(), anyInt(), anyInt())).thenReturn(List.of());
+        when(submissionService.chunkSizeForBody()).thenReturn(800);
+
+        mvc.perform(get("/curated/submissions")).andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("익명 POST /curated/submissions — CSRF 토큰이 있으면 200대 (게스트도 제안 가능)")
+    void anonymousSubmissionPost_allowedWithCsrf() throws Exception {
+        mvc.perform(post("/curated/submissions").with(csrf())
+                        .param("title", "제목").param("body", "본문"))
+                .andExpect(status().is3xxRedirection());
+    }
+
+    @Test
+    @DisplayName("익명 GET /admin/submissions/pending-count — 로그인으로 리다이렉트 (대기 건수 유출 방지)")
+    void anonymousPendingCount_isGated() throws Exception {
+        mvc.perform(get("/admin/submissions/pending-count"))
+                .andExpect(status().is3xxRedirection());
+    }
+
+    @Test
+    @DisplayName("ROLE_USER GET /admin/submissions/pending-count — 403 (게스트 principal은 통과 불가)")
+    void guestPendingCount_isForbidden() throws Exception {
+        mvc.perform(get("/admin/submissions/pending-count").with(user("guest").roles("USER")))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    @DisplayName("ROLE_ADMIN POST /admin/submissions/{id}/approve — CSRF 포함 시 통과")
+    void adminApproveSubmission_succeeds() throws Exception {
+        when(submissionService.approve(anyLong(), anyString(), any(), any(), any()))
+                .thenReturn(Optional.of(55L));
+
+        mvc.perform(post("/admin/submissions/1/approve").with(csrf())
+                        .with(user("admin").roles("ADMIN"))
+                        .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                        .content("{\"title\":\"제목\",\"body\":\"본문\"}"))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("ROLE_USER POST /admin/submissions/{id}/approve — CSRF가 있어도 403")
+    void guestApproveSubmission_isForbidden() throws Exception {
+        mvc.perform(post("/admin/submissions/1/approve").with(csrf())
+                        .with(user("guest").roles("USER"))
+                        .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                        .content("{}"))
+                .andExpect(status().isForbidden());
     }
 
     @Test

@@ -120,7 +120,7 @@ container system stop
 | `LLM_VERIFY_LOCAL_MODELS_ON_STARTUP` | — | `true` | (`app.llm.verify-local-models-on-startup`) — G3 토글. `true`면 URL이 설정된 각 LOCAL provider에 대해 기동 시 `GET {URL}/models`를 호출해 접속 가능·모델명 일치를 확인하고, 실패하면 애플리케이션이 시작되지 않는다. 로컬 서버가 앱보다 늦게 뜨는 배포 순서 레이스가 있을 때만 `false`로 끌 것 — 그 경우 예전처럼 첫 요청 실패 후 런타임 폴백된다 |
 | `LLM_ROUTING_MODE` | — | `COST_FIRST` | 기본 라우팅 모드 (`app.llm.default-routing-mode`). 폐쇄망/로컬 전용은 `LOCAL_ONLY`로 외부 프로바이더 호출 차단 — `LOCAL_ONLY`로 설정하면 채팅 사이드바의 라우팅 전략 드롭다운 자체가 사라짐(어떤 모드를 골라도 결과가 같으므로) |
 | `LLM_DEFAULT_PROVIDER_CONCURRENCY` | — | `3` | 질의 경로 프로바이더별 동시성 게이트(`app.llm.default-provider-concurrency`) — 앱이 한 프로바이더에 보내는 동시 요청이 이 값을 절대 넘지 않음(LLM 서버의 실제 `--parallel` 값에 맞춤). 프로바이더별 오버라이드: `app.llm.providers[N].concurrency` |
-| `LLM_PERMIT_WAIT_TIMEOUT_SECONDS` | — | `20` | 동시성 슬롯 대기 상한(`app.llm.permit-wait-timeout-seconds`) — 초과 시 read timeout까지 기다리지 않고 즉시 HTTP 429 + `Retry-After` 응답. 인덱싱/백그라운드 LLM 호출에는 적용되지 않음 |
+| `LLM_PERMIT_WAIT_TIMEOUT_SECONDS` | — | `60` | 동시성 슬롯 대기 상한(`app.llm.permit-wait-timeout-seconds`) — 초과 시 read timeout까지 기다리지 않고 즉시 HTTP 429 + `Retry-After` 응답. 인덱싱/백그라운드 LLM 호출에는 적용되지 않음 |
 | `LLM_TEMPERATURE` | — | `0.0` | 일반/RAG 답변 temperature(`app.llm.temperature`) — 빈 생성 시점에 각 프로바이더의 `OpenAiChatOptions`에 고정됨. `/settings`에서 **조회 전용**(변경하려면 재기동) |
 | `LLM_MAX_TOKENS` | — | `6000` | **블로킹** LLM 호출(분류·키워드 추출·MD 교정·충분도/근거 평가·TXT 구조화 등) 전용 completion 길이 상한 — 스트리밍 채팅/Direct 답변은 이 값과 무관(대신 SSE 타임아웃이 제한). 대화 히스토리 예산·MD 교정 섹션 분할 크기도 같은 값을 공유. **모델 컨텍스트 윈도우 자체가 아님** — 실제 LLM 서버 컨텍스트 크기에 여유를 두고 설정할 것 — [PIPELINE.md §4.1](documents/PIPELINE.md#41-appllmmax-tokensllm_max_tokens-크기-산정--로컬-llm-컨텍스트-윈도우와의-관계) 참고 |
 | `DIRECT_LLM_TEMPERATURE` | — | `0.1` | meta/Direct 답변 전용 temperature(`app.llm.direct-temperature`), `LLM_TEMPERATURE`와 별개, `[0.0, 0.2]`로 clamp. **`/settings`에서 핫 수정** — 재기동 없이 다음 Direct 호출부터 적용 |
@@ -145,7 +145,7 @@ container system stop
 
 | 변수 | 기본값 | 설명 |
 |------|--------|------|
-| `IMAGE_DESCRIPTION_ENABLED` | `true` | `LazyVisionService` on/off (`app.image-description.enabled`). `@ConditionalOnProperty` 빈 게이트라 **재기동 필요**. `false`면 이미지 마커만 저장하고 검색 시 Vision 호출 없음 |
+| `IMAGE_DESCRIPTION_ENABLED` | `true` | `LazyVisionService` on/off (`app.image-description.enabled`). `@ConditionalOnProperty` 빈 게이트라 **재기동 필요**. `false`면 이미지 마커만 저장하고 검색 시 Vision 호출 없음. 지식 제안 본문 이미지의 승인 시점 설명 생성도 같은 스위치가 막는다 — 꺼두면 이미지는 표시만 되고 검색에는 기여하지 않음 |
 | `IMAGE_OCR_ENABLED` | `true` | 스캔 PDF 페이지의 Tesseract OCR (`OcrService`, 동일한 구조적 빈 게이트) |
 | `IMAGE_OCR_TESSDATA_PATH` | (빈 값) | Tesseract `tessdata` 디렉터리 절대경로. 비우면 `TESSDATA_PREFIX` 환경변수 → 시스템 기본 경로 순으로 탐색 |
 | `IMAGE_CLASSIFY_TYPE` | `true` | 설명 생성 전 이미지 유형(다이어그램/스크린샷/차트/사진) 분류 후 유형별 Vision 프롬프트 선택 |
@@ -170,7 +170,8 @@ container system stop
 |------|--------|-----------|------|
 | `CHUNK_SIZE` | `1500` | 300 ~ 2000 | 문서 청크 크기 (문자 수) |
 | `CHUNK_OVERLAP` | `0` | 0 ~ CHUNK_SIZE × 0.25 | 청크 경계 문맥 보완용 중복 문자 수. 기본값 `0` — 섹션 인식 분할이 이미 소제목·부모 헤딩 컨텍스트를 청크에 붙여 주고, `0`이면 문서 내보내기(아래 참고)의 재조립 결과가 원본과 정확히 일치함 |
-| `MIN_CHUNK_SIZE` | `500` | 50 ~ CHUNK_SIZE × 0.25 | 너무 작은 청크를 인접 청크와 병합할 최소 길이 기준 |
+| `MIN_CHUNK_SIZE` | `500` | 50 ~ CHUNK_SIZE × 0.25 | 너무 작은 청크를 인접 청크와 병합할 최소 길이 기준 (`CHUNK_SPLIT_GRANULAR=true`면 아예 무시됨) |
+| `CHUNK_SPLIT_GRANULAR` | `false` | true/false | 청크 분할 전략. `false`=크기 기준 병합(짧은 챕터를 묶어 `CHUNK_SIZE`를 채움). `true`=**소제목마다 분할**, `MIN_CHUNK_SIZE` 무시 — 단 "제목+2문장 이내" 도입부 챕터만 아래 하위 챕터와 통합. 표·코드 블록은 경계를 `CHUNK_SIZE`의 ±50%까지 옮겨 통째로 유지하고(기본 경로는 `CHUNK_OVERLAP`만큼만 옮길 수 있는데 그 기본값이 0), PPTX/PDF는 슬라이드를 넘는 병합을 하지 않음(1슬라이드=1청크 — 슬라이드 내부 섹션은 합치므로 제목만의 청크는 생기지 않음). 핫 수정 가능하지만 **이미 인덱싱된 문서는 재인덱싱해야 전환** — 켠 뒤 문서 하나에 ↺를 눌러 두 전략을 나란히 비교할 수 있음. [OPERATOR_MANUAL.md §6.10](documents/OPERATOR_MANUAL.md#610-청크-분할-전략-크기-기준-병합--소제목-최대-분할) 참고 |
 | `SEARCH_TOP_K` | `8` | 2 ~ 15 | 벡터 검색 반환 문서 수 |
 | `SEARCH_SIMILARITY_THRESHOLD` | `0.0` | 0.0 ~ 0.75 | 청크 유지 최소 코사인 유사도 (`0.0`=전체 수용) |
 | `SEARCH_MULTIQUERY_ENABLED` | `true` | true/false | 검색 전 질의 다중 확장 여부 |
@@ -183,7 +184,8 @@ container system stop
 | `SEARCH_RRF_KEYWORD_WEIGHT` | `1.0` | 0.5 ~ 3.0 | 가중 RRF(Phase 7-A) — BM25 키워드 축 가중치. 벡터 축(MultiQuery 1~3개)은 항상 `1/축개수`로 그룹 정규화되므로 `1.0`이 정규화된 벡터 그룹과 동일 비중. `SEARCH_HYBRID_ENABLED=false`면 무영향 |
 | `SEARCH_RRF_K` | `60` | 20 ~ 100 | 가중 RRF(Phase 7-A) — RRF 순위융합 상수 k(원논문 기본값 60) |
 | `SEARCH_CURATED_QA_ENABLED` | `true` | true/false | §10.10 — 좋아요 기반 큐레이션 Q&A(예약 version `"curated"` 네임스페이스에 임베딩)를 RRF 융합에 포함할지 여부. `false`면 해당 검색 자체를 생략 |
-| `SEARCH_CURATED_QA_WEIGHT` | `1.5` | 0.5 ~ 5.0 | §10.10 — 큐레이션 Q&A 축 가중치, 키워드축과 동일하게 그룹 정규화 없이 그대로 적용(벡터축은 항상 `1/축개수`) — `1.0`보다 높아 검증된 답변이 우선 노출되되 순위를 독식하지는 않음 |
+| `SEARCH_CURATED_QA_WEIGHT` | `1.2` | 0.5 ~ 5.0 | §10.10 — **좋아요 승격** 큐레이션 축 가중치, 키워드축과 동일하게 그룹 정규화 없이 그대로 적용(벡터축은 항상 `1/축개수`) — `1.0`보다 높아 검증된 답변이 우선 노출되되 순위를 독식하지는 않음 |
+| `SEARCH_SUBMISSION_WEIGHT` | `1.5` | 0.5 ~ 5.0 | **지식 제안**(승인된 사용자 제출) 축 가중치. 두 출처는 벡터 네임스페이스와 검색을 공유하되 `MetaKey.CURATED_ORIGIN` 으로 **서로 다른 RRF 축**으로 갈라져, 사람이 직접 쓰고 관리자가 검토한 항목을 좋아요보다 높게(또는 낮게) 따로 조절할 수 있음 |
 | `SEARCH_QUERY_EMBED_CACHE_ENABLED` | `true` | true/false | 쿼리 임베딩 캐시(Phase 7-A) — 정규화된 질의 → 벡터를 Caffeine 인메모리 캐시에 저장해 반복·유사 질문의 임베딩 왕복을 생략. 캐시 히트 시 `embed:<model>` usage도 기록 안 됨 |
 | `SEARCH_QUERY_EMBED_CACHE_MAX_SIZE` | `500` | 100 ~ 5000 | 쿼리 임베딩 캐시 최대 엔트리 수 |
 | `SEARCH_QUERY_EMBED_CACHE_TTL_SECONDS` | `600` | 60 ~ 3600 | 쿼리 임베딩 캐시 TTL(초, write 기준 만료) |
@@ -240,7 +242,8 @@ rag_java/
     │   │   ├── ChatController.java             # REST POST /api/v1/chat; HTMX /ui/chat, /ui/chat/stream, 스레드 관리
     │   │   ├── DocumentController.java         # REST /api/v1/documents, /api/v1/images; 비동기 업로드 (202+taskId)
     │   │   ├── OperationsController.java       # REST GET /api/v1/health, /api/v1/llm/usage; HTMX 스레드 목록 + LLM 카드
-    │   │   ├── AdminController.java            # /admin, /admin/chunks; 문서 재인덱스
+    │   │   ├── AdminController.java            # /admin, /admin/chunks; 문서 재인덱스; 큐레이션 Q&A + 청크 추가 제안 검토
+    │   │   ├── CuratedSubmissionController.java # /curated/submissions — 청크 추가 게시판(등록·철회·본문 이미지 업로드·미확인 배지)
     │   │   ├── SettingsController.java         # /settings 조회 + /admin/settings/update|reset
     │   │   ├── AuthController.java             # /login, /signup, /setup 페이지 컨트롤러; 회원가입 후 자동 로그인
     │   │   ├── GlobalExceptionHandler.java     # RFC 9457 ProblemDetail; 400/413 처리
@@ -265,12 +268,14 @@ rag_java/
     │   │   ├── MetaKey.java               # 벡터 스토어 메타데이터 키 상수
     │   │   └── ChatRequest/Response/SourceRef/DocumentInfo/SyncResult/ThreadMeta/ChatForm/LlmProviderReport/IndexingProgressEvent.java
     │   ├── security/
-    │   │   ├── FileTypeDetector.java      # 매직바이트 검증 (PDF, DOCX/PPTX, TXT/MD)
+    │   │   ├── FileTypeDetector.java      # 매직바이트 검증 (PDF, DOCX/PPTX, TXT/MD, PNG/JPG/GIF/WebP)
     │   │   └── PromptInjectionGuard.java  # 입력 검증 + API 키 마스킹
     │   ├── repository/
     │   │   ├── MemoryRepository.java              # 대화 메모리 추상 인터페이스 (getTurns 포함)
     │   │   ├── SqliteMemoryRepository.java        # SQLite WAL 기반 구현
     │   │   ├── LlmUsageRepository.java            # LLM 토큰 사용량 SQLite 저장소
+    │   │   ├── CuratedQaRepository.java           # curated_qa — 좋아요 승격 + 승인된 사용자 제안(origin=like|manual)
+    │   │   ├── CuratedSubmissionRepository.java   # curated_submission — 청크 추가 게시판(검토 대기/등록/반려)
     │   │   └── ImageDescriptionRepository.java    # image_descriptions 테이블 CRUD (Vision 캐시)
     │   └── service/
     │       ├── AgentService.java              # 에이전트 파이프라인 진입점
@@ -285,6 +290,9 @@ rag_java/
     │       ├── MemoryService.java             # 멀티턴 메모리 — SQLite 영속
     │       ├── RagService.java                # 문서 인덱싱 + 동기화 + 이미지 정리
     │       ├── AdminService.java              # Admin UI 데이터 (청크 조회/편집 + 벡터 스토어 상태) — chroma·sqlite-vec
+    │       ├── CuratedQaService.java          # 큐레이션 Q&A 축: 좋아요 승격 + 관리자 승인 제안, 임베딩/de-index
+    │       ├── CuratedSubmissionService.java  # 청크 추가 게시판: 입력 검증+태그, 승인 시 분할(1:N), 거부, 알림 카운트
+    │       ├── CuratedImageStore.java         # 제안 본문 이미지: 업로드(허용목록/크기/매직바이트/내용해시 파일명), [이미지: …] 마커 관리, 승인 시 Vision 설명 주입, 참조 세기 정리 + 기동 시 고아 스윕
     │       ├── SettingsService.java           # 런타임 설정 오버라이드 레이어(AppProperties.OverrideSource) + /settings 조회/검증/감사
     │       ├── IndexingProgressService.java   # 비동기 업로드/동기화 SSE 진행 이벤트 관리
     │       ├── MarkdownCorrectionService.java # LLM 마크다운 출력 후처리
@@ -321,8 +329,11 @@ rag_java/
             ├── layout/base.html           # 공통 레이아웃 (Thymeleaf Layout Dialect; PWA meta + SW 등록)
             ├── chat.html                  # 채팅 페이지 (이전 turn 서버 렌더 포함)
             ├── documents.html             # 문서 관리 페이지
+            ├── curated-submissions.html   # 지식 제안 게시판 (등록 폼 + "내 제안" 상태 목록)
             ├── llm-usage.html             # LLM 사용량 통계 페이지
             └── fragments/
+                ├── admin-curated.html     # 관리자 큐레이션 Q&A 패널 (펼칠 때 지연 로딩)
+                ├── admin-submissions.html # 관리자 청크 추가 제안 검토 패널 (지연 로딩, 상태 필터)
                 ├── llm-usage-cards.html   # 프로바이더 카드 (HTMX 30초 자동 갱신)
                 ├── thread-list.html       # HTMX 스레드 목록 fragment
                 ├── thread-item.html       # HTMX 스레드 아이템 fragment
@@ -357,18 +368,20 @@ rag_java/
 - **질문 분류 + 라우팅** — meta(인사·잡담)는 RAG 없이 직접 응답, 나머지는 풀 파이프라인
 - **멀티 LLM 라우팅** — `LlmRouter`가 `TaskType × RoutingMode` 기준으로 프로바이더 선택: COST_FIRST / QUALITY_FIRST / PROGRESSIVE / LOCAL_ONLY
 - **Circuit Breaker** — HTTP 429/오류 시 프로바이더 자동 차단 (Retry-After 지원), 우선순위 기반 failover; LLM 사용량 대시보드에서 차단 상태 확인
-- **프로바이더별 동시성 게이트 + 백프레셔** — 채팅/질의 경로가 한 프로바이더에 보내는 동시 요청은 그 서버가 처리 가능한 만큼(`--parallel`)을 절대 넘지 않음; `LLM_PERMIT_WAIT_TIMEOUT_SECONDS`(기본 20초)를 넘겨 대기하면 180초 read timeout까지 기다리지 않고 즉시 HTTP 429 + `Retry-After` 응답. 인덱싱/백그라운드 LLM 호출은 영향받지 않음(자체 세마포어 유지)
+- **프로바이더별 동시성 게이트 + 백프레셔** — 채팅/질의 경로가 한 프로바이더에 보내는 동시 요청은 그 서버가 처리 가능한 만큼(`--parallel`)을 절대 넘지 않음; `LLM_PERMIT_WAIT_TIMEOUT_SECONDS`(기본 60초)를 넘겨 대기하면 600초 read timeout까지 기다리지 않고 즉시 HTTP 429 + `Retry-After` 응답. 인덱싱/백그라운드 LLM 호출은 영향받지 않음(자체 세마포어 유지)
 - **인플라이트 single-flight (임베딩)** — 완전히 동일한(정규화 후) 텍스트를 동시에 요청하면(예: 여러 사용자가 거의 동시에 같은 질문) 첫 호출만 실제로 계산하고 나머지는 그 결과를 공유(`CachingEmbeddingModel`) — 각자 다시 계산하지 않음
 - **과부하 인지 서킷브레이커** — 폴백 프로바이더가 없는 상태에서(예: 단일 LOCAL 배포) 429/402/503을 받으면 기본 다중 분 단위 차단 대신 30초로 짧게 차단해 일시적 용량 초과가 채팅 전체를 다운시키지 않음 — 다른 프로바이더로 넘길 수 있는 상황이면 기존처럼 정상 차단 후 자동 폴백
 - **동일 우선순위 로드밸런싱** — 같은 role·priority로 프로바이더를 여러 대 등록하면(예: 로컬 서버 2대) 동시성 게이트 여유가 더 많은 쪽으로 요청이 자동 분산(least-in-flight) — 코드 변경 없이 배포 설정만으로 처리량 수평 확장
 - **태스크별 모델 라우팅 (소형 LLM 오프로딩)** — 추론이 필요 없는 잡무(키워드+맥락 추출·대화 요약·제목 생성·MultiQuery 쿼리 확장)는 `TaskType.MICRO_TEXT`로 라우팅됨. `type=MICRO_TEXT` 소형(~500MB) 로컬 모델을 등록하면 이 잡무만 소형으로 내려가고, 답변·품질 민감한 분류/meta 직답은 큰 모델이 전담. 소형 미등록 시 큰 모델이 흡수(회귀 0) — [LLM_ROUTING.md §9](documents/LLM_ROUTING.md) 참고
 - **임베딩 로드밸런싱 + 병렬 서브배치 임베딩** — 다중 임베딩 엔드포인트(`EMBED_ADDITIONAL_BASE_URLS`, 동일 모델·차원)를 least-in-flight로 분산; 인덱싱 시 한 문서의 서브배치를 병렬 임베딩(`EMBED_MAX_CONCURRENT_BATCHES`)해 엔드포인트를 채움. 둘 다 opt-in(기본 단일 엔드포인트·직렬) — [OPERATOR_MANUAL §3.2](documents/OPERATOR_MANUAL.md) 참고
-- **설정 페이지(`/settings`)** — 유효 LLM/RAG 설정(프로바이더·라우팅·임베딩·검색 튜닝)을 한 화면에서 조회. 세 그룹의 값이 **재기동 없이 핫 수정** 가능(`settings_override` 테이블에 영속, 삭제 시 프로퍼티 기본값 복귀): 검색 튜닝(유사도 임계값·RRF 가중치/k·후보 배수·멀티쿼리 최소 길이/활성화·재시도 확대·topK·하이브리드 검색 — 다음 검색부터 적용), 인덱싱/청킹(청크 크기/오버랩/최소 크기·동시 파일/LLM 호출 수 제한 — 다음 인덱싱/↺ 재인덱싱부터 적용), Direct 답변 temperature(다음 Direct 호출부터 적용). 수정은 관리자 전용이며 감사 로그에 기록되고, 재기동 필요 값(rerank-enabled·일반 temperature/max-tokens·임베딩 설정 등)은 조회 전용으로 표시
+- **설정 페이지(`/settings`)** — 유효 LLM/RAG 설정(프로바이더·라우팅·임베딩·검색 튜닝)을 한 화면에서 조회. 세 그룹의 값이 **재기동 없이 핫 수정** 가능(`settings_override` 테이블에 영속, 삭제 시 프로퍼티 기본값 복귀): 검색 튜닝(유사도 임계값·RRF 가중치/k·후보 배수·멀티쿼리 최소 길이/활성화·재시도 확대·topK·하이브리드 검색 — 다음 검색부터 적용), 인덱싱/청킹(청크 크기/오버랩/최소 크기·**청크 분할 전략**·동시 파일/LLM 호출 수 제한 — 다음 인덱싱/↺ 재인덱싱부터 적용), Direct 답변 temperature(다음 Direct 호출부터 적용). 수정은 관리자 전용이며 감사 로그에 기록되고, 재기동 필요 값(rerank-enabled·일반 temperature/max-tokens·임베딩 설정 등)은 조회 전용으로 표시
 - **벡터 검색** — `MultiQueryExpander`(3쿼리 병렬, 짧은 키워드형 질문은 확장 생략)로 최적 검색 후 선택된 백엔드(ChromaDB 또는 sqlite-vec)로 유사도 검색. 원본 질문 검색은 쿼리 확장과 병렬로 실행되어 확장 대기 뒤로 밀리지 않음. Chroma 배치 검색은 실제로 읽는 메타데이터/문서/거리 필드만 요청하고 쓰지 않는 임베딩 벡터는 요청하지 않아, 후보 풀이 큰 경우에도 응답이 가볍게 유지됨
 - **Contextual Retrieval** — 청크 임베딩과 키워드 검색(`chunk_fts`) 입력 앞에 맥락 헤더(`{파일명} > {섹션 제목}` + 키워드 추출과 같은 호출에서 생성되는 LLM 1~2문장 요약)를 결합해, 표·코드 조각·대명사 위주 텍스트처럼 단독으로는 모호한 청크의 검색 재현율을 높임. 이 헤더는 저장·표시 텍스트, 출처 미리보기, 답변 프롬프트에는 절대 나타나지 않고 임베딩/키워드 검색 입력에만 반영됨
 - **임베딩 입력 정규화** — 마크다운 장식(구분선, 볼드/이탤릭/밑줄 마커)을 임베딩·`chunk_fts`·답변 프롬프트 입력에서만 제거(저장·표시 텍스트는 원문 유지)해 검색 인덱스 노이즈와 프롬프트 토큰 사용량을 줄임
 - **응답 길이 모드 (S/M/L)** — 메시지별 토글로 답변 분량을 조절. 각 모드의 목표치는 `LLM_MAX_TOKENS` 비율(15%/40%/70%)과 고정 글자수 하한(2,000/5,000/10,000자) 중 큰 값이라, 설정값이 작아도 S와 M이 뚜렷이 구분됨. 이 값은 블로킹 호출의 `maxTokens`로도, 프롬프트의 "약 N자" 스타일 지시문으로도 그대로 재사용됨 — 스트리밍 응답은 설계상 호출당 토큰 상한이 없어 지시문이 유일한 조절 수단. `L`(원문 최대)은 검색 컨텍스트가 있을 때만 의미가 있어 Direct 모드에서는 비활성화됨
-- **좋아요 기반 큐레이션 Q&A (§10.10)** — 답변에 좋아요를 누르면 별도로 임베딩되어(예약 벡터스토어 버전 네임스페이스, 문서 재인덱싱에도 보존) 이후 검색에 가중 RRF 축으로 융합됨(`SEARCH_CURATED_QA_ENABLED`/`SEARCH_CURATED_QA_WEIGHT`, `/settings`에서 핫 수정 가능). 정답을 그대로 반환하지 않고 근거로만 주입해 LLM이 현재 문서와 대조함. 좋아요를 누른 본인은 채팅 버블에서 바로 수정(자동 재임베딩) 가능하고, 관리자는 `/admin` 카드에서 전체 사용자의 큐레이션 항목을 편집·강제 삭제(좋아요 여부와 무관)할 수 있음. **L모드** 답변은 좋아요를 눌러도 임베딩되지 않음 — 이미 인덱싱된 원본 문서 내용과 사실상 동일해 재임베딩이 불필요하기 때문(좋아요 자체는 정상 기록됨)
+- **좋아요 기반 큐레이션 Q&A (§10.10)** — 답변에 좋아요를 누르면 별도로 임베딩되어(예약 벡터스토어 버전 네임스페이스, 문서 재인덱싱에도 보존) 이후 검색에 가중 RRF 축으로 융합됨(`SEARCH_CURATED_QA_ENABLED`/`SEARCH_CURATED_QA_WEIGHT`, `/settings`에서 핫 수정 가능). 정답을 그대로 반환하지 않고 근거로만 주입해 LLM이 현재 문서와 대조함. 좋아요를 누른 본인은 채팅 버블에서 바로 수정(자동 재임베딩) 가능하고, 관리자는 `/admin` **최하단** 카드에서 전체 사용자의 큐레이션 항목을 편집·강제 삭제(좋아요 여부와 무관)할 수 있음 — 편집 화면은 넓은 화면에서 청크 편집과 동일한 좌측 라이브 미리보기를 띄운다. **L모드** 답변은 좋아요를 눌러도 임베딩되지 않음 — 이미 인덱싱된 원본 문서 내용과 사실상 동일해 재임베딩이 불필요하기 때문(좋아요 자체는 정상 기록됨). 승격된 답변은 **질문 당시의 검색 스코프(태그)를 승계**해(turn 단위로 저장) 태그를 좁힌 검색에서도 살아남고, 스코프를 알 수 없는 항목은 어느 스코프에도 속하지 않는 대신 **모든 스코프에 속한 것으로** 취급된다 — 이 처리가 없던 때는 태그 칩을 하나라도 켜면 큐레이션 항목이 전부 결과에서 사라졌다
+- **청크 추가 게시판 (사용자 제안 → 관리자 임베딩)** — 사용자가 `/curated/submissions`에서 제목+본문으로 지식을 등록하면, 관리자가 `/admin` 전용 카드에서 검토해 **임베딩 실행**하거나 **사유를 적어 거부**한다. 승인된 제안은 좋아요 큐레이션 Q&A와 같은 검색 축으로 들어가므로 `SEARCH_CURATED_QA_*` 설정이 그대로 적용되고, 게시판 자체는 별도 테이블이라 `curated_qa.status='active'`가 "지금 검색에 기여 중"이라는 의미를 그대로 유지한다. **관리자 승인이 사용자 작성 텍스트와 답변 프롬프트의 `[검색된 문서]` 블록 사이의 유일한 관문**이라, 검토 화면은 항상 본문 전문을 보여주고 일괄·자동 승인 경로는 의도적으로 만들지 않았다. 알림은 양방향 60초 헤더 배지 폴링 — 관리자에게는 검토 대기 건수(로그인 직후 첫 폴링에 바로 표시), 작성자에게는 처리 결과("내 제안"을 열면 읽음 처리). **본문 길이 제한은 없다**: 승인 시 본문이 `ChunkSplitter`를 그대로 통과해 N개 큐레이션 행으로 등록되므로(문서 인덱싱과 같은 기계라 `CHUNK_SPLIT_GRANULAR`·표/코드 블록 보호까지 적용) "너무 길어 임베딩 불가"라는 실패 모드가 입력을 거부하는 대신 구조적으로 사라진다. 상태는 **전부/전무** — 청크가 하나라도 살아 있으면 등록 완료, 전부 내려가면 회수됨이며 청크 하나를 지우면 제안 전체가 함께 내려간다(반쪽 등록 상태가 생기지 않음). 본문은 마크다운으로 작성·미리보기하고(등록 폼·관리자 검토 화면 모두 DOMPurify 경유), 태그를 달면 그 태그를 고른 검색에만 반영되며 태그가 없으면 모든 스코프에서 검색된다. [OPERATOR_MANUAL.md §6.9](documents/OPERATOR_MANUAL.md#69-청크-추가-게시판-사용자-제안--관리자-임베딩) 참고
+- **지식 제안 본문 이미지 (마커 자리 = 이미지 자리)** — 폼의 **이미지 추가** 버튼이 파일을 즉시 업로드하고 `[이미지: images/submissions/{해시}.png]` 마커를 **커서 위치에** 끼워 넣는다. **마커의 위치가 곧 이미지의 위치**이므로 그 뒤의 이동·복사·삭제는 전부 평범한 텍스트 편집이고, 승인 시 본문이 청크로 나뉠 때 이미지가 자기가 설명하는 문단을 따라간다. 표준 마크다운 대신 **문서 파이프라인이 이미 쓰는 마커를 재사용**한 덕분에 하위 경로가 그대로 동작한다 — `/api/v1/images/**`가 이미 서빙하고, `RetrievalService`가 이미 `image_paths` 메타데이터를 답변 썸네일로 바꾸므로 큐레이션 청크도 문서 청크와 똑같이 썸네일이 붙는다. 승인 시 **분할하기 전에**(마커와 설명이 다른 청크로 갈라지지 않도록) `LazyVisionService`로 이미지마다 설명을 만들어 `[이미지 설명: ...]`을 본문에 주입하는데, 이것이 그림의 *내용*까지 검색되게 하는 핵심이다(설명은 공용 캐시에도 남아 질의 시점에 재분석되지 않는다). 승인 요청은 그 Vision 호출을 동기로 기다리며 그동안 관리자 버튼은 잠기고 스피너로 바뀐다. 게시판이 모든 인증 모드에서 게스트에게 열려 있어 여기가 **미인증 사용자가 디스크에 바이너리를 쓰는 유일한 지점**이라 확장자 허용목록 → 5MB → 매직바이트 → 내용 해시 파일명(클라이언트가 경로의 어느 조각도 정하지 못함)의 4겹 검증을 거치고, 본문당 10장으로 제한된다. 파일명이 내용 해시라 두 제안이 같은 파일을 공유할 수 있으므로 삭제는 소유권이 아니라 **참조 세기** 방식이다 — 반려·철회 시 정리 + 등록되지 않은 초안 이미지는 기동 시 스윕
 - **ReAct 재검색** — 증거 부족 시 최대 2회 자동 재검색
 - **Critic 검증** — 생성된 답변이 문서에 근거하는지 LLM이 이중 검증
 - **PROGRESSIVE 모드** — COST_FIRST로 시작 → 품질 임계값 미달 시 PREMIUM 프로바이더로 재실행 + 업그레이드 배지 표시
@@ -405,6 +418,8 @@ rag_java/
 | `GET` | `/` | 채팅 홈 (새 스레드 생성) |
 | `GET` | `/chat/{threadId}` | 기존 스레드 채팅 화면 (이전 메시지 버블 복원) |
 | `GET` | `/documents` | 문서 관리 화면 |
+| `GET/POST` | `/curated/submissions` | 지식 제안 게시판 — 청크 직접 등록 + 처리 결과 확인 |
+| `POST` | `/curated/submissions/images` | 제안 본문 이미지 업로드 → 커서 위치에 끼워 넣을 `[이미지: …]` 마커 반환 |
 | `GET` | `/llm-usage` | LLM 사용량 통계 페이지 |
 
 ### REST API

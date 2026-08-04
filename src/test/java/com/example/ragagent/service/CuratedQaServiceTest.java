@@ -63,7 +63,7 @@ class CuratedQaServiceTest {
         memoryService = mock(MemoryService.class);
         threadMetaService = mock(ThreadMetaService.class);
         vectorStore = mock(VectorStoreFacade.class);
-        service = new CuratedQaService(repository, memoryService, threadMetaService, vectorStore, SHORT_DEBOUNCE_MS);
+        service = new CuratedQaService(repository, memoryService, threadMetaService, vectorStore, new com.example.ragagent.ingestion.ChunkSplitter(), splitProps(), SHORT_DEBOUNCE_MS);
 
         when(threadMetaService.findById(UID, TID)).thenReturn(Optional.of(
                 new ThreadMeta(TID, UID, "제목", "v1", "2026-01-01", "2026-01-01", "COST_FIRST", "")));
@@ -74,12 +74,12 @@ class CuratedQaServiceTest {
     }
 
     private static MemoryRepository.Turn turn(String question, String answer, String responseMode) {
-        return new MemoryRepository.Turn(TURN_ID, question, answer, null, null, 0, 0, 0, "local", 1, "LIKE", responseMode);
+        return new MemoryRepository.Turn(TURN_ID, question, answer, null, null, 0, 0, 0, "local", 1, "LIKE", responseMode, null);
     }
 
     private static CuratedQaRepository.CuratedQa curatedQa(long id, String status, String question, String answer) {
         return new CuratedQaRepository.CuratedQa(id, TURN_ID, UID, TID, question, answer, status, "v1",
-                "2026-01-01", "2026-01-01", "ok");
+                "2026-01-01", "2026-01-01", "ok", CuratedQaRepository.ORIGIN_LIKE, null, null, 1);
     }
 
     @Test
@@ -89,26 +89,26 @@ class CuratedQaServiceTest {
 
         service.onLike(UID, TID, TURN_ID);
 
-        verify(repository, never()).upsertActive(anyLong(), any(), any(), any(), any(), any());
+        verify(repository, never()).upsertActive(anyLong(), any(), any(), any(), any(), any(), any());
     }
 
     @Test
     @DisplayName("onLike — 스냅샷을 즉시(동기) upsert한다")
     void onLike_upsertsSnapshotSynchronously() {
         when(memoryService.getTurn(UID, TID, TURN_ID)).thenReturn(Optional.of(turn("질문", "답변")));
-        when(repository.upsertActive(TURN_ID, UID, TID, "질문", "답변", "v1")).thenReturn(1L);
+        when(repository.upsertActive(TURN_ID, UID, TID, "질문", "답변", "v1", null)).thenReturn(1L);
 
         service.onLike(UID, TID, TURN_ID);
 
         // 백그라운드 스레드(임베딩) 완료를 기다릴 필요 없이, 호출 직후 검증 가능해야 한다.
-        verify(repository, times(1)).upsertActive(TURN_ID, UID, TID, "질문", "답변", "v1");
+        verify(repository, times(1)).upsertActive(TURN_ID, UID, TID, "질문", "답변", "v1", null);
     }
 
     @Test
     @DisplayName("onLike — 디바운스 이후에도 LIKE면 curated 네임스페이스로 임베딩한다")
     void onLike_stillLikedAfterDebounce_embeds() {
         when(memoryService.getTurn(UID, TID, TURN_ID)).thenReturn(Optional.of(turn("질문", "답변\n\n## 참고\n- [파일.docx | p.1] (섹션)")));
-        when(repository.upsertActive(anyLong(), any(), any(), any(), any(), any())).thenReturn(1L);
+        when(repository.upsertActive(anyLong(), any(), any(), any(), any(), any(), any())).thenReturn(1L);
         when(repository.findById(1L)).thenReturn(Optional.of(
                 curatedQa(1L, "active", "질문", "답변\n\n## 참고\n- [파일.docx | p.1] (섹션)")));
         when(memoryService.getFeedback(UID, TID, TURN_ID))
@@ -121,9 +121,11 @@ class CuratedQaServiceTest {
         verify(vectorStore, timeout(2000)).add(eq("shared"), eq(CuratedQaService.CURATED_VERSION), docsCaptor.capture());
 
         Document doc = docsCaptor.getValue().get(0);
-        // 저장/표시용 텍스트는 참고 섹션이 그대로 유지된다.
-        assertThat(doc.getText()).contains("## 참고", "파일.docx");
-        // 임베딩용 SEARCH_TEXT 오버라이드는 참고 섹션이 제외된다(질문은 포함).
+        // 벡터 텍스트는 '## 참고'를 제거한 뒤의 내용이다 — 분할이 도입되면서 스트립이 자르기 '전'으로
+        // 옮겨졌기 때문(인용 목록이 청크 경계를 넘으면 뒤 조각에서 헤딩이 사라져 스트립을 못 한다).
+        // 원문 전체는 curated_qa.answer 에 그대로 남아 채팅 버블·관리자 편집기가 보여준다.
+        assertThat(doc.getText()).doesNotContain("## 참고", "파일.docx");
+        // 임베딩용 SEARCH_TEXT 오버라이드도 동일하게 참고 섹션이 제외된다(질문은 포함).
         String searchText = String.valueOf(doc.getMetadata().get(MetaKey.SEARCH_TEXT));
         assertThat(searchText).contains("질문").doesNotContain("참고", "파일.docx");
     }
@@ -133,7 +135,7 @@ class CuratedQaServiceTest {
     void onLike_stillLikedAfterDebounce_embedTextExcludesSummaryToo() {
         String fullAnswer = "## 요약\n핵심 한 줄 요약.\n\n## 상세 설명\n자세한 설명입니다.\n\n## 참고\n- [파일.docx | p.1]";
         when(memoryService.getTurn(UID, TID, TURN_ID)).thenReturn(Optional.of(turn("질문", fullAnswer)));
-        when(repository.upsertActive(anyLong(), any(), any(), any(), any(), any())).thenReturn(1L);
+        when(repository.upsertActive(anyLong(), any(), any(), any(), any(), any(), any())).thenReturn(1L);
         when(repository.findById(1L)).thenReturn(Optional.of(curatedQa(1L, "active", "질문", fullAnswer)));
         when(memoryService.getFeedback(UID, TID, TURN_ID))
                 .thenReturn(Optional.of(new MemoryRepository.FeedbackRow("LIKE")));
@@ -145,9 +147,10 @@ class CuratedQaServiceTest {
         verify(vectorStore, timeout(2000)).add(eq("shared"), eq(CuratedQaService.CURATED_VERSION), docsCaptor.capture());
 
         Document doc = docsCaptor.getValue().get(0);
-        // 저장/표시용 텍스트는 요약·참고 섹션 모두 그대로 유지된다.
-        assertThat(doc.getText()).contains("## 요약", "핵심 한 줄 요약", "## 참고", "파일.docx");
-        // 임베딩용 SEARCH_TEXT 오버라이드는 요약·참고 섹션 모두 제외된다(질문·상세 설명은 포함).
+        // 벡터 텍스트에서 요약·참고 섹션이 모두 빠진다(위 테스트와 같은 이유 — 스트립이 분할보다 앞선다).
+        assertThat(doc.getText()).contains("상세 설명", "자세한 설명입니다.")
+                .doesNotContain("## 요약", "핵심 한 줄 요약", "## 참고", "파일.docx");
+        // 임베딩용 SEARCH_TEXT 오버라이드도 요약·참고 섹션이 제외된다(질문·상세 설명은 포함).
         String searchText = String.valueOf(doc.getMetadata().get(MetaKey.SEARCH_TEXT));
         assertThat(searchText).contains("질문", "상세 설명", "자세한 설명입니다.")
                 .doesNotContain("요약", "핵심 한 줄", "참고", "파일.docx");
@@ -157,12 +160,12 @@ class CuratedQaServiceTest {
     @DisplayName("onLike — L모드 답변은 curated_qa 행은 생성하되 임베딩은 아예 시도하지 않는다(원문과 거의 동일하므로)")
     void onLike_lMode_skipsEmbedEntirely() {
         when(memoryService.getTurn(UID, TID, TURN_ID)).thenReturn(Optional.of(turn("질문", "답변", "L")));
-        when(repository.upsertActive(anyLong(), any(), any(), any(), any(), any())).thenReturn(1L);
+        when(repository.upsertActive(anyLong(), any(), any(), any(), any(), any(), any())).thenReturn(1L);
 
         service.onLike(UID, TID, TURN_ID);
 
         // curated_qa 스냅샷 행은 그대로 생성된다(좋아요 취소/수정/관리자 목록이 계속 동작하도록).
-        verify(repository, times(1)).upsertActive(TURN_ID, UID, TID, "질문", "답변", "v1");
+        verify(repository, times(1)).upsertActive(TURN_ID, UID, TID, "질문", "답변", "v1", null);
         // 하지만 임베딩 스레드 자체가 생성되지 않으므로 findById(재조회)도, vectorStore.add도 절대 호출되지 않는다.
         verify(repository, never()).findById(anyLong());
         verify(vectorStore, never()).add(any(), any(), any());
@@ -172,7 +175,7 @@ class CuratedQaServiceTest {
     @DisplayName("onLike — 디바운스 중 좋아요를 취소하면 임베딩 API 호출 자체를 생략한다")
     void onLike_unlikedDuringDebounce_skipsEmbedCall() throws Exception {
         when(memoryService.getTurn(UID, TID, TURN_ID)).thenReturn(Optional.of(turn("질문", "답변")));
-        when(repository.upsertActive(anyLong(), any(), any(), any(), any(), any())).thenReturn(1L);
+        when(repository.upsertActive(anyLong(), any(), any(), any(), any(), any(), any())).thenReturn(1L);
         // 디바운스가 끝난 시점엔 이미 좋아요가 취소된 상태.
         when(memoryService.getFeedback(UID, TID, TURN_ID)).thenReturn(Optional.empty());
 
@@ -187,7 +190,7 @@ class CuratedQaServiceTest {
     @DisplayName("onLike — 임베딩 호출은 성공했지만 그 사이 좋아요가 취소되면 보정 삭제한다")
     void onLike_unlikedDuringEmbedCall_compensatesWithDelete() {
         when(memoryService.getTurn(UID, TID, TURN_ID)).thenReturn(Optional.of(turn("질문", "답변")));
-        when(repository.upsertActive(anyLong(), any(), any(), any(), any(), any())).thenReturn(1L);
+        when(repository.upsertActive(anyLong(), any(), any(), any(), any(), any(), any())).thenReturn(1L);
         when(repository.findById(1L)).thenReturn(Optional.of(curatedQa(1L, "active", "질문", "답변")));
         // 1st call(디바운스 직후 체크) = LIKE, 2nd call(임베딩 완료 후 보정 체크) = 취소됨.
         when(memoryService.getFeedback(UID, TID, TURN_ID))
@@ -276,7 +279,9 @@ class CuratedQaServiceTest {
         boolean result = service.forceRemove(1L);
 
         assertThat(result).isTrue();
-        verify(repository, times(1)).deactivate(TURN_ID); // curatedQa()의 sourceTurnId=TURN_ID
+        // id 기준 — 사용자 제안(수동) 행은 source_turn_id 가 NULL 이라 turn 기준으로는 못 지운다.
+        verify(repository, times(1)).deactivateById(1L);
+        verify(repository, never()).deactivate(anyLong());
         verify(vectorStore, timeout(2000)).deleteByDocIds("shared", CuratedQaService.CURATED_VERSION, List.of("curated-1"));
         // onUnlike의 소유권 체크(getFeedback)는 전혀 거치지 않는다 — 별도 인가 경로.
         verify(memoryService, never()).getFeedback(any(), any(), anyLong());
@@ -290,7 +295,7 @@ class CuratedQaServiceTest {
 
         assertThat(service.forceRemove(1L)).isFalse();
         assertThat(service.forceRemove(2L)).isFalse();
-        verify(repository, never()).deactivate(anyLong());
+        verify(repository, never()).deactivateById(anyLong());
     }
 
     @Test
@@ -337,7 +342,7 @@ class CuratedQaServiceTest {
     @DisplayName("embed — 전체 텍스트 임베딩이 바로 성공하면 재시도 없이 markEmbedOk")
     void embed_fullTextSucceeds_singleCallAndMarksOk() {
         when(memoryService.getTurn(UID, TID, TURN_ID)).thenReturn(Optional.of(turn("질문", RAG_FORMAT_ANSWER)));
-        when(repository.upsertActive(anyLong(), any(), any(), any(), any(), any())).thenReturn(1L);
+        when(repository.upsertActive(anyLong(), any(), any(), any(), any(), any(), any())).thenReturn(1L);
         when(repository.findById(1L)).thenReturn(Optional.of(curatedQa(1L, "active", "질문", RAG_FORMAT_ANSWER)));
         when(memoryService.getFeedback(UID, TID, TURN_ID))
                 .thenReturn(Optional.of(new MemoryRepository.FeedbackRow("LIKE")));
@@ -353,7 +358,7 @@ class CuratedQaServiceTest {
     @DisplayName("embed — 전체 임베딩 실패 시 상세 섹션만으로 재시도해 성공하면 markEmbedOk")
     void embed_fullTextFails_retriesWithCoreSectionsAndSucceeds() {
         when(memoryService.getTurn(UID, TID, TURN_ID)).thenReturn(Optional.of(turn("질문", RAG_FORMAT_ANSWER)));
-        when(repository.upsertActive(anyLong(), any(), any(), any(), any(), any())).thenReturn(1L);
+        when(repository.upsertActive(anyLong(), any(), any(), any(), any(), any(), any())).thenReturn(1L);
         when(repository.findById(1L)).thenReturn(Optional.of(curatedQa(1L, "active", "질문", RAG_FORMAT_ANSWER)));
         when(memoryService.getFeedback(UID, TID, TURN_ID))
                 .thenReturn(Optional.of(new MemoryRepository.FeedbackRow("LIKE")));
@@ -373,10 +378,10 @@ class CuratedQaServiceTest {
     }
 
     @Test
-    @DisplayName("embed — 전체+재시도 모두 실패하면 markEmbedFailed, markEmbedOk는 호출 안 함")
+    @DisplayName("embed — 크기 사다리(2×/1.5×/1×)와 핵심 섹션 재시도까지 모두 실패하면 markEmbedFailed")
     void embed_bothAttemptsFail_marksFailed() {
         when(memoryService.getTurn(UID, TID, TURN_ID)).thenReturn(Optional.of(turn("질문", RAG_FORMAT_ANSWER)));
-        when(repository.upsertActive(anyLong(), any(), any(), any(), any(), any())).thenReturn(1L);
+        when(repository.upsertActive(anyLong(), any(), any(), any(), any(), any(), any())).thenReturn(1L);
         when(repository.findById(1L)).thenReturn(Optional.of(curatedQa(1L, "active", "질문", RAG_FORMAT_ANSWER)));
         when(memoryService.getFeedback(UID, TID, TURN_ID))
                 .thenReturn(Optional.of(new MemoryRepository.FeedbackRow("LIKE")));
@@ -384,17 +389,18 @@ class CuratedQaServiceTest {
 
         service.onLike(UID, TID, TURN_ID);
 
-        verify(vectorStore, timeout(2000).times(2)).add(any(), any(), any());
+        // 2× → 1.5× → 1× (3회) + 핵심 섹션 폴백 1회 = 4회
+        verify(vectorStore, timeout(2000).times(4)).add(any(), any(), any());
         verify(repository, timeout(2000)).markEmbedFailed(1L);
         verify(repository, never()).markEmbedOk(anyLong());
     }
 
     @Test
-    @DisplayName("embed — 답변에 '## 상세 설명'이 없으면(Direct 모드 등) 재시도 없이 바로 markEmbedFailed")
+    @DisplayName("embed — '## 상세 설명'이 없으면(Direct 모드 등) 크기 사다리만 돌고 핵심 섹션 재시도는 생략")
     void embed_noCoreSectionFallback_failsWithoutRetry() {
         String directAnswer = "안녕하세요! 무엇을 도와드릴까요?";
         when(memoryService.getTurn(UID, TID, TURN_ID)).thenReturn(Optional.of(turn("질문", directAnswer)));
-        when(repository.upsertActive(anyLong(), any(), any(), any(), any(), any())).thenReturn(1L);
+        when(repository.upsertActive(anyLong(), any(), any(), any(), any(), any(), any())).thenReturn(1L);
         when(repository.findById(1L)).thenReturn(Optional.of(curatedQa(1L, "active", "질문", directAnswer)));
         when(memoryService.getFeedback(UID, TID, TURN_ID))
                 .thenReturn(Optional.of(new MemoryRepository.FeedbackRow("LIKE")));
@@ -402,7 +408,9 @@ class CuratedQaServiceTest {
 
         service.onLike(UID, TID, TURN_ID);
 
-        verify(vectorStore, timeout(2000).times(1)).add(any(), any(), any()); // 재시도 자체를 안 함
+        // 짧은 답변이라 세 배수 모두 같은 1청크지만 크기 사다리는 그대로 3회 시도하고,
+        // 핵심 섹션이 없으므로 그 폴백은 시도조차 하지 않는다.
+        verify(vectorStore, timeout(2000).times(3)).add(any(), any(), any());
         verify(repository, timeout(2000)).markEmbedFailed(1L);
     }
 
@@ -424,5 +432,17 @@ class CuratedQaServiceTest {
         when(repository.findFailedTurnIds(List.of(1L, 2L))).thenReturn(Set.of(2L));
 
         assertThat(service.findFailedTurnIds(List.of(1L, 2L))).containsExactly(2L);
+    }
+
+    /** 분할 파이프라인이 실제로 도는 최소 설정 — 기본 배포와 같은 1500/500 비율. */
+    private static com.example.ragagent.config.AppProperties splitProps() {
+        var p = mock(com.example.ragagent.config.AppProperties.class);
+        when(p.chunkSizeSafe()).thenReturn(1500);
+        when(p.chunkOverlapSafe()).thenReturn(0);
+        when(p.minChunkSizeSafe()).thenReturn(500);
+        when(p.chunkSplitGranularSafe()).thenReturn(false);
+        when(p.embeddingSafe()).thenReturn(new com.example.ragagent.config.AppProperties.EmbeddingConfig(
+                null, null, null, null, null, null, false, 0, null, 1));
+        return p;
     }
 }

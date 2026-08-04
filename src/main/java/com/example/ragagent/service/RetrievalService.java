@@ -10,6 +10,7 @@ import com.example.ragagent.llm.TaskType;
 import com.example.ragagent.llm.TrackingChatModel;
 import com.example.ragagent.model.MetaKey;
 import com.example.ragagent.model.SourceRef;
+import com.example.ragagent.repository.CuratedQaRepository;
 import com.example.ragagent.repository.LlmUsageRepository;
 import com.example.ragagent.security.PromptInjectionGuard;
 import org.slf4j.Logger;
@@ -115,6 +116,7 @@ public class RetrievalService {
         boolean hybridEnabled = props.searchHybridEnabledSafe();
         boolean curatedQaEnabled = props.searchCuratedQaEnabledSafe();
         double curatedQaWeight = props.searchCuratedQaWeightSafe();
+        double submissionWeight = props.searchSubmissionWeightSafe();
         List<Document> unique;
         try {
             // Escalate candidate count on retry to surface different documents.
@@ -180,7 +182,13 @@ public class RetrievalService {
                 keywordHits = keywordF.join();
                 curatedHits = curatedF.join();
             }
-            List<Document> candidates = mergeRrf(ranked, keywordHits, curatedHits, candidateK, rrfK, rrfKeywordWeight, curatedQaWeight);
+            // 큐레이션 네임스페이스 한 번의 검색 결과를 출처별로 갈라 서로 다른 가중치의 두 축으로 넣는다
+            // — 좋아요 승격(검증된 답변)과 지식 제안(사람이 직접 쓴 지식)은 신뢰 수준이 달라 별도 튜닝
+            // 대상이기 때문. 각 부분 리스트의 순위는 원래 순서를 유지하므로 축 안에서의 RRF 순위는 그대로다.
+            List<Document> likeHits = curatedHitsOfOrigin(curatedHits, CuratedQaRepository.ORIGIN_MANUAL, false);
+            List<Document> submissionHits = curatedHitsOfOrigin(curatedHits, CuratedQaRepository.ORIGIN_MANUAL, true);
+            List<Document> candidates = mergeRrf(ranked, keywordHits, likeHits, submissionHits,
+                    candidateK, rrfK, rrfKeywordWeight, curatedQaWeight, submissionWeight);
             // Strict AND tag filter — applied after RRF, before rerank/cut. Covers vector
             // + BM25 axes uniformly (tags travel in chunk metadata). No no-tag fallback on shortfall.
             candidates = filterByTags(candidates, selectedTags, candidateK);
@@ -273,18 +281,47 @@ public class RetrievalService {
      * its {@code tags} metadata contains every selected tag. Empty selection → pass-through
      * (version-only behavior). Never falls back to unfiltered results on shortfall.
      * Package-private for unit testing.
+     *
+     * <p><b>Curated exemption</b>: this filter runs on the <em>merged</em> pool, which includes the
+     * curated-Q&A axis (§10.10), so an untagged curated entry would be dropped by every tag-scoped
+     * search — that is what used to make liked answers silently vanish the moment a user touched a
+     * tag chip. A curated entry now carries the tags of the question it was promoted from
+     * ({@code CuratedQaService.onLike}) or the ones its submitter chose; when it has none, its scope
+     * is genuinely unknown and it is treated as belonging to all scopes rather than to none.
+     * Document chunks keep the strict behavior — an untagged document is still excluded, since there
+     * the tag selection is precisely a corpus filter.
      */
     List<Document> filterByTags(List<Document> candidates, List<String> selectedTags, int candidateK) {
         if (selectedTags == null || selectedTags.isEmpty()) return candidates;
         int before = candidates.size();
         List<Document> filtered = candidates.stream()
-                .filter(d -> com.example.ragagent.model.TagUtils.matchesAnd(
+                .filter(d -> isScopelessCuratedEntry(d)
+                        || com.example.ragagent.model.TagUtils.matchesAnd(
                         com.example.ragagent.model.TagUtils.parseTagList(d.getMetadata().get(MetaKey.TAGS)),
                         selectedTags))
                 .toList();
         log.debug("[TAG] selectedTags={} candidateK={} postFilter={}/{}",
                 selectedTags, candidateK, filtered.size(), before);
         return filtered;
+    }
+
+    /**
+     * Partitions curated hits by {@code MetaKey.CURATED_ORIGIN}. {@code wantManual=true} keeps only
+     * approved submissions; {@code false} keeps everything else — vectors embedded before this key
+     * existed carry no origin at all and fall into the 👍 side, which is what they overwhelmingly are.
+     */
+    private static List<Document> curatedHitsOfOrigin(List<Document> hits, String manualOrigin, boolean wantManual) {
+        if (hits == null || hits.isEmpty()) return List.of();
+        return hits.stream()
+                .filter(d -> manualOrigin.equals(d.getMetadata().get(MetaKey.CURATED_ORIGIN)) == wantManual)
+                .toList();
+    }
+
+    /** A curated-Q&A hit carrying no tags at all — see {@link #filterByTags}'s curated exemption. */
+    private static boolean isScopelessCuratedEntry(Document d) {
+        if (!"curated_qa".equals(d.getMetadata().get(MetaKey.DOC_TYPE))) return false;
+        return com.example.ragagent.model.TagUtils
+                .parseTagList(d.getMetadata().get(MetaKey.TAGS)).isEmpty();
     }
 
     private List<Document> augmentWithDescriptions(List<Document> docs, Map<String, String> descriptions) {
@@ -354,6 +391,21 @@ public class RetrievalService {
     static List<Document> mergeRrf(List<List<Document>> vectorRanked, List<Document> keywordRanked,
                                     List<Document> curatedRanked, int topK, int k,
                                     double keywordWeight, double curatedWeight) {
+        return mergeRrf(vectorRanked, keywordRanked, curatedRanked, List.of(), topK, k,
+                keywordWeight, curatedWeight, 0.0);
+    }
+
+    /**
+     * Same as the 7-arg overload, plus a fourth axis for 지식 제안 (approved user submissions) with
+     * its own weight. Both curated axes come from one search of the {@code "curated"} namespace,
+     * partitioned by {@code MetaKey.CURATED_ORIGIN} — a 👍-promoted answer was verified by whoever
+     * asked, a submission is knowledge someone typed in, so they are worth different amounts and
+     * get separate knobs. Empty/absent axis is a no-op. Package-private for unit testing.
+     */
+    static List<Document> mergeRrf(List<List<Document>> vectorRanked, List<Document> keywordRanked,
+                                    List<Document> curatedRanked, List<Document> submissionRanked,
+                                    int topK, int k,
+                                    double keywordWeight, double curatedWeight, double submissionWeight) {
         Map<String, Double> scores = new LinkedHashMap<>();
         Map<String, Document> byKey = new LinkedHashMap<>();
         double vectorWeight = vectorRanked.isEmpty() ? 0.0 : 1.0 / vectorRanked.size();
@@ -365,6 +417,9 @@ public class RetrievalService {
         }
         if (curatedRanked != null && !curatedRanked.isEmpty()) {
             addRrfAxis(curatedRanked, curatedWeight, k, scores, byKey);
+        }
+        if (submissionRanked != null && !submissionRanked.isEmpty()) {
+            addRrfAxis(submissionRanked, submissionWeight, k, scores, byKey);
         }
         return scores.entrySet().stream()
                 .sorted(Map.Entry.<String, Double>comparingByValue().reversed())
@@ -443,10 +498,18 @@ public class RetrievalService {
      */
     /**
      * True when {@code text} already has a "[이미지 설명: ...]" line immediately following the
-     * "[이미지: {imagePath}]" marker — i.e. this exact chunk was indexed with "이미지 설명 추가"
-     * checked, so a fresh Lazy Vision call would be redundant. Only a match right after the marker
-     * counts (not merely "the text contains a description somewhere") — an unrelated image's
-     * description elsewhere in a merged chunk must not suppress analysis of this one.
+     * "[이미지: {imagePath}]" marker — i.e. the description was injected when the chunk was created
+     * ("이미지 설명 추가" on a document upload, or 지식 제안 승인), so a fresh Lazy Vision call would
+     * be redundant. Only a match right after the marker counts (not merely "the text contains a
+     * description somewhere") — an unrelated image's description elsewhere in a merged chunk must
+     * not suppress analysis of this one.
+     *
+     * <p>The {@code <br>} form counts too: inside a GFM table row a raw newline would split the
+     * cell and shatter the table, so both injection sites ({@code MarkdownCorrectionService},
+     * {@code CuratedImageStore}) separate with {@code <br>} there instead. Without accepting it
+     * here, every table-embedded image looks like a cache miss on every turn and
+     * {@link #augmentWithDescriptions} appends a second copy of the same description next to the
+     * one already in the text.
      */
     static boolean hasEmbeddedDescription(String text, String imagePath) {
         if (text == null) return false;
@@ -454,6 +517,7 @@ public class RetrievalService {
         int idx = text.indexOf(marker);
         if (idx < 0) return false;
         String after = text.substring(idx + marker.length()).stripLeading();
+        if (after.startsWith("<br>")) after = after.substring("<br>".length()).stripLeading();
         return after.startsWith("[이미지 설명:");
     }
 

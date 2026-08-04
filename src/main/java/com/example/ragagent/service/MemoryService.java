@@ -40,12 +40,16 @@ public class MemoryService {
         return maxConversationChars;
     }
 
-    /** Returns the generated turn id (conversation_turns.id). */
+    /** Returns the generated turn id (conversation_turns.id). {@code selectedTags} is the
+     *  comma-joined search scope this question was asked under — see
+     *  {@link MemoryRepository#addTurn}. */
     public long addTurn(String userId, String threadId, String question, String answer,
                         String askedAt, int inputTokens, int outputTokens,
-                        int elapsedMs, String provider, int llmCalls, String responseMode) {
+                        int elapsedMs, String provider, int llmCalls, String responseMode,
+                        String selectedTags) {
         return repository.addTurn(userId, threadId, question, answer,
-                askedAt, inputTokens, outputTokens, elapsedMs, provider, llmCalls, responseMode);
+                askedAt, inputTokens, outputTokens, elapsedMs, provider, llmCalls, responseMode,
+                selectedTags);
     }
 
     public void clearHistory(String userId, String threadId) {

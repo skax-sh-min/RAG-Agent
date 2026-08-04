@@ -48,6 +48,18 @@ public class ChunkSplitter {
      */
     public List<Document> splitDocuments(List<Document> docs, String filename,
                                           int chunkSize, int overlap, int minChunkSize, int maxChunkChars) {
+        return splitDocuments(docs, filename, chunkSize, overlap, minChunkSize, maxChunkChars, false);
+    }
+
+    /**
+     * @param granular selects the <b>최대 분할</b> strategy (`app.chunk-split-granular`, hot-editable
+     *                 — applies on the next indexing / ↺ re-index) instead of the default
+     *                 size-driven merging. See {@link #splitChapterGranular} for what changes;
+     *                 {@code false} is byte-for-byte the pre-existing behavior.
+     */
+    public List<Document> splitDocuments(List<Document> docs, String filename,
+                                          int chunkSize, int overlap, int minChunkSize, int maxChunkChars,
+                                          boolean granular) {
         String lower = filename.toLowerCase();
 
         // Two structured strategies split section-wise; scanned PDF (source_type=ocr) never goes
@@ -60,12 +72,22 @@ public class ChunkSplitter {
         boolean pageStructured = lower.endsWith(".pptx") || (lower.endsWith(".pdf") && !isOcrSourced(docs));
 
         if (chapterStructured) {
-            return splitChapterStructured(docs, filename, chunkSize, overlap, minChunkSize, maxChunkChars);
+            return granular
+                    ? splitChapterGranular(docs, filename, chunkSize, overlap, maxChunkChars)
+                    : splitChapterStructured(docs, filename, chunkSize, overlap, minChunkSize, maxChunkChars);
         }
 
         if (pageStructured) {
-            List<Document> dualHeadingMerged = mergeIdenticalHeadingSlides(docs, chunkSize);
-            List<Document> sectionMerged = mergeShortSections(dualHeadingMerged, chunkSize);
+            // 최대 분할에서는 슬라이드/페이지를 넘는 병합을 하지 않는다 — 크기 기준 병합
+            // (mergeShortSections)도, 동일 헤딩 슬라이드 병합(mergeIdenticalHeadingSlides)도 건너뛴다.
+            // 다만 슬라이드 '내부'는 반드시 합친다(joinSectionsWithinPage): 소제목이 있는 슬라이드는
+            // 로더에서 이미 "## 제목" 섹션과 "### 소제목+본문" 섹션으로 쪼개져 들어오므로, 그대로 두면
+            // 본문 없는 제목만의 청크가 생긴다. md/docx/txt와 달리 여기서의 헤딩은 실제 챕터 구조가
+            // 아니라 한 슬라이드의 제목/부제라, 나눠도 검색 단위가 되지 못한다.
+            List<Document> sectionMerged = granular
+                    ? joinSectionsWithinPage(docs)
+                    : mergeShortSections(mergeIdenticalHeadingSlides(docs, chunkSize), chunkSize);
+            int blockTolerance = blockToleranceFor(granular, chunkSize, overlap);
             List<Document> result = new ArrayList<>();
             for (Document doc : sectionMerged) {
                 if (doc.getText() == null || doc.getText().isBlank()) continue;
@@ -74,12 +96,12 @@ public class ChunkSplitter {
                 } else {
                     log.debug("[SPLIT] 섹션 {}자 > chunkSize={}, 슬라이딩 윈도우 적용",
                             doc.getText().length(), chunkSize);
-                    List<Document> pieces = slidingWindow(doc, chunkSize, overlap, minChunkSize);
+                    List<Document> pieces = slidingWindow(doc, chunkSize, overlap, minChunkSize, blockTolerance);
                     result.addAll(reinjectHeadingForSplitPieces(doc.getText(), pieces));
                 }
             }
-            log.debug("[SPLIT] {} → 페이지 섹션 전략, {}섹션 → 병합 {}섹션 → {}청크",
-                    filename, docs.size(), sectionMerged.size(), result.size());
+            log.debug("[SPLIT] {} → 페이지 섹션 전략(granular={}), {}섹션 → 병합 {}섹션 → {}청크",
+                    filename, granular, docs.size(), sectionMerged.size(), result.size());
             return enforceMaxChars(result, maxChunkChars, filename);
         }
 
@@ -128,6 +150,182 @@ public class ChunkSplitter {
         log.debug("[SPLIT] {} → 챕터 섹션 전략, {}섹션 → 병합 {}그룹 → {}청크",
                 filename, docs.size(), groups.size(), result.size());
         return enforceMaxChars(result, maxChunkChars, filename);
+    }
+
+    /**
+     * <b>최대 분할</b> chapter-structured pipeline — the alternative to {@link #splitChapterStructured},
+     * selected by {@code app.chunk-split-granular}. Splits at every heading it can instead of packing
+     * sections up to a size target:
+     * <ol>
+     *   <li><b>{@code minChunkSize} is not consulted at all</b> — neither the forward chapter merge
+     *       ({@link #mergeSectionsByChapter}) nor the backward tiny-chunk pull
+     *       ({@link #backwardMergeShortChunks}) runs, so a genuinely short subsection stays its own
+     *       chunk. That is the point: retrieval returns the one subsection that answers the question
+     *       rather than a bundle of neighbors.</li>
+     *   <li>The single exception is {@link #groupLeadInSections} — a chapter that is just a heading
+     *       plus at most two sentences is a lead-in, not an answer, so it is folded into the child
+     *       chapter(s) that follow it (never into a sibling or parent, and never past
+     *       {@code chunkSize}).</li>
+     *   <li>{@code chunkSize} is still the target for oversized sections, but the boundary pass is
+     *       block-aware ({@link #blockToleranceFor}) so a table or fenced code block is kept whole
+     *       wherever that is possible within tolerance.</li>
+     * </ol>
+     * Heading reinjection and the parent breadcrumb behave exactly as in the default strategy — a
+     * chunk still has to be self-describing, and more (smaller) chunks makes that matter more, not less.
+     */
+    private List<Document> splitChapterGranular(List<Document> docs, String filename,
+                                                int chunkSize, int overlap, int maxChunkChars) {
+        List<SectionGroup> groups = groupLeadInSections(docs, chunkSize);
+        int blockTolerance = blockToleranceFor(true, chunkSize, overlap);
+
+        List<Document> result = new ArrayList<>();
+        for (SectionGroup group : groups) {
+            Document doc = group.doc();
+            if (doc.getText() == null || doc.getText().isBlank()) continue;
+
+            List<Document> pieces;
+            if (doc.getText().length() <= chunkSize) {
+                pieces = List.of(doc);
+            } else {
+                log.debug("[SPLIT] 섹션 {}자 > chunkSize={}, 블록 인지 슬라이딩 적용",
+                        doc.getText().length(), chunkSize);
+                // minChunkSize=0: mergeTinyChunks must not re-merge the pieces we just split apart.
+                List<Document> raw = slidingWindow(doc, chunkSize, overlap, 0, blockTolerance);
+                pieces = reinjectHeadingForSplitPieces(doc.getText(), raw);
+            }
+            result.addAll(prependParentBreadcrumb(docs, group.startIndex(), pieces));
+        }
+
+        log.debug("[SPLIT] {} → 챕터 최대 분할 전략, {}섹션 → {}그룹 → {}청크",
+                filename, docs.size(), groups.size(), result.size());
+        return enforceMaxChars(result, maxChunkChars, filename);
+    }
+
+    /**
+     * How far a chunk boundary may move — in either direction — to avoid cutting a table or fenced
+     * code block ({@link #adjustEndForCodeBlock}/{@link #adjustEndForTableBlock}).
+     *
+     * <p>The default strategy uses {@code overlap}, which is what it has always used. That is now
+     * usually <b>0</b> ({@code app.chunk-overlap} defaults to 0 since document export landed), which
+     * silently turns both block guards into no-ops — every straddling block gets cut. The 최대 분할
+     * strategy therefore decouples the two and allows half a chunk of slack, so a chunk may reach
+     * ~1.5×{@code chunkSize} to finish a block, or end early to let a block start the next chunk.
+     * Blocks larger than that are still split, with the fence/table-header repair
+     * ({@link #reopenTruncatedBlock}) that has always applied.
+     */
+    static int blockToleranceFor(boolean granular, int chunkSize, int overlap) {
+        return granular ? Math.max(overlap, chunkSize / 2) : overlap;
+    }
+
+    /**
+     * 최대 분할's only merge rule: a section that is just a heading plus at most two sentences is a
+     * chapter lead-in ("이 장에서는 …를 다룹니다"), useless as a standalone retrieval unit, so it is
+     * merged forward into the child chapter(s) it introduces.
+     *
+     * <p>Deliberately narrow, so it can't quietly reintroduce the size-based bundling this strategy
+     * exists to avoid:
+     * <ul>
+     *   <li>only merges into a <b>strictly deeper</b> heading level (a sibling or parent chapter
+     *       stops it) — and re-evaluates after each step, so a heading ladder
+     *       ({@code ## A} → {@code ### A-1} → {@code #### A-1-1}) collapses only while every level
+     *       so far has been lead-in text;</li>
+     *   <li>stops as soon as the accumulated text stops looking like a lead-in;</li>
+     *   <li>never crosses {@code chunkSize}, or a {@code page_or_slide} boundary.</li>
+     * </ul>
+     */
+    List<SectionGroup> groupLeadInSections(List<Document> docs, int chunkSize) {
+        List<SectionGroup> groups = new ArrayList<>();
+        if (docs == null || docs.isEmpty()) return groups;
+
+        int n = docs.size();
+        int[] size = new int[n];
+        int[] level = new int[n];
+        for (int k = 0; k < n; k++) {
+            String t = docs.get(k).getText();
+            size[k] = t == null ? 0 : MarkdownNoiseNormalizer.normalize(t).length();
+            level[k] = sectionHeadingLevel(docs.get(k));
+        }
+
+        int i = 0;
+        while (i < n) {
+            int start = i;
+            StringBuilder acc = new StringBuilder(docs.get(i).getText() == null ? "" : docs.get(i).getText());
+            Map<String, Object> metadata = new HashMap<>(docs.get(i).getMetadata());
+            int accSize = size[i];
+            int lastLevel = level[i];
+            int j = i;
+
+            while (j + 1 < n && isLeadInSection(acc.toString())) {
+                int next = j + 1;
+                String nextText = docs.get(next).getText();
+                if (nextText == null || nextText.isBlank()) { // absorb blank section, keep going
+                    j = next;
+                    continue;
+                }
+                // 하위 챕터로만 통합 — 형제/상위 챕터를 만나면 중단.
+                if (lastLevel <= 0 || level[next] <= lastLevel) break;
+                if (isMergeForbiddenByPageMismatch(pageOrSlideOf(docs.get(start)), pageOrSlideOf(docs.get(next)))) break;
+
+                int combined = accSize + 2 + size[next];
+                if (combined > chunkSize) break;
+
+                appendSection(acc, nextText);
+                accSize = combined;
+                lastLevel = level[next];
+                j = next;
+            }
+
+            // 병합으로 실제 챕터 번호를 흡수한 경우 프롤로그 placeholder "0"을 교체 —
+            // mergeSectionsByChapter와 동일한 이유·동일한 규칙.
+            if ("0".equals(metadata.get(MetaKey.CHAPTER_NO))) {
+                metadata.put(MetaKey.CHAPTER_NO, firstRealChapterNo(docs, start, j));
+            }
+            groups.add(new SectionGroup(new Document(acc.toString(), metadata), start));
+            i = j + 1;
+        }
+        return groups;
+    }
+
+    /** Content units allowed in a lead-in section's body — "제목과 2문장 이내". */
+    private static final int LEAD_IN_MAX_UNITS = 2;
+
+    /**
+     * True when {@code text} is a heading plus at most {@link #LEAD_IN_MAX_UNITS} units of body.
+     *
+     * <p>A "unit" is {@code max(sentence-terminator count, non-blank line count)} — the line count
+     * floor is what stops a three-bullet list (no periods at all, so zero terminators) or three
+     * terminator-less one-liners from passing as "two sentences". A body containing a table row or
+     * a code fence is never a lead-in regardless of length: those are content, not an introduction,
+     * and 최대 분할 exists precisely to keep them as their own retrievable chunk.
+     */
+    boolean isLeadInSection(String text) {
+        if (text == null || text.isBlank()) return true;
+
+        int nonBlankLines = 0;
+        int terminators = 0;
+        for (String line : text.split("\n", -1)) {
+            String trimmed = line.strip();
+            if (trimmed.isEmpty()) continue;
+            if (headingLevelOf(trimmed) > 0) continue;          // 제목 줄은 본문에서 제외
+            if (trimmed.startsWith("```")) return false;         // 코드 블록 = 내용
+            if (trimmed.startsWith("|") && trimmed.chars().filter(c -> c == '|').count() >= 2) {
+                return false;                                    // 표 = 내용
+            }
+            nonBlankLines++;
+            for (int k = 0; k < trimmed.length(); k++) {
+                char c = trimmed.charAt(k);
+                if (c == '.' || c == '!' || c == '?' || c == '。' || c == '！' || c == '？') {
+                    // 연속 종결부호("...", "!!")는 한 문장으로 센다.
+                    boolean prevWasTerminator = k > 0 && isSentenceTerminator(trimmed.charAt(k - 1));
+                    if (!prevWasTerminator) terminators++;
+                }
+            }
+        }
+        return Math.max(terminators, nonBlankLines) <= LEAD_IN_MAX_UNITS;
+    }
+
+    private static boolean isSentenceTerminator(char c) {
+        return c == '.' || c == '!' || c == '?' || c == '。' || c == '！' || c == '？';
     }
 
     /** A forward-merged chapter group plus the index of its first section in the original list
@@ -271,6 +469,34 @@ public class ChunkSplitter {
             i = j + 1;
         }
         return result;
+    }
+
+    /**
+     * Collapses each slide/page's raw sections into exactly one {@link Document} — the 최대 분할
+     * counterpart of {@link #mergeShortSections} for page-structured formats. Merges only
+     * <em>within</em> one {@link MetaKey#PAGE_OR_SLIDE} value, never across, so "1 슬라이드 = 1 청크"
+     * holds while the cross-slide merges that 최대 분할 opts out of stay off.
+     *
+     * <p>Necessary because a slide with a title is split by the loader at the heading line as well as
+     * at the {@code [페이지: N]} marker, arriving here as a {@code "## 제목"} section plus a
+     * {@code "### 소제목"}+body section. Emitting those separately would produce a body-less
+     * title-only chunk. No-op for docs without the metadata (md/docx/txt), which
+     * {@link #groupByPageOrSlide} keeps as singleton bundles.
+     */
+    List<Document> joinSectionsWithinPage(List<Document> docs) {
+        if (docs == null || docs.isEmpty()) return docs;
+
+        List<Document> out = new ArrayList<>();
+        for (List<Document> bundle : groupByPageOrSlide(docs)) {
+            if (bundle.size() == 1) {
+                out.add(bundle.get(0));
+                continue;
+            }
+            String joined = joinBundleText(bundle);
+            if (joined.isBlank()) continue;
+            out.add(new Document(joined, new HashMap<>(bundle.get(0).getMetadata())));
+        }
+        return out;
     }
 
     /** Groups consecutive docs sharing the same {@link MetaKey#PAGE_OR_SLIDE} value into per-slide
@@ -702,9 +928,14 @@ public class ChunkSplitter {
     }
 
     List<Document> slidingWindow(Document doc, int chunkSize, int overlap, int minChunkSize) {
+        return slidingWindow(doc, chunkSize, overlap, minChunkSize, overlap);
+    }
+
+    /** @param blockTolerance see {@link #blockToleranceFor} — equals {@code overlap} on the default path. */
+    List<Document> slidingWindow(Document doc, int chunkSize, int overlap, int minChunkSize, int blockTolerance) {
         List<Document> result = new ArrayList<>();
-        List<String> rawChunks = rawSlidingPieces(doc.getText(), chunkSize, overlap);
-        for (String merged : mergeTinyChunks(rawChunks, minChunkSize)) {
+        List<String> rawChunks = rawSlidingPieces(doc.getText(), chunkSize, overlap, blockTolerance);
+        for (String merged : mergeTinyChunks(rawChunks, minChunkSize, overlap)) {
             result.add(new Document(merged, new HashMap<>(doc.getMetadata())));
         }
         return result;
@@ -718,6 +949,12 @@ public class ChunkSplitter {
      * {@link #mergeTinyChunks} plus metadata mapping (behavior unchanged).
      */
     List<String> rawSlidingPieces(String text, int chunkSize, int overlap) {
+        return rawSlidingPieces(text, chunkSize, overlap, overlap);
+    }
+
+    /** @param blockTolerance see {@link #blockToleranceFor} — equals {@code overlap} on the default path,
+     *                        so that call shape is byte-for-byte the pre-existing behavior. */
+    List<String> rawSlidingPieces(String text, int chunkSize, int overlap, int blockTolerance) {
         List<String> rawChunks = new ArrayList<>();
         if (text == null || text.isBlank()) return rawChunks;
         int start = 0;
@@ -727,8 +964,8 @@ public class ChunkSplitter {
                 int lastNl = text.lastIndexOf('\n', end);
                 if (lastNl > start + overlap) end = lastNl + 1;
 
-                end = adjustEndForCodeBlock(text, start, end, overlap);
-                end = adjustEndForTableBlock(text, start, end, overlap);
+                end = adjustEndForCodeBlock(text, start, end, blockTolerance);
+                end = adjustEndForTableBlock(text, start, end, blockTolerance);
 
                 // 남은 꼬리 길이가 overlap 이하이면 새 청크를 만들지 않고 현재 청크에 포함한다.
                 int remaining = text.length() - end;
@@ -807,7 +1044,22 @@ public class ChunkSplitter {
         return headerBlock.isBlank() ? chunk : headerBlock + "\n" + chunk;
     }
 
-    List<String> mergeTinyChunks(List<String> chunks, int minLength) {
+    /**
+     * Folds pieces shorter than {@code minLength} into their neighbour.
+     *
+     * @param maxOverlap how many characters of the join may be treated as duplicated text and
+     *                   dropped — must be the <b>actual sliding-window overlap</b> these pieces were
+     *                   cut with, which is the only text that can legitimately be duplicated across
+     *                   them. It used to be {@code minLength}, which was wrong in both directions and
+     *                   silently destructive: {@code app.chunk-overlap} now defaults to <b>0</b>
+     *                   (pieces are disjoint, so nothing is ever duplicated), yet the join still
+     *                   scanned up to {@code min-chunk-size} (default 500) characters for a matching
+     *                   suffix/prefix and deleted whatever it found. On repetitive content — repeated
+     *                   table rows, uniformly formatted list items — that match is a coincidence, not
+     *                   a duplication, and the text was lost. Passing the real overlap makes the
+     *                   de-duplication a no-op exactly when there is no overlap to remove.
+     */
+    List<String> mergeTinyChunks(List<String> chunks, int minLength, int maxOverlap) {
         if (chunks == null || chunks.isEmpty()) return List.of();
 
         List<String> merged = new ArrayList<>();
@@ -818,14 +1070,14 @@ public class ChunkSplitter {
             if (text.isBlank()) continue;
 
             if (!pendingPrefix.isEmpty()) {
-                text = mergeAdjacentText(pendingPrefix, text, minLength);
+                text = mergeAdjacentText(pendingPrefix, text, maxOverlap);
                 pendingPrefix = "";
             }
 
             if (text.length() < minLength) {
                 if (!merged.isEmpty()) {
                     int last = merged.size() - 1;
-                    merged.set(last, mergeAdjacentText(merged.get(last), text, minLength));
+                    merged.set(last, mergeAdjacentText(merged.get(last), text, maxOverlap));
                 } else {
                     pendingPrefix = text;
                 }
@@ -837,7 +1089,7 @@ public class ChunkSplitter {
 
         if (!pendingPrefix.isEmpty()) {
             if (!merged.isEmpty()) {
-                merged.set(0, mergeAdjacentText(pendingPrefix, merged.get(0), minLength));
+                merged.set(0, mergeAdjacentText(pendingPrefix, merged.get(0), maxOverlap));
             } else {
                 merged.add(pendingPrefix);
             }
@@ -846,9 +1098,16 @@ public class ChunkSplitter {
         return merged;
     }
 
+    /**
+     * Joins two adjacent pieces, dropping at most {@code maxOverlap} characters of text duplicated
+     * across the seam (the sliding window's overlap region). {@code maxOverlap <= 0} joins verbatim —
+     * see {@link #mergeTinyChunks} for why that is the correct behavior at zero overlap rather than a
+     * missed optimization.
+     */
     String mergeAdjacentText(String left, String right, int maxOverlap) {
         if (left == null || left.isBlank()) return right == null ? "" : right;
         if (right == null || right.isBlank()) return left;
+        if (maxOverlap <= 0) return left + "\n\n" + right;
 
         int limit = Math.min(Math.min(maxOverlap, left.length()), right.length());
         int overlapLen = 0;
@@ -865,29 +1124,40 @@ public class ChunkSplitter {
         return left + "\n\n" + right;
     }
 
-    int adjustEndForCodeBlock(String text, int start, int end, int overlap) {
+    /**
+     * Moves a boundary that landed inside a fenced code block: past the block's end when the rest of
+     * it fits within {@code blockTolerance}, else back to the block's start so it opens the next
+     * chunk whole. Leaves the boundary alone only when the block is too big for either move — it is
+     * then split with {@link #reopenCodeFence} repair. {@code blockTolerance} is {@code overlap} on
+     * the default path and half a chunk under 최대 분할 ({@link #blockToleranceFor}).
+     */
+    int adjustEndForCodeBlock(String text, int start, int end, int blockTolerance) {
         Range range = findFencedCodeRangeContaining(text, end);
         if (range == null) return end;
 
         int remaining = range.end() - end;
-        if (remaining <= overlap) {
+        if (remaining <= blockTolerance) {
             return range.end();
         }
 
         int currentCodeLen = end - range.start();
-        if (currentCodeLen < overlap * 2 && range.start() > start) {
+        if (currentCodeLen < blockTolerance * 2 && range.start() > start) {
             return range.start();
         }
 
         return end;
     }
 
-    int adjustEndForTableBlock(String text, int start, int end, int overlap) {
+    /** Table counterpart of {@link #adjustEndForCodeBlock}. A table that began inside this chunk is
+     *  always pushed whole to the next one (no tolerance needed for that direction — a headerless
+     *  row fragment is worthless either way); tolerance only governs finishing a table that started
+     *  in an earlier chunk. */
+    int adjustEndForTableBlock(String text, int start, int end, int blockTolerance) {
         Range range = findTableRangeContaining(text, end);
         if (range == null) return end;
 
         int remaining = range.end() - end;
-        if (remaining <= overlap) {
+        if (remaining <= blockTolerance) {
             return range.end();
         }
 

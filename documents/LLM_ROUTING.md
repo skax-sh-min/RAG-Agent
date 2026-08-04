@@ -110,7 +110,7 @@ app.llm.direct-temperature=${DIRECT_LLM_TEMPERATURE:0.1}
 app.llm.max-tokens=${LLM_MAX_TOKENS:6000}
 # 질의 경로 동시성 게이트 기본값(서버의 실제 --parallel 값에 맞춘다) + 대기 상한
 app.llm.default-provider-concurrency=${LLM_DEFAULT_PROVIDER_CONCURRENCY:3}
-app.llm.permit-wait-timeout-seconds=${LLM_PERMIT_WAIT_TIMEOUT_SECONDS:20}
+app.llm.permit-wait-timeout-seconds=${LLM_PERMIT_WAIT_TIMEOUT_SECONDS:60}
 
 # 등장 순서 = 인덱스 순서(사람이 읽기 편하도록 맞춤; Spring 바인딩 자체는 파일 내 줄 순서와 무관하고
 # "활성(비주석) 프로바이더의 번호가 0부터 연속"이기만 하면 된다): 소형 로컬(MICRO_TEXT) → 로컬 LLM 1
@@ -279,7 +279,7 @@ app.indexing.keyword-batch-size=${INDEXING_KEYWORD_BATCH_SIZE:2}
 - 차단 만료는 다음 라우팅 시 자동 해제.
 - `/llm-usage` 페이지에서 차단 상태 + 남은 시간 카운트다운 확인 가능 (30초마다 자동 갱신).
 - **동시성 백프레셔(§6, 아래)는 Circuit Breaker와 별개**다 — 용량 초과는 프로바이더 장애가 아니므로 차단하지 않는다.
-- **"30초"의 근거**: `LlmRouter.SHORT_BLOCK_SECONDS`("30") 하드코딩 상수 하나를 **세 갈래**(폴백 없는 과부하 차단·기타 4xx/5xx·일반 예외)가 공유한다. 이 값은 폴백 없는 프로바이더 완화 로직을 구현하며 새로 정한 게 아니라, 그 이전부터 "기타 4xx/5xx·일반 예외" 차단에 쓰이던 기존 값을 그대로 재사용한 것 — `permit-wait-timeout-seconds`(기본 20초)와 비슷한 수준이라 재사용에 무리가 없었다. `app.llm.default-provider-concurrency`/`app.llm.permit-wait-timeout-seconds`와 달리 **프로퍼티로 외부화되어 있지 않다** — 값을 바꾸려면 코드 수정이 필요하다.
+- **"30초"의 근거**: `LlmRouter.SHORT_BLOCK_SECONDS`("30") 하드코딩 상수 하나를 **세 갈래**(폴백 없는 과부하 차단·기타 4xx/5xx·일반 예외)가 공유한다. 이 값은 폴백 없는 프로바이더 완화 로직을 구현하며 새로 정한 게 아니라, 그 이전부터 "기타 4xx/5xx·일반 예외" 차단에 쓰이던 기존 값을 그대로 재사용한 것 — `permit-wait-timeout-seconds`(기본 60초)와 비슷한 수준이라 재사용에 무리가 없었다. `app.llm.default-provider-concurrency`/`app.llm.permit-wait-timeout-seconds`와 달리 **프로퍼티로 외부화되어 있지 않다** — 값을 바꾸려면 코드 수정이 필요하다.
   - 더 짧게(예: 10~20초) 바꾸면 일시적 장애에서 더 빨리 회복되지만, 실제 서버 복구가 그보다 오래 걸리는 상황이면 재시도가 더 잦아져(연결·요청·로그 비용만 반복) 실질적인 다운타임 단축 효과 없이 노이즈만 늘 수 있다.
   - 세 갈래가 상수 하나를 공유하므로, 폴백 없는 과부하 차단만 다르게(예: 10초) 가져가고 싶다면 상수를 분리해야 한다.
 
@@ -297,7 +297,7 @@ app.indexing.keyword-batch-size=${INDEXING_KEYWORD_BATCH_SIZE:2}
 │    크기 = providers[N].concurrency, 미설정 시 default-provider-    │
 │           concurrency(기본 3)                                      │
 │                                                                     │
-│  요청 도착 → tryAcquire(permit-wait-timeout-seconds, 기본 20초)     │
+│  요청 도착 → tryAcquire(permit-wait-timeout-seconds, 기본 60초)     │
 │    ├─ 획득 성공 → LLM 호출 → 응답 후 permit 반환                    │
 │    └─ 대기 상한 초과 → LlmBackpressureException                    │
 │          → HTTP 429 + Retry-After (RAG-LLM-002)                    │
@@ -326,7 +326,7 @@ app.indexing.keyword-batch-size=${INDEXING_KEYWORD_BATCH_SIZE:2}
 |---|---|---|---|
 | `app.llm.default-provider-concurrency` | `LLM_DEFAULT_PROVIDER_CONCURRENCY` | `3` | 프로바이더별 동시 처리 상한 기본값(개별 프로바이더가 `concurrency`를 지정하지 않을 때) |
 | `app.llm.providers[N].concurrency` | — (인덱스 프로퍼티) | 위 기본값 | 프로바이더별 개별 오버라이드 — 서버의 실제 `--parallel` 값에 맞춘다 |
-| `app.llm.permit-wait-timeout-seconds` | `LLM_PERMIT_WAIT_TIMEOUT_SECONDS` | `20` | 슬롯 대기 상한(초). `LLM_READ_TIMEOUT_SECONDS`(기본 180)보다 훨씬 짧게 유지해 사용자가 오래 기다리지 않고 빠른 429를 받도록 함 |
+| `app.llm.permit-wait-timeout-seconds` | `LLM_PERMIT_WAIT_TIMEOUT_SECONDS` | `60` | 슬롯 대기 상한(초). `LLM_READ_TIMEOUT_SECONDS`(기본 600)보다 훨씬 짧게 유지해 사용자가 오래 기다리지 않고 빠른 429를 받도록 함 |
 
 SSE 스트리밍에서는 `error.llm.backpressure` 메시지("현재 요청이 몰려 있습니다. 잠시 후 다시 시도해 주세요.")로 우아하게 종료된다(`StreamingAgentService`). REST/HTMX 블로킹 경로는 `GlobalExceptionHandler`가 `RagException.retryAfterSeconds()`를 읽어 `Retry-After` 헤더를 자동 부착한다.
 
@@ -347,7 +347,11 @@ findFirst(role, priority 오름차순 순회)
 - **priority가 다르면 부하와 무관하게 낮은 priority가 항상 우선** — 로드밸런싱은 동일 priority 그룹 내부에서만 일어난다. 부하가 높다고 다음 priority(예: 외부 유료 API)로 자동 전환되지는 않는다 — 그건 프로바이더가 실제로 응답 실패(429/402/503/기타)할 때만 §5 Circuit Breaker가 처리하는 영역이다.
 - **총 동시 처리량 = 등록 대수 × per-provider concurrency** (예: LOCAL 2대 × concurrency 3 = 6).
 - 임베딩 프로바이더도 이제 로드밸런싱된다(§6.21 E1) — `EmbeddingModel` 체인이라 라우팅 지점은 LLM 경로와 다르지만, `LoadBalancingEmbeddingModel`이 다중 임베딩 엔드포인트(`app.embedding.additional-base-urls`)를 least-in-flight로 분산한다. 인덱싱 시 병렬 서브배치(§6.21 E2, `app.embedding.max-concurrent-batches`)와 결합하면 단일 대용량 문서도 여러 엔드포인트를 동시에 채운다. 설정은 OPERATOR_MANUAL §3.2 "임베딩 병렬화" 참고.
-- **좋아요 기반 큐레이션 Q&A 임베딩(§10.10)**은 이 표의 LLM 채팅 게이트(위 표)와 무관하다 — `VectorStoreFacade.add()`를 통해 인덱싱과 동일한 임베딩 파이프라인(uncached, §10.9.4)을 타므로 여기 §6의 임베딩 로드밸런싱·병렬 서브배치 대상에 자연히 포함된다. 좋아요 즉시가 아니라 3초 디바운스 후 배경 가상 스레드에서 실행되므로 채팅 응답 지연에는 영향이 없다. 별도의 라우팅/동시성 설정은 필요 없다.
+- **좋아요 기반 큐레이션 Q&A 임베딩(§10.10)**은 이 표의 LLM 채팅 게이트(위 표)와 무관하다 — `VectorStoreFacade.add()`를 통해 인덱싱과 동일한 임베딩 파이프라인(uncached, §10.9.4)을 타므로 여기 §6의 임베딩 로드밸런싱·병렬 서브배치 대상에 자연히 포함된다. 좋아요 즉시가 아니라 3초 디바운스 후 배경 가상 스레드에서 실행되므로 채팅 응답 지연에는 영향이 없다. 별도의 라우팅/동시성 설정은 필요 없다. **긴 답변은 임베딩 시점에 여러 청크로 나뉘므로 좋아요 1회가 청크 수만큼의 임베딩 호출을 만든다**(제안 승인과 동일) — 모두 위 임베딩 로드밸런싱 대상이다.
+  - **청크 추가 게시판(사용자 제안 → 관리자 승인, OPERATOR_MANUAL §6.9)**도 승인 시점에 같은 경로(`CuratedQaService.createFromSubmission()` → `VectorStoreFacade.add()`)를 그대로 탄다. 차이는 두 가지다: (1) 디바운스가 없다 — 좋아요와 달리 관리자의 명시적 1회 동작이라 취소와 경합할 여지가 없기 때문. (2) 본문이 길면 `ChunkSplitter`로 나뉘므로 승인 1회가 **청크 수만큼의 임베딩 호출**을 만든다(청크마다 배경 가상 스레드 1개). 각 호출은 위 임베딩 로드밸런싱을 그대로 타고, 승인 요청 자체는 행 생성 직후 즉시 응답한다 — 그래서 응답 시점에는 임베딩 성공 여부를 알 수 없고, 실패는 `curated_qa.embed_status='failed'`로 남아 관리 화면 배지로 드러난다(하나라도 실패하면 표시).
+    - **유일한 LLM 호출은 본문 이미지의 Vision 설명 생성이다.** 텍스트만 있는 제안은 등록·승인 어느 쪽도 LLM을 부르지 않는다(키워드 추출도 요약도 돌지 않는다). 본문에 `[이미지: ...]` 마커가 있으면 `approve()`가 **분할 전에** `CuratedImageStore.describeImages()` → `LazyVisionService`로 이미지당 1회 `TaskType.VISION` 호출을 낸다 — 설명이 임베딩되는 텍스트의 일부여야 그림 내용이 검색에 걸리기 때문. 라우팅은 §1 매트릭스의 VISION 규칙(`type=VISION` → `LIGHT_BOTH` → `BOTH`)을 그대로 따르고, **인덱싱 계열이므로 위 표대로 §6 동시성 게이트는 타지 않는다**(`executeWithTracking()`) — 채팅 슬롯을 잠식하지 않지만 로컬 LLM 서버 자원은 공유한다. 동시성은 `LazyVisionService` 자체의 `app.indexing.max-concurrent-llm-calls` 세마포어가 제한하며, 결과는 `image_descriptions` 캐시에 남아 질의 시점에 재분석되지 않는다.
+    - 임베딩과 달리 이 Vision 호출은 **승인 요청 안에서 동기로 끝난다**(배경으로 미루면 마커와 설명이 서로 다른 청크로 갈라진다). 그래서 이미지가 있는 제안은 승인 응답 자체가 느리다 — 장수 상한은 `CuratedImageStore.MAX_IMAGES_PER_SUBMISSION`(기본 10, 프로퍼티 아님). `IMAGE_DESCRIPTION_ENABLED=false`면 `LazyVisionService` 빈이 없어 이 단계가 통째로 생략된다(이미지는 표시만 되고 검색 기여 없음).
+  - 임베딩 입력 텍스트는 `제목 + 본문`이고 **제목은 모든 청크에 반복 부여**된다 — 2번째 청크부터 제목이 빠지면 질문형 질의와의 매칭이 급격히 나빠지기 때문(문서 인덱싱의 소제목 재주입과 같은 이유).
 - `/llm-usage`에서 프로바이더별 사용량 집계로 실제 분산 여부를 확인할 수 있다.
 
 ---
@@ -380,6 +384,7 @@ CREATE TABLE IF NOT EXISTS llm_usage (
 - **classifyOnly() 토큰 미누적**: `AgentService`가 선행 분류 시 `AgentState` 토큰 집계에서 1회 누락 (허용된 MVP 트레이드오프)
 - **tried 집합 순환 방지**: `executeWithTracking()` 내 tried 집합이 모든 프로바이더를 포함하면 exhausted — 최대 재귀 = 프로바이더 수
 - **Vision 라우팅**: `type=VISION` 모델 미등록 시 `LIGHT_BOTH` → `BOTH` 순으로 fallback. Vision 문서 많으면 `local-vision` 등록 권장
+  - ⚠️ `local-vision` 예제는 `role=LOCAL, priority=0` — **소형(MICRO_TEXT) 오프로드 모델과 같은 role+priority**다. `hasMicroTextOffloadProvider()`가 `supports(MICRO_TEXT)`까지 확인하는 이유가 이것이다(§9): 타입을 안 보면 Vision 모델 하나 등록한 것만으로 "소형 모델 있음"으로 오판해, `findFirst`가 정작 그 프로바이더를 건너뛰고 요약 같은 잡무를 `priority=1` 답변 모델로 보낸다. 증상은 "소형 모델을 등록한 적 없는데 `/llm-usage`에 `summary:` 사용량이 답변 모델 이름으로 잡힌다"
 - **동시성 게이트(§6) 크기 설정 실수**: `providers[N].concurrency`를 서버의 실제 `--parallel`보다 크게 잡으면 앱이 스스로 429/타임아웃을 유발할 수 있다(서버가 처리 못 할 요청까지 통과시킴). 반대로 너무 작게 잡으면 여유 용량을 못 씀 — 서버 설정값과 일치시키는 것이 원칙
 - **동일 우선순위 프로바이더 다중 등록 시 자동 로드밸런싱**: `findFirst()`가 같은 role·같은 priority 후보 중 동시성 게이트의 잔여 permit이 가장 많은(least-in-flight) 프로바이더를 선택 — 여러 대 등록하면 실제로 부하가 분산된다. priority가 다르면 부하와 무관하게 낮은 priority가 항상 우선(동일 priority 그룹 내부에서만 분산). 설정 방법은 §3 "로컬 LLM 2 — 로컬 LLM 1과 로드밸런싱" 참고
 
@@ -402,7 +407,7 @@ CREATE TABLE IF NOT EXISTS llm_usage (
 | 답변·Critic·Rerank (`TEXT`) | **큰 모델** | 소형은 `supports(TEXT)=false` |
 | Vision·이미지 분류 (`VISION`/`LIGHT_BOTH`) | **큰 모델** | 소형은 이미지 미지원 |
 
-- **폴백/회귀 0**: `MICRO_TEXT`는 `LIGHT_TEXT`/`LIGHT_BOTH`/`BOTH`가 모두 지원(부분집합)하므로, 소형 다운·미등록 시 큰 모델이 그대로 흡수한다. **예외: 대화 요약**(`ConversationSummarizerService`)만은 이 폴백을 타지 않는다 — 소형(`role=LOCAL, priority=0`)이 없으면(`LlmRouter.hasMicroTextOffloadProvider()=false`) LLM 요약 자체를 생략하고 원본 history로 폴백한다(부가 기능이 답변용 모델의 동시성 슬롯을 잠식하지 않게 하려는 의도적 게이팅. 답변이 이미 `## 요약` 섹션을 갖고 있으면 소형 유무와 무관하게 그 내용을 그대로 재사용하므로 LLM 호출 0회). `RetrievalService`는 `MICRO_TEXT→LIGHT_TEXT→TEXT` 순 폴백이라 cloud-only(LOCAL 없음)에서도 구성 실패가 없다.
+- **폴백/회귀 0**: `MICRO_TEXT`는 `LIGHT_TEXT`/`LIGHT_BOTH`/`BOTH`가 모두 지원(부분집합)하므로, 소형 다운·미등록 시 큰 모델이 그대로 흡수한다. **예외: 대화 요약**(`ConversationSummarizerService`)만은 이 폴백을 타지 않는다 — 소형(`role=LOCAL`·`priority=0`이면서 **`MICRO_TEXT`를 실제로 지원하는 타입**)이 없으면(`LlmRouter.hasMicroTextOffloadProvider()=false`) **LLM 호출만** 생략한다(부가 기능이 답변용 모델의 동시성 슬롯을 잠식하지 않게 하려는 의도적 게이팅). 그렇다고 요약을 포기하지는 않는다: RAG 답변은 `prompt.answer.system`이 강제한 `## 요약` 섹션을 이미 갖고 있으므로 그것들을 그대로 이어 붙여 **LLM 0회로 요약을 조립**하고, 섹션이 없는 답변(Direct·meta)만 `UNSUMMARIZED_ANSWER_CAP`(300자)으로 잘라 담는다 — `LOCAL_FAST_LLM_URL`은 기본값이 없어 미설정이 흔한데, 예전처럼 `null`을 반환하면 Direct 턴 하나 때문에 이미 뽑아둔 요약 전부를 버리고 원본 history로 떨어졌다. 원본 history 폴백은 이제 요약할 턴이 아예 없을 때만 일어난다. `RetrievalService`는 `MICRO_TEXT→LIGHT_TEXT→TEXT` 순 폴백이라 cloud-only(LOCAL 없음)에서도 구성 실패가 없다.
 - **priority 필수**: 소형(0) < 큰(1). 동률이면 §6 로드밸런서가 둘 사이에 분산해 **절반만** 오프로딩된다.
 - **인덱스 연속성**: `providers[N]`은 0부터 연속이어야 바인딩(파일 내 줄 순서 자체는 무관). 기본 파일은 `[0]`=소형·`[1]`=로컬 LLM 1·`[2]`=로컬 LLM 2·`[3]~[8]`=외부(PREMIUM gemma-4-31b-1/-2가 `[6]`·`[7]` 두 키로 로드밸런싱)·`[9]`=Vision(선택, §3 예시).
 

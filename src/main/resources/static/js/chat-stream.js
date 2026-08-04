@@ -206,9 +206,12 @@
             details.className = 'superseded-answer border rounded mb-2';
             const summary = document.createElement('summary');
             summary.className = 'small text-muted p-2';
+            // 사유가 있으면 접힌 상태에서도 보이게 요약줄에 붙인다 — 펼쳐야만 알 수 있으면
+            // "왜 실패했는지"를 확인할 수 있게 한 목적이 반쯤 사라진다.
             summary.innerHTML =
                 `<span class="badge bg-warning text-dark me-1">미검증</span>` +
-                `<span aria-label="싫어요">👎</span> 검증 미통과 — 이전 답변 펼쳐보기`;
+                `<span aria-label="싫어요">👎</span> 검증 미통과 — 이전 답변 펼쳐보기` +
+                (data.detail ? `<div class="text-warning mt-1">사유: ${escHtml(data.detail)}</div>` : '');
             const body = document.createElement('div');
             body.className = 'md-content p-2 pt-0';
             body.textContent = rawText;          // textContent → renderMarkdown sanitizes
@@ -226,9 +229,13 @@
             notice.className = 'retry-notice small text-warning mb-2 d-flex align-items-center gap-1';
             contentEl.parentNode.insertBefore(notice, contentEl);
         }
+        // 아이콘+본문은 한 줄, 사유는 그 아래 줄 → flex 방향을 바꿔야 줄바꿈이 먹는다.
+        notice.className = 'retry-notice small text-warning mb-2 d-flex flex-column';
         notice.innerHTML =
-            `<i class="bi bi-arrow-repeat"></i>` +
-            `<span>${escHtml(data.text || '검증 미통과 — 검색 범위를 넓혀 재시도 중...')}</span>`;
+            `<div class="d-flex align-items-center gap-1">` +
+                `<i class="bi bi-arrow-repeat"></i>` +
+                `<span>${escHtml(data.text || '검증 미통과 — 검색 범위를 넓혀 재시도 중...')}</span>` +
+            `</div>`;
 
         // Clear the live area for the fresh attempt.
         contentEl.textContent = '';
@@ -354,7 +361,10 @@
             const parts = [];
             if (qt)                       parts.push(`<span class="badge badge-${escHtml(qt)} me-1">${escHtml(qt)}</span>`);
             if (data.grounded === true)   parts.push(`<span class="badge bg-success me-1">검증됨</span>`);
-            else if (data.grounded === false) parts.push(`<span class="badge bg-warning text-dark me-1">미검증</span>`);
+            // 재시도를 다 쓰고도 통과하지 못한 답변 — 배지에 사유를 실어 왜 미검증인지 알 수 있게 한다
+            // (네이티브 title: 메타데이터 줄이라 상시 노출하면 길어진다. 사유는 아래 줄에도 한 번 더 나온다).
+            else if (data.grounded === false) parts.push(
+                `<span class="badge bg-warning text-dark me-1"${data.evalReason ? ` title="${escHtml(data.evalReason)}" style="cursor:help;"` : ''}>미검증</span>`);
             if (data.premiumUpgraded)     parts.push(`<span class="badge-upgraded ms-1">⬆ ${escHtml(data.premiumUpgraded)}</span>`);
             if (data.usedProvider)        parts.push(`🤖 ${escHtml(data.usedProvider)}`);
             if (data.elapsedMs != null)   parts.push(`⏱ ${(data.elapsedMs / 1000).toFixed(1)}s`);
@@ -365,6 +375,14 @@
             if (answerLen)                parts.push(`📝 ${answerLen}자`);
             parts.push(`🕐 ${nowTimeStr()}`);
             html += `<span class="text-muted">${parts.join(' · ')}</span>`;
+
+            // 미검증으로 확정된 답변의 사유는 배지 툴팁에만 두지 않고 한 줄로도 보여준다 —
+            // 마우스를 올려봐야 알 수 있으면 모바일에서는 확인할 방법이 없다.
+            if (data.grounded === false && data.evalReason) {
+                html += `<div class="small text-warning mt-1">`
+                     +  `<i class="bi bi-exclamation-triangle me-1"></i>`
+                     +  `검증 미통과 사유: ${escHtml(data.evalReason)}</div>`;
+            }
 
             metaEl.innerHTML = html;
         }

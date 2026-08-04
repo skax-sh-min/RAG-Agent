@@ -59,6 +59,7 @@ class DocumentControllerHtmxTest {
     @Autowired MockMvc mvc;
 
     @MockitoBean RagService ragService;
+    @MockitoBean com.example.ragagent.repository.CuratedQaRepository curatedQaRepository;
     @MockitoBean IndexingProgressService indexingProgressService;
     @MockitoBean ChatModel chatModel;
     @MockitoBean ThreadContextResolver threadContextResolver;

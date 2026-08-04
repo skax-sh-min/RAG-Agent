@@ -7,6 +7,7 @@ import com.example.ragagent.exception.LlmBackpressureException;
 import com.example.ragagent.exception.LlmProviderExhaustedException;
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.model.ChatForm;
+import com.example.ragagent.model.TagUtils;
 import com.example.ragagent.model.SourceRef;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.MessageSource;
@@ -190,7 +191,7 @@ public class StreamingAgentService {
                 turnId = memoryService.addTurn(userId, form.threadId(), form.question(), result.answer(),
                         askedAt, result.totalInputTokens(), result.totalOutputTokens(),
                         (int) elapsedMs, result.usedProvider(), result.llmCallCount(),
-                        form.responseModeOrDefault().name());
+                        form.responseModeOrDefault().name(), TagUtils.toMetaValue(form.selectedTags()));
                 summarizerService.precomputeAfterTurn(userId, form.threadId(), turnId, locale);
             }
 
@@ -231,7 +232,8 @@ public class StreamingAgentService {
                     try {
                         memoryService.addTurn(userId, form.threadId(), form.question(),
                                 partial + "\n[오류로 중단됨]",
-                                askedAt, 0, 0, 0, null, 0, form.responseModeOrDefault().name());
+                                askedAt, 0, 0, 0, null, 0, form.responseModeOrDefault().name(),
+                                TagUtils.toMetaValue(form.selectedTags()));
                         log.debug("partial answer persisted ({} chars) thread={}",
                                 partial.length(), form.threadId());
                     } catch (Exception persistEx) {
@@ -321,11 +323,12 @@ public class StreamingAgentService {
         }
 
         @Override
-        public void onRetry(String reason, int retryCount) {
+        public void onRetry(String reason, int retryCount, String detail) {
             lastActivityNanos.set(nanoTimeSource.getAsLong());
             Map<String, Object> payload = new HashMap<>();
             payload.put("reason", reason);
             payload.put("retryCount", retryCount);
+            payload.put("detail", detail);
             payload.put("text", "이 답변이 검증 조건을 통과하지 못해, 검색 범위를 넓혀 다시 시도하고 있습니다… (재시도 "
                     + retryCount + ")");
             sendEvent(emitter, "retry", payload);
@@ -376,6 +379,9 @@ public class StreamingAgentService {
         m.put("premiumUpgraded",   result.premiumUpgraded());
         m.put("questionType",      result.questionType());
         m.put("grounded",          result.grounded());
+        // 재시도를 다 쓰고도 검증을 통과하지 못한 채 전달되는 답변이 있다 — 그 경우 미검증 배지만
+        // 띄우고 이유를 감추면 사용자가 할 수 있는 게 없다. 통과했으면 null 이라 UI가 그냥 생략한다.
+        m.put("evalReason",        result.evalReason());
         m.put("refreshThreadList", true);
         m.put("turnId",            turnId);
         return m;

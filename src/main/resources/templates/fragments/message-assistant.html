@@ -16,9 +16,24 @@
             ⬆ 고추론 재분석 → <span th:text="${premiumUpgraded}"></span>
         </span>
 
+        <!-- 검증 결과 배지 — 스트리밍 경로(chat-stream.js onDone)와 같은 표기.
+             grounded=null 은 검증 미실행(meta/Direct, 검색 결과 없음)이라 아무것도 띄우지 않는다. -->
+        <span th:if="${grounded != null and grounded}" class="badge bg-success ms-1">검증됨</span>
+        <span th:if="${grounded != null and !grounded}" class="badge bg-warning text-dark ms-1"
+              th:attr="title=${evalReason}"
+              th:style="${evalReason != null} ? 'cursor:help;' : ''">미검증</span>
+
         <!-- Answer (markdown → DOMPurify sanitized HTML) -->
         <div class="md-content"
              th:attr="data-md=${answer}"></div>
+
+        <!-- 재시도를 다 쓰고도 검증을 통과하지 못한 답변의 사유. 배지 툴팁만으로는 모바일에서
+             확인할 방법이 없어 한 줄로도 노출한다(chat-stream.js onDone 과 동일). -->
+        <div th:if="${grounded != null and !grounded and evalReason != null}"
+             class="small text-warning mt-2">
+            <i class="bi bi-exclamation-triangle me-1"></i>검증 미통과 사유:
+            <span th:text="${evalReason}"></span>
+        </div>
 
         <!-- Image thumbnails -->
         <div th:if="${imageRefs != null and !#lists.isEmpty(imageRefs)}" class="mt-2 d-flex flex-wrap gap-2">

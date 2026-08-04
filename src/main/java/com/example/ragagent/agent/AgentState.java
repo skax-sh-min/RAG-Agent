@@ -34,6 +34,7 @@ public record AgentState(
         String usedProvider,
         String premiumUpgraded,   // PROGRESSIVE: PREMIUM 프로바이더명 (null=미적용)
         Boolean grounded,         // CRITIC 결과 (null=CRITIC 미실행)
+        String evalReason,        // 검증(sufficient/grounded) 실패 사유 — 평가 LLM이 준 한 문장. 통과 시 null
         boolean directMode,       // RAG 없이 LLM 직접 호출
         Locale locale,            // UI 언어 설정 — LLM 시스템 프롬프트 언어 선택에 사용
         List<String> selectedTags, // 검색 스코프 태그 (빈 리스트 = version-only 검색)
@@ -79,7 +80,7 @@ public record AgentState(
                 null, 0, false,
                 conversationHistory,
                 0, 0, 0,
-                routingMode, null, null, null,
+                routingMode, null, null, null, null,
                 directMode, locale, List.of(), ResponseMode.DEFAULT);
     }
 
@@ -115,6 +116,7 @@ public record AgentState(
         private String usedProvider;
         private String premiumUpgraded;
         private Boolean grounded;
+        private String evalReason;
         private boolean directMode;
         private Locale locale                    = Locale.KOREAN;
         private List<String> selectedTags        = List.of();
@@ -143,6 +145,7 @@ public record AgentState(
             this.usedProvider       = s.usedProvider;
             this.premiumUpgraded    = s.premiumUpgraded;
             this.grounded           = s.grounded;
+            this.evalReason         = s.evalReason;
             this.directMode         = s.directMode;
             this.locale             = s.locale;
             this.selectedTags       = s.selectedTags;
@@ -167,6 +170,7 @@ public record AgentState(
         public Builder usedProvider(String v)              { this.usedProvider = v;       return this; }
         public Builder premiumUpgraded(String v)           { this.premiumUpgraded = v;    return this; }
         public Builder grounded(Boolean v)                 { this.grounded = v;           return this; }
+        public Builder evalReason(String v)                { this.evalReason = v;         return this; }
         public Builder directMode(boolean v)               { this.directMode = v;         return this; }
         public Builder locale(Locale v)                    { this.locale = v;             return this; }
         public Builder selectedTags(List<String> v)        { this.selectedTags = v;       return this; }
@@ -185,7 +189,7 @@ public record AgentState(
                     retrievedDocs, sources, retrievalWarnings, imageRefs,
                     answer, retryCount, needsRetry, conversationHistory,
                     totalInputTokens, totalOutputTokens, llmCallCount,
-                    routingMode, usedProvider, premiumUpgraded, grounded,
+                    routingMode, usedProvider, premiumUpgraded, grounded, evalReason,
                     directMode, locale, selectedTags, responseMode);
         }
     }
