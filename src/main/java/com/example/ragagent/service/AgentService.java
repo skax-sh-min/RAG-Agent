@@ -104,7 +104,8 @@ public class AgentService {
                 result.usedProvider(),
                 turnId,
                 result.grounded(),
-                result.evalReason()
+                result.evalReason(),
+                result.envNote()
         );
     }
 

@@ -48,8 +48,8 @@
 │  AgentGraph 노드 → TaskType 기준:                                    │
 │    ClassifierService        → LIGHT_TEXT                             │
 │    RetrievalService (쿼리)  → MICRO_TEXT                             │
-│    AnswerService            → TEXT                                   │
-│    CriticService            → TEXT                                   │
+│    AnswerService            → TEXT   (답변 + 충분도·근거 통합 평가)  │
+│    CriticService            → —      (LLM 호출 없음)                 │
 │    DirectAnswerService      → LIGHT_TEXT                             │
 │    VisionDescriptionService → VISION                                 │
 │    ImageTypeClassifier      → LIGHT_BOTH  (분류는 범용 멀티모달로)   │

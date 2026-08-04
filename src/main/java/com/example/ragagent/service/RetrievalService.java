@@ -117,13 +117,25 @@ public class RetrievalService {
         boolean curatedQaEnabled = props.searchCuratedQaEnabledSafe();
         double curatedQaWeight = props.searchCuratedQaWeightSafe();
         double submissionWeight = props.searchSubmissionWeightSafe();
+        int retry = state.retryCount();
+        // Escalating candidateK alone only changed WHICH documents competed for the final slots —
+        // the cut stayed at defaultTopK, so every attempt handed the answer node exactly topK
+        // documents. When the evidence a retry was supposed to surface lands just past that cut,
+        // the retry re-fails for the same reason and burns the whole retry budget. The final cut
+        // therefore grows too, by one document per retry (topK + retryCount): enough to let a
+        // near-miss chunk in, small enough that the answer prompt does not balloon the way the
+        // ×(retryCount+1) candidate escalation would. Gated by the same app.search-retry-escalate
+        // flag — turning escalation off must switch off the whole behavior, not half of it.
+        int effectiveTopK = retryEscalate ? defaultTopK + retry : defaultTopK;
         List<Document> unique;
         try {
             // Escalate candidate count on retry to surface different documents.
-            int retry = state.retryCount();
             int candidateK = (retryEscalate && retry > 0)
                     ? Math.min(defaultTopK * (retry + 1), defaultTopK * 3)
                     : defaultTopK;
+            // The pool can never be smaller than the cut taken from it (possible only in extreme
+            // configs, e.g. topK=1 with several retries).
+            candidateK = Math.max(candidateK, effectiveTopK);
             // Expand candidate pool further when reranking is active.
             if (rerankEnabled && reranker.isPresent()) {
                 candidateK = Math.max(candidateK, defaultTopK * candidateMultiplier);
@@ -192,18 +204,20 @@ public class RetrievalService {
             // Strict AND tag filter — applied after RRF, before rerank/cut. Covers vector
             // + BM25 axes uniformly (tags travel in chunk metadata). No no-tag fallback on shortfall.
             candidates = filterByTags(candidates, selectedTags, candidateK);
-            // Rerank by LLM relevance, then cut to defaultTopK.
+            // Rerank by LLM relevance, then cut to effectiveTopK (= topK on the first attempt).
             unique = (rerankEnabled && reranker.isPresent())
-                    ? reranker.get().rerank(state.question(), candidates, defaultTopK)
-                    : candidates.subList(0, Math.min(defaultTopK, candidates.size()));
+                    ? reranker.get().rerank(state.question(), candidates, effectiveTopK)
+                    : candidates.subList(0, Math.min(effectiveTopK, candidates.size()));
         } catch (Exception e) {
             log.warn("Multi-query expansion failed, falling back to original question: {}", e.getMessage());
             // Keep the tag scope on the fallback path too (else tags leak through on error).
-            int fallbackK = selectedTags.isEmpty() ? defaultTopK
-                    : Math.max(defaultTopK, defaultTopK * tagCandidateMultiplier);
+            // Cut to effectiveTopK as well, so a retry is not silently de-escalated by whichever
+            // attempt happens to lose the expansion LLM call.
+            int fallbackK = selectedTags.isEmpty() ? effectiveTopK
+                    : Math.max(effectiveTopK, defaultTopK * tagCandidateMultiplier);
             List<Document> fallback = ragService.search(state.userId(), state.question(), state.version(), fallbackK);
-            fallback = filterByTags(fallback, selectedTags, defaultTopK);
-            unique = fallback.subList(0, Math.min(defaultTopK, fallback.size()));
+            fallback = filterByTags(fallback, selectedTags, effectiveTopK);
+            unique = fallback.subList(0, Math.min(effectiveTopK, fallback.size()));
         }
 
         List<SourceRef> sources = unique.stream()

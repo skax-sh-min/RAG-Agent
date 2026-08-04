@@ -227,7 +227,7 @@ copy .env.example .env
 | `SEARCH_MULTIQUERY_ENABLED` | `true` | true/false | 검색 전 질의 다중 확장(LLM) 여부. `false`면 임계 경로 첫 LLM 콜 제거 |
 | `SEARCH_MULTIQUERY_MIN_LENGTH` | `15` | 0 ~ 20 | 이 길이(trim) 미만 질의는 확장 생략. `0`=항상 확장. 짧은 키워드 질의 TTFT↓(§10.8.1) |
 | `SEARCH_HYBRID_ENABLED` | `true` | true/false | RRF에 BM25(FTS5) 키워드 축 추가(§10.7.2 — 이 플래그와 무관하게 `chunk_fts`는 항상 채워지므로 **활성화해도 기존 색인 문서 재인덱싱 불필요**, FTS5/하이브리드 검색 도입 이전에 색인된 아주 오래된 문서만 예외) |
-| `SEARCH_RETRY_ESCALATE` | `true` | true/false | 재시도마다 후보 풀 확대. `candidateK = min(topK×(retryCount+1), topK×3)`. 동일 검색 반복 회피 |
+| `SEARCH_RETRY_ESCALATE` | `true` | true/false | 재시도 에스컬레이션 **두 축을 한 플래그로** 제어. ① 후보 풀 `candidateK = min(topK×(retryCount+1), topK×3)` — 동일 검색 반복 회피. ② 최종 컷 `effectiveTopK = topK + retryCount` — 후보 풀만 키우면 ANSWER가 받는 문서 수는 매번 topK 그대로여서, 컷 바로 뒤에 있던 근거는 재시도해도 계속 밖에 머문다. 최종 컷은 답변·평가 프롬프트에 실제 실리는 양이라 배수가 아닌 **가산**(PIPELINE.md §5.1) |
 | `SEARCH_RERANK_ENABLED` | `false` | true/false | RRF 후 LLM 리랭킹 단계 (opt-in). **턴당 LLM 1콜 추가** → 정밀도↑/레이턴시 트레이드오프 |
 | `SEARCH_CANDIDATE_MULTIPLIER` | `3` | 2 ~ 5 | 리랭킹 전 후보 풀 크기. `topK × N`개 가져와 리랭킹 후 topK로 축소 |
 | `SEARCH_TAG_CANDIDATE_MULTIPLIER` | `2` | 1 ~ 5 | 태그가 선택된 검색의 후보 풀 확대 배수. `candidateK = max(candidateK, topK × N)` — sqlite-vec에서 태그 엄격 필터 후 결과가 부족할 때 보정(§4.6) |
@@ -1308,8 +1308,8 @@ app.llm.providers[1].stream=false
 |------|----------|------|
 | ClassifierService | `LIGHT_TEXT` | 질문 유형 분류 (품질 민감 — 큰 모델 유지) |
 | RetrievalService | `MICRO_TEXT` | 쿼리 생성 (MultiQueryExpander) — §6.21 작업2로 MICRO_TEXT 전환 |
-| AnswerService | `TEXT` | 답변 생성 |
-| CriticService | `TEXT` | 근거 검증 |
+| AnswerService | `TEXT` | 답변 생성 + **충분도·근거 통합 평가**(별도 1콜) |
+| CriticService | — | **LLM 호출 없음** — AnswerService의 통합 평가가 낸 `grounded`를 읽어 재시도 여부만 결정 |
 | DirectAnswerService | `LIGHT_TEXT` | meta 질문 직접 응답 (사용자 노출 — 큰 모델 유지) |
 | VisionDescriptionService | `VISION` | 이미지 → 설명 생성 |
 | ImageTypeClassifier | `LIGHT_BOTH` | 이미지 유형 분류 |
@@ -2299,6 +2299,29 @@ time curl -m 30 -X POST $LOCAL_LLM_URL/chat/completions -H "Content-Type: applic
 | 토큰은 오는데 매우 느림(예: 1 tok/s) | 추론 속도 자체가 느림 | 한국어는 대략 1토큰≈1글자라 "약 2,000자" 응답에 30분 이상 걸릴 수 있음 → 응답 길이 모드를 S로, 또는 더 빠른 모델 사용 |
 | 로그에 `[TIMEOUT:SSE_IDLE]` | 300초 동안 진행이 없어 유휴 타임아웃 | 위 원인 해소. 느린 모델이 불가피하면 `SSE_IDLE_TIMEOUT_SECONDS` 상향 |
 | 로그에 `[TIMEOUT:LLM_HTTP]` | `LLM_READ_TIMEOUT_SECONDS`(기본 600초) 초과 | 동일. 프로바이더 장애가 아니므로 Circuit Breaker는 차단하지 않음 |
+
+---
+
+### 답변 내용은 맞는데 계속 **미검증** 배지가 붙음 / 재시도만 반복
+
+답변 자체는 문서와 일치하는데 근거 검증(`grounded`)이 계속 실패하는 경우입니다. 재시도까지 소진하면 미검증 배지가 붙은 채 전달됩니다.
+
+**먼저 사유부터 확인하세요.** 검증 판정은 조용히 일어나지 않습니다.
+
+```bash
+docker compose logs app | grep -E "EVAL\] 검증 미통과|CRITIC_UNGROUNDED" | tail -20
+```
+
+`reason=`에 평가 LLM이 쓴 한 문장이 들어 있고, 이 값은 화면의 미검증 배지 옆에도 그대로 노출됩니다.
+
+| 사유 유형 | 원인 | 조치 |
+|------|------|------|
+| 경로·포트·주소·환경변수 값이 문서와 다르다는 사유 | 평가 프롬프트의 **환경 의존 값 예외**가 동작하지 않음 — 이 값들은 문서와 달라도 `grounded=false` 사유가 될 수 없고 `envNote`(화면의 `ℹ️ 환경에 따라 달라질 수 있는 값`)로만 안내되어야 합니다 | 모델이 지시를 따르지 못하는 경우가 대부분입니다. `messages_ko.properties`의 `prompt.answer.eval`에 `[환경 의존 값 예외]` 블록이 남아 있는지 먼저 확인하고(테스트 `AnswerEvalPromptTest`가 이를 검사), 그다음 더 큰 로컬 모델로 교체 검토 (PIPELINE.md §5.3) |
+| "문서에 없음" 계열인데 실제로는 문서에 있음 | 근거 청크가 검색 결과 하위 순위라 재시도해도 계속 컷 밖에 머무름 | `SEARCH_TOP_K` 상향(2~3 정도), 또는 `SEARCH_RETRY_ESCALATE=true` 확인 — 재시도마다 최종 컷이 `topK + retryCount`로 넓어집니다(§5.1). 둘 다 `/settings`에서 재기동 없이 조정 가능 |
+| 사유가 매번 비어 있음 | 평가 LLM이 JSON 필드를 채우지 못함 (소형 모델에서 흔함) | 파싱 실패는 **검증 통과로 폴백**되므로 답변이 막히지는 않습니다. 검증 품질이 중요하면 평가 호출이 타는 `TEXT` 프로바이더를 더 큰 모델로 |
+| 로그에 `[EVAL] 문서 발췌 20000자 상한으로 …` 경고 | `SEARCH_TOP_K` × `CHUNK_SIZE`가 과도해 하위 문서가 검증에서 제외됨 | 둘 중 하나를 낮추세요. 이 상태에서는 답변이 본 문서 일부를 평가자가 못 봅니다 |
+
+> 검증은 답변을 **버리지 않습니다** — 미검증 배지는 "직접 출처를 확인하라"는 표시이지 실패가 아닙니다. 재시도 자체를 줄이려면 `MAX_RETRY_COUNT`를 낮추세요(`0`이면 재시도 없이 첫 답변을 그대로 전달).
 
 ---
 

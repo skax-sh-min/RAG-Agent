@@ -22,5 +22,11 @@ public record ChatResponse(
          * 스트리밍 경로가 SSE {@code done} 이벤트로 같은 값을 내보내므로, 두 경로 어디로 물어봐도
          * "왜 미검증인지"를 같은 방식으로 알 수 있다.
          */
-        @JsonProperty("eval_reason") String evalReason
+        @JsonProperty("eval_reason") String evalReason,
+        /**
+         * 경로·호스트·포트·환경변수 값처럼 실행 환경에 따라 달라지는 값이 답변에 포함됐을 때의 안내
+         * 한 문장. 이런 값은 문서와 달라도 검증 실패 사유가 아니므로({@code prompt.answer.eval}의
+         * 환경 의존 값 예외) grounded 는 true 로 두고 이 필드로만 알린다. 해당 없으면 null.
+         */
+        @JsonProperty("env_note") String envNote
 ) {}

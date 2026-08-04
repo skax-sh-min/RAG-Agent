@@ -382,6 +382,9 @@ public class StreamingAgentService {
         // 재시도를 다 쓰고도 검증을 통과하지 못한 채 전달되는 답변이 있다 — 그 경우 미검증 배지만
         // 띄우고 이유를 감추면 사용자가 할 수 있는 게 없다. 통과했으면 null 이라 UI가 그냥 생략한다.
         m.put("evalReason",        result.evalReason());
+        // 경로·주소·포트·환경변수 값 안내 — 검증 통과 여부와 무관하게 실릴 수 있다(통과한 답변에도
+        // "이 경로는 본인 환경 기준으로 바꿔야 한다"는 안내가 필요하다).
+        m.put("envNote",           result.envNote());
         m.put("refreshThreadList", true);
         m.put("turnId",            turnId);
         return m;

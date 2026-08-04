@@ -212,6 +212,7 @@ public class ChatController {
             model.addAttribute("premiumUpgraded", resp.premiumUpgraded());
             model.addAttribute("grounded", resp.grounded());
             model.addAttribute("evalReason", resp.evalReason());
+            model.addAttribute("envNote", resp.envNote());
             model.addAttribute("usedProvider", resp.usedProvider());
         } catch (LlmProviderExhaustedException e) {
             log.warn("LLM providers exhausted: {}", e.getMessage());

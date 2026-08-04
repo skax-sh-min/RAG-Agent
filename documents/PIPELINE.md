@@ -10,7 +10,7 @@ RAG Agent의 두 가지 핵심 흐름(질의응답, 문서 임포트)을 코드 
 2. [AgentGraph 노드](#2-agentgraph-노드)
 3. [모드별 동작](#3-모드별-동작)
 4. [LLM 호출 요약](#4-llm-호출-요약)
-5. [재시도 조건](#5-재시도-조건)
+5. [재시도와 검증](#5-재시도와-검증)
 6. [문서 임포트 흐름](#6-문서-임포트-흐름)
 7. [관련 문서](#7-관련-문서)
 
@@ -45,9 +45,9 @@ HTTP 요청
 |------|------|---------|
 | **CLASSIFIER** | 질문 유형 판별 (concept / usage / error / version / meta) | ① — AgentService에서 선실행하므로 그래프 내에서는 스킵 |
 | **DIRECT_ANSWER** | meta 질문 직접 응답 (벡터 검색 없음) | ② |
-| **RETRIEVAL** | 쿼리 확장(조건부 — 15자 미만 질의는 생략, `app.search-multiquery-min-length`) → 확장 LLM 호출과 원본 질의 벡터 검색을 가상 스레드로 병렬 실행(§10.8.1, 원본 검색 지연이 확장 대기 뒤에 숨음) → 배치 임베딩(쿼리 임베딩 캐시 히트 시 스킵) → 벡터 스토어 배치 쿼리(chroma 단일 호출, 결과에 쓰지 않는 임베딩 필드는 요청 자체를 생략 §10.9.1 / sqlite-vec 쿼리별) + 큐레이션 Q&A 축 병렬 조회(§10.10, 예약 version `"curated"`, `search.curated-qa-enabled`로 게이팅) → 가중 RRF 병합(벡터축 그룹 정규화 + 키워드축 가중치 + 큐레이션축 가중치) → 선택적 LLM 리랭킹(opt-in). 재시도 시 후보 풀 ×(retry+1) 에스컬레이션 | ③ 쿼리 확장(조건부), [리랭킹 활성 시 1콜] |
-| **ANSWER** | 문서 기반 답변 생성 + 충분도 검사 | ④ 답변, ⑤ 충분도 |
-| **CRITIC** | 답변이 문서에 근거하는지 검증 | ⑥ |
+| **RETRIEVAL** | 쿼리 확장(조건부 — 15자 미만 질의는 생략, `app.search-multiquery-min-length`) → 확장 LLM 호출과 원본 질의 벡터 검색을 가상 스레드로 병렬 실행(§10.8.1, 원본 검색 지연이 확장 대기 뒤에 숨음) → 배치 임베딩(쿼리 임베딩 캐시 히트 시 스킵) → 벡터 스토어 배치 쿼리(chroma 단일 호출, 결과에 쓰지 않는 임베딩 필드는 요청 자체를 생략 §10.9.1 / sqlite-vec 쿼리별) + 큐레이션 Q&A 축 병렬 조회(§10.10, 예약 version `"curated"`, `search.curated-qa-enabled`로 게이팅) → 가중 RRF 병합(벡터축 그룹 정규화 + 키워드축 가중치 + 큐레이션축 가중치) → 선택적 LLM 리랭킹(opt-in). 재시도 시 후보 풀 ×(retry+1) **및 최종 컷 +retry** 에스컬레이션(§5) | ③ 쿼리 확장(조건부), [리랭킹 활성 시 1콜] |
+| **ANSWER** | 문서 기반 답변 생성 + **충분도·근거 통합 평가**(1콜, §5.1) | ④ 답변, ⑤ 평가 |
+| **CRITIC** | ⑤가 계산해 둔 `grounded` 플래그를 읽어 재시도 여부만 결정 | **없음** (별도 LLM 왕복 없음) |
 | **FINALIZE** | 대화 히스토리 저장 (SQLite) | 없음 |
 
 ### 노드 전환 규칙
@@ -94,8 +94,8 @@ COST_FIRST와 동일하되,
 | ② | DIRECT_ANSWER | meta 직접 응답 | ✓ |
 | ③ | RETRIEVAL | 쿼리 다양화 | 없음 |
 | ④ | ANSWER | 답변 생성 | ✓ |
-| ⑤ | ANSWER | 충분도 평가 | ✓ |
-| ⑥ | CRITIC | 근거 검증 | ✓ |
+| ⑤ | ANSWER | 충분도(`sufficient`) + 근거(`grounded`) + 사유(`reason`) + 환경 의존 값 안내(`envNote`) **동시 평가** | ✓ |
+| ⑥ | CRITIC | — **LLM 호출 없음**. ⑤가 낸 `grounded`를 소비할 뿐 | — |
 | ⑦ | ANSWER (PROGRESSIVE) | PREMIUM 재답변 | ✓ |
 
 > ①은 `AgentState`에 누적되지 않아 `llmCallCount`가 실제보다 1 낮게 표시됨 — 허용된 tradeoff.  
@@ -104,13 +104,13 @@ COST_FIRST와 동일하되,
 
 > **동시성 게이트**: ①~⑦ 모두 프로바이더별 동시성 게이트(`LlmRouter.executeGated()`, 서버의 실제 `--parallel` 값에 맞춘 `Semaphore`)를 거친다 — 여러 사용자의 질문이 겹쳐도 앱이 한 프로바이더에 동시 전송하는 요청 수는 이 한도를 넘지 않는다. 대기가 상한(기본 20초)을 넘으면 즉시 HTTP 429로 응답하고 재검색/재시도로 넘어가지 않는다. 문서 인덱싱의 LLM 호출(키워드 추출, MD 포맷 교정 등)은 이 게이트 대상이 아니며 기존 `INDEXING_MAX_LLM` 세마포어만 적용된다 — 상세는 [LLM_ROUTING.md §6](LLM_ROUTING.md#6-동시성-게이트--백프레셔) 참고.
 
-> **태스크별 모델 분리(§6.21)**: ③ 쿼리 다양화와 인덱싱 잡무(키워드+맥락 추출·대화 요약·제목 생성)는 `TaskType.MICRO_TEXT`로 라우팅된다 — `type=MICRO_TEXT` 소형 프로바이더를 등록하면 이 추론 불필요 잡무만 500MB급 소형 모델로 오프로딩되고, 분류(①, `LIGHT_TEXT`)·직답(②)·답변(④)·근거검증(⑥) 등 품질 민감·고추론 호출은 큰 모델(`type=BOTH`)이 전담한다. 소형 미등록 시 큰 모델이 흡수(회귀 0). 상세는 [LLM_ROUTING.md §9](LLM_ROUTING.md).
+> **태스크별 모델 분리(§6.21)**: ③ 쿼리 다양화와 인덱싱 잡무(키워드+맥락 추출·대화 요약·제목 생성)는 `TaskType.MICRO_TEXT`로 라우팅된다 — `type=MICRO_TEXT` 소형 프로바이더를 등록하면 이 추론 불필요 잡무만 500MB급 소형 모델로 오프로딩되고, 분류(①, `LIGHT_TEXT`)·직답(②)·답변(④)·통합 평가(⑤) 등 품질 민감·고추론 호출은 큰 모델(`type=BOTH`)이 전담한다. 소형 미등록 시 큰 모델이 흡수(회귀 0). 상세는 [LLM_ROUTING.md §9](LLM_ROUTING.md).
 
 ### 4.1 `app.llm.max-tokens`(`LLM_MAX_TOKENS`) 크기 산정 — 로컬 LLM 컨텍스트 윈도우와의 관계
 
 **`max_tokens`(completion 상한) ≠ 컨텍스트 윈도우(n_ctx, 입력+출력 합계).** `LLM_MAX_TOKENS`가 `OpenAiChatOptions.maxTokens()`로 들어가는 값은 LLM이 한 번에 생성할 수 있는 **출력** 토큰 상한일 뿐, 로컬 LLM 서버(예: llama-server)의 컨텍스트 크기(`--ctx-size`, 흔히 기본 8192)와는 별개다. 입력(system prompt + RAG 검색 결과 + 대화 히스토리 + 질문)이 이미 컨텍스트의 상당 부분을 차지하므로, `max_tokens`를 크게 잡아도 실제로 생성 가능한 토큰 수는 `n_ctx - 입력토큰수`로 물리적으로 제한된다 — 서버 구현에 따라 조용히 잘리거나, 입력이 이미 크면 "context length exceeded" 류의 에러가 난다. **컨텍스트 윈도우 자체는 로컬 서버 설정(`--ctx-size`)으로 조절 가능**하므로, 완성 상한을 늘리고 싶다면 `LLM_MAX_TOKENS`만 올리기보다 로컬 서버의 컨텍스트 크기를 함께(또는 우선) 늘리는 것이 근본적인 해법이다.
 
-**스트리밍 답변 경로는 이 값 자체를 전송하지 않는다.** ④(ANSWER 답변 생성)와 ②(DIRECT_ANSWER)의 실제 사용자 대면 스트리밍 경로(`AnswerService`/`DirectAnswerService`가 `OpenAiApi.chatCompletionStream()`을 직접 호출하는 4-arg `ChatCompletionRequest(messages, model, temperature, stream)`, 또는 `ChatClient` 스트리밍 폴백)는 `maxTokens` 필드 자체가 없는 오버로드를 쓴다 — 즉 **사용자가 실제로 보는 채팅 답변 길이는 `LLM_MAX_TOKENS`와 무관**하며, 대신 SSE 타임아웃(`app.sse-idle-timeout-seconds`)이 폭주를 막는다. `LLM_MAX_TOKENS`가 실제로 completion 상한을 거는 곳은 **블로킹** LLM 호출뿐이다 — ①③⑤⑥⑦ 및 인덱싱 계열(분류·쿼리확장·충분도평가·근거검증·PROGRESSIVE 재답변·키워드추출·TXT구조화), Direct의 블로킹(비스트리밍) 모드.
+**스트리밍 답변 경로는 이 값 자체를 전송하지 않는다.** ④(ANSWER 답변 생성)와 ②(DIRECT_ANSWER)의 실제 사용자 대면 스트리밍 경로(`AnswerService`/`DirectAnswerService`가 `OpenAiApi.chatCompletionStream()`을 직접 호출하는 4-arg `ChatCompletionRequest(messages, model, temperature, stream)`, 또는 `ChatClient` 스트리밍 폴백)는 `maxTokens` 필드 자체가 없는 오버로드를 쓴다 — 즉 **사용자가 실제로 보는 채팅 답변 길이는 `LLM_MAX_TOKENS`와 무관**하며, 대신 SSE 타임아웃(`app.sse-idle-timeout-seconds`)이 폭주를 막는다. `LLM_MAX_TOKENS`가 실제로 completion 상한을 거는 곳은 **블로킹** LLM 호출뿐이다 — ①③⑤⑦ 및 인덱싱 계열(분류·쿼리확장·충분도/근거 통합평가·PROGRESSIVE 재답변·키워드추출·TXT구조화), Direct의 블로킹(비스트리밍) 모드.
 
 **§6.18 이후, 이 값 하나가 서로 다른 3곳에 결합돼 있다** — `AppProperties.llmSafe().maxTokens()`를 공유하므로 하나를 올리면 셋이 함께 커진다:
 
@@ -126,7 +126,7 @@ MD 교정 한 번의 LLM 호출은 `섹션(입력) + 시스템 프롬프트/지�
 
 ---
 
-## 5. 재시도 조건
+## 5. 재시도와 검증
 
 ```
 ANSWER sufficient=false   AND retryCount < max  →  retryCount 증가 후 RETRIEVAL 재시도
@@ -138,8 +138,38 @@ PROGRESSIVE 모드 AND sufficient=false AND retryCount >= max
 
 > `retryCount`는 최초 RETRIEVAL 진입 시 증가하지 않습니다.  
 > ANSWER 또는 CRITIC이 재시도를 결정할 때만 증가합니다.  
-> `MAX_RETRY_COUNT=2`(기본)이면 최대 **2회 재검색**이 허용됩니다.  
-> 재검색 시 후보 풀이 `min(topK×(retryCount+1), topK×3)`로 확대되어(`SEARCH_RETRY_ESCALATE=true`) 동일 검색 반복을 피합니다.
+> `MAX_RETRY_COUNT=2`(기본)이면 최대 **2회 재검색**이 허용됩니다.
+
+### 5.1 재검색 에스컬레이션 — 두 축
+
+`SEARCH_RETRY_ESCALATE=true`(기본) 하나가 아래 둘을 **함께** 켜고 끕니다.
+
+| 축 | 공식 | topK=8 기준 (최초 → 재시도1 → 재시도2) |
+|---|---|---|
+| 후보 풀 `candidateK` | `min(topK×(retryCount+1), topK×3)` | 8 → 16 → 24 |
+| **최종 컷 `effectiveTopK`** | `topK + retryCount` | 8 → **9** → **10** |
+
+후보 풀만 키우면 **최종 자리를 놓고 경쟁하는 문서**만 바뀌고 ANSWER 노드가 실제로 받는 문서 수는 매번 `topK` 그대로입니다. 재시도가 끌어올리려던 근거가 그 컷 바로 뒤(9~10위)에 있으면 재시도가 같은 이유로 다시 실패하고, 재시도 예산만 소모한 뒤 미검증 답변으로 끝납니다. 그래서 최종 컷도 재시도마다 한 개씩 넓힙니다.
+
+최종 컷이 **가산(+1)**인 이유는 이 값이 답변·평가 프롬프트에 실제로 실려 나가는 양이기 때문입니다. 후보 풀처럼 배수로 키우면 재시도 2회에 문서 24개(기본 `CHUNK_SIZE=1500` 기준 약 36,000자)가 되어 로컬 모델 컨텍스트를 그대로 넘깁니다. 쿼리 확장 LLM 호출이 실패해 폴백 경로로 빠질 때도 같은 `effectiveTopK`로 자릅니다 — 그러지 않으면 하필 그 시도만 조용히 `topK`로 강등됩니다.
+
+### 5.2 ⑤ 통합 평가가 보는 것
+
+`sufficient`/`grounded`/`reason`/`envNote`는 **한 번의 LLM 호출**(⑤)로 함께 나오고, CRITIC 노드는 그 `grounded`를 읽어 재시도 여부만 결정합니다(별도 LLM 왕복 없음).
+
+**증거 창은 답변 창과 같습니다.** 평가 프롬프트의 `[문서 발췌]`는 `retrievedDocs` **전부**(= 위 `effectiveTopK`)를 싣습니다. 예전에는 앞 5개만 실었는데, 답변 프롬프트는 `topK`(기본 8) 전체를 쓰므로 **6~8번째 문서에만 있는 값을 정확히 인용한 답변이 근거 없음으로 판정**됐습니다. 경로·포트·상수처럼 한 청크에만 등장하는 단발성 사실이 이 불일치의 최대 피해자입니다(산문 주장은 여러 청크에 반복돼 앞 5개 안에서도 확인됨). 발췌 텍스트는 답변 프롬프트와 동일하게 `MarkdownNoiseNormalizer`를 거치므로 두 호출이 같은 **형태**의 값을 봅니다 — 평가만 원문 `**8080**`을 보고 답변은 정규화된 `8080`을 보던 불일치도 함께 제거됩니다.
+
+발췌 총량 상한은 20,000자(= 답변 저장 상한과 동일)이며, 초과 시 문서를 **통째로** 하위 순위부터 제외합니다 — 중간을 자르면 검증 대상인 바로 그 값이 사라지기 때문입니다. 기본 설정(8 × 1500 = 12,000자)은 여유롭게 통과하므로 실제로는 과대 설정용 안전판입니다. 제외가 발생하면 `[EVAL] 문서 발췌 20000자 상한으로 N개 중 M개만 검증에 사용` 경고가 남습니다.
+
+### 5.3 환경 의존 값은 근거 실패 사유가 아니다 — `envNote`
+
+경로·설치 위치·호스트/도메인/IP/포트/URL·환경변수 이름과 값·계정명은 **문서를 쓴 기계와 읽는 기계가 다르면 달라지는 것이 정상**입니다. 평가 프롬프트(`prompt.answer.eval`)는 이런 값이 문서와 다르거나 문서에 그대로 없다는 이유**만**으로 `grounded=false`를 내는 것을 금지하고, 대신 네 번째 필드 `envNote`에 "어떤 값이 환경에 따라 달라질 수 있는지"를 한 문장으로 받습니다.
+
+- 예외는 **값**에만 적용됩니다. 절차·기능·동작 방식·인과관계·옵션의 의미가 문서와 다르면 환경 차이가 아니므로 여전히 `grounded=false`입니다.
+- `evalReason`(실패 사유)과 달리 `envNote`는 **검증을 통과해도 유지**됩니다. 판정이 아니라 "이 경로는 본인 환경 기준으로 바꾸라"는 독자용 안내이기 때문입니다.
+- 전달 경로: `AgentState.envNote` → `ChatResponse.env_note`(REST) / SSE `done.envNote`(스트리밍) → 답변 아래 `ℹ️ 환경에 따라 달라질 수 있는 값: …` 한 줄. 블로킹·스트리밍 두 경로가 같은 문구로 렌더합니다.
+- 규칙이 프롬프트 문자열에만 존재해 코드로는 아무도 눈치채지 못하므로, `AnswerEvalPromptTest`가 실제 메시지 번들(한/영)에 예외 블록과 `envNote` 필드가 남아 있는지 검사합니다.
+- 모델이 `envNote`를 주지 않거나 빈 문자열로 두면 그냥 표시되지 않습니다(기존 동작과 동일).
 
 ---
 

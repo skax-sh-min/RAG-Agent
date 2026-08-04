@@ -81,7 +81,7 @@ class ChatControllerHtmxTest {
                 List.of(),
                 120, 80, 2, 0.42,
                 null, "gemini-flash", 1L,
-                true, null);   // 검증 통과 → 사유 없음
+                true, null, null);   // 검증 통과 → 사유 없음, 환경 의존 값 안내도 없음
     }
 
     @Test

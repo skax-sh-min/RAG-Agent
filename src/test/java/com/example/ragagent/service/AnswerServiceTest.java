@@ -171,6 +171,79 @@ class AnswerServiceTest {
         assertThat(result.evalReason()).isNull();
     }
 
+    // ── 환경 의존 값(경로/주소/포트/환경변수) 안내 ──────────────────────────
+    // 경로·호스트·포트·환경변수 값은 문서를 쓴 기계와 읽는 기계가 다르면 당연히 달라진다. 평가
+    // 프롬프트가 그것만으로는 grounded=false 를 내지 못하게 막는 대신 envNote 로 받아, 검증 결과와
+    // 무관하게 사용자에게 "이 값은 본인 환경 기준으로 바꿔야 한다"고 알린다.
+
+    @Test
+    @DisplayName("BLOCKING — 검증을 통과해도 envNote 는 남는다 (사용자에게 줄 안내라서)")
+    void blocking_envNote_keptEvenWhenPassed() {
+        when(llmRouter.executeGatedWithUsage(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), any()))
+                .thenReturn(new LlmRouter.LlmResult("답변", 0, 0),
+                            new LlmRouter.LlmResult(
+                                    "{\"sufficient\":true,\"grounded\":true,\"reason\":\"\","
+                                    + "\"envNote\":\"설치 경로 /opt/app 과 포트 8080 은 환경에 따라 다를 수 있습니다\"}", 0, 0));
+        when(llmRouter.findProviderName(any(), any())).thenReturn("gemini-flash");
+
+        AgentState result = service.execute(newState(RoutingMode.COST_FIRST));
+
+        assertThat(result.needsRetry()).isFalse();
+        assertThat(result.grounded()).isTrue();
+        assertThat(result.evalReason()).isNull();          // 통과했으니 실패 사유는 없고
+        assertThat(result.envNote())                        // 안내만 남는다
+                .isEqualTo("설치 경로 /opt/app 과 포트 8080 은 환경에 따라 다를 수 있습니다");
+    }
+
+    @Test
+    @DisplayName("BLOCKING — 미통과 답변에서는 evalReason 과 envNote 가 함께 담긴다")
+    void blocking_envNote_coexistsWithEvalReason() {
+        when(llmRouter.executeGatedWithUsage(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), any()))
+                .thenReturn(new LlmRouter.LlmResult("불완전 답변", 0, 0),
+                            new LlmRouter.LlmResult(
+                                    "{\"sufficient\":false,\"grounded\":true,"
+                                    + "\"reason\":\"재시도 횟수는 문서에 근거가 없음\","
+                                    + "\"envNote\":\"로그 경로는 배포마다 다릅니다\"}", 0, 0));
+        when(llmRouter.findProviderName(any(), any())).thenReturn("gemini-flash");
+
+        AgentState result = service.execute(newState(RoutingMode.COST_FIRST));
+
+        assertThat(result.needsRetry()).isTrue();
+        assertThat(result.evalReason()).isEqualTo("재시도 횟수는 문서에 근거가 없음");
+        assertThat(result.envNote()).isEqualTo("로그 경로는 배포마다 다릅니다");
+    }
+
+    @Test
+    @DisplayName("BLOCKING — envNote 가 비었거나 없으면 null (모델이 안 줘도 깨지지 않음)")
+    void blocking_envNote_nullWhenModelOmitsIt() {
+        when(llmRouter.executeGatedWithUsage(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), any()))
+                .thenReturn(new LlmRouter.LlmResult("답변", 0, 0),
+                            new LlmRouter.LlmResult(
+                                    "{\"sufficient\":true,\"grounded\":true,\"envNote\":\"  \"}", 0, 0));
+        when(llmRouter.findProviderName(any(), any())).thenReturn("gemini-flash");
+
+        AgentState result = service.execute(newState(RoutingMode.COST_FIRST));
+
+        assertThat(result.envNote()).isNull();
+    }
+
+    @Test
+    @DisplayName("BLOCKING — 장문 envNote 는 한 줄로 정규화되고 잘린다")
+    void blocking_envNote_normalizedToOneLineAndTruncated() {
+        String longNote = "경로 안내\n".repeat(80);   // 개행 포함 400자 초과
+        when(llmRouter.executeGatedWithUsage(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), any()))
+                .thenReturn(new LlmRouter.LlmResult("답변", 0, 0),
+                            new LlmRouter.LlmResult(
+                                    "{\"sufficient\":true,\"grounded\":true,\"envNote\":\""
+                                    + longNote.replace("\n", "\\n") + "\"}", 0, 0));
+        when(llmRouter.findProviderName(any(), any())).thenReturn("gemini-flash");
+
+        AgentState result = service.execute(newState(RoutingMode.COST_FIRST));
+
+        assertThat(result.envNote()).doesNotContain("\n").endsWith("…");
+        assertThat(result.envNote().length()).isLessThanOrEqualTo(301);   // 300 + 말줄임표
+    }
+
     @Test
     @DisplayName("BLOCKING — sufficiency 파싱 실패 시 sufficient 처리 (fail-safe)")
     void blocking_sufficiency_parse_error_treatsAsSufficient() {
@@ -230,6 +303,102 @@ class AnswerServiceTest {
         String answerPrompt = promptCaptor.getAllValues().get(0).getContents();
         assertThat(answerPrompt).contains("중요한 내용");
         assertThat(answerPrompt).doesNotContain("**중요**", "------", "가이드.pdf > 설정");
+    }
+
+    // ── 검증(evaluate)이 보는 문서 창 ──────────────────────────────────────
+    // 답변은 retrievedDocs 전체(app.search-top-k, 기본 8)로 쓰는데 검증은 앞 5개만 보던 시절이
+    // 있었다. 그러면 6~8번째 문서에만 있는 값(경로·포트·상수처럼 한 청크에만 나오는 사실)을 정확히
+    // 인용한 답변이 근거 없음으로 판정된다. 재시도해도 RetrievalService 는 후보 풀만 키우고 최종
+    // 컷은 계속 topK 라, 검증 창은 절대 넓어지지 않아 같은 실패가 반복된다.
+
+    @Test
+    @DisplayName("BLOCKING — 검증 프롬프트는 retrievedDocs 를 앞 5개로 자르지 않고 전부 싣는다")
+    @SuppressWarnings("unchecked")
+    void blocking_evalPrompt_includesEveryRetrievedDoc() {
+        ArgumentCaptor<Function<ChatModel, ChatResponse>> callCaptor = ArgumentCaptor.forClass(Function.class);
+        when(llmRouter.executeGatedWithUsage(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), callCaptor.capture()))
+                .thenReturn(new LlmRouter.LlmResult("답변", 0, 0),
+                            new LlmRouter.LlmResult("{\"sufficient\":true,\"grounded\":true}", 0, 0));
+        when(llmRouter.findProviderName(any(), any())).thenReturn("gemini-flash");
+
+        // topK 기본값과 같은 8개. 8번째에만 답변이 인용한 포트 값이 들어 있다.
+        List<Document> docs = new ArrayList<>();
+        for (int i = 1; i <= 8; i++) {
+            docs.add(new Document("문서본문" + i + (i == 8 ? " 기본 포트는 18080 입니다" : ""),
+                    Map.of(MetaKey.FILENAME, "가이드.pdf", MetaKey.PAGE_OR_SLIDE, String.valueOf(i))));
+        }
+        AgentState state = newState(RoutingMode.COST_FIRST).toBuilder().retrievedDocs(docs).build();
+
+        service.execute(state);
+
+        ChatModel chatModel = mock(ChatModel.class);
+        ArgumentCaptor<Prompt> promptCaptor = ArgumentCaptor.forClass(Prompt.class);
+        when(chatModel.call(promptCaptor.capture())).thenReturn(chatResponse("dummy"));
+        callCaptor.getAllValues().forEach(fn -> fn.apply(chatModel));
+
+        String evalPrompt = promptCaptor.getAllValues().get(1).getContents();
+        assertThat(evalPrompt).contains("문서본문1");
+        assertThat(evalPrompt).contains("문서본문6", "문서본문7", "문서본문8");   // 예전엔 잘려 나가던 구간
+        assertThat(evalPrompt).contains("기본 포트는 18080 입니다");
+    }
+
+    @Test
+    @DisplayName("BLOCKING — 검증 프롬프트의 [문서 발췌]도 답변 프롬프트와 같은 정규화 텍스트를 쓴다")
+    @SuppressWarnings("unchecked")
+    void blocking_evalPrompt_usesSameNormalizedTextAsAnswerPrompt() {
+        ArgumentCaptor<Function<ChatModel, ChatResponse>> callCaptor = ArgumentCaptor.forClass(Function.class);
+        when(llmRouter.executeGatedWithUsage(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), callCaptor.capture()))
+                .thenReturn(new LlmRouter.LlmResult("답변", 0, 0),
+                            new LlmRouter.LlmResult("{\"sufficient\":true,\"grounded\":true}", 0, 0));
+        when(llmRouter.findProviderName(any(), any())).thenReturn("gemini-flash");
+
+        Document doc = new Document("포트는 **8080** 입니다\n------",
+                Map.of(MetaKey.FILENAME, "가이드.pdf", MetaKey.PAGE_OR_SLIDE, "3"));
+        AgentState state = newState(RoutingMode.COST_FIRST).toBuilder().retrievedDocs(List.of(doc)).build();
+
+        service.execute(state);
+
+        ChatModel chatModel = mock(ChatModel.class);
+        ArgumentCaptor<Prompt> promptCaptor = ArgumentCaptor.forClass(Prompt.class);
+        when(chatModel.call(promptCaptor.capture())).thenReturn(chatResponse("dummy"));
+        callCaptor.getAllValues().forEach(fn -> fn.apply(chatModel));
+
+        String evalPrompt = promptCaptor.getAllValues().get(1).getContents();
+        // 답변 모델은 강조가 벗겨진 "8080"을 보고 썼는데 평가 모델만 "**8080**"을 보면
+        // 같은 값이 서로 다른 문자열로 보인다 — 두 프롬프트가 같은 형태를 봐야 한다.
+        assertThat(evalPrompt).contains("포트는 8080 입니다");
+        assertThat(evalPrompt).doesNotContain("**8080**", "------");
+    }
+
+    @Test
+    @DisplayName("BLOCKING — 발췌 상한 초과 시 하위 순위 문서를 통째로 빼고, 최상위 문서는 항상 남긴다")
+    @SuppressWarnings("unchecked")
+    void blocking_evalPrompt_dropsLowestRankedDocsWholeWhenOverBudget() {
+        ArgumentCaptor<Function<ChatModel, ChatResponse>> callCaptor = ArgumentCaptor.forClass(Function.class);
+        when(llmRouter.executeGatedWithUsage(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), callCaptor.capture()))
+                .thenReturn(new LlmRouter.LlmResult("답변", 0, 0),
+                            new LlmRouter.LlmResult("{\"sufficient\":true,\"grounded\":true}", 0, 0));
+        when(llmRouter.findProviderName(any(), any())).thenReturn("gemini-flash");
+
+        // 상한(20,000자)을 넘기도록 15,000자짜리 문서 3개 — 1번은 통째로 남고 3번은 통째로 빠진다.
+        List<Document> docs = List.of(
+                new Document("최상위표식 " + "가".repeat(15_000), Map.of(MetaKey.FILENAME, "a.pdf")),
+                new Document("두번째표식 " + "나".repeat(15_000), Map.of(MetaKey.FILENAME, "b.pdf")),
+                new Document("세번째표식 " + "다".repeat(15_000), Map.of(MetaKey.FILENAME, "c.pdf")));
+        AgentState state = newState(RoutingMode.COST_FIRST).toBuilder().retrievedDocs(docs).build();
+
+        service.execute(state);
+
+        ChatModel chatModel = mock(ChatModel.class);
+        ArgumentCaptor<Prompt> promptCaptor = ArgumentCaptor.forClass(Prompt.class);
+        when(chatModel.call(promptCaptor.capture())).thenReturn(chatResponse("dummy"));
+        callCaptor.getAllValues().forEach(fn -> fn.apply(chatModel));
+
+        String evalPrompt = promptCaptor.getAllValues().get(1).getContents();
+        assertThat(evalPrompt).contains("최상위표식");                       // 1위는 무조건 유지
+        assertThat(evalPrompt).doesNotContain("세번째표식");                 // 상한 초과분은 제외
+        // 잘린 조각이 아니라 문서 단위로 빠진다 — 반쪽 청크는 검증 대상 값이 사라지는 경로다.
+        assertThat(evalPrompt).contains("가".repeat(15_000));
     }
 
     @Test

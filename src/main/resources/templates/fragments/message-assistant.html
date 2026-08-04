@@ -35,6 +35,14 @@
             <span th:text="${evalReason}"></span>
         </div>
 
+        <!-- 경로·주소·포트·환경변수처럼 실행 환경에 따라 달라지는 값 안내. 이런 값은 문서와 달라도
+             검증 실패로 치지 않으므로(prompt.answer.eval 의 환경 의존 값 예외) 검증 통과한 답변에도
+             나올 수 있다 — 미통과 사유와 달리 grounded 조건을 걸지 않는다(chat-stream.js onDone 과 동일). -->
+        <div th:if="${envNote != null}" class="small text-info mt-2">
+            <i class="bi bi-info-circle me-1"></i>환경에 따라 달라질 수 있는 값:
+            <span th:text="${envNote}"></span>
+        </div>
+
         <!-- Image thumbnails -->
         <div th:if="${imageRefs != null and !#lists.isEmpty(imageRefs)}" class="mt-2 d-flex flex-wrap gap-2">
             <a th:each="ref : ${imageRefs}"

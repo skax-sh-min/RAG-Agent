@@ -14,6 +14,7 @@ import com.example.ragagent.security.PromptInjectionGuard;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.document.Document;
 import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.prompt.ChatOptions;
@@ -43,15 +44,33 @@ public class AnswerService {
 
     private static final int MAX_ANSWER_LEN = 20_000;
 
-    /** Cap for the evaluator's explanation — see {@link #normalizeReason}. */
+    /** Cap for the evaluator's explanation — see {@link #normalizeOneLine}. */
     private static final int MAX_EVAL_REASON_LEN = 200;
+
+    /** Cap for the environment-dependent-value note — shown to the user, so a little more room. */
+    private static final int MAX_ENV_NOTE_LEN = 300;
+
+    /**
+     * Ceiling on the evidence block sent to the evaluator — see {@link #buildEvalExcerpts}. Sized
+     * to match {@link #MAX_ANSWER_LEN}: the evidence may be as long as the longest answer this app
+     * will ever store, which the default config (topK 8 × chunk-size 1500 = 12,000) sits under
+     * comfortably, so the cap is a safety valve rather than something a normal turn ever meets.
+     */
+    private static final int MAX_EVAL_EXCERPT_CHARS = 20_000;
 
     /**
      * single evaluation call returns both gates, plus one sentence explaining a failure.
      * {@code reason} is advisory only — it never affects routing or retry decisions, so a model
      * that returns it empty (or omits it) degrades to today's behavior rather than breaking.
+     *
+     * <p>{@code envNote} carries the other half of that contract: paths, hosts/ports, URLs and
+     * environment-variable values legitimately differ between the machine a document was written
+     * on and the one the reader is using, so the eval prompt forbids failing {@code grounded} on
+     * those alone and asks for this note instead. Unlike {@code reason} it is kept on a
+     * <em>passing</em> turn too — it is an advisory for the reader ("substitute your own path"),
+     * not a verdict about the answer.
      */
-    private record EvalOutput(boolean sufficient, boolean grounded, String reason) {}
+    private record EvalOutput(boolean sufficient, boolean grounded, String reason, String envNote) {}
 
     private final LlmRouter llmRouter;
     private final MessageSource messageSource;
@@ -261,15 +280,17 @@ public class AnswerService {
      * Asking for it in the evaluation call that is already being made costs no extra round-trip.
      * Only stored when a gate actually failed — a passing turn keeps {@code evalReason} null so
      * downstream code can treat non-null as "this turn has something to explain".
+     *
+     * <p>{@code envNote} follows the opposite rule and is kept regardless of the verdict: it exists
+     * because environment-dependent values (paths, hosts, ports, env-var values) are no longer a
+     * legitimate reason to fail {@code grounded} — the prompt routes them here instead — and the
+     * reader still needs to be told which values to substitute for their own machine.
      */
     private AgentState evaluate(AgentState state, String answer, Locale locale) {
         boolean docsPresent = !state.retrievedDocs().isEmpty();
         try {
             String systemPrompt = messageSource.getMessage("prompt.answer.eval", null, locale);
-            String excerpts = state.retrievedDocs().stream()
-                    .limit(5)
-                    .map(d -> d.getText() == null ? "" : d.getText())
-                    .collect(Collectors.joining("\n---\n"));
+            String excerpts = buildEvalExcerpts(state.retrievedDocs());
             String evalPrompt = "[질문]\n%s\n\n[답변]\n%s\n\n[문서 발췌]\n%s\n\n%s"
                     .formatted(PromptInjectionGuard.wrap(state.question()), answer, excerpts, evalConverter.getFormat());
 
@@ -278,35 +299,86 @@ public class AnswerService {
             EvalOutput out = evalConverter.convert(result.text() == null ? "" : result.text());
             boolean grounded = !docsPresent || out.grounded();
             boolean passed = out.sufficient() && grounded;
-            String reason = passed ? null : normalizeReason(out.reason());
+            String reason = passed ? null : normalizeOneLine(out.reason(), MAX_EVAL_REASON_LEN);
+            String envNote = normalizeOneLine(out.envNote(), MAX_ENV_NOTE_LEN);
             if (!passed) {
                 log.info("[EVAL] 검증 미통과 thread={} sufficient={} grounded={} reason={}",
                         state.threadId(), out.sufficient(), grounded, reason);
+            }
+            if (envNote != null) {
+                log.debug("[EVAL] 환경 의존 값 안내 thread={} envNote={}", state.threadId(), envNote);
             }
             return state.toBuilder()
                     .accumulateTokens(result.inputTokens(), result.outputTokens())
                     .needsRetry(!out.sufficient())
                     .grounded(grounded)
                     .evalReason(reason)
+                    .envNote(envNote)
                     .build();
         } catch (Exception e) {
             log.warn("Evaluation parse failed, treating as sufficient + grounded: {}", e.getMessage());
-            return state.toBuilder().needsRetry(false).grounded(true).evalReason(null).build();
+            return state.toBuilder().needsRetry(false).grounded(true).evalReason(null).envNote(null).build();
         }
     }
 
     /**
-     * Keeps the model's explanation to one short line. It lands in an SSE payload, a log line and a
-     * tooltip, none of which want a paragraph — and a model that ignores the "one sentence" ask
-     * would otherwise leak the whole chain of thought into all three. Blank → null, so callers can
-     * test one thing ("is there a reason?") instead of two.
+     * The evidence block the evaluator judges the answer against.
+     *
+     * <p><b>It must be the same evidence the answer was written from.</b> This used to send only
+     * the first 5 documents while {@link #buildAnswerPrompt} passes all of {@code retrievedDocs}
+     * ({@code app.search-top-k}, default 8) — so an answer correctly citing a value found only in
+     * document #6-8 was judged against excerpts that could not contain it. Paths, ports, addresses
+     * and other constants are exactly the facts this hits hardest: they live in a single chunk,
+     * unlike a prose claim that gets restated across several.
+     *
+     * <p>A retry does not repair that. {@code RetrievalService} escalates {@code candidateK} — the
+     * pool it searches — but the final cut is always {@code defaultTopK}, so the answer node keeps
+     * seeing exactly topK documents and the evaluator keeps seeing the same first five of them. A
+     * grounded=false caused by the window, rather than by the answer, therefore tends to reproduce
+     * on every attempt and burn the whole retry budget before delivering a 미검증 answer.
+     *
+     * <p>Text is normalized with the same {@link MarkdownNoiseNormalizer} the answer prompt uses,
+     * so both calls also see the same <em>form</em> of a value — the evaluator comparing a raw
+     * {@code **8080**} against an answer written from the stripped {@code 8080} was its own small
+     * source of false mismatches.
+     *
+     * <p>{@link #MAX_EVAL_EXCERPT_CHARS} bounds the prompt for pathological configurations (a very
+     * large topK or chunk size). Documents are dropped <em>whole</em>, lowest-ranked first, and
+     * never truncated mid-document — half a chunk is precisely how the path or constant under
+     * verification disappears. The top-ranked document is always kept.
      */
-    private static String normalizeReason(String raw) {
+    private static String buildEvalExcerpts(List<Document> docs) {
+        StringBuilder sb = new StringBuilder();
+        int used = 0;
+        int included = 0;
+        for (Document d : docs) {
+            String text = MarkdownNoiseNormalizer.normalize(d.getText());
+            if (included > 0 && used + text.length() > MAX_EVAL_EXCERPT_CHARS) break;
+            if (included > 0) sb.append("\n---\n");
+            sb.append(text);
+            used += text.length();
+            included++;
+        }
+        if (included < docs.size()) {
+            log.warn("[EVAL] 문서 발췌 {}자 상한으로 {}개 중 {}개만 검증에 사용 — 하위 순위 문서 제외 "
+                     + "(app.search-top-k / app.chunk-size 가 과도하게 큰지 확인)",
+                    MAX_EVAL_EXCERPT_CHARS, docs.size(), included);
+        }
+        return sb.toString();
+    }
+
+    /**
+     * Keeps a model-written explanation to one short line. It lands in an SSE payload, a log line
+     * and a tooltip, none of which want a paragraph — and a model that ignores the "one sentence"
+     * ask would otherwise leak the whole chain of thought into all three. Blank → null, so callers
+     * can test one thing ("is there a note?") instead of two.
+     */
+    private static String normalizeOneLine(String raw, int maxLen) {
         if (raw == null) return null;
         String oneLine = raw.replaceAll("\\s+", " ").strip();
         if (oneLine.isEmpty()) return null;
-        return oneLine.length() > MAX_EVAL_REASON_LEN
-                ? oneLine.substring(0, MAX_EVAL_REASON_LEN).strip() + "…"
+        return oneLine.length() > maxLen
+                ? oneLine.substring(0, maxLen).strip() + "…"
                 : oneLine;
     }
 

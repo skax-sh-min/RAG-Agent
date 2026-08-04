@@ -384,6 +384,15 @@
                      +  `검증 미통과 사유: ${escHtml(data.evalReason)}</div>`;
             }
 
+            // 경로·주소·포트·환경변수처럼 실행 환경에 따라 달라지는 값 안내. 이런 값은 문서와 달라도
+            // 검증 실패로 치지 않으므로(prompt.answer.eval 의 환경 의존 값 예외) 검증됨 배지가 붙은
+            // 답변에도 실린다 — grounded 조건을 걸지 않는 이유다(message-assistant.html 과 동일).
+            if (data.envNote) {
+                html += `<div class="small text-info mt-1">`
+                     +  `<i class="bi bi-info-circle me-1"></i>`
+                     +  `환경에 따라 달라질 수 있는 값: ${escHtml(data.envNote)}</div>`;
+            }
+
             metaEl.innerHTML = html;
         }
 
