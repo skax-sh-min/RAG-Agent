@@ -110,9 +110,9 @@
     function appendStreamingBubble(bubbleId) {
         const wrap = document.createElement('div');
         wrap.id = `bubble-${bubbleId}`;
-        wrap.className = 'd-flex align-items-start mb-3';
+        wrap.className = 'd-flex align-items-end mb-3';
         wrap.innerHTML = `
-            <i class="bi bi-robot fs-5 text-secondary me-2 mt-1 flex-shrink-0"></i>
+            <i class="bi bi-robot fs-5 text-secondary me-1 mt-1 flex-shrink-0"></i>
             <div class="bubble-assistant p-3 flex-grow-1">
                 <div id="stream-stage-${bubbleId}" class="stream-stage small text-muted mb-1">
                     <span class="spinner-border spinner-border-sm me-1" role="status"></span>

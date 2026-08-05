@@ -53,7 +53,7 @@
     background: var(--bg-bubble-bot);
     border: 1px solid var(--border-default);
     border-radius: 1rem 1rem 1rem 0;
-    max-width: 85%;
+    max-width: 92%;
 }
 
 /* ── Superseded (unverified) retry answers ───────────────────────────────
@@ -238,7 +238,7 @@
     /* Roomier message bubbles on narrow screens.
        .bubble-user uses vw (not %) — see the comment on the base rule above. */
     .bubble-user      { max-width: 90vw; }
-    .bubble-assistant { max-width: 92%; }
+    .bubble-assistant { max-width: 95%; }
 }
 
 /* ── Accessibility: minimum 44×44 touch target for icon-only buttons ──── */
