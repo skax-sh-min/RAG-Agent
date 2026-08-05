@@ -31,7 +31,7 @@ class AgentStateBuilderTest {
                 .threadId("t1")
                 .questionType("manual")
                 .retrievedDocs(List.of(new Document("텍스트", Map.of())))
-                .sources(List.of(new SourceRef("doc.pdf | v1 | p.3", "snippet", "doc_abc", 3)))
+                .sources(List.of(new SourceRef("doc.pdf | v1 | p.3", "snippet", "chunk_1", "doc_abc", 3)))
                 .retrievalWarnings(List.of("warning1"))
                 .imageRefs(List.of("data/images/img1.png"))
                 .answer("최종 답변")

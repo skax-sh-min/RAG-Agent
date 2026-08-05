@@ -80,6 +80,7 @@ public class QuestionReuseRepository {
                 FROM conversation_turns
                 WHERE lower(question) LIKE lower(?)
                   AND (feedback IS NULL OR feedback <> 'DISLIKE')
+                                    AND (provider IS NULL OR provider <> 'db-reuse')
                 """ + (meOnly ? " AND user_id = ? " : "") + " ORDER BY id DESC LIMIT ?";
 
         if (meOnly) {
@@ -110,6 +111,7 @@ public class QuestionReuseRepository {
                 FROM conversation_turns
                 WHERE id = ?
                   AND (feedback IS NULL OR feedback <> 'DISLIKE')
+                                    AND (provider IS NULL OR provider <> 'db-reuse')
                 """ + (meOnly ? " AND user_id = ?" : "") + " LIMIT 1";
         List<CandidateTurn> rows = meOnly
                 ? jdbc.query(sql,

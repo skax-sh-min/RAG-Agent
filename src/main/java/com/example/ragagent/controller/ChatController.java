@@ -290,9 +290,9 @@ public class ChatController {
             .withZone(ZoneOffset.UTC).format(Instant.now());
         long savedTurnId = memoryService.addTurn(
             ctx.userId(), threadId,
-            lookup.question(), lookup.answer(),
+            lookup.question(), "",
             askedAt, 0, 0, 0,
-            "db-reuse", 0, "M", "");
+            "db-reuse", 0, "M", "", lookup.sourceTurnId());
         questionReuseService.cloneTurnSources(lookup.sourceTurnId(), savedTurnId, ctx.userId(), threadId);
         threadMetaService.generateTitleAsync(ctx.userId(), threadId, version, lookup.question());
 
@@ -301,6 +301,7 @@ public class ChatController {
             "turnId", savedTurnId,
             "question", lookup.question(),
             "answer", lookup.answer(),
+            "sourceChunkIds", lookup.sourceChunkIds(),
             "sourceTurnId", lookup.sourceTurnId(),
             "provider", "db-reuse"));
     }

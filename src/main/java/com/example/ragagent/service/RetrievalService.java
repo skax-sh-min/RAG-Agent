@@ -224,6 +224,7 @@ public class RetrievalService {
                 .map(d -> new SourceRef(
                         formatSource(d),
                 truncate(d.getText(), 600),   // UI 출처 hover 미리보기 길이
+                d.getId(),
                         String.valueOf(d.getMetadata().getOrDefault(MetaKey.DOC_ID, "")),
                         d.getMetadata().getOrDefault(MetaKey.PAGE_OR_SLIDE, "?")))
                 .distinct()

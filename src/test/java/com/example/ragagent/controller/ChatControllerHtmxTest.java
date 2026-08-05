@@ -77,7 +77,7 @@ class ChatControllerHtmxTest {
         return new ChatResponse(
                 "## 요약\n핵심 답변",
                 "manual",
-                List.of(new SourceRef("doc.pdf | v1 | p.3", "snippet preview", "doc_abc", 3)),
+                List.of(new SourceRef("doc.pdf | v1 | p.3", "snippet preview", "chunk-1", "doc_abc", 3)),
                 List.of(),
                 120, 80, 2, 0.42,
                 null, "gemini-flash", 1L,

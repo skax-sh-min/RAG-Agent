@@ -52,6 +52,15 @@ public class MemoryService {
                 selectedTags);
     }
 
+    public long addTurn(String userId, String threadId, String question, String answer,
+                        String askedAt, int inputTokens, int outputTokens,
+                        int elapsedMs, String provider, int llmCalls, String responseMode,
+                        String selectedTags, Long reusedFromTurnId) {
+        return repository.addTurn(userId, threadId, question, answer,
+                askedAt, inputTokens, outputTokens, elapsedMs, provider, llmCalls, responseMode,
+                selectedTags, reusedFromTurnId);
+    }
+
     public void clearHistory(String userId, String threadId) {
         repository.clearHistory(userId, threadId);
     }

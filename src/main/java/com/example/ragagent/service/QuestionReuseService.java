@@ -91,10 +91,13 @@ public class QuestionReuseService {
                 repository.findSuggestionCandidates(query, meOnly, userId, fetch);
 
         List<Suggestion> out = new ArrayList<>();
+        Set<String> seenQuestions = new LinkedHashSet<>();
         for (QuestionReuseRepository.CandidateTurn c : candidates) {
             if (isDirectiveOnlyQuestion(c.question())) continue;
             ValidationResult valid = validateTurn(c.turnId());
             if (!valid.reusable()) continue;
+            String key = normalizeQuestionKey(c.question());
+            if (!seenQuestions.add(key)) continue;
             out.add(new Suggestion(c.turnId(), c.question(), summarize(c.answer()),
                     scope == Scope.ME ? "me" : "shared"));
             if (out.size() >= limit) break;
@@ -112,7 +115,12 @@ public class QuestionReuseService {
         if (!valid.reusable()) {
             return ReuseLookup.notReusable(valid.reason(), turn.question());
         }
-        return ReuseLookup.reusable(turn.turnId(), turn.question(), turn.answer(), turn.threadId());
+        List<String> chunkIds = repository.findSourceRefs(turn.turnId()).stream()
+            .map(QuestionReuseRepository.SourceSnapshot::chunkId)
+            .filter(v -> v != null && !v.isBlank())
+            .distinct()
+            .toList();
+        return ReuseLookup.reusable(turn.turnId(), turn.question(), turn.answer(), turn.threadId(), chunkIds);
     }
 
     public ValidationResult validateTurn(long turnId) {
@@ -150,6 +158,14 @@ public class QuestionReuseService {
         return flat.length() > 120 ? flat.substring(0, 120) + "..." : flat;
     }
 
+    private static String normalizeQuestionKey(String question) {
+        if (question == null) return "";
+        return question
+                .replaceAll("\\s+", " ")
+                .strip()
+                .toLowerCase(Locale.ROOT);
+    }
+
     public enum Scope {
         ME,
         SHARED;
@@ -163,13 +179,15 @@ public class QuestionReuseService {
     public record Suggestion(long turnId, String question, String answerPreview, String scope) {}
 
     public record ReuseLookup(boolean reusable, String reason, Long sourceTurnId,
-                              String question, String answer, String sourceThreadId) {
-        static ReuseLookup reusable(long sourceTurnId, String question, String answer, String sourceThreadId) {
-            return new ReuseLookup(true, null, sourceTurnId, question, answer, sourceThreadId);
+                              String question, String answer, String sourceThreadId,
+                              List<String> sourceChunkIds) {
+        static ReuseLookup reusable(long sourceTurnId, String question, String answer, String sourceThreadId,
+                                    List<String> sourceChunkIds) {
+            return new ReuseLookup(true, null, sourceTurnId, question, answer, sourceThreadId, sourceChunkIds);
         }
 
         static ReuseLookup notReusable(String reason, String question) {
-            return new ReuseLookup(false, reason, null, question, null, null);
+            return new ReuseLookup(false, reason, null, question, null, null, List.of());
         }
     }
 

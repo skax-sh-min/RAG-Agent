@@ -60,7 +60,7 @@ class AgentServiceTest {
                 .toBuilder()
                 .questionType("manual")
                 .answer("최종 답변")
-                .sources(List.of(new SourceRef("doc.pdf | v1 | p.3", "snippet", "doc_123", 3)))
+                .sources(List.of(new SourceRef("doc.pdf | v1 | p.3", "snippet", "chunk_1", "doc_123", 3)))
                 .imageRefs(List.of("data/images/doc_123/img1.png"))
                 .usedProvider("gemini-flash")
                 .accumulateTokens(120, 80)

@@ -67,12 +67,15 @@ public class SqliteMemoryRepository implements MemoryRepository {
                 "ALTER TABLE conversation_turns ADD COLUMN user_id TEXT NOT NULL DEFAULT 'anonymous'",
                 "ALTER TABLE conversation_turns ADD COLUMN feedback TEXT",
                 "ALTER TABLE conversation_turns ADD COLUMN response_mode TEXT",
-                "ALTER TABLE conversation_turns ADD COLUMN selected_tags TEXT"
+                "ALTER TABLE conversation_turns ADD COLUMN selected_tags TEXT",
+                "ALTER TABLE conversation_turns ADD COLUMN reused_from_turn_id INTEGER"
         )) {
             try { jdbc.execute(ddl); } catch (Exception ignored) {}
         }
         jdbc.execute(
                 "CREATE INDEX IF NOT EXISTS idx_turns_user_thread ON conversation_turns(user_id, thread_id)");
+            jdbc.execute(
+                "CREATE INDEX IF NOT EXISTS idx_turns_reused_from ON conversation_turns(reused_from_turn_id)");
         jdbc.execute("""
                 CREATE TABLE IF NOT EXISTS image_descriptions (
                     image_path  TEXT    PRIMARY KEY,
@@ -94,10 +97,12 @@ public class SqliteMemoryRepository implements MemoryRepository {
         // fetch last fetchLimit turns newest-first, then reverse for chronological order.
         // DISLIKE-tagged turns are excluded from context (hard exclusion, §6.9).
         List<String> rows = jdbc.query(
-                "SELECT question, answer FROM conversation_turns " +
-                "WHERE user_id = ? AND thread_id = ? AND (feedback IS NULL OR feedback <> 'DISLIKE') " +
-                "ORDER BY id DESC LIMIT ?",
-                (rs, n) -> "Q: %s\nA: %s".formatted(rs.getString("question"), rs.getString("answer")),
+            "SELECT t.question AS question, COALESCE(src.answer, t.answer) AS answer " +
+            "FROM conversation_turns t " +
+            "LEFT JOIN conversation_turns src ON src.id = t.reused_from_turn_id AND src.user_id = t.user_id " +
+            "WHERE t.user_id = ? AND t.thread_id = ? AND (t.feedback IS NULL OR t.feedback <> 'DISLIKE') " +
+            "ORDER BY t.id DESC LIMIT ?",
+            (rs, n) -> "Q: %s\nA: %s".formatted(rs.getString("question"), rs.getString("answer")),
                 userId, threadId, fetchLimit);
 
         if (rows.isEmpty()) return "";
@@ -124,13 +129,13 @@ public class SqliteMemoryRepository implements MemoryRepository {
     public long addTurn(String userId, String threadId, String question, String answer,
                         String askedAt, int inputTokens, int outputTokens,
                         int elapsedMs, String provider, int llmCalls, String responseMode,
-                        String selectedTags) {
+                        String selectedTags, Long reusedFromTurnId) {
         KeyHolder keyHolder = new GeneratedKeyHolder();
         jdbc.update(connection -> {
             PreparedStatement ps = connection.prepareStatement(
                     "INSERT INTO conversation_turns " +
-                    "(user_id, thread_id, question, answer, asked_at, input_tokens, output_tokens, elapsed_ms, provider, llm_calls, response_mode, selected_tags) " +
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "(user_id, thread_id, question, answer, asked_at, input_tokens, output_tokens, elapsed_ms, provider, llm_calls, response_mode, selected_tags, reused_from_turn_id) " +
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     Statement.RETURN_GENERATED_KEYS);
             ps.setString(1, userId);
             ps.setString(2, threadId);
@@ -144,6 +149,11 @@ public class SqliteMemoryRepository implements MemoryRepository {
             ps.setInt(10, llmCalls);
             ps.setString(11, responseMode);
             ps.setString(12, selectedTags);
+            if (reusedFromTurnId == null) {
+                ps.setNull(13, java.sql.Types.BIGINT);
+            } else {
+                ps.setLong(13, reusedFromTurnId);
+            }
             return ps;
         }, keyHolder);
         Number key = keyHolder.getKey();
@@ -158,9 +168,11 @@ public class SqliteMemoryRepository implements MemoryRepository {
     @Override
     public List<Turn> getTurns(String userId, String threadId) {
         return jdbc.query(
-                "SELECT id, question, answer, asked_at, created_at, " +
-                "input_tokens, output_tokens, elapsed_ms, provider, llm_calls, feedback, response_mode, selected_tags " +
-                "FROM conversation_turns WHERE user_id = ? AND thread_id = ? ORDER BY id ASC",
+            "SELECT t.id, t.question, COALESCE(src.answer, t.answer) AS answer, t.asked_at, t.created_at, " +
+            "t.input_tokens, t.output_tokens, t.elapsed_ms, t.provider, t.llm_calls, t.feedback, t.response_mode, t.selected_tags " +
+            "FROM conversation_turns t " +
+            "LEFT JOIN conversation_turns src ON src.id = t.reused_from_turn_id AND src.user_id = t.user_id " +
+            "WHERE t.user_id = ? AND t.thread_id = ? ORDER BY t.id ASC",
                 TURN_ROW_MAPPER,
                 userId, threadId);
     }
@@ -171,9 +183,11 @@ public class SqliteMemoryRepository implements MemoryRepository {
         // chronological order — bounds LLM-facing callers (summarization) to a constant-size input
         // regardless of how long the conversation has grown.
         List<Turn> rows = jdbc.query(
-                "SELECT id, question, answer, asked_at, created_at, " +
-                "input_tokens, output_tokens, elapsed_ms, provider, llm_calls, feedback, response_mode, selected_tags " +
-                "FROM conversation_turns WHERE user_id = ? AND thread_id = ? ORDER BY id DESC LIMIT ?",
+            "SELECT t.id, t.question, COALESCE(src.answer, t.answer) AS answer, t.asked_at, t.created_at, " +
+            "t.input_tokens, t.output_tokens, t.elapsed_ms, t.provider, t.llm_calls, t.feedback, t.response_mode, t.selected_tags " +
+            "FROM conversation_turns t " +
+            "LEFT JOIN conversation_turns src ON src.id = t.reused_from_turn_id AND src.user_id = t.user_id " +
+            "WHERE t.user_id = ? AND t.thread_id = ? ORDER BY t.id DESC LIMIT ?",
                 TURN_ROW_MAPPER,
                 userId, threadId, fetchLimit);
         return rows.reversed();
@@ -182,9 +196,11 @@ public class SqliteMemoryRepository implements MemoryRepository {
     @Override
     public Optional<Turn> getTurn(String userId, String threadId, long turnId) {
         List<Turn> rows = jdbc.query(
-                "SELECT id, question, answer, asked_at, created_at, " +
-                "input_tokens, output_tokens, elapsed_ms, provider, llm_calls, feedback, response_mode, selected_tags " +
-                "FROM conversation_turns WHERE id = ? AND user_id = ? AND thread_id = ?",
+            "SELECT t.id, t.question, COALESCE(src.answer, t.answer) AS answer, t.asked_at, t.created_at, " +
+            "t.input_tokens, t.output_tokens, t.elapsed_ms, t.provider, t.llm_calls, t.feedback, t.response_mode, t.selected_tags " +
+            "FROM conversation_turns t " +
+            "LEFT JOIN conversation_turns src ON src.id = t.reused_from_turn_id AND src.user_id = t.user_id " +
+            "WHERE t.id = ? AND t.user_id = ? AND t.thread_id = ?",
                 TURN_ROW_MAPPER,
                 turnId, userId, threadId);
         return rows.isEmpty() ? Optional.empty() : Optional.of(rows.get(0));

@@ -14,7 +14,15 @@ public interface MemoryRepository {
     long addTurn(String userId, String threadId, String question, String answer,
                  String askedAt, int inputTokens, int outputTokens,
                  int elapsedMs, String provider, int llmCalls, String responseMode,
-                 String selectedTags);
+                 String selectedTags, Long reusedFromTurnId);
+
+    default long addTurn(String userId, String threadId, String question, String answer,
+                 String askedAt, int inputTokens, int outputTokens,
+                 int elapsedMs, String provider, int llmCalls, String responseMode,
+                 String selectedTags) {
+        return addTurn(userId, threadId, question, answer, askedAt, inputTokens, outputTokens,
+                elapsedMs, provider, llmCalls, responseMode, selectedTags, null);
+    }
 
     void clearHistory(String userId, String threadId);
 
