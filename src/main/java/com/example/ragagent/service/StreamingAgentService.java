@@ -62,6 +62,7 @@ public class StreamingAgentService {
     private final ConversationSummarizerService summarizerService;
     private final AppProperties props;
     private final ChatImageAnalysisSkipRegistry imageSkipRegistry;
+    private final QuestionReuseService questionReuseService;
 
     /**
      * Clock backing the idle watchdog (below). Production passes {@code System::nanoTime}; tests
@@ -77,16 +78,33 @@ public class StreamingAgentService {
     // (NoSuchMethodException: <init>() — Spring falls back to looking for a no-arg constructor).
     @Autowired
     public StreamingAgentService(AgentGraph agentGraph,
-                                  MemoryService memoryService,
-                                  ClassifierService classifierService,
-                                  ThreadMetaService threadMetaService,
-                                  ObjectMapper objectMapper,
-                                  MessageSource messageSource,
-                                  ConversationSummarizerService summarizerService,
-                                  AppProperties props,
-                                  ChatImageAnalysisSkipRegistry imageSkipRegistry) {
+                                 MemoryService memoryService,
+                                 ClassifierService classifierService,
+                                 ThreadMetaService threadMetaService,
+                                 ObjectMapper objectMapper,
+                                 MessageSource messageSource,
+                                 ConversationSummarizerService summarizerService,
+                                 AppProperties props,
+                                 ChatImageAnalysisSkipRegistry imageSkipRegistry,
+                                 QuestionReuseService questionReuseService) {
         this(agentGraph, memoryService, classifierService, threadMetaService, objectMapper,
-                messageSource, summarizerService, props, imageSkipRegistry, System::nanoTime);
+                messageSource, summarizerService, props, imageSkipRegistry, questionReuseService,
+                System::nanoTime);
+    }
+
+    // Backward-compatible constructor for tests that don't care about question reuse.
+    public StreamingAgentService(AgentGraph agentGraph,
+                                 MemoryService memoryService,
+                                 ClassifierService classifierService,
+                                 ThreadMetaService threadMetaService,
+                                 ObjectMapper objectMapper,
+                                 MessageSource messageSource,
+                                 ConversationSummarizerService summarizerService,
+                                 AppProperties props,
+                                 ChatImageAnalysisSkipRegistry imageSkipRegistry,
+                                 LongSupplier nanoTimeSource) {
+        this(agentGraph, memoryService, classifierService, threadMetaService, objectMapper,
+                messageSource, summarizerService, props, imageSkipRegistry, null, nanoTimeSource);
     }
 
     /** Test seam — see {@link #nanoTimeSource}. */
@@ -99,6 +117,7 @@ public class StreamingAgentService {
                           ConversationSummarizerService summarizerService,
                           AppProperties props,
                           ChatImageAnalysisSkipRegistry imageSkipRegistry,
+                          QuestionReuseService questionReuseService,
                           LongSupplier nanoTimeSource) {
         this.agentGraph = agentGraph;
         this.memoryService = memoryService;
@@ -109,6 +128,7 @@ public class StreamingAgentService {
         this.summarizerService = summarizerService;
         this.props = props;
         this.imageSkipRegistry = imageSkipRegistry;
+        this.questionReuseService = questionReuseService;
         this.nanoTimeSource = nanoTimeSource;
     }
 
@@ -192,6 +212,9 @@ public class StreamingAgentService {
                         askedAt, result.totalInputTokens(), result.totalOutputTokens(),
                         (int) elapsedMs, result.usedProvider(), result.llmCallCount(),
                         form.responseModeOrDefault().name(), TagUtils.toMetaValue(form.selectedTags()));
+                if (questionReuseService != null) {
+                    questionReuseService.recordTurnSources(turnId, userId, form.threadId(), result.retrievedDocs());
+                }
                 summarizerService.precomputeAfterTurn(userId, form.threadId(), turnId, locale);
             }
 

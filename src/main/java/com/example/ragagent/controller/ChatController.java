@@ -10,6 +10,7 @@ import com.example.ragagent.service.ChatImageAnalysisSkipRegistry;
 import com.example.ragagent.service.ConversationSummarizerService;
 import com.example.ragagent.service.CuratedQaService;
 import com.example.ragagent.service.MemoryService;
+import com.example.ragagent.service.QuestionReuseService;
 import com.example.ragagent.service.StreamingAgentService;
 import com.example.ragagent.service.ThreadMetaService;
 import com.example.ragagent.config.AppProperties;
@@ -17,6 +18,8 @@ import jakarta.servlet.http.HttpServletResponse;
 import jakarta.servlet.http.HttpSession;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.MessageSource;
 import org.springframework.context.i18n.LocaleContextHolder;
 import org.springframework.http.HttpStatus;
@@ -28,9 +31,12 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.time.Instant;
+import java.time.ZoneOffset;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
+import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -51,7 +57,9 @@ public class ChatController {
     private final LlmRouter llmRouter;
     private final MessageSource messageSource;
     private final ChatImageAnalysisSkipRegistry imageSkipRegistry;
+    private final QuestionReuseService questionReuseService;
 
+    @Autowired
     public ChatController(AgentService agentService,
                           StreamingAgentService streamingAgentService,
                           ThreadMetaService threadMetaService,
@@ -61,7 +69,8 @@ public class ChatController {
                           AppProperties props,
                           LlmRouter llmRouter,
                           MessageSource messageSource,
-                          ChatImageAnalysisSkipRegistry imageSkipRegistry) {
+                          ChatImageAnalysisSkipRegistry imageSkipRegistry,
+                          ObjectProvider<QuestionReuseService> questionReuseService) {
         this.agentService = agentService;
         this.streamingAgentService = streamingAgentService;
         this.threadMetaService = threadMetaService;
@@ -72,6 +81,7 @@ public class ChatController {
         this.llmRouter = llmRouter;
         this.messageSource = messageSource;
         this.imageSkipRegistry = imageSkipRegistry;
+        this.questionReuseService = questionReuseService.getIfAvailable();
     }
 
     // ── Page routes ───────────────────────────────────────────────────
@@ -237,6 +247,62 @@ public class ChatController {
         }
         ChatResponse response = agentService.chat(ctx, request);
         return ResponseEntity.ok(response);
+    }
+
+    @GetMapping("/api/v1/questions/suggest")
+    @ResponseBody
+    public List<QuestionReuseService.Suggestion> suggestQuestions(
+            ThreadContext ctx,
+            @RequestParam(name = "q", defaultValue = "") String q,
+            @RequestParam(name = "scope", defaultValue = "shared") String scope,
+            @RequestParam(name = "limit", defaultValue = "8") int limit) {
+        if (questionReuseService == null || q == null || q.strip().length() < 2) return List.of();
+        int bounded = Math.max(1, Math.min(limit, 20));
+        return questionReuseService.suggest(ctx.userId(), QuestionReuseService.Scope.parse(scope), q, bounded);
+    }
+
+    @PostMapping("/api/v1/questions/reuse")
+    @ResponseBody
+    public ResponseEntity<Map<String, Object>> reuseQuestionAnswer(
+            ThreadContext ctx,
+            @RequestParam("turnId") long turnId,
+            @RequestParam("threadId") String threadId,
+            @RequestParam(name = "version", defaultValue = "latest") String version,
+            @RequestParam(name = "scope", defaultValue = "shared") String scope) {
+        if (questionReuseService == null) {
+            return ResponseEntity.ok(Map.of(
+                "reused", false,
+                "fallback", true,
+                "message", "질문 재사용 기능을 사용할 수 없습니다."));
+        }
+
+        QuestionReuseService.ReuseLookup lookup =
+            questionReuseService.reuseLookup(ctx.userId(), QuestionReuseService.Scope.parse(scope), turnId);
+        if (!lookup.reusable()) {
+            return ResponseEntity.ok(Map.of(
+                "reused", false,
+                "fallback", true,
+                "question", lookup.question() == null ? "" : lookup.question(),
+                "message", lookup.reason() == null ? "검증에 실패하여 일반 질의로 전환합니다." : lookup.reason()));
+        }
+
+        String askedAt = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
+            .withZone(ZoneOffset.UTC).format(Instant.now());
+        long savedTurnId = memoryService.addTurn(
+            ctx.userId(), threadId,
+            lookup.question(), lookup.answer(),
+            askedAt, 0, 0, 0,
+            "db-reuse", 0, "M", "");
+        questionReuseService.cloneTurnSources(lookup.sourceTurnId(), savedTurnId, ctx.userId(), threadId);
+        threadMetaService.generateTitleAsync(ctx.userId(), threadId, version, lookup.question());
+
+        return ResponseEntity.ok(Map.of(
+            "reused", true,
+            "turnId", savedTurnId,
+            "question", lookup.question(),
+            "answer", lookup.answer(),
+            "sourceTurnId", lookup.sourceTurnId(),
+            "provider", "db-reuse"));
     }
 
     // ── Helpers ───────────────────────────────────────────────────────

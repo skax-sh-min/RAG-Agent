@@ -248,6 +248,14 @@
 
                         <div class="flex-grow-1"></div>
 
+                        <div class="input-group input-group-sm w-auto">
+                            <span class="input-group-text">Q Scope</span>
+                            <select id="question-reuse-scope" class="form-select" style="max-width: 110px;">
+                                <option value="shared" selected>shared</option>
+                                <option value="me">me</option>
+                            </select>
+                        </div>
+
                         <!-- 응답 모드 S/M/L 토글 — 답변 길이·상세도 (기본 M).
                              L(원문 최대)은 RAG 검색 컨텍스트가 있을 때만 의미가 있어 Direct 모드에서 비활성화.
                              툴팁은 네이티브 title(브라우저 기본 지연 ~1.5s)이 아니라 Bootstrap Tooltip(짧은 delay)로 표시 — 하단 스크립트에서 초기화. -->
@@ -298,6 +306,7 @@
                             <i class="bi bi-send-fill"></i>
                         </button>
                     </div>
+                    <div id="question-suggest-box" class="list-group mt-1 d-none" style="max-height: 220px; overflow:auto;"></div>
                 </form>
             </div>
         </div>
@@ -331,6 +340,10 @@
     const directToggle    = document.getElementById('direct-mode-toggle');
     const directLabel     = document.getElementById('direct-mode-label');
     const directModeInput = document.getElementById('form-direct-mode');
+    const suggestBox      = document.getElementById('question-suggest-box');
+    const reuseScopeSel   = document.getElementById('question-reuse-scope');
+    let suggestTimer      = null;
+    let suggestSeq        = 0;
 
     /* RAG ↔ Direct LLM 토글 */
     const labelRag    = /*[[#{chat.direct.label.rag}]]*/ 'RAG';
@@ -522,6 +535,147 @@
     }
     questionInput.addEventListener('input', adjustTextarea);
 
+    function hideQuestionSuggestions() {
+        suggestBox.classList.add('d-none');
+        suggestBox.innerHTML = '';
+    }
+
+    function renderMarkdownText(raw) {
+        if (!raw) return '';
+        if (typeof marked === 'undefined') return escHtml(raw);
+        const html = marked.parse(raw);
+        return typeof DOMPurify !== 'undefined' ? DOMPurify.sanitize(html) : html;
+    }
+
+    function appendReusedTurn(question, answer, turnId, provider) {
+        const t = new Date().toLocaleTimeString('ko-KR', {hour: '2-digit', minute: '2-digit', hour12: false});
+        const userBubble = document.createElement('div');
+        userBubble.className = 'd-flex justify-content-end mb-3 align-items-end';
+        userBubble.innerHTML =
+            `<div class="d-flex flex-column align-items-end me-1">` +
+            `<div class="bubble-user p-3">${escHtml(question)}</div>` +
+            `<small class="text-muted" style="font-size:0.68rem; margin-top:2px;">${escHtml(t)}</small>` +
+            `</div>` +
+            `<i class="bi bi-person-circle fs-5 text-secondary ms-2 mt-1 flex-shrink-0"></i>`;
+        chatMessages.appendChild(userBubble);
+
+        const assistant = document.createElement('div');
+        assistant.className = 'd-flex align-items-end mb-3';
+        assistant.innerHTML =
+            `<i class="bi bi-robot fs-5 text-secondary me-1 mt-1 flex-shrink-0"></i>` +
+            `<div class="bubble-assistant p-3 flex-grow-1">` +
+                `<div class="md-content">${renderMarkdownText(answer)}</div>` +
+                `<div class="mt-1 d-flex align-items-center flex-wrap gap-2">` +
+                    `<div class="feedback-controls d-flex gap-1" data-turn-id="${turnId}" data-thread-id="${escHtml(chatForm.querySelector('input[name="threadId"]').value)}">` +
+                        `<button type="button" class="btn btn-sm btn-outline-secondary feedback-btn" data-feedback="LIKE" aria-label="좋아요" title="좋아요">👍</button>` +
+                        `<button type="button" class="btn btn-sm btn-outline-secondary feedback-btn" data-feedback="DISLIKE" aria-label="싫어요" title="싫어요">👎</button>` +
+                    `</div>` +
+                    `<div class="text-muted" style="font-size:0.68rem;">` +
+                        `<span class="badge bg-info text-dark me-1">DB 재사용</span>` +
+                        `🤖 ${escHtml(provider || 'db-reuse')} · 🕐 ${escHtml(t)}` +
+                    `</div>` +
+                `</div>` +
+            `</div>`;
+        chatMessages.appendChild(assistant);
+
+        if (typeof hljs !== 'undefined') {
+            assistant.querySelectorAll('pre code').forEach(block => hljs.highlightElement(block));
+        }
+        scrollToBottom();
+        if (typeof htmx !== 'undefined') htmx.trigger(document.body, 'refreshThreadList');
+    }
+
+    function submitWithFallback(question, message) {
+        if (message) {
+            if (typeof showToast === 'function') showToast(message, 'warning');
+            else alert(message);
+        }
+        questionInput.value = question || '';
+        questionInput.focus();
+        chatForm.requestSubmit();
+    }
+
+    async function onSelectSuggestion(turnId) {
+        const threadId = chatForm.querySelector('input[name="threadId"]').value;
+        const version = document.getElementById('form-version').value || 'latest';
+        const scope = (reuseScopeSel.value || 'shared').toLowerCase();
+        try {
+            const body = new URLSearchParams({ turnId: String(turnId), threadId, version, scope });
+            const res = await fetch('/api/v1/questions/reuse', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded', ...getCsrfHeaders() },
+                body
+            });
+            const data = res.ok ? await res.json() : null;
+            if (!data) throw new Error('reuse failed');
+            hideQuestionSuggestions();
+
+            if (data.reused) {
+                questionInput.value = '';
+                questionInput.style.height = 'auto';
+                appendReusedTurn(data.question || '', data.answer || '', data.turnId || '', data.provider || 'db-reuse');
+                return;
+            }
+            submitWithFallback(data.question || '', data.message || '기존 답변 검증에 실패하여 일반 질의로 전환합니다.');
+        } catch (e) {
+            submitWithFallback(questionInput.value.trim(), '재사용 호출에 실패하여 일반 질의로 전환합니다.');
+        }
+    }
+
+    function renderSuggestions(items) {
+        if (!Array.isArray(items) || items.length === 0) {
+            hideQuestionSuggestions();
+            return;
+        }
+        suggestBox.innerHTML = items.map(it =>
+            `<button type="button" class="list-group-item list-group-item-action" data-turn-id="${it.turnId}">` +
+                `<div class="d-flex justify-content-between align-items-start gap-2">` +
+                    `<div class="small fw-semibold text-start">${escHtml(it.question || '')}</div>` +
+                    `<span class="badge bg-light text-dark border">${escHtml(it.scope || 'shared')}</span>` +
+                `</div>` +
+                `<div class="small text-muted text-start mt-1">${escHtml(it.answerPreview || '')}</div>` +
+            `</button>`
+        ).join('');
+        suggestBox.classList.remove('d-none');
+        suggestBox.querySelectorAll('[data-turn-id]').forEach(btn => {
+            btn.addEventListener('click', () => onSelectSuggestion(btn.getAttribute('data-turn-id')));
+        });
+    }
+
+    async function loadQuestionSuggestions() {
+        const q = questionInput.value.trim();
+        if (q.length < 2) {
+            hideQuestionSuggestions();
+            return;
+        }
+        const seq = ++suggestSeq;
+        const scope = (reuseScopeSel.value || 'shared').toLowerCase();
+        const params = new URLSearchParams({ q, scope, limit: '8' });
+        try {
+            const res = await fetch('/api/v1/questions/suggest?' + params.toString(), {
+                headers: getCsrfHeaders()
+            });
+            const data = res.ok ? await res.json() : [];
+            if (seq !== suggestSeq) return;
+            renderSuggestions(data);
+        } catch (e) {
+            if (seq === suggestSeq) hideQuestionSuggestions();
+        }
+    }
+
+    questionInput.addEventListener('input', function () {
+        if (suggestTimer) clearTimeout(suggestTimer);
+        suggestTimer = setTimeout(loadQuestionSuggestions, 220);
+    });
+
+    reuseScopeSel.addEventListener('change', function () {
+        if ((questionInput.value || '').trim().length >= 2) loadQuestionSuggestions();
+    });
+
+    questionInput.addEventListener('blur', function () {
+        setTimeout(hideQuestionSuggestions, 180);
+    });
+
     /* ── 입력 시작 시 대화 요약 선계산 (백그라운드, 응답 안 기다림) ──────
        요약 대상은 이미 저장된 turn 들뿐이라 지금 입력 중인 텍스트와 무관하므로,
        입력을 시작하는 즉시(한 글자만 쳐도) 1회만 트리거하고 이번 입력 세션 동안 재호출하지 않는다.
@@ -550,8 +704,10 @@
         if (e.key === 'Enter' && !e.shiftKey) {
             if (e.isComposing || isComposing) return;
             e.preventDefault();
+            hideQuestionSuggestions();
             if (this.value.trim()) chatForm.requestSubmit();
         }
+        if (e.key === 'Escape') hideQuestionSuggestions();
     });
 
     /* #chat-messages has CSS scroll-behavior:smooth (app.css) for in-stream scrolling, but that

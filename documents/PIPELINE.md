@@ -37,6 +37,22 @@ HTTP 요청
 
 `AgentState`(불변 레코드)를 각 노드가 받아 새 인스턴스를 반환하며 상태를 전파.
 
+### 1.1 중복 질문 재사용 경로 (UI 추천 선택)
+
+`/api/v1/questions/reuse`는 AgentGraph를 타지 않는 단축 경로입니다.
+
+```
+질문 추천 클릭
+  └─ ChatController.reuseQuestionAnswer()
+       ├─ turn 접근 권한 확인(scope=shared|me)
+       ├─ 반환 직전 출처 청크 해시 재검증
+       │    ├─ 통과: 기존 answer 재사용 저장(provider=db-reuse)
+       │    └─ 실패: fallback=true + 사유 반환
+       └─ (클라이언트) fallback=true면 동일 질문으로 일반 질의 전송
+```
+
+검증 실패는 CRITIC 단계 전용이 아니라, 일반 질의 전체(검색→답변→평가→재시도)로 전환하는 신호입니다.
+
 ---
 
 ## 2. AgentGraph 노드
