@@ -16,6 +16,8 @@ import java.util.regex.Pattern;
 @Service
 public class QuestionReuseService {
 
+    private static final int MAX_SUGGESTION_QUESTION_LENGTH = 50;
+
     private static final Pattern DIRECTIVE_WORD = Pattern.compile(
             "(?:^|\\s)(이거|그거|저거|이것|그것|저것|여기|거기|저기|얘|걔|쟤|요거|저거요)(?:\\s|$)",
             Pattern.CASE_INSENSITIVE);
@@ -93,6 +95,7 @@ public class QuestionReuseService {
         List<Suggestion> out = new ArrayList<>();
         Set<String> seenQuestions = new LinkedHashSet<>();
         for (QuestionReuseRepository.CandidateTurn c : candidates) {
+            if (isTooLongForSuggestion(c.question())) continue;
             if (isDirectiveOnlyQuestion(c.question())) continue;
             ValidationResult valid = validateTurn(c.turnId());
             if (!valid.reusable()) continue;
@@ -164,6 +167,11 @@ public class QuestionReuseService {
                 .replaceAll("\\s+", " ")
                 .strip()
                 .toLowerCase(Locale.ROOT);
+    }
+
+    private static boolean isTooLongForSuggestion(String question) {
+        if (question == null) return true;
+        return question.strip().length() > MAX_SUGGESTION_QUESTION_LENGTH;
     }
 
     public enum Scope {

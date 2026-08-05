@@ -65,4 +65,29 @@ class QuestionReuseServiceTest {
         assertThat(suggestions.get(0).question()).isEqualTo("Spring Boot 설정 방법");
         assertThat(suggestions.get(1).question()).isEqualTo("다른 질문");
     }
+
+    @Test
+    @DisplayName("추천 목록에는 50자를 초과하는 질문이 포함되지 않는다")
+    void suggest_excludesQuestionsOver50Chars() {
+        QuestionReuseRepository repo = mock(QuestionReuseRepository.class);
+        QuestionReuseService service = new QuestionReuseService(repo);
+
+        String longQuestion = "Spring Boot에서 보안 설정을 운영 환경에서 단계별로 점검하는 상세 절차를 알려주세요";
+
+        when(repo.findSuggestionCandidates(anyString(), anyBoolean(), anyString(), anyInt()))
+                .thenReturn(List.of(
+                        new QuestionReuseRepository.CandidateTurn(20L, "u1", "t1", longQuestion, "a1", "2026-08-05 10:00:00"),
+                        new QuestionReuseRepository.CandidateTurn(19L, "u1", "t2", "로그인 오류 401 원인", "a2", "2026-08-05 09:00:00")
+                ));
+        when(repo.findSourceRefs(anyLong()))
+                .thenReturn(List.of(new QuestionReuseRepository.SourceSnapshot("c1", "d1", "h1")));
+        when(repo.currentChunkHashes(java.util.Set.of("c1")))
+                .thenReturn(java.util.Map.of("c1", "h1"));
+
+        List<QuestionReuseService.Suggestion> suggestions =
+                service.suggest("u1", QuestionReuseService.Scope.SHARED, "로그인", 10);
+
+        assertThat(suggestions).hasSize(1);
+        assertThat(suggestions.get(0).question()).isEqualTo("로그인 오류 401 원인");
+    }
 }
