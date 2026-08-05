@@ -90,4 +90,24 @@ class QuestionReuseServiceTest {
         assertThat(suggestions).hasSize(1);
         assertThat(suggestions.get(0).question()).isEqualTo("로그인 오류 401 원인");
     }
+
+        @Test
+        @DisplayName("이전 대화 출처 라벨은 챕터/페이지 규칙을 동일하게 따른다")
+        void sourceRefsForTurn_formatsLabelWithChapterRule() {
+                QuestionReuseRepository repo = mock(QuestionReuseRepository.class);
+                QuestionReuseService service = new QuestionReuseService(repo);
+
+                when(repo.findSourcePreviewRows(7L)).thenReturn(List.of(
+                                new QuestionReuseRepository.SourcePreviewRow(
+                                                "c1", "d1", "manual.docx", "12", "1.2", "docx chunk"),
+                                new QuestionReuseRepository.SourcePreviewRow(
+                                                "c2", "d2", "slides.pptx", "3", "0", "pptx chunk")
+                ));
+
+                var refs = service.sourceRefsForTurn(7L);
+
+                assertThat(refs).hasSize(2);
+                assertThat(refs.get(0).label()).isEqualTo("manual.docx | ch 1.2");
+                assertThat(refs.get(1).label()).isEqualTo("slides.pptx | p.3");
+        }
 }

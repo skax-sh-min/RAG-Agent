@@ -151,6 +151,7 @@ public class QuestionReuseRepository {
                        r.doc_id,
                        f.filename,
                        f.page,
+                                             f.chapter,
                        f.content
                 FROM turn_source_ref r
                 LEFT JOIN chunk_fts f ON f.spring_doc_id = r.chunk_id
@@ -162,6 +163,7 @@ public class QuestionReuseRepository {
                 rs.getString("doc_id"),
                 rs.getString("filename"),
                 rs.getString("page"),
+                                rs.getString("chapter"),
                 rs.getString("content")),
             turnId);
         }
@@ -213,7 +215,7 @@ public class QuestionReuseRepository {
     public record SourceSnapshot(String chunkId, String docId, String chunkHash) {}
 
     public record SourcePreviewRow(String chunkId, String docId, String filename,
-                                   String pageOrSlide, String content) {}
+                                   String pageOrSlide, String chapterNo, String content) {}
 
     public record CandidateTurn(long turnId, String userId, String threadId,
                                 String question, String answer, String createdAt) {}

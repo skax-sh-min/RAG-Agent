@@ -181,12 +181,14 @@ public class QuestionReuseService {
         String filename = (row.filename() == null || row.filename().isBlank())
                 ? (row.docId() == null ? "source" : row.docId())
                 : row.filename();
-        String page = row.pageOrSlide();
-        String label = (page == null || page.isBlank() || "null".equalsIgnoreCase(page))
-                ? filename
-                : filename + " | p." + page;
+        String page = (row.pageOrSlide() == null || row.pageOrSlide().isBlank()) ? "?" : row.pageOrSlide();
+        Map<String, Object> meta = new java.util.HashMap<>();
+        meta.put(MetaKey.FILENAME, filename);
+        meta.put(MetaKey.PAGE_OR_SLIDE, page);
+        meta.put(MetaKey.CHAPTER_NO, row.chapterNo());
+        String label = RetrievalService.formatSource(new Document("", meta));
         String preview = truncate(row.content(), 600);
-        return new SourceRef(label, preview, row.chunkId(), row.docId(), page == null ? "?" : page);
+        return new SourceRef(label, preview, row.chunkId(), row.docId(), page);
     }
 
     private static String truncate(String text, int maxLen) {
