@@ -490,7 +490,7 @@ public class RetrievalService {
     /**
      * Citation label rules.
      * Curated hit: fixed label.
-     * Chapter-based docs (docx/md/txt): "파일명 | ch X" when a real chapter exists, else "파일명 | ch ?".
+        * Chapter-based docs (docx/md/txt): "파일명 | ch X" when a real chapter exists, else "파일명" only.
      * Page-based docs (pptx/pdf etc.): "파일명 | p.N".
      */
     static String formatSource(Document doc) {
@@ -504,7 +504,7 @@ public class RetrievalService {
             return "%s | ch %s".formatted(filename, chapter);
         }
         if (isChapterStructuredFilename(filename)) {
-            return "%s | ch ?".formatted(filename);
+            return filename;
         }
         Object page = meta.getOrDefault(MetaKey.PAGE_OR_SLIDE, "?");
         return "%s | p.%s".formatted(filename, page);

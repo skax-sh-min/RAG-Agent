@@ -125,6 +125,6 @@ class QuestionReuseServiceTest {
                 var refs = service.sourceRefsForTurn(8L);
 
                 assertThat(refs).hasSize(1);
-                assertThat(refs.get(0).label()).isEqualTo("manual.docx | ch ?");
+                assertThat(refs.get(0).label()).isEqualTo("manual.docx");
         }
 }

@@ -13,7 +13,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * QA — RetrievalService.formatSource() citation label.
  *
  * <p>Uses chapter labels for chapter-structured sources (docx/md/txt): "ch X" when real chapter
- * metadata exists, else "ch ?". Page-structured sources keep the existing "p.N" fallback.
+ * metadata exists, else filename-only. Page-structured sources keep the existing "p.N" fallback.
  */
 class RetrievalServiceFormatSourceTest {
 
@@ -44,7 +44,7 @@ class RetrievalServiceFormatSourceTest {
     }
 
     @Test
-        @DisplayName("docx는 챕터 번호가 0이거나 없어도 p.1 대신 'ch ?'를 표시한다")
+        @DisplayName("docx는 챕터 번호가 0이거나 없으면 'ch ?' 대신 파일명만 표시한다")
         void docxUsesUnknownChapterWhenChapterNoIsZeroOrMissing() {
         Document zeroChapter = doc(Map.of(
             MetaKey.FILENAME, "manual.docx",
@@ -54,8 +54,8 @@ class RetrievalServiceFormatSourceTest {
             MetaKey.FILENAME, "manual.docx",
             MetaKey.PAGE_OR_SLIDE, 1));
 
-        assertThat(RetrievalService.formatSource(zeroChapter)).isEqualTo("manual.docx | ch ?");
-        assertThat(RetrievalService.formatSource(missingChapter)).isEqualTo("manual.docx | ch ?");
+        assertThat(RetrievalService.formatSource(zeroChapter)).isEqualTo("manual.docx");
+        assertThat(RetrievalService.formatSource(missingChapter)).isEqualTo("manual.docx");
         }
 
         @Test
