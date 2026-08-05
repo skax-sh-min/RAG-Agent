@@ -17,6 +17,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * SQLite FTS5 keyword index over chunk content + extracted keywords.
@@ -46,6 +48,7 @@ public class KeywordSearchRepository {
     private static final Logger log = LoggerFactory.getLogger(KeywordSearchRepository.class);
 
     private static final String CHUNK_FTS = "chunk_fts";
+    private static final Pattern IMAGE_PATH_MARKER = Pattern.compile("\\[이미지:\\s*([^\\]]+)]");
 
     private static final String CREATE_CHUNK_FTS_SQL = """
             CREATE VIRTUAL TABLE IF NOT EXISTS %s USING fts5(
@@ -222,6 +225,7 @@ public class KeywordSearchRepository {
 
     /** Shared row mapper for both the BM25 MATCH path and the §10.7.3 LIKE fallback path. */
     private static final RowMapper<Document> CHUNK_ROW_MAPPER = (rs, n) -> {
+        String content = rs.getString("content");
         Map<String, Object> meta = new HashMap<>();
         meta.put(MetaKey.DOC_ID, rs.getString("doc_id"));
         meta.put(MetaKey.VERSION, rs.getString("version"));
@@ -229,12 +233,29 @@ public class KeywordSearchRepository {
         meta.put(MetaKey.PAGE_OR_SLIDE, rs.getString("page"));
         meta.put(MetaKey.CHUNK_INDEX, rs.getString("chunk_index"));
         meta.put(MetaKey.TAGS, rs.getString("doc_tags"));  // 태그 동행
+        String imagePaths = extractImagePaths(content);
+        if (!imagePaths.isBlank()) {
+            meta.put(MetaKey.IMAGE_PATHS, imagePaths);
+        }
         return Document.builder()
                 .id(rs.getString("spring_doc_id"))
-                .text(rs.getString("content"))
+                .text(content)
                 .metadata(meta)
                 .build();
     };
+
+    private static String extractImagePaths(String text) {
+        if (text == null || text.isBlank()) return "";
+        List<String> paths = new ArrayList<>();
+        Matcher m = IMAGE_PATH_MARKER.matcher(text);
+        while (m.find()) {
+            String path = m.group(1) == null ? "" : m.group(1).strip();
+            if (!path.isEmpty() && !paths.contains(path)) {
+                paths.add(path);
+            }
+        }
+        return String.join(",", paths);
+    }
 
     /**
      * BM25-ranked lexical search over content + keywords, filtered by version.
