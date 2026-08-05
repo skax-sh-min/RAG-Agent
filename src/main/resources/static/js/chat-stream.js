@@ -253,7 +253,7 @@
         if (!container || !imageRefs || imageRefs.length === 0) return;
         const thumbs = imageRefs.map(ref => {
             const url = escHtml('/api/v1/' + encodeURI(ref));
-            return `<a href="${url}" target="_blank" rel="noopener">
+            return `<a href="#" class="chat-image-thumb" data-image-ref="${escHtml(ref)}" data-turn-id="" data-bubble-id="${bubbleId}">
                 <img src="${url}" alt="참조 이미지" loading="lazy"
                      style="max-height:120px; max-width:180px; object-fit:contain; border:1px solid var(--border-default, #dee2e6); border-radius:4px;" />
             </a>`;
@@ -405,6 +405,11 @@
         }
 
         scrollToBottom();
+
+        if (data.turnId) {
+            document.querySelectorAll(`#stream-images-${bubbleId} .chat-image-thumb`)
+                .forEach(el => { el.dataset.turnId = String(data.turnId); });
+        }
     }
 
     function onError(bubbleId, message) {

@@ -100,6 +100,7 @@ public class AgentService {
                     askedAt, result.totalInputTokens(), result.totalOutputTokens(),
                     (int) elapsedMs, result.usedProvider(), result.llmCallCount(),
                     request.responseMode().name(), TagUtils.toMetaValue(request.selectedTags()));
+                        memoryService.saveTurnImageRefs(turnId, userId, request.threadId(), result.imageRefs());
             if (questionReuseService != null) {
                 questionReuseService.recordTurnSources(turnId, userId, request.threadId(), result.retrievedDocs());
             }

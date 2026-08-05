@@ -109,6 +109,7 @@ public class ChatController {
             model.addAttribute("historyCount", threadMetaService.countTurns(userId, threadId));
             var turns = memoryService.getTurns(userId, threadId);
             model.addAttribute("turns", turns);
+            model.addAttribute("turnImageRefsByTurnId", memoryService.getTurnImageRefs(userId, threadId));
             // §10.10 embedding-fallback — badge for turns whose curated Q&A promotion never
             // managed to embed (surfaced here since it can only be known after the fact; the
             // background embed attempt runs seconds after the like, long past this page's

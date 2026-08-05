@@ -11,7 +11,9 @@ import org.springframework.stereotype.Repository;
 import java.sql.PreparedStatement;
 import java.sql.Statement;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 @Repository
@@ -76,6 +78,19 @@ public class SqliteMemoryRepository implements MemoryRepository {
                 "CREATE INDEX IF NOT EXISTS idx_turns_user_thread ON conversation_turns(user_id, thread_id)");
             jdbc.execute(
                 "CREATE INDEX IF NOT EXISTS idx_turns_reused_from ON conversation_turns(reused_from_turn_id)");
+            jdbc.execute("""
+                CREATE TABLE IF NOT EXISTS turn_image_ref (
+                    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                    turn_id    INTEGER NOT NULL,
+                    user_id    TEXT NOT NULL,
+                    thread_id  TEXT NOT NULL,
+                    image_ref  TEXT NOT NULL,
+                    status     TEXT NOT NULL DEFAULT 'active',
+                    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+                )
+                """);
+            jdbc.execute("CREATE INDEX IF NOT EXISTS idx_turn_image_turn ON turn_image_ref(turn_id)");
+            jdbc.execute("CREATE INDEX IF NOT EXISTS idx_turn_image_user_thread ON turn_image_ref(user_id, thread_id)");
         jdbc.execute("""
                 CREATE TABLE IF NOT EXISTS image_descriptions (
                     image_path  TEXT    PRIMARY KEY,
@@ -162,7 +177,55 @@ public class SqliteMemoryRepository implements MemoryRepository {
 
     @Override
     public void clearHistory(String userId, String threadId) {
+        jdbc.update("DELETE FROM turn_image_ref WHERE user_id = ? AND thread_id = ?", userId, threadId);
         jdbc.update("DELETE FROM conversation_turns WHERE user_id = ? AND thread_id = ?", userId, threadId);
+    }
+
+    @Override
+    public void saveTurnImageRefs(long turnId, String userId, String threadId, List<String> imageRefs) {
+        if (turnId <= 0 || imageRefs == null || imageRefs.isEmpty()) return;
+        List<String> rows = imageRefs.stream()
+                .filter(v -> v != null && !v.isBlank())
+                .map(String::strip)
+                .distinct()
+                .toList();
+        if (rows.isEmpty()) return;
+        jdbc.batchUpdate(
+                "INSERT INTO turn_image_ref (turn_id, user_id, thread_id, image_ref, status) VALUES (?, ?, ?, ?, 'active')",
+                rows,
+                rows.size(),
+                (ps, ref) -> {
+                    ps.setLong(1, turnId);
+                    ps.setString(2, userId);
+                    ps.setString(3, threadId);
+                    ps.setString(4, ref);
+                }
+        );
+    }
+
+    @Override
+    public Map<Long, List<String>> getTurnImageRefs(String userId, String threadId) {
+        List<Map<String, Object>> rows = jdbc.queryForList(
+                "SELECT turn_id, image_ref FROM turn_image_ref " +
+                "WHERE user_id = ? AND thread_id = ? AND status = 'active' ORDER BY id ASC",
+                userId, threadId);
+        Map<Long, List<String>> out = new LinkedHashMap<>();
+        for (Map<String, Object> row : rows) {
+            Number turn = (Number) row.get("turn_id");
+            if (turn == null) continue;
+            String ref = String.valueOf(row.getOrDefault("image_ref", "")).strip();
+            if (ref.isBlank()) continue;
+            out.computeIfAbsent(turn.longValue(), k -> new ArrayList<>()).add(ref);
+        }
+        return out;
+    }
+
+    @Override
+    public void excludeTurnImageRef(String userId, String threadId, long turnId, String imageRef) {
+        if (turnId <= 0 || imageRef == null || imageRef.isBlank()) return;
+        jdbc.update("UPDATE turn_image_ref SET status='inactive' " +
+                        "WHERE user_id = ? AND thread_id = ? AND turn_id = ? AND image_ref = ? AND status = 'active'",
+                userId, threadId, turnId, imageRef.strip());
     }
 
     @Override

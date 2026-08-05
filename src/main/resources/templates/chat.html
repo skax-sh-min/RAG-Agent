@@ -151,6 +151,19 @@
                         <div class="bubble-assistant p-3 flex-grow-1">
                             <div class="md-content" th:attr="data-md=${turn.answer}"></div>
 
+                               <div th:if="${turnImageRefsByTurnId != null and turnImageRefsByTurnId[turn.id] != null and !#lists.isEmpty(turnImageRefsByTurnId[turn.id])}"
+                                   class="mt-2 d-flex flex-wrap gap-2">
+                                  <a th:each="ref : ${turnImageRefsByTurnId[turn.id]}"
+                                    href="#"
+                                    class="chat-image-thumb"
+                                    th:attr="data-image-ref=${ref},data-turn-id=${turn.id}">
+                                     <img th:src="@{'/api/v1/' + ${ref}}"
+                                         alt="참조 이미지"
+                                         style="max-height:120px; max-width:180px; object-fit:contain; border:1px solid var(--border-default, #dee2e6); border-radius:4px;"
+                                         loading="lazy" />
+                                  </a>
+                               </div>
+
                             <!-- Feedback (like/dislike) + Metadata, same line -->
                             <div class="mt-1 d-flex align-items-center flex-wrap gap-2">
                                 <div class="feedback-controls d-flex gap-1"
@@ -327,6 +340,23 @@
             </button>
         </div>
     </div>
+
+    <div class="modal fade" id="chatImageModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered modal-lg">
+            <div class="modal-content">
+                <div class="modal-body p-2 text-center bg-dark">
+                    <img id="chat-image-modal-img" src="" alt="확대 이미지"
+                         style="max-width:100%; max-height:75vh; object-fit:contain;" />
+                </div>
+                <div class="modal-footer py-2">
+                    <button type="button" class="btn btn-sm btn-secondary" data-bs-dismiss="modal"
+                            th:text="#{action.close}">닫기</button>
+                    <button type="button" class="btn btn-sm btn-outline-danger" id="chat-image-exclude-btn"
+                            th:text="#{chat.image.exclude}">대화에서 제외하기</button>
+                </div>
+            </div>
+        </div>
+    </div>
 </div>
 
 <th:block layout:fragment="scripts">
@@ -348,6 +378,11 @@
     window.isSourcePreviewEnabled = function () {
         return !!SOURCE_PREVIEW_ENABLED;
     };
+    const imageModalEl = document.getElementById('chatImageModal');
+    const imageModal = imageModalEl ? bootstrap.Modal.getOrCreateInstance(imageModalEl) : null;
+    const imageModalImg = document.getElementById('chat-image-modal-img');
+    const imageExcludeBtn = document.getElementById('chat-image-exclude-btn');
+    let activeImageContext = null;
 
     /* RAG ↔ Direct LLM 토글 */
     const labelRag    = /*[[#{chat.direct.label.rag}]]*/ 'RAG';
@@ -723,6 +758,53 @@
             .replace(/&/g, '&amp;').replace(/</g, '&lt;')
             .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
     }
+
+    function openImageModal(anchor) {
+        if (!imageModal || !imageModalImg) return;
+        const imageRef = anchor.dataset.imageRef || '';
+        if (!imageRef) return;
+        imageModalImg.src = '/api/v1/' + encodeURI(imageRef);
+        activeImageContext = {
+            imageRef,
+            turnId: anchor.dataset.turnId || ''
+        };
+        imageExcludeBtn.disabled = !(activeImageContext.turnId && activeImageContext.imageRef);
+        imageModal.show();
+    }
+
+    async function excludeActiveImage() {
+        if (!activeImageContext || !activeImageContext.turnId || !activeImageContext.imageRef) return;
+        const threadId = chatForm.querySelector('input[name="threadId"]').value;
+        const body = new URLSearchParams({ imageRef: activeImageContext.imageRef });
+        const res = await fetch(`/ui/threads/${encodeURIComponent(threadId)}/turns/${encodeURIComponent(activeImageContext.turnId)}/images/exclude`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded', ...getCsrfHeaders() },
+            body
+        });
+        if (!res.ok) throw new Error('exclude failed');
+        document.querySelectorAll('.chat-image-thumb').forEach(el => {
+            if ((el.dataset.turnId || '') === activeImageContext.turnId
+                && (el.dataset.imageRef || '') === activeImageContext.imageRef) {
+                el.remove();
+            }
+        });
+        imageModal.hide();
+    }
+
+    if (imageExcludeBtn) {
+        imageExcludeBtn.addEventListener('click', function () {
+            excludeActiveImage().catch(() => {
+                if (typeof showToast === 'function') showToast('이미지 제외 처리에 실패했습니다.', 'warning');
+            });
+        });
+    }
+
+    document.addEventListener('click', function (e) {
+        const thumb = e.target.closest('.chat-image-thumb');
+        if (!thumb) return;
+        e.preventDefault();
+        openImageModal(thumb);
+    });
 
     /* Before request: optimistic user bubble + clear input */
     chatForm.addEventListener('htmx:beforeRequest', function () {

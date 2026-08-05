@@ -5,6 +5,7 @@ import com.example.ragagent.repository.MemoryRepository;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -63,6 +64,18 @@ public class MemoryService {
 
     public void clearHistory(String userId, String threadId) {
         repository.clearHistory(userId, threadId);
+    }
+
+    public void saveTurnImageRefs(long turnId, String userId, String threadId, List<String> imageRefs) {
+        repository.saveTurnImageRefs(turnId, userId, threadId, imageRefs);
+    }
+
+    public Map<Long, List<String>> getTurnImageRefs(String userId, String threadId) {
+        return repository.getTurnImageRefs(userId, threadId);
+    }
+
+    public void excludeTurnImageRef(String userId, String threadId, long turnId, String imageRef) {
+        repository.excludeTurnImageRef(userId, threadId, turnId, imageRef);
     }
 
     public List<MemoryRepository.Turn> getTurns(String userId, String threadId) {

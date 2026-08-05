@@ -391,6 +391,7 @@ rag_java/
 - **속도 제한** — Bucket4j + Caffeine 유저별 토큰버킷; 429 `RAG-RATE-001` + `Retry-After` 헤더; `app.rate-limit.*`로 설정
 - **감사 로그** — Logback 롤링 파일에 구조화된 이벤트 기록; `app.audit.*`로 설정
 - **이미지 처리 파이프라인** — PDF/PPTX/DOCX 이미지 추출 → `data/images/{imageId}/` 저장(문서 SHA-256 기반 해시 키 — 문서 자체의 `docId`와는 별개이며, 긴 파일명이 이미지마다 반복 저장되는 것을 방지); PPTX에서 사진 위에 강조 원·화살표 같은 주석 도형이 겹쳐 있으면 하나의 합성 이미지로 병합(`app.pptx-image.merge-annotated-pictures`), 표 위에 겹친 주석 도형도 표+도형 합성(표는 MD 표로도 유지)하며 실제 Ctrl+G 그룹·SmartArt는 각 한 장으로 유지; 앵커에 안 겹친 느슨한 도형끼리의 병합은 `app.pptx-image.rasterize-shapes=true`일 때만(기본 off). DOCX도 사진과 같은 문단의 레거시 VML 주석 도형(사각형/원/선)을 하나로 병합(`app.docx-image.merge-annotated-shapes` — POI가 DOCX 도형 좌표를 노출하지 않아 같은 문단 근사 방식); 검색 시점 Lazy Vision 설명 생성 (SQLite 캐시); 답변 버블에 이미지 썸네일 표시
+- **대화 이미지 유지 + 개별 제외** — 답변에 표시된 관련 이미지를 turn 단위로 영속 저장해(`/chat/{threadId}` 재진입 시 복원) 페이지를 새로고침해도 사라지지 않음. 썸네일 클릭 시 확대 모달이 열리고, 모달의 **"대화에서 제외하기"**를 누르면 해당 turn의 해당 이미지 1개만 비활성화되어 이후 동일 대화에서 다시 보이지 않음(원본 파일/문서 인덱스는 삭제되지 않음)
 - **채팅 중 이미지 분석 진행 표시 + 건너뛰기** — 검색 결과에 아직 청크 텍스트에 설명이 임베딩되지 않은 이미지가 포함돼 있으면 답변 생성 전에 Lazy Vision이 해당 이미지를 분석하며, 헤더 배지에 "이미지 분석 중 (2/5)"처럼 분석 완료 개수가 실시간으로 표시됨. 옆의 **건너뛰기** 링크는 *대기*만 중단할 뿐 — 분석 자체는 백그라운드에서 계속 진행되어 SQLite 캐시에 저장되므로 다음에 같은 이미지가 다시 검색되면 즉시 재사용됨. 업로드 시 "이미지 설명 추가"로 이미 `[이미지 설명: ...]`이 청크에 임베딩된 이미지는 쿼리 시점에 재분석하지 않음
 - **이미지 유형 분류** — diagram / screenshot / chart / photo / other 분류 후 유형별 전용 Vision 프롬프트 적용
 - **스캔 PDF OCR** — Tesseract OCR (kor+eng)로 텍스트 없는 페이지 처리 (`app.image-description.ocr-enabled=true`)
@@ -422,6 +423,7 @@ rag_java/
 | `GET/POST` | `/curated/submissions` | 지식 제안 게시판 — 청크 직접 등록 + 처리 결과 확인 |
 | `POST` | `/curated/submissions/images` | 제안 본문 이미지 업로드 → 커서 위치에 끼워 넣을 `[이미지: …]` 마커 반환 |
 | `GET` | `/llm-usage` | LLM 사용량 통계 페이지 |
+| `PATCH` | `/ui/threads/{threadId}/turns/{turnId}/images/exclude` | 채팅 답변 썸네일에서 특정 이미지를 현재 대화 기록에서만 제외 |
 
 ### REST API
 

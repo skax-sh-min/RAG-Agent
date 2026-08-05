@@ -1,6 +1,7 @@
 package com.example.ragagent.repository;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 public interface MemoryRepository {
@@ -25,6 +26,15 @@ public interface MemoryRepository {
     }
 
     void clearHistory(String userId, String threadId);
+
+    /** Persist image refs shown with a turn (answer thumbnails in chat UI). */
+    void saveTurnImageRefs(long turnId, String userId, String threadId, List<String> imageRefs);
+
+    /** Active image refs by turn id, for restoring chat history. */
+    Map<Long, List<String>> getTurnImageRefs(String userId, String threadId);
+
+    /** Hides one image from a turn in this conversation (soft delete). */
+    void excludeTurnImageRef(String userId, String threadId, long turnId, String imageRef);
 
     /** Returns all turns for the thread in chronological order (oldest first). */
     List<Turn> getTurns(String userId, String threadId);
