@@ -204,7 +204,7 @@
        excerpt is readable without as much wrapping. Mobile keeps Bootstrap's default —
        a viewport this narrow has no room to spare for a wider popover. */
     .popover {
-        max-width: 560px;
+        max-width: 620px;
         font-size: 0.8rem;
     }
 }

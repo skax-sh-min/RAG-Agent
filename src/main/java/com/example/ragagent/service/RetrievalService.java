@@ -223,7 +223,7 @@ public class RetrievalService {
         List<SourceRef> sources = unique.stream()
                 .map(d -> new SourceRef(
                         formatSource(d),
-                        truncate(d.getText(), 500),   // UI 출처 hover 미리보기 길이
+                truncate(d.getText(), 600),   // UI 출처 hover 미리보기 길이
                         String.valueOf(d.getMetadata().getOrDefault(MetaKey.DOC_ID, "")),
                         d.getMetadata().getOrDefault(MetaKey.PAGE_OR_SLIDE, "?")))
                 .distinct()
@@ -482,14 +482,10 @@ public class RetrievalService {
     }
 
     /**
-     * Citation label: {@code "파일명 | 챕터번호"} when the chunk has a real chapter number
-     * ({@link MetaKey#CHAPTER_NO}, set by {@code DocumentLoaderService} from H2-H6 headings — "0"
-     * means no such heading applies, e.g. PPTX or before the first heading), else falls back to
-     * {@code "파일명 | p.N"} ({@link MetaKey#PAGE_OR_SLIDE}). A curated Q&A hit (§10.10,
-     * {@link MetaKey#DOC_TYPE} = {@code "curated_qa"}) has no real filename/page — it gets a fixed
-     * label instead of the misleading {@code "curated_qa | p.1"} placeholder metadata would
-     * otherwise produce. Static + package-private for unit testing (touches no instance state,
-     * same pattern as {@link #mergeRrf}).
+     * Citation label rules.
+     * Curated hit: fixed label.
+     * Chapter-based docs (docx/md/txt): "파일명 | ch X" when a real chapter exists, else "파일명 | ch ?".
+     * Page-based docs (pptx/pdf etc.): "파일명 | p.N".
      */
     static String formatSource(Document doc) {
         Map<String, Object> meta = doc.getMetadata();
@@ -497,12 +493,32 @@ public class RetrievalService {
             return "💬 큐레이션 Q&A";
         }
         String filename = String.valueOf(meta.getOrDefault(MetaKey.FILENAME, "unknown"));
-        Object chapterNo = meta.get(MetaKey.CHAPTER_NO);
-        if (chapterNo != null && !"0".equals(String.valueOf(chapterNo))) {
-            return "%s | %s".formatted(filename, chapterNo);
+        String chapter = normalizeChapterNo(meta.get(MetaKey.CHAPTER_NO));
+        if (chapter != null) {
+            return "%s | ch %s".formatted(filename, chapter);
+        }
+        if (isChapterStructuredFilename(filename)) {
+            return "%s | ch ?".formatted(filename);
         }
         Object page = meta.getOrDefault(MetaKey.PAGE_OR_SLIDE, "?");
         return "%s | p.%s".formatted(filename, page);
+    }
+
+    private static String normalizeChapterNo(Object chapterNo) {
+        if (chapterNo == null) return null;
+        if (chapterNo instanceof Number n) {
+            if (n.doubleValue() <= 0.0d) return null;
+            return normalizeIndex(n);
+        }
+        String raw = chapterNo.toString().trim();
+        if (raw.isEmpty()) return null;
+        if ("0".equals(raw) || "0.0".equals(raw)) return null;
+        return raw;
+    }
+
+    private static boolean isChapterStructuredFilename(String filename) {
+        String lower = filename.toLowerCase(Locale.ROOT);
+        return lower.endsWith(".docx") || lower.endsWith(".md") || lower.endsWith(".txt");
     }
 
     /**
