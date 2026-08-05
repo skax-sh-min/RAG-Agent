@@ -256,12 +256,6 @@
                             </select>
                         </div>
 
-                        <div class="form-check form-switch small mb-0">
-                            <input class="form-check-input" type="checkbox" role="switch"
-                                   id="source-preview-toggle" checked>
-                            <label class="form-check-label" for="source-preview-toggle">출처 미리보기</label>
-                        </div>
-
                         <!-- 응답 모드 S/M/L 토글 — 답변 길이·상세도 (기본 M).
                              L(원문 최대)은 RAG 검색 컨텍스트가 있을 때만 의미가 있어 Direct 모드에서 비활성화.
                              툴팁은 네이티브 title(브라우저 기본 지연 ~1.5s)이 아니라 Bootstrap Tooltip(짧은 delay)로 표시 — 하단 스크립트에서 초기화. -->
@@ -348,19 +342,12 @@
     const directModeInput = document.getElementById('form-direct-mode');
     const suggestBox      = document.getElementById('question-suggest-box');
     const reuseScopeSel   = document.getElementById('question-reuse-scope');
-    const sourcePreviewToggle = document.getElementById('source-preview-toggle');
     let suggestTimer      = null;
     let suggestSeq        = 0;
-    const SOURCE_PREVIEW_KEY = 'chatSourcePreviewEnabled';
-
+    const SOURCE_PREVIEW_ENABLED = /*[[${sourcePreviewEnabled}]]*/ true;
     window.isSourcePreviewEnabled = function () {
-        const raw = localStorage.getItem(SOURCE_PREVIEW_KEY);
-        return raw == null ? true : raw === 'true';
+        return !!SOURCE_PREVIEW_ENABLED;
     };
-    sourcePreviewToggle.checked = window.isSourcePreviewEnabled();
-    sourcePreviewToggle.addEventListener('change', function () {
-        localStorage.setItem(SOURCE_PREVIEW_KEY, this.checked ? 'true' : 'false');
-    });
 
     /* RAG ↔ Direct LLM 토글 */
     const labelRag    = /*[[#{chat.direct.label.rag}]]*/ 'RAG';
@@ -564,7 +551,7 @@
         return typeof DOMPurify !== 'undefined' ? DOMPurify.sanitize(html) : html;
     }
 
-    function appendReusedTurn(question, answer, turnId, provider, sourceChunkIds) {
+    function appendReusedTurn(question, answer, turnId, provider) {
         const t = new Date().toLocaleTimeString('ko-KR', {hour: '2-digit', minute: '2-digit', hour12: false});
         const userBubble = document.createElement('div');
         userBubble.className = 'd-flex justify-content-end mb-3 align-items-end';
@@ -591,9 +578,6 @@
                         `🤖 ${escHtml(provider || 'db-reuse')} · 🕐 ${escHtml(t)}` +
                     `</div>` +
                 `</div>` +
-                `${Array.isArray(sourceChunkIds) && sourceChunkIds.length > 0
-                    ? `<div class="small text-muted mt-1">📎 chunk: ${sourceChunkIds.map(v => `<span class="badge bg-light text-dark border me-1">${escHtml(v)}</span>`).join('')}</div>`
-                    : ''}` +
             `</div>` +
             `<i class="bi bi-robot fs-5 text-secondary ms-1 mt-1 flex-shrink-0"></i>`;
         chatMessages.appendChild(assistant);
@@ -633,7 +617,7 @@
             if (data.reused) {
                 questionInput.value = '';
                 questionInput.style.height = 'auto';
-                appendReusedTurn(data.question || '', data.answer || '', data.turnId || '', data.provider || 'db-reuse', data.sourceChunkIds || []);
+                appendReusedTurn(data.question || '', data.answer || '', data.turnId || '', data.provider || 'db-reuse');
                 return;
             }
             submitWithFallback(data.question || '', data.message || '기존 답변 검증에 실패하여 일반 질의로 전환합니다.');

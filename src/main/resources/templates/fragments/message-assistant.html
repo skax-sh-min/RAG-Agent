@@ -68,20 +68,9 @@
                                 data-bs-trigger='hover focus',
                                 data-bs-placement='left',
                                 data-bs-content=${src.preview}"></a>
-                    <span class="badge bg-light text-dark border ms-1"
-                          th:if="${src.chunkId != null and !#strings.isEmpty(src.chunkId)}"
-                          th:text="${src.chunkId}"></span>
                 </li>
             </ul>
         </details>
-
-        <div th:if="${sources != null and !#lists.isEmpty(sources)}" class="small text-muted mt-1">
-            📎 chunk:
-            <span th:each="src : ${sources}"
-                  th:if="${src.chunkId != null and !#strings.isEmpty(src.chunkId)}"
-                  class="badge bg-light text-dark border me-1"
-                  th:text="${src.chunkId}"></span>
-        </div>
 
         <!-- Feedback (like/dislike) + Metadata, same line -->
         <div class="mt-2 d-flex align-items-center flex-wrap gap-2">

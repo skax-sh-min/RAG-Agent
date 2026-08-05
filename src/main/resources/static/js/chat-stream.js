@@ -268,23 +268,13 @@
             ? window.isSourcePreviewEnabled()
             : true;
         const refs = sources.map(s => {
-            const chunkId = s.chunk_id || s.chunkId || '';
             const label = escHtml(s.label || '출처');
             const previewAttr = previewEnabled
                 ? `data-bs-toggle="popover" data-bs-trigger="hover focus" data-bs-placement="top" data-bs-content="${escHtml(s.preview || '')}"`
                 : '';
-            return `<span class="d-inline-flex align-items-center me-1 mb-1">`
-                + `<a href="#" class="source-ref badge bg-secondary text-decoration-none" ${previewAttr} title="${label}">${label}</a>`
-                + (chunkId ? `<span class="badge bg-light text-dark border ms-1">${escHtml(chunkId)}</span>` : '')
-                + `</span>`;
+            return `<a href="#" class="source-ref badge bg-secondary text-decoration-none me-1 mb-1" ${previewAttr} title="${label}">${label}</a>`;
         }).join('');
-        const chunkIds = sources
-            .map(s => s.chunk_id || s.chunkId || '')
-            .filter(Boolean)
-            .map(v => `<span class="badge bg-light text-dark border me-1">${escHtml(v)}</span>`)
-            .join('');
-        container.innerHTML = `<div class="mt-2">${refs}</div>`
-            + (chunkIds ? `<div class="small text-muted mt-1">📎 chunk: ${chunkIds}</div>` : '');
+        container.innerHTML = `<div class="mt-2">${refs}</div>`;
         if (previewEnabled) {
             container.querySelectorAll('[data-bs-toggle="popover"]')
                 .forEach(el => new bootstrap.Popover(el));

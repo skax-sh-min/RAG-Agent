@@ -186,17 +186,18 @@ class SettingsServiceTest {
     }
 
     @Test
-    @DisplayName("buildView — search_hot/fixed/indexing/llm_hot/cache 5그룹, 모든 핫 키가 편집 가능 항목으로 노출")
+    @DisplayName("buildView — search_hot/fixed/indexing/llm_hot/ui_hot/cache 6그룹, 모든 핫 키가 편집 가능 항목으로 노출")
     void buildView_structure() {
         SettingsView view = service.buildView();
 
-        assertThat(view.groups()).hasSize(5);
+        assertThat(view.groups()).hasSize(6);
         assertThat(view.groups().get(0).id()).isEqualTo("search_hot");
         assertThat(view.groups().get(0).items()).allMatch(SettingsView.SettingItem::editable);
         // indexing + llm_hot groups exist (chunk/file-concurrency + direct-temperature knobs live here)
         assertThat(view.groups()).anyMatch(g -> g.id().equals("indexing"));
         assertThat(view.groups()).anyMatch(g -> g.id().equals("llm_hot"));
-        // every hot-editable key is rendered as an editable row somewhere (search_hot + indexing + llm_hot)
+        assertThat(view.groups()).anyMatch(g -> g.id().equals("ui_hot"));
+        // every hot-editable key is rendered as an editable row somewhere (search_hot + indexing + llm_hot + ui_hot)
         long editableCount = view.groups().stream()
                 .flatMap(g -> g.items().stream())
                 .filter(SettingsView.SettingItem::editable)

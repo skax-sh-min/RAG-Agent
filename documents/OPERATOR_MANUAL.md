@@ -1883,6 +1883,16 @@ env-var/application.properties value ({설정값}); the override wins. Reset it 
 |------|----|------|
 | Direct(잡담) 응답 temperature | `app.llm.direct-temperature` (`DIRECT_LLM_TEMPERATURE`) | 0.0 ~ 1.0 |
 
+**핫 수정 가능 — UI (재기동 불필요, 다음 화면 렌더부터 반영)**:
+
+| 항목 | 키 | 범위 |
+|------|----|------|
+| 출처 미리보기 표시 | `ui.source-preview-enabled` | true/false |
+
+- 기본값은 `true`(ON)이며, 관리자 설정으로 시스템 전체에 적용됩니다.
+- 이 값이 `false`면 채팅의 출처 배지 팝오버 미리보기를 초기화하지 않습니다.
+- 사용자 로컬 토글(localStorage)은 사용하지 않고, 서버 모델값으로 일관 적용합니다.
+
 - **"기본값" 버튼**으로 오버라이드를 삭제하면 `application.properties`/환경변수 값으로 정확히 복귀합니다(오버라이드가 있으면 항상 프로퍼티보다 우선).
 - 오버라이드는 **재기동 후에도 유지**됩니다(테이블에 영속). 배포 기본값 자체를 바꾸려면 여전히 환경변수/`application.properties`를 수정하세요 — 오버라이드는 그 위에 얹히는 런타임 조정 레이어입니다.
 
@@ -2106,8 +2116,13 @@ mvn test -Dtest=SearchQualityEvaluationTest -Dsearch-eval.enabled=true
 
 - 추천 조회: `GET /api/v1/questions/suggest?q=...&scope=shared|me&limit=...`
 - 재사용 시도: `POST /api/v1/questions/reuse`
-- 재사용 성공: 기존 답변을 새 turn으로 저장(`provider=db-reuse`)
+- 재사용 성공: 기존 답변을 새 turn으로 저장(`provider=db-reuse`, `reused_from_turn_id` 참조 저장)
 - 재사용 실패: `fallback=true`와 사유를 반환, 클라이언트가 일반 질의 파이프라인으로 즉시 전환
+
+추천 결과 품질을 위해 다음 필터를 함께 적용합니다.
+
+- `provider=db-reuse`로 저장된 turn은 추천 후보에서 제외
+- 질문 정규화(공백/대소문자) 기반 중복 제거
 
 #### API 오류/폴백 응답 요약
 
@@ -2125,6 +2140,14 @@ mvn test -Dtest=SearchQualityEvaluationTest -Dsearch-eval.enabled=true
 - 저장 시점: 일반/스트리밍 답변이 turn으로 저장된 직후
 - 내용: `turn_id`, `chunk_id`, `chunk_hash`, `status(active|inactive)` 등
 - 목적: "당시 답변이 어떤 청크 집합을 근거로 했는지"를 고정 스냅샷으로 보존
+
+`db-reuse` 저장은 답변 본문을 중복 저장하지 않고 참조로 기록합니다.
+
+- `conversation_turns.reused_from_turn_id`: 원본 turn id 참조
+- `conversation_turns.answer`: 빈 문자열 저장(중복 데이터 절감)
+- 조회 시 `COALESCE(src.answer, t.answer)`로 원본 답변 복원
+
+원본 turn이 이후 삭제되면(예: 스레드 삭제), 참조 turn은 유지되지만 복원할 `src`가 없어 `t.answer`(빈값)로 표시될 수 있습니다. 이 경우 서버 에러로 처리하지 않으며, 현재 정책상 정상 동작입니다.
 
 #### 유효성 검증 규칙
 

@@ -11,6 +11,7 @@ import com.example.ragagent.service.ConversationSummarizerService;
 import com.example.ragagent.service.CuratedQaService;
 import com.example.ragagent.service.MemoryService;
 import com.example.ragagent.service.QuestionReuseService;
+import com.example.ragagent.service.SettingsService;
 import com.example.ragagent.service.StreamingAgentService;
 import com.example.ragagent.service.ThreadMetaService;
 import com.example.ragagent.config.AppProperties;
@@ -58,6 +59,7 @@ public class ChatController {
     private final MessageSource messageSource;
     private final ChatImageAnalysisSkipRegistry imageSkipRegistry;
     private final QuestionReuseService questionReuseService;
+    private final SettingsService settingsService;
 
     @Autowired
     public ChatController(AgentService agentService,
@@ -70,7 +72,8 @@ public class ChatController {
                           LlmRouter llmRouter,
                           MessageSource messageSource,
                           ChatImageAnalysisSkipRegistry imageSkipRegistry,
-                          ObjectProvider<QuestionReuseService> questionReuseService) {
+                          ObjectProvider<QuestionReuseService> questionReuseService,
+                          SettingsService settingsService) {
         this.agentService = agentService;
         this.streamingAgentService = streamingAgentService;
         this.threadMetaService = threadMetaService;
@@ -82,6 +85,7 @@ public class ChatController {
         this.messageSource = messageSource;
         this.imageSkipRegistry = imageSkipRegistry;
         this.questionReuseService = questionReuseService.getIfAvailable();
+        this.settingsService = settingsService;
     }
 
     // ── Page routes ───────────────────────────────────────────────────
@@ -317,5 +321,6 @@ public class ChatController {
         model.addAttribute("hasLocalProvider", llmRouter.hasLocalProvider());
         model.addAttribute("localOnlyDeployment", llmRouter.getDefaultMode() == RoutingMode.LOCAL_ONLY);
         model.addAttribute("routingMode", meta != null ? meta.routingMode() : "COST_FIRST");
+        model.addAttribute("sourcePreviewEnabled", settingsService.sourcePreviewEnabled());
     }
 }

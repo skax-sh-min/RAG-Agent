@@ -15,6 +15,7 @@ import com.example.ragagent.service.ChatImageAnalysisSkipRegistry;
 import com.example.ragagent.service.ConversationSummarizerService;
 import com.example.ragagent.service.CuratedQaService;
 import com.example.ragagent.service.MemoryService;
+import com.example.ragagent.service.SettingsService;
 import com.example.ragagent.service.StreamingAgentService;
 import com.example.ragagent.service.ThreadMetaService;
 import org.junit.jupiter.api.DisplayName;
@@ -69,6 +70,7 @@ class ChatControllerHtmxTest {
     @MockitoBean CuratedQaService curatedQaService;
     @MockitoBean AppProperties props;
     @MockitoBean LlmRouter llmRouter;
+        @MockitoBean SettingsService settingsService;
     @MockitoBean ChatModel chatModel;
     @MockitoBean ThreadContextResolver threadContextResolver;
     @MockitoBean ChatImageAnalysisSkipRegistry imageSkipRegistry;
