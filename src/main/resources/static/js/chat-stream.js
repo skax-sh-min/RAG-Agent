@@ -112,7 +112,6 @@
         wrap.id = `bubble-${bubbleId}`;
         wrap.className = 'd-flex align-items-end mb-3';
         wrap.innerHTML = `
-            <i class="bi bi-robot fs-5 text-secondary me-1 mt-1 flex-shrink-0"></i>
             <div class="bubble-assistant p-3 flex-grow-1">
                 <div id="stream-stage-${bubbleId}" class="stream-stage small text-muted mb-1">
                     <span class="spinner-border spinner-border-sm me-1" role="status"></span>
@@ -124,7 +123,8 @@
                 <div id="stream-images-${bubbleId}"></div>
                 <div id="stream-sources-${bubbleId}"></div>
                 <div id="stream-meta-${bubbleId}" class="mt-2 d-flex align-items-center flex-wrap gap-2" style="font-size:0.72rem;"></div>
-            </div>`;
+            </div>
+            <i class="bi bi-robot fs-5 text-secondary ms-1 mt-1 flex-shrink-0"></i>`;
         document.getElementById('chat-messages').appendChild(wrap);
 
         const skipBtn = document.getElementById(`stream-skip-images-${bubbleId}`);
@@ -409,10 +409,11 @@
         if (bubble) {
             bubble.outerHTML =
                 `<div class="d-flex align-items-start mb-3">` +
-                `<i class="bi bi-robot fs-5 text-secondary me-2 mt-1 flex-shrink-0"></i>` +
                 `<div class="bubble-assistant p-3 flex-grow-1 text-danger">` +
                 `<i class="bi bi-exclamation-triangle me-1"></i>${escHtml(message || '오류가 발생했습니다.')}` +
-                `</div></div>`;
+                `</div>` +
+                `<i class="bi bi-robot fs-5 text-secondary ms-2 mt-1 flex-shrink-0"></i>` +
+                `</div>`;
         }
     }
 
