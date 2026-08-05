@@ -40,6 +40,15 @@ class AppPropertiesOverrideTest {
                 null, 1.0, 60, null, null, null, null, null, null, null, null, null, null, null, null, null, null);
     }
 
+    /** Same as {@link #base()} but with a configured {@code LlmConfig} (base() leaves it null). */
+    private static AppProperties withLlm(AppProperties.LlmConfig llm) {
+        return new AppProperties(
+                "./data", 2, 800, 100, 100, 7, 0.0, true, 5, false,
+                true, false, 3, null,
+                llm, null, null, null, null, null, null, null, null, null, null, 2,
+                null, 1.0, 60, null, null, null, null, null, null, null, null, null, null, null, null, null, null);
+    }
+
     private final Map<String, String> overrides = new HashMap<>();
 
     private void bind() {
@@ -195,7 +204,7 @@ class AppPropertiesOverrideTest {
     }
 
     @Test
-    @DisplayName("LLM — direct-temperature 오버라이드가 llmSafe()에 반영되고 [0.0, 0.2]로 clamp된다 (§6.18)")
+    @DisplayName("LLM — direct-temperature 오버라이드가 llmSafe()에 반영되고 [0.0, 1.0]으로 clamp된다 (§6.18)")
     void override_directTemperature() {
         bind();
         assertThat(base().llmSafe().directTemperature()).isEqualTo(0.1); // 기본값
@@ -204,8 +213,18 @@ class AppPropertiesOverrideTest {
         overrides.put(SettingsKeys.LLM_DIRECT_TEMPERATURE, "0.05");
         assertThat(base().llmSafe().directTemperature()).isEqualTo(0.05);
 
-        overrides.put(SettingsKeys.LLM_DIRECT_TEMPERATURE, "0.9"); // > 0.2 → clamp
-        assertThat(base().llmSafe().directTemperature()).isEqualTo(0.2);
+        overrides.put(SettingsKeys.LLM_DIRECT_TEMPERATURE, "1.5"); // > 1.0 → clamp
+        assertThat(base().llmSafe().directTemperature()).isEqualTo(1.0);
+    }
+
+    @Test
+    @DisplayName("LLM — 일반/RAG temperature는 [0.0, 0.3]으로 clamp된다")
+    void ragTemperature_isClampedToPointThree() {
+        AppProperties p = withLlm(new AppProperties.LlmConfig(
+                java.util.List.of(), 2, 10, 180, "COST_FIRST", 0.6, 3, 20,
+                1.2, 0.1, 6000, true));
+
+        assertThat(p.llmSafe().temperature()).isEqualTo(0.3);
     }
 
     @Test

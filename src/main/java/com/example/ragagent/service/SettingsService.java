@@ -81,7 +81,7 @@ public class SettingsService implements AppProperties.OverrideSource {
 
     // Insertion order = render order in the "LLM 튜닝" group. Apply on the next LLM call (§6.18).
     private static final List<Spec> LLM_HOT_SPECS = List.of(
-            new Spec(SettingsKeys.LLM_DIRECT_TEMPERATURE,         Kind.DOUBLE, 0.0, 0.2,  0.05, "settings.item.direct-temperature")
+            new Spec(SettingsKeys.LLM_DIRECT_TEMPERATURE,         Kind.DOUBLE, 0.0, 1.0,  0.05, "settings.item.direct-temperature")
     );
 
     private static final Map<String, Spec> SPECS;
