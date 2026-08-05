@@ -1,6 +1,7 @@
 package com.example.ragagent.service;
 
 import com.example.ragagent.model.MetaKey;
+import com.example.ragagent.model.SourceRef;
 import com.example.ragagent.repository.QuestionReuseRepository;
 import org.springframework.ai.document.Document;
 import org.springframework.stereotype.Service;
@@ -126,6 +127,13 @@ public class QuestionReuseService {
         return ReuseLookup.reusable(turn.turnId(), turn.question(), turn.answer(), turn.threadId(), chunkIds);
     }
 
+    public List<SourceRef> sourceRefsForTurn(long turnId) {
+        if (turnId <= 0) return List.of();
+        return repository.findSourcePreviewRows(turnId).stream()
+                .map(this::toSourceRef)
+                .toList();
+    }
+
     public ValidationResult validateTurn(long turnId) {
         List<QuestionReuseRepository.SourceSnapshot> refs = repository.findSourceRefs(turnId);
         if (refs.isEmpty()) {
@@ -167,6 +175,23 @@ public class QuestionReuseService {
                 .replaceAll("\\s+", " ")
                 .strip()
                 .toLowerCase(Locale.ROOT);
+    }
+
+    private SourceRef toSourceRef(QuestionReuseRepository.SourcePreviewRow row) {
+        String filename = (row.filename() == null || row.filename().isBlank())
+                ? (row.docId() == null ? "source" : row.docId())
+                : row.filename();
+        String page = row.pageOrSlide();
+        String label = (page == null || page.isBlank() || "null".equalsIgnoreCase(page))
+                ? filename
+                : filename + " | p." + page;
+        String preview = truncate(row.content(), 600);
+        return new SourceRef(label, preview, row.chunkId(), row.docId(), page == null ? "?" : page);
+    }
+
+    private static String truncate(String text, int maxLen) {
+        if (text == null || text.isBlank()) return "";
+        return text.length() <= maxLen ? text : text.substring(0, maxLen);
     }
 
     private static boolean isTooLongForSuggestion(String question) {

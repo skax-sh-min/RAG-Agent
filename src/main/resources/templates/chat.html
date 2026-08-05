@@ -164,6 +164,18 @@
                                   </a>
                                </div>
 
+                                     <div th:if="${turnSourcesByTurnId != null and turnSourcesByTurnId[turn.id] != null and !#lists.isEmpty(turnSourcesByTurnId[turn.id])}"
+                                            class="mt-2">
+                                          <a th:each="src : ${turnSourcesByTurnId[turn.id]}"
+                                              href="#"
+                                              class="source-ref badge bg-secondary text-decoration-none me-1 mb-1"
+                                              th:text="${src.label}"
+                                              th:attr="data-bs-toggle='popover',
+                                                          data-bs-trigger='hover focus',
+                                                          data-bs-placement='top',
+                                                          data-bs-content=${src.preview}"></a>
+                                     </div>
+
                             <!-- Feedback (like/dislike) + Metadata, same line -->
                             <div class="mt-1 d-flex align-items-center flex-wrap gap-2">
                                 <div class="feedback-controls d-flex gap-1"
@@ -586,7 +598,36 @@
         return typeof DOMPurify !== 'undefined' ? DOMPurify.sanitize(html) : html;
     }
 
-    function appendReusedTurn(question, answer, turnId, provider) {
+    function renderSourceBadges(sources) {
+        if (!Array.isArray(sources) || sources.length === 0) return '';
+        const previewEnabled = typeof window.isSourcePreviewEnabled === 'function'
+            ? window.isSourcePreviewEnabled()
+            : true;
+        const refs = sources.map(s => {
+            const label = escHtml((s && s.label) ? s.label : '출처');
+            const preview = escHtml((s && s.preview) ? s.preview : '');
+            const popoverAttrs = previewEnabled
+                ? `data-bs-toggle="popover" data-bs-trigger="hover focus" data-bs-placement="top" data-bs-content="${preview}"`
+                : '';
+            return `<a href="#" class="source-ref badge bg-secondary text-decoration-none me-1 mb-1" ${popoverAttrs} title="${label}">${label}</a>`;
+        }).join('');
+        return `<div class="mt-2">${refs}</div>`;
+    }
+
+    function initSourcePopovers(rootEl) {
+        if (!rootEl) return;
+        const previewEnabled = typeof window.isSourcePreviewEnabled === 'function'
+            ? window.isSourcePreviewEnabled()
+            : true;
+        rootEl.querySelectorAll('.source-ref').forEach(function (el) {
+            if (previewEnabled && el.hasAttribute('data-bs-toggle')) {
+                new bootstrap.Popover(el);
+            }
+        });
+    }
+    initSourcePopovers(document);
+
+    function appendReusedTurn(question, answer, turnId, provider, sources) {
         const t = new Date().toLocaleTimeString('ko-KR', {hour: '2-digit', minute: '2-digit', hour12: false});
         const userBubble = document.createElement('div');
         userBubble.className = 'd-flex justify-content-end mb-3 align-items-end';
@@ -603,6 +644,7 @@
         assistant.innerHTML =
             `<div class="bubble-assistant p-3 flex-grow-1">` +
                 `<div class="md-content">${renderMarkdownText(answer)}</div>` +
+                `${renderSourceBadges(sources)}` +
                 `<div class="mt-1 d-flex align-items-center flex-wrap gap-2">` +
                     `<div class="feedback-controls d-flex gap-1" data-turn-id="${turnId}" data-thread-id="${escHtml(chatForm.querySelector('input[name="threadId"]').value)}">` +
                         `<button type="button" class="btn btn-sm btn-outline-secondary feedback-btn" data-feedback="LIKE" aria-label="좋아요" title="좋아요">👍</button>` +
@@ -616,6 +658,7 @@
             `</div>` +
             `<i class="bi bi-robot fs-5 text-secondary ms-1 mt-1 flex-shrink-0"></i>`;
         chatMessages.appendChild(assistant);
+        initSourcePopovers(assistant);
 
         if (typeof hljs !== 'undefined') {
             assistant.querySelectorAll('pre code').forEach(block => hljs.highlightElement(block));
@@ -652,7 +695,7 @@
             if (data.reused) {
                 questionInput.value = '';
                 questionInput.style.height = 'auto';
-                appendReusedTurn(data.question || '', data.answer || '', data.turnId || '', data.provider || 'db-reuse');
+                appendReusedTurn(data.question || '', data.answer || '', data.turnId || '', data.provider || 'db-reuse', data.sources || []);
                 return;
             }
             submitWithFallback(data.question || '', data.message || '기존 답변 검증에 실패하여 일반 질의로 전환합니다.');

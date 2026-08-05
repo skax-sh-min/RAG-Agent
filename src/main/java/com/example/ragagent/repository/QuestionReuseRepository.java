@@ -145,6 +145,27 @@ public class QuestionReuseRepository {
                 turnId);
     }
 
+        public List<SourcePreviewRow> findSourcePreviewRows(long turnId) {
+        return vectorJdbc.query("""
+                SELECT r.chunk_id,
+                       r.doc_id,
+                       f.filename,
+                       f.page,
+                       f.content
+                FROM turn_source_ref r
+                LEFT JOIN chunk_fts f ON f.spring_doc_id = r.chunk_id
+                WHERE r.turn_id = ?
+                  AND r.status = 'active'
+                """,
+            (rs, n) -> new SourcePreviewRow(
+                rs.getString("chunk_id"),
+                rs.getString("doc_id"),
+                rs.getString("filename"),
+                rs.getString("page"),
+                rs.getString("content")),
+            turnId);
+        }
+
     /**
      * Current chunk text snapshot from FTS index. If a chunk is deleted/replaced, it simply won't be present.
      */
@@ -190,6 +211,9 @@ public class QuestionReuseRepository {
     }
 
     public record SourceSnapshot(String chunkId, String docId, String chunkHash) {}
+
+    public record SourcePreviewRow(String chunkId, String docId, String filename,
+                                   String pageOrSlide, String content) {}
 
     public record CandidateTurn(long turnId, String userId, String threadId,
                                 String question, String answer, String createdAt) {}

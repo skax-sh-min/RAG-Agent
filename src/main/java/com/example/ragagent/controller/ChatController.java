@@ -39,6 +39,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 /**
  * Chat pages (Thymeleaf), HTMX chat fragments, and REST /api/v1/chat.
@@ -110,6 +111,12 @@ public class ChatController {
             var turns = memoryService.getTurns(userId, threadId);
             model.addAttribute("turns", turns);
             model.addAttribute("turnImageRefsByTurnId", memoryService.getTurnImageRefs(userId, threadId));
+                if (questionReuseService != null) {
+                model.addAttribute("turnSourcesByTurnId",
+                    turns.stream().collect(Collectors.toMap(
+                        t -> t.id(),
+                        t -> questionReuseService.sourceRefsForTurn(t.id()))));
+                }
             // §10.10 embedding-fallback — badge for turns whose curated Q&A promotion never
             // managed to embed (surfaced here since it can only be known after the fact; the
             // background embed attempt runs seconds after the like, long past this page's
@@ -306,6 +313,7 @@ public class ChatController {
             "turnId", savedTurnId,
             "question", lookup.question(),
             "answer", lookup.answer(),
+            "sources", questionReuseService.sourceRefsForTurn(lookup.sourceTurnId()),
             "sourceChunkIds", lookup.sourceChunkIds(),
             "sourceTurnId", lookup.sourceTurnId(),
             "provider", "db-reuse"));
