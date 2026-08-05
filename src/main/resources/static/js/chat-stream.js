@@ -102,8 +102,7 @@
             `<div class="d-flex flex-column align-items-end me-1">` +
             `<div class="bubble-user p-3">${escHtml(question)}</div>` +
             `<small class="text-muted" style="font-size:0.68rem; margin-top:2px;">${escHtml(timeStr)}</small>` +
-            `</div>` +
-            `<i class="bi bi-person-circle fs-5 text-secondary ms-2 mt-1 flex-shrink-0"></i>`;
+            `</div>`;
         document.getElementById('chat-messages').appendChild(wrap);
     }
 
@@ -123,8 +122,7 @@
                 <div id="stream-images-${bubbleId}"></div>
                 <div id="stream-sources-${bubbleId}"></div>
                 <div id="stream-meta-${bubbleId}" class="mt-2 d-flex align-items-center flex-wrap gap-2" style="font-size:0.72rem;"></div>
-            </div>
-            <i class="bi bi-robot fs-5 text-secondary ms-1 mt-1 flex-shrink-0"></i>`;
+            </div>`;
         document.getElementById('chat-messages').appendChild(wrap);
 
         const skipBtn = document.getElementById(`stream-skip-images-${bubbleId}`);
@@ -420,7 +418,6 @@
                 `<div class="bubble-assistant p-3 flex-grow-1 text-danger">` +
                 `<i class="bi bi-exclamation-triangle me-1"></i>${escHtml(message || '오류가 발생했습니다.')}` +
                 `</div>` +
-                `<i class="bi bi-robot fs-5 text-secondary ms-2 mt-1 flex-shrink-0"></i>` +
                 `</div>`;
         }
     }
