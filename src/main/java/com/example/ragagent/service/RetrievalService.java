@@ -269,6 +269,11 @@ public class RetrievalService {
             warnings.add("⚠️ 이 답변에는 OCR로 처리된 스캔 문서가 포함되어 있습니다. 내용이 부정확할 수 있습니다.");
         }
 
+        // Streaming UI (chat-stream.js) renders source popovers and image thumbnails from these
+        // explicit events; without emitting them, sourcePreviewEnabled=true still has nothing to show.
+        listener.onSourcesReady(sources);
+        listener.onImagesReady(imageRefs);
+
         return state.toBuilder()
                 .retrievedDocs(contextDocs)
                 .sources(sources)
