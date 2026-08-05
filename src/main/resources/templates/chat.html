@@ -285,6 +285,7 @@
                         </div>
                         <input type="hidden" id="form-response-mode" name="responseMode" value="M"/>
                     </div>
+                    <div id="question-suggest-box" class="list-group mb-1 d-none" style="max-height: 220px; overflow:auto;"></div>
                     <div class="input-group">
                         <textarea id="question-input" name="question"
                                   class="form-control"
@@ -312,7 +313,6 @@
                             <i class="bi bi-send-fill"></i>
                         </button>
                     </div>
-                    <div id="question-suggest-box" class="list-group mt-1 d-none" style="max-height: 220px; overflow:auto;"></div>
                 </form>
             </div>
         </div>
@@ -649,11 +649,7 @@
         }
         suggestBox.innerHTML = items.map(it =>
             `<button type="button" class="list-group-item list-group-item-action" data-turn-id="${it.turnId}">` +
-                `<div class="d-flex justify-content-between align-items-start gap-2">` +
-                    `<div class="small fw-semibold text-start">${escHtml(it.question || '')}</div>` +
-                    `<span class="badge bg-light text-dark border">${escHtml(it.scope || 'shared')}</span>` +
-                `</div>` +
-                `<div class="small text-muted text-start mt-1">${escHtml(it.answerPreview || '')}</div>` +
+                `<div class="small fw-semibold text-start">${escHtml(it.question || '')}</div>` +
             `</button>`
         ).join('');
         suggestBox.classList.remove('d-none');
