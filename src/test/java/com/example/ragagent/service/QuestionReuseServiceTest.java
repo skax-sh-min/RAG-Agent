@@ -110,4 +110,21 @@ class QuestionReuseServiceTest {
                 assertThat(refs.get(0).label()).isEqualTo("manual.docx | ch 1.2");
                 assertThat(refs.get(1).label()).isEqualTo("slides.pptx | p.3");
         }
+
+        @Test
+        @DisplayName("출처 라벨 변환은 chapter가 null이어도 예외 없이 동작한다")
+        void sourceRefsForTurn_handlesNullChapterSafely() {
+                QuestionReuseRepository repo = mock(QuestionReuseRepository.class);
+                QuestionReuseService service = new QuestionReuseService(repo);
+
+                when(repo.findSourcePreviewRows(8L)).thenReturn(List.of(
+                                new QuestionReuseRepository.SourcePreviewRow(
+                                                "c1", "d1", "manual.docx", "12", null, "docx chunk")
+                ));
+
+                var refs = service.sourceRefsForTurn(8L);
+
+                assertThat(refs).hasSize(1);
+                assertThat(refs.get(0).label()).isEqualTo("manual.docx | ch ?");
+        }
 }

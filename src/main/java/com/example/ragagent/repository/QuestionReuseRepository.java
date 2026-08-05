@@ -145,28 +145,32 @@ public class QuestionReuseRepository {
                 turnId);
     }
 
-        public List<SourcePreviewRow> findSourcePreviewRows(long turnId) {
+    public List<SourcePreviewRow> findSourcePreviewRows(long turnId) {
         return vectorJdbc.query("""
                 SELECT r.chunk_id,
                        r.doc_id,
-                       f.filename,
-                       f.page,
-                                             f.chapter,
-                       f.content
+                  COALESCE(NULLIF(TRIM(f.filename), ''), NULLIF(TRIM(json_extract(c.metadata, '$.filename')), '')) AS filename,
+                  COALESCE(NULLIF(TRIM(f.page), ''), NULLIF(TRIM(json_extract(c.metadata, '$.page_or_slide')), '')) AS page,
+                      COALESCE(
+                          NULLIF(NULLIF(NULLIF(TRIM(json_extract(c.metadata, '$.chapter_no')), ''), '0'), '0.0'),
+                          NULLIF(NULLIF(NULLIF(TRIM(f.chapter), ''), '0'), '0.0')
+                      ) AS chapter,
+                  COALESCE(NULLIF(f.content, ''), c.content) AS content
                 FROM turn_source_ref r
                 LEFT JOIN chunk_fts f ON f.spring_doc_id = r.chunk_id
+                LEFT JOIN vec_document_chunks c ON c.spring_doc_id = r.chunk_id
                 WHERE r.turn_id = ?
                   AND r.status = 'active'
                 """,
-            (rs, n) -> new SourcePreviewRow(
-                rs.getString("chunk_id"),
-                rs.getString("doc_id"),
-                rs.getString("filename"),
-                rs.getString("page"),
-                                rs.getString("chapter"),
-                rs.getString("content")),
-            turnId);
-        }
+                (rs, n) -> new SourcePreviewRow(
+                        rs.getString("chunk_id"),
+                        rs.getString("doc_id"),
+                        rs.getString("filename"),
+                        rs.getString("page"),
+                        rs.getString("chapter"),
+                        rs.getString("content")),
+                turnId);
+    }
 
     /**
      * Current chunk text snapshot from FTS index. If a chunk is deleted/replaced, it simply won't be present.
