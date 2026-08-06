@@ -19,6 +19,8 @@ import java.util.stream.Collectors;
 @Repository
 public class QuestionReuseRepository {
 
+    private static final String DELETED_REFERENCE_TEXT = "참조 원문 삭제됨";
+
     private final JdbcTemplate jdbc;
     private final JdbcTemplate vectorJdbc;
 
@@ -75,19 +77,16 @@ public class QuestionReuseRepository {
     }
 
     public List<CandidateTurn> findSuggestionCandidates(String q, boolean meOnly, String userId, int limit) {
-        String sql = """
-                                SELECT t.id,
-                                             t.user_id,
-                                             t.thread_id,
-                                             t.question,
-                                             COALESCE(src.answer, t.answer) AS answer,
-                                             t.created_at
-                                FROM conversation_turns t
-                                LEFT JOIN conversation_turns src ON src.id = t.reused_from_turn_id AND src.user_id = t.user_id
-                                WHERE lower(t.question) LIKE lower(?)
-                                    AND (t.feedback IS NULL OR t.feedback <> 'DISLIKE')
-                                    AND (COALESCE(t.direct_mode, 0) = 0 OR t.feedback = 'LIKE')
-                """ + (meOnly ? " AND t.user_id = ? " : "") + " ORDER BY t.id DESC LIMIT ?";
+        String resolvedAnswerExpr = "COALESCE(NULLIF(src.answer, ''), NULLIF(t.answer, ''), '" +
+                DELETED_REFERENCE_TEXT + "') AS answer";
+        String sql = "SELECT t.id, t.user_id, t.thread_id, t.question, " + resolvedAnswerExpr + ", t.created_at " +
+            "FROM conversation_turns t " +
+            "LEFT JOIN conversation_turns src ON src.id = t.reused_from_turn_id AND src.user_id = t.user_id " +
+            "WHERE lower(t.question) LIKE lower(?) " +
+            "AND (t.feedback IS NULL OR t.feedback <> 'DISLIKE') " +
+            "AND (COALESCE(t.direct_mode, 0) = 0 OR t.feedback = 'LIKE') " +
+            (meOnly ? "AND t.user_id = ? " : "") +
+            "ORDER BY t.id DESC LIMIT ?";
 
         if (meOnly) {
             return jdbc.query(sql,
@@ -112,19 +111,16 @@ public class QuestionReuseRepository {
     }
 
     public CandidateTurn findTurnForReuse(long turnId, boolean meOnly, String userId) {
-        String sql = """
-                                SELECT t.id,
-                                             t.user_id,
-                                             t.thread_id,
-                                             t.question,
-                                             COALESCE(src.answer, t.answer) AS answer,
-                                             t.created_at
-                                FROM conversation_turns t
-                                LEFT JOIN conversation_turns src ON src.id = t.reused_from_turn_id AND src.user_id = t.user_id
-                                WHERE t.id = ?
-                                    AND (t.feedback IS NULL OR t.feedback <> 'DISLIKE')
-                                    AND (COALESCE(t.direct_mode, 0) = 0 OR t.feedback = 'LIKE')
-                """ + (meOnly ? " AND t.user_id = ?" : "") + " LIMIT 1";
+        String resolvedAnswerExpr = "COALESCE(NULLIF(src.answer, ''), NULLIF(t.answer, ''), '" +
+                DELETED_REFERENCE_TEXT + "') AS answer";
+        String sql = "SELECT t.id, t.user_id, t.thread_id, t.question, " + resolvedAnswerExpr + ", t.created_at " +
+            "FROM conversation_turns t " +
+            "LEFT JOIN conversation_turns src ON src.id = t.reused_from_turn_id AND src.user_id = t.user_id " +
+            "WHERE t.id = ? " +
+            "AND (t.feedback IS NULL OR t.feedback <> 'DISLIKE') " +
+            "AND (COALESCE(t.direct_mode, 0) = 0 OR t.feedback = 'LIKE') " +
+            (meOnly ? "AND t.user_id = ? " : "") +
+            "LIMIT 1";
         List<CandidateTurn> rows = meOnly
                 ? jdbc.query(sql,
                     (rs, n) -> new CandidateTurn(
@@ -169,6 +165,7 @@ public class QuestionReuseRepository {
                       ) AS chapter,
                   COALESCE(NULLIF(f.content, ''), c.content) AS content
                 FROM turn_source_ref r
+                                JOIN conversation_turns t ON t.id = r.turn_id AND t.user_id = r.user_id
                 LEFT JOIN chunk_fts f ON f.spring_doc_id = r.chunk_id
                 LEFT JOIN vec_document_chunks c ON c.spring_doc_id = r.chunk_id
                 WHERE r.turn_id = ?
@@ -182,6 +179,25 @@ public class QuestionReuseRepository {
                         rs.getString("chapter"),
                         rs.getString("content")),
                 turnId);
+    }
+
+    public Long findReusedFromTurnId(long turnId) {
+        List<Long> rows = jdbc.query(
+                "SELECT reused_from_turn_id FROM conversation_turns WHERE id = ? LIMIT 1",
+                (rs, n) -> {
+                    long value = rs.getLong("reused_from_turn_id");
+                    return rs.wasNull() ? null : value;
+                },
+                turnId);
+        return rows.isEmpty() ? null : rows.get(0);
+    }
+
+    public boolean existsTurn(long turnId) {
+        Integer count = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM conversation_turns WHERE id = ?",
+                Integer.class,
+                turnId);
+        return count != null && count > 0;
     }
 
     /**

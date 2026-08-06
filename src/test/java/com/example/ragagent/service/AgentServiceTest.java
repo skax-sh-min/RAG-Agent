@@ -18,6 +18,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -219,7 +220,7 @@ class AgentServiceTest {
         when(classifierService.classifyOnly(any(), any())).thenReturn("manual");
         when(agentGraph.run(any())).thenReturn(fullResult());
         when(memoryService.addTurn(any(), any(), any(), any(), any(),
-                anyInt(), anyInt(), anyInt(), any(), anyInt(), any(), any())).thenReturn(42L);
+            anyInt(), anyInt(), anyInt(), any(), anyInt(), any(), any(), anyBoolean())).thenReturn(42L);
 
         service.chat(CTX, new ChatRequest("질문", "v1", "t1", RoutingMode.COST_FIRST));
 

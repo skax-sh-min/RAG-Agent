@@ -18,6 +18,8 @@ import java.util.regex.Pattern;
 public class QuestionReuseService {
 
     private static final int MAX_SUGGESTION_QUESTION_LENGTH = 50;
+    private static final String DELETED_REFERENCE_LABEL = "참조 원문 삭제됨";
+    private static final String DELETED_REFERENCE_PREVIEW = "원본 대화가 삭제되어 출처 미리보기를 표시할 수 없습니다.";
 
     private static final Pattern DIRECTIVE_WORD = Pattern.compile(
             "(?:^|\\s)(이거|그거|저거|이것|그것|저것|여기|거기|저기|얘|걔|쟤|요거|저거요)(?:\\s|$)",
@@ -129,9 +131,21 @@ public class QuestionReuseService {
 
     public List<SourceRef> sourceRefsForTurn(long turnId) {
         if (turnId <= 0) return List.of();
-        return repository.findSourcePreviewRows(turnId).stream()
+        Long sourceTurnId = repository.findReusedFromTurnId(turnId);
+        long previewTurnId = sourceTurnId != null ? sourceTurnId : turnId;
+        List<SourceRef> refs = repository.findSourcePreviewRows(previewTurnId).stream()
                 .map(this::toSourceRef)
                 .toList();
+        if (!refs.isEmpty()) return refs;
+        if (sourceTurnId != null && !repository.existsTurn(sourceTurnId)) {
+            return List.of(new SourceRef(
+                    DELETED_REFERENCE_LABEL,
+                    DELETED_REFERENCE_PREVIEW,
+                    null,
+                    null,
+                    "?"));
+        }
+        return List.of();
     }
 
     public ValidationResult validateTurn(long turnId) {

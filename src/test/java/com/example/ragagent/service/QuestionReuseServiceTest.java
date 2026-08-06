@@ -140,6 +140,7 @@ class QuestionReuseServiceTest {
                 QuestionReuseRepository repo = mock(QuestionReuseRepository.class);
                 QuestionReuseService service = new QuestionReuseService(repo);
 
+                        when(repo.findReusedFromTurnId(7L)).thenReturn(null);
                 when(repo.findSourcePreviewRows(7L)).thenReturn(List.of(
                                 new QuestionReuseRepository.SourcePreviewRow(
                                                 "c1", "d1", "manual.docx", "12", "1.2", "docx chunk"),
@@ -160,6 +161,7 @@ class QuestionReuseServiceTest {
                 QuestionReuseRepository repo = mock(QuestionReuseRepository.class);
                 QuestionReuseService service = new QuestionReuseService(repo);
 
+                        when(repo.findReusedFromTurnId(8L)).thenReturn(null);
                 when(repo.findSourcePreviewRows(8L)).thenReturn(List.of(
                                 new QuestionReuseRepository.SourcePreviewRow(
                                                 "c1", "d1", "manual.docx", "12", null, "docx chunk")
@@ -169,5 +171,40 @@ class QuestionReuseServiceTest {
 
                 assertThat(refs).hasSize(1);
                 assertThat(refs.get(0).label()).isEqualTo("manual.docx");
+        }
+
+        @Test
+        @DisplayName("db-reuse turn의 출처 미리보기는 원본 turn 기준으로 조회한다")
+        void sourceRefsForTurn_dbReuseUsesOriginalTurn() {
+                QuestionReuseRepository repo = mock(QuestionReuseRepository.class);
+                QuestionReuseService service = new QuestionReuseService(repo);
+
+                when(repo.findReusedFromTurnId(90L)).thenReturn(12L);
+                when(repo.findSourcePreviewRows(12L)).thenReturn(List.of(
+                                new QuestionReuseRepository.SourcePreviewRow(
+                                                "c1", "d1", "manual.docx", "12", "1.2", "docx chunk")
+                ));
+
+                var refs = service.sourceRefsForTurn(90L);
+
+                assertThat(refs).hasSize(1);
+                assertThat(refs.get(0).label()).isEqualTo("manual.docx | ch 1.2");
+        }
+
+        @Test
+        @DisplayName("db-reuse 원본 turn이 삭제되면 안내 문구를 표시한다")
+        void sourceRefsForTurn_deletedOriginalShowsFallbackMessage() {
+                QuestionReuseRepository repo = mock(QuestionReuseRepository.class);
+                QuestionReuseService service = new QuestionReuseService(repo);
+
+                when(repo.findReusedFromTurnId(91L)).thenReturn(13L);
+                when(repo.findSourcePreviewRows(13L)).thenReturn(List.of());
+                when(repo.existsTurn(13L)).thenReturn(false);
+
+                var refs = service.sourceRefsForTurn(91L);
+
+                assertThat(refs).hasSize(1);
+                assertThat(refs.get(0).label()).isEqualTo("참조 원문 삭제됨");
+                assertThat(refs.get(0).preview()).contains("원본 대화가 삭제되어 출처 미리보기를 표시할 수 없습니다");
         }
 }

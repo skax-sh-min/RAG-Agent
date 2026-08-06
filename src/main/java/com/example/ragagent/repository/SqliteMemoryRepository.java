@@ -20,6 +20,7 @@ import java.util.Optional;
 public class SqliteMemoryRepository implements MemoryRepository {
 
     private final JdbcTemplate jdbc;
+    private static final String DELETED_REFERENCE_TEXT = "참조 원문 삭제됨";
     // fetch at most this many recent turns before applying char truncation (§6.11: app.memory.*)
     private final int fetchLimit;
 
@@ -113,7 +114,7 @@ public class SqliteMemoryRepository implements MemoryRepository {
         // fetch last fetchLimit turns newest-first, then reverse for chronological order.
         // DISLIKE-tagged turns are excluded from context (hard exclusion, §6.9).
         List<String> rows = jdbc.query(
-            "SELECT t.question AS question, COALESCE(src.answer, t.answer) AS answer " +
+            "SELECT t.question AS question, COALESCE(NULLIF(src.answer, ''), NULLIF(t.answer, ''), '" + DELETED_REFERENCE_TEXT + "') AS answer " +
             "FROM conversation_turns t " +
             "LEFT JOIN conversation_turns src ON src.id = t.reused_from_turn_id AND src.user_id = t.user_id " +
             "WHERE t.user_id = ? AND t.thread_id = ? AND (t.feedback IS NULL OR t.feedback <> 'DISLIKE') " +
@@ -165,11 +166,11 @@ public class SqliteMemoryRepository implements MemoryRepository {
             ps.setInt(10, llmCalls);
             ps.setString(11, responseMode);
             ps.setString(12, selectedTags);
-            ps.setInt(14, directMode ? 1 : 0);
+            ps.setInt(13, directMode ? 1 : 0);
             if (reusedFromTurnId == null) {
-                ps.setNull(15, java.sql.Types.BIGINT);
+                ps.setNull(14, java.sql.Types.BIGINT);
             } else {
-                ps.setLong(15, reusedFromTurnId);
+                ps.setLong(14, reusedFromTurnId);
             }
             return ps;
         }, keyHolder);
@@ -179,6 +180,12 @@ public class SqliteMemoryRepository implements MemoryRepository {
 
     @Override
     public void clearHistory(String userId, String threadId) {
+        // turn_source_ref is created by QuestionReuseRepository; in isolated tests this table may not exist.
+        try {
+            jdbc.update("DELETE FROM turn_source_ref WHERE user_id = ? AND thread_id = ?", userId, threadId);
+        } catch (Exception ignored) {
+            // no-op
+        }
         jdbc.update("DELETE FROM turn_image_ref WHERE user_id = ? AND thread_id = ?", userId, threadId);
         jdbc.update("DELETE FROM conversation_turns WHERE user_id = ? AND thread_id = ?", userId, threadId);
     }
@@ -233,7 +240,7 @@ public class SqliteMemoryRepository implements MemoryRepository {
     @Override
     public List<Turn> getTurns(String userId, String threadId) {
         return jdbc.query(
-            "SELECT t.id, t.question, COALESCE(src.answer, t.answer) AS answer, t.asked_at, t.created_at, " +
+            "SELECT t.id, t.question, COALESCE(NULLIF(src.answer, ''), NULLIF(t.answer, ''), '" + DELETED_REFERENCE_TEXT + "') AS answer, t.asked_at, t.created_at, " +
             "t.input_tokens, t.output_tokens, t.elapsed_ms, t.provider, t.llm_calls, t.feedback, t.response_mode, t.selected_tags " +
             "FROM conversation_turns t " +
             "LEFT JOIN conversation_turns src ON src.id = t.reused_from_turn_id AND src.user_id = t.user_id " +
@@ -248,7 +255,7 @@ public class SqliteMemoryRepository implements MemoryRepository {
         // chronological order — bounds LLM-facing callers (summarization) to a constant-size input
         // regardless of how long the conversation has grown.
         List<Turn> rows = jdbc.query(
-            "SELECT t.id, t.question, COALESCE(src.answer, t.answer) AS answer, t.asked_at, t.created_at, " +
+            "SELECT t.id, t.question, COALESCE(NULLIF(src.answer, ''), NULLIF(t.answer, ''), '" + DELETED_REFERENCE_TEXT + "') AS answer, t.asked_at, t.created_at, " +
             "t.input_tokens, t.output_tokens, t.elapsed_ms, t.provider, t.llm_calls, t.feedback, t.response_mode, t.selected_tags " +
             "FROM conversation_turns t " +
             "LEFT JOIN conversation_turns src ON src.id = t.reused_from_turn_id AND src.user_id = t.user_id " +
@@ -261,7 +268,7 @@ public class SqliteMemoryRepository implements MemoryRepository {
     @Override
     public Optional<Turn> getTurn(String userId, String threadId, long turnId) {
         List<Turn> rows = jdbc.query(
-            "SELECT t.id, t.question, COALESCE(src.answer, t.answer) AS answer, t.asked_at, t.created_at, " +
+            "SELECT t.id, t.question, COALESCE(NULLIF(src.answer, ''), NULLIF(t.answer, ''), '" + DELETED_REFERENCE_TEXT + "') AS answer, t.asked_at, t.created_at, " +
             "t.input_tokens, t.output_tokens, t.elapsed_ms, t.provider, t.llm_calls, t.feedback, t.response_mode, t.selected_tags " +
             "FROM conversation_turns t " +
             "LEFT JOIN conversation_turns src ON src.id = t.reused_from_turn_id AND src.user_id = t.user_id " +

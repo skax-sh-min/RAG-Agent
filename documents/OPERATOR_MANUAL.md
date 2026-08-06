@@ -1733,7 +1733,7 @@ app.llm.providers[8].concurrency=4
 - **`[Recent]` 구간의 답변 렌더링** (`SUMMARY_RECENT_RAW_TURNS`개, 기본 2): 답변 종류에 따라 다르게 담습니다.
   - **RAG 답변**(`## 요약` 섹션 있음) → **요약만**. 원문은 문서 청크를 다시 풀어 쓴 것인데 그 청크는 **다음 턴이 어차피 재검색**하므로(매 턴 검색), 전문을 되먹이면 `[검색된 문서]`를 수천 자짜리로 중복시키는 셈입니다. 게다가 그 중복본은 원본이 아니라 모델이 만든 미검증 산문이라, 이전 턴의 오류가 문맥에 고착될 위험도 있습니다. 2,700자짜리 답변이 ~250자로 줄어듭니다.
   - **Direct/meta 답변**(그 섹션 없음) → **원문을 남기되 1,200자에서 절단**. 근거 문서가 없어 그 답변 자체가 유일한 기록이므로 지울 수 없고, 길이만 제한합니다. 상한은 `RECENT_DIRECT_ANSWER_CAP` 상수 — **프로퍼티가 아닙니다**.
-  - 판별은 `## 요약` 헤딩 유무입니다(`conversation_turns`에 direct 모드 플래그가 없음). `prompt.answer.system`은 그 섹션을 강제하고 `prompt.direct.system`은 요구하지 않으므로 사실상 정확하며, 형식을 어긴 RAG 답변은 절단 쪽으로 떨어져 안전한 방향입니다.
+  - 판별은 `## 요약` 헤딩 유무입니다(`conversation_turns`에는 `direct_mode` 컬럼이 있으나, 요약 컨텍스트 렌더링 로직은 답변 본문 형식을 직접 기준으로 삼습니다). `prompt.answer.system`은 그 섹션을 강제하고 `prompt.direct.system`은 요구하지 않으므로 사실상 정확하며, 형식을 어긴 RAG 답변은 절단 쪽으로 떨어져 안전한 방향입니다.
   - 이전에는 양쪽 다 **무제한 원문**이었습니다. RAG 답변이 2~3천 자인데 이력 예산이 3,000자(`LLM_MAX_TOKENS/2`)라, 한 건이 예산을 독식해 `SUMMARY_RECENT_RAW_TURNS=2`가 사실상 1로 동작했습니다.
 - **싫어요 제외 범위**: 싫어요가 눌린 턴은 이 경로의 **요약과 `[Recent]` 원문 구간 양쪽**에서 빠집니다(`dedupeTurns()`). `getRecentTurns()`의 SQL에는 feedback 조건이 없으므로 — 다른 호출자는 원본 행이 필요합니다 — 이 클래스에서 그 메서드를 쓰는 곳은 반드시 `dedupeTurns()`를 거쳐야 합니다. 예전에는 `buildContext()`가 이를 건너뛰어, 싫어요 답변이 요약에서만 빠지고 `[Recent]`에는 **전문 그대로** 다시 들어갔습니다(원본 폴백 경로와도 어긋났고, RAG 답변은 2~3천 자라 그 한 건이 문자 예산을 독식해 정상 턴을 밀어냈습니다).
 - **싫어요 처리**: 답변 직후 트리거된 요약 생성이 진행되는 동안(LLM 호출이 아직 끝나지 않은 짧은 시간) 사용자가 방금 그 턴에 싫어요를 누르면, 완성된 요약이라도 캐싱하지 않고 버립니다 — 다음 질문은 자동으로 원문 폴백 경로를 쓰게 되며, 그 경로는 애초에 DISLIKE 턴을 제외합니다. 다음 정상 트리거 때는 dedupe 단계에서 자연스럽게 그 턴이 빠진 채로 다시 요약됩니다.
@@ -2114,14 +2114,14 @@ mvn test -Dtest=SearchQualityEvaluationTest -Dsearch-eval.enabled=true
 
 #### 동작 요약
 
-- 추천 조회: `GET /api/v1/questions/suggest?q=...&scope=shared|me&limit=...`
+- 추천 조회: `GET /api/v1/questions/suggest?q=...&limit=...` (서버는 항상 shared 기준 처리)
 - 재사용 시도: `POST /api/v1/questions/reuse`
 - 재사용 성공: 기존 답변을 새 turn으로 저장(`provider=db-reuse`, `reused_from_turn_id` 참조 저장)
 - 재사용 실패: `fallback=true`와 사유를 반환, 클라이언트가 일반 질의 파이프라인으로 즉시 전환
 
 추천 결과 품질을 위해 다음 필터를 함께 적용합니다.
 
-- `provider=db-reuse`로 저장된 turn은 추천 후보에서 제외
+- `direct_mode=1`인 질문은 `feedback='LIKE'`일 때만 추천/재사용 후보에 포함
 - 질문 정규화(공백/대소문자) 기반 중복 제거
 
 #### API 오류/폴백 응답 요약
@@ -2145,9 +2145,11 @@ mvn test -Dtest=SearchQualityEvaluationTest -Dsearch-eval.enabled=true
 
 - `conversation_turns.reused_from_turn_id`: 원본 turn id 참조
 - `conversation_turns.answer`: 빈 문자열 저장(중복 데이터 절감)
-- 조회 시 `COALESCE(src.answer, t.answer)`로 원본 답변 복원
+- 조회 시 `COALESCE(NULLIF(src.answer,''), NULLIF(t.answer,''), '참조 원문 삭제됨')`로 원본 답변 복원
 
-원본 turn이 이후 삭제되면(예: 스레드 삭제), 참조 turn은 유지되지만 복원할 `src`가 없어 `t.answer`(빈값)로 표시될 수 있습니다. 이 경우 서버 에러로 처리하지 않으며, 현재 정책상 정상 동작입니다.
+원본 turn이 이후 삭제되면(예: 스레드 삭제), 답변 본문은 `'참조 원문 삭제됨'`으로 표시됩니다. 출처 미리보기도 원본 turn 기준으로 조회되며, 원본이 없으면 `'참조 원문 삭제됨'` 안내 항목(미리보기: "원본 대화가 삭제되어 출처 미리보기를 표시할 수 없습니다.")이 반환됩니다.
+
+또한 스레드 삭제 시(`clearHistory`) `conversation_turns`/`turn_image_ref`와 함께 해당 스레드의 `turn_source_ref`도 삭제되어 orphan 참조가 남지 않도록 정리됩니다.
 
 #### 유효성 검증 규칙
 
