@@ -91,6 +91,49 @@ class QuestionReuseServiceTest {
         assertThat(suggestions.get(0).question()).isEqualTo("로그인 오류 401 원인");
     }
 
+    @Test
+    @DisplayName("shared 추천은 db-reuse turn도 포함한다")
+    void suggest_sharedIncludesDbReuseTurns() {
+        QuestionReuseRepository repo = mock(QuestionReuseRepository.class);
+        QuestionReuseService service = new QuestionReuseService(repo);
+
+        when(repo.findSuggestionCandidates(anyString(), anyBoolean(), anyString(), anyInt()))
+                .thenReturn(List.of(
+                        new QuestionReuseRepository.CandidateTurn(30L, "u1", "t1", "캐시 설정 방법", "원본 답변", "2026-08-06 10:00:00")
+                ));
+        when(repo.findSourceRefs(anyLong()))
+                .thenReturn(List.of(new QuestionReuseRepository.SourceSnapshot("c1", "d1", "h1")));
+        when(repo.currentChunkHashes(java.util.Set.of("c1")))
+                .thenReturn(java.util.Map.of("c1", "h1"));
+
+        List<QuestionReuseService.Suggestion> suggestions =
+                service.suggest("admin", QuestionReuseService.Scope.SHARED, "캐시", 8);
+
+        assertThat(suggestions).hasSize(1);
+        assertThat(suggestions.get(0).question()).isEqualTo("캐시 설정 방법");
+    }
+
+    @Test
+    @DisplayName("재사용 조회는 source turn 답변을 그대로 사용한다")
+    void reuseLookup_usesResolvedAnswerFromRepository() {
+        QuestionReuseRepository repo = mock(QuestionReuseRepository.class);
+        QuestionReuseService service = new QuestionReuseService(repo);
+
+        when(repo.findTurnForReuse(55L, false, "admin"))
+                .thenReturn(new QuestionReuseRepository.CandidateTurn(
+                        55L, "u1", "t9", "배포 절차", "원본 turn 답변", "2026-08-06 10:00:00"));
+        when(repo.findSourceRefs(55L))
+                .thenReturn(List.of(new QuestionReuseRepository.SourceSnapshot("c1", "d1", "h1")));
+        when(repo.currentChunkHashes(java.util.Set.of("c1")))
+                .thenReturn(java.util.Map.of("c1", "h1"));
+
+        QuestionReuseService.ReuseLookup lookup =
+                service.reuseLookup("admin", QuestionReuseService.Scope.SHARED, 55L);
+
+        assertThat(lookup.reusable()).isTrue();
+        assertThat(lookup.answer()).isEqualTo("원본 turn 답변");
+    }
+
         @Test
         @DisplayName("이전 대화 출처 라벨은 챕터/페이지 규칙을 동일하게 따른다")
         void sourceRefsForTurn_formatsLabelWithChapterRule() {

@@ -76,12 +76,17 @@ public class QuestionReuseRepository {
 
     public List<CandidateTurn> findSuggestionCandidates(String q, boolean meOnly, String userId, int limit) {
         String sql = """
-                SELECT id, user_id, thread_id, question, answer, created_at
-                FROM conversation_turns
-                WHERE lower(question) LIKE lower(?)
-                  AND (feedback IS NULL OR feedback <> 'DISLIKE')
-                                    AND (provider IS NULL OR provider <> 'db-reuse')
-                """ + (meOnly ? " AND user_id = ? " : "") + " ORDER BY id DESC LIMIT ?";
+                                SELECT t.id,
+                                             t.user_id,
+                                             t.thread_id,
+                                             t.question,
+                                             COALESCE(src.answer, t.answer) AS answer,
+                                             t.created_at
+                                FROM conversation_turns t
+                                LEFT JOIN conversation_turns src ON src.id = t.reused_from_turn_id AND src.user_id = t.user_id
+                                WHERE lower(t.question) LIKE lower(?)
+                                    AND (t.feedback IS NULL OR t.feedback <> 'DISLIKE')
+                """ + (meOnly ? " AND t.user_id = ? " : "") + " ORDER BY t.id DESC LIMIT ?";
 
         if (meOnly) {
             return jdbc.query(sql,
@@ -107,12 +112,17 @@ public class QuestionReuseRepository {
 
     public CandidateTurn findTurnForReuse(long turnId, boolean meOnly, String userId) {
         String sql = """
-                SELECT id, user_id, thread_id, question, answer, created_at
-                FROM conversation_turns
-                WHERE id = ?
-                  AND (feedback IS NULL OR feedback <> 'DISLIKE')
-                                    AND (provider IS NULL OR provider <> 'db-reuse')
-                """ + (meOnly ? " AND user_id = ?" : "") + " LIMIT 1";
+                                SELECT t.id,
+                                             t.user_id,
+                                             t.thread_id,
+                                             t.question,
+                                             COALESCE(src.answer, t.answer) AS answer,
+                                             t.created_at
+                                FROM conversation_turns t
+                                LEFT JOIN conversation_turns src ON src.id = t.reused_from_turn_id AND src.user_id = t.user_id
+                                WHERE t.id = ?
+                                    AND (t.feedback IS NULL OR t.feedback <> 'DISLIKE')
+                """ + (meOnly ? " AND t.user_id = ?" : "") + " LIMIT 1";
         List<CandidateTurn> rows = meOnly
                 ? jdbc.query(sql,
                     (rs, n) -> new CandidateTurn(
