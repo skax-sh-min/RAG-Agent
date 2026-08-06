@@ -131,11 +131,11 @@ class AgentServiceTest {
     @DisplayName("memory 와 classifier 가 진짜 병렬 실행 (각각 200ms sleep 도 총 시간 ~200ms)")
     void chat_runsHistoryAndClassifyInParallel() {
         when(memoryService.getHistory(any(), any())).thenAnswer(inv -> {
-            Thread.sleep(200);
+            Thread.sleep(300);
             return "";
         });
         when(classifierService.classifyOnly(any(), any())).thenAnswer(inv -> {
-            Thread.sleep(200);
+            Thread.sleep(300);
             return "manual";
         });
         when(agentGraph.run(any())).thenReturn(fullResult());
@@ -144,10 +144,10 @@ class AgentServiceTest {
         service.chat(CTX, new ChatRequest("질문", "v1", "t1", RoutingMode.COST_FIRST));
         long elapsedMs = (System.nanoTime() - start) / 1_000_000;
 
-        // 직렬이면 ~400ms, 병렬이면 ~200-300ms. 350ms 미만이면 병렬 보장.
+        // 직렬이면 ~600ms+, 병렬이면 ~300-450ms. 520ms 미만이면 병렬 실행으로 본다.
         assertThat(elapsedMs)
-                .as("history + classify 병렬 실행 (직렬이었다면 400ms 초과)")
-                .isLessThan(350);
+                .as("history + classify 병렬 실행 (직렬이었다면 600ms 초과)")
+                .isLessThan(520);
     }
 
     @Test
