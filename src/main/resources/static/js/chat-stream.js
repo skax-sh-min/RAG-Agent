@@ -99,9 +99,11 @@
         const wrap = document.createElement('div');
         wrap.className = 'd-flex justify-content-end mb-3 align-items-end';
         wrap.innerHTML =
-            `<div class="d-flex flex-column align-items-end me-1">` +
-            `<div class="bubble-user p-3">${escHtml(question)}</div>` +
-            `<small class="text-muted" style="font-size:0.68rem; margin-top:2px;">${escHtml(timeStr)}</small>` +
+            `<div class="me-1">` +
+            `<div class="bubble-user p-3">` +
+                `<div>${escHtml(question)}</div>` +
+                `<small class="text-white bubble-user-time">🕐 ${escHtml(timeStr)}</small>` +
+            `</div>` +
             `</div>`;
         document.getElementById('chat-messages').appendChild(wrap);
     }

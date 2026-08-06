@@ -138,12 +138,13 @@
                 <!-- Server-rendered previous turns (restored from conversation_turns) -->
                 <th:block th:if="${turns != null}" th:each="turn : ${turns}">
                     <div class="d-flex justify-content-end mb-3 align-items-end">
-                        <div class="d-flex flex-column align-items-end me-1">
-                            <div class="bubble-user p-3" th:text="${turn.question}"></div>
-                            <small class="text-muted msg-time"
-                                   th:if="${turn.askedAt != null}"
-                                   th:attr="data-utc-time=${turn.askedAt}"
-                                   style="font-size:0.68rem; margin-top:2px;"></small>
+                        <div class="me-1">
+                            <div class="bubble-user p-3">
+                                <div th:text="${turn.question}"></div>
+                                <small class="text-white bubble-user-time msg-time"
+                                       th:if="${turn.askedAt != null}"
+                                       th:attr="data-utc-time=${turn.askedAt}">🕐</small>
+                            </div>
                         </div>
                     </div>
                     <div class="d-flex align-items-end mb-3">
@@ -620,9 +621,11 @@
         const userBubble = document.createElement('div');
         userBubble.className = 'd-flex justify-content-end mb-3 align-items-end';
         userBubble.innerHTML =
-            `<div class="d-flex flex-column align-items-end me-1">` +
-            `<div class="bubble-user p-3">${escHtml(question)}</div>` +
-            `<small class="text-muted" style="font-size:0.68rem; margin-top:2px;">${escHtml(t)}</small>` +
+            `<div class="me-1">` +
+            `<div class="bubble-user p-3">` +
+                `<div>${escHtml(question)}</div>` +
+                `<small class="text-white bubble-user-time">🕐 ${escHtml(t)}</small>` +
+            `</div>` +
             `</div>`;
         chatMessages.appendChild(userBubble);
 
@@ -839,9 +842,11 @@
             const bubble = document.createElement('div');
             bubble.className = 'd-flex justify-content-end mb-3 align-items-end';
             bubble.innerHTML =
-                `<div class="d-flex flex-column align-items-end me-1">` +
-                `<div class="bubble-user p-3">${escHtml(q)}</div>` +
-                `<small class="text-muted" style="font-size:0.68rem; margin-top:2px;">${escHtml(timeStr)}</small>` +
+                `<div class="me-1">` +
+                `<div class="bubble-user p-3">` +
+                    `<div>${escHtml(q)}</div>` +
+                    `<small class="text-white bubble-user-time">🕐 ${escHtml(timeStr)}</small>` +
+                `</div>` +
                 `</div>`;
             chatMessages.appendChild(bubble);
         }

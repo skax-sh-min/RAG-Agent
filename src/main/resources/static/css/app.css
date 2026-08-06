@@ -39,6 +39,7 @@
 .bubble-user {
     background: var(--bg-bubble-user);
     color: white;
+    text-align: right;
     border-radius: 1rem 1rem 0 1rem;
     /* Must NOT be a % value: .bubble-user is a shrink-to-fit flex item nested inside
        another flex item (row > column). With max-width as a percentage, some browsers
@@ -53,7 +54,14 @@
     background: var(--bg-bubble-bot);
     border: 1px solid var(--border-default);
     border-radius: 1rem 1rem 1rem 0;
-    max-width: 92%;
+    max-width: 96%;
+}
+
+.bubble-user-time {
+    display: block;
+    margin-top: 0.35rem;
+    font-size: 0.68rem;
+    opacity: 0.85;
 }
 
 /* ── Superseded (unverified) retry answers ───────────────────────────────
