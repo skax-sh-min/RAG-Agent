@@ -589,8 +589,9 @@
 
     function stripImagePreviewFromSourceMarkdown(raw) {
         if (!raw) return '';
+        const mdImagePattern = new RegExp('!\\\\[' + '[^\\\\]]*\\\\]\\\\([^)]*\\\\)', 'g');
         return String(raw)
-            .replace(/!\[[^\]]*\]\([^)]*\)/g, '')
+            .replace(mdImagePattern, '')
             .replace(/<img\b[^>]*>/gi, '')
             .replace(/\[이미지(?:\(변환불가\))?:[^\]]*\]/g, '');
     }

@@ -2,6 +2,7 @@ package com.example.ragagent.service;
 
 import com.example.ragagent.agent.AgentState;
 import com.example.ragagent.config.AppProperties;
+import com.example.ragagent.ingestion.CuratedTextUtils;
 import com.example.ragagent.ingestion.MarkdownNoiseNormalizer;
 import com.example.ragagent.model.MetaKey;
 import com.example.ragagent.model.ResponseMode;
@@ -27,6 +28,7 @@ import org.springframework.stereotype.Service;
 
 import java.util.List;
 import java.util.Locale;
+import java.util.Arrays;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
 
@@ -102,7 +104,7 @@ public class AnswerService {
         ChatOptions options = answerOptions(state);
         LlmRouter.LlmResult result = llmRouter.executeGatedWithUsage(TaskType.TEXT, state.routingMode(),
                 model -> model.call(buildPrompt(systemPrompt, userPrompt, options)));
-        String answer = truncate(result.text() == null ? "" : result.text());
+        String answer = truncate(enforceSummaryOnlyForS(result.text() == null ? "" : result.text(), state.responseMode()));
         state = state.toBuilder()
                      .accumulateTokens(result.inputTokens(), result.outputTokens())
                      .usedProvider(llmRouter.findProviderName(TaskType.TEXT, state.routingMode()))
@@ -120,7 +122,7 @@ public class AnswerService {
         try (var permit = llmRouter.acquirePermit(provider)) {
             streamed = streamAnswer(provider, state, systemPrompt, listener::onToken);
         }
-        String answer = truncate(streamed);
+        String answer = truncate(enforceSummaryOnlyForS(streamed, state.responseMode()));
         // streaming has no ChatResponse to read real usage from — record an approximate
         // (chars/4) usage entry so /llm-usage isn't blind to the entire streaming chat path, and
         // reflect the same estimate in the per-turn total so the chat UI isn't stuck at 0/0.
@@ -453,6 +455,24 @@ public class AnswerService {
     private static String truncate(String answer) {
         if (answer == null || answer.length() <= MAX_ANSWER_LEN) return answer;
         return answer.substring(0, MAX_ANSWER_LEN) + "\n\n…(응답이 너무 길어 잘렸습니다)";
+    }
+
+    /**
+     * S mode must return summary-only text. Keep only the summary section body (if present),
+     * otherwise take the first non-empty lines, and cap to 7 lines.
+     */
+    private static String enforceSummaryOnlyForS(String answer, ResponseMode mode) {
+        if (mode != ResponseMode.S) return answer;
+        if (answer == null || answer.isBlank()) return answer;
+        String summary = CuratedTextUtils.extractSummarySection(answer);
+        String base = summary.isBlank() ? answer : summary;
+        String lines = Arrays.stream(base.split("\\R"))
+                .map(String::strip)
+                .filter(s -> !s.isBlank())
+                .limit(7)
+                .collect(Collectors.joining("\n"));
+        if (lines.isBlank()) return "## 요약\n요약할 내용이 없습니다.";
+        return "## 요약\n" + lines;
     }
 
 }
