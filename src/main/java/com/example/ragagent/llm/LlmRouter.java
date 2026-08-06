@@ -268,6 +268,18 @@ public class LlmRouter {
     }
 
     /**
+     * Returns true when at least one runtime-enabled provider has one of the exact types.
+     * Uses operator enable/disable state only; temporary circuit-breaker block does not change
+     * capability presence for UI toggles.
+     */
+    public boolean hasEnabledProviderType(TaskType... types) {
+        if (types == null || types.length == 0) return false;
+        Set<TaskType> wanted = Set.of(types);
+        return providers.stream()
+                .anyMatch(p -> wanted.contains(p.type()) && !providerToggle.isDisabled(p.name()));
+    }
+
+    /**
      * Whether the dedicated MICRO_TEXT offload model ({@code role=LOCAL, priority=0}, i.e. the
      * {@code local-fast} provider behind {@code LOCAL_FAST_LLM_URL} — LLM_ROUTING.md §9) is
      * currently available: registered (a blank base-url disables it outright at startup, LlmConfig

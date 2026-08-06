@@ -11,6 +11,8 @@ import com.example.ragagent.security.UploadValidator;
 import com.example.ragagent.service.DocumentExportService;
 import com.example.ragagent.service.IndexingProgressService;
 import com.example.ragagent.service.RagService;
+import com.example.ragagent.llm.LlmRouter;
+import com.example.ragagent.llm.TaskType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.core.io.FileSystemResource;
@@ -54,6 +56,7 @@ public class DocumentController {
     private final IndexingProgressService progressService;
     private final AuditLogger auditLogger;
     private final DocumentExportService exportService;
+    private final LlmRouter llmRouter;
     /** Only for the {@code includeCurated} union in {@link #listTags} — curated rows never reach
      *  {@code chunk_fts}, so their tags have to come straight from the table. */
     private final com.example.ragagent.repository.CuratedQaRepository curatedQaRepository;
@@ -62,11 +65,13 @@ public class DocumentController {
                                IndexingProgressService progressService,
                                AuditLogger auditLogger,
                                DocumentExportService exportService,
+                               LlmRouter llmRouter,
                                com.example.ragagent.repository.CuratedQaRepository curatedQaRepository) {
         this.ragService = ragService;
         this.progressService = progressService;
         this.auditLogger = auditLogger;
         this.exportService = exportService;
+        this.llmRouter = llmRouter;
         this.curatedQaRepository = curatedQaRepository;
     }
 
@@ -75,6 +80,8 @@ public class DocumentController {
     @GetMapping("/documents")
     public String documents(ThreadContext ctx, Model model) {
         model.addAttribute("documents", ragService.listDocuments(ctx.userId()));
+        boolean imageDescriptionAvailable = llmRouter.hasEnabledProviderType(TaskType.BOTH, TaskType.VISION);
+        model.addAttribute("imageDescriptionAvailable", imageDescriptionAvailable);
         return "documents";
     }
 
