@@ -41,6 +41,26 @@
         return new Date().toLocaleTimeString('ko-KR', {hour: '2-digit', minute: '2-digit', hour12: false});
     }
 
+    function stripImagePreviewFromSourceMarkdown(raw) {
+        if (!raw) return '';
+        return String(raw)
+            .replace(/!\[[^\]]*\]\([^)]*\)/g, '')
+            .replace(/<img\b[^>]*>/gi, '')
+            .replace(/\[이미지(?:\(변환불가\))?:[^\]]*\]/g, '');
+    }
+
+    function renderSourcePreviewHtml(raw) {
+        const text = stripImagePreviewFromSourceMarkdown(raw);
+        if (!text.trim()) return '<span class="text-muted small">미리보기 없음</span>';
+        if (typeof marked === 'undefined') return `<div class="small">${escHtml(text)}</div>`;
+        const parsed = marked.parse(text);
+        const sanitized = typeof DOMPurify !== 'undefined' ? DOMPurify.sanitize(parsed) : parsed;
+        const wrap = document.createElement('div');
+        wrap.innerHTML = sanitized;
+        wrap.querySelectorAll('img').forEach(img => img.remove());
+        return `<div class="small">${wrap.innerHTML}</div>`;
+    }
+
     let idSeq = 0;
 
     /**
@@ -270,14 +290,18 @@
         const refs = sources.map(s => {
             const label = escHtml(s.label || '출처');
             const previewAttr = previewEnabled
-                ? `data-bs-toggle="popover" data-bs-trigger="hover focus" data-bs-placement="top" data-bs-content="${escHtml(s.preview || '')}"`
+                ? `data-bs-toggle="popover" data-bs-trigger="hover focus" data-bs-placement="top" data-preview-md="${escHtml(s.preview || '')}"`
                 : '';
             return `<a href="#" class="source-ref badge bg-secondary text-decoration-none me-1 mb-1" ${previewAttr} title="${label}">${label}</a>`;
         }).join('');
         container.innerHTML = `<div class="mt-2">${refs}</div>`;
         if (previewEnabled) {
             container.querySelectorAll('[data-bs-toggle="popover"]')
-                .forEach(el => new bootstrap.Popover(el));
+                .forEach(el => new bootstrap.Popover(el, {
+                    html: true,
+                    sanitize: false,
+                    content: () => renderSourcePreviewHtml(el.getAttribute('data-preview-md') || '')
+                }));
         }
     }
 

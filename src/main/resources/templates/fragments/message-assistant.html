@@ -68,7 +68,7 @@
                        th:attr="data-bs-toggle='popover',
                                 data-bs-trigger='hover focus',
                                 data-bs-placement='left',
-                                data-bs-content=${src.preview}"></a>
+                                data-preview-md=${src.preview}"></a>
                 </li>
             </ul>
         </details>
@@ -121,16 +121,16 @@
     const sourcePreviewEnabled = typeof window.isSourcePreviewEnabled === 'function'
         ? window.isSourcePreviewEnabled()
         : true;
-    document.querySelectorAll('.source-ref[data-bs-toggle="popover"]').forEach(function (el) {
-        if (sourcePreviewEnabled) {
-            new bootstrap.Popover(el);
-        } else {
+    if (sourcePreviewEnabled && typeof window.initSourcePopovers === 'function') {
+        window.initSourcePopovers(document);
+    } else {
+        document.querySelectorAll('.source-ref[data-bs-toggle="popover"]').forEach(function (el) {
             el.removeAttribute('data-bs-toggle');
             el.removeAttribute('data-bs-trigger');
             el.removeAttribute('data-bs-placement');
-            el.removeAttribute('data-bs-content');
-        }
-    });
+            el.removeAttribute('data-preview-md');
+        });
+    }
 
     /* Render all un-rendered md-content blocks with XSS sanitization + syntax highlight */
     document.querySelectorAll('.md-content[data-md]').forEach(function (el) {

@@ -173,7 +173,7 @@
                                               th:attr="data-bs-toggle='popover',
                                                           data-bs-trigger='hover focus',
                                                           data-bs-placement='top',
-                                                          data-bs-content=${src.preview}"></a>
+                                                          data-preview-md=${src.preview}"></a>
                                      </div>
 
                             <!-- Feedback (like/dislike) + Metadata, same line -->
@@ -587,6 +587,26 @@
         return typeof DOMPurify !== 'undefined' ? DOMPurify.sanitize(html) : html;
     }
 
+    function stripImagePreviewFromSourceMarkdown(raw) {
+        if (!raw) return '';
+        return String(raw)
+            .replace(/!\[[^\]]*\]\([^)]*\)/g, '')
+            .replace(/<img\b[^>]*>/gi, '')
+            .replace(/\[이미지(?:\(변환불가\))?:[^\]]*\]/g, '');
+    }
+
+    function renderSourcePreviewHtml(raw) {
+        const text = stripImagePreviewFromSourceMarkdown(raw);
+        if (!text.trim()) return '<span class="text-muted small">미리보기 없음</span>';
+        if (typeof marked === 'undefined') return `<div class="small">${escHtml(text)}</div>`;
+        const parsed = marked.parse(text);
+        const sanitized = typeof DOMPurify !== 'undefined' ? DOMPurify.sanitize(parsed) : parsed;
+        const wrap = document.createElement('div');
+        wrap.innerHTML = sanitized;
+        wrap.querySelectorAll('img').forEach(img => img.remove());
+        return `<div class="small">${wrap.innerHTML}</div>`;
+    }
+
     function renderSourceBadges(sources) {
         if (!Array.isArray(sources) || sources.length === 0) return '';
         const previewEnabled = typeof window.isSourcePreviewEnabled === 'function'
@@ -594,9 +614,9 @@
             : true;
         const refs = sources.map(s => {
             const label = escHtml((s && s.label) ? s.label : '출처');
-            const preview = escHtml((s && s.preview) ? s.preview : '');
+            const previewMd = escHtml((s && s.preview) ? s.preview : '');
             const popoverAttrs = previewEnabled
-                ? `data-bs-toggle="popover" data-bs-trigger="hover focus" data-bs-placement="top" data-bs-content="${preview}"`
+                ? `data-bs-toggle="popover" data-bs-trigger="hover focus" data-bs-placement="top" data-preview-md="${previewMd}"`
                 : '';
             return `<a href="#" class="source-ref badge bg-secondary text-decoration-none me-1 mb-1" ${popoverAttrs} title="${label}">${label}</a>`;
         }).join('');
@@ -610,7 +630,15 @@
             : true;
         rootEl.querySelectorAll('.source-ref').forEach(function (el) {
             if (previewEnabled && el.hasAttribute('data-bs-toggle')) {
-                new bootstrap.Popover(el);
+                new bootstrap.Popover(el, {
+                    html: true,
+                    sanitize: false,
+                    content: () => renderSourcePreviewHtml(el.getAttribute('data-preview-md') || '')
+                });
+            } else {
+                el.removeAttribute('data-bs-toggle');
+                el.removeAttribute('data-bs-trigger');
+                el.removeAttribute('data-bs-placement');
             }
         });
     }
