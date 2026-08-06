@@ -31,8 +31,10 @@ import org.springframework.test.web.servlet.MockMvc;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.TimeUnit;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -182,6 +184,24 @@ class ChatControllerHtmxTest {
                         org.mockito.ArgumentMatchers.eq(List.of("billing", "policy")));
     }
 
+        @Test
+        @DisplayName("POST /ui/chat — response-mode-radio=S 이면 hidden 값과 무관하게 ResponseMode.S 전달")
+        void postChat_responseModeRadioOverridesHiddenMode() throws Exception {
+                when(agentService.chat(any(), any())).thenReturn(sampleResponse());
+
+                mvc.perform(post("/ui/chat")
+                                                .param("question", "테스트 질문")
+                                                .param("threadId", "t1")
+                                                .param("version", "latest")
+                                                .param("responseMode", "M")
+                                                .param("response-mode-radio", "S")
+                                                .with(csrf()))
+                                .andExpect(status().isOk())
+                                .andExpect(view().name("fragments/message-assistant :: message"));
+
+                verify(agentService).chat(any(), argThat(req -> req.responseMode() == com.example.ragagent.model.ResponseMode.S));
+        }
+
     @Test
     @DisplayName("POST /ui/chat/stream — 전송된 태그 선택을 스레드에 스냅샷 저장 (사이드바 목록용)")
     void streamChat_snapshotsSelectedTagsOntoThread() throws Exception {
@@ -199,6 +219,26 @@ class ChatControllerHtmxTest {
         org.mockito.Mockito.verify(threadMetaService)
                 .updateTags(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.eq("t1"),
                         org.mockito.ArgumentMatchers.eq(List.of("onboarding")));
+    }
+
+    @Test
+    @DisplayName("POST /ui/chat/stream — response-mode-radio=S 이면 StreamingAgentService에 S가 전달")
+    void streamChat_responseModeRadioPropagatesToStreamingService() throws Exception {
+        when(props.sseTimeoutMs()).thenReturn(300_000L);
+
+        mvc.perform(post("/ui/chat/stream")
+                        .param("question", "테스트")
+                        .param("threadId", "t1")
+                        .param("version", "latest")
+                        .param("responseMode", "M")
+                        .param("response-mode-radio", "S")
+                        .with(csrf()))
+                .andExpect(status().isOk())
+                .andExpect(request().asyncStarted());
+
+        verify(streamingAgentService,
+                org.mockito.Mockito.timeout((int) TimeUnit.SECONDS.toMillis(1)))
+                .run(any(), argThat(form -> form.responseModeOrDefault() == com.example.ragagent.model.ResponseMode.S), any());
     }
 
     @Test

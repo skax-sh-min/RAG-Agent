@@ -430,13 +430,15 @@ class AnswerServiceTest {
     @Test
     @DisplayName("BLOCKING — 응답 스타일 지침에 모드별 글자수 목표(minChars, 기본 6000토큰 설정에서는 바닥값)가 전달된다")
     void blocking_answerPrompt_passesResponseModeCharTarget() {
+        // S 모드에서는 평가(evaluate) LLM 호출 자체가 스킵되므로 answer 호출 1회만 발생한다.
         when(llmRouter.executeGatedWithUsage(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), any()))
-                .thenReturn(new LlmRouter.LlmResult("답변", 0, 0),
-                            new LlmRouter.LlmResult("{\"sufficient\":true}", 0, 0));
+                .thenReturn(new LlmRouter.LlmResult("답변", 0, 0));
         when(llmRouter.findProviderName(any(), any())).thenReturn("gemini-flash");
 
         service.execute(newState(RoutingMode.COST_FIRST).toBuilder().responseMode(ResponseMode.S).build());
 
+        // 평가 LLM은 한 번도 호출되지 않는다 (answer LLM 1회만)
+        verify(llmRouter, org.mockito.Mockito.times(1)).executeGatedWithUsage(any(), any(), any());
         verify(messageSource).getMessage(eq("prompt.answer.style.s"), eq(new Object[]{2_000}), any(Locale.class));
     }
 
@@ -498,6 +500,28 @@ class AnswerServiceTest {
 
         assertThat(verifyingCalls.get()).isEqualTo(1);
         assertThat(callOrder).containsSubsequence("token", "verifying", "evaluate");
+    }
+
+    @Test
+    @DisplayName("STREAMING S 모드 — onVerifying() 미발생 + 평가 LLM 호출도 스킵된다")
+    void streaming_sMode_doesNotEmitOnVerifyingAndSkipsEvaluateLlmCall() {
+        ChatModel chatModel = mock(ChatModel.class);
+        when(chatModel.stream(any(Prompt.class))).thenReturn(Flux.just(chatResponse("스트리밍 답변")));
+        LlmProvider provider = new LlmProvider(
+                "local", TaskType.TEXT, ProviderRole.LOCAL, 0, "key", null, "model", false, chatModel, null);
+        when(llmRouter.routeProvider(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST))).thenReturn(provider);
+        // 평가 LLM은 S 모드에서 호출되지 않아야 한다. 스텁을 제거해 실수로 호출되면 즉시 실패하게 한다.
+
+        AtomicInteger verifyingCalls = new AtomicInteger();
+        GraphListener listener = new GraphListener() {
+            @Override public void onVerifying() { verifyingCalls.incrementAndGet(); }
+        };
+
+        service.executeStreaming(newState(RoutingMode.COST_FIRST).toBuilder().responseMode(ResponseMode.S).build(), listener);
+
+        assertThat(verifyingCalls.get()).isZero();
+        // 평가 LLM(executeGatedWithUsage)은 한 번도 호출되지 않는다
+        verify(llmRouter, org.mockito.Mockito.never()).executeGatedWithUsage(any(), any(), any());
     }
 
     @Test

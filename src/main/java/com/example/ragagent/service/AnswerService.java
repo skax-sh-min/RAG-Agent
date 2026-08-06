@@ -137,6 +137,13 @@ public class AnswerService {
     // ── Evaluation (sufficiency + grounding) + PROGRESSIVE ───────────────────
 
     private AgentState checkSufficiencyAndMaybeUpgrade(AgentState state, String answer, GraphListener listener) {
+        // S mode: skip evaluation entirely — no verifying indicator, no LLM eval call,
+        // no retry loop. CRITIC is already skipped in AgentGraph for S mode; skipping the
+        // ANSWER-level eval here ensures neither the blocking LLM call nor the "응답 검증 중..."
+        // UI indicator appears. grounded stays null (검증 미실행), same convention as directMode.
+        if (state.responseMode() == ResponseMode.S) {
+            return state;
+        }
         // The blocking evaluate() call below can take several seconds to tens of seconds with no
         // token/stage event of its own — tell the streaming client to show a "verifying" indicator
         // instead of going silent between the last answer token and the next event.

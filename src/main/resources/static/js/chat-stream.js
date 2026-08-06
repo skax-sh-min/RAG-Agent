@@ -593,6 +593,13 @@
             const question   = questionEl ? questionEl.value.trim() : '';
             if (!question) return;
 
+            // Defensive sync: capture the currently checked S/M/L radio into the hidden field
+            // right before FormData is built. This avoids stale hidden values when users
+            // quickly switch mode and submit in one interaction.
+            const selectedMode = document.querySelector('input[name="response-mode-radio"]:checked');
+            const hiddenMode = document.getElementById('form-response-mode');
+            if (selectedMode && hiddenMode) hiddenMode.value = selectedMode.value;
+
             // Capture FormData BEFORE clearing the textarea
             const formData = new FormData(form);
 

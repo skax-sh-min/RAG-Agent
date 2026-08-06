@@ -151,29 +151,32 @@ public class ChatController {
     }
 
     @PostMapping(value = "/ui/chat/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public SseEmitter streamChat(ThreadContext ctx, @ModelAttribute ChatForm form) {
+    public SseEmitter streamChat(ThreadContext ctx,
+                                 @ModelAttribute ChatForm form,
+                                 @RequestParam(name = "response-mode-radio", required = false) String responseModeRadio) {
+        final ChatForm normalizedForm = normalizeResponseMode(form, responseModeRadio);
         SseEmitter emitter = new SseEmitter(props.sseTimeoutMs());
-        if (form.question() == null || form.question().isBlank()) {
+        if (normalizedForm.question() == null || normalizedForm.question().isBlank()) {
             emitter.completeWithError(new IllegalArgumentException("question is blank"));
             return emitter;
         }
         String userId = ctx.userId();
-        threadMetaService.getOrCreate(userId, form.threadId(), form.version());
-        threadMetaService.updateTags(userId, form.threadId(), form.selectedTags());
-        Thread worker = Thread.ofVirtual().start(() -> streamingAgentService.run(userId, form, emitter));
+        threadMetaService.getOrCreate(userId, normalizedForm.threadId(), normalizedForm.version());
+        threadMetaService.updateTags(userId, normalizedForm.threadId(), normalizedForm.selectedTags());
+        Thread worker = Thread.ofVirtual().start(() -> streamingAgentService.run(userId, normalizedForm, emitter));
         emitter.onTimeout(() -> {
             log.warn("[TIMEOUT:SSE] thread={} timeoutMs={} (app.sse-timeout-seconds={}s)",
-                    form.threadId(), props.sseTimeoutMs(), props.sseTimeoutMs() / 1000);
+                    normalizedForm.threadId(), props.sseTimeoutMs(), props.sseTimeoutMs() / 1000);
             worker.interrupt();
         });
         emitter.onError(t -> {
-            log.warn("[SSE] emitter error thread={} type={} msg={}", form.threadId(),
+            log.warn("[SSE] emitter error thread={} type={} msg={}", normalizedForm.threadId(),
                     t == null ? "null" : t.getClass().getSimpleName(),
                     t == null ? "null" : t.getMessage());
             worker.interrupt();
         });
         emitter.onCompletion(() -> {
-            log.debug("[SSE] completed thread={}", form.threadId());
+            log.debug("[SSE] completed thread={}", normalizedForm.threadId());
             worker.interrupt();
         });
         return emitter;
@@ -194,8 +197,11 @@ public class ChatController {
     }
 
     @PostMapping("/ui/chat")
-    public String postChat(ThreadContext ctx, @ModelAttribute ChatForm form,
+    public String postChat(ThreadContext ctx,
+                           @ModelAttribute ChatForm form,
+                           @RequestParam(name = "response-mode-radio", required = false) String responseModeRadio,
                            Model model, HttpServletResponse response) {
+        form = normalizeResponseMode(form, responseModeRadio);
         if (form.question() == null || form.question().isBlank()) {
             return "fragments/message-error :: message";
         }
@@ -259,6 +265,21 @@ public class ChatController {
         }
         ChatResponse response = agentService.chat(ctx, request);
         return ResponseEntity.ok(response);
+    }
+
+    private ChatForm normalizeResponseMode(ChatForm form, String responseModeRadio) {
+        if (responseModeRadio == null || responseModeRadio.isBlank()) {
+            return form;
+        }
+        ResponseMode selected = ResponseMode.parse(responseModeRadio);
+        return new ChatForm(
+                form.question(),
+                form.threadId(),
+                form.version(),
+                form.routingMode(),
+                form.directMode(),
+                form.tags(),
+                selected.name());
     }
 
     @GetMapping("/api/v1/questions/suggest")
