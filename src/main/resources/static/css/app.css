@@ -163,12 +163,15 @@
 .dot-unknown { background: #6c757d; }
 
 /* ── Markdown content in assistant bubble ────────────────────────────── */
-.md-content h1 { font-size: 1.1rem;  font-weight: 700; margin-top: 0.75rem; }
-.md-content h2 { font-size: 1rem;    font-weight: 600; margin-top: 0.75rem; }
-.md-content h3 { font-size: 0.95rem; font-weight: 600; margin-top: 0.5rem; }
-.md-content h4,
-.md-content h5,
-.md-content h6 { font-size: 0.9rem;  font-weight: 600; }
+/* 소제목 크기를 본문에 가깝게 유지 — 본문 기준 ~0.875rem(14px) 가정.
+   h2 +4px=18px≈1.125rem, h3 +3px=17px≈1.0625rem, h4 +2px=16px=1rem,
+   h5 +1px=15px≈0.9375rem, h6 동일=14px=0.875rem·굵게. */
+.md-content h1 { font-size: 1.2rem;    font-weight: 700; margin-top: 0.75rem; }
+.md-content h2 { font-size: 1.1875rem;  font-weight: 750; margin-top: 0.75rem; }
+.md-content h3 { font-size: 1.125rem; font-weight: 750; margin-top: 0.5rem; }
+.md-content h4 { font-size: 1.0625rem;      font-weight: 750; margin-top: 0.4rem; }
+.md-content h5 { font-size: 1rem; font-weight: 750; }
+.md-content h6 { font-size: 0.9375rem;  font-weight: 750; }
 .md-content pre {
     background: var(--code-bg);
     border: 1px solid var(--border-default);
@@ -215,6 +218,14 @@
         max-width: 620px;
         font-size: 0.8rem;
     }
+    /* 팝오버 내부 소제목 — .popover font-size(0.8rem)를 기준 삼으면 .md-content h*의
+       rem 값이 상대적으로 다시 커지므로 px로 고정한다. */
+    .popover .md-content h1 { font-size: 12px; }
+    .popover .md-content h2 { font-size: 11px; }
+    .popover .md-content h3 { font-size: 10px; }
+    .popover .md-content h4 { font-size: 9px; }
+    .popover .md-content h5 { font-size: 8px; }
+    .popover .md-content h6 { font-size: 8px; }
 }
 
 /* ── Chat input safe-area (notched phones) ───────────────────────────── */
