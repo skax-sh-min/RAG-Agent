@@ -281,6 +281,7 @@ public class StreamingAgentService {
         private final SseEmitter emitter;
         private final AtomicLong lastActivityNanos;
         private final StringBuilder accumulated = new StringBuilder();
+        private boolean waitingFirstAnswerToken;
 
         SseGraphListener(SseEmitter emitter, AtomicLong lastActivityNanos) {
             this.emitter = emitter;
@@ -292,6 +293,7 @@ public class StreamingAgentService {
         @Override
         public void onNodeEnter(String nodeName) {
             lastActivityNanos.set(nanoTimeSource.getAsLong());
+            waitingFirstAnswerToken = "answer".equals(nodeName);
             Map<String, String> payload = Map.of("id", nodeName, "text", stageText(nodeName));
             sendEvent(emitter, "stage", payload);
         }
@@ -299,6 +301,10 @@ public class StreamingAgentService {
         @Override
         public void onToken(String text) {
             lastActivityNanos.set(nanoTimeSource.getAsLong());
+            if (waitingFirstAnswerToken) {
+                waitingFirstAnswerToken = false;
+                sendEvent(emitter, "stage", Map.of("id", "answer", "text", "답변 생성 중..."));
+            }
             accumulated.append(text);
             Map<String, Object> payload = new HashMap<>();
             payload.put("text", text);
@@ -365,7 +371,7 @@ public class StreamingAgentService {
             return switch (nodeId) {
                 case "classifier" -> "질문 분류 중...";
                 case "retrieval"  -> "관련 문서 검색 중...";
-                case "answer"     -> "답변 생성 중...";
+                case "answer"     -> "답변 생각 중...";
                 case "critic"     -> "답변 검증 중...";
                 default           -> nodeId;
             };

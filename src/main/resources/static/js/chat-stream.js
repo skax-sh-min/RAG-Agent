@@ -24,7 +24,7 @@
     const STAGE_LABELS = {
         classifier: '질문 분류 중...',
         retrieval:  '관련 문서 검색 중...',
-        answer:     '답변 생성 중...',
+        answer:     '답변 생각 중...',
         critic:     '답변 검증 중...',
         upgrade:    '고추론 재분석 중...',
     };
