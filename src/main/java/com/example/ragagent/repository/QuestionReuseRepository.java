@@ -86,6 +86,7 @@ public class QuestionReuseRepository {
                                 LEFT JOIN conversation_turns src ON src.id = t.reused_from_turn_id AND src.user_id = t.user_id
                                 WHERE lower(t.question) LIKE lower(?)
                                     AND (t.feedback IS NULL OR t.feedback <> 'DISLIKE')
+                                    AND (COALESCE(t.direct_mode, 0) = 0 OR t.feedback = 'LIKE')
                 """ + (meOnly ? " AND t.user_id = ? " : "") + " ORDER BY t.id DESC LIMIT ?";
 
         if (meOnly) {
@@ -122,6 +123,7 @@ public class QuestionReuseRepository {
                                 LEFT JOIN conversation_turns src ON src.id = t.reused_from_turn_id AND src.user_id = t.user_id
                                 WHERE t.id = ?
                                     AND (t.feedback IS NULL OR t.feedback <> 'DISLIKE')
+                                    AND (COALESCE(t.direct_mode, 0) = 0 OR t.feedback = 'LIKE')
                 """ + (meOnly ? " AND t.user_id = ?" : "") + " LIMIT 1";
         List<CandidateTurn> rows = meOnly
                 ? jdbc.query(sql,

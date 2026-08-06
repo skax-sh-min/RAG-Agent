@@ -70,7 +70,8 @@ public class SqliteMemoryRepository implements MemoryRepository {
                 "ALTER TABLE conversation_turns ADD COLUMN feedback TEXT",
                 "ALTER TABLE conversation_turns ADD COLUMN response_mode TEXT",
                 "ALTER TABLE conversation_turns ADD COLUMN selected_tags TEXT",
-                "ALTER TABLE conversation_turns ADD COLUMN reused_from_turn_id INTEGER"
+            "ALTER TABLE conversation_turns ADD COLUMN reused_from_turn_id INTEGER",
+            "ALTER TABLE conversation_turns ADD COLUMN direct_mode INTEGER NOT NULL DEFAULT 0"
         )) {
             try { jdbc.execute(ddl); } catch (Exception ignored) {}
         }
@@ -144,13 +145,13 @@ public class SqliteMemoryRepository implements MemoryRepository {
     public long addTurn(String userId, String threadId, String question, String answer,
                         String askedAt, int inputTokens, int outputTokens,
                         int elapsedMs, String provider, int llmCalls, String responseMode,
-                        String selectedTags, Long reusedFromTurnId) {
+                        String selectedTags, boolean directMode, Long reusedFromTurnId) {
         KeyHolder keyHolder = new GeneratedKeyHolder();
         jdbc.update(connection -> {
             PreparedStatement ps = connection.prepareStatement(
                     "INSERT INTO conversation_turns " +
-                    "(user_id, thread_id, question, answer, asked_at, input_tokens, output_tokens, elapsed_ms, provider, llm_calls, response_mode, selected_tags, reused_from_turn_id) " +
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "(user_id, thread_id, question, answer, asked_at, input_tokens, output_tokens, elapsed_ms, provider, llm_calls, response_mode, selected_tags, direct_mode, reused_from_turn_id) " +
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     Statement.RETURN_GENERATED_KEYS);
             ps.setString(1, userId);
             ps.setString(2, threadId);
@@ -164,10 +165,11 @@ public class SqliteMemoryRepository implements MemoryRepository {
             ps.setInt(10, llmCalls);
             ps.setString(11, responseMode);
             ps.setString(12, selectedTags);
+            ps.setInt(14, directMode ? 1 : 0);
             if (reusedFromTurnId == null) {
-                ps.setNull(13, java.sql.Types.BIGINT);
+                ps.setNull(15, java.sql.Types.BIGINT);
             } else {
-                ps.setLong(13, reusedFromTurnId);
+                ps.setLong(15, reusedFromTurnId);
             }
             return ps;
         }, keyHolder);

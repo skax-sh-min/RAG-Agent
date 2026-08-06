@@ -211,7 +211,8 @@ public class StreamingAgentService {
                 turnId = memoryService.addTurn(userId, form.threadId(), form.question(), result.answer(),
                         askedAt, result.totalInputTokens(), result.totalOutputTokens(),
                         (int) elapsedMs, result.usedProvider(), result.llmCallCount(),
-                        form.responseModeOrDefault().name(), TagUtils.toMetaValue(form.selectedTags()));
+                    form.responseModeOrDefault().name(), TagUtils.toMetaValue(form.selectedTags()),
+                    form.isDirectMode());
                 memoryService.saveTurnImageRefs(turnId, userId, form.threadId(), result.imageRefs());
                 if (questionReuseService != null) {
                     questionReuseService.recordTurnSources(turnId, userId, form.threadId(), result.retrievedDocs());
@@ -257,7 +258,7 @@ public class StreamingAgentService {
                         memoryService.addTurn(userId, form.threadId(), form.question(),
                                 partial + "\n[오류로 중단됨]",
                                 askedAt, 0, 0, 0, null, 0, form.responseModeOrDefault().name(),
-                                TagUtils.toMetaValue(form.selectedTags()));
+                            TagUtils.toMetaValue(form.selectedTags()), form.isDirectMode());
                         log.debug("partial answer persisted ({} chars) thread={}",
                                 partial.length(), form.threadId());
                     } catch (Exception persistEx) {

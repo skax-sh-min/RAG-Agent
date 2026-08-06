@@ -53,6 +53,15 @@ public class MemoryService {
                 selectedTags);
     }
 
+        public long addTurn(String userId, String threadId, String question, String answer,
+                String askedAt, int inputTokens, int outputTokens,
+                int elapsedMs, String provider, int llmCalls, String responseMode,
+                String selectedTags, boolean directMode) {
+        return repository.addTurn(userId, threadId, question, answer,
+            askedAt, inputTokens, outputTokens, elapsedMs, provider, llmCalls, responseMode,
+            selectedTags, directMode);
+        }
+
     public long addTurn(String userId, String threadId, String question, String answer,
                         String askedAt, int inputTokens, int outputTokens,
                         int elapsedMs, String provider, int llmCalls, String responseMode,
@@ -61,6 +70,15 @@ public class MemoryService {
                 askedAt, inputTokens, outputTokens, elapsedMs, provider, llmCalls, responseMode,
                 selectedTags, reusedFromTurnId);
     }
+
+        public long addTurn(String userId, String threadId, String question, String answer,
+                String askedAt, int inputTokens, int outputTokens,
+                int elapsedMs, String provider, int llmCalls, String responseMode,
+                String selectedTags, boolean directMode, Long reusedFromTurnId) {
+        return repository.addTurn(userId, threadId, question, answer,
+            askedAt, inputTokens, outputTokens, elapsedMs, provider, llmCalls, responseMode,
+            selectedTags, directMode, reusedFromTurnId);
+        }
 
     public void clearHistory(String userId, String threadId) {
         repository.clearHistory(userId, threadId);

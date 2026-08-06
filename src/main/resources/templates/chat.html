@@ -270,14 +270,6 @@
 
                         <div class="flex-grow-1"></div>
 
-                        <div class="input-group input-group-sm w-auto">
-                            <span class="input-group-text">Q Scope</span>
-                            <select id="question-reuse-scope" class="form-select" style="max-width: 110px;">
-                                <option value="shared" selected>shared</option>
-                                <option value="me">me</option>
-                            </select>
-                        </div>
-
                         <!-- 응답 모드 S/M/L 토글 — 답변 길이·상세도 (기본 M).
                              L(원문 최대)은 RAG 검색 컨텍스트가 있을 때만 의미가 있어 Direct 모드에서 비활성화.
                              툴팁은 네이티브 title(브라우저 기본 지연 ~1.5s)이 아니라 Bootstrap Tooltip(짧은 delay)로 표시 — 하단 스크립트에서 초기화. -->
@@ -380,7 +372,6 @@
     const directLabel     = document.getElementById('direct-mode-label');
     const directModeInput = document.getElementById('form-direct-mode');
     const suggestBox      = document.getElementById('question-suggest-box');
-    const reuseScopeSel   = document.getElementById('question-reuse-scope');
     let suggestTimer      = null;
     let suggestSeq        = 0;
     const SOURCE_PREVIEW_ENABLED = /*[[${sourcePreviewEnabled}]]*/ true;
@@ -675,7 +666,7 @@
     async function onSelectSuggestion(turnId) {
         const threadId = chatForm.querySelector('input[name="threadId"]').value;
         const version = document.getElementById('form-version').value || 'latest';
-        const scope = (reuseScopeSel.value || 'shared').toLowerCase();
+        const scope = 'shared';
         try {
             const body = new URLSearchParams({ turnId: String(turnId), threadId, version, scope });
             const res = await fetch('/api/v1/questions/reuse', {
@@ -722,7 +713,7 @@
             return;
         }
         const seq = ++suggestSeq;
-        const scope = (reuseScopeSel.value || 'shared').toLowerCase();
+        const scope = 'shared';
         const params = new URLSearchParams({ q, scope, limit: '8' });
         try {
             const res = await fetch('/api/v1/questions/suggest?' + params.toString(), {
@@ -739,10 +730,6 @@
     questionInput.addEventListener('input', function () {
         if (suggestTimer) clearTimeout(suggestTimer);
         suggestTimer = setTimeout(loadQuestionSuggestions, 220);
-    });
-
-    reuseScopeSel.addEventListener('change', function () {
-        if ((questionInput.value || '').trim().length >= 2) loadQuestionSuggestions();
     });
 
     questionInput.addEventListener('blur', function () {

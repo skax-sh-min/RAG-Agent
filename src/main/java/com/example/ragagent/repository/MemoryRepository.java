@@ -15,15 +15,31 @@ public interface MemoryRepository {
     long addTurn(String userId, String threadId, String question, String answer,
                  String askedAt, int inputTokens, int outputTokens,
                  int elapsedMs, String provider, int llmCalls, String responseMode,
-                 String selectedTags, Long reusedFromTurnId);
+             String selectedTags, boolean directMode, Long reusedFromTurnId);
+
+        default long addTurn(String userId, String threadId, String question, String answer,
+             String askedAt, int inputTokens, int outputTokens,
+             int elapsedMs, String provider, int llmCalls, String responseMode,
+             String selectedTags, Long reusedFromTurnId) {
+        return addTurn(userId, threadId, question, answer, askedAt, inputTokens, outputTokens,
+            elapsedMs, provider, llmCalls, responseMode, selectedTags, false, reusedFromTurnId);
+        }
 
     default long addTurn(String userId, String threadId, String question, String answer,
                  String askedAt, int inputTokens, int outputTokens,
                  int elapsedMs, String provider, int llmCalls, String responseMode,
                  String selectedTags) {
         return addTurn(userId, threadId, question, answer, askedAt, inputTokens, outputTokens,
-                elapsedMs, provider, llmCalls, responseMode, selectedTags, null);
+            elapsedMs, provider, llmCalls, responseMode, selectedTags, false, null);
     }
+
+        default long addTurn(String userId, String threadId, String question, String answer,
+             String askedAt, int inputTokens, int outputTokens,
+             int elapsedMs, String provider, int llmCalls, String responseMode,
+             String selectedTags, boolean directMode) {
+        return addTurn(userId, threadId, question, answer, askedAt, inputTokens, outputTokens,
+            elapsedMs, provider, llmCalls, responseMode, selectedTags, directMode, null);
+        }
 
     void clearHistory(String userId, String threadId);
 

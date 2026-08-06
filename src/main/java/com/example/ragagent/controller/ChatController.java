@@ -270,7 +270,7 @@ public class ChatController {
             @RequestParam(name = "limit", defaultValue = "8") int limit) {
         if (questionReuseService == null || q == null || q.strip().length() < 2) return List.of();
         int bounded = Math.max(1, Math.min(limit, 20));
-        return questionReuseService.suggest(ctx.userId(), QuestionReuseService.Scope.parse(scope), q, bounded);
+        return questionReuseService.suggest(ctx.userId(), QuestionReuseService.Scope.SHARED, q, bounded);
     }
 
     @PostMapping("/api/v1/questions/reuse")
@@ -289,7 +289,7 @@ public class ChatController {
         }
 
         QuestionReuseService.ReuseLookup lookup =
-            questionReuseService.reuseLookup(ctx.userId(), QuestionReuseService.Scope.parse(scope), turnId);
+            questionReuseService.reuseLookup(ctx.userId(), QuestionReuseService.Scope.SHARED, turnId);
         if (!lookup.reusable()) {
             return ResponseEntity.ok(Map.of(
                 "reused", false,

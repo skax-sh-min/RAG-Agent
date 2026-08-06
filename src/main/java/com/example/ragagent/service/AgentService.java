@@ -99,7 +99,8 @@ public class AgentService {
             turnId = memoryService.addTurn(userId, request.threadId(), request.question(), result.answer(),
                     askedAt, result.totalInputTokens(), result.totalOutputTokens(),
                     (int) elapsedMs, result.usedProvider(), result.llmCallCount(),
-                    request.responseMode().name(), TagUtils.toMetaValue(request.selectedTags()));
+                    request.responseMode().name(), TagUtils.toMetaValue(request.selectedTags()),
+                    request.directMode());
                         memoryService.saveTurnImageRefs(turnId, userId, request.threadId(), result.imageRefs());
             if (questionReuseService != null) {
                 questionReuseService.recordTurnSources(turnId, userId, request.threadId(), result.retrievedDocs());
