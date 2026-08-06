@@ -1,6 +1,7 @@
 package com.example.ragagent.agent;
 
 import com.example.ragagent.config.AppProperties;
+import com.example.ragagent.model.ResponseMode;
 import com.example.ragagent.service.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -103,6 +104,9 @@ public class AgentGraph {
                                 state.retryCount(), state.threadId(), state.evalReason());
                         listener.onRetry("answer", state.retryCount(), state.evalReason());
                         yield Node.RETRIEVAL;
+                    }
+                    if (state.responseMode() == ResponseMode.S) {
+                        yield Node.FINALIZE;
                     }
                     yield Node.CRITIC;
                 }

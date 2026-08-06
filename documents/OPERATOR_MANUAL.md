@@ -73,10 +73,13 @@ RAG Agent 시스템 배포·설정·운영 가이드입니다.
         └─ other ──▶ [Retrieval]   (LLM이 최적 쿼리 생성 → 벡터 검색, chroma/sqlite-vec 백엔드 선택)
                        └─▶ [Answer]   (구조화 답변 + 충분성 자체 평가)
                               ├─ 증거 부족 ──▶ [Retrieval] (최대 2회 재시도)
-                              └─ 충분      ──▶ [Critic]   (근거 검증)
-                                                    ├─ 미근거 ──▶ [Retrieval]
-                                                    └─ 근거   ──▶ [Finalize] → 응답
+          └─ 충분      ──▶ [Finalize] (responseMode=S)
+               └─▶ [Critic]   (responseMode!=S, 근거 검증)
+                 ├─ 미근거 ──▶ [Retrieval]
+                 └─ 근거   ──▶ [Finalize] → 응답
 ```
+
+> 응답 모드가 `S`인 turn은 Answer 뒤 Critic을 건너뛰고 바로 Finalize로 종료합니다.
 
 ---
 
@@ -1310,7 +1313,7 @@ app.llm.providers[1].stream=false
 | ClassifierService | `LIGHT_TEXT` | 질문 유형 분류 (품질 민감 — 큰 모델 유지) |
 | RetrievalService | `MICRO_TEXT` | 쿼리 생성 (MultiQueryExpander) — §6.21 작업2로 MICRO_TEXT 전환 |
 | AnswerService | `TEXT` | 답변 생성 + **충분도·근거 통합 평가**(별도 1콜) |
-| CriticService | — | **LLM 호출 없음** — AnswerService의 통합 평가가 낸 `grounded`를 읽어 재시도 여부만 결정 |
+| CriticService | — | **LLM 호출 없음** — AnswerService의 통합 평가가 낸 `grounded`를 읽어 재시도 여부만 결정 (`responseMode=S`이면 이 단계 스킵) |
 | DirectAnswerService | `LIGHT_TEXT` | meta 질문 직접 응답 (사용자 노출 — 큰 모델 유지) |
 | VisionDescriptionService | `VISION` | 이미지 → 설명 생성 |
 | ImageTypeClassifier | `LIGHT_BOTH` | 이미지 유형 분류 |
