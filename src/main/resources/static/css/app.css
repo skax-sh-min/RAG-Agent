@@ -220,12 +220,19 @@
     }
     /* 팝오버 내부 소제목 — .popover font-size(0.8rem)를 기준 삼으면 .md-content h*의
        rem 값이 상대적으로 다시 커지므로 px로 고정한다. */
-    .popover .md-content h1 { font-size: 12px; }
-    .popover .md-content h2 { font-size: 11px; }
-    .popover .md-content h3 { font-size: 10px; }
-    .popover .md-content h4 { font-size: 9px; }
-    .popover .md-content h5 { font-size: 8px; }
-    .popover .md-content h6 { font-size: 8px; }
+    .popover .md-content h1 { font-size: 13px; }
+    .popover .md-content h2 { font-size: 12px; }
+    .popover .md-content h3 { font-size: 11px; }
+    .popover .md-content h4 { font-size: 10px; }
+    .popover .md-content h5 { font-size: 9px; }
+    .popover .md-content h6 { font-size: 9px; }
+    /* .md-content table 도 마찬가지로 rem(루트 기준)이라 .popover의 축소된
+       font-size를 무시하고 본문보다 커 보였다 — 헤딩과 같은 이유로 px 고정. */
+    .popover .md-content table,
+    .popover .md-content th,
+    .popover .md-content td { font-size: 11px; }
+    /* .md-content pre 도 동일 원인(rem). code는 pre 기준 em이라 pre만 고정하면 같이 줄어든다. */
+    .popover .md-content pre { font-size: 11px; }
 }
 
 /* ── Chat input safe-area (notched phones) ───────────────────────────── */

@@ -204,7 +204,7 @@ public class QuestionReuseService {
             meta.put(MetaKey.CHAPTER_NO, chapter);
         }
         String label = RetrievalService.formatSource(new Document("", meta));
-        String preview = truncate(row.content(), 600);
+        String preview = truncate(row.content(), 1200);
         return new SourceRef(label, preview, row.chunkId(), row.docId(), page);
     }
 

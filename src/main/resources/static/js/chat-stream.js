@@ -52,13 +52,13 @@
     function renderSourcePreviewHtml(raw) {
         const text = stripImagePreviewFromSourceMarkdown(raw);
         if (!text.trim()) return '<span class="text-muted small">미리보기 없음</span>';
-        if (typeof marked === 'undefined') return `<div class="small">${escHtml(text)}</div>`;
+        if (typeof marked === 'undefined') return `<div class="md-content small">${escHtml(text)}</div>`;
         const parsed = marked.parse(text);
         const sanitized = typeof DOMPurify !== 'undefined' ? DOMPurify.sanitize(parsed) : parsed;
         const wrap = document.createElement('div');
         wrap.innerHTML = sanitized;
         wrap.querySelectorAll('img').forEach(img => img.remove());
-        return `<div class="small">${wrap.innerHTML}</div>`;
+        return `<div class="md-content small">${wrap.innerHTML}</div>`;
     }
 
     let idSeq = 0;
@@ -296,13 +296,36 @@
         }).join('');
         container.innerHTML = `<div class="mt-2">${refs}</div>`;
         if (previewEnabled) {
-            container.querySelectorAll('[data-bs-toggle="popover"]')
-                .forEach(el => new bootstrap.Popover(el, {
-                    html: true,
-                    sanitize: false,
-                    content: () => renderSourcePreviewHtml(el.getAttribute('data-preview-md') || '')
-                }));
+            container.querySelectorAll('[data-bs-toggle="popover"]').forEach(bindSourcePopover);
         }
+    }
+
+    /* trigger를 hover/focus 자동 바인딩 대신 manual로 두고 show/hide를 직접 제어한다 —
+       배지에서 마우스를 떼는 순간 Bootstrap 기본 동작(hide 지연 없음)이 팝오버 박스에
+       닿기도 전에 먼저 닫아버려 미리보기 텍스트를 드래그로 선택/복사할 수 없었다. 짧은
+       유예(250ms) 뒤에 닫되, 팝오버 박스 위에 마우스가 있는 동안은 유예를 계속 취소한다. */
+    function bindSourcePopover(el) {
+        const popover = new bootstrap.Popover(el, {
+            html: true,
+            sanitize: false,
+            trigger: 'manual',
+            content: () => renderSourcePreviewHtml(el.getAttribute('data-preview-md') || '')
+        });
+        let hideTimer = null;
+        const cancelHide = () => { clearTimeout(hideTimer); hideTimer = null; };
+        const scheduleHide = () => { cancelHide(); hideTimer = setTimeout(() => popover.hide(), 250); };
+        el.addEventListener('mouseenter', () => { cancelHide(); popover.show(); });
+        el.addEventListener('mouseleave', scheduleHide);
+        el.addEventListener('focus', () => { cancelHide(); popover.show(); });
+        el.addEventListener('blur', scheduleHide);
+        el.addEventListener('shown.bs.popover', function () {
+            const tipId = el.getAttribute('aria-describedby');
+            const tip = tipId ? document.getElementById(tipId) : null;
+            if (!tip || tip.dataset.hoverBridged) return;
+            tip.dataset.hoverBridged = '1';
+            tip.addEventListener('mouseenter', cancelHide);
+            tip.addEventListener('mouseleave', scheduleHide);
+        });
     }
 
     function renderMarkdown(el) {
