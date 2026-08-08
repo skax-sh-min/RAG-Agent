@@ -282,7 +282,7 @@ class SqliteVecVectorStoreProviderTest {
     }
 
     @Test
-    @DisplayName("add: 임베딩 입력은 맥락+정규화 텍스트이고, vec_document_chunks.content는 원문 그대로이며 CHUNK_CONTEXT는 제외된다(§10.1)")
+    @DisplayName("add: 임베딩 입력은 맥락+정규화 텍스트이고, vec_document_chunks.content는 원문 그대로이며 CHUNK_CONTEXT는 metadata에 영속된다(§10.1)")
     void add_embedsDerivedTextButPersistsOriginalContent() {
         SqliteVecVectorStoreProvider p = provider();
         String original = "**중요**한 내용\n------";
@@ -304,7 +304,7 @@ class SqliteVecVectorStoreProviderTest {
                 rowsCaptor.capture());
         Object[] row = (Object[]) rowsCaptor.getValue().get(0);
         assertThat(row[1]).isEqualTo(original);                          // content column = raw original
-        assertThat((String) row[2]).doesNotContain("chunk_context");     // metadata JSON excludes CHUNK_CONTEXT
+        assertThat((String) row[2]).contains("\"chunk_context\":\"문서.pdf > 설정\""); // metadata JSON includes CHUNK_CONTEXT
     }
 
     @Test

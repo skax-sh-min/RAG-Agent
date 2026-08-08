@@ -218,7 +218,9 @@ public class SqliteVecVectorStoreProvider implements VectorStoreProvider {
         List<Object[]> chunkRows = new ArrayList<>(originals.size());
         for (Document d : originals) {
             Map<String, Object> meta = d.getMetadata() == null ? new HashMap<>() : new HashMap<>(d.getMetadata());
-            meta.remove(MetaKey.CHUNK_CONTEXT); // transient — never persisted
+            // CHUNK_CONTEXT is a normal persisted key (like EXCERPT_KEYWORDS) — the /admin chunk
+            // editor reads/writes it. Only SEARCH_TEXT (the fully-computed derived text) is
+            // transient, since it's cheaply re-derivable from CHUNK_CONTEXT + the stored text.
             meta.remove(MetaKey.SEARCH_TEXT);   // transient — never persisted (§10.8.5)
             chunkRows.add(new Object[]{
                     d.getId(),

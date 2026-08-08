@@ -202,7 +202,9 @@ public class ChromaVectorStoreProvider implements VectorStoreProvider {
             ids.add(d.getId());
             embeddings.add(embeddingByDocId.get(d.getId()));
             Map<String, Object> meta = new HashMap<>(d.getMetadata());
-            meta.remove(MetaKey.CHUNK_CONTEXT);                    // transient — never persisted
+            // CHUNK_CONTEXT is a normal persisted key (like EXCERPT_KEYWORDS) — the /admin chunk
+            // editor reads/writes it. Only SEARCH_TEXT (the fully-computed derived text) is
+            // transient, since it's cheaply re-derivable from CHUNK_CONTEXT + the stored text.
             meta.remove(MetaKey.SEARCH_TEXT);                      // transient — never persisted (§10.8.5)
             metadatas.add(meta);
             contents.add(d.getText() == null ? "" : d.getText()); // untouched original

@@ -366,13 +366,11 @@ public class AdminService {
      * vector search, and the keyword (BM25) axis is refreshed too (which {@link #updateChunk} never
      * touches at all).
      *
-     * @param regenerateKeywords false — keep the chunk's current {@code excerpt_keywords}/other
-     *        metadata as-is (e.g. a value the operator just hand-edited via {@link #updateChunk})
-     *        and only re-embed + re-index FTS against the current text. No LLM call, immediate.
-     *        Note: {@link MetaKey#CHUNK_CONTEXT} (the LLM-authored 1-2 sentence summary) is never
-     *        persisted (§10.1 — stripped before storage in both providers), so it can't be "kept"
-     *        either way; this path's embedding/FTS input falls back to the structural-only context
-     *        ({@code "{filename} > {heading}"}) until a {@code true} call regenerates it.
+     * @param regenerateKeywords false — keep the chunk's current {@code excerpt_keywords} and
+     *        {@link MetaKey#CHUNK_CONTEXT} as-is (e.g. values the operator just hand-edited via
+     *        {@link #updateChunk} — both are persisted metadata, so an edit genuinely survives
+     *        into this re-embed) and only re-embed + re-index FTS against the current text/
+     *        metadata. No LLM call, immediate.
      *        true — re-run {@link KeywordExtractor} for just this chunk first (one LLM call,
      *        same TF-timeout-fallback as indexing) to regenerate {@code excerpt_keywords}/
      *        {@code chunk_context} from the current text, THEN re-embed + re-index with that result
