@@ -61,8 +61,8 @@ public record AppProperties(
             double progressiveThreshold,
             int defaultProviderConcurrency,  // per-provider concurrency gate default (matches the server's --parallel), fallback when a provider omits its own `concurrency`
             int permitWaitTimeoutSeconds,    // max wait for a concurrency slot on the query path before failing fast with 429 (default 60s, well under the 600s read-timeout)
-            Double temperature,              // general/RAG temperature (app.llm.temperature / LLM_TEMPERATURE), default 0.0, clamp [0,2] — VIEW-ONLY (baked into provider defaultOptions at bean creation, restart to change)
-            Double directTemperature,        // Direct(meta) answer temperature (app.llm.direct-temperature / DIRECT_LLM_TEMPERATURE), default 0.1, clamp [0,0.2] — HOT-editable (DirectAnswerService reads it per call, §6.18)
+            Double temperature,              // general/RAG temperature (app.llm.temperature / LLM_TEMPERATURE), default 0.0, clamp [0,0.3] — VIEW-ONLY (baked into provider defaultOptions at bean creation, restart to change)
+            Double directTemperature,        // Direct(meta) answer temperature (app.llm.direct-temperature / DIRECT_LLM_TEMPERATURE), default 0.1, clamp [0,1.0] — HOT-editable (DirectAnswerService reads it per call, §6.18)
             Integer maxTokens,               // LLM response cap (app.llm.max-tokens / LLM_MAX_TOKENS), default 6000, clamp >0 — VIEW-ONLY (baked at bean creation; streaming chat answers are uncapped by design, bounded by SSE timeouts)
             Boolean verifyLocalModelsOnStartup // GET {base-url}/v1/models for every registered LOCAL-role provider at boot — fails startup (throws, Spring exits) if unreachable or the configured model isn't in the response. Default true (app.llm.verify-local-models-on-startup / LLM_VERIFY_LOCAL_MODELS_ON_STARTUP)
     ) {}
@@ -685,7 +685,7 @@ public record AppProperties(
         // effect until a restart — no hook for them.
         Double directOverride = overrideDouble(SettingsKeys.LLM_DIRECT_TEMPERATURE);
         if (llm == null) {
-            double dt = clamp(directOverride != null ? directOverride : 0.1, 0.0, 0.2);
+            double dt = clamp(directOverride != null ? directOverride : 0.1, 0.0, 1.0);
             return new LlmConfig(List.of(), 2, 10, 180, "COST_FIRST", 0.6, 3, 20, 0.0, dt, 6000, true);
         }
         List<ProviderConfig> providers = llm.providers() != null ? llm.providers() : List.of();
@@ -696,10 +696,10 @@ public record AppProperties(
         double threshold = llm.progressiveThreshold() > 0 ? llm.progressiveThreshold() : 0.6;
         int defaultProviderConcurrency = llm.defaultProviderConcurrency() > 0 ? llm.defaultProviderConcurrency() : 3;
         int permitWaitTimeoutSeconds = llm.permitWaitTimeoutSeconds() > 0 ? llm.permitWaitTimeoutSeconds() : 20;
-        double temperature = clamp(llm.temperature() != null ? llm.temperature() : 0.0, 0.0, 2.0);
+        double temperature = clamp(llm.temperature() != null ? llm.temperature() : 0.0, 0.0, 0.3);
         double directBase = directOverride != null ? directOverride
                 : (llm.directTemperature() != null ? llm.directTemperature() : 0.1);
-        double directTemperature = clamp(directBase, 0.0, 0.2);
+        double directTemperature = clamp(directBase, 0.0, 1.0);
         int maxTokens = (llm.maxTokens() != null && llm.maxTokens() > 0) ? llm.maxTokens() : 6000;
         boolean verifyLocalModels = llm.verifyLocalModelsOnStartup() == null || llm.verifyLocalModelsOnStartup();
                 return new LlmConfig(providers, minutes, connectTimeout, readTimeout, mode, threshold,

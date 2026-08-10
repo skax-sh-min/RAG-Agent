@@ -10,6 +10,8 @@ import com.example.ragagent.service.ChatImageAnalysisSkipRegistry;
 import com.example.ragagent.service.ConversationSummarizerService;
 import com.example.ragagent.service.CuratedQaService;
 import com.example.ragagent.service.MemoryService;
+import com.example.ragagent.service.QuestionReuseService;
+import com.example.ragagent.service.SettingsService;
 import com.example.ragagent.service.StreamingAgentService;
 import com.example.ragagent.service.ThreadMetaService;
 import com.example.ragagent.config.AppProperties;
@@ -17,6 +19,8 @@ import jakarta.servlet.http.HttpServletResponse;
 import jakarta.servlet.http.HttpSession;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.MessageSource;
 import org.springframework.context.i18n.LocaleContextHolder;
 import org.springframework.http.HttpStatus;
@@ -28,10 +32,14 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.time.Instant;
+import java.time.ZoneOffset;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
+import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 /**
  * Chat pages (Thymeleaf), HTMX chat fragments, and REST /api/v1/chat.
@@ -51,7 +59,10 @@ public class ChatController {
     private final LlmRouter llmRouter;
     private final MessageSource messageSource;
     private final ChatImageAnalysisSkipRegistry imageSkipRegistry;
+    private final QuestionReuseService questionReuseService;
+    private final SettingsService settingsService;
 
+    @Autowired
     public ChatController(AgentService agentService,
                           StreamingAgentService streamingAgentService,
                           ThreadMetaService threadMetaService,
@@ -61,7 +72,9 @@ public class ChatController {
                           AppProperties props,
                           LlmRouter llmRouter,
                           MessageSource messageSource,
-                          ChatImageAnalysisSkipRegistry imageSkipRegistry) {
+                          ChatImageAnalysisSkipRegistry imageSkipRegistry,
+                          ObjectProvider<QuestionReuseService> questionReuseService,
+                          SettingsService settingsService) {
         this.agentService = agentService;
         this.streamingAgentService = streamingAgentService;
         this.threadMetaService = threadMetaService;
@@ -72,6 +85,8 @@ public class ChatController {
         this.llmRouter = llmRouter;
         this.messageSource = messageSource;
         this.imageSkipRegistry = imageSkipRegistry;
+        this.questionReuseService = questionReuseService.getIfAvailable();
+        this.settingsService = settingsService;
     }
 
     // ── Page routes ───────────────────────────────────────────────────
@@ -95,6 +110,13 @@ public class ChatController {
             model.addAttribute("historyCount", threadMetaService.countTurns(userId, threadId));
             var turns = memoryService.getTurns(userId, threadId);
             model.addAttribute("turns", turns);
+            model.addAttribute("turnImageRefsByTurnId", memoryService.getTurnImageRefs(userId, threadId));
+                if (questionReuseService != null) {
+                model.addAttribute("turnSourcesByTurnId",
+                    turns.stream().collect(Collectors.toMap(
+                        t -> t.id(),
+                        t -> questionReuseService.sourceRefsForTurn(t.id()))));
+                }
             // §10.10 embedding-fallback — badge for turns whose curated Q&A promotion never
             // managed to embed (surfaced here since it can only be known after the fact; the
             // background embed attempt runs seconds after the like, long past this page's
@@ -129,29 +151,32 @@ public class ChatController {
     }
 
     @PostMapping(value = "/ui/chat/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public SseEmitter streamChat(ThreadContext ctx, @ModelAttribute ChatForm form) {
+    public SseEmitter streamChat(ThreadContext ctx,
+                                 @ModelAttribute ChatForm form,
+                                 @RequestParam(name = "response-mode-radio", required = false) String responseModeRadio) {
+        final ChatForm normalizedForm = normalizeResponseMode(form, responseModeRadio);
         SseEmitter emitter = new SseEmitter(props.sseTimeoutMs());
-        if (form.question() == null || form.question().isBlank()) {
+        if (normalizedForm.question() == null || normalizedForm.question().isBlank()) {
             emitter.completeWithError(new IllegalArgumentException("question is blank"));
             return emitter;
         }
         String userId = ctx.userId();
-        threadMetaService.getOrCreate(userId, form.threadId(), form.version());
-        threadMetaService.updateTags(userId, form.threadId(), form.selectedTags());
-        Thread worker = Thread.ofVirtual().start(() -> streamingAgentService.run(userId, form, emitter));
+        threadMetaService.getOrCreate(userId, normalizedForm.threadId(), normalizedForm.version());
+        threadMetaService.updateTags(userId, normalizedForm.threadId(), normalizedForm.selectedTags());
+        Thread worker = Thread.ofVirtual().start(() -> streamingAgentService.run(userId, normalizedForm, emitter));
         emitter.onTimeout(() -> {
             log.warn("[TIMEOUT:SSE] thread={} timeoutMs={} (app.sse-timeout-seconds={}s)",
-                    form.threadId(), props.sseTimeoutMs(), props.sseTimeoutMs() / 1000);
+                    normalizedForm.threadId(), props.sseTimeoutMs(), props.sseTimeoutMs() / 1000);
             worker.interrupt();
         });
         emitter.onError(t -> {
-            log.warn("[SSE] emitter error thread={} type={} msg={}", form.threadId(),
+            log.warn("[SSE] emitter error thread={} type={} msg={}", normalizedForm.threadId(),
                     t == null ? "null" : t.getClass().getSimpleName(),
                     t == null ? "null" : t.getMessage());
             worker.interrupt();
         });
         emitter.onCompletion(() -> {
-            log.debug("[SSE] completed thread={}", form.threadId());
+            log.debug("[SSE] completed thread={}", normalizedForm.threadId());
             worker.interrupt();
         });
         return emitter;
@@ -172,8 +197,11 @@ public class ChatController {
     }
 
     @PostMapping("/ui/chat")
-    public String postChat(ThreadContext ctx, @ModelAttribute ChatForm form,
+    public String postChat(ThreadContext ctx,
+                           @ModelAttribute ChatForm form,
+                           @RequestParam(name = "response-mode-radio", required = false) String responseModeRadio,
                            Model model, HttpServletResponse response) {
+        form = normalizeResponseMode(form, responseModeRadio);
         if (form.question() == null || form.question().isBlank()) {
             return "fragments/message-error :: message";
         }
@@ -212,6 +240,7 @@ public class ChatController {
             model.addAttribute("premiumUpgraded", resp.premiumUpgraded());
             model.addAttribute("grounded", resp.grounded());
             model.addAttribute("evalReason", resp.evalReason());
+            model.addAttribute("envNote", resp.envNote());
             model.addAttribute("usedProvider", resp.usedProvider());
         } catch (LlmProviderExhaustedException e) {
             log.warn("LLM providers exhausted: {}", e.getMessage());
@@ -238,6 +267,97 @@ public class ChatController {
         return ResponseEntity.ok(response);
     }
 
+    private ChatForm normalizeResponseMode(ChatForm form, String responseModeRadio) {
+        if (responseModeRadio == null || responseModeRadio.isBlank()) {
+            return form;
+        }
+        ResponseMode selected = ResponseMode.parse(responseModeRadio);
+        return new ChatForm(
+                form.question(),
+                form.threadId(),
+                form.version(),
+                form.routingMode(),
+                form.directMode(),
+                form.tags(),
+                selected.name());
+    }
+
+    @GetMapping("/api/v1/questions/suggest")
+    @ResponseBody
+    public List<QuestionReuseService.Suggestion> suggestQuestions(
+            ThreadContext ctx,
+            @RequestParam(name = "q", defaultValue = "") String q,
+            @RequestParam(name = "scope", defaultValue = "shared") String scope,
+            @RequestParam(name = "limit", defaultValue = "8") int limit) {
+        if (questionReuseService == null || q == null || q.strip().length() < 2) return List.of();
+        int bounded = Math.max(1, Math.min(limit, 20));
+        return questionReuseService.suggest(ctx.userId(), QuestionReuseService.Scope.SHARED, q, bounded);
+    }
+
+    @PostMapping("/api/v1/questions/reuse")
+    @ResponseBody
+    public ResponseEntity<Map<String, Object>> reuseQuestionAnswer(
+            ThreadContext ctx,
+            @RequestParam("turnId") long turnId,
+            @RequestParam("threadId") String threadId,
+            @RequestParam(name = "version", defaultValue = "latest") String version,
+            @RequestParam(name = "scope", defaultValue = "shared") String scope) {
+        if (questionReuseService == null) {
+            return ResponseEntity.ok(Map.of(
+                "reused", false,
+                "fallback", true,
+                "message", "질문 재사용 기능을 사용할 수 없습니다."));
+        }
+
+        QuestionReuseService.ReuseLookup lookup =
+            questionReuseService.reuseLookup(ctx.userId(), QuestionReuseService.Scope.SHARED, turnId);
+        if (!lookup.reusable()) {
+            return ResponseEntity.ok(Map.of(
+                "reused", false,
+                "fallback", true,
+                "question", lookup.question() == null ? "" : lookup.question(),
+                "message", lookup.reason() == null ? "검증에 실패하여 일반 질의로 전환합니다." : lookup.reason()));
+        }
+
+        String askedAt = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
+            .withZone(ZoneOffset.UTC).format(Instant.now());
+        long savedTurnId = memoryService.addTurn(
+            ctx.userId(), threadId,
+            lookup.question(), "",
+            askedAt, 0, 0, 0,
+            "db-reuse", 0, "M", "", lookup.sourceTurnId());
+        questionReuseService.cloneTurnSources(lookup.sourceTurnId(), savedTurnId, ctx.userId(), threadId);
+        threadMetaService.generateTitleAsync(ctx.userId(), threadId, version, lookup.question());
+
+        return ResponseEntity.ok(Map.of(
+            "reused", true,
+            "turnId", savedTurnId,
+            "question", lookup.question(),
+            "answer", lookup.answer(),
+            "sources", questionReuseService.sourceRefsForTurn(lookup.sourceTurnId()),
+            "sourceChunkIds", lookup.sourceChunkIds(),
+            "sourceTurnId", lookup.sourceTurnId(),
+            "provider", "db-reuse"));
+    }
+
+    /**
+     * Full untruncated chunk text for the chat 출처 badge's click-to-expand "원문 보기" modal — the
+     * badge itself only ever carries the truncated hover-preview text (§UI 출처 hover 미리보기 길이).
+     * Not admin-gated: document/curated-Q&A storage is shared with no per-user isolation, and any
+     * indexed content here is already reachable indirectly through chat retrieval, so a direct
+     * lookup by (unguessable) chunk id exposes nothing new.
+     */
+    @GetMapping("/api/v1/chunks/{chunkId}")
+    @ResponseBody
+    public ResponseEntity<Map<String, Object>> chunkFullText(@PathVariable String chunkId) {
+        String text = questionReuseService == null ? null : questionReuseService.chunkFullText(chunkId);
+        if (text == null) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(Map.of("message", "청크를 찾을 수 없습니다."));
+        }
+        return ResponseEntity.ok(Map.of("content", text));
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────
 
     private void populateChatModel(Model model, String userId, String threadId, String version, ThreadMeta meta) {
@@ -249,5 +369,6 @@ public class ChatController {
         model.addAttribute("hasLocalProvider", llmRouter.hasLocalProvider());
         model.addAttribute("localOnlyDeployment", llmRouter.getDefaultMode() == RoutingMode.LOCAL_ONLY);
         model.addAttribute("routingMode", meta != null ? meta.routingMode() : "COST_FIRST");
+        model.addAttribute("sourcePreviewEnabled", settingsService.sourcePreviewEnabled());
     }
 }

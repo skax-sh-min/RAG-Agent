@@ -96,6 +96,10 @@
     const CHART_COLORS = ['#198754','#0d6efd','#0dcaf0','#6f42c1','#fd7e14','#dc3545'];
 
     let chartInstance = null;
+    let chartAbortController = null;
+    let tableAbortController = null;
+    let chartRequestSeq = 0;
+    let tableRequestSeq = 0;
 
     function syncChartDefaults() {
         const dark = document.documentElement.getAttribute('data-theme') === 'dark';
@@ -111,8 +115,26 @@
 
     // ── Chart ─────────────────────────────────────────────────────────────
     async function loadChart(days) {
-        const res  = await fetch('/api/v1/llm/usage/history?days=' + days);
-        const data = await res.json();
+        const reqSeq = ++chartRequestSeq;
+        if (chartAbortController) chartAbortController.abort();
+        chartAbortController = new AbortController();
+
+        let data;
+        try {
+            const res = await fetch('/api/v1/llm/usage/history?days=' + days, {
+                signal: chartAbortController.signal
+            });
+            if (!res.ok) return;
+            data = await res.json();
+        } catch (e) {
+            if (e && e.name === 'AbortError') return;
+            return;
+        }
+
+        // Ignore out-of-order responses from older clicks.
+        if (reqSeq !== chartRequestSeq) return;
+        const canvas = document.getElementById('usageChart');
+        if (!canvas) return;
 
         // Build a full date axis (gaps filled with 0)
         const today = new Date();
@@ -137,7 +159,7 @@
         }));
 
         if (chartInstance) chartInstance.destroy();
-        chartInstance = new Chart(document.getElementById('usageChart'), {
+        chartInstance = new Chart(canvas, {
             type: 'bar',
             data: { labels: dates, datasets },
             options: {
@@ -162,9 +184,26 @@
 
     // ── Period table ──────────────────────────────────────────────────────
     async function loadTable(period) {
-        const res     = await fetch('/api/v1/llm/usage');
-        const reports = await res.json();
+        const reqSeq = ++tableRequestSeq;
+        if (tableAbortController) tableAbortController.abort();
+        tableAbortController = new AbortController();
+
+        let reports;
+        try {
+            const res = await fetch('/api/v1/llm/usage', {
+                signal: tableAbortController.signal
+            });
+            if (!res.ok) return;
+            reports = await res.json();
+        } catch (e) {
+            if (e && e.name === 'AbortError') return;
+            return;
+        }
+
+        // Ignore out-of-order responses from older clicks.
+        if (reqSeq !== tableRequestSeq) return;
         const tbody   = document.getElementById('usage-table-body');
+        if (!tbody) return;
 
         if (!reports || reports.length === 0) {
             tbody.innerHTML = `<tr><td colspan="7" class="text-center text-muted py-3">${I18N.llmNoProviders}</td></tr>`;
@@ -236,6 +275,16 @@
 
     // Re-run countdowns after HTMX card refresh
     document.addEventListener('htmx:afterSettle', initCountdowns);
+
+    // Cancel in-flight requests when navigating away quickly.
+    window.addEventListener('pagehide', () => {
+        if (chartAbortController) chartAbortController.abort();
+        if (tableAbortController) tableAbortController.abort();
+        if (chartInstance) {
+            chartInstance.destroy();
+            chartInstance = null;
+        }
+    });
 
     // ── Initial load ──────────────────────────────────────────────────────
     syncChartDefaults();

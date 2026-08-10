@@ -13,7 +13,7 @@
 
     <groupId>com.example</groupId>
     <artifactId>rag-agent</artifactId>
-    <version>0.2.3-SNAPSHOT</version>
+    <version>0.2.4-SNAPSHOT</version>
     <name>rag-agent</name>
     <description>RAG Multi-Agent System with Spring AI (converted from Python/LangGraph)</description>
 
@@ -46,6 +46,20 @@
         <dependency>
             <groupId>io.projectreactor.netty</groupId>
             <artifactId>reactor-netty-http</artifactId>
+        </dependency>
+
+        <!-- macOS Netty DNS native resolver (silences MacOSDnsServerAddressStreamProvider fallback warning). -->
+        <dependency>
+            <groupId>io.netty</groupId>
+            <artifactId>netty-resolver-dns-native-macos</artifactId>
+            <classifier>osx-aarch_64</classifier>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.netty</groupId>
+            <artifactId>netty-resolver-dns-native-macos</artifactId>
+            <classifier>osx-x86_64</classifier>
+            <scope>runtime</scope>
         </dependency>
 
         <!-- Spring AI - OpenAI (works for local OpenAI-compatible endpoints too) -->

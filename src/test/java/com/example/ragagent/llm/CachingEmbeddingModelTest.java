@@ -167,6 +167,11 @@ class CachingEmbeddingModelTest {
     void concurrentFailurePropagatesToJoinerAndClearsInFlight() throws Exception {
         CountDownLatch delegateEntered = new CountDownLatch(1);
         CountDownLatch releaseDelegate = new CountDownLatch(1);
+        // Fired by f2's thread as soon as it starts — before model.call().
+        // Guarantees the main thread doesn't release f1 until f2's thread is confirmed
+        // running, preventing the race where f2 misses the in-flight entry because the
+        // OS scheduler never gave it a timeslice within the old blind Thread.sleep(200).
+        CountDownLatch f2ThreadRunning = new CountDownLatch(1);
         AtomicInteger callCount = new AtomicInteger();
         EmbeddingModel racyDelegate = mock(EmbeddingModel.class);
         when(racyDelegate.call(any())).thenAnswer(inv -> {
@@ -185,12 +190,14 @@ class CachingEmbeddingModelTest {
             Future<EmbeddingResponse> f1 = exec.submit(() ->
                     model.call(new EmbeddingRequest(List.of("boom text"), null)));
             assertThat(delegateEntered.await(5, TimeUnit.SECONDS)).isTrue();
-            Future<EmbeddingResponse> f2 = exec.submit(() ->
-                    model.call(new EmbeddingRequest(List.of("boom text"), null)));
-            // Give f2's thread a moment to reach the in-flight check and register as a joiner
-            // before f1 is released — otherwise f1 may complete/fail and clear the in-flight
-            // entry before f2 gets there, making f2 race to become a (second) owner instead.
-            Thread.sleep(200);
+            Future<EmbeddingResponse> f2 = exec.submit(() -> {
+                f2ThreadRunning.countDown(); // signal: this thread is scheduled and running
+                return model.call(new EmbeddingRequest(List.of("boom text"), null));
+            });
+            // Wait until f2's thread is confirmed running, then give it a moment to reach
+            // putIfAbsent and register as a joiner before f1 is released.
+            assertThat(f2ThreadRunning.await(5, TimeUnit.SECONDS)).isTrue();
+            Thread.sleep(100);
             releaseDelegate.countDown();
 
             assertThatThrownBy(() -> f1.get(5, TimeUnit.SECONDS)).hasRootCauseMessage("boom");

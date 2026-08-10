@@ -62,6 +62,7 @@ public class StreamingAgentService {
     private final ConversationSummarizerService summarizerService;
     private final AppProperties props;
     private final ChatImageAnalysisSkipRegistry imageSkipRegistry;
+    private final QuestionReuseService questionReuseService;
 
     /**
      * Clock backing the idle watchdog (below). Production passes {@code System::nanoTime}; tests
@@ -77,16 +78,33 @@ public class StreamingAgentService {
     // (NoSuchMethodException: <init>() — Spring falls back to looking for a no-arg constructor).
     @Autowired
     public StreamingAgentService(AgentGraph agentGraph,
-                                  MemoryService memoryService,
-                                  ClassifierService classifierService,
-                                  ThreadMetaService threadMetaService,
-                                  ObjectMapper objectMapper,
-                                  MessageSource messageSource,
-                                  ConversationSummarizerService summarizerService,
-                                  AppProperties props,
-                                  ChatImageAnalysisSkipRegistry imageSkipRegistry) {
+                                 MemoryService memoryService,
+                                 ClassifierService classifierService,
+                                 ThreadMetaService threadMetaService,
+                                 ObjectMapper objectMapper,
+                                 MessageSource messageSource,
+                                 ConversationSummarizerService summarizerService,
+                                 AppProperties props,
+                                 ChatImageAnalysisSkipRegistry imageSkipRegistry,
+                                 QuestionReuseService questionReuseService) {
         this(agentGraph, memoryService, classifierService, threadMetaService, objectMapper,
-                messageSource, summarizerService, props, imageSkipRegistry, System::nanoTime);
+                messageSource, summarizerService, props, imageSkipRegistry, questionReuseService,
+                System::nanoTime);
+    }
+
+    // Backward-compatible constructor for tests that don't care about question reuse.
+    public StreamingAgentService(AgentGraph agentGraph,
+                                 MemoryService memoryService,
+                                 ClassifierService classifierService,
+                                 ThreadMetaService threadMetaService,
+                                 ObjectMapper objectMapper,
+                                 MessageSource messageSource,
+                                 ConversationSummarizerService summarizerService,
+                                 AppProperties props,
+                                 ChatImageAnalysisSkipRegistry imageSkipRegistry,
+                                 LongSupplier nanoTimeSource) {
+        this(agentGraph, memoryService, classifierService, threadMetaService, objectMapper,
+                messageSource, summarizerService, props, imageSkipRegistry, null, nanoTimeSource);
     }
 
     /** Test seam — see {@link #nanoTimeSource}. */
@@ -99,6 +117,7 @@ public class StreamingAgentService {
                           ConversationSummarizerService summarizerService,
                           AppProperties props,
                           ChatImageAnalysisSkipRegistry imageSkipRegistry,
+                          QuestionReuseService questionReuseService,
                           LongSupplier nanoTimeSource) {
         this.agentGraph = agentGraph;
         this.memoryService = memoryService;
@@ -109,6 +128,7 @@ public class StreamingAgentService {
         this.summarizerService = summarizerService;
         this.props = props;
         this.imageSkipRegistry = imageSkipRegistry;
+        this.questionReuseService = questionReuseService;
         this.nanoTimeSource = nanoTimeSource;
     }
 
@@ -191,7 +211,12 @@ public class StreamingAgentService {
                 turnId = memoryService.addTurn(userId, form.threadId(), form.question(), result.answer(),
                         askedAt, result.totalInputTokens(), result.totalOutputTokens(),
                         (int) elapsedMs, result.usedProvider(), result.llmCallCount(),
-                        form.responseModeOrDefault().name(), TagUtils.toMetaValue(form.selectedTags()));
+                    form.responseModeOrDefault().name(), TagUtils.toMetaValue(form.selectedTags()),
+                    form.isDirectMode());
+                memoryService.saveTurnImageRefs(turnId, userId, form.threadId(), result.imageRefs());
+                if (questionReuseService != null) {
+                    questionReuseService.recordTurnSources(turnId, userId, form.threadId(), result.retrievedDocs());
+                }
                 summarizerService.precomputeAfterTurn(userId, form.threadId(), turnId, locale);
             }
 
@@ -233,7 +258,7 @@ public class StreamingAgentService {
                         memoryService.addTurn(userId, form.threadId(), form.question(),
                                 partial + "\n[오류로 중단됨]",
                                 askedAt, 0, 0, 0, null, 0, form.responseModeOrDefault().name(),
-                                TagUtils.toMetaValue(form.selectedTags()));
+                            TagUtils.toMetaValue(form.selectedTags()), form.isDirectMode());
                         log.debug("partial answer persisted ({} chars) thread={}",
                                 partial.length(), form.threadId());
                     } catch (Exception persistEx) {
@@ -257,6 +282,7 @@ public class StreamingAgentService {
         private final SseEmitter emitter;
         private final AtomicLong lastActivityNanos;
         private final StringBuilder accumulated = new StringBuilder();
+        private boolean waitingFirstAnswerToken;
 
         SseGraphListener(SseEmitter emitter, AtomicLong lastActivityNanos) {
             this.emitter = emitter;
@@ -268,6 +294,7 @@ public class StreamingAgentService {
         @Override
         public void onNodeEnter(String nodeName) {
             lastActivityNanos.set(nanoTimeSource.getAsLong());
+            waitingFirstAnswerToken = "answer".equals(nodeName);
             Map<String, String> payload = Map.of("id", nodeName, "text", stageText(nodeName));
             sendEvent(emitter, "stage", payload);
         }
@@ -275,6 +302,10 @@ public class StreamingAgentService {
         @Override
         public void onToken(String text) {
             lastActivityNanos.set(nanoTimeSource.getAsLong());
+            if (waitingFirstAnswerToken) {
+                waitingFirstAnswerToken = false;
+                sendEvent(emitter, "stage", Map.of("id", "answer", "text", "답변 생성 중..."));
+            }
             accumulated.append(text);
             Map<String, Object> payload = new HashMap<>();
             payload.put("text", text);
@@ -341,7 +372,7 @@ public class StreamingAgentService {
             return switch (nodeId) {
                 case "classifier" -> "질문 분류 중...";
                 case "retrieval"  -> "관련 문서 검색 중...";
-                case "answer"     -> "답변 생성 중...";
+                case "answer"     -> "답변 생각 중...";
                 case "critic"     -> "답변 검증 중...";
                 default           -> nodeId;
             };
@@ -382,6 +413,9 @@ public class StreamingAgentService {
         // 재시도를 다 쓰고도 검증을 통과하지 못한 채 전달되는 답변이 있다 — 그 경우 미검증 배지만
         // 띄우고 이유를 감추면 사용자가 할 수 있는 게 없다. 통과했으면 null 이라 UI가 그냥 생략한다.
         m.put("evalReason",        result.evalReason());
+        // 경로·주소·포트·환경변수 값 안내 — 검증 통과 여부와 무관하게 실릴 수 있다(통과한 답변에도
+        // "이 경로는 본인 환경 기준으로 바꿔야 한다"는 안내가 필요하다).
+        m.put("envNote",           result.envNote());
         m.put("refreshThreadList", true);
         m.put("turnId",            turnId);
         return m;

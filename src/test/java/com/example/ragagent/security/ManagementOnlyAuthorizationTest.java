@@ -9,6 +9,7 @@ import com.example.ragagent.context.ThreadContextResolver;
 import com.example.ragagent.controller.AdminController;
 import com.example.ragagent.controller.CuratedSubmissionController;
 import com.example.ragagent.controller.DocumentController;
+import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.model.SyncResult;
 import com.example.ragagent.model.VectorStoreAdminView;
 import com.example.ragagent.service.AdminService;
@@ -127,6 +128,7 @@ class ManagementOnlyAuthorizationTest {
     @MockitoBean com.example.ragagent.repository.CuratedQaRepository curatedQaRepository;
     @MockitoBean IndexingProgressService progressService;
     @MockitoBean AuditLogger auditLogger;
+    @MockitoBean LlmRouter llmRouter;
     @MockitoBean AdminService adminService;
     @MockitoBean CuratedQaService curatedQaService;
     @MockitoBean CuratedSubmissionService submissionService;

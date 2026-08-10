@@ -78,7 +78,7 @@ class SettingsControllerRenderTest {
         // '#setting-llm.direct-temperature' 는 "id=setting-llm 이면서 class=direct-temperature"로 파싱돼
         // 아무것도 매치되지 않는다 → hx-include가 비어 key·value 둘 다 누락 → 400/500.
         SettingItem item = new SettingItem(SettingsKeys.LLM_DIRECT_TEMPERATURE, "settings.item.direct-temperature",
-                "0.1", "number", true, true, null, 0.0, 0.2, 0.01);
+                "0.1", "number", true, true, null, 0.0, 1.0, 0.01);
         when(settingsService.editableItem(SettingsKeys.LLM_DIRECT_TEMPERATURE)).thenReturn(item);
 
         String html = mvc.perform(post("/admin/settings/update")

@@ -76,7 +76,8 @@
                                th:title="#{doc.tags.tooltip}" autocomplete="off"/>
                     </div>
                     <div class="form-check form-check-inline mb-0">
-                        <input class="form-check-input" type="checkbox" id="add-image-desc-checkbox"/>
+                           <input class="form-check-input" type="checkbox" id="add-image-desc-checkbox"
+                               th:disabled="${!imageDescriptionAvailable}"/>
                         <label class="form-check-label small" for="add-image-desc-checkbox"
                                th:text="#{doc.upload.image_desc.option}"
                                th:title="#{doc.upload.image_desc.tooltip}">이미지 설명 추가</label>

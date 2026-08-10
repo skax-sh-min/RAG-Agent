@@ -2,6 +2,7 @@ package com.example.ragagent.agent;
 
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.llm.RoutingMode;
+import com.example.ragagent.model.ResponseMode;
 import com.example.ragagent.service.AnswerService;
 import com.example.ragagent.service.ClassifierService;
 import com.example.ragagent.service.CriticService;
@@ -107,6 +108,23 @@ class AgentGraphTest {
         verify(answerService, times(1)).execute(any());
         verify(directAnswerService, never()).execute(any());
         verify(criticService, times(1)).execute(any());
+        verify(finalizeService, times(1)).execute(any());
+    }
+
+    @Test
+    @DisplayName("responseMode=S 면 ANSWER 후 CRITIC 스킵하고 FINALIZE 진행")
+    void responseModeS_skipsCritic() {
+        when(classifierService.execute(any()))
+                .thenAnswer(inv -> ((AgentState) inv.getArgument(0)).toBuilder().questionType("manual").build());
+        when(answerService.execute(any()))
+                .thenAnswer(inv -> ((AgentState) inv.getArgument(0)).toBuilder().needsRetry(false).build());
+
+        AgentState state = newState(RoutingMode.COST_FIRST).toBuilder().responseMode(ResponseMode.S).build();
+        graph.run(state);
+
+        verify(retrievalService, times(1)).execute(any(), any());
+        verify(answerService, times(1)).execute(any());
+        verify(criticService, never()).execute(any());
         verify(finalizeService, times(1)).execute(any());
     }
 

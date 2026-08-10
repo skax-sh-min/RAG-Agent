@@ -29,7 +29,8 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * 재시도 시 topK 에스컬레이션 검증.
+ * 재시도 시 에스컬레이션 검증 — 후보 풀(candidateK, topK×(retry+1) 상한 3배)과 최종 컷
+ * (effectiveTopK, topK+retry) 두 가지가 같은 app.search-retry-escalate 플래그로 함께 움직인다.
  */
 class RetrievalServiceEscalationTest {
 
@@ -116,29 +117,58 @@ class RetrievalServiceEscalationTest {
         verify(ragService).searchBatch(anyString(), any(), anyString(), eq(DEFAULT_TOP_K));
     }
 
-    @Test
-    @DisplayName("escalate=true, retryCount=2 → 결과 문서 수 defaultTopK(5) 이하")
-    void escalate_outputCappedAtDefaultTopK() {
+    // ── 최종 컷(retrievedDocs 개수) 에스컬레이션 ─────────────────────────────
+    // 후보 풀만 키우면 "어떤 문서가 최종 자리를 놓고 경쟁하는지"만 바뀌고 답변 노드가 받는 문서 수는
+    // 매번 topK 그대로였다. 재시도가 끌어올리려던 근거가 그 컷 바로 뒤에 있으면 재시도가 같은 이유로
+    // 다시 실패한다. 그래서 최종 컷도 재시도마다 한 개씩 늘린다(topK + retryCount).
+
+    /** 후보 풀보다 넉넉한 문서를 돌려주는 서비스 — 컷 크기가 결과 수를 결정하게 만든다. */
+    private RetrievalService serviceReturningManyDocs(boolean escalate) {
         AppProperties props = mock(AppProperties.class);
         when(props.searchTopKSafe()).thenReturn(DEFAULT_TOP_K);
         when(props.searchMultiqueryEnabledSafe()).thenReturn(false);
         when(props.searchMultiqueryMinLengthSafe()).thenReturn(0);
         when(props.searchHybridEnabledSafe()).thenReturn(false);
-        when(props.searchRetryEscalateSafe()).thenReturn(true);
+        when(props.searchRetryEscalateSafe()).thenReturn(escalate);
         when(props.searchRerankEnabled()).thenReturn(false);
         when(props.searchCandidateMultiplierSafe()).thenReturn(3);
 
         RagService rs = mock(RagService.class);
-        List<Document> bigList = java.util.stream.IntStream.range(0, 20)
+        List<Document> bigList = java.util.stream.IntStream.range(0, 50)
                 .mapToObj(i -> new Document("doc-" + i, Map.of()))
                 .toList();
         when(rs.searchBatch(anyString(), any(), anyString(), anyInt()))
                 .thenReturn(List.of(bigList));
 
-        RetrievalService svc = new RetrievalService(stubLlmRouter(), mock(LlmUsageRepository.class), rs, props,
+        return new RetrievalService(stubLlmRouter(), mock(LlmUsageRepository.class), rs, props,
                 Optional.empty(), Optional.empty(), stubMessageSource(), new ChatImageAnalysisSkipRegistry());
+    }
 
-        AgentState result = svc.execute(stateWithRetry(2));
-        assertThat(result.retrievedDocs()).hasSizeLessThanOrEqualTo(DEFAULT_TOP_K);
+    @Test
+    @DisplayName("retryCount=0 → 결과 문서 수는 defaultTopK(5) 그대로")
+    void firstAttempt_outputIsDefaultTopK() {
+        AgentState result = serviceReturningManyDocs(true).execute(stateWithRetry(0));
+        assertThat(result.retrievedDocs()).hasSize(DEFAULT_TOP_K);
+    }
+
+    @Test
+    @DisplayName("retryCount=1 → 결과 문서 수 topK+1 = 6")
+    void firstRetry_outputAddsOneDoc() {
+        AgentState result = serviceReturningManyDocs(true).execute(stateWithRetry(1));
+        assertThat(result.retrievedDocs()).hasSize(DEFAULT_TOP_K + 1);
+    }
+
+    @Test
+    @DisplayName("retryCount=2 → 결과 문서 수 topK+2 = 7 (후보 풀처럼 배수로 커지지 않는다)")
+    void secondRetry_outputAddsTwoDocs() {
+        AgentState result = serviceReturningManyDocs(true).execute(stateWithRetry(2));
+        assertThat(result.retrievedDocs()).hasSize(DEFAULT_TOP_K + 2);
+    }
+
+    @Test
+    @DisplayName("escalate=false → 재시도해도 결과 문서 수는 defaultTopK 고정 (플래그 하나가 둘 다 끈다)")
+    void escalateDisabled_outputStaysAtDefaultTopK() {
+        AgentState result = serviceReturningManyDocs(false).execute(stateWithRetry(2));
+        assertThat(result.retrievedDocs()).hasSize(DEFAULT_TOP_K);
     }
 }

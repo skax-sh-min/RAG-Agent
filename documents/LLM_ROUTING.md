@@ -48,8 +48,8 @@
 │  AgentGraph 노드 → TaskType 기준:                                    │
 │    ClassifierService        → LIGHT_TEXT                             │
 │    RetrievalService (쿼리)  → MICRO_TEXT                             │
-│    AnswerService            → TEXT                                   │
-│    CriticService            → TEXT                                   │
+│    AnswerService            → TEXT   (답변 + 충분도·근거 통합 평가)  │
+│    CriticService            → —      (LLM 호출 없음, responseMode=S는 스킵) │
 │    DirectAnswerService      → LIGHT_TEXT                             │
 │    VisionDescriptionService → VISION                                 │
 │    ImageTypeClassifier      → LIGHT_BOTH  (분류는 범용 멀티모달로)   │
@@ -68,12 +68,14 @@
 public enum TaskType {
     MICRO_TEXT,   // 키워드+맥락·요약·제목·쿼리 확장 — 추론 불필요, 소형 모델로 오프로딩(§6.21 B안)
     LIGHT_TEXT,   // 분류, meta 직답 — 가볍지만 품질 민감(큰 모델 유지)
-    TEXT,         // 답변 생성, Critic — 고추론 모델 선택 가능
+  TEXT,         // 답변 생성(및 통합 평가 호출) — 고추론 모델 선택 가능
     VISION,       // 이미지 설명 — 멀티모달 지원 필수
     LIGHT_BOTH,   // LIGHT_TEXT + VISION (로컬 범용 모델)
     BOTH          // TEXT + VISION 모두 처리 (외부 고성능 모델)
 }
 ```
+
+참고: `responseMode=S` turn은 AgentGraph가 ANSWER 뒤 CRITIC 노드를 건너뛰고 바로 FINALIZE로 종료한다.
 
 `supports()` 매핑: `MICRO_TEXT`→MICRO_TEXT만, `LIGHT_TEXT`→LIGHT_TEXT+MICRO_TEXT, `LIGHT_BOTH`→LIGHT_TEXT·MICRO_TEXT·VISION, `BOTH`→전체. MICRO_TEXT는 LIGHT_TEXT의 부분집합이라 소형(`type=MICRO_TEXT`) 미등록 시 상위 모델이 흡수(회귀 0).  
 `type=VISION` 프로바이더는 VISION task에서만 선택됨 — 범용 `LIGHT_BOTH` 모델과 공존 가능.

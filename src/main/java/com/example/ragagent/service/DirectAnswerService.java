@@ -2,6 +2,7 @@ package com.example.ragagent.service;
 
 import com.example.ragagent.agent.AgentState;
 import com.example.ragagent.config.AppProperties;
+import com.example.ragagent.ingestion.CuratedTextUtils;
 import com.example.ragagent.llm.LlmCurlLogger;
 import com.example.ragagent.llm.LlmProvider;
 import com.example.ragagent.llm.LlmRouter;
@@ -19,6 +20,8 @@ import org.springframework.ai.openai.api.OpenAiApi;
 import org.springframework.context.MessageSource;
 
 import java.util.List;
+import java.util.Arrays;
+import java.util.stream.Collectors;
 import org.springframework.stereotype.Service;
 
 /**
@@ -54,7 +57,8 @@ public class DirectAnswerService {
         LlmRouter.LlmResult result = llmRouter.executeGatedWithUsage(TaskType.TEXT, state.routingMode(),
                 model -> model.call(buildPrompt(systemPrompt, userPrompt, directTemp, maxTokens)));
         String rawAnswer = result.text();
-        String answer = (rawAnswer == null || rawAnswer.isEmpty()) ? null : rawAnswer;
+        String normalized = rawAnswer == null ? null : enforceSummaryOnlyForS(rawAnswer, state.responseMode());
+        String answer = (normalized == null || normalized.isEmpty()) ? null : normalized;
         log.debug("[DirectAnswer] answer length={}", answer == null ? -1 : answer.length());
         return state.toBuilder().answer(answer)
                 .accumulateTokens(result.inputTokens(), result.outputTokens()).build();
@@ -76,6 +80,7 @@ public class DirectAnswerService {
         }
 
         String answer = full.toString();
+        answer = enforceSummaryOnlyForS(answer, state.responseMode());
         log.debug("[DirectAnswer] streaming answer length={}", answer.length());
         // Streaming mode has no ChatResponse to read real usage from — record an approximate
         // (chars/4) usage entry so /llm-usage isn't blind to the entire direct-answer stream path,
@@ -203,5 +208,22 @@ public class DirectAnswerService {
         } catch (Exception e) {
             log.debug("[LLM curl] serialization error: {}", e.getMessage());
         }
+    }
+
+    /**
+     * S mode must emit summary-only content. Keep only summary lines and drop extra sections.
+     */
+    private static String enforceSummaryOnlyForS(String answer, ResponseMode mode) {
+        if (mode != ResponseMode.S) return answer;
+        if (answer == null || answer.isBlank()) return answer;
+        String summary = CuratedTextUtils.extractSummarySection(answer);
+        String base = summary.isBlank() ? answer : summary;
+        String lines = Arrays.stream(base.split("\\R"))
+                .map(String::strip)
+                .filter(s -> !s.isBlank())
+                .limit(7)
+                .collect(Collectors.joining("\n"));
+        if (lines.isBlank()) return "## 요약\n요약할 내용이 없습니다.";
+        return "## 요약\n" + lines;
     }
 }

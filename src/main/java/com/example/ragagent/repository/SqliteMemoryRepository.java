@@ -11,13 +11,16 @@ import org.springframework.stereotype.Repository;
 import java.sql.PreparedStatement;
 import java.sql.Statement;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 @Repository
 public class SqliteMemoryRepository implements MemoryRepository {
 
     private final JdbcTemplate jdbc;
+    private static final String DELETED_REFERENCE_TEXT = "참조 원문 삭제됨";
     // fetch at most this many recent turns before applying char truncation (§6.11: app.memory.*)
     private final int fetchLimit;
 
@@ -67,12 +70,29 @@ public class SqliteMemoryRepository implements MemoryRepository {
                 "ALTER TABLE conversation_turns ADD COLUMN user_id TEXT NOT NULL DEFAULT 'anonymous'",
                 "ALTER TABLE conversation_turns ADD COLUMN feedback TEXT",
                 "ALTER TABLE conversation_turns ADD COLUMN response_mode TEXT",
-                "ALTER TABLE conversation_turns ADD COLUMN selected_tags TEXT"
+                "ALTER TABLE conversation_turns ADD COLUMN selected_tags TEXT",
+            "ALTER TABLE conversation_turns ADD COLUMN reused_from_turn_id INTEGER",
+            "ALTER TABLE conversation_turns ADD COLUMN direct_mode INTEGER NOT NULL DEFAULT 0"
         )) {
             try { jdbc.execute(ddl); } catch (Exception ignored) {}
         }
         jdbc.execute(
                 "CREATE INDEX IF NOT EXISTS idx_turns_user_thread ON conversation_turns(user_id, thread_id)");
+            jdbc.execute(
+                "CREATE INDEX IF NOT EXISTS idx_turns_reused_from ON conversation_turns(reused_from_turn_id)");
+            jdbc.execute("""
+                CREATE TABLE IF NOT EXISTS turn_image_ref (
+                    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                    turn_id    INTEGER NOT NULL,
+                    user_id    TEXT NOT NULL,
+                    thread_id  TEXT NOT NULL,
+                    image_ref  TEXT NOT NULL,
+                    status     TEXT NOT NULL DEFAULT 'active',
+                    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+                )
+                """);
+            jdbc.execute("CREATE INDEX IF NOT EXISTS idx_turn_image_turn ON turn_image_ref(turn_id)");
+            jdbc.execute("CREATE INDEX IF NOT EXISTS idx_turn_image_user_thread ON turn_image_ref(user_id, thread_id)");
         jdbc.execute("""
                 CREATE TABLE IF NOT EXISTS image_descriptions (
                     image_path  TEXT    PRIMARY KEY,
@@ -94,10 +114,12 @@ public class SqliteMemoryRepository implements MemoryRepository {
         // fetch last fetchLimit turns newest-first, then reverse for chronological order.
         // DISLIKE-tagged turns are excluded from context (hard exclusion, §6.9).
         List<String> rows = jdbc.query(
-                "SELECT question, answer FROM conversation_turns " +
-                "WHERE user_id = ? AND thread_id = ? AND (feedback IS NULL OR feedback <> 'DISLIKE') " +
-                "ORDER BY id DESC LIMIT ?",
-                (rs, n) -> "Q: %s\nA: %s".formatted(rs.getString("question"), rs.getString("answer")),
+            "SELECT t.question AS question, COALESCE(NULLIF(src.answer, ''), NULLIF(t.answer, ''), '" + DELETED_REFERENCE_TEXT + "') AS answer " +
+            "FROM conversation_turns t " +
+            "LEFT JOIN conversation_turns src ON src.id = t.reused_from_turn_id AND src.user_id = t.user_id " +
+            "WHERE t.user_id = ? AND t.thread_id = ? AND (t.feedback IS NULL OR t.feedback <> 'DISLIKE') " +
+            "ORDER BY t.id DESC LIMIT ?",
+            (rs, n) -> "Q: %s\nA: %s".formatted(rs.getString("question"), rs.getString("answer")),
                 userId, threadId, fetchLimit);
 
         if (rows.isEmpty()) return "";
@@ -124,13 +146,13 @@ public class SqliteMemoryRepository implements MemoryRepository {
     public long addTurn(String userId, String threadId, String question, String answer,
                         String askedAt, int inputTokens, int outputTokens,
                         int elapsedMs, String provider, int llmCalls, String responseMode,
-                        String selectedTags) {
+                        String selectedTags, boolean directMode, Long reusedFromTurnId) {
         KeyHolder keyHolder = new GeneratedKeyHolder();
         jdbc.update(connection -> {
             PreparedStatement ps = connection.prepareStatement(
                     "INSERT INTO conversation_turns " +
-                    "(user_id, thread_id, question, answer, asked_at, input_tokens, output_tokens, elapsed_ms, provider, llm_calls, response_mode, selected_tags) " +
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "(user_id, thread_id, question, answer, asked_at, input_tokens, output_tokens, elapsed_ms, provider, llm_calls, response_mode, selected_tags, direct_mode, reused_from_turn_id) " +
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     Statement.RETURN_GENERATED_KEYS);
             ps.setString(1, userId);
             ps.setString(2, threadId);
@@ -144,6 +166,12 @@ public class SqliteMemoryRepository implements MemoryRepository {
             ps.setInt(10, llmCalls);
             ps.setString(11, responseMode);
             ps.setString(12, selectedTags);
+            ps.setInt(13, directMode ? 1 : 0);
+            if (reusedFromTurnId == null) {
+                ps.setNull(14, java.sql.Types.BIGINT);
+            } else {
+                ps.setLong(14, reusedFromTurnId);
+            }
             return ps;
         }, keyHolder);
         Number key = keyHolder.getKey();
@@ -152,15 +180,71 @@ public class SqliteMemoryRepository implements MemoryRepository {
 
     @Override
     public void clearHistory(String userId, String threadId) {
+        // turn_source_ref is created by QuestionReuseRepository; in isolated tests this table may not exist.
+        try {
+            jdbc.update("DELETE FROM turn_source_ref WHERE user_id = ? AND thread_id = ?", userId, threadId);
+        } catch (Exception ignored) {
+            // no-op
+        }
+        jdbc.update("DELETE FROM turn_image_ref WHERE user_id = ? AND thread_id = ?", userId, threadId);
         jdbc.update("DELETE FROM conversation_turns WHERE user_id = ? AND thread_id = ?", userId, threadId);
+    }
+
+    @Override
+    public void saveTurnImageRefs(long turnId, String userId, String threadId, List<String> imageRefs) {
+        if (turnId <= 0 || imageRefs == null || imageRefs.isEmpty()) return;
+        List<String> rows = imageRefs.stream()
+                .filter(v -> v != null && !v.isBlank())
+                .map(String::strip)
+                .distinct()
+                .toList();
+        if (rows.isEmpty()) return;
+        jdbc.batchUpdate(
+                "INSERT INTO turn_image_ref (turn_id, user_id, thread_id, image_ref, status) VALUES (?, ?, ?, ?, 'active')",
+                rows,
+                rows.size(),
+                (ps, ref) -> {
+                    ps.setLong(1, turnId);
+                    ps.setString(2, userId);
+                    ps.setString(3, threadId);
+                    ps.setString(4, ref);
+                }
+        );
+    }
+
+    @Override
+    public Map<Long, List<String>> getTurnImageRefs(String userId, String threadId) {
+        List<Map<String, Object>> rows = jdbc.queryForList(
+                "SELECT turn_id, image_ref FROM turn_image_ref " +
+                "WHERE user_id = ? AND thread_id = ? AND status = 'active' ORDER BY id ASC",
+                userId, threadId);
+        Map<Long, List<String>> out = new LinkedHashMap<>();
+        for (Map<String, Object> row : rows) {
+            Number turn = (Number) row.get("turn_id");
+            if (turn == null) continue;
+            String ref = String.valueOf(row.getOrDefault("image_ref", "")).strip();
+            if (ref.isBlank()) continue;
+            out.computeIfAbsent(turn.longValue(), k -> new ArrayList<>()).add(ref);
+        }
+        return out;
+    }
+
+    @Override
+    public void excludeTurnImageRef(String userId, String threadId, long turnId, String imageRef) {
+        if (turnId <= 0 || imageRef == null || imageRef.isBlank()) return;
+        jdbc.update("UPDATE turn_image_ref SET status='inactive' " +
+                        "WHERE user_id = ? AND thread_id = ? AND turn_id = ? AND image_ref = ? AND status = 'active'",
+                userId, threadId, turnId, imageRef.strip());
     }
 
     @Override
     public List<Turn> getTurns(String userId, String threadId) {
         return jdbc.query(
-                "SELECT id, question, answer, asked_at, created_at, " +
-                "input_tokens, output_tokens, elapsed_ms, provider, llm_calls, feedback, response_mode, selected_tags " +
-                "FROM conversation_turns WHERE user_id = ? AND thread_id = ? ORDER BY id ASC",
+            "SELECT t.id, t.question, COALESCE(NULLIF(src.answer, ''), NULLIF(t.answer, ''), '" + DELETED_REFERENCE_TEXT + "') AS answer, t.asked_at, t.created_at, " +
+            "t.input_tokens, t.output_tokens, t.elapsed_ms, t.provider, t.llm_calls, t.feedback, t.response_mode, t.selected_tags " +
+            "FROM conversation_turns t " +
+            "LEFT JOIN conversation_turns src ON src.id = t.reused_from_turn_id AND src.user_id = t.user_id " +
+            "WHERE t.user_id = ? AND t.thread_id = ? ORDER BY t.id ASC",
                 TURN_ROW_MAPPER,
                 userId, threadId);
     }
@@ -171,9 +255,11 @@ public class SqliteMemoryRepository implements MemoryRepository {
         // chronological order — bounds LLM-facing callers (summarization) to a constant-size input
         // regardless of how long the conversation has grown.
         List<Turn> rows = jdbc.query(
-                "SELECT id, question, answer, asked_at, created_at, " +
-                "input_tokens, output_tokens, elapsed_ms, provider, llm_calls, feedback, response_mode, selected_tags " +
-                "FROM conversation_turns WHERE user_id = ? AND thread_id = ? ORDER BY id DESC LIMIT ?",
+            "SELECT t.id, t.question, COALESCE(NULLIF(src.answer, ''), NULLIF(t.answer, ''), '" + DELETED_REFERENCE_TEXT + "') AS answer, t.asked_at, t.created_at, " +
+            "t.input_tokens, t.output_tokens, t.elapsed_ms, t.provider, t.llm_calls, t.feedback, t.response_mode, t.selected_tags " +
+            "FROM conversation_turns t " +
+            "LEFT JOIN conversation_turns src ON src.id = t.reused_from_turn_id AND src.user_id = t.user_id " +
+            "WHERE t.user_id = ? AND t.thread_id = ? ORDER BY t.id DESC LIMIT ?",
                 TURN_ROW_MAPPER,
                 userId, threadId, fetchLimit);
         return rows.reversed();
@@ -182,9 +268,11 @@ public class SqliteMemoryRepository implements MemoryRepository {
     @Override
     public Optional<Turn> getTurn(String userId, String threadId, long turnId) {
         List<Turn> rows = jdbc.query(
-                "SELECT id, question, answer, asked_at, created_at, " +
-                "input_tokens, output_tokens, elapsed_ms, provider, llm_calls, feedback, response_mode, selected_tags " +
-                "FROM conversation_turns WHERE id = ? AND user_id = ? AND thread_id = ?",
+            "SELECT t.id, t.question, COALESCE(NULLIF(src.answer, ''), NULLIF(t.answer, ''), '" + DELETED_REFERENCE_TEXT + "') AS answer, t.asked_at, t.created_at, " +
+            "t.input_tokens, t.output_tokens, t.elapsed_ms, t.provider, t.llm_calls, t.feedback, t.response_mode, t.selected_tags " +
+            "FROM conversation_turns t " +
+            "LEFT JOIN conversation_turns src ON src.id = t.reused_from_turn_id AND src.user_id = t.user_id " +
+            "WHERE t.id = ? AND t.user_id = ? AND t.thread_id = ?",
                 TURN_ROW_MAPPER,
                 turnId, userId, threadId);
         return rows.isEmpty() ? Optional.empty() : Optional.of(rows.get(0));

@@ -39,6 +39,7 @@
 .bubble-user {
     background: var(--bg-bubble-user);
     color: white;
+    text-align: right;
     border-radius: 1rem 1rem 0 1rem;
     /* Must NOT be a % value: .bubble-user is a shrink-to-fit flex item nested inside
        another flex item (row > column). With max-width as a percentage, some browsers
@@ -53,7 +54,14 @@
     background: var(--bg-bubble-bot);
     border: 1px solid var(--border-default);
     border-radius: 1rem 1rem 1rem 0;
-    max-width: 85%;
+    max-width: 96%;
+}
+
+.bubble-user-time {
+    display: block;
+    margin-top: 0.35rem;
+    font-size: 0.68rem;
+    opacity: 0.85;
 }
 
 /* ── Superseded (unverified) retry answers ───────────────────────────────
@@ -155,12 +163,15 @@
 .dot-unknown { background: #6c757d; }
 
 /* ── Markdown content in assistant bubble ────────────────────────────── */
-.md-content h1 { font-size: 1.1rem;  font-weight: 700; margin-top: 0.75rem; }
-.md-content h2 { font-size: 1rem;    font-weight: 600; margin-top: 0.75rem; }
-.md-content h3 { font-size: 0.95rem; font-weight: 600; margin-top: 0.5rem; }
-.md-content h4,
-.md-content h5,
-.md-content h6 { font-size: 0.9rem;  font-weight: 600; }
+/* 소제목 크기를 본문에 가깝게 유지 — 본문 기준 ~0.875rem(14px) 가정.
+   h2 +4px=18px≈1.125rem, h3 +3px=17px≈1.0625rem, h4 +2px=16px=1rem,
+   h5 +1px=15px≈0.9375rem, h6 동일=14px=0.875rem·굵게. */
+.md-content h1 { font-size: 1.2rem;    font-weight: 700; margin-top: 0.75rem; }
+.md-content h2 { font-size: 1.1875rem;  font-weight: 750; margin-top: 0.75rem; }
+.md-content h3 { font-size: 1.125rem; font-weight: 750; margin-top: 0.5rem; }
+.md-content h4 { font-size: 1.0625rem;      font-weight: 750; margin-top: 0.4rem; }
+.md-content h5 { font-size: 1rem; font-weight: 750; }
+.md-content h6 { font-size: 0.9375rem;  font-weight: 750; }
 .md-content pre {
     background: var(--code-bg);
     border: 1px solid var(--border-default);
@@ -204,9 +215,24 @@
        excerpt is readable without as much wrapping. Mobile keeps Bootstrap's default —
        a viewport this narrow has no room to spare for a wider popover. */
     .popover {
-        max-width: 560px;
+        max-width: 620px;
         font-size: 0.8rem;
     }
+    /* 팝오버 내부 소제목 — .popover font-size(0.8rem)를 기준 삼으면 .md-content h*의
+       rem 값이 상대적으로 다시 커지므로 px로 고정한다. */
+    .popover .md-content h1 { font-size: 13px; }
+    .popover .md-content h2 { font-size: 12px; }
+    .popover .md-content h3 { font-size: 11px; }
+    .popover .md-content h4 { font-size: 10px; }
+    .popover .md-content h5 { font-size: 9px; }
+    .popover .md-content h6 { font-size: 9px; }
+    /* .md-content table 도 마찬가지로 rem(루트 기준)이라 .popover의 축소된
+       font-size를 무시하고 본문보다 커 보였다 — 헤딩과 같은 이유로 px 고정. */
+    .popover .md-content table,
+    .popover .md-content th,
+    .popover .md-content td { font-size: 11px; }
+    /* .md-content pre 도 동일 원인(rem). code는 pre 기준 em이라 pre만 고정하면 같이 줄어든다. */
+    .popover .md-content pre { font-size: 11px; }
 }
 
 /* ── Chat input safe-area (notched phones) ───────────────────────────── */
@@ -238,7 +264,7 @@
     /* Roomier message bubbles on narrow screens.
        .bubble-user uses vw (not %) — see the comment on the base rule above. */
     .bubble-user      { max-width: 90vw; }
-    .bubble-assistant { max-width: 92%; }
+    .bubble-assistant { max-width: 95%; }
 }
 
 /* ── Accessibility: minimum 44×44 touch target for icon-only buttons ──── */

@@ -9,6 +9,7 @@ import com.example.ragagent.model.ChatResponse;
 import com.example.ragagent.security.PromptInjectionGuard;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
@@ -26,21 +27,32 @@ import java.util.concurrent.Executors;
 @Service
 public class AgentService {
 
-    private static final Logger log = LoggerFactory.getLogger(AgentService.class);
+        private static final Logger log = LoggerFactory.getLogger(AgentService.class);
 
-    private final AgentGraph agentGraph;
-    private final MemoryService memoryService;
-    private final ClassifierService classifierService;
-    private final ConversationSummarizerService summarizerService;
+        private final AgentGraph agentGraph;
+        private final MemoryService memoryService;
+        private final ClassifierService classifierService;
+        private final ConversationSummarizerService summarizerService;
+        private final QuestionReuseService questionReuseService;
 
-    public AgentService(AgentGraph agentGraph, MemoryService memoryService,
-                        ClassifierService classifierService,
-                        ConversationSummarizerService summarizerService) {
-        this.agentGraph = agentGraph;
-        this.memoryService = memoryService;
-        this.classifierService = classifierService;
-        this.summarizerService = summarizerService;
-    }
+        @Autowired
+        public AgentService(AgentGraph agentGraph, MemoryService memoryService,
+                                                ClassifierService classifierService,
+                                                ConversationSummarizerService summarizerService,
+                                                QuestionReuseService questionReuseService) {
+                this.agentGraph = agentGraph;
+                this.memoryService = memoryService;
+                this.classifierService = classifierService;
+                this.summarizerService = summarizerService;
+                this.questionReuseService = questionReuseService;
+        }
+
+        // Test/backward-compatible constructor.
+        public AgentService(AgentGraph agentGraph, MemoryService memoryService,
+                                                ClassifierService classifierService,
+                                                ConversationSummarizerService summarizerService) {
+                this(agentGraph, memoryService, classifierService, summarizerService, null);
+        }
 
     public ChatResponse chat(ThreadContext ctx, ChatRequest request) {
         PromptInjectionGuard.validate(request.question());
@@ -87,7 +99,12 @@ public class AgentService {
             turnId = memoryService.addTurn(userId, request.threadId(), request.question(), result.answer(),
                     askedAt, result.totalInputTokens(), result.totalOutputTokens(),
                     (int) elapsedMs, result.usedProvider(), result.llmCallCount(),
-                    request.responseMode().name(), TagUtils.toMetaValue(request.selectedTags()));
+                    request.responseMode().name(), TagUtils.toMetaValue(request.selectedTags()),
+                    request.directMode());
+                        memoryService.saveTurnImageRefs(turnId, userId, request.threadId(), result.imageRefs());
+            if (questionReuseService != null) {
+                questionReuseService.recordTurnSources(turnId, userId, request.threadId(), result.retrievedDocs());
+            }
             summarizerService.precomputeAfterTurn(userId, request.threadId(), turnId, ctx.locale());
         }
 
@@ -104,7 +121,8 @@ public class AgentService {
                 result.usedProvider(),
                 turnId,
                 result.grounded(),
-                result.evalReason()
+                result.evalReason(),
+                result.envNote()
         );
     }
 

@@ -24,7 +24,7 @@
     const STAGE_LABELS = {
         classifier: '질문 분류 중...',
         retrieval:  '관련 문서 검색 중...',
-        answer:     '답변 생성 중...',
+        answer:     '답변 생각 중...',
         critic:     '답변 검증 중...',
         upgrade:    '고추론 재분석 중...',
     };
@@ -39,6 +39,26 @@
 
     function nowTimeStr() {
         return new Date().toLocaleTimeString('ko-KR', {hour: '2-digit', minute: '2-digit', hour12: false});
+    }
+
+    function stripImagePreviewFromSourceMarkdown(raw) {
+        if (!raw) return '';
+        return String(raw)
+            .replace(/!\[[^\]]*\]\([^)]*\)/g, '')
+            .replace(/<img\b[^>]*>/gi, '')
+            .replace(/\[이미지(?:\(변환불가\))?:[^\]]*\]/g, '');
+    }
+
+    function renderSourcePreviewHtml(raw) {
+        const text = stripImagePreviewFromSourceMarkdown(raw);
+        if (!text.trim()) return '<span class="text-muted small">미리보기 없음</span>';
+        if (typeof marked === 'undefined') return `<div class="md-content small">${escHtml(text)}</div>`;
+        const parsed = marked.parse(text);
+        const sanitized = typeof DOMPurify !== 'undefined' ? DOMPurify.sanitize(parsed) : parsed;
+        const wrap = document.createElement('div');
+        wrap.innerHTML = sanitized;
+        wrap.querySelectorAll('img').forEach(img => img.remove());
+        return `<div class="md-content small">${wrap.innerHTML}</div>`;
     }
 
     let idSeq = 0;
@@ -99,20 +119,20 @@
         const wrap = document.createElement('div');
         wrap.className = 'd-flex justify-content-end mb-3 align-items-end';
         wrap.innerHTML =
-            `<div class="d-flex flex-column align-items-end me-1">` +
-            `<div class="bubble-user p-3">${escHtml(question)}</div>` +
-            `<small class="text-muted" style="font-size:0.68rem; margin-top:2px;">${escHtml(timeStr)}</small>` +
+            `<div class="me-1">` +
+            `<div class="bubble-user p-3">` +
+                `<div>${escHtml(question)}</div>` +
+                `<small class="text-white bubble-user-time">🕐 ${escHtml(timeStr)}</small>` +
             `</div>` +
-            `<i class="bi bi-person-circle fs-5 text-secondary ms-2 mt-1 flex-shrink-0"></i>`;
+            `</div>`;
         document.getElementById('chat-messages').appendChild(wrap);
     }
 
     function appendStreamingBubble(bubbleId) {
         const wrap = document.createElement('div');
         wrap.id = `bubble-${bubbleId}`;
-        wrap.className = 'd-flex align-items-start mb-3';
+        wrap.className = 'd-flex align-items-end mb-3';
         wrap.innerHTML = `
-            <i class="bi bi-robot fs-5 text-secondary me-2 mt-1 flex-shrink-0"></i>
             <div class="bubble-assistant p-3 flex-grow-1">
                 <div id="stream-stage-${bubbleId}" class="stream-stage small text-muted mb-1">
                     <span class="spinner-border spinner-border-sm me-1" role="status"></span>
@@ -253,7 +273,7 @@
         if (!container || !imageRefs || imageRefs.length === 0) return;
         const thumbs = imageRefs.map(ref => {
             const url = escHtml('/api/v1/' + encodeURI(ref));
-            return `<a href="${url}" target="_blank" rel="noopener">
+            return `<a href="#" class="chat-image-thumb" data-image-ref="${escHtml(ref)}" data-turn-id="" data-bubble-id="${bubbleId}">
                 <img src="${url}" alt="참조 이미지" loading="lazy"
                      style="max-height:120px; max-width:180px; object-fit:contain; border:1px solid var(--border-default, #dee2e6); border-radius:4px;" />
             </a>`;
@@ -264,18 +284,49 @@
     function onSources(bubbleId, sources) {
         const container = document.getElementById(`stream-sources-${bubbleId}`);
         if (!container || !sources || sources.length === 0) return;
-        const badges = sources.map(s =>
-            `<a href="#" class="source-ref badge bg-secondary text-decoration-none me-1 mb-1"
-                data-bs-toggle="popover"
-                data-bs-trigger="hover focus"
-                data-bs-placement="top"
-                data-bs-content="${escHtml(s.preview || '')}"
-                title="${escHtml(s.label || '')}"
-             >${escHtml(s.label || '출처')}</a>`
-        ).join('');
-        container.innerHTML = `<div class="mt-2">${badges}</div>`;
-        container.querySelectorAll('[data-bs-toggle="popover"]')
-            .forEach(el => new bootstrap.Popover(el));
+        const previewEnabled = typeof window.isSourcePreviewEnabled === 'function'
+            ? window.isSourcePreviewEnabled()
+            : true;
+        const refs = sources.map(s => {
+            const label = escHtml(s.label || '출처');
+            const previewAttr = previewEnabled
+                ? `data-bs-toggle="popover" data-bs-trigger="hover focus" data-bs-placement="top" data-preview-md="${escHtml(s.preview || '')}"`
+                : '';
+            const chunkIdAttr = s.chunk_id ? `data-chunk-id="${escHtml(s.chunk_id)}"` : '';
+            return `<a href="#" class="source-ref badge bg-secondary text-decoration-none me-1 mb-1" ${previewAttr} ${chunkIdAttr} title="${label}">${label}</a>`;
+        }).join('');
+        container.innerHTML = `<div class="mt-2">${refs}</div>`;
+        if (previewEnabled) {
+            container.querySelectorAll('[data-bs-toggle="popover"]').forEach(bindSourcePopover);
+        }
+    }
+
+    /* trigger를 hover/focus 자동 바인딩 대신 manual로 두고 show/hide를 직접 제어한다 —
+       배지에서 마우스를 떼는 순간 Bootstrap 기본 동작(hide 지연 없음)이 팝오버 박스에
+       닿기도 전에 먼저 닫아버려 미리보기 텍스트를 드래그로 선택/복사할 수 없었다. 짧은
+       유예(250ms) 뒤에 닫되, 팝오버 박스 위에 마우스가 있는 동안은 유예를 계속 취소한다. */
+    function bindSourcePopover(el) {
+        const popover = new bootstrap.Popover(el, {
+            html: true,
+            sanitize: false,
+            trigger: 'manual',
+            content: () => renderSourcePreviewHtml(el.getAttribute('data-preview-md') || '')
+        });
+        let hideTimer = null;
+        const cancelHide = () => { clearTimeout(hideTimer); hideTimer = null; };
+        const scheduleHide = () => { cancelHide(); hideTimer = setTimeout(() => popover.hide(), 250); };
+        el.addEventListener('mouseenter', () => { cancelHide(); popover.show(); });
+        el.addEventListener('mouseleave', scheduleHide);
+        el.addEventListener('focus', () => { cancelHide(); popover.show(); });
+        el.addEventListener('blur', scheduleHide);
+        el.addEventListener('shown.bs.popover', function () {
+            const tipId = el.getAttribute('aria-describedby');
+            const tip = tipId ? document.getElementById(tipId) : null;
+            if (!tip || tip.dataset.hoverBridged) return;
+            tip.dataset.hoverBridged = '1';
+            tip.addEventListener('mouseenter', cancelHide);
+            tip.addEventListener('mouseleave', scheduleHide);
+        });
     }
 
     function renderMarkdown(el) {
@@ -384,6 +435,15 @@
                      +  `검증 미통과 사유: ${escHtml(data.evalReason)}</div>`;
             }
 
+            // 경로·주소·포트·환경변수처럼 실행 환경에 따라 달라지는 값 안내. 이런 값은 문서와 달라도
+            // 검증 실패로 치지 않으므로(prompt.answer.eval 의 환경 의존 값 예외) 검증됨 배지가 붙은
+            // 답변에도 실린다 — grounded 조건을 걸지 않는 이유다(message-assistant.html 과 동일).
+            if (data.envNote) {
+                html += `<div class="small text-info mt-1">`
+                     +  `<i class="bi bi-info-circle me-1"></i>`
+                     +  `환경에 따라 달라질 수 있는 값: ${escHtml(data.envNote)}</div>`;
+            }
+
             metaEl.innerHTML = html;
         }
 
@@ -393,6 +453,11 @@
         }
 
         scrollToBottom();
+
+        if (data.turnId) {
+            document.querySelectorAll(`#stream-images-${bubbleId} .chat-image-thumb`)
+                .forEach(el => { el.dataset.turnId = String(data.turnId); });
+        }
     }
 
     function onError(bubbleId, message) {
@@ -400,10 +465,10 @@
         if (bubble) {
             bubble.outerHTML =
                 `<div class="d-flex align-items-start mb-3">` +
-                `<i class="bi bi-robot fs-5 text-secondary me-2 mt-1 flex-shrink-0"></i>` +
                 `<div class="bubble-assistant p-3 flex-grow-1 text-danger">` +
                 `<i class="bi bi-exclamation-triangle me-1"></i>${escHtml(message || '오류가 발생했습니다.')}` +
-                `</div></div>`;
+                `</div>` +
+                `</div>`;
         }
     }
 
@@ -551,6 +616,13 @@
             const questionEl = document.getElementById('question-input');
             const question   = questionEl ? questionEl.value.trim() : '';
             if (!question) return;
+
+            // Defensive sync: capture the currently checked S/M/L radio into the hidden field
+            // right before FormData is built. This avoids stale hidden values when users
+            // quickly switch mode and submit in one interaction.
+            const selectedMode = document.querySelector('input[name="response-mode-radio"]:checked');
+            const hiddenMode = document.getElementById('form-response-mode');
+            if (selectedMode && hiddenMode) hiddenMode.value = selectedMode.value;
 
             // Capture FormData BEFORE clearing the textarea
             const formData = new FormData(form);

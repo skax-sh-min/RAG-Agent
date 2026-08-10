@@ -17,10 +17,6 @@
                  th:attr="data-date=${thread.updatedAt}"
                  th:text="${thread.updatedAt}"></div>
         </div>
-        <div class="text-muted text-truncate" style="font-size: 0.72rem;">
-            <span th:text="'[' + ${thread.version} + ']'">[latest]</span>
-            <span th:if="${!thread.tagsDisplay().isEmpty()}" th:text="${thread.tagsDisplay()}"></span>
-        </div>
     </div>
 </div>
 </body>

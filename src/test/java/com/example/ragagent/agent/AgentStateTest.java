@@ -93,7 +93,7 @@ class AgentStateTest {
         AgentState state = newState()
                 .toBuilder().accumulateTokens(10, 20).build()
                 .toBuilder().answer("answer").build();
-        AgentState updated = state.toBuilder().sources(List.of(new SourceRef("f", "p", "id", 1))).build();
+        AgentState updated = state.toBuilder().sources(List.of(new SourceRef("f", "p", "chunk-1", "id", 1))).build();
         assertThat(updated.answer()).isEqualTo("answer");
         assertThat(updated.totalInputTokens()).isEqualTo(10);
         assertThat(updated.sources()).hasSize(1);

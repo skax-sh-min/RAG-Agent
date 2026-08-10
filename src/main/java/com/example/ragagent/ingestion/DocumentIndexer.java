@@ -12,11 +12,13 @@ import com.example.ragagent.service.ImageExtractorService;
 import com.example.ragagent.service.MarkdownCorrectionService;
 import com.example.ragagent.service.PdfToMarkdownConverter;
 import com.example.ragagent.service.PptxToMarkdownConverter;
+import com.example.ragagent.service.QuestionReuseService;
 import com.example.ragagent.service.TextToMarkdownService;
 import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.document.Document;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
@@ -60,9 +62,11 @@ public class DocumentIndexer {
     private final ChunkSplitter chunkSplitter;
     private final KeywordExtractor keywordExtractor;
     private final AppProperties props;
+    private final QuestionReuseService questionReuseService;
 
     private Path dataDir;
 
+    @Autowired
     public DocumentIndexer(DocumentLoaderService loaderService,
                            MarkdownCorrectionService correctionService,
                            TextToMarkdownService textToMarkdownService,
@@ -74,7 +78,8 @@ public class DocumentIndexer {
                            KeywordSearchRepository keywordRepo,
                            ChunkSplitter chunkSplitter,
                            KeywordExtractor keywordExtractor,
-                           AppProperties props) {
+                           AppProperties props,
+                           QuestionReuseService questionReuseService) {
         this.loaderService = loaderService;
         this.correctionService = correctionService;
         this.textToMarkdownService = textToMarkdownService;
@@ -87,6 +92,25 @@ public class DocumentIndexer {
         this.chunkSplitter = chunkSplitter;
         this.keywordExtractor = keywordExtractor;
         this.props = props;
+        this.questionReuseService = questionReuseService;
+    }
+
+    // Backward-compatible constructor for tests that build DocumentIndexer directly.
+    public DocumentIndexer(DocumentLoaderService loaderService,
+                           MarkdownCorrectionService correctionService,
+                           TextToMarkdownService textToMarkdownService,
+                           PptxToMarkdownConverter pptxConverter,
+                           PdfToMarkdownConverter pdfConverter,
+                           ImageExtractorService imageExtractorService,
+                           VectorStoreFacade vectorStore,
+                           DocRegistry docRegistry,
+                           KeywordSearchRepository keywordRepo,
+                           ChunkSplitter chunkSplitter,
+                           KeywordExtractor keywordExtractor,
+                           AppProperties props) {
+        this(loaderService, correctionService, textToMarkdownService, pptxConverter, pdfConverter,
+                imageExtractorService, vectorStore, docRegistry, keywordRepo, chunkSplitter,
+                keywordExtractor, props, null);
     }
 
     @PostConstruct
@@ -433,6 +457,7 @@ public class DocumentIndexer {
         if (!oldSpringDocIds.isEmpty()) {
             vectorStore.deleteByDocIds(DocRegistry.SHARED, version, oldSpringDocIds);
             keywordRepo.deleteBySpringDocIds(oldSpringDocIds);
+            if (questionReuseService != null) questionReuseService.markChunksDeleted(oldSpringDocIds);
         }
 
         List<String> springIds = enriched.stream().map(Document::getId).toList();
@@ -725,6 +750,7 @@ public class DocumentIndexer {
             if (!e.springDocIds().isEmpty()) {
                 log.debug("[DELETE] docId={} → 벡터 청크 {}개 삭제", docId, e.springDocIds().size());
                 vectorStore.deleteByDocIds(userId, version, e.springDocIds());
+                if (questionReuseService != null) questionReuseService.markChunksDeleted(e.springDocIds());
             }
         });
         keywordRepo.deleteByDocId(docId);   // keep FTS index in sync

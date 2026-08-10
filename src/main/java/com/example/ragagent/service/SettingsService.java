@@ -81,8 +81,13 @@ public class SettingsService implements AppProperties.OverrideSource {
 
     // Insertion order = render order in the "LLM 튜닝" group. Apply on the next LLM call (§6.18).
     private static final List<Spec> LLM_HOT_SPECS = List.of(
-            new Spec(SettingsKeys.LLM_DIRECT_TEMPERATURE,         Kind.DOUBLE, 0.0, 0.2,  0.05, "settings.item.direct-temperature")
+            new Spec(SettingsKeys.LLM_DIRECT_TEMPERATURE,         Kind.DOUBLE, 0.0, 1.0,  0.05, "settings.item.direct-temperature")
     );
+
+        // Insertion order = render order in the "UI" group. Apply on next page render.
+        private static final List<Spec> UI_HOT_SPECS = List.of(
+            new Spec(SettingsKeys.UI_SOURCE_PREVIEW_ENABLED,      Kind.BOOL,   0,   0,    0,    "settings.item.source-preview-enabled")
+        );
 
     private static final Map<String, Spec> SPECS;
     static {
@@ -90,6 +95,7 @@ public class SettingsService implements AppProperties.OverrideSource {
         for (Spec s : SEARCH_HOT_SPECS) m.put(s.key(), s);
         for (Spec s : INDEXING_HOT_SPECS) m.put(s.key(), s);
         for (Spec s : LLM_HOT_SPECS) m.put(s.key(), s);
+        for (Spec s : UI_HOT_SPECS) m.put(s.key(), s);
         SPECS = Map.copyOf(m);
     }
 
@@ -247,6 +253,7 @@ public class SettingsService implements AppProperties.OverrideSource {
                 new SettingGroup("search_hot", "settings.group.search_hot", searchHotItems()),
                 new SettingGroup("indexing", "settings.group.indexing", indexingItems()),
                 new SettingGroup("llm_hot", "settings.group.llm_hot", llmHotItems()),
+            new SettingGroup("ui_hot", "settings.group.ui_hot", uiHotItems()),
                 new SettingGroup("search_fixed", "settings.group.search_fixed", fixedSearchItems()),
                 new SettingGroup("cache", "settings.group.cache", cacheItems())
         );
@@ -398,6 +405,25 @@ public class SettingsService implements AppProperties.OverrideSource {
         return items;
     }
 
+    private List<SettingItem> uiHotItems() {
+        List<SettingItem> items = new ArrayList<>(UI_HOT_SPECS.size());
+        for (Spec s : UI_HOT_SPECS) items.add(editableItem(s.key()));
+        return items;
+    }
+
+    /** Global source-preview toggle for chat source popovers. Default ON when unset. */
+    public boolean sourcePreviewEnabled() {
+        Boolean o = parseBool(cache.get(SettingsKeys.UI_SOURCE_PREVIEW_ENABLED));
+        return o == null || o;
+    }
+
+    private static Boolean parseBool(String value) {
+        if (value == null || value.isBlank()) return null;
+        if (value.equalsIgnoreCase("true")) return Boolean.TRUE;
+        if (value.equalsIgnoreCase("false")) return Boolean.FALSE;
+        return null;
+    }
+
     private List<SettingItem> cacheItems() {
         return List.of(
                 readOnly("settings.item.query-embed-cache-enabled",
@@ -440,6 +466,7 @@ public class SettingsService implements AppProperties.OverrideSource {
             case SettingsKeys.INDEXING_MAX_CONCURRENT_FILES   -> Integer.toString(props.indexingSafe().maxConcurrentFiles());
             case SettingsKeys.INDEXING_MAX_CONCURRENT_LLM     -> Integer.toString(props.indexingSafe().maxConcurrentLlmCalls());
             case SettingsKeys.LLM_DIRECT_TEMPERATURE          -> trimNum(props.llmSafe().directTemperature());
+            case SettingsKeys.UI_SOURCE_PREVIEW_ENABLED       -> Boolean.toString(sourcePreviewEnabled());
             default -> "";
         };
     }

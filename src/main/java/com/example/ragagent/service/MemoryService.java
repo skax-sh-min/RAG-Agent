@@ -5,6 +5,7 @@ import com.example.ragagent.repository.MemoryRepository;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -52,8 +53,47 @@ public class MemoryService {
                 selectedTags);
     }
 
+        public long addTurn(String userId, String threadId, String question, String answer,
+                String askedAt, int inputTokens, int outputTokens,
+                int elapsedMs, String provider, int llmCalls, String responseMode,
+                String selectedTags, boolean directMode) {
+        return repository.addTurn(userId, threadId, question, answer,
+            askedAt, inputTokens, outputTokens, elapsedMs, provider, llmCalls, responseMode,
+            selectedTags, directMode);
+        }
+
+    public long addTurn(String userId, String threadId, String question, String answer,
+                        String askedAt, int inputTokens, int outputTokens,
+                        int elapsedMs, String provider, int llmCalls, String responseMode,
+                        String selectedTags, Long reusedFromTurnId) {
+        return repository.addTurn(userId, threadId, question, answer,
+                askedAt, inputTokens, outputTokens, elapsedMs, provider, llmCalls, responseMode,
+                selectedTags, reusedFromTurnId);
+    }
+
+        public long addTurn(String userId, String threadId, String question, String answer,
+                String askedAt, int inputTokens, int outputTokens,
+                int elapsedMs, String provider, int llmCalls, String responseMode,
+                String selectedTags, boolean directMode, Long reusedFromTurnId) {
+        return repository.addTurn(userId, threadId, question, answer,
+            askedAt, inputTokens, outputTokens, elapsedMs, provider, llmCalls, responseMode,
+            selectedTags, directMode, reusedFromTurnId);
+        }
+
     public void clearHistory(String userId, String threadId) {
         repository.clearHistory(userId, threadId);
+    }
+
+    public void saveTurnImageRefs(long turnId, String userId, String threadId, List<String> imageRefs) {
+        repository.saveTurnImageRefs(turnId, userId, threadId, imageRefs);
+    }
+
+    public Map<Long, List<String>> getTurnImageRefs(String userId, String threadId) {
+        return repository.getTurnImageRefs(userId, threadId);
+    }
+
+    public void excludeTurnImageRef(String userId, String threadId, long turnId, String imageRef) {
+        repository.excludeTurnImageRef(userId, threadId, turnId, imageRef);
     }
 
     public List<MemoryRepository.Turn> getTurns(String userId, String threadId) {

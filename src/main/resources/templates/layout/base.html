@@ -280,6 +280,42 @@ const I18N = {
         return {};
     }
 
+    /* Global fetch lifecycle guard.
+       Rapid menu navigation can leave page-local callbacks racing after their DOM targets are gone.
+       Track every fetch and abort them all on pagehide/beforeunload so stale responses don't mutate
+       a tearing-down page and break the next render path. */
+    (function () {
+        const nativeFetch = window.fetch.bind(window);
+        const inFlightControllers = new Set();
+
+        function abortAllInFlight() {
+            inFlightControllers.forEach(ctrl => ctrl.abort());
+            inFlightControllers.clear();
+        }
+
+        window.addEventListener('beforeunload', abortAllInFlight);
+        window.addEventListener('pagehide', abortAllInFlight);
+
+        window.fetch = function (input, init) {
+            const lifecycleCtrl = new AbortController();
+            inFlightControllers.add(lifecycleCtrl);
+
+            // Respect caller-provided cancellation and forward it to our lifecycle signal.
+            const callerSignal = init && init.signal;
+            if (callerSignal) {
+                if (callerSignal.aborted) {
+                    lifecycleCtrl.abort(callerSignal.reason);
+                } else {
+                    callerSignal.addEventListener('abort', () => lifecycleCtrl.abort(callerSignal.reason), { once: true });
+                }
+            }
+
+            const mergedInit = Object.assign({}, init || {}, { signal: lifecycleCtrl.signal });
+            return nativeFetch(input, mergedInit)
+                .finally(() => inFlightControllers.delete(lifecycleCtrl));
+        };
+    })();
+
     /* HTMX CSRF 자동 전송 */
     document.body.addEventListener('htmx:configRequest', function (event) {
         Object.assign(event.detail.headers, getCsrfHeaders());
@@ -303,24 +339,42 @@ const I18N = {
         });
     });
 
-    /* API health check on every page load */
+    /* API health indicator (resilient):
+       abort during navigation is not an API failure, so ignore AbortError.
+       Poll periodically so a transient failure can recover without reload. */
     (function () {
         const dot   = document.getElementById('api-dot');
         const label = document.getElementById('api-label');
-        fetch('/api/v1/health')
-            .then(r => r.ok ? r.json() : Promise.reject())
-            .then(d => {
-                if (d.status === 'ok') {
-                    dot.className     = 'status-dot dot-ok';
-                    label.textContent = I18N.apiOk;
-                } else {
-                    throw new Error();
-                }
-            })
-            .catch(() => {
-                dot.className     = 'status-dot dot-error';
-                label.textContent = I18N.apiError;
-            });
+        if (!dot || !label) return;
+
+        function setOk() {
+            dot.className = 'status-dot dot-ok';
+            label.textContent = I18N.apiOk;
+        }
+
+        function setError() {
+            dot.className = 'status-dot dot-error';
+            label.textContent = I18N.apiError;
+        }
+
+        function refreshApiHealth() {
+            fetch('/api/v1/health')
+                .then(r => r.ok ? r.json() : Promise.reject())
+                .then(d => {
+                    if (d && d.status === 'ok') {
+                        setOk();
+                    } else {
+                        setError();
+                    }
+                })
+                .catch(e => {
+                    if (e && e.name === 'AbortError') return;
+                    setError();
+                });
+        }
+
+        refreshApiHealth();
+        setInterval(refreshApiHealth, 10000);
     })();
 
     /* LOCAL LLM concurrency indicator (role=LOCAL, priority=1 tier) — polled every ~3s.

@@ -75,7 +75,7 @@ class AnswerSnapshotTest {
         // sources 더미
         List<SourceRef> sources = java.util.stream.IntStream.range(0, g.sourcesCount())
                 .mapToObj(i -> new SourceRef("doc%d.pdf | v1 | p.%d".formatted(i, i + 1),
-                                              "preview-" + i, "doc_" + i, i + 1))
+                              "preview-" + i, "chunk_" + i, "doc_" + i, i + 1))
                 .toList();
 
         // imageRefs 더미

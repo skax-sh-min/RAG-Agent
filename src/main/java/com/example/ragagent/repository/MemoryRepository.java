@@ -1,6 +1,7 @@
 package com.example.ragagent.repository;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 public interface MemoryRepository {
@@ -14,9 +15,42 @@ public interface MemoryRepository {
     long addTurn(String userId, String threadId, String question, String answer,
                  String askedAt, int inputTokens, int outputTokens,
                  int elapsedMs, String provider, int llmCalls, String responseMode,
-                 String selectedTags);
+             String selectedTags, boolean directMode, Long reusedFromTurnId);
+
+        default long addTurn(String userId, String threadId, String question, String answer,
+             String askedAt, int inputTokens, int outputTokens,
+             int elapsedMs, String provider, int llmCalls, String responseMode,
+             String selectedTags, Long reusedFromTurnId) {
+        return addTurn(userId, threadId, question, answer, askedAt, inputTokens, outputTokens,
+            elapsedMs, provider, llmCalls, responseMode, selectedTags, false, reusedFromTurnId);
+        }
+
+    default long addTurn(String userId, String threadId, String question, String answer,
+                 String askedAt, int inputTokens, int outputTokens,
+                 int elapsedMs, String provider, int llmCalls, String responseMode,
+                 String selectedTags) {
+        return addTurn(userId, threadId, question, answer, askedAt, inputTokens, outputTokens,
+            elapsedMs, provider, llmCalls, responseMode, selectedTags, false, null);
+    }
+
+        default long addTurn(String userId, String threadId, String question, String answer,
+             String askedAt, int inputTokens, int outputTokens,
+             int elapsedMs, String provider, int llmCalls, String responseMode,
+             String selectedTags, boolean directMode) {
+        return addTurn(userId, threadId, question, answer, askedAt, inputTokens, outputTokens,
+            elapsedMs, provider, llmCalls, responseMode, selectedTags, directMode, null);
+        }
 
     void clearHistory(String userId, String threadId);
+
+    /** Persist image refs shown with a turn (answer thumbnails in chat UI). */
+    void saveTurnImageRefs(long turnId, String userId, String threadId, List<String> imageRefs);
+
+    /** Active image refs by turn id, for restoring chat history. */
+    Map<Long, List<String>> getTurnImageRefs(String userId, String threadId);
+
+    /** Hides one image from a turn in this conversation (soft delete). */
+    void excludeTurnImageRef(String userId, String threadId, long turnId, String imageRef);
 
     /** Returns all turns for the thread in chronological order (oldest first). */
     List<Turn> getTurns(String userId, String threadId);

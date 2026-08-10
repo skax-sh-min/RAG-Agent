@@ -33,7 +33,8 @@ public final class SearchTextBuilder {
      * Computes {@link #build} once and stores the result under {@link MetaKey#SEARCH_TEXT} so
      * every subsequent {@link #build} call on the returned Document short-circuits. Callers that
      * persist this Document's metadata (Chroma/sqlite-vec {@code add()}) must strip the key
-     * first — it is transient, same discipline as {@link MetaKey#CHUNK_CONTEXT} (§10.1).
+     * first — it is transient (unlike {@link MetaKey#CHUNK_CONTEXT}, which IS persisted so the
+     * {@code /admin} chunk editor can show/edit it).
      */
     public static Document precompute(Document doc) {
         Map<String, Object> meta = new HashMap<>(doc.getMetadata());

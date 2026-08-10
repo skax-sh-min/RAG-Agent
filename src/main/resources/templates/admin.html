@@ -273,7 +273,11 @@
 <!-- ── Edit Offcanvas ──────────────────────────────────────────────────── -->
 <div class="offcanvas offcanvas-end" tabindex="-1" id="editOffcanvas" style="width:520px; max-width:100%;">
     <div class="offcanvas-header border-bottom">
-        <h6 class="offcanvas-title"><i class="bi bi-pencil-square me-2"></i>청크 편집</h6>
+        <h6 class="offcanvas-title d-flex align-items-center gap-2" style="min-width:0;">
+            <span class="text-nowrap"><i class="bi bi-pencil-square me-2"></i>청크 편집</span>
+            <!-- 편집 영역 공간 절약을 위해 별도 필드 대신 헤더에 표시 — openChunkEdit()이 채운다. -->
+            <code id="edit-chunk-id-label" class="text-muted fw-normal text-truncate" style="font-size:0.7rem;"></code>
+        </h6>
         <button type="button" class="btn-close" data-bs-dismiss="offcanvas"></button>
     </div>
     <div class="offcanvas-body d-flex flex-column gap-3" id="editOffcanvasBody">
@@ -398,6 +402,39 @@ function renderChunkPreview(container, rawText) {
     renderMarkdownWithImageMarkers(container, rawText);
 }
 
+// excerpt_keywords/chunk_context (MetaKey.EXCERPT_KEYWORDS/CHUNK_CONTEXT) get their own dedicated
+// fields below so an operator can edit them without hand-editing JSON — excluded here so there's
+// only one editable copy of each (otherwise the JSON box and the dedicated field could disagree,
+// and saveChunkEdit() always sends the dedicated field's value last).
+const CHUNK_META_INLINE_KEYS = ['excerpt_keywords', 'chunk_context'];
+
+function metaJsonExcludingInlineFields(metadata) {
+    const copy = Object.assign({}, metadata);
+    CHUNK_META_INLINE_KEYS.forEach(k => delete copy[k]);
+    return JSON.stringify(copy, null, 2);
+}
+
+// chunk_context (MetaKey.CHUNK_CONTEXT) is always stored as
+// KeywordExtractor.combineContext()'s "{filename} > {heading}\n{LLM 1-2문장}" — the first line is a
+// structural breadcrumb deterministically derived from filename/heading, not something an operator
+// should hand-edit (editing/deleting it just drifts it from the real filename/heading with nothing
+// to detect that). Split on the first newline so the edit UI shows the breadcrumb read-only and
+// only the LLM-written sentence is editable; join mirrors combineContext()'s exact format back.
+function splitChunkContext(combined) {
+    const text = combined || '';
+    const idx = text.indexOf('\n');
+    return idx === -1
+        ? { breadcrumb: text, summary: '' }
+        : { breadcrumb: text.slice(0, idx), summary: text.slice(idx + 1) };
+}
+
+function joinChunkContext(breadcrumb, summary) {
+    const b = (breadcrumb || '').trim();
+    const s = (summary || '').trim();
+    if (!s) return b;
+    return b ? b + '\n' + s : s;
+}
+
 // Open edit offcanvas: fetch full chunk detail
 function openChunkEdit(chunkId, collection) {
     fetch('/admin/chunks/' + encodeURIComponent(chunkId) + '/detail?collection=' + encodeURIComponent(collection))
@@ -411,19 +448,39 @@ function openChunkEdit(chunkId, collection) {
                            Math.min(EDIT_BASE_WIDTH * 2.5, window.innerWidth - 100)) + 'px'
                 : EDIT_BASE_WIDTH + 'px';
 
-            const metaJson = JSON.stringify(data.metadata, null, 2);
-            // 순서는 Chunk ID → 메타데이터 → 텍스트. 텍스트가 마지막인 이유는 두 가지 —
-            // (1) 바로 아래 "저장" 버튼과 붙어 있어야 편집→저장 동선이 짧고, (2) flex-grow-1을
+            const idLabel = document.getElementById('edit-chunk-id-label');
+            idLabel.textContent = chunkId;
+            idLabel.title = chunkId;
+
+            const metaJson = metaJsonExcludingInlineFields(data.metadata);
+            const contextParts = splitChunkContext(data.metadata.chunk_context);
+            const breadcrumbText = contextParts.breadcrumb || '(위치 정보 없음)';
+            // 순서는 메타데이터 → 요약(맥락) → 키워드 → 텍스트 (Chunk ID는 편집 공간을 아끼려고
+            // 오프캔버스 헤더의 "청크 편집" 옆으로 옮겼다 — 위에서 채운다). 텍스트가 마지막인 이유는
+            // 두 가지 — (1) 바로 아래 "저장" 버튼과 붙어 있어야 편집→저장 동선이 짧고, (2) flex-grow-1을
             // 가진 유일한 필드라 남는 세로 공간을 전부 가져가므로 맨 아래에 두는 편이 자연스럽다.
             const editFields = `
                 <div>
-                    <label class="form-label small fw-semibold">Chunk ID</label>
-                    <div class="form-control form-control-sm text-muted" style="font-size:0.72rem; word-break:break-all;">${escHtml(chunkId)}</div>
-                </div>
-                <div>
                     <label class="form-label small fw-semibold">메타데이터 (JSON)</label>
                     <textarea id="edit-meta" class="form-control form-control-sm font-monospace"
-                              style="min-height:135px; font-size:0.78rem; resize:vertical;">${escHtml(metaJson)}</textarea>
+                              style="min-height:108px; font-size:0.78rem; resize:vertical;">${escHtml(metaJson)}</textarea>
+                </div>
+                <div>
+                    <label class="form-label small fw-semibold">요약 (맥락)
+                        <i class="bi bi-info-circle text-secondary ms-1 small" style="cursor:help;"
+                           data-bs-toggle="tooltip" data-bs-custom-class="tooltip-wide"
+                           title="아래 위치 정보 뒤에 이어붙어 임베딩·키워드 검색(FTS) 입력이 됩니다(청크 원문 자체는 바뀌지 않습니다). 저장 후 아래 &quot;이 청크만 재인덱싱&quot;을 눌러야 검색에 실제로 반영됩니다."></i>
+                    </label>
+                    <div id="edit-context-breadcrumb-display" class="text-muted small font-monospace mb-1"
+                         style="word-break:break-all;">${escHtml(breadcrumbText)}</div>
+                    <input type="hidden" id="edit-context-breadcrumb" value="${escAttr(contextParts.breadcrumb)}"/>
+                    <textarea id="edit-context" class="form-control form-control-sm"
+                              style="min-height:56px; font-size:0.8rem; resize:vertical;">${escHtml(contextParts.summary)}</textarea>
+                </div>
+                <div>
+                    <label class="form-label small fw-semibold">키워드</label>
+                    <input id="edit-keywords" type="text" class="form-control form-control-sm"
+                           value="${escHtml(data.metadata.excerpt_keywords || '')}" placeholder="쉼표로 구분"/>
                 </div>
                 <div class="flex-grow-1 d-flex flex-column">
                     <label class="form-label small fw-semibold">텍스트</label>
@@ -440,10 +497,10 @@ function openChunkEdit(chunkId, collection) {
                          d-flex 를 얹으면 스위치 정렬이 틀어진다 — 아이콘은 라벨 뒤에 인라인으로 둔다. -->
                     <div class="form-check form-switch">
                         <input class="form-check-input" type="checkbox" id="edit-regen-keywords">
-                        <label class="form-check-label small" for="edit-regen-keywords">키워드 재생성 (LLM 1회 호출)</label>
+                        <label class="form-check-label small" for="edit-regen-keywords">키워드·요약 재생성 (LLM 1회 호출)</label>
                         <i class="bi bi-info-circle text-secondary ms-1 small" style="cursor:help;"
                            data-bs-toggle="tooltip" data-bs-custom-class="tooltip-wide"
-                           title="저장된(위 &quot;저장&quot; 버튼으로 반영한) 텍스트 기준으로 재임베딩 + 키워드 검색(FTS) 인덱스를 다시 만듭니다. 체크 해제 시 현재 키워드를 그대로 두고 재임베딩·FTS만 갱신합니다(LLM 미사용, 즉시)."></i>
+                           title="저장된(위 &quot;저장&quot; 버튼으로 반영한) 텍스트 기준으로 재임베딩 + 키워드 검색(FTS) 인덱스를 다시 만듭니다. 체크 해제 시 위 키워드/요약을 (방금 저장한 값 그대로) 두고 재임베딩·FTS만 갱신합니다(LLM 미사용, 즉시)."></i>
                     </div>
                     <button class="btn btn-outline-warning btn-sm mt-2" id="reindex-chunk-btn"
                             onclick="reindexChunkInline('${escAttr(chunkId)}', '${escAttr(collection)}')">
@@ -497,6 +554,12 @@ function saveChunkEdit(chunkId, collection) {
     let metadata;
     try { metadata = JSON.parse(document.getElementById('edit-meta').value); }
     catch (e) { showToast('메타데이터 JSON 파싱 오류', 'danger'); return; }
+    // 키워드/요약 전용 필드가 진짜 값이다 — metaJsonExcludingInlineFields()가 JSON 박스에서
+    // 이 두 키를 애초에 빼 두므로, 여기서 병합해야 저장 시 사라지지 않는다.
+    metadata['excerpt_keywords'] = document.getElementById('edit-keywords').value;
+    metadata['chunk_context']    = joinChunkContext(
+        document.getElementById('edit-context-breadcrumb').value,
+        document.getElementById('edit-context').value);
 
     fetch('/admin/chunks/' + encodeURIComponent(chunkId) + '?collection=' + encodeURIComponent(collection), {
         method: 'POST',
@@ -529,12 +592,20 @@ function reindexChunkInline(chunkId, collection) {
     .then(r => {
         if (!r.ok) { showToast('재인덱싱 실패', 'danger'); return null; }
         showToast('청크가 재인덱싱되었습니다.', 'success');
-        // 키워드 재생성 시 메타데이터(excerpt_keywords 등)가 서버에서 바뀌었으므로 패널에 다시 반영
+        // 키워드·요약 재생성 시 메타데이터(excerpt_keywords/chunk_context)가 서버에서
+        // 바뀌었으므로 패널에 다시 반영
         return fetch('/admin/chunks/' + encodeURIComponent(chunkId) + '/detail?collection=' + encodeURIComponent(collection))
                 .then(r2 => r2.ok ? r2.json() : null);
     })
     .then(data => {
-        if (data) document.getElementById('edit-meta').value = JSON.stringify(data.metadata, null, 2);
+        if (!data) return;
+        document.getElementById('edit-meta').value = metaJsonExcludingInlineFields(data.metadata);
+        document.getElementById('edit-keywords').value = data.metadata.excerpt_keywords || '';
+        const contextParts = splitChunkContext(data.metadata.chunk_context);
+        document.getElementById('edit-context-breadcrumb').value = contextParts.breadcrumb;
+        document.getElementById('edit-context-breadcrumb-display').textContent =
+            contextParts.breadcrumb || '(위치 정보 없음)';
+        document.getElementById('edit-context').value = contextParts.summary;
     })
     .catch(() => showToast('재인덱싱 중 오류 발생', 'danger'))
     .finally(() => { btn.disabled = false; btn.innerHTML = originalHtml; });

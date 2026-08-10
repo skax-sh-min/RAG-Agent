@@ -42,6 +42,7 @@ RAG Agent 시스템 배포·설정·운영 가이드입니다.
    - 6.8 [문서 내보내기](#68-문서-내보내기)
    - 6.9 [청크 추가 게시판 (사용자 제안 → 관리자 임베딩)](#69-청크-추가-게시판-사용자-제안--관리자-임베딩)
    - 6.10 [청크 분할 전략 (크기 기준 병합 / 소제목 최대 분할)](#610-청크-분할-전략-크기-기준-병합--소제목-최대-분할)
+  - 6.11 [중복 질문 재사용 (추천·검증·무효화)](#611-중복-질문-재사용-추천검증무효화)
 7. [벡터 스토어 관리](#7-벡터-스토어-관리)
 8. [문제 해결](#8-문제-해결)
 9. [보안 설정](#9-보안-설정)
@@ -72,10 +73,13 @@ RAG Agent 시스템 배포·설정·운영 가이드입니다.
         └─ other ──▶ [Retrieval]   (LLM이 최적 쿼리 생성 → 벡터 검색, chroma/sqlite-vec 백엔드 선택)
                        └─▶ [Answer]   (구조화 답변 + 충분성 자체 평가)
                               ├─ 증거 부족 ──▶ [Retrieval] (최대 2회 재시도)
-                              └─ 충분      ──▶ [Critic]   (근거 검증)
-                                                    ├─ 미근거 ──▶ [Retrieval]
-                                                    └─ 근거   ──▶ [Finalize] → 응답
+          └─ 충분      ──▶ [Finalize] (responseMode=S)
+               └─▶ [Critic]   (responseMode!=S, 근거 검증)
+                 ├─ 미근거 ──▶ [Retrieval]
+                 └─ 근거   ──▶ [Finalize] → 응답
 ```
+
+> 응답 모드가 `S`인 turn은 Answer 뒤 Critic을 건너뛰고 바로 Finalize로 종료합니다.
 
 ---
 
@@ -227,7 +231,7 @@ copy .env.example .env
 | `SEARCH_MULTIQUERY_ENABLED` | `true` | true/false | 검색 전 질의 다중 확장(LLM) 여부. `false`면 임계 경로 첫 LLM 콜 제거 |
 | `SEARCH_MULTIQUERY_MIN_LENGTH` | `15` | 0 ~ 20 | 이 길이(trim) 미만 질의는 확장 생략. `0`=항상 확장. 짧은 키워드 질의 TTFT↓(§10.8.1) |
 | `SEARCH_HYBRID_ENABLED` | `true` | true/false | RRF에 BM25(FTS5) 키워드 축 추가(§10.7.2 — 이 플래그와 무관하게 `chunk_fts`는 항상 채워지므로 **활성화해도 기존 색인 문서 재인덱싱 불필요**, FTS5/하이브리드 검색 도입 이전에 색인된 아주 오래된 문서만 예외) |
-| `SEARCH_RETRY_ESCALATE` | `true` | true/false | 재시도마다 후보 풀 확대. `candidateK = min(topK×(retryCount+1), topK×3)`. 동일 검색 반복 회피 |
+| `SEARCH_RETRY_ESCALATE` | `true` | true/false | 재시도 에스컬레이션 **두 축을 한 플래그로** 제어. ① 후보 풀 `candidateK = min(topK×(retryCount+1), topK×3)` — 동일 검색 반복 회피. ② 최종 컷 `effectiveTopK = topK + retryCount` — 후보 풀만 키우면 ANSWER가 받는 문서 수는 매번 topK 그대로여서, 컷 바로 뒤에 있던 근거는 재시도해도 계속 밖에 머문다. 최종 컷은 답변·평가 프롬프트에 실제 실리는 양이라 배수가 아닌 **가산**(PIPELINE.md §5.1) |
 | `SEARCH_RERANK_ENABLED` | `false` | true/false | RRF 후 LLM 리랭킹 단계 (opt-in). **턴당 LLM 1콜 추가** → 정밀도↑/레이턴시 트레이드오프 |
 | `SEARCH_CANDIDATE_MULTIPLIER` | `3` | 2 ~ 5 | 리랭킹 전 후보 풀 크기. `topK × N`개 가져와 리랭킹 후 topK로 축소 |
 | `SEARCH_TAG_CANDIDATE_MULTIPLIER` | `2` | 1 ~ 5 | 태그가 선택된 검색의 후보 풀 확대 배수. `candidateK = max(candidateK, topK × N)` — sqlite-vec에서 태그 엄격 필터 후 결과가 부족할 때 보정(§4.6) |
@@ -385,8 +389,8 @@ app.embedding.max-concurrent-batches=4
 | 변수 | 기본값 | 권장 범위 | 설명 |
 |------|--------|----------|------|
 | `LLM_MAX_TOKENS` | `6000` | 1000 ~ 32000 | 단일 진실 소스(`app.llm.max-tokens`)로 통일되어, 이 값을 바꾸면 **아래 세 곳 모두**가 함께 움직입니다: (1) **블로킹 LLM 응답 토큰 상한** — 인덱싱·분류·키워드·Direct 블로킹 호출에 적용(스트리밍 채팅 답변은 의도적으로 미적용, SSE 타임아웃이 폭주 방지). (2) **대화 컨텍스트 문자 예산**(`MemoryService`, `×0.5`로 히스토리 예산 산출). (3) **MD 교정 섹션 크기**(`MarkdownCorrectionService`).<br>§6.18 이전에는 (1)이 코드에 `6000`으로 하드코딩돼 이 환경변수와 무관하게 동작했고, (2)·(3)은 별도의 죽은 프로퍼티(`spring.ai.openai.chat.options.max-tokens`, 기본 `8000`)를 읽어 (1)과 다른 값을 썼습니다 — 이제 세 곳 모두 `app.llm.max-tokens` 하나만 읽습니다.<br>**응답 모드(S/M/L)와의 관계**: (1)의 실제 상한은 이 값 그대로가 아니라 `ResponseMode`별 비율(S 15%/M 40%/L 70%)과 고정 글자수 하한(S 2,000/M 5,000/L 10,000자) 중 **큰 값**입니다 — 그래서 이 값을 기본 `6000`~`12000` 수준으로 두는 한 S/M/L 모두 사실상 고정 하한이 실제 분량을 결정하고, 이 환경변수를 훨씬 크게(예: 20,000 이상) 올려야 비율 항이 하한을 넘어서기 시작합니다. 한글은 1토큰≈1글자라 이 숫자는 별도 환산 없이 "약 N자" 프롬프트 지시문에도 그대로 쓰입니다 — 상세는 CLAUDE.md와 [§6.7 큐레이션 Q&A](#67-큐레이션-qa-좋아요-기반-지식-승격-1010)의 L모드 임베딩 스킵 항목 참고 |
-| `LLM_TEMPERATURE` | `0.0` | 0.0 ~ 2.0 | 일반/RAG 및 Direct를 제외한 모든 LLM 호출의 무작위성 제어(`app.llm.temperature`). `0.0`은 결정적 답변, 높을수록 다양·창의적.<br>**§6.18 이전에는 코드에 `0.0`으로 하드코딩돼 이 값이 무시되는 죽은 설정이었으나, 이제 실제로 적용됩니다** — 과거에 이 값을 설정해 둔 운영자는 이번부터 처음으로 효과가 나타납니다(기본 `0.0`이면 체감 변화 없음). 프로바이더 빈 생성 시점에 고정되므로 변경하려면 재기동 필요 |
-| `DIRECT_LLM_TEMPERATURE` | `0.1` | 0.0 ~ 0.2 | **Direct(meta) 응답 전용** temperature(`app.llm.direct-temperature`) — 인사·잡담 등 RAG를 안 쓰는 직접 응답은 약간의 다양성이 자연스러워 일반 temperature와 분리(§6.18). `[0.0, 0.2]`로 clamp. **핫 수정 가능** — `/settings`에서 재기동 없이 다음 Direct 호출부터 반영(`DirectAnswerService`가 매 호출 재조회) |
+| `LLM_TEMPERATURE` | `0.0` | 0.0 ~ 0.3 | 일반/RAG 및 Direct를 제외한 모든 LLM 호출의 무작위성 제어(`app.llm.temperature`). `0.0`은 결정적 답변, 높을수록 다양·창의적. `[0.0, 0.3]`으로 clamp.<br>**§6.18 이전에는 코드에 `0.0`으로 하드코딩돼 이 값이 무시되는 죽은 설정이었으나, 이제 실제로 적용됩니다** — 과거에 이 값을 설정해 둔 운영자는 이번부터 처음으로 효과가 나타납니다(기본 `0.0`이면 체감 변화 없음). 프로바이더 빈 생성 시점에 고정되므로 변경하려면 재기동 필요 |
+| `DIRECT_LLM_TEMPERATURE` | `0.1` | 0.0 ~ 1.0 | **Direct(meta) 응답 전용** temperature(`app.llm.direct-temperature`) — 인사·잡담 등 RAG를 안 쓰는 직접 응답은 약간의 다양성이 자연스러워 일반 temperature와 분리(§6.18). `[0.0, 1.0]`으로 clamp. **핫 수정 가능** — `/settings`에서 재기동 없이 다음 Direct 호출부터 반영(`DirectAnswerService`가 매 호출 재조회) |
 
 #### 로그 레벨
 
@@ -504,7 +508,7 @@ LLM_ROUTING_MODE=QUALITY_FIRST
 
 #### LLM 응답 파라미터
 
-> **temperature와 최대 출력 토큰**은 각각 `LLM_TEMPERATURE`, `LLM_MAX_TOKENS` 환경변수로 설정할 수 있습니다(§6.18로 실제 적용되도록 수정됨). Direct(잡담) 응답만 별도 `DIRECT_LLM_TEMPERATURE`(기본 0.1)를 쓰며 `/settings`에서 핫 수정 가능합니다. → [§3.2 LLM 응답 파라미터](#32-환경변수-전체-목록) 참조
+> **temperature와 최대 출력 토큰**은 각각 `LLM_TEMPERATURE`, `LLM_MAX_TOKENS` 환경변수로 설정할 수 있습니다(§6.18로 실제 적용되도록 수정됨). 일반/RAG temperature(`LLM_TEMPERATURE`) 범위는 **0.0~0.3**(재기동 필요), Direct(잡담) 전용 `DIRECT_LLM_TEMPERATURE`(기본 0.1) 범위는 **0.0~1.0**이며 `/settings`에서 핫 수정 가능합니다. → [§3.2 LLM 응답 파라미터](#32-환경변수-전체-목록) 참조
 
 #### 업로드 크기 제한
 
@@ -1308,8 +1312,8 @@ app.llm.providers[1].stream=false
 |------|----------|------|
 | ClassifierService | `LIGHT_TEXT` | 질문 유형 분류 (품질 민감 — 큰 모델 유지) |
 | RetrievalService | `MICRO_TEXT` | 쿼리 생성 (MultiQueryExpander) — §6.21 작업2로 MICRO_TEXT 전환 |
-| AnswerService | `TEXT` | 답변 생성 |
-| CriticService | `TEXT` | 근거 검증 |
+| AnswerService | `TEXT` | 답변 생성 + **충분도·근거 통합 평가**(별도 1콜) |
+| CriticService | — | **LLM 호출 없음** — AnswerService의 통합 평가가 낸 `grounded`를 읽어 재시도 여부만 결정 (`responseMode=S`이면 이 단계 스킵) |
 | DirectAnswerService | `LIGHT_TEXT` | meta 질문 직접 응답 (사용자 노출 — 큰 모델 유지) |
 | VisionDescriptionService | `VISION` | 이미지 → 설명 생성 |
 | ImageTypeClassifier | `LIGHT_BOTH` | 이미지 유형 분류 |
@@ -1732,7 +1736,7 @@ app.llm.providers[8].concurrency=4
 - **`[Recent]` 구간의 답변 렌더링** (`SUMMARY_RECENT_RAW_TURNS`개, 기본 2): 답변 종류에 따라 다르게 담습니다.
   - **RAG 답변**(`## 요약` 섹션 있음) → **요약만**. 원문은 문서 청크를 다시 풀어 쓴 것인데 그 청크는 **다음 턴이 어차피 재검색**하므로(매 턴 검색), 전문을 되먹이면 `[검색된 문서]`를 수천 자짜리로 중복시키는 셈입니다. 게다가 그 중복본은 원본이 아니라 모델이 만든 미검증 산문이라, 이전 턴의 오류가 문맥에 고착될 위험도 있습니다. 2,700자짜리 답변이 ~250자로 줄어듭니다.
   - **Direct/meta 답변**(그 섹션 없음) → **원문을 남기되 1,200자에서 절단**. 근거 문서가 없어 그 답변 자체가 유일한 기록이므로 지울 수 없고, 길이만 제한합니다. 상한은 `RECENT_DIRECT_ANSWER_CAP` 상수 — **프로퍼티가 아닙니다**.
-  - 판별은 `## 요약` 헤딩 유무입니다(`conversation_turns`에 direct 모드 플래그가 없음). `prompt.answer.system`은 그 섹션을 강제하고 `prompt.direct.system`은 요구하지 않으므로 사실상 정확하며, 형식을 어긴 RAG 답변은 절단 쪽으로 떨어져 안전한 방향입니다.
+  - 판별은 `## 요약` 헤딩 유무입니다(`conversation_turns`에는 `direct_mode` 컬럼이 있으나, 요약 컨텍스트 렌더링 로직은 답변 본문 형식을 직접 기준으로 삼습니다). `prompt.answer.system`은 그 섹션을 강제하고 `prompt.direct.system`은 요구하지 않으므로 사실상 정확하며, 형식을 어긴 RAG 답변은 절단 쪽으로 떨어져 안전한 방향입니다.
   - 이전에는 양쪽 다 **무제한 원문**이었습니다. RAG 답변이 2~3천 자인데 이력 예산이 3,000자(`LLM_MAX_TOKENS/2`)라, 한 건이 예산을 독식해 `SUMMARY_RECENT_RAW_TURNS=2`가 사실상 1로 동작했습니다.
 - **싫어요 제외 범위**: 싫어요가 눌린 턴은 이 경로의 **요약과 `[Recent]` 원문 구간 양쪽**에서 빠집니다(`dedupeTurns()`). `getRecentTurns()`의 SQL에는 feedback 조건이 없으므로 — 다른 호출자는 원본 행이 필요합니다 — 이 클래스에서 그 메서드를 쓰는 곳은 반드시 `dedupeTurns()`를 거쳐야 합니다. 예전에는 `buildContext()`가 이를 건너뛰어, 싫어요 답변이 요약에서만 빠지고 `[Recent]`에는 **전문 그대로** 다시 들어갔습니다(원본 폴백 경로와도 어긋났고, RAG 답변은 2~3천 자라 그 한 건이 문자 예산을 독식해 정상 턴을 밀어냈습니다).
 - **싫어요 처리**: 답변 직후 트리거된 요약 생성이 진행되는 동안(LLM 호출이 아직 끝나지 않은 짧은 시간) 사용자가 방금 그 턴에 싫어요를 누르면, 완성된 요약이라도 캐싱하지 않고 버립니다 — 다음 질문은 자동으로 원문 폴백 경로를 쓰게 되며, 그 경로는 애초에 DISLIKE 턴을 제외합니다. 다음 정상 트리거 때는 dedupe 단계에서 자연스럽게 그 턴이 빠진 채로 다시 요약됩니다.
@@ -1880,7 +1884,17 @@ env-var/application.properties value ({설정값}); the override wins. Reset it 
 
 | 항목 | 키 | 범위 |
 |------|----|------|
-| Direct(잡담) 응답 temperature | `app.llm.direct-temperature` (`DIRECT_LLM_TEMPERATURE`) | 0.0 ~ 0.2 |
+| Direct(잡담) 응답 temperature | `app.llm.direct-temperature` (`DIRECT_LLM_TEMPERATURE`) | 0.0 ~ 1.0 |
+
+**핫 수정 가능 — UI (재기동 불필요, 다음 화면 렌더부터 반영)**:
+
+| 항목 | 키 | 범위 |
+|------|----|------|
+| 출처 미리보기 표시 | `ui.source-preview-enabled` | true/false |
+
+- 기본값은 `true`(ON)이며, 관리자 설정으로 시스템 전체에 적용됩니다.
+- 이 값이 `false`면 채팅의 출처 배지 팝오버 미리보기를 초기화하지 않습니다.
+- 사용자 로컬 토글(localStorage)은 사용하지 않고, 서버 모델값으로 일관 적용합니다.
 
 - **"기본값" 버튼**으로 오버라이드를 삭제하면 `application.properties`/환경변수 값으로 정확히 복귀합니다(오버라이드가 있으면 항상 프로퍼티보다 우선).
 - 오버라이드는 **재기동 후에도 유지**됩니다(테이블에 영속). 배포 기본값 자체를 바꾸려면 여전히 환경변수/`application.properties`를 수정하세요 — 오버라이드는 그 위에 얹히는 런타임 조정 레이어입니다.
@@ -2097,6 +2111,72 @@ mvn test -Dtest=SearchQualityEvaluationTest -Dsearch-eval.enabled=true
 
 ---
 
+### 6.11 중복 질문 재사용 (추천·검증·무효화)
+
+중복 질문이 많은 환경에서 응답 지연과 LLM 호출을 줄이기 위해, 채팅 입력 시 기존 질문 추천과 답변 재사용 기능을 제공합니다.
+
+#### 동작 요약
+
+- 추천 조회: `GET /api/v1/questions/suggest?q=...&limit=...` (서버는 항상 shared 기준 처리)
+- 재사용 시도: `POST /api/v1/questions/reuse`
+- 재사용 성공: 기존 답변을 새 turn으로 저장(`provider=db-reuse`, `reused_from_turn_id` 참조 저장)
+- 재사용 실패: `fallback=true`와 사유를 반환, 클라이언트가 일반 질의 파이프라인으로 즉시 전환
+
+추천 결과 품질을 위해 다음 필터를 함께 적용합니다.
+
+- `direct_mode=1`인 질문은 `feedback='LIKE'`일 때만 추천/재사용 후보에 포함
+- 질문 정규화(공백/대소문자) 기반 중복 제거
+
+#### API 오류/폴백 응답 요약
+
+| API | HTTP | 형태 | 운영 관점 처리 |
+|---|---|---|---|
+| `/api/v1/questions/suggest` | 200 | `[]` (빈 배열) | 입력 길이(2글자 미만) 또는 후보 없음. 장애가 아니라 정상 케이스 |
+| `/api/v1/questions/reuse` | 200 | `{ "reused": false, "fallback": true, ... }` | 기능 실패가 아니라 검증 실패 분기. 클라이언트는 일반 질의 전환을 수행해야 정상 |
+| 공통(예외 발생) | 4xx/5xx | RFC 9457 ProblemDetail + `errorCode` | [ERROR_CODES.md](ERROR_CODES.md) 기준으로 알람/대응 (`RAG-VAL-001`, `RAG-INT-001` 등) |
+
+> `fallback=true`는 서버 에러가 아니라 데이터 신선도 보호(삭제/변경 감지) 정책이 작동한 결과입니다. 모니터링에서 오류율로 집계하지 않는 것을 권장합니다.
+
+#### 저장 구조
+
+- 테이블: `turn_source_ref`
+- 저장 시점: 일반/스트리밍 답변이 turn으로 저장된 직후
+- 내용: `turn_id`, `chunk_id`, `chunk_hash`, `status(active|inactive)` 등
+- 목적: "당시 답변이 어떤 청크 집합을 근거로 했는지"를 고정 스냅샷으로 보존
+
+`db-reuse` 저장은 답변 본문을 중복 저장하지 않고 참조로 기록합니다.
+
+- `conversation_turns.reused_from_turn_id`: 원본 turn id 참조
+- `conversation_turns.answer`: 빈 문자열 저장(중복 데이터 절감)
+- 조회 시 `COALESCE(NULLIF(src.answer,''), NULLIF(t.answer,''), '참조 원문 삭제됨')`로 원본 답변 복원
+
+원본 turn이 이후 삭제되면(예: 스레드 삭제), 답변 본문은 `'참조 원문 삭제됨'`으로 표시됩니다. 출처 미리보기도 원본 turn 기준으로 조회되며, 원본이 없으면 `'참조 원문 삭제됨'` 안내 항목(미리보기: "원본 대화가 삭제되어 출처 미리보기를 표시할 수 없습니다.")이 반환됩니다.
+
+또한 스레드 삭제 시(`clearHistory`) `conversation_turns`/`turn_image_ref`와 함께 해당 스레드의 `turn_source_ref`도 삭제되어 orphan 참조가 남지 않도록 정리됩니다.
+
+#### 유효성 검증 규칙
+
+- 추천 항목 클릭 시 즉시 반환하지 않고, **반환 직전** `chunk_fts` 기준 현재 해시와 비교
+- 실패 조건:
+  - 청크가 사라짐(문서/청크 삭제, 재인덱싱 교체)
+  - 청크 텍스트 해시 불일치(내용 변경)
+- 실패하면 재사용을 중단하고 일반 질의로 전환
+
+#### 무효화 전파 경로
+
+- 문서 삭제(`deleteDocument`/`deleteArtifacts`) 시 해당 문서의 기존 `spring_doc_id` 전부 비활성화
+- 동기화 삭제(sync step3)도 동일 경로를 타므로 자동 반영
+- 문서 재인덱싱(`reindexFromMd`)은 old chunk 삭제 시점에 old id 묶음을 일괄 비활성화
+- 관리자 청크 삭제(`/admin/chunks/{chunkId}`) 시 해당 id 비활성화
+- 관리자 단건 청크 재인덱싱은 재인덱싱 전/후 해시 비교 후 **변경된 경우에만** 비활성화
+
+#### 추천 품질 필터
+
+- 지시어 위주 질문(예: "이거", "그거")은 추천에서 제외
+- 단, 오류코드/파일명/경로/API명 등 구체 신호가 있으면 제외하지 않음
+
+---
+
 ## 7. 벡터 스토어 관리
 
 `/admin` 페이지(네비게이션 라벨: **벡터 스토어 관리**)의 접근 제어는 인증 모드에 따라 다릅니다.  
@@ -2299,6 +2379,29 @@ time curl -m 30 -X POST $LOCAL_LLM_URL/chat/completions -H "Content-Type: applic
 | 토큰은 오는데 매우 느림(예: 1 tok/s) | 추론 속도 자체가 느림 | 한국어는 대략 1토큰≈1글자라 "약 2,000자" 응답에 30분 이상 걸릴 수 있음 → 응답 길이 모드를 S로, 또는 더 빠른 모델 사용 |
 | 로그에 `[TIMEOUT:SSE_IDLE]` | 300초 동안 진행이 없어 유휴 타임아웃 | 위 원인 해소. 느린 모델이 불가피하면 `SSE_IDLE_TIMEOUT_SECONDS` 상향 |
 | 로그에 `[TIMEOUT:LLM_HTTP]` | `LLM_READ_TIMEOUT_SECONDS`(기본 600초) 초과 | 동일. 프로바이더 장애가 아니므로 Circuit Breaker는 차단하지 않음 |
+
+---
+
+### 답변 내용은 맞는데 계속 **미검증** 배지가 붙음 / 재시도만 반복
+
+답변 자체는 문서와 일치하는데 근거 검증(`grounded`)이 계속 실패하는 경우입니다. 재시도까지 소진하면 미검증 배지가 붙은 채 전달됩니다.
+
+**먼저 사유부터 확인하세요.** 검증 판정은 조용히 일어나지 않습니다.
+
+```bash
+docker compose logs app | grep -E "EVAL\] 검증 미통과|CRITIC_UNGROUNDED" | tail -20
+```
+
+`reason=`에 평가 LLM이 쓴 한 문장이 들어 있고, 이 값은 화면의 미검증 배지 옆에도 그대로 노출됩니다.
+
+| 사유 유형 | 원인 | 조치 |
+|------|------|------|
+| 경로·포트·주소·환경변수 값이 문서와 다르다는 사유 | 평가 프롬프트의 **환경 의존 값 예외**가 동작하지 않음 — 이 값들은 문서와 달라도 `grounded=false` 사유가 될 수 없고 `envNote`(화면의 `ℹ️ 환경에 따라 달라질 수 있는 값`)로만 안내되어야 합니다 | 모델이 지시를 따르지 못하는 경우가 대부분입니다. `messages_ko.properties`의 `prompt.answer.eval`에 `[환경 의존 값 예외]` 블록이 남아 있는지 먼저 확인하고(테스트 `AnswerEvalPromptTest`가 이를 검사), 그다음 더 큰 로컬 모델로 교체 검토 (PIPELINE.md §5.3) |
+| "문서에 없음" 계열인데 실제로는 문서에 있음 | 근거 청크가 검색 결과 하위 순위라 재시도해도 계속 컷 밖에 머무름 | `SEARCH_TOP_K` 상향(2~3 정도), 또는 `SEARCH_RETRY_ESCALATE=true` 확인 — 재시도마다 최종 컷이 `topK + retryCount`로 넓어집니다(§5.1). 둘 다 `/settings`에서 재기동 없이 조정 가능 |
+| 사유가 매번 비어 있음 | 평가 LLM이 JSON 필드를 채우지 못함 (소형 모델에서 흔함) | 파싱 실패는 **검증 통과로 폴백**되므로 답변이 막히지는 않습니다. 검증 품질이 중요하면 평가 호출이 타는 `TEXT` 프로바이더를 더 큰 모델로 |
+| 로그에 `[EVAL] 문서 발췌 20000자 상한으로 …` 경고 | `SEARCH_TOP_K` × `CHUNK_SIZE`가 과도해 하위 문서가 검증에서 제외됨 | 둘 중 하나를 낮추세요. 이 상태에서는 답변이 본 문서 일부를 평가자가 못 봅니다 |
+
+> 검증은 답변을 **버리지 않습니다** — 미검증 배지는 "직접 출처를 확인하라"는 표시이지 실패가 아닙니다. 재시도 자체를 줄이려면 `MAX_RETRY_COUNT`를 낮추세요(`0`이면 재시도 없이 첫 답변을 그대로 전달).
 
 ---
 

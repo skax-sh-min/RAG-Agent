@@ -139,6 +139,20 @@ class SqliteMemoryRepositoryTest {
     }
 
     @Test
+    @DisplayName("db-reuse turn 은 참조만 저장해도 조회 시 원본 answer 로 복원된다")
+    void dbReuseTurnResolvesAnswerFromSourceTurn() {
+        long sourceId = repo.addTurn(UID, "t1", "원본 질문", "원본 답변", null, 0, 0, 0, "local-a", 1, "M", null);
+        long reusedId = repo.addTurn(UID, "t1", "재사용 질문", "", null, 0, 0, 0, "db-reuse", 0, "M", null, sourceId);
+
+        var turns = repo.getTurns(UID, "t1");
+        assertThat(turns).hasSize(2);
+        assertThat(turns.get(1).id()).isEqualTo(reusedId);
+        assertThat(turns.get(1).answer()).isEqualTo("원본 답변");
+
+        assertThat(repo.getHistory(UID, "t1", 10_000)).contains("A: 원본 답변");
+    }
+
+    @Test
     @DisplayName("DISLIKE 로 표시된 turn 은 getHistory 컨텍스트에서 제외된다")
     void dislikedTurnExcludedFromHistory() {
         long keep = repo.addTurn(UID, "t1", "keep-question", "keep-answer", null, 0, 0, 0, null, 0, "M", null);

@@ -276,7 +276,7 @@ class ChromaVectorStoreProviderTest {
     }
 
     @Test
-    @DisplayName("add: 저장 content/metadata는 원문 그대로이고, 임베딩 입력은 맥락+정규화본이며 CHUNK_CONTEXT는 영속에서 제외된다")
+    @DisplayName("add: 저장 content는 원문 그대로이고, 임베딩 입력은 맥락+정규화본이며 CHUNK_CONTEXT는 EXCERPT_KEYWORDS처럼 metadata에 영속된다")
     void add_embedsDerivedTextButPersistsOriginal() {
         VectorStoreRegistry registry = mock(VectorStoreRegistry.class);
         EmbeddingModel embeddingModel = mock(EmbeddingModel.class);
@@ -297,7 +297,7 @@ class ChromaVectorStoreProviderTest {
         ArgumentCaptor<ChromaApi.AddEmbeddingsRequest> captor = ArgumentCaptor.forClass(ChromaApi.AddEmbeddingsRequest.class);
         verify(chromaApi).upsertEmbeddings(anyString(), anyString(), anyString(), captor.capture());
         assertThat(captor.getValue().documents()).containsExactly(original);
-        assertThat(captor.getValue().metadata().get(0)).doesNotContainKey(MetaKey.CHUNK_CONTEXT);
+        assertThat(captor.getValue().metadata().get(0)).containsEntry(MetaKey.CHUNK_CONTEXT, "문서.pdf > 설정");
     }
 
     // ── §10.9.4 — indexing bypasses the query-embedding cache ────────────

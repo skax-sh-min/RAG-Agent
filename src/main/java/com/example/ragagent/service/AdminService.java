@@ -21,6 +21,7 @@ import org.springframework.ai.chroma.vectorstore.ChromaApi.GetEmbeddingsRequest;
 import org.springframework.ai.chroma.vectorstore.ChromaApi.QueryRequest.Include;
 import org.springframework.ai.chroma.vectorstore.common.ChromaApiConstants;
 import org.springframework.ai.document.Document;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -54,6 +55,7 @@ public class AdminService {
     private final VectorStoreFacade vectorStore;
     private final KeywordSearchRepository keywordRepo;
     private final KeywordExtractor keywordExtractor;
+    private final QuestionReuseService questionReuseService;
 
     // shown on /admin to disambiguate operational vs vector DB files. Field-injected
     // (not constructor) so unit tests that build AdminService directly stay unaffected (null → hidden).
@@ -63,10 +65,12 @@ public class AdminService {
     private String sqliteVecDbPath;
 
     // vec_document_chunks/vec_embeddings live with the vector tables → same template as the provider.
+    @Autowired
     public AdminService(Optional<ChromaApi> chromaApi, @Qualifier("vectorJdbcTemplate") JdbcTemplate jdbc,
                         AppProperties props, ObjectMapper objectMapper,
                         VectorStoreFacade vectorStore, KeywordSearchRepository keywordRepo,
-                        KeywordExtractor keywordExtractor) {
+                        KeywordExtractor keywordExtractor,
+                        QuestionReuseService questionReuseService) {
         this.chromaApi = chromaApi.orElse(null);
         this.jdbc = jdbc;
         this.props = props;
@@ -74,6 +78,15 @@ public class AdminService {
         this.vectorStore = vectorStore;
         this.keywordRepo = keywordRepo;
         this.keywordExtractor = keywordExtractor;
+        this.questionReuseService = questionReuseService;
+    }
+
+    // Backward-compatible constructor for unit tests.
+    public AdminService(Optional<ChromaApi> chromaApi, @Qualifier("vectorJdbcTemplate") JdbcTemplate jdbc,
+                        AppProperties props, ObjectMapper objectMapper,
+                        VectorStoreFacade vectorStore, KeywordSearchRepository keywordRepo,
+                        KeywordExtractor keywordExtractor) {
+        this(chromaApi, jdbc, props, objectMapper, vectorStore, keywordRepo, keywordExtractor, null);
     }
 
     /** Active backend is sqlite-vec? Null-safe so unit tests with mocked props don't NPE. */
@@ -271,11 +284,15 @@ public class AdminService {
             // Two-table consistency: drop the chunk from both the metadata table and the vec0 store.
             jdbc.update("DELETE FROM vec_document_chunks WHERE spring_doc_id = ?", chunkId);
             jdbc.update("DELETE FROM vec_embeddings WHERE spring_doc_id = ?", chunkId);
+            keywordRepo.deleteBySpringDocIds(List.of(chunkId));
+            if (questionReuseService != null) questionReuseService.markChunkDeleted(chunkId);
             return;
         }
         if (chromaApi == null) { log.warn("deleteChunk ignored — no ChromaApi"); return; }
         chromaApi.deleteEmbeddings(TENANT, DATABASE, collectionName,
                 new DeleteEmbeddingsRequest(List.of(chunkId)));
+        keywordRepo.deleteBySpringDocIds(List.of(chunkId));
+        if (questionReuseService != null) questionReuseService.markChunkDeleted(chunkId);
     }
 
     private String resolveId(String collectionName) {
@@ -349,13 +366,11 @@ public class AdminService {
      * vector search, and the keyword (BM25) axis is refreshed too (which {@link #updateChunk} never
      * touches at all).
      *
-     * @param regenerateKeywords false — keep the chunk's current {@code excerpt_keywords}/other
-     *        metadata as-is (e.g. a value the operator just hand-edited via {@link #updateChunk})
-     *        and only re-embed + re-index FTS against the current text. No LLM call, immediate.
-     *        Note: {@link MetaKey#CHUNK_CONTEXT} (the LLM-authored 1-2 sentence summary) is never
-     *        persisted (§10.1 — stripped before storage in both providers), so it can't be "kept"
-     *        either way; this path's embedding/FTS input falls back to the structural-only context
-     *        ({@code "{filename} > {heading}"}) until a {@code true} call regenerates it.
+     * @param regenerateKeywords false — keep the chunk's current {@code excerpt_keywords} and
+     *        {@link MetaKey#CHUNK_CONTEXT} as-is (e.g. values the operator just hand-edited via
+     *        {@link #updateChunk} — both are persisted metadata, so an edit genuinely survives
+     *        into this re-embed) and only re-embed + re-index FTS against the current text/
+     *        metadata. No LLM call, immediate.
      *        true — re-run {@link KeywordExtractor} for just this chunk first (one LLM call,
      *        same TF-timeout-fallback as indexing) to regenerate {@code excerpt_keywords}/
      *        {@code chunk_context} from the current text, THEN re-embed + re-index with that result
@@ -368,6 +383,7 @@ public class AdminService {
             log.warn("reindexChunk — chunk not found id={}", chunkId);
             return false;
         }
+        String previousHash = questionReuseService == null ? "" : questionReuseService.currentChunkHash(chunkId);
 
         Map<String, Object> meta = new HashMap<>(row.metadata());
         if (regenerateKeywords) {
@@ -387,6 +403,9 @@ public class AdminService {
         }
         keywordRepo.deleteBySpringDocIds(List.of(chunkId));
         keywordRepo.indexChunks(List.of(doc));
+        if (questionReuseService != null) {
+            questionReuseService.invalidateChunkIfHashChanged(chunkId, previousHash);
+        }
         log.info("[ADMIN] chunk reindexed id={} regenerateKeywords={}", chunkId, regenerateKeywords);
         return true;
     }

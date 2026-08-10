@@ -186,6 +186,23 @@ public class OperationsController {
                 .orElseGet(() -> ResponseEntity.notFound().build());
     }
 
+    /** Hides one image from a chat turn (owner-scoped to userId + threadId). */
+    @PatchMapping("/ui/threads/{threadId}/turns/{turnId}/images/exclude")
+    @ResponseBody
+    public ResponseEntity<Void> excludeTurnImage(ThreadContext ctx, @PathVariable String threadId,
+                                                  @PathVariable long turnId, @RequestParam String imageRef) {
+        String userId = ctx.userId();
+        if (imageRef == null || imageRef.isBlank()) {
+            throw new IllegalArgumentException("imageRef is required");
+        }
+        if (memoryService.getFeedback(userId, threadId, turnId).isEmpty()) {
+            return ResponseEntity.notFound().build();
+        }
+        memoryService.excludeTurnImageRef(userId, threadId, turnId, imageRef);
+        auditLogger.log("turn.image.exclude", threadId, Map.of("turnId", turnId, "imageRef", imageRef));
+        return ResponseEntity.noContent().build();
+    }
+
     // ── LLM usage ─────────────────────────────────────────────────────
 
     @GetMapping("/llm-usage")

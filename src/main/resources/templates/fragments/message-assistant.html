@@ -1,8 +1,7 @@
 <!DOCTYPE html>
 <html xmlns:th="http://www.thymeleaf.org" lang="ko">
 <body>
-<div th:fragment="message" class="d-flex align-items-start mb-3">
-    <i class="bi bi-robot fs-5 text-secondary me-2 mt-1 flex-shrink-0"></i>
+<div th:fragment="message" class="d-flex align-items-end mb-3">
     <div class="bubble-assistant p-3 flex-grow-1">
 
         <!-- Question-type badge -->
@@ -35,11 +34,20 @@
             <span th:text="${evalReason}"></span>
         </div>
 
+        <!-- 경로·주소·포트·환경변수처럼 실행 환경에 따라 달라지는 값 안내. 이런 값은 문서와 달라도
+             검증 실패로 치지 않으므로(prompt.answer.eval 의 환경 의존 값 예외) 검증 통과한 답변에도
+             나올 수 있다 — 미통과 사유와 달리 grounded 조건을 걸지 않는다(chat-stream.js onDone 과 동일). -->
+        <div th:if="${envNote != null}" class="small text-info mt-2">
+            <i class="bi bi-info-circle me-1"></i>환경에 따라 달라질 수 있는 값:
+            <span th:text="${envNote}"></span>
+        </div>
+
         <!-- Image thumbnails -->
         <div th:if="${imageRefs != null and !#lists.isEmpty(imageRefs)}" class="mt-2 d-flex flex-wrap gap-2">
             <a th:each="ref : ${imageRefs}"
-               th:href="@{'/api/v1/' + ${ref}}"
-               target="_blank" rel="noopener">
+               href="#"
+               class="chat-image-thumb"
+               th:attr="data-image-ref=${ref},data-turn-id=${turnId}">
                 <img th:src="@{'/api/v1/' + ${ref}}"
                      alt="참조 이미지"
                      style="max-height:120px; max-width:180px; object-fit:contain; border:1px solid var(--border-default, #dee2e6); border-radius:4px;"
@@ -60,7 +68,7 @@
                        th:attr="data-bs-toggle='popover',
                                 data-bs-trigger='hover focus',
                                 data-bs-placement='left',
-                                data-bs-content=${src.preview}"></a>
+                                data-preview-md=${src.preview}"></a>
                 </li>
             </ul>
         </details>
@@ -105,13 +113,24 @@
             </div>
         </div>
     </div>
+    <i class="bi bi-robot fs-5 text-secondary ms-1 mt-1 flex-shrink-0"></i>
 </div>
 
 <script>
     /* Initialize Bootstrap Popovers on source refs in this fragment */
-    document.querySelectorAll('.source-ref[data-bs-toggle="popover"]').forEach(function (el) {
-        new bootstrap.Popover(el);
-    });
+    const sourcePreviewEnabled = typeof window.isSourcePreviewEnabled === 'function'
+        ? window.isSourcePreviewEnabled()
+        : true;
+    if (sourcePreviewEnabled && typeof window.initSourcePopovers === 'function') {
+        window.initSourcePopovers(document);
+    } else {
+        document.querySelectorAll('.source-ref[data-bs-toggle="popover"]').forEach(function (el) {
+            el.removeAttribute('data-bs-toggle');
+            el.removeAttribute('data-bs-trigger');
+            el.removeAttribute('data-bs-placement');
+            el.removeAttribute('data-preview-md');
+        });
+    }
 
     /* Render all un-rendered md-content blocks with XSS sanitization + syntax highlight */
     document.querySelectorAll('.md-content[data-md]').forEach(function (el) {

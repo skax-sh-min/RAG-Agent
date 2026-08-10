@@ -11,12 +11,13 @@ import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * SQLite FTS5 keyword index over chunk content + extracted keywords.
@@ -46,6 +47,7 @@ public class KeywordSearchRepository {
     private static final Logger log = LoggerFactory.getLogger(KeywordSearchRepository.class);
 
     private static final String CHUNK_FTS = "chunk_fts";
+    private static final Pattern IMAGE_PATH_MARKER = Pattern.compile("\\[이미지:\\s*([^\\]]+)]");
 
     private static final String CREATE_CHUNK_FTS_SQL = """
             CREATE VIRTUAL TABLE IF NOT EXISTS %s USING fts5(
@@ -54,6 +56,7 @@ public class KeywordSearchRepository {
                 version       UNINDEXED,
                 filename      UNINDEXED,
                 page          UNINDEXED,
+                chapter       UNINDEXED,
                 chunk_index   UNINDEXED,
                 doc_tags      UNINDEXED,
                 content,
@@ -89,14 +92,15 @@ public class KeywordSearchRepository {
         if (columns.isEmpty()) return; // freshly created above — already correct schema
 
         boolean hasDocTags = columns.contains("doc_tags");
+        boolean hasChapter = columns.contains("chapter");
         boolean isTrigram = usesTrigramTokenizer(CHUNK_FTS);
-        if (!hasDocTags || !isTrigram) {
-            log.warn("[KEYWORD] Legacy chunk_fts schema detected (doc_tags={}, trigram={}). Rebuilding FTS table.",
-                    hasDocTags, isTrigram);
+        if (!hasDocTags || !hasChapter || !isTrigram) {
+            log.warn("[KEYWORD] Legacy chunk_fts schema detected (doc_tags={}, chapter={}, trigram={}). Rebuilding FTS table.",
+                    hasDocTags, hasChapter, isTrigram);
             // §10.4: a straight INSERT...SELECT into the new table re-tokenizes every row under
             // trigram (FTS5 tokenizes column values at insert time, not at read time), so existing
             // content/keywords/doc_tags survive the rebuild whenever the source already has doc_tags.
-            rebuildChunkFts(hasDocTags);
+            rebuildChunkFts(hasDocTags, hasChapter);
             log.warn("[KEYWORD] chunk_fts rebuild completed.");
         }
     }
@@ -119,19 +123,20 @@ public class KeywordSearchRepository {
         return sql != null && sql.contains("trigram");
     }
 
-    private void rebuildChunkFts(boolean sourceHasDocTags) {
+    private void rebuildChunkFts(boolean sourceHasDocTags, boolean sourceHasChapter) {
         final String tempTable = CHUNK_FTS + "_v2";
         String docTagsSelect = sourceHasDocTags ? "doc_tags" : "''"; // ancient schema predates doc_tags entirely
+        String chapterSelect = sourceHasChapter ? "chapter" : "''";
         try {
             jdbc.execute("DROP TABLE IF EXISTS " + tempTable);
             createChunkFtsTable(tempTable);
             try {
                 jdbc.update(("""
                         INSERT INTO %s
-                            (spring_doc_id, doc_id, version, filename, page, chunk_index, doc_tags, content, keywords)
-                        SELECT spring_doc_id, doc_id, version, filename, page, chunk_index, %s, content, keywords
+                            (spring_doc_id, doc_id, version, filename, page, chapter, chunk_index, doc_tags, content, keywords)
+                        SELECT spring_doc_id, doc_id, version, filename, page, %s, chunk_index, %s, content, keywords
                         FROM %s
-                        """).formatted(tempTable, docTagsSelect, CHUNK_FTS));
+                        """).formatted(tempTable, chapterSelect, docTagsSelect, CHUNK_FTS));
             } catch (Exception copyErr) {
                 // Keep rebuilding even if legacy rows cannot be copied; this table is a derived index.
                 log.warn("[KEYWORD] Skipped legacy row copy during rebuild (derived index will be refilled on next indexing): {}", copyErr.getMessage());
@@ -156,8 +161,8 @@ public class KeywordSearchRepository {
         try {
             jdbc.batchUpdate("""
                     INSERT INTO chunk_fts
-                        (spring_doc_id, doc_id, version, filename, page, chunk_index, doc_tags, content, keywords)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        (spring_doc_id, doc_id, version, filename, page, chapter, chunk_index, doc_tags, content, keywords)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     chunks.stream().map(d -> {
                         Map<String, Object> m = d.getMetadata();
@@ -167,6 +172,7 @@ public class KeywordSearchRepository {
                                 str(m.get(MetaKey.VERSION)),
                                 str(m.get(MetaKey.FILENAME)),
                                 str(m.get(MetaKey.PAGE_OR_SLIDE)),
+                                str(m.get(MetaKey.CHAPTER_NO)),
                                 str(m.get(MetaKey.CHUNK_INDEX)),
                                 str(m.get(MetaKey.TAGS)),     // 태그(쉼표 결합) — 검색 결과에 동행
                                 SearchTextBuilder.build(d),   // 맥락+정규화 텍스트 (Contextual BM25, §10.1)
@@ -222,19 +228,38 @@ public class KeywordSearchRepository {
 
     /** Shared row mapper for both the BM25 MATCH path and the §10.7.3 LIKE fallback path. */
     private static final RowMapper<Document> CHUNK_ROW_MAPPER = (rs, n) -> {
+        String content = rs.getString("content");
         Map<String, Object> meta = new HashMap<>();
         meta.put(MetaKey.DOC_ID, rs.getString("doc_id"));
         meta.put(MetaKey.VERSION, rs.getString("version"));
         meta.put(MetaKey.FILENAME, rs.getString("filename"));
         meta.put(MetaKey.PAGE_OR_SLIDE, rs.getString("page"));
+        meta.put(MetaKey.CHAPTER_NO, rs.getString("chapter"));
         meta.put(MetaKey.CHUNK_INDEX, rs.getString("chunk_index"));
         meta.put(MetaKey.TAGS, rs.getString("doc_tags"));  // 태그 동행
+        String imagePaths = extractImagePaths(content);
+        if (!imagePaths.isBlank()) {
+            meta.put(MetaKey.IMAGE_PATHS, imagePaths);
+        }
         return Document.builder()
                 .id(rs.getString("spring_doc_id"))
-                .text(rs.getString("content"))
+                .text(content)
                 .metadata(meta)
                 .build();
     };
+
+    private static String extractImagePaths(String text) {
+        if (text == null || text.isBlank()) return "";
+        List<String> paths = new ArrayList<>();
+        Matcher m = IMAGE_PATH_MARKER.matcher(text);
+        while (m.find()) {
+            String path = m.group(1) == null ? "" : m.group(1).strip();
+            if (!path.isEmpty() && !paths.contains(path)) {
+                paths.add(path);
+            }
+        }
+        return String.join(",", paths);
+    }
 
     /**
      * BM25-ranked lexical search over content + keywords, filtered by version.
@@ -268,7 +293,7 @@ public class KeywordSearchRepository {
         if (match == null) return List.of();
         try {
             return jdbc.query("""
-                    SELECT spring_doc_id, doc_id, version, filename, page, chunk_index, doc_tags, content
+                    SELECT spring_doc_id, doc_id, version, filename, page, chapter, chunk_index, doc_tags, content
                     FROM chunk_fts
                     WHERE chunk_fts MATCH ? AND version = ?
                     ORDER BY bm25(chunk_fts)
@@ -301,7 +326,7 @@ public class KeywordSearchRepository {
         params.add(limit);
         try {
             return jdbc.query(("""
-                    SELECT spring_doc_id, doc_id, version, filename, page, chunk_index, doc_tags, content
+                    SELECT spring_doc_id, doc_id, version, filename, page, chapter, chunk_index, doc_tags, content
                     FROM chunk_fts
                     WHERE (%s) AND version = ?
                     ORDER BY rowid

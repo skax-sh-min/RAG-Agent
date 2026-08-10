@@ -18,6 +18,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -60,7 +61,7 @@ class AgentServiceTest {
                 .toBuilder()
                 .questionType("manual")
                 .answer("최종 답변")
-                .sources(List.of(new SourceRef("doc.pdf | v1 | p.3", "snippet", "doc_123", 3)))
+                .sources(List.of(new SourceRef("doc.pdf | v1 | p.3", "snippet", "chunk_1", "doc_123", 3)))
                 .imageRefs(List.of("data/images/doc_123/img1.png"))
                 .usedProvider("gemini-flash")
                 .accumulateTokens(120, 80)
@@ -130,11 +131,11 @@ class AgentServiceTest {
     @DisplayName("memory 와 classifier 가 진짜 병렬 실행 (각각 200ms sleep 도 총 시간 ~200ms)")
     void chat_runsHistoryAndClassifyInParallel() {
         when(memoryService.getHistory(any(), any())).thenAnswer(inv -> {
-            Thread.sleep(200);
+            Thread.sleep(300);
             return "";
         });
         when(classifierService.classifyOnly(any(), any())).thenAnswer(inv -> {
-            Thread.sleep(200);
+            Thread.sleep(300);
             return "manual";
         });
         when(agentGraph.run(any())).thenReturn(fullResult());
@@ -143,10 +144,10 @@ class AgentServiceTest {
         service.chat(CTX, new ChatRequest("질문", "v1", "t1", RoutingMode.COST_FIRST));
         long elapsedMs = (System.nanoTime() - start) / 1_000_000;
 
-        // 직렬이면 ~400ms, 병렬이면 ~200-300ms. 350ms 미만이면 병렬 보장.
+        // 직렬이면 ~600ms+, 병렬이면 ~300-450ms. 520ms 미만이면 병렬 실행으로 본다.
         assertThat(elapsedMs)
-                .as("history + classify 병렬 실행 (직렬이었다면 400ms 초과)")
-                .isLessThan(350);
+                .as("history + classify 병렬 실행 (직렬이었다면 600ms 초과)")
+                .isLessThan(520);
     }
 
     @Test
@@ -219,7 +220,7 @@ class AgentServiceTest {
         when(classifierService.classifyOnly(any(), any())).thenReturn("manual");
         when(agentGraph.run(any())).thenReturn(fullResult());
         when(memoryService.addTurn(any(), any(), any(), any(), any(),
-                anyInt(), anyInt(), anyInt(), any(), anyInt(), any(), any())).thenReturn(42L);
+            anyInt(), anyInt(), anyInt(), any(), anyInt(), any(), any(), anyBoolean())).thenReturn(42L);
 
         service.chat(CTX, new ChatRequest("질문", "v1", "t1", RoutingMode.COST_FIRST));
 

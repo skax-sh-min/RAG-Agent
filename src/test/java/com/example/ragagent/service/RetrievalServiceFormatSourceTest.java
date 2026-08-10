@@ -12,9 +12,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 /**
  * QA — RetrievalService.formatSource() citation label.
  *
- * <p>Prefers the chapter number ({@link MetaKey#CHAPTER_NO}) when the chunk has a real one
- * (H2-H6 heading structure), else falls back to the page/slide number — "0" means "no chapter
- * applies here" (prologue or PPTX), not a real chapter, so it must not be shown as one.
+ * <p>Uses chapter labels for chapter-structured sources (docx/md/txt): "ch X" when real chapter
+ * metadata exists, else filename-only. Page-structured sources keep the existing "p.N" fallback.
  */
 class RetrievalServiceFormatSourceTest {
 
@@ -23,19 +22,19 @@ class RetrievalServiceFormatSourceTest {
     }
 
     @Test
-    @DisplayName("챕터 번호가 있으면(0이 아니면) '파일 | 챕터번호' 형식을 쓴다")
+    @DisplayName("챕터 번호가 있으면(0이 아니면) '파일 | ch 챕터번호' 형식을 쓴다")
     void usesChapterNoWhenPresent() {
         Document d = doc(Map.of(
                 MetaKey.FILENAME, "manual.docx",
                 MetaKey.CHAPTER_NO, "1.5.3",
                 MetaKey.PAGE_OR_SLIDE, 7));
 
-        assertThat(RetrievalService.formatSource(d)).isEqualTo("manual.docx | 1.5.3");
+        assertThat(RetrievalService.formatSource(d)).isEqualTo("manual.docx | ch 1.5.3");
     }
 
     @Test
-    @DisplayName("챕터 번호가 \"0\"(프롤로그/PPTX)이면 페이지 번호로 폴백한다: '파일 | p.N'")
-    void fallsBackToPageWhenChapterNoIsZero() {
+    @DisplayName("PPTX처럼 페이지 기반 파일은 챕터가 0이면 페이지 번호로 폴백한다: '파일 | p.N'")
+    void pageBasedFileFallsBackToPageWhenChapterNoIsZero() {
         Document d = doc(Map.of(
                 MetaKey.FILENAME, "slides.pptx",
                 MetaKey.CHAPTER_NO, "0",
@@ -45,8 +44,23 @@ class RetrievalServiceFormatSourceTest {
     }
 
     @Test
-    @DisplayName("챕터 번호 메타데이터 자체가 없으면(구버전 인덱스 등) 페이지 번호로 폴백한다")
-    void fallsBackToPageWhenChapterNoMissing() {
+        @DisplayName("docx는 챕터 번호가 0이거나 없으면 'ch ?' 대신 파일명만 표시한다")
+        void docxUsesUnknownChapterWhenChapterNoIsZeroOrMissing() {
+        Document zeroChapter = doc(Map.of(
+            MetaKey.FILENAME, "manual.docx",
+            MetaKey.CHAPTER_NO, "0",
+            MetaKey.PAGE_OR_SLIDE, 1));
+        Document missingChapter = doc(Map.of(
+            MetaKey.FILENAME, "manual.docx",
+            MetaKey.PAGE_OR_SLIDE, 1));
+
+        assertThat(RetrievalService.formatSource(zeroChapter)).isEqualTo("manual.docx");
+        assertThat(RetrievalService.formatSource(missingChapter)).isEqualTo("manual.docx");
+        }
+
+        @Test
+        @DisplayName("페이지 기반 파일에서 챕터 메타데이터가 없으면 페이지 번호로 폴백한다")
+        void fallsBackToPageWhenChapterNoMissingOnPageBasedFile() {
         Document d = doc(Map.of(
                 MetaKey.FILENAME, "old.pdf",
                 MetaKey.PAGE_OR_SLIDE, 2));

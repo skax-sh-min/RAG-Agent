@@ -69,6 +69,8 @@ src/main/resources/
 | POST | `/ui/chat` | `fragments/message-assistant` | 질문 전송 (동기 fallback) |
 | POST | `/ui/chat/stream` | `text/event-stream` (SseEmitter) | SSE 스트리밍 응답 — `chat-stream.js`가 사용 |
 | POST | `/ui/chat/stream/skip-images` | `204` | 현재 스트리밍 중인 턴의 쿼리 시점 이미지 분석(Lazy Vision) 대기를 건너뜀(`threadId` 파라미터) — 턴 전체를 끊는 `/ui/chat/stream`의 abort/중지와는 별개, 아래 §8 참고 |
+| GET | `/api/v1/questions/suggest` | JSON 배열 | 질문 입력 중 추천 목록 조회 (`q`, `limit`; 서버는 항상 shared 기준 처리) |
+| POST | `/api/v1/questions/reuse` | JSON | 추천 항목 재사용 시도. 반환 직전 출처 청크 유효성 재검증 후 성공 시 `reused=true`, 실패 시 `fallback=true`로 일반 질의 전환 신호 반환 |
 | POST | `/ui/chat/new` | redirect `/chat/{newId}` | 새 대화 생성 |
 | PATCH | `/ui/threads/{threadId}/title` | `fragments/thread-item` | 대화 제목 수정 |
 | PATCH | `/ui/threads/{threadId}/routing-mode` | `204` | 대화별 라우팅 모드 저장 |
@@ -112,6 +114,17 @@ REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — �
 > **헤더 알림 배지 2종**(`layout/base.html`, 청크 추가 게시판): 네비의 **지식 제안** 링크 옆에 작성자 본인의 미확인 처리 건수(`#my-submission-badge` ← `GET /curated/submissions/unread-count`), **관리자** 링크 옆에 검토 대기 건수(`#pending-submission-badge` ← `GET /admin/submissions/pending-count`)가 빨간 배지로 붙는다. 둘 다 **60초 폴링**이며(위 LLM 동시성 지표의 3초와 달리 게시글은 초 단위 신선도가 불필요) 0건이면 `.d-none`으로 감춘다. 관리자 배지는 `isAdmin`일 때만 렌더링되고, 폴링 스크립트는 **엘리먼트가 있을 때만** 시작하므로 비관리자 브라우저에서는 요청 자체가 나가지 않는다. 로그인 직후 첫 폴링이 바로 실행되므로 "관리자가 로그인하면 알림"이 함께 충족된다.
 >
 > **`inUse`가 채팅 요청만이 아니라 임베딩 활동·서킷브레이커 차단까지 반영한다**: `inUse`는 채팅 동시성 게이트 사용량 + `EmbeddingConcurrencyTracker`(인덱싱·검색 임베딩 in-flight 카운터, 채팅 게이트와 완전히 별개의 `EmbeddingModel` 데코레이터 체인이라 이게 없으면 임베딩 중에도 항상 0으로 보였다)를 합산하고, `capacity`를 넘지 않게 clamp된 값이다(임베딩 동시성은 `EMBED_MAX_CONCURRENT_BATCHES` 등 별도 한도라 합산 결과가 capacity를 초과할 수 있음). 서킷브레이커로 차단된 로컬 프로바이더는 `capacity`에는 그대로 남되 전체 용량이 `inUse`로 집계된다(제외되는 게 아니라 "완전 포화"로 표시됨). `inUse`가 `capacity`에 도달하면(즉 값이 같아지면) 헤더 스크립트가 숫자에 Bootstrap `text-danger`+`fw-bold`를 토글해 굵은 빨간 글씨로 강조한다.
+
+### 3.3-bis 채팅 입력 추천 UI
+
+`chat.html` 입력 영역에 `#question-suggest-box`가 표시되며 추천 범위는 항상 shared로 동작한다.
+
+- 입력값이 2글자 이상이면 220ms 디바운스로 `/api/v1/questions/suggest`를 호출한다.
+- 추천 클릭 시 `/api/v1/questions/reuse`를 호출하며 `turnId`, `threadId`, `version`을 보낸다(서버는 shared 기준 처리).
+- 재사용 성공(`reused=true`)이면 페이지 새로고침 없이 사용자 버블 + 어시스턴트 버블을 즉시 렌더링하고 provider 배지에 `db-reuse`를 표시한다.
+- 재사용 실패(`fallback=true`)면 토스트 안내 후 질문 입력창에 질문을 채워 일반 질의를 바로 전송한다.
+- Direct 모드 질문은 `feedback='LIKE'`인 항목만 추천/재사용 후보가 된다.
+- `Esc`, 전송(Enter), blur 시 추천 목록을 닫는다.
 
 ### 3.4 벡터 스토어 관리 (AdminController)
 
@@ -233,19 +246,15 @@ REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — �
 
 ## 3.9 사이드바 대화 목록 항목 (thread-list.html / thread-item.html)
 
-두 줄 구조 — `fragments/thread-list.html`(전체 목록, `GET /ui/threads`)과 `fragments/thread-item.html`
-(항목 1건, `PATCH /ui/threads/{id}/title` 응답)이 **동일한 마크업**을 각자 들고 있어(부분 갱신 대상이 다름)
-수정 시 항상 함께 바꿔야 한다:
+단일 행 구조 — `fragments/thread-list.html`(전체 목록, `GET /ui/threads`)과 `fragments/thread-item.html`
+(항목 1건, `PATCH /ui/threads/{id}/title` 응답)은 제목/날짜 한 줄만 렌더링한다.
 
 ```
 {제목, 왼쪽 정렬}                              {날짜, 오른쪽 정렬}
-[{버전}] {선택된 태그, 쉼표 구분 — 없으면 생략}
 ```
 
-- **1행**: `justify-content-between` flex — 제목(`text-truncate small`, 기존 스타일 그대로)과 날짜
-  (`.thread-date.text-muted`, `font-size:0.72rem`, 기존 스타일 그대로)를 양끝 정렬.
-- **2행**: 버전 `[latest]` + 태그(있으면), 둘 다 1행의 날짜와 같은 폰트(`text-muted`, `0.72rem`)로 통일.
-  태그가 없으면 두 번째 `<span>`이 아예 렌더링되지 않고 버전만 보인다(`th:if="${!thread.tagsDisplay().isEmpty()}"`).
+- 버전과 태그는 사이드바 목록에서 표시하지 않는다.
+- 제목(`text-truncate small`)과 날짜(`.thread-date.text-muted`, `font-size:0.72rem`)는 기존 스타일 유지.
 - **제목의 `[버전]` 접두사 제거**: `ThreadMetaService`는 여전히 `title` 컬럼에 `"[{version}] {summary}"`를
   그대로 저장한다(하위 호환, DB 마이그레이션 없음) — 화면에는 `ThreadMeta.displayTitle()`이 선행
   `[..]` 브래킷을 정규식으로 잘라낸 값을 쓴다. 버전은 `ThreadMeta.version` 필드를 2행에서 직접 표시하므로
@@ -338,9 +347,9 @@ PROGRESSIVE 업그레이드 시 `🔝 고추론 재분석 → {premiumProvider}`
 
 **출처 라벨 형식**: `RetrievalService.formatSource()`가 청크 메타데이터의 `chapter_no`(H2~H6 헤딩 기반 계층 번호, 예: `1.5.3`)가 "0"이 아니면 `"파일명 | 1.5.3"`, 아니면(프롤로그·PPTX·비스캔 PDF — 이 세 경우는 chapter_no가 항상 "0") `page_or_slide`로 폴백해 `"파일명 | p.12"`로 표시한다 — 문서 버전은 라벨에 포함되지 않는다. **큐레이션 Q&A**(§10.10, 좋아요로 승격된 답변)가 출처로 포함된 경우엔 파일명·페이지가 없으므로 `"💬 큐레이션 Q&A"` 고정 라벨로 표시된다.
 
-출처 목록 항목에 Bootstrap Popover (`hover focus` 트리거). `SourceRef.preview`에 청크 텍스트 앞 500자 포함.
+출처 목록 항목에 Bootstrap Popover (`hover focus` 트리거). `SourceRef.preview`에 청크 텍스트 앞 600자 포함.
 
-**팝오버 크기 (`app.css`, ≥768px 전용)**: Bootstrap 기본값(`max-width: 276px`, `font-size: 0.875rem`)은 500자 미리보기가 세로로 길게 줄바꿈되어 가독성이 떨어졌다 — `max-width: 560px`(약 2배), `font-size: 0.8rem`으로 넓히고 살짝 줄여 같은 500자가 더 적은 줄로 읽기 좋게 표시된다. `@media (min-width: 768px)` 블록 안에 있어 모바일(<768px)은 Bootstrap 기본값 그대로 — 좁은 화면에서 팝오버를 더 넓히면 화면 밖으로 넘칠 여지가 있기 때문.
+**팝오버 크기 (`app.css`, ≥768px 전용)**: Bootstrap 기본값(`max-width: 276px`, `font-size: 0.875rem`)은 미리보기가 세로로 길게 줄바꿈되어 가독성이 떨어졌다 — `max-width: 620px`(약 2배), `font-size: 0.8rem`으로 넓히고 살짝 줄여 같은 600자가 더 적은 줄로 읽기 좋게 표시된다. `@media (min-width: 768px)` 블록 안에 있어 모바일(<768px)은 Bootstrap 기본값 그대로 — 좁은 화면에서 팝오버를 더 넓히면 화면 밖으로 넘칠 여지가 있기 때문.
 
 ### 좋아요 피드백 & 큐레이션 Q&A 편집 (§10.10)
 

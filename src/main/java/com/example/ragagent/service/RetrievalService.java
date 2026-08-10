@@ -8,6 +8,7 @@ import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.llm.TaskType;
 import com.example.ragagent.llm.TrackingChatModel;
+import com.example.ragagent.ingestion.CuratedTextUtils;
 import com.example.ragagent.model.MetaKey;
 import com.example.ragagent.model.SourceRef;
 import com.example.ragagent.repository.CuratedQaRepository;
@@ -117,13 +118,25 @@ public class RetrievalService {
         boolean curatedQaEnabled = props.searchCuratedQaEnabledSafe();
         double curatedQaWeight = props.searchCuratedQaWeightSafe();
         double submissionWeight = props.searchSubmissionWeightSafe();
+        int retry = state.retryCount();
+        // Escalating candidateK alone only changed WHICH documents competed for the final slots —
+        // the cut stayed at defaultTopK, so every attempt handed the answer node exactly topK
+        // documents. When the evidence a retry was supposed to surface lands just past that cut,
+        // the retry re-fails for the same reason and burns the whole retry budget. The final cut
+        // therefore grows too, by one document per retry (topK + retryCount): enough to let a
+        // near-miss chunk in, small enough that the answer prompt does not balloon the way the
+        // ×(retryCount+1) candidate escalation would. Gated by the same app.search-retry-escalate
+        // flag — turning escalation off must switch off the whole behavior, not half of it.
+        int effectiveTopK = retryEscalate ? defaultTopK + retry : defaultTopK;
         List<Document> unique;
         try {
             // Escalate candidate count on retry to surface different documents.
-            int retry = state.retryCount();
             int candidateK = (retryEscalate && retry > 0)
                     ? Math.min(defaultTopK * (retry + 1), defaultTopK * 3)
                     : defaultTopK;
+            // The pool can never be smaller than the cut taken from it (possible only in extreme
+            // configs, e.g. topK=1 with several retries).
+            candidateK = Math.max(candidateK, effectiveTopK);
             // Expand candidate pool further when reranking is active.
             if (rerankEnabled && reranker.isPresent()) {
                 candidateK = Math.max(candidateK, defaultTopK * candidateMultiplier);
@@ -192,24 +205,27 @@ public class RetrievalService {
             // Strict AND tag filter — applied after RRF, before rerank/cut. Covers vector
             // + BM25 axes uniformly (tags travel in chunk metadata). No no-tag fallback on shortfall.
             candidates = filterByTags(candidates, selectedTags, candidateK);
-            // Rerank by LLM relevance, then cut to defaultTopK.
+            // Rerank by LLM relevance, then cut to effectiveTopK (= topK on the first attempt).
             unique = (rerankEnabled && reranker.isPresent())
-                    ? reranker.get().rerank(state.question(), candidates, defaultTopK)
-                    : candidates.subList(0, Math.min(defaultTopK, candidates.size()));
+                    ? reranker.get().rerank(state.question(), candidates, effectiveTopK)
+                    : candidates.subList(0, Math.min(effectiveTopK, candidates.size()));
         } catch (Exception e) {
             log.warn("Multi-query expansion failed, falling back to original question: {}", e.getMessage());
             // Keep the tag scope on the fallback path too (else tags leak through on error).
-            int fallbackK = selectedTags.isEmpty() ? defaultTopK
-                    : Math.max(defaultTopK, defaultTopK * tagCandidateMultiplier);
+            // Cut to effectiveTopK as well, so a retry is not silently de-escalated by whichever
+            // attempt happens to lose the expansion LLM call.
+            int fallbackK = selectedTags.isEmpty() ? effectiveTopK
+                    : Math.max(effectiveTopK, defaultTopK * tagCandidateMultiplier);
             List<Document> fallback = ragService.search(state.userId(), state.question(), state.version(), fallbackK);
-            fallback = filterByTags(fallback, selectedTags, defaultTopK);
-            unique = fallback.subList(0, Math.min(defaultTopK, fallback.size()));
+            fallback = filterByTags(fallback, selectedTags, effectiveTopK);
+            unique = fallback.subList(0, Math.min(effectiveTopK, fallback.size()));
         }
 
         List<SourceRef> sources = unique.stream()
                 .map(d -> new SourceRef(
                         formatSource(d),
-                        truncate(d.getText(), 500),   // UI 출처 hover 미리보기 길이
+                truncate(previewSource(d), 700),   // UI 출처 hover 미리보기 길이
+                d.getId(),
                         String.valueOf(d.getMetadata().getOrDefault(MetaKey.DOC_ID, "")),
                         d.getMetadata().getOrDefault(MetaKey.PAGE_OR_SLIDE, "?")))
                 .distinct()
@@ -253,6 +269,11 @@ public class RetrievalService {
         if (hasOcr) {
             warnings.add("⚠️ 이 답변에는 OCR로 처리된 스캔 문서가 포함되어 있습니다. 내용이 부정확할 수 있습니다.");
         }
+
+        // Streaming UI (chat-stream.js) renders source popovers and image thumbnails from these
+        // explicit events; without emitting them, sourcePreviewEnabled=true still has nothing to show.
+        listener.onSourcesReady(sources);
+        listener.onImagesReady(imageRefs);
 
         return state.toBuilder()
                 .retrievedDocs(contextDocs)
@@ -468,14 +489,10 @@ public class RetrievalService {
     }
 
     /**
-     * Citation label: {@code "파일명 | 챕터번호"} when the chunk has a real chapter number
-     * ({@link MetaKey#CHAPTER_NO}, set by {@code DocumentLoaderService} from H2-H6 headings — "0"
-     * means no such heading applies, e.g. PPTX or before the first heading), else falls back to
-     * {@code "파일명 | p.N"} ({@link MetaKey#PAGE_OR_SLIDE}). A curated Q&A hit (§10.10,
-     * {@link MetaKey#DOC_TYPE} = {@code "curated_qa"}) has no real filename/page — it gets a fixed
-     * label instead of the misleading {@code "curated_qa | p.1"} placeholder metadata would
-     * otherwise produce. Static + package-private for unit testing (touches no instance state,
-     * same pattern as {@link #mergeRrf}).
+     * Citation label rules.
+     * Curated hit: fixed label.
+        * Chapter-based docs (docx/md/txt): "파일명 | ch X" when a real chapter exists, else "파일명" only.
+     * Page-based docs (pptx/pdf etc.): "파일명 | p.N".
      */
     static String formatSource(Document doc) {
         Map<String, Object> meta = doc.getMetadata();
@@ -483,12 +500,32 @@ public class RetrievalService {
             return "💬 큐레이션 Q&A";
         }
         String filename = String.valueOf(meta.getOrDefault(MetaKey.FILENAME, "unknown"));
-        Object chapterNo = meta.get(MetaKey.CHAPTER_NO);
-        if (chapterNo != null && !"0".equals(String.valueOf(chapterNo))) {
-            return "%s | %s".formatted(filename, chapterNo);
+        String chapter = normalizeChapterNo(meta.get(MetaKey.CHAPTER_NO));
+        if (chapter != null) {
+            return "%s | ch %s".formatted(filename, chapter);
+        }
+        if (isChapterStructuredFilename(filename)) {
+            return filename;
         }
         Object page = meta.getOrDefault(MetaKey.PAGE_OR_SLIDE, "?");
         return "%s | p.%s".formatted(filename, page);
+    }
+
+    private static String normalizeChapterNo(Object chapterNo) {
+        if (chapterNo == null) return null;
+        if (chapterNo instanceof Number n) {
+            if (n.doubleValue() <= 0.0d) return null;
+            return normalizeIndex(n);
+        }
+        String raw = chapterNo.toString().trim();
+        if (raw.isEmpty()) return null;
+        if ("0".equals(raw) || "0.0".equals(raw)) return null;
+        return raw;
+    }
+
+    private static boolean isChapterStructuredFilename(String filename) {
+        String lower = filename.toLowerCase(Locale.ROOT);
+        return lower.endsWith(".docx") || lower.endsWith(".md") || lower.endsWith(".txt");
     }
 
     /**
@@ -533,9 +570,25 @@ public class RetrievalService {
         return null;
     }
 
+    /**
+     * The chat 출처 hover-preview shows a document excerpt, not a restatement of the answer the
+     * user is already reading — but a curated Q&A hit's stored text is the full liked/approved
+     * answer verbatim (§10.10, kept intact for the admin/curated views), "## 요약"/"## 참고"
+     * included whenever the answer was small enough to embed as one vector. A multi-chunk curated
+     * answer already has those sections stripped before splitting ({@code
+     * CuratedQaService.buildChunkedDocuments}), so without this the preview inconsistently shows
+     * a summary depending on answer length alone. Stripping here only affects what the hover
+     * preview displays — the retrieval/grounding text ({@code d.getText()} itself) is untouched.
+     */
+    private static String previewSource(Document d) {
+        String text = d.getText();
+        if (!"curated_qa".equals(d.getMetadata().get(MetaKey.DOC_TYPE))) return text;
+        return CuratedTextUtils.stripStructuralSections(text);
+    }
+
     private static String truncate(String text, int max) {
         if (text == null) return "";
         String stripped = text.strip();
-        return stripped.length() <= max ? stripped : stripped.substring(0, max) + "…";
+        return stripped.length() <= max ? stripped : stripped.substring(0, max) + " ……";
     }
 }
