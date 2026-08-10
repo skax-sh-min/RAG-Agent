@@ -414,6 +414,27 @@ function metaJsonExcludingInlineFields(metadata) {
     return JSON.stringify(copy, null, 2);
 }
 
+// chunk_context (MetaKey.CHUNK_CONTEXT) is always stored as
+// KeywordExtractor.combineContext()'s "{filename} > {heading}\n{LLM 1-2문장}" — the first line is a
+// structural breadcrumb deterministically derived from filename/heading, not something an operator
+// should hand-edit (editing/deleting it just drifts it from the real filename/heading with nothing
+// to detect that). Split on the first newline so the edit UI shows the breadcrumb read-only and
+// only the LLM-written sentence is editable; join mirrors combineContext()'s exact format back.
+function splitChunkContext(combined) {
+    const text = combined || '';
+    const idx = text.indexOf('\n');
+    return idx === -1
+        ? { breadcrumb: text, summary: '' }
+        : { breadcrumb: text.slice(0, idx), summary: text.slice(idx + 1) };
+}
+
+function joinChunkContext(breadcrumb, summary) {
+    const b = (breadcrumb || '').trim();
+    const s = (summary || '').trim();
+    if (!s) return b;
+    return b ? b + '\n' + s : s;
+}
+
 // Open edit offcanvas: fetch full chunk detail
 function openChunkEdit(chunkId, collection) {
     fetch('/admin/chunks/' + encodeURIComponent(chunkId) + '/detail?collection=' + encodeURIComponent(collection))
@@ -432,6 +453,8 @@ function openChunkEdit(chunkId, collection) {
             idLabel.title = chunkId;
 
             const metaJson = metaJsonExcludingInlineFields(data.metadata);
+            const contextParts = splitChunkContext(data.metadata.chunk_context);
+            const breadcrumbText = contextParts.breadcrumb || '(위치 정보 없음)';
             // 순서는 메타데이터 → 요약(맥락) → 키워드 → 텍스트 (Chunk ID는 편집 공간을 아끼려고
             // 오프캔버스 헤더의 "청크 편집" 옆으로 옮겼다 — 위에서 채운다). 텍스트가 마지막인 이유는
             // 두 가지 — (1) 바로 아래 "저장" 버튼과 붙어 있어야 편집→저장 동선이 짧고, (2) flex-grow-1을
@@ -446,10 +469,13 @@ function openChunkEdit(chunkId, collection) {
                     <label class="form-label small fw-semibold">요약 (맥락)
                         <i class="bi bi-info-circle text-secondary ms-1 small" style="cursor:help;"
                            data-bs-toggle="tooltip" data-bs-custom-class="tooltip-wide"
-                           title="임베딩·키워드 검색(FTS) 입력 앞에 붙는 맥락 헤더입니다(청크 원문 자체는 바뀌지 않습니다). 저장 후 아래 &quot;이 청크만 재인덱싱&quot;을 눌러야 검색에 실제로 반영됩니다."></i>
+                           title="아래 위치 정보 뒤에 이어붙어 임베딩·키워드 검색(FTS) 입력이 됩니다(청크 원문 자체는 바뀌지 않습니다). 저장 후 아래 &quot;이 청크만 재인덱싱&quot;을 눌러야 검색에 실제로 반영됩니다."></i>
                     </label>
+                    <div id="edit-context-breadcrumb-display" class="text-muted small font-monospace mb-1"
+                         style="word-break:break-all;">${escHtml(breadcrumbText)}</div>
+                    <input type="hidden" id="edit-context-breadcrumb" value="${escAttr(contextParts.breadcrumb)}"/>
                     <textarea id="edit-context" class="form-control form-control-sm"
-                              style="min-height:56px; font-size:0.8rem; resize:vertical;">${escHtml(data.metadata.chunk_context || '')}</textarea>
+                              style="min-height:56px; font-size:0.8rem; resize:vertical;">${escHtml(contextParts.summary)}</textarea>
                 </div>
                 <div>
                     <label class="form-label small fw-semibold">키워드</label>
@@ -531,7 +557,9 @@ function saveChunkEdit(chunkId, collection) {
     // 키워드/요약 전용 필드가 진짜 값이다 — metaJsonExcludingInlineFields()가 JSON 박스에서
     // 이 두 키를 애초에 빼 두므로, 여기서 병합해야 저장 시 사라지지 않는다.
     metadata['excerpt_keywords'] = document.getElementById('edit-keywords').value;
-    metadata['chunk_context']    = document.getElementById('edit-context').value;
+    metadata['chunk_context']    = joinChunkContext(
+        document.getElementById('edit-context-breadcrumb').value,
+        document.getElementById('edit-context').value);
 
     fetch('/admin/chunks/' + encodeURIComponent(chunkId) + '?collection=' + encodeURIComponent(collection), {
         method: 'POST',
@@ -573,7 +601,11 @@ function reindexChunkInline(chunkId, collection) {
         if (!data) return;
         document.getElementById('edit-meta').value = metaJsonExcludingInlineFields(data.metadata);
         document.getElementById('edit-keywords').value = data.metadata.excerpt_keywords || '';
-        document.getElementById('edit-context').value = data.metadata.chunk_context || '';
+        const contextParts = splitChunkContext(data.metadata.chunk_context);
+        document.getElementById('edit-context-breadcrumb').value = contextParts.breadcrumb;
+        document.getElementById('edit-context-breadcrumb-display').textContent =
+            contextParts.breadcrumb || '(위치 정보 없음)';
+        document.getElementById('edit-context').value = contextParts.summary;
     })
     .catch(() => showToast('재인덱싱 중 오류 발생', 'danger'))
     .finally(() => { btn.disabled = false; btn.innerHTML = originalHtml; });
