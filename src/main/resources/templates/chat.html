@@ -173,7 +173,8 @@
                                               th:attr="data-bs-toggle='popover',
                                                           data-bs-trigger='hover focus',
                                                           data-bs-placement='top',
-                                                          data-preview-md=${src.preview}"></a>
+                                                          data-preview-md=${src.preview},
+                                                          data-chunk-id=${src.chunkId}"></a>
                                      </div>
 
                             <!-- Feedback (like/dislike) + Metadata, same line -->
@@ -359,6 +360,23 @@
             </div>
         </div>
     </div>
+
+    <!-- 청크 원문 보기: 출처 배지 클릭 시 (호버 미리보기와 별개) 잘리지 않은 전체 청크 내용을
+         이미지 포함해서 보여준다. -->
+    <div class="modal fade" id="chunkFullTextModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-scrollable modal-lg">
+            <div class="modal-content">
+                <div class="modal-header py-2">
+                    <h6 class="modal-title small fw-semibold mb-0" id="chunk-fulltext-modal-title"
+                        th:text="#{chat.chunk.title}">원문 보기</h6>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="md-content" id="chunk-fulltext-modal-body"></div>
+                </div>
+            </div>
+        </div>
+    </div>
 </div>
 
 <th:block layout:fragment="scripts">
@@ -384,6 +402,43 @@
     const imageModalImg = document.getElementById('chat-image-modal-img');
     const imageExcludeBtn = document.getElementById('chat-image-exclude-btn');
     let activeImageContext = null;
+
+    /* 청크 원문 보기 — 출처 배지 클릭. 배지의 호버 미리보기(항상 잘린 텍스트, 이미지 제거)와
+       달리 전체 청크 원문을 이미지 포함해서 보여준다. 서버·스트리밍 렌더 배지 모두 document
+       레벨 위임으로 한 번에 처리한다(.chat-image-thumb 클릭 위임과 동일한 패턴) — 스트리밍으로
+       나중에 추가된 배지에도 별도 바인딩 없이 그대로 적용된다. */
+    const chunkFullTextModalEl = document.getElementById('chunkFullTextModal');
+    const chunkFullTextModal = chunkFullTextModalEl ? bootstrap.Modal.getOrCreateInstance(chunkFullTextModalEl) : null;
+    const chunkFullTextModalTitle = document.getElementById('chunk-fulltext-modal-title');
+    const chunkFullTextModalBody  = document.getElementById('chunk-fulltext-modal-body');
+    const CHUNK_TITLE_DEFAULT = /*[[#{chat.chunk.title}]]*/ '원문 보기';
+    const CHUNK_LOADING_TEXT  = /*[[#{chat.chunk.loading}]]*/ '불러오는 중...';
+    const CHUNK_NOTFOUND_TEXT = /*[[#{chat.chunk.notfound}]]*/ '청크를 찾을 수 없습니다.';
+    const CHUNK_ERROR_TEXT    = /*[[#{chat.chunk.error}]]*/ '불러오는 중 오류가 발생했습니다.';
+
+    function openChunkFullTextModal(chunkId, label) {
+        if (!chunkFullTextModal || !chunkFullTextModalBody) return;
+        chunkFullTextModalTitle.textContent = label || CHUNK_TITLE_DEFAULT;
+        chunkFullTextModalBody.innerHTML = `<div class="text-muted small">${CHUNK_LOADING_TEXT}</div>`;
+        chunkFullTextModal.show();
+        fetch('/api/v1/chunks/' + encodeURIComponent(chunkId))
+            .then(res => res.ok ? res.json() : Promise.reject(res.status === 404 ? 'notfound' : 'error'))
+            .then(data => renderMarkdownWithImageMarkers(chunkFullTextModalBody, data.content || ''))
+            .catch(reason => {
+                const text = reason === 'notfound' ? CHUNK_NOTFOUND_TEXT : CHUNK_ERROR_TEXT;
+                chunkFullTextModalBody.innerHTML = `<div class="text-muted small">${text}</div>`;
+            });
+    }
+
+    document.addEventListener('click', function (e) {
+        if (!isSourcePreviewEnabled()) return;
+        const badge = e.target.closest('.source-ref');
+        if (!badge) return;
+        const chunkId = badge.dataset.chunkId;
+        if (!chunkId) return;
+        e.preventDefault();
+        openChunkFullTextModal(chunkId, badge.textContent);
+    });
 
     /* RAG ↔ Direct LLM 토글 */
     const labelRag    = /*[[#{chat.direct.label.rag}]]*/ 'RAG';
@@ -616,10 +671,12 @@
         const refs = sources.map(s => {
             const label = escHtml((s && s.label) ? s.label : '출처');
             const previewMd = escHtml((s && s.preview) ? s.preview : '');
+            const chunkId = escHtml((s && s.chunk_id) ? s.chunk_id : '');
             const popoverAttrs = previewEnabled
                 ? `data-bs-toggle="popover" data-bs-trigger="hover focus" data-bs-placement="top" data-preview-md="${previewMd}"`
                 : '';
-            return `<a href="#" class="source-ref badge bg-secondary text-decoration-none me-1 mb-1" ${popoverAttrs} title="${label}">${label}</a>`;
+            const chunkIdAttr = chunkId ? `data-chunk-id="${chunkId}"` : '';
+            return `<a href="#" class="source-ref badge bg-secondary text-decoration-none me-1 mb-1" ${popoverAttrs} ${chunkIdAttr} title="${label}">${label}</a>`;
         }).join('');
         return `<div class="mt-2">${refs}</div>`;
     }

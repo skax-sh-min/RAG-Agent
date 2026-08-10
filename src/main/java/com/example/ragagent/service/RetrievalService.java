@@ -224,7 +224,7 @@ public class RetrievalService {
         List<SourceRef> sources = unique.stream()
                 .map(d -> new SourceRef(
                         formatSource(d),
-                truncate(previewSource(d), 1200),   // UI 출처 hover 미리보기 길이
+                truncate(previewSource(d), 700),   // UI 출처 hover 미리보기 길이
                 d.getId(),
                         String.valueOf(d.getMetadata().getOrDefault(MetaKey.DOC_ID, "")),
                         d.getMetadata().getOrDefault(MetaKey.PAGE_OR_SLIDE, "?")))
@@ -589,6 +589,6 @@ public class RetrievalService {
     private static String truncate(String text, int max) {
         if (text == null) return "";
         String stripped = text.strip();
-        return stripped.length() <= max ? stripped : stripped.substring(0, max) + "…";
+        return stripped.length() <= max ? stripped : stripped.substring(0, max) + " ……";
     }
 }

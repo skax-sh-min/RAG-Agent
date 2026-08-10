@@ -340,6 +340,24 @@ public class ChatController {
             "provider", "db-reuse"));
     }
 
+    /**
+     * Full untruncated chunk text for the chat 출처 badge's click-to-expand "원문 보기" modal — the
+     * badge itself only ever carries the truncated hover-preview text (§UI 출처 hover 미리보기 길이).
+     * Not admin-gated: document/curated-Q&A storage is shared with no per-user isolation, and any
+     * indexed content here is already reachable indirectly through chat retrieval, so a direct
+     * lookup by (unguessable) chunk id exposes nothing new.
+     */
+    @GetMapping("/api/v1/chunks/{chunkId}")
+    @ResponseBody
+    public ResponseEntity<Map<String, Object>> chunkFullText(@PathVariable String chunkId) {
+        String text = questionReuseService == null ? null : questionReuseService.chunkFullText(chunkId);
+        if (text == null) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(Map.of("message", "청크를 찾을 수 없습니다."));
+        }
+        return ResponseEntity.ok(Map.of("content", text));
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────
 
     private void populateChatModel(Model model, String userId, String threadId, String version, ThreadMeta meta) {

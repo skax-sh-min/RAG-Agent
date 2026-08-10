@@ -149,6 +149,17 @@ public class QuestionReuseService {
         return List.of();
     }
 
+    /**
+     * Full untruncated text for one source chunk, for the chat 출처 badge's click-to-expand "원문
+     * 보기" modal — unlike {@link #sourceRefsForTurn}'s {@code preview}, which is always capped
+     * (§UI 출처 hover 미리보기 길이) for the lightweight hover popover. {@code null} when the chunk
+     * no longer exists (deleted/re-indexed since the turn was recorded); callers show a fallback
+     * message rather than an empty modal.
+     */
+    public String chunkFullText(String chunkId) {
+        return repository.findChunkFullText(chunkId);
+    }
+
     public ValidationResult validateTurn(long turnId) {
         List<QuestionReuseRepository.SourceSnapshot> refs = repository.findSourceRefs(turnId);
         if (refs.isEmpty()) {
@@ -217,13 +228,13 @@ public class QuestionReuseService {
         // otherwise a curated hit's preview flips a "## 요약" section in and out depending only on
         // whether that answer was short enough to embed as a single vector.
         String content = curated ? CuratedTextUtils.stripStructuralSections(row.content()) : row.content();
-        String preview = truncate(content, 1200);
+        String preview = truncate(content, 700);
         return new SourceRef(label, preview, row.chunkId(), row.docId(), page);
     }
 
     private static String truncate(String text, int maxLen) {
         if (text == null || text.isBlank()) return "";
-        return text.length() <= maxLen ? text : text.substring(0, maxLen);
+        return text.length() <= maxLen ? text : text.substring(0, maxLen) + " ……";
     }
 
     private static boolean isTooLongForSuggestion(String question) {

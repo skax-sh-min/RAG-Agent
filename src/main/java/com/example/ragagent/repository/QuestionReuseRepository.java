@@ -191,6 +191,34 @@ public class QuestionReuseRepository {
                 turnId);
     }
 
+    /**
+     * Full untruncated stored text for one chunk, keyed by id alone — no {@code turn_source_ref}
+     * join, unlike {@link #findSourcePreviewRows}, since the chat "원문 보기" click-to-expand modal
+     * only ever has the badge's {@code chunk_id} to go on. Same backend-priority rule as the
+     * preview query: {@code vec_document_chunks.content} (raw stored text, sqlite-vec only) wins
+     * over {@code chunk_fts.content} (derived embedding/FTS text, populated for both backends) —
+     * a plain LEFT JOIN can't express that without a driving row to join from, so this unions the
+     * two single-table lookups and keeps the higher-priority match. Returns {@code null} when the
+     * chunk no longer exists in either table (deleted/re-indexed since the turn was recorded).
+     */
+    public String findChunkFullText(String chunkId) {
+        if (chunkId == null || chunkId.isBlank()) return null;
+        List<String> rows = vectorJdbc.query("""
+                SELECT content FROM (
+                    SELECT c.content AS content, 0 AS priority
+                    FROM vec_document_chunks c WHERE c.spring_doc_id = ?
+                    UNION ALL
+                    SELECT f.content AS content, 1 AS priority
+                    FROM chunk_fts f WHERE f.spring_doc_id = ?
+                )
+                ORDER BY priority
+                LIMIT 1
+                """,
+                (rs, n) -> rs.getString("content"),
+                chunkId, chunkId);
+        return rows.isEmpty() ? null : rows.get(0);
+    }
+
     public Long findReusedFromTurnId(long turnId) {
         List<Long> rows = jdbc.query(
                 "SELECT reused_from_turn_id FROM conversation_turns WHERE id = ? LIMIT 1",

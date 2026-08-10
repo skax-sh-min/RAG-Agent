@@ -292,7 +292,8 @@
             const previewAttr = previewEnabled
                 ? `data-bs-toggle="popover" data-bs-trigger="hover focus" data-bs-placement="top" data-preview-md="${escHtml(s.preview || '')}"`
                 : '';
-            return `<a href="#" class="source-ref badge bg-secondary text-decoration-none me-1 mb-1" ${previewAttr} title="${label}">${label}</a>`;
+            const chunkIdAttr = s.chunk_id ? `data-chunk-id="${escHtml(s.chunk_id)}"` : '';
+            return `<a href="#" class="source-ref badge bg-secondary text-decoration-none me-1 mb-1" ${previewAttr} ${chunkIdAttr} title="${label}">${label}</a>`;
         }).join('');
         container.innerHTML = `<div class="mt-2">${refs}</div>`;
         if (previewEnabled) {
