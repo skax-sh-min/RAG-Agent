@@ -8,6 +8,7 @@ import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.llm.TaskType;
 import com.example.ragagent.llm.TrackingChatModel;
+import com.example.ragagent.ingestion.CuratedTextUtils;
 import com.example.ragagent.model.MetaKey;
 import com.example.ragagent.model.SourceRef;
 import com.example.ragagent.repository.CuratedQaRepository;
@@ -223,7 +224,7 @@ public class RetrievalService {
         List<SourceRef> sources = unique.stream()
                 .map(d -> new SourceRef(
                         formatSource(d),
-                truncate(d.getText(), 1200),   // UI 출처 hover 미리보기 길이
+                truncate(previewSource(d), 1200),   // UI 출처 hover 미리보기 길이
                 d.getId(),
                         String.valueOf(d.getMetadata().getOrDefault(MetaKey.DOC_ID, "")),
                         d.getMetadata().getOrDefault(MetaKey.PAGE_OR_SLIDE, "?")))
@@ -567,6 +568,22 @@ public class RetrievalService {
                     .collect(java.util.stream.Collectors.joining(","));
         }
         return null;
+    }
+
+    /**
+     * The chat 출처 hover-preview shows a document excerpt, not a restatement of the answer the
+     * user is already reading — but a curated Q&A hit's stored text is the full liked/approved
+     * answer verbatim (§10.10, kept intact for the admin/curated views), "## 요약"/"## 참고"
+     * included whenever the answer was small enough to embed as one vector. A multi-chunk curated
+     * answer already has those sections stripped before splitting ({@code
+     * CuratedQaService.buildChunkedDocuments}), so without this the preview inconsistently shows
+     * a summary depending on answer length alone. Stripping here only affects what the hover
+     * preview displays — the retrieval/grounding text ({@code d.getText()} itself) is untouched.
+     */
+    private static String previewSource(Document d) {
+        String text = d.getText();
+        if (!"curated_qa".equals(d.getMetadata().get(MetaKey.DOC_TYPE))) return text;
+        return CuratedTextUtils.stripStructuralSections(text);
     }
 
     private static String truncate(String text, int max) {

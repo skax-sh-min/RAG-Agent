@@ -165,7 +165,15 @@ public class QuestionReuseRepository {
                           NULLIF(NULLIF(NULLIF(TRIM(json_extract(c.metadata, '$.chapter_no')), ''), '0'), '0.0'),
                           NULLIF(NULLIF(NULLIF(TRIM(f.chapter), ''), '0'), '0.0')
                       ) AS chapter,
-                  COALESCE(NULLIF(f.content, ''), c.content) AS content
+                  -- c.content (vec_document_chunks, sqlite-vec only) is the untouched stored chunk
+                  -- text — the same thing the live/in-session preview shows via Document.getText().
+                  -- f.content (chunk_fts) is the derived embedding/FTS search text (§10.1 Contextual
+                  -- Retrieval: CHUNK_CONTEXT prefix + normalized/noise-stripped body), populated for
+                  -- both vector-store backends but NOT what a user was shown live. Preferring f over
+                  -- c (as before) made the reload preview differ from the live one whenever c.content
+                  -- existed (sqlite-vec mode); c must win, with f only as the Chroma-mode fallback
+                  -- (vec_document_chunks has no rows there).
+                  COALESCE(NULLIF(c.content, ''), f.content) AS content
                 FROM turn_source_ref r
                                 JOIN conversation_turns t ON t.id = r.turn_id AND t.user_id = r.user_id
                 LEFT JOIN chunk_fts f ON f.spring_doc_id = r.chunk_id

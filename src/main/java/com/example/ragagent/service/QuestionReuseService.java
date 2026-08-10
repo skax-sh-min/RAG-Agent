@@ -1,5 +1,6 @@
 package com.example.ragagent.service;
 
+import com.example.ragagent.ingestion.CuratedTextUtils;
 import com.example.ragagent.model.MetaKey;
 import com.example.ragagent.model.SourceRef;
 import com.example.ragagent.repository.QuestionReuseRepository;
@@ -192,6 +193,11 @@ public class QuestionReuseService {
     }
 
     private SourceRef toSourceRef(QuestionReuseRepository.SourcePreviewRow row) {
+        // CuratedQaService.buildDocument() always sets MetaKey.DOC_ID to "curated:<id>", regardless
+        // of chunk index — the one stable signal this SQL-sourced row has for "this chunk came from
+        // a curated Q&A entry, not a document" (no DOC_TYPE column here, unlike the live Document
+        // metadata RetrievalService reads from).
+        boolean curated = row.docId() != null && row.docId().startsWith("curated:");
         String filename = (row.filename() == null || row.filename().isBlank())
                 ? (row.docId() == null ? "source" : row.docId())
                 : row.filename();
@@ -199,12 +205,19 @@ public class QuestionReuseService {
         Map<String, Object> meta = new java.util.HashMap<>();
         meta.put(MetaKey.FILENAME, filename);
         meta.put(MetaKey.PAGE_OR_SLIDE, page);
+        if (curated) {
+            meta.put(MetaKey.DOC_TYPE, "curated_qa");
+        }
         String chapter = row.chapterNo();
         if (chapter != null && !chapter.isBlank() && !"null".equalsIgnoreCase(chapter)) {
             meta.put(MetaKey.CHAPTER_NO, chapter);
         }
         String label = RetrievalService.formatSource(new Document("", meta));
-        String preview = truncate(row.content(), 1200);
+        // Same 요약/참고 stripping as the live-session preview (RetrievalService.previewSource) —
+        // otherwise a curated hit's preview flips a "## 요약" section in and out depending only on
+        // whether that answer was short enough to embed as a single vector.
+        String content = curated ? CuratedTextUtils.stripStructuralSections(row.content()) : row.content();
+        String preview = truncate(content, 1200);
         return new SourceRef(label, preview, row.chunkId(), row.docId(), page);
     }
 
