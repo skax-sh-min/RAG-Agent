@@ -22,7 +22,7 @@
                     <option value="">-- 전체 --</option>
                     <option th:each="doc : ${documents}"
                             th:value="${doc.docId()}"
-                            th:text="${doc.filename() + ' (' + doc.version() + ')'}"
+                            th:text="${doc.displayLabel() + ' (' + doc.version() + ')'}"
                             th:selected="${doc.docId() == docId}"></option>
                 </select>
                 <select class="form-select form-select-sm" id="limit-select" style="max-width:100px;"

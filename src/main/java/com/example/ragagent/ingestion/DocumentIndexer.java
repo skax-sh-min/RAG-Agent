@@ -146,14 +146,22 @@ public class DocumentIndexer {
         // (staleDocId when content changed, else this docId). Read BEFORE the delete below
         // wipes those rows. Interactive single upload keeps its explicit tags — an empty list
         // there means the user intentionally cleared them, so we do not auto-restore.
+        String priorDocId = req.staleDocId() != null ? req.staleDocId() : docId;
         List<String> effectiveTags = req.tags();
         if (effectiveTags.isEmpty() && req.parallelGate() != null) {
-            String priorDocId = req.staleDocId() != null ? req.staleDocId() : docId;
             effectiveTags = restoreTags(priorDocId);
             if (!effectiveTags.isEmpty()) {
                 log.debug("[INDEX] {} 태그 복원: {} (prior={})", req.filename(), effectiveTags, priorDocId);
             }
         }
+
+        // Display-name override (§ 표시 이름) is never carried in the request — there is no
+        // "user intentionally cleared it via this upload" case to respect like there is for tags
+        // above — so it is always carried forward, for both a same-content re-index/resync (docId
+        // unchanged) and a content-update (staleDocId points at the row that still has it).
+        String preservedDisplayName = docRegistry.findByDocId(priorDocId, DocRegistry.SHARED)
+                .map(DocRegistry.DocRegistryEntry::displayName)
+                .orElse(null);
 
         // Delete before conversion so newly created images/MD files are not immediately removed
         deleteExistingVectorsAndFiles(DocRegistry.SHARED, docId, req.version());
@@ -284,7 +292,8 @@ public class DocumentIndexer {
         // MD 파일을 만들지 않으므로(reindexFromMd 미지원 대상) 자동으로 제외된다.
         if (Files.exists(rawMdPath) || Files.exists(correctedMdPath)) {
             docRegistry.put(docId, DocRegistry.SHARED, new DocRegistry.DocRegistryEntry(
-                    sha256, req.version(), Instant.now().toString(), 0, List.of(), List.of()));
+                    sha256, req.version(), Instant.now().toString(), 0, List.of(), List.of(),
+                    null, preservedDisplayName));
         }
 
         req.onProgress().accept(IndexingProgressEvent.of("chunking", 0, 0, req.filename(), "청크 분할 중..."));
@@ -322,7 +331,7 @@ public class DocumentIndexer {
         List<String> docIds = enriched.stream().map(Document::getId).toList();
         DocRegistry.DocRegistryEntry entry = new DocRegistry.DocRegistryEntry(
                 sha256, req.version(), Instant.now().toString(), tagged.size(), docIds, List.of(),
-                usedOverlap);
+                usedOverlap, preservedDisplayName);
         docRegistry.put(docId, DocRegistry.SHARED, entry);
 
         if (req.staleDocId() != null) {
@@ -331,7 +340,7 @@ public class DocumentIndexer {
         }
 
         log.info("[INDEX] 완료: {} → {}개 청크, {}ms", req.filename(), tagged.size(), System.currentTimeMillis() - t0);
-        return new DocumentInfo(docId, req.filename(), req.version(), tagged.size(),
+        return new DocumentInfo(docId, req.filename(), preservedDisplayName, req.version(), tagged.size(),
             entry.indexedAt(), sha256,
             List.copyOf(new LinkedHashSet<>(effectiveTags)),
             List.of());
@@ -463,7 +472,7 @@ public class DocumentIndexer {
         List<String> springIds = enriched.stream().map(Document::getId).toList();
         docRegistry.put(docId, DocRegistry.SHARED, new DocRegistry.DocRegistryEntry(
                 sha256, version, Instant.now().toString(), tagged.size(), springIds, List.of(),
-                usedOverlap));
+                usedOverlap, existing.displayName()));
         docRegistry.save();
 
         log.info("[REINDEX] 완료: {} → {}개 청크, {}ms", filename, tagged.size(), System.currentTimeMillis() - t0);

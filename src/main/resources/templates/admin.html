@@ -105,7 +105,7 @@
                     </thead>
                     <tbody>
                     <tr th:each="doc : ${documents}">
-                        <td th:text="${doc.filename()}"></td>
+                        <td th:text="${doc.displayLabel()}" th:title="${doc.filename()}"></td>
                         <td><span class="badge bg-secondary" th:text="${doc.version()}"></span></td>
                         <td class="text-center" style="min-width:45px;" th:text="${doc.chunks()}"></td>
                         <td class="text-muted" style="font-size:0.7rem;" th:text="${doc.docId()}"></td>
