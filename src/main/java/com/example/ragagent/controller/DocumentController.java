@@ -168,6 +168,14 @@ public class DocumentController {
         return progressService.subscribe(taskId);
     }
 
+    /** One-shot status check — lets a client that lost its SSE connection (page reload, long
+     *  sleep/network drop) learn a task's outcome without opening a new stream. */
+    @GetMapping("/ui/documents/progress/{taskId}/status")
+    @ResponseBody
+    public IndexingProgressEvent indexingProgressStatus(@PathVariable String taskId) {
+        return progressService.status(taskId);
+    }
+
     /** §6.16.1 — cancels an in-progress upload/sync task: interrupts the worker thread and
      *  completes the SSE progress stream immediately. */
     @PostMapping("/ui/documents/progress/{taskId}/cancel")

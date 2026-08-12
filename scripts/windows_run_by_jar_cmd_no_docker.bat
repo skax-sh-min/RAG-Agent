@@ -24,10 +24,18 @@ if exist "%ENV_FILE%" (
     echo =======================================================
     echo Starting... !JAR_NAME!  port: !SERVER_PORT! 
     echo =======================================================
-    java -jar "target\!JAR_NAME!"
-    REM java -jar target/extracted/!JAR_NAME!
+
+    REM 로그를 남기지 않고 바로 실행하고 싶다면 아래 주석을 제거하고 사용하세요.
+    REM java -jar target/!JAR_NAME!
     REM run.log 파일에 로그를 남기고 싶다면 아래 주석을 제거하고 사용하세요.
     REM java -jar "target\!JAR_NAME!" >> run.log 2>&1
+
+    REM rag-agent.jar 파일을 data 폴더로 복사 (overwrite)
+    cp "%CD%\target\!JAR_NAME!" "%CD%\data\rag-agent.jar"
+    REM 로그를 남기지 않고 바로 실행하고 싶다면 아래 주석을 제거하고 사용하세요.
+    java -jar "data\rag-agent.jar"
+    REM run.log 파일에 로그를 남기고 싶다면 아래 주석을 제거하고 사용하세요.
+    REM java -jar "data\rag-agent.jar" >> run.log 2>&1
 )
 
 echo =======================================================

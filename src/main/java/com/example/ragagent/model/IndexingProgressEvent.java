@@ -40,4 +40,19 @@ public record IndexingProgressEvent(
     public static IndexingProgressEvent syncFileError(int done, int total, String filename, String message) {
         return new IndexingProgressEvent("sync_file_error", done, total, filename, message, null);
     }
+
+    /** Terminal: the taskId is unrecognized — never existed, or its outcome aged out of
+     *  {@link com.example.ragagent.service.IndexingProgressService}'s retention window. Lets a
+     *  reconnecting client stop waiting instead of sitting on a connection nothing will ever
+     *  arrive on. */
+    public static IndexingProgressEvent unknown() {
+        return new IndexingProgressEvent("unknown", 0, 0, null,
+                "작업 상태를 확인할 수 없습니다 (만료되었거나 존재하지 않는 작업)", null);
+    }
+
+    /** Non-terminal, status-check only: the task is still actively running. Never sent over the
+     *  SSE progress channel itself — only returned by the one-shot status endpoint. */
+    public static IndexingProgressEvent running() {
+        return new IndexingProgressEvent("running", 0, 0, null, "진행 중", null);
+    }
 }

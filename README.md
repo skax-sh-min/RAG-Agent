@@ -295,7 +295,7 @@ rag_java/
     │       ├── CuratedSubmissionService.java  # Proposal board: validation + tags, split-on-approve (1:N), reject, notification counts
     │       ├── CuratedImageStore.java         # Proposal body images: upload (allowlist/size/magic-byte/content-hash name), [이미지: …] marker bookkeeping, approval-time Vision description, reference-counted cleanup + startup orphan sweep
     │       ├── SettingsService.java           # runtime settings-override layer (AppProperties.OverrideSource) + /settings view/validation/audit
-    │       ├── IndexingProgressService.java   # SSE emitter registry for async upload/sync progress
+    │       ├── IndexingProgressService.java   # SSE emitter registry for async upload/sync progress; retains outcomes for hours so a reconnect after a long disconnect still learns the real result instead of hanging
     │       ├── MarkdownCorrectionService.java # Post-process LLM markdown output
     │       ├── DocumentLoaderService.java     # PDF/DOCX/TXT/MD loader + Markdown section parser; scanned PDF OCR
     │       ├── DocxToMarkdownConverter.java   # DOCX → Markdown with inline image extraction

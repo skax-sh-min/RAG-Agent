@@ -1011,11 +1011,19 @@ function postReindex(docId, force) {
 }
 
 function subscribeReindexProgress(taskId, btn, icon) {
-    const sse = new EventSource('/ui/documents/progress/' + taskId);
-    const finish = () => { sse.close(); btn.innerHTML = icon; setRegistryBusy(false, ''); };
+    let sse = new EventSource('/ui/documents/progress/' + taskId);
+    let retryCount = 0;
+    let settled = false;
 
-    sse.addEventListener('progress', e => {
-        const evt = JSON.parse(e.data);
+    function finish() {
+        settled = true;
+        sse.close();
+        document.removeEventListener('visibilitychange', onVisible);
+        btn.innerHTML = icon;
+        setRegistryBusy(false, '');
+    }
+
+    function handleEvent(evt) {
         if (evt.stage === 'done') {
             finish();
             showToast('재인덱싱 완료', 'success');
@@ -1023,11 +1031,57 @@ function subscribeReindexProgress(taskId, btn, icon) {
         } else if (evt.stage === 'error') {
             finish();
             showToast('재인덱싱 실패: ' + (evt.message || '오류'), 'danger');
-        } else {
+        } else if (evt.stage === 'unknown') {
+            // Server no longer has any record of this task (e.g. reconnect landed after a very
+            // long disconnect). Not necessarily a failure — the reindex may well have finished —
+            // so refresh instead of just erroring out.
+            finish();
+            showToast((evt.message || '재인덱싱 상태를 확인할 수 없습니다') + ' — 새로고침하여 확인해 주세요', 'warning');
+        } else if (evt.stage !== 'running') {
             setRegistryStatus(formatReindexStatus(evt));
         }
-    });
-    sse.onerror = () => { finish(); showToast('재인덱싱 진행 상태 연결 오류', 'danger'); };
+    }
+
+    function attach(emitter) {
+        emitter.addEventListener('progress', e => {
+            retryCount = 0;
+            handleEvent(JSON.parse(e.data));
+        });
+        emitter.onerror = () => {
+            // A single hiccup shouldn't abandon tracking — EventSource retries the connection on
+            // its own; only give up after several consecutive failures with no successful event
+            // between them (mirrors documents.html's upload/sync progress handling).
+            retryCount++;
+            if (retryCount > 5 && !settled) {
+                finish();
+                showToast('재인덱싱 진행 상태 연결 오류', 'danger');
+            }
+        };
+    }
+    attach(sse);
+
+    // A backgrounded admin tab can end up with a connection that's silently dead (browser network
+    // throttling, a reverse proxy or NAT/firewall idle-connection cleanup) without EventSource ever
+    // firing onerror — the reindex keeps running server-side but the button looks stuck. When the
+    // tab becomes visible again, actively re-verify via the one-shot status endpoint instead of
+    // trusting a connection that may already be dead.
+    function onVisible() {
+        if (settled || document.visibilityState !== 'visible') return;
+        fetch('/ui/documents/progress/' + taskId + '/status')
+            .then(r => r.json())
+            .then(evt => {
+                if (settled) return;
+                if (evt.stage === 'running') {
+                    sse.close();
+                    sse = new EventSource('/ui/documents/progress/' + taskId);
+                    attach(sse);
+                } else {
+                    handleEvent(evt);
+                }
+            })
+            .catch(() => {}); // best-effort; the existing onerror/retry path still applies
+    }
+    document.addEventListener('visibilitychange', onVisible);
 }
 
 function escHtml(s) {

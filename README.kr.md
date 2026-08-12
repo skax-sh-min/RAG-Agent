@@ -294,7 +294,7 @@ rag_java/
     │       ├── CuratedSubmissionService.java  # 청크 추가 게시판: 입력 검증+태그, 승인 시 분할(1:N), 거부, 알림 카운트
     │       ├── CuratedImageStore.java         # 제안 본문 이미지: 업로드(허용목록/크기/매직바이트/내용해시 파일명), [이미지: …] 마커 관리, 승인 시 Vision 설명 주입, 참조 세기 정리 + 기동 시 고아 스윕
     │       ├── SettingsService.java           # 런타임 설정 오버라이드 레이어(AppProperties.OverrideSource) + /settings 조회/검증/감사
-    │       ├── IndexingProgressService.java   # 비동기 업로드/동기화 SSE 진행 이벤트 관리
+    │       ├── IndexingProgressService.java   # 비동기 업로드/동기화 SSE 진행 이벤트 관리; 결과를 수 시간 보관해 오래 끊겼다 재접속해도 실제 결과를 이어받음
     │       ├── MarkdownCorrectionService.java # LLM 마크다운 출력 후처리
     │       ├── DocumentLoaderService.java     # PDF/DOCX/TXT/MD 로더 + 마크다운 섹션 파서; 스캔 PDF OCR
     │       ├── DocxToMarkdownConverter.java   # DOCX → Markdown + 인라인 이미지 추출
