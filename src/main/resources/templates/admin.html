@@ -109,7 +109,7 @@
                         <td><span class="badge bg-secondary" th:text="${doc.version()}"></span></td>
                         <td class="text-center" style="min-width:45px;" th:text="${doc.chunks()}"></td>
                         <td class="text-muted" style="font-size:0.7rem;" th:text="${doc.docId()}"></td>
-                        <td class="text-muted" th:text="${doc.indexedAt() != null ? doc.indexedAt().substring(0,19).replace('T',' ') : ''}"></td>
+                        <td class="text-muted" th:text="${T(com.example.ragagent.model.KstDateFormat).toKst(doc.indexedAt())}"></td>
                         <td class="text-center">
                             <button type="button"
                                     class="btn btn-sm btn-outline-primary py-0 px-2"

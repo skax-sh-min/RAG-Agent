@@ -9,9 +9,7 @@
         <td th:text="${doc.version}">버전</td>
         <td th:replace="~{::tagsView}"></td>
         <td th:text="${doc.chunks}">청크</td>
-        <td th:text="${doc.indexedAt != null and #strings.length(doc.indexedAt) >= 16
-            ? #strings.replace(#strings.substring(doc.indexedAt, 0, 16), 'T', ' ')
-            : doc.indexedAt}">시각</td>
+        <td th:text="${T(com.example.ragagent.model.KstDateFormat).toKst(doc.indexedAt)}">시각</td>
         <td>
             <button th:if="${isAdmin}" class="btn btn-sm btn-outline-danger"
                     th:attr="hx-delete=@{/ui/documents/{id}(id=${doc.docId},version=${doc.version})},hx-confirm=#{confirm.delete.doc}"
