@@ -27,8 +27,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
-import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -235,6 +236,58 @@ class RagServiceTest {
         assertThatThrownBy(() -> service.updateDocumentTags("u1", "doc1", tooMany))
                 .isInstanceOf(IllegalArgumentException.class);
         verifyNoInteractions(vectorStore, keywordRepo);
+    }
+
+    @Test
+    @DisplayName("updateDisplayName — UPDATE가 1행에 영향 → 갱신 후 재조회한 DocumentInfo(실제 DB 상태)를 반환한다")
+    void updateDisplayName_updatesAndReturnsRefetchedEntry() {
+        when(docRegistry.updateDisplayName("doc1", DocRegistry.SHARED, "별칭")).thenReturn(1);
+        DocRegistry.DocRegistryEntry updated = new DocRegistry.DocRegistryEntry(
+                "sha", "v2", "2026-01-01T00:00:00Z", 3, List.of("doc1"), List.of(), null, "별칭");
+        when(docRegistry.findByDocId("doc1", DocRegistry.SHARED)).thenReturn(java.util.Optional.of(updated));
+
+        DocumentInfo result = service.updateDisplayName("u1", "doc1", "  별칭  ");
+
+        assertThat(result.displayName()).isEqualTo("별칭");
+        verify(docRegistry).updateDisplayName("doc1", DocRegistry.SHARED, "별칭");
+    }
+
+    @Test
+    @DisplayName("updateDisplayName — UPDATE가 0행에 영향(존재하지 않는 문서) → IllegalArgumentException, 재조회하지 않는다")
+    void updateDisplayName_zeroRowsAffected_throwsWithoutRefetch() {
+        // Regression: the pre-fix version pre-checked existence with a SELECT, then returned the
+        // requested name unconditionally without ever checking whether the UPDATE itself affected
+        // any rows — a write that silently no-oped still reported success with the new name, which
+        // reverted on the next page load. The UPDATE's own row count is now the sole existence check.
+        when(docRegistry.updateDisplayName("missing", DocRegistry.SHARED, "별칭")).thenReturn(0);
+
+        assertThatThrownBy(() -> service.updateDisplayName("u1", "missing", "별칭"))
+                .isInstanceOf(IllegalArgumentException.class);
+        verify(docRegistry, never()).findByDocId(anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("updateDisplayName — 공백만 있는 이름은 null(해제)로 저장되고 반환된다")
+    void updateDisplayName_blankClearsOverride() {
+        when(docRegistry.updateDisplayName("doc1", DocRegistry.SHARED, null)).thenReturn(1);
+        DocRegistry.DocRegistryEntry cleared = new DocRegistry.DocRegistryEntry(
+                "sha", "v2", "2026-01-01T00:00:00Z", 3, List.of("doc1"), List.of(), null, null);
+        when(docRegistry.findByDocId("doc1", DocRegistry.SHARED)).thenReturn(java.util.Optional.of(cleared));
+
+        DocumentInfo result = service.updateDisplayName("u1", "doc1", "   ");
+
+        assertThat(result.displayName()).isNull();
+        verify(docRegistry).updateDisplayName("doc1", DocRegistry.SHARED, null);
+    }
+
+    @Test
+    @DisplayName("updateDisplayName — 200자 초과 → IllegalArgumentException, DB 접근 없음")
+    void updateDisplayName_tooLong_throwsBeforeAnyDbCall() {
+        String tooLong = "a".repeat(201);
+
+        assertThatThrownBy(() -> service.updateDisplayName("u1", "doc1", tooLong))
+                .isInstanceOf(IllegalArgumentException.class);
+        verifyNoInteractions(docRegistry);
     }
 
     @Test

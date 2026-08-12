@@ -186,6 +186,12 @@ public class RagService {
      * — purely cosmetic (see {@link DocRegistry.DocRegistryEntry#displayName}), never touches
      * docId, vector-store data, or files on disk. Throws {@link IllegalArgumentException} when
      * the document does not exist or the name exceeds {@link #MAX_DISPLAY_NAME_LEN}.
+     *
+     * <p>Checks the UPDATE's affected-row count rather than assuming success — the pre-fix version
+     * pre-checked existence with a SELECT, then returned the requested name unconditionally without
+     * ever verifying the subsequent UPDATE actually took effect, so a write that silently affected
+     * 0 rows still reported success with the new name, which reverted on the next page load. Mirrors
+     * {@link #updateDocumentTags} verifying its write below.
      */
     public DocumentInfo updateDisplayName(String userId, String docId, String rawDisplayName) {
         String trimmed = rawDisplayName == null ? "" : rawDisplayName.strip();
@@ -194,12 +200,15 @@ public class RagService {
         }
         String displayName = trimmed.isEmpty() ? null : trimmed;
 
+        int updated = docRegistry.updateDisplayName(docId, DocRegistry.SHARED, displayName);
+        if (updated == 0) {
+            throw new IllegalArgumentException("문서를 찾을 수 없습니다: " + docId);
+        }
         DocRegistry.DocRegistryEntry entry = docRegistry.findByDocId(docId, DocRegistry.SHARED)
                 .orElseThrow(() -> new IllegalArgumentException("문서를 찾을 수 없습니다: " + docId));
-        docRegistry.updateDisplayName(docId, DocRegistry.SHARED, displayName);
 
         List<String> tags = keywordRepo.tagsByDocIds(List.of(docId)).getOrDefault(docId, List.of());
-        return new DocumentInfo(docId, DocRegistry.filenameFromDocId(docId), displayName, entry.version(),
+        return new DocumentInfo(docId, DocRegistry.filenameFromDocId(docId), entry.displayName(), entry.version(),
                 entry.chunks(), entry.indexedAt(), entry.sha256(), tags, entry.errors());
     }
 

@@ -78,6 +78,8 @@ public class SecurityConfig {
                     .requestMatchers(HttpMethod.DELETE, "/ui/documents/*").hasRole("ADMIN")
                     .requestMatchers(HttpMethod.PATCH, "/ui/documents/*/tags").hasRole("ADMIN")
                     .requestMatchers(HttpMethod.GET, "/ui/documents/*/tags/edit").hasRole("ADMIN")
+                    .requestMatchers(HttpMethod.PATCH, "/ui/documents/*/display-name").hasRole("ADMIN")
+                    .requestMatchers(HttpMethod.GET, "/ui/documents/*/display-name/edit").hasRole("ADMIN")
                     // Export is a read, but it hands back the document's full reconstructed content
                     // in one request — a bulk-extraction capability guest chat/browsing doesn't
                     // provide — so it is gated with the management surface rather than left open.

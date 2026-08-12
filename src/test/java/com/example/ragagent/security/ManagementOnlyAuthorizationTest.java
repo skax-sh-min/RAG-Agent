@@ -49,6 +49,7 @@ import static org.springframework.security.test.web.servlet.request.SecurityMock
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -209,6 +210,47 @@ class ManagementOnlyAuthorizationTest {
     void adminRole_deleteDocument_succeeds() throws Exception {
         mvc.perform(delete("/ui/documents/x").with(csrf()).with(user("admin").roles("ADMIN")))
                 .andExpect(status().isOk());
+    }
+
+    /**
+     * §표시 이름 — regression coverage for the display-name routes originally shipped without an
+     * entry in either this matcher list or NoAuthAutoLoginFilter.GATED_UI_DOCUMENT_ROUTES (the two
+     * are supposed to mirror each other exactly, per that field's own comment), which left them
+     * open to any guest in management-only mode instead of requiring the real admin login every
+     * other document-write route here does.
+     */
+    @Test
+    @DisplayName("익명 PATCH /ui/documents/x/display-name — 로그인 페이지로 리다이렉트")
+    void anonymousUpdateDisplayName_redirectsToLogin() throws Exception {
+        mvc.perform(patch("/ui/documents/x/display-name").with(csrf()).param("displayName", "별칭"))
+                .andExpect(status().is3xxRedirection());
+    }
+
+    @Test
+    @DisplayName("ROLE_USER + CSRF — PATCH /ui/documents/x/display-name → 403")
+    void wrongRole_updateDisplayName_forbidden() throws Exception {
+        mvc.perform(patch("/ui/documents/x/display-name").with(csrf()).with(user("someone").roles("USER"))
+                        .param("displayName", "별칭"))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    @DisplayName("ROLE_ADMIN + CSRF — PATCH /ui/documents/x/display-name → 200 통과")
+    void adminRole_updateDisplayName_succeeds() throws Exception {
+        when(ragService.updateDisplayName(any(), any(), any())).thenReturn(
+                new com.example.ragagent.model.DocumentInfo("x", "file.md", "별칭", "latest", 1,
+                        "2026-08-12T00:00:00Z", "sha", List.of(), List.of()));
+
+        mvc.perform(patch("/ui/documents/x/display-name").with(csrf()).with(user("admin").roles("ADMIN"))
+                        .param("displayName", "별칭"))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("ROLE_USER GET /ui/documents/x/display-name/edit — 403")
+    void wrongRole_editDisplayNameForm_forbidden() throws Exception {
+        mvc.perform(get("/ui/documents/x/display-name/edit").with(user("someone").roles("USER")))
+                .andExpect(status().isForbidden());
     }
 
     // ── 열린 표면: 익명이어도 조회는 그대로 동작 ────────────────────────────────
