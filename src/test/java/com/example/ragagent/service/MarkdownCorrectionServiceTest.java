@@ -123,8 +123,8 @@ class MarkdownCorrectionServiceTest {
     }
 
     @Test
-    @DisplayName("splitBySections — 펜스 밖의 실제 헤딩(##/###/####)은 여전히 섹션을 나눈다")
-    void realHeadingsOutsideFenceStillSplit() {
+    @DisplayName("splitBySections — 펜스 밖의 실제 헤딩(##/###/####)은 경계로 인식되지만, 예산 안에서는 한 섹션으로 병합된다")
+    void realHeadingsOutsideFenceAreBoundariesButMergeWithinBudget() {
         String md = """
                 ## 첫 번째 절
                 본문A
@@ -138,17 +138,40 @@ class MarkdownCorrectionServiceTest {
 
         List<String> sections = service.splitBySections(md);
 
-        assertThat(sections).hasSize(3);
-        assertThat(sections.get(0)).contains("첫 번째 절").contains("본문A");
-        assertThat(sections.get(1)).contains("하위 절").contains("본문B");
-        assertThat(sections.get(2)).startsWith("#### 더 하위 절").contains("본문C");
+        // Three tiny headings well under maxSectionChars merge into one correction call instead of
+        // three separate LLM round-trips — see mergeSmallSections().
+        assertThat(sections).hasSize(1);
+        String merged = sections.get(0);
+        assertThat(merged).contains("첫 번째 절").contains("본문A")
+                .contains("하위 절").contains("본문B")
+                .contains("더 하위 절").contains("본문C");
+        assertThat(merged.indexOf("첫 번째 절")).isLessThan(merged.indexOf("하위 절"));
+        assertThat(merged.indexOf("하위 절")).isLessThan(merged.indexOf("더 하위 절"));
     }
 
     @Test
-    @DisplayName("splitBySections — 헤딩 없는 PDF도 [페이지: N] 마커를 경계로 페이지마다 나뉜다")
-    void splitBySections_splitsOnPageMarkerForHeadinglessPdf() {
+    @DisplayName("splitBySections — 헤딩 경계 인식 자체는 그대로다: 두 섹션을 합치면 예산을 넘길 만큼 크면 병합되지 않고 나뉜다")
+    void largeHeadingSectionsStillSplitSeparately() {
+        // This test's LlmConfig (maxTokens=8000, see setUp) gives maxSectionChars ≈ 3750. Each body
+        // alone (≈2400 chars) stays comfortably under that — so splitByBoundary's own size
+        // enforcement never force-splits it — but two of them together (≈4800) exceed the merge
+        // budget, so mergeSmallSections() must not bundle them.
+        String body = "본문내용".repeat(600);
+        String md = "## 첫 번째 절\n" + body + "\n\n## 두 번째 절\n" + body + "\n";
+
+        List<String> sections = service.splitBySections(md);
+
+        assertThat(sections).hasSize(2);
+        assertThat(sections.get(0)).startsWith("## 첫 번째 절");
+        assertThat(sections.get(1)).startsWith("## 두 번째 절");
+    }
+
+    @Test
+    @DisplayName("splitBySections — 헤딩 없는 PDF도 [페이지: N] 마커를 경계로 인식하되, 작은 페이지들은 한 섹션으로 병합된다")
+    void splitBySections_recognizesPageMarkerButMergesSmallPages() {
         // PdfToMarkdownConverter no longer emits "## N페이지", so the page marker is the only
-        // per-page boundary the correction step can split on.
+        // per-page boundary the correction step can split on — but small pages still bundle into
+        // one correction call (mergeSmallSections()), same as the heading case above.
         String md = """
                 [페이지: 1]
                 첫 페이지 본문입니다.
@@ -162,10 +185,11 @@ class MarkdownCorrectionServiceTest {
 
         List<String> sections = service.splitBySections(md);
 
-        assertThat(sections).hasSize(3);
-        assertThat(sections.get(0)).startsWith("[페이지: 1]").contains("첫 페이지 본문");
-        assertThat(sections.get(1)).startsWith("[페이지: 2]").contains("둘째 페이지 본문");
-        assertThat(sections.get(2)).startsWith("[페이지: 3]").contains("셋째 페이지 본문");
+        assertThat(sections).hasSize(1);
+        assertThat(sections.get(0))
+                .contains("[페이지: 1]").contains("첫 페이지 본문")
+                .contains("[페이지: 2]").contains("둘째 페이지 본문")
+                .contains("[페이지: 3]").contains("셋째 페이지 본문");
     }
 
     @Test

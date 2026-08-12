@@ -406,10 +406,40 @@ public class MarkdownCorrectionService {
      * is a no-op for them. (PPTX itself uses {@link #splitByPages}, not this method.)
      */
     List<String> splitBySections(String md) {
-        return splitByBoundary(md,
+        List<String> raw = splitByBoundary(md,
                 line -> line.startsWith("## ") || line.startsWith("### ") || line.startsWith("#### ")
                         || line.startsWith("[페이지: "),
                 true);
+        return mergeSmallSections(raw);
+    }
+
+    /**
+     * Bundles consecutive small sections up to {@link #maxSectionChars} into one correction call —
+     * same pattern {@link #splitByPages} already uses to bundle PPTX slides. Without this, a
+     * document with frequent short headings (a heading every few lines — common in DOCX/MD with
+     * deep subsection structure) sent one tiny LLM call per heading instead of a handful of
+     * well-filled ones, multiplying round-trips (and, since this runs during indexing, wall-clock
+     * time) for no correction-quality benefit. Each input section is already guaranteed
+     * fence-complete by {@link #splitByBoundary} (a heading boundary never splits mid-fence), so
+     * plain concatenation is always safe — no re-parsing needed.
+     *
+     * <p>An already-oversized section (from {@code splitByBoundary}'s own size enforcement) is left
+     * on its own: the budget check only fires once the running bundle is non-empty, so a single
+     * over-budget section never grows further, and the next section starts a fresh bundle rather
+     * than piling onto it.
+     */
+    private List<String> mergeSmallSections(List<String> raw) {
+        List<String> merged = new ArrayList<>();
+        StringBuilder bundle = new StringBuilder();
+        for (String section : raw) {
+            if (!bundle.isEmpty() && bundle.length() + section.length() > maxSectionChars) {
+                merged.add(bundle.toString());
+                bundle.setLength(0);
+            }
+            bundle.append(section);
+        }
+        if (!bundle.isEmpty()) merged.add(bundle.toString());
+        return merged;
     }
 
     /**
