@@ -338,7 +338,6 @@ rag_java/
                 ├── llm-usage-cards.html   # Provider cards (HTMX 30s auto-refresh)
                 ├── thread-list.html       # HTMX thread list fragment
                 ├── thread-item.html       # HTMX thread item fragment
-                ├── doc-row.html           # HTMX document table row fragment
                 ├── doc-table-body.html    # HTMX document table tbody fragment
                 ├── message-user.html      # User message bubble fragment
                 ├── message-assistant.html # HTMX assistant bubble (includes source hover preview)

@@ -337,7 +337,6 @@ rag_java/
                 ├── llm-usage-cards.html   # 프로바이더 카드 (HTMX 30초 자동 갱신)
                 ├── thread-list.html       # HTMX 스레드 목록 fragment
                 ├── thread-item.html       # HTMX 스레드 아이템 fragment
-                ├── doc-row.html           # HTMX 문서 테이블 행 fragment
                 ├── doc-table-body.html    # HTMX 문서 테이블 tbody fragment
                 ├── message-user.html      # 사용자 메시지 버블 fragment
                 ├── message-assistant.html # HTMX 답변 버블 (출처 hover preview 포함)
