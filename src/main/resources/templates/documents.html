@@ -705,6 +705,7 @@
                         // Still going server-side — replace the connection outright in case the old
                         // one is a corpse that just hasn't errored yet; subscribe() replays history.
                         sse.close();
+                        retryCount = 0; // fresh connection deserves its own retry budget
                         sse = new EventSource(`/ui/documents/progress/${taskId}`);
                         attach(sse);
                     } else {

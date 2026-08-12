@@ -1045,6 +1045,7 @@ function subscribeReindexProgress(taskId, btn, icon) {
     function attach(emitter) {
         emitter.addEventListener('progress', e => {
             retryCount = 0;
+            if (settled) return; // already resolved via onVisible()'s status check racing this event
             handleEvent(JSON.parse(e.data));
         });
         emitter.onerror = () => {
@@ -1073,6 +1074,7 @@ function subscribeReindexProgress(taskId, btn, icon) {
                 if (settled) return;
                 if (evt.stage === 'running') {
                     sse.close();
+                    retryCount = 0; // fresh connection deserves its own retry budget
                     sse = new EventSource('/ui/documents/progress/' + taskId);
                     attach(sse);
                 } else {

@@ -75,9 +75,15 @@ public class IndexingProgressService {
      * §6.16.1 — user-initiated cancel. Interrupts the registered worker thread (if any) and
      * immediately publishes a terminal {@code cancelled} event so the client's SSE subscription
      * completes right away, without waiting for the interrupted worker to unwind and report back.
+     *
+     * <p>Reads {@code workers} rather than removing from it directly — {@link #publish} already
+     * removes the entry as part of handling the terminal event below, atomically with the buffer
+     * write. Removing it here first would open a window (for a taskId with no buffered events yet)
+     * where a concurrent {@link #subscribe}/{@link #status} sees neither a buffered event nor an
+     * active worker and misreports {@code unknown} instead of {@code cancelled}.
      */
     public void cancel(String taskId) {
-        Thread worker = workers.remove(taskId);
+        Thread worker = workers.get(taskId);
         if (worker != null) {
             log.info("[IndexingProgress] cancel requested taskId={}", taskId);
             worker.interrupt();
