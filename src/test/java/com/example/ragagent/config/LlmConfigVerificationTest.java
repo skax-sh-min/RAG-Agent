@@ -1,5 +1,6 @@
 package com.example.ragagent.config;
 
+import com.example.ragagent.llm.BackgroundLlmConcurrencyTracker;
 import com.example.ragagent.llm.CircuitBreaker;
 import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.ProviderToggle;
@@ -72,7 +73,7 @@ class LlmConfigVerificationTest {
                 "{\"object\":\"list\",\"data\":[{\"id\":\"gemma-4-e4b\"},{\"id\":\"other-model\"}]}", 200);
         AppProperties props = propsWith(localProvider(baseUrl, "gemma-4-e4b"), true);
 
-        LlmRouter router = new LlmConfig().llmRouter(props, USAGE, new CircuitBreaker(2), new ProviderToggle());
+        LlmRouter router = new LlmConfig().llmRouter(props, USAGE, new CircuitBreaker(2), new ProviderToggle(), new BackgroundLlmConcurrencyTracker());
 
         assertThat(router.hasLocalProvider()).isTrue();
     }
@@ -84,7 +85,7 @@ class LlmConfigVerificationTest {
                 "{\"object\":\"list\",\"data\":[{\"id\":\"other-model\"}]}", 200);
         AppProperties props = propsWith(localProvider(baseUrl, "gemma-4-e4b"), true);
 
-        assertThatThrownBy(() -> new LlmConfig().llmRouter(props, USAGE, new CircuitBreaker(2), new ProviderToggle()))
+        assertThatThrownBy(() -> new LlmConfig().llmRouter(props, USAGE, new CircuitBreaker(2), new ProviderToggle(), new BackgroundLlmConcurrencyTracker()))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("gemma-4-e4b")
                 .hasMessageContaining("not found");
@@ -95,7 +96,7 @@ class LlmConfigVerificationTest {
     void serverUnreachable_failsStartup() {
         AppProperties props = propsWith(localProvider("http://127.0.0.1:1/v1", "gemma-4-e4b"), true);
 
-        assertThatThrownBy(() -> new LlmConfig().llmRouter(props, USAGE, new CircuitBreaker(2), new ProviderToggle()))
+        assertThatThrownBy(() -> new LlmConfig().llmRouter(props, USAGE, new CircuitBreaker(2), new ProviderToggle(), new BackgroundLlmConcurrencyTracker()))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("unreachable");
     }
@@ -105,7 +106,7 @@ class LlmConfigVerificationTest {
     void verificationDisabled_skipsCheckEvenOnUnreachableServer() {
         AppProperties props = propsWith(localProvider("http://127.0.0.1:1/v1", "gemma-4-e4b"), false);
 
-        LlmRouter router = new LlmConfig().llmRouter(props, USAGE, new CircuitBreaker(2), new ProviderToggle());
+        LlmRouter router = new LlmConfig().llmRouter(props, USAGE, new CircuitBreaker(2), new ProviderToggle(), new BackgroundLlmConcurrencyTracker());
 
         assertThat(router.hasLocalProvider()).isTrue();
     }

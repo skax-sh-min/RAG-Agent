@@ -3,6 +3,7 @@ package com.example.ragagent.controller;
 import com.example.ragagent.audit.AuditLogger;
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.context.ThreadContext;
+import com.example.ragagent.llm.BackgroundLlmConcurrencyTracker;
 import com.example.ragagent.llm.BackgroundUsage;
 import com.example.ragagent.llm.CircuitBreaker;
 import com.example.ragagent.llm.EmbeddingConcurrencyTracker;
@@ -44,6 +45,7 @@ public class OperationsController {
     private final CuratedQaService curatedQaService;
     private final LlmRouter llmRouter;
     private final EmbeddingConcurrencyTracker embeddingConcurrencyTracker;
+    private final BackgroundLlmConcurrencyTracker backgroundConcurrencyTracker;
 
     public OperationsController(ThreadMetaService threadMetaService,
                                 MemoryService memoryService,
@@ -53,7 +55,8 @@ public class OperationsController {
                                 AuditLogger auditLogger,
                                 CuratedQaService curatedQaService,
                                 LlmRouter llmRouter,
-                                EmbeddingConcurrencyTracker embeddingConcurrencyTracker) {
+                                EmbeddingConcurrencyTracker embeddingConcurrencyTracker,
+                                BackgroundLlmConcurrencyTracker backgroundConcurrencyTracker) {
         this.threadMetaService = threadMetaService;
         this.memoryService = memoryService;
         this.usageRepo = usageRepo;
@@ -63,6 +66,7 @@ public class OperationsController {
         this.curatedQaService = curatedQaService;
         this.llmRouter = llmRouter;
         this.embeddingConcurrencyTracker = embeddingConcurrencyTracker;
+        this.backgroundConcurrencyTracker = backgroundConcurrencyTracker;
     }
 
     // ── Page ──────────────────────────────────────────────────────────
@@ -236,20 +240,24 @@ public class OperationsController {
      * (no {@code inUse}/{@code capacity}) when no such provider is currently available — the
      * indicator hides itself in that case rather than showing a meaningless {@code 0/0}.
      *
-     * <p>{@code inUse} folds in {@link EmbeddingConcurrencyTracker#get()} — embedding calls
-     * (indexing or query-time) never acquire {@link LlmRouter}'s chat concurrency permits, so
-     * without this the indicator would sit at 0 during embedding no matter how busy the endpoint
-     * actually is. The combined total is clamped to {@code capacity} so the display never shows
-     * something like {@code 5/3} — embedding concurrency is governed by separate limits
-     * (`EMBED_MAX_CONCURRENT_BATCHES`, possibly a different endpoint entirely) that don't share
-     * the chat tier's budget, so a raw sum could otherwise exceed it.
+     * <p>{@code inUse} folds in {@link EmbeddingConcurrencyTracker#get()} and {@link
+     * BackgroundLlmConcurrencyTracker#get()} — embedding calls (indexing or query-time) and
+     * indexing/background chat LLM calls (keyword+context extraction, MD correction, TXT
+     * structuring, summarization, title generation, indexing-time Vision) never acquire {@link
+     * LlmRouter}'s chat concurrency permits, so without these the indicator would sit at 0 during
+     * indexing no matter how busy the LOCAL model actually is. The combined total is clamped to
+     * {@code capacity} so the display never shows something like {@code 5/3} — neither embedding
+     * concurrency (`EMBED_MAX_CONCURRENT_BATCHES`, possibly a different endpoint entirely) nor
+     * background LLM concurrency (`app.indexing.max-concurrent-llm-calls`) shares the chat tier's
+     * budget, so a raw sum could otherwise exceed it.
      */
     @GetMapping("/api/v1/llm/concurrency")
     @ResponseBody
     public Map<String, Object> getLlmConcurrency() {
         return llmRouter.localTier1Concurrency()
                 .<Map<String, Object>>map(s -> {
-                    int inUse = Math.min(s.capacity(), s.inUse() + embeddingConcurrencyTracker.get());
+                    int inUse = Math.min(s.capacity(),
+                            s.inUse() + embeddingConcurrencyTracker.get() + backgroundConcurrencyTracker.get());
                     return Map.of(
                             "available", true,
                             "inUse", inUse,

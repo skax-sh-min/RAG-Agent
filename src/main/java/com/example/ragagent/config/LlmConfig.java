@@ -28,7 +28,8 @@ public class LlmConfig {
 
     @Bean
     public LlmRouter llmRouter(AppProperties props, LlmUsageRepository usageRepo,
-                                CircuitBreaker circuitBreaker, ProviderToggle providerToggle) {
+                                CircuitBreaker circuitBreaker, ProviderToggle providerToggle,
+                                BackgroundLlmConcurrencyTracker backgroundConcurrencyTracker) {
         AppProperties.LlmConfig llmCfg = props.llmSafe();
                 int connectTimeoutSeconds = llmCfg.connectTimeoutSeconds();
                 int readTimeoutSeconds = llmCfg.readTimeoutSeconds();
@@ -149,7 +150,7 @@ public class LlmConfig {
 
         return new LlmRouter(providers, usageRepo, circuitBreaker, defaultMode, threshold, readTimeoutSeconds,
                 providerConcurrency, llmCfg.defaultProviderConcurrency(), llmCfg.permitWaitTimeoutSeconds(),
-                providerToggle);
+                providerToggle, backgroundConcurrencyTracker);
     }
 
     @Bean

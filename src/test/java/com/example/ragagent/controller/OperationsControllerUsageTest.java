@@ -6,6 +6,7 @@ import com.example.ragagent.audit.AuditLogger;
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.context.ThreadContextResolver;
 import com.example.ragagent.llm.CircuitBreaker;
+import com.example.ragagent.llm.BackgroundLlmConcurrencyTracker;
 import com.example.ragagent.llm.EmbeddingConcurrencyTracker;
 import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.repository.LlmUsageRepository;
@@ -71,6 +72,7 @@ class OperationsControllerUsageTest {
     @MockitoBean CuratedQaService curatedQaService;
     @MockitoBean LlmRouter llmRouter;
     @MockitoBean EmbeddingConcurrencyTracker embeddingConcurrencyTracker;
+    @MockitoBean BackgroundLlmConcurrencyTracker backgroundConcurrencyTracker;
 
     @BeforeEach
     void setUp() {
@@ -161,6 +163,20 @@ class OperationsControllerUsageTest {
                 .andExpect(jsonPath("$.available").value(true))
                 .andExpect(jsonPath("$.inUse").value(3)) // capacity 로 clamp
                 .andExpect(jsonPath("$.capacity").value(3));
+    }
+
+    @Test
+    @DisplayName("GET /api/v1/llm/concurrency — 인덱싱/백그라운드 LLM in-flight 값도 inUse 에 합산된다")
+    void concurrency_foldsInBackgroundLlmActivity() throws Exception {
+        when(llmRouter.localTier1Concurrency())
+                .thenReturn(Optional.of(new LlmRouter.ConcurrencySnapshot(0, 6)));
+        when(backgroundConcurrencyTracker.get()).thenReturn(2); // e.g. keyword+context extraction in flight
+
+        mvc.perform(get("/api/v1/llm/concurrency"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.available").value(true))
+                .andExpect(jsonPath("$.inUse").value(2)) // 0(chat) + 2(background)
+                .andExpect(jsonPath("$.capacity").value(6));
     }
 
     @Test
