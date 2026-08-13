@@ -143,12 +143,12 @@
                     <table class="table table-hover mb-0">
                         <thead class="table-light">
                         <tr>
-                            <th th:text="#{doc.col.name}">Filename</th>
-                            <th th:text="#{doc.col.version}">Version</th>
+                            <th th:text="#{doc.col.name}" style="width:auto;">Filename</th>
+                            <th th:text="#{doc.col.version}" class="text-nowrap" style="width:1%;">Version</th>
                             <th th:text="#{doc.col.tags}">Tags</th>
-                            <th th:text="#{doc.col.chunks}">Chunks</th>
-                            <th th:text="#{doc.col.indexed_at}">Indexed At</th>
-                            <th></th>
+                            <th th:text="#{doc.col.chunks}" class="text-nowrap" style="width:1%;">Chunks</th>
+                            <th th:text="#{doc.col.indexed_at}" class="text-nowrap" style="width:1%;">Indexed At</th>
+                            <th class="text-nowrap" style="width:1%;"></th>
                         </tr>
                         </thead>
                         <th:block th:replace="~{fragments/doc-table-body :: body}"></th:block>

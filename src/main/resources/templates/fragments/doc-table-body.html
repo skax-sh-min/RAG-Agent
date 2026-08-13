@@ -10,7 +10,7 @@
         <td th:replace="~{::tagsView}"></td>
         <td th:text="${doc.chunks}">청크</td>
         <td th:text="${T(com.example.ragagent.model.KstDateFormat).toKst(doc.indexedAt)}">시각</td>
-        <td>
+        <td class="text-nowrap">
             <button th:if="${isAdmin}" class="btn btn-sm btn-outline-danger"
                     th:attr="hx-delete=@{/ui/documents/{id}(id=${doc.docId},version=${doc.version})},hx-confirm=#{confirm.delete.doc}"
                     hx-target="closest tr"
@@ -32,17 +32,19 @@
      CSS display, so the check keeps working either way. -->
 <td th:fragment="nameView"
     th:with="hasName=${doc.displayName != null and !#strings.isEmpty(doc.displayName)}">
-    <i class="bi bi-file-earmark-text me-1 text-secondary"></i>
-    <span th:if="${hasName}" th:text="${doc.displayName}">표시 이름</span>
-    <span th:class="${hasName} ? 'doc-filename d-none' : 'doc-filename'" th:text="${doc.filename}">파일명</span>
+    <div class="text-nowrap">
+        <i class="bi bi-file-earmark-text me-1 text-secondary"></i>
+        <span th:if="${hasName}" th:text="${doc.displayName}">표시 이름</span>
+        <span th:class="${hasName} ? 'doc-filename d-none' : 'doc-filename'" th:text="${doc.filename}">파일명</span>
+        <button th:if="${isAdmin}" type="button" class="btn btn-sm btn-link p-0 ms-1 text-muted"
+                th:attr="hx-get=@{/ui/documents/{id}/display-name/edit(id=${doc.docId})}"
+                hx-target="closest td" hx-swap="outerHTML"
+                title="표시 이름 편집" aria-label="표시 이름 편집">
+            <i class="bi bi-pencil-square" style="font-size:0.75rem;"></i>
+        </button>
+    </div>
     <div th:if="${hasName}" class="small text-muted text-truncate" style="max-width:280px;"
          th:title="${doc.filename}" th:text="${doc.filename}">원본 파일명</div>
-    <button th:if="${isAdmin}" type="button" class="btn btn-sm btn-link p-0 ms-1 text-muted"
-            th:attr="hx-get=@{/ui/documents/{id}/display-name/edit(id=${doc.docId})}"
-            hx-target="closest td" hx-swap="outerHTML"
-            title="표시 이름 편집" aria-label="표시 이름 편집">
-        <i class="bi bi-pencil-square" style="font-size:0.75rem;"></i>
-    </button>
     <div th:if="${doc.errors != null and !#lists.isEmpty(doc.errors)}"
          class="small text-danger mt-1">
         <th:block th:each="err : ${doc.errors}">
