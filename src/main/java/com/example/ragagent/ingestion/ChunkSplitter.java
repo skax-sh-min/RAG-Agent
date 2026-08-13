@@ -8,6 +8,7 @@ import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 
@@ -38,6 +39,44 @@ public class ChunkSplitter {
     public List<Document> splitDocuments(List<Document> docs, String filename,
                                           int chunkSize, int overlap, int minChunkSize) {
         return splitDocuments(docs, filename, chunkSize, overlap, minChunkSize, 0);
+    }
+
+    /**
+     * Every merge helper below concatenates TEXT from multiple raw sections/chunks but keeps only
+     * one side's metadata map (cheap, and correct for every key except this one) — a later-merged
+     * section's {@code [이미지: ...]} marker survives in the merged text, but its
+     * {@link MetaKey#IMAGE_PATHS} metadata does not unless explicitly unioned back in via one of
+     * the two overloads below. {@code RetrievalService}'s chat-time image thumbnails come purely
+     * from this metadata key (never re-parsed from the chunk text), so a merged-away image
+     * reference meant the image was part of the answer's evidence text but was never rendered.
+     */
+    private static void collectImagePaths(Object raw, LinkedHashSet<String> out) {
+        if (raw instanceof String s && !s.isBlank()) {
+            for (String p : s.split(",")) {
+                String trimmed = p.strip();
+                if (!trimmed.isBlank()) out.add(trimmed);
+            }
+        }
+    }
+
+    /** Unions {@link MetaKey#IMAGE_PATHS} across every {@code Document} in {@code parts} (plus
+     *  whatever {@code target} already carries) into {@code target}, in place. */
+    private static void mergeImagePaths(Map<String, Object> target, List<Document> parts) {
+        LinkedHashSet<String> paths = new LinkedHashSet<>();
+        collectImagePaths(target.get(MetaKey.IMAGE_PATHS), paths);
+        for (Document part : parts) collectImagePaths(part.getMetadata().get(MetaKey.IMAGE_PATHS), paths);
+        if (paths.isEmpty()) target.remove(MetaKey.IMAGE_PATHS);
+        else target.put(MetaKey.IMAGE_PATHS, String.join(",", paths));
+    }
+
+    /** Unions {@link MetaKey#IMAGE_PATHS} from {@code other} (plus {@code target}'s own existing
+     *  value) into {@code target}, in place. {@code other == null} is a no-op. */
+    private static void mergeImagePaths(Map<String, Object> target, Map<String, Object> other) {
+        LinkedHashSet<String> paths = new LinkedHashSet<>();
+        collectImagePaths(target.get(MetaKey.IMAGE_PATHS), paths);
+        if (other != null) collectImagePaths(other.get(MetaKey.IMAGE_PATHS), paths);
+        if (paths.isEmpty()) target.remove(MetaKey.IMAGE_PATHS);
+        else target.put(MetaKey.IMAGE_PATHS, String.join(",", paths));
     }
 
     /**
@@ -280,6 +319,7 @@ public class ChunkSplitter {
             if ("0".equals(metadata.get(MetaKey.CHAPTER_NO))) {
                 metadata.put(MetaKey.CHAPTER_NO, firstRealChapterNo(docs, start, j));
             }
+            mergeImagePaths(metadata, docs.subList(start, j + 1));
             groups.add(new SectionGroup(new Document(acc.toString(), metadata), start));
             i = j + 1;
         }
@@ -462,7 +502,11 @@ public class ChunkSplitter {
             }
 
             if (j > i) {
-                result.add(new Document(mergedText, new HashMap<>(bundle.get(0).getMetadata())));
+                Map<String, Object> metadata = new HashMap<>(bundle.get(0).getMetadata());
+                List<Document> mergedParts = new ArrayList<>();
+                for (int k = i; k <= j; k++) mergedParts.addAll(bundles.get(k));
+                mergeImagePaths(metadata, mergedParts);
+                result.add(new Document(mergedText, metadata));
             } else {
                 result.addAll(bundle);
             }
@@ -494,7 +538,9 @@ public class ChunkSplitter {
             }
             String joined = joinBundleText(bundle);
             if (joined.isBlank()) continue;
-            out.add(new Document(joined, new HashMap<>(bundle.get(0).getMetadata())));
+            Map<String, Object> metadata = new HashMap<>(bundle.get(0).getMetadata());
+            mergeImagePaths(metadata, bundle);
+            out.add(new Document(joined, metadata));
         }
         return out;
     }
@@ -639,6 +685,7 @@ public class ChunkSplitter {
                 currentHeadingLevel = nextHeadingLevel > 0 ? nextHeadingLevel : currentHeadingLevel;
             }
 
+            mergeImagePaths(metadata, docs.subList(i, j + 1));
             merged.add(new Document(acc.toString(), metadata));
             i = j + 1;
         }
@@ -728,6 +775,7 @@ public class ChunkSplitter {
             if ("0".equals(metadata.get(MetaKey.CHAPTER_NO))) {
                 metadata.put(MetaKey.CHAPTER_NO, firstRealChapterNo(docs, start, j));
             }
+            mergeImagePaths(metadata, docs.subList(start, j + 1));
             groups.add(new SectionGroup(new Document(acc.toString(), metadata), start));
             i = j + 1;
         }
@@ -809,6 +857,7 @@ public class ChunkSplitter {
             Map<String, Object> meta = new HashMap<>(chunk.getMetadata());
             if (!pendingPrefix.isEmpty()) {           // flush leading orphan(s) into this chunk
                 text = pendingPrefix + "\n\n" + text;
+                mergeImagePaths(meta, pendingMeta);
                 pendingPrefix = "";
                 pendingMeta = null;
             }
@@ -819,8 +868,9 @@ public class ChunkSplitter {
                     if (isMergeForbiddenByPageMismatch(pageOrSlideOf(prev), pageOrSlideOf(chunk))) {
                         out.add(new Document(text, meta));
                     } else {
-                        out.set(out.size() - 1,
-                                new Document(prev.getText() + "\n\n" + text, new HashMap<>(prev.getMetadata())));
+                        Map<String, Object> mergedMeta = new HashMap<>(prev.getMetadata());
+                        mergeImagePaths(mergedMeta, meta);
+                        out.set(out.size() - 1, new Document(prev.getText() + "\n\n" + text, mergedMeta));
                     }
                 } else {
                     pendingPrefix = text;
@@ -834,7 +884,9 @@ public class ChunkSplitter {
         if (!pendingPrefix.isEmpty()) { // every chunk was tiny, or a tiny tail never found a successor
             if (!out.isEmpty()) {
                 Document first = out.get(0);
-                out.set(0, new Document(pendingPrefix + "\n\n" + first.getText(), new HashMap<>(first.getMetadata())));
+                Map<String, Object> mergedMeta = new HashMap<>(first.getMetadata());
+                mergeImagePaths(mergedMeta, pendingMeta);
+                out.set(0, new Document(pendingPrefix + "\n\n" + first.getText(), mergedMeta));
             } else {
                 out.add(new Document(pendingPrefix, pendingMeta != null ? pendingMeta : new HashMap<>()));
             }

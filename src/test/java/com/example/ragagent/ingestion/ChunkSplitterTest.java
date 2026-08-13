@@ -707,6 +707,19 @@ class ChunkSplitterTest {
         assertThat(groups.get(0).doc().getMetadata().get(MetaKey.CHAPTER_NO)).isEqualTo("1.1");
     }
 
+    @Test
+    @DisplayName("mergeSectionsByChapter — 전방 병합된 (첫 섹션이 아닌) 섹션의 image_paths도 합쳐진 그룹에 유지된다")
+    void chapterMerge_unionsImagePathsFromMergedSection() {
+        List<Document> docs = List.of(
+                new Document("짧은 섹션"),
+                new Document("이미지 섹션\n[이미지: img2.png]", Map.of(MetaKey.IMAGE_PATHS, "img2.png")));
+
+        List<ChunkSplitter.SectionGroup> groups = splitter.mergeSectionsByChapter(docs, 1000, 100, 100);
+
+        assertThat(groups).hasSize(1); // 짧아서 전방 병합됨
+        assertThat(groups.get(0).doc().getMetadata().get(MetaKey.IMAGE_PATHS)).isEqualTo("img2.png");
+    }
+
     // ── 부모 챕터 브레드크럼 ──────────────────────────────────────────────────
 
     @Test
@@ -772,5 +785,79 @@ class ChunkSplitterTest {
                 .toList();
         assertThat(tailPieces).isNotEmpty();
         assertThat(tailPieces).allSatisfy(d -> assertThat(d.getText()).doesNotContain("큰챕터"));
+    }
+
+    // ── image_paths 병합 (채팅 이미지 썸네일이 사라지던 버그 수정) ─────────────
+    // 모든 병합 헬퍼는 텍스트는 여러 섹션/청크를 이어붙이면서도 메타데이터는 첫 섹션(또는
+    // base)의 것만 유지한다 — [이미지: ...] 마커는 병합된 텍스트에 그대로 남지만, 그 마커가
+    // 속한 섹션이 첫 섹션이 아니면 image_paths 메타데이터에서는 조용히 사라졌었다.
+    // RetrievalService의 채팅 이미지 썸네일은 텍스트를 다시 파싱하지 않고 이 메타데이터만
+    // 읽으므로, 검색된 청크 텍스트에는 이미지 링크가 보이는데 썸네일은 안 뜨는 증상으로 나타난다.
+
+    @Test
+    @DisplayName("groupLeadInSections — 도입부 뒤로 병합되는 하위 챕터의 image_paths가 병합 그룹에 유지된다")
+    void groupLeadIn_unionsImagePathsFromChildSection() {
+        List<Document> docs = List.of(
+                new Document("## 장1\n짧은 도입."),
+                new Document("### 소제목\n[이미지: pic.png]", Map.of(MetaKey.IMAGE_PATHS, "pic.png")));
+
+        List<ChunkSplitter.SectionGroup> groups = splitter.groupLeadInSections(docs, 1000);
+
+        assertThat(groups).hasSize(1); // 도입부(lead-in)가 하위 챕터로 병합됨
+        assertThat(groups.get(0).doc().getMetadata().get(MetaKey.IMAGE_PATHS)).isEqualTo("pic.png");
+    }
+
+    @Test
+    @DisplayName("mergeIdenticalHeadingSlides — 두 번째(첫 슬라이드가 아닌) 슬라이드의 image_paths가 병합된 청크에 유지된다")
+    void mergeIdenticalHeadingSlides_unionsImagePathsFromSecondSlide() {
+        List<Document> docs = List.of(
+                new Document("## 큰챕터\n\n### 소챕터\n\n본문1", Map.of(MetaKey.PAGE_OR_SLIDE, 1)),
+                new Document("## 큰챕터\n\n### 소챕터\n\n[이미지: slide2.png]",
+                        Map.of(MetaKey.PAGE_OR_SLIDE, 2, MetaKey.IMAGE_PATHS, "slide2.png")));
+
+        List<Document> result = splitter.mergeIdenticalHeadingSlides(docs, 2000);
+
+        assertThat(result).hasSize(1);
+        assertThat(result.get(0).getMetadata().get(MetaKey.IMAGE_PATHS)).isEqualTo("slide2.png");
+    }
+
+    @Test
+    @DisplayName("joinSectionsWithinPage — 같은 슬라이드 내 두 번째 섹션의 image_paths가 합쳐진 청크에 유지된다")
+    void joinSectionsWithinPage_unionsImagePathsFromSecondSection() {
+        List<Document> docs = List.of(
+                new Document("## 제목", Map.of(MetaKey.PAGE_OR_SLIDE, 1)),
+                new Document("### 소제목\n[이미지: fig.png]",
+                        Map.of(MetaKey.PAGE_OR_SLIDE, 1, MetaKey.IMAGE_PATHS, "fig.png")));
+
+        List<Document> result = splitter.joinSectionsWithinPage(docs);
+
+        assertThat(result).hasSize(1);
+        assertThat(result.get(0).getMetadata().get(MetaKey.IMAGE_PATHS)).isEqualTo("fig.png");
+    }
+
+    @Test
+    @DisplayName("mergeShortSections — 병합되는 (첫 섹션이 아닌) 섹션의 image_paths가 병합된 청크에 유지된다")
+    void mergeShortSections_unionsImagePathsFromMergedSection() {
+        List<Document> docs = List.of(
+                new Document("짧은 섹션 A"),
+                new Document("짧은 섹션 B\n[이미지: b.png]", Map.of(MetaKey.IMAGE_PATHS, "b.png")));
+
+        List<Document> result = splitter.mergeShortSections(docs, 100);
+
+        assertThat(result).hasSize(1);
+        assertThat(result.get(0).getMetadata().get(MetaKey.IMAGE_PATHS)).isEqualTo("b.png");
+    }
+
+    @Test
+    @DisplayName("backwardMergeShortChunks — 뒤로 병합되는 짧은 청크의 image_paths가 이전 청크와 합쳐진다")
+    void backwardMerge_unionsImagePathsFromMergedShortChunk() {
+        List<Document> chunks = List.of(
+                new Document("A".repeat(60)),
+                new Document("[이미지: tail.png]", Map.of(MetaKey.IMAGE_PATHS, "tail.png")));
+
+        List<Document> result = splitter.backwardMergeShortChunks(chunks, 30);
+
+        assertThat(result).hasSize(1); // 두 번째 청크(18자)가 minChunkSize(30) 미만이라 앞으로 병합됨
+        assertThat(result.get(0).getMetadata().get(MetaKey.IMAGE_PATHS)).isEqualTo("tail.png");
     }
 }
