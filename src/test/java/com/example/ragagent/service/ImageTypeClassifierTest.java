@@ -1,5 +1,6 @@
 package com.example.ragagent.service;
 
+import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.llm.TaskType;
@@ -40,7 +41,10 @@ class ImageTypeClassifierTest {
     @BeforeEach
     void setUp() {
         llmRouter = mock(LlmRouter.class);
-        classifier = new ImageTypeClassifier(llmRouter);
+        AppProperties props = mock(AppProperties.class);
+        when(props.llmSafe()).thenReturn(new AppProperties.LlmConfig(
+                List.of(), 2, 10, 180, "COST_FIRST", 0.6, 3, 20, 0.0, 0.1, 0.0, 6000, true));
+        classifier = new ImageTypeClassifier(llmRouter, props);
     }
 
     private static ChatResponse chatResponse(String text) {

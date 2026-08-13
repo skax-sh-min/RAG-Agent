@@ -63,6 +63,7 @@ public record AppProperties(
             int permitWaitTimeoutSeconds,    // max wait for a concurrency slot on the query path before failing fast with 429 (default 60s, well under the 600s read-timeout)
             Double temperature,              // general/RAG temperature (app.llm.temperature / LLM_TEMPERATURE), default 0.0, clamp [0,0.3] — VIEW-ONLY (baked into provider defaultOptions at bean creation, restart to change)
             Double directTemperature,        // Direct(meta) answer temperature (app.llm.direct-temperature / DIRECT_LLM_TEMPERATURE), default 0.1, clamp [0,1.0] — HOT-editable (DirectAnswerService reads it per call, §6.18)
+            Double indexingTemperature,      // indexing/background temperature (app.llm.indexing-temperature / LLM_INDEXING_TEMPERATURE), default 0.0, clamp [0,1.0] — HOT-editable, attached per call by every ungated executeWithTracking() caller (KeywordExtractor, MarkdownCorrectionService, TextToMarkdownService, VisionDescriptionService, ImageTypeClassifier, ThreadMetaService, ConversationSummarizerService) so a higher general/RAG temperature can never leak into extraction-style calls that need to stay deterministic
             Integer maxTokens,               // LLM response cap (app.llm.max-tokens / LLM_MAX_TOKENS), default 6000, clamp >0 — VIEW-ONLY (baked at bean creation; streaming chat answers are uncapped by design, bounded by SSE timeouts)
             Boolean verifyLocalModelsOnStartup // GET {base-url}/v1/models for every registered LOCAL-role provider at boot — fails startup (throws, Spring exits) if unreachable or the configured model isn't in the response. Default true (app.llm.verify-local-models-on-startup / LLM_VERIFY_LOCAL_MODELS_ON_STARTUP)
     ) {}
@@ -679,14 +680,17 @@ public record AppProperties(
 
     /** Null-safe accessor — returns an empty LlmConfig when app.llm is not configured. */
     public LlmConfig llmSafe() {
-        // direct-temperature is hot-editable — fold the /settings override in here (DirectAnswerService
-        // reads props.llmSafe().directTemperature() per call). temperature/maxTokens stay view-only:
-        // they're baked into the provider defaultOptions at bean creation, so an override couldn't take
-        // effect until a restart — no hook for them.
+        // direct-temperature / indexing-temperature are hot-editable — fold their /settings overrides
+        // in here (DirectAnswerService reads directTemperature() per call; every ungated
+        // executeWithTracking() background caller reads indexingTemperature() per call). temperature/
+        // maxTokens stay view-only: they're baked into the provider defaultOptions at bean creation, so
+        // an override couldn't take effect until a restart — no hook for them.
         Double directOverride = overrideDouble(SettingsKeys.LLM_DIRECT_TEMPERATURE);
+        Double indexingOverride = overrideDouble(SettingsKeys.LLM_INDEXING_TEMPERATURE);
         if (llm == null) {
             double dt = clamp(directOverride != null ? directOverride : 0.1, 0.0, 1.0);
-            return new LlmConfig(List.of(), 2, 10, 180, "COST_FIRST", 0.6, 3, 20, 0.0, dt, 6000, true);
+            double it = clamp(indexingOverride != null ? indexingOverride : 0.0, 0.0, 1.0);
+            return new LlmConfig(List.of(), 2, 10, 180, "COST_FIRST", 0.6, 3, 20, 0.0, dt, it, 6000, true);
         }
         List<ProviderConfig> providers = llm.providers() != null ? llm.providers() : List.of();
         int minutes = llm.circuitBreakerMinutes() > 0 ? llm.circuitBreakerMinutes() : 2;
@@ -700,11 +704,14 @@ public record AppProperties(
         double directBase = directOverride != null ? directOverride
                 : (llm.directTemperature() != null ? llm.directTemperature() : 0.1);
         double directTemperature = clamp(directBase, 0.0, 1.0);
+        double indexingBase = indexingOverride != null ? indexingOverride
+                : (llm.indexingTemperature() != null ? llm.indexingTemperature() : 0.0);
+        double indexingTemperature = clamp(indexingBase, 0.0, 1.0);
         int maxTokens = (llm.maxTokens() != null && llm.maxTokens() > 0) ? llm.maxTokens() : 6000;
         boolean verifyLocalModels = llm.verifyLocalModelsOnStartup() == null || llm.verifyLocalModelsOnStartup();
                 return new LlmConfig(providers, minutes, connectTimeout, readTimeout, mode, threshold,
-                        defaultProviderConcurrency, permitWaitTimeoutSeconds, temperature, directTemperature, maxTokens,
-                        verifyLocalModels);
+                        defaultProviderConcurrency, permitWaitTimeoutSeconds, temperature, directTemperature,
+                        indexingTemperature, maxTokens, verifyLocalModels);
     }
 
     private static double clamp(double v, double lo, double hi) {

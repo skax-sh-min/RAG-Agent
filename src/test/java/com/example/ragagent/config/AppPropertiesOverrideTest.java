@@ -218,11 +218,24 @@ class AppPropertiesOverrideTest {
     }
 
     @Test
+    @DisplayName("LLM — indexing-temperature 오버라이드가 llmSafe()에 반영되고 [0.0, 1.0]으로 clamp된다")
+    void override_indexingTemperature() {
+        bind();
+        assertThat(base().llmSafe().indexingTemperature()).isEqualTo(0.0); // 기본값
+
+        overrides.put(SettingsKeys.LLM_INDEXING_TEMPERATURE, "0.2");
+        assertThat(base().llmSafe().indexingTemperature()).isEqualTo(0.2);
+
+        overrides.put(SettingsKeys.LLM_INDEXING_TEMPERATURE, "1.5"); // > 1.0 → clamp
+        assertThat(base().llmSafe().indexingTemperature()).isEqualTo(1.0);
+    }
+
+    @Test
     @DisplayName("LLM — 일반/RAG temperature는 [0.0, 0.3]으로 clamp된다")
     void ragTemperature_isClampedToPointThree() {
         AppProperties p = withLlm(new AppProperties.LlmConfig(
                 java.util.List.of(), 2, 10, 180, "COST_FIRST", 0.6, 3, 20,
-                1.2, 0.1, 6000, true));
+                1.2, 0.1, 0.0, 6000, true));
 
         assertThat(p.llmSafe().temperature()).isEqualTo(0.3);
     }

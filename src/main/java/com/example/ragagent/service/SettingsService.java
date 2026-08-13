@@ -81,7 +81,8 @@ public class SettingsService implements AppProperties.OverrideSource {
 
     // Insertion order = render order in the "LLM 튜닝" group. Apply on the next LLM call (§6.18).
     private static final List<Spec> LLM_HOT_SPECS = List.of(
-            new Spec(SettingsKeys.LLM_DIRECT_TEMPERATURE,         Kind.DOUBLE, 0.0, 1.0,  0.05, "settings.item.direct-temperature")
+            new Spec(SettingsKeys.LLM_DIRECT_TEMPERATURE,         Kind.DOUBLE, 0.0, 1.0,  0.05, "settings.item.direct-temperature"),
+            new Spec(SettingsKeys.LLM_INDEXING_TEMPERATURE,       Kind.DOUBLE, 0.0, 1.0,  0.05, "settings.item.indexing-temperature")
     );
 
         // Insertion order = render order in the "UI" group. Apply on next page render.
@@ -396,9 +397,12 @@ public class SettingsService implements AppProperties.OverrideSource {
         return items;
     }
 
-    /** LLM tuning (§6.18): direct-temperature is hot (DirectAnswerService reads it per call); the
-     *  general temperature + max-tokens sit in the LLM providers card footer as read-only (baked into
-     *  the provider beans at startup — restart to change). */
+    /** LLM tuning (§6.18): direct-temperature is hot (DirectAnswerService reads it per call);
+     *  indexing-temperature is hot too (every ungated executeWithTracking() background caller — keyword
+     *  extraction, MD correction, txt→md, vision description/classification, title, summary — reads it
+     *  per call, so it can be pinned near 0 for deterministic extraction independently of the
+     *  general/RAG temperature). The general temperature + max-tokens sit in the LLM providers card
+     *  footer as read-only (baked into the provider beans at startup — restart to change). */
     private List<SettingItem> llmHotItems() {
         List<SettingItem> items = new ArrayList<>(LLM_HOT_SPECS.size());
         for (Spec s : LLM_HOT_SPECS) items.add(editableItem(s.key()));
@@ -466,6 +470,7 @@ public class SettingsService implements AppProperties.OverrideSource {
             case SettingsKeys.INDEXING_MAX_CONCURRENT_FILES   -> Integer.toString(props.indexingSafe().maxConcurrentFiles());
             case SettingsKeys.INDEXING_MAX_CONCURRENT_LLM     -> Integer.toString(props.indexingSafe().maxConcurrentLlmCalls());
             case SettingsKeys.LLM_DIRECT_TEMPERATURE          -> trimNum(props.llmSafe().directTemperature());
+            case SettingsKeys.LLM_INDEXING_TEMPERATURE        -> trimNum(props.llmSafe().indexingTemperature());
             case SettingsKeys.UI_SOURCE_PREVIEW_ENABLED       -> Boolean.toString(sourcePreviewEnabled());
             default -> "";
         };

@@ -55,6 +55,7 @@ public final class SettingsKeys {
 
     // ── LLM (apply on the next LLM call) ─────────────────────────────────────
     public static final String LLM_DIRECT_TEMPERATURE         = "llm.direct-temperature";
+    public static final String LLM_INDEXING_TEMPERATURE       = "llm.indexing-temperature";
 
     // ── UI (apply on next page render) ───────────────────────────────────────
     public static final String UI_SOURCE_PREVIEW_ENABLED      = "ui.source-preview-enabled";
@@ -81,6 +82,7 @@ public final class SettingsKeys {
             INDEXING_MAX_CONCURRENT_FILES,
             INDEXING_MAX_CONCURRENT_LLM,
             LLM_DIRECT_TEMPERATURE,
+            LLM_INDEXING_TEMPERATURE,
             UI_SOURCE_PREVIEW_ENABLED
     );
 }

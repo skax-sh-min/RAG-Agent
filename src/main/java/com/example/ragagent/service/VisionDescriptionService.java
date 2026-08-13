@@ -1,5 +1,6 @@
 package com.example.ragagent.service;
 
+import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.exception.LlmProviderExhaustedException;
 import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.RoutingMode;
@@ -9,6 +10,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.content.Media;
+import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.stereotype.Service;
 import org.springframework.util.MimeTypeUtils;
@@ -40,9 +42,16 @@ public class VisionDescriptionService {
     );
 
     private final LlmRouter llmRouter;
+    private final AppProperties props;
 
-    public VisionDescriptionService(LlmRouter llmRouter) {
+    public VisionDescriptionService(LlmRouter llmRouter, AppProperties props) {
         this.llmRouter = llmRouter;
+        this.props = props;
+    }
+
+    /** Indexing/background temperature (hot-editable), read fresh per call — see AppProperties.LlmConfig. */
+    private OpenAiChatOptions indexingOptions() {
+        return OpenAiChatOptions.builder().temperature(props.llmSafe().indexingTemperature()).build();
     }
 
     public String describe(byte[] imageBytes, String mimeType) {
@@ -54,7 +63,7 @@ public class VisionDescriptionService {
             Media media = new Media(MimeTypeUtils.parseMimeType(mimeType), new ByteArrayResource(imageBytes));
             UserMessage userMessage = UserMessage.builder().text(prompt).media(media).build();
             String response = llmRouter.executeWithTracking(TaskType.VISION, RoutingMode.COST_FIRST,
-                    model -> model.call(new Prompt(userMessage)));
+                    model -> model.call(new Prompt(userMessage, indexingOptions())));
             return response == null ? "" : response;
         } catch (LlmProviderExhaustedException e) {
             log.warn("No vision provider available: {}", e.getMessage());

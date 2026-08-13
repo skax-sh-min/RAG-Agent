@@ -11,6 +11,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.content.Media;
+import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.stereotype.Service;
 import org.springframework.util.MimeTypeUtils;
@@ -172,6 +173,11 @@ public class MarkdownCorrectionService {
         int llmMaxTokens = props.llmSafe().maxTokens();
         this.maxSectionChars = Math.max(MIN_SECTION_CHARS, (llmMaxTokens - MIN_SECTION_CHARS) / 2);
         this.defaultCodeLanguage = props.mdCorrectionDefaultCodeLanguageSafe();
+    }
+
+    /** Indexing/background temperature (hot-editable), read fresh per call — see AppProperties.LlmConfig. */
+    private OpenAiChatOptions indexingOptions() {
+        return OpenAiChatOptions.builder().temperature(props.llmSafe().indexingTemperature()).build();
     }
 
     /**
@@ -688,7 +694,7 @@ public class MarkdownCorrectionService {
         try {
             String result = llmRouter.executeWithTracking(
                     TaskType.LIGHT_TEXT, RoutingMode.COST_FIRST, BackgroundUsage.MDCORRECT_PREFIX,
-                    model -> model.call(new Prompt(prompt)));
+                    model -> model.call(new Prompt(prompt, indexingOptions())));
             log.debug("[MD_CORRECT] 섹션 교정 완료: {}자 → {}자", safeSection.length(), result.length());
 
             if (!tableExtraction.tables().isEmpty()) {
@@ -1071,7 +1077,7 @@ public class MarkdownCorrectionService {
                             + "여러 선택지나 후보 설명을 나열하지 말고, 하나의 완성된 설명 문장만 작성하세요.")
                     .media(media).build();
             String response = llmRouter.executeWithTracking(TaskType.VISION, RoutingMode.LOCAL_ONLY,
-                    BackgroundUsage.IMAGE_PREFIX, model -> model.call(new Prompt(userMessage)));
+                    BackgroundUsage.IMAGE_PREFIX, model -> model.call(new Prompt(userMessage, indexingOptions())));
             return response == null ? "" : response.trim();
         } catch (LlmProviderExhaustedException e) {
             return ""; // no LOCAL vision provider (pre-gated; defensive)
