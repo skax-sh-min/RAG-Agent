@@ -93,8 +93,12 @@ public class LlmConfig {
                             .openAiApi(api)
                             // §6.18 — was hardcoded temperature(0.0)/maxTokens(6000); now the effective
                             // app.llm.temperature / app.llm.max-tokens (LLM_TEMPERATURE / LLM_MAX_TOKENS).
-                            // Baked in here at bean creation → view-only (restart to change). The Direct
-                            // path overrides temperature per call via the Prompt's ChatOptions.
+                            // temperature here is only the startup-time fallback for framework-internal
+                            // callers that build their own ChatClient around this bean and never pass a
+                            // per-call ChatOptions (e.g. RetrievalService's MultiQueryExpander) — every
+                            // call site this app owns (Classifier/Answer/Reranker/Direct) attaches the
+                            // live effective temperature per call instead, so /settings changes apply
+                            // without a restart for those. maxTokens stays view-only (restart to change).
                             .defaultOptions(OpenAiChatOptions.builder()
                                     .model(cfg.model())
                                     .temperature(llmCfg.temperature())

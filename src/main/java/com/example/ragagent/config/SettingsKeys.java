@@ -54,6 +54,7 @@ public final class SettingsKeys {
     public static final String INDEXING_MAX_CONCURRENT_LLM    = "indexing.max-concurrent-llm-calls";
 
     // ── LLM (apply on the next LLM call) ─────────────────────────────────────
+    public static final String LLM_TEMPERATURE                = "llm.temperature";
     public static final String LLM_DIRECT_TEMPERATURE         = "llm.direct-temperature";
     public static final String LLM_INDEXING_TEMPERATURE       = "llm.indexing-temperature";
 
@@ -81,6 +82,7 @@ public final class SettingsKeys {
             CHUNK_SPLIT_GRANULAR,
             INDEXING_MAX_CONCURRENT_FILES,
             INDEXING_MAX_CONCURRENT_LLM,
+            LLM_TEMPERATURE,
             LLM_DIRECT_TEMPERATURE,
             LLM_INDEXING_TEMPERATURE,
             UI_SOURCE_PREVIEW_ENABLED

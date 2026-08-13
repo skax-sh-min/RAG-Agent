@@ -204,6 +204,19 @@ class AppPropertiesOverrideTest {
     }
 
     @Test
+    @DisplayName("LLM — temperature 오버라이드가 llmSafe()에 반영되고 [0.0, 0.3]으로 clamp된다 (§6.18)")
+    void override_temperature() {
+        bind();
+        assertThat(base().llmSafe().temperature()).isEqualTo(0.0); // 기본값
+
+        overrides.put(SettingsKeys.LLM_TEMPERATURE, "0.15");
+        assertThat(base().llmSafe().temperature()).isEqualTo(0.15);
+
+        overrides.put(SettingsKeys.LLM_TEMPERATURE, "1.2"); // > 0.3 → clamp
+        assertThat(base().llmSafe().temperature()).isEqualTo(0.3);
+    }
+
+    @Test
     @DisplayName("LLM — direct-temperature 오버라이드가 llmSafe()에 반영되고 [0.0, 1.0]으로 clamp된다 (§6.18)")
     void override_directTemperature() {
         bind();

@@ -103,14 +103,17 @@ public enum RoutingMode {
 app.llm.default-routing-mode=COST_FIRST
 app.llm.circuit-breaker-minutes=4
 app.llm.progressive-threshold=0.6
-# §6.18 — sampling temperature + response cap (were dead/hardcoded before). temperature/max-tokens
-# are baked into each provider bean at startup (view-only, restart to change); direct-temperature
-# is read per-call by DirectAnswerService (hot-editable via /settings). indexing-temperature is read
-# per-call by every ungated background/indexing caller (keyword extraction, MD correction, txt→md,
-# vision description/classification, thread-title generation, conversation summarization) — kept
-# near 0 independently of temperature/direct-temperature since those are extraction/classification
-# tasks, not conversational ones. max-tokens applies to blocking calls only — streaming chat answers
-# are uncapped (bounded by app.sse-*-timeout-seconds).
+# §6.18 — sampling temperature + response cap (were dead/hardcoded before). All three temperatures
+# are hot-editable via /settings (apply on the next call, no restart): temperature is read per-call
+# by every interactive gated caller (ClassifierService/AnswerService/RerankerService) — still also
+# baked into each provider bean at startup as the fallback for framework-internal callers that can't
+# take a per-call override (e.g. multi-query expansion), which only pick up a change on restart.
+# direct-temperature is read per-call by DirectAnswerService. indexing-temperature is read per-call
+# by every ungated background/indexing caller (keyword extraction, MD correction, txt→md, vision
+# description/classification, thread-title generation, conversation summarization) — kept near 0
+# independently of temperature/direct-temperature since those are extraction/classification tasks,
+# not conversational ones. max-tokens stays view-only (restart to change) and applies to blocking
+# calls only — streaming chat answers are uncapped (bounded by app.sse-*-timeout-seconds).
 app.llm.temperature=${LLM_TEMPERATURE:0.0}
 app.llm.direct-temperature=${DIRECT_LLM_TEMPERATURE:0.1}
 app.llm.indexing-temperature=${LLM_INDEXING_TEMPERATURE:0.0}

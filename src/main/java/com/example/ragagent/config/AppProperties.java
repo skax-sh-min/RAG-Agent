@@ -61,7 +61,7 @@ public record AppProperties(
             double progressiveThreshold,
             int defaultProviderConcurrency,  // per-provider concurrency gate default (matches the server's --parallel), fallback when a provider omits its own `concurrency`
             int permitWaitTimeoutSeconds,    // max wait for a concurrency slot on the query path before failing fast with 429 (default 60s, well under the 600s read-timeout)
-            Double temperature,              // general/RAG temperature (app.llm.temperature / LLM_TEMPERATURE), default 0.0, clamp [0,0.3] — VIEW-ONLY (baked into provider defaultOptions at bean creation, restart to change)
+            Double temperature,              // general/RAG temperature (app.llm.temperature / LLM_TEMPERATURE), default 0.0, clamp [0,0.3] — HOT-editable, attached per call by every interactive gated caller (ClassifierService, AnswerService, RerankerService); still baked into each provider's defaultOptions at bean creation too, as the fallback for framework-internal callers that build their own ChatClient around the injected model (e.g. RetrievalService's MultiQueryExpander) and so can't take a per-call override
             Double directTemperature,        // Direct(meta) answer temperature (app.llm.direct-temperature / DIRECT_LLM_TEMPERATURE), default 0.1, clamp [0,1.0] — HOT-editable (DirectAnswerService reads it per call, §6.18)
             Double indexingTemperature,      // indexing/background temperature (app.llm.indexing-temperature / LLM_INDEXING_TEMPERATURE), default 0.0, clamp [0,1.0] — HOT-editable, attached per call by every ungated executeWithTracking() caller (KeywordExtractor, MarkdownCorrectionService, TextToMarkdownService, VisionDescriptionService, ImageTypeClassifier, ThreadMetaService, ConversationSummarizerService) so a higher general/RAG temperature can never leak into extraction-style calls that need to stay deterministic
             Integer maxTokens,               // LLM response cap (app.llm.max-tokens / LLM_MAX_TOKENS), default 6000, clamp >0 — VIEW-ONLY (baked at bean creation; streaming chat answers are uncapped by design, bounded by SSE timeouts)
@@ -680,17 +680,20 @@ public record AppProperties(
 
     /** Null-safe accessor — returns an empty LlmConfig when app.llm is not configured. */
     public LlmConfig llmSafe() {
-        // direct-temperature / indexing-temperature are hot-editable — fold their /settings overrides
-        // in here (DirectAnswerService reads directTemperature() per call; every ungated
-        // executeWithTracking() background caller reads indexingTemperature() per call). temperature/
-        // maxTokens stay view-only: they're baked into the provider defaultOptions at bean creation, so
-        // an override couldn't take effect until a restart — no hook for them.
+        // temperature / direct-temperature / indexing-temperature are all hot-editable — fold their
+        // /settings overrides in here. Every interactive gated caller (ClassifierService, AnswerService,
+        // RerankerService) reads temperature() per call; DirectAnswerService reads directTemperature()
+        // per call; every ungated executeWithTracking() background caller reads indexingTemperature()
+        // per call. maxTokens stays view-only: it's baked into the provider defaultOptions at bean
+        // creation, so an override couldn't take effect until a restart — no hook for it.
+        Double tempOverride = overrideDouble(SettingsKeys.LLM_TEMPERATURE);
         Double directOverride = overrideDouble(SettingsKeys.LLM_DIRECT_TEMPERATURE);
         Double indexingOverride = overrideDouble(SettingsKeys.LLM_INDEXING_TEMPERATURE);
         if (llm == null) {
+            double t = clamp(tempOverride != null ? tempOverride : 0.0, 0.0, 0.3);
             double dt = clamp(directOverride != null ? directOverride : 0.1, 0.0, 1.0);
             double it = clamp(indexingOverride != null ? indexingOverride : 0.0, 0.0, 1.0);
-            return new LlmConfig(List.of(), 2, 10, 180, "COST_FIRST", 0.6, 3, 20, 0.0, dt, it, 6000, true);
+            return new LlmConfig(List.of(), 2, 10, 180, "COST_FIRST", 0.6, 3, 20, t, dt, it, 6000, true);
         }
         List<ProviderConfig> providers = llm.providers() != null ? llm.providers() : List.of();
         int minutes = llm.circuitBreakerMinutes() > 0 ? llm.circuitBreakerMinutes() : 2;
@@ -700,7 +703,9 @@ public record AppProperties(
         double threshold = llm.progressiveThreshold() > 0 ? llm.progressiveThreshold() : 0.6;
         int defaultProviderConcurrency = llm.defaultProviderConcurrency() > 0 ? llm.defaultProviderConcurrency() : 3;
         int permitWaitTimeoutSeconds = llm.permitWaitTimeoutSeconds() > 0 ? llm.permitWaitTimeoutSeconds() : 20;
-        double temperature = clamp(llm.temperature() != null ? llm.temperature() : 0.0, 0.0, 0.3);
+        double temperatureBase = tempOverride != null ? tempOverride
+                : (llm.temperature() != null ? llm.temperature() : 0.0);
+        double temperature = clamp(temperatureBase, 0.0, 0.3);
         double directBase = directOverride != null ? directOverride
                 : (llm.directTemperature() != null ? llm.directTemperature() : 0.1);
         double directTemperature = clamp(directBase, 0.0, 1.0);

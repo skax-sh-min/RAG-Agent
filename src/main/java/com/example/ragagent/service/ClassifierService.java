@@ -1,6 +1,7 @@
 package com.example.ragagent.service;
 
 import com.example.ragagent.agent.AgentState;
+import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.llm.TaskType;
@@ -12,6 +13,7 @@ import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.converter.BeanOutputConverter;
+import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.context.MessageSource;
 import org.springframework.stereotype.Service;
 
@@ -35,12 +37,14 @@ public class ClassifierService {
 
     private final LlmRouter llmRouter;
     private final MessageSource messageSource;
+    private final AppProperties props;
     private final BeanOutputConverter<ClassifierOutput> converter =
             new BeanOutputConverter<>(ClassifierOutput.class);
 
-    public ClassifierService(LlmRouter llmRouter, MessageSource messageSource) {
+    public ClassifierService(LlmRouter llmRouter, MessageSource messageSource, AppProperties props) {
         this.llmRouter = llmRouter;
         this.messageSource = messageSource;
+        this.props = props;
     }
 
     public String classifyOnly(String question, Locale locale) {
@@ -62,8 +66,13 @@ public class ClassifierService {
                     .build();
     }
 
-    private static Prompt buildPrompt(String systemPrompt, String userPrompt) {
-        return new Prompt(List.of(new SystemMessage(systemPrompt), new UserMessage(userPrompt)));
+    /** §6.18 — general/RAG temperature, hot (read fresh per call so a /settings change applies
+     *  without a restart). */
+    private Prompt buildPrompt(String systemPrompt, String userPrompt) {
+        OpenAiChatOptions options = OpenAiChatOptions.builder()
+                .temperature(props.llmSafe().temperature())
+                .build();
+        return new Prompt(List.of(new SystemMessage(systemPrompt), new UserMessage(userPrompt)), options);
     }
 
     private String parseType(String response) {

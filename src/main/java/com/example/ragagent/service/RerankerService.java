@@ -1,5 +1,6 @@
 package com.example.ragagent.service;
 
+import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.ingestion.KeywordExtractor;
 import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.RoutingMode;
@@ -11,6 +12,7 @@ import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.document.Document;
+import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.MessageSource;
 import org.springframework.stereotype.Service;
@@ -40,10 +42,12 @@ public class RerankerService {
 
     private final LlmRouter llmRouter;
     private final MessageSource messageSource;
+    private final AppProperties props;
 
-    public RerankerService(LlmRouter llmRouter, MessageSource messageSource) {
+    public RerankerService(LlmRouter llmRouter, MessageSource messageSource, AppProperties props) {
         this.llmRouter = llmRouter;
         this.messageSource = messageSource;
+        this.props = props;
     }
 
     /**
@@ -59,9 +63,13 @@ public class RerankerService {
             String userContent = "[질문]\n%s\n\n[문서 목록]\n%s"
                     .formatted(question, formatDocList(candidates));
 
+            // §6.18 — general/RAG temperature, hot (read fresh per call).
+            OpenAiChatOptions options = OpenAiChatOptions.builder()
+                    .temperature(props.llmSafe().temperature())
+                    .build();
             String response = llmRouter.executeGated(TaskType.TEXT, RoutingMode.COST_FIRST,
                     model -> model.call(new Prompt(List.of(
-                            new SystemMessage(systemPrompt), new UserMessage(userContent)))));
+                            new SystemMessage(systemPrompt), new UserMessage(userContent)), options)));
 
             List<Integer> ranking = parseRanking(response == null ? "" : response, candidates.size());
             List<Document> reranked = ranking.stream()
