@@ -1,6 +1,7 @@
 package com.example.ragagent.service;
 
 import com.example.ragagent.ingestion.CuratedTextUtils;
+import com.example.ragagent.ingestion.DocRegistry;
 import com.example.ragagent.model.MetaKey;
 import com.example.ragagent.model.SourceRef;
 import com.example.ragagent.repository.QuestionReuseRepository;
@@ -31,9 +32,11 @@ public class QuestionReuseService {
             Pattern.CASE_INSENSITIVE);
 
     private final QuestionReuseRepository repository;
+    private final DocRegistry docRegistry;
 
-    public QuestionReuseService(QuestionReuseRepository repository) {
+    public QuestionReuseService(QuestionReuseRepository repository, DocRegistry docRegistry) {
         this.repository = repository;
+        this.docRegistry = docRegistry;
     }
 
     public void recordTurnSources(long turnId, String userId, String threadId, List<Document> retrievedDocs) {
@@ -134,8 +137,16 @@ public class QuestionReuseService {
         if (turnId <= 0) return List.of();
         Long sourceTurnId = repository.findReusedFromTurnId(turnId);
         long previewTurnId = sourceTurnId != null ? sourceTurnId : turnId;
-        List<SourceRef> refs = repository.findSourcePreviewRows(previewTurnId).stream()
-                .map(this::toSourceRef)
+        List<QuestionReuseRepository.SourcePreviewRow> rows = repository.findSourcePreviewRows(previewTurnId);
+        // § 표시 이름 — one batch lookup for the whole turn instead of one per row; toSourceRef()
+        // falls back to the real filename for any docId absent from the map.
+        List<String> docIds = rows.stream()
+                .map(QuestionReuseRepository.SourcePreviewRow::docId)
+                .filter(id -> id != null && !id.isBlank())
+                .toList();
+        Map<String, String> displayNames = docRegistry.findDisplayNames(docIds);
+        List<SourceRef> refs = rows.stream()
+                .map(row -> toSourceRef(row, displayNames))
                 .toList();
         if (!refs.isEmpty()) return refs;
         if (sourceTurnId != null && !repository.existsTurn(sourceTurnId)) {
@@ -203,7 +214,7 @@ public class QuestionReuseService {
                 .toLowerCase(Locale.ROOT);
     }
 
-    private SourceRef toSourceRef(QuestionReuseRepository.SourcePreviewRow row) {
+    private SourceRef toSourceRef(QuestionReuseRepository.SourcePreviewRow row, Map<String, String> displayNames) {
         // CuratedQaService.buildDocument() always sets MetaKey.DOC_ID to "curated:<id>", regardless
         // of chunk index — the one stable signal this SQL-sourced row has for "this chunk came from
         // a curated Q&A entry, not a document" (no DOC_TYPE column here, unlike the live Document
@@ -216,6 +227,9 @@ public class QuestionReuseService {
         Map<String, Object> meta = new java.util.HashMap<>();
         meta.put(MetaKey.FILENAME, filename);
         meta.put(MetaKey.PAGE_OR_SLIDE, page);
+        if (row.docId() != null) {
+            meta.put(MetaKey.DOC_ID, row.docId());
+        }
         if (curated) {
             meta.put(MetaKey.DOC_TYPE, "curated_qa");
         }
@@ -223,7 +237,7 @@ public class QuestionReuseService {
         if (chapter != null && !chapter.isBlank() && !"null".equalsIgnoreCase(chapter)) {
             meta.put(MetaKey.CHAPTER_NO, chapter);
         }
-        String label = RetrievalService.formatSource(new Document("", meta));
+        String label = RetrievalService.formatSource(new Document("", meta), displayNames);
         // Same 요약/참고 stripping as the live-session preview (RetrievalService.previewSource) —
         // otherwise a curated hit's preview flips a "## 요약" section in and out depending only on
         // whether that answer was short enough to embed as a single vector.

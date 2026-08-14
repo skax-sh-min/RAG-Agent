@@ -144,6 +144,33 @@ public class DocRegistry {
         return rows.isEmpty() ? Optional.empty() : Optional.of(rows.get(0));
     }
 
+    /**
+     * Batch display-name lookup — chat citations (RetrievalService/QuestionReuseService) substitute
+     * a document's display name for the real filename in the source label when one is set (§ 표시
+     * 이름). One query for a whole turn's retrieved/reused chunks instead of one per chunk. Only
+     * docIds with a non-blank override are present in the returned map, so callers can just fall
+     * back to the real filename on a missing key.
+     */
+    public Map<String, String> findDisplayNames(Collection<String> docIds) {
+        if (docIds == null || docIds.isEmpty()) return Map.of();
+        List<String> ids = new ArrayList<>(new LinkedHashSet<>(docIds));
+        String placeholders = ids.stream().map(id -> "?").collect(java.util.stream.Collectors.joining(","));
+        List<Object> params = new ArrayList<>(ids.size() + 1);
+        params.add(SHARED);
+        params.addAll(ids);
+        List<Map<String, Object>> rows = jdbc.queryForList(
+                "SELECT doc_id, display_name FROM doc_registry WHERE user_id = ? AND doc_id IN (" + placeholders + ")",
+                params.toArray());
+        Map<String, String> out = new HashMap<>();
+        for (Map<String, Object> row : rows) {
+            Object name = row.get("display_name");
+            if (name instanceof String s && !s.isBlank()) {
+                out.put(String.valueOf(row.get("doc_id")), s);
+            }
+        }
+        return out;
+    }
+
     /** Finds by docId ignoring owner — for admin/reindex operations. */
     public Optional<DocRegistryEntry> findByDocId(String docId) {
         List<DocRegistryEntry> rows = jdbc.query(

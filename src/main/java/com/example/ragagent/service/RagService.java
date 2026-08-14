@@ -179,6 +179,11 @@ public class RagService {
         });
     }
 
+    /** Batch display-name lookup for chat citations (§ 표시 이름) — see {@link DocRegistry#findDisplayNames}. */
+    public Map<String, String> findDisplayNames(Collection<String> docIds) {
+        return docRegistry.findDisplayNames(docIds);
+    }
+
     private static final int MAX_DISPLAY_NAME_LEN = 200;
 
     /**

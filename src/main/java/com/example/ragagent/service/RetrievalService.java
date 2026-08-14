@@ -221,9 +221,18 @@ public class RetrievalService {
             unique = fallback.subList(0, Math.min(effectiveTopK, fallback.size()));
         }
 
+        // § 표시 이름 — one batch lookup for the whole turn's retrieved chunks instead of one
+        // query per chunk; formatSource() falls back to the real filename for any docId absent
+        // from the map (no override set, or lookup failed).
+        List<String> docIds = unique.stream()
+                .map(d -> String.valueOf(d.getMetadata().getOrDefault(MetaKey.DOC_ID, "")))
+                .filter(id -> !id.isBlank())
+                .toList();
+        Map<String, String> displayNames = ragService.findDisplayNames(docIds);
+
         List<SourceRef> sources = unique.stream()
                 .map(d -> new SourceRef(
-                        formatSource(d),
+                        formatSource(d, displayNames),
                 truncate(previewSource(d), 700),   // UI 출처 hover 미리보기 길이
                 d.getId(),
                         String.valueOf(d.getMetadata().getOrDefault(MetaKey.DOC_ID, "")),
@@ -493,18 +502,25 @@ public class RetrievalService {
      * Curated hit: fixed label.
         * Chapter-based docs (docx/md/txt): "파일명 | ch X" when a real chapter exists, else "파일명" only.
      * Page-based docs (pptx/pdf etc.): "파일명 | p.N".
+     *
+     * @param displayNames docId → display-name override (§ 표시 이름), from {@link RagService#findDisplayNames};
+     *                     the label shows the override when present, but the <b>real</b> filename still
+     *                     drives {@link #isChapterStructuredFilename} — a display name is cosmetic and
+     *                     typically has no extension, so it must never decide the citation format.
      */
-    static String formatSource(Document doc) {
+    static String formatSource(Document doc, Map<String, String> displayNames) {
         Map<String, Object> meta = doc.getMetadata();
         if ("curated_qa".equals(meta.get(MetaKey.DOC_TYPE))) {
             return "💬 큐레이션 Q&A";
         }
-        String filename = String.valueOf(meta.getOrDefault(MetaKey.FILENAME, "unknown"));
+        String realFilename = String.valueOf(meta.getOrDefault(MetaKey.FILENAME, "unknown"));
+        String docId = String.valueOf(meta.getOrDefault(MetaKey.DOC_ID, ""));
+        String filename = (displayNames != null) ? displayNames.getOrDefault(docId, realFilename) : realFilename;
         String chapter = normalizeChapterNo(meta.get(MetaKey.CHAPTER_NO));
         if (chapter != null) {
             return "%s | ch %s".formatted(filename, chapter);
         }
-        if (isChapterStructuredFilename(filename)) {
+        if (isChapterStructuredFilename(realFilename)) {
             return filename;
         }
         Object page = meta.getOrDefault(MetaKey.PAGE_OR_SLIDE, "?");
