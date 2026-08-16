@@ -374,7 +374,8 @@ PROGRESSIVE 업그레이드 시 `🔝 고추론 재분석 → {premiumProvider}`
 > - **`retrievalShare`는 채팅에서 뺐다** — 순위 기반 RRF라 한 턴 안에서는 값이 평평해(1위 13% vs 8위 12%) 출처끼리 비교하는 용도로는 변별력이 거의 없다. 여러 턴의 경향으로 읽어야 의미가 생기므로 `/admin` 패널의 몫이다.
 > - **유사도와 축별 순위는 비는 조건이 서로 배타적**이라 한 칸을 폴백 체인으로 채운다 — 순수 BM25 히트는 키워드 축 문서가 SQL 행이라 거리값이 없고(유사도 null), 쿼리 확장 실패 폴백 턴은 RRF를 건너뛰어 축 순위가 없다(유사도는 `Document.getScore()`로 살아 있음). 둘 다 비는 경우는 실질적으로 없다.
 > - 축 표기로 대체됐다는 사실 자체가 **"의미가 아니라 단어로 걸린 청크"**라는 신호가 된다.
-> - 폴백 체인은 두 렌더 경로(`chat-stream.js`의 `renderSourceMetrics()`, `message-assistant.html`)에 같은 규칙으로 구현돼 있다.
+> - 폴백 체인은 **세 렌더 경로**(`chat-stream.js`의 `renderSourceMetrics()`, `message-assistant.html`, 그리고 `chat.html`의 이전 turn 복원 마크업)에 같은 규칙으로 구현돼 있다 — `/chat/{threadId}`를 다시 열면 이전 turn은 프래그먼트가 아니라 `chat.html` 자체 마크업으로 그려지므로, 여기를 빠뜨리면 새로고침하는 순간 수치가 사라진다.
+> - **복원 값의 출처는 `conversation_turns.retrieval_metrics`**(3단계 영속). 출처 목록 자체는 현재 청크 기준으로 재구성한 쪽(`QuestionReuseService.sourceRefsForTurn()`)이 권위이고 — 라벨·미리보기·삭제된 청크 placeholder는 저장 blob이 알 수 없다 — `RetrievalMetricsService.enrich()`가 **수치만 `chunkId`로 병합**한다. 저장 기록이 없는 출처·턴은 그대로 통과하므로 목록에서 사라지지 않는다. DB 재사용 turn은 검색을 돌리지 않아 기록 자체가 없다.
 
 | 값 | `SourceRef` 필드 | 의미 |
 |---|---|---|

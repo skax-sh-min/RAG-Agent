@@ -92,6 +92,12 @@ public interface MemoryRepository {
     /** Total turns carrying diagnostics — for the panel's pagination. */
     int countRetrievalMetrics();
 
+    /**
+     * Raw diagnostics blobs for the given turns, keyed by turn id — backs restoring the numbers
+     * when a chat thread is reopened. Turns without diagnostics are simply absent from the map.
+     */
+    Map<Long, String> findRetrievalMetricsByTurnIds(List<Long> turnIds);
+
     /** One row of the {@code /admin} diagnostics panel; {@code metricsJson} is parsed by the service. */
     record MetricsRow(long turnId, String askedAt, String question, String responseMode,
                       String provider, String metricsJson) {}

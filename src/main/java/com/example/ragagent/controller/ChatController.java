@@ -11,6 +11,7 @@ import com.example.ragagent.service.ConversationSummarizerService;
 import com.example.ragagent.service.CuratedQaService;
 import com.example.ragagent.service.MemoryService;
 import com.example.ragagent.service.QuestionReuseService;
+import com.example.ragagent.service.RetrievalMetricsService;
 import com.example.ragagent.service.SettingsService;
 import com.example.ragagent.service.StreamingAgentService;
 import com.example.ragagent.service.ThreadMetaService;
@@ -61,6 +62,7 @@ public class ChatController {
     private final ChatImageAnalysisSkipRegistry imageSkipRegistry;
     private final QuestionReuseService questionReuseService;
     private final SettingsService settingsService;
+    private final RetrievalMetricsService retrievalMetricsService;
 
     @Autowired
     public ChatController(AgentService agentService,
@@ -74,7 +76,8 @@ public class ChatController {
                           MessageSource messageSource,
                           ChatImageAnalysisSkipRegistry imageSkipRegistry,
                           ObjectProvider<QuestionReuseService> questionReuseService,
-                          SettingsService settingsService) {
+                          SettingsService settingsService,
+                          RetrievalMetricsService retrievalMetricsService) {
         this.agentService = agentService;
         this.streamingAgentService = streamingAgentService;
         this.threadMetaService = threadMetaService;
@@ -87,6 +90,7 @@ public class ChatController {
         this.imageSkipRegistry = imageSkipRegistry;
         this.questionReuseService = questionReuseService.getIfAvailable();
         this.settingsService = settingsService;
+        this.retrievalMetricsService = retrievalMetricsService;
     }
 
     // ── Page routes ───────────────────────────────────────────────────
@@ -112,10 +116,13 @@ public class ChatController {
             model.addAttribute("turns", turns);
             model.addAttribute("turnImageRefsByTurnId", memoryService.getTurnImageRefs(userId, threadId));
                 if (questionReuseService != null) {
+                // 저장해 둔 검색 진단 수치를 다시 붙인다 — 목록 자체는 현재 청크 기준으로
+                // 재구성된 쪽이 권위이고(라벨·미리보기·삭제 placeholder), 수치만 chunkId로 병합된다.
                 model.addAttribute("turnSourcesByTurnId",
-                    turns.stream().collect(Collectors.toMap(
-                        t -> t.id(),
-                        t -> questionReuseService.sourceRefsForTurn(t.id()))));
+                    retrievalMetricsService.enrich(
+                        turns.stream().collect(Collectors.toMap(
+                            t -> t.id(),
+                            t -> questionReuseService.sourceRefsForTurn(t.id())))));
                 }
             // §10.10 embedding-fallback — badge for turns whose curated Q&A promotion never
             // managed to embed (surfaced here since it can only be known after the fact; the

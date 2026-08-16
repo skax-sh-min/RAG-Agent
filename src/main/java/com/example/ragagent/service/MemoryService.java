@@ -135,6 +135,10 @@ public class MemoryService {
         return repository.countRetrievalMetrics();
     }
 
+    public Map<Long, String> findRetrievalMetricsByTurnIds(List<Long> turnIds) {
+        return repository.findRetrievalMetricsByTurnIds(turnIds);
+    }
+
     public Map<Long, List<String>> getTurnImageRefs(String userId, String threadId) {
         return repository.getTurnImageRefs(userId, threadId);
     }

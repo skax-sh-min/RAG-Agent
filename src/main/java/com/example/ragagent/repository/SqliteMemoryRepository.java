@@ -323,6 +323,18 @@ public class SqliteMemoryRepository implements MemoryRepository {
     }
 
     @Override
+    public Map<Long, String> findRetrievalMetricsByTurnIds(List<Long> turnIds) {
+        if (turnIds == null || turnIds.isEmpty()) return Map.of();
+        String placeholders = String.join(",", java.util.Collections.nCopies(turnIds.size(), "?"));
+        Map<Long, String> out = new java.util.HashMap<>();
+        jdbc.query("SELECT id, retrieval_metrics FROM conversation_turns " +
+                   "WHERE retrieval_metrics IS NOT NULL AND id IN (" + placeholders + ")",
+                rs -> { out.put(rs.getLong("id"), rs.getString("retrieval_metrics")); },
+                turnIds.toArray());
+        return out;
+    }
+
+    @Override
     public int countRetrievalMetrics() {
         Integer n = jdbc.queryForObject(
                 "SELECT COUNT(*) FROM conversation_turns WHERE retrieval_metrics IS NOT NULL",

@@ -10,6 +10,7 @@ import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Read side of the 검색 진단 수치 (3단계) — turns the JSON blob stored per turn back into rows for
@@ -86,6 +87,51 @@ public class RetrievalMetricsService {
 
     public int count() {
         return memoryService.countRetrievalMetrics();
+    }
+
+    /**
+     * Re-attaches stored diagnostics to a reopened thread's source lists (`/chat/{threadId}`).
+     *
+     * <p>The passed-in lists stay authoritative — they are rebuilt from the chunks as they exist
+     * <em>now</em> (labels, previews, deleted-chunk placeholders), which the stored blob cannot
+     * know about. Only the four numbers are merged in, matched by {@code chunkId}; a source with
+     * no stored entry is returned untouched rather than dropped.
+     *
+     * <p>A DB-reuse turn has no entry at all: it answered from a stored answer without running
+     * retrieval, so there is nothing to report even though its previews are borrowed from the
+     * original turn.
+     */
+    public Map<Long, List<SourceRef>> enrich(Map<Long, List<SourceRef>> sourcesByTurn) {
+        if (sourcesByTurn == null || sourcesByTurn.isEmpty()) return sourcesByTurn;
+        Map<Long, String> blobs = memoryService.findRetrievalMetricsByTurnIds(
+                List.copyOf(sourcesByTurn.keySet()));
+        if (blobs.isEmpty()) return sourcesByTurn;
+
+        Map<Long, List<SourceRef>> out = new java.util.LinkedHashMap<>(sourcesByTurn.size());
+        for (var entry : sourcesByTurn.entrySet()) {
+            String blob = blobs.get(entry.getKey());
+            List<SourceRef> stored = blob == null
+                    ? List.of()
+                    : parse(new MemoryRepository.MetricsRow(entry.getKey(), null, null, null, null, blob));
+            if (stored.isEmpty()) {
+                out.put(entry.getKey(), entry.getValue());
+                continue;
+            }
+            Map<String, SourceRef> byChunkId = new java.util.HashMap<>();
+            for (SourceRef s : stored) {
+                if (s.chunkId() != null) byChunkId.put(s.chunkId(), s);
+            }
+            out.put(entry.getKey(), entry.getValue().stream()
+                    .map(live -> {
+                        SourceRef m = live.chunkId() == null ? null : byChunkId.get(live.chunkId());
+                        return m == null ? live : new SourceRef(
+                                live.label(), live.preview(), live.chunkId(), live.docId(),
+                                live.pageOrSlide(),
+                                m.similarity(), m.retrievalShare(), m.axisRanks(), m.answerShare());
+                    })
+                    .toList());
+        }
+        return out;
     }
 
     private List<SourceRef> parse(MemoryRepository.MetricsRow row) {

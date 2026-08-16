@@ -7,9 +7,11 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -104,6 +106,47 @@ class RetrievalMetricsServiceTest {
 
         assertThat(turns).hasSize(1);
         assertThat(turns.get(0).sources().get(0).similarity()).isEqualTo(0.6);
+    }
+
+    // ── 복원 경로(/chat/{threadId}) 병합 ──────────────────────────────────────
+
+    @Test
+    @DisplayName("복원 시 저장된 수치를 chunkId로 병합하되, 라벨·미리보기는 현재 값을 유지한다")
+    void enrichMergesMetricsButKeepsLiveLabels() {
+        // 저장 당시의 라벨은 낡았을 수 있다(문서 표시 이름 변경, 청크 재인덱싱 등).
+        String stored = json(new SourceRef("옛 라벨", "옛 미리보기", "c1", "d1", 1,
+                0.72, 0.18, "vec:2", 0.31));
+        MemoryService memory = mock(MemoryService.class);
+        when(memory.findRetrievalMetricsByTurnIds(List.of(7L))).thenReturn(Map.of(7L, stored));
+        var service = new RetrievalMetricsService(memory, MAPPER);
+
+        List<SourceRef> live = List.of(new SourceRef("현재 라벨", "현재 미리보기", "c1", "d1", 1));
+        SourceRef merged = service.enrich(Map.of(7L, live)).get(7L).get(0);
+
+        assertThat(merged.label()).isEqualTo("현재 라벨");        // 현재 값이 권위
+        assertThat(merged.preview()).isEqualTo("현재 미리보기");
+        assertThat(merged.similarity()).isEqualTo(0.72);          // 수치만 병합
+        assertThat(merged.answerShare()).isEqualTo(0.31);
+    }
+
+    @Test
+    @DisplayName("저장된 수치가 없는 출처·턴은 그대로 통과한다 — 목록에서 사라지지 않는다")
+    void enrichLeavesUnmatchedSourcesIntact() {
+        String stored = json(new SourceRef("a", "p", "c1", "d1", 1, 0.5, 0.5, "vec:1", 0.5));
+        MemoryService memory = mock(MemoryService.class);
+        when(memory.findRetrievalMetricsByTurnIds(anyList())).thenReturn(Map.of(7L, stored));
+        var service = new RetrievalMetricsService(memory, MAPPER);
+
+        var result = service.enrich(Map.of(
+                7L, List.of(new SourceRef("a", "p", "c1", "d1", 1),
+                            new SourceRef("b", "p", "c-없음", "d2", 2)),   // 저장 기록에 없는 청크
+                8L, List.of(new SourceRef("c", "p", "c3", "d3", 3))));      // 수치가 없는 턴(DB 재사용 등)
+
+        assertThat(result.get(7L)).hasSize(2);
+        assertThat(result.get(7L).get(0).similarity()).isEqualTo(0.5);
+        assertThat(result.get(7L).get(1).similarity()).isNull();
+        assertThat(result.get(8L)).hasSize(1);
+        assertThat(result.get(8L).get(0).similarity()).isNull();
     }
 
     @Test
