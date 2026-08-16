@@ -27,6 +27,7 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -416,6 +417,14 @@ public class StreamingAgentService {
         // 경로·주소·포트·환경변수 값 안내 — 검증 통과 여부와 무관하게 실릴 수 있다(통과한 답변에도
         // "이 경로는 본인 환경 기준으로 바꿔야 한다"는 안내가 필요하다).
         m.put("envNote",           result.envNote());
+        // 2단계 응답 참여도 — 출처 배지는 RETRIEVAL 직후의 `sources` 이벤트로 이미 그려졌고, 참여도는
+        // 답변이 끝나야 나오므로 여기서 chunkId 기준으로 사후 갱신한다(값이 없으면 키 자체가 빠져
+        // 클라이언트가 아무것도 하지 않는다).
+        Map<String, Double> shares = new LinkedHashMap<>();
+        for (SourceRef s : result.sources()) {
+            if (s.chunkId() != null && s.answerShare() != null) shares.put(s.chunkId(), s.answerShare());
+        }
+        if (!shares.isEmpty()) m.put("attribution", shares);
         m.put("refreshThreadList", true);
         m.put("turnId",            turnId);
         return m;

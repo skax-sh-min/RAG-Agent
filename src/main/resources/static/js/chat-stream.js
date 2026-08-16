@@ -292,6 +292,23 @@
         return `<span class="source-metrics text-muted me-2" style="font-size:0.72rem;">${parts.join(' · ')}</span>`;
     }
 
+    /* done 이벤트의 attribution {chunkId: 0.0~1.0}을 이미 그려진 출처 배지에 덧붙인다.
+       수치 표시가 꺼져 있으면 .source-metrics 자체가 없으므로 조용히 아무것도 하지 않는다. */
+    function applyAttribution(bubbleId, attribution) {
+        if (!attribution) return;
+        const container = document.getElementById(`stream-sources-${bubbleId}`);
+        if (!container) return;
+        container.querySelectorAll('.source-ref[data-chunk-id]').forEach(badge => {
+            const share = attribution[badge.getAttribute('data-chunk-id')];
+            if (typeof share !== 'number') return;
+            const metrics = badge.nextElementSibling;
+            if (!metrics || !metrics.classList.contains('source-metrics')) return;
+            if (metrics.dataset.hasAttribution === '1') return;   // 재진입 방지(멱등)
+            metrics.dataset.hasAttribution = '1';
+            metrics.insertAdjacentHTML('beforeend', ` · <strong>응답 ${Math.round(share * 100)}%</strong>`);
+        });
+    }
+
     function onSources(bubbleId, sources) {
         const container = document.getElementById(`stream-sources-${bubbleId}`);
         if (!container || !sources || sources.length === 0) return;
@@ -407,6 +424,11 @@
         //    answer arrived, so the "삭제 예정" attempts are removed (retry succeeded/exhausted).
         if (stageEl) stageEl.remove();
         clearRetryArtifacts(bubbleId);
+
+        // 3-bis. 응답 참여도 사후 갱신 — 출처 배지는 RETRIEVAL 직후 `sources`로 이미 그려졌고,
+        //    참여도는 답변이 끝나야 나오므로 여기서 chunkId로 찾아 덧붙인다. 재시도가 있었으면
+        //    `sources`가 다시 와서 배지가 새로 그려졌을 수 있으므로 항상 현재 DOM 기준으로 찾는다.
+        applyAttribution(bubbleId, data.attribution);
 
         // 4. Feedback buttons (like/dislike) + metadata footer, same line — feedback first (left).
         //    Uses the same .feedback-btn/.feedback-controls markup the chat.html delegated

@@ -72,12 +72,14 @@
                     <!-- 검색 진단 수치: 항상 렌더하되 기본 숨김 — ui.retrieval-metrics-enabled가
                          켜져 있을 때만 하단 스크립트가 d-none을 벗긴다(스트리밍 경로와 동일 규칙). -->
                     <span class="source-metrics text-muted d-none" style="font-size:0.72rem;"
-                          th:if="${src.similarity != null or src.retrievalShare != null}">
+                          th:if="${src.similarity != null or src.retrievalShare != null or src.answerShare != null}">
                         <span th:if="${src.similarity != null}"
                               th:text="'유사도 ' + ${#numbers.formatDecimal(src.similarity, 1, 2)}"></span>
                         <span th:if="${src.retrievalShare != null}"
                               th:text="' · 검색 ' + ${#numbers.formatDecimal(src.retrievalShare * 100, 1, 0)} + '%'"></span>
                         <span th:if="${src.axisRanks != null}" th:text="' · ' + ${src.axisRanks}"></span>
+                        <strong th:if="${src.answerShare != null}"
+                                th:text="' · 응답 ' + ${#numbers.formatDecimal(src.answerShare * 100, 1, 0)} + '%'"></strong>
                     </span>
                 </li>
             </ul>

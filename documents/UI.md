@@ -362,12 +362,35 @@ PROGRESSIVE 업그레이드 시 `🔝 고추론 재분석 → {premiumProvider}`
 | `유사도 0.72` | `similarity` | 질의와의 코사인 유사도(`1 - distance`). 벡터 축에 없던 청크는 **null**(0.0 아님) |
 | `검색 18%` | `retrievalShare` | 가중 RRF 점수 ÷ 최종 컷 전체 합. 후보 풀이 아니라 **답변 노드가 실제로 받은 문서들** 기준으로 정규화 |
 | `vec:2, bm25:5` | `axisRanks` | 축별 순위. 여러 MultiQuery 벡터 축에 걸치면 **최선 순위** |
+| `응답 31%` | `answerShare` | **응답 참여도(2단계)** — 답변 텍스트 중 이 청크에서 온 것으로 추정되는 비율. 아래 별도 설명 |
 
 - **`retrievalShare`는 순위 기반이라 의도적으로 평평하다** — RRF가 `w/(rank+1+k)`이고 k 기본값이 60이라 1위(0.0164)와 8위(0.0145)의 차이가 작다. 변별력은 `similarity` 쪽에서 봐야 하며, 실제 진단에 가장 쓸모 있는 건 `axisRanks`다("벡터 12위인데 BM25 1위라 올라옴" → `SEARCH_RRF_KEYWORD_WEIGHT` 조정 근거).
 - **null은 "측정 안 됨"이지 0이 아니다.** BM25/큐레이션 축에만 걸린 청크는 유사도가 없고, 쿼리 확장 LLM 호출이 실패해 폴백 경로로 빠진 턴은 RRF 자체를 건너뛰어 share·순위가 전부 없다. 세 표시 지점 모두 해당 항목만 생략한다.
 - 수치는 `RetrievalService.mergeRrfScored()`가 융합 부산물로 계산하며 **LLM·임베딩 추가 호출이 0회**다. 기존 `mergeRrf()` 오버로드는 이 메서드에 위임 후 메트릭을 버리므로 랭킹 동작은 완전히 동일하다(`RetrievalServiceRrfTest`가 두 경로의 문서 순서 일치를 검증).
 - 메트릭은 `Document` 메타데이터가 아니라 `docKey` 기준 **사이드 맵**으로 나른다 — 검색 결과 문서는 답변 프롬프트와 (큐레이션·관리자 경로에서는) 벡터 스토어로 다시 흘러가므로, `MetaKey.SEARCH_TEXT`처럼 "영속 전 제거해야 하는 임시 키"를 하나 더 만들지 않기 위함이다. 태그 필터·리랭크가 문서 목록을 재구성해도 살아남는다는 이점도 있다.
-- 전달: REST `ChatResponse.sources[]`와 SSE `sources` 이벤트는 토글과 무관하게 **항상** 세 필드를 싣는다(`similarity`/`retrieval_share`/`axis_ranks`) — 토글은 렌더링만 막는다. 서버 렌더 경로(`message-assistant.html`)는 값을 `.source-metrics.d-none`으로 항상 그려두고 `window.isRetrievalMetricsEnabled()`가 `d-none`을 벗기며, 스트리밍 경로(`chat-stream.js`)는 애초에 켜졌을 때만 만든다.
+- 전달: REST `ChatResponse.sources[]`와 SSE `sources` 이벤트는 토글과 무관하게 **항상** 필드를 싣는다(`similarity`/`retrieval_share`/`axis_ranks`/`answer_share`) — 토글은 렌더링만 막는다. 서버 렌더 경로(`message-assistant.html`)는 값을 `.source-metrics.d-none`으로 항상 그려두고 `window.isRetrievalMetricsEnabled()`가 `d-none`을 벗기며, 스트리밍 경로(`chat-stream.js`)는 애초에 켜졌을 때만 만든다.
+
+#### 응답 참여도 (2단계) — `answerShare`
+
+앞의 세 값과 달리 **검색 시점에는 존재할 수 없는 값**이다(답변이 끝나야 나온다). 그래서 SSE는 2단계로 전달한다:
+
+```
+sources 이벤트 (RETRIEVAL 직후) → 유사도 · 검색기여도 · 축별 순위
+done 이벤트    (답변 완료 후)   → attribution {chunkId: 0.0~1.0} → 배지 사후 갱신
+```
+
+`chat-stream.js`의 `applyAttribution()`이 `data-chunk-id`로 배지를 찾아 `· 응답 31%`를 덧붙인다. 재시도가 있었으면 `sources`가 다시 와서 배지가 새로 그려지므로 항상 현재 DOM 기준으로 찾고, `data-has-attribution`으로 멱등성을 보장한다. 블로킹/REST 경로는 한 번에 다 나오므로 분기가 없다.
+
+**계산은 `AnswerAttribution`**(Spring 의존 없는 순수 클래스, `ChunkReassembler` 선례)이 하며, `FinalizeService`가 그래프 끝에서 딱 한 번 호출한다 — ANSWER 노드는 재시도·PROGRESSIVE 업그레이드로 여러 번 돌 수 있어서, 버려질 답변에 대해 계산하면 낭비다. **추가 LLM·임베딩 호출 0회**(순수 CPU).
+
+**알고리즘**: 답변을 문장 단위로 쪼개 각 문장을 가장 닮은 청크에 배정하고, 청크별 배정 글자수 비율을 몫으로 낸다.
+- **문자 4-gram 매칭** — 한국어는 공백 토큰화가 조사/어미를 잘못 끊는다("포트를" vs "포트는"은 토큰이 다르다). 4-gram은 어간 위를 미끄러지므로 활용형이 달라도 잡힌다.
+- **희소도 가중(`1/문서빈도`)** — 이게 없으면 같은 문서에서 온 청크들이 머리말·제품명·breadcrumb 같은 보일러플레이트만으로 서로 비슷해져, 몫이 "가장 긴 청크"로 쏠린다. 모든 청크에 있는 4-gram은 귀속 정보가 0이고, 한 청크에만 있는 4-gram이 실제로 출처를 식별한다.
+- **매칭되지 않은 문장은 분모에서 빠진다** — 모델이 자기 말로 쓴 연결 문장·요약 문장을 억지로 가까운 청크에 밀어 넣지 않는다. 마크다운 헤딩 줄(`## 요약`)도 매 턴 동일한 골격이라 제외한다.
+
+**인용 신호(`usedDocs`)**: 평가 LLM 호출(⑤)이 이미 답변과 모든 발췌를 함께 들고 있으므로, "실제로 근거로 쓴 `[Dn]` 번호"를 같은 호출에서 함께 받는다(**추가 왕복 0회**). 발췌 블록에 `[D1]`, `[D2]` … 번호가 붙는 이유가 이것이다. 이 값은 **후보를 좁히기만 하고 몫을 만들어내지는 않는다** — 모델이 인용한 문서라도 답변이 그 내용을 닮지 않았으면 몫은 0이다. 범위 밖 번호는 무시하고, 목록이 비면 전체 문서가 후보가 된다(`method`: `citation+lexical` / `lexical` / `none`).
+
+> ⚠️ **이 값은 추정이지 측정이 아니다.** 진짜 인과적 기여도는 청크를 하나씩 빼고 답변을 다시 생성해야(leave-one-out) 알 수 있고, 그건 턴당 LLM 호출이 topK배라 오프라인 평가 하네스(OPERATOR_MANUAL §6.6) 영역이다. 또한 `responseMode=S`는 평가 호출 자체가 없어 인용 신호 없이 어휘 기반으로만 계산된다.
 
 **팝오버 크기 (`app.css`, ≥768px 전용)**: Bootstrap 기본값(`max-width: 276px`, `font-size: 0.875rem`)은 미리보기가 세로로 길게 줄바꿈되어 가독성이 떨어졌다 — `max-width: 620px`(약 2배), `font-size: 0.8rem`으로 넓히고 살짝 줄여 같은 600자가 더 적은 줄로 읽기 좋게 표시된다. `@media (min-width: 768px)` 블록 안에 있어 모바일(<768px)은 Bootstrap 기본값 그대로 — 좁은 화면에서 팝오버를 더 넓히면 화면 밖으로 넘칠 여지가 있기 때문.
 

@@ -72,7 +72,8 @@ public class AnswerService {
      * <em>passing</em> turn too — it is an advisory for the reader ("substitute your own path"),
      * not a verdict about the answer.
      */
-    private record EvalOutput(boolean sufficient, boolean grounded, String reason, String envNote) {}
+    private record EvalOutput(boolean sufficient, boolean grounded, String reason, String envNote,
+                              List<Integer> usedDocs) {}
 
     private final LlmRouter llmRouter;
     private final MessageSource messageSource;
@@ -292,6 +293,12 @@ public class AnswerService {
      * because environment-dependent values (paths, hosts, ports, env-var values) are no longer a
      * legitimate reason to fail {@code grounded} — the prompt routes them here instead — and the
      * reader still needs to be told which values to substitute for their own machine.
+     *
+     * <p>{@code usedDocs} (2단계 응답 참여도) rides along for the same reason {@code reason} does:
+     * this call already holds the answer and every excerpt side by side, so asking which excerpt
+     * numbers the answer actually drew on costs no extra round-trip. It is <b>advisory only</b> —
+     * it never gates anything, a model that omits it degrades to pure lexical attribution, and it
+     * can only narrow the candidate set, never manufacture a share (see {@code AnswerAttribution}).
      */
     private AgentState evaluate(AgentState state, String answer, Locale locale) {
         boolean docsPresent = !state.retrievedDocs().isEmpty();
@@ -321,10 +328,12 @@ public class AnswerService {
                     .grounded(grounded)
                     .evalReason(reason)
                     .envNote(envNote)
+                    .usedDocIndices(out.usedDocs())
                     .build();
         } catch (Exception e) {
             log.warn("Evaluation parse failed, treating as sufficient + grounded: {}", e.getMessage());
-            return state.toBuilder().needsRetry(false).grounded(true).evalReason(null).envNote(null).build();
+            return state.toBuilder().needsRetry(false).grounded(true).evalReason(null).envNote(null)
+                    .usedDocIndices(List.of()).build();
         }
     }
 
@@ -362,7 +371,11 @@ public class AnswerService {
             String text = MarkdownNoiseNormalizer.normalize(d.getText());
             if (included > 0 && used + text.length() > MAX_EVAL_EXCERPT_CHARS) break;
             if (included > 0) sb.append("\n---\n");
-            sb.append(text);
+            // [D1], [D2], … — the numbering the eval prompt's usedDocs field refers to. 1-based and
+            // in prompt order, so an index maps straight back to retrievedDocs.get(n-1). A document
+            // dropped by the size cap simply never gets a number, which is why the cap truncates
+            // from the tail: indices of the documents that ARE included never shift.
+            sb.append("[D").append(included + 1).append("]\n").append(text);
             used += text.length();
             included++;
         }
