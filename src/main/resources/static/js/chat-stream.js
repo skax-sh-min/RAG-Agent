@@ -281,15 +281,22 @@
         container.innerHTML = `<div class="mt-2 d-flex flex-wrap gap-2">${thumbs}</div>`;
     }
 
-    /* 검색 진단 수치 — null은 "측정 안 됨"이지 0이 아니므로 해당 항목만 생략한다.
-       (벡터 축에 없던 청크는 유사도가 없고, 확장 실패 폴백 경로는 RRF 자체를 건너뛴다) */
+    /* 검색 진단 수치 — 채팅에는 "근거 품질" 한 칸 + 응답 참여도만 싣는다.
+       검색기여(retrieval_share)는 순위 기반 RRF라 값이 평평해 한 턴 안에서 변별력이 거의
+       없다(1위 13% vs 8위 12%). 여러 턴의 경향으로 읽어야 의미가 생기므로 /admin 진단
+       패널에만 남기고 여기서는 뺀다 — 페이로드에는 그대로 실려 있다.
+
+       유사도와 축별 순위는 비는 조건이 서로 배타적이라 한 칸을 폴백 체인으로 채운다:
+         · 순수 BM25 히트  → 키워드 축 문서는 SQL 행이라 거리값이 없다(유사도 null)
+         · 확장 실패 폴백  → RRF를 건너뛰어 축 순위가 없다(유사도는 살아 있음)
+       그래서 둘 다 비는 경우는 실질적으로 없고, 축 표기로 대체됐다는 사실 자체가
+       "의미가 아니라 단어로 걸린 청크"라는 신호가 된다. */
     function renderSourceMetrics(s) {
-        const parts = [];
-        if (typeof s.similarity === 'number')      parts.push(`유사도 ${s.similarity.toFixed(2)}`);
-        if (typeof s.retrieval_share === 'number') parts.push(`검색 ${Math.round(s.retrieval_share * 100)}%`);
-        if (s.axis_ranks)                          parts.push(escHtml(s.axis_ranks));
-        if (parts.length === 0) return '';
-        return `<span class="source-metrics text-muted me-2" style="font-size:0.72rem;">${parts.join(' · ')}</span>`;
+        const quality = typeof s.similarity === 'number'
+            ? `유사도 ${s.similarity.toFixed(2)}`
+            : (s.axis_ranks ? escHtml(s.axis_ranks) : '');
+        if (!quality) return '';
+        return `<span class="source-metrics text-muted me-2" style="font-size:0.72rem;">${quality}</span>`;
     }
 
     /* done 이벤트의 attribution {chunkId: 0.0~1.0}을 이미 그려진 출처 배지에 덧붙인다.

@@ -72,14 +72,18 @@
                     <!-- 검색 진단 수치: 항상 렌더하되 기본 숨김 — ui.retrieval-metrics-enabled가
                          켜져 있을 때만 하단 스크립트가 d-none을 벗긴다(스트리밍 경로와 동일 규칙). -->
                     <span class="source-metrics text-muted d-none" style="font-size:0.72rem;"
-                          th:if="${src.similarity != null or src.retrievalShare != null or src.answerShare != null}">
+                          th:if="${src.similarity != null or src.axisRanks != null or src.answerShare != null}">
+                        <!-- 근거 품질 한 칸 — 유사도 우선, 없으면 축 표기로 대체(chat-stream.js의
+                             renderSourceMetrics()와 같은 폴백 체인). 검색기여는 순위 기반이라
+                             한 턴 안에서 평평해 /admin 패널에만 남긴다. -->
                         <span th:if="${src.similarity != null}"
                               th:text="'유사도 ' + ${#numbers.formatDecimal(src.similarity, 1, 2)}"></span>
-                        <span th:if="${src.retrievalShare != null}"
-                              th:text="' · 검색 ' + ${#numbers.formatDecimal(src.retrievalShare * 100, 1, 0)} + '%'"></span>
-                        <span th:if="${src.axisRanks != null}" th:text="' · ' + ${src.axisRanks}"></span>
+                        <span th:if="${src.similarity == null and src.axisRanks != null}"
+                              th:text="${src.axisRanks}"></span>
+                        <!-- 앞 칸이 비었을 때 구분자로 시작하지 않도록 ' · '를 조건부로 붙인다 -->
                         <strong th:if="${src.answerShare != null}"
-                                th:text="' · 응답 ' + ${#numbers.formatDecimal(src.answerShare * 100, 1, 0)} + '%'"></strong>
+                                th:text="${(src.similarity != null or src.axisRanks != null) ? ' · ' : ''}
+                                         + '응답 ' + ${#numbers.formatDecimal(src.answerShare * 100, 1, 0)} + '%'"></strong>
                     </span>
                 </li>
             </ul>
