@@ -219,7 +219,7 @@ Assistant 응답에 👍/👎 토글 추가(`conversation_turns.feedback`, `PATC
 
 ### 6.11 대화 컨텍스트 예산 정합성 + 설정 외부화 ✅ 완료
 
-§6.9 도입 후 요약 경로에는 없던 문자 예산 체크를 `MemoryService.maxConversationChars()`(단일 진실 원천, `max(1000, LLM_MAX_TOKENS × 0.75)`)로 통일하고, `FETCH_LIMIT` 등 하드코딩 5개 값을 `app.memory.*`/`app.summary.*` 프로퍼티로 외부화.
+§6.9 도입 후 요약 경로에는 없던 문자 예산 체크를 `MemoryService.maxConversationChars()`(단일 진실 원천, `max(1000, LLM_MAX_TOKENS × 0.5)` — 도입 당시 0.75였으나 요약 입력 상한을 조이면서 0.5로 낮췄다)로 통일하고, `FETCH_LIMIT` 등 하드코딩 5개 값을 `app.memory.*`/`app.summary.*` 프로퍼티로 외부화.
 
 ---
 

@@ -1293,9 +1293,9 @@ app.llm.providers[1].stream=false
 | type | 처리 가능 태스크 | 권장 모델 유형 |
 |------|----------------|--------------|
 | `MICRO_TEXT` | 키워드+맥락·요약·제목·쿼리 확장만 (추론 불필요) | 500MB급 소형 모델 (§6.21) |
-| `LIGHT_TEXT` | 분류·직답 + `MICRO_TEXT` 잡무 | 텍스트 전용 소형~중형 모델 |
-| `LIGHT_BOTH` | 분류·직답·`MICRO_TEXT` 잡무 + Vision | 범용 로컬 LLM |
-| `TEXT` | 답변 생성·Critic·Rerank만 | 텍스트 전용 대형 모델 |
+| `LIGHT_TEXT` | MD 서식 교정·TXT 구조화 + `MICRO_TEXT` 잡무 | 텍스트 전용 소형~중형 모델 |
+| `LIGHT_BOTH` | `LIGHT_TEXT` 태스크 + Vision | 범용 로컬 LLM |
+| `TEXT` | 답변 생성·Rerank **+ 분류·meta 직답**만 | 텍스트 전용 대형 모델 |
 | `VISION` | 이미지 설명만 | Vision 전용 모델 |
 | `BOTH` | 모든 태스크 | 외부 고성능 / 범용 대형 모델 |
 
@@ -1311,11 +1311,11 @@ app.llm.providers[1].stream=false
 
 | 노드 | TaskType | 설명 |
 |------|----------|------|
-| ClassifierService | `LIGHT_TEXT` | 질문 유형 분류 (품질 민감 — 큰 모델 유지) |
+| ClassifierService | `TEXT` | 질문 유형 분류 (품질 민감 — 답변과 같은 타입으로 묶어 큰 모델 유지) |
 | RetrievalService | `MICRO_TEXT` | 쿼리 생성 (MultiQueryExpander) — §6.21 작업2로 MICRO_TEXT 전환 |
 | AnswerService | `TEXT` | 답변 생성 + **충분도·근거 통합 평가**(별도 1콜) |
 | CriticService | — | **LLM 호출 없음** — AnswerService의 통합 평가가 낸 `grounded`를 읽어 재시도 여부만 결정 (`responseMode=S`이면 이 단계 스킵) |
-| DirectAnswerService | `LIGHT_TEXT` | meta 질문 직접 응답 (사용자 노출 — 큰 모델 유지) |
+| DirectAnswerService | `TEXT` | meta 질문 직접 응답 (사용자 노출 — 답변과 같은 타입으로 묶어 큰 모델 유지) |
 | VisionDescriptionService | `VISION` | 이미지 → 설명 생성 |
 | ImageTypeClassifier | `LIGHT_BOTH` | 이미지 유형 분류 |
 | KeywordExtractor | `MICRO_TEXT` | 청크 키워드+맥락(Contextual Retrieval, §10.1) 통합 추출 — `context:` 사용량 라벨. §6.21로 MICRO_TEXT 전환 |
@@ -1460,9 +1460,10 @@ app.llm.circuit-breaker-minutes=4
 app.llm.progressive-threshold=0.6
 
 # LOCAL — 무료, 분류·키워드·경량 태스크 처리
+# base-url에 폴백 기본값을 두지 않는다 — LOCAL_LLM_URL이 비면 이 프로바이더는 기동 시 제외된다(LlmConfig G2)
 app.llm.providers[0].name=local
-app.llm.providers[0].base-url=${LOCAL_LLM_URL:http://localhost:1234/v1}
-app.llm.providers[0].api-key=${LOCAL_LLM_KEY:lm-studio}
+app.llm.providers[0].base-url=${LOCAL_LLM_URL:}
+app.llm.providers[0].api-key=${LOCAL_LLM_KEY:no-key}
 app.llm.providers[0].model=${LOCAL_LLM_MODEL:gemma-4-27b-it}
 app.llm.providers[0].type=LIGHT_BOTH
 app.llm.providers[0].role=LOCAL
@@ -1549,13 +1550,14 @@ COST_FIRST 흐름:
 
 #### 예제 6 — 소형(경량) LLM 분리로 잡무 오프로딩 (PLAN §6.21)
 
-추론이 필요 없는 잡무(키워드+맥락 추출·대화 요약·제목 생성·MultiQuery 쿼리 확장 = `MICRO_TEXT`)를 500MB급 소형 모델로 내리고, 답변 생성(`TEXT`)과 품질 민감한 분류·직답(`LIGHT_TEXT`)은 큰 모델이 전담하게 하면 — 두 모델이 **서로 다른 동시성 슬롯(Semaphore)**을 쓰므로 인덱싱 잡무가 채팅 답변의 슬롯을 잠식하지 않습니다(대화 응답 지연 감소).
+추론이 필요 없는 잡무(키워드+맥락 추출·대화 요약·제목 생성·MultiQuery 쿼리 확장 = `MICRO_TEXT`)를 500MB급 소형 모델로 내리고, 답변 생성과 품질 민감한 분류·직답(셋 다 `TEXT`)은 큰 모델이 전담하게 하면 — 두 모델이 **서로 다른 동시성 슬롯(Semaphore)**을 쓰므로 인덱싱 잡무가 채팅 답변의 슬롯을 잠식하지 않습니다(대화 응답 지연 감소).
 
 > 이 오프로딩은 `application.properties` 기본 설정에 이미 적용되어 있습니다(`providers[0]`=소형, `providers[1]`=큰 모델) — 아래는 처음부터 구성하는 방법을 보여주는 예제입니다.
 
 소형 모델 서버를 큰 모델과 **다른 포트/장비**에 띄운 뒤(예: LM Studio 2번째 인스턴스에 `qwen2.5-0.5b-instruct`를 로드, 포트 1236), `application.properties`:
 ```properties
-# 큰 모델 — 답변(TEXT)·분류·직답(LIGHT_TEXT)·Vision 전담. priority를 1로 올려 소형에 MICRO_TEXT 우선권을 넘긴다.
+# 큰 모델 — 답변·분류·직답(전부 TEXT)·MD 교정/TXT 구조화(LIGHT_TEXT)·Vision 전담.
+# priority를 1로 올려 소형에 MICRO_TEXT 우선권을 넘긴다.
 app.llm.providers[1].name=local
 app.llm.providers[1].base-url=http://localhost:1234/v1
 app.llm.providers[1].model=google/gemma-4-e4b
@@ -1577,15 +1579,17 @@ app.llm.providers[0].concurrency=4
 라우팅 결과:
 ```
 [키워드·요약·제목·쿼리확장] local-fast (MICRO_TEXT, priority 0)    ← 소형
-[분류·meta 직답]            local        (LIGHT_TEXT→BOTH, p1)      ← 큰 모델(품질 유지)
+[분류·meta 직답]            local        (TEXT/BOTH, priority 1)    ← 큰 모델(품질 유지)
 [답변·Critic·Rerank]        local        (TEXT/BOTH, priority 1)    ← 큰 모델
+[MD 교정·TXT 구조화]        local        (LIGHT_TEXT→BOTH, p1)      ← 큰 모델
 [Vision·이미지 분류]        local        (소형은 이미지 미지원)      ← 큰 모델
 소형 다운/차단 시           → MICRO_TEXT가 local(priority 1)로 자동 폴백
 ```
 
 - ⚠️ **priority 필수**: 소형(0) < 큰 모델(1). 둘 다 0으로 두면 `MICRO_TEXT`가 두 모델 사이에 로드밸런싱되어 절반만 오프로딩됩니다.
-- ⚠️ **인덱스 연속성**: `providers[N]`은 0부터 연속이어야 바인딩됩니다(파일 내 줄 순서 자체는 무관 — 사람이 읽기 편하도록만 맞춤). 현재 기본 파일은 `[0]`=소형·`[1]`=로컬 LLM 1·`[2]`=로컬 LLM 2·`[3]~[7]`=외부·`[8]`=Vision(선택) 순.
-- **더 공격적 오프로딩(A안)**: 분류·직답까지 소형으로 내리려면 `type=MICRO_TEXT` 대신 `type=LIGHT_TEXT`로 등록(`LIGHT_TEXT`가 `MICRO_TEXT`도 흡수). 단 분류 오분류는 라우팅 정확도로, 직답은 사용자 노출로 이어지므로 채택 전 검색 품질 평가 하네스([§6.6](#66-검색-품질-평가-하네스-개발자용))로 분류 정확도 회귀를 확인하세요.
+- ⚠️ **인덱스 연속성**: `providers[N]`은 0부터 연속이어야 바인딩됩니다(파일 내 줄 순서 자체는 무관 — 사람이 읽기 편하도록만 맞춤). 현재 기본 파일은 `[0]`=소형·`[1]`=로컬 LLM 1·`[2]`=로컬 LLM 2·`[3]~[8]`=외부(NORMAL 3 + PREMIUM 3)·`[9]`=Vision(선택, 주석 처리) 순.
+- **더 공격적 오프로딩(A안)**: MD 서식 교정·TXT 구조화까지 소형으로 내리려면 `type=MICRO_TEXT` 대신 `type=LIGHT_TEXT`로 등록(`LIGHT_TEXT`가 `MICRO_TEXT`도 흡수). 구조 충실도가 떨어지면 청킹 품질에 직결되므로 채택 전 검색 품질 평가 하네스([§6.6](#66-검색-품질-평가-하네스-개발자용))로 회귀를 확인하세요.
+  - ⚠️ **분류·직답은 A안으로도 내려가지 않습니다** — 둘 다 답변과 같은 `TaskType.TEXT`라서, 소형을 `LIGHT_TEXT`로 올려도 후보에 들지 않습니다. 소형을 `TEXT`/`BOTH`로 등록하면 답변 생성까지 함께 소형으로 넘어갑니다(같은 타입이라 분리 불가).
 - 처리량을 더 늘리려면 소형·큰 모델 각각을 [예제 5](#예제-5--로컬-llm-2대-로드밸런싱-처리량-확장)처럼 같은 priority로 다중 등록해 로드밸런싱할 수 있습니다 — 구체적인 결합 설정은 아래 예제 7 참고.
 
 ---
@@ -1633,11 +1637,11 @@ app.llm.providers[8].concurrency=4
 라우팅 결과:
 ```
 [키워드·요약·제목·쿼리확장] local-fast-a ∥ local-fast-b (MICRO_TEXT, priority 0, least-in-flight 분산)
-[분류·meta 직답·답변·Critic] local-a ∥ local-b            (LIGHT_TEXT→BOTH / TEXT/BOTH, priority 1, least-in-flight 분산)
+[분류·meta 직답·답변·Critic] local-a ∥ local-b            (전부 TEXT → BOTH, priority 1, least-in-flight 분산)
 ```
 
 - 총 잡무 처리량 = 소형 대수 × concurrency(2×4=8), 총 답변 처리량 = 큰 모델 대수 × concurrency(2×3=6) — **두 숫자는 서로 독립**이라 티어별로 필요한 만큼만 대수를 늘리면 됩니다(예: 인덱싱이 병목이면 소형만 증설, 채팅이 병목이면 큰 모델만 증설).
-- 인덱스는 활성 프로바이더 [0]~[5] 이후 연속이어야 합니다. 위 예시는 [6][7][8]을 사용 — `local-vision`(§3의 [6] 예시)도 함께 쓴다면 [9]로 밀어야 합니다.
+- 인덱스는 활성 프로바이더 다음 번호부터 연속이어야 합니다. 위 예시의 [6][7][8]은 **외부 프로바이더를 쓰지 않는 배포 기준**이며, 기본 파일 그대로(활성 [0]~[8] = 로컬 3 + 외부 6)라면 증설분은 [9]부터 시작하고 `local-vision` 예시는 그만큼 더 밀어야 합니다.
 - 한쪽 티어의 한 대가 다운돼도 같은 티어 안에서 나머지가 흡수하고, 그래도 전멸하면 상위 티어(큰 모델)로 자동 폴백합니다(예제 6의 폴백 규칙 그대로 유지).
 
 ---

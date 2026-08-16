@@ -197,12 +197,13 @@ REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — �
 | POST | `/admin/settings/provider/toggle` | `fragments/settings-providers :: providers` | LLM 프로바이더 활성/비활성 토글(`name`, `enabled`) — `ProviderToggle`(메모리 전용, `settings_override`와 무관)이라 **재기동 시 초기화**됨. 이름이 같은 프로바이더는 함께 토글되고, 마지막 활성 프로바이더는 비활성화 거부(400). 감사 로그 기록 |
 
 - 핫 수정 가능 항목만 `key`를 받아 수정할 수 있다:
-  - **검색 튜닝**(다음 검색부터 반영) — 유사도 임계값·RRF 가중치/k·후보 배수·태그 후보 배수·멀티쿼리 최소 길이·재시도 시 후보 확대·topK·멀티쿼리 확장·하이브리드 검색·**큐레이션 가중치(좋아요)·지식 제안 가중치**
-  - **인덱싱/청킹**(다음 인덱싱/↺ 재인덱싱부터 반영) — 청크 크기·오버랩·최소 크기·동시 파일 처리 수·동시 LLM 호출 수
-  - **LLM**(다음 LLM 호출부터 반영, §6.18) — Direct 응답 temperature
+  - **검색 튜닝**(다음 검색부터 반영) — 유사도 임계값·RRF 가중치/k·후보 배수·태그 후보 배수·멀티쿼리 최소 길이·재시도 시 후보 확대·topK·멀티쿼리 확장·하이브리드 검색·**큐레이션 Q&A 사용 여부·큐레이션 가중치(좋아요)·지식 제안 가중치**
+  - **인덱싱/청킹**(다음 인덱싱/↺ 재인덱싱부터 반영) — 청크 크기·오버랩·최소 크기·**청크 분할 전략(`chunk-split-granular`)**·동시 파일 처리 수·동시 LLM 호출 수
+  - **LLM**(다음 LLM 호출부터 반영, §6.18) — **temperature 3종 전부**: 일반/RAG(`llm.temperature`, clamp `[0.0, 0.3]`)·Direct 응답(`llm.direct-temperature`, `[0.0, 1.0]`)·인덱싱/백그라운드(`llm.indexing-temperature`, `[0.0, 1.0]`). 각각 자기 계열의 다음 호출부터 반영된다
+  - **UI**(다음 페이지 렌더부터 반영) — 출처 미리보기 표시(`ui.source-preview-enabled`, 기본 ON). 끄면 채팅 출처 배지의 팝오버 미리보기(§4)가 사라진다
   - 그 외 키(조회 전용: `rerank-enabled`·쿼리 임베딩 캐시 등)는 400(`IllegalArgumentException`)으로 거부된다.
 - 값 검증 실패(범위 초과, 타입 불일치)도 400 — `GlobalExceptionHandler`가 처리.
-- 재기동이 필요한 값(rerank/hybrid 활성화, 벡터 스토어 백엔드, 임베딩 차원, 일반 temperature·max-tokens 등)과 기본 라우팅 모드는 조회 전용으로만 노출된다(§6.18로 일반 temperature·max-tokens는 실제 config 값을 반영해 표시).
+- 재기동이 필요한 값(rerank 활성화, 벡터 스토어 백엔드, 임베딩 설정, `max-tokens` 등)과 기본 라우팅 모드는 조회 전용으로만 노출된다. `max-tokens`는 프로바이더 빈 생성 시점에 `OpenAiChatOptions`로 구워지므로 핫 수정 대상이 아니다(§6.18 이후 실제 config 값을 반영해 표시만 한다).
 - **프로바이더 활성/비활성**(`/admin/settings/provider/toggle`)은 위 `key`/`value` 오버라이드 메커니즘과 별개다 — `settings_override`에 저장되지 않는 메모리 전용(`ProviderToggle`) 토글이라 **재기동하면 초기화**된다. LLM 라우팅 표의 각 행에서 관리자에게만 활성화/비활성화 버튼이 보인다. 표 본문 행 사이의 구분선은 CSS로 숨겨져 있다(`app.css`의 `#llm-providers tbody > tr > *`) — 헤더 밑줄만 남아 열 제목과 데이터를 구분한다.
 - **LOCAL_ONLY 배포에서는 NORMAL/PREMIUM 프로바이더가 표에서 통째로 숨겨진다**: `app.llm.default-routing-mode=LOCAL_ONLY`일 때 `SettingsService.visibleProviders()`가 `role != LOCAL`인 프로바이더를 필터링한다(`providerRows()`/`setProviderEnabled()` 둘 다 동일하게 적용) — NORMAL/PREMIUM 항목이 향후 모드 전환에 대비해 `application.properties`에 여전히 남아있을 수 있다. 숨겨진 프로바이더는 토글 엔드포인트로도 조작할 수 없다(이름이 "알 수 없는 프로바이더"로 거부됨) — 표시 범위와 조작 가능 범위가 항상 일치한다. (안내 배너·토글 휘발성 안내 문구는 UX 정리 차원에서 제거됨 — 동작 자체는 그대로.)
 - LLM 라우팅 카드는 `<hr>`로 두 구역을 나눈다: 위쪽은 라우팅 모드·temperature·max-tokens(LLM 자체), 아래쪽은 임베딩(모델·**접속 주소**(`settings.embeddingBaseUrl`, `app.embedding.base-url`/`EMBED_BASE_URL` 조회 전용)·차원). 임베딩 접속 주소는 채팅 LLM과 별도 엔드포인트일 수 있어(§6.21 로드밸런싱 등) 조회 전용으로만 노출된다.
@@ -260,12 +261,12 @@ REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — �
 - 제목(`text-truncate small`)과 날짜(`.thread-date.text-muted`, `font-size:0.72rem`)는 기존 스타일 유지.
 - **제목의 `[버전]` 접두사 제거**: `ThreadMetaService`는 여전히 `title` 컬럼에 `"[{version}] {summary}"`를
   그대로 저장한다(하위 호환, DB 마이그레이션 없음) — 화면에는 `ThreadMeta.displayTitle()`이 선행
-  `[..]` 브래킷을 정규식으로 잘라낸 값을 쓴다. 버전은 `ThreadMeta.version` 필드를 2행에서 직접 표시하므로
-  중복되지 않는다.
-- **태그는 스레드에 스냅샷 저장**: `thread_meta.tags`(`V3__thread_tags.sql`)는 그 스레드에서 **가장 최근에
-  보낸 메시지의 태그 선택**을 담는다 — `ChatController`가 `/ui/chat`·`/ui/chat/stream` 양쪽에서 매 전송마다
-  `ThreadMetaService.updateTags()`를 호출해 무조건 덮어쓴다(제목 생성과 달리 "커스텀이면 건너뛰기" 가드 없음).
-  `ThreadMeta.tagsDisplay()`가 CSV를 `"tag1, tag2"`로 재조인해 보여준다.
+  `[..]` 브래킷을 정규식으로 잘라낸 값을 쓴다. 버전은 사이드바에 따로 표시하지 않는다.
+- **태그는 스레드에 스냅샷 저장되지만 사이드바에 표시하지는 않는다**: `thread_meta.tags`(`V3__thread_tags.sql`)는
+  그 스레드에서 **가장 최근에 보낸 메시지의 태그 선택**을 담는다 — `ChatController`가 `/ui/chat`·`/ui/chat/stream`
+  양쪽에서 매 전송마다 `ThreadMetaService.updateTags()`를 호출해 무조건 덮어쓴다(제목 생성과 달리 "커스텀이면
+  건너뛰기" 가드 없음). 렌더링용 헬퍼 `ThreadMeta.tagsDisplay()`(CSV → `"tag1, tag2"`)는 남아 있으나 현재 어느
+  템플릿에서도 호출하지 않는다 — 2행 표시를 되돌리려면 이 헬퍼를 다시 쓰면 된다.
 
 ---
 
@@ -471,7 +472,13 @@ PROGRESSIVE 업그레이드 시 `🔝 고추론 재분석 → {premiumProvider}`
 
 ## 8. SSE 스트리밍
 
-`POST /ui/chat/stream` → `SseEmitter(180s)` → Virtual Thread에서 `StreamingAgentService.run()` 실행.
+`POST /ui/chat/stream` → `SseEmitter(props.sseTimeoutMs())` → Virtual Thread에서 `StreamingAgentService.run()` 실행.
+
+> **타임아웃은 두 겹이다**: `SseEmitter`에 들어가는 값은 활동 여부와 무관한 절대 상한
+> `app.sse-timeout-seconds`(`SSE_TIMEOUT_SECONDS`, 기본 **7200초** — 폭주 생성에 대한 백스톱일 뿐)이고,
+> 실제로 "멈춘 응답"을 끊는 건 `StreamingAgentService`가 직접 감시하는 무활동 타임아웃
+> `app.sse-idle-timeout-seconds`(`SSE_IDLE_TIMEOUT_SECONDS`, 기본 **300초**)다 — 노드 전환·토큰·
+> sources 이벤트가 올 때마다 리셋되므로 느리지만 계속 생성 중인 로컬 LLM 응답은 잘리지 않는다.
 
 ```
 stage(classifier) → stage(retrieval) → sources → stage(answer) → token × N
@@ -529,7 +536,7 @@ stage(classifier) → stage(retrieval) → sources → stage(answer) → token �
 | 테이블 넘침 | `documents.html` 두 테이블을 `.table-responsive`로 래핑(가로 페이지 스크롤 제거) |
 | 차트 넘침 | `llm-usage.html` 차트를 `height:280px` 컨테이너 + Chart.js `maintainAspectRatio:false` |
 | iOS 자동 확대 | `@media (max-width:767.98px)`에서 모든 폼 컨트롤 `font-size:16px` |
-| 출처 미리보기 팝오버 | `@media (min-width:768px)`에서 팝오버 폭 확대(`max-width:560px`, `<768px`는 기본값 유지) — 배경·수치는 [§4 출처 Hover 미리보기](#출처-hover-미리보기) 참고 |
+| 출처 미리보기 팝오버 | `@media (min-width:768px)`에서 팝오버 폭 확대(`max-width:620px`, `<768px`는 기본값 유지) — 배경·수치는 [§4 출처 Hover 미리보기](#출처-hover-미리보기) 참고 |
 
 > ⚠️ Bootstrap `.offcanvas-md`는 ≥md에서 `background-color:transparent!important`를 강제한다. 데스크톱 사이드바 배경은 `app.css`에서 `.sidebar.offcanvas-md { background-color: var(--bg-elevated) !important }`로 복구(라이트/다크 변수 일치).
 

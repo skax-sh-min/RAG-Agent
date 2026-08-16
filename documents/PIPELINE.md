@@ -126,9 +126,9 @@ COST_FIRST와 동일하되,
 >
 > `responseMode=S`에서는 CRITIC 노드가 실행되지 않는다. 따라서 해당 turn의 재시도는 ANSWER의 `sufficient=false` 조건으로만 결정된다.
 
-> **동시성 게이트**: ①~⑦ 모두 프로바이더별 동시성 게이트(`LlmRouter.executeGated()`, 서버의 실제 `--parallel` 값에 맞춘 `Semaphore`)를 거친다 — 여러 사용자의 질문이 겹쳐도 앱이 한 프로바이더에 동시 전송하는 요청 수는 이 한도를 넘지 않는다. 대기가 상한(기본 20초)을 넘으면 즉시 HTTP 429로 응답하고 재검색/재시도로 넘어가지 않는다. 문서 인덱싱의 LLM 호출(키워드 추출, MD 포맷 교정 등)은 이 게이트 대상이 아니며 기존 `INDEXING_MAX_LLM` 세마포어만 적용된다 — 상세는 [LLM_ROUTING.md §6](LLM_ROUTING.md#6-동시성-게이트--백프레셔) 참고.
+> **동시성 게이트**: ①~⑦ 모두 프로바이더별 동시성 게이트(`LlmRouter.executeGated()`, 서버의 실제 `--parallel` 값에 맞춘 `Semaphore`)를 거친다 — 여러 사용자의 질문이 겹쳐도 앱이 한 프로바이더에 동시 전송하는 요청 수는 이 한도를 넘지 않는다. 대기가 상한(`app.llm.permit-wait-timeout-seconds`, 기본 60초)을 넘으면 즉시 HTTP 429로 응답하고 재검색/재시도로 넘어가지 않는다. 문서 인덱싱의 LLM 호출(키워드 추출, MD 포맷 교정 등)은 이 게이트 대상이 아니며 기존 `INDEXING_MAX_LLM` 세마포어만 적용된다 — 상세는 [LLM_ROUTING.md §6](LLM_ROUTING.md#6-동시성-게이트--백프레셔) 참고.
 
-> **태스크별 모델 분리(§6.21)**: ③ 쿼리 다양화와 인덱싱 잡무(키워드+맥락 추출·대화 요약·제목 생성)는 `TaskType.MICRO_TEXT`로 라우팅된다 — `type=MICRO_TEXT` 소형 프로바이더를 등록하면 이 추론 불필요 잡무만 500MB급 소형 모델로 오프로딩되고, 분류(①, `LIGHT_TEXT`)·직답(②)·답변(④)·통합 평가(⑤) 등 품질 민감·고추론 호출은 큰 모델(`type=BOTH`)이 전담한다. 소형 미등록 시 큰 모델이 흡수(회귀 0). 상세는 [LLM_ROUTING.md §9](LLM_ROUTING.md).
+> **태스크별 모델 분리(§6.21)**: ③ 쿼리 다양화와 인덱싱 잡무(키워드+맥락 추출·대화 요약·제목 생성)는 `TaskType.MICRO_TEXT`로 라우팅된다 — `type=MICRO_TEXT` 소형 프로바이더를 등록하면 이 추론 불필요 잡무만 500MB급 소형 모델로 오프로딩되고, 분류(①)·직답(②)·답변(④)·통합 평가(⑤) 등 품질 민감·고추론 호출은 전부 `TaskType.TEXT`로 묶여 큰 모델(`type=TEXT`/`BOTH`)이 전담한다. 소형 미등록 시 큰 모델이 흡수(회귀 0). 상세는 [LLM_ROUTING.md §9](LLM_ROUTING.md).
 
 ### 4.1 `app.llm.max-tokens`(`LLM_MAX_TOKENS`) 크기 산정 — 로컬 LLM 컨텍스트 윈도우와의 관계
 
