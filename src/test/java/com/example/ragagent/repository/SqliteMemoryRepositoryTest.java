@@ -196,4 +196,51 @@ class SqliteMemoryRepositoryTest {
         repo.updateFeedback(UID, "t1", id, null); // clear
         assertThat(repo.getFeedback(UID, "t1", id).get().feedback()).isNull();
     }
+
+    // ── 검색 진단 수치 영속 (3단계) ────────────────────────────────────────────
+
+    @Test
+    @DisplayName("저장한 진단 수치가 최신순으로 조회되고, 수치 없는 턴은 목록에 끼지 않는다")
+    void retrievalMetricsStoredAndListedNewestFirst() {
+        long withMetrics1 = repo.addTurn(UID, "t1", "Q1", "A1", "2026-08-16 10:00:00", 0, 0, 0, "local", 0, "M", null);
+        long noMetrics    = repo.addTurn(UID, "t1", "Q2", "A2", "2026-08-16 10:01:00", 0, 0, 0, "local", 0, "M", null);
+        long withMetrics2 = repo.addTurn(UID, "t1", "Q3", "A3", "2026-08-16 10:02:00", 0, 0, 0, "local", 0, "S", null);
+
+        repo.saveRetrievalMetrics(withMetrics1, "[{\"label\":\"a\"}]");
+        repo.saveRetrievalMetrics(withMetrics2, "[{\"label\":\"b\"}]");
+
+        assertThat(repo.countRetrievalMetrics()).isEqualTo(2);
+
+        var rows = repo.findRecentRetrievalMetrics(0, 10);
+        assertThat(rows).hasSize(2);
+        assertThat(rows.get(0).turnId()).isEqualTo(withMetrics2);   // 최신순
+        assertThat(rows.get(0).responseMode()).isEqualTo("S");
+        assertThat(rows.get(0).metricsJson()).isEqualTo("[{\"label\":\"b\"}]");
+        assertThat(rows).noneMatch(r -> r.turnId() == noMetrics);
+    }
+
+    @Test
+    @DisplayName("null/빈 JSON 저장은 no-op — 빈 행이 관리자 패널에 생기지 않는다")
+    void blankMetricsAreNoOp() {
+        long id = repo.addTurn(UID, "t1", "Q", "A", null, 0, 0, 0, null, 0, "M", null);
+
+        repo.saveRetrievalMetrics(id, null);
+        repo.saveRetrievalMetrics(id, "   ");
+
+        assertThat(repo.countRetrievalMetrics()).isZero();
+        assertThat(repo.findRecentRetrievalMetrics(0, 10)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("진단 수치 조회는 offset/limit 페이지네이션을 지킨다")
+    void retrievalMetricsPaginate() {
+        for (int i = 0; i < 5; i++) {
+            long id = repo.addTurn(UID, "t1", "Q" + i, "A" + i, null, 0, 0, 0, null, 0, "M", null);
+            repo.saveRetrievalMetrics(id, "[{\"label\":\"s" + i + "\"}]");
+        }
+
+        assertThat(repo.findRecentRetrievalMetrics(0, 2)).hasSize(2);
+        assertThat(repo.findRecentRetrievalMetrics(4, 10)).hasSize(1);
+        assertThat(repo.findRecentRetrievalMetrics(99, 10)).isEmpty();
+    }
 }

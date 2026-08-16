@@ -15,6 +15,7 @@ import com.example.ragagent.model.VectorStoreAdminView;
 import com.example.ragagent.service.AdminService;
 import com.example.ragagent.service.CuratedQaService;
 import com.example.ragagent.service.CuratedSubmissionService;
+import com.example.ragagent.service.RetrievalMetricsService;
 import com.example.ragagent.service.DocumentExportService;
 import com.example.ragagent.service.IndexingProgressService;
 import com.example.ragagent.service.RagService;
@@ -133,6 +134,7 @@ class ManagementOnlyAuthorizationTest {
     @MockitoBean AdminService adminService;
     @MockitoBean CuratedQaService curatedQaService;
     @MockitoBean CuratedSubmissionService submissionService;
+    @MockitoBean RetrievalMetricsService retrievalMetricsService;
     // 본문 이미지 업로드 엔드포인트의 협력자 — @WebMvcTest 는 @Service 를 스캔하지 않으므로
     // 명시하지 않으면 CuratedSubmissionController 생성이 실패해 컨텍스트 로드가 깨진다.
     @MockitoBean com.example.ragagent.service.CuratedImageStore curatedImageStore;

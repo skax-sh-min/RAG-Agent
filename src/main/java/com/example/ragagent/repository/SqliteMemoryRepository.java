@@ -72,7 +72,12 @@ public class SqliteMemoryRepository implements MemoryRepository {
                 "ALTER TABLE conversation_turns ADD COLUMN response_mode TEXT",
                 "ALTER TABLE conversation_turns ADD COLUMN selected_tags TEXT",
             "ALTER TABLE conversation_turns ADD COLUMN reused_from_turn_id INTEGER",
-            "ALTER TABLE conversation_turns ADD COLUMN direct_mode INTEGER NOT NULL DEFAULT 0"
+            "ALTER TABLE conversation_turns ADD COLUMN direct_mode INTEGER NOT NULL DEFAULT 0",
+            // 3단계 — 그 턴의 출처별 검색 진단 수치 + 응답 참여도를 JSON 배열로 보관한다.
+            // 정규화 테이블 대신 blob 하나인 이유: 읽는 쪽이 /admin 진단 패널 하나뿐이고 항상
+            // "턴 하나의 출처 전부"를 통째로 꺼내므로 조인할 이유가 없다. 스키마도 SourceRef를
+            // 따라가야 하는데(필드가 늘어날 수 있다) 컬럼으로 고정하면 그때마다 마이그레이션이다.
+            "ALTER TABLE conversation_turns ADD COLUMN retrieval_metrics TEXT"
         )) {
             try { jdbc.execute(ddl); } catch (Exception ignored) {}
         }
@@ -292,5 +297,36 @@ public class SqliteMemoryRepository implements MemoryRepository {
         jdbc.update(
                 "UPDATE conversation_turns SET feedback = ? WHERE id = ? AND user_id = ? AND thread_id = ?",
                 feedback, turnId, userId, threadId);
+    }
+
+    @Override
+    public void saveRetrievalMetrics(long turnId, String metricsJson) {
+        if (metricsJson == null || metricsJson.isBlank()) return;
+        jdbc.update("UPDATE conversation_turns SET retrieval_metrics = ? WHERE id = ?",
+                metricsJson, turnId);
+    }
+
+    @Override
+    public List<MetricsRow> findRecentRetrievalMetrics(int offset, int limit) {
+        return jdbc.query(
+                "SELECT id, asked_at, question, response_mode, provider, retrieval_metrics " +
+                "FROM conversation_turns WHERE retrieval_metrics IS NOT NULL " +
+                "ORDER BY id DESC LIMIT ? OFFSET ?",
+                (rs, n) -> new MetricsRow(
+                        rs.getLong("id"),
+                        rs.getString("asked_at"),
+                        rs.getString("question"),
+                        rs.getString("response_mode"),
+                        rs.getString("provider"),
+                        rs.getString("retrieval_metrics")),
+                limit, offset);
+    }
+
+    @Override
+    public int countRetrievalMetrics() {
+        Integer n = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM conversation_turns WHERE retrieval_metrics IS NOT NULL",
+                Integer.class);
+        return n == null ? 0 : n;
     }
 }

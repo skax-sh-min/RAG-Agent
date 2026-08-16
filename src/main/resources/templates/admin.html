@@ -244,11 +244,33 @@
         </div>
     </details>
 
+    <!-- 3단계 검색 진단 수치 — 페이지 최하단. 조치를 기다리는 대기열(제안)도, 이미 반영된 것을
+         확인하는 용도(큐레이션)도 아닌 순수 분석 뷰라 가장 아래에 둔다. 동일한 지연 로딩 패턴. -->
+    <details class="card mt-4" id="retrieval-metrics-card"
+              hx-get="/admin/retrieval-metrics" hx-trigger="toggle[this.open] once"
+              hx-target="#retrieval-metrics-body" hx-swap="innerHTML">
+        <summary class="card-header d-flex align-items-center py-2" style="cursor:pointer; list-style:none;">
+            <i class="bi bi-speedometer2 me-2"></i>
+            <span class="fw-semibold small">검색 진단 수치</span>
+            <span class="ms-auto small text-muted d-flex align-items-center gap-1">
+                턴별 유사도·검색기여도·응답참여도 — 검색 튜닝용 — 펼치면 조회
+                <i class="bi bi-chevron-down curated-qa-chevron"></i>
+            </span>
+        </summary>
+        <div id="retrieval-metrics-body">
+            <div class="card-body text-center text-muted py-4 small">
+                <span class="spinner-border spinner-border-sm me-2"></span>불러오는 중...
+            </div>
+        </div>
+    </details>
+
     <style>
         #curated-qa-card > summary::-webkit-details-marker { display: none; }
         #curated-qa-card[open] .curated-qa-chevron { transform: rotate(180deg); }
         #submission-card > summary::-webkit-details-marker { display: none; }
         #submission-card[open] .curated-qa-chevron { transform: rotate(180deg); }
+        #retrieval-metrics-card > summary::-webkit-details-marker { display: none; }
+        #retrieval-metrics-card[open] .curated-qa-chevron { transform: rotate(180deg); }
         .curated-qa-chevron { transition: transform .15s ease; }
 
         /* 청크 편집 오프캔버스의 좌측 미리보기 컬럼 (넓은 화면에서만 렌더링됨) */
@@ -712,6 +734,18 @@ function loadCurated(offset, limit) {
     fetch('/admin/curated?offset=' + offset + '&limit=' + limit, { headers: { 'HX-Request': 'true' } })
         .then(r => r.text())
         .then(html => { document.getElementById('curated-qa-body').innerHTML = html; });
+}
+
+/* 3단계 검색 진단 수치 패널 — 큐레이션 패널과 같은 이유로 페이지 레벨에 둔다:
+   재조회가 plain innerHTML 삽입이라 프래그먼트에 넣은 <script>는 실행되지 않는다. */
+function applyMetricsLimitFilter(sel) {
+    loadRetrievalMetrics(0, +sel.value);
+}
+
+function loadRetrievalMetrics(offset, limit) {
+    fetch('/admin/retrieval-metrics?offset=' + offset + '&limit=' + limit, { headers: { 'HX-Request': 'true' } })
+        .then(r => r.text())
+        .then(html => { document.getElementById('retrieval-metrics-body').innerHTML = html; });
 }
 
 function deleteCuratedInline(id, btn) {

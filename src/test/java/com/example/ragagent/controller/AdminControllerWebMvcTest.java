@@ -12,6 +12,7 @@ import com.example.ragagent.service.AdminService;
 import com.example.ragagent.service.AdminService.CollectionsResult;
 import com.example.ragagent.service.CuratedQaService;
 import com.example.ragagent.service.CuratedSubmissionService;
+import com.example.ragagent.service.RetrievalMetricsService;
 import com.example.ragagent.service.IndexingProgressService;
 import com.example.ragagent.service.RagService;
 import org.junit.jupiter.api.BeforeEach;
@@ -66,6 +67,7 @@ class AdminControllerWebMvcTest {
     @MockitoBean IndexingProgressService progressService;
     @MockitoBean CuratedQaService curatedQaService;
     @MockitoBean CuratedSubmissionService submissionService;
+    @MockitoBean RetrievalMetricsService retrievalMetricsService;
     @MockitoBean CurrentUser currentUser;             // 승인/거부 시 reviewer id
     @MockitoBean AppProperties props;                 // SecurityConfig 의존
     @MockitoBean ThreadContextResolver threadContextResolver;

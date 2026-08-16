@@ -215,6 +215,7 @@ public class StreamingAgentService {
                     form.responseModeOrDefault().name(), TagUtils.toMetaValue(form.selectedTags()),
                     form.isDirectMode());
                 memoryService.saveTurnImageRefs(turnId, userId, form.threadId(), result.imageRefs());
+                memoryService.saveRetrievalMetrics(turnId, result.sources());
                 if (questionReuseService != null) {
                     questionReuseService.recordTurnSources(turnId, userId, form.threadId(), result.retrievedDocs());
                 }
