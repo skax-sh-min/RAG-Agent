@@ -246,4 +246,85 @@ class RetrievalServiceRrfTest {
 
         assertThat(ids(withEmptyAxis)).isEqualTo(ids(legacy));
     }
+
+    // ── 검색 진단 수치 (1단계) ──────────────────────────────────────────────
+
+    private static Document scored(String id, double score) {
+        return Document.builder()
+                .text("content-" + id)
+                .metadata(Map.of("filename", id, "page_or_slide", "1"))
+                .score(score)
+                .build();
+    }
+
+    @Test
+    @DisplayName("메트릭 수집이 순위를 바꾸지 않는다 — mergeRrf와 mergeRrfScored의 문서 순서 동일")
+    void scoredVariant_rankingIsIdentical() {
+        List<List<Document>> vectorRanked = List.of(List.of(doc("a"), doc("b")), List.of(doc("c")));
+        List<Document> keyword = List.of(doc("b"), doc("d"));
+
+        List<Document> plain = RetrievalService.mergeRrf(
+                vectorRanked, keyword, List.of(), List.of(), 4, 60, 1.0, 1.2, 1.5);
+        RetrievalService.RrfResult scored = RetrievalService.mergeRrfScored(
+                vectorRanked, keyword, List.of(), List.of(), 4, 60, 1.0, 1.2, 1.5);
+
+        assertThat(ids(scored.docs())).isEqualTo(ids(plain));
+    }
+
+    @Test
+    @DisplayName("키워드 축이 먼저 도달한 청크도 벡터 유사도를 잃지 않는다")
+    void keywordAxisDoesNotBlankOutVectorSimilarity() {
+        // 같은 청크가 키워드 축 1위, 벡터 축 2위. 키워드 축 Document에는 score가 없다(BM25는
+        // 거리값을 만들지 않음) — putIfAbsent였다면 유사도가 통째로 사라지던 자리.
+        Document keywordSide = doc("shared");           // score 없음
+        Document vectorSide  = scored("shared", 0.83);  // score 있음
+
+        RetrievalService.RrfResult r = RetrievalService.mergeRrfScored(
+                List.of(List.of(scored("other", 0.9), vectorSide)),
+                List.of(keywordSide),
+                List.of(), List.of(), 5, 60, 1.0, 0.0, 0.0);
+
+        String key = RetrievalService.docKey(vectorSide);
+        assertThat(r.metrics().get(key).vectorSimilarity()).isEqualTo(0.83);
+        assertThat(r.metrics().get(key).axisRanks()).isEqualTo("vec:2, bm25:1");
+    }
+
+    @Test
+    @DisplayName("여러 벡터 축(MultiQuery)에 걸친 청크는 최고 유사도·최선 순위를 취한다")
+    void multipleVectorAxes_takeBestSimilarityAndRank() {
+        RetrievalService.RrfResult r = RetrievalService.mergeRrfScored(
+                List.of(List.of(doc("x"), scored("a", 0.55)),   // a: 2위, 0.55
+                        List.of(scored("a", 0.71))),            // a: 1위, 0.71
+                List.of(), List.of(), List.of(), 5, 60, 1.0, 0.0, 0.0);
+
+        var m = r.metrics().get(RetrievalService.docKey(doc("a")));
+        assertThat(m.vectorSimilarity()).isEqualTo(0.71);
+        assertThat(m.axisRanks()).isEqualTo("vec:1");
+    }
+
+    @Test
+    @DisplayName("벡터 축에 없던 청크는 유사도가 null — 0.0이 아니다")
+    void keywordOnlyChunk_hasNullSimilarity() {
+        RetrievalService.RrfResult r = RetrievalService.mergeRrfScored(
+                List.of(List.of(scored("a", 0.9))),
+                List.of(doc("kw-only")),
+                List.of(), List.of(), 5, 60, 1.0, 0.0, 0.0);
+
+        var m = r.metrics().get(RetrievalService.docKey(doc("kw-only")));
+        assertThat(m.vectorSimilarity()).isNull();
+        assertThat(m.axisRanks()).isEqualTo("bm25:1");
+    }
+
+    @Test
+    @DisplayName("RRF 점수는 축 가중치를 반영하고, 상위 문서가 더 높은 점수를 갖는다")
+    void rrfScoresAreOrderedAndWeighted() {
+        RetrievalService.RrfResult r = RetrievalService.mergeRrfScored(
+                List.of(List.of(doc("a"), doc("b"))),
+                List.of(), List.of(), List.of(), 5, 60, 1.0, 0.0, 0.0);
+
+        double a = r.metrics().get(RetrievalService.docKey(doc("a"))).rrfScore();
+        double b = r.metrics().get(RetrievalService.docKey(doc("b"))).rrfScore();
+        assertThat(a).isGreaterThan(b);
+        assertThat(a).isEqualTo(1.0 / 61);
+    }
 }

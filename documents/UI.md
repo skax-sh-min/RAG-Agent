@@ -200,7 +200,7 @@ REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — �
   - **검색 튜닝**(다음 검색부터 반영) — 유사도 임계값·RRF 가중치/k·후보 배수·태그 후보 배수·멀티쿼리 최소 길이·재시도 시 후보 확대·topK·멀티쿼리 확장·하이브리드 검색·**큐레이션 Q&A 사용 여부·큐레이션 가중치(좋아요)·지식 제안 가중치**
   - **인덱싱/청킹**(다음 인덱싱/↺ 재인덱싱부터 반영) — 청크 크기·오버랩·최소 크기·**청크 분할 전략(`chunk-split-granular`)**·동시 파일 처리 수·동시 LLM 호출 수
   - **LLM**(다음 LLM 호출부터 반영, §6.18) — **temperature 3종 전부**: 일반/RAG(`llm.temperature`, clamp `[0.0, 0.3]`)·Direct 응답(`llm.direct-temperature`, `[0.0, 1.0]`)·인덱싱/백그라운드(`llm.indexing-temperature`, `[0.0, 1.0]`). 각각 자기 계열의 다음 호출부터 반영된다
-  - **UI**(다음 페이지 렌더부터 반영) — 출처 미리보기 표시(`ui.source-preview-enabled`, 기본 ON). 끄면 채팅 출처 배지의 팝오버 미리보기(§4)가 사라진다
+  - **UI**(다음 페이지 렌더부터 반영) — 출처 미리보기 표시(`ui.source-preview-enabled`, 기본 ON). 끄면 채팅 출처 배지의 팝오버 미리보기(§4)가 사라진다. **출처 검색 수치 표시**(`ui.retrieval-metrics-enabled`, 기본 **OFF**) — 켜면 출처마다 `유사도 0.72 · 검색 18% · vec:2, bm25:5`가 붙는다(§4 "출처 검색 진단 수치")
   - 그 외 키(조회 전용: `rerank-enabled`·쿼리 임베딩 캐시 등)는 400(`IllegalArgumentException`)으로 거부된다.
 - 값 검증 실패(범위 초과, 타입 불일치)도 400 — `GlobalExceptionHandler`가 처리.
 - 재기동이 필요한 값(rerank 활성화, 벡터 스토어 백엔드, 임베딩 설정, `max-tokens` 등)과 기본 라우팅 모드는 조회 전용으로만 노출된다. `max-tokens`는 프로바이더 빈 생성 시점에 `OpenAiChatOptions`로 구워지므로 핫 수정 대상이 아니다(§6.18 이후 실제 config 값을 반영해 표시만 한다).
@@ -352,6 +352,22 @@ PROGRESSIVE 업그레이드 시 `🔝 고추론 재분석 → {premiumProvider}`
 **출처 라벨 형식**: `RetrievalService.formatSource()`가 청크 메타데이터의 `chapter_no`(H2~H6 헤딩 기반 계층 번호, 예: `1.5.3`)가 "0"이 아니면 `"파일명 | 1.5.3"`, 아니면(프롤로그·PPTX·비스캔 PDF — 이 세 경우는 chapter_no가 항상 "0") `page_or_slide`로 폴백해 `"파일명 | p.12"`로 표시한다 — 문서 버전은 라벨에 포함되지 않는다. **큐레이션 Q&A**(§10.10, 좋아요로 승격된 답변)가 출처로 포함된 경우엔 파일명·페이지가 없으므로 `"💬 큐레이션 Q&A"` 고정 라벨로 표시된다.
 
 출처 목록 항목에 Bootstrap Popover (`hover focus` 트리거). `SourceRef.preview`에 청크 텍스트 앞 600자 포함.
+
+### 출처 검색 진단 수치 (1단계)
+
+`ui.retrieval-metrics-enabled`(기본 **OFF**, §3.5)를 켜면 출처마다 세 값이 붙는다 — **"왜 이 청크가 검색됐는가"를 설명하는 값이지, 답변에 얼마나 쓰였는지가 아니다**.
+
+| 값 | `SourceRef` 필드 | 의미 |
+|---|---|---|
+| `유사도 0.72` | `similarity` | 질의와의 코사인 유사도(`1 - distance`). 벡터 축에 없던 청크는 **null**(0.0 아님) |
+| `검색 18%` | `retrievalShare` | 가중 RRF 점수 ÷ 최종 컷 전체 합. 후보 풀이 아니라 **답변 노드가 실제로 받은 문서들** 기준으로 정규화 |
+| `vec:2, bm25:5` | `axisRanks` | 축별 순위. 여러 MultiQuery 벡터 축에 걸치면 **최선 순위** |
+
+- **`retrievalShare`는 순위 기반이라 의도적으로 평평하다** — RRF가 `w/(rank+1+k)`이고 k 기본값이 60이라 1위(0.0164)와 8위(0.0145)의 차이가 작다. 변별력은 `similarity` 쪽에서 봐야 하며, 실제 진단에 가장 쓸모 있는 건 `axisRanks`다("벡터 12위인데 BM25 1위라 올라옴" → `SEARCH_RRF_KEYWORD_WEIGHT` 조정 근거).
+- **null은 "측정 안 됨"이지 0이 아니다.** BM25/큐레이션 축에만 걸린 청크는 유사도가 없고, 쿼리 확장 LLM 호출이 실패해 폴백 경로로 빠진 턴은 RRF 자체를 건너뛰어 share·순위가 전부 없다. 세 표시 지점 모두 해당 항목만 생략한다.
+- 수치는 `RetrievalService.mergeRrfScored()`가 융합 부산물로 계산하며 **LLM·임베딩 추가 호출이 0회**다. 기존 `mergeRrf()` 오버로드는 이 메서드에 위임 후 메트릭을 버리므로 랭킹 동작은 완전히 동일하다(`RetrievalServiceRrfTest`가 두 경로의 문서 순서 일치를 검증).
+- 메트릭은 `Document` 메타데이터가 아니라 `docKey` 기준 **사이드 맵**으로 나른다 — 검색 결과 문서는 답변 프롬프트와 (큐레이션·관리자 경로에서는) 벡터 스토어로 다시 흘러가므로, `MetaKey.SEARCH_TEXT`처럼 "영속 전 제거해야 하는 임시 키"를 하나 더 만들지 않기 위함이다. 태그 필터·리랭크가 문서 목록을 재구성해도 살아남는다는 이점도 있다.
+- 전달: REST `ChatResponse.sources[]`와 SSE `sources` 이벤트는 토글과 무관하게 **항상** 세 필드를 싣는다(`similarity`/`retrieval_share`/`axis_ranks`) — 토글은 렌더링만 막는다. 서버 렌더 경로(`message-assistant.html`)는 값을 `.source-metrics.d-none`으로 항상 그려두고 `window.isRetrievalMetricsEnabled()`가 `d-none`을 벗기며, 스트리밍 경로(`chat-stream.js`)는 애초에 켜졌을 때만 만든다.
 
 **팝오버 크기 (`app.css`, ≥768px 전용)**: Bootstrap 기본값(`max-width: 276px`, `font-size: 0.875rem`)은 미리보기가 세로로 길게 줄바꿈되어 가독성이 떨어졌다 — `max-width: 620px`(약 2배), `font-size: 0.8rem`으로 넓히고 살짝 줄여 같은 600자가 더 적은 줄로 읽기 좋게 표시된다. `@media (min-width: 768px)` 블록 안에 있어 모바일(<768px)은 Bootstrap 기본값 그대로 — 좁은 화면에서 팝오버를 더 넓히면 화면 밖으로 넘칠 여지가 있기 때문.
 

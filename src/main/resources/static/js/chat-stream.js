@@ -281,19 +281,33 @@
         container.innerHTML = `<div class="mt-2 d-flex flex-wrap gap-2">${thumbs}</div>`;
     }
 
+    /* 검색 진단 수치 — null은 "측정 안 됨"이지 0이 아니므로 해당 항목만 생략한다.
+       (벡터 축에 없던 청크는 유사도가 없고, 확장 실패 폴백 경로는 RRF 자체를 건너뛴다) */
+    function renderSourceMetrics(s) {
+        const parts = [];
+        if (typeof s.similarity === 'number')      parts.push(`유사도 ${s.similarity.toFixed(2)}`);
+        if (typeof s.retrieval_share === 'number') parts.push(`검색 ${Math.round(s.retrieval_share * 100)}%`);
+        if (s.axis_ranks)                          parts.push(escHtml(s.axis_ranks));
+        if (parts.length === 0) return '';
+        return `<span class="source-metrics text-muted me-2" style="font-size:0.72rem;">${parts.join(' · ')}</span>`;
+    }
+
     function onSources(bubbleId, sources) {
         const container = document.getElementById(`stream-sources-${bubbleId}`);
         if (!container || !sources || sources.length === 0) return;
         const previewEnabled = typeof window.isSourcePreviewEnabled === 'function'
             ? window.isSourcePreviewEnabled()
             : true;
+        const metricsEnabled = typeof window.isRetrievalMetricsEnabled === 'function'
+            && window.isRetrievalMetricsEnabled();
         const refs = sources.map(s => {
             const label = escHtml(s.label || '출처');
             const previewAttr = previewEnabled
                 ? `data-bs-toggle="popover" data-bs-trigger="hover focus" data-bs-placement="top" data-preview-md="${escHtml(s.preview || '')}"`
                 : '';
             const chunkIdAttr = s.chunk_id ? `data-chunk-id="${escHtml(s.chunk_id)}"` : '';
-            return `<a href="#" class="source-ref badge bg-secondary text-decoration-none me-1 mb-1" ${previewAttr} ${chunkIdAttr} title="${label}">${label}</a>`;
+            const badge = `<a href="#" class="source-ref badge bg-secondary text-decoration-none me-1 mb-1" ${previewAttr} ${chunkIdAttr} title="${label}">${label}</a>`;
+            return metricsEnabled ? badge + renderSourceMetrics(s) : badge;
         }).join('');
         container.innerHTML = `<div class="mt-2">${refs}</div>`;
         if (previewEnabled) {

@@ -88,7 +88,8 @@ public class SettingsService implements AppProperties.OverrideSource {
 
         // Insertion order = render order in the "UI" group. Apply on next page render.
         private static final List<Spec> UI_HOT_SPECS = List.of(
-            new Spec(SettingsKeys.UI_SOURCE_PREVIEW_ENABLED,      Kind.BOOL,   0,   0,    0,    "settings.item.source-preview-enabled")
+            new Spec(SettingsKeys.UI_SOURCE_PREVIEW_ENABLED,      Kind.BOOL,   0,   0,    0,    "settings.item.source-preview-enabled"),
+            new Spec(SettingsKeys.UI_RETRIEVAL_METRICS_ENABLED,   Kind.BOOL,   0,   0,    0,    "settings.item.retrieval-metrics-enabled")
         );
 
     private static final Map<String, Spec> SPECS;
@@ -424,6 +425,17 @@ public class SettingsService implements AppProperties.OverrideSource {
         return o == null || o;
     }
 
+    /**
+     * Shows per-chunk retrieval diagnostics (유사도 · 검색기여도 · 축별 순위) in the chat source
+     * list. Default <b>OFF</b> — the numbers are a tuning aid, not something a reader of an answer
+     * needs, and they invite over-reading (a high similarity with no bearing on the answer is
+     * normal). The REST/SSE payload carries them regardless; this only gates the rendering.
+     */
+    public boolean retrievalMetricsEnabled() {
+        Boolean o = parseBool(cache.get(SettingsKeys.UI_RETRIEVAL_METRICS_ENABLED));
+        return o != null && o;
+    }
+
     private static Boolean parseBool(String value) {
         if (value == null || value.isBlank()) return null;
         if (value.equalsIgnoreCase("true")) return Boolean.TRUE;
@@ -476,6 +488,7 @@ public class SettingsService implements AppProperties.OverrideSource {
             case SettingsKeys.LLM_DIRECT_TEMPERATURE          -> trimNum(props.llmSafe().directTemperature());
             case SettingsKeys.LLM_INDEXING_TEMPERATURE        -> trimNum(props.llmSafe().indexingTemperature());
             case SettingsKeys.UI_SOURCE_PREVIEW_ENABLED       -> Boolean.toString(sourcePreviewEnabled());
+            case SettingsKeys.UI_RETRIEVAL_METRICS_ENABLED    -> Boolean.toString(retrievalMetricsEnabled());
             default -> "";
         };
     }

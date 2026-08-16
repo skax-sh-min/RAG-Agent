@@ -397,6 +397,10 @@
     window.isSourcePreviewEnabled = function () {
         return !!SOURCE_PREVIEW_ENABLED;
     };
+    const RETRIEVAL_METRICS_ENABLED = /*[[${retrievalMetricsEnabled}]]*/ false;
+    window.isRetrievalMetricsEnabled = function () {
+        return !!RETRIEVAL_METRICS_ENABLED;
+    };
     const imageModalEl = document.getElementById('chatImageModal');
     const imageModal = imageModalEl ? bootstrap.Modal.getOrCreateInstance(imageModalEl) : null;
     const imageModalImg = document.getElementById('chat-image-modal-img');

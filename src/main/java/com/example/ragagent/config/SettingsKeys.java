@@ -60,6 +60,7 @@ public final class SettingsKeys {
 
     // ── UI (apply on next page render) ───────────────────────────────────────
     public static final String UI_SOURCE_PREVIEW_ENABLED      = "ui.source-preview-enabled";
+    public static final String UI_RETRIEVAL_METRICS_ENABLED   = "ui.retrieval-metrics-enabled";
 
     /** All hot-editable keys, in the order they are grouped on the settings page. */
     public static final List<String> HOT_EDITABLE = List.of(
@@ -85,6 +86,7 @@ public final class SettingsKeys {
             LLM_TEMPERATURE,
             LLM_DIRECT_TEMPERATURE,
             LLM_INDEXING_TEMPERATURE,
-            UI_SOURCE_PREVIEW_ENABLED
+            UI_SOURCE_PREVIEW_ENABLED,
+            UI_RETRIEVAL_METRICS_ENABLED
     );
 }

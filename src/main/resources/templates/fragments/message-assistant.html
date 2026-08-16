@@ -69,6 +69,16 @@
                                 data-bs-trigger='hover focus',
                                 data-bs-placement='left',
                                 data-preview-md=${src.preview}"></a>
+                    <!-- 검색 진단 수치: 항상 렌더하되 기본 숨김 — ui.retrieval-metrics-enabled가
+                         켜져 있을 때만 하단 스크립트가 d-none을 벗긴다(스트리밍 경로와 동일 규칙). -->
+                    <span class="source-metrics text-muted d-none" style="font-size:0.72rem;"
+                          th:if="${src.similarity != null or src.retrievalShare != null}">
+                        <span th:if="${src.similarity != null}"
+                              th:text="'유사도 ' + ${#numbers.formatDecimal(src.similarity, 1, 2)}"></span>
+                        <span th:if="${src.retrievalShare != null}"
+                              th:text="' · 검색 ' + ${#numbers.formatDecimal(src.retrievalShare * 100, 1, 0)} + '%'"></span>
+                        <span th:if="${src.axisRanks != null}" th:text="' · ' + ${src.axisRanks}"></span>
+                    </span>
                 </li>
             </ul>
         </details>
@@ -129,6 +139,15 @@
             el.removeAttribute('data-bs-trigger');
             el.removeAttribute('data-bs-placement');
             el.removeAttribute('data-preview-md');
+        });
+    }
+
+    /* 검색 진단 수치 노출 — 기본 숨김, ui.retrieval-metrics-enabled가 켜진 경우에만 보인다.
+       서버 렌더/HTMX 프래그먼트 양쪽에서 같은 헬퍼를 쓰므로 모델 속성을 프래그먼트로
+       내려보낼 필요가 없다(위 출처 미리보기 토글과 동일 패턴). */
+    if (typeof window.isRetrievalMetricsEnabled === 'function' && window.isRetrievalMetricsEnabled()) {
+        document.querySelectorAll('.source-metrics.d-none').forEach(function (el) {
+            el.classList.remove('d-none');
         });
     }
 

@@ -370,5 +370,6 @@ public class ChatController {
         model.addAttribute("localOnlyDeployment", llmRouter.getDefaultMode() == RoutingMode.LOCAL_ONLY);
         model.addAttribute("routingMode", meta != null ? meta.routingMode() : "COST_FIRST");
         model.addAttribute("sourcePreviewEnabled", settingsService.sourcePreviewEnabled());
+        model.addAttribute("retrievalMetricsEnabled", settingsService.retrievalMetricsEnabled());
     }
 }
