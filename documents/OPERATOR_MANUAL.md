@@ -35,6 +35,7 @@ RAG Agent 시스템 배포·설정·운영 가이드입니다.
    - 6.1 [대화 메모리](#61-대화-메모리)
    - 6.2 [문서 버전 관리](#62-문서-버전-관리)
    - 6.3 [데이터 영속성](#63-데이터-영속성)
+      - 6.3.1 [SQLite 파일별 테이블 구성](#631-sqlite-파일별-테이블-구성)
    - 6.4 [성능](#64-성능)
    - 6.5 [설정 페이지 (/settings) — LLM/RAG 옵션 조회·핫 수정](#65-설정-페이지-settings--llmrag-옵션-조회핫-수정)
    - 6.6 [검색 품질 평가 하네스 (개발자용)](#66-검색-품질-평가-하네스-개발자용)
@@ -1793,11 +1794,49 @@ curl -X POST http://localhost:8080/api/v1/chat \
 | DOCX 변환 MD (교정본) | `DATA_DIR/converted/{docId}_corrected.md` | LLM 포맷 교정 후 저장; 실제 인덱싱 소스; 수동 편집 후 벡터 스토어 관리 페이지에서 ↺ 재인덱싱 가능 |
 | 인덱스 레지스트리 | `DATA_DIR/memory.db` (SQLite `doc_registry` 테이블) | SHA-256 기반 변경 감지. 문서 저장소는 사용자별 격리 없이 공유됨(`DocRegistry.SHARED`) — `userId` 파라미터는 API 시그니처상 존재하나 실제로는 무시됨 |
 | 벡터 임베딩 | chroma: Chroma 서버(로컬 `data/chroma/`, Docker Compose `chroma_data` 볼륨) / sqlite-vec: `DATA_DIR/memory.db`(기본) 또는 `app.vectorstore.sqlite-vec.db-path` 설정 시 별도 `vector.db` | 백엔드 전환 시 벡터 공유 안 됨(§3.1) |
-| 대화 이력 + LLM 사용량 | `DATA_DIR/memory.db` (SQLite) | WAL 모드; 메시지 메타데이터(토큰·시간·프로바이더) 포함 |
+| 대화 이력 + LLM 사용량 | `DATA_DIR/memory.db` (SQLite) | WAL 모드; 메시지 메타데이터(토큰·시간·프로바이더) 포함. 파일별 테이블 구성은 아래 [§6.3.1](#631-sqlite-파일별-테이블-구성) |
 | 감사 로그 | `DATA_DIR/audit/audit.log` | JSON Lines; 롤링 압축본 `audit.YYYY-MM-DD.N.log.gz` 포함 |
 
 > Docker Compose 사용 시 `./data` 디렉터리를 컨테이너에 바인드 마운트합니다.  
 > 데이터 백업 시 `data/` 디렉터리와 Chroma 볼륨을 함께 보존하세요.
+
+#### 6.3.1 SQLite 파일별 테이블 구성
+
+DB 파일은 **최대 두 개**입니다. `SQLITE_VEC_DB_PATH`(=`app.vectorstore.sqlite-vec.db-path`)를 **비워 두면 파일은 `memory.db` 하나뿐**이고, 값을 넣으면(예: `./data/vector.db`) 벡터·검색 색인 테이블만 그 파일로 분리됩니다. Chroma 백엔드에서는 벡터가 Chroma 서버에 있으므로 `vector.db`에는 FTS 색인만 남습니다.
+
+**`memory.db`** — 대화·운영 데이터 전부 (`spring.datasource.url`, `@Primary` DataSource)
+
+| 테이블 | 내용 | 생성 주체 |
+|---|---|---|
+| `conversation_turns` | 대화 턴(질문·답변·토큰·프로바이더·피드백·응답모드·검색 스코프 태그·**검색 진단 수치**) | `SqliteMemoryRepository` (Flyway V1 + 방어적 `ALTER`) |
+| `turn_image_ref` | 턴별 답변 썸네일 이미지 참조(개별 제외는 `status`) | `SqliteMemoryRepository` |
+| `turn_source_ref` | 턴별 출처 청크 스냅샷(재사용 검증용 `chunk_hash`) | `QuestionReuseRepository` |
+| `thread_meta` | 대화 제목·버전·라우팅 모드·태그 | Flyway V1·V3 |
+| `image_descriptions` | Vision 이미지 설명 캐시 | Flyway V1 |
+| `doc_registry` | 인덱싱된 문서 레지스트리(SHA-256 변경 감지, `chunk_overlap`) | `DocRegistry` |
+| `llm_usage` | 프로바이더별 일자별 토큰 사용량 | Flyway V1 |
+| `curated_qa` | 큐레이션 Q&A(좋아요 승격 + 승인된 지식 제안) | `CuratedQaRepository` |
+| `curated_submission` | 청크 추가 제안 게시판 | `CuratedSubmissionRepository` |
+| `settings_override` | `/settings` 핫 수정 오버라이드 | `SettingsOverrideRepository` |
+| `users`, `persistent_logins` | 계정·자동 로그인 토큰 | Flyway V2 / `SqliteUserDetailsService` |
+| `app_secret` | 게스트 식별 HMAC 키 등 서버 비밀값 | `AppSecretRepository` |
+| `flyway_schema_history` | 마이그레이션 이력 | Flyway |
+
+**`vector.db`** — 벡터·검색 색인 (분리 설정을 켰을 때만 별도 파일; 끄면 아래 테이블이 `memory.db` 안에 생깁니다)
+
+| 테이블 | 내용 | 생성 주체 |
+|---|---|---|
+| `vec_embeddings` | vec0 가상 테이블 — 임베딩 벡터(`FLOAT[app.embedding.dimensions]`) | `SqliteVecSchemaInitializer` (sqlite-vec 백엔드 전용) |
+| `vec_document_chunks` | 청크 원문 + JSON 메타데이터. `spring_doc_id`로 위 테이블과 JOIN | `SqliteVecSchemaInitializer` (sqlite-vec 백엔드 전용) |
+| `chunk_fts` | FTS5(trigram) 키워드 색인 — 하이브리드 검색의 BM25 축 | `KeywordSearchRepository` (**백엔드 무관, 항상 생성**) |
+
+> 위 두 표에 없는 이름이 파일 안에 보이면 대개 **SQLite가 자동 생성한 그림자 테이블**입니다 — `chunk_fts_data`/`_idx`/`_content`/`_docsize`/`_config`(FTS5), `vec_embeddings_*`(vec0), `sqlite_sequence`(AUTOINCREMENT). 직접 조회·수정하지 마세요.
+>
+> **어느 파일에 들어가는지는 코드가 주입받는 `JdbcTemplate`으로 결정됩니다** — `@Qualifier("vectorJdbcTemplate")`를 받는 컴포넌트(`SqliteVecSchemaInitializer`·`SqliteVecVerifier`·`SqliteVecVectorStoreProvider`·`KeywordSearchRepository`·`AdminService`)만 `vector.db`를 씁니다. 그 외는 전부 `memory.db`입니다. `QuestionReuseRepository`는 두 템플릿을 모두 주입받지만 **쓰기(`turn_source_ref`)는 `memory.db`**, 벡터 템플릿은 청크 원문을 읽을 때만 씁니다.
+>
+> ⚠️ **두 파일은 트랜잭션이 분리돼 있습니다.** 인덱싱은 벡터 → FTS → 레지스트리(`memory.db`) 순서로 쓰며, 마지막 레지스트리 커밋이 "색인 완료"의 기준입니다. 백업할 때는 **두 파일을 같은 시점에 함께** 보존하세요(한쪽만 되돌리면 레지스트리와 벡터가 어긋납니다).
+>
+> **스키마는 기동 시 자동 정비됩니다** — Flyway 마이그레이션(V1~V3) 이후의 컬럼은 각 리포지터리의 `@PostConstruct`에서 `ALTER TABLE`(이미 있으면 조용히 무시)로 추가됩니다. 따라서 **오래된 `memory.db`를 가져다 놓고 앱을 재기동하면 자동으로 최신 스키마가 됩니다**(기존 행은 보존, 새 컬럼은 `NULL`). 반대로 앱이 실행 중일 때 DB 파일을 교체하면 열려 있는 커넥션과 어긋나 손상될 수 있으니, 반드시 **앱을 내린 뒤** 교체하세요.
 
 > **`doc_registry.chunk_overlap`**: 문서를 인덱싱(또는 ↺ 재인덱싱)한 시점에 실제로 적용된 `app.chunk-overlap` 값을 문서별로 함께 기록합니다 — §6.8 문서 내보내기가 이 값을 읽어 청크 재조립 시 overlap을 정확히 제거하는 데 씁니다. 이 컬럼이 추가되기 전에 인덱싱된 문서는 `NULL`로 남아 있다가, 기동 시 `ChunkOverlapBackfill`이 한 번 그 시점의 `app.chunk-overlap` 현재값으로 채웁니다(이미 값이 있는 행은 건드리지 않음 — 멱등). 운영자가 직접 조작할 일은 없는 내부 컬럼입니다.
 
