@@ -395,7 +395,12 @@
 
 <th:block layout:fragment="scripts">
 <script th:src="@{/js/chat-stream.js}" defer></script>
-<script>
+<!-- th:inline="javascript" 필수 — 이 블록은 `/*[[${x}]]*/ 기본값` 패턴을 여러 곳에서 쓴다.
+     이 속성이 없으면 Thymeleaf가 표현식을 텍스트 모드로 처리해 **값을 주석 안에 써 넣고**
+     뒤의 기본값이 그대로 살아남는다(`const X = /*true*/ false;`) — 문법 오류가 아니라서
+     조용히 항상 기본값으로 동작한다. admin/documents/base/curated-submissions.html은
+     이미 이 속성을 갖고 있었고 chat.html만 빠져 있었다. -->
+<script th:inline="javascript">
     const chatMessages    = document.getElementById('chat-messages');
     const typingIndicator = document.getElementById('typing-indicator');
     const chatForm        = document.getElementById('chat-form');
