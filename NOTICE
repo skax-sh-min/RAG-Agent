@@ -20,7 +20,8 @@ Includes: spring-boot-starter-actuator (runtime log-level management)
 Spring AI 1.1.8 (https://spring.io/projects/spring-ai)
 Copyright © 2023–2025 Broadcom. All Rights Reserved.
 The term "Broadcom" refers to Broadcom Inc. and/or its subsidiaries.
-Includes: spring-ai-openai, spring-ai-rag, spring-ai-chroma-store
+Includes: spring-ai-openai, spring-ai-rag, spring-ai-chroma-store,
+          spring-ai-pdf-document-reader
 --------------------------------------------------------------------
 
 --------------------------------------------------------------------
@@ -29,9 +30,21 @@ Copyright © 2002–2024 Broadcom. All Rights Reserved.
 --------------------------------------------------------------------
 
 --------------------------------------------------------------------
+Spring Security 6.5.11 (https://spring.io/projects/spring-security)
+Copyright © 2002–2025 Broadcom. All Rights Reserved.
+The term "Broadcom" refers to Broadcom Inc. and/or its subsidiaries.
+--------------------------------------------------------------------
+
+--------------------------------------------------------------------
 Reactor Netty HTTP 1.2.18 (https://github.com/reactor/reactor-netty)
 Copyright © 2011–2024 Broadcom. All Rights Reserved.
 The term "Broadcom" refers to Broadcom Inc. and/or its subsidiaries.
+--------------------------------------------------------------------
+
+--------------------------------------------------------------------
+Netty 4.1.135.Final (https://netty.io)
+Copyright © 2008–2025 The Netty Project
+Includes: netty-resolver-dns-native-macos (macOS DNS resolver, runtime)
 --------------------------------------------------------------------
 
 --------------------------------------------------------------------
@@ -101,6 +114,17 @@ Copyright © 2011–2024 The Thymeleaf Team
 --------------------------------------------------------------------
 Thymeleaf Layout Dialect 3.4.0 (https://github.com/ultraq/thymeleaf-layout-dialect)
 Copyright © 2012–2024 Emanuel Rabina
+--------------------------------------------------------------------
+
+--------------------------------------------------------------------
+Thymeleaf Extras Spring Security 6 3.1.5.RELEASE
+(https://github.com/thymeleaf/thymeleaf-extras-springsecurity)
+Copyright © 2011–2024 The Thymeleaf Team
+--------------------------------------------------------------------
+
+--------------------------------------------------------------------
+HikariCP 6.3.3 (https://github.com/brettwooldridge/HikariCP)
+Copyright © 2013–2025 Brett Wooldridge and contributors
 --------------------------------------------------------------------
 
 
@@ -196,6 +220,42 @@ Test scope only — NOT distributed with the production binary
 JUnit 5.12.2 (https://junit.org/junit5) — Eclipse Public License 2.0
 Mockito 5.17.0 (https://site.mockito.org) — MIT License
 AssertJ 3.27.7 (https://assertj.github.io/doc) — Apache License, Version 2.0
+--------------------------------------------------------------------
+
+
+====================================================================
+Operator-supplied at runtime — NOT bundled with this product
+====================================================================
+
+These components are obtained and installed separately by the operator
+(see documents/OPERATOR_MANUAL.md). No copy of them is contained in this
+repository or in the built artifact; they are listed only so deployers
+know which third-party terms apply to a complete installation.
+
+--------------------------------------------------------------------
+sqlite-vec (https://github.com/asg017/sqlite-vec)
+Loadable SQLite extension (vec0) — required only when
+app.vectorstore.type=sqlite-vec. Path given via SQLITE_VEC_EXTENSION_PATH.
+Dual-licensed: Apache License, Version 2.0 OR MIT License
+--------------------------------------------------------------------
+
+--------------------------------------------------------------------
+Tesseract OCR (https://github.com/tesseract-ocr/tesseract)
+Native engine + tessdata language files used through Tess4j when
+app.image-description.ocr-enabled=true — Apache License, Version 2.0
+--------------------------------------------------------------------
+
+--------------------------------------------------------------------
+Chroma (https://github.com/chroma-core/chroma)
+External vector-store server — required only when
+app.vectorstore.type=chroma. Run as a separate container/process.
+Apache License, Version 2.0
+--------------------------------------------------------------------
+
+--------------------------------------------------------------------
+LibreOffice (https://www.libreoffice.org)
+Optional headless converter used for DOCX WMF→PNG rasterization when
+DOCX_WMF_CONVERT=true — Mozilla Public License, Version 2.0
 --------------------------------------------------------------------
 
 
