@@ -1,0 +1,10 @@
+# core.autocrlf=input stores LF and does NOT restore CRLF on checkout, so without
+# this every committed .bat/.cmd came back LF-only. cmd.exe seeks by byte offset
+# while parsing, and on an LF-only file that offset drifts: comment fragments get
+# executed as commands and parenthesized blocks lose their structure.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# Shell scripts must stay LF regardless of platform.
+*.sh text eol=lf
