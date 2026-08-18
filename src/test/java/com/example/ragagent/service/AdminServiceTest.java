@@ -305,6 +305,73 @@ class AdminServiceTest {
         assertThat(result.remainingChunks()).isNull();
     }
 
+    // ── reconcileChunkCounts() — 과거 드리프트 일회성 복구 ────────────────────
+
+    private AdminService sqliteVecSvc(JdbcTemplate jdbc, DocRegistry registry) {
+        AppProperties props = mock(AppProperties.class);
+        when(props.vectorStoreSafe()).thenReturn(new VectorStoreConfig("sqlite-vec"));
+        return new AdminService(Optional.empty(), jdbc, props, OM, mock(VectorStoreFacade.class),
+                mock(KeywordSearchRepository.class), mock(KeywordExtractor.class), null, registry);
+    }
+
+    private void stubRegistryEntry(DocRegistry registry, String docId, int chunks, List<String> ids) {
+        when(registry.entries(DocRegistry.SHARED)).thenReturn(Map.of(docId,
+                new DocRegistry.DocRegistryEntry("sha", "latest", "2026-01-01T00:00:00Z", chunks,
+                        ids, List.of(), 0, null)).entrySet());
+    }
+
+    @Test
+    @DisplayName("reconcileChunkCounts: 저장된 청크 수가 실제와 다르면 실제 값으로 고쳐 쓴다")
+    void reconcileChunkCounts_fixesDrift() {
+        JdbcTemplate jdbc = mock(JdbcTemplate.class);
+        when(jdbc.queryForList(anyString(), eq(String.class), any(), any()))
+                .thenReturn(List.of("c1", "c3"));
+        DocRegistry registry = mock(DocRegistry.class);
+        stubRegistryEntry(registry, "doc1", 3, List.of("c1", "c2", "c3"));
+
+        AdminService.ReconcileResult r = sqliteVecSvc(jdbc, registry).reconcileChunkCounts();
+
+        ArgumentCaptor<DocRegistry.DocRegistryEntry> saved =
+                ArgumentCaptor.forClass(DocRegistry.DocRegistryEntry.class);
+        verify(registry).put(eq("doc1"), eq(DocRegistry.SHARED), saved.capture());
+        assertThat(saved.getValue().chunks()).isEqualTo(2);
+        assertThat(saved.getValue().springDocIds()).containsExactly("c1", "c3");
+        assertThat(r.fixed()).isEqualTo(1);
+        assertThat(r.checked()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("reconcileChunkCounts: 이미 정확한 행은 다시 쓰지 않는다")
+    void reconcileChunkCounts_noDrift_noWrite() {
+        JdbcTemplate jdbc = mock(JdbcTemplate.class);
+        when(jdbc.queryForList(anyString(), eq(String.class), any(), any()))
+                .thenReturn(List.of("c1", "c2"));
+        DocRegistry registry = mock(DocRegistry.class);
+        stubRegistryEntry(registry, "doc1", 2, List.of("c1", "c2"));
+
+        AdminService.ReconcileResult r = sqliteVecSvc(jdbc, registry).reconcileChunkCounts();
+
+        verify(registry, never()).put(anyString(), anyString(), any());
+        assertThat(r.fixed()).isZero();
+    }
+
+    /** "청크가 전부 삭제된 문서"와 "스토어가 답을 안 준 상황"은 여기서 똑같이 보인다 —
+     *  둘 중 하나만 기록해도 안전하지 않으므로 건드리지 않는다. */
+    @Test
+    @DisplayName("reconcileChunkCounts: 실제 청크가 0으로 오면 행을 0으로 만들지 않고 건너뛴다")
+    void reconcileChunkCounts_emptyLiveResult_skips() {
+        JdbcTemplate jdbc = mock(JdbcTemplate.class);
+        when(jdbc.queryForList(anyString(), eq(String.class), any(), any())).thenReturn(List.of());
+        DocRegistry registry = mock(DocRegistry.class);
+        stubRegistryEntry(registry, "doc1", 5, List.of("c1", "c2", "c3", "c4", "c5"));
+
+        AdminService.ReconcileResult r = sqliteVecSvc(jdbc, registry).reconcileChunkCounts();
+
+        verify(registry, never()).put(anyString(), anyString(), any());
+        assertThat(r.fixed()).isZero();
+        assertThat(r.checked()).isEqualTo(1);
+    }
+
     // ── reindexChunk() — chroma 백엔드 기준(순수 JdbcTemplate 목킹 없이 ChromaApi로 검증) ──────
 
     /** {@code getChunk()}가 이 하나짜리 응답을 chroma에서 그대로 읽어오도록 stub. */

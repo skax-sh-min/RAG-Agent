@@ -86,6 +86,14 @@
             <i class="bi bi-archive me-2"></i>
             <span class="fw-semibold small">문서 레지스트리</span>
             <span class="badge bg-secondary ms-2" th:text="${#lists.size(documents)}">0</span>
+            <!-- 청크 수는 인덱싱 시점에 기록된 값이라, 삭제가 이 행을 갱신하지 않던 시절의 문서는
+                 실제보다 큰 수를 계속 보여준다. 이 버튼이 벡터 스토어와 대조해 한 번에 맞춘다. -->
+            <button type="button" class="btn btn-sm btn-outline-secondary py-0 px-2 ms-2"
+                    style="font-size:0.72rem;" id="reconcile-chunks-btn"
+                    onclick="reconcileChunkCounts()"
+                    title="저장된 청크 수를 벡터 스토어의 실제 청크와 대조해 맞춥니다.">
+                <i class="bi bi-calculator me-1"></i>청크 수 재계산
+            </button>
             <span id="registry-status" class="ms-auto small text-muted text-truncate" style="max-width:60%;"></span>
         </div>
         <div class="card-body p-0">
@@ -1119,6 +1127,33 @@ function formatReindexWarnings(body) {
     if (problems.length > 0) sections.push(formatFenceProblems(problems));
     return '재인덱싱 전 확인해 주세요.\n\n' + sections.join('\n\n')
         + '\n\n[확인] 무시하고 진행   /   [취소] 중지';
+}
+
+// 레지스트리에 저장된 청크 수를 벡터 스토어 실제 내용과 대조해 맞춘다(과거 드리프트 일회성 복구).
+// 고친 행이 있으면 새로고침한다 — 표 전체가 서버 렌더라 칸 하나씩 갈아 끼우는 것보다 정직하다.
+function reconcileChunkCounts() {
+    const btn = document.getElementById('reconcile-chunks-btn');
+    const original = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm" style="width:.7rem;height:.7rem;"></span>';
+
+    fetch('/admin/registry/reconcile-chunks', { method: 'POST', headers: getCsrfHeaders() })
+        .then(r => r.ok ? r.json() : Promise.reject())
+        .then(body => {
+            if (body.fixed > 0) {
+                showToast('문서 ' + body.fixed + '건의 청크 수를 맞췄습니다.', 'success');
+                setTimeout(() => location.reload(), 800);
+            } else {
+                showToast('청크 수가 모두 정확합니다 (문서 ' + body.checked + '건 대조).', 'info');
+                btn.disabled = false;
+                btn.innerHTML = original;
+            }
+        })
+        .catch(() => {
+            showToast('청크 수 재계산 실패', 'danger');
+            btn.disabled = false;
+            btn.innerHTML = original;
+        });
 }
 
 function reindexFromMd(btn) {

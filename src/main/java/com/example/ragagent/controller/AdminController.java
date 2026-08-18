@@ -98,6 +98,19 @@ public class AdminController {
         return ResponseEntity.ok(body);
     }
 
+    /**
+     * Recomputes every document's stored chunk count from the vector store — a one-off repair for
+     * rows that drifted while chunk deletion did not maintain them. Kept under {@code /admin/**}
+     * (ROLE_ADMIN gated, §6.17) like every other registry-mutating action.
+     */
+    @PostMapping("/admin/registry/reconcile-chunks")
+    @ResponseBody
+    public ResponseEntity<Map<String, Object>> reconcileChunkCounts() {
+        AdminService.ReconcileResult r = adminService.reconcileChunkCounts();
+        log.info("[REGISTRY] 청크 수 재계산 요청 처리: 대조 {}건, 수정 {}건", r.checked(), r.fixed());
+        return ResponseEntity.ok(Map.of("checked", r.checked(), "fixed", r.fixed()));
+    }
+
     /** Get full chunk data (text + metadata) for the edit panel. */
     @GetMapping("/admin/chunks/{chunkId}/detail")
     @ResponseBody

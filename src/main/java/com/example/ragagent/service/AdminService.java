@@ -340,6 +340,72 @@ public class AdminService {
         return new DeleteResult(docId, forgetChunkInRegistry(docId, chunkId));
     }
 
+    // ── 레지스트리 청크 수 재계산 ─────────────────────────────────────────────
+
+    /** @param checked 대조한 문서 수, @param fixed 실제로 고쳐 쓴 문서 수 */
+    public record ReconcileResult(int checked, int fixed) {}
+
+    /**
+     * Rewrites every document's stored chunk count / {@code spring_doc_ids} from what the vector
+     * store actually holds right now, repairing rows that drifted before {@link #deleteChunk}
+     * started maintaining them.
+     *
+     * <p>Deliberately operator-triggered rather than a startup backfill: on the Chroma backend the
+     * only way to enumerate a document's chunks is to fetch them, which is far too much work to
+     * repeat on every boot for a one-off repair — and with delete now keeping the row in sync,
+     * fresh drift no longer accumulates.
+     *
+     * <p>A document whose live chunk list comes back empty while the row claims chunks is skipped,
+     * not zeroed: "every chunk was deleted" and "the store did not answer" look identical here, and
+     * only one of them is safe to write.
+     */
+    public ReconcileResult reconcileChunkCounts() {
+        if (docRegistry == null) return new ReconcileResult(0, 0);
+        int checked = 0, fixed = 0;
+        for (Map.Entry<String, DocRegistry.DocRegistryEntry> e : docRegistry.entries(DocRegistry.SHARED)) {
+            String docId = e.getKey();
+            DocRegistry.DocRegistryEntry entry = e.getValue();
+            checked++;
+            List<String> live;
+            try {
+                live = liveChunkIds(collectionFor(entry.version()), docId);
+            } catch (Exception ex) {
+                log.warn("[REGISTRY] 청크 수 재계산 건너뜀 docId={}: {}", docId, ex.getMessage());
+                continue;
+            }
+            if (live.isEmpty() && entry.chunks() > 0) {
+                log.warn("[REGISTRY] 청크 수 재계산 건너뜀 docId={}: 벡터 스토어가 청크를 하나도 돌려주지 않음 "
+                        + "(전부 삭제된 문서인지 스토어 응답 문제인지 구분할 수 없음)", docId);
+                continue;
+            }
+            List<String> stored = entry.springDocIds() == null ? List.of() : entry.springDocIds();
+            if (live.size() == entry.chunks() && new HashSet<>(live).equals(new HashSet<>(stored))) continue;
+
+            docRegistry.put(docId, DocRegistry.SHARED, new DocRegistry.DocRegistryEntry(
+                    entry.sha256(), entry.version(), entry.indexedAt(), live.size(), live,
+                    entry.errors(), entry.chunkOverlap(), entry.displayName()));
+            log.info("[REGISTRY] 청크 수 재계산: docId={}, {} -> {}", docId, entry.chunks(), live.size());
+            fixed++;
+        }
+        return new ReconcileResult(checked, fixed);
+    }
+
+    /** Chunk ids the store currently holds for one document. Metadata-only on Chroma (the chunk
+     *  text is irrelevant here and is the bulk of the payload). */
+    private List<String> liveChunkIds(String collectionName, String docId) {
+        if (isSqliteVec()) {
+            return jdbc.queryForList(
+                    "SELECT spring_doc_id FROM vec_document_chunks WHERE version = ? AND doc_id = ?",
+                    String.class, collectionName, docId);
+        }
+        if (chromaApi == null) throw new IllegalStateException("ChromaApi 없음");
+        GetEmbeddingsRequest req = new GetEmbeddingsRequest(
+                null, Map.of(MetaKey.DOC_ID, Map.of("$eq", docId)), CHUNK_FETCH_CAP, 0,
+                List.of(Include.METADATAS));
+        GetEmbeddingResponse resp = chromaApi.getEmbeddings(TENANT, DATABASE, resolveId(collectionName), req);
+        return (resp == null || resp.ids() == null) ? List.of() : resp.ids();
+    }
+
     /** Outcome of {@link #deleteChunk}: which document lost a chunk and its new registry count
      *  ({@code null} when the registry was not updated — unknown document, or a legacy row with no
      *  recorded chunk ids), so the UI can refresh that number instead of reloading the page. */
