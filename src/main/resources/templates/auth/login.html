@@ -53,9 +53,15 @@
         </div>
     </div>
 
+    <!-- app.auth.enabled=false 에서는 가입할 계정 개념이 없다 — 이 모드의 /login 은 관리 전용
+         로그인(§6.17 B안)이고 관리자 계정은 /setup 에서 만들어지므로, 회원가입 링크는 존재하지
+         않는 흐름으로 보내는 셈이다. 대신 게스트로 그냥 쓸 수 있는 홈으로 돌려보낸다. -->
     <div class="text-center mt-3 small text-secondary">
-        <span th:text="#{auth.login.no_account}">계정이 없으신가요?</span>
-        <a th:href="@{/signup}" class="ms-1" th:text="#{auth.signup.link}">회원가입</a>
+        <th:block th:if="${authEnabled}">
+            <span th:text="#{auth.login.no_account}">계정이 없으신가요?</span>
+            <a th:href="@{/signup}" class="ms-1" th:text="#{auth.signup.link}">회원가입</a>
+        </th:block>
+        <a th:unless="${authEnabled}" th:href="@{/}" th:text="#{auth.login.home_link}">홈으로</a>
     </div>
 </div>
 

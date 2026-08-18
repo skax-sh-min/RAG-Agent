@@ -122,6 +122,32 @@ class AuthControllerTest {
                 .andExpect(view().name("auth/login"));
     }
 
+    /** auth.enabled=false 에서는 가입할 계정이라는 개념 자체가 없다(관리자 계정은 /setup 에서
+     *  만든다). 회원가입 링크를 그대로 두면 존재하지 않는 흐름으로 보내게 된다. 문구가 아니라
+     *  링크 대상으로 검증하는 이유는 테스트 로케일(ko/en)에 좌우되지 않게 하기 위함. */
+    @Test
+    @DisplayName("GET /login — auth 비활성(management-only) 시 회원가입 링크 대신 홈 링크가 나온다")
+    void loginPage_authDisabled_showsHomeLinkInsteadOfSignup() throws Exception {
+        when(props.authSafe()).thenReturn(new AppProperties.AuthConfig(false, true));
+
+        String html = mvc.perform(get("/login"))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        assertThat(html).doesNotContain("/signup");
+        assertThat(html).contains("href=\"/\"");
+    }
+
+    @Test
+    @DisplayName("GET /login — auth 활성 시에는 회원가입 링크가 그대로 있다")
+    void loginPage_authEnabled_keepsSignupLink() throws Exception {
+        String html = mvc.perform(get("/login"))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        assertThat(html).contains("/signup");
+    }
+
     @Test
     @DisplayName("GET /signup — no-auth 모드에서는 redirect:/ (CSRF 비활성화로 템플릿이 깨짐 방지)")
     void signupPage_noAuthMode_redirectsToRoot() throws Exception {
