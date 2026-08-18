@@ -253,6 +253,58 @@ class AdminServiceTest {
         verify(jdbc).update(eq("DELETE FROM vec_embeddings WHERE spring_doc_id = ?"), eq("doc1::0"));
     }
 
+    // ── deleteChunk() — doc_registry 청크 수 동기화 ────────────────────────────
+
+    /** 문서 목록의 청크 수는 doc_registry에 저장된 값이라 라이브 집계가 아니다 — 청크를 지워도
+     *  이 행을 안 고치면 삭제된 청크가 다음 전체 재인덱싱까지 계속 세어진다(실제로 보고된 증상). */
+    @Test
+    @DisplayName("deleteChunk: 문서 레지스트리의 청크 수와 spring_doc_ids에서도 삭제된 청크가 빠진다")
+    void deleteChunk_syncsDocRegistry() {
+        ChromaApi api = mock(ChromaApi.class);
+        stubExistingChunk(api, "c2", "text", Map.of(MetaKey.DOC_ID, "doc1"));
+
+        DocRegistry registry = mock(DocRegistry.class);
+        when(registry.findByDocId("doc1", DocRegistry.SHARED)).thenReturn(Optional.of(
+                new DocRegistry.DocRegistryEntry("sha", "latest", "2026-01-01T00:00:00Z", 3,
+                        List.of("c1", "c2", "c3"), List.of(), 0, null)));
+
+        AdminService svc = new AdminService(Optional.of(api), mock(JdbcTemplate.class), mock(AppProperties.class), OM,
+                mock(VectorStoreFacade.class), mock(KeywordSearchRepository.class), mock(KeywordExtractor.class),
+                null, registry);
+
+        AdminService.DeleteResult result = svc.deleteChunk("manual_latest", "c2");
+
+        ArgumentCaptor<DocRegistry.DocRegistryEntry> saved =
+                ArgumentCaptor.forClass(DocRegistry.DocRegistryEntry.class);
+        verify(registry).put(eq("doc1"), eq(DocRegistry.SHARED), saved.capture());
+        assertThat(saved.getValue().chunks()).isEqualTo(2);
+        assertThat(saved.getValue().springDocIds()).containsExactly("c1", "c3");
+        assertThat(result.remainingChunks()).isEqualTo(2);
+        assertThat(result.docId()).isEqualTo("doc1");
+    }
+
+    /** 청크 id 목록이 기록되지 않은 예전 문서 행을, 목록에 없는 id 하나로 0으로 만들어 버리면 안 된다. */
+    @Test
+    @DisplayName("deleteChunk: 레지스트리에 그 청크 id가 없으면 청크 수를 건드리지 않는다")
+    void deleteChunk_unknownChunkId_leavesRegistryAlone() {
+        ChromaApi api = mock(ChromaApi.class);
+        stubExistingChunk(api, "ghost", "text", Map.of(MetaKey.DOC_ID, "doc1"));
+
+        DocRegistry registry = mock(DocRegistry.class);
+        when(registry.findByDocId("doc1", DocRegistry.SHARED)).thenReturn(Optional.of(
+                new DocRegistry.DocRegistryEntry("sha", "latest", "2026-01-01T00:00:00Z", 3,
+                        List.of(), List.of(), 0, null)));
+
+        AdminService svc = new AdminService(Optional.of(api), mock(JdbcTemplate.class), mock(AppProperties.class), OM,
+                mock(VectorStoreFacade.class), mock(KeywordSearchRepository.class), mock(KeywordExtractor.class),
+                null, registry);
+
+        AdminService.DeleteResult result = svc.deleteChunk("manual_latest", "ghost");
+
+        verify(registry, never()).put(anyString(), anyString(), any());
+        assertThat(result.remainingChunks()).isNull();
+    }
+
     // ── reindexChunk() — chroma 백엔드 기준(순수 JdbcTemplate 목킹 없이 ChromaApi로 검증) ──────
 
     /** {@code getChunk()}가 이 하나짜리 응답을 chroma에서 그대로 읽어오도록 stub. */

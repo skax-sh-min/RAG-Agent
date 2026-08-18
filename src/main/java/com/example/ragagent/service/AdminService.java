@@ -57,6 +57,7 @@ public class AdminService {
     private final KeywordSearchRepository keywordRepo;
     private final KeywordExtractor keywordExtractor;
     private final QuestionReuseService questionReuseService;
+    private final DocRegistry docRegistry;
 
     // shown on /admin to disambiguate operational vs vector DB files. Field-injected
     // (not constructor) so unit tests that build AdminService directly stay unaffected (null → hidden).
@@ -71,7 +72,8 @@ public class AdminService {
                         AppProperties props, ObjectMapper objectMapper,
                         VectorStoreFacade vectorStore, KeywordSearchRepository keywordRepo,
                         KeywordExtractor keywordExtractor,
-                        QuestionReuseService questionReuseService) {
+                        QuestionReuseService questionReuseService,
+                        DocRegistry docRegistry) {
         this.chromaApi = chromaApi.orElse(null);
         this.jdbc = jdbc;
         this.props = props;
@@ -80,6 +82,7 @@ public class AdminService {
         this.keywordRepo = keywordRepo;
         this.keywordExtractor = keywordExtractor;
         this.questionReuseService = questionReuseService;
+        this.docRegistry = docRegistry;
     }
 
     // Backward-compatible constructor for unit tests.
@@ -87,7 +90,7 @@ public class AdminService {
                         AppProperties props, ObjectMapper objectMapper,
                         VectorStoreFacade vectorStore, KeywordSearchRepository keywordRepo,
                         KeywordExtractor keywordExtractor) {
-        this(chromaApi, jdbc, props, objectMapper, vectorStore, keywordRepo, keywordExtractor, null);
+        this(chromaApi, jdbc, props, objectMapper, vectorStore, keywordRepo, keywordExtractor, null, null);
     }
 
     /** Active backend is sqlite-vec? Null-safe so unit tests with mocked props don't NPE. */
@@ -305,20 +308,66 @@ public class AdminService {
         }
     }
 
-    public void deleteChunk(String collectionName, String chunkId) {
+    /**
+     * Deletes one chunk from the vector store, the FTS index, and — via
+     * {@link #forgetChunkInRegistry} — the owning document's {@code doc_registry} row.
+     *
+     * <p>The registry part matters because the document list's chunk count is read from that row,
+     * not counted live: without it a deleted chunk kept being reported for the life of the document
+     * (until the next full re-index rewrote the row).
+     */
+    public DeleteResult deleteChunk(String collectionName, String chunkId) {
+        // Read the owning document BEFORE deleting — afterwards the metadata carrying it is gone.
+        ChunkRow row = getChunk(collectionName, chunkId);
+        String docId = row == null ? null : row.docId();
+
         if (isSqliteVec()) {
             // Two-table consistency: drop the chunk from both the metadata table and the vec0 store.
             jdbc.update("DELETE FROM vec_document_chunks WHERE spring_doc_id = ?", chunkId);
             jdbc.update("DELETE FROM vec_embeddings WHERE spring_doc_id = ?", chunkId);
             keywordRepo.deleteBySpringDocIds(List.of(chunkId));
             if (questionReuseService != null) questionReuseService.markChunkDeleted(chunkId);
-            return;
+            return new DeleteResult(docId, forgetChunkInRegistry(docId, chunkId));
         }
-        if (chromaApi == null) { log.warn("deleteChunk ignored — no ChromaApi"); return; }
+        if (chromaApi == null) {
+            log.warn("deleteChunk ignored — no ChromaApi");
+            return new DeleteResult(docId, null);
+        }
         chromaApi.deleteEmbeddings(TENANT, DATABASE, collectionName,
                 new DeleteEmbeddingsRequest(List.of(chunkId)));
         keywordRepo.deleteBySpringDocIds(List.of(chunkId));
         if (questionReuseService != null) questionReuseService.markChunkDeleted(chunkId);
+        return new DeleteResult(docId, forgetChunkInRegistry(docId, chunkId));
+    }
+
+    /** Outcome of {@link #deleteChunk}: which document lost a chunk and its new registry count
+     *  ({@code null} when the registry was not updated — unknown document, or a legacy row with no
+     *  recorded chunk ids), so the UI can refresh that number instead of reloading the page. */
+    public record DeleteResult(String docId, Integer remainingChunks) {}
+
+    /**
+     * Drops {@code chunkId} from its document's registry row so the stored chunk count and
+     * {@code spring_doc_ids} list keep matching what the vector store actually holds.
+     *
+     * <p>No-op unless the id is really in the list: that makes a repeated delete harmless and
+     * leaves legacy rows (indexed before ids were recorded) alone rather than zeroing their count
+     * from a list that was never populated. The new count is the surviving list's size rather than
+     * {@code chunks - 1}, so the two columns can only converge, never drift further apart.
+     */
+    private Integer forgetChunkInRegistry(String docId, String chunkId) {
+        if (docRegistry == null || docId == null || docId.isBlank()) return null;
+        var entry = docRegistry.findByDocId(docId, DocRegistry.SHARED);
+        if (entry.isEmpty()) return null;
+        var e = entry.get();
+        List<String> ids = e.springDocIds();
+        if (ids == null || !ids.contains(chunkId)) return null;
+        List<String> remaining = ids.stream().filter(id -> !chunkId.equals(id)).toList();
+        docRegistry.put(docId, DocRegistry.SHARED, new DocRegistry.DocRegistryEntry(
+                e.sha256(), e.version(), e.indexedAt(), remaining.size(), remaining,
+                e.errors(), e.chunkOverlap(), e.displayName()));
+        log.info("[ADMIN] 청크 삭제로 레지스트리 갱신: docId={}, 청크 {} -> {}",
+                docId, ids.size(), remaining.size());
+        return remaining.size();
     }
 
     private String resolveId(String collectionName) {

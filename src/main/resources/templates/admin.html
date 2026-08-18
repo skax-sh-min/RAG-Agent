@@ -107,7 +107,10 @@
                     <tr th:each="doc : ${documents}">
                         <td th:text="${doc.displayLabel()}" th:title="${doc.filename()}"></td>
                         <td><span class="badge bg-secondary" th:text="${doc.version()}"></span></td>
-                        <td class="text-center" style="min-width:45px;" th:text="${doc.chunks()}"></td>
+                        <!-- id — 청크 하나를 지웠을 때 이 숫자만 제자리에서 갱신한다(deleteChunkInline).
+                             페이지를 다시 그리면 보고 있던 청크 목록이 닫혀 버린다. -->
+                        <td class="text-center" style="min-width:45px;"
+                            th:id="'doc-chunks-' + ${doc.docId()}" th:text="${doc.chunks()}"></td>
                         <td class="text-muted" style="font-size:0.7rem;" th:text="${doc.docId()}"></td>
                         <td class="text-muted" th:text="${T(com.example.ragagent.model.KstDateFormat).toKst(doc.indexedAt())}"></td>
                         <td class="text-center">
@@ -731,8 +734,20 @@ function deleteChunkInline(chunkId, collection, row) {
         headers: getCsrfHeaders()
     })
     .then(r => {
-        if (r.ok) { row.closest('tr').remove(); showToast('청크 삭제됨', 'success'); }
-        else       { showToast('삭제 실패', 'danger'); }
+        if (!r.ok) { showToast('삭제 실패', 'danger'); return null; }
+        row.closest('tr').remove();
+        showToast('청크 삭제됨', 'success');
+        // 삭제한 행이 사라지면 이전/다음 이동 대상 목록도 바뀐다.
+        updateChunkNavState();
+        return r.json().catch(() => null);
+    })
+    .then(body => {
+        // 문서 레지스트리 표의 청크 수는 저장된 값(doc_registry.chunks)이라 삭제 후에도 그대로
+        // 남는다 — 서버가 돌려준 새 값으로 그 칸만 갈아 끼운다. remainingChunks 가 null 이면
+        // (레지스트리에 청크 id가 기록되지 않은 예전 문서) 건드리지 않는다.
+        if (!body || body.remainingChunks === null || body.remainingChunks === undefined) return;
+        const cell = document.getElementById('doc-chunks-' + body.docId);
+        if (cell) cell.textContent = body.remainingChunks;
     })
     .catch(() => showToast('삭제 중 오류', 'danger'));
 }

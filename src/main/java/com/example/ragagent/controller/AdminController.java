@@ -87,10 +87,15 @@ public class AdminController {
     /** Delete a single chunk by its ChromaDB ID. */
     @DeleteMapping("/admin/chunks/{chunkId}")
     @ResponseBody
-    public ResponseEntity<Void> deleteChunk(@PathVariable String chunkId,
+    public ResponseEntity<Map<String, Object>> deleteChunk(@PathVariable String chunkId,
                                              @RequestParam String collection) {
-        adminService.deleteChunk(collection, chunkId);
-        return ResponseEntity.ok().build();
+        AdminService.DeleteResult result = adminService.deleteChunk(collection, chunkId);
+        // Reports the owning document's new chunk count so the registry table can update that one
+        // number in place; null (unknown document / legacy row) simply leaves it as it was.
+        Map<String, Object> body = new HashMap<>();
+        body.put("docId", result.docId());
+        body.put("remainingChunks", result.remainingChunks());
+        return ResponseEntity.ok(body);
     }
 
     /** Get full chunk data (text + metadata) for the edit panel. */
