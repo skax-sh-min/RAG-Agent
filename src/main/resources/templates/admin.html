@@ -300,6 +300,21 @@
             <!-- 편집 영역 공간 절약을 위해 별도 필드 대신 헤더에 표시 — openChunkEdit()이 채운다. -->
             <code id="edit-chunk-id-label" class="text-muted fw-normal text-truncate" style="font-size:0.7rem;"></code>
         </h6>
+        <!-- 이전/다음 청크 이동. offcanvas-header 가 space-between 이라 제목과 닫기 버튼 사이
+             남는 공간의 가운데에 놓인다. 이동 범위는 목록에 "현재 렌더된" 청크들(=현재 페이지)이며,
+             경계에서는 비활성화된다 — openChunkEdit() 이 열 때마다 상태를 다시 계산한다. -->
+        <div class="btn-group btn-group-sm flex-shrink-0 mx-2" role="group" aria-label="청크 이동">
+            <!-- 기본 disabled — 청크를 열기 전(오프캔버스 초기 "청크를 선택하세요" 상태)에는
+                 이동할 대상이 없다. openChunkEdit()/loadChunks()가 updateChunkNavState()로 푼다. -->
+            <button type="button" class="btn btn-outline-secondary py-0 px-2" id="chunk-prev-btn"
+                    onclick="navigateChunk(-1)" title="이전 청크" disabled>
+                <i class="bi bi-arrow-left"></i>
+            </button>
+            <button type="button" class="btn btn-outline-secondary py-0 px-2" id="chunk-next-btn"
+                    onclick="navigateChunk(1)" title="다음 청크" disabled>
+                <i class="bi bi-arrow-right"></i>
+            </button>
+        </div>
         <button type="button" class="btn-close" data-bs-dismiss="offcanvas"></button>
     </div>
     <div class="offcanvas-body d-flex flex-column gap-3" id="editOffcanvasBody">
@@ -403,6 +418,9 @@ function loadChunksByDoc(btn) {
             document.getElementById('chunk-panel').innerHTML = html;
             document.getElementById('chunk-spinner').style.display = 'none';
             htmx.process(document.getElementById('chunk-panel'));
+            // 오프캔버스가 열린 채로 목록을 다시 그릴 수 있다(페이지 이동/컬렉션 전환) —
+            // 이전/다음 버튼은 렌더된 행 기준이므로 여기서 다시 계산한다.
+            updateChunkNavState();
             // Highlight matching collection button
             document.querySelectorAll('.collection-btn').forEach(function (b) {
                 b.classList.toggle('active', b.getAttribute('data-collection') === colName);
@@ -468,6 +486,54 @@ function joinChunkContext(breadcrumb, summary) {
     const s = (summary || '').trim();
     if (!s) return b;
     return b ? b + '\n' + s : s;
+}
+
+// ── 편집 오프캔버스 이전/다음 청크 이동 ──────────────────────────────────
+// 이동 범위는 목록에 지금 렌더돼 있는 행들, 즉 "현재 페이지"다. 청크 목록은 서버 페이지네이션
+// (loadChunks의 offset/limit)이라 전체 순서를 클라이언트가 알지 못하고, 페이지 경계에서 다음
+// 페이지를 자동으로 당겨오면 사용자가 누른 적 없는 목록 이동이 뒤에서 일어난다 — 경계에서는
+// 버튼을 비활성화해 "여기까지"를 그대로 보여준다.
+// 현재 열려 있는 청크(+ 열 때의 필드 스냅샷). 스냅샷은 저장하지 않은 편집을 감지하는 용도다.
+let currentChunkEdit = null;
+
+function chunkEditButtons() {
+    return Array.from(document.querySelectorAll('#chunk-panel .chunk-edit-btn'));
+}
+
+// 편집 필드 4개의 현재 값. 열었을 때와 이동 직전 값을 비교해 "저장 안 함"을 감지한다.
+// (저장은 별도 버튼이고 이동은 화면을 통째로 갈아끼우므로, 경고가 없으면 편집이 조용히 사라진다.)
+const CHUNK_EDIT_FIELD_IDS = ['edit-meta', 'edit-context', 'edit-keywords', 'edit-text'];
+
+function chunkEditSnapshot() {
+    return CHUNK_EDIT_FIELD_IDS.map(id => (document.getElementById(id) || {}).value || '');
+}
+
+function chunkEditDirty() {
+    if (!currentChunkEdit) return false;
+    const now = chunkEditSnapshot();
+    return now.some((v, i) => v !== currentChunkEdit.snapshot[i]);
+}
+
+function updateChunkNavState() {
+    const prev = document.getElementById('chunk-prev-btn');
+    const next = document.getElementById('chunk-next-btn');
+    const buttons = chunkEditButtons();
+    const idx = currentChunkEdit
+        ? buttons.findIndex(b => b.dataset.chunkId === currentChunkEdit.chunkId)
+        : -1;
+    prev.disabled = idx <= 0;
+    next.disabled = idx < 0 || idx >= buttons.length - 1;
+}
+
+function navigateChunk(delta) {
+    if (!currentChunkEdit) return;
+    const buttons = chunkEditButtons();
+    const idx = buttons.findIndex(b => b.dataset.chunkId === currentChunkEdit.chunkId);
+    const target = idx < 0 ? null : buttons[idx + delta];
+    if (!target) return;
+    if (chunkEditDirty() &&
+        !confirm('저장하지 않은 변경사항이 있습니다. 이동하면 사라집니다. 계속할까요?')) return;
+    openChunkEdit(target.dataset.chunkId, target.dataset.collection);
 }
 
 // Open edit offcanvas: fetch full chunk detail
@@ -561,7 +627,13 @@ function openChunkEdit(chunkId, collection) {
                 body.innerHTML = editFields;
             }
             initTooltipsIn(body);
-            new bootstrap.Offcanvas(offcanvasEl).show();
+            // 스냅샷은 필드가 그려진 뒤에 떠야 한다(이동 시 변경 감지의 기준값).
+            currentChunkEdit = { chunkId, collection, snapshot: chunkEditSnapshot() };
+            updateChunkNavState();
+            // getOrCreateInstance — 이전/다음 이동은 "이미 열려 있는" 오프캔버스를 다시 여는
+            // 경로라, new 로 매번 인스턴스를 만들면 _isShown 이 false 인 새 인스턴스가 backdrop 을
+            // 한 겹 더 깔고 그 겹이 닫아도 남는다.
+            bootstrap.Offcanvas.getOrCreateInstance(offcanvasEl).show();
         })
         .catch(() => showToast('청크 정보를 불러올 수 없습니다.', 'danger'));
 }
@@ -637,6 +709,12 @@ function reindexChunkInline(chunkId, collection) {
         document.getElementById('edit-context-breadcrumb-display').textContent =
             contextParts.breadcrumb || '(위치 정보 없음)';
         document.getElementById('edit-context').value = contextParts.summary;
+        // 서버가 덮어쓴 3개 필드만 스냅샷 기준값을 갱신한다 — 텍스트(마지막 항목)는 그대로 둬야
+        // 재인덱싱 전에 해 둔 저장 안 한 텍스트 편집이 이동 경고에서 계속 잡힌다.
+        if (currentChunkEdit) {
+            const fresh = chunkEditSnapshot();
+            currentChunkEdit.snapshot = fresh.slice(0, 3).concat(currentChunkEdit.snapshot.slice(3));
+        }
     })
     .catch(() => showToast('재인덱싱 중 오류 발생', 'danger'))
     .finally(() => { btn.disabled = false; btn.innerHTML = originalHtml; });
