@@ -166,15 +166,32 @@
 
                                      <div th:if="${turnSourcesByTurnId != null and turnSourcesByTurnId[turn.id] != null and !#lists.isEmpty(turnSourcesByTurnId[turn.id])}"
                                             class="mt-2">
-                                          <a th:each="src : ${turnSourcesByTurnId[turn.id]}"
-                                              href="#"
-                                              class="source-ref badge bg-secondary text-decoration-none me-1 mb-1"
+                                          <!-- 배지와 그 수치는 .source-item 한 단위로 묶는다 —
+                                               느슨한 inline 형제로 두면 줄바꿈이 배지와 수치 사이에서
+                                               일어나 수치가 다음 배지 것처럼 읽힌다(chat-stream.js와 동일). -->
+                                          <span class="source-item" th:each="src : ${turnSourcesByTurnId[turn.id]}">
+                                          <a href="#"
+                                              class="source-ref badge bg-secondary text-decoration-none"
                                               th:text="${src.label}"
                                               th:attr="data-bs-toggle='popover',
                                                           data-bs-trigger='hover focus',
                                                           data-bs-placement='top',
                                                           data-preview-md=${src.preview},
                                                           data-chunk-id=${src.chunkId}"></a>
+                                          <!-- 저장해 둔 검색 진단 수치(3단계) 복원 — 표시 규칙은
+                                               스트리밍/HTMX 경로와 동일: 유사도 우선, 없으면 축 표기.
+                                               기본은 숨김이고 아래 스크립트가 토글에 따라 해제한다. -->
+                                          <span class="source-metrics text-muted d-none" style="font-size:0.72rem;"
+                                                th:if="${src.similarity != null or src.axisRanks != null or src.answerShare != null}">
+                                              <span th:if="${src.similarity != null}"
+                                                    th:text="'유사도 ' + ${#numbers.formatDecimal(src.similarity, 1, 2)}"></span>
+                                              <span th:if="${src.similarity == null and src.axisRanks != null}"
+                                                    th:text="${src.axisRanks}"></span>
+                                              <strong th:if="${src.answerShare != null}"
+                                                      th:text="${(src.similarity != null or src.axisRanks != null) ? ' · ' : ''}
+                                                               + '응답 ' + ${#numbers.formatDecimal(src.answerShare * 100, 1, 0)} + '%'"></strong>
+                                          </span>
+                                          </span>
                                      </div>
 
                             <!-- Feedback (like/dislike) + Metadata, same line -->
@@ -381,7 +398,12 @@
 
 <th:block layout:fragment="scripts">
 <script th:src="@{/js/chat-stream.js}" defer></script>
-<script>
+<!-- th:inline="javascript" 필수 — 이 블록은 `/*[[${x}]]*/ 기본값` 패턴을 여러 곳에서 쓴다.
+     이 속성이 없으면 Thymeleaf가 표현식을 텍스트 모드로 처리해 **값을 주석 안에 써 넣고**
+     뒤의 기본값이 그대로 살아남는다(`const X = /*true*/ false;`) — 문법 오류가 아니라서
+     조용히 항상 기본값으로 동작한다. admin/documents/base/curated-submissions.html은
+     이미 이 속성을 갖고 있었고 chat.html만 빠져 있었다. -->
+<script th:inline="javascript">
     const chatMessages    = document.getElementById('chat-messages');
     const typingIndicator = document.getElementById('typing-indicator');
     const chatForm        = document.getElementById('chat-form');
@@ -397,6 +419,17 @@
     window.isSourcePreviewEnabled = function () {
         return !!SOURCE_PREVIEW_ENABLED;
     };
+    const RETRIEVAL_METRICS_ENABLED = /*[[${retrievalMetricsEnabled}]]*/ false;
+    window.isRetrievalMetricsEnabled = function () {
+        return !!RETRIEVAL_METRICS_ENABLED;
+    };
+    /* 서버가 렌더한 이전 turn들의 진단 수치 노출 — 이 페이지는 message-assistant 프래그먼트가
+       아니라 자체 마크업으로 이전 turn을 그리므로(§복원 경로), 해제 처리도 여기서 한다. */
+    if (RETRIEVAL_METRICS_ENABLED) {
+        document.querySelectorAll('.source-metrics.d-none').forEach(function (el) {
+            el.classList.remove('d-none');
+        });
+    }
     const imageModalEl = document.getElementById('chatImageModal');
     const imageModal = imageModalEl ? bootstrap.Modal.getOrCreateInstance(imageModalEl) : null;
     const imageModalImg = document.getElementById('chat-image-modal-img');

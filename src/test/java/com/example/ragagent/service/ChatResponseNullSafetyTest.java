@@ -1,6 +1,7 @@
 package com.example.ragagent.service;
 
 import com.example.ragagent.agent.AgentState;
+import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.llm.LlmRouter;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -64,7 +65,7 @@ class ChatResponseNullSafetyTest {
 
         MessageSource messageSource = mock(MessageSource.class);
         when(messageSource.getMessage(anyString(), any(), any(Locale.class))).thenReturn("prompt");
-        ClassifierService svc = new ClassifierService(llmRouter, messageSource);
+        ClassifierService svc = new ClassifierService(llmRouter, messageSource, fakeProps());
         AgentState state = AgentState.of("테스트", "latest", "t1", "", null);
         AgentState result = svc.execute(state);
 
@@ -118,7 +119,7 @@ class ChatResponseNullSafetyTest {
 
         MessageSource messageSource = mock(MessageSource.class);
         when(messageSource.getMessage(anyString(), any(), any(Locale.class))).thenReturn("prompt");
-        ClassifierService svc = new ClassifierService(llmRouter, messageSource);
+        ClassifierService svc = new ClassifierService(llmRouter, messageSource, fakeProps());
         AgentState state = AgentState.of("테스트", "latest", "t1", "", null);
         AgentState result = svc.execute(state);
 
@@ -139,5 +140,12 @@ class ChatResponseNullSafetyTest {
         AgentState result = svc.execute(state);
 
         assertThat(result.needsRetry()).isFalse();
+    }
+
+    private static AppProperties fakeProps() {
+        AppProperties props = mock(AppProperties.class);
+        when(props.llmSafe()).thenReturn(new AppProperties.LlmConfig(
+                List.of(), 2, 10, 180, "COST_FIRST", 0.6, 3, 20, 0.0, 0.1, 0.0, 6000, true));
+        return props;
     }
 }

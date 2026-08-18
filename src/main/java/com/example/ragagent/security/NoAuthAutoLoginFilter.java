@@ -51,6 +51,8 @@ public class NoAuthAutoLoginFilter extends OncePerRequestFilter {
             new GatedRoute("DELETE", "/ui/documents/*"),
             new GatedRoute("PATCH", "/ui/documents/*/tags"),
             new GatedRoute("GET", "/ui/documents/*/tags/edit"),
+            new GatedRoute("PATCH", "/ui/documents/*/display-name"),
+            new GatedRoute("GET", "/ui/documents/*/display-name/edit"),
             new GatedRoute("GET", "/ui/documents/*/export")
     );
 

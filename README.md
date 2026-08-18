@@ -119,9 +119,10 @@ See [USER_MANUAL.md](documents/USER_MANUAL.md) for usage instructions and [OPERA
 | `LLM_ROUTING_MODE` | — | `COST_FIRST` | Default routing mode (`app.llm.default-routing-mode`). Air-gapped / local-only: set `LOCAL_ONLY` to block all external provider calls — this also hides the routing-strategy dropdown in the chat sidebar entirely, since every mode would resolve to the same provider |
 | `LLM_DEFAULT_PROVIDER_CONCURRENCY` | — | `3` | Query-path per-provider concurrency gate (`app.llm.default-provider-concurrency`) — the app never sends more concurrent requests to one provider than this (match the LLM server's real `--parallel` value). Per-provider override: `app.llm.providers[N].concurrency` |
 | `LLM_PERMIT_WAIT_TIMEOUT_SECONDS` | — | `60` | Max wait for a concurrency slot before failing fast with HTTP 429 + `Retry-After` (`app.llm.permit-wait-timeout-seconds`) instead of hanging until the read timeout. Indexing/background LLM calls are not subject to this cap |
-| `LLM_TEMPERATURE` | — | `0.0` | General/RAG answer temperature (`app.llm.temperature`), baked into each provider's `OpenAiChatOptions` at bean creation — **view-only in `/settings`**, restart to change |
+| `LLM_TEMPERATURE` | — | `0.0` | General/RAG interactive-call temperature (`app.llm.temperature`) — classify/answer/eval/rerank. Clamped to `[0.0, 0.3]`. **Hot-editable via `/settings`** — `ClassifierService`/`AnswerService`/`RerankerService` read it per call, applies to the next call without a restart. Still baked into each provider's `OpenAiChatOptions` at bean creation too, as the startup-time fallback for framework-internal callers that build their own `ChatClient` around the model (e.g. multi-query expansion) and so can't take a per-call override — those pick up a change only on restart |
 | `LLM_MAX_TOKENS` | — | `6000` | Completion-length cap for **blocking** LLM calls only (classification, keyword extraction, MD correction, sufficiency/critic evaluation, TXT structuring, etc.) — streaming chat/Direct answers are uncapped by design (bounded by SSE timeouts instead). Also sizes the conversation-history budget and MD-correction section-splitting budget (same value, shared across all three). **Not the model's context window** — size it with headroom under your LLM server's actual context size; see [PIPELINE.md §4.1](documents/PIPELINE.md#41-appllmmax-tokensllm_max_tokens-크기-산정--로컬-llm-컨텍스트-윈도우와의-관계) |
 | `DIRECT_LLM_TEMPERATURE` | — | `0.1` | Temperature for meta/Direct answers only (`app.llm.direct-temperature`), separate from `LLM_TEMPERATURE`, clamped to `[0.0, 1.0]`. **Hot-editable via `/settings`** — applies to the next Direct call without a restart |
+| `LLM_INDEXING_TEMPERATURE` | — | `0.0` | Temperature for every ungated background/indexing call (`app.llm.indexing-temperature`) — keyword extraction, MD correction, TXT structuring, vision image description/classification, thread-title generation, conversation summarization. Separate from `LLM_TEMPERATURE`/`DIRECT_LLM_TEMPERATURE` so these extraction-style calls stay deterministic regardless of what those are set to. Clamped to `[0.0, 1.0]`. **Hot-editable via `/settings`** — applies to the next call without a restart |
 | `OPENAI_API_KEY` | — | — | Required for OpenAI providers. Providers auto-disabled at startup if unset |
 | `GEMINI_API_KEY1` / `GEMINI_API_KEY2` | — | — | Required for Gemini providers (one key per NORMAL/PREMIUM pair — see [OPERATOR_MANUAL.md §5](documents/OPERATOR_MANUAL.md#5-llm-프로바이더-설정)). Providers auto-disabled at startup if unset |
 | `GEMINI_MODEL` | — | per-provider | Overrides the model for both Gemini NORMAL-tier providers (`providers[3]` gemini-flash-lite, `providers[4]` gemini-flash). ⚠ Both read this one var, so setting it collapses them to the same model — leave unset to keep their distinct defaults |
@@ -191,11 +192,11 @@ See [USER_MANUAL.md](documents/USER_MANUAL.md) for usage instructions and [OPERA
 
 ### Conversation Memory / Summary Cache
 
-Conversation history budget is auto-derived as `LLM_MAX_TOKENS × 0.75` (floor 1,000 chars). Both the raw-history fallback path and the precomputed-summary path (below) honor this exact same ceiling, so switching between them never changes how much context reaches the LLM.
+Conversation history budget is auto-derived as `LLM_MAX_TOKENS × 0.5` (floor 1,000 chars). Both the raw-history fallback path and the precomputed-summary path (below) honor this exact same ceiling, so switching between them never changes how much context reaches the LLM.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `MEMORY_FETCH_LIMIT_TURNS` | `50` | Max recent turns fetched (fallback path) before the char budget above trims them newest-first |
+| `MEMORY_FETCH_LIMIT_TURNS` | `10` | Max recent turns fetched (fallback path, and the summary path's input bound) before the char budget above trims them newest-first |
 | `SUMMARY_MAX_CACHED_THREADS` | `3` | Number of threads kept warm in the precomputed-summary LRU cache |
 | `SUMMARY_MAX_SUMMARY_CHARS` | `2000` | Hard cap on the generated summary string |
 | `SUMMARY_RECENT_RAW_TURNS` | `2` | Verbatim recent turns appended after the summary (also budget-trimmed newest-first) |
@@ -295,7 +296,7 @@ rag_java/
     │       ├── CuratedSubmissionService.java  # Proposal board: validation + tags, split-on-approve (1:N), reject, notification counts
     │       ├── CuratedImageStore.java         # Proposal body images: upload (allowlist/size/magic-byte/content-hash name), [이미지: …] marker bookkeeping, approval-time Vision description, reference-counted cleanup + startup orphan sweep
     │       ├── SettingsService.java           # runtime settings-override layer (AppProperties.OverrideSource) + /settings view/validation/audit
-    │       ├── IndexingProgressService.java   # SSE emitter registry for async upload/sync progress
+    │       ├── IndexingProgressService.java   # SSE emitter registry for async upload/sync progress; retains outcomes for hours so a reconnect after a long disconnect still learns the real result instead of hanging
     │       ├── MarkdownCorrectionService.java # Post-process LLM markdown output
     │       ├── DocumentLoaderService.java     # PDF/DOCX/TXT/MD loader + Markdown section parser; scanned PDF OCR
     │       ├── DocxToMarkdownConverter.java   # DOCX → Markdown with inline image extraction
@@ -330,15 +331,20 @@ rag_java/
             ├── layout/base.html           # Shared layout (Thymeleaf Layout Dialect; PWA meta + SW register)
             ├── chat.html                  # Chat page (server-renders previous turns)
             ├── documents.html             # Document management page
+            ├── admin.html                 # Vector store admin (chunk browser + curated Q&A + submissions)
+            ├── settings.html              # Effective LLM/RAG config — view + hot edit
             ├── curated-submissions.html   # Knowledge-proposal board (post form + "my proposals" status list)
             ├── llm-usage.html             # LLM usage statistics page
+            ├── auth/                      # login.html, signup.html, setup.html
             └── fragments/
+                ├── admin-chunks.html      # Chunk table (collection/document filter + pagination)
                 ├── admin-curated.html     # Admin curated-Q&A panel (lazy-loaded on expand)
+                ├── settings-item.html     # One settings row (view or edit input) — HTMX partial target
+                ├── settings-providers.html # LLM providers table (enable/disable toggles)
                 ├── admin-submissions.html # Admin proposal-review panel (lazy-loaded, status-filtered)
                 ├── llm-usage-cards.html   # Provider cards (HTMX 30s auto-refresh)
                 ├── thread-list.html       # HTMX thread list fragment
                 ├── thread-item.html       # HTMX thread item fragment
-                ├── doc-row.html           # HTMX document table row fragment
                 ├── doc-table-body.html    # HTMX document table tbody fragment
                 ├── message-user.html      # User message bubble fragment
                 ├── message-assistant.html # HTMX assistant bubble (includes source hover preview)
@@ -376,7 +382,7 @@ User question
 - **Same-priority load balancing** — registering multiple providers at the same role + priority (e.g. two LOCAL servers) automatically distributes requests to whichever has more free concurrency-gate capacity (least-in-flight), for horizontal throughput scaling — no code changes, just deployment config
 - **Task-tier model routing (small-LLM offload)** — reasoning-free chores (keyword+context extraction, conversation summary, thread title, MultiQuery query expansion) route to `TaskType.MICRO_TEXT`; register a dedicated small (~500MB) local model at `type=MICRO_TEXT` and those chores offload to it while the main model stays dedicated to answers and the quality-sensitive classify / meta-direct-answer. Falls back to the main model when no small model is registered (zero regression) — see [LLM_ROUTING.md §9](documents/LLM_ROUTING.md)
 - **Embedding load balancing + parallel sub-batch embedding** — multiple embedding endpoints (`EMBED_ADDITIONAL_BASE_URLS`, same model/dimension) are balanced least-in-flight; indexing can embed a document's sub-batches in parallel (`EMBED_MAX_CONCURRENT_BATCHES`) to fill them. Both opt-in (default single-endpoint, serial) — see [OPERATOR_MANUAL §3.2](documents/OPERATOR_MANUAL.md)
-- **Settings page (`/settings`)** — view the effective LLM/RAG configuration (providers, routing, embedding, search tuning) in one place; three families of values are **hot-editable without a restart** (persisted in `settings_override`, revert to the property default on delete): search tuning (similarity threshold, RRF weight/k, candidate multipliers, multi-query min length/enabled, retry escalation, topK, hybrid search — apply on the next search), indexing/chunking (chunk size/overlap/min, **chunking strategy**, concurrent file/LLM-call limits — apply on the next indexing or ↺ re-index), and Direct-answer temperature (apply on the next Direct call). Editing is admin-only and audited; restart-required values (rerank-enabled, general temperature/max-tokens, embedding config, etc.) are shown read-only
+- **Settings page (`/settings`)** — view the effective LLM/RAG configuration (providers, routing, embedding, search tuning) in one place; several families of values are **hot-editable without a restart** (persisted in `settings_override`, revert to the property default on delete): search tuning (similarity threshold, RRF weight/k, candidate multipliers, multi-query min length/enabled, retry escalation, topK, hybrid search — apply on the next search), indexing/chunking (chunk size/overlap/min, **chunking strategy**, concurrent file/LLM-call limits — apply on the next indexing or ↺ re-index), all three LLM temperatures — general/RAG, Direct-answer, and indexing/background (each applies on the next call of its own kind) — and a UI toggle for the chat source-preview popovers (`ui.source-preview-enabled`, applies on the next page render). Editing is admin-only and audited; restart-required values (rerank-enabled, max-tokens, embedding config, etc.) are shown read-only
 - **Vector search** — LLM generates an optimized search query (`MultiQueryExpander`, 3 parallel queries; skipped for short keyword-ish questions), then performs vector similarity search via the selected backend (ChromaDB or sqlite-vec); the original-question search runs in parallel with query expansion instead of waiting behind it. Batched Chroma search requests only the metadata/document/distance fields it actually reads, not the (unused) embedding vectors, keeping large-candidate-pool responses lean
 - **Contextual Retrieval** — each chunk's embedding and lexical (`chunk_fts`) index include a prepended context header (`{filename} > {section heading}`, plus an optional LLM-generated 1-2 sentence summary from the same call that extracts keywords) so chunks that read ambiguously alone (tables, code fragments, pronoun-heavy text) are recalled more reliably; the header never appears in stored/displayed text, the source preview, or the answer prompt — only in the embedding/lexical-search input
 - **Embedding input normalization** — decorative markdown (separator lines, bold/italic/underline markers) is stripped from the embedding, `chunk_fts`, and answer-prompt inputs (not from stored/displayed text), reducing noise in the search index and prompt token usage
@@ -426,6 +432,9 @@ User question
 | `GET/POST` | `/curated/submissions` | Knowledge-proposal board — post a chunk, track its review outcome |
 | `POST` | `/curated/submissions/images` | Upload a proposal body image → returns the `[이미지: …]` marker to splice in at the caret |
 | `GET` | `/llm-usage` | LLM usage statistics page |
+| `GET` | `/admin` | Vector store admin — chunk browser, curated Q&A, submission review (admin-only) |
+| `GET` | `/settings` | Effective LLM/RAG configuration; hot-editable values are admin-only to change |
+| `GET` | `/ui/documents/{docId}/export` | Rebuild + download a document from its indexed chunks (MD/TXT/DOCX; admin-only) |
 | `PATCH` | `/ui/threads/{threadId}/turns/{turnId}/images/exclude` | Exclude one thumbnail image from the current conversation record only |
 | `GET/POST` | `/login` | Login page (auth mode, or no-auth management-only submode) |
 | `GET/POST` | `/signup` | Sign-up page (auth mode only) |
@@ -442,5 +451,9 @@ User question
 | `GET` | `/api/v1/documents` | List indexed documents |
 | `DELETE` | `/api/v1/documents/{docId}` | Delete a document |
 | `GET` | `/api/v1/images/{docId}/{filename}` | Serve an extracted image file |
+| `GET` | `/api/v1/tags` | Distinct tags in use (`?version`, `?excludeCommon`, `?includeCurated`) |
+| `GET` | `/api/v1/questions/suggest` | Previously asked questions matching the in-progress input (`?q`, `?limit`) |
+| `POST` | `/api/v1/questions/reuse` | Reuse a suggested question's stored answer; revalidates source chunks, else signals fallback |
 | `GET` | `/api/v1/llm/usage` | Per-provider token usage + Circuit Breaker status |
 | `GET` | `/api/v1/llm/usage/history` | Daily token history (`?days=7\|30\|90`) |
+| `GET` | `/api/v1/llm/concurrency` | Live LOCAL-tier concurrency for the header indicator (`{"available","inUse","capacity"}`) |

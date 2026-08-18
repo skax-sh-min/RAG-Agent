@@ -12,6 +12,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.document.Document;
+import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
@@ -56,6 +57,11 @@ public class KeywordExtractor {
     public KeywordExtractor(LlmRouter llmRouter, AppProperties props) {
         this.llmRouter = llmRouter;
         this.props = props;
+    }
+
+    /** Indexing/background temperature (hot-editable), read fresh per call — see AppProperties.LlmConfig. */
+    private OpenAiChatOptions indexingOptions() {
+        return OpenAiChatOptions.builder().temperature(props.llmSafe().indexingTemperature()).build();
     }
 
     public List<Document> enrichParallel(List<Document> chunks, Semaphore llmGate,
@@ -154,7 +160,7 @@ public class KeywordExtractor {
             // (BackgroundUsage.KEYWORD_PREFIX stays defined only to recognize historical rows).
             String response = llmRouter.executeWithTracking(
                     TaskType.MICRO_TEXT, RoutingMode.COST_FIRST, BackgroundUsage.CONTEXT_PREFIX,
-                    model -> model.call(new Prompt(prompt)));
+                    model -> model.call(new Prompt(prompt, indexingOptions())));
             log.debug("[ENRICH] LLM 응답: [{}]", response);
             ParsedEnrichment parsed = parseEnrichment(response);
             // No "키워드:" marker → legacy plain-response shape, treat the whole reply as keywords.
@@ -207,7 +213,7 @@ public class KeywordExtractor {
         try {
             String response = llmRouter.executeWithTracking(
                     TaskType.MICRO_TEXT, RoutingMode.COST_FIRST, BackgroundUsage.CONTEXT_PREFIX,
-                    model -> model.call(new Prompt(prompt.toString())));
+                    model -> model.call(new Prompt(prompt.toString(), indexingOptions())));
             log.debug("[ENRICH-BATCH] LLM 응답({}개 청크): [{}]", n, response);
             Map<Integer, String> sections = splitBatchSections(response);
             if (sections.size() < n) {

@@ -54,10 +54,13 @@ public final class SettingsKeys {
     public static final String INDEXING_MAX_CONCURRENT_LLM    = "indexing.max-concurrent-llm-calls";
 
     // ── LLM (apply on the next LLM call) ─────────────────────────────────────
+    public static final String LLM_TEMPERATURE                = "llm.temperature";
     public static final String LLM_DIRECT_TEMPERATURE         = "llm.direct-temperature";
+    public static final String LLM_INDEXING_TEMPERATURE       = "llm.indexing-temperature";
 
     // ── UI (apply on next page render) ───────────────────────────────────────
     public static final String UI_SOURCE_PREVIEW_ENABLED      = "ui.source-preview-enabled";
+    public static final String UI_RETRIEVAL_METRICS_ENABLED   = "ui.retrieval-metrics-enabled";
 
     /** All hot-editable keys, in the order they are grouped on the settings page. */
     public static final List<String> HOT_EDITABLE = List.of(
@@ -80,7 +83,10 @@ public final class SettingsKeys {
             CHUNK_SPLIT_GRANULAR,
             INDEXING_MAX_CONCURRENT_FILES,
             INDEXING_MAX_CONCURRENT_LLM,
+            LLM_TEMPERATURE,
             LLM_DIRECT_TEMPERATURE,
-            UI_SOURCE_PREVIEW_ENABLED
+            LLM_INDEXING_TEMPERATURE,
+            UI_SOURCE_PREVIEW_ENABLED,
+            UI_RETRIEVAL_METRICS_ENABLED
     );
 }

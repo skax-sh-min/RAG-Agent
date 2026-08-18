@@ -8,6 +8,7 @@ import com.example.ragagent.service.CuratedQaService;
 import com.example.ragagent.service.CuratedSubmissionService;
 import com.example.ragagent.service.IndexingProgressService;
 import com.example.ragagent.service.RagService;
+import com.example.ragagent.service.RetrievalMetricsService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
@@ -33,16 +34,19 @@ public class AdminController {
     private final IndexingProgressService progressService;
     private final CuratedQaService curatedQaService;
     private final CuratedSubmissionService submissionService;
+    private final RetrievalMetricsService retrievalMetricsService;
     private final CurrentUser currentUser;
 
     public AdminController(AdminService adminService, RagService ragService,
                             IndexingProgressService progressService, CuratedQaService curatedQaService,
-                            CuratedSubmissionService submissionService, CurrentUser currentUser) {
+                            CuratedSubmissionService submissionService,
+                            RetrievalMetricsService retrievalMetricsService, CurrentUser currentUser) {
         this.adminService = adminService;
         this.ragService   = ragService;
         this.progressService = progressService;
         this.curatedQaService = curatedQaService;
         this.submissionService = submissionService;
+        this.retrievalMetricsService = retrievalMetricsService;
         this.currentUser = currentUser;
     }
 
@@ -187,6 +191,27 @@ public class AdminController {
     public ResponseEntity<Void> deleteCurated(@PathVariable long id) {
         boolean removed = curatedQaService.forceRemove(id);
         return removed ? ResponseEntity.ok().build() : ResponseEntity.notFound().build();
+    }
+
+    // ── 검색 진단 수치 (3단계) ──────────────────────────────────────────────────
+
+    /**
+     * Retrieval-diagnostics panel fragment — same lazy-load-on-expand pattern as
+     * {@link #curatedPanel}, so {@code /admin} itself never pays for this query.
+     *
+     * <p>Read-only by design: it exists to answer "is retrieval behaving" across many turns, and
+     * every knob it informs already lives on {@code /settings}. Deliberately not user-scoped —
+     * it is a deployment-wide operator view, gated by {@code /admin/**}'s ROLE_ADMIN.
+     */
+    @GetMapping("/admin/retrieval-metrics")
+    public String retrievalMetricsPanel(@RequestParam(defaultValue = "0")  int offset,
+                                        @RequestParam(defaultValue = "20") int limit,
+                                        Model model) {
+        model.addAttribute("metricTurns",  retrievalMetricsService.recent(offset, limit));
+        model.addAttribute("metricsTotal", retrievalMetricsService.count());
+        model.addAttribute("offset", offset);
+        model.addAttribute("limit",  limit);
+        return "fragments/admin-retrieval-metrics :: panel";
     }
 
     // ── 청크 추가 게시판 — 제안 검토 ────────────────────────────────────────────

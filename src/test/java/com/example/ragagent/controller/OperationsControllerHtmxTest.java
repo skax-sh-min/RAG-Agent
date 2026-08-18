@@ -6,6 +6,7 @@ import com.example.ragagent.audit.AuditLogger;
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.context.ThreadContextResolver;
 import com.example.ragagent.llm.CircuitBreaker;
+import com.example.ragagent.llm.BackgroundLlmConcurrencyTracker;
 import com.example.ragagent.llm.EmbeddingConcurrencyTracker;
 import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.repository.LlmUsageRepository;
@@ -62,6 +63,7 @@ class OperationsControllerHtmxTest {
     @MockitoBean CuratedQaService curatedQaService;
     @MockitoBean LlmRouter llmRouter;
     @MockitoBean EmbeddingConcurrencyTracker embeddingConcurrencyTracker;
+    @MockitoBean BackgroundLlmConcurrencyTracker backgroundConcurrencyTracker;
 
     @Test
     @DisplayName("DELETE /ui/threads/{id} — 200 OK")

@@ -35,6 +35,7 @@ RAG Agent 시스템 배포·설정·운영 가이드입니다.
    - 6.1 [대화 메모리](#61-대화-메모리)
    - 6.2 [문서 버전 관리](#62-문서-버전-관리)
    - 6.3 [데이터 영속성](#63-데이터-영속성)
+      - 6.3.1 [SQLite 파일별 테이블 구성](#631-sqlite-파일별-테이블-구성)
    - 6.4 [성능](#64-성능)
    - 6.5 [설정 페이지 (/settings) — LLM/RAG 옵션 조회·핫 수정](#65-설정-페이지-settings--llmrag-옵션-조회핫-수정)
    - 6.6 [검색 품질 평가 하네스 (개발자용)](#66-검색-품질-평가-하네스-개발자용)
@@ -389,8 +390,9 @@ app.embedding.max-concurrent-batches=4
 | 변수 | 기본값 | 권장 범위 | 설명 |
 |------|--------|----------|------|
 | `LLM_MAX_TOKENS` | `6000` | 1000 ~ 32000 | 단일 진실 소스(`app.llm.max-tokens`)로 통일되어, 이 값을 바꾸면 **아래 세 곳 모두**가 함께 움직입니다: (1) **블로킹 LLM 응답 토큰 상한** — 인덱싱·분류·키워드·Direct 블로킹 호출에 적용(스트리밍 채팅 답변은 의도적으로 미적용, SSE 타임아웃이 폭주 방지). (2) **대화 컨텍스트 문자 예산**(`MemoryService`, `×0.5`로 히스토리 예산 산출). (3) **MD 교정 섹션 크기**(`MarkdownCorrectionService`).<br>§6.18 이전에는 (1)이 코드에 `6000`으로 하드코딩돼 이 환경변수와 무관하게 동작했고, (2)·(3)은 별도의 죽은 프로퍼티(`spring.ai.openai.chat.options.max-tokens`, 기본 `8000`)를 읽어 (1)과 다른 값을 썼습니다 — 이제 세 곳 모두 `app.llm.max-tokens` 하나만 읽습니다.<br>**응답 모드(S/M/L)와의 관계**: (1)의 실제 상한은 이 값 그대로가 아니라 `ResponseMode`별 비율(S 15%/M 40%/L 70%)과 고정 글자수 하한(S 2,000/M 5,000/L 10,000자) 중 **큰 값**입니다 — 그래서 이 값을 기본 `6000`~`12000` 수준으로 두는 한 S/M/L 모두 사실상 고정 하한이 실제 분량을 결정하고, 이 환경변수를 훨씬 크게(예: 20,000 이상) 올려야 비율 항이 하한을 넘어서기 시작합니다. 한글은 1토큰≈1글자라 이 숫자는 별도 환산 없이 "약 N자" 프롬프트 지시문에도 그대로 쓰입니다 — 상세는 CLAUDE.md와 [§6.7 큐레이션 Q&A](#67-큐레이션-qa-좋아요-기반-지식-승격-1010)의 L모드 임베딩 스킵 항목 참고 |
-| `LLM_TEMPERATURE` | `0.0` | 0.0 ~ 0.3 | 일반/RAG 및 Direct를 제외한 모든 LLM 호출의 무작위성 제어(`app.llm.temperature`). `0.0`은 결정적 답변, 높을수록 다양·창의적. `[0.0, 0.3]`으로 clamp.<br>**§6.18 이전에는 코드에 `0.0`으로 하드코딩돼 이 값이 무시되는 죽은 설정이었으나, 이제 실제로 적용됩니다** — 과거에 이 값을 설정해 둔 운영자는 이번부터 처음으로 효과가 나타납니다(기본 `0.0`이면 체감 변화 없음). 프로바이더 빈 생성 시점에 고정되므로 변경하려면 재기동 필요 |
+| `LLM_TEMPERATURE` | `0.0` | 0.0 ~ 0.3 | **일반/RAG 대화형 호출**(분류·답변·근거평가·재순위)의 무작위성 제어(`app.llm.temperature`). `0.0`은 결정적 답변, 높을수록 다양·창의적. `[0.0, 0.3]`으로 clamp.<br>**핫 수정 가능** — `/settings`에서 재기동 없이 다음 호출부터 반영(`ClassifierService`/`AnswerService`/`RerankerService`가 매 호출 재조회). 프로바이더 빈 생성 시점에도 고정되는데, 이는 모델 주위에 자체 `ChatClient`를 구성해 호출별 오버라이드를 받을 수 없는 프레임워크 내부 호출(예: 멀티쿼리 확장)을 위한 기동 시점 폴백 값으로만 쓰입니다 — 그런 호출은 재기동해야 변경이 반영됩니다.<br>인덱싱/백그라운드 호출(키워드 추출·MD 교정 등)에는 적용되지 않습니다 — 아래 `LLM_INDEXING_TEMPERATURE`로 분리되어 있습니다 |
 | `DIRECT_LLM_TEMPERATURE` | `0.1` | 0.0 ~ 1.0 | **Direct(meta) 응답 전용** temperature(`app.llm.direct-temperature`) — 인사·잡담 등 RAG를 안 쓰는 직접 응답은 약간의 다양성이 자연스러워 일반 temperature와 분리(§6.18). `[0.0, 1.0]`으로 clamp. **핫 수정 가능** — `/settings`에서 재기동 없이 다음 Direct 호출부터 반영(`DirectAnswerService`가 매 호출 재조회) |
+| `LLM_INDEXING_TEMPERATURE` | `0.0` | 0.0 ~ 1.0 | **인덱싱/백그라운드 전용** temperature(`app.llm.indexing-temperature`) — 키워드 추출, MD 교정, txt→md 구조화, 이미지 설명/분류, 스레드 제목 생성, 대화 요약 등 모든 ungated 백그라운드 호출에 적용. 대화형이 아닌 추출/분류 작업이라 `LLM_TEMPERATURE`/`DIRECT_LLM_TEMPERATURE` 값과 무관하게 결정적으로 유지하려고 분리했습니다. `[0.0, 1.0]`으로 clamp. **핫 수정 가능** — `/settings`에서 재기동 없이 다음 호출부터 반영(각 서비스가 매 호출 재조회) |
 
 #### 로그 레벨
 
@@ -508,7 +510,7 @@ LLM_ROUTING_MODE=QUALITY_FIRST
 
 #### LLM 응답 파라미터
 
-> **temperature와 최대 출력 토큰**은 각각 `LLM_TEMPERATURE`, `LLM_MAX_TOKENS` 환경변수로 설정할 수 있습니다(§6.18로 실제 적용되도록 수정됨). 일반/RAG temperature(`LLM_TEMPERATURE`) 범위는 **0.0~0.3**(재기동 필요), Direct(잡담) 전용 `DIRECT_LLM_TEMPERATURE`(기본 0.1) 범위는 **0.0~1.0**이며 `/settings`에서 핫 수정 가능합니다. → [§3.2 LLM 응답 파라미터](#32-환경변수-전체-목록) 참조
+> **temperature와 최대 출력 토큰**은 각각 `LLM_TEMPERATURE`, `LLM_MAX_TOKENS` 환경변수로 설정할 수 있습니다(§6.18로 실제 적용되도록 수정됨). LLM temperature는 세 가지 모두 `/settings`에서 핫 수정 가능합니다 — 일반/RAG temperature(`LLM_TEMPERATURE`, 기본 0.0, 범위 **0.0~0.3**), Direct(잡담) 전용 `DIRECT_LLM_TEMPERATURE`(기본 0.1, 범위 **0.0~1.0**), 인덱싱/백그라운드 전용 `LLM_INDEXING_TEMPERATURE`(기본 0.0, 범위 **0.0~1.0**). → [§3.2 LLM 응답 파라미터](#32-환경변수-전체-목록) 참조
 
 #### 업로드 크기 제한
 
@@ -1292,9 +1294,9 @@ app.llm.providers[1].stream=false
 | type | 처리 가능 태스크 | 권장 모델 유형 |
 |------|----------------|--------------|
 | `MICRO_TEXT` | 키워드+맥락·요약·제목·쿼리 확장만 (추론 불필요) | 500MB급 소형 모델 (§6.21) |
-| `LIGHT_TEXT` | 분류·직답 + `MICRO_TEXT` 잡무 | 텍스트 전용 소형~중형 모델 |
-| `LIGHT_BOTH` | 분류·직답·`MICRO_TEXT` 잡무 + Vision | 범용 로컬 LLM |
-| `TEXT` | 답변 생성·Critic·Rerank만 | 텍스트 전용 대형 모델 |
+| `LIGHT_TEXT` | MD 서식 교정·TXT 구조화 + `MICRO_TEXT` 잡무 | 텍스트 전용 소형~중형 모델 |
+| `LIGHT_BOTH` | `LIGHT_TEXT` 태스크 + Vision | 범용 로컬 LLM |
+| `TEXT` | 답변 생성·Rerank **+ 분류·meta 직답**만 | 텍스트 전용 대형 모델 |
 | `VISION` | 이미지 설명만 | Vision 전용 모델 |
 | `BOTH` | 모든 태스크 | 외부 고성능 / 범용 대형 모델 |
 
@@ -1310,11 +1312,11 @@ app.llm.providers[1].stream=false
 
 | 노드 | TaskType | 설명 |
 |------|----------|------|
-| ClassifierService | `LIGHT_TEXT` | 질문 유형 분류 (품질 민감 — 큰 모델 유지) |
+| ClassifierService | `TEXT` | 질문 유형 분류 (품질 민감 — 답변과 같은 타입으로 묶어 큰 모델 유지) |
 | RetrievalService | `MICRO_TEXT` | 쿼리 생성 (MultiQueryExpander) — §6.21 작업2로 MICRO_TEXT 전환 |
 | AnswerService | `TEXT` | 답변 생성 + **충분도·근거 통합 평가**(별도 1콜) |
 | CriticService | — | **LLM 호출 없음** — AnswerService의 통합 평가가 낸 `grounded`를 읽어 재시도 여부만 결정 (`responseMode=S`이면 이 단계 스킵) |
-| DirectAnswerService | `LIGHT_TEXT` | meta 질문 직접 응답 (사용자 노출 — 큰 모델 유지) |
+| DirectAnswerService | `TEXT` | meta 질문 직접 응답 (사용자 노출 — 답변과 같은 타입으로 묶어 큰 모델 유지) |
 | VisionDescriptionService | `VISION` | 이미지 → 설명 생성 |
 | ImageTypeClassifier | `LIGHT_BOTH` | 이미지 유형 분류 |
 | KeywordExtractor | `MICRO_TEXT` | 청크 키워드+맥락(Contextual Retrieval, §10.1) 통합 추출 — `context:` 사용량 라벨. §6.21로 MICRO_TEXT 전환 |
@@ -1459,9 +1461,10 @@ app.llm.circuit-breaker-minutes=4
 app.llm.progressive-threshold=0.6
 
 # LOCAL — 무료, 분류·키워드·경량 태스크 처리
+# base-url에 폴백 기본값을 두지 않는다 — LOCAL_LLM_URL이 비면 이 프로바이더는 기동 시 제외된다(LlmConfig G2)
 app.llm.providers[0].name=local
-app.llm.providers[0].base-url=${LOCAL_LLM_URL:http://localhost:1234/v1}
-app.llm.providers[0].api-key=${LOCAL_LLM_KEY:lm-studio}
+app.llm.providers[0].base-url=${LOCAL_LLM_URL:}
+app.llm.providers[0].api-key=${LOCAL_LLM_KEY:no-key}
 app.llm.providers[0].model=${LOCAL_LLM_MODEL:gemma-4-27b-it}
 app.llm.providers[0].type=LIGHT_BOTH
 app.llm.providers[0].role=LOCAL
@@ -1548,13 +1551,14 @@ COST_FIRST 흐름:
 
 #### 예제 6 — 소형(경량) LLM 분리로 잡무 오프로딩 (PLAN §6.21)
 
-추론이 필요 없는 잡무(키워드+맥락 추출·대화 요약·제목 생성·MultiQuery 쿼리 확장 = `MICRO_TEXT`)를 500MB급 소형 모델로 내리고, 답변 생성(`TEXT`)과 품질 민감한 분류·직답(`LIGHT_TEXT`)은 큰 모델이 전담하게 하면 — 두 모델이 **서로 다른 동시성 슬롯(Semaphore)**을 쓰므로 인덱싱 잡무가 채팅 답변의 슬롯을 잠식하지 않습니다(대화 응답 지연 감소).
+추론이 필요 없는 잡무(키워드+맥락 추출·대화 요약·제목 생성·MultiQuery 쿼리 확장 = `MICRO_TEXT`)를 500MB급 소형 모델로 내리고, 답변 생성과 품질 민감한 분류·직답(셋 다 `TEXT`)은 큰 모델이 전담하게 하면 — 두 모델이 **서로 다른 동시성 슬롯(Semaphore)**을 쓰므로 인덱싱 잡무가 채팅 답변의 슬롯을 잠식하지 않습니다(대화 응답 지연 감소).
 
 > 이 오프로딩은 `application.properties` 기본 설정에 이미 적용되어 있습니다(`providers[0]`=소형, `providers[1]`=큰 모델) — 아래는 처음부터 구성하는 방법을 보여주는 예제입니다.
 
 소형 모델 서버를 큰 모델과 **다른 포트/장비**에 띄운 뒤(예: LM Studio 2번째 인스턴스에 `qwen2.5-0.5b-instruct`를 로드, 포트 1236), `application.properties`:
 ```properties
-# 큰 모델 — 답변(TEXT)·분류·직답(LIGHT_TEXT)·Vision 전담. priority를 1로 올려 소형에 MICRO_TEXT 우선권을 넘긴다.
+# 큰 모델 — 답변·분류·직답(전부 TEXT)·MD 교정/TXT 구조화(LIGHT_TEXT)·Vision 전담.
+# priority를 1로 올려 소형에 MICRO_TEXT 우선권을 넘긴다.
 app.llm.providers[1].name=local
 app.llm.providers[1].base-url=http://localhost:1234/v1
 app.llm.providers[1].model=google/gemma-4-e4b
@@ -1576,15 +1580,17 @@ app.llm.providers[0].concurrency=4
 라우팅 결과:
 ```
 [키워드·요약·제목·쿼리확장] local-fast (MICRO_TEXT, priority 0)    ← 소형
-[분류·meta 직답]            local        (LIGHT_TEXT→BOTH, p1)      ← 큰 모델(품질 유지)
+[분류·meta 직답]            local        (TEXT/BOTH, priority 1)    ← 큰 모델(품질 유지)
 [답변·Critic·Rerank]        local        (TEXT/BOTH, priority 1)    ← 큰 모델
+[MD 교정·TXT 구조화]        local        (LIGHT_TEXT→BOTH, p1)      ← 큰 모델
 [Vision·이미지 분류]        local        (소형은 이미지 미지원)      ← 큰 모델
 소형 다운/차단 시           → MICRO_TEXT가 local(priority 1)로 자동 폴백
 ```
 
 - ⚠️ **priority 필수**: 소형(0) < 큰 모델(1). 둘 다 0으로 두면 `MICRO_TEXT`가 두 모델 사이에 로드밸런싱되어 절반만 오프로딩됩니다.
-- ⚠️ **인덱스 연속성**: `providers[N]`은 0부터 연속이어야 바인딩됩니다(파일 내 줄 순서 자체는 무관 — 사람이 읽기 편하도록만 맞춤). 현재 기본 파일은 `[0]`=소형·`[1]`=로컬 LLM 1·`[2]`=로컬 LLM 2·`[3]~[7]`=외부·`[8]`=Vision(선택) 순.
-- **더 공격적 오프로딩(A안)**: 분류·직답까지 소형으로 내리려면 `type=MICRO_TEXT` 대신 `type=LIGHT_TEXT`로 등록(`LIGHT_TEXT`가 `MICRO_TEXT`도 흡수). 단 분류 오분류는 라우팅 정확도로, 직답은 사용자 노출로 이어지므로 채택 전 검색 품질 평가 하네스([§6.6](#66-검색-품질-평가-하네스-개발자용))로 분류 정확도 회귀를 확인하세요.
+- ⚠️ **인덱스 연속성**: `providers[N]`은 0부터 연속이어야 바인딩됩니다(파일 내 줄 순서 자체는 무관 — 사람이 읽기 편하도록만 맞춤). 현재 기본 파일은 `[0]`=소형·`[1]`=로컬 LLM 1·`[2]`=로컬 LLM 2·`[3]~[8]`=외부(NORMAL 3 + PREMIUM 3)·`[9]`=Vision(선택, 주석 처리) 순.
+- **더 공격적 오프로딩(A안)**: MD 서식 교정·TXT 구조화까지 소형으로 내리려면 `type=MICRO_TEXT` 대신 `type=LIGHT_TEXT`로 등록(`LIGHT_TEXT`가 `MICRO_TEXT`도 흡수). 구조 충실도가 떨어지면 청킹 품질에 직결되므로 채택 전 검색 품질 평가 하네스([§6.6](#66-검색-품질-평가-하네스-개발자용))로 회귀를 확인하세요.
+  - ⚠️ **분류·직답은 A안으로도 내려가지 않습니다** — 둘 다 답변과 같은 `TaskType.TEXT`라서, 소형을 `LIGHT_TEXT`로 올려도 후보에 들지 않습니다. 소형을 `TEXT`/`BOTH`로 등록하면 답변 생성까지 함께 소형으로 넘어갑니다(같은 타입이라 분리 불가).
 - 처리량을 더 늘리려면 소형·큰 모델 각각을 [예제 5](#예제-5--로컬-llm-2대-로드밸런싱-처리량-확장)처럼 같은 priority로 다중 등록해 로드밸런싱할 수 있습니다 — 구체적인 결합 설정은 아래 예제 7 참고.
 
 ---
@@ -1632,11 +1638,11 @@ app.llm.providers[8].concurrency=4
 라우팅 결과:
 ```
 [키워드·요약·제목·쿼리확장] local-fast-a ∥ local-fast-b (MICRO_TEXT, priority 0, least-in-flight 분산)
-[분류·meta 직답·답변·Critic] local-a ∥ local-b            (LIGHT_TEXT→BOTH / TEXT/BOTH, priority 1, least-in-flight 분산)
+[분류·meta 직답·답변·Critic] local-a ∥ local-b            (전부 TEXT → BOTH, priority 1, least-in-flight 분산)
 ```
 
 - 총 잡무 처리량 = 소형 대수 × concurrency(2×4=8), 총 답변 처리량 = 큰 모델 대수 × concurrency(2×3=6) — **두 숫자는 서로 독립**이라 티어별로 필요한 만큼만 대수를 늘리면 됩니다(예: 인덱싱이 병목이면 소형만 증설, 채팅이 병목이면 큰 모델만 증설).
-- 인덱스는 활성 프로바이더 [0]~[5] 이후 연속이어야 합니다. 위 예시는 [6][7][8]을 사용 — `local-vision`(§3의 [6] 예시)도 함께 쓴다면 [9]로 밀어야 합니다.
+- 인덱스는 활성 프로바이더 다음 번호부터 연속이어야 합니다. 위 예시의 [6][7][8]은 **외부 프로바이더를 쓰지 않는 배포 기준**이며, 기본 파일 그대로(활성 [0]~[8] = 로컬 3 + 외부 6)라면 증설분은 [9]부터 시작하고 `local-vision` 예시는 그만큼 더 밀어야 합니다.
 - 한쪽 티어의 한 대가 다운돼도 같은 티어 안에서 나머지가 흡수하고, 그래도 전멸하면 상위 티어(큰 모델)로 자동 폴백합니다(예제 6의 폴백 규칙 그대로 유지).
 
 ---
@@ -1788,11 +1794,49 @@ curl -X POST http://localhost:8080/api/v1/chat \
 | DOCX 변환 MD (교정본) | `DATA_DIR/converted/{docId}_corrected.md` | LLM 포맷 교정 후 저장; 실제 인덱싱 소스; 수동 편집 후 벡터 스토어 관리 페이지에서 ↺ 재인덱싱 가능 |
 | 인덱스 레지스트리 | `DATA_DIR/memory.db` (SQLite `doc_registry` 테이블) | SHA-256 기반 변경 감지. 문서 저장소는 사용자별 격리 없이 공유됨(`DocRegistry.SHARED`) — `userId` 파라미터는 API 시그니처상 존재하나 실제로는 무시됨 |
 | 벡터 임베딩 | chroma: Chroma 서버(로컬 `data/chroma/`, Docker Compose `chroma_data` 볼륨) / sqlite-vec: `DATA_DIR/memory.db`(기본) 또는 `app.vectorstore.sqlite-vec.db-path` 설정 시 별도 `vector.db` | 백엔드 전환 시 벡터 공유 안 됨(§3.1) |
-| 대화 이력 + LLM 사용량 | `DATA_DIR/memory.db` (SQLite) | WAL 모드; 메시지 메타데이터(토큰·시간·프로바이더) 포함 |
+| 대화 이력 + LLM 사용량 | `DATA_DIR/memory.db` (SQLite) | WAL 모드; 메시지 메타데이터(토큰·시간·프로바이더) 포함. 파일별 테이블 구성은 아래 [§6.3.1](#631-sqlite-파일별-테이블-구성) |
 | 감사 로그 | `DATA_DIR/audit/audit.log` | JSON Lines; 롤링 압축본 `audit.YYYY-MM-DD.N.log.gz` 포함 |
 
 > Docker Compose 사용 시 `./data` 디렉터리를 컨테이너에 바인드 마운트합니다.  
 > 데이터 백업 시 `data/` 디렉터리와 Chroma 볼륨을 함께 보존하세요.
+
+#### 6.3.1 SQLite 파일별 테이블 구성
+
+DB 파일은 **최대 두 개**입니다. `SQLITE_VEC_DB_PATH`(=`app.vectorstore.sqlite-vec.db-path`)를 **비워 두면 파일은 `memory.db` 하나뿐**이고, 값을 넣으면(예: `./data/vector.db`) 벡터·검색 색인 테이블만 그 파일로 분리됩니다. Chroma 백엔드에서는 벡터가 Chroma 서버에 있으므로 `vector.db`에는 FTS 색인만 남습니다.
+
+**`memory.db`** — 대화·운영 데이터 전부 (`spring.datasource.url`, `@Primary` DataSource)
+
+| 테이블 | 내용 | 생성 주체 |
+|---|---|---|
+| `conversation_turns` | 대화 턴(질문·답변·토큰·프로바이더·피드백·응답모드·검색 스코프 태그·**검색 진단 수치**) | `SqliteMemoryRepository` (Flyway V1 + 방어적 `ALTER`) |
+| `turn_image_ref` | 턴별 답변 썸네일 이미지 참조(개별 제외는 `status`) | `SqliteMemoryRepository` |
+| `turn_source_ref` | 턴별 출처 청크 스냅샷(재사용 검증용 `chunk_hash`) | `QuestionReuseRepository` |
+| `thread_meta` | 대화 제목·버전·라우팅 모드·태그 | Flyway V1·V3 |
+| `image_descriptions` | Vision 이미지 설명 캐시 | Flyway V1 |
+| `doc_registry` | 인덱싱된 문서 레지스트리(SHA-256 변경 감지, `chunk_overlap`) | `DocRegistry` |
+| `llm_usage` | 프로바이더별 일자별 토큰 사용량 | Flyway V1 |
+| `curated_qa` | 큐레이션 Q&A(좋아요 승격 + 승인된 지식 제안) | `CuratedQaRepository` |
+| `curated_submission` | 청크 추가 제안 게시판 | `CuratedSubmissionRepository` |
+| `settings_override` | `/settings` 핫 수정 오버라이드 | `SettingsOverrideRepository` |
+| `users`, `persistent_logins` | 계정·자동 로그인 토큰 | Flyway V2 / `SqliteUserDetailsService` |
+| `app_secret` | 게스트 식별 HMAC 키 등 서버 비밀값 | `AppSecretRepository` |
+| `flyway_schema_history` | 마이그레이션 이력 | Flyway |
+
+**`vector.db`** — 벡터·검색 색인 (분리 설정을 켰을 때만 별도 파일; 끄면 아래 테이블이 `memory.db` 안에 생깁니다)
+
+| 테이블 | 내용 | 생성 주체 |
+|---|---|---|
+| `vec_embeddings` | vec0 가상 테이블 — 임베딩 벡터(`FLOAT[app.embedding.dimensions]`) | `SqliteVecSchemaInitializer` (sqlite-vec 백엔드 전용) |
+| `vec_document_chunks` | 청크 원문 + JSON 메타데이터. `spring_doc_id`로 위 테이블과 JOIN | `SqliteVecSchemaInitializer` (sqlite-vec 백엔드 전용) |
+| `chunk_fts` | FTS5(trigram) 키워드 색인 — 하이브리드 검색의 BM25 축 | `KeywordSearchRepository` (**백엔드 무관, 항상 생성**) |
+
+> 위 두 표에 없는 이름이 파일 안에 보이면 대개 **SQLite가 자동 생성한 그림자 테이블**입니다 — `chunk_fts_data`/`_idx`/`_content`/`_docsize`/`_config`(FTS5), `vec_embeddings_*`(vec0), `sqlite_sequence`(AUTOINCREMENT). 직접 조회·수정하지 마세요.
+>
+> **어느 파일에 들어가는지는 코드가 주입받는 `JdbcTemplate`으로 결정됩니다** — `@Qualifier("vectorJdbcTemplate")`를 받는 컴포넌트(`SqliteVecSchemaInitializer`·`SqliteVecVerifier`·`SqliteVecVectorStoreProvider`·`KeywordSearchRepository`·`AdminService`)만 `vector.db`를 씁니다. 그 외는 전부 `memory.db`입니다. `QuestionReuseRepository`는 두 템플릿을 모두 주입받지만 **쓰기(`turn_source_ref`)는 `memory.db`**, 벡터 템플릿은 청크 원문을 읽을 때만 씁니다.
+>
+> ⚠️ **두 파일은 트랜잭션이 분리돼 있습니다.** 인덱싱은 벡터 → FTS → 레지스트리(`memory.db`) 순서로 쓰며, 마지막 레지스트리 커밋이 "색인 완료"의 기준입니다. 백업할 때는 **두 파일을 같은 시점에 함께** 보존하세요(한쪽만 되돌리면 레지스트리와 벡터가 어긋납니다).
+>
+> **스키마는 기동 시 자동 정비됩니다** — Flyway 마이그레이션(V1~V3) 이후의 컬럼은 각 리포지터리의 `@PostConstruct`에서 `ALTER TABLE`(이미 있으면 조용히 무시)로 추가됩니다. 따라서 **오래된 `memory.db`를 가져다 놓고 앱을 재기동하면 자동으로 최신 스키마가 됩니다**(기존 행은 보존, 새 컬럼은 `NULL`). 반대로 앱이 실행 중일 때 DB 파일을 교체하면 열려 있는 커넥션과 어긋나 손상될 수 있으니, 반드시 **앱을 내린 뒤** 교체하세요.
 
 > **`doc_registry.chunk_overlap`**: 문서를 인덱싱(또는 ↺ 재인덱싱)한 시점에 실제로 적용된 `app.chunk-overlap` 값을 문서별로 함께 기록합니다 — §6.8 문서 내보내기가 이 값을 읽어 청크 재조립 시 overlap을 정확히 제거하는 데 씁니다. 이 컬럼이 추가되기 전에 인덱싱된 문서는 `NULL`로 남아 있다가, 기동 시 `ChunkOverlapBackfill`이 한 번 그 시점의 `app.chunk-overlap` 현재값으로 채웁니다(이미 값이 있는 행은 건드리지 않음 — 멱등). 운영자가 직접 조작할 일은 없는 내부 컬럼입니다.
 
@@ -1820,7 +1864,7 @@ CPU/메모리 제약이 있는 환경에서는 `INDEXING_MAX_FILES`와 `INDEXING
 `/settings`는 현재 **유효** LLM/RAG 설정을 한 화면에서 보여주고, 일부 검색 튜닝 값은 **재기동 없이** 조정할 수 있게 합니다. `application.properties`/환경변수를 고치고 재기동하지 않아도 검색 동작을 실시간으로 미세조정할 수 있습니다.
 
 **조회 항목 (그룹별)**:
-- **LLM 라우팅**: 등록 프로바이더·역할(role)·우선순위·모델·API 키 설정 여부·서킷브레이커 상태·**활성화 여부**(아래 참조), 기본 라우팅 모드, 일반 temperature·max-tokens(조회 전용, 실제 config 값 표시). **`app.llm.default-routing-mode`(`LLM_ROUTING_MODE`)가 `LOCAL_ONLY`인 배포에서는 이 표에 `LOCAL` 역할 프로바이더만 표시됩니다** — 이 모드에서는 라우팅이 NORMAL/PREMIUM을 절대 선택하지 않으므로, `application.properties`에 여전히 등록돼 있더라도(예: 나중에 모드를 바꿀 때를 대비해 남겨둔 설정) 표에서는 숨겨져 혼동을 줄입니다. 표 위에 이 사실을 알리는 안내 문구가 함께 표시됩니다. 숨겨진 프로바이더는 `POST /admin/settings/provider/toggle`로도 조작할 수 없습니다(알 수 없는 프로바이더로 거부).
+- **LLM 라우팅**: 등록 프로바이더·역할(role)·우선순위·모델·API 키 설정 여부·서킷브레이커 상태·**활성화 여부**(아래 참조), 기본 라우팅 모드, max-tokens(조회 전용, 실제 config 값 표시). 일반/RAG temperature는 아래 "LLM 튜닝" 핫 수정 그룹으로 옮겨졌습니다. **`app.llm.default-routing-mode`(`LLM_ROUTING_MODE`)가 `LOCAL_ONLY`인 배포에서는 이 표에 `LOCAL` 역할 프로바이더만 표시됩니다** — 이 모드에서는 라우팅이 NORMAL/PREMIUM을 절대 선택하지 않으므로, `application.properties`에 여전히 등록돼 있더라도(예: 나중에 모드를 바꿀 때를 대비해 남겨둔 설정) 표에서는 숨겨져 혼동을 줄입니다. 표 위에 이 사실을 알리는 안내 문구가 함께 표시됩니다. 숨겨진 프로바이더는 `POST /admin/settings/provider/toggle`로도 조작할 수 없습니다(알 수 없는 프로바이더로 거부).
 - **임베딩 / 벡터 스토어**: 임베딩 모델·차원, 벡터 스토어 백엔드(chroma/sqlite-vec).
 - **검색 튜닝 / 인덱싱 / 캐시**: 아래 핫 수정 항목 + 조회 전용 항목.
 
@@ -1884,22 +1928,31 @@ env-var/application.properties value ({설정값}); the override wins. Reset it 
 
 | 항목 | 키 | 범위 |
 |------|----|------|
+| 일반/RAG temperature | `app.llm.temperature` (`LLM_TEMPERATURE`) | 0.0 ~ 0.3 |
 | Direct(잡담) 응답 temperature | `app.llm.direct-temperature` (`DIRECT_LLM_TEMPERATURE`) | 0.0 ~ 1.0 |
+| 인덱싱/백그라운드 temperature | `app.llm.indexing-temperature` (`LLM_INDEXING_TEMPERATURE`) | 0.0 ~ 1.0 |
 
 **핫 수정 가능 — UI (재기동 불필요, 다음 화면 렌더부터 반영)**:
 
 | 항목 | 키 | 범위 |
 |------|----|------|
-| 출처 미리보기 표시 | `ui.source-preview-enabled` | true/false |
+| 출처 미리보기 표시 | `ui.source-preview-enabled` | true/false (기본 ON) |
+| 출처 검색 수치 표시 | `ui.retrieval-metrics-enabled` | true/false (기본 **OFF**) |
 
-- 기본값은 `true`(ON)이며, 관리자 설정으로 시스템 전체에 적용됩니다.
-- 이 값이 `false`면 채팅의 출처 배지 팝오버 미리보기를 초기화하지 않습니다.
+- `ui.source-preview-enabled` 기본값은 `true`(ON)이며, 관리자 설정으로 시스템 전체에 적용됩니다. `false`면 채팅의 출처 배지 팝오버 미리보기를 초기화하지 않습니다.
+- `ui.retrieval-metrics-enabled`를 켜면 채팅 출처마다 `유사도 0.72 · 응답 31%`가 함께 표시됩니다(유사도가 없는 순수 BM25 히트는 `bm25:1 · 응답 12%`처럼 축 표기로 대체 — 유사도와 축 순위는 비는 조건이 배타적이라 한 칸을 번갈아 채웁니다). **검색기여(`검색 %`)와 전체 축 순위는 채팅에 표시하지 않고 [§7.7 진단 패널](#77-검색-진단-수치--검색-튜닝-근거-보기)에만 둡니다** — 순위 기반이라 한 턴 안에서는 평평해 여러 턴의 경향으로 봐야 의미가 생기기 때문입니다 — 검색 튜닝(§6.5의 RRF 가중치·유사도 임계값·하이브리드 검색)의 효과를 실제 질의에서 눈으로 확인하기 위한 값입니다. 계산은 RRF 융합의 부산물이라 **LLM·임베딩 추가 호출이 없고**, 끄고 켜는 것으로 검색 결과가 달라지지 않습니다(표시만 제어).
+  - **읽는 법**: `유사도`는 질의와의 코사인 거리라 절대값으로 읽히고 턴을 넘어 비교됩니다 — 채팅에 이 값을 남긴 이유입니다. 축 표기(`bm25:1`)로 대체돼 있으면 벡터 축이 이 청크를 못 찾았다는 뜻이니, 단어만 겹친 근거일 수 있어 한 번 더 확인하세요. `/admin` 패널에만 있는 `검색 %`·전체 축 순위의 정의와 해석은 [§7.7 검색기여 읽는 법](#77-검색-진단-수치--검색-튜닝-근거-보기) 참고.
+  - **값이 안 보이는 경우**는 오류가 아닙니다 — 벡터 축에 걸리지 않은 청크는 유사도가 없고(BM25·큐레이션 전용 히트), 쿼리 확장 LLM 호출이 실패해 폴백 경로로 처리된 턴은 RRF를 건너뛰어 `검색 %`·순위가 없습니다.
+  - **`응답 %`(응답 참여도)는 앞의 셋과 성격이 다릅니다** — 답변 텍스트 중 그 청크에서 온 것으로 추정되는 비율이며, 답변이 끝난 뒤에야 계산돼 배지에 사후로 붙습니다. 역시 LLM 추가 호출은 없습니다(평가 호출에 필드 하나를 얹고, 나머지는 문자 n-gram 계산).
+  - **`응답 %`는 추정이지 측정이 아닙니다.** 진짜 인과적 기여도는 청크를 빼고 답변을 다시 생성해야(leave-one-out) 알 수 있으며 턴당 LLM 호출이 topK배로 늘어 실시간에는 넣지 않았습니다. 또 `응답 모드 S`는 평가 호출 자체를 건너뛰므로 인용 신호 없이 어휘 유사도만으로 계산됩니다.
+  - **유사도가 높은데 `응답 %`가 없는 출처는 정상입니다** — 질문과 비슷하지만 답변에 쓰이지 않은 문서이고, 이 **불일치가 오히려 가장 유용한 신호**입니다. "검색은 잘 되는데 답변이 안 쓴다"가 반복되면 프롬프트/topK를, "유사도는 낮은데 답변이 많이 썼다"가 반복되면 임베딩 모델을 의심하십시오.
+  - **"반복되면"을 확인하는 곳이 `/admin` 최하단의 검색 진단 수치 카드입니다** — 채팅 배지는 그 순간만 보이지만, 위 튜닝 값들은 여러 턴의 경향을 보고 정해야 합니다. 이 표시 토글(`ui.retrieval-metrics-enabled`)과 무관하게 수치는 항상 기록되므로, 토글을 꺼둔 채로도 패널은 채워집니다.
 - 사용자 로컬 토글(localStorage)은 사용하지 않고, 서버 모델값으로 일관 적용합니다.
 
 - **"기본값" 버튼**으로 오버라이드를 삭제하면 `application.properties`/환경변수 값으로 정확히 복귀합니다(오버라이드가 있으면 항상 프로퍼티보다 우선).
 - 오버라이드는 **재기동 후에도 유지**됩니다(테이블에 영속). 배포 기본값 자체를 바꾸려면 여전히 환경변수/`application.properties`를 수정하세요 — 오버라이드는 그 위에 얹히는 런타임 조정 레이어입니다.
 
-**조회 전용(재기동 필요)**: `rerank-enabled`(빈 생성 시점 `@ConditionalOnProperty`로 결정)·쿼리 임베딩 캐시(빈 생성 시점 결정), 임베딩 차원·벡터 스토어 백엔드(DDL/빈 구성). **일반/RAG temperature**(`LLM_TEMPERATURE`)와 **max-tokens**(`LLM_MAX_TOKENS`)는 §6.18로 이제 실제 config 값을 그대로 반영해 표시되지만, 프로바이더 빈 생성 시점에 고정되므로 조회 전용(변경 시 재기동)입니다 — 호출별로 다르게 줄 수 있는 Direct temperature만 핫 수정 대상입니다. 기본 라우팅 모드도 조회 전용입니다(대화별 라우팅은 채팅 화면에서 설정).
+**조회 전용(재기동 필요)**: `rerank-enabled`(빈 생성 시점 `@ConditionalOnProperty`로 결정)·쿼리 임베딩 캐시(빈 생성 시점 결정), 임베딩 차원·벡터 스토어 백엔드(DDL/빈 구성). **max-tokens**(`LLM_MAX_TOKENS`)는 §6.18로 실제 config 값을 그대로 반영해 표시되지만, 프로바이더 빈 생성 시점에 고정되므로 조회 전용(변경 시 재기동)입니다. 기본 라우팅 모드도 조회 전용입니다(대화별 라우팅은 채팅 화면에서 설정). LLM temperature 3종(일반/RAG·Direct·인덱싱/백그라운드)은 모두 위 "핫 수정 가능 — LLM" 표로 옮겨져 있습니다 — 단, 일반/RAG temperature는 프레임워크 내부 호출(예: 멀티쿼리 확장)에는 여전히 기동 시점에 고정된 값이 적용됩니다.
 
 **권한**: 조회는 누구나 가능하지만, **수정은 관리자만** 가능합니다(관리 전용 인증 모드 `AUTH_MANAGEMENT_ONLY=true`에서 `/setup` 관리자 로그인 필요 — §9 참조). 수정 UI(입력/버튼)는 비관리자에게 숨겨지며, 서버도 `/admin/settings/**` 경로로 이중 방어합니다. 모든 변경은 감사 로그(`settings.update`/`settings.reset`, 변경 키·이전값·새값)에 남습니다.
 
@@ -2289,6 +2342,66 @@ mvn test -Dtest=SearchQualityEvaluationTest -Dsearch-eval.enabled=true
 - 이미 처리된 제안은 읽기 전용으로 열립니다 — 등록 후 마음이 바뀌면 §7.5에서 삭제하세요.
 - ⚠️ **검토 시 이미지도 함께 확인하세요.** 승인은 글뿐 아니라 그 이미지, 그리고 이미지에서 자동 생성된 설명 문장까지 검색 근거로 나가는 것을 허가하는 행위입니다.
 
+### 7.7 검색 진단 수치 — 검색 튜닝 근거 보기
+
+`/admin` 최하단의 **검색 진단 수치** 카드(펼칠 때만 조회)에서 최근 질의들이 실제로 어떻게 검색됐는지 turn 단위로 확인합니다. **읽기 전용**이며, 여기서 얻은 판단으로 조정할 값은 전부 [§6.5 설정 페이지](#65-설정-페이지-settings--llmrag-옵션-조회핫-수정)에 있습니다.
+
+| 열 | 의미 |
+|---|---|
+| 최고 유사도 | 그 턴에서 가장 가까웠던 청크의 코사인 유사도 — "검색이 근접한 걸 찾긴 했는가" |
+| 사용/검색 | 답변에 실제로 반영된 출처 수 / 검색된 출처 수. 절반 이상이 미반영이면 ⚠ |
+| 상세 | 출처별 유사도·검색기여·축별 순위·응답참여 4개 수치 |
+
+**읽는 순서**:
+
+1. **최고 유사도가 지속적으로 낮다**(예: 0.3 이하) → 검색이 애초에 못 찾고 있습니다. 임베딩 모델·청크 크기·`SEARCH_SIMILARITY_THRESHOLD`를 보세요.
+2. **사용/검색에 ⚠가 잦다**(`2/8` 같은) → 검색은 되는데 답변이 안 씁니다. `SEARCH_TOP_K`가 과한지, 또는 프롬프트가 문서를 충분히 활용하지 않는지 의심합니다. 컨텍스트만 낭비하고 있는 상태입니다.
+3. **축별 순위가 한쪽으로 쏠린다** → `vec:12, bm25:1`처럼 키워드 축이 계속 끌어올리고 있다면 `SEARCH_RRF_KEYWORD_WEIGHT`를, 반대로 BM25가 전혀 기여하지 않으면 `SEARCH_HYBRID_ENABLED`와 2글자 질의 문제(§8 참고)를 확인하세요.
+
+#### 검색기여 읽는 법
+
+**정의**: 그 청크의 가중 RRF 점수를, **답변 노드에 실제로 전달된 문서들의 점수 합**으로 나눈 비율입니다. 후보 풀이 아니라 최종 컷 기준이라, 한 턴의 출처를 모두 더하면 항상 100%가 됩니다.
+
+```
+rrfScore(문서) = Σ  가중치 ÷ (그 축에서의 순위 + k)      ← k = SEARCH_RRF_K, 기본 60
+                 축
+
+검색기여 = rrfScore ÷ Σ(최종 컷 문서들의 rrfScore)
+```
+
+가중치는 벡터축 `1/축개수`(그룹 정규화), BM25 `SEARCH_RRF_KEYWORD_WEIGHT`(1.0), 좋아요 큐레이션 `SEARCH_CURATED_QA_WEIGHT`(1.2), 지식 제안 `SEARCH_SUBMISSION_WEIGHT`(1.5)입니다.
+
+**① 값이 다 비슷한 것이 정상입니다.** k=60이 순위 차이를 크게 눌러 줍니다. 벡터 축 하나에만 걸린 문서 8개라면:
+
+| 순위 | rrfScore | 검색기여 |
+|---|---|---|
+| 1위 | 1/61 = 0.01639 | **13.2%** |
+| 2위 | 1/62 = 0.01613 | 13.0% |
+| … | … | … |
+| 8위 | 1/68 = 0.01471 | **11.8%** |
+
+1위와 8위가 13.2% 대 11.8%입니다. 이는 RRF의 설계 의도입니다 — 축마다 점수 체계가 달라(코사인 거리 vs BM25 점수) 직접 비교가 불가능하므로 순위만 쓰고, k로 상위권 쏠림을 완화합니다. **따라서 "얼마나 가까운가"를 알고 싶으면 이 값이 아니라 `유사도`를 보셔야 합니다.**
+
+**② 값이 벌어지는 이유는 순위가 아니라 축 간 합의입니다.** 여러 축이 같은 문서를 지목하면 점수가 더해집니다. 짧은 질의(멀티쿼리 확장 생략)에 하이브리드 검색이 켜진 경우의 예:
+
+| 문서 | 걸린 축 | rrfScore | 검색기여 |
+|---|---|---|---|
+| A | `vec:1, bm25:2` | 1/61 + 1/62 | **33.7%** |
+| D | `bm25:1` | 1/61 | 17.0% |
+| B | `vec:2` | 1/62 | 16.7% |
+| C | `vec:3` | 1/63 | 16.4% |
+| E | `vec:4` | 1/64 | 16.2% |
+
+A가 나머지의 약 2배입니다. 즉 **검색기여가 눈에 띄게 높다 = 의미 검색과 키워드 검색이 같은 문서를 지목했다**는 뜻이고, 반대로 **전부 11~13%대로 고르다 = 벡터 축 하나만 일하고 있다**는 신호입니다(하이브리드가 꺼졌거나, 2글자 질의라 BM25가 기여하지 못하는 경우 — §8 참고).
+
+**③ 멀티쿼리 변형 여러 개에 걸려도 배수가 되지는 않습니다.** 벡터 축은 `1/축개수`로 그룹 정규화되므로, 3개 확장 질의 모두에서 1위인 문서는 `3 × (1/3) ÷ 61 = 1/61`로 단일 축 1위와 같은 점수입니다. 이는 의도된 것으로, 그러지 않으면 멀티쿼리 축이 2~3표를 갖게 되어 BM25 축이 구조적으로 밀립니다. **가산이 실제로 일어나는 것은 서로 다른 종류의 축(벡터 그룹 / BM25 / 큐레이션 / 지식 제안) 사이에서입니다.**
+
+> 값이 `-`인 칸은 0이 아니라 **측정 안 됨**입니다(벡터 축에 걸리지 않은 청크, 쿼리 확장 실패로 폴백된 턴 등).
+>
+> 이 패널은 **표시 토글(`ui.retrieval-metrics-enabled`)과 무관하게** 채워집니다 — 수치 기록은 항상 이뤄지고 토글은 채팅 화면 표시만 제어합니다. 기록이 없는 턴(meta·Direct·DB 재사용)은 애초에 목록에 오르지 않습니다.
+>
+> ⚠️ 이 패널은 **모든 사용자의 질문**을 보여줍니다(배포 전체의 검색 동작을 보는 운영자 뷰). `/admin/**`의 관리자 게이트가 유일한 접근 통제입니다.
+
 ---
 
 ## 8. 문제 해결
@@ -2444,6 +2557,25 @@ docker-compose logs app
 - `INDEXING_MAX_FILES` / `INDEXING_MAX_LLM` 값 증가 (CPU·API 쿼터 여유 있는 경우)
 - 키워드+맥락 추출(`KeywordExtractor`)이 청크당 LLM 호출 → 문서 수 많을수록 시간 증가 (의도된 동작)
 - DOCX·TXT·PPTX·PDF(스캔 아님)는 LLM 포맷 교정(섹션당 1회 LLM 호출)이 추가되어 스캔 PDF(OCR만 수행, 포맷 교정 없음)보다 인덱싱 시간이 더 길 수 있습니다. 교정 실패 시 원본 MD로 fallback됩니다.
+- 청크 하나하나가 `INDEXING_KEYWORD_TIMEOUT_SECONDS`(기본 600초)에 가깝게 걸리고 있다면, 로컬 LLM 서버가 그 시점에 실제로는 거의 응답하지 못하고(과부하·모델 교체·행) 매 호출이 타임아웃까지 채운 뒤 TF 폴백으로 넘어가고 있다는 신호입니다 — 문서 하나가 수 시간 걸렸다면 먼저 이것부터 의심하세요. `[TIMEOUT:INDEX_KEYWORD]`/`[TIMEOUT:INDEX_KEYWORD_BATCH]` 로그 빈도로 확인 가능(아래 "로컬 LLM 응답 타임아웃"의 로그 키 표 참고).
+
+---
+
+### 업로드/재인덱싱 진행률이 "처리 중"에서 멈춘 것처럼 보임 (실제로는 서버에서 계속/이미 완료됨)
+
+인덱싱이 위 항목처럼 오래 걸리는 동안(수 시간) 브라우저의 SSE 연결이 끊겼다 재접속하는 일이 드물지 않습니다(절전, 네트워크 전환, VPN 재연결 등). 이때 서버(`IndexingProgressService`)가 좀비 연결이 되지 않도록 아래처럼 동작합니다.
+
+| 재접속 시점 | 동작 |
+|---|---|
+| 작업이 아직 실행 중 | 지금까지의 진행 이력을 재생하고 계속 실시간 추적 |
+| 작업이 끝난 지 4시간 이내 (`IndexingProgressService.BUFFER_RETENTION`, 코드 상수 — 프로퍼티화되어 있지 않음) | 마지막 상태(`done`/`error`/`cancelled`)를 즉시 재생 후 종료 |
+| 작업이 끝난 지 4시간 초과, 또는 애초에 존재한 적 없는 taskId | `unknown` 종결 이벤트를 즉시 보내고 종료 — 화면에는 실패가 아니라 "⚠️ 상태 확인 불가, 문서 목록에서 확인" 경고로 표시됨 |
+
+`GET /ui/documents/progress/{taskId}/status`로 SSE 없이 1회성 상태 조회도 가능합니다(`{"stage":"running"|"done"|"error"|"cancelled"|"unknown", ...}`) — 진단용으로 유용합니다.
+
+이 개선 이전에는 작업 완료 **60초**만 지나도(그때는 4시간이 아니라 60초짜리 이벤트 버퍼였음) 재접속 시 서버가 heartbeat만 보내고 실제 이벤트는 영원히 안 오는 좀비 연결 상태가 됐습니다 — 화면은 "처리 중"에 영구히 멈추고, 문서관리 페이지는 파일을 **순차** 업로드하므로 그 파일 이후 나머지 파일은 아예 업로드조차 시작되지 않았습니다. 여러 파일을 올렸는데 1개만 완료되고 나머지가 조용히 멈춰 있었다면 이 문제였을 가능성이 큽니다 — 문서관리 페이지를 새로고침하면 실제로는 완료된 문서가 정상적으로 보입니다.
+
+`/admin`의 **↺ MD 재인덱싱**도 같은 `IndexingProgressService`/같은 SSE 엔드포인트를 쓰므로 동일하게 적용됩니다. 다만 `admin.html`의 재인덱싱 진행률 표시는 연결 오류 시 곧바로 포기하지 않고 최대 5회까지 재시도합니다(업로드 화면과 동일한 재시도 정책).
 
 ---
 

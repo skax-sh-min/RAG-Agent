@@ -76,4 +76,21 @@ class AnswerEvalPromptTest {
         assertThat(evalPrompt(Locale.KOREAN)).contains("절차");
         assertThat(evalPrompt(Locale.ENGLISH)).contains("procedure");
     }
+
+    @Test
+    @DisplayName("실제 번들이 usedDocs 를 [Dn] 번호 기준으로 요구한다 (2단계 응답 참여도)")
+    void realBundle_asksForUsedDocs() {
+        // AnswerService.buildEvalExcerpts()가 발췌마다 붙이는 [D1],[D2]… 번호와 이 지시가 짝이다 —
+        // 한쪽만 바뀌면 모델이 무엇을 세라는 건지 알 수 없게 되므로 두 로케일 모두 고정한다.
+        assertThat(evalPrompt(Locale.KOREAN)).contains("usedDocs").contains("[D1]");
+        assertThat(evalPrompt(Locale.ENGLISH)).contains("usedDocs").contains("[D1]");
+    }
+
+    @Test
+    @DisplayName("usedDocs 가 판정에 영향을 주지 않는 advisory 임을 프롬프트가 명시한다")
+    void realBundle_marksUsedDocsAdvisory() {
+        // 이 한 줄이 빠지면 모델이 "인용할 게 없으니 sufficient=false" 식으로 판정을 흔들 수 있다.
+        assertThat(evalPrompt(Locale.KOREAN)).contains("판정에 영향을 주지 않습니다");
+        assertThat(evalPrompt(Locale.ENGLISH)).contains("does not affect any verdict");
+    }
 }

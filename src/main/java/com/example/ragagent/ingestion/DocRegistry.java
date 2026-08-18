@@ -52,6 +52,7 @@ public class DocRegistry {
         jdbc.execute(
                 "CREATE INDEX IF NOT EXISTS idx_doc_registry_sha_version ON doc_registry(sha256, version, user_id)");
         addChunkOverlapColumn();
+        addDisplayNameColumn();
         log.debug("[REGISTRY] SQLite 초기화 완료");
     }
 
@@ -67,6 +68,20 @@ public class DocRegistry {
             log.info("[REGISTRY] doc_registry.chunk_overlap 컬럼 추가");
         } catch (DataAccessException e) {
             log.debug("[REGISTRY] chunk_overlap 컬럼이 이미 존재함");   // duplicate column name
+        }
+    }
+
+    /**
+     * Defensive ALTER for the {@code display_name} column — a purely cosmetic per-document
+     * override (see {@link DocRegistryEntry#displayName}). {@code NULL} means "no override, show
+     * the real filename", which is also what every pre-existing row gets automatically.
+     */
+    private void addDisplayNameColumn() {
+        try {
+            jdbc.execute("ALTER TABLE doc_registry ADD COLUMN display_name TEXT");
+            log.info("[REGISTRY] doc_registry.display_name 컬럼 추가");
+        } catch (DataAccessException e) {
+            log.debug("[REGISTRY] display_name 컬럼이 이미 존재함");   // duplicate column name
         }
     }
 
@@ -91,22 +106,30 @@ public class DocRegistry {
 
     public void put(String docId, String userId, DocRegistryEntry entry) {
         jdbc.update("""
-                INSERT INTO doc_registry (doc_id, user_id, sha256, version, indexed_at, chunks, spring_doc_ids, errors, chunk_overlap)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO doc_registry (doc_id, user_id, sha256, version, indexed_at, chunks, spring_doc_ids, errors, chunk_overlap, display_name)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(doc_id, user_id) DO UPDATE SET
                   sha256=excluded.sha256, version=excluded.version,
                   indexed_at=excluded.indexed_at, chunks=excluded.chunks,
                   spring_doc_ids=excluded.spring_doc_ids, errors=excluded.errors,
-                  chunk_overlap=excluded.chunk_overlap
+                  chunk_overlap=excluded.chunk_overlap, display_name=excluded.display_name
                 """,
                 docId, userId, entry.sha256(), entry.version(), entry.indexedAt(),
                 entry.chunks(), toJson(entry.springDocIds()), toJson(entry.errors()),
-                entry.chunkOverlap());
+                entry.chunkOverlap(), entry.displayName());
+    }
+
+    /** Updates only the display-name override, leaving every other column untouched.
+     *  @return rows affected (0 = no such document) */
+    public int updateDisplayName(String docId, String userId, String displayName) {
+        return jdbc.update(
+                "UPDATE doc_registry SET display_name = ? WHERE doc_id = ? AND user_id = ?",
+                displayName, docId, userId);
     }
 
     public Optional<DocRegistryEntry> findByDocId(String docId, String userId) {
         List<DocRegistryEntry> rows = jdbc.query(
-                "SELECT sha256, version, indexed_at, chunks, spring_doc_ids, errors, chunk_overlap " +
+                "SELECT sha256, version, indexed_at, chunks, spring_doc_ids, errors, chunk_overlap, display_name " +
                 "FROM doc_registry WHERE doc_id = ? AND user_id = ?",
                 (rs, n) -> new DocRegistryEntry(
                         rs.getString("sha256"),
@@ -115,15 +138,43 @@ public class DocRegistry {
                         rs.getInt("chunks"),
                         fromJsonList(rs.getString("spring_doc_ids")),
                         fromJsonList(rs.getString("errors")),
-                        nullableInt(rs, "chunk_overlap")),
+                        nullableInt(rs, "chunk_overlap"),
+                        rs.getString("display_name")),
                 docId, userId);
         return rows.isEmpty() ? Optional.empty() : Optional.of(rows.get(0));
+    }
+
+    /**
+     * Batch display-name lookup — chat citations (RetrievalService/QuestionReuseService) substitute
+     * a document's display name for the real filename in the source label when one is set (§ 표시
+     * 이름). One query for a whole turn's retrieved/reused chunks instead of one per chunk. Only
+     * docIds with a non-blank override are present in the returned map, so callers can just fall
+     * back to the real filename on a missing key.
+     */
+    public Map<String, String> findDisplayNames(Collection<String> docIds) {
+        if (docIds == null || docIds.isEmpty()) return Map.of();
+        List<String> ids = new ArrayList<>(new LinkedHashSet<>(docIds));
+        String placeholders = ids.stream().map(id -> "?").collect(java.util.stream.Collectors.joining(","));
+        List<Object> params = new ArrayList<>(ids.size() + 1);
+        params.add(SHARED);
+        params.addAll(ids);
+        List<Map<String, Object>> rows = jdbc.queryForList(
+                "SELECT doc_id, display_name FROM doc_registry WHERE user_id = ? AND doc_id IN (" + placeholders + ")",
+                params.toArray());
+        Map<String, String> out = new HashMap<>();
+        for (Map<String, Object> row : rows) {
+            Object name = row.get("display_name");
+            if (name instanceof String s && !s.isBlank()) {
+                out.put(String.valueOf(row.get("doc_id")), s);
+            }
+        }
+        return out;
     }
 
     /** Finds by docId ignoring owner — for admin/reindex operations. */
     public Optional<DocRegistryEntry> findByDocId(String docId) {
         List<DocRegistryEntry> rows = jdbc.query(
-                "SELECT sha256, version, indexed_at, chunks, spring_doc_ids, errors, chunk_overlap " +
+                "SELECT sha256, version, indexed_at, chunks, spring_doc_ids, errors, chunk_overlap, display_name " +
                 "FROM doc_registry WHERE doc_id = ? LIMIT 1",
                 (rs, n) -> new DocRegistryEntry(
                         rs.getString("sha256"),
@@ -132,7 +183,8 @@ public class DocRegistry {
                         rs.getInt("chunks"),
                         fromJsonList(rs.getString("spring_doc_ids")),
                         fromJsonList(rs.getString("errors")),
-                        nullableInt(rs, "chunk_overlap")),
+                        nullableInt(rs, "chunk_overlap"),
+                        rs.getString("display_name")),
                 docId);
         return rows.isEmpty() ? Optional.empty() : Optional.of(rows.get(0));
     }
@@ -150,21 +202,22 @@ public class DocRegistry {
 
     public Collection<DocRegistryEntry> values(String userId) {
         return jdbc.query(
-                "SELECT sha256, version, indexed_at, chunks, spring_doc_ids, errors, chunk_overlap " +
+                "SELECT sha256, version, indexed_at, chunks, spring_doc_ids, errors, chunk_overlap, display_name " +
                 "FROM doc_registry WHERE user_id = ?",
                 (rs, n) -> new DocRegistryEntry(
                         rs.getString("sha256"), rs.getString("version"),
                         rs.getString("indexed_at"), rs.getInt("chunks"),
                         fromJsonList(rs.getString("spring_doc_ids")),
                         fromJsonList(rs.getString("errors")),
-                        nullableInt(rs, "chunk_overlap")),
+                        nullableInt(rs, "chunk_overlap"),
+                        rs.getString("display_name")),
                 userId);
     }
 
     public Set<Map.Entry<String, DocRegistryEntry>> entries(String userId) {
         Map<String, DocRegistryEntry> map = new LinkedHashMap<>();
         jdbc.query(
-                "SELECT doc_id, sha256, version, indexed_at, chunks, spring_doc_ids, errors, chunk_overlap " +
+                "SELECT doc_id, sha256, version, indexed_at, chunks, spring_doc_ids, errors, chunk_overlap, display_name " +
                 "FROM doc_registry WHERE user_id = ? ORDER BY indexed_at DESC",
                 rs -> {
                     map.put(rs.getString("doc_id"), new DocRegistryEntry(
@@ -172,7 +225,8 @@ public class DocRegistry {
                             rs.getString("indexed_at"), rs.getInt("chunks"),
                             fromJsonList(rs.getString("spring_doc_ids")),
                             fromJsonList(rs.getString("errors")),
-                            nullableInt(rs, "chunk_overlap")));
+                            nullableInt(rs, "chunk_overlap"),
+                            rs.getString("display_name")));
                 },
                 userId);
         return map.entrySet();
@@ -270,13 +324,29 @@ public class DocRegistry {
              * isn't there (or miss text that is). {@code null} only for a row written before this
              * column existed and not yet backfilled ({@link #backfillMissingChunkOverlap}).
              */
-            Integer chunkOverlap
+            Integer chunkOverlap,
+            /**
+             * Operator-set cosmetic alias shown instead of the (often long) real filename in the
+             * document list and admin registry view. {@code null}/blank = no override, fall back
+             * to the filename. Never touched by indexing/re-indexing except to carry it forward
+             * onto the new row — the underlying {@code docId}, vector-store ids, and converted MD
+             * file paths are entirely unaffected, so setting or clearing it is always safe and
+             * instantly reversible.
+             */
+            String displayName
     ) {
-        /** Legacy 6-arg form — overlap unknown. Kept so existing call sites and older fixtures
-         *  don't have to state a value they never had. */
+        /** Legacy 7-arg form — display name unknown/unset. Kept so existing call sites and older
+         *  fixtures don't have to state a value most rows never had. */
+        public DocRegistryEntry(String sha256, String version, String indexedAt, int chunks,
+                                List<String> springDocIds, List<String> errors, Integer chunkOverlap) {
+            this(sha256, version, indexedAt, chunks, springDocIds, errors, chunkOverlap, null);
+        }
+
+        /** Legacy 6-arg form — overlap and display name unknown. Kept so existing call sites and
+         *  older fixtures don't have to state values they never had. */
         public DocRegistryEntry(String sha256, String version, String indexedAt, int chunks,
                                 List<String> springDocIds, List<String> errors) {
-            this(sha256, version, indexedAt, chunks, springDocIds, errors, null);
+            this(sha256, version, indexedAt, chunks, springDocIds, errors, null, null);
         }
     }
 }

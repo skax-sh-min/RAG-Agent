@@ -168,6 +168,14 @@ public class DocumentController {
         return progressService.subscribe(taskId);
     }
 
+    /** One-shot status check — lets a client that lost its SSE connection (page reload, long
+     *  sleep/network drop) learn a task's outcome without opening a new stream. */
+    @GetMapping("/ui/documents/progress/{taskId}/status")
+    @ResponseBody
+    public IndexingProgressEvent indexingProgressStatus(@PathVariable String taskId) {
+        return progressService.status(taskId);
+    }
+
     /** §6.16.1 — cancels an in-progress upload/sync task: interrupts the worker thread and
      *  completes the SSE progress stream immediately. */
     @PostMapping("/ui/documents/progress/{taskId}/cancel")
@@ -248,6 +256,38 @@ public class DocumentController {
         auditLogger.log("document.tags_update", docId, Map.of("tags", doc.tags()));
         model.addAttribute("doc", doc);
         return "fragments/doc-table-body :: tagsView";
+    }
+
+    /** Display-name-cell edit form (HTMX fragment) — pre-filled with the document's current override. */
+    @GetMapping("/ui/documents/{docId}/display-name/edit")
+    public String editDisplayNameForm(ThreadContext ctx, @PathVariable String docId, Model model) {
+        DocumentInfo doc = ragService.findDocument(ctx.userId(), docId)
+                .orElseThrow(() -> new IllegalArgumentException("문서를 찾을 수 없습니다: " + docId));
+        model.addAttribute("doc", doc);
+        return "fragments/doc-table-body :: nameEdit";
+    }
+
+    /** Display-name-cell view fragment — also used as the Cancel target for the edit form. */
+    @GetMapping("/ui/documents/{docId}/display-name/view")
+    public String viewDisplayNameCell(ThreadContext ctx, @PathVariable String docId, Model model) {
+        DocumentInfo doc = ragService.findDocument(ctx.userId(), docId)
+                .orElseThrow(() -> new IllegalArgumentException("문서를 찾을 수 없습니다: " + docId));
+        model.addAttribute("doc", doc);
+        return "fragments/doc-table-body :: nameView";
+    }
+
+    /**
+     * Sets (blank clears) a document's display-name override — cosmetic only, the underlying
+     * docId/vector-store data/files on disk are untouched.
+     */
+    @PatchMapping("/ui/documents/{docId}/display-name")
+    public String updateDisplayNameUi(ThreadContext ctx, @PathVariable String docId,
+                                       @RequestParam(defaultValue = "") String displayName, Model model) {
+        DocumentInfo doc = ragService.updateDisplayName(ctx.userId(), docId, displayName);
+        auditLogger.log("document.display_name_update", docId,
+                Map.of("displayName", doc.displayName() == null ? "" : doc.displayName()));
+        model.addAttribute("doc", doc);
+        return "fragments/doc-table-body :: nameView";
     }
 
     @GetMapping("/ui/documents/list")

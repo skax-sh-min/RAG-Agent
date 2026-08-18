@@ -1,7 +1,11 @@
 package com.example.ragagent.service;
 
 import com.example.ragagent.config.AppProperties;
+import com.example.ragagent.model.SourceRef;
 import com.example.ragagent.repository.MemoryRepository;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
@@ -15,6 +19,16 @@ import java.util.Optional;
  */
 @Service
 public class MemoryService {
+
+    private static final Logger log = LoggerFactory.getLogger(MemoryService.class);
+
+    /**
+     * Not injected: this class is constructed directly in several tests, and widening its
+     * constructor for a diagnostic serializer would ripple through all of them. A default
+     * ObjectMapper is enough here — {@link SourceRef} is a plain record with explicit
+     * {@code @JsonProperty} names and needs no app-specific configuration — and it is thread-safe.
+     */
+    private static final ObjectMapper objectMapper = new ObjectMapper();
 
     private final int maxConversationChars;
     private final MemoryRepository repository;
@@ -86,6 +100,43 @@ public class MemoryService {
 
     public void saveTurnImageRefs(long turnId, String userId, String threadId, List<String> imageRefs) {
         repository.saveTurnImageRefs(turnId, userId, threadId, imageRefs);
+    }
+
+    /**
+     * 3단계 — persists the turn's retrieval diagnostics (유사도·검색기여도·축별 순위·응답 참여도)
+     * so tuning can be reviewed after the fact instead of only in the moment.
+     *
+     * <p>Sources with no numbers at all are skipped, and a turn left with nothing to say writes
+     * nothing — the {@code /admin} panel lists only rows that actually carry data, so a DB-reuse
+     * or meta turn never shows up as an empty row.
+     *
+     * <p><b>Never throws.</b> This runs after the answer has already been produced; a
+     * serialization or write failure must cost the diagnostic, not the turn.
+     */
+    public void saveRetrievalMetrics(long turnId, List<SourceRef> sources) {
+        if (sources == null || sources.isEmpty()) return;
+        try {
+            List<SourceRef> withMetrics = sources.stream()
+                    .filter(s -> s.similarity() != null || s.retrievalShare() != null
+                              || s.axisRanks() != null || s.answerShare() != null)
+                    .toList();
+            if (withMetrics.isEmpty()) return;
+            repository.saveRetrievalMetrics(turnId, objectMapper.writeValueAsString(withMetrics));
+        } catch (Exception e) {
+            log.warn("[METRICS] 검색 진단 수치 저장 실패 turnId={} — 무시하고 진행: {}", turnId, e.toString());
+        }
+    }
+
+    public List<MemoryRepository.MetricsRow> findRecentRetrievalMetrics(int offset, int limit) {
+        return repository.findRecentRetrievalMetrics(offset, limit);
+    }
+
+    public int countRetrievalMetrics() {
+        return repository.countRetrievalMetrics();
+    }
+
+    public Map<Long, String> findRetrievalMetricsByTurnIds(List<Long> turnIds) {
+        return repository.findRetrievalMetricsByTurnIds(turnIds);
     }
 
     public Map<Long, List<String>> getTurnImageRefs(String userId, String threadId) {

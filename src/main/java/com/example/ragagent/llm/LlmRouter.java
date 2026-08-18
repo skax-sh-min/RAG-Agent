@@ -74,6 +74,10 @@ public class LlmRouter {
      */
     private final Set<String> visionUnsupportedProviders = ConcurrentHashMap.newKeySet();
 
+    /** In-flight counter for ungated (indexing/background) calls — see {@link
+     *  BackgroundLlmConcurrencyTracker} for why the header concurrency indicator needs this. */
+    private final BackgroundLlmConcurrencyTracker backgroundConcurrencyTracker;
+
     public LlmRouter(List<LlmProvider> providers, LlmUsageRepository usageRepo,
                      CircuitBreaker circuitBreaker, RoutingMode defaultMode,
                      double progressiveThreshold) {
@@ -104,6 +108,20 @@ public class LlmRouter {
                      Map<String, Integer> providerConcurrency,
                      int defaultProviderConcurrency, int permitWaitTimeoutSeconds,
                      ProviderToggle providerToggle) {
+        // Existing callers (incl. tests) get a fresh, un-shared tracker — harmless, since nothing
+        // else reads it unless the same instance is also wired into OperationsController (only
+        // LlmConfig does that, via the overload below).
+        this(providers, usageRepo, circuitBreaker, defaultMode, progressiveThreshold, readTimeoutSeconds,
+                providerConcurrency, defaultProviderConcurrency, permitWaitTimeoutSeconds, providerToggle,
+                new BackgroundLlmConcurrencyTracker());
+    }
+
+    public LlmRouter(List<LlmProvider> providers, LlmUsageRepository usageRepo,
+                     CircuitBreaker circuitBreaker, RoutingMode defaultMode,
+                     double progressiveThreshold, int readTimeoutSeconds,
+                     Map<String, Integer> providerConcurrency,
+                     int defaultProviderConcurrency, int permitWaitTimeoutSeconds,
+                     ProviderToggle providerToggle, BackgroundLlmConcurrencyTracker backgroundConcurrencyTracker) {
         this.providers = providers;
         this.usageRepo = usageRepo;
         this.circuitBreaker = circuitBreaker;
@@ -113,6 +131,7 @@ public class LlmRouter {
         this.defaultProviderConcurrency = defaultProviderConcurrency > 0 ? defaultProviderConcurrency : 3;
         this.permitWaitTimeoutSeconds = permitWaitTimeoutSeconds > 0 ? permitWaitTimeoutSeconds : 20;
         this.providerToggle = providerToggle;
+        this.backgroundConcurrencyTracker = backgroundConcurrencyTracker;
         for (LlmProvider p : providers) {
             int concurrency = (providerConcurrency != null && providerConcurrency.containsKey(p.name()))
                     ? providerConcurrency.get(p.name()) : this.defaultProviderConcurrency;
@@ -545,7 +564,15 @@ public class LlmRouter {
                 response = call.apply(provider.chatModel());
             }
         } else {
-            response = call.apply(provider.chatModel());
+            // Ungated (indexing/background) calls never touch the per-provider Semaphore above, so
+            // they'd otherwise be invisible to the header's LLM concurrency indicator — see
+            // BackgroundLlmConcurrencyTracker.
+            backgroundConcurrencyTracker.increment();
+            try {
+                response = call.apply(provider.chatModel());
+            } finally {
+                backgroundConcurrencyTracker.decrement();
+            }
         }
         long elapsed = System.currentTimeMillis() - t0;
         var usage = response.getMetadata().getUsage();

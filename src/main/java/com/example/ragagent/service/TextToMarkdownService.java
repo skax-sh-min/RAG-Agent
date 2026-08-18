@@ -9,6 +9,7 @@ import com.example.ragagent.llm.TaskType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.prompt.Prompt;
+import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
@@ -44,6 +45,11 @@ public class TextToMarkdownService {
     public TextToMarkdownService(LlmRouter llmRouter, AppProperties props) {
         this.llmRouter = llmRouter;
         this.props = props;
+    }
+
+    /** Indexing/background temperature (hot-editable), read fresh per call — see AppProperties.LlmConfig. */
+    private OpenAiChatOptions indexingOptions() {
+        return OpenAiChatOptions.builder().temperature(props.llmSafe().indexingTemperature()).build();
     }
 
     /** {@link #convert(String, String, BiConsumer)} without progress callback. */
@@ -152,7 +158,7 @@ public class TextToMarkdownService {
         try {
             String result = llmRouter.executeWithTracking(
                     TaskType.LIGHT_TEXT, RoutingMode.COST_FIRST, BackgroundUsage.TXT2MD_PREFIX,
-                    model -> model.call(new Prompt(prompt)));
+                    model -> model.call(new Prompt(prompt, indexingOptions())));
             log.debug("[TXT2MD] 블록 구조화 완료: {}자 → {}자", safeBlock.length(), result.length());
             return result;
         } catch (LlmProviderExhaustedException e) {

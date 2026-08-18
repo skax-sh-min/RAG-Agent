@@ -1,5 +1,6 @@
 package com.example.ragagent.service;
 
+import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.llm.BackgroundUsage;
 import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.RoutingMode;
@@ -46,7 +47,15 @@ class ThreadMetaServiceTest {
 
     private final ThreadMetaRepository repository = mock(ThreadMetaRepository.class);
     private final LlmRouter llmRouter = mock(LlmRouter.class);
-    private final ThreadMetaService service = new ThreadMetaService(repository, llmRouter);
+    private final AppProperties props = mockProps();
+    private final ThreadMetaService service = new ThreadMetaService(repository, llmRouter, props);
+
+    private static AppProperties mockProps() {
+        AppProperties p = mock(AppProperties.class);
+        when(p.llmSafe()).thenReturn(new AppProperties.LlmConfig(
+                List.of(), 2, 10, 180, "COST_FIRST", 0.6, 3, 20, 0.0, 0.1, 0.0, 6000, true));
+        return p;
+    }
 
     private static ChatResponse chatResponse(String text) {
         return new ChatResponse(List.of(new Generation(new AssistantMessage(text))));

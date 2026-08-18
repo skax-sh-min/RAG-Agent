@@ -105,11 +105,11 @@
                     </thead>
                     <tbody>
                     <tr th:each="doc : ${documents}">
-                        <td th:text="${doc.filename()}"></td>
+                        <td th:text="${doc.displayLabel()}" th:title="${doc.filename()}"></td>
                         <td><span class="badge bg-secondary" th:text="${doc.version()}"></span></td>
                         <td class="text-center" style="min-width:45px;" th:text="${doc.chunks()}"></td>
                         <td class="text-muted" style="font-size:0.7rem;" th:text="${doc.docId()}"></td>
-                        <td class="text-muted" th:text="${doc.indexedAt() != null ? doc.indexedAt().substring(0,19).replace('T',' ') : ''}"></td>
+                        <td class="text-muted" th:text="${T(com.example.ragagent.model.KstDateFormat).toKst(doc.indexedAt())}"></td>
                         <td class="text-center">
                             <button type="button"
                                     class="btn btn-sm btn-outline-primary py-0 px-2"
@@ -244,11 +244,33 @@
         </div>
     </details>
 
+    <!-- 3단계 검색 진단 수치 — 페이지 최하단. 조치를 기다리는 대기열(제안)도, 이미 반영된 것을
+         확인하는 용도(큐레이션)도 아닌 순수 분석 뷰라 가장 아래에 둔다. 동일한 지연 로딩 패턴. -->
+    <details class="card mt-4" id="retrieval-metrics-card"
+              hx-get="/admin/retrieval-metrics" hx-trigger="toggle[this.open] once"
+              hx-target="#retrieval-metrics-body" hx-swap="innerHTML">
+        <summary class="card-header d-flex align-items-center py-2" style="cursor:pointer; list-style:none;">
+            <i class="bi bi-speedometer2 me-2"></i>
+            <span class="fw-semibold small">검색 진단 수치</span>
+            <span class="ms-auto small text-muted d-flex align-items-center gap-1">
+                턴별 유사도·검색기여도·응답참여도 — 검색 튜닝용 — 펼치면 조회
+                <i class="bi bi-chevron-down curated-qa-chevron"></i>
+            </span>
+        </summary>
+        <div id="retrieval-metrics-body">
+            <div class="card-body text-center text-muted py-4 small">
+                <span class="spinner-border spinner-border-sm me-2"></span>불러오는 중...
+            </div>
+        </div>
+    </details>
+
     <style>
         #curated-qa-card > summary::-webkit-details-marker { display: none; }
         #curated-qa-card[open] .curated-qa-chevron { transform: rotate(180deg); }
         #submission-card > summary::-webkit-details-marker { display: none; }
         #submission-card[open] .curated-qa-chevron { transform: rotate(180deg); }
+        #retrieval-metrics-card > summary::-webkit-details-marker { display: none; }
+        #retrieval-metrics-card[open] .curated-qa-chevron { transform: rotate(180deg); }
         .curated-qa-chevron { transition: transform .15s ease; }
 
         /* 청크 편집 오프캔버스의 좌측 미리보기 컬럼 (넓은 화면에서만 렌더링됨) */
@@ -714,6 +736,18 @@ function loadCurated(offset, limit) {
         .then(html => { document.getElementById('curated-qa-body').innerHTML = html; });
 }
 
+/* 3단계 검색 진단 수치 패널 — 큐레이션 패널과 같은 이유로 페이지 레벨에 둔다:
+   재조회가 plain innerHTML 삽입이라 프래그먼트에 넣은 <script>는 실행되지 않는다. */
+function applyMetricsLimitFilter(sel) {
+    loadRetrievalMetrics(0, +sel.value);
+}
+
+function loadRetrievalMetrics(offset, limit) {
+    fetch('/admin/retrieval-metrics?offset=' + offset + '&limit=' + limit, { headers: { 'HX-Request': 'true' } })
+        .then(r => r.text())
+        .then(html => { document.getElementById('retrieval-metrics-body').innerHTML = html; });
+}
+
 function deleteCuratedInline(id, btn) {
     if (!confirm('이 큐레이션 Q&A를 삭제하시겠습니까? (검색에서 즉시 제외됩니다)')) return;
     fetch('/admin/curated/' + encodeURIComponent(id), {
@@ -1011,11 +1045,19 @@ function postReindex(docId, force) {
 }
 
 function subscribeReindexProgress(taskId, btn, icon) {
-    const sse = new EventSource('/ui/documents/progress/' + taskId);
-    const finish = () => { sse.close(); btn.innerHTML = icon; setRegistryBusy(false, ''); };
+    let sse = new EventSource('/ui/documents/progress/' + taskId);
+    let retryCount = 0;
+    let settled = false;
 
-    sse.addEventListener('progress', e => {
-        const evt = JSON.parse(e.data);
+    function finish() {
+        settled = true;
+        sse.close();
+        document.removeEventListener('visibilitychange', onVisible);
+        btn.innerHTML = icon;
+        setRegistryBusy(false, '');
+    }
+
+    function handleEvent(evt) {
         if (evt.stage === 'done') {
             finish();
             showToast('재인덱싱 완료', 'success');
@@ -1023,11 +1065,59 @@ function subscribeReindexProgress(taskId, btn, icon) {
         } else if (evt.stage === 'error') {
             finish();
             showToast('재인덱싱 실패: ' + (evt.message || '오류'), 'danger');
-        } else {
+        } else if (evt.stage === 'unknown') {
+            // Server no longer has any record of this task (e.g. reconnect landed after a very
+            // long disconnect). Not necessarily a failure — the reindex may well have finished —
+            // so refresh instead of just erroring out.
+            finish();
+            showToast((evt.message || '재인덱싱 상태를 확인할 수 없습니다') + ' — 새로고침하여 확인해 주세요', 'warning');
+        } else if (evt.stage !== 'running') {
             setRegistryStatus(formatReindexStatus(evt));
         }
-    });
-    sse.onerror = () => { finish(); showToast('재인덱싱 진행 상태 연결 오류', 'danger'); };
+    }
+
+    function attach(emitter) {
+        emitter.addEventListener('progress', e => {
+            retryCount = 0;
+            if (settled) return; // already resolved via onVisible()'s status check racing this event
+            handleEvent(JSON.parse(e.data));
+        });
+        emitter.onerror = () => {
+            // A single hiccup shouldn't abandon tracking — EventSource retries the connection on
+            // its own; only give up after several consecutive failures with no successful event
+            // between them (mirrors documents.html's upload/sync progress handling).
+            retryCount++;
+            if (retryCount > 5 && !settled) {
+                finish();
+                showToast('재인덱싱 진행 상태 연결 오류', 'danger');
+            }
+        };
+    }
+    attach(sse);
+
+    // A backgrounded admin tab can end up with a connection that's silently dead (browser network
+    // throttling, a reverse proxy or NAT/firewall idle-connection cleanup) without EventSource ever
+    // firing onerror — the reindex keeps running server-side but the button looks stuck. When the
+    // tab becomes visible again, actively re-verify via the one-shot status endpoint instead of
+    // trusting a connection that may already be dead.
+    function onVisible() {
+        if (settled || document.visibilityState !== 'visible') return;
+        fetch('/ui/documents/progress/' + taskId + '/status')
+            .then(r => r.json())
+            .then(evt => {
+                if (settled) return;
+                if (evt.stage === 'running') {
+                    sse.close();
+                    retryCount = 0; // fresh connection deserves its own retry budget
+                    sse = new EventSource('/ui/documents/progress/' + taskId);
+                    attach(sse);
+                } else {
+                    handleEvent(evt);
+                }
+            })
+            .catch(() => {}); // best-effort; the existing onerror/retry path still applies
+    }
+    document.addEventListener('visibilitychange', onVisible);
 }
 
 function escHtml(s) {

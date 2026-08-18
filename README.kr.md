@@ -121,9 +121,10 @@ container system stop
 | `LLM_ROUTING_MODE` | — | `COST_FIRST` | 기본 라우팅 모드 (`app.llm.default-routing-mode`). 폐쇄망/로컬 전용은 `LOCAL_ONLY`로 외부 프로바이더 호출 차단 — `LOCAL_ONLY`로 설정하면 채팅 사이드바의 라우팅 전략 드롭다운 자체가 사라짐(어떤 모드를 골라도 결과가 같으므로) |
 | `LLM_DEFAULT_PROVIDER_CONCURRENCY` | — | `3` | 질의 경로 프로바이더별 동시성 게이트(`app.llm.default-provider-concurrency`) — 앱이 한 프로바이더에 보내는 동시 요청이 이 값을 절대 넘지 않음(LLM 서버의 실제 `--parallel` 값에 맞춤). 프로바이더별 오버라이드: `app.llm.providers[N].concurrency` |
 | `LLM_PERMIT_WAIT_TIMEOUT_SECONDS` | — | `60` | 동시성 슬롯 대기 상한(`app.llm.permit-wait-timeout-seconds`) — 초과 시 read timeout까지 기다리지 않고 즉시 HTTP 429 + `Retry-After` 응답. 인덱싱/백그라운드 LLM 호출에는 적용되지 않음 |
-| `LLM_TEMPERATURE` | — | `0.0` | 일반/RAG 답변 temperature(`app.llm.temperature`) — 허용 범위 0.0~0.3(클램프). 빈 생성 시점에 각 프로바이더의 `OpenAiChatOptions`에 고정됨. `/settings`에서 **조회 전용**(변경하려면 재기동) |
+| `LLM_TEMPERATURE` | — | `0.0` | 일반/RAG 대화형 호출(분류·답변·평가·재순위) temperature(`app.llm.temperature`) — 허용 범위 0.0~0.3(클램프). **`/settings`에서 핫 수정** — `ClassifierService`/`AnswerService`/`RerankerService`가 매 호출 재조회, 재기동 없이 다음 호출부터 적용. 빈 생성 시점에 각 프로바이더의 `OpenAiChatOptions`에도 고정되는데, 이는 모델 주위에 자체 `ChatClient`를 구성해 호출별 오버라이드를 받을 수 없는 프레임워크 내부 호출(예: 멀티쿼리 확장)을 위한 기동 시점 폴백 값 — 이런 호출은 재기동해야만 변경이 반영됨 |
 | `LLM_MAX_TOKENS` | — | `6000` | **블로킹** LLM 호출(분류·키워드 추출·MD 교정·충분도/근거 평가·TXT 구조화 등) 전용 completion 길이 상한 — 스트리밍 채팅/Direct 답변은 이 값과 무관(대신 SSE 타임아웃이 제한). 대화 히스토리 예산·MD 교정 섹션 분할 크기도 같은 값을 공유. **모델 컨텍스트 윈도우 자체가 아님** — 실제 LLM 서버 컨텍스트 크기에 여유를 두고 설정할 것 — [PIPELINE.md §4.1](documents/PIPELINE.md#41-appllmmax-tokensllm_max_tokens-크기-산정--로컬-llm-컨텍스트-윈도우와의-관계) 참고 |
 | `DIRECT_LLM_TEMPERATURE` | — | `0.1` | meta/Direct 답변 전용 temperature(`app.llm.direct-temperature`), `LLM_TEMPERATURE`와 별개, `[0.0, 1.0]`으로 clamp. **`/settings`에서 핫 수정** — 재기동 없이 다음 Direct 호출부터 적용 |
+| `LLM_INDEXING_TEMPERATURE` | — | `0.0` | 모든 ungated 백그라운드/인덱싱 호출 전용 temperature(`app.llm.indexing-temperature`) — 키워드 추출, MD 교정, TXT 구조화, 이미지 설명/분류, 스레드 제목 생성, 대화 요약. `LLM_TEMPERATURE`/`DIRECT_LLM_TEMPERATURE`와 별개라 그 값이 무엇이든 이 추출/분류형 호출은 결정적으로 유지됨. `[0.0, 1.0]`으로 clamp. **`/settings`에서 핫 수정** — 재기동 없이 다음 호출부터 적용 |
 | `OPENAI_API_KEY` | — | — | OpenAI providers 사용 시 필요. 미설정 시 해당 providers 자동 비활성화 |
 | `GEMINI_API_KEY1` / `GEMINI_API_KEY2` | — | — | Gemini providers 사용 시 필요(NORMAL/PREMIUM 쌍마다 키 1개 — [OPERATOR_MANUAL.md §5](documents/OPERATOR_MANUAL.md#5-llm-프로바이더-설정) 참고). 미설정 시 해당 providers 자동 비활성화 |
 | `GEMINI_MODEL` | — | provider별 상이 | Gemini NORMAL 티어 두 provider(`providers[3]` gemini-flash-lite, `providers[4]` gemini-flash) 모델명 오버라이드. ⚠ 두 provider가 같은 변수를 참조하므로 설정 시 둘이 같은 모델로 합쳐짐 — 각자 기본값을 유지하려면 비워둘 것 |
@@ -193,11 +194,11 @@ container system stop
 
 ### 대화 메모리 / 요약 캐시
 
-대화 이력 주입 길이는 `LLM_MAX_TOKENS × 0.75`(최소 1,000자)로 자동 계산됩니다. 원문 그대로 보내는 폴백 경로와 아래 요약 캐시 경로 모두 이 예산을 그대로 지키므로, 두 경로 사이를 오가도 LLM에 전달되는 컨텍스트 양은 항상 동일하게 유지됩니다.
+대화 이력 주입 길이는 `LLM_MAX_TOKENS × 0.5`(최소 1,000자)로 자동 계산됩니다. 원문 그대로 보내는 폴백 경로와 아래 요약 캐시 경로 모두 이 예산을 그대로 지키므로, 두 경로 사이를 오가도 LLM에 전달되는 컨텍스트 양은 항상 동일하게 유지됩니다.
 
 | 변수 | 기본값 | 설명 |
 |------|--------|------|
-| `MEMORY_FETCH_LIMIT_TURNS` | `50` | 폴백 경로에서 문자 예산 적용 전 조회할 최근 turn 상한 |
+| `MEMORY_FETCH_LIMIT_TURNS` | `10` | 폴백 경로(및 요약 경로 입력)에서 문자 예산 적용 전 조회할 최근 turn 상한 |
 | `SUMMARY_MAX_CACHED_THREADS` | `3` | 요약 캐시(LRU)가 동시에 유지하는 최대 thread 수 |
 | `SUMMARY_MAX_SUMMARY_CHARS` | `2000` | 생성된 요약 문자열의 상한 (초과 시 잘림) |
 | `SUMMARY_RECENT_RAW_TURNS` | `2` | 요약 뒤에 원문 그대로 덧붙일 최근 turn 수 (이 turn들도 예산 안에서 최신 우선으로 채워짐) |
@@ -294,7 +295,7 @@ rag_java/
     │       ├── CuratedSubmissionService.java  # 청크 추가 게시판: 입력 검증+태그, 승인 시 분할(1:N), 거부, 알림 카운트
     │       ├── CuratedImageStore.java         # 제안 본문 이미지: 업로드(허용목록/크기/매직바이트/내용해시 파일명), [이미지: …] 마커 관리, 승인 시 Vision 설명 주입, 참조 세기 정리 + 기동 시 고아 스윕
     │       ├── SettingsService.java           # 런타임 설정 오버라이드 레이어(AppProperties.OverrideSource) + /settings 조회/검증/감사
-    │       ├── IndexingProgressService.java   # 비동기 업로드/동기화 SSE 진행 이벤트 관리
+    │       ├── IndexingProgressService.java   # 비동기 업로드/동기화 SSE 진행 이벤트 관리; 결과를 수 시간 보관해 오래 끊겼다 재접속해도 실제 결과를 이어받음
     │       ├── MarkdownCorrectionService.java # LLM 마크다운 출력 후처리
     │       ├── DocumentLoaderService.java     # PDF/DOCX/TXT/MD 로더 + 마크다운 섹션 파서; 스캔 PDF OCR
     │       ├── DocxToMarkdownConverter.java   # DOCX → Markdown + 인라인 이미지 추출
@@ -337,7 +338,6 @@ rag_java/
                 ├── llm-usage-cards.html   # 프로바이더 카드 (HTMX 30초 자동 갱신)
                 ├── thread-list.html       # HTMX 스레드 목록 fragment
                 ├── thread-item.html       # HTMX 스레드 아이템 fragment
-                ├── doc-row.html           # HTMX 문서 테이블 행 fragment
                 ├── doc-table-body.html    # HTMX 문서 테이블 tbody fragment
                 ├── message-user.html      # 사용자 메시지 버블 fragment
                 ├── message-assistant.html # HTMX 답변 버블 (출처 hover preview 포함)
@@ -375,7 +375,7 @@ rag_java/
 - **동일 우선순위 로드밸런싱** — 같은 role·priority로 프로바이더를 여러 대 등록하면(예: 로컬 서버 2대) 동시성 게이트 여유가 더 많은 쪽으로 요청이 자동 분산(least-in-flight) — 코드 변경 없이 배포 설정만으로 처리량 수평 확장
 - **태스크별 모델 라우팅 (소형 LLM 오프로딩)** — 추론이 필요 없는 잡무(키워드+맥락 추출·대화 요약·제목 생성·MultiQuery 쿼리 확장)는 `TaskType.MICRO_TEXT`로 라우팅됨. `type=MICRO_TEXT` 소형(~500MB) 로컬 모델을 등록하면 이 잡무만 소형으로 내려가고, 답변·품질 민감한 분류/meta 직답은 큰 모델이 전담. 소형 미등록 시 큰 모델이 흡수(회귀 0) — [LLM_ROUTING.md §9](documents/LLM_ROUTING.md) 참고
 - **임베딩 로드밸런싱 + 병렬 서브배치 임베딩** — 다중 임베딩 엔드포인트(`EMBED_ADDITIONAL_BASE_URLS`, 동일 모델·차원)를 least-in-flight로 분산; 인덱싱 시 한 문서의 서브배치를 병렬 임베딩(`EMBED_MAX_CONCURRENT_BATCHES`)해 엔드포인트를 채움. 둘 다 opt-in(기본 단일 엔드포인트·직렬) — [OPERATOR_MANUAL §3.2](documents/OPERATOR_MANUAL.md) 참고
-- **설정 페이지(`/settings`)** — 유효 LLM/RAG 설정(프로바이더·라우팅·임베딩·검색 튜닝)을 한 화면에서 조회. 세 그룹의 값이 **재기동 없이 핫 수정** 가능(`settings_override` 테이블에 영속, 삭제 시 프로퍼티 기본값 복귀): 검색 튜닝(유사도 임계값·RRF 가중치/k·후보 배수·멀티쿼리 최소 길이/활성화·재시도 확대·topK·하이브리드 검색 — 다음 검색부터 적용), 인덱싱/청킹(청크 크기/오버랩/최소 크기·**청크 분할 전략**·동시 파일/LLM 호출 수 제한 — 다음 인덱싱/↺ 재인덱싱부터 적용), Direct 답변 temperature(허용 범위 0.0~1.0, 다음 Direct 호출부터 적용). 수정은 관리자 전용이며 감사 로그에 기록되고, 재기동 필요 값(rerank-enabled·일반 temperature/max-tokens·임베딩 설정·일반/RAG temperature 0.0~0.3 등)은 조회 전용으로 표시
+- **설정 페이지(`/settings`)** — 유효 LLM/RAG 설정(프로바이더·라우팅·임베딩·검색 튜닝)을 한 화면에서 조회. 여러 그룹의 값이 **재기동 없이 핫 수정** 가능(`settings_override` 테이블에 영속, 삭제 시 프로퍼티 기본값 복귀): 검색 튜닝(유사도 임계값·RRF 가중치/k·후보 배수·멀티쿼리 최소 길이/활성화·재시도 확대·topK·하이브리드 검색 — 다음 검색부터 적용), 인덱싱/청킹(청크 크기/오버랩/최소 크기·**청크 분할 전략**·동시 파일/LLM 호출 수 제한 — 다음 인덱싱/↺ 재인덱싱부터 적용), LLM temperature 3종(일반/RAG·Direct 답변·인덱싱/백그라운드 — 각각 해당 종류의 다음 호출부터 적용). 수정은 관리자 전용이며 감사 로그에 기록되고, 재기동 필요 값(rerank-enabled·max-tokens·임베딩 설정 등)은 조회 전용으로 표시
 - **벡터 검색** — `MultiQueryExpander`(3쿼리 병렬, 짧은 키워드형 질문은 확장 생략)로 최적 검색 후 선택된 백엔드(ChromaDB 또는 sqlite-vec)로 유사도 검색. 원본 질문 검색은 쿼리 확장과 병렬로 실행되어 확장 대기 뒤로 밀리지 않음. Chroma 배치 검색은 실제로 읽는 메타데이터/문서/거리 필드만 요청하고 쓰지 않는 임베딩 벡터는 요청하지 않아, 후보 풀이 큰 경우에도 응답이 가볍게 유지됨
 - **Contextual Retrieval** — 청크 임베딩과 키워드 검색(`chunk_fts`) 입력 앞에 맥락 헤더(`{파일명} > {섹션 제목}` + 키워드 추출과 같은 호출에서 생성되는 LLM 1~2문장 요약)를 결합해, 표·코드 조각·대명사 위주 텍스트처럼 단독으로는 모호한 청크의 검색 재현율을 높임. 이 헤더는 저장·표시 텍스트, 출처 미리보기, 답변 프롬프트에는 절대 나타나지 않고 임베딩/키워드 검색 입력에만 반영됨
 - **임베딩 입력 정규화** — 마크다운 장식(구분선, 볼드/이탤릭/밑줄 마커)을 임베딩·`chunk_fts`·답변 프롬프트 입력에서만 제거(저장·표시 텍스트는 원문 유지)해 검색 인덱스 노이즈와 프롬프트 토큰 사용량을 줄임

@@ -1,5 +1,6 @@
 package com.example.ragagent.service;
 
+import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.llm.TaskType;
@@ -8,6 +9,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.content.Media;
+import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.stereotype.Service;
@@ -36,17 +38,21 @@ public class ImageTypeClassifier {
             """;
 
     private final LlmRouter llmRouter;
+    private final AppProperties props;
 
-    public ImageTypeClassifier(LlmRouter llmRouter) {
+    public ImageTypeClassifier(LlmRouter llmRouter, AppProperties props) {
         this.llmRouter = llmRouter;
+        this.props = props;
     }
 
     public String classify(byte[] imageBytes, String mimeType) {
         try {
             Media media = new Media(MimeTypeUtils.parseMimeType(mimeType), new ByteArrayResource(imageBytes));
             UserMessage userMessage = UserMessage.builder().text(PROMPT).media(media).build();
+            OpenAiChatOptions options = OpenAiChatOptions.builder()
+                    .temperature(props.llmSafe().indexingTemperature()).build();
             String response = llmRouter.executeWithTracking(TaskType.LIGHT_BOTH, RoutingMode.COST_FIRST,
-                    model -> model.call(new Prompt(userMessage)));
+                    model -> model.call(new Prompt(userMessage, options)));
             String type = response == null ? "other" : response.strip().toLowerCase();
             return VALID_TYPES.contains(type) ? type : "other";
         } catch (WebClientResponseException e) {

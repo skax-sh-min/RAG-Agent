@@ -129,6 +129,9 @@ public class RetrievalService {
         // flag — turning escalation off must switch off the whole behavior, not half of it.
         int effectiveTopK = retryEscalate ? defaultTopK + retry : defaultTopK;
         List<Document> unique;
+        // Empty on the expansion-failure fallback path below, which skips fusion entirely — every
+        // consumer must therefore tolerate a missing entry rather than assume one exists.
+        Map<String, RrfMetrics> fusedMetrics = Map.of();
         try {
             // Escalate candidate count on retry to surface different documents.
             int candidateK = (retryEscalate && retry > 0)
@@ -200,8 +203,10 @@ public class RetrievalService {
             // 대상이기 때문. 각 부분 리스트의 순위는 원래 순서를 유지하므로 축 안에서의 RRF 순위는 그대로다.
             List<Document> likeHits = curatedHitsOfOrigin(curatedHits, CuratedQaRepository.ORIGIN_MANUAL, false);
             List<Document> submissionHits = curatedHitsOfOrigin(curatedHits, CuratedQaRepository.ORIGIN_MANUAL, true);
-            List<Document> candidates = mergeRrf(ranked, keywordHits, likeHits, submissionHits,
+            RrfResult fused = mergeRrfScored(ranked, keywordHits, likeHits, submissionHits,
                     candidateK, rrfK, rrfKeywordWeight, curatedQaWeight, submissionWeight);
+            fusedMetrics = fused.metrics();
+            List<Document> candidates = fused.docs();
             // Strict AND tag filter — applied after RRF, before rerank/cut. Covers vector
             // + BM25 axes uniformly (tags travel in chunk metadata). No no-tag fallback on shortfall.
             candidates = filterByTags(candidates, selectedTags, candidateK);
@@ -221,13 +226,43 @@ public class RetrievalService {
             unique = fallback.subList(0, Math.min(effectiveTopK, fallback.size()));
         }
 
+        // § 표시 이름 — one batch lookup for the whole turn's retrieved chunks instead of one
+        // query per chunk; formatSource() falls back to the real filename for any docId absent
+        // from the map (no override set, or lookup failed).
+        List<String> docIds = unique.stream()
+                .map(d -> String.valueOf(d.getMetadata().getOrDefault(MetaKey.DOC_ID, "")))
+                .filter(id -> !id.isBlank())
+                .toList();
+        Map<String, String> displayNames = ragService.findDisplayNames(docIds);
+
+        final Map<String, RrfMetrics> rrfMetrics = fusedMetrics;
+        // Share is normalized over the FINAL cut, not the candidate pool — the question it answers
+        // is "of what the answer node actually received, how much weight was this chunk", so a
+        // chunk dropped by the tag filter or the rerank cut must not dilute the denominator.
+        double rrfTotal = unique.stream()
+                .map(d -> rrfMetrics.get(docKey(d)))
+                .filter(Objects::nonNull)
+                .mapToDouble(RrfMetrics::rrfScore)
+                .sum();
+
         List<SourceRef> sources = unique.stream()
-                .map(d -> new SourceRef(
-                        formatSource(d),
-                truncate(previewSource(d), 700),   // UI 출처 hover 미리보기 길이
-                d.getId(),
-                        String.valueOf(d.getMetadata().getOrDefault(MetaKey.DOC_ID, "")),
-                        d.getMetadata().getOrDefault(MetaKey.PAGE_OR_SLIDE, "?")))
+                .map(d -> {
+                    RrfMetrics m = rrfMetrics.get(docKey(d));
+                    // Similarity falls back to the document's own score so the fallback path (no
+                    // fusion) still reports it; share/ranks are genuinely unknown there.
+                    Double similarity = m != null && m.vectorSimilarity() != null
+                            ? m.vectorSimilarity() : d.getScore();
+                    Double share = (m != null && rrfTotal > 0.0) ? m.rrfScore() / rrfTotal : null;
+                    return new SourceRef(
+                            formatSource(d, displayNames),
+                            truncate(previewSource(d), 700),   // UI 출처 hover 미리보기 길이
+                            d.getId(),
+                            String.valueOf(d.getMetadata().getOrDefault(MetaKey.DOC_ID, "")),
+                            d.getMetadata().getOrDefault(MetaKey.PAGE_OR_SLIDE, "?"),
+                            similarity,
+                            share,
+                            m != null ? m.axisRanks() : null);
+                })
                 .distinct()
                 .toList();
 
@@ -427,36 +462,105 @@ public class RetrievalService {
                                     List<Document> curatedRanked, List<Document> submissionRanked,
                                     int topK, int k,
                                     double keywordWeight, double curatedWeight, double submissionWeight) {
-        Map<String, Double> scores = new LinkedHashMap<>();
-        Map<String, Document> byKey = new LinkedHashMap<>();
-        double vectorWeight = vectorRanked.isEmpty() ? 0.0 : 1.0 / vectorRanked.size();
-        for (List<Document> list : vectorRanked) {
-            addRrfAxis(list, vectorWeight, k, scores, byKey);
-        }
-        if (keywordRanked != null && !keywordRanked.isEmpty()) {
-            addRrfAxis(keywordRanked, keywordWeight, k, scores, byKey);
-        }
-        if (curatedRanked != null && !curatedRanked.isEmpty()) {
-            addRrfAxis(curatedRanked, curatedWeight, k, scores, byKey);
-        }
-        if (submissionRanked != null && !submissionRanked.isEmpty()) {
-            addRrfAxis(submissionRanked, submissionWeight, k, scores, byKey);
-        }
-        return scores.entrySet().stream()
-                .sorted(Map.Entry.<String, Double>comparingByValue().reversed())
-                .limit(topK)
-                .map(e -> byKey.get(e.getKey()))
-                .toList();
+        return mergeRrfScored(vectorRanked, keywordRanked, curatedRanked, submissionRanked,
+                topK, k, keywordWeight, curatedWeight, submissionWeight).docs();
     }
 
+    /**
+     * Per-chunk retrieval diagnostics produced as a by-product of fusion. {@code vectorSimilarity}
+     * is the best cosine across the vector axes and is null for a chunk that only ever appeared on
+     * the BM25/curated axes (those carry rank, not distance).
+     */
+    record RrfMetrics(double rrfScore, Double vectorSimilarity, String axisRanks) {}
+
+    /** Fusion output plus the diagnostics, keyed by {@link #docKey(Document)}. */
+    record RrfResult(List<Document> docs, Map<String, RrfMetrics> metrics) {}
+
+    /**
+     * Same fusion as {@link #mergeRrf}, but also keeps the numbers it computes instead of
+     * discarding them once sorting is done. The plain {@code mergeRrf} overloads delegate here and
+     * drop the metrics, so ranking behavior is bit-identical and existing callers are unaffected.
+     *
+     * <p>Metrics are keyed by {@code docKey} rather than attached to the {@link Document}: the
+     * documents flow on into the answer prompt and (for curated/admin paths) back into the vector
+     * store, and this codebase already pays for one transient-metadata key ({@code
+     * MetaKey.SEARCH_TEXT}) that every provider's {@code add()} has to remember to strip. A side
+     * map cannot leak into storage at all, and it survives the rerank/tag-filter steps that rebuild
+     * the document list.
+     */
+    static RrfResult mergeRrfScored(List<List<Document>> vectorRanked, List<Document> keywordRanked,
+                                     List<Document> curatedRanked, List<Document> submissionRanked,
+                                     int topK, int k,
+                                     double keywordWeight, double curatedWeight, double submissionWeight) {
+        Map<String, Double> scores = new LinkedHashMap<>();
+        Map<String, Document> byKey = new LinkedHashMap<>();
+        Map<String, Double> bestSimilarity = new LinkedHashMap<>();
+        Map<String, Map<String, Integer>> ranksByKey = new LinkedHashMap<>();
+        double vectorWeight = vectorRanked.isEmpty() ? 0.0 : 1.0 / vectorRanked.size();
+        for (List<Document> list : vectorRanked) {
+            addRrfAxis(list, vectorWeight, k, AXIS_VECTOR, true, scores, byKey, bestSimilarity, ranksByKey);
+        }
+        if (keywordRanked != null && !keywordRanked.isEmpty()) {
+            addRrfAxis(keywordRanked, keywordWeight, k, AXIS_KEYWORD, false, scores, byKey, bestSimilarity, ranksByKey);
+        }
+        if (curatedRanked != null && !curatedRanked.isEmpty()) {
+            addRrfAxis(curatedRanked, curatedWeight, k, AXIS_LIKE, false, scores, byKey, bestSimilarity, ranksByKey);
+        }
+        if (submissionRanked != null && !submissionRanked.isEmpty()) {
+            addRrfAxis(submissionRanked, submissionWeight, k, AXIS_SUBMISSION, false, scores, byKey, bestSimilarity, ranksByKey);
+        }
+        List<Map.Entry<String, Double>> ordered = scores.entrySet().stream()
+                .sorted(Map.Entry.<String, Double>comparingByValue().reversed())
+                .limit(topK)
+                .toList();
+        Map<String, RrfMetrics> metrics = new LinkedHashMap<>();
+        for (Map.Entry<String, Double> e : ordered) {
+            metrics.put(e.getKey(), new RrfMetrics(
+                    e.getValue(), bestSimilarity.get(e.getKey()), formatAxisRanks(ranksByKey.get(e.getKey()))));
+        }
+        return new RrfResult(ordered.stream().map(e -> byKey.get(e.getKey())).toList(), metrics);
+    }
+
+    private static final String AXIS_VECTOR = "vec";
+    private static final String AXIS_KEYWORD = "bm25";
+    private static final String AXIS_LIKE = "like";
+    private static final String AXIS_SUBMISSION = "sub";
+    /** Axis print order — fixed so the rendered string is stable turn to turn. */
+    private static final List<String> AXIS_ORDER =
+            List.of(AXIS_VECTOR, AXIS_KEYWORD, AXIS_LIKE, AXIS_SUBMISSION);
+
     private static void addRrfAxis(List<Document> axis, double weight, int k,
-                                    Map<String, Double> scores, Map<String, Document> byKey) {
+                                    String axisName, boolean carriesSimilarity,
+                                    Map<String, Double> scores, Map<String, Document> byKey,
+                                    Map<String, Double> bestSimilarity,
+                                    Map<String, Map<String, Integer>> ranksByKey) {
         for (int i = 0; i < axis.size(); i++) {
             Document doc = axis.get(i);
             String key = docKey(doc);
             scores.merge(key, weight / (i + 1 + k), Double::sum);
-            byKey.putIfAbsent(key, doc);
+            // Prefer a document that actually carries a similarity score. The keyword axis builds
+            // its Documents from SQL rows with no score at all, so a plain putIfAbsent would blank
+            // out the similarity of any chunk the BM25 axis happened to reach first.
+            Document existing = byKey.get(key);
+            if (existing == null || (existing.getScore() == null && doc.getScore() != null)) {
+                byKey.put(key, doc);
+            }
+            // Best rank wins when a chunk appears on several vector axes (MultiQuery variants).
+            ranksByKey.computeIfAbsent(key, x -> new LinkedHashMap<>())
+                      .merge(axisName, i + 1, Math::min);
+            if (carriesSimilarity && doc.getScore() != null) {
+                bestSimilarity.merge(key, doc.getScore(), Math::max);
+            }
         }
+    }
+
+    /** {@code {vec:2, bm25:5}} → {@code "vec:2, bm25:5"}, in {@link #AXIS_ORDER}. */
+    private static String formatAxisRanks(Map<String, Integer> ranks) {
+        if (ranks == null || ranks.isEmpty()) return null;
+        return AXIS_ORDER.stream()
+                .filter(ranks::containsKey)
+                .map(axis -> axis + ":" + ranks.get(axis))
+                .collect(java.util.stream.Collectors.joining(", "));
     }
 
     /**
@@ -493,18 +597,25 @@ public class RetrievalService {
      * Curated hit: fixed label.
         * Chapter-based docs (docx/md/txt): "파일명 | ch X" when a real chapter exists, else "파일명" only.
      * Page-based docs (pptx/pdf etc.): "파일명 | p.N".
+     *
+     * @param displayNames docId → display-name override (§ 표시 이름), from {@link RagService#findDisplayNames};
+     *                     the label shows the override when present, but the <b>real</b> filename still
+     *                     drives {@link #isChapterStructuredFilename} — a display name is cosmetic and
+     *                     typically has no extension, so it must never decide the citation format.
      */
-    static String formatSource(Document doc) {
+    static String formatSource(Document doc, Map<String, String> displayNames) {
         Map<String, Object> meta = doc.getMetadata();
         if ("curated_qa".equals(meta.get(MetaKey.DOC_TYPE))) {
             return "💬 큐레이션 Q&A";
         }
-        String filename = String.valueOf(meta.getOrDefault(MetaKey.FILENAME, "unknown"));
+        String realFilename = String.valueOf(meta.getOrDefault(MetaKey.FILENAME, "unknown"));
+        String docId = String.valueOf(meta.getOrDefault(MetaKey.DOC_ID, ""));
+        String filename = (displayNames != null) ? displayNames.getOrDefault(docId, realFilename) : realFilename;
         String chapter = normalizeChapterNo(meta.get(MetaKey.CHAPTER_NO));
         if (chapter != null) {
             return "%s | ch %s".formatted(filename, chapter);
         }
-        if (isChapterStructuredFilename(filename)) {
+        if (isChapterStructuredFilename(realFilename)) {
             return filename;
         }
         Object page = meta.getOrDefault(MetaKey.PAGE_OR_SLIDE, "?");

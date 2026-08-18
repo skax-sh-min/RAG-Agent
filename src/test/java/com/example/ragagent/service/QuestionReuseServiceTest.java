@@ -1,5 +1,6 @@
 package com.example.ragagent.service;
 
+import com.example.ragagent.ingestion.DocRegistry;
 import com.example.ragagent.repository.QuestionReuseRepository;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -45,7 +46,7 @@ class QuestionReuseServiceTest {
     @DisplayName("추천 목록은 질문 텍스트 중복을 제거한다")
     void suggest_deduplicatesQuestions() {
         QuestionReuseRepository repo = mock(QuestionReuseRepository.class);
-        QuestionReuseService service = new QuestionReuseService(repo);
+        QuestionReuseService service = new QuestionReuseService(repo, mock(DocRegistry.class));
 
         when(repo.findSuggestionCandidates(anyString(), anyBoolean(), anyString(), anyInt()))
                 .thenReturn(List.of(
@@ -70,7 +71,7 @@ class QuestionReuseServiceTest {
     @DisplayName("추천 목록에는 50자를 초과하는 질문이 포함되지 않는다")
     void suggest_excludesQuestionsOver50Chars() {
         QuestionReuseRepository repo = mock(QuestionReuseRepository.class);
-        QuestionReuseService service = new QuestionReuseService(repo);
+        QuestionReuseService service = new QuestionReuseService(repo, mock(DocRegistry.class));
 
         String longQuestion = "Spring Boot에서 보안 설정을 운영 환경에서 단계별로 점검하는 상세 절차를 알려주세요";
 
@@ -95,7 +96,7 @@ class QuestionReuseServiceTest {
     @DisplayName("shared 추천은 db-reuse turn도 포함한다")
     void suggest_sharedIncludesDbReuseTurns() {
         QuestionReuseRepository repo = mock(QuestionReuseRepository.class);
-        QuestionReuseService service = new QuestionReuseService(repo);
+        QuestionReuseService service = new QuestionReuseService(repo, mock(DocRegistry.class));
 
         when(repo.findSuggestionCandidates(anyString(), anyBoolean(), anyString(), anyInt()))
                 .thenReturn(List.of(
@@ -117,7 +118,7 @@ class QuestionReuseServiceTest {
     @DisplayName("재사용 조회는 source turn 답변을 그대로 사용한다")
     void reuseLookup_usesResolvedAnswerFromRepository() {
         QuestionReuseRepository repo = mock(QuestionReuseRepository.class);
-        QuestionReuseService service = new QuestionReuseService(repo);
+        QuestionReuseService service = new QuestionReuseService(repo, mock(DocRegistry.class));
 
         when(repo.findTurnForReuse(55L, false, "admin"))
                 .thenReturn(new QuestionReuseRepository.CandidateTurn(
@@ -138,7 +139,7 @@ class QuestionReuseServiceTest {
         @DisplayName("이전 대화 출처 라벨은 챕터/페이지 규칙을 동일하게 따른다")
         void sourceRefsForTurn_formatsLabelWithChapterRule() {
                 QuestionReuseRepository repo = mock(QuestionReuseRepository.class);
-                QuestionReuseService service = new QuestionReuseService(repo);
+                QuestionReuseService service = new QuestionReuseService(repo, mock(DocRegistry.class));
 
                         when(repo.findReusedFromTurnId(7L)).thenReturn(null);
                 when(repo.findSourcePreviewRows(7L)).thenReturn(List.of(
@@ -159,7 +160,7 @@ class QuestionReuseServiceTest {
         @DisplayName("출처 라벨 변환은 chapter가 null이어도 예외 없이 동작한다")
         void sourceRefsForTurn_handlesNullChapterSafely() {
                 QuestionReuseRepository repo = mock(QuestionReuseRepository.class);
-                QuestionReuseService service = new QuestionReuseService(repo);
+                QuestionReuseService service = new QuestionReuseService(repo, mock(DocRegistry.class));
 
                         when(repo.findReusedFromTurnId(8L)).thenReturn(null);
                 when(repo.findSourcePreviewRows(8L)).thenReturn(List.of(
@@ -177,7 +178,7 @@ class QuestionReuseServiceTest {
         @DisplayName("db-reuse turn의 출처 미리보기는 원본 turn 기준으로 조회한다")
         void sourceRefsForTurn_dbReuseUsesOriginalTurn() {
                 QuestionReuseRepository repo = mock(QuestionReuseRepository.class);
-                QuestionReuseService service = new QuestionReuseService(repo);
+                QuestionReuseService service = new QuestionReuseService(repo, mock(DocRegistry.class));
 
                 when(repo.findReusedFromTurnId(90L)).thenReturn(12L);
                 when(repo.findSourcePreviewRows(12L)).thenReturn(List.of(
@@ -195,7 +196,7 @@ class QuestionReuseServiceTest {
         @DisplayName("db-reuse 원본 turn이 삭제되면 안내 문구를 표시한다")
         void sourceRefsForTurn_deletedOriginalShowsFallbackMessage() {
                 QuestionReuseRepository repo = mock(QuestionReuseRepository.class);
-                QuestionReuseService service = new QuestionReuseService(repo);
+                QuestionReuseService service = new QuestionReuseService(repo, mock(DocRegistry.class));
 
                 when(repo.findReusedFromTurnId(91L)).thenReturn(13L);
                 when(repo.findSourcePreviewRows(13L)).thenReturn(List.of());

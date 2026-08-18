@@ -299,6 +299,45 @@ class LlmRouterTest {
         assertThat(breaker.isBlocked("lm")).isFalse();
     }
 
+    @Test
+    @DisplayName("executeWithTracking(게이트 미적용) — 호출 도중 BackgroundLlmConcurrencyTracker가 증가했다가 끝나면 원복된다")
+    void executeWithTracking_incrementsAndDecrementsBackgroundTracker() {
+        var tracker = new BackgroundLlmConcurrencyTracker();
+        ChatModel chatModel = mock(ChatModel.class);
+        when(chatModel.call(any(Prompt.class))).thenAnswer(inv -> {
+            assertThat(tracker.get()).as("must be incremented while the call is in flight").isEqualTo(1);
+            return chatResponse("ok");
+        });
+        var local = new LlmProvider("lm", TaskType.TEXT, ProviderRole.LOCAL, 1, "k", null, null, true,
+                chatModel, null);
+        var r = new LlmRouter(List.of(local), mock(LlmUsageRepository.class), breaker, RoutingMode.COST_FIRST,
+                0.6, 180, Map.of(), 3, 20, new ProviderToggle(), tracker);
+
+        r.executeWithTracking(TaskType.TEXT, RoutingMode.COST_FIRST, m -> m.call(new Prompt("x")));
+
+        assertThat(tracker.get()).as("decremented back to 0 after the call finishes").isEqualTo(0);
+    }
+
+    @Test
+    @DisplayName("executeGated — 동시성 게이트로 이미 카운트되므로 BackgroundLlmConcurrencyTracker는 증가하지 않는다 (이중 계산 방지)")
+    void executeGated_doesNotIncrementBackgroundTracker() {
+        var tracker = new BackgroundLlmConcurrencyTracker();
+        ChatModel chatModel = mock(ChatModel.class);
+        when(chatModel.call(any(Prompt.class))).thenAnswer(inv -> {
+            assertThat(tracker.get()).as("gated calls are already counted via the semaphore-based indicator")
+                    .isEqualTo(0);
+            return chatResponse("ok");
+        });
+        var local = new LlmProvider("lm", TaskType.TEXT, ProviderRole.LOCAL, 1, "k", null, null, true,
+                chatModel, null);
+        var r = new LlmRouter(List.of(local), mock(LlmUsageRepository.class), breaker, RoutingMode.COST_FIRST,
+                0.6, 180, Map.of(), 3, 20, new ProviderToggle(), tracker);
+
+        r.executeGated(TaskType.TEXT, RoutingMode.COST_FIRST, m -> m.call(new Prompt("x")));
+
+        assertThat(tracker.get()).isEqualTo(0);
+    }
+
     // ── Overload (429/402/503) circuit-breaker blocking ───────────────────────
 
     private static HttpClientErrorException tooManyRequests(HttpHeaders headers) {

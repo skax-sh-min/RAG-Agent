@@ -6,6 +6,7 @@ import com.example.ragagent.audit.AuditLogger;
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.context.ThreadContextResolver;
 import com.example.ragagent.llm.CircuitBreaker;
+import com.example.ragagent.llm.BackgroundLlmConcurrencyTracker;
 import com.example.ragagent.llm.EmbeddingConcurrencyTracker;
 import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.repository.LlmUsageRepository;
@@ -71,13 +72,14 @@ class OperationsControllerUsageTest {
     @MockitoBean CuratedQaService curatedQaService;
     @MockitoBean LlmRouter llmRouter;
     @MockitoBean EmbeddingConcurrencyTracker embeddingConcurrencyTracker;
+    @MockitoBean BackgroundLlmConcurrencyTracker backgroundConcurrencyTracker;
 
     @BeforeEach
     void setUp() {
         var chatProvider = new AppProperties.ProviderConfig(
                 "local", "http://localhost:1234/v1", "sk-fake", "gemma", "BOTH", "LOCAL", 0, true, null);
         when(props.llmSafe()).thenReturn(new AppProperties.LlmConfig(
-                List.of(chatProvider), 2, 10, 180, "COST_FIRST", 0.6, 3, 20, 0.0, 0.1, 6000, true));
+                List.of(chatProvider), 2, 10, 180, "COST_FIRST", 0.6, 3, 20, 0.0, 0.1, 0.0, 6000, true));
         when(props.embeddingSafe()).thenReturn(new AppProperties.EmbeddingConfig(
                 "http://localhost:1234/v1", null, "nomic-embed", 768, 10, 120, true, 0, List.of(), 1));
         when(circuitBreaker.getBlockedProviders()).thenReturn(Map.of());
@@ -164,6 +166,20 @@ class OperationsControllerUsageTest {
     }
 
     @Test
+    @DisplayName("GET /api/v1/llm/concurrency — 인덱싱/백그라운드 LLM in-flight 값도 inUse 에 합산된다")
+    void concurrency_foldsInBackgroundLlmActivity() throws Exception {
+        when(llmRouter.localTier1Concurrency())
+                .thenReturn(Optional.of(new LlmRouter.ConcurrencySnapshot(0, 6)));
+        when(backgroundConcurrencyTracker.get()).thenReturn(2); // e.g. keyword+context extraction in flight
+
+        mvc.perform(get("/api/v1/llm/concurrency"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.available").value(true))
+                .andExpect(jsonPath("$.inUse").value(2)) // 0(chat) + 2(background)
+                .andExpect(jsonPath("$.capacity").value(6));
+    }
+
+    @Test
     @DisplayName("GET /api/v1/llm/usage/history — 맵에 chat provider 키 + embed:<model> 키 모두 포함")
     void usageHistory_includesEmbeddingKey() throws Exception {
         mvc.perform(get("/api/v1/llm/usage/history"))
@@ -239,7 +255,7 @@ class OperationsControllerUsageTest {
         var ghost = new AppProperties.ProviderConfig(
                 "ghost", "https://api.example.com", "", "ghost-model", "TEXT", "NORMAL", 1, true, null);
         when(props.llmSafe()).thenReturn(new AppProperties.LlmConfig(
-                List.of(local, ghost), 2, 10, 180, "COST_FIRST", 0.6, 3, 20, 0.0, 0.1, 6000, true));
+                List.of(local, ghost), 2, 10, 180, "COST_FIRST", 0.6, 3, 20, 0.0, 0.1, 0.0, 6000, true));
     }
 
     @Test

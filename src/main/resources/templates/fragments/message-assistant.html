@@ -69,6 +69,22 @@
                                 data-bs-trigger='hover focus',
                                 data-bs-placement='left',
                                 data-preview-md=${src.preview}"></a>
+                    <!-- 검색 진단 수치: 항상 렌더하되 기본 숨김 — ui.retrieval-metrics-enabled가
+                         켜져 있을 때만 하단 스크립트가 d-none을 벗긴다(스트리밍 경로와 동일 규칙). -->
+                    <span class="source-metrics text-muted d-none" style="font-size:0.72rem;"
+                          th:if="${src.similarity != null or src.axisRanks != null or src.answerShare != null}">
+                        <!-- 근거 품질 한 칸 — 유사도 우선, 없으면 축 표기로 대체(chat-stream.js의
+                             renderSourceMetrics()와 같은 폴백 체인). 검색기여는 순위 기반이라
+                             한 턴 안에서 평평해 /admin 패널에만 남긴다. -->
+                        <span th:if="${src.similarity != null}"
+                              th:text="'유사도 ' + ${#numbers.formatDecimal(src.similarity, 1, 2)}"></span>
+                        <span th:if="${src.similarity == null and src.axisRanks != null}"
+                              th:text="${src.axisRanks}"></span>
+                        <!-- 앞 칸이 비었을 때 구분자로 시작하지 않도록 ' · '를 조건부로 붙인다 -->
+                        <strong th:if="${src.answerShare != null}"
+                                th:text="${(src.similarity != null or src.axisRanks != null) ? ' · ' : ''}
+                                         + '응답 ' + ${#numbers.formatDecimal(src.answerShare * 100, 1, 0)} + '%'"></strong>
+                    </span>
                 </li>
             </ul>
         </details>
@@ -129,6 +145,15 @@
             el.removeAttribute('data-bs-trigger');
             el.removeAttribute('data-bs-placement');
             el.removeAttribute('data-preview-md');
+        });
+    }
+
+    /* 검색 진단 수치 노출 — 기본 숨김, ui.retrieval-metrics-enabled가 켜진 경우에만 보인다.
+       서버 렌더/HTMX 프래그먼트 양쪽에서 같은 헬퍼를 쓰므로 모델 속성을 프래그먼트로
+       내려보낼 필요가 없다(위 출처 미리보기 토글과 동일 패턴). */
+    if (typeof window.isRetrievalMetricsEnabled === 'function' && window.isRetrievalMetricsEnabled()) {
+        document.querySelectorAll('.source-metrics.d-none').forEach(function (el) {
+            el.classList.remove('d-none');
         });
     }
 

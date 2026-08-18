@@ -72,7 +72,8 @@ public class AnswerService {
      * <em>passing</em> turn too — it is an advisory for the reader ("substitute your own path"),
      * not a verdict about the answer.
      */
-    private record EvalOutput(boolean sufficient, boolean grounded, String reason, String envNote) {}
+    private record EvalOutput(boolean sufficient, boolean grounded, String reason, String envNote,
+                              List<Integer> usedDocs) {}
 
     private final LlmRouter llmRouter;
     private final MessageSource messageSource;
@@ -190,9 +191,7 @@ public class AnswerService {
                           .build();
     }
 
-    /** Shared raw Prompt construction for the non-fluent LlmRouter call sites (evaluation, PROGRESSIVE).
-     *  {@code options} is null for calls that should keep the provider defaults (the sufficiency
-     *  evaluation), and carries the response mode's maxTokens for the answer calls. */
+    /** Shared raw Prompt construction for the non-fluent LlmRouter call sites (evaluation, PROGRESSIVE). */
     private static Prompt buildPrompt(String systemPrompt, String userPrompt, ChatOptions options) {
         List<org.springframework.ai.chat.messages.Message> messages =
                 List.of(new SystemMessage(systemPrompt), new UserMessage(userPrompt));
@@ -294,6 +293,12 @@ public class AnswerService {
      * because environment-dependent values (paths, hosts, ports, env-var values) are no longer a
      * legitimate reason to fail {@code grounded} — the prompt routes them here instead — and the
      * reader still needs to be told which values to substitute for their own machine.
+     *
+     * <p>{@code usedDocs} (2단계 응답 참여도) rides along for the same reason {@code reason} does:
+     * this call already holds the answer and every excerpt side by side, so asking which excerpt
+     * numbers the answer actually drew on costs no extra round-trip. It is <b>advisory only</b> —
+     * it never gates anything, a model that omits it degrades to pure lexical attribution, and it
+     * can only narrow the candidate set, never manufacture a share (see {@code AnswerAttribution}).
      */
     private AgentState evaluate(AgentState state, String answer, Locale locale) {
         boolean docsPresent = !state.retrievedDocs().isEmpty();
@@ -304,7 +309,7 @@ public class AnswerService {
                     .formatted(PromptInjectionGuard.wrap(state.question()), answer, excerpts, evalConverter.getFormat());
 
             LlmRouter.LlmResult result = llmRouter.executeGatedWithUsage(TaskType.TEXT, state.routingMode(),
-                    model -> model.call(buildPrompt(systemPrompt, evalPrompt, null)));
+                    model -> model.call(buildPrompt(systemPrompt, evalPrompt, evalOptions())));
             EvalOutput out = evalConverter.convert(result.text() == null ? "" : result.text());
             boolean grounded = !docsPresent || out.grounded();
             boolean passed = out.sufficient() && grounded;
@@ -323,10 +328,12 @@ public class AnswerService {
                     .grounded(grounded)
                     .evalReason(reason)
                     .envNote(envNote)
+                    .usedDocIndices(out.usedDocs())
                     .build();
         } catch (Exception e) {
             log.warn("Evaluation parse failed, treating as sufficient + grounded: {}", e.getMessage());
-            return state.toBuilder().needsRetry(false).grounded(true).evalReason(null).envNote(null).build();
+            return state.toBuilder().needsRetry(false).grounded(true).evalReason(null).envNote(null)
+                    .usedDocIndices(List.of()).build();
         }
     }
 
@@ -364,7 +371,11 @@ public class AnswerService {
             String text = MarkdownNoiseNormalizer.normalize(d.getText());
             if (included > 0 && used + text.length() > MAX_EVAL_EXCERPT_CHARS) break;
             if (included > 0) sb.append("\n---\n");
-            sb.append(text);
+            // [D1], [D2], … — the numbering the eval prompt's usedDocs field refers to. 1-based and
+            // in prompt order, so an index maps straight back to retrievedDocs.get(n-1). A document
+            // dropped by the size cap simply never gets a number, which is why the cap truncates
+            // from the tail: indices of the documents that ARE included never shift.
+            sb.append("[D").append(included + 1).append("]\n").append(text);
             used += text.length();
             included++;
         }
@@ -409,15 +420,27 @@ public class AnswerService {
     }
 
     /**
-     * Per-call {@code maxTokens} for this turn's answer, derived from the response mode's share of
-     * the configured {@code app.llm.max-tokens}. Only attached on the <b>blocking</b> call paths —
+     * Per-call options for a blocking answer call: general/RAG temperature (§6.18, hot — read fresh
+     * per call) plus {@code maxTokens} derived from the response mode's share of the configured
+     * {@code app.llm.max-tokens}. maxTokens is only attached on the <b>blocking</b> call paths —
      * streaming calls have no hard per-call cap (token-by-token UX), so there the same character
      * target is instead named in {@link #responseStyleInstruction} as the model's only length control.
      */
     private ChatOptions answerOptions(AgentState state) {
+        OpenAiChatOptions.Builder builder = OpenAiChatOptions.builder()
+                .temperature(props.llmSafe().temperature());
         int configured = props.llmSafe().maxTokens();
         int max = state.responseMode().maxTokens(configured);
-        return max > 0 ? OpenAiChatOptions.builder().maxTokens(max).build() : null;
+        if (max > 0) builder.maxTokens(max);
+        return builder.build();
+    }
+
+    /** Sufficiency-evaluation call options: general/RAG temperature only (no maxTokens cap — the
+     *  structured JSON output is already short). Hot — read fresh per call. */
+    private ChatOptions evalOptions() {
+        return OpenAiChatOptions.builder()
+                .temperature(props.llmSafe().temperature())
+                .build();
     }
 
     private String buildAnswerPrompt(AgentState state) {

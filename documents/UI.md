@@ -84,6 +84,7 @@ src/main/resources/
 | GET | `/documents` | `documents.html` | 문서 관리 페이지 |
 | POST | `/ui/documents/upload` | 202 `{"taskId":"..."}` | 파일 업로드 수신 → 비동기 인덱싱 시작 |
 | GET | `/ui/documents/progress/{taskId}` | `text/event-stream` (SSE) | 인덱싱 진행 이벤트 (`stage`, `done`, `error`) |
+| GET | `/ui/documents/progress/{taskId}/status` | JSON (`IndexingProgressEvent`) | 1회성 상태 조회 — SSE를 새로 열지 않고도 마지막 상태(`buffers`에 있으면 그 이벤트, 워커만 등록돼 있으면 `running`, 둘 다 없으면 `unknown`)를 즉시 확인 |
 | DELETE | `/ui/documents/{docId}` | `200` | 문서 삭제 |
 | GET | `/ui/documents/{docId}/export` | 바이너리(MD/TXT/DOCX, MD+이미지는 ZIP) | 현재 색인된 청크로 문서를 재구성해 다운로드(§ 문서 내보내기, [OPERATOR_MANUAL.md §6.8](OPERATOR_MANUAL.md#68-문서-내보내기) 참고) — 관리자 전용 |
 | GET | `/ui/documents/list` | `fragments/doc-table-body` | 문서 목록 새로고침 |
@@ -91,6 +92,8 @@ src/main/resources/
 > **관리 전용 인증 모드**(`app.auth.management-only=true`, §6.17 B안)에서는 `POST /ui/documents/upload`, `POST /ui/documents/progress/*/cancel`, `DELETE /ui/documents/{docId}`, `PATCH /ui/documents/{id}/tags`, `GET /ui/documents/{id}/tags/edit`, `GET /ui/documents/{id}/export`가 `hasRole("ADMIN")`로 게이트된다 — 비로그인은 `/login` 리다이렉트, 관리자 아닌 로그인은 403. `GET /documents`·`GET /ui/documents/list`·태그 조회는 게스트에게 그대로 열려 있다. 자세한 내용은 [OPERATOR_MANUAL.md §9.4.2](OPERATOR_MANUAL.md#942-관리-전용-인증-management-only) 참고. 내보내기는 읽기 동작이지만 문서 전체를 한 번에 반출하는 벌크 기능이라 이 그룹에 포함됐다.
 >
 > **인덱싱 진행 스테이지**(`stage` 값): `loading` → `structuring`(TXT만) → `describing_images`(Vision 이미지 분석, "이미지 설명 추가" 체크 시만 — "이미지 분석 중 (N/M)") → `correcting`(DOCX/TXT/MD/PPTX/PDF[비스캔]) → `chunking` → `enriching` → `storing` → `done`/`error`/`cancelled`. 각 이벤트는 `stage`와 함께 `done`/`total`/`filename`/`message`를 실어 나르며, `documents.html`의 `stageHtml`/`STAGE_LABELS`가 단계별 진행률 바와 오류 로그 라벨을 렌더링한다. 상세는 [PIPELINE.md §6.3](PIPELINE.md#63-docx--md--임베딩-db-저장-상세-이미지-포함) 참고.
+>
+> **연결 재접속 처리**(`IndexingProgressService`): 인덱싱은 (특히 로컬 LLM이 느릴 때) 수 시간까지 걸릴 수 있어, 그 사이 브라우저의 SSE 연결이 끊겼다 재접속하는 일이 드물지 않다. 마지막으로 알려진 상태(진행 중 이벤트 이력 포함)는 **4시간**(코드 상수, 프로퍼티화되어 있지 않음) 보관되므로 재접속 시점에도 실제 결과(`done`/`error`/`cancelled`)를 그대로 재생해 받을 수 있다. 그보다 오래 끊겨 있었다면(4시간 초과) 서버는 조용히 연결만 열어두는 대신 **`unknown`** 종결 이벤트를 즉시 보낸다 — `documents.html`은 이를 실패가 아닌 "상태 확인 불가"(⚠️, 문서 목록에서 직접 확인 권장)로 표시하고, 순차 업로드 루프도 다음 파일로 넘어간다. 이 처리 이전에는 만료된 taskId로 재접속하면 heartbeat만 오갈 뿐 아무 이벤트도 오지 않는 "좀비 연결" 상태로 남아, 화면이 영구히 "처리 중"에 멈추고 이후 파일 업로드까지 함께 멈추는 문제가 있었다(순차 업로드 루프가 그 `await`에서 빠져나오지 못함).
 >
 > **"소제목 숫자 생성" 체크박스 자동 기본값**(`documents.html`, 순수 클라이언트 로직, 서버 API 변경 없음): 파일을 선택할 때마다(드래그앤드롭·파일 선택창 둘 다 `handleFiles()` 경유) `syncHeadingNumbersCheckbox()`가 재계산한다 — 선택된 파일에 PPTX가 하나라도 있으면 체크 해제, 없으면(PDF 포함) 체크. 파일을 지울 때(`removeFile()`)도 남은 구성 기준으로 다시 계산된다. 이 기본값은 `DocumentIndexer`의 `.pptx` 분기가 체크박스 상태와 무관하게 항상 `addHeadingNumbers=false`를 넘기는 서버 동작(§3.3 [OPERATOR_MANUAL.md](OPERATOR_MANUAL.md#소제목-숫자-생성-addheadingnumbers) 참고)을 UI에 미리 반영한 것이며, PDF는 `PdfToMarkdownConverter`가 헤딩 자체를 만들지 않아 체크해도 무해하므로 자동 해제 대상에서 제외된다. PPTX와 다른 형식이 같은 배치에 섞이면 업로드가 배치 전체에 값 하나만 전송하는 구조라 `warnIfPptxMixed()`가 토스트 경고를 띄운다(업로드 자체는 막지 않음). 둘 다 기본값 제안일 뿐이라 체크박스는 언제든 수동으로 바꿀 수 있다.
 >
@@ -142,11 +145,12 @@ REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — �
 | GET | `/admin/chunks/{chunkId}/detail` | JSON | 청크 텍스트·메타데이터 (편집 패널) |
 | POST | `/admin/chunks/{chunkId}` | `200` | 청크 텍스트·메타데이터 수정 (벡터 보존) |
 | DELETE | `/admin/chunks/{chunkId}` | `200` | 청크 삭제 (sqlite-vec는 두 테이블 동기 삭제) |
-| POST | `/admin/documents/{docId}/reindex` | JSON | 저장된 MD로 재인덱싱 (DOCX/TXT/MD/PPTX/PDF 전용, 스캔 PDF 제외 — 스캔 PDF는 MD 변환 없이 OCR로 바로 인덱싱되어 재사용할 MD 파일이 없다) |
+| POST | `/admin/documents/{docId}/reindex` | 202 `{"taskId":"..."}` | 저장된 MD로 재인덱싱 (DOCX/TXT/MD/PPTX/PDF 전용, 스캔 PDF 제외 — 스캔 PDF는 MD 변환 없이 OCR로 바로 인덱싱되어 재사용할 MD 파일이 없다). 진행률은 업로드와 **같은** `GET /ui/documents/progress/{taskId}` SSE를 그대로 쓴다(위 §3.2 재접속 처리도 동일 적용) — `admin.html`의 `subscribeReindexProgress()`는 연결 오류 시 즉시 포기하지 않고 최대 5회까지 재시도하며, `unknown` 종결 이벤트를 받으면 "새로고침하여 확인" 경고로 표시한다 |
 | GET | `/admin/curated` | `fragments/admin-curated :: panel` | §10.10 — 큐레이션 Q&A 패널 지연 로딩 프래그먼트. `offset`(기본 0)·`limit`(기본 20, 20/50/100) 쿼리 파라미터로 페이지네이션. `/admin` 페이지 자체는 이 데이터를 조회하지 않고, 카드를 처음 펼칠 때만(`<details>` `toggle` 이벤트) HTMX로 호출되며, 이후 페이지 이동·페이지당 건수 변경은 `loadCurated()`(페이지 레벨 JS, plain fetch)가 같은 엔드포인트를 다시 호출함 |
 | GET | `/admin/curated/{id}/detail` | JSON | §10.10 — 큐레이션 Q&A 항목의 질문·답변 조회 (편집 패널) |
 | POST | `/admin/curated/{id}` | `200` | §10.10 — 큐레이션 Q&A 답변 수정 → 재임베딩. 좋아요를 누른 사용자와 무관하게 관리자가 어떤 항목이든 편집 가능 |
 | DELETE | `/admin/curated/{id}` | `200` | §10.10 — 큐레이션 Q&A 강제 삭제(비활성화+de-index). 좋아요 주체의 동의 없이도 관리자가 제거 가능(모더레이션). 사용자 제안에서 온 행이면 **같은 제안의 모든 청크가 함께** 내려간다(전부/전무) |
+| GET | `/admin/retrieval-metrics` | `fragments/admin-retrieval-metrics :: panel` | 3단계 — 턴별 검색 진단 수치 패널 지연 로딩(`offset`/`limit`, 기본 20). **읽기 전용**이며 사용자 스코프가 아니다(배포 전체의 검색 동작을 보는 운영자 뷰, `/admin/**`의 ROLE_ADMIN 게이트 상속) |
 | GET | `/admin/submissions` | `fragments/admin-submissions :: panel` | 청크 추가 제안 검토 패널 지연 로딩. `status`(기본 `pending`, `all`=전체)·`offset`·`limit` 파라미터. 큐레이션 패널과 동일한 `<details>` + `toggle once` 패턴 |
 | GET | `/admin/submissions/pending-count` | JSON `{"count":N}` | 검토 대기 건수 — 헤더 배지·카드 pill이 60초마다 폴링. **`/api/v1/**`이 아니라 `/admin/**` 아래**에 둔 이유는 아래 참고 |
 | GET | `/admin/submissions/{id}/detail` | JSON | 제안 전문(제목·본문·태그·작성자·상태·예상 청크 수) — 검토 오프캔버스 채우기용 |
@@ -157,7 +161,13 @@ REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — �
 >
 > **큐레이션 Q&A 카드**(`/admin` 하단, §10.10): 기본적으로 접힌 `<details>` 카드이며, 처음 펼칠 때만(`hx-trigger="toggle[this.open] once"` → `GET /admin/curated`) 좋아요로 승격된 질문·답변을 최신순으로 조회해 표시한다 — `AdminController.adminPage()`는 더 이상 `curatedQaService.listActive()`를 즉시 호출하지 않으므로 `/admin` 페이지 로드 자체는 이 조회를 하지 않는다. 페이지당 건수는 20/50/100 중 선택(기본 20 — `AdminController.curatedPanel()`의 `limit` 기본값), 이전/다음 버튼으로 페이지 이동한다(`CuratedQaRepository.findAllActive(offset, limit)`) — 이전의 고정 상한 50건·페이지네이션 없음 방식에서, 큐레이션 항목이 계속 쌓여도 패널이 무거워지지 않도록 청크 목록과 동일한 페이지네이션 UI로 전환됐다. 편집(연필 아이콘)은 저장 시 자동 재임베딩되는 점이 위 청크 편집과 다르다 — 청크 편집은 원본 벡터를 그대로 유지하지만, 큐레이션 Q&A 편집은 검색 정확도가 목적이라 항상 재임베딩된다. **편집 오프캔버스는 청크 편집과 동일한 조건·동일한 렌더러로 좌측 미리보기 컬럼을 띄운다**(`window.innerWidth >= EDIT_BASE_WIDTH * 2`일 때만, `renderChunkPreview()` → `renderMarkdownWithImageMarkers()`, 입력 200ms 디바운스) — 큐레이션 답변은 표·코드블록·이미지 마커를 포함한 마크다운이 그대로 검색 근거가 되므로 원문만 보고 고치면 서식이 깨진 것을 알아채기 어렵다. 좁은 화면은 기존 단일 컬럼 그대로다. 질문 앞에 노란 ⚠ 배지가 보이면 `embed_status='failed'`(전체+핵심 섹션 재시도 모두 실패, `CuratedQaService.tryEmbedWithFallback()`) — 해당 항목은 검색에 전혀 반영되지 않고 있다는 뜻이며, 답변을 편집해 저장하면 재시도된다. 채팅 화면에서도 본인 소유 turn에 한해 같은 배지(`"임베딩 실패"` 텍스트)가 좋아요/편집 아이콘 옆에 뜬다(백그라운드 임베딩이 몇 초 뒤 실패하는 구조라 실시간 토스트는 없고, 다음 페이지 로드 시 표시). 상세는 [OPERATOR_MANUAL.md §7.5](OPERATOR_MANUAL.md#75-큐레이션-qa-관리-1010) 참고.
 
-> **카드 순서**: `/admin` 하단은 **청크 추가 제안 → 큐레이션 Q&A** 순이다. 앞쪽은 관리자의 조치를 기다리는 대기열(검토 대기 pill이 붙는다)이고, 뒤쪽은 이미 반영된 것을 확인·회수하는 용도라 열어볼 일이 드물어 최하단에 둔다.
+> **검색 진단 수치 카드**(`/admin` 최하단, 3단계): 같은 `<details>` 지연 로딩 구조(`hx-trigger="toggle[this.open] once"` → `GET /admin/retrieval-metrics`). 턴 한 줄에 **시각·질문·응답모드·최고 유사도·사용/검색 개수**를 보여주고, **상세**를 누르면 그 턴의 출처별 4개 수치(유사도·검색기여·축별 순위·응답참여)가 펼쳐진다. 채팅의 배지는 그 순간만 보이므로, `SEARCH_RRF_KEYWORD_WEIGHT`·`SEARCH_SIMILARITY_THRESHOLD` 같은 값을 조정하려면 **여러 턴에 걸친 경향**을 봐야 한다는 것이 이 패널의 존재 이유다.
+> - **사용/검색** 열(`3/8`)이 이 패널에서 가장 볼 만한 수치다 — 검색된 출처의 절반 이상이 답변에 반영되지 않으면 ⚠가 붙는다(topK 과다 또는 프롬프트 문제 의심).
+> - 값이 `-`인 칸은 0이 아니라 **측정 안 됨**이다(벡터 축에 없던 청크, 확장 실패 폴백 턴 등).
+> - 페이지네이션 JS(`loadRetrievalMetrics()`/`applyMetricsLimitFilter()`)는 큐레이션 패널과 **같은 이유로** `admin.html` 페이지 레벨에 있다 — 재조회가 plain `innerHTML` 삽입이라 프래그먼트 내장 `<script>`는 실행되지 않는다.
+> - 기록은 `conversation_turns.retrieval_metrics`(JSON blob, 방어적 `ALTER TABLE`)에서 읽으며, **수치를 가진 턴만** 목록에 오른다(meta/Direct/DB 재사용 턴은 빈 행으로 끼지 않는다). 읽기는 모르는 필드를 무시하도록 명시적으로 관대하게 파싱한다 — 이 행들은 자신을 쓴 코드보다 오래 살아남으므로, `SourceRef`에 필드가 하나 추가됐다고 과거 기록 전체가 안 읽히면 안 된다.
+
+> **카드 순서**: `/admin` 하단은 **청크 추가 제안 → 큐레이션 Q&A → 검색 진단 수치** 순이다. 마지막은 조치 대기열도, 반영 확인용도 아닌 순수 분석 뷰라 가장 아래다. 앞쪽은 관리자의 조치를 기다리는 대기열(검토 대기 pill이 붙는다)이고, 뒤쪽은 이미 반영된 것을 확인·회수하는 용도라 열어볼 일이 드물어 최하단에 둔다.
 
 > **청크 추가 제안 카드**(`/admin` 하단, 큐레이션 Q&A 카드 바로 위): 같은 `<details>` 지연 로딩 구조(`hx-trigger="toggle[this.open] once"` → `GET /admin/submissions`)이며, 카드 제목 옆에 검토 대기 건수 pill(`#submission-pending-pill`)이 붙는다(0건이면 `.d-none`). 기본 필터는 `pending` — 상태 드롭다운으로 등록 완료/반려/철회됨/전체 전환. 행의 아이콘을 누르면 검토 오프캔버스(`#submissionReviewOffcanvas`)가 열려 제목·태그·본문을 **전문 그대로** 보여주고 수정한 뒤 **임베딩 실행**/**거부**할 수 있다 — 승인된 본문이 곧 답변 프롬프트의 검색 컨텍스트가 되므로 본문을 잘라 보여주지 않고, 일괄·자동 승인 버튼도 없다([OPERATOR_MANUAL.md §7.6](OPERATOR_MANUAL.md#76-청크-추가-제안-검토-69) 참고). 본문 영역은 **원문/미리보기 탭**으로 전환되며 미리보기는 `marked` → `DOMPurify.sanitize()`를 거친다(사용자가 작성한 마크다운을 관리자 화면에서 렌더하므로 sanitize가 필수). 오프캔버스 상단에는 **승인 시 몇 개 청크로 나뉘는지**(승인 후에는 실제 생성 개수)가 표시된다 — 본문 길이 제한이 없어진 대신 `ChunkSplitter`가 분할하기 때문. 페이지 레벨 JS(`loadSubmissions()`/`openSubmissionReview()`/`approveSubmission()`/`rejectSubmission()`)는 큐레이션 패널과 같은 이유로 `admin.html`에 둔다.
 >
@@ -194,12 +204,13 @@ REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — �
 | POST | `/admin/settings/provider/toggle` | `fragments/settings-providers :: providers` | LLM 프로바이더 활성/비활성 토글(`name`, `enabled`) — `ProviderToggle`(메모리 전용, `settings_override`와 무관)이라 **재기동 시 초기화**됨. 이름이 같은 프로바이더는 함께 토글되고, 마지막 활성 프로바이더는 비활성화 거부(400). 감사 로그 기록 |
 
 - 핫 수정 가능 항목만 `key`를 받아 수정할 수 있다:
-  - **검색 튜닝**(다음 검색부터 반영) — 유사도 임계값·RRF 가중치/k·후보 배수·태그 후보 배수·멀티쿼리 최소 길이·재시도 시 후보 확대·topK·멀티쿼리 확장·하이브리드 검색·**큐레이션 가중치(좋아요)·지식 제안 가중치**
-  - **인덱싱/청킹**(다음 인덱싱/↺ 재인덱싱부터 반영) — 청크 크기·오버랩·최소 크기·동시 파일 처리 수·동시 LLM 호출 수
-  - **LLM**(다음 LLM 호출부터 반영, §6.18) — Direct 응답 temperature
+  - **검색 튜닝**(다음 검색부터 반영) — 유사도 임계값·RRF 가중치/k·후보 배수·태그 후보 배수·멀티쿼리 최소 길이·재시도 시 후보 확대·topK·멀티쿼리 확장·하이브리드 검색·**큐레이션 Q&A 사용 여부·큐레이션 가중치(좋아요)·지식 제안 가중치**
+  - **인덱싱/청킹**(다음 인덱싱/↺ 재인덱싱부터 반영) — 청크 크기·오버랩·최소 크기·**청크 분할 전략(`chunk-split-granular`)**·동시 파일 처리 수·동시 LLM 호출 수
+  - **LLM**(다음 LLM 호출부터 반영, §6.18) — **temperature 3종 전부**: 일반/RAG(`llm.temperature`, clamp `[0.0, 0.3]`)·Direct 응답(`llm.direct-temperature`, `[0.0, 1.0]`)·인덱싱/백그라운드(`llm.indexing-temperature`, `[0.0, 1.0]`). 각각 자기 계열의 다음 호출부터 반영된다
+  - **UI**(다음 페이지 렌더부터 반영) — 출처 미리보기 표시(`ui.source-preview-enabled`, 기본 ON). 끄면 채팅 출처 배지의 팝오버 미리보기(§4)가 사라진다. **출처 검색 수치 표시**(`ui.retrieval-metrics-enabled`, 기본 **OFF**) — 켜면 출처마다 `유사도 0.72 · 응답 31%`가 붙는다(§4 "출처 검색 진단 수치")
   - 그 외 키(조회 전용: `rerank-enabled`·쿼리 임베딩 캐시 등)는 400(`IllegalArgumentException`)으로 거부된다.
 - 값 검증 실패(범위 초과, 타입 불일치)도 400 — `GlobalExceptionHandler`가 처리.
-- 재기동이 필요한 값(rerank/hybrid 활성화, 벡터 스토어 백엔드, 임베딩 차원, 일반 temperature·max-tokens 등)과 기본 라우팅 모드는 조회 전용으로만 노출된다(§6.18로 일반 temperature·max-tokens는 실제 config 값을 반영해 표시).
+- 재기동이 필요한 값(rerank 활성화, 벡터 스토어 백엔드, 임베딩 설정, `max-tokens` 등)과 기본 라우팅 모드는 조회 전용으로만 노출된다. `max-tokens`는 프로바이더 빈 생성 시점에 `OpenAiChatOptions`로 구워지므로 핫 수정 대상이 아니다(§6.18 이후 실제 config 값을 반영해 표시만 한다).
 - **프로바이더 활성/비활성**(`/admin/settings/provider/toggle`)은 위 `key`/`value` 오버라이드 메커니즘과 별개다 — `settings_override`에 저장되지 않는 메모리 전용(`ProviderToggle`) 토글이라 **재기동하면 초기화**된다. LLM 라우팅 표의 각 행에서 관리자에게만 활성화/비활성화 버튼이 보인다. 표 본문 행 사이의 구분선은 CSS로 숨겨져 있다(`app.css`의 `#llm-providers tbody > tr > *`) — 헤더 밑줄만 남아 열 제목과 데이터를 구분한다.
 - **LOCAL_ONLY 배포에서는 NORMAL/PREMIUM 프로바이더가 표에서 통째로 숨겨진다**: `app.llm.default-routing-mode=LOCAL_ONLY`일 때 `SettingsService.visibleProviders()`가 `role != LOCAL`인 프로바이더를 필터링한다(`providerRows()`/`setProviderEnabled()` 둘 다 동일하게 적용) — NORMAL/PREMIUM 항목이 향후 모드 전환에 대비해 `application.properties`에 여전히 남아있을 수 있다. 숨겨진 프로바이더는 토글 엔드포인트로도 조작할 수 없다(이름이 "알 수 없는 프로바이더"로 거부됨) — 표시 범위와 조작 가능 범위가 항상 일치한다. (안내 배너·토글 휘발성 안내 문구는 UX 정리 차원에서 제거됨 — 동작 자체는 그대로.)
 - LLM 라우팅 카드는 `<hr>`로 두 구역을 나눈다: 위쪽은 라우팅 모드·temperature·max-tokens(LLM 자체), 아래쪽은 임베딩(모델·**접속 주소**(`settings.embeddingBaseUrl`, `app.embedding.base-url`/`EMBED_BASE_URL` 조회 전용)·차원). 임베딩 접속 주소는 채팅 LLM과 별도 엔드포인트일 수 있어(§6.21 로드밸런싱 등) 조회 전용으로만 노출된다.
@@ -257,12 +268,12 @@ REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — �
 - 제목(`text-truncate small`)과 날짜(`.thread-date.text-muted`, `font-size:0.72rem`)는 기존 스타일 유지.
 - **제목의 `[버전]` 접두사 제거**: `ThreadMetaService`는 여전히 `title` 컬럼에 `"[{version}] {summary}"`를
   그대로 저장한다(하위 호환, DB 마이그레이션 없음) — 화면에는 `ThreadMeta.displayTitle()`이 선행
-  `[..]` 브래킷을 정규식으로 잘라낸 값을 쓴다. 버전은 `ThreadMeta.version` 필드를 2행에서 직접 표시하므로
-  중복되지 않는다.
-- **태그는 스레드에 스냅샷 저장**: `thread_meta.tags`(`V3__thread_tags.sql`)는 그 스레드에서 **가장 최근에
-  보낸 메시지의 태그 선택**을 담는다 — `ChatController`가 `/ui/chat`·`/ui/chat/stream` 양쪽에서 매 전송마다
-  `ThreadMetaService.updateTags()`를 호출해 무조건 덮어쓴다(제목 생성과 달리 "커스텀이면 건너뛰기" 가드 없음).
-  `ThreadMeta.tagsDisplay()`가 CSV를 `"tag1, tag2"`로 재조인해 보여준다.
+  `[..]` 브래킷을 정규식으로 잘라낸 값을 쓴다. 버전은 사이드바에 따로 표시하지 않는다.
+- **태그는 스레드에 스냅샷 저장되지만 사이드바에 표시하지는 않는다**: `thread_meta.tags`(`V3__thread_tags.sql`)는
+  그 스레드에서 **가장 최근에 보낸 메시지의 태그 선택**을 담는다 — `ChatController`가 `/ui/chat`·`/ui/chat/stream`
+  양쪽에서 매 전송마다 `ThreadMetaService.updateTags()`를 호출해 무조건 덮어쓴다(제목 생성과 달리 "커스텀이면
+  건너뛰기" 가드 없음). 렌더링용 헬퍼 `ThreadMeta.tagsDisplay()`(CSV → `"tag1, tag2"`)는 남아 있으나 현재 어느
+  템플릿에서도 호출하지 않는다 — 2행 표시를 되돌리려면 이 헬퍼를 다시 쓰면 된다.
 
 ---
 
@@ -348,6 +359,58 @@ PROGRESSIVE 업그레이드 시 `🔝 고추론 재분석 → {premiumProvider}`
 **출처 라벨 형식**: `RetrievalService.formatSource()`가 청크 메타데이터의 `chapter_no`(H2~H6 헤딩 기반 계층 번호, 예: `1.5.3`)가 "0"이 아니면 `"파일명 | 1.5.3"`, 아니면(프롤로그·PPTX·비스캔 PDF — 이 세 경우는 chapter_no가 항상 "0") `page_or_slide`로 폴백해 `"파일명 | p.12"`로 표시한다 — 문서 버전은 라벨에 포함되지 않는다. **큐레이션 Q&A**(§10.10, 좋아요로 승격된 답변)가 출처로 포함된 경우엔 파일명·페이지가 없으므로 `"💬 큐레이션 Q&A"` 고정 라벨로 표시된다.
 
 출처 목록 항목에 Bootstrap Popover (`hover focus` 트리거). `SourceRef.preview`에 청크 텍스트 앞 600자 포함.
+
+### 출처 검색 진단 수치 (1단계)
+
+`ui.retrieval-metrics-enabled`(기본 **OFF**, §3.5)를 켜면 출처마다 수치가 붙는다 — **"왜 이 청크가 검색됐는가"를 설명하는 값이지, 답변에 얼마나 쓰였는지가 아니다**(그건 아래 `answerShare`).
+
+> **채팅에 실제로 보이는 것은 아래 표의 전부가 아니다.** 4개 필드는 REST/SSE 페이로드와 `/admin` 패널에 모두 실리지만, 채팅 출처 줄에는 **근거 품질 한 칸 + 응답 참여도**만 렌더한다:
+>
+> ```
+> 유사도 0.72 · 응답 31%      ← 유사도가 있으면 유사도
+> bm25:1 · 응답 12%           ← 없으면 축 표기로 대체
+> ```
+>
+> - **`retrievalShare`는 채팅에서 뺐다** — 순위 기반 RRF라 한 턴 안에서는 값이 평평해(1위 13% vs 8위 12%) 출처끼리 비교하는 용도로는 변별력이 거의 없다. 여러 턴의 경향으로 읽어야 의미가 생기므로 `/admin` 패널의 몫이다.
+> - **유사도와 축별 순위는 비는 조건이 서로 배타적**이라 한 칸을 폴백 체인으로 채운다 — 순수 BM25 히트는 키워드 축 문서가 SQL 행이라 거리값이 없고(유사도 null), 쿼리 확장 실패 폴백 턴은 RRF를 건너뛰어 축 순위가 없다(유사도는 `Document.getScore()`로 살아 있음). 둘 다 비는 경우는 실질적으로 없다.
+> - 축 표기로 대체됐다는 사실 자체가 **"의미가 아니라 단어로 걸린 청크"**라는 신호가 된다.
+> - 폴백 체인은 **세 렌더 경로**(`chat-stream.js`의 `renderSourceMetrics()`, `message-assistant.html`, 그리고 `chat.html`의 이전 turn 복원 마크업)에 같은 규칙으로 구현돼 있다 — `/chat/{threadId}`를 다시 열면 이전 turn은 프래그먼트가 아니라 `chat.html` 자체 마크업으로 그려지므로, 여기를 빠뜨리면 새로고침하는 순간 수치가 사라진다.
+> - **복원 값의 출처는 `conversation_turns.retrieval_metrics`**(3단계 영속). 출처 목록 자체는 현재 청크 기준으로 재구성한 쪽(`QuestionReuseService.sourceRefsForTurn()`)이 권위이고 — 라벨·미리보기·삭제된 청크 placeholder는 저장 blob이 알 수 없다 — `RetrievalMetricsService.enrich()`가 **수치만 `chunkId`로 병합**한다. 저장 기록이 없는 출처·턴은 그대로 통과하므로 목록에서 사라지지 않는다. DB 재사용 turn은 검색을 돌리지 않아 기록 자체가 없다.
+
+| 값 | `SourceRef` 필드 | 의미 |
+|---|---|---|
+| `유사도 0.72` | `similarity` | 질의와의 코사인 유사도(`1 - distance`). 벡터 축에 없던 청크는 **null**(0.0 아님) |
+| `검색 18%` | `retrievalShare` | 가중 RRF 점수 ÷ 최종 컷 전체 합. 후보 풀이 아니라 **답변 노드가 실제로 받은 문서들** 기준으로 정규화 |
+| `vec:2, bm25:5` | `axisRanks` | 축별 순위. 여러 MultiQuery 벡터 축에 걸치면 **최선 순위** |
+| `응답 31%` | `answerShare` | **응답 참여도(2단계)** — 답변 텍스트 중 이 청크에서 온 것으로 추정되는 비율. 아래 별도 설명 |
+
+- **`retrievalShare`는 순위 기반이라 의도적으로 평평하다** — RRF가 `w/(rank+1+k)`이고 k 기본값이 60이라 1위(0.0164)와 8위(0.0145)의 차이가 작다. 변별력은 `similarity` 쪽에서 봐야 하며, 실제 진단에 가장 쓸모 있는 건 `axisRanks`다("벡터 12위인데 BM25 1위라 올라옴" → `SEARCH_RRF_KEYWORD_WEIGHT` 조정 근거).
+- **null은 "측정 안 됨"이지 0이 아니다.** BM25/큐레이션 축에만 걸린 청크는 유사도가 없고, 쿼리 확장 LLM 호출이 실패해 폴백 경로로 빠진 턴은 RRF 자체를 건너뛰어 share·순위가 전부 없다. 세 표시 지점 모두 해당 항목만 생략한다.
+- 수치는 `RetrievalService.mergeRrfScored()`가 융합 부산물로 계산하며 **LLM·임베딩 추가 호출이 0회**다. 기존 `mergeRrf()` 오버로드는 이 메서드에 위임 후 메트릭을 버리므로 랭킹 동작은 완전히 동일하다(`RetrievalServiceRrfTest`가 두 경로의 문서 순서 일치를 검증).
+- 메트릭은 `Document` 메타데이터가 아니라 `docKey` 기준 **사이드 맵**으로 나른다 — 검색 결과 문서는 답변 프롬프트와 (큐레이션·관리자 경로에서는) 벡터 스토어로 다시 흘러가므로, `MetaKey.SEARCH_TEXT`처럼 "영속 전 제거해야 하는 임시 키"를 하나 더 만들지 않기 위함이다. 태그 필터·리랭크가 문서 목록을 재구성해도 살아남는다는 이점도 있다.
+- 전달: REST `ChatResponse.sources[]`와 SSE `sources` 이벤트는 토글과 무관하게 **항상** 필드를 싣는다(`similarity`/`retrieval_share`/`axis_ranks`/`answer_share`) — 토글은 렌더링만 막는다. 서버 렌더 경로(`message-assistant.html`)는 값을 `.source-metrics.d-none`으로 항상 그려두고 `window.isRetrievalMetricsEnabled()`가 `d-none`을 벗기며, 스트리밍 경로(`chat-stream.js`)는 애초에 켜졌을 때만 만든다.
+
+#### 응답 참여도 (2단계) — `answerShare`
+
+앞의 세 값과 달리 **검색 시점에는 존재할 수 없는 값**이다(답변이 끝나야 나온다). 그래서 SSE는 2단계로 전달한다:
+
+```
+sources 이벤트 (RETRIEVAL 직후) → 유사도 · 검색기여도 · 축별 순위
+done 이벤트    (답변 완료 후)   → attribution {chunkId: 0.0~1.0} → 배지 사후 갱신
+```
+
+`chat-stream.js`의 `applyAttribution()`이 `data-chunk-id`로 배지를 찾아 `· 응답 31%`를 덧붙인다. 재시도가 있었으면 `sources`가 다시 와서 배지가 새로 그려지므로 항상 현재 DOM 기준으로 찾고, `data-has-attribution`으로 멱등성을 보장한다. 블로킹/REST 경로는 한 번에 다 나오므로 분기가 없다.
+
+**계산은 `AnswerAttribution`**(Spring 의존 없는 순수 클래스, `ChunkReassembler` 선례)이 하며, `FinalizeService`가 그래프 끝에서 딱 한 번 호출한다 — ANSWER 노드는 재시도·PROGRESSIVE 업그레이드로 여러 번 돌 수 있어서, 버려질 답변에 대해 계산하면 낭비다. **추가 LLM·임베딩 호출 0회**(순수 CPU).
+
+**알고리즘**: 답변을 문장 단위로 쪼개 각 문장을 가장 닮은 청크에 배정하고, 청크별 배정 글자수 비율을 몫으로 낸다.
+- **문자 4-gram 매칭** — 한국어는 공백 토큰화가 조사/어미를 잘못 끊는다("포트를" vs "포트는"은 토큰이 다르다). 4-gram은 어간 위를 미끄러지므로 활용형이 달라도 잡힌다.
+- **희소도 가중(`1/문서빈도`)** — 이게 없으면 같은 문서에서 온 청크들이 머리말·제품명·breadcrumb 같은 보일러플레이트만으로 서로 비슷해져, 몫이 "가장 긴 청크"로 쏠린다. 모든 청크에 있는 4-gram은 귀속 정보가 0이고, 한 청크에만 있는 4-gram이 실제로 출처를 식별한다.
+- **매칭되지 않은 문장은 분모에서 빠진다** — 모델이 자기 말로 쓴 연결 문장·요약 문장을 억지로 가까운 청크에 밀어 넣지 않는다. 마크다운 헤딩 줄(`## 요약`)도 매 턴 동일한 골격이라 제외한다.
+
+**인용 신호(`usedDocs`)**: 평가 LLM 호출(⑤)이 이미 답변과 모든 발췌를 함께 들고 있으므로, "실제로 근거로 쓴 `[Dn]` 번호"를 같은 호출에서 함께 받는다(**추가 왕복 0회**). 발췌 블록에 `[D1]`, `[D2]` … 번호가 붙는 이유가 이것이다. 이 값은 **후보를 좁히기만 하고 몫을 만들어내지는 않는다** — 모델이 인용한 문서라도 답변이 그 내용을 닮지 않았으면 몫은 0이다. 범위 밖 번호는 무시하고, 목록이 비면 전체 문서가 후보가 된다(`method`: `citation+lexical` / `lexical` / `none`).
+
+> ⚠️ **이 값은 추정이지 측정이 아니다.** 진짜 인과적 기여도는 청크를 하나씩 빼고 답변을 다시 생성해야(leave-one-out) 알 수 있고, 그건 턴당 LLM 호출이 topK배라 오프라인 평가 하네스(OPERATOR_MANUAL §6.6) 영역이다. 또한 `responseMode=S`는 평가 호출 자체가 없어 인용 신호 없이 어휘 기반으로만 계산된다.
 
 **팝오버 크기 (`app.css`, ≥768px 전용)**: Bootstrap 기본값(`max-width: 276px`, `font-size: 0.875rem`)은 미리보기가 세로로 길게 줄바꿈되어 가독성이 떨어졌다 — `max-width: 620px`(약 2배), `font-size: 0.8rem`으로 넓히고 살짝 줄여 같은 600자가 더 적은 줄로 읽기 좋게 표시된다. `@media (min-width: 768px)` 블록 안에 있어 모바일(<768px)은 Bootstrap 기본값 그대로 — 좁은 화면에서 팝오버를 더 넓히면 화면 밖으로 넘칠 여지가 있기 때문.
 
@@ -468,7 +531,13 @@ PROGRESSIVE 업그레이드 시 `🔝 고추론 재분석 → {premiumProvider}`
 
 ## 8. SSE 스트리밍
 
-`POST /ui/chat/stream` → `SseEmitter(180s)` → Virtual Thread에서 `StreamingAgentService.run()` 실행.
+`POST /ui/chat/stream` → `SseEmitter(props.sseTimeoutMs())` → Virtual Thread에서 `StreamingAgentService.run()` 실행.
+
+> **타임아웃은 두 겹이다**: `SseEmitter`에 들어가는 값은 활동 여부와 무관한 절대 상한
+> `app.sse-timeout-seconds`(`SSE_TIMEOUT_SECONDS`, 기본 **7200초** — 폭주 생성에 대한 백스톱일 뿐)이고,
+> 실제로 "멈춘 응답"을 끊는 건 `StreamingAgentService`가 직접 감시하는 무활동 타임아웃
+> `app.sse-idle-timeout-seconds`(`SSE_IDLE_TIMEOUT_SECONDS`, 기본 **300초**)다 — 노드 전환·토큰·
+> sources 이벤트가 올 때마다 리셋되므로 느리지만 계속 생성 중인 로컬 LLM 응답은 잘리지 않는다.
 
 ```
 stage(classifier) → stage(retrieval) → sources → stage(answer) → token × N
@@ -526,7 +595,7 @@ stage(classifier) → stage(retrieval) → sources → stage(answer) → token �
 | 테이블 넘침 | `documents.html` 두 테이블을 `.table-responsive`로 래핑(가로 페이지 스크롤 제거) |
 | 차트 넘침 | `llm-usage.html` 차트를 `height:280px` 컨테이너 + Chart.js `maintainAspectRatio:false` |
 | iOS 자동 확대 | `@media (max-width:767.98px)`에서 모든 폼 컨트롤 `font-size:16px` |
-| 출처 미리보기 팝오버 | `@media (min-width:768px)`에서 팝오버 폭 확대(`max-width:560px`, `<768px`는 기본값 유지) — 배경·수치는 [§4 출처 Hover 미리보기](#출처-hover-미리보기) 참고 |
+| 출처 미리보기 팝오버 | `@media (min-width:768px)`에서 팝오버 폭 확대(`max-width:620px`, `<768px`는 기본값 유지) — 배경·수치는 [§4 출처 Hover 미리보기](#출처-hover-미리보기) 참고 |
 
 > ⚠️ Bootstrap `.offcanvas-md`는 ≥md에서 `background-color:transparent!important`를 강제한다. 데스크톱 사이드바 배경은 `app.css`에서 `.sidebar.offcanvas-md { background-color: var(--bg-elevated) !important }`로 복구(라이트/다크 변수 일치).
 

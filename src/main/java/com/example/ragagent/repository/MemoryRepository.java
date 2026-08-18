@@ -73,6 +73,35 @@ public interface MemoryRepository {
     /** {@code feedback}: {@code "LIKE" | "DISLIKE" | null}. No-op if the turn isn't owned by userId/threadId. */
     void updateFeedback(String userId, String threadId, long turnId, String feedback);
 
+    /**
+     * 3단계 — stores the turn's per-source retrieval diagnostics as a JSON array (see
+     * {@code RetrievalMetricsView}). Written right after the turn insert, in the same
+     * post-insert slot as {@link #saveTurnImageRefs}. Diagnostic only: a failure here must never
+     * cost the user their answer, so callers swallow, and {@code null}/blank is a no-op.
+     */
+    void saveRetrievalMetrics(long turnId, String metricsJson);
+
+    /**
+     * Recent turns that actually carry diagnostics, newest first — backs the {@code /admin}
+     * tuning panel. Deliberately <b>not</b> user-scoped: it is an operator view of how retrieval
+     * is behaving across the deployment, gated by {@code /admin/**}'s ROLE_ADMIN like every other
+     * panel there.
+     */
+    List<MetricsRow> findRecentRetrievalMetrics(int offset, int limit);
+
+    /** Total turns carrying diagnostics — for the panel's pagination. */
+    int countRetrievalMetrics();
+
+    /**
+     * Raw diagnostics blobs for the given turns, keyed by turn id — backs restoring the numbers
+     * when a chat thread is reopened. Turns without diagnostics are simply absent from the map.
+     */
+    Map<Long, String> findRetrievalMetricsByTurnIds(List<Long> turnIds);
+
+    /** One row of the {@code /admin} diagnostics panel; {@code metricsJson} is parsed by the service. */
+    record MetricsRow(long turnId, String askedAt, String question, String responseMode,
+                      String provider, String metricsJson) {}
+
     record Turn(long id, String question, String answer,
                 String askedAt, String answeredAt,
                 int inputTokens, int outputTokens,

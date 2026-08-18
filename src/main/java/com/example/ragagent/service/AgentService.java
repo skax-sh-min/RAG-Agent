@@ -102,6 +102,7 @@ public class AgentService {
                     request.responseMode().name(), TagUtils.toMetaValue(request.selectedTags()),
                     request.directMode());
                         memoryService.saveTurnImageRefs(turnId, userId, request.threadId(), result.imageRefs());
+            memoryService.saveRetrievalMetrics(turnId, result.sources());
             if (questionReuseService != null) {
                 questionReuseService.recordTurnSources(turnId, userId, request.threadId(), result.retrievedDocs());
             }

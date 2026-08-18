@@ -39,7 +39,10 @@ public record AgentState(
         boolean directMode,       // RAG 없이 LLM 직접 호출
         Locale locale,            // UI 언어 설정 — LLM 시스템 프롬프트 언어 선택에 사용
         List<String> selectedTags, // 검색 스코프 태그 (빈 리스트 = version-only 검색)
-        ResponseMode responseMode // 답변 길이/상세도 (S/M/L, 기본 M) — AnswerService/DirectAnswerService가 사용
+        ResponseMode responseMode, // 답변 길이/상세도 (S/M/L, 기본 M) — AnswerService/DirectAnswerService가 사용
+        List<Integer> usedDocIndices // 평가 LLM이 "실제로 근거로 썼다"고 보고한 [D n] 번호(1-based).
+                                     // 2단계 응답 참여도의 후보 축소 신호일 뿐 판정에는 쓰이지 않으며,
+                                     // 모델이 주지 않으면 빈 리스트(=신호 없음, 전체 문서가 후보)
 ) {
     public AgentState {
         retrievedDocs     = retrievedDocs     == null ? List.of() : List.copyOf(retrievedDocs);
@@ -47,6 +50,7 @@ public record AgentState(
         retrievalWarnings = retrievalWarnings == null ? List.of() : List.copyOf(retrievalWarnings);
         imageRefs         = imageRefs         == null ? List.of() : List.copyOf(imageRefs);
         selectedTags      = selectedTags      == null ? List.of() : List.copyOf(selectedTags);
+        usedDocIndices    = usedDocIndices    == null ? List.of() : List.copyOf(usedDocIndices);
         if (userId      == null) userId      = "anonymous";
         if (routingMode == null) routingMode = RoutingMode.COST_FIRST;
         if (locale      == null) locale      = Locale.KOREAN;
@@ -82,7 +86,7 @@ public record AgentState(
                 conversationHistory,
                 0, 0, 0,
                 routingMode, null, null, null, null, null,
-                directMode, locale, List.of(), ResponseMode.DEFAULT);
+                directMode, locale, List.of(), ResponseMode.DEFAULT, List.of());
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────
@@ -123,6 +127,7 @@ public record AgentState(
         private Locale locale                    = Locale.KOREAN;
         private List<String> selectedTags        = List.of();
         private ResponseMode responseMode        = ResponseMode.DEFAULT;
+        private List<Integer> usedDocIndices     = List.of();
 
         Builder() {}
 
@@ -153,6 +158,7 @@ public record AgentState(
             this.locale             = s.locale;
             this.selectedTags       = s.selectedTags;
             this.responseMode       = s.responseMode;
+            this.usedDocIndices     = s.usedDocIndices;
         }
 
         public Builder question(String v)                  { this.question = v;           return this; }
@@ -179,6 +185,7 @@ public record AgentState(
         public Builder locale(Locale v)                    { this.locale = v;             return this; }
         public Builder selectedTags(List<String> v)        { this.selectedTags = v;       return this; }
         public Builder responseMode(ResponseMode v)        { this.responseMode = v;       return this; }
+        public Builder usedDocIndices(List<Integer> v)     { this.usedDocIndices = v;     return this; }
 
         public Builder accumulateTokens(int inputTokens, int outputTokens) {
             this.totalInputTokens  += inputTokens;
@@ -194,7 +201,7 @@ public record AgentState(
                     answer, retryCount, needsRetry, conversationHistory,
                     totalInputTokens, totalOutputTokens, llmCallCount,
                     routingMode, usedProvider, premiumUpgraded, grounded, evalReason, envNote,
-                    directMode, locale, selectedTags, responseMode);
+                    directMode, locale, selectedTags, responseMode, usedDocIndices);
         }
     }
 }

@@ -11,6 +11,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.content.Media;
+import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.stereotype.Service;
 import org.springframework.util.MimeTypeUtils;
@@ -172,6 +173,11 @@ public class MarkdownCorrectionService {
         int llmMaxTokens = props.llmSafe().maxTokens();
         this.maxSectionChars = Math.max(MIN_SECTION_CHARS, (llmMaxTokens - MIN_SECTION_CHARS) / 2);
         this.defaultCodeLanguage = props.mdCorrectionDefaultCodeLanguageSafe();
+    }
+
+    /** Indexing/background temperature (hot-editable), read fresh per call — see AppProperties.LlmConfig. */
+    private OpenAiChatOptions indexingOptions() {
+        return OpenAiChatOptions.builder().temperature(props.llmSafe().indexingTemperature()).build();
     }
 
     /**
@@ -406,10 +412,40 @@ public class MarkdownCorrectionService {
      * is a no-op for them. (PPTX itself uses {@link #splitByPages}, not this method.)
      */
     List<String> splitBySections(String md) {
-        return splitByBoundary(md,
+        List<String> raw = splitByBoundary(md,
                 line -> line.startsWith("## ") || line.startsWith("### ") || line.startsWith("#### ")
                         || line.startsWith("[페이지: "),
                 true);
+        return mergeSmallSections(raw);
+    }
+
+    /**
+     * Bundles consecutive small sections up to {@link #maxSectionChars} into one correction call —
+     * same pattern {@link #splitByPages} already uses to bundle PPTX slides. Without this, a
+     * document with frequent short headings (a heading every few lines — common in DOCX/MD with
+     * deep subsection structure) sent one tiny LLM call per heading instead of a handful of
+     * well-filled ones, multiplying round-trips (and, since this runs during indexing, wall-clock
+     * time) for no correction-quality benefit. Each input section is already guaranteed
+     * fence-complete by {@link #splitByBoundary} (a heading boundary never splits mid-fence), so
+     * plain concatenation is always safe — no re-parsing needed.
+     *
+     * <p>An already-oversized section (from {@code splitByBoundary}'s own size enforcement) is left
+     * on its own: the budget check only fires once the running bundle is non-empty, so a single
+     * over-budget section never grows further, and the next section starts a fresh bundle rather
+     * than piling onto it.
+     */
+    private List<String> mergeSmallSections(List<String> raw) {
+        List<String> merged = new ArrayList<>();
+        StringBuilder bundle = new StringBuilder();
+        for (String section : raw) {
+            if (!bundle.isEmpty() && bundle.length() + section.length() > maxSectionChars) {
+                merged.add(bundle.toString());
+                bundle.setLength(0);
+            }
+            bundle.append(section);
+        }
+        if (!bundle.isEmpty()) merged.add(bundle.toString());
+        return merged;
     }
 
     /**
@@ -658,7 +694,7 @@ public class MarkdownCorrectionService {
         try {
             String result = llmRouter.executeWithTracking(
                     TaskType.LIGHT_TEXT, RoutingMode.COST_FIRST, BackgroundUsage.MDCORRECT_PREFIX,
-                    model -> model.call(new Prompt(prompt)));
+                    model -> model.call(new Prompt(prompt, indexingOptions())));
             log.debug("[MD_CORRECT] 섹션 교정 완료: {}자 → {}자", safeSection.length(), result.length());
 
             if (!tableExtraction.tables().isEmpty()) {
@@ -1041,7 +1077,7 @@ public class MarkdownCorrectionService {
                             + "여러 선택지나 후보 설명을 나열하지 말고, 하나의 완성된 설명 문장만 작성하세요.")
                     .media(media).build();
             String response = llmRouter.executeWithTracking(TaskType.VISION, RoutingMode.LOCAL_ONLY,
-                    BackgroundUsage.IMAGE_PREFIX, model -> model.call(new Prompt(userMessage)));
+                    BackgroundUsage.IMAGE_PREFIX, model -> model.call(new Prompt(userMessage, indexingOptions())));
             return response == null ? "" : response.trim();
         } catch (LlmProviderExhaustedException e) {
             return ""; // no LOCAL vision provider (pre-gated; defensive)

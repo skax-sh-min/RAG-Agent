@@ -1,6 +1,7 @@
 package com.example.ragagent.service;
 
 import com.example.ragagent.agent.AgentState;
+import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.llm.TaskType;
@@ -53,7 +54,10 @@ class ClassifierServiceTest {
         llmRouter = mock(LlmRouter.class);
         MessageSource messageSource = mock(MessageSource.class);
         when(messageSource.getMessage(anyString(), any(), any(Locale.class))).thenReturn("prompt");
-        service = new ClassifierService(llmRouter, messageSource);
+        AppProperties props = mock(AppProperties.class);
+        when(props.llmSafe()).thenReturn(new AppProperties.LlmConfig(
+                List.of(), 2, 10, 180, "COST_FIRST", 0.6, 3, 20, 0.0, 0.1, 0.0, 6000, true));
+        service = new ClassifierService(llmRouter, messageSource, props);
     }
 
     private static ChatResponse chatResponse(String text) {

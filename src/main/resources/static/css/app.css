@@ -363,3 +363,28 @@
 .min-w-0 {
     min-width: 0;
 }
+
+/* ── Chat source badges + retrieval metrics ───────────────────────────── */
+/* A source is a pair: the `.source-ref` badge and the `.source-metrics` span that
+   describes it. The two inline paths (chat-stream.js's SSE render and chat.html's
+   restored-history render) used to emit them as loose inline siblings in one div,
+   so the line box broke wherever it ran out of room — mid-metric ("유사\n도 0.67")
+   and, worse, between a badge and the numbers belonging to it, which then read as
+   if they belonged to the next badge. `.source-item` makes each pair one atomic
+   inline-flex unit: wrapping happens *between* units, never inside one.
+   (message-assistant.html lists sources as <li> rows and never had the pairing
+   problem, but shares the nowrap rule below.) */
+.source-item {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 0.35rem;
+    margin: 0 0.5rem 0.35rem 0;
+    /* A long filename badge must still be able to shrink+wrap inside its own unit
+       rather than push the row into horizontal overflow. */
+    max-width: 100%;
+}
+/* The metric text is short and meaningless when split — keep it on one line and let
+   the whole unit move down instead. */
+.source-metrics {
+    white-space: nowrap;
+}

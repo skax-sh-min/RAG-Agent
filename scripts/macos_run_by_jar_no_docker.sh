@@ -13,6 +13,13 @@ fi
 echo "======================================================="
 echo "현재 경로: $(pwd)"
 
+# .bat 의 `chcp 65001` 대응. Java 18+ 는 file.encoding 이 UTF-8 이지만 콘솔 출력 인코딩은
+# 로케일을 따르므로, 로케일이 비어 있으면(cron/CI 등 비대화형 셸) 한글 로그가 깨진다.
+if [ -z "$LANG" ] && [ -z "$LC_ALL" ]; then
+  LANG=ko_KR.UTF-8
+  export LANG
+fi
+
 ENV_FILE=".env"
 
 if [ ! -f "$ENV_FILE" ]; then
@@ -22,6 +29,8 @@ if [ ! -f "$ENV_FILE" ]; then
 fi
 
 echo ".env 환경변수를 로딩합니다..."
+# 셸이 직접 읽으므로 값에 공백이 있으면 따옴표로 감싸야 한다(예: FOO="a b").
+# 인용 없는 `FOO=a b` 는 b 를 명령으로 실행하려 해 실패한다.
 set -a; . "./$ENV_FILE"; set +a
 
 # .bat 과 동일하게 .env 값을 덮어써서 8081 로 띄운다(다른 포트를 쓰려면 이 줄을 수정).
@@ -50,15 +59,27 @@ case "${VECTORSTORE_TYPE:-chroma}" in
     ;;
 esac
 
+# .bat 과 동일하게 버전 없는 고정 경로(data/rag-agent.jar)로 복사한 뒤 그것을 실행한다.
+# 이유 두 가지: (1) 실행 중에도 target/ 을 지우고 다시 빌드할 수 있다 — 실행 파일과 빌드
+# 산출물이 분리되므로 mvn clean 이 돌아가는 앱을 건드리지 않는다. (2) 버전이 올라가도
+# 실행 명령·서비스 등록·로그 경로가 그대로다.
+# 참고: data/ 는 .gitignore 대상이고 DATA_DIR 과는 무관하다 — 여기서는 단순히 JAR 을 두는 자리다.
+RUN_DIR="data"
+RUN_JAR="$RUN_DIR/rag-agent.jar"
+mkdir -p "$RUN_DIR"
+cp "$JAR_PATH" "$RUN_JAR"
+
 echo "======================================================="
-echo "Starting... $(basename "$JAR_PATH")  port: $SERVER_PORT"
+echo "Starting... $(basename "$RUN_JAR")  port: $SERVER_PORT"
 echo "======================================================="
 
-java -jar "$JAR_PATH"
-# Exploded(계층 추출) 실행을 쓰려면 위 줄 대신 아래를 사용하세요.
+java -jar "$RUN_JAR"
+# target/ 의 JAR 을 복사 없이 그대로 실행하려면 위 줄 대신 아래를 사용하세요.
+# java -jar "$JAR_PATH"
+# Exploded(계층 추출) 실행을 쓰려면 아래를 사용하세요.
 # java -jar "target/extracted/$(basename "$JAR_PATH")"
 # run.log 파일에 로그를 남기고 싶다면 아래를 사용하세요.
-# java -jar "$JAR_PATH" >> run.log 2>&1
+# java -jar "$RUN_JAR" >> run.log 2>&1
 
 echo "======================================================="
 echo "Done."

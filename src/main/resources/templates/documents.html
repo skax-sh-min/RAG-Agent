@@ -143,12 +143,12 @@
                     <table class="table table-hover mb-0">
                         <thead class="table-light">
                         <tr>
-                            <th th:text="#{doc.col.name}">Filename</th>
-                            <th th:text="#{doc.col.version}">Version</th>
+                            <th th:text="#{doc.col.name}" style="width:auto;">Filename</th>
+                            <th th:text="#{doc.col.version}" class="text-nowrap" style="width:1%;">Version</th>
                             <th th:text="#{doc.col.tags}">Tags</th>
-                            <th th:text="#{doc.col.chunks}">Chunks</th>
-                            <th th:text="#{doc.col.indexed_at}">Indexed At</th>
-                            <th></th>
+                            <th th:text="#{doc.col.chunks}" class="text-nowrap" style="width:1%;">Chunks</th>
+                            <th th:text="#{doc.col.indexed_at}" class="text-nowrap" style="width:1%;">Indexed At</th>
+                            <th class="text-nowrap" style="width:1%;"></th>
                         </tr>
                         </thead>
                         <th:block th:replace="~{fragments/doc-table-body :: body}"></th:block>
@@ -519,6 +519,12 @@
                 if (err.cancelled) {
                     setFileStatus(i, 'cancelled');
                     showToast(`${escHtml(files[i].name)} ${I18N.cancelled}`, 'warning');
+                } else if (err.unknown) {
+                    // Not a failure — the server just no longer has a record of this task's
+                    // outcome (e.g. reconnect landed after a very long disconnect). Refresh the
+                    // doc list afterward so a genuinely-completed file still shows up correctly.
+                    setFileStatus(i, 'unknown');
+                    showToast(`${escHtml(files[i].name)}: ${err.message}`, 'warning');
                 } else {
                     setFileError(i, err.message);
                     showToast(`${escHtml(files[i].name)} ${I18N.uploadError}: ${err.message}`, 'danger');
@@ -626,36 +632,91 @@
     }
 
     function subscribeIndexingProgress(taskId, onStage, resolve, reject) {
-        const sse = new EventSource(`/ui/documents/progress/${taskId}`);
+        let sse = new EventSource(`/ui/documents/progress/${taskId}`);
         let retryCount = 0;
-        sse.addEventListener('progress', e => {
-            retryCount = 0;
-            const evt = JSON.parse(e.data);
-            onStage(evt);
+        let settled = false;
+
+        function handleTerminal(evt) {
             if (evt.stage === 'done') {
-                sse.close();
                 dropPendingTask(taskId);
                 resolve(evt.docResult);
             } else if (evt.stage === 'error') {
-                sse.close();
                 dropPendingTask(taskId);
                 reject(new Error(evt.message || '인덱싱 오류'));
             } else if (evt.stage === 'cancelled') {
-                sse.close();
                 dropPendingTask(taskId);
                 const err = new Error(evt.message || I18N.cancelled);
                 err.cancelled = true;
                 reject(err);
+            } else if (evt.stage === 'unknown') {
+                // Server no longer has any record of this task (outcome aged out after a long
+                // disconnect, e.g. laptop sleep). Stop waiting instead of sitting on a connection
+                // that will only ever receive heartbeat pings — surface it distinctly so the
+                // caller doesn't report it as a hard failure.
+                dropPendingTask(taskId);
+                const err = new Error(evt.message || '작업 상태를 확인할 수 없습니다');
+                err.unknown = true;
+                reject(err);
+            } else {
+                return false; // not terminal
             }
-        });
-        sse.onerror = () => {
-            retryCount++;
-            if (retryCount > 5) {
-                sse.close();
-                reject(new Error('SSE 연결 실패 (재시도 초과)'));
-            }
-        };
-        return sse;
+            return true;
+        }
+
+        function settle(evt) {
+            if (settled || !handleTerminal(evt)) return;
+            settled = true;
+            sse.close();
+            document.removeEventListener('visibilitychange', onVisible);
+        }
+
+        function attach(emitter) {
+            emitter.addEventListener('progress', e => {
+                retryCount = 0;
+                const evt = JSON.parse(e.data);
+                onStage(evt);
+                settle(evt);
+            });
+            emitter.onerror = () => {
+                retryCount++;
+                if (retryCount > 5 && !settled) {
+                    settled = true;
+                    emitter.close();
+                    document.removeEventListener('visibilitychange', onVisible);
+                    reject(new Error('SSE 연결 실패 (재시도 초과)'));
+                }
+            };
+        }
+        attach(sse);
+
+        // A backgrounded tab can end up with a connection that's silently dead — browser network
+        // throttling, a reverse proxy or NAT/firewall idle-connection cleanup, none of which fire
+        // EventSource's onerror since as far as the browser knows the socket is still "open". This
+        // is exactly what leaves a multi-hour indexing job looking stuck after switching tabs and
+        // back. Rather than trust that connection, actively re-verify via the one-shot status
+        // endpoint the moment the tab becomes visible again.
+        function onVisible() {
+            if (settled || document.visibilityState !== 'visible') return;
+            fetch(`/ui/documents/progress/${taskId}/status`)
+                .then(r => r.json())
+                .then(evt => {
+                    if (settled) return;
+                    if (evt.stage === 'running') {
+                        // Still going server-side — replace the connection outright in case the old
+                        // one is a corpse that just hasn't errored yet; subscribe() replays history.
+                        sse.close();
+                        retryCount = 0; // fresh connection deserves its own retry budget
+                        sse = new EventSource(`/ui/documents/progress/${taskId}`);
+                        attach(sse);
+                    } else {
+                        settle(evt);
+                    }
+                })
+                .catch(() => {}); // best-effort; the existing onerror/retry path still applies
+        }
+        document.addEventListener('visibilitychange', onVisible);
+
+        return { close: () => sse.close() };
     }
 
     /* ── File row status helpers ─────────────────────────────────────────── */
@@ -670,6 +731,7 @@
             queued:    `<span class="text-info">⏳ 인덱싱 대기 중...</span>`,
             done:      `<span class="text-success">✅ ${PAGE_I18N.statusDone} (${extra} ${PAGE_I18N.chunks})</span>`,
             cancelled: `<span class="text-muted">⏹ ${I18N.cancelled}</span>`,
+            unknown:   `<span class="text-warning">⚠️ 상태 확인 불가 — 문서 목록에서 확인해 주세요</span>`,
         };
         if (map[status]) el.innerHTML = map[status];
     }
@@ -907,17 +969,13 @@
                 </td>`;
             tbody.appendChild(tr);
 
-            let gotEvent = false;
-            let noEventTimer = null;
-
-            const sse = subscribeIndexingProgress(
+            // subscribe() now answers authoritatively as soon as the connection opens — buffered
+            // replay for a task that's still tracked, or a synthetic 'unknown' event for one whose
+            // outcome already aged out server-side — so there's no more need to guess from silence.
+            subscribeIndexingProgress(
                 taskId,
-                evt => {
-                    if (!gotEvent) { gotEvent = true; clearTimeout(noEventTimer); }
-                    setIndexingStageById(statusId, evt);
-                },
+                evt => setIndexingStageById(statusId, evt),
                 docResult => {
-                    clearTimeout(noEventTimer);
                     dropPendingTask(taskId);
                     const el = document.getElementById(statusId);
                     if (el) el.innerHTML = `<span class="text-success">✅ 완료 (${docResult?.chunks ?? 0} ${PAGE_I18N.chunks})</span>`;
@@ -925,25 +983,19 @@
                     removeRecoveryRow(rowId, tbody, panel, true);
                 },
                 err => {
-                    clearTimeout(noEventTimer);
                     dropPendingTask(taskId);
                     const el = document.getElementById(statusId);
-                    if (el) el.innerHTML = err.cancelled
-                        ? `<span class="text-muted">⏹ ${escHtml(err.message)}</span>`
-                        : `<span class="text-danger">❌ ${escHtml(err.message)}</span>`;
-                    removeRecoveryRow(rowId, tbody, panel, false);
+                    if (err.cancelled) {
+                        if (el) el.innerHTML = `<span class="text-muted">⏹ ${escHtml(err.message)}</span>`;
+                    } else if (err.unknown) {
+                        if (el) el.innerHTML = `<span class="text-warning">⚠️ ${escHtml(err.message)}</span>`;
+                    } else {
+                        if (el) el.innerHTML = `<span class="text-danger">❌ ${escHtml(err.message)}</span>`;
+                    }
+                    // A file that actually finished while away still needs its row to show up.
+                    removeRecoveryRow(rowId, tbody, panel, true);
                 }
             );
-
-            // No events within 5 s → task completed while away and buffer expired
-            noEventTimer = setTimeout(() => {
-                if (gotEvent) return;
-                sse.close();
-                dropPendingTask(taskId);
-                const el = document.getElementById(statusId);
-                if (el) el.innerHTML = `<span class="text-muted">✔️ 페이지 이탈 중 처리 완료</span>`;
-                removeRecoveryRow(rowId, tbody, panel, true);
-            }, 5000);
         });
     }
 

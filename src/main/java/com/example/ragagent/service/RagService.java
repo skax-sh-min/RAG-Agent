@@ -161,7 +161,7 @@ public class RagService {
                 .map(e -> {
                     DocRegistry.DocRegistryEntry r = e.getValue();
                     String filename = DocRegistry.filenameFromDocId(e.getKey());
-                    return new DocumentInfo(e.getKey(), filename, r.version(),
+                    return new DocumentInfo(e.getKey(), filename, r.displayName(), r.version(),
                     r.chunks(), r.indexedAt(), r.sha256(),
                     tagsByDocId.getOrDefault(e.getKey(), List.of()),
                     r.errors());
@@ -174,9 +174,47 @@ public class RagService {
     public Optional<DocumentInfo> findDocument(String userId, String docId) {
         return docRegistry.findByDocId(docId, DocRegistry.SHARED).map(r -> {
             List<String> tags = keywordRepo.tagsByDocIds(List.of(docId)).getOrDefault(docId, List.of());
-            return new DocumentInfo(docId, DocRegistry.filenameFromDocId(docId), r.version(),
+            return new DocumentInfo(docId, DocRegistry.filenameFromDocId(docId), r.displayName(), r.version(),
                     r.chunks(), r.indexedAt(), r.sha256(), tags, r.errors());
         });
+    }
+
+    /** Batch display-name lookup for chat citations (§ 표시 이름) — see {@link DocRegistry#findDisplayNames}. */
+    public Map<String, String> findDisplayNames(Collection<String> docIds) {
+        return docRegistry.findDisplayNames(docIds);
+    }
+
+    private static final int MAX_DISPLAY_NAME_LEN = 200;
+
+    /**
+     * Sets (or clears, when {@code rawDisplayName} is blank) a document's display-name override
+     * — purely cosmetic (see {@link DocRegistry.DocRegistryEntry#displayName}), never touches
+     * docId, vector-store data, or files on disk. Throws {@link IllegalArgumentException} when
+     * the document does not exist or the name exceeds {@link #MAX_DISPLAY_NAME_LEN}.
+     *
+     * <p>Checks the UPDATE's affected-row count rather than assuming success — the pre-fix version
+     * pre-checked existence with a SELECT, then returned the requested name unconditionally without
+     * ever verifying the subsequent UPDATE actually took effect, so a write that silently affected
+     * 0 rows still reported success with the new name, which reverted on the next page load. Mirrors
+     * {@link #updateDocumentTags} verifying its write below.
+     */
+    public DocumentInfo updateDisplayName(String userId, String docId, String rawDisplayName) {
+        String trimmed = rawDisplayName == null ? "" : rawDisplayName.strip();
+        if (trimmed.length() > MAX_DISPLAY_NAME_LEN) {
+            throw new IllegalArgumentException("표시 이름은 " + MAX_DISPLAY_NAME_LEN + "자를 넘을 수 없습니다");
+        }
+        String displayName = trimmed.isEmpty() ? null : trimmed;
+
+        int updated = docRegistry.updateDisplayName(docId, DocRegistry.SHARED, displayName);
+        if (updated == 0) {
+            throw new IllegalArgumentException("문서를 찾을 수 없습니다: " + docId);
+        }
+        DocRegistry.DocRegistryEntry entry = docRegistry.findByDocId(docId, DocRegistry.SHARED)
+                .orElseThrow(() -> new IllegalArgumentException("문서를 찾을 수 없습니다: " + docId));
+
+        List<String> tags = keywordRepo.tagsByDocIds(List.of(docId)).getOrDefault(docId, List.of());
+        return new DocumentInfo(docId, DocRegistry.filenameFromDocId(docId), entry.displayName(), entry.version(),
+                entry.chunks(), entry.indexedAt(), entry.sha256(), tags, entry.errors());
     }
 
     /**
@@ -205,7 +243,7 @@ public class RagService {
                     "문서의 색인 데이터를 찾을 수 없어 태그를 저장하지 못했습니다 (재동기화 또는 재업로드가 필요합니다): " + docId);
         }
 
-        return new DocumentInfo(docId, DocRegistry.filenameFromDocId(docId), entry.version(),
+        return new DocumentInfo(docId, DocRegistry.filenameFromDocId(docId), entry.displayName(), entry.version(),
                 entry.chunks(), entry.indexedAt(), entry.sha256(), tags, entry.errors());
     }
 

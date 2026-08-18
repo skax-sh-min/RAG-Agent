@@ -12,6 +12,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.prompt.Prompt;
+import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.context.MessageSource;
 import org.springframework.stereotype.Service;
 
@@ -66,6 +67,7 @@ public class ConversationSummarizerService {
     private final MemoryService memoryService;
     private final LlmRouter llmRouter;
     private final MessageSource messageSource;
+    private final AppProperties props;
 
     // §6.11: previously hardcoded constants, now sourced from app.summary.* (null-safe defaults).
     private final int maxSummaryChars;
@@ -82,6 +84,7 @@ public class ConversationSummarizerService {
         this.memoryService = memoryService;
         this.llmRouter = llmRouter;
         this.messageSource = messageSource;
+        this.props = props;
 
         AppProperties.SummaryConfig cfg = props.summarySafe();
         int maxCachedThreads = cfg.maxCachedThreads();
@@ -220,11 +223,13 @@ public class ConversationSummarizerService {
         }
 
         String systemPrompt = messageSource.getMessage("prompt.summary.system", null, locale);
+        OpenAiChatOptions options = OpenAiChatOptions.builder()
+                .temperature(props.llmSafe().indexingTemperature()).build();
         return llmRouter.executeWithTracking(TaskType.MICRO_TEXT, RoutingMode.LOCAL_ONLY,
                 BackgroundUsage.SUMMARY_PREFIX,
                 model -> model.call(new Prompt(List.of(
                         new SystemMessage(systemPrompt),
-                        new UserMessage(input.text())))));
+                        new UserMessage(input.text())), options)));
     }
 
     /**

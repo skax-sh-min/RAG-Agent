@@ -281,19 +281,61 @@
         container.innerHTML = `<div class="mt-2 d-flex flex-wrap gap-2">${thumbs}</div>`;
     }
 
+    /* 검색 진단 수치 — 채팅에는 "근거 품질" 한 칸 + 응답 참여도만 싣는다.
+       검색기여(retrieval_share)는 순위 기반 RRF라 값이 평평해 한 턴 안에서 변별력이 거의
+       없다(1위 13% vs 8위 12%). 여러 턴의 경향으로 읽어야 의미가 생기므로 /admin 진단
+       패널에만 남기고 여기서는 뺀다 — 페이로드에는 그대로 실려 있다.
+
+       유사도와 축별 순위는 비는 조건이 서로 배타적이라 한 칸을 폴백 체인으로 채운다:
+         · 순수 BM25 히트  → 키워드 축 문서는 SQL 행이라 거리값이 없다(유사도 null)
+         · 확장 실패 폴백  → RRF를 건너뛰어 축 순위가 없다(유사도는 살아 있음)
+       그래서 둘 다 비는 경우는 실질적으로 없고, 축 표기로 대체됐다는 사실 자체가
+       "의미가 아니라 단어로 걸린 청크"라는 신호가 된다. */
+    function renderSourceMetrics(s) {
+        const quality = typeof s.similarity === 'number'
+            ? `유사도 ${s.similarity.toFixed(2)}`
+            : (s.axis_ranks ? escHtml(s.axis_ranks) : '');
+        if (!quality) return '';
+        return `<span class="source-metrics text-muted" style="font-size:0.72rem;">${quality}</span>`;
+    }
+
+    /* done 이벤트의 attribution {chunkId: 0.0~1.0}을 이미 그려진 출처 배지에 덧붙인다.
+       수치 표시가 꺼져 있으면 .source-metrics 자체가 없으므로 조용히 아무것도 하지 않는다. */
+    function applyAttribution(bubbleId, attribution) {
+        if (!attribution) return;
+        const container = document.getElementById(`stream-sources-${bubbleId}`);
+        if (!container) return;
+        container.querySelectorAll('.source-ref[data-chunk-id]').forEach(badge => {
+            const share = attribution[badge.getAttribute('data-chunk-id')];
+            if (typeof share !== 'number') return;
+            const metrics = badge.nextElementSibling;
+            if (!metrics || !metrics.classList.contains('source-metrics')) return;
+            if (metrics.dataset.hasAttribution === '1') return;   // 재진입 방지(멱등)
+            metrics.dataset.hasAttribution = '1';
+            metrics.insertAdjacentHTML('beforeend', ` · <strong>응답 ${Math.round(share * 100)}%</strong>`);
+        });
+    }
+
     function onSources(bubbleId, sources) {
         const container = document.getElementById(`stream-sources-${bubbleId}`);
         if (!container || !sources || sources.length === 0) return;
         const previewEnabled = typeof window.isSourcePreviewEnabled === 'function'
             ? window.isSourcePreviewEnabled()
             : true;
+        const metricsEnabled = typeof window.isRetrievalMetricsEnabled === 'function'
+            && window.isRetrievalMetricsEnabled();
         const refs = sources.map(s => {
             const label = escHtml(s.label || '출처');
             const previewAttr = previewEnabled
                 ? `data-bs-toggle="popover" data-bs-trigger="hover focus" data-bs-placement="top" data-preview-md="${escHtml(s.preview || '')}"`
                 : '';
             const chunkIdAttr = s.chunk_id ? `data-chunk-id="${escHtml(s.chunk_id)}"` : '';
-            return `<a href="#" class="source-ref badge bg-secondary text-decoration-none me-1 mb-1" ${previewAttr} ${chunkIdAttr} title="${label}">${label}</a>`;
+            const badge = `<a href="#" class="source-ref badge bg-secondary text-decoration-none" ${previewAttr} ${chunkIdAttr} title="${label}">${label}</a>`;
+            /* 배지와 그 수치는 .source-item 한 단위로 묶는다 — 느슨한 inline 형제로 두면
+               줄바꿈이 배지와 수치 사이에서 일어나 수치가 다음 배지 것처럼 읽힌다.
+               간격은 .source-item의 gap/margin이 담당하므로 배지에 me-1 mb-1을 걸지 않는다. */
+            const metrics = metricsEnabled ? renderSourceMetrics(s) : '';
+            return `<span class="source-item">${badge}${metrics}</span>`;
         }).join('');
         container.innerHTML = `<div class="mt-2">${refs}</div>`;
         if (previewEnabled) {
@@ -393,6 +435,11 @@
         //    answer arrived, so the "삭제 예정" attempts are removed (retry succeeded/exhausted).
         if (stageEl) stageEl.remove();
         clearRetryArtifacts(bubbleId);
+
+        // 3-bis. 응답 참여도 사후 갱신 — 출처 배지는 RETRIEVAL 직후 `sources`로 이미 그려졌고,
+        //    참여도는 답변이 끝나야 나오므로 여기서 chunkId로 찾아 덧붙인다. 재시도가 있었으면
+        //    `sources`가 다시 와서 배지가 새로 그려졌을 수 있으므로 항상 현재 DOM 기준으로 찾는다.
+        applyAttribution(bubbleId, data.attribution);
 
         // 4. Feedback buttons (like/dislike) + metadata footer, same line — feedback first (left).
         //    Uses the same .feedback-btn/.feedback-controls markup the chat.html delegated
