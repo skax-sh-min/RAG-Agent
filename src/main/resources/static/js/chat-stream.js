@@ -296,7 +296,7 @@
             ? `유사도 ${s.similarity.toFixed(2)}`
             : (s.axis_ranks ? escHtml(s.axis_ranks) : '');
         if (!quality) return '';
-        return `<span class="source-metrics text-muted me-2" style="font-size:0.72rem;">${quality}</span>`;
+        return `<span class="source-metrics text-muted" style="font-size:0.72rem;">${quality}</span>`;
     }
 
     /* done 이벤트의 attribution {chunkId: 0.0~1.0}을 이미 그려진 출처 배지에 덧붙인다.
@@ -330,8 +330,12 @@
                 ? `data-bs-toggle="popover" data-bs-trigger="hover focus" data-bs-placement="top" data-preview-md="${escHtml(s.preview || '')}"`
                 : '';
             const chunkIdAttr = s.chunk_id ? `data-chunk-id="${escHtml(s.chunk_id)}"` : '';
-            const badge = `<a href="#" class="source-ref badge bg-secondary text-decoration-none me-1 mb-1" ${previewAttr} ${chunkIdAttr} title="${label}">${label}</a>`;
-            return metricsEnabled ? badge + renderSourceMetrics(s) : badge;
+            const badge = `<a href="#" class="source-ref badge bg-secondary text-decoration-none" ${previewAttr} ${chunkIdAttr} title="${label}">${label}</a>`;
+            /* 배지와 그 수치는 .source-item 한 단위로 묶는다 — 느슨한 inline 형제로 두면
+               줄바꿈이 배지와 수치 사이에서 일어나 수치가 다음 배지 것처럼 읽힌다.
+               간격은 .source-item의 gap/margin이 담당하므로 배지에 me-1 mb-1을 걸지 않는다. */
+            const metrics = metricsEnabled ? renderSourceMetrics(s) : '';
+            return `<span class="source-item">${badge}${metrics}</span>`;
         }).join('');
         container.innerHTML = `<div class="mt-2">${refs}</div>`;
         if (previewEnabled) {
