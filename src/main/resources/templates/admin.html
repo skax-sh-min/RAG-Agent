@@ -412,9 +412,22 @@ function loadChunksByDoc(btn) {
 }
 
 // 편집 오프캔버스 기본 폭(좁은 화면·모바일). 가용 뷰포트가 이 폭의 2배 이상일 때만
-// 좌측에 마크다운 미리보기 컬럼을 함께 띄우고 오프캔버스를 2~2.5배로 넓힌다.
+// 좌측에 마크다운 미리보기 컬럼을 함께 띄우고 오프캔버스를 전체 폭으로 넓힌다.
 const EDIT_BASE_WIDTH = 520;
 const EDIT_FIELDS_WIDTH = 500;
+
+// 편집 오프캔버스(청크 편집·큐레이션 편집)의 폭을 정하고 2컬럼 여부를 돌려준다. 두 화면은
+// 같은 렌더러(renderChunkPreview)로 같은 형식의 마크다운을 편집하므로 폭 규칙도 한 벌이어야 한다.
+// 넓은 화면에선 뷰포트를 100% 채운다 — 우측 편집 컬럼은 EDIT_FIELDS_WIDTH 고정이므로 늘어난
+// 폭은 전부 좌측 미리보기 몫이고, 청크 원문에는 표·코드블록처럼 가로로 긴 요소가 흔해서
+// 미리보기가 넓을수록 줄바꿈 없이 읽힌다. 90%를 쓰지 않는 이유는 2컬럼 하한(EDIT_BASE_WIDTH*2)
+// 때문에 isWide 경계 부근(약 1040~1155px)에서 어차피 100%로 클램프돼, 창을 줄이는 동안 비율이
+// 90%에서 100%로 튀는 것처럼 보였기 때문 — 항상 100%면 그 불연속이 없다.
+function applyEditOffcanvasWidth(offcanvasEl) {
+    const isWide = window.innerWidth >= EDIT_BASE_WIDTH * 2;
+    offcanvasEl.style.width = isWide ? '100%' : EDIT_BASE_WIDTH + 'px';
+    return isWide;
+}
 
 // 청크 원문의 이미지 참조는 표준 마크다운이 아니라 [이미지: images/{id}/{file}] 커스텀 마커
 // (DocumentIndexer.IMAGE_MARKER와 동일한 형태)라 marked가 인식하지 못한다. 치환+렌더는
@@ -464,11 +477,7 @@ function openChunkEdit(chunkId, collection) {
         .then(data => {
             const offcanvasEl = document.getElementById('editOffcanvas');
             const body = document.getElementById('editOffcanvasBody');
-            const isWide = window.innerWidth >= EDIT_BASE_WIDTH * 2;
-            offcanvasEl.style.width = isWide
-                ? Math.max(EDIT_BASE_WIDTH * 2,
-                           Math.min(EDIT_BASE_WIDTH * 2.5, window.innerWidth - 100)) + 'px'
-                : EDIT_BASE_WIDTH + 'px';
+            const isWide = applyEditOffcanvasWidth(offcanvasEl);
 
             const idLabel = document.getElementById('edit-chunk-id-label');
             idLabel.textContent = chunkId;
@@ -648,8 +657,8 @@ function deleteChunkInline(chunkId, collection, row) {
 
 // ── §10.10 큐레이션 Q&A 편집/삭제 ──────────────────────────────────────────
 
-// 청크 편집(openChunkEdit)과 같은 조건·같은 렌더러를 쓴다: 가용 뷰포트가 EDIT_BASE_WIDTH의 2배
-// 이상일 때만 좌측에 미리보기 컬럼을 띄우고 오프캔버스를 넓힌다. 큐레이션 답변은 검색 근거로
+// 청크 편집(openChunkEdit)과 같은 폭 규칙(applyEditOffcanvasWidth)·같은 렌더러를 쓴다: 가용
+// 뷰포트가 EDIT_BASE_WIDTH의 2배 이상일 때만 좌측에 미리보기 컬럼을 띄운다. 큐레이션 답변은 검색 근거로
 // 쓰이는 마크다운이라(표·코드블록·이미지 마커 포함) 원문 텍스트만 보고 편집하면 서식이 깨진 걸
 // 알아채기 어렵다 — 청크 편집에서 미리보기를 붙인 것과 같은 이유다.
 function openCuratedEdit(id) {
@@ -658,11 +667,7 @@ function openCuratedEdit(id) {
         .then(data => {
             const offcanvasEl = document.getElementById('curatedEditOffcanvas');
             const body = document.getElementById('curatedEditOffcanvasBody');
-            const isWide = window.innerWidth >= EDIT_BASE_WIDTH * 2;
-            offcanvasEl.style.width = isWide
-                ? Math.max(EDIT_BASE_WIDTH * 2,
-                           Math.min(EDIT_BASE_WIDTH * 2.5, window.innerWidth - 100)) + 'px'
-                : EDIT_BASE_WIDTH + 'px';
+            const isWide = applyEditOffcanvasWidth(offcanvasEl);
 
             const editFields = `
                 <div>
