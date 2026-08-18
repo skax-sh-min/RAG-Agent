@@ -672,7 +672,11 @@ function saveChunkEdit(chunkId, collection) {
     .then(r => {
         if (r.ok) {
             showToast('청크가 저장되었습니다.', 'success');
-            bootstrap.Offcanvas.getInstance(document.getElementById('editOffcanvas')).hide();
+            // 저장해도 오프캔버스는 열어 둔다 — 저장 다음에 오는 동작이 "이 청크만 재인덱싱"
+            // (같은 패널 안, 저장된 텍스트 기준으로 도는 별도 버튼)이거나 이전/다음 청크로의
+            // 이동이라, 닫아 버리면 둘 다 다시 열기부터 해야 한다.
+            // 스냅샷을 지금 값으로 갱신해야 방금 저장한 내용이 이동 시 "저장 안 함"으로 잡히지 않는다.
+            if (currentChunkEdit) currentChunkEdit.snapshot = chunkEditSnapshot();
         } else { showToast('저장 실패', 'danger'); }
     })
     .catch(() => showToast('저장 중 오류 발생', 'danger'));
@@ -1075,24 +1079,19 @@ const FENCE_PROBLEMS_SHOWN = 10;
 
 function formatFenceProblems(problems) {
     const shown = problems.slice(0, FENCE_PROBLEMS_SHOWN)
-        .map(p => '  · ' + p.line + '행: ' + p.message).join('
-');
+        .map(p => '  · ' + p.line + '행: ' + p.message).join('\n');
     const rest = problems.length > FENCE_PROBLEMS_SHOWN
-        ? '
-  … 외 ' + (problems.length - FENCE_PROBLEMS_SHOWN) + '건' : '';
-    return '[MD 파일] 코드 블록(```) 문제 ' + problems.length + '건이 발견되었습니다.
-'
+        ? '\n  … 외 ' + (problems.length - FENCE_PROBLEMS_SHOWN) + '건' : '';
+    return '[MD 파일] 코드 블록(```) 문제 ' + problems.length + '건이 발견되었습니다.\n'
         + shown + rest
-        + '
-  재인덱싱은 MD 파일을 교정하지 않으므로 이 상태 그대로 청크에 반영됩니다.';
+        + '\n  재인덱싱은 MD 파일을 교정하지 않으므로 이 상태 그대로 청크에 반영됩니다.';
 }
 
 // 손으로 고친 청크가 사라진다는 경고. 편집은 청크에만 남고 MD 파일에는 들어가지 않으므로,
 // MD에서 청크를 다시 만드는 재인덱싱은 그 편집을 되살릴 수 없다. 키워드/요약만 고친 경우도
 // 같은 이유로 사라지므로 함께 세서 경고한다.
 function formatEditedChunks(count) {
-    return '[편집] 이 문서에 직접 편집한 청크가 ' + count + '개 있습니다.
-'
+    return '[편집] 이 문서에 직접 편집한 청크가 ' + count + '개 있습니다.\n'
         + '  재인덱싱은 MD 파일로 청크를 다시 만들기 때문에 편집 내용(텍스트·키워드·요약)은 사라집니다.';
 }
 
@@ -1103,14 +1102,8 @@ function formatReindexWarnings(body) {
     if (body.editedChunks > 0) sections.push(formatEditedChunks(body.editedChunks));
     const problems = body.problems || [];
     if (problems.length > 0) sections.push(formatFenceProblems(problems));
-    return '재인덱싱 전 확인해 주세요.
-
-' + sections.join('
-
-')
-        + '
-
-[확인] 무시하고 진행   /   [취소] 중지';
+    return '재인덱싱 전 확인해 주세요.\n\n' + sections.join('\n\n')
+        + '\n\n[확인] 무시하고 진행   /   [취소] 중지';
 }
 
 function reindexFromMd(btn) {
