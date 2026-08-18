@@ -164,7 +164,7 @@ public final class AnswerAttribution {
         for (SourceRef s : sources) {
             Double share = s.chunkId() == null ? null : result.sharesByChunkId().get(s.chunkId());
             out.add(new SourceRef(s.label(), s.preview(), s.chunkId(), s.docId(), s.pageOrSlide(),
-                    s.similarity(), s.retrievalShare(), s.axisRanks(), share));
+                    s.similarity(), s.retrievalShare(), s.axisRanks(), share, s.staleStatus()));
         }
         return List.copyOf(out);
     }

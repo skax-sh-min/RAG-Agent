@@ -45,6 +45,17 @@ public class QuestionReuseRepository {
                     created_at  TEXT NOT NULL DEFAULT (datetime('now'))
                 )
                 """);
+        // 응답 참여도(§2단계 AnswerAttribution)를 스냅샷과 함께 보관 — 기존 테이블에는 없으므로
+        // 방어적 ALTER (conversation_turns.response_mode 선례). 구 행은 NULL로 남고, 그 경우
+        // QuestionReuseService.validateTurn()이 예전처럼 전체 출처를 검증 대상으로 삼는다.
+        try {
+            jdbc.execute("ALTER TABLE turn_source_ref ADD COLUMN answer_share REAL");
+        } catch (Exception ignored) { /* already present */ }
+        // 무효화 시각 — 배지 자체에는 안 쓰지만, "언제부터 이 답변이 낡았나"는 사후 조사에서
+        // 가장 먼저 묻는 값이고 상태 전이 시점에만 알 수 있어 지금 남겨두지 않으면 복구 불가다.
+        try {
+            jdbc.execute("ALTER TABLE turn_source_ref ADD COLUMN invalidated_at TEXT");
+        } catch (Exception ignored) { /* already present */ }
         jdbc.execute("CREATE INDEX IF NOT EXISTS idx_turn_source_turn ON turn_source_ref(turn_id)");
         jdbc.execute("CREATE INDEX IF NOT EXISTS idx_turn_source_chunk ON turn_source_ref(chunk_id)");
     }
@@ -52,7 +63,7 @@ public class QuestionReuseRepository {
     public void saveTurnSourceRefs(long turnId, String userId, String threadId, List<SourceSnapshot> refs) {
         if (refs == null || refs.isEmpty()) return;
         jdbc.batchUpdate(
-                "INSERT INTO turn_source_ref (turn_id, user_id, thread_id, chunk_id, doc_id, chunk_hash, status) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO turn_source_ref (turn_id, user_id, thread_id, chunk_id, doc_id, chunk_hash, status, answer_share) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 refs,
                 refs.size(),
                 (ps, ref) -> {
@@ -63,14 +74,19 @@ public class QuestionReuseRepository {
                     ps.setString(5, ref.docId());
                     ps.setString(6, ref.chunkHash());
                     ps.setString(7, "active");
+                    if (ref.answerShare() == null) {
+                        ps.setNull(8, java.sql.Types.REAL);
+                    } else {
+                        ps.setDouble(8, ref.answerShare());
+                    }
                 }
         );
     }
 
     public void cloneTurnSourceRefs(long fromTurnId, long toTurnId, String userId, String threadId) {
         jdbc.update("""
-                INSERT INTO turn_source_ref (turn_id, user_id, thread_id, chunk_id, doc_id, chunk_hash, status)
-                SELECT ?, ?, ?, chunk_id, doc_id, chunk_hash, status
+                INSERT INTO turn_source_ref (turn_id, user_id, thread_id, chunk_id, doc_id, chunk_hash, status, answer_share)
+                SELECT ?, ?, ?, chunk_id, doc_id, chunk_hash, status, answer_share
                 FROM turn_source_ref
                 WHERE turn_id = ?
                 """, toTurnId, userId, threadId, fromTurnId);
@@ -147,18 +163,49 @@ public class QuestionReuseRepository {
 
     public List<SourceSnapshot> findSourceRefs(long turnId) {
         return jdbc.query(
-                "SELECT chunk_id, doc_id, chunk_hash FROM turn_source_ref WHERE turn_id = ? AND status = 'active'",
-                (rs, n) -> new SourceSnapshot(
-                        rs.getString("chunk_id"),
-                        rs.getString("doc_id"),
-                        rs.getString("chunk_hash")),
+                "SELECT chunk_id, doc_id, chunk_hash, answer_share FROM turn_source_ref WHERE turn_id = ? AND status = 'active'",
+                SNAPSHOT_MAPPER,
                 turnId);
     }
+
+    /**
+     * Every recorded source for a turn, <b>including</b> ones already marked inactive.
+     *
+     * <p>{@link #findSourceRefs} can't back reuse validation on its own: invalidating a chunk that
+     * never contributed to the answer would silently shrink that list, and an emptied list reads as
+     * "출처 없음 → 재사용 불가" — i.e. exactly the block the answer-share scope exists to avoid.
+     * Validation therefore reads all rows and decides scope itself.
+     */
+    public List<SourceSnapshot> findAllSourceRefs(long turnId) {
+        return jdbc.query(
+                "SELECT chunk_id, doc_id, chunk_hash, answer_share, status FROM turn_source_ref WHERE turn_id = ?",
+                (rs, n) -> {
+                    double share = rs.getDouble("answer_share");
+                    return new SourceSnapshot(
+                            rs.getString("chunk_id"),
+                            rs.getString("doc_id"),
+                            rs.getString("chunk_hash"),
+                            rs.wasNull() ? null : share,
+                            rs.getString("status"));
+                },
+                turnId);
+    }
+
+    private static final org.springframework.jdbc.core.RowMapper<SourceSnapshot> SNAPSHOT_MAPPER = (rs, n) -> {
+        double share = rs.getDouble("answer_share");
+        return new SourceSnapshot(
+                rs.getString("chunk_id"),
+                rs.getString("doc_id"),
+                rs.getString("chunk_hash"),
+                rs.wasNull() ? null : share,
+                "active");
+    };
 
     public List<SourcePreviewRow> findSourcePreviewRows(long turnId) {
         return vectorJdbc.query("""
                 SELECT r.chunk_id,
                        r.doc_id,
+                       r.status,
                   COALESCE(NULLIF(TRIM(f.filename), ''), NULLIF(TRIM(json_extract(c.metadata, '$.filename')), '')) AS filename,
                   COALESCE(NULLIF(TRIM(f.page), ''), NULLIF(TRIM(json_extract(c.metadata, '$.page_or_slide')), '')) AS page,
                       COALESCE(
@@ -178,8 +225,9 @@ public class QuestionReuseRepository {
                                 JOIN conversation_turns t ON t.id = r.turn_id AND t.user_id = r.user_id
                 LEFT JOIN chunk_fts f ON f.spring_doc_id = r.chunk_id
                 LEFT JOIN vec_document_chunks c ON c.spring_doc_id = r.chunk_id
+                -- status 필터가 없다: 무효화된 출처를 걸러내면 대화 기록에서 배지가 아니라 출처
+                -- 자체가 조용히 사라져(§2번 표시 요구) "원래 없었던 것"처럼 보인다.
                 WHERE r.turn_id = ?
-                  AND r.status = 'active'
                 """,
                 (rs, n) -> new SourcePreviewRow(
                         rs.getString("chunk_id"),
@@ -187,7 +235,8 @@ public class QuestionReuseRepository {
                         rs.getString("filename"),
                         rs.getString("page"),
                         rs.getString("chapter"),
-                        rs.getString("content")),
+                        rs.getString("content"),
+                        rs.getString("status")),
                 turnId);
     }
 
@@ -265,12 +314,26 @@ public class QuestionReuseRepository {
         return currentChunkHashes(ids);
     }
 
-    public void markSourceRefsInactiveByChunkIds(List<String> chunkIds) {
+    /**
+     * 스냅샷 이후 청크가 바뀌었음을 표시한다.
+     *
+     * @param status {@code SourceRef.STALE_DELETED} 또는 {@code STALE_MODIFIED} — 재사용 차단에는
+     *        둘 다 똑같이 작용하지만 대화 기록의 배지 규칙이 다르다(삭제는 항상, 수정은 응답 지분이
+     *        있는 출처만). 이미 무효화된 행은 건드리지 않는다: 수정된 뒤 삭제되면 최종 상태는
+     *        삭제여야 하므로 {@code deleted}만 덮어쓰기를 허용한다.
+     */
+    public void markSourceRefsInactiveByChunkIds(List<String> chunkIds, String status) {
         if (chunkIds == null || chunkIds.isEmpty()) return;
         String placeholders = chunkIds.stream().map(v -> "?").collect(Collectors.joining(","));
-        jdbc.update("UPDATE turn_source_ref SET status='inactive' WHERE chunk_id IN (" + placeholders + ")",
-                chunkIds.toArray());
+        List<Object> args = new ArrayList<>();
+        args.add(status);
+        args.addAll(chunkIds);
+        String guard = "deleted".equals(status) ? "" : " AND status = 'active'";
+        jdbc.update("UPDATE turn_source_ref SET status = ?, invalidated_at = datetime('now') " +
+                    "WHERE chunk_id IN (" + placeholders + ")" + guard,
+                args.toArray());
     }
+
 
     private static String sha256(String text) {
         String src = text == null ? "" : text;
@@ -282,10 +345,40 @@ public class QuestionReuseRepository {
         }
     }
 
-    public record SourceSnapshot(String chunkId, String docId, String chunkHash) {}
+    /**
+     * @param answerShare 이 청크가 답변에서 차지한 글자수 비율(§2단계 응답 참여도). {@code null}은
+     *        "측정 안 됨"이지 0이 아니다 — 컬럼 추가 이전에 기록된 행, 그리고 귀속 계산이
+     *        {@code Method.NONE}으로 끝난 턴이 여기에 해당한다.
+     * @param status 스냅샷 시점 이후 이 청크가 삭제/변경 처리되었는지. {@code findSourceRefs}가
+     *        돌려주는 행은 정의상 항상 {@code active}다.
+     */
+    public record SourceSnapshot(String chunkId, String docId, String chunkHash,
+                                 Double answerShare, String status) {
+
+        /** 하위 호환 — 응답 참여도를 모르는 호출부(테스트, 구 경로)용. */
+        public SourceSnapshot(String chunkId, String docId, String chunkHash) {
+            this(chunkId, docId, chunkHash, null, "active");
+        }
+
+        /** 답변에 실제로 지분이 있었던 출처인가. */
+        public boolean contributed() {
+            return answerShare != null && answerShare > 0.0;
+        }
+
+        public boolean inactive() {
+            return status != null && !"active".equals(status);
+        }
+    }
 
     public record SourcePreviewRow(String chunkId, String docId, String filename,
-                                   String pageOrSlide, String chapterNo, String content) {}
+                                   String pageOrSlide, String chapterNo, String content,
+                                   String status) {
+
+        public SourcePreviewRow(String chunkId, String docId, String filename,
+                                String pageOrSlide, String chapterNo, String content) {
+            this(chunkId, docId, filename, pageOrSlide, chapterNo, content, "active");
+        }
+    }
 
     public record CandidateTurn(long turnId, String userId, String threadId,
                                 String question, String answer, String createdAt) {}

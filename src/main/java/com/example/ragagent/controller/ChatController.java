@@ -50,6 +50,9 @@ public class ChatController {
 
     private static final Logger log = LoggerFactory.getLogger(ChatController.class);
 
+    /** 입력창 아래 뜨는 이전 질문 제안 목록의 최대 개수. */
+    private static final int MAX_QUESTION_SUGGESTIONS = 12;
+
     private final AgentService agentService;
     private final StreamingAgentService streamingAgentService;
     private final ThreadMetaService threadMetaService;
@@ -295,9 +298,10 @@ public class ChatController {
             ThreadContext ctx,
             @RequestParam(name = "q", defaultValue = "") String q,
             @RequestParam(name = "scope", defaultValue = "shared") String scope,
-            @RequestParam(name = "limit", defaultValue = "8") int limit) {
+            @RequestParam(name = "limit", defaultValue = "12") int limit) {
         if (questionReuseService == null || q == null || q.strip().length() < 2) return List.of();
-        int bounded = Math.max(1, Math.min(limit, 20));
+        // 이전 질문 제안은 최대 12개 (요청이 더 크게 와도 서버에서 자른다)
+        int bounded = Math.max(1, Math.min(limit, MAX_QUESTION_SUGGESTIONS));
         return questionReuseService.suggest(ctx.userId(), QuestionReuseService.Scope.SHARED, q, bounded);
     }
 

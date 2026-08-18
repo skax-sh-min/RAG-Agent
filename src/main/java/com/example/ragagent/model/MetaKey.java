@@ -20,6 +20,7 @@ public final class MetaKey {
     public static final String CHAPTER_NO      = "chapter_no";        // 계층적 챕터 번호("1","1.1","1.5.3", H2~H6 기준). 헤딩 이전 구간·PPTX는 "0"
     public static final String CHUNK_CONTEXT   = "chunk_context";     // 임베딩/FTS용 맥락 헤더 (EXCERPT_KEYWORDS와 동일하게 영속 저장 — 관리자 청크 편집에서 확인/수정 가능, §10.1)
     public static final String CURATED_ORIGIN  = "curated_origin"; // 큐레이션 벡터의 출처: like(좋아요) | manual(지식 제안) — RRF 축 분리·가중치 구분용
+    public static final String EDITED_AT       = "edited_at";         // 관리자가 /admin에서 이 청크를 손으로 고친 시각(ISO-8601). 문서 전체 재인덱싱은 MD 파일에서 청크를 다시 만들므로 이 편집이 사라진다 — 재인덱싱 사전 확인에서 "편집된 청크 N개" 경고의 근거이자, 재인덱싱 후 자연히 없어지는 값
     public static final String SEARCH_TEXT     = "search_text";       // SearchTextBuilder 결과 캐시 (transient — 영속 전 제거, §10.8.5)
 
     // 미래 확장 — 멀티유저/권한

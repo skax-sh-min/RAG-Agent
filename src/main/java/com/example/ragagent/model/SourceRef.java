@@ -38,16 +38,45 @@ public record SourceRef(
          * either "not computed for this turn" or "this chunk matched nothing" — see
          * {@code AnswerAttribution}, and note it is an estimate, never a causal measurement.
          */
-        @JsonProperty("answer_share") Double answerShare
+        @JsonProperty("answer_share") Double answerShare,
+        /**
+         * 이 출처 청크가 턴이 기록된 뒤 삭제/수정되었는지({@code turn_source_ref.status}).
+         * {@code null}/{@code "active"}는 스냅샷 당시와 동일하다는 뜻. 검색 시점에는 정의상 존재할
+         * 수 없고, 대화 기록을 다시 열 때만 채워진다 — 그래서 {@code retrieval_metrics} blob에
+         * 저장되지 않으며 매번 현재 DB 상태로 새로 계산된다.
+         */
+        @JsonProperty("stale") String staleStatus
 ) {
+    public static final String STALE_DELETED = "deleted";
+    public static final String STALE_MODIFIED = "modified";
+
     /** Metric-less sources (DB-reuse, restored history, fallback path). */
     public SourceRef(String label, String preview, String chunkId, String docId, Object pageOrSlide) {
-        this(label, preview, chunkId, docId, pageOrSlide, null, null, null, null);
+        this(label, preview, chunkId, docId, pageOrSlide, null, null, null, null, null);
     }
 
     /** Retrieval-time construction — the answer share is attached later. */
     public SourceRef(String label, String preview, String chunkId, String docId, Object pageOrSlide,
                      Double similarity, Double retrievalShare, String axisRanks) {
-        this(label, preview, chunkId, docId, pageOrSlide, similarity, retrievalShare, axisRanks, null);
+        this(label, preview, chunkId, docId, pageOrSlide, similarity, retrievalShare, axisRanks, null, null);
+    }
+
+    /**
+     * 대화 기록에서 이 출처에 "삭제됨/수정됨" 배지를 붙일지, 붙인다면 무슨 문구로.
+     *
+     * <p><b>수정은 답변에 지분이 있었던 출처에만</b> 표시한다 — topK개가 검색돼도 답변을 실제로
+     * 떠받친 건 보통 두세 개이고, 한 글자도 반영되지 않은 청크가 손질됐다는 사실은 이 답변을 다시
+     * 읽는 사람에게 아무 의미가 없다. 전부 표시하면 문서를 한 번 손볼 때마다 과거 대화 전체가
+     * 배지로 뒤덮여 정작 중요한 경고가 묻힌다.
+     *
+     * <p><b>삭제는 지분과 무관하게 항상</b> 표시한다 — 근거로 쓰였든 아니든 클릭해도 원문이 없고,
+     * 침묵하면 "출처는 있는데 열리지 않는" 상태가 되기 때문이다.
+     *
+     * @return 배지 문구, 또는 표시하지 않을 때 {@code null}
+     */
+    public String staleBadge() {
+        if (STALE_DELETED.equals(staleStatus)) return "삭제됨";
+        if (staleStatus == null || "active".equals(staleStatus)) return null;
+        return (answerShare != null && answerShare > 0.0) ? "수정됨" : null;
     }
 }

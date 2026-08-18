@@ -86,6 +86,14 @@
             <i class="bi bi-archive me-2"></i>
             <span class="fw-semibold small">문서 레지스트리</span>
             <span class="badge bg-secondary ms-2" th:text="${#lists.size(documents)}">0</span>
+            <!-- 청크 수는 인덱싱 시점에 기록된 값이라, 삭제가 이 행을 갱신하지 않던 시절의 문서는
+                 실제보다 큰 수를 계속 보여준다. 이 버튼이 벡터 스토어와 대조해 한 번에 맞춘다. -->
+            <button type="button" class="btn btn-sm btn-outline-secondary py-0 px-2 ms-2"
+                    style="font-size:0.72rem;" id="reconcile-chunks-btn"
+                    onclick="reconcileChunkCounts()"
+                    title="저장된 청크 수를 벡터 스토어의 실제 청크와 대조해 맞춥니다.">
+                <i class="bi bi-calculator me-1"></i>청크 수 재계산
+            </button>
             <span id="registry-status" class="ms-auto small text-muted text-truncate" style="max-width:60%;"></span>
         </div>
         <div class="card-body p-0">
@@ -107,7 +115,10 @@
                     <tr th:each="doc : ${documents}">
                         <td th:text="${doc.displayLabel()}" th:title="${doc.filename()}"></td>
                         <td><span class="badge bg-secondary" th:text="${doc.version()}"></span></td>
-                        <td class="text-center" style="min-width:45px;" th:text="${doc.chunks()}"></td>
+                        <!-- id — 청크 하나를 지웠을 때 이 숫자만 제자리에서 갱신한다(deleteChunkInline).
+                             페이지를 다시 그리면 보고 있던 청크 목록이 닫혀 버린다. -->
+                        <td class="text-center" style="min-width:45px;"
+                            th:id="'doc-chunks-' + ${doc.docId()}" th:text="${doc.chunks()}"></td>
                         <td class="text-muted" style="font-size:0.7rem;" th:text="${doc.docId()}"></td>
                         <td class="text-muted" th:text="${T(com.example.ragagent.model.KstDateFormat).toKst(doc.indexedAt())}"></td>
                         <td class="text-center">
@@ -300,6 +311,21 @@
             <!-- 편집 영역 공간 절약을 위해 별도 필드 대신 헤더에 표시 — openChunkEdit()이 채운다. -->
             <code id="edit-chunk-id-label" class="text-muted fw-normal text-truncate" style="font-size:0.7rem;"></code>
         </h6>
+        <!-- 이전/다음 청크 이동. offcanvas-header 가 space-between 이라 제목과 닫기 버튼 사이
+             남는 공간의 가운데에 놓인다. 이동 범위는 목록에 "현재 렌더된" 청크들(=현재 페이지)이며,
+             경계에서는 비활성화된다 — openChunkEdit() 이 열 때마다 상태를 다시 계산한다. -->
+        <div class="btn-group btn-group-sm flex-shrink-0 mx-2" role="group" aria-label="청크 이동">
+            <!-- 기본 disabled — 청크를 열기 전(오프캔버스 초기 "청크를 선택하세요" 상태)에는
+                 이동할 대상이 없다. openChunkEdit()/loadChunks()가 updateChunkNavState()로 푼다. -->
+            <button type="button" class="btn btn-outline-secondary py-0 px-2" id="chunk-prev-btn"
+                    onclick="navigateChunk(-1)" title="이전 청크" disabled>
+                <i class="bi bi-arrow-left"></i>
+            </button>
+            <button type="button" class="btn btn-outline-secondary py-0 px-2" id="chunk-next-btn"
+                    onclick="navigateChunk(1)" title="다음 청크" disabled>
+                <i class="bi bi-arrow-right"></i>
+            </button>
+        </div>
         <button type="button" class="btn-close" data-bs-dismiss="offcanvas"></button>
     </div>
     <div class="offcanvas-body d-flex flex-column gap-3" id="editOffcanvasBody">
@@ -403,6 +429,9 @@ function loadChunksByDoc(btn) {
             document.getElementById('chunk-panel').innerHTML = html;
             document.getElementById('chunk-spinner').style.display = 'none';
             htmx.process(document.getElementById('chunk-panel'));
+            // 오프캔버스가 열린 채로 목록을 다시 그릴 수 있다(페이지 이동/컬렉션 전환) —
+            // 이전/다음 버튼은 렌더된 행 기준이므로 여기서 다시 계산한다.
+            updateChunkNavState();
             // Highlight matching collection button
             document.querySelectorAll('.collection-btn').forEach(function (b) {
                 b.classList.toggle('active', b.getAttribute('data-collection') === colName);
@@ -412,9 +441,22 @@ function loadChunksByDoc(btn) {
 }
 
 // 편집 오프캔버스 기본 폭(좁은 화면·모바일). 가용 뷰포트가 이 폭의 2배 이상일 때만
-// 좌측에 마크다운 미리보기 컬럼을 함께 띄우고 오프캔버스를 2~2.5배로 넓힌다.
+// 좌측에 마크다운 미리보기 컬럼을 함께 띄우고 오프캔버스를 전체 폭으로 넓힌다.
 const EDIT_BASE_WIDTH = 520;
 const EDIT_FIELDS_WIDTH = 500;
+
+// 편집 오프캔버스(청크 편집·큐레이션 편집)의 폭을 정하고 2컬럼 여부를 돌려준다. 두 화면은
+// 같은 렌더러(renderChunkPreview)로 같은 형식의 마크다운을 편집하므로 폭 규칙도 한 벌이어야 한다.
+// 넓은 화면에선 뷰포트를 100% 채운다 — 우측 편집 컬럼은 EDIT_FIELDS_WIDTH 고정이므로 늘어난
+// 폭은 전부 좌측 미리보기 몫이고, 청크 원문에는 표·코드블록처럼 가로로 긴 요소가 흔해서
+// 미리보기가 넓을수록 줄바꿈 없이 읽힌다. 90%를 쓰지 않는 이유는 2컬럼 하한(EDIT_BASE_WIDTH*2)
+// 때문에 isWide 경계 부근(약 1040~1155px)에서 어차피 100%로 클램프돼, 창을 줄이는 동안 비율이
+// 90%에서 100%로 튀는 것처럼 보였기 때문 — 항상 100%면 그 불연속이 없다.
+function applyEditOffcanvasWidth(offcanvasEl) {
+    const isWide = window.innerWidth >= EDIT_BASE_WIDTH * 2;
+    offcanvasEl.style.width = isWide ? '100%' : EDIT_BASE_WIDTH + 'px';
+    return isWide;
+}
 
 // 청크 원문의 이미지 참조는 표준 마크다운이 아니라 [이미지: images/{id}/{file}] 커스텀 마커
 // (DocumentIndexer.IMAGE_MARKER와 동일한 형태)라 marked가 인식하지 못한다. 치환+렌더는
@@ -457,6 +499,54 @@ function joinChunkContext(breadcrumb, summary) {
     return b ? b + '\n' + s : s;
 }
 
+// ── 편집 오프캔버스 이전/다음 청크 이동 ──────────────────────────────────
+// 이동 범위는 목록에 지금 렌더돼 있는 행들, 즉 "현재 페이지"다. 청크 목록은 서버 페이지네이션
+// (loadChunks의 offset/limit)이라 전체 순서를 클라이언트가 알지 못하고, 페이지 경계에서 다음
+// 페이지를 자동으로 당겨오면 사용자가 누른 적 없는 목록 이동이 뒤에서 일어난다 — 경계에서는
+// 버튼을 비활성화해 "여기까지"를 그대로 보여준다.
+// 현재 열려 있는 청크(+ 열 때의 필드 스냅샷). 스냅샷은 저장하지 않은 편집을 감지하는 용도다.
+let currentChunkEdit = null;
+
+function chunkEditButtons() {
+    return Array.from(document.querySelectorAll('#chunk-panel .chunk-edit-btn'));
+}
+
+// 편집 필드 4개의 현재 값. 열었을 때와 이동 직전 값을 비교해 "저장 안 함"을 감지한다.
+// (저장은 별도 버튼이고 이동은 화면을 통째로 갈아끼우므로, 경고가 없으면 편집이 조용히 사라진다.)
+const CHUNK_EDIT_FIELD_IDS = ['edit-meta', 'edit-context', 'edit-keywords', 'edit-text'];
+
+function chunkEditSnapshot() {
+    return CHUNK_EDIT_FIELD_IDS.map(id => (document.getElementById(id) || {}).value || '');
+}
+
+function chunkEditDirty() {
+    if (!currentChunkEdit) return false;
+    const now = chunkEditSnapshot();
+    return now.some((v, i) => v !== currentChunkEdit.snapshot[i]);
+}
+
+function updateChunkNavState() {
+    const prev = document.getElementById('chunk-prev-btn');
+    const next = document.getElementById('chunk-next-btn');
+    const buttons = chunkEditButtons();
+    const idx = currentChunkEdit
+        ? buttons.findIndex(b => b.dataset.chunkId === currentChunkEdit.chunkId)
+        : -1;
+    prev.disabled = idx <= 0;
+    next.disabled = idx < 0 || idx >= buttons.length - 1;
+}
+
+function navigateChunk(delta) {
+    if (!currentChunkEdit) return;
+    const buttons = chunkEditButtons();
+    const idx = buttons.findIndex(b => b.dataset.chunkId === currentChunkEdit.chunkId);
+    const target = idx < 0 ? null : buttons[idx + delta];
+    if (!target) return;
+    if (chunkEditDirty() &&
+        !confirm('저장하지 않은 변경사항이 있습니다. 이동하면 사라집니다. 계속할까요?')) return;
+    openChunkEdit(target.dataset.chunkId, target.dataset.collection);
+}
+
 // Open edit offcanvas: fetch full chunk detail
 function openChunkEdit(chunkId, collection) {
     fetch('/admin/chunks/' + encodeURIComponent(chunkId) + '/detail?collection=' + encodeURIComponent(collection))
@@ -464,11 +554,7 @@ function openChunkEdit(chunkId, collection) {
         .then(data => {
             const offcanvasEl = document.getElementById('editOffcanvas');
             const body = document.getElementById('editOffcanvasBody');
-            const isWide = window.innerWidth >= EDIT_BASE_WIDTH * 2;
-            offcanvasEl.style.width = isWide
-                ? Math.max(EDIT_BASE_WIDTH * 2,
-                           Math.min(EDIT_BASE_WIDTH * 2.5, window.innerWidth - 100)) + 'px'
-                : EDIT_BASE_WIDTH + 'px';
+            const isWide = applyEditOffcanvasWidth(offcanvasEl);
 
             const idLabel = document.getElementById('edit-chunk-id-label');
             idLabel.textContent = chunkId;
@@ -552,7 +638,13 @@ function openChunkEdit(chunkId, collection) {
                 body.innerHTML = editFields;
             }
             initTooltipsIn(body);
-            new bootstrap.Offcanvas(offcanvasEl).show();
+            // 스냅샷은 필드가 그려진 뒤에 떠야 한다(이동 시 변경 감지의 기준값).
+            currentChunkEdit = { chunkId, collection, snapshot: chunkEditSnapshot() };
+            updateChunkNavState();
+            // getOrCreateInstance — 이전/다음 이동은 "이미 열려 있는" 오프캔버스를 다시 여는
+            // 경로라, new 로 매번 인스턴스를 만들면 _isShown 이 false 인 새 인스턴스가 backdrop 을
+            // 한 겹 더 깔고 그 겹이 닫아도 남는다.
+            bootstrap.Offcanvas.getOrCreateInstance(offcanvasEl).show();
         })
         .catch(() => showToast('청크 정보를 불러올 수 없습니다.', 'danger'));
 }
@@ -591,7 +683,11 @@ function saveChunkEdit(chunkId, collection) {
     .then(r => {
         if (r.ok) {
             showToast('청크가 저장되었습니다.', 'success');
-            bootstrap.Offcanvas.getInstance(document.getElementById('editOffcanvas')).hide();
+            // 저장해도 오프캔버스는 열어 둔다 — 저장 다음에 오는 동작이 "이 청크만 재인덱싱"
+            // (같은 패널 안, 저장된 텍스트 기준으로 도는 별도 버튼)이거나 이전/다음 청크로의
+            // 이동이라, 닫아 버리면 둘 다 다시 열기부터 해야 한다.
+            // 스냅샷을 지금 값으로 갱신해야 방금 저장한 내용이 이동 시 "저장 안 함"으로 잡히지 않는다.
+            if (currentChunkEdit) currentChunkEdit.snapshot = chunkEditSnapshot();
         } else { showToast('저장 실패', 'danger'); }
     })
     .catch(() => showToast('저장 중 오류 발생', 'danger'));
@@ -628,6 +724,12 @@ function reindexChunkInline(chunkId, collection) {
         document.getElementById('edit-context-breadcrumb-display').textContent =
             contextParts.breadcrumb || '(위치 정보 없음)';
         document.getElementById('edit-context').value = contextParts.summary;
+        // 서버가 덮어쓴 3개 필드만 스냅샷 기준값을 갱신한다 — 텍스트(마지막 항목)는 그대로 둬야
+        // 재인덱싱 전에 해 둔 저장 안 한 텍스트 편집이 이동 경고에서 계속 잡힌다.
+        if (currentChunkEdit) {
+            const fresh = chunkEditSnapshot();
+            currentChunkEdit.snapshot = fresh.slice(0, 3).concat(currentChunkEdit.snapshot.slice(3));
+        }
     })
     .catch(() => showToast('재인덱싱 중 오류 발생', 'danger'))
     .finally(() => { btn.disabled = false; btn.innerHTML = originalHtml; });
@@ -640,16 +742,28 @@ function deleteChunkInline(chunkId, collection, row) {
         headers: getCsrfHeaders()
     })
     .then(r => {
-        if (r.ok) { row.closest('tr').remove(); showToast('청크 삭제됨', 'success'); }
-        else       { showToast('삭제 실패', 'danger'); }
+        if (!r.ok) { showToast('삭제 실패', 'danger'); return null; }
+        row.closest('tr').remove();
+        showToast('청크 삭제됨', 'success');
+        // 삭제한 행이 사라지면 이전/다음 이동 대상 목록도 바뀐다.
+        updateChunkNavState();
+        return r.json().catch(() => null);
+    })
+    .then(body => {
+        // 문서 레지스트리 표의 청크 수는 저장된 값(doc_registry.chunks)이라 삭제 후에도 그대로
+        // 남는다 — 서버가 돌려준 새 값으로 그 칸만 갈아 끼운다. remainingChunks 가 null 이면
+        // (레지스트리에 청크 id가 기록되지 않은 예전 문서) 건드리지 않는다.
+        if (!body || body.remainingChunks === null || body.remainingChunks === undefined) return;
+        const cell = document.getElementById('doc-chunks-' + body.docId);
+        if (cell) cell.textContent = body.remainingChunks;
     })
     .catch(() => showToast('삭제 중 오류', 'danger'));
 }
 
 // ── §10.10 큐레이션 Q&A 편집/삭제 ──────────────────────────────────────────
 
-// 청크 편집(openChunkEdit)과 같은 조건·같은 렌더러를 쓴다: 가용 뷰포트가 EDIT_BASE_WIDTH의 2배
-// 이상일 때만 좌측에 미리보기 컬럼을 띄우고 오프캔버스를 넓힌다. 큐레이션 답변은 검색 근거로
+// 청크 편집(openChunkEdit)과 같은 폭 규칙(applyEditOffcanvasWidth)·같은 렌더러를 쓴다: 가용
+// 뷰포트가 EDIT_BASE_WIDTH의 2배 이상일 때만 좌측에 미리보기 컬럼을 띄운다. 큐레이션 답변은 검색 근거로
 // 쓰이는 마크다운이라(표·코드블록·이미지 마커 포함) 원문 텍스트만 보고 편집하면 서식이 깨진 걸
 // 알아채기 어렵다 — 청크 편집에서 미리보기를 붙인 것과 같은 이유다.
 function openCuratedEdit(id) {
@@ -658,11 +772,7 @@ function openCuratedEdit(id) {
         .then(data => {
             const offcanvasEl = document.getElementById('curatedEditOffcanvas');
             const body = document.getElementById('curatedEditOffcanvasBody');
-            const isWide = window.innerWidth >= EDIT_BASE_WIDTH * 2;
-            offcanvasEl.style.width = isWide
-                ? Math.max(EDIT_BASE_WIDTH * 2,
-                           Math.min(EDIT_BASE_WIDTH * 2.5, window.innerWidth - 100)) + 'px'
-                : EDIT_BASE_WIDTH + 'px';
+            const isWide = applyEditOffcanvasWidth(offcanvasEl);
 
             const editFields = `
                 <div>
@@ -995,10 +1105,55 @@ function formatFenceProblems(problems) {
         .map(p => '  · ' + p.line + '행: ' + p.message).join('\n');
     const rest = problems.length > FENCE_PROBLEMS_SHOWN
         ? '\n  … 외 ' + (problems.length - FENCE_PROBLEMS_SHOWN) + '건' : '';
-    return '저장된 MD 파일에서 코드 블록(```) 문제 ' + problems.length + '건이 발견되었습니다.\n\n'
+    return '[MD 파일] 코드 블록(```) 문제 ' + problems.length + '건이 발견되었습니다.\n'
         + shown + rest
-        + '\n\n재인덱싱은 MD 파일을 교정하지 않으므로 이 상태 그대로 청크에 반영됩니다.'
+        + '\n  재인덱싱은 MD 파일을 교정하지 않으므로 이 상태 그대로 청크에 반영됩니다.';
+}
+
+// 손으로 고친 청크가 사라진다는 경고. 편집은 청크에만 남고 MD 파일에는 들어가지 않으므로,
+// MD에서 청크를 다시 만드는 재인덱싱은 그 편집을 되살릴 수 없다. 키워드/요약만 고친 경우도
+// 같은 이유로 사라지므로 함께 세서 경고한다.
+function formatEditedChunks(count) {
+    return '[편집] 이 문서에 직접 편집한 청크가 ' + count + '개 있습니다.\n'
+        + '  재인덱싱은 MD 파일로 청크를 다시 만들기 때문에 편집 내용(텍스트·키워드·요약)은 사라집니다.';
+}
+
+// 두 검사 결과를 한 번에 보여준다 — 서버가 한 응답에 둘 다 실어 보내므로, 연달아 두 번
+// 물으면 "확인 두 번 누르기"가 습관이 되어 경고가 무의미해진다.
+function formatReindexWarnings(body) {
+    const sections = [];
+    if (body.editedChunks > 0) sections.push(formatEditedChunks(body.editedChunks));
+    const problems = body.problems || [];
+    if (problems.length > 0) sections.push(formatFenceProblems(problems));
+    return '재인덱싱 전 확인해 주세요.\n\n' + sections.join('\n\n')
         + '\n\n[확인] 무시하고 진행   /   [취소] 중지';
+}
+
+// 레지스트리에 저장된 청크 수를 벡터 스토어 실제 내용과 대조해 맞춘다(과거 드리프트 일회성 복구).
+// 고친 행이 있으면 새로고침한다 — 표 전체가 서버 렌더라 칸 하나씩 갈아 끼우는 것보다 정직하다.
+function reconcileChunkCounts() {
+    const btn = document.getElementById('reconcile-chunks-btn');
+    const original = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm" style="width:.7rem;height:.7rem;"></span>';
+
+    fetch('/admin/registry/reconcile-chunks', { method: 'POST', headers: getCsrfHeaders() })
+        .then(r => r.ok ? r.json() : Promise.reject())
+        .then(body => {
+            if (body.fixed > 0) {
+                showToast('문서 ' + body.fixed + '건의 청크 수를 맞췄습니다.', 'success');
+                setTimeout(() => location.reload(), 800);
+            } else {
+                showToast('청크 수가 모두 정확합니다 (문서 ' + body.checked + '건 대조).', 'info');
+                btn.disabled = false;
+                btn.innerHTML = original;
+            }
+        })
+        .catch(() => {
+            showToast('청크 수 재계산 실패', 'danger');
+            btn.disabled = false;
+            btn.innerHTML = original;
+        });
 }
 
 function reindexFromMd(btn) {
@@ -1010,19 +1165,19 @@ function reindexFromMd(btn) {
     setRegistryBusy(true, '[REINDEX] 준비 중: ' + filename);
     btn.innerHTML = '<span class="spinner-border spinner-border-sm" style="width:.7rem;height:.7rem;"></span>';
 
-    // 1차 요청은 force 없이 — 서버가 펜스 사전 점검에서 문제를 찾으면 409로 목록을 돌려주고
+    // 1차 요청은 force 없이 — 서버가 사전 점검(펜스 문제·편집된 청크)에서 뭐라도 찾으면 409로 돌려주고
     // 아무 작업도 시작하지 않는다. 사용자가 "무시하고 진행"을 고르면 force=true 로 재요청.
     postReindex(docId, false)
         .then(res => {
             if (res.status === 409) {
                 return res.json().then(body => {
-                    if (!confirm(formatFenceProblems(body.problems || []))) {
+                    if (!confirm(formatReindexWarnings(body))) {
                         showToast('재인덱싱을 중지했습니다', 'info');
                         btn.innerHTML = icon;
                         setRegistryBusy(false, '');
                         return null;
                     }
-                    setRegistryBusy(true, '[REINDEX] 준비 중(펜스 문제 무시): ' + filename);
+                    setRegistryBusy(true, '[REINDEX] 준비 중(경고 무시): ' + filename);
                     return postReindex(docId, true).then(r => r.json());
                 });
             }

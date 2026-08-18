@@ -177,7 +177,21 @@
                                                           data-bs-trigger='hover focus',
                                                           data-bs-placement='top',
                                                           data-preview-md=${src.preview},
-                                                          data-chunk-id=${src.chunkId}"></a>
+                                                          data-chunk-id=${src.chunkId}"></a><!--
+                                          --><!-- 청크 변경 표시 — 배지 문구와 표시 여부 판단은
+                                               SourceRef.staleBadge()가 전부 갖고 있다(삭제는 항상,
+                                               수정은 응답 지분이 있는 출처만). 템플릿에 조건을 풀어
+                                               쓰면 스트리밍/HTMX 경로와 규칙이 갈라진다. -->
+                                          <span th:if="${src.staleBadge != null}"
+                                                class="badge ms-1"
+                                                style="font-size:0.62rem; vertical-align:middle;"
+                                                th:classappend="${src.staleStatus == 'deleted'}
+                                                    ? 'bg-danger-subtle text-danger-emphasis border border-danger-subtle'
+                                                    : 'bg-warning-subtle text-warning-emphasis border border-warning-subtle'"
+                                                th:text="${src.staleBadge}"
+                                                th:title="${src.staleStatus == 'deleted'}
+                                                    ? '이 답변을 만든 뒤 출처 청크가 삭제되었습니다. 내용이 현재 문서와 다를 수 있습니다.'
+                                                    : '이 답변을 만든 뒤 출처 청크가 수정되었습니다. 내용이 현재 문서와 다를 수 있습니다.'"></span>
                                           <!-- 저장해 둔 검색 진단 수치(3단계) 복원 — 표시 규칙은
                                                스트리밍/HTMX 경로와 동일: 유사도 우선, 없으면 축 표기.
                                                기본은 숨김이고 아래 스크립트가 토글에 따라 해제한다. -->
@@ -860,7 +874,7 @@
         }
         const seq = ++suggestSeq;
         const scope = 'shared';
-        const params = new URLSearchParams({ q, scope, limit: '8' });
+        const params = new URLSearchParams({ q, scope, limit: '12' });
         try {
             const res = await fetch('/api/v1/questions/suggest?' + params.toString(), {
                 headers: getCsrfHeaders()

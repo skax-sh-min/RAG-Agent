@@ -359,7 +359,7 @@ class AdminControllerWebMvcTest {
 
         mvc.perform(post("/admin/documents/doc1/reindex").with(user(ADMIN)).with(csrf()))
                 .andExpect(status().isConflict())
-                .andExpect(content().string(containsString("fence_problems")))
+                .andExpect(content().string(containsString("preflight_warnings")))
                 .andExpect(content().string(containsString("\"line\":12")))
                 .andExpect(content().string(containsString("\"line\":40")));
 
@@ -388,5 +388,41 @@ class AdminControllerWebMvcTest {
         mvc.perform(post("/admin/documents/doc1/reindex").with(user(ADMIN)).with(csrf()))
                 .andExpect(status().isAccepted())
                 .andExpect(content().string(containsString("task-2")));
+    }
+
+    // ── 문서 재인덱싱 — 편집된 청크 사전 경고 (A안) ─────────────────────────────
+
+    /** 재인덱싱은 MD 파일로 청크를 다시 만들므로 /admin에서 손으로 고친 청크는 사라진다.
+     *  펜스가 멀쩡해도 이 사실만으로 사전 확인을 띄워야 한다. */
+    @Test
+    @DisplayName("POST /admin/documents/{docId}/reindex — 편집된 청크가 있으면 펜스가 멀쩡해도 409, 작업은 시작하지 않는다")
+    void reindexFromMd_editedChunks_returns409() throws Exception {
+        when(ragService.checkReindexFenceHealth("doc1")).thenReturn(List.of());
+        when(ragService.findDocument(anyString(), eq("doc1"))).thenReturn(Optional.of(
+                new com.example.ragagent.model.DocumentInfo(
+                        "doc1", "a.md", "latest", 3, "2026-01-01T00:00:00Z", "sha", List.of(), List.of())));
+        when(adminService.collectionFor("latest")).thenReturn("manual_latest");
+        when(adminService.countEditedChunks("manual_latest", "doc1")).thenReturn(2L);
+
+        mvc.perform(post("/admin/documents/doc1/reindex").with(user(ADMIN)).with(csrf()))
+                .andExpect(status().isConflict())
+                .andExpect(content().string(containsString("preflight_warnings")))
+                .andExpect(content().string(containsString("\"editedChunks\":2")));
+
+        verifyNoInteractions(progressService);
+    }
+
+    /** 레지스트리에 없는 문서는 재인덱싱 호출 자체가 실패로 보고할 일이지,
+     *  사전 점검이 헷갈리는 경고로 바꿀 일이 아니다. */
+    @Test
+    @DisplayName("POST /admin/documents/{docId}/reindex — 레지스트리에 없는 문서는 편집 경고 없이 진행한다(202)")
+    void reindexFromMd_unknownDocument_noEditedWarning() throws Exception {
+        when(ragService.checkReindexFenceHealth("ghost")).thenReturn(List.of());
+        when(ragService.findDocument(anyString(), eq("ghost"))).thenReturn(Optional.empty());
+        when(progressService.newTaskId()).thenReturn("task-3");
+
+        mvc.perform(post("/admin/documents/ghost/reindex").with(user(ADMIN)).with(csrf()))
+                .andExpect(status().isAccepted())
+                .andExpect(content().string(containsString("task-3")));
     }
 }

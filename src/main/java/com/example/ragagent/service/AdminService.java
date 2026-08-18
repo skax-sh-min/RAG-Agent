@@ -28,6 +28,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
 import java.nio.file.Path;
+import java.time.Instant;
 import java.util.*;
 
 /**
@@ -56,6 +57,7 @@ public class AdminService {
     private final KeywordSearchRepository keywordRepo;
     private final KeywordExtractor keywordExtractor;
     private final QuestionReuseService questionReuseService;
+    private final DocRegistry docRegistry;
 
     // shown on /admin to disambiguate operational vs vector DB files. Field-injected
     // (not constructor) so unit tests that build AdminService directly stay unaffected (null → hidden).
@@ -70,7 +72,8 @@ public class AdminService {
                         AppProperties props, ObjectMapper objectMapper,
                         VectorStoreFacade vectorStore, KeywordSearchRepository keywordRepo,
                         KeywordExtractor keywordExtractor,
-                        QuestionReuseService questionReuseService) {
+                        QuestionReuseService questionReuseService,
+                        DocRegistry docRegistry) {
         this.chromaApi = chromaApi.orElse(null);
         this.jdbc = jdbc;
         this.props = props;
@@ -79,6 +82,7 @@ public class AdminService {
         this.keywordRepo = keywordRepo;
         this.keywordExtractor = keywordExtractor;
         this.questionReuseService = questionReuseService;
+        this.docRegistry = docRegistry;
     }
 
     // Backward-compatible constructor for unit tests.
@@ -86,7 +90,7 @@ public class AdminService {
                         AppProperties props, ObjectMapper objectMapper,
                         VectorStoreFacade vectorStore, KeywordSearchRepository keywordRepo,
                         KeywordExtractor keywordExtractor) {
-        this(chromaApi, jdbc, props, objectMapper, vectorStore, keywordRepo, keywordExtractor, null);
+        this(chromaApi, jdbc, props, objectMapper, vectorStore, keywordRepo, keywordExtractor, null, null);
     }
 
     /** Active backend is sqlite-vec? Null-safe so unit tests with mocked props don't NPE. */
@@ -259,6 +263,31 @@ public class AdminService {
         return all.size();
     }
 
+    /**
+     * How many of a document's chunks carry a {@link MetaKey#EDITED_AT} stamp, i.e. were hand-edited
+     * in {@code /admin} and would be discarded by a document-level re-index (which rebuilds chunks
+     * from the saved MD file — the edit never went back into that file).
+     *
+     * <p>Deliberately goes through {@link #getChunks}: one code path for both backends, and it runs
+     * only on the re-index pre-flight (a single click), never on a page render. Metadata edits
+     * (keywords/context) count too — they are lost by the same re-index for the same reason.
+     */
+    public long countEditedChunks(String collectionName, String docId) {
+        return getChunks(collectionName, docId, 0, CHUNK_FETCH_CAP).stream()
+                .filter(r -> !r.metadata().getOrDefault(MetaKey.EDITED_AT, "").isBlank())
+                .count();
+    }
+
+    /**
+     * Vector-store identifier for a document version: the version itself on sqlite-vec (the vec0
+     * partition key), {@code manual_<version>} on Chroma (the collection name). The UI passes this
+     * value around as "collection" on both backends.
+     */
+    public String collectionFor(String version) {
+        String v = (version == null || version.isBlank()) ? "latest" : version.strip();
+        return isSqliteVec() ? v : "manual_" + v;
+    }
+
     public ChunkRow getChunk(String collectionName, String chunkId) {
         if (isSqliteVec()) return sqliteVecChunk(chunkId);
         if (chromaApi == null) return null;
@@ -279,20 +308,132 @@ public class AdminService {
         }
     }
 
-    public void deleteChunk(String collectionName, String chunkId) {
+    /**
+     * Deletes one chunk from the vector store, the FTS index, and — via
+     * {@link #forgetChunkInRegistry} — the owning document's {@code doc_registry} row.
+     *
+     * <p>The registry part matters because the document list's chunk count is read from that row,
+     * not counted live: without it a deleted chunk kept being reported for the life of the document
+     * (until the next full re-index rewrote the row).
+     */
+    public DeleteResult deleteChunk(String collectionName, String chunkId) {
+        // Read the owning document BEFORE deleting — afterwards the metadata carrying it is gone.
+        ChunkRow row = getChunk(collectionName, chunkId);
+        String docId = row == null ? null : row.docId();
+
         if (isSqliteVec()) {
             // Two-table consistency: drop the chunk from both the metadata table and the vec0 store.
             jdbc.update("DELETE FROM vec_document_chunks WHERE spring_doc_id = ?", chunkId);
             jdbc.update("DELETE FROM vec_embeddings WHERE spring_doc_id = ?", chunkId);
             keywordRepo.deleteBySpringDocIds(List.of(chunkId));
             if (questionReuseService != null) questionReuseService.markChunkDeleted(chunkId);
-            return;
+            return new DeleteResult(docId, forgetChunkInRegistry(docId, chunkId));
         }
-        if (chromaApi == null) { log.warn("deleteChunk ignored — no ChromaApi"); return; }
+        if (chromaApi == null) {
+            log.warn("deleteChunk ignored — no ChromaApi");
+            return new DeleteResult(docId, null);
+        }
         chromaApi.deleteEmbeddings(TENANT, DATABASE, collectionName,
                 new DeleteEmbeddingsRequest(List.of(chunkId)));
         keywordRepo.deleteBySpringDocIds(List.of(chunkId));
         if (questionReuseService != null) questionReuseService.markChunkDeleted(chunkId);
+        return new DeleteResult(docId, forgetChunkInRegistry(docId, chunkId));
+    }
+
+    // ── 레지스트리 청크 수 재계산 ─────────────────────────────────────────────
+
+    /** @param checked 대조한 문서 수, @param fixed 실제로 고쳐 쓴 문서 수 */
+    public record ReconcileResult(int checked, int fixed) {}
+
+    /**
+     * Rewrites every document's stored chunk count / {@code spring_doc_ids} from what the vector
+     * store actually holds right now, repairing rows that drifted before {@link #deleteChunk}
+     * started maintaining them.
+     *
+     * <p>Deliberately operator-triggered rather than a startup backfill: on the Chroma backend the
+     * only way to enumerate a document's chunks is to fetch them, which is far too much work to
+     * repeat on every boot for a one-off repair — and with delete now keeping the row in sync,
+     * fresh drift no longer accumulates.
+     *
+     * <p>A document whose live chunk list comes back empty while the row claims chunks is skipped,
+     * not zeroed: "every chunk was deleted" and "the store did not answer" look identical here, and
+     * only one of them is safe to write.
+     */
+    public ReconcileResult reconcileChunkCounts() {
+        if (docRegistry == null) return new ReconcileResult(0, 0);
+        int checked = 0, fixed = 0;
+        for (Map.Entry<String, DocRegistry.DocRegistryEntry> e : docRegistry.entries(DocRegistry.SHARED)) {
+            String docId = e.getKey();
+            DocRegistry.DocRegistryEntry entry = e.getValue();
+            checked++;
+            List<String> live;
+            try {
+                live = liveChunkIds(collectionFor(entry.version()), docId);
+            } catch (Exception ex) {
+                log.warn("[REGISTRY] 청크 수 재계산 건너뜀 docId={}: {}", docId, ex.getMessage());
+                continue;
+            }
+            if (live.isEmpty() && entry.chunks() > 0) {
+                log.warn("[REGISTRY] 청크 수 재계산 건너뜀 docId={}: 벡터 스토어가 청크를 하나도 돌려주지 않음 "
+                        + "(전부 삭제된 문서인지 스토어 응답 문제인지 구분할 수 없음)", docId);
+                continue;
+            }
+            List<String> stored = entry.springDocIds() == null ? List.of() : entry.springDocIds();
+            if (live.size() == entry.chunks() && new HashSet<>(live).equals(new HashSet<>(stored))) continue;
+
+            docRegistry.put(docId, DocRegistry.SHARED, new DocRegistry.DocRegistryEntry(
+                    entry.sha256(), entry.version(), entry.indexedAt(), live.size(), live,
+                    entry.errors(), entry.chunkOverlap(), entry.displayName()));
+            log.info("[REGISTRY] 청크 수 재계산: docId={}, {} -> {}", docId, entry.chunks(), live.size());
+            fixed++;
+        }
+        return new ReconcileResult(checked, fixed);
+    }
+
+    /** Chunk ids the store currently holds for one document. Metadata-only on Chroma (the chunk
+     *  text is irrelevant here and is the bulk of the payload). */
+    private List<String> liveChunkIds(String collectionName, String docId) {
+        if (isSqliteVec()) {
+            return jdbc.queryForList(
+                    "SELECT spring_doc_id FROM vec_document_chunks WHERE version = ? AND doc_id = ?",
+                    String.class, collectionName, docId);
+        }
+        if (chromaApi == null) throw new IllegalStateException("ChromaApi 없음");
+        GetEmbeddingsRequest req = new GetEmbeddingsRequest(
+                null, Map.of(MetaKey.DOC_ID, Map.of("$eq", docId)), CHUNK_FETCH_CAP, 0,
+                List.of(Include.METADATAS));
+        GetEmbeddingResponse resp = chromaApi.getEmbeddings(TENANT, DATABASE, resolveId(collectionName), req);
+        return (resp == null || resp.ids() == null) ? List.of() : resp.ids();
+    }
+
+    /** Outcome of {@link #deleteChunk}: which document lost a chunk and its new registry count
+     *  ({@code null} when the registry was not updated — unknown document, or a legacy row with no
+     *  recorded chunk ids), so the UI can refresh that number instead of reloading the page. */
+    public record DeleteResult(String docId, Integer remainingChunks) {}
+
+    /**
+     * Drops {@code chunkId} from its document's registry row so the stored chunk count and
+     * {@code spring_doc_ids} list keep matching what the vector store actually holds.
+     *
+     * <p>No-op unless the id is really in the list: that makes a repeated delete harmless and
+     * leaves legacy rows (indexed before ids were recorded) alone rather than zeroing their count
+     * from a list that was never populated. The new count is the surviving list's size rather than
+     * {@code chunks - 1}, so the two columns can only converge, never drift further apart.
+     */
+    private Integer forgetChunkInRegistry(String docId, String chunkId) {
+        if (docRegistry == null || docId == null || docId.isBlank()) return null;
+        var entry = docRegistry.findByDocId(docId, DocRegistry.SHARED);
+        if (entry.isEmpty()) return null;
+        var e = entry.get();
+        List<String> ids = e.springDocIds();
+        if (ids == null || !ids.contains(chunkId)) return null;
+        List<String> remaining = ids.stream().filter(id -> !chunkId.equals(id)).toList();
+        docRegistry.put(docId, DocRegistry.SHARED, new DocRegistry.DocRegistryEntry(
+                e.sha256(), e.version(), e.indexedAt(), remaining.size(), remaining,
+                e.errors(), e.chunkOverlap(), e.displayName()));
+        log.info("[ADMIN] 청크 삭제로 레지스트리 갱신: docId={}, 청크 {} -> {}",
+                docId, ids.size(), remaining.size());
+        return remaining.size();
     }
 
     private String resolveId(String collectionName) {
@@ -307,9 +448,19 @@ public class AdminService {
     /**
      * Metadata-only update: fetches the existing embedding and re-upserts
      * with new text/metadata while preserving the original vector.
+     *
+     * <p>Stamps {@link MetaKey#EDITED_AT} so a later document-level {@code ↺ 재인덱싱} — which
+     * rebuilds every chunk from the saved MD file and therefore discards this edit — can warn
+     * first ({@link #countEditedChunks}). The stamp is written only when {@code newMeta} is
+     * non-null, i.e. from the {@code /admin} edit panel, which always sends both fields; a
+     * text-only call would have no metadata map to put it in.
      */
     public void updateChunk(String collectionName, String chunkId,
                             String newText, Map<String, String> newMeta) {
+        if (newMeta != null) {
+            newMeta = new HashMap<>(newMeta);
+            newMeta.put(MetaKey.EDITED_AT, Instant.now().toString());
+        }
         if (isSqliteVec()) {
             // Metadata/text only — the stored vector (vec_embeddings) is intentionally preserved
             // (same caveat as the Chroma path: editing text does not re-embed).
@@ -320,6 +471,9 @@ public class AdminService {
             if (newMeta != null) {
                 jdbc.update("UPDATE vec_document_chunks SET metadata = ? WHERE spring_doc_id = ?",
                         toJson(newMeta), chunkId);
+            }
+            if (newText != null && questionReuseService != null) {
+                questionReuseService.invalidateChunk(chunkId);
             }
             return;
         }
@@ -353,6 +507,10 @@ public class AdminService {
                     new AddEmbeddingsRequest(chunkId, embedding, metaObj, text));
         } catch (Exception e) {
             log.error("updateChunk upsert failed id={}: {}", chunkId, e.getMessage());
+            return;
+        }
+        if (newText != null && questionReuseService != null) {
+            questionReuseService.invalidateChunk(chunkId);
         }
     }
 

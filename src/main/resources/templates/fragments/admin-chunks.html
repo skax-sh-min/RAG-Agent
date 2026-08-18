@@ -122,8 +122,10 @@
 
                 <!-- Actions -->
                 <td class="text-center">
+                    <!-- .chunk-edit-btn: 편집 오프캔버스의 이전/다음 이동(navigateChunk)이 이 클래스로
+                         행 순서를 읽는다 — 행당 정확히 하나여야 하므로 삭제 버튼에는 붙이지 않는다. -->
                     <button type="button"
-                            class="btn btn-sm btn-outline-secondary py-0 px-1 me-1"
+                            class="btn btn-sm btn-outline-secondary py-0 px-1 me-1 chunk-edit-btn"
                             style="font-size:0.7rem;"
                             th:data-chunk-id="${chunk.id()}"
                             th:data-collection="${collection}"

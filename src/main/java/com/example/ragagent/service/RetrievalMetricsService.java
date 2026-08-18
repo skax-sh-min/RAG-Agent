@@ -127,7 +127,9 @@ public class RetrievalMetricsService {
                         return m == null ? live : new SourceRef(
                                 live.label(), live.preview(), live.chunkId(), live.docId(),
                                 live.pageOrSlide(),
-                                m.similarity(), m.retrievalShare(), m.axisRanks(), m.answerShare());
+                                m.similarity(), m.retrievalShare(), m.axisRanks(), m.answerShare(),
+                                // 저장된 blob이 아니라 현재 DB 상태에서 온 값 — 병합으로 덮으면 안 된다.
+                                live.staleStatus());
                     })
                     .toList());
         }
