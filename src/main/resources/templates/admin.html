@@ -1075,13 +1075,42 @@ const FENCE_PROBLEMS_SHOWN = 10;
 
 function formatFenceProblems(problems) {
     const shown = problems.slice(0, FENCE_PROBLEMS_SHOWN)
-        .map(p => '  · ' + p.line + '행: ' + p.message).join('\n');
+        .map(p => '  · ' + p.line + '행: ' + p.message).join('
+');
     const rest = problems.length > FENCE_PROBLEMS_SHOWN
-        ? '\n  … 외 ' + (problems.length - FENCE_PROBLEMS_SHOWN) + '건' : '';
-    return '저장된 MD 파일에서 코드 블록(```) 문제 ' + problems.length + '건이 발견되었습니다.\n\n'
+        ? '
+  … 외 ' + (problems.length - FENCE_PROBLEMS_SHOWN) + '건' : '';
+    return '[MD 파일] 코드 블록(```) 문제 ' + problems.length + '건이 발견되었습니다.
+'
         + shown + rest
-        + '\n\n재인덱싱은 MD 파일을 교정하지 않으므로 이 상태 그대로 청크에 반영됩니다.'
-        + '\n\n[확인] 무시하고 진행   /   [취소] 중지';
+        + '
+  재인덱싱은 MD 파일을 교정하지 않으므로 이 상태 그대로 청크에 반영됩니다.';
+}
+
+// 손으로 고친 청크가 사라진다는 경고. 편집은 청크에만 남고 MD 파일에는 들어가지 않으므로,
+// MD에서 청크를 다시 만드는 재인덱싱은 그 편집을 되살릴 수 없다. 키워드/요약만 고친 경우도
+// 같은 이유로 사라지므로 함께 세서 경고한다.
+function formatEditedChunks(count) {
+    return '[편집] 이 문서에 직접 편집한 청크가 ' + count + '개 있습니다.
+'
+        + '  재인덱싱은 MD 파일로 청크를 다시 만들기 때문에 편집 내용(텍스트·키워드·요약)은 사라집니다.';
+}
+
+// 두 검사 결과를 한 번에 보여준다 — 서버가 한 응답에 둘 다 실어 보내므로, 연달아 두 번
+// 물으면 "확인 두 번 누르기"가 습관이 되어 경고가 무의미해진다.
+function formatReindexWarnings(body) {
+    const sections = [];
+    if (body.editedChunks > 0) sections.push(formatEditedChunks(body.editedChunks));
+    const problems = body.problems || [];
+    if (problems.length > 0) sections.push(formatFenceProblems(problems));
+    return '재인덱싱 전 확인해 주세요.
+
+' + sections.join('
+
+')
+        + '
+
+[확인] 무시하고 진행   /   [취소] 중지';
 }
 
 function reindexFromMd(btn) {
@@ -1093,19 +1122,19 @@ function reindexFromMd(btn) {
     setRegistryBusy(true, '[REINDEX] 준비 중: ' + filename);
     btn.innerHTML = '<span class="spinner-border spinner-border-sm" style="width:.7rem;height:.7rem;"></span>';
 
-    // 1차 요청은 force 없이 — 서버가 펜스 사전 점검에서 문제를 찾으면 409로 목록을 돌려주고
+    // 1차 요청은 force 없이 — 서버가 사전 점검(펜스 문제·편집된 청크)에서 뭐라도 찾으면 409로 돌려주고
     // 아무 작업도 시작하지 않는다. 사용자가 "무시하고 진행"을 고르면 force=true 로 재요청.
     postReindex(docId, false)
         .then(res => {
             if (res.status === 409) {
                 return res.json().then(body => {
-                    if (!confirm(formatFenceProblems(body.problems || []))) {
+                    if (!confirm(formatReindexWarnings(body))) {
                         showToast('재인덱싱을 중지했습니다', 'info');
                         btn.innerHTML = icon;
                         setRegistryBusy(false, '');
                         return null;
                     }
-                    setRegistryBusy(true, '[REINDEX] 준비 중(펜스 문제 무시): ' + filename);
+                    setRegistryBusy(true, '[REINDEX] 준비 중(경고 무시): ' + filename);
                     return postReindex(docId, true).then(r => r.json());
                 });
             }

@@ -28,6 +28,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
 import java.nio.file.Path;
+import java.time.Instant;
 import java.util.*;
 
 /**
@@ -259,6 +260,31 @@ public class AdminService {
         return all.size();
     }
 
+    /**
+     * How many of a document's chunks carry a {@link MetaKey#EDITED_AT} stamp, i.e. were hand-edited
+     * in {@code /admin} and would be discarded by a document-level re-index (which rebuilds chunks
+     * from the saved MD file — the edit never went back into that file).
+     *
+     * <p>Deliberately goes through {@link #getChunks}: one code path for both backends, and it runs
+     * only on the re-index pre-flight (a single click), never on a page render. Metadata edits
+     * (keywords/context) count too — they are lost by the same re-index for the same reason.
+     */
+    public long countEditedChunks(String collectionName, String docId) {
+        return getChunks(collectionName, docId, 0, CHUNK_FETCH_CAP).stream()
+                .filter(r -> !r.metadata().getOrDefault(MetaKey.EDITED_AT, "").isBlank())
+                .count();
+    }
+
+    /**
+     * Vector-store identifier for a document version: the version itself on sqlite-vec (the vec0
+     * partition key), {@code manual_<version>} on Chroma (the collection name). The UI passes this
+     * value around as "collection" on both backends.
+     */
+    public String collectionFor(String version) {
+        String v = (version == null || version.isBlank()) ? "latest" : version.strip();
+        return isSqliteVec() ? v : "manual_" + v;
+    }
+
     public ChunkRow getChunk(String collectionName, String chunkId) {
         if (isSqliteVec()) return sqliteVecChunk(chunkId);
         if (chromaApi == null) return null;
@@ -307,9 +333,19 @@ public class AdminService {
     /**
      * Metadata-only update: fetches the existing embedding and re-upserts
      * with new text/metadata while preserving the original vector.
+     *
+     * <p>Stamps {@link MetaKey#EDITED_AT} so a later document-level {@code ↺ 재인덱싱} — which
+     * rebuilds every chunk from the saved MD file and therefore discards this edit — can warn
+     * first ({@link #countEditedChunks}). The stamp is written only when {@code newMeta} is
+     * non-null, i.e. from the {@code /admin} edit panel, which always sends both fields; a
+     * text-only call would have no metadata map to put it in.
      */
     public void updateChunk(String collectionName, String chunkId,
                             String newText, Map<String, String> newMeta) {
+        if (newMeta != null) {
+            newMeta = new HashMap<>(newMeta);
+            newMeta.put(MetaKey.EDITED_AT, Instant.now().toString());
+        }
         if (isSqliteVec()) {
             // Metadata/text only — the stored vector (vec_embeddings) is intentionally preserved
             // (same caveat as the Chroma path: editing text does not re-embed).

@@ -2,6 +2,7 @@ package com.example.ragagent.controller;
 
 import com.example.ragagent.context.ThreadContext;
 import com.example.ragagent.model.IndexingProgressEvent;
+import com.example.ragagent.model.MetaKey;
 import com.example.ragagent.security.CurrentUser;
 import com.example.ragagent.service.AdminService;
 import com.example.ragagent.service.CuratedQaService;
@@ -306,26 +307,49 @@ public class AdminController {
      * terminal outcome are reported via the shared SSE endpoint (same one uploads/sync use):
      * {@code GET /ui/documents/progress/{taskId}}.
      *
-     * <p>Pre-flight: unless {@code force=true}, the saved MD is checked for code-fence defects first
-     * and a {@code 409} listing them (with line numbers) is returned <em>without starting any work</em>,
-     * so the operator can fix the MD, proceed anyway ({@code force=true}), or stop. This path never
-     * repairs fences itself — it does not re-run the rewriting correction passes (see
-     * {@code DocumentIndexer.postProcessIfNeeded}) — so a defect found here would otherwise be baked
-     * into the new chunks silently.
+     * <p>Pre-flight: unless {@code force=true}, two read-only checks run first and a {@code 409}
+     * describing what they found is returned <em>without starting any work</em>, so the operator can
+     * proceed anyway ({@code force=true}) or stop:
+     *
+     * <ol>
+     *   <li>code-fence defects in the saved MD (with line numbers). This path never repairs fences
+     *       itself — it does not re-run the rewriting correction passes (see
+     *       {@code DocumentIndexer.postProcessIfNeeded}) — so a defect found here would otherwise be
+     *       baked into the new chunks silently;</li>
+     *   <li>chunks hand-edited in {@code /admin} ({@link MetaKey#EDITED_AT}). Re-indexing rebuilds
+     *       every chunk from the MD file, which never received those edits, so they are about to be
+     *       discarded — this is the warning that makes that consequence visible before the fact
+     *       rather than after.</li>
+     * </ol>
+     *
+     * <p>Both are reported in one response: they are independent findings about the same click, and
+     * asking the operator twice in a row would train them to click through both.
      */
+    /** 0 when the document isn't in the registry — a missing document is the re-index call's own
+     *  error to report, not something the pre-flight should turn into a confusing warning. */
+    private long countEditedChunks(String userId, String docId) {
+        return ragService.findDocument(userId, docId)
+                .map(d -> adminService.countEditedChunks(adminService.collectionFor(d.version()), docId))
+                .orElse(0L);
+    }
+
     @PostMapping("/admin/documents/{docId}/reindex")
     @ResponseBody
     public ResponseEntity<Map<String, Object>> reindexFromMd(
+            ThreadContext ctx,
             @PathVariable String docId,
             @RequestParam(defaultValue = "false") boolean force) {
 
         if (!force) {
             var problems = ragService.checkReindexFenceHealth(docId);
-            if (!problems.isEmpty()) {
-                log.info("[REINDEX] 코드 펜스 문제 {}건으로 사전 확인 요청: docId={}", problems.size(), docId);
+            long editedChunks = countEditedChunks(ctx.userId(), docId);
+            if (!problems.isEmpty() || editedChunks > 0) {
+                log.info("[REINDEX] 사전 확인 요청: docId={}, 펜스 문제={}건, 편집된 청크={}개",
+                        docId, problems.size(), editedChunks);
                 return ResponseEntity.status(409).body(Map.of(
-                        "status", "fence_problems",
+                        "status", "preflight_warnings",
                         "docId", docId,
+                        "editedChunks", editedChunks,
                         "problems", problems.stream().map(p -> Map.of(
                                 "line", p.line(), "kind", p.kind(), "message", p.message())).toList()));
             }

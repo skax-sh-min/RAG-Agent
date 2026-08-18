@@ -106,6 +106,55 @@ class AdminServiceTest {
         assertThat(v.collectionCount()).isNull();
     }
 
+    // ── 편집 스탬프(MetaKey.EDITED_AT) — 재인덱싱 사전 경고의 근거 ─────────────
+
+    /** 편집 스탬프가 없으면 재인덱싱 경고가 셀 것이 없어져 A안 전체가 조용히 무력화된다. */
+    @Test
+    @DisplayName("updateChunk(sqlite-vec): 저장한 메타데이터에 edited_at 스탬프가 찍힌다")
+    void updateChunk_stampsEditedAt() {
+        JdbcTemplate jdbc = mock(JdbcTemplate.class);
+        AppProperties props = mock(AppProperties.class);
+        when(props.vectorStoreSafe()).thenReturn(new VectorStoreConfig("sqlite-vec"));
+
+        AdminService svc = new AdminService(Optional.empty(), jdbc, props, OM, mock(VectorStoreFacade.class), mock(KeywordSearchRepository.class), mock(KeywordExtractor.class));
+        svc.updateChunk("latest", "c1", "new text", Map.of(MetaKey.DOC_ID, "doc1"));
+
+        ArgumentCaptor<String> json = ArgumentCaptor.forClass(String.class);
+        verify(jdbc).update(eq("UPDATE vec_document_chunks SET metadata = ? WHERE spring_doc_id = ?"),
+                json.capture(), eq("c1"));
+        assertThat(json.getValue()).contains(MetaKey.EDITED_AT);
+    }
+
+    /** 호출자가 넘긴 맵은 불변(Map.of)일 수 있고, 남의 맵을 고쳐 놓아서도 안 된다. */
+    @Test
+    @DisplayName("updateChunk: 호출자가 넘긴 메타데이터 맵 자체는 변경하지 않는다")
+    void updateChunk_doesNotMutateCallerMap() {
+        AppProperties props = mock(AppProperties.class);
+        when(props.vectorStoreSafe()).thenReturn(new VectorStoreConfig("sqlite-vec"));
+        AdminService svc = new AdminService(Optional.empty(), mock(JdbcTemplate.class), props, OM, mock(VectorStoreFacade.class), mock(KeywordSearchRepository.class), mock(KeywordExtractor.class));
+
+        Map<String, String> caller = Map.of(MetaKey.DOC_ID, "doc1");
+        assertThatCode(() -> svc.updateChunk("latest", "c1", "t", caller)).doesNotThrowAnyException();
+        assertThat(caller).doesNotContainKey(MetaKey.EDITED_AT);
+    }
+
+    @Test
+    @DisplayName("collectionFor: sqlite-vec은 버전 그대로, chroma는 manual_ 접두어 (빈 값은 latest)")
+    void collectionFor_perBackend() {
+        AppProperties vec = mock(AppProperties.class);
+        when(vec.vectorStoreSafe()).thenReturn(new VectorStoreConfig("sqlite-vec"));
+        AdminService vecSvc = new AdminService(Optional.empty(), mock(JdbcTemplate.class), vec, OM, mock(VectorStoreFacade.class), mock(KeywordSearchRepository.class), mock(KeywordExtractor.class));
+
+        AppProperties chroma = mock(AppProperties.class);
+        when(chroma.vectorStoreSafe()).thenReturn(new VectorStoreConfig("chroma"));
+        AdminService chromaSvc = new AdminService(Optional.empty(), mock(JdbcTemplate.class), chroma, OM, mock(VectorStoreFacade.class), mock(KeywordSearchRepository.class), mock(KeywordExtractor.class));
+
+        assertThat(vecSvc.collectionFor("v2")).isEqualTo("v2");
+        assertThat(chromaSvc.collectionFor("v2")).isEqualTo("manual_v2");
+        assertThat(vecSvc.collectionFor(" ")).isEqualTo("latest");
+        assertThat(chromaSvc.collectionFor(null)).isEqualTo("manual_latest");
+    }
+
     @Test
     @DisplayName("vectorStoreView(chroma): 컬렉션 집계 재사용, 문서 수는 unknown(-1)")
     void vectorStoreView_chroma() {

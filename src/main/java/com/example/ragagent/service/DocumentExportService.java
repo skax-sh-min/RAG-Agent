@@ -176,10 +176,11 @@ public class DocumentExportService {
                 .orElseGet(props::chunkOverlapSafe);
     }
 
-    /** sqlite-vec identifies a "collection" by the version string; chroma uses {@code manual_<v>}. */
+    /** sqlite-vec identifies a "collection" by the version string; chroma uses {@code manual_<v>}.
+     *  Owned by {@code AdminService} — this service already reads chunks through it, so the two
+     *  must agree on the identifier by construction. */
     private String collectionOf(String version) {
-        String v = (version == null || version.isBlank()) ? "latest" : version.strip();
-        return "sqlite-vec".equals(props.vectorStoreSafe().type()) ? v : "manual_" + v;
+        return adminService.collectionFor(version);
     }
 
     /**
