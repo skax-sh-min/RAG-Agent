@@ -874,7 +874,7 @@
         }
         const seq = ++suggestSeq;
         const scope = 'shared';
-        const params = new URLSearchParams({ q, scope, limit: '8' });
+        const params = new URLSearchParams({ q, scope, limit: '12' });
         try {
             const res = await fetch('/api/v1/questions/suggest?' + params.toString(), {
                 headers: getCsrfHeaders()
