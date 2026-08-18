@@ -472,6 +472,9 @@ public class AdminService {
                 jdbc.update("UPDATE vec_document_chunks SET metadata = ? WHERE spring_doc_id = ?",
                         toJson(newMeta), chunkId);
             }
+            if (newText != null && questionReuseService != null) {
+                questionReuseService.invalidateChunk(chunkId);
+            }
             return;
         }
         if (chromaApi == null) { log.warn("updateChunk ignored — no ChromaApi"); return; }
@@ -504,6 +507,10 @@ public class AdminService {
                     new AddEmbeddingsRequest(chunkId, embedding, metaObj, text));
         } catch (Exception e) {
             log.error("updateChunk upsert failed id={}: {}", chunkId, e.getMessage());
+            return;
+        }
+        if (newText != null && questionReuseService != null) {
+            questionReuseService.invalidateChunk(chunkId);
         }
     }
 

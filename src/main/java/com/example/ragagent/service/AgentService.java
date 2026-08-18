@@ -104,7 +104,8 @@ public class AgentService {
                         memoryService.saveTurnImageRefs(turnId, userId, request.threadId(), result.imageRefs());
             memoryService.saveRetrievalMetrics(turnId, result.sources());
             if (questionReuseService != null) {
-                questionReuseService.recordTurnSources(turnId, userId, request.threadId(), result.retrievedDocs());
+                questionReuseService.recordTurnSources(turnId, userId, request.threadId(),
+                        result.retrievedDocs(), result.sources());
             }
             summarizerService.precomputeAfterTurn(userId, request.threadId(), turnId, ctx.locale());
         }

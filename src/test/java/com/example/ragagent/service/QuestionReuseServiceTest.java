@@ -43,6 +43,51 @@ class QuestionReuseServiceTest {
     }
 
     @Test
+    @DisplayName("응답 참여도가 없는 청크가 바뀌어도 재사용은 막히지 않는다")
+    void validateTurn_ignoresNonContributingChunks() {
+        QuestionReuseRepository repo = mock(QuestionReuseRepository.class);
+        QuestionReuseService service = new QuestionReuseService(repo, mock(DocRegistry.class));
+
+        // c1만 답변에 지분이 있었고, c2는 검색만 되고 한 글자도 안 쓰였다.
+        when(repo.findAllSourceRefs(7L)).thenReturn(List.of(
+                new QuestionReuseRepository.SourceSnapshot("c1", "d1", "h1", 0.31, "active"),
+                new QuestionReuseRepository.SourceSnapshot("c2", "d1", "h2", 0.0, "inactive")));
+        // c2는 이미 수정되어 해시가 바뀌었지만 검증 대상이 아니다.
+        when(repo.currentChunkHashes(java.util.Set.of("c1"))).thenReturn(java.util.Map.of("c1", "h1"));
+
+        assertThat(service.validateTurn(7L).reusable()).isTrue();
+    }
+
+    @Test
+    @DisplayName("응답 참여도가 있는 청크가 바뀌면 재사용이 막힌다")
+    void validateTurn_blocksWhenContributingChunkChanged() {
+        QuestionReuseRepository repo = mock(QuestionReuseRepository.class);
+        QuestionReuseService service = new QuestionReuseService(repo, mock(DocRegistry.class));
+
+        when(repo.findAllSourceRefs(8L)).thenReturn(List.of(
+                new QuestionReuseRepository.SourceSnapshot("c1", "d1", "h1", 0.31, "active"),
+                new QuestionReuseRepository.SourceSnapshot("c2", "d1", "h2", 0.0, "active")));
+        when(repo.currentChunkHashes(java.util.Set.of("c1"))).thenReturn(java.util.Map.of("c1", "CHANGED"));
+
+        assertThat(service.validateTurn(8L).reusable()).isFalse();
+    }
+
+    @Test
+    @DisplayName("응답 참여도가 기록되지 않은 구 데이터는 예전처럼 전체 출처를 검증한다")
+    void validateTurn_legacyRowsFallBackToAllSources() {
+        QuestionReuseRepository repo = mock(QuestionReuseRepository.class);
+        QuestionReuseService service = new QuestionReuseService(repo, mock(DocRegistry.class));
+
+        when(repo.findAllSourceRefs(9L)).thenReturn(List.of(
+                new QuestionReuseRepository.SourceSnapshot("c1", "d1", "h1"),
+                new QuestionReuseRepository.SourceSnapshot("c2", "d1", "h2")));
+        when(repo.currentChunkHashes(java.util.Set.of("c1", "c2")))
+                .thenReturn(java.util.Map.of("c1", "h1", "c2", "CHANGED"));
+
+        assertThat(service.validateTurn(9L).reusable()).isFalse();
+    }
+
+    @Test
     @DisplayName("추천 목록은 질문 텍스트 중복을 제거한다")
     void suggest_deduplicatesQuestions() {
         QuestionReuseRepository repo = mock(QuestionReuseRepository.class);
@@ -55,6 +100,8 @@ class QuestionReuseServiceTest {
                         new QuestionReuseRepository.CandidateTurn(10L, "u1", "t3", "다른 질문", "a3", "2026-08-05 08:00:00")
                 ));
         when(repo.findSourceRefs(anyLong()))
+                .thenReturn(List.of(new QuestionReuseRepository.SourceSnapshot("c1", "d1", "h1")));
+        when(repo.findAllSourceRefs(anyLong()))
                 .thenReturn(List.of(new QuestionReuseRepository.SourceSnapshot("c1", "d1", "h1")));
         when(repo.currentChunkHashes(java.util.Set.of("c1")))
                 .thenReturn(java.util.Map.of("c1", "h1"));
@@ -82,6 +129,8 @@ class QuestionReuseServiceTest {
                 ));
         when(repo.findSourceRefs(anyLong()))
                 .thenReturn(List.of(new QuestionReuseRepository.SourceSnapshot("c1", "d1", "h1")));
+        when(repo.findAllSourceRefs(anyLong()))
+                .thenReturn(List.of(new QuestionReuseRepository.SourceSnapshot("c1", "d1", "h1")));
         when(repo.currentChunkHashes(java.util.Set.of("c1")))
                 .thenReturn(java.util.Map.of("c1", "h1"));
 
@@ -104,6 +153,8 @@ class QuestionReuseServiceTest {
                 ));
         when(repo.findSourceRefs(anyLong()))
                 .thenReturn(List.of(new QuestionReuseRepository.SourceSnapshot("c1", "d1", "h1")));
+        when(repo.findAllSourceRefs(anyLong()))
+                .thenReturn(List.of(new QuestionReuseRepository.SourceSnapshot("c1", "d1", "h1")));
         when(repo.currentChunkHashes(java.util.Set.of("c1")))
                 .thenReturn(java.util.Map.of("c1", "h1"));
 
@@ -124,6 +175,8 @@ class QuestionReuseServiceTest {
                 .thenReturn(new QuestionReuseRepository.CandidateTurn(
                         55L, "u1", "t9", "배포 절차", "원본 turn 답변", "2026-08-06 10:00:00"));
         when(repo.findSourceRefs(55L))
+                .thenReturn(List.of(new QuestionReuseRepository.SourceSnapshot("c1", "d1", "h1")));
+        when(repo.findAllSourceRefs(55L))
                 .thenReturn(List.of(new QuestionReuseRepository.SourceSnapshot("c1", "d1", "h1")));
         when(repo.currentChunkHashes(java.util.Set.of("c1")))
                 .thenReturn(java.util.Map.of("c1", "h1"));
