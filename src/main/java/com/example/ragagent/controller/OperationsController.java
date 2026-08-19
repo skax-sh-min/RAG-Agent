@@ -14,7 +14,9 @@ import com.example.ragagent.repository.LlmUsageRepository;
 import com.example.ragagent.repository.MemoryRepository;
 import com.example.ragagent.service.CuratedQaService;
 import com.example.ragagent.service.MemoryService;
+import com.example.ragagent.service.QuestionReuseService;
 import com.example.ragagent.service.ThreadMetaService;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Controller;
@@ -46,6 +48,8 @@ public class OperationsController {
     private final LlmRouter llmRouter;
     private final EmbeddingConcurrencyTracker embeddingConcurrencyTracker;
     private final BackgroundLlmConcurrencyTracker backgroundConcurrencyTracker;
+    /** ObjectProvider로 받는다 — ChatController와 같은 이유(이 빈이 없는 슬라이스 테스트 컨텍스트). */
+    private final QuestionReuseService questionReuseService;
 
     public OperationsController(ThreadMetaService threadMetaService,
                                 MemoryService memoryService,
@@ -56,7 +60,8 @@ public class OperationsController {
                                 CuratedQaService curatedQaService,
                                 LlmRouter llmRouter,
                                 EmbeddingConcurrencyTracker embeddingConcurrencyTracker,
-                                BackgroundLlmConcurrencyTracker backgroundConcurrencyTracker) {
+                                BackgroundLlmConcurrencyTracker backgroundConcurrencyTracker,
+                                ObjectProvider<QuestionReuseService> questionReuseService) {
         this.threadMetaService = threadMetaService;
         this.memoryService = memoryService;
         this.usageRepo = usageRepo;
@@ -67,6 +72,7 @@ public class OperationsController {
         this.llmRouter = llmRouter;
         this.embeddingConcurrencyTracker = embeddingConcurrencyTracker;
         this.backgroundConcurrencyTracker = backgroundConcurrencyTracker;
+        this.questionReuseService = questionReuseService.getIfAvailable();
     }
 
     // ── Page ──────────────────────────────────────────────────────────
@@ -204,6 +210,35 @@ public class OperationsController {
         }
         memoryService.excludeTurnImageRef(userId, threadId, turnId, imageRef);
         auditLogger.log("turn.image.exclude", threadId, Map.of("turnId", turnId, "imageRef", imageRef));
+        return ResponseEntity.noContent().build();
+    }
+
+    /**
+     * Hides one source chunk from a chat turn's 출처 목록 (owner-scoped, same shape as
+     * {@link #excludeTurnImage}).
+     *
+     * <p>표시 전용이다 — 이 답변이 그 청크를 근거로 만들어졌다는 사실은 그대로이므로 재사용 검증은
+     * 계속 그 청크를 본다({@code QuestionReuseRepository.hideSourceRef}). 사용자가 목록을 정리한
+     * 것과 "이 답변이 아직 유효한가"는 다른 질문이다.
+     */
+    @PatchMapping("/ui/threads/{threadId}/turns/{turnId}/sources/exclude")
+    @ResponseBody
+    public ResponseEntity<Void> excludeTurnSource(ThreadContext ctx, @PathVariable String threadId,
+                                                  @PathVariable long turnId, @RequestParam String chunkId) {
+        if (chunkId == null || chunkId.isBlank()) {
+            throw new IllegalArgumentException("chunkId is required");
+        }
+        if (questionReuseService == null) {
+            return ResponseEntity.notFound().build();
+        }
+        String userId = ctx.userId();
+        if (memoryService.getFeedback(userId, threadId, turnId).isEmpty()) {
+            return ResponseEntity.notFound().build();   // 없는 턴이거나 남의 턴
+        }
+        if (!questionReuseService.hideSourceForTurn(turnId, userId, threadId, chunkId)) {
+            return ResponseEntity.notFound().build();   // 그 턴의 출처가 아니거나 이미 숨김
+        }
+        auditLogger.log("turn.source.exclude", threadId, Map.of("turnId", turnId, "chunkId", chunkId));
         return ResponseEntity.noContent().build();
     }
 

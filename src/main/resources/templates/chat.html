@@ -169,7 +169,11 @@
                                           <!-- 배지와 그 수치는 .source-item 한 단위로 묶는다 —
                                                느슨한 inline 형제로 두면 줄바꿈이 배지와 수치 사이에서
                                                일어나 수치가 다음 배지 것처럼 읽힌다(chat-stream.js와 동일). -->
-                                          <span class="source-item" th:each="src : ${turnSourcesByTurnId[turn.id]}">
+                                          <!-- data-turn-id/data-answer-share: 원문 보기 모달의 "이 청크 제거"
+                                               버튼이 어느 턴의 어느 출처인지와 응답 참여도 0% 여부를
+                                               판단하는 키. 스트리밍 경로는 chat-stream.js가 같은 값을 심는다. -->
+                                          <span class="source-item" th:each="src : ${turnSourcesByTurnId[turn.id]}"
+                                                th:attr="data-turn-id=${turn.id},data-share=${src.answerShare}">
                                           <a href="#"
                                               class="source-ref badge bg-secondary text-decoration-none"
                                               th:text="${src.label}"
@@ -400,7 +404,13 @@
                 <div class="modal-header py-2">
                     <h6 class="modal-title small fw-semibold mb-0" id="chunk-fulltext-modal-title"
                         th:text="#{chat.chunk.title}">원문 보기</h6>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                    <!-- 응답 참여도가 0%인 출처에만 노출된다(스크립트가 d-none을 토글). 답변에
+                         쓰이지 않은 청크를 그 대화의 출처 목록에서 치우는 표시 전용 동작이라
+                         닫기 버튼 옆(왼쪽)에 두고, 문서/검색에는 영향이 없다. -->
+                    <button type="button" class="btn btn-sm btn-outline-danger ms-auto me-2 d-none"
+                            id="chunk-exclude-btn"
+                            th:text="#{chat.chunk.exclude}">현재 대화에서 이 청크 제거</button>
+                    <button type="button" class="btn-close m-0" data-bs-dismiss="modal" aria-label="Close"></button>
                 </div>
                 <div class="modal-body">
                     <div class="md-content" id="chunk-fulltext-modal-body"></div>
@@ -462,9 +472,30 @@
     const CHUNK_LOADING_TEXT  = /*[[#{chat.chunk.loading}]]*/ '불러오는 중...';
     const CHUNK_NOTFOUND_TEXT = /*[[#{chat.chunk.notfound}]]*/ '청크를 찾을 수 없습니다.';
     const CHUNK_ERROR_TEXT    = /*[[#{chat.chunk.error}]]*/ '불러오는 중 오류가 발생했습니다.';
+    const CHUNK_EXCLUDE_FAILED = /*[[#{chat.chunk.exclude.failed}]]*/ '청크 제거에 실패했습니다.';
+    const chunkExcludeBtn = document.getElementById('chunk-exclude-btn');
+    /* 모달이 지금 보여주는 출처가 어느 턴의 어느 청크인지 — 제거 버튼이 쓴다. */
+    let activeChunkContext = null;
 
-    function openChunkFullTextModal(chunkId, label) {
+    /* 응답 참여도 0% 판정. AnswerAttribution은 답변에 기여하지 않은 청크에 0.0이 아니라 값을
+       아예 넣지 않으므로(§ SourceRef.answerShare), "값 없음"이 곧 0%다. 참여도 계산 자체가
+       실패한 턴에서는 모든 출처가 여기 걸리는데, 그 턴은 실제로 어느 청크가 답변을 떠받쳤는지
+       알 수 없으므로 사용자 판단에 맡기는 편이 맞다(제거는 표시 전용이라 되돌릴 수 있다). */
+    function hasNoAnswerShare(el) {
+        const raw = el && el.dataset ? el.dataset.share : undefined;
+        if (raw === undefined || raw === '' || raw === 'null') return true;
+        const share = parseFloat(raw);
+        return !(share > 0) || Math.round(share * 100) === 0;
+    }
+
+    function openChunkFullTextModal(chunkId, label, item) {
         if (!chunkFullTextModal || !chunkFullTextModalBody) return;
+        const turnId = item && item.dataset ? (item.dataset.turnId || '') : '';
+        /* 버튼은 "제거 대상을 특정할 수 있고" + "참여도 0%"일 때만. 스트리밍 중인 턴은 done
+           이벤트로 turnId가 심어지기 전까지 turnId가 없어 자연히 숨겨진다. */
+        const removable = !!(turnId && chunkId && hasNoAnswerShare(item));
+        activeChunkContext = removable ? { turnId, chunkId, item } : null;
+        if (chunkExcludeBtn) chunkExcludeBtn.classList.toggle('d-none', !removable);
         chunkFullTextModalTitle.textContent = label || CHUNK_TITLE_DEFAULT;
         chunkFullTextModalBody.innerHTML = `<div class="text-muted small">${CHUNK_LOADING_TEXT}</div>`;
         chunkFullTextModal.show();
@@ -484,8 +515,41 @@
         const chunkId = badge.dataset.chunkId;
         if (!chunkId) return;
         e.preventDefault();
-        openChunkFullTextModal(chunkId, badge.textContent);
+        openChunkFullTextModal(chunkId, badge.textContent, badge.closest('.source-item'));
     });
+
+    /* 현재 대화에서 이 청크 제거 — 표시 전용(서버도 turn_source_ref.hidden_at만 세운다).
+       문서/벡터 스토어는 그대로이고, 이 답변의 재사용 검증도 계속 이 청크를 본다. */
+    async function excludeActiveChunk() {
+        if (!activeChunkContext) return;
+        const { turnId, chunkId, item } = activeChunkContext;
+        const threadId = chatForm.querySelector('input[name="threadId"]').value;
+        const res = await fetch(
+            `/ui/threads/${encodeURIComponent(threadId)}/turns/${encodeURIComponent(turnId)}/sources/exclude`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded', ...getCsrfHeaders() },
+                body: new URLSearchParams({ chunkId })
+            });
+        if (!res.ok) throw new Error('exclude failed');
+        /* 같은 청크가 같은 턴에 두 번 그려지는 일은 없지만, 배지를 지우는 기준은 서버 WHERE와
+           같게 (turnId, chunkId) 쌍으로 둔다 — 다른 턴의 같은 청크는 남아야 한다. */
+        document.querySelectorAll('.source-item').forEach(el => {
+            if ((el.dataset.turnId || '') === String(turnId)
+                && el.querySelector(`.source-ref[data-chunk-id="${CSS.escape(chunkId)}"]`)) {
+                el.remove();
+            }
+        });
+        activeChunkContext = null;
+        chunkFullTextModal.hide();
+    }
+
+    if (chunkExcludeBtn) {
+        chunkExcludeBtn.addEventListener('click', function () {
+            excludeActiveChunk().catch(() => {
+                if (typeof showToast === 'function') showToast(CHUNK_EXCLUDE_FAILED, 'warning');
+            });
+        });
+    }
 
     /* RAG ↔ Direct LLM 토글 */
     const labelRag    = /*[[#{chat.direct.label.rag}]]*/ 'RAG';

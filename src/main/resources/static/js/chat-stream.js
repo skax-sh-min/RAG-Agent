@@ -549,6 +549,10 @@
         if (data.turnId) {
             document.querySelectorAll(`#stream-images-${bubbleId} .chat-image-thumb`)
                 .forEach(el => { el.dataset.turnId = String(data.turnId); });
+            /* 출처 배지에도 같은 턴 id를 심는다 — 원문 보기 모달의 "현재 대화에서 이 청크 제거"가
+               어느 턴의 출처인지 알아야 하고, 그 값은 지금(턴 저장 후)에야 존재한다. */
+            document.querySelectorAll(`#stream-sources-${bubbleId} .source-item`)
+                .forEach(el => { el.dataset.turnId = String(data.turnId); });
         }
     }
 
