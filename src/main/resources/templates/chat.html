@@ -404,13 +404,22 @@
                 <div class="modal-header py-2">
                     <h6 class="modal-title small fw-semibold mb-0" id="chunk-fulltext-modal-title"
                         th:text="#{chat.chunk.title}">원문 보기</h6>
-                    <!-- 응답 참여도가 0%인 출처에만 노출된다(스크립트가 d-none을 토글). 답변에
-                         쓰이지 않은 청크를 그 대화의 출처 목록에서 치우는 표시 전용 동작이라
-                         닫기 버튼 옆(왼쪽)에 두고, 문서/검색에는 영향이 없다. -->
-                    <button type="button" class="btn btn-sm btn-outline-danger ms-auto me-2 d-none"
-                            id="chunk-exclude-btn"
-                            th:text="#{chat.chunk.exclude}">현재 대화에서 이 청크 제거</button>
-                    <button type="button" class="btn-close m-0" data-bs-dismiss="modal" aria-label="Close"></button>
+                    <!-- 두 버튼을 래퍼로 묶어 래퍼에만 ms-auto를 건다. .modal-header에는
+                         justify-content가 없고, X가 오른쪽 끝에 붙는 것은 순전히 Bootstrap의
+                         `.modal-header .btn-close { margin-left: auto }` 덕분이다 — 그래서
+                         btn-close의 여백은 손대면 안 된다(m-0으로 지웠더니 제거 버튼이 숨겨진
+                         경우 X가 제목 바로 옆으로 딸려 왔다). 래퍼는 내용 너비라 그 안의
+                         auto 여백은 남는 공간이 없어 무해하고, X를 헤더 패딩 안쪽으로 당기는
+                         음수 여백은 그대로 살아 있다. -->
+                    <div class="d-flex align-items-center gap-2 ms-auto">
+                        <!-- 응답 참여도가 0%인 출처에만 노출된다(스크립트가 d-none을 토글). 답변에
+                             쓰이지 않은 청크를 그 대화의 출처 목록에서 치우는 표시 전용 동작이라
+                             닫기 버튼 옆(왼쪽)에 두고, 문서/검색에는 영향이 없다. -->
+                        <button type="button" class="btn btn-sm btn-outline-danger d-none"
+                                id="chunk-exclude-btn"
+                                th:text="#{chat.chunk.exclude}">현재 대화에서 이 청크 제거</button>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                    </div>
                 </div>
                 <div class="modal-body">
                     <div class="md-content" id="chunk-fulltext-modal-body"></div>
