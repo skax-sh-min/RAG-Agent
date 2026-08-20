@@ -75,6 +75,7 @@ src/main/resources/
 | PATCH | `/ui/threads/{threadId}/title` | `fragments/thread-item` | 대화 제목 수정 |
 | PATCH | `/ui/threads/{threadId}/routing-mode` | `204` | 대화별 라우팅 모드 저장 |
 | DELETE | `/ui/threads/{threadId}` | `200` | 대화 삭제 |
+| DELETE | `/ui/threads/{threadId}/turns/{turnId}` | `204` | 턴 하나(질문+답변) 삭제 — 싫어요 직후 확인 대화상자에서만 호출된다(§ 피드백). 소유권은 피드백 엔드포인트와 같은 `getFeedback(userId, threadId, turnId)` 스코핑이라 남의 턴·없는 턴 모두 `404` |
 | GET | `/ui/threads` | `fragments/thread-list` | 대화 목록 새로고침 |
 
 ### 3.2 문서 관리 (DocumentController)
@@ -441,6 +442,13 @@ done 이벤트    (답변 완료 후)   → attribution {chunkId: 0.0~1.0} → �
 |------|--------|----------|
 | 좋아요 | 👍 클릭(재클릭 시 취소) | `PATCH /ui/threads/{id}/turns/{turnId}/feedback` → 즉시 큐레이션 스냅샷 생성 + 3초 후 배경 임베딩 |
 | 싫어요 | 👎 클릭 | 동일 엔드포인트 — 다음 대화 컨텍스트에서 해당 turn 제외(§6.8). **세 경로 모두에서 빠진다**: 원본 폴백(`getHistory()`의 SQL `feedback <> 'DISLIKE'`), 요약(`dedupeTurns()`), 그리고 요약 경로가 덧붙이는 `[Recent]` 원문 구간. 마지막 것은 `buildContext()`가 `getRecentTurns()`를 그대로 쓰다가 누락됐던 자리 — 그 SQL에는 feedback 조건이 없어서, 싫어요 답변이 요약에서만 빠지고 원문으로는 다시 들어갔다 |
+
+**싫어요를 누르면 삭제 여부를 묻는다.** 피드백은 먼저 저장되고, 그 직후 `confirm.delete.turn`("이 질문과 답변을 대화에서 삭제할까요?") 확인 대화상자가 뜬다 — 여기서 취소해도 싫어요는 그대로 남는다(그 턴은 이미 컨텍스트에서 빠진 상태이고, 삭제는 그보다 강한 선택지일 뿐이다). '예'면 `DELETE /ui/threads/{threadId}/turns/{turnId}`를 호출하고 질문·답변 버블 한 쌍을 DOM에서 걷어낸다.
+
+- **묻는 시점은 `NONE → DISLIKE` 전이뿐이다.** 싫어요를 다시 눌러 해제하거나(`DISLIKE → NONE`) 좋아요를 누를 때는 묻지 않는다.
+- 삭제 범위는 **그 턴 하나**다(대화 전체가 아니다 — 사이드바 휴지통의 `confirm.delete.thread`와 구분할 것). `conversation_turns` + `turn_source_ref` + `turn_image_ref`에서 그 `turn_id`만 지우며, 이는 `clearHistory()`가 스레드 단위로 지우는 것과 같은 테이블 집합이다.
+- 그 턴을 재사용한 **다른 턴의 `reused_from_turn_id`는 일부러 그대로 둔다.** 그 컬럼을 읽는 모든 SQL이 LEFT JOIN + `"참조 원문 삭제됨"` 폴백이라 이미 사라진 원본을 견디게 되어 있다.
+- DOM 제거는 피드백 컨트롤에서 `#chat-messages`의 **직계 자식**까지 거슬러 올라가 답변 행을 찾고 그 앞 형제를 질문 행으로 삼는다 — 서버 복원·스트리밍 두 경로가 모두 '질문 행 다음 답변 행'을 직계 자식으로 붙이기 때문에 이 규칙 하나로 양쪽이 처리된다. 제거 후에는 질문 내비게이션의 `MutationObserver`가 목록을 자동으로 갱신한다.
 | 큐레이션 답변 편집 | 좋아요 상태일 때만 노출되는 연필(✏) 아이콘 | `GET`/`PATCH /ui/threads/{id}/turns/{turnId}/curated` → 우측 오프캔버스에서 답변 텍스트 수정, 저장 시 자동 재임베딩 |
 
 - 편집 아이콘은 **본인이 좋아요한 turn에서만** 보인다 — 채팅창은 항상 본인 스레드만 렌더링하므로 별도 권한 UI 분기가 없다.

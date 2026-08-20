@@ -158,6 +158,39 @@ public class OperationsController {
     }
 
     /**
+     * Deletes one turn (question + answer) from a conversation — offered by the chat UI right after
+     * a 싫어요 (DISLIKE), which is the only place that asks for it.
+     *
+     * <p>DISLIKE on its own already hard-excludes the turn from future prompt context
+     * ({@code MemoryRepository.getHistory()}); this endpoint is the stronger, explicit follow-up for
+     * a user who wants the exchange gone from the transcript as well. Ownership is enforced the same
+     * way as the feedback endpoint above — {@code getFeedback(userId, threadId, turnId)} returns empty
+     * for any turn that is not this user's, so a 404 covers both "missing" and "not yours".
+     *
+     * <p>A turn that is still LIKE-promoted has its curated-Q&A entry retracted first, so deleting the
+     * turn can never leave an orphaned curated row contributing to search. In the chat flow that
+     * transition already happened when the DISLIKE was recorded; this covers every other caller.
+     */
+    @DeleteMapping("/ui/threads/{threadId}/turns/{turnId}")
+    @ResponseBody
+    public ResponseEntity<Void> deleteTurn(ThreadContext ctx, @PathVariable String threadId,
+                                           @PathVariable long turnId) {
+        String userId = ctx.userId();
+        var existing = memoryService.getFeedback(userId, threadId, turnId);
+        if (existing.isEmpty()) {
+            return ResponseEntity.notFound().build();
+        }
+        if ("LIKE".equals(existing.get().feedback())) {
+            curatedQaService.onUnlike(userId, threadId, turnId);
+        }
+        if (!memoryService.deleteTurn(userId, threadId, turnId)) {
+            return ResponseEntity.notFound().build();
+        }
+        auditLogger.log("turn.delete", threadId, Map.of("turnId", turnId));
+        return ResponseEntity.noContent().build();
+    }
+
+    /**
      * §10.10 step ④ — owner-only inline edit of a turn's curated-Q&A entry (chat window "편집").
      * Ownership check reuses the exact same {@code getFeedback(userId, threadId, turnId)} scoping
      * as the feedback endpoint above — a thread only ever contains the current user's own turns,

@@ -196,6 +196,27 @@ public class SqliteMemoryRepository implements MemoryRepository {
     }
 
     @Override
+    public boolean deleteTurn(String userId, String threadId, long turnId) {
+        // Same table set and the same order as clearHistory(), narrowed to one turn. The
+        // conversation_turns row goes last so a failure part-way through can only leave orphaned
+        // child rows (invisible to every read path, all of which start from conversation_turns),
+        // never a turn whose sources have silently vanished.
+        try {
+            jdbc.update("DELETE FROM turn_source_ref WHERE user_id = ? AND thread_id = ? AND turn_id = ?",
+                    userId, threadId, turnId);
+        } catch (Exception ignored) {
+            // turn_source_ref belongs to QuestionReuseRepository; in isolated tests it may not exist.
+        }
+        jdbc.update("DELETE FROM turn_image_ref WHERE user_id = ? AND thread_id = ? AND turn_id = ?",
+                userId, threadId, turnId);
+        int removed = jdbc.update(
+                "DELETE FROM conversation_turns WHERE user_id = ? AND thread_id = ? AND id = ?",
+                userId, threadId, turnId);
+        return removed > 0;
+    }
+
+
+    @Override
     public void saveTurnImageRefs(long turnId, String userId, String threadId, List<String> imageRefs) {
         if (turnId <= 0 || imageRefs == null || imageRefs.isEmpty()) return;
         List<String> rows = imageRefs.stream()

@@ -1280,6 +1280,30 @@
         delete el.dataset.md;
     });
 
+    /* ── 턴 삭제 (싫어요 직후 확인) ─────────────────────────────────────── */
+    /** 버블 한 쌍을 DOM에서 걷어낸다. 피드백 컨트롤에서 #chat-messages의 직계 자식까지
+        거슬러 올라가 어시스턴트 행을 찾고, 그 앞 형제가 질문 행이다 — 두 렌더 경로(서버 복원,
+        스트리밍)가 모두 '질문 행 다음 답변 행'을 직계 자식으로 붙이므로 이 규칙 하나로 충분하다. */
+    function removeTurnFromDom(controls) {
+        const chat = document.getElementById('chat-messages');
+        let assistantRow = controls;
+        while (assistantRow && assistantRow.parentElement !== chat) assistantRow = assistantRow.parentElement;
+        if (!assistantRow) return;
+        const userRow = assistantRow.previousElementSibling;
+        if (userRow && userRow.classList.contains('user-turn')) userRow.remove();
+        assistantRow.remove();
+    }
+
+    function deleteTurn(threadId, turnId, controls) {
+        fetch(`/ui/threads/${threadId}/turns/${turnId}`, { method: 'DELETE', headers: getCsrfHeaders() })
+            .then(function (r) {
+                if (!r.ok) { showToast(I18N.turnDeleteFailed, 'danger'); return; }
+                removeTurnFromDom(controls);
+                showToast(I18N.turnDeleted, 'success');
+            })
+            .catch(function () { showToast(I18N.turnDeleteFailed, 'danger'); });
+    }
+
     /* ── 응답 피드백 (좋아요/싫어요) — 서버 렌더/HTMX/스트리밍 버블 공통 위임 처리 ── */
     document.getElementById('chat-messages').addEventListener('click', function (e) {
         const btn = e.target.closest('.feedback-btn');
@@ -1312,6 +1336,12 @@
             // §10.10 — 편집 아이콘은 LIKE 상태일 때만 노출(승격 즉시 임베딩되므로 그 즉시부터 편집 가능).
             const editBtn = container.querySelector('.curated-edit-btn');
             if (editBtn) editBtn.style.display = (newValue === 'LIKE') ? '' : 'none';
+            // 싫어요로 '바뀐' 직후에만 삭제를 묻는다 — 해제 토글(NONE)이나 좋아요에는 묻지 않는다.
+            // 피드백은 이미 저장된 뒤이므로, 여기서 취소해도 싫어요는 그대로 남는다(그 턴은 §6.9에
+            // 따라 이후 프롬프트 컨텍스트에서 이미 제외된 상태). 삭제는 그보다 강한 선택지일 뿐이다.
+            if (newValue === 'DISLIKE' && confirm(I18N.deleteConfirmTurn)) {
+                deleteTurn(tId, turnId, container);
+            }
         }).catch(function () { showToast(I18N.requestFailed, 'danger'); });
     });
 

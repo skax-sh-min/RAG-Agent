@@ -98,6 +98,12 @@ public class MemoryService {
         repository.clearHistory(userId, threadId);
     }
 
+
+    /** Deletes one turn (question + answer) and its per-turn rows. See {@link MemoryRepository#deleteTurn}. */
+    public boolean deleteTurn(String userId, String threadId, long turnId) {
+        return repository.deleteTurn(userId, threadId, turnId);
+    }
+
     public void saveTurnImageRefs(long turnId, String userId, String threadId, List<String> imageRefs) {
         repository.saveTurnImageRefs(turnId, userId, threadId, imageRefs);
     }
