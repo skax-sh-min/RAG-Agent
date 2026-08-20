@@ -158,18 +158,19 @@ public class OperationsController {
     }
 
     /**
-     * Deletes one turn (question + answer) from a conversation — offered by the chat UI right after
-     * a 싫어요 (DISLIKE), which is the only place that asks for it.
+     * Deletes one turn (question + answer) from a conversation — offered by the chat UI when 싫어요
+     * is clicked, which is the only place that asks for it.
      *
-     * <p>DISLIKE on its own already hard-excludes the turn from future prompt context
-     * ({@code MemoryRepository.getHistory()}); this endpoint is the stronger, explicit follow-up for
-     * a user who wants the exchange gone from the transcript as well. Ownership is enforced the same
-     * way as the feedback endpoint above — {@code getFeedback(userId, threadId, turnId)} returns empty
-     * for any turn that is not this user's, so a 404 covers both "missing" and "not yours".
+     * <p>The UI asks <em>before</em> recording the feedback, so deleting and disliking are exclusive:
+     * a plain DISLIKE hard-excludes the turn from future prompt context but keeps it in the
+     * transcript ({@code MemoryRepository.getHistory()}), while this endpoint removes the exchange
+     * outright and leaves no feedback to record. Ownership is enforced the same way as the feedback
+     * endpoint above — {@code getFeedback(userId, threadId, turnId)} returns empty for any turn that
+     * is not this user's, so a 404 covers both "missing" and "not yours".
      *
-     * <p>A turn that is still LIKE-promoted has its curated-Q&A entry retracted first, so deleting the
-     * turn can never leave an orphaned curated row contributing to search. In the chat flow that
-     * transition already happened when the DISLIKE was recorded; this covers every other caller.
+     * <p>Because the feedback is never written on this path, a turn that was LIKE-promoted arrives
+     * here <em>still</em> liked — the retraction below is the only thing standing between it and an
+     * orphaned curated-Q&A row that would keep contributing to search after the turn is gone.
      */
     @DeleteMapping("/ui/threads/{threadId}/turns/{turnId}")
     @ResponseBody

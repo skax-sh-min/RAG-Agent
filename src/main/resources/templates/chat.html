@@ -1319,6 +1319,17 @@
         const wasActive = btn.classList.contains(activeClass);
         const newValue = wasActive ? 'NONE' : clickedValue;
 
+        // 싫어요로 '바뀌는' 클릭에서만 삭제를 먼저 묻는다 — 해제 토글(NONE)이나 좋아요에는 묻지 않는다.
+        // 저장보다 확인이 앞서는 이유: 삭제를 고르면 그 턴 자체가 사라지므로 피드백을 남길 대상이
+        // 없다. 삭제하지 않을 때만 평소대로 DISLIKE를 저장한다(그 턴은 §6.9에 따라 이후 프롬프트
+        // 컨텍스트에서 빠진다) — 즉 '삭제'와 '맥락에서만 제외'가 서로 배타적인 두 선택지가 된다.
+        // 삭제가 실패하면 아무것도 저장하지 않고 실패 토스트만 띄운다. 사용자가 고른 것은 삭제이지
+        // 싫어요가 아니므로, 조용히 약한 쪽으로 바꿔 적용하지 않는다.
+        if (newValue === 'DISLIKE' && confirm(I18N.deleteConfirmTurn)) {
+            deleteTurn(tId, turnId, container);
+            return;
+        }
+
         fetch(`/ui/threads/${tId}/turns/${turnId}/feedback`, {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/x-www-form-urlencoded', ...getCsrfHeaders() },
@@ -1336,12 +1347,6 @@
             // §10.10 — 편집 아이콘은 LIKE 상태일 때만 노출(승격 즉시 임베딩되므로 그 즉시부터 편집 가능).
             const editBtn = container.querySelector('.curated-edit-btn');
             if (editBtn) editBtn.style.display = (newValue === 'LIKE') ? '' : 'none';
-            // 싫어요로 '바뀐' 직후에만 삭제를 묻는다 — 해제 토글(NONE)이나 좋아요에는 묻지 않는다.
-            // 피드백은 이미 저장된 뒤이므로, 여기서 취소해도 싫어요는 그대로 남는다(그 턴은 §6.9에
-            // 따라 이후 프롬프트 컨텍스트에서 이미 제외된 상태). 삭제는 그보다 강한 선택지일 뿐이다.
-            if (newValue === 'DISLIKE' && confirm(I18N.deleteConfirmTurn)) {
-                deleteTurn(tId, turnId, container);
-            }
         }).catch(function () { showToast(I18N.requestFailed, 'danger'); });
     });
 
