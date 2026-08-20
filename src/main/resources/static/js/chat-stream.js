@@ -117,7 +117,12 @@
     function appendUserBubble(question) {
         const timeStr = nowTimeStr();
         const wrap = document.createElement('div');
-        wrap.className = 'd-flex justify-content-end mb-3 align-items-end';
+        // .user-turn + data-question: chat.html's question navigation (the floating
+        // current-question bubble and the all-questions list) reads only this marker.
+        // The server-rendered turns in chat.html carry the same one — fix one path
+        // without the other and freshly sent questions drop out of the list.
+        wrap.className = 'd-flex justify-content-end mb-3 align-items-end user-turn';
+        wrap.dataset.question = question;
         wrap.innerHTML =
             `<div class="me-1">` +
             `<div class="bubble-user p-3">` +
