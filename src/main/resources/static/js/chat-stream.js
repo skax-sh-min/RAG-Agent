@@ -340,7 +340,9 @@
         if (items.length < 2) return;
         const num = (el, key) => {
             const v = el.dataset[key];
-            return v === undefined || v === '' ? null : parseFloat(v);
+            if (v === undefined || v === '' || v === 'null') return null;
+            const n = parseFloat(v);
+            return Number.isFinite(n) ? n : null;
         };
         items
             .map(el => ({ el, share: num(el, 'share'), similarity: num(el, 'similarity') }))
