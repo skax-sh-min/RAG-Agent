@@ -1295,7 +1295,7 @@
     }
 
     function deleteTurn(threadId, turnId, controls) {
-        fetch(`/ui/threads/${threadId}/turns/${turnId}`, { method: 'DELETE', headers: getCsrfHeaders() })
+        fetch(`/ui/threads/${encodeURIComponent(threadId)}/turns/${encodeURIComponent(turnId)}`, { method: 'DELETE', headers: getCsrfHeaders() })
             .then(function (r) {
                 if (!r.ok) { showToast(I18N.turnDeleteFailed, 'danger'); return; }
                 removeTurnFromDom(controls);
