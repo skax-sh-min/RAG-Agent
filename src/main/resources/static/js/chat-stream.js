@@ -226,25 +226,32 @@
             container.id = `stream-superseded-${bubbleId}`;
             contentEl.parentNode.insertBefore(container, contentEl);
         }
-        if (rawText.trim()) {
-            const details = document.createElement('details');
-            details.className = 'superseded-answer border rounded mb-2';
-            const summary = document.createElement('summary');
-            summary.className = 'small text-muted p-2';
-            // 사유가 있으면 접힌 상태에서도 보이게 요약줄에 붙인다 — 펼쳐야만 알 수 있으면
-            // "왜 실패했는지"를 확인할 수 있게 한 목적이 반쯤 사라진다.
-            summary.innerHTML =
-                `<span class="badge bg-warning text-dark me-1">미검증</span>` +
-                `<span aria-label="싫어요">👎</span> 검증 미통과 — 이전 답변 펼쳐보기` +
-                (data.detail ? `<div class="text-warning mt-1">사유: ${escHtml(data.detail)}</div>` : '');
-            const body = document.createElement('div');
-            body.className = 'md-content p-2 pt-0';
-            body.textContent = rawText;          // textContent → renderMarkdown sanitizes
-            renderMarkdown(body);
-            details.appendChild(summary);
-            details.appendChild(body);
-            container.appendChild(details);
-        }
+        // 한 글자도 스트리밍되지 않은 시도라도 블록은 남긴다 — 예전에는 여기서 조용히
+        // 건너뛰어 "재시도 안내만 있고 접힌 답변은 없는" 화면이 됐고, 그게 정상 동작인지
+        // 모델이 빈 응답을 낸 것인지 화면만으로는 구분할 수 없었다. 항상 재시도 횟수만큼
+        // 블록이 쌓이게 두고, 빈 시도는 그렇다고 표시한다.
+        const emptyAttempt = !rawText.trim();
+        const details = document.createElement('details');
+        details.className = 'superseded-answer border rounded mb-2';
+        const summary = document.createElement('summary');
+        summary.className = 'small text-muted p-2';
+        // 사유가 있으면 접힌 상태에서도 보이게 요약줄에 붙인다 — 펼쳐야만 알 수 있으면
+        // "왜 실패했는지"를 확인할 수 있게 한 목적이 반쯤 사라진다.
+        summary.innerHTML =
+            `<span class="badge bg-warning text-dark me-1">미검증</span>` +
+            `<span aria-label="싫어요">👎</span> ` +
+            (emptyAttempt
+                ? `검증 미통과 — 이전 시도는 빈 응답이었습니다`
+                : `검증 미통과 — 이전 답변 펼쳐보기`) +
+            (data.detail ? `<div class="text-warning mt-1">사유: ${escHtml(data.detail)}</div>` : '');
+        const body = document.createElement('div');
+        body.className = 'md-content p-2 pt-0';
+        // textContent → renderMarkdown sanitizes
+        body.textContent = emptyAttempt ? '(모델이 이 시도에서 아무 내용도 생성하지 않았습니다.)' : rawText;
+        renderMarkdown(body);
+        details.appendChild(summary);
+        details.appendChild(body);
+        container.appendChild(details);
 
         // Persistent retry notice (removed on done/abort).
         let notice = document.getElementById(`stream-retry-notice-${bubbleId}`);
@@ -260,7 +267,11 @@
             `<div class="d-flex align-items-center gap-1">` +
                 `<i class="bi bi-arrow-repeat"></i>` +
                 `<span>${escHtml(data.text || '검증 미통과 — 검색 범위를 넓혀 재시도 중...')}</span>` +
-            `</div>`;
+            `</div>` +
+            // 사유는 안내 바로 아래 줄에 둔다. 접힘 블록 요약에도 같은 값이 들어가지만,
+            // 블록은 '이전 시도'의 것이고 이 줄은 '지금 왜 다시 도는지'라 성격이 다르다.
+            // (ca68b6a에서 무관한 리팩토링에 휩쓸려 이 줄이 사라졌던 회귀를 복구)
+            (data.detail ? `<div class="ms-4">사유: ${escHtml(data.detail)}</div>` : '');
 
         // Clear the live area for the fresh attempt.
         contentEl.textContent = '';
