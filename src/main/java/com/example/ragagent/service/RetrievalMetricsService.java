@@ -121,7 +121,9 @@ public class RetrievalMetricsService {
             for (SourceRef s : stored) {
                 if (s.chunkId() != null) byChunkId.put(s.chunkId(), s);
             }
-            out.put(entry.getKey(), entry.getValue().stream()
+            // 병합으로 참여도/유사도가 채워진 '뒤에' 표시 순서를 잡는다 — 넘어온 목록은
+            // turn_source_ref 행 순서라 두 값을 모르는 상태이고, 정렬 키가 여기서 생긴다.
+            out.put(entry.getKey(), SourceRef.sortedForDisplay(entry.getValue().stream()
                     .map(live -> {
                         SourceRef m = live.chunkId() == null ? null : byChunkId.get(live.chunkId());
                         return m == null ? live : new SourceRef(
@@ -131,7 +133,7 @@ public class RetrievalMetricsService {
                                 // 저장된 blob이 아니라 현재 DB 상태에서 온 값 — 병합으로 덮으면 안 된다.
                                 live.staleStatus());
                     })
-                    .toList());
+                    .toList()));
         }
         return out;
     }

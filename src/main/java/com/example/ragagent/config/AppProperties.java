@@ -35,7 +35,7 @@ public record AppProperties(
         SummaryConfig summary,
         Integer searchTagCandidateMultiplier,  // 태그 선택 시 후보확대 배수 (기본 2)
         Integer sseIdleTimeoutSeconds,          // SSE 무활동(토큰/노드 이벤트 없음) 감시 타임아웃 (기본 120초)
-        Double searchRrfKeywordWeight,          // 가중 RRF — 키워드(BM25) 축 가중치 (기본 1.0, 벡터축은 그룹 정규화되어 자동으로 1.0과 동등 비중)
+        Double searchRrfKeywordWeight,          // 가중 RRF — 키워드(BM25) 축 가중치 (기본 0.5; 벡터축은 그룹 정규화되어 1.0이 동등 비중이므로 BM25를 절반으로 낮춘 값)
         Integer searchRrfK,                     // 가중 RRF — RRF 상수 k (기본 60, 원논문 표준값)
         Boolean searchQueryEmbedCacheEnabled,   // 쿼리 임베딩 캐시 on/off (기본 true)
         Integer searchQueryEmbedCacheMaxSize,   // 쿼리 임베딩 캐시 최대 엔트리 수 (기본 500)

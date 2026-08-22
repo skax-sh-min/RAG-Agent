@@ -117,7 +117,12 @@
     function appendUserBubble(question) {
         const timeStr = nowTimeStr();
         const wrap = document.createElement('div');
-        wrap.className = 'd-flex justify-content-end mb-3 align-items-end';
+        // .user-turn + data-question: chat.html's question navigation (the floating
+        // current-question bubble and the all-questions list) reads only this marker.
+        // The server-rendered turns in chat.html carry the same one — fix one path
+        // without the other and freshly sent questions drop out of the list.
+        wrap.className = 'd-flex justify-content-end mb-3 align-items-end user-turn';
+        wrap.dataset.question = question;
         wrap.innerHTML =
             `<div class="me-1">` +
             `<div class="bubble-user p-3">` +
@@ -221,25 +226,32 @@
             container.id = `stream-superseded-${bubbleId}`;
             contentEl.parentNode.insertBefore(container, contentEl);
         }
-        if (rawText.trim()) {
-            const details = document.createElement('details');
-            details.className = 'superseded-answer border rounded mb-2';
-            const summary = document.createElement('summary');
-            summary.className = 'small text-muted p-2';
-            // 사유가 있으면 접힌 상태에서도 보이게 요약줄에 붙인다 — 펼쳐야만 알 수 있으면
-            // "왜 실패했는지"를 확인할 수 있게 한 목적이 반쯤 사라진다.
-            summary.innerHTML =
-                `<span class="badge bg-warning text-dark me-1">미검증</span>` +
-                `<span aria-label="싫어요">👎</span> 검증 미통과 — 이전 답변 펼쳐보기` +
-                (data.detail ? `<div class="text-warning mt-1">사유: ${escHtml(data.detail)}</div>` : '');
-            const body = document.createElement('div');
-            body.className = 'md-content p-2 pt-0';
-            body.textContent = rawText;          // textContent → renderMarkdown sanitizes
-            renderMarkdown(body);
-            details.appendChild(summary);
-            details.appendChild(body);
-            container.appendChild(details);
-        }
+        // 한 글자도 스트리밍되지 않은 시도라도 블록은 남긴다 — 예전에는 여기서 조용히
+        // 건너뛰어 "재시도 안내만 있고 접힌 답변은 없는" 화면이 됐고, 그게 정상 동작인지
+        // 모델이 빈 응답을 낸 것인지 화면만으로는 구분할 수 없었다. 항상 재시도 횟수만큼
+        // 블록이 쌓이게 두고, 빈 시도는 그렇다고 표시한다.
+        const emptyAttempt = !rawText.trim();
+        const details = document.createElement('details');
+        details.className = 'superseded-answer border rounded mb-2';
+        const summary = document.createElement('summary');
+        summary.className = 'small text-muted p-2';
+        // 사유가 있으면 접힌 상태에서도 보이게 요약줄에 붙인다 — 펼쳐야만 알 수 있으면
+        // "왜 실패했는지"를 확인할 수 있게 한 목적이 반쯤 사라진다.
+        summary.innerHTML =
+            `<span class="badge bg-warning text-dark me-1">미검증</span>` +
+            `<span aria-label="싫어요">👎</span> ` +
+            (emptyAttempt
+                ? `검증 미통과 — 이전 시도는 빈 응답이었습니다`
+                : `검증 미통과 — 이전 답변 펼쳐보기`) +
+            (data.detail ? `<div class="text-warning mt-1">사유: ${escHtml(data.detail)}</div>` : '');
+        const body = document.createElement('div');
+        body.className = 'md-content p-2 pt-0';
+        // textContent → renderMarkdown sanitizes
+        body.textContent = emptyAttempt ? '(모델이 이 시도에서 아무 내용도 생성하지 않았습니다.)' : rawText;
+        renderMarkdown(body);
+        details.appendChild(summary);
+        details.appendChild(body);
+        container.appendChild(details);
 
         // Persistent retry notice (removed on done/abort).
         let notice = document.getElementById(`stream-retry-notice-${bubbleId}`);
@@ -255,7 +267,11 @@
             `<div class="d-flex align-items-center gap-1">` +
                 `<i class="bi bi-arrow-repeat"></i>` +
                 `<span>${escHtml(data.text || '검증 미통과 — 검색 범위를 넓혀 재시도 중...')}</span>` +
-            `</div>`;
+            `</div>` +
+            // 사유는 안내 바로 아래 줄에 둔다. 접힘 블록 요약에도 같은 값이 들어가지만,
+            // 블록은 '이전 시도'의 것이고 이 줄은 '지금 왜 다시 도는지'라 성격이 다르다.
+            // (ca68b6a에서 무관한 리팩토링에 휩쓸려 이 줄이 사라졌던 회귀를 복구)
+            (data.detail ? `<div class="ms-4">사유: ${escHtml(data.detail)}</div>` : '');
 
         // Clear the live area for the fresh attempt.
         contentEl.textContent = '';
@@ -299,8 +315,44 @@
         return `<span class="source-metrics text-muted" style="font-size:0.72rem;">${quality}</span>`;
     }
 
-    /* done 이벤트의 attribution {chunkId: 0.0~1.0}을 이미 그려진 출처 배지에 덧붙인다.
-       수치 표시가 꺼져 있으면 .source-metrics 자체가 없으므로 조용히 아무것도 하지 않는다. */
+    /* 출처 표시 순서 비교 — 1순위 응답 참여도, 2순위 유사도, 둘 다 내림차순이며 값이 없는
+       쪽이 뒤로 간다. 서버의 SourceRef.DISPLAY_ORDER와 같은 규칙이다: 블로킹/기록 조회는
+       서버가 이미 정렬해 내려주지만, 스트리밍은 출처가 답변보다 먼저 도착해 그 시점에
+       참여도가 존재하지 않으므로 클라이언트가 같은 규칙을 한 번 더 적용해야 한다. */
+    function descNullsLast(a, b) {
+        const an = typeof a === 'number', bn = typeof b === 'number';
+        if (an && bn) return b - a;
+        if (an) return -1;
+        if (bn) return 1;
+        return 0;
+    }
+    function compareSourceOrder(a, b) {
+        const d = descNullsLast(a.share, b.share);
+        return d !== 0 ? d : descNullsLast(a.similarity, b.similarity);
+    }
+
+    /* 그려진 출처 배지를 표시 순서대로 다시 붙인다. 정렬 키는 DOM의 data-* 에 실려 있어
+       (참여도는 applyAttribution이 채운다) 원본 배열을 다시 들고 있을 필요가 없다. */
+    function reorderSources(container) {
+        const wrap = container.firstElementChild;
+        if (!wrap) return;
+        const items = Array.from(wrap.querySelectorAll(':scope > .source-item'));
+        if (items.length < 2) return;
+        const num = (el, key) => {
+            const v = el.dataset[key];
+            if (v === undefined || v === '' || v === 'null') return null;
+            const n = parseFloat(v);
+            return Number.isFinite(n) ? n : null;
+        };
+        items
+            .map(el => ({ el, share: num(el, 'share'), similarity: num(el, 'similarity') }))
+            .sort(compareSourceOrder)
+            .forEach(entry => wrap.appendChild(entry.el));
+    }
+
+    /* done 이벤트의 attribution {chunkId: 0.0~1.0}을 이미 그려진 출처 배지에 덧붙이고,
+       참여도가 생겼으므로 목록을 다시 정렬한다. 수치 표시가 꺼져 있으면 .source-metrics
+       자체가 없어 문구는 붙지 않지만, 정렬은 그와 무관하게 이뤄진다. */
     function applyAttribution(bubbleId, attribution) {
         if (!attribution) return;
         const container = document.getElementById(`stream-sources-${bubbleId}`);
@@ -308,12 +360,15 @@
         container.querySelectorAll('.source-ref[data-chunk-id]').forEach(badge => {
             const share = attribution[badge.getAttribute('data-chunk-id')];
             if (typeof share !== 'number') return;
+            const item = badge.closest('.source-item');
+            if (item) item.dataset.share = String(share);
             const metrics = badge.nextElementSibling;
             if (!metrics || !metrics.classList.contains('source-metrics')) return;
             if (metrics.dataset.hasAttribution === '1') return;   // 재진입 방지(멱등)
             metrics.dataset.hasAttribution = '1';
             metrics.insertAdjacentHTML('beforeend', ` · <strong>응답 ${Math.round(share * 100)}%</strong>`);
         });
+        reorderSources(container);
     }
 
     function onSources(bubbleId, sources) {
@@ -324,7 +379,12 @@
             : true;
         const metricsEnabled = typeof window.isRetrievalMetricsEnabled === 'function'
             && window.isRetrievalMetricsEnabled();
-        const refs = sources.map(s => {
+        /* 참여도는 아직 없다(답변보다 먼저 도착) — 이 시점의 순서는 유사도 기준이고,
+           done 이벤트가 참여도를 붙이는 순간 applyAttribution()이 다시 정렬한다. */
+        const ordered = sources.slice().sort((a, b) => compareSourceOrder(
+            { share: a.answer_share, similarity: a.similarity },
+            { share: b.answer_share, similarity: b.similarity }));
+        const refs = ordered.map(s => {
             const label = escHtml(s.label || '출처');
             const previewAttr = previewEnabled
                 ? `data-bs-toggle="popover" data-bs-trigger="hover focus" data-bs-placement="top" data-preview-md="${escHtml(s.preview || '')}"`
@@ -335,7 +395,10 @@
                줄바꿈이 배지와 수치 사이에서 일어나 수치가 다음 배지 것처럼 읽힌다.
                간격은 .source-item의 gap/margin이 담당하므로 배지에 me-1 mb-1을 걸지 않는다. */
             const metrics = metricsEnabled ? renderSourceMetrics(s) : '';
-            return `<span class="source-item">${badge}${metrics}</span>`;
+            /* 정렬 키를 DOM에 실어둔다 — 참여도가 도착하면 reorderSources()가 이 값들만 보고
+               재정렬하므로 원본 sources 배열을 버블별로 보관할 필요가 없다. */
+            const simAttr = typeof s.similarity === 'number' ? ` data-similarity="${s.similarity}"` : '';
+            return `<span class="source-item"${simAttr}>${badge}${metrics}</span>`;
         }).join('');
         container.innerHTML = `<div class="mt-2">${refs}</div>`;
         if (previewEnabled) {
@@ -503,6 +566,10 @@
 
         if (data.turnId) {
             document.querySelectorAll(`#stream-images-${bubbleId} .chat-image-thumb`)
+                .forEach(el => { el.dataset.turnId = String(data.turnId); });
+            /* 출처 배지에도 같은 턴 id를 심는다 — 원문 보기 모달의 "현재 대화에서 이 청크 제거"가
+               어느 턴의 출처인지 알아야 하고, 그 값은 지금(턴 저장 후)에야 존재한다. */
+            document.querySelectorAll(`#stream-sources-${bubbleId} .source-item`)
                 .forEach(el => { el.dataset.turnId = String(data.turnId); });
         }
     }

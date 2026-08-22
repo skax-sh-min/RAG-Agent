@@ -10,6 +10,7 @@ import org.springframework.jdbc.datasource.DriverManagerDataSource;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
@@ -242,5 +243,52 @@ class SqliteMemoryRepositoryTest {
         assertThat(repo.findRecentRetrievalMetrics(0, 2)).hasSize(2);
         assertThat(repo.findRecentRetrievalMetrics(4, 10)).hasSize(1);
         assertThat(repo.findRecentRetrievalMetrics(99, 10)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("deleteTurn 은 그 턴만 지우고 같은 대화의 나머지 턴은 남긴다")
+    void deleteTurnRemovesOnlyThatTurn() {
+        long first = repo.addTurn(UID, "t1", "Q1", "A1", null, 0, 0, 0, null, 0, "M", null);
+        long second = repo.addTurn(UID, "t1", "Q2", "A2", null, 0, 0, 0, null, 0, "M", null);
+        repo.saveTurnImageRefs(first, UID, "t1", List.of("images/a/x.png"));
+
+        assertThat(repo.deleteTurn(UID, "t1", first)).isTrue();
+
+        assertThat(repo.getTurns(UID, "t1")).extracting(MemoryRepository.Turn::id).containsExactly(second);
+        assertThat(repo.getTurn(UID, "t1", first)).isEmpty();
+        // 이미지 참조도 함께 사라진다(고아 행이 남으면 다음 대화 복원에서 유령 썸네일이 된다).
+        assertThat(repo.getTurnImageRefs(UID, "t1")).doesNotContainKey(first);
+    }
+
+    @Test
+    @DisplayName("deleteTurn 은 다른 사용자·다른 대화의 턴에는 닿지 않는다")
+    void deleteTurnIsScopedByUserAndThread() {
+        long mine = repo.addTurn(UID, "t1", "Q", "A", null, 0, 0, 0, null, 0, "M", null);
+
+        assertThat(repo.deleteTurn("other-user", "t1", mine)).isFalse();
+        assertThat(repo.deleteTurn(UID, "other-thread", mine)).isFalse();
+        assertThat(repo.getTurn(UID, "t1", mine)).isPresent();
+    }
+
+    @Test
+    @DisplayName("deleteTurn 은 이미 없는 턴에 대해 false 를 돌려준다")
+    void deleteTurnIsIdempotent() {
+        long id = repo.addTurn(UID, "t1", "Q", "A", null, 0, 0, 0, null, 0, "M", null);
+
+        assertThat(repo.deleteTurn(UID, "t1", id)).isTrue();
+        assertThat(repo.deleteTurn(UID, "t1", id)).isFalse();
+        assertThat(repo.deleteTurn(UID, "t1", 999_999L)).isFalse();
+    }
+
+    @Test
+    @DisplayName("삭제된 턴은 이후 프롬프트 히스토리에서도 빠진다")
+    void deletedTurnDropsOutOfHistory() {
+        long first = repo.addTurn(UID, "t1", "지울 질문", "지울 답변", null, 0, 0, 0, null, 0, "M", null);
+        repo.addTurn(UID, "t1", "남길 질문", "남길 답변", null, 0, 0, 0, null, 0, "M", null);
+
+        repo.deleteTurn(UID, "t1", first);
+
+        String history = repo.getHistory(UID, "t1", 4000);
+        assertThat(history).contains("남길 질문").doesNotContain("지울 질문");
     }
 }

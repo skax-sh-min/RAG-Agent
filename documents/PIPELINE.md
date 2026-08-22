@@ -122,7 +122,7 @@ COST_FIRST와 동일하되,
 
 > ①은 `AgentState`에 누적되지 않아 `llmCallCount`가 실제보다 1 낮게 표시됨 — 허용된 tradeoff.  
 > ③ (MultiQueryExpander)도 토큰 미누적. 15자 미만 질의는 생략되며(기본값), 실행될 때도 원본 질의 검색과 병렬로 진행되어(§10.8.1) 검색 전체 지연에 그대로 더해지지 않는다.  
-> ③의 프롬프트는 Spring AI 기본값(영어, 관점 다양화만 요청)이 아니라 `RetrievalService` 생성자가 `messages(_ko).properties`의 `prompt.retrieval.expansion`으로 교체한 커스텀 한국어 프롬프트 — 관점만 다양화하는 게 아니라 인사말·존댓말 어미·군더더기 제거, 지시어/대명사를 구체적 용어로 풀어쓰기 등 **임베딩 벡터 검색에 더 적합한 형태로 정규화**하도록 함께 요청한다. LLM에 넘기는 질문 텍스트는 다른 프롬프트 구성 지점과 동일하게 `PromptInjectionGuard.wrap()`으로 감싸며, 벡터 검색 자체(원본 질의 축)는 감싸지 않은 원문을 그대로 임베딩한다.
+> ③의 프롬프트는 Spring AI 기본값(영어, 관점 다양화만 요청)이 아니라 `RetrievalService` 생성자가 `messages(_ko).properties`의 `prompt.retrieval.expansion`으로 교체한 커스텀 한국어 프롬프트 — 관점만 다양화하는 게 아니라 인사말·존댓말 어미·군더더기 제거, 지시어/대명사를 구체적 용어로 풀어쓰기 등 **임베딩 벡터 검색에 더 적합한 형태로 정규화**하도록 함께 요청한다. 여기에 **표기 변형**도 포함된다 — 문서가 한글로 쓰였는지 영문으로 쓰였는지 알 수 없으므로 변형 중 최소 1개는 핵심 용어를 반대 언어 표기로 바꾸게 하고("디비 접속 설정" → "database connection configuration"), 약어·구어체 음차(디비)는 정식 표기(데이터베이스/DB)로도 풀어 쓰게 한다. **이 변형은 벡터 축에만 투입된다** — BM25 축(`keywordF`)은 여전히 원본 질문만 검색하므로, 한/영 표기 차이의 나머지 절반은 키워드 축 가중치(`SEARCH_RRF_KEYWORD_WEIGHT`, 기본 0.5)로 다룬다(OPERATOR_MANUAL §7.8). LLM에 넘기는 질문 텍스트는 다른 프롬프트 구성 지점과 동일하게 `PromptInjectionGuard.wrap()`으로 감싸며, 벡터 검색 자체(원본 질의 축)는 감싸지 않은 원문을 그대로 임베딩한다.
 >
 > `responseMode=S`에서는 CRITIC 노드가 실행되지 않는다. 따라서 해당 turn의 재시도는 ANSWER의 `sufficient=false` 조건으로만 결정된다.
 

@@ -182,7 +182,7 @@ container system stop
 | `SEARCH_RERANK_ENABLED` | `false` | true/false | RRF 후 LLM 리랭킹 단계 (턴당 LLM 1콜 추가) |
 | `SEARCH_CANDIDATE_MULTIPLIER` | `3` | 2 ~ 5 | 리랭킹 후보 풀 크기 — `topK × N` |
 | `SEARCH_TAG_CANDIDATE_MULTIPLIER` | `2` | 1 ~ 5 | 태그 선택 시 후보 풀 확대 — `candidateK = max(candidateK, topK × N)` |
-| `SEARCH_RRF_KEYWORD_WEIGHT` | `1.0` | 0.5 ~ 3.0 | 가중 RRF(Phase 7-A) — BM25 키워드 축 가중치. 벡터 축(MultiQuery 1~3개)은 항상 `1/축개수`로 그룹 정규화되므로 `1.0`이 정규화된 벡터 그룹과 동일 비중. `SEARCH_HYBRID_ENABLED=false`면 무영향 |
+| `SEARCH_RRF_KEYWORD_WEIGHT` | `0.5` | 0.5 ~ 3.0 | 가중 RRF(Phase 7-A) — BM25 키워드 축 가중치. 벡터 축(MultiQuery 1~3개)은 항상 `1/축개수`로 그룹 정규화되므로 `1.0`이면 정규화된 벡터 그룹과 동일 비중이고, 기본값은 의도적으로 그 절반이다. BM25(`chunk_fts`, `tokenize='trigram'`)는 **같은 문자 체계 안에서만 동작하는 리터럴 매처**라 한글 질문은 영문으로 쓰인 청크와 trigram이 하나도 겹치지 않아 그 청크가 키워드 축 지원을 전혀 못 받는 반면, 흔한 토큰 하나가 겹친 무관 청크는 그 축에서 1~2위를 차지한다. 단일 언어 코퍼스이고 파일명·오류코드·API명 같은 정확 매칭이 의미 검색보다 중요하면 `1.0` 쪽으로 올릴 것. `SEARCH_HYBRID_ENABLED=false`면 무영향 |
 | `SEARCH_RRF_K` | `60` | 20 ~ 100 | 가중 RRF(Phase 7-A) — RRF 순위융합 상수 k(원논문 기본값 60) |
 | `SEARCH_CURATED_QA_ENABLED` | `true` | true/false | §10.10 — 좋아요 기반 큐레이션 Q&A(예약 version `"curated"` 네임스페이스에 임베딩)를 RRF 융합에 포함할지 여부. `false`면 해당 검색 자체를 생략 |
 | `SEARCH_CURATED_QA_WEIGHT` | `1.2` | 0.5 ~ 5.0 | §10.10 — **좋아요 승격** 큐레이션 축 가중치, 키워드축과 동일하게 그룹 정규화 없이 그대로 적용(벡터축은 항상 `1/축개수`) — `1.0`보다 높아 검증된 답변이 우선 노출되되 순위를 독식하지는 않음 |

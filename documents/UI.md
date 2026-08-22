@@ -75,6 +75,7 @@ src/main/resources/
 | PATCH | `/ui/threads/{threadId}/title` | `fragments/thread-item` | 대화 제목 수정 |
 | PATCH | `/ui/threads/{threadId}/routing-mode` | `204` | 대화별 라우팅 모드 저장 |
 | DELETE | `/ui/threads/{threadId}` | `200` | 대화 삭제 |
+| DELETE | `/ui/threads/{threadId}/turns/{turnId}` | `204` | 턴 하나(질문+답변) 삭제 — 싫어요 직후 확인 대화상자에서만 호출된다(§ 피드백). 소유권은 피드백 엔드포인트와 같은 `getFeedback(userId, threadId, turnId)` 스코핑이라 남의 턴·없는 턴 모두 `404` |
 | GET | `/ui/threads` | `fragments/thread-list` | 대화 목록 새로고침 |
 
 ### 3.2 문서 관리 (DocumentController)
@@ -346,6 +347,21 @@ hide:0}})`, 하단 스크립트에서 초기화)이다. 네이티브 title 툴�
 > Bootstrap의 `.btn-check:disabled` 스타일로 흐리게 표시된다. 이 시점에 `L`이 선택돼 있었다면 자동으로
 > `M`으로 되돌리고(`localStorage`도 갱신) 다시 RAG로 돌아가도 `L`을 자동 재선택하지는 않는다.
 
+### 질문 내비게이션 (현재 질문 풍선 · 전체 질문 보기)
+
+답변이 수십 줄인 것이 보통이라, 조금만 스크롤하면 그 답변이 **어떤 질문에 대한 것인지** 화면에서 사라진다. 두 가지로 보완한다.
+
+| 요소 | 위치 | 동작 |
+|------|------|------|
+| `#current-question-float` | 대화 영역 **우측 상단** (`.chat-messages-wrap` 기준 absolute) | 지금 읽고 있는 턴의 질문을 사용자 버블과 같은 색 풍선으로 최대 2줄까지 표시. 클릭(또는 Enter/Space)하면 그 질문 위치로 이동 |
+| `#question-nav-btn` / `#question-nav-panel` | **'맨 아래로' 버튼 바로 위** | 이 대화의 질문 전체 목록(번호 · 질문 2줄 · 시각)을 카드 풍선으로 열고, 항목을 누르면 그 질문으로 이동 후 닫힘. 바깥 클릭 · `Esc` · X 로도 닫힌다 |
+
+- **질문 원본은 `.user-turn[data-question]` 하나에서만 읽는다.** 서버 렌더 경로(`chat.html`의 `turns` 루프)와 스트리밍 경로(`chat-stream.js`의 `appendUserBubble()`)가 같은 표식을 심는다 — 한쪽만 고치면 새로 보낸 질문이 목록에서 빠진다.
+- 풍선 표시 규칙은 `qnavUpdateFloat()` 하나에 있다: 목록 상단에서 `QNAV_ANCHOR_PX`(48px) 아래를 기준선으로 잡아 그 위로 시작점이 올라간 **마지막** 턴이 "지금 읽는 턴"이고, 그 질문 버블이 아직 화면에 남아 있으면 풍선은 숨는다(같은 문구를 두 번 보여줄 이유가 없다). 기준선을 상단 딱 그 지점이 아니라 조금 아래로 잡는 이유는 목록에서 이동했을 때 질문이 상단 12px 아래에 놓이기 때문 — 상단 기준이면 방금 이동해 온 질문이 '다음 턴'으로 분류돼 풍선이 바로 앞 질문을 가리킨다.
+- 목록은 **열 때마다 DOM에서 다시 만든다**(별도 상태 없음). 버블 추가는 `#chat-messages`의 `MutationObserver`(`childList`, `subtree` 없음 — 스트리밍 토큰은 답변 버블 *안*에서 일어나므로 잡히지 않는다)로 감지해 버튼 노출/목록을 갱신한다.
+- `.chat-messages-wrap`은 순전히 위치 기준용 래퍼다. 풍선을 스크롤 컨테이너(`#chat-messages`) 안에 두면 내용과 함께 흘러가고, 바깥 채팅 영역에 두면 상단바·이어가기 배너 위에 얹힌다.
+- 두 버튼의 `bottom` 값은 서로 물려 있다 — `.scroll-to-bottom-btn`(7.125rem) + 높이 2.5rem + 간격 0.425rem = `.question-nav-btn`(10.05rem). 하나를 옮기면 나머지도 함께 옮겨야 한다.
+
 ### 응답 메타데이터 (어시스턴트 버블 하단)
 
 ```
@@ -426,6 +442,15 @@ done 이벤트    (답변 완료 후)   → attribution {chunkId: 0.0~1.0} → �
 |------|--------|----------|
 | 좋아요 | 👍 클릭(재클릭 시 취소) | `PATCH /ui/threads/{id}/turns/{turnId}/feedback` → 즉시 큐레이션 스냅샷 생성 + 3초 후 배경 임베딩 |
 | 싫어요 | 👎 클릭 | 동일 엔드포인트 — 다음 대화 컨텍스트에서 해당 turn 제외(§6.8). **세 경로 모두에서 빠진다**: 원본 폴백(`getHistory()`의 SQL `feedback <> 'DISLIKE'`), 요약(`dedupeTurns()`), 그리고 요약 경로가 덧붙이는 `[Recent]` 원문 구간. 마지막 것은 `buildContext()`가 `getRecentTurns()`를 그대로 쓰다가 누락됐던 자리 — 그 SQL에는 feedback 조건이 없어서, 싫어요 답변이 요약에서만 빠지고 원문으로는 다시 들어갔다 |
+
+**싫어요를 누르면 저장보다 먼저 삭제 여부를 묻는다.** `confirm.delete.turn`("이 질문과 답변을 대화에서 삭제할까요?") 확인 대화상자가 뜨고, '예'면 `DELETE /ui/threads/{threadId}/turns/{turnId}`를 호출한 뒤 질문·답변 버블 한 쌍을 DOM에서 걷어낸다 — **이 경로에서는 피드백 PATCH를 아예 보내지 않는다**(턴이 사라지므로 피드백을 남길 대상이 없다). '아니오'면 평소대로 `DISLIKE`를 저장한다. 즉 **삭제와 싫어요는 배타적인 두 선택지**다 — 지울 것인가, 화면에는 남기되 이후 맥락에서만 뺄 것인가.
+
+- **묻는 시점은 `NONE → DISLIKE` 전이뿐이다.** 싫어요를 다시 눌러 해제하거나(`DISLIKE → NONE`) 좋아요를 누를 때는 묻지 않는다.
+- **삭제가 실패하면 아무것도 저장하지 않고** 실패 토스트만 띄운다. 사용자가 고른 것은 삭제이지 싫어요가 아니므로 조용히 약한 쪽으로 바꿔 적용하지 않는다.
+- 피드백을 쓰지 않고 삭제하므로 **좋아요 상태였던 턴은 `LIKE`인 채로 삭제 엔드포인트에 도달한다** — 거기서 `curatedQaService.onUnlike()`를 먼저 부르는 분기가 큐레이션 고아 행(턴이 사라진 뒤에도 검색에 계속 기여하는 행)을 막는 유일한 장치다.
+- 삭제 범위는 **그 턴 하나**다(대화 전체가 아니다 — 사이드바 휴지통의 `confirm.delete.thread`와 구분할 것). `conversation_turns` + `turn_source_ref` + `turn_image_ref`에서 그 `turn_id`만 지우며, 이는 `clearHistory()`가 스레드 단위로 지우는 것과 같은 테이블 집합이다.
+- 그 턴을 재사용한 **다른 턴의 `reused_from_turn_id`는 일부러 그대로 둔다.** 그 컬럼을 읽는 모든 SQL이 LEFT JOIN + `"참조 원문 삭제됨"` 폴백이라 이미 사라진 원본을 견디게 되어 있다.
+- DOM 제거는 피드백 컨트롤에서 `#chat-messages`의 **직계 자식**까지 거슬러 올라가 답변 행을 찾고 그 앞 형제를 질문 행으로 삼는다 — 서버 복원·스트리밍 두 경로가 모두 '질문 행 다음 답변 행'을 직계 자식으로 붙이기 때문에 이 규칙 하나로 양쪽이 처리된다. 제거 후에는 질문 내비게이션의 `MutationObserver`가 목록을 자동으로 갱신한다.
 | 큐레이션 답변 편집 | 좋아요 상태일 때만 노출되는 연필(✏) 아이콘 | `GET`/`PATCH /ui/threads/{id}/turns/{turnId}/curated` → 우측 오프캔버스에서 답변 텍스트 수정, 저장 시 자동 재임베딩 |
 
 - 편집 아이콘은 **본인이 좋아요한 turn에서만** 보인다 — 채팅창은 항상 본인 스레드만 렌더링하므로 별도 권한 UI 분기가 없다.

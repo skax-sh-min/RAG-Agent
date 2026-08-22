@@ -133,11 +133,22 @@
                 <strong th:text="#{chat.resume.hint}">Continue typing below.</strong>
             </div>
 
-            <!-- Messages -->
+            <!-- Messages
+                 .chat-messages-wrap는 순전히 위치 기준(positioning context)용 래퍼다 —
+                 현재 질문 풍선(#current-question-float)은 스크롤과 무관하게 목록 상단에
+                 고정돼야 하는데, 스크롤 컨테이너(#chat-messages) 안에 absolute로 두면
+                 내용과 함께 흘러가 버린다. 바깥 채팅 영역(.position-relative)에 걸면
+                 이번엔 상단바/이어가기 배너 위에 얹혀 버린다. -->
+            <div class="chat-messages-wrap position-relative d-flex flex-column flex-grow-1 overflow-hidden">
             <div id="chat-messages" class="flex-grow-1 p-3">
                 <!-- Server-rendered previous turns (restored from conversation_turns) -->
                 <th:block th:if="${turns != null}" th:each="turn : ${turns}">
-                    <div class="d-flex justify-content-end mb-3 align-items-end">
+                    <!-- .user-turn + data-question: 질문 내비게이션(현재 질문 풍선 / 전체 질문
+                         목록)이 읽는 유일한 표식. 스트리밍 경로의 chat-stream.js
+                         appendUserBubble()도 같은 표식을 심는다 — 한쪽만 고치면 새로 보낸
+                         질문이 목록에서 빠진다. -->
+                    <div class="d-flex justify-content-end mb-3 align-items-end user-turn"
+                         th:attr="data-question=${turn.question}">
                         <div class="me-1">
                             <div class="bubble-user p-3">
                                 <div th:text="${turn.question}"></div>
@@ -169,7 +180,11 @@
                                           <!-- 배지와 그 수치는 .source-item 한 단위로 묶는다 —
                                                느슨한 inline 형제로 두면 줄바꿈이 배지와 수치 사이에서
                                                일어나 수치가 다음 배지 것처럼 읽힌다(chat-stream.js와 동일). -->
-                                          <span class="source-item" th:each="src : ${turnSourcesByTurnId[turn.id]}">
+                                          <!-- data-turn-id/data-answer-share: 원문 보기 모달의 "이 청크 제거"
+                                               버튼이 어느 턴의 어느 출처인지와 응답 참여도 0% 여부를
+                                               판단하는 키. 스트리밍 경로는 chat-stream.js가 같은 값을 심는다. -->
+                                          <span class="source-item" th:each="src : ${turnSourcesByTurnId[turn.id]}"
+                                                th:attr="data-turn-id=${turn.id},data-share=${src.answerShare}">
                                           <a href="#"
                                               class="source-ref badge bg-secondary text-decoration-none"
                                               th:text="${src.label}"
@@ -255,6 +270,34 @@
                         </div>
                     </div>
                 </th:block>
+            </div>
+
+            <!-- 현재 질문 풍선 — 답변이 길어 질문이 위로 밀려났을 때만(질문 버블이 목록
+                 상단 밖으로 나갔을 때) 나타난다. 클릭하면 그 질문 위치로 되돌아간다. -->
+            <div id="current-question-float" class="current-question-float d-none"
+                 role="button" tabindex="0"
+                 th:attr="title=#{chat.question.jump},aria-label=#{chat.question.current}">
+                <i class="bi bi-chat-quote-fill flex-shrink-0 mt-1"></i>
+                <span class="cq-text" id="current-question-float-text"></span>
+            </div>
+            </div><!-- /.chat-messages-wrap -->
+
+            <!-- 전체 질문 보기 — '맨 아래로' 버튼 바로 위. 열면 이 대화의 질문 목록이
+                 풍선 창으로 뜨고, 항목을 누르면 그 질문으로 이동한다. -->
+            <button type="button" id="question-nav-btn"
+                    class="btn btn-secondary question-nav-btn d-none"
+                    th:attr="aria-label=#{chat.questions.title},title=#{chat.questions.title}"
+                    aria-expanded="false">
+                <i class="bi bi-list-ul"></i>
+            </button>
+            <div id="question-nav-panel" class="question-nav-panel card d-none">
+                <div class="card-header py-2 d-flex align-items-center gap-2">
+                    <span class="small fw-semibold" th:text="#{chat.questions.title}">전체 질문 보기</span>
+                    <span id="question-nav-count" class="badge bg-secondary"></span>
+                    <button type="button" class="btn-close btn-sm ms-auto" id="question-nav-close"
+                            th:attr="aria-label=#{action.close}"></button>
+                </div>
+                <div class="list-group list-group-flush question-nav-list" id="question-nav-list"></div>
             </div>
 
             <!-- Jump-to-latest: shown when the user scrolls up (e.g. to read earlier content
@@ -400,7 +443,22 @@
                 <div class="modal-header py-2">
                     <h6 class="modal-title small fw-semibold mb-0" id="chunk-fulltext-modal-title"
                         th:text="#{chat.chunk.title}">원문 보기</h6>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                    <!-- 두 버튼을 래퍼로 묶어 래퍼에만 ms-auto를 건다. .modal-header에는
+                         justify-content가 없고, X가 오른쪽 끝에 붙는 것은 순전히 Bootstrap의
+                         `.modal-header .btn-close { margin-left: auto }` 덕분이다 — 그래서
+                         btn-close의 여백은 손대면 안 된다(m-0으로 지웠더니 제거 버튼이 숨겨진
+                         경우 X가 제목 바로 옆으로 딸려 왔다). 래퍼는 내용 너비라 그 안의
+                         auto 여백은 남는 공간이 없어 무해하고, X를 헤더 패딩 안쪽으로 당기는
+                         음수 여백은 그대로 살아 있다. -->
+                    <div class="d-flex align-items-center gap-2 ms-auto">
+                        <!-- 응답 참여도가 0%인 출처에만 노출된다(스크립트가 d-none을 토글). 답변에
+                             쓰이지 않은 청크를 그 대화의 출처 목록에서 치우는 표시 전용 동작이라
+                             닫기 버튼 옆(왼쪽)에 두고, 문서/검색에는 영향이 없다. -->
+                        <button type="button" class="btn btn-sm btn-outline-danger d-none"
+                                id="chunk-exclude-btn"
+                                th:text="#{chat.chunk.exclude}">현재 대화에서 이 청크 제거</button>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                    </div>
                 </div>
                 <div class="modal-body">
                     <div class="md-content" id="chunk-fulltext-modal-body"></div>
@@ -462,9 +520,30 @@
     const CHUNK_LOADING_TEXT  = /*[[#{chat.chunk.loading}]]*/ '불러오는 중...';
     const CHUNK_NOTFOUND_TEXT = /*[[#{chat.chunk.notfound}]]*/ '청크를 찾을 수 없습니다.';
     const CHUNK_ERROR_TEXT    = /*[[#{chat.chunk.error}]]*/ '불러오는 중 오류가 발생했습니다.';
+    const CHUNK_EXCLUDE_FAILED = /*[[#{chat.chunk.exclude.failed}]]*/ '청크 제거에 실패했습니다.';
+    const chunkExcludeBtn = document.getElementById('chunk-exclude-btn');
+    /* 모달이 지금 보여주는 출처가 어느 턴의 어느 청크인지 — 제거 버튼이 쓴다. */
+    let activeChunkContext = null;
 
-    function openChunkFullTextModal(chunkId, label) {
+    /* 응답 참여도 0% 판정. AnswerAttribution은 답변에 기여하지 않은 청크에 0.0이 아니라 값을
+       아예 넣지 않으므로(§ SourceRef.answerShare), "값 없음"이 곧 0%다. 참여도 계산 자체가
+       실패한 턴에서는 모든 출처가 여기 걸리는데, 그 턴은 실제로 어느 청크가 답변을 떠받쳤는지
+       알 수 없으므로 사용자 판단에 맡기는 편이 맞다(제거는 표시 전용이라 되돌릴 수 있다). */
+    function hasNoAnswerShare(el) {
+        const raw = el && el.dataset ? el.dataset.share : undefined;
+        if (raw === undefined || raw === '' || raw === 'null') return true;
+        const share = parseFloat(raw);
+        return !(share > 0) || Math.round(share * 100) === 0;
+    }
+
+    function openChunkFullTextModal(chunkId, label, item) {
         if (!chunkFullTextModal || !chunkFullTextModalBody) return;
+        const turnId = item && item.dataset ? (item.dataset.turnId || '') : '';
+        /* 버튼은 "제거 대상을 특정할 수 있고" + "참여도 0%"일 때만. 스트리밍 중인 턴은 done
+           이벤트로 turnId가 심어지기 전까지 turnId가 없어 자연히 숨겨진다. */
+        const removable = !!(turnId && chunkId && hasNoAnswerShare(item));
+        activeChunkContext = removable ? { turnId, chunkId, item } : null;
+        if (chunkExcludeBtn) chunkExcludeBtn.classList.toggle('d-none', !removable);
         chunkFullTextModalTitle.textContent = label || CHUNK_TITLE_DEFAULT;
         chunkFullTextModalBody.innerHTML = `<div class="text-muted small">${CHUNK_LOADING_TEXT}</div>`;
         chunkFullTextModal.show();
@@ -484,8 +563,41 @@
         const chunkId = badge.dataset.chunkId;
         if (!chunkId) return;
         e.preventDefault();
-        openChunkFullTextModal(chunkId, badge.textContent);
+        openChunkFullTextModal(chunkId, badge.textContent, badge.closest('.source-item'));
     });
+
+    /* 현재 대화에서 이 청크 제거 — 표시 전용(서버도 turn_source_ref.hidden_at만 세운다).
+       문서/벡터 스토어는 그대로이고, 이 답변의 재사용 검증도 계속 이 청크를 본다. */
+    async function excludeActiveChunk() {
+        if (!activeChunkContext) return;
+        const { turnId, chunkId, item } = activeChunkContext;
+        const threadId = chatForm.querySelector('input[name="threadId"]').value;
+        const res = await fetch(
+            `/ui/threads/${encodeURIComponent(threadId)}/turns/${encodeURIComponent(turnId)}/sources/exclude`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded', ...getCsrfHeaders() },
+                body: new URLSearchParams({ chunkId })
+            });
+        if (!res.ok) throw new Error('exclude failed');
+        /* 같은 청크가 같은 턴에 두 번 그려지는 일은 없지만, 배지를 지우는 기준은 서버 WHERE와
+           같게 (turnId, chunkId) 쌍으로 둔다 — 다른 턴의 같은 청크는 남아야 한다. */
+        document.querySelectorAll('.source-item').forEach(el => {
+            if ((el.dataset.turnId || '') === String(turnId)
+                && el.querySelector(`.source-ref[data-chunk-id="${CSS.escape(chunkId)}"]`)) {
+                el.remove();
+            }
+        });
+        activeChunkContext = null;
+        chunkFullTextModal.hide();
+    }
+
+    if (chunkExcludeBtn) {
+        chunkExcludeBtn.addEventListener('click', function () {
+            excludeActiveChunk().catch(() => {
+                if (typeof showToast === 'function') showToast(CHUNK_EXCLUDE_FAILED, 'warning');
+            });
+        });
+    }
 
     /* RAG ↔ Direct LLM 토글 */
     const labelRag    = /*[[#{chat.direct.label.rag}]]*/ 'RAG';
@@ -1168,6 +1280,30 @@
         delete el.dataset.md;
     });
 
+    /* ── 턴 삭제 (싫어요 직후 확인) ─────────────────────────────────────── */
+    /** 버블 한 쌍을 DOM에서 걷어낸다. 피드백 컨트롤에서 #chat-messages의 직계 자식까지
+        거슬러 올라가 어시스턴트 행을 찾고, 그 앞 형제가 질문 행이다 — 두 렌더 경로(서버 복원,
+        스트리밍)가 모두 '질문 행 다음 답변 행'을 직계 자식으로 붙이므로 이 규칙 하나로 충분하다. */
+    function removeTurnFromDom(controls) {
+        const chat = document.getElementById('chat-messages');
+        let assistantRow = controls;
+        while (assistantRow && assistantRow.parentElement !== chat) assistantRow = assistantRow.parentElement;
+        if (!assistantRow) return;
+        const userRow = assistantRow.previousElementSibling;
+        if (userRow && userRow.classList.contains('user-turn')) userRow.remove();
+        assistantRow.remove();
+    }
+
+    function deleteTurn(threadId, turnId, controls) {
+        fetch(`/ui/threads/${encodeURIComponent(threadId)}/turns/${encodeURIComponent(turnId)}`, { method: 'DELETE', headers: getCsrfHeaders() })
+            .then(function (r) {
+                if (!r.ok) { showToast(I18N.turnDeleteFailed, 'danger'); return; }
+                removeTurnFromDom(controls);
+                showToast(I18N.turnDeleted, 'success');
+            })
+            .catch(function () { showToast(I18N.turnDeleteFailed, 'danger'); });
+    }
+
     /* ── 응답 피드백 (좋아요/싫어요) — 서버 렌더/HTMX/스트리밍 버블 공통 위임 처리 ── */
     document.getElementById('chat-messages').addEventListener('click', function (e) {
         const btn = e.target.closest('.feedback-btn');
@@ -1182,6 +1318,17 @@
         const activeClass = clickedValue === 'LIKE' ? 'btn-primary' : 'btn-danger';
         const wasActive = btn.classList.contains(activeClass);
         const newValue = wasActive ? 'NONE' : clickedValue;
+
+        // 싫어요로 '바뀌는' 클릭에서만 삭제를 먼저 묻는다 — 해제 토글(NONE)이나 좋아요에는 묻지 않는다.
+        // 저장보다 확인이 앞서는 이유: 삭제를 고르면 그 턴 자체가 사라지므로 피드백을 남길 대상이
+        // 없다. 삭제하지 않을 때만 평소대로 DISLIKE를 저장한다(그 턴은 §6.9에 따라 이후 프롬프트
+        // 컨텍스트에서 빠진다) — 즉 '삭제'와 '맥락에서만 제외'가 서로 배타적인 두 선택지가 된다.
+        // 삭제가 실패하면 아무것도 저장하지 않고 실패 토스트만 띄운다. 사용자가 고른 것은 삭제이지
+        // 싫어요가 아니므로, 조용히 약한 쪽으로 바꿔 적용하지 않는다.
+        if (newValue === 'DISLIKE' && confirm(I18N.deleteConfirmTurn)) {
+            deleteTurn(tId, turnId, container);
+            return;
+        }
 
         fetch(`/ui/threads/${tId}/turns/${turnId}/feedback`, {
             method: 'PATCH',
@@ -1241,7 +1388,170 @@
         }).catch(function () { showToast(I18N.requestFailed, 'danger'); });
     });
 
+    /* ── 질문 내비게이션 ────────────────────────────────────────────────
+       답변이 수십 줄이라 조금만 스크롤해도 질문이 화면 밖으로 나간다.
+       (1) 지금 보고 있는 답변의 질문을 오른쪽 위 풍선으로 띄우고,
+       (2) '맨 아래로' 버튼 위 목록 버튼으로 전체 질문 목록을 열어 바로 이동한다.
+       질문 원본은 오직 .user-turn[data-question] 하나에서 읽는다 — 서버 렌더 경로와
+       스트리밍 경로(chat-stream.js appendUserBubble)가 같은 표식을 심기 때문에
+       두 경로를 따로 다룰 필요가 없다. */
+    const QNAV_I18N = {
+        empty: /*[[#{chat.questions.empty}]]*/ 'No questions yet.',
+        countSuffix: /*[[#{chat.questions.count}]]*/ ''
+    };
+    const qnavFloat     = document.getElementById('current-question-float');
+    const qnavFloatText = document.getElementById('current-question-float-text');
+    const qnavBtn       = document.getElementById('question-nav-btn');
+    const qnavPanel     = document.getElementById('question-nav-panel');
+    const qnavList      = document.getElementById('question-nav-list');
+    const qnavCount     = document.getElementById('question-nav-count');
+    let qnavCurrent     = null;  // 지금 풍선이 가리키는 .user-turn
+    let qnavTicking     = false; // scroll 핸들러 rAF 스로틀
+
+    function qnavTurns() {
+        return Array.prototype.slice.call(chatMessages.querySelectorAll('.user-turn'));
+    }
+
+    function qnavTextOf(el) {
+        if (el.dataset.question) return el.dataset.question;
+        const body = el.querySelector('.bubble-user > div');
+        return body ? body.textContent.trim() : '';
+    }
+
+    function qnavTimeOf(el) {
+        const t = el.querySelector('.bubble-user-time');
+        return t ? t.textContent.replace('🕐', '').trim() : '';
+    }
+
+    /* 목록/풍선에서 해당 질문으로 이동. scrollIntoView는 페이지 전체를 움직일 수 있어
+       스크롤 컨테이너 기준 상대 이동으로 직접 계산한다(#chat-messages의 CSS
+       scroll-behavior:smooth가 부드러운 이동을 담당). */
+    function qnavJumpTo(el) {
+        if (!el) return;
+        const cRect = chatMessages.getBoundingClientRect();
+        const top = chatMessages.scrollTop + (el.getBoundingClientRect().top - cRect.top) - 12;
+        chatMessages.scrollTo({ top: Math.max(0, top), behavior: 'smooth' });
+        const bubble = el.querySelector('.bubble-user');
+        if (bubble) {
+            bubble.classList.remove('question-flash');
+            void bubble.offsetWidth; // 연속 클릭 시 애니메이션 재시작
+            bubble.classList.add('question-flash');
+            setTimeout(function () { bubble.classList.remove('question-flash'); }, 1500);
+        }
+    }
+
+    /* 지금 읽고 있는 턴 = 목록 상단(정확히는 상단에서 QNAV_ANCHOR_PX 아래) 위로 시작점이
+       올라간 마지막 질문. 그 질문 버블이 아직 화면에 남아 있으면 풍선은 숨긴다 — 같은
+       문구를 두 번 보여줄 이유가 없다.
+       기준선을 상단 딱 그 지점이 아니라 조금 아래로 잡는 이유: 목록에서 질문으로 이동하면
+       그 질문이 상단에서 12px 아래에 놓이는데, 상단을 기준으로 하면 방금 이동해 온 질문이
+       아직 '다음 턴'으로 분류돼 풍선이 바로 앞 질문을 가리킨다. */
+    const QNAV_ANCHOR_PX = 48;
+
+    function qnavUpdateFloat() {
+        if (!qnavFloat) return;
+        const cTop = chatMessages.getBoundingClientRect().top;
+        let found = null;
+        const turns = qnavTurns();
+        for (let i = 0; i < turns.length; i++) {
+            if (turns[i].getBoundingClientRect().top <= cTop + QNAV_ANCHOR_PX) found = turns[i];
+            else break;
+        }
+        qnavCurrent = found;
+        const text = found ? qnavTextOf(found) : '';
+        // bottom > cTop → 질문 버블이 아직 (일부라도) 보인다.
+        const stillVisible = found && found.getBoundingClientRect().bottom > cTop + 4;
+        if (!text || stillVisible) { qnavFloat.classList.add('d-none'); return; }
+        if (qnavFloatText.textContent !== text) qnavFloatText.textContent = text;
+        qnavFloat.classList.remove('d-none');
+    }
+
+    function qnavRenderList() {
+        const turns = qnavTurns();
+        qnavCount.textContent = turns.length + (QNAV_I18N.countSuffix || '');
+        qnavList.innerHTML = '';
+        if (turns.length === 0) {
+            const empty = document.createElement('div');
+            empty.className = 'p-3 small text-muted';
+            empty.textContent = QNAV_I18N.empty;
+            qnavList.appendChild(empty);
+            return;
+        }
+        turns.forEach(function (turn, idx) {
+            const item = document.createElement('button');
+            item.type = 'button';
+            item.className = 'list-group-item list-group-item-action question-nav-item d-flex gap-2';
+            if (turn === qnavCurrent) item.classList.add('active');
+            const time = qnavTimeOf(turn);
+            item.innerHTML =
+                '<span class="text-muted flex-shrink-0">' + (idx + 1) + '.</span>' +
+                '<span class="qn-text flex-grow-1">' + escHtml(qnavTextOf(turn)) + '</span>' +
+                (time ? '<span class="text-muted flex-shrink-0 small">' + escHtml(time) + '</span>' : '');
+            item.addEventListener('click', function () {
+                qnavJumpTo(turn);
+                qnavClosePanel();
+            });
+            qnavList.appendChild(item);
+        });
+    }
+
+    function qnavOpenPanel() {
+        qnavRenderList();
+        qnavPanel.classList.remove('d-none');
+        qnavBtn.setAttribute('aria-expanded', 'true');
+    }
+
+    function qnavClosePanel() {
+        qnavPanel.classList.add('d-none');
+        qnavBtn.setAttribute('aria-expanded', 'false');
+    }
+
+    /* 질문이 하나도 없는 새 대화에서는 목록 버튼 자체를 감춘다. */
+    function qnavSyncButton() {
+        const has = qnavTurns().length > 0;
+        qnavBtn.classList.toggle('d-none', !has);
+        if (!has) qnavClosePanel();
+        else if (!qnavPanel.classList.contains('d-none')) qnavRenderList();
+    }
+
+    chatMessages.addEventListener('scroll', function () {
+        if (qnavTicking) return;
+        qnavTicking = true;
+        requestAnimationFrame(function () {
+            qnavTicking = false;
+            qnavUpdateFloat();
+        });
+    }, { passive: true });
+
+    qnavFloat.addEventListener('click', function () { qnavJumpTo(qnavCurrent); });
+    qnavFloat.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); qnavJumpTo(qnavCurrent); }
+    });
+    qnavBtn.addEventListener('click', function (e) {
+        e.stopPropagation();
+        if (qnavPanel.classList.contains('d-none')) qnavOpenPanel(); else qnavClosePanel();
+    });
+    document.getElementById('question-nav-close').addEventListener('click', qnavClosePanel);
+    document.addEventListener('click', function (e) {
+        if (qnavPanel.classList.contains('d-none')) return;
+        if (qnavPanel.contains(e.target) || qnavBtn.contains(e.target)) return;
+        qnavClosePanel();
+    });
+    document.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape') qnavClosePanel();
+    });
+
+    /* 스트리밍/HTMX로 버블이 붙을 때 목록·풍선을 따라가게 한다. subtree:false가 중요 —
+       스트리밍 토큰은 답변 버블 '안'에서 일어나므로 여기서는 아무 일도 일어나지 않는다. */
+    new MutationObserver(function () {
+        qnavSyncButton();
+        qnavUpdateFloat();
+    }).observe(chatMessages, { childList: true });
+
+    qnavSyncButton();
+
     scrollToBottom();
+    qnavUpdateFloat();
 </script>
 </th:block>
 

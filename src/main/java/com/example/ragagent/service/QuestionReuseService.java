@@ -202,6 +202,17 @@ public class QuestionReuseService {
     }
 
     /**
+     * 대화 기록의 한 턴에서 출처 청크 하나를 숨긴다 (채팅 원문 보기 모달의 "현재 대화에서 이 청크
+     * 제거"). 표시에서만 사라질 뿐 답변 재사용 검증은 그대로 이 청크를 본다 —
+     * {@link QuestionReuseRepository#hideSourceRef} 참고.
+     *
+     * @return 실제로 숨겨졌으면 {@code true} (이미 숨겨졌거나 그 턴의 출처가 아니면 {@code false})
+     */
+    public boolean hideSourceForTurn(long turnId, String userId, String threadId, String chunkId) {
+        return repository.hideSourceRef(turnId, userId, threadId, chunkId) > 0;
+    }
+
+    /**
      * Full untruncated text for one source chunk, for the chat 출처 badge's click-to-expand "원문
      * 보기" modal — unlike {@link #sourceRefsForTurn}'s {@code preview}, which is always capped
      * (§UI 출처 hover 미리보기 길이) for the lightweight hover popover. {@code null} when the chunk

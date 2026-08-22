@@ -56,6 +56,13 @@ public class QuestionReuseRepository {
         try {
             jdbc.execute("ALTER TABLE turn_source_ref ADD COLUMN invalidated_at TEXT");
         } catch (Exception ignored) { /* already present */ }
+        // 사용자가 "현재 대화에서 이 청크 제거"로 직접 숨긴 시각. status와 별도 컬럼인 이유:
+        // status(active/deleted/modified)는 "청크가 그 뒤 바뀌었나"라는 사실 관측이고 재사용
+        // 검증이 그 값에 의존한다. 여기 숨김은 사실 관측이 아니라 표시 취향이라, 같은 컬럼에
+        // 섞으면 화면에서 치웠다는 이유만으로 재사용 판정이 달라진다(§ 표시 전용).
+        try {
+            jdbc.execute("ALTER TABLE turn_source_ref ADD COLUMN hidden_at TEXT");
+        } catch (Exception ignored) { /* already present */ }
         jdbc.execute("CREATE INDEX IF NOT EXISTS idx_turn_source_turn ON turn_source_ref(turn_id)");
         jdbc.execute("CREATE INDEX IF NOT EXISTS idx_turn_source_chunk ON turn_source_ref(chunk_id)");
     }
@@ -227,7 +234,8 @@ public class QuestionReuseRepository {
                 LEFT JOIN vec_document_chunks c ON c.spring_doc_id = r.chunk_id
                 -- status 필터가 없다: 무효화된 출처를 걸러내면 대화 기록에서 배지가 아니라 출처
                 -- 자체가 조용히 사라져(§2번 표시 요구) "원래 없었던 것"처럼 보인다.
-                WHERE r.turn_id = ?
+                -- hidden_at은 그 반대로 걸러낸다 — 사라지는 것이 사용자가 직접 요청한 결과다.
+                WHERE r.turn_id = ? AND r.hidden_at IS NULL
                 """,
                 (rs, n) -> new SourcePreviewRow(
                         rs.getString("chunk_id"),
@@ -238,6 +246,28 @@ public class QuestionReuseRepository {
                         rs.getString("content"),
                         rs.getString("status")),
                 turnId);
+    }
+
+    /**
+     * 대화 기록의 한 턴에서 출처 청크 하나를 숨긴다 (§ 현재 대화에서 이 청크 제거).
+     *
+     * <p><b>표시 전용이며 재사용 검증에는 영향이 없다</b> — {@link #findSourceRefs}/
+     * {@link #findAllSourceRefs}는 이 컬럼을 보지 않는다. 답변은 그 청크를 근거로 만들어진
+     * 사실이 그대로이므로, 사용자가 목록에서 치웠다고 해서 그 답변의 유효성 판정 기준까지
+     * 바뀌면 안 된다.
+     *
+     * <p>소유권은 {@code user_id}/{@code thread_id}까지 WHERE에 넣어 SQL 자체로 강제한다
+     * ({@code excludeTurnImageRef}와 같은 방식) — 컨트롤러의 확인과 이중이지만, 이 메서드를
+     * 나중에 다른 경로에서 부를 때 조용히 남의 대화를 건드리는 일이 없도록.
+     *
+     * @return 실제로 숨겨진 행 수 (0 = 없는 청크이거나 이미 숨김)
+     */
+    public int hideSourceRef(long turnId, String userId, String threadId, String chunkId) {
+        if (turnId <= 0 || chunkId == null || chunkId.isBlank()) return 0;
+        return jdbc.update(
+                "UPDATE turn_source_ref SET hidden_at = datetime('now') " +
+                "WHERE turn_id = ? AND user_id = ? AND thread_id = ? AND chunk_id = ? AND hidden_at IS NULL",
+                turnId, userId, threadId, chunkId.strip());
     }
 
     /**

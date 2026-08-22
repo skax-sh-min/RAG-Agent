@@ -33,12 +33,15 @@ public class FinalizeService {
             AnswerAttribution.Result attribution = AnswerAttribution.compute(
                     state.answer(), state.retrievedDocs(), state.usedDocIndices());
             if (attribution.method() == AnswerAttribution.Method.NONE) {
-                return state;
+                // 참여도를 못 구해도 유사도만으로 정렬은 성립한다 (SourceRef.DISPLAY_ORDER 2순위).
+                return state.toBuilder().sources(SourceRef.sortedForDisplay(sources)).build();
             }
             log.debug("[ATTRIBUTION] thread={} method={} chunks={}",
                     state.threadId(), attribution.method().wireValue(), attribution.sharesByChunkId().size());
+            // 참여도를 붙인 '뒤에' 정렬한다 — 1순위 키가 방금 생겼기 때문.
             return state.toBuilder()
-                        .sources(AnswerAttribution.applyTo(sources, attribution))
+                        .sources(SourceRef.sortedForDisplay(
+                                AnswerAttribution.applyTo(sources, attribution)))
                         .build();
         } catch (Exception e) {
             // Attribution is a diagnostic. It must never be the reason a finished answer fails to

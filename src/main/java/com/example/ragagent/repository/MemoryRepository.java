@@ -43,6 +43,20 @@ public interface MemoryRepository {
 
     void clearHistory(String userId, String threadId);
 
+    /**
+     * Deletes a single turn and everything keyed to it, scoped by {@code userId} so a caller
+     * can never reach another user's turn. Same table set as {@link #clearHistory} (turn_source_ref,
+     * turn_image_ref, conversation_turns), narrowed to one turn.
+     *
+     * <p>A later turn that reused this one keeps a now-dangling {@code reused_from_turn_id}; every
+     * read of that column is a LEFT JOIN that already falls back to "참조 원문 삭제됨", so the
+     * pointer is deliberately left alone rather than cascaded.
+     *
+     * @return true when a turn row was actually removed (false = wrong user, thread, or already gone)
+     */
+    boolean deleteTurn(String userId, String threadId, long turnId);
+
+
     /** Persist image refs shown with a turn (answer thumbnails in chat UI). */
     void saveTurnImageRefs(long turnId, String userId, String threadId, List<String> imageRefs);
 
