@@ -204,8 +204,12 @@ public class SqliteMemoryRepository implements MemoryRepository {
         try {
             jdbc.update("DELETE FROM turn_source_ref WHERE user_id = ? AND thread_id = ? AND turn_id = ?",
                     userId, threadId, turnId);
-        } catch (Exception ignored) {
+        } catch (org.springframework.jdbc.BadSqlGrammarException e) {
             // turn_source_ref belongs to QuestionReuseRepository; in isolated tests it may not exist.
+            String msg = (e.getCause() != null ? e.getCause().getMessage() : e.getMessage());
+            if (msg == null || !msg.contains("no such table") || !msg.contains("turn_source_ref")) {
+                throw e;
+            }
         }
         jdbc.update("DELETE FROM turn_image_ref WHERE user_id = ? AND thread_id = ? AND turn_id = ?",
                 userId, threadId, turnId);
