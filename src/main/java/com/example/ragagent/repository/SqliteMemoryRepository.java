@@ -2,6 +2,7 @@ package com.example.ragagent.repository;
 
 import com.example.ragagent.config.AppProperties;
 import jakarta.annotation.PostConstruct;
+import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
@@ -185,11 +186,10 @@ public class SqliteMemoryRepository implements MemoryRepository {
 
     @Override
     public void clearHistory(String userId, String threadId) {
-        // turn_source_ref is created by QuestionReuseRepository; in isolated tests this table may not exist.
         try {
             jdbc.update("DELETE FROM turn_source_ref WHERE user_id = ? AND thread_id = ?", userId, threadId);
-        } catch (Exception ignored) {
-            // no-op
+        } catch (DataAccessException e) {
+            if (!isMissingTurnSourceRef(e)) throw e;
         }
         jdbc.update("DELETE FROM turn_image_ref WHERE user_id = ? AND thread_id = ?", userId, threadId);
         jdbc.update("DELETE FROM conversation_turns WHERE user_id = ? AND thread_id = ?", userId, threadId);
@@ -204,12 +204,8 @@ public class SqliteMemoryRepository implements MemoryRepository {
         try {
             jdbc.update("DELETE FROM turn_source_ref WHERE user_id = ? AND thread_id = ? AND turn_id = ?",
                     userId, threadId, turnId);
-        } catch (org.springframework.jdbc.BadSqlGrammarException e) {
-            // turn_source_ref belongs to QuestionReuseRepository; in isolated tests it may not exist.
-            String msg = (e.getCause() != null ? e.getCause().getMessage() : e.getMessage());
-            if (msg == null || !msg.contains("no such table") || !msg.contains("turn_source_ref")) {
-                throw e;
-            }
+        } catch (DataAccessException e) {
+            if (!isMissingTurnSourceRef(e)) throw e;
         }
         jdbc.update("DELETE FROM turn_image_ref WHERE user_id = ? AND thread_id = ? AND turn_id = ?",
                 userId, threadId, turnId);
@@ -217,6 +213,25 @@ public class SqliteMemoryRepository implements MemoryRepository {
                 "DELETE FROM conversation_turns WHERE user_id = ? AND thread_id = ? AND id = ?",
                 userId, threadId, turnId);
         return removed > 0;
+    }
+
+    /**
+     * {@code turn_source_ref} belongs to {@code QuestionReuseRepository} (§6.23 runtime DDL), not to
+     * this repository. A context that never ran that init — an isolated repository test — has no such
+     * table, and then there is nothing to delete either; anything else must still surface.
+     *
+     * <p><b>Catch {@link DataAccessException}, not {@code BadSqlGrammarException}.</b> Spring ships no
+     * error-code mapping for SQLite, so a missing table arrives as a bare {@code SQLITE_ERROR}
+     * (code 1) and is translated to {@code UncategorizedSQLException}. This guard originally caught
+     * only {@code BadSqlGrammarException}, so it never actually applied and the four {@code deleteTurn}
+     * tests failed on the very case the guard was written for.
+     *
+     * <p>The message is read off {@code getMostSpecificCause()} — the wrapper's own text varies with
+     * the translation path, the underlying driver's does not.
+     */
+    private static boolean isMissingTurnSourceRef(DataAccessException e) {
+        String msg = e.getMostSpecificCause().getMessage();
+        return msg != null && msg.contains("no such table") && msg.contains("turn_source_ref");
     }
 
 

@@ -5,6 +5,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
 
@@ -13,6 +14,7 @@ import java.nio.file.Path;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -29,17 +31,35 @@ class SqliteMemoryRepositoryTest {
     private static final String UID = "test-user";
 
     private Path dbFile;
+    private JdbcTemplate jdbc;
     private SqliteMemoryRepository repo;
 
     @BeforeEach
     void setUp() throws Exception {
         dbFile = Files.createTempFile("rag-test-", ".db");
         DriverManagerDataSource ds = new DriverManagerDataSource("jdbc:sqlite:" + dbFile);
-        JdbcTemplate jdbc = new JdbcTemplate(ds);
+        jdbc = new JdbcTemplate(ds);
         AppProperties props = mock(AppProperties.class);
         when(props.memorySafe()).thenReturn(new AppProperties.MemoryConfig(50));
         repo = new SqliteMemoryRepository(jdbc, props);
         repo.init();
+        // deleteTurn()/clearHistory()는 turn_source_ref 까지 지우는데 그 테이블의 소유자는
+        // QuestionReuseRepository 다(§6.23 런타임 DDL). 여기서 실제 init()을 돌려 스키마를
+        // 운영과 맞춘다 — DDL을 테스트에 복사하면 그쪽이 바뀔 때 조용히 어긋난다.
+        // (memory.db 단독 모드에서는 vectorJdbcTemplate 가 primary 의 별칭이라 같은 걸 넘긴다.)
+        new QuestionReuseRepository(jdbc, jdbc).init();
+    }
+
+    /** 검색 출처 스냅샷 1건 — deleteTurn 이 자식 행까지 지우는지 보기 위한 최소 픽스처. */
+    private void insertSourceRef(long turnId, String threadId, String chunkId) {
+        jdbc.update("INSERT INTO turn_source_ref (turn_id, user_id, thread_id, chunk_id, chunk_hash) "
+                + "VALUES (?, ?, ?, ?, ?)", turnId, UID, threadId, chunkId, "hash-" + chunkId);
+    }
+
+    private int sourceRefCount(long turnId) {
+        Integer n = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM turn_source_ref WHERE turn_id = ?", Integer.class, turnId);
+        return n == null ? 0 : n;
     }
 
     @AfterEach
@@ -251,6 +271,8 @@ class SqliteMemoryRepositoryTest {
         long first = repo.addTurn(UID, "t1", "Q1", "A1", null, 0, 0, 0, null, 0, "M", null);
         long second = repo.addTurn(UID, "t1", "Q2", "A2", null, 0, 0, 0, null, 0, "M", null);
         repo.saveTurnImageRefs(first, UID, "t1", List.of("images/a/x.png"));
+        insertSourceRef(first, "t1", "chunk-1");
+        insertSourceRef(second, "t1", "chunk-2");
 
         assertThat(repo.deleteTurn(UID, "t1", first)).isTrue();
 
@@ -258,6 +280,35 @@ class SqliteMemoryRepositoryTest {
         assertThat(repo.getTurn(UID, "t1", first)).isEmpty();
         // 이미지 참조도 함께 사라진다(고아 행이 남으면 다음 대화 복원에서 유령 썸네일이 된다).
         assertThat(repo.getTurnImageRefs(UID, "t1")).doesNotContainKey(first);
+        // 출처 스냅샷도 그 턴 것만 사라진다 — clearHistory()와 같은 테이블 집합을 turn_id 하나로
+        // 좁힌 것이므로, 세 테이블 중 하나라도 빠지면 고아 행이 남는다(CLAUDE.md).
+        assertThat(sourceRefCount(first)).isZero();
+        assertThat(sourceRefCount(second)).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("deleteTurn 은 turn_source_ref 테이블이 아예 없어도 나머지를 지운다(그 테이블 소유자는 QuestionReuseRepository)")
+    void deleteTurnToleratesMissingTurnSourceRefTable() {
+        long id = repo.addTurn(UID, "t1", "Q", "A", null, 0, 0, 0, null, 0, "M", null);
+        // QuestionReuseRepository.init() 을 돌리지 않은 컨텍스트를 재현한다. 그 경우 지울 출처
+        // 자체가 없으므로 관용이 맞지만, 관용의 catch 대상이 틀리면(과거: BadSqlGrammarException)
+        // SQLite 의 no-such-table 이 UncategorizedSQLException 으로 와서 그대로 터진다.
+        jdbc.execute("DROP TABLE turn_source_ref");
+
+        assertThat(repo.deleteTurn(UID, "t1", id)).isTrue();
+        assertThat(repo.getTurn(UID, "t1", id)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("deleteTurn 은 turn_source_ref 외의 SQL 오류는 삼키지 않는다")
+    void deleteTurnDoesNotSwallowUnrelatedSqlErrors() {
+        long id = repo.addTurn(UID, "t1", "Q", "A", null, 0, 0, 0, null, 0, "M", null);
+        // 관용은 "turn_source_ref 가 없다"에만 걸려야 한다. 다른 테이블이 사라진 상황까지
+        // 조용히 넘기면 삭제가 절반만 된 것을 아무도 모른다.
+        jdbc.execute("DROP TABLE turn_image_ref");
+
+        assertThatThrownBy(() -> repo.deleteTurn(UID, "t1", id))
+                .isInstanceOf(DataAccessException.class);
     }
 
     @Test
