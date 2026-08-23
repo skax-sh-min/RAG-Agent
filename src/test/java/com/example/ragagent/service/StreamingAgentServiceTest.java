@@ -247,6 +247,67 @@ class StreamingAgentServiceTest {
         verify(emitter).completeWithError(boom);
     }
 
+
+    // ── §6.24 Step 1-d: 서버가 스트리밍 이후 답변을 손봤을 때의 화면/DB 동기화 ──────────
+
+    /** emitter 로 나간 SSE 이벤트들의 JSON 본문을 순서대로 모은다. */
+    private List<String> capturedEventJson() throws Exception {
+        ArgumentCaptor<SseEmitter.SseEventBuilder> captor =
+                ArgumentCaptor.forClass(SseEmitter.SseEventBuilder.class);
+        verify(emitter, org.mockito.Mockito.atLeastOnce()).send(captor.capture());
+        List<String> out = new java.util.ArrayList<>();
+        for (SseEmitter.SseEventBuilder b : captor.getAllValues()) {
+            StringBuilder sb = new StringBuilder();
+            b.build().forEach(d -> sb.append(String.valueOf(d.getData())));
+            out.add(sb.toString());
+        }
+        return out;
+    }
+
+    @Test
+    @DisplayName("done — 서버 후처리로 답변이 바뀌면 finalAnswer 를 실어 화면을 최종본으로 맞춘다")
+    void run_serverRewroteAnswer_sendsFinalAnswerForResync() throws Exception {
+        // 스트리밍으로는 긴 답변이 나갔는데 서버가 요약 전용 가드로 잘라낸 상황.
+        when(agentGraph.runStreaming(any(), any())).thenAnswer(inv -> {
+            GraphListener listener = inv.getArgument(1);
+            listener.onToken("## 요약\n짧은 요약\n\n## 상세 설명\n버려질 내용");
+            return resultState("## 요약\n짧은 요약");
+        });
+
+        service.run("u1", form(false, null, "S"), emitter);
+
+        String done = capturedEventJson().stream().filter(j -> j.contains("usedProvider")).findFirst().orElseThrow();
+        assertThat(done).contains("finalAnswer").contains("짧은 요약").doesNotContain("버려질 내용");
+    }
+
+    @Test
+    @DisplayName("done — 답변이 스트리밍된 그대로면 finalAnswer 키를 아예 넣지 않는다(중복 전송 방지)")
+    void run_answerUnchanged_omitsFinalAnswer() throws Exception {
+        when(agentGraph.runStreaming(any(), any())).thenAnswer(inv -> {
+            GraphListener listener = inv.getArgument(1);
+            listener.onToken("그대로인 답변");
+            return resultState("그대로인 답변");
+        });
+
+        service.run("u1", form(false, null), emitter);
+
+        String done = capturedEventJson().stream().filter(j -> j.contains("usedProvider")).findFirst().orElseThrow();
+        assertThat(done).doesNotContain("finalAnswer");
+    }
+
+    @Test
+    @DisplayName("클라이언트도 done.finalAnswer 를 반영한다 — 서버만 고치면 화면은 그대로 어긋난다")
+    void streamingClientConsumesFinalAnswer() throws Exception {
+        // 이 계약은 서버와 브라우저 양쪽에 걸쳐 있어 한쪽만 고쳐도 빌드가 통과한다. 그 경우 증상은
+        // "새로고침해야 답변이 바뀐다"는 조용한 불일치뿐이라 사실상 발견되지 않는다.
+        String js = java.nio.file.Files.readString(
+                java.nio.file.Path.of("src/main/resources/static/js/chat-stream.js"));
+
+        assertThat(js)
+                .as("chat-stream.js 의 onDone 이 data.finalAnswer 를 반영해야 한다 (§6.24 Step 1-d)")
+                .contains("data.finalAnswer");
+    }
+
     // ── images 이벤트 (RAG 관련 이미지 썸네일) ───────────────────────────────
 
     @Test

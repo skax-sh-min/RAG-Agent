@@ -2,7 +2,6 @@ package com.example.ragagent.service;
 
 import com.example.ragagent.agent.AgentState;
 import com.example.ragagent.config.AppProperties;
-import com.example.ragagent.ingestion.CuratedTextUtils;
 import com.example.ragagent.ingestion.MarkdownNoiseNormalizer;
 import com.example.ragagent.model.MetaKey;
 import com.example.ragagent.model.ResponseMode;
@@ -28,7 +27,6 @@ import org.springframework.stereotype.Service;
 
 import java.util.List;
 import java.util.Locale;
-import java.util.Arrays;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
 
@@ -482,22 +480,8 @@ public class AnswerService {
         return answer.substring(0, MAX_ANSWER_LEN) + "\n\n…(응답이 너무 길어 잘렸습니다)";
     }
 
-    /**
-     * 요약 전용 모드({@link ResponseMode#summaryOnly()})의 출력을 요약 하나로 좁힌다 — 요약
-     * 섹션이 있으면 그 본문만, 없으면 앞쪽 비어있지 않은 줄을 최대 7줄까지.
-     */
+    /** 요약 전용 모드의 안전망 — 구현·판단 근거는 {@link SummaryOnlyGuard}에 있다. */
     private static String enforceSummaryOnly(String answer, ResponseMode mode) {
-        if (!mode.summaryOnly()) return answer;
-        if (answer == null || answer.isBlank()) return answer;
-        String summary = CuratedTextUtils.extractSummarySection(answer);
-        String base = summary.isBlank() ? answer : summary;
-        String lines = Arrays.stream(base.split("\\R"))
-                .map(String::strip)
-                .filter(s -> !s.isBlank())
-                .limit(7)
-                .collect(Collectors.joining("\n"));
-        if (lines.isBlank()) return "## 요약\n요약할 내용이 없습니다.";
-        return "## 요약\n" + lines;
+        return SummaryOnlyGuard.apply(answer, mode);
     }
-
 }

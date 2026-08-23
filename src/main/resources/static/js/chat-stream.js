@@ -487,6 +487,15 @@
         if (contentEl) contentEl.classList.remove('stream-cursor');
         removeVerifyingIndicator(bubbleId);
 
+        // 1-bis. 서버가 스트리밍 이후 답변을 손봤으면(요약 전용 가드, 20,000자 절단, PROGRESSIVE
+        //    재생성) 그 최종본으로 교체한다. 이 신호가 없던 시절엔 화면엔 스트리밍된 원본이 남고
+        //    DB엔 손본 답변이 저장돼, 새로고침해야 비로소 달라진 것이 드러났다 — 그 사이 사용자는
+        //    화면의 답변을 보고 좋아요를 눌렀고 저장된 건 다른 텍스트였다.
+        //    같으면 서버가 키 자체를 안 보내므로 여기서 아무 일도 일어나지 않는다.
+        if (contentEl && typeof data.finalAnswer === 'string') {
+            contentEl.textContent = data.finalAnswer;   // 아래 renderMarkdown 이 이 원문을 렌더한다
+        }
+
         // Capture raw (pre-render) answer length for the char-count metadata below —
         // must happen before markdown rendering replaces textContent with rendered HTML.
         const answerLen = (contentEl?.textContent || '').length;

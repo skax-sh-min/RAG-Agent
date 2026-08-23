@@ -223,7 +223,8 @@ public class StreamingAgentService {
                 summarizerService.precomputeAfterTurn(userId, form.threadId(), turnId, locale);
             }
 
-            sendEvent(emitter, "done", buildDonePayload(result, elapsedMs, turnId));
+            sendEvent(emitter, "done",
+                    buildDonePayload(result, elapsedMs, turnId, listener.getAccumulatedAnswer()));
             emitter.complete();
 
             threadMetaService.generateTitleAsync(userId, form.threadId(), form.version(), form.question());
@@ -403,8 +404,22 @@ public class StreamingAgentService {
         } catch (Exception ignored) {}
     }
 
-    private Map<String, Object> buildDonePayload(AgentState result, long elapsedMs, Long turnId) {
+    /**
+     * @param streamedAnswer 클라이언트가 token 이벤트로 이미 받아 화면에 그린 텍스트. 서버가 그
+     *                       뒤에 답변을 손봤다면(요약 전용 가드, 20,000자 절단, PROGRESSIVE 재생성)
+     *                       화면과 저장본이 갈라지므로 최종본을 함께 실어 보낸다 — §6.24 Step 1-d.
+     */
+    private Map<String, Object> buildDonePayload(AgentState result, long elapsedMs, Long turnId,
+                                                 String streamedAnswer) {
         Map<String, Object> m = new HashMap<>();
+        // 서버 후처리로 답변이 바뀌었을 때만 최종본을 싣는다. 예전에는 이 신호가 없어서 화면엔 긴
+        // 답변이 남고 DB엔 잘린 답변이 저장됐고, 새로고침해야 비로소 달라진 것이 드러났다(그 사이
+        // 사용자는 화면의 긴 답변을 보고 좋아요를 눌렀다). 같은 값이면 키 자체를 넣지 않아
+        // 20,000자짜리 답변을 두 번 실어 보내는 일이 없다.
+        String finalAnswer = result.answer();
+        if (finalAnswer != null && !finalAnswer.equals(streamedAnswer)) {
+            m.put("finalAnswer", finalAnswer);
+        }
         m.put("usedProvider",      result.usedProvider());
         m.put("inputTokens",       result.totalInputTokens());
         m.put("outputTokens",      result.totalOutputTokens());

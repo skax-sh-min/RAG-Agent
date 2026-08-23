@@ -2,7 +2,6 @@ package com.example.ragagent.service;
 
 import com.example.ragagent.agent.AgentState;
 import com.example.ragagent.config.AppProperties;
-import com.example.ragagent.ingestion.CuratedTextUtils;
 import com.example.ragagent.llm.LlmCurlLogger;
 import com.example.ragagent.llm.LlmProvider;
 import com.example.ragagent.llm.LlmRouter;
@@ -20,8 +19,6 @@ import org.springframework.ai.openai.api.OpenAiApi;
 import org.springframework.context.MessageSource;
 
 import java.util.List;
-import java.util.Arrays;
-import java.util.stream.Collectors;
 import org.springframework.stereotype.Service;
 
 /**
@@ -207,21 +204,8 @@ public class DirectAnswerService {
         }
     }
 
-    /**
-     * 요약 전용 모드({@link ResponseMode#summaryOnly()})의 출력을 요약 줄만 남기고 좁힌다 —
-     * RAG 경로의 AnswerService.enforceSummaryOnly()와 같은 규칙.
-     */
+    /** 요약 전용 모드의 안전망 — RAG 경로와 같은 {@link SummaryOnlyGuard}를 쓴다. */
     private static String enforceSummaryOnly(String answer, ResponseMode mode) {
-        if (!mode.summaryOnly()) return answer;
-        if (answer == null || answer.isBlank()) return answer;
-        String summary = CuratedTextUtils.extractSummarySection(answer);
-        String base = summary.isBlank() ? answer : summary;
-        String lines = Arrays.stream(base.split("\\R"))
-                .map(String::strip)
-                .filter(s -> !s.isBlank())
-                .limit(7)
-                .collect(Collectors.joining("\n"));
-        if (lines.isBlank()) return "## 요약\n요약할 내용이 없습니다.";
-        return "## 요약\n" + lines;
+        return SummaryOnlyGuard.apply(answer, mode);
     }
 }
