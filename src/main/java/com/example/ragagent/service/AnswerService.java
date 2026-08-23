@@ -105,7 +105,7 @@ public class AnswerService {
         ChatOptions options = answerOptions(state);
         LlmRouter.LlmResult result = llmRouter.executeGatedWithUsage(TaskType.TEXT, state.routingMode(),
                 model -> model.call(buildPrompt(systemPrompt, userPrompt, options)));
-        String answer = truncate(enforceSummaryOnlyForS(result.text() == null ? "" : result.text(), state.responseMode()));
+        String answer = truncate(enforceSummaryOnly(result.text() == null ? "" : result.text(), state.responseMode()));
         state = state.toBuilder()
                      .accumulateTokens(result.inputTokens(), result.outputTokens())
                      .usedProvider(llmRouter.findProviderName(TaskType.TEXT, state.routingMode()))
@@ -123,7 +123,7 @@ public class AnswerService {
         try (var permit = llmRouter.acquirePermit(provider)) {
             streamed = streamAnswer(provider, state, systemPrompt, listener::onToken);
         }
-        String answer = truncate(enforceSummaryOnlyForS(streamed, state.responseMode()));
+        String answer = truncate(enforceSummaryOnly(streamed, state.responseMode()));
         // streaming has no ChatResponse to read real usage from — record an approximate
         // (chars/4) usage entry so /llm-usage isn't blind to the entire streaming chat path, and
         // reflect the same estimate in the per-turn total so the chat UI isn't stuck at 0/0.
@@ -138,11 +138,10 @@ public class AnswerService {
     // ── Evaluation (sufficiency + grounding) + PROGRESSIVE ───────────────────
 
     private AgentState checkSufficiencyAndMaybeUpgrade(AgentState state, String answer, GraphListener listener) {
-        // S mode: skip evaluation entirely — no verifying indicator, no LLM eval call,
-        // no retry loop. CRITIC is already skipped in AgentGraph for S mode; skipping the
-        // ANSWER-level eval here ensures neither the blocking LLM call nor the "응답 검증 중..."
-        // UI indicator appears. grounded stays null (검증 미실행), same convention as directMode.
-        if (state.responseMode() == ResponseMode.S) {
+        // 검증을 건너뛰는 모드(현재 S): eval LLM 호출도, "응답 검증 중..." 인디케이터도, 재시도
+        // 루프도 없다. AgentGraph가 같은 성질로 CRITIC을 건너뛰므로 두 게이트가 함께 꺼진다.
+        // grounded는 null로 남는다(검증 미실행) — directMode와 같은 규약.
+        if (state.responseMode().skipsVerification()) {
             return state;
         }
         // The blocking evaluate() call below can take several seconds to tens of seconds with no
@@ -488,11 +487,11 @@ public class AnswerService {
     }
 
     /**
-     * S mode must return summary-only text. Keep only the summary section body (if present),
-     * otherwise take the first non-empty lines, and cap to 7 lines.
+     * 요약 전용 모드({@link ResponseMode#summaryOnly()})의 출력을 요약 하나로 좁힌다 — 요약
+     * 섹션이 있으면 그 본문만, 없으면 앞쪽 비어있지 않은 줄을 최대 7줄까지.
      */
-    private static String enforceSummaryOnlyForS(String answer, ResponseMode mode) {
-        if (mode != ResponseMode.S) return answer;
+    private static String enforceSummaryOnly(String answer, ResponseMode mode) {
+        if (!mode.summaryOnly()) return answer;
         if (answer == null || answer.isBlank()) return answer;
         String summary = CuratedTextUtils.extractSummarySection(answer);
         String base = summary.isBlank() ? answer : summary;

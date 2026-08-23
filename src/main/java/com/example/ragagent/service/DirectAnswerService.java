@@ -57,7 +57,7 @@ public class DirectAnswerService {
         LlmRouter.LlmResult result = llmRouter.executeGatedWithUsage(TaskType.TEXT, state.routingMode(),
                 model -> model.call(buildPrompt(systemPrompt, userPrompt, directTemp, maxTokens)));
         String rawAnswer = result.text();
-        String normalized = rawAnswer == null ? null : enforceSummaryOnlyForS(rawAnswer, state.responseMode());
+        String normalized = rawAnswer == null ? null : enforceSummaryOnly(rawAnswer, state.responseMode());
         String answer = (normalized == null || normalized.isEmpty()) ? null : normalized;
         log.debug("[DirectAnswer] answer length={}", answer == null ? -1 : answer.length());
         return state.toBuilder().answer(answer)
@@ -80,7 +80,7 @@ public class DirectAnswerService {
         }
 
         String answer = full.toString();
-        answer = enforceSummaryOnlyForS(answer, state.responseMode());
+        answer = enforceSummaryOnly(answer, state.responseMode());
         log.debug("[DirectAnswer] streaming answer length={}", answer.length());
         // Streaming mode has no ChatResponse to read real usage from — record an approximate
         // (chars/4) usage entry so /llm-usage isn't blind to the entire direct-answer stream path,
@@ -211,10 +211,11 @@ public class DirectAnswerService {
     }
 
     /**
-     * S mode must emit summary-only content. Keep only summary lines and drop extra sections.
+     * 요약 전용 모드({@link ResponseMode#summaryOnly()})의 출력을 요약 줄만 남기고 좁힌다 —
+     * RAG 경로의 AnswerService.enforceSummaryOnly()와 같은 규칙.
      */
-    private static String enforceSummaryOnlyForS(String answer, ResponseMode mode) {
-        if (mode != ResponseMode.S) return answer;
+    private static String enforceSummaryOnly(String answer, ResponseMode mode) {
+        if (!mode.summaryOnly()) return answer;
         if (answer == null || answer.isBlank()) return answer;
         String summary = CuratedTextUtils.extractSummarySection(answer);
         String base = summary.isBlank() ? answer : summary;

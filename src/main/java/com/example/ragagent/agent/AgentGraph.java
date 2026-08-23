@@ -1,7 +1,6 @@
 package com.example.ragagent.agent;
 
 import com.example.ragagent.config.AppProperties;
-import com.example.ragagent.model.ResponseMode;
 import com.example.ragagent.service.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -105,7 +104,9 @@ public class AgentGraph {
                         listener.onRetry("answer", state.retryCount(), state.evalReason());
                         yield Node.RETRIEVAL;
                     }
-                    if (state.responseMode() == ResponseMode.S) {
+                    // CRITIC은 ANSWER의 eval이 남긴 grounded 플래그만 소비하므로, 검증을 건너뛴
+                    // 모드에서는 판단할 재료가 없다 — 값이 아니라 성질로 묻는다(§6.24 Step 0-b).
+                    if (state.responseMode().skipsVerification()) {
                         yield Node.FINALIZE;
                     }
                     yield Node.CRITIC;

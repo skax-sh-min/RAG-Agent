@@ -12,9 +12,12 @@ package com.example.ragagent.model;
  *
  * <p>모드가 늘어날 때 분기가 흩어지지 않도록, 각 모드는 "무엇을 하는가"를 값이 아니라
  * <b>성질</b>로 노출한다({@link #allowsDirect()} / {@link #skipsVerification()} /
- * {@link #retrievalBoost()} / {@link #allowsCuration()}). 호출부는 {@code == ResponseMode.S}
- * 같은 값 비교 대신 이 메서드들을 물어야, 다음 모드를 추가할 때 고칠 곳이 이 파일 한 곳으로
- * 모인다.
+ * {@link #summaryOnly()} / {@link #retrievalBoost()} / {@link #allowsCuration()}).
+ * <b>호출부에 모드 값 비교를 두지 않는 것이 이 enum의 계약이다</b> — 그래야 다음 모드를
+ * 추가할 때 고칠 곳이 이 파일 한 곳으로 모인다. 새 분기가 필요하면 값을 비교하지 말고
+ * 여기에 성질을 하나 더 만들어라. 성질끼리 값이 우연히 같더라도(예: 지금 S에서
+ * {@code skipsVerification}과 {@code summaryOnly}가 둘 다 참) 묻는 질문이 다르면 합치지
+ * 않는다 — 합쳐두면 뒤에 붙는 모드가 한쪽을 조용히 잘못 상속한다.
  *
  * <p><b>예산</b>은 비율({@link #tokenRatio()})과 글자수 바닥({@link #minChars()}) 중 큰 쪽을
  * 고르되, <b>운영자가 설정한 {@code app.llm.max-tokens}를 절대 넘지 않는다</b>
@@ -28,12 +31,12 @@ public enum ResponseMode {
     /** 요약형 — 짧게, 요약 섹션 하나로. 검증(eval + CRITIC)을 건너뛴다. */
     S(0.15, 2_000,
       "prompt.answer.system.s", "prompt.direct.system.s", null,
-      0, true),
+      0, true, true),
 
     /** 표준형 (구 M) — 문서에 충실하게, 구체적이고 자세하게. 기본값. */
     N(0.40, 5_000,
       "prompt.answer.system.n", "prompt.direct.system.n", "prompt.answer.eval",
-      0, true);
+      0, true, false);
 
     /** 클라이언트가 아무것도/모르는 값을 보냈을 때 쓰는 모드. 옛 {@code "M"}·{@code "L"} 기록도 여기로 흡수된다. */
     public static final ResponseMode DEFAULT = N;
@@ -45,10 +48,11 @@ public enum ResponseMode {
     private final String evalPromptKey;
     private final int retrievalBoost;
     private final boolean curatable;
+    private final boolean summaryOnly;
 
     ResponseMode(double tokenRatio, int minChars,
                  String answerSystemPromptKey, String directSystemPromptKey, String evalPromptKey,
-                 int retrievalBoost, boolean curatable) {
+                 int retrievalBoost, boolean curatable, boolean summaryOnly) {
         this.tokenRatio = tokenRatio;
         this.minChars = minChars;
         this.answerSystemPromptKey = answerSystemPromptKey;
@@ -56,6 +60,7 @@ public enum ResponseMode {
         this.evalPromptKey = evalPromptKey;
         this.retrievalBoost = retrievalBoost;
         this.curatable = curatable;
+        this.summaryOnly = summaryOnly;
     }
 
     /** {@code app.llm.max-tokens} 중 이 모드가 쓸 비율. */
@@ -114,6 +119,20 @@ public enum ResponseMode {
 
     /** 충분성/근거 검증(ANSWER의 eval 호출 + CRITIC 노드)을 통째로 건너뛰는가. */
     public boolean skipsVerification() { return evalPromptKey == null; }
+
+    /**
+     * 답변을 요약 섹션 하나로 잘라내는 후처리를 적용하는가.
+     *
+     * <p>{@link #skipsVerification()}과 S에서 값이 같지만 <b>다른 성질</b>이라 별도 플래그로
+     * 둔다 — 하나는 "검증할 가치가 있을 만큼 긴 답변인가", 다른 하나는 "출력 형태가 요약
+     * 하나로 고정인가"이고, 뒤에 붙는 모드에서 둘은 갈릴 수 있다. 두 질문을 한 플래그로
+     * 합치면 그때 한쪽을 조용히 잘못 상속한다.
+     *
+     * <p>이 후처리는 PLAN §6.24 Step 1-c에서 <b>조건부 가드</b>로 강등된다 — 전용 시스템
+     * 프롬프트가 생기면 모델이 애초에 요약만 쓰므로, 후처리는 그게 실패했을 때만 도는
+     * 안전망이자 프롬프트 효과의 측정 수단이 된다.
+     */
+    public boolean summaryOnly() { return summaryOnly; }
 
     /** 모드별 답변 스타일 지시문의 i18n 키 ({@code messages*.properties}). */
     public String promptKey() {

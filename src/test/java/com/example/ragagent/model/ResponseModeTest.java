@@ -105,6 +105,16 @@ class ResponseModeTest {
     }
 
     @Test
+    @DisplayName("summaryOnly — S만 요약 전용 후처리 대상이다(skipsVerification과 값이 같아도 별개 성질)")
+    void summaryOnlyIsSeparateFromSkipsVerification() {
+        assertThat(ResponseMode.S.summaryOnly()).isTrue();
+        assertThat(ResponseMode.N.summaryOnly()).isFalse();
+        // 지금은 S에서 두 값이 우연히 같다. 뒤에 붙는 모드에서 갈릴 수 있으므로 하나로 합치지
+        // 않는다 — 합치면 그때 한쪽을 조용히 잘못 상속한다.
+        assertThat(ResponseMode.S.summaryOnly()).isEqualTo(ResponseMode.S.skipsVerification());
+    }
+
+    @Test
     @DisplayName("프롬프트 키 — 모드별 전용 시스템 프롬프트 키를 노출한다(번들은 Step 1-a에서 추가)")
     void systemPromptKeys() {
         assertThat(ResponseMode.S.answerSystemPromptKey()).isEqualTo("prompt.answer.system.s");
