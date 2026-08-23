@@ -92,8 +92,14 @@ public class DirectAnswerService {
         return state.toBuilder().answer(answer).accumulateTokens(approxIn, approxOut).build();
     }
 
+    /**
+     * meta(인사/잡담)는 모드와 무관하게 자체 프롬프트를 쓰고, directMode 답변은 <b>모드별 전용</b>
+     * 시스템 프롬프트를 고른다 (PLAN §6.24 Step 1-b) — RAG 경로와 같은 구조다.
+     */
     private String resolveSystemPrompt(AgentState state) {
-        String key = state.directMode() ? "prompt.direct.system" : "prompt.direct.meta.system";
+        String key = state.directMode()
+                ? state.responseMode().directSystemPromptKey()
+                : "prompt.direct.meta.system";
         return messageSource.getMessage(key, null, state.locale());
     }
 
@@ -110,10 +116,9 @@ public class DirectAnswerService {
 
 
     /**
-     * directMode (RAG 없이 직접 질문) answers get the same S/N style instruction as the RAG path
-     * (see AnswerService.responseStyleInstruction) — meta/greeting answers keep their own fixed
-     * "2-3 sentences" instruction (prompt.direct.meta.system) unchanged, since S/N differentiation
-     * doesn't make sense for a greeting.
+     * 사용자 프롬프트는 이제 대화 이력과 질문만 나른다 — 답변의 성격은 전적으로
+     * {@link #resolveSystemPrompt} 가 고른 모드별 시스템 프롬프트가 정한다(§6.24 Step 0-c에서
+     * 스타일 지시문 층을 걷어냈다).
      */
     private String buildUserPrompt(AgentState state) {
         String history = state.conversationHistory();
@@ -127,16 +132,8 @@ public class DirectAnswerService {
         if (!history.isBlank()) {
             sb.append("[이전 대화]\n").append(history).append("\n\n");
         }
-        sb.append(responseStyleInstruction(state)).append("\n\n[현재 질문]\n").append(question);
+        sb.append("[현재 질문]\n").append(question);
         return sb.toString();
-    }
-
-    /** Same character-target instruction as AnswerService.responseStyleInstruction — see ResponseMode javadoc. */
-    private String responseStyleInstruction(AgentState state) {
-        ResponseMode mode = state.responseMode();
-        int tokens = mode.maxTokens(props.llmSafe().maxTokens());
-        int targetChars = tokens > 0 ? tokens : mode.minChars();
-        return messageSource.getMessage(mode.promptKey(), new Object[]{targetChars}, state.locale());
     }
 
     /**

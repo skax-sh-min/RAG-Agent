@@ -34,7 +34,8 @@ import java.util.concurrent.ConcurrentHashMap;
  * or degrades chat.
  *
  * <p>The summary itself is built without an LLM whenever the turns' answers already carry their
- * own "## 요약" section — a RAG answer always does ({@code prompt.answer.system} mandates it), so
+ * own "## 요약" section — a RAG answer always does (both {@code prompt.answer.system.n} and
+ * {@code prompt.answer.system.s} mandate it), so
  * in practice the LLM path only ever exists to compress Direct-mode/meta answers, which have no
  * such section. And even then it runs only when the dedicated MICRO_TEXT offload model is
  * configured; without it the text is still assembled from the 요약 sections, with un-summarized
@@ -186,7 +187,7 @@ public class ConversationSummarizerService {
      * Produces the thread summary, preferring the answers' own "## 요약" sections over an LLM call.
      *
      * <p>A RAG answer already opens with an LLM-written recap of itself
-     * ({@code prompt.answer.system}'s fixed 요약 → 상세 설명 → … format), so re-summarizing it is
+     * ({@code prompt.answer.system.n}'s fixed 요약 → 상세 설명 → … format), so re-summarizing it is
      * paying a second time for text the first call already produced. {@link #buildSummaryInput}
      * therefore substitutes each answer with its own 요약 section where one exists:
      * <ul>
@@ -284,7 +285,7 @@ public class ConversationSummarizerService {
      * <p>The discriminator is "does the answer carry a {@code ## 요약} heading", not a persisted
      * direct-mode flag ({@code conversation_turns} has none) — the same proxy
      * {@link #buildSummaryInput} already relies on, and accurate because
-     * {@code prompt.answer.system} mandates that section while {@code prompt.direct.system} never
+     * {@code prompt.answer.system.*} mandates that section while {@code prompt.direct.system.n} never
      * asks for it. A RAG answer where the model ignored the format degrades to the capped branch,
      * which is the safe direction.
      */

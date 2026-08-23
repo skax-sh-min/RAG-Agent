@@ -100,7 +100,7 @@ public class AnswerService {
     // ── Blocking paths ──────────────────────────────────────────────────────
 
     private AgentState executeBlocking(AgentState state) {
-        String systemPrompt = answerSystemPrompt(state.locale());
+        String systemPrompt = answerSystemPrompt(state.locale(), state.responseMode());
         String userPrompt = buildAnswerPrompt(state);
         ChatOptions options = answerOptions(state);
         LlmRouter.LlmResult result = llmRouter.executeGatedWithUsage(TaskType.TEXT, state.routingMode(),
@@ -117,7 +117,7 @@ public class AnswerService {
     // ── Streaming paths ─────────────────────────────────────────────────────
 
     private AgentState executeStreamingNormal(AgentState state, GraphListener listener) {
-        String systemPrompt = answerSystemPrompt(state.locale());
+        String systemPrompt = answerSystemPrompt(state.locale(), state.responseMode());
         LlmProvider provider = llmRouter.routeProvider(TaskType.TEXT, state.routingMode());
         String streamed;
         try (var permit = llmRouter.acquirePermit(provider)) {
@@ -158,7 +158,7 @@ public class AnswerService {
     }
 
     private AgentState progressiveUpgrade(AgentState state, AgentState resultState, GraphListener listener) {
-        String systemPrompt = answerSystemPrompt(state.locale());
+        String systemPrompt = answerSystemPrompt(state.locale(), state.responseMode());
         LlmProvider premiumProvider = llmRouter.routeProvider(TaskType.TEXT, RoutingMode.QUALITY_FIRST);
         if (listener != null) listener.onUpgrade(premiumProvider.name());
         String premiumAnswer;
@@ -401,29 +401,27 @@ public class AnswerService {
                 : oneLine;
     }
 
-    private String answerSystemPrompt(Locale locale) {
-        return messageSource.getMessage("prompt.answer.system", null, locale);
-    }
-
     /**
-     * The S/N answer-style instruction for this turn (summary / standard),
-     * naming a concrete character target (see {@link ResponseMode} javadoc). Appended to the user
-     * prompt just before the question so the question stays last (the system prompt's injection
-     * warning assumes that ordering).
+     * 이 턴의 모드 전용 시스템 프롬프트 (PLAN §6.24 Step 1-a).
+     *
+     * <p>예전에는 공용 프롬프트 하나를 쓰고 사용자 메시지 끝에 "[응답 스타일]" 지시문을 덧붙여
+     * 형식을 뒤집으려 했다. 그 방식은 S에서 실패했다 — 시스템 프롬프트가 나열한 5섹션 헤더
+     * 목록이 사용자 메시지의 한 줄 부정 지시보다 강하게 작용해 모델이 전부 생성했고, 서버가
+     * 사후에 잘라내면서 화면과 DB가 달라졌다. 이제 모드마다 프롬프트를 통째로 바꾼다.
      */
-    private String responseStyleInstruction(AgentState state) {
-        ResponseMode mode = state.responseMode();
-        int tokens = mode.maxTokens(props.llmSafe().maxTokens());
-        int targetChars = tokens > 0 ? tokens : mode.minChars();
-        return messageSource.getMessage(mode.promptKey(), new Object[]{targetChars}, state.locale());
+    private String answerSystemPrompt(Locale locale, ResponseMode mode) {
+        return messageSource.getMessage(mode.answerSystemPromptKey(), null, locale);
     }
 
     /**
      * Per-call options for a blocking answer call: general/RAG temperature (§6.18, hot — read fresh
      * per call) plus {@code maxTokens} derived from the response mode's share of the configured
-     * {@code app.llm.max-tokens}. maxTokens is only attached on the <b>blocking</b> call paths —
-     * streaming calls have no hard per-call cap (token-by-token UX), so there the same character
-     * target is instead named in {@link #responseStyleInstruction} as the model's only length control.
+     * {@code app.llm.max-tokens} (never above it — see {@link ResponseMode#maxTokens(int)}).
+     *
+     * <p>maxTokens is only attached on the <b>blocking</b> call paths; streaming has no per-call cap
+     * (token-by-token UX). That asymmetry no longer matters for length control: the budget is a
+     * safety valve, and what actually shapes the answer is the mode's own system prompt — S names a
+     * 1,000-character ceiling there, N deliberately names no number at all (§6.24).
      */
     private ChatOptions answerOptions(AgentState state) {
         OpenAiChatOptions.Builder builder = OpenAiChatOptions.builder()
@@ -472,8 +470,6 @@ public class AnswerService {
         if (!state.retrievalWarnings().isEmpty()) {
             sb.append("[경고]\n").append(String.join("\n", state.retrievalWarnings())).append("\n\n");
         }
-
-        sb.append(responseStyleInstruction(state)).append("\n\n");
 
         sb.append("[질문]\n").append(PromptInjectionGuard.wrap(state.question()));
         return sb.toString();

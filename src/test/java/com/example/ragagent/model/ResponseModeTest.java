@@ -122,11 +122,4 @@ class ResponseModeTest {
         assertThat(ResponseMode.S.directSystemPromptKey()).isEqualTo("prompt.direct.system.s");
         assertThat(ResponseMode.N.directSystemPromptKey()).isEqualTo("prompt.direct.system.n");
     }
-
-    @Test
-    @DisplayName("promptKey — 모드별 i18n 키를 소문자로 만든다(Step 1-a에서 이 층 자체가 사라진다)")
-    void promptKey() {
-        assertThat(ResponseMode.S.promptKey()).isEqualTo("prompt.answer.style.s");
-        assertThat(ResponseMode.N.promptKey()).isEqualTo("prompt.answer.style.n");
-    }
 }

@@ -90,15 +90,15 @@ public enum ResponseMode {
      * 마세요" 같은 부정 지시를 얹어 뒤집는 방식은 S에서 이미 실패했다(모델이 5섹션을 그대로
      * 생성 → 사후 절단 → 화면과 DB 불일치). 없는 형식은 따라갈 수 없다.
      *
-     * <p><b>번들 키는 PLAN §6.24 Step 1-a에서 추가된다</b> — 그 전까지 이 값을 실제로
-     * {@code MessageSource}에 넘기면 {@code NoSuchMessageException}이 난다.
+     * <p>S는 5섹션 헤더 이름을 <b>언급조차 하지 않는다</b> — 금지하려고 나열하는 것만으로도
+     * 성능이 낮은 로컬 모델은 그 목록을 따라간다.
      */
     public String answerSystemPromptKey() { return answerSystemPromptKey; }
 
     /**
      * Direct(RAG 없이 직접 질문) 답변의 전용 시스템 프롬프트 키. {@code null}이면 그 모드는
-     * Direct에서 쓸 수 없다는 뜻이다({@link #allowsDirect()}). 번들 키 추가 시점은
-     * {@link #answerSystemPromptKey()}와 같다(Step 1-b).
+     * Direct에서 쓸 수 없다는 뜻이다({@link #allowsDirect()}). meta(인사/잡담) 답변은 모드와
+     * 무관하게 {@code prompt.direct.meta.system}을 쓰므로 이 키를 거치지 않는다.
      */
     public String directSystemPromptKey() { return directSystemPromptKey; }
 
@@ -133,11 +133,6 @@ public enum ResponseMode {
      * 안전망이자 프롬프트 효과의 측정 수단이 된다.
      */
     public boolean summaryOnly() { return summaryOnly; }
-
-    /** 모드별 답변 스타일 지시문의 i18n 키 ({@code messages*.properties}). */
-    public String promptKey() {
-        return "prompt.answer.style." + name().toLowerCase();
-    }
 
     /**
      * 관대한 파싱 — {@code null}/공백/모르는 값 모두 {@link #DEFAULT}로 떨어지고 예외를 던지지

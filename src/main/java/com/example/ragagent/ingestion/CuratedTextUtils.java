@@ -10,7 +10,7 @@ import java.util.regex.Pattern;
  */
 public final class CuratedTextUtils {
 
-    // prompt.answer.system (messages_ko.properties) instructs the LLM to always end an answer
+    // prompt.answer.system.n (messages_ko.properties) instructs the LLM to always end an answer
     // with a "## 참고" section listing cited [filename | p.N] (heading) bullets. This is literal
     // text inside the answer string — not a separately computed source list — and always the
     // LAST section per the prompt's fixed format, so truncating at the last match is safe.
@@ -22,7 +22,8 @@ public final class CuratedTextUtils {
     private static final Pattern REFERENCE_HEADING =
             Pattern.compile("(?m)^(?:#{1,3}\\s*참고.*|참고)\\s*$");
 
-    // prompt.answer.system's fixed 5-section format: 요약 → 상세 설명 → 예시/코드 → 설정/주의사항 → 참고.
+    // prompt.answer.system.n's fixed 5-section format: 요약 → 상세 설명 → 예시/코드 → 설정/주의사항 → 참고.
+    // (S는 요약 하나만 내므로 이 형식을 쓰지 않는다 — §6.24 Step 1-a)
     // Same heading-variant tolerance as REFERENCE_HEADING ("## 상세 설명 및 배경" etc. still matches).
     private static final Pattern DETAIL_HEADING = Pattern.compile("(?m)^#{1,3}\\s*상세\\s*설명.*$");
 

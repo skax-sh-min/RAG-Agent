@@ -428,8 +428,8 @@ class AnswerServiceTest {
     }
 
     @Test
-    @DisplayName("BLOCKING — 응답 스타일 지침에 모드별 글자수 목표(minChars, 기본 6000토큰 설정에서는 바닥값)가 전달된다")
-    void blocking_answerPrompt_passesResponseModeCharTarget() {
+    @DisplayName("BLOCKING — S는 전용 시스템 프롬프트를 쓰고 스타일 지시문 층은 없다 (§6.24 Step 0-c/1-a)")
+    void blocking_answerPrompt_usesModeSystemPrompt() {
         // S 모드에서는 평가(evaluate) LLM 호출 자체가 스킵되므로 answer 호출 1회만 발생한다.
         when(llmRouter.executeGatedWithUsage(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), any()))
                 .thenReturn(new LlmRouter.LlmResult("답변", 0, 0));
@@ -439,7 +439,9 @@ class AnswerServiceTest {
 
         // 평가 LLM은 한 번도 호출되지 않는다 (answer LLM 1회만)
         verify(llmRouter, org.mockito.Mockito.times(1)).executeGatedWithUsage(any(), any(), any());
-        verify(messageSource).getMessage(eq("prompt.answer.style.s"), eq(new Object[]{2_000}), any(Locale.class));
+        verify(messageSource).getMessage(eq("prompt.answer.system.s"), any(), any(Locale.class));
+        verify(messageSource, org.mockito.Mockito.never())
+                .getMessage(org.mockito.ArgumentMatchers.startsWith("prompt.answer.style"), any(), any(Locale.class));
     }
 
     // ── STREAMING 경로 ───────────────────────────────────────────────────
