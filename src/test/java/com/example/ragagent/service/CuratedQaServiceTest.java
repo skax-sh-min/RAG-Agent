@@ -157,6 +157,21 @@ class CuratedQaServiceTest {
     }
 
     @Test
+    @DisplayName("onLike — S 모드 턴은 curated_qa 행조차 만들지 않는다(좋아요 무동작)")
+    void onLike_summaryMode_doesNothing() {
+        // S 답변은 전체가 "## 요약" 한 섹션이라, 큐레이션 임베딩 입력에서 구조 섹션을 걷어내면
+        // 본문이 통째로 사라져 질문만 담긴 벡터가 만들어졌다. 애초에 축약된 답변이라 공유 지식으로
+        // 승격할 대상도 아니므로 좋아요 자체를 무동작으로 만든다(싫어요는 계속 동작한다).
+        when(memoryService.getTurn(UID, TID, TURN_ID)).thenReturn(Optional.of(turn("질문", "## 요약\n짧은 답변", "S")));
+
+        service.onLike(UID, TID, TURN_ID);
+
+        verify(repository, never()).upsertActive(anyLong(), any(), any(), any(), any(), any(), any());
+        verify(repository, never()).findById(anyLong());
+        verify(vectorStore, never()).add(any(), any(), any());
+    }
+
+    @Test
     @DisplayName("onLike — 옛 L모드로 저장된 턴도 이제 임베딩된다(PLAN §6.24 Step 0-a: 근거 없던 스킵 제거)")
     void onLike_legacyLModeTurn_isNoLongerSkipped() {
         // 예전에는 response_mode='L' 이면 임베딩을 통째로 건너뛰었다 — "L 답변은 색인된 원문을

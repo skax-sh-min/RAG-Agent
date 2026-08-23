@@ -7,6 +7,7 @@ import com.example.ragagent.ingestion.DocRegistry;
 import com.example.ragagent.ingestion.MarkdownNoiseNormalizer;
 import com.example.ragagent.ingestion.VectorStoreFacade;
 import com.example.ragagent.model.MetaKey;
+import com.example.ragagent.model.ResponseMode;
 import com.example.ragagent.repository.CuratedQaRepository;
 import com.example.ragagent.repository.CuratedQaRepository.CuratedQa;
 import com.example.ragagent.repository.MemoryRepository;
@@ -144,6 +145,16 @@ public class CuratedQaService {
             return;
         }
         MemoryRepository.Turn turn = turnOpt.get();
+
+        // 큐레이션 대상이 아닌 모드는 여기서 끝 — curated_qa 행조차 만들지 않는다. LIKE 피드백의
+        // 유일한 소비자가 큐레이션이므로 그 모드에서는 좋아요가 무동작이 된다(싫어요는 그대로
+        // 다음 컨텍스트 제외로 동작). 사유는 ResponseMode 의 해당 모드 주석 참조.
+        ResponseMode mode = ResponseMode.parse(turn.responseMode());
+        if (!mode.allowsCuration()) {
+            log.debug("[CURATED] onLike: {} 모드는 큐레이션 대상이 아니라 무시한다 turnId={}", mode, turnId);
+            return;
+        }
+
         String version = threadMetaService.findById(userId, threadId)
                 .map(t -> t.version())
                 .orElse(null);

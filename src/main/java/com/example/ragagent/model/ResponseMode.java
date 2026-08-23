@@ -28,10 +28,20 @@ package com.example.ragagent.model;
  */
 public enum ResponseMode {
 
-    /** 요약형 — 짧게, 요약 섹션 하나로. 검증(eval + CRITIC)을 건너뛴다. */
+    /**
+     * 요약형 — 짧게, 요약 섹션 하나로. 검증(eval + CRITIC)을 건너뛴다.
+     *
+     * <p><b>큐레이션 대상이 아니다</b>({@code curatable=false}). S 답변은 전체가 {@code "## 요약"}
+     * 한 섹션이라 큐레이션 임베딩 입력에서 구조 섹션을 걷어내면 <b>본문이 통째로 사라진다</b>
+     * ({@code CuratedTextUtils.stripStructuralSections} 는 요약·참고 섹션을 제거하도록 만들어졌고,
+     * N 답변에서는 {@code ## 상세 설명}이 남지만 S에는 남을 것이 없다). 그렇게 만들어진 벡터는
+     * 질문만 담고 답변 내용을 하나도 담지 못한다. 게다가 S는 애초에 축약된 답변이라 공유 지식으로
+     * 승격할 대상도 아니다 — 그래서 좋아요는 S 턴에서 아무 일도 하지 않는다(싫어요는 그대로
+     * 동작한다: 다음 대화 컨텍스트에서 제외).
+     */
     S(0.15, 2_000,
       "prompt.answer.system.s", "prompt.direct.system.s", null,
-      0, true, true),
+      0, false, true),
 
     /**
      * 표준형 (구 M) — 문서에 충실하게, 구체적이고 자세하게. 기본값.
@@ -118,7 +128,13 @@ public enum ResponseMode {
     /** 이 모드가 검색 결과를 몇 개 더 받을지(0 = 기본 topK 그대로). */
     public int retrievalBoost() { return retrievalBoost; }
 
-    /** 이 모드의 답변을 좋아요 기반 큐레이션 지식(§10.10)으로 승격해도 되는가. */
+    /**
+     * 이 모드의 답변을 좋아요 기반 큐레이션 지식(§10.10)으로 승격해도 되는가.
+     *
+     * <p>{@code false}면 {@code CuratedQaService.onLike()}가 즉시 반환한다 — {@code curated_qa} 행도
+     * 만들지 않으므로 좋아요가 사실상 무동작이 된다(LIKE 피드백의 유일한 소비자가 큐레이션이다).
+     * 싫어요는 무관하게 계속 동작한다.
+     */
     public boolean allowsCuration() { return curatable; }
 
     /** Direct 모드(검색 없음)에서 고를 수 있는가 — 검색 결과가 전제인 모드는 false. */

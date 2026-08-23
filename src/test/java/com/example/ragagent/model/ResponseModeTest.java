@@ -101,10 +101,18 @@ class ResponseModeTest {
 
         for (ResponseMode mode : ResponseMode.values()) {
             assertThat(mode.allowsDirect()).as("%s.allowsDirect", mode).isTrue();
-            assertThat(mode.allowsCuration()).as("%s.allowsCuration", mode).isTrue();
             assertThat(mode.retrievalBoost()).as("%s.retrievalBoost", mode).isZero();
             assertThat(mode.directSystemPromptKey()).as("%s.directSystemPromptKey", mode).isNotNull();
         }
+    }
+
+    @Test
+    @DisplayName("allowsCuration — S는 큐레이션 대상이 아니다(좋아요 무동작), N만 승격된다")
+    void summaryModeIsNotCuratable() {
+        // S 답변은 전체가 "## 요약" 한 섹션이라 큐레이션 임베딩 입력에서 본문이 통째로 사라진다
+        // (stripStructuralSections 가 요약·참고를 걷어내는데 S에는 남을 것이 없다).
+        assertThat(ResponseMode.S.allowsCuration()).isFalse();
+        assertThat(ResponseMode.N.allowsCuration()).isTrue();
     }
 
     @Test

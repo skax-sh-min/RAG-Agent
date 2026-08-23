@@ -315,10 +315,10 @@ REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — �
 `includeCurated=true`를 붙여 **문서 태그 ∪ 큐레이션 태그**를 받는다(큐레이션 항목은 `chunk_fts`에
 색인되지 않아 기본 호출로는 잡히지 않는다).
 
-**응답 모드 토글 (S/M/L)**: 콤보박스가 아니라 `.btn-check` 기반 3버튼 토글 그룹(`#response-mode-group` 안의
-`#response-mode-s/m/l`) — 왼쪽에 `응답옵션`(`chat.response.group.label`) 라벨이 붙는다. 버튼 폭은 기본
+**응답 모드 토글 (S/N)**: 콤보박스가 아니라 `.btn-check` 기반 2버튼 토글 그룹(`#response-mode-group` 안의
+`#response-mode-s/n`) — 왼쪽에 `응답옵션`(`chat.response.group.label`) 라벨이 붙는다. 버튼 폭은 기본
 `btn-group-sm`의 약 1.5배(`.response-mode-btn { min-width: 2.6rem }`, `app.css`)로 넓히고 `font-weight:700`으로
-굵게 표시한다. 버튼에는 `S`/`M`/`L` 글자만 표시하고, 마우스를 올리면 상세 설명이 뜬다 — 단 네이티브 `title`
+굵게 표시한다. 버튼에는 `S`/`N` 글자만 표시하고, 마우스를 올리면 상세 설명이 뜬다 — 단 네이티브 `title`
 속성이 아니라 **Bootstrap Tooltip**(`data-bs-toggle="tooltip"` + `new bootstrap.Tooltip(el, {delay:{show:100,
 hide:0}})`, 하단 스크립트에서 초기화)이다. 네이티브 title 툴팁은 브라우저 기본 지연(~1.5초)이 있어 체감상
 너무 늦게 뜨는 문제가 있었고, `bootstrap.bundle.min.js`가 `layout/base.html`에 이미 로드돼 있어(Popper 포함)
@@ -326,26 +326,32 @@ hide:0}})`, 하단 스크립트에서 초기화)이다. 네이티브 title 툴�
 `localStorage['chatResponseMode']`에 저장되어 재방문 시 복원된다 — HTMX 폼 전송과 SSE(`new FormData(form)`)
 둘 다 이 hidden 필드를 그대로 집어간다.
 
-| 선택지 | ResponseMode | 답변 성격 | 토큰 비율(`LLM_MAX_TOKENS` 대비) | 글자수 하한 |
-|--------|-------------|----------|------------------------------|------------|
-| S | `S` | 요약적이고 간단하게 | 15% | 2,000자 |
-| M | `M` | 쉽고 자세하게 | 40% (기본값) | 5,000자 |
-| L | `L` | 원문 최대한 살려 최대한 많이 | 70% | 10,000자 |
+| 선택지 | ResponseMode | 답변 성격 | 프롬프트의 분량 지침 |
+|--------|-------------|----------|--------------------|
+| S | `S` | 요약 하나로 (`## 요약` 섹션만) | **1,000자 이내** + 4~7줄 |
+| N | `N` | 문서에 충실하게, 5섹션 (기본값) | 숫자 없음 — "구체적이고 자세하게" |
 
-**목표 분량은 두 값(비율/하한) 중 큰 쪽**(`ResponseMode.maxTokens()` = `max(256, max(round(설정값×비율),
-하한))`) — `LLM_MAX_TOKENS`를 낮게 잡은 배포에서도 S/M/L이 같은 값으로 뭉개지지 않도록 하한이 바닥을
-잡아준다(전형적인 설정 범위에서는 사실상 이 하한이 실제 분량을 결정하고, 비율 항은 나중에 훨씬 큰
-컨텍스트 모델을 쓰게 될 때의 안전판이다). 이 하나의 숫자(글자 수로 취급 — 한글은 1토큰≈1글자라 별도
-환산 없음)가 **블로킹 호출의 `ChatOptions.maxTokens`**로도, **프롬프트 지시문(`prompt.answer.style.{s,m,l}`)에
-들어가는 "약 N자 이내로" 목표치**로도 그대로 재사용된다. 다만 이는 프롬프트로 LLM에 전달하는 "목표"일 뿐
-서버가 답변을 그 글자 수에서 강제로 잘라내지는 않는다 — `maxTokens`는 **블로킹 호출에만** 붙으므로(스트리밍은
-기존 설계대로 토큰 상한이 없음 — CLAUDE.md 참고) 스트리밍 채팅에서는 프롬프트 지시문이 유일한 조절 수단이다.
-`AnswerService.truncate()`의 20,000자 컷은 모드와 무관한 절대 상한으로 그대로 유지된다.
+**옛 `L`(원문 최대)은 제거됐다** — 같은 검색 결과를 받아 재료가 동일했고 실측 분량이 M과 4.6%밖에
+차이 나지 않았다(PLAN §6.24). 화이트리스트(`['S','N']`)에 없는 값은 기본값 `N`으로 떨어지므로
+브라우저 `localStorage`에 남아 있던 `'M'`·`'L'`도 그대로 흡수된다 — 서버의 `ResponseMode.parse()`와
+같은 규칙이다.
 
-> **L은 RAG 전용**: `L`(원문 최대)은 검색된 문서 컨텍스트를 최대한 살리는 모드라 Direct(RAG 미사용) 모드에서는
-> 의미가 없다 — RAG/Direct 토글(`#direct-mode-toggle`)이 켜지면 `#response-mode-l`이 `disabled`되어
-> Bootstrap의 `.btn-check:disabled` 스타일로 흐리게 표시된다. 이 시점에 `L`이 선택돼 있었다면 자동으로
-> `M`으로 되돌리고(`localStorage`도 갱신) 다시 RAG로 돌아가도 `L`을 자동 재선택하지는 않는다.
+**분량은 프롬프트가 정하고, 토큰 예산은 안전판이다.** `ResponseMode.maxTokens()`
+(`= min(설정값, max(256, max(round(설정값×비율), 하한)))`, S 0.15/2,000 · N 0.70/5,000)가 내는 값은
+**블로킹 호출의 `ChatOptions.maxTokens`에만** 붙는다 — 스트리밍 채팅에는 토큰 상한이 없다. 예전에는
+이 숫자가 `prompt.answer.style.*`의 "약 N자 이내로" 목표치로도 재사용됐지만, 긴 출력에서 그 목표가
+아무 일도 하지 않는다는 것이 확인돼(옛 M/L이 구분되지 않은 원인) **그 층 자체가 제거됐다**. 지금은
+모드별 전용 시스템 프롬프트(`prompt.answer.system.{s,n}`)가 분량을 지시한다. `/settings`의 "응답 예산"
+행이 모드별 실효 토큰과 어느 항이 이겼는지를 보여준다. `AnswerService.truncate()`의 20,000자 컷은
+모드와 무관한 절대 상한으로 그대로 유지된다.
+
+> **Direct 배타는 현재 없다**: 두 모드 모두 검색 없이도 의미가 있어(`prompt.direct.system.{s,n}`)
+> RAG/Direct 토글이 응답 모드 버튼을 비활성화하지 않는다. 검색 결과가 전제인 모드(C, PLAN §6.24 Phase 4)가
+> 추가되면 그때 배타 처리가 돌아온다 — 클라이언트 `disabled` + 서버 강등 가드 양쪽.
+
+> **`S`에서는 좋아요 버튼이 아무 일도 하지 않는다**: S 답변은 전체가 `## 요약` 한 섹션이라 큐레이션
+> 임베딩 입력에서 구조 섹션을 걷어내면 본문이 통째로 사라진다(`ResponseMode.S.allowsCuration() = false`,
+> `CuratedQaService.onLike()`가 즉시 반환). 싫어요는 모드와 무관하게 동작한다. 상세는 PIPELINE §3.1.
 
 ### 질문 내비게이션 (현재 질문 풍선 · 전체 질문 보기)
 
@@ -454,7 +460,7 @@ done 이벤트    (답변 완료 후)   → attribution {chunkId: 0.0~1.0} → �
 | 큐레이션 답변 편집 | 좋아요 상태일 때만 노출되는 연필(✏) 아이콘 | `GET`/`PATCH /ui/threads/{id}/turns/{turnId}/curated` → 우측 오프캔버스에서 답변 텍스트 수정, 저장 시 자동 재임베딩 |
 
 - 편집 아이콘은 **본인이 좋아요한 turn에서만** 보인다 — 채팅창은 항상 본인 스레드만 렌더링하므로 별도 권한 UI 분기가 없다.
-- **L(원문 최대) 모드 답변은 좋아요를 눌러도 재임베딩되지 않는다** — `curated_qa` 행(좋아요 취소·편집·관리자 목록용)은 그대로 생성되지만, 이미 인덱싱된 원본 문서 내용과 사실상 동일해 배경 임베딩 스레드 자체가 시작되지 않는다(`CuratedQaService.onLike()`). UI 동작(👍 토글, 편집 아이콘 노출)은 다른 모드와 동일하다.
+- **`S`(간단히) 모드 답변은 좋아요가 무동작이다** — `curated_qa` 행조차 만들지 않는다(`ResponseMode.S.allowsCuration() = false` → `CuratedQaService.onLike()` 즉시 반환). S 답변은 전체가 `## 요약` 한 섹션이라 임베딩 입력에서 구조 섹션을 걷어내면 본문이 통째로 사라지기 때문. 👍 토글 자체는 눌리지만 편집 아이콘은 큐레이션 행이 없으므로 나타나지 않는다. 싫어요는 모드와 무관하게 동작한다.
 - 좋아요/취소 클릭 시 JS가 서버 응답에 따라 편집 아이콘의 표시 여부도 함께 갱신한다(새로고침 불필요).
 - 관리자용 전체 큐레이션 Q&A 관리(모든 사용자 대상)는 `/admin` 페이지에 별도로 있다 — [§3.4](#34-벡터-스토어-관리-admincontroller) 및 [OPERATOR_MANUAL.md §7.5](OPERATOR_MANUAL.md#75-큐레이션-qa-관리-1010) 참고.
 - 동작 원리(디바운스, 재임베딩, 문서 재인덱싱/대화 삭제와의 관계)는 [OPERATOR_MANUAL.md §6.7](OPERATOR_MANUAL.md#67-큐레이션-qa-좋아요-기반-지식-승격-1010) 참고.
