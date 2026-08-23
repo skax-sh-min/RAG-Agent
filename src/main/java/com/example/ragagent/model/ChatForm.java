@@ -20,7 +20,7 @@ public record ChatForm(
         return TagUtils.parseTagList(tags);
     }
 
-    /** Lenient parse of the S/M/L selector (never throws — {@link ResponseMode#DEFAULT} on blank/unknown). */
+    /** Lenient parse of the S/N selector (never throws — {@link ResponseMode#DEFAULT} on blank/unknown). */
     public ResponseMode responseModeOrDefault() {
         return ResponseMode.parse(responseMode);
     }

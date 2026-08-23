@@ -8,7 +8,8 @@ public interface MemoryRepository {
     String getHistory(String userId, String threadId, int maxChars);
 
     /** Returns the generated turn id (conversation_turns.id). {@code responseMode}: the turn's
-     *  S/M/L answer-length mode ({@code ResponseMode.name()}), null-safe (nullable column).
+     *  S/N response mode ({@code ResponseMode.name()}), null-safe (nullable column). Legacy
+     *  {@code "M"}/{@code "L"} rows parse back to {@code N} (see ResponseMode.parse).
      *  {@code selectedTags}: the search-scope tags this question was asked under (comma-joined,
      *  null/blank = 전체 검색) — read back by {@code CuratedQaService.onLike} so a 👍-promoted
      *  answer inherits the scope it was actually answered in. */

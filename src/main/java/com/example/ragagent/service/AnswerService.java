@@ -407,7 +407,7 @@ public class AnswerService {
     }
 
     /**
-     * The S/M/L answer-style instruction for this turn (summary / detailed / source-preserving),
+     * The S/N answer-style instruction for this turn (summary / standard),
      * naming a concrete character target (see {@link ResponseMode} javadoc). Appended to the user
      * prompt just before the question so the question stays last (the system prompt's injection
      * warning assumes that ordering).

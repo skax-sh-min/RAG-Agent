@@ -110,9 +110,9 @@ public class DirectAnswerService {
 
 
     /**
-     * directMode (RAG 없이 직접 질문) answers get the same S/M/L length instruction as the RAG path
+     * directMode (RAG 없이 직접 질문) answers get the same S/N style instruction as the RAG path
      * (see AnswerService.responseStyleInstruction) — meta/greeting answers keep their own fixed
-     * "2-3 sentences" instruction (prompt.direct.meta.system) unchanged, since S/M/L differentiation
+     * "2-3 sentences" instruction (prompt.direct.meta.system) unchanged, since S/N differentiation
      * doesn't make sense for a greeting.
      */
     private String buildUserPrompt(AgentState state) {

@@ -119,11 +119,11 @@ class DirectAnswerServiceTest {
         when(llmRouter.executeGatedWithUsage(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), any()))
                 .thenReturn(new LlmRouter.LlmResult("답변", 0, 0));
 
-        AgentState state = newState(true).toBuilder().responseMode(ResponseMode.M).build();
+        AgentState state = newState(true).toBuilder().responseMode(ResponseMode.N).build();
         service.execute(state);
 
-        // llmSafe().maxTokens()=6000 → M.maxTokens(6000)=max(2400,5000)=5000 (바닥값)
-        verify(messageSource).getMessage(eq("prompt.answer.style.m"), eq(new Object[]{5_000}), any(Locale.class));
+        // llmSafe().maxTokens()=6000 → N.maxTokens(6000)=min(6000, max(2400,5000))=5000 (바닥값)
+        verify(messageSource).getMessage(eq("prompt.answer.style.n"), eq(new Object[]{5_000}), any(Locale.class));
     }
 
     @Test

@@ -157,18 +157,23 @@ class CuratedQaServiceTest {
     }
 
     @Test
-    @DisplayName("onLike — L모드 답변은 curated_qa 행은 생성하되 임베딩은 아예 시도하지 않는다(원문과 거의 동일하므로)")
-    void onLike_lMode_skipsEmbedEntirely() {
+    @DisplayName("onLike — 옛 L모드로 저장된 턴도 이제 임베딩된다(PLAN §6.24 Step 0-a: 근거 없던 스킵 제거)")
+    void onLike_legacyLModeTurn_isNoLongerSkipped() {
+        // 예전에는 response_mode='L' 이면 임베딩을 통째로 건너뛰었다 — "L 답변은 색인된 원문을
+        // 거의 그대로 미러링한다"는 전제였는데, 실측에서 L 답변 길이가 M과 같아 전제가 깨졌다.
+        // 그 분기는 멀쩡한 큐레이션 지식을 조용히 버리고 있었으므로 L과 함께 제거했다.
+        // 이제 'L'은 존재하지 않는 값이라 ResponseMode.parse가 N으로 흡수하고, 일반 경로를 탄다.
         when(memoryService.getTurn(UID, TID, TURN_ID)).thenReturn(Optional.of(turn("질문", "답변", "L")));
         when(repository.upsertActive(anyLong(), any(), any(), any(), any(), any(), any())).thenReturn(1L);
+        when(memoryService.getFeedback(UID, TID, TURN_ID))
+                .thenReturn(Optional.of(new MemoryRepository.FeedbackRow("LIKE")));
+        when(repository.findById(1L)).thenReturn(Optional.of(curatedQa(1L, "active", "질문", "답변")));
 
         service.onLike(UID, TID, TURN_ID);
 
-        // curated_qa 스냅샷 행은 그대로 생성된다(좋아요 취소/수정/관리자 목록이 계속 동작하도록).
         verify(repository, times(1)).upsertActive(TURN_ID, UID, TID, "질문", "답변", "v1", null);
-        // 하지만 임베딩 스레드 자체가 생성되지 않으므로 findById(재조회)도, vectorStore.add도 절대 호출되지 않는다.
-        verify(repository, never()).findById(anyLong());
-        verify(vectorStore, never()).add(any(), any(), any());
+        // 디바운스(20ms) 뒤 백그라운드 임베딩 스레드가 실제로 벡터를 쓴다.
+        verify(vectorStore, timeout(2_000)).add(any(), any(), any());
     }
 
     @Test

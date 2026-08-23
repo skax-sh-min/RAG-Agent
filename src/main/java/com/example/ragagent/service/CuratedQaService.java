@@ -7,7 +7,6 @@ import com.example.ragagent.ingestion.DocRegistry;
 import com.example.ragagent.ingestion.MarkdownNoiseNormalizer;
 import com.example.ragagent.ingestion.VectorStoreFacade;
 import com.example.ragagent.model.MetaKey;
-import com.example.ragagent.model.ResponseMode;
 import com.example.ragagent.repository.CuratedQaRepository;
 import com.example.ragagent.repository.CuratedQaRepository.CuratedQa;
 import com.example.ragagent.repository.MemoryRepository;
@@ -131,10 +130,12 @@ public class CuratedQaService {
      * </ol>
      * Mirrors the DISLIKE-discard guard in {@link ConversationSummarizerService#precompute}.
      *
-     * <p>L-mode answers (§ ResponseMode) are skipped entirely — an L answer already preserves the
-     * source document's own wording almost verbatim, so embedding it again would just duplicate a
-     * vector that's already in the index under the real document. The curated_qa row is still
-     * created (unlike/edit/admin-listing keep working), only the embed call is skipped.
+     * <p>PLAN §6.24 Step 0-a — the old "skip embedding for L-mode answers" branch is gone with L
+     * itself. Its premise ("an L answer mirrors the indexed source almost verbatim, so re-embedding
+     * duplicates an existing vector") did not hold: L answers measured the same length as M ones,
+     * i.e. they were ordinary answers, and the branch was quietly discarding legitimate curated
+     * knowledge. A mode-driven skip returns in Step 3-a via {@code ResponseMode.allowsCuration()},
+     * but for a real reason — keeping model-invented C-mode content out of the search corpus.
      */
     public void onLike(String userId, String threadId, long turnId) {
         Optional<MemoryRepository.Turn> turnOpt = memoryService.getTurn(userId, threadId, turnId);
@@ -153,11 +154,6 @@ public class CuratedQaService {
         // 걸러지지 않는다(RetrievalService.filterByTags의 큐레이션 면제).
         long curatedId = repository.upsertActive(turnId, userId, threadId,
                 turn.question(), turn.answer(), version, turn.selectedTags());
-
-        if (ResponseMode.parse(turn.responseMode()) == ResponseMode.L) {
-            log.debug("[CURATED] embed skipped (L-mode answer already mirrors source content) turnId={}", turnId);
-            return;
-        }
 
         Thread.ofVirtual().name("curated-embed-" + curatedId).start(() -> {
             try {

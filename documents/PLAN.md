@@ -463,7 +463,7 @@ N·C에서 숫자를 빼는 대신 **"자세히"를 방향으로 지시**하는 
 |---|---|---|---|
 | **0-a** | enum 코어 — L 제거·M→N·`Math.min(configured, …)` 클램프·능력 플래그 도입(`answerSystemPromptKey()` / `directSystemPromptKey()`(null=Direct 불가) / `evalPromptKey()`(null=검증 생략) / `retrievalBoost()` / `allowsCuration()`) | `ResponseMode` | `maxTokens()`가 설정 상한을 넘지 않음. `parse("M")`·`parse("L")`→N |
 | **0-b** | 서버 분기 6곳을 값 비교(`== ResponseMode.S`)에서 **성질 질의**로 치환 — 값을 하나 더 얹기 전에 분기를 한곳으로 모으는 것이 C의 선결 조건 | `AgentGraph` · `AnswerService`×2 · `DirectAnswerService`×2 · `CuratedQaService` | 컴파일 통과 + S/N 동작 회귀 0. 이후 모드 추가 시 고칠 곳이 enum 정의 한 곳 |
-| **0-c** | 스타일 지시문 **층 자체** 제거 — 사용자 메시지로 시스템 프롬프트를 덮어쓰던 구조를 없앤다 | `prompt.answer.style.{s,m,l}` 3키 · `responseStyleInstruction()` ×2 | 사용자 프롬프트에서 스타일 문단이 사라짐(토큰 감소) |
+| **0-c** | 스타일 지시문 **층 자체** 제거 — 사용자 메시지로 시스템 프롬프트를 덮어쓰던 구조를 없앤다. ⚠️ **1-a보다 먼저 넣지 말 것**(0-a 구현 중 확인) — 이 층이 지금 S의 "요약형" 지시와 N의 분량 지시를 나르는 유일한 통로라, 대체할 전용 시스템 프롬프트 없이 먼저 걷어내면 두 모드가 공용 프롬프트의 5섹션 형식으로 붕괴한다. **1-a와 같은 커밋에서 교체**한다 | `prompt.answer.style.{s,n}` 2키 · `responseStyleInstruction()` ×2 | 사용자 프롬프트에서 스타일 문단이 사라짐(토큰 감소) |
 | **0-d** | UI에서 L 제거 — 버튼 + JS 참조 **4곳** + `localStorage` 화이트리스트 `['S','N','C']`·폴백 `'N'` | `chat.html` | 브라우저에 남은 `'M'`·`'L'`이 N으로 흡수됨. ⚠️ 참조를 하나라도 남기면 `responseModeLRadio`가 null → `updateResponseModeAvailability()` TypeError → **그 뒤 `DOMContentLoaded` 블록 전체(라우팅 모드 동기화·툴팁·태그 입력)가 죽는다** |
 | **0-e** | `/settings`에 모드별 유효 예산 3행(읽기 전용) — 지금은 `max-tokens` 한 줄만 보여 floor/비율 어느 구간인지 알 수 없다 | `SettingsService.buildView()` 파생(`SettingsKeys` 확장 불필요) | 현재 `max-tokens` 기준 실효 토큰이 모드별로 화면에 보임 |
 
