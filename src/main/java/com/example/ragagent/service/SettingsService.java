@@ -7,6 +7,7 @@ import com.example.ragagent.llm.CircuitBreaker;
 import com.example.ragagent.llm.ProviderToggle;
 import com.example.ragagent.model.SettingsView;
 import com.example.ragagent.model.SettingsView.ProviderRow;
+import com.example.ragagent.model.ResponseMode;
 import com.example.ragagent.model.SettingsView.SettingGroup;
 import com.example.ragagent.model.SettingsView.SettingItem;
 import com.example.ragagent.repository.SettingsOverrideRepository;
@@ -410,7 +411,47 @@ public class SettingsService implements AppProperties.OverrideSource {
     private List<SettingItem> llmHotItems() {
         List<SettingItem> items = new ArrayList<>(LLM_HOT_SPECS.size());
         for (Spec s : LLM_HOT_SPECS) items.add(editableItem(s.key()));
+        items.addAll(responseModeBudgetItems());
         return items;
+    }
+
+    /**
+     * 응답 모드별 <b>유효</b> 답변 예산 — 읽기 전용 파생 행 (PLAN §6.24 Step 0-e).
+     *
+     * <p>{@code max-tokens} 한 줄만 보여주는 것으로는 지금 무슨 값이 적용 중인지 알 수 없다.
+     * 모드 예산은 비율분과 글자수 바닥 중 <b>큰 쪽</b>을 취하되 설정 상한에서 잘리므로, 같은
+     * {@code max-tokens} 변경이 모드마다 다른 폭으로 움직인다 — 실사용 12,000에서는 세 항 모두
+     * 바닥이 이기고 16,000에서는 모두 비율이 이긴다(전환점 S 13,334 / N 12,501). 어느 구간에
+     * 있는지를 값 옆에 함께 적어 그 혼란을 없앤다.
+     *
+     * <p>{@link ResponseMode#values()}를 돌므로 모드가 늘면 행도 저절로 늘어난다. 다만 라벨은
+     * 메시지 키라 번들에 한 줄이 필요하고, 그 누락은 화면에 {@code ??key??}로만 드러나므로
+     * {@code SettingsResponseModeBudgetTest}가 모든 모드의 키 존재를 고정한다.
+     */
+    private List<SettingItem> responseModeBudgetItems() {
+        int configured = props.llmSafe().maxTokens();
+        List<SettingItem> items = new ArrayList<>(ResponseMode.values().length);
+        for (ResponseMode mode : ResponseMode.values()) {
+            items.add(readOnly("settings.item.mode-budget." + mode.name().toLowerCase(),
+                    formatModeBudget(mode, configured), null));
+        }
+        return items;
+    }
+
+    /** 테스트 전용 접근점 — 표시 공식이 {@link ResponseMode#maxTokens(int)} 와 갈라지지 않는지 고정한다. */
+    static String formatModeBudgetForTest(ResponseMode mode, int configured) {
+        return formatModeBudget(mode, configured);
+    }
+
+    /** 예: {@code "5,000 (바닥)"} — 값과 함께 <b>어느 항이 이겼는지</b>를 적는다. */
+    private static String formatModeBudget(ResponseMode mode, int configured) {
+        int effective = mode.maxTokens(configured);
+        if (effective <= 0) return "-";
+        // 비율항은 enum 의 tokenRatio() 에서 파생한다 — 상수를 여기 복제하지 않는다.
+        int ratioTokens = (int) Math.round(configured * mode.tokenRatio());
+        String source = effective < Math.max(ratioTokens, mode.minChars()) ? "상한"
+                : (ratioTokens >= mode.minChars() ? "비율" : "바닥");
+        return "%,d (%s)".formatted(effective, source);
     }
 
     private List<SettingItem> uiHotItems() {
