@@ -24,6 +24,11 @@
               th:text="#{settings.badge.overridden}">overridden</span>
         <span th:if="${item.note != null}" class="badge bg-warning text-dark ms-1"
               th:text="#{__${item.note}__}">note</span>
+        <!-- 값 열이 12rem 고정이라 계산 근거·적용 범위를 값에 다 적을 수 없다. 긴 설명은 여기로.
+             초기화는 settings.html 하단에서(HTMX 스왑 후 재초기화 포함). -->
+        <span th:if="${item.tooltip != null}" class="text-secondary ms-1" role="button"
+              tabindex="0" data-bs-toggle="tooltip" data-bs-custom-class="tooltip-wide"
+              th:title="#{__${item.tooltip}__}" aria-label="설명">&#9432;</span>
         <code th:if="${item.key != null}" class="d-block small text-secondary mt-1"
               th:text="'app.' + ${item.key}">app.key</code>
     </div>

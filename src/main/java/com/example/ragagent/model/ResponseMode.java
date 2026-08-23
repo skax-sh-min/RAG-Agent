@@ -33,8 +33,15 @@ public enum ResponseMode {
       "prompt.answer.system.s", "prompt.direct.system.s", null,
       0, true, true),
 
-    /** 표준형 (구 M) — 문서에 충실하게, 구체적이고 자세하게. 기본값. */
-    N(0.40, 5_000,
+    /**
+     * 표준형 (구 M) — 문서에 충실하게, 구체적이고 자세하게. 기본값.
+     *
+     * <p>비율은 0.70 — 구 L의 몫을 물려받았다. L이 사라져 <b>요약이 아닌 유일한 모드</b>가 됐으므로
+     * 상한을 나눠 가질 상대가 없다. 전환점은 {@code max-tokens} 7,143(= 5,000/0.70)이라 실사용
+     * 설정(12,000·16,000)에서는 비율항이 이긴다. 다만 이 예산이 걸리는 곳은 블로킹 호출뿐이라
+     * (스트리밍은 캡 없음) 실제 답변 길이가 그만큼 늘어난다는 뜻은 아니다 — 안전판이다.
+     */
+    N(0.70, 5_000,
       "prompt.answer.system.n", "prompt.direct.system.n", "prompt.answer.eval",
       0, true, false);
 

@@ -38,10 +38,10 @@ class ResponseModeTest {
     }
 
     @Test
-    @DisplayName("tokenRatio / minChars — S=15%·2000, N=40%·5000")
+    @DisplayName("tokenRatio / minChars — S=15%·2000, N=70%·5000(구 L의 몫을 물려받음)")
     void ratiosAndFloors() {
         assertThat(ResponseMode.S.tokenRatio()).isEqualTo(0.15);
-        assertThat(ResponseMode.N.tokenRatio()).isEqualTo(0.40);
+        assertThat(ResponseMode.N.tokenRatio()).isEqualTo(0.70);
         assertThat(ResponseMode.S.minChars()).isEqualTo(2_000);
         assertThat(ResponseMode.N.minChars()).isEqualTo(5_000);
     }
@@ -49,19 +49,22 @@ class ResponseModeTest {
     @Test
     @DisplayName("maxTokens — 설정값이 커서 비율항이 minChars를 넘으면 비율이 채택된다")
     void maxTokens_appliesConfiguredRatioWhenLargerThanFloor() {
-        assertThat(ResponseMode.S.maxTokens(16_000)).isEqualTo(2_400); // 15% = 2400 > 2000
-        assertThat(ResponseMode.N.maxTokens(16_000)).isEqualTo(6_400); // 40% = 6400 > 5000
+        assertThat(ResponseMode.S.maxTokens(16_000)).isEqualTo(2_400);  // 15% = 2,400 > 2,000
+        assertThat(ResponseMode.N.maxTokens(16_000)).isEqualTo(11_200); // 70% = 11,200 > 5,000
     }
 
     @Test
-    @DisplayName("maxTokens — 실사용 설정(6000~12000)에서는 minChars 바닥값이 채택된다")
-    void maxTokens_flooredAtMinCharsForTypicalConfig() {
-        // LLM_MAX_TOKENS=6000: ratio항(900/2400)이 모두 minChars보다 작다.
+    @DisplayName("maxTokens — 두 모드의 전환점이 서로 다르다(S 13,334 / N 7,143)")
+    void maxTokens_floorAndRatioCrossoverDiffersPerMode() {
+        // max-tokens=6,000: 비율항(900 / 4,200)이 둘 다 minChars 아래 → 바닥이 받쳐준다.
         assertThat(ResponseMode.S.maxTokens(6_000)).isEqualTo(2_000);
         assertThat(ResponseMode.N.maxTokens(6_000)).isEqualTo(5_000);
-        // 12000으로 올려도 ratio항(1800/4800)이 여전히 minChars보다 작다 — 전환점은 S 13,334 / N 12,501.
+        // 12,000: N은 이미 비율(8,400)이 이기지만 S는 아직 바닥(1,800 < 2,000)이다.
         assertThat(ResponseMode.S.maxTokens(12_000)).isEqualTo(2_000);
-        assertThat(ResponseMode.N.maxTokens(12_000)).isEqualTo(5_000);
+        assertThat(ResponseMode.N.maxTokens(12_000)).isEqualTo(8_400);
+        // 전환점 직전/직후 — N은 5,000/0.70 ≈ 7,143 에서 갈린다.
+        assertThat(ResponseMode.N.maxTokens(7_000)).isEqualTo(5_000);   // 4,900 < 5,000
+        assertThat(ResponseMode.N.maxTokens(7_200)).isEqualTo(5_040);   // 5,040 > 5,000
     }
 
     @Test

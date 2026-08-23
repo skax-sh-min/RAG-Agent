@@ -375,7 +375,8 @@ public class SettingsService implements AppProperties.OverrideSource {
                 null,
                 bool ? null : spec.min(),
                 bool ? null : spec.max(),
-                bool ? null : spec.step());
+                bool ? null : spec.step(),
+                null);   // 편집 가능한 행은 라벨·범위로 충분해 툴팁을 쓰지 않는다
     }
 
     private List<SettingItem> searchHotItems() {
@@ -433,7 +434,7 @@ public class SettingsService implements AppProperties.OverrideSource {
         List<SettingItem> items = new ArrayList<>(ResponseMode.values().length);
         for (ResponseMode mode : ResponseMode.values()) {
             items.add(readOnly("settings.item.mode-budget." + mode.name().toLowerCase(),
-                    formatModeBudget(mode, configured), null));
+                    formatModeBudget(mode, configured), null, "settings.tooltip.mode-budget"));
         }
         return items;
     }
@@ -443,14 +444,23 @@ public class SettingsService implements AppProperties.OverrideSource {
         return formatModeBudget(mode, configured);
     }
 
-    /** 예: {@code "5,000 (바닥)"} — 값과 함께 <b>어느 항이 이겼는지</b>를 적는다. */
+    /**
+     * 예: {@code "8,400 (상한의 70%)"} — 값과 함께 <b>어느 항이 이겼는지를 풀어서</b> 적는다.
+     * 축약어(바닥/비율/상한)는 그 자체가 설명을 필요로 해서 표시의 목적을 반쯤 잃는다.
+     */
     private static String formatModeBudget(ResponseMode mode, int configured) {
         int effective = mode.maxTokens(configured);
         if (effective <= 0) return "-";
         // 비율항은 enum 의 tokenRatio() 에서 파생한다 — 상수를 여기 복제하지 않는다.
         int ratioTokens = (int) Math.round(configured * mode.tokenRatio());
-        String source = effective < Math.max(ratioTokens, mode.minChars()) ? "상한"
-                : (ratioTokens >= mode.minChars() ? "비율" : "바닥");
+        String source;
+        if (effective < Math.max(ratioTokens, mode.minChars())) {
+            source = "설정 상한";                                   // max-tokens 가 모드 요구보다 낮다
+        } else if (ratioTokens >= mode.minChars()) {
+            source = "상한의 %d%%".formatted(Math.round(mode.tokenRatio() * 100));
+        } else {
+            source = "최소 보장";                                   // 비율분이 작아 바닥이 받쳐준다
+        }
         return "%,d (%s)".formatted(effective, source);
     }
 
@@ -496,7 +506,11 @@ public class SettingsService implements AppProperties.OverrideSource {
     }
 
     private static SettingItem readOnly(String labelKey, String value, String note) {
-        return new SettingItem(null, labelKey, value, "text", false, false, note, null, null, null);
+        return readOnly(labelKey, value, note, null);
+    }
+
+    private static SettingItem readOnly(String labelKey, String value, String note, String tooltipKey) {
+        return new SettingItem(null, labelKey, value, "text", false, false, note, null, null, null, tooltipKey);
     }
 
     /**

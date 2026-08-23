@@ -42,14 +42,28 @@ class SettingsResponseModeBudgetTest {
     @Test
     @DisplayName("표시값은 어느 항이 이겼는지를 함께 알려준다 — 바닥 / 비율 / 상한")
     void budgetLabelsWhichTermWon() {
-        // 실사용 12,000: 비율항(1,800 / 4,800)이 모두 minChars 아래라 바닥이 이긴다.
-        assertThat(SettingsService.formatModeBudgetForTest(ResponseMode.S, 12_000)).isEqualTo("2,000 (바닥)");
-        assertThat(SettingsService.formatModeBudgetForTest(ResponseMode.N, 12_000)).isEqualTo("5,000 (바닥)");
-        // 16,000: 비율항(2,400 / 6,400)이 minChars 를 넘어 비율이 이긴다 — 전환점 S 13,334 / N 12,501.
-        assertThat(SettingsService.formatModeBudgetForTest(ResponseMode.S, 16_000)).isEqualTo("2,400 (비율)");
-        assertThat(SettingsService.formatModeBudgetForTest(ResponseMode.N, 16_000)).isEqualTo("6,400 (비율)");
+        // 실사용 12,000: S는 비율항(1,800)이 바닥 아래라 바닥이 받쳐주고, N은 비율(8,400)이 이긴다.
+        assertThat(SettingsService.formatModeBudgetForTest(ResponseMode.S, 12_000)).isEqualTo("2,000 (최소 보장)");
+        assertThat(SettingsService.formatModeBudgetForTest(ResponseMode.N, 12_000)).isEqualTo("8,400 (상한의 70%)");
+        // 16,000: 두 모드 모두 비율이 이긴다 — 전환점은 S 13,334 / N 7,143.
+        assertThat(SettingsService.formatModeBudgetForTest(ResponseMode.S, 16_000)).isEqualTo("2,400 (상한의 15%)");
+        assertThat(SettingsService.formatModeBudgetForTest(ResponseMode.N, 16_000)).isEqualTo("11,200 (상한의 70%)");
         // 설정 상한이 모드 바닥보다 낮으면 상한에서 잘린다(§6.24 클램프) — 그 사실이 화면에 보여야 한다.
-        assertThat(SettingsService.formatModeBudgetForTest(ResponseMode.N, 3_000)).isEqualTo("3,000 (상한)");
+        assertThat(SettingsService.formatModeBudgetForTest(ResponseMode.N, 3_000)).isEqualTo("3,000 (설정 상한)");
+    }
+
+    @Test
+    @DisplayName("툴팁 문구가 한/영 번들에 존재한다 — 값 열에 담을 수 없는 계산 근거를 나른다")
+    void tooltipTextExistsInBothBundles() {
+        for (Locale locale : new Locale[]{Locale.KOREAN, Locale.ENGLISH}) {
+            assertThat(realMessageSource().getMessage("settings.tooltip.mode-budget", null, "MISSING", locale))
+                    .as("settings.tooltip.mode-budget (%s)", locale)
+                    .isNotEqualTo("MISSING");
+        }
+        // 이 값이 "목표 분량"으로 오해되는 것이 이 툴팁의 존재 이유다 — S 예산(2,000~2,400)은
+        // 프롬프트 상한(1,000자)의 두 배가 넘고, 그 여유는 의도된 것이다.
+        assertThat(realMessageSource().getMessage("settings.tooltip.mode-budget", null, Locale.KOREAN))
+                .contains("안전판", "1,000자", "스트리밍");
     }
 
     @Test

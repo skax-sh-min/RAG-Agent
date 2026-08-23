@@ -57,6 +57,8 @@ public record SettingsView(
      * @param min        numeric lower bound (nullable / number type only)
      * @param max        numeric upper bound (nullable / number type only)
      * @param step       numeric input step (nullable / number type only)
+     * @param tooltip    i18n key for a hover explanation (nullable) — 값 열이 좁아 한 줄로는
+     *                   담을 수 없는 계산 근거·적용 범위를 여기에 둔다
      */
     public record SettingItem(
             String key,
@@ -68,6 +70,18 @@ public record SettingsView(
             String note,
             Double min,
             Double max,
-            Double step
-    ) {}
+            Double step,
+            String tooltip
+    ) {
+        /**
+         * 툴팁 없는 행(대다수)을 위한 편의 생성자 — {@code SourceRef} 의 5/8/10-인자 생성자와 같은
+         * 선례다. 툴팁은 값 열에 담을 수 없는 긴 설명이 있을 때만 붙으므로, 그 필드를 추가하면서
+         * 기존 호출부 전부에 {@code null} 을 흩뿌리는 대신 여기서 한 번 채운다.
+         */
+        public SettingItem(String key, String label, String value, String type,
+                           boolean editable, boolean overridden, String note,
+                           Double min, Double max, Double step) {
+            this(key, label, value, type, editable, overridden, note, min, max, step, null);
+        }
+    }
 }

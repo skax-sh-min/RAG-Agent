@@ -365,6 +365,8 @@ no-auth 배포에서 모든 방문자가 고정 게스트 id 하나를 공유해
 |---|---|---|---|---|---|
 | **S** 요약 | 길이 축 극단 | `prompt.answer.system.s` | **"1,000자 이내"** + 4~7줄 | 생략 (eval + CRITIC 둘 다) | 기본 |
 | **N** 표준 (구 M) | 문서 충실 | `prompt.answer.system.n` | 숫자 없음 — "구체적이고 자세하게" | `prompt.answer.eval` | 기본 |
+
+> **N의 `tokenRatio`는 0.70이다**(2026-08-24 변경, 구 M의 0.40이 아니라 구 L의 몫). L이 사라져 N이 요약이 아닌 유일한 모드가 됐으므로 상한을 나눠 가질 상대가 없다. 전환점이 `max-tokens` 7,143(=5,000/0.70)으로 내려와 실사용 설정에서는 비율항이 이긴다 — S(13,334)와 전환점이 달라 `/settings`가 모드별로 어느 항이 이겼는지 따로 표시한다(0-e).
 | **C** 응용 | 문서를 재료로 생성 | `prompt.answer.system.c` | 숫자 없음 — "구체적이고 자세하게" | `prompt.answer.eval.creative` | 부스트(옵션, 기본 0) |
 
 L 제거. **M→N 개명의 마이그레이션 비용은 0** — `ResponseMode.parse()`가 관대해 DB에 남은 `"M"`/`"L"` 문자열은 `valueOf` 실패 → `DEFAULT`(=N)로 자동 강등된다. 스키마 변경 없음(`conversation_turns.response_mode`는 이미 문자열 컬럼).
