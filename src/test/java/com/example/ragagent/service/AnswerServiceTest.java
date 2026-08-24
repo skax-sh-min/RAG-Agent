@@ -444,6 +444,100 @@ class AnswerServiceTest {
                 .getMessage(org.mockito.ArgumentMatchers.startsWith("prompt.answer.style"), any(), any(Locale.class));
     }
 
+    @Test
+    @DisplayName("BLOCKING C — 창의 시스템 프롬프트 + 창의 검증 프롬프트를 쓰고, apiGrounded 가 grounded 로 실린다 (§6.24 Step 2-a/2-d)")
+    void blocking_creativeMode_usesCreativePromptsAndMapsApiGrounded() {
+        when(llmRouter.executeGatedWithUsage(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), any()))
+                .thenReturn(new LlmRouter.LlmResult("## 요약\n만들었습니다", 100, 40),
+                            new LlmRouter.LlmResult("{\"sufficient\":true,\"apiGrounded\":true,\"inventedSymbols\":[],\"envNote\":\"\"}", 30, 10));
+        when(llmRouter.findProviderName(any(), any())).thenReturn("local");
+
+        AgentState result = service.execute(
+                newState(RoutingMode.COST_FIRST).toBuilder().responseMode(ResponseMode.C).build());
+
+        verify(messageSource).getMessage(eq("prompt.answer.system.c"), any(), any(Locale.class));
+        verify(messageSource).getMessage(eq("prompt.answer.eval.creative"), any(), any(Locale.class));
+        // 검증을 '끄지' 않는다 — 답변 1회 + 평가 1회. S(평가 스킵)와 갈리는 지점이다.
+        verify(llmRouter, times(2)).executeGatedWithUsage(any(), any(), any());
+        assertThat(result.grounded()).isTrue();   // apiGrounded → grounded (CriticService 코드 변경 0)
+        assertThat(result.needsRetry()).isFalse();
+        assertThat(result.inventedSymbols()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("BLOCKING C — 창의 답변이 '문서에 그대로 없다'는 이유로 재시도 루프를 돌지 않는다")
+    void blocking_creativeMode_doesNotSpinTheRetryLoop() {
+        // 기존 grounded 기준이었다면 창의 답변은 정의상 false 라 CRITIC 재시도를 물고
+        // ANSWER·EVAL·RETRIEVAL 을 각각 3배 태웠을 상황이다. 창의 검증에서는 통과해야 한다.
+        when(llmRouter.executeGatedWithUsage(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), any()))
+                .thenReturn(new LlmRouter.LlmResult("## 구현\n새로 작성한 코드", 100, 40),
+                            new LlmRouter.LlmResult("{\"sufficient\":true,\"apiGrounded\":true,\"inventedSymbols\":[],\"envNote\":\"\"}", 30, 10));
+        when(llmRouter.findProviderName(any(), any())).thenReturn("local");
+
+        AgentState state = newState(RoutingMode.COST_FIRST).toBuilder()
+                .responseMode(ResponseMode.C)
+                .retrievedDocs(List.of(new Document("문서 본문", Map.of(MetaKey.FILENAME, "a.md"))))
+                .build();
+        AgentState result = service.execute(state);
+
+        assertThat(result.needsRetry()).isFalse();
+        assertThat(result.grounded()).isTrue();
+        assertThat(result.evalReason()).isNull();
+    }
+
+    @Test
+    @DisplayName("BLOCKING C — inventedSymbols 는 상태에 담기되 재시도는 걸지 않는다(경고 전용)")
+    void blocking_creativeMode_inventedSymbolsWarnWithoutRetry() {
+        when(llmRouter.executeGatedWithUsage(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), any()))
+                .thenReturn(new LlmRouter.LlmResult("## 구현\ncode", 100, 40),
+                            new LlmRouter.LlmResult("{\"sufficient\":true,\"apiGrounded\":true,"
+                                    + "\"inventedSymbols\":[\"parseDateEx\"],\"envNote\":\"\"}", 30, 10));
+        when(llmRouter.findProviderName(any(), any())).thenReturn("local");
+
+        AgentState result = service.execute(
+                newState(RoutingMode.COST_FIRST).toBuilder().responseMode(ResponseMode.C).build());
+
+        // 창의 모드에서 이름을 지어내는 것 자체는 실패가 아니다 — 다시 생성시키는 대신 경고한다.
+        assertThat(result.inventedSymbols()).containsExactly("parseDateEx");
+        assertThat(result.needsRetry()).isFalse();
+    }
+
+    @Test
+    @DisplayName("BLOCKING C — apiGrounded=false 는 grounded=false 로 실려 CRITIC 이 재시도를 걸 수 있다")
+    void blocking_creativeMode_apiGroundedFalsePropagates() {
+        when(llmRouter.executeGatedWithUsage(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), any()))
+                .thenReturn(new LlmRouter.LlmResult("## 구현\ncode", 100, 40),
+                            new LlmRouter.LlmResult("{\"sufficient\":true,\"apiGrounded\":false,"
+                                    + "\"inventedSymbols\":[\"fakeApi\"],\"envNote\":\"\"}", 30, 10));
+        when(llmRouter.findProviderName(any(), any())).thenReturn("local");
+
+        AgentState state = newState(RoutingMode.COST_FIRST).toBuilder()
+                .responseMode(ResponseMode.C)
+                .retrievedDocs(List.of(new Document("문서 본문", Map.of(MetaKey.FILENAME, "a.md"))))
+                .build();
+        AgentState result = service.execute(state);
+
+        assertThat(result.grounded()).isFalse();
+        // 실패 사유는 발명된 이름 그 자체다 — evalReason 이 SSE·로그·툴팁을 지나가는 자리라 거기 싣는다.
+        assertThat(result.evalReason()).contains("fakeApi");
+    }
+
+    @Test
+    @DisplayName("BLOCKING C — 창의 검증 파싱 실패도 통과 처리한다 (검증기 고장이 답변 전달을 막지 않음)")
+    void blocking_creativeMode_parseFailureIsFailSafe() {
+        when(llmRouter.executeGatedWithUsage(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), any()))
+                .thenReturn(new LlmRouter.LlmResult("## 구현\ncode", 100, 40),
+                            new LlmRouter.LlmResult("not json at all", 30, 10));
+        when(llmRouter.findProviderName(any(), any())).thenReturn("local");
+
+        AgentState result = service.execute(
+                newState(RoutingMode.COST_FIRST).toBuilder().responseMode(ResponseMode.C).build());
+
+        assertThat(result.needsRetry()).isFalse();
+        assertThat(result.grounded()).isTrue();
+        assertThat(result.inventedSymbols()).isEmpty();
+    }
+
     // ── STREAMING 경로 ───────────────────────────────────────────────────
     // ChatModel.stream()에는 call()로 위임하는 default 구현이 없어(UnsupportedOperationException)
     // ChatModel을 직접 mock 해야 한다 (DirectAnswerServiceTest와 동일 패턴).

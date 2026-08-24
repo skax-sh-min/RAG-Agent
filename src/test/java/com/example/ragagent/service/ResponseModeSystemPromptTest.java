@@ -138,6 +138,24 @@ class ResponseModeSystemPromptTest {
     }
 
     @Test
+    @DisplayName("C 전용 검증 프롬프트가 한/영 번들에 있고 창의 판정 기준 네 가지를 모두 묻는다")
+    void creativeEvalPromptAsksForAllFourFields() {
+        for (Locale locale : new Locale[]{Locale.KOREAN, Locale.ENGLISH}) {
+            String eval = prompt(ResponseMode.C.evalPromptKey(), locale);
+            // 필드명은 BeanOutputConverter 가 만드는 JSON 스키마의 키와 1:1이다 — 프롬프트에서
+            // 이름이 하나라도 어긋나면 파싱은 성공하는데 값만 조용히 비는 형태로 깨진다.
+            assertThat(eval).as("C eval/%s", locale)
+                    .contains("sufficient", "apiGrounded", "inventedSymbols", "envNote");
+            // 창의 답변에서 "문서에 그대로 없다"는 반려 사유가 아니다 — 이 면책이 빠지면 기존
+            // grounded 와 똑같이 정의상 항상 실패해 재시도 루프를 3배로 태운다.
+            assertThat(eval).as("C eval/%s 는 grounded 를 묻지 않는다", locale)
+                    .doesNotContain("- grounded:");
+        }
+        assertThat(prompt(ResponseMode.C.evalPromptKey(), Locale.KOREAN))
+                .contains("문서에 없다는 이유만으로 반려하지 마세요");
+    }
+
+    @Test
     @DisplayName("스타일 지시문 층은 완전히 사라졌다 (§6.24 Step 0-c)")
     void styleInstructionLayerIsGone() {
         for (ResponseMode mode : ResponseMode.values()) {

@@ -73,12 +73,37 @@ public class AnswerService {
     private record EvalOutput(boolean sufficient, boolean grounded, String reason, String envNote,
                               List<Integer> usedDocs) {}
 
+    /**
+     * C(응용) 전용 검증 결과 (§6.24 Step 2-d) — {@link EvalOutput}과 <b>필드가 다르다</b>.
+     *
+     * <p>기존 {@code grounded}("답변의 핵심 주장이 발췌에 근거하는가")는 창의 답변에서 정의상 항상
+     * false다. 그 판정을 그대로 태우면 CRITIC이 재시도를 걸어 ANSWER·EVAL·RETRIEVAL을 각각 3회
+     * (기본 {@code max-retry-count}=2) 태우고 끝에 미검증 경고까지 붙인다 — 표준 턴 164초 기준
+     * 8분짜리 턴이다. 그렇다고 S처럼 검증을 통째로 끄면 C 고유의 위험(문서에 없는 API 발명)이
+     * 무방비가 된다. 그래서 <b>끄지 않고 기준만 바꿔 끼운다</b>: "문서를 조합해 새로 만들었다"는
+     * 통과, "문서에 없는 함수를 발명했다"는 실패.
+     *
+     * <p>{@code apiGrounded}는 그대로 {@code AgentState.grounded}에 실린다 — CRITIC은 그 불린
+     * 하나만 소비하므로 <b>{@code CriticService} 코드 변경이 0</b>이다.
+     *
+     * <p>{@code inventedSymbols}는 재시도를 걸지 <b>않는다</b>(UI 경고 전용). 별도 왕복이 아니라
+     * 같은 호출이 이미 답변과 전 발췌를 나란히 들고 있어 따라오는 값이다.
+     *
+     * <p>{@code usedDocs}는 일부러 없다 — C 답변은 발췌를 인용하는 게 아니라 재료로 삼아 새로
+     * 쓰는 것이라 "몇 번 조각을 근거로 썼는가"가 성립하지 않는다. 빈 리스트로 두면
+     * {@code AnswerAttribution}이 신호 없이 순수 어휘 매칭으로 degrade한다(설계된 폴백).
+     */
+    private record CreativeEvalOutput(boolean sufficient, boolean apiGrounded,
+                                      List<String> inventedSymbols, String envNote) {}
+
     private final LlmRouter llmRouter;
     private final MessageSource messageSource;
     private final AppProperties props;
     private final int maxRetryCount;
     private final BeanOutputConverter<EvalOutput> evalConverter =
             new BeanOutputConverter<>(EvalOutput.class);
+    private final BeanOutputConverter<CreativeEvalOutput> creativeEvalConverter =
+            new BeanOutputConverter<>(CreativeEvalOutput.class);
 
     public AnswerService(LlmRouter llmRouter, AppProperties appProperties, MessageSource messageSource) {
         this.llmRouter = llmRouter;
@@ -302,12 +327,14 @@ public class AnswerService {
      * can only narrow the candidate set, never manufacture a share (see {@code AnswerAttribution}).
      */
     private AgentState evaluate(AgentState state, String answer, Locale locale) {
+        if (state.responseMode().usesCreativeEval()) {
+            return evaluateCreative(state, answer, locale);
+        }
         boolean docsPresent = !state.retrievedDocs().isEmpty();
         try {
-            String systemPrompt = messageSource.getMessage("prompt.answer.eval", null, locale);
+            String systemPrompt = messageSource.getMessage(state.responseMode().evalPromptKey(), null, locale);
             String excerpts = buildEvalExcerpts(state.retrievedDocs());
-            String evalPrompt = "[질문]\n%s\n\n[답변]\n%s\n\n[문서 발췌]\n%s\n\n%s"
-                    .formatted(PromptInjectionGuard.wrap(state.question()), answer, excerpts, evalConverter.getFormat());
+            String evalPrompt = buildEvalPrompt(state, answer, excerpts, evalConverter.getFormat());
 
             LlmRouter.LlmResult result = llmRouter.executeGatedWithUsage(TaskType.TEXT, state.routingMode(),
                     model -> model.call(buildPrompt(systemPrompt, evalPrompt, evalOptions())));
@@ -336,6 +363,69 @@ public class AnswerService {
             return state.toBuilder().needsRetry(false).grounded(true).evalReason(null).envNote(null)
                     .usedDocIndices(List.of()).build();
         }
+    }
+
+    /**
+     * C(응용) 전용 검증 (§6.24 Step 2-d) — {@link #evaluate}와 <b>같은 자리, 같은 왕복 수</b>다.
+     * 검증을 끄는 것이 아니라 판정 기준만 창의 모드에 맞게 바꿔 끼운다
+     * ({@link CreativeEvalOutput} 참조).
+     *
+     * <p>{@code apiGrounded}는 그대로 {@code grounded}에 실린다 — CRITIC은 그 불린 하나만 보므로
+     * {@code CriticService}는 한 줄도 바뀌지 않는다. 재시도를 거는 것은 {@code sufficient}(요청한
+     * 산출물을 실제로 만들었는가)뿐이고, {@code inventedSymbols}는 <b>재시도를 걸지 않는다</b> —
+     * 창의 모드에서 이름을 지어내는 것 자체는 실패가 아니고 그것을 문서 근거인 양 제시하는 것이
+     * 문제라서, 다시 생성시키는 대신 독자에게 경고로 보여주는 편이 맞다.
+     *
+     * <p>파싱 실패 시의 폴백은 {@link #evaluate}와 같다 — 통과 처리. 검증기 자체의 고장이 완성된
+     * 답변의 전달을 막아서는 안 된다.
+     */
+    private AgentState evaluateCreative(AgentState state, String answer, Locale locale) {
+        boolean docsPresent = !state.retrievedDocs().isEmpty();
+        try {
+            String systemPrompt = messageSource.getMessage(state.responseMode().evalPromptKey(), null, locale);
+            String excerpts = buildEvalExcerpts(state.retrievedDocs());
+            String evalPrompt = buildEvalPrompt(state, answer, excerpts, creativeEvalConverter.getFormat());
+
+            LlmRouter.LlmResult result = llmRouter.executeGatedWithUsage(TaskType.TEXT, state.routingMode(),
+                    model -> model.call(buildPrompt(systemPrompt, evalPrompt, evalOptions())));
+            CreativeEvalOutput out = creativeEvalConverter.convert(result.text() == null ? "" : result.text());
+            boolean apiGrounded = !docsPresent || out.apiGrounded();
+            boolean passed = out.sufficient() && apiGrounded;
+            List<String> invented = out.inventedSymbols() == null ? List.of() : out.inventedSymbols();
+            // 실패 사유는 발명된 이름 그 자체다 — 별도 필드를 만들면 SSE 페이로드·로그·툴팁 세 곳을
+            // 모두 늘려야 하는데, evalReason 이 이미 그 셋을 지나가는 "한 문장 설명" 자리다.
+            String reason = passed ? null
+                    : normalizeOneLine(invented.isEmpty()
+                            ? "요청한 산출물을 만들지 못했거나 문서에 없는 이름을 문서 근거로 제시함"
+                            : "문서 발췌에 없는 이름을 문서에 있는 것처럼 사용: " + String.join(", ", invented),
+                            MAX_EVAL_REASON_LEN);
+            String envNote = normalizeOneLine(out.envNote(), MAX_ENV_NOTE_LEN);
+            if (!passed) {
+                log.info("[EVAL-C] 검증 미통과 thread={} sufficient={} apiGrounded={} invented={}",
+                        state.threadId(), out.sufficient(), apiGrounded, invented);
+            } else if (!invented.isEmpty()) {
+                log.info("[EVAL-C] 통과했으나 미확인 심볼 보고 thread={} invented={}", state.threadId(), invented);
+            }
+            return state.toBuilder()
+                    .accumulateTokens(result.inputTokens(), result.outputTokens())
+                    .needsRetry(!out.sufficient())
+                    .grounded(apiGrounded)
+                    .evalReason(reason)
+                    .envNote(envNote)
+                    .usedDocIndices(List.of())
+                    .inventedSymbols(invented)
+                    .build();
+        } catch (Exception e) {
+            log.warn("Creative evaluation parse failed, treating as sufficient + grounded: {}", e.getMessage());
+            return state.toBuilder().needsRetry(false).grounded(true).evalReason(null).envNote(null)
+                    .usedDocIndices(List.of()).inventedSymbols(List.of()).build();
+        }
+    }
+
+    /** 두 검증 경로가 공유하는 사용자 메시지 — 차이는 시스템 프롬프트와 {@code format}(응답 스키마)뿐이다. */
+    private static String buildEvalPrompt(AgentState state, String answer, String excerpts, String format) {
+        return "[질문]\n%s\n\n[답변]\n%s\n\n[문서 발췌]\n%s\n\n%s"
+                .formatted(PromptInjectionGuard.wrap(state.question()), answer, excerpts, format);
     }
 
     /**
