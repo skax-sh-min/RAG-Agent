@@ -585,11 +585,61 @@ public class AnswerService {
         return sb.toString();
     }
 
-    /** Absolute ceiling protecting storage/rendering — independent of the response mode, whose
-     *  budget is expressed as the call's maxTokens instead of a character cap. */
+    /** 절단 안내 — 코드 펜스 <b>바깥</b>의 평문이어야 한다({@link #truncate} 참조). */
+    private static final String TRUNCATION_NOTICE = "…(응답이 너무 길어 잘렸습니다)";
+
+    /**
+     * Absolute ceiling protecting storage/rendering — independent of the response mode, whose
+     * budget is expressed as the call's maxTokens instead of a character cap.
+     *
+     * <p><b>줄 경계에서 자르고 코드 펜스 짝을 맞춘다</b> (§6.24 Step 3-c). 예전에는 문자
+     * 인덱스로 그냥 잘랐는데, 그 자리가 펜스 안이면 펜스 줄 수가 홀수인 답변이 만들어진다.
+     * 그 답변이 문서 내보내기나 재색인을 타는 순간 {@code MarkdownCorrectionService} 의
+     * <b>코드펜스 짝 맞춤 불변식</b>이 깨지고, {@code normalizeCodeBlocks()} 가 짝을 확정할 수
+     * 없다며 <b>그 문서 전체</b>의 언어 태그·코드 정리를 건너뛴다 — 잘린 답변 하나가 문서
+     * 단위 품질 저하로 번진다.
+     *
+     * <p>두 가지를 한다:
+     * <ol>
+     *   <li><b>펜스가 열린 채 끝나면 닫는다.</b> 이것이 불변식을 지키는 부분이다. 닫는 펜스는
+     *       안내 문구 <b>앞</b>에 온다 — 안내는 코드가 아니므로 펜스 밖 평문이어야 하고, 이는
+     *       {@code ChunkSplitter} 의 {@code CODE_CONTINUATION_*} 마커가 지키는 규칙과 같다.</li>
+     *   <li><b>마지막 줄바꿈까지만 남긴다.</b> 이쪽은 불변식이 아니라 결과물의 문제다 —
+     *       {@code "```java"} 한가운데서 자르면 {@code "```ja"} 라는 잘린 여는 펜스가 남고,
+     *       위 1번이 거기에 닫는 펜스를 붙여 <b>언어 태그가 깨진 빈 코드 블록</b>을 만든다.
+     *       표 행이 반쪽만 남는 것도 같은 종류의 문제다. 잃는 것은 이미 잘리는 중인 답변의
+     *       마지막 한 줄뿐이다.</li>
+     * </ol>
+     *
+     * <p><b>줄 중간 펜스는 여기서 만들어지지 않는다.</b> {@code fenceLineCount} 와
+     * {@code fenceMarkCount} 가 어긋나는 그 조건은 한 줄 안에 앞선 내용과 {@code ```} 이 함께
+     * 있어야 성립하는데, 절단은 뒤에서 문자를 <b>덜어낼</b> 뿐이라 없던 것을 만들 수 없다 —
+     * 원문에 이미 있었다면 그것은 이 메서드가 고칠 대상이 아니다. 절단이 실제로 일으킬 수 있는
+     * 결함은 <b>홀수 펜스</b> 하나뿐이고, 그것이 1번이 막는 것이다.
+     *
+     * <p>펜스 세기는 {@link MarkdownCorrectionService#fenceLineCount} 를 그대로 쓴다. 같은 것을
+     * 여기서 다시 구현하면 두 관점이 갈라질 수 있고, 그러면 이 수리가 저쪽 가드를 통과시키지
+     * 못한다.
+     *
+     * <p>줄바꿈이 하나도 없는 거대한 한 줄이면 자를 줄 경계가 없다. 그때는 잘린 끝에 남은 백틱
+     * 연속만 걷어낸다 — 문장 중간에 매달린 {@code "``"} 는 원문에도 없던 것이라 남길 이유가 없고,
+     * 그 자리에서 잘린 백틱이 {@code ```} 를 이루면 개수만 늘리기 때문이다.
+     *
+     * <p>결과 길이는 {@link #MAX_ANSWER_LEN} 을 안내 문구만큼 넘는다 — 예전부터 그랬고,
+     * 이 상한은 저장·렌더링 보호용이지 정확한 바이트 예산이 아니다.
+     */
     private static String truncate(String answer) {
         if (answer == null || answer.length() <= MAX_ANSWER_LEN) return answer;
-        return answer.substring(0, MAX_ANSWER_LEN) + "\n\n…(응답이 너무 길어 잘렸습니다)";
+        String cut = answer.substring(0, MAX_ANSWER_LEN);
+        int lastLineBreak = cut.lastIndexOf('\n');
+        if (lastLineBreak >= 0) {
+            cut = cut.substring(0, lastLineBreak);
+        } else {
+            while (cut.endsWith("`")) cut = cut.substring(0, cut.length() - 1);
+        }
+        StringBuilder out = new StringBuilder(cut);
+        if (MarkdownCorrectionService.fenceLineCount(cut) % 2 != 0) out.append("\n```");
+        return out.append("\n\n").append(TRUNCATION_NOTICE).toString();
     }
 
     /** 요약 전용 모드의 안전망 — 구현·판단 근거는 {@link SummaryOnlyGuard}에 있다. */
