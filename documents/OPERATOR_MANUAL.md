@@ -2181,6 +2181,7 @@ mvn test -Dtest=SearchQualityEvaluationTest -Dsearch-eval.enabled=true
 
 - `direct_mode=1`인 질문은 `feedback='LIKE'`일 때만 추천/재사용 후보에 포함
 - 질문 정규화(공백/대소문자) 기반 중복 제거
+- **응답 모드가 `S`(간단히) 또는 `C`(응용)였던 turn은 후보에서 제외**됩니다. `C`는 "문서에서 찾아 달라"가 아니라 "만들어 달라"는 요청이라, 저장된 코드를 그대로 돌려주면 사용자가 요청한 바로 그 일을 하지 않는 셈이 됩니다(근거 청크가 그대로여도 마찬가지). 판정은 `ResponseMode.allowsReuse()`이고 기준값은 `conversation_turns.response_mode`입니다 — 값이 비어 있거나 옛 `M`/`L`이거나 알 수 없는 값이면 `N`으로 간주되어 **후보에 남습니다**
 
 #### API 오류/폴백 응답 요약
 
