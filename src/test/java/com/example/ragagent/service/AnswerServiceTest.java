@@ -245,8 +245,8 @@ class AnswerServiceTest {
     }
 
     @Test
-    @DisplayName("BLOCKING — sufficiency 파싱 실패 시 sufficient 처리 (fail-safe)")
-    void blocking_sufficiency_parse_error_treatsAsSufficient() {
+    @DisplayName("BLOCKING — sufficiency 파싱 실패는 재시도를 걸지 않되 통과로 위조하지도 않는다")
+    void blocking_sufficiency_parse_error_leavesNoVerdict() {
         when(llmRouter.executeGatedWithUsage(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), any()))
                 .thenReturn(new LlmRouter.LlmResult("답변", 0, 0),
                             new LlmRouter.LlmResult("not-a-json", 0, 0));
@@ -255,6 +255,7 @@ class AnswerServiceTest {
         AgentState result = service.execute(newState(RoutingMode.COST_FIRST));
 
         assertThat(result.needsRetry()).isFalse();
+        assertThat(result.grounded()).isNull();
     }
 
     @Test
@@ -523,8 +524,8 @@ class AnswerServiceTest {
     }
 
     @Test
-    @DisplayName("BLOCKING C — 창의 검증 파싱 실패도 통과 처리한다 (검증기 고장이 답변 전달을 막지 않음)")
-    void blocking_creativeMode_parseFailureIsFailSafe() {
+    @DisplayName("BLOCKING C — 창의 검증 파싱 실패는 '판정 없음'이다 (통과로 위조하지 않고, 전달도 막지 않는다)")
+    void blocking_creativeMode_parseFailureLeavesNoVerdict() {
         when(llmRouter.executeGatedWithUsage(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), any()))
                 .thenReturn(new LlmRouter.LlmResult("## 구현\ncode", 100, 40),
                             new LlmRouter.LlmResult("not json at all", 30, 10));
@@ -533,9 +534,46 @@ class AnswerServiceTest {
         AgentState result = service.execute(
                 newState(RoutingMode.COST_FIRST).toBuilder().responseMode(ResponseMode.C).build());
 
-        assertThat(result.needsRetry()).isFalse();
-        assertThat(result.grounded()).isTrue();
+        assertThat(result.needsRetry()).isFalse();   // 검증기 고장이 답변 전달을 막지는 않는다
+        assertThat(result.grounded()).isNull();      // 그러나 통과 배지를 붙여서도 안 된다
         assertThat(result.inventedSymbols()).isEmpty();
+    }
+
+    // 실제로 관찰된 사고(2026-08-24 23:58): 창의 검증이 빈 문자열을 반환 → BeanOutputConverter 가
+    // "No content to map due to end-of-input" 으로 실패 → 예전 폴백이 통과 처리 → sufficient=false
+    // 로 걸렸어야 할 재시도가 돌지 않은 채 파란 '생성' 배지까지 붙은 답변이 나갔다. 빈 응답은
+    // 검증 호출에서 가장 흔한 실패 모드다(이 앱에서 가장 큰 단일 요청이라 컨텍스트를 넘기기 쉽다).
+    @Test
+    @DisplayName("BLOCKING C — 창의 검증이 빈 응답이면 판정 없음으로 기록한다 (§ 관찰된 사고)")
+    void blocking_creativeMode_emptyVerdictIsNotAPass() {
+        when(llmRouter.executeGatedWithUsage(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), any()))
+                .thenReturn(new LlmRouter.LlmResult("## 구현\ncode", 100, 40),
+                            new LlmRouter.LlmResult("", 900, 0));
+        when(llmRouter.findProviderName(any(), any())).thenReturn("local");
+
+        AgentState result = service.execute(
+                newState(RoutingMode.COST_FIRST).toBuilder().responseMode(ResponseMode.C).build());
+
+        assertThat(result.grounded()).isNull();
+        assertThat(result.needsRetry()).isFalse();
+        assertThat(result.evalReason()).isNull();
+        assertThat(result.inventedSymbols()).isEmpty();
+        // 빈 응답이어도 그 호출의 토큰은 실제로 썼다 — 사용량 집계에서 사라지면 안 된다.
+        assertThat(result.totalInputTokens()).isEqualTo(1000);
+    }
+
+    @Test
+    @DisplayName("BLOCKING N — 검증이 빈 응답이면 역시 판정 없음이다 (창의 경로와 같은 규칙)")
+    void blocking_standardMode_emptyVerdictIsNotAPass() {
+        when(llmRouter.executeGatedWithUsage(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), any()))
+                .thenReturn(new LlmRouter.LlmResult("답변", 100, 40),
+                            new LlmRouter.LlmResult("   ", 900, 0));
+        when(llmRouter.findProviderName(any(), any())).thenReturn("local");
+
+        AgentState result = service.execute(newState(RoutingMode.COST_FIRST));
+
+        assertThat(result.grounded()).isNull();
+        assertThat(result.needsRetry()).isFalse();
     }
 
     // ── STREAMING 경로 ───────────────────────────────────────────────────

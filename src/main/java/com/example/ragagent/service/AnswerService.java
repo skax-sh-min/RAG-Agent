@@ -338,7 +338,12 @@ public class AnswerService {
 
             LlmRouter.LlmResult result = llmRouter.executeGatedWithUsage(TaskType.TEXT, state.routingMode(),
                     model -> model.call(buildPrompt(systemPrompt, evalPrompt, evalOptions())));
-            EvalOutput out = evalConverter.convert(result.text() == null ? "" : result.text());
+            if (isEmptyVerdict(result)) {
+                logEmptyVerdict("EVAL", state, result);
+                return withoutVerdict(state.toBuilder()
+                        .accumulateTokens(result.inputTokens(), result.outputTokens()).build());
+            }
+            EvalOutput out = evalConverter.convert(result.text());
             boolean grounded = !docsPresent || out.grounded();
             boolean passed = out.sufficient() && grounded;
             String reason = passed ? null : normalizeOneLine(out.reason(), MAX_EVAL_REASON_LEN);
@@ -359,9 +364,9 @@ public class AnswerService {
                     .usedDocIndices(out.usedDocs())
                     .build();
         } catch (Exception e) {
-            log.warn("Evaluation parse failed, treating as sufficient + grounded: {}", e.getMessage());
-            return state.toBuilder().needsRetry(false).grounded(true).evalReason(null).envNote(null)
-                    .usedDocIndices(List.of()).build();
+            log.warn("[EVAL] 검증 응답을 읽지 못했다 — 판정 없음으로 기록한다(재시도 없음, 배지 없음): {}",
+                    e.getMessage());
+            return withoutVerdict(state);
         }
     }
 
@@ -388,7 +393,12 @@ public class AnswerService {
 
             LlmRouter.LlmResult result = llmRouter.executeGatedWithUsage(TaskType.TEXT, state.routingMode(),
                     model -> model.call(buildPrompt(systemPrompt, evalPrompt, evalOptions())));
-            CreativeEvalOutput out = creativeEvalConverter.convert(result.text() == null ? "" : result.text());
+            if (isEmptyVerdict(result)) {
+                logEmptyVerdict("EVAL-C", state, result);
+                return withoutVerdict(state.toBuilder()
+                        .accumulateTokens(result.inputTokens(), result.outputTokens()).build());
+            }
+            CreativeEvalOutput out = creativeEvalConverter.convert(result.text());
             boolean apiGrounded = !docsPresent || out.apiGrounded();
             boolean passed = out.sufficient() && apiGrounded;
             List<String> invented = out.inventedSymbols() == null ? List.of() : out.inventedSymbols();
@@ -416,10 +426,59 @@ public class AnswerService {
                     .inventedSymbols(invented)
                     .build();
         } catch (Exception e) {
-            log.warn("Creative evaluation parse failed, treating as sufficient + grounded: {}", e.getMessage());
-            return state.toBuilder().needsRetry(false).grounded(true).evalReason(null).envNote(null)
-                    .usedDocIndices(List.of()).inventedSymbols(List.of()).build();
+            log.warn("[EVAL-C] 창의 검증 응답을 읽지 못했다 — 판정 없음으로 기록한다"
+                     + "(재시도 없음, 배지 없음): {}", e.getMessage());
+            return withoutVerdict(state);
         }
+    }
+
+    /**
+     * 검증 결과를 <b>읽지 못했을 때</b>의 상태 — 판정을 위조하지 않는다.
+     *
+     * <p>예전에는 이 자리에서 {@code grounded=true} 를 써넣었다. 재시도를 막는 것까지는 옳다
+     * (검증기 고장이 이미 완성된 답변의 전달을 막아서는 안 된다). 틀린 것은 그 다음이었다 —
+     * 그 {@code true} 가 그대로 {@code VerificationSnapshot} 으로 흘러가 <b>검증한 적 없는 답변에
+     * '검증됨'(N) / '생성'(C) 배지</b>가 붙었다. 실제로 관찰된 사고가 그것이다: 창의 검증이 빈
+     * 응답을 반환 → 파싱 실패 → 통과 처리 → 재시도({@code sufficient=false} 로 걸렸어야 할)도
+     * 돌지 않고 파란 '생성' 배지까지 붙은 답변이 나갔다.
+     *
+     * <p>{@code grounded=null} 은 이 앱에서 이미 <b>"검증 미실행"</b>을 뜻하고, 그 상태는 끝까지
+     * 그렇게 흐른다: {@code CriticService} 가 덮어쓰지 않고, {@code VerificationSnapshot.isEmpty()}
+     * 가 참이 되어 {@code MemoryService.saveVerification()} 이 저장을 건너뛰며(컬럼 NULL),
+     * {@code verdictLabel()} 과 {@code chat-stream.js} 의 {@code === true}/{@code === false} 비교가
+     * 둘 다 배지를 그리지 않는다. 즉 새 UI 상태를 만드는 것이 아니라 <b>이미 있는 상태로 정직하게
+     * 되돌리는 것</b>이다 — S 모드와 meta/Direct 턴이 늘 그렇게 표시돼 왔다.
+     */
+    private static AgentState withoutVerdict(AgentState state) {
+        return state.toBuilder()
+                .needsRetry(false)
+                .grounded(null)
+                .evalReason(null)
+                .envNote(null)
+                .usedDocIndices(List.of())
+                .inventedSymbols(List.of())
+                .build();
+    }
+
+    /**
+     * 검증 호출이 빈 응답을 돌려줬는지. 빈 응답은 <b>깨진 JSON과 다른 사고</b>다 — 모델이 판정을
+     * 내렸는데 형식이 틀린 것이 아니라, 아무것도 내지 못한 것이다. 두 경우의 처리는 같지만
+     * (판정 없음) 원인이 달라 로그를 나눈다: 이 경로가 잦다면 프롬프트가 아니라 <b>요청 크기나
+     * 모델 쪽</b>을 봐야 한다. 검증 호출은 이 앱에서 가장 큰 단일 요청이다 — 질문 + 답변 전문 +
+     * {@link #buildEvalExcerpts} 발췌(topK × chunk-size, 상한 {@link #MAX_EVAL_EXCERPT_CHARS}) +
+     * 응답 스키마가 한 번에 들어간다.
+     */
+    private static boolean isEmptyVerdict(LlmRouter.LlmResult result) {
+        return result.text() == null || result.text().isBlank();
+    }
+
+    /** 빈 응답 진단 로그 — {@code outputTokens} 가 이 사고의 원인을 가르는 유일한 단서다. */
+    private void logEmptyVerdict(String tag, AgentState state, LlmRouter.LlmResult result) {
+        log.warn("[{}] 검증기가 빈 응답을 반환했다 — 판정 없음으로 기록한다(재시도 없음, 배지 없음). "
+                 + "thread={} inputTokens={} outputTokens={} | outputTokens=0 이면 모델이 아무것도 "
+                 + "내지 못한 것(컨텍스트 초과 의심), 0보다 크면 content 가 아닌 곳으로 나온 것"
+                 + "(reasoning 모델).",
+                tag, state.threadId(), result.inputTokens(), result.outputTokens());
     }
 
     /** 두 검증 경로가 공유하는 사용자 메시지 — 차이는 시스템 프롬프트와 {@code format}(응답 스키마)뿐이다. */
