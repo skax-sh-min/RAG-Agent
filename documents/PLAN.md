@@ -32,7 +32,7 @@
 
 | 순위 | 항목 | 현재 상태 |
 |---|---|---|
-| 1 | **§6.24 응답 모드 재설계 — S/N/C**(L 제거·모드별 전용 프롬프트·응용 모드 신설) | 설계 확정(2026-08-22), Phase 0 착수 예정. Phase 0·1만으로도 기존 결함 3건(큐레이션 L 스킵·L 상한 초과·S 화면/DB 불일치) 제거 |
+| 1 | **§6.24 응답 모드 재설계 — S/N/C**(L 제거·모드별 전용 프롬프트·응용 모드 신설) | **Phase 0·1·2 완료**(2026-08-24). 기존 결함 3건(큐레이션 L 스킵·L 상한 초과·S 화면/DB 불일치) 제거 + C 서버 구현 완료(다크 런치, UI 미노출). 남은 것은 Phase 3(오염 방지) → Phase 4(C 공개) |
 | 2 | **§6.15 스토리지 쿼터**(전역 상한 B안, §6.2에서 이관) | 설계 완료, 구현 전 |
 | 3 | 운영 준비 잔여 — SQLite 백업 자동화(Litestream/cron), Caddy 인증서 만료 모니터링 | 미착수 |
 | 4 | §9.4 — CADDY 하위호환 별칭 | 선택, 낮은 우선순위 |
@@ -369,6 +369,8 @@ no-auth 배포에서 모든 방문자가 고정 게스트 id 하나를 공유해
 > **N의 `tokenRatio`는 0.70이다**(2026-08-24 변경, 구 M의 0.40이 아니라 구 L의 몫). L이 사라져 N이 요약이 아닌 유일한 모드가 됐으므로 상한을 나눠 가질 상대가 없다. 전환점이 `max-tokens` 7,143(=5,000/0.70)으로 내려와 실사용 설정에서는 비율항이 이긴다 — S(13,334)와 전환점이 달라 `/settings`가 모드별로 어느 항이 이겼는지 따로 표시한다(0-e).
 | **C** 응용 | 문서를 재료로 생성 | `prompt.answer.system.c` | 숫자 없음 — "구체적이고 자세하게" | `prompt.answer.eval.creative` | 부스트(옵션, 기본 0) |
 
+> **C의 예산은 N과 같다**(0.70 / 5,000). 분량 지침이 N과 동일(숫자 없음)하므로 예산을 달리 줄 근거가 없다. **Direct는 불가**(`directSystemPromptKey=null`) — 검색 결과가 이 모드의 전제다.
+
 L 제거. **M→N 개명의 마이그레이션 비용은 0** — `ResponseMode.parse()`가 관대해 DB에 남은 `"M"`/`"L"` 문자열은 `valueOf` 실패 → `DEFAULT`(=N)로 자동 강등된다. 스키마 변경 없음(`conversation_turns.response_mode`는 이미 문자열 컬럼).
 
 **모드별 전용 시스템 프롬프트가 필요한 이유 — S의 현행 버그**
@@ -449,19 +451,42 @@ N·C에서 숫자를 빼는 대신 **"자세히"를 방향으로 지시**하는 
 
 당초 C에 `topK + 4`를 제안했으나 실사용 topK가 이미 **10~12**라 근거가 약하고 컨텍스트 압박이 실질적 위험이다. topK 12 기준 입력 ≈ 17,000~19,000자(문서 12 × ~1,300자 정규화 후 + 시스템/이력/질문) + 출력 예약 16,000토큰 ≈ **33,000~35,000토큰**으로 40K 컨텍스트가 필요하고, +4를 더하면 ~40,000토큰이 되어 32K 모델에서 초과한다. **LM Studio류는 앞에서부터 잘라내므로 시스템 프롬프트나 상위 문서가 조용히 사라진다 — 에러도 나지 않는다**(창의 모드에서 환각 금지 조항이 잘려 나가는 것이 최악의 시나리오). → `app.search-creative-top-k-boost`(hot, **기본 0**)로 외부화하고 필요 시 운영자가 1~2씩 올리며 관찰.
 
+> **구현 결과 (2026-08-24)**: Phase 2에서 `ResponseMode.retrievalBoost()`를 `RetrievalService`에 배선했고 **값은 0으로 두었으며, 프로퍼티 외부화는 하지 않았다.** 지금 `/settings`에 노브를 내면 아래 `MAX_EVAL_EXCERPT_CHARS` 선행 조건이 없는 상태에서 운영자가 값을 올릴 수 있게 되고, 그러면 바로 그 항목이 막으려던 오탐이 발생한다. **노브와 상한 상향은 한 변경(4-c)에 함께 들어가야 한다.**
+
 **`MAX_EVAL_EXCERPT_CHARS` — 현재 미발동, 부스트 도입 시에만 선행 (2026-08-22 확인)**
 
-20,000자 상한에 topK 12 × ~1,300자(정규화 후) ≈ 15,600자로 여유가 4,400자뿐이라 이미 걸리고 있을 가능성을 점검했으나, **운영 로그에 `[EVAL] 문서 발췌 20000자 상한으로 …` 경고는 없었다** — 현재 설정에서는 발동하지 않는다. 따라서 Phase 0이 아니라 **Phase 2(부스트 도입)의 선행 조건**으로 내린다. 부스트를 1이라도 올리는 순간 상한을 넘고, 그러면 하위 순위 문서가 검증 대상에서 빠지면서 `AnswerService`가 `.limit(5)`를 없애며 고쳤던 오탐 — **문서 #10~12에만 있는 값(경로·포트·상수처럼 한 청크에만 나오는 사실)을 정확히 인용한 답변이 `grounded=false` 판정을 받고 재시도 예산을 태우는** — 이 부분적으로 되살아난다. 부스트 기본값이 0인 한 이 항목은 착수 불필요.
+20,000자 상한에 topK 12 × ~1,300자(정규화 후) ≈ 15,600자로 여유가 4,400자뿐이라 이미 걸리고 있을 가능성을 점검했으나, **운영 로그에 `[EVAL] 문서 발췌 20000자 상한으로 …` 경고는 없었다** — 현재 설정에서는 발동하지 않는다. 따라서 Phase 0이 아니라 **부스트를 실제로 0보다 올리는 변경(4-c)의 선행 조건**으로 내린다(Phase 2는 부스트를 0으로 배선만 했다). 부스트를 1이라도 올리는 순간 상한을 넘고, 그러면 하위 순위 문서가 검증 대상에서 빠지면서 `AnswerService`가 `.limit(5)`를 없애며 고쳤던 오탐 — **문서 #10~12에만 있는 값(경로·포트·상수처럼 한 청크에만 나오는 사실)을 정확히 인용한 답변이 `grounded=false` 판정을 받고 재시도 예산을 태우는** — 이 부분적으로 되살아난다. 부스트 기본값이 0인 한 이 항목은 착수 불필요.
 
 **작업 단계**
 
-> **진행 현황 (2026-08-24)**: **Phase 1까지 완료**(0-e 제외).
+> **진행 현황 (2026-08-24)**: **Phase 2까지 완료**.
 > ✅ 0-a(enum 코어) · 0-b(성질 질의 치환) · 0-c(스타일 지시문 층 제거) · 0-d(UI L 제거) ·
 > 1-a(RAG 전용 프롬프트) · 1-b(Direct 전용 프롬프트) · 1-c(S 후처리 조건부 가드화) ·
 > 1-d(스트리밍 최종 답변 동기화) · 0-e(`/settings` 유효 예산 표시) — **Phase 0·1 전체 완료**.
-> 버전 0.4.0-SNAPSHOT, 테스트 1,570건 통과.
+> ✅ 2-a(enum C + 창의 시스템 프롬프트) · 2-b(`app.llm.creative-temperature` 배선 ①~⑨) ·
+> 2-c(그래프·검색 배선) · 2-d(창의 eval 교체) — **Phase 2 전체 완료**.
+> 버전 0.4.0-SNAPSHOT, 테스트 **1,590건** 통과(Phase 2에서 +20).
 > **§6.24가 지목한 S 화면/DB 불일치 버그는 1-c+1-d로 닫혔다.**
-> 🔵 남은 것: Phase 2~4 (C 도입 → 오염 방지 → 공개).
+> 🔵 남은 것: Phase 3(오염 방지) → Phase 4(C 공개).
+>
+> **Phase 2 구현 중 확정된 사항 4건**
+> 1. **성질 플래그 2개 추가** — `usesCreativeTemperature()`(어느 온도 knob을 쓰나) ·
+>    `usesCreativeEval()`(돌아온 JSON을 어느 레코드로 읽나). 값이 항상 같이 움직이겠지만 묻는
+>    질문이 달라 합치지 않았다(`skipsVerification`/`summaryOnly` 선례). 프롬프트 키 문자열을
+>    비교해 파서를 고르는 방식은 배제했다 — 키를 바꾸는 순간 조용히 엉뚱한 파서가 걸린다.
+> 2. **3-a(큐레이션 제외)는 C를 선언하는 순간 이미 닫혔다.** 0-b에서 `CuratedQaService.onLike()`가
+>    이미 `allowsCuration()`으로 묻고 있어, `C(..., curatable=false, ...)` 한 줄이 곧 그 게이트다.
+>    다크 런치 기간에 켜둘 이유가 없는 위험이라 미루지 않았다. Phase 3의 남은 것은 3-b·3-c.
+> 3. **4-a의 서버 가드 중 그래프 몫은 앞당겼다** — C는 `directSystemPromptKey`가 null이라, 손으로
+>    만든 `responseMode=C&directMode=true` 요청이 DIRECT_ANSWER에 닿으면 **NPE로 터진다**. 다크
+>    런치의 유일한 사용 경로가 손으로 만든 API 호출인데 그 경로에 크래시를 남겨둘 수는 없어
+>    `AgentGraph`가 시작 노드에서 RAG 경로로 되돌린다. 4-a에 남은 것은 **사용자에게 보이는
+>    강등**(`ChatController.normalizeResponseMode()`에서 C+Direct → N)이다.
+> 4. **`app.search-creative-top-k-boost` 외부화는 착수하지 않았다.** `retrievalBoost()`는
+>    `RetrievalService`에 배선했고 값은 0이다. 지금 `/settings`에 노브를 내면 4-c(`MAX_EVAL_EXCERPT_CHARS`
+>    상향)가 없는 상태에서 운영자가 그 값을 올릴 수 있게 되고, 그 순간 4-c가 막으려던 오탐
+>    (하위 순위 문서가 검증 창에서 빠져 `grounded=false`)이 그대로 발생한다. **노브는 4-c와 같은
+>    변경에 붙이는 것이 맞다** — 그때까지 부스트를 올리는 방법은 enum 상수 한 글자다.
 >
 > **구현 중 확정된 순서 제약**: 0-c는 1-a/1-b와 **한 커밋**으로 처리했다 — 스타일 지시문 층이
 > S/N의 분량 지시를 나르는 유일한 통로라, 대체할 전용 시스템 프롬프트가 같은 커밋에 없으면 두
@@ -490,20 +515,20 @@ N·C에서 숫자를 빼는 대신 **"자세히"를 방향으로 지시**하는 
 | **1-c** | `enforceSummaryOnlyForS()`를 **조건부 가드**로 강등 — 추가 섹션이 실제 검출될 때만 재작성, 발동 시 `log.info` | `AnswerService` · `DirectAnswerService` | 정상 케이스에서 후처리가 **발동하지 않음**(로그가 새 프롬프트의 효과를 재는 측정 수단이 된다) |
 | **1-d** | 스트리밍 최종 답변 동기화 — 후처리가 발동하면 `done` 페이로드에 최종 답변을 실어 클라이언트가 교체 | SSE `done` 페이로드 · `chat-stream.js onDone()` | S 답변이 **새로고침 전후 동일**. 좋아요 시 `curated_qa`에 화면과 같은 텍스트가 저장됨 |
 
-*Phase 2 — C 서버 구현 (UI 미노출, 다크 런치)*
+*Phase 2 — C 서버 구현 (UI 미노출, 다크 런치) ✅ 완료 2026-08-24*
 
 | Step | 작업 | 주요 대상 | 완료 기준 |
 |---|---|---|---|
-| **2-a** | enum에 C 추가 + 창의 시스템 프롬프트(구분 표기 4섹션 · 환각 금지 · 문서 내 지시문 불복종 · 분량은 숫자 없이 "구체적이고 자세하게") | `ResponseMode` · `prompt.answer.system.c`(ko/en) | `responseMode=C` API 호출로 창의 답변 생성(UI 경로 없음) |
-| **2-b** | `app.llm.creative-temperature`(기본 0.7, clamp [0,1.0], hot) — **위 "배선 체크리스트" ①~⑨ 전부** | `SettingsKeys`(상수+`HOT_EDITABLE`) · `LLM_HOT_SPECS` · `settingsValue()` · `AppProperties.LlmConfig`+`llmSafe()` · **메시지 번들 ko/en** · `application.properties` · `AnswerService.answerOptions()`+**`streamDirect()`** | ① `/settings`의 "LLM 튜닝" 그룹에 슬라이더가 뜨고 현재값이 보임 ② 재기동 없이 저장 → 다음 답변에 반영 ③ 블로킹·스트리밍 **양쪽**에서 온도가 오름(streamDirect를 빠뜨리면 스트리밍만 0.3에 고정된다) |
-| **2-c** | 그래프·검색 배선 — `"meta"→DIRECT_ANSWER` 분기에 `!mode.allowsDirect()` 가드 / `retrievalBoost()`(기본 0) | `AgentGraph` · `RetrievalService` | C는 meta로 분류돼도 RETRIEVAL을 탄다 |
-| **2-d** | 창의 eval로 교체 — `sufficient` / `apiGrounded`(→ 기존 `grounded` 필드에 실어 `CriticService` **코드 변경 0**) / `inventedSymbols` / `envNote` | `prompt.answer.eval.creative`(ko/en) · `AnswerService.evaluate()` | C 턴이 재시도 루프를 돌지 않음(LLM 호출 3배 소진 제거) |
+| **2-a** ✅ | enum에 C 추가 + 창의 시스템 프롬프트(구분 표기 4섹션 · 환각 금지 · 문서 내 지시문 불복종 · 분량은 숫자 없이 "구체적이고 자세하게") | `ResponseMode` · `prompt.answer.system.c`(ko/en) | `responseMode=C` API 호출로 창의 답변 생성(UI 경로 없음). 예산은 N과 동일(0.70/5,000) — 분량 성격이 같아서다. `chat.html`의 화이트리스트는 `['S','N']` 그대로라 UI 경로가 없다 |
+| **2-b** ✅ | `app.llm.creative-temperature`(기본 0.7, clamp [0,1.0], hot) — **위 "배선 체크리스트" ①~⑨ 전부** | `SettingsKeys`(상수+`HOT_EDITABLE`) · `LLM_HOT_SPECS` · `settingsValue()` · `AppProperties.LlmConfig`+`llmSafe()` · **메시지 번들 ko/en** · `application.properties` · `AnswerService.answerOptions()`+**`streamDirect()`** | ① `/settings`의 "LLM 튜닝" 그룹에 슬라이더가 뜨고 현재값이 보임 ② 재기동 없이 저장 → 다음 답변에 반영 ③ 블로킹·스트리밍 **양쪽**에서 온도가 오름(streamDirect를 빠뜨리면 스트리밍만 0.3에 고정된다) |
+| **2-c** ✅ | 그래프·검색 배선 — `"meta"→DIRECT_ANSWER` 분기에 `!mode.allowsDirect()` 가드 / `retrievalBoost()`(기본 0) | `AgentGraph` · `RetrievalService` | C는 meta로 분류돼도 RETRIEVAL을 탄다. `directMode=true` 요청도 같은 `allowsDirect()` 질의로 RAG 경로로 되돌린다(NPE 방지 — 위 진행 현황 3번). `retrievalBoost()`는 재시도 증가분과 **더해지고**(사전 성질 vs 사후 신호라 서로를 대체하지 않는다) 값은 0이다 — 올리려면 4-c가 선행돼야 한다 |
+| **2-d** ✅ | 창의 eval로 교체 — `sufficient` / `apiGrounded`(→ 기존 `grounded` 필드에 실어 `CriticService` **코드 변경 0**) / `inventedSymbols` / `envNote` | `prompt.answer.eval.creative`(ko/en) · `AnswerService.evaluate()` | C 턴이 재시도 루프를 돌지 않음(LLM 호출 3배 소진 제거). 응답 **형식이 다르므로 파서도 둘**이다 — `EvalOutput`(N) / `CreativeEvalOutput`(C). 한 레코드에 `inventedSymbols`를 얹으면 N의 `getFormat()` 스키마에도 그 필드가 실려 표준 검증이 흔들린다. `inventedSymbols`는 `AgentState`의 새 컴포넌트로 실리고 재시도를 걸지 않는다(4-b가 배지로 읽는다) |
 
-*Phase 3 — 오염 방지 (C 공개 전 필수 게이트)*
+*Phase 3 — 오염 방지 (C 공개 전 필수 게이트) — 3-a 완료, 남은 것은 3-b·3-c*
 
 | Step | 작업 | 주요 대상 | 완료 기준 |
 |---|---|---|---|
-| **3-a** | **큐레이션 제외**(`allowsCuration()`) — C 답변이 `curated_qa`에 들어가면 가중치 1.2로 검색돼 **모델이 지어낸 코드가 다음 턴의 "문서"가 된다.** 세대를 거치며 환각이 정설로 굳는 되먹임으로, 이 설계에서 **가장 위험한 단일 지점** | `CuratedQaService.onLike()` | C 턴 좋아요 시 임베딩 스레드가 뜨지 않음 |
+| **3-a** ✅ | **큐레이션 제외**(`allowsCuration()`) — 2-a에서 `curatable=false`로 선언하며 닫혔다(0-b가 이미 성질로 묻고 있었다). — C 답변이 `curated_qa`에 들어가면 가중치 1.2로 검색돼 **모델이 지어낸 코드가 다음 턴의 "문서"가 된다.** 세대를 거치며 환각이 정설로 굳는 되먹임으로, 이 설계에서 **가장 위험한 단일 지점** | `CuratedQaService.onLike()` | C 턴 좋아요 시 `curated_qa` 행조차 만들지 않음. `ResponseModeTest.creativeModeIsNeverCuratable()`이 고정 |
 | **3-b** | 재사용 캐시 제외 — "다시 만들어줘"에 같은 코드를 반환하면 기능 자체가 배신당한다 | `QuestionReuseService` | C 턴이 재사용 후보에서 빠짐 |
 | **3-c** | 코드펜스 절단 복구 — `truncate()`의 20,000자 절단이 펜스 중간을 자르면, 그 답변이 문서 내보내기/재색인을 탈 때 `MarkdownCorrectionService`의 **코드펜스 짝 맞춤 불변식**을 깬다 | `AnswerService.truncate()` | 절단된 답변의 펜스 개수가 짝수 |
 
@@ -511,11 +536,11 @@ N·C에서 숫자를 빼는 대신 **"자세히"를 방향으로 지시**하는 
 
 | Step | 작업 | 주요 대상 | 완료 기준 |
 |---|---|---|---|
-| **4-a** | UI 3버튼(S/N/C) + Direct 배타 — 클라이언트 비활성 **및 서버 가드**(구 L은 서버 가드가 없어 손으로 만든 요청이 그대로 통과했다) | `chat.html` · `ChatController.normalizeResponseMode()` | `responseMode=C&directMode=true`가 N으로 강등됨 |
+| **4-a** | UI 3버튼(S/N/C) + Direct 배타 — 클라이언트 비활성 **및 서버 가드**(구 L은 서버 가드가 없어 손으로 만든 요청이 그대로 통과했다). **그래프 몫은 Phase 2에서 이미 들어갔다**(C+Direct → RAG 경로). 여기 남은 것은 `chat.html` 화이트리스트에 `'C'` 추가 + 사용자에게 보이는 N 강등 | `chat.html` · `ChatController.normalizeResponseMode()` | `responseMode=C&directMode=true`가 N으로 강등됨 |
 | **4-b** | 배지 분기 — `검증됨`(초록) 대신 **`생성`(파랑)**, `inventedSymbols` 있으면 노랑 경고 | `fragments/message-assistant.html`(히스토리) · `chat-stream.js`(스트리밍) **양쪽** | 새로고침 전후 배지가 동일 |
 | **4-c** | **부스트를 실제로 0보다 올릴 때만** — `MAX_EVAL_EXCERPT_CHARS` 상향 또는 `topK × chunk-size` 연동 | `AnswerService` | 위 "현재 미발동" 참조. 기본값 유지 시 착수 불필요 |
 
-**테스트**: `ResponseModeTest`(클램프 — 설정 상한 초과 불가, `parse("M")`/`parse("L")`→N, 플래그 매트릭스) · 프롬프트 번들 테스트(ko/en 6키 존재 + C의 환각 금지·인젝션 조항 문자열 고정 + **분량 정책 고정**: S에 `1,000자`가 있고 N·C에는 숫자 분량 문구가 없음 — `AnswerEvalPromptTest` 선례) · `AgentGraphTest`(C+meta여도 RETRIEVAL을 타는지, S가 eval/CRITIC을 건너뛰는지) · `CuratedQaServiceTest`(C는 임베딩 스레드 미생성) · **`AppPropertiesOverrideTest`(creative-temperature 오버라이드가 `llmSafe()`에 반영되고 [0.0,1.0]으로 clamp — `direct-temperature` 케이스 복제) · `SettingsServiceTest`/`SettingsControllerRenderTest`(LLM 튜닝 그룹에 항목이 렌더되고 현재값이 채워짐)** · `AppPropertiesSafeAccessorTest`(creative-temperature 누락 시 자동 실패) · 설정 오버라이드를 건드리는 테스트는 `@ResourceLock("global-state")` 필수.
+**테스트**(Phase 2에서 +20건, 총 1,590건): `ResponseModeTest`(클램프 — 설정 상한 초과 불가, `parse("M")`/`parse("L")`→N, 플래그 매트릭스 + **창의 파서와 창의 프롬프트가 짝인지**) · `AnswerServiceTest`(C가 창의 프롬프트 2벌을 쓰고 `apiGrounded`→`grounded` 매핑 · 재시도 미발생 · `inventedSymbols`는 담기되 재시도 없음 · 파싱 실패 fail-safe) · 프롬프트 번들 테스트(ko/en 6키 존재 + C의 환각 금지·인젝션 조항 문자열 고정 + **분량 정책 고정**: S에 `1,000자`가 있고 N·C에는 숫자 분량 문구가 없음 — `AnswerEvalPromptTest` 선례) · `AgentGraphTest`(C+meta여도 RETRIEVAL을 타는지, S가 eval/CRITIC을 건너뛰는지) · `CuratedQaServiceTest`(C는 임베딩 스레드 미생성) · **`AppPropertiesOverrideTest`(creative-temperature 오버라이드가 `llmSafe()`에 반영되고 [0.0,1.0]으로 clamp — `direct-temperature` 케이스 복제) · `SettingsServiceTest`/`SettingsControllerRenderTest`(LLM 튜닝 그룹에 항목이 렌더되고 현재값이 채워짐)** · `AppPropertiesSafeAccessorTest`(creative-temperature 누락 시 자동 실패) · 설정 오버라이드를 건드리는 테스트는 `@ResourceLock("global-state")` 필수.
 
 **남은 이슈**: (a) `/llm-usage` 토큰 과소 보고 — `ResponseMode`는 "한글 1토큰≈1글자", `LlmRouter.approxTokens()`는 chars/4로 **같은 코드베이스에 4배 차이 나는 두 가정이 공존**한다(스트리밍 한국어 사용량이 ~4배 적게 기록됨). 이번 범위 밖이지만 토큰↔글자 환산이라는 같은 뿌리. (b) C 턴은 `AnswerAttribution` 지분이 0에 수렴해 `/admin` 진단 패널의 "답변에 실제 쓰인 출처 수"가 항상 0으로 보인다 — "해당 없음" 표기 권장(유사도 정렬 폴백은 이미 구현돼 있어 기능상 안전). (c) **긴 답변 수요는 없는 것으로 확인**(운영자: "M 수준으로 충분") — 재발 시 레버는 프롬프트의 숫자 목표가 아니라 섹션별 분할 생성(호출 3배) 또는 문서 내보내기다.
 

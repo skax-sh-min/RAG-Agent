@@ -389,10 +389,11 @@ app.embedding.max-concurrent-batches=4
 
 | 변수 | 기본값 | 권장 범위 | 설명 |
 |------|--------|----------|------|
-| `LLM_MAX_TOKENS` | `6000` | 1000 ~ 32000 | 단일 진실 소스(`app.llm.max-tokens`)로 통일되어, 이 값을 바꾸면 **아래 세 곳 모두**가 함께 움직입니다: (1) **블로킹 LLM 응답 토큰 상한** — 인덱싱·분류·키워드·Direct 블로킹 호출에 적용(스트리밍 채팅 답변은 의도적으로 미적용, SSE 타임아웃이 폭주 방지). (2) **대화 컨텍스트 문자 예산**(`MemoryService`, `×0.5`로 히스토리 예산 산출). (3) **MD 교정 섹션 크기**(`MarkdownCorrectionService`).<br>§6.18 이전에는 (1)이 코드에 `6000`으로 하드코딩돼 이 환경변수와 무관하게 동작했고, (2)·(3)은 별도의 죽은 프로퍼티(`spring.ai.openai.chat.options.max-tokens`, 기본 `8000`)를 읽어 (1)과 다른 값을 썼습니다 — 이제 세 곳 모두 `app.llm.max-tokens` 하나만 읽습니다.<br>**응답 모드(S/N)와의 관계**: (1)의 실제 상한은 이 값 그대로가 아니라 `ResponseMode`별 비율(S 15% / N 70%)과 글자수 하한(S 2,000 / N 5,000자) 중 **큰 값**이며, 다시 이 값 자체로 잘립니다(`min`). 전환점이 모드마다 달라 — S는 13,334, N은 7,143 — 실사용 12,000에서 S는 하한(2,000), N은 비율(8,400)이 적용됩니다. **어느 항이 적용 중인지는 `/settings`의 "응답 예산" 행에서 바로 확인할 수 있습니다**(`2,000 (최소 보장)` / `8,400 (상한의 70%)` / `3,000 (설정 상한)`). ⚠️ 이 값은 **폭주를 막는 안전판이지 목표 분량이 아닙니다** — 실제 분량은 모드별 시스템 프롬프트가 정하고(S만 "1,000자 이내"를 명시, N은 숫자 없음), 게다가 스트리밍 채팅 답변에는 적용되지 않습니다. 상세는 [PIPELINE §3.1](PIPELINE.md) |
+| `LLM_MAX_TOKENS` | `6000` | 1000 ~ 32000 | 단일 진실 소스(`app.llm.max-tokens`)로 통일되어, 이 값을 바꾸면 **아래 세 곳 모두**가 함께 움직입니다: (1) **블로킹 LLM 응답 토큰 상한** — 인덱싱·분류·키워드·Direct 블로킹 호출에 적용(스트리밍 채팅 답변은 의도적으로 미적용, SSE 타임아웃이 폭주 방지). (2) **대화 컨텍스트 문자 예산**(`MemoryService`, `×0.5`로 히스토리 예산 산출). (3) **MD 교정 섹션 크기**(`MarkdownCorrectionService`).<br>§6.18 이전에는 (1)이 코드에 `6000`으로 하드코딩돼 이 환경변수와 무관하게 동작했고, (2)·(3)은 별도의 죽은 프로퍼티(`spring.ai.openai.chat.options.max-tokens`, 기본 `8000`)를 읽어 (1)과 다른 값을 썼습니다 — 이제 세 곳 모두 `app.llm.max-tokens` 하나만 읽습니다.<br>**응답 모드(S/N)와의 관계**: (1)의 실제 상한은 이 값 그대로가 아니라 `ResponseMode`별 비율(S 15% / N·C 70%)과 글자수 하한(S 2,000 / N·C 5,000자) 중 **큰 값**이며, 다시 이 값 자체로 잘립니다(`min`). 전환점이 모드마다 달라 — S는 13,334, N은 7,143 — 실사용 12,000에서 S는 하한(2,000), N은 비율(8,400)이 적용됩니다. **어느 항이 적용 중인지는 `/settings`의 "응답 예산" 행에서 바로 확인할 수 있습니다**(`2,000 (최소 보장)` / `8,400 (상한의 70%)` / `3,000 (설정 상한)`). ⚠️ 이 값은 **폭주를 막는 안전판이지 목표 분량이 아닙니다** — 실제 분량은 모드별 시스템 프롬프트가 정하고(S만 "1,000자 이내"를 명시, N은 숫자 없음), 게다가 스트리밍 채팅 답변에는 적용되지 않습니다. 상세는 [PIPELINE §3.1](PIPELINE.md) |
 | `LLM_TEMPERATURE` | `0.0` | 0.0 ~ 0.3 | **일반/RAG 대화형 호출**(분류·답변·근거평가·재순위)의 무작위성 제어(`app.llm.temperature`). `0.0`은 결정적 답변, 높을수록 다양·창의적. `[0.0, 0.3]`으로 clamp.<br>**핫 수정 가능** — `/settings`에서 재기동 없이 다음 호출부터 반영(`ClassifierService`/`AnswerService`/`RerankerService`가 매 호출 재조회). 프로바이더 빈 생성 시점에도 고정되는데, 이는 모델 주위에 자체 `ChatClient`를 구성해 호출별 오버라이드를 받을 수 없는 프레임워크 내부 호출(예: 멀티쿼리 확장)을 위한 기동 시점 폴백 값으로만 쓰입니다 — 그런 호출은 재기동해야 변경이 반영됩니다.<br>인덱싱/백그라운드 호출(키워드 추출·MD 교정 등)에는 적용되지 않습니다 — 아래 `LLM_INDEXING_TEMPERATURE`로 분리되어 있습니다 |
 | `DIRECT_LLM_TEMPERATURE` | `0.1` | 0.0 ~ 1.0 | **Direct(meta) 응답 전용** temperature(`app.llm.direct-temperature`) — 인사·잡담 등 RAG를 안 쓰는 직접 응답은 약간의 다양성이 자연스러워 일반 temperature와 분리(§6.18). `[0.0, 1.0]`으로 clamp. **핫 수정 가능** — `/settings`에서 재기동 없이 다음 Direct 호출부터 반영(`DirectAnswerService`가 매 호출 재조회) |
 | `LLM_INDEXING_TEMPERATURE` | `0.0` | 0.0 ~ 1.0 | **인덱싱/백그라운드 전용** temperature(`app.llm.indexing-temperature`) — 키워드 추출, MD 교정, txt→md 구조화, 이미지 설명/분류, 스레드 제목 생성, 대화 요약 등 모든 ungated 백그라운드 호출에 적용. 대화형이 아닌 추출/분류 작업이라 `LLM_TEMPERATURE`/`DIRECT_LLM_TEMPERATURE` 값과 무관하게 결정적으로 유지하려고 분리했습니다. `[0.0, 1.0]`으로 clamp. **핫 수정 가능** — `/settings`에서 재기동 없이 다음 호출부터 반영(각 서비스가 매 호출 재조회) |
+| `CREATIVE_LLM_TEMPERATURE` | `0.7` | 0.0 ~ 1.0 | **응답 모드 C(응용) 전용** temperature(`app.llm.creative-temperature`) — 검색된 문서를 **재료로** 새 코드·설정을 만들어내는 모드라 표본추출의 다양성이 필요합니다. 일반 temperature와 분리한 이유는 그쪽 clamp 상한이 **0.3**이라 창의 생성이 원천 봉쇄되기 때문입니다(§6.24). `[0.0, 1.0]`으로 clamp. **핫 수정 가능** — `/settings`의 "LLM 튜닝"에서 재기동 없이 다음 호출부터 반영되며, 블로킹·스트리밍 **양쪽**에 적용됩니다. ⚠️ **C 모드는 아직 채팅 화면에 노출되지 않습니다**(다크 런치) — 이 값은 지금은 `responseMode=C`를 직접 보내는 API 호출에만 영향을 줍니다 |
 
 #### 로그 레벨
 
@@ -510,7 +511,7 @@ LLM_ROUTING_MODE=QUALITY_FIRST
 
 #### LLM 응답 파라미터
 
-> **temperature와 최대 출력 토큰**은 각각 `LLM_TEMPERATURE`, `LLM_MAX_TOKENS` 환경변수로 설정할 수 있습니다(§6.18로 실제 적용되도록 수정됨). LLM temperature는 세 가지 모두 `/settings`에서 핫 수정 가능합니다 — 일반/RAG temperature(`LLM_TEMPERATURE`, 기본 0.0, 범위 **0.0~0.3**), Direct(잡담) 전용 `DIRECT_LLM_TEMPERATURE`(기본 0.1, 범위 **0.0~1.0**), 인덱싱/백그라운드 전용 `LLM_INDEXING_TEMPERATURE`(기본 0.0, 범위 **0.0~1.0**). → [§3.2 LLM 응답 파라미터](#32-환경변수-전체-목록) 참조
+> **temperature와 최대 출력 토큰**은 각각 `LLM_TEMPERATURE`, `LLM_MAX_TOKENS` 환경변수로 설정할 수 있습니다(§6.18로 실제 적용되도록 수정됨). LLM temperature는 네 가지 모두 `/settings`에서 핫 수정 가능합니다 — 일반/RAG temperature(`LLM_TEMPERATURE`, 기본 0.0, 범위 **0.0~0.3**), Direct(잡담) 전용 `DIRECT_LLM_TEMPERATURE`(기본 0.1, 범위 **0.0~1.0**), 인덱싱/백그라운드 전용 `LLM_INDEXING_TEMPERATURE`(기본 0.0, 범위 **0.0~1.0**), 응답 모드 C(응용) 전용 `CREATIVE_LLM_TEMPERATURE`(기본 0.7, 범위 **0.0~1.0**). → [§3.2 LLM 응답 파라미터](#32-환경변수-전체-목록) 참조
 
 #### 업로드 크기 제한
 
@@ -1931,6 +1932,7 @@ env-var/application.properties value ({설정값}); the override wins. Reset it 
 | 일반/RAG temperature | `app.llm.temperature` (`LLM_TEMPERATURE`) | 0.0 ~ 0.3 |
 | Direct(잡담) 응답 temperature | `app.llm.direct-temperature` (`DIRECT_LLM_TEMPERATURE`) | 0.0 ~ 1.0 |
 | 인덱싱/백그라운드 temperature | `app.llm.indexing-temperature` (`LLM_INDEXING_TEMPERATURE`) | 0.0 ~ 1.0 |
+| C(응용) 응답 temperature | `app.llm.creative-temperature` (`CREATIVE_LLM_TEMPERATURE`) | 0.0 ~ 1.0 |
 
 **핫 수정 가능 — UI (재기동 불필요, 다음 화면 렌더부터 반영)**:
 
