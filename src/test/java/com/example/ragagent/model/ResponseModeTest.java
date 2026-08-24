@@ -141,6 +141,16 @@ class ResponseModeTest {
     }
 
     @Test
+    @DisplayName("allowsReuse — C는 재사용 후보가 아니다 (\"다시 만들어줘\"에 저장된 코드를 돌려줄 수 없다)")
+    void creativeModeIsNeverReused() {
+        // 이 모드의 요청은 "찾아 달라"가 아니라 "만들어 달라"다 — 캐시가 기능 자체를 배신한다.
+        assertThat(ResponseMode.C.allowsReuse()).isFalse();
+        // S 는 이 플래그가 생기기 전부터 SQL 리터럴로 제외돼 있었다(동작 변화 없음).
+        assertThat(ResponseMode.S.allowsReuse()).isFalse();
+        assertThat(ResponseMode.N.allowsReuse()).isTrue();
+    }
+
+    @Test
     @DisplayName("allowsCuration — C는 절대 큐레이션되지 않는다(모델이 지어낸 코드가 다음 턴의 '문서'가 되는 되먹임)")
     void creativeModeIsNeverCuratable() {
         // 이 설계에서 가장 위험한 단일 지점 — 되돌리려면 벡터를 찾아 지워야 한다(§6.24 Step 3-a).

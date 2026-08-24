@@ -15,7 +15,7 @@ package com.example.ragagent.model;
  * <p>모드가 늘어날 때 분기가 흩어지지 않도록, 각 모드는 "무엇을 하는가"를 값이 아니라
  * <b>성질</b>로 노출한다({@link #allowsDirect()} / {@link #skipsVerification()} /
  * {@link #summaryOnly()} / {@link #retrievalBoost()} / {@link #allowsCuration()} /
- * {@link #usesCreativeTemperature()} / {@link #usesCreativeEval()}).
+ * {@link #usesCreativeTemperature()} / {@link #usesCreativeEval()} / {@link #allowsReuse()}).
  * <b>호출부에 모드 값 비교를 두지 않는 것이 이 enum의 계약이다</b> — 그래야 다음 모드를
  * 추가할 때 고칠 곳이 이 파일 한 곳으로 모인다. 새 분기가 필요하면 값을 비교하지 말고
  * 여기에 성질을 하나 더 만들어라. 성질끼리 값이 우연히 같더라도(예: 지금 S에서
@@ -44,7 +44,7 @@ public enum ResponseMode {
      */
     S(0.15, 2_000,
       "prompt.answer.system.s", "prompt.direct.system.s", null,
-      0, false, true, false, false),
+      0, false, true, false, false, false),
 
     /**
      * 표준형 (구 M) — 문서에 충실하게, 구체적이고 자세하게. 기본값.
@@ -56,7 +56,7 @@ public enum ResponseMode {
      */
     N(0.70, 5_000,
       "prompt.answer.system.n", "prompt.direct.system.n", "prompt.answer.eval",
-      0, true, false, false, false),
+      0, true, false, false, false, true),
 
     /**
      * 응용형 — 검색된 문서를 <b>재료로</b> 예제 코드·설정 등을 생성한다 (PLAN §6.24 Phase 2).
@@ -88,7 +88,7 @@ public enum ResponseMode {
      */
     C(0.70, 5_000,
       "prompt.answer.system.c", null, "prompt.answer.eval.creative",
-      0, false, false, true, true);
+      0, false, false, true, true, false);
 
     /** 클라이언트가 아무것도/모르는 값을 보냈을 때 쓰는 모드. 옛 {@code "M"}·{@code "L"} 기록도 여기로 흡수된다. */
     public static final ResponseMode DEFAULT = N;
@@ -103,11 +103,12 @@ public enum ResponseMode {
     private final boolean summaryOnly;
     private final boolean creativeTemperature;
     private final boolean creativeEval;
+    private final boolean reusable;
 
     ResponseMode(double tokenRatio, int minChars,
                  String answerSystemPromptKey, String directSystemPromptKey, String evalPromptKey,
                  int retrievalBoost, boolean curatable, boolean summaryOnly,
-                 boolean creativeTemperature, boolean creativeEval) {
+                 boolean creativeTemperature, boolean creativeEval, boolean reusable) {
         this.tokenRatio = tokenRatio;
         this.minChars = minChars;
         this.answerSystemPromptKey = answerSystemPromptKey;
@@ -118,6 +119,7 @@ public enum ResponseMode {
         this.summaryOnly = summaryOnly;
         this.creativeTemperature = creativeTemperature;
         this.creativeEval = creativeEval;
+        this.reusable = reusable;
     }
 
     /** {@code app.llm.max-tokens} 중 이 모드가 쓸 비율. */
@@ -176,6 +178,24 @@ public enum ResponseMode {
      * 싫어요는 무관하게 계속 동작한다.
      */
     public boolean allowsCuration() { return curatable; }
+
+    /**
+     * 이 모드의 답변을 <b>과거 턴 재사용</b>(§ 질문 재사용, {@code /api/v1/questions/reuse})의
+     * 후보로 삼아도 되는가.
+     *
+     * <p><b>C는 false다.</b> 이 모드의 요청은 "문서에서 답을 찾아 달라"가 아니라 "만들어 달라"이므로,
+     * "다시 만들어줘"에 저장된 코드를 그대로 돌려주면 사용자가 요청한 바로 그것을 하지 않는 셈이
+     * 된다 — 캐시가 기능 자체를 배신한다. 검색 결과가 그대로여도 마찬가지다.
+     *
+     * <p>S도 false인데, 이는 <b>이 플래그가 생기기 전부터 SQL에 하드코딩돼 있던 규칙</b>을 그대로
+     * 옮긴 것이라 동작 변화가 없다. 값 비교가 SQL 문자열 안에 숨어 있으면
+     * {@code ResponseModeBranchConventionTest}의 그물에도 걸리지 않고, 모드를 추가할 때 고쳐야 할
+     * 곳이라는 사실도 드러나지 않는다 — 그래서 성질로 끌어올렸다.
+     *
+     * <p>재사용 후보 판정은 SQL 단계에서 걸리므로({@code QuestionReuseRepository}), 추천 목록
+     * ({@code suggest})과 실제 재사용({@code reuseLookup}) 양쪽이 같은 술어를 공유한다.
+     */
+    public boolean allowsReuse() { return reusable; }
 
     /** Direct 모드(검색 없음)에서 고를 수 있는가 — 검색 결과가 전제인 모드는 false. */
     public boolean allowsDirect() { return directSystemPromptKey != null; }
