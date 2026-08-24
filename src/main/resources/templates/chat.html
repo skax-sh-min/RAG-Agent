@@ -160,7 +160,38 @@
                     </div>
                     <div class="d-flex align-items-end mb-3">
                         <div class="bubble-assistant p-3 flex-grow-1">
+                            <!-- 저장해 둔 검증 결과 배지 (§6.24 Step 4-b) — 문구·색·툴팁 판단은 전부
+                                 VerificationSnapshot 한 곳에 있다(message-assistant.html 과 같은 레코드를
+                                 읽는다). 맵에 없는 턴은 검증 기록이 없는 턴이고, 그 경우 이 컬럼이
+                                 생기기 전과 똑같이 아무것도 띄우지 않는다. -->
+                            <th:block th:with="v=${verificationByTurnId != null ? verificationByTurnId[turn.id] : null}">
+                                <span th:if="${v != null and v.verdictLabel != null}"
+                                      class="badge mb-2"
+                                      th:classappend="${v.verdictClass}"
+                                      th:attr="title=${v.verdictTitle}"
+                                      th:style="${v.verdictTitle != null} ? 'cursor:help;' : ''"
+                                      th:text="${v.verdictLabel}"></span>
+                                <span th:if="${v != null and v.hasInventedSymbols}"
+                                      class="badge bg-warning text-dark ms-1 mb-2" style="cursor:help;"
+                                      th:attr="title=${v.inventedSymbolsText}">문서 밖 이름
+                                    <span th:text="${#lists.size(v.inventedSymbols)}"></span></span>
+                            </th:block>
                             <div class="md-content" th:attr="data-md=${turn.answer}"></div>
+
+                            <th:block th:with="v=${verificationByTurnId != null ? verificationByTurnId[turn.id] : null}">
+                                <div th:if="${v != null and v.showsEvalReasonLine}" class="small text-warning mt-2">
+                                    <i class="bi bi-exclamation-triangle me-1"></i>검증 미통과 사유:
+                                    <span th:text="${v.evalReason}"></span>
+                                </div>
+                                <div th:if="${v != null and v.hasInventedSymbols}" class="small text-warning mt-2">
+                                    <i class="bi bi-exclamation-triangle me-1"></i>문서에서 확인되지 않은 이름:
+                                    <span th:text="${v.inventedSymbolsText}"></span>
+                                </div>
+                                <div th:if="${v != null and v.envNote != null}" class="small text-info mt-2">
+                                    <i class="bi bi-info-circle me-1"></i>환경에 따라 달라질 수 있는 값:
+                                    <span th:text="${v.envNote}"></span>
+                                </div>
+                            </th:block>
 
                                <div th:if="${turnImageRefsByTurnId != null and turnImageRefsByTurnId[turn.id] != null and !#lists.isEmpty(turnImageRefsByTurnId[turn.id])}"
                                    class="mt-2 d-flex flex-wrap gap-2">

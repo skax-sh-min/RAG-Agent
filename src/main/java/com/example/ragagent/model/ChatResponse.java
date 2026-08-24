@@ -28,5 +28,21 @@ public record ChatResponse(
          * 한 문장. 이런 값은 문서와 달라도 검증 실패 사유가 아니므로({@code prompt.answer.eval}의
          * 환경 의존 값 예외) grounded 는 true 로 두고 이 필드로만 알린다. 해당 없으면 null.
          */
-        @JsonProperty("env_note") String envNote
-) {}
+        @JsonProperty("env_note") String envNote,
+        /**
+         * 이 답변이 <b>문서를 재료로 생성된 것</b>인가 ({@code ResponseMode.generative()}).
+         * 검증 배지가 이 값으로 갈린다 — {@code 검증됨}(초록) 대신 {@code 생성}(파랑). 통과한 검증의
+         * 질문 자체가 다르기 때문이다(문서 근거 여부 vs 발명된 이름 여부). 클라이언트가 모드 문자열을
+         * 보고 판단하지 않도록 <b>서버가 성질로 계산해 내려준다</b>.
+         */
+        @JsonProperty("generative") boolean generative,
+        /**
+         * 창의 검증이 "발췌에 없는데 문서에 있는 것처럼 쓰였다"고 지목한 이름들. 재시도를 걸지 않는
+         * <b>경고 전용</b> 값이고(§6.24 Step 2-d), 창의 모드가 아닌 턴에서는 항상 비어 있다.
+         */
+        @JsonProperty("invented_symbols") List<String> inventedSymbols
+) {
+    public ChatResponse {
+        inventedSymbols = inventedSymbols == null ? List.of() : List.copyOf(inventedSymbols);
+    }
+}

@@ -113,6 +113,21 @@ public interface MemoryRepository {
      */
     Map<Long, String> findRetrievalMetricsByTurnIds(List<Long> turnIds);
 
+    /**
+     * 한 턴의 검증 결과({@code VerificationSnapshot}) JSON 을 저장한다 — {@code saveRetrievalMetrics}
+     * 와 같은 사후 UPDATE 다. {@code addTurn} 파라미터로 밀어 넣지 않는 이유는 그 시그니처가 이미
+     * 13개이고, 검증 결과는 답변 저장 이후에야(그리고 없을 수도 있게) 확정되는 값이기 때문이다.
+     */
+    void saveVerification(long turnId, String verificationJson);
+
+    /**
+     * 대화 기록 화면이 배지를 되살리는 데 쓰는 조회 — 값이 있는 턴만 담긴다
+     * ({@code findRetrievalMetricsByTurnIds} 와 같은 형태). {@code Turn} 레코드에 필드를 더하지
+     * 않은 이유는 그 레코드가 요약·컨텍스트 조립 경로에서도 쓰여서, 표시 전용 값을 실으면 세 개의
+     * SELECT 와 무관한 소비자들이 함께 움직이기 때문이다.
+     */
+    Map<Long, String> findVerificationsByTurnIds(List<Long> turnIds);
+
     /** One row of the {@code /admin} diagnostics panel; {@code metricsJson} is parsed by the service. */
     record MetricsRow(long turnId, String askedAt, String question, String responseMode,
                       String provider, String metricsJson) {}

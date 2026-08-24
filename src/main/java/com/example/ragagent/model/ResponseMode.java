@@ -44,7 +44,7 @@ public enum ResponseMode {
      */
     S(0.15, 2_000,
       "prompt.answer.system.s", "prompt.direct.system.s", null,
-      0, false, true, false, false, false),
+      0, false, true, false, false, false, false),
 
     /**
      * 표준형 (구 M) — 문서에 충실하게, 구체적이고 자세하게. 기본값.
@@ -56,7 +56,7 @@ public enum ResponseMode {
      */
     N(0.70, 5_000,
       "prompt.answer.system.n", "prompt.direct.system.n", "prompt.answer.eval",
-      0, true, false, false, false, true),
+      0, true, false, false, false, true, false),
 
     /**
      * 응용형 — 검색된 문서를 <b>재료로</b> 예제 코드·설정 등을 생성한다 (PLAN §6.24 Phase 2).
@@ -88,7 +88,7 @@ public enum ResponseMode {
      */
     C(0.70, 5_000,
       "prompt.answer.system.c", null, "prompt.answer.eval.creative",
-      0, false, false, true, true, false);
+      0, false, false, true, true, false, true);
 
     /** 클라이언트가 아무것도/모르는 값을 보냈을 때 쓰는 모드. 옛 {@code "M"}·{@code "L"} 기록도 여기로 흡수된다. */
     public static final ResponseMode DEFAULT = N;
@@ -104,11 +104,13 @@ public enum ResponseMode {
     private final boolean creativeTemperature;
     private final boolean creativeEval;
     private final boolean reusable;
+    private final boolean generative;
 
     ResponseMode(double tokenRatio, int minChars,
                  String answerSystemPromptKey, String directSystemPromptKey, String evalPromptKey,
                  int retrievalBoost, boolean curatable, boolean summaryOnly,
-                 boolean creativeTemperature, boolean creativeEval, boolean reusable) {
+                 boolean creativeTemperature, boolean creativeEval, boolean reusable,
+                 boolean generative) {
         this.tokenRatio = tokenRatio;
         this.minChars = minChars;
         this.answerSystemPromptKey = answerSystemPromptKey;
@@ -120,6 +122,7 @@ public enum ResponseMode {
         this.creativeTemperature = creativeTemperature;
         this.creativeEval = creativeEval;
         this.reusable = reusable;
+        this.generative = generative;
     }
 
     /** {@code app.llm.max-tokens} 중 이 모드가 쓸 비율. */
@@ -196,6 +199,22 @@ public enum ResponseMode {
      * ({@code suggest})과 실제 재사용({@code reuseLookup}) 양쪽이 같은 술어를 공유한다.
      */
     public boolean allowsReuse() { return reusable; }
+
+    /**
+     * 이 모드의 답변을 <b>문서에서 확인된 것</b>이 아니라 <b>문서를 재료로 생성된 것</b>으로
+     * 표시해야 하는가 (§6.24 Step 4-b).
+     *
+     * <p>검증 배지가 이 값으로 갈린다 — {@code true} 면 {@code 검증됨}(초록)이 아니라
+     * {@code 생성}(파랑)이다. 통과한 검증의 <b>질문이 다르기 때문</b>이다: 표준 모드의
+     * {@code grounded} 는 "답변이 문서에 근거하는가"를 물었고, 창의 모드의 {@code apiGrounded} 는
+     * "문서 유래라고 제시한 이름이 실재하는가"를 물었다. 같은 초록 배지를 붙이면 사용자는 뒤엣것을
+     * 앞엣것으로 읽는다 — 창의 모드에서 가장 비싼 오해다.
+     *
+     * <p>{@link #usesCreativeEval()} 과 값이 늘 같이 움직이겠지만 <b>합치지 않는다</b> — 저쪽은
+     * "돌아온 JSON을 어느 레코드로 읽을까", 이쪽은 "그 결과를 뭐라고 부를까"다. 이 파일의 다른
+     * 쌍({@code skipsVerification}/{@code summaryOnly})과 같은 이유다.
+     */
+    public boolean generative() { return generative; }
 
     /** Direct 모드(검색 없음)에서 고를 수 있는가 — 검색 결과가 전제인 모드는 false. */
     public boolean allowsDirect() { return directSystemPromptKey != null; }

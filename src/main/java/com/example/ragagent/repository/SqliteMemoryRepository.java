@@ -78,7 +78,11 @@ public class SqliteMemoryRepository implements MemoryRepository {
             // 정규화 테이블 대신 blob 하나인 이유: 읽는 쪽이 /admin 진단 패널 하나뿐이고 항상
             // "턴 하나의 출처 전부"를 통째로 꺼내므로 조인할 이유가 없다. 스키마도 SourceRef를
             // 따라가야 하는데(필드가 늘어날 수 있다) 컬럼으로 고정하면 그때마다 마이그레이션이다.
-            "ALTER TABLE conversation_turns ADD COLUMN retrieval_metrics TEXT"
+            "ALTER TABLE conversation_turns ADD COLUMN retrieval_metrics TEXT",
+            // 답변 검증 결과(VerificationSnapshot) JSON — 대화 기록의 검증 배지가 새로고침 후에도
+            // 남으려면 저장돼 있어야 한다. NULL 은 "검증 기록 없음"이고, 이 컬럼 이전의 모든
+            // 턴과 meta/Direct·S 턴이 그렇다 — 그 경우 배지를 띄우지 않는 예전 동작 그대로다.
+            "ALTER TABLE conversation_turns ADD COLUMN verification TEXT"
         )) {
             try { jdbc.execute(ddl); } catch (Exception ignored) {}
         }
@@ -370,6 +374,25 @@ public class SqliteMemoryRepository implements MemoryRepository {
         jdbc.query("SELECT id, retrieval_metrics FROM conversation_turns " +
                    "WHERE retrieval_metrics IS NOT NULL AND id IN (" + placeholders + ")",
                 rs -> { out.put(rs.getLong("id"), rs.getString("retrieval_metrics")); },
+                turnIds.toArray());
+        return out;
+    }
+
+    @Override
+    public void saveVerification(long turnId, String verificationJson) {
+        if (verificationJson == null || verificationJson.isBlank()) return;
+        jdbc.update("UPDATE conversation_turns SET verification = ? WHERE id = ?",
+                verificationJson, turnId);
+    }
+
+    @Override
+    public Map<Long, String> findVerificationsByTurnIds(List<Long> turnIds) {
+        if (turnIds == null || turnIds.isEmpty()) return Map.of();
+        String placeholders = String.join(",", java.util.Collections.nCopies(turnIds.size(), "?"));
+        Map<Long, String> out = new java.util.HashMap<>();
+        jdbc.query("SELECT id, verification FROM conversation_turns " +
+                   "WHERE verification IS NOT NULL AND id IN (" + placeholders + ")",
+                rs -> { out.put(rs.getLong("id"), rs.getString("verification")); },
                 turnIds.toArray());
         return out;
     }

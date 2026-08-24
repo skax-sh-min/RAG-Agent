@@ -2,12 +2,14 @@ package com.example.ragagent.service;
 
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.model.SourceRef;
+import com.example.ragagent.model.VerificationSnapshot;
 import com.example.ragagent.repository.MemoryRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -131,6 +133,49 @@ public class MemoryService {
         } catch (Exception e) {
             log.warn("[METRICS] 검색 진단 수치 저장 실패 turnId={} — 무시하고 진행: {}", turnId, e.toString());
         }
+    }
+
+    /**
+     * 이 턴의 검증 결과를 저장한다 — 대화 기록의 배지가 새로고침 후에도 남으려면 저장돼 있어야 한다
+     * (PLAN §6.24 Step 4-b). 담을 것이 하나도 없는 턴(검증 미실행 + 안내 없음)은 저장하지 않아
+     * 컬럼이 {@code NULL} 로 남는다 — 그게 곧 "배지 없음"이다.
+     *
+     * <p>{@code saveRetrievalMetrics} 와 같이 <b>실패해도 삼킨다</b>. 검증 결과 표시는 진단·안내
+     * 값이라, 직렬화 사고가 이미 완성된 답변의 저장을 되돌려서는 안 된다.
+     */
+    public void saveVerification(long turnId, VerificationSnapshot snapshot) {
+        if (snapshot == null || snapshot.isEmpty()) return;
+        try {
+            repository.saveVerification(turnId, objectMapper.writeValueAsString(snapshot));
+        } catch (Exception e) {
+            log.warn("[VERIFY] 검증 결과 저장 실패 turnId={} — 무시하고 진행: {}", turnId, e.toString());
+        }
+    }
+
+    /**
+     * 대화 기록 화면이 배지를 되살리는 데 쓰는 조회.
+     *
+     * <p><b>파싱은 명시적으로 관대하다</b> — 이 행들은 자신을 쓴 코드보다 오래 살아남으므로,
+     * {@code VerificationSnapshot} 에 필드가 하나 추가되면 과거 기록 전체가 안 읽히게 된다
+     * ({@code RetrievalMetricsService} 와 같은 규약). 깨진 값은 그 턴만 건너뛴다 — 화면 전체를
+     * 죽이지 않는다.
+     */
+    public Map<Long, VerificationSnapshot> getVerifications(List<Long> turnIds) {
+        Map<Long, VerificationSnapshot> out = new LinkedHashMap<>();
+        repository.findVerificationsByTurnIds(turnIds).forEach((turnId, json) -> {
+            try {
+                out.put(turnId, lenientMapper().readValue(json, VerificationSnapshot.class));
+            } catch (Exception e) {
+                log.debug("[VERIFY] 검증 결과 파싱 실패 turnId={} — 이 턴만 건너뜀: {}", turnId, e.toString());
+            }
+        });
+        return out;
+    }
+
+    /** 관대한 파서 — 위 javadoc 의 이유로 알 수 없는 필드를 무시한다. */
+    private ObjectMapper lenientMapper() {
+        return objectMapper.copy()
+                .configure(com.fasterxml.jackson.databind.DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
     }
 
     public List<MemoryRepository.MetricsRow> findRecentRetrievalMetrics(int offset, int limit) {

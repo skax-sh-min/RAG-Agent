@@ -5,6 +5,7 @@ import com.example.ragagent.agent.AgentState;
 import com.example.ragagent.context.ThreadContext;
 import com.example.ragagent.model.ChatRequest;
 import com.example.ragagent.model.TagUtils;
+import com.example.ragagent.model.VerificationSnapshot;
 import com.example.ragagent.model.ChatResponse;
 import com.example.ragagent.security.PromptInjectionGuard;
 import org.slf4j.Logger;
@@ -103,6 +104,9 @@ public class AgentService {
                     request.directMode());
                         memoryService.saveTurnImageRefs(turnId, userId, request.threadId(), result.imageRefs());
             memoryService.saveRetrievalMetrics(turnId, result.sources());
+            memoryService.saveVerification(turnId, new VerificationSnapshot(
+                    result.grounded(), result.responseMode().generative(),
+                    result.evalReason(), result.envNote(), result.inventedSymbols()));
             if (questionReuseService != null) {
                 questionReuseService.recordTurnSources(turnId, userId, request.threadId(),
                         result.retrievedDocs(), result.sources());
@@ -124,7 +128,9 @@ public class AgentService {
                 turnId,
                 result.grounded(),
                 result.evalReason(),
-                result.envNote()
+                result.envNote(),
+                result.responseMode().generative(),
+                result.inventedSymbols()
         );
     }
 

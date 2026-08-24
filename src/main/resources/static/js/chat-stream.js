@@ -530,11 +530,23 @@
             const qt = data.questionType;
             const parts = [];
             if (qt)                       parts.push(`<span class="badge badge-${escHtml(qt)} me-1">${escHtml(qt)}</span>`);
-            if (data.grounded === true)   parts.push(`<span class="badge bg-success me-1">검증됨</span>`);
+            // 통과 배지는 '무엇을 검증했는가'에 따라 갈린다 — 표준 모드의 grounded 는 "답변이 문서에
+            // 근거하는가"를, 창의 모드의 apiGrounded 는 "문서 유래라고 제시한 이름이 실재하는가"를
+            // 물었다. 같은 초록 배지를 붙이면 사용자가 뒤엣것을 앞엣것으로 읽는다.
+            // 판정(generative)은 서버가 ResponseMode.generative() 로 계산해 내려준다 — 여기서 모드
+            // 문자열을 비교하지 않는다(message-assistant.html 도 같은 필드를 쓴다).
+            if (data.grounded === true && data.generative) parts.push(
+                `<span class="badge bg-primary me-1" title="문서를 재료로 생성된 답변입니다. 문서에 없는 이름을 지어내지 않았는지만 검증했습니다.">생성</span>`);
+            else if (data.grounded === true) parts.push(`<span class="badge bg-success me-1">검증됨</span>`);
             // 재시도를 다 쓰고도 통과하지 못한 답변 — 배지에 사유를 실어 왜 미검증인지 알 수 있게 한다
             // (네이티브 title: 메타데이터 줄이라 상시 노출하면 길어진다. 사유는 아래 줄에도 한 번 더 나온다).
             else if (data.grounded === false) parts.push(
                 `<span class="badge bg-warning text-dark me-1"${data.evalReason ? ` title="${escHtml(data.evalReason)}" style="cursor:help;"` : ''}>미검증</span>`);
+            // 발명된 이름 경고 — 재시도를 걸지 않는 값이라(§6.24 Step 2-d) 통과한 답변에도 붙는다.
+            // 그래서 grounded 조건을 걸지 않는다(envNote 와 같은 규칙).
+            const invented = Array.isArray(data.inventedSymbols) ? data.inventedSymbols : [];
+            if (invented.length) parts.push(
+                `<span class="badge bg-warning text-dark me-1" style="cursor:help;" title="${escHtml(invented.join(', '))}">문서 밖 이름 ${invented.length}</span>`);
             if (data.premiumUpgraded)     parts.push(`<span class="badge-upgraded ms-1">⬆ ${escHtml(data.premiumUpgraded)}</span>`);
             if (data.usedProvider)        parts.push(`🤖 ${escHtml(data.usedProvider)}`);
             if (data.elapsedMs != null)   parts.push(`⏱ ${(data.elapsedMs / 1000).toFixed(1)}s`);
@@ -557,6 +569,14 @@
             // 경로·주소·포트·환경변수처럼 실행 환경에 따라 달라지는 값 안내. 이런 값은 문서와 달라도
             // 검증 실패로 치지 않으므로(prompt.answer.eval 의 환경 의존 값 예외) 검증됨 배지가 붙은
             // 답변에도 실린다 — grounded 조건을 걸지 않는 이유다(message-assistant.html 과 동일).
+            // 발명된 이름 목록 — 배지 툴팁만으로는 모바일에서 확인할 방법이 없다(evalReason 과 같은
+            // 이유). C 에서는 이것이 안전 신호라 통과·미통과와 무관하게 항상 펼쳐 보여준다.
+            if (invented.length) {
+                html += `<div class="small text-warning mt-1">`
+                     +  `<i class="bi bi-exclamation-triangle me-1"></i>`
+                     +  `문서에서 확인되지 않은 이름: ${escHtml(invented.join(', '))}</div>`;
+            }
+
             if (data.envNote) {
                 html += `<div class="small text-info mt-1">`
                      +  `<i class="bi bi-info-circle me-1"></i>`
