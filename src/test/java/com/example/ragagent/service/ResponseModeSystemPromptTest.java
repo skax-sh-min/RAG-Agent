@@ -156,6 +156,34 @@ class ResponseModeSystemPromptTest {
     }
 
     @Test
+    @DisplayName("C 프롬프트는 '## 구현'을 비울 수 없는 섹션으로 못박는다")
+    void creativePromptForbidsAnEmptyImplementationSection() {
+        String ko = prompt(ResponseMode.C.answerSystemPromptKey(), Locale.KOREAN);
+        String en = prompt(ResponseMode.C.answerSystemPromptKey(), Locale.ENGLISH);
+
+        // 관찰된 실패: 재료가 얇은 짧은 요청("부서별 휴일 체크 샘플을 만들어줘")에서 모델이
+        // "## 요약"과 "## 문서 근거"만 쓰고 멈췄다. 서버는 C 답변에서 섹션을 지우지 않으므로
+        // (SummaryOnlyGuard 는 summaryOnly()=true 인 S 전용, truncate() 는 20,000자에서만 걸린다)
+        // 이건 전부 프롬프트 문제이고, 그래서 여기가 유일한 고정 지점이다.
+        assertThat(ko).as("C/ko 는 '## 구현' 섹션 설명 안에서 비우기를 금지해야 한다")
+                .contains("이 섹션을 비우거나 생략하지 마세요");
+        assertThat(en.toLowerCase()).as("C/en 는 '## 구현' 섹션 설명 안에서 비우기를 금지해야 한다")
+                .contains("never leave this section empty or omit it");
+
+        // 섹션 목록은 강한 지시인데 "산출물을 실제로 만들어라"는 규칙 한 줄이라 후자가 진다
+        // (S 가 예전 prompt.answer.style.s 로 겪은 실패와 같은 유형). 규칙 쪽에도 같은 말을 둔다.
+        assertThat(ko).as("C/ko 섹션 생략 금지 규칙").contains("네 섹션 중 어느 것도 생략하지 마세요");
+        assertThat(en.toLowerCase()).as("C/en 섹션 생략 금지 규칙")
+                .contains("never omit any of the four sections");
+
+        // 예전 문구는 "못 만들겠으면 섹션을 빼도 된다"로 읽혔다 — 되살아나면 안 된다.
+        assertThat(ko).as("C/ko 에 섹션 생략의 핑계가 되살아났다")
+                .doesNotContain("만들 수 없다면 무엇이 부족한지 밝히세요");
+        assertThat(en.toLowerCase()).as("C/en 에 섹션 생략의 핑계가 되살아났다")
+                .doesNotContain("if you cannot, state what is missing");
+    }
+
+    @Test
     @DisplayName("스타일 지시문 층은 완전히 사라졌다 (§6.24 Step 0-c)")
     void styleInstructionLayerIsGone() {
         for (ResponseMode mode : ResponseMode.values()) {
