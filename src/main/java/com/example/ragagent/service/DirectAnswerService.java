@@ -152,19 +152,21 @@ public class DirectAnswerService {
             OpenAiApi.ChatCompletionRequest request =
                     new OpenAiApi.ChatCompletionRequest(messages, provider.model(), temperature, true);
             logDirectRequest(provider, request);
-            provider.openAiApi().chatCompletionStream(request)
-                    .mapNotNull(chunk -> {
-                        if (chunk.choices() == null || chunk.choices().isEmpty()) return null;
-                        return chunk.choices().get(0).delta().content();
-                    })
-                    .filter(t -> !t.isEmpty())
-                    .doOnCancel(() -> log.warn("[DirectAnswer] Stream cancelled provider={} thread={} route={}",
-                            provider.name(), state.threadId(), state.routingMode()))
-                    .doOnError(e -> log.error("[DirectAnswer] Stream error provider={}", provider.name(), e))
-                    .doFinally(signal -> log.debug("[DirectAnswer] Stream finished signal={} provider={} thread={}",
-                            signal, provider.name(), state.threadId()))
-                    .toIterable()
-                    .forEach(tokenSink);
+            // 중지/끊김 시 LLM 쪽 연결까지 실제로 끊으려면 구독을 취소해야 한다 — toIterable() 을
+            // 그냥 벗어나는 것으로는 취소되지 않는다(CancellableTokenStream 참조).
+            CancellableTokenStream.consume(
+                    provider.openAiApi().chatCompletionStream(request)
+                            .mapNotNull(chunk -> {
+                                if (chunk.choices() == null || chunk.choices().isEmpty()) return null;
+                                return chunk.choices().get(0).delta().content();
+                            })
+                            .filter(t -> !t.isEmpty())
+                            .doOnCancel(() -> log.warn("[DirectAnswer] Stream cancelled provider={} thread={} route={}",
+                                    provider.name(), state.threadId(), state.routingMode()))
+                            .doOnError(e -> log.error("[DirectAnswer] Stream error provider={}", provider.name(), e))
+                            .doFinally(signal -> log.debug("[DirectAnswer] Stream finished signal={} provider={} thread={}",
+                                    signal, provider.name(), state.threadId())),
+                    tokenSink);
         } else {
             // Provider does not support streaming: buffer and deliver as single chunk
             StringBuilder buf = new StringBuilder();
