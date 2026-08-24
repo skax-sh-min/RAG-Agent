@@ -84,7 +84,8 @@ public class SettingsService implements AppProperties.OverrideSource {
     private static final List<Spec> LLM_HOT_SPECS = List.of(
             new Spec(SettingsKeys.LLM_TEMPERATURE,                Kind.DOUBLE, 0.0, 0.3,  0.01, "settings.item.temperature"),
             new Spec(SettingsKeys.LLM_DIRECT_TEMPERATURE,         Kind.DOUBLE, 0.0, 1.0,  0.05, "settings.item.direct-temperature"),
-            new Spec(SettingsKeys.LLM_INDEXING_TEMPERATURE,       Kind.DOUBLE, 0.0, 1.0,  0.05, "settings.item.indexing-temperature")
+            new Spec(SettingsKeys.LLM_INDEXING_TEMPERATURE,       Kind.DOUBLE, 0.0, 1.0,  0.05, "settings.item.indexing-temperature"),
+            new Spec(SettingsKeys.LLM_CREATIVE_TEMPERATURE,       Kind.DOUBLE, 0.0, 1.0,  0.05, "settings.item.creative-temperature")
     );
 
         // Insertion order = render order in the "UI" group. Apply on next page render.
@@ -406,7 +407,9 @@ public class SettingsService implements AppProperties.OverrideSource {
      *  (DirectAnswerService reads it per call), and indexing-temperature (every ungated
      *  executeWithTracking() background caller — keyword extraction, MD correction, txt→md, vision
      *  description/classification, title, summary — reads it per call, so it can be pinned near 0
-     *  for deterministic extraction independently of the other two). max-tokens sits in the LLM
+     *  for deterministic extraction independently of the other two) — and creative-temperature, which
+     *  only the C (응용) response mode uses (§6.24): the general one is clamped to [0.0, 0.3], so
+     *  creative generation is impossible on it. max-tokens sits in the LLM
      *  providers card footer as read-only (baked into the provider beans at startup — restart to
      *  change). */
     private List<SettingItem> llmHotItems() {
@@ -542,6 +545,7 @@ public class SettingsService implements AppProperties.OverrideSource {
             case SettingsKeys.LLM_TEMPERATURE                 -> trimNum(props.llmSafe().temperature());
             case SettingsKeys.LLM_DIRECT_TEMPERATURE          -> trimNum(props.llmSafe().directTemperature());
             case SettingsKeys.LLM_INDEXING_TEMPERATURE        -> trimNum(props.llmSafe().indexingTemperature());
+            case SettingsKeys.LLM_CREATIVE_TEMPERATURE        -> trimNum(props.llmSafe().creativeTemperature());
             case SettingsKeys.UI_SOURCE_PREVIEW_ENABLED       -> Boolean.toString(sourcePreviewEnabled());
             case SettingsKeys.UI_RETRIEVAL_METRICS_ENABLED    -> Boolean.toString(retrievalMetricsEnabled());
             default -> "";

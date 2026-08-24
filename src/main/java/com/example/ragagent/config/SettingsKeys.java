@@ -57,6 +57,7 @@ public final class SettingsKeys {
     public static final String LLM_TEMPERATURE                = "llm.temperature";
     public static final String LLM_DIRECT_TEMPERATURE         = "llm.direct-temperature";
     public static final String LLM_INDEXING_TEMPERATURE       = "llm.indexing-temperature";
+    public static final String LLM_CREATIVE_TEMPERATURE       = "llm.creative-temperature"; // §6.24 C(응용) 모드
 
     // ── UI (apply on next page render) ───────────────────────────────────────
     public static final String UI_SOURCE_PREVIEW_ENABLED      = "ui.source-preview-enabled";
@@ -86,6 +87,7 @@ public final class SettingsKeys {
             LLM_TEMPERATURE,
             LLM_DIRECT_TEMPERATURE,
             LLM_INDEXING_TEMPERATURE,
+            LLM_CREATIVE_TEMPERATURE,
             UI_SOURCE_PREVIEW_ENABLED,
             UI_RETRIEVAL_METRICS_ENABLED
     );

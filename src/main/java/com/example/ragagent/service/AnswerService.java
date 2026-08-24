@@ -210,7 +210,7 @@ public class AnswerService {
             // Bypass OpenAiChatModel.internalStream() which buffers ALL chunks via buffer(int,int)
             // before emitting, defeating real-time token delivery to the browser.
             streamDirect(provider, systemPrompt, buildAnswerPrompt(state), tokenSink,
-                    state.threadId(), state.routingMode());
+                    state.threadId(), state.routingMode(), answerTemperature(state.responseMode()));
         } else {
             // stream=false: still use streaming HTTP to stay compatible with local LLM servers
             // that do not support stream:false. Buffer all tokens and deliver as one chunk.
@@ -230,14 +230,18 @@ public class AnswerService {
     }
 
     private void streamDirect(LlmProvider provider, String systemPrompt, String userPrompt,
-                               Consumer<String> tokenSink, String threadId, RoutingMode routingMode) {
+                               Consumer<String> tokenSink, String threadId, RoutingMode routingMode,
+                               double temperature) {
         List<OpenAiApi.ChatCompletionMessage> messages = List.of(
                 new OpenAiApi.ChatCompletionMessage(systemPrompt, OpenAiApi.ChatCompletionMessage.Role.SYSTEM),
                 new OpenAiApi.ChatCompletionMessage(userPrompt, OpenAiApi.ChatCompletionMessage.Role.USER)
         );
         // §6.18 — general/RAG temperature (app.llm.temperature / LLM_TEMPERATURE), was hardcoded 0.0.
+        // §6.24 — the caller now picks between that and creative-temperature by response mode; this
+        // path is the one the chat UI actually uses, so a mode-aware temperature that skipped it
+        // would be invisible everywhere it matters.
         OpenAiApi.ChatCompletionRequest request =
-                new OpenAiApi.ChatCompletionRequest(messages, provider.model(), props.llmSafe().temperature(), true);
+                new OpenAiApi.ChatCompletionRequest(messages, provider.model(), temperature, true);
         logDirectRequest(provider, request);
         provider.openAiApi().chatCompletionStream(request)
                 .mapNotNull(chunk -> {
@@ -423,15 +427,33 @@ public class AnswerService {
      */
     private ChatOptions answerOptions(AgentState state) {
         OpenAiChatOptions.Builder builder = OpenAiChatOptions.builder()
-                .temperature(props.llmSafe().temperature());
+                .temperature(answerTemperature(state.responseMode()));
         int configured = props.llmSafe().maxTokens();
         int max = state.responseMode().maxTokens(configured);
         if (max > 0) builder.maxTokens(max);
         return builder.build();
     }
 
+    /**
+     * 이 턴의 답변 생성 온도 (§6.24 Step 2-b).
+     *
+     * <p>문서 충실 모드(S/N)는 일반/RAG 온도를 쓴다 — clamp가 [0.0, 0.3]이라 표본추출로 사실이
+     * 흔들리지 않는다. C(응용)만 창의 온도({@code app.llm.creative-temperature}, clamp [0.0, 1.0])를
+     * 쓰는데, 바로 그 0.3 상한 때문에 일반 온도로는 창의 생성이 원천 봉쇄되기 때문이다.
+     *
+     * <p>둘 다 hot이라 매 호출 새로 읽는다. 그리고 이 메서드는 <b>블로킹과 스트리밍 양쪽</b>에서
+     * 불려야 한다 — 채팅 UI의 유일한 전송 경로가 스트리밍이므로, {@code streamDirect()}를 빠뜨리면
+     * 화면에서만 온도가 안 오르고 그 사실이 아무 로그에도 남지 않는다.
+     */
+    private double answerTemperature(ResponseMode mode) {
+        AppProperties.LlmConfig llm = props.llmSafe();
+        return mode.usesCreativeTemperature() ? llm.creativeTemperature() : llm.temperature();
+    }
+
     /** Sufficiency-evaluation call options: general/RAG temperature only (no maxTokens cap — the
-     *  structured JSON output is already short). Hot — read fresh per call. */
+     *  structured JSON output is already short). Deliberately NOT the creative temperature even for
+     *  C: judging whether an identifier appears in an excerpt is a lookup, not a creative task.
+     *  Hot — read fresh per call. */
     private ChatOptions evalOptions() {
         return OpenAiChatOptions.builder()
                 .temperature(props.llmSafe().temperature())

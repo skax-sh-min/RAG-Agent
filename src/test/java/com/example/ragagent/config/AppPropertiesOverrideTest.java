@@ -244,11 +244,28 @@ class AppPropertiesOverrideTest {
     }
 
     @Test
+    @DisplayName("LLM — creative-temperature 오버라이드가 llmSafe()에 반영되고 [0.0, 1.0]으로 clamp된다 (§6.24)")
+    void override_creativeTemperature() {
+        bind();
+        assertThat(base().llmSafe().creativeTemperature()).isEqualTo(0.7); // 기본값
+        assertThat(base().llmSafe().temperature()).isEqualTo(0.0);         // 일반 temperature 기본값
+
+        overrides.put(SettingsKeys.LLM_CREATIVE_TEMPERATURE, "0.45");
+        assertThat(base().llmSafe().creativeTemperature()).isEqualTo(0.45);
+
+        overrides.put(SettingsKeys.LLM_CREATIVE_TEMPERATURE, "1.5"); // > 1.0 → clamp
+        assertThat(base().llmSafe().creativeTemperature()).isEqualTo(1.0);
+
+        // 일반 temperature 의 [0.0, 0.3] 상한이 창의 온도까지 끌어내리면 존재 이유가 사라진다.
+        assertThat(base().llmSafe().temperature()).isEqualTo(0.0);
+    }
+
+    @Test
     @DisplayName("LLM — 일반/RAG temperature는 [0.0, 0.3]으로 clamp된다")
     void ragTemperature_isClampedToPointThree() {
         AppProperties p = withLlm(new AppProperties.LlmConfig(
                 java.util.List.of(), 2, 10, 180, "COST_FIRST", 0.6, 3, 20,
-                1.2, 0.1, 0.0, 6000, true));
+                1.2, 0.1, 0.0, 0.7, 6000, true));
 
         assertThat(p.llmSafe().temperature()).isEqualTo(0.3);
     }

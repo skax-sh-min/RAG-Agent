@@ -59,7 +59,7 @@ class LlmConfigVerificationTest {
 
     private AppProperties propsWith(AppProperties.ProviderConfig provider, boolean verifyOnStartup) {
         var llm = new AppProperties.LlmConfig(
-                List.of(provider), 2, 10, 180, "COST_FIRST", 0.6, 3, 20, 0.0, 0.1, 0.0, 6000, verifyOnStartup);
+                List.of(provider), 2, 10, 180, "COST_FIRST", 0.6, 3, 20, 0.0, 0.1, 0.0, 0.7, 6000, verifyOnStartup);
         return new AppProperties(
                 "./data", 2, 800, 100, 100, 7, 0.0, true, 0, false, true, false, 3,
                 null, llm, null, null, null, null, null, null, null, null, null, null, null, null,

@@ -145,7 +145,7 @@ class ChatResponseNullSafetyTest {
     private static AppProperties fakeProps() {
         AppProperties props = mock(AppProperties.class);
         when(props.llmSafe()).thenReturn(new AppProperties.LlmConfig(
-                List.of(), 2, 10, 180, "COST_FIRST", 0.6, 3, 20, 0.0, 0.1, 0.0, 6000, true));
+                List.of(), 2, 10, 180, "COST_FIRST", 0.6, 3, 20, 0.0, 0.1, 0.0, 0.7, 6000, true));
         return props;
     }
 }

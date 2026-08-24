@@ -62,7 +62,7 @@ class SettingsServiceTest {
                     n, "http://x/v1", "key", "model", "BOTH", "LOCAL", 1, true, null));
         }
         AppProperties.LlmConfig llm = new AppProperties.LlmConfig(
-                pcs, 2, 10, 180, "COST_FIRST", 0.6, 3, 20, 0.0, 0.1, 0.0, 6000, false);
+                pcs, 2, 10, 180, "COST_FIRST", 0.6, 3, 20, 0.0, 0.1, 0.0, 0.7, 6000, false);
         return new AppProperties(
                 "./data", 2, 800, 100, 100, 7, 0.0, true, 5, false,
                 true, false, 3, null,
@@ -76,7 +76,7 @@ class SettingsServiceTest {
         nameToRole.forEach((name, role) -> pcs.add(new AppProperties.ProviderConfig(
                 name, "http://x/v1", "key", "model", "BOTH", role, 1, true, null)));
         AppProperties.LlmConfig llm = new AppProperties.LlmConfig(
-                pcs, 2, 10, 180, routingMode, 0.6, 3, 20, 0.0, 0.1, 0.0, 6000, false);
+                pcs, 2, 10, 180, routingMode, 0.6, 3, 20, 0.0, 0.1, 0.0, 0.7, 6000, false);
         return new AppProperties(
                 "./data", 2, 800, 100, 100, 7, 0.0, true, 5, false,
                 true, false, 3, null,
@@ -206,6 +206,37 @@ class SettingsServiceTest {
         assertThat(view.vectorStoreType()).isEqualTo("chroma");
         assertThat(view.defaultRoutingMode()).isEqualTo("COST_FIRST");
         assertThat(view.providers()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("buildView — LLM 튜닝 그룹에 creative-temperature 행이 뜨고 현재값이 채워진다 (§6.24 Step 2-b)")
+    void buildView_llmGroupRendersCreativeTemperature() {
+        // 배선이 한 곳이라도 빠지면 '조용히' 실패한다 — 값은 반영되는데 화면에 안 뜨거나(②③),
+        // 화면엔 뜨는데 현재값이 비거나(④), 라벨 자리에 키 문자열이 그대로 나온다(⑦).
+        SettingsView.SettingItem item = service.buildView().groups().stream()
+                .filter(g -> g.id().equals("llm_hot"))
+                .flatMap(g -> g.items().stream())
+                .filter(i -> i.key().equals(SettingsKeys.LLM_CREATIVE_TEMPERATURE))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("llm_hot 그룹에 creative-temperature 행이 없다"));
+
+        assertThat(item.editable()).isTrue();
+        assertThat(item.value()).isEqualTo("0.7");                       // ④ 현재값
+        assertThat(item.max()).isEqualTo(1.0);                           // ③ clamp 범위
+        assertThat(item.label()).isEqualTo("settings.item.creative-temperature"); // ⑦ 라벨 키
+    }
+
+    @Test
+    @DisplayName("update — creative-temperature 는 [0.0, 1.0] 범위로 검증된다 (일반 temperature의 0.3 상한과 무관)")
+    void update_creativeTemperature_range() {
+        service.update(SettingsKeys.LLM_CREATIVE_TEMPERATURE, "0.9");
+        assertThat(props.llmSafe().creativeTemperature()).isEqualTo(0.9);
+
+        // 0.9 는 일반 temperature 였다면 거부됐을 값이다 — 두 knob 이 실제로 갈려 있는지 확인.
+        assertThatThrownBy(() -> service.update(SettingsKeys.LLM_TEMPERATURE, "0.9"))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> service.update(SettingsKeys.LLM_CREATIVE_TEMPERATURE, "1.4"))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test
