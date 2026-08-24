@@ -346,9 +346,12 @@
 
                         <div class="flex-grow-1"></div>
 
-                        <!-- 응답 모드 S/N 토글 — 답변의 성격 (기본 N). PLAN §6.24: L은 N과 구분되지
-                             않아 제거했고(같은 검색 재료를 받으므로 길이도 같았다), 응용 모드 C는
-                             Step 4-a에서 붙는다 — 그때 Direct 배타 처리도 함께 돌아온다.
+                        <!-- 응답 모드 S/N/C 토글 — 답변의 성격 (기본 N). PLAN §6.24: L은 N과 구분되지
+                             않아 제거했고(같은 검색 재료를 받으므로 길이도 같았다), C(응용)는 길이가
+                             아니라 근거 엄격도 축이다 — 문서를 재료로 코드·설정을 만들어낸다.
+                             C는 검색 결과가 전제라 Direct와 배타다: 아래 스크립트가 버튼을 비활성화하고,
+                             서버도 같은 규칙을 독립적으로 건다(ChatForm/ChatRequest — 구 L은 서버 가드가
+                             없어 손으로 만든 요청이 통과했다).
                              툴팁은 네이티브 title(브라우저 기본 지연 ~1.5s)이 아니라 Bootstrap Tooltip(짧은 delay)로 표시 — 하단 스크립트에서 초기화. -->
                         <span class="small text-muted" th:text="#{chat.response.group.label}">응답옵션</span>
                         <div id="response-mode-group" class="btn-group btn-group-sm" role="group"
@@ -362,6 +365,11 @@
                                    id="response-mode-n" value="N" checked autocomplete="off"/>
                             <label class="btn btn-outline-secondary response-mode-btn" for="response-mode-n"
                                    data-bs-toggle="tooltip" th:title="#{chat.response.n}">N</label>
+
+                            <input type="radio" class="btn-check" name="response-mode-radio"
+                                   id="response-mode-c" value="C" autocomplete="off"/>
+                            <label class="btn btn-outline-secondary response-mode-btn" for="response-mode-c"
+                                   data-bs-toggle="tooltip" th:title="#{chat.response.c}">C</label>
                         </div>
                         <input type="hidden" id="form-response-mode" name="responseMode" value="N"/>
                     </div>
@@ -604,8 +612,7 @@
         directLabel.textContent = isDirect ? labelDirect : labelRag;
         directLabel.classList.toggle('text-primary', isDirect);
         directLabel.classList.toggle('text-muted', !isDirect);
-        /* 현재 두 모드(S/N) 모두 Direct에서 의미가 있어 여기서 할 일이 없다. 검색 결과가
-           전제인 C가 붙는 Step 4-a에서 배타 처리가 다시 들어온다(클라이언트 비활성 + 서버 가드). */
+        updateResponseModeAvailability(isDirect);
     });
 
     const versionInput  = document.getElementById('version-input');
@@ -732,15 +739,30 @@
     const RESPONSE_MODE_KEY  = 'chatResponseMode';
     /* 버튼으로 고를 수 있는 값. 여기 없는 값(옛 'M'/'L', 손으로 넣은 값)은 기본값으로 떨어진다 —
        화이트리스트에 버튼 없는 값을 넣으면 어느 라디오도 체크되지 않은 상태가 만들어진다.
-       C는 버튼이 생기는 Step 4-a에서 함께 추가한다. 서버도 같은 규칙이다(ResponseMode.parse). */
-    const RESPONSE_MODES = ['S', 'N'];
+       서버도 같은 규칙이다(ResponseMode.parse). */
+    const RESPONSE_MODES = ['S', 'N', 'C'];
     const RESPONSE_MODE_DEFAULT = 'N';
+    const responseModeCRadio = document.getElementById('response-mode-c');
 
     function applyResponseMode(mode) {
-        const m = RESPONSE_MODES.includes(mode) ? mode : RESPONSE_MODE_DEFAULT;
+        const requested = RESPONSE_MODES.includes(mode) ? mode : RESPONSE_MODE_DEFAULT;
+        /* 비활성 버튼을 고른 상태로 두면 어느 라디오도 체크되지 않은 화면이 만들어진다. */
+        const m = (requested === 'C' && responseModeCRadio.disabled) ? RESPONSE_MODE_DEFAULT : requested;
         responseModeRadios.forEach(r => { r.checked = (r.value === m); });
         responseModeInput.value = m;
     }
+    /* Direct는 검색을 건너뛰므로 문서를 재료로 삼는 C가 성립하지 않는다 — 버튼을 비활성화하고,
+       현재 선택이 C였다면 N으로 되돌린다. RAG로 돌아가도 C를 자동 재선택하지는 않는다(구 L과 같은
+       규칙: 저장된 선택까지 N으로 덮어써 "왜 갑자기 C로 보냈지"가 생기지 않게 한다).
+       이것은 편의일 뿐이고 실제 방어는 서버에 있다 — ChatForm/ChatRequest 가 같은 성질을 묻는다. */
+    function updateResponseModeAvailability(isDirect) {
+        responseModeCRadio.disabled = isDirect;
+        if (isDirect && responseModeInput.value === 'C') {
+            applyResponseMode(RESPONSE_MODE_DEFAULT);
+            localStorage.setItem(RESPONSE_MODE_KEY, RESPONSE_MODE_DEFAULT);
+        }
+    }
+    updateResponseModeAvailability(directToggle.checked);
     /* 브라우저에 남아 있던 옛 'M'/'L' 선택도 여기서 기본값 N으로 흡수된다(마이그레이션 불필요). */
     applyResponseMode(localStorage.getItem(RESPONSE_MODE_KEY));
     responseModeRadios.forEach(radio => radio.addEventListener('change', function () {

@@ -93,8 +93,8 @@ class ChatControllerHtmxTest {
     }
 
     @Test
-    @DisplayName("GET / — 응답 모드 토글은 S/N 두 개뿐이고 기본 선택은 N (PLAN §6.24 Step 0-d)")
-    void chatPage_rendersOnlySAndNResponseModes() throws Exception {
+    @DisplayName("GET / — 응답 모드 토글은 S/N/C 세 개이고 기본 선택은 N (PLAN §6.24 Step 4-a)")
+    void chatPage_rendersAllThreeResponseModes() throws Exception {
         // base.html 이 principal.displayName 을 읽으므로 @WithMockUser 기본 principal 로는 렌더되지 않는다.
         AppUserDetails principal = new AppUserDetails("id-1", "user@local", "", "User", "USER", true, false);
 
@@ -103,17 +103,20 @@ class ChatControllerHtmxTest {
                 .andExpect(view().name("chat"))
                 .andReturn().getResponse().getContentAsString();
 
-        assertThat(html).contains("id=\"response-mode-s\"", "id=\"response-mode-n\"");
+        assertThat(html).contains("id=\"response-mode-s\"", "id=\"response-mode-n\"",
+                                  "id=\"response-mode-c\"");
         assertThat(html).contains("name=\"responseMode\" value=\"N\"");
         // L/M 버튼의 잔재가 남아 있으면 사용자가 서버에 존재하지 않는 모드를 고를 수 있게 된다.
         assertThat(html).doesNotContain("response-mode-l", "response-mode-m");
-        // 메시지 번들 키를 못 찾으면 Thymeleaf 는 ??key_locale?? 를 그대로 찍는다 — 모드 이름을
-        // 바꾸면서 chat.response.* 키 개명을 빠뜨리는 것이 이 화면의 대표적인 실수다.
+        // 메시지 번들 키를 못 찾으면 Thymeleaf 는 ??key_locale?? 를 그대로 찍는다 — 모드를 추가하면서
+        // chat.response.* 키를 빠뜨리는 것이 이 화면의 대표적인 실수다.
         assertThat(html).doesNotContain("??chat.response");
-        // 제거된 요소를 참조하는 JS 가 남으면 getElementById 가 null 을 주고, 그걸 건드리는 순간
+        // 없는 요소를 참조하는 JS 가 남으면 getElementById 가 null 을 주고, 그걸 건드리는 순간
         // TypeError 로 DOMContentLoaded 블록 전체(라우팅 모드 동기화·툴팁·태그 입력)가 죽는다.
-        // HTML 은 멀쩡해 보이므로 위 단언들로는 절대 잡히지 않는다.
-        assertThat(html).doesNotContain("responseModeLRadio", "updateResponseModeAvailability");
+        // HTML 은 멀쩡해 보이므로 위 단언들로는 절대 잡히지 않는다 — 제거된 L 참조가 그 사례였다.
+        assertThat(html).doesNotContain("responseModeLRadio");
+        // 반대로 C 는 스크립트가 참조하는 것과 버튼이 반드시 짝이어야 한다(Direct 배타 비활성화 대상).
+        assertThat(html).contains("responseModeCRadio", "updateResponseModeAvailability");
     }
 
     @Test
