@@ -315,10 +315,10 @@ REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — �
 `includeCurated=true`를 붙여 **문서 태그 ∪ 큐레이션 태그**를 받는다(큐레이션 항목은 `chunk_fts`에
 색인되지 않아 기본 호출로는 잡히지 않는다).
 
-**응답 모드 토글 (S/N)**: 콤보박스가 아니라 `.btn-check` 기반 2버튼 토글 그룹(`#response-mode-group` 안의
-`#response-mode-s/n`) — 왼쪽에 `응답옵션`(`chat.response.group.label`) 라벨이 붙는다. 버튼 폭은 기본
+**응답 모드 토글 (S/N/C)**: 콤보박스가 아니라 `.btn-check` 기반 3버튼 토글 그룹(`#response-mode-group` 안의
+`#response-mode-s/n/c`) — 왼쪽에 `응답옵션`(`chat.response.group.label`) 라벨이 붙는다. 버튼 폭은 기본
 `btn-group-sm`의 약 1.5배(`.response-mode-btn { min-width: 2.6rem }`, `app.css`)로 넓히고 `font-weight:700`으로
-굵게 표시한다. 버튼에는 `S`/`N` 글자만 표시하고, 마우스를 올리면 상세 설명이 뜬다 — 단 네이티브 `title`
+굵게 표시한다. 버튼에는 `S`/`N`/`C` 글자만 표시하고, 마우스를 올리면 상세 설명이 뜬다 — 단 네이티브 `title`
 속성이 아니라 **Bootstrap Tooltip**(`data-bs-toggle="tooltip"` + `new bootstrap.Tooltip(el, {delay:{show:100,
 hide:0}})`, 하단 스크립트에서 초기화)이다. 네이티브 title 툴팁은 브라우저 기본 지연(~1.5초)이 있어 체감상
 너무 늦게 뜨는 문제가 있었고, `bootstrap.bundle.min.js`가 `layout/base.html`에 이미 로드돼 있어(Popper 포함)
@@ -330,28 +330,39 @@ hide:0}})`, 하단 스크립트에서 초기화)이다. 네이티브 title 툴�
 |--------|-------------|----------|--------------------|
 | S | `S` | 요약 하나로 (`## 요약` 섹션만) | **1,000자 이내** + 4~7줄 |
 | N | `N` | 문서에 충실하게, 5섹션 (기본값) | 숫자 없음 — "구체적이고 자세하게" |
+| C | `C` | 문서를 **재료로** 코드·설정 생성, 4섹션 | 숫자 없음 — "구체적이고 자세하게" |
 
 **옛 `L`(원문 최대)은 제거됐다** — 같은 검색 결과를 받아 재료가 동일했고 실측 분량이 M과 4.6%밖에
-차이 나지 않았다(PLAN §6.24). 화이트리스트(`['S','N']`)에 없는 값은 기본값 `N`으로 떨어지므로
+차이 나지 않았다(PLAN §6.24). 화이트리스트(`['S','N','C']`)에 없는 값은 기본값 `N`으로 떨어지므로
 브라우저 `localStorage`에 남아 있던 `'M'`·`'L'`도 그대로 흡수된다 — 서버의 `ResponseMode.parse()`와
 같은 규칙이다.
 
 **분량은 프롬프트가 정하고, 토큰 예산은 안전판이다.** `ResponseMode.maxTokens()`
-(`= min(설정값, max(256, max(round(설정값×비율), 하한)))`, S 0.15/2,000 · N 0.70/5,000)가 내는 값은
+(`= min(설정값, max(256, max(round(설정값×비율), 하한)))`, S 0.15/2,000 · N·C 0.70/5,000)가 내는 값은
 **블로킹 호출의 `ChatOptions.maxTokens`에만** 붙는다 — 스트리밍 채팅에는 토큰 상한이 없다. 예전에는
 이 숫자가 `prompt.answer.style.*`의 "약 N자 이내로" 목표치로도 재사용됐지만, 긴 출력에서 그 목표가
 아무 일도 하지 않는다는 것이 확인돼(옛 M/L이 구분되지 않은 원인) **그 층 자체가 제거됐다**. 지금은
-모드별 전용 시스템 프롬프트(`prompt.answer.system.{s,n}`)가 분량을 지시한다. `/settings`의 "응답 예산"
+모드별 전용 시스템 프롬프트(`prompt.answer.system.{s,n,c}`)가 분량을 지시한다. `/settings`의 "응답 예산"
 행이 모드별 실효 토큰과 어느 항이 이겼는지를 보여준다. `AnswerService.truncate()`의 20,000자 컷은
 모드와 무관한 절대 상한으로 그대로 유지된다.
 
-> **Direct 배타는 현재 없다**: 두 모드 모두 검색 없이도 의미가 있어(`prompt.direct.system.{s,n}`)
-> RAG/Direct 토글이 응답 모드 버튼을 비활성화하지 않는다. 검색 결과가 전제인 모드(C, PLAN §6.24 Phase 4)가
-> 추가되면 그때 배타 처리가 돌아온다 — 클라이언트 `disabled` + 서버 강등 가드 양쪽.
+> **Direct 배타는 `C`에만 걸린다**: S/N은 검색 없이도 의미가 있어(`prompt.direct.system.{s,n}`) Direct 토글이
+> 그 두 버튼을 건드리지 않는다. C는 `directSystemPromptKey`가 `null`이라(`allowsDirect()=false`) Direct에서
+> 성립하지 않으므로, `updateResponseModeAvailability(isDirect)`가 `#response-mode-c`를 `disabled` 처리하고
+> 선택 중이었다면 `localStorage`까지 `N`으로 되돌린다(RAG로 돌아가도 자동 재선택하지 않는다 — 구 `L`과 같은 규칙).
+> **클라이언트 비활성화는 편의일 뿐이다** — 구 `L`은 이것만 있고 서버 가드가 없어 손으로 만든 요청이 통과했다.
+> 실제 방어는 `ChatRequest`(REST)와 `ChatForm.responseModeOrDefault()`(HTMX 폼 + SSE가 공유하는 유일한 지점 —
+> `ChatController.normalizeResponseMode()`는 SSE 경로를 지나가지 않는다)에 있고, 거기서 `N`으로 강등되므로
+> 저장되는 `conversation_turns.response_mode`까지 실제 동작과 일치한다.
 
-> **`S`에서는 좋아요 버튼이 아무 일도 하지 않는다**: S 답변은 전체가 `## 요약` 한 섹션이라 큐레이션
-> 임베딩 입력에서 구조 섹션을 걷어내면 본문이 통째로 사라진다(`ResponseMode.S.allowsCuration() = false`,
-> `CuratedQaService.onLike()`가 즉시 반환). 싫어요는 모드와 무관하게 동작한다. 상세는 PIPELINE §3.1.
+> **`S`·`C`에서는 좋아요 버튼이 아무 일도 하지 않는다**(`allowsCuration() = false` → `CuratedQaService.onLike()`가
+> 즉시 반환, `curated_qa` 행조차 만들지 않는다). S는 답변 전체가 `## 요약` 한 섹션이라 임베딩 입력에서 구조
+> 섹션을 걷어내면 본문이 통째로 사라지고, C는 만들어 낸 코드가 가중 RRF 축으로 검색돼 다음 턴의 "문서"가
+> 되는 되먹임을 만든다. 싫어요는 모드와 무관하게 동작한다. 상세는 PIPELINE §3.1.
+
+> **`C`는 답변 재사용 후보에서도 빠진다**(`allowsReuse() = false`). "다시 만들어 줘"에 저장된 코드를 그대로
+> 돌려주면 요청한 바로 그 일을 하지 않는 셈이 되기 때문이다 — 근거 청크가 그대로여도 마찬가지다.
+> 판정은 `QuestionReuseRepository`의 WHERE 술어가 enum에서 만들어 추천 조회와 재사용 조회가 함께 쓴다.
 
 ### 질문 내비게이션 (현재 질문 풍선 · 전체 질문 보기)
 
@@ -582,9 +593,15 @@ stage(classifier) → stage(retrieval) → sources → stage(answer) → token �
 | `stage` | `{"id":"retrieval","text":"관련 문서 검색 중..."}` | 노드 진입 시 배지 교체 |
 | `sources` | `[{"label":"...","preview":"..."}]` JSON 배열 | RETRIEVAL 완료 후 출처 배지 삽입 |
 | `token` | `{"text":"텍스트 조각"}` | ANSWER 스트리밍 토큰 |
-| `done` | 메타데이터 JSON (`usedProvider`, `inputTokens`, `elapsedMs`, `grounded`, `evalReason` 등) | 완료 시 마크다운 렌더 |
+| `done` | 메타데이터 JSON (`usedProvider`, `inputTokens`, `elapsedMs`, `grounded`, `evalReason`, `generative`, `inventedSymbols` 등) | 완료 시 마크다운 렌더 |
 | `retry` | `{"reason":"answer\|critic","retryCount":1,"detail":"...","text":"..."}` | 검증 미통과 → 이전 답변을 미검증 블록으로 접고 재시도 안내 |
 | `error` | `{"message":"오류 설명"}` | 오류 버블로 교체 |
+
+> **검증 배지는 '무엇을 검증했는가'로 갈린다**: 같은 통과라도 `N`의 `grounded`는 "답변이 문서에 근거하는가"를, `C`의 `apiGrounded`는 "문서 유래라고 제시한 이름이 실재하는가"를 물었다. 그래서 통과 배지가 `N`은 초록 **검증됨**, `C`는 파랑 **생성**이다 — 같은 초록을 붙이면 사용자가 뒤엣것을 앞엣것으로 읽는데, 창의 모드에서 가장 비싼 오해다. 판정은 클라이언트가 모드 문자열을 비교하는 게 아니라 서버가 `ResponseMode.generative()`로 계산해 `done`의 `generative` 필드로 내려준다. 평가가 지목한 발명된 이름(`inventedSymbols`)이 있으면 노랑 **문서 밖 이름 N** 배지와 펼친 목록이 함께 붙고, 이것은 **재시도를 걸지 않는 경고 전용 값**이라 통과한 답변에도 나타난다(`envNote`와 같은 규칙).
+>
+> **렌더러가 셋이라 규칙은 `model/VerificationSnapshot` 한 곳에 있다** — 방금 보낸 메시지를 그리는 no-JS HTMX 폴백(`fragments/message-assistant.html`), 새로고침 후의 대화 기록(`chat.html`의 자체 루프), 그리고 스트리밍(`chat-stream.js`). 서버 렌더러 둘은 그 레코드의 `verdictLabel()`/`verdictClass()`/`verdictTitle()`/`hasInventedSymbols()`를 그대로 읽고, JS는 SSE 이벤트가 템플릿을 거치지 않아 같은 규칙을 한 번 더 구현한다 — **바꾸면 양쪽을 함께 고쳐야 한다**(`SourceRef.staleBadge()`와 같은 구조).
+>
+> **배지는 새로고침 후에도 남는다**: 같은 레코드가 `conversation_turns.verification`에 JSON으로 저장된다(방어적 `ALTER TABLE`, `retrieval_metrics` 선례). 예전에는 기록 루프가 검증 배지를 아예 그리지 않아 새로고침 한 번으로 배지가 사라졌는데, C의 "문서 밖 이름"은 안전 신호라 그렇게 둘 수 없다. 컬럼이 `NULL`이면 검증 기록이 없는 턴(이 컬럼 이전의 모든 턴 + meta/Direct·S)이고 배지를 띄우지 않는 예전 동작 그대로다.
 
 > **검증 미통과 사유(`detail` / `evalReason`)**: `AnswerService.evaluate()`의 평가 LLM 호출이 `sufficient`/`grounded`와 함께 `reason`(한 문장)을 돌려주고, 그 값이 `AgentState.evalReason` → `GraphListener.onRetry(reason, retryCount, detail)` → `retry` 이벤트의 `detail`, 그리고 최종 `done` 이벤트의 `evalReason`으로 흐른다. 두 게이트가 모두 통과하면 `null`이라 UI가 알아서 생략한다. 표시 지점은 세 곳 — 재시도 안내 줄 아래("사유: …"), 접힌 미검증 블록의 요약줄, 그리고 재시도를 다 쓰고도 통과하지 못한 최종 답변의 메타데이터 줄(배지 `title` + 경고 한 줄). **툴팁만으로 끝내지 않는 이유**는 모바일에서 hover가 없기 때문이다. 블로킹/REST 경로도 같은 값을 `ChatResponse.grounded`/`eval_reason`으로 내보내고 `fragments/message-assistant.html`이 동일하게 렌더한다.
 

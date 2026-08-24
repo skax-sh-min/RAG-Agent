@@ -32,7 +32,7 @@
 
 | 순위 | 항목 | 현재 상태 |
 |---|---|---|
-| 1 | **§6.24 응답 모드 재설계 — S/N/C**(L 제거·모드별 전용 프롬프트·응용 모드 신설) | **Phase 0~3 완료**(2026-08-24). 기존 결함 3건(큐레이션 L 스킵·L 상한 초과·S 화면/DB 불일치) 제거 + C 서버 구현·오염 방지 게이트 3건 완료. 남은 것은 **Phase 4(C 공개)** — UI 3버튼·서버 강등·배지 분기 |
+| 1 | ✅ **§6.24 응답 모드 재설계 — S/N/C** | **전체 완료**(2026-08-24, Phase 0~4). 기존 결함 3건(큐레이션 L 스킵·L 상한 초과·S 화면/DB 불일치) 제거 + C 신설·오염 방지 3건·UI 공개. 4-c(검색 부스트 상향)는 부스트 기본값 0이라 미착수 — 올릴 때 `MAX_EVAL_EXCERPT_CHARS` 선행 필요 |
 | 2 | **§6.15 스토리지 쿼터**(전역 상한 B안, §6.2에서 이관) | 설계 완료, 구현 전 |
 | 3 | 운영 준비 잔여 — SQLite 백업 자동화(Litestream/cron), Caddy 인증서 만료 모니터링 | 미착수 |
 | 4 | §9.4 — CADDY 하위호환 별칭 | 선택, 낮은 우선순위 |
@@ -337,7 +337,7 @@ no-auth 배포에서 모든 방문자가 고정 게스트 id 하나를 공유해
 
 ---
 
-### 6.24 응답 모드 재설계 — S/N/C (L 제거 · 모드별 전용 시스템 프롬프트) 🟡 진행 중 — 설계 확정 2026-08-22 (분량 지침·`/settings` 배선 보강 2026-08-23)
+### 6.24 응답 모드 재설계 — S/N/C (L 제거 · 모드별 전용 시스템 프롬프트) ✅ 완료 2026-08-24 — 설계 확정 2026-08-22 (분량 지침·`/settings` 배선 보강 2026-08-23)
 
 **배경**: 새로 필요한 것은 "검색된 문서를 **재료로** 예제 코드·설정 등을 생성하는" 응용 모드다(예: 문서에 있는 날짜 함수로 새 기능 예제 작성). 그런데 이 모드는 S/M/L과 **다른 축**이다 — S/M/L은 길이 축, 응용은 **근거 엄격도** 축이다. 네 번째 값을 그대로 얹기 전에 기존 축이 실제로 작동하는지 검토한 결과, **M과 L이 구분되지 않음**이 확인됐다(운영자 실사용 확인 + 아래 구조 분석). 따라서 L을 제거하고 M을 N으로 개명한 뒤, 세 모드 각각에 전용 시스템 프롬프트를 주는 형태로 재설계한다.
 
@@ -467,9 +467,24 @@ N·C에서 숫자를 빼는 대신 **"자세히"를 방향으로 지시**하는 
 > 2-c(그래프·검색 배선) · 2-d(창의 eval 교체) — **Phase 2 전체 완료**.
 > ✅ 3-a(큐레이션 제외 — 2-a에서 함께 닫힘) · 3-b(재사용 제외) · 3-c(펜스 절단 복구)
 > — **Phase 3 전체 완료**. C를 공개하기 전에 요구되던 게이트 3개가 모두 닫혔다.
-> 버전 0.4.0-SNAPSHOT, 테스트 **1,601건** 통과(Phase 2에서 +20, Phase 3에서 +11).
+> ✅ 4-a(UI 3버튼 + Direct 배타 서버 가드) · 4-b(배지 분기 + 검증 결과 저장)
+> — **Phase 4 완료. C가 사용자에게 공개됐다.** 4-c는 부스트 기본값이 0이라 착수 불필요.
+> 버전 0.4.0-SNAPSHOT, 테스트 **1,624건** 통과(Phase 2 +20, Phase 3 +11, Phase 4 +23).
 > **§6.24가 지목한 S 화면/DB 불일치 버그는 1-c+1-d로 닫혔다.**
-> 🔵 남은 것: Phase 4(C 공개) — 4-a(UI 3버튼 + 서버 강등) · 4-b(배지 분기).
+> **§6.24 전체 완료** — 남은 항목은 아래 "남은 이슈" 3건(전부 이번 범위 밖).
+>
+> **Phase 4에서 드러난 것 2건 — 둘 다 계획의 전제가 틀렸다**
+> 1. **4-a의 가드 위치.** `ChatController.normalizeResponseMode()`는 라디오→폼 매핑만 하고
+>    **SSE 경로를 지나가지 않는다** — 채팅의 유일한 전송 경로가 스트리밍인데 거기에 가드를
+>    두면 아무것도 막지 못했을 것이다. HTMX와 SSE가 공유하는 유일한 지점인
+>    `ChatForm.responseModeOrDefault()` + REST의 `ChatRequest` 컴팩트 생성자로 옮겼다.
+> 2. **4-b의 "히스토리"가 히스토리가 아니었다.** 계획이 지목한 `message-assistant.html`은
+>    no-JS HTMX 폴백이고, 새로고침 후 기록은 `chat.html`의 자체 루프다. 그 루프는 검증 배지를
+>    **아예 렌더하지 않았다** — 검증 결과가 저장되지 않았기 때문이고, 따라서 "새로고침 전후
+>    동일" 기준은 S/N에 대해서도 이미 거짓이었다. 검증 결과를 저장하는 쪽으로 처리했고,
+>    그 과정에서 **렌더러가 셋**(HTMX 폴백 · 기록 루프 · 스트리밍 JS)이라는 사실이 드러나
+>    배지 규칙을 `VerificationSnapshot` 한 곳으로 모았다. C의 "문서 밖 이름"은 안전 신호라
+>    새로고침으로 사라져선 안 된다는 것이 저장을 택한 결정적 근거다(1-d와 같은 종류의 불일치).
 >
 > **Phase 3에서 드러난 것 2건**
 > 1. **오염 방지 규칙 두 개가 코드가 아닌 곳에 숨어 있었다.** 3-b의 S 제외는 SQL 리터럴
@@ -546,17 +561,17 @@ N·C에서 숫자를 빼는 대신 **"자세히"를 방향으로 지시**하는 
 | **3-b** ✅ | 재사용 캐시 제외 — "다시 만들어줘"에 같은 코드를 반환하면 기능 자체가 배신당한다 | `ResponseMode.allowsReuse()` · `QuestionReuseRepository` | C 턴이 추천·재사용 양쪽에서 빠짐. **규칙이 서비스가 아니라 SQL에 있었다** — `<> 'S'` 리터럴이 두 쿼리에 박혀 있어 모드를 추가할 때 고칠 곳이라는 사실이 드러나지 않았고 규약 테스트도 문자열 안은 못 본다. 이제 제외 목록을 enum에서 만들어 두 쿼리가 공유한다. **허용(IN)이 아니라 제외(NOT IN)** 여야 `parse()`의 관대함과 같은 방향으로 떨어진다(NULL·공백·구 `M`/`L`·미지값 → N = 재사용 가능). 목킹된 서비스 테스트로는 술어가 한 글자도 실행되지 않아 실제 SQLite로 고정했다 |
 | **3-c** ✅ | 코드펜스 절단 복구 — `truncate()`의 20,000자 절단이 펜스 중간을 자르면, 그 답변이 문서 내보내기/재색인을 탈 때 `MarkdownCorrectionService`의 **코드펜스 짝 맞춤 불변식**을 깬다 | `AnswerService.truncate()` · `MarkdownCorrectionService.fenceLineCount()`(package-private로 확대) | 절단된 답변의 펜스 개수가 짝수. 닫는 펜스는 안내 문구 **앞**(안내는 코드가 아니다). 추가로 마지막 줄바꿈까지만 남긴다 — 불변식이 아니라 결과물 문제다(`"```java"` 중간에서 자르면 `"```ja"`가 남고 짝 맞추기가 거기에 닫는 펜스를 붙여 언어 태그가 깨진 빈 블록을 만든다). **줄 중간 펜스는 절단이 만들 수 없다** — 그 조건은 한 줄에 앞선 내용과 ` ``` `이 함께 있어야 성립하는데 절단은 뒤에서 덜어낼 뿐이다. 당초 설계가 이 경우까지 절단 탓으로 적었으나 실제로는 원문에 이미 있던 결함이다 |
 
-*Phase 4 — C 공개*
+*Phase 4 — C 공개 ✅ 완료 2026-08-24 (4-c는 착수 불필요)*
 
 | Step | 작업 | 주요 대상 | 완료 기준 |
 |---|---|---|---|
-| **4-a** | UI 3버튼(S/N/C) + Direct 배타 — 클라이언트 비활성 **및 서버 가드**(구 L은 서버 가드가 없어 손으로 만든 요청이 그대로 통과했다). **그래프 몫은 Phase 2에서 이미 들어갔다**(C+Direct → RAG 경로). 여기 남은 것은 `chat.html` 화이트리스트에 `'C'` 추가 + 사용자에게 보이는 N 강등 | `chat.html` · `ChatController.normalizeResponseMode()` | `responseMode=C&directMode=true`가 N으로 강등됨 |
-| **4-b** | 배지 분기 — `검증됨`(초록) 대신 **`생성`(파랑)**, `inventedSymbols` 있으면 노랑 경고 | `fragments/message-assistant.html`(히스토리) · `chat-stream.js`(스트리밍) **양쪽** | 새로고침 전후 배지가 동일 |
-| **4-c** | **부스트를 실제로 0보다 올릴 때만** — `MAX_EVAL_EXCERPT_CHARS` 상향 또는 `topK × chunk-size` 연동 | `AnswerService` | 위 "현재 미발동" 참조. 기본값 유지 시 착수 불필요 |
+| **4-a** ✅ | UI 3버튼(S/N/C) + Direct 배타 — 클라이언트 비활성 **및 서버 가드** | `chat.html` · `ChatForm.responseModeOrDefault()` · `ChatRequest` 컴팩트 생성자 | `responseMode=C&directMode=true`가 N으로 강등됨. **가드 위치가 계획과 다르다** — `ChatController.normalizeResponseMode()`는 라디오→폼 매핑만 하고 **SSE 경로를 지나가지 않는다**. 그래서 두 진입점 값 객체에 뒀다: REST는 `ChatRequest`, HTMX 폼과 SSE가 공유하는 유일한 지점은 `ChatForm.responseModeOrDefault()`. 그래프 가드(2-c)와 역할이 다르다 — 그쪽은 널 프롬프트 키 방어이고 이쪽은 **저장되는 `response_mode`까지** N으로 맞춘다(안 그러면 DB엔 C, 실제론 N으로 답한 턴이 된다) |
+| **4-b** ✅ | 배지 분기 — `검증됨`(초록) 대신 **`생성`(파랑)**, `inventedSymbols` 있으면 노랑 경고 | `model/VerificationSnapshot`(신설) · `fragments/message-assistant.html` · `chat.html` 기록 루프 · `chat-stream.js` · `conversation_turns.verification`(신설 컬럼) | 새로고침 전후 배지가 동일. **계획의 전제가 틀렸다** — `message-assistant.html`은 히스토리가 아니라 no-JS HTMX 폴백이고, 새로고침 후 기록은 `chat.html`의 자체 루프가 그리는데 그 루프는 **검증 배지를 아예 렌더하지 않았다**(`grounded`/`evalReason`/`envNote`가 저장되지 않아서). 즉 이 기준은 S/N에 대해서도 오늘까지 거짓이었다. 그래서 검증 결과를 `verification` JSON 컬럼(방어적 ALTER, `retrieval_metrics` 선례)에 저장하고 기록 루프에서 되살린다. **렌더러가 셋**이라 배지 규칙은 `VerificationSnapshot` 한 곳에 두고 서버 렌더러 둘이 공유한다(JS만 한 번 더 구현 — `SourceRef.staleBadge()` 선례) |
+| **4-c** 🔵 | **부스트를 실제로 0보다 올릴 때만** (기본값 0 유지 → 미착수) — `MAX_EVAL_EXCERPT_CHARS` 상향 또는 `topK × chunk-size` 연동 | `AnswerService` | 위 "현재 미발동" 참조. 기본값 유지 시 착수 불필요 |
 
 **테스트**(Phase 2에서 +20건, 총 1,590건): `ResponseModeTest`(클램프 — 설정 상한 초과 불가, `parse("M")`/`parse("L")`→N, 플래그 매트릭스 + **창의 파서와 창의 프롬프트가 짝인지**) · `AnswerServiceTest`(C가 창의 프롬프트 2벌을 쓰고 `apiGrounded`→`grounded` 매핑 · 재시도 미발생 · `inventedSymbols`는 담기되 재시도 없음 · 파싱 실패 fail-safe) · 프롬프트 번들 테스트(ko/en 6키 존재 + C의 환각 금지·인젝션 조항 문자열 고정 + **분량 정책 고정**: S에 `1,000자`가 있고 N·C에는 숫자 분량 문구가 없음 — `AnswerEvalPromptTest` 선례) · `AgentGraphTest`(C+meta여도 RETRIEVAL을 타는지, S가 eval/CRITIC을 건너뛰는지) · `CuratedQaServiceTest`(C는 임베딩 스레드 미생성) · **`AppPropertiesOverrideTest`(creative-temperature 오버라이드가 `llmSafe()`에 반영되고 [0.0,1.0]으로 clamp — `direct-temperature` 케이스 복제) · `SettingsServiceTest`/`SettingsControllerRenderTest`(LLM 튜닝 그룹에 항목이 렌더되고 현재값이 채워짐)** · `AppPropertiesSafeAccessorTest`(creative-temperature 누락 시 자동 실패) · 설정 오버라이드를 건드리는 테스트는 `@ResourceLock("global-state")` 필수.
 
-**남은 이슈**: (a) `/llm-usage` 토큰 과소 보고 — `ResponseMode`는 "한글 1토큰≈1글자", `LlmRouter.approxTokens()`는 chars/4로 **같은 코드베이스에 4배 차이 나는 두 가정이 공존**한다(스트리밍 한국어 사용량이 ~4배 적게 기록됨). 이번 범위 밖이지만 토큰↔글자 환산이라는 같은 뿌리. (b) C 턴은 `AnswerAttribution` 지분이 0에 수렴해 `/admin` 진단 패널의 "답변에 실제 쓰인 출처 수"가 항상 0으로 보인다 — "해당 없음" 표기 권장(유사도 정렬 폴백은 이미 구현돼 있어 기능상 안전). (c) **긴 답변 수요는 없는 것으로 확인**(운영자: "M 수준으로 충분") — 재발 시 레버는 프롬프트의 숫자 목표가 아니라 섹션별 분할 생성(호출 3배) 또는 문서 내보내기다.
+**남은 이슈**: (a) `/llm-usage` 토큰 과소 보고 — `ResponseMode`는 "한글 1토큰≈1글자", `LlmRouter.approxTokens()`는 chars/4로 **같은 코드베이스에 4배 차이 나는 두 가정이 공존**한다(스트리밍 한국어 사용량이 ~4배 적게 기록됨). 이번 범위 밖이지만 토큰↔글자 환산이라는 같은 뿌리. (b) C 턴은 `AnswerAttribution` 지분이 0에 수렴해 `/admin` 진단 패널의 "답변에 실제 쓰인 출처 수"가 항상 0으로 보인다 — "해당 없음" 표기 권장(유사도 정렬 폴백은 이미 구현돼 있어 기능상 안전). **미처리** — 창의 eval이 `usedDocs`를 아예 묻지 않으므로(2-d) C 턴은 항상 이 상태이고, 표기 변경은 `/admin` 패널 쪽 작업이라 §6.24 범위 밖으로 남겼다. (c) **긴 답변 수요는 없는 것으로 확인**(운영자: "M 수준으로 충분") — 재발 시 레버는 프롬프트의 숫자 목표가 아니라 섹션별 분할 생성(호출 3배) 또는 문서 내보내기다.
 
 ---
 

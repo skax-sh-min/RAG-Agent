@@ -49,7 +49,7 @@
 │    ClassifierService        → TEXT   (품질 민감 — 큰 모델 유지)      │
 │    RetrievalService (쿼리)  → MICRO_TEXT                             │
 │    AnswerService            → TEXT   (답변 + 충분도·근거 통합 평가)  │
-│    CriticService            → —      (LLM 호출 없음, responseMode=S는 스킵) │
+│    CriticService            → —      (LLM 호출 없음, S는 스킵·C는 창의 기준) │
 │    DirectAnswerService      → TEXT   (사용자 노출 — 큰 모델 유지)    │
 │    VisionDescriptionService → VISION                                 │
 │    ImageTypeClassifier      → LIGHT_BOTH  (분류는 범용 멀티모달로)   │
@@ -76,6 +76,10 @@ public enum TaskType {
 ```
 
 참고: `responseMode=S` turn은 AgentGraph가 ANSWER 뒤 CRITIC 노드를 건너뛰고 바로 FINALIZE로 종료한다.
+`responseMode=C`(응용)는 반대로 검증을 **끄지 않고 바꿔 낀다** — 평가 프롬프트만 `prompt.answer.eval.creative`로
+교체되고 라우팅(`TaskType.TEXT`)·호출 수는 그대로다. 또한 C는 검색 결과가 전제라 `"meta"`로 분류돼도
+DIRECT_ANSWER로 가지 않고 RETRIEVAL을 탄다(`allowsDirect()=false`) — 라우팅 관점에서는 meta 턴 하나가
+TEXT 1회에서 TEXT 2회(답변+평가) + 임베딩으로 늘어난다는 뜻이다.
 
 `supports()` 매핑: `MICRO_TEXT`→MICRO_TEXT만, `LIGHT_TEXT`→LIGHT_TEXT+MICRO_TEXT, `LIGHT_BOTH`→LIGHT_TEXT·MICRO_TEXT·VISION, `BOTH`→전체. MICRO_TEXT는 LIGHT_TEXT의 부분집합이라 소형(`type=MICRO_TEXT`) 미등록 시 상위 모델이 흡수(회귀 0).  
 `type=VISION` 프로바이더는 VISION task에서만 선택됨 — 범용 `LIGHT_BOTH` 모델과 공존 가능.
@@ -111,7 +115,10 @@ app.llm.progressive-threshold=0.6
 # by every interactive gated caller (ClassifierService/AnswerService/RerankerService) — still also
 # baked into each provider bean at startup as the fallback for framework-internal callers that can't
 # take a per-call override (e.g. multi-query expansion), which only pick up a change on restart.
-# direct-temperature is read per-call by DirectAnswerService. indexing-temperature is read per-call
+# direct-temperature is read per-call by DirectAnswerService. creative-temperature is read per-call by
+# AnswerService for the C (응용) response mode, on BOTH the blocking and the streaming path — it exists
+# separately because temperature above is clamped to [0.0, 0.3], which makes creative generation
+# impossible on it. indexing-temperature is read per-call
 # by every ungated background/indexing caller (keyword extraction, MD correction, txt→md, vision
 # description/classification, thread-title generation, conversation summarization) — kept near 0
 # independently of temperature/direct-temperature since those are extraction/classification tasks,
@@ -120,6 +127,7 @@ app.llm.progressive-threshold=0.6
 app.llm.temperature=${LLM_TEMPERATURE:0.0}
 app.llm.direct-temperature=${DIRECT_LLM_TEMPERATURE:0.1}
 app.llm.indexing-temperature=${LLM_INDEXING_TEMPERATURE:0.0}
+app.llm.creative-temperature=${CREATIVE_LLM_TEMPERATURE:0.7}
 app.llm.max-tokens=${LLM_MAX_TOKENS:6000}
 # 질의 경로 동시성 게이트 기본값(서버의 실제 --parallel 값에 맞춘다) + 대기 상한
 app.llm.default-provider-concurrency=${LLM_DEFAULT_PROVIDER_CONCURRENCY:3}
@@ -365,7 +373,7 @@ findFirst(role, priority 오름차순 순회)
 - **priority가 다르면 부하와 무관하게 낮은 priority가 항상 우선** — 로드밸런싱은 동일 priority 그룹 내부에서만 일어난다. 부하가 높다고 다음 priority(예: 외부 유료 API)로 자동 전환되지는 않는다 — 그건 프로바이더가 실제로 응답 실패(429/402/503/기타)할 때만 §5 Circuit Breaker가 처리하는 영역이다.
 - **총 동시 처리량 = 등록 대수 × per-provider concurrency** (예: LOCAL 2대 × concurrency 3 = 6).
 - 임베딩 프로바이더도 이제 로드밸런싱된다(§6.21 E1) — `EmbeddingModel` 체인이라 라우팅 지점은 LLM 경로와 다르지만, `LoadBalancingEmbeddingModel`이 다중 임베딩 엔드포인트(`app.embedding.additional-base-urls`)를 least-in-flight로 분산한다. 인덱싱 시 병렬 서브배치(§6.21 E2, `app.embedding.max-concurrent-batches`)와 결합하면 단일 대용량 문서도 여러 엔드포인트를 동시에 채운다. 설정은 OPERATOR_MANUAL §3.2 "임베딩 병렬화" 참고.
-- **좋아요 기반 큐레이션 Q&A 임베딩(§10.10)**은 이 표의 LLM 채팅 게이트(위 표)와 무관하다 — `VectorStoreFacade.add()`를 통해 인덱싱과 동일한 임베딩 파이프라인(uncached, §10.9.4)을 타므로 여기 §6의 임베딩 로드밸런싱·병렬 서브배치 대상에 자연히 포함된다. 좋아요 즉시가 아니라 3초 디바운스 후 배경 가상 스레드에서 실행되므로 채팅 응답 지연에는 영향이 없다. 별도의 라우팅/동시성 설정은 필요 없다. **긴 답변은 임베딩 시점에 여러 청크로 나뉘므로 좋아요 1회가 청크 수만큼의 임베딩 호출을 만든다**(제안 승인과 동일) — 모두 위 임베딩 로드밸런싱 대상이다.
+- **좋아요 기반 큐레이션 Q&A 임베딩(§10.10)**은 이 표의 LLM 채팅 게이트(위 표)와 무관하다 — `VectorStoreFacade.add()`를 통해 인덱싱과 동일한 임베딩 파이프라인(uncached, §10.9.4)을 타므로 여기 §6의 임베딩 로드밸런싱·병렬 서브배치 대상에 자연히 포함된다. 좋아요 즉시가 아니라 3초 디바운스 후 배경 가상 스레드에서 실행되므로 채팅 응답 지연에는 영향이 없다. 별도의 라우팅/동시성 설정은 필요 없다. **긴 답변은 임베딩 시점에 여러 청크로 나뉘므로 좋아요 1회가 청크 수만큼의 임베딩 호출을 만든다**(제안 승인과 동일) — 모두 위 임베딩 로드밸런싱 대상이다. 다만 **응답 모드 `S`·`C` 턴은 좋아요를 눌러도 임베딩 호출이 아예 발생하지 않는다**(`allowsCuration()=false` → `onLike()` 즉시 반환, `curated_qa` 행조차 만들지 않음) — 특히 C는 모델이 만들어 낸 코드가 가중 RRF 축으로 되돌아와 다음 턴의 근거가 되는 것을 막기 위한 게이트다.
   - **청크 추가 게시판(사용자 제안 → 관리자 승인, OPERATOR_MANUAL §6.9)**도 승인 시점에 같은 경로(`CuratedQaService.createFromSubmission()` → `VectorStoreFacade.add()`)를 그대로 탄다. 차이는 두 가지다: (1) 디바운스가 없다 — 좋아요와 달리 관리자의 명시적 1회 동작이라 취소와 경합할 여지가 없기 때문. (2) 본문이 길면 `ChunkSplitter`로 나뉘므로 승인 1회가 **청크 수만큼의 임베딩 호출**을 만든다(청크마다 배경 가상 스레드 1개). 각 호출은 위 임베딩 로드밸런싱을 그대로 타고, 승인 요청 자체는 행 생성 직후 즉시 응답한다 — 그래서 응답 시점에는 임베딩 성공 여부를 알 수 없고, 실패는 `curated_qa.embed_status='failed'`로 남아 관리 화면 배지로 드러난다(하나라도 실패하면 표시).
     - **유일한 LLM 호출은 본문 이미지의 Vision 설명 생성이다.** 텍스트만 있는 제안은 등록·승인 어느 쪽도 LLM을 부르지 않는다(키워드 추출도 요약도 돌지 않는다). 본문에 `[이미지: ...]` 마커가 있으면 `approve()`가 **분할 전에** `CuratedImageStore.describeImages()` → `LazyVisionService`로 이미지당 1회 `TaskType.VISION` 호출을 낸다 — 설명이 임베딩되는 텍스트의 일부여야 그림 내용이 검색에 걸리기 때문. 라우팅은 §1 매트릭스의 VISION 규칙(`type=VISION` → `LIGHT_BOTH` → `BOTH`)을 그대로 따르고, **인덱싱 계열이므로 위 표대로 §6 동시성 게이트는 타지 않는다**(`executeWithTracking()`) — 채팅 슬롯을 잠식하지 않지만 로컬 LLM 서버 자원은 공유한다. 동시성은 `LazyVisionService` 자체의 `app.indexing.max-concurrent-llm-calls` 세마포어가 제한하며, 결과는 `image_descriptions` 캐시에 남아 질의 시점에 재분석되지 않는다.
     - 임베딩과 달리 이 Vision 호출은 **승인 요청 안에서 동기로 끝난다**(배경으로 미루면 마커와 설명이 서로 다른 청크로 갈라진다). 그래서 이미지가 있는 제안은 승인 응답 자체가 느리다 — 장수 상한은 `CuratedImageStore.MAX_IMAGES_PER_SUBMISSION`(기본 10, 프로퍼티 아님). `IMAGE_DESCRIPTION_ENABLED=false`면 `LazyVisionService` 빈이 없어 이 단계가 통째로 생략된다(이미지는 표시만 되고 검색 기여 없음).
