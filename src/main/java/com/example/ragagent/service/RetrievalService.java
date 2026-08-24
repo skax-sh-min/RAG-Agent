@@ -127,7 +127,14 @@ public class RetrievalService {
         // near-miss chunk in, small enough that the answer prompt does not balloon the way the
         // ×(retryCount+1) candidate escalation would. Gated by the same app.search-retry-escalate
         // flag — turning escalation off must switch off the whole behavior, not half of it.
-        int effectiveTopK = retryEscalate ? defaultTopK + retry : defaultTopK;
+        // §6.24 Step 2-c — 응답 모드의 검색 부스트. 재시도 증가분과 '더해진다': 재시도는 "이번
+        // 시도에 근거가 모자랐다"는 사후 신호이고, 부스트는 "이 모드는 원래 재료가 더 필요하다"는
+        // 사전 성질이라 서로를 대체하지 않는다. 오늘은 모든 모드가 0이다 — 이 값을 실제로 올리면
+        // AnswerService.MAX_EVAL_EXCERPT_CHARS 를 먼저 손봐야 하고(§6.24 Step 4-c), 그러지 않으면
+        // 하위 순위 문서가 검증 대상에서 빠지면서 "그 문서에만 있는 값을 정확히 인용한 답변이
+        // grounded=false 판정을 받는" 오탐이 되살아난다.
+        int modeBoost = Math.max(0, state.responseMode().retrievalBoost());
+        int effectiveTopK = (retryEscalate ? defaultTopK + retry : defaultTopK) + modeBoost;
         List<Document> unique;
         // Empty on the expansion-failure fallback path below, which skips fusion entirely — every
         // consumer must therefore tolerate a missing entry rather than assume one exists.

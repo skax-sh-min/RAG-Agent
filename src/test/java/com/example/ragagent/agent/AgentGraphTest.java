@@ -129,6 +129,62 @@ class AgentGraphTest {
     }
 
     @Test
+    @DisplayName("responseMode=C 면 meta 로 분류돼도 DIRECT_ANSWER 가 아니라 RETRIEVAL 을 탄다 (§6.24 Step 2-c)")
+    void creativeMode_metaStillGoesToRetrieval() {
+        // "문서에 있는 날짜 함수로 예제 하나 만들어줘" 가 meta 로 분류되는 순간 검색을 통째로
+        // 건너뛰어 C 가 무력화된다 — 분류기는 "잡담인가"만 알고 "문서가 필요한가"는 모드가 안다.
+        when(classifierService.execute(any()))
+                .thenAnswer(inv -> ((AgentState) inv.getArgument(0)).toBuilder().questionType("meta").build());
+
+        AgentState state = newState(RoutingMode.COST_FIRST).toBuilder()
+                .responseMode(ResponseMode.C).build();
+        AgentState result = graph.run(state);
+
+        verify(classifierService, times(1)).execute(any());
+        verify(directAnswerService, never()).execute(any());
+        verify(retrievalService, times(1)).execute(any(), any());
+        verify(answerService, times(1)).execute(any());
+        verify(finalizeService, times(1)).execute(any());
+        assertThat(result.questionType()).isEqualTo("meta");
+    }
+
+    @Test
+    @DisplayName("responseMode=C + directMode=true 요청도 DIRECT_ANSWER 로 새지 않는다")
+    void creativeMode_directModeRequestFallsBackToTheRagPath() {
+        // C 는 Direct 전용 시스템 프롬프트가 없다(키가 null). 손으로 만든
+        // responseMode=C&directMode=true 요청이 DIRECT_ANSWER 에 닿으면 그 null 로 터진다 —
+        // 구 L 은 서버 가드가 없어 정확히 그런 요청이 통과했다.
+        when(classifierService.execute(any()))
+                .thenAnswer(inv -> ((AgentState) inv.getArgument(0)).toBuilder().questionType("manual").build());
+
+        AgentState state = AgentState.of("질문", "v1", "t1", "", RoutingMode.COST_FIRST, true)
+                .toBuilder().responseMode(ResponseMode.C).build();
+        graph.run(state);
+
+        verify(directAnswerService, never()).execute(any());
+        verify(retrievalService, times(1)).execute(any(), any());
+        verify(answerService, times(1)).execute(any());
+        verify(finalizeService, times(1)).execute(any());
+    }
+
+    @Test
+    @DisplayName("responseMode=C 는 검증을 건너뛰지 않는다 — CRITIC 을 그대로 탄다")
+    void creativeMode_stillRunsCritic() {
+        // S 와 갈리는 지점. C 는 eval 을 '끄는' 게 아니라 창의 기준으로 바꿔 끼우므로,
+        // 그 결과(apiGrounded)를 소비할 CRITIC 이 여전히 필요하다.
+        when(classifierService.execute(any()))
+                .thenAnswer(inv -> ((AgentState) inv.getArgument(0)).toBuilder().questionType("manual").build());
+        when(answerService.execute(any()))
+                .thenAnswer(inv -> ((AgentState) inv.getArgument(0)).toBuilder().needsRetry(false).build());
+
+        AgentState state = newState(RoutingMode.COST_FIRST).toBuilder()
+                .responseMode(ResponseMode.C).build();
+        graph.run(state);
+
+        verify(criticService, times(1)).execute(any());
+    }
+
+    @Test
     @DisplayName("AgentService 사전 분류 — questionType 이미 설정되면 classifier 호출 skip")
     void existingQuestionType_skipsClassifier() {
         AgentState pre = newState(RoutingMode.COST_FIRST).toBuilder().questionType("manual").build();

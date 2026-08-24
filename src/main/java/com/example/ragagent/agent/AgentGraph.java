@@ -62,9 +62,27 @@ public class AgentGraph {
 
     // ── Internal ──────────────────────────────────────────────────────────────
 
+    /**
+     * CLASSIFIER 이후의 갈림길. meta(인사/잡담)는 검색을 건너뛰지만, <b>검색 결과가 전제인
+     * 모드는 예외다</b> (§6.24 Step 2-c) — "문서에 있는 날짜 함수로 예제 하나 만들어줘" 같은
+     * 요청이 meta 로 분류되는 순간 검색을 통째로 건너뛰어 그 모드가 무력화되기 때문이다.
+     * 분류기를 고치는 대신 여기서 막는 이유는, 분류기는 "이 질문이 잡담인가"만 알고 "이 턴이
+     * 문서를 필요로 하는가"는 모드가 알기 때문이다.
+     */
+    private static Node afterClassify(AgentState state) {
+        boolean meta = "meta".equals(state.questionType());
+        return (meta && state.responseMode().allowsDirect()) ? Node.DIRECT_ANSWER : Node.RETRIEVAL;
+    }
+
     private AgentState runInternal(AgentState initialState, GraphListener listener) {
-        // directMode: RAG 없이 LLM 직접 호출 → CLASSIFIER/RETRIEVAL/CRITIC 생략
-        Node current = initialState.directMode() ? Node.DIRECT_ANSWER : Node.CLASSIFIER;
+        // directMode: RAG 없이 LLM 직접 호출 → CLASSIFIER/RETRIEVAL/CRITIC 생략.
+        // 단, 검색 결과가 전제인 모드(C)는 Direct 전용 시스템 프롬프트 자체가 없다 — 값이 아니라
+        // 성질로 묻고(§6.24 Step 0-b), 해당하지 않으면 일반 RAG 경로로 되돌린다. 손으로 만든
+        // responseMode=C&directMode=true 요청이 여기로 들어오면 프롬프트 키가 null 이라 그대로
+        // 터진다(구 L은 서버 가드가 없어 그 요청이 통과했다). 사용자에게 보이는 강등은 별도로
+        // ChatController 가 맡고, 이 가드는 그래프 자신의 정합성 보장이다.
+        Node current = (initialState.directMode() && initialState.responseMode().allowsDirect())
+                ? Node.DIRECT_ANSWER : Node.CLASSIFIER;
         log.debug("[AgentGraph] start node={} directMode={} routingMode={}",
                 current, initialState.directMode(), initialState.routingMode());
         AgentState state = initialState;
@@ -74,10 +92,10 @@ public class AgentGraph {
                 case CLASSIFIER -> {
                     listener.onNodeEnter("classifier");
                     if (state.questionType() != null) {
-                        yield "meta".equals(state.questionType()) ? Node.DIRECT_ANSWER : Node.RETRIEVAL;
+                        yield afterClassify(state);
                     }
                     state = classifierService.execute(state);
-                    yield "meta".equals(state.questionType()) ? Node.DIRECT_ANSWER : Node.RETRIEVAL;
+                    yield afterClassify(state);
                 }
                 case DIRECT_ANSWER -> {
                     state = (listener == GraphListener.NOOP)
