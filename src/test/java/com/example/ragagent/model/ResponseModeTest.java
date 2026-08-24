@@ -3,17 +3,21 @@ package com.example.ragagent.model;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import java.util.List;
+
 import static org.assertj.core.api.Assertions.assertThat;
 
-/** 응답 모드(S/N) 파싱·예산·성질 플래그 단위 테스트 (PLAN §6.24 Step 0-a). */
+/** 응답 모드(S/N/C) 파싱·예산·성질 플래그 단위 테스트 (PLAN §6.24 Step 0-a·2-a). */
 class ResponseModeTest {
 
     @Test
-    @DisplayName("parse — 대소문자·공백 무관하게 S/N을 인식한다")
+    @DisplayName("parse — 대소문자·공백 무관하게 S/N/C를 인식한다")
     void parse_acceptsAnyCase() {
         assertThat(ResponseMode.parse("S")).isEqualTo(ResponseMode.S);
         assertThat(ResponseMode.parse("n")).isEqualTo(ResponseMode.N);
         assertThat(ResponseMode.parse(" N ")).isEqualTo(ResponseMode.N);
+        assertThat(ResponseMode.parse("c")).isEqualTo(ResponseMode.C);
+        assertThat(ResponseMode.parse(" C ")).isEqualTo(ResponseMode.C);
     }
 
     @Test
@@ -38,12 +42,15 @@ class ResponseModeTest {
     }
 
     @Test
-    @DisplayName("tokenRatio / minChars — S=15%·2000, N=70%·5000(구 L의 몫을 물려받음)")
+    @DisplayName("tokenRatio / minChars — S=15%·2000, N·C=70%·5000(구 L의 몫을 물려받음)")
     void ratiosAndFloors() {
         assertThat(ResponseMode.S.tokenRatio()).isEqualTo(0.15);
         assertThat(ResponseMode.N.tokenRatio()).isEqualTo(0.70);
         assertThat(ResponseMode.S.minChars()).isEqualTo(2_000);
         assertThat(ResponseMode.N.minChars()).isEqualTo(5_000);
+        // C의 분량 성격은 N과 같다(둘 다 프롬프트에 숫자를 두지 않는다) → 예산도 같다.
+        assertThat(ResponseMode.C.tokenRatio()).isEqualTo(ResponseMode.N.tokenRatio());
+        assertThat(ResponseMode.C.minChars()).isEqualTo(ResponseMode.N.minChars());
     }
 
     @Test
@@ -92,18 +99,52 @@ class ResponseModeTest {
     }
 
     @Test
-    @DisplayName("성질 플래그 — S만 검증을 건너뛰고, 두 모드 다 Direct 가능·큐레이션 가능·검색 부스트 없음")
+    @DisplayName("성질 플래그 — S만 검증을 건너뛰고, C만 Direct 불가. 검색 부스트는 아직 전부 0")
     void capabilityFlags() {
         assertThat(ResponseMode.S.skipsVerification()).isTrue();
         assertThat(ResponseMode.S.evalPromptKey()).isNull();
         assertThat(ResponseMode.N.skipsVerification()).isFalse();
         assertThat(ResponseMode.N.evalPromptKey()).isEqualTo("prompt.answer.eval");
+        // C는 검증을 '끄지' 않고 바꿔 낀다 — 통째로 끄면 문서에 없는 API 발명이 무방비가 된다.
+        assertThat(ResponseMode.C.skipsVerification()).isFalse();
+        assertThat(ResponseMode.C.evalPromptKey()).isEqualTo("prompt.answer.eval.creative");
 
-        for (ResponseMode mode : ResponseMode.values()) {
+        // 검색 결과가 전제인 모드는 Direct 로 부를 수 없다 — 프롬프트 키 부재가 곧 그 사실이다.
+        assertThat(ResponseMode.C.allowsDirect()).isFalse();
+        assertThat(ResponseMode.C.directSystemPromptKey()).isNull();
+        for (ResponseMode mode : List.of(ResponseMode.S, ResponseMode.N)) {
             assertThat(mode.allowsDirect()).as("%s.allowsDirect", mode).isTrue();
-            assertThat(mode.retrievalBoost()).as("%s.retrievalBoost", mode).isZero();
             assertThat(mode.directSystemPromptKey()).as("%s.directSystemPromptKey", mode).isNotNull();
         }
+        // 부스트를 0보다 올리려면 MAX_EVAL_EXCERPT_CHARS 상향이 선행돼야 한다(§6.24 Step 4-c) —
+        // 이 단언이 깨지면 그 선행 조건을 먼저 확인하라는 뜻이다.
+        for (ResponseMode mode : ResponseMode.values()) {
+            assertThat(mode.retrievalBoost()).as("%s.retrievalBoost", mode).isZero();
+        }
+    }
+
+    @Test
+    @DisplayName("성질 플래그 — 창의 온도/창의 검증은 C에서만 켜진다")
+    void creativeFlagsAreExclusiveToCreativeMode() {
+        assertThat(ResponseMode.C.usesCreativeTemperature()).isTrue();
+        assertThat(ResponseMode.C.usesCreativeEval()).isTrue();
+        for (ResponseMode mode : List.of(ResponseMode.S, ResponseMode.N)) {
+            assertThat(mode.usesCreativeTemperature()).as("%s.usesCreativeTemperature", mode).isFalse();
+            assertThat(mode.usesCreativeEval()).as("%s.usesCreativeEval", mode).isFalse();
+        }
+        // 창의 검증 프롬프트가 있는 모드만 창의 파서를 쓴다 — 프롬프트와 파서는 반드시 짝이다.
+        for (ResponseMode mode : ResponseMode.values()) {
+            assertThat(mode.usesCreativeEval())
+                    .as("%s — 창의 파서와 창의 프롬프트가 어긋났다", mode)
+                    .isEqualTo("prompt.answer.eval.creative".equals(mode.evalPromptKey()));
+        }
+    }
+
+    @Test
+    @DisplayName("allowsCuration — C는 절대 큐레이션되지 않는다(모델이 지어낸 코드가 다음 턴의 '문서'가 되는 되먹임)")
+    void creativeModeIsNeverCuratable() {
+        // 이 설계에서 가장 위험한 단일 지점 — 되돌리려면 벡터를 찾아 지워야 한다(§6.24 Step 3-a).
+        assertThat(ResponseMode.C.allowsCuration()).isFalse();
     }
 
     @Test
@@ -130,6 +171,7 @@ class ResponseModeTest {
     void systemPromptKeys() {
         assertThat(ResponseMode.S.answerSystemPromptKey()).isEqualTo("prompt.answer.system.s");
         assertThat(ResponseMode.N.answerSystemPromptKey()).isEqualTo("prompt.answer.system.n");
+        assertThat(ResponseMode.C.answerSystemPromptKey()).isEqualTo("prompt.answer.system.c");
         assertThat(ResponseMode.S.directSystemPromptKey()).isEqualTo("prompt.direct.system.s");
         assertThat(ResponseMode.N.directSystemPromptKey()).isEqualTo("prompt.direct.system.n");
     }

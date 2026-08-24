@@ -7,12 +7,15 @@ package com.example.ragagent.model;
  * 않았다: 채팅의 유일한 전송 경로인 스트리밍에는 {@code maxTokens}가 붙지 않고, 검색 재료
  * (topK 청크)가 두 모드에서 동일하며, 남은 차이인 프롬프트의 "약 N자" 문구는 긴 출력에서
  * 모델을 움직이지 못했다(실측 M 3,047자 / L 3,187자). 그래서 L을 제거하고 M을 N으로 개명해
- * <b>S(요약) · N(표준)</b>만 남겼고, 앞으로 추가될 C(응용)는 길이가 아니라 <b>근거 엄격도</b>
- * 축에서 갈린다.
+ * <b>S(요약) · N(표준)</b>만 남겼다. 세 번째 값 <b>C(응용)</b>는 길이가 아니라 <b>근거 엄격도</b>
+ * 축에서 갈린다 — 문서를 재료로 삼아 새 코드·설정을 만들어내는 모드라, "문서 밖 내용 금지"라는
+ * S/N의 대전제를 스스로 걷어낸다. 그래서 온도도 검증도 다른 것을 쓴다
+ * ({@link #usesCreativeTemperature()} / {@link #usesCreativeEval()}).
  *
  * <p>모드가 늘어날 때 분기가 흩어지지 않도록, 각 모드는 "무엇을 하는가"를 값이 아니라
  * <b>성질</b>로 노출한다({@link #allowsDirect()} / {@link #skipsVerification()} /
- * {@link #summaryOnly()} / {@link #retrievalBoost()} / {@link #allowsCuration()}).
+ * {@link #summaryOnly()} / {@link #retrievalBoost()} / {@link #allowsCuration()} /
+ * {@link #usesCreativeTemperature()} / {@link #usesCreativeEval()}).
  * <b>호출부에 모드 값 비교를 두지 않는 것이 이 enum의 계약이다</b> — 그래야 다음 모드를
  * 추가할 때 고칠 곳이 이 파일 한 곳으로 모인다. 새 분기가 필요하면 값을 비교하지 말고
  * 여기에 성질을 하나 더 만들어라. 성질끼리 값이 우연히 같더라도(예: 지금 S에서
@@ -41,7 +44,7 @@ public enum ResponseMode {
      */
     S(0.15, 2_000,
       "prompt.answer.system.s", "prompt.direct.system.s", null,
-      0, false, true),
+      0, false, true, false, false),
 
     /**
      * 표준형 (구 M) — 문서에 충실하게, 구체적이고 자세하게. 기본값.
@@ -53,7 +56,39 @@ public enum ResponseMode {
      */
     N(0.70, 5_000,
       "prompt.answer.system.n", "prompt.direct.system.n", "prompt.answer.eval",
-      0, true, false);
+      0, true, false, false, false),
+
+    /**
+     * 응용형 — 검색된 문서를 <b>재료로</b> 예제 코드·설정 등을 생성한다 (PLAN §6.24 Phase 2).
+     * 길이 축이 아니라 <b>근거 엄격도</b> 축의 값이라, S/N과 다른 것이 다섯 가지다.
+     *
+     * <p><b>① 예산은 N과 같다</b>(0.70 / 5,000) — 분량 성격이 N과 같기 때문이다(둘 다 프롬프트에
+     * 숫자를 두지 않고 "구체적이고 자세하게"로 지시한다).
+     *
+     * <p><b>② Direct 불가</b>({@code directSystemPromptKey=null}). 검색 결과가 이 모드의 전제이므로
+     * RAG 없이 부를 수 있는 값이 아니다 — 그래서 {@code AgentGraph}가 {@code directMode} 요청도,
+     * {@code "meta"} 분류도 이 모드에서는 DIRECT_ANSWER로 보내지 않는다.
+     *
+     * <p><b>③ 전용 검증</b>({@code prompt.answer.eval.creative}). 기존 {@code grounded}("핵심 주장이
+     * 발췌에 근거하는가")는 창의 답변에서 <b>정의상 항상 false</b>라, 그대로 두면 CRITIC이 재시도를
+     * 걸어 정상 턴의 3배를 태우고 끝에 미검증 경고까지 붙는다. 그렇다고 S처럼 통째로 끄면 C 고유의
+     * 위험(문서에 없는 API 발명)이 무방비가 된다. 그래서 끄는 대신 <b>바꿔 끼운다</b>.
+     *
+     * <p><b>④ 창의 온도</b>({@code app.llm.creative-temperature}). 일반/RAG 온도는 clamp 상한이 0.3이라
+     * 창의 생성이 원천 봉쇄돼 있다.
+     *
+     * <p><b>⑤ 큐레이션 제외.</b> 이 설계에서 가장 위험한 단일 지점 — C 답변이 {@code curated_qa}에
+     * 들어가면 가중 RRF 축으로 검색돼 <b>모델이 지어낸 코드가 다음 턴의 "문서"가 된다.</b> 세대를
+     * 거치며 환각이 정설로 굳는 되먹임이고, 되돌리려면 벡터를 찾아 지워야 한다.
+     *
+     * <p>{@link #retrievalBoost()}는 0으로 시작한다. 실사용 topK가 이미 10~12라 +4는 근거가 약하고,
+     * 컨텍스트 압박이 실질적 위험이다(topK 12 + 출력 예약이면 이미 33,000~35,000토큰 — LM Studio류는
+     * 초과분을 <b>앞에서부터</b> 조용히 잘라내므로 환각 금지 조항이 먼저 사라진다). 이 값을 실제로
+     * 0보다 올리려면 {@code AnswerService.MAX_EVAL_EXCERPT_CHARS} 상향이 선행돼야 한다(§6.24 Step 4-c).
+     */
+    C(0.70, 5_000,
+      "prompt.answer.system.c", null, "prompt.answer.eval.creative",
+      0, false, false, true, true);
 
     /** 클라이언트가 아무것도/모르는 값을 보냈을 때 쓰는 모드. 옛 {@code "M"}·{@code "L"} 기록도 여기로 흡수된다. */
     public static final ResponseMode DEFAULT = N;
@@ -66,10 +101,13 @@ public enum ResponseMode {
     private final int retrievalBoost;
     private final boolean curatable;
     private final boolean summaryOnly;
+    private final boolean creativeTemperature;
+    private final boolean creativeEval;
 
     ResponseMode(double tokenRatio, int minChars,
                  String answerSystemPromptKey, String directSystemPromptKey, String evalPromptKey,
-                 int retrievalBoost, boolean curatable, boolean summaryOnly) {
+                 int retrievalBoost, boolean curatable, boolean summaryOnly,
+                 boolean creativeTemperature, boolean creativeEval) {
         this.tokenRatio = tokenRatio;
         this.minChars = minChars;
         this.answerSystemPromptKey = answerSystemPromptKey;
@@ -78,6 +116,8 @@ public enum ResponseMode {
         this.retrievalBoost = retrievalBoost;
         this.curatable = curatable;
         this.summaryOnly = summaryOnly;
+        this.creativeTemperature = creativeTemperature;
+        this.creativeEval = creativeEval;
     }
 
     /** {@code app.llm.max-tokens} 중 이 모드가 쓸 비율. */
@@ -142,6 +182,28 @@ public enum ResponseMode {
 
     /** 충분성/근거 검증(ANSWER의 eval 호출 + CRITIC 노드)을 통째로 건너뛰는가. */
     public boolean skipsVerification() { return evalPromptKey == null; }
+
+    /**
+     * 일반/RAG 온도({@code app.llm.temperature}) 대신 창의 온도
+     * ({@code app.llm.creative-temperature})를 쓰는가.
+     *
+     * <p>두 값을 갈라 둔 이유는 clamp 범위가 다르기 때문이다 — 일반 온도는 [0.0, 0.3]으로 묶여
+     * 있어(문서 기반 답변이 표본추출로 흔들리면 안 된다) 창의 생성에는 쓸 수 없다. 소비처는
+     * {@code AnswerService}의 블로킹·스트리밍 <b>양쪽</b>이다: 한쪽만 고치면 채팅(스트리밍)에서만
+     * 온도가 안 올라가고, 그 차이는 로그에도 남지 않는다.
+     */
+    public boolean usesCreativeTemperature() { return creativeTemperature; }
+
+    /**
+     * 검증 응답의 <b>형식</b>이 창의 전용인가 — {@code sufficient}/{@code apiGrounded}/
+     * {@code inventedSymbols}/{@code envNote}.
+     *
+     * <p>{@link #evalPromptKey()}와 값이 연동되지만 묻는 질문이 다르다: 저쪽은 "어떤 프롬프트를
+     * 보낼까", 이쪽은 "돌아온 JSON을 어떤 레코드로 읽을까"다. 프롬프트와 파서는 반드시 짝이므로
+     * 한 곳에서 함께 갈라야 하고, 그렇다고 키 문자열을 비교해 파서를 고르면 프롬프트 키를 바꾸는
+     * 순간 조용히 엉뚱한 파서가 걸린다.
+     */
+    public boolean usesCreativeEval() { return creativeEval; }
 
     /**
      * 답변을 요약 섹션 하나로 잘라내는 후처리를 적용하는가.
