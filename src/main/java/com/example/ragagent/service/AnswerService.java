@@ -51,12 +51,41 @@ public class AnswerService {
     private static final int MAX_ENV_NOTE_LEN = 300;
 
     /**
-     * Ceiling on the evidence block sent to the evaluator — see {@link #buildEvalExcerpts}. Sized
-     * to match {@link #MAX_ANSWER_LEN}: the evidence may be as long as the longest answer this app
-     * will ever store, which the default config (topK 8 × chunk-size 1500 = 12,000) sits under
-     * comfortably, so the cap is a safety valve rather than something a normal turn ever meets.
+     * Ceiling on the evidence block sent to the evaluator — see {@link #buildEvalExcerpts}.
+     *
+     * <p><b>This is a safety valve for a pathological configuration, not a working limit.</b> The
+     * real bound on the evidence block is {@code topK × chunk-size} (default 8 × 1500 = 12,000),
+     * which sits well under it; a normal turn never meets this cap, and a turn that does has
+     * already lost documents from the verification window.
+     *
+     * <p>Sizing follows the <b>evaluation call</b>, not the answer call, because the eval call is
+     * the largest single request this app makes — it carries the question, the full answer, the
+     * same excerpts, and the response schema at once. Budgeting Korean at ~1 token/char, the
+     * non-excerpt part is roughly 4,900 tokens (eval system prompt ~1,570 + schema ~250 + question
+     * + a ~3,000-char answer), and the reply reserves {@link #MAX_EVAL_OUTPUT_TOKENS}. At 32,000
+     * the whole call lands near ~39,000 tokens, which needs a 64k-class context window; on a
+     * 32k model the effective ceiling is closer to 20,000 chars and must come from {@code topK} /
+     * {@code chunk-size} rather than from this constant. See OPERATOR_MANUAL §8.
      */
-    private static final int MAX_EVAL_EXCERPT_CHARS = 20_000;
+    private static final int MAX_EVAL_EXCERPT_CHARS = 32_000;
+
+    /**
+     * Output cap for the evaluation call only.
+     *
+     * <p>Without it the call inherits the provider's baked-in default ({@code app.llm.max-tokens})
+     * and reserves the operator's entire completion budget for a reply that is a handful of JSON
+     * fields — on a narrow context window that reservation, not the evidence, is what pushes the
+     * request over {@code n_ctx}. Strict servers reject it outright; llama-server clamps generation
+     * and can return nothing, which surfaces as {@code [EVAL] 검증기가 빈 응답} with
+     * {@code outputTokens=0}.
+     *
+     * <p>Deliberately generous for what the schema needs (~400 tokens: two short Korean sentences
+     * plus a small array): a model that emits a brief reasoning preamble into content must still
+     * reach the JSON, since a truncated reply parses as a failure and degrades to
+     * {@link #withoutVerdict} — trading a verdict for tokens is the wrong side of that bargain.
+     * Clamped by the configured ceiling so it can never exceed what the operator allows.
+     */
+    private static final int MAX_EVAL_OUTPUT_TOKENS = 2_048;
 
     /**
      * single evaluation call returns both gates, plus one sentence explaining a failure.
@@ -383,8 +412,9 @@ public class AnswerService {
      * 창의 모드에서 이름을 지어내는 것 자체는 실패가 아니고 그것을 문서 근거인 양 제시하는 것이
      * 문제라서, 다시 생성시키는 대신 독자에게 경고로 보여주는 편이 맞다.
      *
-     * <p>파싱 실패 시의 폴백은 {@link #evaluate}와 같다 — 통과 처리. 검증기 자체의 고장이 완성된
-     * 답변의 전달을 막아서는 안 된다.
+     * <p>파싱 실패 시의 폴백은 {@link #evaluate}와 같다 — {@link #withoutVerdict}(판정 없음).
+     * 검증기 자체의 고장이 완성된 답변의 전달을 막아서는 안 되지만, 그렇다고 검증한 적 없는
+     * 답변에 통과 배지를 달아 줘서도 안 된다.
      */
     private AgentState evaluateCreative(AgentState state, String answer, Locale locale) {
         boolean docsPresent = !state.retrievedDocs().isEmpty();
@@ -606,9 +636,12 @@ public class AnswerService {
      *  C: judging whether an identifier appears in an excerpt is a lookup, not a creative task.
      *  Hot — read fresh per call. */
     private ChatOptions evalOptions() {
-        return OpenAiChatOptions.builder()
-                .temperature(props.llmSafe().temperature())
-                .build();
+        OpenAiChatOptions.Builder builder = OpenAiChatOptions.builder()
+                .temperature(props.llmSafe().temperature());
+        int configured = props.llmSafe().maxTokens();
+        // 0 이하 = "프로바이더 기본값 유지" (answerOptions 와 같은 규약).
+        if (configured > 0) builder.maxTokens(Math.min(configured, MAX_EVAL_OUTPUT_TOKENS));
+        return builder.build();
     }
 
     private String buildAnswerPrompt(AgentState state) {

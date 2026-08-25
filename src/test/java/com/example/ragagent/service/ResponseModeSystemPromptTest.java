@@ -22,6 +22,9 @@ class ResponseModeSystemPromptTest {
     /** 5섹션 형식의 헤더 이름 — S 프롬프트가 <b>언급조차 하면 안 되는</b> 문자열. */
     private static final String[] SECTION_HEADERS = {"상세 설명", "예시/코드", "설정/주의사항", "참고"};
 
+    /** Direct(검색 없음) S 프롬프트의 분량 상한 — RAG-S(1,000자)보다 의도적으로 느슨하다. */
+    private static final String DIRECT_SUMMARY_CHAR_CAP = "1,500";
+
     private static ResourceBundleMessageSource realMessageSource() {
         ResourceBundleMessageSource ms = new ResourceBundleMessageSource();
         ms.setBasename("messages");
@@ -83,13 +86,19 @@ class ResponseModeSystemPromptTest {
     }
 
     @Test
-    @DisplayName("Direct 프롬프트도 같은 분량 규칙을 따른다 (S=1,000자 상한 / N=숫자 없음)")
+    @DisplayName("Direct 프롬프트도 같은 분량 규칙을 따른다 (S=자체 상한 명시 / N=숫자 없음)")
     void directPromptsFollowTheSameLengthPolicy() {
-        String directS = prompt(ResponseMode.S.directSystemPromptKey(), Locale.KOREAN);
+        // S 쪽 규칙은 "숫자 상한이 있다"이지 "RAG-S와 같은 숫자다"가 아니다 — 검색 없는 Direct는
+        // 문서 발췌를 인용할 자리가 없어 같은 질문에도 더 풀어 써야 하므로 상한이 RAG-S(1,000자)보다
+        // 느슨한 1,500자다. 다만 한/영 번들이 서로 다른 숫자를 말하면 같은 모드가 언어에 따라 다른
+        // 길이로 답하므로, 두 번들이 '같은' 숫자를 말하는 것까지가 이 가드의 몫이다.
+        for (Locale locale : new Locale[]{Locale.KOREAN, Locale.ENGLISH}) {
+            assertThat(prompt(ResponseMode.S.directSystemPromptKey(), locale))
+                    .as("Direct S/%s 는 자체 분량 상한과 요약 헤더를 명시해야 한다", locale)
+                    .contains(DIRECT_SUMMARY_CHAR_CAP, "## 요약");
+        }
         String directN = prompt(ResponseMode.N.directSystemPromptKey(), Locale.KOREAN);
-
-        assertThat(directS).contains("1,000", "## 요약");
-        assertThat(directN).contains("구체적이고 자세하게").doesNotContain("자 이내", "1,000");
+        assertThat(directN).contains("구체적이고 자세하게").doesNotContain("자 이내", "1,000", "1,500");
     }
 
     @Test

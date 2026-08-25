@@ -381,11 +381,11 @@ class AnswerServiceTest {
                             new LlmRouter.LlmResult("{\"sufficient\":true,\"grounded\":true}", 0, 0));
         when(llmRouter.findProviderName(any(), any())).thenReturn("gemini-flash");
 
-        // 상한(20,000자)을 넘기도록 15,000자짜리 문서 3개 — 1번은 통째로 남고 3번은 통째로 빠진다.
+        // 상한(32,000자)을 넘기도록 20,000자짜리 문서 3개 — 1번은 통째로 남고 3번은 통째로 빠진다.
         List<Document> docs = List.of(
-                new Document("최상위표식 " + "가".repeat(15_000), Map.of(MetaKey.FILENAME, "a.pdf")),
-                new Document("두번째표식 " + "나".repeat(15_000), Map.of(MetaKey.FILENAME, "b.pdf")),
-                new Document("세번째표식 " + "다".repeat(15_000), Map.of(MetaKey.FILENAME, "c.pdf")));
+                new Document("최상위표식 " + "가".repeat(20_000), Map.of(MetaKey.FILENAME, "a.pdf")),
+                new Document("두번째표식 " + "나".repeat(20_000), Map.of(MetaKey.FILENAME, "b.pdf")),
+                new Document("세번째표식 " + "다".repeat(20_000), Map.of(MetaKey.FILENAME, "c.pdf")));
         AgentState state = newState(RoutingMode.COST_FIRST).toBuilder().retrievedDocs(docs).build();
 
         service.execute(state);
@@ -399,7 +399,38 @@ class AnswerServiceTest {
         assertThat(evalPrompt).contains("최상위표식");                       // 1위는 무조건 유지
         assertThat(evalPrompt).doesNotContain("세번째표식");                 // 상한 초과분은 제외
         // 잘린 조각이 아니라 문서 단위로 빠진다 — 반쪽 청크는 검증 대상 값이 사라지는 경로다.
-        assertThat(evalPrompt).contains("가".repeat(15_000));
+        assertThat(evalPrompt).contains("가".repeat(20_000));
+    }
+
+    @Test
+    @DisplayName("BLOCKING — 검증 호출은 답변 예산이 아니라 자체 출력 상한(2,048)을 쓴다")
+    @SuppressWarnings("unchecked")
+    void blocking_evalCall_capsItsOwnOutputBudget() {
+        ArgumentCaptor<Function<ChatModel, ChatResponse>> callCaptor = ArgumentCaptor.forClass(Function.class);
+        when(llmRouter.executeGatedWithUsage(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), callCaptor.capture()))
+                .thenReturn(new LlmRouter.LlmResult("답변", 0, 0),
+                            new LlmRouter.LlmResult("{\"sufficient\":true,\"grounded\":true}", 0, 0));
+        when(llmRouter.findProviderName(any(), any())).thenReturn("gemini-flash");
+
+        service.execute(newState(RoutingMode.COST_FIRST));
+
+        ChatModel chatModel = mock(ChatModel.class);
+        ArgumentCaptor<Prompt> promptCaptor = ArgumentCaptor.forClass(Prompt.class);
+        when(chatModel.call(promptCaptor.capture())).thenReturn(chatResponse("dummy"));
+        callCaptor.getAllValues().forEach(fn -> fn.apply(chatModel));
+
+        // 검증 응답은 JSON 몇 필드뿐인데, 상한을 안 걸면 프로바이더에 구워진 app.llm.max-tokens
+        // 전체가 예약된다 — 좁은 컨텍스트에서 n_ctx 를 넘기는 것은 근거가 아니라 이 예약이다.
+        Integer evalMax = promptCaptor.getAllValues().get(1).getOptions().getMaxTokens();
+        assertThat(evalMax).as("검증 호출 출력 상한").isEqualTo(2_048);
+        // 답변 호출은 모드 예산(N = max-tokens의 70% 또는 5,000자 바닥) 그대로여야 한다.
+        Integer answerMax = promptCaptor.getAllValues().get(0).getOptions().getMaxTokens();
+        assertThat(answerMax).as("답변 호출은 영향 없음")
+                .isEqualTo(ResponseMode.N.maxTokens(new AppProperties(
+                        "./data", MAX_RETRY, 800, 100, 100, 7, 0.0, true, 0, false, true, false, 3,
+                        null, null, null, null, null, null, null, null, null, null, null, null, null, null,
+                        null, null, null, null, null, null, null, null, null, null, null, null, null, null,
+                        null, null).llmSafe().maxTokens()));
     }
 
     @Test

@@ -679,6 +679,13 @@ public record AppProperties(
         };
     }
 
+    /**
+     * {@code app.llm.max-tokens} 의 코드 쪽 폴백 — {@code application.properties} 의 기본값과
+     * <b>같은 수여야 한다</b>. 두 곳에 흩어진 리터럴이라 한쪽만 바꾸면 프로퍼티가 비었을 때만
+     * 다른 값이 나오는, 재현이 까다로운 불일치가 된다.
+     */
+    private static final int DEFAULT_MAX_TOKENS = 10_000;
+
     /** Null-safe accessor — returns an empty LlmConfig when app.llm is not configured. */
     public LlmConfig llmSafe() {
         // temperature / direct-temperature / indexing-temperature are all hot-editable — fold their
@@ -697,7 +704,8 @@ public record AppProperties(
             double dt = clamp(directOverride != null ? directOverride : 0.1, 0.0, 1.0);
             double it = clamp(indexingOverride != null ? indexingOverride : 0.0, 0.0, 1.0);
             double ct = clamp(creativeOverride != null ? creativeOverride : 0.7, 0.0, 1.0);
-            return new LlmConfig(List.of(), 2, 10, 180, "COST_FIRST", 0.6, 3, 20, t, dt, it, ct, 6000, true);
+            return new LlmConfig(List.of(), 2, 10, 180, "COST_FIRST", 0.6, 3, 20, t, dt, it, ct,
+                    DEFAULT_MAX_TOKENS, true);
         }
         List<ProviderConfig> providers = llm.providers() != null ? llm.providers() : List.of();
         int minutes = llm.circuitBreakerMinutes() > 0 ? llm.circuitBreakerMinutes() : 2;
@@ -719,7 +727,7 @@ public record AppProperties(
         double creativeBase = creativeOverride != null ? creativeOverride
                 : (llm.creativeTemperature() != null ? llm.creativeTemperature() : 0.7);
         double creativeTemperature = clamp(creativeBase, 0.0, 1.0);
-        int maxTokens = (llm.maxTokens() != null && llm.maxTokens() > 0) ? llm.maxTokens() : 6000;
+        int maxTokens = (llm.maxTokens() != null && llm.maxTokens() > 0) ? llm.maxTokens() : DEFAULT_MAX_TOKENS;
         boolean verifyLocalModels = llm.verifyLocalModelsOnStartup() == null || llm.verifyLocalModelsOnStartup();
                 return new LlmConfig(providers, minutes, connectTimeout, readTimeout, mode, threshold,
                         defaultProviderConcurrency, permitWaitTimeoutSeconds, temperature, directTemperature,
