@@ -54,7 +54,7 @@ public class AnswerService {
      * Ceiling on the evidence block sent to the evaluator — see {@link #buildEvalExcerpts}.
      *
      * <p><b>This is a safety valve for a pathological configuration, not a working limit.</b> The
-     * real bound on the evidence block is {@code topK × chunk-size} (default 8 × 1500 = 12,000),
+     * real bound on the evidence block is {@code topK × chunk-size} (default 10 × 1500 = 15,000),
      * which sits well under it; a normal turn never meets this cap, and a turn that does has
      * already lost documents from the verification window.
      *
@@ -524,7 +524,7 @@ public class AnswerService {
      *
      * <p><b>It must be the same evidence the answer was written from.</b> This used to send only
      * the first 5 documents while {@link #buildAnswerPrompt} passes all of {@code retrievedDocs}
-     * ({@code app.search-top-k}, default 8) — so an answer correctly citing a value found only in
+     * ({@code app.search-top-k}, default 10) — so an answer correctly citing a value found only in
      * document #6-8 was judged against excerpts that could not contain it. Paths, ports, addresses
      * and other constants are exactly the facts this hits hardest: they live in a single chunk,
      * unlike a prose claim that gets restated across several.

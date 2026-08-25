@@ -133,7 +133,9 @@ class AppPropertiesOverrideTest {
         bind();
         AppProperties p = base();
         assertThat(p.searchCuratedQaEnabledSafe()).isTrue();   // default: enabled
-        assertThat(p.searchCuratedQaWeightSafe()).isEqualTo(1.5); // default weight
+        // 기본 1.0 = 정규화된 벡터 축 그룹과 동등. 그보다 높이면 이 축은 후보가 적어
+        // 웬만하면 자기 축에서 상위 랭크를 받는 탓에, 질문과 크게 관련 없는 항목까지 끌려 올라온다.
+        assertThat(p.searchCuratedQaWeightSafe()).isEqualTo(1.0); // default weight
 
         overrides.put(SettingsKeys.SEARCH_CURATED_QA_ENABLED, "false");
         overrides.put(SettingsKeys.SEARCH_CURATED_QA_WEIGHT, "2.5");

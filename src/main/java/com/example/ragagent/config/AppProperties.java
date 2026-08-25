@@ -304,8 +304,17 @@ public record AppProperties(
     }
 
     /**
-     * Similarity threshold for vector search, clamped to [0,1].
-     * 0.0 = accept all (Spring AI default).
+     * Similarity threshold for vector search, clamped to [0,1]. Defaults to <b>0.3</b> — a floor
+     * low enough that a genuinely relevant chunk never trips it, high enough to drop the tail the
+     * vector store returns simply because {@code topK} asked for that many rows.
+     *
+     * <p>It applies inside the {@code VectorStoreProvider}, so it prunes the <b>vector axis only</b>
+     * — the BM25 axis is unfiltered. Raising this therefore also raises the keyword axis's relative
+     * share of the fused ranking, which is why it and {@code search-rrf-keyword-weight} should not
+     * be raised in the same step. The curated axes are vector searches too, so they are pruned by
+     * the same floor.
+     *
+     * <p>{@code 0.0} = accept all (the previous default, and Spring AI's).
      */
     public double searchSimilarityThresholdSafe() {
         Double o = overrideDouble(SettingsKeys.SEARCH_SIMILARITY_THRESHOLD);
@@ -372,8 +381,8 @@ public record AppProperties(
      */
     public double searchSubmissionWeightSafe() {
         Double o = overrideDouble(SettingsKeys.SEARCH_SUBMISSION_WEIGHT);
-        double v = (o != null) ? o : (searchSubmissionWeight != null ? searchSubmissionWeight : 1.5);
-        return v >= 0 ? v : 1.5;
+        double v = (o != null) ? o : (searchSubmissionWeight != null ? searchSubmissionWeight : 1.0);
+        return v >= 0 ? v : 1.0;
     }
 
     /** Minimum chunk size (chars); {@code <= 0} falls back to the (override-aware) overlap. Hot-editable. */
@@ -389,7 +398,8 @@ public record AppProperties(
     public int searchTopKSafe() {
         Integer o = overrideInt(SettingsKeys.SEARCH_TOP_K);
         int v = (o != null) ? o : searchTopK;
-        return v > 0 ? v : 7;
+        // 프로퍼티가 비었을 때의 폴백 — application.properties 의 기본값과 같은 수여야 한다.
+        return v > 0 ? v : 10;
     }
 
     /** Multi-query expansion on/off. Hot-editable — {@code RetrievalService.shouldExpand()} re-reads it per search. */
@@ -438,13 +448,15 @@ public record AppProperties(
         return effective == null || effective;
     }
 
-    /** §10.10 — curated-Q&A RRF axis weight. Defaults to 1.5 (above the group-normalized vector
-     *  axes' effective 1.0, so a verified answer tends to surface without dominating outright —
-     *  RRF's own rank decay still applies). Hot-editable. */
+    /** §10.10 — curated-Q&A RRF axis weight. Defaults to <b>1.0</b>: parity with the
+     *  group-normalized vector axes, so this axis competes on rank rather than on a bonus.
+     *  It used to sit above 1.0, which surfaced loosely-related curated entries — the axis holds
+     *  few candidates, so almost anything in it ranks high on its own axis, and a bonus on top of
+     *  that reads as "boost whatever exists here". Hot-editable. */
     public double searchCuratedQaWeightSafe() {
         Double o = overrideDouble(SettingsKeys.SEARCH_CURATED_QA_WEIGHT);
         Double effective = (o != null) ? o : searchCuratedQaWeight;
-        return (effective != null && effective > 0) ? effective : 1.5;
+        return (effective != null && effective > 0) ? effective : 1.0;
     }
 
     /** Query embedding cache on/off. Defaults to enabled. */
