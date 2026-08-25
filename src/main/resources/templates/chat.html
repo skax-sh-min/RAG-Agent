@@ -655,6 +655,16 @@
         directLabel.classList.toggle('text-primary', isDirect);
         directLabel.classList.toggle('text-muted', !isDirect);
         updateResponseModeAvailability(isDirect);
+        /* RAG ↔ Direct 를 오갈 때는 응답 모드를 **항상** 기본값(N)으로 되돌린다 — 어느 방향이든,
+           직전 선택이 무엇이었든. 두 축은 성격이 달라(검색 여부 vs 답변의 성격) 한쪽을 바꾼 뒤에도
+           남아 있는 다른 쪽 선택은 "내가 고른 것"이 아니라 "직전 대화에서 흘러온 것"에 가깝다.
+           특히 S 는 버튼만 봐서는 눈에 잘 띄지 않아, Direct 로 옮긴 뒤 짧은 답변이 오는 이유를
+           알기 어려웠다. 저장된 선택(localStorage)까지 함께 덮어써야 다음 방문에서 되살아나지 않는다.
+           ⚠️ 이 초기화는 **토글 이벤트에서만** 한다 — updateResponseModeAvailability() 안에 넣으면
+           페이지 로드 때도 실행되어(그 함수는 로드 시 현재 상태로 한 번 불린다) 사용자가 저장해 둔
+           선택을 매번 지운다. */
+        applyResponseMode(RESPONSE_MODE_DEFAULT);
+        localStorage.setItem(RESPONSE_MODE_KEY, RESPONSE_MODE_DEFAULT);
     });
 
     const versionInput  = document.getElementById('version-input');
@@ -793,9 +803,10 @@
         responseModeRadios.forEach(r => { r.checked = (r.value === m); });
         responseModeInput.value = m;
     }
-    /* Direct는 검색을 건너뛰므로 문서를 재료로 삼는 C가 성립하지 않는다 — 버튼을 비활성화하고,
-       현재 선택이 C였다면 N으로 되돌린다. RAG로 돌아가도 C를 자동 재선택하지는 않는다(구 L과 같은
-       규칙: 저장된 선택까지 N으로 덮어써 "왜 갑자기 C로 보냈지"가 생기지 않게 한다).
+    /* Direct는 검색을 건너뛰므로 문서를 재료로 삼는 C가 성립하지 않는다 — 버튼을 비활성화한다.
+       사용자가 토글을 직접 움직이는 경우의 초기화는 위 change 핸들러가 (C뿐 아니라 모든 모드를)
+       담당하므로, 여기 남은 C→N 은 **로드 시점** 몫이다: 저장된 선택이 C인데 Direct 상태로 화면이
+       열리면 어느 라디오도 체크되지 않은 상태가 되기 때문이다.
        이것은 편의일 뿐이고 실제 방어는 서버에 있다 — ChatForm/ChatRequest 가 같은 성질을 묻는다. */
     function updateResponseModeAvailability(isDirect) {
         responseModeCRadio.disabled = isDirect;
