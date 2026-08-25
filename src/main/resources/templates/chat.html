@@ -259,14 +259,25 @@
                                 <div class="feedback-controls d-flex gap-1"
                                      th:attr="data-turn-id=${turn.id},data-thread-id=${threadId}">
                                     <button type="button" class="btn btn-sm feedback-btn" data-feedback="LIKE"
+                                            th:if="${turn.curatable}"
                                             th:classappend="${turn.feedback == 'LIKE'} ? 'btn-primary' : 'btn-outline-secondary'"
                                             th:attr="aria-label=#{feedback.like},title=#{feedback.like}">👍</button>
+                                    <!-- 좋아요가 아무 일도 하지 않는 모드(S·C). 이 수정 이전에 눌린
+                                         LIKE 기록이 남아 있어도 강조하지 않는다 — 그 좋아요는 실제로
+                                         curated_qa 행을 만든 적이 없으므로, 기여 중인 것처럼 칠하는
+                                         것이 바로 여기서 고치려는 거짓말이다. -->
+                                    <button type="button" class="btn btn-sm btn-outline-secondary feedback-btn opacity-50"
+                                            th:unless="${turn.curatable}" disabled
+                                            th:attr="aria-label=#{${turn.curationBlockedMessageKey}},
+                                                     title=#{${turn.curationBlockedMessageKey}}">👍</button>
                                     <button type="button" class="btn btn-sm feedback-btn" data-feedback="DISLIKE"
                                             th:classappend="${turn.feedback == 'DISLIKE'} ? 'btn-danger' : 'btn-outline-secondary'"
                                             th:attr="aria-label=#{feedback.dislike},title=#{feedback.dislike}">👎</button>
-                                    <!-- §10.10 — 좋아요한 답변만 편집 가능(본인 소유 turn, 채팅창은 항상 본인 스레드만 보여줌) -->
+                                    <!-- §10.10 — 좋아요한 답변만 편집 가능(본인 소유 turn, 채팅창은 항상 본인 스레드만 보여줌).
+                                         curatable 조건이 함께 걸린다: 이 수정 이전 S·C 턴에 남은 LIKE 기록은
+                                         curated_qa 행이 없으므로, 연필만 보고 누르면 편집할 대상이 없다. -->
                                     <button type="button" class="btn btn-sm btn-outline-secondary curated-edit-btn"
-                                            th:style="${turn.feedback == 'LIKE'} ? '' : 'display:none;'"
+                                            th:style="${turn.feedback == 'LIKE' and turn.curatable} ? '' : 'display:none;'"
                                             th:attr="aria-label=#{curated.edit},title=#{curated.edit}">
                                         <i class="bi bi-pencil"></i>
                                     </button>
@@ -949,6 +960,9 @@
                 `<div class="md-content">${renderMarkdownText(answer)}</div>` +
                 `${renderSourceBadges(sources)}` +
                 `<div class="mt-1 d-flex align-items-center flex-wrap gap-2">` +
+                    // 재사용(db-reuse) 경로에는 좋아요 비활성 분기가 없다 — S·C 는 재사용 후보에서
+                    // 아예 빠지므로(ResponseMode.allowsReuse) 여기에 도달하는 턴은 항상 큐레이션
+                    // 가능한 모드다. 재사용 제외 규칙을 바꾸면 이 가정도 함께 깨진다.
                     `<div class="feedback-controls d-flex gap-1" data-turn-id="${turnId}" data-thread-id="${escHtml(chatForm.querySelector('input[name="threadId"]').value)}">` +
                         `<button type="button" class="btn btn-sm btn-outline-secondary feedback-btn" data-feedback="LIKE" aria-label="좋아요" title="좋아요">👍</button>` +
                         `<button type="button" class="btn btn-sm btn-outline-secondary feedback-btn" data-feedback="DISLIKE" aria-label="싫어요" title="싫어요">👎</button>` +

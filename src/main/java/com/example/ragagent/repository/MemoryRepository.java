@@ -1,5 +1,7 @@
 package com.example.ragagent.repository;
 
+import com.example.ragagent.model.ResponseMode;
+
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -136,7 +138,36 @@ public interface MemoryRepository {
                 String askedAt, String answeredAt,
                 int inputTokens, int outputTokens,
                 int elapsedMs, String provider, int llmCalls,
-                String feedback, String responseMode, String selectedTags) {}
+                String feedback, String responseMode, String selectedTags) {
+
+        /**
+         * 이 턴에 좋아요가 <b>실제로 무언가를 하는가</b> — 대화 기록 렌더러가 읽는 값이다.
+         *
+         * <p>LIKE의 유일한 소비자가 큐레이션 승격이라, {@code allowsCuration()}이 false인 모드
+         * (S·C)에서는 {@code CuratedQaService.onLike()}가 행조차 만들지 않고 즉시 돌아온다. 그런데
+         * 피드백 값 자체는 저장되므로 버튼은 눌린 채 남고, 사용자는 공유 지식에 기여했다고 믿게
+         * 된다 — 화면 어디에도 아무 일도 없었다는 신호가 없었다.
+         *
+         * <p>레코드 컴포넌트가 아니라 파생 메서드인 것은 {@code SourceRef.staleBadge()}와 같은
+         * 이유다: 저장된 사실이 아니라 저장된 값에서 계산되는 표시 규칙이고, 규칙의 출처는
+         * {@code ResponseMode} 하나여야 한다. 템플릿이 {@code ${turn.curatable}}로 읽으므로
+         * SpEL 접근 가능 여부를 {@code TurnCuratableTest}가 고정한다.
+         */
+        public boolean curatable() {
+            return ResponseMode.parse(responseMode).allowsCuration();
+        }
+
+        /**
+         * 좋아요가 막힌 사유의 메시지 키 — {@link #curatable()}이 true면 {@code null}.
+         *
+         * <p>불린만으로는 툴팁을 쓸 수 없다. 사유가 모드마다 다르기 때문이다 — S는 임베딩할 본문이
+         * 남지 않아서, C는 모델 생성물이 다음 턴의 "문서"가 되는 것을 막기 위해서다
+         * ({@code ResponseMode.curationBlockedMessageKey}).
+         */
+        public String curationBlockedMessageKey() {
+            return ResponseMode.parse(responseMode).curationBlockedMessageKey();
+        }
+    }
 
     /** Wraps a nullable feedback value so "found with NULL feedback" is distinguishable from "not found". */
     record FeedbackRow(String feedback) {}

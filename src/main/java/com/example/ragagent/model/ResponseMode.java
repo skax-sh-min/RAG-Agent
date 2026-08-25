@@ -183,6 +183,23 @@ public enum ResponseMode {
     public boolean allowsCuration() { return curatable; }
 
     /**
+     * {@link #allowsCuration()} 이 false 인 이유를 담은 메시지 키 — 좋아요 버튼의 비활성 툴팁이다.
+     * 큐레이션이 가능한 모드에서는 {@code null}.
+     *
+     * <p><b>사유가 모드마다 다르기 때문에</b> 불린 하나로는 부족하다. S는 위험해서가 아니라
+     * 임베딩 입력에서 구조 섹션을 걷어내면 <b>남는 것이 없어서</b>이고, C는 내용이 없어서가 아니라
+     * <b>모델 생성물이 다음 턴의 "문서"가 되는 것</b>을 막기 위해서다. 사용자에게 "안 됩니다"만
+     * 말하고 이유를 감추면 버그로 읽힌다.
+     *
+     * <p>키를 여기서 들고 있는 것은 {@link #answerSystemPromptKey()}/{@link #evalPromptKey()} 와
+     * 같은 규칙이다 — 렌더러가 셋(HTMX 폴백·기록 루프·스트리밍 JS)이라 각자 모드 문자열을 비교하게
+     * 두면 모드를 하나 더 붙일 때 세 곳을 사람이 기억해서 찾아야 한다.
+     */
+    public String curationBlockedMessageKey() {
+        return curatable ? null : "feedback.like.disabled." + name().toLowerCase();
+    }
+
+    /**
      * 이 모드의 답변을 <b>과거 턴 재사용</b>(§ 질문 재사용, {@code /api/v1/questions/reuse})의
      * 후보로 삼아도 되는가.
      *

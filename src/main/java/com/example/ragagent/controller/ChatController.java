@@ -262,6 +262,11 @@ public class ChatController {
                     resp.grounded(), resp.generative(), resp.evalReason(), resp.envNote(),
                     resp.inventedSymbols()));
             model.addAttribute("usedProvider", resp.usedProvider());
+            // 좋아요가 이 모드에서 실제로 동작하는가 — 서버가 성질로 계산한다
+            // (SSE done 의 "curatable", 대화 기록의 Turn.curatable() 과 같은 값).
+            model.addAttribute("curatable", form.responseModeOrDefault().allowsCuration());
+            model.addAttribute("curationBlockedKey",
+                    form.responseModeOrDefault().curationBlockedMessageKey());
         } catch (LlmProviderExhaustedException e) {
             log.warn("LLM providers exhausted: {}", e.getMessage());
             model.addAttribute("errorMessage", messageSource.getMessage(

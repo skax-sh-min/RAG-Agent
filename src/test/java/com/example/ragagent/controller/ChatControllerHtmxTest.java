@@ -371,6 +371,32 @@ class ChatControllerHtmxTest {
     }
 
     @Test
+    @DisplayName("좋아요가 무동작인 모드(S·C)에서는 대화 기록의 👍가 비활성으로, 사유와 함께 그려진다")
+    void likeButtonIsDisabledWithReason_whenModeIsNotCuratable() throws Exception {
+        AppUserDetails principal = new AppUserDetails("id-1", "user@local", "", "User", "USER", true, false);
+        when(threadMetaService.findById(any(), eq("thread-01"))).thenReturn(Optional.of(
+                new ThreadMeta("thread-01", "user", "제목", "latest", "now", "now", "COST_FIRST", "")));
+        when(memoryService.getTurns(any(), eq("thread-01"))).thenReturn(List.of(
+                new MemoryRepository.Turn(1L, "q", "a", null, null, 0, 0, 0, "local", 1, null, "C", null),
+                new MemoryRepository.Turn(2L, "q2", "a2", null, null, 0, 0, 0, "local", 1, null, "N", null)));
+        when(memoryService.getVerifications(any())).thenReturn(java.util.Map.of());
+
+        String html = mvc.perform(get("/chat/thread-01").with(user(principal)))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        // 사유 문구가 실제로 해석돼야 한다 — 템플릿이 #{${turn.curationBlockedMessageKey}} 로
+        // 키를 변수에서 읽으므로, 이 표기가 깨지면 예외가 아니라 ??key_ko?? 가 화면에 찍힌다.
+        assertThat(html).contains("공유 지식으로 등록되지 않습니다");
+        assertThat(html).doesNotContain("??feedback.like.disabled");
+        // C 턴의 👍 는 disabled 로, N 턴의 👍 는 평소대로.
+        assertThat(html).contains("feedback-btn opacity-50");
+        assertThat(html).contains("data-feedback=\"LIKE\"");
+        // 싫어요는 모드와 무관하게 살아 있어야 한다 — 이 수정이 건드리는 것은 좋아요뿐이다.
+        assertThat(html).contains("data-feedback=\"DISLIKE\"");
+    }
+
+    @Test
     @DisplayName("POST /ui/chat/stream/skip-images — registry.requestSkip(threadId) 호출 + 204")
     void skipImageAnalysis_forwardsThreadIdToRegistry() throws Exception {
         mvc.perform(post("/ui/chat/stream/skip-images")

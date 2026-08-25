@@ -112,8 +112,14 @@
             <div class="feedback-controls d-flex gap-1"
                  th:if="${turnId != null}"
                  th:attr="data-turn-id=${turnId},data-thread-id=${threadId}">
+                <!-- 좋아요가 아무 일도 하지 않는 모드(S·C)에서는 누를 수 없게 하고 사유를 툴팁으로
+                     밝힌다 — 예전에는 눌리고 상태까지 남아 기여한 것처럼 보였다. 싫어요는 그대로. -->
                 <button type="button" class="btn btn-sm btn-outline-secondary feedback-btn" data-feedback="LIKE"
+                        th:if="${curatable}"
                         th:attr="aria-label=#{feedback.like},title=#{feedback.like}">👍</button>
+                <button type="button" class="btn btn-sm btn-outline-secondary feedback-btn opacity-50"
+                        th:unless="${curatable}" disabled
+                        th:attr="aria-label=#{${curationBlockedKey}},title=#{${curationBlockedKey}}">👍</button>
                 <button type="button" class="btn btn-sm btn-outline-secondary feedback-btn" data-feedback="DISLIKE"
                         th:attr="aria-label=#{feedback.dislike},title=#{feedback.dislike}">👎</button>
                 <!-- §10.10 — 새로 답변된 turn은 아직 좋아요 상태일 수 없으므로 항상 숨김에서 시작
