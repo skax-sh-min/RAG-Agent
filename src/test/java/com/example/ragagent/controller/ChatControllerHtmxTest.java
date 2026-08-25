@@ -371,6 +371,34 @@ class ChatControllerHtmxTest {
     }
 
     @Test
+    @DisplayName("대화 기록의 질문 앞에 응답 모드가 '[S] 질문' 형태로 붙고, 구 M/L 은 N 으로 표기된다")
+    void historyQuestionsCarryTheResponseModePrefix() throws Exception {
+        AppUserDetails principal = new AppUserDetails("id-1", "user@local", "", "User", "USER", true, false);
+        when(threadMetaService.findById(any(), eq("thread-01"))).thenReturn(Optional.of(
+                new ThreadMeta("thread-01", "user", "제목", "latest", "now", "now", "COST_FIRST", "")));
+        when(memoryService.getTurns(any(), eq("thread-01"))).thenReturn(List.of(
+                new MemoryRepository.Turn(1L, "요약 질문", "a", null, null, 0, 0, 0, "local", 1, null, "S", null),
+                new MemoryRepository.Turn(2L, "응용 질문", "a", null, null, 0, 0, 0, "local", 1, null, "C", null),
+                new MemoryRepository.Turn(3L, "옛 기록 질문", "a", null, null, 0, 0, 0, "local", 1, null, "M", null),
+                new MemoryRepository.Turn(4L, "모드 없는 질문", "a", null, null, 0, 0, 0, "local", 1, null, null, null)));
+        when(memoryService.getVerifications(any())).thenReturn(java.util.Map.of());
+
+        String html = mvc.perform(get("/chat/thread-01").with(user(principal)))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        assertThat(html).contains("[S] ", "[C] ");
+        // 구 M/L 과 NULL 은 ResponseMode.parse 를 거쳐 N 으로 읽힌다 — 표기가 저장값이 아니라
+        // '그 턴이 실제로 답한 방식'을 가리켜야 하므로 화면에도 N 으로 나와야 한다.
+        assertThat(html).as("구 M 기록이 그대로 노출되면 안 된다").doesNotContain("[M] ", "[L] ", "[null] ");
+        assertThat(html).contains("data-response-mode=\"N\"");
+
+        // 질문 원본에는 표기가 섞이지 않는다 — data-question 은 추천/재사용이 쓰는 값이라,
+        // 여기에 대괄호가 끼면 그 소비자들에게 그대로 딸려간다.
+        assertThat(html).contains("data-question=\"요약 질문\"");
+    }
+
+    @Test
     @DisplayName("좋아요가 무동작인 모드(S·C)에서는 대화 기록의 👍가 비활성으로, 사유와 함께 그려진다")
     void likeButtonIsDisabledWithReason_whenModeIsNotCuratable() throws Exception {
         AppUserDetails principal = new AppUserDetails("id-1", "user@local", "", "User", "USER", true, false);

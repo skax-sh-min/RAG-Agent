@@ -158,6 +158,17 @@ public interface MemoryRepository {
         }
 
         /**
+         * 질문 앞에 붙일 응답 모드 표기(`S`/`N`/`C`) — 대화 기록 렌더러가 읽는다.
+         *
+         * <p>저장된 원본 문자열을 그대로 쓰지 않는 이유는 컬럼이 nullable 이고 구 {@code "M"}/{@code "L"}
+         * 값이 그대로 남아 있기 때문이다. {@link ResponseMode#parse}를 거치면 그 값들이 실제 동작과
+         * 같은 모드(N)로 읽히므로, 화면에 뜨는 표기와 그 턴이 실제로 어떻게 답했는지가 어긋나지 않는다.
+         */
+        public String responseModeLabel() {
+            return ResponseMode.parse(responseMode).name();
+        }
+
+        /**
          * 좋아요가 막힌 사유의 메시지 키 — {@link #curatable()}이 true면 {@code null}.
          *
          * <p>불린만으로는 툴팁을 쓸 수 없다. 사유가 모드마다 다르기 때문이다 — S는 임베딩할 본문이

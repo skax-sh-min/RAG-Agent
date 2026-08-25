@@ -114,7 +114,7 @@
 
     // ── DOM builders ─────────────────────────────────────────────────────────
 
-    function appendUserBubble(question) {
+    function appendUserBubble(question, responseMode) {
         const timeStr = nowTimeStr();
         const wrap = document.createElement('div');
         // .user-turn + data-question: chat.html's question navigation (the floating
@@ -123,10 +123,14 @@
         // without the other and freshly sent questions drop out of the list.
         wrap.className = 'd-flex justify-content-end mb-3 align-items-end user-turn';
         wrap.dataset.question = question;
+        // 질문 앞의 [S]/[N]/[C] 표기. data-question 에는 넣지 않는다 — 그 값은 질문 '원본'이고,
+        // 질문 내비게이션이 표기를 붙이는 일은 data-response-mode 를 보고 스스로 한다.
+        const mode = responseMode || 'N';
+        wrap.dataset.responseMode = mode;
         wrap.innerHTML =
             `<div class="me-1">` +
             `<div class="bubble-user p-3">` +
-                `<div>${escHtml(question)}</div>` +
+                `<div><span class="bubble-user-mode">[${escHtml(mode)}] </span>${escHtml(question)}</div>` +
                 `<small class="text-white bubble-user-time">🕐 ${escHtml(timeStr)}</small>` +
             `</div>` +
             `</div>`;
@@ -647,7 +651,7 @@
     async function submitStream(formData, question) {
         const bubbleId = genId();
 
-        appendUserBubble(question);
+        appendUserBubble(question, formData.get('responseMode'));
         appendStreamingBubble(bubbleId);
         scrollToBottom(true);   // user just sent — re-anchor to bottom
 
