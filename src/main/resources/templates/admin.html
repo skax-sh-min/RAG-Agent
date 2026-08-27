@@ -255,6 +255,27 @@
         </div>
     </details>
 
+    <!-- ── §6.25 대화 목록 (전 사용자) ─────────────────────────────────────────── -->
+    <!-- 아래 검색 진단 수치 카드 바로 위: 두 패널이 서로 드릴다운하는 짝이다(대화 행 → 그 대화의
+         진단, 진단 행 → 그 대화). 위의 제안/큐레이션 카드는 조치 대기열이라 순서를 유지한다. -->
+    <details class="card mt-4" id="thread-admin-card"
+              hx-get="/admin/threads" hx-trigger="toggle[this.open] once"
+              hx-target="#thread-admin-body" hx-swap="innerHTML">
+        <summary class="card-header d-flex align-items-center py-2" style="cursor:pointer; list-style:none;">
+            <i class="bi bi-chat-left-text me-2"></i>
+            <span class="fw-semibold small">대화 목록</span>
+            <span class="ms-auto small text-muted d-flex align-items-center gap-1">
+                전 사용자 대화 — 재사용 현황 확인·삭제 — 펼치면 조회
+                <i class="bi bi-chevron-down curated-qa-chevron"></i>
+            </span>
+        </summary>
+        <div id="thread-admin-body">
+            <div class="card-body text-center text-muted py-4 small">
+                <span class="spinner-border spinner-border-sm me-2"></span>불러오는 중...
+            </div>
+        </div>
+    </details>
+
     <!-- 3단계 검색 진단 수치 — 페이지 최하단. 조치를 기다리는 대기열(제안)도, 이미 반영된 것을
          확인하는 용도(큐레이션)도 아닌 순수 분석 뷰라 가장 아래에 둔다. 동일한 지연 로딩 패턴. -->
     <details class="card mt-4" id="retrieval-metrics-card"
@@ -282,6 +303,8 @@
         #submission-card[open] .curated-qa-chevron { transform: rotate(180deg); }
         #retrieval-metrics-card > summary::-webkit-details-marker { display: none; }
         #retrieval-metrics-card[open] .curated-qa-chevron { transform: rotate(180deg); }
+        #thread-admin-card > summary::-webkit-details-marker { display: none; }
+        #thread-admin-card[open] .curated-qa-chevron { transform: rotate(180deg); }
         .curated-qa-chevron { transition: transform .15s ease; }
 
         /* 청크 편집 오프캔버스의 좌측 미리보기 컬럼 (넓은 화면에서만 렌더링됨) */
@@ -856,6 +879,65 @@ function loadRetrievalMetrics(offset, limit) {
     fetch('/admin/retrieval-metrics?offset=' + offset + '&limit=' + limit, { headers: { 'HX-Request': 'true' } })
         .then(r => r.text())
         .then(html => { document.getElementById('retrieval-metrics-body').innerHTML = html; });
+}
+
+/* §6.25 대화 목록 패널 — 위 패널들과 같은 이유로 페이지 레벨에 둔다(프래그먼트의 <script>는
+   plain innerHTML 삽입이라 실행되지 않는다).
+
+   필터 상태를 JS 변수가 아니라 DOM(현재 렌더된 select)에서 읽는 이유: 재조회 때마다 패널 전체가
+   갈아끼워지므로 서버가 돌려준 select 의 선택 상태가 언제나 최신이고, 별도 변수를 두면 그 둘이
+   어긋날 수 있다. */
+function threadFilterState() {
+    const body = document.getElementById('thread-admin-body');
+    const sel  = body ? body.querySelectorAll('select') : [];
+    return {
+        userId: sel.length > 0 ? sel[0].value : '',
+        sort:   sel.length > 1 ? sel[1].value : 'RECENT',
+        limit:  sel.length > 2 ? +sel[2].value : 20
+    };
+}
+
+function loadThreads(offset, overrides) {
+    const s = Object.assign(threadFilterState(), overrides || {});
+    const url = '/admin/threads?offset=' + (offset || 0)
+              + '&limit=' + s.limit
+              + '&sort=' + encodeURIComponent(s.sort)
+              + (s.userId ? '&userId=' + encodeURIComponent(s.userId) : '');
+    fetch(url, { headers: { 'HX-Request': 'true' } })
+        .then(r => r.text())
+        .then(html => { document.getElementById('thread-admin-body').innerHTML = html; });
+}
+
+/* 필터를 바꾸면 항상 첫 페이지로 — 5페이지를 보던 중 필터를 좁히면 결과가 그보다 적어져
+   빈 화면이 나오고, 그게 "결과 없음"으로 읽힌다. */
+function applyThreadUserFilter(sel) { loadThreads(0, { userId: sel.value }); }
+function applyThreadSort(sel)       { loadThreads(0, { sort:   sel.value }); }
+function applyThreadLimit(sel)      { loadThreads(0, { limit: +sel.value }); }
+
+/* 상세 토글 — 처음 펼칠 때만 가져오고 이후에는 접었다 펴기만 한다. */
+function toggleThreadTurns(threadId) {
+    const row  = document.getElementById('thread-turns-' + threadId);
+    const body = document.getElementById('thread-turns-body-' + threadId);
+    if (!row || !body) return;
+
+    const opening = row.classList.contains('d-none');
+    row.classList.toggle('d-none');
+    if (!opening || body.dataset.loaded === '1') return;
+
+    fetch('/admin/threads/' + encodeURIComponent(threadId) + '/turns',
+          { headers: { 'HX-Request': 'true' } })
+        .then(r => r.text())
+        .then(html => { body.innerHTML = html; body.dataset.loaded = '1'; })
+        .catch(() => { body.innerHTML =
+            '<div class="p-2 text-danger small text-center">턴 목록을 불러오지 못했습니다.</div>'; });
+}
+
+/* 이 대화로 좁힌 검색 진단 수치 — 실제 필터 배선은 Step 5. 지금은 진단 카드를 펼치기만 한다. */
+function showThreadDiagnostics(threadId) {
+    const card = document.getElementById('retrieval-metrics-card');
+    if (!card) return;
+    card.open = true;
+    card.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
 function deleteCuratedInline(id, btn) {

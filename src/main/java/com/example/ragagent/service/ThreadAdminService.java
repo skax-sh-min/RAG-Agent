@@ -1,11 +1,13 @@
 package com.example.ragagent.service;
 
 import com.example.ragagent.config.AppProperties;
+import com.example.ragagent.model.ResponseMode;
 import com.example.ragagent.model.ThreadMeta;
 import com.example.ragagent.repository.ThreadAdminRepository;
 import com.example.ragagent.repository.ThreadAdminRepository.Sort;
 import com.example.ragagent.repository.ThreadAdminRepository.Summary;
 import com.example.ragagent.repository.ThreadAdminRepository.ThreadRow;
+import com.example.ragagent.repository.ThreadAdminRepository.TurnRow;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
@@ -24,6 +26,12 @@ public class ThreadAdminService {
     /** Matches the page-size choices the other {@code /admin} panels offer (20/50/100). */
     static final int MAX_LIMIT = 100;
     static final int DEFAULT_LIMIT = 20;
+
+    /** Drill-down cap — opening a very long conversation must not render thousands of rows. */
+    static final int MAX_TURNS = 500;
+
+    /** Question preview length, matching the diagnostics panel so the two lists read alike. */
+    static final int MAX_QUESTION_PREVIEW = 120;
 
     private final ThreadAdminRepository repository;
     private final AppProperties props;
@@ -99,6 +107,54 @@ public class ThreadAdminService {
         return new PanelView(rows, repository.summary(), repository.distinctUserIds(),
                 filter, sort, safeOffset, safeLimit, repository.count(filter),
                 visitorSeparationOff());
+    }
+
+    /**
+     * The turns of one conversation, for the drill-down. Resolves the owner from the thread id
+     * itself ({@link ThreadAdminRepository#findOwner}) so no caller has to hand one in — the same
+     * reason the delete endpoint takes only a thread id.
+     *
+     * <p>Empty for an unknown thread: a conversation that isn't there and a conversation with no
+     * turns look the same to the operator, and neither is worth an error page in a panel.
+     */
+    public List<TurnView> turns(String threadId) {
+        return repository.findOwner(threadId)
+                .map(owner -> repository.findTurns(owner, threadId, MAX_TURNS).stream()
+                        .map(TurnView::new)
+                        .toList())
+                .orElseGet(List::of);
+    }
+
+    /** One drill-down turn as the template sees it — see {@link TurnRow} on why there is no answer. */
+    public record TurnView(TurnRow row) {
+        public long turnId()            { return row.turnId(); }
+        public String askedAt()         { return row.askedAt(); }
+        public String provider()        { return row.provider(); }
+        public boolean reused()         { return row.reused(); }
+        public boolean directMode()     { return row.directMode(); }
+        public boolean hasDiagnostics() { return row.hasDiagnostics(); }
+
+        /** Preview line — the panel is a list, not a transcript reader. */
+        public String question() {
+            String q = row.question();
+            if (q == null) return "";
+            String oneLine = q.replaceAll("\\s+", " ").strip();
+            return oneLine.length() > MAX_QUESTION_PREVIEW
+                    ? oneLine.substring(0, MAX_QUESTION_PREVIEW) + "…"
+                    : oneLine;
+        }
+
+        /**
+         * The mode this turn actually answered in. Goes through {@link ResponseMode#parse} rather
+         * than showing the stored string, so legacy {@code "M"}/{@code "L"} and NULL read as the
+         * {@code N} they behave as — the same rule the chat bubbles follow.
+         */
+        public String responseMode() {
+            return ResponseMode.parse(row.responseMode()).name();
+        }
+
+        public boolean liked()    { return "LIKE".equals(row.feedback()); }
+        public boolean disliked() { return "DISLIKE".equals(row.feedback()); }
     }
 
     /**

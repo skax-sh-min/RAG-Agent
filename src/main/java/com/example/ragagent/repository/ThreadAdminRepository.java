@@ -57,6 +57,23 @@ public class ThreadAdminRepository {
                           int orphanTurnCount) {}
 
     /**
+     * One turn in a conversation's drill-down.
+     *
+     * <p><b>There is deliberately no {@code answer} field.</b> The panel's default is that an
+     * operator can see what was asked and how it was answered <em>structurally</em>, but not the
+     * answer text itself; making that a missing column rather than a template omission means a
+     * future edit to the template cannot leak it. Reading an answer is a separate, audited call
+     * (§6.25 결정 3, Step 6).
+     *
+     * @param question already truncated to a single preview line — this is a list, not a transcript
+     * @param reused this turn answered by reusing an older turn, so it ran no retrieval of its own
+     * @param hasDiagnostics retrieval diagnostics were recorded, i.e. search actually ran
+     */
+    public record TurnRow(long turnId, String askedAt, String question, String responseMode,
+                          String provider, String feedback, boolean reused, boolean directMode,
+                          boolean hasDiagnostics) {}
+
+    /**
      * Sort orders the panel offers. An enum rather than a string because the value is concatenated
      * into SQL — {@code ORDER BY} cannot be parameterized, so the only safe form is a closed set
      * chosen in code.
@@ -202,6 +219,39 @@ public class ThreadAdminRepository {
                                     WHERE m.thread_id = t.thread_id AND m.user_id = t.user_id)""",
                 Integer.class);
         return n == null ? 0 : n;
+    }
+
+    /**
+     * The turns of one conversation, oldest first — the drill-down under a list row.
+     *
+     * <p>Selects columns explicitly rather than reusing {@code MemoryRepository.getTurns}: that
+     * one returns the full answer text (it feeds prompt assembly), which is exactly what this view
+     * must not carry by default. Capped by {@code limit} so opening a very long conversation can't
+     * render thousands of rows into the page.
+     */
+    public List<TurnRow> findTurns(String userId, String threadId, int limit) {
+        return jdbc.query("""
+                SELECT id, asked_at, question, response_mode, provider, feedback,
+                       reused_from_turn_id, direct_mode, retrieval_metrics
+                  FROM conversation_turns
+                 WHERE user_id = ? AND thread_id = ?
+                 ORDER BY id
+                 LIMIT ?""",
+                (rs, n) -> {
+                    rs.getLong("reused_from_turn_id");
+                    boolean reused = !rs.wasNull();
+                    return new TurnRow(
+                            rs.getLong("id"),
+                            rs.getString("asked_at"),
+                            rs.getString("question"),
+                            rs.getString("response_mode"),
+                            rs.getString("provider"),
+                            rs.getString("feedback"),
+                            reused,
+                            rs.getInt("direct_mode") != 0,
+                            rs.getString("retrieval_metrics") != null);
+                },
+                userId, threadId, Math.max(1, limit));
     }
 
     /** Owners that actually have conversations — the panel's filter dropdown. */

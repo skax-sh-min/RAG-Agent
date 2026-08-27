@@ -135,6 +135,7 @@ class ManagementOnlyAuthorizationTest {
     @MockitoBean CuratedQaService curatedQaService;
     @MockitoBean CuratedSubmissionService submissionService;
     @MockitoBean RetrievalMetricsService retrievalMetricsService;
+    @MockitoBean com.example.ragagent.service.ThreadAdminService threadAdminService;
     // 본문 이미지 업로드 엔드포인트의 협력자 — @WebMvcTest 는 @Service 를 스캔하지 않으므로
     // 명시하지 않으면 CuratedSubmissionController 생성이 실패해 컨텍스트 로드가 깨진다.
     @MockitoBean com.example.ragagent.service.CuratedImageStore curatedImageStore;
@@ -305,6 +306,32 @@ class ManagementOnlyAuthorizationTest {
     @DisplayName("ROLE_USER GET /admin/submissions/pending-count — 403 (게스트 principal은 통과 불가)")
     void guestPendingCount_isForbidden() throws Exception {
         mvc.perform(get("/admin/submissions/pending-count").with(user("guest").roles("USER")))
+                .andExpect(status().isForbidden());
+    }
+
+    /**
+     * §6.25 — 대화 목록은 전 사용자의 대화 제목이라, 이 엔드포인트가 게스트에게 열리면
+     * 배포의 모든 대화 제목이 그대로 유출된다. {@code /api/v1/**}(CSRF 면제 + 게스트 개방)이
+     * 아니라 {@code /admin/**} 아래 둔 이유가 정확히 이것이므로 그 사실을 고정한다.
+     */
+    @Test
+    @DisplayName("익명 GET /admin/threads — 로그인으로 리다이렉트 (전 사용자 대화 제목 유출 방지)")
+    void anonymousThreadPanel_isGated() throws Exception {
+        mvc.perform(get("/admin/threads"))
+                .andExpect(status().is3xxRedirection());
+    }
+
+    @Test
+    @DisplayName("ROLE_USER GET /admin/threads — 403 (게스트 principal은 통과 불가)")
+    void guestThreadPanel_isForbidden() throws Exception {
+        mvc.perform(get("/admin/threads").with(user("guest").roles("USER")))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    @DisplayName("ROLE_USER GET /admin/threads/{id}/turns — 403 (드릴다운도 같은 게이트)")
+    void guestThreadTurns_isForbidden() throws Exception {
+        mvc.perform(get("/admin/threads/t1/turns").with(user("guest").roles("USER")))
                 .andExpect(status().isForbidden());
     }
 

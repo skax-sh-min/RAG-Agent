@@ -10,6 +10,7 @@ import com.example.ragagent.service.CuratedSubmissionService;
 import com.example.ragagent.service.IndexingProgressService;
 import com.example.ragagent.service.RagService;
 import com.example.ragagent.service.RetrievalMetricsService;
+import com.example.ragagent.service.ThreadAdminService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
@@ -36,18 +37,21 @@ public class AdminController {
     private final CuratedQaService curatedQaService;
     private final CuratedSubmissionService submissionService;
     private final RetrievalMetricsService retrievalMetricsService;
+    private final ThreadAdminService threadAdminService;
     private final CurrentUser currentUser;
 
     public AdminController(AdminService adminService, RagService ragService,
                             IndexingProgressService progressService, CuratedQaService curatedQaService,
                             CuratedSubmissionService submissionService,
-                            RetrievalMetricsService retrievalMetricsService, CurrentUser currentUser) {
+                            RetrievalMetricsService retrievalMetricsService,
+                            ThreadAdminService threadAdminService, CurrentUser currentUser) {
         this.adminService = adminService;
         this.ragService   = ragService;
         this.progressService = progressService;
         this.curatedQaService = curatedQaService;
         this.submissionService = submissionService;
         this.retrievalMetricsService = retrievalMetricsService;
+        this.threadAdminService = threadAdminService;
         this.currentUser = currentUser;
     }
 
@@ -231,6 +235,46 @@ public class AdminController {
         model.addAttribute("offset", offset);
         model.addAttribute("limit",  limit);
         return "fragments/admin-retrieval-metrics :: panel";
+    }
+
+    // ── §6.25 대화 목록 (전 사용자) ─────────────────────────────────────────────
+
+    /**
+     * 대화 목록 패널 — same lazy-load-on-expand pattern as {@link #curatedPanel}.
+     *
+     * <p>Deliberately <b>not</b> under {@code /api/v1/**}: that prefix is CSRF-exempt and
+     * guest-open in management-only mode (§6.17), which would hand every user's conversation
+     * titles to anyone. Here it inherits the {@code ROLE_ADMIN} gate, same reasoning as
+     * {@link #pendingSubmissionCount}. It is also a different endpoint from {@code /ui/threads},
+     * which is the signed-in user's own sidebar and stays user-scoped.
+     *
+     * @param userId optional owner filter; {@code sort} is parsed into a closed set
+     *               ({@code ThreadAdminRepository.Sort}) since {@code ORDER BY} can't be a bind
+     *               parameter
+     */
+    @GetMapping("/admin/threads")
+    public String threadPanel(@RequestParam(required = false) String userId,
+                              @RequestParam(required = false) String sort,
+                              @RequestParam(defaultValue = "0")  int offset,
+                              @RequestParam(defaultValue = "20") int limit,
+                              Model model) {
+        model.addAttribute("panel", threadAdminService.panel(userId, sort, offset, limit));
+        return "fragments/admin-threads :: panel";
+    }
+
+    /**
+     * One conversation's turns — the drill-down opened by 상세, fetched on demand rather than
+     * rendered with the list (a deployment can hold thousands of turns across the page's rows).
+     *
+     * <p>The owner is resolved from the thread id server-side, and the rows carry no answer text
+     * at all ({@code ThreadAdminRepository.TurnRow}) — reading an answer is a separate audited
+     * call, not something this listing can be edited into exposing.
+     */
+    @GetMapping("/admin/threads/{threadId}/turns")
+    public String threadTurns(@PathVariable String threadId, Model model) {
+        model.addAttribute("turns", threadAdminService.turns(threadId));
+        model.addAttribute("threadId", threadId);
+        return "fragments/admin-threads :: turns";
     }
 
     // ── 청크 추가 게시판 — 제안 검토 ────────────────────────────────────────────

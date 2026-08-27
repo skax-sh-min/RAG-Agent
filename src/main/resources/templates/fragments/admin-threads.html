@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" lang="ko">
+<body>
+
+<!-- §6.25 대화 목록 패널 — /admin/threads 로 지연 로딩되는 카드 본문.
+     다른 관리자 패널과 같은 이유로 이 프래그먼트에는 <script>를 두지 않는다: 필터/페이지네이션
+     재조회가 plain innerHTML 삽입이라 프래그먼트 내장 스크립트는 실행되지 않는다
+     (admin.html의 loadThreads()/loadThreadTurns()가 페이지 레벨에 있다). -->
+<th:block th:fragment="panel">
+<div class="card-body p-0">
+
+    <!-- 요약 스트립 — 배포 전체 기준(아래 목록을 걸러도 그대로다) -->
+    <div class="px-3 py-2 border-bottom d-flex align-items-center flex-wrap gap-3 small text-muted">
+        <span>대화 <span class="badge bg-secondary" th:text="${panel.summary.threadCount}">0</span></span>
+        <span>턴 <span class="badge bg-secondary" th:text="${panel.summary.turnCount}">0</span></span>
+        <span>사용자 <span class="badge bg-secondary" th:text="${panel.summary.userCount}">0</span></span>
+        <span>재사용 <span class="badge bg-secondary" th:text="${panel.summary.reusedTurnCount}">0</span>건</span>
+        <!-- thread_meta 행 없이 턴만 남은 대화 — 목록 쿼리가 구조적으로 볼 수 없는 상태라
+             숫자로만 알린다(/admin/registry/reconcile-chunks 와 같은 성격의 정합성 표시). -->
+        <span th:if="${panel.summary.orphanTurnCount > 0}" class="text-warning"
+              title="thread_meta 행이 없어 아래 목록에는 나타나지 않는 턴입니다. 삭제나 쓰기가 중간에 끊겼을 수 있습니다.">
+            ⚠ 소속 대화 없는 턴 <span th:text="${panel.summary.orphanTurnCount}">0</span>건
+        </span>
+    </div>
+
+    <!-- 방문자 분리가 꺼져 있으면 목록이 사용자 한 명으로 뭉친다 — "한 명이 썼다"로 오해하지
+         않도록 이유를 밝힌다(/settings 가 LOCAL_ONLY 에서 프로바이더를 숨기며 힌트를 다는 것과 같은 처리). -->
+    <div th:if="${panel.visitorSeparationOff}"
+         class="px-3 py-2 border-bottom small text-muted bg-body-tertiary">
+        <i class="bi bi-info-circle me-1"></i>
+        <code>app.auth.guest-identity=shared</code> — 모든 방문자가 하나의 게스트 id를 공유하므로
+        아래 목록의 사용자는 실제 사람 수가 아닙니다. 방문자별로 나누려면 <code>hybrid</code>를 권장합니다.
+    </div>
+
+    <!-- 필터 바 -->
+    <div class="px-3 py-2 border-bottom d-flex align-items-center flex-wrap gap-2 small">
+        <label class="text-muted">사용자</label>
+        <select class="form-select form-select-sm" style="max-width:200px;"
+                onchange="applyThreadUserFilter(this)">
+            <option value="" th:selected="${panel.userFilter == null}">전체</option>
+            <option th:each="u : ${panel.userIds}" th:value="${u}" th:text="${u}"
+                    th:selected="${u == panel.userFilter}">u1</option>
+        </select>
+
+        <label class="text-muted ms-2">정렬</label>
+        <select class="form-select form-select-sm" style="max-width:150px;"
+                onchange="applyThreadSort(this)">
+            <option value="RECENT" th:selected="${panel.sort.name() == 'RECENT'}">최종 활동순</option>
+            <option value="TURNS"  th:selected="${panel.sort.name() == 'TURNS'}">턴 많은순</option>
+            <option value="REUSED" th:selected="${panel.sort.name() == 'REUSED'}">재사용된순</option>
+        </select>
+
+        <select class="form-select form-select-sm ms-auto" style="max-width:100px;"
+                onchange="applyThreadLimit(this)">
+            <option value="20"  th:selected="${panel.limit == 20}">20건</option>
+            <option value="50"  th:selected="${panel.limit == 50}">50건</option>
+            <option value="100" th:selected="${panel.limit == 100}">100건</option>
+        </select>
+    </div>
+
+    <!-- 페이지네이션 — 진단 수치 패널과 같은 형태 -->
+    <div class="px-3 py-2 border-bottom d-flex align-items-center gap-2 small text-muted"
+         th:if="${#lists.size(panel.threads) > 0 or panel.offset > 0}">
+        <button class="btn btn-sm btn-outline-secondary py-0 px-2"
+                th:disabled="${panel.offset == 0}"
+                th:data-offset="${panel.offset - panel.limit}"
+                onclick="loadThreads(+this.dataset.offset)">‹ 이전</button>
+        <span>
+            <span th:text="${panel.offset + 1}">1</span> –
+            <span th:text="${panel.offset + #lists.size(panel.threads)}">20</span>
+            / <span th:text="${panel.total}">0</span>
+        </span>
+        <button class="btn btn-sm btn-outline-secondary py-0 px-2"
+                th:disabled="${panel.offset + #lists.size(panel.threads) >= panel.total}"
+                th:data-offset="${panel.offset + panel.limit}"
+                onclick="loadThreads(+this.dataset.offset)">다음 ›</button>
+    </div>
+
+    <div th:if="${#lists.isEmpty(panel.threads)}" class="text-muted small p-3 text-center">
+        대화가 없습니다.
+    </div>
+
+    <div class="table-responsive" th:unless="${#lists.isEmpty(panel.threads)}">
+        <table class="table table-sm table-hover mb-0 small align-middle">
+            <thead>
+            <tr>
+                <th style="width:140px;">최종 활동</th>
+                <th>제목</th>
+                <th style="width:130px;">사용자</th>
+                <th style="width:50px;"  title="이 대화의 전체 턴 수">턴</th>
+                <th style="width:60px;"  title="검색이 실제로 돌아 진단 수치가 남은 턴 수 — 재사용·Direct·meta 턴은 여기서 빠집니다">진단</th>
+                <th style="width:70px;"  title="이 대화의 턴이 과거 답변을 재사용한 횟수">재사용함</th>
+                <th style="width:70px;"  title="이 대화의 답변이 다른 턴에서 재사용된 횟수 — 삭제 시 그 턴들이 '참조 원문 삭제됨'이 됩니다">재사용됨</th>
+                <th style="width:70px;">피드백</th>
+                <th style="width:150px;"></th>
+            </tr>
+            </thead>
+            <tbody th:each="t : ${panel.threads}">
+            <tr>
+                <td class="text-muted text-nowrap" th:text="${t.updatedAt}">2026-08-27</td>
+                <td class="text-truncate" style="max-width:0;"
+                    th:text="${t.displayTitle}" th:title="${t.displayTitle}">제목</td>
+                <td class="text-truncate font-monospace text-muted" style="max-width:0;font-size:0.72rem;"
+                    th:text="${t.shortUserId}" th:title="${t.userId}">guest-…</td>
+                <td th:text="${t.turnCount}">0</td>
+                <td>
+                    <span th:text="${t.diagCount}">0</span>
+                    <span class="text-warning" th:if="${t.mostlyWithoutRetrieval}"
+                          title="턴의 절반 이상이 검색을 돌지 않았습니다 — 재사용이나 Direct 위주의 대화입니다">⚠</span>
+                </td>
+                <td th:text="${t.reusedIn}">0</td>
+                <td>
+                    <span th:text="${t.reusedOut}">0</span>
+                    <span th:if="${t.reusedOut > 0}" class="text-info"
+                          title="이 대화의 답변에 의존하는 턴이 있습니다 — 삭제 시 그 턴들은 원문 참조를 잃습니다">◆</span>
+                </td>
+                <td class="text-nowrap">
+                    <span th:if="${t.likeCount > 0}">👍<span th:text="${t.likeCount}">0</span></span>
+                    <span th:if="${t.dislikeCount > 0}" class="ms-1">👎<span th:text="${t.dislikeCount}">0</span></span>
+                    <span th:if="${t.likeCount == 0 and t.dislikeCount == 0}" class="text-muted">-</span>
+                </td>
+                <td class="text-nowrap">
+                    <button class="btn btn-sm btn-outline-secondary py-0 px-2"
+                            th:data-thread-id="${t.threadId}"
+                            onclick="toggleThreadTurns(this.dataset.threadId)">상세</button>
+                    <!-- 이 대화로 좁힌 검색 진단 수치 — Step 5 에서 배선된다 -->
+                    <button class="btn btn-sm btn-outline-secondary py-0 px-2"
+                            th:data-thread-id="${t.threadId}"
+                            th:disabled="${t.diagCount == 0}"
+                            title="이 대화의 검색 진단 수치만 보기"
+                            onclick="showThreadDiagnostics(this.dataset.threadId)">진단</button>
+                </td>
+            </tr>
+            <tr class="d-none" th:id="'thread-turns-' + ${t.threadId}">
+                <td colspan="9" class="bg-body-tertiary p-0">
+                    <div class="p-2 text-muted small text-center"
+                         th:id="'thread-turns-body-' + ${t.threadId}">
+                        <span class="spinner-border spinner-border-sm me-2"></span>불러오는 중...
+                    </div>
+                </td>
+            </tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+</th:block>
+
+
+<!-- 한 대화의 턴 목록 — 상세를 펼칠 때 /admin/threads/{id}/turns 로 따로 가져온다.
+     목록과 함께 렌더하지 않는 이유는 한 페이지의 대화들이 합쳐 수천 턴이 될 수 있어서다. -->
+<th:block th:fragment="turns">
+    <div th:if="${#lists.isEmpty(turns)}" class="p-2 text-muted small text-center">
+        턴이 없습니다.
+    </div>
+    <table class="table table-sm mb-0 small" th:unless="${#lists.isEmpty(turns)}">
+        <thead>
+        <tr>
+            <th style="width:150px;">시각 (UTC)</th>
+            <th>질문</th>
+            <th style="width:50px;">모드</th>
+            <th style="width:110px;">경로</th>
+            <th style="width:60px;">피드백</th>
+        </tr>
+        </thead>
+        <tbody>
+        <tr th:each="t : ${turns}">
+            <td class="text-muted text-nowrap" th:text="${t.askedAt}">2026-08-27</td>
+            <td class="text-truncate" style="max-width:0;" th:text="${t.question}" th:title="${t.question}">질문</td>
+            <td><span class="badge bg-secondary" th:text="${t.responseMode}">N</span></td>
+            <td class="text-nowrap text-muted" style="font-size:0.72rem;">
+                <!-- 이 턴이 무엇을 했는지 — 검색을 돌았는지가 진단 패널과 이어지는 지점이다 -->
+                <span th:if="${t.reused}" class="badge bg-info-subtle text-info-emphasis">재사용</span>
+                <span th:if="${t.directMode}" class="badge bg-secondary-subtle text-secondary-emphasis">Direct</span>
+                <span th:if="${t.hasDiagnostics}" class="badge bg-success-subtle text-success-emphasis">검색</span>
+                <span th:if="${!t.reused and !t.directMode and !t.hasDiagnostics}">-</span>
+            </td>
+            <td>
+                <span th:if="${t.liked}">👍</span>
+                <span th:if="${t.disliked}">👎</span>
+                <span th:if="${!t.liked and !t.disliked}" class="text-muted">-</span>
+            </td>
+        </tr>
+        </tbody>
+    </table>
+</th:block>
+
+</body>
+</html>

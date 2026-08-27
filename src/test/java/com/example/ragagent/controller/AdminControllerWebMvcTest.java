@@ -68,6 +68,7 @@ class AdminControllerWebMvcTest {
     @MockitoBean CuratedQaService curatedQaService;
     @MockitoBean CuratedSubmissionService submissionService;
     @MockitoBean RetrievalMetricsService retrievalMetricsService;
+    @MockitoBean com.example.ragagent.service.ThreadAdminService threadAdminService;
     @MockitoBean CurrentUser currentUser;             // 승인/거부 시 reviewer id
     @MockitoBean AppProperties props;                 // SecurityConfig 의존
     @MockitoBean ThreadContextResolver threadContextResolver;
@@ -96,7 +97,24 @@ class AdminControllerWebMvcTest {
                 .andExpect(view().name("admin"))
                 .andExpect(model().attributeExists("vectorStore", "collections", "chromaAvailable", "documents"))
                 .andExpect(content().string(containsString("ChromaDB 컬렉션")))
-                .andExpect(content().string(containsString("컬렉션 수")));
+                .andExpect(content().string(containsString("컬렉션 수")))
+                // §6.25 — 대화 목록 카드는 페이지에 있되 펼치기 전에는 조회하지 않는다
+                // (아래 doesNotEagerlyLoad… 테스트가 그 지연 로딩을 지킨다)
+                .andExpect(content().string(containsString("thread-admin-card")))
+                .andExpect(content().string(containsString("대화 목록")));
+    }
+
+    /** 다른 지연 로딩 패널과 같은 계약 — /admin 로드만으로 전 사용자 대화를 집계하지 않는다. */
+    @Test
+    @DisplayName("GET /admin — 대화 목록은 펼치기 전까지 조회하지 않는다")
+    void adminPage_doesNotEagerlyLoadThreads() throws Exception {
+        when(adminService.vectorStoreView()).thenReturn(
+                new VectorStoreAdminView("chroma", true, -1, 0, 0, null, null,
+                        "/data/memory.db", null));
+
+        mvc.perform(get("/admin").with(user(ADMIN))).andExpect(status().isOk());
+
+        verifyNoInteractions(threadAdminService);
     }
 
     @Test
@@ -424,5 +442,97 @@ class AdminControllerWebMvcTest {
         mvc.perform(post("/admin/documents/ghost/reindex").with(user(ADMIN)).with(csrf()))
                 .andExpect(status().isAccepted())
                 .andExpect(content().string(containsString("task-3")));
+    }
+
+    // ── §6.25 대화 목록 패널 ────────────────────────────────────────────────────
+
+    private static com.example.ragagent.service.ThreadAdminService.ThreadView threadView(
+            String threadId, String title, String userId, int turns, int diag,
+            int reusedIn, int reusedOut) {
+        var row = new com.example.ragagent.repository.ThreadAdminRepository.ThreadRow(
+                threadId, userId, title, "", "2026-01-01", "2026-08-27 14:22:00",
+                "2026-08-27 05:22:00", turns, reusedIn, reusedOut, diag, 1, 0);
+        return new com.example.ragagent.service.ThreadAdminService.ThreadView(row, title);
+    }
+
+    private void stubPanel(List<com.example.ragagent.service.ThreadAdminService.ThreadView> rows,
+                           boolean visitorSeparationOff) {
+        when(threadAdminService.panel(any(), any(), anyInt(), anyInt())).thenReturn(
+                new com.example.ragagent.service.ThreadAdminService.PanelView(
+                        rows,
+                        new com.example.ragagent.repository.ThreadAdminRepository.Summary(
+                                rows.size(), 1, 9, 2, 0),
+                        List.of("u1"), null,
+                        com.example.ragagent.repository.ThreadAdminRepository.Sort.RECENT,
+                        0, 20, rows.size(), visitorSeparationOff));
+    }
+
+    @Test
+    @DisplayName("GET /admin/threads — 두 재사용 카운터를 서로 다른 열로 렌더한다")
+    void threadPanel_rendersBothReuseCounters() throws Exception {
+        stubPanel(List.of(threadView("t1", "인덱싱 파이프라인 질문",
+                "guest-a1b2c3d4e5f6", 15, 4, 11, 3)), false);
+
+        mvc.perform(get("/admin/threads").with(user(ADMIN)))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("인덱싱 파이프라인 질문")))
+                .andExpect(content().string(containsString("재사용함")))
+                .andExpect(content().string(containsString("재사용됨")))
+                // 소유자는 축약해 보이되 원본이 title 속성으로 남는다
+                .andExpect(content().string(containsString("guest-a1b2c3d4e5f6")));
+    }
+
+    /** shared 게스트에서 목록이 사용자 한 명으로 뭉치는 것을 "한 명이 썼다"로 읽으면 안 된다. */
+    @Test
+    @DisplayName("GET /admin/threads — 방문자 분리가 꺼져 있으면 이유를 표시한다")
+    void threadPanel_warnsWhenVisitorSeparationIsOff() throws Exception {
+        stubPanel(List.of(threadView("t1", "대화", "guest", 3, 3, 0, 0)), true);
+
+        mvc.perform(get("/admin/threads").with(user(ADMIN)))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("app.auth.guest-identity=shared")));
+    }
+
+    @Test
+    @DisplayName("GET /admin/threads — 필터/정렬/페이징이 서비스로 그대로 전달된다")
+    void threadPanel_passesFiltersThrough() throws Exception {
+        stubPanel(List.of(), false);
+
+        mvc.perform(get("/admin/threads")
+                        .param("userId", "u1").param("sort", "REUSED")
+                        .param("offset", "40").param("limit", "50")
+                        .with(user(ADMIN)))
+                .andExpect(status().isOk());
+
+        verify(threadAdminService).panel(eq("u1"), eq("REUSED"), eq(40), eq(50));
+    }
+
+    /**
+     * 드릴다운은 질문·모드·경로까지만 보여주고 답변 전문은 담지 않는다 — {@code TurnRow}에
+     * answer 필드가 아예 없다는 구조적 사실(§6.25 결정 3)을 렌더 결과에서도 고정한다.
+     */
+    @Test
+    @DisplayName("GET /admin/threads/{id}/turns — 질문·경로 배지를 렌더한다")
+    void threadTurns_showsQuestionsAndPathBadges() throws Exception {
+        var row = new com.example.ragagent.repository.ThreadAdminRepository.TurnRow(
+                7L, "2026-08-27 05:22:00", "청크 분할 전략이 뭐야", "N", "local",
+                "LIKE", true, false, false);
+        when(threadAdminService.turns("t1"))
+                .thenReturn(List.of(new com.example.ragagent.service.ThreadAdminService.TurnView(row)));
+
+        mvc.perform(get("/admin/threads/t1/turns").with(user(ADMIN)))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("청크 분할 전략이 뭐야")))
+                .andExpect(content().string(containsString("재사용")));
+    }
+
+    @Test
+    @DisplayName("GET /admin/threads/{id}/turns — 턴이 없으면 빈 상태를 렌더한다(오류 아님)")
+    void threadTurns_emptyRendersPlaceholder() throws Exception {
+        when(threadAdminService.turns("ghost")).thenReturn(List.of());
+
+        mvc.perform(get("/admin/threads/ghost/turns").with(user(ADMIN)))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("턴이 없습니다")));
     }
 }
