@@ -8,9 +8,12 @@ import com.example.ragagent.repository.ThreadAdminRepository.Sort;
 import com.example.ragagent.repository.ThreadAdminRepository.Summary;
 import com.example.ragagent.repository.ThreadAdminRepository.ThreadRow;
 import com.example.ragagent.repository.ThreadAdminRepository.TurnRow;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
+import java.util.Optional;
 
 /**
  * §6.25 — read side of the {@code /admin} 대화 목록 panel.
@@ -22,6 +25,8 @@ import java.util.List;
  */
 @Service
 public class ThreadAdminService {
+
+    private static final Logger log = LoggerFactory.getLogger(ThreadAdminService.class);
 
     /** Matches the page-size choices the other {@code /admin} panels offer (20/50/100). */
     static final int MAX_LIMIT = 100;
@@ -35,10 +40,18 @@ public class ThreadAdminService {
 
     private final ThreadAdminRepository repository;
     private final AppProperties props;
+    private final CuratedQaService curatedQaService;
+    private final MemoryService memoryService;
+    private final ThreadMetaService threadMetaService;
 
-    public ThreadAdminService(ThreadAdminRepository repository, AppProperties props) {
+    public ThreadAdminService(ThreadAdminRepository repository, AppProperties props,
+                              CuratedQaService curatedQaService, MemoryService memoryService,
+                              ThreadMetaService threadMetaService) {
         this.repository = repository;
         this.props = props;
+        this.curatedQaService = curatedQaService;
+        this.memoryService = memoryService;
+        this.threadMetaService = threadMetaService;
     }
 
     /**
@@ -155,6 +168,72 @@ public class ThreadAdminService {
 
         public boolean liked()    { return "LIKE".equals(row.feedback()); }
         public boolean disliked() { return "DISLIKE".equals(row.feedback()); }
+    }
+
+    // ── 삭제 ─────────────────────────────────────────────────────────────────
+
+    /**
+     * What deleting this conversation would cost, read <b>now</b>.
+     *
+     * <p>The confirmation dialog is the whole safeguard on an irreversible cross-user delete, so
+     * the numbers behind it are re-read at click time instead of scraped from the rendered row —
+     * the panel may have been open for a while, and approving a delete against stale counts is the
+     * failure this exists to prevent.
+     *
+     * @param curatedCount 좋아요로 승격된 큐레이션 항목 수 — 이 대화를 지우면 함께 회수된다.
+     *                     목록 집계에 넣지 않은 이유는 `curated_qa`에 `source_thread_id` 인덱스가
+     *                     없어 행마다 스캔이 되는데, 이 값이 필요한 순간은 삭제 클릭 한 번뿐이기 때문.
+     * @param reusedOut    이 대화의 답변에 의존하는 다른 턴 수 — 삭제하면 전부 "참조 원문 삭제됨"이
+     *                     된다. 되돌릴 수 없는 쪽의 대가라 확인 문구에서 가장 무겁게 다룬다.
+     */
+    public record DeletePreview(String threadId, String displayTitle, String userId,
+                                int turnCount, int reusedOut, int diagCount, int curatedCount) {}
+
+    /** Empty when the conversation isn't there — a delete of something already gone is a 404,
+     *  not a dialog. */
+    public Optional<DeletePreview> deletePreview(String threadId) {
+        return repository.findOne(threadId).map(r -> new DeletePreview(
+                r.threadId(),
+                ThreadMeta.stripVersionPrefix(r.title()),
+                r.userId(),
+                r.turnCount(),
+                r.reusedOut(),
+                r.diagCount(),
+                curatedQaService.countActiveByThread(r.userId(), threadId)));
+    }
+
+    /** What the delete actually removed — fed straight into the audit entry. */
+    public record DeleteResult(String threadId, String userId, int turnCount, int curatedRetracted) {}
+
+    /**
+     * Deletes one conversation on an operator's behalf.
+     *
+     * <p><b>The owner is resolved here, from the thread id.</b> {@code thread_meta.thread_id} is
+     * the primary key, so nothing needs to hand one in — and the endpoint therefore exposes no
+     * parameter naming <em>whose</em> conversation to act on.
+     *
+     * <p>Same order and the same three steps as the user's own delete path
+     * ({@code OperationsController.deleteThread}), curated retraction first: a curated row is
+     * linked to its turn by a copy of the id, not a foreign key, so without that the row and its
+     * vectors would outlive the conversation and keep feeding search (§6.25 결정 4). Any future
+     * delete path must call the same three, or the outcome depends on which button was pressed.
+     *
+     * @return empty when the conversation doesn't exist (nothing was touched)
+     */
+    public Optional<DeleteResult> delete(String threadId) {
+        Optional<String> owner = repository.findOwner(threadId);
+        if (owner.isEmpty()) return Optional.empty();
+
+        String userId = owner.get();
+        int turnCount = repository.findOne(threadId).map(ThreadRow::turnCount).orElse(0);
+
+        int curatedRetracted = curatedQaService.onThreadDeleted(userId, threadId);
+        memoryService.clearHistory(userId, threadId);
+        threadMetaService.delete(userId, threadId);
+
+        log.info("[ADMIN] 대화 삭제 threadId={} owner={} 턴={} 큐레이션회수={}",
+                threadId, userId, turnCount, curatedRetracted);
+        return Optional.of(new DeleteResult(threadId, userId, turnCount, curatedRetracted));
     }
 
     /**

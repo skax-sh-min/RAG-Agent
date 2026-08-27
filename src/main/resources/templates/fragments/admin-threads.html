@@ -85,7 +85,7 @@
              유연 열인 제목이 td 의 max-width:0 때문에 몇 px 로 눌려 한 글자만 남는다. 부모가
              .table-responsive 이므로 넘치는 만큼은 가로 스크롤로 처리된다 — 제목을 읽을 수 없게
              만드는 것보다 낫다. -->
-        <table class="table table-sm table-hover mb-0 small align-middle" style="min-width:940px;">
+        <table class="table table-sm table-hover mb-0 small align-middle" style="min-width:990px;">
             <thead>
             <tr>
                 <th style="width:140px;">최종 활동</th>
@@ -99,7 +99,7 @@
                 <th style="width:70px;"  title="이 대화의 턴이 과거 답변을 재사용한 횟수">재사용함</th>
                 <th style="width:70px;"  title="이 대화의 답변이 다른 턴에서 재사용된 횟수 — 삭제 시 그 턴들이 '참조 원문 삭제됨'이 됩니다">재사용됨</th>
                 <th style="width:70px;">피드백</th>
-                <th style="width:150px;"></th>
+                <th style="width:200px;"></th>
             </tr>
             </thead>
             <tbody th:each="t : ${panel.threads}">
@@ -136,6 +136,12 @@
                             th:disabled="${t.diagCount == 0}"
                             title="이 대화의 검색 진단 수치만 보기"
                             onclick="showThreadDiagnostics(this.dataset.threadId)">진단</button>
+                    <!-- 되돌릴 수 없고 남의 대화에까지 닿는 작업이라, 확인 문구의 숫자는 이 행이
+                         아니라 클릭 시점의 서버 조회에서 온다(delete-preview). -->
+                    <button class="btn btn-sm btn-outline-danger py-0 px-2"
+                            th:data-thread-id="${t.threadId}"
+                            title="이 대화를 삭제합니다 (되돌릴 수 없음)"
+                            onclick="deleteThreadRow(this.dataset.threadId)">삭제</button>
                 </td>
             </tr>
             <tr class="d-none" th:id="'thread-turns-' + ${t.threadId}">

@@ -158,7 +158,11 @@ public class ThreadAdminRepository {
                 ? new Object[]{userId, limit, offset}
                 : new Object[]{limit, offset};
 
-        return jdbc.query(sql, (rs, n) -> new ThreadRow(
+        return jdbc.query(sql, ThreadAdminRepository::mapRow, args);
+    }
+
+    private static ThreadRow mapRow(java.sql.ResultSet rs, int n) throws java.sql.SQLException {
+        return new ThreadRow(
                 rs.getString("thread_id"),
                 rs.getString("user_id"),
                 rs.getString("title"),
@@ -171,7 +175,23 @@ public class ThreadAdminRepository {
                 rs.getInt("reused_out"),
                 rs.getInt("diag_count"),
                 rs.getInt("like_count"),
-                rs.getInt("dislike_count")), args);
+                rs.getInt("dislike_count"));
+    }
+
+    /**
+     * One conversation's row, by thread id — <b>the same aggregate</b> {@link #findAll} renders,
+     * so the delete confirmation can't disagree with the list about what it is about to remove.
+     *
+     * <p>Read at click time rather than trusting the rendered row: the panel may have been open
+     * for minutes, and this is the number an operator uses to approve an irreversible cross-user
+     * delete.
+     */
+    public Optional<ThreadRow> findOne(String threadId) {
+        List<ThreadRow> rows = jdbc.query(
+                LIST_SQL.formatted(REUSED_OUT_SUBQUERY, "WHERE m.thread_id = ?", Sort.RECENT.sql()),
+                ThreadAdminRepository::mapRow,
+                threadId, 1, 0);
+        return rows.isEmpty() ? Optional.empty() : Optional.of(rows.get(0));
     }
 
     /** Total conversations matching the same filter {@link #findAll} was given — the panel's

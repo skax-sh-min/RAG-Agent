@@ -33,7 +33,7 @@
 | 순위 | 항목 | 현재 상태 |
 |---|---|---|
 | 1 | **§6.15 스토리지 쿼터**(전역 상한 B안, §6.2에서 이관) | 설계 완료, 구현 전 |
-| 2 | **§6.25 관리자 전체 대화 목록 조회·삭제 + 검색 진단 연결**(§7.3 일부 선반영) | **Step 1~3 완료(2026-08-27)** — 버그 픽스·조회 계층·패널. Step 4~6 남음. 새 스키마 0개 |
+| 2 | **§6.25 관리자 전체 대화 목록 조회·삭제 + 검색 진단 연결**(§7.3 일부 선반영) | **Step 1~4 완료(2026-08-27)** — 버그 픽스·조회 계층·패널·삭제. Step 5~6(진단 연결·표시 정리) 남음. 새 스키마 0개 |
 | 3 | 운영 준비 잔여 — SQLite 백업 자동화(Litestream/cron), Caddy 인증서 만료 모니터링 | 미착수 |
 | 4 | §6.24 `4-c` — 검색 부스트 상향 | 부스트 기본값이 0이라 미착수. 올리려면 `MAX_EVAL_EXCERPT_CHARS` 상향이 **같은 변경에** 선행돼야 한다(§6.24) |
 | 5 | §9.4 — CADDY 하위호환 별칭 | 선택, 낮은 우선순위 |
@@ -475,7 +475,7 @@ conversation_turns.asked_at = Instant.now() @ UTC      → UTC
 | 1 | ~~**대화 삭제 시 큐레이션 회수**(`onThreadDeleted`) — 기존 `/ui/threads` 삭제에도 적용~~ ✅ **완료 2026-08-27** | 아래 "Step 1 완료" 참조 |
 | 2 | ~~조회 계층 — `ThreadAdminService` + `ThreadAdminRow` record~~ ✅ **완료 2026-08-27** | `ThreadAdminRepository` 신설(크로스 유저 조회를 `ThreadMetaRepository`에 섞지 않음). 재사용 두 축·정렬 enum·`findOwner` 포함 |
 | 3 | ~~패널 렌더 — `GET /admin/threads` + `fragments/admin-threads.html` + admin.html 카드~~ ✅ **완료 2026-08-27** | 드릴다운(`/turns`)까지. 실데이터 검증 결과는 아래 |
-| 4 | 삭제 — `DELETE /admin/threads/{threadId}` + 확인 대화상자 + 감사 로그 | **Step 1 없이 진행 금지** |
+| 4 | ~~삭제 — `DELETE /admin/threads/{threadId}` + 확인 대화상자 + 감사 로그~~ ✅ **완료 2026-08-27** | 확인 문구의 숫자는 `delete-preview` 로 클릭 시점 재조회 |
 | 5 | 진단 패널 확장 — `사용자` 열 + `userId`/`threadId` 필터(+ `count`도 같은 필터) + 필터 칩 + 공용 `sourceTable` 프래그먼트 + 양방향 버튼 + C 턴 "해당 없음" | 유일하게 **기존 화면을 고치는** 단계 — 회귀 주의(`null, null` 위임) |
 | 6 | 표시 정리 — KST 변환(두 패널 공통), 고아 턴 카운트, 답변 원문 보기 + `admin.thread.read` 감사 | |
 
@@ -500,6 +500,15 @@ conversation_turns.asked_at = Instant.now() @ UTC      → UTC
 - **레이아웃 함정**: 다른 열이 전부 고정 폭이면 그 합계가 좁은 창의 테이블 폭을 다 먹고, 유연 열인 제목이 `td { max-width:0 }`(말줄임 관용구) 때문에 **22px로 눌려 한 글자만 남는다**. `th`의 `min-width`만으로는 못 고치고 **테이블 자체에 `min-width`**를 줘서 `.table-responsive`가 넘침을 흡수하게 해야 한다. 검색 진단 수치 패널이 같은 관용구로 멀쩡한 것은 고정 열이 적어 슬랙이 있기 때문 — 열을 더 붙이면 그쪽도 같은 증상이 난다.
 - **고아 턴 카운트가 실제로 값을 했다**: 요약은 `재사용 2건`인데 모든 행의 `재사용함`이 0이었다. 두 재사용 턴이 전부 `thread_meta` 행 없는 대화에 속해 있었기 때문 — 이 숫자가 없으면 카운터가 고장 난 것으로 읽힌다. 덤으로 그 턴들의 원본(11·12)은 이미 삭제돼 `reused_from_turn_id`가 dangling이었고, 서브쿼리의 INNER JOIN이 `재사용됨=0`을 내는 것이 정확한 동작임도 함께 확인됐다.
 - **검증 환경 주의 2가지**: `spring-boot:run`은 `target/classes`의 템플릿 사본을 쓰고 Thymeleaf가 그것을 캐시하므로, 프래그먼트를 고쳐도 `mvn compile` + 재시작 없이는 반영되지 않는다(고친 줄 없이 "안 고쳐진다"고 헤매기 쉽다). 그리고 `-DDATA_DIR`에 git-bash 경로(`/c/Users/...`)를 넘기면 Java가 `C:\c\Users\...`로 해석해 **엉뚱한 위치에 빈 DB를 만든다** — 화면은 "데이터 없음"으로만 보인다.
+
+**Step 4 완료 (2026-08-27)** — 삭제. `GET /admin/threads/{id}/delete-preview` + `DELETE /admin/threads/{id}`.
+
+- **확인 문구의 숫자를 행에서 긁지 않고 클릭 시점에 서버에서 다시 읽는다**(`delete-preview`). 패널은 몇 분 전에 그려진 것일 수 있고, 오래된 숫자를 보고 되돌릴 수 없는 작업을 승인하게 두는 것이 이 절차가 막으려는 실패 그 자체다. 목록과 같은 집계(`findOne`)를 쓰므로 두 화면이 어긋날 수도 없다.
+- **큐레이션 건수만 목록 집계에서 뺐다** — `curated_qa`에 `source_thread_id` 인덱스가 없어 행마다 스캔이 되는데, 이 값이 필요한 순간은 삭제 클릭 한 번뿐이다.
+- 확인 문구는 **대가가 있는 항목만 조건부로** 덧붙인다(큐레이션 0건·재사용됨 0건이면 그 줄이 없다). "0건 회수"를 늘 보여주면 정작 값이 있을 때의 경고가 묻힌다.
+- 삭제 후에는 행 하나를 지우지 않고 **목록 전체를 다시 그린다** — 요약 스트립·전체 개수·페이지 경계가 전부 움직이므로 행만 빼면 나머지 숫자가 삭제 전 상태로 남는다.
+
+**실데이터 삭제 검증**: 사본 DB에서 좋아요 승격 행 하나를 심고 UI 버튼으로 삭제해, ① `thread_meta`·`conversation_turns`·`turn_source_ref` 제거 ② **like 행 `inactive` 전환 + 벡터 제거** ③ **manual(제안) 행은 `active` 유지** ④ 감사 로그에 `owner`/`turnCount`/`curatedRetracted` 기록까지 확인했다. ③이 `findActiveByThread`의 `source_turn_id IS NOT NULL` 가드가 실제로 하는 일이다.
 
 **함정 / 경계**:
 - **`/api/v1/**` 밑에 두지 말 것** — 그 접두사는 CSRF 면제 + management-only에서 guest-open이다. 제안 pending-count를 `/admin/` 밑에 둔 것과 **완전히 같은 이유**로, 여기 두면 전 사용자 대화 목록이 누구에게나 열린다. `/ui/threads`(사용자 사이드바)와도 다른 엔드포인트다.

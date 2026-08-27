@@ -940,6 +940,50 @@ function showThreadDiagnostics(threadId) {
     card.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
+/* 대화 삭제 — 되돌릴 수 없고 남의 대화에까지 닿는다.
+   확인 문구의 숫자는 화면의 행이 아니라 클릭 시점의 서버 조회(delete-preview)에서 온다:
+   패널이 몇 분 전에 그려진 것일 수 있고, 오래된 숫자를 보고 파괴적 작업을 승인하게 두는 것이
+   이 확인 절차가 막으려는 실패 그 자체다. */
+function deleteThreadRow(threadId) {
+    fetch('/admin/threads/' + encodeURIComponent(threadId) + '/delete-preview',
+          { headers: { 'HX-Request': 'true' } })
+        .then(r => {
+            if (r.status === 404) throw new Error('이미 삭제된 대화입니다.');
+            if (!r.ok) throw new Error('삭제 전 확인 정보를 불러오지 못했습니다.');
+            return r.json();
+        })
+        .then(p => {
+            const lines = [
+                '이 대화를 삭제합니다. 되돌릴 수 없습니다.',
+                '',
+                '제목: ' + (p.title || '(제목 없음)'),
+                '소유자: ' + p.userId,
+                '턴 ' + p.turnCount + '개 · 검색 진단 ' + p.diagCount + '건이 함께 삭제됩니다.'
+            ];
+            /* 대가가 있는 두 항목만 조건부로 덧붙인다 — 0건일 때 "0건 회수"를 읽히게 하면
+               정작 값이 있을 때의 경고가 묻힌다. */
+            if (p.curatedCount > 0) {
+                lines.push('좋아요로 승격된 큐레이션 ' + p.curatedCount + '건이 검색에서 회수됩니다.');
+            }
+            if (p.reusedOut > 0) {
+                lines.push('⚠ 다른 턴 ' + p.reusedOut + '개가 이 대화의 답변을 재사용 중입니다 — '
+                         + '삭제하면 그 턴들은 "참조 원문 삭제됨"으로 남습니다.');
+            }
+            if (!confirm(lines.join('\n'))) return null;
+
+            return fetch('/admin/threads/' + encodeURIComponent(threadId),
+                         { method: 'DELETE', headers: getCsrfHeaders() });
+        })
+        .then(r => {
+            if (r === null) return;                        // 사용자가 취소
+            if (!r.ok) throw new Error('삭제에 실패했습니다 (' + r.status + ')');
+            /* 목록 전체를 다시 그린다 — 요약 스트립·전체 개수·페이지 경계가 전부 움직이므로
+               행 하나만 지우면 나머지 숫자가 삭제 전 상태로 남는다. */
+            loadThreads(0);
+        })
+        .catch(e => alert(e.message));
+}
+
 function deleteCuratedInline(id, btn) {
     if (!confirm('이 큐레이션 Q&A를 삭제하시겠습니까? (검색에서 즉시 제외됩니다)')) return;
     fetch('/admin/curated/' + encodeURIComponent(id), {

@@ -1,5 +1,6 @@
 package com.example.ragagent.controller;
 
+import com.example.ragagent.audit.AuditLogger;
 import com.example.ragagent.context.ThreadContext;
 import com.example.ragagent.model.IndexingProgressEvent;
 import com.example.ragagent.model.MetaKey;
@@ -38,13 +39,15 @@ public class AdminController {
     private final CuratedSubmissionService submissionService;
     private final RetrievalMetricsService retrievalMetricsService;
     private final ThreadAdminService threadAdminService;
+    private final AuditLogger auditLogger;
     private final CurrentUser currentUser;
 
     public AdminController(AdminService adminService, RagService ragService,
                             IndexingProgressService progressService, CuratedQaService curatedQaService,
                             CuratedSubmissionService submissionService,
                             RetrievalMetricsService retrievalMetricsService,
-                            ThreadAdminService threadAdminService, CurrentUser currentUser) {
+                            ThreadAdminService threadAdminService, AuditLogger auditLogger,
+                            CurrentUser currentUser) {
         this.adminService = adminService;
         this.ragService   = ragService;
         this.progressService = progressService;
@@ -52,6 +55,7 @@ public class AdminController {
         this.submissionService = submissionService;
         this.retrievalMetricsService = retrievalMetricsService;
         this.threadAdminService = threadAdminService;
+        this.auditLogger = auditLogger;
         this.currentUser = currentUser;
     }
 
@@ -275,6 +279,53 @@ public class AdminController {
         model.addAttribute("turns", threadAdminService.turns(threadId));
         model.addAttribute("threadId", threadId);
         return "fragments/admin-threads :: turns";
+    }
+
+    /**
+     * What deleting this conversation would cost — the numbers behind the confirmation dialog,
+     * read at click time rather than taken from the rendered row (the panel may be minutes old,
+     * and this is an irreversible cross-user action).
+     */
+    @GetMapping("/admin/threads/{threadId}/delete-preview")
+    @ResponseBody
+    public ResponseEntity<Map<String, Object>> threadDeletePreview(@PathVariable String threadId) {
+        return threadAdminService.deletePreview(threadId)
+                .<ResponseEntity<Map<String, Object>>>map(p -> ResponseEntity.ok(Map.of(
+                        "threadId",     p.threadId(),
+                        "title",        p.displayTitle(),
+                        "userId",       p.userId(),
+                        "turnCount",    p.turnCount(),
+                        "reusedOut",    p.reusedOut(),
+                        "diagCount",    p.diagCount(),
+                        "curatedCount", p.curatedCount())))
+                .orElseGet(() -> ResponseEntity.notFound().build());
+    }
+
+    /**
+     * Deletes one conversation, on any user's behalf.
+     *
+     * <p><b>Takes only a thread id.</b> {@code thread_meta.thread_id} is the primary key, so the
+     * owner is resolved server-side ({@code ThreadAdminService.delete}); accepting a {@code userId}
+     * here would mean exposing a parameter that names whose conversation to destroy.
+     *
+     * <p>There is deliberately no bulk-delete endpoint — the same reason submission approval has
+     * none, and more strongly, because this one is irreversible and reaches across users.
+     */
+    @DeleteMapping("/admin/threads/{threadId}")
+    @ResponseBody
+    public ResponseEntity<Map<String, Object>> deleteThread(@PathVariable String threadId) {
+        return threadAdminService.delete(threadId)
+                .<ResponseEntity<Map<String, Object>>>map(r -> {
+                    auditLogger.log("admin.thread.delete", threadId, Map.of(
+                            "owner", r.userId(),
+                            "turnCount", r.turnCount(),
+                            "curatedRetracted", r.curatedRetracted()));
+                    return ResponseEntity.ok(Map.of(
+                            "deleted", true,
+                            "turnCount", r.turnCount(),
+                            "curatedRetracted", r.curatedRetracted()));
+                })
+                .orElseGet(() -> ResponseEntity.notFound().build());
     }
 
     // ── 청크 추가 게시판 — 제안 검토 ────────────────────────────────────────────

@@ -33,6 +33,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -69,6 +70,7 @@ class AdminControllerWebMvcTest {
     @MockitoBean CuratedSubmissionService submissionService;
     @MockitoBean RetrievalMetricsService retrievalMetricsService;
     @MockitoBean com.example.ragagent.service.ThreadAdminService threadAdminService;
+    @MockitoBean com.example.ragagent.audit.AuditLogger auditLogger;
     @MockitoBean CurrentUser currentUser;             // 승인/거부 시 reviewer id
     @MockitoBean AppProperties props;                 // SecurityConfig 의존
     @MockitoBean ThreadContextResolver threadContextResolver;
@@ -534,5 +536,60 @@ class AdminControllerWebMvcTest {
         mvc.perform(get("/admin/threads/ghost/turns").with(user(ADMIN)))
                 .andExpect(status().isOk())
                 .andExpect(content().string(containsString("턴이 없습니다")));
+    }
+
+    // ── §6.25 대화 삭제 ─────────────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("GET .../delete-preview — 확인 대화상자가 쓰는 다섯 숫자를 모두 돌려준다")
+    void deletePreview_returnsEveryNumberTheDialogShows() throws Exception {
+        when(threadAdminService.deletePreview("t1")).thenReturn(Optional.of(
+                new com.example.ragagent.service.ThreadAdminService.DeletePreview(
+                        "t1", "인덱싱 질문", "guest-a1b2c3d4e5f6", 15, 3, 4, 2)));
+
+        mvc.perform(get("/admin/threads/t1/delete-preview").with(user(ADMIN)))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("\"turnCount\":15")))
+                .andExpect(content().string(containsString("\"reusedOut\":3")))
+                .andExpect(content().string(containsString("\"diagCount\":4")))
+                .andExpect(content().string(containsString("\"curatedCount\":2")))
+                .andExpect(content().string(containsString("guest-a1b2c3d4e5f6")));
+    }
+
+    @Test
+    @DisplayName("GET .../delete-preview — 없는 대화는 404 (대화상자를 띄우지 않는다)")
+    void deletePreview_unknownThreadIs404() throws Exception {
+        when(threadAdminService.deletePreview("ghost")).thenReturn(Optional.empty());
+
+        mvc.perform(get("/admin/threads/ghost/delete-preview").with(user(ADMIN)))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
+    @DisplayName("DELETE /admin/threads/{id} — 삭제하고 소유자·턴 수·회수 건수를 감사 로그에 남긴다")
+    void deleteThread_deletesAndAudits() throws Exception {
+        when(threadAdminService.delete("t1")).thenReturn(Optional.of(
+                new com.example.ragagent.service.ThreadAdminService.DeleteResult("t1", "u1", 15, 2)));
+
+        mvc.perform(delete("/admin/threads/t1").with(user(ADMIN)).with(csrf()))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("\"curatedRetracted\":2")));
+
+        verify(auditLogger).log(eq("admin.thread.delete"), eq("t1"), argThat(d ->
+                "u1".equals(d.get("owner"))
+                        && Integer.valueOf(15).equals(d.get("turnCount"))
+                        && Integer.valueOf(2).equals(d.get("curatedRetracted"))));
+    }
+
+    /** 이미 없는 대화를 지웠다고 보고하면 운영자가 "지워졌다"고 믿는다 — 감사 로그도 남기지 않는다. */
+    @Test
+    @DisplayName("DELETE /admin/threads/{id} — 없는 대화는 404이고 감사 로그를 남기지 않는다")
+    void deleteThread_unknownThreadIs404AndNotAudited() throws Exception {
+        when(threadAdminService.delete("ghost")).thenReturn(Optional.empty());
+
+        mvc.perform(delete("/admin/threads/ghost").with(user(ADMIN)).with(csrf()))
+                .andExpect(status().isNotFound());
+
+        verifyNoInteractions(auditLogger);
     }
 }

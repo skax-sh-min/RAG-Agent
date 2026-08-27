@@ -335,6 +335,48 @@ class ManagementOnlyAuthorizationTest {
                 .andExpect(status().isForbidden());
     }
 
+    /**
+     * 남의 대화를 되돌릴 수 없게 지우는 엔드포인트다 — 게이트가 이 테스트 하나에 걸려 있다.
+     * {@code .hasRole("ADMIN")}이지 {@code .authenticated()}가 아니어야 하는 이유이기도 하다:
+     * {@code NoAuthAutoLoginFilter}의 게스트 principal 자체가 인증된 ROLE_USER 라서
+     * {@code .authenticated()} 였다면 여기를 그냥 통과한다.
+     */
+    @Test
+    @DisplayName("ROLE_USER DELETE /admin/threads/{id} — CSRF가 있어도 403")
+    void guestDeleteThread_isForbidden() throws Exception {
+        mvc.perform(delete("/admin/threads/t1").with(csrf())
+                        .with(user("guest").roles("USER")))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    @DisplayName("익명 DELETE /admin/threads/{id} — 로그인으로 리다이렉트")
+    void anonymousDeleteThread_isGated() throws Exception {
+        mvc.perform(delete("/admin/threads/t1").with(csrf()))
+                .andExpect(status().is3xxRedirection());
+    }
+
+    @Test
+    @DisplayName("ROLE_ADMIN DELETE /admin/threads/{id} — CSRF 없으면 403 (파괴적 작업에 CSRF 필수)")
+    void adminDeleteThreadWithoutCsrf_isForbidden() throws Exception {
+        mvc.perform(delete("/admin/threads/t1").with(user("admin").roles("ADMIN")))
+                .andExpect(status().isForbidden());
+    }
+
+    /**
+     * 양성 대조 — 위 403들이 "게이트가 막았다"인지 "그런 엔드포인트가 없다"인지 구분한다.
+     * 서비스 목이 빈 값을 주므로 컨트롤러까지 도달했다면 404 다: 403 이 아니라는 것이 요지.
+     */
+    @Test
+    @DisplayName("ROLE_ADMIN DELETE /admin/threads/{id} — CSRF 포함 시 컨트롤러까지 도달한다")
+    void adminDeleteThread_reachesController() throws Exception {
+        when(threadAdminService.delete("t1")).thenReturn(java.util.Optional.empty());
+
+        mvc.perform(delete("/admin/threads/t1").with(csrf())
+                        .with(user("admin").roles("ADMIN")))
+                .andExpect(status().isNotFound());
+    }
+
     @Test
     @DisplayName("ROLE_ADMIN POST /admin/submissions/{id}/approve — CSRF 포함 시 통과")
     void adminApproveSubmission_succeeds() throws Exception {

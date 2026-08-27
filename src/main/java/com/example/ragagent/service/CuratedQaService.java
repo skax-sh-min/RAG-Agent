@@ -200,6 +200,15 @@ public class CuratedQaService {
     }
 
     /**
+     * §6.25 — how many curated entries {@link #onThreadDeleted} would retract for this
+     * conversation. Read by the admin delete confirmation so the operator sees the knowledge cost
+     * of the delete before approving it, not after.
+     */
+    public int countActiveByThread(String userId, String threadId) {
+        return repository.findActiveByThread(userId, threadId).size();
+    }
+
+    /**
      * §6.25 — retracts every 👍-promoted entry of a conversation that is being deleted whole; the
      * thread-level counterpart of {@link #onUnlike}.
      *
