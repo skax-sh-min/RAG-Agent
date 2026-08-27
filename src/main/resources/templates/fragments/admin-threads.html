@@ -81,12 +81,19 @@
     </div>
 
     <div class="table-responsive" th:unless="${#lists.isEmpty(panel.threads)}">
-        <table class="table table-sm table-hover mb-0 small align-middle">
+        <!-- min-width 가 없으면 고정 폭 열 합계(~740px)가 좁은 창에서 테이블 폭을 다 먹고,
+             유연 열인 제목이 td 의 max-width:0 때문에 몇 px 로 눌려 한 글자만 남는다. 부모가
+             .table-responsive 이므로 넘치는 만큼은 가로 스크롤로 처리된다 — 제목을 읽을 수 없게
+             만드는 것보다 낫다. -->
+        <table class="table table-sm table-hover mb-0 small align-middle" style="min-width:940px;">
             <thead>
             <tr>
                 <th style="width:140px;">최종 활동</th>
-                <th>제목</th>
-                <th style="width:130px;">사용자</th>
+                <!-- 유연 폭 열에는 min-width 가 필요하다. td 의 max-width:0 은 말줄임(text-truncate)을
+                     켜기 위한 것인데, 나머지 열이 전부 고정 폭이면 브라우저가 이 열을 최소 폭으로
+                     눌러버려 제목이 한두 글자만 남는다(1400px 에서는 슬랙이 있어 드러나지 않는다). -->
+                <th style="min-width:200px;">제목</th>
+                <th style="width:130px; min-width:130px;">사용자</th>
                 <th style="width:50px;"  title="이 대화의 전체 턴 수">턴</th>
                 <th style="width:60px;"  title="검색이 실제로 돌아 진단 수치가 남은 턴 수 — 재사용·Direct·meta 턴은 여기서 빠집니다">진단</th>
                 <th style="width:70px;"  title="이 대화의 턴이 과거 답변을 재사용한 횟수">재사용함</th>
