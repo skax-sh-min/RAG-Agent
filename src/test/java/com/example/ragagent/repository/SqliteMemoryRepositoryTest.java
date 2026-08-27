@@ -48,6 +48,10 @@ class SqliteMemoryRepositoryTest {
         // 운영과 맞춘다 — DDL을 테스트에 복사하면 그쪽이 바뀔 때 조용히 어긋난다.
         // (memory.db 단독 모드에서는 vectorJdbcTemplate 가 primary 의 별칭이라 같은 걸 넘긴다.)
         new QuestionReuseRepository(jdbc, jdbc).init();
+        // 같은 이유로 thread_meta 도 실제 소유자에게 만들게 한다: findRecentRetrievalMetrics 가
+        // 대화 제목을 붙이려고 LEFT JOIN 한다(§6.25). 운영에서는 두 리포지토리의 @PostConstruct 가
+        // 모두 돌아 항상 함께 존재하고, 이 테스트만이 그렇지 않은 유일한 맥락이다.
+        new ThreadMetaRepository(jdbc).init();
     }
 
     /** 검색 출처 스냅샷 1건 — deleteTurn 이 자식 행까지 지우는지 보기 위한 최소 픽스처. */
@@ -263,6 +267,85 @@ class SqliteMemoryRepositoryTest {
         assertThat(repo.findRecentRetrievalMetrics(0, 2)).hasSize(2);
         assertThat(repo.findRecentRetrievalMetrics(4, 10)).hasSize(1);
         assertThat(repo.findRecentRetrievalMetrics(99, 10)).isEmpty();
+    }
+
+    // ── §6.25 진단 수치 필터 (사용자 / 대화) ────────────────────────────────────
+
+    /** 필터가 걸린 목록과 개수가 <b>같은 집합</b>을 봐야 한다. 페이지네이션 버튼은 크기 기반이라
+     *  개수만 어긋나도 아무것도 깨지지 않는다 — 그래서 눈치채기 어렵고, 그래서 고정한다. */
+    @Test
+    @DisplayName("사용자·대화 필터가 목록과 개수에 똑같이 걸린다")
+    void metricsFiltersApplyToBothListAndCount() {
+        long a = repo.addTurn("u1", "t1", "Q", "A", null, 0, 0, 0, null, 0, "N", null);
+        long b = repo.addTurn("u1", "t2", "Q", "A", null, 0, 0, 0, null, 0, "N", null);
+        long c = repo.addTurn("u2", "t3", "Q", "A", null, 0, 0, 0, null, 0, "N", null);
+        for (long id : new long[]{a, b, c}) repo.saveRetrievalMetrics(id, "[{\"label\":\"x\"}]");
+
+        assertThat(repo.findRecentRetrievalMetrics("u1", null, 0, 10)).hasSize(2);
+        assertThat(repo.countRetrievalMetrics("u1", null)).isEqualTo(2);
+
+        assertThat(repo.findRecentRetrievalMetrics(null, "t2", 0, 10)).hasSize(1);
+        assertThat(repo.countRetrievalMetrics(null, "t2")).isEqualTo(1);
+
+        // 공백은 "필터 없음"과 같게 취급된다 — SQL 에 도달하는 형태는 하나뿐이어야 한다.
+        assertThat(repo.countRetrievalMetrics("  ", "")).isEqualTo(3);
+    }
+
+    /** 회귀 가드 — 필터 없이 부른 결과가 이 기능 도입 전과 완전히 같아야 한다. */
+    @Test
+    @DisplayName("필터를 주지 않으면 예전 시그니처와 완전히 같은 목록·개수를 낸다")
+    void unfilteredCallsAreUnchanged() {
+        for (int i = 0; i < 3; i++) {
+            long id = repo.addTurn(UID, "t" + i, "Q" + i, "A", null, 0, 0, 0, null, 0, "N", null);
+            repo.saveRetrievalMetrics(id, "[{\"label\":\"s" + i + "\"}]");
+        }
+
+        assertThat(repo.findRecentRetrievalMetrics(0, 10))
+                .usingRecursiveComparison()
+                .isEqualTo(repo.findRecentRetrievalMetrics(null, null, 0, 10));
+        assertThat(repo.countRetrievalMetrics()).isEqualTo(repo.countRetrievalMetrics(null, null));
+    }
+
+    /** LEFT JOIN 이어야 하는 이유 — thread_meta 행이 없는 턴의 진단도 목록에 남아야 한다.
+     *  빠지면 목록과 "전체 N턴" 배지가 조용히 어긋난다. */
+    @Test
+    @DisplayName("대화(thread_meta) 행이 없는 턴도 진단 목록에 남고, 제목만 null 이다")
+    void orphanTurnStillAppearsWithNullTitle() {
+        long orphan = repo.addTurn(UID, "사라진-대화", "Q", "A", null, 0, 0, 0, null, 0, "N", null);
+        repo.saveRetrievalMetrics(orphan, "[{\"label\":\"x\"}]");
+
+        var rows = repo.findRecentRetrievalMetrics(null, null, 0, 10);
+
+        assertThat(rows).hasSize(1);
+        assertThat(rows.get(0).threadId()).isEqualTo("사라진-대화");
+        assertThat(rows.get(0).threadTitle()).isNull();
+        assertThat(repo.countRetrievalMetrics(null, null)).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("대화 제목·소유자가 진단 행에 함께 실린다")
+    void metricsRowCarriesOwnerAndThreadTitle() {
+        new ThreadMetaRepository(jdbc).save(new com.example.ragagent.model.ThreadMeta(
+                "t1", UID, "[latest] 인덱싱 질문", "latest",
+                "2026-01-01 00:00:00", "2026-01-02 00:00:00", "COST_FIRST", ""));
+        long id = repo.addTurn(UID, "t1", "Q", "A", null, 0, 0, 0, null, 0, "N", null);
+        repo.saveRetrievalMetrics(id, "[{\"label\":\"x\"}]");
+
+        var row = repo.findRecentRetrievalMetrics(null, null, 0, 10).get(0);
+
+        assertThat(row.userId()).isEqualTo(UID);
+        assertThat(row.threadId()).isEqualTo("t1");
+        assertThat(row.threadTitle()).isEqualTo("[latest] 인덱싱 질문");   // 접두 제거는 표시 계층의 몫
+    }
+
+    @Test
+    @DisplayName("distinctRetrievalMetricsUserIds — 진단이 있는 사용자만 (전체 대화 소유자와 다른 집합)")
+    void distinctUserIdsCoversOnlyOwnersWithMetrics() {
+        long withMetrics = repo.addTurn("u1", "t1", "Q", "A", null, 0, 0, 0, null, 0, "N", null);
+        repo.addTurn("u2", "t2", "Q", "A", null, 0, 0, 0, null, 0, "N", null);   // 진단 없음
+        repo.saveRetrievalMetrics(withMetrics, "[{\"label\":\"x\"}]");
+
+        assertThat(repo.distinctRetrievalMetricsUserIds()).containsExactly("u1");
     }
 
     @Test

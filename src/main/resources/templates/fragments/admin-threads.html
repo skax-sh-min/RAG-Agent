@@ -173,10 +173,11 @@
             <th style="width:50px;">모드</th>
             <th style="width:110px;">경로</th>
             <th style="width:60px;">피드백</th>
+            <th style="width:60px;"></th>
         </tr>
         </thead>
-        <tbody>
-        <tr th:each="t : ${turns}">
+        <tbody th:each="t : ${turns}">
+        <tr>
             <td class="text-muted text-nowrap" th:text="${t.askedAt}">2026-08-27</td>
             <td class="text-truncate" style="max-width:0;" th:text="${t.question}" th:title="${t.question}">질문</td>
             <td><span class="badge bg-secondary" th:text="${t.responseMode}">N</span></td>
@@ -191,6 +192,19 @@
                 <span th:if="${t.liked}">👍</span>
                 <span th:if="${t.disliked}">👎</span>
                 <span th:if="${!t.liked and !t.disliked}" class="text-muted">-</span>
+            </td>
+            <td>
+                <!-- 검색이 돈 턴만 볼 것이 있다. 진단 패널과 같은 표(공용 프래그먼트)를 쓴다. -->
+                <button class="btn btn-sm btn-outline-secondary py-0 px-2"
+                        th:if="${t.hasDiagnostics}" th:data-turn-id="${t.turnId}"
+                        onclick="toggleTurnSources(this.dataset.turnId)">출처</button>
+            </td>
+        </tr>
+        <tr class="d-none" th:if="${t.hasDiagnostics}" th:id="'turn-sources-' + ${t.turnId}">
+            <td colspan="6" class="p-0">
+                <div class="p-2 text-muted small text-center" th:id="'turn-sources-body-' + ${t.turnId}">
+                    <span class="spinner-border spinner-border-sm me-2"></span>불러오는 중...
+                </div>
             </td>
         </tr>
         </tbody>

@@ -875,10 +875,46 @@ function applyMetricsLimitFilter(sel) {
     loadRetrievalMetrics(0, +sel.value);
 }
 
-function loadRetrievalMetrics(offset, limit) {
-    fetch('/admin/retrieval-metrics?offset=' + offset + '&limit=' + limit, { headers: { 'HX-Request': 'true' } })
+/* 진단 패널의 필터 상태도 대화 목록과 같은 이유로 DOM 에서 읽는다: 재조회 때마다 패널 전체가
+   갈아끼워지므로 서버가 돌려준 마크업이 언제나 최신이고, 별도 변수를 두면 그 둘이 어긋난다.
+   대화 필터는 칩의 data 속성에 실려 온다. */
+function metricsFilterState() {
+    const body = document.getElementById('retrieval-metrics-body');
+    if (!body) return { userId: '', threadId: '' };
+    const userSel = body.querySelector('#metrics-user-filter');
+    const chipBtn = body.querySelector('[data-metrics-thread-id]');
+    return {
+        userId:   userSel ? userSel.value : '',
+        threadId: chipBtn ? chipBtn.dataset.metricsThreadId : ''
+    };
+}
+
+function loadRetrievalMetrics(offset, limit, overrides) {
+    const s = Object.assign(metricsFilterState(), overrides || {});
+    const body = document.getElementById('retrieval-metrics-body');
+    const effLimit = limit || (body && body.querySelector('select[onchange^="applyMetricsLimit"]')
+        ? +body.querySelector('select[onchange^="applyMetricsLimit"]').value : 20);
+    const url = '/admin/retrieval-metrics?offset=' + (offset || 0) + '&limit=' + effLimit
+              + (s.userId   ? '&userId='   + encodeURIComponent(s.userId)   : '')
+              + (s.threadId ? '&threadId=' + encodeURIComponent(s.threadId) : '');
+    fetch(url, { headers: { 'HX-Request': 'true' } })
         .then(r => r.text())
         .then(html => { document.getElementById('retrieval-metrics-body').innerHTML = html; });
+}
+
+/* 사용자와 대화 필터는 배타적이다 — 한 대화는 소유자가 한 명이라, 둘을 동시에 들고 있으면
+   화면 어디에도 원인이 없는 빈 목록에 도달할 수 있다. 서버도 같은 규칙을 따로 강제한다. */
+function applyMetricsUserFilter(sel) {
+    loadRetrievalMetrics(0, null, { userId: sel.value, threadId: '' });
+}
+
+function clearMetricsThreadFilter() {
+    loadRetrievalMetrics(0, null, { threadId: '', userId: '' });
+}
+
+/* 진단 행의 '대화' 링크 → 그 대화로 좁힌다 (진단 → 대화 방향). */
+function filterMetricsByThread(threadId) {
+    loadRetrievalMetrics(0, null, { threadId: threadId, userId: '' });
 }
 
 /* §6.25 대화 목록 패널 — 위 패널들과 같은 이유로 페이지 레벨에 둔다(프래그먼트의 <script>는
@@ -932,12 +968,33 @@ function toggleThreadTurns(threadId) {
             '<div class="p-2 text-danger small text-center">턴 목록을 불러오지 못했습니다.</div>'; });
 }
 
-/* 이 대화로 좁힌 검색 진단 수치 — 실제 필터 배선은 Step 5. 지금은 진단 카드를 펼치기만 한다. */
+/* 대화 행의 '진단' → 진단 패널을 그 대화로 좁혀 연다 (대화 → 진단 방향).
+   두 패널의 필터 상태는 공유하지 않는다 — 각각 독립 지연 로딩 카드라 한쪽 선택이 다른 쪽을
+   조용히 바꾸면 예측이 안 된다. 유일한 연결이 이 명시적 threadId 전달이다. */
 function showThreadDiagnostics(threadId) {
     const card = document.getElementById('retrieval-metrics-card');
     if (!card) return;
     card.open = true;
+    loadRetrievalMetrics(0, null, { threadId: threadId, userId: '' });
     card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+/* 드릴다운의 턴별 '출처' — 진단 패널과 같은 공용 표 프래그먼트를 지연 로딩한다. */
+function toggleTurnSources(turnId) {
+    const row  = document.getElementById('turn-sources-' + turnId);
+    const body = document.getElementById('turn-sources-body-' + turnId);
+    if (!row || !body) return;
+
+    const opening = row.classList.contains('d-none');
+    row.classList.toggle('d-none');
+    if (!opening || body.dataset.loaded === '1') return;
+
+    fetch('/admin/retrieval-metrics/turns/' + encodeURIComponent(turnId) + '/sources',
+          { headers: { 'HX-Request': 'true' } })
+        .then(r => r.text())
+        .then(html => { body.innerHTML = html; body.dataset.loaded = '1'; })
+        .catch(() => { body.innerHTML =
+            '<div class="p-2 text-danger small text-center">출처를 불러오지 못했습니다.</div>'; });
 }
 
 /* 대화 삭제 — 되돌릴 수 없고 남의 대화에까지 닿는다.

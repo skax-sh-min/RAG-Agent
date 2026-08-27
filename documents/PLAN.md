@@ -33,7 +33,7 @@
 | 순위 | 항목 | 현재 상태 |
 |---|---|---|
 | 1 | **§6.15 스토리지 쿼터**(전역 상한 B안, §6.2에서 이관) | 설계 완료, 구현 전 |
-| 2 | **§6.25 관리자 전체 대화 목록 조회·삭제 + 검색 진단 연결**(§7.3 일부 선반영) | **Step 1~4 완료(2026-08-27)** — 버그 픽스·조회 계층·패널·삭제. Step 5~6(진단 연결·표시 정리) 남음. 새 스키마 0개 |
+| 2 | **§6.25 관리자 전체 대화 목록 조회·삭제 + 검색 진단 연결**(§7.3 일부 선반영) | **Step 1~5 완료(2026-08-27)**. Step 6(KST 표시 통일·답변 원문 보기+감사)만 남음. 새 스키마 0개 |
 | 3 | 운영 준비 잔여 — SQLite 백업 자동화(Litestream/cron), Caddy 인증서 만료 모니터링 | 미착수 |
 | 4 | §6.24 `4-c` — 검색 부스트 상향 | 부스트 기본값이 0이라 미착수. 올리려면 `MAX_EVAL_EXCERPT_CHARS` 상향이 **같은 변경에** 선행돼야 한다(§6.24) |
 | 5 | §9.4 — CADDY 하위호환 별칭 | 선택, 낮은 우선순위 |
@@ -476,7 +476,7 @@ conversation_turns.asked_at = Instant.now() @ UTC      → UTC
 | 2 | ~~조회 계층 — `ThreadAdminService` + `ThreadAdminRow` record~~ ✅ **완료 2026-08-27** | `ThreadAdminRepository` 신설(크로스 유저 조회를 `ThreadMetaRepository`에 섞지 않음). 재사용 두 축·정렬 enum·`findOwner` 포함 |
 | 3 | ~~패널 렌더 — `GET /admin/threads` + `fragments/admin-threads.html` + admin.html 카드~~ ✅ **완료 2026-08-27** | 드릴다운(`/turns`)까지. 실데이터 검증 결과는 아래 |
 | 4 | ~~삭제 — `DELETE /admin/threads/{threadId}` + 확인 대화상자 + 감사 로그~~ ✅ **완료 2026-08-27** | 확인 문구의 숫자는 `delete-preview` 로 클릭 시점 재조회 |
-| 5 | 진단 패널 확장 — `사용자` 열 + `userId`/`threadId` 필터(+ `count`도 같은 필터) + 필터 칩 + 공용 `sourceTable` 프래그먼트 + 양방향 버튼 + C 턴 "해당 없음" | 유일하게 **기존 화면을 고치는** 단계 — 회귀 주의(`null, null` 위임) |
+| 5 | ~~진단 패널 확장 — `사용자` 열 + `userId`/`threadId` 필터 + 필터 칩 + 공용 `sourceTable` + 양방향 버튼 + C 턴 "해당 없음"~~ ✅ **완료 2026-08-27** | 회귀 가드 포함(`null, null` 위임이 예전과 동일한 목록·개수를 낸다) |
 | 6 | 표시 정리 — KST 변환(두 패널 공통), 고아 턴 카운트, 답변 원문 보기 + `admin.thread.read` 감사 | |
 
 **삭제 엔드포인트 설계**:
@@ -509,6 +509,16 @@ conversation_turns.asked_at = Instant.now() @ UTC      → UTC
 - 삭제 후에는 행 하나를 지우지 않고 **목록 전체를 다시 그린다** — 요약 스트립·전체 개수·페이지 경계가 전부 움직이므로 행만 빼면 나머지 숫자가 삭제 전 상태로 남는다.
 
 **실데이터 삭제 검증**: 사본 DB에서 좋아요 승격 행 하나를 심고 UI 버튼으로 삭제해, ① `thread_meta`·`conversation_turns`·`turn_source_ref` 제거 ② **like 행 `inactive` 전환 + 벡터 제거** ③ **manual(제안) 행은 `active` 유지** ④ 감사 로그에 `owner`/`turnCount`/`curatedRetracted` 기록까지 확인했다. ③이 `findActiveByThread`의 `source_turn_id IS NOT NULL` 가드가 실제로 하는 일이다.
+
+**Step 5 완료 (2026-08-27)** — 진단 패널 확장. 6단계 중 유일하게 기존 화면을 고치는 단계였고, 나온 것:
+
+- **컨벤션 테스트가 주석까지 본다**: `ResponseModeBranchConventionTest`는 텍스트 스캔이라 `attributionApplies()`의 **javadoc 안에 쓴** 금지 형태(`== ResponseMode.C`)를 그대로 잡아 빌드를 깼다. 가드를 주석 제외하도록 완화하지 않고 문구를 고쳤다 — 무딘 것이 그 가드의 장점이다.
+- **`SqliteMemoryRepository`가 `thread_meta`를 읽게 됐다**(대화 제목 LEFT JOIN). `clearHistory()`가 `turn_source_ref`에 대해 이미 하던 것과 같은 교차 참조이고, 운영에선 두 리포지토리의 `@PostConstruct`가 모두 돌아 항상 함께 존재한다. 그 전제가 깨지는 유일한 맥락이 격리된 리포지토리 테스트라, 거기서는 DDL을 복사하지 않고 **소유자의 `init()`을 부른다**(같은 파일의 `QuestionReuseRepository` 선례).
+- **LEFT JOIN 이어야 하는 이유가 데이터로 확인됐다**: `thread_meta` 행이 없는 턴의 진단도 목록에 남아야 한다. INNER 였다면 목록에서만 빠지고 "전체 N턴" 배지는 그대로라 조용히 어긋난다.
+- 두 필터의 **배타 규칙은 서버와 클라이언트 양쪽에** 있다(컨트롤러가 `threadId` 우선으로 `userId`를 떨구고, JS 도 같은 규칙). 한쪽만 두면 URL 을 직접 친 경우와 버튼으로 들어온 경우가 갈린다.
+- 공용 `sourceTable` 프래그먼트의 두 번째 소비자는 **대화 드릴다운의 턴별 `출처`** 다 — 이걸 안 붙이면 "추출"이 파일만 옮긴 것이 된다.
+
+**실데이터 확인**: 진단 3건(N·C·타 사용자)을 심어 ① C 턴 `해당 없음`·N 턴 `1/3 ⚠` ② 사용자 필터 시 목록과 배지가 **함께** 1로 ③ 대화 필터 시 칩 표시 + 사용자 select 비활성·해제 ④ 대화 행 `진단` → 그 대화로 좁힘 ⑤ 드릴다운 `출처`가 진단 패널과 같은 표를 지연 로딩 — 전부 확인.
 
 **함정 / 경계**:
 - **`/api/v1/**` 밑에 두지 말 것** — 그 접두사는 CSRF 면제 + management-only에서 guest-open이다. 제안 pending-count를 `/admin/` 밑에 둔 것과 **완전히 같은 이유**로, 여기 두면 전 사용자 대화 목록이 누구에게나 열린다. `/ui/threads`(사용자 사이드바)와도 다른 엔드포인트다.

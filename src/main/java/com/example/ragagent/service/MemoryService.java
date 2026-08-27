@@ -178,6 +178,20 @@ public class MemoryService {
                 .configure(com.fasterxml.jackson.databind.DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
     }
 
+    public List<MemoryRepository.MetricsRow> findRecentRetrievalMetrics(
+            String userId, String threadId, int offset, int limit) {
+        return repository.findRecentRetrievalMetrics(userId, threadId, offset, limit);
+    }
+
+    /** §6.25 — owners that have diagnostics, for the panel's user filter. */
+    public List<String> distinctRetrievalMetricsUserIds() {
+        return repository.distinctRetrievalMetricsUserIds();
+    }
+
+    public int countRetrievalMetrics(String userId, String threadId) {
+        return repository.countRetrievalMetrics(userId, threadId);
+    }
+
     public List<MemoryRepository.MetricsRow> findRecentRetrievalMetrics(int offset, int limit) {
         return repository.findRecentRetrievalMetrics(offset, limit);
     }

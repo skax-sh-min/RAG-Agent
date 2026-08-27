@@ -19,6 +19,32 @@
         </select>
     </div>
 
+    <!-- 필터 바. 사용자와 대화는 배타적이다(한 대화는 소유자가 한 명) — 그래서 대화 칩이 걸려
+         있으면 사용자 select 를 잠그고, 사용자를 바꾸면 대화 필터가 풀린다. 둘을 동시에 들고
+         있으면 화면 어디에도 원인이 없는 빈 목록에 도달할 수 있다. -->
+    <div class="px-3 py-2 border-bottom d-flex align-items-center flex-wrap gap-2 small">
+        <label class="text-muted">사용자</label>
+        <select class="form-select form-select-sm" id="metrics-user-filter" style="max-width:200px;"
+                th:disabled="${metricThreadFilter != null}"
+                onchange="applyMetricsUserFilter(this)">
+            <option value="" th:selected="${metricUserFilter == null}">전체</option>
+            <option th:each="u : ${metricUserIds}" th:value="${u}" th:text="${u}"
+                    th:selected="${u == metricUserFilter}">u1</option>
+        </select>
+
+        <!-- 걸린 필터를 눈에 보이게 둔다 — 필터를 잊고 "왜 최근 턴이 안 보이지"로 오해하는 것이
+             이 패널에서 가장 흔해질 실수다. -->
+        <span th:if="${metricThreadFilter != null}"
+              class="badge bg-info-subtle text-info-emphasis d-inline-flex align-items-center gap-1">
+            대화: <span th:text="${metricThreadLabel}">제목</span>
+            <!-- data-metrics-thread-id 는 표시용이 아니라 상태다: 재조회 때 현재 걸린 대화
+                 필터를 JS 가 여기서 다시 읽는다(metricsFilterState). -->
+            <button type="button" class="btn-close btn-close-sm" style="font-size:0.6rem;"
+                    th:data-metrics-thread-id="${metricThreadFilter}"
+                    title="대화 필터 해제" onclick="clearMetricsThreadFilter()"></button>
+        </span>
+    </div>
+
     <div class="px-3 py-2 border-bottom d-flex align-items-center gap-2 small text-muted"
          th:if="${#lists.size(metricTurns) > 0 or offset > 0}">
         <button class="btn btn-sm btn-outline-secondary py-0 px-2"
@@ -28,6 +54,7 @@
         <span>
             <span th:text="${offset + 1}">1</span> –
             <span th:text="${offset + #lists.size(metricTurns)}">20</span>
+            / <span th:text="${metricsTotal}">0</span>
         </span>
         <button class="btn btn-sm btn-outline-secondary py-0 px-2"
                 th:disabled="${#lists.size(metricTurns) < limit}"
@@ -36,15 +63,24 @@
     </div>
 
     <div th:if="${#lists.isEmpty(metricTurns)}" class="text-muted small p-3 text-center">
-        기록된 검색 진단 수치가 없습니다. RAG 질문을 한 번 이상 해야 쌓입니다.
+        <span th:if="${metricThreadFilter != null or metricUserFilter != null}">
+            이 필터에 해당하는 진단 수치가 없습니다.
+        </span>
+        <span th:unless="${metricThreadFilter != null or metricUserFilter != null}">
+            기록된 검색 진단 수치가 없습니다. RAG 질문을 한 번 이상 해야 쌓입니다.
+        </span>
     </div>
 
     <div class="table-responsive" th:unless="${#lists.isEmpty(metricTurns)}">
-        <table class="table table-sm table-hover mb-0 small align-middle">
+        <!-- 대화 목록 표와 같은 이유로 min-width 를 준다: 고정 폭 열 합계가 창을 다 먹으면
+             유연 열(질문·대화)이 max-width:0 때문에 몇 px 로 눌린다. -->
+        <table class="table table-sm table-hover mb-0 small align-middle" style="min-width:940px;">
             <thead>
             <tr>
                 <th style="width:130px;">시각</th>
-                <th>질문</th>
+                <th style="min-width:200px;">질문</th>
+                <th style="min-width:140px;">대화</th>
+                <th style="width:120px; min-width:120px;">사용자</th>
                 <th style="width:60px;">모드</th>
                 <th style="width:90px;">최고 유사도</th>
                 <th style="width:110px;">사용/검색</th>
@@ -55,13 +91,28 @@
             <tr>
                 <td class="text-muted text-nowrap" th:text="${t.askedAt}">2026-08-16</td>
                 <td class="text-truncate" style="max-width:0;" th:text="${t.question}" th:title="${t.question}">질문</td>
-                <td><span class="badge bg-secondary" th:text="${t.responseMode} ?: '-'">M</span></td>
+                <!-- 이 턴이 어느 대화에서 나왔는지 — 클릭하면 그 대화로 좁힌다 -->
+                <td class="text-truncate" style="max-width:0;">
+                    <a href="#" class="link-secondary text-decoration-none"
+                       th:data-thread-id="${t.threadId}" th:title="${t.threadLabel}"
+                       onclick="event.preventDefault(); filterMetricsByThread(this.dataset.threadId);"
+                       th:text="${t.threadLabel}">대화</a>
+                </td>
+                <td class="text-truncate font-monospace text-muted" style="max-width:0; font-size:0.72rem;"
+                    th:text="${t.shortUserId}" th:title="${t.userId}">guest-…</td>
+                <td><span class="badge bg-secondary" th:text="${t.responseMode} ?: '-'">N</span></td>
                 <td th:text="${t.maxSimilarity != null} ? ${#numbers.formatDecimal(t.maxSimilarity, 1, 2)} : '-'">0.72</td>
-                <!-- 검색은 많이 했는데 답변이 거의 안 쓴 턴이 튜닝에서 가장 볼 만한 신호다 -->
+                <!-- 검색은 많이 했는데 답변이 거의 안 쓴 턴이 튜닝에서 가장 볼 만한 신호다.
+                     단, 창의(C) 턴은 평가기가 usedDocs 를 묻지 않아 지분이 구조적으로 0이므로
+                     0/N 대신 '해당 없음'으로 적는다 — 그렇지 않으면 영원히 쫓게 될 버그로 읽힌다. -->
                 <td>
-                    <span th:text="${t.usedSourceCount}">3</span>/<span th:text="${#lists.size(t.sources)}">8</span>
-                    <span class="text-warning" th:if="${t.usedSourceCount * 2 < #lists.size(t.sources)}"
-                          title="검색된 출처의 절반 이상이 답변에 반영되지 않았습니다 — topK 과다 또는 프롬프트 문제일 수 있습니다">⚠</span>
+                    <th:block th:if="${t.attributionApplies}">
+                        <span th:text="${t.usedSourceCount}">3</span>/<span th:text="${#lists.size(t.sources)}">8</span>
+                        <span class="text-warning" th:if="${t.usedSourceCount * 2 < #lists.size(t.sources)}"
+                              title="검색된 출처의 절반 이상이 답변에 반영되지 않았습니다 — topK 과다 또는 프롬프트 문제일 수 있습니다">⚠</span>
+                    </th:block>
+                    <span th:unless="${t.attributionApplies}" class="text-muted"
+                          title="창의(C) 모드는 평가기가 인용 문서를 묻지 않아 응답 참여도를 계산할 수 없습니다">해당 없음</span>
                 </td>
                 <td>
                     <button class="btn btn-sm btn-outline-secondary py-0 px-2"
@@ -72,32 +123,13 @@
                 </td>
             </tr>
             <tr class="d-none" th:id="'metrics-detail-' + ${t.turnId}">
-                <td colspan="6" class="bg-body-tertiary">
+                <td colspan="8" class="bg-body-tertiary">
                     <div class="small text-muted mb-1">
                         turn #<span th:text="${t.turnId}">1</span>
                         · provider <span th:text="${t.provider} ?: '-'">local</span>
                     </div>
-                    <table class="table table-sm mb-0 small">
-                        <thead>
-                        <tr>
-                            <th>출처</th>
-                            <th style="width:80px;">유사도</th>
-                            <th style="width:80px;">검색기여</th>
-                            <th style="width:120px;">축별 순위</th>
-                            <th style="width:80px;">응답참여</th>
-                        </tr>
-                        </thead>
-                        <tbody>
-                        <tr th:each="s : ${t.sources}">
-                            <td class="text-truncate" style="max-width:0;" th:text="${s.label}" th:title="${s.label}">문서</td>
-                            <!-- null = 측정 안 됨(벡터 축에 없던 청크 등). 0으로 보이면 안 되므로 '-' -->
-                            <td th:text="${s.similarity != null} ? ${#numbers.formatDecimal(s.similarity, 1, 2)} : '-'">0.72</td>
-                            <td th:text="${s.retrievalShare != null} ? ${#numbers.formatDecimal(s.retrievalShare * 100, 1, 0)} + '%' : '-'">18%</td>
-                            <td class="text-muted" th:text="${s.axisRanks} ?: '-'">vec:2, bm25:5</td>
-                            <td th:text="${s.answerShare != null} ? ${#numbers.formatDecimal(s.answerShare * 100, 1, 0)} + '%' : '-'">31%</td>
-                        </tr>
-                        </tbody>
-                    </table>
+                    <!-- 출처별 표는 대화 목록 패널과 공유한다 (fragments/admin-source-table) -->
+                    <th:block th:replace="~{fragments/admin-source-table :: sourceTable(${t.sources})}"></th:block>
                 </td>
             </tr>
             </tbody>

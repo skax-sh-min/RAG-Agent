@@ -231,14 +231,40 @@ public class AdminController {
      * it is a deployment-wide operator view, gated by {@code /admin/**}'s ROLE_ADMIN.
      */
     @GetMapping("/admin/retrieval-metrics")
-    public String retrievalMetricsPanel(@RequestParam(defaultValue = "0")  int offset,
+    public String retrievalMetricsPanel(@RequestParam(required = false) String userId,
+                                        @RequestParam(required = false) String threadId,
+                                        @RequestParam(defaultValue = "0")  int offset,
                                         @RequestParam(defaultValue = "20") int limit,
                                         Model model) {
-        model.addAttribute("metricTurns",  retrievalMetricsService.recent(offset, limit));
-        model.addAttribute("metricsTotal", retrievalMetricsService.count());
+        // §6.25 — the two filters are mutually exclusive by construction (a conversation belongs
+        // to exactly one owner), so a threadId wins and the user filter is dropped. Holding both
+        // would let the panel land on a silently empty list whose cause is nowhere on screen.
+        String user = (threadId != null && !threadId.isBlank()) ? null : userId;
+
+        model.addAttribute("metricTurns",  retrievalMetricsService.recent(user, threadId, offset, limit));
+        model.addAttribute("metricsTotal", retrievalMetricsService.count(user, threadId));
+        model.addAttribute("metricUserIds", retrievalMetricsService.userIds());
+        model.addAttribute("metricUserFilter", user);
+        model.addAttribute("metricThreadFilter", threadId);
+        // 대화 필터가 걸렸을 때 칩에 보여줄 이름 — id 만으로는 어느 대화인지 알 수 없다.
+        model.addAttribute("metricThreadLabel",
+                threadId == null || threadId.isBlank() ? null
+                        : threadAdminService.deletePreview(threadId)
+                                .map(ThreadAdminService.DeletePreview::displayTitle).orElse(threadId));
         model.addAttribute("offset", offset);
         model.addAttribute("limit",  limit);
         return "fragments/admin-retrieval-metrics :: panel";
+    }
+
+    /**
+     * The sources of one turn — the conversation panel's per-turn 출처 view. Renders the same
+     * shared table fragment the diagnostics panel uses, so the two never drift on what the
+     * columns mean.
+     */
+    @GetMapping("/admin/retrieval-metrics/turns/{turnId}/sources")
+    public String turnSources(@PathVariable long turnId, Model model) {
+        model.addAttribute("sources", retrievalMetricsService.sourcesForTurn(turnId));
+        return "fragments/admin-source-table :: standalone";
     }
 
     // ── §6.25 대화 목록 (전 사용자) ─────────────────────────────────────────────

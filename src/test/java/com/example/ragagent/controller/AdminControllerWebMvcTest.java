@@ -35,6 +35,7 @@ import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -536,6 +537,93 @@ class AdminControllerWebMvcTest {
         mvc.perform(get("/admin/threads/ghost/turns").with(user(ADMIN)))
                 .andExpect(status().isOk())
                 .andExpect(content().string(containsString("턴이 없습니다")));
+    }
+
+    // ── §6.25 진단 패널 확장 ─────────────────────────────────────────────────────
+
+    private static com.example.ragagent.service.RetrievalMetricsService.TurnMetrics metricTurn(
+            long turnId, String mode, String userId, String threadId, String threadTitle) {
+        var src = new com.example.ragagent.model.SourceRef(
+                "doc.md | 1.2", "미리보기", "c1", "d1", 3, 0.72, 0.18, "vec:2", 0.31, null);
+        return new com.example.ragagent.service.RetrievalMetricsService.TurnMetrics(
+                turnId, "2026-08-27 05:22:00", "청크 분할 전략", mode, "local",
+                List.of(src), 0.72, 1, userId, threadId, threadTitle);
+    }
+
+    private void stubMetrics(com.example.ragagent.service.RetrievalMetricsService.TurnMetrics... turns) {
+        when(retrievalMetricsService.recent(any(), any(), anyInt(), anyInt()))
+                .thenReturn(List.of(turns));
+        when(retrievalMetricsService.count(any(), any())).thenReturn(turns.length);
+        when(retrievalMetricsService.userIds()).thenReturn(List.of("u1"));
+    }
+
+    @Test
+    @DisplayName("GET /admin/retrieval-metrics — 사용자·대화 열과 공용 출처 표를 렌더한다")
+    void metricsPanel_rendersOwnerThreadAndSharedSourceTable() throws Exception {
+        stubMetrics(metricTurn(7L, "N", "guest-a1b2c3d4e5f6", "t1", "[latest] 인덱싱 질문"));
+
+        mvc.perform(get("/admin/retrieval-metrics").with(user(ADMIN)))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("사용자")))
+                .andExpect(content().string(containsString("guest-a1b2c3d4e5f6")))
+                .andExpect(content().string(containsString("인덱싱 질문")))
+                // 공용 프래그먼트가 실제로 끼워졌는지 — 열 이름은 그쪽에만 있다
+                .andExpect(content().string(containsString("검색기여")))
+                .andExpect(content().string(containsString("축별 순위")));
+    }
+
+    /**
+     * 한 대화는 소유자가 한 명이므로 두 필터를 동시에 들면 화면 어디에도 원인이 없는 빈 목록에
+     * 도달할 수 있다. 서버가 threadId 를 우선하고 사용자 필터를 떨어뜨리는 것을 고정한다.
+     */
+    @Test
+    @DisplayName("GET /admin/retrieval-metrics — threadId 가 오면 userId 는 무시된다(배타)")
+    void metricsPanel_threadFilterWinsOverUserFilter() throws Exception {
+        stubMetrics();
+        when(threadAdminService.deletePreview("t1")).thenReturn(Optional.empty());
+
+        mvc.perform(get("/admin/retrieval-metrics")
+                        .param("userId", "u1").param("threadId", "t1")
+                        .with(user(ADMIN)))
+                .andExpect(status().isOk());
+
+        verify(retrievalMetricsService).recent(isNull(), eq("t1"), eq(0), eq(20));
+        verify(retrievalMetricsService).count(isNull(), eq("t1"));
+    }
+
+    @Test
+    @DisplayName("GET /admin/retrieval-metrics — 사용자만 오면 그대로 전달된다")
+    void metricsPanel_userFilterPassesThrough() throws Exception {
+        stubMetrics();
+
+        mvc.perform(get("/admin/retrieval-metrics").param("userId", "u1").with(user(ADMIN)))
+                .andExpect(status().isOk());
+
+        verify(retrievalMetricsService).recent(eq("u1"), isNull(), eq(0), eq(20));
+        verify(retrievalMetricsService).count(eq("u1"), isNull());
+    }
+
+    @Test
+    @DisplayName("GET .../turns/{turnId}/sources — 대화 패널이 쓰는 공용 출처 표를 낸다")
+    void turnSources_rendersSharedFragment() throws Exception {
+        when(retrievalMetricsService.sourcesForTurn(7L)).thenReturn(List.of(
+                new com.example.ragagent.model.SourceRef(
+                        "doc.md | 1.2", "미리보기", "c1", "d1", 3, 0.72, 0.18, "vec:2", 0.31, null)));
+
+        mvc.perform(get("/admin/retrieval-metrics/turns/7/sources").with(user(ADMIN)))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("검색기여")))
+                .andExpect(content().string(containsString("doc.md | 1.2")));
+    }
+
+    @Test
+    @DisplayName("GET .../turns/{turnId}/sources — 출처가 없으면 빈 상태를 렌더한다")
+    void turnSources_emptyRendersPlaceholder() throws Exception {
+        when(retrievalMetricsService.sourcesForTurn(9L)).thenReturn(List.of());
+
+        mvc.perform(get("/admin/retrieval-metrics/turns/9/sources").with(user(ADMIN)))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("출처 정보가 없습니다")));
     }
 
     // ── §6.25 대화 삭제 ─────────────────────────────────────────────────────────

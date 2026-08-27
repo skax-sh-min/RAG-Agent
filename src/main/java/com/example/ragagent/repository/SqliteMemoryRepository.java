@@ -351,19 +351,40 @@ public class SqliteMemoryRepository implements MemoryRepository {
     }
 
     @Override
-    public List<MetricsRow> findRecentRetrievalMetrics(int offset, int limit) {
-        return jdbc.query(
-                "SELECT id, asked_at, question, response_mode, provider, retrieval_metrics " +
-                "FROM conversation_turns WHERE retrieval_metrics IS NOT NULL " +
-                "ORDER BY id DESC LIMIT ? OFFSET ?",
+    public List<MetricsRow> findRecentRetrievalMetrics(String userId, String threadId,
+                                                       int offset, int limit) {
+        // Reads thread_meta, which ThreadMetaRepository owns — the same cross-repository reach
+        // clearHistory() already makes for turn_source_ref. Both tables are created by a
+        // @PostConstruct that always runs, so the only context lacking one is an isolated
+        // repository test, which inits the owner explicitly rather than copying its DDL.
+        //
+        // LEFT JOIN, not JOIN: a turn whose thread_meta row is gone (see ThreadAdminRepository's
+        // orphan count) must still appear here — its diagnostics are as valid as any other's, and
+        // dropping it would make the panel silently disagree with its own "전체 N턴" badge.
+        StringBuilder sql = new StringBuilder(
+                "SELECT t.id, t.asked_at, t.question, t.response_mode, t.provider, " +
+                "       t.retrieval_metrics, t.user_id, t.thread_id, m.title AS thread_title " +
+                "  FROM conversation_turns t " +
+                "  LEFT JOIN thread_meta m ON m.thread_id = t.thread_id AND m.user_id = t.user_id " +
+                " WHERE t.retrieval_metrics IS NOT NULL");
+        List<Object> args = new java.util.ArrayList<>(4);
+        appendMetricsFilters(sql, args, userId, threadId);
+        sql.append(" ORDER BY t.id DESC LIMIT ? OFFSET ?");
+        args.add(limit);
+        args.add(offset);
+
+        return jdbc.query(sql.toString(),
                 (rs, n) -> new MetricsRow(
                         rs.getLong("id"),
                         rs.getString("asked_at"),
                         rs.getString("question"),
                         rs.getString("response_mode"),
                         rs.getString("provider"),
-                        rs.getString("retrieval_metrics")),
-                limit, offset);
+                        rs.getString("retrieval_metrics"),
+                        rs.getString("user_id"),
+                        rs.getString("thread_id"),
+                        rs.getString("thread_title")),
+                args.toArray());
     }
 
     @Override
@@ -398,10 +419,37 @@ public class SqliteMemoryRepository implements MemoryRepository {
     }
 
     @Override
-    public int countRetrievalMetrics() {
-        Integer n = jdbc.queryForObject(
-                "SELECT COUNT(*) FROM conversation_turns WHERE retrieval_metrics IS NOT NULL",
-                Integer.class);
+    public int countRetrievalMetrics(String userId, String threadId) {
+        StringBuilder sql = new StringBuilder(
+                "SELECT COUNT(*) FROM conversation_turns t WHERE t.retrieval_metrics IS NOT NULL");
+        List<Object> args = new java.util.ArrayList<>(2);
+        appendMetricsFilters(sql, args, userId, threadId);
+        Integer n = jdbc.queryForObject(sql.toString(), Integer.class, args.toArray());
         return n == null ? 0 : n;
+    }
+
+    @Override
+    public List<String> distinctRetrievalMetricsUserIds() {
+        return jdbc.queryForList(
+                "SELECT DISTINCT user_id FROM conversation_turns " +
+                "WHERE retrieval_metrics IS NOT NULL ORDER BY user_id",
+                String.class);
+    }
+
+    /**
+     * The two optional filters, appended identically to the list and the count — if they ever
+     * diverge the panel's "전체 N턴" badge starts describing a different set than the rows under it.
+     * Blank is treated as absent so one "no filter" form reaches SQL.
+     */
+    private static void appendMetricsFilters(StringBuilder sql, List<Object> args,
+                                             String userId, String threadId) {
+        if (userId != null && !userId.isBlank()) {
+            sql.append(" AND t.user_id = ?");
+            args.add(userId);
+        }
+        if (threadId != null && !threadId.isBlank()) {
+            sql.append(" AND t.thread_id = ?");
+            args.add(threadId);
+        }
     }
 }

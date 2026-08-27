@@ -104,10 +104,33 @@ public interface MemoryRepository {
      * is behaving across the deployment, gated by {@code /admin/**}'s ROLE_ADMIN like every other
      * panel there.
      */
-    List<MetricsRow> findRecentRetrievalMetrics(int offset, int limit);
+    List<MetricsRow> findRecentRetrievalMetrics(String userId, String threadId,
+                                                int offset, int limit);
 
-    /** Total turns carrying diagnostics — for the panel's pagination. */
-    int countRetrievalMetrics();
+    /** Unfiltered — the pre-§6.25 behaviour, preserved as the one-line delegation so every
+     *  existing caller keeps producing exactly the same list, order and count. */
+    default List<MetricsRow> findRecentRetrievalMetrics(int offset, int limit) {
+        return findRecentRetrievalMetrics(null, null, offset, limit);
+    }
+
+    /**
+     * Total turns carrying diagnostics — for the panel's pagination and its "전체 N턴" badge.
+     *
+     * <p>Takes the <b>same two filters</b> as {@link #findRecentRetrievalMetrics}: filter the list
+     * without filtering the count and the badge starts describing a set the operator isn't looking
+     * at. The pagination buttons are size-based, so nothing would visibly break — which is exactly
+     * why the mismatch would go unnoticed.
+     */
+    int countRetrievalMetrics(String userId, String threadId);
+
+    default int countRetrievalMetrics() {
+        return countRetrievalMetrics(null, null);
+    }
+
+    /** Owners that actually have diagnostics — the panel's user dropdown. Deliberately a
+     *  different set from {@code ThreadAdminRepository.distinctUserIds()} (all conversation
+     *  owners): offering a user with no diagnostics yields an empty list the moment it's picked. */
+    List<String> distinctRetrievalMetricsUserIds();
 
     /**
      * Raw diagnostics blobs for the given turns, keyed by turn id — backs restoring the numbers
@@ -130,9 +153,25 @@ public interface MemoryRepository {
      */
     Map<Long, String> findVerificationsByTurnIds(List<Long> turnIds);
 
-    /** One row of the {@code /admin} diagnostics panel; {@code metricsJson} is parsed by the service. */
+    /**
+     * One row of the {@code /admin} diagnostics panel; {@code metricsJson} is parsed by the service.
+     *
+     * <p>{@code userId}/{@code threadId}/{@code threadTitle} (§6.25) are what let a diagnostics row
+     * say <em>whose</em> question it was and which conversation it came from — the panel is a flat
+     * cross-user list, and without them a row cannot be traced back to anything.
+     * {@code threadTitle} is null for a turn whose {@code thread_meta} row is gone.
+     */
     record MetricsRow(long turnId, String askedAt, String question, String responseMode,
-                      String provider, String metricsJson) {}
+                      String provider, String metricsJson,
+                      String userId, String threadId, String threadTitle) {
+
+        /** Pre-§6.25 shape — used where the extra three are genuinely unknown, e.g.
+         *  {@code RetrievalMetricsService.enrich()} re-parsing a single stored blob. */
+        public MetricsRow(long turnId, String askedAt, String question, String responseMode,
+                          String provider, String metricsJson) {
+            this(turnId, askedAt, question, responseMode, provider, metricsJson, null, null, null);
+        }
+    }
 
     record Turn(long id, String question, String answer,
                 String askedAt, String answeredAt,
