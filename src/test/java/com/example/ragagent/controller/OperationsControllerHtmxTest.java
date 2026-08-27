@@ -1,6 +1,7 @@
 package com.example.ragagent.controller;
 
 import org.junit.jupiter.api.parallel.ResourceLock;
+import org.mockito.InOrder;
 
 import com.example.ragagent.audit.AuditLogger;
 import com.example.ragagent.config.AppProperties;
@@ -29,6 +30,9 @@ import java.util.Optional;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.argThat;
+import static org.mockito.Mockito.inOrder;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
@@ -71,6 +75,36 @@ class OperationsControllerHtmxTest {
         mvc.perform(delete("/ui/threads/t1")
                         .with(csrf()))
                 .andExpect(status().isOk());
+    }
+
+    /**
+     * §6.25 — 대화 삭제가 그 대화의 좋아요 큐레이션을 회수하지 않으면, 대화가 사라진 뒤에도
+     * curated_qa 행과 벡터가 남아 계속 검색에 기여한다(turn 단위 {@code deleteTurn} 이 이미
+     * {@code onUnlike} 로 막고 있는 것과 같은 고아 문제). 세 호출의 <b>순서까지</b> 고정한다 —
+     * 회수가 기록 삭제보다 먼저다.
+     */
+    @Test
+    @DisplayName("DELETE /ui/threads/{id} — 기록 삭제 전에 큐레이션을 회수한다")
+    void deleteThread_retractsCuratedEntriesBeforeClearingHistory() throws Exception {
+        mvc.perform(delete("/ui/threads/t1").with(csrf()))
+                .andExpect(status().isOk());
+
+        InOrder order = inOrder(curatedQaService, memoryService, threadMetaService);
+        order.verify(curatedQaService).onThreadDeleted(any(), eq("t1"));
+        order.verify(memoryService).clearHistory(any(), eq("t1"));
+        order.verify(threadMetaService).delete(any(), eq("t1"));
+    }
+
+    @Test
+    @DisplayName("DELETE /ui/threads/{id} — 회수 건수를 감사 로그에 남긴다")
+    void deleteThread_recordsRetractedCountInAudit() throws Exception {
+        when(curatedQaService.onThreadDeleted(any(), eq("t1"))).thenReturn(3);
+
+        mvc.perform(delete("/ui/threads/t1").with(csrf()))
+                .andExpect(status().isOk());
+
+        verify(auditLogger).log(eq("thread.delete"), eq("t1"),
+                argThat(details -> Integer.valueOf(3).equals(details.get("curatedRetracted"))));
     }
 
     @Test

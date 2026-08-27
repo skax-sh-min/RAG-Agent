@@ -11,7 +11,7 @@
 >
 > **완료 항목 압축 원칙 (2026-08-22 적용)**: ✅ 완료된 항목은 **① 무엇을 왜 그렇게 했는가 ② 앞으로도 지켜야 할 결정·함정 ③ 남은 열린 항목**만 남기고, 구현 과정 서술·테스트 통계·CLAUDE.md에 이미 있는 메커니즘 설명은 걷어낸다. 살아 있는 동작 명세의 단일 출처는 **코드와 CLAUDE.md**이고, 이 문서는 "왜 그렇게 결정했는가"의 기록이다 — 양쪽에 같은 설명을 두면 드리프트만 생긴다(§12가 의존성에 대해 같은 판단을 이미 적용했다).
 
-### ✅ 완료 — Phase 1·2·5·6·7 전체, Phase 3 전체(§6.15·6.16.2·6.19·6.20 제외)
+### ✅ 완료 — Phase 1·2·5·6·7 전체, Phase 3 전체(§6.15·6.16.2·6.19·6.20·6.25 제외)
 
 | Phase | 완료 항목 | 상세 |
 |---|---|---|
@@ -26,17 +26,18 @@
 
 ### 🔵 진행할 것 (우선순위 순)
 
-> **재우선순위화**: 실배포 기준(폐쇄망·no-auth 단일 운영자)에서 가치가 없는 **멀티유저(`auth.enabled=true`) 전용 작업**(§6.19·§6.20·§6.16.2·Phase 4)은 전부 후속으로 내렸다(사유는 아래 후속 표의 트리거 열 참조). §6.15(스토리지 쿼터)만 설계상 전역 상한이 1차 권장이라 단일 운영자에도 적용되므로 지금 진행 그룹에 남겼다.
+> **재우선순위화**: 실배포 기준(폐쇄망·no-auth 단일 운영자)에서 가치가 없는 **멀티유저(`auth.enabled=true`) 전용 작업**(§6.19·§6.20·§6.16.2·Phase 4)은 전부 후속으로 내렸다(사유는 아래 후속 표의 트리거 열 참조). §6.15(스토리지 쿼터)만 설계상 전역 상한이 1차 권장이라 단일 운영자에도 적용되므로 지금 진행 그룹에 남겼다. **§6.25(관리자 대화 목록)도 이름은 §7.3(Phase 4) 계열이지만 같은 이유로 지금 진행 그룹이다** — `app.auth.guest-identity`가 `shared`가 아니면 no-auth 단일 운영자 배포에도 방문자별 대화가 쌓이고, 그중 Step 1은 인증 모드와 무관한 검색 오염 버그 수정이다.
 
 **🟢 지금 진행 (no-auth 단일 운영자 배포에도 바로 적용)**
 
 | 순위 | 항목 | 현재 상태 |
 |---|---|---|
 | 1 | **§6.15 스토리지 쿼터**(전역 상한 B안, §6.2에서 이관) | 설계 완료, 구현 전 |
-| 2 | 운영 준비 잔여 — SQLite 백업 자동화(Litestream/cron), Caddy 인증서 만료 모니터링 | 미착수 |
-| 3 | §6.24 `4-c` — 검색 부스트 상향 | 부스트 기본값이 0이라 미착수. 올리려면 `MAX_EVAL_EXCERPT_CHARS` 상향이 **같은 변경에** 선행돼야 한다(§6.24) |
-| 4 | §9.4 — CADDY 하위호환 별칭 | 선택, 낮은 우선순위 |
-| 5 | Phase 2 남은 실기기 검증 2건 (키보드 하단 고정 · 홈 화면 standalone) | 좌우 스크롤·다크모드는 자동 검증 완료, 나머지는 실기기 필요 |
+| 2 | **§6.25 관리자 전체 대화 목록 조회·삭제 + 검색 진단 연결**(§7.3 일부 선반영) | **Step 1 완료(2026-08-27 — 대화 통삭제 시 큐레이션 미회수 버그)**, Step 2~6 구현 전. 새 스키마 0개 |
+| 3 | 운영 준비 잔여 — SQLite 백업 자동화(Litestream/cron), Caddy 인증서 만료 모니터링 | 미착수 |
+| 4 | §6.24 `4-c` — 검색 부스트 상향 | 부스트 기본값이 0이라 미착수. 올리려면 `MAX_EVAL_EXCERPT_CHARS` 상향이 **같은 변경에** 선행돼야 한다(§6.24) |
+| 5 | §9.4 — CADDY 하위호환 별칭 | 선택, 낮은 우선순위 |
+| 6 | Phase 2 남은 실기기 검증 2건 (키보드 하단 고정 · 홈 화면 standalone) | 좌우 스크롤·다크모드는 자동 검증 완료, 나머지는 실기기 필요 |
 
 **🟣 후속 — 멀티유저(`auth.enabled=true`) 활성화 시에만 착수**
 
@@ -362,6 +363,155 @@ no-auth 배포에서 모든 방문자가 고정 게스트 id 하나를 공유해
 **남은 이슈**: (a) `/llm-usage` 토큰 과소 보고 — `ResponseMode`는 "한글 1토큰≈1글자", `LlmRouter.approxTokens()`는 chars/4로 **같은 코드베이스에 4배 차이 나는 두 가정이 공존**한다(스트리밍 한국어 사용량이 ~4배 적게 기록됨). (b) C 턴은 `AnswerAttribution` 지분이 0에 수렴해 `/admin` 진단 패널의 "답변에 실제 쓰인 출처 수"가 항상 0으로 보인다 — 창의 eval이 `usedDocs`를 묻지 않으므로 구조적이며, "해당 없음" 표기는 `/admin` 쪽 작업이라 범위 밖. (c) 긴 답변 수요는 없는 것으로 확인(운영자: "M 수준으로 충분").
 ---
 
+### 6.25 관리자 — 전체 대화 목록 조회·삭제 + 검색 진단 연결 🟡 일부 완료 (Step 1) — 지금 진행 (우선순위 2)
+
+> **현재 코드 확인 (2026-08-27)**: 요구 데이터는 **전부 이미 저장돼 있다 — 새 테이블·컬럼 0개**. 빠진 것은 ① 전 사용자 단위로 묶어 읽는 조회 계층, ② 그것을 그리는 `/admin` 패널, ③ **대화를 통째로 지울 때 큐레이션 Q&A를 회수하지 않는 기존 버그**(아래 결정 4). §7.3(관리자 페이지 확장)의 "사용자/운영 관리" 중 대화 관리 부분을 선반영한다 — 나머지(사용자 목록·잠금 해제·감사 로그 뷰)는 멀티유저 활성화 시 §7.3에 남는다.
+
+**목표**: 관리자가 전 사용자의 대화창 목록(제목·최종 활동 시각·턴 수·재사용 수)을 한 화면에서 보고, 특정 대화를 삭제하며, 그 대화의 검색 진단 수치로 바로 내려갈 수 있다.
+
+**데이터 출처** — 요구 항목 전부가 기존 컬럼에서 나온다:
+
+| 요구 항목 | 소스 |
+|---|---|
+| 대화창 제목 | `thread_meta.title` (표시는 `ThreadMeta.displayTitle()` — 레거시 `[version]` 접두 제거) |
+| 최종 활동 시각 | `thread_meta.updated_at` |
+| 재사용된 질문 수 | `conversation_turns.reused_from_turn_id` (**두 방향** — 결정 1) |
+| 소유자 | `thread_meta.user_id` |
+| 턴 수 · 👍👎 | `conversation_turns.feedback` |
+| 진단 보유 턴 수 | `conversation_turns.retrieval_metrics IS NOT NULL` |
+
+집계는 `thread_meta LEFT JOIN conversation_turns ON (thread_id, user_id)` + `GROUP BY` 1쿼리로 끝난다(`idx_turns_user_thread` 적중). "재사용됨"만 `idx_turns_reused_from`을 쓰는 상관 서브쿼리.
+
+---
+
+**결정 1 — "재사용 수"는 서로 다른 두 숫자이므로 두 열로 낸다**
+
+- **재사용함(인바운드)** = 이 대화의 턴이 과거 답변을 재사용한 횟수(`reused_from_turn_id IS NOT NULL`).
+- **재사용됨(아웃바운드)** = **이 대화의 답변이** 다른 대화에서 재사용된 횟수(`JOIN ... ON src.id = r.reused_from_turn_id WHERE src.thread_id = ?`).
+
+운영상 값어치 있는 쪽은 아웃바운드다 — "이 대화가 배포 전체를 떠받치는 지식 자산"이라는 뜻이고, **삭제 버튼 옆에 있어야 할 숫자**도 이쪽이다(재사용 30건짜리 대화를 지우면 그 30개 턴이 전부 `QuestionReuseRepository.DELETED_REFERENCE_TEXT`("참조 원문 삭제됨") 폴백으로 떨어진다). 한쪽만 내면 삭제 판단이 근거를 잃는다.
+
+**결정 2 — 시간 컬럼 두 개의 타임존이 다르다 (기존 표시 버그 동반 수정)**
+
+```
+thread_meta.updated_at      = LocalDateTime.now()      → 시스템 로컬(KST)
+conversation_turns.asked_at = Instant.now() @ UTC      → UTC
+```
+
+- 한 열에 `COALESCE`하거나 두 열을 나란히 놓으면 9시간 어긋나 보인다. **정렬·표시는 `updated_at` 단독**으로 — 사이드바(`ThreadMetaRepository.findAllRecent`)와 같은 순서를 유지해야 두 화면이 어긋나지 않는다.
+- **기존 `검색 진단 수치` 패널의 `시각` 열이 이미 UTC를 그대로 찍고 있다**(`fragments/admin-retrieval-metrics.html`의 `${t.askedAt}`). 이번 작업에서 표시 계층에 KST 변환을 넣고 두 패널을 함께 고친다. `KstDateFormat`은 ISO instant 파서라 `yyyy-MM-dd HH:mm:ss`용 오버로드가 하나 필요하다.
+- `updated_at`은 엄밀히는 "마지막 메시지"가 아니다 — `updateTitle()`도 갱신한다(제목 자동생성이 첫 메시지 직후 async로 도는 거라 실질 무해, 수동 rename만 시각을 민다). 열 이름은 **"최종 활동"**으로 하고, 정확한 마지막 질문 시각은 드릴다운의 `MAX(asked_at)`에서 보여준다.
+
+**결정 3 — 열람 범위: 답변 전문까지 허용하되 별도 버튼 + 감사 로그**
+
+- 제목·시각·개수(메타데이터)와 **질문 미리보기**는 기본 노출. 질문 원문은 `검색 진단 수치` 패널이 이미 전 사용자 대상으로 관리자에게 보여주고 있어 선례가 있다.
+- **답변 전문은 새 노출이므로 기본 감춤** — 드릴다운의 "원문 보기" 버튼을 눌렀을 때만 조회하고 `admin.thread.read` 감사 이벤트를 남긴다(`AuditLogger`, `admin.thread.delete`와 같은 계열).
+- **no-auth + `app.auth.guest-identity=shared`면 전원이 `GUEST_ID` 한 줄로 뭉쳐 패널이 무의미해진다** — `ip`/`cookie`/`hybrid`가 전제다. 패널 상단에 현재 전략 힌트 한 줄을 띄운다(`/settings`가 `LOCAL_ONLY`에서 프로바이더를 숨기며 힌트를 다는 것과 같은 처리 — 설정과 화면이 어긋나 보이는 것을 막는다). guest id는 HMAC 해시(`guest-<12hex>`)라 그대로 truncate + `title` 툴팁으로 표시한다.
+
+**결정 4 — 대화 삭제 시 큐레이션 Q&A는 함께 회수한다 (⚠ 선행 버그 수정)**
+
+**기존 `DELETE /ui/threads/{threadId}`에 이미 버그가 있다.** `OperationsController.deleteTurn()`은 LIKE 턴의 큐레이션을 회수하고 주석에 "orphaned curated-Q&A row that would keep contributing to search after the turn is gone"을 막는 유일한 장치라고 못 박혀 있는데, 바로 위 `deleteThread()`는 `clearHistory` + `threadMetaService.delete`만 하고 **`curated_qa`를 손대지 않는다**. 좋아요로 승격된 답변의 행과 벡터가 살아남아 계속 검색에 융합된다.
+
+관리자 기능은 이것을 **대량으로** 하게 되므로 반드시 선행 수정한다:
+
+- `CuratedQaRepository.findActiveByThread(userId, threadId)` 신규 (`source_thread_id` 컬럼은 이미 존재).
+- `CuratedQaService.onThreadDeleted(userId, threadId)` — `onUnlike()`와 같은 형태(동기 deactivate + 백그라운드 벡터 삭제, `chunkCount`만큼).
+- **기존 `deleteThread()`와 새 관리자 삭제가 둘 다** 호출한다. 한쪽만 고치면 경로에 따라 결과가 달라진다.
+
+보존안(대화만 지우고 큐레이션은 검색에 남김)은 검토 후 채택하지 않았다 — `source_turn_id`가 dangling 상태가 되어 `findBySourceTurnId` 기반 멱등성(좋아요 취소·재승격)이 깨지고, `deleteTurn`과 동작이 갈린다.
+
+---
+
+**검색 진단 수치와의 연결 — 합치지 말고 양방향으로 뚫는다**
+
+두 뷰가 서로의 사각지대다: 진단 패널은 턴 단위 flat이라 "이 턴이 **어느 대화**에서 나왔나"를 답할 수 없고, 새 대화 목록은 "이 대화에서 **검색이 어땠나**"를 답할 수 없다. 합치면 진단 패널이 의도적으로 유지해 온 flat 튜닝 뷰 성격이 깨지므로 다섯 지점만 연결한다:
+
+1. `MemoryRepository.findRecentRetrievalMetrics(userId, threadId, offset, limit)` — **nullable 필터 2개 추가**. 기존 호출은 `null, null` 위임이라 회귀 0. **`countRetrievalMetrics()`도 같은 두 필터를 받아야 한다** — 목록만 걸러지고 개수가 안 걸러지면 상단 "전체 N턴" 배지가 거짓말을 한다(페이지네이션 버튼 자체는 `#lists.size < limit` 기반이라 멀쩡히 동작해서 더 눈치채기 어렵다).
+2. `MetricsRow`에 `userId`/`threadId` 추가 → 진단 패널에 **`사용자` 열 + `대화` 열** 신설(각각 그 사용자로 필터 / 그 대화로 점프).
+3. 대화 행의 **`진단` 버튼** → `loadRetrievalMetrics(0, 20, threadId)` + 진단 카드 `open` + 스크롤.
+4. **per-source 테이블(출처/유사도/검색기여/축별순위/응답참여)을 공용 프래그먼트로 추출** — `fragments/admin-retrieval-metrics.html :: sourceTable(sources)`를 두 패널이 `th:replace`. 컬럼 규칙이 한 곳에만 남는 것이 이 연결의 핵심.
+5. 대화 목록의 **`진단` 열 = 그 대화에서 실제로 검색이 돈 턴 수**. 재사용·Direct·meta 턴은 검색을 안 돌아 여기서 빠지므로, `턴 15 / 진단 4` 같은 **격차 자체가 "이 대화는 대부분 재사용이나 Direct였다"는 신호**가 된다. 세 축(대화·재사용·검색 진단)이 한 줄에서 읽히는 지점.
+
+또한 §6.24 남은 이슈 (b) — **C 턴의 "답변에 실제 쓰인 출처 수"가 항상 0으로 보이는 문제**("`/admin` 쪽 작업이라 범위 밖"으로 유보) — 는 이 작업이 그 `/admin` 쪽 작업이므로 여기서 함께 처리한다: 창의 eval은 `usedDocs`를 묻지 않아 구조적으로 0이므로, C 턴은 `0/N`이 아니라 **"해당 없음"**으로 표기한다.
+
+**진단 패널의 사용자 구분 — `사용자` 열 + 사용자별 필터**
+
+현재 진단 패널은 전 사용자 턴이 한 줄로 섞여 있어 **"누구의 질문인지"가 화면에 아예 없다**. 대화가 사용자 단위로 정리되면 진단 쪽도 같은 축을 가져야 두 화면이 같은 언어를 쓴다.
+
+- **`사용자` 열**: `MetricsRow.userId`. guest id는 HMAC 해시(`guest-<12hex>`)라 truncate + `title` 툴팁 — 대화 목록 패널과 같은 표기를 쓴다.
+- **사용자 select 필터**: 옵션 소스는 `SELECT DISTINCT user_id FROM conversation_turns WHERE retrieval_metrics IS NOT NULL`. **대화 목록 패널의 사용자 목록(`thread_meta` 기준)과 의도적으로 다른 쿼리다** — 진단이 하나도 없는 사용자를 여기 넣으면 고르는 순간 빈 목록이 나온다. 두 패널의 드롭다운 항목 수가 다른 것은 버그가 아니다.
+- **`userId`와 `threadId` 필터의 충돌 규칙**: 대화 행의 `진단` 버튼은 `threadId`를 건다. 한 대화는 사용자 한 명에게만 속하므로 **`threadId`가 걸리면 사용자 필터를 해제**하고, 반대로 사용자 필터를 바꾸면 `threadId`를 해제한다. 둘을 동시에 유지하면 다른 사용자가 선택된 상태에서 **조용히 빈 패널**이 나오고, 원인이 화면 어디에도 안 보인다.
+- **현재 걸린 필터는 상단 스트립에 해제 가능한 칩으로 표시**한다(`대화: 인덱싱 파이프라인 질문 ✕`). 필터가 걸린 것을 잊고 "왜 최근 턴이 안 보이지"로 오해하는 것이 이 패널에서 가장 흔해질 실수다.
+- **두 패널의 필터 상태는 공유하지 않는다** — 각각 독립 지연 로딩 카드라 한쪽 선택이 다른 쪽을 조용히 바꾸면 예측이 안 된다. 유일한 연결은 `진단` 버튼의 명시적 `threadId` 전달이다.
+- 노출 변화 한 가지: 질문 원문은 이미 전 사용자 대상으로 보이고 있었지만 **귀속되지 않은** 상태였고, `사용자` 열이 그것을 방문자 id에 붙인다. 결정 3과 같은 계열의 변화이며, `guest-identity=shared`에서 한 줄로 뭉치는 것도 동일하다.
+
+**⚠ 대화 삭제는 그 대화의 진단 수치도 함께 지운다**
+
+`retrieval_metrics`는 `conversation_turns`의 컬럼이므로 `clearHistory()`가 턴을 지우면 진단 수치도 같이 사라진다 — **관리자가 대화를 정리할수록 검색 튜닝의 관측 표본이 줄어든다**. 별도 보존 테이블은 만들지 않는다(진단은 "그 턴이 어떻게 답했나"의 부속물이라 턴 없이는 해석이 안 되고, `RetrievalMetricsService`가 blob 하나만 읽는 현재 구조의 근거이기도 하다). 대신 **삭제 확인 대화상자에 "진단 N건도 함께 삭제됨"을 표시**해 그 대가를 클릭 전에 보이게 한다.
+
+---
+
+**UI 배치**
+
+`/admin` 현재 구조: 벡터스토어 상태 → 문서 레지스트리 → 컬렉션/청크 → `[details] 청크 추가 제안` → `[details] 큐레이션 Q&A` → `[details] 검색 진단 수치`. 신규 카드는 **검색 진단 수치 바로 위** — 서로 드릴다운하는 짝이고, 위 두 카드는 조치 대기열이라 순서를 유지한다.
+
+- 지연 로딩: `hx-get="/admin/threads" hx-trigger="toggle[this.open] once"` (기존 세 패널과 동일)
+- 상단 요약 스트립: `대화 N · 턴 M · 사용자 K · 재사용 R건 · 고아 턴 O건`
+- 필터 바: 사용자 select(`DISTINCT user_id`) · 정렬(최종활동 / 턴 수 / 재사용됨) · 20/50/100
+- 테이블 열: `최종 활동 | 제목 | 사용자 | 턴 | 진단 | 재사용함 | 재사용됨 | 👍👎 | [상세][진단][삭제]`
+- `상세` = 진단 패널의 `상세`와 동일한 인라인 토글 행 → 그 대화의 턴 목록(시각/질문/모드/재사용/피드백/진단 유무 + "원문 보기")
+- 페이지네이션 버튼은 진단 패널 것을 그대로 복제
+
+**프래그먼트 규약(반드시 지킬 것)**:
+- `fragments/admin-threads.html :: panel` 안에 **`<script>` 금지** — 페이지네이션 재조회가 plain `innerHTML` 삽입이라 프래그먼트 내장 스크립트는 실행되지 않는다. JS는 `admin.html` 페이지 레벨(`loadThreads()`)에 둔다(기존 세 패널 주석이 모두 명시).
+- 새 `<script>`에서 `/*[[${x}]]*/` 패턴을 쓰면 **`th:inline="javascript"` 필수** — 없으면 조용히 기본값으로 영원히 돈다(`chat.html` 전례).
+
+---
+
+**구현 단계** (각 단계 독립 배포 가능)
+
+| Step | 내용 | 비고 |
+|---|---|---|
+| 1 | ~~**대화 삭제 시 큐레이션 회수**(`onThreadDeleted`) — 기존 `/ui/threads` 삭제에도 적용~~ ✅ **완료 2026-08-27** | 아래 "Step 1 완료" 참조 |
+| 2 | 조회 계층 — `ThreadAdminService` + `ThreadAdminRow` record | |
+| 3 | 패널 렌더 — `GET /admin/threads` + `fragments/admin-threads.html` + admin.html 카드 | |
+| 4 | 삭제 — `DELETE /admin/threads/{threadId}` + 확인 대화상자 + 감사 로그 | **Step 1 없이 진행 금지** |
+| 5 | 진단 패널 확장 — `사용자` 열 + `userId`/`threadId` 필터(+ `count`도 같은 필터) + 필터 칩 + 공용 `sourceTable` 프래그먼트 + 양방향 버튼 + C 턴 "해당 없음" | 유일하게 **기존 화면을 고치는** 단계 — 회귀 주의(`null, null` 위임) |
+| 6 | 표시 정리 — KST 변환(두 패널 공통), 고아 턴 카운트, 답변 원문 보기 + `admin.thread.read` 감사 | |
+
+**삭제 엔드포인트 설계**:
+- `DELETE /admin/threads/{threadId}` — `/admin/**`의 ROLE_ADMIN 게이트 상속.
+- **소유자 `userId`는 요청 파라미터로 받지 않는다.** `thread_id`가 PK이므로 서버가 `thread_meta`에서 조회한다 — 클라이언트가 보내게 하면 "남의 대화를 지정하는 파라미터"를 노출하는 셈이다.
+- 순서: `onThreadDeleted` → `clearHistory` → `threadMetaService.delete` → `auditLogger.log("admin.thread.delete", ...)`(소유자·턴 수·회수된 큐레이션 수 포함).
+- 확인 대화상자에 **소유자 / 턴 수 / 재사용됨 N건 / 큐레이션 N건 회수**를 표시 — 되돌릴 수 없는 크로스 유저 파괴 작업이라 숫자를 보여주는 것이 확인의 실질이다.
+- **벌크 삭제는 넣지 않는다** — 제안 승인에 벌크 경로를 두지 않은 것과 같은 이유이고, 파괴적이라 더 강하게 적용된다.
+
+**Step 1 완료 (2026-08-27)** — 관리자 기능보다 먼저, 단독으로:
+
+`CuratedQaRepository.findActiveByThread(userId, threadId)` + `CuratedQaService.onThreadDeleted(userId, threadId)` 신규, `OperationsController.deleteThread()`가 기록 삭제 **전에** 호출하고 회수 건수를 `thread.delete` 감사 이벤트의 `curatedRetracted`로 남긴다. 구현 중 확정된 두 가지:
+
+- **벡터 삭제는 행별이 아니라 한 번의 배치 호출**(`vectorIdsFor()`로 id를 모아 `deleteByDocIds` 1회, 백그라운드 스레드 1개). `forceRemoveBySubmission`의 행별 fan-out을 그대로 베끼면 좋아요 턴이 많은 대화에서 스레드와 네트워크 왕복이 행 수만큼 늘어난다. 기존 `deleteVectors()`는 같은 헬퍼를 쓰도록 리팩터만 했고 동작은 그대로다.
+- **제안(manual) 행 배제는 `source_thread_id`가 아니라 `source_turn_id IS NOT NULL`로** 한다. 수동 행이 지금 `source_thread_id=''`를 갖는다는 사실에 기대면, 나중에 그 값이 진짜 id로 바뀌는 순간 대화 삭제가 제안의 일부 청크를 조용히 내려버린다(제안은 전부/전무 단위).
+
+검증: 신규 테스트 8건(`CuratedQaThreadScopeTest` 5 + `CuratedQaServiceTest` 3 + `OperationsControllerHtmxTest` 2 — 마지막은 호출 **순서**와 감사 필드까지 고정). §6.24에서 얻은 규칙대로 **수정 전 코드에서 실제로 실패하는지 먼저 확인**했다 — 컨트롤러 호출을 되돌리면 컨트롤러 테스트 2건이, `source_turn_id IS NOT NULL` 가드를 빼면 리포지토리 테스트 2건이 각각 실패한다. 전체 1650건 통과.
+
+**함정 / 경계**:
+- **`/api/v1/**` 밑에 두지 말 것** — 그 접두사는 CSRF 면제 + management-only에서 guest-open이다. 제안 pending-count를 `/admin/` 밑에 둔 것과 **완전히 같은 이유**로, 여기 두면 전 사용자 대화 목록이 누구에게나 열린다. `/ui/threads`(사용자 사이드바)와도 다른 엔드포인트다.
+- **크로스 유저 조회를 `ThreadMetaRepository`에 섞지 말 것** — 그 클래스의 모든 메서드가 `userId` 스코프라는 게 현재 불변식이다. 별도 클래스로 빼거나 최소한 `findAllForAdmin*`로 이름 붙이고, `findRecentRetrievalMetrics`가 "Deliberately not user-scoped"를 주석으로 못 박은 선례를 따른다.
+- **고아 턴**: `FROM thread_meta LEFT JOIN`은 meta 행 없이 턴만 남은 대화를 못 본다. 기능으로 만들지 말고 `/admin/registry/reconcile-chunks` 선례대로 상단에 카운트 한 줄만 띄운다.
+- 전사 트랜스크립트 검색/뷰어는 범위 밖(필요해지면 §7.3).
+
+**완료 기준**:
+- 관리자가 전 사용자의 대화 목록을 제목·최종 활동·턴 수·재사용함/재사용됨·진단 턴 수와 함께 한 화면에서 본다.
+- 대화 삭제 시 `conversation_turns`/`turn_source_ref`/`turn_image_ref`/`thread_meta`와 **해당 대화에서 승격된 `curated_qa` 행·벡터가 모두 회수**되고, 감사 로그에 소유자·턴 수·회수 건수가 남는다. 기존 사용자 경로(`DELETE /ui/threads/{threadId}`)도 같은 보장을 갖는다.
+- 대화 행 → 그 대화의 검색 진단 수치, 진단 행 → 그 대화로 양방향 이동이 된다.
+- 진단 패널에서 **턴마다 누가 물었는지 보이고**, 사용자별로 걸러진다. 필터를 걸면 목록과 "전체 N턴" 배지가 **같이** 줄고, 걸린 필터가 칩으로 보이며, 사용자 필터와 대화 필터가 동시에 걸려 빈 목록이 되는 상태에 도달할 수 없다.
+- 필터 없이 연 진단 패널은 이번 변경 전과 **완전히 같은 목록·같은 순서·같은 개수**를 낸다(`null, null` 위임).
+- 두 패널의 시각 표기가 KST로 일치한다.
+- `app.auth.guest-identity=shared`(기본)에서도 화면이 깨지지 않고, 왜 한 줄로 뭉치는지 힌트가 표시된다.
+
+---
+
 ### 6.20 사용자별 LLM 사용량 쿼터 🔵 미착수 — 멀티유저 활성화 시 후속 (우선순위 2)
 
 **현재 코드 확인 (2026-07-04 재확인)**:
@@ -416,6 +566,8 @@ Google/GitHub 제공자 등록. 가입 흐름은 **기존 폼 가입과 동등**
 4. Spring 프로파일 분리: `application-sqlite.properties` / `application-postgres.properties`
 
 ### 7.3 관리자 페이지 (부분 존재 → 확장)
+
+> **일부 선반영 → §6.25**: 이 절의 "사용자/운영 관리" 중 **대화 관리**(전 사용자 대화 목록 조회·삭제 + 검색 진단 연결)는 no-auth 단일 운영자에서도 값어치가 있어 Phase 3 §6.25로 분리해 먼저 진행한다. 여기 남는 것은 **사용자 계정 관리**(목록·잠금 해제·강제 로그아웃)와 감사 로그 뷰 — 전부 `auth.enabled=true`가 전제다.
 
 - `ROLE_ADMIN` 전용 경로 확장(현재 청크 관리 위주 → 사용자/운영 관리 추가). ※ DB `role` 값은 `ADMIN` 문자열, 인증은 `NoAuthAutoLoginFilter`가 no-auth 모드에서 첫 `ADMIN` 사용자로 자동 인증.
 - 사용자 목록·상태(잠금/활성), 전체 LLM 사용량(§6.5~6.7과 연계), 감사 로그(`data/audit/audit.log` NDJSON) 조회 뷰.

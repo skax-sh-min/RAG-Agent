@@ -39,6 +39,9 @@ import static org.mockito.Mockito.when;
  *  - onLike → 임베딩 호출 자체는 성공했지만 그 사이 좋아요가 취소됨 → 보정 삭제(커밋 후 체크포인트)
  *  - onUnlike: 활성 엔트리 존재 → 비활성화 + 벡터 삭제
  *  - onUnlike: 엔트리 없음 / 이미 비활성 → no-op
+ *  - onThreadDeleted(§6.25): 대화의 활성 엔트리 전부를 id 기준으로 비활성화 + 벡터 삭제 1회 배치
+ *  - onThreadDeleted: 엔트리 없음 → no-op (벡터 호출 자체가 없다)
+ *  - onThreadDeleted: chunkCount>1 행의 벡터 id가 전부 포함된다(-1, -2 …)
  *  - embed 임베딩 실패 fallback: 전체 텍스트 실패 시 상세 섹션만으로 재시도 → 성공하면 markEmbedOk,
  *    둘 다 실패하거나 애초에 상세 섹션이 없으면(Direct 모드 등) markEmbedFailed
  *  - updateAnswer 재임베딩도 동일한 fallback/마킹 로직 공유
@@ -254,6 +257,58 @@ class CuratedQaServiceTest {
 
         verify(repository, never()).deactivate(anyLong());
         verify(vectorStore, never()).deleteByDocIds(any(), any(), any());
+    }
+
+    // ── §6.25 — 대화 통삭제 시 큐레이션 회수 ──────────────────────────────────
+
+    /** {@link #curatedQa}와 달리 id별로 turn/chunkCount를 달리 줄 수 있는 변형. */
+    private static CuratedQaRepository.CuratedQa curatedRow(long id, long turnId, int chunkCount) {
+        return new CuratedQaRepository.CuratedQa(id, turnId, UID, TID, "질문" + id, "답변" + id,
+                "active", "v1", "2026-01-01", "2026-01-01", "ok",
+                CuratedQaRepository.ORIGIN_LIKE, null, null, chunkCount);
+    }
+
+    @Test
+    @DisplayName("onThreadDeleted — 대화의 활성 엔트리를 전부 비활성화하고 벡터를 한 번에 삭제한다")
+    void onThreadDeleted_activeEntries_deactivatesAllAndDeletesVectorsOnce() {
+        when(repository.findActiveByThread(UID, TID))
+                .thenReturn(List.of(curatedRow(1L, 11L, 1), curatedRow(2L, 12L, 1)));
+
+        int retracted = service.onThreadDeleted(UID, TID);
+
+        assertThat(retracted).isEqualTo(2);
+        // turn 기준이 아니라 id 기준으로 내려야 한다 — deactivate(turnId)는 source_turn_id가
+        // NULL인 행에 no-op이고, 새 해제 경로는 전부 deactivateById를 써야 한다는 규약.
+        verify(repository).deactivateById(1L);
+        verify(repository).deactivateById(2L);
+        verify(repository, never()).deactivate(anyLong());
+        // 행마다 한 번씩이 아니라 한 번의 배치 호출 — 긴 대화에서 스레드/왕복이 행 수만큼 늘지 않는다.
+        verify(vectorStore, timeout(2000).times(1)).deleteByDocIds(
+                "shared", CuratedQaService.CURATED_VERSION, List.of("curated-1", "curated-2"));
+    }
+
+    @Test
+    @DisplayName("onThreadDeleted — 회수할 엔트리가 없으면 벡터 스토어를 건드리지 않는다")
+    void onThreadDeleted_noEntries_isNoOp() {
+        when(repository.findActiveByThread(UID, TID)).thenReturn(List.of());
+
+        assertThat(service.onThreadDeleted(UID, TID)).isZero();
+
+        verify(repository, never()).deactivateById(anyLong());
+        verify(vectorStore, never()).deleteByDocIds(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("onThreadDeleted — 여러 청크로 임베딩된 행은 모든 청크 벡터 id가 포함된다")
+    void onThreadDeleted_multiChunkRow_deletesEveryChunkVector() {
+        when(repository.findActiveByThread(UID, TID))
+                .thenReturn(List.of(curatedRow(7L, 11L, 3)));
+
+        service.onThreadDeleted(UID, TID);
+
+        // 첫 청크는 하위호환 형식(curated-7), 이후는 접미사 — springDocId 규약 그대로.
+        verify(vectorStore, timeout(2000)).deleteByDocIds("shared", CuratedQaService.CURATED_VERSION,
+                List.of("curated-7", "curated-7-1", "curated-7-2"));
     }
 
     // ── §10.10 step ④ — 편집/관리 ────────────────────────────────────────────

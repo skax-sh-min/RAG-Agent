@@ -200,6 +200,55 @@ public class CuratedQaService {
     }
 
     /**
+     * §6.25 — retracts every 👍-promoted entry of a conversation that is being deleted whole; the
+     * thread-level counterpart of {@link #onUnlike}.
+     *
+     * <p><b>Why this has to exist at all.</b> A {@code curated_qa} row is linked to its turn by a
+     * <em>copy</em> of the thread/turn id, not a foreign key, so deleting the conversation removes
+     * the turns while the row and its vectors survive and keep feeding search from a conversation
+     * that no longer exists. That is exactly the orphan {@link #onUnlike} is called for on the
+     * single-turn delete path — one level up. Both delete paths (the user's own
+     * {@code DELETE /ui/threads/{threadId}} and the admin one) must call this, or the outcome
+     * depends on which button was pressed.
+     *
+     * <p>Rows are deactivated <b>by their own id</b>, never by turn: {@code deactivate(turnId)}
+     * silently no-ops on any row whose {@code source_turn_id} is NULL (see
+     * {@link CuratedQaRepository#deactivateById}). Manual (청크 추가) rows are excluded by the
+     * query itself — a submission is a 전부/전무 unit and deleting a chat thread must not take
+     * part of one down.
+     *
+     * <p>Vector removal is <b>one batched call on one background thread</b>, unlike
+     * {@link #forceRemoveBySubmission}'s per-row fan-out: a long conversation can hold many liked
+     * turns, and that pattern would spend a thread and a network round-trip on each. As everywhere
+     * else here, the DB write is synchronous (cheap, local) and only the remote delete is deferred
+     * (§6.12).
+     *
+     * @return how many curated rows were retracted — surfaced in the deletion's audit entry and in
+     *         the admin confirm dialog, so the cost of deleting a conversation is visible rather
+     *         than silent.
+     */
+    public int onThreadDeleted(String userId, String threadId) {
+        List<CuratedQa> rows = repository.findActiveByThread(userId, threadId);
+        if (rows.isEmpty()) return 0;
+
+        List<String> vectorIds = new java.util.ArrayList<>();
+        for (CuratedQa row : rows) {
+            repository.deactivateById(row.id());
+            vectorIds.addAll(vectorIdsFor(row.id(), row.chunkCount()));
+        }
+        Thread.ofVirtual().name("curated-deindex-thread-" + threadId).start(() -> {
+            try {
+                vectorStore.deleteByDocIds(DocRegistry.SHARED, CURATED_VERSION, vectorIds);
+            } catch (Exception e) {
+                log.warn("[CURATED] 대화 삭제 후 벡터 삭제 실패 threadId={}: {}", threadId, e.getMessage());
+            }
+        });
+        log.info("[CURATED] 대화 {} 삭제 — 큐레이션 {}건 회수(벡터 {}개)",
+                threadId, rows.size(), vectorIds.size());
+        return rows.size();
+    }
+
+    /**
      * §10.10 step ④ — looked up by the originating turn (all the chat UI knows — threadId/turnId,
      * not the curated row's own id). The caller (controller) is responsible for the ownership
      * check — {@code memoryService.getFeedback} already scopes by (userId, threadId), same as the
@@ -570,12 +619,21 @@ public class CuratedQaService {
     /** Removes every vector this row owns — {@code chunkCount} ids, not just the first. */
     private void deleteVectors(long curatedId, int chunkCount) {
         try {
-            List<String> ids = new java.util.ArrayList<>(Math.max(1, chunkCount));
-            for (int i = 0; i < Math.max(1, chunkCount); i++) ids.add(springDocId(curatedId, i));
-            vectorStore.deleteByDocIds(DocRegistry.SHARED, CURATED_VERSION, ids);
+            vectorStore.deleteByDocIds(DocRegistry.SHARED, CURATED_VERSION,
+                    vectorIdsFor(curatedId, chunkCount));
         } catch (Exception e) {
             log.warn("[CURATED] vector delete failed curatedId={}: {}", curatedId, e.getMessage());
         }
+    }
+
+    /**
+     * Vector ids for every chunk of one curated row. {@code chunkCount} is floored at 1 — a row
+     * written before splitting existed records 0 but still owns the index-0 vector.
+     */
+    private static List<String> vectorIdsFor(long curatedId, int chunkCount) {
+        List<String> ids = new java.util.ArrayList<>(Math.max(1, chunkCount));
+        for (int i = 0; i < Math.max(1, chunkCount); i++) ids.add(springDocId(curatedId, i));
+        return ids;
     }
 
     private boolean isStillLiked(String userId, String threadId, long turnId) {
