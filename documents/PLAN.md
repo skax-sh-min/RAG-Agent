@@ -33,7 +33,7 @@
 | 순위 | 항목 | 현재 상태 |
 |---|---|---|
 | 1 | **§6.15 스토리지 쿼터**(전역 상한 B안, §6.2에서 이관) | 설계 완료, 구현 전 |
-| 2 | **§6.25 관리자 전체 대화 목록 조회·삭제 + 검색 진단 연결**(§7.3 일부 선반영) | **Step 1 완료(2026-08-27 — 대화 통삭제 시 큐레이션 미회수 버그)**, Step 2~6 구현 전. 새 스키마 0개 |
+| 2 | **§6.25 관리자 전체 대화 목록 조회·삭제 + 검색 진단 연결**(§7.3 일부 선반영) | **Step 1~3 완료(2026-08-27)** — 버그 픽스·조회 계층·패널. Step 4~6 남음. 새 스키마 0개 |
 | 3 | 운영 준비 잔여 — SQLite 백업 자동화(Litestream/cron), Caddy 인증서 만료 모니터링 | 미착수 |
 | 4 | §6.24 `4-c` — 검색 부스트 상향 | 부스트 기본값이 0이라 미착수. 올리려면 `MAX_EVAL_EXCERPT_CHARS` 상향이 **같은 변경에** 선행돼야 한다(§6.24) |
 | 5 | §9.4 — CADDY 하위호환 별칭 | 선택, 낮은 우선순위 |
@@ -473,8 +473,8 @@ conversation_turns.asked_at = Instant.now() @ UTC      → UTC
 | Step | 내용 | 비고 |
 |---|---|---|
 | 1 | ~~**대화 삭제 시 큐레이션 회수**(`onThreadDeleted`) — 기존 `/ui/threads` 삭제에도 적용~~ ✅ **완료 2026-08-27** | 아래 "Step 1 완료" 참조 |
-| 2 | 조회 계층 — `ThreadAdminService` + `ThreadAdminRow` record | |
-| 3 | 패널 렌더 — `GET /admin/threads` + `fragments/admin-threads.html` + admin.html 카드 | |
+| 2 | ~~조회 계층 — `ThreadAdminService` + `ThreadAdminRow` record~~ ✅ **완료 2026-08-27** | `ThreadAdminRepository` 신설(크로스 유저 조회를 `ThreadMetaRepository`에 섞지 않음). 재사용 두 축·정렬 enum·`findOwner` 포함 |
+| 3 | ~~패널 렌더 — `GET /admin/threads` + `fragments/admin-threads.html` + admin.html 카드~~ ✅ **완료 2026-08-27** | 드릴다운(`/turns`)까지. 실데이터 검증 결과는 아래 |
 | 4 | 삭제 — `DELETE /admin/threads/{threadId}` + 확인 대화상자 + 감사 로그 | **Step 1 없이 진행 금지** |
 | 5 | 진단 패널 확장 — `사용자` 열 + `userId`/`threadId` 필터(+ `count`도 같은 필터) + 필터 칩 + 공용 `sourceTable` 프래그먼트 + 양방향 버튼 + C 턴 "해당 없음" | 유일하게 **기존 화면을 고치는** 단계 — 회귀 주의(`null, null` 위임) |
 | 6 | 표시 정리 — KST 변환(두 패널 공통), 고아 턴 카운트, 답변 원문 보기 + `admin.thread.read` 감사 | |
@@ -494,6 +494,12 @@ conversation_turns.asked_at = Instant.now() @ UTC      → UTC
 - **제안(manual) 행 배제는 `source_thread_id`가 아니라 `source_turn_id IS NOT NULL`로** 한다. 수동 행이 지금 `source_thread_id=''`를 갖는다는 사실에 기대면, 나중에 그 값이 진짜 id로 바뀌는 순간 대화 삭제가 제안의 일부 청크를 조용히 내려버린다(제안은 전부/전무 단위).
 
 검증: 신규 테스트 8건(`CuratedQaThreadScopeTest` 5 + `CuratedQaServiceTest` 3 + `OperationsControllerHtmxTest` 2 — 마지막은 호출 **순서**와 감사 필드까지 고정). §6.24에서 얻은 규칙대로 **수정 전 코드에서 실제로 실패하는지 먼저 확인**했다 — 컨트롤러 호출을 되돌리면 컨트롤러 테스트 2건이, `source_turn_id IS NOT NULL` 가드를 빼면 리포지토리 테스트 2건이 각각 실패한다. 전체 1650건 통과.
+
+**Step 2~3 완료 (2026-08-27)** — 조회 계층 + 패널. 실데이터(대화 4·턴 5·사용자 3)로 확인하며 나온 것:
+
+- **레이아웃 함정**: 다른 열이 전부 고정 폭이면 그 합계가 좁은 창의 테이블 폭을 다 먹고, 유연 열인 제목이 `td { max-width:0 }`(말줄임 관용구) 때문에 **22px로 눌려 한 글자만 남는다**. `th`의 `min-width`만으로는 못 고치고 **테이블 자체에 `min-width`**를 줘서 `.table-responsive`가 넘침을 흡수하게 해야 한다. 검색 진단 수치 패널이 같은 관용구로 멀쩡한 것은 고정 열이 적어 슬랙이 있기 때문 — 열을 더 붙이면 그쪽도 같은 증상이 난다.
+- **고아 턴 카운트가 실제로 값을 했다**: 요약은 `재사용 2건`인데 모든 행의 `재사용함`이 0이었다. 두 재사용 턴이 전부 `thread_meta` 행 없는 대화에 속해 있었기 때문 — 이 숫자가 없으면 카운터가 고장 난 것으로 읽힌다. 덤으로 그 턴들의 원본(11·12)은 이미 삭제돼 `reused_from_turn_id`가 dangling이었고, 서브쿼리의 INNER JOIN이 `재사용됨=0`을 내는 것이 정확한 동작임도 함께 확인됐다.
+- **검증 환경 주의 2가지**: `spring-boot:run`은 `target/classes`의 템플릿 사본을 쓰고 Thymeleaf가 그것을 캐시하므로, 프래그먼트를 고쳐도 `mvn compile` + 재시작 없이는 반영되지 않는다(고친 줄 없이 "안 고쳐진다"고 헤매기 쉽다). 그리고 `-DDATA_DIR`에 git-bash 경로(`/c/Users/...`)를 넘기면 Java가 `C:\c\Users\...`로 해석해 **엉뚱한 위치에 빈 DB를 만든다** — 화면은 "데이터 없음"으로만 보인다.
 
 **함정 / 경계**:
 - **`/api/v1/**` 밑에 두지 말 것** — 그 접두사는 CSRF 면제 + management-only에서 guest-open이다. 제안 pending-count를 `/admin/` 밑에 둔 것과 **완전히 같은 이유**로, 여기 두면 전 사용자 대화 목록이 누구에게나 열린다. `/ui/threads`(사용자 사이드바)와도 다른 엔드포인트다.
