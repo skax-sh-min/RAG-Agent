@@ -28,7 +28,8 @@ src/main/resources/
 │   │                                      #   <img>로 치환해 marked→DOMPurify 렌더하는 전역 유틸(§3.5-bis)
 │   ├── chat.html                          # 채팅 페이지 (이전 turn 서버 렌더 포함)
 │   ├── documents.html                     # 문서 관리 페이지
-│   ├── admin.html                         # 벡터 스토어 관리 (청크 브라우저 + 큐레이션 Q&A + 청크 추가 제안)
+│   ├── admin.html                         # 벡터 스토어 관리 (청크 브라우저 + 청크 추가 제안 + 큐레이션 Q&A
+│   │                                      #   + 대화 목록 + 검색 진단 수치)
 │   ├── curated-submissions.html           # 청크 추가 게시판 (등록 폼 + 이미지 업로드 + "내 제안" 목록)
 │   ├── llm-usage.html                     # LLM 사용량 통계 페이지
 │   ├── settings.html                      # LLM/RAG 설정 조회·핫 수정 페이지
@@ -42,6 +43,9 @@ src/main/resources/
 │       ├── admin-chunks.html              # 청크 테이블 (컬렉션/문서 필터 + 페이지네이션)
 │       ├── admin-curated.html             # 큐레이션 Q&A 패널 (펼칠 때 지연 로딩)
 │       ├── admin-submissions.html         # 청크 추가 제안 검토 패널 (지연 로딩, 상태 필터)
+│       ├── admin-retrieval-metrics.html   # 검색 진단 수치 패널 (지연 로딩, 사용자/대화 필터)
+│       ├── admin-threads.html             # 대화 목록 패널 + 턴 드릴다운 (§6.25, 지연 로딩)
+│       ├── admin-source-table.html        # 출처별 진단 표 — 위 두 패널이 공유
 │       ├── llm-usage-cards.html           # 프로바이더 + 임베딩(EMBEDDING) + orphan(ORPHAN, 삭제 가능) 상태 카드 (30초 자동 갱신)
 │       ├── settings-item.html             # 설정 항목 1행(조회 또는 편집 입력 + 저장/기본값 버튼) — HTMX 부분 갱신 대상
 │       └── settings-providers.html        # LLM providers 표(활성화 배지 + 관리자 활성/비활성 버튼) — settings.html에 인라인 포함 + 토글 응답 시 테이블 전체 교체
@@ -151,7 +155,13 @@ REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — �
 | GET | `/admin/curated/{id}/detail` | JSON | §10.10 — 큐레이션 Q&A 항목의 질문·답변 조회 (편집 패널) |
 | POST | `/admin/curated/{id}` | `200` | §10.10 — 큐레이션 Q&A 답변 수정 → 재임베딩. 좋아요를 누른 사용자와 무관하게 관리자가 어떤 항목이든 편집 가능 |
 | DELETE | `/admin/curated/{id}` | `200` | §10.10 — 큐레이션 Q&A 강제 삭제(비활성화+de-index). 좋아요 주체의 동의 없이도 관리자가 제거 가능(모더레이션). 사용자 제안에서 온 행이면 **같은 제안의 모든 청크가 함께** 내려간다(전부/전무) |
-| GET | `/admin/retrieval-metrics` | `fragments/admin-retrieval-metrics :: panel` | 3단계 — 턴별 검색 진단 수치 패널 지연 로딩(`offset`/`limit`, 기본 20). **읽기 전용**이며 사용자 스코프가 아니다(배포 전체의 검색 동작을 보는 운영자 뷰, `/admin/**`의 ROLE_ADMIN 게이트 상속) |
+| GET | `/admin/retrieval-metrics` | `fragments/admin-retrieval-metrics :: panel` | 3단계 — 턴별 검색 진단 수치 패널 지연 로딩(`offset`/`limit`, 기본 20). **읽기 전용**이며 사용자 스코프가 아니다(배포 전체의 검색 동작을 보는 운영자 뷰, `/admin/**`의 ROLE_ADMIN 게이트 상속). §6.25로 `userId`·`threadId` 필터가 추가됐다 — 둘은 **배타**라 `threadId`가 오면 서버가 `userId`를 떨군다(한 대화는 소유자가 한 명이므로 둘을 함께 들면 원인이 화면에 없는 빈 목록이 나온다) |
+| GET | `/admin/retrieval-metrics/turns/{turnId}/sources` | `fragments/admin-source-table :: standalone` | §6.25 — 한 턴의 출처별 진단 표. 대화 목록 패널의 드릴다운이 지연 로딩하며, 진단 패널의 **상세**와 같은 프래그먼트를 쓴다 |
+| GET | `/admin/threads` | `fragments/admin-threads :: panel` | §6.25 — 전 사용자 대화 목록 지연 로딩. `userId`(소유자 필터)·`sort`(`RECENT`/`TURNS`/`REUSED`)·`offset`·`limit`. `sort`는 닫힌 enum으로 파싱된다(`ORDER BY`는 바인드 파라미터가 될 수 없어 알 수 없는 값은 `RECENT`로 떨어진다) |
+| GET | `/admin/threads/{threadId}/turns` | `fragments/admin-threads :: turns` | §6.25 — 그 대화의 턴 목록(드릴다운). **답변 전문은 실리지 않는다** — 응답 레코드에 `answer` 필드 자체가 없다 |
+| GET | `/admin/threads/{threadId}/delete-preview` | JSON | §6.25 — 삭제 확인 대화상자의 숫자(제목·소유자·턴 수·재사용됨·진단 수·큐레이션 수). 렌더된 행이 아니라 **클릭 시점**에 다시 읽는다 |
+| DELETE | `/admin/threads/{threadId}` | JSON `{deleted,turnCount,curatedRetracted}` / `404` | §6.25 — 대화 삭제. **thread id만 받는다**(소유자는 서버가 PK로 조회 — `userId`를 받으면 남의 대화를 지정하는 파라미터가 된다). 큐레이션 회수 → 기록 삭제 → `thread_meta` 순이며 `admin.thread.delete` 감사 기록. 벌크 삭제 없음 |
+| GET | `/admin/threads/turns/{turnId}/content` | JSON `{question,answer,askedAt,responseMode}` / `404` | §6.25 — 답변 원문 열람. **호출 자체가 `admin.thread.read` 감사 이벤트**를 남기며, 내용이 실제로 나갈 때만 기록한다(없는 턴은 404이고 열람이 아니다) |
 | GET | `/admin/submissions` | `fragments/admin-submissions :: panel` | 청크 추가 제안 검토 패널 지연 로딩. `status`(기본 `pending`, `all`=전체)·`offset`·`limit` 파라미터. 큐레이션 패널과 동일한 `<details>` + `toggle once` 패턴 |
 | GET | `/admin/submissions/pending-count` | JSON `{"count":N}` | 검토 대기 건수 — 헤더 배지·카드 pill이 60초마다 폴링. **`/api/v1/**`이 아니라 `/admin/**` 아래**에 둔 이유는 아래 참고 |
 | GET | `/admin/submissions/{id}/detail` | JSON | 제안 전문(제목·본문·태그·작성자·상태·예상 청크 수) — 검토 오프캔버스 채우기용 |
@@ -162,13 +172,25 @@ REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — �
 >
 > **큐레이션 Q&A 카드**(`/admin` 하단, §10.10): 기본적으로 접힌 `<details>` 카드이며, 처음 펼칠 때만(`hx-trigger="toggle[this.open] once"` → `GET /admin/curated`) 좋아요로 승격된 질문·답변을 최신순으로 조회해 표시한다 — `AdminController.adminPage()`는 더 이상 `curatedQaService.listActive()`를 즉시 호출하지 않으므로 `/admin` 페이지 로드 자체는 이 조회를 하지 않는다. 페이지당 건수는 20/50/100 중 선택(기본 20 — `AdminController.curatedPanel()`의 `limit` 기본값), 이전/다음 버튼으로 페이지 이동한다(`CuratedQaRepository.findAllActive(offset, limit)`) — 이전의 고정 상한 50건·페이지네이션 없음 방식에서, 큐레이션 항목이 계속 쌓여도 패널이 무거워지지 않도록 청크 목록과 동일한 페이지네이션 UI로 전환됐다. 편집(연필 아이콘)은 저장 시 자동 재임베딩되는 점이 위 청크 편집과 다르다 — 청크 편집은 원본 벡터를 그대로 유지하지만, 큐레이션 Q&A 편집은 검색 정확도가 목적이라 항상 재임베딩된다. **편집 오프캔버스는 청크 편집과 동일한 조건·동일한 렌더러로 좌측 미리보기 컬럼을 띄운다**(`window.innerWidth >= EDIT_BASE_WIDTH * 2`일 때만, `renderChunkPreview()` → `renderMarkdownWithImageMarkers()`, 입력 200ms 디바운스) — 큐레이션 답변은 표·코드블록·이미지 마커를 포함한 마크다운이 그대로 검색 근거가 되므로 원문만 보고 고치면 서식이 깨진 것을 알아채기 어렵다. 좁은 화면은 기존 단일 컬럼 그대로다. 질문 앞에 노란 ⚠ 배지가 보이면 `embed_status='failed'`(전체+핵심 섹션 재시도 모두 실패, `CuratedQaService.tryEmbedWithFallback()`) — 해당 항목은 검색에 전혀 반영되지 않고 있다는 뜻이며, 답변을 편집해 저장하면 재시도된다. 채팅 화면에서도 본인 소유 turn에 한해 같은 배지(`"임베딩 실패"` 텍스트)가 좋아요/편집 아이콘 옆에 뜬다(백그라운드 임베딩이 몇 초 뒤 실패하는 구조라 실시간 토스트는 없고, 다음 페이지 로드 시 표시). 상세는 [OPERATOR_MANUAL.md §7.5](OPERATOR_MANUAL.md#75-큐레이션-qa-관리-1010) 참고.
 
-> **검색 진단 수치 카드**(`/admin` 최하단, 3단계): 같은 `<details>` 지연 로딩 구조(`hx-trigger="toggle[this.open] once"` → `GET /admin/retrieval-metrics`). 턴 한 줄에 **시각·질문·응답모드·최고 유사도·사용/검색 개수**를 보여주고, **상세**를 누르면 그 턴의 출처별 4개 수치(유사도·검색기여·축별 순위·응답참여)가 펼쳐진다. 채팅의 배지는 그 순간만 보이므로, `SEARCH_RRF_KEYWORD_WEIGHT`·`SEARCH_SIMILARITY_THRESHOLD` 같은 값을 조정하려면 **여러 턴에 걸친 경향**을 봐야 한다는 것이 이 패널의 존재 이유다.
+> **검색 진단 수치 카드**(`/admin` 최하단, 3단계): 같은 `<details>` 지연 로딩 구조(`hx-trigger="toggle[this.open] once"` → `GET /admin/retrieval-metrics`). 턴 한 줄에 **시각·질문·대화·사용자·응답모드·최고 유사도·사용/검색 개수**를 보여주고, **상세**를 누르면 그 턴의 출처별 4개 수치(유사도·검색기여·축별 순위·응답참여)가 펼쳐진다 — 그 표는 대화 목록 패널과 공유하는 `fragments/admin-source-table`이다. 채팅의 배지는 그 순간만 보이므로, `SEARCH_RRF_KEYWORD_WEIGHT`·`SEARCH_SIMILARITY_THRESHOLD` 같은 값을 조정하려면 **여러 턴에 걸친 경향**을 봐야 한다는 것이 이 패널의 존재 이유다.
 > - **사용/검색** 열(`3/8`)이 이 패널에서 가장 볼 만한 수치다 — 검색된 출처의 절반 이상이 답변에 반영되지 않으면 ⚠가 붙는다(topK 과다 또는 프롬프트 문제 의심).
 > - 값이 `-`인 칸은 0이 아니라 **측정 안 됨**이다(벡터 축에 없던 청크, 확장 실패 폴백 턴 등).
-> - 페이지네이션 JS(`loadRetrievalMetrics()`/`applyMetricsLimitFilter()`)는 큐레이션 패널과 **같은 이유로** `admin.html` 페이지 레벨에 있다 — 재조회가 plain `innerHTML` 삽입이라 프래그먼트 내장 `<script>`는 실행되지 않는다.
+> - **시각은 KST로 표시된다**(§6.25) — `conversation_turns.asked_at`은 UTC로 저장되므로 `KstDateFormat.utcStampToKst()`를 거친다. 그 전에는 UTC를 로컬인 양 찍고 있었고, 대화 목록의 `최종 활동`(`thread_meta.updated_at`, 시스템 로컬 저장)과 실측 9시간 어긋났다.
+> - **사용자·대화 필터는 배타다** — 대화 필터가 걸리면 사용자 select가 잠기고 해제 가능한 칩(`대화: {제목} ✕`)이 뜬다. 필터를 걸면 목록과 `전체 N턴` 배지가 **함께** 움직인다(페이지네이션 버튼은 크기 기반이라 개수만 어긋나도 아무것도 안 깨지고, 그래서 발견이 늦는다). `대화` 열을 누르면 그 대화로 좁혀지고, 반대 방향은 대화 목록의 `진단` 버튼이다.
+> - **응답 모드 `C` 턴의 `사용/검색`은 `해당 없음`이다** — 창의 평가기가 인용 문서(`usedDocs`)를 묻지 않아 응답 참여도가 구조적으로 0이라, `0/8`로 그리면 검색 실패로 오독된다.
+> - 페이지네이션·필터 JS(`loadRetrievalMetrics()`/`applyMetricsUserFilter()`/`filterMetricsByThread()`/`clearMetricsThreadFilter()`)는 큐레이션 패널과 **같은 이유로** `admin.html` 페이지 레벨에 있다 — 재조회가 plain `innerHTML` 삽입이라 프래그먼트 내장 `<script>`는 실행되지 않는다. 현재 필터 상태는 JS 변수가 아니라 **렌더된 DOM**(사용자 select 값, 칩의 `data-metrics-thread-id`)에서 읽는다 — 패널 전체가 매번 교체되므로 서버가 돌려준 마크업이 언제나 최신이다.
 > - 기록은 `conversation_turns.retrieval_metrics`(JSON blob, 방어적 `ALTER TABLE`)에서 읽으며, **수치를 가진 턴만** 목록에 오른다(meta/Direct/DB 재사용 턴은 빈 행으로 끼지 않는다). 읽기는 모르는 필드를 무시하도록 명시적으로 관대하게 파싱한다 — 이 행들은 자신을 쓴 코드보다 오래 살아남으므로, `SourceRef`에 필드가 하나 추가됐다고 과거 기록 전체가 안 읽히면 안 된다.
 
-> **카드 순서**: `/admin` 하단은 **청크 추가 제안 → 큐레이션 Q&A → 검색 진단 수치** 순이다. 마지막은 조치 대기열도, 반영 확인용도 아닌 순수 분석 뷰라 가장 아래다. 앞쪽은 관리자의 조치를 기다리는 대기열(검토 대기 pill이 붙는다)이고, 뒤쪽은 이미 반영된 것을 확인·회수하는 용도라 열어볼 일이 드물어 최하단에 둔다.
+> **대화 목록 카드**(`/admin`, 검색 진단 수치 카드 바로 위, §6.25): 같은 `<details>` 지연 로딩 구조(`hx-trigger="toggle[this.open] once"` → `GET /admin/threads`). **전 사용자**의 대화를 한 줄씩 보여준다 — `최종 활동 · 제목 · 사용자 · 턴 · 진단 · 재사용함 · 재사용됨 · 피드백` + `상세`/`진단`/`삭제`.
+> - **재사용 열이 둘인 이유**: `재사용함`은 이 대화가 과거 답변을 재사용한 횟수, `재사용됨`은 **이 대화의 답변이** 다른 턴에서 재사용된 횟수다. 삭제 버튼 옆에서 읽어야 할 값은 후자다 — 지우면 그 턴들이 전부 `"참조 원문 삭제됨"`이 되므로 0보다 크면 ◆ 표시가 붙는다.
+> - `진단` 열은 검색이 실제로 돈 턴 수다. 턴 수와 크게 벌어지면(⚠) 재사용·Direct 위주의 대화라는 뜻이다.
+> - 상단 요약 스트립은 **배포 전체 기준**이라 아래 목록을 걸러도 움직이지 않는다. 여기 `소속 대화 없는 턴 N건`이 뜨면 `thread_meta` 행 없이 남은 턴이 있다는 뜻 — 목록 쿼리가 구조적으로 볼 수 없는 상태라 숫자로만 알린다(`/admin/registry/reconcile-chunks`와 같은 성격의 정합성 표시).
+> - `app.auth.guest-identity=shared`(기본)이면 전 방문자가 하나의 게스트 id를 공유해 목록이 사용자 한 명으로 뭉친다 — "한 명이 썼다"로 오독하지 않도록 패널이 그 이유를 배너로 밝힌다.
+> - **상세**는 그 대화의 턴 목록(시각·질문·모드·경로·피드백)을 지연 로딩한다. `경로` 배지가 `재사용`/`Direct`/`검색`으로 이 턴이 무엇을 했는지 알려주고, `검색`인 턴에만 **출처** 버튼이 붙어 진단 패널과 같은 표를 편다. **원문** 버튼은 질문·답변 전문을 오프캔버스로 여는데, 그 호출이 `admin.thread.read` 감사를 남긴다(목록 자체에는 답변이 실리지 않는다 — [OPERATOR_MANUAL.md §7.9](OPERATOR_MANUAL.md#79-대화-목록--전-사용자-대화-조회삭제-625) 참고).
+> - **삭제**는 되돌릴 수 없고 남의 대화에까지 닿으므로, 확인 문구의 숫자를 렌더된 행이 아니라 **클릭 시점에 서버에서 다시 읽는다**(`delete-preview`). 대가가 있는 줄만 조건부로 붙는다 — 큐레이션 0건·재사용됨 0건이면 그 줄이 아예 없다(늘 "0건 회수"를 보여주면 정작 값이 있을 때의 경고가 묻힌다). 삭제 후에는 행 하나를 빼지 않고 목록 전체를 다시 그린다(요약·전체 개수·페이지 경계가 모두 움직인다).
+> - 표에 `min-width`가 걸려 있다 — 고정 폭 열 합계가 좁은 창의 테이블 폭을 다 먹으면 유연 열(제목)이 `max-width:0`(말줄임 관용구) 때문에 몇 px로 눌린다. 넘치는 만큼은 `.table-responsive`가 가로 스크롤로 흡수한다.
+
+> **카드 순서**: `/admin` 하단은 **청크 추가 제안 → 큐레이션 Q&A → 대화 목록 → 검색 진단 수치** 순이다. 뒤의 둘은 조치 대기열도, 반영 확인용도 아닌 분석·운영 뷰라 아래에 두고, 서로 드릴다운하는 짝이라 붙여 놓는다(대화 행 → 그 대화의 진단, 진단 행 → 그 대화). 앞쪽은 관리자의 조치를 기다리는 대기열(검토 대기 pill이 붙는다)이고, 뒤쪽은 이미 반영된 것을 확인·회수하는 용도라 열어볼 일이 드물어 최하단에 둔다.
 
 > **청크 추가 제안 카드**(`/admin` 하단, 큐레이션 Q&A 카드 바로 위): 같은 `<details>` 지연 로딩 구조(`hx-trigger="toggle[this.open] once"` → `GET /admin/submissions`)이며, 카드 제목 옆에 검토 대기 건수 pill(`#submission-pending-pill`)이 붙는다(0건이면 `.d-none`). 기본 필터는 `pending` — 상태 드롭다운으로 등록 완료/반려/철회됨/전체 전환. 행의 아이콘을 누르면 검토 오프캔버스(`#submissionReviewOffcanvas`)가 열려 제목·태그·본문을 **전문 그대로** 보여주고 수정한 뒤 **임베딩 실행**/**거부**할 수 있다 — 승인된 본문이 곧 답변 프롬프트의 검색 컨텍스트가 되므로 본문을 잘라 보여주지 않고, 일괄·자동 승인 버튼도 없다([OPERATOR_MANUAL.md §7.6](OPERATOR_MANUAL.md#76-청크-추가-제안-검토-69) 참고). 본문 영역은 **원문/미리보기 탭**으로 전환되며 미리보기는 `marked` → `DOMPurify.sanitize()`를 거친다(사용자가 작성한 마크다운을 관리자 화면에서 렌더하므로 sanitize가 필수). 오프캔버스 상단에는 **승인 시 몇 개 청크로 나뉘는지**(승인 후에는 실제 생성 개수)가 표시된다 — 본문 길이 제한이 없어진 대신 `ChunkSplitter`가 분할하기 때문. 페이지 레벨 JS(`loadSubmissions()`/`openSubmissionReview()`/`approveSubmission()`/`rejectSubmission()`)는 큐레이션 패널과 같은 이유로 `admin.html`에 둔다.
 >

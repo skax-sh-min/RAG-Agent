@@ -245,7 +245,7 @@ rag_java/
     │   │   ├── ChatController.java             # REST POST /api/v1/chat; HTMX /ui/chat, /ui/chat/stream, thread management
     │   │   ├── DocumentController.java         # REST /api/v1/documents, /api/v1/images; async upload (202+taskId)
     │   │   ├── OperationsController.java       # REST GET /api/v1/health, /api/v1/llm/usage; HTMX thread list + LLM cards
-    │   │   ├── AdminController.java            # /admin, /admin/chunks; document re-index; curated-Q&A + submission review
+    │   │   ├── AdminController.java            # /admin, /admin/chunks; document re-index; curated-Q&A + submission review; /admin/threads* conversation list/delete/read
     │   │   ├── CuratedSubmissionController.java # /curated/submissions — user-submitted chunk board (post, withdraw, body-image upload, unread badge)
     │   │   ├── SettingsController.java         # /settings view + /admin/settings/update|reset
     │   │   ├── AuthController.java             # /login, /signup, /setup page controllers; auto-login after signup
@@ -296,6 +296,7 @@ rag_java/
     │       ├── CuratedQaService.java          # Curated-Q&A axis: like promotion + admin-approved submissions, embed/de-index
     │       ├── CuratedSubmissionService.java  # Proposal board: validation + tags, split-on-approve (1:N), reject, notification counts
     │       ├── CuratedImageStore.java         # Proposal body images: upload (allowlist/size/magic-byte/content-hash name), [이미지: …] marker bookkeeping, approval-time Vision description, reference-counted cleanup + startup orphan sweep
+    │       ├── ThreadAdminService.java        # §6.25 — cross-user conversation list/drill-down + delete (retracts the thread's curated rows) + audited answer read
     │       ├── SettingsService.java           # runtime settings-override layer (AppProperties.OverrideSource) + /settings view/validation/audit
     │       ├── IndexingProgressService.java   # SSE emitter registry for async upload/sync progress; retains outcomes for hours so a reconnect after a long disconnect still learns the real result instead of hanging
     │       ├── MarkdownCorrectionService.java # Post-process LLM markdown output
@@ -332,7 +333,8 @@ rag_java/
             ├── layout/base.html           # Shared layout (Thymeleaf Layout Dialect; PWA meta + SW register)
             ├── chat.html                  # Chat page (server-renders previous turns)
             ├── documents.html             # Document management page
-            ├── admin.html                 # Vector store admin (chunk browser + curated Q&A + submissions)
+            ├── admin.html                 # Vector store admin (chunk browser + submissions + curated Q&A
+            │                              #   + cross-user conversation list + retrieval diagnostics)
             ├── settings.html              # Effective LLM/RAG config — view + hot edit
             ├── curated-submissions.html   # Knowledge-proposal board (post form + "my proposals" status list)
             ├── llm-usage.html             # LLM usage statistics page
@@ -343,6 +345,9 @@ rag_java/
                 ├── settings-item.html     # One settings row (view or edit input) — HTMX partial target
                 ├── settings-providers.html # LLM providers table (enable/disable toggles)
                 ├── admin-submissions.html # Admin proposal-review panel (lazy-loaded, status-filtered)
+                ├── admin-retrieval-metrics.html # Retrieval diagnostics panel (lazy, user/conversation filters)
+                ├── admin-threads.html     # Cross-user conversation list + turn drill-down (§6.25)
+                ├── admin-source-table.html # Per-source diagnostics table — shared by the two panels above
                 ├── llm-usage-cards.html   # Provider cards (HTMX 30s auto-refresh)
                 ├── thread-list.html       # HTMX thread list fragment
                 ├── thread-item.html       # HTMX thread item fragment

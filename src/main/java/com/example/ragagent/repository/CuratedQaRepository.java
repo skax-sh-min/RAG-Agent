@@ -23,9 +23,16 @@ import java.util.Set;
 
 /**
  * §10.10 — Q&A snapshot for turns promoted by a 👍. Independent of {@code conversation_turns}:
- * stores its own {@code question}/{@code answer} copy so it survives thread deletion (see
- * documents/PLAN.md §10.10 "연쇄 삭제 정책") and edits never mutate the original turn (audit
- * record stays immutable).
+ * it keeps its own {@code question}/{@code answer} copy, so edits never mutate the original turn
+ * (the audit record stays immutable) and a row outlives its turn structurally.
+ *
+ * <p>That independence is <b>not</b> a retention policy. The original §10.10 rule was that a
+ * curated row survives thread deletion; §6.25 reversed it — deleting a conversation now retracts
+ * the rows it promoted ({@code CuratedQaService.onThreadDeleted}), because an answer still being
+ * used as search evidence after its conversation is gone proved more confusing than the shared-
+ * knowledge loss the old rule protected, and because turn-level deletion had always retracted
+ * ({@code onUnlike}), leaving the two paths inconsistent. Copies still matter: they are what let
+ * the row be edited and re-embedded independently of the turn.
  */
 @Repository
 public class CuratedQaRepository {

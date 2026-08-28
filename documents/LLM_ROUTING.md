@@ -107,7 +107,7 @@ public enum RoutingMode {
 > 진실이고 이 문서가 뒤처진 것이다 — 특히 `base-url`의 폴백 기본값과 `priority` 숫자는 과거에 실제로 바뀐 적이 있다.
 
 ```properties
-app.llm.default-routing-mode=COST_FIRST
+app.llm.default-routing-mode=${LLM_ROUTING_MODE:COST_FIRST}
 app.llm.circuit-breaker-minutes=4
 app.llm.progressive-threshold=0.6
 # §6.18 — sampling temperature + response cap (were dead/hardcoded before). All three temperatures
@@ -128,7 +128,7 @@ app.llm.temperature=${LLM_TEMPERATURE:0.0}
 app.llm.direct-temperature=${DIRECT_LLM_TEMPERATURE:0.1}
 app.llm.indexing-temperature=${LLM_INDEXING_TEMPERATURE:0.0}
 app.llm.creative-temperature=${CREATIVE_LLM_TEMPERATURE:0.7}
-app.llm.max-tokens=${LLM_MAX_TOKENS:6000}
+app.llm.max-tokens=${LLM_MAX_TOKENS:10000}
 # 질의 경로 동시성 게이트 기본값(서버의 실제 --parallel 값에 맞춘다) + 대기 상한
 app.llm.default-provider-concurrency=${LLM_DEFAULT_PROVIDER_CONCURRENCY:3}
 app.llm.permit-wait-timeout-seconds=${LLM_PERMIT_WAIT_TIMEOUT_SECONDS:60}
@@ -184,11 +184,12 @@ app.llm.providers[2].stream=true
 # GEMINI_API_KEY1 미설정 시 시작 시 warn 로그 후 자동 비활성화.
 # ⚠️ 아래 [4]와 priority(2)가 동일하다 — 순차 폴백이 아니라 §6 로드밸런싱 대상(두 Gemini 키로
 # NORMAL 티어 처리량/쿼터를 두 배로 쓰는 구성, PREMIUM의 gemma-4-31b-1/-2와 같은 패턴).
-# GEMINI_MODEL을 설정하면 [3]/[4]가 같은 값을 읽어 두 모델이 하나로 합쳐지니 주의(README 참고).
+# ⚠️ [3]/[4]는 현재 기본 모델까지 동일하다(둘 다 gemini-3.5-flash-lite) — 즉 GEMINI_MODEL을 설정하지
+# 않아도 같은 모델을 두 키로 부르는 구성이다. 서로 다른 모델을 쓰려면 한쪽을 명시적으로 바꿔야 한다.
 app.llm.providers[3].name=gemini-flash-lite
 app.llm.providers[3].base-url=${GEMINI_BASE_URL:https://generativelanguage.googleapis.com/v1beta/openai/}
 app.llm.providers[3].api-key=${GEMINI_API_KEY1:}
-app.llm.providers[3].model=${GEMINI_MODEL:gemini-3.1-flash-lite}
+app.llm.providers[3].model=${GEMINI_MODEL:gemini-3.5-flash-lite}
 app.llm.providers[3].type=TEXT
 app.llm.providers[3].role=NORMAL
 app.llm.providers[3].priority=2
@@ -198,7 +199,7 @@ app.llm.providers[3].priority=2
 app.llm.providers[4].name=gemini-flash
 app.llm.providers[4].base-url=${GEMINI_BASE_URL:https://generativelanguage.googleapis.com/v1beta/openai/}
 app.llm.providers[4].api-key=${GEMINI_API_KEY2:}
-app.llm.providers[4].model=${GEMINI_MODEL:gemini-2.5-flash}
+app.llm.providers[4].model=${GEMINI_MODEL:gemini-3.5-flash-lite}
 app.llm.providers[4].type=TEXT
 app.llm.providers[4].role=NORMAL
 app.llm.providers[4].priority=2

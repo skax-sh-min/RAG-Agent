@@ -293,6 +293,7 @@ rag_java/
     │       ├── RagService.java                # 문서 인덱싱 + 동기화 + 이미지 정리
     │       ├── AdminService.java              # Admin UI 데이터 (청크 조회/편집 + 벡터 스토어 상태) — chroma·sqlite-vec
     │       ├── CuratedQaService.java          # 큐레이션 Q&A 축: 좋아요 승격 + 관리자 승인 제안, 임베딩/de-index
+    │       ├── ThreadAdminService.java        # §6.25 — 전 사용자 대화 목록/드릴다운 + 삭제(그 대화의 큐레이션 회수) + 감사되는 원문 열람
     │       ├── CuratedSubmissionService.java  # 청크 추가 게시판: 입력 검증+태그, 승인 시 분할(1:N), 거부, 알림 카운트
     │       ├── CuratedImageStore.java         # 제안 본문 이미지: 업로드(허용목록/크기/매직바이트/내용해시 파일명), [이미지: …] 마커 관리, 승인 시 Vision 설명 주입, 참조 세기 정리 + 기동 시 고아 스윕
     │       ├── SettingsService.java           # 런타임 설정 오버라이드 레이어(AppProperties.OverrideSource) + /settings 조회/검증/감사
@@ -336,6 +337,9 @@ rag_java/
             └── fragments/
                 ├── admin-curated.html     # 관리자 큐레이션 Q&A 패널 (펼칠 때 지연 로딩)
                 ├── admin-submissions.html # 관리자 청크 추가 제안 검토 패널 (지연 로딩, 상태 필터)
+                ├── admin-retrieval-metrics.html # 검색 진단 수치 패널 (지연 로딩, 사용자/대화 필터)
+                ├── admin-threads.html     # 전 사용자 대화 목록 + 턴 드릴다운 (§6.25)
+                ├── admin-source-table.html # 출처별 진단 표 — 위 두 패널이 공유
                 ├── llm-usage-cards.html   # 프로바이더 카드 (HTMX 30초 자동 갱신)
                 ├── thread-list.html       # HTMX 스레드 목록 fragment
                 ├── thread-item.html       # HTMX 스레드 아이템 fragment
