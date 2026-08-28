@@ -308,6 +308,33 @@ public class AdminController {
     }
 
     /**
+     * One turn's question and answer, in full — the drill-down's 원문 보기.
+     *
+     * <p>§6.25 결정 3: the panel's default shows structure, not transcripts, and reading someone's
+     * answer is an explicit act that leaves an {@code admin.thread.read} audit entry naming the
+     * reader, the owner and the turn. The audit is written <b>only when content actually goes
+     * out</b> — an unknown turn is a 404 and not a read.
+     */
+    @GetMapping("/admin/threads/turns/{turnId}/content")
+    @ResponseBody
+    public ResponseEntity<Map<String, Object>> turnContent(@PathVariable long turnId) {
+        return threadAdminService.turnContent(turnId)
+                .<ResponseEntity<Map<String, Object>>>map(c -> {
+                    auditLogger.log("admin.thread.read", c.threadId(), Map.of(
+                            "turnId", c.turnId(),
+                            "owner", c.userId()));
+                    Map<String, Object> body = new HashMap<>();
+                    body.put("turnId", c.turnId());
+                    body.put("askedAt", c.askedAtKst());
+                    body.put("question", c.question());
+                    body.put("answer", c.answer());
+                    body.put("responseMode", c.responseMode());
+                    return ResponseEntity.ok(body);
+                })
+                .orElseGet(() -> ResponseEntity.notFound().build());
+    }
+
+    /**
      * What deleting this conversation would cost — the numbers behind the confirmation dialog,
      * read at click time rather than taken from the rendered row (the panel may be minutes old,
      * and this is an irreversible cross-user action).

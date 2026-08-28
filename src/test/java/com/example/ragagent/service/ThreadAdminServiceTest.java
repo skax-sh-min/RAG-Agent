@@ -152,6 +152,43 @@ class ThreadAdminServiceTest {
                 .isEqualTo("admin");
     }
 
+    // ── 원문 열람 / KST 표시 ──────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("turnContent — 원문을 그대로 주되 시각은 KST 로, 모드는 파싱된 값으로")
+    void turnContentReturnsRawTextWithKstTimeAndParsedMode() {
+        when(repository.findTurnContent(7L)).thenReturn(java.util.Optional.of(
+                new ThreadAdminRepository.TurnContent(
+                        7L, "u1", "t1", "2026-08-27 03:00:00",
+                        "질문", "답변 전문", "M")));   // 구 모드 값
+
+        var c = service.turnContent(7L).orElseThrow();
+
+        assertThat(c.question()).isEqualTo("질문");
+        assertThat(c.answer()).isEqualTo("답변 전문");     // 원문은 손대지 않는다
+        assertThat(c.askedAtKst()).isEqualTo("2026-08-27 12:00:00");
+        assertThat(c.responseMode()).isEqualTo("N");       // 구 M/L 은 실제 동작과 같은 N 으로
+        assertThat(c.userId()).isEqualTo("u1");            // 감사에 남길 소유자
+    }
+
+    @Test
+    @DisplayName("turnContent — 없는 턴은 비어 있다 (열람이 아니므로 감사도 없다)")
+    void turnContentUnknownTurnIsEmpty() {
+        when(repository.findTurnContent(99L)).thenReturn(java.util.Optional.empty());
+
+        assertThat(service.turnContent(99L)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("드릴다운 턴의 시각도 KST — 진단 패널과 같은 규칙")
+    void drilldownTurnTimeIsKst() {
+        var row = new ThreadAdminRepository.TurnRow(
+                7L, "2026-08-27 15:30:45", "질문", "N", "local", null, false, false, true);
+
+        assertThat(new ThreadAdminService.TurnView(row).askedAtKst())
+                .isEqualTo("2026-08-28 00:30:45");   // 날짜 경계를 넘는다
+    }
+
     // ── 삭제 ─────────────────────────────────────────────────────────────────
 
     private void stubOne(String threadId, String owner, ThreadRow row) {

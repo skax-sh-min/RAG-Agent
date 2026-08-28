@@ -359,6 +359,34 @@
 <!-- ── §10.10 큐레이션 Q&A 편집 Offcanvas ──────────────────────────────── -->
 <!-- 너비는 청크 편집과 동일하게 openCuratedEdit()이 화면 폭에 따라 다시 지정한다(좁은 화면에서만
      여기 적힌 기본값이 그대로 쓰인다). -->
+<!-- §6.25 — 대화 원문 열람(읽기 전용). 답변은 최대 2만 자까지 갈 수 있어 표 안에 펼치지 않고
+     오프캔버스로 뺀다. 렌더링 없이 <pre>+textContent 로만 넣는다: 여기는 "원문 보기"이고,
+     남의 텍스트를 마크다운으로 해석하면 보이는 것과 저장된 것이 달라진다. -->
+<div class="offcanvas offcanvas-end" tabindex="-1" id="turnContentOffcanvas" style="width:640px; max-width:100%;">
+    <div class="offcanvas-header border-bottom py-2">
+        <h6 class="offcanvas-title"><i class="bi bi-card-text me-2"></i>대화 원문</h6>
+        <button type="button" class="btn-close" data-bs-dismiss="offcanvas"></button>
+    </div>
+    <div class="offcanvas-body d-flex flex-column gap-3">
+        <div class="small text-muted d-flex flex-wrap gap-2 align-items-center">
+            <span id="turn-content-meta">turn #-</span>
+            <span class="badge bg-warning-subtle text-warning-emphasis">열람 기록됨</span>
+        </div>
+        <div>
+            <label class="form-label small text-muted mb-1">질문</label>
+            <pre id="turn-content-question"
+                 class="border rounded p-2 mb-0 small"
+                 style="white-space:pre-wrap; word-break:break-word;"></pre>
+        </div>
+        <div class="d-flex flex-column flex-grow-1" style="min-height:0;">
+            <label class="form-label small text-muted mb-1">답변</label>
+            <pre id="turn-content-answer"
+                 class="border rounded p-2 mb-0 small flex-grow-1 overflow-auto"
+                 style="white-space:pre-wrap; word-break:break-word;"></pre>
+        </div>
+    </div>
+</div>
+
 <div class="offcanvas offcanvas-end" tabindex="-1" id="curatedEditOffcanvas" style="width:520px; max-width:100%;">
     <div class="offcanvas-header border-bottom">
         <h6 class="offcanvas-title"><i class="bi bi-chat-heart me-2"></i>큐레이션 Q&A 편집</h6>
@@ -977,6 +1005,27 @@ function showThreadDiagnostics(threadId) {
     card.open = true;
     loadRetrievalMetrics(0, null, { threadId: threadId, userId: '' });
     card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+/* 답변 원문 열람 — 이 호출 자체가 admin.thread.read 감사 이벤트를 남긴다(§6.25 결정 3).
+   textContent 로만 넣는다: 남의 텍스트를 마크다운/HTML 로 해석하면 "원문 보기"가 아니게 되고,
+   그 텍스트는 애초에 신뢰 경계 밖에서 온 값이다. */
+function openTurnContent(turnId) {
+    fetch('/admin/threads/turns/' + encodeURIComponent(turnId) + '/content',
+          { headers: { 'HX-Request': 'true' } })
+        .then(r => {
+            if (r.status === 404) throw new Error('이미 삭제된 턴입니다.');
+            if (!r.ok) throw new Error('원문을 불러오지 못했습니다 (' + r.status + ')');
+            return r.json();
+        })
+        .then(c => {
+            document.getElementById('turn-content-meta').textContent =
+                'turn #' + c.turnId + ' · ' + c.askedAt + ' · ' + c.responseMode;
+            document.getElementById('turn-content-question').textContent = c.question || '';
+            document.getElementById('turn-content-answer').textContent = c.answer || '';
+            new bootstrap.Offcanvas(document.getElementById('turnContentOffcanvas')).show();
+        })
+        .catch(e => alert(e.message));
 }
 
 /* 드릴다운의 턴별 '출처' — 진단 패널과 같은 공용 표 프래그먼트를 지연 로딩한다. */

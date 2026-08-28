@@ -626,6 +626,59 @@ class AdminControllerWebMvcTest {
                 .andExpect(content().string(containsString("출처 정보가 없습니다")));
     }
 
+    // ── §6.25 답변 원문 열람 (결정 3) ────────────────────────────────────────────
+
+    @Test
+    @DisplayName("GET .../turns/{id}/content — 원문을 내주고 열람을 감사 로그에 남긴다")
+    void turnContent_returnsTextAndAuditsTheRead() throws Exception {
+        when(threadAdminService.turnContent(7L)).thenReturn(Optional.of(
+                new com.example.ragagent.service.ThreadAdminService.TurnContentView(
+                        7L, "guest-a1b2c3d4e5f6", "t1", "2026-08-27 12:00:00",
+                        "청크 분할 전략이 뭐야", "답변 전문입니다", "N")));
+
+        mvc.perform(get("/admin/threads/turns/7/content").with(user(ADMIN)))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("답변 전문입니다")))
+                // 표시 시각은 KST 로 변환된 값이어야 한다 (§6.25 결정 2)
+                .andExpect(content().string(containsString("2026-08-27 12:00:00")));
+
+        verify(auditLogger).log(eq("admin.thread.read"), eq("t1"), argThat(d ->
+                Long.valueOf(7L).equals(d.get("turnId"))
+                        && "guest-a1b2c3d4e5f6".equals(d.get("owner"))));
+    }
+
+    /** 없는 턴은 열람이 아니다 — 404 이고 감사 로그에 "읽었다"가 남으면 안 된다. */
+    @Test
+    @DisplayName("GET .../turns/{id}/content — 없는 턴은 404이고 열람 기록을 남기지 않는다")
+    void turnContent_unknownTurnIs404AndNotAudited() throws Exception {
+        when(threadAdminService.turnContent(99L)).thenReturn(Optional.empty());
+
+        mvc.perform(get("/admin/threads/turns/99/content").with(user(ADMIN)))
+                .andExpect(status().isNotFound());
+
+        verifyNoInteractions(auditLogger);
+    }
+
+    /**
+     * 드릴다운 목록에는 답변이 실려서는 안 된다 — {@code TurnRow} 에 필드가 없다는 구조적 사실을
+     * 렌더 결과로도 고정한다. 원문은 위 감사되는 엔드포인트로만 나간다(결정 3).
+     */
+    @Test
+    @DisplayName("드릴다운 목록은 답변을 싣지 않고, 원문 버튼만 제공한다")
+    void threadTurns_listCarriesNoAnswerOnlyTheButton() throws Exception {
+        var row = new com.example.ragagent.repository.ThreadAdminRepository.TurnRow(
+                7L, "2026-08-27 03:00:00", "질문 미리보기", "N", "local", null, false, false, true);
+        when(threadAdminService.turns("t1"))
+                .thenReturn(List.of(new com.example.ragagent.service.ThreadAdminService.TurnView(row)));
+
+        mvc.perform(get("/admin/threads/t1/turns").with(user(ADMIN)))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("질문 미리보기")))
+                .andExpect(content().string(containsString("원문")))
+                // 시각은 KST 로 (03:00 UTC → 12:00 KST)
+                .andExpect(content().string(containsString("2026-08-27 12:00:00")));
+    }
+
     // ── §6.25 대화 삭제 ─────────────────────────────────────────────────────────
 
     @Test

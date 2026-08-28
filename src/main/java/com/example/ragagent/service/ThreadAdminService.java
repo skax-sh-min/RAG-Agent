@@ -1,6 +1,7 @@
 package com.example.ragagent.service;
 
 import com.example.ragagent.config.AppProperties;
+import com.example.ragagent.model.KstDateFormat;
 import com.example.ragagent.model.ResponseMode;
 import com.example.ragagent.model.ThreadMeta;
 import com.example.ragagent.repository.ThreadAdminRepository;
@@ -147,6 +148,11 @@ public class ThreadAdminService {
         public boolean directMode()     { return row.directMode(); }
         public boolean hasDiagnostics() { return row.hasDiagnostics(); }
 
+        /** 진단 패널과 같은 규칙 — 저장은 UTC, 표시는 KST(§6.25 결정 2). */
+        public String askedAtKst() {
+            return KstDateFormat.utcStampToKst(row.askedAt());
+        }
+
         /** Preview line — the panel is a list, not a transcript reader. */
         public String question() {
             String q = row.question();
@@ -168,6 +174,30 @@ public class ThreadAdminService {
 
         public boolean liked()    { return "LIKE".equals(row.feedback()); }
         public boolean disliked() { return "DISLIKE".equals(row.feedback()); }
+    }
+
+    // ── 답변 원문 열람 (§6.25 결정 3) ────────────────────────────────────────
+
+    /**
+     * One turn's question and answer, in full.
+     *
+     * @param askedAtKst 저장은 UTC, 표시는 KST — 목록·드릴다운과 같은 규칙(결정 2)
+     */
+    public record TurnContentView(long turnId, String userId, String threadId, String askedAtKst,
+                                  String question, String answer, String responseMode) {}
+
+    /**
+     * 한 턴의 원문. <b>호출 자체가 기록에 남을 일</b>이므로 컨트롤러가 결과를 받은 뒤
+     * {@code admin.thread.read} 감사 이벤트를 남긴다 — 여기서 남기지 않는 이유는 감사에 필요한
+     * 행위자(관리자 id)를 서비스가 알지 못하고, "조회했다"는 사실은 응답이 실제로 나갔을 때만
+     * 참이기 때문이다(없는 턴은 404 이고 열람이 아니다).
+     */
+    public Optional<TurnContentView> turnContent(long turnId) {
+        return repository.findTurnContent(turnId).map(c -> new TurnContentView(
+                c.turnId(), c.userId(), c.threadId(),
+                KstDateFormat.utcStampToKst(c.askedAt()),
+                c.question(), c.answer(),
+                ResponseMode.parse(c.responseMode()).name()));
     }
 
     // ── 삭제 ─────────────────────────────────────────────────────────────────

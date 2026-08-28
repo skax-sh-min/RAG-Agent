@@ -274,6 +274,38 @@ public class ThreadAdminRepository {
                 userId, threadId, Math.max(1, limit));
     }
 
+    /**
+     * One turn's full text — the only place in this class that returns an answer.
+     *
+     * <p>Separate from {@link #findTurns}, which deliberately has no answer column: the panel's
+     * default is that an operator sees structure, not transcripts, and reading an answer is an
+     * explicit, audited act (§6.25 결정 3). Keeping it a distinct query is what makes "was this
+     * read" a question the audit log can answer — a column on the list would have made every
+     * listing an unlogged read.
+     *
+     * <p>Carries the owner so the caller can record <em>whose</em> answer was read without
+     * accepting a userId from the client.
+     */
+    public Optional<TurnContent> findTurnContent(long turnId) {
+        List<TurnContent> rows = jdbc.query(
+                "SELECT id, user_id, thread_id, asked_at, question, answer, response_mode " +
+                "  FROM conversation_turns WHERE id = ?",
+                (rs, n) -> new TurnContent(
+                        rs.getLong("id"),
+                        rs.getString("user_id"),
+                        rs.getString("thread_id"),
+                        rs.getString("asked_at"),
+                        rs.getString("question"),
+                        rs.getString("answer"),
+                        rs.getString("response_mode")),
+                turnId);
+        return rows.isEmpty() ? Optional.empty() : Optional.of(rows.get(0));
+    }
+
+    /** @see #findTurnContent */
+    public record TurnContent(long turnId, String userId, String threadId, String askedAt,
+                              String question, String answer, String responseMode) {}
+
     /** Owners that actually have conversations — the panel's filter dropdown. */
     public List<String> distinctUserIds() {
         return jdbc.queryForList(

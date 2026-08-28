@@ -364,6 +364,24 @@ class ManagementOnlyAuthorizationTest {
     }
 
     /**
+     * §6.25 결정 3 — 이 엔드포인트가 게스트에게 열리면 "관리자만, 기록을 남기고" 라는 열람 조건이
+     * 통째로 무의미해진다. 남의 답변 전문이 나가는 유일한 경로라 게이트를 따로 고정한다.
+     */
+    @Test
+    @DisplayName("ROLE_USER GET /admin/threads/turns/{id}/content — 403 (원문 열람은 관리자 전용)")
+    void guestTurnContent_isForbidden() throws Exception {
+        mvc.perform(get("/admin/threads/turns/7/content").with(user("guest").roles("USER")))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    @DisplayName("익명 GET /admin/threads/turns/{id}/content — 로그인으로 리다이렉트")
+    void anonymousTurnContent_isGated() throws Exception {
+        mvc.perform(get("/admin/threads/turns/7/content"))
+                .andExpect(status().is3xxRedirection());
+    }
+
+    /**
      * 양성 대조 — 위 403들이 "게이트가 막았다"인지 "그런 엔드포인트가 없다"인지 구분한다.
      * 서비스 목이 빈 값을 주므로 컨트롤러까지 도달했다면 404 다: 403 이 아니라는 것이 요지.
      */

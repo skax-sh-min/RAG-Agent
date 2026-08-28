@@ -1,5 +1,6 @@
 package com.example.ragagent.service;
 
+import com.example.ragagent.model.KstDateFormat;
 import com.example.ragagent.model.ResponseMode;
 import com.example.ragagent.model.SourceRef;
 import com.example.ragagent.model.ThreadMeta;
@@ -68,6 +69,12 @@ public class RetrievalMetricsService {
                               String provider, List<SourceRef> sources,
                               Double maxSimilarity, int usedSourceCount,
                               String userId, String threadId, String threadTitle) {
+
+        /** {@code asked_at} 은 UTC 로 저장된다 — 화면에는 KST 로 낸다(§6.25 결정 2). 원본은
+         *  {@link #askedAt()} 로 남는다. */
+        public String askedAtKst() {
+            return KstDateFormat.utcStampToKst(askedAt);
+        }
 
         /**
          * Shortened owner id for the table cell — a no-auth guest id is {@code guest-<12 hex>}

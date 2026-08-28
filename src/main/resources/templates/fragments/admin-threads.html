@@ -168,7 +168,7 @@
     <table class="table table-sm mb-0 small" th:unless="${#lists.isEmpty(turns)}">
         <thead>
         <tr>
-            <th style="width:150px;">시각 (UTC)</th>
+            <th style="width:160px;">시각</th>
             <th>질문</th>
             <th style="width:50px;">모드</th>
             <th style="width:110px;">경로</th>
@@ -178,7 +178,7 @@
         </thead>
         <tbody th:each="t : ${turns}">
         <tr>
-            <td class="text-muted text-nowrap" th:text="${t.askedAt}">2026-08-27</td>
+            <td class="text-muted text-nowrap" th:text="${t.askedAtKst}" title="KST (저장은 UTC)">2026-08-27</td>
             <td class="text-truncate" style="max-width:0;" th:text="${t.question}" th:title="${t.question}">질문</td>
             <td><span class="badge bg-secondary" th:text="${t.responseMode}">N</span></td>
             <td class="text-nowrap text-muted" style="font-size:0.72rem;">
@@ -193,15 +193,21 @@
                 <span th:if="${t.disliked}">👎</span>
                 <span th:if="${!t.liked and !t.disliked}" class="text-muted">-</span>
             </td>
-            <td>
+            <td class="text-nowrap">
                 <!-- 검색이 돈 턴만 볼 것이 있다. 진단 패널과 같은 표(공용 프래그먼트)를 쓴다. -->
                 <button class="btn btn-sm btn-outline-secondary py-0 px-2"
                         th:if="${t.hasDiagnostics}" th:data-turn-id="${t.turnId}"
                         onclick="toggleTurnSources(this.dataset.turnId)">출처</button>
+                <!-- 답변 전문은 기본 감춤이고, 이 버튼을 눌러야 조회된다 — 그 조회가
+                     admin.thread.read 감사 이벤트를 남긴다(§6.25 결정 3). -->
+                <button class="btn btn-sm btn-outline-secondary py-0 px-2"
+                        th:data-turn-id="${t.turnId}"
+                        title="질문·답변 원문 보기 (열람 기록이 남습니다)"
+                        onclick="openTurnContent(this.dataset.turnId)">원문</button>
             </td>
         </tr>
         <tr class="d-none" th:if="${t.hasDiagnostics}" th:id="'turn-sources-' + ${t.turnId}">
-            <td colspan="6" class="p-0">
+            <td colspan="7" class="p-0">
                 <div class="p-2 text-muted small text-center" th:id="'turn-sources-body-' + ${t.turnId}">
                     <span class="spinner-border spinner-border-sm me-2"></span>불러오는 중...
                 </div>

@@ -89,7 +89,7 @@
             </thead>
             <tbody th:each="t : ${metricTurns}">
             <tr>
-                <td class="text-muted text-nowrap" th:text="${t.askedAt}">2026-08-16</td>
+                <td class="text-muted text-nowrap" th:text="${t.askedAtKst}" title="KST (저장은 UTC)">2026-08-16</td>
                 <td class="text-truncate" style="max-width:0;" th:text="${t.question}" th:title="${t.question}">질문</td>
                 <!-- 이 턴이 어느 대화에서 나왔는지 — 클릭하면 그 대화로 좁힌다 -->
                 <td class="text-truncate" style="max-width:0;">
