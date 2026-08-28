@@ -81,7 +81,9 @@
                      th:text="${meta.title}"></div>
                 <!-- Thread ID + copy -->
                 <div class="d-flex align-items-center gap-1 mb-2 text-muted font-monospace">
-                    <span th:text="${#strings.substring(meta.threadId, 0, 8)}"></span>
+                    <!-- 8자 자르기를 템플릿에서 하지 않는다: 8자보다 짧은 id(레거시 "default" 등)에서
+                         #strings.substring 이 예외를 던져 채팅 페이지 전체가 500으로 죽었다. -->
+                    <span th:text="${meta.shortThreadId}"></span>
                     <button class="btn btn-link btn-sm p-0 text-muted lh-1"
                             th:title="#{chat.copy}"
                             th:attr="data-thread-id=${meta.threadId}"

@@ -45,6 +45,7 @@ import static org.springframework.security.test.web.servlet.request.SecurityMock
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.hamcrest.Matchers.containsString;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.model;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.request;
@@ -293,6 +294,32 @@ class ChatControllerHtmxTest {
                 .andExpect(model().attribute("curatedEmbedFailedTurnIds", Set.of(1L)));
 
         verify(curatedQaService).findFailedTurnIds(List.of(1L, 2L));
+    }
+
+    /**
+     * 회귀 — 8자보다 짧은 thread id 로 채팅 페이지가 500 이 되던 사고.
+     *
+     * <p>사이드바가 id 를 8자로 줄여 보여주는데, 그 자르기를 템플릿이
+     * {@code #strings.substring(meta.threadId, 0, 8)} 으로 직접 하고 있었다. 스레드 id 는 보통
+     * UUID 지만 전부 그렇지는 않아서, 실배포에 있던 레거시 스레드 {@code "default"}(7자)를 열면
+     * {@code StringIndexOutOfBoundsException} 이 나고 페이지 전체가 죽었다.
+     *
+     * <p>단위 테스트({@code ThreadMetaTest.shortThreadId_*})만으로는 이 사고를 잡을 수 없다 —
+     * 터진 곳이 템플릿이었기 때문에, 실제로 렌더까지 가는 이 테스트가 함께 있어야 한다.
+     */
+    @Test
+    @DisplayName("GET /chat/{threadId} — id가 8자보다 짧아도 페이지가 렌더된다 (500 회귀)")
+    void chat_shortThreadId_rendersWithoutError() throws Exception {
+        when(threadMetaService.findById(any(), eq("default"))).thenReturn(Optional.of(
+                new ThreadMeta("default", "user", "제목", "latest", "now", "now", "COST_FIRST", "")));
+        when(memoryService.getTurns(any(), eq("default"))).thenReturn(List.of());
+
+        AppUserDetails principal = new AppUserDetails("id-1", "user@local", "", "User", "USER", true, false);
+
+        mvc.perform(get("/chat/default").with(user(principal)))
+                .andExpect(status().isOk())
+                .andExpect(view().name("chat"))
+                .andExpect(content().string(containsString("default")));
     }
 
     /** C(응용) 턴 — 검증 통과(생성) + 발명된 이름 하나. */

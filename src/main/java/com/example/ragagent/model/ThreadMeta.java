@@ -38,4 +38,24 @@ public record ThreadMeta(
     public String tagsDisplay() {
         return String.join(", ", TagUtils.parseTagList(tags));
     }
+
+    /** How much of the thread id the chat sidebar shows next to the copy button. */
+    private static final int SHORT_ID_LENGTH = 8;
+
+    /**
+     * Thread id shortened for display — the full value stays available for the copy button.
+     *
+     * <p>The template used to do this itself with {@code #strings.substring(meta.threadId, 0, 8)},
+     * which threw {@code StringIndexOutOfBoundsException} and took the whole chat page down with a
+     * 500 for any id shorter than 8 characters. Thread ids are normally UUIDs, but not all of them
+     * are: a real deployment carried a legacy thread literally named {@code "default"} (7 chars),
+     * and opening it made {@code /chat/default} unreachable rather than merely ugly.
+     *
+     * <p>Lives here rather than in the template for the same reason {@link #displayTitle()} does —
+     * a display rule with an edge case belongs somewhere a test can reach it.
+     */
+    public String shortThreadId() {
+        if (threadId == null) return "";
+        return threadId.length() <= SHORT_ID_LENGTH ? threadId : threadId.substring(0, SHORT_ID_LENGTH);
+    }
 }
