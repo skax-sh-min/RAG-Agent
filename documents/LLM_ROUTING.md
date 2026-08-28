@@ -52,7 +52,7 @@
 │    CriticService            → —      (LLM 호출 없음, S는 스킵·C는 창의 기준) │
 │    DirectAnswerService      → TEXT   (사용자 노출 — 큰 모델 유지)    │
 │    VisionDescriptionService → VISION                                 │
-│    ImageTypeClassifier      → LIGHT_BOTH  (분류는 범용 멀티모달로)   │
+│    ImageTypeClassifier      → LIGHT_BOTH  (멀티모달: LIGHT_BOTH/BOTH) │
 │    KeywordExtractor (키워드+맥락) → MICRO_TEXT                                  │
 │    RerankerService (opt-in) → TEXT        (SEARCH_RERANK_ENABLED=true일 때만) │
 └──────────────────────────────────────────────────────────────────────┘
@@ -81,8 +81,17 @@ public enum TaskType {
 DIRECT_ANSWER로 가지 않고 RETRIEVAL을 탄다(`allowsDirect()=false`) — 라우팅 관점에서는 meta 턴 하나가
 TEXT 1회에서 TEXT 2회(답변+평가) + 임베딩으로 늘어난다는 뜻이다.
 
-`supports()` 매핑: `MICRO_TEXT`→MICRO_TEXT만, `LIGHT_TEXT`→LIGHT_TEXT+MICRO_TEXT, `LIGHT_BOTH`→LIGHT_TEXT·MICRO_TEXT·VISION, `BOTH`→전체. MICRO_TEXT는 LIGHT_TEXT의 부분집합이라 소형(`type=MICRO_TEXT`) 미등록 시 상위 모델이 흡수(회귀 0).  
-`type=VISION` 프로바이더는 VISION task에서만 선택됨 — 범용 `LIGHT_BOTH` 모델과 공존 가능.
+`supports()` 매핑 — 텍스트 3종은 **사다리**(`MICRO_TEXT` ⊂ `LIGHT_TEXT` ⊂ `TEXT`)이고 무거운 타입이 가벼운 작업을 반드시 흡수한다: `MICRO_TEXT`→MICRO_TEXT만, `LIGHT_TEXT`→LIGHT_TEXT+MICRO_TEXT, `TEXT`→TEXT+LIGHT_TEXT+MICRO_TEXT, `LIGHT_BOTH`→LIGHT_TEXT·MICRO_TEXT·VISION, `BOTH`→전체. 덕분에 소형(`type=MICRO_TEXT`) 미등록 시 상위 모델이 그대로 흡수한다(회귀 0).  
+`type=VISION` 프로바이더는 VISION task에서만 선택됨 — 범용 `LIGHT_BOTH` 모델과 공존 가능. **VISION은 사다리와 무관한 별도 축**이라 어떤 텍스트 타입도 흡수하지 않는다(mmproj 없는 모델로 이미지가 흘러가면 안 되므로).
+
+> **`TEXT`가 아래 둘을 흡수하는 이유** — 예전에는 `TEXT`→TEXT만이었고, 그 결과 **텍스트 전용 모델 하나짜리 배포**(`LOCAL_LLM_TYPE=TEXT`)와 **클라우드 전용 배포**(출하되는 클라우드 프로바이더가 전부 `type=TEXT`)에서 `MICRO_TEXT`/`LIGHT_TEXT` 자격 프로바이더가 **0개**가 됐다. 키워드+맥락 추출·MD 서식 교정·TXT 구조화·스레드 제목·대화 요약이 통째로 죽는데, 채팅만은 `TEXT`로 라우팅돼 정상 동작하고 실패는 `All providers exhausted for task=MICRO_TEXT` DEBUG 한 줄이라 드러나지 않았다.
+> 이 확장은 §6.21(잡무를 답변 모델에서 분리)을 되돌리지 않는다 — 그 분리는 **태스크 라벨링**으로 강제되고(분류·meta 직답이 `TEXT`인 이유가 그것), 소형이 등록돼 있으면 `priority=0`이 여전히 먼저 뽑힌다. 선택적 잡무가 답변 티어를 잠식하는 것을 막는 장치는 `supports()`가 아니라 `LlmRouter.hasMicroTextOffloadProvider()`다(아래 §9 "폴백/회귀 0" 참조).
+
+**행(프로바이더 type)과 열(요청 task)은 서로 다른 축이다.** 6개 값이 양쪽에 다 등장하지만 요청으로 쓰이는 것은 5개뿐이다 — 앱은 **`BOTH`를 태스크로 요청하지 않는다**. `BOTH`는 프로바이더 설정값과 `LlmRouter.hasEnabledProviderFor()`류의 판정에만 등장하므로, 표의 `BOTH` 행(프로바이더 능력)과 태스크로서의 `BOTH`를 같은 것으로 읽으면 안 된다.
+
+`LIGHT_BOTH`는 양쪽에 다 쓰인다 — 프로바이더 type이자, `ImageTypeClassifier`(이미지 유형 분류)가 "멀티모달이면 되고 대형일 필요는 없다"는 뜻으로 내는 요청이다. 그래서 `LIGHT_BOTH` 요청은 **`LIGHT_BOTH`와 `BOTH`가 받고**, 텍스트 전용 3종과 `VISION` 전용은 거부한다(이 요청은 경량 텍스트 + 이미지를 함께 요구한다).
+
+> **예전에는 `case LIGHT_BOTH` 분기가 자기 자신을 빼놓아 `BOTH`만 이 요청을 받을 수 있었다.** 즉 이 값이 존재하는 이유인 "범용 로컬 LLM"으로 등록하면, 이미지 설명(`VISION` 요청)은 되는데 유형 분류만 그 모델에서 못 돌았다. `TEXT`가 사다리를 못 올라가던 것과 같은 모양의 구멍이었고 같은 방식으로 메웠다.
 
 ### RoutingMode
 
@@ -411,6 +420,8 @@ CREATE TABLE IF NOT EXISTS llm_usage (
 - **classifyOnly() 토큰 미누적**: `AgentService`가 선행 분류 시 `AgentState` 토큰 집계에서 1회 누락 (허용된 MVP 트레이드오프)
 - **tried 집합 순환 방지**: `executeWithTracking()` 내 tried 집합이 모든 프로바이더를 포함하면 exhausted — 최대 재귀 = 프로바이더 수
 - **Vision 라우팅**: `type=VISION` 모델 미등록 시 `LIGHT_BOTH` → `BOTH` 순으로 fallback. Vision 문서 많으면 `local-vision` 등록 권장
+  - **이미지 유형 분류(`ImageTypeClassifier`)는 요청 타입이 `VISION`이 아니라 `LIGHT_BOTH`** 라 `type=VISION` 전용 모델로는 내려가지 않는다(경량 텍스트도 함께 요구하므로). 후보는 `LIGHT_BOTH`/`BOTH`이며, `local-vision`을 따로 등록해도 이 호출만은 범용 모델이 받는다
+  - 문서 업로드 화면의 이미지 설명 가능 여부는 `DocumentController`가 `LlmRouter.hasEnabledProviderFor(VISION)`으로 판단한다 — `supports()`에서 능력을 파생하므로 화면 표시와 실제 라우팅 조건이 항상 일치한다. 예전에는 `hasEnabledProviderType(BOTH, VISION)`이라는 **타입 이름 목록** 검사였고 `LIGHT_BOTH`가 빠져 있어, 이미지 설명이 실제로 동작하는 배포에서 "이미지 설명 추가" 체크박스가 비활성화됐다
   - ⚠️ `local-vision` 예제는 `role=LOCAL, priority=0` — **소형(MICRO_TEXT) 오프로드 모델과 같은 role+priority**다. `hasMicroTextOffloadProvider()`가 `supports(MICRO_TEXT)`까지 확인하는 이유가 이것이다(§9): 타입을 안 보면 Vision 모델 하나 등록한 것만으로 "소형 모델 있음"으로 오판해, `findFirst`가 정작 그 프로바이더를 건너뛰고 요약 같은 잡무를 `priority=1` 답변 모델로 보낸다. 증상은 "소형 모델을 등록한 적 없는데 `/llm-usage`에 `summary:` 사용량이 답변 모델 이름으로 잡힌다"
 - **동시성 게이트(§6) 크기 설정 실수**: `providers[N].concurrency`를 서버의 실제 `--parallel`보다 크게 잡으면 앱이 스스로 429/타임아웃을 유발할 수 있다(서버가 처리 못 할 요청까지 통과시킴). 반대로 너무 작게 잡으면 여유 용량을 못 씀 — 서버 설정값과 일치시키는 것이 원칙
 - **동일 우선순위 프로바이더 다중 등록 시 자동 로드밸런싱**: `findFirst()`가 같은 role·같은 priority 후보 중 동시성 게이트의 잔여 permit이 가장 많은(least-in-flight) 프로바이더를 선택 — 여러 대 등록하면 실제로 부하가 분산된다. priority가 다르면 부하와 무관하게 낮은 priority가 항상 우선(동일 priority 그룹 내부에서만 분산). 설정 방법은 §3 "로컬 LLM 2 — 로컬 LLM 1과 로드밸런싱" 참고
@@ -432,10 +443,11 @@ CREATE TABLE IF NOT EXISTS llm_usage (
 | 키워드+맥락·요약·제목·MultiQuery 쿼리확장 (`MICRO_TEXT`) | **소형** | MICRO_TEXT eligible=[소형(p0), 큰(p1)] → 최저 priority=소형 |
 | 분류·meta 직답 (`TEXT`) | **큰 모델** | 답변과 같은 타입이라 `type=TEXT`/`BOTH`만 eligible |
 | 답변·Critic·Rerank (`TEXT`) | **큰 모델** | 소형은 `supports(TEXT)=false` |
-| MD 서식 교정·TXT 구조화 (`LIGHT_TEXT`) | **큰 모델** | 소형(MICRO_TEXT)은 `supports(LIGHT_TEXT)=false` → 큰 BOTH만 eligible |
-| Vision·이미지 분류 (`VISION`/`LIGHT_BOTH`) | **큰 모델** | 소형은 이미지 미지원 |
+| MD 서식 교정·TXT 구조화 (`LIGHT_TEXT`) | **큰 모델** | 소형(MICRO_TEXT)은 `supports(LIGHT_TEXT)=false` → 큰 모델(`TEXT`/`BOTH`)만 eligible |
+| 이미지 설명 (`VISION`) | **큰 모델** | 소형은 이미지 미지원 (`type=VISION`/`LIGHT_BOTH`/`BOTH`만 eligible) |
+| 이미지 유형 분류 (`LIGHT_BOTH`) | **큰 모델** | 경량 텍스트 + 이미지를 함께 요구 → `LIGHT_BOTH`/`BOTH`만 eligible (`VISION` 전용도 거부) |
 
-- **폴백/회귀 0**: `MICRO_TEXT`는 `LIGHT_TEXT`/`LIGHT_BOTH`/`BOTH`가 모두 지원(부분집합)하므로, 소형 다운·미등록 시 큰 모델이 그대로 흡수한다. **예외: 대화 요약**(`ConversationSummarizerService`)만은 이 폴백을 타지 않는다 — 소형(`role=LOCAL`·`priority=0`이면서 **`MICRO_TEXT`를 실제로 지원하는 타입**)이 없으면(`LlmRouter.hasMicroTextOffloadProvider()=false`) **LLM 호출만** 생략한다(부가 기능이 답변용 모델의 동시성 슬롯을 잠식하지 않게 하려는 의도적 게이팅). 그렇다고 요약을 포기하지는 않는다: RAG 답변은 `prompt.answer.system`이 강제한 `## 요약` 섹션을 이미 갖고 있으므로 그것들을 그대로 이어 붙여 **LLM 0회로 요약을 조립**하고, 섹션이 없는 답변(Direct·meta)만 `UNSUMMARIZED_ANSWER_CAP`(300자)으로 잘라 담는다 — `LOCAL_FAST_LLM_URL`은 기본값이 없어 미설정이 흔한데, 예전처럼 `null`을 반환하면 Direct 턴 하나 때문에 이미 뽑아둔 요약 전부를 버리고 원본 history로 떨어졌다. 원본 history 폴백은 이제 요약할 턴이 아예 없을 때만 일어난다. `RetrievalService`는 `MICRO_TEXT→LIGHT_TEXT→TEXT` 순 폴백이라 cloud-only(LOCAL 없음)에서도 구성 실패가 없다.
+- **폴백/회귀 0**: `MICRO_TEXT`는 `LIGHT_TEXT`/`TEXT`/`LIGHT_BOTH`/`BOTH`가 모두 지원(부분집합)하므로, 소형 다운·미등록 시 큰 모델이 그대로 흡수한다. **예외: 대화 요약**(`ConversationSummarizerService`)만은 이 폴백을 타지 않는다 — 소형(`role=LOCAL`·`priority=0`이면서 **`MICRO_TEXT`를 실제로 지원하는 타입**)이 없으면(`LlmRouter.hasMicroTextOffloadProvider()=false`) **LLM 호출만** 생략한다(부가 기능이 답변용 모델의 동시성 슬롯을 잠식하지 않게 하려는 의도적 게이팅). 그렇다고 요약을 포기하지는 않는다: RAG 답변은 `prompt.answer.system`이 강제한 `## 요약` 섹션을 이미 갖고 있으므로 그것들을 그대로 이어 붙여 **LLM 0회로 요약을 조립**하고, 섹션이 없는 답변(Direct·meta)만 `UNSUMMARIZED_ANSWER_CAP`(300자)으로 잘라 담는다 — `LOCAL_FAST_LLM_URL`은 기본값이 없어 미설정이 흔한데, 예전처럼 `null`을 반환하면 Direct 턴 하나 때문에 이미 뽑아둔 요약 전부를 버리고 원본 history로 떨어졌다. 원본 history 폴백은 이제 요약할 턴이 아예 없을 때만 일어난다. `RetrievalService`는 `MICRO_TEXT→LIGHT_TEXT→TEXT` 순 폴백이라 cloud-only(LOCAL 없음)에서도 구성 실패가 없다 — `TEXT`가 `MICRO_TEXT`를 흡수하게 된 지금은 첫 항목에서 이미 해결되므로 이 목록은 이중 안전장치로만 남아 있다(제거해도 동작은 같지만, 라우팅 실패 시 생성자에서 앱이 기동조차 못 하는 자리라 그대로 둔다).
 - **priority 필수**: 소형(0) < 큰(1). 동률이면 §6 로드밸런서가 둘 사이에 분산해 **절반만** 오프로딩된다.
 - **인덱스 연속성**: `providers[N]`은 0부터 연속이어야 바인딩(파일 내 줄 순서 자체는 무관). 기본 파일은 `[0]`=소형·`[1]`=로컬 LLM 1·`[2]`=로컬 LLM 2·`[3]~[8]`=외부(PREMIUM gemma-4-31b-1/-2가 `[6]`·`[7]` 두 키로 로드밸런싱)·`[9]`=Vision(선택, §3 예시).
 

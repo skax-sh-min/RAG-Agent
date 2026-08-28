@@ -187,7 +187,7 @@ copy .env.example .env
 | `LOCAL_LLM_URL` | 이 provider 사용 시 ✅ | — (기본값 없음) | `providers[1]`(`local`, 로컬 LLM 1) 엔드포인트. **미설정·공백이면 이 provider가 통째로 비활성화된다** (`LlmConfig` G2 — 예전처럼 `http://localhost:1234/v1`로 조용히 폴백하지 않음). 값을 설정하면 기동 시 `GET {URL}/models`로 접속 가능·모델명 일치 여부를 검증한다(G3) — 실패하면 **애플리케이션이 시작되지 않는다**, [§5.2 프로바이더 활성화 게이트](#52-프로바이더-속성) 참고. 임베딩 설정(`EMBED_BASE_URL`)의 폴백으로도 별도 사용됨(그쪽은 기존처럼 자체 기본값 보유, G3 대상 아님) |
 | `LOCAL_LLM_KEY` | — | `no-key` | `providers[1]` API 키. **로컬 엔드포인트(llama-server 등)는 키가 불필요** — 비우거나 미설정해도(URL만 설정돼 있다면) LOCAL provider는 등록됨(미설정 시 내부적으로 `no-key` 치환, G1). 완전히 제외하려면 `LOCAL_LLM_URL`을 비우거나(G2) `application.properties`의 `providers[1]`를 주석 처리 |
 | `LOCAL_LLM_MODEL` | — | `google/gemma-4-e4b` | `providers[1]` 모델 식별자. 사용 중인 로컬 모델명으로 변경 |
-| `LOCAL_LLM_TYPE` | — | `BOTH` | `providers[1]`(로컬 LLM 1) 작업 유형 (`app.llm.providers[1].type`) — `MICRO_TEXT`/`LIGHT_TEXT`/`TEXT`/`VISION`/`LIGHT_BOTH`/`BOTH` 중 하나. 기본 `BOTH`(모든 작업 처리). 예: 로컬 모델을 채팅 텍스트 전용으로 한정하려면 `TEXT` |
+| `LOCAL_LLM_TYPE` | — | `BOTH` | `providers[1]`(로컬 LLM 1) 작업 유형 (`app.llm.providers[1].type`) — `MICRO_TEXT`/`LIGHT_TEXT`/`TEXT`/`VISION`/`LIGHT_BOTH`/`BOTH` 중 하나. 기본 `BOTH`(모든 작업 처리). **텍스트 3종은 사다리라 `TEXT`는 채팅 답변뿐 아니라 `LIGHT_TEXT`·`MICRO_TEXT` 잡무까지 함께 받는다** — "채팅 전용으로 한정"하는 값이 아니다(§5.6 type 값 표). 이미지를 뺀 텍스트 전용 모델도 `BOTH`로 두는 것이 권장 — Vision 호출 1회만 실패한 뒤 기억되어 이후 이미지 작업에서 제외되고 텍스트 작업은 영향을 받지 않는다. 이미지 설명 자체를 끄려면 `IMAGE_DESCRIPTION_ENABLED=false`를 쓴다 |
 | `LOCAL_LLM_URL_2` | 사용 시 ✅ | — (기본값 없음) | `providers[2]`(`local-2`, 로컬 LLM 2) 엔드포인트. `local`과 **동일한 role(LOCAL)·동일한 priority(1)**로 등록되어 두 번째 물리 서버로 로드밸런싱된다(least-in-flight — [§5.4 예제 5/7](#예제-5--로컬-llm-2대-로드밸런싱-처리량-확장) 참고). **미설정·공백이면 이 provider가 통째로 비활성화된다**(G2) — 2대째 로컬 서버가 없다면 그냥 비워두면 됨(회귀 0, `local` 단독으로 동작). 값을 설정하면 기동 시 접속 가능·모델명 일치 여부를 검증하며 실패 시 애플리케이션이 시작되지 않는다(G3) — 즉 "설정은 했지만 서버가 아직 안 떠 있다"는 이 변수를 비워두는 것과 결과가 다르다(전자는 기동 실패, 후자는 정상 기동) |
 | `LOCAL_LLM_KEY_2` | — | `no-key` | `providers[2]` API 키. 로컬 엔드포인트는 키가 불필요 — 미설정 시 `no-key`가 치환되어 등록됨(`LOCAL_LLM_KEY`를 상속하지 않음). 모델명(`LOCAL_LLM_MODEL_2`)은 여전히 `LOCAL_LLM_MODEL`로 폴백 |
 | `LOCAL_LLM_MODEL_2` | — | `LOCAL_LLM_MODEL` 폴백 | `providers[2]` 모델 식별자. 미설정 시 `LOCAL_LLM_MODEL`과 동일한 모델명을 사용(로컬 LLM 1과 동일 모델을 다른 서버에 복제하는 것이 일반적인 사용 사례) |
@@ -449,8 +449,12 @@ LLM_ROUTING_MODE=QUALITY_FIRST
 > 소비처가 없어(strip/describe 판단은 업로드 시 "이미지 설명 추가" 체크박스와 `LazyVisionService`의 질의 시점
 > 캐시로 옮겨감) 값을 바꿔도 동작이 달라지지 않습니다. 바인딩 호환을 위해 남겨둔 것이라 환경변수도 두지 않았습니다.
 
-> **이미지 설명 전제 조건**: `enabled=true` + Vision 모델 프로바이더 등록 (`type=VISION` 또는 `type=LIGHT_BOTH`).
+> **이미지 설명 전제 조건**: `enabled=true` + Vision 모델 프로바이더 등록 (`type=VISION`·`type=LIGHT_BOTH`·`type=BOTH` — `supports(VISION)`이 참인 세 가지).
 > 프로바이더가 없으면 설명 없이 마커만 남습니다.
+>
+> 화면의 "이미지 설명 추가" 체크박스 활성 여부는 `DocumentController`가 `LlmRouter.hasEnabledProviderFor(VISION)`으로
+> 판단합니다 — `supports()`에서 능력을 파생하므로 위 세 타입과 항상 일치합니다. 예전에는 타입 이름 목록
+> (`BOTH`, `VISION`) 검사여서 `LIGHT_BOTH`만 등록한 배포는 실제로는 동작하는데도 체크박스가 비활성이었습니다.
 
 > **EMF/WMF 변환**: LibreOffice(`soffice`)가 PATH에 있어야 합니다. 없으면 변환이 건너뛰어지며 `[TIMEOUT:LIBREOFFICE]` 로그가 출력됩니다.
 
@@ -1303,14 +1307,19 @@ app.llm.providers[1].stream=false
 
 #### type 값
 
+텍스트 태스크 3종은 **사다리**(`MICRO_TEXT` ⊂ `LIGHT_TEXT` ⊂ `TEXT`)라 무거운 타입이 가벼운 작업을 함께 받는다. **Vision은 사다리와 무관한 별도 축**이라 어떤 텍스트 타입도 흡수하지 않는다(mmproj 없는 모델로 이미지가 흘러가면 안 되므로).
+
 | type | 처리 가능 태스크 | 권장 모델 유형 |
 |------|----------------|--------------|
 | `MICRO_TEXT` | 키워드+맥락·요약·제목·쿼리 확장만 (추론 불필요) | 500MB급 소형 모델 (§6.21) |
 | `LIGHT_TEXT` | MD 서식 교정·TXT 구조화 + `MICRO_TEXT` 잡무 | 텍스트 전용 소형~중형 모델 |
 | `LIGHT_BOTH` | `LIGHT_TEXT` 태스크 + Vision | 범용 로컬 LLM |
-| `TEXT` | 답변 생성·Rerank **+ 분류·meta 직답**만 | 텍스트 전용 대형 모델 |
+| `TEXT` | 답변 생성·Rerank·분류·meta 직답 **+ `LIGHT_TEXT`·`MICRO_TEXT` 잡무 전부** | 텍스트 전용 대형 모델 |
 | `VISION` | 이미지 설명만 | Vision 전용 모델 |
 | `BOTH` | 모든 태스크 | 외부 고성능 / 범용 대형 모델 |
+
+> **`BOTH`는 태스크로 요청되는 일이 없다** — 프로바이더 설정값과 `LlmRouter.hasEnabledProviderFor()`류의 판정에만 쓰인다. 표의 `BOTH` 행(프로바이더 능력)과 태스크로서의 `BOTH`는 다른 것이다.
+> `LIGHT_BOTH`는 반대로 양쪽에 다 쓰인다 — 프로바이더 type이자, `ImageTypeClassifier`(이미지 유형 분류)가 "멀티모달이면 되고 대형일 필요는 없다"는 뜻으로 내는 요청이다. 이 요청은 `LIGHT_BOTH`·`BOTH`가 받고 텍스트 전용 3종과 `VISION` 전용은 거부한다(경량 텍스트 + 이미지를 함께 요구하므로).
 
 #### role 값 (COST_FIRST 기준 시도 순서)
 
@@ -1330,7 +1339,7 @@ app.llm.providers[1].stream=false
 | CriticService | — | **LLM 호출 없음** — AnswerService의 통합 평가가 낸 `grounded`를 읽어 재시도 여부만 결정 (`responseMode=S`이면 이 단계 스킵) |
 | DirectAnswerService | `TEXT` | meta 질문 직접 응답 (사용자 노출 — 답변과 같은 타입으로 묶어 큰 모델 유지) |
 | VisionDescriptionService | `VISION` | 이미지 → 설명 생성 |
-| ImageTypeClassifier | `LIGHT_BOTH` | 이미지 유형 분류 |
+| ImageTypeClassifier | `LIGHT_BOTH` | 이미지 유형 분류 — 멀티모달(`LIGHT_BOTH`/`BOTH`)만 후보. `VISION` 전용 모델은 텍스트를 못 하므로 제외 |
 | KeywordExtractor | `MICRO_TEXT` | 청크 키워드+맥락(Contextual Retrieval, §10.1) 통합 추출 — `context:` 사용량 라벨. §6.21로 MICRO_TEXT 전환 |
 | RerankerService | `TEXT` (ChatClient) | 검색 후보 LLM 리랭킹 — `SEARCH_RERANK_ENABLED=true`일 때만 동작 |
 
@@ -1518,6 +1527,19 @@ app.llm.providers[4].role=PREMIUM
 app.llm.providers[4].priority=4
 ```
 
+COST_FIRST 흐름 — `local`이 `LIGHT_BOTH`라 **`TEXT` 태스크는 로컬에 남지 않는다**:
+```
+[키워드·요약·제목·쿼리확장 (MICRO_TEXT)]  local
+[MD 교정·TXT 구조화 (LIGHT_TEXT)]         local
+[이미지 설명 (VISION)]                     local
+[이미지 유형 분류 (LIGHT_BOTH)]            local
+[답변·분류·직답·Rerank (TEXT)]             gemini-flash → openai-mini → gemini-pro → openai
+                                           (각 단계에서 429/오류 시 다음 우선순위로 자동 전환)
+```
+
+- 분류·meta 직답은 `LIGHT_TEXT`가 아니라 **`TaskType.TEXT`** 라서(§5.6 노드별 TaskType 표) `LIGHT_BOTH` 로컬 모델이 받지 못하고 클라우드로 나갑니다. 로컬에 남기려면 `type`을 `BOTH`로 올려야 합니다.
+- 이미지 작업(설명·유형 분류)은 둘 다 로컬이 처리합니다 — `LIGHT_BOTH`가 `VISION`과 `LIGHT_BOTH` 요청을 모두 받기 때문입니다.
+
 ---
 
 #### 예제 5 — 로컬 LLM 2대 로드밸런싱 (처리량 확장)
@@ -1554,9 +1576,7 @@ app.llm.providers[1].concurrency=4
 
 COST_FIRST 흐름:
 ```
-[분류·키워드·쿼리] local(LIGHT_BOTH)
-[답변·Critic]      gemini-flash → openai-mini → gemini-pro → openai
-                   (각 단계에서 429/오류 시 다음 우선순위로 자동 전환)
+[전 태스크] local-a ∥ local-b (둘 다 BOTH, priority 0 동일 → least-in-flight 분산)
 ```
 
 ---
