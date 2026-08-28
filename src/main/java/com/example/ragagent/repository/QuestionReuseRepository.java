@@ -378,12 +378,18 @@ public class QuestionReuseRepository {
     /**
      * 스냅샷 이후 청크가 바뀌었음을 표시한다.
      *
+     * <p>예전 이름은 {@code markSourceRefsInactiveByChunkIds} 였다 — 그 시절에는 이 컬럼에
+     * 실제로 {@code 'inactive'} 를 썼기 때문이다. 지금 쓰는 값은 {@code deleted}/{@code modified}
+     * 둘뿐이라 이름이 값과 어긋나 있었고, 코드에 없는 상태가 있는 것처럼 읽혔다. 레거시
+     * {@code 'inactive'} 행을 읽는 코드는 남아 있지 않다(상태 판정은 모두 {@code = 'active'}
+     * 비교라, 옛 값은 자동으로 "무효화됨" 쪽으로 떨어진다).
+     *
      * @param status {@code SourceRef.STALE_DELETED} 또는 {@code STALE_MODIFIED} — 재사용 차단에는
      *        둘 다 똑같이 작용하지만 대화 기록의 배지 규칙이 다르다(삭제는 항상, 수정은 응답 지분이
      *        있는 출처만). 이미 무효화된 행은 건드리지 않는다: 수정된 뒤 삭제되면 최종 상태는
      *        삭제여야 하므로 {@code deleted}만 덮어쓰기를 허용한다.
      */
-    public void markSourceRefsInactiveByChunkIds(List<String> chunkIds, String status) {
+    public void markSourceRefsStaleByChunkIds(List<String> chunkIds, String status) {
         if (chunkIds == null || chunkIds.isEmpty()) return;
         String placeholders = chunkIds.stream().map(v -> "?").collect(Collectors.joining(","));
         List<Object> args = new ArrayList<>();
@@ -426,7 +432,9 @@ public class QuestionReuseRepository {
             return answerShare != null && answerShare > 0.0;
         }
 
-        public boolean inactive() {
+        /** 스냅샷 이후 청크가 삭제·수정됐는가({@code status != 'active'}). "active 가 아니다" 로
+         *  판정하므로 레거시 {@code 'inactive'} 행도 그대로 무효로 읽힌다. */
+        public boolean stale() {
             return status != null && !"active".equals(status);
         }
     }
