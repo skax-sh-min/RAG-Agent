@@ -83,5 +83,35 @@ public record SettingsView(
                            Double min, Double max, Double step) {
             this(key, label, value, type, editable, overridden, note, min, max, step, null);
         }
+
+        /**
+         * 허용 범위 툴팁이 쓰는 경계값 — {@code 1.0} 이 아니라 {@code 1} 로 보이게 다듬는다.
+         *
+         * <p>레코드 컴포넌트가 아니라 <b>일반 메서드</b>다({@code SourceRef.staleBadge()} 선례):
+         * 저장·전송되는 값이 아니라 {@code min}/{@code max}/{@code step} 에서 그때그때 파생되는
+         * 표시 형태라, 생성자에 실어 나르면 호출부마다 같은 계산을 복제하게 된다. 템플릿이 SpEL
+         * ({@code ${item.minLabel}}) 로 읽으므로 실제 렌더로 접근 가능 여부를
+         * {@code SettingsControllerRenderTest} 가, 다듬는 규칙 자체를 {@code SettingsRangeLabelTest} 가
+         * 고정한다 — 이름이나 형식이 어긋나도 화면에는 예외가 아니라 <b>어긋난 툴팁</b>으로만
+         * 드러난다({@code 1.0 ~ 1000.0} 처럼).
+         *
+         * <p>{@code SettingsService.trimNum()} 과 같은 모양이지만 합치지 않는다: 저쪽은 저장·검증에
+         * 쓰이는 <b>값</b>의 정규화(원시 double)이고 이쪽은 <b>경계</b>의 표시(nullable Double,
+         * 읽기 전용 행에서는 셋 다 null)다. 둘이 갈라져도 결과는 툴팁에 {@code 1.0} 이 보이는
+         * 정도이지 저장되는 값이 달라지지 않는다.
+         */
+        public String minLabel() { return trimBound(min); }
+
+        /** @see #minLabel() */
+        public String maxLabel() { return trimBound(max); }
+
+        /** @see #minLabel() */
+        public String stepLabel() { return trimBound(step); }
+
+        private static String trimBound(Double d) {
+            if (d == null) return "";
+            if (d == Math.rint(d) && !Double.isInfinite(d)) return Long.toString((long) (double) d);
+            return Double.toString(d);
+        }
     }
 }

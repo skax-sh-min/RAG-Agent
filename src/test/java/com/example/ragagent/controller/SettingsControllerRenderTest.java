@@ -94,6 +94,47 @@ class SettingsControllerRenderTest {
     }
 
     @Test
+    @DisplayName("숫자 편집 칸은 허용 범위를 hover 툴팁으로 안내한다 — 경계는 1.0 이 아니라 1 로")
+    void numberEditorCarriesARangeTooltip() throws Exception {
+        SettingItem item = new SettingItem(SettingsKeys.SEARCH_RRF_K, "settings.item.rrf-k", "70",
+                "number", true, true, null, 1.0, 1000.0, 1.0);
+        when(settingsService.editableItem(SettingsKeys.SEARCH_RRF_K)).thenReturn(item);
+
+        // 200 자체가 SpEL 접근 가능 여부를 증명한다 — item.minLabel 이 없으면 Thymeleaf 가 던진다.
+        String html = mvc.perform(post("/admin/settings/update")
+                        .param("key", SettingsKeys.SEARCH_RRF_K)
+                        .param("value", "70")
+                        .with(csrf()))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        assertThat(html).contains("data-bs-toggle=\"tooltip\"");
+        // Bootstrap 기본 트리거는 'hover focus' — 값을 고치려고 클릭하면 툴팁이 떠서 남는다.
+        assertThat(html).contains("data-bs-trigger=\"hover\"");
+        // 문구는 로케일마다 다르지만(ko '~' / en '-') 경계값은 같다. 다듬기가 빠지면 1.0/1000.0 이 된다.
+        assertThat(html).containsPattern("1 [~-] 1000");
+        assertThat(html).doesNotContain("1.0 ", "??settings.range");
+    }
+
+    @Test
+    @DisplayName("bool 편집 칸도 같은 자리에 안내를 단다 — 범위가 '두 값 중 하나'일 뿐이다")
+    void boolEditorCarriesARangeTooltip() throws Exception {
+        SettingItem item = new SettingItem(SettingsKeys.SEARCH_RETRY_ESCALATE, "settings.item.retry-escalate",
+                "true", "bool", true, false, null, null, null, null);
+        when(settingsService.editableItem(SettingsKeys.SEARCH_RETRY_ESCALATE)).thenReturn(item);
+
+        String html = mvc.perform(post("/admin/settings/update")
+                        .param("key", SettingsKeys.SEARCH_RETRY_ESCALATE)
+                        .param("value", "true")
+                        .with(csrf()))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        assertThat(html).contains("<select", "data-bs-toggle=\"tooltip\"", "data-bs-trigger=\"hover\"");
+        assertThat(html).doesNotContain("??settings.range");
+    }
+
+    @Test
     @DisplayName("POST /admin/settings/provider/toggle — 프로바이더 테이블 프래그먼트가 활성 상태로 렌더된다")
     void toggleProviderFragmentRenders() throws Exception {
         // service reports the provider now disabled → the fragment should show the "enable" control

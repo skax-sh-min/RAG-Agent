@@ -41,9 +41,18 @@
              flexes (.setting-value), so on a row with no override — where the 기본값 button is
              absent — the input simply grows into that space and the group stays the same width. -->
         <div th:if="${item.editable and isAdmin}" class="input-group input-group-sm">
+            <!-- 허용 범위는 컨트롤 자신에 툴팁으로 붙인다. 조건 분기가 없는 이유: 이 두 요소는
+                 이미 타입별로 갈라져 있어 각자 자기 문구만 알면 된다. trigger=hover 로 고정하는 것이
+                 중요하다 — Bootstrap 기본값은 'hover focus' 라, 값을 고치려고 클릭한 순간 툴팁이
+                 떠서 아래 행을 가린 채 blur 까지 남는다. 명시 config 가 data 속성을 이기므로
+                 (settings.html 의 initTooltips 는 delay 만 넘긴다) trigger 는 여기서 정해진다. -->
             <input th:if="${item.type == 'number'}" type="number" name="value" class="form-control setting-value"
-                   th:value="${item.value}" th:min="${item.min}" th:max="${item.max}" th:step="${item.step}"/>
-            <select th:if="${item.type == 'bool'}" name="value" class="form-select setting-value">
+                   th:value="${item.value}" th:min="${item.min}" th:max="${item.max}" th:step="${item.step}"
+                   data-bs-toggle="tooltip" data-bs-trigger="hover"
+                   th:title="#{settings.range.number(${item.minLabel}, ${item.maxLabel}, ${item.stepLabel})}"/>
+            <select th:if="${item.type == 'bool'}" name="value" class="form-select setting-value"
+                    data-bs-toggle="tooltip" data-bs-trigger="hover"
+                    th:title="#{settings.range.bool}">
                 <option value="true"  th:selected="${item.value == 'true'}">true</option>
                 <option value="false" th:selected="${item.value == 'false'}">false</option>
             </select>
