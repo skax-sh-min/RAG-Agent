@@ -319,6 +319,22 @@ app.indexing.keyword-batch-size=${INDEXING_KEYWORD_BATCH_SIZE:2}
   - 폴백 프로바이더가 있으면 `circuit-breaker-minutes`(기본값) 적용
   - 폴백이 전혀 없는 유일 프로바이더면 30초로 단축 차단(다중 분 단위 전면 다운 방지)
 - 그 외 4xx/5xx 및 기타 예외: 30초 차단 후 다음 프로바이더 시도.
+- **차단하지 않는 실패가 셋 있다** — 셋 다 "프로바이더가 아픈 게 아니다"라는 같은 이유다:
+  - 클라이언트 측 타임아웃/인터럽트(`isTimeoutLike`) — 서버는 멀쩡하다. 예외를 그대로 던진다.
+  - 이미지 입력 미지원(`isVisionUnsupported`, mmproj 부재) — 그 프로바이더의 **영구적** 한계라
+    기억해 두고 이후 VISION/LIGHT_BOTH 를 건너뛴다. 텍스트 작업은 계속 그 프로바이더로 간다.
+  - **컨텍스트 윈도우 초과**(`isContextOverflow`) — **이 요청 하나의 크기** 문제라 기억할 것이
+    없다(다음 짧은 질문은 같은 프로바이더에서 통과해야 한다). 차단하지 않는 이유가 둘이다:
+    ① 결정적 오류라 30초를 기다려도 같은 요청은 똑같이 실패하고, ② 유일한 LOCAL 프로바이더를
+    막으면 그 사이 들어온 — 작아서 통과했을 — 요청까지 `All providers exhausted` 로 함께 죽는다.
+    **이 요청 자체는 여전히 실패한다**; 얻는 것은 뒤따르는 요청이 말려들지 않는 것뿐이고, 근본
+    해결은 프롬프트 크기 조정이다(`search-top-k` → `max-tokens` → 서버 `--ctx-size` 순, WARN 로그가
+    그 순서를 안내한다). 판정은 메시지 부분 일치이며 서버마다 문구가 달라
+    `CONTEXT_OVERFLOW_MARKERS` 에 모아 두었다 — LM Studio 의 `Context size has been exceeded.` 는
+    HTTP 400 **본문 안에** 실려 오고 Spring AI 가 `NonTransientAiException` 으로 감싸므로
+    `HttpStatusCodeException` catch 가 아니라 일반 catch 로 떨어진다. `too many tokens` 류는
+    일부러 제외했다 — 레이트리밋 문구(`Too many tokens per minute`)와 겹쳐, 진짜 429 를 여기로
+    잘못 읽으면 `Retry-After` 처리를 건너뛰게 된다.
 - 차단 만료는 다음 라우팅 시 자동 해제.
 - `/llm-usage` 페이지에서 차단 상태 + 남은 시간 카운트다운 확인 가능 (30초마다 자동 갱신).
 - **동시성 백프레셔(§6, 아래)는 Circuit Breaker와 별개**다 — 용량 초과는 프로바이더 장애가 아니므로 차단하지 않는다.

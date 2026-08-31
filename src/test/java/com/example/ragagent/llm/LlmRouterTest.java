@@ -266,6 +266,64 @@ class LlmRouterTest {
     }
 
     @Test
+    @DisplayName("executeWithTracking — 컨텍스트 초과는 CircuitBreaker 를 차단하지 않음 (뒤따르는 작은 요청이 말려들지 않는다)")
+    void contextOverflow_doesNotBlockCircuitBreaker() {
+        ChatModel chatModel = mock(ChatModel.class);
+        // 실제 관측된 LM Studio 응답 — HTTP 400 본문 안에 500 이 들어 있고, Spring AI 가
+        // NonTransientAiException 으로 감싸므로 HttpStatusCodeException catch 에 걸리지 않는다.
+        when(chatModel.call(any(Prompt.class))).thenThrow(new RuntimeException(
+                "400 - {\"error\":\"Engine protocol predict stream returned an error: "
+                + "{\\\"code\\\":500,\\\"message\\\":\\\"Context size has been exceeded.\\\"}\"}"));
+        var local = new LlmProvider("lm", TaskType.BOTH, ProviderRole.LOCAL, 1, "k", null, null, true,
+                chatModel, null);
+        var r = router(RoutingMode.COST_FIRST, local);
+
+        // 이 요청 자체는 여전히 실패한다 — 얻는 것은 프로바이더가 살아남는 것뿐이다.
+        assertThatThrownBy(() -> r.executeWithTracking(TaskType.TEXT, RoutingMode.COST_FIRST,
+                m -> m.call(new Prompt("x"))))
+                .isInstanceOf(LlmProviderExhaustedException.class);
+
+        assertThat(breaker.isBlocked("lm")).isFalse();
+        // mmproj 와 달리 기억해 두지 않는다 — 요청 하나의 크기 문제라 다음 짧은 질문은 통과해야 한다.
+        assertThat(r.findProviderName(TaskType.TEXT, RoutingMode.COST_FIRST)).isEqualTo("lm");
+        assertThat(r.findProviderName(TaskType.VISION, RoutingMode.COST_FIRST)).isEqualTo("lm");
+    }
+
+    @Test
+    @DisplayName("컨텍스트 초과 판정 — 서버별 문구를 인식하되 레이트리밋 문구는 건드리지 않는다")
+    void contextOverflow_recognizesServerPhrasingsButNotRateLimits() {
+        var overflow = List.of(
+                "Context size has been exceeded.",                                   // LM Studio
+                "context_length_exceeded",                                           // OpenAI code
+                "This model's maximum context length is 8192 tokens",                // OpenAI message
+                "the request exceeds the available context size",                    // llama.cpp
+                "prompt is too long: 210000 tokens > 200000 maximum");               // Anthropic
+        for (String msg : overflow) {
+            ChatModel cm = mock(ChatModel.class);
+            when(cm.call(any(Prompt.class))).thenThrow(new RuntimeException(msg));
+            CircuitBreaker cb = new CircuitBreaker(2);
+            var p = new LlmProvider("lm", TaskType.TEXT, ProviderRole.LOCAL, 1, "k", null, null, true, cm, null);
+            var r = new LlmRouter(List.of(p), null, cb, RoutingMode.COST_FIRST, 0.6, 180,
+                    Map.of(), 3, 20, new ProviderToggle());
+            assertThatThrownBy(() -> r.executeWithTracking(TaskType.TEXT, RoutingMode.COST_FIRST,
+                    m -> m.call(new Prompt("x")))).isInstanceOf(LlmProviderExhaustedException.class);
+            assertThat(cb.isBlocked("lm")).as("'%s' 는 컨텍스트 초과로 읽혀야 한다", msg).isFalse();
+        }
+
+        // 레이트리밋은 여전히 프로바이더 실패로 다뤄야 한다 — "too many tokens" 를 마커에 넣었다면
+        // 여기서 걸린다(그랬다면 진짜 429 의 Retry-After 처리까지 건너뛰게 된다).
+        ChatModel cm = mock(ChatModel.class);
+        when(cm.call(any(Prompt.class))).thenThrow(new RuntimeException("Rate limit: too many tokens per minute"));
+        CircuitBreaker cb = new CircuitBreaker(2);
+        var p = new LlmProvider("lm", TaskType.TEXT, ProviderRole.LOCAL, 1, "k", null, null, true, cm, null);
+        var r = new LlmRouter(List.of(p), null, cb, RoutingMode.COST_FIRST, 0.6, 180,
+                Map.of(), 3, 20, new ProviderToggle());
+        assertThatThrownBy(() -> r.executeWithTracking(TaskType.TEXT, RoutingMode.COST_FIRST,
+                m -> m.call(new Prompt("x")))).isInstanceOf(LlmProviderExhaustedException.class);
+        assertThat(cb.isBlocked("lm")).as("레이트리밋은 컨텍스트 초과가 아니다").isTrue();
+    }
+
+    @Test
     @DisplayName("executeWithTracking — mmproj 미지원 확인 후에는 VISION/LIGHT_BOTH 요청을 재시도 없이 건너뜀")
     void visionUnsupportedError_skipsFutureImageTasksForThatProvider() {
         ChatModel chatModel = mock(ChatModel.class);

@@ -492,7 +492,18 @@ public class LlmRouter {
                         + "NOT blocking circuit breaker", provider.name(), readTimeoutSeconds);
                 throw e;
             }
-            if (isVisionUnsupported(e)) {
+            if (isContextOverflow(e)) {
+                // 이 요청의 프롬프트가 서버 컨텍스트를 넘은 것이지 프로바이더가 아픈 게 아니다.
+                // 30초를 기다려도 같은 요청은 똑같이 실패하고(결정적 오류), 그동안 들어온 -- 작아서
+                // 통과했을 -- 요청까지 "All providers exhausted" 로 함께 죽는다. mmproj 와 달리
+                // 기억해 두지도 않는다: 저건 모델의 영구적 성질이지만 이건 요청 하나의 크기 문제라,
+                // 다음 짧은 질문은 같은 프로바이더에서 멀쩡히 처리된다.
+                log.warn("Provider [{}] rejected the prompt: context window exceeded — NOT blocking "
+                        + "circuit breaker (waiting changes nothing; a smaller prompt fits). Lower "
+                        + "app.search-top-k (hot, via /settings) first, then app.llm.max-tokens "
+                        + "(restart required), or raise the LLM server's context size. "
+                        + "See OPERATOR_MANUAL §8.", provider.name());
+            } else if (isVisionUnsupported(e)) {
                 // Model lacks mmproj / image-input support — a request-shape limitation, not a
                 // provider outage. Blocking here (like any other failure) would also stall
                 // unrelated TEXT/LIGHT_TEXT tasks sharing this provider name until the block
@@ -547,6 +558,49 @@ public class LlmRouter {
         }
         return false;
     }
+
+    /**
+     * 프롬프트가 서버의 컨텍스트 윈도우를 넘어 거절된 것인가.
+     *
+     * <p>{@link #isTimeoutLike}(클라이언트 측 중단) · {@link #isVisionUnsupported}(모델 성질)와 같은
+     * 갈래의 세 번째 판정이다 — <b>프로바이더 장애가 아니어서 차단하면 안 되는</b> 실패. 다만 앞의
+     * 둘과 성격이 하나 다르다: mmproj 부재는 그 프로바이더의 영구적 한계라 기억해 두고 이후 이미지
+     * 작업을 건너뛰지만, 컨텍스트 초과는 <b>이 요청 하나의 크기</b> 문제라 기억할 것이 없다. 다음
+     * 짧은 질문은 같은 프로바이더에서 그대로 처리돼야 한다.
+     *
+     * <p>서버마다 문구가 달라 메시지로 판정한다. 실제로 관측된 것은 LM Studio 의
+     * {@code {"code":500,"message":"Context size has been exceeded."}} 인데, 이것이 HTTP 400 본문에
+     * 실려 오고 Spring AI 가 {@code NonTransientAiException} 으로 감싸므로 위 {@code catch
+     * (HttpStatusCodeException)} 가 아니라 일반 {@code catch} 로 떨어진다 — 그래서 여기서 걸러야 한다.
+     *
+     * <p><b>{@code "too many tokens"} 류는 일부러 넣지 않았다</b> — 레이트리밋 응답
+     * ("Too many tokens per minute")과 문구가 겹쳐, 진짜 429 를 컨텍스트 초과로 잘못 읽으면
+     * {@code blockForOverload()} 의 Retry-After 처리를 건너뛰게 된다.
+     */
+    private static boolean isContextOverflow(Throwable t) {
+        Throwable cur = t;
+        while (cur != null) {
+            String msg = cur.getMessage();
+            if (msg != null) {
+                String lowered = msg.toLowerCase();
+                for (String marker : CONTEXT_OVERFLOW_MARKERS) {
+                    if (lowered.contains(marker)) return true;
+                }
+            }
+            cur = cur.getCause();
+        }
+        return false;
+    }
+
+    /** 소문자 부분 일치. 서버별 문구 — LM Studio · OpenAI · llama.cpp · Anthropic 순. */
+    private static final List<String> CONTEXT_OVERFLOW_MARKERS = List.of(
+            "context size has been exceeded",
+            "context_length_exceeded",
+            "maximum context length",
+            "exceeds the available context",
+            "exceed context size",
+            "prompt is too long"
+    );
 
     private static boolean isVisionUnsupported(Throwable t) {
         Throwable cur = t;
