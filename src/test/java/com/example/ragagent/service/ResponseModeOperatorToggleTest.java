@@ -6,6 +6,7 @@ import com.example.ragagent.config.SettingsKeys;
 import com.example.ragagent.llm.CircuitBreaker;
 import com.example.ragagent.llm.ProviderToggle;
 import com.example.ragagent.model.ResponseMode;
+import com.example.ragagent.model.SettingsView;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -133,6 +134,22 @@ class ResponseModeOperatorToggleTest {
     }
 
     // ── 화면 ─────────────────────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("LLM 그룹에서 C 두 행은 붙어 있고 온도가 먼저다 — 스위치는 그 온도를 무의미하게 만드는 쪽")
+    void creativeRowsSitTogetherWithTheKnobFirst() {
+        var llmKeys = service.buildView().groups().stream()
+                .filter(g -> "llm_hot".equals(g.id()))
+                .flatMap(g -> g.items().stream())
+                .map(SettingsView.SettingItem::key)
+                .filter(k -> k != null)
+                .toList();
+
+        int temp = llmKeys.indexOf(SettingsKeys.LLM_CREATIVE_TEMPERATURE);
+        int gate = llmKeys.indexOf(SettingsKeys.LLM_CREATIVE_MODE_ENABLED);
+        assertThat(temp).as("C 온도 행이 없다").isNotNegative();
+        assertThat(gate).as("C 스위치 행이 없다").isEqualTo(temp + 1);
+    }
 
     @Test
     @DisplayName("/settings 의 LLM 그룹에 이 행이 렌더되고, 라벨 키가 한/영 번들에 있다")

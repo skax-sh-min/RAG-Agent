@@ -233,16 +233,18 @@ class AppPropertiesOverrideTest {
     }
 
     @Test
-    @DisplayName("LLM — indexing-temperature 오버라이드가 llmSafe()에 반영되고 [0.0, 1.0]으로 clamp된다")
+    @DisplayName("LLM — indexing-temperature 오버라이드가 llmSafe()에 반영되고 [0.0, 0.1]로 clamp된다")
     void override_indexingTemperature() {
         bind();
         assertThat(base().llmSafe().indexingTemperature()).isEqualTo(0.0); // 기본값
 
-        overrides.put(SettingsKeys.LLM_INDEXING_TEMPERATURE, "0.2");
-        assertThat(base().llmSafe().indexingTemperature()).isEqualTo(0.2);
+        overrides.put(SettingsKeys.LLM_INDEXING_TEMPERATURE, "0.05");
+        assertThat(base().llmSafe().indexingTemperature()).isEqualTo(0.05);
 
-        overrides.put(SettingsKeys.LLM_INDEXING_TEMPERATURE, "1.5"); // > 1.0 → clamp
-        assertThat(base().llmSafe().indexingTemperature()).isEqualTo(1.0);
+        // 상한은 /settings 스펙(0.1)과 같아야 한다 — 한쪽만 넓으면 화면이 거부하는 값이 환경변수로는
+        // 그대로 적용된다. 예전 상한은 1.0 이었다.
+        overrides.put(SettingsKeys.LLM_INDEXING_TEMPERATURE, "0.5"); // > 0.1 → clamp
+        assertThat(base().llmSafe().indexingTemperature()).isEqualTo(0.1);
     }
 
     @Test

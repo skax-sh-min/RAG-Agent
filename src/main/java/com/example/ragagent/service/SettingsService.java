@@ -76,17 +76,17 @@ public class SettingsService implements AppProperties.OverrideSource {
             new Spec(SettingsKeys.CHUNK_OVERLAP,                   Kind.INT,    0,   2000, 10,   "settings.item.chunk-overlap"),
             new Spec(SettingsKeys.MIN_CHUNK_SIZE,                  Kind.INT,    0,   4000, 10,   "settings.item.min-chunk-size"),
             new Spec(SettingsKeys.CHUNK_SPLIT_GRANULAR,            Kind.BOOL,   0,   0,    0,    "settings.item.chunk-split-granular"),
-            new Spec(SettingsKeys.INDEXING_MAX_CONCURRENT_FILES,   Kind.INT,    1,   32,   1,    "settings.item.max-concurrent-files"),
-            new Spec(SettingsKeys.INDEXING_MAX_CONCURRENT_LLM,     Kind.INT,    1,   32,   1,    "settings.item.max-concurrent-llm-calls")
+            new Spec(SettingsKeys.INDEXING_MAX_CONCURRENT_FILES,   Kind.INT,    1,   4,    1,    "settings.item.max-concurrent-files"),
+            new Spec(SettingsKeys.INDEXING_MAX_CONCURRENT_LLM,     Kind.INT,    1,   8,    1,    "settings.item.max-concurrent-llm-calls")
     );
 
     // Insertion order = render order in the "LLM 튜닝" group. Apply on the next LLM call (§6.18).
     private static final List<Spec> LLM_HOT_SPECS = List.of(
-            new Spec(SettingsKeys.LLM_TEMPERATURE,                Kind.DOUBLE, 0.0, 0.3,  0.01, "settings.item.temperature"),
+            new Spec(SettingsKeys.LLM_TEMPERATURE,                Kind.DOUBLE, 0.0, 0.3,  0.05, "settings.item.temperature"),
             new Spec(SettingsKeys.LLM_DIRECT_TEMPERATURE,         Kind.DOUBLE, 0.0, 1.0,  0.05, "settings.item.direct-temperature"),
-            new Spec(SettingsKeys.LLM_INDEXING_TEMPERATURE,       Kind.DOUBLE, 0.0, 1.0,  0.05, "settings.item.indexing-temperature"),
-            new Spec(SettingsKeys.LLM_CREATIVE_MODE_ENABLED,      Kind.BOOL,   0,   0,    0,    "settings.item.creative-mode-enabled"),
-            new Spec(SettingsKeys.LLM_CREATIVE_TEMPERATURE,       Kind.DOUBLE, 0.0, 1.0,  0.05, "settings.item.creative-temperature")
+            new Spec(SettingsKeys.LLM_INDEXING_TEMPERATURE,       Kind.DOUBLE, 0.0, 0.1,  0.05, "settings.item.indexing-temperature"),
+            new Spec(SettingsKeys.LLM_CREATIVE_TEMPERATURE,       Kind.DOUBLE, 0.0, 1.0,  0.05, "settings.item.creative-temperature"),
+            new Spec(SettingsKeys.LLM_CREATIVE_MODE_ENABLED,      Kind.BOOL,   0,   0,    0,    "settings.item.creative-mode-enabled")
     );
 
         // Insertion order = render order in the "UI" group. Apply on next page render.
@@ -411,8 +411,8 @@ public class SettingsService implements AppProperties.OverrideSource {
      *  for deterministic extraction independently of the other two) — and creative-temperature, which
      *  only the C (응용) response mode uses (§6.24): the general one is clamped to [0.0, 0.3], so
      *  creative generation is impossible on it. Paired with it is creative-mode-enabled, the on/off
-     *  switch for that mode as a whole ({@link #effectiveResponseMode}) — the two sit together so an
-     *  operator who closes C sees its now-idle temperature right below it. max-tokens sits in the LLM
+     *  switch for that mode as a whole ({@link #effectiveResponseMode}) — the two sit together, the
+     *  knob first and the switch that makes it moot right after it. max-tokens sits in the LLM
      *  providers card footer as read-only (baked into the provider beans at startup — restart to
      *  change). */
     private List<SettingItem> llmHotItems() {

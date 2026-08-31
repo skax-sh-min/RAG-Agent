@@ -147,6 +147,41 @@ class SettingsServiceTest {
     }
 
     @Test
+    @DisplayName("인덱싱 3종의 허용 범위 — 경계값은 통과, 한 칸 넘으면 거부")
+    void indexingKeys_enforceTheirNarrowedRanges() {
+        // 하한은 셋이 다르다 — 동시성은 1(0개 워커는 무의미), 온도는 0(완전 결정적이 기본값이다).
+        record Bound(String key, String atMax, String overMax, String underMin) {}
+        List<Bound> bounds = List.of(
+                new Bound(SettingsKeys.INDEXING_MAX_CONCURRENT_FILES, "4", "5", "0"),
+                new Bound(SettingsKeys.INDEXING_MAX_CONCURRENT_LLM, "8", "9", "0"),
+                new Bound(SettingsKeys.LLM_INDEXING_TEMPERATURE, "0.1", "0.2", "-0.1"));
+
+        for (Bound b : bounds) {
+            assertThat(service.update(b.key(), b.atMax()))
+                    .as("%s 의 상한값 자체는 저장돼야 한다", b.key()).isEqualTo(b.atMax());
+            assertThatThrownBy(() -> service.update(b.key(), b.overMax()))
+                    .as("%s = %s 는 거부돼야 한다", b.key(), b.overMax())
+                    .isInstanceOf(IllegalArgumentException.class);
+            assertThatThrownBy(() -> service.update(b.key(), b.underMin()))
+                    .as("%s = %s 는 하한 아래라 거부돼야 한다", b.key(), b.underMin())
+                    .isInstanceOf(IllegalArgumentException.class);
+            // 거부된 값이 저장되지 않았는지 — 상한값이 그대로 남아 있어야 한다
+            assertThat(repo.store).containsEntry(b.key(), b.atMax());
+        }
+    }
+
+    @Test
+    @DisplayName("indexing-temperature 는 /settings 스펙 상한과 llmSafe() clamp 상한이 같다")
+    void indexingTemperature_specMaxMatchesClamp() {
+        // 한쪽만 좁으면 화면이 거부하는 값이 환경변수로는 그대로 적용된다 — 두 파일에 나뉘어 있어
+        // 컴파일러가 잡아주지 못하는 짝이다.
+        service.update(SettingsKeys.LLM_INDEXING_TEMPERATURE, "0.1");
+        assertThat(props.llmSafe().indexingTemperature()).isEqualTo(0.1);
+        assertThatThrownBy(() -> service.update(SettingsKeys.LLM_INDEXING_TEMPERATURE, "0.2"))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
     @DisplayName("update — 알 수 없는/비-핫 키는 거부")
     void update_unknownKey_rejected() {
         // rerank-enabled is surfaced read-only (structural @ConditionalOnProperty bean), never hot
