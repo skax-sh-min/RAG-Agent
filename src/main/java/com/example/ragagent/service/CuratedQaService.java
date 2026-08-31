@@ -131,10 +131,12 @@ public class CuratedQaService {
      * </ol>
      * Mirrors the DISLIKE-discard guard in {@link ConversationSummarizerService#precompute}.
      *
-     * <p>L-mode answers (§ ResponseMode) are skipped entirely — an L answer already preserves the
-     * source document's own wording almost verbatim, so embedding it again would just duplicate a
-     * vector that's already in the index under the real document. The curated_qa row is still
-     * created (unlike/edit/admin-listing keep working), only the embed call is skipped.
+     * <p>PLAN §6.24 Step 0-a — the old "skip embedding for L-mode answers" branch is gone with L
+     * itself. Its premise ("an L answer mirrors the indexed source almost verbatim, so re-embedding
+     * duplicates an existing vector") did not hold: L answers measured the same length as M ones,
+     * i.e. they were ordinary answers, and the branch was quietly discarding legitimate curated
+     * knowledge. A mode-driven skip returns in Step 3-a via {@code ResponseMode.allowsCuration()},
+     * but for a real reason — keeping model-invented C-mode content out of the search corpus.
      */
     public void onLike(String userId, String threadId, long turnId) {
         Optional<MemoryRepository.Turn> turnOpt = memoryService.getTurn(userId, threadId, turnId);
@@ -143,6 +145,16 @@ public class CuratedQaService {
             return;
         }
         MemoryRepository.Turn turn = turnOpt.get();
+
+        // 큐레이션 대상이 아닌 모드는 여기서 끝 — curated_qa 행조차 만들지 않는다. LIKE 피드백의
+        // 유일한 소비자가 큐레이션이므로 그 모드에서는 좋아요가 무동작이 된다(싫어요는 그대로
+        // 다음 컨텍스트 제외로 동작). 사유는 ResponseMode 의 해당 모드 주석 참조.
+        ResponseMode mode = ResponseMode.parse(turn.responseMode());
+        if (!mode.allowsCuration()) {
+            log.debug("[CURATED] onLike: {} 모드는 큐레이션 대상이 아니라 무시한다 turnId={}", mode, turnId);
+            return;
+        }
+
         String version = threadMetaService.findById(userId, threadId)
                 .map(t -> t.version())
                 .orElse(null);
@@ -153,11 +165,6 @@ public class CuratedQaService {
         // 걸러지지 않는다(RetrievalService.filterByTags의 큐레이션 면제).
         long curatedId = repository.upsertActive(turnId, userId, threadId,
                 turn.question(), turn.answer(), version, turn.selectedTags());
-
-        if (ResponseMode.parse(turn.responseMode()) == ResponseMode.L) {
-            log.debug("[CURATED] embed skipped (L-mode answer already mirrors source content) turnId={}", turnId);
-            return;
-        }
 
         Thread.ofVirtual().name("curated-embed-" + curatedId).start(() -> {
             try {
@@ -190,6 +197,64 @@ public class CuratedQaService {
         int chunks = existing.get().chunkCount();
         Thread.ofVirtual().name("curated-deindex-" + curatedId).start(() ->
                 deleteVectors(curatedId, chunks));
+    }
+
+    /**
+     * §6.25 — how many curated entries {@link #onThreadDeleted} would retract for this
+     * conversation. Read by the admin delete confirmation so the operator sees the knowledge cost
+     * of the delete before approving it, not after.
+     */
+    public int countActiveByThread(String userId, String threadId) {
+        return repository.findActiveByThread(userId, threadId).size();
+    }
+
+    /**
+     * §6.25 — retracts every 👍-promoted entry of a conversation that is being deleted whole; the
+     * thread-level counterpart of {@link #onUnlike}.
+     *
+     * <p><b>Why this has to exist at all.</b> A {@code curated_qa} row is linked to its turn by a
+     * <em>copy</em> of the thread/turn id, not a foreign key, so deleting the conversation removes
+     * the turns while the row and its vectors survive and keep feeding search from a conversation
+     * that no longer exists. That is exactly the orphan {@link #onUnlike} is called for on the
+     * single-turn delete path — one level up. Both delete paths (the user's own
+     * {@code DELETE /ui/threads/{threadId}} and the admin one) must call this, or the outcome
+     * depends on which button was pressed.
+     *
+     * <p>Rows are deactivated <b>by their own id</b>, never by turn: {@code deactivate(turnId)}
+     * silently no-ops on any row whose {@code source_turn_id} is NULL (see
+     * {@link CuratedQaRepository#deactivateById}). Manual (청크 추가) rows are excluded by the
+     * query itself — a submission is a 전부/전무 unit and deleting a chat thread must not take
+     * part of one down.
+     *
+     * <p>Vector removal is <b>one batched call on one background thread</b>, unlike
+     * {@link #forceRemoveBySubmission}'s per-row fan-out: a long conversation can hold many liked
+     * turns, and that pattern would spend a thread and a network round-trip on each. As everywhere
+     * else here, the DB write is synchronous (cheap, local) and only the remote delete is deferred
+     * (§6.12).
+     *
+     * @return how many curated rows were retracted — surfaced in the deletion's audit entry and in
+     *         the admin confirm dialog, so the cost of deleting a conversation is visible rather
+     *         than silent.
+     */
+    public int onThreadDeleted(String userId, String threadId) {
+        List<CuratedQa> rows = repository.findActiveByThread(userId, threadId);
+        if (rows.isEmpty()) return 0;
+
+        List<String> vectorIds = new java.util.ArrayList<>();
+        for (CuratedQa row : rows) {
+            repository.deactivateById(row.id());
+            vectorIds.addAll(vectorIdsFor(row.id(), row.chunkCount()));
+        }
+        Thread.ofVirtual().name("curated-deindex-thread-" + threadId).start(() -> {
+            try {
+                vectorStore.deleteByDocIds(DocRegistry.SHARED, CURATED_VERSION, vectorIds);
+            } catch (Exception e) {
+                log.warn("[CURATED] 대화 삭제 후 벡터 삭제 실패 threadId={}: {}", threadId, e.getMessage());
+            }
+        });
+        log.info("[CURATED] 대화 {} 삭제 — 큐레이션 {}건 회수(벡터 {}개)",
+                threadId, rows.size(), vectorIds.size());
+        return rows.size();
     }
 
     /**
@@ -563,12 +628,21 @@ public class CuratedQaService {
     /** Removes every vector this row owns — {@code chunkCount} ids, not just the first. */
     private void deleteVectors(long curatedId, int chunkCount) {
         try {
-            List<String> ids = new java.util.ArrayList<>(Math.max(1, chunkCount));
-            for (int i = 0; i < Math.max(1, chunkCount); i++) ids.add(springDocId(curatedId, i));
-            vectorStore.deleteByDocIds(DocRegistry.SHARED, CURATED_VERSION, ids);
+            vectorStore.deleteByDocIds(DocRegistry.SHARED, CURATED_VERSION,
+                    vectorIdsFor(curatedId, chunkCount));
         } catch (Exception e) {
             log.warn("[CURATED] vector delete failed curatedId={}: {}", curatedId, e.getMessage());
         }
+    }
+
+    /**
+     * Vector ids for every chunk of one curated row. {@code chunkCount} is floored at 1 — a row
+     * written before splitting existed records 0 but still owns the index-0 vector.
+     */
+    private static List<String> vectorIdsFor(long curatedId, int chunkCount) {
+        List<String> ids = new java.util.ArrayList<>(Math.max(1, chunkCount));
+        for (int i = 0; i < Math.max(1, chunkCount); i++) ids.add(springDocId(curatedId, i));
+        return ids;
     }
 
     private boolean isStillLiked(String userId, String threadId, long turnId) {

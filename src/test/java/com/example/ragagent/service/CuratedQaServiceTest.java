@@ -39,6 +39,9 @@ import static org.mockito.Mockito.when;
  *  - onLike → 임베딩 호출 자체는 성공했지만 그 사이 좋아요가 취소됨 → 보정 삭제(커밋 후 체크포인트)
  *  - onUnlike: 활성 엔트리 존재 → 비활성화 + 벡터 삭제
  *  - onUnlike: 엔트리 없음 / 이미 비활성 → no-op
+ *  - onThreadDeleted(§6.25): 대화의 활성 엔트리 전부를 id 기준으로 비활성화 + 벡터 삭제 1회 배치
+ *  - onThreadDeleted: 엔트리 없음 → no-op (벡터 호출 자체가 없다)
+ *  - onThreadDeleted: chunkCount>1 행의 벡터 id가 전부 포함된다(-1, -2 …)
  *  - embed 임베딩 실패 fallback: 전체 텍스트 실패 시 상세 섹션만으로 재시도 → 성공하면 markEmbedOk,
  *    둘 다 실패하거나 애초에 상세 섹션이 없으면(Direct 모드 등) markEmbedFailed
  *  - updateAnswer 재임베딩도 동일한 fallback/마킹 로직 공유
@@ -157,18 +160,38 @@ class CuratedQaServiceTest {
     }
 
     @Test
-    @DisplayName("onLike — L모드 답변은 curated_qa 행은 생성하되 임베딩은 아예 시도하지 않는다(원문과 거의 동일하므로)")
-    void onLike_lMode_skipsEmbedEntirely() {
-        when(memoryService.getTurn(UID, TID, TURN_ID)).thenReturn(Optional.of(turn("질문", "답변", "L")));
-        when(repository.upsertActive(anyLong(), any(), any(), any(), any(), any(), any())).thenReturn(1L);
+    @DisplayName("onLike — S 모드 턴은 curated_qa 행조차 만들지 않는다(좋아요 무동작)")
+    void onLike_summaryMode_doesNothing() {
+        // S 답변은 전체가 "## 요약" 한 섹션이라, 큐레이션 임베딩 입력에서 구조 섹션을 걷어내면
+        // 본문이 통째로 사라져 질문만 담긴 벡터가 만들어졌다. 애초에 축약된 답변이라 공유 지식으로
+        // 승격할 대상도 아니므로 좋아요 자체를 무동작으로 만든다(싫어요는 계속 동작한다).
+        when(memoryService.getTurn(UID, TID, TURN_ID)).thenReturn(Optional.of(turn("질문", "## 요약\n짧은 답변", "S")));
 
         service.onLike(UID, TID, TURN_ID);
 
-        // curated_qa 스냅샷 행은 그대로 생성된다(좋아요 취소/수정/관리자 목록이 계속 동작하도록).
-        verify(repository, times(1)).upsertActive(TURN_ID, UID, TID, "질문", "답변", "v1", null);
-        // 하지만 임베딩 스레드 자체가 생성되지 않으므로 findById(재조회)도, vectorStore.add도 절대 호출되지 않는다.
+        verify(repository, never()).upsertActive(anyLong(), any(), any(), any(), any(), any(), any());
         verify(repository, never()).findById(anyLong());
         verify(vectorStore, never()).add(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("onLike — 옛 L모드로 저장된 턴도 이제 임베딩된다(PLAN §6.24 Step 0-a: 근거 없던 스킵 제거)")
+    void onLike_legacyLModeTurn_isNoLongerSkipped() {
+        // 예전에는 response_mode='L' 이면 임베딩을 통째로 건너뛰었다 — "L 답변은 색인된 원문을
+        // 거의 그대로 미러링한다"는 전제였는데, 실측에서 L 답변 길이가 M과 같아 전제가 깨졌다.
+        // 그 분기는 멀쩡한 큐레이션 지식을 조용히 버리고 있었으므로 L과 함께 제거했다.
+        // 이제 'L'은 존재하지 않는 값이라 ResponseMode.parse가 N으로 흡수하고, 일반 경로를 탄다.
+        when(memoryService.getTurn(UID, TID, TURN_ID)).thenReturn(Optional.of(turn("질문", "답변", "L")));
+        when(repository.upsertActive(anyLong(), any(), any(), any(), any(), any(), any())).thenReturn(1L);
+        when(memoryService.getFeedback(UID, TID, TURN_ID))
+                .thenReturn(Optional.of(new MemoryRepository.FeedbackRow("LIKE")));
+        when(repository.findById(1L)).thenReturn(Optional.of(curatedQa(1L, "active", "질문", "답변")));
+
+        service.onLike(UID, TID, TURN_ID);
+
+        verify(repository, times(1)).upsertActive(TURN_ID, UID, TID, "질문", "답변", "v1", null);
+        // 디바운스(20ms) 뒤 백그라운드 임베딩 스레드가 실제로 벡터를 쓴다.
+        verify(vectorStore, timeout(2_000)).add(any(), any(), any());
     }
 
     @Test
@@ -234,6 +257,58 @@ class CuratedQaServiceTest {
 
         verify(repository, never()).deactivate(anyLong());
         verify(vectorStore, never()).deleteByDocIds(any(), any(), any());
+    }
+
+    // ── §6.25 — 대화 통삭제 시 큐레이션 회수 ──────────────────────────────────
+
+    /** {@link #curatedQa}와 달리 id별로 turn/chunkCount를 달리 줄 수 있는 변형. */
+    private static CuratedQaRepository.CuratedQa curatedRow(long id, long turnId, int chunkCount) {
+        return new CuratedQaRepository.CuratedQa(id, turnId, UID, TID, "질문" + id, "답변" + id,
+                "active", "v1", "2026-01-01", "2026-01-01", "ok",
+                CuratedQaRepository.ORIGIN_LIKE, null, null, chunkCount);
+    }
+
+    @Test
+    @DisplayName("onThreadDeleted — 대화의 활성 엔트리를 전부 비활성화하고 벡터를 한 번에 삭제한다")
+    void onThreadDeleted_activeEntries_deactivatesAllAndDeletesVectorsOnce() {
+        when(repository.findActiveByThread(UID, TID))
+                .thenReturn(List.of(curatedRow(1L, 11L, 1), curatedRow(2L, 12L, 1)));
+
+        int retracted = service.onThreadDeleted(UID, TID);
+
+        assertThat(retracted).isEqualTo(2);
+        // turn 기준이 아니라 id 기준으로 내려야 한다 — deactivate(turnId)는 source_turn_id가
+        // NULL인 행에 no-op이고, 새 해제 경로는 전부 deactivateById를 써야 한다는 규약.
+        verify(repository).deactivateById(1L);
+        verify(repository).deactivateById(2L);
+        verify(repository, never()).deactivate(anyLong());
+        // 행마다 한 번씩이 아니라 한 번의 배치 호출 — 긴 대화에서 스레드/왕복이 행 수만큼 늘지 않는다.
+        verify(vectorStore, timeout(2000).times(1)).deleteByDocIds(
+                "shared", CuratedQaService.CURATED_VERSION, List.of("curated-1", "curated-2"));
+    }
+
+    @Test
+    @DisplayName("onThreadDeleted — 회수할 엔트리가 없으면 벡터 스토어를 건드리지 않는다")
+    void onThreadDeleted_noEntries_isNoOp() {
+        when(repository.findActiveByThread(UID, TID)).thenReturn(List.of());
+
+        assertThat(service.onThreadDeleted(UID, TID)).isZero();
+
+        verify(repository, never()).deactivateById(anyLong());
+        verify(vectorStore, never()).deleteByDocIds(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("onThreadDeleted — 여러 청크로 임베딩된 행은 모든 청크 벡터 id가 포함된다")
+    void onThreadDeleted_multiChunkRow_deletesEveryChunkVector() {
+        when(repository.findActiveByThread(UID, TID))
+                .thenReturn(List.of(curatedRow(7L, 11L, 3)));
+
+        service.onThreadDeleted(UID, TID);
+
+        // 첫 청크는 하위호환 형식(curated-7), 이후는 접미사 — springDocId 규약 그대로.
+        verify(vectorStore, timeout(2000)).deleteByDocIds("shared", CuratedQaService.CURATED_VERSION,
+                List.of("curated-7", "curated-7-1", "curated-7-2"));
     }
 
     // ── §10.10 step ④ — 편집/관리 ────────────────────────────────────────────

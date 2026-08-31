@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" lang="ko">
+<body>
+
+<!-- §6.25 — 한 턴의 출처별 검색 진단 표. 두 곳이 이 프래그먼트 하나를 쓴다:
+       · 검색 진단 수치 패널의 '상세' (턴 단위 flat 목록)
+       · 대화 목록 패널의 드릴다운 안, 검색이 돈 턴의 '출처'
+     열의 의미(무엇이 null 이고 무엇이 0 인지 포함)가 두 화면에서 갈리지 않도록 한 곳에만 둔다.
+     인자로 `sources` 를 받는다. 컨트롤러가 직접 반환할 때는 아래 `standalone` 을 쓴다 —
+     프래그먼트 셀렉터 문자열로는 인자를 넘기기 어렵기 때문. -->
+<th:block th:fragment="sourceTable(sources)">
+    <div th:if="${#lists.isEmpty(sources)}" class="p-2 text-muted small text-center">
+        이 턴의 출처 정보가 없습니다.
+    </div>
+    <table class="table table-sm mb-0 small" th:unless="${#lists.isEmpty(sources)}">
+        <thead>
+        <tr>
+            <th>출처</th>
+            <th style="width:80px;">유사도</th>
+            <th style="width:80px;">검색기여</th>
+            <th style="width:120px;">축별 순위</th>
+            <th style="width:80px;">응답참여</th>
+        </tr>
+        </thead>
+        <tbody>
+        <tr th:each="s : ${sources}">
+            <td class="text-truncate" style="max-width:0; min-width:160px;"
+                th:text="${s.label}" th:title="${s.label}">문서</td>
+            <!-- null = 측정 안 됨(벡터 축에 없던 청크 등). 0으로 보이면 안 되므로 '-' -->
+            <td th:text="${s.similarity != null} ? ${#numbers.formatDecimal(s.similarity, 1, 2)} : '-'">0.72</td>
+            <td th:text="${s.retrievalShare != null} ? ${#numbers.formatDecimal(s.retrievalShare * 100, 1, 0)} + '%' : '-'">18%</td>
+            <td class="text-muted" th:text="${s.axisRanks} ?: '-'">vec:2, bm25:5</td>
+            <td th:text="${s.answerShare != null} ? ${#numbers.formatDecimal(s.answerShare * 100, 1, 0)} + '%' : '-'">31%</td>
+        </tr>
+        </tbody>
+    </table>
+</th:block>
+
+<!-- 컨트롤러가 직접 반환하는 형태 — 모델의 `sources` 를 위 프래그먼트에 넘겨준다. -->
+<th:block th:fragment="standalone">
+    <th:block th:replace="~{fragments/admin-source-table :: sourceTable(${sources})}"></th:block>
+</th:block>
+
+</body>
+</html>

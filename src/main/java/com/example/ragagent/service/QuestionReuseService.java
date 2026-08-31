@@ -89,7 +89,7 @@ public class QuestionReuseService {
 
     public void markChunkDeleted(String chunkId) {
         if (chunkId == null || chunkId.isBlank()) return;
-        repository.markSourceRefsInactiveByChunkIds(List.of(chunkId), SourceRef.STALE_DELETED);
+        repository.markSourceRefsStaleByChunkIds(List.of(chunkId), SourceRef.STALE_DELETED);
     }
 
     /**
@@ -101,7 +101,7 @@ public class QuestionReuseService {
      */
     public void invalidateChunk(String chunkId) {
         if (chunkId == null || chunkId.isBlank()) return;
-        repository.markSourceRefsInactiveByChunkIds(List.of(chunkId), SourceRef.STALE_MODIFIED);
+        repository.markSourceRefsStaleByChunkIds(List.of(chunkId), SourceRef.STALE_MODIFIED);
     }
 
     public void markChunksDeleted(List<String> chunkIds) {
@@ -111,7 +111,7 @@ public class QuestionReuseService {
                 .distinct()
                 .toList();
         if (normalized.isEmpty()) return;
-        repository.markSourceRefsInactiveByChunkIds(normalized, SourceRef.STALE_DELETED);
+        repository.markSourceRefsStaleByChunkIds(normalized, SourceRef.STALE_DELETED);
     }
 
     public String currentChunkHash(String chunkId) {
@@ -125,9 +125,9 @@ public class QuestionReuseService {
         String current = currentChunkHash(chunkId);
         if (current.isBlank()) {
             // 재인덱싱 후 FTS에서 사라졌다 = 이 청크는 더 이상 없다.
-            repository.markSourceRefsInactiveByChunkIds(List.of(chunkId), SourceRef.STALE_DELETED);
+            repository.markSourceRefsStaleByChunkIds(List.of(chunkId), SourceRef.STALE_DELETED);
         } else if (!current.equals(previousHash)) {
-            repository.markSourceRefsInactiveByChunkIds(List.of(chunkId), SourceRef.STALE_MODIFIED);
+            repository.markSourceRefsStaleByChunkIds(List.of(chunkId), SourceRef.STALE_MODIFIED);
         }
     }
 
@@ -253,7 +253,7 @@ public class QuestionReuseService {
             return ValidationResult.invalid("답변에 반영된 출처가 없어 재사용할 수 없습니다.");
         }
         for (QuestionReuseRepository.SourceSnapshot ref : scope) {
-            if (ref.inactive()) {
+            if (ref.stale()) {
                 return ValidationResult.invalid("문서/청크가 삭제 또는 재인덱싱되어 기존 답변을 재사용할 수 없습니다.");
             }
         }

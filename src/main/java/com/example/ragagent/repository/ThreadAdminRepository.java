@@ -1,0 +1,328 @@
+package com.example.ragagent.repository;
+
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.stereotype.Repository;
+
+import java.util.List;
+import java.util.Optional;
+
+/**
+ * §6.25 — the read side of the {@code /admin} 대화 목록 panel: every conversation in the
+ * deployment with the counters an operator needs to decide what to look at and what to delete.
+ *
+ * <p><b>Deliberately not user-scoped.</b> Every method on {@link ThreadMetaRepository} takes a
+ * {@code userId} and filters by it, and that is an invariant worth keeping legible — a
+ * cross-user query mixed in there would quietly break "this class can only ever see one user's
+ * threads". So the operator view lives in its own class, gated by {@code /admin/**}'s ROLE_ADMIN
+ * like {@code MemoryRepository.findRecentRetrievalMetrics}, which made the same call for the same
+ * reason.
+ *
+ * <p>Read-only: this class owns no DDL. {@code thread_meta} is created by
+ * {@link ThreadMetaRepository} and {@code conversation_turns} by {@link SqliteMemoryRepository};
+ * both live in {@code memory.db} on the primary {@code JdbcTemplate}, which is what lets the
+ * aggregate below be one join rather than two round-trips stitched in Java.
+ */
+@Repository
+public class ThreadAdminRepository {
+
+    /**
+     * One conversation in the admin list.
+     *
+     * <p>Two different reuse counters, because they answer different questions and only one of
+     * them belongs next to a delete button:
+     * <ul>
+     *   <li>{@code reusedIn} — turns <em>in</em> this conversation that were answered by reusing
+     *       an older answer. "How much of this conversation was free."</li>
+     *   <li>{@code reusedOut} — turns anywhere that reused an answer <em>from</em> this
+     *       conversation. "How much other work rests on it" — deleting a thread with a high
+     *       count drops every one of those turns to the {@code 참조 원문 삭제됨} fallback.</li>
+     * </ul>
+     *
+     * @param lastAskedAt {@code MAX(asked_at)} — the real last-message time, <b>UTC</b>, unlike
+     *                    {@code updatedAt} which {@link ThreadMetaRepository#now()} writes in
+     *                    system-local time. The two must never be mixed in one column or sorted
+     *                    against each other; see PLAN §6.25 결정 2. Null when the thread has no
+     *                    turns at all.
+     * @param diagCount   turns carrying retrieval diagnostics. Reuse/Direct/meta turns run no
+     *                    search, so a large {@code turnCount - diagCount} gap is itself the
+     *                    signal that this conversation mostly did not retrieve anything.
+     */
+    public record ThreadRow(String threadId, String userId, String title, String tags,
+                            String createdAt, String updatedAt, String lastAskedAt,
+                            int turnCount, int reusedIn, int reusedOut, int diagCount,
+                            int likeCount, int dislikeCount) {}
+
+    /** Deployment-wide totals for the panel's summary strip. */
+    public record Summary(int threadCount, int userCount, int turnCount, int reusedTurnCount,
+                          int orphanTurnCount) {}
+
+    /**
+     * One turn in a conversation's drill-down.
+     *
+     * <p><b>There is deliberately no {@code answer} field.</b> The panel's default is that an
+     * operator can see what was asked and how it was answered <em>structurally</em>, but not the
+     * answer text itself; making that a missing column rather than a template omission means a
+     * future edit to the template cannot leak it. Reading an answer is a separate, audited call
+     * (§6.25 결정 3, Step 6).
+     *
+     * @param question already truncated to a single preview line — this is a list, not a transcript
+     * @param reused this turn answered by reusing an older turn, so it ran no retrieval of its own
+     * @param hasDiagnostics retrieval diagnostics were recorded, i.e. search actually ran
+     */
+    public record TurnRow(long turnId, String askedAt, String question, String responseMode,
+                          String provider, String feedback, boolean reused, boolean directMode,
+                          boolean hasDiagnostics) {}
+
+    /**
+     * Sort orders the panel offers. An enum rather than a string because the value is concatenated
+     * into SQL — {@code ORDER BY} cannot be parameterized, so the only safe form is a closed set
+     * chosen in code.
+     */
+    public enum Sort {
+        /** Most recent activity first — the same order the chat sidebar uses. */
+        RECENT("m.updated_at DESC"),
+        TURNS("turn_count DESC, m.updated_at DESC"),
+        REUSED("reused_out DESC, m.updated_at DESC");
+
+        private final String orderBy;
+
+        Sort(String orderBy) {
+            this.orderBy = orderBy;
+        }
+
+        /** Every order ends with the primary key so pagination can't drop or repeat a row when
+         *  the leading key ties (common: many threads with the same turn count, or 0 reuse). */
+        String sql() {
+            return orderBy + ", m.thread_id";
+        }
+
+        public static Sort parse(String raw) {
+            if (raw == null) return RECENT;
+            for (Sort s : values()) {
+                if (s.name().equalsIgnoreCase(raw.strip())) return s;
+            }
+            return RECENT;
+        }
+    }
+
+    private final JdbcTemplate jdbc;
+
+    public ThreadAdminRepository(JdbcTemplate jdbc) {
+        this.jdbc = jdbc;
+    }
+
+    /**
+     * {@code reusedOut} as a correlated subquery rather than a second join: joining
+     * {@code conversation_turns} twice would multiply the row count the outer aggregate is
+     * counting and silently inflate every other counter here. Backed by
+     * {@code idx_turns_reused_from}.
+     *
+     * <p>A turn that reused an answer from its own thread counts too — the question is "was this
+     * answer reused", not "was it reused elsewhere".
+     */
+    private static final String REUSED_OUT_SUBQUERY = """
+            (SELECT COUNT(*) FROM conversation_turns r
+               JOIN conversation_turns src ON src.id = r.reused_from_turn_id
+              WHERE src.thread_id = m.thread_id AND src.user_id = m.user_id)""";
+
+    private static final String LIST_SQL = """
+            SELECT m.thread_id, m.user_id, m.title, m.tags, m.created_at, m.updated_at,
+                   COUNT(t.id)                                                        AS turn_count,
+                   SUM(CASE WHEN t.reused_from_turn_id IS NOT NULL THEN 1 ELSE 0 END) AS reused_in,
+                   SUM(CASE WHEN t.retrieval_metrics   IS NOT NULL THEN 1 ELSE 0 END) AS diag_count,
+                   SUM(CASE WHEN t.feedback = 'LIKE'    THEN 1 ELSE 0 END)            AS like_count,
+                   SUM(CASE WHEN t.feedback = 'DISLIKE' THEN 1 ELSE 0 END)            AS dislike_count,
+                   MAX(t.asked_at)                                                    AS last_asked_at,
+                   %s                                                                 AS reused_out
+              FROM thread_meta m
+              LEFT JOIN conversation_turns t
+                     ON t.thread_id = m.thread_id AND t.user_id = m.user_id
+             %s
+             GROUP BY m.thread_id
+             ORDER BY %s
+             LIMIT ? OFFSET ?""";
+
+    /**
+     * One page of conversations.
+     *
+     * @param userId optional owner filter; null/blank means every user
+     */
+    public List<ThreadRow> findAll(String userId, Sort sort, int offset, int limit) {
+        boolean byUser = userId != null && !userId.isBlank();
+        String sql = LIST_SQL.formatted(
+                REUSED_OUT_SUBQUERY,
+                byUser ? "WHERE m.user_id = ?" : "",
+                (sort == null ? Sort.RECENT : sort).sql());
+
+        Object[] args = byUser
+                ? new Object[]{userId, limit, offset}
+                : new Object[]{limit, offset};
+
+        return jdbc.query(sql, ThreadAdminRepository::mapRow, args);
+    }
+
+    private static ThreadRow mapRow(java.sql.ResultSet rs, int n) throws java.sql.SQLException {
+        return new ThreadRow(
+                rs.getString("thread_id"),
+                rs.getString("user_id"),
+                rs.getString("title"),
+                rs.getString("tags"),
+                rs.getString("created_at"),
+                rs.getString("updated_at"),
+                rs.getString("last_asked_at"),
+                rs.getInt("turn_count"),
+                rs.getInt("reused_in"),
+                rs.getInt("reused_out"),
+                rs.getInt("diag_count"),
+                rs.getInt("like_count"),
+                rs.getInt("dislike_count"));
+    }
+
+    /**
+     * One conversation's row, by thread id — <b>the same aggregate</b> {@link #findAll} renders,
+     * so the delete confirmation can't disagree with the list about what it is about to remove.
+     *
+     * <p>Read at click time rather than trusting the rendered row: the panel may have been open
+     * for minutes, and this is the number an operator uses to approve an irreversible cross-user
+     * delete.
+     */
+    public Optional<ThreadRow> findOne(String threadId) {
+        List<ThreadRow> rows = jdbc.query(
+                LIST_SQL.formatted(REUSED_OUT_SUBQUERY, "WHERE m.thread_id = ?", Sort.RECENT.sql()),
+                ThreadAdminRepository::mapRow,
+                threadId, 1, 0);
+        return rows.isEmpty() ? Optional.empty() : Optional.of(rows.get(0));
+    }
+
+    /** Total conversations matching the same filter {@link #findAll} was given — the panel's
+     *  "전체 N개" badge must move with the list or it reports on a set the operator isn't seeing. */
+    public int count(String userId) {
+        boolean byUser = userId != null && !userId.isBlank();
+        Integer n = byUser
+                ? jdbc.queryForObject("SELECT COUNT(*) FROM thread_meta WHERE user_id = ?",
+                        Integer.class, userId)
+                : jdbc.queryForObject("SELECT COUNT(*) FROM thread_meta", Integer.class);
+        return n == null ? 0 : n;
+    }
+
+    /**
+     * Deployment-wide totals. Unfiltered on purpose — the strip describes the deployment, so it
+     * stays put while the operator filters the list underneath it.
+     */
+    public Summary summary() {
+        Summary threads = jdbc.queryForObject(
+                "SELECT COUNT(*) AS c, COUNT(DISTINCT user_id) AS u FROM thread_meta",
+                (rs, n) -> new Summary(rs.getInt("c"), rs.getInt("u"), 0, 0, 0));
+        Summary turns = jdbc.queryForObject("""
+                SELECT COUNT(*) AS c,
+                       SUM(CASE WHEN reused_from_turn_id IS NOT NULL THEN 1 ELSE 0 END) AS r
+                  FROM conversation_turns""",
+                (rs, n) -> new Summary(0, 0, rs.getInt("c"), rs.getInt("r"), 0));
+        return new Summary(
+                threads == null ? 0 : threads.threadCount(),
+                threads == null ? 0 : threads.userCount(),
+                turns == null ? 0 : turns.turnCount(),
+                turns == null ? 0 : turns.reusedTurnCount(),
+                countOrphanTurns());
+    }
+
+    /**
+     * Turns whose conversation has no {@code thread_meta} row — invisible to {@link #findAll},
+     * which starts from {@code thread_meta}. Surfaced as a number only: this is a consistency
+     * readout in the spirit of {@code /admin/registry/reconcile-chunks}, not a feature, and a
+     * non-zero value means a delete or a write went half-finished somewhere.
+     */
+    public int countOrphanTurns() {
+        Integer n = jdbc.queryForObject("""
+                SELECT COUNT(*) FROM conversation_turns t
+                 WHERE NOT EXISTS (SELECT 1 FROM thread_meta m
+                                    WHERE m.thread_id = t.thread_id AND m.user_id = t.user_id)""",
+                Integer.class);
+        return n == null ? 0 : n;
+    }
+
+    /**
+     * The turns of one conversation, oldest first — the drill-down under a list row.
+     *
+     * <p>Selects columns explicitly rather than reusing {@code MemoryRepository.getTurns}: that
+     * one returns the full answer text (it feeds prompt assembly), which is exactly what this view
+     * must not carry by default. Capped by {@code limit} so opening a very long conversation can't
+     * render thousands of rows into the page.
+     */
+    public List<TurnRow> findTurns(String userId, String threadId, int limit) {
+        return jdbc.query("""
+                SELECT id, asked_at, question, response_mode, provider, feedback,
+                       reused_from_turn_id, direct_mode, retrieval_metrics
+                  FROM conversation_turns
+                 WHERE user_id = ? AND thread_id = ?
+                 ORDER BY id
+                 LIMIT ?""",
+                (rs, n) -> {
+                    rs.getLong("reused_from_turn_id");
+                    boolean reused = !rs.wasNull();
+                    return new TurnRow(
+                            rs.getLong("id"),
+                            rs.getString("asked_at"),
+                            rs.getString("question"),
+                            rs.getString("response_mode"),
+                            rs.getString("provider"),
+                            rs.getString("feedback"),
+                            reused,
+                            rs.getInt("direct_mode") != 0,
+                            rs.getString("retrieval_metrics") != null);
+                },
+                userId, threadId, Math.max(1, limit));
+    }
+
+    /**
+     * One turn's full text — the only place in this class that returns an answer.
+     *
+     * <p>Separate from {@link #findTurns}, which deliberately has no answer column: the panel's
+     * default is that an operator sees structure, not transcripts, and reading an answer is an
+     * explicit, audited act (§6.25 결정 3). Keeping it a distinct query is what makes "was this
+     * read" a question the audit log can answer — a column on the list would have made every
+     * listing an unlogged read.
+     *
+     * <p>Carries the owner so the caller can record <em>whose</em> answer was read without
+     * accepting a userId from the client.
+     */
+    public Optional<TurnContent> findTurnContent(long turnId) {
+        List<TurnContent> rows = jdbc.query(
+                "SELECT id, user_id, thread_id, asked_at, question, answer, response_mode " +
+                "  FROM conversation_turns WHERE id = ?",
+                (rs, n) -> new TurnContent(
+                        rs.getLong("id"),
+                        rs.getString("user_id"),
+                        rs.getString("thread_id"),
+                        rs.getString("asked_at"),
+                        rs.getString("question"),
+                        rs.getString("answer"),
+                        rs.getString("response_mode")),
+                turnId);
+        return rows.isEmpty() ? Optional.empty() : Optional.of(rows.get(0));
+    }
+
+    /** @see #findTurnContent */
+    public record TurnContent(long turnId, String userId, String threadId, String askedAt,
+                              String question, String answer, String responseMode) {}
+
+    /** Owners that actually have conversations — the panel's filter dropdown. */
+    public List<String> distinctUserIds() {
+        return jdbc.queryForList(
+                "SELECT DISTINCT user_id FROM thread_meta ORDER BY user_id", String.class);
+    }
+
+    /**
+     * The owner of a conversation, looked up by thread id alone.
+     *
+     * <p>This is what lets the admin delete endpoint take only a {@code threadId}:
+     * {@code thread_meta.thread_id} is the primary key, so the server can resolve the owner
+     * itself instead of accepting a {@code userId} from the client — a parameter that would let a
+     * caller name whose conversation to act on.
+     */
+    public Optional<String> findOwner(String threadId) {
+        List<String> owners = jdbc.queryForList(
+                "SELECT user_id FROM thread_meta WHERE thread_id = ?", String.class, threadId);
+        return owners.isEmpty() ? Optional.empty() : Optional.of(owners.get(0));
+    }
+}

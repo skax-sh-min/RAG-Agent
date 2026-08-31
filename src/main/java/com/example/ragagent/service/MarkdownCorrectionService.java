@@ -1305,9 +1305,17 @@ public class MarkdownCorrectionService {
         return line.startsWith("[페이지: ");
     }
 
-    /** Number of lines that open or close a fenced code block (leading whitespace ignored) — the
-     *  line-based view {@link #fixClosingFences} and {@link #postProcessMarkdown} both use. */
-    private static int fenceLineCount(String text) {
+    /**
+     * Number of lines that open or close a fenced code block (leading whitespace ignored) — the
+     * line-based view {@link #fixClosingFences} and {@link #postProcessMarkdown} both use.
+     *
+     * <p>Package-private, not private, so {@code AnswerService.truncate()} can count fences the
+     * <b>same</b> way this class does (§6.24 Step 3-c). A second implementation over there would
+     * be free to drift, and the whole point of the code-fence parity invariant is that every pass
+     * touching fences agrees on where they are. Static, so no bean dependency is created — the
+     * chat path must not pull in this indexing-path service.
+     */
+    static int fenceLineCount(String text) {
         int count = 0;
         for (String line : text.split("\n", -1)) {
             if (line.stripLeading().startsWith("```")) count++;

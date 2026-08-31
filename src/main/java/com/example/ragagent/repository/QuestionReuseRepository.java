@@ -1,5 +1,6 @@
 package com.example.ragagent.repository;
 
+import com.example.ragagent.model.ResponseMode;
 import jakarta.annotation.PostConstruct;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -20,6 +21,36 @@ import java.util.stream.Collectors;
 public class QuestionReuseRepository {
 
     private static final String DELETED_REFERENCE_TEXT = "참조 원문 삭제됨";
+
+    /**
+     * 재사용 후보에서 제외할 응답 모드를 거르는 WHERE 술어 (§6.24 Step 3-b).
+     *
+     * <p>예전에는 {@code COALESCE(NULLIF(TRIM(t.response_mode), ''), 'M') <> 'S'} 라는 리터럴이
+     * 두 쿼리에 각각 박혀 있었다. 값 비교가 SQL 문자열 안에 있으면 두 가지가 동시에 깨진다 —
+     * 모드를 하나 추가할 때 여기를 고쳐야 한다는 사실이 어디에도 드러나지 않고, 운영 코드의
+     * 모드 값 비교를 잡아내는 {@code ResponseModeBranchConventionTest} 도 SQL 문자열 안까지는
+     * 보지 못한다. 이제 목록을 {@link ResponseMode#allowsReuse()} 에서
+     * 만들어 두 쿼리가 공유한다.
+     *
+     * <p><b>{@code ResponseMode.parse()} 와 판정이 일치해야 한다.</b> 그래서 컬럼을
+     * {@code TRIM(UPPER(...))} 로 정규화한 뒤 <b>제외 목록에 대한 NOT IN</b> 으로 거른다 —
+     * 허용 목록에 대한 IN 이 아니다. 그래야 {@code parse()} 의 관대함과 같은 방향으로 떨어진다:
+     * NULL·공백·옛 {@code 'M'}/{@code 'L'}·알 수 없는 값은 모두 {@code parse()} 에서 N(재사용 가능)
+     * 으로 흡수되고, 여기서도 목록에 없으므로 포함된다. 허용 목록 방식이었다면 같은 행들이
+     * 조용히 후보에서 빠졌을 것이다.
+     *
+     * <p>enum 상수 이름만 들어가므로 SQL 인젝션 여지가 없다(따옴표를 담을 수 없는 식별자다).
+     */
+    private static final String REUSABLE_MODE_PREDICATE = buildReusableModePredicate();
+
+    private static String buildReusableModePredicate() {
+        String excluded = java.util.Arrays.stream(ResponseMode.values())
+                .filter(m -> !m.allowsReuse())
+                .map(m -> "'" + m.name() + "'")
+                .collect(Collectors.joining(", "));
+        if (excluded.isEmpty()) return "1 = 1";
+        return "TRIM(UPPER(COALESCE(t.response_mode, ''))) NOT IN (" + excluded + ") ";
+    }
 
     private final JdbcTemplate jdbc;
     private final JdbcTemplate vectorJdbc;
@@ -107,7 +138,7 @@ public class QuestionReuseRepository {
             "LEFT JOIN conversation_turns src ON src.id = t.reused_from_turn_id AND src.user_id = t.user_id " +
             "WHERE lower(t.question) LIKE lower(?) " +
             "AND (t.feedback IS NULL OR t.feedback <> 'DISLIKE') " +
-            "AND COALESCE(NULLIF(TRIM(t.response_mode), ''), 'M') <> 'S' " +
+            "AND " + REUSABLE_MODE_PREDICATE +
             "AND (COALESCE(t.direct_mode, 0) = 0 OR t.feedback = 'LIKE') " +
             (meOnly ? "AND t.user_id = ? " : "") +
             "ORDER BY t.id DESC LIMIT ?";
@@ -142,7 +173,7 @@ public class QuestionReuseRepository {
             "LEFT JOIN conversation_turns src ON src.id = t.reused_from_turn_id AND src.user_id = t.user_id " +
             "WHERE t.id = ? " +
             "AND (t.feedback IS NULL OR t.feedback <> 'DISLIKE') " +
-            "AND COALESCE(NULLIF(TRIM(t.response_mode), ''), 'M') <> 'S' " +
+            "AND " + REUSABLE_MODE_PREDICATE +
             "AND (COALESCE(t.direct_mode, 0) = 0 OR t.feedback = 'LIKE') " +
             (meOnly ? "AND t.user_id = ? " : "") +
             "LIMIT 1";
@@ -347,12 +378,18 @@ public class QuestionReuseRepository {
     /**
      * 스냅샷 이후 청크가 바뀌었음을 표시한다.
      *
+     * <p>예전 이름은 {@code markSourceRefsInactiveByChunkIds} 였다 — 그 시절에는 이 컬럼에
+     * 실제로 {@code 'inactive'} 를 썼기 때문이다. 지금 쓰는 값은 {@code deleted}/{@code modified}
+     * 둘뿐이라 이름이 값과 어긋나 있었고, 코드에 없는 상태가 있는 것처럼 읽혔다. 레거시
+     * {@code 'inactive'} 행을 읽는 코드는 남아 있지 않다(상태 판정은 모두 {@code = 'active'}
+     * 비교라, 옛 값은 자동으로 "무효화됨" 쪽으로 떨어진다).
+     *
      * @param status {@code SourceRef.STALE_DELETED} 또는 {@code STALE_MODIFIED} — 재사용 차단에는
      *        둘 다 똑같이 작용하지만 대화 기록의 배지 규칙이 다르다(삭제는 항상, 수정은 응답 지분이
      *        있는 출처만). 이미 무효화된 행은 건드리지 않는다: 수정된 뒤 삭제되면 최종 상태는
      *        삭제여야 하므로 {@code deleted}만 덮어쓰기를 허용한다.
      */
-    public void markSourceRefsInactiveByChunkIds(List<String> chunkIds, String status) {
+    public void markSourceRefsStaleByChunkIds(List<String> chunkIds, String status) {
         if (chunkIds == null || chunkIds.isEmpty()) return;
         String placeholders = chunkIds.stream().map(v -> "?").collect(Collectors.joining(","));
         List<Object> args = new ArrayList<>();
@@ -395,7 +432,9 @@ public class QuestionReuseRepository {
             return answerShare != null && answerShare > 0.0;
         }
 
-        public boolean inactive() {
+        /** 스냅샷 이후 청크가 삭제·수정됐는가({@code status != 'active'}). "active 가 아니다" 로
+         *  판정하므로 레거시 {@code 'inactive'} 행도 그대로 무효로 읽힌다. */
+        public boolean stale() {
             return status != null && !"active".equals(status);
         }
     }

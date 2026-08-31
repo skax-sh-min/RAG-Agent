@@ -23,9 +23,16 @@ import java.util.Set;
 
 /**
  * §10.10 — Q&A snapshot for turns promoted by a 👍. Independent of {@code conversation_turns}:
- * stores its own {@code question}/{@code answer} copy so it survives thread deletion (see
- * documents/PLAN.md §10.10 "연쇄 삭제 정책") and edits never mutate the original turn (audit
- * record stays immutable).
+ * it keeps its own {@code question}/{@code answer} copy, so edits never mutate the original turn
+ * (the audit record stays immutable) and a row outlives its turn structurally.
+ *
+ * <p>That independence is <b>not</b> a retention policy. The original §10.10 rule was that a
+ * curated row survives thread deletion; §6.25 reversed it — deleting a conversation now retracts
+ * the rows it promoted ({@code CuratedQaService.onThreadDeleted}), because an answer still being
+ * used as search evidence after its conversation is gone proved more confusing than the shared-
+ * knowledge loss the old rule protected, and because turn-level deletion had always retracted
+ * ({@code onUnlike}), leaving the two paths inconsistent. Copies still matter: they are what let
+ * the row be edited and re-embedded independently of the turn.
  */
 @Repository
 public class CuratedQaRepository {
@@ -267,6 +274,28 @@ public class CuratedQaRepository {
         List<CuratedQa> rows = jdbc.query(
                 "SELECT " + COLUMNS + "FROM curated_qa WHERE source_turn_id = ?", ROW_MAPPER, turnId);
         return rows.isEmpty() ? Optional.empty() : Optional.of(rows.get(0));
+    }
+
+    /**
+     * Every still-active 👍-promoted row of one chat thread, in creation order — the unit
+     * {@code CuratedQaService.onThreadDeleted} takes down when a whole conversation is deleted
+     * (§6.25).
+     *
+     * <p>{@code source_turn_id IS NOT NULL} excludes 청크 추가 (manual) rows <b>structurally</b>.
+     * Those currently carry {@code source_thread_id = ''} (see {@link #insertManual}), so a real
+     * thread id can never match one today — but a submission is a 전부/전무 unit owned by
+     * {@code forceRemoveBySubmission}, and deleting a conversation must never take half of one
+     * down. The guard keeps that true even if manual rows ever gain a real thread id.
+     *
+     * <p>Scoped by {@code source_user_id} as well as the thread: every other delete path in the
+     * app is (userId, threadId)-scoped, and matching on the thread alone would make this the one
+     * query that could reach across owners if two threads ever shared an id.
+     */
+    public List<CuratedQa> findActiveByThread(String userId, String threadId) {
+        return jdbc.query("SELECT " + COLUMNS +
+                        "FROM curated_qa WHERE source_user_id = ? AND source_thread_id = ? " +
+                        "AND source_turn_id IS NOT NULL AND status = 'active' ORDER BY id",
+                ROW_MAPPER, userId, threadId);
     }
 
     /** Every still-active chunk of one submission, in creation order — the 전부/전무 unit for

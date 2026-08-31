@@ -7,6 +7,7 @@ import com.example.ragagent.llm.CircuitBreaker;
 import com.example.ragagent.llm.ProviderToggle;
 import com.example.ragagent.model.SettingsView;
 import com.example.ragagent.model.SettingsView.ProviderRow;
+import com.example.ragagent.model.ResponseMode;
 import com.example.ragagent.model.SettingsView.SettingGroup;
 import com.example.ragagent.model.SettingsView.SettingItem;
 import com.example.ragagent.repository.SettingsOverrideRepository;
@@ -83,7 +84,8 @@ public class SettingsService implements AppProperties.OverrideSource {
     private static final List<Spec> LLM_HOT_SPECS = List.of(
             new Spec(SettingsKeys.LLM_TEMPERATURE,                Kind.DOUBLE, 0.0, 0.3,  0.01, "settings.item.temperature"),
             new Spec(SettingsKeys.LLM_DIRECT_TEMPERATURE,         Kind.DOUBLE, 0.0, 1.0,  0.05, "settings.item.direct-temperature"),
-            new Spec(SettingsKeys.LLM_INDEXING_TEMPERATURE,       Kind.DOUBLE, 0.0, 1.0,  0.05, "settings.item.indexing-temperature")
+            new Spec(SettingsKeys.LLM_INDEXING_TEMPERATURE,       Kind.DOUBLE, 0.0, 1.0,  0.05, "settings.item.indexing-temperature"),
+            new Spec(SettingsKeys.LLM_CREATIVE_TEMPERATURE,       Kind.DOUBLE, 0.0, 1.0,  0.05, "settings.item.creative-temperature")
     );
 
         // Insertion order = render order in the "UI" group. Apply on next page render.
@@ -374,7 +376,8 @@ public class SettingsService implements AppProperties.OverrideSource {
                 null,
                 bool ? null : spec.min(),
                 bool ? null : spec.max(),
-                bool ? null : spec.step());
+                bool ? null : spec.step(),
+                null);   // 편집 가능한 행은 라벨·범위로 충분해 툴팁을 쓰지 않는다
     }
 
     private List<SettingItem> searchHotItems() {
@@ -404,13 +407,64 @@ public class SettingsService implements AppProperties.OverrideSource {
      *  (DirectAnswerService reads it per call), and indexing-temperature (every ungated
      *  executeWithTracking() background caller — keyword extraction, MD correction, txt→md, vision
      *  description/classification, title, summary — reads it per call, so it can be pinned near 0
-     *  for deterministic extraction independently of the other two). max-tokens sits in the LLM
+     *  for deterministic extraction independently of the other two) — and creative-temperature, which
+     *  only the C (응용) response mode uses (§6.24): the general one is clamped to [0.0, 0.3], so
+     *  creative generation is impossible on it. max-tokens sits in the LLM
      *  providers card footer as read-only (baked into the provider beans at startup — restart to
      *  change). */
     private List<SettingItem> llmHotItems() {
         List<SettingItem> items = new ArrayList<>(LLM_HOT_SPECS.size());
         for (Spec s : LLM_HOT_SPECS) items.add(editableItem(s.key()));
+        items.addAll(responseModeBudgetItems());
         return items;
+    }
+
+    /**
+     * 응답 모드별 <b>유효</b> 답변 예산 — 읽기 전용 파생 행 (PLAN §6.24 Step 0-e).
+     *
+     * <p>{@code max-tokens} 한 줄만 보여주는 것으로는 지금 무슨 값이 적용 중인지 알 수 없다.
+     * 모드 예산은 비율분과 글자수 바닥 중 <b>큰 쪽</b>을 취하되 설정 상한에서 잘리므로, 같은
+     * {@code max-tokens} 변경이 모드마다 다른 폭으로 움직인다 — 실사용 12,000에서는 세 항 모두
+     * 바닥이 이기고 16,000에서는 모두 비율이 이긴다(전환점 S 13,334 / N 12,501). 어느 구간에
+     * 있는지를 값 옆에 함께 적어 그 혼란을 없앤다.
+     *
+     * <p>{@link ResponseMode#values()}를 돌므로 모드가 늘면 행도 저절로 늘어난다. 다만 라벨은
+     * 메시지 키라 번들에 한 줄이 필요하고, 그 누락은 화면에 {@code ??key??}로만 드러나므로
+     * {@code SettingsResponseModeBudgetTest}가 모든 모드의 키 존재를 고정한다.
+     */
+    private List<SettingItem> responseModeBudgetItems() {
+        int configured = props.llmSafe().maxTokens();
+        List<SettingItem> items = new ArrayList<>(ResponseMode.values().length);
+        for (ResponseMode mode : ResponseMode.values()) {
+            items.add(readOnly("settings.item.mode-budget." + mode.name().toLowerCase(),
+                    formatModeBudget(mode, configured), null, "settings.tooltip.mode-budget"));
+        }
+        return items;
+    }
+
+    /** 테스트 전용 접근점 — 표시 공식이 {@link ResponseMode#maxTokens(int)} 와 갈라지지 않는지 고정한다. */
+    static String formatModeBudgetForTest(ResponseMode mode, int configured) {
+        return formatModeBudget(mode, configured);
+    }
+
+    /**
+     * 예: {@code "8,400 (상한의 70%)"} — 값과 함께 <b>어느 항이 이겼는지를 풀어서</b> 적는다.
+     * 축약어(바닥/비율/상한)는 그 자체가 설명을 필요로 해서 표시의 목적을 반쯤 잃는다.
+     */
+    private static String formatModeBudget(ResponseMode mode, int configured) {
+        int effective = mode.maxTokens(configured);
+        if (effective <= 0) return "-";
+        // 비율항은 enum 의 tokenRatio() 에서 파생한다 — 상수를 여기 복제하지 않는다.
+        int ratioTokens = (int) Math.round(configured * mode.tokenRatio());
+        String source;
+        if (effective < Math.max(ratioTokens, mode.minChars())) {
+            source = "설정 상한";                                   // max-tokens 가 모드 요구보다 낮다
+        } else if (ratioTokens >= mode.minChars()) {
+            source = "상한의 %d%%".formatted(Math.round(mode.tokenRatio() * 100));
+        } else {
+            source = "최소 보장";                                   // 비율분이 작아 바닥이 받쳐준다
+        }
+        return "%,d (%s)".formatted(effective, source);
     }
 
     private List<SettingItem> uiHotItems() {
@@ -455,7 +509,11 @@ public class SettingsService implements AppProperties.OverrideSource {
     }
 
     private static SettingItem readOnly(String labelKey, String value, String note) {
-        return new SettingItem(null, labelKey, value, "text", false, false, note, null, null, null);
+        return readOnly(labelKey, value, note, null);
+    }
+
+    private static SettingItem readOnly(String labelKey, String value, String note, String tooltipKey) {
+        return new SettingItem(null, labelKey, value, "text", false, false, note, null, null, null, tooltipKey);
     }
 
     /**
@@ -487,6 +545,7 @@ public class SettingsService implements AppProperties.OverrideSource {
             case SettingsKeys.LLM_TEMPERATURE                 -> trimNum(props.llmSafe().temperature());
             case SettingsKeys.LLM_DIRECT_TEMPERATURE          -> trimNum(props.llmSafe().directTemperature());
             case SettingsKeys.LLM_INDEXING_TEMPERATURE        -> trimNum(props.llmSafe().indexingTemperature());
+            case SettingsKeys.LLM_CREATIVE_TEMPERATURE        -> trimNum(props.llmSafe().creativeTemperature());
             case SettingsKeys.UI_SOURCE_PREVIEW_ENABLED       -> Boolean.toString(sourcePreviewEnabled());
             case SettingsKeys.UI_RETRIEVAL_METRICS_ENABLED    -> Boolean.toString(retrievalMetricsEnabled());
             default -> "";

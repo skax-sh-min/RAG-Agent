@@ -8,6 +8,7 @@ import com.example.ragagent.exception.LlmProviderExhaustedException;
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.model.ChatForm;
 import com.example.ragagent.model.TagUtils;
+import com.example.ragagent.model.VerificationSnapshot;
 import com.example.ragagent.model.SourceRef;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.MessageSource;
@@ -216,6 +217,9 @@ public class StreamingAgentService {
                     form.isDirectMode());
                 memoryService.saveTurnImageRefs(turnId, userId, form.threadId(), result.imageRefs());
                 memoryService.saveRetrievalMetrics(turnId, result.sources());
+                memoryService.saveVerification(turnId, new VerificationSnapshot(
+                        result.grounded(), result.responseMode().generative(),
+                        result.evalReason(), result.envNote(), result.inventedSymbols()));
                 if (questionReuseService != null) {
                     questionReuseService.recordTurnSources(turnId, userId, form.threadId(),
                             result.retrievedDocs(), result.sources());
@@ -223,7 +227,8 @@ public class StreamingAgentService {
                 summarizerService.precomputeAfterTurn(userId, form.threadId(), turnId, locale);
             }
 
-            sendEvent(emitter, "done", buildDonePayload(result, elapsedMs, turnId));
+            sendEvent(emitter, "done",
+                    buildDonePayload(result, elapsedMs, turnId, listener.getAccumulatedAnswer()));
             emitter.complete();
 
             threadMetaService.generateTitleAsync(userId, form.threadId(), form.version(), form.question());
@@ -403,8 +408,22 @@ public class StreamingAgentService {
         } catch (Exception ignored) {}
     }
 
-    private Map<String, Object> buildDonePayload(AgentState result, long elapsedMs, Long turnId) {
+    /**
+     * @param streamedAnswer 클라이언트가 token 이벤트로 이미 받아 화면에 그린 텍스트. 서버가 그
+     *                       뒤에 답변을 손봤다면(요약 전용 가드, 20,000자 절단, PROGRESSIVE 재생성)
+     *                       화면과 저장본이 갈라지므로 최종본을 함께 실어 보낸다 — §6.24 Step 1-d.
+     */
+    private Map<String, Object> buildDonePayload(AgentState result, long elapsedMs, Long turnId,
+                                                 String streamedAnswer) {
         Map<String, Object> m = new HashMap<>();
+        // 서버 후처리로 답변이 바뀌었을 때만 최종본을 싣는다. 예전에는 이 신호가 없어서 화면엔 긴
+        // 답변이 남고 DB엔 잘린 답변이 저장됐고, 새로고침해야 비로소 달라진 것이 드러났다(그 사이
+        // 사용자는 화면의 긴 답변을 보고 좋아요를 눌렀다). 같은 값이면 키 자체를 넣지 않아
+        // 20,000자짜리 답변을 두 번 실어 보내는 일이 없다.
+        String finalAnswer = result.answer();
+        if (finalAnswer != null && !finalAnswer.equals(streamedAnswer)) {
+            m.put("finalAnswer", finalAnswer);
+        }
         m.put("usedProvider",      result.usedProvider());
         m.put("inputTokens",       result.totalInputTokens());
         m.put("outputTokens",      result.totalOutputTokens());
@@ -419,6 +438,24 @@ public class StreamingAgentService {
         // 경로·주소·포트·환경변수 값 안내 — 검증 통과 여부와 무관하게 실릴 수 있다(통과한 답변에도
         // "이 경로는 본인 환경 기준으로 바꿔야 한다"는 안내가 필요하다).
         m.put("envNote",           result.envNote());
+        // 통과 배지를 '검증됨'(초록)이 아니라 '생성'(파랑)으로 바꿔야 하는가 — 서버가 성질로
+        // 계산해 내려준다(ResponseMode.generative()). 클라이언트가 모드 문자열을 비교하게 두면
+        // 모드를 하나 더 붙일 때 JS 쪽 분기를 사람이 기억해서 찾아야 한다.
+        m.put("generative",        result.responseMode().generative());
+        // 이 턴에서 좋아요가 실제로 무언가를 하는가. LIKE의 유일한 소비자가 큐레이션이라
+        // S·C에서는 눌러도 curated_qa 행조차 생기지 않는데, 피드백 값은 저장돼 버튼만 눌린
+        // 채로 남는다 — 사용자는 기여했다고 믿는다. generative 와 같은 이유로 모드 문자열이
+        // 아니라 성질을 내려보낸다.
+        m.put("curatable",         result.responseMode().allowsCuration());
+        // 스트리밍 클라이언트에는 메시지 번들이 없으므로 사유 문구까지 서버가 해석해 보낸다
+        // (서버 템플릿 두 곳은 키를 직접 읽는다). 사유는 모드마다 다르다 — ResponseMode 참조.
+        String blockedKey = result.responseMode().curationBlockedMessageKey();
+        if (blockedKey != null) {
+            m.put("likeDisabledReason", messageSource.getMessage(blockedKey, null, result.locale()));
+        }
+        // 창의 검증이 지목한 '문서에 있는 것처럼 쓰였지만 발췌에 없는' 이름들. 재시도를 걸지 않는
+        // 경고 전용 값이라 통과한 답변에도 실린다(envNote 와 같은 규칙). 창의 모드가 아니면 비어 있다.
+        m.put("inventedSymbols",   result.inventedSymbols());
         // 2단계 응답 참여도 — 출처 배지는 RETRIEVAL 직후의 `sources` 이벤트로 이미 그려졌고, 참여도는
         // 답변이 끝나야 나오므로 여기서 chunkId 기준으로 사후 갱신한다(값이 없으면 키 자체가 빠져
         // 클라이언트가 아무것도 하지 않는다).

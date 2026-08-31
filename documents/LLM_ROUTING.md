@@ -49,10 +49,10 @@
 │    ClassifierService        → TEXT   (품질 민감 — 큰 모델 유지)      │
 │    RetrievalService (쿼리)  → MICRO_TEXT                             │
 │    AnswerService            → TEXT   (답변 + 충분도·근거 통합 평가)  │
-│    CriticService            → —      (LLM 호출 없음, responseMode=S는 스킵) │
+│    CriticService            → —      (LLM 호출 없음, S는 스킵·C는 창의 기준) │
 │    DirectAnswerService      → TEXT   (사용자 노출 — 큰 모델 유지)    │
 │    VisionDescriptionService → VISION                                 │
-│    ImageTypeClassifier      → LIGHT_BOTH  (분류는 범용 멀티모달로)   │
+│    ImageTypeClassifier      → LIGHT_BOTH  (멀티모달: LIGHT_BOTH/BOTH) │
 │    KeywordExtractor (키워드+맥락) → MICRO_TEXT                                  │
 │    RerankerService (opt-in) → TEXT        (SEARCH_RERANK_ENABLED=true일 때만) │
 └──────────────────────────────────────────────────────────────────────┘
@@ -76,9 +76,22 @@ public enum TaskType {
 ```
 
 참고: `responseMode=S` turn은 AgentGraph가 ANSWER 뒤 CRITIC 노드를 건너뛰고 바로 FINALIZE로 종료한다.
+`responseMode=C`(응용)는 반대로 검증을 **끄지 않고 바꿔 낀다** — 평가 프롬프트만 `prompt.answer.eval.creative`로
+교체되고 라우팅(`TaskType.TEXT`)·호출 수는 그대로다. 또한 C는 검색 결과가 전제라 `"meta"`로 분류돼도
+DIRECT_ANSWER로 가지 않고 RETRIEVAL을 탄다(`allowsDirect()=false`) — 라우팅 관점에서는 meta 턴 하나가
+TEXT 1회에서 TEXT 2회(답변+평가) + 임베딩으로 늘어난다는 뜻이다.
 
-`supports()` 매핑: `MICRO_TEXT`→MICRO_TEXT만, `LIGHT_TEXT`→LIGHT_TEXT+MICRO_TEXT, `LIGHT_BOTH`→LIGHT_TEXT·MICRO_TEXT·VISION, `BOTH`→전체. MICRO_TEXT는 LIGHT_TEXT의 부분집합이라 소형(`type=MICRO_TEXT`) 미등록 시 상위 모델이 흡수(회귀 0).  
-`type=VISION` 프로바이더는 VISION task에서만 선택됨 — 범용 `LIGHT_BOTH` 모델과 공존 가능.
+`supports()` 매핑 — 텍스트 3종은 **사다리**(`MICRO_TEXT` ⊂ `LIGHT_TEXT` ⊂ `TEXT`)이고 무거운 타입이 가벼운 작업을 반드시 흡수한다: `MICRO_TEXT`→MICRO_TEXT만, `LIGHT_TEXT`→LIGHT_TEXT+MICRO_TEXT, `TEXT`→TEXT+LIGHT_TEXT+MICRO_TEXT, `LIGHT_BOTH`→LIGHT_TEXT·MICRO_TEXT·VISION, `BOTH`→전체. 덕분에 소형(`type=MICRO_TEXT`) 미등록 시 상위 모델이 그대로 흡수한다(회귀 0).  
+`type=VISION` 프로바이더는 VISION task에서만 선택됨 — 범용 `LIGHT_BOTH` 모델과 공존 가능. **VISION은 사다리와 무관한 별도 축**이라 어떤 텍스트 타입도 흡수하지 않는다(mmproj 없는 모델로 이미지가 흘러가면 안 되므로).
+
+> **`TEXT`가 아래 둘을 흡수하는 이유** — 예전에는 `TEXT`→TEXT만이었고, 그 결과 **텍스트 전용 모델 하나짜리 배포**(`LOCAL_LLM_TYPE=TEXT`)와 **클라우드 전용 배포**(출하되는 클라우드 프로바이더가 전부 `type=TEXT`)에서 `MICRO_TEXT`/`LIGHT_TEXT` 자격 프로바이더가 **0개**가 됐다. 키워드+맥락 추출·MD 서식 교정·TXT 구조화·스레드 제목·대화 요약이 통째로 죽는데, 채팅만은 `TEXT`로 라우팅돼 정상 동작하고 실패는 `All providers exhausted for task=MICRO_TEXT` DEBUG 한 줄이라 드러나지 않았다.
+> 이 확장은 §6.21(잡무를 답변 모델에서 분리)을 되돌리지 않는다 — 그 분리는 **태스크 라벨링**으로 강제되고(분류·meta 직답이 `TEXT`인 이유가 그것), 소형이 등록돼 있으면 `priority=0`이 여전히 먼저 뽑힌다. 선택적 잡무가 답변 티어를 잠식하는 것을 막는 장치는 `supports()`가 아니라 `LlmRouter.hasMicroTextOffloadProvider()`다(아래 §9 "폴백/회귀 0" 참조).
+
+**행(프로바이더 type)과 열(요청 task)은 서로 다른 축이다.** 6개 값이 양쪽에 다 등장하지만 요청으로 쓰이는 것은 5개뿐이다 — 앱은 **`BOTH`를 태스크로 요청하지 않는다**. `BOTH`는 프로바이더 설정값과 `LlmRouter.hasEnabledProviderFor()`류의 판정에만 등장하므로, 표의 `BOTH` 행(프로바이더 능력)과 태스크로서의 `BOTH`를 같은 것으로 읽으면 안 된다.
+
+`LIGHT_BOTH`는 양쪽에 다 쓰인다 — 프로바이더 type이자, `ImageTypeClassifier`(이미지 유형 분류)가 "멀티모달이면 되고 대형일 필요는 없다"는 뜻으로 내는 요청이다. 그래서 `LIGHT_BOTH` 요청은 **`LIGHT_BOTH`와 `BOTH`가 받고**, 텍스트 전용 3종과 `VISION` 전용은 거부한다(이 요청은 경량 텍스트 + 이미지를 함께 요구한다).
+
+> **예전에는 `case LIGHT_BOTH` 분기가 자기 자신을 빼놓아 `BOTH`만 이 요청을 받을 수 있었다.** 즉 이 값이 존재하는 이유인 "범용 로컬 LLM"으로 등록하면, 이미지 설명(`VISION` 요청)은 되는데 유형 분류만 그 모델에서 못 돌았다. `TEXT`가 사다리를 못 올라가던 것과 같은 모양의 구멍이었고 같은 방식으로 메웠다.
 
 ### RoutingMode
 
@@ -103,7 +116,7 @@ public enum RoutingMode {
 > 진실이고 이 문서가 뒤처진 것이다 — 특히 `base-url`의 폴백 기본값과 `priority` 숫자는 과거에 실제로 바뀐 적이 있다.
 
 ```properties
-app.llm.default-routing-mode=COST_FIRST
+app.llm.default-routing-mode=${LLM_ROUTING_MODE:COST_FIRST}
 app.llm.circuit-breaker-minutes=4
 app.llm.progressive-threshold=0.6
 # §6.18 — sampling temperature + response cap (were dead/hardcoded before). All three temperatures
@@ -111,7 +124,10 @@ app.llm.progressive-threshold=0.6
 # by every interactive gated caller (ClassifierService/AnswerService/RerankerService) — still also
 # baked into each provider bean at startup as the fallback for framework-internal callers that can't
 # take a per-call override (e.g. multi-query expansion), which only pick up a change on restart.
-# direct-temperature is read per-call by DirectAnswerService. indexing-temperature is read per-call
+# direct-temperature is read per-call by DirectAnswerService. creative-temperature is read per-call by
+# AnswerService for the C (응용) response mode, on BOTH the blocking and the streaming path — it exists
+# separately because temperature above is clamped to [0.0, 0.3], which makes creative generation
+# impossible on it. indexing-temperature is read per-call
 # by every ungated background/indexing caller (keyword extraction, MD correction, txt→md, vision
 # description/classification, thread-title generation, conversation summarization) — kept near 0
 # independently of temperature/direct-temperature since those are extraction/classification tasks,
@@ -120,7 +136,8 @@ app.llm.progressive-threshold=0.6
 app.llm.temperature=${LLM_TEMPERATURE:0.0}
 app.llm.direct-temperature=${DIRECT_LLM_TEMPERATURE:0.1}
 app.llm.indexing-temperature=${LLM_INDEXING_TEMPERATURE:0.0}
-app.llm.max-tokens=${LLM_MAX_TOKENS:6000}
+app.llm.creative-temperature=${CREATIVE_LLM_TEMPERATURE:0.7}
+app.llm.max-tokens=${LLM_MAX_TOKENS:10000}
 # 질의 경로 동시성 게이트 기본값(서버의 실제 --parallel 값에 맞춘다) + 대기 상한
 app.llm.default-provider-concurrency=${LLM_DEFAULT_PROVIDER_CONCURRENCY:3}
 app.llm.permit-wait-timeout-seconds=${LLM_PERMIT_WAIT_TIMEOUT_SECONDS:60}
@@ -176,11 +193,12 @@ app.llm.providers[2].stream=true
 # GEMINI_API_KEY1 미설정 시 시작 시 warn 로그 후 자동 비활성화.
 # ⚠️ 아래 [4]와 priority(2)가 동일하다 — 순차 폴백이 아니라 §6 로드밸런싱 대상(두 Gemini 키로
 # NORMAL 티어 처리량/쿼터를 두 배로 쓰는 구성, PREMIUM의 gemma-4-31b-1/-2와 같은 패턴).
-# GEMINI_MODEL을 설정하면 [3]/[4]가 같은 값을 읽어 두 모델이 하나로 합쳐지니 주의(README 참고).
+# ⚠️ [3]/[4]는 현재 기본 모델까지 동일하다(둘 다 gemini-3.5-flash-lite) — 즉 GEMINI_MODEL을 설정하지
+# 않아도 같은 모델을 두 키로 부르는 구성이다. 서로 다른 모델을 쓰려면 한쪽을 명시적으로 바꿔야 한다.
 app.llm.providers[3].name=gemini-flash-lite
 app.llm.providers[3].base-url=${GEMINI_BASE_URL:https://generativelanguage.googleapis.com/v1beta/openai/}
 app.llm.providers[3].api-key=${GEMINI_API_KEY1:}
-app.llm.providers[3].model=${GEMINI_MODEL:gemini-3.1-flash-lite}
+app.llm.providers[3].model=${GEMINI_MODEL:gemini-3.5-flash-lite}
 app.llm.providers[3].type=TEXT
 app.llm.providers[3].role=NORMAL
 app.llm.providers[3].priority=2
@@ -190,7 +208,7 @@ app.llm.providers[3].priority=2
 app.llm.providers[4].name=gemini-flash
 app.llm.providers[4].base-url=${GEMINI_BASE_URL:https://generativelanguage.googleapis.com/v1beta/openai/}
 app.llm.providers[4].api-key=${GEMINI_API_KEY2:}
-app.llm.providers[4].model=${GEMINI_MODEL:gemini-2.5-flash}
+app.llm.providers[4].model=${GEMINI_MODEL:gemini-3.5-flash-lite}
 app.llm.providers[4].type=TEXT
 app.llm.providers[4].role=NORMAL
 app.llm.providers[4].priority=2
@@ -365,7 +383,7 @@ findFirst(role, priority 오름차순 순회)
 - **priority가 다르면 부하와 무관하게 낮은 priority가 항상 우선** — 로드밸런싱은 동일 priority 그룹 내부에서만 일어난다. 부하가 높다고 다음 priority(예: 외부 유료 API)로 자동 전환되지는 않는다 — 그건 프로바이더가 실제로 응답 실패(429/402/503/기타)할 때만 §5 Circuit Breaker가 처리하는 영역이다.
 - **총 동시 처리량 = 등록 대수 × per-provider concurrency** (예: LOCAL 2대 × concurrency 3 = 6).
 - 임베딩 프로바이더도 이제 로드밸런싱된다(§6.21 E1) — `EmbeddingModel` 체인이라 라우팅 지점은 LLM 경로와 다르지만, `LoadBalancingEmbeddingModel`이 다중 임베딩 엔드포인트(`app.embedding.additional-base-urls`)를 least-in-flight로 분산한다. 인덱싱 시 병렬 서브배치(§6.21 E2, `app.embedding.max-concurrent-batches`)와 결합하면 단일 대용량 문서도 여러 엔드포인트를 동시에 채운다. 설정은 OPERATOR_MANUAL §3.2 "임베딩 병렬화" 참고.
-- **좋아요 기반 큐레이션 Q&A 임베딩(§10.10)**은 이 표의 LLM 채팅 게이트(위 표)와 무관하다 — `VectorStoreFacade.add()`를 통해 인덱싱과 동일한 임베딩 파이프라인(uncached, §10.9.4)을 타므로 여기 §6의 임베딩 로드밸런싱·병렬 서브배치 대상에 자연히 포함된다. 좋아요 즉시가 아니라 3초 디바운스 후 배경 가상 스레드에서 실행되므로 채팅 응답 지연에는 영향이 없다. 별도의 라우팅/동시성 설정은 필요 없다. **긴 답변은 임베딩 시점에 여러 청크로 나뉘므로 좋아요 1회가 청크 수만큼의 임베딩 호출을 만든다**(제안 승인과 동일) — 모두 위 임베딩 로드밸런싱 대상이다.
+- **좋아요 기반 큐레이션 Q&A 임베딩(§10.10)**은 이 표의 LLM 채팅 게이트(위 표)와 무관하다 — `VectorStoreFacade.add()`를 통해 인덱싱과 동일한 임베딩 파이프라인(uncached, §10.9.4)을 타므로 여기 §6의 임베딩 로드밸런싱·병렬 서브배치 대상에 자연히 포함된다. 좋아요 즉시가 아니라 3초 디바운스 후 배경 가상 스레드에서 실행되므로 채팅 응답 지연에는 영향이 없다. 별도의 라우팅/동시성 설정은 필요 없다. **긴 답변은 임베딩 시점에 여러 청크로 나뉘므로 좋아요 1회가 청크 수만큼의 임베딩 호출을 만든다**(제안 승인과 동일) — 모두 위 임베딩 로드밸런싱 대상이다. 다만 **응답 모드 `S`·`C` 턴은 좋아요를 눌러도 임베딩 호출이 아예 발생하지 않는다**(`allowsCuration()=false` → `onLike()` 즉시 반환, `curated_qa` 행조차 만들지 않음) — 특히 C는 모델이 만들어 낸 코드가 가중 RRF 축으로 되돌아와 다음 턴의 근거가 되는 것을 막기 위한 게이트다.
   - **청크 추가 게시판(사용자 제안 → 관리자 승인, OPERATOR_MANUAL §6.9)**도 승인 시점에 같은 경로(`CuratedQaService.createFromSubmission()` → `VectorStoreFacade.add()`)를 그대로 탄다. 차이는 두 가지다: (1) 디바운스가 없다 — 좋아요와 달리 관리자의 명시적 1회 동작이라 취소와 경합할 여지가 없기 때문. (2) 본문이 길면 `ChunkSplitter`로 나뉘므로 승인 1회가 **청크 수만큼의 임베딩 호출**을 만든다(청크마다 배경 가상 스레드 1개). 각 호출은 위 임베딩 로드밸런싱을 그대로 타고, 승인 요청 자체는 행 생성 직후 즉시 응답한다 — 그래서 응답 시점에는 임베딩 성공 여부를 알 수 없고, 실패는 `curated_qa.embed_status='failed'`로 남아 관리 화면 배지로 드러난다(하나라도 실패하면 표시).
     - **유일한 LLM 호출은 본문 이미지의 Vision 설명 생성이다.** 텍스트만 있는 제안은 등록·승인 어느 쪽도 LLM을 부르지 않는다(키워드 추출도 요약도 돌지 않는다). 본문에 `[이미지: ...]` 마커가 있으면 `approve()`가 **분할 전에** `CuratedImageStore.describeImages()` → `LazyVisionService`로 이미지당 1회 `TaskType.VISION` 호출을 낸다 — 설명이 임베딩되는 텍스트의 일부여야 그림 내용이 검색에 걸리기 때문. 라우팅은 §1 매트릭스의 VISION 규칙(`type=VISION` → `LIGHT_BOTH` → `BOTH`)을 그대로 따르고, **인덱싱 계열이므로 위 표대로 §6 동시성 게이트는 타지 않는다**(`executeWithTracking()`) — 채팅 슬롯을 잠식하지 않지만 로컬 LLM 서버 자원은 공유한다. 동시성은 `LazyVisionService` 자체의 `app.indexing.max-concurrent-llm-calls` 세마포어가 제한하며, 결과는 `image_descriptions` 캐시에 남아 질의 시점에 재분석되지 않는다.
     - 임베딩과 달리 이 Vision 호출은 **승인 요청 안에서 동기로 끝난다**(배경으로 미루면 마커와 설명이 서로 다른 청크로 갈라진다). 그래서 이미지가 있는 제안은 승인 응답 자체가 느리다 — 장수 상한은 `CuratedImageStore.MAX_IMAGES_PER_SUBMISSION`(기본 10, 프로퍼티 아님). `IMAGE_DESCRIPTION_ENABLED=false`면 `LazyVisionService` 빈이 없어 이 단계가 통째로 생략된다(이미지는 표시만 되고 검색 기여 없음).
@@ -402,6 +420,8 @@ CREATE TABLE IF NOT EXISTS llm_usage (
 - **classifyOnly() 토큰 미누적**: `AgentService`가 선행 분류 시 `AgentState` 토큰 집계에서 1회 누락 (허용된 MVP 트레이드오프)
 - **tried 집합 순환 방지**: `executeWithTracking()` 내 tried 집합이 모든 프로바이더를 포함하면 exhausted — 최대 재귀 = 프로바이더 수
 - **Vision 라우팅**: `type=VISION` 모델 미등록 시 `LIGHT_BOTH` → `BOTH` 순으로 fallback. Vision 문서 많으면 `local-vision` 등록 권장
+  - **이미지 유형 분류(`ImageTypeClassifier`)는 요청 타입이 `VISION`이 아니라 `LIGHT_BOTH`** 라 `type=VISION` 전용 모델로는 내려가지 않는다(경량 텍스트도 함께 요구하므로). 후보는 `LIGHT_BOTH`/`BOTH`이며, `local-vision`을 따로 등록해도 이 호출만은 범용 모델이 받는다
+  - 문서 업로드 화면의 이미지 설명 가능 여부는 `DocumentController`가 `LlmRouter.hasEnabledProviderFor(VISION)`으로 판단한다 — `supports()`에서 능력을 파생하므로 화면 표시와 실제 라우팅 조건이 항상 일치한다. 예전에는 `hasEnabledProviderType(BOTH, VISION)`이라는 **타입 이름 목록** 검사였고 `LIGHT_BOTH`가 빠져 있어, 이미지 설명이 실제로 동작하는 배포에서 "이미지 설명 추가" 체크박스가 비활성화됐다
   - ⚠️ `local-vision` 예제는 `role=LOCAL, priority=0` — **소형(MICRO_TEXT) 오프로드 모델과 같은 role+priority**다. `hasMicroTextOffloadProvider()`가 `supports(MICRO_TEXT)`까지 확인하는 이유가 이것이다(§9): 타입을 안 보면 Vision 모델 하나 등록한 것만으로 "소형 모델 있음"으로 오판해, `findFirst`가 정작 그 프로바이더를 건너뛰고 요약 같은 잡무를 `priority=1` 답변 모델로 보낸다. 증상은 "소형 모델을 등록한 적 없는데 `/llm-usage`에 `summary:` 사용량이 답변 모델 이름으로 잡힌다"
 - **동시성 게이트(§6) 크기 설정 실수**: `providers[N].concurrency`를 서버의 실제 `--parallel`보다 크게 잡으면 앱이 스스로 429/타임아웃을 유발할 수 있다(서버가 처리 못 할 요청까지 통과시킴). 반대로 너무 작게 잡으면 여유 용량을 못 씀 — 서버 설정값과 일치시키는 것이 원칙
 - **동일 우선순위 프로바이더 다중 등록 시 자동 로드밸런싱**: `findFirst()`가 같은 role·같은 priority 후보 중 동시성 게이트의 잔여 permit이 가장 많은(least-in-flight) 프로바이더를 선택 — 여러 대 등록하면 실제로 부하가 분산된다. priority가 다르면 부하와 무관하게 낮은 priority가 항상 우선(동일 priority 그룹 내부에서만 분산). 설정 방법은 §3 "로컬 LLM 2 — 로컬 LLM 1과 로드밸런싱" 참고
@@ -423,10 +443,11 @@ CREATE TABLE IF NOT EXISTS llm_usage (
 | 키워드+맥락·요약·제목·MultiQuery 쿼리확장 (`MICRO_TEXT`) | **소형** | MICRO_TEXT eligible=[소형(p0), 큰(p1)] → 최저 priority=소형 |
 | 분류·meta 직답 (`TEXT`) | **큰 모델** | 답변과 같은 타입이라 `type=TEXT`/`BOTH`만 eligible |
 | 답변·Critic·Rerank (`TEXT`) | **큰 모델** | 소형은 `supports(TEXT)=false` |
-| MD 서식 교정·TXT 구조화 (`LIGHT_TEXT`) | **큰 모델** | 소형(MICRO_TEXT)은 `supports(LIGHT_TEXT)=false` → 큰 BOTH만 eligible |
-| Vision·이미지 분류 (`VISION`/`LIGHT_BOTH`) | **큰 모델** | 소형은 이미지 미지원 |
+| MD 서식 교정·TXT 구조화 (`LIGHT_TEXT`) | **큰 모델** | 소형(MICRO_TEXT)은 `supports(LIGHT_TEXT)=false` → 큰 모델(`TEXT`/`BOTH`)만 eligible |
+| 이미지 설명 (`VISION`) | **큰 모델** | 소형은 이미지 미지원 (`type=VISION`/`LIGHT_BOTH`/`BOTH`만 eligible) |
+| 이미지 유형 분류 (`LIGHT_BOTH`) | **큰 모델** | 경량 텍스트 + 이미지를 함께 요구 → `LIGHT_BOTH`/`BOTH`만 eligible (`VISION` 전용도 거부) |
 
-- **폴백/회귀 0**: `MICRO_TEXT`는 `LIGHT_TEXT`/`LIGHT_BOTH`/`BOTH`가 모두 지원(부분집합)하므로, 소형 다운·미등록 시 큰 모델이 그대로 흡수한다. **예외: 대화 요약**(`ConversationSummarizerService`)만은 이 폴백을 타지 않는다 — 소형(`role=LOCAL`·`priority=0`이면서 **`MICRO_TEXT`를 실제로 지원하는 타입**)이 없으면(`LlmRouter.hasMicroTextOffloadProvider()=false`) **LLM 호출만** 생략한다(부가 기능이 답변용 모델의 동시성 슬롯을 잠식하지 않게 하려는 의도적 게이팅). 그렇다고 요약을 포기하지는 않는다: RAG 답변은 `prompt.answer.system`이 강제한 `## 요약` 섹션을 이미 갖고 있으므로 그것들을 그대로 이어 붙여 **LLM 0회로 요약을 조립**하고, 섹션이 없는 답변(Direct·meta)만 `UNSUMMARIZED_ANSWER_CAP`(300자)으로 잘라 담는다 — `LOCAL_FAST_LLM_URL`은 기본값이 없어 미설정이 흔한데, 예전처럼 `null`을 반환하면 Direct 턴 하나 때문에 이미 뽑아둔 요약 전부를 버리고 원본 history로 떨어졌다. 원본 history 폴백은 이제 요약할 턴이 아예 없을 때만 일어난다. `RetrievalService`는 `MICRO_TEXT→LIGHT_TEXT→TEXT` 순 폴백이라 cloud-only(LOCAL 없음)에서도 구성 실패가 없다.
+- **폴백/회귀 0**: `MICRO_TEXT`는 `LIGHT_TEXT`/`TEXT`/`LIGHT_BOTH`/`BOTH`가 모두 지원(부분집합)하므로, 소형 다운·미등록 시 큰 모델이 그대로 흡수한다. **예외: 대화 요약**(`ConversationSummarizerService`)만은 이 폴백을 타지 않는다 — 소형(`role=LOCAL`·`priority=0`이면서 **`MICRO_TEXT`를 실제로 지원하는 타입**)이 없으면(`LlmRouter.hasMicroTextOffloadProvider()=false`) **LLM 호출만** 생략한다(부가 기능이 답변용 모델의 동시성 슬롯을 잠식하지 않게 하려는 의도적 게이팅). 그렇다고 요약을 포기하지는 않는다: RAG 답변은 `prompt.answer.system`이 강제한 `## 요약` 섹션을 이미 갖고 있으므로 그것들을 그대로 이어 붙여 **LLM 0회로 요약을 조립**하고, 섹션이 없는 답변(Direct·meta)만 `UNSUMMARIZED_ANSWER_CAP`(300자)으로 잘라 담는다 — `LOCAL_FAST_LLM_URL`은 기본값이 없어 미설정이 흔한데, 예전처럼 `null`을 반환하면 Direct 턴 하나 때문에 이미 뽑아둔 요약 전부를 버리고 원본 history로 떨어졌다. 원본 history 폴백은 이제 요약할 턴이 아예 없을 때만 일어난다. `RetrievalService`는 `MICRO_TEXT→LIGHT_TEXT→TEXT` 순 폴백이라 cloud-only(LOCAL 없음)에서도 구성 실패가 없다 — `TEXT`가 `MICRO_TEXT`를 흡수하게 된 지금은 첫 항목에서 이미 해결되므로 이 목록은 이중 안전장치로만 남아 있다(제거해도 동작은 같지만, 라우팅 실패 시 생성자에서 앱이 기동조차 못 하는 자리라 그대로 둔다).
 - **priority 필수**: 소형(0) < 큰(1). 동률이면 §6 로드밸런서가 둘 사이에 분산해 **절반만** 오프로딩된다.
 - **인덱스 연속성**: `providers[N]`은 0부터 연속이어야 바인딩(파일 내 줄 순서 자체는 무관). 기본 파일은 `[0]`=소형·`[1]`=로컬 LLM 1·`[2]`=로컬 LLM 2·`[3]~[8]`=외부(PREMIUM gemma-4-31b-1/-2가 `[6]`·`[7]` 두 키로 로드밸런싱)·`[9]`=Vision(선택, §3 예시).
 

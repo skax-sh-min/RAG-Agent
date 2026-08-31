@@ -158,6 +158,16 @@
     opacity: 0.85;
 }
 
+/* 질문 앞의 응답 모드 표기 '[S] '. 질문 본문과 같은 줄에 흐르되(inline) 한 눈에 갈라 보이도록
+   흐리게 + 고정폭으로 둔다 — 답변 길이가 왜 다른지 대화 기록에서 바로 읽히게 하려는 표시라,
+   눈에 띄되 질문을 읽는 흐름을 끊지 않는 세기가 목표다. */
+.bubble-user-mode {
+    opacity: 0.75;
+    font-size: 0.85em;
+    font-family: var(--bs-font-monospace, monospace);
+    white-space: nowrap;
+}
+
 /* ── Superseded (unverified) retry answers ───────────────────────────────
    Transient, dimmed, collapsed blocks shown while a verification-failure retry
    is in progress; removed once a final answer arrives (chat-stream.js). */

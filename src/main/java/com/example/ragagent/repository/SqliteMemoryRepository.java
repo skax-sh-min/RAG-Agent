@@ -2,6 +2,7 @@ package com.example.ragagent.repository;
 
 import com.example.ragagent.config.AppProperties;
 import jakarta.annotation.PostConstruct;
+import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
@@ -77,7 +78,11 @@ public class SqliteMemoryRepository implements MemoryRepository {
             // 정규화 테이블 대신 blob 하나인 이유: 읽는 쪽이 /admin 진단 패널 하나뿐이고 항상
             // "턴 하나의 출처 전부"를 통째로 꺼내므로 조인할 이유가 없다. 스키마도 SourceRef를
             // 따라가야 하는데(필드가 늘어날 수 있다) 컬럼으로 고정하면 그때마다 마이그레이션이다.
-            "ALTER TABLE conversation_turns ADD COLUMN retrieval_metrics TEXT"
+            "ALTER TABLE conversation_turns ADD COLUMN retrieval_metrics TEXT",
+            // 답변 검증 결과(VerificationSnapshot) JSON — 대화 기록의 검증 배지가 새로고침 후에도
+            // 남으려면 저장돼 있어야 한다. NULL 은 "검증 기록 없음"이고, 이 컬럼 이전의 모든
+            // 턴과 meta/Direct·S 턴이 그렇다 — 그 경우 배지를 띄우지 않는 예전 동작 그대로다.
+            "ALTER TABLE conversation_turns ADD COLUMN verification TEXT"
         )) {
             try { jdbc.execute(ddl); } catch (Exception ignored) {}
         }
@@ -185,11 +190,10 @@ public class SqliteMemoryRepository implements MemoryRepository {
 
     @Override
     public void clearHistory(String userId, String threadId) {
-        // turn_source_ref is created by QuestionReuseRepository; in isolated tests this table may not exist.
         try {
             jdbc.update("DELETE FROM turn_source_ref WHERE user_id = ? AND thread_id = ?", userId, threadId);
-        } catch (Exception ignored) {
-            // no-op
+        } catch (DataAccessException e) {
+            if (!isMissingTurnSourceRef(e)) throw e;
         }
         jdbc.update("DELETE FROM turn_image_ref WHERE user_id = ? AND thread_id = ?", userId, threadId);
         jdbc.update("DELETE FROM conversation_turns WHERE user_id = ? AND thread_id = ?", userId, threadId);
@@ -204,12 +208,8 @@ public class SqliteMemoryRepository implements MemoryRepository {
         try {
             jdbc.update("DELETE FROM turn_source_ref WHERE user_id = ? AND thread_id = ? AND turn_id = ?",
                     userId, threadId, turnId);
-        } catch (org.springframework.jdbc.BadSqlGrammarException e) {
-            // turn_source_ref belongs to QuestionReuseRepository; in isolated tests it may not exist.
-            String msg = (e.getCause() != null ? e.getCause().getMessage() : e.getMessage());
-            if (msg == null || !msg.contains("no such table") || !msg.contains("turn_source_ref")) {
-                throw e;
-            }
+        } catch (DataAccessException e) {
+            if (!isMissingTurnSourceRef(e)) throw e;
         }
         jdbc.update("DELETE FROM turn_image_ref WHERE user_id = ? AND thread_id = ? AND turn_id = ?",
                 userId, threadId, turnId);
@@ -217,6 +217,25 @@ public class SqliteMemoryRepository implements MemoryRepository {
                 "DELETE FROM conversation_turns WHERE user_id = ? AND thread_id = ? AND id = ?",
                 userId, threadId, turnId);
         return removed > 0;
+    }
+
+    /**
+     * {@code turn_source_ref} belongs to {@code QuestionReuseRepository} (§6.23 runtime DDL), not to
+     * this repository. A context that never ran that init — an isolated repository test — has no such
+     * table, and then there is nothing to delete either; anything else must still surface.
+     *
+     * <p><b>Catch {@link DataAccessException}, not {@code BadSqlGrammarException}.</b> Spring ships no
+     * error-code mapping for SQLite, so a missing table arrives as a bare {@code SQLITE_ERROR}
+     * (code 1) and is translated to {@code UncategorizedSQLException}. This guard originally caught
+     * only {@code BadSqlGrammarException}, so it never actually applied and the four {@code deleteTurn}
+     * tests failed on the very case the guard was written for.
+     *
+     * <p>The message is read off {@code getMostSpecificCause()} — the wrapper's own text varies with
+     * the translation path, the underlying driver's does not.
+     */
+    private static boolean isMissingTurnSourceRef(DataAccessException e) {
+        String msg = e.getMostSpecificCause().getMessage();
+        return msg != null && msg.contains("no such table") && msg.contains("turn_source_ref");
     }
 
 
@@ -332,19 +351,40 @@ public class SqliteMemoryRepository implements MemoryRepository {
     }
 
     @Override
-    public List<MetricsRow> findRecentRetrievalMetrics(int offset, int limit) {
-        return jdbc.query(
-                "SELECT id, asked_at, question, response_mode, provider, retrieval_metrics " +
-                "FROM conversation_turns WHERE retrieval_metrics IS NOT NULL " +
-                "ORDER BY id DESC LIMIT ? OFFSET ?",
+    public List<MetricsRow> findRecentRetrievalMetrics(String userId, String threadId,
+                                                       int offset, int limit) {
+        // Reads thread_meta, which ThreadMetaRepository owns — the same cross-repository reach
+        // clearHistory() already makes for turn_source_ref. Both tables are created by a
+        // @PostConstruct that always runs, so the only context lacking one is an isolated
+        // repository test, which inits the owner explicitly rather than copying its DDL.
+        //
+        // LEFT JOIN, not JOIN: a turn whose thread_meta row is gone (see ThreadAdminRepository's
+        // orphan count) must still appear here — its diagnostics are as valid as any other's, and
+        // dropping it would make the panel silently disagree with its own "전체 N턴" badge.
+        StringBuilder sql = new StringBuilder(
+                "SELECT t.id, t.asked_at, t.question, t.response_mode, t.provider, " +
+                "       t.retrieval_metrics, t.user_id, t.thread_id, m.title AS thread_title " +
+                "  FROM conversation_turns t " +
+                "  LEFT JOIN thread_meta m ON m.thread_id = t.thread_id AND m.user_id = t.user_id " +
+                " WHERE t.retrieval_metrics IS NOT NULL");
+        List<Object> args = new java.util.ArrayList<>(4);
+        appendMetricsFilters(sql, args, userId, threadId);
+        sql.append(" ORDER BY t.id DESC LIMIT ? OFFSET ?");
+        args.add(limit);
+        args.add(offset);
+
+        return jdbc.query(sql.toString(),
                 (rs, n) -> new MetricsRow(
                         rs.getLong("id"),
                         rs.getString("asked_at"),
                         rs.getString("question"),
                         rs.getString("response_mode"),
                         rs.getString("provider"),
-                        rs.getString("retrieval_metrics")),
-                limit, offset);
+                        rs.getString("retrieval_metrics"),
+                        rs.getString("user_id"),
+                        rs.getString("thread_id"),
+                        rs.getString("thread_title")),
+                args.toArray());
     }
 
     @Override
@@ -360,10 +400,56 @@ public class SqliteMemoryRepository implements MemoryRepository {
     }
 
     @Override
-    public int countRetrievalMetrics() {
-        Integer n = jdbc.queryForObject(
-                "SELECT COUNT(*) FROM conversation_turns WHERE retrieval_metrics IS NOT NULL",
-                Integer.class);
+    public void saveVerification(long turnId, String verificationJson) {
+        if (verificationJson == null || verificationJson.isBlank()) return;
+        jdbc.update("UPDATE conversation_turns SET verification = ? WHERE id = ?",
+                verificationJson, turnId);
+    }
+
+    @Override
+    public Map<Long, String> findVerificationsByTurnIds(List<Long> turnIds) {
+        if (turnIds == null || turnIds.isEmpty()) return Map.of();
+        String placeholders = String.join(",", java.util.Collections.nCopies(turnIds.size(), "?"));
+        Map<Long, String> out = new java.util.HashMap<>();
+        jdbc.query("SELECT id, verification FROM conversation_turns " +
+                   "WHERE verification IS NOT NULL AND id IN (" + placeholders + ")",
+                rs -> { out.put(rs.getLong("id"), rs.getString("verification")); },
+                turnIds.toArray());
+        return out;
+    }
+
+    @Override
+    public int countRetrievalMetrics(String userId, String threadId) {
+        StringBuilder sql = new StringBuilder(
+                "SELECT COUNT(*) FROM conversation_turns t WHERE t.retrieval_metrics IS NOT NULL");
+        List<Object> args = new java.util.ArrayList<>(2);
+        appendMetricsFilters(sql, args, userId, threadId);
+        Integer n = jdbc.queryForObject(sql.toString(), Integer.class, args.toArray());
         return n == null ? 0 : n;
+    }
+
+    @Override
+    public List<String> distinctRetrievalMetricsUserIds() {
+        return jdbc.queryForList(
+                "SELECT DISTINCT user_id FROM conversation_turns " +
+                "WHERE retrieval_metrics IS NOT NULL ORDER BY user_id",
+                String.class);
+    }
+
+    /**
+     * The two optional filters, appended identically to the list and the count — if they ever
+     * diverge the panel's "전체 N턴" badge starts describing a different set than the rows under it.
+     * Blank is treated as absent so one "no filter" form reaches SQL.
+     */
+    private static void appendMetricsFilters(StringBuilder sql, List<Object> args,
+                                             String userId, String threadId) {
+        if (userId != null && !userId.isBlank()) {
+            sql.append(" AND t.user_id = ?");
+            args.add(userId);
+        }
+        if (threadId != null && !threadId.isBlank()) {
+            sql.append(" AND t.thread_id = ?");
+            args.add(threadId);
+        }
     }
 }

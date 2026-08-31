@@ -2,7 +2,6 @@ package com.example.ragagent.service;
 
 import com.example.ragagent.agent.AgentState;
 import com.example.ragagent.config.AppProperties;
-import com.example.ragagent.ingestion.CuratedTextUtils;
 import com.example.ragagent.llm.LlmCurlLogger;
 import com.example.ragagent.llm.LlmProvider;
 import com.example.ragagent.llm.LlmRouter;
@@ -20,8 +19,6 @@ import org.springframework.ai.openai.api.OpenAiApi;
 import org.springframework.context.MessageSource;
 
 import java.util.List;
-import java.util.Arrays;
-import java.util.stream.Collectors;
 import org.springframework.stereotype.Service;
 
 /**
@@ -57,7 +54,7 @@ public class DirectAnswerService {
         LlmRouter.LlmResult result = llmRouter.executeGatedWithUsage(TaskType.TEXT, state.routingMode(),
                 model -> model.call(buildPrompt(systemPrompt, userPrompt, directTemp, maxTokens)));
         String rawAnswer = result.text();
-        String normalized = rawAnswer == null ? null : enforceSummaryOnlyForS(rawAnswer, state.responseMode());
+        String normalized = rawAnswer == null ? null : enforceSummaryOnly(rawAnswer, state.responseMode());
         String answer = (normalized == null || normalized.isEmpty()) ? null : normalized;
         log.debug("[DirectAnswer] answer length={}", answer == null ? -1 : answer.length());
         return state.toBuilder().answer(answer)
@@ -80,7 +77,7 @@ public class DirectAnswerService {
         }
 
         String answer = full.toString();
-        answer = enforceSummaryOnlyForS(answer, state.responseMode());
+        answer = enforceSummaryOnly(answer, state.responseMode());
         log.debug("[DirectAnswer] streaming answer length={}", answer.length());
         // Streaming mode has no ChatResponse to read real usage from — record an approximate
         // (chars/4) usage entry so /llm-usage isn't blind to the entire direct-answer stream path,
@@ -92,8 +89,14 @@ public class DirectAnswerService {
         return state.toBuilder().answer(answer).accumulateTokens(approxIn, approxOut).build();
     }
 
+    /**
+     * meta(인사/잡담)는 모드와 무관하게 자체 프롬프트를 쓰고, directMode 답변은 <b>모드별 전용</b>
+     * 시스템 프롬프트를 고른다 (PLAN §6.24 Step 1-b) — RAG 경로와 같은 구조다.
+     */
     private String resolveSystemPrompt(AgentState state) {
-        String key = state.directMode() ? "prompt.direct.system" : "prompt.direct.meta.system";
+        String key = state.directMode()
+                ? state.responseMode().directSystemPromptKey()
+                : "prompt.direct.meta.system";
         return messageSource.getMessage(key, null, state.locale());
     }
 
@@ -110,10 +113,9 @@ public class DirectAnswerService {
 
 
     /**
-     * directMode (RAG 없이 직접 질문) answers get the same S/M/L length instruction as the RAG path
-     * (see AnswerService.responseStyleInstruction) — meta/greeting answers keep their own fixed
-     * "2-3 sentences" instruction (prompt.direct.meta.system) unchanged, since S/M/L differentiation
-     * doesn't make sense for a greeting.
+     * 사용자 프롬프트는 이제 대화 이력과 질문만 나른다 — 답변의 성격은 전적으로
+     * {@link #resolveSystemPrompt} 가 고른 모드별 시스템 프롬프트가 정한다(§6.24 Step 0-c에서
+     * 스타일 지시문 층을 걷어냈다).
      */
     private String buildUserPrompt(AgentState state) {
         String history = state.conversationHistory();
@@ -127,16 +129,8 @@ public class DirectAnswerService {
         if (!history.isBlank()) {
             sb.append("[이전 대화]\n").append(history).append("\n\n");
         }
-        sb.append(responseStyleInstruction(state)).append("\n\n[현재 질문]\n").append(question);
+        sb.append("[현재 질문]\n").append(question);
         return sb.toString();
-    }
-
-    /** Same character-target instruction as AnswerService.responseStyleInstruction — see ResponseMode javadoc. */
-    private String responseStyleInstruction(AgentState state) {
-        ResponseMode mode = state.responseMode();
-        int tokens = mode.maxTokens(props.llmSafe().maxTokens());
-        int targetChars = tokens > 0 ? tokens : mode.minChars();
-        return messageSource.getMessage(mode.promptKey(), new Object[]{targetChars}, state.locale());
     }
 
     /**
@@ -158,19 +152,21 @@ public class DirectAnswerService {
             OpenAiApi.ChatCompletionRequest request =
                     new OpenAiApi.ChatCompletionRequest(messages, provider.model(), temperature, true);
             logDirectRequest(provider, request);
-            provider.openAiApi().chatCompletionStream(request)
-                    .mapNotNull(chunk -> {
-                        if (chunk.choices() == null || chunk.choices().isEmpty()) return null;
-                        return chunk.choices().get(0).delta().content();
-                    })
-                    .filter(t -> !t.isEmpty())
-                    .doOnCancel(() -> log.warn("[DirectAnswer] Stream cancelled provider={} thread={} route={}",
-                            provider.name(), state.threadId(), state.routingMode()))
-                    .doOnError(e -> log.error("[DirectAnswer] Stream error provider={}", provider.name(), e))
-                    .doFinally(signal -> log.debug("[DirectAnswer] Stream finished signal={} provider={} thread={}",
-                            signal, provider.name(), state.threadId()))
-                    .toIterable()
-                    .forEach(tokenSink);
+            // 중지/끊김 시 LLM 쪽 연결까지 실제로 끊으려면 구독을 취소해야 한다 — toIterable() 을
+            // 그냥 벗어나는 것으로는 취소되지 않는다(CancellableTokenStream 참조).
+            CancellableTokenStream.consume(
+                    provider.openAiApi().chatCompletionStream(request)
+                            .mapNotNull(chunk -> {
+                                if (chunk.choices() == null || chunk.choices().isEmpty()) return null;
+                                return chunk.choices().get(0).delta().content();
+                            })
+                            .filter(t -> !t.isEmpty())
+                            .doOnCancel(() -> log.warn("[DirectAnswer] Stream cancelled provider={} thread={} route={}",
+                                    provider.name(), state.threadId(), state.routingMode()))
+                            .doOnError(e -> log.error("[DirectAnswer] Stream error provider={}", provider.name(), e))
+                            .doFinally(signal -> log.debug("[DirectAnswer] Stream finished signal={} provider={} thread={}",
+                                    signal, provider.name(), state.threadId())),
+                    tokenSink);
         } else {
             // Provider does not support streaming: buffer and deliver as single chunk
             StringBuilder buf = new StringBuilder();
@@ -210,20 +206,8 @@ public class DirectAnswerService {
         }
     }
 
-    /**
-     * S mode must emit summary-only content. Keep only summary lines and drop extra sections.
-     */
-    private static String enforceSummaryOnlyForS(String answer, ResponseMode mode) {
-        if (mode != ResponseMode.S) return answer;
-        if (answer == null || answer.isBlank()) return answer;
-        String summary = CuratedTextUtils.extractSummarySection(answer);
-        String base = summary.isBlank() ? answer : summary;
-        String lines = Arrays.stream(base.split("\\R"))
-                .map(String::strip)
-                .filter(s -> !s.isBlank())
-                .limit(7)
-                .collect(Collectors.joining("\n"));
-        if (lines.isBlank()) return "## 요약\n요약할 내용이 없습니다.";
-        return "## 요약\n" + lines;
+    /** 요약 전용 모드의 안전망 — RAG 경로와 같은 {@link SummaryOnlyGuard}를 쓴다. */
+    private static String enforceSummaryOnly(String answer, ResponseMode mode) {
+        return SummaryOnlyGuard.apply(answer, mode);
     }
 }

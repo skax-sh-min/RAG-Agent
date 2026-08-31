@@ -135,6 +135,7 @@ class ManagementOnlyAuthorizationTest {
     @MockitoBean CuratedQaService curatedQaService;
     @MockitoBean CuratedSubmissionService submissionService;
     @MockitoBean RetrievalMetricsService retrievalMetricsService;
+    @MockitoBean com.example.ragagent.service.ThreadAdminService threadAdminService;
     // 본문 이미지 업로드 엔드포인트의 협력자 — @WebMvcTest 는 @Service 를 스캔하지 않으므로
     // 명시하지 않으면 CuratedSubmissionController 생성이 실패해 컨텍스트 로드가 깨진다.
     @MockitoBean com.example.ragagent.service.CuratedImageStore curatedImageStore;
@@ -306,6 +307,92 @@ class ManagementOnlyAuthorizationTest {
     void guestPendingCount_isForbidden() throws Exception {
         mvc.perform(get("/admin/submissions/pending-count").with(user("guest").roles("USER")))
                 .andExpect(status().isForbidden());
+    }
+
+    /**
+     * §6.25 — 대화 목록은 전 사용자의 대화 제목이라, 이 엔드포인트가 게스트에게 열리면
+     * 배포의 모든 대화 제목이 그대로 유출된다. {@code /api/v1/**}(CSRF 면제 + 게스트 개방)이
+     * 아니라 {@code /admin/**} 아래 둔 이유가 정확히 이것이므로 그 사실을 고정한다.
+     */
+    @Test
+    @DisplayName("익명 GET /admin/threads — 로그인으로 리다이렉트 (전 사용자 대화 제목 유출 방지)")
+    void anonymousThreadPanel_isGated() throws Exception {
+        mvc.perform(get("/admin/threads"))
+                .andExpect(status().is3xxRedirection());
+    }
+
+    @Test
+    @DisplayName("ROLE_USER GET /admin/threads — 403 (게스트 principal은 통과 불가)")
+    void guestThreadPanel_isForbidden() throws Exception {
+        mvc.perform(get("/admin/threads").with(user("guest").roles("USER")))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    @DisplayName("ROLE_USER GET /admin/threads/{id}/turns — 403 (드릴다운도 같은 게이트)")
+    void guestThreadTurns_isForbidden() throws Exception {
+        mvc.perform(get("/admin/threads/t1/turns").with(user("guest").roles("USER")))
+                .andExpect(status().isForbidden());
+    }
+
+    /**
+     * 남의 대화를 되돌릴 수 없게 지우는 엔드포인트다 — 게이트가 이 테스트 하나에 걸려 있다.
+     * {@code .hasRole("ADMIN")}이지 {@code .authenticated()}가 아니어야 하는 이유이기도 하다:
+     * {@code NoAuthAutoLoginFilter}의 게스트 principal 자체가 인증된 ROLE_USER 라서
+     * {@code .authenticated()} 였다면 여기를 그냥 통과한다.
+     */
+    @Test
+    @DisplayName("ROLE_USER DELETE /admin/threads/{id} — CSRF가 있어도 403")
+    void guestDeleteThread_isForbidden() throws Exception {
+        mvc.perform(delete("/admin/threads/t1").with(csrf())
+                        .with(user("guest").roles("USER")))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    @DisplayName("익명 DELETE /admin/threads/{id} — 로그인으로 리다이렉트")
+    void anonymousDeleteThread_isGated() throws Exception {
+        mvc.perform(delete("/admin/threads/t1").with(csrf()))
+                .andExpect(status().is3xxRedirection());
+    }
+
+    @Test
+    @DisplayName("ROLE_ADMIN DELETE /admin/threads/{id} — CSRF 없으면 403 (파괴적 작업에 CSRF 필수)")
+    void adminDeleteThreadWithoutCsrf_isForbidden() throws Exception {
+        mvc.perform(delete("/admin/threads/t1").with(user("admin").roles("ADMIN")))
+                .andExpect(status().isForbidden());
+    }
+
+    /**
+     * §6.25 결정 3 — 이 엔드포인트가 게스트에게 열리면 "관리자만, 기록을 남기고" 라는 열람 조건이
+     * 통째로 무의미해진다. 남의 답변 전문이 나가는 유일한 경로라 게이트를 따로 고정한다.
+     */
+    @Test
+    @DisplayName("ROLE_USER GET /admin/threads/turns/{id}/content — 403 (원문 열람은 관리자 전용)")
+    void guestTurnContent_isForbidden() throws Exception {
+        mvc.perform(get("/admin/threads/turns/7/content").with(user("guest").roles("USER")))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    @DisplayName("익명 GET /admin/threads/turns/{id}/content — 로그인으로 리다이렉트")
+    void anonymousTurnContent_isGated() throws Exception {
+        mvc.perform(get("/admin/threads/turns/7/content"))
+                .andExpect(status().is3xxRedirection());
+    }
+
+    /**
+     * 양성 대조 — 위 403들이 "게이트가 막았다"인지 "그런 엔드포인트가 없다"인지 구분한다.
+     * 서비스 목이 빈 값을 주므로 컨트롤러까지 도달했다면 404 다: 403 이 아니라는 것이 요지.
+     */
+    @Test
+    @DisplayName("ROLE_ADMIN DELETE /admin/threads/{id} — CSRF 포함 시 컨트롤러까지 도달한다")
+    void adminDeleteThread_reachesController() throws Exception {
+        when(threadAdminService.delete("t1")).thenReturn(java.util.Optional.empty());
+
+        mvc.perform(delete("/admin/threads/t1").with(csrf())
+                        .with(user("admin").roles("ADMIN")))
+                .andExpect(status().isNotFound());
     }
 
     @Test

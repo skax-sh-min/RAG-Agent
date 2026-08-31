@@ -1,6 +1,9 @@
 package com.example.ragagent.service;
 
+import com.example.ragagent.model.KstDateFormat;
+import com.example.ragagent.model.ResponseMode;
 import com.example.ragagent.model.SourceRef;
+import com.example.ragagent.model.ThreadMeta;
 import com.example.ragagent.repository.MemoryRepository;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -64,11 +67,64 @@ public class RetrievalMetricsService {
      */
     public record TurnMetrics(long turnId, String askedAt, String question, String responseMode,
                               String provider, List<SourceRef> sources,
-                              Double maxSimilarity, int usedSourceCount) {}
+                              Double maxSimilarity, int usedSourceCount,
+                              String userId, String threadId, String threadTitle) {
 
+        /** {@code asked_at} 은 UTC 로 저장된다 — 화면에는 KST 로 낸다(§6.25 결정 2). 원본은
+         *  {@link #askedAt()} 로 남는다. */
+        public String askedAtKst() {
+            return KstDateFormat.utcStampToKst(askedAt);
+        }
+
+        /**
+         * Shortened owner id for the table cell — a no-auth guest id is {@code guest-<12 hex>}
+         * (an HMAC). Same rule the conversation list uses, so the two panels abbreviate
+         * identically; the full value stays available as the cell's tooltip.
+         */
+        public String shortUserId() {
+            return userId == null ? "" : userId.length() <= 14 ? userId : userId.substring(0, 14) + "…";
+        }
+
+        /** Conversation label: its title, or the raw thread id when {@code thread_meta} is gone
+         *  (an orphan turn — the diagnostics are still valid, only the conversation is missing). */
+        public String threadLabel() {
+            String t = ThreadMeta.stripVersionPrefix(threadTitle);
+            return t.isBlank() ? (threadId == null ? "-" : threadId) : t;
+        }
+
+        /**
+         * Whether "사용/검색" means anything for this turn.
+         *
+         * <p>The creative evaluator never asks which excerpts the answer used
+         * ({@code usedDocs}), so {@code AnswerAttribution} has nothing to narrow candidates with
+         * and every share collapses to zero. Rendering that as {@code 0/8} reads as "retrieval
+         * found nothing usable", which is a bug report the operator would chase forever — it is
+         * structural, not a measurement (§6.24 남은 이슈 b).
+         *
+         * <p>Branches on a capability rather than comparing the enum value —
+         * {@code ResponseModeBranchConventionTest} fails the build on a value comparison, and the
+         * question here really is "was this turn judged by the creative evaluator", which is
+         * exactly what {@link ResponseMode#usesCreativeEval()} names. (That guard is a plain text
+         * scan, so it flags the forbidden form in a comment too; keeping it blunt is the point.)
+         */
+        public boolean attributionApplies() {
+            return !ResponseMode.parse(responseMode).usesCreativeEval();
+        }
+    }
+
+    /** Unfiltered — the pre-§6.25 call shape. */
     public List<TurnMetrics> recent(int offset, int limit) {
+        return recent(null, null, offset, limit);
+    }
+
+    /**
+     * @param userId   optional owner filter
+     * @param threadId optional conversation filter — set by the 대화 목록 panel's 진단 button
+     */
+    public List<TurnMetrics> recent(String userId, String threadId, int offset, int limit) {
         List<TurnMetrics> out = new ArrayList<>();
-        for (MemoryRepository.MetricsRow row : memoryService.findRecentRetrievalMetrics(offset, limit)) {
+        for (MemoryRepository.MetricsRow row :
+                memoryService.findRecentRetrievalMetrics(userId, threadId, offset, limit)) {
             List<SourceRef> sources = parse(row);
             if (sources.isEmpty()) continue;   // unreadable blob — skip the row rather than break the panel
             out.add(new TurnMetrics(
@@ -80,13 +136,35 @@ public class RetrievalMetricsService {
                     sources,
                     sources.stream().map(SourceRef::similarity).filter(java.util.Objects::nonNull)
                            .max(Double::compare).orElse(null),
-                    (int) sources.stream().filter(s -> s.answerShare() != null).count()));
+                    (int) sources.stream().filter(s -> s.answerShare() != null).count(),
+                    row.userId(),
+                    row.threadId(),
+                    row.threadTitle()));
         }
         return out;
     }
 
     public int count() {
-        return memoryService.countRetrievalMetrics();
+        return count(null, null);
+    }
+
+    /** Must take the same filters {@link #recent} was given — see
+     *  {@link MemoryRepository#countRetrievalMetrics(String, String)}. */
+    public int count(String userId, String threadId) {
+        return memoryService.countRetrievalMetrics(userId, threadId);
+    }
+
+    /** Owners that have diagnostics — the panel's user dropdown. */
+    public List<String> userIds() {
+        return memoryService.distinctRetrievalMetricsUserIds();
+    }
+
+    /** The sources of one turn, for the conversation panel's per-turn 출처 view — the same
+     *  {@code SourceRef} list this panel renders, so both go through the shared table fragment. */
+    public List<SourceRef> sourcesForTurn(long turnId) {
+        String blob = memoryService.findRetrievalMetricsByTurnIds(List.of(turnId)).get(turnId);
+        if (blob == null) return List.of();
+        return parse(new MemoryRepository.MetricsRow(turnId, null, null, null, null, blob));
     }
 
     /**

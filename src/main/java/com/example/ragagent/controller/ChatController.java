@@ -118,6 +118,10 @@ public class ChatController {
             var turns = memoryService.getTurns(userId, threadId);
             model.addAttribute("turns", turns);
             model.addAttribute("turnImageRefsByTurnId", memoryService.getTurnImageRefs(userId, threadId));
+            // 저장해 둔 검증 결과로 배지를 되살린다 (§6.24 Step 4-b) — 값이 없는 턴은 맵에
+            // 아예 없고, 그게 곧 "배지 없음"이다(이 컬럼 이전의 모든 턴 + meta/Direct·S 턴).
+            model.addAttribute("verificationByTurnId",
+                    memoryService.getVerifications(turns.stream().map(t -> t.id()).toList()));
                 if (questionReuseService != null) {
                 // 저장해 둔 검색 진단 수치를 다시 붙인다 — 목록 자체는 현재 청크 기준으로
                 // 재구성된 쪽이 권위이고(라벨·미리보기·삭제 placeholder), 수치만 chunkId로 병합된다.
@@ -251,7 +255,18 @@ public class ChatController {
             model.addAttribute("grounded", resp.grounded());
             model.addAttribute("evalReason", resp.evalReason());
             model.addAttribute("envNote", resp.envNote());
+            // 배지 규칙은 VerificationSnapshot 한 곳에 있다 — 이 프래그먼트와 대화 기록
+            // 루프가 같은 레코드를 읽는다(§6.24 Step 4-b). 조건을 템플릿에 풀어 쓰면
+            // 두 렌더러가 갈라지고, 갈라진 것은 화면에서 보이지 않는다.
+            model.addAttribute("verification", new VerificationSnapshot(
+                    resp.grounded(), resp.generative(), resp.evalReason(), resp.envNote(),
+                    resp.inventedSymbols()));
             model.addAttribute("usedProvider", resp.usedProvider());
+            // 좋아요가 이 모드에서 실제로 동작하는가 — 서버가 성질로 계산한다
+            // (SSE done 의 "curatable", 대화 기록의 Turn.curatable() 과 같은 값).
+            model.addAttribute("curatable", form.responseModeOrDefault().allowsCuration());
+            model.addAttribute("curationBlockedKey",
+                    form.responseModeOrDefault().curationBlockedMessageKey());
         } catch (LlmProviderExhaustedException e) {
             log.warn("LLM providers exhausted: {}", e.getMessage());
             model.addAttribute("errorMessage", messageSource.getMessage(

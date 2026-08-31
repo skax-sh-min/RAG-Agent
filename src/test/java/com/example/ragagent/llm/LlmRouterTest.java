@@ -65,6 +65,43 @@ class LlmRouterTest {
         assertThat(r.findProviderName(TaskType.TEXT, RoutingMode.COST_FIRST)).isEqualTo("lm");
     }
 
+    /**
+     * 실제로 겪은 사고 — `LOCAL_LLM_TYPE=TEXT` 로 등록된 로컬 모델 하나뿐인 폐쇄망(LOCAL_ONLY)
+     * 배포에서 MICRO_TEXT/LIGHT_TEXT 자격 프로바이더가 0개가 됐다. 인덱싱 로그에는
+     * "All providers exhausted for task=MICRO_TEXT" 가 DEBUG 로만 찍히고 채팅은 TEXT 라
+     * 정상 동작해, 키워드+맥락 추출·MD 교정·제목·요약이 조용히 전부 죽어 있었다.
+     */
+    @Test
+    @DisplayName("findFirst — type=TEXT 단독 프로바이더도 MICRO_TEXT·LIGHT_TEXT 를 받는다 (사다리)")
+    void loneTextProviderServesLighterTextTasks() {
+        var local = p("local", ProviderRole.LOCAL, TaskType.TEXT, 1);
+        var r = router(RoutingMode.LOCAL_ONLY, local);
+
+        assertThat(r.findProviderName(TaskType.TEXT, RoutingMode.LOCAL_ONLY)).isEqualTo("local");
+        assertThat(r.findProviderName(TaskType.LIGHT_TEXT, RoutingMode.LOCAL_ONLY)).isEqualTo("local");
+        assertThat(r.findProviderName(TaskType.MICRO_TEXT, RoutingMode.LOCAL_ONLY)).isEqualTo("local");
+        // VISION 은 다른 축이라 여전히 흡수되지 않는다 (mmproj 없는 모델에 이미지가 가면 안 된다).
+        assertThat(r.findProviderName(TaskType.VISION, RoutingMode.LOCAL_ONLY)).isEqualTo("unknown");
+    }
+
+    /**
+     * 위 사다리 확장이 §6.21(잡무를 답변 모델에서 떼어내기)을 되돌리지 않는다는 확인 —
+     * 소형 모델이 등록돼 있으면 priority=0 이 여전히 먼저 뽑히고, 그게 죽었을 때만
+     * 답변 모델로 내려간다(예전에는 그냥 실패했다).
+     */
+    @Test
+    @DisplayName("findFirst — 소형(p0) 이 있으면 MICRO_TEXT 는 여전히 소형 우선, 차단 시에만 TEXT 로 폴백")
+    void microTextStillPrefersOffloadTierOverTextProvider() {
+        var fast  = p("local-fast", ProviderRole.LOCAL, TaskType.MICRO_TEXT, 0);
+        var local = p("local",      ProviderRole.LOCAL, TaskType.TEXT,       1);
+        var r = router(RoutingMode.LOCAL_ONLY, fast, local);
+
+        assertThat(r.findProviderName(TaskType.MICRO_TEXT, RoutingMode.LOCAL_ONLY)).isEqualTo("local-fast");
+
+        breaker.block("local-fast", null);
+        assertThat(r.findProviderName(TaskType.MICRO_TEXT, RoutingMode.LOCAL_ONLY)).isEqualTo("local");
+    }
+
     @Test
     @DisplayName("ProviderToggle: 비활성화된 프로바이더는 findFirst에서 제외되고 다음 우선순위로 넘어간다")
     void disabledProviderIsSkipped() {
@@ -126,6 +163,44 @@ class LlmRouterTest {
         assertThat(r.hasLocalProvider()).isTrue();
         breaker.block("lm", null);
         assertThat(r.hasLocalProvider()).isFalse();
+    }
+
+    /**
+     * 문서 업로드 화면의 "이미지 설명 추가" 체크박스 활성 판단({@code DocumentController}).
+     * 예전 형태는 {@code hasEnabledProviderType(BOTH, VISION)} 이라는 **타입 이름 목록** 검사였고
+     * {@code LIGHT_BOTH} 가 빠져 있어, 이미지 설명이 실제로 동작하는 배포에서 체크박스가 비활성화됐다.
+     * 이제 {@code supports()} 에서 능력을 파생하므로 목록을 따로 관리할 필요가 없다.
+     */
+    @Test
+    @DisplayName("hasEnabledProviderFor(VISION) — VISION 을 실제로 처리하는 모든 타입을 센다(LIGHT_BOTH 포함)")
+    void hasEnabledProviderFor_countsEveryVisionCapableType() {
+        for (TaskType visionCapable : List.of(TaskType.VISION, TaskType.LIGHT_BOTH, TaskType.BOTH)) {
+            assertThat(router(RoutingMode.COST_FIRST, p("p", ProviderRole.LOCAL, visionCapable, 1))
+                    .hasEnabledProviderFor(TaskType.VISION))
+                    .as("%s serves VISION", visionCapable).isTrue();
+        }
+        for (TaskType textOnly : List.of(TaskType.MICRO_TEXT, TaskType.LIGHT_TEXT, TaskType.TEXT)) {
+            assertThat(router(RoutingMode.COST_FIRST, p("p", ProviderRole.LOCAL, textOnly, 1))
+                    .hasEnabledProviderFor(TaskType.VISION))
+                    .as("%s does not serve VISION", textOnly).isFalse();
+        }
+    }
+
+    @Test
+    @DisplayName("hasEnabledProviderFor — /settings 비활성화는 반영, 일시적 서킷 차단은 무시")
+    void hasEnabledProviderFor_togglesCountButCircuitBlocksDoNot() {
+        var vision = p("local-vision", ProviderRole.LOCAL, TaskType.VISION, 0);
+        var toggle = new ProviderToggle();
+        var r = new LlmRouter(List.of(vision), null, breaker, RoutingMode.COST_FIRST, 0.6, 180,
+                Map.of(), 3, 20, toggle);
+
+        assertThat(r.hasEnabledProviderFor(TaskType.VISION)).isTrue();
+
+        breaker.block("local-vision", null);
+        assertThat(r.hasEnabledProviderFor(TaskType.VISION)).isTrue();   // 일시 차단은 능력 부재가 아니다
+
+        toggle.setEnabled("local-vision", false);
+        assertThat(r.hasEnabledProviderFor(TaskType.VISION)).isFalse();  // 운영자 결정은 반영
     }
 
     @Test

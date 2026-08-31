@@ -245,8 +245,8 @@ class AnswerServiceTest {
     }
 
     @Test
-    @DisplayName("BLOCKING — sufficiency 파싱 실패 시 sufficient 처리 (fail-safe)")
-    void blocking_sufficiency_parse_error_treatsAsSufficient() {
+    @DisplayName("BLOCKING — sufficiency 파싱 실패는 재시도를 걸지 않되 통과로 위조하지도 않는다")
+    void blocking_sufficiency_parse_error_leavesNoVerdict() {
         when(llmRouter.executeGatedWithUsage(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), any()))
                 .thenReturn(new LlmRouter.LlmResult("답변", 0, 0),
                             new LlmRouter.LlmResult("not-a-json", 0, 0));
@@ -255,6 +255,7 @@ class AnswerServiceTest {
         AgentState result = service.execute(newState(RoutingMode.COST_FIRST));
 
         assertThat(result.needsRetry()).isFalse();
+        assertThat(result.grounded()).isNull();
     }
 
     @Test
@@ -380,11 +381,11 @@ class AnswerServiceTest {
                             new LlmRouter.LlmResult("{\"sufficient\":true,\"grounded\":true}", 0, 0));
         when(llmRouter.findProviderName(any(), any())).thenReturn("gemini-flash");
 
-        // 상한(20,000자)을 넘기도록 15,000자짜리 문서 3개 — 1번은 통째로 남고 3번은 통째로 빠진다.
+        // 상한(32,000자)을 넘기도록 20,000자짜리 문서 3개 — 1번은 통째로 남고 3번은 통째로 빠진다.
         List<Document> docs = List.of(
-                new Document("최상위표식 " + "가".repeat(15_000), Map.of(MetaKey.FILENAME, "a.pdf")),
-                new Document("두번째표식 " + "나".repeat(15_000), Map.of(MetaKey.FILENAME, "b.pdf")),
-                new Document("세번째표식 " + "다".repeat(15_000), Map.of(MetaKey.FILENAME, "c.pdf")));
+                new Document("최상위표식 " + "가".repeat(20_000), Map.of(MetaKey.FILENAME, "a.pdf")),
+                new Document("두번째표식 " + "나".repeat(20_000), Map.of(MetaKey.FILENAME, "b.pdf")),
+                new Document("세번째표식 " + "다".repeat(20_000), Map.of(MetaKey.FILENAME, "c.pdf")));
         AgentState state = newState(RoutingMode.COST_FIRST).toBuilder().retrievedDocs(docs).build();
 
         service.execute(state);
@@ -398,7 +399,38 @@ class AnswerServiceTest {
         assertThat(evalPrompt).contains("최상위표식");                       // 1위는 무조건 유지
         assertThat(evalPrompt).doesNotContain("세번째표식");                 // 상한 초과분은 제외
         // 잘린 조각이 아니라 문서 단위로 빠진다 — 반쪽 청크는 검증 대상 값이 사라지는 경로다.
-        assertThat(evalPrompt).contains("가".repeat(15_000));
+        assertThat(evalPrompt).contains("가".repeat(20_000));
+    }
+
+    @Test
+    @DisplayName("BLOCKING — 검증 호출은 답변 예산이 아니라 자체 출력 상한(2,048)을 쓴다")
+    @SuppressWarnings("unchecked")
+    void blocking_evalCall_capsItsOwnOutputBudget() {
+        ArgumentCaptor<Function<ChatModel, ChatResponse>> callCaptor = ArgumentCaptor.forClass(Function.class);
+        when(llmRouter.executeGatedWithUsage(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), callCaptor.capture()))
+                .thenReturn(new LlmRouter.LlmResult("답변", 0, 0),
+                            new LlmRouter.LlmResult("{\"sufficient\":true,\"grounded\":true}", 0, 0));
+        when(llmRouter.findProviderName(any(), any())).thenReturn("gemini-flash");
+
+        service.execute(newState(RoutingMode.COST_FIRST));
+
+        ChatModel chatModel = mock(ChatModel.class);
+        ArgumentCaptor<Prompt> promptCaptor = ArgumentCaptor.forClass(Prompt.class);
+        when(chatModel.call(promptCaptor.capture())).thenReturn(chatResponse("dummy"));
+        callCaptor.getAllValues().forEach(fn -> fn.apply(chatModel));
+
+        // 검증 응답은 JSON 몇 필드뿐인데, 상한을 안 걸면 프로바이더에 구워진 app.llm.max-tokens
+        // 전체가 예약된다 — 좁은 컨텍스트에서 n_ctx 를 넘기는 것은 근거가 아니라 이 예약이다.
+        Integer evalMax = promptCaptor.getAllValues().get(1).getOptions().getMaxTokens();
+        assertThat(evalMax).as("검증 호출 출력 상한").isEqualTo(2_048);
+        // 답변 호출은 모드 예산(N = max-tokens의 70% 또는 5,000자 바닥) 그대로여야 한다.
+        Integer answerMax = promptCaptor.getAllValues().get(0).getOptions().getMaxTokens();
+        assertThat(answerMax).as("답변 호출은 영향 없음")
+                .isEqualTo(ResponseMode.N.maxTokens(new AppProperties(
+                        "./data", MAX_RETRY, 800, 100, 100, 7, 0.0, true, 0, false, true, false, 3,
+                        null, null, null, null, null, null, null, null, null, null, null, null, null, null,
+                        null, null, null, null, null, null, null, null, null, null, null, null, null, null,
+                        null, null).llmSafe().maxTokens()));
     }
 
     @Test
@@ -428,8 +460,8 @@ class AnswerServiceTest {
     }
 
     @Test
-    @DisplayName("BLOCKING — 응답 스타일 지침에 모드별 글자수 목표(minChars, 기본 6000토큰 설정에서는 바닥값)가 전달된다")
-    void blocking_answerPrompt_passesResponseModeCharTarget() {
+    @DisplayName("BLOCKING — S는 전용 시스템 프롬프트를 쓰고 스타일 지시문 층은 없다 (§6.24 Step 0-c/1-a)")
+    void blocking_answerPrompt_usesModeSystemPrompt() {
         // S 모드에서는 평가(evaluate) LLM 호출 자체가 스킵되므로 answer 호출 1회만 발생한다.
         when(llmRouter.executeGatedWithUsage(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), any()))
                 .thenReturn(new LlmRouter.LlmResult("답변", 0, 0));
@@ -439,7 +471,140 @@ class AnswerServiceTest {
 
         // 평가 LLM은 한 번도 호출되지 않는다 (answer LLM 1회만)
         verify(llmRouter, org.mockito.Mockito.times(1)).executeGatedWithUsage(any(), any(), any());
-        verify(messageSource).getMessage(eq("prompt.answer.style.s"), eq(new Object[]{2_000}), any(Locale.class));
+        verify(messageSource).getMessage(eq("prompt.answer.system.s"), any(), any(Locale.class));
+        verify(messageSource, org.mockito.Mockito.never())
+                .getMessage(org.mockito.ArgumentMatchers.startsWith("prompt.answer.style"), any(), any(Locale.class));
+    }
+
+    @Test
+    @DisplayName("BLOCKING C — 창의 시스템 프롬프트 + 창의 검증 프롬프트를 쓰고, apiGrounded 가 grounded 로 실린다 (§6.24 Step 2-a/2-d)")
+    void blocking_creativeMode_usesCreativePromptsAndMapsApiGrounded() {
+        when(llmRouter.executeGatedWithUsage(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), any()))
+                .thenReturn(new LlmRouter.LlmResult("## 요약\n만들었습니다", 100, 40),
+                            new LlmRouter.LlmResult("{\"sufficient\":true,\"apiGrounded\":true,\"inventedSymbols\":[],\"envNote\":\"\"}", 30, 10));
+        when(llmRouter.findProviderName(any(), any())).thenReturn("local");
+
+        AgentState result = service.execute(
+                newState(RoutingMode.COST_FIRST).toBuilder().responseMode(ResponseMode.C).build());
+
+        verify(messageSource).getMessage(eq("prompt.answer.system.c"), any(), any(Locale.class));
+        verify(messageSource).getMessage(eq("prompt.answer.eval.creative"), any(), any(Locale.class));
+        // 검증을 '끄지' 않는다 — 답변 1회 + 평가 1회. S(평가 스킵)와 갈리는 지점이다.
+        verify(llmRouter, times(2)).executeGatedWithUsage(any(), any(), any());
+        assertThat(result.grounded()).isTrue();   // apiGrounded → grounded (CriticService 코드 변경 0)
+        assertThat(result.needsRetry()).isFalse();
+        assertThat(result.inventedSymbols()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("BLOCKING C — 창의 답변이 '문서에 그대로 없다'는 이유로 재시도 루프를 돌지 않는다")
+    void blocking_creativeMode_doesNotSpinTheRetryLoop() {
+        // 기존 grounded 기준이었다면 창의 답변은 정의상 false 라 CRITIC 재시도를 물고
+        // ANSWER·EVAL·RETRIEVAL 을 각각 3배 태웠을 상황이다. 창의 검증에서는 통과해야 한다.
+        when(llmRouter.executeGatedWithUsage(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), any()))
+                .thenReturn(new LlmRouter.LlmResult("## 구현\n새로 작성한 코드", 100, 40),
+                            new LlmRouter.LlmResult("{\"sufficient\":true,\"apiGrounded\":true,\"inventedSymbols\":[],\"envNote\":\"\"}", 30, 10));
+        when(llmRouter.findProviderName(any(), any())).thenReturn("local");
+
+        AgentState state = newState(RoutingMode.COST_FIRST).toBuilder()
+                .responseMode(ResponseMode.C)
+                .retrievedDocs(List.of(new Document("문서 본문", Map.of(MetaKey.FILENAME, "a.md"))))
+                .build();
+        AgentState result = service.execute(state);
+
+        assertThat(result.needsRetry()).isFalse();
+        assertThat(result.grounded()).isTrue();
+        assertThat(result.evalReason()).isNull();
+    }
+
+    @Test
+    @DisplayName("BLOCKING C — inventedSymbols 는 상태에 담기되 재시도는 걸지 않는다(경고 전용)")
+    void blocking_creativeMode_inventedSymbolsWarnWithoutRetry() {
+        when(llmRouter.executeGatedWithUsage(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), any()))
+                .thenReturn(new LlmRouter.LlmResult("## 구현\ncode", 100, 40),
+                            new LlmRouter.LlmResult("{\"sufficient\":true,\"apiGrounded\":true,"
+                                    + "\"inventedSymbols\":[\"parseDateEx\"],\"envNote\":\"\"}", 30, 10));
+        when(llmRouter.findProviderName(any(), any())).thenReturn("local");
+
+        AgentState result = service.execute(
+                newState(RoutingMode.COST_FIRST).toBuilder().responseMode(ResponseMode.C).build());
+
+        // 창의 모드에서 이름을 지어내는 것 자체는 실패가 아니다 — 다시 생성시키는 대신 경고한다.
+        assertThat(result.inventedSymbols()).containsExactly("parseDateEx");
+        assertThat(result.needsRetry()).isFalse();
+    }
+
+    @Test
+    @DisplayName("BLOCKING C — apiGrounded=false 는 grounded=false 로 실려 CRITIC 이 재시도를 걸 수 있다")
+    void blocking_creativeMode_apiGroundedFalsePropagates() {
+        when(llmRouter.executeGatedWithUsage(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), any()))
+                .thenReturn(new LlmRouter.LlmResult("## 구현\ncode", 100, 40),
+                            new LlmRouter.LlmResult("{\"sufficient\":true,\"apiGrounded\":false,"
+                                    + "\"inventedSymbols\":[\"fakeApi\"],\"envNote\":\"\"}", 30, 10));
+        when(llmRouter.findProviderName(any(), any())).thenReturn("local");
+
+        AgentState state = newState(RoutingMode.COST_FIRST).toBuilder()
+                .responseMode(ResponseMode.C)
+                .retrievedDocs(List.of(new Document("문서 본문", Map.of(MetaKey.FILENAME, "a.md"))))
+                .build();
+        AgentState result = service.execute(state);
+
+        assertThat(result.grounded()).isFalse();
+        // 실패 사유는 발명된 이름 그 자체다 — evalReason 이 SSE·로그·툴팁을 지나가는 자리라 거기 싣는다.
+        assertThat(result.evalReason()).contains("fakeApi");
+    }
+
+    @Test
+    @DisplayName("BLOCKING C — 창의 검증 파싱 실패는 '판정 없음'이다 (통과로 위조하지 않고, 전달도 막지 않는다)")
+    void blocking_creativeMode_parseFailureLeavesNoVerdict() {
+        when(llmRouter.executeGatedWithUsage(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), any()))
+                .thenReturn(new LlmRouter.LlmResult("## 구현\ncode", 100, 40),
+                            new LlmRouter.LlmResult("not json at all", 30, 10));
+        when(llmRouter.findProviderName(any(), any())).thenReturn("local");
+
+        AgentState result = service.execute(
+                newState(RoutingMode.COST_FIRST).toBuilder().responseMode(ResponseMode.C).build());
+
+        assertThat(result.needsRetry()).isFalse();   // 검증기 고장이 답변 전달을 막지는 않는다
+        assertThat(result.grounded()).isNull();      // 그러나 통과 배지를 붙여서도 안 된다
+        assertThat(result.inventedSymbols()).isEmpty();
+    }
+
+    // 실제로 관찰된 사고(2026-08-24 23:58): 창의 검증이 빈 문자열을 반환 → BeanOutputConverter 가
+    // "No content to map due to end-of-input" 으로 실패 → 예전 폴백이 통과 처리 → sufficient=false
+    // 로 걸렸어야 할 재시도가 돌지 않은 채 파란 '생성' 배지까지 붙은 답변이 나갔다. 빈 응답은
+    // 검증 호출에서 가장 흔한 실패 모드다(이 앱에서 가장 큰 단일 요청이라 컨텍스트를 넘기기 쉽다).
+    @Test
+    @DisplayName("BLOCKING C — 창의 검증이 빈 응답이면 판정 없음으로 기록한다 (§ 관찰된 사고)")
+    void blocking_creativeMode_emptyVerdictIsNotAPass() {
+        when(llmRouter.executeGatedWithUsage(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), any()))
+                .thenReturn(new LlmRouter.LlmResult("## 구현\ncode", 100, 40),
+                            new LlmRouter.LlmResult("", 900, 0));
+        when(llmRouter.findProviderName(any(), any())).thenReturn("local");
+
+        AgentState result = service.execute(
+                newState(RoutingMode.COST_FIRST).toBuilder().responseMode(ResponseMode.C).build());
+
+        assertThat(result.grounded()).isNull();
+        assertThat(result.needsRetry()).isFalse();
+        assertThat(result.evalReason()).isNull();
+        assertThat(result.inventedSymbols()).isEmpty();
+        // 빈 응답이어도 그 호출의 토큰은 실제로 썼다 — 사용량 집계에서 사라지면 안 된다.
+        assertThat(result.totalInputTokens()).isEqualTo(1000);
+    }
+
+    @Test
+    @DisplayName("BLOCKING N — 검증이 빈 응답이면 역시 판정 없음이다 (창의 경로와 같은 규칙)")
+    void blocking_standardMode_emptyVerdictIsNotAPass() {
+        when(llmRouter.executeGatedWithUsage(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), any()))
+                .thenReturn(new LlmRouter.LlmResult("답변", 100, 40),
+                            new LlmRouter.LlmResult("   ", 900, 0));
+        when(llmRouter.findProviderName(any(), any())).thenReturn("local");
+
+        AgentState result = service.execute(newState(RoutingMode.COST_FIRST));
+
+        assertThat(result.grounded()).isNull();
+        assertThat(result.needsRetry()).isFalse();
     }
 
     // ── STREAMING 경로 ───────────────────────────────────────────────────

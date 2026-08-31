@@ -10,6 +10,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.Mockito.mock;
@@ -27,7 +28,9 @@ class RetrievalMetricsServiceTest {
 
     private static RetrievalMetricsService serviceReturning(MemoryRepository.MetricsRow... rows) {
         MemoryService memory = mock(MemoryService.class);
-        when(memory.findRecentRetrievalMetrics(anyInt(), anyInt())).thenReturn(List.of(rows));
+        // 4-인자 형태를 스텁한다 — §6.25 이후 서비스는 필터 두 개를 항상 넘긴다(없으면 null).
+        when(memory.findRecentRetrievalMetrics(any(), any(), anyInt(), anyInt()))
+                .thenReturn(List.of(rows));
         return new RetrievalMetricsService(memory, MAPPER);
     }
 
@@ -159,5 +162,72 @@ class RetrievalMetricsServiceTest {
         String shown = serviceReturning(row).recent(0, 20).get(0).question();
 
         assertThat(shown).hasSizeLessThan(300).endsWith("…");
+    }
+
+    // ── §6.25 — 사용자/대화 표기와 C 턴 예외 ──────────────────────────────────
+
+    private static MemoryRepository.MetricsRow rowWithThread(
+            String mode, String userId, String threadId, String threadTitle) {
+        String stored = json(new SourceRef("a", "p", "c1", "d1", 1, 0.5, 0.5, "vec:1", 0.5, null));
+        return new MemoryRepository.MetricsRow(1L, "2026-08-16", "질문", mode, "local",
+                stored, userId, threadId, threadTitle);
+    }
+
+    /**
+     * 창의(C) 턴은 평가기가 usedDocs 를 묻지 않아 응답 참여도가 구조적으로 0이다 —
+     * 0/N 으로 그리면 "검색이 아무것도 못 찾았다"로 읽혀 영원히 쫓게 될 버그가 된다(§6.24 이슈 b).
+     */
+    @Test
+    @DisplayName("C 턴은 응답 참여도가 '해당 없음' — 0/N 으로 그리지 않는다")
+    void creativeTurnsHaveNoAttribution() {
+        assertThat(serviceReturning(rowWithThread("C", "u1", "t1", "제목"))
+                .recent(0, 20).get(0).attributionApplies()).isFalse();
+    }
+
+    @Test
+    @DisplayName("N·S 턴과 구 M/L·null 모드는 참여도가 유효하다")
+    void nonCreativeTurnsKeepAttribution() {
+        for (String mode : new String[]{"N", "S", "M", "L", null, "알수없음"}) {
+            assertThat(serviceReturning(rowWithThread(mode, "u1", "t1", "제목"))
+                    .recent(0, 20).get(0).attributionApplies())
+                    .as("mode=%s", mode)
+                    .isTrue();
+        }
+    }
+
+    @Test
+    @DisplayName("대화 라벨 — 제목의 레거시 [version] 접두를 떼고, 제목이 없으면 thread id 로 떨어진다")
+    void threadLabelStripsPrefixAndFallsBackToId() {
+        assertThat(serviceReturning(rowWithThread("N", "u1", "t1", "[latest] 인덱싱 질문"))
+                .recent(0, 20).get(0).threadLabel()).isEqualTo("인덱싱 질문");
+
+        // thread_meta 행이 사라진 턴 — 진단은 유효하므로 목록에 남고, 라벨만 id 로 대신한다.
+        assertThat(serviceReturning(rowWithThread("N", "u1", "사라진-대화", null))
+                .recent(0, 20).get(0).threadLabel()).isEqualTo("사라진-대화");
+    }
+
+    @Test
+    @DisplayName("소유자 id 축약 — 대화 목록 패널과 같은 규칙")
+    void shortensOwnerIdLikeTheConversationPanel() {
+        var t = serviceReturning(rowWithThread("N", "guest-a1b2c3d4e5f6", "t1", "제목"))
+                .recent(0, 20).get(0);
+
+        assertThat(t.shortUserId()).endsWith("…");
+        assertThat(t.userId()).isEqualTo("guest-a1b2c3d4e5f6");   // 툴팁용 원본
+    }
+
+    @Test
+    @DisplayName("필터는 저장소로 그대로 전달되고, count 도 같은 필터를 받는다")
+    void filtersReachTheRepositoryAndTheCount() {
+        MemoryService memory = mock(MemoryService.class);
+        when(memory.findRecentRetrievalMetrics(any(), any(), anyInt(), anyInt()))
+                .thenReturn(List.of());
+        var service = new RetrievalMetricsService(memory, MAPPER);
+
+        service.recent("u1", "t1", 0, 20);
+        service.count("u1", "t1");
+
+        org.mockito.Mockito.verify(memory).findRecentRetrievalMetrics("u1", "t1", 0, 20);
+        org.mockito.Mockito.verify(memory).countRetrievalMetrics("u1", "t1");
     }
 }

@@ -2,7 +2,6 @@ package com.example.ragagent.service;
 
 import com.example.ragagent.agent.AgentState;
 import com.example.ragagent.config.AppProperties;
-import com.example.ragagent.ingestion.CuratedTextUtils;
 import com.example.ragagent.ingestion.MarkdownNoiseNormalizer;
 import com.example.ragagent.model.MetaKey;
 import com.example.ragagent.model.ResponseMode;
@@ -28,7 +27,6 @@ import org.springframework.stereotype.Service;
 
 import java.util.List;
 import java.util.Locale;
-import java.util.Arrays;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
 
@@ -53,12 +51,41 @@ public class AnswerService {
     private static final int MAX_ENV_NOTE_LEN = 300;
 
     /**
-     * Ceiling on the evidence block sent to the evaluator — see {@link #buildEvalExcerpts}. Sized
-     * to match {@link #MAX_ANSWER_LEN}: the evidence may be as long as the longest answer this app
-     * will ever store, which the default config (topK 8 × chunk-size 1500 = 12,000) sits under
-     * comfortably, so the cap is a safety valve rather than something a normal turn ever meets.
+     * Ceiling on the evidence block sent to the evaluator — see {@link #buildEvalExcerpts}.
+     *
+     * <p><b>This is a safety valve for a pathological configuration, not a working limit.</b> The
+     * real bound on the evidence block is {@code topK × chunk-size} (default 10 × 1500 = 15,000),
+     * which sits well under it; a normal turn never meets this cap, and a turn that does has
+     * already lost documents from the verification window.
+     *
+     * <p>Sizing follows the <b>evaluation call</b>, not the answer call, because the eval call is
+     * the largest single request this app makes — it carries the question, the full answer, the
+     * same excerpts, and the response schema at once. Budgeting Korean at ~1 token/char, the
+     * non-excerpt part is roughly 4,900 tokens (eval system prompt ~1,570 + schema ~250 + question
+     * + a ~3,000-char answer), and the reply reserves {@link #MAX_EVAL_OUTPUT_TOKENS}. At 32,000
+     * the whole call lands near ~39,000 tokens, which needs a 64k-class context window; on a
+     * 32k model the effective ceiling is closer to 20,000 chars and must come from {@code topK} /
+     * {@code chunk-size} rather than from this constant. See OPERATOR_MANUAL §8.
      */
-    private static final int MAX_EVAL_EXCERPT_CHARS = 20_000;
+    private static final int MAX_EVAL_EXCERPT_CHARS = 32_000;
+
+    /**
+     * Output cap for the evaluation call only.
+     *
+     * <p>Without it the call inherits the provider's baked-in default ({@code app.llm.max-tokens})
+     * and reserves the operator's entire completion budget for a reply that is a handful of JSON
+     * fields — on a narrow context window that reservation, not the evidence, is what pushes the
+     * request over {@code n_ctx}. Strict servers reject it outright; llama-server clamps generation
+     * and can return nothing, which surfaces as {@code [EVAL] 검증기가 빈 응답} with
+     * {@code outputTokens=0}.
+     *
+     * <p>Deliberately generous for what the schema needs (~400 tokens: two short Korean sentences
+     * plus a small array): a model that emits a brief reasoning preamble into content must still
+     * reach the JSON, since a truncated reply parses as a failure and degrades to
+     * {@link #withoutVerdict} — trading a verdict for tokens is the wrong side of that bargain.
+     * Clamped by the configured ceiling so it can never exceed what the operator allows.
+     */
+    private static final int MAX_EVAL_OUTPUT_TOKENS = 2_048;
 
     /**
      * single evaluation call returns both gates, plus one sentence explaining a failure.
@@ -75,12 +102,37 @@ public class AnswerService {
     private record EvalOutput(boolean sufficient, boolean grounded, String reason, String envNote,
                               List<Integer> usedDocs) {}
 
+    /**
+     * C(응용) 전용 검증 결과 (§6.24 Step 2-d) — {@link EvalOutput}과 <b>필드가 다르다</b>.
+     *
+     * <p>기존 {@code grounded}("답변의 핵심 주장이 발췌에 근거하는가")는 창의 답변에서 정의상 항상
+     * false다. 그 판정을 그대로 태우면 CRITIC이 재시도를 걸어 ANSWER·EVAL·RETRIEVAL을 각각 3회
+     * (기본 {@code max-retry-count}=2) 태우고 끝에 미검증 경고까지 붙인다 — 표준 턴 164초 기준
+     * 8분짜리 턴이다. 그렇다고 S처럼 검증을 통째로 끄면 C 고유의 위험(문서에 없는 API 발명)이
+     * 무방비가 된다. 그래서 <b>끄지 않고 기준만 바꿔 끼운다</b>: "문서를 조합해 새로 만들었다"는
+     * 통과, "문서에 없는 함수를 발명했다"는 실패.
+     *
+     * <p>{@code apiGrounded}는 그대로 {@code AgentState.grounded}에 실린다 — CRITIC은 그 불린
+     * 하나만 소비하므로 <b>{@code CriticService} 코드 변경이 0</b>이다.
+     *
+     * <p>{@code inventedSymbols}는 재시도를 걸지 <b>않는다</b>(UI 경고 전용). 별도 왕복이 아니라
+     * 같은 호출이 이미 답변과 전 발췌를 나란히 들고 있어 따라오는 값이다.
+     *
+     * <p>{@code usedDocs}는 일부러 없다 — C 답변은 발췌를 인용하는 게 아니라 재료로 삼아 새로
+     * 쓰는 것이라 "몇 번 조각을 근거로 썼는가"가 성립하지 않는다. 빈 리스트로 두면
+     * {@code AnswerAttribution}이 신호 없이 순수 어휘 매칭으로 degrade한다(설계된 폴백).
+     */
+    private record CreativeEvalOutput(boolean sufficient, boolean apiGrounded,
+                                      List<String> inventedSymbols, String envNote) {}
+
     private final LlmRouter llmRouter;
     private final MessageSource messageSource;
     private final AppProperties props;
     private final int maxRetryCount;
     private final BeanOutputConverter<EvalOutput> evalConverter =
             new BeanOutputConverter<>(EvalOutput.class);
+    private final BeanOutputConverter<CreativeEvalOutput> creativeEvalConverter =
+            new BeanOutputConverter<>(CreativeEvalOutput.class);
 
     public AnswerService(LlmRouter llmRouter, AppProperties appProperties, MessageSource messageSource) {
         this.llmRouter = llmRouter;
@@ -100,12 +152,12 @@ public class AnswerService {
     // ── Blocking paths ──────────────────────────────────────────────────────
 
     private AgentState executeBlocking(AgentState state) {
-        String systemPrompt = answerSystemPrompt(state.locale());
+        String systemPrompt = answerSystemPrompt(state.locale(), state.responseMode());
         String userPrompt = buildAnswerPrompt(state);
         ChatOptions options = answerOptions(state);
         LlmRouter.LlmResult result = llmRouter.executeGatedWithUsage(TaskType.TEXT, state.routingMode(),
                 model -> model.call(buildPrompt(systemPrompt, userPrompt, options)));
-        String answer = truncate(enforceSummaryOnlyForS(result.text() == null ? "" : result.text(), state.responseMode()));
+        String answer = truncate(enforceSummaryOnly(result.text() == null ? "" : result.text(), state.responseMode()));
         state = state.toBuilder()
                      .accumulateTokens(result.inputTokens(), result.outputTokens())
                      .usedProvider(llmRouter.findProviderName(TaskType.TEXT, state.routingMode()))
@@ -117,13 +169,13 @@ public class AnswerService {
     // ── Streaming paths ─────────────────────────────────────────────────────
 
     private AgentState executeStreamingNormal(AgentState state, GraphListener listener) {
-        String systemPrompt = answerSystemPrompt(state.locale());
+        String systemPrompt = answerSystemPrompt(state.locale(), state.responseMode());
         LlmProvider provider = llmRouter.routeProvider(TaskType.TEXT, state.routingMode());
         String streamed;
         try (var permit = llmRouter.acquirePermit(provider)) {
             streamed = streamAnswer(provider, state, systemPrompt, listener::onToken);
         }
-        String answer = truncate(enforceSummaryOnlyForS(streamed, state.responseMode()));
+        String answer = truncate(enforceSummaryOnly(streamed, state.responseMode()));
         // streaming has no ChatResponse to read real usage from — record an approximate
         // (chars/4) usage entry so /llm-usage isn't blind to the entire streaming chat path, and
         // reflect the same estimate in the per-turn total so the chat UI isn't stuck at 0/0.
@@ -138,11 +190,10 @@ public class AnswerService {
     // ── Evaluation (sufficiency + grounding) + PROGRESSIVE ───────────────────
 
     private AgentState checkSufficiencyAndMaybeUpgrade(AgentState state, String answer, GraphListener listener) {
-        // S mode: skip evaluation entirely — no verifying indicator, no LLM eval call,
-        // no retry loop. CRITIC is already skipped in AgentGraph for S mode; skipping the
-        // ANSWER-level eval here ensures neither the blocking LLM call nor the "응답 검증 중..."
-        // UI indicator appears. grounded stays null (검증 미실행), same convention as directMode.
-        if (state.responseMode() == ResponseMode.S) {
+        // 검증을 건너뛰는 모드(현재 S): eval LLM 호출도, "응답 검증 중..." 인디케이터도, 재시도
+        // 루프도 없다. AgentGraph가 같은 성질로 CRITIC을 건너뛰므로 두 게이트가 함께 꺼진다.
+        // grounded는 null로 남는다(검증 미실행) — directMode와 같은 규약.
+        if (state.responseMode().skipsVerification()) {
             return state;
         }
         // The blocking evaluate() call below can take several seconds to tens of seconds with no
@@ -159,7 +210,7 @@ public class AnswerService {
     }
 
     private AgentState progressiveUpgrade(AgentState state, AgentState resultState, GraphListener listener) {
-        String systemPrompt = answerSystemPrompt(state.locale());
+        String systemPrompt = answerSystemPrompt(state.locale(), state.responseMode());
         LlmProvider premiumProvider = llmRouter.routeProvider(TaskType.TEXT, RoutingMode.QUALITY_FIRST);
         if (listener != null) listener.onUpgrade(premiumProvider.name());
         String premiumAnswer;
@@ -213,7 +264,7 @@ public class AnswerService {
             // Bypass OpenAiChatModel.internalStream() which buffers ALL chunks via buffer(int,int)
             // before emitting, defeating real-time token delivery to the browser.
             streamDirect(provider, systemPrompt, buildAnswerPrompt(state), tokenSink,
-                    state.threadId(), state.routingMode());
+                    state.threadId(), state.routingMode(), answerTemperature(state.responseMode()));
         } else {
             // stream=false: still use streaming HTTP to stay compatible with local LLM servers
             // that do not support stream:false. Buffer all tokens and deliver as one chunk.
@@ -233,28 +284,34 @@ public class AnswerService {
     }
 
     private void streamDirect(LlmProvider provider, String systemPrompt, String userPrompt,
-                               Consumer<String> tokenSink, String threadId, RoutingMode routingMode) {
+                               Consumer<String> tokenSink, String threadId, RoutingMode routingMode,
+                               double temperature) {
         List<OpenAiApi.ChatCompletionMessage> messages = List.of(
                 new OpenAiApi.ChatCompletionMessage(systemPrompt, OpenAiApi.ChatCompletionMessage.Role.SYSTEM),
                 new OpenAiApi.ChatCompletionMessage(userPrompt, OpenAiApi.ChatCompletionMessage.Role.USER)
         );
         // §6.18 — general/RAG temperature (app.llm.temperature / LLM_TEMPERATURE), was hardcoded 0.0.
+        // §6.24 — the caller now picks between that and creative-temperature by response mode; this
+        // path is the one the chat UI actually uses, so a mode-aware temperature that skipped it
+        // would be invisible everywhere it matters.
         OpenAiApi.ChatCompletionRequest request =
-                new OpenAiApi.ChatCompletionRequest(messages, provider.model(), props.llmSafe().temperature(), true);
+                new OpenAiApi.ChatCompletionRequest(messages, provider.model(), temperature, true);
         logDirectRequest(provider, request);
-        provider.openAiApi().chatCompletionStream(request)
-                .mapNotNull(chunk -> {
-                    if (chunk.choices() == null || chunk.choices().isEmpty()) return null;
-                    return chunk.choices().get(0).delta().content();
-                })
-                .filter(t -> !t.isEmpty())
-                .doOnCancel(() -> log.warn("[Answer] Stream cancelled provider={} thread={} route={}",
-                        provider.name(), threadId, routingMode))
-                .doOnError(e -> log.error("[Answer] Stream error provider={}", provider.name(), e))
-                .doFinally(signal -> log.debug("[Answer] Stream finished signal={} provider={} thread={}",
-                        signal, provider.name(), threadId))
-                .toIterable()
-                .forEach(tokenSink);
+        // 중지/끊김 시 LLM 쪽 연결까지 실제로 끊으려면 구독을 취소해야 한다 — toIterable() 을
+        // 그냥 벗어나는 것으로는 취소되지 않는다(CancellableTokenStream 참조).
+        CancellableTokenStream.consume(
+                provider.openAiApi().chatCompletionStream(request)
+                        .mapNotNull(chunk -> {
+                            if (chunk.choices() == null || chunk.choices().isEmpty()) return null;
+                            return chunk.choices().get(0).delta().content();
+                        })
+                        .filter(t -> !t.isEmpty())
+                        .doOnCancel(() -> log.warn("[Answer] Stream cancelled provider={} thread={} route={}",
+                                provider.name(), threadId, routingMode))
+                        .doOnError(e -> log.error("[Answer] Stream error provider={}", provider.name(), e))
+                        .doFinally(signal -> log.debug("[Answer] Stream finished signal={} provider={} thread={}",
+                                signal, provider.name(), threadId)),
+                tokenSink);
     }
 
     /**
@@ -301,16 +358,23 @@ public class AnswerService {
      * can only narrow the candidate set, never manufacture a share (see {@code AnswerAttribution}).
      */
     private AgentState evaluate(AgentState state, String answer, Locale locale) {
+        if (state.responseMode().usesCreativeEval()) {
+            return evaluateCreative(state, answer, locale);
+        }
         boolean docsPresent = !state.retrievedDocs().isEmpty();
         try {
-            String systemPrompt = messageSource.getMessage("prompt.answer.eval", null, locale);
+            String systemPrompt = messageSource.getMessage(state.responseMode().evalPromptKey(), null, locale);
             String excerpts = buildEvalExcerpts(state.retrievedDocs());
-            String evalPrompt = "[질문]\n%s\n\n[답변]\n%s\n\n[문서 발췌]\n%s\n\n%s"
-                    .formatted(PromptInjectionGuard.wrap(state.question()), answer, excerpts, evalConverter.getFormat());
+            String evalPrompt = buildEvalPrompt(state, answer, excerpts, evalConverter.getFormat());
 
             LlmRouter.LlmResult result = llmRouter.executeGatedWithUsage(TaskType.TEXT, state.routingMode(),
                     model -> model.call(buildPrompt(systemPrompt, evalPrompt, evalOptions())));
-            EvalOutput out = evalConverter.convert(result.text() == null ? "" : result.text());
+            if (isEmptyVerdict(result)) {
+                logEmptyVerdict("EVAL", state, result);
+                return withoutVerdict(state.toBuilder()
+                        .accumulateTokens(result.inputTokens(), result.outputTokens()).build());
+            }
+            EvalOutput out = evalConverter.convert(result.text());
             boolean grounded = !docsPresent || out.grounded();
             boolean passed = out.sufficient() && grounded;
             String reason = passed ? null : normalizeOneLine(out.reason(), MAX_EVAL_REASON_LEN);
@@ -331,10 +395,128 @@ public class AnswerService {
                     .usedDocIndices(out.usedDocs())
                     .build();
         } catch (Exception e) {
-            log.warn("Evaluation parse failed, treating as sufficient + grounded: {}", e.getMessage());
-            return state.toBuilder().needsRetry(false).grounded(true).evalReason(null).envNote(null)
-                    .usedDocIndices(List.of()).build();
+            log.warn("[EVAL] 검증 응답을 읽지 못했다 — 판정 없음으로 기록한다(재시도 없음, 배지 없음): {}",
+                    e.getMessage());
+            return withoutVerdict(state);
         }
+    }
+
+    /**
+     * C(응용) 전용 검증 (§6.24 Step 2-d) — {@link #evaluate}와 <b>같은 자리, 같은 왕복 수</b>다.
+     * 검증을 끄는 것이 아니라 판정 기준만 창의 모드에 맞게 바꿔 끼운다
+     * ({@link CreativeEvalOutput} 참조).
+     *
+     * <p>{@code apiGrounded}는 그대로 {@code grounded}에 실린다 — CRITIC은 그 불린 하나만 보므로
+     * {@code CriticService}는 한 줄도 바뀌지 않는다. 재시도를 거는 것은 {@code sufficient}(요청한
+     * 산출물을 실제로 만들었는가)뿐이고, {@code inventedSymbols}는 <b>재시도를 걸지 않는다</b> —
+     * 창의 모드에서 이름을 지어내는 것 자체는 실패가 아니고 그것을 문서 근거인 양 제시하는 것이
+     * 문제라서, 다시 생성시키는 대신 독자에게 경고로 보여주는 편이 맞다.
+     *
+     * <p>파싱 실패 시의 폴백은 {@link #evaluate}와 같다 — {@link #withoutVerdict}(판정 없음).
+     * 검증기 자체의 고장이 완성된 답변의 전달을 막아서는 안 되지만, 그렇다고 검증한 적 없는
+     * 답변에 통과 배지를 달아 줘서도 안 된다.
+     */
+    private AgentState evaluateCreative(AgentState state, String answer, Locale locale) {
+        boolean docsPresent = !state.retrievedDocs().isEmpty();
+        try {
+            String systemPrompt = messageSource.getMessage(state.responseMode().evalPromptKey(), null, locale);
+            String excerpts = buildEvalExcerpts(state.retrievedDocs());
+            String evalPrompt = buildEvalPrompt(state, answer, excerpts, creativeEvalConverter.getFormat());
+
+            LlmRouter.LlmResult result = llmRouter.executeGatedWithUsage(TaskType.TEXT, state.routingMode(),
+                    model -> model.call(buildPrompt(systemPrompt, evalPrompt, evalOptions())));
+            if (isEmptyVerdict(result)) {
+                logEmptyVerdict("EVAL-C", state, result);
+                return withoutVerdict(state.toBuilder()
+                        .accumulateTokens(result.inputTokens(), result.outputTokens()).build());
+            }
+            CreativeEvalOutput out = creativeEvalConverter.convert(result.text());
+            boolean apiGrounded = !docsPresent || out.apiGrounded();
+            boolean passed = out.sufficient() && apiGrounded;
+            List<String> invented = out.inventedSymbols() == null ? List.of() : out.inventedSymbols();
+            // 실패 사유는 발명된 이름 그 자체다 — 별도 필드를 만들면 SSE 페이로드·로그·툴팁 세 곳을
+            // 모두 늘려야 하는데, evalReason 이 이미 그 셋을 지나가는 "한 문장 설명" 자리다.
+            String reason = passed ? null
+                    : normalizeOneLine(invented.isEmpty()
+                            ? "요청한 산출물을 만들지 못했거나 문서에 없는 이름을 문서 근거로 제시함"
+                            : "문서 발췌에 없는 이름을 문서에 있는 것처럼 사용: " + String.join(", ", invented),
+                            MAX_EVAL_REASON_LEN);
+            String envNote = normalizeOneLine(out.envNote(), MAX_ENV_NOTE_LEN);
+            if (!passed) {
+                log.info("[EVAL-C] 검증 미통과 thread={} sufficient={} apiGrounded={} invented={}",
+                        state.threadId(), out.sufficient(), apiGrounded, invented);
+            } else if (!invented.isEmpty()) {
+                log.info("[EVAL-C] 통과했으나 미확인 심볼 보고 thread={} invented={}", state.threadId(), invented);
+            }
+            return state.toBuilder()
+                    .accumulateTokens(result.inputTokens(), result.outputTokens())
+                    .needsRetry(!out.sufficient())
+                    .grounded(apiGrounded)
+                    .evalReason(reason)
+                    .envNote(envNote)
+                    .usedDocIndices(List.of())
+                    .inventedSymbols(invented)
+                    .build();
+        } catch (Exception e) {
+            log.warn("[EVAL-C] 창의 검증 응답을 읽지 못했다 — 판정 없음으로 기록한다"
+                     + "(재시도 없음, 배지 없음): {}", e.getMessage());
+            return withoutVerdict(state);
+        }
+    }
+
+    /**
+     * 검증 결과를 <b>읽지 못했을 때</b>의 상태 — 판정을 위조하지 않는다.
+     *
+     * <p>예전에는 이 자리에서 {@code grounded=true} 를 써넣었다. 재시도를 막는 것까지는 옳다
+     * (검증기 고장이 이미 완성된 답변의 전달을 막아서는 안 된다). 틀린 것은 그 다음이었다 —
+     * 그 {@code true} 가 그대로 {@code VerificationSnapshot} 으로 흘러가 <b>검증한 적 없는 답변에
+     * '검증됨'(N) / '생성'(C) 배지</b>가 붙었다. 실제로 관찰된 사고가 그것이다: 창의 검증이 빈
+     * 응답을 반환 → 파싱 실패 → 통과 처리 → 재시도({@code sufficient=false} 로 걸렸어야 할)도
+     * 돌지 않고 파란 '생성' 배지까지 붙은 답변이 나갔다.
+     *
+     * <p>{@code grounded=null} 은 이 앱에서 이미 <b>"검증 미실행"</b>을 뜻하고, 그 상태는 끝까지
+     * 그렇게 흐른다: {@code CriticService} 가 덮어쓰지 않고, {@code VerificationSnapshot.isEmpty()}
+     * 가 참이 되어 {@code MemoryService.saveVerification()} 이 저장을 건너뛰며(컬럼 NULL),
+     * {@code verdictLabel()} 과 {@code chat-stream.js} 의 {@code === true}/{@code === false} 비교가
+     * 둘 다 배지를 그리지 않는다. 즉 새 UI 상태를 만드는 것이 아니라 <b>이미 있는 상태로 정직하게
+     * 되돌리는 것</b>이다 — S 모드와 meta/Direct 턴이 늘 그렇게 표시돼 왔다.
+     */
+    private static AgentState withoutVerdict(AgentState state) {
+        return state.toBuilder()
+                .needsRetry(false)
+                .grounded(null)
+                .evalReason(null)
+                .envNote(null)
+                .usedDocIndices(List.of())
+                .inventedSymbols(List.of())
+                .build();
+    }
+
+    /**
+     * 검증 호출이 빈 응답을 돌려줬는지. 빈 응답은 <b>깨진 JSON과 다른 사고</b>다 — 모델이 판정을
+     * 내렸는데 형식이 틀린 것이 아니라, 아무것도 내지 못한 것이다. 두 경우의 처리는 같지만
+     * (판정 없음) 원인이 달라 로그를 나눈다: 이 경로가 잦다면 프롬프트가 아니라 <b>요청 크기나
+     * 모델 쪽</b>을 봐야 한다. 검증 호출은 이 앱에서 가장 큰 단일 요청이다 — 질문 + 답변 전문 +
+     * {@link #buildEvalExcerpts} 발췌(topK × chunk-size, 상한 {@link #MAX_EVAL_EXCERPT_CHARS}) +
+     * 응답 스키마가 한 번에 들어간다.
+     */
+    private static boolean isEmptyVerdict(LlmRouter.LlmResult result) {
+        return result.text() == null || result.text().isBlank();
+    }
+
+    /** 빈 응답 진단 로그 — {@code outputTokens} 가 이 사고의 원인을 가르는 유일한 단서다. */
+    private void logEmptyVerdict(String tag, AgentState state, LlmRouter.LlmResult result) {
+        log.warn("[{}] 검증기가 빈 응답을 반환했다 — 판정 없음으로 기록한다(재시도 없음, 배지 없음). "
+                 + "thread={} inputTokens={} outputTokens={} | outputTokens=0 이면 모델이 아무것도 "
+                 + "내지 못한 것(컨텍스트 초과 의심), 0보다 크면 content 가 아닌 곳으로 나온 것"
+                 + "(reasoning 모델).",
+                tag, state.threadId(), result.inputTokens(), result.outputTokens());
+    }
+
+    /** 두 검증 경로가 공유하는 사용자 메시지 — 차이는 시스템 프롬프트와 {@code format}(응답 스키마)뿐이다. */
+    private static String buildEvalPrompt(AgentState state, String answer, String excerpts, String format) {
+        return "[질문]\n%s\n\n[답변]\n%s\n\n[문서 발췌]\n%s\n\n%s"
+                .formatted(PromptInjectionGuard.wrap(state.question()), answer, excerpts, format);
     }
 
     /**
@@ -342,7 +524,7 @@ public class AnswerService {
      *
      * <p><b>It must be the same evidence the answer was written from.</b> This used to send only
      * the first 5 documents while {@link #buildAnswerPrompt} passes all of {@code retrievedDocs}
-     * ({@code app.search-top-k}, default 8) — so an answer correctly citing a value found only in
+     * ({@code app.search-top-k}, default 10) — so an answer correctly citing a value found only in
      * document #6-8 was judged against excerpts that could not contain it. Paths, ports, addresses
      * and other constants are exactly the facts this hits hardest: they live in a single chunk,
      * unlike a prose claim that gets restated across several.
@@ -402,45 +584,64 @@ public class AnswerService {
                 : oneLine;
     }
 
-    private String answerSystemPrompt(Locale locale) {
-        return messageSource.getMessage("prompt.answer.system", null, locale);
-    }
-
     /**
-     * The S/M/L answer-style instruction for this turn (summary / detailed / source-preserving),
-     * naming a concrete character target (see {@link ResponseMode} javadoc). Appended to the user
-     * prompt just before the question so the question stays last (the system prompt's injection
-     * warning assumes that ordering).
+     * 이 턴의 모드 전용 시스템 프롬프트 (PLAN §6.24 Step 1-a).
+     *
+     * <p>예전에는 공용 프롬프트 하나를 쓰고 사용자 메시지 끝에 "[응답 스타일]" 지시문을 덧붙여
+     * 형식을 뒤집으려 했다. 그 방식은 S에서 실패했다 — 시스템 프롬프트가 나열한 5섹션 헤더
+     * 목록이 사용자 메시지의 한 줄 부정 지시보다 강하게 작용해 모델이 전부 생성했고, 서버가
+     * 사후에 잘라내면서 화면과 DB가 달라졌다. 이제 모드마다 프롬프트를 통째로 바꾼다.
      */
-    private String responseStyleInstruction(AgentState state) {
-        ResponseMode mode = state.responseMode();
-        int tokens = mode.maxTokens(props.llmSafe().maxTokens());
-        int targetChars = tokens > 0 ? tokens : mode.minChars();
-        return messageSource.getMessage(mode.promptKey(), new Object[]{targetChars}, state.locale());
+    private String answerSystemPrompt(Locale locale, ResponseMode mode) {
+        return messageSource.getMessage(mode.answerSystemPromptKey(), null, locale);
     }
 
     /**
      * Per-call options for a blocking answer call: general/RAG temperature (§6.18, hot — read fresh
      * per call) plus {@code maxTokens} derived from the response mode's share of the configured
-     * {@code app.llm.max-tokens}. maxTokens is only attached on the <b>blocking</b> call paths —
-     * streaming calls have no hard per-call cap (token-by-token UX), so there the same character
-     * target is instead named in {@link #responseStyleInstruction} as the model's only length control.
+     * {@code app.llm.max-tokens} (never above it — see {@link ResponseMode#maxTokens(int)}).
+     *
+     * <p>maxTokens is only attached on the <b>blocking</b> call paths; streaming has no per-call cap
+     * (token-by-token UX). That asymmetry no longer matters for length control: the budget is a
+     * safety valve, and what actually shapes the answer is the mode's own system prompt — S names a
+     * 1,000-character ceiling there, N deliberately names no number at all (§6.24).
      */
     private ChatOptions answerOptions(AgentState state) {
         OpenAiChatOptions.Builder builder = OpenAiChatOptions.builder()
-                .temperature(props.llmSafe().temperature());
+                .temperature(answerTemperature(state.responseMode()));
         int configured = props.llmSafe().maxTokens();
         int max = state.responseMode().maxTokens(configured);
         if (max > 0) builder.maxTokens(max);
         return builder.build();
     }
 
+    /**
+     * 이 턴의 답변 생성 온도 (§6.24 Step 2-b).
+     *
+     * <p>문서 충실 모드(S/N)는 일반/RAG 온도를 쓴다 — clamp가 [0.0, 0.3]이라 표본추출로 사실이
+     * 흔들리지 않는다. C(응용)만 창의 온도({@code app.llm.creative-temperature}, clamp [0.0, 1.0])를
+     * 쓰는데, 바로 그 0.3 상한 때문에 일반 온도로는 창의 생성이 원천 봉쇄되기 때문이다.
+     *
+     * <p>둘 다 hot이라 매 호출 새로 읽는다. 그리고 이 메서드는 <b>블로킹과 스트리밍 양쪽</b>에서
+     * 불려야 한다 — 채팅 UI의 유일한 전송 경로가 스트리밍이므로, {@code streamDirect()}를 빠뜨리면
+     * 화면에서만 온도가 안 오르고 그 사실이 아무 로그에도 남지 않는다.
+     */
+    private double answerTemperature(ResponseMode mode) {
+        AppProperties.LlmConfig llm = props.llmSafe();
+        return mode.usesCreativeTemperature() ? llm.creativeTemperature() : llm.temperature();
+    }
+
     /** Sufficiency-evaluation call options: general/RAG temperature only (no maxTokens cap — the
-     *  structured JSON output is already short). Hot — read fresh per call. */
+     *  structured JSON output is already short). Deliberately NOT the creative temperature even for
+     *  C: judging whether an identifier appears in an excerpt is a lookup, not a creative task.
+     *  Hot — read fresh per call. */
     private ChatOptions evalOptions() {
-        return OpenAiChatOptions.builder()
-                .temperature(props.llmSafe().temperature())
-                .build();
+        OpenAiChatOptions.Builder builder = OpenAiChatOptions.builder()
+                .temperature(props.llmSafe().temperature());
+        int configured = props.llmSafe().maxTokens();
+        // 0 이하 = "프로바이더 기본값 유지" (answerOptions 와 같은 규약).
+        if (configured > 0) builder.maxTokens(Math.min(configured, MAX_EVAL_OUTPUT_TOKENS));
+        return builder.build();
     }
 
     private String buildAnswerPrompt(AgentState state) {
@@ -474,35 +675,69 @@ public class AnswerService {
             sb.append("[경고]\n").append(String.join("\n", state.retrievalWarnings())).append("\n\n");
         }
 
-        sb.append(responseStyleInstruction(state)).append("\n\n");
-
         sb.append("[질문]\n").append(PromptInjectionGuard.wrap(state.question()));
         return sb.toString();
     }
 
-    /** Absolute ceiling protecting storage/rendering — independent of the response mode, whose
-     *  budget is expressed as the call's maxTokens instead of a character cap. */
-    private static String truncate(String answer) {
-        if (answer == null || answer.length() <= MAX_ANSWER_LEN) return answer;
-        return answer.substring(0, MAX_ANSWER_LEN) + "\n\n…(응답이 너무 길어 잘렸습니다)";
-    }
+    /** 절단 안내 — 코드 펜스 <b>바깥</b>의 평문이어야 한다({@link #truncate} 참조). */
+    private static final String TRUNCATION_NOTICE = "…(응답이 너무 길어 잘렸습니다)";
 
     /**
-     * S mode must return summary-only text. Keep only the summary section body (if present),
-     * otherwise take the first non-empty lines, and cap to 7 lines.
+     * Absolute ceiling protecting storage/rendering — independent of the response mode, whose
+     * budget is expressed as the call's maxTokens instead of a character cap.
+     *
+     * <p><b>줄 경계에서 자르고 코드 펜스 짝을 맞춘다</b> (§6.24 Step 3-c). 예전에는 문자
+     * 인덱스로 그냥 잘랐는데, 그 자리가 펜스 안이면 펜스 줄 수가 홀수인 답변이 만들어진다.
+     * 그 답변이 문서 내보내기나 재색인을 타는 순간 {@code MarkdownCorrectionService} 의
+     * <b>코드펜스 짝 맞춤 불변식</b>이 깨지고, {@code normalizeCodeBlocks()} 가 짝을 확정할 수
+     * 없다며 <b>그 문서 전체</b>의 언어 태그·코드 정리를 건너뛴다 — 잘린 답변 하나가 문서
+     * 단위 품질 저하로 번진다.
+     *
+     * <p>두 가지를 한다:
+     * <ol>
+     *   <li><b>펜스가 열린 채 끝나면 닫는다.</b> 이것이 불변식을 지키는 부분이다. 닫는 펜스는
+     *       안내 문구 <b>앞</b>에 온다 — 안내는 코드가 아니므로 펜스 밖 평문이어야 하고, 이는
+     *       {@code ChunkSplitter} 의 {@code CODE_CONTINUATION_*} 마커가 지키는 규칙과 같다.</li>
+     *   <li><b>마지막 줄바꿈까지만 남긴다.</b> 이쪽은 불변식이 아니라 결과물의 문제다 —
+     *       {@code "```java"} 한가운데서 자르면 {@code "```ja"} 라는 잘린 여는 펜스가 남고,
+     *       위 1번이 거기에 닫는 펜스를 붙여 <b>언어 태그가 깨진 빈 코드 블록</b>을 만든다.
+     *       표 행이 반쪽만 남는 것도 같은 종류의 문제다. 잃는 것은 이미 잘리는 중인 답변의
+     *       마지막 한 줄뿐이다.</li>
+     * </ol>
+     *
+     * <p><b>줄 중간 펜스는 여기서 만들어지지 않는다.</b> {@code fenceLineCount} 와
+     * {@code fenceMarkCount} 가 어긋나는 그 조건은 한 줄 안에 앞선 내용과 {@code ```} 이 함께
+     * 있어야 성립하는데, 절단은 뒤에서 문자를 <b>덜어낼</b> 뿐이라 없던 것을 만들 수 없다 —
+     * 원문에 이미 있었다면 그것은 이 메서드가 고칠 대상이 아니다. 절단이 실제로 일으킬 수 있는
+     * 결함은 <b>홀수 펜스</b> 하나뿐이고, 그것이 1번이 막는 것이다.
+     *
+     * <p>펜스 세기는 {@link MarkdownCorrectionService#fenceLineCount} 를 그대로 쓴다. 같은 것을
+     * 여기서 다시 구현하면 두 관점이 갈라질 수 있고, 그러면 이 수리가 저쪽 가드를 통과시키지
+     * 못한다.
+     *
+     * <p>줄바꿈이 하나도 없는 거대한 한 줄이면 자를 줄 경계가 없다. 그때는 잘린 끝에 남은 백틱
+     * 연속만 걷어낸다 — 문장 중간에 매달린 {@code "``"} 는 원문에도 없던 것이라 남길 이유가 없고,
+     * 그 자리에서 잘린 백틱이 {@code ```} 를 이루면 개수만 늘리기 때문이다.
+     *
+     * <p>결과 길이는 {@link #MAX_ANSWER_LEN} 을 안내 문구만큼 넘는다 — 예전부터 그랬고,
+     * 이 상한은 저장·렌더링 보호용이지 정확한 바이트 예산이 아니다.
      */
-    private static String enforceSummaryOnlyForS(String answer, ResponseMode mode) {
-        if (mode != ResponseMode.S) return answer;
-        if (answer == null || answer.isBlank()) return answer;
-        String summary = CuratedTextUtils.extractSummarySection(answer);
-        String base = summary.isBlank() ? answer : summary;
-        String lines = Arrays.stream(base.split("\\R"))
-                .map(String::strip)
-                .filter(s -> !s.isBlank())
-                .limit(7)
-                .collect(Collectors.joining("\n"));
-        if (lines.isBlank()) return "## 요약\n요약할 내용이 없습니다.";
-        return "## 요약\n" + lines;
+    private static String truncate(String answer) {
+        if (answer == null || answer.length() <= MAX_ANSWER_LEN) return answer;
+        String cut = answer.substring(0, MAX_ANSWER_LEN);
+        int lastLineBreak = cut.lastIndexOf('\n');
+        if (lastLineBreak >= 0) {
+            cut = cut.substring(0, lastLineBreak);
+        } else {
+            while (cut.endsWith("`")) cut = cut.substring(0, cut.length() - 1);
+        }
+        StringBuilder out = new StringBuilder(cut);
+        if (MarkdownCorrectionService.fenceLineCount(cut) % 2 != 0) out.append("\n```");
+        return out.append("\n\n").append(TRUNCATION_NOTICE).toString();
     }
 
+    /** 요약 전용 모드의 안전망 — 구현·판단 근거는 {@link SummaryOnlyGuard}에 있다. */
+    private static String enforceSummaryOnly(String answer, ResponseMode mode) {
+        return SummaryOnlyGuard.apply(answer, mode);
+    }
 }

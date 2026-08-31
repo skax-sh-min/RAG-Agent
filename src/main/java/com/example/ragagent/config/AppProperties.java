@@ -64,6 +64,7 @@ public record AppProperties(
             Double temperature,              // general/RAG temperature (app.llm.temperature / LLM_TEMPERATURE), default 0.0, clamp [0,0.3] — HOT-editable, attached per call by every interactive gated caller (ClassifierService, AnswerService, RerankerService); still baked into each provider's defaultOptions at bean creation too, as the fallback for framework-internal callers that build their own ChatClient around the injected model (e.g. RetrievalService's MultiQueryExpander) and so can't take a per-call override
             Double directTemperature,        // Direct(meta) answer temperature (app.llm.direct-temperature / DIRECT_LLM_TEMPERATURE), default 0.1, clamp [0,1.0] — HOT-editable (DirectAnswerService reads it per call, §6.18)
             Double indexingTemperature,      // indexing/background temperature (app.llm.indexing-temperature / LLM_INDEXING_TEMPERATURE), default 0.0, clamp [0,1.0] — HOT-editable, attached per call by every ungated executeWithTracking() caller (KeywordExtractor, MarkdownCorrectionService, TextToMarkdownService, VisionDescriptionService, ImageTypeClassifier, ThreadMetaService, ConversationSummarizerService) so a higher general/RAG temperature can never leak into extraction-style calls that need to stay deterministic
+            Double creativeTemperature,      // C(응용) 모드 answer temperature (app.llm.creative-temperature / CREATIVE_LLM_TEMPERATURE), default 0.7, clamp [0,1.0] — HOT-editable (§6.24). Separate from `temperature` because that one is clamped to [0,0.3]: a document-faithful answer must not wobble under sampling, which also makes creative generation impossible on it. Read fresh per call by AnswerService on BOTH the blocking and the streaming path — miss streamDirect() and only the chat UI stays cold
             Integer maxTokens,               // LLM response cap (app.llm.max-tokens / LLM_MAX_TOKENS), default 6000, clamp >0 — VIEW-ONLY (baked at bean creation; streaming chat answers are uncapped by design, bounded by SSE timeouts)
             Boolean verifyLocalModelsOnStartup // GET {base-url}/v1/models for every registered LOCAL-role provider at boot — fails startup (throws, Spring exits) if unreachable or the configured model isn't in the response. Default true (app.llm.verify-local-models-on-startup / LLM_VERIFY_LOCAL_MODELS_ON_STARTUP)
     ) {}
@@ -303,8 +304,17 @@ public record AppProperties(
     }
 
     /**
-     * Similarity threshold for vector search, clamped to [0,1].
-     * 0.0 = accept all (Spring AI default).
+     * Similarity threshold for vector search, clamped to [0,1]. Defaults to <b>0.3</b> — a floor
+     * low enough that a genuinely relevant chunk never trips it, high enough to drop the tail the
+     * vector store returns simply because {@code topK} asked for that many rows.
+     *
+     * <p>It applies inside the {@code VectorStoreProvider}, so it prunes the <b>vector axis only</b>
+     * — the BM25 axis is unfiltered. Raising this therefore also raises the keyword axis's relative
+     * share of the fused ranking, which is why it and {@code search-rrf-keyword-weight} should not
+     * be raised in the same step. The curated axes are vector searches too, so they are pruned by
+     * the same floor.
+     *
+     * <p>{@code 0.0} = accept all (the previous default, and Spring AI's).
      */
     public double searchSimilarityThresholdSafe() {
         Double o = overrideDouble(SettingsKeys.SEARCH_SIMILARITY_THRESHOLD);
@@ -371,8 +381,8 @@ public record AppProperties(
      */
     public double searchSubmissionWeightSafe() {
         Double o = overrideDouble(SettingsKeys.SEARCH_SUBMISSION_WEIGHT);
-        double v = (o != null) ? o : (searchSubmissionWeight != null ? searchSubmissionWeight : 1.5);
-        return v >= 0 ? v : 1.5;
+        double v = (o != null) ? o : (searchSubmissionWeight != null ? searchSubmissionWeight : 1.0);
+        return v >= 0 ? v : 1.0;
     }
 
     /** Minimum chunk size (chars); {@code <= 0} falls back to the (override-aware) overlap. Hot-editable. */
@@ -388,7 +398,8 @@ public record AppProperties(
     public int searchTopKSafe() {
         Integer o = overrideInt(SettingsKeys.SEARCH_TOP_K);
         int v = (o != null) ? o : searchTopK;
-        return v > 0 ? v : 7;
+        // 프로퍼티가 비었을 때의 폴백 — application.properties 의 기본값과 같은 수여야 한다.
+        return v > 0 ? v : 10;
     }
 
     /** Multi-query expansion on/off. Hot-editable — {@code RetrievalService.shouldExpand()} re-reads it per search. */
@@ -437,13 +448,15 @@ public record AppProperties(
         return effective == null || effective;
     }
 
-    /** §10.10 — curated-Q&A RRF axis weight. Defaults to 1.5 (above the group-normalized vector
-     *  axes' effective 1.0, so a verified answer tends to surface without dominating outright —
-     *  RRF's own rank decay still applies). Hot-editable. */
+    /** §10.10 — curated-Q&A RRF axis weight. Defaults to <b>1.0</b>: parity with the
+     *  group-normalized vector axes, so this axis competes on rank rather than on a bonus.
+     *  It used to sit above 1.0, which surfaced loosely-related curated entries — the axis holds
+     *  few candidates, so almost anything in it ranks high on its own axis, and a bonus on top of
+     *  that reads as "boost whatever exists here". Hot-editable. */
     public double searchCuratedQaWeightSafe() {
         Double o = overrideDouble(SettingsKeys.SEARCH_CURATED_QA_WEIGHT);
         Double effective = (o != null) ? o : searchCuratedQaWeight;
-        return (effective != null && effective > 0) ? effective : 1.5;
+        return (effective != null && effective > 0) ? effective : 1.0;
     }
 
     /** Query embedding cache on/off. Defaults to enabled. */
@@ -678,22 +691,33 @@ public record AppProperties(
         };
     }
 
+    /**
+     * {@code app.llm.max-tokens} 의 코드 쪽 폴백 — {@code application.properties} 의 기본값과
+     * <b>같은 수여야 한다</b>. 두 곳에 흩어진 리터럴이라 한쪽만 바꾸면 프로퍼티가 비었을 때만
+     * 다른 값이 나오는, 재현이 까다로운 불일치가 된다.
+     */
+    private static final int DEFAULT_MAX_TOKENS = 10_000;
+
     /** Null-safe accessor — returns an empty LlmConfig when app.llm is not configured. */
     public LlmConfig llmSafe() {
         // temperature / direct-temperature / indexing-temperature are all hot-editable — fold their
         // /settings overrides in here. Every interactive gated caller (ClassifierService, AnswerService,
         // RerankerService) reads temperature() per call; DirectAnswerService reads directTemperature()
         // per call; every ungated executeWithTracking() background caller reads indexingTemperature()
-        // per call. maxTokens stays view-only: it's baked into the provider defaultOptions at bean
-        // creation, so an override couldn't take effect until a restart — no hook for it.
+        // per call; AnswerService reads creativeTemperature() per call for the C (creative) mode, on
+        // the blocking AND the streaming path. maxTokens stays view-only: it's baked into the provider
+        // defaultOptions at bean creation, so an override couldn't take effect until a restart.
         Double tempOverride = overrideDouble(SettingsKeys.LLM_TEMPERATURE);
         Double directOverride = overrideDouble(SettingsKeys.LLM_DIRECT_TEMPERATURE);
         Double indexingOverride = overrideDouble(SettingsKeys.LLM_INDEXING_TEMPERATURE);
+        Double creativeOverride = overrideDouble(SettingsKeys.LLM_CREATIVE_TEMPERATURE);
         if (llm == null) {
             double t = clamp(tempOverride != null ? tempOverride : 0.0, 0.0, 0.3);
             double dt = clamp(directOverride != null ? directOverride : 0.1, 0.0, 1.0);
             double it = clamp(indexingOverride != null ? indexingOverride : 0.0, 0.0, 1.0);
-            return new LlmConfig(List.of(), 2, 10, 180, "COST_FIRST", 0.6, 3, 20, t, dt, it, 6000, true);
+            double ct = clamp(creativeOverride != null ? creativeOverride : 0.7, 0.0, 1.0);
+            return new LlmConfig(List.of(), 2, 10, 180, "COST_FIRST", 0.6, 3, 20, t, dt, it, ct,
+                    DEFAULT_MAX_TOKENS, true);
         }
         List<ProviderConfig> providers = llm.providers() != null ? llm.providers() : List.of();
         int minutes = llm.circuitBreakerMinutes() > 0 ? llm.circuitBreakerMinutes() : 2;
@@ -712,11 +736,14 @@ public record AppProperties(
         double indexingBase = indexingOverride != null ? indexingOverride
                 : (llm.indexingTemperature() != null ? llm.indexingTemperature() : 0.0);
         double indexingTemperature = clamp(indexingBase, 0.0, 1.0);
-        int maxTokens = (llm.maxTokens() != null && llm.maxTokens() > 0) ? llm.maxTokens() : 6000;
+        double creativeBase = creativeOverride != null ? creativeOverride
+                : (llm.creativeTemperature() != null ? llm.creativeTemperature() : 0.7);
+        double creativeTemperature = clamp(creativeBase, 0.0, 1.0);
+        int maxTokens = (llm.maxTokens() != null && llm.maxTokens() > 0) ? llm.maxTokens() : DEFAULT_MAX_TOKENS;
         boolean verifyLocalModels = llm.verifyLocalModelsOnStartup() == null || llm.verifyLocalModelsOnStartup();
                 return new LlmConfig(providers, minutes, connectTimeout, readTimeout, mode, threshold,
                         defaultProviderConcurrency, permitWaitTimeoutSeconds, temperature, directTemperature,
-                        indexingTemperature, maxTokens, verifyLocalModels);
+                        indexingTemperature, creativeTemperature, maxTokens, verifyLocalModels);
     }
 
     private static double clamp(double v, double lo, double hi) {

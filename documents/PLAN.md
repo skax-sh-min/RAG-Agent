@@ -8,6 +8,8 @@
 ## 📊 전체 현황 대시보드
 
 > 완료/미착수를 한눈에 보도록 상단 대시보드를 신설했다.
+>
+> **완료 항목 압축 원칙 (2026-08-22 적용)**: ✅ 완료된 항목은 **① 무엇을 왜 그렇게 했는가 ② 앞으로도 지켜야 할 결정·함정 ③ 남은 열린 항목**만 남기고, 구현 과정 서술·테스트 통계·CLAUDE.md에 이미 있는 메커니즘 설명은 걷어낸다. 살아 있는 동작 명세의 단일 출처는 **코드와 CLAUDE.md**이고, 이 문서는 "왜 그렇게 결정했는가"의 기록이다 — 양쪽에 같은 설명을 두면 드리프트만 생긴다(§12가 의존성에 대해 같은 판단을 이미 적용했다).
 
 ### ✅ 완료 — Phase 1·2·5·6·7 전체, Phase 3 전체(§6.15·6.16.2·6.19·6.20 제외)
 
@@ -15,7 +17,7 @@
 |---|---|---|
 | **Phase 1** — 보안 기반 | Step 1.1~1.6 전체(Caddy·Flyway·Spring Security·멀티유저 격리·CSRF·로그인/회원가입 UI) + `app.auth.enabled` no-auth 토글 | §4 |
 | **Phase 2** — 모바일 UI | 반응형 레이아웃(Offcanvas) · PWA(manifest/SW/오프라인) · 다크모드·접근성 | §5 |
-| **Phase 3** — 운영 견고화 | §6.1 Rate limit · §6.2 업로드 검증(매직바이트, 쿼터는 §6.15로 이관) · §6.3 예외처리 · §6.4 감사로그 · §6.5 임베딩 사용량 분리 · §6.6 비활성 프로바이더 표시 · §6.7 orphan 기록 삭제 · §6.8 피드백 기반 컨텍스트 제외 · §6.9 요약 선계산 · §6.10 백그라운드 사용량 분리 · §6.11 컨텍스트 예산 정합성 · §6.12 다중 사용자 동시 LLM 처리(동시성 게이트+백프레셔+로드밸런싱) · §6.13 설정 페이지(핫 수정 오버라이드) · §6.14 핵심 채팅 경로 추적 · §6.16.1 스트리밍/인덱싱 중단 버튼 · §6.17 관리 전용 인증(B안) · §6.18 Direct temperature 분리 · §6.19.3 XFF 신뢰 옵트인 · §6.21 소형 LLM 분리+멀티 LLM 처리량 확장 · §6.22 접속자별 채팅 개인화(no-auth) · §6.23 청크 변경 시 답변 재사용 무효화·대화 기록 표시 | §6 |
+| **Phase 3** — 운영 견고화 | §6.1 Rate limit · §6.2 업로드 검증(매직바이트, 쿼터는 §6.15로 이관) · §6.3 예외처리 · §6.4 감사로그 · §6.5 임베딩 사용량 분리 · §6.6 비활성 프로바이더 표시 · §6.7 orphan 기록 삭제 · §6.8 피드백 기반 컨텍스트 제외 · §6.9 요약 선계산 · §6.10 백그라운드 사용량 분리 · §6.11 컨텍스트 예산 정합성 · §6.12 다중 사용자 동시 LLM 처리(동시성 게이트+백프레셔+로드밸런싱) · §6.13 설정 페이지(핫 수정 오버라이드) · §6.14 핵심 채팅 경로 추적 · §6.16.1 스트리밍/인덱싱 중단 버튼 · §6.17 관리 전용 인증(B안) · §6.18 Direct temperature 분리 · §6.19.3 XFF 신뢰 옵트인 · §6.21 소형 LLM 분리+멀티 LLM 처리량 확장 · §6.22 접속자별 채팅 개인화(no-auth) · §6.23 청크 변경 시 답변 재사용 무효화·대화 기록 표시 · §6.24 응답 모드 재설계(S/N/C — L 제거·모드별 전용 프롬프트·오염 방지 3건, `4-c`만 미착수) · §6.25 관리자 대화 목록·삭제·검색 진단 연결 | §6 |
 | **Phase 5** — Vector Store | Step 5.1~5.10 전체(Chroma↔sqlite-vec 런타임 전환, 관리자 페이지, 태그 검색, 운영/벡터 DB 분리) | §8 |
 | **Phase 6** — 폐쇄망/노-도커 | G1~G5(키리스 LOCAL·차원 외부화·라우팅 외부화·런북·무외부호출 인수) | §9 |
 | **Phase 7** — 검색 품질·성능 고도화 | §10.1~10.9 전체(17건) — 정확도·속도·메모리 개선 + recall@k/nDCG@k 평가 하네스(baseline recall@10=0.962). **+ §10.10** — 좋아요 기반 큐레이션 Q&A 지식화(스냅샷·임베딩·검색 융합·관리 UI) 완료 | §10 |
@@ -24,7 +26,7 @@
 
 ### 🔵 진행할 것 (우선순위 순)
 
-> **재우선순위화**: 실배포 기준(폐쇄망·no-auth 단일 운영자)에서 가치가 없는 **멀티유저(`auth.enabled=true`) 전용 작업**(§6.19·§6.20·§6.16.2·Phase 4)은 전부 후속으로 내렸다(사유는 아래 후속 표의 트리거 열 참조). §6.15(스토리지 쿼터)만 설계상 전역 상한이 1차 권장이라 단일 운영자에도 적용되므로 지금 진행 그룹에 남겼다.
+> **재우선순위화**: 실배포 기준(폐쇄망·no-auth 단일 운영자)에서 가치가 없는 **멀티유저(`auth.enabled=true`) 전용 작업**(§6.19·§6.20·§6.16.2·Phase 4)은 전부 후속으로 내렸다(사유는 아래 후속 표의 트리거 열 참조). §6.15(스토리지 쿼터)만 설계상 전역 상한이 1차 권장이라 단일 운영자에도 적용되므로 지금 진행 그룹에 남겼다. **§6.25(관리자 대화 목록)도 이름은 §7.3(Phase 4) 계열이지만 같은 이유로 지금 진행 그룹이다** — `app.auth.guest-identity`가 `shared`가 아니면 no-auth 단일 운영자 배포에도 방문자별 대화가 쌓이고, 그중 Step 1은 인증 모드와 무관한 검색 오염 버그 수정이다.
 
 **🟢 지금 진행 (no-auth 단일 운영자 배포에도 바로 적용)**
 
@@ -32,8 +34,9 @@
 |---|---|---|
 | 1 | **§6.15 스토리지 쿼터**(전역 상한 B안, §6.2에서 이관) | 설계 완료, 구현 전 |
 | 2 | 운영 준비 잔여 — SQLite 백업 자동화(Litestream/cron), Caddy 인증서 만료 모니터링 | 미착수 |
-| 3 | §9.4 — CADDY 하위호환 별칭 | 선택, 낮은 우선순위 |
-| 4 | Phase 2 남은 실기기 검증 2건 (키보드 하단 고정 · 홈 화면 standalone) | 좌우 스크롤·다크모드는 자동 검증 완료, 나머지는 실기기 필요 |
+| 3 | §6.24 `4-c` — 검색 부스트 상향 | 부스트 기본값이 0이라 미착수. 올리려면 `MAX_EVAL_EXCERPT_CHARS` 상향이 **같은 변경에** 선행돼야 한다(§6.24) |
+| 4 | §9.4 — CADDY 하위호환 별칭 | 선택, 낮은 우선순위 |
+| 5 | Phase 2 남은 실기기 검증 2건 (키보드 하단 고정 · 홈 화면 standalone) | 좌우 스크롤·다크모드는 자동 검증 완료, 나머지는 실기기 필요 |
 
 **🟣 후속 — 멀티유저(`auth.enabled=true`) 활성화 시에만 착수**
 
@@ -209,7 +212,7 @@ Assistant 응답에 👍/👎 토글 추가(`conversation_turns.feedback`, `PATC
 
 입력 시작 시(첫 글자) `ConversationSummarizerService`가 이전 대화를 LOCAL 프로바이더로 미리 요약해 스레드별 LRU 캐시(최대 3개, TTL 15초)에 저장 — 캐시 있으면 "요약+최근 2턴", 없으면 기존 `getHistory()`로 조용히 폴백.
 
-**이후 개선 — 답변의 `## 요약` 재사용 + LLM 요약 게이팅**: RAG 답변은 `prompt.answer.system`의 고정 5-섹션 형식상 이미 자기 자신의 요약(`## 요약`)을 첫 섹션으로 갖고 있으므로, 그 내용을 그대로 쓰고 LLM 재요약은 하지 않는다(`CuratedTextUtils.extractSummarySection()` — §10.10의 `stripSummarySection()`과 헤딩 정규식 공유). ① 모든 turn 의 답변에 `## 요약`이 있으면 **LLM 호출 0회**로 요약 완성 ② 일부에 없으면(Direct 모드·meta 답변 등) 그 요약본으로 축약된 입력에 대해 기존과 같이 LLM 1회 호출 ③ 단, LLM 요약은 **MICRO_TEXT 전담 소형 모델(`LOCAL_FAST_LLM_URL`, `role=LOCAL priority=0`)이 등록되어 있을 때만** 수행한다(`LlmRouter.hasMicroTextOffloadProvider()`). 부가 기능인 대화 요약이 `MICRO_TEXT`의 기본 폴백 경로를 타고 답변 생성용 `priority=1` 로컬 모델의 슬롯을 잠식하지 않게 하려는 것. ④ **소형 미설정 시에도 요약을 포기하지 않는다**(개선): 예전에는 `null`을 반환해 원본 history로 폴백했는데, 그러면 Direct 턴 하나 때문에 나머지 turn 들의 `## 요약`을 전부 버리게 된다 — `LOCAL_FAST_LLM_URL`은 기본값이 없어 이 경로가 오히려 흔하다. 이제 ②의 축약 입력을 그대로 요약으로 쓰되, 요약 섹션이 없는 답변만 `UNSUMMARIZED_ANSWER_CAP`(300자, 실제 `## 요약` 분량과 같은 급)으로 자른다. 자르는 이유는 `truncate()`가 완성된 요약을 **앞에서부터** `max-summary-chars`로 자르기 때문 — 앞쪽의 긴 Direct 답변 하나가 예산을 독식하면 정작 최신 턴이 통째로 밀려난다.
+**이후 개선 — 답변의 `## 요약` 재사용 + LLM 요약 게이팅**: RAG 답변은 이미 `## 요약` 섹션을 갖고 있으므로 그대로 쓰고 LLM 재요약을 생략한다(`CuratedTextUtils.extractSummarySection()`). 전부 있으면 **LLM 호출 0회**, 일부에 없으면(Direct/meta 답변) 축약 입력에 대해 1회 호출하되 **MICRO_TEXT 전담 소형 모델이 등록됐을 때만** — 부가 기능인 대화 요약이 답변 생성용 `priority=1` 로컬 모델의 슬롯을 잠식하지 않게 하려는 것. 소형 미설정 시(기본값이 없어 오히려 흔한 경로)에도 요약을 포기하지 않고, 요약 섹션이 없는 답변만 `UNSUMMARIZED_ANSWER_CAP`(300자)으로 자른다 — `truncate()`가 **앞에서부터** 자르므로 앞쪽의 긴 Direct 답변 하나가 예산을 독식하면 최신 턴이 통째로 밀려나기 때문.
 
 ### 6.10 LLM 사용량 — 백그라운드(비-채팅) 사용량 분리 기록 ✅ 완료
 
@@ -231,7 +234,7 @@ Assistant 응답에 👍/👎 토글 추가(`conversation_turns.feedback`, `PATC
 
 ### 6.13 설정 페이지 — LLM/RAG 옵션 조회·부분 수정 ✅ 완료
 
-신규 `GET /settings`(게스트 조회 가능, 편집은 `isAdmin` 게이트)에서 LLM/임베딩/RAG 설정을 조회. 검색 튜닝 값(초기 7개 → 이후 topK·멀티쿼리 확장·하이브리드까지 10개)은 SQLite `settings_override` 테이블 기반 오버레이 레이어로 **재기동 없이 다음 검색부터 반영**(`RetrievalService`가 매 호출 `props.xxxSafe()`로 재조회하도록 변경). 이후 확장(Tier A/B)으로 인덱싱/청킹 값(청크 크기·오버랩·최소 크기·동시 파일 처리 수·동시 LLM 호출 수)도 핫 수정 대상이 되어, 소비처(`DocumentIndexer`·`MarkdownCorrectionService.correct()`·`LazyVisionService`)가 매 작업마다 재조회해 **다음 인덱싱/↺ 재인덱싱부터 반영**된다(`MarkdownCorrectionService`의 생성자 캐시를 제거해 세 소비처의 동작을 일치시킴). 빈 생성 시점에 고정되는 값(rerank-enabled·쿼리 임베딩 캐시 등)과 기본 라우팅 모드는 조회 전용. 수정은 `/admin/settings/update|reset`(§6.17 ROLE_ADMIN 상속) + 감사 로그 기록.
+`GET /settings`(게스트 조회 가능, 편집은 `isAdmin` 게이트)에서 LLM/임베딩/RAG 설정을 조회하고, `settings_override` 테이블 기반 오버레이 레이어로 **재기동 없이** 반영한다 — 검색 값은 다음 검색부터, 인덱싱/청킹 값은 다음 인덱싱/↺ 재인덱싱부터. 핵심 규칙은 **소비처가 값을 필드에 캐시하지 않고 매 호출 `props.xxxSafe()`로 재조회**하는 것(`MarkdownCorrectionService`의 생성자 캐시를 제거해 세 소비처의 동작을 일치시켰다). 빈 생성 시점에 고정되는 값(rerank-enabled 등)과 기본 라우팅 모드는 조회 전용. 수정은 `/admin/settings/update|reset`(§6.17 ROLE_ADMIN 상속) + 감사 로그. **핫 키 추가 절차와 전체 키 목록은 CLAUDE.md §6.13 항목이 단일 출처.**
 
 ---
 
@@ -241,7 +244,7 @@ Assistant 응답에 👍/👎 토글 추가(`conversation_turns.feedback`, `PATC
 
 ---
 
-### 6.15 사용자별 스토리지 쿼터 🔵 미착수 (§6.2에서 이관) — 지금 진행 (우선순위 3)
+### 6.15 사용자별 스토리지 쿼터 🔵 미착수 (§6.2에서 이관) — 지금 진행 (우선순위 1)
 
 > **현재 코드 확인 (2026-07-02)**: `storage_used_bytes` 컬럼·쿼터 로직·프로퍼티 모두 없음. §6.2가 "완료"로 표기했으나 **미구현**. 저장은 공유 구조(`DocRegistry.SHARED`, `data/documents/`)라 "사용자별" 쿼터의 의미부터 재정의 필요.
 
@@ -284,9 +287,9 @@ no-auth 기본 배포에서 `/documents` 쓰기와 `/admin/**`이 로그인 없�
 
 ### 6.18 Direct 메시지 전용 LLM Temperature 분리 ✅ 완료
 
-라우터 경로가 Spring AI 오토컨피규레이션을 우회해 `LLM_TEMPERATURE` 등 기존 환경변수가 전부 죽은 설정이던 문제 — `LlmConfig`/`AnswerService`/`DirectAnswerService`의 하드코딩 4곳을 제거하고 config 기반으로 전환. 신규 `app.llm.temperature`(일반/RAG)·`app.llm.direct-temperature`(Direct 전용, 기본 0.1, `[0,0.2]` clamp)·`app.llm.max-tokens`(기본 6000). **direct-temperature만 `DirectAnswerService`가 매 호출 재조회해 핫 수정**(블로킹은 `Prompt`, 스트리밍은 `ChatCompletionRequest`에 주입), §6.13 `/settings`에 슬라이더로 노출. 일반 temperature/max-tokens는 프로바이더 빈에 baked라 조회 전용(재기동 필요). 회귀 테스트: `AppPropertiesOverrideTest`·`DirectAnswerServiceTest`.
+라우터 경로가 Spring AI 오토컨피규레이션을 우회해 `LLM_TEMPERATURE` 등 기존 환경변수가 **전부 죽은 설정**이던 문제 — 하드코딩 4곳을 제거하고 `app.llm.temperature`(일반/RAG)·`app.llm.direct-temperature`(Direct 전용)·`app.llm.max-tokens`로 전환. direct-temperature만 매 호출 재조회해 핫 수정(블로킹은 `Prompt`, 스트리밍은 `ChatCompletionRequest`에 주입). 이후 §6.13 확장으로 세 temperature가 모두 핫이 됐고 max-tokens만 조회 전용으로 남았다(현행 clamp·소비처는 CLAUDE.md §6.13 항목 참조).
 
-**후속**: `MemoryService`(대화 컨텍스트 예산)·`MarkdownCorrectionService`(MD 교정 섹션 크기)가 여전히 죽은 `spring.ai.openai.chat.options.max-tokens`(기본 8000, `LLM_MAX_TOKENS`와 별개 기본값)를 읽던 중복을 발견해 `props.llmSafe().maxTokens()`(6000) 공유로 통일, 죽은 `application.properties` 라인 제거. **동작 변경**: 대화 히스토리 예산 6000→4500자, MD 교정 섹션 크기 3750→2750자로 기본값이 줄어듦(과거 분량을 유지하려면 `LLM_MAX_TOKENS` 상향).
+**동작 변경(주의)**: `MemoryService`·`MarkdownCorrectionService`가 읽던 죽은 `spring.ai.openai.chat.options.max-tokens`(기본 8000)를 `props.llmSafe().maxTokens()`(6000)로 통일하면서 **대화 히스토리 예산 6000→4500자, MD 교정 섹션 크기 3750→2750자**로 기본값이 줄었다. 과거 분량을 유지하려면 `LLM_MAX_TOKENS`를 올려야 한다.
 
 ---
 
@@ -304,56 +307,94 @@ no-auth 기본 배포에서 `/documents` 쓰기와 `/admin/**`이 로그인 없�
 - **개선안**: `/admin/**` 전체를 `hasRole("ADMIN")`으로 게이트. no-auth 모드는 `NoAuthAutoLoginFilter`가 `/admin` 요청을 첫 ADMIN으로 자동 인증하므로 무영향. 단, `AdminController`/`AdminService` 테스트에 비관리자 403 케이스 추가 필요.
 - **완료 기준**: 인증 모드에서 비-ADMIN 사용자의 `/admin/**` 접근이 403. no-auth 모드 관리자 자동 인증 회귀 0.
 
-**6.19.3 Rate limit — `X-Forwarded-For` 무검증 신뢰 (per-IP 제한 우회)** ✅ **완료** (§6.22와 함께 선행 처리)
-- **현재 코드**: ~~`RateLimitFilter.clientKey()`가 익명 요청에서 `X-Forwarded-For`의 첫 값을 무조건 클라이언트 IP로 사용~~ → `ClientIpResolver`(신규)로 일원화. `app.trust-forwarded-for`(기본 `false`) 옵트인일 때만 XFF를 신뢰하고, 아니면 `req.getRemoteAddr()`만 사용한다.
-- **당초 계획과의 차이**: 프로퍼티명을 `app.rate-limit.trust-forwarded-for`가 아니라 **최상위 `app.trust-forwarded-for`**로 뒀다 — §6.22(방문자 식별)가 같은 판정을 필요로 하면서 속도 제한 전용 관심사가 아니게 됐기 때문. 두 소비자가 같은 `ClientIpResolver` 한 곳을 쓴다.
-- **우선순위 승격 사유**: 원래 "멀티유저 활성화 시 후속"이었으나, §6.22에서 IP가 **식별자**가 되는 순간 XFF 위조는 속도 제한 우회를 넘어 **남의 대화 목록 열람**이 된다. no-auth 단일 배포에서도 선행 필수로 올라갔다.
-- **완료 기준 충족**: 프록시 없는 배포에서 XFF 조작이 무시됨(`RateLimitFilterTest.x_forwarded_for_ignored_by_default`, `GuestIdentityResolverTest.forgedForwardedForCannotImpersonate`). 프록시 배포는 `TRUST_FORWARDED_FOR=true`로 실제 클라이언트 IP 인식(`x_forwarded_for_used_when_trusted`, `behindProxySplitsByForwardedFor`).
+**6.19.3 Rate limit — `X-Forwarded-For` 무검증 신뢰** ✅ **완료** (§6.22와 함께 선행 처리)
+- XFF 판정을 `ClientIpResolver`(신규) 한 곳으로 일원화하고 **최상위** `app.trust-forwarded-for`(기본 `false`) 옵트인일 때만 신뢰. 프로퍼티를 rate-limit 하위가 아니라 최상위에 둔 이유는 §6.22(방문자 식별)가 같은 판정을 쓰기 때문 — 두 소비자가 한 곳을 공유한다.
+- **승격 사유(기록용)**: 원래 멀티유저 후속이었으나, §6.22에서 IP가 **식별자**가 되는 순간 XFF 위조가 속도 제한 우회를 넘어 **남의 대화 목록 열람**이 되어 no-auth 배포에서도 선행 필수가 됐다.
+- ⚠️ **프록시 뒤 배포는 `TRUST_FORWARDED_FOR=true`가 필수** — 끄면 전 방문자가 프록시 주소 하나로 합쳐진다.
 
 ---
 
 ### 6.22 접속자별 채팅 개인화 (no-auth) ✅ 완료
 
-**배경**: no-auth 배포에서 모든 방문자가 고정 게스트 id 하나를 공유해 사이드바 스레드 목록·대화 이력이 전부 섞여 보였다.
+no-auth 배포에서 모든 방문자가 고정 게스트 id 하나를 공유해 스레드 목록·대화 이력이 섞이던 문제를, `NoAuthAutoLoginFilter`가 주입하는 게스트 principal의 id **한 곳만** 방문자별로 파생해 해결(저장 계층은 Step 1.4에서 이미 `user_id` 축으로 격리돼 있었고 상수를 먹고 있었을 뿐 → 저장·서비스 계층 변경 0). `app.auth.guest-identity` = `shared`(기본, 회귀 0)/`ip`/`cookie`/`hybrid`(권장), id는 `guest-<12 hex>` = HMAC-SHA256(`app_secret` 테이블의 영속 시크릿, 방문자 키). 메커니즘 상세는 CLAUDE.md `GuestIdentityResolver` 항목.
 
-**설계**: 저장 계층은 이미 Phase 1 Step 1.4에서 `user_id` 축으로 격리돼 있었고(`thread_meta`/`conversation_turns`/`curated_qa`, Repository 시그니처가 `(userId, …)` 강제) **상수를 먹고 있었을 뿐**이다. 따라서 `NoAuthAutoLoginFilter`가 주입하는 게스트 principal의 id 한 곳만 방문자별로 파생하면 저장·서비스 계층 변경 0으로 개인화된다.
-
-- `app.auth.guest-identity` = `shared`(기본, 회귀 0) / `ip` / `cookie` / `hybrid`(권장) — `GuestIdentityResolver`
-- id 형식 `guest-<12 hex>` = HMAC-SHA256(영속 시크릿, 방문자 키). 원문 IP 미저장, 접두사로 후속 정리·이관 대상 식별 가능
-- 시크릿은 `app_secret` 테이블(신규, 런타임 멱등 DDL)에 영속 — 부팅마다 랜덤이면 재기동 시 전원 이력이 고아가 됨
+**유지해야 할 사실**
+- 인증을 켜면 `GuestIdentityResolver`가 `@ConditionalOnProperty(app.auth.enabled=false)`로 컨텍스트에서 사라진다 — 파생 게스트 id와 실제 로그인 id가 동시에 살아 있는 경로가 없다. 전환 시 기존 게스트 스레드는 `guest-%` 접두사로 일괄 삭제하거나 실계정에 귀속 가능
 - 문서 저장은 공유 유지(`DocRegistry.SHARED`) — 개인화 대상은 채팅 스레드·이력·좋아요 소유권뿐
-
-**멀티유저 전환 정합성**: `GuestIdentityResolver`는 `NoAuthAutoLoginFilter`와 동일한 `@ConditionalOnProperty(app.auth.enabled=false)`라 인증을 켜면 컨텍스트에서 통째로 사라진다 — 파생 게스트 id와 실제 로그인 id가 동시에 살아 있는 경로가 없다. §3.4 Row-level 멀티테넌시 모델과 같은 축을 재사용하므로 모델 변경도 없다. 전환 시 기존 게스트 스레드는 `guest-%` 접두사로 일괄 삭제하거나 실계정에 귀속시킬 수 있다.
-
-**부수 효과**: §6.20(사용자별 토큰 쿼터)의 (A)안(`conversation_turns` 기반 집계)이 no-auth 배포에서도 의미를 갖게 됐다(기존엔 전원 동일 id라 무의미). 큐레이션 Q&A의 "본인만 편집"(`source_user_id`)도 비로소 실제로 동작한다.
-
-**주의**: 이 설정을 켜기 전 쌓인 스레드는 예전 공용 게스트 id에 묶여 조회되지 않는다(삭제되지는 않으며 `shared`로 되돌리면 다시 보임). 채택 시 운영자에게 고지 필요 — OPERATOR_MANUAL §9.4.3.
+- 부수 효과: §6.20 (A)안(`conversation_turns` 기반 집계)이 no-auth에서도 의미를 갖게 됐고, 큐레이션 "본인만 편집"(`source_user_id`)이 비로소 실동작
+- ⚠️ 이 설정을 켜기 전 쌓인 스레드는 옛 공용 id에 묶여 조회되지 않는다(삭제는 아니며 `shared`로 되돌리면 복귀). 채택 시 운영자 고지 — OPERATOR_MANUAL §9.4.3
 
 ---
 
 ### 6.23 청크 변경 시 답변 재사용 무효화 + 대화 기록 표시 ✅ 완료
 
-**배경**: 질문 재사용(`/api/v1/questions/reuse`)은 과거 턴의 답변을 LLM 호출 없이 그대로 내주는데, 그 답변의 근거였던 청크가 그 사이 삭제·수정되면 **현재 문서와 다른 내용을 사실처럼 재사용**하게 된다. 두 가지가 필요했다 — ① 그런 답변의 재사용 차단, ② 이미 쌓인 대화 기록에서 그 사실을 읽는 사람에게 표시.
+답변 재사용(`/api/v1/questions/reuse`)이 근거 청크가 그 사이 삭제·수정된 답변을 사실처럼 되돌려주던 문제를 **스냅샷 대조**로 해결 — 턴 저장 시 `(chunk_id, sha256(chunk_fts.content), answer_share)`를 `turn_source_ref`에 남기고 재사용 직전 대조하며, 삭제/재인덱싱 경로는 별도로 즉시 무효화 표시를 남겨 이중으로 막는다. 대화 기록에는 `SourceRef.staleBadge()` 한 곳이 정한 규칙으로 **삭제됨/수정됨** 배지를 띄운다. 메커니즘·테이블·배지 규칙 상세는 CLAUDE.md의 `QuestionReuseService`/`QuestionReuseRepository`/`SourceRef` 항목.
 
-**설계 — 스냅샷 대조**: 턴 저장 시 `QuestionReuseService.recordTurnSources()`가 검색된 청크의 `(chunk_id, sha256(chunk_fts.content), answer_share)`를 `turn_source_ref`에 스냅샷하고, 재사용 직전 `validateTurn()`이 현재 해시와 대조한다. 삭제/재인덱싱 경로는 별도로 즉시 무효화 표시를 남겨, 해시 대조가 놓칠 수 있는 경우까지 이중으로 막는다.
+**유지해야 할 결정**
+- **검증 범위 = 응답 지분(`answer_share > 0`)이 있는 청크만.** 한 글자도 반영 안 된 청크의 수정으로 멀쩡한 답변을 폐기하면 문서를 손볼 때마다 재사용이 통째로 무력화된다. 단 지분을 모르면(구 데이터, 귀속 `Method.NONE`) 전체를 검증한다 — **차단의 폴백은 항상 엄격한 쪽**
+- **의도한 비대칭**: 구 데이터는 "배지 없이 재사용만 막히는" 상태가 된다. 차단의 폴백은 안전한 쪽, 표시의 폴백은 조용한 쪽
+- **`updateChunk()`가 유일한 해시 사각지대** — 재임베딩 없이 저장 텍스트만 고쳐 `chunk_fts`를 건드리지 않으므로 원문이 바뀌어도 해시가 그대로다. 명시적 통지(`invalidateChunk`)로만 잡힌다. **청크를 바꾸는 새 경로를 추가하면 반드시 통지를 함께 붙일 것**
 
-- **검증 범위 = 응답 지분이 있는 청크만**: topK개가 검색돼도 답변을 실제로 떠받친 건 보통 두세 개다(§2단계 `AnswerAttribution`). 한 글자도 반영되지 않은 청크가 손질됐다는 이유로 멀쩡한 답변을 폐기하면, 문서를 한 번 손볼 때마다 재사용 기능이 통째로 무력화된다. `turn_source_ref.answer_share`(방어적 `ALTER TABLE`)에 기록해 `validateTurn()`의 대상을 좁혔다. 행 자체는 검색된 청크 **전부**에 남긴다 — 대화 복원 시 출처 배지가 그대로 나와야 하므로.
-- **지분을 모르면 좁히지 않는다**: 컬럼 추가 이전 기록, 귀속이 `Method.NONE`으로 끝난 턴은 예전처럼 전체 출처를 검증한다. 차단의 폴백은 항상 엄격한 쪽이어야 한다.
-- **`updateChunk()` 구멍 차단**: 텍스트만 편집하는 경로는 재임베딩을 하지 않아 `chunk_fts`를 건드리지 않고, 해시는 그 테이블에서 계산되므로 **원문이 바뀌었는데 해시는 그대로**였다 — 재인덱싱 전까지 옛 원문 기준 답변이 계속 재사용되던 유일한 경로. 명시적 통지(`invalidateChunk`)로 막았다.
+---
 
-**설계 — 표시**: `turn_source_ref.status`를 `active`/`deleted`/`modified`로 나누고 `invalidated_at`을 함께 기록(무효화 시점에만 알 수 있고, 안 남기면 사후 복구 불가). 표시 규칙은 `SourceRef.staleBadge()` 한 곳에만 둔다 — 템플릿에 조건을 풀어 쓰면 경로마다 규칙이 갈라진다.
+### 6.24 응답 모드 재설계 — S/N/C (L 제거 · 모드별 전용 시스템 프롬프트) ✅ 완료 2026-08-24 — 설계 확정 2026-08-22 (분량 지침·`/settings` 배선 보강 2026-08-23, 완료 후 보정 2026-08-25)
 
-| 상태 | 응답 지분 | 배지 |
-|---|---|---|
-| `deleted` | 무관 | **삭제됨** — 근거로 쓰였든 아니든 클릭해도 원문이 없다 |
-| `modified` | > 0 | **수정됨** |
-| `modified` | 0 / 미측정 | 없음 — 전부 표시하면 과거 대화가 배지로 뒤덮여 정작 중요한 경고가 묻힌다 |
+길이 축(S/M/L)에 "문서를 **재료로** 코드·설정을 생성"이라는 **다른 축**(근거 엄격도)을 얹으려다, 기존 축부터 검토해 **M과 L이 구분되지 않음**을 확인하고 재설계했다. M/L이 같았던 이유는 튜닝이 아니라 구조다 — 채팅의 유일한 전송 경로인 스트리밍에는 `maxTokens`가 붙지 않고, `RetrievalService`가 모드를 몰라 두 모드의 재료(topK)가 동일하며, 남은 차이인 "약 N자" 문구는 모델을 움직이지 못했다(실측 M 3,047자 / L 3,187자, **둘 다 M의 목표 5,000자 미달**). 그래서 L 제거·M→N 개명 후, 모드마다 **시스템 프롬프트를 통째로** 주고(공용 프롬프트를 사용자 메시지로 뒤집던 층은 삭제) 응용 모드 **C**를 신설했다. Phase 0(`0-a`~`0-e`) · 1(`1-a`~`1-d`) · 2(`2-a`~`2-d`) · 3(`3-a`~`3-c`) · 4(`4-a`·`4-b`) 완료, `4-c`만 미착수(아래). 모드별 동작 명세는 CLAUDE.md의 Response mode 항목과 PIPELINE §3.1.
 
-`findSourcePreviewRows()`의 `status='active'` 필터를 제거한 것이 표시의 실제 관건이었다 — 그 필터 때문에 무효화된 출처는 배지가 아니라 **출처 자체가 히스토리에서 조용히 사라져** "원래 없었던 것"처럼 보이고 있었다. `staleStatus`는 `retrieval_metrics` blob에 저장하지 않고 대화를 열 때마다 새로 계산한다(굳혀두면 그 뒤 삭제된 청크를 영원히 정상으로 표시).
+**유지해야 할 결정**
+- **상한(cap)과 목표(target)는 다르게 작동한다.** 짧은 출력에 건 상한은 모델이 스스로 멈추는 지점보다 **앞**이라 구속력이 있고, 긴 출력에 건 목표는 그 **뒤**라 아무 일도 하지 않는다. 그래서 숫자를 말하는 건 S뿐이고 N·C는 "무엇을 더 다룰지"를 지시한다. 긴 답변 수요가 재발해도 레버는 숫자가 아니라 섹션별 분할 생성(호출 3배) 또는 문서 내보내기다
+- **S의 숫자는 모드가 아니라 경로별이다** — RAG `prompt.answer.system.s`는 1,000자, Direct `prompt.direct.system.s`는 1,500자(인용할 발췌가 없어 스스로 풀어 써야 한다). 고정해야 할 불변식은 숫자 자체가 아니라 **한/영 번들이 같은 숫자를 말하는 것**이며(언어에 따라 답변 길이가 달라진 사고가 실제로 났다) `ResponseModeSystemPromptTest`가 이를 잡는다
+- **`maxTokens()`는 폭주 방지 안전판이지 분량 통제 수단이 아니다.** `min(configured, …)` 클램프로 설정 상한을 넘지 않게 하되(구 L의 잠복 버그), 비율항은 유지한다(제거하면 16,000 환경에서 N이 6,400→5,000으로 회귀). 어느 항이 이겼는지는 `/settings` 응답 예산 행이 보여준다. 프롬프트 상한보다 **넉넉히 위**여야 하므로 S의 프롬프트 상한을 올리면 `minChars`도 함께 올린다. S 가드는 **구조만** 본다 — 글자 수로 자르는 로직을 넣지 말 것
+- **C의 오염 방지 3건이 공개의 전제였다**(다크 런치 이유). 특히 큐레이션 제외(`allowsCuration()`)가 **가장 위험한 단일 지점** — C 답변이 `curated_qa`에 들어가면 가중 RRF 축으로 다시 검색돼 모델이 지어낸 코드가 다음 턴의 "문서"가 되고, 되돌리려면 벡터를 찾아 지워야 한다. 재사용 제외(`allowsReuse()`)와 펜스 절단 복구가 나머지 둘
+- **C는 검증을 끄지 않고 바꿔 낀다.** `grounded`는 창의 답변에서 정의상 거짓이라 그대로 두면 재시도로 정상 턴의 3배를 태우고, 통째로 끄면 API 발명이 무방비가 된다. 같은 호출이 이미 답변과 발췌를 들고 있어 **추가 왕복 0회**로 `apiGrounded`/`inventedSymbols`를 묻는다. 배지는 초록 `검증됨`이 아니라 파랑 `생성` — **다른 질문을 통과한 것**이므로 같은 배지를 쓰면 독자가 후자를 전자로 읽는다
+- **분기는 값 비교가 아니라 성질 질의로**(`ResponseModeBranchConventionTest`). 이 그물은 **문자열 안을 못 본다** — 3-b의 제외 규칙이 SQL 리터럴 `<> 'S'`로 두 쿼리에 박혀 있었고, 이제 제외 목록을 enum에서 만들어 공유한다. **허용(IN)이 아니라 제외(NOT IN)** 여야 `parse()`의 관대함과 같은 방향으로 떨어진다
 
-**의도한 비대칭**: 지분이 기록되지 않은 구 데이터는 **배지 없이 재사용만 막히는** 상태가 된다. 차단의 폴백은 안전한 쪽, 표시의 폴백은 조용한 쪽이어야 하기 때문. 이 변경 이전의 `inactive` 행은 삭제/수정 구분이 없어 `modified`로 취급된다(되살릴 데이터가 없음).
+**계획이 틀렸던 지점 (같은 실수 방지)**
+- **서버 가드 위치**: `ChatController.normalizeResponseMode()`는 라디오→폼 매핑만 하고 **SSE 경로를 지나가지 않는다**. 채팅의 유일한 전송 경로가 스트리밍이므로 거기 두면 아무것도 막지 못한다 → 두 진입점 값 객체(`ChatRequest` 컴팩트 생성자 · `ChatForm.responseModeOrDefault()`)로 옮겼다
+- **"히스토리"가 히스토리가 아니었다**: `message-assistant.html`은 no-JS 폴백이고 새로고침 후 기록은 `chat.html`의 자체 루프다. 그 루프는 검증 배지를 **아예 렌더하지 않았다**(저장이 없어서) — 즉 "새로고침 전후 동일" 기준은 S/N에 대해서도 이미 거짓이었다. 검증 결과를 저장하고, **렌더러가 셋**(HTMX 폴백·기록 루프·스트리밍 JS)이라 배지 규칙을 `VerificationSnapshot` 한 곳으로 모았다
+- **3-c의 절반이 틀렸다**: 절단은 뒤에서 덜어낼 뿐이라 없던 줄 중간 펜스를 만들 수 없다 — 실제 결함은 홀수 펜스 하나뿐이었다. 처음 쓴 테스트 2개가 이미 결함 있는 입력을 먹여 통과해 버렸다 → **새 테스트는 반드시 수정 전 코드에서 실패시켜 볼 것**
+- **순서 제약**: 0-c(스타일 지시문 층 제거)는 1-a/1-b와 **한 커밋**이어야 한다 — 그 층이 S/N의 분량 지시를 나르는 유일한 통로라, 대체 프롬프트 없이 걷어내면 두 모드가 공용 5섹션 형식으로 붕괴한다
 
-**검증**: 전체 1533건 통과. 신규 `SourceRefStaleBadgeTest`(배지 규칙 + 템플릿이 쓰는 SpEL 프로퍼티 접근 고정 — `staleBadge()`는 레코드 컴포넌트가 아닌 일반 메서드라 접근자 규칙이 바뀌면 컴파일·테스트는 통과한 채 화면에서만 조용히 사라진다), `QuestionReuseServiceTest` 3건 추가(지분 스코프·구 데이터 폴백).
+**완료 후 보정 (2026-08-25)**: ① 검증 응답을 읽지 못하면 `grounded=true`로 위조하던 폴백을 **판정 없음**(`grounded=null`, 배지 없음·재시도 없음)으로 교체 — 검증한 적 없는 답변에 `검증됨`/`생성` 배지가 붙고 `sufficient=false` 재시도까지 사라지던 경로였다(운영 진단은 OPERATOR_MANUAL §8). ② 중지 버튼이 화면만 멈추고 LLM 스트림은 계속 소비하던 것을 실제 취소로 수정(`CancellableTokenStream`). ③ Direct S 상한 1,000→1,500자.
+
+**미착수 — 4-c (검색 부스트 상향)**: `retrievalBoost()`는 `RetrievalService`에 배선돼 있으나 **모든 모드에서 0**이고 `app.search-creative-top-k-boost` 외부화도 하지 않았다. **노브와 `MAX_EVAL_EXCERPT_CHARS`(20,000) 상향은 한 변경에 함께 들어가야 한다** — 지금 `/settings`에 노브만 내면 부스트를 1만 올려도 상한을 넘어 하위 순위 문서가 검증 창에서 빠지고, `AnswerService`가 `.limit(5)`를 없애며 고쳤던 오탐(문서 #10~12에만 있는 값을 정확히 인용한 답변이 `grounded=false`)이 되살아난다. 부스트 근거 자체도 약하다 — 실사용 topK가 이미 10~12라 +4면 ~40,000토큰으로 32K 모델에서 앞부분이 **조용히** 잘린다(창의 모드에서 환각 금지 조항이 잘리는 것이 최악).
+
+**남은 이슈**: (a) `/llm-usage` 토큰 과소 보고 — `ResponseMode`는 "한글 1토큰≈1글자", `LlmRouter.approxTokens()`는 chars/4로 **같은 코드베이스에 4배 차이 나는 두 가정이 공존**한다(스트리밍 한국어 사용량이 ~4배 적게 기록됨). (b) C 턴은 `AnswerAttribution` 지분이 0에 수렴해 `/admin` 진단 패널의 "답변에 실제 쓰인 출처 수"가 항상 0으로 보인다 — 창의 eval이 `usedDocs`를 묻지 않으므로 구조적이며, "해당 없음" 표기는 `/admin` 쪽 작업이라 범위 밖. (c) 긴 답변 수요는 없는 것으로 확인(운영자: "M 수준으로 충분").
+---
+
+### 6.25 관리자 — 전체 대화 목록 조회·삭제 + 검색 진단 연결 ✅ 완료 2026-08-28
+
+관리자가 `/admin`에서 **전 사용자의 대화 목록**(제목·최종 활동·턴 수·재사용 수·피드백)을 보고, 대화를 삭제하고, 그 대화의 검색 진단 수치로 바로 내려갈 수 있게 했다. §7.3(관리자 페이지 확장)의 "대화 관리" 부분을 선반영한 것 — 남은 사용자 계정 관리·감사 로그 뷰는 §7.3에 그대로 있다.
+
+**새 스키마 0개.** 요구 데이터가 전부 `thread_meta`/`conversation_turns`에 이미 있었고, 빠진 것은 그것을 전 사용자 단위로 묶어 읽는 계층과 화면뿐이었다. 구성: `ThreadAdminRepository`/`ThreadAdminService`(조회·삭제), `fragments/admin-threads.html`(패널·드릴다운), `fragments/admin-source-table.html`(출처 표 — 진단 패널과 공유), `AdminController`의 `/admin/threads*` 라우트. 동작 명세는 CLAUDE.md 해당 항목이 단일 출처다.
+
+**선행 버그 픽스(Step 1, 단독 가치)**: 대화를 통째로 지울 때 좋아요로 승격된 `curated_qa` 행과 벡터가 살아남아 검색에 계속 기여하고 있었다. 턴 단위 `deleteTurn`은 `onUnlike()`로 막고 있었지만 `deleteThread`에는 그 장치가 아예 없었다. `CuratedQaService.onThreadDeleted()`를 만들어 **사용자 경로와 관리자 경로 양쪽**이 호출한다.
+
+#### 지켜야 할 결정·함정
+
+- **재사용 카운터는 두 개이고 방향이 반대다.** `reusedIn`(이 대화가 과거 답변을 재사용한 횟수) vs `reusedOut`(이 대화의 답변이 재사용된 횟수). 삭제 버튼 옆에 있어야 하는 건 후자다 — 지우면 그 턴들이 전부 `"참조 원문 삭제됨"` 폴백이 된다. `reusedOut`은 **조인이 아니라 상관 서브쿼리**여야 한다(두 번 조인하면 그룹 행이 곱해져 다른 카운터가 전부 부풀어 오른다).
+- **시각은 두 계열로 저장된다.** `conversation_turns.asked_at`은 UTC(`Instant.now()`), `thread_meta.updated_at`은 시스템 로컬(`LocalDateTime.now()`) — 실데이터로 정확히 9시간 어긋남을 확인했고, 진단 패널은 그때까지 UTC를 로컬인 양 찍고 있었다. 표시만 `KstDateFormat.utcStampToKst()`로 통일했다. `toKst()`와 합치지 않은 이유는 **입력 형식이 달라서**다(ISO instant vs 존 없는 DB 스탬프) — 합치면 "존 없는 값은 UTC"라는 규칙이 형식 추측에 묻힌다. **저장 존 통일은 하지 않았다**(아래 열린 항목).
+- **삭제는 thread id 만 받는다.** `thread_meta.thread_id`가 PK라 소유자는 서버가 찾는다 — `userId`를 받으면 "누구 대화를 지울지 지정하는 파라미터"를 노출하는 셈이다. 확인 대화상자의 숫자도 렌더된 행이 아니라 **클릭 시점 재조회**(`delete-preview`)에서 온다: 패널이 몇 분 전 것일 수 있고, 낡은 숫자로 되돌릴 수 없는 작업을 승인하게 두는 것이 그 절차가 막으려는 실패다. **벌크 삭제는 없다.**
+- **큐레이션 회수에서 제안(manual) 행은 `source_turn_id IS NOT NULL`로 배제한다.** 지금 수동 행이 `source_thread_id=''`라는 사실에 기대면, 그 값이 나중에 진짜 id로 바뀌는 순간 대화 삭제가 제안의 일부 청크를 조용히 내린다(제안은 전부/전무 단위). 실데이터 삭제 검증에서 like 행은 `inactive`+벡터 제거, manual 행은 `active` 유지로 이 가드가 실제로 하는 일을 확인했다.
+- **답변 원문은 목록과 다른 쿼리로만 나간다.** 목록의 `TurnRow`에는 `answer` 필드가 아예 없다 — 감추는 것을 템플릿이 아니라 구조로 강제해야 나중에 템플릿을 고치다 유출시킬 수 없다. 목록 쿼리에 컬럼을 더했다면 **목록을 여는 것 자체가 기록 없는 열람**이 됐을 것이다. 열람은 `admin.thread.read` 감사를 남기고, **내용이 실제로 나갈 때만** 남긴다(없는 턴은 404이고 열람이 아니다). 오프캔버스는 마크다운 렌더 없이 `<pre>`+`textContent`.
+- **`/api/v1/**` 아래 두면 안 된다** — CSRF 면제 + management-only에서 게스트 개방이라 전 사용자 대화 제목이 그대로 열린다. `/ui/threads`(사용자 사이드바)와도 다른 엔드포인트다.
+- **크로스 유저 조회를 `ThreadMetaRepository`에 섞지 말 것** — 그 클래스는 모든 메서드가 `userId` 스코프라는 게 불변식이다(`findRecentRetrievalMetrics`가 "Deliberately not user-scoped"를 주석으로 못 박은 선례를 따라 별도 클래스).
+- **진단 패널의 사용자/대화 필터는 배타다**(한 대화는 소유자가 한 명). 서버가 `threadId` 우선으로 `userId`를 떨구고 **클라이언트도 같은 규칙**을 갖는다 — 한쪽만 두면 URL을 직접 친 경우와 버튼으로 들어온 경우가 갈린다. 목록을 거르면 **개수도 같은 필터로** 걸러야 한다(페이지네이션이 크기 기반이라 개수만 어긋나도 아무것도 안 깨지고, 그래서 발견이 늦는다).
+- **C 턴의 "사용/검색"은 `해당 없음`이다** — 창의 평가기가 `usedDocs`를 묻지 않아 지분이 구조적으로 0이고, `0/8`로 그리면 영원히 쫓게 될 검색 버그로 읽힌다(§6.24 남은 이슈 b를 여기서 해소).
+- **레이아웃 함정**: 다른 열이 전부 고정 폭이면 그 합계가 좁은 창의 테이블 폭을 다 먹고, 유연 열이 `td { max-width:0 }`(말줄임 관용구) 때문에 몇 px로 눌린다(제목이 한 글자만 남았다). `th`의 `min-width`로는 못 고치고 **테이블 자체에 `min-width`**를 줘 `.table-responsive`가 넘침을 흡수하게 해야 한다.
+- **`ResponseModeBranchConventionTest`는 텍스트 스캔이라 주석까지 본다** — "이렇게 쓰지 말라"고 설명하려고 javadoc에 적은 금지 형태가 그대로 빌드를 깼다. 가드를 완화하지 말고 문구를 고칠 것.
+- **고아 턴 카운트는 기능이 아니라 정합성 표시**(`/admin/registry/reconcile-chunks` 계열). 실배포에서 "요약의 재사용 건수는 2인데 모든 행이 0"을 설명해 준 값이다 — 두 재사용 턴이 전부 `thread_meta` 없는 대화에 속해 있었다. 그래서 진단 목록 조인도 **LEFT** 여야 한다(INNER면 목록에서만 빠지고 배지는 그대로라 조용히 어긋난다).
+
+#### 검증 방법 (재현용)
+
+실데이터 사본으로 앱을 띄워 확인했다. 그 과정에서 걸린 환경 함정 둘: `spring-boot:run`은 `target/classes`의 템플릿 **사본**을 쓰고 Thymeleaf가 캐시하므로 프래그먼트 수정은 `mvn compile`+재시작 없이 반영되지 않는다. 그리고 `-DDATA_DIR`에 git-bash 경로(`/c/Users/...`)를 넘기면 Java가 `C:\c\Users\...`로 해석해 **엉뚱한 위치에 빈 DB를 만든다**(화면에는 "데이터 없음"으로만 보인다).
+
+#### 남은 열린 항목 (§6.25 범위 밖)
+
+- **`thread_meta.updated_at`의 저장 존 통일** — 지금은 시스템 로컬이라 서버가 KST가 아닌 곳에서 돌면 두 시각 열이 다시 갈린다. 어느 존으로 쓰였는지 사후에 알 수 없어 표시 계층에서 고칠 수 없다.
+- `curated_qa.source_thread_id` 인덱스 — 대화 목록에 큐레이션 수 열을 넣고 싶어질 때 필요(지금은 삭제 확인에서만 1회 조회).
+- 전사 트랜스크립트 검색/뷰어 — 필요해지면 §7.3.
+- **고아 `turn_source_ref`** — 턴이 사라졌는데 남은 출처 스냅샷 행이 실배포에 54건 있다(읽는 경로가 전부 `conversation_turns`에서 출발해 무해하지만, 누적된다). 정리 스크립트나 `reconcile` 확장이 필요하면 별도 항목.
 
 ---
 
@@ -382,11 +423,11 @@ no-auth 기본 배포에서 `/documents` 쓰기와 `/admin/**`이 로그인 없�
 
 ### 6.21 소형(경량) LLM 분리 — 태스크별 모델 라우팅 + 멀티 LLM 처리량 확장 ✅ 완료
 
-추론이 필요 없는 고빈도 백그라운드 호출(키워드+맥락 추출·대화 요약·제목 생성·MultiQuery 확장)을 신규 `TaskType.MICRO_TEXT`(`LIGHT_TEXT`/`BOTH`에 폴백)로 분리해 500MB급 소형 로컬 모델로 오프로딩 — 분류·직답은 품질 유지를 위해 큰 모델에 남김. 임베딩은 `LoadBalancingEmbeddingModel`(다중 엔드포인트 least-in-flight)+서브배치 병렬화로 처리량 확장, 대화 응답 쪽 로드밸런싱은 §6.12 재사용. **전부 opt-in(소형/추가 엔드포인트 미등록 시 기존 동작 그대로) → 회귀 0**. 설정·런북: [LLM_ROUTING.md §9](LLM_ROUTING.md) · [OPERATOR_MANUAL §3.2·§5.4](OPERATOR_MANUAL.md). 테스트: `LlmProviderTest`·`LoadBalancingEmbeddingModelTest` 신규 + 백그라운드 서비스 테스트 3건 갱신.
+추론이 필요 없는 고빈도 백그라운드 호출(키워드+맥락 추출·대화 요약·제목 생성·MultiQuery 확장)을 신규 `TaskType.MICRO_TEXT`(`LIGHT_TEXT`/`BOTH`에 폴백)로 분리해 500MB급 소형 로컬 모델로 오프로딩 — 분류·직답은 품질 유지를 위해 큰 모델에 남김. 임베딩은 `LoadBalancingEmbeddingModel`(다중 엔드포인트 least-in-flight)+서브배치 병렬화로 처리량 확장, 대화 응답 쪽은 §6.12 재사용. **전부 opt-in(미등록 시 기존 동작 그대로) → 회귀 0**. 설정·런북: [LLM_ROUTING.md §9](LLM_ROUTING.md) · [OPERATOR_MANUAL §3.2·§5.4](OPERATOR_MANUAL.md).
 
-**실측 게이트 — 부분 검증으로 종료**: 라이브 듀얼티어(local-fast=Qwen3.5-0.8B/MICRO_TEXT + local=gemma-4-E4B/TEXT)로 §10.7.5 하네스 실행 — 색인된 문서(batch 골든셋 6건) 전부 recall@10=1.0으로 **소형 모델 라우팅이 검색 품질을 회귀시키지 않음을 확인**. 전체 baseline(0.962) 정식 대조는 현재 코퍼스에 arch/sample 문서가 미색인이라 보류(§6.21과 무관한 코퍼스 갭, 원인 상세는 git 이력 참조) — 재색인 후 `mvn test -Dtest=SearchQualityEvaluationTest -Dsearch-eval.enabled=true`로 언제든 재현 가능.
+**주의**: 임베딩 다중 엔드포인트는 **동일 모델·차원이어야 한다**(섞으면 인덱스 손상). 소형+대형 co-located 시 VRAM/RAM 합산 확인.
 
-**주의**: 소형+대형 동시 상주 VRAM/RAM은 500MB급이라 부담이 작지만 co-located면 합산 확인. 임베딩 다중 엔드포인트는 동일 모델·차원이어야 한다(섞으면 인덱스 손상). sqlite-vec 스트리밍 삽입은 §10.9.3 메모리 상한과 속도의 트레이드오프라 opt-in이다.
+**실측 게이트 — 부분 검증으로 종료**: 라이브 듀얼티어로 §10.7.5 하네스 실행 시 색인된 골든셋 6건 전부 recall@10=1.0 — 소형 모델 라우팅이 검색 품질을 회귀시키지 않음을 확인. 전체 baseline(0.962) 정식 대조는 코퍼스에 arch/sample 문서가 미색인이라 보류(§6.21과 무관한 코퍼스 갭) — 재색인 후 `mvn test -Dtest=SearchQualityEvaluationTest -Dsearch-eval.enabled=true`로 재현 가능.
 
 ---
 
@@ -411,6 +452,8 @@ Google/GitHub 제공자 등록. 가입 흐름은 **기존 폼 가입과 동등**
 4. Spring 프로파일 분리: `application-sqlite.properties` / `application-postgres.properties`
 
 ### 7.3 관리자 페이지 (부분 존재 → 확장)
+
+> **일부 선반영 → §6.25**: 이 절의 "사용자/운영 관리" 중 **대화 관리**(전 사용자 대화 목록 조회·삭제 + 검색 진단 연결)는 no-auth 단일 운영자에서도 값어치가 있어 Phase 3 §6.25로 분리해 먼저 진행한다. 여기 남는 것은 **사용자 계정 관리**(목록·잠금 해제·강제 로그아웃)와 감사 로그 뷰 — 전부 `auth.enabled=true`가 전제다.
 
 - `ROLE_ADMIN` 전용 경로 확장(현재 청크 관리 위주 → 사용자/운영 관리 추가). ※ DB `role` 값은 `ADMIN` 문자열, 인증은 `NoAuthAutoLoginFilter`가 no-auth 모드에서 첫 `ADMIN` 사용자로 자동 인증.
 - 사용자 목록·상태(잠금/활성), 전체 LLM 사용량(§6.5~6.7과 연계), 감사 로그(`data/audit/audit.log` NDJSON) 조회 뷰.
@@ -549,31 +592,15 @@ G1~G4 코드/문서 완료, G5(라우팅 계층의 외부 무선택)도 완료. 
 
 ### 10.10 좋아요 기반 큐레이션 Q&A 지식화 ✅ ①②③④ 전체 완료
 
-> Phase 7의 원래 17건(§10.1~10.9) 완료 **이후** 추가된 신규 설계다. 채팅 응답 중 **좋아요(LIKE)** 받은 답변을 (편집 가능한) 큐레이션 Q&A로 승격→별도 임베딩하고, 다음 검색부터 **가중 RRF 축**으로 활용해 반복·FAQ성 질문의 정확도를 높인다. §10.5에서 범위 제외한 "시맨틱 응답 캐시"의 **인간 검수·편집 가능 버전** — 답변을 그대로 반환(캐시)하는 대신 검색 축의 근거로 주입하므로 stale 위험·무효화 복잡도를 낮춘다.
+Phase 7의 원래 17건 완료 **이후** 추가된 설계. 좋아요(👍)한 답변을 `curated_qa`로 스냅샷 → 예약 네임스페이스 `"curated"`에 임베딩 → 검색 시 **가중 RRF 축**으로 융합 → 본인(채팅 인라인) 또는 관리자(`/admin` 카드)가 편집·삭제. §10.5에서 제외한 "시맨틱 응답 캐시"의 **인간 검수 가능 버전** — verbatim 반환이 아니라 검색 축의 근거로만 주입하므로 stale 위험·무효화 복잡도가 낮다. 신규 프로바이더 메서드 없이 기존 인프라(§10.1 임베딩≠저장, §10.8.5 `SEARCH_TEXT` 오버라이드, `/admin/chunks` 편집 패턴, 소유권 체크)를 재사용. 구현 상세는 CLAUDE.md `CuratedQaService`/`CuratedQaRepository` 항목, 운영은 [OPERATOR_MANUAL §6.7·§7.5](OPERATOR_MANUAL.md), UI는 [UI.md](UI.md).
 
-**요약**: 좋아요(👍)한 답변을 별도 스냅샷(`curated_qa`)으로 저장 → 예약 벡터스토어 네임스페이스 `"curated"`에 임베딩(질문 기준 매칭, 답변 말미 LLM 생성 "## 참고" 섹션은 임베딩에서만 제외) → 검색 시 가중 RRF 3번째 축으로 융합 → 본인(채팅 인라인, LIKE 상태에서만) 또는 관리자(`/admin` 카드, 전 사용자 대상)가 편집·삭제. 신규 스키마·프로바이더 메서드 없이 기존 인프라(§10.1 임베딩≠저장, §10.8.5 `SEARCH_TEXT` 오버라이드, `/admin/chunks` 편집 패턴, 기존 소유권 체크)를 재사용해 구현했다.
+**확정된 정책**
+- 가시성=전체 공유. 답변은 verbatim 반환이 아닌 **LLM 근거로 주입**(오답 증폭 방지, `/admin`에서 가중치·편집·삭제로 통제)
+- 편집 권한=본인 OR 관리자
+- **대화 삭제 시 큐레이션도 함께 회수**(§6.25에서 정책 변경) — 최초 정책은 반대였다("유지, 캐스케이드 안 함": 개인 대화 정리가 공유 검색 품질을 조용히 떨어뜨리는 것을 막기 위함). 바뀐 이유는 대화가 사라진 뒤에도 그 답변이 검색 근거로 남는 쪽이 더 혼란스럽고, 턴 단위 삭제(`deleteTurn`→`onUnlike`)는 처음부터 회수하고 있어 두 경로의 동작이 갈려 있었기 때문. 구현은 `CuratedQaService.onThreadDeleted()`이고 **사용자 경로와 관리자 경로가 함께** 호출한다. 승인된 청크 추가 제안(`origin='manual'`)은 대화 소속이 아니므로 제외된다. 열린 항목 (e)(프라이버시 트레이드오프)는 이 변경으로 해소됐다
+- **문서 삭제와는 연동 없음** — `conversation_turns`가 턴별 출처 문서를 저장하지 않아 구조적으로 불가(열린 항목 (b))
 
-**핵심 산출물**:
-
-| 단계 | 파일 | 요지 |
-|---|---|---|
-| ① 스냅샷 | `CuratedQaRepository`(신규) | `curated_qa` 테이블(memory.db) — 좋아요 시 upsert, `conversation_turns`와 독립 저장이라 thread 삭제에도 생존 |
-| ② 임베딩 | `CuratedQaService`(신규), `CuratedTextUtils`(신규) | `onLike()`/`onUnlike()` — 3초 디바운스 + 2-체크포인트 레이스 가드(즉시 취소 시 임베딩 API 호출 자체 생략, 호출 도중 취소 시 보정 삭제) |
-| ③ 검색 융합 | `RetrievalService.mergeRrf()` 7-arg 오버로드, `AppProperties`/`SettingsKeys`/`SettingsService` | 예약 version `"curated"` 축을 가중 RRF에 병합. `search.curated-qa-enabled`(기본 true)/`search.curated-qa-weight`(기본 1.5) — `/settings` 핫 수정 + `SEARCH_CURATED_QA_ENABLED`/`SEARCH_CURATED_QA_WEIGHT` 환경변수. `formatSource()`/`buildAnswerPrompt()`에 고정 라벨 분기 |
-| ④ 관리 UI | `OperationsController`/`AdminController`(수정) | 본인: 채팅 버블 편집 아이콘 → `GET`/`PATCH /ui/threads/{id}/turns/{id}/curated`(기존 소유권 체크 재사용). 관리자: `/admin` 큐레이션 카드 → `GET/POST/DELETE /admin/curated/{id}`(강제 삭제 가능). 두 경로 모두 `CuratedQaService.updateAnswer()` 공유(중복 로직 없음) |
-| ⑤ 임베딩 실패 대응 | `CuratedQaService.tryEmbedWithFallback()`, `CuratedTextUtils.extractCoreSections()`, `curated_qa.embed_status` 컬럼(신규) | 전체 질문+답변 임베딩이 실패(주로 임베딩 서버 입력 한도 초과)하면 답변의 핵심 섹션(상세 설명/예시·코드/설정·주의사항 — 요약·참고 제외, `**`/`__` 강조 마커 제거)만으로 1회 재시도. 그래도 실패하거나 애초에 이 RAG 5단 형식이 아닌 답변(Direct 모드 등)이면 `embed_status='failed'`로 기록 — 채팅 버블(본인)과 `/admin` 큐레이션 패널(관리자) 양쪽에 "임베딩 실패" 배지로 노출(다음 페이지 로드 시; 백그라운드 임베딩이라 실시간 알림은 불가) |
-
-**확정된 정책**:
-- 가시성=전체 공유, 답변은 verbatim 반환이 아닌 LLM 근거로 주입(오답 증폭 방지, `/admin`에서 가중치·편집·삭제로 통제)
-- 편집 권한=본인(소유권 체크 재사용) OR 관리자 — thread가 이미 userId로 격리돼 있어 채팅창 인라인 편집도 타인 지식 오염 위험 없음
-- **대화 삭제**: 큐레이션은 유지(캐스케이드 안 함, 개인 대화 정리가 공유 검색 품질을 조용히 떨어뜨리는 것을 방지) — 좋아요한 turn이 있는 대화를 지우려 하면 삭제 확인창에 이 사실을 안내
-- **문서 삭제**: 자동 캐스케이드/플래그 없음 — `conversation_turns`가 턴별 출처 문서를 저장하지 않아 연동 자체가 불가능(아래 열린 항목 (b))
-
-**검증**: 전체 테스트 스위트 957개 회귀 0. 로컬 LLM 미기동 환경 특성상 실브라우저 클릭 흐름(offcanvas 열림/저장/삭제)은 미검증 — Thymeleaf 렌더 자체는 `AdminControllerWebMvcTest`로 커버됨. 로컬 LLM 기동 후 1회 수동 확인 권장.
-
-**문서**: 사용자 가이드 [USER_MANUAL.md](USER_MANUAL.md), 운영 설정·동작 원리 [OPERATOR_MANUAL.md §6.7·§7.5](OPERATOR_MANUAL.md), UI 상세 [UI.md](UI.md).
-
-**열린 항목**: (a) 큐레이션 축 similarity threshold 별도화(후속 튜닝), (b) 문서 단위(doc_id) 인용 추적 + 삭제 시 자동 재검토 플래그 — `conversation_turns`가 턴별 출처 문서를 저장하지 않아 전체 스키마 확장 없이는 불가능, 위 "연쇄 삭제 정책" 참고, 실사용에서 stale 인용이 문제로 보고되면 착수, (c) BM25 축 편입 여부(정확도 실측 후), (d) 회귀 검증은 §10.7.5 골든셋(recall@10=0.962) 재측정으로, (e) thread 삭제 시 큐레이션 유지의 프라이버시 트레이드오프 — 공개 멀티테넌트 확장 시 "삭제 시 연쇄 삭제" 옵션 재검토.
+**열린 항목**: (a) 큐레이션 축 similarity threshold 별도화 · (b) doc_id 인용 추적 + 문서 삭제 시 재검토 플래그(스키마 확장 필요, stale 인용이 실사용에서 보고되면 착수) · (c) BM25 축 편입 여부(정확도 실측 후) · (d) 회귀 검증은 §10.7.5 골든셋(recall@10=0.962) 재측정 · ~~(e) thread 삭제 시 큐레이션 유지의 프라이버시 트레이드오프~~ — §6.25에서 회수로 정책을 바꿔 해소.
 
 ---
 
@@ -605,12 +632,7 @@ G1~G4 코드/문서 완료, G5(라우팅 계층의 외부 무선택)도 완료. 
 
 ### 배경 (현황 정정)
 
-**Chroma v2 API는 이미 적용된 상태다.** Spring AI 1.1.8의 `ChromaApi`는 `/api/v2/tenants/{tenant}/databases/{database}/collections…` 경로만 호출하며(디스어셈블로 확인), tenant/database 개념 자체가 v1 API에는 없다. 즉 이 앱은 **v1 전용 Chroma 서버(0.5.x 이하)에서는 동작하지 않는다** — "앞으로 v2로 올린다"가 아니라 "이미 v2만 쓴다"가 정확한 현황이다.
-
-남아 있던 v1 잔재는 애플리케이션 코드가 아니라 배포 설정이었다:
-
-- `docker-compose.yml`의 헬스체크가 `/api/v1/heartbeat` → 1.x 서버에서 404 → 컨테이너가 영영 `unhealthy` → `app`의 `depends_on: service_healthy`가 통과되지 않음. **→ `/api/v2/heartbeat`로 수정 완료.**
-- 이미지 태그가 `chromadb/chroma:latest` → 메이저 업그레이드에서 HTTP API가 바뀌는 전례가 있는 제품이라 무방비. **→ `chromadb/chroma:1.0.21` 고정 완료** (README 3곳의 `docker run`/`container run` 예시도 동일 태그로 통일).
+**Chroma v2 API는 이미 적용된 상태다.** Spring AI 1.1.8의 `ChromaApi`는 v2 경로만 호출하므로 이 앱은 **v1 전용 Chroma 서버(0.5.x 이하)에서는 동작하지 않는다** — "앞으로 v2로 올린다"가 아니라 "이미 v2만 쓴다"가 정확한 현황이다. 남아 있던 v1 잔재는 코드가 아니라 배포 설정이었고 둘 다 조치 완료: 헬스체크 경로 `/api/v1/heartbeat`→`/api/v2/heartbeat`(404로 컨테이너가 영영 `unhealthy`가 되어 `depends_on: service_healthy`가 통과되지 않던 문제), 이미지 태그 `:latest`→`1.0.21` 고정(README 예시 3곳 포함).
 
 ### 예정 작업
 

@@ -66,7 +66,7 @@ class DirectAnswerServiceTest {
         AppProperties props = mock(AppProperties.class);
         // llmSafe() supplies the Direct temperature (§6.18); a real record so directTemperature() works.
         when(props.llmSafe()).thenReturn(new AppProperties.LlmConfig(
-                List.of(), 2, 10, 180, "COST_FIRST", 0.6, 3, 20, 0.0, 0.1, 0.0, 6000, true));
+                List.of(), 2, 10, 180, "COST_FIRST", 0.6, 3, 20, 0.0, 0.1, 0.0, 0.7, 6000, true));
         service = new DirectAnswerService(llmRouter, messageSource, props);
     }
 
@@ -92,14 +92,16 @@ class DirectAnswerServiceTest {
     }
 
     @Test
-    @DisplayName("execute — directMode=true 는 prompt.direct.system 키 사용")
+    @DisplayName("execute — directMode=true 는 모드별 Direct 시스템 프롬프트 키를 쓴다 (§6.24 Step 1-b)")
     void execute_directMode_usesDirectSystemPromptKey() {
         when(llmRouter.executeGatedWithUsage(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), any()))
                 .thenReturn(new LlmRouter.LlmResult("답변", 0, 0));
 
-        service.execute(newState(true));
+        service.execute(newState(true).toBuilder().responseMode(ResponseMode.N).build());
+        verify(messageSource).getMessage(eq("prompt.direct.system.n"), any(), any(Locale.class));
 
-        verify(messageSource).getMessage(eq("prompt.direct.system"), any(), any(Locale.class));
+        service.execute(newState(true).toBuilder().responseMode(ResponseMode.S).build());
+        verify(messageSource).getMessage(eq("prompt.direct.system.s"), any(), any(Locale.class));
     }
 
     @Test
@@ -114,20 +116,21 @@ class DirectAnswerServiceTest {
     }
 
     @Test
-    @DisplayName("execute — directMode=true 는 응답 스타일 지침(모드별 글자수 목표)이 사용자 프롬프트에 포함된다")
-    void execute_directMode_includesResponseStyleInstructionWithCharTarget() {
+    @DisplayName("execute — 사용자 프롬프트에 스타일 지시문 층이 더는 없다 (§6.24 Step 0-c)")
+    void execute_directMode_noLongerAppendsStyleInstruction() {
         when(llmRouter.executeGatedWithUsage(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), any()))
                 .thenReturn(new LlmRouter.LlmResult("답변", 0, 0));
 
-        AgentState state = newState(true).toBuilder().responseMode(ResponseMode.M).build();
-        service.execute(state);
+        service.execute(newState(true).toBuilder().responseMode(ResponseMode.N).build());
 
-        // llmSafe().maxTokens()=6000 → M.maxTokens(6000)=max(2400,5000)=5000 (바닥값)
-        verify(messageSource).getMessage(eq("prompt.answer.style.m"), eq(new Object[]{5_000}), any(Locale.class));
+        // 답변의 성격은 이제 전적으로 시스템 프롬프트가 정한다 — 사용자 메시지로 시스템 프롬프트를
+        // 덮어쓰던 층 자체가 사라졌다.
+        verify(messageSource, never())
+                .getMessage(startsWith("prompt.answer.style"), any(), any(Locale.class));
     }
 
     @Test
-    @DisplayName("execute — directMode=false(meta)는 응답 스타일 지침을 넣지 않는다(2-3문장 고정 유지)")
+    @DisplayName("execute — meta 경로도 스타일 지침이 없다(2-3문장 고정 유지)")
     void execute_metaMode_neverIncludesResponseStyleInstruction() {
         when(llmRouter.executeGatedWithUsage(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), any()))
                 .thenReturn(new LlmRouter.LlmResult("답변", 0, 0));

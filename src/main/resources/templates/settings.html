@@ -10,6 +10,19 @@
 
 <section layout:fragment="content" class="container-fluid py-4 px-4">
 
+<style>
+    /* 설명형 툴팁 — 기본 200px 폭에서는 계산식 안내가 세로로 길게 찢어진다.
+       CSS 변수는 Bootstrap 5.3+ 경로, .tooltip-inner 규칙은 그 이전 버전용 폴백.
+       (admin.html 에 같은 정의가 있지만 그쪽은 페이지 로컬이라 공유되지 않는다.) */
+    .tooltip-wide { --bs-tooltip-max-width: 320px; }
+    .tooltip-wide .tooltip-inner {
+        max-width: 320px;
+        text-align: left;
+        line-height: 1.45;
+    }
+</style>
+
+
     <h5 class="fw-semibold mb-1">
         <i class="bi bi-sliders me-2"></i>
         <span th:text="#{settings.title}">Settings (LLM / RAG)</span>
@@ -74,6 +87,24 @@
     </div>
 
 </section>
+
+<!-- 툴팁 초기화. 네이티브 title 은 브라우저 기본 지연(~1.5s)이 있어 체감상 너무 늦다.
+     /admin/settings/update|reset 이 행을 hx-swap=outerHTML 로 갈아끼우므로 스왑 이후에도 다시
+     걸어야 한다 — 그때 옛 인스턴스를 dispose 하지 않으면 떠 있던 툴팁이 유령으로 남는다
+     (admin.html 의 같은 패턴). Thymeleaf 표현식을 쓰지 않으므로 th:inline 은 필요 없다. -->
+<script>
+    (function () {
+        function initTooltips(root) {
+            (root || document).querySelectorAll('[data-bs-toggle="tooltip"]').forEach(function (el) {
+                var existing = bootstrap.Tooltip.getInstance(el);
+                if (existing) existing.dispose();
+                new bootstrap.Tooltip(el, {delay: {show: 100, hide: 0}});
+            });
+        }
+        document.addEventListener('DOMContentLoaded', function () { initTooltips(document); });
+        document.body.addEventListener('htmx:afterSwap', function (e) { initTooltips(e.target); });
+    })();
+</script>
 
 </body>
 </html>

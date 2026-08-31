@@ -287,15 +287,24 @@ public class LlmRouter {
     }
 
     /**
-     * Returns true when at least one runtime-enabled provider has one of the exact types.
-     * Uses operator enable/disable state only; temporary circuit-breaker block does not change
-     * capability presence for UI toggles.
+     * Whether at least one runtime-enabled provider can serve {@code task}.
+     *
+     * <p>Capability is asked of {@link LlmProvider#supports(TaskType)} rather than compared against
+     * a hand-maintained list of provider types. The previous form took the types as varargs and its
+     * one caller passed {@code (BOTH, VISION)} for "can we describe images?", silently omitting
+     * {@code LIGHT_BOTH} — a type that does serve {@code VISION}. The document upload page then
+     * disabled its "이미지 설명 추가" checkbox on a deployment where image description worked. Such a
+     * list has to be revisited every time {@code supports()} changes; deriving it removes that
+     * class of drift rather than fixing one instance of it.
+     *
+     * <p>Deliberately ignores the circuit breaker: a temporary block does not mean the capability
+     * is absent, and a UI control should not flicker with provider health. Operator enable/disable
+     * via {@code /settings} does count — that is a standing decision, not a transient state.
      */
-    public boolean hasEnabledProviderType(TaskType... types) {
-        if (types == null || types.length == 0) return false;
-        Set<TaskType> wanted = Set.of(types);
+    public boolean hasEnabledProviderFor(TaskType task) {
+        if (task == null) return false;
         return providers.stream()
-                .anyMatch(p -> wanted.contains(p.type()) && !providerToggle.isDisabled(p.name()));
+                .anyMatch(p -> p.supports(task) && !providerToggle.isDisabled(p.name()));
     }
 
     /**

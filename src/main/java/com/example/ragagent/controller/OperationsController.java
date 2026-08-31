@@ -97,13 +97,25 @@ public class OperationsController {
         return "fragments/thread-item :: item";
     }
 
+    /**
+     * Deletes a whole conversation. Retracts the thread's 👍-promoted curated-Q&A entries
+     * <b>first</b>, for the same reason {@link #deleteTurn} does it for a single turn: a curated
+     * row is linked to its turn by a copy of the id, not a foreign key, so without this the row
+     * and its vectors outlive the conversation and keep contributing to search (§6.25).
+     *
+     * <p>Order matters only in one direction — the retraction reads {@code curated_qa} by
+     * (userId, threadId) and never touches {@code conversation_turns}, but running it first keeps
+     * this path identical in shape to {@code deleteTurn}, where the ownership read genuinely must
+     * precede the delete.
+     */
     @DeleteMapping("/ui/threads/{threadId}")
     @ResponseBody
     public ResponseEntity<Void> deleteThread(ThreadContext ctx, @PathVariable String threadId) {
         String userId = ctx.userId();
+        int curatedRetracted = curatedQaService.onThreadDeleted(userId, threadId);
         memoryService.clearHistory(userId, threadId);
         threadMetaService.delete(userId, threadId);
-        auditLogger.log("thread.delete", threadId);
+        auditLogger.log("thread.delete", threadId, Map.of("curatedRetracted", curatedRetracted));
         return ResponseEntity.ok().build();
     }
 

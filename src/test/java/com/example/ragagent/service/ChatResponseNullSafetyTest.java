@@ -77,8 +77,8 @@ class ChatResponseNullSafetyTest {
     // ── CriticService ─────────────────────────────────────────────────────────
 
     @Test
-    @DisplayName("CriticService.execute — grounded 미설정(null) → grounded=true 폴백")
-    void critic_nullGrounded_treatsAsGrounded() {
+    @DisplayName("CriticService.execute — grounded 미설정(null) → null 유지(통과로 위조하지 않음)")
+    void critic_nullGrounded_staysUnverified() {
         CriticService svc = new CriticService();
         AgentState state = AgentState.of("테스트", "latest", "t1", "", null)
                 .toBuilder()
@@ -88,8 +88,9 @@ class ChatResponseNullSafetyTest {
         AgentState result = svc.execute(state);
 
         assertThat(result.grounded())
-                .as("precomputed grounded null → treat as grounded (fail-safe)")
-                .isTrue();
+                .as("검증을 돌리지 못한 턴은 '미실행'로 남아야 한다 — "
+                    + "true 로 위조하면 VerificationSnapshot 이 '검증됨'/'생성' 배지를 붙인다")
+                .isNull();
         assertThat(result.needsRetry()).isFalse();
     }
 
@@ -145,7 +146,7 @@ class ChatResponseNullSafetyTest {
     private static AppProperties fakeProps() {
         AppProperties props = mock(AppProperties.class);
         when(props.llmSafe()).thenReturn(new AppProperties.LlmConfig(
-                List.of(), 2, 10, 180, "COST_FIRST", 0.6, 3, 20, 0.0, 0.1, 0.0, 6000, true));
+                List.of(), 2, 10, 180, "COST_FIRST", 0.6, 3, 20, 0.0, 0.1, 0.0, 0.7, 6000, true));
         return props;
     }
 }

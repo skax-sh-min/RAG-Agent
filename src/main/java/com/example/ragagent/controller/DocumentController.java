@@ -80,7 +80,7 @@ public class DocumentController {
     @GetMapping("/documents")
     public String documents(ThreadContext ctx, Model model) {
         model.addAttribute("documents", ragService.listDocuments(ctx.userId()));
-        boolean imageDescriptionAvailable = llmRouter.hasEnabledProviderType(TaskType.BOTH, TaskType.VISION);
+        boolean imageDescriptionAvailable = llmRouter.hasEnabledProviderFor(TaskType.VISION);
         model.addAttribute("imageDescriptionAvailable", imageDescriptionAvailable);
         return "documents";
     }

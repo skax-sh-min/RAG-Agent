@@ -1,5 +1,6 @@
 package com.example.ragagent.controller;
 
+import com.example.ragagent.audit.AuditLogger;
 import com.example.ragagent.context.ThreadContext;
 import com.example.ragagent.model.IndexingProgressEvent;
 import com.example.ragagent.model.MetaKey;
@@ -10,6 +11,7 @@ import com.example.ragagent.service.CuratedSubmissionService;
 import com.example.ragagent.service.IndexingProgressService;
 import com.example.ragagent.service.RagService;
 import com.example.ragagent.service.RetrievalMetricsService;
+import com.example.ragagent.service.ThreadAdminService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
@@ -36,18 +38,24 @@ public class AdminController {
     private final CuratedQaService curatedQaService;
     private final CuratedSubmissionService submissionService;
     private final RetrievalMetricsService retrievalMetricsService;
+    private final ThreadAdminService threadAdminService;
+    private final AuditLogger auditLogger;
     private final CurrentUser currentUser;
 
     public AdminController(AdminService adminService, RagService ragService,
                             IndexingProgressService progressService, CuratedQaService curatedQaService,
                             CuratedSubmissionService submissionService,
-                            RetrievalMetricsService retrievalMetricsService, CurrentUser currentUser) {
+                            RetrievalMetricsService retrievalMetricsService,
+                            ThreadAdminService threadAdminService, AuditLogger auditLogger,
+                            CurrentUser currentUser) {
         this.adminService = adminService;
         this.ragService   = ragService;
         this.progressService = progressService;
         this.curatedQaService = curatedQaService;
         this.submissionService = submissionService;
         this.retrievalMetricsService = retrievalMetricsService;
+        this.threadAdminService = threadAdminService;
+        this.auditLogger = auditLogger;
         this.currentUser = currentUser;
     }
 
@@ -223,14 +231,154 @@ public class AdminController {
      * it is a deployment-wide operator view, gated by {@code /admin/**}'s ROLE_ADMIN.
      */
     @GetMapping("/admin/retrieval-metrics")
-    public String retrievalMetricsPanel(@RequestParam(defaultValue = "0")  int offset,
+    public String retrievalMetricsPanel(@RequestParam(required = false) String userId,
+                                        @RequestParam(required = false) String threadId,
+                                        @RequestParam(defaultValue = "0")  int offset,
                                         @RequestParam(defaultValue = "20") int limit,
                                         Model model) {
-        model.addAttribute("metricTurns",  retrievalMetricsService.recent(offset, limit));
-        model.addAttribute("metricsTotal", retrievalMetricsService.count());
+        // §6.25 — the two filters are mutually exclusive by construction (a conversation belongs
+        // to exactly one owner), so a threadId wins and the user filter is dropped. Holding both
+        // would let the panel land on a silently empty list whose cause is nowhere on screen.
+        String user = (threadId != null && !threadId.isBlank()) ? null : userId;
+
+        model.addAttribute("metricTurns",  retrievalMetricsService.recent(user, threadId, offset, limit));
+        model.addAttribute("metricsTotal", retrievalMetricsService.count(user, threadId));
+        model.addAttribute("metricUserIds", retrievalMetricsService.userIds());
+        model.addAttribute("metricUserFilter", user);
+        model.addAttribute("metricThreadFilter", threadId);
+        // 대화 필터가 걸렸을 때 칩에 보여줄 이름 — id 만으로는 어느 대화인지 알 수 없다.
+        model.addAttribute("metricThreadLabel",
+                threadId == null || threadId.isBlank() ? null
+                        : threadAdminService.deletePreview(threadId)
+                                .map(ThreadAdminService.DeletePreview::displayTitle).orElse(threadId));
         model.addAttribute("offset", offset);
         model.addAttribute("limit",  limit);
         return "fragments/admin-retrieval-metrics :: panel";
+    }
+
+    /**
+     * The sources of one turn — the conversation panel's per-turn 출처 view. Renders the same
+     * shared table fragment the diagnostics panel uses, so the two never drift on what the
+     * columns mean.
+     */
+    @GetMapping("/admin/retrieval-metrics/turns/{turnId}/sources")
+    public String turnSources(@PathVariable long turnId, Model model) {
+        model.addAttribute("sources", retrievalMetricsService.sourcesForTurn(turnId));
+        return "fragments/admin-source-table :: standalone";
+    }
+
+    // ── §6.25 대화 목록 (전 사용자) ─────────────────────────────────────────────
+
+    /**
+     * 대화 목록 패널 — same lazy-load-on-expand pattern as {@link #curatedPanel}.
+     *
+     * <p>Deliberately <b>not</b> under {@code /api/v1/**}: that prefix is CSRF-exempt and
+     * guest-open in management-only mode (§6.17), which would hand every user's conversation
+     * titles to anyone. Here it inherits the {@code ROLE_ADMIN} gate, same reasoning as
+     * {@link #pendingSubmissionCount}. It is also a different endpoint from {@code /ui/threads},
+     * which is the signed-in user's own sidebar and stays user-scoped.
+     *
+     * @param userId optional owner filter; {@code sort} is parsed into a closed set
+     *               ({@code ThreadAdminRepository.Sort}) since {@code ORDER BY} can't be a bind
+     *               parameter
+     */
+    @GetMapping("/admin/threads")
+    public String threadPanel(@RequestParam(required = false) String userId,
+                              @RequestParam(required = false) String sort,
+                              @RequestParam(defaultValue = "0")  int offset,
+                              @RequestParam(defaultValue = "20") int limit,
+                              Model model) {
+        model.addAttribute("panel", threadAdminService.panel(userId, sort, offset, limit));
+        return "fragments/admin-threads :: panel";
+    }
+
+    /**
+     * One conversation's turns — the drill-down opened by 상세, fetched on demand rather than
+     * rendered with the list (a deployment can hold thousands of turns across the page's rows).
+     *
+     * <p>The owner is resolved from the thread id server-side, and the rows carry no answer text
+     * at all ({@code ThreadAdminRepository.TurnRow}) — reading an answer is a separate audited
+     * call, not something this listing can be edited into exposing.
+     */
+    @GetMapping("/admin/threads/{threadId}/turns")
+    public String threadTurns(@PathVariable String threadId, Model model) {
+        model.addAttribute("turns", threadAdminService.turns(threadId));
+        model.addAttribute("threadId", threadId);
+        return "fragments/admin-threads :: turns";
+    }
+
+    /**
+     * One turn's question and answer, in full — the drill-down's 원문 보기.
+     *
+     * <p>§6.25 결정 3: the panel's default shows structure, not transcripts, and reading someone's
+     * answer is an explicit act that leaves an {@code admin.thread.read} audit entry naming the
+     * reader, the owner and the turn. The audit is written <b>only when content actually goes
+     * out</b> — an unknown turn is a 404 and not a read.
+     */
+    @GetMapping("/admin/threads/turns/{turnId}/content")
+    @ResponseBody
+    public ResponseEntity<Map<String, Object>> turnContent(@PathVariable long turnId) {
+        return threadAdminService.turnContent(turnId)
+                .<ResponseEntity<Map<String, Object>>>map(c -> {
+                    auditLogger.log("admin.thread.read", c.threadId(), Map.of(
+                            "turnId", c.turnId(),
+                            "owner", c.userId()));
+                    Map<String, Object> body = new HashMap<>();
+                    body.put("turnId", c.turnId());
+                    body.put("askedAt", c.askedAtKst());
+                    body.put("question", c.question());
+                    body.put("answer", c.answer());
+                    body.put("responseMode", c.responseMode());
+                    return ResponseEntity.ok(body);
+                })
+                .orElseGet(() -> ResponseEntity.notFound().build());
+    }
+
+    /**
+     * What deleting this conversation would cost — the numbers behind the confirmation dialog,
+     * read at click time rather than taken from the rendered row (the panel may be minutes old,
+     * and this is an irreversible cross-user action).
+     */
+    @GetMapping("/admin/threads/{threadId}/delete-preview")
+    @ResponseBody
+    public ResponseEntity<Map<String, Object>> threadDeletePreview(@PathVariable String threadId) {
+        return threadAdminService.deletePreview(threadId)
+                .<ResponseEntity<Map<String, Object>>>map(p -> ResponseEntity.ok(Map.of(
+                        "threadId",     p.threadId(),
+                        "title",        p.displayTitle(),
+                        "userId",       p.userId(),
+                        "turnCount",    p.turnCount(),
+                        "reusedOut",    p.reusedOut(),
+                        "diagCount",    p.diagCount(),
+                        "curatedCount", p.curatedCount())))
+                .orElseGet(() -> ResponseEntity.notFound().build());
+    }
+
+    /**
+     * Deletes one conversation, on any user's behalf.
+     *
+     * <p><b>Takes only a thread id.</b> {@code thread_meta.thread_id} is the primary key, so the
+     * owner is resolved server-side ({@code ThreadAdminService.delete}); accepting a {@code userId}
+     * here would mean exposing a parameter that names whose conversation to destroy.
+     *
+     * <p>There is deliberately no bulk-delete endpoint — the same reason submission approval has
+     * none, and more strongly, because this one is irreversible and reaches across users.
+     */
+    @DeleteMapping("/admin/threads/{threadId}")
+    @ResponseBody
+    public ResponseEntity<Map<String, Object>> deleteThread(@PathVariable String threadId) {
+        return threadAdminService.delete(threadId)
+                .<ResponseEntity<Map<String, Object>>>map(r -> {
+                    auditLogger.log("admin.thread.delete", threadId, Map.of(
+                            "owner", r.userId(),
+                            "turnCount", r.turnCount(),
+                            "curatedRetracted", r.curatedRetracted()));
+                    return ResponseEntity.ok(Map.of(
+                            "deleted", true,
+                            "turnCount", r.turnCount(),
+                            "curatedRetracted", r.curatedRetracted()));
+                })
+                .orElseGet(() -> ResponseEntity.notFound().build());
     }
 
     // ── 청크 추가 게시판 — 제안 검토 ────────────────────────────────────────────

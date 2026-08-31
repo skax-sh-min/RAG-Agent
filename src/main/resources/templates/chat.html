@@ -81,7 +81,9 @@
                      th:text="${meta.title}"></div>
                 <!-- Thread ID + copy -->
                 <div class="d-flex align-items-center gap-1 mb-2 text-muted font-monospace">
-                    <span th:text="${#strings.substring(meta.threadId, 0, 8)}"></span>
+                    <!-- 8자 자르기를 템플릿에서 하지 않는다: 8자보다 짧은 id(레거시 "default" 등)에서
+                         #strings.substring 이 예외를 던져 채팅 페이지 전체가 500으로 죽었다. -->
+                    <span th:text="${meta.shortThreadId}"></span>
                     <button class="btn btn-link btn-sm p-0 text-muted lh-1"
                             th:title="#{chat.copy}"
                             th:attr="data-thread-id=${meta.threadId}"
@@ -147,11 +149,16 @@
                          목록)이 읽는 유일한 표식. 스트리밍 경로의 chat-stream.js
                          appendUserBubble()도 같은 표식을 심는다 — 한쪽만 고치면 새로 보낸
                          질문이 목록에서 빠진다. -->
+                    <!-- data-response-mode: 질문 내비게이션이 같은 표기를 다시 만들 수 있도록 심는다.
+                         data-question 은 질문 '원본'만 담는다 — 표기를 그 안에 섞으면 추천/재사용처럼
+                         질문 텍스트를 그대로 쓰는 소비자에게 대괄호가 함께 딸려간다. -->
                     <div class="d-flex justify-content-end mb-3 align-items-end user-turn"
-                         th:attr="data-question=${turn.question}">
+                         th:attr="data-question=${turn.question},data-response-mode=${turn.responseModeLabel}">
                         <div class="me-1">
                             <div class="bubble-user p-3">
-                                <div th:text="${turn.question}"></div>
+                                <div><span class="bubble-user-mode"
+                                           th:text="'[' + ${turn.responseModeLabel} + '] '">[N] </span><span
+                                        th:text="${turn.question}"></span></div>
                                 <small class="text-white bubble-user-time msg-time"
                                        th:if="${turn.askedAt != null}"
                                        th:attr="data-utc-time=${turn.askedAt}">🕐</small>
@@ -160,7 +167,38 @@
                     </div>
                     <div class="d-flex align-items-end mb-3">
                         <div class="bubble-assistant p-3 flex-grow-1">
+                            <!-- 저장해 둔 검증 결과 배지 (§6.24 Step 4-b) — 문구·색·툴팁 판단은 전부
+                                 VerificationSnapshot 한 곳에 있다(message-assistant.html 과 같은 레코드를
+                                 읽는다). 맵에 없는 턴은 검증 기록이 없는 턴이고, 그 경우 이 컬럼이
+                                 생기기 전과 똑같이 아무것도 띄우지 않는다. -->
+                            <th:block th:with="v=${verificationByTurnId != null ? verificationByTurnId[turn.id] : null}">
+                                <span th:if="${v != null and v.verdictLabel != null}"
+                                      class="badge mb-2"
+                                      th:classappend="${v.verdictClass}"
+                                      th:attr="title=${v.verdictTitle}"
+                                      th:style="${v.verdictTitle != null} ? 'cursor:help;' : ''"
+                                      th:text="${v.verdictLabel}"></span>
+                                <span th:if="${v != null and v.hasInventedSymbols}"
+                                      class="badge bg-warning text-dark ms-1 mb-2" style="cursor:help;"
+                                      th:attr="title=${v.inventedSymbolsText}">문서 밖 이름
+                                    <span th:text="${#lists.size(v.inventedSymbols)}"></span></span>
+                            </th:block>
                             <div class="md-content" th:attr="data-md=${turn.answer}"></div>
+
+                            <th:block th:with="v=${verificationByTurnId != null ? verificationByTurnId[turn.id] : null}">
+                                <div th:if="${v != null and v.showsEvalReasonLine}" class="small text-warning mt-2">
+                                    <i class="bi bi-exclamation-triangle me-1"></i>검증 미통과 사유:
+                                    <span th:text="${v.evalReason}"></span>
+                                </div>
+                                <div th:if="${v != null and v.hasInventedSymbols}" class="small text-warning mt-2">
+                                    <i class="bi bi-exclamation-triangle me-1"></i>문서에서 확인되지 않은 이름:
+                                    <span th:text="${v.inventedSymbolsText}"></span>
+                                </div>
+                                <div th:if="${v != null and v.envNote != null}" class="small text-info mt-2">
+                                    <i class="bi bi-info-circle me-1"></i>환경에 따라 달라질 수 있는 값:
+                                    <span th:text="${v.envNote}"></span>
+                                </div>
+                            </th:block>
 
                                <div th:if="${turnImageRefsByTurnId != null and turnImageRefsByTurnId[turn.id] != null and !#lists.isEmpty(turnImageRefsByTurnId[turn.id])}"
                                    class="mt-2 d-flex flex-wrap gap-2">
@@ -228,14 +266,25 @@
                                 <div class="feedback-controls d-flex gap-1"
                                      th:attr="data-turn-id=${turn.id},data-thread-id=${threadId}">
                                     <button type="button" class="btn btn-sm feedback-btn" data-feedback="LIKE"
+                                            th:if="${turn.curatable}"
                                             th:classappend="${turn.feedback == 'LIKE'} ? 'btn-primary' : 'btn-outline-secondary'"
                                             th:attr="aria-label=#{feedback.like},title=#{feedback.like}">👍</button>
+                                    <!-- 좋아요가 아무 일도 하지 않는 모드(S·C). 이 수정 이전에 눌린
+                                         LIKE 기록이 남아 있어도 강조하지 않는다 — 그 좋아요는 실제로
+                                         curated_qa 행을 만든 적이 없으므로, 기여 중인 것처럼 칠하는
+                                         것이 바로 여기서 고치려는 거짓말이다. -->
+                                    <button type="button" class="btn btn-sm btn-outline-secondary feedback-btn opacity-50"
+                                            th:unless="${turn.curatable}" disabled
+                                            th:attr="aria-label=#{${turn.curationBlockedMessageKey}},
+                                                     title=#{${turn.curationBlockedMessageKey}}">👍</button>
                                     <button type="button" class="btn btn-sm feedback-btn" data-feedback="DISLIKE"
                                             th:classappend="${turn.feedback == 'DISLIKE'} ? 'btn-danger' : 'btn-outline-secondary'"
                                             th:attr="aria-label=#{feedback.dislike},title=#{feedback.dislike}">👎</button>
-                                    <!-- §10.10 — 좋아요한 답변만 편집 가능(본인 소유 turn, 채팅창은 항상 본인 스레드만 보여줌) -->
+                                    <!-- §10.10 — 좋아요한 답변만 편집 가능(본인 소유 turn, 채팅창은 항상 본인 스레드만 보여줌).
+                                         curatable 조건이 함께 걸린다: 이 수정 이전 S·C 턴에 남은 LIKE 기록은
+                                         curated_qa 행이 없으므로, 연필만 보고 누르면 편집할 대상이 없다. -->
                                     <button type="button" class="btn btn-sm btn-outline-secondary curated-edit-btn"
-                                            th:style="${turn.feedback == 'LIKE'} ? '' : 'display:none;'"
+                                            th:style="${turn.feedback == 'LIKE' and turn.curatable} ? '' : 'display:none;'"
                                             th:attr="aria-label=#{curated.edit},title=#{curated.edit}">
                                         <i class="bi bi-pencil"></i>
                                     </button>
@@ -346,8 +395,12 @@
 
                         <div class="flex-grow-1"></div>
 
-                        <!-- 응답 모드 S/M/L 토글 — 답변 길이·상세도 (기본 M).
-                             L(원문 최대)은 RAG 검색 컨텍스트가 있을 때만 의미가 있어 Direct 모드에서 비활성화.
+                        <!-- 응답 모드 S/N/C 토글 — 답변의 성격 (기본 N). PLAN §6.24: L은 N과 구분되지
+                             않아 제거했고(같은 검색 재료를 받으므로 길이도 같았다), C(응용)는 길이가
+                             아니라 근거 엄격도 축이다 — 문서를 재료로 코드·설정을 만들어낸다.
+                             C는 검색 결과가 전제라 Direct와 배타다: 아래 스크립트가 버튼을 비활성화하고,
+                             서버도 같은 규칙을 독립적으로 건다(ChatForm/ChatRequest — 구 L은 서버 가드가
+                             없어 손으로 만든 요청이 통과했다).
                              툴팁은 네이티브 title(브라우저 기본 지연 ~1.5s)이 아니라 Bootstrap Tooltip(짧은 delay)로 표시 — 하단 스크립트에서 초기화. -->
                         <span class="small text-muted" th:text="#{chat.response.group.label}">응답옵션</span>
                         <div id="response-mode-group" class="btn-group btn-group-sm" role="group"
@@ -358,16 +411,16 @@
                                    data-bs-toggle="tooltip" th:title="#{chat.response.s}">S</label>
 
                             <input type="radio" class="btn-check" name="response-mode-radio"
-                                   id="response-mode-m" value="M" checked autocomplete="off"/>
-                            <label class="btn btn-outline-secondary response-mode-btn" for="response-mode-m"
-                                   data-bs-toggle="tooltip" th:title="#{chat.response.m}">M</label>
+                                   id="response-mode-n" value="N" checked autocomplete="off"/>
+                            <label class="btn btn-outline-secondary response-mode-btn" for="response-mode-n"
+                                   data-bs-toggle="tooltip" th:title="#{chat.response.n}">N</label>
 
                             <input type="radio" class="btn-check" name="response-mode-radio"
-                                   id="response-mode-l" value="L" autocomplete="off"/>
-                            <label class="btn btn-outline-secondary response-mode-btn" for="response-mode-l"
-                                   id="response-mode-l-label" data-bs-toggle="tooltip" th:title="#{chat.response.l}">L</label>
+                                   id="response-mode-c" value="C" autocomplete="off"/>
+                            <label class="btn btn-outline-secondary response-mode-btn" for="response-mode-c"
+                                   data-bs-toggle="tooltip" th:title="#{chat.response.c}">C</label>
                         </div>
-                        <input type="hidden" id="form-response-mode" name="responseMode" value="M"/>
+                        <input type="hidden" id="form-response-mode" name="responseMode" value="N"/>
                     </div>
                     <div id="question-suggest-box" class="list-group mb-1 d-none" style="max-height: 220px; overflow:auto;"></div>
                     <div class="input-group">
@@ -609,6 +662,16 @@
         directLabel.classList.toggle('text-primary', isDirect);
         directLabel.classList.toggle('text-muted', !isDirect);
         updateResponseModeAvailability(isDirect);
+        /* RAG ↔ Direct 를 오갈 때는 응답 모드를 **항상** 기본값(N)으로 되돌린다 — 어느 방향이든,
+           직전 선택이 무엇이었든. 두 축은 성격이 달라(검색 여부 vs 답변의 성격) 한쪽을 바꾼 뒤에도
+           남아 있는 다른 쪽 선택은 "내가 고른 것"이 아니라 "직전 대화에서 흘러온 것"에 가깝다.
+           특히 S 는 버튼만 봐서는 눈에 잘 띄지 않아, Direct 로 옮긴 뒤 짧은 답변이 오는 이유를
+           알기 어려웠다. 저장된 선택(localStorage)까지 함께 덮어써야 다음 방문에서 되살아나지 않는다.
+           ⚠️ 이 초기화는 **토글 이벤트에서만** 한다 — updateResponseModeAvailability() 안에 넣으면
+           페이지 로드 때도 실행되어(그 함수는 로드 시 현재 상태로 한 번 불린다) 사용자가 저장해 둔
+           선택을 매번 지운다. */
+        applyResponseMode(RESPONSE_MODE_DEFAULT);
+        localStorage.setItem(RESPONSE_MODE_KEY, RESPONSE_MODE_DEFAULT);
     });
 
     const versionInput  = document.getElementById('version-input');
@@ -729,28 +792,38 @@
     loadVersionOptions();
     loadChatTagSuggestions();
 
-    /* ── 응답 모드 S/M/L 토글 버튼 → hidden 폼 필드 + localStorage 유지 ───────── */
+    /* ── 응답 모드 S/N 토글 버튼 → hidden 폼 필드 + localStorage 유지 ───────── */
     const responseModeRadios = document.querySelectorAll('input[name="response-mode-radio"]');
     const responseModeInput  = document.getElementById('form-response-mode');
-    const responseModeLRadio = document.getElementById('response-mode-l');
     const RESPONSE_MODE_KEY  = 'chatResponseMode';
+    /* 버튼으로 고를 수 있는 값. 여기 없는 값(옛 'M'/'L', 손으로 넣은 값)은 기본값으로 떨어진다 —
+       화이트리스트에 버튼 없는 값을 넣으면 어느 라디오도 체크되지 않은 상태가 만들어진다.
+       서버도 같은 규칙이다(ResponseMode.parse). */
+    const RESPONSE_MODES = ['S', 'N', 'C'];
+    const RESPONSE_MODE_DEFAULT = 'N';
+    const responseModeCRadio = document.getElementById('response-mode-c');
 
     function applyResponseMode(mode) {
-        const requested = ['S', 'M', 'L'].includes(mode) ? mode : 'M';
-        const m = (requested === 'L' && responseModeLRadio.disabled) ? 'M' : requested;
+        const requested = RESPONSE_MODES.includes(mode) ? mode : RESPONSE_MODE_DEFAULT;
+        /* 비활성 버튼을 고른 상태로 두면 어느 라디오도 체크되지 않은 화면이 만들어진다. */
+        const m = (requested === 'C' && responseModeCRadio.disabled) ? RESPONSE_MODE_DEFAULT : requested;
         responseModeRadios.forEach(r => { r.checked = (r.value === m); });
         responseModeInput.value = m;
     }
-    /* Direct 모드에서는 L(원문 최대)이 의미가 없으므로 버튼 자체를 비활성화하고,
-       현재 선택이 L이었다면 M으로 되돌린다. RAG로 돌아가도 L은 자동 재선택하지 않는다. */
+    /* Direct는 검색을 건너뛰므로 문서를 재료로 삼는 C가 성립하지 않는다 — 버튼을 비활성화한다.
+       사용자가 토글을 직접 움직이는 경우의 초기화는 위 change 핸들러가 (C뿐 아니라 모든 모드를)
+       담당하므로, 여기 남은 C→N 은 **로드 시점** 몫이다: 저장된 선택이 C인데 Direct 상태로 화면이
+       열리면 어느 라디오도 체크되지 않은 상태가 되기 때문이다.
+       이것은 편의일 뿐이고 실제 방어는 서버에 있다 — ChatForm/ChatRequest 가 같은 성질을 묻는다. */
     function updateResponseModeAvailability(isDirect) {
-        responseModeLRadio.disabled = isDirect;
-        if (isDirect && responseModeInput.value === 'L') {
-            applyResponseMode('M');
-            localStorage.setItem(RESPONSE_MODE_KEY, 'M');
+        responseModeCRadio.disabled = isDirect;
+        if (isDirect && responseModeInput.value === 'C') {
+            applyResponseMode(RESPONSE_MODE_DEFAULT);
+            localStorage.setItem(RESPONSE_MODE_KEY, RESPONSE_MODE_DEFAULT);
         }
     }
     updateResponseModeAvailability(directToggle.checked);
+    /* 브라우저에 남아 있던 옛 'M'/'L' 선택도 여기서 기본값 N으로 흡수된다(마이그레이션 불필요). */
     applyResponseMode(localStorage.getItem(RESPONSE_MODE_KEY));
     responseModeRadios.forEach(radio => radio.addEventListener('change', function () {
         if (!this.checked) return;
@@ -889,10 +962,14 @@
         const t = new Date().toLocaleTimeString('ko-KR', {hour: '2-digit', minute: '2-digit', hour12: false});
         const userBubble = document.createElement('div');
         userBubble.className = 'd-flex justify-content-end mb-3 align-items-end';
+        // 재사용 버블도 같은 표기를 단다. 저장된 그 턴의 모드가 아니라 '지금 폼에 선택된' 모드인데,
+        // 재사용은 방금 고른 설정으로 새 턴을 만드는 동작이라 그것이 맞다.
+        const reuseMode = responseModeInput.value || RESPONSE_MODE_DEFAULT;
+        userBubble.dataset.responseMode = reuseMode;
         userBubble.innerHTML =
             `<div class="me-1">` +
             `<div class="bubble-user p-3">` +
-                `<div>${escHtml(question)}</div>` +
+                `<div><span class="bubble-user-mode">[${escHtml(reuseMode)}] </span>${escHtml(question)}</div>` +
                 `<small class="text-white bubble-user-time">🕐 ${escHtml(t)}</small>` +
             `</div>` +
             `</div>`;
@@ -905,6 +982,9 @@
                 `<div class="md-content">${renderMarkdownText(answer)}</div>` +
                 `${renderSourceBadges(sources)}` +
                 `<div class="mt-1 d-flex align-items-center flex-wrap gap-2">` +
+                    // 재사용(db-reuse) 경로에는 좋아요 비활성 분기가 없다 — S·C 는 재사용 후보에서
+                    // 아예 빠지므로(ResponseMode.allowsReuse) 여기에 도달하는 턴은 항상 큐레이션
+                    // 가능한 모드다. 재사용 제외 규칙을 바꾸면 이 가정도 함께 깨진다.
                     `<div class="feedback-controls d-flex gap-1" data-turn-id="${turnId}" data-thread-id="${escHtml(chatForm.querySelector('input[name="threadId"]').value)}">` +
                         `<button type="button" class="btn btn-sm btn-outline-secondary feedback-btn" data-feedback="LIKE" aria-label="좋아요" title="좋아요">👍</button>` +
                         `<button type="button" class="btn btn-sm btn-outline-secondary feedback-btn" data-feedback="DISLIKE" aria-label="싫어요" title="싫어요">👎</button>` +
@@ -1110,10 +1190,12 @@
             const timeStr = new Date().toLocaleTimeString('ko-KR', {hour: '2-digit', minute: '2-digit', hour12: false});
             const bubble = document.createElement('div');
             bubble.className = 'd-flex justify-content-end mb-3 align-items-end';
+            const optimisticMode = responseModeInput.value || RESPONSE_MODE_DEFAULT;
+            bubble.dataset.responseMode = optimisticMode;
             bubble.innerHTML =
                 `<div class="me-1">` +
                 `<div class="bubble-user p-3">` +
-                    `<div>${escHtml(q)}</div>` +
+                    `<div><span class="bubble-user-mode">[${escHtml(optimisticMode)}] </span>${escHtml(q)}</div>` +
                     `<small class="text-white bubble-user-time">🕐 ${escHtml(timeStr)}</small>` +
                 `</div>` +
                 `</div>`;
@@ -1418,6 +1500,15 @@
         return body ? body.textContent.trim() : '';
     }
 
+    /* 목록·풍선에 붙는 '[S] ' 접두. 버블의 표기 span 을 읽지 않고 data-response-mode 로 다시
+       만드는 이유는 qnavTextOf() 가 data-question(원본)을 우선하기 때문이다 — 원본에는 표기가
+       없으므로 여기서 붙이지 않으면 버블에는 보이고 목록에는 안 보이는 상태가 된다.
+       모드를 심지 않은 옛 경로가 남아 있어도 빈 문자열로 떨어져 질문만 나온다. */
+    function qnavModePrefix(el) {
+        const m = el.dataset.responseMode;
+        return m ? '[' + m + '] ' : '';
+    }
+
     function qnavTimeOf(el) {
         const t = el.querySelector('.bubble-user-time');
         return t ? t.textContent.replace('🕐', '').trim() : '';
@@ -1458,7 +1549,7 @@
             else break;
         }
         qnavCurrent = found;
-        const text = found ? qnavTextOf(found) : '';
+        const text = found ? (qnavModePrefix(found) + qnavTextOf(found)) : '';
         // bottom > cTop → 질문 버블이 아직 (일부라도) 보인다.
         const stillVisible = found && found.getBoundingClientRect().bottom > cTop + 4;
         if (!text || stillVisible) { qnavFloat.classList.add('d-none'); return; }
@@ -1485,7 +1576,7 @@
             const time = qnavTimeOf(turn);
             item.innerHTML =
                 '<span class="text-muted flex-shrink-0">' + (idx + 1) + '.</span>' +
-                '<span class="qn-text flex-grow-1">' + escHtml(qnavTextOf(turn)) + '</span>' +
+                '<span class="qn-text flex-grow-1">' + escHtml(qnavModePrefix(turn) + qnavTextOf(turn)) + '</span>' +
                 (time ? '<span class="text-muted flex-shrink-0 small">' + escHtml(time) + '</span>' : '');
             item.addEventListener('click', function () {
                 qnavJumpTo(turn);
