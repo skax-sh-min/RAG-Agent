@@ -83,6 +83,18 @@ class ChatControllerHtmxTest {
     @MockitoBean ThreadContextResolver threadContextResolver;
     @MockitoBean ChatImageAnalysisSkipRegistry imageSkipRegistry;
 
+    /**
+     * 모킹된 {@code SettingsService} 는 boolean 에 false, 객체에 null 을 준다 — 그대로 두면 C 모드가
+     * 꺼진 배포처럼 굴고(버튼 미렌더) 응답 모드 정규화가 null 을 {@code .name()} 해 터진다. 실제 빈의
+     * 기본값(C 열림 · 요청한 모드가 곧 유효 모드)을 되돌려 준다. 끄는 쪽 동작은 개별 테스트가
+     * 이 스텁을 덮어써서 확인한다.
+     */
+    @org.junit.jupiter.api.BeforeEach
+    void openCreativeModeByDefault() {
+        when(settingsService.creativeModeEnabled()).thenReturn(true);
+        when(settingsService.effectiveResponseMode(any())).thenAnswer(inv -> inv.getArgument(0));
+    }
+
     private ChatResponse sampleResponse() {
         return new ChatResponse(
                 "## 요약\n핵심 답변",
@@ -120,6 +132,59 @@ class ChatControllerHtmxTest {
         assertThat(html).doesNotContain("responseModeLRadio");
         // 반대로 C 는 스크립트가 참조하는 것과 버튼이 반드시 짝이어야 한다(Direct 배타 비활성화 대상).
         assertThat(html).contains("responseModeCRadio", "updateResponseModeAvailability");
+    }
+
+    @Test
+    @DisplayName("GET / — 운영자가 C를 끄면 버튼이 아예 렌더되지 않고 S/N은 그대로 남는다")
+    void chatPage_omitsCreativeButton_whenOperatorDisabledIt() throws Exception {
+        when(settingsService.creativeModeEnabled()).thenReturn(false);
+        AppUserDetails principal = new AppUserDetails("id-1", "user@local", "", "User", "USER", true, false);
+
+        String html = mvc.perform(get("/").with(user(principal)))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        assertThat(html).doesNotContain("id=\"response-mode-c\"");
+        assertThat(html).contains("id=\"response-mode-s\"", "id=\"response-mode-n\"");
+        // 버튼이 없으면 화이트리스트에서도 빠져야 한다 — 남아 있으면 localStorage 의 'C' 가 되살아나
+        // 어느 라디오도 체크되지 않은 입력창이 만들어진다.
+        assertThat(html).contains("CREATIVE_MODE_ENABLED = false");
+    }
+
+    @Test
+    @DisplayName("POST /ui/chat — 운영자가 끈 모드는 진입점에서 강등된다 (저장되는 값까지 N)")
+    void postChat_downgradesOperatorDisabledMode() throws Exception {
+        when(agentService.chat(any(), any())).thenReturn(sampleResponse());
+        when(settingsService.effectiveResponseMode(com.example.ragagent.model.ResponseMode.C))
+                .thenReturn(com.example.ragagent.model.ResponseMode.N);
+
+        mvc.perform(post("/ui/chat")
+                        .param("question", "테스트 질문")
+                        .param("threadId", "t1")
+                        .param("version", "latest")
+                        .param("responseMode", "C")
+                        .with(csrf()))
+                .andExpect(status().isOk());
+
+        verify(agentService).chat(any(),
+                argThat(req -> req.responseMode() == com.example.ragagent.model.ResponseMode.N));
+    }
+
+    @Test
+    @DisplayName("POST /api/v1/chat — 화면을 거치지 않는 REST 요청도 같은 스위치를 지난다")
+    void chatApi_downgradesOperatorDisabledMode() throws Exception {
+        when(agentService.chat(any(), any())).thenReturn(sampleResponse());
+        when(settingsService.effectiveResponseMode(com.example.ragagent.model.ResponseMode.C))
+                .thenReturn(com.example.ragagent.model.ResponseMode.N);
+
+        mvc.perform(post("/api/v1/chat")
+                        .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                        .content("{\"question\":\"테스트\",\"thread_id\":\"t1\",\"response_mode\":\"C\"}")
+                        .with(csrf()))
+                .andExpect(status().isOk());
+
+        verify(agentService).chat(any(),
+                argThat(req -> req.responseMode() == com.example.ragagent.model.ResponseMode.N));
     }
 
     @Test

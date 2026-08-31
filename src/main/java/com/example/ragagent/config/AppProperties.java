@@ -65,6 +65,7 @@ public record AppProperties(
             Double directTemperature,        // Direct(meta) answer temperature (app.llm.direct-temperature / DIRECT_LLM_TEMPERATURE), default 0.1, clamp [0,1.0] — HOT-editable (DirectAnswerService reads it per call, §6.18)
             Double indexingTemperature,      // indexing/background temperature (app.llm.indexing-temperature / LLM_INDEXING_TEMPERATURE), default 0.0, clamp [0,1.0] — HOT-editable, attached per call by every ungated executeWithTracking() caller (KeywordExtractor, MarkdownCorrectionService, TextToMarkdownService, VisionDescriptionService, ImageTypeClassifier, ThreadMetaService, ConversationSummarizerService) so a higher general/RAG temperature can never leak into extraction-style calls that need to stay deterministic
             Double creativeTemperature,      // C(응용) 모드 answer temperature (app.llm.creative-temperature / CREATIVE_LLM_TEMPERATURE), default 0.7, clamp [0,1.0] — HOT-editable (§6.24). Separate from `temperature` because that one is clamped to [0,0.3]: a document-faithful answer must not wobble under sampling, which also makes creative generation impossible on it. Read fresh per call by AnswerService on BOTH the blocking and the streaming path — miss streamDirect() and only the chat UI stays cold
+            Boolean creativeModeEnabled,     // C(응용) 모드를 채팅에서 고를 수 있는가 (app.llm.creative-mode-enabled / CREATIVE_MODE_ENABLED), default true — HOT-editable. 온도(creativeTemperature)가 "C를 어떻게 답하게 할까"라면 이쪽은 "C를 열어 둘까"다: 문서 밖 내용을 생성하는 유일한 모드라 배포처에 따라 아예 닫아 두는 것이 운영 정책일 수 있다. 끄면 채팅 입력창에서 C 버튼이 사라지고, 그래도 도착한 요청(REST·손으로 만든 폼)은 SettingsService.effectiveResponseMode() 가 N 으로 강등한다 — 과거 C 턴의 기록/배지는 그대로 남는다
             Integer maxTokens,               // LLM response cap (app.llm.max-tokens / LLM_MAX_TOKENS), default 6000, clamp >0 — VIEW-ONLY (baked at bean creation; streaming chat answers are uncapped by design, bounded by SSE timeouts)
             Boolean verifyLocalModelsOnStartup // GET {base-url}/v1/models for every registered LOCAL-role provider at boot — fails startup (throws, Spring exits) if unreachable or the configured model isn't in the response. Default true (app.llm.verify-local-models-on-startup / LLM_VERIFY_LOCAL_MODELS_ON_STARTUP)
     ) {}
@@ -705,18 +706,22 @@ public record AppProperties(
         // RerankerService) reads temperature() per call; DirectAnswerService reads directTemperature()
         // per call; every ungated executeWithTracking() background caller reads indexingTemperature()
         // per call; AnswerService reads creativeTemperature() per call for the C (creative) mode, on
-        // the blocking AND the streaming path. maxTokens stays view-only: it's baked into the provider
+        // the blocking AND the streaming path; creative-mode-enabled gates whether the C mode can be
+        // picked at all (read per chat request by SettingsService.effectiveResponseMode()).
+        // maxTokens stays view-only: it's baked into the provider
         // defaultOptions at bean creation, so an override couldn't take effect until a restart.
         Double tempOverride = overrideDouble(SettingsKeys.LLM_TEMPERATURE);
         Double directOverride = overrideDouble(SettingsKeys.LLM_DIRECT_TEMPERATURE);
         Double indexingOverride = overrideDouble(SettingsKeys.LLM_INDEXING_TEMPERATURE);
         Double creativeOverride = overrideDouble(SettingsKeys.LLM_CREATIVE_TEMPERATURE);
+        Boolean creativeModeOverride = overrideBool(SettingsKeys.LLM_CREATIVE_MODE_ENABLED);
         if (llm == null) {
             double t = clamp(tempOverride != null ? tempOverride : 0.0, 0.0, 0.3);
             double dt = clamp(directOverride != null ? directOverride : 0.1, 0.0, 1.0);
             double it = clamp(indexingOverride != null ? indexingOverride : 0.0, 0.0, 1.0);
             double ct = clamp(creativeOverride != null ? creativeOverride : 0.7, 0.0, 1.0);
-            return new LlmConfig(List.of(), 2, 10, 180, "COST_FIRST", 0.6, 3, 20, t, dt, it, ct,
+            boolean cm = creativeModeOverride == null || creativeModeOverride;
+            return new LlmConfig(List.of(), 2, 10, 180, "COST_FIRST", 0.6, 3, 20, t, dt, it, ct, cm,
                     DEFAULT_MAX_TOKENS, true);
         }
         List<ProviderConfig> providers = llm.providers() != null ? llm.providers() : List.of();
@@ -739,11 +744,15 @@ public record AppProperties(
         double creativeBase = creativeOverride != null ? creativeOverride
                 : (llm.creativeTemperature() != null ? llm.creativeTemperature() : 0.7);
         double creativeTemperature = clamp(creativeBase, 0.0, 1.0);
+        // 기본 ON — 이 스위치가 생기기 전에는 C 가 늘 열려 있었으므로, 미설정 시 동작이 바뀌면 안 된다.
+        boolean creativeModeEnabled = creativeModeOverride != null ? creativeModeOverride
+                : (llm.creativeModeEnabled() == null || llm.creativeModeEnabled());
         int maxTokens = (llm.maxTokens() != null && llm.maxTokens() > 0) ? llm.maxTokens() : DEFAULT_MAX_TOKENS;
         boolean verifyLocalModels = llm.verifyLocalModelsOnStartup() == null || llm.verifyLocalModelsOnStartup();
                 return new LlmConfig(providers, minutes, connectTimeout, readTimeout, mode, threshold,
                         defaultProviderConcurrency, permitWaitTimeoutSeconds, temperature, directTemperature,
-                        indexingTemperature, creativeTemperature, maxTokens, verifyLocalModels);
+                        indexingTemperature, creativeTemperature, creativeModeEnabled, maxTokens,
+                        verifyLocalModels);
     }
 
     private static double clamp(double v, double lo, double hi) {

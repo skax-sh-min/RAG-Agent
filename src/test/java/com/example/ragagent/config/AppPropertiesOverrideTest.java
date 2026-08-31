@@ -267,7 +267,7 @@ class AppPropertiesOverrideTest {
     void ragTemperature_isClampedToPointThree() {
         AppProperties p = withLlm(new AppProperties.LlmConfig(
                 java.util.List.of(), 2, 10, 180, "COST_FIRST", 0.6, 3, 20,
-                1.2, 0.1, 0.0, 0.7, 6000, true));
+                1.2, 0.1, 0.0, 0.7, true, 6000, true));
 
         assertThat(p.llmSafe().temperature()).isEqualTo(0.3);
     }

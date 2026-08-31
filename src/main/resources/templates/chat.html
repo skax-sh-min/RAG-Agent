@@ -415,10 +415,17 @@
                             <label class="btn btn-outline-secondary response-mode-btn" for="response-mode-n"
                                    data-bs-toggle="tooltip" th:title="#{chat.response.n}">N</label>
 
+                            <!-- C는 운영자가 /settings 에서 끌 수 있다(app.llm.creative-mode-enabled).
+                                 꺼진 배포에서는 비활성이 아니라 **아예 렌더하지 않는다** — 사용자가
+                                 영영 켤 수 없는 회색 버튼이 입력창에 상주할 이유가 없다. 아래 스크립트가
+                                 이 요소의 부재를 견디고, 서버도 같은 판정을 독립적으로 건다
+                                 (SettingsService.effectiveResponseMode). -->
+                            <th:block th:if="${creativeModeEnabled}">
                             <input type="radio" class="btn-check" name="response-mode-radio"
                                    id="response-mode-c" value="C" autocomplete="off"/>
                             <label class="btn btn-outline-secondary response-mode-btn" for="response-mode-c"
                                    data-bs-toggle="tooltip" th:title="#{chat.response.c}">C</label>
+                            </th:block>
                         </div>
                         <input type="hidden" id="form-response-mode" name="responseMode" value="N"/>
                     </div>
@@ -799,14 +806,19 @@
     /* 버튼으로 고를 수 있는 값. 여기 없는 값(옛 'M'/'L', 손으로 넣은 값)은 기본값으로 떨어진다 —
        화이트리스트에 버튼 없는 값을 넣으면 어느 라디오도 체크되지 않은 상태가 만들어진다.
        서버도 같은 규칙이다(ResponseMode.parse). */
-    const RESPONSE_MODES = ['S', 'N', 'C'];
+    /* 운영자가 C를 꺼 두면 버튼 자체가 렌더되지 않는다 — 화이트리스트에서도 빼야
+       localStorage 에 남은 'C' 선택이 기본값 N으로 흡수된다(안 그러면 어느 라디오도 체크되지
+       않은 화면이 만들어진다). 서버 판정은 이와 무관하게 따로 돈다. */
+    const CREATIVE_MODE_ENABLED = /*[[${creativeModeEnabled}]]*/ true;
+    const RESPONSE_MODES = CREATIVE_MODE_ENABLED ? ['S', 'N', 'C'] : ['S', 'N'];
     const RESPONSE_MODE_DEFAULT = 'N';
     const responseModeCRadio = document.getElementById('response-mode-c');
 
     function applyResponseMode(mode) {
         const requested = RESPONSE_MODES.includes(mode) ? mode : RESPONSE_MODE_DEFAULT;
-        /* 비활성 버튼을 고른 상태로 두면 어느 라디오도 체크되지 않은 화면이 만들어진다. */
-        const m = (requested === 'C' && responseModeCRadio.disabled) ? RESPONSE_MODE_DEFAULT : requested;
+        /* 비활성(또는 없는) 버튼을 고른 상태로 두면 어느 라디오도 체크되지 않은 화면이 만들어진다. */
+        const m = (requested === 'C' && (!responseModeCRadio || responseModeCRadio.disabled))
+                ? RESPONSE_MODE_DEFAULT : requested;
         responseModeRadios.forEach(r => { r.checked = (r.value === m); });
         responseModeInput.value = m;
     }
@@ -816,6 +828,7 @@
        열리면 어느 라디오도 체크되지 않은 상태가 되기 때문이다.
        이것은 편의일 뿐이고 실제 방어는 서버에 있다 — ChatForm/ChatRequest 가 같은 성질을 묻는다. */
     function updateResponseModeAvailability(isDirect) {
+        if (!responseModeCRadio) return;   /* 운영자가 C를 꺼 둔 배포 — 비활성화할 버튼이 없다 */
         responseModeCRadio.disabled = isDirect;
         if (isDirect && responseModeInput.value === 'C') {
             applyResponseMode(RESPONSE_MODE_DEFAULT);

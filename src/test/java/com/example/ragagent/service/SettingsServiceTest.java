@@ -62,7 +62,7 @@ class SettingsServiceTest {
                     n, "http://x/v1", "key", "model", "BOTH", "LOCAL", 1, true, null));
         }
         AppProperties.LlmConfig llm = new AppProperties.LlmConfig(
-                pcs, 2, 10, 180, "COST_FIRST", 0.6, 3, 20, 0.0, 0.1, 0.0, 0.7, 6000, false);
+                pcs, 2, 10, 180, "COST_FIRST", 0.6, 3, 20, 0.0, 0.1, 0.0, 0.7, true, 6000, false);
         return new AppProperties(
                 "./data", 2, 800, 100, 100, 7, 0.0, true, 5, false,
                 true, false, 3, null,
@@ -76,7 +76,7 @@ class SettingsServiceTest {
         nameToRole.forEach((name, role) -> pcs.add(new AppProperties.ProviderConfig(
                 name, "http://x/v1", "key", "model", "BOTH", role, 1, true, null)));
         AppProperties.LlmConfig llm = new AppProperties.LlmConfig(
-                pcs, 2, 10, 180, routingMode, 0.6, 3, 20, 0.0, 0.1, 0.0, 0.7, 6000, false);
+                pcs, 2, 10, 180, routingMode, 0.6, 3, 20, 0.0, 0.1, 0.0, 0.7, true, 6000, false);
         return new AppProperties(
                 "./data", 2, 800, 100, 100, 7, 0.0, true, 5, false,
                 true, false, 3, null,

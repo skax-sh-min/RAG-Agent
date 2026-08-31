@@ -85,6 +85,7 @@ public class SettingsService implements AppProperties.OverrideSource {
             new Spec(SettingsKeys.LLM_TEMPERATURE,                Kind.DOUBLE, 0.0, 0.3,  0.01, "settings.item.temperature"),
             new Spec(SettingsKeys.LLM_DIRECT_TEMPERATURE,         Kind.DOUBLE, 0.0, 1.0,  0.05, "settings.item.direct-temperature"),
             new Spec(SettingsKeys.LLM_INDEXING_TEMPERATURE,       Kind.DOUBLE, 0.0, 1.0,  0.05, "settings.item.indexing-temperature"),
+            new Spec(SettingsKeys.LLM_CREATIVE_MODE_ENABLED,      Kind.BOOL,   0,   0,    0,    "settings.item.creative-mode-enabled"),
             new Spec(SettingsKeys.LLM_CREATIVE_TEMPERATURE,       Kind.DOUBLE, 0.0, 1.0,  0.05, "settings.item.creative-temperature")
     );
 
@@ -409,7 +410,9 @@ public class SettingsService implements AppProperties.OverrideSource {
      *  description/classification, title, summary — reads it per call, so it can be pinned near 0
      *  for deterministic extraction independently of the other two) — and creative-temperature, which
      *  only the C (응용) response mode uses (§6.24): the general one is clamped to [0.0, 0.3], so
-     *  creative generation is impossible on it. max-tokens sits in the LLM
+     *  creative generation is impossible on it. Paired with it is creative-mode-enabled, the on/off
+     *  switch for that mode as a whole ({@link #effectiveResponseMode}) — the two sit together so an
+     *  operator who closes C sees its now-idle temperature right below it. max-tokens sits in the LLM
      *  providers card footer as read-only (baked into the provider beans at startup — restart to
      *  change). */
     private List<SettingItem> llmHotItems() {
@@ -465,6 +468,40 @@ public class SettingsService implements AppProperties.OverrideSource {
             source = "최소 보장";                                   // 비율분이 작아 바닥이 받쳐준다
         }
         return "%,d (%s)".formatted(effective, source);
+    }
+
+    /**
+     * C(응용) 응답 모드를 채팅에서 고를 수 있는가 ({@code app.llm.creative-mode-enabled}).
+     * <b>기본 ON</b> — 이 스위치가 생기기 전에는 늘 열려 있었으므로 미설정 시 동작이 바뀌지 않는다.
+     *
+     * <p>이것만으로 판정이 끝나지는 않는다: "어떤 모드가 이 스위치에 종속되는가"는
+     * {@link ResponseMode#operatorToggleable()} 가 안다. 둘을 합치는 곳이
+     * {@link #effectiveResponseMode(ResponseMode)} 하나이므로, 모드를 하나 더 끄고 싶어지면
+     * enum 의 플래그만 켜면 되고 이 클래스는 손대지 않는다.
+     */
+    public boolean creativeModeEnabled() {
+        return props.llmSafe().creativeModeEnabled();
+    }
+
+    /**
+     * 요청된 응답 모드를 <b>지금 이 배포에서 실제로 쓸 수 있는 모드</b>로 바꿔 준다 — 운영자가 꺼 둔
+     * 모드는 {@link ResponseMode#DEFAULT} 로 강등한다.
+     *
+     * <p>모든 채팅 진입점이 이 메서드를 거쳐야 한다({@code ChatController} 의 HTMX·SSE·REST 세 경로).
+     * 클라이언트가 버튼을 감추는 것만으로는 부족하다 — C/Direct 배타 가드와 같은 이유이고, 실제로 구
+     * L 모드는 서버 가드가 없어 손으로 만든 요청이 그대로 통과했다. 강등을 <b>진입점</b>에서 하는 것도
+     * 같은 이유다: 그래프 안쪽에서 모드만 바꾸면 화면·DB 의 {@code response_mode} 는 C 인데 실제로는
+     * N 으로 답한 턴이 남는다.
+     *
+     * <p>강등 대상이 {@code DEFAULT} 이므로 {@code DEFAULT} 자신은 끌 수 있는 모드일 수 없다 —
+     * {@code ResponseMode.operatorToggleable()} 의 계약이고 테스트가 고정한다.
+     */
+    public ResponseMode effectiveResponseMode(ResponseMode requested) {
+        if (requested == null) return ResponseMode.DEFAULT;
+        if (requested.operatorToggleable() && !creativeModeEnabled()) {
+            return ResponseMode.DEFAULT;
+        }
+        return requested;
     }
 
     private List<SettingItem> uiHotItems() {
@@ -545,6 +582,7 @@ public class SettingsService implements AppProperties.OverrideSource {
             case SettingsKeys.LLM_TEMPERATURE                 -> trimNum(props.llmSafe().temperature());
             case SettingsKeys.LLM_DIRECT_TEMPERATURE          -> trimNum(props.llmSafe().directTemperature());
             case SettingsKeys.LLM_INDEXING_TEMPERATURE        -> trimNum(props.llmSafe().indexingTemperature());
+            case SettingsKeys.LLM_CREATIVE_MODE_ENABLED       -> Boolean.toString(creativeModeEnabled());
             case SettingsKeys.LLM_CREATIVE_TEMPERATURE        -> trimNum(props.llmSafe().creativeTemperature());
             case SettingsKeys.UI_SOURCE_PREVIEW_ENABLED       -> Boolean.toString(sourcePreviewEnabled());
             case SettingsKeys.UI_RETRIEVAL_METRICS_ENABLED    -> Boolean.toString(retrievalMetricsEnabled());
