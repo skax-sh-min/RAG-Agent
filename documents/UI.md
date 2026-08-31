@@ -228,11 +228,18 @@ REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — �
 
 - 핫 수정 가능 항목만 `key`를 받아 수정할 수 있다:
   - **검색 튜닝**(다음 검색부터 반영) — 유사도 임계값·RRF 가중치/k·후보 배수·태그 후보 배수·멀티쿼리 최소 길이·재시도 시 후보 확대·topK·멀티쿼리 확장·하이브리드 검색·**큐레이션 Q&A 사용 여부·큐레이션 가중치(좋아요)·지식 제안 가중치**
-  - **인덱싱/청킹**(다음 인덱싱/↺ 재인덱싱부터 반영) — 청크 크기·오버랩·최소 크기·**청크 분할 전략(`chunk-split-granular`)**·동시 파일 처리 수·동시 LLM 호출 수
-  - **LLM**(다음 LLM 호출부터 반영, §6.18) — **temperature 3종 전부**: 일반/RAG(`llm.temperature`, clamp `[0.0, 0.3]`)·Direct 응답(`llm.direct-temperature`, `[0.0, 1.0]`)·인덱싱/백그라운드(`llm.indexing-temperature`, `[0.0, 1.0]`). 각각 자기 계열의 다음 호출부터 반영된다
+  - **인덱싱/청킹**(다음 인덱싱/↺ 재인덱싱부터 반영) — 청크 크기·오버랩·최소 크기·**청크 분할 전략(`chunk-split-granular`)**·동시 파일 처리 수(`1~4`)·동시 LLM 호출 수(`1~8`).
+    두 동시성 값의 범위는 **`/settings` 입력 한계일 뿐**이다 — `indexingSafe()`는 `<= 0`만 걸러내고
+    상한 clamp가 없어서, 환경변수로 더 큰 값을 준 배포는 그대로 동작하되 설정 화면에서 그 값을 다시
+    넣을 수는 없다(온도들과 다른 점이다. 아래 참고).
+  - **LLM**(다음 LLM 호출부터 반영, §6.18) — **temperature 4종 전부**: 일반/RAG(`llm.temperature`, clamp `[0.0, 0.3]`)·Direct 응답(`llm.direct-temperature`, `[0.0, 1.0]`)·인덱싱/백그라운드(`llm.indexing-temperature`, `[0.0, 0.1]`)·C(응용) 창의(`llm.creative-temperature`, `[0.0, 1.0]`). 각각 자기 계열의 다음 호출부터 반영된다.
+    이 넷은 **`/settings` 스펙 범위와 `llmSafe()`의 clamp가 같은 값**이라, 환경변수로 범위를 벗어난 값을 줘도 같은 상한에서 잘린다 — 화면이 거부하는 값이 뒤에서 적용되는 일이 없다. 한쪽만 고치면 그 성질이 깨진다.
+  - **C(응용) 응답 모드 사용**(`llm.creative-mode-enabled`, BOOL, 기본 ON) — 같은 LLM 그룹에 **창의 온도 바로 다음**에 놓인다(온도가 "어떻게", 이쪽이 "열어 둘까"). 끄면 채팅 입력창의 C 버튼이 렌더되지 않고 서버가 요청을 `N`으로 강등한다(§3.4 응답 모드 토글).
   - **UI**(다음 페이지 렌더부터 반영) — 출처 미리보기 표시(`ui.source-preview-enabled`, 기본 ON). 끄면 채팅 출처 배지의 팝오버 미리보기(§4)가 사라진다. **출처 검색 수치 표시**(`ui.retrieval-metrics-enabled`, 기본 **OFF**) — 켜면 출처마다 `유사도 0.72 · 응답 31%`가 붙는다(§4 "출처 검색 진단 수치")
   - 그 외 키(조회 전용: `rerank-enabled`·쿼리 임베딩 캐시 등)는 400(`IllegalArgumentException`)으로 거부된다.
 - 값 검증 실패(범위 초과, 타입 불일치)도 400 — `GlobalExceptionHandler`가 처리.
+- **편집 칸에 마우스를 올리면 허용 범위가 툴팁으로 뜬다** — 숫자 칸은 `설정 가능 범위 1 ~ 1000 (입력 단위 1)`, bool 칸은 `설정 가능 값 true 또는 false`(`settings.range.number`/`.bool`). 툴팁은 행이 아니라 `<input>`/`<select>` 자신에 붙어 있어(타입별로 요소가 이미 갈라져 있으므로 조건 분기가 없다) 조작할 칸 바로 옆에 뜬다. 경계값은 `Double`이라 그대로 찍으면 `1.0 ~ 1000.0`이 되므로 `SettingItem.minLabel()/maxLabel()/stepLabel()`이 다듬는다(레코드 컴포넌트가 아닌 일반 메서드 — `SourceRef.staleBadge()` 선례). `data-bs-trigger="hover"`를 명시하는데, Bootstrap 기본값 `'hover focus'`로 두면 값을 고치려고 클릭한 순간 툴팁이 떠서 아래 행을 가린 채 blur까지 남는다.
+  - 툴팁 재초기화 훅은 `htmx:afterSwap`이 아니라 **`htmx.onLoad`**여야 한다: `hx-swap=outerHTML`은 기존 행을 DOM에서 떼어내므로 그 행에서 발화하는 `afterSwap`이 `document.body`까지 버블링하지 못할 수 있고, `htmx:load`는 **새로 삽입된** 노드에서 발화하니 항상 도달한다. 편집 가능한 행에 툴팁이 생기기 전에는 스왑되는 행에 툴팁이 하나도 없어 드러나지 않던 차이다.
 - 재기동이 필요한 값(rerank 활성화, 벡터 스토어 백엔드, 임베딩 설정, `max-tokens` 등)과 기본 라우팅 모드는 조회 전용으로만 노출된다. `max-tokens`는 프로바이더 빈 생성 시점에 `OpenAiChatOptions`로 구워지므로 핫 수정 대상이 아니다(§6.18 이후 실제 config 값을 반영해 표시만 한다).
 - **프로바이더 활성/비활성**(`/admin/settings/provider/toggle`)은 위 `key`/`value` 오버라이드 메커니즘과 별개다 — `settings_override`에 저장되지 않는 메모리 전용(`ProviderToggle`) 토글이라 **재기동하면 초기화**된다. LLM 라우팅 표의 각 행에서 관리자에게만 활성화/비활성화 버튼이 보인다. 표 본문 행 사이의 구분선은 CSS로 숨겨져 있다(`app.css`의 `#llm-providers tbody > tr > *`) — 헤더 밑줄만 남아 열 제목과 데이터를 구분한다.
 - **LOCAL_ONLY 배포에서는 NORMAL/PREMIUM 프로바이더가 표에서 통째로 숨겨진다**: `app.llm.default-routing-mode=LOCAL_ONLY`일 때 `SettingsService.visibleProviders()`가 `role != LOCAL`인 프로바이더를 필터링한다(`providerRows()`/`setProviderEnabled()` 둘 다 동일하게 적용) — NORMAL/PREMIUM 항목이 향후 모드 전환에 대비해 `application.properties`에 여전히 남아있을 수 있다. 숨겨진 프로바이더는 토글 엔드포인트로도 조작할 수 없다(이름이 "알 수 없는 프로바이더"로 거부됨) — 표시 범위와 조작 가능 범위가 항상 일치한다. (안내 배너·토글 휘발성 안내 문구는 UX 정리 차원에서 제거됨 — 동작 자체는 그대로.)
@@ -337,8 +344,9 @@ REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — �
 `includeCurated=true`를 붙여 **문서 태그 ∪ 큐레이션 태그**를 받는다(큐레이션 항목은 `chunk_fts`에
 색인되지 않아 기본 호출로는 잡히지 않는다).
 
-**응답 모드 토글 (S/N/C)**: 콤보박스가 아니라 `.btn-check` 기반 3버튼 토글 그룹(`#response-mode-group` 안의
-`#response-mode-s/n/c`) — 왼쪽에 `응답옵션`(`chat.response.group.label`) 라벨이 붙는다. 버튼 폭은 기본
+**응답 모드 토글 (S/N/C)**: 콤보박스가 아니라 `.btn-check` 기반 버튼 토글 그룹(`#response-mode-group` 안의
+`#response-mode-s/n/c`. **`#response-mode-c`는 `app.llm.creative-mode-enabled`가 켜져 있을 때만 렌더된다** —
+아래 "운영자 스위치" 참고) — 왼쪽에 `응답옵션`(`chat.response.group.label`) 라벨이 붙는다. 버튼 폭은 기본
 `btn-group-sm`의 약 1.5배(`.response-mode-btn { min-width: 2.6rem }`, `app.css`)로 넓히고 `font-weight:700`으로
 굵게 표시한다. 버튼에는 `S`/`N`/`C` 글자만 표시하고, 마우스를 올리면 상세 설명이 뜬다 — 단 네이티브 `title`
 속성이 아니라 **Bootstrap Tooltip**(`data-bs-toggle="tooltip"` + `new bootstrap.Tooltip(el, {delay:{show:100,
@@ -355,7 +363,8 @@ hide:0}})`, 하단 스크립트에서 초기화)이다. 네이티브 title 툴�
 | C | `C` | 문서를 **재료로** 코드·설정 생성, 4섹션 | 숫자 없음 — "구체적이고 자세하게" |
 
 **옛 `L`(원문 최대)은 제거됐다** — 같은 검색 결과를 받아 재료가 동일했고 실측 분량이 M과 4.6%밖에
-차이 나지 않았다(PLAN §6.24). 화이트리스트(`['S','N','C']`)에 없는 값은 기본값 `N`으로 떨어지므로
+차이 나지 않았다(PLAN §6.24). 화이트리스트(`CREATIVE_MODE_ENABLED`가 켜져 있으면 `['S','N','C']`, 꺼져 있으면 `['S','N']`)에
+없는 값은 기본값 `N`으로 떨어지므로
 브라우저 `localStorage`에 남아 있던 `'M'`·`'L'`도 그대로 흡수된다 — 서버의 `ResponseMode.parse()`와
 같은 규칙이다.
 
@@ -373,9 +382,25 @@ hide:0}})`, 하단 스크립트에서 초기화)이다. 네이티브 title 툴�
 > 성립하지 않으므로, `updateResponseModeAvailability(isDirect)`가 `#response-mode-c`를 `disabled` 처리하고
 > 선택 중이었다면 `localStorage`까지 `N`으로 되돌린다(RAG로 돌아가도 자동 재선택하지 않는다 — 구 `L`과 같은 규칙).
 > **클라이언트 비활성화는 편의일 뿐이다** — 구 `L`은 이것만 있고 서버 가드가 없어 손으로 만든 요청이 통과했다.
-> 실제 방어는 `ChatRequest`(REST)와 `ChatForm.responseModeOrDefault()`(HTMX 폼 + SSE가 공유하는 유일한 지점 —
-> `ChatController.normalizeResponseMode()`는 SSE 경로를 지나가지 않는다)에 있고, 거기서 `N`으로 강등되므로
-> 저장되는 `conversation_turns.response_mode`까지 실제 동작과 일치한다.
+> 실제 방어는 `ChatRequest`(REST) 컴팩트 생성자와 `ChatForm.responseModeOrDefault()`(HTMX 폼 + SSE가
+> 공유하는 값 객체)에 있고, 거기서 `N`으로 강등되므로 저장되는 `conversation_turns.response_mode`까지
+> 실제 동작과 일치한다. 두 가드가 **레코드 안**에 있는 이유는 이 판정이 요청 자체에서만 파생되기
+> 때문이다(설정 조회가 필요 없다).
+>
+> ⚠️ 예전 판에는 "`ChatController.normalizeResponseMode()`는 SSE 경로를 지나가지 않는다"고 적혀 있었는데
+> **사실이 아니다** — `streamChat()`과 `postChat()`이 모두 그 메서드를 부른다. 아래 운영자 스위치가 바로
+> 그 지점에 걸려 있으므로, 이 문장을 믿고 "SSE는 컨트롤러 가드를 안 탄다"고 읽으면 안 된다.
+
+> **운영자 스위치 — C는 통째로 닫을 수 있다**: `app.llm.creative-mode-enabled`(기본 ON, `/settings`의
+> "LLM 튜닝"에서 핫 수정)를 끄면 `#response-mode-c`가 **비활성이 아니라 아예 렌더되지 않는다** — 사용자가
+> 영영 켤 수 없는 회색 버튼을 입력창에 남길 이유가 없기 때문이고, 그래서 `updateResponseModeAvailability()`와
+> `applyResponseMode()`는 이 요소의 **부재를 견뎌야 한다**(`getElementById`가 `null`을 주고, 그걸 건드리면
+> `TypeError`로 `DOMContentLoaded` 블록 전체가 죽는다 — 제거된 `L` 참조가 그 사례였다). 서버 판정은 이와
+> 독립적으로 `SettingsService.effectiveResponseMode()` 한 곳에서 이뤄지고, 세 진입점
+> (`postChat`·`streamChat`의 `normalizeResponseMode()`, REST 의 `withAvailableResponseMode()`)이 전부 그것을
+> 지난다. "어떤 모드가 이 스위치에 종속되는가"는 `ResponseMode.operatorToggleable()`이 알고(지금은 C 뿐),
+> 기본 모드는 절대 여기 해당할 수 없다(강등 대상이 자기 자신이 되어 스위치가 무의미해진다).
+> **과거 기록은 건드리지 않는다** — 이미 C로 답한 턴의 `[C]` 표기와 검증 배지는 그대로 남는다.
 
 > **`S`·`C`에서는 좋아요 버튼이 아무 일도 하지 않는다**(`allowsCuration() = false` → `CuratedQaService.onLike()`가
 > 즉시 반환, `curated_qa` 행조차 만들지 않는다). S는 답변 전체가 `## 요약` 한 섹션이라 임베딩 입력에서 구조

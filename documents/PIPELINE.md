@@ -118,7 +118,9 @@ COST_FIRST와 동일하되,
 
 Direct(검색 없음) 경로도 같은 규칙으로 `prompt.direct.system.{s,n}`을 고른다. meta(인사/잡담)만 모드와 무관하게 `prompt.direct.meta.system`을 쓴다. **C는 Direct 프롬프트가 없다** — 검색 결과가 이 모드의 전제라 RAG 없이 부를 수 있는 값이 아니다.
 
-> **C는 Direct와 배타다.** 검색을 건너뛰는 Direct 에서는 문서를 재료로 삼는 C 가 성립하지 않으므로, 채팅 화면이 C 버튼을 비활성화하고(선택 중이었다면 저장된 선택까지 N 으로 되돌린다) **서버도 독립적으로 같은 규칙을 건다** — `ChatRequest`(REST)와 `ChatForm.responseModeOrDefault()`(HTMX 폼 + SSE 가 공유하는 유일한 지점). 구 L 모드는 클라이언트 비활성화만 있고 서버 가드가 없어 손으로 만든 요청이 그대로 통과했다.
+> **C는 Direct와 배타다.** 검색을 건너뛰는 Direct 에서는 문서를 재료로 삼는 C 가 성립하지 않으므로, 채팅 화면이 C 버튼을 비활성화하고(선택 중이었다면 저장된 선택까지 N 으로 되돌린다) **서버도 독립적으로 같은 규칙을 건다** — `ChatRequest`(REST)와 `ChatForm.responseModeOrDefault()`(HTMX 폼 + SSE 가 공유하는 값 객체). 구 L 모드는 클라이언트 비활성화만 있고 서버 가드가 없어 손으로 만든 요청이 그대로 통과했다.
+
+> **C는 운영자가 통째로 닫을 수 있는 유일한 모드다** — `app.llm.creative-mode-enabled`(기본 ON, `/settings`에서 핫 수정). 문서 밖의 내용을 쓰는 유일한 모드라 제공 여부 자체가 운영 정책이기 때문이다. 위의 Direct 배타가 **요청 하나**를 보고 판정하는 것과 달리 이쪽은 **배포 설정**을 봐야 하므로 레코드가 스스로 답할 수 없다 — 판정은 `ResponseMode.operatorToggleable()`(끌 수 있는 모드인가)과 `SettingsService.creativeModeEnabled()`(지금 꺼져 있는가)로 나뉘고, 둘을 합치는 곳은 `SettingsService.effectiveResponseMode()` **하나**다. 모든 채팅 진입점이 그것을 지난다: `ChatController.normalizeResponseMode()`(HTMX·SSE 공유)와 `withAvailableResponseMode()`(REST). 강등을 **진입점에서** 하는 이유는 Direct 가드와 같다 — 그래프 안쪽에서만 바꾸면 저장된 `response_mode`는 C인데 실제로는 N으로 답한 턴이 남는다. 꺼져도 이미 C로 답한 과거 턴의 표기·배지는 그대로다.
 
 **모드마다 시스템 프롬프트를 통째로 바꾼다.** 공용 프롬프트 하나를 두고 사용자 메시지에 "위 형식은 쓰지 마세요" 같은 부정 지시를 얹어 뒤집는 방식은 S에서 실패했다 — 시스템 프롬프트가 나열한 5섹션 헤더 목록이 그 한 줄보다 강하게 작용해 모델이 전부 생성했고, 서버가 사후 절단하면서 화면과 저장본이 갈라졌다. 그래서 **S 프롬프트는 5섹션 헤더 이름을 언급조차 하지 않는다**(금지하려고 나열하는 것만으로도 약한 로컬 모델은 그 목록을 따라간다).
 

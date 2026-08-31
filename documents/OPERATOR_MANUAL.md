@@ -261,8 +261,8 @@ copy .env.example .env
 
 | 변수 | 기본값 | 권장 범위 | 설명 |
 |------|--------|----------|------|
-| `INDEXING_MAX_FILES` | `1` | 1 ~ 8 | 파일 병렬 인덱싱 워커 수. **인덱싱 LLM 동시 호출 피크 ≈ `INDEXING_MAX_FILES` × `INDEXING_MAX_LLM`** 이므로, 기본값 `1`은 피크를 정확히 `INDEXING_MAX_LLM`으로 고정한다(§6.5 주석 참고). 올리면 처리량은 늘지만 피크가 곱으로 커진다 |
-| `INDEXING_MAX_LLM` | `3` | 1 ~ 16 | 인덱싱 중 LLM 병렬 호출 수 — 키워드 추출뿐 아니라 MD 교정·TXT 구조화·지연 Vision 설명이 모두 사용. 로컬 LLM 서버의 `--parallel` 값에 맞춘다 |
+| `INDEXING_MAX_FILES` | `1` | 1 ~ 4 (`/settings` 상한) | 파일 병렬 인덱싱 워커 수. **인덱싱 LLM 동시 호출 피크 ≈ `INDEXING_MAX_FILES` × `INDEXING_MAX_LLM`** 이므로, 기본값 `1`은 피크를 정확히 `INDEXING_MAX_LLM`으로 고정한다(§6.5 주석 참고). 올리면 처리량은 늘지만 피크가 곱으로 커진다 |
+| `INDEXING_MAX_LLM` | `3` | 1 ~ 8 (`/settings` 상한) | 인덱싱 중 LLM 병렬 호출 수 — 키워드 추출뿐 아니라 MD 교정·TXT 구조화·지연 Vision 설명이 모두 사용. 로컬 LLM 서버의 `--parallel` 값에 맞춘다 |
 | `INDEXING_KEYWORD_TIMEOUT_SECONDS` | `600` | 30 ~ 1800 | 청크 키워드 추출 1회당(§10.8.2 배치 시 배치 1회당) 최대 대기 시간. 초과 시 TF fallback |
 | `INDEXING_KEYWORD_BATCH_SIZE` | `2` | 1 ~ 8 | §10.8.2 — 청크 N개를 한 LLM 호출로 묶어 요청(왕복 ≈ ceil(청크수/N)). `1`=배치 없음(청크당 1콜, 이전 동작). 배치가 클수록 응답 길이도 늘어나므로 로컬 모델에서 타임아웃이 잦으면 `INDEXING_KEYWORD_TIMEOUT_SECONDS`를 함께 올리세요 |
 
@@ -392,7 +392,7 @@ app.embedding.max-concurrent-batches=4
 | `LLM_MAX_TOKENS` | `10000` | 1000 ~ 32000 | 단일 진실 소스(`app.llm.max-tokens`)로 통일되어, 이 값을 바꾸면 **아래 세 곳 모두**가 함께 움직입니다: (1) **블로킹 LLM 응답 토큰 상한** — 인덱싱·분류·키워드·Direct 블로킹 호출에 적용(스트리밍 채팅 답변은 의도적으로 미적용, SSE 타임아웃이 폭주 방지). (2) **대화 컨텍스트 문자 예산**(`MemoryService`, `×0.5`로 히스토리 예산 산출). (3) **MD 교정 섹션 크기**(`MarkdownCorrectionService`).<br>§6.18 이전에는 (1)이 코드에 `6000`으로 하드코딩돼 이 환경변수와 무관하게 동작했고, (2)·(3)은 별도의 죽은 프로퍼티(`spring.ai.openai.chat.options.max-tokens`, 기본 `8000`)를 읽어 (1)과 다른 값을 썼습니다 — 이제 세 곳 모두 `app.llm.max-tokens` 하나만 읽습니다.<br>**⚠️ 기본값 `10000`은 32k 이상 컨텍스트를 전제합니다** — 이 값은 출력 상한인 동시에 (2)를 통해 **입력**(히스토리 5,000자)도 키우므로 `n_ctx` 양쪽을 함께 압박합니다. 8k~10k 모델이면 `2000` 근처로 낮추세요(§8 「검증 배지가 아예 사라짐」의 산정표).<br>**검증 호출만은 이 값을 쓰지 않습니다** — `AnswerService`가 자체 상한 **2,048토큰**을 겁니다. 검증 응답은 JSON 몇 필드인데 프로바이더에 구워진 이 값 전체가 출력으로 예약되면, 좁은 컨텍스트에서 `n_ctx`를 넘기는 것은 근거가 아니라 그 예약이 됩니다.<br>**응답 모드(S/N)와의 관계**: (1)의 실제 상한은 이 값 그대로가 아니라 `ResponseMode`별 비율(S 15% / N·C 70%)과 글자수 하한(S 2,000 / N·C 5,000자) 중 **큰 값**이며, 다시 이 값 자체로 잘립니다(`min`). 전환점이 모드마다 달라 — S는 13,334, N·C는 7,143 — **기본값 10,000에서는 S가 하한(2,000), N·C가 비율(7,000)** 입니다. **어느 항이 적용 중인지는 `/settings`의 "응답 예산" 행에서 바로 확인할 수 있습니다**(`2,000 (최소 보장)` / `8,400 (상한의 70%)` / `3,000 (설정 상한)`). ⚠️ 이 값은 **폭주를 막는 안전판이지 목표 분량이 아닙니다** — 실제 분량은 모드별 시스템 프롬프트가 정하고(숫자를 말하는 건 S뿐 — RAG 답변 `prompt.answer.system.s`는 "1,000자 이내", 검색을 건너뛰는 Direct 답변 `prompt.direct.system.s`는 "1,500자 이내". Direct 쪽이 느슨한 이유는 인용할 문서 발췌가 없어 답변이 스스로 풀어 써야 하기 때문이며, 한/영 번들이 같은 숫자를 말하는지는 `ResponseModeSystemPromptTest`가 고정한다. N은 숫자 없음), 게다가 스트리밍 채팅 답변에는 적용되지 않습니다. 상세는 [PIPELINE §3.1](PIPELINE.md) |
 | `LLM_TEMPERATURE` | `0.0` | 0.0 ~ 0.3 | **일반/RAG 대화형 호출**(분류·답변·근거평가·재순위)의 무작위성 제어(`app.llm.temperature`). `0.0`은 결정적 답변, 높을수록 다양·창의적. `[0.0, 0.3]`으로 clamp.<br>**핫 수정 가능** — `/settings`에서 재기동 없이 다음 호출부터 반영(`ClassifierService`/`AnswerService`/`RerankerService`가 매 호출 재조회). 프로바이더 빈 생성 시점에도 고정되는데, 이는 모델 주위에 자체 `ChatClient`를 구성해 호출별 오버라이드를 받을 수 없는 프레임워크 내부 호출(예: 멀티쿼리 확장)을 위한 기동 시점 폴백 값으로만 쓰입니다 — 그런 호출은 재기동해야 변경이 반영됩니다.<br>인덱싱/백그라운드 호출(키워드 추출·MD 교정 등)에는 적용되지 않습니다 — 아래 `LLM_INDEXING_TEMPERATURE`로 분리되어 있습니다 |
 | `DIRECT_LLM_TEMPERATURE` | `0.1` | 0.0 ~ 1.0 | **Direct(meta) 응답 전용** temperature(`app.llm.direct-temperature`) — 인사·잡담 등 RAG를 안 쓰는 직접 응답은 약간의 다양성이 자연스러워 일반 temperature와 분리(§6.18). `[0.0, 1.0]`으로 clamp. **핫 수정 가능** — `/settings`에서 재기동 없이 다음 Direct 호출부터 반영(`DirectAnswerService`가 매 호출 재조회) |
-| `LLM_INDEXING_TEMPERATURE` | `0.0` | 0.0 ~ 1.0 | **인덱싱/백그라운드 전용** temperature(`app.llm.indexing-temperature`) — 키워드 추출, MD 교정, txt→md 구조화, 이미지 설명/분류, 스레드 제목 생성, 대화 요약 등 모든 ungated 백그라운드 호출에 적용. 대화형이 아닌 추출/분류 작업이라 `LLM_TEMPERATURE`/`DIRECT_LLM_TEMPERATURE` 값과 무관하게 결정적으로 유지하려고 분리했습니다. `[0.0, 1.0]`으로 clamp. **핫 수정 가능** — `/settings`에서 재기동 없이 다음 호출부터 반영(각 서비스가 매 호출 재조회) |
+| `LLM_INDEXING_TEMPERATURE` | `0.0` | 0.0 ~ 0.1 | **인덱싱/백그라운드 전용** temperature(`app.llm.indexing-temperature`) — 키워드 추출, MD 교정, txt→md 구조화, 이미지 설명/분류, 스레드 제목 생성, 대화 요약 등 모든 ungated 백그라운드 호출에 적용. 대화형이 아닌 추출/분류 작업이라 `LLM_TEMPERATURE`/`DIRECT_LLM_TEMPERATURE` 값과 무관하게 결정적으로 유지하려고 분리했습니다. `[0.0, 0.1]`으로 clamp — 출력이 파싱되는 추출 작업이라 표본추출의 다양성이 이득이 아니라 결함이고, 0에서 반복에 빠지는 로컬 모델을 깨울 만큼만 열어 둡니다. 환경변수로 더 큰 값을 줘도 이 상한에서 잘립니다. **핫 수정 가능** — `/settings`에서 재기동 없이 다음 호출부터 반영(각 서비스가 매 호출 재조회) |
 | `CREATIVE_LLM_TEMPERATURE` | `0.7` | 0.0 ~ 1.0 | **응답 모드 C(응용) 전용** temperature(`app.llm.creative-temperature`) — 검색된 문서를 **재료로** 새 코드·설정을 만들어내는 모드라 표본추출의 다양성이 필요합니다. 일반 temperature와 분리한 이유는 그쪽 clamp 상한이 **0.3**이라 창의 생성이 원천 봉쇄되기 때문입니다(§6.24). `[0.0, 1.0]`으로 clamp. **핫 수정 가능** — `/settings`의 "LLM 튜닝"에서 재기동 없이 다음 호출부터 반영되며, 블로킹·스트리밍 **양쪽**에 적용됩니다. C 모드는 채팅 입력창의 **S/N/C** 토글에서 고를 수 있고, **Direct(잡담) 토글과 함께 쓸 수 없습니다** — Direct 를 켜면 C 버튼이 비활성화되고 선택 중이었다면 N 으로 되돌아갑니다(서버도 같은 규칙을 독립적으로 적용하므로 손으로 만든 요청도 N 으로 강등됩니다). 이 모드를 배포 전체에서 닫으려면 아래 `CREATIVE_MODE_ENABLED`를 쓰세요 |
 | `CREATIVE_MODE_ENABLED` | `true` | true/false | **응답 모드 C(응용)를 아예 열지 말지**(`app.llm.creative-mode-enabled`). 위 `CREATIVE_LLM_TEMPERATURE`가 "C가 **어떻게** 답할까"라면 이 값은 "C를 **열어 둘까**"입니다 — C는 검색된 문서 밖의 내용(예제 코드·설정)을 생성하는 유일한 모드라, 배포처에 따라 처음부터 제공하지 않는 편이 맞을 수 있습니다.<br>`false`면 ① 채팅 입력창의 **C 버튼이 렌더되지 않고**(비활성 회색 버튼이 아니라 아예 사라집니다), ② 그럼에도 도착한 요청(REST `POST /api/v1/chat`, 손으로 만든 폼 POST)은 서버가 **N으로 강등**해 저장까지 N으로 남기며, ③ **이미 C로 답한 과거 턴의 `[C]` 표기와 검증 배지는 그대로 유지**됩니다(끄는 것은 "앞으로 고를 수 있는가"이지 "예전에 그렇게 답했는가"가 아닙니다).<br>**핫 수정 가능** — `/settings`의 "LLM 튜닝"에서 재기동 없이 다음 질문부터 반영됩니다 (열려 있던 채팅 화면은 새로고침해야 버튼이 사라집니다). 기본값은 `true`로, 이 스위치가 생기기 전과 동작이 같습니다 |
 
@@ -1947,8 +1947,8 @@ env-var/application.properties value ({설정값}); the override wins. Reset it 
 | 청크 크기(자) | `app.chunk-size` | 100 ~ 8000 |
 | 청크 오버랩(자) | `app.chunk-overlap` | 0 ~ 2000 |
 | 최소 청크 크기(자) | `app.min-chunk-size` | 0 ~ 4000 |
-| 동시 파일 처리 수 | `app.indexing.max-concurrent-files` | 1 ~ 32 |
-| 동시 LLM 호출 수 | `app.indexing.max-concurrent-llm-calls` (`INDEXING_MAX_LLM`) | 1 ~ 32 |
+| 동시 파일 처리 수 | `app.indexing.max-concurrent-files` | 1 ~ 4 |
+| 동시 LLM 호출 수 | `app.indexing.max-concurrent-llm-calls` (`INDEXING_MAX_LLM`) | 1 ~ 8 |
 
 > **`INDEXING_MAX_LLM`의 적용 범위**: 이 값은 키워드+맥락 추출 전용이 아니라 **인덱싱 계열 LLM 호출의 공통 병렬도**입니다 — 키워드 추출(`DocumentIndexer`), MD 포맷 교정(`MarkdownCorrectionService`), 인덱싱 중 이미지 설명("이미지 설명 추가" 체크 시, `MarkdownCorrectionService`가 문서 내 이미지를 이 값만큼 병렬 분석 — 예전엔 순차라 사실상 `INDEXING_MAX_FILES`에 매여 있었음), TXT 구조화(`TextToMarkdownService`), 지연 Vision 설명(`LazyVisionService`)이 모두 이 값을 씁니다. 다만 이 값은 "앱 전체 동시 LLM 호출 N개"라는 **전역 예산이 아닙니다**. 소비처마다 규칙이 다릅니다:
 >
@@ -1963,9 +1963,9 @@ env-var/application.properties value ({설정값}); the override wins. Reset it 
 |------|----|------|
 | 일반/RAG temperature | `app.llm.temperature` (`LLM_TEMPERATURE`) | 0.0 ~ 0.3 |
 | Direct(잡담) 응답 temperature | `app.llm.direct-temperature` (`DIRECT_LLM_TEMPERATURE`) | 0.0 ~ 1.0 |
-| 인덱싱/백그라운드 temperature | `app.llm.indexing-temperature` (`LLM_INDEXING_TEMPERATURE`) | 0.0 ~ 1.0 |
-| C(응용) 응답 모드 사용 | `app.llm.creative-mode-enabled` (`CREATIVE_MODE_ENABLED`) | true/false (기본 ON) |
+| 인덱싱/백그라운드 temperature | `app.llm.indexing-temperature` (`LLM_INDEXING_TEMPERATURE`) | 0.0 ~ 0.1 |
 | C(응용) 응답 temperature | `app.llm.creative-temperature` (`CREATIVE_LLM_TEMPERATURE`) | 0.0 ~ 1.0 |
+| C(응용) 응답 모드 사용 | `app.llm.creative-mode-enabled` (`CREATIVE_MODE_ENABLED`) | true/false (기본 ON) |
 
 **핫 수정 가능 — UI (재기동 불필요, 다음 화면 렌더부터 반영)**:
 

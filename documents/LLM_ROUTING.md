@@ -131,12 +131,16 @@ app.llm.progressive-threshold=0.6
 # by every ungated background/indexing caller (keyword extraction, MD correction, txt→md, vision
 # description/classification, thread-title generation, conversation summarization) — kept near 0
 # independently of temperature/direct-temperature since those are extraction/classification tasks,
-# not conversational ones. max-tokens stays view-only (restart to change) and applies to blocking
+# not conversational ones — hence its tight [0.0, 0.1] clamp, unlike the other temperatures.
+# creative-mode-enabled is the on/off switch for the C mode itself (default true): the temperature
+# says HOW C answers, this says WHETHER C is offered — it is the only mode that writes content the
+# documents do not contain. max-tokens stays view-only (restart to change) and applies to blocking
 # calls only — streaming chat answers are uncapped (bounded by app.sse-*-timeout-seconds).
 app.llm.temperature=${LLM_TEMPERATURE:0.0}
 app.llm.direct-temperature=${DIRECT_LLM_TEMPERATURE:0.1}
 app.llm.indexing-temperature=${LLM_INDEXING_TEMPERATURE:0.0}
 app.llm.creative-temperature=${CREATIVE_LLM_TEMPERATURE:0.7}
+app.llm.creative-mode-enabled=${CREATIVE_MODE_ENABLED:true}
 app.llm.max-tokens=${LLM_MAX_TOKENS:10000}
 # 질의 경로 동시성 게이트 기본값(서버의 실제 --parallel 값에 맞춘다) + 대기 상한
 app.llm.default-provider-concurrency=${LLM_DEFAULT_PROVIDER_CONCURRENCY:3}
@@ -276,6 +280,9 @@ app.llm.providers[8].priority=5
 # ── 병렬 인덱싱 제어 ──────────────────────────────────────────────
 # 인덱싱 LLM 동시 호출 피크 ≈ FILES × LLM (파일끼리 단계가 겹칠 수 있고, 교정/구조화 세마포어는
 # 파일마다 별개로 생성됨). FILES=1이면 피크가 정확히 LLM 값으로 고정된다.
+# /settings 에서 넣을 수 있는 범위는 FILES 1~4, LLM 1~8 이다. 온도들과 달리 indexingSafe() 에는 상한
+# clamp 가 없어(<= 0 만 걸러낸다) 환경변수로 더 큰 값을 준 배포는 그대로 동작하되, 설정 화면에서
+# 그 값을 다시 넣을 수는 없다.
 app.indexing.max-concurrent-files=${INDEXING_MAX_FILES:1}
 app.indexing.max-concurrent-llm-calls=${INDEXING_MAX_LLM:3}
 # 키워드+맥락 추출 배치 크기(§10.8.2) — 청크 N개를 한 LLM 호출로 묶어 왕복을 ceil(청크수/N)로 절감.
