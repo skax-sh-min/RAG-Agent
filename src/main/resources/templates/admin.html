@@ -99,6 +99,27 @@
         <div class="card-body p-0">
             <div th:if="${#lists.isEmpty(documents)}"
                  class="text-muted small p-3 text-center">인덱싱된 문서가 없습니다.</div>
+
+            <!-- 페이지 크기 + 이동. 다른 패널(큐레이션·대화 목록 등)과 생김새는 같지만 서버로
+                 offset/limit 을 보내지 않는다 — 아래 initRegistryPaging() 주석 참고. 표가 통째로
+                 서버 렌더라 초기 선택값도 여기 selected 가 아니라 그 스크립트가 정한다(저장된
+                 선택을 복원하므로). -->
+            <div class="px-3 py-2 border-bottom d-flex align-items-center gap-2 small text-muted"
+                 th:unless="${#lists.isEmpty(documents)}">
+                <button type="button" class="btn btn-sm btn-outline-secondary py-0 px-2"
+                        id="registry-prev" onclick="moveRegistryPage(-1)">‹ 이전</button>
+                <span id="registry-range">&nbsp;</span>
+                <button type="button" class="btn btn-sm btn-outline-secondary py-0 px-2"
+                        id="registry-next" onclick="moveRegistryPage(1)">다음 ›</button>
+                <select class="form-select form-select-sm ms-auto" id="registry-page-size"
+                        style="max-width:100px;" onchange="applyRegistryPageSize(this)">
+                    <option value="5">5개씩</option>
+                    <option value="10">10개씩</option>
+                    <option value="20">20개씩</option>
+                    <option value="50">50개씩</option>
+                </select>
+            </div>
+
             <div class="table-responsive" th:unless="${#lists.isEmpty(documents)}">
                 <table class="table table-sm table-hover mb-0 small">
                     <thead class="table-light">
@@ -111,7 +132,7 @@
                         <th class="text-center">작업</th>
                     </tr>
                     </thead>
-                    <tbody>
+                    <tbody id="registry-tbody">
                     <tr th:each="doc : ${documents}">
                         <td th:text="${doc.displayLabel()}" th:title="${doc.filename()}"></td>
                         <td><span class="badge bg-secondary" th:text="${doc.version()}"></span></td>
@@ -1307,8 +1328,74 @@ function closeSubmissionReview() {
 function setRegistryBusy(busy, statusText) {
     const card = document.getElementById('doc-registry-card');
     if (card) card.querySelectorAll('button').forEach(b => b.disabled = busy);
+    // 일괄 해제는 페이지 경계에서 비활성이어야 할 이전/다음까지 되살린다 — 다시 계산한다.
+    if (!busy) applyRegistryPage();
     setRegistryStatus(statusText);
 }
+
+/* ── 문서 레지스트리 페이지네이션 ──────────────────────────────────────────
+   이 카드만 **클라이언트 측**이다. 큐레이션·대화 목록·제안 패널은 offset/limit 을 서버에 보내
+   프래그먼트를 갈아끼우지만, 레지스트리는 성격이 다르다:
+     · 목록이 이미 DocRegistry 의 인메모리 맵 전체이고 admin.html 에 통째로 렌더돼 있어, 서버로
+       다시 다녀와도 줄일 질의가 없다(다른 패널들은 DB 를 페이지 단위로 읽는다).
+     · 이 카드에는 청크 삭제 후 청크 수 제자리 갱신(doc-chunks-<docId>) · 재인덱싱 SSE 진행 표시 ·
+       setRegistryBusy 가 얽혀 있다. 프래그먼트로 빼면 그 배선을 전부 다시 해야 한다.
+   그래서 행을 보이고 숨기기만 한다 — 모든 행이 DOM 에 남으므로 위 배선은 그대로 동작한다.
+   (뒤집어 말하면 이 페이징은 화면을 줄일 뿐 초기 응답 크기를 줄이지 않는다.) */
+const REGISTRY_PAGE_SIZES = [5, 10, 20, 50];
+const REGISTRY_DEFAULT_PAGE_SIZE = 10;
+const REGISTRY_PAGE_SIZE_KEY = 'adminRegistryPageSize';
+let registryPageSize = REGISTRY_DEFAULT_PAGE_SIZE;
+let registryOffset = 0;
+
+function applyRegistryPage() {
+    const tbody = document.getElementById('registry-tbody');
+    if (!tbody) return;
+    const rows = Array.from(tbody.rows);
+    const total = rows.length;
+    // 크기를 키우거나 행이 사라지면 지금 offset 이 마지막 페이지 밖으로 나갈 수 있다 —
+    // 빈 화면 대신 실제로 존재하는 마지막 페이지로 당긴다.
+    if (registryOffset >= total) {
+        registryOffset = Math.max(0, (Math.ceil(total / registryPageSize) - 1) * registryPageSize);
+    }
+    const end = Math.min(registryOffset + registryPageSize, total);
+    rows.forEach((tr, i) => { tr.style.display = (i >= registryOffset && i < end) ? '' : 'none'; });
+
+    const range = document.getElementById('registry-range');
+    if (range) range.textContent = total ? (registryOffset + 1) + ' – ' + end + ' / ' + total : '0';
+    const prev = document.getElementById('registry-prev');
+    const next = document.getElementById('registry-next');
+    if (prev) prev.disabled = registryOffset === 0;
+    if (next) next.disabled = end >= total;
+}
+
+function moveRegistryPage(direction) {
+    registryOffset = Math.max(0, registryOffset + direction * registryPageSize);
+    applyRegistryPage();
+}
+
+function applyRegistryPageSize(sel) {
+    const size = +sel.value;
+    registryPageSize = REGISTRY_PAGE_SIZES.includes(size) ? size : REGISTRY_DEFAULT_PAGE_SIZE;
+    registryOffset = 0;   // 크기를 바꾸면 지금 페이지 번호는 의미가 없다
+    try { localStorage.setItem(REGISTRY_PAGE_SIZE_KEY, String(registryPageSize)); } catch (e) { /* 사생활 보호 모드 */ }
+    applyRegistryPage();
+}
+
+/* 선택한 크기를 저장해 두는 이유: 이 카드의 청크 수 재계산·재인덱싱이 끝나면 location.reload()
+   가 돌아 페이지가 처음부터 다시 그려진다. 저장하지 않으면 그럴 때마다 기본값으로 되돌아간다.
+   offset 은 저장하지 않는다 — 목록이 인덱싱 시각 내림차순이라 새 문서 하나로 순서가 밀린다. */
+function initRegistryPaging() {
+    const sel = document.getElementById('registry-page-size');
+    if (!sel) return;   // 인덱싱된 문서가 없으면 컨트롤 자체가 렌더되지 않는다
+    let stored = null;
+    try { stored = +localStorage.getItem(REGISTRY_PAGE_SIZE_KEY); } catch (e) { /* 사생활 보호 모드 */ }
+    registryPageSize = REGISTRY_PAGE_SIZES.includes(stored) ? stored : REGISTRY_DEFAULT_PAGE_SIZE;
+    sel.value = String(registryPageSize);
+    registryOffset = 0;
+    applyRegistryPage();
+}
+initRegistryPaging();
 
 function setRegistryStatus(text) {
     const status = document.getElementById('registry-status');
