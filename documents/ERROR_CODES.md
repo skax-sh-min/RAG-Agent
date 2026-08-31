@@ -11,6 +11,7 @@
 | RAG-INDEX-001 | 500 | `DocumentIndexingException` | 인덱싱 실패 (SHA-256 연산, 청크 저장 등) |
 | RAG-VEC-001 | 503 | `VectorStoreException` | Vector Store 호출 실패 |
 | RAG-LLM-001 | 503 | `LlmProviderExhaustedException` | 모든 LLM 프로바이더 차단 또는 소진 |
+| RAG-LLM-003 | 500 | `LlmContextOverflowException` | 프롬프트가 LLM 컨텍스트 윈도우 초과 — `LlmProviderExhaustedException` 의 **하위 타입**이라 소진을 잡던 자리들이 그대로 잡는다(도달 경로가 같다). 503 이 아닌 이유는 결정적 실패여서 — 같은 요청을 다시 보내도 똑같이 실패하므로 고칠 것은 시간이 아니라 프롬프트 크기(`search-top-k`·`max-tokens`)나 서버 컨텍스트 설정이다 |
 | RAG-RATE-001 | 429 | (RateLimitFilter) | API 요청 빈도 제한 초과 — `Retry-After` 헤더(초)에 대기 시간 포함 |
 | RAG-INT-001 | 500 | (미분류 Exception) | 내부 알 수 없는 오류 |
 

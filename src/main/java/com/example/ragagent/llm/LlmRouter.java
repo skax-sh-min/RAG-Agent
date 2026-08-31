@@ -1,6 +1,7 @@
 package com.example.ragagent.llm;
 
 import com.example.ragagent.exception.LlmBackpressureException;
+import com.example.ragagent.exception.LlmContextOverflowException;
 import com.example.ragagent.exception.LlmProviderExhaustedException;
 import com.example.ragagent.repository.LlmUsageRepository;
 import org.slf4j.Logger;
@@ -492,7 +493,8 @@ public class LlmRouter {
                         + "NOT blocking circuit breaker", provider.name(), readTimeoutSeconds);
                 throw e;
             }
-            if (isContextOverflow(e)) {
+            boolean contextOverflow = isContextOverflow(e);
+            if (contextOverflow) {
                 // 이 요청의 프롬프트가 서버 컨텍스트를 넘은 것이지 프로바이더가 아픈 게 아니다.
                 // 30초를 기다려도 같은 요청은 똑같이 실패하고(결정적 오류), 그동안 들어온 -- 작아서
                 // 통과했을 -- 요청까지 "All providers exhausted" 로 함께 죽는다. mmproj 와 달리
@@ -517,7 +519,19 @@ public class LlmRouter {
             }
             log.warn("Provider [{}] threw {}: {}, trying next",
                     provider.name(), e.getClass().getSimpleName(), e.getMessage());
-            return executeWithTracking(taskType, roleOrder, usageLabelPrefix, call, tried, gated);
+            try {
+                return executeWithTracking(taskType, roleOrder, usageLabelPrefix, call, tried, gated);
+            } catch (LlmProviderExhaustedException exhausted) {
+                // 여기까지 왔다는 건 남은 프로바이더가 없다는 뜻이다. 그런데 이 체인에서 컨텍스트
+                // 초과가 한 번이라도 있었다면 진짜 이유는 "프로바이더가 없다"가 아니라 "프롬프트가
+                // 컨텍스트를 넘었다"이고, 그것이 사용자·운영자가 실제로 고칠 수 있는 유일한 것이다.
+                // 안쪽 프레임이 이미 바꿔 던졌으면 그대로 흘려보낸다(가장 처음 넘친 프로바이더
+                // 이름을 잃지 않기 위해).
+                if (contextOverflow && !(exhausted instanceof LlmContextOverflowException)) {
+                    throw new LlmContextOverflowException(provider.name(), e);
+                }
+                throw exhausted;
+            }
         }
     }
 

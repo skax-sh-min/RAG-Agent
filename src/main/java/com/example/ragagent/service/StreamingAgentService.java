@@ -4,6 +4,7 @@ import com.example.ragagent.agent.AgentGraph;
 import com.example.ragagent.agent.AgentState;
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.exception.LlmBackpressureException;
+import com.example.ragagent.exception.LlmContextOverflowException;
 import com.example.ragagent.exception.LlmProviderExhaustedException;
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.model.ChatForm;
@@ -233,6 +234,14 @@ public class StreamingAgentService {
 
             threadMetaService.generateTitleAsync(userId, form.threadId(), form.version(), form.question());
 
+        } catch (LlmContextOverflowException e) {
+            // 하위 타입이라 반드시 소진 catch 보다 앞에 와야 한다(자바 규칙이자 이 구분의 전부다).
+            log.warn("LLM context window exceeded: {}", e.getMessage());
+            String msg = messageSource.getMessage("error.llm.context-overflow", null,
+                    "질문에 필요한 문서가 LLM이 한 번에 처리할 수 있는 크기를 넘었습니다.",
+                    LocaleContextHolder.getLocale());
+            trySendError(emitter, msg);
+            emitter.complete();
         } catch (LlmProviderExhaustedException e) {
             log.warn("LLM providers exhausted: {}", e.getMessage());
             String msg = messageSource.getMessage("error.llm.exhausted", null,

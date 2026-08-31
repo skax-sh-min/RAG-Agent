@@ -215,6 +215,46 @@ class ChatControllerHtmxTest {
     }
 
     @Test
+    @DisplayName("POST /ui/chat — 컨텍스트 초과는 '프로바이더 없음'이 아니라 프롬프트 크기 문제로 안내한다")
+    void postChat_contextOverflowGetsItsOwnMessage() throws Exception {
+        when(agentService.chat(any(), any())).thenThrow(
+                new com.example.ragagent.exception.LlmContextOverflowException(
+                        "lm", new RuntimeException("Context size has been exceeded.")));
+
+        String html = mvc.perform(post("/ui/chat")
+                        .param("question", "긴 질문")
+                        .param("threadId", "t1")
+                        .param("version", "latest")
+                        .with(csrf()))
+                .andExpect(status().isOk())
+                .andExpect(view().name("fragments/message-error :: message"))
+                .andReturn().getResponse().getContentAsString();
+
+        // 하위 타입 catch 가 소진 catch 보다 앞에 있어야만 이 문구가 나온다 — 순서가 바뀌면
+        // 조용히 예전 문구("모든 AI 프로바이더를 사용할 수 없는 상태")로 되돌아간다.
+        assertThat(html).contains("search-top-k");
+        assertThat(html).doesNotContain("프로바이더를 사용할 수 없는");
+    }
+
+    @Test
+    @DisplayName("POST /ui/chat — 진짜 소진은 종전 문구 그대로다 (구분이 한쪽만 바꿨는지 확인)")
+    void postChat_plainExhaustedKeepsItsOwnMessage() throws Exception {
+        when(agentService.chat(any(), any())).thenThrow(
+                new com.example.ragagent.exception.LlmProviderExhaustedException("all down"));
+
+        String html = mvc.perform(post("/ui/chat")
+                        .param("question", "질문")
+                        .param("threadId", "t1")
+                        .param("version", "latest")
+                        .with(csrf()))
+                .andExpect(status().isOk())
+                .andExpect(view().name("fragments/message-error :: message"))
+                .andReturn().getResponse().getContentAsString();
+
+        assertThat(html).doesNotContain("search-top-k");
+    }
+
+    @Test
     @DisplayName("POST /ui/chat — 서비스 예외 → message-error fragment")
     void postChat_serviceException_returnsErrorFragment() throws Exception {
         when(agentService.chat(any(), any())).thenThrow(new RuntimeException("LLM down"));

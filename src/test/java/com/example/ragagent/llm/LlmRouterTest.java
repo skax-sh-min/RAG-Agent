@@ -1,6 +1,7 @@
 package com.example.ragagent.llm;
 
 import com.example.ragagent.exception.LlmBackpressureException;
+import com.example.ragagent.exception.LlmContextOverflowException;
 import com.example.ragagent.exception.LlmProviderExhaustedException;
 import com.example.ragagent.repository.LlmUsageRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -279,14 +280,63 @@ class LlmRouterTest {
         var r = router(RoutingMode.COST_FIRST, local);
 
         // 이 요청 자체는 여전히 실패한다 — 얻는 것은 프로바이더가 살아남는 것뿐이다.
+        // 다만 "프로바이더가 없다"가 아니라 "프롬프트가 넘쳤다"로 구분돼 나가야 한다. 소진의
+        // 하위 타입이라 기존에 소진을 잡던 자리들(인덱싱 우아한 강등 등)은 그대로 잡는다.
         assertThatThrownBy(() -> r.executeWithTracking(TaskType.TEXT, RoutingMode.COST_FIRST,
                 m -> m.call(new Prompt("x"))))
+                .isInstanceOf(LlmContextOverflowException.class)
                 .isInstanceOf(LlmProviderExhaustedException.class);
 
         assertThat(breaker.isBlocked("lm")).isFalse();
         // mmproj 와 달리 기억해 두지 않는다 — 요청 하나의 크기 문제라 다음 짧은 질문은 통과해야 한다.
         assertThat(r.findProviderName(TaskType.TEXT, RoutingMode.COST_FIRST)).isEqualTo("lm");
         assertThat(r.findProviderName(TaskType.VISION, RoutingMode.COST_FIRST)).isEqualTo("lm");
+    }
+
+    @Test
+    @DisplayName("컨텍스트 초과라도 폴백이 받아주면 성공한다 — 컨텍스트가 더 큰 프로바이더가 있을 수 있다")
+    void contextOverflow_stillFallsBackToAnotherProvider() {
+        ChatModel overflowing = mock(ChatModel.class);
+        when(overflowing.call(any(Prompt.class)))
+                .thenThrow(new RuntimeException("Context size has been exceeded."));
+        ChatModel roomy = mock(ChatModel.class);
+        when(roomy.call(any(Prompt.class))).thenReturn(chatResponse("ok"));
+
+        var small = new LlmProvider("small", TaskType.TEXT, ProviderRole.LOCAL, 1, "k", null, null, true,
+                overflowing, null);
+        var big = new LlmProvider("big", TaskType.TEXT, ProviderRole.NORMAL, 2, "k", null, null, true,
+                roomy, null);
+        var r = router(RoutingMode.COST_FIRST, small, big);
+
+        assertThat(r.executeWithTracking(TaskType.TEXT, RoutingMode.COST_FIRST,
+                m -> m.call(new Prompt("x")))).isEqualTo("ok");
+        assertThat(breaker.isBlocked("small")).isFalse();
+    }
+
+    @Test
+    @DisplayName("컨텍스트 초과가 아닌 실패로 소진되면 종전대로 LlmProviderExhaustedException 이다")
+    void ordinaryFailure_stillThrowsPlainExhausted() {
+        ChatModel chatModel = mock(ChatModel.class);
+        when(chatModel.call(any(Prompt.class))).thenThrow(new RuntimeException("connection refused"));
+        var local = new LlmProvider("lm", TaskType.TEXT, ProviderRole.LOCAL, 1, "k", null, null, true,
+                chatModel, null);
+        var r = router(RoutingMode.COST_FIRST, local);
+
+        assertThatThrownBy(() -> r.executeWithTracking(TaskType.TEXT, RoutingMode.COST_FIRST,
+                m -> m.call(new Prompt("x"))))
+                .isInstanceOf(LlmProviderExhaustedException.class)
+                .isNotInstanceOf(LlmContextOverflowException.class);
+        assertThat(breaker.isBlocked("lm")).isTrue();   // 이쪽은 여전히 프로바이더 실패다
+    }
+
+    @Test
+    @DisplayName("컨텍스트 초과 예외는 재시도를 권하는 503 이 아니라 500 이다 — 같은 요청은 다시 보내도 실패한다")
+    void contextOverflow_mapsTo500NotRetryable() {
+        var ex = new LlmContextOverflowException("lm", new RuntimeException("Context size has been exceeded."));
+        assertThat(ex.httpStatus()).isEqualTo(500);
+        assertThat(ex.errorCode()).isEqualTo("RAG-LLM-003");
+        assertThat(ex.retryAfterSeconds()).isEqualTo(-1);
+        assertThat(new LlmProviderExhaustedException("x").httpStatus()).isEqualTo(503);
     }
 
     @Test

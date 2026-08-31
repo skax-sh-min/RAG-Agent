@@ -1,6 +1,7 @@
 package com.example.ragagent.controller;
 
 import com.example.ragagent.context.ThreadContext;
+import com.example.ragagent.exception.LlmContextOverflowException;
 import com.example.ragagent.exception.LlmProviderExhaustedException;
 import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.RoutingMode;
@@ -267,6 +268,12 @@ public class ChatController {
             model.addAttribute("curatable", form.responseModeOrDefault().allowsCuration());
             model.addAttribute("curationBlockedKey",
                     form.responseModeOrDefault().curationBlockedMessageKey());
+        } catch (LlmContextOverflowException e) {
+            // 하위 타입이라 반드시 소진 catch 보다 앞에 와야 한다(자바 규칙이자 이 구분의 전부다).
+            log.warn("LLM context window exceeded: {}", e.getMessage());
+            model.addAttribute("errorMessage", messageSource.getMessage(
+                    "error.llm.context-overflow", null, LocaleContextHolder.getLocale()));
+            return "fragments/message-error :: message";
         } catch (LlmProviderExhaustedException e) {
             log.warn("LLM providers exhausted: {}", e.getMessage());
             model.addAttribute("errorMessage", messageSource.getMessage(
