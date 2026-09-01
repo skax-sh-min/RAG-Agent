@@ -272,12 +272,20 @@ public class LlmRouter {
         }
     }
 
-    /** Rough token estimate (chars/4) for text whose real usage isn't available (streaming
-     *  answers, whose caller reads only content deltas, never a {@link ChatResponse}) — same
-     *  heuristic {@link #recordApproxUsage} records to the aggregate usage table, exposed so
-     *  streaming callers can also reflect it in their own per-turn {@code AgentState} totals. */
+    /**
+     * Rough token estimate for text whose real usage isn't available (streaming answers, whose
+     * caller reads only content deltas, never a {@link ChatResponse}) — the same heuristic
+     * {@link #recordApproxUsage} records to the aggregate usage table, exposed so streaming callers
+     * can also reflect it in their own per-turn {@code AgentState} totals.
+     *
+     * <p>Delegates to {@link TokenEstimator}, this app's single estimation assumption. It used to be
+     * a bare {@code chars/4} here, which is the English rule of thumb and undercounted Korean
+     * streaming usage by roughly 4x in {@code /llm-usage} — while {@code ResponseMode}'s budgets a
+     * few classes away assumed 1 token per Korean character. English-only text estimates exactly as
+     * before.
+     */
     public static long approxTokens(String text) {
-        return text == null ? 0 : text.length() / 4;
+        return TokenEstimator.estimate(text);
     }
 
     public boolean hasLocalProvider() {
