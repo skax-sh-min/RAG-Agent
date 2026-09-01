@@ -53,12 +53,16 @@ public class MemoryService {
      * Exposed so the summary path ({@code ConversationSummarizerService.buildContext()}) can
      * respect the exact same ceiling as this fallback path — single source of truth (§6.11).
      *
-     * <p><b>매 호출 재계산한다.</b> 예전에는 생성자에서 한 번 굳혔는데, {@code app.llm.max-tokens} 는
-     * {@code /settings} 에서 바뀔 수 있는 값이라 재기동 전까지 이력 예산만 옛 값에 머물렀다 — 이 앱의
-     * "핫 값은 소비처가 매 호출 재조회한다"는 규약을 이 한 곳이 어기고 있었다. 컨텍스트 예산 축소
-     * ({@code AnswerService.fitToBudget()})가 이 값과 같은 {@code max-tokens} 에서 파생되므로, 굳어
-     * 있으면 <b>둘이 서로 다른 상한을 믿는 상태</b>가 만들어진다: 운영자가 상한을 내려도 이력은 옛
-     * 크기로 실려 오고, 축소 쪽만 새 예산으로 그것을 잘라낸다.
+     * <p><b>매 호출 재계산한다</b> — 다만 이것은 버그 수정이 아니라 방어다. {@code app.llm.max-tokens}
+     * 는 오늘 기준 <b>핫 편집 대상이 아니다</b>({@code SettingsKeys.HOT_EDITABLE} 에 없고
+     * {@code llmSafe()} 에도 오버라이드 조회가 없다 — 프로바이더 빈 생성 시점에 구워지므로 재기동해야
+     * 바뀐다). 그래서 생성자에서 굳혀도 값이 낡지는 않았다.
+     *
+     * <p>그럼에도 매번 읽는 이유는 이 값을 파생시켜 쓰는 곳이 늘었기 때문이다 — 컨텍스트 입력 예산
+     * ({@code AnswerService.fitToBudget()})과 인덱싱 출력 상한({@code IndexingOutputCap})이 같은
+     * {@code max-tokens} 에서 나온다. 그중 하나만 생성자에 굳어 있으면, 나중에 이 값이 핫 편집으로
+     * 열리는 순간 <b>둘이 서로 다른 상한을 믿는 상태</b>가 조용히 만들어진다. 계산 비용이 없으므로
+     * 그 가능성을 미리 닫아 둔다.
      */
     public int maxConversationChars() {
         return Math.max(1_000, props.llmSafe().maxTokens() / 2);
