@@ -406,6 +406,30 @@ class AnswerServiceTest {
         assertThat(out.grounded()).isTrue();
     }
 
+    @Test
+    @DisplayName("스트리밍은 출력 예약이 더 작다 — 캡을 보내지 않으므로 폭주 방지선을 뺄 이유가 없다")
+    void streamingReservesLessThanBlocking() {
+        // N: 블로킹은 실제로 보내는 값(10,000의 70%)을 그대로 빼야 계산이 맞고, 스트리밍은
+        // 아무것도 보내지 않으므로 "답변이 자랄 자리"(minChars 5,000)면 충분하다.
+        assertThat(AnswerService.outputReservation(ResponseMode.N, false, 10_000)).isEqualTo(7_000);
+        assertThat(AnswerService.outputReservation(ResponseMode.N, true, 10_000)).isEqualTo(5_000);
+    }
+
+    @Test
+    @DisplayName("S는 두 경로가 같다 — 이미 minChars가 블로킹 예산과 같은 자리다")
+    void shortModeIsUnchanged() {
+        assertThat(AnswerService.outputReservation(ResponseMode.S, false, 10_000)).isEqualTo(2_000);
+        assertThat(AnswerService.outputReservation(ResponseMode.S, true, 10_000)).isEqualTo(2_000);
+    }
+
+    @Test
+    @DisplayName("설정 상한이 작으면 그쪽이 이긴다 — 스트리밍 예약이 상한을 넘어설 수 없다")
+    void neverExceedsTheConfiguredCeiling() {
+        // max-tokens 2,000 배포: N의 minChars(5,000)가 아니라 2,000이 적용돼야 한다.
+        assertThat(AnswerService.outputReservation(ResponseMode.N, true, 2_000)).isEqualTo(2_000);
+        assertThat(AnswerService.outputReservation(ResponseMode.N, false, 2_000)).isEqualTo(2_000);
+    }
+
     private static int countOccurrences(String haystack, String needle) {
         int count = 0, idx = 0;
         while ((idx = haystack.indexOf(needle, idx)) >= 0) { count++; idx += needle.length(); }

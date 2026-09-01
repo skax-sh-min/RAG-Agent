@@ -176,10 +176,33 @@ public class AnswerService {
      * 답변이 자라날 자리는 여전히 필요하므로 같은 값을 <b>예상 분량</b>으로 잡아 둔다 — 입력이 창을
      * 꽉 채우면 생성할 자리가 없어 결국 같은 초과가 난다.
      */
-    private PromptBudget budgetFor(AgentState state, String providerName) {
+    private PromptBudget budgetFor(AgentState state, String providerName, boolean streaming) {
         int window = contextWindows.tokensOrZero(providerName);
         if (window <= 0) return null;   // 창을 모른다 — 추측으로 근거를 버리지 않는다
-        return new PromptBudget(window, state.responseMode().maxTokens(props.llmSafe().maxTokens()));
+        return new PromptBudget(window,
+                outputReservation(state.responseMode(), streaming, props.llmSafe().maxTokens()));
+    }
+
+    /**
+     * 이 호출이 출력에 잡아 둬야 할 자리.
+     *
+     * <p><b>블로킹은 우리가 보내는 값 그대로다.</b> {@code answerOptions()} 가
+     * {@code maxTokens = ResponseMode.maxTokens(설정값)} 을 실어 보내고 서버는 그만큼을 실제로
+     * 예약하므로, 예산에서도 같은 값을 빼야 계산이 맞는다.
+     *
+     * <p><b>스트리밍은 아무것도 보내지 않는다</b>(토큰 단위 UX 때문에 캡을 붙이지 않는다). 그래서
+     * 서버가 예약하는 것이 아니라 <b>답변이 자랄 자리</b>가 필요할 뿐인데, 예전에는 여기에도 블로킹과
+     * 같은 값을 뺐다 — N 기준 7,000 이다. 그건 <b>폭주 방지선</b>이지 예상 분량이 아니다: §6.24 의
+     * 실측이 목표를 5,000자로 줘도 3,047자, 10,000자로 줘도 3,187자가 나온다고 기록하고 있다.
+     * 쓰지도 않을 자리를 비워 두느라 근거 문서가 밀려났다.
+     *
+     * <p>그래서 스트리밍은 {@link ResponseMode#minChars()} 로 낮춘다 — 그 모드가 "이만큼은 쓰겠다"고
+     * 정한 값이라 예상 분량의 근사로 맞고(N 5,000 은 실측 3,047 대비 60% 여유), 새 상수를 만들지
+     * 않으며, 여전히 블로킹 예산을 넘지 않는다({@code min}). 설정 상한이 작으면 그쪽이 이긴다.
+     */
+    static int outputReservation(ResponseMode mode, boolean streaming, int configuredMaxTokens) {
+        int blocking = mode.maxTokens(configuredMaxTokens);
+        return streaming ? Math.min(blocking, mode.minChars()) : blocking;
     }
 
     /** 아직 프로바이더가 정해지지 않은 자리에서 쓰는 추정 — 라우터에게 "지금이라면 누구" 를 묻는다. */
@@ -208,7 +231,8 @@ public class AnswerService {
      * 같은 입력에 같은 함수라 결과가 갈리지 않는다 — 로직을 복제하는 대신 한 함수를 두 번 부른다.
      */
     private AgentState withBudgetNote(AgentState state) {
-        Fitted fitted = fitToBudget(state, likelyProvider(state));
+        // 안내는 사용자가 실제로 겪는 경로 기준이어야 한다 — 채팅의 유일한 전송 경로는 스트리밍이다.
+        Fitted fitted = fitToBudget(state, likelyProvider(state), true);
         if (fitted.note() == null) return state;
         return state.toBuilder()
                 .budgetNote(fitted.note())
@@ -241,7 +265,8 @@ public class AnswerService {
 
     private AgentState executeBlocking(AgentState state) {
         String systemPrompt = answerSystemPrompt(state.locale(), state.responseMode());
-        String userPrompt = buildAnswerPrompt(state, likelyProvider(state));
+        // 블로킹 — answerOptions() 가 maxTokens 를 실어 보내므로 그만큼 실제로 예약된다.
+        String userPrompt = buildAnswerPrompt(state, likelyProvider(state), false);
         ChatOptions options = answerOptions(state);
         LlmRouter.LlmResult result = llmRouter.executeGatedWithUsage(TaskType.TEXT, state.routingMode(),
                 model -> model.call(buildPrompt(systemPrompt, userPrompt, options)));
@@ -267,7 +292,7 @@ public class AnswerService {
         // streaming has no ChatResponse to read real usage from — record an approximate
         // (chars/4) usage entry so /llm-usage isn't blind to the entire streaming chat path, and
         // reflect the same estimate in the per-turn total so the chat UI isn't stuck at 0/0.
-        String promptText = systemPrompt + buildAnswerPrompt(state, provider.name());
+        String promptText = systemPrompt + buildAnswerPrompt(state, provider.name(), true);
         llmRouter.recordApproxUsage(provider.name(), promptText, answer);
         int approxIn = (int) LlmRouter.approxTokens(promptText);
         int approxOut = (int) LlmRouter.approxTokens(answer);
@@ -307,12 +332,12 @@ public class AnswerService {
             try (var permit = llmRouter.acquirePermit(premiumProvider)) {
                 premiumAnswer = streamAnswer(premiumProvider, state, systemPrompt, listener::onToken);
             }
-            String promptText = systemPrompt + buildAnswerPrompt(state, premiumProvider.name());
+            String promptText = systemPrompt + buildAnswerPrompt(state, premiumProvider.name(), true);
             llmRouter.recordApproxUsage(premiumProvider.name(), promptText, premiumAnswer);
             inputTokens = (int) LlmRouter.approxTokens(promptText);
             outputTokens = (int) LlmRouter.approxTokens(premiumAnswer);
         } else {
-            String userPrompt = buildAnswerPrompt(state, premiumProvider.name());
+            String userPrompt = buildAnswerPrompt(state, premiumProvider.name(), false);
             LlmRouter.LlmResult result = llmRouter.executeGatedWithUsage(
                     TaskType.TEXT, RoutingMode.QUALITY_FIRST,
                     model -> model.call(buildPrompt(systemPrompt, userPrompt, answerOptions(state)))
@@ -351,7 +376,7 @@ public class AnswerService {
         if (provider.stream()) {
             // Bypass OpenAiChatModel.internalStream() which buffers ALL chunks via buffer(int,int)
             // before emitting, defeating real-time token delivery to the browser.
-            streamDirect(provider, systemPrompt, buildAnswerPrompt(state, provider.name()), tokenSink,
+            streamDirect(provider, systemPrompt, buildAnswerPrompt(state, provider.name(), true), tokenSink,
                     state.threadId(), state.routingMode(), answerTemperature(state.responseMode()));
         } else {
             // stream=false: still use streaming HTTP to stay compatible with local LLM servers
@@ -362,7 +387,8 @@ public class AnswerService {
             if (options != null) spec = spec.options(options);
             spec
                     .system(systemPrompt)
-                    .user(buildAnswerPrompt(state, provider.name()))
+                    // stream=false 경로는 answerOptions() 를 붙여 보내므로 예약이 실제로 걸린다.
+                    .user(buildAnswerPrompt(state, provider.name(), false))
                     .stream()
                     .content()
                     .doOnNext(buf::append)
@@ -841,13 +867,13 @@ public class AnswerService {
      *                     그래서 이 메서드는 호출마다 예산을 다시 계산한다 — 중복 계산이 아니라
      *                     호출부마다 답이 달라야 하는 값이다.
      */
-    private String buildAnswerPrompt(AgentState state, String providerName) {
+    private String buildAnswerPrompt(AgentState state, String providerName, boolean streaming) {
         StringBuilder sb = new StringBuilder();
 
         // 예산에 맞춰 미리 덜어낸다. 호출 후에 초과 오류를 받고 재시도하는 것보다 왕복이 0회 싸고,
         // 무엇을 버릴지도 여기서만 알 수 있다(라우터는 프롬프트 안을 못 본다). 창을 모르면
         // fitToBudget 이 원본을 그대로 돌려주므로 예전과 동작이 같다.
-        Fitted fitted = fitToBudget(state, providerName);
+        Fitted fitted = fitToBudget(state, providerName, streaming);
 
         if (!fitted.history().isBlank()) {
             sb.append("[이전 대화]\n").append(fitted.history()).append("\n\n");
@@ -899,10 +925,10 @@ public class AnswerService {
      * 자를 수 있다. 답변 본문에도 빈 줄이 있을 수 있으므로 <b>빈 줄 다음에 {@code "Q: "} 가 오는
      * 자리</b>만 경계로 본다 — 문자 인덱스로 자르면 반쪽짜리 턴이 남아 모델을 더 헷갈리게 한다.
      */
-    private Fitted fitToBudget(AgentState state, String providerName) {
+    private Fitted fitToBudget(AgentState state, String providerName, boolean streaming) {
         List<Document> docs = state.retrievedDocs();
         String history = state.conversationHistory();
-        PromptBudget budget = budgetFor(state, providerName);
+        PromptBudget budget = budgetFor(state, providerName, streaming);
         if (budget == null) return new Fitted(docs, history, null);   // 창 모름 → 예전 그대로
 
         // 시스템 프롬프트는 실제로 센다 — 모드·로케일마다 길이가 다르고(S 는 N 보다 훨씬 짧다),

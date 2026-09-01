@@ -69,7 +69,7 @@ public final class TokenEstimator {
      * 한국어 문장에도 공백과 마침표가 섞여 있고 그것들은 다른 토큰에 흡수되는 쪽이라, CJK 취급하면
      * 추정이 눈에 띄게 부풀어 예산을 필요 이상으로 깎게 된다.
      */
-    private static boolean isCjkLike(int cp) {
+    static boolean isCjkLike(int cp) {
         return (cp >= 0xAC00 && cp <= 0xD7A3)     // 한글 음절
             || (cp >= 0x1100 && cp <= 0x11FF)     // 한글 자모
             || (cp >= 0x3130 && cp <= 0x318F)     // 한글 호환 자모

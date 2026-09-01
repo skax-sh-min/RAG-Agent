@@ -4,6 +4,7 @@ import com.example.ragagent.exception.LlmProviderExhaustedException;
 import com.example.ragagent.llm.ContextWindowProbe;
 import com.example.ragagent.llm.MaxTokensCappingChatModel;
 import com.example.ragagent.llm.ProviderContextWindows;
+import com.example.ragagent.llm.TokenEstimateCalibration;
 import com.example.ragagent.llm.*;
 import com.example.ragagent.repository.LlmUsageRepository;
 import org.slf4j.Logger;
@@ -33,7 +34,8 @@ public class LlmConfig {
     public LlmRouter llmRouter(AppProperties props, LlmUsageRepository usageRepo,
                                 CircuitBreaker circuitBreaker, ProviderToggle providerToggle,
                                 BackgroundLlmConcurrencyTracker backgroundConcurrencyTracker,
-                                ProviderContextWindows contextWindows) {
+                                ProviderContextWindows contextWindows,
+                                TokenEstimateCalibration tokenCalibration) {
         AppProperties.LlmConfig llmCfg = props.llmSafe();
                 int connectTimeoutSeconds = llmCfg.connectTimeoutSeconds();
                 int readTimeoutSeconds = llmCfg.readTimeoutSeconds();
@@ -136,8 +138,11 @@ public class LlmConfig {
                     // defaultOptions 만으로는 부족하다 — 블로킹 호출부가 매번 자기 maxTokens 를
                     // 실어 보내 그 기본값을 덮어쓴다. 이 데코레이터가 프로바이더 선택 '이후'에
                     // 상한으로 눌러 준다(MaxTokensCappingChatModel 클래스 주석 참고).
+                    // 계측 데코레이터는 프롬프트와 usage 를 동시에 보는 유일한 자리다 — 라우터는
+                    // 호출을 불투명한 클로저로 받고, 호출부는 서버가 센 토큰 수를 못 본다.
                     ChatModel model = new LoggingChatModel(
-                            new MaxTokensCappingChatModel(rawModel, cfg.name(), effectiveMaxTokens),
+                            tokenCalibration.wrap(
+                                    new MaxTokensCappingChatModel(rawModel, cfg.name(), effectiveMaxTokens)),
                             cfg.name(), resolvedUrl, effectiveApiKey, cfg.model());
                     return new LlmProvider(
                             cfg.name(),
