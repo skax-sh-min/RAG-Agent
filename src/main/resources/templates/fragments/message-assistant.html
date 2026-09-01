@@ -60,6 +60,13 @@
             <span th:text="${verification.envNote}"></span>
         </div>
 
+        <!-- 축소 안내: 아래 출처 목록은 검색된 전부라 줄지 않는다. 이 줄이 없으면 사용자는
+             모델이 그 출처를 다 읽고 답한 것으로 읽는다. -->
+        <div th:if="${verification != null and verification.budgetNote != null}" class="small text-warning mt-2">
+            <i class="bi bi-scissors me-1"></i>
+            <span th:text="${verification.budgetNote}"></span>
+        </div>
+
         <!-- Image thumbnails -->
         <div th:if="${imageRefs != null and !#lists.isEmpty(imageRefs)}" class="mt-2 d-flex flex-wrap gap-2">
             <a th:each="ref : ${imageRefs}"

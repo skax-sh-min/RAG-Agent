@@ -595,6 +595,15 @@
                      +  `환경에 따라 달라질 수 있는 값: ${escHtml(data.envNote)}</div>`;
             }
 
+            /* 축소 안내 — 서버가 문구를 통째로 만들어 내려주므로 여기서 조립하지 않는다.
+               출처 목록은 검색된 전부를 그대로 그리므로, 이 줄이 빠지면 사용자는 모델이
+               그 출처를 다 봤다고 믿게 된다(서버 렌더러 둘과 같은 규칙). */
+            if (data.budgetNote) {
+                html += `<div class="small text-warning mt-1">`
+                     +  `<i class="bi bi-scissors me-1"></i>`
+                     +  `${escHtml(data.budgetNote)}</div>`;
+            }
+
             metaEl.innerHTML = html;
         }
 

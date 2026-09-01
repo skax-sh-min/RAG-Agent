@@ -198,6 +198,10 @@
                                     <i class="bi bi-info-circle me-1"></i>환경에 따라 달라질 수 있는 값:
                                     <span th:text="${v.envNote}"></span>
                                 </div>
+                                <div th:if="${v != null and v.budgetNote != null}" class="small text-warning mt-2">
+                                    <i class="bi bi-scissors me-1"></i>
+                                    <span th:text="${v.budgetNote}"></span>
+                                </div>
                             </th:block>
 
                                <div th:if="${turnImageRefsByTurnId != null and turnImageRefsByTurnId[turn.id] != null and !#lists.isEmpty(turnImageRefsByTurnId[turn.id])}"

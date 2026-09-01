@@ -256,12 +256,13 @@ public class ChatController {
             model.addAttribute("grounded", resp.grounded());
             model.addAttribute("evalReason", resp.evalReason());
             model.addAttribute("envNote", resp.envNote());
+            model.addAttribute("budgetNote", resp.budgetNote());
             // 배지 규칙은 VerificationSnapshot 한 곳에 있다 — 이 프래그먼트와 대화 기록
             // 루프가 같은 레코드를 읽는다(§6.24 Step 4-b). 조건을 템플릿에 풀어 쓰면
             // 두 렌더러가 갈라지고, 갈라진 것은 화면에서 보이지 않는다.
             model.addAttribute("verification", new VerificationSnapshot(
                     resp.grounded(), resp.generative(), resp.evalReason(), resp.envNote(),
-                    resp.inventedSymbols()));
+                    resp.inventedSymbols(), resp.budgetNote()));
             model.addAttribute("usedProvider", resp.usedProvider());
             // 좋아요가 이 모드에서 실제로 동작하는가 — 서버가 성질로 계산한다
             // (SSE done 의 "curatable", 대화 기록의 Turn.curatable() 과 같은 값).

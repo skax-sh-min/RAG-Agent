@@ -18,7 +18,7 @@ class VerificationSnapshotTest {
 
     private static VerificationSnapshot snap(Boolean grounded, boolean generative,
                                              String evalReason, String... invented) {
-        return new VerificationSnapshot(grounded, generative, evalReason, null, List.of(invented));
+        return new VerificationSnapshot(grounded, generative, evalReason, null, List.of(invented), null);
     }
 
     @Test
@@ -89,7 +89,7 @@ class VerificationSnapshotTest {
     @Test
     @DisplayName("null 심볼 목록은 빈 목록으로 정규화된다 (옛 기록·모델 누락 대응)")
     void nullListIsNormalized() {
-        VerificationSnapshot v = new VerificationSnapshot(true, false, null, null, null);
+        VerificationSnapshot v = new VerificationSnapshot(true, false, null, null, null, null);
         assertThat(v.inventedSymbols()).isEmpty();
         assertThat(v.hasInventedSymbols()).isFalse();
     }
@@ -97,10 +97,30 @@ class VerificationSnapshotTest {
     @Test
     @DisplayName("담을 것이 하나도 없는 턴은 isEmpty — 저장하지 않아 컬럼이 NULL로 남는다")
     void emptySnapshotIsNotWorthStoring() {
-        assertThat(new VerificationSnapshot(null, false, null, null, List.of()).isEmpty()).isTrue();
+        assertThat(new VerificationSnapshot(null, false, null, null, List.of(), null).isEmpty()).isTrue();
         // envNote 만 있어도 저장 대상이다 — 검증 통과 여부와 무관하게 사용자에게 줄 안내다.
-        assertThat(new VerificationSnapshot(null, false, null, "경로는 환경마다 다릅니다", List.of()).isEmpty()).isFalse();
-        assertThat(new VerificationSnapshot(true, false, null, null, List.of()).isEmpty()).isFalse();
-        assertThat(new VerificationSnapshot(null, true, null, null, List.of("x")).isEmpty()).isFalse();
+        assertThat(new VerificationSnapshot(null, false, null, "경로는 환경마다 다릅니다", List.of(), null).isEmpty()).isFalse();
+        assertThat(new VerificationSnapshot(true, false, null, null, List.of(), null).isEmpty()).isFalse();
+        assertThat(new VerificationSnapshot(null, true, null, null, List.of("x"), null).isEmpty()).isFalse();
+    }
+
+    @Test
+    @DisplayName("축소 안내만 있어도 저장한다 — 검증을 안 돌린 턴이라도 이 사실은 남아야 한다")
+    void budgetNoteAloneIsWorthPersisting() {
+        var onlyBudget = new VerificationSnapshot(null, false, null, null, java.util.List.of(),
+                "컨텍스트 한도로 검색된 문서 10개 중 6개만 사용했습니다.");
+
+        // isEmpty() 가 true 면 MemoryService.saveVerification() 이 저장을 건너뛰고, 새로고침하면
+        // 출처 10개가 아무 단서 없이 나열된다 — 이 기능이 막으려던 바로 그 상태다.
+        assertThat(onlyBudget.isEmpty()).isFalse();
+        // 판정은 없으므로 배지는 여전히 그리지 않는다.
+        assertThat(onlyBudget.verdictLabel()).isNull();
+    }
+
+    @Test
+    @DisplayName("아무 값도 없으면 여전히 빈 스냅샷이다")
+    void stillEmptyWhenNothingIsSet() {
+        assertThat(new VerificationSnapshot(null, false, null, null, java.util.List.of(), null).isEmpty())
+                .isTrue();
     }
 }

@@ -103,7 +103,7 @@ class ChatControllerHtmxTest {
                 List.of(),
                 120, 80, 2, 0.42,
                 null, "gemini-flash", 1L,
-                true, null, null,    // 검증 통과 → 사유 없음, 환경 의존 값 안내도 없음
+                true, null, null, null,    // 검증 통과 → 사유·환경 안내·축소 안내 모두 없음
                 false, java.util.List.of()); // 생성 모드 아님 → 발명된 심볼도 없음
     }
 
@@ -434,8 +434,44 @@ class ChatControllerHtmxTest {
                 List.of(), List.of(),
                 120, 80, 2, 0.42,
                 null, "local", 1L,
-                true, null, "포트는 환경마다 다릅니다",
+                true, null, "포트는 환경마다 다릅니다", null,
                 true, List.of("parseDateEx"));
+    }
+
+    @Test
+    @DisplayName("축소 안내는 새로고침 전후가 같다 — 출처 목록은 줄지 않으므로 이 줄이 유일한 단서다")
+    void budgetNote_survivesPageReload() throws Exception {
+        AppUserDetails principal = new AppUserDetails("id-1", "user@local", "", "User", "USER", true, false);
+        String note = "컨텍스트 한도로 검색된 문서 10개 중 6개만 사용했습니다.";
+
+        // ① 방금 보낸 메시지 (HTMX 폴백 프래그먼트)
+        when(agentService.chat(any(), any())).thenReturn(new ChatResponse(
+                "## 요약\n답변", "manual", List.of(), List.of(),
+                120, 80, 2, 0.42, null, "local", 1L,
+                true, null, null, note,
+                false, List.of()));
+        String justSent = mvc.perform(post("/ui/chat")
+                        .param("question", "질문")
+                        .param("threadId", "thread-01")
+                        .param("version", "latest")
+                        .with(user(principal)).with(csrf()))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        // ② 새로고침 후 (chat.html 의 기록 루프 — 저장해 둔 스냅샷으로 되살린다)
+        when(threadMetaService.findById(any(), eq("thread-01"))).thenReturn(Optional.of(
+                new ThreadMeta("thread-01", "user", "제목", "latest", "now", "now", "COST_FIRST", "")));
+        when(memoryService.getTurns(any(), eq("thread-01"))).thenReturn(List.of(
+                new MemoryRepository.Turn(1L, "질문", "## 요약\n답변",
+                        null, null, 0, 0, 0, "local", 1, null, "N", null)));
+        when(memoryService.getVerifications(List.of(1L))).thenReturn(java.util.Map.of(
+                1L, new VerificationSnapshot(true, false, null, null, List.of(), note)));
+        String afterReload = mvc.perform(get("/chat/thread-01").with(user(principal)))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        assertThat(justSent).as("방금 보낸 응답에 축소 안내가 없다").contains(note);
+        assertThat(afterReload).as("새로고침 후 축소 안내가 사라졌다").contains(note);
     }
 
     @Test
@@ -463,7 +499,7 @@ class ChatControllerHtmxTest {
                         null, null, 0, 0, 0, "local", 1, null, "C", null)));
         when(memoryService.getVerifications(List.of(1L))).thenReturn(java.util.Map.of(
                 1L, new VerificationSnapshot(true, true, null, "포트는 환경마다 다릅니다",
-                        List.of("parseDateEx"))));
+                        List.of("parseDateEx"), null)));
         String afterReload = mvc.perform(get("/chat/thread-01").with(user(principal)))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();

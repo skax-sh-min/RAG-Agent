@@ -33,13 +33,20 @@ import java.util.List;
  * @param envNote         환경에 따라 달라질 수 있는 값 안내. 통과 여부와 무관하게 실릴 수 있다
  * @param inventedSymbols 창의 검증이 "문서에 있는 것처럼 쓰였지만 발췌에 없다"고 지목한 이름들.
  *                        재시도를 걸지 않는 경고 전용 값이라(§6.24 Step 2-d) 통과한 답변에도 붙는다
+ * @param budgetNote      컨텍스트 예산 때문에 검색 문서·이전 대화 일부가 프롬프트에서 빠졌다는 안내.
+ *                        검증 결과가 아니지만 {@code envNote} 와 같은 이유로 여기 함께 저장한다 —
+ *                        <b>새로고침 후에도 남아야 하기 때문</b>이다. 저장하지 않으면 대화를 다시 열었을
+ *                        때 출처 10개가 아무 단서 없이 나열되고, 사용자는 모델이 그것을 전부 읽었다고
+ *                        믿게 된다(축소는 프롬프트에만 걸리고 출처 목록은 줄지 않는다). 배지 규칙이
+ *                        렌더러 셋에 흩어지지 않도록 이 레코드로 모으는 것과 같은 논리다
  */
 public record VerificationSnapshot(
         Boolean grounded,
         boolean generative,
         String evalReason,
         String envNote,
-        List<String> inventedSymbols
+        List<String> inventedSymbols,
+        String budgetNote
 ) {
     public VerificationSnapshot {
         inventedSymbols = inventedSymbols == null ? List.of() : List.copyOf(inventedSymbols);
@@ -47,7 +54,8 @@ public record VerificationSnapshot(
 
     /** 저장할 값이 하나도 없는 턴 — 검증을 돌리지 않았고 안내도 없다. 그런 턴은 아예 저장하지 않는다. */
     public boolean isEmpty() {
-        return grounded == null && evalReason == null && envNote == null && inventedSymbols.isEmpty();
+        return grounded == null && evalReason == null && envNote == null
+                && inventedSymbols.isEmpty() && budgetNote == null;
     }
 
     /**

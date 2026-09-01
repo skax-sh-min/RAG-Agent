@@ -220,7 +220,8 @@ public class StreamingAgentService {
                 memoryService.saveRetrievalMetrics(turnId, result.sources());
                 memoryService.saveVerification(turnId, new VerificationSnapshot(
                         result.grounded(), result.responseMode().generative(),
-                        result.evalReason(), result.envNote(), result.inventedSymbols()));
+                        result.evalReason(), result.envNote(), result.inventedSymbols(),
+                        result.budgetNote()));
                 if (questionReuseService != null) {
                     questionReuseService.recordTurnSources(turnId, userId, form.threadId(),
                             result.retrievedDocs(), result.sources());
@@ -447,6 +448,8 @@ public class StreamingAgentService {
         // 경로·주소·포트·환경변수 값 안내 — 검증 통과 여부와 무관하게 실릴 수 있다(통과한 답변에도
         // "이 경로는 본인 환경 기준으로 바꿔야 한다"는 안내가 필요하다).
         m.put("envNote",           result.envNote());
+        // 축소 안내도 통과한 답변에 실린다(envNote 와 같은 규칙) — 판정이 아니라 안내다.
+        m.put("budgetNote",        result.budgetNote());
         // 통과 배지를 '검증됨'(초록)이 아니라 '생성'(파랑)으로 바꿔야 하는가 — 서버가 성질로
         // 계산해 내려준다(ResponseMode.generative()). 클라이언트가 모드 문자열을 비교하게 두면
         // 모드를 하나 더 붙일 때 JS 쪽 분기를 사람이 기억해서 찾아야 한다.

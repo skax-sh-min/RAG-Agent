@@ -36,6 +36,7 @@ public record AgentState(
         Boolean grounded,         // CRITIC 결과 (null=CRITIC 미실행)
         String evalReason,        // 검증(sufficient/grounded) 실패 사유 — 평가 LLM이 준 한 문장. 통과 시 null
         String envNote,           // 환경(경로/주소/포트/환경변수)에 따라 달라질 수 있는 값 안내 — 검증 통과 여부와 무관. 해당 없으면 null
+        String budgetNote,        // 컨텍스트 예산 때문에 문서·이력을 덜어냈다는 사용자 안내 — 축소가 없었으면 null. 출처 목록은 검색된 전부를 그대로 보여주므로(축소는 프롬프트에만 걸린다), 이 안내가 없으면 사용자는 모델이 그 출처를 다 봤다고 믿게 된다
         boolean directMode,       // RAG 없이 LLM 직접 호출
         Locale locale,            // UI 언어 설정 — LLM 시스템 프롬프트 언어 선택에 사용
         List<String> selectedTags, // 검색 스코프 태그 (빈 리스트 = version-only 검색)
@@ -91,7 +92,7 @@ public record AgentState(
                 null, 0, false,
                 conversationHistory,
                 0, 0, 0,
-                routingMode, null, null, null, null, null,
+                routingMode, null, null, null, null, null, null,
                 directMode, locale, List.of(), ResponseMode.DEFAULT, List.of(), List.of());
     }
 
@@ -129,6 +130,7 @@ public record AgentState(
         private Boolean grounded;
         private String evalReason;
         private String envNote;
+        private String budgetNote;
         private boolean directMode;
         private Locale locale                    = Locale.KOREAN;
         private List<String> selectedTags        = List.of();
@@ -161,6 +163,7 @@ public record AgentState(
             this.grounded           = s.grounded;
             this.evalReason         = s.evalReason;
             this.envNote            = s.envNote;
+            this.budgetNote         = s.budgetNote;
             this.directMode         = s.directMode;
             this.locale             = s.locale;
             this.selectedTags       = s.selectedTags;
@@ -189,6 +192,7 @@ public record AgentState(
         public Builder grounded(Boolean v)                 { this.grounded = v;           return this; }
         public Builder evalReason(String v)                { this.evalReason = v;         return this; }
         public Builder envNote(String v)                   { this.envNote = v;            return this; }
+        public Builder budgetNote(String v)                { this.budgetNote = v;         return this; }
         public Builder directMode(boolean v)               { this.directMode = v;         return this; }
         public Builder locale(Locale v)                    { this.locale = v;             return this; }
         public Builder selectedTags(List<String> v)        { this.selectedTags = v;       return this; }
@@ -209,7 +213,7 @@ public record AgentState(
                     retrievedDocs, sources, retrievalWarnings, imageRefs,
                     answer, retryCount, needsRetry, conversationHistory,
                     totalInputTokens, totalOutputTokens, llmCallCount,
-                    routingMode, usedProvider, premiumUpgraded, grounded, evalReason, envNote,
+                    routingMode, usedProvider, premiumUpgraded, grounded, evalReason, envNote, budgetNote,
                     directMode, locale, selectedTags, responseMode, usedDocIndices, inventedSymbols);
         }
     }

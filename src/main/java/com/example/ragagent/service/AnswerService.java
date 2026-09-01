@@ -180,11 +180,28 @@ public class AnswerService {
     }
 
     public AgentState execute(AgentState state) {
-        return executeBlocking(state);
+        return executeBlocking(withBudgetNote(state));
     }
 
     public AgentState executeStreaming(AgentState state, GraphListener listener) {
-        return executeStreamingNormal(state, listener);
+        return executeStreamingNormal(withBudgetNote(state), listener);
+    }
+
+    /**
+     * 축소가 일어났으면 그 사실을 state 에 실어 둔다 — 사용자에게 보여주기 위해서다.
+     *
+     * <p><b>안내가 필요한 이유는 출처 목록이 줄지 않기 때문이다.</b> 축소는 프롬프트에만 걸리고
+     * {@code state.sources()} 는 검색된 전부를 그대로 들고 있어서, 안내가 없으면 사용자는 화면의
+     * 출처 10개를 모델이 다 읽고 답한 것으로 믿는다. 실제로는 그중 몇 개만 프롬프트에 들어갔다.
+     *
+     * <p><b>두 진입점에서만 부른다.</b> 여기서 세워 둔 값은 아래 모든 경로의 {@code toBuilder()}
+     * 복사를 타고 그대로 흘러가므로(PROGRESSIVE 업그레이드가 만드는 새 state 포함) 경로마다
+     * 심을 필요가 없다. {@link #fitToBudget} 자체는 {@link #buildAnswerPrompt} 가 다시 부르지만
+     * 같은 입력에 같은 함수라 결과가 갈리지 않는다 — 로직을 복제하는 대신 한 함수를 두 번 부른다.
+     */
+    private AgentState withBudgetNote(AgentState state) {
+        String note = fitToBudget(state).note();
+        return note == null ? state : state.toBuilder().budgetNote(note).build();
     }
 
     // ── Blocking paths ──────────────────────────────────────────────────────
@@ -762,7 +779,8 @@ public class AnswerService {
     }
 
     /** 예산에 맞춘 결과 — 무엇이 얼마나 남았는지. */
-    private record Fitted(List<Document> docs, String history) {}
+    /** @param note 축소가 있었을 때만 채워지는 사용자 안내 문구. 없으면 {@code null}. */
+    private record Fitted(List<Document> docs, String history, String note) {}
 
     /**
      * 프롬프트가 프로바이더의 창에 들어가도록 <b>문서를 먼저</b>, 그래도 넘치면 <b>대화 이력을</b>
@@ -781,7 +799,7 @@ public class AnswerService {
         List<Document> docs = state.retrievedDocs();
         String history = state.conversationHistory();
         PromptBudget budget = budgetFor(state);
-        if (budget == null) return new Fitted(docs, history);   // 창 모름 → 예전 그대로
+        if (budget == null) return new Fitted(docs, history, null);   // 창 모름 → 예전 그대로
 
         long fixedCost = TokenEstimator.estimate(state.question())
                 + TokenEstimator.estimate(String.join("\n", state.retrievalWarnings()))
@@ -798,14 +816,36 @@ public class AnswerService {
                 .sum();
         String keptHistory = trimHistory(history, limit - fixedCost - docCost);
 
-        if (keptDocs.size() < docs.size() || keptHistory.length() < history.length()) {
+        boolean docsTrimmed = keptDocs.size() < docs.size();
+        boolean historyTrimmed = keptHistory.length() < history.length();
+        String note = null;
+        if (docsTrimmed || historyTrimmed) {
             log.warn("[BUDGET] 컨텍스트 창 {}토큰(출력 예약 {}) → 입력 예산 {}토큰에 맞춰 축소: "
                      + "문서 {}→{}개, 이력 {}→{}자. app.search-top-k / app.chunk-size 를 낮추거나 "
                      + "프로바이더의 컨텍스트를 키우면 이 축소가 사라집니다.",
                     budget.contextWindow(), budget.outputReservation(), limit,
                     docs.size(), keptDocs.size(), history.length(), keptHistory.length());
+            note = budgetNoteText(docs.size(), keptDocs.size(), historyTrimmed);
         }
-        return new Fitted(keptDocs, keptHistory);
+        return new Fitted(keptDocs, keptHistory, note);
+    }
+
+    /**
+     * 사용자용 문구 — <b>무엇이 줄었는지</b>를 숫자로 말한다.
+     *
+     * <p>메시지 번들을 쓰지 않는다: 이 문자열은 {@code conversation_turns} 에 저장돼 나중에 다시
+     * 렌더되는데, 그때의 로케일은 답변한 시점의 로케일과 다를 수 있다({@code evalReason}·
+     * {@code envNote} 가 모델이 쓴 한국어 문장을 그대로 저장하는 것과 같은 자리다).
+     */
+    private static String budgetNoteText(int totalDocs, int keptDocs, boolean historyTrimmed) {
+        StringBuilder sb = new StringBuilder();
+        if (keptDocs < totalDocs) {
+            sb.append("컨텍스트 한도로 검색된 문서 %d개 중 %d개만 사용했습니다".formatted(totalDocs, keptDocs));
+        }
+        if (historyTrimmed) {
+            sb.append(sb.isEmpty() ? "컨텍스트 한도로 " : ", ").append("이전 대화 일부를 제외했습니다");
+        }
+        return sb.append(".").toString();
     }
 
     /** 턴 경계(빈 줄 + {@code "Q: "})에서 오래된 쪽부터 버린다. 예산이 음수면 전부 버린다. */
