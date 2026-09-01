@@ -1,5 +1,6 @@
 package com.example.ragagent.service;
 
+import com.example.ragagent.llm.ProviderContextWindows;
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.llm.LlmProvider;
 import com.example.ragagent.llm.LlmRouter;
@@ -40,7 +41,7 @@ class RetrievalServiceExpansionGateTest {
         MessageSource messageSource = mock(MessageSource.class);
         when(messageSource.getMessage(anyString(), any(), any(Locale.class))).thenReturn("{query} {number}");
         return new RetrievalService(llmRouter, mock(LlmUsageRepository.class), mock(RagService.class), props,
-                Optional.empty(), Optional.empty(), messageSource, new ChatImageAnalysisSkipRegistry());
+                Optional.empty(), Optional.empty(), messageSource, new ChatImageAnalysisSkipRegistry(), new ProviderContextWindows());
     }
 
     @Test

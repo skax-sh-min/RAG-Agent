@@ -77,7 +77,7 @@ HTTP 요청
 | ANSWER sufficient=false, retryCount < max | ANSWER → RETRIEVAL |
 | ANSWER responseMode == S | ANSWER → FINALIZE (CRITIC 스킵) |
 | ANSWER responseMode != S | ANSWER → CRITIC |
-| CRITIC grounded=false, retryCount < max | CRITIC → RETRIEVAL |
+| CRITIC grounded=false, retryCount < max | CRITIC → **ANSWER** (재검색 없이 답변만 재생성) |
 | 그 외 | CRITIC → FINALIZE |
 
 ---
@@ -258,14 +258,32 @@ MD 교정 한 번의 LLM 호출은 `섹션(입력) + 시스템 프롬프트/지�
 ## 5. 재시도와 검증
 
 ```
-ANSWER sufficient=false   AND retryCount < max  →  retryCount 증가 후 RETRIEVAL 재시도
-CRITIC grounded=false     AND retryCount < max  →  retryCount 증가 후 RETRIEVAL 재시도
+ANSWER sufficient=false   AND retryCount < max  →  retryCount + retrievalRetries 증가 후 RETRIEVAL
+CRITIC grounded=false     AND retryCount < max  →  retryCount 만 증가 후 ANSWER (재검색 없음)
 
 responseMode=S            →  ANSWER 통과 시 CRITIC 생략 후 FINALIZE
 
 PROGRESSIVE 모드 AND sufficient=false AND retryCount >= max
   →  PREMIUM 모델(⑦)로 단발 업그레이드 후 CRITIC 진행
 ```
+
+**두 게이트는 다른 실패라 대응이 다릅니다** (§6.27). `sufficient=false`는 "질문에 답하지 못했다"이므로
+재료를 바꿔야 하고, `grounded=false`는 "문서 밖으로 나갔다"이므로 재료는 그대로 두고 답변만 다시 써야
+합니다 — 후자에서 재검색은 임베딩과 MultiQuery 확장 호출을 쓰고 사실상 같은 집합을 받아옵니다.
+
+재시도가 실제로 다른 결과를 낼 수 있게 하는 것은 **`[직전 시도 메모]`** 입니다. 질문·시스템 프롬프트·
+대화 이력이 그대로이고 일반/RAG 온도가 기본 `0.0`이라, 프롬프트가 달라지지 않으면 같은 답변이 그대로
+재생성됩니다. 평가가 낸 반려 사유 한 문장(`evalReason`)이 답변 프롬프트에 들어가며, 추가 LLM 왕복은
+없습니다. 지시("이 지적을 만족시켜라")가 아니라 관찰로 넣습니다 — 지적을 채우려고 지어내면 근거
+지표가 오히려 나빠지기 때문입니다.
+
+**재검색(`sufficient=false`)에서 달라지는 것 세 가지:**
+
+| 축 | 동작 |
+|---|---|
+| 청크 교체 | 직전 시도에서 **근거로 안 쓰였고(`usedDocs`) + RRF 하위**인 청크를 최대 1/3 밀어냅니다(`RetrievalEviction`). 1순위는 항상 보존하고, `usedDocs`가 비었거나 검증 발췌가 잘린 시도에서는 아무것도 밀어내지 않습니다 — 그 경우의 "미사용"은 "안 쓰인 것"이 아니라 "모른다"/"보이지도 않은 것"이기 때문입니다 |
+| 질의 축 추가 | 반려 사유 문장이 **검색 축 하나로** 더 들어갑니다. 원 질문 축은 그대로라, 사유가 엉뚱해도 그 축의 순위만 나빠집니다. LLM 왕복 0회 |
+| 문서 수 | `topK + retrievalRetries` — 단, **검증 호출에 여유가 있을 때만** 늘립니다. 발췌가 잘리면 `unreliableNegative()`가 판정을 `null`로 떨어뜨려, 여유를 안 보면 재시도를 거듭할수록 판정이 사라집니다 |
 
 > `retryCount`는 최초 RETRIEVAL 진입 시 증가하지 않습니다.  
 > ANSWER 또는 CRITIC이 재시도를 결정할 때만 증가합니다(S 모드는 CRITIC 단계 자체가 없음).  

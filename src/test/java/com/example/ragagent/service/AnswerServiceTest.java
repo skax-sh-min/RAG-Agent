@@ -632,6 +632,62 @@ class AnswerServiceTest {
                 assertThat(prompt.getContents()).contains("[USER_QUESTION]").contains("[/USER_QUESTION]"));
     }
 
+    // ── 재시도 피드백 (§ 재시도 개선) ────────────────────────────────────────
+
+    /** 프롬프트를 캡처하는 관용구 — 위 테스트들과 같은 2회(답변 + 검증) 호출 모양. */
+    @SuppressWarnings("unchecked")
+    private List<String> capturePrompts(AgentState state) {
+        ArgumentCaptor<Function<ChatModel, ChatResponse>> callCaptor = ArgumentCaptor.forClass(Function.class);
+        when(llmRouter.executeGatedWithUsage(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), callCaptor.capture()))
+                .thenReturn(new LlmRouter.LlmResult("답변", 0, 0),
+                            new LlmRouter.LlmResult("{\"sufficient\":true}", 0, 0));
+        when(llmRouter.findProviderName(any(), any())).thenReturn("gemini-flash");
+
+        service.execute(state);
+
+        ChatModel chatModel = mock(ChatModel.class);
+        ArgumentCaptor<Prompt> promptCaptor = ArgumentCaptor.forClass(Prompt.class);
+        when(chatModel.call(promptCaptor.capture())).thenReturn(chatResponse("dummy"));
+        callCaptor.getAllValues().forEach(fn -> fn.apply(chatModel));
+        return promptCaptor.getAllValues().stream().map(Prompt::getContents).toList();
+    }
+
+    @Test
+    @DisplayName("재시도 — 직전 반려 사유가 답변 프롬프트에 들어간다 (없으면 재시도가 같은 입력의 반복이다)")
+    void retry_answerPromptCarriesThePreviousRejectionReason() {
+        AgentState retrying = newState(RoutingMode.COST_FIRST).toBuilder()
+                .retryCount(1)
+                .evalReason("설정 파일의 포트 번호가 답변에 없다")
+                .build();
+
+        String answerPrompt = capturePrompts(retrying).get(0);
+
+        assertThat(answerPrompt).contains("[직전 시도 메모]");
+        assertThat(answerPrompt).contains("설정 파일의 포트 번호가 답변에 없다");
+        // 지시가 아니라 관찰로 — 지적을 채우려고 지어내면 근거 지표가 더 나빠진다
+        assertThat(answerPrompt).contains("지어내지 말고");
+        // 내부 메모가 답변에 새어 나가지 않도록 같은 블록이 스스로 제약을 건다
+        assertThat(answerPrompt).contains("답변에 언급하지 마라");
+    }
+
+    @Test
+    @DisplayName("첫 시도에는 그 블록이 없다 — 반려된 적이 없으므로")
+    void firstAttempt_hasNoRetryFeedbackBlock() {
+        assertThat(capturePrompts(newState(RoutingMode.COST_FIRST)).get(0))
+                .doesNotContain("[직전 시도 메모]");
+    }
+
+    @Test
+    @DisplayName("재시도라도 사유가 없으면 블록을 넣지 않는다 — 빈 메모는 잡음일 뿐이다")
+    void retryWithoutReason_hasNoRetryFeedbackBlock() {
+        AgentState retrying = newState(RoutingMode.COST_FIRST).toBuilder()
+                .retryCount(1)
+                .evalReason(null)
+                .build();
+
+        assertThat(capturePrompts(retrying).get(0)).doesNotContain("[직전 시도 메모]");
+    }
+
     @Test
     @DisplayName("BLOCKING — 답변 프롬프트의 [검색된 문서]는 정규화된 텍스트를 쓰고 맥락 헤더는 넣지 않는다(§10.1)")
     @SuppressWarnings("unchecked")

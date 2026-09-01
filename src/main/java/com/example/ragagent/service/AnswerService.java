@@ -91,7 +91,9 @@ public class AnswerService {
      * {@link #withoutVerdict} — trading a verdict for tokens is the wrong side of that bargain.
      * Clamped by the configured ceiling so it can never exceed what the operator allows.
      */
-    private static final int MAX_EVAL_OUTPUT_TOKENS = 2_048;
+    /** 검증 호출이 스스로 거는 출력 예약. {@code RetrievalService} 의 컨텍스트 여유 판단이
+     *  같은 값을 써야 해서 package-private 이다 — 두 곳이 다른 예약을 믿으면 여유 계산이 틀린다. */
+    static final int MAX_EVAL_OUTPUT_TOKENS = 2_048;
 
     /**
      * 답변 프롬프트의 <b>섹션 머리말과 구분선</b>({@code [이전 대화]}·{@code [검색된 문서]}·
@@ -512,6 +514,7 @@ public class AnswerService {
                     .evalReason(reason)
                     .envNote(envNote)
                     .usedDocIndices(out.usedDocs())
+                    .excludedDocIds(evictionsFor(state, out.sufficient(), out.usedDocs(), excerpts))
                     .build();
         } catch (Exception e) {
             log.warn("[EVAL] 검증 응답을 읽지 못했다 — 판정 없음으로 기록한다(재시도 없음, 배지 없음): {}",
@@ -635,6 +638,33 @@ public class AnswerService {
      * 버리면 정당한 재시도와 PROGRESSIVE 업그레이드 신호가 함께 사라지는데, 업그레이드는 오히려
      * <b>창이 더 큰 프로바이더</b>로 가므로 이 상황에서 도움이 되는 쪽이다.
      */
+    /**
+     * 다음 재검색에서 밀어낼 청크를 고른다 — {@code sufficient=false} 재시도 전용.
+     *
+     * <p><b>여기서 계산하는 이유는 세 입력이 전부 이 자리에만 모여 있기 때문이다</b>: 직전 문서
+     * 목록({@code state.retrievedDocs()}), 평가가 보고한 사용 문서({@code usedDocs}), 그리고 발췌가
+     * 잘렸는지({@code excerpts.trimmed()}). 마지막 것은 {@code EvalExcerpts} 안에만 있어서
+     * {@code RetrievalService} 로 옮기려면 그 사실을 상태에 실어 날라야 한다 — 판단을 데이터가 있는
+     * 곳으로 가져오는 편이 데이터를 판단이 있는 곳으로 옮기는 것보다 낫다.
+     *
+     * <p>{@code grounded=false} 에는 적용하지 않는다: 그건 답변이 문서 <b>밖으로</b> 나간 경우라
+     * 근거를 빼는 것이 방향상 반대다. 이 메서드가 {@code sufficient} 만 보는 이유다.
+     *
+     * <p>누적한다 — 직전에 밀어낸 청크는 다음 검색에서 다시 올라오면 안 된다. 그러지 않으면 교체가
+     * 앞으로 나아가지 못하고 같은 자리를 오간다.
+     */
+    private static List<String> evictionsFor(AgentState state, boolean sufficient,
+                                             List<Integer> usedDocs, EvalExcerpts excerpts) {
+        if (sufficient) return state.excludedDocIds();
+        Set<String> fresh = RetrievalEviction.select(state.retrievedDocs(), usedDocs, excerpts.trimmed());
+        if (fresh.isEmpty()) return state.excludedDocIds();
+        List<String> merged = new ArrayList<>(state.excludedDocIds());
+        fresh.stream().filter(id -> !merged.contains(id)).forEach(merged::add);
+        log.info("[EVAL] 재시도에서 밀어낼 청크 {}개 (근거 미사용 + 하위 순위) thread={}",
+                fresh.size(), state.threadId());
+        return merged;
+    }
+
     private static boolean unreliableNegative(boolean grounded, EvalExcerpts excerpts, AgentState state) {
         if (grounded || !excerpts.trimmed()) return false;
         log.warn("[EVAL] 근거 없음 판정을 버린다(판정 없음으로 기록) — 검증이 답변보다 적은 문서를 봤다: "
@@ -904,8 +934,38 @@ public class AnswerService {
             sb.append("[경고]\n").append(String.join("\n", state.retrievalWarnings())).append("\n\n");
         }
 
+        appendRetryFeedback(sb, state);
+
         sb.append("[질문]\n").append(PromptInjectionGuard.wrap(state.question()));
         return sb.toString();
+    }
+
+    /**
+     * 직전 시도가 왜 반려됐는지를 재시도 프롬프트에 실어 준다.
+     *
+     * <p><b>이게 없으면 재시도가 거의 무의미하다.</b> 검색 escalation 은 최종 컷을 재시도당 1개
+     * 늘릴 뿐이고, 질문·시스템 프롬프트·대화 이력은 그대로이며, 일반/RAG 온도는 {@code [0, 0.3]}
+     * 로 조여 있고 기본값이 {@code 0.0} 이다 — 같은 입력을 결정적으로 다시 넣고 같은 평가자에게
+     * 같은 질문을 하는 셈이라 같은 답과 같은 판정이 나오기 쉽다. 프롬프트가 실제로 달라지는 것이
+     * 재시도가 다른 결과를 낼 수 있는 유일한 경로다.
+     *
+     * <p>사유는 이미 계산돼 있다 — {@code evalReason} 은 평가 LLM 이 낸 한 문장이고 로그·SSE·DB 로
+     * 이미 나가며 재시도 state 까지 살아남는다. 정작 그걸 볼 필요가 있는 모델에게만 안 갔다.
+     *
+     * <p><b>지시가 아니라 관찰로 넣는다.</b> "이 지적을 만족시켜라"로 쓰면 모델이 지적을 채우려고
+     * 문서에 없는 내용을 지어내고, 그러면 고치려던 지표(근거)가 더 나빠진다. 그래서 문구는 "다시
+     * 확인하라 / 없으면 없다고 말하라"이고, 이 블록을 답변에 언급하지 말라는 제약이 같은 블록 안에
+     * 붙는다(시스템 프롬프트 6개를 건드리는 대신 — 블록이 있을 때만 그 제약도 존재하면 된다).
+     */
+    private static void appendRetryFeedback(StringBuilder sb, AgentState state) {
+        if (state.retryCount() <= 0) return;
+        String reason = state.evalReason();
+        if (reason == null || reason.isBlank()) return;
+        sb.append("[직전 시도 메모]\n")
+          .append("직전 답변은 다음 이유로 반려됐다: ").append(reason).append('\n')
+          .append("이번에는 그 부분을 문서에서 다시 확인하고 답하라. ")
+          .append("문서에 없으면 지어내지 말고 없다고 밝혀라. ")
+          .append("이 메모 자체는 내부 기록이므로 답변에 언급하지 마라.\n\n");
     }
 
     /** 예산에 맞춘 결과 — 무엇이 얼마나 남았는지. */

@@ -1,5 +1,6 @@
 package com.example.ragagent.service;
 
+import com.example.ragagent.llm.ProviderContextWindows;
 import com.example.ragagent.agent.AgentState;
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.llm.LlmProvider;
@@ -53,7 +54,7 @@ class RetrievalServiceTagFilterTest {
         when(llmRouter.routeProviderWithFallback(any(), any())).thenReturn(expansionProvider);
         MessageSource messageSource = mock(MessageSource.class);
         when(messageSource.getMessage(anyString(), any(), any(Locale.class))).thenReturn("{query} {number}");
-        svc = new RetrievalService(llmRouter, mock(LlmUsageRepository.class), rag, props, Optional.empty(), Optional.empty(), messageSource, new ChatImageAnalysisSkipRegistry());
+        svc = new RetrievalService(llmRouter, mock(LlmUsageRepository.class), rag, props, Optional.empty(), Optional.empty(), messageSource, new ChatImageAnalysisSkipRegistry(), new ProviderContextWindows());
     }
 
     private static Document doc(String id, String tagsCsv) {

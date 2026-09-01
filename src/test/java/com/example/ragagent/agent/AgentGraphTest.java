@@ -219,8 +219,8 @@ class AgentGraphTest {
     }
 
     @Test
-    @DisplayName("CRITIC 가 needsRetry=true → RETRIEVAL 로 루프백")
-    void critic_needsRetry_loopsBackToRetrieval() {
+    @DisplayName("CRITIC 가 needsRetry=true → 재검색 없이 ANSWER 만 다시 (근거는 이미 손에 있다)")
+    void critic_needsRetry_regeneratesWithoutRetrieval() {
         when(classifierService.execute(any()))
                 .thenAnswer(inv -> ((AgentState) inv.getArgument(0)).toBuilder().questionType("manual").build());
         when(answerService.execute(any()))
@@ -235,10 +235,33 @@ class AgentGraphTest {
 
         graph.run(newState(RoutingMode.COST_FIRST));
 
-        verify(retrievalService, times(2)).execute(any(), any());
+        // grounded=false 는 "문서 밖으로 나갔다"이지 "근거가 모자라다"가 아니다. 재검색은 임베딩 +
+        // MultiQuery 확장 호출을 쓰고 사실상 같은 집합을 받아오므로 한 번만 돈다.
+        verify(retrievalService, times(1)).execute(any(), any());
         verify(answerService, times(2)).execute(any());
         verify(criticService, times(2)).execute(any());
         verify(finalizeService, times(1)).execute(any());
+    }
+
+    @Test
+    @DisplayName("CRITIC 재시도는 retrievalRetries 를 올리지 않는다 — 검색 escalation 이 앞서 나가면 안 된다")
+    void critic_retry_doesNotAdvanceRetrievalEscalation() {
+        when(classifierService.execute(any()))
+                .thenAnswer(inv -> ((AgentState) inv.getArgument(0)).toBuilder().questionType("manual").build());
+        when(answerService.execute(any()))
+                .thenAnswer(inv -> ((AgentState) inv.getArgument(0)).toBuilder().needsRetry(false).build());
+
+        int[] criticCalls = {0};
+        when(criticService.execute(any())).thenAnswer(inv -> {
+            AgentState s = inv.getArgument(0);
+            criticCalls[0]++;
+            return criticCalls[0] == 1 ? s.toBuilder().needsRetry(true).build() : s.toBuilder().needsRetry(false).build();
+        });
+
+        AgentState result = graph.run(newState(RoutingMode.COST_FIRST));
+
+        assertThat(result.retryCount()).isEqualTo(1);
+        assertThat(result.retrievalRetries()).isZero();
     }
 
     @Test

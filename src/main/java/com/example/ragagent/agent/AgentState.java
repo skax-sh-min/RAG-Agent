@@ -49,6 +49,14 @@ public record AgentState(
                                      // 창의 모드에서 이름을 지어내는 것 자체는 실패가 아니고, 그것을
                                      // 문서 근거인 양 제시하는 것이 문제라 독자에게 경고로 보여준다.
                                      // C가 아닌 모드에서는 항상 빈 리스트
+        ,
+        int retrievalRetries,        // RETRIEVAL 노드를 '다시' 돈 횟수. retryCount 와 갈라지는 이유는
+                                     // grounded 실패 재시도가 검색을 건너뛰고 ANSWER 로 바로 가기
+                                     // 때문이다 — 검색 escalation(후보 풀·최종 컷)의 입력은 "몇 번
+                                     // 재시도했나"가 아니라 "검색을 몇 번 다시 했나"여야 한다
+        List<String> excludedDocIds  // 이번 턴에서 근거로 쓰이지 않아 밀어낸 청크 id (누적).
+                                     // 재시도마다 새로 계산하면 직전에 뺀 청크가 다음 검색에서 다시
+                                     // 올라와 자리를 차지한다 — 턴 단위로 기억해야 교체가 전진한다
 ) {
     public AgentState {
         retrievedDocs     = retrievedDocs     == null ? List.of() : List.copyOf(retrievedDocs);
@@ -58,6 +66,7 @@ public record AgentState(
         selectedTags      = selectedTags      == null ? List.of() : List.copyOf(selectedTags);
         usedDocIndices    = usedDocIndices    == null ? List.of() : List.copyOf(usedDocIndices);
         inventedSymbols   = inventedSymbols   == null ? List.of() : List.copyOf(inventedSymbols);
+        excludedDocIds    = excludedDocIds    == null ? List.of() : List.copyOf(excludedDocIds);
         if (userId      == null) userId      = "anonymous";
         if (routingMode == null) routingMode = RoutingMode.COST_FIRST;
         if (locale      == null) locale      = Locale.KOREAN;
@@ -93,7 +102,8 @@ public record AgentState(
                 conversationHistory,
                 0, 0, 0,
                 routingMode, null, null, null, null, null, null,
-                directMode, locale, List.of(), ResponseMode.DEFAULT, List.of(), List.of());
+                directMode, locale, List.of(), ResponseMode.DEFAULT, List.of(), List.of(),
+                0, List.of());
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────
@@ -137,6 +147,8 @@ public record AgentState(
         private ResponseMode responseMode        = ResponseMode.DEFAULT;
         private List<Integer> usedDocIndices     = List.of();
         private List<String> inventedSymbols     = List.of();
+        private int retrievalRetries             = 0;
+        private List<String> excludedDocIds      = List.of();
 
         Builder() {}
 
@@ -170,6 +182,8 @@ public record AgentState(
             this.responseMode       = s.responseMode;
             this.usedDocIndices     = s.usedDocIndices;
             this.inventedSymbols    = s.inventedSymbols;
+            this.retrievalRetries   = s.retrievalRetries;
+            this.excludedDocIds     = s.excludedDocIds;
         }
 
         public Builder question(String v)                  { this.question = v;           return this; }
@@ -199,6 +213,9 @@ public record AgentState(
         public Builder responseMode(ResponseMode v)        { this.responseMode = v;       return this; }
         public Builder usedDocIndices(List<Integer> v)     { this.usedDocIndices = v;     return this; }
         public Builder inventedSymbols(List<String> v)     { this.inventedSymbols = v;    return this; }
+        public Builder excludedDocIds(List<String> v)      { this.excludedDocIds = v;     return this; }
+        /** RETRIEVAL 을 다시 도는 분기에서만 호출한다 — {@code incrementRetry()} 와 짝이 아니라 별개다. */
+        public Builder incrementRetrievalRetry()           { this.retrievalRetries++;     return this; }
 
         public Builder accumulateTokens(int inputTokens, int outputTokens) {
             this.totalInputTokens  += inputTokens;
@@ -214,7 +231,8 @@ public record AgentState(
                     answer, retryCount, needsRetry, conversationHistory,
                     totalInputTokens, totalOutputTokens, llmCallCount,
                     routingMode, usedProvider, premiumUpgraded, grounded, evalReason, envNote, budgetNote,
-                    directMode, locale, selectedTags, responseMode, usedDocIndices, inventedSymbols);
+                    directMode, locale, selectedTags, responseMode, usedDocIndices, inventedSymbols,
+                    retrievalRetries, excludedDocIds);
         }
     }
 }
