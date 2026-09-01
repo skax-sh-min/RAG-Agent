@@ -526,18 +526,43 @@ LLM_ROUTING_MODE=QUALITY_FIRST
 | `spring.servlet.multipart.max-file-size` | — | `200MB` | 단일 파일 최대 크기. 초과 시 413 (`RAG-UP-003`) |
 | `spring.servlet.multipart.max-request-size` | — | `200MB` | 멀티파트 요청 전체 최대 크기 |
 | `app.upload.max-total-size` | `UPLOAD_MAX_TOTAL_SIZE` | `0` (무제한) | **배포 전체 저장 상한** (§6.15). 초과 시 413 (`RAG-UP-002`) |
+| `app.upload.backup-retention-days` | `BACKUP_RETENTION_DAYS` | `30` | `documents/backup/` 보관 일수. `0` = 기간 규칙 해제 |
+| `app.upload.backup-max-size` | `BACKUP_MAX_SIZE` | `2GB` | `documents/backup/` 총 용량 상한. 초과 시 오래된 것부터 삭제. `0` = 용량 규칙 해제 |
 
 > **두 상한은 다른 축입니다.** 위의 per-file 상한은 "이 파일 하나가 너무 크다", `max-total-size`는 "더 넣을
 > 자리가 없다"입니다. 후자는 `20GB`처럼 단위를 붙여 쓸 수 있고, 단위가 없으면 바이트로 읽습니다. `0`(기본)은
 > 무제한이며, 이때는 사용량을 재려고 디스크를 걷는 일조차 하지 않습니다.
 >
-> **세는 대상**: `{app.data-dir}` 아래 `documents/`(재인덱싱 백업 포함) + `converted/` + `images/` 세 트리입니다.
+> **세는 대상**: `{app.data-dir}` 아래 `documents/` + `converted/` + `images/` 세 트리입니다.
 > 업로드 원본만이 아니라 인덱싱이 만들어 내는 변환 마크다운과 추출 이미지까지 포함하며, PPTX·스캔 PDF는 보통
 > 그쪽이 원본보다 큽니다. `memory.db`/`vector.db`·감사 로그·Chroma 볼륨은 업로드가 만드는 것이 아니라 제외됩니다.
+>
+> **`documents/backup/` 은 제외됩니다.** 문서를 삭제하면 원본이 지워지는 게 아니라 그 폴더로 **옮겨지므로**,
+> 그것까지 세면 "문서를 지워 자리를 만드세요"라는 이 상한의 유일한 해결책이 성립하지 않습니다(사용량이 거의
+> 안 줄고, 그 바이트는 어느 화면에서도 회수할 수 없습니다). 대신 아래 **백업 보존 정책**이 그 폴더를 묶습니다.
 >
 > **소프트 상한입니다.** 업로드를 받을 시점에 알 수 있는 크기는 올라오는 파일뿐이므로(파생 산출물은 아직 없음)
 > 한 건이 상한을 조금 넘겨 끝날 수 있고, 대신 **그다음 업로드가 거부**됩니다. 문서를 지우면 즉시 자리가 납니다
 > — 별도 카운터 없이 실제 디스크를 재기 때문에 `/admin` 삭제·디렉터리 동기화·수동 삭제가 모두 그대로 반영됩니다.
+
+##### 백업 보존 정책 (`documents/backup/`)
+
+문서 삭제 시 원본은 `{app.data-dir}/documents/backup/{원본이름}_{yyyyMMdd_HHmmss}{확장자}` 로 보관됩니다
+(실수로 지운 문서를 되살리기 위한 것). 이 폴더는 저장 상한에서 빠지는 대신 **세 규칙으로 정리**됩니다 —
+문서 **삭제 직후**와 **앱 기동 시**에 적용됩니다.
+
+| 순서 | 규칙 | 설정 |
+|---|---|---|
+| ① | 같은 원본 파일명의 백업은 **최신 1개만** 남긴다 | 항상 적용 (끌 수 없음) |
+| ② | ①이 남긴 것 중 **보관 일수**를 넘긴 것 삭제 | `BACKUP_RETENTION_DAYS` (기본 30, `0`=해제) |
+| ③ | 그래도 폴더가 **용량 상한**을 넘으면 오래된 것부터 삭제 | `BACKUP_MAX_SIZE` (기본 `2GB`, `0`=해제) |
+
+> **이 앱이 만든 파일만 지웁니다.** 삭제 대상은 위 이름 규칙에 맞는 파일뿐이며, 운영자가 그 폴더에 직접 둔
+> 파일은 ③의 용량 계산에는 포함되지만 절대 지우지 않습니다. 그래서 외부 파일 때문에 상한까지 못 내려가는
+> 경우가 생기면 삭제 대신 로그(`[BACKUP] 상한(...)까지 줄이지 못했다`)로 알립니다.
+>
+> **정리 시점 주의**: 삭제 직후와 기동 시에만 돕니다. 문서를 한동안 지우지 않는 배포에서는 ②의 30일이 최대
+> 그만큼 늦게 반영될 수 있습니다(다음 삭제 때 따라잡습니다). 즉시 정리하려면 앱을 재기동하세요.
 >
 > **적용 범위**: 문서 업로드 2경로(`POST /ui/documents/upload`, `POST /api/v1/documents`)와 지식 제안 본문
 > 이미지 업로드(`POST /curated/submissions/images`). `POST /api/v1/documents/sync`는 이미 디스크에 있는 파일을
@@ -552,7 +577,7 @@ LLM_ROUTING_MODE=QUALITY_FIRST
 |------|----------|--------|------|
 | `app.rate-limit.enabled` | `RATE_LIMIT_ENABLED` | `true` | `false`로 설정하면 전체 비활성화 |
 | `app.rate-limit.chat-per-minute` | `RATE_LIMIT_CHAT_PER_MINUTE` | `60` | `/chat` 경로 — 분당 요청 수 |
-| `app.rate-limit.upload-per-minute` | `RATE_LIMIT_UPLOAD_PER_MINUTE` | `10` | `/documents` (업로드) 경로 — 분당 요청 수 |
+| `app.rate-limit.upload-per-minute` | `RATE_LIMIT_UPLOAD_PER_MINUTE` | `10` | 문서 **업로드 쓰기 요청**만 — `POST /ui/documents/upload`, `POST /api/v1/documents`. 문서 화면 조회·목록 갱신·내보내기·태그 편집은 `default` 버킷을 씁니다(예전에는 전부 이 버킷이라 다중 파일 업로드가 429로 죽었습니다) |
 | `app.rate-limit.sync-per-minute` | `RATE_LIMIT_SYNC_PER_MINUTE` | `3` | `/documents/sync` 경로 — 분당 요청 수 |
 | `app.rate-limit.image-per-minute` | `RATE_LIMIT_IMAGE_PER_MINUTE` | `300` | `/images/` 경로 — 분당 요청 수 |
 | `app.rate-limit.default-per-minute` | `RATE_LIMIT_DEFAULT_PER_MINUTE` | `120` | 그 외 경로 기본값 |
@@ -1839,6 +1864,7 @@ curl -X POST http://localhost:8080/api/v1/chat \
 | 데이터 | 저장 위치 | 비고 |
 |--------|----------|------|
 | 문서 원본 | `DATA_DIR/documents/` | Sync 대상 |
+| 삭제된 문서 원본 | `DATA_DIR/documents/backup/` | 문서 삭제 시 원본이 여기로 이동(즉시 삭제 아님). 저장 상한 집계에서 **제외**되며 보존 정책 3규칙으로 정리됨 — §"업로드 크기 제한" 참조. `syncDirectory()` 의 비재귀 스캔 아래라 새 파일로 재검출되지 않음 |
 | 추출된 이미지 | `DATA_DIR/images/{imageId}/` | `imageId`는 문서 SHA-256 앞 16자(문서명이 아닌 내용 기반 키) — 문서 삭제 시 함께 삭제되나, 내용이 동일한 다른 문서가 남아 있으면 보존 |
 | 지식 제안 본문 이미지 | `DATA_DIR/images/submissions/` | 사용자가 업로드한 제안 본문 이미지(§6.9). 파일명은 내용 SHA-256 앞 16자 + 확장자라 같은 그림은 한 벌만 저장되고 **여러 제안이 공유**할 수 있습니다 — 그래서 삭제는 참조 세기 방식입니다(반려·철회 시 + 기동 시 24시간 지난 미참조 파일 스윕). 디렉터리 이름이 문자열 `submissions`이므로 16자리 hex인 `{imageId}`와 절대 충돌하지 않습니다 |
 | DOCX 변환 MD (원본) | `DATA_DIR/converted/{docId}.md` | DOCX 인덱싱 시 자동 생성; 문서 삭제 시 함께 삭제 |
@@ -2045,7 +2071,7 @@ mvn test -Dtest=SearchQualityEvaluationTest -Dsearch-eval.enabled=true
 - 답변 텍스트 끝에 LLM이 자동으로 붙이는 "## 참고"(출처 인용) 섹션과 맨 앞 "## 요약" 섹션은 검색 색인에 들어가지 않습니다 — 파일명·페이지 번호가 질문 의도와 무관한 노이즈이고, 요약은 "## 상세 설명"과 중복이기 때문입니다. **원문 전체는 `curated_qa.answer`에 그대로 보존**되어 채팅 버블과 관리자 편집기에서 그대로 보입니다.
 - **긴 답변은 여러 청크로 나뉘어 임베딩됩니다**(§6.9 제안 게시판과 같은 `ChunkSplitter`, §6.10의 분할 전략까지 동일 적용). 다만 게시판과 달리 **DB 행은 turn 당 하나로 유지**되고 벡터만 여러 개가 됩니다 — 좋아요 취소·본인 편집·관리자 목록이 전부 turn 단위라 행을 쪼개면 그 동작들이 깨지기 때문입니다. 몇 개로 나뉘었는지는 `curated_qa.chunk_count`에 기록되어 좋아요 취소·강제 삭제·재임베딩이 모든 벡터를 찾습니다.
 - 재임베딩(편집 저장)은 **새 벡터를 먼저 쓴 뒤** 남은 이전 벡터를 지웁니다 — 답변이 짧아져 청크 수가 줄어도, 재임베딩이 실패하면 기존 벡터가 검색에 그대로 남아 있도록 하기 위해서입니다.
-- **검색 가중치는 출처별로 다릅니다**: 두 경로 모두 같은 `"curated"` 네임스페이스에 저장되고 검색도 한 번만 하지만, 결과를 `curated_origin` 메타데이터로 갈라 **두 개의 RRF 축**으로 넣습니다 — 좋아요 승격은 `SEARCH_CURATED_QA_WEIGHT`(기본 **1.2**), 지식 제안은 `SEARCH_SUBMISSION_WEIGHT`(기본 **1.5**). 좋아요는 "질문한 사람이 맞다고 확인한 답변", 제안은 "사람이 직접 써서 관리자가 검토한 지식"이라 신뢰 근거가 달라 따로 조절합니다. 둘 다 `/settings`에서 핫 수정됩니다.
+- **검색 가중치는 출처별로 다릅니다**: 두 경로 모두 같은 `"curated"` 네임스페이스에 저장되고 검색도 한 번만 하지만, 결과를 `curated_origin` 메타데이터로 갈라 **두 개의 RRF 축**으로 넣습니다 — 좋아요 승격은 `SEARCH_CURATED_QA_WEIGHT`(기본 **1.0**), 지식 제안은 `SEARCH_SUBMISSION_WEIGHT`(기본 **1.0**). 좋아요는 "질문한 사람이 맞다고 확인한 답변", 제안은 "사람이 직접 써서 관리자가 검토한 지식"이라 신뢰 근거가 달라 따로 조절합니다. 둘 다 `/settings`에서 핫 수정됩니다.
   - 이 키가 생기기 전에 임베딩된 벡터에는 `curated_origin`이 없어 **좋아요 쪽으로 취급**됩니다(실제로 대부분 그렇습니다). 제안 가중치를 적용받게 하려면 해당 항목을 다시 임베딩해야 합니다(큐레이션 탭에서 저장).
 - **긴 항목일수록 청크가 많아 그 축에서 차지하는 후보 수가 늘어납니다** — 한 답변이 상위권을 여러 칸 차지할 수 있습니다. 가중치를 올리기 전에 이 점을 함께 고려하세요.
 - **임베딩 청크 크기는 문서보다 크게 시작합니다**: `CHUNK_SIZE`의 **2배 → 1.5배 → 1배** 순으로 시도하고, 임베딩 서버가 거부할 때만 줄입니다. 큐레이션 텍스트는 하나의 이어진 논증이라 문서용 크기로 자르면 근거로서 읽히지 않기 때문이며, 줄이는 것은 오직 거부에 대한 대응입니다. 세 크기가 모두 실패하면 기존처럼 핵심 섹션만으로 한 번 더 시도합니다. `EMBED_MAX_CHUNK_CHARS`가 설정돼 있으면 어느 배수에서든 그 상한이 먼저 적용됩니다.

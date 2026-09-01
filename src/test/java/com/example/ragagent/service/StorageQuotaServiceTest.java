@@ -31,7 +31,8 @@ class StorageQuotaServiceTest {
                 true, false, 3, null,
                 null, null, null, null, null, null, null, null, null, null, null, 2,
                 null, 1.0, 60, null, null, null, null, null, null, null, null, null, null, null, null, null, null,
-                limitBytes == null ? null : new AppProperties.UploadConfig(DataSize.ofBytes(limitBytes)));
+                limitBytes == null ? null
+                        : new AppProperties.UploadConfig(DataSize.ofBytes(limitBytes), 0, DataSize.ofBytes(0)));
     }
 
     private static void write(Path file, int bytes) throws IOException {
@@ -76,15 +77,43 @@ class StorageQuotaServiceTest {
     @DisplayName("사용량은 원본만이 아니라 인덱싱 산출물(converted·images)까지 합산한다")
     void usedBytes_countsDerivedArtifactsToo(@TempDir Path dataDir) throws IOException {
         write(dataDir.resolve("documents/a.pdf"), 100);
-        write(dataDir.resolve("documents/backup/a_2026.pdf"), 50);   // ↺ 재인덱싱이 남긴 백업도 디스크다
         write(dataDir.resolve("converted/a.md"), 200);
         write(dataDir.resolve("images/abc123/slide1.png"), 400);
         write(dataDir.resolve("images/submissions/deadbeef.png"), 30);
         // 업로드가 만들지 않는 것들은 세지 않는다
         write(dataDir.resolve("memory.db"), 10_000);
         write(dataDir.resolve("audit/audit.log"), 10_000);
+        // 삭제 아카이브도 세지 않는다 (별도 테스트에서 따로 고정)
+        write(dataDir.resolve("documents/backup/a_20260101_120000.pdf"), 50);
 
-        assertThat(new StorageQuotaService(props(dataDir, 1L)).usedBytes()).isEqualTo(780);
+        assertThat(new StorageQuotaService(props(dataDir, 1L)).usedBytes()).isEqualTo(730);
+    }
+
+    @Test
+    @DisplayName("documents/backup/ 은 세지 않는다 — 세면 '삭제해서 자리를 만드세요'가 성립하지 않는다")
+    void excludesTheDeleteArchive(@TempDir Path dataDir) throws IOException {
+        write(dataDir.resolve("documents/a.pdf"), 100);
+        write(dataDir.resolve("documents/backup/a_20260101_120000.pdf"), 5_000);
+        write(dataDir.resolve("documents/backup/nested/b_20260101_120000.pdf"), 5_000);
+
+        assertThat(new StorageQuotaService(props(dataDir, 1L)).usedBytes()).isEqualTo(100);
+    }
+
+    @Test
+    @DisplayName("상한에 걸린 뒤 문서를 삭제하면(원본이 backup/ 으로 이동) 자리가 난다")
+    void deletingAtTheLimitActuallyFreesSpace(@TempDir Path dataDir) throws IOException {
+        Path source = dataDir.resolve("documents/큰문서.pdf");
+        write(source, 900);
+        StorageQuotaService svc = new StorageQuotaService(props(dataDir, 1000L));
+        assertThatThrownBy(() -> svc.checkCanAccept(200, "새문서.pdf"))
+                .isInstanceOf(StorageQuotaExceededException.class);
+
+        // RagService.archiveSourceFile() 이 하는 일 — 지우는 것이 아니라 옮긴다
+        Path archived = dataDir.resolve("documents/backup/큰문서_20260101_120000.pdf");
+        Files.createDirectories(archived.getParent());
+        Files.move(source, archived);
+
+        assertThatCode(() -> svc.checkCanAccept(200, "새문서.pdf")).doesNotThrowAnyException();
     }
 
     @Test

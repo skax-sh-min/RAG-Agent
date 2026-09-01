@@ -40,15 +40,21 @@ import static org.mockito.Mockito.when;
 @ResourceLock("global-state")
 class SettingsServiceTest {
 
-    /** §6.15 — the storage row is read-only and points at a data dir that doesn't exist in tests,
-     *  so a real service over {@code base()} yields 0 bytes / no limit without touching disk. */
+    /** §6.15 — the storage row is read-only, and this points the service at a directory that does
+     *  not exist so {@code buildView()} reports 0 bytes without walking anything. {@code base()}'s
+     *  {@code "./data"} would make every buildView test recurse the repository's real data
+     *  directory — environment-dependent and slow in proportion to whatever is sitting there. */
     private static StorageQuotaService quotaService() {
-        return new StorageQuotaService(base());
+        return new StorageQuotaService(withDataDir("target/test-no-such-data-dir"));
     }
 
     private static AppProperties base() {
+        return withDataDir("./data");
+    }
+
+    private static AppProperties withDataDir(String dataDir) {
         return new AppProperties(
-                "./data", 2, 800, 100, 100, 7, 0.0, true, 5, false,
+                dataDir, 2, 800, 100, 100, 7, 0.0, true, 5, false,
                 true, false, 3, null,
                 null, null, null, null, null, null, null, null, null, null, null, 2,
                 null, 1.0, 60, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null);

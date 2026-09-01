@@ -43,15 +43,18 @@ public class RagService {
     private final VectorStoreFacade vectorStore;
     private final KeywordSearchRepository keywordRepo;
     private final AppProperties props;
+    /** §6.15 — bounds {@code documents/backup/}, which the storage cap deliberately does not count. */
+    private final DocumentBackupCleaner backupCleaner;
 
     public RagService(DocumentIndexer indexer, DocRegistry docRegistry,
                       VectorStoreFacade vectorStore, KeywordSearchRepository keywordRepo,
-                      AppProperties props) {
-        this.indexer     = indexer;
-        this.docRegistry = docRegistry;
-        this.vectorStore = vectorStore;
-        this.keywordRepo = keywordRepo;
-        this.props       = props;
+                      AppProperties props, DocumentBackupCleaner backupCleaner) {
+        this.indexer       = indexer;
+        this.docRegistry   = docRegistry;
+        this.vectorStore   = vectorStore;
+        this.keywordRepo   = keywordRepo;
+        this.props         = props;
+        this.backupCleaner = backupCleaner;
     }
 
     // ── Public API ─────────────────────────────────────────────────────────
@@ -139,11 +142,14 @@ public class RagService {
             int dot = filename.lastIndexOf('.');
             String base = dot > 0 ? filename.substring(0, dot) : filename;
             String ext  = dot > 0 ? filename.substring(dot) : "";
-            Path backupDir = source.getParent().resolve("backup");
+            Path backupDir = source.getParent().resolve(DocumentBackupCleaner.BACKUP_DIR_NAME);
             Path dest = backupDir.resolve(base + "_" + BACKUP_TIMESTAMP_FMT.format(Instant.now()) + ext);
             Files.createDirectories(backupDir);
             Files.move(source, dest, StandardCopyOption.REPLACE_EXISTING);
             log.debug("[DELETE] 원본 파일 백업: {} → {}", source, dest);
+            // §6.15 — this directory is excluded from the storage cap, so something has to bound
+            // it; sweeping right after each archive keeps the work proportional to the deletes.
+            backupCleaner.sweep();
         } catch (Exception e) {
             // Best-effort — never let an archiving hiccup (permissions, unresolvable data dir in
             // tests, etc.) fail a delete that has already succeeded.

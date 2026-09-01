@@ -58,7 +58,12 @@ class RagServiceTest {
         vectorStore = mock(VectorStoreFacade.class);
         keywordRepo = mock(KeywordSearchRepository.class);
         AppProperties props = mock(AppProperties.class);
-        service = new RagService(indexer, docRegistry, vectorStore, keywordRepo, props);
+        service = new RagService(indexer, docRegistry, vectorStore, keywordRepo, props, backupCleaner());
+    }
+
+    /** §6.15 백업 보존은 이 테스트의 관심사가 아니다 — 삭제 경로가 호출만 하고 지나가면 된다. */
+    private static DocumentBackupCleaner backupCleaner() {
+        return mock(DocumentBackupCleaner.class);
     }
 
     private static DocRegistry.DocRegistryEntry entry(String sha, String version, String indexedAt, int chunks) {
@@ -137,7 +142,7 @@ class RagServiceTest {
     void deleteDocument_archivesSourceFileToBackupFolder(@TempDir Path tmpDir) throws Exception {
         AppProperties props = mock(AppProperties.class);
         when(props.dataDir()).thenReturn(tmpDir.toString());
-        RagService svc = new RagService(indexer, docRegistry, vectorStore, keywordRepo, props);
+        RagService svc = new RagService(indexer, docRegistry, vectorStore, keywordRepo, props, backupCleaner());
 
         Path documentsDir = tmpDir.resolve("documents");
         Files.createDirectories(documentsDir);
@@ -162,7 +167,7 @@ class RagServiceTest {
     void deleteDocument_sourceFileAlreadyMissing_noBackupFolderCreated(@TempDir Path tmpDir) throws Exception {
         AppProperties props = mock(AppProperties.class);
         when(props.dataDir()).thenReturn(tmpDir.toString());
-        RagService svc = new RagService(indexer, docRegistry, vectorStore, keywordRepo, props);
+        RagService svc = new RagService(indexer, docRegistry, vectorStore, keywordRepo, props, backupCleaner());
 
         svc.deleteDocument("u1", "missing.pdf_a1b2c3d4", "latest");
 

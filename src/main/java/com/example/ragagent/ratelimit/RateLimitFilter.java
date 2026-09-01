@@ -66,13 +66,34 @@ public class RateLimitFilter extends OncePerRequestFilter {
         }
     }
 
+    /**
+     * Which bucket a request draws from.
+     *
+     * <p><b>The document rules are method-aware on purpose.</b> Matching {@code "/documents"} on the
+     * path alone put every read of that area — the {@code /documents} page itself, the
+     * {@code /ui/documents/list} refresh the upload flow fires when a batch finishes, exports, tag
+     * and display-name edits — into the same bucket as an actual upload, whose limit is a deliberately
+     * small {@code upload-per-minute} (10). Loading the page and then uploading ten selected files is
+     * eleven tokens, so the last file of a normal multi-file upload was refused with a 429 that the UI
+     * could only render as "서버 오류". Writes are what that limit is for; reads belong in {@code default}.
+     */
     String policyFor(HttpServletRequest req) {
         String path = req.getRequestURI();
+        boolean write = isWrite(req.getMethod());
         if (path.contains("/chat")) return "chat";
-        if (path.contains("/documents/sync")) return "sync";
-        if (path.contains("/documents")) return "upload";
+        if (write && path.contains("/documents/sync")) return "sync";
+        if (write && isDocumentUpload(path)) return "upload";
         if (path.contains("/images/")) return "image";
         return "default";
+    }
+
+    /** The two endpoints that actually accept a new document ({@code DocumentController}). */
+    private static boolean isDocumentUpload(String path) {
+        return path.endsWith("/ui/documents/upload") || path.endsWith("/api/v1/documents");
+    }
+
+    private static boolean isWrite(String method) {
+        return !"GET".equalsIgnoreCase(method) && !"HEAD".equalsIgnoreCase(method);
     }
 
     int limitFor(AppProperties.RateLimitConfig cfg, String policy) {

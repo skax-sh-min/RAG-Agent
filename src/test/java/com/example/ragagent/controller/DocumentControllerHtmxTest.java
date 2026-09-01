@@ -146,6 +146,33 @@ class DocumentControllerHtmxTest {
     }
 
     @Test
+    @DisplayName("POST /ui/documents/upload — 거부 사유가 본문에 담긴다 (태그 위반이 '파일이 비어 있습니다'로 보이던 문제)")
+    void uploadDocument_invalidTag_returnsTheActualReason() throws Exception {
+        MockMultipartFile file = new MockMultipartFile(
+                "file", "ok.pdf", "application/pdf", "%PDF-1.4 body".getBytes());
+
+        mvc.perform(multipart("/ui/documents/upload").file(file)
+                        .param("version", "latest")
+                        .param("tags", "a".repeat(33))     // MAX_TAG_LEN = 32
+                        .with(csrf()))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("32")));
+    }
+
+    @Test
+    @DisplayName("POST /ui/documents/upload — 미지원 확장자의 422 도 사유를 함께 준다")
+    void uploadDocument_unsupportedExt_returnsTheActualReason() throws Exception {
+        MockMultipartFile exe = new MockMultipartFile(
+                "file", "malware.exe", "application/octet-stream", "MZ".getBytes());
+
+        mvc.perform(multipart("/ui/documents/upload").file(exe)
+                        .param("version", "latest")
+                        .with(csrf()))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("malware.exe")));
+    }
+
+    @Test
     @DisplayName("POST /ui/documents/upload — 저장 상한 초과 → 413 + RAG-UP-002, 파일은 디스크에 남지 않는다")
     void uploadDocument_overStorageQuota_returns413() throws Exception {
         org.mockito.Mockito.doThrow(new StorageQuotaExceededException(

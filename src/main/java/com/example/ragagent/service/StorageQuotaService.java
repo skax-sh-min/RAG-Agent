@@ -28,9 +28,16 @@ import java.util.stream.Stream;
  * extracts images, and for a slide deck or a scanned PDF those derived artifacts routinely dwarf
  * the source. A cap that measured only {@code documents/} would therefore miss most of what
  * uploading actually consumes, so {@link #usedBytes()} walks all three document-owned trees —
- * {@code documents/} (including the {@code backup/} copies re-indexing leaves behind),
- * {@code converted/} and {@code images/}. Everything else under {@code data/} (the SQLite files,
- * audit logs, the Chroma volume) is not upload-driven and is left out.
+ * {@code documents/}, {@code converted/} and {@code images/}. Everything else under {@code data/}
+ * (the SQLite files, audit logs, the Chroma volume) is not upload-driven and is left out.
+ *
+ * <p><b>The one exclusion is {@code documents/backup/}</b>, where deleting a document archives its
+ * original ({@code RagService.archiveSourceFile}). Counting it would break the only remedy this
+ * cap's own error message offers: a user at the limit deletes a document, the bytes move from
+ * {@code documents/} to {@code documents/backup/}, usage barely drops, and the next upload is
+ * refused again — with no screen anywhere that can reclaim the difference. Excluding it is only
+ * safe because {@link DocumentBackupCleaner} bounds that directory (newest-per-document, an age
+ * limit, and a size cap); the two decisions are halves of one.
  *
  * <p><b>It is a soft cap, on purpose.</b> The check runs at admission, when the only size known is
  * the incoming file's — the derived artifacts do not exist yet and cannot be predicted. So a single
@@ -107,16 +114,18 @@ public class StorageQuotaService {
     }
 
     /**
-     * Bytes currently held by the document-owned trees under {@code app.data-dir}. Missing
-     * directories count as 0 (a fresh install has none of them yet), and an I/O failure mid-walk
-     * yields what was counted so far rather than propagating: a quota reading is not worth failing
-     * an upload over, and under-counting only ever errs toward accepting.
+     * Bytes currently held by the document-owned trees under {@code app.data-dir}, excluding
+     * {@code documents/backup/}. Missing directories count as 0 (a fresh install has none of them
+     * yet), and an I/O failure makes that whole tree contribute 0 rather than propagating — a
+     * quota reading is not worth failing an upload over, and under-counting only ever errs toward
+     * accepting.
      */
     public long usedBytes() {
         Path dataDir = Path.of(props.dataDir());
+        Path archived = dataDir.resolve("documents").resolve(DocumentBackupCleaner.BACKUP_DIR_NAME);
         long total = 0;
         for (String dir : MEASURED_DIRS) {
-            total += treeSize(dataDir.resolve(dir));
+            total += treeSize(dataDir.resolve(dir), archived);
         }
         return total;
     }
@@ -139,12 +148,16 @@ public class StorageQuotaService {
         return fresh;
     }
 
-    private long treeSize(Path dir) {
+    /** @param excluded subtree to skip entirely; {@code null} to walk everything */
+    private long treeSize(Path dir, Path excluded) {
         if (!Files.isDirectory(dir)) return 0;
         try (Stream<Path> files = Files.walk(dir)) {
-            return files.filter(Files::isRegularFile).mapToLong(StorageQuotaService::sizeOf).sum();
+            return files.filter(Files::isRegularFile)
+                    .filter(p -> excluded == null || !p.startsWith(excluded))
+                    .mapToLong(StorageQuotaService::sizeOf)
+                    .sum();
         } catch (IOException | UncheckedIOException e) {
-            log.warn("[QUOTA] 사용량 측정 실패 (일부만 집계됨): {} — {}", dir, e.toString());
+            log.warn("[QUOTA] 사용량 측정 실패 (이 트리는 0으로 집계): {} — {}", dir, e.toString());
             return 0;
         }
     }
