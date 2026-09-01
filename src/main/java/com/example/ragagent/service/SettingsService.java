@@ -4,6 +4,7 @@ import com.example.ragagent.audit.AuditLogger;
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.config.SettingsKeys;
 import com.example.ragagent.llm.CircuitBreaker;
+import com.example.ragagent.llm.ProviderContextWindows;
 import com.example.ragagent.llm.ProviderToggle;
 import com.example.ragagent.model.SettingsView;
 import com.example.ragagent.model.SettingsView.ProviderRow;
@@ -110,18 +111,20 @@ public class SettingsService implements AppProperties.OverrideSource {
     private final AuditLogger audit;
     private final CircuitBreaker circuitBreaker;
     private final ProviderToggle providerToggle;
+    private final ProviderContextWindows contextWindows;
 
     /** Persisted overrides, cached so the {@link #get} hot path never hits SQLite. */
     private final Map<String, String> cache = new ConcurrentHashMap<>();
 
     public SettingsService(SettingsOverrideRepository repo, AppProperties props,
                            AuditLogger audit, CircuitBreaker circuitBreaker,
-                           ProviderToggle providerToggle) {
+                           ProviderToggle providerToggle, ProviderContextWindows contextWindows) {
         this.repo = repo;
         this.props = props;
         this.audit = audit;
         this.circuitBreaker = circuitBreaker;
         this.providerToggle = providerToggle;
+        this.contextWindows = contextWindows;
     }
 
     @PostConstruct
@@ -302,9 +305,25 @@ public class SettingsService implements AppProperties.OverrideSource {
                             cfg.isEnabled(), // real registration gate — see ProviderRow#configured javadoc
                             until != null,
                             until != null ? until.toString() : null,
-                            providerToggle.isEnabled(cfg.name()));
+                            providerToggle.isEnabled(cfg.name()),
+                            contextWindowLabel(cfg.name()));
                 })
                 .toList();
+    }
+
+    /**
+     * {@code "8,192 (탐지됨)"} 처럼 값과 <b>출처</b>를 함께 적는다 — 운영자가 직접 적은 숫자인지 앱이
+     * 서버에게 물어본 숫자인지가 신뢰도를 가른다. 탐지값은 기동 시점의 관측이라 모델을 다른 크기로
+     * 다시 로드하면 낡고, 그때 운영자가 {@code context-size} 로 못 박으면 이 칸이 (설정됨)으로 바뀐다.
+     *
+     * <p>모르면 {@code "-"} 다. 이것도 정보다 — 컨텍스트 초과가 나는데 이 칸이 {@code "-"} 라면
+     * 앱이 창 크기를 모르는 상태이므로 어떤 보정도 돌지 않았다는 뜻이다.
+     */
+    private String contextWindowLabel(String providerName) {
+        return contextWindows.find(providerName)
+                .map(w -> "%,d (%s)".formatted(w.tokens(),
+                        w.source() == ProviderContextWindows.Source.CONFIGURED ? "설정됨" : "탐지됨"))
+                .orElse("-");
     }
 
     /** {@code app.llm.default-routing-mode} pinned to {@code LOCAL_ONLY} for this whole deployment. */

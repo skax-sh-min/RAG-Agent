@@ -80,6 +80,7 @@ public record AppProperties(
             int priority,
             Boolean stream,
             Integer concurrency, // this provider's own concurrency slots; null/<=0 falls back to LlmConfig.defaultProviderConcurrency
+            Integer contextSize, // this provider's total context window in tokens (input + output). Unset = probed from the server at startup (ContextWindowProbe), and left unknown if that fails — never guessed. Operator-declared always wins, because a probe reads the server as it is *right now* and a model reloaded at a different size makes it stale
             Integer maxTokens    // this provider's own blocking-call output cap; null/<=0 falls back to LlmConfig.maxTokens. Exists because context windows differ per model — a 8k local model and a 128k cloud model cannot share one ceiling. Enforced by MaxTokensCappingChatModel (baking it into the provider bean's defaultOptions is not enough: every blocking call site attaches its own maxTokens, which would override it)
     ) {
         /**

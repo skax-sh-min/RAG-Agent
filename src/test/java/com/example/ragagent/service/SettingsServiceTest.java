@@ -10,6 +10,7 @@ import com.example.ragagent.audit.AuditLogger;
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.config.SettingsKeys;
 import com.example.ragagent.llm.CircuitBreaker;
+import com.example.ragagent.llm.ProviderContextWindows;
 import com.example.ragagent.llm.ProviderToggle;
 import com.example.ragagent.model.SettingsView;
 import org.junit.jupiter.api.AfterEach;
@@ -59,7 +60,7 @@ class SettingsServiceTest {
         java.util.List<AppProperties.ProviderConfig> pcs = new java.util.ArrayList<>();
         for (String n : names) {
             pcs.add(new AppProperties.ProviderConfig(
-                    n, "http://x/v1", "key", "model", "BOTH", "LOCAL", 1, true, null, null));
+                    n, "http://x/v1", "key", "model", "BOTH", "LOCAL", 1, true, null, null, null));
         }
         AppProperties.LlmConfig llm = new AppProperties.LlmConfig(
                 pcs, 2, 10, 180, "COST_FIRST", 0.6, 3, 20, 0.0, 0.1, 0.0, 0.7, true, 6000, false);
@@ -74,7 +75,7 @@ class SettingsServiceTest {
     private static AppProperties propsWithProvidersOfRoles(String routingMode, Map<String, String> nameToRole) {
         List<AppProperties.ProviderConfig> pcs = new java.util.ArrayList<>();
         nameToRole.forEach((name, role) -> pcs.add(new AppProperties.ProviderConfig(
-                name, "http://x/v1", "key", "model", "BOTH", role, 1, true, null, null)));
+                name, "http://x/v1", "key", "model", "BOTH", role, 1, true, null, null, null)));
         AppProperties.LlmConfig llm = new AppProperties.LlmConfig(
                 pcs, 2, 10, 180, routingMode, 0.6, 3, 20, 0.0, 0.1, 0.0, 0.7, true, 6000, false);
         return new AppProperties(
@@ -102,7 +103,7 @@ class SettingsServiceTest {
         when(circuitBreaker.getBlockedProviders()).thenReturn(Map.<String, Instant>of());
         toggle = new ProviderToggle();
         props = base();
-        service = new SettingsService(repo, props, audit, circuitBreaker, toggle);
+        service = new SettingsService(repo, props, audit, circuitBreaker, toggle, new ProviderContextWindows());
         service.init(); // loads (empty) overrides + binds the static override source to this service
     }
 
@@ -284,7 +285,7 @@ class SettingsServiceTest {
         SettingsOverrideRepositoryStub seeded = new SettingsOverrideRepositoryStub();
         seeded.store.put(SettingsKeys.SEARCH_RRF_K, "80");  // application.properties default = 60 → diverges → WARN
         seeded.store.put(SettingsKeys.SEARCH_TOP_K, "7");   // default = 7 → identical → must NOT warn
-        SettingsService fresh = new SettingsService(seeded, base(), audit, circuitBreaker, new ProviderToggle());
+        SettingsService fresh = new SettingsService(seeded, base(), audit, circuitBreaker, new ProviderToggle(), new ProviderContextWindows());
 
         Logger settingsLogger = com.example.ragagent.LogbackTestSupport.logger(SettingsService.class);
         ListAppender<ILoggingEvent> appender = new ListAppender<>();
@@ -312,7 +313,8 @@ class SettingsServiceTest {
     @DisplayName("setProviderEnabled — 비활성화/재활성화가 ProviderToggle·row·감사로그에 반영된다")
     void setProviderEnabled_disablesThenEnables() {
         ProviderToggle tg = new ProviderToggle();
-        SettingsService svc = new SettingsService(repo, propsWithProviders("a", "b"), audit, circuitBreaker, tg);
+        SettingsService svc = new SettingsService(repo, propsWithProviders("a", "b"), audit, circuitBreaker, tg,
+                new ProviderContextWindows());
 
         List<SettingsView.ProviderRow> afterDisable = svc.setProviderEnabled("a", false);
         assertThat(tg.isDisabled("a")).isTrue();
@@ -329,7 +331,7 @@ class SettingsServiceTest {
     @Test
     @DisplayName("setProviderEnabled — 알 수 없는 프로바이더 이름은 거부")
     void setProviderEnabled_unknownName_rejected() {
-        SettingsService svc = new SettingsService(repo, propsWithProviders("a"), audit, circuitBreaker, new ProviderToggle());
+        SettingsService svc = new SettingsService(repo, propsWithProviders("a"), audit, circuitBreaker, new ProviderToggle(), new ProviderContextWindows());
         assertThatThrownBy(() -> svc.setProviderEnabled("nope", false))
                 .isInstanceOf(IllegalArgumentException.class);
     }
@@ -338,7 +340,8 @@ class SettingsServiceTest {
     @DisplayName("setProviderEnabled — 마지막으로 활성화된 프로바이더는 비활성화할 수 없다")
     void setProviderEnabled_lastEnabled_rejected() {
         ProviderToggle tg = new ProviderToggle();
-        SettingsService svc = new SettingsService(repo, propsWithProviders("a", "b"), audit, circuitBreaker, tg);
+        SettingsService svc = new SettingsService(repo, propsWithProviders("a", "b"), audit, circuitBreaker, tg,
+                new ProviderContextWindows());
         svc.setProviderEnabled("a", false);   // one left enabled (b)
 
         assertThatThrownBy(() -> svc.setProviderEnabled("b", false))  // would disable the last one
@@ -354,7 +357,7 @@ class SettingsServiceTest {
         nameToRole.put("gemini-flash", "NORMAL");
         nameToRole.put("openai", "PREMIUM");
         SettingsService svc = new SettingsService(
-                repo, propsWithProvidersOfRoles("LOCAL_ONLY", nameToRole), audit, circuitBreaker, new ProviderToggle());
+                repo, propsWithProvidersOfRoles("LOCAL_ONLY", nameToRole), audit, circuitBreaker, new ProviderToggle(), new ProviderContextWindows());
 
         List<SettingsView.ProviderRow> rows = svc.providerRows();
 
@@ -368,7 +371,7 @@ class SettingsServiceTest {
         nameToRole.put("local", "LOCAL");
         nameToRole.put("gemini-flash", "NORMAL");
         SettingsService svc = new SettingsService(
-                repo, propsWithProvidersOfRoles("COST_FIRST", nameToRole), audit, circuitBreaker, new ProviderToggle());
+                repo, propsWithProvidersOfRoles("COST_FIRST", nameToRole), audit, circuitBreaker, new ProviderToggle(), new ProviderContextWindows());
 
         List<SettingsView.ProviderRow> rows = svc.providerRows();
 
@@ -383,7 +386,7 @@ class SettingsServiceTest {
         nameToRole.put("local", "LOCAL");
         nameToRole.put("gemini-flash", "NORMAL");
         SettingsService svc = new SettingsService(
-                repo, propsWithProvidersOfRoles("LOCAL_ONLY", nameToRole), audit, circuitBreaker, new ProviderToggle());
+                repo, propsWithProvidersOfRoles("LOCAL_ONLY", nameToRole), audit, circuitBreaker, new ProviderToggle(), new ProviderContextWindows());
 
         assertThatThrownBy(() -> svc.setProviderEnabled("gemini-flash", false))
                 .isInstanceOf(IllegalArgumentException.class);

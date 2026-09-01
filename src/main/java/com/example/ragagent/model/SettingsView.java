@@ -28,6 +28,10 @@ public record SettingsView(
      *                   up as a live {@code LlmProvider} regardless of what its api-key/toggle look like
      * @param enabled    false when an operator has disabled this provider at runtime (§A) — routing skips
      *                   it until re-enabled or the app restarts (the toggle is in-memory/volatile)
+     * @param contextWindow 이 프로바이더의 컨텍스트 창 표시 문자열 — {@code "8,192 (탐지됨)"} /
+     *                   {@code "16,384 (설정됨)"} / {@code "-"}(모름). <b>{@code "-"} 가 정보다</b>:
+     *                   선언도 탐지도 없다는 뜻이고, 그 상태에서는 입력 예산을 짤 근거가 없어
+     *                   {@code max-tokens} 보정도 돌지 않는다. 기동 로그의 {@code ctx=?} 와 같은 값이다
      */
     public record ProviderRow(
             String name,
@@ -38,7 +42,8 @@ public record SettingsView(
             boolean configured,
             boolean blocked,
             String blockedUntil,
-            boolean enabled
+            boolean enabled,
+            String contextWindow
     ) {}
 
     /** A titled group of settings on the page (e.g. "검색 튜닝 (핫 수정)"). */

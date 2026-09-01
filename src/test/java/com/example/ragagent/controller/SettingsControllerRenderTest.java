@@ -139,7 +139,7 @@ class SettingsControllerRenderTest {
     void toggleProviderFragmentRenders() throws Exception {
         // service reports the provider now disabled → the fragment should show the "enable" control
         when(settingsService.setProviderEnabled("local", false)).thenReturn(
-                List.of(new ProviderRow("local", "LOCAL", 1, "qwen", "http://localhost:1234/v1", true, false, null, false)));
+                List.of(new ProviderRow("local", "LOCAL", 1, "qwen", "http://localhost:1234/v1", true, false, null, false, "-")));
 
         AppUserDetails admin = new AppUserDetails(
                 "id-1", "admin@local", "", "Admin", "ADMIN", true, false);
@@ -164,7 +164,7 @@ class SettingsControllerRenderTest {
         SettingItem fixed = new SettingItem(null, "settings.item.top-k", "7",
                 "text", false, false, null, null, null, null);
         SettingsView view = new SettingsView(
-                List.of(new ProviderRow("local", "LOCAL", 0, "qwen", "http://localhost:1234/v1", true, false, null, true)),
+                List.of(new ProviderRow("local", "LOCAL", 0, "qwen", "http://localhost:1234/v1", true, false, null, true, "-")),
                 "COST_FIRST", "0.0", "6000", "bge-m3", "http://localhost:1234/v1", "1024", "chroma",
                 List.of(new SettingGroup("search_hot", "settings.group.search_hot", List.of(hot)),
                         new SettingGroup("search_fixed", "settings.group.search_fixed", List.of(fixed))));
@@ -187,7 +187,7 @@ class SettingsControllerRenderTest {
         SettingItem hot = new SettingItem(SettingsKeys.SEARCH_RRF_K, "settings.item.rrf-k", "60",
                 "number", true, false, null, 1.0, 1000.0, 1.0);
         SettingsView view = new SettingsView(
-                List.of(new ProviderRow("local", "LOCAL", 0, "qwen", "http://localhost:1234/v1", true, false, null, true)),
+                List.of(new ProviderRow("local", "LOCAL", 0, "qwen", "http://localhost:1234/v1", true, false, null, true, "-")),
                 "LOCAL_ONLY", "0.0", "6000", "bge-m3", "http://localhost:1234/v1", "1024", "chroma",
                 List.of(new SettingGroup("search_hot", "settings.group.search_hot", List.of(hot))));
         when(settingsService.buildView()).thenReturn(view);

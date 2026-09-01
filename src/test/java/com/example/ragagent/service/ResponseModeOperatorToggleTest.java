@@ -4,6 +4,7 @@ import com.example.ragagent.audit.AuditLogger;
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.config.SettingsKeys;
 import com.example.ragagent.llm.CircuitBreaker;
+import com.example.ragagent.llm.ProviderContextWindows;
 import com.example.ragagent.llm.ProviderToggle;
 import com.example.ragagent.model.ResponseMode;
 import com.example.ragagent.model.SettingsView;
@@ -65,7 +66,7 @@ class ResponseModeOperatorToggleTest {
         CircuitBreaker cb = mock(CircuitBreaker.class);
         when(cb.getBlockedProviders()).thenReturn(Map.<String, Instant>of());
         props = propsWithLlm();
-        service = new SettingsService(new RepoStub(), props, mock(AuditLogger.class), cb, new ProviderToggle());
+        service = new SettingsService(new RepoStub(), props, mock(AuditLogger.class), cb, new ProviderToggle(), new ProviderContextWindows());
         service.init();
     }
 

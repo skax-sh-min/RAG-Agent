@@ -141,6 +141,13 @@ app.llm.direct-temperature=${DIRECT_LLM_TEMPERATURE:0.1}
 app.llm.indexing-temperature=${LLM_INDEXING_TEMPERATURE:0.0}
 app.llm.creative-temperature=${CREATIVE_LLM_TEMPERATURE:0.7}
 app.llm.creative-mode-enabled=${CREATIVE_MODE_ENABLED:true}
+
+# 프로바이더별 상한/창 (둘 다 선택). max-tokens 미설정이면 전역 app.llm.max-tokens,
+# context-size 미설정이면 기동 시 서버에 물어보고(llama.cpp /props · LM Studio /api/v0/models)
+# 그래도 못 구하면 '모름'으로 둔다 — 두 서버가 노출하는 "모델 상한" 필드는 실제 로드된 크기와
+# 무관하므로 일부러 쓰지 않는다.
+# app.llm.providers[1].max-tokens=4000
+# app.llm.providers[1].context-size=8192
 app.llm.max-tokens=${LLM_MAX_TOKENS:10000}
 # 질의 경로 동시성 게이트 기본값(서버의 실제 --parallel 값에 맞춘다) + 대기 상한
 app.llm.default-provider-concurrency=${LLM_DEFAULT_PROVIDER_CONCURRENCY:3}
