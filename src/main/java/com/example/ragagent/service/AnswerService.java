@@ -8,6 +8,9 @@ import com.example.ragagent.model.ResponseMode;
 import com.example.ragagent.llm.LlmCurlLogger;
 import com.example.ragagent.llm.LlmProvider;
 import com.example.ragagent.llm.LlmRouter;
+import com.example.ragagent.llm.PromptBudget;
+import com.example.ragagent.llm.ProviderContextWindows;
+import com.example.ragagent.llm.TokenEstimator;
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.llm.TaskType;
 import com.example.ragagent.security.PromptInjectionGuard;
@@ -25,6 +28,7 @@ import org.springframework.ai.openai.api.OpenAiApi;
 import org.springframework.context.MessageSource;
 import org.springframework.stereotype.Service;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.function.Consumer;
@@ -88,6 +92,17 @@ public class AnswerService {
     private static final int MAX_EVAL_OUTPUT_TOKENS = 2_048;
 
     /**
+     * 답변 프롬프트에서 문서·이력·질문 말고 <b>고정으로 들어가는 것</b>의 대략적 토큰 수 —
+     * 시스템 프롬프트와 섹션 머리말({@code [이전 대화]}·{@code [검색된 문서]}·{@code [질문]})이다.
+     *
+     * <p>정확히 세지 않는 이유는 시스템 프롬프트가 응답 모드·로케일마다 다른 메시지 번들에서
+     * 오고, 그걸 예산 계산 때문에 매번 불러오면 계산이 프롬프트 조립보다 무거워지기 때문이다.
+     * 한/영 번들의 모드별 시스템 프롬프트가 1,200~1,800자 범위이므로 넉넉한 쪽으로 잡는다 —
+     * 이 값이 실제보다 크면 조금 덜 담고, 작으면 초과한다. 어느 쪽이 안전한지는 분명하다.
+     */
+    private static final int ANSWER_PROMPT_OVERHEAD_TOKENS = 2_000;
+
+    /**
      * single evaluation call returns both gates, plus one sentence explaining a failure.
      * {@code reason} is advisory only — it never affects routing or retry decisions, so a model
      * that returns it empty (or omits it) degrades to today's behavior rather than breaking.
@@ -128,17 +143,40 @@ public class AnswerService {
     private final LlmRouter llmRouter;
     private final MessageSource messageSource;
     private final AppProperties props;
+    private final ProviderContextWindows contextWindows;
     private final int maxRetryCount;
     private final BeanOutputConverter<EvalOutput> evalConverter =
             new BeanOutputConverter<>(EvalOutput.class);
     private final BeanOutputConverter<CreativeEvalOutput> creativeEvalConverter =
             new BeanOutputConverter<>(CreativeEvalOutput.class);
 
-    public AnswerService(LlmRouter llmRouter, AppProperties appProperties, MessageSource messageSource) {
+    public AnswerService(LlmRouter llmRouter, AppProperties appProperties, MessageSource messageSource,
+                         ProviderContextWindows contextWindows) {
         this.llmRouter = llmRouter;
         this.messageSource = messageSource;
         this.props = appProperties;
         this.maxRetryCount = appProperties.maxRetryCount();
+        this.contextWindows = contextWindows;
+    }
+
+    /**
+     * 이 턴을 받을 프로바이더의 입력 예산 — 모르면 {@code null}(= 자르지 않는다).
+     *
+     * <p>어느 프로바이더가 받을지는 라우터가 정하므로 먼저 물어본다. 물어본 뒤 실제 호출 사이에
+     * 답이 달라질 수 있지만(서킷 브레이커가 그 사이 열리거나 닫히는 경우), 그 경우 대체되는 것은
+     * 보통 <b>다른 역할</b>의 프로바이더 — 즉 창이 더 큰 클라우드 — 라 결과는 "덜 잘랐어야 했는데
+     * 더 잘랐다" 쪽이다. 같은 우선순위의 형제는 같은 모델을 돌리는 부하분산 쌍이라(§6.21) 창이
+     * 같다. 어느 쪽이든 초과를 부르는 방향은 아니다.
+     *
+     * <p>출력 예약은 이 모드가 실제로 붙일 {@code maxTokens} 다. 스트리밍은 캡을 붙이지 않지만
+     * 답변이 자라날 자리는 여전히 필요하므로 같은 값을 <b>예상 분량</b>으로 잡아 둔다 — 입력이 창을
+     * 꽉 채우면 생성할 자리가 없어 결국 같은 초과가 난다.
+     */
+    private PromptBudget budgetFor(AgentState state) {
+        int window = contextWindows.tokensOrZero(
+                llmRouter.findProviderName(TaskType.TEXT, state.routingMode()));
+        if (window <= 0) return null;   // 창을 모른다 — 추측으로 근거를 버리지 않는다
+        return new PromptBudget(window, state.responseMode().maxTokens(props.llmSafe().maxTokens()));
     }
 
     public AgentState execute(AgentState state) {
@@ -646,11 +684,17 @@ public class AnswerService {
 
     private String buildAnswerPrompt(AgentState state) {
         StringBuilder sb = new StringBuilder();
-        if (!state.conversationHistory().isBlank()) {
-            sb.append("[이전 대화]\n").append(state.conversationHistory()).append("\n\n");
+
+        // 예산에 맞춰 미리 덜어낸다. 호출 후에 초과 오류를 받고 재시도하는 것보다 왕복이 0회 싸고,
+        // 무엇을 버릴지도 여기서만 알 수 있다(라우터는 프롬프트 안을 못 본다). 창을 모르면
+        // fitToBudget 이 원본을 그대로 돌려주므로 예전과 동작이 같다.
+        Fitted fitted = fitToBudget(state);
+
+        if (!fitted.history().isBlank()) {
+            sb.append("[이전 대화]\n").append(fitted.history()).append("\n\n");
         }
 
-        String docsContext = state.retrievedDocs().stream()
+        String docsContext = fitted.docs().stream()
                 .map(doc -> {
                     // §10.10 — a curated Q&A hit has no real filename/page; label it distinctly
                     // instead of leaking the "curated_qa | p.1" placeholder metadata into the prompt.
@@ -677,6 +721,68 @@ public class AnswerService {
 
         sb.append("[질문]\n").append(PromptInjectionGuard.wrap(state.question()));
         return sb.toString();
+    }
+
+    /** 예산에 맞춘 결과 — 무엇이 얼마나 남았는지. */
+    private record Fitted(List<Document> docs, String history) {}
+
+    /**
+     * 프롬프트가 프로바이더의 창에 들어가도록 <b>문서를 먼저</b>, 그래도 넘치면 <b>대화 이력을</b>
+     * 오래된 것부터 덜어낸다.
+     *
+     * <p><b>문서를 먼저 버리는 이유.</b> 검색 결과는 RRF 점수 내림차순이라 뒤쪽이 최저 관련도이고,
+     * 그 문서들이 답변에 기여하지 않는 일은 흔하다(§ 응답 참여도 — 검색 1위조차 한 글자도 기여하지
+     * 않는 경우가 있어 출처 표시 순서를 참여도 우선으로 바꿨다). 반면 대화 이력이 사라지면 사용자는
+     * "방금 말한 걸 잊었다"로 즉시 체감한다. 덜 아픈 쪽을 먼저 버린다.
+     *
+     * <p>이력은 {@code "Q: …\nA: …"} 를 빈 줄로 이어 붙인 형식이라(오래된 것이 앞) 턴 경계에서
+     * 자를 수 있다. 답변 본문에도 빈 줄이 있을 수 있으므로 <b>빈 줄 다음에 {@code "Q: "} 가 오는
+     * 자리</b>만 경계로 본다 — 문자 인덱스로 자르면 반쪽짜리 턴이 남아 모델을 더 헷갈리게 한다.
+     */
+    private Fitted fitToBudget(AgentState state) {
+        List<Document> docs = state.retrievedDocs();
+        String history = state.conversationHistory();
+        PromptBudget budget = budgetFor(state);
+        if (budget == null) return new Fitted(docs, history);   // 창 모름 → 예전 그대로
+
+        long fixedCost = TokenEstimator.estimate(state.question())
+                + TokenEstimator.estimate(String.join("\n", state.retrievalWarnings()))
+                + ANSWER_PROMPT_OVERHEAD_TOKENS;
+        long limit = budget.inputBudget();
+
+        List<Document> keptDocs = PromptBudget.fitByPrefix(docs,
+                d -> TokenEstimator.estimate(MarkdownNoiseNormalizer.normalize(d.getText())),
+                fixedCost + TokenEstimator.estimate(history), limit);
+
+        // 문서를 줄여도 안 들어가면 이력을 오래된 턴부터 덜어낸다.
+        long docCost = keptDocs.stream()
+                .mapToLong(d -> TokenEstimator.estimate(MarkdownNoiseNormalizer.normalize(d.getText())))
+                .sum();
+        String keptHistory = trimHistory(history, limit - fixedCost - docCost);
+
+        if (keptDocs.size() < docs.size() || keptHistory.length() < history.length()) {
+            log.warn("[BUDGET] 컨텍스트 창 {}토큰(출력 예약 {}) → 입력 예산 {}토큰에 맞춰 축소: "
+                     + "문서 {}→{}개, 이력 {}→{}자. app.search-top-k / app.chunk-size 를 낮추거나 "
+                     + "프로바이더의 컨텍스트를 키우면 이 축소가 사라집니다.",
+                    budget.contextWindow(), budget.outputReservation(), limit,
+                    docs.size(), keptDocs.size(), history.length(), keptHistory.length());
+        }
+        return new Fitted(keptDocs, keptHistory);
+    }
+
+    /** 턴 경계(빈 줄 + {@code "Q: "})에서 오래된 쪽부터 버린다. 예산이 음수면 전부 버린다. */
+    private static String trimHistory(String history, long budget) {
+        if (history == null || history.isBlank()) return "";
+        if (budget <= 0) return "";
+        if (TokenEstimator.estimate(history) <= budget) return history;
+
+        List<String> turns = new ArrayList<>(List.of(history.split("\n\n(?=Q: )")));
+        while (!turns.isEmpty()) {
+            turns.removeFirst();   // 가장 오래된 턴
+            String candidate = String.join("\n\n", turns);
+            if (TokenEstimator.estimate(candidate) <= budget) return candidate;
+        }
+        return "";
     }
 
     /** 절단 안내 — 코드 펜스 <b>바깥</b>의 평문이어야 한다({@link #truncate} 참조). */

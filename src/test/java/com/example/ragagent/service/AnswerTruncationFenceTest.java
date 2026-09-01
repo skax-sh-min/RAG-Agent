@@ -3,6 +3,7 @@ package com.example.ragagent.service;
 import com.example.ragagent.agent.AgentState;
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.llm.LlmRouter;
+import com.example.ragagent.llm.ProviderContextWindows;
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.llm.TaskType;
 import com.example.ragagent.model.ResponseMode;
@@ -50,9 +51,11 @@ class AnswerTruncationFenceTest {
                 true, false, 3,
                 null, null, null, null, null, null, null, null, null, null, null, null, null, null,
                 null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null);
+        // 비어 있음 = 창 모름 → 예산 축소가 돌지 않아 이 테스트의 관심사(절단·펜스)만 남는다.
+        ProviderContextWindows contextWindows = new ProviderContextWindows();
         MessageSource messageSource = mock(MessageSource.class);
         when(messageSource.getMessage(anyString(), any(), any(Locale.class))).thenReturn("prompt");
-        service = new AnswerService(llmRouter, props, messageSource);
+        service = new AnswerService(llmRouter, props, messageSource, contextWindows);
     }
 
     private String answerFor(String raw) {

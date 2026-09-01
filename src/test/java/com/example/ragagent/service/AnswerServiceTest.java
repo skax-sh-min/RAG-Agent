@@ -8,6 +8,7 @@ import com.example.ragagent.agent.AgentState;
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.llm.LlmProvider;
 import com.example.ragagent.llm.LlmRouter;
+import com.example.ragagent.llm.ProviderContextWindows;
 import com.example.ragagent.llm.ProviderRole;
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.llm.TaskType;
@@ -68,6 +69,7 @@ class AnswerServiceTest {
 
     private LlmRouter llmRouter;
     private MessageSource messageSource;
+    private ProviderContextWindows contextWindows;
     private AnswerService service;
 
     @BeforeEach
@@ -78,9 +80,132 @@ class AnswerServiceTest {
                 true, false, 3,
                 null, null, null, null, null, null, null, null, null, null, null, null, null, null,
                 null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null);
+        contextWindows = new ProviderContextWindows();   // 비어 있음 = 창 모름 → 예산 축소 없음
         messageSource = mock(MessageSource.class);
         when(messageSource.getMessage(anyString(), any(), any(Locale.class))).thenReturn("prompt");
-        service = new AnswerService(llmRouter, props, messageSource);
+        service = new AnswerService(llmRouter, props, messageSource, contextWindows);
+    }
+
+    // ── 입력 예산 (컨텍스트 창 기반 사전 축소) ────────────────────────────────
+
+    /** 한글 n자 = TokenEstimator 기준 n토큰 — 예산 계산이 눈에 보이게 하려고 한국어로 만든다. */
+    private static org.springframework.ai.document.Document koreanDoc(int chars) {
+        return new org.springframework.ai.document.Document("가".repeat(chars));
+    }
+
+    /**
+     * <b>첫</b> 프롬프트만 붙잡는 라우터 스텁 — 한 턴은 답변 호출에 이어 검증 호출을 내고, 마지막을
+     * 잡으면 검증 프롬프트({@code [답변]}/{@code [문서 발췌]})를 보게 된다. 입력 예산이 걸리는 곳은
+     * 답변 프롬프트이므로 처음 것을 남긴다.
+     */
+    private java.util.concurrent.atomic.AtomicReference<String> capturePrompt() {
+        var seen = new java.util.concurrent.atomic.AtomicReference<String>();
+        when(llmRouter.executeGatedWithUsage(any(), any(), any())).thenAnswer(inv -> {
+            java.util.function.Function<org.springframework.ai.chat.model.ChatModel,
+                    org.springframework.ai.chat.model.ChatResponse> fn = inv.getArgument(2);
+            org.springframework.ai.chat.model.ChatModel probe =
+                    mock(org.springframework.ai.chat.model.ChatModel.class);
+            when(probe.call(any(org.springframework.ai.chat.prompt.Prompt.class))).thenAnswer(call -> {
+                org.springframework.ai.chat.prompt.Prompt prompt = call.getArgument(0);
+                seen.compareAndSet(null, prompt.getInstructions().stream()
+                        .map(org.springframework.ai.chat.messages.Message::getText)
+                        .reduce("", (a, b) -> a + "\n" + b));
+                return chatResponse("답변");
+            });
+            fn.apply(probe);
+            return new LlmRouter.LlmResult("답변", 0, 0);
+        });
+        return seen;
+    }
+
+    @Test
+    @DisplayName("컨텍스트 창을 모르면 아무것도 자르지 않는다 — 추측으로 근거를 버리지 않는다")
+    void unknownContextWindowTrimsNothing() {
+        // contextWindows 는 setUp 에서 비어 있다.
+        when(llmRouter.findProviderName(any(), any())).thenReturn("lm");
+        var seen = capturePrompt();
+
+        AgentState state = newState(RoutingMode.COST_FIRST).toBuilder()
+                .retrievedDocs(List.of(koreanDoc(4_000), koreanDoc(4_000), koreanDoc(4_000)))
+                .build();
+        service.execute(state);
+
+        // 세 문서가 모두 실려야 한다(각 4,000자).
+        assertThat(seen.get()).isNotNull();
+        assertThat(countOccurrences(seen.get(), "가".repeat(4_000))).isEqualTo(3);
+    }
+
+    @Test
+    @DisplayName("창이 좁으면 관련도 낮은 뒤쪽 문서부터 덜어낸다")
+    void narrowContextDropsLowestRankedDocumentsFirst() {
+        // 창 16,000 → 예산 = 16,000 − 예약 7,000 − 여유 1,600 = 7,400 토큰.
+        // 고정비(질문 + 프롬프트 오버헤드) ≈ 2,002 이므로 문서 셋(각 ~2,003) 중 둘만 들어간다.
+        contextWindows.record("lm", 16_000, ProviderContextWindows.Source.CONFIGURED);
+        when(llmRouter.findProviderName(any(), any())).thenReturn("lm");
+        var seen = capturePrompt();
+
+        // 문서를 서로 구분되게 만든다 — 무엇이 남았는지 확인해야 하므로.
+        var first  = new org.springframework.ai.document.Document("첫번째" + "가".repeat(2_000));
+        var second = new org.springframework.ai.document.Document("두번째" + "나".repeat(2_000));
+        var third  = new org.springframework.ai.document.Document("세번째" + "다".repeat(2_000));
+        AgentState state = newState(RoutingMode.COST_FIRST).toBuilder()
+                .retrievedDocs(List.of(first, second, third))
+                .build();
+        service.execute(state);
+
+        String prompt = seen.get();
+        assertThat(prompt).as("가장 관련도 높은 문서는 남아야 한다").contains("첫번째");
+        assertThat(prompt).as("예산이 허락하는 만큼은 담는다").contains("두번째");
+        assertThat(prompt).as("최저 관련도 문서가 먼저 버려진다").doesNotContain("세번째");
+    }
+
+    @Test
+    @DisplayName("문서를 다 덜어내도 모자라면 대화 이력을 오래된 턴부터 버린다")
+    void historyIsTrimmedOldestFirstWhenDocumentsAreNotEnough() {
+        // 창 12,000 → 예산 3,800. 고정비 ~2,002 + 문서 1,000 을 빼면 이력에 ~798 만 남아,
+        // 1,500자짜리 오래된 턴은 버려지고 200자짜리 최근 턴만 살아남는다.
+        contextWindows.record("lm", 12_000, ProviderContextWindows.Source.CONFIGURED);
+        when(llmRouter.findProviderName(any(), any())).thenReturn("lm");
+        var seen = capturePrompt();
+
+        String history = "Q: 가장오래된질문\nA: " + "옛".repeat(1_500)
+                + "\n\nQ: 최근질문\nA: " + "새".repeat(200);
+        AgentState state = newState(RoutingMode.COST_FIRST).toBuilder()
+                .conversationHistory(history)
+                .retrievedDocs(List.of(koreanDoc(1_000)))
+                .build();
+        service.execute(state);
+
+        String prompt = seen.get();
+        assertThat(prompt).as("최근 턴은 남아야 한다").contains("최근질문");
+        assertThat(prompt).as("가장 오래된 턴부터 버린다").doesNotContain("가장오래된질문");
+    }
+
+    @Test
+    @DisplayName("이력은 턴 경계에서 잘린다 — 반쪽짜리 턴을 남기지 않는다")
+    void historyIsCutAtTurnBoundaries() {
+        // 창 12,000 → 예산 3,800, 고정비 ~2,002 → 이력에 ~1,798. 2,000자 턴은 못 들어간다.
+        contextWindows.record("lm", 12_000, ProviderContextWindows.Source.CONFIGURED);
+        when(llmRouter.findProviderName(any(), any())).thenReturn("lm");
+        var seen = capturePrompt();
+
+        String history = "Q: 첫질문\nA: " + "옛".repeat(2_000) + "\n\nQ: 둘째질문\nA: 짧은답";
+        AgentState state = newState(RoutingMode.COST_FIRST).toBuilder()
+                .conversationHistory(history)
+                .build();
+        service.execute(state);
+
+        String prompt = seen.get();
+        // 남은 이력은 온전한 턴이어야 한다 — Q 와 A 가 짝으로 들어 있다.
+        assertThat(prompt).contains("Q: 둘째질문");
+        assertThat(prompt).contains("A: 짧은답");
+        assertThat(prompt).doesNotContain("첫질문");
+    }
+
+    private static int countOccurrences(String haystack, String needle) {
+        int count = 0, idx = 0;
+        while ((idx = haystack.indexOf(needle, idx)) >= 0) { count++; idx += needle.length(); }
+        return count;
     }
 
     private AgentState newState(RoutingMode mode) {

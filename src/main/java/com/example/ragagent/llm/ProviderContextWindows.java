@@ -38,9 +38,15 @@ public class ProviderContextWindows {
         if (tokens > 0) windows.put(providerName, new ContextWindow(tokens, source));
     }
 
-    /** 비어 있으면 "이 프로바이더의 컨텍스트 크기를 모른다"는 뜻이다 — 0 이나 기본값이 아니다. */
+    /**
+     * 비어 있으면 "이 프로바이더의 컨텍스트 크기를 모른다"는 뜻이다 — 0 이나 기본값이 아니다.
+     *
+     * <p>{@code null} 이름도 "모름"으로 받는다. {@code LlmRouter.findProviderName()} 은 후보가 없으면
+     * {@code "unknown"} 을 주지만, 그 라우터가 목(mock)일 때는 {@code null} 이 온다 — 조회 하나가
+     * {@code ConcurrentHashMap} 의 널 금지에 걸려 예산 계산 전체를 터뜨릴 이유는 없다.
+     */
     public Optional<ContextWindow> find(String providerName) {
-        return Optional.ofNullable(windows.get(providerName));
+        return providerName == null ? Optional.empty() : Optional.ofNullable(windows.get(providerName));
     }
 
     /** 편의 접근 — 모르면 {@code 0}. 예산 계산에 쓸 때는 반드시 0 을 "미지"로 다뤄야 한다. */
