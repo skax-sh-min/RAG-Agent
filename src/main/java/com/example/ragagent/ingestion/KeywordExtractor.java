@@ -12,6 +12,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.document.Document;
+import com.example.ragagent.llm.IndexingOutputCap;
 import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.stereotype.Component;
 
@@ -60,9 +61,20 @@ public class KeywordExtractor {
     }
 
     /** Indexing/background temperature (hot-editable), read fresh per call — see AppProperties.LlmConfig. */
-    private OpenAiChatOptions indexingOptions() {
-        return OpenAiChatOptions.builder().temperature(props.llmSafe().indexingTemperature()).build();
+    /**
+     * 온도 + 출력 상한. 이 호출의 응답은 <b>키워드 몇 개와 1~2문장</b>이라 입력 크기와 무관하게
+     * 작다 — 상한을 비워 두면 그 응답을 위해 {@code app.llm.max-tokens} 전체가 예약된다
+     * ({@link IndexingOutputCap}).
+     */
+    private OpenAiChatOptions indexingOptions(int maxTokens) {
+        OpenAiChatOptions.Builder b = OpenAiChatOptions.builder()
+                .temperature(props.llmSafe().indexingTemperature());
+        if (maxTokens > 0) b.maxTokens(maxTokens);   // 0 = 프로바이더 기본값 유지
+        return b.build();
     }
+
+    /** 청크 하나의 키워드+맥락이 {@code app.llm.max-tokens} 중 쓸 몫 — 배치는 건수를 곱한다. */
+    private static final double ENRICHMENT_OUTPUT_RATIO_PER_CHUNK = 0.05;
 
     public List<Document> enrichParallel(List<Document> chunks, Semaphore llmGate,
                                           String filename, Consumer<IndexingProgressEvent> onProgress) {
@@ -160,7 +172,9 @@ public class KeywordExtractor {
             // (BackgroundUsage.KEYWORD_PREFIX stays defined only to recognize historical rows).
             String response = llmRouter.executeWithTracking(
                     TaskType.MICRO_TEXT, RoutingMode.COST_FIRST, BackgroundUsage.CONTEXT_PREFIX,
-                    model -> model.call(new Prompt(prompt, indexingOptions())));
+                    model -> model.call(new Prompt(prompt, indexingOptions(
+                            IndexingOutputCap.forFixed(ENRICHMENT_OUTPUT_RATIO_PER_CHUNK,
+                                    props.llmSafe().maxTokens())))));
             log.debug("[ENRICH] LLM 응답: [{}]", response);
             ParsedEnrichment parsed = parseEnrichment(response);
             // No "키워드:" marker → legacy plain-response shape, treat the whole reply as keywords.
@@ -213,7 +227,10 @@ public class KeywordExtractor {
         try {
             String response = llmRouter.executeWithTracking(
                     TaskType.MICRO_TEXT, RoutingMode.COST_FIRST, BackgroundUsage.CONTEXT_PREFIX,
-                    model -> model.call(new Prompt(prompt.toString(), indexingOptions())));
+                    model -> model.call(new Prompt(prompt.toString(), indexingOptions(
+                            // 배치는 청크 수만큼 결과가 늘어난다 — 몫도 그만큼 곱한다.
+                            IndexingOutputCap.forFixed(ENRICHMENT_OUTPUT_RATIO_PER_CHUNK * n,
+                                    props.llmSafe().maxTokens())))));
             log.debug("[ENRICH-BATCH] LLM 응답({}개 청크): [{}]", n, response);
             Map<Integer, String> sections = splitBatchSections(response);
             if (sections.size() < n) {

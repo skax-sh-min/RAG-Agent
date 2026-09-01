@@ -3,6 +3,7 @@ package com.example.ragagent.service;
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.exception.LlmProviderExhaustedException;
 import com.example.ragagent.llm.BackgroundUsage;
+import com.example.ragagent.llm.IndexingOutputCap;
 import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.llm.TaskType;
@@ -71,6 +72,9 @@ public class MarkdownCorrectionService {
 
     private static final Logger log = LoggerFactory.getLogger(MarkdownCorrectionService.class);
     private static final int MIN_SECTION_CHARS = 500;
+
+    /** 이미지 설명(2~3문장)이 {@code app.llm.max-tokens} 중 쓸 몫 — {@link IndexingOutputCap} 참고. */
+    private static final double IMAGE_DESCRIPTION_OUTPUT_RATIO = 0.05;
     private static final Pattern MD_IMAGE_LINK = Pattern.compile("!\\[([^\\]]*)]\\(([^)]+)\\)");
     private static final Pattern IMAGE_MARKER = Pattern.compile("\\[이미지:\\s*([^\\]]+)]");
     /** Whole-line variants of the above, used by the PPTX-only shape-group formatting passes
@@ -175,9 +179,20 @@ public class MarkdownCorrectionService {
         this.defaultCodeLanguage = props.mdCorrectionDefaultCodeLanguageSafe();
     }
 
-    /** Indexing/background temperature (hot-editable), read fresh per call — see AppProperties.LlmConfig. */
-    private OpenAiChatOptions indexingOptions() {
-        return OpenAiChatOptions.builder().temperature(props.llmSafe().indexingTemperature()).build();
+    /**
+     * Indexing/background temperature (hot-editable), read fresh per call — see AppProperties.LlmConfig.
+     *
+     * <p><b>출력 상한을 함께 싣는다</b>({@link IndexingOutputCap}). 이걸 비워 두면 프로바이더 빈에
+     * 구워진 {@code app.llm.max-tokens} 전체가 출력으로 <b>예약</b>되는데, 서버는
+     * {@code 프롬프트 + max_tokens ≤ n_ctx} 를 검사하므로 그만큼 입력 자리가 사라진다. 창 20,480 ·
+     * {@code max-tokens=10000} 배포에서 MD 교정이 컨텍스트 초과로 실패한 것이 정확히 이 조합이었다 —
+     * 같은 프로퍼티가 {@link #maxSectionChars} 까지 정하므로 입력과 예약이 함께 커진다.
+     */
+    private OpenAiChatOptions indexingOptions(int maxTokens) {
+        OpenAiChatOptions.Builder b = OpenAiChatOptions.builder()
+                .temperature(props.llmSafe().indexingTemperature());
+        if (maxTokens > 0) b.maxTokens(maxTokens);   // 0 = 프로바이더 기본값 유지
+        return b.build();
     }
 
     /**
@@ -694,7 +709,10 @@ public class MarkdownCorrectionService {
         try {
             String result = llmRouter.executeWithTracking(
                     TaskType.LIGHT_TEXT, RoutingMode.COST_FIRST, BackgroundUsage.MDCORRECT_PREFIX,
-                    model -> model.call(new Prompt(prompt, indexingOptions())));
+                    model -> model.call(new Prompt(prompt, indexingOptions(
+                            // 재작성이라 출력은 이 섹션 크기에 묶인다 — 지시문은 입력일 뿐 출력이 아니다.
+                            IndexingOutputCap.forRewrite(tableExtraction.protectedText(),
+                                    props.llmSafe().maxTokens())))));
             log.debug("[MD_CORRECT] 섹션 교정 완료: {}자 → {}자", safeSection.length(), result.length());
 
             if (!tableExtraction.tables().isEmpty()) {
@@ -1076,8 +1094,10 @@ public class MarkdownCorrectionService {
                     .text("이 이미지를 한국어 2~3문장으로 간단히 설명하세요. "
                             + "여러 선택지나 후보 설명을 나열하지 말고, 하나의 완성된 설명 문장만 작성하세요.")
                     .media(media).build();
+            // 요청 자체가 "2~3문장"이라 출력 크기가 입력과 무관하게 정해져 있다.
+            int cap = IndexingOutputCap.forFixed(IMAGE_DESCRIPTION_OUTPUT_RATIO, props.llmSafe().maxTokens());
             String response = llmRouter.executeWithTracking(TaskType.VISION, RoutingMode.LOCAL_ONLY,
-                    BackgroundUsage.IMAGE_PREFIX, model -> model.call(new Prompt(userMessage, indexingOptions())));
+                    BackgroundUsage.IMAGE_PREFIX, model -> model.call(new Prompt(userMessage, indexingOptions(cap))));
             return response == null ? "" : response.trim();
         } catch (LlmProviderExhaustedException e) {
             return ""; // no LOCAL vision provider (pre-gated; defensive)

@@ -9,6 +9,7 @@ import com.example.ragagent.llm.TaskType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.prompt.Prompt;
+import com.example.ragagent.llm.IndexingOutputCap;
 import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.stereotype.Service;
 
@@ -48,8 +49,12 @@ public class TextToMarkdownService {
     }
 
     /** Indexing/background temperature (hot-editable), read fresh per call — see AppProperties.LlmConfig. */
-    private OpenAiChatOptions indexingOptions() {
-        return OpenAiChatOptions.builder().temperature(props.llmSafe().indexingTemperature()).build();
+    /** 온도 + 출력 상한 — 상한을 비우면 {@code max-tokens} 전체가 예약된다({@link IndexingOutputCap}). */
+    private OpenAiChatOptions indexingOptions(int maxTokens) {
+        OpenAiChatOptions.Builder b = OpenAiChatOptions.builder()
+                .temperature(props.llmSafe().indexingTemperature());
+        if (maxTokens > 0) b.maxTokens(maxTokens);   // 0 = 프로바이더 기본값 유지
+        return b.build();
     }
 
     /** {@link #convert(String, String, BiConsumer)} without progress callback. */
@@ -158,7 +163,9 @@ public class TextToMarkdownService {
         try {
             String result = llmRouter.executeWithTracking(
                     TaskType.LIGHT_TEXT, RoutingMode.COST_FIRST, BackgroundUsage.TXT2MD_PREFIX,
-                    model -> model.call(new Prompt(prompt, indexingOptions())));
+                    model -> model.call(new Prompt(prompt, indexingOptions(
+                            // 구조화도 재작성이라 출력이 이 블록 크기에 묶인다.
+                            IndexingOutputCap.forRewrite(safeBlock, props.llmSafe().maxTokens())))));
             log.debug("[TXT2MD] 블록 구조화 완료: {}자 → {}자", safeBlock.length(), result.length());
             return result;
         } catch (LlmProviderExhaustedException e) {
