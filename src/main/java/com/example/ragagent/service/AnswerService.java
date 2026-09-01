@@ -577,32 +577,6 @@ public class AnswerService {
     }
 
     /**
-     * The evidence block the evaluator judges the answer against.
-     *
-     * <p><b>It must be the same evidence the answer was written from.</b> This used to send only
-     * the first 5 documents while {@link #buildAnswerPrompt} passes all of {@code retrievedDocs}
-     * ({@code app.search-top-k}, default 10) — so an answer correctly citing a value found only in
-     * document #6-8 was judged against excerpts that could not contain it. Paths, ports, addresses
-     * and other constants are exactly the facts this hits hardest: they live in a single chunk,
-     * unlike a prose claim that gets restated across several.
-     *
-     * <p>A retry does not repair that. {@code RetrievalService} escalates {@code candidateK} — the
-     * pool it searches — but the final cut is always {@code defaultTopK}, so the answer node keeps
-     * seeing exactly topK documents and the evaluator keeps seeing the same first five of them. A
-     * grounded=false caused by the window, rather than by the answer, therefore tends to reproduce
-     * on every attempt and burn the whole retry budget before delivering a 미검증 answer.
-     *
-     * <p>Text is normalized with the same {@link MarkdownNoiseNormalizer} the answer prompt uses,
-     * so both calls also see the same <em>form</em> of a value — the evaluator comparing a raw
-     * {@code **8080**} against an answer written from the stripped {@code 8080} was its own small
-     * source of false mismatches.
-     *
-     * <p>{@link #MAX_EVAL_EXCERPT_CHARS} bounds the prompt for pathological configurations (a very
-     * large topK or chunk size). Documents are dropped <em>whole</em>, lowest-ranked first, and
-     * never truncated mid-document — half a chunk is precisely how the path or constant under
-     * verification disappears. The top-ranked document is always kept.
-     */
-    /**
      * 검증 호출의 발췌에 쓸 수 있는 토큰 수 — 창을 모르면 {@code 0}(= 토큰 예산 없음, 글자 상한만).
      *
      * <p><b>답변 호출과 따로 계산해야 한다.</b> 이 호출은 프롬프트 모양이 다르다: 검색 문서는 같지만
@@ -625,6 +599,37 @@ public class AnswerService {
     }
 
     /**
+     * The evidence block the evaluator judges the answer against.
+     *
+     * <p><b>It must be the same evidence the answer was written from.</b> This used to send only
+     * the first 5 documents while {@link #buildAnswerPrompt} passes all of {@code retrievedDocs}
+     * ({@code app.search-top-k}, default 10) — so an answer correctly citing a value found only in
+     * document #6-8 was judged against excerpts that could not contain it. Paths, ports, addresses
+     * and other constants are exactly the facts this hits hardest: they live in a single chunk,
+     * unlike a prose claim that gets restated across several.
+     *
+     * <p>A retry does not repair that. {@code RetrievalService} escalates {@code candidateK} — the
+     * pool it searches — but the final cut is always {@code defaultTopK}, so the answer node keeps
+     * seeing exactly topK documents and the evaluator keeps seeing the same first five of them. A
+     * grounded=false caused by the window, rather than by the answer, therefore tends to reproduce
+     * on every attempt and burn the whole retry budget before delivering a 미검증 answer.
+     *
+     * <p><b>같은 이유로 "답변에 실제로 쓰인 문서만 검증에 넣기" 는 하면 안 된다.</b> 어느 문서가
+     * 쓰였는지는 이 호출이 <i>끝나야</i> 알 수 있고({@code usedDocs} 는 이 호출의 출력이며
+     * {@code AnswerAttribution} 은 FINALIZE 에서 돈다), 설령 미리 안다 해도 <b>답변을 닮은 문서만
+     * 골라 보여주고 채점하는 것</b>이 된다. 무엇보다 근거는 답변이 인용한 문서에만 있는 것이 아니다 —
+     * 위 사고가 정확히 그 모양이었다.
+     *
+     * <p>Text is normalized with the same {@link MarkdownNoiseNormalizer} the answer prompt uses,
+     * so both calls also see the same <em>form</em> of a value — the evaluator comparing a raw
+     * {@code **8080**} against an answer written from the stripped {@code 8080} was its own small
+     * source of false mismatches.
+     *
+     * <p>{@link #MAX_EVAL_EXCERPT_CHARS} bounds the prompt for pathological configurations (a very
+     * large topK or chunk size). Documents are dropped <em>whole</em>, lowest-ranked first, and
+     * never truncated mid-document — half a chunk is precisely how the path or constant under
+     * verification disappears. The top-ranked document is always kept.
+     *
      * @param tokenBudget 창에서 파생된 발췌 토큰 예산. {@code 0} 이하면 적용하지 않는다(창 모름).
      *                    {@link #MAX_EVAL_EXCERPT_CHARS} 글자 상한은 <b>그와 무관하게 늘 걸린다</b> —
      *                    그쪽은 과대 설정을 막는 절대 안전판이고, 이쪽은 이 프로바이더에 실제로 들어가는
