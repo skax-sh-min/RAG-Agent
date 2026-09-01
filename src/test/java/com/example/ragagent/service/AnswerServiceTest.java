@@ -351,6 +351,61 @@ class AnswerServiceTest {
                 .as("PREMIUM 창(64,000)이면 세 문서가 다 들어간다").contains("세번째");
     }
 
+    @Test
+    @DisplayName("발췌가 잘린 채 나온 '근거 없음'은 판정으로 삼지 않는다 — 빠진 문서에 근거가 있었을 수 있다")
+    void groundedFalseOnTrimmedEvidenceBecomesNoVerdict() {
+        // 창을 좁혀 검증 발췌가 반드시 잘리게 만든다. 답변 전문이 발췌 자리를 먹는 구조라
+        // 답변이 길수록 이 상황이 쉽게 생긴다.
+        contextWindows.record("lm", 8_000, ProviderContextWindows.Source.CONFIGURED);
+        when(llmRouter.findProviderName(any(), any())).thenReturn("lm");
+
+        var calls = new java.util.ArrayList<String>();
+        when(llmRouter.executeGatedWithUsage(any(), any(), any())).thenAnswer(inv -> {
+            calls.add("x");
+            // 1번째 = 답변, 2번째 = 검증(근거 없음 판정)
+            return new LlmRouter.LlmResult(
+                    calls.size() == 1 ? "긴답변".repeat(500)
+                                      : "{\"sufficient\":true,\"grounded\":false,\"reason\":\"근거 없음\"}",
+                    0, 0);
+        });
+
+        var docs = List.of(
+                new org.springframework.ai.document.Document("첫번째" + "가".repeat(1_500)),
+                new org.springframework.ai.document.Document("두번째" + "나".repeat(1_500)),
+                new org.springframework.ai.document.Document("세번째" + "다".repeat(1_500)));
+        AgentState out = service.execute(
+                newState(RoutingMode.COST_FIRST).toBuilder().retrievedDocs(docs).build());
+
+        assertThat(out.grounded()).as("판정 없음이어야 한다 — false 로 굳히면 잘못된 미검증 배지가 붙는다").isNull();
+        assertThat(out.needsRetry()).as("재시도해도 답변 길이와 창은 그대로라 같은 축소가 반복된다").isFalse();
+        assertThat(out.evalReason()).isNull();
+    }
+
+    @Test
+    @DisplayName("반대로 '근거 있음'은 발췌가 잘렸어도 그대로 신뢰한다 — 문서를 더 봤다고 근거가 사라지지 않는다")
+    void groundedTrueOnTrimmedEvidenceIsStillTrusted() {
+        contextWindows.record("lm", 8_000, ProviderContextWindows.Source.CONFIGURED);
+        when(llmRouter.findProviderName(any(), any())).thenReturn("lm");
+
+        var calls = new java.util.ArrayList<String>();
+        when(llmRouter.executeGatedWithUsage(any(), any(), any())).thenAnswer(inv -> {
+            calls.add("x");
+            return new LlmRouter.LlmResult(
+                    calls.size() == 1 ? "긴답변".repeat(500)
+                                      : "{\"sufficient\":true,\"grounded\":true}",
+                    0, 0);
+        });
+
+        var docs = List.of(
+                new org.springframework.ai.document.Document("첫번째" + "가".repeat(1_500)),
+                new org.springframework.ai.document.Document("두번째" + "나".repeat(1_500)),
+                new org.springframework.ai.document.Document("세번째" + "다".repeat(1_500)));
+        AgentState out = service.execute(
+                newState(RoutingMode.COST_FIRST).toBuilder().retrievedDocs(docs).build());
+
+        assertThat(out.grounded()).isTrue();
+    }
+
     private static int countOccurrences(String haystack, String needle) {
         int count = 0, idx = 0;
         while ((idx = haystack.indexOf(needle, idx)) >= 0) { count++; idx += needle.length(); }

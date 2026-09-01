@@ -452,9 +452,9 @@ public class AnswerService {
         boolean docsPresent = !state.retrievedDocs().isEmpty();
         try {
             String systemPrompt = messageSource.getMessage(state.responseMode().evalPromptKey(), null, locale);
-            String excerpts = buildEvalExcerpts(state.retrievedDocs(),
+            EvalExcerpts excerpts = buildEvalExcerpts(state.retrievedDocs(),
                     evalExcerptTokenBudget(state, systemPrompt, answer, evalConverter.getFormat()));
-            String evalPrompt = buildEvalPrompt(state, answer, excerpts, evalConverter.getFormat());
+            String evalPrompt = buildEvalPrompt(state, answer, excerpts.text(), evalConverter.getFormat());
 
             LlmRouter.LlmResult result = llmRouter.executeGatedWithUsage(TaskType.TEXT, state.routingMode(),
                     model -> model.call(buildPrompt(systemPrompt, evalPrompt, evalOptions())));
@@ -465,7 +465,11 @@ public class AnswerService {
             }
             EvalOutput out = evalConverter.convert(result.text());
             boolean grounded = !docsPresent || out.grounded();
-            boolean passed = out.sufficient() && grounded;
+            // 근거 판정만 비운다 — sufficient("요청에 답했는가")는 발췌 완전성에 거의 의존하지 않고,
+            // 그것까지 버리면 정당한 재시도·PROGRESSIVE 업그레이드 신호가 함께 사라진다.
+            boolean groundedUnreliable = unreliableNegative(grounded, excerpts, state);
+            Boolean groundedVerdict = groundedUnreliable ? null : grounded;
+            boolean passed = out.sufficient() && (groundedUnreliable || grounded);
             String reason = passed ? null : normalizeOneLine(out.reason(), MAX_EVAL_REASON_LEN);
             String envNote = normalizeOneLine(out.envNote(), MAX_ENV_NOTE_LEN);
             if (!passed) {
@@ -478,7 +482,7 @@ public class AnswerService {
             return state.toBuilder()
                     .accumulateTokens(result.inputTokens(), result.outputTokens())
                     .needsRetry(!out.sufficient())
-                    .grounded(grounded)
+                    .grounded(groundedVerdict)
                     .evalReason(reason)
                     .envNote(envNote)
                     .usedDocIndices(out.usedDocs())
@@ -509,9 +513,9 @@ public class AnswerService {
         boolean docsPresent = !state.retrievedDocs().isEmpty();
         try {
             String systemPrompt = messageSource.getMessage(state.responseMode().evalPromptKey(), null, locale);
-            String excerpts = buildEvalExcerpts(state.retrievedDocs(),
+            EvalExcerpts excerpts = buildEvalExcerpts(state.retrievedDocs(),
                     evalExcerptTokenBudget(state, systemPrompt, answer, creativeEvalConverter.getFormat()));
-            String evalPrompt = buildEvalPrompt(state, answer, excerpts, creativeEvalConverter.getFormat());
+            String evalPrompt = buildEvalPrompt(state, answer, excerpts.text(), creativeEvalConverter.getFormat());
 
             LlmRouter.LlmResult result = llmRouter.executeGatedWithUsage(TaskType.TEXT, state.routingMode(),
                     model -> model.call(buildPrompt(systemPrompt, evalPrompt, evalOptions())));
@@ -522,7 +526,11 @@ public class AnswerService {
             }
             CreativeEvalOutput out = creativeEvalConverter.convert(result.text());
             boolean apiGrounded = !docsPresent || out.apiGrounded();
-            boolean passed = out.sufficient() && apiGrounded;
+            // 표준 검증과 같은 가드 — C 의 apiGrounded 도 "발췌에서 못 찾았다"는 부정 판정이라,
+            // 발췌가 빠진 상태에서 나온 것이면 믿을 수 없다. 여기서도 sufficient 는 살린다.
+            boolean groundedUnreliable = unreliableNegative(apiGrounded, excerpts, state);
+            Boolean groundedVerdict = groundedUnreliable ? null : apiGrounded;
+            boolean passed = out.sufficient() && (groundedUnreliable || apiGrounded);
             List<String> invented = out.inventedSymbols() == null ? List.of() : out.inventedSymbols();
             // 실패 사유는 발명된 이름 그 자체다 — 별도 필드를 만들면 SSE 페이로드·로그·툴팁 세 곳을
             // 모두 늘려야 하는데, evalReason 이 이미 그 셋을 지나가는 "한 문장 설명" 자리다.
@@ -541,7 +549,7 @@ public class AnswerService {
             return state.toBuilder()
                     .accumulateTokens(result.inputTokens(), result.outputTokens())
                     .needsRetry(!out.sufficient())
-                    .grounded(apiGrounded)
+                    .grounded(groundedVerdict)
                     .evalReason(reason)
                     .envNote(envNote)
                     .usedDocIndices(List.of())
@@ -571,6 +579,46 @@ public class AnswerService {
      * 둘 다 배지를 그리지 않는다. 즉 새 UI 상태를 만드는 것이 아니라 <b>이미 있는 상태로 정직하게
      * 되돌리는 것</b>이다 — S 모드와 meta/Direct 턴이 늘 그렇게 표시돼 왔다.
      */
+    /**
+     * 축소된 근거로 내려진 <b>부정 판정</b>을 판정으로 인정할지 — 인정하면 안 된다.
+     *
+     * <p><b>비대칭이 핵심이다.</b> 발췌 일부가 빠진 채 나온 결과라도
+     * <ul>
+     *   <li>{@code grounded=true} 는 <b>믿을 수 있다</b> — 본 것만으로 근거를 찾았다는 뜻이고,
+     *       문서를 더 보여준다고 그 근거가 사라지지 않는다.</li>
+     *   <li>{@code grounded=false} 는 <b>믿을 수 없다</b> — "못 찾았다"인데, 빠진 그 문서에 있었을
+     *       수 있다. 이것이 {@code .limit(5)} 사고의 정확한 모양이었다(#6~8 문서에만 있는 포트·경로를
+     *       올바로 인용한 답변이 근거 없음 판정을 받음).</li>
+     * </ul>
+     *
+     * <p><b>검증 호출이 이 앱에서 가장 큰 요청</b>이라 이 상황이 실제로 생긴다. 답변 호출과 달리
+     * 검색 문서 위에 <b>답변 전문</b>이 통째로 얹히므로, 답변이 길어질수록 발췌에 남는 자리가
+     * 줄어든다 — 즉 <b>답변이 길수록 검증이 보는 근거가 좁아진다</b>. 답변 호출은 통과했는데 검증만
+     * 좁아지는 구간이 존재한다.
+     *
+     * <p>그래서 부정 판정이면 판정 자체를 버린다({@code grounded=null} = 판정 없음). 이 앱이 이미
+     * 가진 상태라 새 UI가 필요 없고, 그 의미도 정확하다 — 배지도 재시도도 없다. <b>재시도를 걸지
+     * 않는 것이 중요하다</b>: 재시도해도 답변 길이와 창은 그대로라 같은 축소가 반복되고, 재시도
+     * 예산만 태운 뒤 미검증 배지가 붙는다.
+     *
+     * <p>거짓 통과를 만들지도 않는다 — {@code grounded=true} 를 위조하는 것이 아니라 판정을
+     * 비우는 것이다('판정 없음' 규약 참고).
+     *
+     * <p><b>비우는 것은 {@code grounded} 뿐이다.</b> 같은 호출이 낸 {@code sufficient}("요청한 것에
+     * 답했는가")는 발췌 완전성에 거의 의존하지 않는다 — 답변과 질문을 견주는 판단이다. 그것까지
+     * 버리면 정당한 재시도와 PROGRESSIVE 업그레이드 신호가 함께 사라지는데, 업그레이드는 오히려
+     * <b>창이 더 큰 프로바이더</b>로 가므로 이 상황에서 도움이 되는 쪽이다.
+     */
+    private static boolean unreliableNegative(boolean grounded, EvalExcerpts excerpts, AgentState state) {
+        if (grounded || !excerpts.trimmed()) return false;
+        log.warn("[EVAL] 근거 없음 판정을 버린다(판정 없음으로 기록) — 검증이 답변보다 적은 문서를 봤다: "
+                 + "{}개 중 {}개. thread={} 답변 {}자. 답변이 길수록 발췌 자리가 줄어드는 구조라, "
+                 + "이 판정은 문서가 빠져서 나온 것일 수 있다.",
+                excerpts.total(), excerpts.included(), state.threadId(),
+                state.answer() == null ? 0 : state.answer().length());
+        return true;
+    }
+
     private static AgentState withoutVerdict(AgentState state) {
         return state.toBuilder()
                 .needsRetry(false)
@@ -667,7 +715,18 @@ public class AnswerService {
      *                    그쪽은 과대 설정을 막는 절대 안전판이고, 이쪽은 이 프로바이더에 실제로 들어가는
      *                    양이라 성격이 다르다. 둘 중 먼저 걸리는 쪽에서 멈춘다.
      */
-    private static String buildEvalExcerpts(List<Document> docs, long tokenBudget) {
+    /**
+     * @param text     프롬프트에 실린 발췌 블록
+     * @param included 실제로 실린 문서 수
+     * @param total    답변이 봤던 문서 수. {@code included < total} 이면 <b>검증이 답변보다 적은
+     *                 근거를 보고 판정했다</b>는 뜻이고, 그 사실이 판정의 신뢰도를 가른다
+     *                 ({@link #evaluate} 의 축소 가드 참고)
+     */
+    private record EvalExcerpts(String text, int included, int total) {
+        boolean trimmed() { return included < total; }
+    }
+
+    private static EvalExcerpts buildEvalExcerpts(List<Document> docs, long tokenBudget) {
         StringBuilder sb = new StringBuilder();
         int used = 0;
         long usedTokens = 0;
@@ -696,7 +755,7 @@ public class AnswerService {
                     MAX_EVAL_EXCERPT_CHARS, tokenBudget > 0 ? tokenBudget : "미적용",
                     docs.size(), included);
         }
-        return sb.toString();
+        return new EvalExcerpts(sb.toString(), included, docs.size());
     }
 
     /**
