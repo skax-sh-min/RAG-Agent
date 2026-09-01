@@ -10,6 +10,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.prompt.Prompt;
 import com.example.ragagent.llm.IndexingOutputCap;
+import com.example.ragagent.llm.PromptBudget;
+import com.example.ragagent.llm.ProviderContextWindows;
 import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.stereotype.Service;
 
@@ -38,18 +40,49 @@ import java.util.function.BiConsumer;
 public class TextToMarkdownService {
 
     private static final Logger log = LoggerFactory.getLogger(TextToMarkdownService.class);
+    /**
+     * 창을 모를 때의 블록 크기 상한. 실제로 쓰는 값은 {@link #blockCharBudget()} 이며, 프로바이더
+     * 창을 알면 거기서 더 줄어들 수 있다 — 이 상수만으로는 6,000자 본문 + 지시 프롬프트 + 그 본문에
+     * 비례하는 출력 예약이 좁은 창에 들어가는지 알 수 없다.
+     */
     private static final int MAX_BLOCK_CHARS = 6_000;
+
+    /**
+     * 구조화 지시 프롬프트(본문 제외)의 대략적 토큰 수 — 블록 예산의 고정비.
+     * 프롬프트를 크게 늘리면 이 값도 함께 올릴 것.
+     */
+    private static final int STRUCTURING_PROMPT_TOKENS = 600;
 
     private final LlmRouter llmRouter;
     private final AppProperties props;
 
-    public TextToMarkdownService(LlmRouter llmRouter, AppProperties props) {
+    private final ProviderContextWindows contextWindows;
+
+    public TextToMarkdownService(LlmRouter llmRouter, AppProperties props,
+                                 ProviderContextWindows contextWindows) {
         this.llmRouter = llmRouter;
         this.props = props;
+        this.contextWindows = contextWindows;
     }
 
     /** Indexing/background temperature (hot-editable), read fresh per call — see AppProperties.LlmConfig. */
     /** 온도 + 출력 상한 — 상한을 비우면 {@code max-tokens} 전체가 예약된다({@link IndexingOutputCap}). */
+    /**
+     * 이번 구조화 호출에 넣을 블록의 글자 상한 — {@link #MAX_BLOCK_CHARS} 와 프로바이더 창에서 나온
+     * 값 중 작은 쪽. 재작성이라 출력이 입력에 비례하므로 본문과 그 예약이 함께 창에 들어가야 한다
+     * ({@code PromptBudget.rewriteInputChars()}). 창을 모르면 상수 그대로다.
+     *
+     * <p>MD 교정과 같은 이유로 <b>줄이기만 한다</b> — 창이 넉넉하다고 블록을 키우면 구조화 결과가
+     * 달라지고, 그건 초과를 막으러 온 변경이 할 일이 아니다.
+     */
+    private int blockCharBudget() {
+        int window = contextWindows.tokensOrZero(
+                llmRouter.findProviderName(TaskType.LIGHT_TEXT, RoutingMode.COST_FIRST));
+        if (window <= 0) return MAX_BLOCK_CHARS;
+        int fromWindow = PromptBudget.rewriteInputChars(window, STRUCTURING_PROMPT_TOKENS);
+        return fromWindow <= 0 ? MAX_BLOCK_CHARS : Math.min(MAX_BLOCK_CHARS, Math.max(500, fromWindow));
+    }
+
     private OpenAiChatOptions indexingOptions(int maxTokens) {
         OpenAiChatOptions.Builder b = OpenAiChatOptions.builder()
                 .temperature(props.llmSafe().indexingTemperature());
@@ -121,17 +154,19 @@ public class TextToMarkdownService {
      * at blank lines so paragraphs stay intact for coherent structuring.
      */
     private List<String> splitIntoBlocks(String text) {
+        // 한 번만 물어보고 이 분할 내내 같은 값을 쓴다 — 도중에 달라지면 경계가 흔들린다.
+        final int budget = blockCharBudget();
         List<String> blocks = new ArrayList<>();
         StringBuilder current = new StringBuilder();
         for (String line : text.split("\n", -1)) {
             // Flush at a paragraph boundary once the block is already sizeable.
-            if (line.isBlank() && current.length() > MAX_BLOCK_CHARS / 2) {
+            if (line.isBlank() && current.length() > budget / 2) {
                 blocks.add(current.toString());
                 current = new StringBuilder();
             }
             current.append(line).append("\n");
             // Hard cap so a single huge paragraph cannot overflow the LLM context window.
-            if (current.length() > MAX_BLOCK_CHARS) {
+            if (current.length() > budget) {
                 blocks.add(current.toString());
                 current = new StringBuilder();
             }

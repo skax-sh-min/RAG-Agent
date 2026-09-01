@@ -40,6 +40,32 @@ public record PromptBudget(int contextWindow, int outputReservation) {
     }
 
     /**
+     * <b>재작성</b> 작업 한 번에 넣을 수 있는 본문 글자 수 — MD 형식 교정·txt→md 구조화용.
+     *
+     * <p>답변 호출과 셈이 다른 이유는 <b>출력 예약이 입력에 비례</b>하기 때문이다. 재작성은 넣은 만큼
+     * 나오므로 {@code IndexingOutputCap.forRewrite()} 가 입력 추정의 1.5배를 예약한다. 그래서 본문 S 는
+     * 자기 자신과 자기 예약을 동시에 창에 넣어야 한다:
+     *
+     * <pre>{@code   지시 프롬프트 + S + 1.5S + 여유 ≤ 창   →   S ≤ (창 − 지시 − 여유) / 2.5}</pre>
+     *
+     * <p>답변 예산처럼 "예약을 먼저 빼고 남은 것"으로 계산하면 순환이 된다(예약이 S 에 달려 있다).
+     * 그 순환을 푼 것이 위 2.5 다.
+     *
+     * <p>토큰을 글자로 바꿀 때는 <b>1글자 = 1토큰</b>으로 본다({@link TokenEstimator} 의 한글 가정).
+     * 영어 문서라면 실제로는 4배 더 들어가지만, 여기서 넉넉하게 잡으면 좁은 창에서 초과가 나므로
+     * 보수적인 쪽을 택한다.
+     *
+     * @param contextWindow          이 호출을 받을 프로바이더의 창(토큰)
+     * @param promptOverheadTokens   본문을 뺀 지시 프롬프트의 토큰 수
+     * @return 본문에 쓸 수 있는 글자 수. 창이 지시 프롬프트도 못 담으면 0
+     */
+    public static int rewriteInputChars(int contextWindow, long promptOverheadTokens) {
+        long usable = contextWindow - promptOverheadTokens - marginFor(contextWindow);
+        if (usable <= 0) return 0;
+        return (int) (usable * 100 / (100 + IndexingOutputCap.REWRITE_HEADROOM_PERCENT));
+    }
+
+    /**
      * 예산 안에 들어가도록 <b>뒤에서부터</b> 덜어낸 앞부분을 돌려준다.
      *
      * <p>앞이 남는 이유는 이 앱의 검색 결과가 RRF 점수 내림차순이라 <b>뒤가 곧 최저 관련도</b>이기

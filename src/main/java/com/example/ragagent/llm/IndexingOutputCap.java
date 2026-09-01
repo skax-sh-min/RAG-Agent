@@ -44,8 +44,14 @@ public final class IndexingOutputCap {
      */
     public static final int MIN_OUTPUT_TOKENS = 512;
 
-    /** 재작성 출력이 입력보다 커질 수 있는 여지(형식 보정·빈 줄·언어 태그 추가). */
-    private static final int REWRITE_HEADROOM_PERCENT = 150;
+    /**
+     * 재작성 출력이 입력보다 커질 수 있는 여지(형식 보정·빈 줄·언어 태그 추가).
+     *
+     * <p>{@code PromptBudget.rewriteInputChars()} 가 같은 값을 쓴다 — 그쪽은 "본문 S 와 그 예약
+     * 1.5S 가 함께 창에 들어가야 한다"를 풀어 입력 상한을 내므로, 두 값이 갈라지면 예약과 입력이
+     * 서로 다른 비율을 믿게 된다.
+     */
+    static final int REWRITE_HEADROOM_PERCENT = 150;
 
     /**
      * 재작성 작업이 아주 짧은 조각을 받았을 때의 바닥 — {@code max-tokens} 의 이 비율.

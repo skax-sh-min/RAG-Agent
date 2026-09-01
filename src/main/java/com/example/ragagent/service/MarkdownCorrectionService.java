@@ -4,6 +4,8 @@ import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.exception.LlmProviderExhaustedException;
 import com.example.ragagent.llm.BackgroundUsage;
 import com.example.ragagent.llm.IndexingOutputCap;
+import com.example.ragagent.llm.PromptBudget;
+import com.example.ragagent.llm.ProviderContextWindows;
 import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.llm.TaskType;
@@ -72,6 +74,12 @@ public class MarkdownCorrectionService {
 
     private static final Logger log = LoggerFactory.getLogger(MarkdownCorrectionService.class);
     private static final int MIN_SECTION_CHARS = 500;
+
+    /**
+     * 교정 지시 프롬프트(본문 제외)의 대략적 토큰 수 — 섹션 예산 계산의 고정비.
+     * 실측 ~1,100 토큰(한글 기준)에 여유를 얹었다. 프롬프트를 크게 늘리면 이 값도 함께 올릴 것.
+     */
+    private static final int CORRECTION_PROMPT_TOKENS = 1_300;
 
     /** 이미지 설명(2~3문장)이 {@code app.llm.max-tokens} 중 쓸 몫 — {@link IndexingOutputCap} 참고. */
     private static final double IMAGE_DESCRIPTION_OUTPUT_RATIO = 0.05;
@@ -164,6 +172,11 @@ public class MarkdownCorrectionService {
 
     private final LlmRouter llmRouter;
     private final AppProperties props;
+    /**
+     * {@code app.llm.max-tokens} 에서 나온 섹션 크기 상한 — <b>창을 모를 때의 값</b>이다.
+     * 실제로 쓰는 값은 {@link #sectionCharBudget()} 이며, 창을 알면 거기서 더 줄어들 수 있다.
+     */
+    private final ProviderContextWindows contextWindows;
     private final int maxSectionChars;
     private final String defaultCodeLanguage;
 
@@ -171,9 +184,11 @@ public class MarkdownCorrectionService {
     // 6000) — used to read the separate, dead spring.ai.openai.chat.options.max-tokens property
     // (default 8000), which config'd nothing (Spring AI's autoconfigured ChatModel bean is skipped
     // since LlmConfig.primaryChatModel() already satisfies its @ConditionalOnMissingBean).
-    public MarkdownCorrectionService(LlmRouter llmRouter, AppProperties props) {
+    public MarkdownCorrectionService(LlmRouter llmRouter, AppProperties props,
+                                     ProviderContextWindows contextWindows) {
         this.llmRouter = llmRouter;
         this.props = props;
+        this.contextWindows = contextWindows;
         int llmMaxTokens = props.llmSafe().maxTokens();
         this.maxSectionChars = Math.max(MIN_SECTION_CHARS, (llmMaxTokens - MIN_SECTION_CHARS) / 2);
         this.defaultCodeLanguage = props.mdCorrectionDefaultCodeLanguageSafe();
@@ -188,6 +203,30 @@ public class MarkdownCorrectionService {
      * {@code max-tokens=10000} 배포에서 MD 교정이 컨텍스트 초과로 실패한 것이 정확히 이 조합이었다 —
      * 같은 프로퍼티가 {@link #maxSectionChars} 까지 정하므로 입력과 예약이 함께 커진다.
      */
+    /**
+     * 이번 교정 호출에 넣을 섹션의 글자 상한.
+     *
+     * <p>{@link #maxSectionChars}(= {@code max-tokens} 파생)와 <b>프로바이더 창에서 나온 값</b> 중
+     * 작은 쪽이다. 두 값이 다른 것을 재는 탓에 어느 한쪽만으로는 부족하다 — 앞의 것은 "출력이
+     * 이만큼이면 입력은 이 정도"라는 어림이고, 뒤의 것은 "이 서버에 실제로 들어가는 양"이다.
+     * 창 20,480 · {@code max-tokens=10000} 배포에서 교정이 컨텍스트 초과로 실패한 것은 앞의 값만
+     * 보고 있었기 때문이다.
+     *
+     * <p><b>줄이기만 한다.</b> 창이 넉넉하면 계산상 더 큰 섹션도 들어가지만, 섹션을 키우면 교정
+     * 결과 자체가 달라진다(경계가 이동하고 한 호출이 보는 문맥이 바뀐다) — 초과를 막으러 온
+     * 변경이 멀쩡한 배포의 인덱싱 결과를 바꿀 이유는 없다.
+     *
+     * <p>창을 모르면 {@link #maxSectionChars} 그대로다(예전 동작).
+     */
+    private int sectionCharBudget() {
+        int window = contextWindows.tokensOrZero(
+                llmRouter.findProviderName(TaskType.LIGHT_TEXT, RoutingMode.COST_FIRST));
+        if (window <= 0) return maxSectionChars;
+        int fromWindow = PromptBudget.rewriteInputChars(window, CORRECTION_PROMPT_TOKENS);
+        if (fromWindow <= 0) return maxSectionChars;   // 창이 지시 프롬프트도 못 담는다 — 판단 불가
+        return Math.min(maxSectionChars, Math.max(MIN_SECTION_CHARS, fromWindow));
+    }
+
     private OpenAiChatOptions indexingOptions(int maxTokens) {
         OpenAiChatOptions.Builder b = OpenAiChatOptions.builder()
                 .temperature(props.llmSafe().indexingTemperature());
@@ -260,7 +299,8 @@ public class MarkdownCorrectionService {
         // applies on the next indexing without a restart, exactly like DocumentIndexer's keyword
         // gate and LazyVisionService. Never cache this in a field.
         int maxConcurrent = Math.max(1, props.indexingSafe().maxConcurrentLlmCalls());
-        log.debug("[MD_CORRECT] 설정: maxConcurrent={}, maxSectionChars={}", maxConcurrent, maxSectionChars);
+        log.debug("[MD_CORRECT] 설정: maxConcurrent={}, maxSectionChars={} (설정 파생 {})",
+                maxConcurrent, sectionCharBudget(), maxSectionChars);
         long t0 = System.currentTimeMillis();
 
         String preprocessed = addImageDescriptions
@@ -453,7 +493,7 @@ public class MarkdownCorrectionService {
         List<String> merged = new ArrayList<>();
         StringBuilder bundle = new StringBuilder();
         for (String section : raw) {
-            if (!bundle.isEmpty() && bundle.length() + section.length() > maxSectionChars) {
+            if (!bundle.isEmpty() && bundle.length() + section.length() > sectionCharBudget()) {
                 merged.add(bundle.toString());
                 bundle.setLength(0);
             }
@@ -483,14 +523,14 @@ public class MarkdownCorrectionService {
         StringBuilder bundle = new StringBuilder();
         int bundlePages = 0;
         for (String page : pages) {
-            if (page.length() > maxSectionChars) {
+            if (page.length() > sectionCharBudget()) {
                 if (bundle.length() > 0) { sections.add(bundle.toString()); bundle.setLength(0); bundlePages = 0; }
                 sections.addAll(splitOversizedPage(page));
                 continue;
             }
             if (bundle.length() > 0
                     && (bundlePages >= PPTX_MAX_BUNDLE_PAGES
-                        || bundle.length() + page.length() > maxSectionChars)) {
+                        || bundle.length() + page.length() > sectionCharBudget())) {
                 sections.add(bundle.toString());
                 bundle.setLength(0);
                 bundlePages = 0;
@@ -555,7 +595,7 @@ public class MarkdownCorrectionService {
             current.append(line).append("\n");
             if (isFenceLine) inFence = !inFence;
 
-            if (enforceSize && current.length() > maxSectionChars) {
+            if (enforceSize && current.length() > sectionCharBudget()) {
                 if (!inFence) {
                     sections.add(current.toString());
                     current = new StringBuilder();

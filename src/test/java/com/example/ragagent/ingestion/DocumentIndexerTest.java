@@ -121,7 +121,8 @@ class DocumentIndexerTest {
         when(props.llmSafe()).thenReturn(new AppProperties.LlmConfig(
                 java.util.List.of(), 2, 10, 180, "COST_FIRST", 3, 20, 0.0, 0.1, 0.0, 0.7, true, 8000, true));
         MarkdownCorrectionService realCorrectionForRenumber =
-                new MarkdownCorrectionService(mock(com.example.ragagent.llm.LlmRouter.class), props);
+                new MarkdownCorrectionService(mock(com.example.ragagent.llm.LlmRouter.class), props,
+                        new com.example.ragagent.llm.ProviderContextWindows());
         when(correctionService.reapplyHeadingNumbers(any()))
                 .thenAnswer(inv -> realCorrectionForRenumber.reapplyHeadingNumbers(inv.getArgument(0)));
         // postProcess (also no LLM call) — same real-instance delegation as reapplyHeadingNumbers above.
