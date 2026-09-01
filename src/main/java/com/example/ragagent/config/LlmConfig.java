@@ -1,6 +1,7 @@
 package com.example.ragagent.config;
 
 import com.example.ragagent.exception.LlmProviderExhaustedException;
+import com.example.ragagent.llm.MaxTokensCappingChatModel;
 import com.example.ragagent.llm.*;
 import com.example.ragagent.repository.LlmUsageRepository;
 import org.slf4j.Logger;
@@ -89,6 +90,9 @@ public class LlmConfig {
                     // ResourceAccessException which includes SocketTimeoutException). Without this,
                     // a single slow LLM call sends the same request up to 10 times.
                     // LlmRouter.executeWithTracking() handles retries at the router level instead.
+                    // 프로바이더별 max-tokens (미설정/0 이하면 전역값) — concurrency 와 같은 폴백 규약.
+                    int effectiveMaxTokens = (cfg.maxTokens() != null && cfg.maxTokens() > 0)
+                            ? cfg.maxTokens() : llmCfg.maxTokens();
                     ChatModel rawModel = OpenAiChatModel.builder()
                             .openAiApi(api)
                             // §6.18 — was hardcoded temperature(0.0)/maxTokens(6000); now the effective
@@ -102,12 +106,16 @@ public class LlmConfig {
                             .defaultOptions(OpenAiChatOptions.builder()
                                     .model(cfg.model())
                                     .temperature(llmCfg.temperature())
-                                    .maxTokens(llmCfg.maxTokens())
+                                    .maxTokens(effectiveMaxTokens)
                                     .build())
                             .retryTemplate(RetryTemplate.builder().maxAttempts(1).build())
                             .build();
-                    ChatModel model = new LoggingChatModel(rawModel, cfg.name(),
-                            resolvedUrl, effectiveApiKey, cfg.model());
+                    // defaultOptions 만으로는 부족하다 — 블로킹 호출부가 매번 자기 maxTokens 를
+                    // 실어 보내 그 기본값을 덮어쓴다. 이 데코레이터가 프로바이더 선택 '이후'에
+                    // 상한으로 눌러 준다(MaxTokensCappingChatModel 클래스 주석 참고).
+                    ChatModel model = new LoggingChatModel(
+                            new MaxTokensCappingChatModel(rawModel, cfg.name(), effectiveMaxTokens),
+                            cfg.name(), resolvedUrl, effectiveApiKey, cfg.model());
                     return new LlmProvider(
                             cfg.name(),
                             TaskType.valueOf(typeStr),

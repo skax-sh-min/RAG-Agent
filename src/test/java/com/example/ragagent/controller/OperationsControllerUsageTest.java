@@ -77,7 +77,7 @@ class OperationsControllerUsageTest {
     @BeforeEach
     void setUp() {
         var chatProvider = new AppProperties.ProviderConfig(
-                "local", "http://localhost:1234/v1", "sk-fake", "gemma", "BOTH", "LOCAL", 0, true, null);
+                "local", "http://localhost:1234/v1", "sk-fake", "gemma", "BOTH", "LOCAL", 0, true, null, null);
         when(props.llmSafe()).thenReturn(new AppProperties.LlmConfig(
                 List.of(chatProvider), 2, 10, 180, "COST_FIRST", 0.6, 3, 20, 0.0, 0.1, 0.0, 0.7, true, 6000, true));
         when(props.embeddingSafe()).thenReturn(new AppProperties.EmbeddingConfig(
@@ -251,9 +251,9 @@ class OperationsControllerUsageTest {
     /** apiKey="" → unconfigured; only shown when usedProviders() contains its name. */
     private void withGhostProvider() {
         var local = new AppProperties.ProviderConfig(
-                "local", "http://localhost:1234/v1", "sk-fake", "gemma", "BOTH", "LOCAL", 0, true, null);
+                "local", "http://localhost:1234/v1", "sk-fake", "gemma", "BOTH", "LOCAL", 0, true, null, null);
         var ghost = new AppProperties.ProviderConfig(
-                "ghost", "https://api.example.com", "", "ghost-model", "TEXT", "NORMAL", 1, true, null);
+                "ghost", "https://api.example.com", "", "ghost-model", "TEXT", "NORMAL", 1, true, null, null);
         when(props.llmSafe()).thenReturn(new AppProperties.LlmConfig(
                 List.of(local, ghost), 2, 10, 180, "COST_FIRST", 0.6, 3, 20, 0.0, 0.1, 0.0, 0.7, true, 6000, true));
     }

@@ -59,7 +59,7 @@ class SettingsServiceTest {
         java.util.List<AppProperties.ProviderConfig> pcs = new java.util.ArrayList<>();
         for (String n : names) {
             pcs.add(new AppProperties.ProviderConfig(
-                    n, "http://x/v1", "key", "model", "BOTH", "LOCAL", 1, true, null));
+                    n, "http://x/v1", "key", "model", "BOTH", "LOCAL", 1, true, null, null));
         }
         AppProperties.LlmConfig llm = new AppProperties.LlmConfig(
                 pcs, 2, 10, 180, "COST_FIRST", 0.6, 3, 20, 0.0, 0.1, 0.0, 0.7, true, 6000, false);
@@ -74,7 +74,7 @@ class SettingsServiceTest {
     private static AppProperties propsWithProvidersOfRoles(String routingMode, Map<String, String> nameToRole) {
         List<AppProperties.ProviderConfig> pcs = new java.util.ArrayList<>();
         nameToRole.forEach((name, role) -> pcs.add(new AppProperties.ProviderConfig(
-                name, "http://x/v1", "key", "model", "BOTH", role, 1, true, null)));
+                name, "http://x/v1", "key", "model", "BOTH", role, 1, true, null, null)));
         AppProperties.LlmConfig llm = new AppProperties.LlmConfig(
                 pcs, 2, 10, 180, routingMode, 0.6, 3, 20, 0.0, 0.1, 0.0, 0.7, true, 6000, false);
         return new AppProperties(

@@ -54,7 +54,7 @@ class LlmConfigVerificationTest {
 
     private AppProperties.ProviderConfig localProvider(String baseUrl, String model) {
         return new AppProperties.ProviderConfig(
-                "local", baseUrl, "", model, "BOTH", "LOCAL", 1, true, null);
+                "local", baseUrl, "", model, "BOTH", "LOCAL", 1, true, null, null);
     }
 
     private AppProperties propsWith(AppProperties.ProviderConfig provider, boolean verifyOnStartup) {

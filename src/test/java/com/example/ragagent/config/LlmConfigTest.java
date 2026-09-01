@@ -44,7 +44,7 @@ class LlmConfigTest {
 
     private AppProperties.ProviderConfig provider(String name, String role, String type, String apiKey) {
         return new AppProperties.ProviderConfig(
-                name, "http://localhost:1234/v1", apiKey, "test-model", type, role, 0, true, null);
+                name, "http://localhost:1234/v1", apiKey, "test-model", type, role, 0, true, null, null);
     }
 
     @Test

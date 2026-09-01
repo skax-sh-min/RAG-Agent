@@ -79,7 +79,8 @@ public record AppProperties(
             String role,
             int priority,
             Boolean stream,
-            Integer concurrency  // this provider's own concurrency slots; null/<=0 falls back to LlmConfig.defaultProviderConcurrency
+            Integer concurrency, // this provider's own concurrency slots; null/<=0 falls back to LlmConfig.defaultProviderConcurrency
+            Integer maxTokens    // this provider's own blocking-call output cap; null/<=0 falls back to LlmConfig.maxTokens. Exists because context windows differ per model — a 8k local model and a 128k cloud model cannot share one ceiling. Enforced by MaxTokensCappingChatModel (baking it into the provider bean's defaultOptions is not enough: every blocking call site attaches its own maxTokens, which would override it)
     ) {
         /**
          * True when this provider will actually be registered as a live {@code LlmProvider} by
