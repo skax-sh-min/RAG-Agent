@@ -476,6 +476,14 @@ public class StreamingAgentService {
             if (s.chunkId() != null && s.answerShare() != null) shares.put(s.chunkId(), s.answerShare());
         }
         if (!shares.isEmpty()) m.put("attribution", shares);
+        // 컨텍스트 예산으로 프롬프트에서 빠진 출처 — 참여도와 같은 이유로 사후 갱신이다. 출처 배지는
+        // RETRIEVAL 직후에 그려지는데 축소는 ANSWER 에서 일어나므로, 그 시점에는 알 수 없는 값이다.
+        List<String> excluded = result.sources().stream()
+                .filter(SourceRef::promptExcluded)
+                .map(SourceRef::chunkId)
+                .filter(java.util.Objects::nonNull)
+                .toList();
+        if (!excluded.isEmpty()) m.put("promptExcluded", excluded);
         m.put("refreshThreadList", true);
         m.put("turnId",            turnId);
         return m;

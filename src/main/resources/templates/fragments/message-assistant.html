@@ -94,6 +94,12 @@
                                 data-bs-trigger='hover focus',
                                 data-bs-placement='left',
                                 data-preview-md=${src.preview}"></a>
+                    <!-- 프롬프트에서 빠진 출처 — 모델이 읽지 '못한' 것이라, 읽고도 안 쓴
+                         (answerShare 0) 것과 구별해서 보여야 한다. -->
+                    <span th:if="${src.promptExcluded}"
+                          class="badge ms-1 bg-secondary-subtle text-secondary-emphasis border border-secondary-subtle"
+                          style="font-size:0.62rem; vertical-align:middle; cursor:help;"
+                          th:title="'컨텍스트 한도로 이 출처는 답변 생성에 사용되지 않았습니다. 모델이 읽지 못한 문서이므로 답변이 이 내용을 반영하지 못했을 수 있습니다.'">미사용</span>
                     <!-- 검색 진단 수치: 항상 렌더하되 기본 숨김 — ui.retrieval-metrics-enabled가
                          켜져 있을 때만 하단 스크립트가 d-none을 벗긴다(스트리밍 경로와 동일 규칙). -->
                     <span class="source-metrics text-muted d-none" style="font-size:0.72rem;"

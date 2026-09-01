@@ -32,7 +32,7 @@ public class MemoryService {
      */
     private static final ObjectMapper objectMapper = new ObjectMapper();
 
-    private final int maxConversationChars;
+    private final AppProperties props;
     private final MemoryRepository repository;
 
     // Single source of truth for "LLM max tokens" (app.llm.max-tokens / LLM_MAX_TOKENS, default
@@ -40,21 +40,28 @@ public class MemoryService {
     // (default 8000), which config'd nothing (Spring AI's autoconfigured ChatModel bean is skipped
     // since LlmConfig.primaryChatModel() already satisfies its @ConditionalOnMissingBean).
     public MemoryService(MemoryRepository repository, AppProperties props) {
-        this.maxConversationChars = Math.max(1_000, props.llmSafe().maxTokens() / 2);
+        this.props = props;
         this.repository = repository;
     }
 
     public String getHistory(String userId, String threadId) {
-        return repository.getHistory(userId, threadId, maxConversationChars);
+        return repository.getHistory(userId, threadId, maxConversationChars());
     }
 
     /**
      * Char budget applied to conversation history (LLM_MAX_TOKENS × 0.5, floor 1,000).
      * Exposed so the summary path ({@code ConversationSummarizerService.buildContext()}) can
      * respect the exact same ceiling as this fallback path — single source of truth (§6.11).
+     *
+     * <p><b>매 호출 재계산한다.</b> 예전에는 생성자에서 한 번 굳혔는데, {@code app.llm.max-tokens} 는
+     * {@code /settings} 에서 바뀔 수 있는 값이라 재기동 전까지 이력 예산만 옛 값에 머물렀다 — 이 앱의
+     * "핫 값은 소비처가 매 호출 재조회한다"는 규약을 이 한 곳이 어기고 있었다. 컨텍스트 예산 축소
+     * ({@code AnswerService.fitToBudget()})가 이 값과 같은 {@code max-tokens} 에서 파생되므로, 굳어
+     * 있으면 <b>둘이 서로 다른 상한을 믿는 상태</b>가 만들어진다: 운영자가 상한을 내려도 이력은 옛
+     * 크기로 실려 오고, 축소 쪽만 새 예산으로 그것을 잘라낸다.
      */
     public int maxConversationChars() {
-        return maxConversationChars;
+        return Math.max(1_000, props.llmSafe().maxTokens() / 2);
     }
 
     /** Returns the generated turn id (conversation_turns.id). {@code selectedTags} is the

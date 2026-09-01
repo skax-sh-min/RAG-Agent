@@ -375,6 +375,29 @@
         reorderSources(container);
     }
 
+    /* done 이벤트의 promptExcluded(chunkId 배열)를 이미 그려진 출처 배지에 덧붙인다.
+       참여도(applyAttribution)와 같은 사후 갱신이고 이유도 같다 — 배지는 RETRIEVAL 직후에
+       그려지는데 축소는 ANSWER 에서 일어난다.
+       '읽고도 안 썼다'(응답 0%)와 '읽지도 못했다'는 전혀 다른 사실이라 따로 표시한다.
+       서버 렌더러 둘과 같은 문구를 쓴다 — 바꾸면 세 곳을 함께 고쳐야 한다. */
+    function applyPromptExcluded(bubbleId, excludedIds) {
+        if (!excludedIds || excludedIds.length === 0) return;
+        const container = document.getElementById(`stream-sources-${bubbleId}`);
+        if (!container) return;
+        const excluded = new Set(excludedIds);
+        container.querySelectorAll('.source-ref[data-chunk-id]').forEach(badge => {
+            if (!excluded.has(badge.getAttribute('data-chunk-id'))) return;
+            const item = badge.closest('.source-item');
+            if (!item || item.dataset.hasExcluded === '1') return;   // 재진입 방지(멱등)
+            item.dataset.hasExcluded = '1';
+            badge.insertAdjacentHTML('afterend',
+                ` <span class="badge bg-secondary-subtle text-secondary-emphasis border border-secondary-subtle"`
+                + ` style="font-size:0.62rem; vertical-align:middle; cursor:help;"`
+                + ` title="컨텍스트 한도로 이 출처는 답변 생성에 사용되지 않았습니다.`
+                + ` 모델이 읽지 못한 문서이므로 답변이 이 내용을 반영하지 못했을 수 있습니다.">미사용</span>`);
+        });
+    }
+
     function onSources(bubbleId, sources) {
         const container = document.getElementById(`stream-sources-${bubbleId}`);
         if (!container || !sources || sources.length === 0) return;
@@ -516,6 +539,7 @@
         //    참여도는 답변이 끝나야 나오므로 여기서 chunkId로 찾아 덧붙인다. 재시도가 있었으면
         //    `sources`가 다시 와서 배지가 새로 그려졌을 수 있으므로 항상 현재 DOM 기준으로 찾는다.
         applyAttribution(bubbleId, data.attribution);
+        applyPromptExcluded(bubbleId, data.promptExcluded);
 
         // 4. Feedback buttons (like/dislike) + metadata footer, same line — feedback first (left).
         //    Uses the same .feedback-btn/.feedback-controls markup the chat.html delegated

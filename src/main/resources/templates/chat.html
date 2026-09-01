@@ -239,6 +239,10 @@
                                                SourceRef.staleBadge()가 전부 갖고 있다(삭제는 항상,
                                                수정은 응답 지분이 있는 출처만). 템플릿에 조건을 풀어
                                                쓰면 스트리밍/HTMX 경로와 규칙이 갈라진다. -->
+                                          <span th:if="${src.promptExcluded}"
+                                                class="badge ms-1 bg-secondary-subtle text-secondary-emphasis border border-secondary-subtle"
+                                                style="font-size:0.62rem; vertical-align:middle; cursor:help;"
+                                                th:title="'컨텍스트 한도로 이 출처는 답변 생성에 사용되지 않았습니다. 모델이 읽지 못한 문서이므로 답변이 이 내용을 반영하지 못했을 수 있습니다.'">미사용</span>
                                           <span th:if="${src.staleBadge != null}"
                                                 class="badge ms-1"
                                                 style="font-size:0.62rem; vertical-align:middle;"

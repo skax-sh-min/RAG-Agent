@@ -589,7 +589,7 @@ class AdminControllerWebMvcTest {
     private static com.example.ragagent.service.RetrievalMetricsService.TurnMetrics metricTurn(
             long turnId, String mode, String userId, String threadId, String threadTitle) {
         var src = new com.example.ragagent.model.SourceRef(
-                "doc.md | 1.2", "미리보기", "c1", "d1", 3, 0.72, 0.18, "vec:2", 0.31, null);
+                "doc.md | 1.2", "미리보기", "c1", "d1", 3, 0.72, 0.18, "vec:2", 0.31, null, false);
         return new com.example.ragagent.service.RetrievalMetricsService.TurnMetrics(
                 turnId, "2026-08-27 05:22:00", "청크 분할 전략", mode, "local",
                 List.of(src), 0.72, 1, userId, threadId, threadTitle);
@@ -653,7 +653,7 @@ class AdminControllerWebMvcTest {
     void turnSources_rendersSharedFragment() throws Exception {
         when(retrievalMetricsService.sourcesForTurn(7L)).thenReturn(List.of(
                 new com.example.ragagent.model.SourceRef(
-                        "doc.md | 1.2", "미리보기", "c1", "d1", 3, 0.72, 0.18, "vec:2", 0.31, null)));
+                        "doc.md | 1.2", "미리보기", "c1", "d1", 3, 0.72, 0.18, "vec:2", 0.31, null, false)));
 
         mvc.perform(get("/admin/retrieval-metrics/turns/7/sources").with(user(ADMIN)))
                 .andExpect(status().isOk())

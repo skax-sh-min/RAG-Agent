@@ -209,7 +209,10 @@ public class RetrievalMetricsService {
                                 live.pageOrSlide(),
                                 m.similarity(), m.retrievalShare(), m.axisRanks(), m.answerShare(),
                                 // 저장된 blob이 아니라 현재 DB 상태에서 온 값 — 병합으로 덮으면 안 된다.
-                                live.staleStatus());
+                                live.staleStatus(),
+                                // 반대로 이건 그 턴의 사실이라 blob 쪽이 정답이다 — 지금 다시
+                                // 계산할 수 없고(그때의 창·예산을 모른다) 계산해서도 안 된다.
+                                m.promptExcluded());
                     })
                     .toList()));
         }

@@ -138,9 +138,10 @@ class AnswerServiceTest {
     @Test
     @DisplayName("창이 좁으면 관련도 낮은 뒤쪽 문서부터 덜어낸다")
     void narrowContextDropsLowestRankedDocumentsFirst() {
-        // 창 16,000 → 예산 = 16,000 − 예약 7,000 − 여유 1,600 = 7,400 토큰.
-        // 고정비(질문 + 프롬프트 오버헤드) ≈ 2,002 이므로 문서 셋(각 ~2,003) 중 둘만 들어간다.
-        contextWindows.record("lm", 16_000, ProviderContextWindows.Source.CONFIGURED);
+        // 창 13,000 → 예산 = 13,000 − 예약 7,000 − 여유 1,300 = 4,700 토큰.
+        // 고정비 ≈ 203(목 시스템 프롬프트 "prompt" + 질문 + 섹션 머리말 200)이므로
+        // 문서 셋(각 ~2,003) 중 둘까지만 들어간다: 203+2,003+2,003=4,209 ≤ 4,700 < 6,212.
+        contextWindows.record("lm", 13_000, ProviderContextWindows.Source.CONFIGURED);
         when(llmRouter.findProviderName(any(), any())).thenReturn("lm");
         var seen = capturePrompt();
 
@@ -162,9 +163,9 @@ class AnswerServiceTest {
     @Test
     @DisplayName("문서를 다 덜어내도 모자라면 대화 이력을 오래된 턴부터 버린다")
     void historyIsTrimmedOldestFirstWhenDocumentsAreNotEnough() {
-        // 창 12,000 → 예산 3,800. 고정비 ~2,002 + 문서 1,000 을 빼면 이력에 ~798 만 남아,
+        // 창 10,000 → 예산 2,000. 고정비 ~203 + 문서 1,000 을 빼면 이력에 ~797 만 남아,
         // 1,500자짜리 오래된 턴은 버려지고 200자짜리 최근 턴만 살아남는다.
-        contextWindows.record("lm", 12_000, ProviderContextWindows.Source.CONFIGURED);
+        contextWindows.record("lm", 10_000, ProviderContextWindows.Source.CONFIGURED);
         when(llmRouter.findProviderName(any(), any())).thenReturn("lm");
         var seen = capturePrompt();
 
@@ -184,8 +185,8 @@ class AnswerServiceTest {
     @Test
     @DisplayName("이력은 턴 경계에서 잘린다 — 반쪽짜리 턴을 남기지 않는다")
     void historyIsCutAtTurnBoundaries() {
-        // 창 12,000 → 예산 3,800, 고정비 ~2,002 → 이력에 ~1,798. 2,000자 턴은 못 들어간다.
-        contextWindows.record("lm", 12_000, ProviderContextWindows.Source.CONFIGURED);
+        // 창 10,000 → 예산 2,000, 고정비 ~203 → 이력에 ~1,797. 2,000자 턴은 못 들어간다.
+        contextWindows.record("lm", 10_000, ProviderContextWindows.Source.CONFIGURED);
         when(llmRouter.findProviderName(any(), any())).thenReturn("lm");
         var seen = capturePrompt();
 
@@ -275,6 +276,79 @@ class AnswerServiceTest {
         // 창 4,096 → 예산 4,096 − 2,048 − 409 = 1,639. 첫 문서(1,503)만 들어간다.
         assertThat(evalPrompt).as("첫 발췌는 예산을 넘어도 남는다").contains("첫번째");
         assertThat(evalPrompt).as("좁은 창에서는 하위 순위 발췌가 빠진다").doesNotContain("두번째");
+    }
+
+    @Test
+    @DisplayName("턴 경계가 없는 이력(요약 경로)도 통째로 버리지 않고 줄 단위로 줄인다")
+    void historyWithoutTurnBoundariesIsTrimmedByLine() {
+        // §6.10 요약 경로는 "Q:/A:" 쌍이 아니라 요약문을 준다 — 예전 구현은 경계를 못 찾아
+        // 이력 전체를 버렸고, 예산이 조금 모자랄 뿐인데 대화 맥락을 통째로 잃었다.
+        contextWindows.record("lm", 10_000, ProviderContextWindows.Source.CONFIGURED);
+        when(llmRouter.findProviderName(any(), any())).thenReturn("lm");
+        var seen = capturePrompt();
+
+        String summary = "오래된요약" + "옛".repeat(2_000) + "\n최근요약줄";
+        AgentState state = newState(RoutingMode.COST_FIRST).toBuilder()
+                .conversationHistory(summary)
+                .build();
+        service.execute(state);
+
+        String prompt = seen.get();
+        assertThat(prompt).as("이력이 통째로 사라지면 안 된다").contains("최근요약줄");
+        assertThat(prompt).as("앞쪽(오래된 줄)부터 버린다").doesNotContain("오래된요약");
+    }
+
+    @Test
+    @DisplayName("PROGRESSIVE 업그레이드는 PREMIUM 의 창으로 예산을 다시 잡는다 — 로컬 기준으로 깎지 않는다")
+    void premiumUpgradeBudgetsAgainstThePremiumProvider() {
+        // 로컬은 좁고(8,192) PREMIUM 은 넓다(64,000). 예전에는 두 호출 모두 state.routingMode() 로
+        // 프로바이더를 찾아, 넓은 창으로 가는 업그레이드 답변까지 좁은 창 기준으로 문서를 버렸다.
+        contextWindows.record("local", 8_192, ProviderContextWindows.Source.CONFIGURED);
+        contextWindows.record("premium", 64_000, ProviderContextWindows.Source.CONFIGURED);
+        when(llmRouter.findProviderName(any(), any())).thenReturn("local");
+
+        var premium = new com.example.ragagent.llm.LlmProvider(
+                "premium", com.example.ragagent.llm.TaskType.TEXT,
+                com.example.ragagent.llm.ProviderRole.PREMIUM, 1, "k", null, null, false,
+                mock(org.springframework.ai.chat.model.ChatModel.class), null);
+        when(llmRouter.routeProvider(any(), eq(RoutingMode.QUALITY_FIRST))).thenReturn(premium);
+
+        var prompts = new java.util.ArrayList<String>();
+        when(llmRouter.executeGatedWithUsage(any(), any(), any())).thenAnswer(inv -> {
+            java.util.function.Function<org.springframework.ai.chat.model.ChatModel,
+                    org.springframework.ai.chat.model.ChatResponse> fn = inv.getArgument(2);
+            org.springframework.ai.chat.model.ChatModel probe =
+                    mock(org.springframework.ai.chat.model.ChatModel.class);
+            when(probe.call(any(org.springframework.ai.chat.prompt.Prompt.class))).thenAnswer(call -> {
+                org.springframework.ai.chat.prompt.Prompt prompt = call.getArgument(0);
+                prompts.add(prompt.getInstructions().stream()
+                        .map(org.springframework.ai.chat.messages.Message::getText)
+                        .reduce("", (a, b) -> a + "\n" + b));
+                return chatResponse("{\"sufficient\":false,\"grounded\":false}");
+            });
+            fn.apply(probe);
+            // 첫 호출(답변)은 본문, 이후 검증 호출은 불충분 판정 → PROGRESSIVE 업그레이드 유발
+            return new LlmRouter.LlmResult(
+                    prompts.size() == 1 ? "답변" : "{\"sufficient\":false,\"grounded\":false}", 0, 0);
+        });
+
+        var docs = List.of(
+                new org.springframework.ai.document.Document("첫번째" + "가".repeat(2_000)),
+                new org.springframework.ai.document.Document("두번째" + "나".repeat(2_000)),
+                new org.springframework.ai.document.Document("세번째" + "다".repeat(2_000)));
+        // 업그레이드는 재시도를 다 쓴 뒤에만 일어난다(checkSufficiencyAndMaybeUpgrade).
+        service.execute(newState(RoutingMode.PROGRESSIVE).toBuilder()
+                .retrievedDocs(docs).retryCount(MAX_RETRY).build());
+
+        // 한 턴에는 답변 호출과 검증 호출이 섞여 나간다 — 예산이 걸리는 것은 답변 프롬프트이고,
+        // 그쪽만 "[검색된 문서]" 섹션을 갖는다(검증은 "[문서 발췌]").
+        List<String> answerPrompts = prompts.stream().filter(p -> p.contains("[검색된 문서]")).toList();
+        assertThat(answerPrompts).as("답변 호출이 두 번(원본 + 업그레이드) 나가야 한다").hasSizeGreaterThanOrEqualTo(2);
+
+        assertThat(answerPrompts.getFirst())
+                .as("원래 로컬 창(8,192)에서는 하위 문서가 잘린다").doesNotContain("세번째");
+        assertThat(answerPrompts.getLast())
+                .as("PREMIUM 창(64,000)이면 세 문서가 다 들어간다").contains("세번째");
     }
 
     private static int countOccurrences(String haystack, String needle) {

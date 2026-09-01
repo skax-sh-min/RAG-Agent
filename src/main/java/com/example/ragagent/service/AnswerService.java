@@ -5,6 +5,7 @@ import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.ingestion.MarkdownNoiseNormalizer;
 import com.example.ragagent.model.MetaKey;
 import com.example.ragagent.model.ResponseMode;
+import com.example.ragagent.model.SourceRef;
 import com.example.ragagent.llm.LlmCurlLogger;
 import com.example.ragagent.llm.LlmProvider;
 import com.example.ragagent.llm.LlmRouter;
@@ -30,6 +31,7 @@ import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import java.util.Locale;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
@@ -92,15 +94,17 @@ public class AnswerService {
     private static final int MAX_EVAL_OUTPUT_TOKENS = 2_048;
 
     /**
-     * 답변 프롬프트에서 문서·이력·질문 말고 <b>고정으로 들어가는 것</b>의 대략적 토큰 수 —
-     * 시스템 프롬프트와 섹션 머리말({@code [이전 대화]}·{@code [검색된 문서]}·{@code [질문]})이다.
+     * 답변 프롬프트의 <b>섹션 머리말과 구분선</b>({@code [이전 대화]}·{@code [검색된 문서]}·
+     * {@code [질문]}·문서 사이 {@code ---}·{@code [파일명 | p.N]} 라벨)이 차지하는 몫.
      *
-     * <p>정확히 세지 않는 이유는 시스템 프롬프트가 응답 모드·로케일마다 다른 메시지 번들에서
-     * 오고, 그걸 예산 계산 때문에 매번 불러오면 계산이 프롬프트 조립보다 무거워지기 때문이다.
-     * 한/영 번들의 모드별 시스템 프롬프트가 1,200~1,800자 범위이므로 넉넉한 쪽으로 잡는다 —
-     * 이 값이 실제보다 크면 조금 덜 담고, 작으면 초과한다. 어느 쪽이 안전한지는 분명하다.
+     * <p>시스템 프롬프트는 여기 포함되지 않는다 — 그쪽은 {@code fitToBudget()} 이 실제로 세기
+     * 때문이다. 예전에는 둘을 합쳐 2,000 으로 뭉뚱그렸는데, 모드·로케일마다 시스템 프롬프트 길이가
+     * 크게 다르고(S 는 N 보다 훨씬 짧다) 그 차이만큼 좁은 창에서 문서를 괜히 버렸다.
+     *
+     * <p>남은 이 값은 라벨·구분선처럼 문서 개수에 비례하는 잔돈이라 상수로 둔다. 실제로는 topK 10 ·
+     * 라벨 30자 기준 100 토큰 안쪽이므로, 넉넉한 쪽(200)으로 잡아도 예산에 거의 영향이 없다.
      */
-    private static final int ANSWER_PROMPT_OVERHEAD_TOKENS = 2_000;
+    private static final int ANSWER_PROMPT_SECTION_OVERHEAD_TOKENS = 200;
 
     /**
      * single evaluation call returns both gates, plus one sentence explaining a failure.
@@ -172,11 +176,15 @@ public class AnswerService {
      * 답변이 자라날 자리는 여전히 필요하므로 같은 값을 <b>예상 분량</b>으로 잡아 둔다 — 입력이 창을
      * 꽉 채우면 생성할 자리가 없어 결국 같은 초과가 난다.
      */
-    private PromptBudget budgetFor(AgentState state) {
-        int window = contextWindows.tokensOrZero(
-                llmRouter.findProviderName(TaskType.TEXT, state.routingMode()));
+    private PromptBudget budgetFor(AgentState state, String providerName) {
+        int window = contextWindows.tokensOrZero(providerName);
         if (window <= 0) return null;   // 창을 모른다 — 추측으로 근거를 버리지 않는다
         return new PromptBudget(window, state.responseMode().maxTokens(props.llmSafe().maxTokens()));
+    }
+
+    /** 아직 프로바이더가 정해지지 않은 자리에서 쓰는 추정 — 라우터에게 "지금이라면 누구" 를 묻는다. */
+    private String likelyProvider(AgentState state) {
+        return llmRouter.findProviderName(TaskType.TEXT, state.routingMode());
     }
 
     public AgentState execute(AgentState state) {
@@ -200,15 +208,40 @@ public class AnswerService {
      * 같은 입력에 같은 함수라 결과가 갈리지 않는다 — 로직을 복제하는 대신 한 함수를 두 번 부른다.
      */
     private AgentState withBudgetNote(AgentState state) {
-        String note = fitToBudget(state).note();
-        return note == null ? state : state.toBuilder().budgetNote(note).build();
+        Fitted fitted = fitToBudget(state, likelyProvider(state));
+        if (fitted.note() == null) return state;
+        return state.toBuilder()
+                .budgetNote(fitted.note())
+                .sources(markExcludedSources(state.sources(), fitted.docs()))
+                .build();
+    }
+
+    /**
+     * 프롬프트에 실리지 못한 출처에 표시를 남긴다 — 턴 단위 안내가 <b>몇 개</b>인지 말한다면 이쪽은
+     * <b>어느 것</b>인지를 말한다.
+     *
+     * <p>위치가 아니라 {@code chunkId} 로 맞춘다. 출처 목록은 나중에 응답 참여도 기준으로 다시
+     * 정렬되므로({@code SourceRef.DISPLAY_ORDER}) "뒤에서 N개"라는 위치 규칙은 화면에 닿기 전에
+     * 무너진다. chunk id 를 모르는 출처(구 기록·폴백 경로)는 건드리지 않는다 — 확인할 수 없는 것을
+     * 빠졌다고 표시하면 그 표시 자체를 믿을 수 없게 된다.
+     */
+    private static List<SourceRef> markExcludedSources(List<SourceRef> sources, List<Document> keptDocs) {
+        if (sources.isEmpty()) return sources;
+        Set<String> keptIds = keptDocs.stream()
+                .map(Document::getId)
+                .filter(java.util.Objects::nonNull)
+                .collect(java.util.stream.Collectors.toSet());
+        return sources.stream()
+                .map(s -> (s.chunkId() != null && !keptIds.contains(s.chunkId()))
+                        ? s.markPromptExcluded() : s)
+                .toList();
     }
 
     // ── Blocking paths ──────────────────────────────────────────────────────
 
     private AgentState executeBlocking(AgentState state) {
         String systemPrompt = answerSystemPrompt(state.locale(), state.responseMode());
-        String userPrompt = buildAnswerPrompt(state);
+        String userPrompt = buildAnswerPrompt(state, likelyProvider(state));
         ChatOptions options = answerOptions(state);
         LlmRouter.LlmResult result = llmRouter.executeGatedWithUsage(TaskType.TEXT, state.routingMode(),
                 model -> model.call(buildPrompt(systemPrompt, userPrompt, options)));
@@ -234,7 +267,7 @@ public class AnswerService {
         // streaming has no ChatResponse to read real usage from — record an approximate
         // (chars/4) usage entry so /llm-usage isn't blind to the entire streaming chat path, and
         // reflect the same estimate in the per-turn total so the chat UI isn't stuck at 0/0.
-        String promptText = systemPrompt + buildAnswerPrompt(state);
+        String promptText = systemPrompt + buildAnswerPrompt(state, provider.name());
         llmRouter.recordApproxUsage(provider.name(), promptText, answer);
         int approxIn = (int) LlmRouter.approxTokens(promptText);
         int approxOut = (int) LlmRouter.approxTokens(answer);
@@ -274,12 +307,12 @@ public class AnswerService {
             try (var permit = llmRouter.acquirePermit(premiumProvider)) {
                 premiumAnswer = streamAnswer(premiumProvider, state, systemPrompt, listener::onToken);
             }
-            String promptText = systemPrompt + buildAnswerPrompt(state);
+            String promptText = systemPrompt + buildAnswerPrompt(state, premiumProvider.name());
             llmRouter.recordApproxUsage(premiumProvider.name(), promptText, premiumAnswer);
             inputTokens = (int) LlmRouter.approxTokens(promptText);
             outputTokens = (int) LlmRouter.approxTokens(premiumAnswer);
         } else {
-            String userPrompt = buildAnswerPrompt(state);
+            String userPrompt = buildAnswerPrompt(state, premiumProvider.name());
             LlmRouter.LlmResult result = llmRouter.executeGatedWithUsage(
                     TaskType.TEXT, RoutingMode.QUALITY_FIRST,
                     model -> model.call(buildPrompt(systemPrompt, userPrompt, answerOptions(state)))
@@ -318,7 +351,7 @@ public class AnswerService {
         if (provider.stream()) {
             // Bypass OpenAiChatModel.internalStream() which buffers ALL chunks via buffer(int,int)
             // before emitting, defeating real-time token delivery to the browser.
-            streamDirect(provider, systemPrompt, buildAnswerPrompt(state), tokenSink,
+            streamDirect(provider, systemPrompt, buildAnswerPrompt(state, provider.name()), tokenSink,
                     state.threadId(), state.routingMode(), answerTemperature(state.responseMode()));
         } else {
             // stream=false: still use streaming HTTP to stay compatible with local LLM servers
@@ -329,7 +362,7 @@ public class AnswerService {
             if (options != null) spec = spec.options(options);
             spec
                     .system(systemPrompt)
-                    .user(buildAnswerPrompt(state))
+                    .user(buildAnswerPrompt(state, provider.name()))
                     .stream()
                     .content()
                     .doOnNext(buf::append)
@@ -588,8 +621,7 @@ public class AnswerService {
      * 프로바이더의 일반 예약이 아니라 실제로 예약되는 값을 빼야 맞다.
      */
     private long evalExcerptTokenBudget(AgentState state, String systemPrompt, String answer, String schema) {
-        int window = contextWindows.tokensOrZero(
-                llmRouter.findProviderName(TaskType.TEXT, state.routingMode()));
+        int window = contextWindows.tokensOrZero(likelyProvider(state));
         if (window <= 0) return 0;   // 창 모름 → 글자 상한만 적용(예전 동작 그대로)
         long fixed = TokenEstimator.estimate(systemPrompt)
                 + TokenEstimator.estimate(answer)
@@ -742,13 +774,21 @@ public class AnswerService {
         return builder.build();
     }
 
-    private String buildAnswerPrompt(AgentState state) {
+    /**
+     * @param providerName 이 프롬프트를 <b>실제로 받을</b> 프로바이더. 예산이 그 프로바이더의 창에서
+     *                     나오므로 호출부마다 다르다 — 특히 PROGRESSIVE 업그레이드는 창이 더 큰
+     *                     PREMIUM 으로 가는데, 예전에는 이 자리에서도 원래(로컬) 프로바이더 기준으로
+     *                     예산을 잡아 <b>업그레이드 답변이 필요 없이 적은 문서로 만들어졌다</b>.
+     *                     그래서 이 메서드는 호출마다 예산을 다시 계산한다 — 중복 계산이 아니라
+     *                     호출부마다 답이 달라야 하는 값이다.
+     */
+    private String buildAnswerPrompt(AgentState state, String providerName) {
         StringBuilder sb = new StringBuilder();
 
         // 예산에 맞춰 미리 덜어낸다. 호출 후에 초과 오류를 받고 재시도하는 것보다 왕복이 0회 싸고,
         // 무엇을 버릴지도 여기서만 알 수 있다(라우터는 프롬프트 안을 못 본다). 창을 모르면
         // fitToBudget 이 원본을 그대로 돌려주므로 예전과 동작이 같다.
-        Fitted fitted = fitToBudget(state);
+        Fitted fitted = fitToBudget(state, providerName);
 
         if (!fitted.history().isBlank()) {
             sb.append("[이전 대화]\n").append(fitted.history()).append("\n\n");
@@ -800,15 +840,18 @@ public class AnswerService {
      * 자를 수 있다. 답변 본문에도 빈 줄이 있을 수 있으므로 <b>빈 줄 다음에 {@code "Q: "} 가 오는
      * 자리</b>만 경계로 본다 — 문자 인덱스로 자르면 반쪽짜리 턴이 남아 모델을 더 헷갈리게 한다.
      */
-    private Fitted fitToBudget(AgentState state) {
+    private Fitted fitToBudget(AgentState state, String providerName) {
         List<Document> docs = state.retrievedDocs();
         String history = state.conversationHistory();
-        PromptBudget budget = budgetFor(state);
+        PromptBudget budget = budgetFor(state, providerName);
         if (budget == null) return new Fitted(docs, history, null);   // 창 모름 → 예전 그대로
 
-        long fixedCost = TokenEstimator.estimate(state.question())
+        // 시스템 프롬프트는 실제로 센다 — 모드·로케일마다 길이가 다르고(S 는 N 보다 훨씬 짧다),
+        // 넉넉히 잡은 상수로 대신하면 좁은 창에서 그 차이만큼 불필요하게 문서를 버린다.
+        long fixedCost = TokenEstimator.estimate(answerSystemPrompt(state.locale(), state.responseMode()))
+                + TokenEstimator.estimate(state.question())
                 + TokenEstimator.estimate(String.join("\n", state.retrievalWarnings()))
-                + ANSWER_PROMPT_OVERHEAD_TOKENS;
+                + ANSWER_PROMPT_SECTION_OVERHEAD_TOKENS;
         long limit = budget.inputBudget();
 
         List<Document> keptDocs = PromptBudget.fitByPrefix(docs,
@@ -853,17 +896,50 @@ public class AnswerService {
         return sb.append(".").toString();
     }
 
-    /** 턴 경계(빈 줄 + {@code "Q: "})에서 오래된 쪽부터 버린다. 예산이 음수면 전부 버린다. */
+    /**
+     * 오래된 쪽부터 버려 예산에 맞춘다 — 가능하면 <b>턴 경계</b>(빈 줄 + {@code "Q: "})에서.
+     *
+     * <p>이력은 {@code MemoryService} 의 폴백 경로에서 {@code "Q: …\nA: …"} 를 빈 줄로 이어 붙여
+     * 만들어지므로 그 경계가 존재한다. 다만 <b>항상 그 모양인 것은 아니다</b>: §6.10 요약 경로
+     * ({@code ConversationSummarizerService.buildContext()})는 요약문 + 최근 턴을 섞어 주고, 답변
+     * 본문 안에 빈 줄 다음 {@code "Q: "} 로 시작하는 줄이 있으면(FAQ 형식 답변) 경계가 더 잘게 잡힌다.
+     *
+     * <p>그래서 경계를 <b>찾지 못했을 때 전부 버리지 않는다</b>. 예전 구현은 분할 결과가 한 덩어리면
+     * 그 하나를 지우고 빈 문자열을 반환했다 — 요약 경로의 이력이 통째로 사라지는 것이 정확히 그
+     * 경우였고, 예산이 조금 모자랄 뿐인데 대화 맥락 전체를 잃었다. 이제는 줄 경계에서 앞을 잘라
+     * <b>가능한 만큼 남긴다</b>. 경계가 잘게 잡히는 쪽(FAQ 답변)은 필요보다 조금 더 버리는 것뿐이라
+     * 안전한 방향이다.
+     */
     private static String trimHistory(String history, long budget) {
         if (history == null || history.isBlank()) return "";
         if (budget <= 0) return "";
         if (TokenEstimator.estimate(history) <= budget) return history;
 
         List<String> turns = new ArrayList<>(List.of(history.split("\n\n(?=Q: )")));
-        while (!turns.isEmpty()) {
-            turns.removeFirst();   // 가장 오래된 턴
-            String candidate = String.join("\n\n", turns);
-            if (TokenEstimator.estimate(candidate) <= budget) return candidate;
+        if (turns.size() > 1) {
+            while (turns.size() > 1) {
+                turns.removeFirst();   // 가장 오래된 턴
+                String candidate = String.join("\n\n", turns);
+                if (TokenEstimator.estimate(candidate) <= budget) return candidate;
+            }
+            // 마지막 한 턴만 남았는데도 넘친다 — 아래 줄 단위 절단으로 넘긴다.
+            history = turns.getFirst();
+        }
+        return trimLeadingLines(history, budget);
+    }
+
+    /**
+     * 턴 경계를 쓸 수 없을 때의 폴백 — 앞에서부터 <b>줄 단위</b>로 덜어낸다.
+     *
+     * <p>문자 인덱스로 자르지 않는 이유는 문장·코드가 반 토막 나면 남은 이력이 오히려 모델을
+     * 헷갈리게 하기 때문이다. 한 줄도 못 남기면 빈 문자열이다(그 한 줄조차 예산을 넘는 경우).
+     */
+    private static String trimLeadingLines(String text, long budget) {
+        List<String> lines = new ArrayList<>(List.of(text.split("\n")));
+        while (!lines.isEmpty()) {
+            lines.removeFirst();
+            String candidate = String.join("\n", lines);
+            if (TokenEstimator.estimate(candidate) <= budget) return candidate.strip();
         }
         return "";
     }

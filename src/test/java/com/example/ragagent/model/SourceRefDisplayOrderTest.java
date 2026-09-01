@@ -17,7 +17,7 @@ class SourceRefDisplayOrderTest {
 
     private static SourceRef ref(String label, Double similarity, Double answerShare) {
         return new SourceRef(label, "preview", label, "d1", null,
-                similarity, null, null, answerShare, null);
+                similarity, null, null, answerShare, null, false);
     }
 
     private static List<String> labels(List<SourceRef> sources) {
