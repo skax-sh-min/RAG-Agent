@@ -237,6 +237,7 @@ REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — �
   - **LLM**(다음 LLM 호출부터 반영, §6.18) — **temperature 4종 전부**: 일반/RAG(`llm.temperature`, clamp `[0.0, 0.3]`)·Direct 응답(`llm.direct-temperature`, `[0.0, 1.0]`)·인덱싱/백그라운드(`llm.indexing-temperature`, `[0.0, 0.1]`)·C(응용) 창의(`llm.creative-temperature`, `[0.0, 1.0]`). 각각 자기 계열의 다음 호출부터 반영된다.
     이 넷은 **`/settings` 스펙 범위와 `llmSafe()`의 clamp가 같은 값**이라, 환경변수로 범위를 벗어난 값을 줘도 같은 상한에서 잘린다 — 화면이 거부하는 값이 뒤에서 적용되는 일이 없다. 한쪽만 고치면 그 성질이 깨진다.
   - **C(응용) 응답 모드 사용**(`llm.creative-mode-enabled`, BOOL, 기본 ON) — 같은 LLM 그룹에 **창의 온도 바로 다음**에 놓인다(온도가 "어떻게", 이쪽이 "열어 둘까"). 끄면 채팅 입력창의 C 버튼이 렌더되지 않고 서버가 요청을 `N`으로 강등한다(§3.4 응답 모드 토글).
+  - **저장 용량**(조회 전용) — 문서 저장 사용량(`documents`+`converted`+`images`, `documents/backup/` 제외)과 상한(`app.upload.max-total-size`). 상한은 재기동 필요이며 `/settings`에서 고칠 수 없다(배포 정책이고, 핫 키의 수치 타입이 GB 단위를 담지 못한다). 사용량을 함께 내는 이유는, 상한만 적혀 있으면 운영자가 어디쯤 와 있는지 알 방법이 업로드가 거부되는 순간뿐이기 때문이다. 이 값은 30초 memoize된다 — `/settings`는 모든 인증 모드에서 게스트 개방이라 렌더가 곧 무제한 디렉터리 walk 트리거가 되어선 안 된다(업로드 검사 경로는 이 캐시를 쓰지 않고 매번 다시 잰다)
   - **UI**(다음 페이지 렌더부터 반영) — 출처 미리보기 표시(`ui.source-preview-enabled`, 기본 ON). 끄면 채팅 출처 배지의 팝오버 미리보기(§4)가 사라진다. **출처 검색 수치 표시**(`ui.retrieval-metrics-enabled`, 기본 **OFF**) — 켜면 출처마다 `유사도 0.72 · 응답 31%`가 붙는다(§4 "출처 검색 진단 수치")
   - 그 외 키(조회 전용: `rerank-enabled`·쿼리 임베딩 캐시 등)는 400(`IllegalArgumentException`)으로 거부된다.
 - 값 검증 실패(범위 초과, 타입 불일치)도 400 — `GlobalExceptionHandler`가 처리.
@@ -651,7 +652,7 @@ stage(classifier) → stage(retrieval) → sources → stage(answer) → token �
 | `sources` | `[{"label":"...","preview":"..."}]` JSON 배열 | RETRIEVAL 완료 후 출처 배지 삽입 |
 | `token` | `{"text":"텍스트 조각"}` | ANSWER 스트리밍 토큰 |
 | `done` | 메타데이터 JSON (`usedProvider`, `inputTokens`, `elapsedMs`, `grounded`, `evalReason`, `generative`, `inventedSymbols` 등) | 완료 시 마크다운 렌더 |
-| `retry` | `{"reason":"answer\|critic","retryCount":1,"detail":"...","text":"..."}` | 검증 미통과 → 이전 답변을 미검증 블록으로 접고 재시도 안내 |
+| `retry` | `{"reason":"answer\|critic","retryCount":1,"detail":"...","text":"..."}` | 검증 미통과 → 이전 답변을 미검증 블록으로 접고 재시도 안내. **`reason`이 다음에 무슨 일이 일어나는지를 가른다** — `answer`(근거 부족)는 재검색까지 하므로 `sources`가 다시 오지만, `critic`(근거 이탈)은 검색을 건너뛰고 답변만 다시 쓰므로 출처가 재발행되지 않는다(클라이언트는 이미 갖고 있다) |
 | `error` | `{"message":"오류 설명"}` | 오류 버블로 교체 |
 
 > **검증 배지는 '무엇을 검증했는가'로 갈린다**: 같은 통과라도 `N`의 `grounded`는 "답변이 문서에 근거하는가"를, `C`의 `apiGrounded`는 "문서 유래라고 제시한 이름이 실재하는가"를 물었다. 그래서 통과 배지가 `N`은 초록 **검증됨**, `C`는 파랑 **생성**이다 — 같은 초록을 붙이면 사용자가 뒤엣것을 앞엣것으로 읽는데, 창의 모드에서 가장 비싼 오해다. 판정은 클라이언트가 모드 문자열을 비교하는 게 아니라 서버가 `ResponseMode.generative()`로 계산해 `done`의 `generative` 필드로 내려준다. 평가가 지목한 발명된 이름(`inventedSymbols`)이 있으면 노랑 **문서 밖 이름 N** 배지와 펼친 목록이 함께 붙고, 이것은 **재시도를 걸지 않는 경고 전용 값**이라 통과한 답변에도 나타난다(`envNote`와 같은 규칙).

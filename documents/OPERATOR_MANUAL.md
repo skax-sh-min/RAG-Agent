@@ -233,7 +233,7 @@ copy .env.example .env
 | `SEARCH_MULTIQUERY_ENABLED` | `true` | true/false | 검색 전 질의 다중 확장(LLM) 여부. `false`면 임계 경로 첫 LLM 콜 제거 |
 | `SEARCH_MULTIQUERY_MIN_LENGTH` | `15` | 0 ~ 20 | 이 길이(trim) 미만 질의는 확장 생략. `0`=항상 확장. 짧은 키워드 질의 TTFT↓(§10.8.1) |
 | `SEARCH_HYBRID_ENABLED` | `true` | true/false | RRF에 BM25(FTS5) 키워드 축 추가(§10.7.2 — 이 플래그와 무관하게 `chunk_fts`는 항상 채워지므로 **활성화해도 기존 색인 문서 재인덱싱 불필요**, FTS5/하이브리드 검색 도입 이전에 색인된 아주 오래된 문서만 예외) |
-| `SEARCH_RETRY_ESCALATE` | `true` | true/false | 재시도 에스컬레이션 **두 축을 한 플래그로** 제어. ① 후보 풀 `candidateK = min(topK×(retryCount+1), topK×3)` — 동일 검색 반복 회피. ② 최종 컷 `effectiveTopK = topK + retryCount` — 후보 풀만 키우면 ANSWER가 받는 문서 수는 매번 topK 그대로여서, 컷 바로 뒤에 있던 근거는 재시도해도 계속 밖에 머문다. 최종 컷은 답변·평가 프롬프트에 실제 실리는 양이라 배수가 아닌 **가산**(PIPELINE.md §5.1) |
+| `SEARCH_RETRY_ESCALATE` | `true` | true/false | **재검색** 에스컬레이션 두 축을 한 플래그로 제어. ① 후보 풀 `candidateK = min(round(topK×(1+0.5×재검색횟수)), topK×3)` — 예전 ×2에서 낮췄다(재시도가 이제 자리를 비우므로). ② 최종 컷 `effectiveTopK = topK + 재검색횟수`, **단 검증 호출에 여유가 있을 때만** — 발췌가 잘리면 근거 판정이 `null`로 떨어져 재시도를 거듭할수록 판정을 잃는다. 세는 것은 재시도가 아니라 **재검색** 횟수다(근거 이탈 재시도는 검색을 건너뛴다). 재시도는 근거로 쓰이지 않은 하위 청크를 최대 1/3 **교체**하기도 한다 — PIPELINE.md §5.1 |
 | `SEARCH_RERANK_ENABLED` | `false` | true/false | RRF 후 LLM 리랭킹 단계 (opt-in). **턴당 LLM 1콜 추가** → 정밀도↑/레이턴시 트레이드오프 |
 | `SEARCH_CANDIDATE_MULTIPLIER` | `3` | 2 ~ 5 | 리랭킹 전 후보 풀 크기. `topK × N`개 가져와 리랭킹 후 topK로 축소 |
 | `SEARCH_TAG_CANDIDATE_MULTIPLIER` | `2` | 1 ~ 5 | 태그가 선택된 검색의 후보 풀 확대 배수. `candidateK = max(candidateK, topK × N)` — sqlite-vec에서 태그 엄격 필터 후 결과가 부족할 때 보정(§4.6) |
@@ -2675,7 +2675,7 @@ docker compose logs app | grep -E "EVAL\] 검증 미통과|CRITIC_UNGROUNDED" | 
 | 사유 유형 | 원인 | 조치 |
 |------|------|------|
 | 경로·포트·주소·환경변수 값이 문서와 다르다는 사유 | 평가 프롬프트의 **환경 의존 값 예외**가 동작하지 않음 — 이 값들은 문서와 달라도 `grounded=false` 사유가 될 수 없고 `envNote`(화면의 `ℹ️ 환경에 따라 달라질 수 있는 값`)로만 안내되어야 합니다 | 모델이 지시를 따르지 못하는 경우가 대부분입니다. `messages_ko.properties`의 `prompt.answer.eval`에 `[환경 의존 값 예외]` 블록이 남아 있는지 먼저 확인하고(테스트 `AnswerEvalPromptTest`가 이를 검사), 그다음 더 큰 로컬 모델로 교체 검토 (PIPELINE.md §5.3) |
-| "문서에 없음" 계열인데 실제로는 문서에 있음 | 근거 청크가 검색 결과 하위 순위라 재시도해도 계속 컷 밖에 머무름 | `SEARCH_TOP_K` 상향(2~3 정도), 또는 `SEARCH_RETRY_ESCALATE=true` 확인 — 재시도마다 최종 컷이 `topK + retryCount`로 넓어집니다(§5.1). 둘 다 `/settings`에서 재기동 없이 조정 가능 |
+| "문서에 없음" 계열인데 실제로는 문서에 있음 | 근거 청크가 검색 결과 하위 순위라 재시도해도 계속 컷 밖에 머무름 | `SEARCH_TOP_K` 상향(2~3 정도), 또는 `SEARCH_RETRY_ESCALATE=true` 확인 — 재검색마다 최종 컷이 `topK + 재검색횟수`로 넓어지고, 근거로 쓰이지 않은 하위 청크가 밀려나 자리를 내줍니다(§5.1). 둘 다 `/settings`에서 재기동 없이 조정 가능. 로그의 `[RETRIEVAL] 컨텍스트 여유 부족` 이 보이면 컷 확대가 생략된 것이므로 `LLM_MAX_TOKENS`를 내리거나 서버 `--ctx-size`를 올리세요 |
 | 사유가 매번 비어 있음 | 평가 LLM이 `reason` 필드만 못 채움 (소형 모델에서 흔함) | 판정 자체는 유효하므로 답변이 막히지는 않습니다. 검증 품질이 중요하면 평가 호출이 타는 `TEXT` 프로바이더를 더 큰 모델로 |
 | **배지가 아예 없음** (검증됨/생성도, 미검증도 아님) | 평가 응답이 비었거나 JSON 파싱에 실패해 **판정 없음**으로 내려감 | 실패가 아니라 "검증을 못 했다"는 표시입니다. 아래 *검증 배지가 사라짐* 항목으로 |
 | 로그에 `[EVAL] 문서 발췌 32000자 상한으로 …` 경고 | `SEARCH_TOP_K` × `CHUNK_SIZE`가 과도해 하위 문서가 검증에서 제외됨 | 둘 중 하나를 낮추세요. 이 상태에서는 답변이 본 문서 일부를 평가자가 못 봅니다 |
@@ -2718,7 +2718,7 @@ docker compose logs app | grep -E "판정 없음으로 기록한다" | tail -20
 
 | `n_ctx` | `LLM_MAX_TOKENS` | `SEARCH_TOP_K` | `CHUNK_SIZE` | 비고 |
 |---|---|---|---|---|
-| **8k~10k** | `2000` | `4` | `600~800` | 빡빡합니다. 발췌 여유가 ~3,000자뿐이라 재시도(`topK + retryCount`)까지 감안하면 topK 4가 실질 상한이고, S 모드를 기본으로 쓰는 편이 맞습니다 |
+| **8k~10k** | `2000` | `4` | `600~800` | 빡빡합니다. 발췌 여유가 ~3,000자뿐이라 재시도까지 감안하면 topK 4가 실질 상한이고, S 모드를 기본으로 쓰는 편이 맞습니다. 이 구간에서는 재검색의 문서 +1이 여유 부족으로 자주 생략되고(로그 `[RETRIEVAL] 컨텍스트 여유 부족`) 대신 청크 교체만 적용됩니다 — 의도된 동작입니다 |
 | **16k** | `4000` | `6` | `1000` | 발췌 ~6,000자 |
 | **32k** | `6000~8000` | `8~12` | `1500` | 기본값(topK **10** × 1500 = 15,000자)이 그대로 들어갑니다 — 4,900 + 15,000 + 2,048 ≈ 22,000 |
 | **64k 이상** | `10000`(기본) | `12~15` | `1500~2000` | `MAX_EVAL_EXCERPT_CHARS`(32,000)가 비로소 의미를 갖는 구간 |

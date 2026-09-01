@@ -309,6 +309,8 @@ app.indexing.keyword-batch-size=${INDEXING_KEYWORD_BATCH_SIZE:2}
 | 모든 NORMAL 차단 | PREMIUM fallback | PREMIUM 정상 | PREMIUM 재실행 | local 단독 |
 | 전체 소진 | `LlmProviderExhaustedException` | 동일 | 동일 | 동일 |
 
+> **재시도가 무엇을 다시 부르는지는 실패한 게이트에 달렸다** (§6.27). `sufficient=false` 는 RETRIEVAL 부터 다시 도므로 임베딩 + MultiQuery 확장 호출(`MICRO_TEXT`)이 재시도마다 한 번씩 더 나가고, `grounded=false` 는 ANSWER 로 바로 돌아가므로 `TEXT` 호출(답변 + 평가)만 늘고 검색 계열 호출은 늘지 않는다. 예전에는 둘 다 RETRIEVAL 로 갔다 — 즉 근거 이탈 재시도가 사실상 같은 문서 집합을 다시 받아오려고 확장 호출을 태우고 있었다. 아래 §6 표의 "게이트 적용" 열에서 재시도가 소비하는 슬롯 수를 셀 때 이 차이를 감안할 것.
+
 **PROGRESSIVE 흐름**:
 1. COST_FIRST로 Answer 실행
 2. 검증이 `sufficient=false` 를 내고(`needsRetry`) 재시도까지 소진했을 때(`retryCount >= max-retry-count`)
@@ -381,7 +383,7 @@ app.indexing.keyword-batch-size=${INDEXING_KEYWORD_BATCH_SIZE:2}
 | `AnswerService` (블로킹+스트리밍+PROGRESSIVE+평가) | `MarkdownCorrectionService` (MD 포맷 교정) |
 | `DirectAnswerService` | `VisionDescriptionService` |
 | `RerankerService` (opt-in) | `ImageTypeClassifier` |
-| `RetrievalService`의 MultiQuery 확장 모델(`ConcurrencyLimitingChatModel` 데코레이터 경유) | `TextToMarkdownService` (TXT 구조화) |
+| `RetrievalService`의 MultiQuery 확장 모델(`ConcurrencyLimitingChatModel` 데코레이터 경유) — 재검색 재시도에서만 다시 호출된다(근거 이탈 재시도는 RETRIEVAL 자체를 건너뛴다) | `TextToMarkdownService` (TXT 구조화) |
 | | `ConversationSummarizerService.precompute()`(fire-and-forget) |
 | | `ThreadMetaService.generateTitleAsync()`(fire-and-forget) |
 
