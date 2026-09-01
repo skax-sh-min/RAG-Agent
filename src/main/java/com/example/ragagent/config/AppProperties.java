@@ -2,6 +2,7 @@ package com.example.ragagent.config;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.context.properties.bind.ConstructorBinding;
+import org.springframework.util.unit.DataSize;
 
 import java.util.List;
 import java.util.Locale;
@@ -50,7 +51,8 @@ public record AppProperties(
         Boolean pptxDropRedundantTitleSlides,    // PPTX 변환 시 이미지·도형 없이 짧은 제목 한 줄만 있고 그 내용이 바로 다음 슬라이드에 그대로 포함되는 "예고 제목" 슬라이드 제거 (기본 true) — PptxToMarkdownConverter
         Boolean pptxDropEndingSlide,             // PPTX 변환 시 마지막 슬라이드가 이미지 없이 '끝'/'END'/'The End' 같은 종료 표시만 담고 있으면 제거 (기본 true) — PptxToMarkdownConverter
         Boolean chunkSplitGranular,              // 청크 분할 전략: true=소제목 기준 최대 분할(min-chunk-size 무시), false=크기 기준 병합(기본, 기존 동작). 핫에디터블 — 다음 인덱싱/↺ 재인덱싱부터 적용
-        Double searchSubmissionWeight            // 지식 제안(승인된 사용자 제출) 축 RRF 가중치 (기본 1.5). 좋아요 큐레이션(searchCuratedQaWeight)과 별개 — 핫에디터블
+        Double searchSubmissionWeight,           // 지식 제안(승인된 사용자 제출) 축 RRF 가중치 (기본 1.5). 좋아요 큐레이션(searchCuratedQaWeight)과 별개 — 핫에디터블
+        UploadConfig upload                      // §6.15 — 전역 저장 상한(문서 업로드가 늘리는 디스크 사용량의 총량 캡). 미설정/0 = 무제한(기본)
 ) {
     public record LlmConfig(
             List<ProviderConfig> providers,
@@ -140,6 +142,28 @@ public record AppProperties(
             int maxHistoryDays,      // 보관 일수, 이 일수가 지난 파일 자동 삭제
             String totalSizeCap      // audit 디렉터리 전체 상한, e.g. "100MB"
     ) {}
+
+    /**
+     * §6.15 — 전역 저장 상한. 저장소가 사용자별로 갈라져 있지 않으므로({@code DocRegistry.SHARED})
+     * 쿼터 축도 "사용자별 누적"이 아니라 배포 전체의 디스크 총량이다.
+     *
+     * <p>{@code DataSize} 로 받는 이유는 상한이 GB 단위여서다 — {@code 20GB} 로 쓸 수 있고, 단위
+     * 없는 숫자는 바이트로 읽힌다({@code 0} = 무제한, 기본값). {@code int} 바이트 수로는 2GB 를
+     * 넘길 수도 없다.
+     */
+    public record UploadConfig(
+            DataSize maxTotalSize    // 문서 저장 사용량 총 상한 (app.upload.max-total-size / UPLOAD_MAX_TOTAL_SIZE). 0/미설정 = 무제한
+    ) {
+        /** 상한(바이트). {@code <= 0} 이면 무제한이라는 뜻이고, 호출부는 그때 아무것도 검사하지 않는다. */
+        public long maxTotalBytes() {
+            return maxTotalSize == null ? 0L : maxTotalSize.toBytes();
+        }
+
+        /** 상한이 실제로 걸려 있는지 — {@code maxTotalBytes() > 0}. 기본 배포는 false 라 회귀가 0이다. */
+        public boolean hasLimit() {
+            return maxTotalBytes() > 0L;
+        }
+    }
 
     public record AuthConfig(
             boolean enabled,         // false → no-auth mode (guest/admin auto-login)
@@ -597,6 +621,15 @@ public record AppProperties(
         int days = audit.maxHistoryDays() > 0 ? audit.maxHistoryDays() : 7;
         String cap = (audit.totalSizeCap() != null && !audit.totalSizeCap().isBlank()) ? audit.totalSizeCap() : "100MB";
         return new AuditConfig(audit.enabled(), size, days, cap);
+    }
+
+    /**
+     * §6.15 저장 상한. 미설정·음수는 전부 <b>0(무제한)</b> 으로 정규화된다 — 상한이 없는 상태가
+     * 기본이고, 설정 실수가 "예상보다 빡빡한 상한"으로 굳어져 업로드를 막는 쪽보다 낫다.
+     */
+    public UploadConfig uploadSafe() {
+        long bytes = (upload == null) ? 0L : upload.maxTotalBytes();
+        return new UploadConfig(DataSize.ofBytes(Math.max(0L, bytes)));
     }
 
     public AuthConfig authSafe() {

@@ -140,6 +140,7 @@ class ManagementOnlyAuthorizationTest {
     // 명시하지 않으면 CuratedSubmissionController 생성이 실패해 컨텍스트 로드가 깨진다.
     @MockitoBean com.example.ragagent.service.CuratedImageStore curatedImageStore;
     @MockitoBean DocumentExportService documentExportService;
+    @MockitoBean com.example.ragagent.service.StorageQuotaService storageQuotaService;
 
     private AppUserDetails adminUser() {
         return new AppUserDetails("admin-id", "admin@local", "hash", "Admin", "ADMIN", true, false);

@@ -7,6 +7,7 @@
 |---|---|---|---|
 | RAG-VAL-001 | 400 | `InvalidQuestionException` | 잘못된 질문 (빈 값, 길이 초과 등) |
 | RAG-UP-001  | 422 | `UnsupportedFileTypeException` | 미지원 파일 타입 또는 매직바이트 불일치 |
+| RAG-UP-002  | 413 | `StorageQuotaExceededException` | 배포 저장 상한(`app.upload.max-total-size`) 초과 — 이 파일 하나가 큰 게 아니라 **더 넣을 자리가 없다**는 뜻이라 RAG-UP-003 과 상태 코드는 같고 코드가 다르다. 기다린다고 자리가 나지 않으므로 `Retry-After` 를 주지 않는다(문서를 지워야 한다) |
 | RAG-UP-003  | 413 | (MaxUploadSizeExceededException) | 파일 크기 초과 |
 | RAG-INDEX-001 | 500 | `DocumentIndexingException` | 인덱싱 실패 (SHA-256 연산, 청크 저장 등) |
 | RAG-VEC-001 | 503 | `VectorStoreException` | Vector Store 호출 실패 |

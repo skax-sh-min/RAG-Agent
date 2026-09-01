@@ -79,7 +79,7 @@ class AnswerServiceTest {
                 "./data", MAX_RETRY, 800, 100, 100, 7, 0.0, true, 0, false,
                 true, false, 3,
                 null, null, null, null, null, null, null, null, null, null, null, null, null, null,
-                null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null);
         contextWindows = new ProviderContextWindows();   // 비어 있음 = 창 모름 → 예산 축소 없음
         messageSource = mock(MessageSource.class);
         when(messageSource.getMessage(anyString(), any(), any(Locale.class))).thenReturn("prompt");
@@ -783,7 +783,7 @@ class AnswerServiceTest {
                         "./data", MAX_RETRY, 800, 100, 100, 7, 0.0, true, 0, false, true, false, 3,
                         null, null, null, null, null, null, null, null, null, null, null, null, null, null,
                         null, null, null, null, null, null, null, null, null, null, null, null, null, null,
-                        null, null).llmSafe().maxTokens()));
+                        null, null, null).llmSafe().maxTokens()));
     }
 
     @Test

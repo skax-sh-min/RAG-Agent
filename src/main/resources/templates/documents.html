@@ -475,6 +475,18 @@
         return plain ? plain[1] : null;
     }
 
+    /** ProblemDetail(JSON) 본문의 detail 문구. XHR 은 응답을 문자열로 주므로 fetch 용
+     *  extractError() 와 달리 동기 파싱이며, 본문이 없거나 JSON 이 아니면 null 을 준다. */
+    function problemDetail(responseText) {
+        if (!responseText) return null;
+        try {
+            const body = JSON.parse(responseText);
+            return body.detail || null;
+        } catch (_) {
+            return null;
+        }
+    }
+
     /** ProblemDetail(JSON)의 detail 필드를 우선 사용하고, 아니면 상태 코드를 보여준다. */
     async function extractError(res) {
         try {
@@ -611,8 +623,12 @@
                 } else if (xhr.status === 503) {
                     reject(new Error(I18N.chromaUnavailable));
                 } else {
-                    reject(new Error(xhr.status === 400 ? I18N.fileEmpty
-                            : `${I18N.serverError} (${xhr.status})`));
+                    // A rejection the server explains (§6.15 storage cap → 413 RAG-UP-002, and any
+                    // future ProblemDetail) says exactly what to do about it; "서버 오류 (413)" does not.
+                    const detail = problemDetail(xhr.responseText);
+                    reject(new Error(detail
+                            || (xhr.status === 400 ? I18N.fileEmpty
+                                                   : `${I18N.serverError} (${xhr.status})`)));
                 }
             });
             xhr.addEventListener('error', () => reject(new Error(I18N.networkError)));

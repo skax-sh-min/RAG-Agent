@@ -40,12 +40,18 @@ import static org.mockito.Mockito.when;
 @ResourceLock("global-state")
 class SettingsServiceTest {
 
+    /** §6.15 — the storage row is read-only and points at a data dir that doesn't exist in tests,
+     *  so a real service over {@code base()} yields 0 bytes / no limit without touching disk. */
+    private static StorageQuotaService quotaService() {
+        return new StorageQuotaService(base());
+    }
+
     private static AppProperties base() {
         return new AppProperties(
                 "./data", 2, 800, 100, 100, 7, 0.0, true, 5, false,
                 true, false, 3, null,
                 null, null, null, null, null, null, null, null, null, null, null, 2,
-                null, 1.0, 60, null, null, null, null, null, null, null, null, null, null, null, null, null, null);
+                null, 1.0, 60, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null);
     }
 
     private SettingsOverrideRepositoryStub repo;
@@ -68,7 +74,7 @@ class SettingsServiceTest {
                 "./data", 2, 800, 100, 100, 7, 0.0, true, 5, false,
                 true, false, 3, null,
                 llm, null, null, null, null, null, null, null, null, null, null, 2,
-                null, 1.0, 60, null, null, null, null, null, null, null, null, null, null, null, null, null, null);
+                null, 1.0, 60, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null);
     }
 
     /** AppProperties with LLM providers of specific roles under a given default routing mode. */
@@ -82,7 +88,7 @@ class SettingsServiceTest {
                 "./data", 2, 800, 100, 100, 7, 0.0, true, 5, false,
                 true, false, 3, null,
                 llm, null, null, null, null, null, null, null, null, null, null, 2,
-                null, 1.0, 60, null, null, null, null, null, null, null, null, null, null, null, null, null, null);
+                null, 1.0, 60, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null);
     }
 
     /** Lightweight in-memory stand-in for the SQLite repository. */
@@ -103,7 +109,7 @@ class SettingsServiceTest {
         when(circuitBreaker.getBlockedProviders()).thenReturn(Map.<String, Instant>of());
         toggle = new ProviderToggle();
         props = base();
-        service = new SettingsService(repo, props, audit, circuitBreaker, toggle, new ProviderContextWindows());
+        service = new SettingsService(repo, props, audit, circuitBreaker, toggle, new ProviderContextWindows(), quotaService());
         service.init(); // loads (empty) overrides + binds the static override source to this service
     }
 
@@ -222,17 +228,20 @@ class SettingsServiceTest {
     }
 
     @Test
-    @DisplayName("buildView — search_hot/fixed/indexing/llm_hot/ui_hot/cache 6그룹, 모든 핫 키가 편집 가능 항목으로 노출")
+    @DisplayName("buildView — search_hot/fixed/indexing/llm_hot/ui_hot/storage/cache 7그룹, 모든 핫 키가 편집 가능 항목으로 노출")
     void buildView_structure() {
         SettingsView view = service.buildView();
 
-        assertThat(view.groups()).hasSize(6);
+        assertThat(view.groups()).hasSize(7);
         assertThat(view.groups().get(0).id()).isEqualTo("search_hot");
         assertThat(view.groups().get(0).items()).allMatch(SettingsView.SettingItem::editable);
         // indexing + llm_hot groups exist (chunk/file-concurrency + direct-temperature knobs live here)
         assertThat(view.groups()).anyMatch(g -> g.id().equals("indexing"));
         assertThat(view.groups()).anyMatch(g -> g.id().equals("llm_hot"));
         assertThat(view.groups()).anyMatch(g -> g.id().equals("ui_hot"));
+        // §6.15 저장 상한 — 조회 전용이므로 편집 가능 행 수(아래)에는 영향을 주지 않아야 한다
+        assertThat(view.groups()).anyMatch(g -> g.id().equals("storage")
+                && g.items().stream().noneMatch(SettingsView.SettingItem::editable));
         // every hot-editable key is rendered as an editable row somewhere (search_hot + indexing + llm_hot + ui_hot)
         long editableCount = view.groups().stream()
                 .flatMap(g -> g.items().stream())
@@ -285,7 +294,7 @@ class SettingsServiceTest {
         SettingsOverrideRepositoryStub seeded = new SettingsOverrideRepositoryStub();
         seeded.store.put(SettingsKeys.SEARCH_RRF_K, "80");  // application.properties default = 60 → diverges → WARN
         seeded.store.put(SettingsKeys.SEARCH_TOP_K, "7");   // default = 7 → identical → must NOT warn
-        SettingsService fresh = new SettingsService(seeded, base(), audit, circuitBreaker, new ProviderToggle(), new ProviderContextWindows());
+        SettingsService fresh = new SettingsService(seeded, base(), audit, circuitBreaker, new ProviderToggle(), new ProviderContextWindows(), quotaService());
 
         Logger settingsLogger = com.example.ragagent.LogbackTestSupport.logger(SettingsService.class);
         ListAppender<ILoggingEvent> appender = new ListAppender<>();
@@ -314,7 +323,7 @@ class SettingsServiceTest {
     void setProviderEnabled_disablesThenEnables() {
         ProviderToggle tg = new ProviderToggle();
         SettingsService svc = new SettingsService(repo, propsWithProviders("a", "b"), audit, circuitBreaker, tg,
-                new ProviderContextWindows());
+                new ProviderContextWindows(), quotaService());
 
         List<SettingsView.ProviderRow> afterDisable = svc.setProviderEnabled("a", false);
         assertThat(tg.isDisabled("a")).isTrue();
@@ -331,7 +340,7 @@ class SettingsServiceTest {
     @Test
     @DisplayName("setProviderEnabled — 알 수 없는 프로바이더 이름은 거부")
     void setProviderEnabled_unknownName_rejected() {
-        SettingsService svc = new SettingsService(repo, propsWithProviders("a"), audit, circuitBreaker, new ProviderToggle(), new ProviderContextWindows());
+        SettingsService svc = new SettingsService(repo, propsWithProviders("a"), audit, circuitBreaker, new ProviderToggle(), new ProviderContextWindows(), quotaService());
         assertThatThrownBy(() -> svc.setProviderEnabled("nope", false))
                 .isInstanceOf(IllegalArgumentException.class);
     }
@@ -341,7 +350,7 @@ class SettingsServiceTest {
     void setProviderEnabled_lastEnabled_rejected() {
         ProviderToggle tg = new ProviderToggle();
         SettingsService svc = new SettingsService(repo, propsWithProviders("a", "b"), audit, circuitBreaker, tg,
-                new ProviderContextWindows());
+                new ProviderContextWindows(), quotaService());
         svc.setProviderEnabled("a", false);   // one left enabled (b)
 
         assertThatThrownBy(() -> svc.setProviderEnabled("b", false))  // would disable the last one
@@ -357,7 +366,7 @@ class SettingsServiceTest {
         nameToRole.put("gemini-flash", "NORMAL");
         nameToRole.put("openai", "PREMIUM");
         SettingsService svc = new SettingsService(
-                repo, propsWithProvidersOfRoles("LOCAL_ONLY", nameToRole), audit, circuitBreaker, new ProviderToggle(), new ProviderContextWindows());
+                repo, propsWithProvidersOfRoles("LOCAL_ONLY", nameToRole), audit, circuitBreaker, new ProviderToggle(), new ProviderContextWindows(), quotaService());
 
         List<SettingsView.ProviderRow> rows = svc.providerRows();
 
@@ -371,7 +380,7 @@ class SettingsServiceTest {
         nameToRole.put("local", "LOCAL");
         nameToRole.put("gemini-flash", "NORMAL");
         SettingsService svc = new SettingsService(
-                repo, propsWithProvidersOfRoles("COST_FIRST", nameToRole), audit, circuitBreaker, new ProviderToggle(), new ProviderContextWindows());
+                repo, propsWithProvidersOfRoles("COST_FIRST", nameToRole), audit, circuitBreaker, new ProviderToggle(), new ProviderContextWindows(), quotaService());
 
         List<SettingsView.ProviderRow> rows = svc.providerRows();
 
@@ -386,7 +395,7 @@ class SettingsServiceTest {
         nameToRole.put("local", "LOCAL");
         nameToRole.put("gemini-flash", "NORMAL");
         SettingsService svc = new SettingsService(
-                repo, propsWithProvidersOfRoles("LOCAL_ONLY", nameToRole), audit, circuitBreaker, new ProviderToggle(), new ProviderContextWindows());
+                repo, propsWithProvidersOfRoles("LOCAL_ONLY", nameToRole), audit, circuitBreaker, new ProviderToggle(), new ProviderContextWindows(), quotaService());
 
         assertThatThrownBy(() -> svc.setProviderEnabled("gemini-flash", false))
                 .isInstanceOf(IllegalArgumentException.class);

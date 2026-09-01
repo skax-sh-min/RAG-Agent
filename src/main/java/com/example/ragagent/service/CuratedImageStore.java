@@ -95,6 +95,10 @@ public class CuratedImageStore {
     private final CuratedQaRepository curatedQaRepository;
     /** null when {@code app.image-description.enabled=false} — descriptions are then skipped. */
     private final LazyVisionService lazyVisionService;
+    /** §6.15 — the same deployment-wide cap document uploads answer to. These images land under
+     *  {@code {dataDir}/images/} and so are already counted by it; leaving the one guest-open
+     *  binary-write path unchecked would be the obvious way around a storage cap. */
+    private final StorageQuotaService storageQuotaService;
 
     /** {@code Optional<LazyVisionService>} rather than a plain parameter for the same reason
      *  {@code RetrievalService} takes it that way: the bean is {@code @ConditionalOnProperty} and
@@ -102,11 +106,13 @@ public class CuratedImageStore {
     public CuratedImageStore(AppProperties props,
                              CuratedSubmissionRepository submissionRepository,
                              CuratedQaRepository curatedQaRepository,
-                             Optional<LazyVisionService> lazyVisionOpt) {
+                             Optional<LazyVisionService> lazyVisionOpt,
+                             StorageQuotaService storageQuotaService) {
         this.props = props;
         this.submissionRepository = submissionRepository;
         this.curatedQaRepository = curatedQaRepository;
         this.lazyVisionService = lazyVisionOpt.orElse(null);
+        this.storageQuotaService = storageQuotaService;
     }
 
     // ── Upload ───────────────────────────────────────────────────────────────
@@ -119,6 +125,8 @@ public class CuratedImageStore {
      * path and re-uploading the same picture is idempotent instead of duplicating bytes on disk.
      *
      * @throws IllegalArgumentException     empty file or over {@link #MAX_IMAGE_BYTES} (→ 400)
+     * @throws com.example.ragagent.exception.StorageQuotaExceededException
+     *                                      deployment storage cap reached (→ 413, §6.15)
      * @throws UnsupportedFileTypeException extension not allowed, or magic bytes disagree (→ 422)
      */
     public String store(MultipartFile file) throws IOException {
@@ -129,6 +137,7 @@ public class CuratedImageStore {
             throw new IllegalArgumentException(
                     "이미지가 너무 큽니다 (최대 " + (MAX_IMAGE_BYTES / 1024 / 1024) + "MB).");
         }
+        storageQuotaService.checkCanAccept(file.getSize(), file.getOriginalFilename());   // §6.15
         String ext = extensionOf(file.getOriginalFilename());
         if (!ALLOWED_EXTENSIONS.contains(ext)) {
             throw new UnsupportedFileTypeException(

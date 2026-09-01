@@ -51,6 +51,11 @@ class ResponseModeOperatorToggleTest {
     private AppProperties props;
     private SettingsService service;
 
+    /** §6.15 — /settings 저장 행 전용 의존성. 이 테스트가 보는 것과 무관하고 디스크도 건드리지 않는다. */
+    private static StorageQuotaService quotaService() {
+        return new StorageQuotaService(propsWithLlm());
+    }
+
     private static AppProperties propsWithLlm() {
         AppProperties.LlmConfig llm = new AppProperties.LlmConfig(
                 List.of(), 2, 10, 180, "COST_FIRST", 3, 20, 0.0, 0.1, 0.0, 0.7, null, 6000, false);
@@ -58,7 +63,7 @@ class ResponseModeOperatorToggleTest {
                 "./data", 2, 800, 100, 100, 7, 0.0, true, 5, false,
                 true, false, 3, null,
                 llm, null, null, null, null, null, null, null, null, null, null, 2,
-                null, 1.0, 60, null, null, null, null, null, null, null, null, null, null, null, null, null, null);
+                null, 1.0, 60, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null);
     }
 
     @BeforeEach
@@ -66,7 +71,7 @@ class ResponseModeOperatorToggleTest {
         CircuitBreaker cb = mock(CircuitBreaker.class);
         when(cb.getBlockedProviders()).thenReturn(Map.<String, Instant>of());
         props = propsWithLlm();
-        service = new SettingsService(new RepoStub(), props, mock(AuditLogger.class), cb, new ProviderToggle(), new ProviderContextWindows());
+        service = new SettingsService(new RepoStub(), props, mock(AuditLogger.class), cb, new ProviderToggle(), new ProviderContextWindows(), quotaService());
         service.init();
     }
 

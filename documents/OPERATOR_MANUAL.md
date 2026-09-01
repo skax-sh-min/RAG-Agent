@@ -215,6 +215,7 @@ copy .env.example .env
 | `CHROMA_HOST` | — | `http://localhost` | **chroma 전용** — Chroma 서버 호스트 (프로토콜 포함). Docker Compose 환경에서는 서비스명 `chroma`로 자동 지정됨 |
 | `CHROMA_PORT` | — | `8001` | **chroma 전용** — Chroma 서버 포트. Docker Compose 환경에서는 `8000`으로 자동 지정됨 |
 | `DATA_DIR` | — | `./data` | 문서 원본·이미지·변환 MD·SQLite DB 저장 루트 경로. Docker 실행 시 `/app/data`(볼륨 마운트 고정값)로 컨테이너 내부에 자동 설정됨 |
+| `UPLOAD_MAX_TOTAL_SIZE` | — | `0` (무제한) | 배포 전체 저장 상한 (§6.15). `20GB`처럼 단위를 붙일 수 있고 단위 없는 숫자는 바이트. `DATA_DIR` 아래 `documents`+`converted`+`images` 합계로 검사하며, 초과 업로드는 413 `RAG-UP-002`. 재기동 필요 — 상세는 아래 "업로드 크기 제한" |
 | `AUTH_ENABLED` | — | `true` | `false`로 설정하면 로그인 없이 실행 (no-auth 모드). 자세한 내용은 [§9.4](#94-인증-토글-no-auth-모드) 참조 |
 | `DOMAIN` | — | `localhost` | Docker Compose의 `caddy` 컨테이너가 사용하는 도메인명. `localhost`이면 Caddy 로컬 CA 인증서 자동 생성. 운영 시 실제 도메인(예: `myrag.duckdns.org`)으로 변경 |
 | `USE_CADDY_REVERSE_PROXY_HTTPS` | — | `true` | 세션 쿠키 `Secure` 플래그 제어 (`server.servlet.session.cookie.secure`). Caddy HTTPS 환경에서는 `true`(기본값). **HTTP 로컬 단독 실행 시 반드시 `false`로 변경** — `true` 상태에서 HTTP로 접근하면 쿠키가 전송되지 않아 로그인 불가 |
@@ -520,10 +521,28 @@ LLM_ROUTING_MODE=QUALITY_FIRST
 
 #### 업로드 크기 제한
 
-| 속성 | 기본값 | 설명 |
-|------|--------|------|
-| `spring.servlet.multipart.max-file-size` | `200MB` | 단일 파일 최대 크기. 초과 시 413 응답 |
-| `spring.servlet.multipart.max-request-size` | `200MB` | 멀티파트 요청 전체 최대 크기 |
+| 속성 | 환경변수 | 기본값 | 설명 |
+|------|----------|--------|------|
+| `spring.servlet.multipart.max-file-size` | — | `200MB` | 단일 파일 최대 크기. 초과 시 413 (`RAG-UP-003`) |
+| `spring.servlet.multipart.max-request-size` | — | `200MB` | 멀티파트 요청 전체 최대 크기 |
+| `app.upload.max-total-size` | `UPLOAD_MAX_TOTAL_SIZE` | `0` (무제한) | **배포 전체 저장 상한** (§6.15). 초과 시 413 (`RAG-UP-002`) |
+
+> **두 상한은 다른 축입니다.** 위의 per-file 상한은 "이 파일 하나가 너무 크다", `max-total-size`는 "더 넣을
+> 자리가 없다"입니다. 후자는 `20GB`처럼 단위를 붙여 쓸 수 있고, 단위가 없으면 바이트로 읽습니다. `0`(기본)은
+> 무제한이며, 이때는 사용량을 재려고 디스크를 걷는 일조차 하지 않습니다.
+>
+> **세는 대상**: `{app.data-dir}` 아래 `documents/`(재인덱싱 백업 포함) + `converted/` + `images/` 세 트리입니다.
+> 업로드 원본만이 아니라 인덱싱이 만들어 내는 변환 마크다운과 추출 이미지까지 포함하며, PPTX·스캔 PDF는 보통
+> 그쪽이 원본보다 큽니다. `memory.db`/`vector.db`·감사 로그·Chroma 볼륨은 업로드가 만드는 것이 아니라 제외됩니다.
+>
+> **소프트 상한입니다.** 업로드를 받을 시점에 알 수 있는 크기는 올라오는 파일뿐이므로(파생 산출물은 아직 없음)
+> 한 건이 상한을 조금 넘겨 끝날 수 있고, 대신 **그다음 업로드가 거부**됩니다. 문서를 지우면 즉시 자리가 납니다
+> — 별도 카운터 없이 실제 디스크를 재기 때문에 `/admin` 삭제·디렉터리 동기화·수동 삭제가 모두 그대로 반영됩니다.
+>
+> **적용 범위**: 문서 업로드 2경로(`POST /ui/documents/upload`, `POST /api/v1/documents`)와 지식 제안 본문
+> 이미지 업로드(`POST /curated/submissions/images`). `POST /api/v1/documents/sync`는 이미 디스크에 있는 파일을
+> 인덱싱하는 것이라 검사하지 않습니다. 현재 사용량과 상한은 `/settings`의 **저장 용량** 카드에서 볼 수 있으며,
+> 상한 변경은 재기동이 필요합니다(핫 수정 불가).
 
 #### Rate Limiting (`app.rate-limit.*`)
 

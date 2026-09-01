@@ -11,6 +11,7 @@ import com.example.ragagent.security.UploadValidator;
 import com.example.ragagent.service.DocumentExportService;
 import com.example.ragagent.service.IndexingProgressService;
 import com.example.ragagent.service.RagService;
+import com.example.ragagent.service.StorageQuotaService;
 import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.TaskType;
 import org.slf4j.Logger;
@@ -60,19 +61,23 @@ public class DocumentController {
     /** Only for the {@code includeCurated} union in {@link #listTags} — curated rows never reach
      *  {@code chunk_fts}, so their tags have to come straight from the table. */
     private final com.example.ragagent.repository.CuratedQaRepository curatedQaRepository;
+    /** §6.15 — deployment-wide storage cap, consulted before either upload path writes anything. */
+    private final StorageQuotaService storageQuotaService;
 
     public DocumentController(RagService ragService,
                                IndexingProgressService progressService,
                                AuditLogger auditLogger,
                                DocumentExportService exportService,
                                LlmRouter llmRouter,
-                               com.example.ragagent.repository.CuratedQaRepository curatedQaRepository) {
+                               com.example.ragagent.repository.CuratedQaRepository curatedQaRepository,
+                               StorageQuotaService storageQuotaService) {
         this.ragService = ragService;
         this.progressService = progressService;
         this.auditLogger = auditLogger;
         this.exportService = exportService;
         this.llmRouter = llmRouter;
         this.curatedQaRepository = curatedQaRepository;
+        this.storageQuotaService = storageQuotaService;
     }
 
     // ── Page ──────────────────────────────────────────────────────────
@@ -103,6 +108,9 @@ public class DocumentController {
         if (file.isEmpty()) {
             return ResponseEntity.badRequest().build();
         }
+        // §6.15 — before stageToTemp(), so a doomed upload never writes a byte anywhere.
+        // Propagates as 413 + ProblemDetail via GlobalExceptionHandler (RAG-UP-002).
+        storageQuotaService.checkCanAccept(file.getSize(), file.getOriginalFilename());
         String filename;
         Path tmp;
         final List<String> tagList;
@@ -339,6 +347,8 @@ public class DocumentController {
             @RequestParam(name = "addHeadingNumbers", defaultValue = "false") boolean addHeadingNumbers) throws IOException {
 
         if (file.isEmpty()) return ResponseEntity.badRequest().build();
+
+        storageQuotaService.checkCanAccept(file.getSize(), file.getOriginalFilename());   // §6.15
 
         String filename;
         Path staged;

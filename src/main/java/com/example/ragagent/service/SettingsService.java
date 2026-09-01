@@ -112,19 +112,23 @@ public class SettingsService implements AppProperties.OverrideSource {
     private final CircuitBreaker circuitBreaker;
     private final ProviderToggle providerToggle;
     private final ProviderContextWindows contextWindows;
+    /** §6.15 — only for the read-only 저장 사용량 row; nothing on this page edits the cap. */
+    private final StorageQuotaService storageQuotaService;
 
     /** Persisted overrides, cached so the {@link #get} hot path never hits SQLite. */
     private final Map<String, String> cache = new ConcurrentHashMap<>();
 
     public SettingsService(SettingsOverrideRepository repo, AppProperties props,
                            AuditLogger audit, CircuitBreaker circuitBreaker,
-                           ProviderToggle providerToggle, ProviderContextWindows contextWindows) {
+                           ProviderToggle providerToggle, ProviderContextWindows contextWindows,
+                           StorageQuotaService storageQuotaService) {
         this.repo = repo;
         this.props = props;
         this.audit = audit;
         this.circuitBreaker = circuitBreaker;
         this.providerToggle = providerToggle;
         this.contextWindows = contextWindows;
+        this.storageQuotaService = storageQuotaService;
     }
 
     @PostConstruct
@@ -264,6 +268,7 @@ public class SettingsService implements AppProperties.OverrideSource {
                 new SettingGroup("llm_hot", "settings.group.llm_hot", llmHotItems()),
             new SettingGroup("ui_hot", "settings.group.ui_hot", uiHotItems()),
                 new SettingGroup("search_fixed", "settings.group.search_fixed", fixedSearchItems()),
+                new SettingGroup("storage", "settings.group.storage", storageItems()),
                 new SettingGroup("cache", "settings.group.cache", cacheItems())
         );
 
@@ -551,6 +556,29 @@ public class SettingsService implements AppProperties.OverrideSource {
         if (value.equalsIgnoreCase("true")) return Boolean.TRUE;
         if (value.equalsIgnoreCase("false")) return Boolean.FALSE;
         return null;
+    }
+
+    /**
+     * §6.15 저장 상한 — 조회 전용 2행: 지금 쓰고 있는 양과 상한.
+     *
+     * <p>편집 가능하게 만들지 않은 이유는 {@code max-tokens} 와 같다 — 여기서 고쳐도 다음 호출부터
+     * 적용되는 종류의 값이 아니라 배포 정책이고, 무엇보다 {@code Spec} 의 수치 종류가 {@code int}
+     * 라 GB 단위(20GB = 2.1e10)를 담지 못한다. 대신 <b>사용량</b>을 함께 보여준다: 상한만 적혀
+     * 있으면 운영자가 어디쯤 와 있는지 알 방법이 업로드가 거부되는 순간뿐이다.
+     */
+    private List<SettingItem> storageItems() {
+        long used = storageQuotaService.usedBytesCached();   // guest-open page — never an on-demand disk walk
+        long limit = storageQuotaService.limitBytes();
+        String usage = limit > 0
+                ? "%s / %s (%d%%)".formatted(StorageQuotaService.formatBytes(used),
+                        StorageQuotaService.formatBytes(limit), Math.round(used * 100.0 / limit))
+                : StorageQuotaService.formatBytes(used);
+        return List.of(
+                readOnly("settings.item.storage-used", usage, null, "settings.tooltip.storage-used"),
+                readOnly("settings.item.storage-limit",
+                        limit > 0 ? StorageQuotaService.formatBytes(limit) : "무제한",
+                        "settings.note.restart")
+        );
     }
 
     private List<SettingItem> cacheItems() {
