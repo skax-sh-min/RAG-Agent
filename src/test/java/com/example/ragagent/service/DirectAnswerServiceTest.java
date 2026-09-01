@@ -66,7 +66,7 @@ class DirectAnswerServiceTest {
         AppProperties props = mock(AppProperties.class);
         // llmSafe() supplies the Direct temperature (§6.18); a real record so directTemperature() works.
         when(props.llmSafe()).thenReturn(new AppProperties.LlmConfig(
-                List.of(), 2, 10, 180, "COST_FIRST", 0.6, 3, 20, 0.0, 0.1, 0.0, 0.7, true, 6000, true));
+                List.of(), 2, 10, 180, "COST_FIRST", 3, 20, 0.0, 0.1, 0.0, 0.7, true, 6000, true));
         service = new DirectAnswerService(llmRouter, messageSource, props);
     }
 

@@ -45,7 +45,7 @@ class ConcurrencyLimitingChatModelTest {
 
     private LlmRouter router(int concurrency) {
         return new LlmRouter(List.of(provider), mock(LlmUsageRepository.class), breaker,
-                RoutingMode.COST_FIRST, 0.6, 180, Map.of("lm", concurrency), concurrency, 1);
+                RoutingMode.COST_FIRST, 180, Map.of("lm", concurrency), concurrency, 1);
     }
 
     private static ChatResponse chatResponse(String text) {

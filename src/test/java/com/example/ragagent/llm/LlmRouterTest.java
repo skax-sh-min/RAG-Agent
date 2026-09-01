@@ -52,7 +52,7 @@ class LlmRouterTest {
     }
 
     private LlmRouter router(RoutingMode defaultMode, LlmProvider... providers) {
-        return new LlmRouter(List.of(providers), null, breaker, defaultMode, 0.6);
+        return new LlmRouter(List.of(providers), null, breaker, defaultMode);
     }
 
     @Test
@@ -109,7 +109,7 @@ class LlmRouterTest {
         var local  = p("lm",     ProviderRole.LOCAL,  TaskType.TEXT, 1);
         var normal = p("openai", ProviderRole.NORMAL, TaskType.TEXT, 2);
         var toggle = new ProviderToggle();
-        var r = new LlmRouter(List.of(local, normal), null, breaker, RoutingMode.COST_FIRST, 0.6, 180,
+        var r = new LlmRouter(List.of(local, normal), null, breaker, RoutingMode.COST_FIRST, 180,
                 Map.of(), 3, 20, toggle);
 
         assertThat(r.findProviderName(TaskType.TEXT, RoutingMode.COST_FIRST)).isEqualTo("lm");
@@ -192,7 +192,7 @@ class LlmRouterTest {
     void hasEnabledProviderFor_togglesCountButCircuitBlocksDoNot() {
         var vision = p("local-vision", ProviderRole.LOCAL, TaskType.VISION, 0);
         var toggle = new ProviderToggle();
-        var r = new LlmRouter(List.of(vision), null, breaker, RoutingMode.COST_FIRST, 0.6, 180,
+        var r = new LlmRouter(List.of(vision), null, breaker, RoutingMode.COST_FIRST, 180,
                 Map.of(), 3, 20, toggle);
 
         assertThat(r.hasEnabledProviderFor(TaskType.VISION)).isTrue();
@@ -210,7 +210,7 @@ class LlmRouterTest {
         var fast  = p("local-fast", ProviderRole.LOCAL, TaskType.MICRO_TEXT, 0);
         var local = p("local",      ProviderRole.LOCAL, TaskType.BOTH,       1);
         var toggle = new ProviderToggle();
-        var r = new LlmRouter(List.of(fast, local), null, breaker, RoutingMode.COST_FIRST, 0.6, 180,
+        var r = new LlmRouter(List.of(fast, local), null, breaker, RoutingMode.COST_FIRST, 180,
                 Map.of(), 3, 20, toggle);
 
         assertThat(r.hasMicroTextOffloadProvider()).isTrue();
@@ -236,15 +236,14 @@ class LlmRouterTest {
         // "소형 모델이 있다"고 믿고 요약 LLM 호출을 내보내 답변 티어를 잠식하게 된다.
         var vision = p("local-vision", ProviderRole.LOCAL, TaskType.VISION,    0);
         var local  = p("local",        ProviderRole.LOCAL, TaskType.BOTH,      1);
-        var r = new LlmRouter(List.of(vision, local), null, breaker, RoutingMode.COST_FIRST, 0.6, 180,
+        var r = new LlmRouter(List.of(vision, local), null, breaker, RoutingMode.COST_FIRST, 180,
                 Map.of(), 3, 20, new ProviderToggle());
 
         assertThat(r.hasMicroTextOffloadProvider()).isFalse();
 
         // 반대로 §9 "A안"(소형을 LIGHT_TEXT 로 등록)은 MICRO_TEXT 를 실제로 처리하므로 true.
         var lightFast = p("local-fast", ProviderRole.LOCAL, TaskType.LIGHT_TEXT, 0);
-        assertThat(new LlmRouter(List.of(vision, lightFast, local), null, breaker, RoutingMode.COST_FIRST,
-                0.6, 180, Map.of(), 3, 20, new ProviderToggle())
+        assertThat(new LlmRouter(List.of(vision, lightFast, local), null, breaker, RoutingMode.COST_FIRST, 180, Map.of(), 3, 20, new ProviderToggle())
                 .hasMicroTextOffloadProvider()).isTrue();
     }
 
@@ -353,7 +352,7 @@ class LlmRouterTest {
             when(cm.call(any(Prompt.class))).thenThrow(new RuntimeException(msg));
             CircuitBreaker cb = new CircuitBreaker(2);
             var p = new LlmProvider("lm", TaskType.TEXT, ProviderRole.LOCAL, 1, "k", null, null, true, cm, null);
-            var r = new LlmRouter(List.of(p), null, cb, RoutingMode.COST_FIRST, 0.6, 180,
+            var r = new LlmRouter(List.of(p), null, cb, RoutingMode.COST_FIRST, 180,
                     Map.of(), 3, 20, new ProviderToggle());
             assertThatThrownBy(() -> r.executeWithTracking(TaskType.TEXT, RoutingMode.COST_FIRST,
                     m -> m.call(new Prompt("x")))).isInstanceOf(LlmProviderExhaustedException.class);
@@ -366,7 +365,7 @@ class LlmRouterTest {
         when(cm.call(any(Prompt.class))).thenThrow(new RuntimeException("Rate limit: too many tokens per minute"));
         CircuitBreaker cb = new CircuitBreaker(2);
         var p = new LlmProvider("lm", TaskType.TEXT, ProviderRole.LOCAL, 1, "k", null, null, true, cm, null);
-        var r = new LlmRouter(List.of(p), null, cb, RoutingMode.COST_FIRST, 0.6, 180,
+        var r = new LlmRouter(List.of(p), null, cb, RoutingMode.COST_FIRST, 180,
                 Map.of(), 3, 20, new ProviderToggle());
         assertThatThrownBy(() -> r.executeWithTracking(TaskType.TEXT, RoutingMode.COST_FIRST,
                 m -> m.call(new Prompt("x")))).isInstanceOf(LlmProviderExhaustedException.class);
@@ -410,7 +409,7 @@ class LlmRouterTest {
     @DisplayName("acquirePermit: concurrency=1에서 슬롯이 점유돼 있으면 대기 후 LlmBackpressureException")
     void acquirePermit_timesOutWhenSaturated() {
         var local = p("lm", ProviderRole.LOCAL, TaskType.TEXT, 1);
-        var r = new LlmRouter(List.of(local), null, breaker, RoutingMode.COST_FIRST, 0.6, 180,
+        var r = new LlmRouter(List.of(local), null, breaker, RoutingMode.COST_FIRST, 180,
                 Map.of("lm", 1), 1, 1);
 
         LlmRouter.Permit held = r.acquirePermit(local);
@@ -432,7 +431,7 @@ class LlmRouterTest {
         var local = new LlmProvider("lm", TaskType.TEXT, ProviderRole.LOCAL, 1, "k", null, null, true,
                 chatModel, null);
         var r = new LlmRouter(List.of(local), mock(LlmUsageRepository.class), breaker,
-                RoutingMode.COST_FIRST, 0.6, 180, Map.of("lm", 1), 1, 1);
+                RoutingMode.COST_FIRST, 180, Map.of("lm", 1), 1, 1);
 
         LlmRouter.Permit held = r.acquirePermit(local);
         assertThatThrownBy(() -> r.executeGated(TaskType.TEXT, RoutingMode.COST_FIRST,
@@ -450,7 +449,7 @@ class LlmRouterTest {
         var local = new LlmProvider("lm", TaskType.TEXT, ProviderRole.LOCAL, 1, "k", null, null, true,
                 chatModel, null);
         var r = new LlmRouter(List.of(local), mock(LlmUsageRepository.class), breaker,
-                RoutingMode.COST_FIRST, 0.6, 180, Map.of("lm", 1), 1, 1);
+                RoutingMode.COST_FIRST, 180, Map.of("lm", 1), 1, 1);
 
         LlmRouter.Permit held = r.acquirePermit(local); // saturate the gate
         String result = r.executeWithTracking(TaskType.TEXT, RoutingMode.COST_FIRST,
@@ -470,7 +469,7 @@ class LlmRouterTest {
         doThrow(new org.springframework.jdbc.UncategorizedSQLException(
                 "insert", "INSERT INTO llm_usage ...", new java.sql.SQLException("database or disk is full")))
                 .when(usageRepo).record(any(), anyLong(), anyLong());
-        var r = new LlmRouter(List.of(local), usageRepo, breaker, RoutingMode.COST_FIRST, 0.6);
+        var r = new LlmRouter(List.of(local), usageRepo, breaker, RoutingMode.COST_FIRST);
 
         // The LLM call itself succeeded — a bookkeeping-only failure must not be mistaken for a
         // provider failure (which would discard this response, block the circuit breaker, and
@@ -493,8 +492,7 @@ class LlmRouterTest {
         });
         var local = new LlmProvider("lm", TaskType.TEXT, ProviderRole.LOCAL, 1, "k", null, null, true,
                 chatModel, null);
-        var r = new LlmRouter(List.of(local), mock(LlmUsageRepository.class), breaker, RoutingMode.COST_FIRST,
-                0.6, 180, Map.of(), 3, 20, new ProviderToggle(), tracker);
+        var r = new LlmRouter(List.of(local), mock(LlmUsageRepository.class), breaker, RoutingMode.COST_FIRST, 180, Map.of(), 3, 20, new ProviderToggle(), tracker);
 
         r.executeWithTracking(TaskType.TEXT, RoutingMode.COST_FIRST, m -> m.call(new Prompt("x")));
 
@@ -513,8 +511,7 @@ class LlmRouterTest {
         });
         var local = new LlmProvider("lm", TaskType.TEXT, ProviderRole.LOCAL, 1, "k", null, null, true,
                 chatModel, null);
-        var r = new LlmRouter(List.of(local), mock(LlmUsageRepository.class), breaker, RoutingMode.COST_FIRST,
-                0.6, 180, Map.of(), 3, 20, new ProviderToggle(), tracker);
+        var r = new LlmRouter(List.of(local), mock(LlmUsageRepository.class), breaker, RoutingMode.COST_FIRST, 180, Map.of(), 3, 20, new ProviderToggle(), tracker);
 
         r.executeGated(TaskType.TEXT, RoutingMode.COST_FIRST, m -> m.call(new Prompt("x")));
 
@@ -564,7 +561,7 @@ class LlmRouterTest {
         // router() passes a null usageRepo — fine for tests that only ever throw, but this one
         // needs a real fallback success, which records usage.
         var r = new LlmRouter(List.of(local, normal), mock(LlmUsageRepository.class), breaker,
-                RoutingMode.COST_FIRST, 0.6);
+                RoutingMode.COST_FIRST);
 
         String result = r.executeWithTracking(TaskType.TEXT, RoutingMode.COST_FIRST,
                 m -> m.call(new Prompt("x")));
@@ -625,7 +622,7 @@ class LlmRouterTest {
     void samePriorityOneSaturated_picksLeastInFlight() {
         var local1 = p("local-1", ProviderRole.LOCAL, TaskType.TEXT, 0);
         var local2 = p("local-2", ProviderRole.LOCAL, TaskType.TEXT, 0);
-        var r = new LlmRouter(List.of(local1, local2), null, breaker, RoutingMode.COST_FIRST, 0.6, 180,
+        var r = new LlmRouter(List.of(local1, local2), null, breaker, RoutingMode.COST_FIRST, 180,
                 Map.of("local-1", 1, "local-2", 1), 1, 1);
 
         LlmRouter.Permit held = r.acquirePermit(local1); // local-1의 유일한 슬롯을 점유
@@ -641,7 +638,7 @@ class LlmRouterTest {
     void differentPriorityIgnoresLoad() {
         var local1 = p("local-1", ProviderRole.LOCAL, TaskType.TEXT, 0);
         var local2 = p("local-2", ProviderRole.LOCAL, TaskType.TEXT, 1); // 더 높은(나중) priority
-        var r = new LlmRouter(List.of(local1, local2), null, breaker, RoutingMode.COST_FIRST, 0.6, 180,
+        var r = new LlmRouter(List.of(local1, local2), null, breaker, RoutingMode.COST_FIRST, 180,
                 Map.of("local-1", 1, "local-2", 1), 1, 1);
 
         LlmRouter.Permit held = r.acquirePermit(local1); // local-1이 포화 상태여도
@@ -661,7 +658,7 @@ class LlmRouterTest {
         var local2 = new LlmProvider("local-2", TaskType.TEXT, ProviderRole.LOCAL, 0, "k", null, null, true,
                 model2, null);
         var r = new LlmRouter(List.of(local1, local2), mock(LlmUsageRepository.class), breaker,
-                RoutingMode.COST_FIRST, 0.6, 180, Map.of("local-1", 1, "local-2", 1), 1, 5);
+                RoutingMode.COST_FIRST, 180, Map.of("local-1", 1, "local-2", 1), 1, 5);
 
         LlmRouter.Permit held = r.acquirePermit(local1); // local-1 포화
         String result = r.executeGated(TaskType.TEXT, RoutingMode.COST_FIRST, m -> m.call(new Prompt("x")));
@@ -684,7 +681,7 @@ class LlmRouterTest {
     @DisplayName("localTier1Concurrency — 단일 LOCAL priority=1 프로바이더의 capacity 를 그대로 반환한다")
     void localTier1Concurrency_singleProvider_reportsCapacity() {
         var local = p("local", ProviderRole.LOCAL, TaskType.BOTH, 1);
-        var r = new LlmRouter(List.of(local), null, breaker, RoutingMode.COST_FIRST, 0.6, 180,
+        var r = new LlmRouter(List.of(local), null, breaker, RoutingMode.COST_FIRST, 180,
                 Map.of("local", 5), 3, 20);
 
         var snap = r.localTier1Concurrency();
@@ -699,7 +696,7 @@ class LlmRouterTest {
     void localTier1Concurrency_multipleProviders_sumsCapacity() {
         var local1 = p("local", ProviderRole.LOCAL, TaskType.BOTH, 1);
         var local2 = p("local-2", ProviderRole.LOCAL, TaskType.BOTH, 1);
-        var r = new LlmRouter(List.of(local1, local2), null, breaker, RoutingMode.COST_FIRST, 0.6, 180,
+        var r = new LlmRouter(List.of(local1, local2), null, breaker, RoutingMode.COST_FIRST, 180,
                 Map.of("local", 3, "local-2", 4), 3, 20);
 
         var snap = r.localTier1Concurrency().orElseThrow();
@@ -712,7 +709,7 @@ class LlmRouterTest {
     @DisplayName("localTier1Concurrency — 획득한 permit 만큼 inUse 가 증가하고, 반환하면 다시 줄어든다")
     void localTier1Concurrency_reflectsAcquiredPermits() {
         var local = p("local", ProviderRole.LOCAL, TaskType.BOTH, 1);
-        var r = new LlmRouter(List.of(local), null, breaker, RoutingMode.COST_FIRST, 0.6, 180,
+        var r = new LlmRouter(List.of(local), null, breaker, RoutingMode.COST_FIRST, 180,
                 Map.of("local", 3), 3, 20);
 
         LlmRouter.Permit permit = r.acquirePermit(local);
@@ -732,7 +729,7 @@ class LlmRouterTest {
     void localTier1Concurrency_blockedProviderCountsFullyAsInUse() {
         var local1 = p("local", ProviderRole.LOCAL, TaskType.BOTH, 1);
         var local2 = p("local-2", ProviderRole.LOCAL, TaskType.BOTH, 1);
-        var r = new LlmRouter(List.of(local1, local2), null, breaker, RoutingMode.COST_FIRST, 0.6, 180,
+        var r = new LlmRouter(List.of(local1, local2), null, breaker, RoutingMode.COST_FIRST, 180,
                 Map.of("local", 3, "local-2", 4), 3, 20);
 
         var before = r.localTier1Concurrency().orElseThrow();
@@ -756,7 +753,7 @@ class LlmRouterTest {
         var local1 = p("local", ProviderRole.LOCAL, TaskType.BOTH, 1);
         var local2 = p("local-2", ProviderRole.LOCAL, TaskType.BOTH, 1);
         var toggle = new ProviderToggle();
-        var r = new LlmRouter(List.of(local1, local2), null, breaker, RoutingMode.COST_FIRST, 0.6, 180,
+        var r = new LlmRouter(List.of(local1, local2), null, breaker, RoutingMode.COST_FIRST, 180,
                 Map.of("local", 3, "local-2", 4), 3, 20, toggle);
 
         toggle.setEnabled("local-2", false);

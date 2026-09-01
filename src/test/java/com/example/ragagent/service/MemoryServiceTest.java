@@ -27,7 +27,7 @@ class MemoryServiceTest {
     private static AppProperties propsWithMaxTokens(int maxTokens) {
         AppProperties props = mock(AppProperties.class);
         when(props.llmSafe()).thenReturn(new AppProperties.LlmConfig(
-                java.util.List.of(), 2, 10, 180, "COST_FIRST", 0.6, 3, 20, 0.0, 0.1, 0.0, 0.7, true, maxTokens, true));
+                java.util.List.of(), 2, 10, 180, "COST_FIRST", 3, 20, 0.0, 0.1, 0.0, 0.7, true, maxTokens, true));
         return props;
     }
 

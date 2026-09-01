@@ -22,14 +22,25 @@ public class LlmRouter {
 
     private static final Logger log = LoggerFactory.getLogger(LlmRouter.class);
 
-    /** Short fallback block (seconds) for transient/overload-type failures — see {@link #blockForOverload}. */
+    /**
+     * Short fallback block for transient/overload-type failures — see {@link #blockForOverload}.
+     *
+     * <p><b>{@code String} 인 것은 실수가 아니다.</b> 이 값은 {@code CircuitBreaker.block()} 의 두 번째
+     * 인자로 가는데, 그 자리는 HTTP {@code Retry-After} <b>헤더 값</b>이다 — 프로바이더가 헤더를 줬으면
+     * 그 문자열이 그대로 오고, 안 줬을 때 이 상수가 대신 들어간다. {@code parseRetryAfter()} 가 초 단위
+     * 숫자와 RFC 1123 날짜를 모두 받으므로 타입은 문자열이어야 한다. {@code int} 로 바꾸려면
+     * {@code block()} 의 시그니처부터 갈라야 하고, 그러면 "헤더가 있으면 그것, 없으면 이 값"이라는
+     * 한 줄짜리 규칙이 두 갈래로 늘어난다.
+     *
+     * <p>프로퍼티로 외부화되어 있지 않다 — 바꾸려면 코드를 고쳐야 한다. 세 갈래(폴백 없는 과부하 차단·
+     * 기타 4xx/5xx·일반 예외)가 이 하나를 공유하므로, 그중 하나만 다르게 하려면 상수를 분리해야 한다.
+     */
     private static final String SHORT_BLOCK_SECONDS = "30";
 
     private final List<LlmProvider> providers; // priority 오름차순
     private final LlmUsageRepository usageRepo;
     private final CircuitBreaker circuitBreaker;
     private final RoutingMode defaultMode;
-    private final double progressiveThreshold;
     private final int readTimeoutSeconds;
 
     /**
@@ -80,46 +91,45 @@ public class LlmRouter {
     private final BackgroundLlmConcurrencyTracker backgroundConcurrencyTracker;
 
     public LlmRouter(List<LlmProvider> providers, LlmUsageRepository usageRepo,
-                     CircuitBreaker circuitBreaker, RoutingMode defaultMode,
-                     double progressiveThreshold) {
-        this(providers, usageRepo, circuitBreaker, defaultMode, progressiveThreshold, 180);
+                     CircuitBreaker circuitBreaker, RoutingMode defaultMode) {
+        this(providers, usageRepo, circuitBreaker, defaultMode, 180);
     }
 
     public LlmRouter(List<LlmProvider> providers, LlmUsageRepository usageRepo,
                      CircuitBreaker circuitBreaker, RoutingMode defaultMode,
-                     double progressiveThreshold, int readTimeoutSeconds) {
-        this(providers, usageRepo, circuitBreaker, defaultMode, progressiveThreshold, readTimeoutSeconds,
+                     int readTimeoutSeconds) {
+        this(providers, usageRepo, circuitBreaker, defaultMode, readTimeoutSeconds,
                 Map.of(), 3, 20);
     }
 
     public LlmRouter(List<LlmProvider> providers, LlmUsageRepository usageRepo,
                      CircuitBreaker circuitBreaker, RoutingMode defaultMode,
-                     double progressiveThreshold, int readTimeoutSeconds,
+                     int readTimeoutSeconds,
                      Map<String, Integer> providerConcurrency,
                      int defaultProviderConcurrency, int permitWaitTimeoutSeconds) {
         // Existing callers (incl. tests) get a fresh empty toggle → nothing disabled, zero behavior
         // change. Only LlmConfig injects the shared @Component so /settings toggles affect this router.
-        this(providers, usageRepo, circuitBreaker, defaultMode, progressiveThreshold, readTimeoutSeconds,
+        this(providers, usageRepo, circuitBreaker, defaultMode, readTimeoutSeconds,
                 providerConcurrency, defaultProviderConcurrency, permitWaitTimeoutSeconds, new ProviderToggle());
     }
 
     public LlmRouter(List<LlmProvider> providers, LlmUsageRepository usageRepo,
                      CircuitBreaker circuitBreaker, RoutingMode defaultMode,
-                     double progressiveThreshold, int readTimeoutSeconds,
+                     int readTimeoutSeconds,
                      Map<String, Integer> providerConcurrency,
                      int defaultProviderConcurrency, int permitWaitTimeoutSeconds,
                      ProviderToggle providerToggle) {
         // Existing callers (incl. tests) get a fresh, un-shared tracker — harmless, since nothing
         // else reads it unless the same instance is also wired into OperationsController (only
         // LlmConfig does that, via the overload below).
-        this(providers, usageRepo, circuitBreaker, defaultMode, progressiveThreshold, readTimeoutSeconds,
+        this(providers, usageRepo, circuitBreaker, defaultMode, readTimeoutSeconds,
                 providerConcurrency, defaultProviderConcurrency, permitWaitTimeoutSeconds, providerToggle,
                 new BackgroundLlmConcurrencyTracker());
     }
 
     public LlmRouter(List<LlmProvider> providers, LlmUsageRepository usageRepo,
                      CircuitBreaker circuitBreaker, RoutingMode defaultMode,
-                     double progressiveThreshold, int readTimeoutSeconds,
+                     int readTimeoutSeconds,
                      Map<String, Integer> providerConcurrency,
                      int defaultProviderConcurrency, int permitWaitTimeoutSeconds,
                      ProviderToggle providerToggle, BackgroundLlmConcurrencyTracker backgroundConcurrencyTracker) {
@@ -127,7 +137,6 @@ public class LlmRouter {
         this.usageRepo = usageRepo;
         this.circuitBreaker = circuitBreaker;
         this.defaultMode = defaultMode;
-        this.progressiveThreshold = progressiveThreshold;
         this.readTimeoutSeconds = readTimeoutSeconds;
         this.defaultProviderConcurrency = defaultProviderConcurrency > 0 ? defaultProviderConcurrency : 3;
         this.permitWaitTimeoutSeconds = permitWaitTimeoutSeconds > 0 ? permitWaitTimeoutSeconds : 20;
@@ -401,7 +410,6 @@ public class LlmRouter {
     }
 
     public RoutingMode getDefaultMode() { return defaultMode; }
-    public double getProgressiveThreshold() { return progressiveThreshold; }
 
     // ── Private ────────────────────────────────────────────────────────────
 

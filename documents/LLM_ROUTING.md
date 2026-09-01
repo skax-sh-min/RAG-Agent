@@ -99,7 +99,7 @@ TEXT 1회에서 TEXT 2회(답변+평가) + 임베딩으로 늘어난다는 뜻�
 public enum RoutingMode {
     COST_FIRST,    // LOCAL → NORMAL → PREMIUM
     QUALITY_FIRST, // PREMIUM → NORMAL → LOCAL
-    PROGRESSIVE,   // COST_FIRST 먼저 → qualityScore < threshold 시 PREMIUM 재실행
+    PROGRESSIVE,   // COST_FIRST 먼저 → 검증 미충족 + 재시도 소진 시 PREMIUM 재실행
     LOCAL_ONLY     // LOCAL 전용 (미연결 시 LlmProviderExhaustedException)
 }
 ```
@@ -118,7 +118,6 @@ public enum RoutingMode {
 ```properties
 app.llm.default-routing-mode=${LLM_ROUTING_MODE:COST_FIRST}
 app.llm.circuit-breaker-minutes=4
-app.llm.progressive-threshold=0.6
 # §6.18 — sampling temperature + response cap (were dead/hardcoded before). All three temperatures
 # are hot-editable via /settings (apply on the next call, no restart): temperature is read per-call
 # by every interactive gated caller (ClassifierService/AnswerService/RerankerService) — still also
@@ -312,11 +311,13 @@ app.indexing.keyword-batch-size=${INDEXING_KEYWORD_BATCH_SIZE:2}
 
 **PROGRESSIVE 흐름**:
 1. COST_FIRST로 Answer 실행
-2. `qualityScore` < `progressiveThreshold`(기본 0.6) AND 재검색 소진 시
+2. 검증이 `sufficient=false` 를 내고(`needsRetry`) 재시도까지 소진했을 때(`retryCount >= max-retry-count`)
 3. QUALITY_FIRST로 Answer 재실행 (동일 검색 결과 재사용)
 4. 응답 메타에 `🔝 고추론 재분석 → {providerName}` 배지 표시
 
-> 현재 `qualityScore`는 sufficient=true→1.0, false→0.0 이진값. 추후 스칼라 점수로 확장 가능.
+> **`qualityScore` 와 `app.llm.progressive-threshold` 는 존재하지 않는다** (2026-09-01 제거). 문서에만 있던 개념이고 코드에는 점수 계산이 없었다 — 프로퍼티는 `LlmRouter` 필드까지 실려 다녔지만 `getProgressiveThreshold()` 의 호출부가 하나도 없어, 0.0~1.0 어느 값으로 설정해도 동작이 같았다. 튜닝 손잡이처럼 보이는 죽은 설정이라 지웠다. 스칼라 점수를 도입한다면 그때 다시 넣되, **넣는 커밋에서 소비처까지 함께** 만들 것.
+>
+> **PROGRESSIVE 승격 조건** — 점수도 임계값도 없다. `AnswerService.checkSufficiencyAndMaybeUpgrade()` 의 조건 셋이 전부다: 라우팅 모드가 `PROGRESSIVE` 이고, 검증이 `sufficient=false` 를 냈고(`needsRetry`), 재시도를 이미 다 썼을 때(`retryCount >= max-retry-count`).
 
 ---
 

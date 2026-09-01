@@ -168,8 +168,6 @@ public class LlmConfig {
             defaultMode = RoutingMode.COST_FIRST;
         }
 
-        double threshold = llmCfg.progressiveThreshold() > 0
-                ? llmCfg.progressiveThreshold() : 0.6;
 
         // Per-provider concurrency gate: falls back to defaultProviderConcurrency
         // when a provider config omits its own `concurrency`.
@@ -191,7 +189,7 @@ public class LlmConfig {
         log.info("LLM HTTP timeouts: connect={}s read={}s, permit-wait={}s", connectTimeoutSeconds, readTimeoutSeconds,
                 llmCfg.permitWaitTimeoutSeconds());
 
-        return new LlmRouter(providers, usageRepo, circuitBreaker, defaultMode, threshold, readTimeoutSeconds,
+        return new LlmRouter(providers, usageRepo, circuitBreaker, defaultMode, readTimeoutSeconds,
                 providerConcurrency, llmCfg.defaultProviderConcurrency(), llmCfg.permitWaitTimeoutSeconds(),
                 providerToggle, backgroundConcurrencyTracker);
     }

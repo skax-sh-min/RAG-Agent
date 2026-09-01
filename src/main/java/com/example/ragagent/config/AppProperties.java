@@ -58,7 +58,6 @@ public record AppProperties(
             int connectTimeoutSeconds,
             int readTimeoutSeconds,
             String defaultRoutingMode,
-            double progressiveThreshold,
             int defaultProviderConcurrency,  // per-provider concurrency gate default (matches the server's --parallel), fallback when a provider omits its own `concurrency`
             int permitWaitTimeoutSeconds,    // max wait for a concurrency slot on the query path before failing fast with 429 (default 60s, well under the 600s read-timeout)
             Double temperature,              // general/RAG temperature (app.llm.temperature / LLM_TEMPERATURE), default 0.0, clamp [0,0.3] — HOT-editable, attached per call by every interactive gated caller (ClassifierService, AnswerService, RerankerService); still baked into each provider's defaultOptions at bean creation too, as the fallback for framework-internal callers that build their own ChatClient around the injected model (e.g. RetrievalService's MultiQueryExpander) and so can't take a per-call override
@@ -723,7 +722,7 @@ public record AppProperties(
             double it = clamp(indexingOverride != null ? indexingOverride : 0.0, 0.0, 0.1);
             double ct = clamp(creativeOverride != null ? creativeOverride : 0.7, 0.0, 1.0);
             boolean cm = creativeModeOverride == null || creativeModeOverride;
-            return new LlmConfig(List.of(), 2, 10, 180, "COST_FIRST", 0.6, 3, 20, t, dt, it, ct, cm,
+            return new LlmConfig(List.of(), 2, 10, 180, "COST_FIRST", 3, 20, t, dt, it, ct, cm,
                     DEFAULT_MAX_TOKENS, true);
         }
         List<ProviderConfig> providers = llm.providers() != null ? llm.providers() : List.of();
@@ -731,7 +730,6 @@ public record AppProperties(
                 int connectTimeout = llm.connectTimeoutSeconds() > 0 ? llm.connectTimeoutSeconds() : 10;
                 int readTimeout = llm.readTimeoutSeconds() > 0 ? llm.readTimeoutSeconds() : 180;
         String mode = llm.defaultRoutingMode() != null ? llm.defaultRoutingMode() : "COST_FIRST";
-        double threshold = llm.progressiveThreshold() > 0 ? llm.progressiveThreshold() : 0.6;
         int defaultProviderConcurrency = llm.defaultProviderConcurrency() > 0 ? llm.defaultProviderConcurrency() : 3;
         int permitWaitTimeoutSeconds = llm.permitWaitTimeoutSeconds() > 0 ? llm.permitWaitTimeoutSeconds() : 20;
         double temperatureBase = tempOverride != null ? tempOverride
@@ -751,7 +749,7 @@ public record AppProperties(
                 : (llm.creativeModeEnabled() == null || llm.creativeModeEnabled());
         int maxTokens = (llm.maxTokens() != null && llm.maxTokens() > 0) ? llm.maxTokens() : DEFAULT_MAX_TOKENS;
         boolean verifyLocalModels = llm.verifyLocalModelsOnStartup() == null || llm.verifyLocalModelsOnStartup();
-                return new LlmConfig(providers, minutes, connectTimeout, readTimeout, mode, threshold,
+                return new LlmConfig(providers, minutes, connectTimeout, readTimeout, mode,
                         defaultProviderConcurrency, permitWaitTimeoutSeconds, temperature, directTemperature,
                         indexingTemperature, creativeTemperature, creativeModeEnabled, maxTokens,
                         verifyLocalModels);

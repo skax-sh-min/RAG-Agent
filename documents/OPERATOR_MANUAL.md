@@ -1360,7 +1360,7 @@ Web UI 채팅 화면 드롭다운에서 대화별로 변경 가능.
 | `PROGRESSIVE` | COST_FIRST로 먼저 답변 → 품질 점수 미달 시 PREMIUM으로 재실행 | 품질·비용 균형 |
 | `LOCAL_ONLY` | LOCAL만 사용, 외부 API 미호출 | 오프라인 / 보안 환경 |
 
-> **PROGRESSIVE 임계값**: `app.llm.progressive-threshold=0.6` (기본). 현재 sufficient=true(1.0) / false(0.0) 이진값.
+> **PROGRESSIVE 승격 조건**: 임계값 설정은 없습니다(`app.llm.progressive-threshold` 는 2026-09-01 제거 — 값을 읽는 코드가 없어 어떤 값을 넣어도 동작이 같았습니다). **PROGRESSIVE 승격 조건** — 점수도 임계값도 없다. `AnswerService.checkSufficiencyAndMaybeUpgrade()` 의 조건 셋이 전부다: 라우팅 모드가 `PROGRESSIVE` 이고, 검증이 `sufficient=false` 를 냈고(`needsRetry`), 재시도를 이미 다 썼을 때(`retryCount >= max-retry-count`).
 
 ---
 
@@ -1480,7 +1480,6 @@ LOCAL_LLM_MODEL=gemma-4-27b-it
 ```properties
 app.llm.default-routing-mode=COST_FIRST
 app.llm.circuit-breaker-minutes=4
-app.llm.progressive-threshold=0.6
 
 # LOCAL — 무료, 분류·키워드·경량 태스크 처리
 # base-url에 폴백 기본값을 두지 않는다 — LOCAL_LLM_URL이 비면 이 프로바이더는 기동 시 제외된다(LlmConfig G2)

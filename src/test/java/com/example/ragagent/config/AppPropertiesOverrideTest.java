@@ -268,7 +268,7 @@ class AppPropertiesOverrideTest {
     @DisplayName("LLM — 일반/RAG temperature는 [0.0, 0.3]으로 clamp된다")
     void ragTemperature_isClampedToPointThree() {
         AppProperties p = withLlm(new AppProperties.LlmConfig(
-                java.util.List.of(), 2, 10, 180, "COST_FIRST", 0.6, 3, 20,
+                java.util.List.of(), 2, 10, 180, "COST_FIRST", 3, 20,
                 1.2, 0.1, 0.0, 0.7, true, 6000, true));
 
         assertThat(p.llmSafe().temperature()).isEqualTo(0.3);
