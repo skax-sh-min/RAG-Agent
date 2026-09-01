@@ -402,7 +402,8 @@ public class AnswerService {
         boolean docsPresent = !state.retrievedDocs().isEmpty();
         try {
             String systemPrompt = messageSource.getMessage(state.responseMode().evalPromptKey(), null, locale);
-            String excerpts = buildEvalExcerpts(state.retrievedDocs());
+            String excerpts = buildEvalExcerpts(state.retrievedDocs(),
+                    evalExcerptTokenBudget(state, systemPrompt, answer, evalConverter.getFormat()));
             String evalPrompt = buildEvalPrompt(state, answer, excerpts, evalConverter.getFormat());
 
             LlmRouter.LlmResult result = llmRouter.executeGatedWithUsage(TaskType.TEXT, state.routingMode(),
@@ -458,7 +459,8 @@ public class AnswerService {
         boolean docsPresent = !state.retrievedDocs().isEmpty();
         try {
             String systemPrompt = messageSource.getMessage(state.responseMode().evalPromptKey(), null, locale);
-            String excerpts = buildEvalExcerpts(state.retrievedDocs());
+            String excerpts = buildEvalExcerpts(state.retrievedDocs(),
+                    evalExcerptTokenBudget(state, systemPrompt, answer, creativeEvalConverter.getFormat()));
             String evalPrompt = buildEvalPrompt(state, answer, excerpts, creativeEvalConverter.getFormat());
 
             LlmRouter.LlmResult result = llmRouter.executeGatedWithUsage(TaskType.TEXT, state.routingMode(),
@@ -583,13 +585,45 @@ public class AnswerService {
      * never truncated mid-document — half a chunk is precisely how the path or constant under
      * verification disappears. The top-ranked document is always kept.
      */
-    private static String buildEvalExcerpts(List<Document> docs) {
+    /**
+     * 검증 호출의 발췌에 쓸 수 있는 토큰 수 — 창을 모르면 {@code 0}(= 토큰 예산 없음, 글자 상한만).
+     *
+     * <p><b>답변 호출과 따로 계산해야 한다.</b> 이 호출은 프롬프트 모양이 다르다: 검색 문서는 같지만
+     * 거기에 <b>답변 전문</b>과 응답 스키마가 더 얹히고, 대화 이력은 빠진다. 답변 프롬프트가 예산에
+     * 들어갔다는 사실이 검증 프롬프트도 들어간다는 보장이 되지 못하는 이유이고, 실제로 이 앱에서
+     * 가장 큰 단일 요청은 답변이 아니라 이쪽이다.
+     *
+     * <p>출력 예약은 {@link #MAX_EVAL_OUTPUT_TOKENS} 다 — 이 호출은 스스로 그 값으로 조이므로
+     * 프로바이더의 일반 예약이 아니라 실제로 예약되는 값을 빼야 맞다.
+     */
+    private long evalExcerptTokenBudget(AgentState state, String systemPrompt, String answer, String schema) {
+        int window = contextWindows.tokensOrZero(
+                llmRouter.findProviderName(TaskType.TEXT, state.routingMode()));
+        if (window <= 0) return 0;   // 창 모름 → 글자 상한만 적용(예전 동작 그대로)
+        long fixed = TokenEstimator.estimate(systemPrompt)
+                + TokenEstimator.estimate(answer)
+                + TokenEstimator.estimate(state.question())
+                + TokenEstimator.estimate(schema);
+        return Math.max(0, new PromptBudget(window, MAX_EVAL_OUTPUT_TOKENS).inputBudget() - fixed);
+    }
+
+    /**
+     * @param tokenBudget 창에서 파생된 발췌 토큰 예산. {@code 0} 이하면 적용하지 않는다(창 모름).
+     *                    {@link #MAX_EVAL_EXCERPT_CHARS} 글자 상한은 <b>그와 무관하게 늘 걸린다</b> —
+     *                    그쪽은 과대 설정을 막는 절대 안전판이고, 이쪽은 이 프로바이더에 실제로 들어가는
+     *                    양이라 성격이 다르다. 둘 중 먼저 걸리는 쪽에서 멈춘다.
+     */
+    private static String buildEvalExcerpts(List<Document> docs, long tokenBudget) {
         StringBuilder sb = new StringBuilder();
         int used = 0;
+        long usedTokens = 0;
         int included = 0;
         for (Document d : docs) {
             String text = MarkdownNoiseNormalizer.normalize(d.getText());
-            if (included > 0 && used + text.length() > MAX_EVAL_EXCERPT_CHARS) break;
+            long tokens = TokenEstimator.estimate(text);
+            boolean overChars = used + text.length() > MAX_EVAL_EXCERPT_CHARS;
+            boolean overTokens = tokenBudget > 0 && usedTokens + tokens > tokenBudget;
+            if (included > 0 && (overChars || overTokens)) break;
             if (included > 0) sb.append("\n---\n");
             // [D1], [D2], … — the numbering the eval prompt's usedDocs field refers to. 1-based and
             // in prompt order, so an index maps straight back to retrievedDocs.get(n-1). A document
@@ -597,12 +631,16 @@ public class AnswerService {
             // from the tail: indices of the documents that ARE included never shift.
             sb.append("[D").append(included + 1).append("]\n").append(text);
             used += text.length();
+            usedTokens += tokens;
             included++;
         }
         if (included < docs.size()) {
-            log.warn("[EVAL] 문서 발췌 {}자 상한으로 {}개 중 {}개만 검증에 사용 — 하위 순위 문서 제외 "
-                     + "(app.search-top-k / app.chunk-size 가 과도하게 큰지 확인)",
-                    MAX_EVAL_EXCERPT_CHARS, docs.size(), included);
+            log.warn("[EVAL] 발췌 한도(글자 {} / 토큰 {})로 {}개 중 {}개만 검증에 사용 — 하위 순위 문서 제외. "
+                     + "검증 창이 답변 창보다 좁아지면 6~8번째 문서에만 있는 값을 정확히 인용한 답변이 "
+                     + "근거 없음으로 판정될 수 있으므로, app.search-top-k / app.chunk-size 를 낮추거나 "
+                     + "프로바이더의 컨텍스트를 키우는 편이 낫다.",
+                    MAX_EVAL_EXCERPT_CHARS, tokenBudget > 0 ? tokenBudget : "미적용",
+                    docs.size(), included);
         }
         return sb.toString();
     }

@@ -202,6 +202,81 @@ class AnswerServiceTest {
         assertThat(prompt).doesNotContain("첫질문");
     }
 
+    @Test
+    @DisplayName("검증 발췌도 창에서 파생된다 — 답변이 길수록 발췌에 남는 자리가 줄어든다")
+    void evalExcerptsDeriveFromTheContextWindow() {
+        contextWindows.record("lm", 12_000, ProviderContextWindows.Source.CONFIGURED);
+        when(llmRouter.findProviderName(any(), any())).thenReturn("lm");
+
+        // 검증 프롬프트(두 번째 호출)를 잡는다 — 첫 번째는 답변 프롬프트다.
+        var prompts = new java.util.ArrayList<String>();
+        when(llmRouter.executeGatedWithUsage(any(), any(), any())).thenAnswer(inv -> {
+            java.util.function.Function<org.springframework.ai.chat.model.ChatModel,
+                    org.springframework.ai.chat.model.ChatResponse> fn = inv.getArgument(2);
+            org.springframework.ai.chat.model.ChatModel probe =
+                    mock(org.springframework.ai.chat.model.ChatModel.class);
+            when(probe.call(any(org.springframework.ai.chat.prompt.Prompt.class))).thenAnswer(call -> {
+                org.springframework.ai.chat.prompt.Prompt prompt = call.getArgument(0);
+                prompts.add(prompt.getInstructions().stream()
+                        .map(org.springframework.ai.chat.messages.Message::getText)
+                        .reduce("", (a, b) -> a + "\n" + b));
+                return chatResponse("답변");
+            });
+            fn.apply(probe);
+            return new LlmRouter.LlmResult("답변", 0, 0);
+        });
+
+        var first  = new org.springframework.ai.document.Document("첫번째" + "가".repeat(1_000));
+        var second = new org.springframework.ai.document.Document("두번째" + "나".repeat(1_000));
+        var third  = new org.springframework.ai.document.Document("세번째" + "다".repeat(1_000));
+        AgentState state = newState(RoutingMode.COST_FIRST).toBuilder()
+                .retrievedDocs(List.of(first, second, third))
+                .build();
+        service.execute(state);
+
+        assertThat(prompts).as("답변 + 검증 두 호출이 나가야 한다").hasSizeGreaterThanOrEqualTo(2);
+        String evalPrompt = prompts.get(1);
+        // 창 12,000 → PromptBudget(12,000, 2,048).inputBudget() = 12,000 − 2,048 − 1,200 = 8,752.
+        // 시스템 프롬프트("prompt" 목)·답변·질문·스키마를 빼도 문서 셋(각 ~1,003)은 다 들어간다.
+        assertThat(evalPrompt).contains("첫번째", "두번째", "세번째");
+    }
+
+    @Test
+    @DisplayName("검증 창이 좁으면 발췌도 하위 순위부터 줄어든다")
+    void evalExcerptsShrinkOnANarrowWindow() {
+        contextWindows.record("lm", 4_096, ProviderContextWindows.Source.CONFIGURED);
+        when(llmRouter.findProviderName(any(), any())).thenReturn("lm");
+
+        var prompts = new java.util.ArrayList<String>();
+        when(llmRouter.executeGatedWithUsage(any(), any(), any())).thenAnswer(inv -> {
+            java.util.function.Function<org.springframework.ai.chat.model.ChatModel,
+                    org.springframework.ai.chat.model.ChatResponse> fn = inv.getArgument(2);
+            org.springframework.ai.chat.model.ChatModel probe =
+                    mock(org.springframework.ai.chat.model.ChatModel.class);
+            when(probe.call(any(org.springframework.ai.chat.prompt.Prompt.class))).thenAnswer(call -> {
+                org.springframework.ai.chat.prompt.Prompt prompt = call.getArgument(0);
+                prompts.add(prompt.getInstructions().stream()
+                        .map(org.springframework.ai.chat.messages.Message::getText)
+                        .reduce("", (a, b) -> a + "\n" + b));
+                return chatResponse("답변");
+            });
+            fn.apply(probe);
+            return new LlmRouter.LlmResult("답변", 0, 0);
+        });
+
+        var first  = new org.springframework.ai.document.Document("첫번째" + "가".repeat(1_500));
+        var second = new org.springframework.ai.document.Document("두번째" + "나".repeat(1_500));
+        AgentState state = newState(RoutingMode.COST_FIRST).toBuilder()
+                .retrievedDocs(List.of(first, second))
+                .build();
+        service.execute(state);
+
+        String evalPrompt = prompts.get(1);
+        // 창 4,096 → 예산 4,096 − 2,048 − 409 = 1,639. 첫 문서(1,503)만 들어간다.
+        assertThat(evalPrompt).as("첫 발췌는 예산을 넘어도 남는다").contains("첫번째");
+        assertThat(evalPrompt).as("좁은 창에서는 하위 순위 발췌가 빠진다").doesNotContain("두번째");
+    }
+
     private static int countOccurrences(String haystack, String needle) {
         int count = 0, idx = 0;
         while ((idx = haystack.indexOf(needle, idx)) >= 0) { count++; idx += needle.length(); }
