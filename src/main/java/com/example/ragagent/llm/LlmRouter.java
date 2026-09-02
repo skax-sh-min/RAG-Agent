@@ -37,6 +37,24 @@ public class LlmRouter {
      */
     private static final String SHORT_BLOCK_SECONDS = "30";
 
+    /**
+     * 폴백이 없는 프로바이더가 <b>연결 계열</b>로 실패했을 때의 차단 — 30초가 아니라 이만큼이다.
+     *
+     * <p><b>왜 그래도 차단은 하는가.</b> 서버가 정말 죽어 있으면 차단이 없을 때 모든 요청이 연결
+     * 타임아웃을 각자 물게 된다. 빠르게 실패시키는 것이 차단의 값이고 그건 프로바이더가 하나뿐일
+     * 때도 유효하다.
+     *
+     * <p><b>왜 30초는 긴가.</b> 프로바이더가 하나면 차단은 그 시간만큼 <b>전면 중단</b>이다. 로컬 LLM
+     * 재시작은 보통 몇 초로 끝나므로, 30초는 서버가 이미 올라온 뒤까지 남아 운영자에게
+     * "재시작했는데도 계속 안 된다"로 보인다 — 실측 사고가 정확히 그 모양이었다(차단 1회, 그 창 안의
+     * 재시도 3번이 전부 {@code "All providers exhausted"}). 5초면 스탬피드는 막으면서 회복은
+     * 사실상 즉시다.
+     *
+     * <p>폴백이 있으면 이 값을 쓰지 않는다 — 그때는 차단이 "다른 곳으로 보낸다"는 뜻이라 길어도
+     * 손해가 없고, 아픈 프로바이더를 성급히 다시 부르지 않는 편이 낫다.
+     */
+    private static final String NO_FALLBACK_BLOCK_SECONDS = "5";
+
     private final List<LlmProvider> providers; // priority 오름차순
     private final LlmUsageRepository usageRepo;
     private final CircuitBreaker circuitBreaker;
@@ -498,7 +516,9 @@ public class LlmRouter {
                         ? e.getResponseHeaders().getFirst("Retry-After") : null;
                 blockForOverload(provider, taskType, roleOrder, tried, retryAfter);
             } else {
-                circuitBreaker.block(provider.name(), SHORT_BLOCK_SECONDS);
+                // 5xx·4xx 도 같은 판단을 받는다 — 프로바이더가 하나뿐이면 차단은 우회가 아니라
+                // 전면 중단이고, 재시작 중 서버가 잠깐 5xx 를 뱉는 경우가 흔하다.
+                blockForFailure(provider, taskType, roleOrder, tried);
             }
             log.warn("Provider [{}] returned HTTP {}, trying next", provider.name(), status);
             return executeWithTracking(taskType, roleOrder, usageLabelPrefix, call, tried, gated);
@@ -521,6 +541,12 @@ public class LlmRouter {
                         + "app.search-top-k (hot, via /settings) first, then app.llm.max-tokens "
                         + "(restart required), or raise the LLM server's context size. "
                         + "See OPERATOR_MANUAL §8.", provider.name());
+            } else if (isRequestTerminatedByServer(e)) {
+                // 서버가 내려가면서 이 요청을 끊었다. 차단하면 서버가 올라온 뒤까지 그 차단이 남아
+                // "재시작했는데도 계속 안 된다"가 된다 — isTimeoutLike 와 같은 이유로 통과시킨다.
+                log.warn("Provider [{}] terminated the in-flight request (restart/model reload?) — "
+                        + "NOT blocking circuit breaker; the server is usually back within seconds.",
+                        provider.name());
             } else if (isVisionUnsupported(e)) {
                 // Model lacks mmproj / image-input support — a request-shape limitation, not a
                 // provider outage. Blocking here (like any other failure) would also stall
@@ -531,7 +557,7 @@ public class LlmRouter {
                 log.warn("Provider [{}] does not support image input (mmproj missing) — "
                         + "skipping image tasks for this provider, NOT blocking circuit breaker", provider.name());
             } else {
-                circuitBreaker.block(provider.name(), SHORT_BLOCK_SECONDS);
+                blockForFailure(provider, taskType, roleOrder, tried);
             }
             log.warn("Provider [{}] threw {}: {}, trying next",
                     provider.name(), e.getClass().getSimpleName(), e.getMessage());
@@ -562,6 +588,27 @@ public class LlmRouter {
      * {@code Retry-After} header is still honored even with no fallback (authoritative operator
      * guidance from the provider itself, not a default we're second-guessing).
      */
+    /**
+     * 오버로드가 아닌 일반 실패(연결 거부·리셋·5xx 등)의 차단.
+     *
+     * <p>{@link #blockForOverload} 와 <b>같은 판단</b>을 한다 — 넘겨줄 상대가 있으면 차단이 곧
+     * 우회이고, 없으면 차단은 전면 중단이다. 다른 점은 여기엔 존중해야 할 {@code Retry-After} 가
+     * 없다는 것뿐이라 분기가 폴백 유무 하나로 단순해진다.
+     *
+     * <p>이 분기가 없던 동안 로컬 LLM 하나짜리 배포는 재시작 한 번에 30초를 통째로 잃었다.
+     */
+    private void blockForFailure(LlmProvider provider, TaskType taskType,
+                                 List<ProviderRole> roleOrder, Set<String> tried) {
+        if (findFirst(taskType, roleOrder, tried).isPresent()) {
+            circuitBreaker.block(provider.name(), SHORT_BLOCK_SECONDS);
+            return;
+        }
+        log.warn("[NO-FALLBACK] provider={} is the only viable provider for task={} — "
+                + "blocking briefly ({}s) so a restart recovers immediately instead of after {}s",
+                provider.name(), taskType, NO_FALLBACK_BLOCK_SECONDS, SHORT_BLOCK_SECONDS);
+        circuitBreaker.block(provider.name(), NO_FALLBACK_BLOCK_SECONDS);
+    }
+
     private void blockForOverload(LlmProvider provider, TaskType taskType, List<ProviderRole> roleOrder,
                                   Set<String> tried, String retryAfterHeader) {
         boolean hasFallback = findFirst(taskType, roleOrder, tried).isPresent();
@@ -636,6 +683,51 @@ public class LlmRouter {
             "exceeds the available context",
             "exceed context size",
             "prompt is too long"
+    );
+
+    /**
+     * 서버가 <b>처리 중이던 요청을 끊었다</b> — 재시작·모델 리로드·수동 취소. 차단하면 안 되는
+     * 네 번째 실패 갈래다.
+     *
+     * <p><b>{@link #isTimeoutLike} 의 거울상</b>이라고 보면 된다. 그쪽은 클라이언트가 끊은 경우이고
+     * 이쪽은 서버가 끊은 경우인데, "프로바이더가 아픈 것이 아니다"라는 결론은 같다. 실제로 관측된
+     * 것은 로컬 LLM 을 재시작했을 때 진행 중이던 응답에 돌아온
+     * {@code 400 - {"error":"terminated"}} 이고, 서버는 그 몇 초 뒤 멀쩡히 살아난다.
+     *
+     * <p><b>차단이 왜 해로운가.</b> 이 실패는 서버가 <b>내려가는 순간</b>에만 나오는데, 30초 차단은
+     * 서버가 <b>이미 올라온 뒤</b>까지 이어진다. 그동안 들어온 요청은 프로바이더에 닿지도 못하고
+     * {@code "All providers exhausted"} 로 죽어, 운영자에게는 "재시작했는데도 계속 안 된다"로 보인다
+     * (실측: 차단 1회에 그 창 안의 재시도 3번이 전부 그렇게 실패했다). 게다가 그 메시지는 원인을
+     * 가린다 — 프로바이더가 고갈된 것이 아니라 하나가 한 번 끊긴 것이다.
+     *
+     * <p>{@link #isContextOverflow} 와 마찬가지로 <b>기억하지 않는다</b>: 서버 수명주기의 한순간이지
+     * 그 프로바이더의 성질이 아니다.
+     *
+     * <p>판정을 메시지로 하는 이유도 같다 — 이 응답 역시 HTTP 400 본문에 실려
+     * {@code NonTransientAiException} 으로 감싸여 오므로 {@code catch (HttpStatusCodeException)} 에
+     * 걸리지 않는다. 마커를 {@code "terminated"} 한 단어가 아니라 JSON 조각으로 둔 것은 그 단어가
+     * 다른 오류 문구에도 흔히 들어가기 때문이다(예: "connection terminated by peer" — 그건 진짜
+     * 네트워크 장애라 차단하는 편이 맞다).
+     */
+    static boolean isRequestTerminatedByServer(Throwable t) {
+        Throwable cur = t;
+        while (cur != null) {
+            String msg = cur.getMessage();
+            if (msg != null) {
+                String lowered = msg.toLowerCase();
+                for (String marker : REQUEST_TERMINATED_MARKERS) {
+                    if (lowered.contains(marker)) return true;
+                }
+            }
+            cur = cur.getCause();
+        }
+        return false;
+    }
+
+    /** 소문자 부분 일치. 서버가 진행 중인 요청을 끊었을 때의 응답 본문 조각. */
+    private static final List<String> REQUEST_TERMINATED_MARKERS = List.of(
+            "\"error\":\"terminated\"",
+            "\"error\": \"terminated\""
     );
 
     private static boolean isVisionUnsupported(Throwable t) {

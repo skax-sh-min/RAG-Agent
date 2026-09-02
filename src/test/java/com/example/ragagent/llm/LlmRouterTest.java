@@ -373,6 +373,86 @@ class LlmRouterTest {
     }
 
     @Test
+    @DisplayName("서버가 요청을 끊으면(재시작·모델 리로드) 차단하지 않는다 — isTimeoutLike 의 거울상")
+    void serverTerminatedRequest_doesNotBlockTheProvider() {
+        // 실측: 로컬 LLM 을 재시작하면 진행 중이던 응답에 이 본문이 돌아온다. HTTP 400 본문이라
+        // NonTransientAiException 으로 감싸여 오고, catch (HttpStatusCodeException) 에 걸리지 않는다.
+        ChatModel cm = mock(ChatModel.class);
+        when(cm.call(any(Prompt.class)))
+                .thenThrow(new RuntimeException("400 - {\"error\":\"terminated\"}"));
+        CircuitBreaker cb = new CircuitBreaker(2);
+        var p = new LlmProvider("lm", TaskType.TEXT, ProviderRole.LOCAL, 1, "k", null, null, true, cm, null);
+        var r = new LlmRouter(List.of(p), null, cb, RoutingMode.COST_FIRST, 180,
+                Map.of(), 3, 20, new ProviderToggle());
+
+        assertThatThrownBy(() -> r.executeWithTracking(TaskType.TEXT, RoutingMode.COST_FIRST,
+                m -> m.call(new Prompt("x")))).isInstanceOf(LlmProviderExhaustedException.class);
+
+        assertThat(cb.isBlocked("lm"))
+                .as("차단하면 서버가 올라온 뒤까지 남아 '재시작했는데도 계속 안 된다'가 된다")
+                .isFalse();
+    }
+
+    @Test
+    @DisplayName("'terminated' 라는 단어만으로는 통과시키지 않는다 — 진짜 네트워크 장애는 차단해야 한다")
+    void theWordTerminatedAloneIsNotEnough() {
+        ChatModel cm = mock(ChatModel.class);
+        when(cm.call(any(Prompt.class)))
+                .thenThrow(new RuntimeException("connection terminated by peer"));
+        CircuitBreaker cb = new CircuitBreaker(2);
+        var p = new LlmProvider("lm", TaskType.TEXT, ProviderRole.LOCAL, 1, "k", null, null, true, cm, null);
+        var r = new LlmRouter(List.of(p), null, cb, RoutingMode.COST_FIRST, 180,
+                Map.of(), 3, 20, new ProviderToggle());
+
+        assertThatThrownBy(() -> r.executeWithTracking(TaskType.TEXT, RoutingMode.COST_FIRST,
+                m -> m.call(new Prompt("x")))).isInstanceOf(LlmProviderExhaustedException.class);
+
+        assertThat(cb.isBlocked("lm")).isTrue();
+    }
+
+    @Test
+    @DisplayName("폴백이 없으면 일반 실패도 짧게만 차단한다 — 프로바이더가 하나면 차단은 전면 중단이다")
+    void aLoneProviderIsBlockedOnlyBriefly() {
+        ChatModel cm = mock(ChatModel.class);
+        when(cm.call(any(Prompt.class))).thenThrow(new RuntimeException("Connection refused"));
+        CircuitBreaker cb = new CircuitBreaker(2);
+        var lone = new LlmProvider("lm", TaskType.TEXT, ProviderRole.LOCAL, 1, "k", null, null, true, cm, null);
+        var r = new LlmRouter(List.of(lone), null, cb, RoutingMode.COST_FIRST, 180,
+                Map.of(), 3, 20, new ProviderToggle());
+
+        assertThatThrownBy(() -> r.executeWithTracking(TaskType.TEXT, RoutingMode.COST_FIRST,
+                m -> m.call(new Prompt("x")))).isInstanceOf(LlmProviderExhaustedException.class);
+
+        // 차단 자체는 유지된다 — 정말 죽어 있으면 매 요청이 연결 타임아웃을 각자 무는 편이 나쁘다.
+        assertThat(cb.isBlocked("lm")).isTrue();
+        java.time.Instant until = cb.getBlockedProviders().get("lm");
+        assertThat(until).isNotNull();
+        assertThat(until).as("30초가 아니라 몇 초여야 재시작이 즉시 회복된다")
+                .isBefore(java.time.Instant.now().plusSeconds(10));
+    }
+
+    @Test
+    @DisplayName("폴백이 있으면 예전대로 30초 — 그때 차단은 전면 중단이 아니라 우회다")
+    void aProviderWithAFallbackKeepsTheLongerBlock() {
+        ChatModel failing = mock(ChatModel.class);
+        when(failing.call(any(Prompt.class))).thenThrow(new RuntimeException("Connection refused"));
+        ChatModel ok = mock(ChatModel.class);
+        when(ok.call(any(Prompt.class))).thenThrow(new RuntimeException("Connection refused"));
+        CircuitBreaker cb = new CircuitBreaker(2);
+        var local = new LlmProvider("lm", TaskType.TEXT, ProviderRole.LOCAL, 1, "k", null, null, true, failing, null);
+        var cloud = new LlmProvider("cloud", TaskType.TEXT, ProviderRole.NORMAL, 1, "k", null, null, true, ok, null);
+        var r = new LlmRouter(List.of(local, cloud), null, cb, RoutingMode.COST_FIRST, 180,
+                Map.of(), 3, 20, new ProviderToggle());
+
+        assertThatThrownBy(() -> r.executeWithTracking(TaskType.TEXT, RoutingMode.COST_FIRST,
+                m -> m.call(new Prompt("x")))).isInstanceOf(LlmProviderExhaustedException.class);
+
+        assertThat(cb.getBlockedProviders().get("lm"))
+                .as("폴백이 있었으므로 짧게 줄일 이유가 없다")
+                .isAfter(java.time.Instant.now().plusSeconds(10));
+    }
+
+    @Test
     @DisplayName("executeWithTracking — mmproj 미지원 확인 후에는 VISION/LIGHT_BOTH 요청을 재시도 없이 건너뜀")
     void visionUnsupportedError_skipsFutureImageTasksForThatProvider() {
         ChatModel chatModel = mock(ChatModel.class);
