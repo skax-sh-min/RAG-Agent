@@ -111,8 +111,6 @@ src/main/resources/
 | GET | `/llm-usage` | `llm-usage.html` | LLM 사용량 페이지 |
 | GET | `/ui/llm-usage/cards` | `fragments/llm-usage-cards` | 카드 HTMX 자동 갱신(30초). 채팅 프로바이더 + 임베딩(`embed:<model>`, `EMBEDDING` 배지) + orphan(설정에 없는 이름, `ORPHAN` 배지 + 삭제 버튼) 카드 포함 |
 | DELETE | `/admin/llm-usage/{provider}` | `fragments/llm-usage-cards` | orphan 프로바이더의 누적 사용 기록 삭제. `/admin/**` 경로 아래 있어 `ROLE_ADMIN` 전용(no-auth 모드는 관리자 자동 인증 상속) — 컨트롤러는 `OperationsController` 소속, 경로만 admin 네임스페이스 |
-| GET | `/ui/threads/{threadId}/turns/{turnId}/curated` | JSON `{"answer":"..."}` | §10.10 — 본인 좋아요 답변의 현재 큐레이션 텍스트 조회(채팅 인라인 편집창 채우기용). 소유권은 기존 피드백 엔드포인트와 동일하게 `(userId, threadId)` 스코프로 검증 |
-| PATCH | `/ui/threads/{threadId}/turns/{turnId}/curated` | `204` | §10.10 — 본인 좋아요 답변의 큐레이션 텍스트 수정(`answer` 폼 파라미터) → 저장 즉시 백그라운드 재임베딩. 관리자 권한 불필요 — thread 자체가 사용자별로 격리되어 있어 본인 turn만 접근 가능 |
 | GET | `/api/v1/llm/concurrency` | JSON `{"available":true,"inUse":N,"capacity":N}` 또는 `{"available":false}` | 헤더의 **LLM 동시성** 표시가 폴링하는 REST 엔드포인트. `role=LOCAL, priority=1`(우선 처리 계층 — MICRO_TEXT 전용 `priority=0` 소형 모델은 제외)이면서 현재 가용한(등록됨+서킷브레이커 미차단+런타임 비활성화 안 됨) 프로바이더들의 concurrency 합계가 `capacity`, 실제 사용 중인 permit 수가 `inUse`. 그런 프로바이더가 하나도 없으면 `available=false`만 반환(다른 필드 생략) — 로컬 LLM이 없는 배포에서는 지표 자체가 무의미하므로 |
 
 REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — 둘 다 임베딩·orphan 항목 포함(상세는 [OPERATOR_MANUAL.md](OPERATOR_MANUAL.md) 참고)
@@ -170,7 +168,7 @@ REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — �
 
 > 상태 카드는 `AdminService.vectorStoreView()` → `VectorStoreAdminView`. 백엔드별 표시 차이는 [OPERATOR_MANUAL.md §7.4](OPERATOR_MANUAL.md) 참고.
 >
-> **큐레이션 Q&A 카드**(`/admin` 하단, §10.10): 기본적으로 접힌 `<details>` 카드이며, 처음 펼칠 때만(`hx-trigger="toggle[this.open] once"` → `GET /admin/curated`) 좋아요로 승격된 질문·답변을 최신순으로 조회해 표시한다 — `AdminController.adminPage()`는 더 이상 `curatedQaService.listActive()`를 즉시 호출하지 않으므로 `/admin` 페이지 로드 자체는 이 조회를 하지 않는다. 페이지당 건수는 20/50/100 중 선택(기본 20 — `AdminController.curatedPanel()`의 `limit` 기본값), 이전/다음 버튼으로 페이지 이동한다(`CuratedQaRepository.findAllActive(offset, limit)`) — 이전의 고정 상한 50건·페이지네이션 없음 방식에서, 큐레이션 항목이 계속 쌓여도 패널이 무거워지지 않도록 청크 목록과 동일한 페이지네이션 UI로 전환됐다. 편집(연필 아이콘)은 저장 시 자동 재임베딩되는 점이 위 청크 편집과 다르다 — 청크 편집은 원본 벡터를 그대로 유지하지만, 큐레이션 Q&A 편집은 검색 정확도가 목적이라 항상 재임베딩된다. **편집 오프캔버스는 청크 편집과 동일한 조건·동일한 렌더러로 좌측 미리보기 컬럼을 띄운다**(`window.innerWidth >= EDIT_BASE_WIDTH * 2`일 때만, `renderChunkPreview()` → `renderMarkdownWithImageMarkers()`, 입력 200ms 디바운스) — 큐레이션 답변은 표·코드블록·이미지 마커를 포함한 마크다운이 그대로 검색 근거가 되므로 원문만 보고 고치면 서식이 깨진 것을 알아채기 어렵다. 좁은 화면은 기존 단일 컬럼 그대로다. 질문 앞에 노란 ⚠ 배지가 보이면 `embed_status='failed'`(전체+핵심 섹션 재시도 모두 실패, `CuratedQaService.tryEmbedWithFallback()`) — 해당 항목은 검색에 전혀 반영되지 않고 있다는 뜻이며, 답변을 편집해 저장하면 재시도된다. 채팅 화면에서도 본인 소유 turn에 한해 같은 배지(`"임베딩 실패"` 텍스트)가 좋아요/편집 아이콘 옆에 뜬다(백그라운드 임베딩이 몇 초 뒤 실패하는 구조라 실시간 토스트는 없고, 다음 페이지 로드 시 표시). 상세는 [OPERATOR_MANUAL.md §7.5](OPERATOR_MANUAL.md#75-큐레이션-qa-관리-1010) 참고.
+> **큐레이션 Q&A 카드**(`/admin` 하단, §10.10): 기본적으로 접힌 `<details>` 카드이며, 처음 펼칠 때만(`hx-trigger="toggle[this.open] once"` → `GET /admin/curated`) 승인된 큐레이션 항목을 최신순으로 조회해 표시한다 — `AdminController.adminPage()`는 더 이상 `curatedQaService.listActive()`를 즉시 호출하지 않으므로 `/admin` 페이지 로드 자체는 이 조회를 하지 않는다. 페이지당 건수는 20/50/100 중 선택(기본 20 — `AdminController.curatedPanel()`의 `limit` 기본값), 이전/다음 버튼으로 페이지 이동한다(`CuratedQaRepository.findAllActive(offset, limit)`) — 이전의 고정 상한 50건·페이지네이션 없음 방식에서, 큐레이션 항목이 계속 쌓여도 패널이 무거워지지 않도록 청크 목록과 동일한 페이지네이션 UI로 전환됐다. 편집(연필 아이콘)은 저장 시 자동 재임베딩되는 점이 위 청크 편집과 다르다 — 청크 편집은 원본 벡터를 그대로 유지하지만, 큐레이션 Q&A 편집은 검색 정확도가 목적이라 항상 재임베딩된다. **편집 오프캔버스는 청크 편집과 동일한 조건·동일한 렌더러로 좌측 미리보기 컬럼을 띄운다**(`window.innerWidth >= EDIT_BASE_WIDTH * 2`일 때만, `renderChunkPreview()` → `renderMarkdownWithImageMarkers()`, 입력 200ms 디바운스) — 큐레이션 답변은 표·코드블록·이미지 마커를 포함한 마크다운이 그대로 검색 근거가 되므로 원문만 보고 고치면 서식이 깨진 것을 알아채기 어렵다. 좁은 화면은 기존 단일 컬럼 그대로다. 질문 앞에 노란 ⚠ 배지가 보이면 `embed_status='failed'`(전체+핵심 섹션 재시도 모두 실패, `CuratedQaService.tryEmbedWithFallback()`) — 해당 항목은 검색에 전혀 반영되지 않고 있다는 뜻이며, 답변을 편집해 저장하면 재시도된다. 저자에게는 같은 사실이 `/curated/submissions`의 자기 제안 옆 경고로 뜬다(백그라운드 임베딩이 몇 초 뒤 실패하는 구조라 실시간 토스트는 없고, 다음 페이지 로드 시 표시) — §10.11 이 채팅 쪽 배지를 없앤 뒤로 그 자리가 여기다. 상세는 [OPERATOR_MANUAL.md §7.5](OPERATOR_MANUAL.md#75-큐레이션-qa-관리-1010) 참고.
 
 > **검색 진단 수치 카드**(`/admin` 최하단, 3단계): 같은 `<details>` 지연 로딩 구조(`hx-trigger="toggle[this.open] once"` → `GET /admin/retrieval-metrics`). 턴 한 줄에 **시각·질문·대화·사용자·응답모드·최고 유사도·사용/검색 개수**를 보여주고, **상세**를 누르면 그 턴의 출처별 4개 수치(유사도·검색기여·축별 순위·응답참여)가 펼쳐진다 — 그 표는 대화 목록 패널과 공유하는 `fragments/admin-source-table`이다. 채팅의 배지는 그 순간만 보이므로, `SEARCH_RRF_KEYWORD_WEIGHT`·`SEARCH_SIMILARITY_THRESHOLD` 같은 값을 조정하려면 **여러 턴에 걸친 경향**을 봐야 한다는 것이 이 패널의 존재 이유다.
 > - **사용/검색** 열(`3/8`)이 이 패널에서 가장 볼 만한 수치다 — 검색된 출처의 절반 이상이 답변에 반영되지 않으면 ⚠가 붙는다(topK 과다 또는 프롬프트 문제 의심).
@@ -229,7 +227,7 @@ REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — �
 | POST | `/admin/settings/provider/toggle` | `fragments/settings-providers :: providers` | LLM 프로바이더 활성/비활성 토글(`name`, `enabled`) — `ProviderToggle`(메모리 전용, `settings_override`와 무관)이라 **재기동 시 초기화**됨. 이름이 같은 프로바이더는 함께 토글되고, 마지막 활성 프로바이더는 비활성화 거부(400). 감사 로그 기록 |
 
 - 핫 수정 가능 항목만 `key`를 받아 수정할 수 있다:
-  - **검색 튜닝**(다음 검색부터 반영) — 유사도 임계값·RRF 가중치/k·후보 배수·태그 후보 배수·멀티쿼리 최소 길이·재시도 시 후보 확대·topK·멀티쿼리 확장·하이브리드 검색·**큐레이션 Q&A 사용 여부·큐레이션 가중치(좋아요)·지식 제안 가중치**
+  - **검색 튜닝**(다음 검색부터 반영) — 유사도 임계값·RRF 가중치/k·후보 배수·태그 후보 배수·멀티쿼리 최소 길이·재시도 시 후보 확대·topK·멀티쿼리 확장·하이브리드 검색·**큐레이션 Q&A 사용 여부·큐레이션 가중치**
   - **인덱싱/청킹**(다음 인덱싱/↺ 재인덱싱부터 반영) — 청크 크기·오버랩·최소 크기·**청크 분할 전략(`chunk-split-granular`)**·동시 파일 처리 수(`1~4`)·동시 LLM 호출 수(`1~8`).
     두 동시성 값의 범위는 **`/settings` 입력 한계일 뿐**이다 — `indexingSafe()`는 `<= 0`만 걸러내고
     상한 clamp가 없어서, 환경변수로 더 큰 값을 준 배포는 그대로 동작하되 설정 화면에서 그 값을 다시
@@ -252,18 +250,22 @@ REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — �
 - LLM 라우팅 카드는 `<hr>`로 두 구역을 나눈다: 위쪽은 라우팅 모드(LLM 자체 — `max-tokens`는 편집 가능해지면서 LLM 핫 그룹으로 옮겨졌고, 요약 칸에 남겨 두면 같은 값이 두 곳에 다른 조작 가능성으로 보인다), 아래쪽은 임베딩(모델·**접속 주소**(`settings.embeddingBaseUrl`, `app.embedding.base-url`/`EMBED_BASE_URL` 조회 전용)·차원). 임베딩 접속 주소는 채팅 LLM과 별도 엔드포인트일 수 있어(§6.21 로드밸런싱 등) 조회 전용으로만 노출된다.
 - 상세는 [OPERATOR_MANUAL.md §6.5](OPERATOR_MANUAL.md#65-설정-페이지-settings--llmrag-옵션-조회핫-수정) 참고.
 
-### 3.5-bis 청크 추가 게시판 (CuratedSubmissionController)
+### 3.5-bis 지식 제안 게시판 (CuratedSubmissionController)
 
-사용자가 검색에 넣고 싶은 내용을 직접 등록하는 게시판. **모든 인증 모드에서 게스트에게 열려 있다** —
+사용자가 검색에 넣고 싶은 내용을 등록하는 게시판이자, **§10.11 이후 검색 코퍼스로 들어가는 유일한 문**.
+직접 쓸 수도 있고, 채팅에서 답변에 좋아요를 누르면 그 답변으로 채워져 열린다.
+**모든 인증 모드에서 게스트에게 열려 있다** —
 등록이 만드는 것은 검색에 영향을 주지 않는 `pending` 행 하나뿐이고, 실제 색인은 관리자 승인(§3.4)을 거친다.
 모든 조회·쓰기가 `CurrentUser.userId()` 스코프이며, no-auth 모드에서 "내 제안"이 방문자별로 갈리려면
 `app.auth.guest-identity`가 기본값 `shared`가 아니어야 한다([OPERATOR_MANUAL.md §9.4.3](OPERATOR_MANUAL.md#943-접속자별-채팅-개인화-appauthguest-identity)).
 
 | Method | Path | 반환 | 설명 |
 |--------|------|------|------|
-| GET | `/curated/submissions` | `curated-submissions.html` | 등록 폼 + "내 제안" 목록. **페이지를 여는 것 자체가 읽음 처리**(`markAllReadForAuthor`)라 헤더 배지가 사라진다 |
-| POST | `/curated/submissions` | redirect + flash | 등록(`title`/`body`/`tags`). HTMX가 아니라 **평범한 폼 POST + 플래시 리다이렉트** — HTML 폼이므로 검증 실패가 `GlobalExceptionHandler`의 JSON으로 나가면 안 된다. 실패 시 입력 초안(`draftTitle`/`draftBody`/`draftTags`)을 되돌려준다 |
-| POST | `/curated/submissions/{id}/withdraw` | redirect + flash | 작성자 본인의 `pending` 제안 철회 |
+| GET | `/curated/submissions` | `curated-submissions.html` | 등록 폼 + "내 제안" 목록(`?status=` 로 상태 필터). **페이지를 여는 것 자체가 읽음 처리**(`markAllReadForAuthor`)라 헤더 배지가 사라진다. `?fromThread=&fromTurn=` 이 붙으면 그 턴의 답변으로 폼을 채운다 — **본문은 서버가 턴에서 읽는다**(3,000자 답변은 URL로 나를 수 없고, 클라이언트가 나르면 임의 텍스트를 "채팅 답변에서 온 것"으로 위장할 수 있다). 같은 턴에 살아 있는 제안이 이미 있으면 두 번째 초안을 열지 않고 그 항목을 가리킨다 |
+| POST | `/curated/submissions` | redirect + flash | 등록(`title`/`body`/`tags`, 좋아요 출신이면 `sourceThreadId`/`sourceTurnId`). HTMX가 아니라 **평범한 폼 POST + 플래시 리다이렉트** — HTML 폼이므로 검증 실패가 `GlobalExceptionHandler`의 JSON으로 나가면 안 된다. 실패 시 입력 초안(출처 턴 포함)을 되돌려준다. 출처 턴은 서버가 소유권을 다시 확인하므로 위조해도 손으로 쓴 제안이 될 뿐이다 |
+| POST | `/curated/submissions/{id}/withdraw` | redirect + flash | 작성자 본인의 `pending`·`approved` 제안 철회. **등록 완료 건이면 검색에서도 함께 회수된다**(확인 문구가 그 사실을 먼저 말한다) — §10.11 이전에는 `pending`만 가능해 한 번 승인된 지식을 저자가 내릴 방법이 없었다 |
+| GET | `/curated/submissions/{id}/detail` | JSON | 저자 수정 오프캔버스가 읽는 전문. 작성자 스코프로 걸러지므로 남의 초안은 열리지 않는다 |
+| POST | `/curated/submissions/{id}` | `200` / `409` / `400` | 저자 수정 저장(JSON). 저장하면 어느 상태에서든 `pending`으로 돌아가지만 **등록본은 검색에 그대로 남는다**(정책 3) — 관리자가 새 본문을 승인할 때 교체된다. 409=이미 처리됨, 400=검증 실패(둘 다 오프캔버스가 인라인으로 렌더) |
 | POST | `/curated/submissions/images` | JSON `{"path","marker"}` / `400` / `422` | 본문 이미지 업로드(multipart `file`). 위 등록 POST와 달리 **진짜 API 호출**(폼 JS의 `fetch`)이라 오류를 JSON으로 돌려주는 것이 맞다 — 크기/빈 파일은 `GlobalExceptionHandler` 경유 400, 확장자·매직바이트 불일치는 422 |
 | GET | `/curated/submissions/unread-count` | JSON `{"count":N}` | 헤더 배지 폴링(60초) — 처리됐지만 아직 확인하지 않은 내 제안 수. **읽음 처리는 하지 않는다**(폴링이 지우면 보기도 전에 사라짐) |
 
@@ -273,7 +275,8 @@ REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — �
 - **태그**(선택) — 자유 입력 + 아래 **기존 태그** 칩 클릭 추가. `documents.html` 업로드 태그와 동일한 패턴이며, 목록은 `GET /api/v1/tags?includeCurated=true`로 **문서 태그 ∪ 큐레이션 태그**를 받는다 — 큐레이션 항목은 `chunk_fts`에 색인되지 않아(벡터 축 전용) 합집합이 아니면 제안에서만 쓴 태그가 다음 사람에게 안 보이고 표기가 갈린다. 비워 두면 모든 태그 스코프에서 검색된다(§4 "큐레이션 태그 스코프" 참고).
 - **본문** — **길이 제한 없음**. 오른쪽 위 **작성/미리보기** 탭으로 전환하며, 미리보기는 `renderMarkdownWithImageMarkers()` → `marked` → `DOMPurify.sanitize()`(관리자 검토 화면과 동일 파이프라인). 입력창 아래에 글자 수와 **예상 청크 수**(`chunkSize`로 나눈 클라이언트 추정치 — 정확한 값은 소제목 위치에 따라 달라지므로 관리자 검토 화면이 서버 계산으로 보여준다)가 표시된다.
 - **이미지 추가** — 본문 라벨 옆 버튼. 파일을 고르면 즉시 `POST /curated/submissions/images`로 올라가고, 응답의 `[이미지: images/submissions/{해시}.png]` 마커가 **textarea의 커서 위치**에 삽입된다(앞뒤 빈 줄 포함, 삽입 후 `input` 이벤트를 발생시켜 글자 수·예상 청크 수를 갱신). **마커의 위치가 곧 이미지의 위치**이므로 그 뒤의 이동·복사·삭제는 전부 평범한 텍스트 편집이고, 승인 시 본문이 청크로 나뉠 때 이미지가 자기가 설명하는 문단을 따라간다. png·jpg·gif·webp / 파일당 5MB / 본문당 10장. CSRF 토큰은 폼의 히든 인풋에서 읽어 `FormData`에 실으므로 세 인증 모드에서 분기가 필요 없다(no-auth에서는 값이 비어 생략).
-- **내 제안 목록** — 상태 뱃지(검토 대기/등록 완료/반려/철회함/회수됨), 반려 사유 **전문**, 임베딩 실패 경고, 태그 뱃지, 등록된 청크 수. 상태는 전부/전무로 파생된다(청크가 하나라도 살아 있으면 등록 완료).
+- **좋아요에서 열린 경우** — 폼 위에 출처 안내가 붙는다: 그 턴의 **두 글자 표기**(`[RN]`/`[DN]` — 관리자가 검토할 때 보는 것과 같은 값), 본문 이미지 개수/상한(`validateImageCount()`가 문서 이미지까지 세므로 이미지 많은 답변은 제출 단계에서 걸린다 — 미리 보여 준다), 원 대화 링크. 제목은 질문을 200자로 **자른** 값이다(질문은 2,000자까지 가능하다).
+- **내 제안 목록** — 상태 뱃지(검토 대기/등록 완료/반려/철회함/회수됨), 반려 사유 **전문**, 임베딩 실패 경고, 태그 뱃지, 등록된 **벡터 수**(행 수가 아니다 — 좋아요 출신은 행 하나가 벡터 N개다), 상태 필터, 그리고 검토 대기·등록 완료 건의 **수정·철회** 버튼. 상태는 전부/전무로 파생된다(청크가 하나라도 살아 있으면 등록 완료). `pending`인데 활성 등록본이 있으면 "현재 등록본은 계속 사용 중"이 함께 뜬다 — 수정 중에도 그 지식이 검색에 남아 있다는 뜻이고, 새 파생 상태를 만들지 않고 두 값의 조합으로 표기한다.
 
 > **이미지 마커 렌더링은 전역 1벌**(`layout/base.html`의 `renderMarkdownWithImageMarkers()`) — `/admin` 청크 뷰(`renderChunkPreview()`)·제안 작성 미리보기·관리자 검토 미리보기가 모두 같은 본문 형식을 그린다. `CHUNK_IMAGE_MARKER`/`PREVIEWABLE_IMAGE_EXT`는 이제 전역 상수이므로 **페이지 스크립트에서 다시 선언하면 안 된다**(최상위 `const` 중복 = 그 페이지 스크립트 전체가 죽는 `SyntaxError`).
 
@@ -416,10 +419,10 @@ hide:0}})`, 하단 스크립트에서 초기화)이다. 네이티브 title 툴�
 > 렌더러는 늘 그렇듯 셋이고, 스트리밍은 출처 배지가 RETRIEVAL 직후에 그려지므로 `done` 이벤트의
 > `promptExcluded`(chunkId 배열)로 사후에 붙인다 — 참여도(`attribution`)와 같은 자리, 같은 이유다.
 
-> **`S`·`C`에서는 좋아요 버튼이 아무 일도 하지 않는다**(`allowsCuration() = false` → `CuratedQaService.onLike()`가
-> 즉시 반환, `curated_qa` 행조차 만들지 않는다). S는 답변 전체가 `## 요약` 한 섹션이라 임베딩 입력에서 구조
-> 섹션을 걷어내면 본문이 통째로 사라지고, C는 만들어 낸 코드가 가중 RRF 축으로 검색돼 다음 턴의 "문서"가
-> 되는 되먹임을 만든다. 싫어요는 모드와 무관하게 동작한다. 상세는 PIPELINE §3.1.
+> **`S`에서는 좋아요 버튼이 비활성이다**(`allowsSubmission() = false`) — 사유가 툴팁에 붙는다. S는 배경·이유·전제를
+> 일부러 덜어낸 형식이라 오래 남길 지식의 원본이 아니기 때문이다. **`C`는 §10.11에서 열렸다** — 예전에 막았던 이유
+> (만들어 낸 코드가 다음 턴의 "문서"가 되는 되먹임)가 치명적이었던 것은 게이트가 없었기 때문이고, 사람이 편집하고
+> 관리자가 승인하는 지금은 C 답변도 같은 심사를 받는다. 싫어요는 모드와 무관하게 동작한다. 상세는 PIPELINE §3.1.
 
 > **`C`는 답변 재사용 후보에서도 빠진다**(`allowsReuse() = false`). "다시 만들어 줘"에 저장된 코드를 그대로
 > 돌려주면 요청한 바로 그 일을 하지 않는 셈이 되기 때문이다 — 근거 청크가 그대로여도 마찬가지다.
@@ -508,36 +511,38 @@ done 이벤트    (답변 완료 후)   → attribution {chunkId: 0.0~1.0} → �
 
 **팝오버 크기 (`app.css`, ≥768px 전용)**: Bootstrap 기본값(`max-width: 276px`, `font-size: 0.875rem`)은 미리보기가 세로로 길게 줄바꿈되어 가독성이 떨어졌다 — `max-width: 620px`(약 2배), `font-size: 0.8rem`으로 넓히고 살짝 줄여 같은 600자가 더 적은 줄로 읽기 좋게 표시된다. `@media (min-width: 768px)` 블록 안에 있어 모바일(<768px)은 Bootstrap 기본값 그대로 — 좁은 화면에서 팝오버를 더 넓히면 화면 밖으로 넘칠 여지가 있기 때문.
 
-### 좋아요 피드백 & 큐레이션 Q&A 편집 (§10.10)
+### 좋아요 피드백 (§10.10 · §10.11)
 
-어시스턴트 버블 하단(피드백 컨트롤 영역, `.feedback-controls`)에 👍/👎 버튼과 함께 표시된다.
+어시스턴트 버블 하단(피드백 컨트롤 영역, `.feedback-controls`)에 👍/👎 두 버튼만 있다.
 
 ```
-👍  👎  ✏(좋아요 상태일 때만)
+👍  👎
 ```
+
+> **§10.11 — 채팅에는 큐레이션 상태가 없다.** 예전에는 좋아요한 턴에 연필(✏) 아이콘과 `임베딩 실패` 배지가 함께 떴다.
+> 등록·수정·철회가 전부 지식 제안 페이지로 옮겨가면서 둘 다 제거됐다 — 두 화면이 같은 것을 서로 다르게 말할 자리를
+> 없앤 것이다. 채팅은 감상만 다룬다.
 
 | 동작 | 트리거 | 서버 반영 |
 |------|--------|----------|
-| 좋아요 | 👍 클릭(재클릭 시 취소) | `PATCH /ui/threads/{id}/turns/{turnId}/feedback` → 즉시 큐레이션 스냅샷 생성 + 3초 후 배경 임베딩 |
+| 좋아요 | 👍 클릭(재클릭 시 취소) | 먼저 `confirm.propose`("이 답변을 지식 제안으로 등록할까요?")를 묻는다 — **예**: `PATCH /ui/threads/{id}/turns/{turnId}/feedback` 로 좋아요를 기록하고 `/curated/submissions?fromThread=&fromTurn=` 로 이동(본문은 서버가 그 턴에서 읽어 폼을 채운다) / **아니오**: 아무것도 저장하지 않고 돌아간다(= 좋아요 취소). 좋아요만 남기고 제안은 안 하는 중간 상태를 만들지 않는 것이 이 화면의 계약이다 |
 | 싫어요 | 👎 클릭 | 동일 엔드포인트 — 다음 대화 컨텍스트에서 해당 turn 제외(§6.8). **세 경로 모두에서 빠진다**: 원본 폴백(`getHistory()`의 SQL `feedback <> 'DISLIKE'`), 요약(`dedupeTurns()`), 그리고 요약 경로가 덧붙이는 `[Recent]` 원문 구간. 마지막 것은 `buildContext()`가 `getRecentTurns()`를 그대로 쓰다가 누락됐던 자리 — 그 SQL에는 feedback 조건이 없어서, 싫어요 답변이 요약에서만 빠지고 원문으로는 다시 들어갔다 |
 
 **싫어요를 누르면 저장보다 먼저 삭제 여부를 묻는다.** `confirm.delete.turn`("이 질문과 답변을 대화에서 삭제할까요?") 확인 대화상자가 뜨고, '예'면 `DELETE /ui/threads/{threadId}/turns/{turnId}`를 호출한 뒤 질문·답변 버블 한 쌍을 DOM에서 걷어낸다 — **이 경로에서는 피드백 PATCH를 아예 보내지 않는다**(턴이 사라지므로 피드백을 남길 대상이 없다). '아니오'면 평소대로 `DISLIKE`를 저장한다. 즉 **삭제와 싫어요는 배타적인 두 선택지**다 — 지울 것인가, 화면에는 남기되 이후 맥락에서만 뺄 것인가.
 
 - **묻는 시점은 `NONE → DISLIKE` 전이뿐이다.** 싫어요를 다시 눌러 해제하거나(`DISLIKE → NONE`) 좋아요를 누를 때는 묻지 않는다.
 - **삭제가 실패하면 아무것도 저장하지 않고** 실패 토스트만 띄운다. 사용자가 고른 것은 삭제이지 싫어요가 아니므로 조용히 약한 쪽으로 바꿔 적용하지 않는다.
-- 피드백을 쓰지 않고 삭제하므로 **좋아요 상태였던 턴은 `LIKE`인 채로 삭제 엔드포인트에 도달한다** — 거기서 `curatedQaService.onUnlike()`를 먼저 부르는 분기가 큐레이션 고아 행(턴이 사라진 뒤에도 검색에 계속 기여하는 행)을 막는 유일한 장치다.
+- 삭제 엔드포인트는 `curatedQaService.onTurnDeleted()`를 **좋아요 여부와 무관하게** 먼저 부른다 — 이것이 큐레이션 고아 행(턴이 사라진 뒤에도 검색에 계속 기여하는 행)을 막는 유일한 장치다. §10.11 이후 엔트리의 존재가 피드백 값과 무관해졌으므로 `LIKE`를 확인하고 들어가면 나중에 마음이 바뀐 저자의 엔트리를 전부 놓친다.
 - 삭제 범위는 **그 턴 하나**다(대화 전체가 아니다 — 사이드바 휴지통의 `confirm.delete.thread`와 구분할 것). `conversation_turns` + `turn_source_ref` + `turn_image_ref`에서 그 `turn_id`만 지우며, 이는 `clearHistory()`가 스레드 단위로 지우는 것과 같은 테이블 집합이다.
 - 그 턴을 재사용한 **다른 턴의 `reused_from_turn_id`는 일부러 그대로 둔다.** 그 컬럼을 읽는 모든 SQL이 LEFT JOIN + `"참조 원문 삭제됨"` 폴백이라 이미 사라진 원본을 견디게 되어 있다.
 - DOM 제거는 피드백 컨트롤에서 `#chat-messages`의 **직계 자식**까지 거슬러 올라가 답변 행을 찾고 그 앞 형제를 질문 행으로 삼는다 — 서버 복원·스트리밍 두 경로가 모두 '질문 행 다음 답변 행'을 직계 자식으로 붙이기 때문에 이 규칙 하나로 양쪽이 처리된다. 제거 후에는 질문 내비게이션의 `MutationObserver`가 목록을 자동으로 갱신한다.
-| 큐레이션 답변 편집 | 좋아요 상태일 때만 노출되는 연필(✏) 아이콘 | `GET`/`PATCH /ui/threads/{id}/turns/{turnId}/curated` → 우측 오프캔버스에서 답변 텍스트 수정, 저장 시 자동 재임베딩 |
 
-- 편집 아이콘은 **본인이 좋아요한 turn에서만** 보인다 — 채팅창은 항상 본인 스레드만 렌더링하므로 별도 권한 UI 분기가 없다.
-- **`S`(간단히) 모드 답변은 좋아요가 무동작이다** — `curated_qa` 행조차 만들지 않는다(`ResponseMode.S.allowsCuration() = false` → `CuratedQaService.onLike()` 즉시 반환). S 답변은 전체가 `## 요약` 한 섹션이라 임베딩 입력에서 구조 섹션을 걷어내면 본문이 통째로 사라지기 때문. 👍 토글 자체는 눌리지만 편집 아이콘은 큐레이션 행이 없으므로 나타나지 않는다. 싫어요는 모드와 무관하게 동작한다.
-- 좋아요/취소 클릭 시 JS가 서버 응답에 따라 편집 아이콘의 표시 여부도 함께 갱신한다(새로고침 불필요).
+- **`S`(간단히) 모드 답변은 좋아요 버튼이 비활성으로 렌더된다**(`ResponseMode.S.allowsSubmission() = false`) — 사유가 툴팁에 붙는다. 이전에 눌린 `LIKE` 기록이 남아 있어도 강조하지 않는다: 그 좋아요는 아무것도 만든 적이 없으므로 기여 중인 것처럼 칠하는 것이 여기서 고치려는 거짓말이다. 싫어요는 모드와 무관하게 동작한다.
+- 자기 제안의 수정·철회는 `/curated/submissions`에서 한다 — 목록의 각 항목에 수정·철회 버튼이 있고, 수정은 `/admin` 검토 오프캔버스와 같은 컴포넌트를 쓴다.
 - 관리자용 전체 큐레이션 Q&A 관리(모든 사용자 대상)는 `/admin` 페이지에 별도로 있다 — [§3.4](#34-벡터-스토어-관리-admincontroller) 및 [OPERATOR_MANUAL.md §7.5](OPERATOR_MANUAL.md#75-큐레이션-qa-관리-1010) 참고.
 - 동작 원리(디바운스, 재임베딩, 문서 재인덱싱/대화 삭제와의 관계)는 [OPERATOR_MANUAL.md §6.7](OPERATOR_MANUAL.md#67-큐레이션-qa-좋아요-기반-지식-승격-1010) 참고.
 
-**큐레이션 태그 스코프**: 좋아요를 누른 시점에 **그 질문이 검색된 태그 스코프**(입력 바의 태그 칩 선택값)가 `curated_qa.tags`로 승계된다 — 그 태그로 좁혀 얻은 답변이므로 이후 같은 스코프 검색에서 살아남아야 하기 때문. `RetrievalService.filterByTags()`가 벡터·키워드·큐레이션이 합쳐진 후보 풀 **전체**에 걸리므로, 태그 메타데이터가 없던 이전에는 사용자가 태그 칩을 하나라도 켜는 순간 좋아요한 답변이 전부 결과에서 빠졌다. 태그 없이(= `All` 칩) 물은 질문은 스코프가 비어 승계되고, **스코프를 알 수 없는 큐레이션 항목은 어느 스코프에도 속하지 않는 대신 모든 스코프를 통과**한다(문서 청크는 엄격 AND 그대로 — 태그 없는 문서는 여전히 탈락). 사용자 제안(§3.5-bis)의 태그도 같은 컬럼·같은 판정을 쓴다.
+**큐레이션 태그 스코프**: 좋아요로 연 제안 폼에는 **그 질문이 검색된 태그 스코프**(입력 바의 태그 칩 선택값)가 미리 채워지고, 승인 시 그 값이 `curated_qa.tags`로 들어간다 — 그 태그로 좁혀 얻은 답변이므로 이후 같은 스코프 검색에서 살아남아야 하기 때문(저자와 관리자가 등록 전에 고칠 수 있다). `RetrievalService.filterByTags()`가 벡터·키워드·큐레이션이 합쳐진 후보 풀 **전체**에 걸리므로, 태그 메타데이터가 없던 이전에는 사용자가 태그 칩을 하나라도 켜는 순간 좋아요한 답변이 전부 결과에서 빠졌다. 태그 없이(= `All` 칩) 물은 질문은 스코프가 비어 승계되고, **스코프를 알 수 없는 큐레이션 항목은 어느 스코프에도 속하지 않는 대신 모든 스코프를 통과**한다(문서 청크는 엄격 AND 그대로 — 태그 없는 문서는 여전히 탈락). 사용자 제안(§3.5-bis)의 태그도 같은 컬럼·같은 판정을 쓴다.
 
 ---
 

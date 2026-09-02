@@ -112,10 +112,10 @@ Flow:
 | `export/PlainTextRenderer.java` | § 문서 내보내기 — TXT format: strips markdown syntax, keeps code-fence contents. Blockquote markers must strip **before** heading markers — a Vision `[이미지 설명: ...]` can itself contain a markdown heading (`"> ### 옵션 1"`), so heading-first stripping would leave a stranded `###` |
 | `export/ExportFormat.java` | § 문서 내보내기 — `MD`/`TXT`/`DOCX` enum + content types; `parse()` rejects unknown/blank input (400 via `GlobalExceptionHandler`). No `PPTX` — rebuilding slides from reassembled prose needs slide-boundary/layout rules the chunk data doesn't carry |
 | `ingestion/ChunkOverlapBackfill.java` | `ApplicationReadyEvent` — `doc_registry.chunk_overlap` 이 `NULL` 인 기존 문서를 채운다 [↗](documents/PITFALLS.md#ingestionchunkoverlapbackfilljava) |
-| `service/CuratedQaService.java` | §10.10 — 좋아요한 답변을 공유 큐레이션 Q&A 축으로 승격(예약 네임스페이스 `"curated"`) [↗](documents/PITFALLS.md#servicecuratedqaservicejava) |
-| `service/CuratedSubmissionService.java` | 청크 추가 게시판 — 사용자가 제안(제목+본문), 관리자가 임베딩 실행/거부 [↗](documents/PITFALLS.md#servicecuratedsubmissionservicejava) |
+| `service/CuratedQaService.java` | §10.10 — 공유 큐레이션 Q&A 축(예약 네임스페이스 `"curated"`). §10.11 이후 여기에 쓰는 경로는 **관리자 승인 둘뿐**(`createFromSubmission`/`createFromLikedTurn`) — 좋아요는 아무것도 만들지 않는다 [↗](documents/PITFALLS.md#servicecuratedqaservicejava) |
+| `service/CuratedSubmissionService.java` | 지식 제안 게시판 — 사용자가 제안(직접 작성 또는 좋아요한 답변 프리필), 저자가 수정·철회, 관리자가 임베딩 실행/거부. **검색 코퍼스로 들어가는 유일한 문**(§10.11) [↗](documents/PITFALLS.md#servicecuratedsubmissionservicejava) |
 | `repository/CuratedSubmissionRepository.java` | 청크 추가 게시판 테이블·쿼리. 상태 전이는 전부 compare-and-set [↗](documents/PITFALLS.md#repositorycuratedsubmissionrepositoryjava) |
-| `controller/CuratedSubmissionController.java` | 청크 추가 게시판(사용자) — `/curated/submissions` 페이지·제출·철회·이미지 업로드 [↗](documents/PITFALLS.md#controllercuratedsubmissioncontrollerjava) |
+| `controller/CuratedSubmissionController.java` | 지식 제안 게시판(사용자) — `/curated/submissions` 페이지·제출·수정·철회·이미지 업로드. `?fromThread=&fromTurn=` 로 좋아요한 답변을 프리필(본문은 서버가 턴에서 읽는다) [↗](documents/PITFALLS.md#controllercuratedsubmissioncontrollerjava) |
 | `service/CuratedImageStore.java` | 지식 제안 본문 이미지 — upload, marker bookkeeping, approval-time Vision description, cleanup [↗](documents/PITFALLS.md#servicecuratedimagestorejava) |
 
 ## Conventions
@@ -161,7 +161,7 @@ docker-compose up chroma
 - Document storage is shared (no per-user isolation): `data/documents/`, `data/images/{docId}/`, `data/converted/{docId}.md`; DocRegistry and Chroma collection use `DocRegistry.SHARED` as the owner key
 - PPTX/비스캔 PDF → MD: 섹션 경계는 `[페이지: N]` 마커이지 합성 헤딩이 아니다. 여러 줄 도형 텍스트는 코드 펜스 또는 블록 분리로, 도형 그룹의 맨숫자 배지 라벨은 버린다 [↗](documents/PITFALLS.md#pptx--스캔본-아닌-pdf-의-마크다운-변환)
 - **코드 펜스 짝 맞춤은 파이프라인 불변식이다** — LLM 이후의 모든 패스가 펜스 줄이 1-2, 3-4… 로 짝지어짐을 가정한다. 펜스를 건드리는 패스를 새로 넣으면 이 불변식을 반드시 유지할 것. 표 본문은 LLM 에 보내지 않는다(자리표시자 치환) [↗](documents/PITFALLS.md#markdowncorrectionservice--코드-펜스-짝-불변식과-표-보호)
-- 응답 모드 **S/N/C**(기본 `N`) — 메시지별 '답변의 성격' 축, 라우팅 모드와 직교. **값이 아니라 성질로 분기한다**(`skipsVerification()`/`allowsDirect()`/`allowsCuration()`/… — `ResponseModeBranchConventionTest` 가 main 의 `== ResponseMode.X` 를 빌드 실패로 막는다). C 와 Direct 는 배타이며 RAG↔Direct 토글은 모드를 `N` 으로 되돌린다 [↗](documents/PITFALLS.md#응답-모드-s--n--c)
+- 응답 모드 **S/N/C**(기본 `N`) — 메시지별 '답변의 성격' 축, 라우팅 모드와 직교. **값이 아니라 성질로 분기한다**(`skipsVerification()`/`allowsDirect()`/`allowsSubmission()`/… — `ResponseModeBranchConventionTest` 가 main 의 `== ResponseMode.X` 를 빌드 실패로 막는다). C 와 Direct 는 배타이며 RAG↔Direct 토글은 모드를 `N` 으로 되돌린다 [↗](documents/PITFALLS.md#응답-모드-s--n--c)
 - 검증 판정 셋: 프롬프트를 창에 맞춰 줄였으면 **사용자에게 말한다**(`budgetNote`); 줄인 근거로 나온 `grounded=false` 는 **판정으로 삼지 않는다**(`unreliableNegative()`); 판정을 **읽지 못하면 '통과'가 아니라 '판정 없음'**이다(`withoutVerdict()` — `grounded=true` 로 위조하지 않는다) [↗](documents/PITFALLS.md#검증-판정의-신뢰도--축소실패-시-판정-없음)
 - 질문 버블 표기는 **두 글자**(`[RS]`) — 앞이 검색 축(`R` RAG / `D` Direct), 뒤가 성격(`S`/`N`/`C`). 렌더러가 넷이고 규칙의 출처는 둘(서버 `Turn.responseModeLabel()`, 클라이언트 `base.html` 의 `bubbleModeLabel()`). **`data-question` 에는 절대 섞지 않는다** [↗](documents/PITFALLS.md#질문-버블의-두-글자-표기)
 - Chat search-scope tags have **no text input** — the user toggles the tag chips under the input bar, which write a comma-joined value into the `#chat-tags-input` **hidden** field (still `name="tags"`, so both the HTMX post and the SSE `FormData(form)` pick it up unchanged)
@@ -178,6 +178,8 @@ docker-compose up chroma
 - `GlobalModelAdvice.authEnabled()` is computed per-request (not in constructor) to avoid NPE when `AppProperties` is mocked in `@WebMvcTest`
 - 벡터 백엔드는 `app.vectorstore.type=chroma|sqlite-vec`. Chroma 전용 빈은 전부 `@ConditionalOnProperty`. **vec/FTS 테이블을 만지는 컴포넌트는 `@Qualifier("vectorJdbcTemplate")` 를 주입해야 한다**. 백엔드 전환은 전체 재인덱싱이 필요하다 [↗](documents/PITFALLS.md#벡터-스토어-백엔드와-vecfts-datasource)
 - 청크 추가: `curated_qa.source_turn_id` 가 nullable 이 되면서 `idx_curated_qa_turn` 이 **부분 UNIQUE** 인덱스가 됐다. 따라서 **`deactivate(turnId)` 는 manual 행에 조용히 no-op** 이다 — 새 비활성화 경로는 `deactivateById()` 를 써야 한다 [↗](documents/PITFALLS.md#청크-추가)
+- **검색 코퍼스로 들어가는 문은 하나다** (§10.11): 지식 제안의 관리자 승인. 좋아요는 그 폼을 열어 줄 뿐 아무것도 만들지 않는다 — `curated_qa` 에 쓰는 경로를 새로 만들면 그 불변식이 깨진다. 저장 모양은 출처마다 다르다: 손으로 쓴 제안은 승인 시 **미리 나뉜 N개 행**, 좋아요 출신은 **turn 을 키로 하는 행 하나 → 임베딩 시점에 벡터 N개**(`UNIQUE(source_turn_id)`·대화/턴 삭제 회수·재승인이 전부 그 키를 탄다) [↗](documents/PITFALLS.md#servicecuratedqaservicejava)
+- 승인 시 `source_submission_id` 를 반드시 실어야 한다 — 제안의 상태(청크 수·등록 완료/회수됨·임베딩 실패)가 **전부 그 컬럼으로만** 세어지므로, 빠지면 오류도 로그도 없이 제안이 현실과 끊긴다(청크 0개인 '등록 완료'로 뜨고, 관리자가 실제로 내려도 계속 그렇게 뜬다) [↗](documents/PITFALLS.md#servicecuratedqaservicejava)
 - **대화(스레드) 삭제도 큐레이션을 회수해야 한다** (§6.25): `curated_qa` 행은 turn/thread id의 **복사본**으로만 연결돼 있어(FK가 아니다 — 그래서 이 테이블이 대화 삭제를 견디도록 설계됐다) 대화를 지워도 행과 벡터가 남아 검색에 계속 기여한다 [↗](documents/PITFALLS.md#대화)
 - Header badges (청크 추가 알림) poll every **60 s** from `layout/base.html`, not 3 s like the LLM indicator [↗](documents/PITFALLS.md#header-badges)
 - 정적 자산(`/css/**`, `/js/**`)은 **내용 해시 URL**로 나간다 (`spring.web.resources.chain.strategy.content.*`) [↗](documents/PITFALLS.md#정적-자산)
