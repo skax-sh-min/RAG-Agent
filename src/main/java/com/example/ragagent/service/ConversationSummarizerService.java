@@ -307,14 +307,21 @@ public class ConversationSummarizerService {
         // 보여주는 꼴이라 통째로 생략한다.
         String summaryBlock = summary.isEmpty() ? "" : "[Conversation Summary]\n" + summary;
 
-        List<MemoryRepository.Turn> recent =
-                turns.subList(Math.max(0, turns.size() - recentRawTurns), turns.size());
+        // §10.13 — Direct 턴에서 [Recent] 의 상한은 `recent-raw-turns` 가 아니라 **예산**이다.
+        //
+        // 그 값(기본 2)은 문서와 이력이 같은 창을 다툴 때 "원문으로 남길 최근 창"을 정하는 값인데,
+        // Direct 에는 다툴 문서가 없다. 턴당 캡만 없애고 이 개수를 그대로 두면 예산을 30,000자로
+        // 넓혀도 실제로 들어가는 것은 요약 2,000 + 최근 2턴 ≈ 5,500자에 머문다 — 넓힌 자리를
+        // 아무도 쓰지 않는다. 들어갈 수 있으면 압축본보다 원문이 낫고, 예산이 그 경계를 정한다.
+        List<MemoryRepository.Turn> recent = askingDirect ? turns
+                : turns.subList(Math.max(0, turns.size() - recentRawTurns), turns.size());
 
         // Reserve the "[Recent]" header up front so the budget check stays honest even before we
         // know whether any recent turn fits; unused reservation is harmless (conservative).
         String recentHeader = "\n\n[Recent]\n";
         int used = summaryBlock.length() + recentHeader.length();
         StringBuilder recentSb = new StringBuilder();
+        int rawTurns = 0;
         for (int i = recent.size() - 1; i >= 0; i--) {
             MemoryRepository.Turn t = recent.get(i);
             String entry = "Q: " + t.question() + "\nA: "
@@ -322,7 +329,14 @@ public class ConversationSummarizerService {
             if (used + entry.length() > budget) break;
             recentSb.insert(0, entry);
             used += entry.length();
+            rawTurns++;
         }
+
+        // 원문이 가져온 턴 전부를 담았으면 요약은 순수한 중복이다 — 같은 대화를 압축본과 원문으로
+        // 두 번 싣게 된다. 빼면 예산이 남을 뿐이라 위 계산을 다시 할 필요도 없다.
+        // (일부만 담긴 경우의 겹침은 요약 상한 `SUMMARY_MAX_SUMMARY_CHARS` 만큼으로 묶여 있어,
+        //  넓어진 예산 안에서는 무시할 만한 크기다.)
+        if (rawTurns == turns.size()) summaryBlock = "";
 
         StringBuilder sb = new StringBuilder(summaryBlock);
         if (recentSb.length() > 0) sb.append(recentHeader).append(recentSb);

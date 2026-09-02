@@ -628,4 +628,64 @@ class ConversationSummarizerServiceTest {
         assertThat(service.buildContext(UID, TID, 40, true)).doesNotContain("첫 질문");
         assertThat(service.buildContext(UID, TID, 100_000, true)).contains("첫 질문");
     }
+
+    /**
+     * §10.13 — 넓어진 예산을 실제로 <b>쓰는지</b>. 턴당 캡만 없애고 {@code recent-raw-turns}(기본 2)를
+     * 그대로 두면 예산을 30,000자로 넓혀도 들어가는 것은 요약 2,000 + 최근 2턴 ≈ 5,500자에 머문다 —
+     * 자리를 비워 놓고 아무도 쓰지 않는 상태다. Direct 에는 그 자리를 다툴 문서가 없다.
+     */
+    @Test
+    @DisplayName("§10.13 — Direct 턴의 [Recent] 는 recent-raw-turns 가 아니라 예산이 정한다")
+    void askingDirect_recentBlockIsBoundedByBudgetNotTurnCount() {
+        List<MemoryRepository.Turn> eight = new java.util.ArrayList<>();
+        for (int i = 1; i <= 8; i++) {
+            eight.add(turn(i, "질문" + i, "직접 답변 본문입니다.".repeat(150), null));
+        }
+        when(memoryService.getRecentTurns(UID, TID)).thenReturn(eight);
+        when(llmRouter.executeWithTracking(eq(TaskType.MICRO_TEXT), eq(RoutingMode.LOCAL_ONLY),
+                eq(BackgroundUsage.SUMMARY_PREFIX), any()))
+                .thenReturn("요약된 내용");
+        service.precompute(UID, TID, null, Locale.KOREAN);
+
+        String direct = service.buildContext(UID, TID, 30_000, true);
+        String rag = service.buildContext(UID, TID, 30_000, false);
+
+        // 여덟 턴이 전부 원문으로 들어간다 — 가장 오래된 턴까지.
+        assertThat(direct).contains("질문1", "질문8");
+        // 8턴 전부 = 답변 1,650자 × 8 + 질문 줄. 예전(요약 2,000 + 최근 2턴 ≈ 5,500)의 두 배 이상이다.
+        assertThat(direct.length()).isGreaterThan(13_000);
+        // RAG 로 물으면 지금 그대로: 최근 2턴만 원문이고 나머지는 요약이 담당한다.
+        assertThat(rag.length()).isLessThan(direct.length() / 2);
+    }
+
+    @Test
+    @DisplayName("§10.13 — 원문이 가져온 턴을 전부 담으면 요약 블록은 빠진다 (같은 대화를 두 번 싣지 않는다)")
+    void askingDirect_dropsTheSummaryWhenEveryTurnIsRaw() {
+        when(memoryService.getRecentTurns(UID, TID)).thenReturn(threeTurns());
+        when(llmRouter.executeWithTracking(eq(TaskType.MICRO_TEXT), eq(RoutingMode.LOCAL_ONLY),
+                eq(BackgroundUsage.SUMMARY_PREFIX), any()))
+                .thenReturn("요약된 내용");
+        service.precompute(UID, TID, null, Locale.KOREAN);
+
+        assertThat(service.buildContext(UID, TID, 30_000, true))
+                .doesNotContain("[Conversation Summary]")
+                .contains("질문", "질문2", "질문3");
+    }
+
+    @Test
+    @DisplayName("§10.13 — 예산이 모자라면 오래된 턴은 요약이 계속 담당한다")
+    void askingDirect_keepsTheSummaryWhenNotEverythingFits() {
+        List<MemoryRepository.Turn> eight = new java.util.ArrayList<>();
+        for (int i = 1; i <= 8; i++) {
+            eight.add(turn(i, "질문" + i, "직접 답변 본문입니다.".repeat(150), null));
+        }
+        when(memoryService.getRecentTurns(UID, TID)).thenReturn(eight);
+        when(llmRouter.executeWithTracking(eq(TaskType.MICRO_TEXT), eq(RoutingMode.LOCAL_ONLY),
+                eq(BackgroundUsage.SUMMARY_PREFIX), any()))
+                .thenReturn("요약된 내용");
+        service.precompute(UID, TID, null, Locale.KOREAN);
+
+        assertThat(service.buildContext(UID, TID, 6_000, true))
+                .contains("[Conversation Summary]");
+    }
 }
