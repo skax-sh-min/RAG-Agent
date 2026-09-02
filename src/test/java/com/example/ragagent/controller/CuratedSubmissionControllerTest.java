@@ -72,7 +72,7 @@ class CuratedSubmissionControllerTest {
     private static Submission submission(String status, String reviewNote,
                                          int curatedActive, int curatedFailed) {
         return new Submission(1L, USER, "제안 제목", "제안 본문", status, "admin", reviewNote,
-                7L, "2026-01-01", "2026-01-01", "2026-01-02", null, "인프라",
+                7L, "2026-01-01", "2026-01-01", "2026-01-02", null, "인프라", null, null,
                 "approved".equals(status) ? 2 : 0, curatedActive, curatedFailed);
     }
 
@@ -85,6 +85,47 @@ class CuratedSubmissionControllerTest {
 
         verify(service).markAllReadForAuthor(USER);
         verify(service).listMine(USER, 0, 20);
+    }
+
+    @Test
+    @DisplayName("GET ?fromTurn — 좋아요한 답변을 서버가 읽어 폼을 채우고, 출처를 숨은 필드로 싣는다")
+    void page_prefillsFromChatTurn() throws Exception {
+        when(service.prefillFromTurn(USER, "t1", 42L)).thenReturn(java.util.Optional.of(
+                new CuratedSubmissionService.TurnPrefill(42L, "t1", "원래 질문", "원래 답변 본문",
+                        "인프라", 0, "DN")));
+
+        mvc.perform(get("/curated/submissions").with(user(PRINCIPAL)).param("lang", "ko")
+                        .param("fromThread", "t1").param("fromTurn", "42"))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("원래 답변 본문")))
+                .andExpect(content().string(containsString("[DN]")))
+                .andExpect(content().string(containsString("name=\"sourceTurnId\"")))
+                .andExpect(content().string(containsString("채팅 답변에서 가져왔습니다")));
+    }
+
+    @Test
+    @DisplayName("GET ?fromTurn — 같은 턴에 살아 있는 제안이 있으면 두 번째 초안을 열지 않는다")
+    void page_duplicateProposal_pointsAtExisting() throws Exception {
+        when(service.findLiveProposalForTurn(42L))
+                .thenReturn(java.util.Optional.of(submission("pending", null, 0, 0)));
+
+        mvc.perform(get("/curated/submissions").with(user(PRINCIPAL)).param("lang", "ko")
+                        .param("fromThread", "t1").param("fromTurn", "42"))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("이미 지식 제안으로 등록")));
+
+        verify(service, never()).prefillFromTurn(anyString(), anyString(), anyLong());
+    }
+
+    @Test
+    @DisplayName("POST — 출처 턴을 그대로 서비스에 넘긴다 (소유권 확인은 서비스의 몫)")
+    void submit_forwardsSourceTurn() throws Exception {
+        mvc.perform(post("/curated/submissions").with(csrf()).with(user(PRINCIPAL))
+                        .param("title", "제목").param("body", "본문")
+                        .param("sourceThreadId", "t1").param("sourceTurnId", "42"))
+                .andExpect(status().is3xxRedirection());
+
+        verify(service).submit(USER, "제목", "본문", List.of(), "t1", 42L);
     }
 
     @Test
@@ -136,7 +177,7 @@ class CuratedSubmissionControllerTest {
     @Test
     @DisplayName("POST — 검증 실패 시 오류 메시지와 입력 초안을 되돌려준다 (JSON 오류가 아니라 플래시)")
     void submit_validationFailure_returnsDraft() throws Exception {
-        when(service.submit(anyString(), anyString(), anyString(), any()))
+        when(service.submit(anyString(), anyString(), anyString(), any(), any(), any()))
                 .thenThrow(new IllegalArgumentException("본문이 너무 깁니다 (최대 800자, 입력: 900자)"));
 
         mvc.perform(post("/curated/submissions").with(csrf()).with(user(PRINCIPAL))

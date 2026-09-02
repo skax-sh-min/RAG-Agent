@@ -36,17 +36,20 @@ public class CuratedSubmissionService {
     private final CuratedSubmissionRepository repository;
     private final CuratedQaService curatedQaService;
     private final CuratedImageStore imageStore;
+    private final MemoryService memoryService;
     private final AppProperties props;
     private final AuditLogger auditLogger;
 
     public CuratedSubmissionService(CuratedSubmissionRepository repository,
                                     CuratedQaService curatedQaService,
                                     CuratedImageStore imageStore,
+                                    MemoryService memoryService,
                                     AppProperties props,
                                     AuditLogger auditLogger) {
         this.repository = repository;
         this.curatedQaService = curatedQaService;
         this.imageStore = imageStore;
+        this.memoryService = memoryService;
         this.props = props;
         this.auditLogger = auditLogger;
     }
@@ -90,6 +93,31 @@ public class CuratedSubmissionService {
      * per-user pending cap still are.
      */
     public long submit(String authorUserId, String title, String body, List<String> tags) {
+        return submit(authorUserId, title, body, tags, null, null);
+    }
+
+    /**
+     * §10.11 — same as {@link #submit(String, String, String, List)}, plus the chat turn this
+     * proposal came from. The turn is <b>re-read and ownership-checked here</b>: the client may
+     * edit the prefilled text (that is the point of routing 좋아요 through review), but it may not
+     * decide on its own that some text "came from a chat answer". An unresolvable or foreign
+     * turn is not an error — the proposal is simply stored as a hand-written one.
+     *
+     * <p>The per-user pending cap is <b>skipped</b> for these (trap ④): the cap exists to stop a
+     * user from flooding the review queue by typing, and a 좋아요 is one button press with nowhere
+     * to render a "20건이 밀려 있습니다" form error. Flooding by 좋아요 is bounded by
+     * {@link #findLiveProposalForTurn} instead — one live proposal per turn.
+     */
+    public long submit(String authorUserId, String title, String body, List<String> tags,
+                       String sourceThreadId, Long sourceTurnId) {
+        boolean fromTurn = sourceTurnId != null && sourceThreadId != null
+                && memoryService.getTurn(authorUserId, sourceThreadId, sourceTurnId).isPresent();
+        return submitInternal(authorUserId, title, body, tags,
+                fromTurn ? sourceTurnId : null, fromTurn ? sourceThreadId : null);
+    }
+
+    private long submitInternal(String authorUserId, String title, String body, List<String> tags,
+                                Long sourceTurnId, String sourceThreadId) {
         String cleanTitle = PromptInjectionGuard.validate(title == null ? null : title.trim());
         if (cleanTitle.length() > MAX_TITLE_LEN) {
             throw new IllegalArgumentException(
@@ -104,17 +132,68 @@ public class CuratedSubmissionService {
         imageStore.validateImageCount(cleanBody);
         // TagUtils.normalize throws on policy violation (최대 10개 / 32자) — the message is user-facing.
         String tagsCsv = TagUtils.toMetaValue(TagUtils.normalize(tags));
-        if (repository.countPendingByAuthor(authorUserId) >= MAX_PENDING_PER_USER) {
+        if (sourceTurnId == null && repository.countPendingByAuthor(authorUserId) >= MAX_PENDING_PER_USER) {
             throw new IllegalArgumentException(
                     "검토 대기 중인 제안이 이미 " + MAX_PENDING_PER_USER + "건입니다. 처리된 뒤 다시 등록해 주세요.");
         }
 
-        long id = repository.insert(authorUserId, cleanTitle, cleanBody, tagsCsv);
+        long id = repository.insert(authorUserId, cleanTitle, cleanBody, tagsCsv,
+                sourceTurnId, sourceThreadId);
         auditLogger.log("curated.submission.create", "submission:" + id,
-                Map.of("title", cleanTitle, "chars", cleanBody.length(), "tags", tagsCsv));
-        log.info("[SUBMISSION] 신규 청크 제안 등록 id={} author={} chars={}", id, authorUserId, cleanBody.length());
+                Map.of("title", cleanTitle, "chars", cleanBody.length(), "tags", tagsCsv,
+                        "sourceTurnId", sourceTurnId == null ? "" : String.valueOf(sourceTurnId)));
+        log.info("[SUBMISSION] 신규 청크 제안 등록 id={} author={} chars={} turn={}",
+                id, authorUserId, cleanBody.length(), sourceTurnId);
         return id;
     }
+
+    /**
+     * §10.11 프리필 — the 좋아요된 답변, read <b>server-side from the turn</b> so the form starts
+     * from what was actually said (trap ③: a 3,000자 답변 does not fit in a URL, and text carried
+     * by the client could claim an origin it doesn't have).
+     *
+     * <p>Empty when the turn doesn't exist or isn't this user's — the page then just renders the
+     * blank write form rather than an error, since a stale link is not worth a failure page.
+     */
+    public Optional<TurnPrefill> prefillFromTurn(String userId, String threadId, long turnId) {
+        return memoryService.getTurn(userId, threadId, turnId).map(turn -> new TurnPrefill(
+                turnId,
+                threadId,
+                // 질문은 2,000자까지 가능하고 제목은 200자다 — 자르지 않으면 폼이 예외로 죽는다.
+                truncateTitle(turn.question()),
+                turn.answer(),
+                turn.selectedTags(),
+                CuratedImageStore.markerPaths(turn.answer()).size(),
+                turn.responseModeLabel()));
+    }
+
+    /**
+     * §10.11 중복 제안 방지 — the live (pending/approved) proposal already made for this turn.
+     * The chat's 좋아요 flow sends the user to that entry instead of opening a second draft.
+     */
+    public Optional<Submission> findLiveProposalForTurn(long turnId) {
+        return repository.findLiveByTurn(turnId);
+    }
+
+    /** Cuts a chat question down to a title. Public so the chat-side prefill and the form agree. */
+    public static String truncateTitle(String question) {
+        String q = question == null ? "" : question.strip().replaceAll("\\s+", " ");
+        return q.length() <= MAX_TITLE_LEN ? q : q.substring(0, MAX_TITLE_LEN);
+    }
+
+    /**
+     * What the 제안 폼 is pre-populated with when it is opened from a 좋아요.
+     *
+     * @param imageCount how many image markers the answer carries — shown next to
+     *                   {@link CuratedImageStore#MAX_IMAGES_PER_SUBMISSION} so the author can
+     *                   delete some <em>before</em> submitting rather than being rejected after
+     *                   (trap ⑥; document images are counted too)
+     * @param modeLabel  the turn's two-letter 표기 ({@code RN}/{@code DN}/…) — the same label the
+     *                   admin will review it under, shown here so the author knows a Direct answer
+     *                   is being proposed as shared knowledge
+     */
+    public record TurnPrefill(long turnId, String threadId, String title, String body,
+                              String tags, int imageCount, String modeLabel) {}
 
     /**
      * Admin 임베딩 실행: copies the (possibly edited) text into a real curated row and flips the

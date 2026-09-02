@@ -55,7 +55,7 @@ public class CuratedSubmissionRepository {
     private static final String SELECT_BASE = """
             SELECT s.id, s.author_user_id, s.title, s.body, s.status, s.reviewer_user_id,
                    s.review_note, s.curated_qa_id, s.created_at, s.updated_at, s.reviewed_at,
-                   s.author_read_at, s.tags,
+                   s.author_read_at, s.tags, s.source_turn_id, s.source_thread_id,
                    (SELECT COUNT(*) FROM curated_qa c
                      WHERE c.source_submission_id = s.id) AS curated_total,
                    (SELECT COUNT(*) FROM curated_qa c
@@ -71,6 +71,8 @@ public class CuratedSubmissionRepository {
     private static final RowMapper<Submission> ROW_MAPPER = (rs, n) -> {
         long curatedId = rs.getLong("curated_qa_id");
         Long curatedQaId = rs.wasNull() ? null : curatedId;
+        long turnId = rs.getLong("source_turn_id");
+        Long sourceTurnId = rs.wasNull() ? null : turnId;
         return new Submission(
                 rs.getLong("id"),
                 rs.getString("author_user_id"),
@@ -85,6 +87,8 @@ public class CuratedSubmissionRepository {
                 rs.getString("reviewed_at"),
                 rs.getString("author_read_at"),
                 rs.getString("tags"),
+                sourceTurnId,
+                rs.getString("source_thread_id"),
                 rs.getInt("curated_total"),
                 rs.getInt("curated_active"),
                 rs.getInt("curated_failed"));
@@ -110,7 +114,9 @@ public class CuratedSubmissionRepository {
                     updated_at        TEXT NOT NULL,
                     reviewed_at       TEXT,
                     author_read_at    TEXT,
-                    tags              TEXT
+                    tags              TEXT,
+                    source_turn_id    INTEGER,
+                    source_thread_id  TEXT
                 )
                 """);
         // `tags` shipped after the initial table — plain ADD COLUMN (nullable TEXT).
@@ -118,6 +124,19 @@ public class CuratedSubmissionRepository {
                 .noneMatch(c -> "tags".equals(c.get("name")))) {
             jdbc.execute("ALTER TABLE curated_submission ADD COLUMN tags TEXT");
         }
+        // §10.11 — 좋아요 출신 제안의 출처 턴. `tags` 와 같은 방어적 ADD COLUMN 이며 둘 다
+        // nullable 이다: 손으로 쓴 제안에는 출처 턴이 없고, 이 컬럼이 생기기 전 제안도 전부 없다.
+        var subCols = jdbc.queryForList("PRAGMA table_info(curated_submission)");
+        if (subCols.stream().noneMatch(c -> "source_turn_id".equals(c.get("name")))) {
+            jdbc.execute("ALTER TABLE curated_submission ADD COLUMN source_turn_id INTEGER");
+        }
+        if (subCols.stream().noneMatch(c -> "source_thread_id".equals(c.get("name")))) {
+            jdbc.execute("ALTER TABLE curated_submission ADD COLUMN source_thread_id TEXT");
+        }
+        // 부분 인덱스 — 중복 제안 방지(findLiveByTurn)가 매 좋아요마다 이걸 탄다. UNIQUE 는 쓰지
+        // 않는다: 반려·철회된 제안이 같은 턴에 남으므로 한 턴에 여러 행이 정상이다.
+        jdbc.execute("CREATE INDEX IF NOT EXISTS idx_curated_sub_turn " +
+                "ON curated_submission(source_turn_id) WHERE source_turn_id IS NOT NULL");
         // (status, id DESC) — the admin panel's default "pending, newest first" listing.
         jdbc.execute("CREATE INDEX IF NOT EXISTS idx_curated_sub_status " +
                 "ON curated_submission(status, id DESC)");
@@ -126,15 +145,30 @@ public class CuratedSubmissionRepository {
                 "ON curated_submission(author_user_id, id DESC)");
     }
 
-    /** Returns the new submission id. Always starts {@code pending}. {@code tags} is the
-     *  comma-joined search scope the author picked (nullable). */
+    /** Hand-written proposal — no originating chat turn. See {@link #insert(String, String,
+     *  String, String, Long, String)}. */
     public long insert(String authorUserId, String title, String body, String tags) {
+        return insert(authorUserId, title, body, tags, null, null);
+    }
+
+    /**
+     * Returns the new submission id. Always starts {@code pending}. {@code tags} is the
+     * comma-joined search scope the author picked (nullable).
+     *
+     * <p>{@code sourceTurnId}/{@code sourceThreadId} are set only for a 좋아요 출신 제안 (§10.11) —
+     * they are what lets the admin review screen show the {@code [RN]}/{@code [DN]} label and a link
+     * back to the conversation, and what {@link #findLiveByTurn} reads to keep one turn from being
+     * proposed twice.
+     */
+    public long insert(String authorUserId, String title, String body, String tags,
+                       Long sourceTurnId, String sourceThreadId) {
         String now = now();
         KeyHolder keyHolder = new GeneratedKeyHolder();
         jdbc.update(connection -> {
             PreparedStatement ps = connection.prepareStatement(
                     "INSERT INTO curated_submission (author_user_id, title, body, status, " +
-                    "created_at, updated_at, tags) VALUES (?, ?, ?, '" + STATUS_PENDING + "', ?, ?, ?)",
+                    "created_at, updated_at, tags, source_turn_id, source_thread_id) " +
+                    "VALUES (?, ?, ?, '" + STATUS_PENDING + "', ?, ?, ?, ?, ?)",
                     Statement.RETURN_GENERATED_KEYS);
             ps.setString(1, authorUserId);
             ps.setString(2, title);
@@ -142,10 +176,32 @@ public class CuratedSubmissionRepository {
             ps.setString(4, now);
             ps.setString(5, now);
             ps.setString(6, tags);
+            if (sourceTurnId == null) {
+                ps.setNull(7, java.sql.Types.INTEGER);
+            } else {
+                ps.setLong(7, sourceTurnId);
+            }
+            ps.setString(8, sourceThreadId);
             return ps;
         }, keyHolder);
         Number key = keyHolder.getKey();
         return key != null ? key.longValue() : -1L;
+    }
+
+    /**
+     * §10.11 중복 제안 방지 — the still-live proposal already made for this chat turn, if any.
+     * "Live" is {@code pending} or {@code approved}: a rejected or withdrawn proposal is precisely
+     * the case where the user should be able to try again.
+     *
+     * <p>Enforced here rather than by a UNIQUE index because the constraint is on a <em>subset</em>
+     * of statuses and rows move between them; {@code curated_qa}'s {@code UNIQUE(source_turn_id)}
+     * only starts guarding after approval, which is one step too late.
+     */
+    public Optional<Submission> findLiveByTurn(long turnId) {
+        List<Submission> rows = jdbc.query(
+                SELECT_BASE + " WHERE s.source_turn_id = ? AND s.status IN (?, ?) ORDER BY s.id DESC",
+                ROW_MAPPER, turnId, STATUS_PENDING, STATUS_APPROVED);
+        return rows.isEmpty() ? Optional.empty() : Optional.of(rows.get(0));
     }
 
     public Optional<Submission> findById(long id) {
@@ -257,6 +313,8 @@ public class CuratedSubmissionRepository {
     /**
      * @param curatedQaId    first chunk's curated row id — the admin edit panel's entry point.
      *                       Prefer the counts below for status; this is a pointer, not the whole set.
+     * @param sourceTurnId   originating chat turn for a 좋아요 출신 제안, null for a hand-written one
+     * @param sourceThreadId that turn's conversation — only meaningful together with the turn id
      * @param curatedTotal   curated rows created for this submission (chunks), 0 until approved
      * @param curatedActive  how many of those are still contributing to search
      * @param curatedFailed  how many active ones are stuck in {@code embed_status='failed'}
@@ -265,6 +323,7 @@ public class CuratedSubmissionRepository {
                              String status, String reviewerUserId, String reviewNote,
                              Long curatedQaId, String createdAt, String updatedAt,
                              String reviewedAt, String authorReadAt, String tags,
+                             Long sourceTurnId, String sourceThreadId,
                              int curatedTotal, int curatedActive, int curatedFailed) {
 
         /**
@@ -296,6 +355,13 @@ public class CuratedSubmissionRepository {
         }
 
         public boolean isPending()  { return STATUS_PENDING.equals(status); }
+
+        /**
+         * §10.11 — came from a 좋아요 on a chat answer rather than the write form. Drives the
+         * admin review screen's mode label + conversation link, and the pending-cap exemption
+         * (a 좋아요 is one button press with nowhere to show a "20건 초과" form error).
+         */
+        public boolean fromChatTurn() { return sourceTurnId != null; }
 
         /** Short one-line preview for list views. */
         public String bodyPreview() {

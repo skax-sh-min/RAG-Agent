@@ -232,7 +232,7 @@ class AdminControllerWebMvcTest {
         when(submissionService.listForAdmin(anyString(), anyInt(), anyInt())).thenReturn(List.of(
                 new com.example.ragagent.repository.CuratedSubmissionRepository.Submission(
                         1L, "u1", "제안 제목", "제안 본문", "pending", null, null, null,
-                        "2026-01-01", "2026-01-01", null, null, "인프라", 0, 0, 0)));
+                        "2026-01-01", "2026-01-01", null, null, "인프라", null, null, 0, 0, 0)));
 
         mvc.perform(get("/admin/submissions").with(user(ADMIN)))
                 .andExpect(status().isOk())

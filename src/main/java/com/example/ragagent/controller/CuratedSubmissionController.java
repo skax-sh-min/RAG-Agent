@@ -51,7 +51,10 @@ public class CuratedSubmissionController {
      * reading it, so a separate "확인" click would be busywork.
      */
     @GetMapping
-    public String page(@RequestParam(defaultValue = "0") int offset, Model model) {
+    public String page(@RequestParam(defaultValue = "0") int offset,
+                       @RequestParam(required = false) String fromThread,
+                       @RequestParam(required = false) Long fromTurn,
+                       Model model) {
         String userId = currentUser.userId();
         service.markAllReadForAuthor(userId);
         model.addAttribute("submissions", service.listMine(userId, offset, PAGE_SIZE));
@@ -60,7 +63,34 @@ public class CuratedSubmissionController {
         model.addAttribute("chunkSize", service.chunkSizeForBody());
         model.addAttribute("maxTitleLength", CuratedSubmissionService.MAX_TITLE_LEN);
         model.addAttribute("maxTags", com.example.ragagent.model.TagUtils.MAX_TAGS);
+        model.addAttribute("maxImages", CuratedImageStore.MAX_IMAGES_PER_SUBMISSION);
+        if (fromThread != null && fromTurn != null) {
+            prefill(userId, fromThread, fromTurn, model);
+        }
         return "curated-submissions";
+    }
+
+    /**
+     * §10.11 — opens the form on a 좋아요한 답변. The text comes from the turn on the server
+     * ({@code prefillFromTurn}), never from the query string.
+     *
+     * <p>A turn that already has a live proposal doesn't get a second draft (열린 항목 (a)) —
+     * the page points at the existing entry instead. A duplicate would be two review items for one
+     * answer, and after approval {@code curated_qa}'s {@code UNIQUE(source_turn_id)} would reject
+     * the second one anyway, at a point where the author has already retyped everything.
+     */
+    private void prefill(String userId, String threadId, long turnId, Model model) {
+        var existing = service.findLiveProposalForTurn(turnId);
+        if (existing.isPresent()) {
+            model.addAttribute("duplicateOfSubmissionId", existing.get().id());
+            return;
+        }
+        service.prefillFromTurn(userId, threadId, turnId).ifPresent(p -> {
+            model.addAttribute("draftTitle", p.title());
+            model.addAttribute("draftBody", p.body());
+            model.addAttribute("draftTags", p.tags());
+            model.addAttribute("prefill", p);
+        });
     }
 
     /**
@@ -72,10 +102,13 @@ public class CuratedSubmissionController {
     public String submit(@RequestParam String title,
                          @RequestParam String body,
                          @RequestParam(required = false) String tags,
+                         @RequestParam(required = false) String sourceThreadId,
+                         @RequestParam(required = false) Long sourceTurnId,
                          RedirectAttributes flash) {
         try {
             service.submit(currentUser.userId(), title, body,
-                    com.example.ragagent.model.TagUtils.parseTagList(tags));
+                    com.example.ragagent.model.TagUtils.parseTagList(tags),
+                    sourceThreadId, sourceTurnId);
             flash.addFlashAttribute("submitSuccess",
                     "제안이 등록되었습니다. 관리자가 검토 후 임베딩을 실행하면 검색에 반영됩니다.");
         } catch (IllegalArgumentException e) {
@@ -84,6 +117,10 @@ public class CuratedSubmissionController {
             flash.addFlashAttribute("draftTitle", title);
             flash.addFlashAttribute("draftBody", body);
             flash.addFlashAttribute("draftTags", tags);
+            // 출처 턴도 함께 되돌린다 — 안 그러면 재제출에서 좋아요 출신이라는 사실이 조용히
+            // 사라져 손으로 쓴 제안이 되고, 관리자는 [DN] 표기 없이 검토하게 된다.
+            flash.addFlashAttribute("draftSourceThreadId", sourceThreadId);
+            flash.addFlashAttribute("draftSourceTurnId", sourceTurnId);
         }
         return "redirect:/curated/submissions";
     }

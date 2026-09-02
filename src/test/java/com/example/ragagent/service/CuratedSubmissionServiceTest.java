@@ -41,6 +41,7 @@ class CuratedSubmissionServiceTest {
 
     private CuratedSubmissionRepository repository;
     private CuratedQaService curatedQaService;
+    private MemoryService memoryService;
     private AppProperties props;
     private AuditLogger auditLogger;
     private CuratedSubmissionService service;
@@ -49,6 +50,7 @@ class CuratedSubmissionServiceTest {
     void setUp() {
         repository = mock(CuratedSubmissionRepository.class);
         curatedQaService = mock(CuratedQaService.class);
+        memoryService = mock(MemoryService.class);
         props = mock(AppProperties.class);
         auditLogger = mock(AuditLogger.class);
         when(props.chunkSizeSafe()).thenReturn(800);
@@ -65,12 +67,12 @@ class CuratedSubmissionServiceTest {
                 props, repository, mock(com.example.ragagent.repository.CuratedQaRepository.class),
                 Optional.empty(), new StorageQuotaService(props));
         // 실제 ChunkSplitter — 승인 시 본문 분할이 문서 인덱싱과 같은 기계를 쓰는지까지 함께 검증한다.
-        service = new CuratedSubmissionService(repository, curatedQaService, imageStore, props, auditLogger);
+        service = new CuratedSubmissionService(repository, curatedQaService, imageStore, memoryService, props, auditLogger);
     }
 
     private static Submission submission(long id, String status) {
         return new Submission(id, AUTHOR, "원래 제목", "원래 본문", status, null, null,
-                null, "2026-01-01", "2026-01-01", null, null, null, 0, 0, 0);
+                null, "2026-01-01", "2026-01-01", null, null, null, null, null, 0, 0, 0);
     }
 
     // ── 등록 검증 ────────────────────────────────────────────────────────────
@@ -79,13 +81,13 @@ class CuratedSubmissionServiceTest {
     @DisplayName("submit — 정상 입력이면 저장하고 감사 로그를 남긴다")
     void submit_valid_insertsAndAudits() {
         when(repository.countPendingByAuthor(AUTHOR)).thenReturn(0);
-        when(repository.insert(eq(AUTHOR), eq("제목"), eq("본문"), any())).thenReturn(7L);
+        when(repository.insert(eq(AUTHOR), eq("제목"), eq("본문"), any(), any(), any())).thenReturn(7L);
 
         long id = service.submit(AUTHOR, "  제목  ", "  본문  ", java.util.List.of());
 
         assertThat(id).isEqualTo(7L);
         // 태그 없이 등록하면 빈 CSV — 큐레이션 면제 대상이 되어 모든 태그 스코프에서 검색된다.
-        verify(repository).insert(AUTHOR, "제목", "본문", "");
+        verify(repository).insert(AUTHOR, "제목", "본문", "", null, null);
         verify(auditLogger).log(eq("curated.submission.create"), eq("submission:7"), any());
     }
 
@@ -97,7 +99,7 @@ class CuratedSubmissionServiceTest {
         assertThatThrownBy(() -> service.submit(AUTHOR, "가".repeat(201), "본문", java.util.List.of()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("제목이 너무 깁니다");
-        verify(repository, never()).insert(anyString(), anyString(), anyString(), any());
+        verify(repository, never()).insert(anyString(), anyString(), anyString(), any(), any(), any());
     }
 
     @Test
@@ -106,7 +108,7 @@ class CuratedSubmissionServiceTest {
         assertThatThrownBy(() -> service.submit(AUTHOR, "제목", "   ", java.util.List.of()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("본문");
-        verify(repository, never()).insert(anyString(), anyString(), anyString(), any());
+        verify(repository, never()).insert(anyString(), anyString(), anyString(), any(), any(), any());
     }
 
     @Test
@@ -114,12 +116,12 @@ class CuratedSubmissionServiceTest {
     void submit_hasNoBodyLengthLimit() {
         when(props.chunkSizeSafe()).thenReturn(30);
         when(repository.countPendingByAuthor(AUTHOR)).thenReturn(0);
-        when(repository.insert(anyString(), anyString(), anyString(), any())).thenReturn(1L);
+        when(repository.insert(anyString(), anyString(), anyString(), any(), any(), any())).thenReturn(1L);
 
         // chunkSize 의 수십 배여도 거부되지 않는다 — 승인 시 청크로 나뉘기 때문.
         service.submit(AUTHOR, "제목", "가".repeat(1000), List.of());
 
-        verify(repository, times(1)).insert(eq(AUTHOR), eq("제목"), eq("가".repeat(1000)), any());
+        verify(repository, times(1)).insert(eq(AUTHOR), eq("제목"), eq("가".repeat(1000)), any(), any(), any());
     }
 
     @Test
@@ -140,7 +142,7 @@ class CuratedSubmissionServiceTest {
         assertThatThrownBy(() -> service.submit(AUTHOR, "제목", "본문", java.util.List.of()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("검토 대기");
-        verify(repository, never()).insert(anyString(), anyString(), anyString(), any());
+        verify(repository, never()).insert(anyString(), anyString(), anyString(), any(), any(), any());
     }
 
     @Test
@@ -249,7 +251,7 @@ class CuratedSubmissionServiceTest {
         when(curatedQaService.splitForEmbedding(longBody))
                 .thenReturn(List.of("조각1", "조각2", "조각3"));
         Submission row = new Submission(1L, AUTHOR, "제목", longBody, "pending", null, null,
-                null, "2026-01-01", "2026-01-01", null, null, "인프라", 0, 0, 0);
+                null, "2026-01-01", "2026-01-01", null, null, "인프라", null, null, 0, 0, 0);
         when(repository.findById(1L)).thenReturn(Optional.of(row));
         when(curatedQaService.createFromSubmission(anyLong(), anyString(), anyString(), any(), any()))
                 .thenReturn(List.of(10L, 11L, 12L));
@@ -287,7 +289,7 @@ class CuratedSubmissionServiceTest {
     @DisplayName("approve — 관리자가 태그를 건드리지 않으면(null) 제안에 저장된 값을 유지한다")
     void approve_keepsSubmissionTagsWhenAdminDidNotTouchThem() {
         Submission row = new Submission(1L, AUTHOR, "제목", "본문", "pending", null, null,
-                null, "2026-01-01", "2026-01-01", null, null, "인프라", 0, 0, 0);
+                null, "2026-01-01", "2026-01-01", null, null, "인프라", null, null, 0, 0, 0);
         when(repository.findById(1L)).thenReturn(Optional.of(row));
         when(curatedQaService.createFromSubmission(anyLong(), anyString(), anyString(), any(), any()))
                 .thenReturn(List.of(55L));
@@ -308,6 +310,6 @@ class CuratedSubmissionServiceTest {
                 List.of("a".repeat(33))))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("태그는 최대");
-        verify(repository, never()).insert(anyString(), anyString(), anyString(), any());
+        verify(repository, never()).insert(anyString(), anyString(), anyString(), any(), any(), any());
     }
 }
