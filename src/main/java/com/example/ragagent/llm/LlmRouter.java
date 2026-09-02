@@ -598,6 +598,12 @@ public class LlmRouter {
      * 작업을 건너뛰지만, 컨텍스트 초과는 <b>이 요청 하나의 크기</b> 문제라 기억할 것이 없다. 다음
      * 짧은 질문은 같은 프로바이더에서 그대로 처리돼야 한다.
      *
+     * <p><b>공개인 이유</b>: 채팅 스트리밍 경로({@code AnswerService.streamDirect()})는 이 라우터를
+     * 거치지 않고 {@link org.springframework.ai.openai.api.OpenAiApi} 를 직접 호출하므로, 거기서
+     * 올라오는 예외는 {@code LlmContextOverflowException} 으로 바뀌지 않은 <b>날것</b>이다. 축소
+     * 재시도(§6.26-9)가 그 경로에서도 초과를 알아보려면 같은 판정이 필요한데, 마커 목록을 복사하면
+     * 서버 문구가 추가될 때 한쪽만 고쳐진다.
+     *
      * <p>서버마다 문구가 달라 메시지로 판정한다. 실제로 관측된 것은 LM Studio 의
      * {@code {"code":500,"message":"Context size has been exceeded."}} 인데, 이것이 HTTP 400 본문에
      * 실려 오고 Spring AI 가 {@code NonTransientAiException} 으로 감싸므로 위 {@code catch
@@ -607,7 +613,7 @@ public class LlmRouter {
      * ("Too many tokens per minute")과 문구가 겹쳐, 진짜 429 를 컨텍스트 초과로 잘못 읽으면
      * {@code blockForOverload()} 의 Retry-After 처리를 건너뛰게 된다.
      */
-    private static boolean isContextOverflow(Throwable t) {
+    public static boolean isContextOverflow(Throwable t) {
         Throwable cur = t;
         while (cur != null) {
             String msg = cur.getMessage();

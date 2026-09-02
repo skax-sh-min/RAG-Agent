@@ -6,6 +6,7 @@ import com.example.ragagent.ingestion.MarkdownNoiseNormalizer;
 import com.example.ragagent.model.MetaKey;
 import com.example.ragagent.model.ResponseMode;
 import com.example.ragagent.model.SourceRef;
+import com.example.ragagent.exception.LlmContextOverflowException;
 import com.example.ragagent.llm.LlmCurlLogger;
 import com.example.ragagent.llm.LlmProvider;
 import com.example.ragagent.llm.LlmRouter;
@@ -33,7 +34,9 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import java.util.Locale;
+import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
+import java.util.function.IntFunction;
 import java.util.stream.Collectors;
 
 /**
@@ -233,8 +236,18 @@ public class AnswerService {
      * 같은 입력에 같은 함수라 결과가 갈리지 않는다 — 로직을 복제하는 대신 한 함수를 두 번 부른다.
      */
     private AgentState withBudgetNote(AgentState state) {
+        return withBudgetNote(state, 0);
+    }
+
+    /**
+     * @param shrinkLevel 실제로 성공한 시도의 축소 단계. 초과 재시도가 있었다면 <b>호출이 끝난 뒤</b>
+     *                    그 단계로 다시 불러야 한다 — 안 그러면 화면은 0단계 기준으로 안내하고 모델은
+     *                    그보다 적은 문서를 봤다는 상태가 남는다. 이미 표시된 출처를 다시 표시하는 것은
+     *                    무해하므로(chunkId 기준, 멱등) 덧칠하면 된다.
+     */
+    private AgentState withBudgetNote(AgentState state, int shrinkLevel) {
         // 안내는 사용자가 실제로 겪는 경로 기준이어야 한다 — 채팅의 유일한 전송 경로는 스트리밍이다.
-        Fitted fitted = fitToBudget(state, likelyProvider(state), true);
+        Fitted fitted = fitToBudget(state, likelyProvider(state), true, shrinkLevel);
         if (fitted.note() == null) return state;
         return state.toBuilder()
                 .budgetNote(fitted.note())
@@ -266,14 +279,18 @@ public class AnswerService {
     // ── Blocking paths ──────────────────────────────────────────────────────
 
     private AgentState executeBlocking(AgentState state) {
+        final AgentState requested = state;   // 아래에서 state 를 다시 대입하므로 람다는 이쪽을 본다
         String systemPrompt = answerSystemPrompt(state.locale(), state.responseMode());
-        // 블로킹 — answerOptions() 가 maxTokens 를 실어 보내므로 그만큼 실제로 예약된다.
-        String userPrompt = buildAnswerPrompt(state, likelyProvider(state), false);
         ChatOptions options = answerOptions(state);
-        LlmRouter.LlmResult result = llmRouter.executeGatedWithUsage(TaskType.TEXT, state.routingMode(),
-                model -> model.call(buildPrompt(systemPrompt, userPrompt, options)));
+        Shrunk<LlmRouter.LlmResult> attempt = withShrinkRetry(requested, "ANSWER", level -> {
+            // 블로킹 — answerOptions() 가 maxTokens 를 실어 보내므로 그만큼 실제로 예약된다.
+            String userPrompt = buildAnswerPrompt(requested, likelyProvider(requested), false, level);
+            return llmRouter.executeGatedWithUsage(TaskType.TEXT, requested.routingMode(),
+                    model -> model.call(buildPrompt(systemPrompt, userPrompt, options)));
+        });
+        LlmRouter.LlmResult result = attempt.value();
         String answer = truncate(enforceSummaryOnly(result.text() == null ? "" : result.text(), state.responseMode()));
-        state = state.toBuilder()
+        state = withBudgetNote(state, attempt.level()).toBuilder()
                      .accumulateTokens(result.inputTokens(), result.outputTokens())
                      .usedProvider(llmRouter.findProviderName(TaskType.TEXT, state.routingMode()))
                      .answer(answer)
@@ -286,15 +303,16 @@ public class AnswerService {
     private AgentState executeStreamingNormal(AgentState state, GraphListener listener) {
         String systemPrompt = answerSystemPrompt(state.locale(), state.responseMode());
         LlmProvider provider = llmRouter.routeProvider(TaskType.TEXT, state.routingMode());
-        String streamed;
+        Shrunk<String> attempt;
         try (var permit = llmRouter.acquirePermit(provider)) {
-            streamed = streamAnswer(provider, state, systemPrompt, listener::onToken);
+            attempt = streamAnswer(provider, state, systemPrompt, listener::onToken);
         }
-        String answer = truncate(enforceSummaryOnly(streamed, state.responseMode()));
+        state = withBudgetNote(state, attempt.level());
+        String answer = truncate(enforceSummaryOnly(attempt.value(), state.responseMode()));
         // streaming has no ChatResponse to read real usage from — record an approximate
         // (chars/4) usage entry so /llm-usage isn't blind to the entire streaming chat path, and
         // reflect the same estimate in the per-turn total so the chat UI isn't stuck at 0/0.
-        String promptText = systemPrompt + buildAnswerPrompt(state, provider.name(), true);
+        String promptText = systemPrompt + buildAnswerPrompt(state, provider.name(), true, attempt.level());
         llmRouter.recordApproxUsage(provider.name(), promptText, answer);
         int approxIn = (int) LlmRouter.approxTokens(promptText);
         int approxOut = (int) LlmRouter.approxTokens(answer);
@@ -330,23 +348,35 @@ public class AnswerService {
         if (listener != null) listener.onUpgrade(premiumProvider.name());
         String premiumAnswer;
         int inputTokens, outputTokens;
+        int shrinkLevel;
         if (listener != null) {
+            Shrunk<String> attempt;
             try (var permit = llmRouter.acquirePermit(premiumProvider)) {
-                premiumAnswer = streamAnswer(premiumProvider, state, systemPrompt, listener::onToken);
+                attempt = streamAnswer(premiumProvider, state, systemPrompt, listener::onToken);
             }
-            String promptText = systemPrompt + buildAnswerPrompt(state, premiumProvider.name(), true);
+            premiumAnswer = attempt.value();
+            shrinkLevel = attempt.level();
+            String promptText = systemPrompt
+                    + buildAnswerPrompt(state, premiumProvider.name(), true, shrinkLevel);
             llmRouter.recordApproxUsage(premiumProvider.name(), promptText, premiumAnswer);
             inputTokens = (int) LlmRouter.approxTokens(promptText);
             outputTokens = (int) LlmRouter.approxTokens(premiumAnswer);
         } else {
-            String userPrompt = buildAnswerPrompt(state, premiumProvider.name(), false);
-            LlmRouter.LlmResult result = llmRouter.executeGatedWithUsage(
-                    TaskType.TEXT, RoutingMode.QUALITY_FIRST,
-                    model -> model.call(buildPrompt(systemPrompt, userPrompt, answerOptions(state)))
-            );
-            premiumAnswer = result.text();
-            inputTokens = result.inputTokens();
-            outputTokens = result.outputTokens();
+            Shrunk<LlmRouter.LlmResult> attempt = withShrinkRetry(state, "ANSWER-PREMIUM", level -> {
+                String userPrompt = buildAnswerPrompt(state, premiumProvider.name(), false, level);
+                return llmRouter.executeGatedWithUsage(
+                        TaskType.TEXT, RoutingMode.QUALITY_FIRST,
+                        model -> model.call(buildPrompt(systemPrompt, userPrompt, answerOptions(state))));
+            });
+            premiumAnswer = attempt.value().text();
+            shrinkLevel = attempt.level();
+            inputTokens = attempt.value().inputTokens();
+            outputTokens = attempt.value().outputTokens();
+        }
+        // 업그레이드 답변이 축소된 프롬프트로 만들어졌다면 그 사실도 사용자에게 가야 한다 —
+        // 화면에 남는 것은 이 마지막 답변이다.
+        if (shrinkLevel > 0) {
+            resultState = withBudgetNote(resultState, shrinkLevel);
         }
         return resultState.toBuilder()
                           .answer(truncate(premiumAnswer))
@@ -355,6 +385,117 @@ public class AnswerService {
                           .accumulateTokens(inputTokens, outputTokens)
                           .needsRetry(false)
                           .build();
+    }
+
+    // ── 컨텍스트 초과 후 축소 재시도 (§6.26-9) ───────────────────────────────
+
+    /**
+     * 초과 한 번에 프롬프트를 <b>절반</b>으로 줄인다 — 하나씩이 아니라 절반씩이라 왕복이 log(n) 이다.
+     * 이 상수가 그 단계 수의 상한이라 최악의 왕복은 4회(0~3단계)이고, topK=10 이면 10→5→3→2 다.
+     *
+     * <p><b>왜 이만큼이면 충분한가.</b> 사전 예산({@code fitToBudget})이 이미 창에 맞춰 줄여 놓았고,
+     * 여기까지 오는 것은 그 계산이 <b>빗나갔다</b>는 뜻이다. 빗나가는 폭은 {@code TokenEstimator} 의
+     * 추정 오차이고, {@code TokenEstimateCalibration} 이 정상으로 보는 범위가 0.75~1.35 다 — 5배를
+     * 줄이고도 안 들어간다면 그건 추정 오차가 아니라 설정 문제이고, 그때는 {@code RAG-LLM-003} 이
+     * 무엇을 고쳐야 하는지 이름을 대 주는 편이 낫다. 더 줄여 봐야 근거가 한 조각 남은 답변이 된다.
+     */
+    private static final int MAX_SHRINK_LEVELS = 3;
+
+    /** 성공한 시도의 결과와 <b>그때의 축소 단계</b>. 단계가 있어야 사용자 안내를 다시 세울 수 있다. */
+    private record Shrunk<T>(T value, int level) {}
+
+    private <T> Shrunk<T> withShrinkRetry(AgentState state, String tag, IntFunction<T> attempt) {
+        return withShrinkRetry(state, tag, () -> true, attempt);
+    }
+
+    /**
+     * 컨텍스트 초과로 실패하면 프롬프트를 절반씩 줄여 다시 시도한다.
+     *
+     * <p><b>사전 예산이 있는데도 이것이 필요한 이유.</b> {@code fitToBudget} 은 {@code TokenEstimator}
+     * 의 <b>추정</b> 위에 서 있고(창을 아예 모르면 아무것도 자르지 않는다), 추정이 빗나가면 그대로
+     * 초과가 난다. 그때 사용자가 받는 것은 답변이 아니라 오류다 — 문서 몇 개만 덜어내면 답할 수
+     * 있었는데도.
+     *
+     * <p><b>줄이는 것은 프롬프트지 요청이 아니다.</b> 라우터는 호출을 불투명한 클로저로 받아 프롬프트
+     * 안을 못 보므로 이 재시도는 라우터가 아니라 <b>프롬프트를 조립하는 여기</b>에만 있을 수 있다.
+     * 라우터의 프로바이더 순회(다른 프로바이더로 넘어가며 재시도)와는 층이 다르고 서로 방해하지
+     * 않는다 — 저쪽이 "다른 곳에 물어본다"면 이쪽은 "더 작게 물어본다"다.
+     *
+     * <p><b>축소는 사용자에게 보여야 한다.</b> 성공한 단계를 함께 돌려주는 이유가 그것이다 —
+     * 호출부가 {@link #withBudgetNote} 를 그 단계로 다시 세워 안내 문구와 출처의 {@code 미사용}
+     * 표시를 실제로 보낸 프롬프트와 맞춘다. 안 그러면 화면은 0단계 기준으로 말하고 모델은 3단계를
+     * 봤다는 상태가 된다.
+     *
+     * @param canRetry 재시도해도 되는 상황인지 — 스트리밍은 <b>토큰이 하나라도 나갔으면</b> 안 된다
+     *                 (화면에 앞부분이 두 번 찍힌다). 초과는 생성 전에 거절되므로 실제로는 늘 참이지만,
+     *                 그 가정이 깨졌을 때 사용자가 보는 것이 중복 텍스트라 조건으로 못 박아 둔다.
+     */
+    private <T> Shrunk<T> withShrinkRetry(AgentState state, String tag,
+                                          BooleanSupplier canRetry, IntFunction<T> attempt) {
+        int maxLevel = maxShrinkLevel(state);
+        for (int level = 0; ; level++) {
+            try {
+                return new Shrunk<>(attempt.apply(level), level);
+            } catch (RuntimeException e) {
+                if (level >= maxLevel || !isContextOverflow(e) || !canRetry.getAsBoolean()) throw e;
+                log.warn("[SHRINK] {} 컨텍스트 초과 — 프롬프트를 줄여 다시 시도한다. thread={} "
+                         + "단계 {}→{}, 문서 {}→{}개. 사전 예산은 토큰 추정 위에 서 있어 여기까지 오는 "
+                         + "일 자체는 정상이지만, 잦다면 app.search-top-k 를 낮추거나(핫, /settings) "
+                         + "프로바이더의 컨텍스트를 키우십시오.",
+                        tag, state.threadId(), level, level + 1,
+                        shrinkDocs(state.retrievedDocs(), level).size(),
+                        shrinkDocs(state.retrievedDocs(), level + 1).size());
+            }
+        }
+    }
+
+    /**
+     * 블로킹 경로는 라우터가 {@link LlmContextOverflowException} 으로 바꿔 던지고, 스트리밍 경로는
+     * {@code OpenAiApi} 를 직접 호출해 <b>날것</b>이 올라온다 — 둘 다 알아봐야 한다.
+     */
+    private static boolean isContextOverflow(Throwable t) {
+        return t instanceof LlmContextOverflowException || LlmRouter.isContextOverflow(t);
+    }
+
+    /**
+     * 이 턴에서 의미 있게 줄일 수 있는 단계 수.
+     *
+     * <p>문서가 1개뿐이면 반으로 나눠도 그대로라 <b>같은 요청을 반복</b>하게 된다 — 그때는 이력이
+     * 남아 있을 때만 한 단계를 준다. 상한을 두지 않으면 결정적으로 실패하는 요청에 왕복만 쓴다.
+     */
+    private static int maxShrinkLevel(AgentState state) {
+        int byDocs = ceilLog2(state.retrievedDocs().size());
+        String history = state.conversationHistory();
+        boolean hasHistory = history != null && !history.isBlank();
+        return Math.min(MAX_SHRINK_LEVELS, hasHistory ? byDocs + 1 : byDocs);
+    }
+
+    /** 1 이 될 때까지 필요한 반감 횟수. {@code n <= 1} 이면 0 — 더 줄일 것이 없다. */
+    private static int ceilLog2(int n) {
+        return n <= 1 ? 0 : 32 - Integer.numberOfLeadingZeros(n - 1);
+    }
+
+    /**
+     * 단계마다 문서 수를 반으로 — 뒤(최저 관련도)부터 버린다. {@code fitToBudget} 의 순서 규칙과 같다.
+     * <b>최상위 문서는 남는다</b>: 다 버리면 프롬프트가 "문서를 찾을 수 없습니다"가 되어, 초과를
+     * 피하려다 검색이 성공한 질문에 모른다고 답하게 된다.
+     */
+    private static List<Document> shrinkDocs(List<Document> docs, int level) {
+        if (level <= 0 || docs.size() <= 1) return docs;
+        int keep = Math.max(1, (docs.size() + (1 << level) - 1) >> level);
+        return docs.subList(0, keep);
+    }
+
+    /**
+     * 이력은 <b>문서를 다 줄인 뒤에야</b> 손댄다 — 이 앱이 축소에서 지키는 순서(문서 → 이력)를 재시도
+     * 에서도 그대로 따른다. 문서가 이미 1개면 1단계부터 이력이 반씩 줄고, topK 가 크면 상한(3단계)
+     * 안에서는 이력에 닿지 않는다. 그래도 되는 이유는 이력이 설정으로 이미 묶여 있고
+     * ({@code MemoryService} 가 {@code max-tokens}의 절반) 창을 밀어붙이는 쪽은 문서라서다.
+     */
+    private static String shrinkHistory(String history, int level, int docCount) {
+        int shift = level - ceilLog2(docCount);
+        if (shift <= 0 || history == null || history.isBlank()) return history;
+        return trimHistory(history, TokenEstimator.estimate(history) >> shift);
     }
 
     /** Shared raw Prompt construction for the non-fluent LlmRouter call sites (evaluation, PROGRESSIVE). */
@@ -366,19 +507,31 @@ public class AnswerService {
 
     // ── Stream helpers ──────────────────────────────────────────────────────
 
-    private String streamAnswer(LlmProvider provider, AgentState state,
-                                String systemPrompt, Consumer<String> tokenSink) {
+    /**
+     * <b>토큰이 하나라도 나갔으면 재시도하지 않는다</b> — 화면에 앞부분이 두 번 찍히기 때문이다.
+     * 컨텍스트 초과는 생성이 시작되기 전에 거절되므로 실제로 그런 일은 없지만, 그 가정이 깨졌을 때
+     * 사용자가 보는 것이 중복 텍스트라 조건으로 못 박는다. 나간 것이 없으면 {@code full} 도 비어
+     * 있어 되감을 것이 없다.
+     */
+    private Shrunk<String> streamAnswer(LlmProvider provider, AgentState state,
+                                        String systemPrompt, Consumer<String> tokenSink) {
         StringBuilder full = new StringBuilder();
-        callOrStream(provider, state, systemPrompt, t -> { tokenSink.accept(t); full.append(t); });
-        return full.toString();
+        boolean[] emitted = {false};
+        Shrunk<Void> attempt = withShrinkRetry(state, "ANSWER-STREAM", () -> !emitted[0], level -> {
+            callOrStream(provider, state, systemPrompt, level,
+                    t -> { emitted[0] = true; tokenSink.accept(t); full.append(t); });
+            return null;
+        });
+        return new Shrunk<>(full.toString(), attempt.level());
     }
 
-    private void callOrStream(LlmProvider provider, AgentState state,
-                              String systemPrompt, Consumer<String> tokenSink) {
+    private void callOrStream(LlmProvider provider, AgentState state, String systemPrompt,
+                              int shrinkLevel, Consumer<String> tokenSink) {
         if (provider.stream()) {
             // Bypass OpenAiChatModel.internalStream() which buffers ALL chunks via buffer(int,int)
             // before emitting, defeating real-time token delivery to the browser.
-            streamDirect(provider, systemPrompt, buildAnswerPrompt(state, provider.name(), true), tokenSink,
+            streamDirect(provider, systemPrompt,
+                    buildAnswerPrompt(state, provider.name(), true, shrinkLevel), tokenSink,
                     state.threadId(), state.routingMode(), answerTemperature(state.responseMode()));
         } else {
             // stream=false: still use streaming HTTP to stay compatible with local LLM servers
@@ -390,7 +543,7 @@ public class AnswerService {
             spec
                     .system(systemPrompt)
                     // stream=false 경로는 answerOptions() 를 붙여 보내므로 예약이 실제로 걸린다.
-                    .user(buildAnswerPrompt(state, provider.name(), false))
+                    .user(buildAnswerPrompt(state, provider.name(), false, shrinkLevel))
                     .stream()
                     .content()
                     .doOnNext(buf::append)
@@ -480,12 +633,16 @@ public class AnswerService {
         boolean docsPresent = !state.retrievedDocs().isEmpty();
         try {
             String systemPrompt = messageSource.getMessage(state.responseMode().evalPromptKey(), null, locale);
-            EvalExcerpts excerpts = buildEvalExcerpts(state.retrievedDocs(),
-                    evalExcerptTokenBudget(state, systemPrompt, answer, evalConverter.getFormat()));
-            String evalPrompt = buildEvalPrompt(state, answer, excerpts.text(), evalConverter.getFormat());
-
-            LlmRouter.LlmResult result = llmRouter.executeGatedWithUsage(TaskType.TEXT, state.routingMode(),
-                    model -> model.call(buildPrompt(systemPrompt, evalPrompt, evalOptions())));
+            EvalExcerpts[] used = new EvalExcerpts[1];
+            LlmRouter.LlmResult result = withShrinkRetry(state, "EVAL", level -> {
+                EvalExcerpts excerpts = evalExcerptsFor(state, answer, systemPrompt,
+                        evalConverter.getFormat(), level);
+                used[0] = excerpts;
+                String evalPrompt = buildEvalPrompt(state, answer, excerpts.text(), evalConverter.getFormat());
+                return llmRouter.executeGatedWithUsage(TaskType.TEXT, state.routingMode(),
+                        model -> model.call(buildPrompt(systemPrompt, evalPrompt, evalOptions())));
+            }).value();
+            EvalExcerpts excerpts = used[0];
             if (isEmptyVerdict(result)) {
                 logEmptyVerdict("EVAL", state, result);
                 return withoutVerdict(state.toBuilder()
@@ -542,12 +699,17 @@ public class AnswerService {
         boolean docsPresent = !state.retrievedDocs().isEmpty();
         try {
             String systemPrompt = messageSource.getMessage(state.responseMode().evalPromptKey(), null, locale);
-            EvalExcerpts excerpts = buildEvalExcerpts(state.retrievedDocs(),
-                    evalExcerptTokenBudget(state, systemPrompt, answer, creativeEvalConverter.getFormat()));
-            String evalPrompt = buildEvalPrompt(state, answer, excerpts.text(), creativeEvalConverter.getFormat());
-
-            LlmRouter.LlmResult result = llmRouter.executeGatedWithUsage(TaskType.TEXT, state.routingMode(),
-                    model -> model.call(buildPrompt(systemPrompt, evalPrompt, evalOptions())));
+            EvalExcerpts[] used = new EvalExcerpts[1];
+            LlmRouter.LlmResult result = withShrinkRetry(state, "EVAL-C", level -> {
+                EvalExcerpts excerpts = evalExcerptsFor(state, answer, systemPrompt,
+                        creativeEvalConverter.getFormat(), level);
+                used[0] = excerpts;
+                String evalPrompt = buildEvalPrompt(state, answer, excerpts.text(),
+                        creativeEvalConverter.getFormat());
+                return llmRouter.executeGatedWithUsage(TaskType.TEXT, state.routingMode(),
+                        model -> model.call(buildPrompt(systemPrompt, evalPrompt, evalOptions())));
+            }).value();
+            EvalExcerpts excerpts = used[0];
             if (isEmptyVerdict(result)) {
                 logEmptyVerdict("EVAL-C", state, result);
                 return withoutVerdict(state.toBuilder()
@@ -707,6 +869,21 @@ public class AnswerService {
                 tag, state.threadId(), result.inputTokens(), result.outputTokens());
     }
 
+    /**
+     * 두 검증 경로가 공유하는 발췌 조립 — 축소 단계까지 포함해서.
+     *
+     * <p><b>{@code total} 은 언제나 원본 문서 수다.</b> 재시도가 목록을 미리 줄여도
+     * {@link EvalExcerpts#trimmed()} 는 여전히 참이 되고, 그래서 그 판정을
+     * {@link #unreliableNegative} 가 "줄어든 근거로 내려진 부정 판정"으로 걸러 낸다 — 재시도로 답을
+     * 받아 내는 것과 그 답을 곧이곧대로 믿는 것은 다른 문제다.
+     */
+    private EvalExcerpts evalExcerptsFor(AgentState state, String answer, String systemPrompt,
+                                         String schema, int shrinkLevel) {
+        return buildEvalExcerpts(shrinkDocs(state.retrievedDocs(), shrinkLevel),
+                evalExcerptTokenBudget(state, systemPrompt, answer, schema),
+                state.retrievedDocs().size());
+    }
+
     /** 두 검증 경로가 공유하는 사용자 메시지 — 차이는 시스템 프롬프트와 {@code format}(응답 스키마)뿐이다. */
     private static String buildEvalPrompt(AgentState state, String answer, String excerpts, String format) {
         return "[질문]\n%s\n\n[답변]\n%s\n\n[문서 발췌]\n%s\n\n%s"
@@ -783,6 +960,19 @@ public class AnswerService {
     }
 
     private static EvalExcerpts buildEvalExcerpts(List<Document> docs, long tokenBudget) {
+        return buildEvalExcerpts(docs, tokenBudget, docs.size());
+    }
+
+    /**
+     * @param totalAvailable 답변이 봤던 <b>원본</b> 문서 수. 축소 재시도(§6.26-9)가 {@code docs} 를
+     *                       미리 줄여 놓았다면 {@code docs.size()} 로는 그 사실이 보이지 않는다 —
+     *                       {@link EvalExcerpts#trimmed()} 가 {@code false} 가 되어
+     *                       {@link #unreliableNegative} 가 <b>줄어든 근거로 내려진 부정 판정을 그대로
+     *                       믿게 된다</b>. 이 앱이 계속 되풀이해 온 실수({@code .limit(5)})의 정확한
+     *                       모양이라 재시도가 그것을 되살리게 둘 수 없다.
+     */
+    private static EvalExcerpts buildEvalExcerpts(List<Document> docs, long tokenBudget,
+                                                  int totalAvailable) {
         StringBuilder sb = new StringBuilder();
         int used = 0;
         long usedTokens = 0;
@@ -803,15 +993,15 @@ public class AnswerService {
             usedTokens += tokens;
             included++;
         }
-        if (included < docs.size()) {
+        if (included < totalAvailable) {
             log.warn("[EVAL] 발췌 한도(글자 {} / 토큰 {})로 {}개 중 {}개만 검증에 사용 — 하위 순위 문서 제외. "
                      + "검증 창이 답변 창보다 좁아지면 6~8번째 문서에만 있는 값을 정확히 인용한 답변이 "
                      + "근거 없음으로 판정될 수 있으므로, app.search-top-k / app.chunk-size 를 낮추거나 "
                      + "프로바이더의 컨텍스트를 키우는 편이 낫다.",
                     MAX_EVAL_EXCERPT_CHARS, tokenBudget > 0 ? tokenBudget : "미적용",
-                    docs.size(), included);
+                    totalAvailable, included);
         }
-        return new EvalExcerpts(sb.toString(), included, docs.size());
+        return new EvalExcerpts(sb.toString(), included, totalAvailable);
     }
 
     /**
@@ -898,12 +1088,18 @@ public class AnswerService {
      *                     호출부마다 답이 달라야 하는 값이다.
      */
     private String buildAnswerPrompt(AgentState state, String providerName, boolean streaming) {
+        return buildAnswerPrompt(state, providerName, streaming, 0);
+    }
+
+    /** @param shrinkLevel 컨텍스트 초과 후 재시도 단계 — {@link #fitToBudget} 참조. */
+    private String buildAnswerPrompt(AgentState state, String providerName, boolean streaming,
+                                     int shrinkLevel) {
         StringBuilder sb = new StringBuilder();
 
         // 예산에 맞춰 미리 덜어낸다. 호출 후에 초과 오류를 받고 재시도하는 것보다 왕복이 0회 싸고,
         // 무엇을 버릴지도 여기서만 알 수 있다(라우터는 프롬프트 안을 못 본다). 창을 모르면
         // fitToBudget 이 원본을 그대로 돌려주므로 예전과 동작이 같다.
-        Fitted fitted = fitToBudget(state, providerName, streaming);
+        Fitted fitted = fitToBudget(state, providerName, streaming, shrinkLevel);
 
         if (!fitted.history().isBlank()) {
             sb.append("[이전 대화]\n").append(fitted.history()).append("\n\n");
@@ -986,10 +1182,25 @@ public class AnswerService {
      * 자리</b>만 경계로 본다 — 문자 인덱스로 자르면 반쪽짜리 턴이 남아 모델을 더 헷갈리게 한다.
      */
     private Fitted fitToBudget(AgentState state, String providerName, boolean streaming) {
-        List<Document> docs = state.retrievedDocs();
-        String history = state.conversationHistory();
+        return fitToBudget(state, providerName, streaming, 0);
+    }
+
+    /**
+     * @param shrinkLevel 컨텍스트 초과 후 재시도 단계(§6.26-9). {@code 0} 이면 예전 동작 그대로이고,
+     *                    단계마다 문서 수가 절반이 된다. <b>예산 계산보다 먼저</b> 적용된다 —
+     *                    창을 모르면 예산 단계가 통째로 no-op 이라, 축소를 그쪽에 얹으면 정작
+     *                    자동 복구가 가장 필요한 "창 모름" 배포에서 아무 일도 일어나지 않는다.
+     */
+    private Fitted fitToBudget(AgentState state, String providerName, boolean streaming, int shrinkLevel) {
+        List<Document> allDocs = state.retrievedDocs();
+        String fullHistory = state.conversationHistory();
+        List<Document> docs = shrinkDocs(allDocs, shrinkLevel);
+        String history = shrinkHistory(fullHistory, shrinkLevel, allDocs.size());
         PromptBudget budget = budgetFor(state, providerName, streaming);
-        if (budget == null) return new Fitted(docs, history, null);   // 창 모름 → 예전 그대로
+        if (budget == null) {
+            // 창 모름 → 예산 축소는 하지 않는다. 다만 재시도 축소는 창과 무관하게 적용된다.
+            return new Fitted(docs, history, noteFor(allDocs.size(), docs.size(), fullHistory, history));
+        }
 
         // 시스템 프롬프트는 실제로 센다 — 모드·로케일마다 길이가 다르고(S 는 N 보다 훨씬 짧다),
         // 넉넉히 잡은 상수로 대신하면 좁은 창에서 그 차이만큼 불필요하게 문서를 버린다.
@@ -1009,18 +1220,30 @@ public class AnswerService {
                 .sum();
         String keptHistory = trimHistory(history, limit - fixedCost - docCost);
 
-        boolean docsTrimmed = keptDocs.size() < docs.size();
-        boolean historyTrimmed = keptHistory.length() < history.length();
-        String note = null;
-        if (docsTrimmed || historyTrimmed) {
+        String note = noteFor(allDocs.size(), keptDocs.size(), fullHistory, keptHistory);
+        if (note != null) {
             log.warn("[BUDGET] 컨텍스트 창 {}토큰(출력 예약 {}) → 입력 예산 {}토큰에 맞춰 축소: "
-                     + "문서 {}→{}개, 이력 {}→{}자. app.search-top-k / app.chunk-size 를 낮추거나 "
-                     + "프로바이더의 컨텍스트를 키우면 이 축소가 사라집니다.",
+                     + "문서 {}→{}개, 이력 {}→{}자 (재시도 축소 단계 {}). app.search-top-k / "
+                     + "app.chunk-size 를 낮추거나 프로바이더의 컨텍스트를 키우면 이 축소가 사라집니다.",
                     budget.contextWindow(), budget.outputReservation(), limit,
-                    docs.size(), keptDocs.size(), history.length(), keptHistory.length());
-            note = budgetNoteText(docs.size(), keptDocs.size(), historyTrimmed);
+                    allDocs.size(), keptDocs.size(), lengthOf(fullHistory), lengthOf(keptHistory),
+                    shrinkLevel);
         }
         return new Fitted(keptDocs, keptHistory, note);
+    }
+
+    /**
+     * 안내 문구 — <b>원본 대비</b> 무엇이 줄었는지. 예산 축소와 재시도 축소가 같은 문장을 쓰는 이유는
+     * 사용자에게 그 둘이 같은 사실이기 때문이다: 화면의 출처 목록만큼을 모델이 다 보지는 못했다.
+     */
+    private static String noteFor(int totalDocs, int keptDocs, String fullHistory, String keptHistory) {
+        boolean historyTrimmed = lengthOf(keptHistory) < lengthOf(fullHistory);
+        if (keptDocs >= totalDocs && !historyTrimmed) return null;
+        return budgetNoteText(totalDocs, keptDocs, historyTrimmed);
+    }
+
+    private static int lengthOf(String s) {
+        return s == null ? 0 : s.length();
     }
 
     /**
