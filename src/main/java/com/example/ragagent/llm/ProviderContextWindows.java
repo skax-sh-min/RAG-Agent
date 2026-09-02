@@ -54,6 +54,22 @@ public class ProviderContextWindows {
         return find(providerName).map(ContextWindow::tokens).orElse(0);
     }
 
+    /**
+     * 이 창에서 안전한 출력 예약 — {@code max_tokens >= 창} 이면 입력에 남는 자리가 0 이하라
+     * <b>모든 요청이 실패</b>하므로 창의 절반으로 낮춘다(최소 256).
+     *
+     * <p><b>왜 순수 함수로 여기 있는가.</b> 두 곳이 이 값을 알아야 한다: 기동 시 프로바이더 빈에
+     * 이 숫자를 굽는 {@code LlmConfig}, 그리고 창을 <b>다시 탐지한 뒤</b> "지금 구워져 있는 값이
+     * 새 창에서도 맞는가"를 판정해야 하는 {@code SettingsService} 다. 후자가 이 계산을 복제하면
+     * 두 판정이 갈라져 재기동 안내가 틀린다.
+     *
+     * @param contextTokens 창을 모르면 {@code null} — 그때는 낮출 근거가 없으므로 그대로 둔다
+     */
+    public static int cappedMaxTokens(int requested, Integer contextTokens) {
+        if (contextTokens == null || contextTokens <= 0 || requested < contextTokens) return requested;
+        return Math.max(256, contextTokens / 2);
+    }
+
     public Map<String, ContextWindow> snapshot() {
         return Map.copyOf(windows);
     }

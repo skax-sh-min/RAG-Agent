@@ -97,9 +97,38 @@ public record AppProperties(
          */
         public boolean isEnabled() {
             boolean hasKey     = apiKey != null && !apiKey.isBlank();
-            boolean isLocal    = role != null && "LOCAL".equalsIgnoreCase(role.trim());
             boolean hasBaseUrl = baseUrl != null && !baseUrl.isBlank();
-            return (hasKey || isLocal) && hasBaseUrl;
+            return (hasKey || isLocal()) && hasBaseUrl;
+        }
+
+        /** LOCAL 역할인가 — 키 면제({@link #isEnabled()})와 컨텍스트 탐지 대상 판정에 함께 쓰인다. */
+        public boolean isLocal() {
+            return role != null && "LOCAL".equalsIgnoreCase(role.trim());
+        }
+
+        /**
+         * {@code OpenAiApi.builder()} 와 {@code ContextWindowProbe} 에 넘길 루트 URL — 선언된
+         * base-url 에서 뒤쪽 {@code /v1} 을 걷어낸 것이다(빌더가 내부에서 다시 붙이므로 두면
+         * {@code /v1/v1} 이 된다). {@code baseUrl()} 자체는 {@code LlmProvider.baseUrl()} 과 curl
+         * 로그가 그대로 쓰므로 건드리지 않는다.
+         *
+         * <p><b>기동 시 프로바이더 빈을 만드는 곳과 나중에 창을 다시 탐지하는 곳이 같은 규칙을
+         * 써야 한다</b> — 양쪽에 문자열 자르기를 각각 두면 한쪽만 고쳐졌을 때 탐지가 조용히
+         * 404 를 받고 "모름"으로 떨어진다. 그래서 파생 규칙을 설정 레코드 위에 둔다.
+         */
+        public String apiBase() {
+            if (baseUrl == null) return null;
+            if (baseUrl.endsWith("/v1/")) return baseUrl.substring(0, baseUrl.length() - 4);
+            if (baseUrl.endsWith("/v1"))  return baseUrl.substring(0, baseUrl.length() - 3);
+            return baseUrl;
+        }
+
+        /**
+         * 운영자가 못 박은 창(토큰). 없으면 {@code null} = "탐지에 맡긴다".
+         * 선언은 <b>항상</b> 탐지를 이긴다 — 탐지는 그 순간의 관측이고 선언은 의도다.
+         */
+        public Integer declaredContextSize() {
+            return (contextSize != null && contextSize > 0) ? contextSize : null;
         }
     }
 

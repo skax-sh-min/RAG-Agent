@@ -41,7 +41,7 @@
     <div class="card mb-4">
         <div class="card-header fw-semibold" th:text="#{settings.group.llm}">LLM Routing</div>
         <div class="card-body p-0">
-            <div th:replace="~{fragments/settings-providers :: providers(${settings.providers})}"></div>
+            <div th:replace="~{fragments/settings-providers :: providers(${settings.providers}, null)}"></div>
         </div>
         <div class="card-footer small">
             <div class="row g-2">

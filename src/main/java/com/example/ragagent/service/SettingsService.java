@@ -1,6 +1,7 @@
 package com.example.ragagent.service;
 
 import com.example.ragagent.audit.AuditLogger;
+import com.example.ragagent.llm.ContextWindowProbe;
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.config.SettingsKeys;
 import com.example.ragagent.llm.CircuitBreaker;
@@ -315,6 +316,97 @@ public class SettingsService implements AppProperties.OverrideSource {
                             contextWindowLabel(cfg.name()));
                 })
                 .toList();
+    }
+
+
+    // ── 컨텍스트 창 재탐지 (§6.26 A5) ─────────────────────────────────────────
+
+    /**
+     * 한 프로바이더의 재탐지 결과 한 줄.
+     *
+     * @param before {@code contextWindowLabel()} 형식의 이전 값 — 무엇이 바뀌었는지 보이려면 새 값만으로는 부족하다
+     * @param outcome 화면 배지와 문구를 가르는 값
+     */
+    public record ReprobeRow(String provider, String before, String after, ReprobeOutcome outcome) {}
+
+    /** 재탐지 한 번의 결과 전체. {@code restartNeeded} 는 아래 {@link #reprobeContextWindows()} 참고. */
+    public record ReprobeResult(List<ReprobeRow> rows, boolean restartNeeded, String restartDetail) {}
+
+    public enum ReprobeOutcome {
+        /** 값이 실제로 달라졌다 — 다음 호출부터 새 예산이 적용된다. */
+        UPDATED,
+        /** 물어봤고 답을 받았는데 예전과 같다. */
+        UNCHANGED,
+        /** 서버가 답하지 않았거나 로드된 컨텍스트를 못 찾았다. <b>이전 값은 그대로 둔다.</b> */
+        FAILED,
+        /** {@code context-size} 로 선언된 프로바이더 — 선언이 탐지를 이기므로 묻지 않는다. */
+        SKIPPED_DECLARED
+    }
+
+    /**
+     * 등록된 LOCAL 프로바이더에게 컨텍스트 창을 <b>지금</b> 다시 물어본다 (§6.26 A5, 선택지 D).
+     *
+     * <p><b>왜 자동이 아니라 버튼인가.</b> 주기적으로 다시 물으면 같은 질문이 시각에 따라 다른 양의
+     * 근거를 받는다 — {@code TokenEstimateCalibration} 이 "관측만 하고 예산을 자동 보정하지 않는다"고
+     * 정한 것과 같은 이유로, 예산이 스스로 움직이면 재현이 안 된다. 창을 바꾼 사람은 자기가 바꿨다는
+     * 것을 알고 있으므로, 값이 갱신되는 시점을 그 사람이 정하게 하는 편이 정직하다. 감사 로그에도
+     * 누가 언제 눌렀는지가 남는다.
+     *
+     * <p><b>실패는 이전 값을 지우지 않는다.</b> 서버가 잠깐 응답하지 않는 것과 창이 사라진 것은 다르고,
+     * 알던 값을 "모름"으로 되돌리면 그 순간부터 입력 예산이 통째로 꺼진다 — 고치러 누른 버튼이 상황을
+     * 악화시키는 셈이다.
+     *
+     * <p><b>선언된 창은 건드리지 않는다.</b> {@code context-size} 는 의도이고 탐지는 관측이라, 관측이
+     * 의도를 덮어쓰면 운영자가 못 박은 값이 버튼 한 번에 사라진다. 그런 행은 결과 표에
+     * {@link ReprobeOutcome#SKIPPED_DECLARED} 로 남겨 "안 물어봤다"는 사실 자체를 보여 준다.
+     *
+     * <p><b>재탐지가 고치는 것은 입력 예산뿐이다.</b> 출력 예약({@code max-tokens})은 프로바이더 빈이
+     * 만들어질 때 {@link ProviderContextWindows#cappedMaxTokens} 로 굳어 {@code MaxTokensCappingChatModel}
+     * 안에 들어가 있으므로, 새 창에서 그 값이 달라져야 한다면 재기동 말고는 방법이 없다. 그 경우를
+     * 조용히 넘기면 "재탐지했으니 이제 괜찮겠지"라는 잘못된 안심이 남으므로 {@code restartNeeded} 로
+     * 함께 돌려준다.
+     */
+    public ReprobeResult reprobeContextWindows() {
+        AppProperties.LlmConfig llm = props.llmSafe();
+        List<ReprobeRow> rows = new ArrayList<>();
+        List<String> restartReasons = new ArrayList<>();
+
+        for (AppProperties.ProviderConfig cfg : visibleProviders()) {
+            if (!cfg.isEnabled() || !cfg.isLocal()) continue;   // 클라우드는 이 엔드포인트가 없다
+            String before = contextWindowLabel(cfg.name());
+            if (cfg.declaredContextSize() != null) {
+                rows.add(new ReprobeRow(cfg.name(), before, before, ReprobeOutcome.SKIPPED_DECLARED));
+                continue;
+            }
+            int old = contextWindows.tokensOrZero(cfg.name());
+            Integer found = ContextWindowProbe.probe(cfg.apiBase(), cfg.model(),
+                    llm.connectTimeoutSeconds(), llm.readTimeoutSeconds()).orElse(null);
+            if (found == null) {
+                rows.add(new ReprobeRow(cfg.name(), before, before, ReprobeOutcome.FAILED));
+                continue;
+            }
+            contextWindows.record(cfg.name(), found, ProviderContextWindows.Source.PROBED);
+            String after = contextWindowLabel(cfg.name());
+            boolean changed = found != old;
+            rows.add(new ReprobeRow(cfg.name(), before, after,
+                    changed ? ReprobeOutcome.UPDATED : ReprobeOutcome.UNCHANGED));
+
+            if (changed) {
+                int requested = (cfg.maxTokens() != null && cfg.maxTokens() > 0)
+                        ? cfg.maxTokens() : llm.maxTokens();
+                int baked = ProviderContextWindows.cappedMaxTokens(requested, old > 0 ? old : null);
+                int now = ProviderContextWindows.cappedMaxTokens(requested, found);
+                if (baked != now) {
+                    restartReasons.add("%s: max-tokens %,d → %,d".formatted(cfg.name(), baked, now));
+                }
+            }
+        }
+
+        long updated = rows.stream().filter(r -> r.outcome() == ReprobeOutcome.UPDATED).count();
+        audit.log("settings.context-window.reprobe", "all", Map.of(
+                "probed", Integer.toString(rows.size()),
+                "updated", Long.toString(updated)));
+        return new ReprobeResult(rows, !restartReasons.isEmpty(), String.join(", ", restartReasons));
     }
 
     /**

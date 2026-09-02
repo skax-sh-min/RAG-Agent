@@ -43,7 +43,7 @@ public class LlmConfig {
         // G1: LOCAL providers target a local endpoint (e.g. llama-server) that needs no api-key.
         // Only cloud providers (NORMAL/PREMIUM) with a blank key are disabled.
         llmCfg.providers().stream()
-                .filter(cfg -> (cfg.apiKey() == null || cfg.apiKey().isBlank()) && !isLocalRole(cfg))
+                .filter(cfg -> (cfg.apiKey() == null || cfg.apiKey().isBlank()) && !cfg.isLocal())
                 .forEach(cfg -> log.warn(
                         "Provider [{}] disabled — api-key is empty (set the corresponding env var)", cfg.name()));
         // G2: ANY provider (LOCAL included) with no base-url configured is disabled. LOCAL providers
@@ -78,10 +78,8 @@ public class LlmConfig {
                     boolean providerStream = !Boolean.FALSE.equals(cfg.stream()); // default: true
                     // OpenAiApi.builder() appends /v1 internally, so strip it to avoid /v1/v1.
                     // resolvedUrl (with /v1) is kept for LlmProvider.baseUrl() and LoggingChatModel curl logs.
-                    String apiBase = resolvedUrl.endsWith("/v1/") ? resolvedUrl.substring(0, resolvedUrl.length() - 4)
-                                   : resolvedUrl.endsWith("/v1")  ? resolvedUrl.substring(0, resolvedUrl.length() - 3)
-                                   : resolvedUrl;
-                    if (isLocalRole(cfg) && verifyLocalModels) {
+                    String apiBase = cfg.apiBase();
+                    if (cfg.isLocal() && verifyLocalModels) {
                         verifyLocalModel(cfg.name(), apiBase, cfg.model(), connectTimeoutSeconds, readTimeoutSeconds);
                     }
                     OpenAiApi api = OpenAiApi.builder()
@@ -98,13 +96,12 @@ public class LlmConfig {
                     // 컨텍스트 창: 운영자 선언이 최우선, 없으면 서버에 물어본다(LOCAL 만 — 클라우드
                     // 프로바이더는 이 엔드포인트가 없고, 컨텍스트가 넉넉해 문제가 되지도 않는다).
                     // 못 구하면 기록하지 않는다 = "모른다". 0 이나 추측값을 넣지 않는 것이 중요하다.
-                    Integer declaredCtx = (cfg.contextSize() != null && cfg.contextSize() > 0)
-                            ? cfg.contextSize() : null;
+                    Integer declaredCtx = cfg.declaredContextSize();
                     Integer effectiveCtx = declaredCtx;
                     if (effectiveCtx != null) {
                         contextWindows.record(cfg.name(), effectiveCtx,
                                 ProviderContextWindows.Source.CONFIGURED);
-                    } else if (isLocalRole(cfg)) {
+                    } else if (cfg.isLocal()) {
                         effectiveCtx = ContextWindowProbe.probe(apiBase, cfg.model(),
                                 connectTimeoutSeconds, readTimeoutSeconds).orElse(null);
                         if (effectiveCtx != null) {
@@ -212,11 +209,6 @@ public class LlmConfig {
                 "No LLM provider available. Configure a LOCAL provider (LOCAL_LLM_URL) or set OPENAI_API_KEY / GEMINI_API_KEY.");
     }
 
-    /** G1: a provider whose role is LOCAL targets a local endpoint (e.g. llama-server) that needs no api-key. */
-    private static boolean isLocalRole(AppProperties.ProviderConfig cfg) {
-        return cfg.role() != null && "LOCAL".equalsIgnoreCase(cfg.role().trim());
-    }
-
     /**
      * 출력 예약이 컨텍스트 창을 통째로 먹어버리는 설정을 기동 시점에 잡아낸다.
      *
@@ -237,8 +229,8 @@ public class LlmConfig {
     // package-private static: 순수 계산이라 빈을 띄우지 않고 검사할 수 있어야 한다
     // (SettingsService.formatModeBudgetForTest 와 같은 선례).
     static int capMaxTokensToContext(String providerName, int requested, Integer contextTokens) {
-        if (contextTokens == null || requested < contextTokens) return requested;
-        int capped = Math.max(256, contextTokens / 2);
+        int capped = ProviderContextWindows.cappedMaxTokens(requested, contextTokens);
+        if (capped == requested) return requested;
         log.warn("""
                 [LLM CONFIG] provider=[{}] max-tokens({}) >= context-size({}) — 입력에 남는 자리가 없어 \
                 모든 요청이 컨텍스트 초과로 실패합니다. {} 로 낮춰 실행합니다.
