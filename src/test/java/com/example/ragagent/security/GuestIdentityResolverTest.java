@@ -289,7 +289,7 @@ class GuestIdentityResolverTest {
                     true, false, 3, null,
                     null, null, null, null, null, null, null,
                     new AppProperties.AuthConfig(false, false, raw), null, null, null,
-                    null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null);
+                    null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null);
             return props.authSafe().guestIdentity();
         }
 

@@ -217,34 +217,22 @@ class RetrievalServiceRrfTest {
 
     // ── 큐레이션 / 지식 제안 축 분리 ──────────────────────────────────────────
 
+    /**
+     * §10.11 — 큐레이션은 축 하나다. 예전에는 좋아요 승격과 지식 제안을 {@code CURATED_ORIGIN} 으로
+     * 갈라 서로 다른 가중치를 줬는데, 그 구분의 근거("앱이 만든 무검토 출력" 대 "사람이 쓴 텍스트")가
+     * 모든 유입에 사람 편집 + 관리자 승인이 걸리면서 사라졌다. 두 출처가 이제 <b>같은 가중치로
+     * 경쟁</b>하고, 순위만이 순서를 정한다.
+     */
     @Test
-    @DisplayName("두 큐레이션 축은 각자의 가중치로 계산된다 — 같은 순위면 가중치 큰 쪽이 앞선다")
-    void curatedAndSubmissionAxesUseTheirOwnWeights() {
-        Document like = doc("like");
-        Document submission = doc("submission");
+    @DisplayName("큐레이션 축은 하나다 — 출처가 달라도 같은 가중치로 순위만 겨룬다")
+    void curatedOriginsShareOneAxis() {
+        Document fromLike = doc("like");
+        Document fromSubmission = doc("submission");
 
-        // 각 축에서 1위인 동점 상황 — 순위가 같으니 가중치만으로 갈린다.
-        List<Document> higherSubmission = RetrievalService.mergeRrf(
-                List.of(), List.of(), List.of(like), List.of(submission), 5, 60, 0.0, 1.2, 1.5);
-        assertThat(ids(higherSubmission)).containsExactly("submission", "like");
+        List<Document> fused = RetrievalService.mergeRrf(
+                List.of(), List.of(), List.of(fromLike, fromSubmission), 5, 60, 0.0, 1.5);
 
-        // 가중치를 뒤집으면 순서도 뒤집힌다 — 값이 실제로 반영된다는 증거.
-        List<Document> higherLike = RetrievalService.mergeRrf(
-                List.of(), List.of(), List.of(like), List.of(submission), 5, 60, 0.0, 1.5, 1.2);
-        assertThat(ids(higherLike)).containsExactly("like", "submission");
-    }
-
-    @Test
-    @DisplayName("제안 축이 비어 있으면 기존 7-인자 동작과 완전히 같다 (회귀 없음)")
-    void emptySubmissionAxis_matchesLegacyBehavior() {
-        List<List<Document>> vectorRanked = List.of(List.of(doc("a"), doc("b")));
-        List<Document> curated = List.of(doc("c"));
-
-        List<Document> legacy = RetrievalService.mergeRrf(vectorRanked, List.of(), curated, 5, 60, 1.0, 1.5);
-        List<Document> withEmptyAxis = RetrievalService.mergeRrf(
-                vectorRanked, List.of(), curated, List.of(), 5, 60, 1.0, 1.5, 1.5);
-
-        assertThat(ids(withEmptyAxis)).isEqualTo(ids(legacy));
+        assertThat(ids(fused)).containsExactly("like", "submission");
     }
 
     // ── 검색 진단 수치 (1단계) ──────────────────────────────────────────────
@@ -264,9 +252,9 @@ class RetrievalServiceRrfTest {
         List<Document> keyword = List.of(doc("b"), doc("d"));
 
         List<Document> plain = RetrievalService.mergeRrf(
-                vectorRanked, keyword, List.of(), List.of(), 4, 60, 1.0, 1.2, 1.5);
+                vectorRanked, keyword, List.of(), 4, 60, 1.0, 1.2);
         RetrievalService.RrfResult scored = RetrievalService.mergeRrfScored(
-                vectorRanked, keyword, List.of(), List.of(), 4, 60, 1.0, 1.2, 1.5);
+                vectorRanked, keyword, List.of(), 4, 60, 1.0, 1.2);
 
         assertThat(ids(scored.docs())).isEqualTo(ids(plain));
     }
@@ -282,7 +270,7 @@ class RetrievalServiceRrfTest {
         RetrievalService.RrfResult r = RetrievalService.mergeRrfScored(
                 List.of(List.of(scored("other", 0.9), vectorSide)),
                 List.of(keywordSide),
-                List.of(), List.of(), 5, 60, 1.0, 0.0, 0.0);
+                List.of(), 5, 60, 1.0, 0.0);
 
         String key = RetrievalService.docKey(vectorSide);
         assertThat(r.metrics().get(key).vectorSimilarity()).isEqualTo(0.83);
@@ -295,7 +283,7 @@ class RetrievalServiceRrfTest {
         RetrievalService.RrfResult r = RetrievalService.mergeRrfScored(
                 List.of(List.of(doc("x"), scored("a", 0.55)),   // a: 2위, 0.55
                         List.of(scored("a", 0.71))),            // a: 1위, 0.71
-                List.of(), List.of(), List.of(), 5, 60, 1.0, 0.0, 0.0);
+                List.of(), List.of(), 5, 60, 1.0, 0.0);
 
         var m = r.metrics().get(RetrievalService.docKey(doc("a")));
         assertThat(m.vectorSimilarity()).isEqualTo(0.71);
@@ -308,7 +296,7 @@ class RetrievalServiceRrfTest {
         RetrievalService.RrfResult r = RetrievalService.mergeRrfScored(
                 List.of(List.of(scored("a", 0.9))),
                 List.of(doc("kw-only")),
-                List.of(), List.of(), 5, 60, 1.0, 0.0, 0.0);
+                List.of(), 5, 60, 1.0, 0.0);
 
         var m = r.metrics().get(RetrievalService.docKey(doc("kw-only")));
         assertThat(m.vectorSimilarity()).isNull();
@@ -320,7 +308,7 @@ class RetrievalServiceRrfTest {
     void rrfScoresAreOrderedAndWeighted() {
         RetrievalService.RrfResult r = RetrievalService.mergeRrfScored(
                 List.of(List.of(doc("a"), doc("b"))),
-                List.of(), List.of(), List.of(), 5, 60, 1.0, 0.0, 0.0);
+                List.of(), List.of(), 5, 60, 1.0, 0.0);
 
         double a = r.metrics().get(RetrievalService.docKey(doc("a"))).rrfScore();
         double b = r.metrics().get(RetrievalService.docKey(doc("b"))).rrfScore();

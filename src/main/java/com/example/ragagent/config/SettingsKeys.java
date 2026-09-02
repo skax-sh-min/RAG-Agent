@@ -43,7 +43,6 @@ public final class SettingsKeys {
     public static final String SEARCH_HYBRID_ENABLED          = "search-hybrid-enabled";
     public static final String SEARCH_CURATED_QA_ENABLED      = "search-curated-qa-enabled"; // §10.10
     public static final String SEARCH_CURATED_QA_WEIGHT       = "search-curated-qa-weight";  // §10.10
-    public static final String SEARCH_SUBMISSION_WEIGHT       = "search-submission-weight"; // 지식 제안 축
 
     // ── Indexing / chunking (apply on the next indexing / ↺ re-index) ────────
     public static final String CHUNK_SIZE                     = "chunk-size";
@@ -80,7 +79,6 @@ public final class SettingsKeys {
             SEARCH_HYBRID_ENABLED,
             SEARCH_CURATED_QA_ENABLED,
             SEARCH_CURATED_QA_WEIGHT,
-            SEARCH_SUBMISSION_WEIGHT,
             CHUNK_SIZE,
             CHUNK_OVERLAP,
             MIN_CHUNK_SIZE,

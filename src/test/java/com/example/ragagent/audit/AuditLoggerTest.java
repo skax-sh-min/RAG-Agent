@@ -50,7 +50,7 @@ class AuditLoggerTest {
                 true, false, 3,
                 null, null, null, null, null, null, null,
                 new AppProperties.AuditConfig(true, "10MB", 7, "100MB"), null, null, null, null, null, null,
-                null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null);
 
         logger = new AuditLogger(new ObjectMapper(), props, currentUser);
     }
@@ -101,7 +101,7 @@ class AuditLoggerTest {
                 true, false, 3,
                 null, null, null, null, null, null, null,
                 new AppProperties.AuditConfig(false, "10MB", 7, "100MB"), null, null, null, null, null, null,
-                null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null);
         AuditLogger disabledLogger = new AuditLogger(new ObjectMapper(), disabledProps, currentUser);
 
         disabledLogger.log("document.upload", "doc-3");
@@ -116,7 +116,7 @@ class AuditLoggerTest {
             "./data", 2, 800, 100, 100, 7, 0.0, true, 0, false,
                 true, false, 3,
                 null, null, null, null, null, null, null, null, null, null, null, null, null, null,
-                null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null);
         assertThat(propsWithNull.auditSafe().enabled()).isTrue();
         assertThat(propsWithNull.auditSafe().maxHistoryDays()).isEqualTo(7);
         assertThat(propsWithNull.auditSafe().maxFileSize()).isEqualTo("10MB");

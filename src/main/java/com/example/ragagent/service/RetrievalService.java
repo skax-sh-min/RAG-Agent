@@ -127,7 +127,6 @@ public class RetrievalService {
         boolean hybridEnabled = props.searchHybridEnabledSafe();
         boolean curatedQaEnabled = props.searchCuratedQaEnabledSafe();
         double curatedQaWeight = props.searchCuratedQaWeightSafe();
-        double submissionWeight = props.searchSubmissionWeightSafe();
         // 재시도 횟수가 아니라 '검색을 다시 한 횟수'가 escalation 의 입력이다 — grounded 실패
         // 재시도는 검색을 건너뛰고 ANSWER 로 바로 가므로(AgentGraph), retryCount 를 쓰면 검색을
         // 하지도 않은 만큼 escalation 이 앞서 나간다.
@@ -236,13 +235,12 @@ public class RetrievalService {
                 keywordHits = keywordF.join();
                 curatedHits = curatedF.join();
             }
-            // 큐레이션 네임스페이스 한 번의 검색 결과를 출처별로 갈라 서로 다른 가중치의 두 축으로 넣는다
-            // — 좋아요 승격(검증된 답변)과 지식 제안(사람이 직접 쓴 지식)은 신뢰 수준이 달라 별도 튜닝
-            // 대상이기 때문. 각 부분 리스트의 순위는 원래 순서를 유지하므로 축 안에서의 RRF 순위는 그대로다.
-            List<Document> likeHits = curatedHitsOfOrigin(curatedHits, CuratedQaRepository.ORIGIN_MANUAL, false);
-            List<Document> submissionHits = curatedHitsOfOrigin(curatedHits, CuratedQaRepository.ORIGIN_MANUAL, true);
-            RrfResult fused = mergeRrfScored(ranked, keywordHits, likeHits, submissionHits,
-                    candidateK, rrfK, rrfKeywordWeight, curatedQaWeight, submissionWeight);
+            // 큐레이션은 축 하나다 (§10.11). 예전에는 좋아요 승격과 지식 제안을 MetaKey.CURATED_ORIGIN
+            // 으로 갈라 각자 가중치를 줬는데, 그 구분의 근거는 "앱이 만든 미편집·무검토 출력" 대
+            // "사람이 쓴 텍스트"였다. 이제 모든 유입이 사람 편집 + 관리자 승인을 거치므로 그 차이가
+            // 사라졌다. CURATED_ORIGIN 자체는 감사·통계용으로 계속 실리며, 검색 분기에서만 빠졌다.
+            RrfResult fused = mergeRrfScored(ranked, keywordHits, curatedHits,
+                    candidateK, rrfK, rrfKeywordWeight, curatedQaWeight);
             fusedMetrics = fused.metrics();
             List<Document> candidates = fused.docs();
             // Strict AND tag filter — applied after RRF, before rerank/cut. Covers vector
@@ -461,18 +459,6 @@ public class RetrievalService {
         return filtered;
     }
 
-    /**
-     * Partitions curated hits by {@code MetaKey.CURATED_ORIGIN}. {@code wantManual=true} keeps only
-     * approved submissions; {@code false} keeps everything else — vectors embedded before this key
-     * existed carry no origin at all and fall into the 👍 side, which is what they overwhelmingly are.
-     */
-    private static List<Document> curatedHitsOfOrigin(List<Document> hits, String manualOrigin, boolean wantManual) {
-        if (hits == null || hits.isEmpty()) return List.of();
-        return hits.stream()
-                .filter(d -> manualOrigin.equals(d.getMetadata().get(MetaKey.CURATED_ORIGIN)) == wantManual)
-                .toList();
-    }
-
     /** A curated-Q&A hit carrying no tags at all — see {@link #filterByTags}'s curated exemption. */
     private static boolean isScopelessCuratedEntry(Document d) {
         if (!"curated_qa".equals(d.getMetadata().get(MetaKey.DOC_TYPE))) return false;
@@ -547,23 +533,8 @@ public class RetrievalService {
     static List<Document> mergeRrf(List<List<Document>> vectorRanked, List<Document> keywordRanked,
                                     List<Document> curatedRanked, int topK, int k,
                                     double keywordWeight, double curatedWeight) {
-        return mergeRrf(vectorRanked, keywordRanked, curatedRanked, List.of(), topK, k,
-                keywordWeight, curatedWeight, 0.0);
-    }
-
-    /**
-     * Same as the 7-arg overload, plus a fourth axis for 지식 제안 (approved user submissions) with
-     * its own weight. Both curated axes come from one search of the {@code "curated"} namespace,
-     * partitioned by {@code MetaKey.CURATED_ORIGIN} — a 👍-promoted answer was verified by whoever
-     * asked, a submission is knowledge someone typed in, so they are worth different amounts and
-     * get separate knobs. Empty/absent axis is a no-op. Package-private for unit testing.
-     */
-    static List<Document> mergeRrf(List<List<Document>> vectorRanked, List<Document> keywordRanked,
-                                    List<Document> curatedRanked, List<Document> submissionRanked,
-                                    int topK, int k,
-                                    double keywordWeight, double curatedWeight, double submissionWeight) {
-        return mergeRrfScored(vectorRanked, keywordRanked, curatedRanked, submissionRanked,
-                topK, k, keywordWeight, curatedWeight, submissionWeight).docs();
+        return mergeRrfScored(vectorRanked, keywordRanked, curatedRanked,
+                topK, k, keywordWeight, curatedWeight).docs();
     }
 
     /**
@@ -589,9 +560,8 @@ public class RetrievalService {
      * the document list.
      */
     static RrfResult mergeRrfScored(List<List<Document>> vectorRanked, List<Document> keywordRanked,
-                                     List<Document> curatedRanked, List<Document> submissionRanked,
-                                     int topK, int k,
-                                     double keywordWeight, double curatedWeight, double submissionWeight) {
+                                     List<Document> curatedRanked, int topK, int k,
+                                     double keywordWeight, double curatedWeight) {
         Map<String, Double> scores = new LinkedHashMap<>();
         Map<String, Document> byKey = new LinkedHashMap<>();
         Map<String, Double> bestSimilarity = new LinkedHashMap<>();
@@ -604,10 +574,7 @@ public class RetrievalService {
             addRrfAxis(keywordRanked, keywordWeight, k, AXIS_KEYWORD, false, scores, byKey, bestSimilarity, ranksByKey);
         }
         if (curatedRanked != null && !curatedRanked.isEmpty()) {
-            addRrfAxis(curatedRanked, curatedWeight, k, AXIS_LIKE, false, scores, byKey, bestSimilarity, ranksByKey);
-        }
-        if (submissionRanked != null && !submissionRanked.isEmpty()) {
-            addRrfAxis(submissionRanked, submissionWeight, k, AXIS_SUBMISSION, false, scores, byKey, bestSimilarity, ranksByKey);
+            addRrfAxis(curatedRanked, curatedWeight, k, AXIS_CURATED, false, scores, byKey, bestSimilarity, ranksByKey);
         }
         List<Map.Entry<String, Double>> ordered = scores.entrySet().stream()
                 .sorted(Map.Entry.<String, Double>comparingByValue().reversed())
@@ -623,11 +590,12 @@ public class RetrievalService {
 
     private static final String AXIS_VECTOR = "vec";
     private static final String AXIS_KEYWORD = "bm25";
-    private static final String AXIS_LIKE = "like";
-    private static final String AXIS_SUBMISSION = "sub";
+    /** §10.11 — one curated axis. Was {@code like}/{@code sub}; the diagnostics panel shows the
+     *  new name from the next search on, and an older stored string keeps its own labels. */
+    private static final String AXIS_CURATED = "curated";
     /** Axis print order — fixed so the rendered string is stable turn to turn. */
     private static final List<String> AXIS_ORDER =
-            List.of(AXIS_VECTOR, AXIS_KEYWORD, AXIS_LIKE, AXIS_SUBMISSION);
+            List.of(AXIS_VECTOR, AXIS_KEYWORD, AXIS_CURATED);
 
     private static void addRrfAxis(List<Document> axis, double weight, int k,
                                     String axisName, boolean carriesSimilarity,

@@ -47,11 +47,10 @@ public record AppProperties(
         Boolean pptxRemoveDuplicateSlides,      // PPTX 변환 시 완전 동일 슬라이드 + 목차형 슬라이드 제거 (기본 true) — PptxToMarkdownConverter
         Boolean pptxDropDividerSlides,          // PPTX 변환 시 본문·이미지 없이 '구분용 제목'만 있는 섹션 구분 슬라이드 제거 (기본 true, 문장형/키 메시지 제목은 유지) — PptxToMarkdownConverter
         Boolean searchCuratedQaEnabled,          // §10.10 — 좋아요 기반 큐레이션 Q&A를 RRF 축으로 반영할지 여부 (기본 true). 핫에디터블 — RetrievalService가 매 검색마다 재조회
-        Double searchCuratedQaWeight,            // §10.10 — 좋아요 큐레이션 축 RRF 가중치 (기본 1.0 = 그룹정규화된 벡터축과 동등. 예전 1.2 에서 내렸다 — 이 축은 후보가 적어 웬만하면 자기 축 상위를 받는데 거기에 가산점까지 주면 관련 없는 큐레이션 항목이 끌려 올라온다). 지식 제안은 searchSubmissionWeight 로 별도. 핫에디터블
+        Double searchCuratedQaWeight,            // §10.10 — 큐레이션 축 RRF 가중치 (기본 1.0 = 그룹정규화된 벡터축과 동등. 예전 1.2 에서 내렸다 — 이 축은 후보가 적어 웬만하면 자기 축 상위를 받는데 거기에 가산점까지 주면 관련 없는 큐레이션 항목이 끌려 올라온다). §10.11 에서 지식 제안 축과 합쳐져 이 값 하나가 큐레이션 전체를 다룬다. 핫에디터블
         Boolean pptxDropRedundantTitleSlides,    // PPTX 변환 시 이미지·도형 없이 짧은 제목 한 줄만 있고 그 내용이 바로 다음 슬라이드에 그대로 포함되는 "예고 제목" 슬라이드 제거 (기본 true) — PptxToMarkdownConverter
         Boolean pptxDropEndingSlide,             // PPTX 변환 시 마지막 슬라이드가 이미지 없이 '끝'/'END'/'The End' 같은 종료 표시만 담고 있으면 제거 (기본 true) — PptxToMarkdownConverter
         Boolean chunkSplitGranular,              // 청크 분할 전략: true=소제목 기준 최대 분할(min-chunk-size 무시), false=크기 기준 병합(기본, 기존 동작). 핫에디터블 — 다음 인덱싱/↺ 재인덱싱부터 적용
-        Double searchSubmissionWeight,           // 지식 제안(승인된 사용자 제출) 축 RRF 가중치 (기본 1.0). 좋아요 큐레이션(searchCuratedQaWeight)과 별개 — 핫에디터블
         UploadConfig upload                      // §6.15 — 전역 저장 상한(문서 업로드가 늘리는 디스크 사용량의 총량 캡). 미설정/0 = 무제한(기본)
 ) {
     public record LlmConfig(
@@ -445,18 +444,6 @@ public record AppProperties(
         Boolean o = overrideBool(SettingsKeys.CHUNK_SPLIT_GRANULAR);
         if (o != null) return o;
         return chunkSplitGranular != null && chunkSplitGranular;
-    }
-
-    /**
-     * RRF weight of the 지식 제안 axis — approved user submissions ({@code origin='manual'}), split
-     * out from the 👍-promoted axis ({@link #searchCuratedQaWeightSafe()}) so the two can be tuned
-     * against each other. Both live in the same {@code "curated"} vector namespace; what separates
-     * them at search time is {@code MetaKey.CURATED_ORIGIN}. Hot-editable, clamped to {@code >= 0}.
-     */
-    public double searchSubmissionWeightSafe() {
-        Double o = overrideDouble(SettingsKeys.SEARCH_SUBMISSION_WEIGHT);
-        double v = (o != null) ? o : (searchSubmissionWeight != null ? searchSubmissionWeight : 1.0);
-        return v >= 0 ? v : 1.0;
     }
 
     /** Minimum chunk size (chars); {@code <= 0} falls back to the (override-aware) overlap. Hot-editable. */
