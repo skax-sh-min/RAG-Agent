@@ -192,6 +192,36 @@ class ResponseModeSystemPromptTest {
                 .doesNotContain("if you cannot, state what is missing");
     }
 
+    /**
+     * §10.13 1단계 — DN 답변도 {@code ## 요약} 을 내게 한다. 이 지시가 있어야 요약 경로가
+     * {@code fullyPreSummarized} 로 떨어져 LLM 호출을 건너뛰고, 300자 절단({@code
+     * UNSUMMARIZED_ANSWER_CAP})이 사라지며, {@code RECENT_DIRECT_ANSWER_CAP} 이 정상 경로에서
+     * 빠진다 — 셋 다 코드가 아니라 <b>프롬프트</b>에 달려 있어 여기서만 고정된다.
+     *
+     * <p><b>강제하지 않는 것이 요건이다.</b> 같은 프롬프트를 meta(인사·잡담) 답변도 쓰므로
+     * "안녕하세요"에 {@code ## 요약} 헤더가 붙으면 안 된다. 그래서 분량 조건부이고, 모델이
+     * 안 따르거나 답변이 짧아 요약이 없으면 렌더 규칙이 "뺄 게 없으니 전문"으로 안전하게 떨어진다.
+     */
+    @Test
+    @DisplayName("DN 프롬프트는 '## 요약'을 조건부로 요구한다 — 짧은 답변엔 붙이지 말라는 단서까지 (§10.13)")
+    void directNormalPromptAsksForConditionalSummary() {
+        String ko = prompt("prompt.direct.system.n", Locale.KOREAN);
+        String en = prompt("prompt.direct.system.n", Locale.ENGLISH);
+
+        // 헤더 문자열은 한/영이 같아야 한다 — CuratedTextUtils.extractSummarySection() 이 한국어
+        // 헤딩만 찾으므로, 영어 번들이 "## Summary" 라고 쓰면 EN 로케일에서 요약 경로가 통째로 죽는다.
+        assertThat(ko).as("DN/ko 요약 지시").contains("## 요약");
+        assertThat(en).as("DN/en 요약 지시 — 헤더는 번역하지 않는다").contains("## 요약");
+
+        // 조건부라는 단서. 이게 빠지면 인사말에도 헤더가 붙는다.
+        assertThat(ko).as("DN/ko 짧은 답변 예외").contains("붙이지 마세요");
+        assertThat(en.toLowerCase()).as("DN/en 짧은 답변 예외").contains("do not add it");
+
+        // S 처럼 "출력 전체를 요약으로 시작하라"는 무조건 지시가 되면 안 된다.
+        assertThat(ko).as("DN 은 S 의 무조건 지시를 물려받지 않는다")
+                .doesNotContain("출력 전체를 \"## 요약\" 헤더 한 줄로 시작합니다");
+    }
+
     @Test
     @DisplayName("스타일 지시문 층은 완전히 사라졌다 (§6.24 Step 0-c)")
     void styleInstructionLayerIsGone() {
