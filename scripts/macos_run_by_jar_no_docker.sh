@@ -41,13 +41,34 @@ export SERVER_PORT
 # *.jar.original(Boot 재패키징 전 원본)은 glob 에 걸리지 않고, 여러 개면 가장 최근 것을 고른다.
 JAR_PATH=$(ls -t target/rag-agent-*.jar 2>/dev/null | head -1 || true)
 
+# .bat/.cmd 와 같은 자리(data/rag-agent.jar)를 쓴다 — 아래 복사 대상이자 실행 대상.
+RUN_DIR="data"
+RUN_JAR="$RUN_DIR/rag-agent.jar"
+SKIP_COPY=""
+
 if [ -z "$JAR_PATH" ]; then
-  echo "오류: target/rag-agent-*.jar 를 찾을 수 없습니다. 먼저 빌드하세요:"
-  echo "      mvn clean package -DskipTests"
-  exit 1
+  if [ -f "$RUN_JAR" ]; then
+    # 빌드 산출물은 없지만 예전에 복사해 둔 것이 있다 — mvn clean 후 재빌드 없이 다시 띄우는 경우다.
+    # 없는 파일을 복사하려다 죽는 것보다 있는 것으로 도는 편이 낫고, 대신 최신이 아님을 알린다.
+    echo ""
+    echo "알림: target/rag-agent-*.jar 파일이 없습니다."
+    echo "      이미 있는 $RUN_JAR 로 진행합니다 (복사하지 않음)."
+    echo "      최신 빌드로 실행하려면 중단 후 mvn clean package -DskipTests 를 먼저 실행하세요."
+    echo ""
+    sleep 3
+    SKIP_COPY=1
+  else
+    echo "오류: target/rag-agent-*.jar 도 $RUN_JAR 도 없습니다. 먼저 빌드하세요:"
+    echo "      mvn clean package -DskipTests"
+    exit 1
+  fi
 fi
 
-echo "JAR_NAME=$(basename "$JAR_PATH")"
+if [ -n "$JAR_PATH" ]; then
+  echo "JAR_NAME=$(basename "$JAR_PATH")"
+else
+  echo "JAR_NAME=$(basename "$RUN_JAR") (기존)"
+fi
 
 # Docker 를 쓰지 않는 스크립트이므로 chroma 백엔드면 Chroma 서버가 이미 떠 있어야 한다.
 case "${VECTORSTORE_TYPE:-chroma}" in
@@ -64,10 +85,11 @@ esac
 # 산출물이 분리되므로 mvn clean 이 돌아가는 앱을 건드리지 않는다. (2) 버전이 올라가도
 # 실행 명령·서비스 등록·로그 경로가 그대로다.
 # 참고: data/ 는 .gitignore 대상이고 DATA_DIR 과는 무관하다 — 여기서는 단순히 JAR 을 두는 자리다.
-RUN_DIR="data"
-RUN_JAR="$RUN_DIR/rag-agent.jar"
-mkdir -p "$RUN_DIR"
-cp "$JAR_PATH" "$RUN_JAR"
+# RUN_DIR/RUN_JAR 는 위에서(빌드 산출물 탐색 직후) 이미 정해 뒀다 — 폴백이 그 값을 봐야 하기 때문.
+if [ -z "$SKIP_COPY" ]; then
+  mkdir -p "$RUN_DIR"
+  cp "$JAR_PATH" "$RUN_JAR"
+fi
 
 echo "======================================================="
 echo "Starting... $(basename "$RUN_JAR")  port: $SERVER_PORT"

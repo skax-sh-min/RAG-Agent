@@ -99,6 +99,8 @@ container system stop
 
 자세한 사용법은 [USER_MANUAL.md](documents/USER_MANUAL.md)를, 배포·LLM 설정은 [OPERATOR_MANUAL.md](documents/OPERATOR_MANUAL.md)를 참고하세요.
 
+> 코드를 고칠 때: [CLAUDE.md](CLAUDE.md)가 안정적인 지도(스택·파일 역할·규약·하드 제약)이고, [documents/PITFALLS.md](documents/PITFALLS.md)에 각 규칙의 근거와 **실제로 깨졌던 기록**이 있습니다 — 거기 이름이 나온 파일을 고치기 전에 해당 항목을 읽으세요.
+
 ## 환경 변수
 
 ### 연결 / 인증

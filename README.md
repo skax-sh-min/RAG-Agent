@@ -97,6 +97,8 @@ Open: http://localhost:8080
 
 See [USER_MANUAL.md](documents/USER_MANUAL.md) for usage instructions and [OPERATOR_MANUAL.md](documents/OPERATOR_MANUAL.md) for deployment and LLM configuration.
 
+> Contributors: [CLAUDE.md](CLAUDE.md) is the stable map (stack, file roles, conventions, hard constraints); [documents/PITFALLS.md](documents/PITFALLS.md) holds the reasoning behind each rule and the record of what broke — read the matching entry before changing a file it names.
+
 ## Environment Variables
 
 ### Connection / Authentication
