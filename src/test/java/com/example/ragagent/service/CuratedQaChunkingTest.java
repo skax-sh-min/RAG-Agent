@@ -82,7 +82,7 @@ class CuratedQaChunkingTest {
     private void likeWith(String answer, int existingChunkCount) {
         when(memoryService.getTurn(UID, TID, TURN_ID)).thenReturn(Optional.of(
                 new MemoryRepository.Turn(TURN_ID, "질문", answer, null, null, 0, 0, 0,
-                        "local", 1, "LIKE", "M", null)));
+                        "local", 1, "LIKE", "M", null, false)));
         when(repository.findById(CURATED_ID)).thenReturn(Optional.of(
                 new CuratedQaRepository.CuratedQa(CURATED_ID, TURN_ID, UID, TID, "질문", answer,
                         "active", "v1", "2026-01-01", "2026-01-01", "ok",

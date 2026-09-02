@@ -49,20 +49,41 @@ public record SourceRef(
          * 수 없고, 대화 기록을 다시 열 때만 채워진다 — 그래서 {@code retrieval_metrics} blob에
          * 저장되지 않으며 매번 현재 DB 상태로 새로 계산된다.
          */
-        @JsonProperty("stale") String staleStatus
+        @JsonProperty("stale") String staleStatus,
+        /**
+         * 이 출처가 검색에는 걸렸지만 <b>컨텍스트 예산 때문에 프롬프트에 실리지 못했는가</b>
+         * ({@code AnswerService.fitToBudget()}).
+         *
+         * <p>출처 목록은 검색된 전부를 보여주므로, 이 표시가 없으면 모델이 읽지 않은 청크가 읽은 것과
+         * 똑같이 나열된다. 턴 단위 안내({@code budgetNote})가 "10개 중 6개"라고 개수를 말한다면 이
+         * 값은 <b>어느 것인지</b>를 말한다 — 빠진 것이 중요한 문서였는지는 그것을 봐야 판단할 수 있다.
+         *
+         * <p>{@code answerShare} 가 0/null 인 것과 구별해야 한다: 그쪽은 "모델이 봤지만 답변에 쓰지
+         * 않았다"이고 이쪽은 "모델이 보지도 못했다"이다. 앞의 것은 검색이 그럭저럭 맞았다는 뜻이지만
+         * 뒤의 것은 <b>답변이 불완전할 수 있다</b>는 뜻이라 성격이 전혀 다르다.
+         *
+         * <p>{@code boolean} 이라 이 필드가 없던 시절의 blob 은 자연히 {@code false} 로 읽힌다.
+         */
+        @JsonProperty("prompt_excluded") boolean promptExcluded
 ) {
     public static final String STALE_DELETED = "deleted";
     public static final String STALE_MODIFIED = "modified";
 
     /** Metric-less sources (DB-reuse, restored history, fallback path). */
     public SourceRef(String label, String preview, String chunkId, String docId, Object pageOrSlide) {
-        this(label, preview, chunkId, docId, pageOrSlide, null, null, null, null, null);
+        this(label, preview, chunkId, docId, pageOrSlide, null, null, null, null, null, false);
     }
 
     /** Retrieval-time construction — the answer share is attached later. */
     public SourceRef(String label, String preview, String chunkId, String docId, Object pageOrSlide,
                      Double similarity, Double retrievalShare, String axisRanks) {
-        this(label, preview, chunkId, docId, pageOrSlide, similarity, retrievalShare, axisRanks, null, null);
+        this(label, preview, chunkId, docId, pageOrSlide, similarity, retrievalShare, axisRanks, null, null, false);
+    }
+
+    /** 예산 축소로 프롬프트에서 빠졌다고 표시한 사본. */
+    public SourceRef markPromptExcluded() {
+        return new SourceRef(label, preview, chunkId, docId, pageOrSlide,
+                similarity, retrievalShare, axisRanks, answerShare, staleStatus, true);
     }
 
     /**

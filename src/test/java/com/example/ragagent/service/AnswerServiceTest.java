@@ -8,6 +8,7 @@ import com.example.ragagent.agent.AgentState;
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.llm.LlmProvider;
 import com.example.ragagent.llm.LlmRouter;
+import com.example.ragagent.llm.ProviderContextWindows;
 import com.example.ragagent.llm.ProviderRole;
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.llm.TaskType;
@@ -68,6 +69,7 @@ class AnswerServiceTest {
 
     private LlmRouter llmRouter;
     private MessageSource messageSource;
+    private ProviderContextWindows contextWindows;
     private AnswerService service;
 
     @BeforeEach
@@ -77,10 +79,361 @@ class AnswerServiceTest {
                 "./data", MAX_RETRY, 800, 100, 100, 7, 0.0, true, 0, false,
                 true, false, 3,
                 null, null, null, null, null, null, null, null, null, null, null, null, null, null,
-                null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null);
+        contextWindows = new ProviderContextWindows();   // 비어 있음 = 창 모름 → 예산 축소 없음
         messageSource = mock(MessageSource.class);
         when(messageSource.getMessage(anyString(), any(), any(Locale.class))).thenReturn("prompt");
-        service = new AnswerService(llmRouter, props, messageSource);
+        service = new AnswerService(llmRouter, props, messageSource, contextWindows);
+    }
+
+    // ── 입력 예산 (컨텍스트 창 기반 사전 축소) ────────────────────────────────
+
+    /** 한글 n자 = TokenEstimator 기준 n토큰 — 예산 계산이 눈에 보이게 하려고 한국어로 만든다. */
+    private static org.springframework.ai.document.Document koreanDoc(int chars) {
+        return new org.springframework.ai.document.Document("가".repeat(chars));
+    }
+
+    /**
+     * <b>첫</b> 프롬프트만 붙잡는 라우터 스텁 — 한 턴은 답변 호출에 이어 검증 호출을 내고, 마지막을
+     * 잡으면 검증 프롬프트({@code [답변]}/{@code [문서 발췌]})를 보게 된다. 입력 예산이 걸리는 곳은
+     * 답변 프롬프트이므로 처음 것을 남긴다.
+     */
+    private java.util.concurrent.atomic.AtomicReference<String> capturePrompt() {
+        var seen = new java.util.concurrent.atomic.AtomicReference<String>();
+        when(llmRouter.executeGatedWithUsage(any(), any(), any())).thenAnswer(inv -> {
+            java.util.function.Function<org.springframework.ai.chat.model.ChatModel,
+                    org.springframework.ai.chat.model.ChatResponse> fn = inv.getArgument(2);
+            org.springframework.ai.chat.model.ChatModel probe =
+                    mock(org.springframework.ai.chat.model.ChatModel.class);
+            when(probe.call(any(org.springframework.ai.chat.prompt.Prompt.class))).thenAnswer(call -> {
+                org.springframework.ai.chat.prompt.Prompt prompt = call.getArgument(0);
+                seen.compareAndSet(null, prompt.getInstructions().stream()
+                        .map(org.springframework.ai.chat.messages.Message::getText)
+                        .reduce("", (a, b) -> a + "\n" + b));
+                return chatResponse("답변");
+            });
+            fn.apply(probe);
+            return new LlmRouter.LlmResult("답변", 0, 0);
+        });
+        return seen;
+    }
+
+    @Test
+    @DisplayName("컨텍스트 창을 모르면 아무것도 자르지 않는다 — 추측으로 근거를 버리지 않는다")
+    void unknownContextWindowTrimsNothing() {
+        // contextWindows 는 setUp 에서 비어 있다.
+        when(llmRouter.findProviderName(any(), any())).thenReturn("lm");
+        var seen = capturePrompt();
+
+        AgentState state = newState(RoutingMode.COST_FIRST).toBuilder()
+                .retrievedDocs(List.of(koreanDoc(4_000), koreanDoc(4_000), koreanDoc(4_000)))
+                .build();
+        service.execute(state);
+
+        // 세 문서가 모두 실려야 한다(각 4,000자).
+        assertThat(seen.get()).isNotNull();
+        assertThat(countOccurrences(seen.get(), "가".repeat(4_000))).isEqualTo(3);
+    }
+
+    @Test
+    @DisplayName("창이 좁으면 관련도 낮은 뒤쪽 문서부터 덜어낸다")
+    void narrowContextDropsLowestRankedDocumentsFirst() {
+        // 창 13,000 → 예산 = 13,000 − 예약 7,000 − 여유 1,300 = 4,700 토큰.
+        // 고정비 ≈ 203(목 시스템 프롬프트 "prompt" + 질문 + 섹션 머리말 200)이므로
+        // 문서 셋(각 ~2,003) 중 둘까지만 들어간다: 203+2,003+2,003=4,209 ≤ 4,700 < 6,212.
+        contextWindows.record("lm", 13_000, ProviderContextWindows.Source.CONFIGURED);
+        when(llmRouter.findProviderName(any(), any())).thenReturn("lm");
+        var seen = capturePrompt();
+
+        // 문서를 서로 구분되게 만든다 — 무엇이 남았는지 확인해야 하므로.
+        var first  = new org.springframework.ai.document.Document("첫번째" + "가".repeat(2_000));
+        var second = new org.springframework.ai.document.Document("두번째" + "나".repeat(2_000));
+        var third  = new org.springframework.ai.document.Document("세번째" + "다".repeat(2_000));
+        AgentState state = newState(RoutingMode.COST_FIRST).toBuilder()
+                .retrievedDocs(List.of(first, second, third))
+                .build();
+        service.execute(state);
+
+        String prompt = seen.get();
+        assertThat(prompt).as("가장 관련도 높은 문서는 남아야 한다").contains("첫번째");
+        assertThat(prompt).as("예산이 허락하는 만큼은 담는다").contains("두번째");
+        assertThat(prompt).as("최저 관련도 문서가 먼저 버려진다").doesNotContain("세번째");
+    }
+
+    @Test
+    @DisplayName("문서를 다 덜어내도 모자라면 대화 이력을 오래된 턴부터 버린다")
+    void historyIsTrimmedOldestFirstWhenDocumentsAreNotEnough() {
+        // 창 10,000 → 예산 2,000. 고정비 ~203 + 문서 1,000 을 빼면 이력에 ~797 만 남아,
+        // 1,500자짜리 오래된 턴은 버려지고 200자짜리 최근 턴만 살아남는다.
+        contextWindows.record("lm", 10_000, ProviderContextWindows.Source.CONFIGURED);
+        when(llmRouter.findProviderName(any(), any())).thenReturn("lm");
+        var seen = capturePrompt();
+
+        String history = "Q: 가장오래된질문\nA: " + "옛".repeat(1_500)
+                + "\n\nQ: 최근질문\nA: " + "새".repeat(200);
+        AgentState state = newState(RoutingMode.COST_FIRST).toBuilder()
+                .conversationHistory(history)
+                .retrievedDocs(List.of(koreanDoc(1_000)))
+                .build();
+        service.execute(state);
+
+        String prompt = seen.get();
+        assertThat(prompt).as("최근 턴은 남아야 한다").contains("최근질문");
+        assertThat(prompt).as("가장 오래된 턴부터 버린다").doesNotContain("가장오래된질문");
+    }
+
+    @Test
+    @DisplayName("이력은 턴 경계에서 잘린다 — 반쪽짜리 턴을 남기지 않는다")
+    void historyIsCutAtTurnBoundaries() {
+        // 창 10,000 → 예산 2,000, 고정비 ~203 → 이력에 ~1,797. 2,000자 턴은 못 들어간다.
+        contextWindows.record("lm", 10_000, ProviderContextWindows.Source.CONFIGURED);
+        when(llmRouter.findProviderName(any(), any())).thenReturn("lm");
+        var seen = capturePrompt();
+
+        String history = "Q: 첫질문\nA: " + "옛".repeat(2_000) + "\n\nQ: 둘째질문\nA: 짧은답";
+        AgentState state = newState(RoutingMode.COST_FIRST).toBuilder()
+                .conversationHistory(history)
+                .build();
+        service.execute(state);
+
+        String prompt = seen.get();
+        // 남은 이력은 온전한 턴이어야 한다 — Q 와 A 가 짝으로 들어 있다.
+        assertThat(prompt).contains("Q: 둘째질문");
+        assertThat(prompt).contains("A: 짧은답");
+        assertThat(prompt).doesNotContain("첫질문");
+    }
+
+    @Test
+    @DisplayName("검증 발췌도 창에서 파생된다 — 답변이 길수록 발췌에 남는 자리가 줄어든다")
+    void evalExcerptsDeriveFromTheContextWindow() {
+        contextWindows.record("lm", 12_000, ProviderContextWindows.Source.CONFIGURED);
+        when(llmRouter.findProviderName(any(), any())).thenReturn("lm");
+
+        // 검증 프롬프트(두 번째 호출)를 잡는다 — 첫 번째는 답변 프롬프트다.
+        var prompts = new java.util.ArrayList<String>();
+        when(llmRouter.executeGatedWithUsage(any(), any(), any())).thenAnswer(inv -> {
+            java.util.function.Function<org.springframework.ai.chat.model.ChatModel,
+                    org.springframework.ai.chat.model.ChatResponse> fn = inv.getArgument(2);
+            org.springframework.ai.chat.model.ChatModel probe =
+                    mock(org.springframework.ai.chat.model.ChatModel.class);
+            when(probe.call(any(org.springframework.ai.chat.prompt.Prompt.class))).thenAnswer(call -> {
+                org.springframework.ai.chat.prompt.Prompt prompt = call.getArgument(0);
+                prompts.add(prompt.getInstructions().stream()
+                        .map(org.springframework.ai.chat.messages.Message::getText)
+                        .reduce("", (a, b) -> a + "\n" + b));
+                return chatResponse("답변");
+            });
+            fn.apply(probe);
+            return new LlmRouter.LlmResult("답변", 0, 0);
+        });
+
+        var first  = new org.springframework.ai.document.Document("첫번째" + "가".repeat(1_000));
+        var second = new org.springframework.ai.document.Document("두번째" + "나".repeat(1_000));
+        var third  = new org.springframework.ai.document.Document("세번째" + "다".repeat(1_000));
+        AgentState state = newState(RoutingMode.COST_FIRST).toBuilder()
+                .retrievedDocs(List.of(first, second, third))
+                .build();
+        service.execute(state);
+
+        assertThat(prompts).as("답변 + 검증 두 호출이 나가야 한다").hasSizeGreaterThanOrEqualTo(2);
+        String evalPrompt = prompts.get(1);
+        // 창 12,000 → PromptBudget(12,000, 2,048).inputBudget() = 12,000 − 2,048 − 1,200 = 8,752.
+        // 시스템 프롬프트("prompt" 목)·답변·질문·스키마를 빼도 문서 셋(각 ~1,003)은 다 들어간다.
+        assertThat(evalPrompt).contains("첫번째", "두번째", "세번째");
+    }
+
+    @Test
+    @DisplayName("검증 창이 좁으면 발췌도 하위 순위부터 줄어든다")
+    void evalExcerptsShrinkOnANarrowWindow() {
+        contextWindows.record("lm", 4_096, ProviderContextWindows.Source.CONFIGURED);
+        when(llmRouter.findProviderName(any(), any())).thenReturn("lm");
+
+        var prompts = new java.util.ArrayList<String>();
+        when(llmRouter.executeGatedWithUsage(any(), any(), any())).thenAnswer(inv -> {
+            java.util.function.Function<org.springframework.ai.chat.model.ChatModel,
+                    org.springframework.ai.chat.model.ChatResponse> fn = inv.getArgument(2);
+            org.springframework.ai.chat.model.ChatModel probe =
+                    mock(org.springframework.ai.chat.model.ChatModel.class);
+            when(probe.call(any(org.springframework.ai.chat.prompt.Prompt.class))).thenAnswer(call -> {
+                org.springframework.ai.chat.prompt.Prompt prompt = call.getArgument(0);
+                prompts.add(prompt.getInstructions().stream()
+                        .map(org.springframework.ai.chat.messages.Message::getText)
+                        .reduce("", (a, b) -> a + "\n" + b));
+                return chatResponse("답변");
+            });
+            fn.apply(probe);
+            return new LlmRouter.LlmResult("답변", 0, 0);
+        });
+
+        var first  = new org.springframework.ai.document.Document("첫번째" + "가".repeat(1_500));
+        var second = new org.springframework.ai.document.Document("두번째" + "나".repeat(1_500));
+        AgentState state = newState(RoutingMode.COST_FIRST).toBuilder()
+                .retrievedDocs(List.of(first, second))
+                .build();
+        service.execute(state);
+
+        String evalPrompt = prompts.get(1);
+        // 창 4,096 → 예산 4,096 − 2,048 − 409 = 1,639. 첫 문서(1,503)만 들어간다.
+        assertThat(evalPrompt).as("첫 발췌는 예산을 넘어도 남는다").contains("첫번째");
+        assertThat(evalPrompt).as("좁은 창에서는 하위 순위 발췌가 빠진다").doesNotContain("두번째");
+    }
+
+    @Test
+    @DisplayName("턴 경계가 없는 이력(요약 경로)도 통째로 버리지 않고 줄 단위로 줄인다")
+    void historyWithoutTurnBoundariesIsTrimmedByLine() {
+        // §6.10 요약 경로는 "Q:/A:" 쌍이 아니라 요약문을 준다 — 예전 구현은 경계를 못 찾아
+        // 이력 전체를 버렸고, 예산이 조금 모자랄 뿐인데 대화 맥락을 통째로 잃었다.
+        contextWindows.record("lm", 10_000, ProviderContextWindows.Source.CONFIGURED);
+        when(llmRouter.findProviderName(any(), any())).thenReturn("lm");
+        var seen = capturePrompt();
+
+        String summary = "오래된요약" + "옛".repeat(2_000) + "\n최근요약줄";
+        AgentState state = newState(RoutingMode.COST_FIRST).toBuilder()
+                .conversationHistory(summary)
+                .build();
+        service.execute(state);
+
+        String prompt = seen.get();
+        assertThat(prompt).as("이력이 통째로 사라지면 안 된다").contains("최근요약줄");
+        assertThat(prompt).as("앞쪽(오래된 줄)부터 버린다").doesNotContain("오래된요약");
+    }
+
+    @Test
+    @DisplayName("PROGRESSIVE 업그레이드는 PREMIUM 의 창으로 예산을 다시 잡는다 — 로컬 기준으로 깎지 않는다")
+    void premiumUpgradeBudgetsAgainstThePremiumProvider() {
+        // 로컬은 좁고(8,192) PREMIUM 은 넓다(64,000). 예전에는 두 호출 모두 state.routingMode() 로
+        // 프로바이더를 찾아, 넓은 창으로 가는 업그레이드 답변까지 좁은 창 기준으로 문서를 버렸다.
+        contextWindows.record("local", 8_192, ProviderContextWindows.Source.CONFIGURED);
+        contextWindows.record("premium", 64_000, ProviderContextWindows.Source.CONFIGURED);
+        when(llmRouter.findProviderName(any(), any())).thenReturn("local");
+
+        var premium = new com.example.ragagent.llm.LlmProvider(
+                "premium", com.example.ragagent.llm.TaskType.TEXT,
+                com.example.ragagent.llm.ProviderRole.PREMIUM, 1, "k", null, null, false,
+                mock(org.springframework.ai.chat.model.ChatModel.class), null);
+        when(llmRouter.routeProvider(any(), eq(RoutingMode.QUALITY_FIRST))).thenReturn(premium);
+
+        var prompts = new java.util.ArrayList<String>();
+        when(llmRouter.executeGatedWithUsage(any(), any(), any())).thenAnswer(inv -> {
+            java.util.function.Function<org.springframework.ai.chat.model.ChatModel,
+                    org.springframework.ai.chat.model.ChatResponse> fn = inv.getArgument(2);
+            org.springframework.ai.chat.model.ChatModel probe =
+                    mock(org.springframework.ai.chat.model.ChatModel.class);
+            when(probe.call(any(org.springframework.ai.chat.prompt.Prompt.class))).thenAnswer(call -> {
+                org.springframework.ai.chat.prompt.Prompt prompt = call.getArgument(0);
+                prompts.add(prompt.getInstructions().stream()
+                        .map(org.springframework.ai.chat.messages.Message::getText)
+                        .reduce("", (a, b) -> a + "\n" + b));
+                return chatResponse("{\"sufficient\":false,\"grounded\":false}");
+            });
+            fn.apply(probe);
+            // 첫 호출(답변)은 본문, 이후 검증 호출은 불충분 판정 → PROGRESSIVE 업그레이드 유발
+            return new LlmRouter.LlmResult(
+                    prompts.size() == 1 ? "답변" : "{\"sufficient\":false,\"grounded\":false}", 0, 0);
+        });
+
+        var docs = List.of(
+                new org.springframework.ai.document.Document("첫번째" + "가".repeat(2_000)),
+                new org.springframework.ai.document.Document("두번째" + "나".repeat(2_000)),
+                new org.springframework.ai.document.Document("세번째" + "다".repeat(2_000)));
+        // 업그레이드는 재시도를 다 쓴 뒤에만 일어난다(checkSufficiencyAndMaybeUpgrade).
+        service.execute(newState(RoutingMode.PROGRESSIVE).toBuilder()
+                .retrievedDocs(docs).retryCount(MAX_RETRY).build());
+
+        // 한 턴에는 답변 호출과 검증 호출이 섞여 나간다 — 예산이 걸리는 것은 답변 프롬프트이고,
+        // 그쪽만 "[검색된 문서]" 섹션을 갖는다(검증은 "[문서 발췌]").
+        List<String> answerPrompts = prompts.stream().filter(p -> p.contains("[검색된 문서]")).toList();
+        assertThat(answerPrompts).as("답변 호출이 두 번(원본 + 업그레이드) 나가야 한다").hasSizeGreaterThanOrEqualTo(2);
+
+        assertThat(answerPrompts.getFirst())
+                .as("원래 로컬 창(8,192)에서는 하위 문서가 잘린다").doesNotContain("세번째");
+        assertThat(answerPrompts.getLast())
+                .as("PREMIUM 창(64,000)이면 세 문서가 다 들어간다").contains("세번째");
+    }
+
+    @Test
+    @DisplayName("발췌가 잘린 채 나온 '근거 없음'은 판정으로 삼지 않는다 — 빠진 문서에 근거가 있었을 수 있다")
+    void groundedFalseOnTrimmedEvidenceBecomesNoVerdict() {
+        // 창을 좁혀 검증 발췌가 반드시 잘리게 만든다. 답변 전문이 발췌 자리를 먹는 구조라
+        // 답변이 길수록 이 상황이 쉽게 생긴다.
+        contextWindows.record("lm", 8_000, ProviderContextWindows.Source.CONFIGURED);
+        when(llmRouter.findProviderName(any(), any())).thenReturn("lm");
+
+        var calls = new java.util.ArrayList<String>();
+        when(llmRouter.executeGatedWithUsage(any(), any(), any())).thenAnswer(inv -> {
+            calls.add("x");
+            // 1번째 = 답변, 2번째 = 검증(근거 없음 판정)
+            return new LlmRouter.LlmResult(
+                    calls.size() == 1 ? "긴답변".repeat(500)
+                                      : "{\"sufficient\":true,\"grounded\":false,\"reason\":\"근거 없음\"}",
+                    0, 0);
+        });
+
+        var docs = List.of(
+                new org.springframework.ai.document.Document("첫번째" + "가".repeat(1_500)),
+                new org.springframework.ai.document.Document("두번째" + "나".repeat(1_500)),
+                new org.springframework.ai.document.Document("세번째" + "다".repeat(1_500)));
+        AgentState out = service.execute(
+                newState(RoutingMode.COST_FIRST).toBuilder().retrievedDocs(docs).build());
+
+        assertThat(out.grounded()).as("판정 없음이어야 한다 — false 로 굳히면 잘못된 미검증 배지가 붙는다").isNull();
+        assertThat(out.needsRetry()).as("재시도해도 답변 길이와 창은 그대로라 같은 축소가 반복된다").isFalse();
+        assertThat(out.evalReason()).isNull();
+    }
+
+    @Test
+    @DisplayName("반대로 '근거 있음'은 발췌가 잘렸어도 그대로 신뢰한다 — 문서를 더 봤다고 근거가 사라지지 않는다")
+    void groundedTrueOnTrimmedEvidenceIsStillTrusted() {
+        contextWindows.record("lm", 8_000, ProviderContextWindows.Source.CONFIGURED);
+        when(llmRouter.findProviderName(any(), any())).thenReturn("lm");
+
+        var calls = new java.util.ArrayList<String>();
+        when(llmRouter.executeGatedWithUsage(any(), any(), any())).thenAnswer(inv -> {
+            calls.add("x");
+            return new LlmRouter.LlmResult(
+                    calls.size() == 1 ? "긴답변".repeat(500)
+                                      : "{\"sufficient\":true,\"grounded\":true}",
+                    0, 0);
+        });
+
+        var docs = List.of(
+                new org.springframework.ai.document.Document("첫번째" + "가".repeat(1_500)),
+                new org.springframework.ai.document.Document("두번째" + "나".repeat(1_500)),
+                new org.springframework.ai.document.Document("세번째" + "다".repeat(1_500)));
+        AgentState out = service.execute(
+                newState(RoutingMode.COST_FIRST).toBuilder().retrievedDocs(docs).build());
+
+        assertThat(out.grounded()).isTrue();
+    }
+
+    @Test
+    @DisplayName("스트리밍은 출력 예약이 더 작다 — 캡을 보내지 않으므로 폭주 방지선을 뺄 이유가 없다")
+    void streamingReservesLessThanBlocking() {
+        // N: 블로킹은 실제로 보내는 값(10,000의 70%)을 그대로 빼야 계산이 맞고, 스트리밍은
+        // 아무것도 보내지 않으므로 "답변이 자랄 자리"(minChars 5,000)면 충분하다.
+        assertThat(AnswerService.outputReservation(ResponseMode.N, false, 10_000)).isEqualTo(7_000);
+        assertThat(AnswerService.outputReservation(ResponseMode.N, true, 10_000)).isEqualTo(5_000);
+    }
+
+    @Test
+    @DisplayName("S는 두 경로가 같다 — 이미 minChars가 블로킹 예산과 같은 자리다")
+    void shortModeIsUnchanged() {
+        assertThat(AnswerService.outputReservation(ResponseMode.S, false, 10_000)).isEqualTo(2_000);
+        assertThat(AnswerService.outputReservation(ResponseMode.S, true, 10_000)).isEqualTo(2_000);
+    }
+
+    @Test
+    @DisplayName("설정 상한이 작으면 그쪽이 이긴다 — 스트리밍 예약이 상한을 넘어설 수 없다")
+    void neverExceedsTheConfiguredCeiling() {
+        // max-tokens 2,000 배포: N의 minChars(5,000)가 아니라 2,000이 적용돼야 한다.
+        assertThat(AnswerService.outputReservation(ResponseMode.N, true, 2_000)).isEqualTo(2_000);
+        assertThat(AnswerService.outputReservation(ResponseMode.N, false, 2_000)).isEqualTo(2_000);
+    }
+
+    private static int countOccurrences(String haystack, String needle) {
+        int count = 0, idx = 0;
+        while ((idx = haystack.indexOf(needle, idx)) >= 0) { count++; idx += needle.length(); }
+        return count;
     }
 
     private AgentState newState(RoutingMode mode) {
@@ -279,6 +632,62 @@ class AnswerServiceTest {
                 assertThat(prompt.getContents()).contains("[USER_QUESTION]").contains("[/USER_QUESTION]"));
     }
 
+    // ── 재시도 피드백 (§ 재시도 개선) ────────────────────────────────────────
+
+    /** 프롬프트를 캡처하는 관용구 — 위 테스트들과 같은 2회(답변 + 검증) 호출 모양. */
+    @SuppressWarnings("unchecked")
+    private List<String> capturePrompts(AgentState state) {
+        ArgumentCaptor<Function<ChatModel, ChatResponse>> callCaptor = ArgumentCaptor.forClass(Function.class);
+        when(llmRouter.executeGatedWithUsage(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), callCaptor.capture()))
+                .thenReturn(new LlmRouter.LlmResult("답변", 0, 0),
+                            new LlmRouter.LlmResult("{\"sufficient\":true}", 0, 0));
+        when(llmRouter.findProviderName(any(), any())).thenReturn("gemini-flash");
+
+        service.execute(state);
+
+        ChatModel chatModel = mock(ChatModel.class);
+        ArgumentCaptor<Prompt> promptCaptor = ArgumentCaptor.forClass(Prompt.class);
+        when(chatModel.call(promptCaptor.capture())).thenReturn(chatResponse("dummy"));
+        callCaptor.getAllValues().forEach(fn -> fn.apply(chatModel));
+        return promptCaptor.getAllValues().stream().map(Prompt::getContents).toList();
+    }
+
+    @Test
+    @DisplayName("재시도 — 직전 반려 사유가 답변 프롬프트에 들어간다 (없으면 재시도가 같은 입력의 반복이다)")
+    void retry_answerPromptCarriesThePreviousRejectionReason() {
+        AgentState retrying = newState(RoutingMode.COST_FIRST).toBuilder()
+                .retryCount(1)
+                .evalReason("설정 파일의 포트 번호가 답변에 없다")
+                .build();
+
+        String answerPrompt = capturePrompts(retrying).get(0);
+
+        assertThat(answerPrompt).contains("[직전 시도 메모]");
+        assertThat(answerPrompt).contains("설정 파일의 포트 번호가 답변에 없다");
+        // 지시가 아니라 관찰로 — 지적을 채우려고 지어내면 근거 지표가 더 나빠진다
+        assertThat(answerPrompt).contains("지어내지 말고");
+        // 내부 메모가 답변에 새어 나가지 않도록 같은 블록이 스스로 제약을 건다
+        assertThat(answerPrompt).contains("답변에 언급하지 마라");
+    }
+
+    @Test
+    @DisplayName("첫 시도에는 그 블록이 없다 — 반려된 적이 없으므로")
+    void firstAttempt_hasNoRetryFeedbackBlock() {
+        assertThat(capturePrompts(newState(RoutingMode.COST_FIRST)).get(0))
+                .doesNotContain("[직전 시도 메모]");
+    }
+
+    @Test
+    @DisplayName("재시도라도 사유가 없으면 블록을 넣지 않는다 — 빈 메모는 잡음일 뿐이다")
+    void retryWithoutReason_hasNoRetryFeedbackBlock() {
+        AgentState retrying = newState(RoutingMode.COST_FIRST).toBuilder()
+                .retryCount(1)
+                .evalReason(null)
+                .build();
+
+        assertThat(capturePrompts(retrying).get(0)).doesNotContain("[직전 시도 메모]");
+    }
+
     @Test
     @DisplayName("BLOCKING — 답변 프롬프트의 [검색된 문서]는 정규화된 텍스트를 쓰고 맥락 헤더는 넣지 않는다(§10.1)")
     @SuppressWarnings("unchecked")
@@ -430,7 +839,7 @@ class AnswerServiceTest {
                         "./data", MAX_RETRY, 800, 100, 100, 7, 0.0, true, 0, false, true, false, 3,
                         null, null, null, null, null, null, null, null, null, null, null, null, null, null,
                         null, null, null, null, null, null, null, null, null, null, null, null, null, null,
-                        null, null).llmSafe().maxTokens()));
+                        null, null, null).llmSafe().maxTokens()));
     }
 
     @Test

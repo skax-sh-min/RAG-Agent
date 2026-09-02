@@ -331,7 +331,7 @@ public class QuestionReuseService {
             preview = DELETED_CHUNK_PREVIEW;
         }
         return new SourceRef(label, preview, row.chunkId(), row.docId(), page,
-                null, null, null, null, stale);
+                null, null, null, null, stale, false);
     }
 
     private static String truncate(String text, int maxLen) {

@@ -50,7 +50,7 @@ class RetrievalMetricsServiceTest {
     @DisplayName("JSON 왕복 — SourceRef의 4개 수치가 그대로 복원된다")
     void roundTripsAllMetrics() {
         String stored = json(new SourceRef("doc.pdf | 1.2", "미리보기", "c1", "d1", 3,
-                0.72, 0.18, "vec:2, bm25:5", 0.31, null));
+                0.72, 0.18, "vec:2, bm25:5", 0.31, null, false));
 
         var turns = serviceReturning(row(1L, stored)).recent(0, 20);
 
@@ -66,9 +66,9 @@ class RetrievalMetricsServiceTest {
     @DisplayName("요약 수치 — 최고 유사도와 '답변에 실제로 쓰인 출처 수'")
     void summarizesMaxSimilarityAndUsedCount() {
         String stored = json(
-                new SourceRef("a", "p", "c1", "d1", 1, 0.55, 0.4, "vec:1", 0.7, null),
-                new SourceRef("b", "p", "c2", "d2", 2, 0.81, 0.4, "vec:2", null, null),   // 검색됐지만 미사용
-                new SourceRef("c", "p", "c3", "d3", 3, null, 0.2, "bm25:1", 0.3, null));  // 벡터 축엔 없던 청크
+                new SourceRef("a", "p", "c1", "d1", 1, 0.55, 0.4, "vec:1", 0.7, null, false),
+                new SourceRef("b", "p", "c2", "d2", 2, 0.81, 0.4, "vec:2", null, null, false),   // 검색됐지만 미사용
+                new SourceRef("c", "p", "c3", "d3", 3, null, 0.2, "bm25:1", 0.3, null, false));  // 벡터 축엔 없던 청크
 
         var t = serviceReturning(row(1L, stored)).recent(0, 20).get(0);
 
@@ -80,7 +80,7 @@ class RetrievalMetricsServiceTest {
     @Test
     @DisplayName("유사도가 하나도 없는 턴은 최고 유사도가 null — 0.0으로 뭉개지 않는다")
     void allNullSimilarityStaysNull() {
-        String stored = json(new SourceRef("a", "p", "c1", "d1", 1, null, 0.5, "bm25:1", 1.0, null));
+        String stored = json(new SourceRef("a", "p", "c1", "d1", 1, null, 0.5, "bm25:1", 1.0, null, false));
 
         assertThat(serviceReturning(row(1L, stored)).recent(0, 20).get(0).maxSimilarity()).isNull();
     }
@@ -88,7 +88,7 @@ class RetrievalMetricsServiceTest {
     @Test
     @DisplayName("깨진 blob 은 그 행만 건너뛴다 — 패널 전체가 죽지 않는다")
     void malformedBlobSkipsOnlyThatRow() {
-        String good = json(new SourceRef("a", "p", "c1", "d1", 1, 0.5, 0.5, "vec:1", 0.5, null));
+        String good = json(new SourceRef("a", "p", "c1", "d1", 1, 0.5, 0.5, "vec:1", 0.5, null, false));
 
         var turns = serviceReturning(
                 row(1L, "{ 이건 JSON 이 아니다"),
@@ -118,7 +118,7 @@ class RetrievalMetricsServiceTest {
     void enrichMergesMetricsButKeepsLiveLabels() {
         // 저장 당시의 라벨은 낡았을 수 있다(문서 표시 이름 변경, 청크 재인덱싱 등).
         String stored = json(new SourceRef("옛 라벨", "옛 미리보기", "c1", "d1", 1,
-                0.72, 0.18, "vec:2", 0.31, null));
+                0.72, 0.18, "vec:2", 0.31, null, false));
         MemoryService memory = mock(MemoryService.class);
         when(memory.findRetrievalMetricsByTurnIds(List.of(7L))).thenReturn(Map.of(7L, stored));
         var service = new RetrievalMetricsService(memory, MAPPER);
@@ -135,7 +135,7 @@ class RetrievalMetricsServiceTest {
     @Test
     @DisplayName("저장된 수치가 없는 출처·턴은 그대로 통과한다 — 목록에서 사라지지 않는다")
     void enrichLeavesUnmatchedSourcesIntact() {
-        String stored = json(new SourceRef("a", "p", "c1", "d1", 1, 0.5, 0.5, "vec:1", 0.5, null));
+        String stored = json(new SourceRef("a", "p", "c1", "d1", 1, 0.5, 0.5, "vec:1", 0.5, null, false));
         MemoryService memory = mock(MemoryService.class);
         when(memory.findRetrievalMetricsByTurnIds(anyList())).thenReturn(Map.of(7L, stored));
         var service = new RetrievalMetricsService(memory, MAPPER);
@@ -155,7 +155,7 @@ class RetrievalMetricsServiceTest {
     @Test
     @DisplayName("질문은 미리보기 길이로 잘린다 — 진단 뷰지 대화 열람 뷰가 아니다")
     void longQuestionTruncated() {
-        String stored = json(new SourceRef("a", "p", "c1", "d1", 1, 0.5, 0.5, "vec:1", 0.5, null));
+        String stored = json(new SourceRef("a", "p", "c1", "d1", 1, 0.5, 0.5, "vec:1", 0.5, null, false));
         var row = new MemoryRepository.MetricsRow(
                 1L, "2026-08-16", "질".repeat(300), "M", "local", stored);
 
@@ -168,7 +168,7 @@ class RetrievalMetricsServiceTest {
 
     private static MemoryRepository.MetricsRow rowWithThread(
             String mode, String userId, String threadId, String threadTitle) {
-        String stored = json(new SourceRef("a", "p", "c1", "d1", 1, 0.5, 0.5, "vec:1", 0.5, null));
+        String stored = json(new SourceRef("a", "p", "c1", "d1", 1, 0.5, 0.5, "vec:1", 0.5, null, false));
         return new MemoryRepository.MetricsRow(1L, "2026-08-16", "질문", mode, "local",
                 stored, userId, threadId, threadTitle);
     }

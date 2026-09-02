@@ -3,7 +3,8 @@ package com.example.ragagent.exception;
 public sealed abstract class RagException extends RuntimeException
         permits DocumentIndexingException, VectorStoreException,
                 InvalidQuestionException, UnsupportedFileTypeException,
-                LlmProviderExhaustedException, LlmBackpressureException {
+                LlmProviderExhaustedException, LlmBackpressureException,
+                StorageQuotaExceededException {
 
     private final String errorCode;
 

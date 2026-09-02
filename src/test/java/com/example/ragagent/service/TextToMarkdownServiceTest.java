@@ -4,6 +4,7 @@ import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.exception.LlmProviderExhaustedException;
 import com.example.ragagent.llm.BackgroundUsage;
 import com.example.ragagent.llm.LlmRouter;
+import com.example.ragagent.llm.ProviderContextWindows;
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.llm.TaskType;
 import org.junit.jupiter.api.BeforeEach;
@@ -34,7 +35,7 @@ class TextToMarkdownServiceTest {
         AppProperties.IndexingConfig indexing = mock(AppProperties.IndexingConfig.class);
         when(indexing.maxConcurrentLlmCalls()).thenReturn(3); // 구 하드코딩 상수와 동일한 병렬도
         when(props.indexingSafe()).thenReturn(indexing);
-        service = new TextToMarkdownService(llmRouter, props);
+        service = new TextToMarkdownService(llmRouter, props, new ProviderContextWindows());
     }
 
     @Test

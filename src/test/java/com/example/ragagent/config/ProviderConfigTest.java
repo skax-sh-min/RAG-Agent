@@ -13,7 +13,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class ProviderConfigTest {
 
     private static AppProperties.ProviderConfig config(String apiKey, String role, String baseUrl) {
-        return new AppProperties.ProviderConfig("p", baseUrl, apiKey, "model", "TEXT", role, 0, true, null);
+        return new AppProperties.ProviderConfig("p", baseUrl, apiKey, "model", "TEXT", role, 0, true, null, null, null);
     }
 
     @Test

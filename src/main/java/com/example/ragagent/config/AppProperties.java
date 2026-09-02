@@ -2,6 +2,7 @@ package com.example.ragagent.config;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.context.properties.bind.ConstructorBinding;
+import org.springframework.util.unit.DataSize;
 
 import java.util.List;
 import java.util.Locale;
@@ -46,11 +47,12 @@ public record AppProperties(
         Boolean pptxRemoveDuplicateSlides,      // PPTX 변환 시 완전 동일 슬라이드 + 목차형 슬라이드 제거 (기본 true) — PptxToMarkdownConverter
         Boolean pptxDropDividerSlides,          // PPTX 변환 시 본문·이미지 없이 '구분용 제목'만 있는 섹션 구분 슬라이드 제거 (기본 true, 문장형/키 메시지 제목은 유지) — PptxToMarkdownConverter
         Boolean searchCuratedQaEnabled,          // §10.10 — 좋아요 기반 큐레이션 Q&A를 RRF 축으로 반영할지 여부 (기본 true). 핫에디터블 — RetrievalService가 매 검색마다 재조회
-        Double searchCuratedQaWeight,            // §10.10 — 좋아요 큐레이션 축 RRF 가중치 (기본 1.2 — 벡터축 그룹정규화 1.0보다 약간 높게 잡아 검증된 답변이 우선 노출되되 순위를 독식하진 않음). 지식 제안은 searchSubmissionWeight 로 별도. 핫에디터블
+        Double searchCuratedQaWeight,            // §10.10 — 좋아요 큐레이션 축 RRF 가중치 (기본 1.0 = 그룹정규화된 벡터축과 동등. 예전 1.2 에서 내렸다 — 이 축은 후보가 적어 웬만하면 자기 축 상위를 받는데 거기에 가산점까지 주면 관련 없는 큐레이션 항목이 끌려 올라온다). 지식 제안은 searchSubmissionWeight 로 별도. 핫에디터블
         Boolean pptxDropRedundantTitleSlides,    // PPTX 변환 시 이미지·도형 없이 짧은 제목 한 줄만 있고 그 내용이 바로 다음 슬라이드에 그대로 포함되는 "예고 제목" 슬라이드 제거 (기본 true) — PptxToMarkdownConverter
         Boolean pptxDropEndingSlide,             // PPTX 변환 시 마지막 슬라이드가 이미지 없이 '끝'/'END'/'The End' 같은 종료 표시만 담고 있으면 제거 (기본 true) — PptxToMarkdownConverter
         Boolean chunkSplitGranular,              // 청크 분할 전략: true=소제목 기준 최대 분할(min-chunk-size 무시), false=크기 기준 병합(기본, 기존 동작). 핫에디터블 — 다음 인덱싱/↺ 재인덱싱부터 적용
-        Double searchSubmissionWeight            // 지식 제안(승인된 사용자 제출) 축 RRF 가중치 (기본 1.5). 좋아요 큐레이션(searchCuratedQaWeight)과 별개 — 핫에디터블
+        Double searchSubmissionWeight,           // 지식 제안(승인된 사용자 제출) 축 RRF 가중치 (기본 1.0). 좋아요 큐레이션(searchCuratedQaWeight)과 별개 — 핫에디터블
+        UploadConfig upload                      // §6.15 — 전역 저장 상한(문서 업로드가 늘리는 디스크 사용량의 총량 캡). 미설정/0 = 무제한(기본)
 ) {
     public record LlmConfig(
             List<ProviderConfig> providers,
@@ -58,14 +60,15 @@ public record AppProperties(
             int connectTimeoutSeconds,
             int readTimeoutSeconds,
             String defaultRoutingMode,
-            double progressiveThreshold,
             int defaultProviderConcurrency,  // per-provider concurrency gate default (matches the server's --parallel), fallback when a provider omits its own `concurrency`
             int permitWaitTimeoutSeconds,    // max wait for a concurrency slot on the query path before failing fast with 429 (default 60s, well under the 600s read-timeout)
             Double temperature,              // general/RAG temperature (app.llm.temperature / LLM_TEMPERATURE), default 0.0, clamp [0,0.3] — HOT-editable, attached per call by every interactive gated caller (ClassifierService, AnswerService, RerankerService); still baked into each provider's defaultOptions at bean creation too, as the fallback for framework-internal callers that build their own ChatClient around the injected model (e.g. RetrievalService's MultiQueryExpander) and so can't take a per-call override
             Double directTemperature,        // Direct(meta) answer temperature (app.llm.direct-temperature / DIRECT_LLM_TEMPERATURE), default 0.1, clamp [0,1.0] — HOT-editable (DirectAnswerService reads it per call, §6.18)
-            Double indexingTemperature,      // indexing/background temperature (app.llm.indexing-temperature / LLM_INDEXING_TEMPERATURE), default 0.0, clamp [0,1.0] — HOT-editable, attached per call by every ungated executeWithTracking() caller (KeywordExtractor, MarkdownCorrectionService, TextToMarkdownService, VisionDescriptionService, ImageTypeClassifier, ThreadMetaService, ConversationSummarizerService) so a higher general/RAG temperature can never leak into extraction-style calls that need to stay deterministic
+            Double indexingTemperature,      // indexing/background temperature (app.llm.indexing-temperature / LLM_INDEXING_TEMPERATURE), default 0.0, clamp [0,0.1] — HOT-editable, attached per call by every ungated executeWithTracking() caller (KeywordExtractor, MarkdownCorrectionService, TextToMarkdownService, VisionDescriptionService, ImageTypeClassifier, ThreadMetaService, ConversationSummarizerService) so a higher general/RAG temperature can never leak into extraction-style calls that need to stay deterministic
             Double creativeTemperature,      // C(응용) 모드 answer temperature (app.llm.creative-temperature / CREATIVE_LLM_TEMPERATURE), default 0.7, clamp [0,1.0] — HOT-editable (§6.24). Separate from `temperature` because that one is clamped to [0,0.3]: a document-faithful answer must not wobble under sampling, which also makes creative generation impossible on it. Read fresh per call by AnswerService on BOTH the blocking and the streaming path — miss streamDirect() and only the chat UI stays cold
+            Boolean creativeModeEnabled,     // C(응용) 모드를 채팅에서 고를 수 있는가 (app.llm.creative-mode-enabled / CREATIVE_MODE_ENABLED), default true — HOT-editable. 온도(creativeTemperature)가 "C를 어떻게 답하게 할까"라면 이쪽은 "C를 열어 둘까"다: 문서 밖 내용을 생성하는 유일한 모드라 배포처에 따라 아예 닫아 두는 것이 운영 정책일 수 있다. 끄면 채팅 입력창에서 C 버튼이 사라지고, 그래도 도착한 요청(REST·손으로 만든 폼)은 SettingsService.effectiveResponseMode() 가 N 으로 강등한다 — 과거 C 턴의 기록/배지는 그대로 남는다
             Integer maxTokens,               // LLM response cap (app.llm.max-tokens / LLM_MAX_TOKENS), default 6000, clamp >0 — VIEW-ONLY (baked at bean creation; streaming chat answers are uncapped by design, bounded by SSE timeouts)
+            Integer shrinkStep,              // 컨텍스트 초과 후 재시도할 때 한 번에 덜어낼 문서 수 (app.llm.shrink-step / LLM_SHRINK_STEP), 기본 1, clamp [1,10] — HOT-editable, AnswerService.withShrinkRetry() 가 매 호출 재조회. 절반씩 줄이던 것을 대체한다: 초과는 대개 아슬아슬하게 나므로 한두 개만 덜어내면 들어가는데, 반으로 자르면 그때마다 근거의 절반이 사라진다. 다만 재시도 횟수 상한(AnswerService.MAX_SHRINK_ATTEMPTS)은 그대로라, 이 값이 작을수록 도달 가능한 최대 축소폭도 작다
             Boolean verifyLocalModelsOnStartup // GET {base-url}/v1/models for every registered LOCAL-role provider at boot — fails startup (throws, Spring exits) if unreachable or the configured model isn't in the response. Default true (app.llm.verify-local-models-on-startup / LLM_VERIFY_LOCAL_MODELS_ON_STARTUP)
     ) {}
 
@@ -78,7 +81,9 @@ public record AppProperties(
             String role,
             int priority,
             Boolean stream,
-            Integer concurrency  // this provider's own concurrency slots; null/<=0 falls back to LlmConfig.defaultProviderConcurrency
+            Integer concurrency, // this provider's own concurrency slots; null/<=0 falls back to LlmConfig.defaultProviderConcurrency
+            Integer contextSize, // this provider's total context window in tokens (input + output). Unset = probed from the server at startup (ContextWindowProbe), and left unknown if that fails — never guessed. Operator-declared always wins, because a probe reads the server as it is *right now* and a model reloaded at a different size makes it stale
+            Integer maxTokens    // this provider's own blocking-call output cap; null/<=0 falls back to LlmConfig.maxTokens. Exists because context windows differ per model — a 8k local model and a 128k cloud model cannot share one ceiling. Enforced by MaxTokensCappingChatModel (baking it into the provider bean's defaultOptions is not enough: every blocking call site attaches its own maxTokens, which would override it)
     ) {
         /**
          * True when this provider will actually be registered as a live {@code LlmProvider} by
@@ -92,9 +97,38 @@ public record AppProperties(
          */
         public boolean isEnabled() {
             boolean hasKey     = apiKey != null && !apiKey.isBlank();
-            boolean isLocal    = role != null && "LOCAL".equalsIgnoreCase(role.trim());
             boolean hasBaseUrl = baseUrl != null && !baseUrl.isBlank();
-            return (hasKey || isLocal) && hasBaseUrl;
+            return (hasKey || isLocal()) && hasBaseUrl;
+        }
+
+        /** LOCAL 역할인가 — 키 면제({@link #isEnabled()})와 컨텍스트 탐지 대상 판정에 함께 쓰인다. */
+        public boolean isLocal() {
+            return role != null && "LOCAL".equalsIgnoreCase(role.trim());
+        }
+
+        /**
+         * {@code OpenAiApi.builder()} 와 {@code ContextWindowProbe} 에 넘길 루트 URL — 선언된
+         * base-url 에서 뒤쪽 {@code /v1} 을 걷어낸 것이다(빌더가 내부에서 다시 붙이므로 두면
+         * {@code /v1/v1} 이 된다). {@code baseUrl()} 자체는 {@code LlmProvider.baseUrl()} 과 curl
+         * 로그가 그대로 쓰므로 건드리지 않는다.
+         *
+         * <p><b>기동 시 프로바이더 빈을 만드는 곳과 나중에 창을 다시 탐지하는 곳이 같은 규칙을
+         * 써야 한다</b> — 양쪽에 문자열 자르기를 각각 두면 한쪽만 고쳐졌을 때 탐지가 조용히
+         * 404 를 받고 "모름"으로 떨어진다. 그래서 파생 규칙을 설정 레코드 위에 둔다.
+         */
+        public String apiBase() {
+            if (baseUrl == null) return null;
+            if (baseUrl.endsWith("/v1/")) return baseUrl.substring(0, baseUrl.length() - 4);
+            if (baseUrl.endsWith("/v1"))  return baseUrl.substring(0, baseUrl.length() - 3);
+            return baseUrl;
+        }
+
+        /**
+         * 운영자가 못 박은 창(토큰). 없으면 {@code null} = "탐지에 맡긴다".
+         * 선언은 <b>항상</b> 탐지를 이긴다 — 탐지는 그 순간의 관측이고 선언은 의도다.
+         */
+        public Integer declaredContextSize() {
+            return (contextSize != null && contextSize > 0) ? contextSize : null;
         }
     }
 
@@ -138,6 +172,46 @@ public record AppProperties(
             int maxHistoryDays,      // 보관 일수, 이 일수가 지난 파일 자동 삭제
             String totalSizeCap      // audit 디렉터리 전체 상한, e.g. "100MB"
     ) {}
+
+    /**
+     * §6.15 — 전역 저장 상한. 저장소가 사용자별로 갈라져 있지 않으므로({@code DocRegistry.SHARED})
+     * 쿼터 축도 "사용자별 누적"이 아니라 배포 전체의 디스크 총량이다.
+     *
+     * <p>{@code DataSize} 로 받는 이유는 상한이 GB 단위여서다 — {@code 20GB} 로 쓸 수 있고, 단위
+     * 없는 숫자는 바이트로 읽힌다({@code 0} = 무제한, 기본값). {@code int} 바이트 수로는 2GB 를
+     * 넘길 수도 없다.
+     */
+    public record UploadConfig(
+            DataSize maxTotalSize,       // 문서 저장 사용량 총 상한 (app.upload.max-total-size / UPLOAD_MAX_TOTAL_SIZE). 0/미설정 = 무제한
+            Integer backupRetentionDays, // documents/backup/ 보관 일수 (app.upload.backup-retention-days / BACKUP_RETENTION_DAYS). 0/음수 = 기간 제한 없음
+            DataSize backupMaxSize       // documents/backup/ 총 용량 상한 (app.upload.backup-max-size / BACKUP_MAX_SIZE). 초과 시 오래된 것부터 삭제. 0 = 무제한
+    ) {
+        /** 미설정 시 보관 일수. 삭제 취소를 뒤늦게 알아차리는 데 걸릴 만한 시간을 넉넉히 잡은 값. */
+        public static final int DEFAULT_BACKUP_RETENTION_DAYS = 30;
+
+        /** 미설정 시 백업 총 용량 상한. */
+        public static final long DEFAULT_BACKUP_MAX_BYTES = 2L * 1024 * 1024 * 1024;
+
+        /** 상한(바이트). {@code <= 0} 이면 무제한이라는 뜻이고, 호출부는 그때 아무것도 검사하지 않는다. */
+        public long maxTotalBytes() {
+            return maxTotalSize == null ? 0L : maxTotalSize.toBytes();
+        }
+
+        /** 상한이 실제로 걸려 있는지 — {@code maxTotalBytes() > 0}. 기본 배포는 false 라 회귀가 0이다. */
+        public boolean hasLimit() {
+            return maxTotalBytes() > 0L;
+        }
+
+        /** 백업 보관 일수. {@code <= 0} = 기간으로는 지우지 않음(다른 두 규칙은 그대로 적용된다). */
+        public int backupRetentionDaysOrZero() {
+            return backupRetentionDays == null ? 0 : Math.max(0, backupRetentionDays);
+        }
+
+        /** 백업 총 용량 상한(바이트). {@code <= 0} = 용량으로는 지우지 않음. */
+        public long backupMaxBytes() {
+            return backupMaxSize == null ? 0L : Math.max(0L, backupMaxSize.toBytes());
+        }
+    }
 
     public record AuthConfig(
             boolean enabled,         // false → no-auth mode (guest/admin auto-login)
@@ -597,6 +671,32 @@ public record AppProperties(
         return new AuditConfig(audit.enabled(), size, days, cap);
     }
 
+    /**
+     * §6.15 저장 상한 + 백업 보존 정책.
+     *
+     * <p><b>상한은</b> 미설정·음수가 전부 <b>0(무제한)</b> 으로 정규화된다 — 상한이 없는 상태가
+     * 기본이고, 설정 실수가 "예상보다 빡빡한 상한"으로 굳어져 업로드를 막는 쪽보다 낫다.
+     *
+     * <p><b>백업 보존은 반대로</b> 미설정이 <b>기본값</b>(30일 / 2GB)으로 채워진다. 이쪽의 "무제한"은
+     * 안전한 기본이 아니라 디스크가 조용히 차는 상태이고, 백업은 사용자가 화면에서 볼 수도 지울 수도
+     * 없는 파일이라 아무도 알아차리지 못한다. 명시적으로 {@code 0} 을 적은 운영자만 무제한이 된다.
+     */
+    public UploadConfig uploadSafe() {
+        if (upload == null) {
+            return new UploadConfig(DataSize.ofBytes(0),
+                    UploadConfig.DEFAULT_BACKUP_RETENTION_DAYS,
+                    DataSize.ofBytes(UploadConfig.DEFAULT_BACKUP_MAX_BYTES));
+        }
+        return new UploadConfig(
+                DataSize.ofBytes(Math.max(0L, upload.maxTotalBytes())),
+                upload.backupRetentionDays() == null
+                        ? UploadConfig.DEFAULT_BACKUP_RETENTION_DAYS
+                        : Math.max(0, upload.backupRetentionDays()),
+                DataSize.ofBytes(upload.backupMaxSize() == null
+                        ? UploadConfig.DEFAULT_BACKUP_MAX_BYTES
+                        : upload.backupMaxBytes()));
+    }
+
     public AuthConfig authSafe() {
         if (auth == null) return new AuthConfig(true, false);
         // managementOnly is only meaningful when auth is disabled — normalize here so every
@@ -705,26 +805,34 @@ public record AppProperties(
         // RerankerService) reads temperature() per call; DirectAnswerService reads directTemperature()
         // per call; every ungated executeWithTracking() background caller reads indexingTemperature()
         // per call; AnswerService reads creativeTemperature() per call for the C (creative) mode, on
-        // the blocking AND the streaming path. maxTokens stays view-only: it's baked into the provider
+        // the blocking AND the streaming path; creative-mode-enabled gates whether the C mode can be
+        // picked at all (read per chat request by SettingsService.effectiveResponseMode()).
+        // maxTokens stays view-only: it's baked into the provider
         // defaultOptions at bean creation, so an override couldn't take effect until a restart.
         Double tempOverride = overrideDouble(SettingsKeys.LLM_TEMPERATURE);
         Double directOverride = overrideDouble(SettingsKeys.LLM_DIRECT_TEMPERATURE);
         Double indexingOverride = overrideDouble(SettingsKeys.LLM_INDEXING_TEMPERATURE);
         Double creativeOverride = overrideDouble(SettingsKeys.LLM_CREATIVE_TEMPERATURE);
+        Boolean creativeModeOverride = overrideBool(SettingsKeys.LLM_CREATIVE_MODE_ENABLED);
+        Integer shrinkStepOverride = overrideInt(SettingsKeys.LLM_SHRINK_STEP);
+        Integer maxTokensOverride = overrideInt(SettingsKeys.LLM_MAX_TOKENS);
         if (llm == null) {
             double t = clamp(tempOverride != null ? tempOverride : 0.0, 0.0, 0.3);
             double dt = clamp(directOverride != null ? directOverride : 0.1, 0.0, 1.0);
-            double it = clamp(indexingOverride != null ? indexingOverride : 0.0, 0.0, 1.0);
+            double it = clamp(indexingOverride != null ? indexingOverride : 0.0, 0.0, 0.1);
             double ct = clamp(creativeOverride != null ? creativeOverride : 0.7, 0.0, 1.0);
-            return new LlmConfig(List.of(), 2, 10, 180, "COST_FIRST", 0.6, 3, 20, t, dt, it, ct,
-                    DEFAULT_MAX_TOKENS, true);
+            boolean cm = creativeModeOverride == null || creativeModeOverride;
+            int ss = clampInt(shrinkStepOverride != null ? shrinkStepOverride : DEFAULT_SHRINK_STEP, 1, 10);
+            int mt = clampInt(maxTokensOverride != null ? maxTokensOverride : DEFAULT_MAX_TOKENS,
+                    MIN_MAX_TOKENS, MAX_MAX_TOKENS);
+            return new LlmConfig(List.of(), 2, 10, 180, "COST_FIRST", 3, 20, t, dt, it, ct, cm,
+                    mt, ss, true);
         }
         List<ProviderConfig> providers = llm.providers() != null ? llm.providers() : List.of();
         int minutes = llm.circuitBreakerMinutes() > 0 ? llm.circuitBreakerMinutes() : 2;
                 int connectTimeout = llm.connectTimeoutSeconds() > 0 ? llm.connectTimeoutSeconds() : 10;
                 int readTimeout = llm.readTimeoutSeconds() > 0 ? llm.readTimeoutSeconds() : 180;
         String mode = llm.defaultRoutingMode() != null ? llm.defaultRoutingMode() : "COST_FIRST";
-        double threshold = llm.progressiveThreshold() > 0 ? llm.progressiveThreshold() : 0.6;
         int defaultProviderConcurrency = llm.defaultProviderConcurrency() > 0 ? llm.defaultProviderConcurrency() : 3;
         int permitWaitTimeoutSeconds = llm.permitWaitTimeoutSeconds() > 0 ? llm.permitWaitTimeoutSeconds() : 20;
         double temperatureBase = tempOverride != null ? tempOverride
@@ -735,15 +843,45 @@ public record AppProperties(
         double directTemperature = clamp(directBase, 0.0, 1.0);
         double indexingBase = indexingOverride != null ? indexingOverride
                 : (llm.indexingTemperature() != null ? llm.indexingTemperature() : 0.0);
-        double indexingTemperature = clamp(indexingBase, 0.0, 1.0);
+        double indexingTemperature = clamp(indexingBase, 0.0, 0.1);
         double creativeBase = creativeOverride != null ? creativeOverride
                 : (llm.creativeTemperature() != null ? llm.creativeTemperature() : 0.7);
         double creativeTemperature = clamp(creativeBase, 0.0, 1.0);
-        int maxTokens = (llm.maxTokens() != null && llm.maxTokens() > 0) ? llm.maxTokens() : DEFAULT_MAX_TOKENS;
+        // 기본 ON — 이 스위치가 생기기 전에는 C 가 늘 열려 있었으므로, 미설정 시 동작이 바뀌면 안 된다.
+        boolean creativeModeEnabled = creativeModeOverride != null ? creativeModeOverride
+                : (llm.creativeModeEnabled() == null || llm.creativeModeEnabled());
+        // §6.26 A6 — 핫 편집 대상이 됐다. 모든 소비처가 매 호출 여기를 다시 읽으므로 재기동이
+        // 필요한 것은 프로바이더 빈의 defaultOptions 뿐이다(옵션을 안 싣는 프레임워크 내부
+        // 호출자용 폴백 — temperature 와 같은 예외).
+        int maxTokensBase = maxTokensOverride != null ? maxTokensOverride
+                : ((llm.maxTokens() != null && llm.maxTokens() > 0) ? llm.maxTokens() : DEFAULT_MAX_TOKENS);
+        int maxTokens = clampInt(maxTokensBase, MIN_MAX_TOKENS, MAX_MAX_TOKENS);
+        // 0 이나 음수는 "줄이지 않는다" 가 되어 재시도가 같은 프롬프트를 반복하게 되므로 1 이 바닥이다.
+        int shrinkStepBase = shrinkStepOverride != null ? shrinkStepOverride
+                : (llm.shrinkStep() != null ? llm.shrinkStep() : DEFAULT_SHRINK_STEP);
+        int shrinkStep = clampInt(shrinkStepBase, 1, 10);
         boolean verifyLocalModels = llm.verifyLocalModelsOnStartup() == null || llm.verifyLocalModelsOnStartup();
-                return new LlmConfig(providers, minutes, connectTimeout, readTimeout, mode, threshold,
+                return new LlmConfig(providers, minutes, connectTimeout, readTimeout, mode,
                         defaultProviderConcurrency, permitWaitTimeoutSeconds, temperature, directTemperature,
-                        indexingTemperature, creativeTemperature, maxTokens, verifyLocalModels);
+                        indexingTemperature, creativeTemperature, creativeModeEnabled, maxTokens,
+                        shrinkStep, verifyLocalModels);
+    }
+
+    /**
+     * {@code app.llm.max-tokens} 의 허용 범위. 바닥이 0 이 아닌 이유는 이 값이 단순한 출력 상한이
+     * 아니기 때문이다 — 대화 이력 예산(×0.5)·MD 교정 섹션 크기·인덱싱 출력 예약이 전부 여기서
+     * 파생되므로, 0 에 가까운 값은 "짧게 답한다"가 아니라 이력도 근거도 없는 상태가 된다.
+     * 천장은 좁은 창을 가진 로컬 배포에서 예약만으로 컨텍스트를 다 먹는 설정을 막는다
+     * (창을 아는 프로바이더에는 {@code cappedMaxTokens} 가 그 위에 한 번 더 걸린다).
+     */
+    public static final int MIN_MAX_TOKENS = 1_000;
+    public static final int MAX_MAX_TOKENS = 32_000;
+
+    /** 컨텍스트 초과 재시도에서 한 번에 덜어낼 문서 수의 기본값 — 1개씩(가장 보수적). */
+    public static final int DEFAULT_SHRINK_STEP = 1;
+
+    private static int clampInt(int v, int lo, int hi) {
+        return Math.max(lo, Math.min(hi, v));
     }
 
     private static double clamp(double v, double lo, double hi) {

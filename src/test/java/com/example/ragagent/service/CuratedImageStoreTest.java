@@ -52,7 +52,7 @@ class CuratedImageStoreTest {
     @Test
     @DisplayName("개수 상한 — 상한 초과 본문은 사용자 메시지와 함께 거부된다")
     void rejects_too_many_images() {
-        CuratedImageStore store = new CuratedImageStore(null, null, null, Optional.empty());
+        CuratedImageStore store = new CuratedImageStore(null, null, null, Optional.empty(), null);
         StringBuilder body = new StringBuilder();
         for (int i = 0; i <= CuratedImageStore.MAX_IMAGES_PER_SUBMISSION; i++) {
             body.append("[이미지: images/submissions/").append(i).append(".png]\n");

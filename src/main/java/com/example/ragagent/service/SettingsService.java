@@ -1,9 +1,11 @@
 package com.example.ragagent.service;
 
 import com.example.ragagent.audit.AuditLogger;
+import com.example.ragagent.llm.ContextWindowProbe;
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.config.SettingsKeys;
 import com.example.ragagent.llm.CircuitBreaker;
+import com.example.ragagent.llm.ProviderContextWindows;
 import com.example.ragagent.llm.ProviderToggle;
 import com.example.ragagent.model.SettingsView;
 import com.example.ragagent.model.SettingsView.ProviderRow;
@@ -76,16 +78,20 @@ public class SettingsService implements AppProperties.OverrideSource {
             new Spec(SettingsKeys.CHUNK_OVERLAP,                   Kind.INT,    0,   2000, 10,   "settings.item.chunk-overlap"),
             new Spec(SettingsKeys.MIN_CHUNK_SIZE,                  Kind.INT,    0,   4000, 10,   "settings.item.min-chunk-size"),
             new Spec(SettingsKeys.CHUNK_SPLIT_GRANULAR,            Kind.BOOL,   0,   0,    0,    "settings.item.chunk-split-granular"),
-            new Spec(SettingsKeys.INDEXING_MAX_CONCURRENT_FILES,   Kind.INT,    1,   32,   1,    "settings.item.max-concurrent-files"),
-            new Spec(SettingsKeys.INDEXING_MAX_CONCURRENT_LLM,     Kind.INT,    1,   32,   1,    "settings.item.max-concurrent-llm-calls")
+            new Spec(SettingsKeys.INDEXING_MAX_CONCURRENT_FILES,   Kind.INT,    1,   4,    1,    "settings.item.max-concurrent-files"),
+            new Spec(SettingsKeys.INDEXING_MAX_CONCURRENT_LLM,     Kind.INT,    1,   8,    1,    "settings.item.max-concurrent-llm-calls")
     );
 
     // Insertion order = render order in the "LLM 튜닝" group. Apply on the next LLM call (§6.18).
     private static final List<Spec> LLM_HOT_SPECS = List.of(
-            new Spec(SettingsKeys.LLM_TEMPERATURE,                Kind.DOUBLE, 0.0, 0.3,  0.01, "settings.item.temperature"),
+            new Spec(SettingsKeys.LLM_TEMPERATURE,                Kind.DOUBLE, 0.0, 0.3,  0.05, "settings.item.temperature"),
             new Spec(SettingsKeys.LLM_DIRECT_TEMPERATURE,         Kind.DOUBLE, 0.0, 1.0,  0.05, "settings.item.direct-temperature"),
-            new Spec(SettingsKeys.LLM_INDEXING_TEMPERATURE,       Kind.DOUBLE, 0.0, 1.0,  0.05, "settings.item.indexing-temperature"),
-            new Spec(SettingsKeys.LLM_CREATIVE_TEMPERATURE,       Kind.DOUBLE, 0.0, 1.0,  0.05, "settings.item.creative-temperature")
+            new Spec(SettingsKeys.LLM_INDEXING_TEMPERATURE,       Kind.DOUBLE, 0.0, 0.1,  0.05, "settings.item.indexing-temperature"),
+            new Spec(SettingsKeys.LLM_CREATIVE_TEMPERATURE,       Kind.DOUBLE, 0.0, 1.0,  0.05, "settings.item.creative-temperature"),
+            new Spec(SettingsKeys.LLM_CREATIVE_MODE_ENABLED,      Kind.BOOL,   0,   0,    0,    "settings.item.creative-mode-enabled"),
+            new Spec(SettingsKeys.LLM_SHRINK_STEP,                Kind.INT,    1,   10,   1,    "settings.item.shrink-step"),
+            new Spec(SettingsKeys.LLM_MAX_TOKENS,                 Kind.INT,
+                    AppProperties.MIN_MAX_TOKENS, AppProperties.MAX_MAX_TOKENS, 500, "settings.item.max-tokens")
     );
 
         // Insertion order = render order in the "UI" group. Apply on next page render.
@@ -109,18 +115,24 @@ public class SettingsService implements AppProperties.OverrideSource {
     private final AuditLogger audit;
     private final CircuitBreaker circuitBreaker;
     private final ProviderToggle providerToggle;
+    private final ProviderContextWindows contextWindows;
+    /** §6.15 — only for the read-only 저장 사용량 row; nothing on this page edits the cap. */
+    private final StorageQuotaService storageQuotaService;
 
     /** Persisted overrides, cached so the {@link #get} hot path never hits SQLite. */
     private final Map<String, String> cache = new ConcurrentHashMap<>();
 
     public SettingsService(SettingsOverrideRepository repo, AppProperties props,
                            AuditLogger audit, CircuitBreaker circuitBreaker,
-                           ProviderToggle providerToggle) {
+                           ProviderToggle providerToggle, ProviderContextWindows contextWindows,
+                           StorageQuotaService storageQuotaService) {
         this.repo = repo;
         this.props = props;
         this.audit = audit;
         this.circuitBreaker = circuitBreaker;
         this.providerToggle = providerToggle;
+        this.contextWindows = contextWindows;
+        this.storageQuotaService = storageQuotaService;
     }
 
     @PostConstruct
@@ -260,6 +272,7 @@ public class SettingsService implements AppProperties.OverrideSource {
                 new SettingGroup("llm_hot", "settings.group.llm_hot", llmHotItems()),
             new SettingGroup("ui_hot", "settings.group.ui_hot", uiHotItems()),
                 new SettingGroup("search_fixed", "settings.group.search_fixed", fixedSearchItems()),
+                new SettingGroup("storage", "settings.group.storage", storageItems()),
                 new SettingGroup("cache", "settings.group.cache", cacheItems())
         );
 
@@ -301,9 +314,119 @@ public class SettingsService implements AppProperties.OverrideSource {
                             cfg.isEnabled(), // real registration gate — see ProviderRow#configured javadoc
                             until != null,
                             until != null ? until.toString() : null,
-                            providerToggle.isEnabled(cfg.name()));
+                            providerToggle.isEnabled(cfg.name()),
+                            contextWindowLabel(cfg.name()));
                 })
                 .toList();
+    }
+
+
+    // ── 컨텍스트 창 재탐지 (§6.26 A5) ─────────────────────────────────────────
+
+    /**
+     * 한 프로바이더의 재탐지 결과 한 줄.
+     *
+     * @param before {@code contextWindowLabel()} 형식의 이전 값 — 무엇이 바뀌었는지 보이려면 새 값만으로는 부족하다
+     * @param outcome 화면 배지와 문구를 가르는 값
+     */
+    public record ReprobeRow(String provider, String before, String after, ReprobeOutcome outcome) {}
+
+    /** 재탐지 한 번의 결과 전체. {@code restartNeeded} 는 아래 {@link #reprobeContextWindows()} 참고. */
+    public record ReprobeResult(List<ReprobeRow> rows, boolean restartNeeded, String restartDetail) {}
+
+    public enum ReprobeOutcome {
+        /** 값이 실제로 달라졌다 — 다음 호출부터 새 예산이 적용된다. */
+        UPDATED,
+        /** 물어봤고 답을 받았는데 예전과 같다. */
+        UNCHANGED,
+        /** 서버가 답하지 않았거나 로드된 컨텍스트를 못 찾았다. <b>이전 값은 그대로 둔다.</b> */
+        FAILED,
+        /** {@code context-size} 로 선언된 프로바이더 — 선언이 탐지를 이기므로 묻지 않는다. */
+        SKIPPED_DECLARED
+    }
+
+    /**
+     * 등록된 LOCAL 프로바이더에게 컨텍스트 창을 <b>지금</b> 다시 물어본다 (§6.26 A5, 선택지 D).
+     *
+     * <p><b>왜 자동이 아니라 버튼인가.</b> 주기적으로 다시 물으면 같은 질문이 시각에 따라 다른 양의
+     * 근거를 받는다 — {@code TokenEstimateCalibration} 이 "관측만 하고 예산을 자동 보정하지 않는다"고
+     * 정한 것과 같은 이유로, 예산이 스스로 움직이면 재현이 안 된다. 창을 바꾼 사람은 자기가 바꿨다는
+     * 것을 알고 있으므로, 값이 갱신되는 시점을 그 사람이 정하게 하는 편이 정직하다. 감사 로그에도
+     * 누가 언제 눌렀는지가 남는다.
+     *
+     * <p><b>실패는 이전 값을 지우지 않는다.</b> 서버가 잠깐 응답하지 않는 것과 창이 사라진 것은 다르고,
+     * 알던 값을 "모름"으로 되돌리면 그 순간부터 입력 예산이 통째로 꺼진다 — 고치러 누른 버튼이 상황을
+     * 악화시키는 셈이다.
+     *
+     * <p><b>선언된 창은 건드리지 않는다.</b> {@code context-size} 는 의도이고 탐지는 관측이라, 관측이
+     * 의도를 덮어쓰면 운영자가 못 박은 값이 버튼 한 번에 사라진다. 그런 행은 결과 표에
+     * {@link ReprobeOutcome#SKIPPED_DECLARED} 로 남겨 "안 물어봤다"는 사실 자체를 보여 준다.
+     *
+     * <p><b>출력 상한은 이제 따라온다</b>(§6.26 A6) — {@code MaxTokensCappingChatModel} 이 호출마다
+     * {@code LlmConfig.liveMaxTokens()} 를 불러 현재 창과 현재 {@code app.llm.max-tokens} 로 다시
+     * 계산하므로, 옵션을 싣는 호출부(이 앱의 모든 블로킹 호출)는 재탐지 직후부터 새 값을 쓴다.
+     *
+     * <p><b>딱 한 곳이 남는다.</b> 프로바이더 빈의 {@code defaultOptions} 는 기동 시점 값 그대로이고,
+     * 이건 <b>옵션을 실어 보내지 않는</b> 프레임워크 내부 호출자(예: MultiQuery 확장기)의 폴백이다.
+     * 그 경로는 캡 데코레이터가 손댈 옵션 자체가 없어 지나가므로, 창이 <b>줄어들어</b> 그 기동값이
+     * 새 창을 넘게 되면 그 호출만 컨텍스트 초과가 난다 — 그때만 {@code restartNeeded} 가 켜진다.
+     * 창이 넓어진 경우는 기동값이 작을 뿐 안전하므로 알리지 않는다(알림이 잦으면 아무도 안 읽는다).
+     */
+    public ReprobeResult reprobeContextWindows() {
+        AppProperties.LlmConfig llm = props.llmSafe();
+        List<ReprobeRow> rows = new ArrayList<>();
+        List<String> restartReasons = new ArrayList<>();
+
+        for (AppProperties.ProviderConfig cfg : visibleProviders()) {
+            if (!cfg.isEnabled() || !cfg.isLocal()) continue;   // 클라우드는 이 엔드포인트가 없다
+            String before = contextWindowLabel(cfg.name());
+            if (cfg.declaredContextSize() != null) {
+                rows.add(new ReprobeRow(cfg.name(), before, before, ReprobeOutcome.SKIPPED_DECLARED));
+                continue;
+            }
+            int old = contextWindows.tokensOrZero(cfg.name());
+            Integer found = ContextWindowProbe.probe(cfg.apiBase(), cfg.model(),
+                    llm.connectTimeoutSeconds(), llm.readTimeoutSeconds()).orElse(null);
+            if (found == null) {
+                rows.add(new ReprobeRow(cfg.name(), before, before, ReprobeOutcome.FAILED));
+                continue;
+            }
+            contextWindows.record(cfg.name(), found, ProviderContextWindows.Source.PROBED);
+            String after = contextWindowLabel(cfg.name());
+            boolean changed = found != old;
+            rows.add(new ReprobeRow(cfg.name(), before, after,
+                    changed ? ReprobeOutcome.UPDATED : ReprobeOutcome.UNCHANGED));
+
+            if (changed) {
+                int requested = (cfg.maxTokens() != null && cfg.maxTokens() > 0)
+                        ? cfg.maxTokens() : llm.maxTokens();
+                int baked = ProviderContextWindows.cappedMaxTokens(requested, old > 0 ? old : null);
+                if (ProviderContextWindows.cappedMaxTokens(baked, found) != baked) {
+                    restartReasons.add("%s: defaultOptions %,d ≥ 창 %,d".formatted(cfg.name(), baked, found));
+                }
+            }
+        }
+
+        long updated = rows.stream().filter(r -> r.outcome() == ReprobeOutcome.UPDATED).count();
+        audit.log("settings.context-window.reprobe", "all", Map.of(
+                "probed", Integer.toString(rows.size()),
+                "updated", Long.toString(updated)));
+        return new ReprobeResult(rows, !restartReasons.isEmpty(), String.join(", ", restartReasons));
+    }
+
+    /**
+     * {@code "8,192 (탐지됨)"} 처럼 값과 <b>출처</b>를 함께 적는다 — 운영자가 직접 적은 숫자인지 앱이
+     * 서버에게 물어본 숫자인지가 신뢰도를 가른다. 탐지값은 기동 시점의 관측이라 모델을 다른 크기로
+     * 다시 로드하면 낡고, 그때 운영자가 {@code context-size} 로 못 박으면 이 칸이 (설정됨)으로 바뀐다.
+     *
+     * <p>모르면 {@code "-"} 다. 이것도 정보다 — 컨텍스트 초과가 나는데 이 칸이 {@code "-"} 라면
+     * 앱이 창 크기를 모르는 상태이므로 어떤 보정도 돌지 않았다는 뜻이다.
+     */
+    private String contextWindowLabel(String providerName) {
+        return contextWindows.find(providerName)
+                .map(w -> "%,d (%s)".formatted(w.tokens(),
+                        w.source() == ProviderContextWindows.Source.CONFIGURED ? "설정됨" : "탐지됨"))
+                .orElse("-");
     }
 
     /** {@code app.llm.default-routing-mode} pinned to {@code LOCAL_ONLY} for this whole deployment. */
@@ -409,7 +532,9 @@ public class SettingsService implements AppProperties.OverrideSource {
      *  description/classification, title, summary — reads it per call, so it can be pinned near 0
      *  for deterministic extraction independently of the other two) — and creative-temperature, which
      *  only the C (응용) response mode uses (§6.24): the general one is clamped to [0.0, 0.3], so
-     *  creative generation is impossible on it. max-tokens sits in the LLM
+     *  creative generation is impossible on it. Paired with it is creative-mode-enabled, the on/off
+     *  switch for that mode as a whole ({@link #effectiveResponseMode}) — the two sit together, the
+     *  knob first and the switch that makes it moot right after it. max-tokens sits in the LLM
      *  providers card footer as read-only (baked into the provider beans at startup — restart to
      *  change). */
     private List<SettingItem> llmHotItems() {
@@ -467,6 +592,40 @@ public class SettingsService implements AppProperties.OverrideSource {
         return "%,d (%s)".formatted(effective, source);
     }
 
+    /**
+     * C(응용) 응답 모드를 채팅에서 고를 수 있는가 ({@code app.llm.creative-mode-enabled}).
+     * <b>기본 ON</b> — 이 스위치가 생기기 전에는 늘 열려 있었으므로 미설정 시 동작이 바뀌지 않는다.
+     *
+     * <p>이것만으로 판정이 끝나지는 않는다: "어떤 모드가 이 스위치에 종속되는가"는
+     * {@link ResponseMode#operatorToggleable()} 가 안다. 둘을 합치는 곳이
+     * {@link #effectiveResponseMode(ResponseMode)} 하나이므로, 모드를 하나 더 끄고 싶어지면
+     * enum 의 플래그만 켜면 되고 이 클래스는 손대지 않는다.
+     */
+    public boolean creativeModeEnabled() {
+        return props.llmSafe().creativeModeEnabled();
+    }
+
+    /**
+     * 요청된 응답 모드를 <b>지금 이 배포에서 실제로 쓸 수 있는 모드</b>로 바꿔 준다 — 운영자가 꺼 둔
+     * 모드는 {@link ResponseMode#DEFAULT} 로 강등한다.
+     *
+     * <p>모든 채팅 진입점이 이 메서드를 거쳐야 한다({@code ChatController} 의 HTMX·SSE·REST 세 경로).
+     * 클라이언트가 버튼을 감추는 것만으로는 부족하다 — C/Direct 배타 가드와 같은 이유이고, 실제로 구
+     * L 모드는 서버 가드가 없어 손으로 만든 요청이 그대로 통과했다. 강등을 <b>진입점</b>에서 하는 것도
+     * 같은 이유다: 그래프 안쪽에서 모드만 바꾸면 화면·DB 의 {@code response_mode} 는 C 인데 실제로는
+     * N 으로 답한 턴이 남는다.
+     *
+     * <p>강등 대상이 {@code DEFAULT} 이므로 {@code DEFAULT} 자신은 끌 수 있는 모드일 수 없다 —
+     * {@code ResponseMode.operatorToggleable()} 의 계약이고 테스트가 고정한다.
+     */
+    public ResponseMode effectiveResponseMode(ResponseMode requested) {
+        if (requested == null) return ResponseMode.DEFAULT;
+        if (requested.operatorToggleable() && !creativeModeEnabled()) {
+            return ResponseMode.DEFAULT;
+        }
+        return requested;
+    }
+
     private List<SettingItem> uiHotItems() {
         List<SettingItem> items = new ArrayList<>(UI_HOT_SPECS.size());
         for (Spec s : UI_HOT_SPECS) items.add(editableItem(s.key()));
@@ -495,6 +654,29 @@ public class SettingsService implements AppProperties.OverrideSource {
         if (value.equalsIgnoreCase("true")) return Boolean.TRUE;
         if (value.equalsIgnoreCase("false")) return Boolean.FALSE;
         return null;
+    }
+
+    /**
+     * §6.15 저장 상한 — 조회 전용 2행: 지금 쓰고 있는 양과 상한.
+     *
+     * <p>편집 가능하게 만들지 않은 이유는 {@code max-tokens} 와 같다 — 여기서 고쳐도 다음 호출부터
+     * 적용되는 종류의 값이 아니라 배포 정책이고, 무엇보다 {@code Spec} 의 수치 종류가 {@code int}
+     * 라 GB 단위(20GB = 2.1e10)를 담지 못한다. 대신 <b>사용량</b>을 함께 보여준다: 상한만 적혀
+     * 있으면 운영자가 어디쯤 와 있는지 알 방법이 업로드가 거부되는 순간뿐이다.
+     */
+    private List<SettingItem> storageItems() {
+        long used = storageQuotaService.usedBytesCached();   // guest-open page — never an on-demand disk walk
+        long limit = storageQuotaService.limitBytes();
+        String usage = limit > 0
+                ? "%s / %s (%d%%)".formatted(StorageQuotaService.formatBytes(used),
+                        StorageQuotaService.formatBytes(limit), Math.round(used * 100.0 / limit))
+                : StorageQuotaService.formatBytes(used);
+        return List.of(
+                readOnly("settings.item.storage-used", usage, null, "settings.tooltip.storage-used"),
+                readOnly("settings.item.storage-limit",
+                        limit > 0 ? StorageQuotaService.formatBytes(limit) : "무제한",
+                        "settings.note.restart")
+        );
     }
 
     private List<SettingItem> cacheItems() {
@@ -545,6 +727,9 @@ public class SettingsService implements AppProperties.OverrideSource {
             case SettingsKeys.LLM_TEMPERATURE                 -> trimNum(props.llmSafe().temperature());
             case SettingsKeys.LLM_DIRECT_TEMPERATURE          -> trimNum(props.llmSafe().directTemperature());
             case SettingsKeys.LLM_INDEXING_TEMPERATURE        -> trimNum(props.llmSafe().indexingTemperature());
+            case SettingsKeys.LLM_CREATIVE_MODE_ENABLED       -> Boolean.toString(creativeModeEnabled());
+            case SettingsKeys.LLM_SHRINK_STEP                 -> Integer.toString(props.llmSafe().shrinkStep());
+            case SettingsKeys.LLM_MAX_TOKENS                  -> Integer.toString(props.llmSafe().maxTokens());
             case SettingsKeys.LLM_CREATIVE_TEMPERATURE        -> trimNum(props.llmSafe().creativeTemperature());
             case SettingsKeys.UI_SOURCE_PREVIEW_ENABLED       -> Boolean.toString(sourcePreviewEnabled());
             case SettingsKeys.UI_RETRIEVAL_METRICS_ENABLED    -> Boolean.toString(retrievalMetricsEnabled());

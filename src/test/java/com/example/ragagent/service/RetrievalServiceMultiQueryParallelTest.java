@@ -1,5 +1,6 @@
 package com.example.ragagent.service;
 
+import com.example.ragagent.llm.ProviderContextWindows;
 import com.example.ragagent.agent.AgentState;
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.llm.LlmProvider;
@@ -90,7 +91,7 @@ class RetrievalServiceMultiQueryParallelTest {
         when(messageSource.getMessage(anyString(), any(), any(Locale.class))).thenReturn("{query} {number}");
 
         RetrievalService svc = new RetrievalService(llmRouter, mock(LlmUsageRepository.class), ragService, props,
-                Optional.empty(), Optional.empty(), messageSource, new ChatImageAnalysisSkipRegistry());
+                Optional.empty(), Optional.empty(), messageSource, new ChatImageAnalysisSkipRegistry(), new ProviderContextWindows());
 
         testStartNanos.set(System.nanoTime());
         AgentState result = svc.execute(

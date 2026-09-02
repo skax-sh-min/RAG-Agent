@@ -215,6 +215,7 @@ copy .env.example .env
 | `CHROMA_HOST` | — | `http://localhost` | **chroma 전용** — Chroma 서버 호스트 (프로토콜 포함). Docker Compose 환경에서는 서비스명 `chroma`로 자동 지정됨 |
 | `CHROMA_PORT` | — | `8001` | **chroma 전용** — Chroma 서버 포트. Docker Compose 환경에서는 `8000`으로 자동 지정됨 |
 | `DATA_DIR` | — | `./data` | 문서 원본·이미지·변환 MD·SQLite DB 저장 루트 경로. Docker 실행 시 `/app/data`(볼륨 마운트 고정값)로 컨테이너 내부에 자동 설정됨 |
+| `UPLOAD_MAX_TOTAL_SIZE` | — | `0` (무제한) | 배포 전체 저장 상한 (§6.15). `20GB`처럼 단위를 붙일 수 있고 단위 없는 숫자는 바이트. `DATA_DIR` 아래 `documents`+`converted`+`images` 합계로 검사하며, 초과 업로드는 413 `RAG-UP-002`. 재기동 필요 — 상세는 아래 "업로드 크기 제한" |
 | `AUTH_ENABLED` | — | `true` | `false`로 설정하면 로그인 없이 실행 (no-auth 모드). 자세한 내용은 [§9.4](#94-인증-토글-no-auth-모드) 참조 |
 | `DOMAIN` | — | `localhost` | Docker Compose의 `caddy` 컨테이너가 사용하는 도메인명. `localhost`이면 Caddy 로컬 CA 인증서 자동 생성. 운영 시 실제 도메인(예: `myrag.duckdns.org`)으로 변경 |
 | `USE_CADDY_REVERSE_PROXY_HTTPS` | — | `true` | 세션 쿠키 `Secure` 플래그 제어 (`server.servlet.session.cookie.secure`). Caddy HTTPS 환경에서는 `true`(기본값). **HTTP 로컬 단독 실행 시 반드시 `false`로 변경** — `true` 상태에서 HTTP로 접근하면 쿠키가 전송되지 않아 로그인 불가 |
@@ -232,7 +233,7 @@ copy .env.example .env
 | `SEARCH_MULTIQUERY_ENABLED` | `true` | true/false | 검색 전 질의 다중 확장(LLM) 여부. `false`면 임계 경로 첫 LLM 콜 제거 |
 | `SEARCH_MULTIQUERY_MIN_LENGTH` | `15` | 0 ~ 20 | 이 길이(trim) 미만 질의는 확장 생략. `0`=항상 확장. 짧은 키워드 질의 TTFT↓(§10.8.1) |
 | `SEARCH_HYBRID_ENABLED` | `true` | true/false | RRF에 BM25(FTS5) 키워드 축 추가(§10.7.2 — 이 플래그와 무관하게 `chunk_fts`는 항상 채워지므로 **활성화해도 기존 색인 문서 재인덱싱 불필요**, FTS5/하이브리드 검색 도입 이전에 색인된 아주 오래된 문서만 예외) |
-| `SEARCH_RETRY_ESCALATE` | `true` | true/false | 재시도 에스컬레이션 **두 축을 한 플래그로** 제어. ① 후보 풀 `candidateK = min(topK×(retryCount+1), topK×3)` — 동일 검색 반복 회피. ② 최종 컷 `effectiveTopK = topK + retryCount` — 후보 풀만 키우면 ANSWER가 받는 문서 수는 매번 topK 그대로여서, 컷 바로 뒤에 있던 근거는 재시도해도 계속 밖에 머문다. 최종 컷은 답변·평가 프롬프트에 실제 실리는 양이라 배수가 아닌 **가산**(PIPELINE.md §5.1) |
+| `SEARCH_RETRY_ESCALATE` | `true` | true/false | **재검색** 에스컬레이션 두 축을 한 플래그로 제어. ① 후보 풀 `candidateK = min(round(topK×(1+0.5×재검색횟수)), topK×3)` — 예전 ×2에서 낮췄다(재시도가 이제 자리를 비우므로). ② 최종 컷 `effectiveTopK = topK + 재검색횟수`, **단 검증 호출에 여유가 있을 때만** — 발췌가 잘리면 근거 판정이 `null`로 떨어져 재시도를 거듭할수록 판정을 잃는다. 세는 것은 재시도가 아니라 **재검색** 횟수다(근거 이탈 재시도는 검색을 건너뛴다). 재시도는 근거로 쓰이지 않은 하위 청크를 최대 1/3 **교체**하기도 한다 — PIPELINE.md §5.1 |
 | `SEARCH_RERANK_ENABLED` | `false` | true/false | RRF 후 LLM 리랭킹 단계 (opt-in). **턴당 LLM 1콜 추가** → 정밀도↑/레이턴시 트레이드오프 |
 | `SEARCH_CANDIDATE_MULTIPLIER` | `3` | 2 ~ 5 | 리랭킹 전 후보 풀 크기. `topK × N`개 가져와 리랭킹 후 topK로 축소 |
 | `SEARCH_TAG_CANDIDATE_MULTIPLIER` | `2` | 1 ~ 5 | 태그가 선택된 검색의 후보 풀 확대 배수. `candidateK = max(candidateK, topK × N)` — sqlite-vec에서 태그 엄격 필터 후 결과가 부족할 때 보정(§4.6) |
@@ -261,8 +262,8 @@ copy .env.example .env
 
 | 변수 | 기본값 | 권장 범위 | 설명 |
 |------|--------|----------|------|
-| `INDEXING_MAX_FILES` | `1` | 1 ~ 8 | 파일 병렬 인덱싱 워커 수. **인덱싱 LLM 동시 호출 피크 ≈ `INDEXING_MAX_FILES` × `INDEXING_MAX_LLM`** 이므로, 기본값 `1`은 피크를 정확히 `INDEXING_MAX_LLM`으로 고정한다(§6.5 주석 참고). 올리면 처리량은 늘지만 피크가 곱으로 커진다 |
-| `INDEXING_MAX_LLM` | `3` | 1 ~ 16 | 인덱싱 중 LLM 병렬 호출 수 — 키워드 추출뿐 아니라 MD 교정·TXT 구조화·지연 Vision 설명이 모두 사용. 로컬 LLM 서버의 `--parallel` 값에 맞춘다 |
+| `INDEXING_MAX_FILES` | `1` | 1 ~ 4 (`/settings` 상한) | 파일 병렬 인덱싱 워커 수. **인덱싱 LLM 동시 호출 피크 ≈ `INDEXING_MAX_FILES` × `INDEXING_MAX_LLM`** 이므로, 기본값 `1`은 피크를 정확히 `INDEXING_MAX_LLM`으로 고정한다(§6.5 주석 참고). 올리면 처리량은 늘지만 피크가 곱으로 커진다 |
+| `INDEXING_MAX_LLM` | `3` | 1 ~ 8 (`/settings` 상한) | 인덱싱 중 LLM 병렬 호출 수 — 키워드 추출뿐 아니라 MD 교정·TXT 구조화·지연 Vision 설명이 모두 사용. 로컬 LLM 서버의 `--parallel` 값에 맞춘다 |
 | `INDEXING_KEYWORD_TIMEOUT_SECONDS` | `600` | 30 ~ 1800 | 청크 키워드 추출 1회당(§10.8.2 배치 시 배치 1회당) 최대 대기 시간. 초과 시 TF fallback |
 | `INDEXING_KEYWORD_BATCH_SIZE` | `2` | 1 ~ 8 | §10.8.2 — 청크 N개를 한 LLM 호출로 묶어 요청(왕복 ≈ ceil(청크수/N)). `1`=배치 없음(청크당 1콜, 이전 동작). 배치가 클수록 응답 길이도 늘어나므로 로컬 모델에서 타임아웃이 잦으면 `INDEXING_KEYWORD_TIMEOUT_SECONDS`를 함께 올리세요 |
 
@@ -389,11 +390,13 @@ app.embedding.max-concurrent-batches=4
 
 | 변수 | 기본값 | 권장 범위 | 설명 |
 |------|--------|----------|------|
-| `LLM_MAX_TOKENS` | `10000` | 1000 ~ 32000 | 단일 진실 소스(`app.llm.max-tokens`)로 통일되어, 이 값을 바꾸면 **아래 세 곳 모두**가 함께 움직입니다: (1) **블로킹 LLM 응답 토큰 상한** — 인덱싱·분류·키워드·Direct 블로킹 호출에 적용(스트리밍 채팅 답변은 의도적으로 미적용, SSE 타임아웃이 폭주 방지). (2) **대화 컨텍스트 문자 예산**(`MemoryService`, `×0.5`로 히스토리 예산 산출). (3) **MD 교정 섹션 크기**(`MarkdownCorrectionService`).<br>§6.18 이전에는 (1)이 코드에 `6000`으로 하드코딩돼 이 환경변수와 무관하게 동작했고, (2)·(3)은 별도의 죽은 프로퍼티(`spring.ai.openai.chat.options.max-tokens`, 기본 `8000`)를 읽어 (1)과 다른 값을 썼습니다 — 이제 세 곳 모두 `app.llm.max-tokens` 하나만 읽습니다.<br>**⚠️ 기본값 `10000`은 32k 이상 컨텍스트를 전제합니다** — 이 값은 출력 상한인 동시에 (2)를 통해 **입력**(히스토리 5,000자)도 키우므로 `n_ctx` 양쪽을 함께 압박합니다. 8k~10k 모델이면 `2000` 근처로 낮추세요(§8 「검증 배지가 아예 사라짐」의 산정표).<br>**검증 호출만은 이 값을 쓰지 않습니다** — `AnswerService`가 자체 상한 **2,048토큰**을 겁니다. 검증 응답은 JSON 몇 필드인데 프로바이더에 구워진 이 값 전체가 출력으로 예약되면, 좁은 컨텍스트에서 `n_ctx`를 넘기는 것은 근거가 아니라 그 예약이 됩니다.<br>**응답 모드(S/N)와의 관계**: (1)의 실제 상한은 이 값 그대로가 아니라 `ResponseMode`별 비율(S 15% / N·C 70%)과 글자수 하한(S 2,000 / N·C 5,000자) 중 **큰 값**이며, 다시 이 값 자체로 잘립니다(`min`). 전환점이 모드마다 달라 — S는 13,334, N·C는 7,143 — **기본값 10,000에서는 S가 하한(2,000), N·C가 비율(7,000)** 입니다. **어느 항이 적용 중인지는 `/settings`의 "응답 예산" 행에서 바로 확인할 수 있습니다**(`2,000 (최소 보장)` / `8,400 (상한의 70%)` / `3,000 (설정 상한)`). ⚠️ 이 값은 **폭주를 막는 안전판이지 목표 분량이 아닙니다** — 실제 분량은 모드별 시스템 프롬프트가 정하고(숫자를 말하는 건 S뿐 — RAG 답변 `prompt.answer.system.s`는 "1,000자 이내", 검색을 건너뛰는 Direct 답변 `prompt.direct.system.s`는 "1,500자 이내". Direct 쪽이 느슨한 이유는 인용할 문서 발췌가 없어 답변이 스스로 풀어 써야 하기 때문이며, 한/영 번들이 같은 숫자를 말하는지는 `ResponseModeSystemPromptTest`가 고정한다. N은 숫자 없음), 게다가 스트리밍 채팅 답변에는 적용되지 않습니다. 상세는 [PIPELINE §3.1](PIPELINE.md) |
+| `LLM_MAX_TOKENS` | `10000` | 1000 ~ 32000 | 단일 진실 소스(`app.llm.max-tokens`)로 통일되어, 이 값을 바꾸면 **아래 세 곳 모두**가 함께 움직입니다: (1) **블로킹 LLM 응답 토큰 상한** — 인덱싱·분류·키워드·Direct 블로킹 호출에 적용(스트리밍 채팅 답변은 의도적으로 미적용, SSE 타임아웃이 폭주 방지). (2) **대화 컨텍스트 문자 예산**(`MemoryService`, `×0.5`로 히스토리 예산 산출). (3) **MD 교정 섹션 크기**(`MarkdownCorrectionService`) — §6.26 이후로는 **상한**입니다. 프로바이더 창을 알면 거기서 나온 값과 비교해 작은 쪽을 씁니다.<br>§6.18 이전에는 (1)이 코드에 `6000`으로 하드코딩돼 이 환경변수와 무관하게 동작했고, (2)·(3)은 별도의 죽은 프로퍼티(`spring.ai.openai.chat.options.max-tokens`, 기본 `8000`)를 읽어 (1)과 다른 값을 썼습니다 — 이제 세 곳 모두 `app.llm.max-tokens` 하나만 읽습니다.<br>**⚠️ 기본값 `10000`은 32k 이상 컨텍스트를 전제합니다** — 이 값은 출력 상한인 동시에 (2)를 통해 **입력**(히스토리 5,000자)도 키우므로 `n_ctx` 양쪽을 함께 압박합니다. 8k~10k 모델이면 `2000` 근처로 낮추세요(§8 「검증 배지가 아예 사라짐」의 산정표).<br>**두 갈래는 이 값을 통째로 쓰지 않습니다** — `max_tokens`는 상한이 아니라 **예약**이라(서버가 `프롬프트 + max_tokens ≤ n_ctx`를 검사) 쓰지도 않을 큰 값은 그만큼 입력 자리를 없앱니다. ① **검증 호출**은 자체 상한 **2,048토큰**(`AnswerService`) — 응답이 JSON 몇 필드인데 전체가 예약되면 좁은 컨텍스트에서 `n_ctx`를 넘기는 것은 근거가 아니라 그 예약입니다. ② **인덱싱 호출**은 작업 크기에서 파생(`IndexingOutputCap`) — 재작성(MD 교정·txt→md)은 입력 추정 × 1.5, 고정 출력(키워드+맥락·이미지 설명)은 이 값의 비율. 예전에는 인덱싱이 전체를 예약해, 창 20,480 · 이 값 10000 배포에서 MD 교정이 컨텍스트 초과로 실패했습니다(같은 프로퍼티가 (3) 섹션 크기까지 정하므로 입력과 예약이 함께 커집니다). 둘 다 이 값에서 파생되고 이 값으로 잘리므로 **내리면 전부 함께 내려갑니다**.<br>**응답 모드(S/N)와의 관계**: (1)의 실제 상한은 이 값 그대로가 아니라 `ResponseMode`별 비율(S 15% / N·C 70%)과 글자수 하한(S 2,000 / N·C 5,000자) 중 **큰 값**이며, 다시 이 값 자체로 잘립니다(`min`). 전환점이 모드마다 달라 — S는 13,334, N·C는 7,143 — **기본값 10,000에서는 S가 하한(2,000), N·C가 비율(7,000)** 입니다. **어느 항이 적용 중인지는 `/settings`의 "응답 예산" 행에서 바로 확인할 수 있습니다**(`2,000 (최소 보장)` / `8,400 (상한의 70%)` / `3,000 (설정 상한)`). ⚠️ 이 값은 **폭주를 막는 안전판이지 목표 분량이 아닙니다** — 실제 분량은 모드별 시스템 프롬프트가 정하고(숫자를 말하는 건 S뿐 — RAG 답변 `prompt.answer.system.s`는 "1,000자 이내", 검색을 건너뛰는 Direct 답변 `prompt.direct.system.s`는 "1,500자 이내". Direct 쪽이 느슨한 이유는 인용할 문서 발췌가 없어 답변이 스스로 풀어 써야 하기 때문이며, 한/영 번들이 같은 숫자를 말하는지는 `ResponseModeSystemPromptTest`가 고정한다. N은 숫자 없음), 게다가 스트리밍 채팅 답변에는 적용되지 않습니다. 상세는 [PIPELINE §3.1](PIPELINE.md) |
 | `LLM_TEMPERATURE` | `0.0` | 0.0 ~ 0.3 | **일반/RAG 대화형 호출**(분류·답변·근거평가·재순위)의 무작위성 제어(`app.llm.temperature`). `0.0`은 결정적 답변, 높을수록 다양·창의적. `[0.0, 0.3]`으로 clamp.<br>**핫 수정 가능** — `/settings`에서 재기동 없이 다음 호출부터 반영(`ClassifierService`/`AnswerService`/`RerankerService`가 매 호출 재조회). 프로바이더 빈 생성 시점에도 고정되는데, 이는 모델 주위에 자체 `ChatClient`를 구성해 호출별 오버라이드를 받을 수 없는 프레임워크 내부 호출(예: 멀티쿼리 확장)을 위한 기동 시점 폴백 값으로만 쓰입니다 — 그런 호출은 재기동해야 변경이 반영됩니다.<br>인덱싱/백그라운드 호출(키워드 추출·MD 교정 등)에는 적용되지 않습니다 — 아래 `LLM_INDEXING_TEMPERATURE`로 분리되어 있습니다 |
 | `DIRECT_LLM_TEMPERATURE` | `0.1` | 0.0 ~ 1.0 | **Direct(meta) 응답 전용** temperature(`app.llm.direct-temperature`) — 인사·잡담 등 RAG를 안 쓰는 직접 응답은 약간의 다양성이 자연스러워 일반 temperature와 분리(§6.18). `[0.0, 1.0]`으로 clamp. **핫 수정 가능** — `/settings`에서 재기동 없이 다음 Direct 호출부터 반영(`DirectAnswerService`가 매 호출 재조회) |
-| `LLM_INDEXING_TEMPERATURE` | `0.0` | 0.0 ~ 1.0 | **인덱싱/백그라운드 전용** temperature(`app.llm.indexing-temperature`) — 키워드 추출, MD 교정, txt→md 구조화, 이미지 설명/분류, 스레드 제목 생성, 대화 요약 등 모든 ungated 백그라운드 호출에 적용. 대화형이 아닌 추출/분류 작업이라 `LLM_TEMPERATURE`/`DIRECT_LLM_TEMPERATURE` 값과 무관하게 결정적으로 유지하려고 분리했습니다. `[0.0, 1.0]`으로 clamp. **핫 수정 가능** — `/settings`에서 재기동 없이 다음 호출부터 반영(각 서비스가 매 호출 재조회) |
-| `CREATIVE_LLM_TEMPERATURE` | `0.7` | 0.0 ~ 1.0 | **응답 모드 C(응용) 전용** temperature(`app.llm.creative-temperature`) — 검색된 문서를 **재료로** 새 코드·설정을 만들어내는 모드라 표본추출의 다양성이 필요합니다. 일반 temperature와 분리한 이유는 그쪽 clamp 상한이 **0.3**이라 창의 생성이 원천 봉쇄되기 때문입니다(§6.24). `[0.0, 1.0]`으로 clamp. **핫 수정 가능** — `/settings`의 "LLM 튜닝"에서 재기동 없이 다음 호출부터 반영되며, 블로킹·스트리밍 **양쪽**에 적용됩니다. C 모드는 채팅 입력창의 **S/N/C** 토글에서 고를 수 있고, **Direct(잡담) 토글과 함께 쓸 수 없습니다** — Direct 를 켜면 C 버튼이 비활성화되고 선택 중이었다면 N 으로 되돌아갑니다(서버도 같은 규칙을 독립적으로 적용하므로 손으로 만든 요청도 N 으로 강등됩니다) |
+| `LLM_INDEXING_TEMPERATURE` | `0.0` | 0.0 ~ 0.1 | **인덱싱/백그라운드 전용** temperature(`app.llm.indexing-temperature`) — 키워드 추출, MD 교정, txt→md 구조화, 이미지 설명/분류, 스레드 제목 생성, 대화 요약 등 모든 ungated 백그라운드 호출에 적용. 대화형이 아닌 추출/분류 작업이라 `LLM_TEMPERATURE`/`DIRECT_LLM_TEMPERATURE` 값과 무관하게 결정적으로 유지하려고 분리했습니다. `[0.0, 0.1]`으로 clamp — 출력이 파싱되는 추출 작업이라 표본추출의 다양성이 이득이 아니라 결함이고, 0에서 반복에 빠지는 로컬 모델을 깨울 만큼만 열어 둡니다. 환경변수로 더 큰 값을 줘도 이 상한에서 잘립니다. **핫 수정 가능** — `/settings`에서 재기동 없이 다음 호출부터 반영(각 서비스가 매 호출 재조회) |
+| `CREATIVE_LLM_TEMPERATURE` | `0.7` | 0.0 ~ 1.0 | **응답 모드 C(응용) 전용** temperature(`app.llm.creative-temperature`) — 검색된 문서를 **재료로** 새 코드·설정을 만들어내는 모드라 표본추출의 다양성이 필요합니다. 일반 temperature와 분리한 이유는 그쪽 clamp 상한이 **0.3**이라 창의 생성이 원천 봉쇄되기 때문입니다(§6.24). `[0.0, 1.0]`으로 clamp. **핫 수정 가능** — `/settings`의 "LLM 튜닝"에서 재기동 없이 다음 호출부터 반영되며, 블로킹·스트리밍 **양쪽**에 적용됩니다. C 모드는 채팅 입력창의 **S/N/C** 토글에서 고를 수 있고, **Direct(잡담) 토글과 함께 쓸 수 없습니다** — Direct 를 켜면 C 버튼이 비활성화되고 선택 중이었다면 N 으로 되돌아갑니다(서버도 같은 규칙을 독립적으로 적용하므로 손으로 만든 요청도 N 으로 강등됩니다). 이 모드를 배포 전체에서 닫으려면 아래 `CREATIVE_MODE_ENABLED`를 쓰세요 |
+| `CREATIVE_MODE_ENABLED` | `true` | true/false | **응답 모드 C(응용)를 아예 열지 말지**(`app.llm.creative-mode-enabled`). 위 `CREATIVE_LLM_TEMPERATURE`가 "C가 **어떻게** 답할까"라면 이 값은 "C를 **열어 둘까**"입니다 — C는 검색된 문서 밖의 내용(예제 코드·설정)을 생성하는 유일한 모드라, 배포처에 따라 처음부터 제공하지 않는 편이 맞을 수 있습니다.<br>`false`면 ① 채팅 입력창의 **C 버튼이 렌더되지 않고**(비활성 회색 버튼이 아니라 아예 사라집니다), ② 그럼에도 도착한 요청(REST `POST /api/v1/chat`, 손으로 만든 폼 POST)은 서버가 **N으로 강등**해 저장까지 N으로 남기며, ③ **이미 C로 답한 과거 턴의 `[C]` 표기와 검증 배지는 그대로 유지**됩니다(끄는 것은 "앞으로 고를 수 있는가"이지 "예전에 그렇게 답했는가"가 아닙니다).<br>**핫 수정 가능** — `/settings`의 "LLM 튜닝"에서 재기동 없이 다음 질문부터 반영됩니다 (열려 있던 채팅 화면은 새로고침해야 버튼이 사라집니다). 기본값은 `true`로, 이 스위치가 생기기 전과 동작이 같습니다 |
+| `LLM_SHRINK_STEP` | `1` | 1 ~ 10 | **컨텍스트 초과로 프롬프트가 거절되면 재시도마다 문서를 이만큼씩 덜어냅니다**(`app.llm.shrink-step`, §6.26-9). 사전 예산이 이미 창에 맞춰 놓은 뒤라 여기까지 오는 초과는 대개 아슬아슬해서, 기본값이 **1**입니다 — 한 개만 덜어내면 들어갈 자리에서 반을 자르면 근거의 절반이 사라집니다. 재시도는 5회까지이므로 **이 값 × 5 가 도달 가능한 최대 축소폭**이고, 거기서도 안 되면 `RAG-LLM-003`. 로그 `[SHRINK]` 가 한 턴에 여러 번 보이면 2~3 으로 올려 왕복을 줄일 수 있지만, 근본 해결은 `SEARCH_TOP_K` 를 낮추거나 서버 `--ctx-size` 를 키우는 쪽입니다. 핫 수정 가능 |
 
 #### 로그 레벨
 
@@ -515,14 +518,57 @@ LLM_ROUTING_MODE=QUALITY_FIRST
 
 #### LLM 응답 파라미터
 
-> **temperature와 최대 출력 토큰**은 각각 `LLM_TEMPERATURE`, `LLM_MAX_TOKENS` 환경변수로 설정할 수 있습니다(§6.18로 실제 적용되도록 수정됨). LLM temperature는 네 가지 모두 `/settings`에서 핫 수정 가능합니다 — 일반/RAG temperature(`LLM_TEMPERATURE`, 기본 0.0, 범위 **0.0~0.3**), Direct(잡담) 전용 `DIRECT_LLM_TEMPERATURE`(기본 0.1, 범위 **0.0~1.0**), 인덱싱/백그라운드 전용 `LLM_INDEXING_TEMPERATURE`(기본 0.0, 범위 **0.0~1.0**), 응답 모드 C(응용) 전용 `CREATIVE_LLM_TEMPERATURE`(기본 0.7, 범위 **0.0~1.0**). → [§3.2 LLM 응답 파라미터](#32-환경변수-전체-목록) 참조
+> **temperature와 최대 출력 토큰**은 각각 `LLM_TEMPERATURE`, `LLM_MAX_TOKENS` 환경변수로 설정할 수 있습니다(§6.18로 실제 적용되도록 수정됨). **`LLM_MAX_TOKENS`도 §6.26 A6 이후 핫 수정 대상입니다**(범위 1,000~32,000) — 단순한 출력 상한이 아니라 대화 이력 예산(×0.5)·MD 교정 섹션 크기·인덱싱 출력 예약·컨텍스트 입력 예산이 전부 여기서 파생되므로, 컨텍스트 압박을 조정할 때 가장 크게 듣는 손잡이입니다. LLM temperature는 네 가지 모두 `/settings`에서 핫 수정 가능합니다 — 일반/RAG temperature(`LLM_TEMPERATURE`, 기본 0.0, 범위 **0.0~0.3**), Direct(잡담) 전용 `DIRECT_LLM_TEMPERATURE`(기본 0.1, 범위 **0.0~1.0**), 인덱싱/백그라운드 전용 `LLM_INDEXING_TEMPERATURE`(기본 0.0, 범위 **0.0~1.0**), 응답 모드 C(응용) 전용 `CREATIVE_LLM_TEMPERATURE`(기본 0.7, 범위 **0.0~1.0**). → [§3.2 LLM 응답 파라미터](#32-환경변수-전체-목록) 참조
 
 #### 업로드 크기 제한
 
-| 속성 | 기본값 | 설명 |
-|------|--------|------|
-| `spring.servlet.multipart.max-file-size` | `200MB` | 단일 파일 최대 크기. 초과 시 413 응답 |
-| `spring.servlet.multipart.max-request-size` | `200MB` | 멀티파트 요청 전체 최대 크기 |
+| 속성 | 환경변수 | 기본값 | 설명 |
+|------|----------|--------|------|
+| `spring.servlet.multipart.max-file-size` | — | `200MB` | 단일 파일 최대 크기. 초과 시 413 (`RAG-UP-003`) |
+| `spring.servlet.multipart.max-request-size` | — | `200MB` | 멀티파트 요청 전체 최대 크기 |
+| `app.upload.max-total-size` | `UPLOAD_MAX_TOTAL_SIZE` | `0` (무제한) | **배포 전체 저장 상한** (§6.15). 초과 시 413 (`RAG-UP-002`) |
+| `app.upload.backup-retention-days` | `BACKUP_RETENTION_DAYS` | `30` | `documents/backup/` 보관 일수. `0` = 기간 규칙 해제 |
+| `app.upload.backup-max-size` | `BACKUP_MAX_SIZE` | `2GB` | `documents/backup/` 총 용량 상한. 초과 시 오래된 것부터 삭제. `0` = 용량 규칙 해제 |
+
+> **두 상한은 다른 축입니다.** 위의 per-file 상한은 "이 파일 하나가 너무 크다", `max-total-size`는 "더 넣을
+> 자리가 없다"입니다. 후자는 `20GB`처럼 단위를 붙여 쓸 수 있고, 단위가 없으면 바이트로 읽습니다. `0`(기본)은
+> 무제한이며, 이때는 사용량을 재려고 디스크를 걷는 일조차 하지 않습니다.
+>
+> **세는 대상**: `{app.data-dir}` 아래 `documents/` + `converted/` + `images/` 세 트리입니다.
+> 업로드 원본만이 아니라 인덱싱이 만들어 내는 변환 마크다운과 추출 이미지까지 포함하며, PPTX·스캔 PDF는 보통
+> 그쪽이 원본보다 큽니다. `memory.db`/`vector.db`·감사 로그·Chroma 볼륨은 업로드가 만드는 것이 아니라 제외됩니다.
+>
+> **`documents/backup/` 은 제외됩니다.** 문서를 삭제하면 원본이 지워지는 게 아니라 그 폴더로 **옮겨지므로**,
+> 그것까지 세면 "문서를 지워 자리를 만드세요"라는 이 상한의 유일한 해결책이 성립하지 않습니다(사용량이 거의
+> 안 줄고, 그 바이트는 어느 화면에서도 회수할 수 없습니다). 대신 아래 **백업 보존 정책**이 그 폴더를 묶습니다.
+>
+> **소프트 상한입니다.** 업로드를 받을 시점에 알 수 있는 크기는 올라오는 파일뿐이므로(파생 산출물은 아직 없음)
+> 한 건이 상한을 조금 넘겨 끝날 수 있고, 대신 **그다음 업로드가 거부**됩니다. 문서를 지우면 즉시 자리가 납니다
+> — 별도 카운터 없이 실제 디스크를 재기 때문에 `/admin` 삭제·디렉터리 동기화·수동 삭제가 모두 그대로 반영됩니다.
+
+##### 백업 보존 정책 (`documents/backup/`)
+
+문서 삭제 시 원본은 `{app.data-dir}/documents/backup/{원본이름}_{yyyyMMdd_HHmmss}{확장자}` 로 보관됩니다
+(실수로 지운 문서를 되살리기 위한 것). 이 폴더는 저장 상한에서 빠지는 대신 **세 규칙으로 정리**됩니다 —
+문서 **삭제 직후**와 **앱 기동 시**에 적용됩니다.
+
+| 순서 | 규칙 | 설정 |
+|---|---|---|
+| ① | 같은 원본 파일명의 백업은 **최신 1개만** 남긴다 | 항상 적용 (끌 수 없음) |
+| ② | ①이 남긴 것 중 **보관 일수**를 넘긴 것 삭제 | `BACKUP_RETENTION_DAYS` (기본 30, `0`=해제) |
+| ③ | 그래도 폴더가 **용량 상한**을 넘으면 오래된 것부터 삭제 | `BACKUP_MAX_SIZE` (기본 `2GB`, `0`=해제) |
+
+> **이 앱이 만든 파일만 지웁니다.** 삭제 대상은 위 이름 규칙에 맞는 파일뿐이며, 운영자가 그 폴더에 직접 둔
+> 파일은 ③의 용량 계산에는 포함되지만 절대 지우지 않습니다. 그래서 외부 파일 때문에 상한까지 못 내려가는
+> 경우가 생기면 삭제 대신 로그(`[BACKUP] 상한(...)까지 줄이지 못했다`)로 알립니다.
+>
+> **정리 시점 주의**: 삭제 직후와 기동 시에만 돕니다. 문서를 한동안 지우지 않는 배포에서는 ②의 30일이 최대
+> 그만큼 늦게 반영될 수 있습니다(다음 삭제 때 따라잡습니다). 즉시 정리하려면 앱을 재기동하세요.
+>
+> **적용 범위**: 문서 업로드 2경로(`POST /ui/documents/upload`, `POST /api/v1/documents`)와 지식 제안 본문
+> 이미지 업로드(`POST /curated/submissions/images`). `POST /api/v1/documents/sync`는 이미 디스크에 있는 파일을
+> 인덱싱하는 것이라 검사하지 않습니다. 현재 사용량과 상한은 `/settings`의 **저장 용량** 카드에서 볼 수 있으며,
+> 상한 변경은 재기동이 필요합니다(핫 수정 불가).
 
 #### Rate Limiting (`app.rate-limit.*`)
 
@@ -532,7 +578,7 @@ LLM_ROUTING_MODE=QUALITY_FIRST
 |------|----------|--------|------|
 | `app.rate-limit.enabled` | `RATE_LIMIT_ENABLED` | `true` | `false`로 설정하면 전체 비활성화 |
 | `app.rate-limit.chat-per-minute` | `RATE_LIMIT_CHAT_PER_MINUTE` | `60` | `/chat` 경로 — 분당 요청 수 |
-| `app.rate-limit.upload-per-minute` | `RATE_LIMIT_UPLOAD_PER_MINUTE` | `10` | `/documents` (업로드) 경로 — 분당 요청 수 |
+| `app.rate-limit.upload-per-minute` | `RATE_LIMIT_UPLOAD_PER_MINUTE` | `10` | 문서 **업로드 쓰기 요청**만 — `POST /ui/documents/upload`, `POST /api/v1/documents`. 문서 화면 조회·목록 갱신·내보내기·태그 편집은 `default` 버킷을 씁니다(예전에는 전부 이 버킷이라 다중 파일 업로드가 429로 죽었습니다) |
 | `app.rate-limit.sync-per-minute` | `RATE_LIMIT_SYNC_PER_MINUTE` | `3` | `/documents/sync` 경로 — 분당 요청 수 |
 | `app.rate-limit.image-per-minute` | `RATE_LIMIT_IMAGE_PER_MINUTE` | `300` | `/images/` 경로 — 분당 요청 수 |
 | `app.rate-limit.default-per-minute` | `RATE_LIMIT_DEFAULT_PER_MINUTE` | `120` | 그 외 경로 기본값 |
@@ -1359,7 +1405,7 @@ Web UI 채팅 화면 드롭다운에서 대화별로 변경 가능.
 | `PROGRESSIVE` | COST_FIRST로 먼저 답변 → 품질 점수 미달 시 PREMIUM으로 재실행 | 품질·비용 균형 |
 | `LOCAL_ONLY` | LOCAL만 사용, 외부 API 미호출 | 오프라인 / 보안 환경 |
 
-> **PROGRESSIVE 임계값**: `app.llm.progressive-threshold=0.6` (기본). 현재 sufficient=true(1.0) / false(0.0) 이진값.
+> **PROGRESSIVE 승격 조건**: 임계값 설정은 없습니다(`app.llm.progressive-threshold` 는 2026-09-01 제거 — 값을 읽는 코드가 없어 어떤 값을 넣어도 동작이 같았습니다). **PROGRESSIVE 승격 조건** — 점수도 임계값도 없다. `AnswerService.checkSufficiencyAndMaybeUpgrade()` 의 조건 셋이 전부다: 라우팅 모드가 `PROGRESSIVE` 이고, 검증이 `sufficient=false` 를 냈고(`needsRetry`), 재시도를 이미 다 썼을 때(`retryCount >= max-retry-count`).
 
 ---
 
@@ -1479,7 +1525,6 @@ LOCAL_LLM_MODEL=gemma-4-27b-it
 ```properties
 app.llm.default-routing-mode=COST_FIRST
 app.llm.circuit-breaker-minutes=4
-app.llm.progressive-threshold=0.6
 
 # LOCAL — 무료, 분류·키워드·경량 태스크 처리
 # base-url에 폴백 기본값을 두지 않는다 — LOCAL_LLM_URL이 비면 이 프로바이더는 기동 시 제외된다(LlmConfig G2)
@@ -1820,6 +1865,7 @@ curl -X POST http://localhost:8080/api/v1/chat \
 | 데이터 | 저장 위치 | 비고 |
 |--------|----------|------|
 | 문서 원본 | `DATA_DIR/documents/` | Sync 대상 |
+| 삭제된 문서 원본 | `DATA_DIR/documents/backup/` | 문서 삭제 시 원본이 여기로 이동(즉시 삭제 아님). 저장 상한 집계에서 **제외**되며 보존 정책 3규칙으로 정리됨 — §"업로드 크기 제한" 참조. `syncDirectory()` 의 비재귀 스캔 아래라 새 파일로 재검출되지 않음 |
 | 추출된 이미지 | `DATA_DIR/images/{imageId}/` | `imageId`는 문서 SHA-256 앞 16자(문서명이 아닌 내용 기반 키) — 문서 삭제 시 함께 삭제되나, 내용이 동일한 다른 문서가 남아 있으면 보존 |
 | 지식 제안 본문 이미지 | `DATA_DIR/images/submissions/` | 사용자가 업로드한 제안 본문 이미지(§6.9). 파일명은 내용 SHA-256 앞 16자 + 확장자라 같은 그림은 한 벌만 저장되고 **여러 제안이 공유**할 수 있습니다 — 그래서 삭제는 참조 세기 방식입니다(반려·철회 시 + 기동 시 24시간 지난 미참조 파일 스윕). 디렉터리 이름이 문자열 `submissions`이므로 16자리 hex인 `{imageId}`와 절대 충돌하지 않습니다 |
 | DOCX 변환 MD (원본) | `DATA_DIR/converted/{docId}.md` | DOCX 인덱싱 시 자동 생성; 문서 삭제 시 함께 삭제 |
@@ -1896,7 +1942,7 @@ CPU/메모리 제약이 있는 환경에서는 `INDEXING_MAX_FILES`와 `INDEXING
 `/settings`는 현재 **유효** LLM/RAG 설정을 한 화면에서 보여주고, 일부 검색 튜닝 값은 **재기동 없이** 조정할 수 있게 합니다. `application.properties`/환경변수를 고치고 재기동하지 않아도 검색 동작을 실시간으로 미세조정할 수 있습니다.
 
 **조회 항목 (그룹별)**:
-- **LLM 라우팅**: 등록 프로바이더·역할(role)·우선순위·모델·API 키 설정 여부·서킷브레이커 상태·**활성화 여부**(아래 참조), 기본 라우팅 모드, max-tokens(조회 전용, 실제 config 값 표시). 일반/RAG temperature는 아래 "LLM 튜닝" 핫 수정 그룹으로 옮겨졌습니다. **`app.llm.default-routing-mode`(`LLM_ROUTING_MODE`)가 `LOCAL_ONLY`인 배포에서는 이 표에 `LOCAL` 역할 프로바이더만 표시됩니다** — 이 모드에서는 라우팅이 NORMAL/PREMIUM을 절대 선택하지 않으므로, `application.properties`에 여전히 등록돼 있더라도(예: 나중에 모드를 바꿀 때를 대비해 남겨둔 설정) 표에서는 숨겨져 혼동을 줄입니다. 표 위에 이 사실을 알리는 안내 문구가 함께 표시됩니다. 숨겨진 프로바이더는 `POST /admin/settings/provider/toggle`로도 조작할 수 없습니다(알 수 없는 프로바이더로 거부).
+- **LLM 라우팅**: 등록 프로바이더·역할(role)·우선순위·모델·API 키 설정 여부·서킷브레이커 상태·**활성화 여부**(아래 참조), 기본 라우팅 모드. 일반/RAG temperature와 **max-tokens**는 아래 "LLM 튜닝" 핫 수정 그룹으로 옮겨졌습니다. **`app.llm.default-routing-mode`(`LLM_ROUTING_MODE`)가 `LOCAL_ONLY`인 배포에서는 이 표에 `LOCAL` 역할 프로바이더만 표시됩니다** — 이 모드에서는 라우팅이 NORMAL/PREMIUM을 절대 선택하지 않으므로, `application.properties`에 여전히 등록돼 있더라도(예: 나중에 모드를 바꿀 때를 대비해 남겨둔 설정) 표에서는 숨겨져 혼동을 줄입니다. 표 위에 이 사실을 알리는 안내 문구가 함께 표시됩니다. 숨겨진 프로바이더는 `POST /admin/settings/provider/toggle`로도 조작할 수 없습니다(알 수 없는 프로바이더로 거부).
 - **임베딩 / 벡터 스토어**: 임베딩 모델·차원, 벡터 스토어 백엔드(chroma/sqlite-vec).
 - **검색 튜닝 / 인덱싱 / 캐시**: 아래 핫 수정 항목 + 조회 전용 항목.
 
@@ -1946,8 +1992,13 @@ env-var/application.properties value ({설정값}); the override wins. Reset it 
 | 청크 크기(자) | `app.chunk-size` | 100 ~ 8000 |
 | 청크 오버랩(자) | `app.chunk-overlap` | 0 ~ 2000 |
 | 최소 청크 크기(자) | `app.min-chunk-size` | 0 ~ 4000 |
-| 동시 파일 처리 수 | `app.indexing.max-concurrent-files` | 1 ~ 32 |
-| 동시 LLM 호출 수 | `app.indexing.max-concurrent-llm-calls` (`INDEXING_MAX_LLM`) | 1 ~ 32 |
+| 동시 파일 처리 수 | `app.indexing.max-concurrent-files` | 1 ~ 4 |
+| 동시 LLM 호출 수 | `app.indexing.max-concurrent-llm-calls` (`INDEXING_MAX_LLM`) | 1 ~ 8 |
+
+> **프로바이더별로 따로 줄 수 있는 값 2종**(환경변수 없음, `application.properties` 직접 편집, 재기동 필요):
+> `app.llm.providers[N].max-tokens` — 그 프로바이더만의 출력 상한(미설정 시 전역 `app.llm.max-tokens`).
+> `app.llm.providers[N].context-size` — 그 프로바이더의 총 컨텍스트 창(미설정 시 기동 탐지, 실패하면 "모름").
+> 창 크기는 모델마다 다르므로 8k 로컬과 128k 클라우드가 하나의 상한을 공유할 수 없습니다 — 특히 좁은 모델에서는 **출력 예약 자체가** `n_ctx` 를 넘기는 원인입니다.
 
 > **`INDEXING_MAX_LLM`의 적용 범위**: 이 값은 키워드+맥락 추출 전용이 아니라 **인덱싱 계열 LLM 호출의 공통 병렬도**입니다 — 키워드 추출(`DocumentIndexer`), MD 포맷 교정(`MarkdownCorrectionService`), 인덱싱 중 이미지 설명("이미지 설명 추가" 체크 시, `MarkdownCorrectionService`가 문서 내 이미지를 이 값만큼 병렬 분석 — 예전엔 순차라 사실상 `INDEXING_MAX_FILES`에 매여 있었음), TXT 구조화(`TextToMarkdownService`), 지연 Vision 설명(`LazyVisionService`)이 모두 이 값을 씁니다. 다만 이 값은 "앱 전체 동시 LLM 호출 N개"라는 **전역 예산이 아닙니다**. 소비처마다 규칙이 다릅니다:
 >
@@ -1962,8 +2013,11 @@ env-var/application.properties value ({설정값}); the override wins. Reset it 
 |------|----|------|
 | 일반/RAG temperature | `app.llm.temperature` (`LLM_TEMPERATURE`) | 0.0 ~ 0.3 |
 | Direct(잡담) 응답 temperature | `app.llm.direct-temperature` (`DIRECT_LLM_TEMPERATURE`) | 0.0 ~ 1.0 |
-| 인덱싱/백그라운드 temperature | `app.llm.indexing-temperature` (`LLM_INDEXING_TEMPERATURE`) | 0.0 ~ 1.0 |
+| 인덱싱/백그라운드 temperature | `app.llm.indexing-temperature` (`LLM_INDEXING_TEMPERATURE`) | 0.0 ~ 0.1 |
 | C(응용) 응답 temperature | `app.llm.creative-temperature` (`CREATIVE_LLM_TEMPERATURE`) | 0.0 ~ 1.0 |
+| C(응용) 응답 모드 사용 | `app.llm.creative-mode-enabled` (`CREATIVE_MODE_ENABLED`) | true/false (기본 ON) |
+| 컨텍스트 초과 재시도당 제외할 문서 수 | `app.llm.shrink-step` (`LLM_SHRINK_STEP`) | 1 ~ 10 (기본 1) |
+| 블로킹 호출 출력 상한 | `app.llm.max-tokens` (`LLM_MAX_TOKENS`) | 1000 ~ 32000 |
 
 **핫 수정 가능 — UI (재기동 불필요, 다음 화면 렌더부터 반영)**:
 
@@ -1985,7 +2039,7 @@ env-var/application.properties value ({설정값}); the override wins. Reset it 
 - **"기본값" 버튼**으로 오버라이드를 삭제하면 `application.properties`/환경변수 값으로 정확히 복귀합니다(오버라이드가 있으면 항상 프로퍼티보다 우선).
 - 오버라이드는 **재기동 후에도 유지**됩니다(테이블에 영속). 배포 기본값 자체를 바꾸려면 여전히 환경변수/`application.properties`를 수정하세요 — 오버라이드는 그 위에 얹히는 런타임 조정 레이어입니다.
 
-**조회 전용(재기동 필요)**: `rerank-enabled`(빈 생성 시점 `@ConditionalOnProperty`로 결정)·쿼리 임베딩 캐시(빈 생성 시점 결정), 임베딩 차원·벡터 스토어 백엔드(DDL/빈 구성). **max-tokens**(`LLM_MAX_TOKENS`)는 §6.18로 실제 config 값을 그대로 반영해 표시되지만, 프로바이더 빈 생성 시점에 고정되므로 조회 전용(변경 시 재기동)입니다. 기본 라우팅 모드도 조회 전용입니다(대화별 라우팅은 채팅 화면에서 설정). LLM temperature 3종(일반/RAG·Direct·인덱싱/백그라운드)은 모두 위 "핫 수정 가능 — LLM" 표로 옮겨져 있습니다 — 단, 일반/RAG temperature는 프레임워크 내부 호출(예: 멀티쿼리 확장)에는 여전히 기동 시점에 고정된 값이 적용됩니다.
+**조회 전용(재기동 필요)**: `rerank-enabled`(빈 생성 시점 `@ConditionalOnProperty`로 결정)·쿼리 임베딩 캐시(빈 생성 시점 결정), 임베딩 차원·벡터 스토어 백엔드(DDL/빈 구성). 기본 라우팅 모드도 조회 전용입니다(대화별 라우팅은 채팅 화면에서 설정). LLM temperature 3종(일반/RAG·Direct·인덱싱/백그라운드)은 모두 위 "핫 수정 가능 — LLM" 표로 옮겨져 있습니다 — 단, 일반/RAG temperature는 프레임워크 내부 호출(예: 멀티쿼리 확장)에는 여전히 기동 시점에 고정된 값이 적용됩니다.
 
 **권한**: 조회는 누구나 가능하지만, **수정은 관리자만** 가능합니다(관리 전용 인증 모드 `AUTH_MANAGEMENT_ONLY=true`에서 `/setup` 관리자 로그인 필요 — §9 참조). 수정 UI(입력/버튼)는 비관리자에게 숨겨지며, 서버도 `/admin/settings/**` 경로로 이중 방어합니다. 모든 변경은 감사 로그(`settings.update`/`settings.reset`, 변경 키·이전값·새값)에 남습니다.
 
@@ -2020,7 +2074,7 @@ mvn test -Dtest=SearchQualityEvaluationTest -Dsearch-eval.enabled=true
 - 답변 텍스트 끝에 LLM이 자동으로 붙이는 "## 참고"(출처 인용) 섹션과 맨 앞 "## 요약" 섹션은 검색 색인에 들어가지 않습니다 — 파일명·페이지 번호가 질문 의도와 무관한 노이즈이고, 요약은 "## 상세 설명"과 중복이기 때문입니다. **원문 전체는 `curated_qa.answer`에 그대로 보존**되어 채팅 버블과 관리자 편집기에서 그대로 보입니다.
 - **긴 답변은 여러 청크로 나뉘어 임베딩됩니다**(§6.9 제안 게시판과 같은 `ChunkSplitter`, §6.10의 분할 전략까지 동일 적용). 다만 게시판과 달리 **DB 행은 turn 당 하나로 유지**되고 벡터만 여러 개가 됩니다 — 좋아요 취소·본인 편집·관리자 목록이 전부 turn 단위라 행을 쪼개면 그 동작들이 깨지기 때문입니다. 몇 개로 나뉘었는지는 `curated_qa.chunk_count`에 기록되어 좋아요 취소·강제 삭제·재임베딩이 모든 벡터를 찾습니다.
 - 재임베딩(편집 저장)은 **새 벡터를 먼저 쓴 뒤** 남은 이전 벡터를 지웁니다 — 답변이 짧아져 청크 수가 줄어도, 재임베딩이 실패하면 기존 벡터가 검색에 그대로 남아 있도록 하기 위해서입니다.
-- **검색 가중치는 출처별로 다릅니다**: 두 경로 모두 같은 `"curated"` 네임스페이스에 저장되고 검색도 한 번만 하지만, 결과를 `curated_origin` 메타데이터로 갈라 **두 개의 RRF 축**으로 넣습니다 — 좋아요 승격은 `SEARCH_CURATED_QA_WEIGHT`(기본 **1.2**), 지식 제안은 `SEARCH_SUBMISSION_WEIGHT`(기본 **1.5**). 좋아요는 "질문한 사람이 맞다고 확인한 답변", 제안은 "사람이 직접 써서 관리자가 검토한 지식"이라 신뢰 근거가 달라 따로 조절합니다. 둘 다 `/settings`에서 핫 수정됩니다.
+- **검색 가중치는 출처별로 다릅니다**: 두 경로 모두 같은 `"curated"` 네임스페이스에 저장되고 검색도 한 번만 하지만, 결과를 `curated_origin` 메타데이터로 갈라 **두 개의 RRF 축**으로 넣습니다 — 좋아요 승격은 `SEARCH_CURATED_QA_WEIGHT`(기본 **1.0**), 지식 제안은 `SEARCH_SUBMISSION_WEIGHT`(기본 **1.0**). 좋아요는 "질문한 사람이 맞다고 확인한 답변", 제안은 "사람이 직접 써서 관리자가 검토한 지식"이라 신뢰 근거가 달라 따로 조절합니다. 둘 다 `/settings`에서 핫 수정됩니다.
   - 이 키가 생기기 전에 임베딩된 벡터에는 `curated_origin`이 없어 **좋아요 쪽으로 취급**됩니다(실제로 대부분 그렇습니다). 제안 가중치를 적용받게 하려면 해당 항목을 다시 임베딩해야 합니다(큐레이션 탭에서 저장).
 - **긴 항목일수록 청크가 많아 그 축에서 차지하는 후보 수가 늘어납니다** — 한 답변이 상위권을 여러 칸 차지할 수 있습니다. 가중치를 올리기 전에 이 점을 함께 고려하세요.
 - **임베딩 청크 크기는 문서보다 크게 시작합니다**: `CHUNK_SIZE`의 **2배 → 1.5배 → 1배** 순으로 시도하고, 임베딩 서버가 거부할 때만 줄입니다. 큐레이션 텍스트는 하나의 이어진 논증이라 문서용 크기로 자르면 근거로서 읽히지 않기 때문이며, 줄이는 것은 오직 거부에 대한 대응입니다. 세 크기가 모두 실패하면 기존처럼 핵심 섹션만으로 한 번 더 시도합니다. `EMBED_MAX_CHUNK_CHARS`가 설정돼 있으면 어느 배수에서든 그 상한이 먼저 적용됩니다.
@@ -2559,7 +2613,7 @@ curl $LOCAL_LLM_URL/models -H "Authorization: Bearer $LOCAL_LLM_KEY"
 | API 키 만료/권한 없음 | 키 재발급 후 재시작 |
 | LOCAL LLM 서버 미실행 | LM Studio / Ollama 실행 확인 |
 | 로컬 LLM 없이 실행 | `LOCAL_LLM_KEY=` (빈 값)으로 LOCAL 비활성화 후 NORMAL/PREMIUM 등록 |
-| 모든 프로바이더 소진 | `/llm-usage`에서 차단 상태 확인; circuit-breaker-minutes 경과 후 자동 해제 |
+| 모든 프로바이더 소진 | `/llm-usage`에서 차단 상태 확인; 차단은 시간이 지나면 자동 해제됩니다(폴백 있음 30초 또는 `circuit-breaker-minutes`, **폴백 없는 유일 프로바이더는 5초**). **이 메시지는 원인이 아니라 결과입니다** — LOCAL 프로바이더가 하나뿐인 배포에서는 그 하나가 한 번 실패하기만 해도 이 문구가 나옵니다. 진짜 원인은 바로 앞 로그 줄(`Provider [x] threw ...`)에 있습니다 |
 
 ---
 
@@ -2624,7 +2678,7 @@ docker compose logs app | grep -E "EVAL\] 검증 미통과|CRITIC_UNGROUNDED" | 
 | 사유 유형 | 원인 | 조치 |
 |------|------|------|
 | 경로·포트·주소·환경변수 값이 문서와 다르다는 사유 | 평가 프롬프트의 **환경 의존 값 예외**가 동작하지 않음 — 이 값들은 문서와 달라도 `grounded=false` 사유가 될 수 없고 `envNote`(화면의 `ℹ️ 환경에 따라 달라질 수 있는 값`)로만 안내되어야 합니다 | 모델이 지시를 따르지 못하는 경우가 대부분입니다. `messages_ko.properties`의 `prompt.answer.eval`에 `[환경 의존 값 예외]` 블록이 남아 있는지 먼저 확인하고(테스트 `AnswerEvalPromptTest`가 이를 검사), 그다음 더 큰 로컬 모델로 교체 검토 (PIPELINE.md §5.3) |
-| "문서에 없음" 계열인데 실제로는 문서에 있음 | 근거 청크가 검색 결과 하위 순위라 재시도해도 계속 컷 밖에 머무름 | `SEARCH_TOP_K` 상향(2~3 정도), 또는 `SEARCH_RETRY_ESCALATE=true` 확인 — 재시도마다 최종 컷이 `topK + retryCount`로 넓어집니다(§5.1). 둘 다 `/settings`에서 재기동 없이 조정 가능 |
+| "문서에 없음" 계열인데 실제로는 문서에 있음 | 근거 청크가 검색 결과 하위 순위라 재시도해도 계속 컷 밖에 머무름 | `SEARCH_TOP_K` 상향(2~3 정도), 또는 `SEARCH_RETRY_ESCALATE=true` 확인 — 재검색마다 최종 컷이 `topK + 재검색횟수`로 넓어지고, 근거로 쓰이지 않은 하위 청크가 밀려나 자리를 내줍니다(§5.1). 둘 다 `/settings`에서 재기동 없이 조정 가능. 로그의 `[RETRIEVAL] 컨텍스트 여유 부족` 이 보이면 컷 확대가 생략된 것이므로 `LLM_MAX_TOKENS`를 내리거나 서버 `--ctx-size`를 올리세요 |
 | 사유가 매번 비어 있음 | 평가 LLM이 `reason` 필드만 못 채움 (소형 모델에서 흔함) | 판정 자체는 유효하므로 답변이 막히지는 않습니다. 검증 품질이 중요하면 평가 호출이 타는 `TEXT` 프로바이더를 더 큰 모델로 |
 | **배지가 아예 없음** (검증됨/생성도, 미검증도 아님) | 평가 응답이 비었거나 JSON 파싱에 실패해 **판정 없음**으로 내려감 | 실패가 아니라 "검증을 못 했다"는 표시입니다. 아래 *검증 배지가 사라짐* 항목으로 |
 | 로그에 `[EVAL] 문서 발췌 32000자 상한으로 …` 경고 | `SEARCH_TOP_K` × `CHUNK_SIZE`가 과도해 하위 문서가 검증에서 제외됨 | 둘 중 하나를 낮추세요. 이 상태에서는 답변이 본 문서 일부를 평가자가 못 봅니다 |
@@ -2667,14 +2721,88 @@ docker compose logs app | grep -E "판정 없음으로 기록한다" | tail -20
 
 | `n_ctx` | `LLM_MAX_TOKENS` | `SEARCH_TOP_K` | `CHUNK_SIZE` | 비고 |
 |---|---|---|---|---|
-| **8k~10k** | `2000` | `4` | `600~800` | 빡빡합니다. 발췌 여유가 ~3,000자뿐이라 재시도(`topK + retryCount`)까지 감안하면 topK 4가 실질 상한이고, S 모드를 기본으로 쓰는 편이 맞습니다 |
+| **8k~10k** | `2000` | `4` | `600~800` | 빡빡합니다. 발췌 여유가 ~3,000자뿐이라 재시도까지 감안하면 topK 4가 실질 상한이고, S 모드를 기본으로 쓰는 편이 맞습니다. 이 구간에서는 재검색의 문서 +1이 여유 부족으로 자주 생략되고(로그 `[RETRIEVAL] 컨텍스트 여유 부족`) 대신 청크 교체만 적용됩니다 — 의도된 동작입니다 |
 | **16k** | `4000` | `6` | `1000` | 발췌 ~6,000자 |
 | **32k** | `6000~8000` | `8~12` | `1500` | 기본값(topK **10** × 1500 = 15,000자)이 그대로 들어갑니다 — 4,900 + 15,000 + 2,048 ≈ 22,000 |
 | **64k 이상** | `10000`(기본) | `12~15` | `1500~2000` | `MAX_EVAL_EXCERPT_CHARS`(32,000)가 비로소 의미를 갖는 구간 |
 
 - **한글 ≈1토큰/자**는 보수적 계획값입니다. 코드·영문이 섞인 문서는 3~4자/토큰이라 실효 여유는 이보다 낫지만, 좁은 컨텍스트에서는 안전한 쪽으로 잡으세요.
 - `MAX_EVAL_EXCERPT_CHARS`(코드 상수, 32,000)는 **병적인 설정을 막는 안전판이지 튜닝 손잡이가 아닙니다.** 실제 발췌량은 `SEARCH_TOP_K × CHUNK_SIZE`가 정하고, 이 상한에 닿았다는 것은 이미 하위 문서가 검증에서 빠지고 있다는 뜻입니다(위 경고 로그). 32k 이하 배포에서는 이 상수에 닿기 훨씬 전에 `n_ctx`가 먼저 터지므로, 조절해야 할 것은 언제나 `SEARCH_TOP_K`/`CHUNK_SIZE` 쪽입니다.
-- 답변 프롬프트에는 대응하는 상한이 **없습니다**(검색된 문서를 전량 싣습니다). 즉 이 두 설정은 답변 품질과 검증 정확도를 동시에 결정합니다.
+- 답변 프롬프트에도 이제 상한이 있습니다 — 아래 「앱이 창을 알면 스스로 줄인다」 참고. 두 설정은 여전히 답변 품질과 검증 정확도를 동시에 결정하지만, 넘칠 때 조용히 실패하는 대신 줄이고 알려 줍니다.
+
+#### 앱이 창을 알면 스스로 줄인다 (§6.26)
+
+위 표는 **앱이 컨텍스트 창을 모를 때**의 수동 산정입니다. 창을 알면 앱이 프롬프트를 미리 맞춰 줄이므로 표는 "이 값이면 축소 없이 들어간다"는 목표치가 됩니다.
+
+창을 아는 방법은 둘입니다.
+
+1. **선언** — `app.llm.providers[N].context-size=8192`. 항상 이쪽이 우선입니다.
+2. **탐지** — 미설정이면 기동 시 LOCAL 프로바이더에게 물어봅니다. llama.cpp 는 `GET /props` 의 `default_generation_settings.n_ctx`, LM Studio 는 `GET /api/v0/models` 의 로드된 인스턴스 컨텍스트.
+
+> ⚠️ **두 서버가 함께 노출하는 "모델 상한" 필드는 일부러 읽지 않습니다.** llama.cpp `/v1/models` 의 `meta.n_ctx_train` 과 LM Studio 최상위 `max_context_length` 는 **모델이 지원하는** 최대치라, `-c 8192` 로 띄운 서버도 131072 를 돌려줍니다. 그 값으로 예산을 짜면 컨텍스트 초과를 막으려던 코드가 오히려 초과를 부릅니다. 로드된 값을 못 찾으면 앱은 **추측하지 않고 "모름"으로 둡니다**.
+
+**확인**: `/settings` 의 프로바이더 표 `컨텍스트` 열 — `8,192 (탐지됨)` / `16,384 (설정됨)` / `-`(모름). 기동 로그에도 `ctx=8192/probed` 형태로 찍힙니다. **`-` 이면 어떤 자동 보정도 돌지 않는다**는 뜻이므로 위 표대로 손으로 맞추거나 `context-size` 를 선언하세요.
+
+#### 로컬 LLM을 재시작했더니 계속 "모든 프로바이더 사용 불가"
+
+응답 중에 로컬 LLM을 재시작하면 진행 중이던 요청에 `400 - {"error":"terminated"}`가 돌아옵니다. 서버가 **내려가면서 그 요청을 끊었다**는 뜻이지 "서버가 아프다"가 아닙니다.
+
+예전에는 이것도 일반 실패로 보고 프로바이더를 **30초 차단**했습니다. 문제는 이 오류가 서버가 *내려가는 순간*에만 나오는데 차단은 서버가 *이미 올라온 뒤*까지 남는다는 점입니다 — 실측 로그에서 차단 1회에 그 창 안의 재시도 3번이 전부 `All providers exhausted`로 죽었고, 운영자에게는 "완전히 재시작했는데도 계속 안 된다"로 보였습니다.
+
+지금은 두 가지가 다릅니다.
+
+- **`{"error":"terminated"}`는 차단하지 않습니다** — `NOT blocking circuit breaker; the server is usually back within seconds.` 로그가 대신 남습니다.
+- **폴백이 없는 유일 프로바이더는 일반 실패도 5초만 차단합니다**(연결 거부 등). 프로바이더가 하나면 차단은 우회가 아니라 전면 중단이기 때문입니다. 차단을 아예 없애지는 않았습니다 — 서버가 정말 죽어 있으면 모든 요청이 각자 연결 타임아웃을 무는 편이 더 나쁩니다.
+
+사용자 화면에도 **언제부터 다시 되는지**가 표시됩니다 — `AI 서버가 일시적으로 응답하지 않아 20초 후 다시 시도할 수 있습니다. (task=TEXT)`. 차단이 원인일 때만 초가 붙고, 시도했다가 실패해 후보가 없어진 경우엔 `잠시 후 다시 시도해 주세요.` 로 나갑니다(기다린다고 풀리는 것이 아니므로). REST 호출에는 같은 값이 `Retry-After` 헤더로 나갑니다.
+
+**여전히 이 증상이 보인다면** 로그에서 실제 예외를 확인하세요:
+
+```bash
+grep -E "threw |blocked for |NO-FALLBACK" logs/rag-agent.log | tail -30
+```
+
+`Provider [x] threw ...` 줄이 진짜 원인입니다. `blocked for 30s`가 보이면 폴백이 있는 구성이라는 뜻이고, `blocked for 5s`면 유일 프로바이더 경로입니다.
+
+#### 창이 바뀌었는데 앱이 모를 때 — 컨텍스트 다시 탐지 (§6.26 A5)
+
+탐지값은 **기동 시점의 관측**입니다. 다음 셋 중 하나면 앱이 들고 있는 숫자가 실제와 다릅니다.
+
+1. 서버를 다른 `--ctx-size` / `-c` 로 다시 띄웠는데 앱은 재기동하지 않았다
+2. LM Studio 에서 컨텍스트를 바꿔 모델을 다시 로드했다
+3. **LM Studio 의 JIT 로딩** — 앱이 뜰 때는 로드된 인스턴스가 없어 탐지가 빈손으로 끝났고, 그 뒤 모델이 올라왔다 (`컨텍스트` 열이 `-` 로 남아 있습니다)
+
+**피해가 방향에 따라 다릅니다.** 창을 *줄인* 경우는 컨텍스트 초과로 요란하게 드러나고 축소 재시도가 받아냅니다. 문제는 창을 *키운* 경우입니다 — 앱은 옛 창 기준으로 계속 문서를 자르고, 사용자에게는 `컨텍스트 한도로 … 6개만 사용했습니다` 만 뜰 뿐 **왜 그런지는 아무 데도 안 나옵니다.** 창을 키웠는데 답변 품질이 그대로라면 이걸 의심하세요.
+
+**해결**: `/settings` 프로바이더 표 위의 **컨텍스트 다시 탐지** 버튼(관리자만 보입니다). 등록된 LOCAL 프로바이더에게 지금 다시 물어보고, 프로바이더마다 결과를 표 위에 남깁니다.
+
+| 결과 | 뜻 |
+|---|---|
+| **갱신됨** | 값이 실제로 달라졌습니다. 다음 호출부터 새 예산이 적용됩니다 |
+| **변화 없음** | 물어봤고 예전과 같았습니다 |
+| **응답 없음 — 이전 값 유지** | 서버가 답하지 않았거나 로드된 컨텍스트를 찾지 못했습니다. **알던 값은 지우지 않습니다** — 되돌리면 그 순간부터 입력 예산이 통째로 꺼지기 때문입니다 |
+| **선언됨 — 탐지 안 함** | `context-size` 가 선언된 프로바이더입니다. 선언이 항상 탐지를 이기므로 묻지 않습니다. 값을 바꾸려면 `context-size` 를 고치고 재기동하세요 |
+
+> **출력 상한은 함께 따라옵니다** (§6.26 A6): 앱의 모든 블로킹 호출은 자기 옵션을 실어 보내고, 그 위에 씌워지는 프로바이더 상한이 호출마다 현재 창 · 현재 `LLM_MAX_TOKENS` 로 다시 계산됩니다. 재기동이 필요한 곳은 **옵션을 실어 보내지 않는** 프레임워크 내부 호출(쿼리 확장 등)이 쓰는 기동 시점 기본값 하나뿐이고, 그 값이 **좁아진 새 창을 넘게 될 때만** 결과 위에 재기동 경고가 뜹니다(예: `local: defaultOptions 6,000 ≥ 창 4,096`). 창이 넓어진 경우는 그 기본값이 작을 뿐 안전하므로 알리지 않습니다.
+
+> **주기적 자동 재탐지는 일부러 넣지 않았습니다.** 예산이 스스로 움직이면 같은 질문이 시각에 따라 다른 양의 근거를 받아 재현이 안 됩니다(`[TOKEN_CAL]` 계수를 자동 보정하지 않는 것과 같은 이유). 창을 자주 바꾸는 배포라면 아예 `context-size` 로 못 박는 편이 낫습니다 — 선언된 값은 애초에 낡지 않습니다.
+
+
+창을 알 때 자동으로 도는 것:
+
+- **기동 시 검사** — `max-tokens >= context-size` 면 입력에 남는 자리가 0 이하라 **모든 요청이 실패**합니다(설정만 보면 멀쩡해 보입니다). 창의 절반으로 낮추고 WARN 을 남깁니다.
+- **호출 전 축소** — `입력 예산 = 창 − 출력 예약 − 여유(창의 10%)`. 넘치면 **문서를 하위 순위부터**, 그래도 넘치면 **이전 대화를 오래된 턴부터** 덜어냅니다. 검색 결과가 하나도 없어지지는 않습니다(최상위 문서는 항상 남습니다).
+- **사용자 안내** — 축소가 일어난 답변에는 `컨텍스트 한도로 검색된 문서 10개 중 6개만 사용했습니다.` 가 붙고, 프롬프트에 실리지 못한 출처에는 `미사용` 배지가 붙습니다. 출처 목록은 검색된 전부를 그대로 보여주므로, 이 표시가 없으면 모델이 읽지 않은 문서를 읽은 것처럼 보게 됩니다.
+- 로그: `[BUDGET] 컨텍스트 창 …토큰(출력 예약 …) → 입력 예산 …토큰에 맞춰 축소: 문서 10→6개, 이력 5000→800자`
+- **인덱싱(MD 교정·txt→md 구조화)도 같은 창을 봅니다** — 다만 잘라내는 대신 **조각을 더 잘게 나눕니다**(버려지는 내용 없음). 재작성은 출력이 입력에 비례하므로 `조각 ≤ (창 − 지시 프롬프트 − 여유) / 2.5` 로 잡고, `LLM_MAX_TOKENS` 파생 상한보다 작을 때만 적용합니다. 창을 모르면 예전 동작 그대로입니다. 창 20,480 · `LLM_MAX_TOKENS=10000` 에서 MD 교정이 `Context size has been exceeded` 로 실패하던 조합이 이 계산으로 막힙니다 — **창을 넓히지 않고도** 교정이 끝까지 돕니다.
+
+> **축소가 잦다면** `SEARCH_TOP_K` → `CHUNK_SIZE` → 서버 `--ctx-size` 순으로 손보세요. 축소는 안전장치이지 정상 상태가 아닙니다 — 하위 문서가 매번 빠진다면 그 문서들은 애초에 검색될 필요가 없었거나, 창이 이 설정에 비해 좁은 것입니다.
+
+- **그래도 넘치면 문서를 조금씩 덜어내며 다시 시도합니다** — 로그 `[SHRINK] ANSWER 컨텍스트 초과 — 프롬프트를 줄여 다시 시도한다. 시도 1/5, 문서 10→9개(app.llm.shrink-step=1)`. 한 번에 덜어낼 개수가 `LLM_SHRINK_STEP`(기본 **1**, 범위 1~10, `/settings` 에서 핫 수정)이고 재시도는 5회까지이므로, **`LLM_SHRINK_STEP × 5` 가 도달 가능한 최대 축소폭**입니다 — 거기서도 안 되면 `RAG-LLM-003` 이 나갑니다.
+  - 기본값이 1인 이유는 사전 예산이 이미 창에 맞춰 놓은 뒤라 여기까지 오는 초과가 대개 아슬아슬하기 때문입니다. 한 개만 덜어내면 들어갈 자리에서 반을 자르면 근거의 절반이 사라집니다. 실패한 시도는 서버가 생성 전에 거절하므로 왕복 자체는 쌉니다.
+  - **이 로그가 한 턴에 여러 번 보이면** 예산 계산이 실제와 어긋나 있다는 뜻입니다. `[TOKEN_CAL]` 계수를 함께 확인하고, `LLM_SHRINK_STEP` 을 2~3 으로 올려 왕복을 줄이거나 — 근본적으로는 `SEARCH_TOP_K` 를 낮추거나 서버 `--ctx-size` 를 키우십시오.
+
+> **컨텍스트 초과가 그래도 나면** 프로바이더는 더 이상 차단되지 않습니다(§6.26). 오류도 "모든 프로바이더 사용 불가"가 아니라 `RAG-LLM-003` 으로 구분되어, 사용자에게는 질문을 좁히거나 관리자에게 `search-top-k` 조정을 요청하라고 안내합니다.
 
 ---
 

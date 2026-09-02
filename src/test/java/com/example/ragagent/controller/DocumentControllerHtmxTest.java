@@ -9,6 +9,8 @@ import com.example.ragagent.model.DocumentInfo;
 import com.example.ragagent.service.DocumentExportService;
 import com.example.ragagent.service.IndexingProgressService;
 import com.example.ragagent.service.RagService;
+import com.example.ragagent.service.StorageQuotaService;
+import com.example.ragagent.exception.StorageQuotaExceededException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -48,6 +50,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  *  - 정상 업로드 → 202 + taskId
  *  - 빈 파일 → 400
  *  - 미지원 확장자 → 422
+ *  - 저장 상한 초과 → 413 + RAG-UP-002 (§6.15)
  *  - 문서 삭제 → 200
  *  - 동기화 → 202 + taskId
  */
@@ -67,6 +70,7 @@ class DocumentControllerHtmxTest {
     @MockitoBean AuditLogger auditLogger;
     @MockitoBean DocumentExportService documentExportService;
         @MockitoBean LlmRouter llmRouter;
+    @MockitoBean StorageQuotaService storageQuotaService;
 
     @TempDir Path tempDir;
 
@@ -139,6 +143,54 @@ class DocumentControllerHtmxTest {
                         .param("version", "latest")
                         .with(csrf()))
                 .andExpect(status().isUnprocessableEntity());
+    }
+
+    @Test
+    @DisplayName("POST /ui/documents/upload — 거부 사유가 본문에 담긴다 (태그 위반이 '파일이 비어 있습니다'로 보이던 문제)")
+    void uploadDocument_invalidTag_returnsTheActualReason() throws Exception {
+        MockMultipartFile file = new MockMultipartFile(
+                "file", "ok.pdf", "application/pdf", "%PDF-1.4 body".getBytes());
+
+        mvc.perform(multipart("/ui/documents/upload").file(file)
+                        .param("version", "latest")
+                        .param("tags", "a".repeat(33))     // MAX_TAG_LEN = 32
+                        .with(csrf()))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("32")));
+    }
+
+    @Test
+    @DisplayName("POST /ui/documents/upload — 미지원 확장자의 422 도 사유를 함께 준다")
+    void uploadDocument_unsupportedExt_returnsTheActualReason() throws Exception {
+        MockMultipartFile exe = new MockMultipartFile(
+                "file", "malware.exe", "application/octet-stream", "MZ".getBytes());
+
+        mvc.perform(multipart("/ui/documents/upload").file(exe)
+                        .param("version", "latest")
+                        .with(csrf()))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("malware.exe")));
+    }
+
+    @Test
+    @DisplayName("POST /ui/documents/upload — 저장 상한 초과 → 413 + RAG-UP-002, 파일은 디스크에 남지 않는다")
+    void uploadDocument_overStorageQuota_returns413() throws Exception {
+        org.mockito.Mockito.doThrow(new StorageQuotaExceededException(
+                        "저장 공간이 부족합니다 — over.pdf 을(를) 받으면 상한 1.0 KB 를 넘습니다.", 900, 1000, 200))
+                .when(storageQuotaService).checkCanAccept(org.mockito.ArgumentMatchers.anyLong(), any());
+
+        MockMultipartFile file = new MockMultipartFile(
+                "file", "over.pdf", "application/pdf", "%PDF-1.4 body".getBytes());
+
+        mvc.perform(multipart("/ui/documents/upload").file(file)
+                        .param("version", "latest")
+                        .with(csrf()))
+                .andExpect(status().isPayloadTooLarge())
+                .andExpect(jsonPath("$.errorCode").value("RAG-UP-002"))
+                .andExpect(jsonPath("$.detail").value(org.hamcrest.Matchers.containsString("over.pdf")));
+
+        // 검사는 stageToTemp() 앞이라 거부된 업로드는 한 바이트도 쓰지 않는다
+        assertThat(tempDir.resolve("documents").resolve("over.pdf")).doesNotExist();
     }
 
     @Test

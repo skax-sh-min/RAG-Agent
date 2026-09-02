@@ -1,6 +1,7 @@
 package com.example.ragagent.controller;
 
 import com.example.ragagent.context.ThreadContext;
+import com.example.ragagent.exception.LlmContextOverflowException;
 import com.example.ragagent.exception.LlmProviderExhaustedException;
 import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.RoutingMode;
@@ -255,18 +256,25 @@ public class ChatController {
             model.addAttribute("grounded", resp.grounded());
             model.addAttribute("evalReason", resp.evalReason());
             model.addAttribute("envNote", resp.envNote());
+            model.addAttribute("budgetNote", resp.budgetNote());
             // 배지 규칙은 VerificationSnapshot 한 곳에 있다 — 이 프래그먼트와 대화 기록
             // 루프가 같은 레코드를 읽는다(§6.24 Step 4-b). 조건을 템플릿에 풀어 쓰면
             // 두 렌더러가 갈라지고, 갈라진 것은 화면에서 보이지 않는다.
             model.addAttribute("verification", new VerificationSnapshot(
                     resp.grounded(), resp.generative(), resp.evalReason(), resp.envNote(),
-                    resp.inventedSymbols()));
+                    resp.inventedSymbols(), resp.budgetNote()));
             model.addAttribute("usedProvider", resp.usedProvider());
             // 좋아요가 이 모드에서 실제로 동작하는가 — 서버가 성질로 계산한다
             // (SSE done 의 "curatable", 대화 기록의 Turn.curatable() 과 같은 값).
             model.addAttribute("curatable", form.responseModeOrDefault().allowsCuration());
             model.addAttribute("curationBlockedKey",
                     form.responseModeOrDefault().curationBlockedMessageKey());
+        } catch (LlmContextOverflowException e) {
+            // 하위 타입이라 반드시 소진 catch 보다 앞에 와야 한다(자바 규칙이자 이 구분의 전부다).
+            log.warn("LLM context window exceeded: {}", e.getMessage());
+            model.addAttribute("errorMessage", messageSource.getMessage(
+                    "error.llm.context-overflow", null, LocaleContextHolder.getLocale()));
+            return "fragments/message-error :: message";
         } catch (LlmProviderExhaustedException e) {
             log.warn("LLM providers exhausted: {}", e.getMessage());
             model.addAttribute("errorMessage", messageSource.getMessage(
@@ -288,15 +296,27 @@ public class ChatController {
         if (request.question() == null || request.question().isBlank()) {
             return ResponseEntity.badRequest().build();
         }
-        ChatResponse response = agentService.chat(ctx, request);
+        ChatResponse response = agentService.chat(ctx, withAvailableResponseMode(request));
         return ResponseEntity.ok(response);
     }
 
+    /**
+     * 응답 모드를 <b>저장될 값</b>으로 확정한다 — 라디오 파라미터(있으면 우선)와 hidden 필드 중
+     * 하나를 고르고, 운영자가 꺼 둔 모드는 {@link SettingsService#effectiveResponseMode}로 강등한다.
+     *
+     * <p>라디오가 비었을 때 폼을 그대로 돌려주던 예전 구현은 <b>운영자 스위치를 통째로 비껴갔다</b> —
+     * 그 경로(직접 만든 POST, 라디오 없는 클라이언트)에서는 hidden 필드의 값이 검사 없이 흘러갔다.
+     * 이제 두 경우 모두 같은 판정을 지난다.
+     *
+     * <p>강등을 여기서 하는 이유는 {@code ChatForm} 이 레코드라 설정 계층에 닿을 수 없기 때문이다
+     * (Direct 배타 가드는 요청 자체에서 파생되므로 레코드 안에 있다). HTMX·SSE 두 경로가 모두
+     * 이 메서드를 지나므로 저장되는 {@code response_mode} 도 실제로 답한 모드와 일치한다.
+     */
     private ChatForm normalizeResponseMode(ChatForm form, String responseModeRadio) {
-        if (responseModeRadio == null || responseModeRadio.isBlank()) {
-            return form;
-        }
-        ResponseMode selected = ResponseMode.parse(responseModeRadio);
+        String raw = (responseModeRadio == null || responseModeRadio.isBlank())
+                ? form.responseMode()
+                : responseModeRadio;
+        ResponseMode selected = settingsService.effectiveResponseMode(ResponseMode.parse(raw));
         return new ChatForm(
                 form.question(),
                 form.threadId(),
@@ -305,6 +325,22 @@ public class ChatController {
                 form.directMode(),
                 form.tags(),
                 selected.name());
+    }
+
+    /**
+     * REST 요청의 응답 모드에 같은 운영자 스위치를 적용한다 — 채팅 UI 를 거치지 않는 경로라
+     * 버튼 감추기가 존재하지 않고, 서버 판정만이 유일한 관문이다({@code ChatRequest} 의 Direct 배타
+     * 가드와 같은 자리, 다른 이유). 항상 새 레코드를 만들어 compact 생성자의 기존 가드도 다시 지난다.
+     */
+    private ChatRequest withAvailableResponseMode(ChatRequest request) {
+        return new ChatRequest(
+                request.question(),
+                request.version(),
+                request.threadId(),
+                request.routingMode(),
+                request.directMode(),
+                request.selectedTags(),
+                settingsService.effectiveResponseMode(request.responseMode()));
     }
 
     @GetMapping("/api/v1/questions/suggest")
@@ -395,6 +431,7 @@ public class ChatController {
         model.addAttribute("hasLocalProvider", llmRouter.hasLocalProvider());
         model.addAttribute("localOnlyDeployment", llmRouter.getDefaultMode() == RoutingMode.LOCAL_ONLY);
         model.addAttribute("routingMode", meta != null ? meta.routingMode() : "COST_FIRST");
+        model.addAttribute("creativeModeEnabled", settingsService.creativeModeEnabled());
         model.addAttribute("sourcePreviewEnabled", settingsService.sourcePreviewEnabled());
         model.addAttribute("retrievalMetricsEnabled", settingsService.retrievalMetricsEnabled());
     }

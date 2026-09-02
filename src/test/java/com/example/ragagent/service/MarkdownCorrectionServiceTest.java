@@ -10,6 +10,7 @@ import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.llm.BackgroundUsage;
 import com.example.ragagent.llm.LlmProvider;
 import com.example.ragagent.llm.LlmRouter;
+import com.example.ragagent.llm.ProviderContextWindows;
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.llm.TaskType;
 import org.junit.jupiter.api.AfterEach;
@@ -69,8 +70,8 @@ class MarkdownCorrectionServiceTest {
         when(indexing.maxConcurrentLlmCalls()).thenReturn(2);
         when(props.indexingSafe()).thenReturn(indexing);
         when(props.llmSafe()).thenReturn(new AppProperties.LlmConfig(
-                java.util.List.of(), 2, 10, 180, "COST_FIRST", 0.6, 3, 20, 0.0, 0.1, 0.0, 0.7, 8000, true));
-        service = new MarkdownCorrectionService(llmRouter, props);
+                java.util.List.of(), 2, 10, 180, "COST_FIRST", 3, 20, 0.0, 0.1, 0.0, 0.7, true, 8000, 1, true));
+        service = new MarkdownCorrectionService(llmRouter, props, new ProviderContextWindows());
     }
 
     @BeforeEach
@@ -1379,5 +1380,48 @@ class MarkdownCorrectionServiceTest {
     void resolve_keepsExistingNonSqlTag() {
         assertThat(service.resolveCodeLanguage("python", "print('x')", false)).isEqualTo("python");
         assertThat(service.resolveCodeLanguage("java", "class Foo {}", false)).isEqualTo("java");
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // 섹션 크기 예산 — max-tokens 파생값과 실제 창 중 작은 쪽 (A1 인덱싱 입력 예산)
+    // ---------------------------------------------------------------------------------------------
+
+    @Test
+    @DisplayName("창이 좁으면 섹션이 더 잘게 나뉜다 — max-tokens 파생값만 믿다가 컨텍스트를 넘겼던 자리")
+    void narrowContextWindowShrinksSections() {
+        // max-tokens=8000 → maxSectionChars = (8000-500)/2 = 3,750
+        // 창 8,192 → (8192 - 1300 지시 - 819 여유) / 2.5 = 2,429  → 이쪽이 작으므로 채택
+        String body = ("가".repeat(79) + "\n").repeat(75);   // 6,000자, 헤딩 없음
+        assertThat(service.splitBySections(body)).hasSize(2);   // 창 모름: 3,750 기준
+
+        ProviderContextWindows windows = new ProviderContextWindows();
+        windows.record("local", 8_192, ProviderContextWindows.Source.CONFIGURED);
+        when(llmRouter.findProviderName(TaskType.LIGHT_TEXT, RoutingMode.COST_FIRST)).thenReturn("local");
+
+        assertThat(narrowService(windows).splitBySections(body)).hasSize(3);
+    }
+
+    @Test
+    @DisplayName("창이 넉넉해도 섹션을 키우지는 않는다 — 초과 방지가 멀쩡한 배포의 인덱싱 결과를 바꿀 이유는 없다")
+    void wideContextWindowNeverEnlargesSections() {
+        String body = ("가".repeat(79) + "\n").repeat(75);   // 6,000자
+        ProviderContextWindows windows = new ProviderContextWindows();
+        windows.record("local", 131_072, ProviderContextWindows.Source.PROBED);
+        when(llmRouter.findProviderName(TaskType.LIGHT_TEXT, RoutingMode.COST_FIRST)).thenReturn("local");
+
+        // 창 기준으로는 5만 자도 들어가지만 max-tokens 파생 상한(3,750)이 그대로 이긴다
+        assertThat(narrowService(windows).splitBySections(body))
+                .hasSameSizeAs(service.splitBySections(body));
+    }
+
+    /** 같은 설정에 창 레지스트리만 갈아 끼운 인스턴스. */
+    private MarkdownCorrectionService narrowService(ProviderContextWindows windows) {
+        AppProperties props = mock(AppProperties.class);
+        AppProperties.IndexingConfig indexing = mock(AppProperties.IndexingConfig.class);
+        when(indexing.maxConcurrentLlmCalls()).thenReturn(2);
+        when(props.indexingSafe()).thenReturn(indexing);
+        when(props.llmSafe()).thenReturn(new AppProperties.LlmConfig(
+                java.util.List.of(), 2, 10, 180, "COST_FIRST", 3, 20, 0.0, 0.1, 0.0, 0.7, true, 8000, 1, true));
+        return new MarkdownCorrectionService(llmRouter, props, windows);
     }
 }

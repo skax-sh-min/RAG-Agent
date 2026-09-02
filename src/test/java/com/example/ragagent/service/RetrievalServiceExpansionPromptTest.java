@@ -1,5 +1,6 @@
 package com.example.ragagent.service;
 
+import com.example.ragagent.llm.ProviderContextWindows;
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.llm.LlmProvider;
 import com.example.ragagent.llm.LlmRouter;
@@ -67,7 +68,7 @@ class RetrievalServiceExpansionPromptTest {
         when(llmRouter.routeProviderWithFallback(any(), any())).thenReturn(expansionProvider);
 
         assertThatCode(() -> new RetrievalService(llmRouter, mock(LlmUsageRepository.class), mock(RagService.class),
-                props, Optional.empty(), Optional.empty(), realMessageSource(), new ChatImageAnalysisSkipRegistry()))
+                props, Optional.empty(), Optional.empty(), realMessageSource(), new ChatImageAnalysisSkipRegistry(), new ProviderContextWindows()))
                 .doesNotThrowAnyException();
     }
 }

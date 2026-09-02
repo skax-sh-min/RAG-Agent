@@ -30,6 +30,12 @@ public record ChatResponse(
          */
         @JsonProperty("env_note") String envNote,
         /**
+         * 컨텍스트 예산 때문에 검색 문서나 이전 대화 일부가 프롬프트에서 빠졌을 때의 안내.
+         * <b>출처 목록은 줄지 않는다</b> — 축소는 프롬프트에만 걸리므로, 이 안내가 없으면 사용자는
+         * 화면의 출처를 모델이 전부 읽고 답했다고 믿는다. 축소가 없었으면 null.
+         */
+        @JsonProperty("budget_note") String budgetNote,
+        /**
          * 이 답변이 <b>문서를 재료로 생성된 것</b>인가 ({@code ResponseMode.generative()}).
          * 검증 배지가 이 값으로 갈린다 — {@code 검증됨}(초록) 대신 {@code 생성}(파랑). 통과한 검증의
          * 질문 자체가 다르기 때문이다(문서 근거 여부 vs 발명된 이름 여부). 클라이언트가 모드 문자열을

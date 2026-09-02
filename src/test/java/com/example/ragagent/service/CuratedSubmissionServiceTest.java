@@ -63,7 +63,7 @@ class CuratedSubmissionServiceTest {
         // "이미지가 없으면 아무 일도 하지 않는다"는 계약까지 함께 지켜준다.
         CuratedImageStore imageStore = new CuratedImageStore(
                 props, repository, mock(com.example.ragagent.repository.CuratedQaRepository.class),
-                Optional.empty());
+                Optional.empty(), new StorageQuotaService(props));
         // 실제 ChunkSplitter — 승인 시 본문 분할이 문서 인덱싱과 같은 기계를 쓰는지까지 함께 검증한다.
         service = new CuratedSubmissionService(repository, curatedQaService, imageStore, props, auditLogger);
     }

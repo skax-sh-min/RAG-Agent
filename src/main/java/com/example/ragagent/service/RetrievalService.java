@@ -5,6 +5,9 @@ import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.llm.ConcurrencyLimitingChatModel;
 import com.example.ragagent.llm.LlmProvider;
 import com.example.ragagent.llm.LlmRouter;
+import com.example.ragagent.llm.PromptBudget;
+import com.example.ragagent.llm.ProviderContextWindows;
+import com.example.ragagent.llm.TokenEstimator;
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.llm.TaskType;
 import com.example.ragagent.llm.TrackingChatModel;
@@ -41,6 +44,10 @@ public class RetrievalService {
     private static final Logger log = LoggerFactory.getLogger(RetrievalService.class);
 
     private final RagService ragService;
+    /** 재시도 때 "청크를 더 실어도 되는가"를 묻기 위해서만 보관한다 — 답변을 받을 프로바이더를
+     *  {@code AnswerService} 와 같은 방식으로 먼저 물어본다. */
+    private final LlmRouter llmRouter;
+    private final ProviderContextWindows contextWindows;
     private final MultiQueryExpander multiQueryExpander;
     private final AppProperties props;
     // rerank-enabled is truly structural — the RerankerService bean only exists when it was true at
@@ -56,7 +63,10 @@ public class RetrievalService {
     public RetrievalService(LlmRouter llmRouter, LlmUsageRepository usageRepo, RagService ragService,
                             AppProperties props, Optional<LazyVisionService> lazyVisionOpt,
                             Optional<RerankerService> rerankerOpt, MessageSource messageSource,
-                            ChatImageAnalysisSkipRegistry imageSkipRegistry) {
+                            ChatImageAnalysisSkipRegistry imageSkipRegistry,
+                            ProviderContextWindows contextWindows) {
+        this.llmRouter = llmRouter;
+        this.contextWindows = contextWindows;
         this.ragService = ragService;
         this.props = props;
         this.rerankEnabled = props.searchRerankEnabled();
@@ -118,7 +128,10 @@ public class RetrievalService {
         boolean curatedQaEnabled = props.searchCuratedQaEnabledSafe();
         double curatedQaWeight = props.searchCuratedQaWeightSafe();
         double submissionWeight = props.searchSubmissionWeightSafe();
-        int retry = state.retryCount();
+        // 재시도 횟수가 아니라 '검색을 다시 한 횟수'가 escalation 의 입력이다 — grounded 실패
+        // 재시도는 검색을 건너뛰고 ANSWER 로 바로 가므로(AgentGraph), retryCount 를 쓰면 검색을
+        // 하지도 않은 만큼 escalation 이 앞서 나간다.
+        int retry = state.retrievalRetries();
         // Escalating candidateK alone only changed WHICH documents competed for the final slots —
         // the cut stayed at defaultTopK, so every attempt handed the answer node exactly topK
         // documents. When the evidence a retry was supposed to surface lands just past that cut,
@@ -134,15 +147,27 @@ public class RetrievalService {
         // 하위 순위 문서가 검증 대상에서 빠지면서 "그 문서에만 있는 값을 정확히 인용한 답변이
         // grounded=false 판정을 받는" 오탐이 되살아난다.
         int modeBoost = Math.max(0, state.responseMode().retrievalBoost());
-        int effectiveTopK = (retryEscalate ? defaultTopK + retry : defaultTopK) + modeBoost;
+        // 재시도당 +1 은 그대로 두되, 컨텍스트에 여유가 있을 때만 늘린다. 늘리는 쪽이 기존 동작이라
+        // 창을 모르면 늘린다 — 이 앱의 "창을 모르면 아무것도 하지 않는다"는 추측으로 '줄이지'
+        // 말라는 뜻이고, 여기서 줄이는 쪽이 동작 변경이다.
+        int extraDocs = retryEscalate ? retry : 0;
+        if (extraDocs > 0 && !hasContextHeadroomFor(state, extraDocs)) {
+            log.info("[RETRIEVAL] 컨텍스트 여유 부족 — 재시도 문서 증가(+{})를 생략하고 교체만 적용한다 thread={}",
+                    extraDocs, state.threadId());
+            extraDocs = 0;
+        }
+        int effectiveTopK = defaultTopK + extraDocs + modeBoost;
         List<Document> unique;
         // Empty on the expansion-failure fallback path below, which skips fusion entirely — every
         // consumer must therefore tolerate a missing entry rather than assume one exists.
         Map<String, RrfMetrics> fusedMetrics = Map.of();
         try {
             // Escalate candidate count on retry to surface different documents.
+            // 재시도당 ×2 였다. 교체가 들어오면서 그만큼의 신규 후보가 필요 없어졌다 — topK 의
+            // 1/3 을 비우므로 그 자리를 채울 만큼(≈ ×1.3)만 있으면 되고, ×1.5 는 거기에 여유를
+            // 얹은 값이다. 후보 풀을 키우는 것도 공짜가 아니다(융합·태그 필터·리랭크가 그 위에서 돈다).
             int candidateK = (retryEscalate && retry > 0)
-                    ? Math.min(defaultTopK * (retry + 1), defaultTopK * 3)
+                    ? (int) Math.min(Math.round(defaultTopK * (1 + 0.5 * retry)), (long) defaultTopK * 3)
                     : defaultTopK;
             // The pool can never be smaller than the cut taken from it (possible only in extreme
             // configs, e.g. topK=1 with several retries).
@@ -190,10 +215,16 @@ public class RetrievalService {
                     // wrapped string as one "variant", so filter against that same wrapped string
                     // (not the raw question) to strip it before the variant-only batch search below.
                     String expansionInput = PromptInjectionGuard.wrap(state.question());
-                    List<String> variantTexts = multiQueryExpander.expand(new Query(expansionInput)).stream()
-                            .map(Query::text)
-                            .filter(t -> !t.equals(expansionInput))
-                            .toList();
+                    List<String> variantTexts = new ArrayList<>(
+                            multiQueryExpander.expand(new Query(expansionInput)).stream()
+                                    .map(Query::text)
+                                    .filter(t -> !t.equals(expansionInput))
+                                    .toList());
+                    // 재시도라면 평가가 남긴 "무엇이 부족했는지"를 검색 축 하나로 더 넣는다.
+                    // 확장기는 빈 생성 시점에 프롬프트가 고정돼 있어 per-request 로 지시를 바꿀 수
+                    // 없지만, 그 사유 문장 자체가 이미 "못 찾은 것"을 이름으로 부르고 있어 질의로
+                    // 쓸 만하다. LLM 왕복은 늘지 않는다 — 벡터 검색 한 번이 추가될 뿐이다.
+                    reasonQuery(state).ifPresent(variantTexts::add);
                     ranked = new ArrayList<>();
                     ranked.add(originalF.join());
                     if (!variantTexts.isEmpty()) {
@@ -217,6 +248,9 @@ public class RetrievalService {
             // Strict AND tag filter — applied after RRF, before rerank/cut. Covers vector
             // + BM25 axes uniformly (tags travel in chunk metadata). No no-tag fallback on shortfall.
             candidates = filterByTags(candidates, selectedTags, candidateK);
+            // 직전 시도에서 근거로 쓰이지 않은 하위 청크를 뺀다. 자리를 비우는 것이 목적이므로
+            // 최종 컷 '전에' 걸어야 다음 후보가 그 자리로 올라온다(§ 재시도 개선).
+            candidates = RetrievalEviction.withoutExcluded(candidates, Set.copyOf(state.excludedDocIds()));
             // Rerank by LLM relevance, then cut to effectiveTopK (= topK on the first attempt).
             unique = (rerankEnabled && reranker.isPresent())
                     ? reranker.get().rerank(state.question(), candidates, effectiveTopK)
@@ -325,6 +359,65 @@ public class RetrievalService {
                 .needsRetry(false)
                 .build();
     }
+
+    /**
+     * 재시도에서 문서를 {@code extraDocs} 개 더 실어도 <b>검증 호출</b>이 발췌를 자르지 않을지 본다.
+     *
+     * <p><b>기준이 답변 호출이 아니라 검증 호출인 이유</b>: 이 앱에서 가장 큰 단일 요청은 검증이다
+     * (질문 + 답변 전문 + 발췌 + 응답 스키마가 한 번에 들어간다). 그리고 넘칠 때 나는 사고는
+     * 컨텍스트 초과가 아니라 조용한 품질 저하다 — 발췌가 잘리면 {@code AnswerService} 가 근거 없음
+     * 판정을 신뢰할 수 없다고 보고 {@code grounded=null}(판정 없음)로 떨어뜨린다. 즉 <b>재시도를
+     * 거듭할수록 판정이 사라지는</b> 구조라, 문서를 늘리는 결정은 그 예산을 보고 내려야 한다.
+     *
+     * <p>직전 답변을 실측에 쓴다 — 재시도 시점에는 방금 반려된 답변이 {@code state.answer()} 에
+     * 있고, 다음 답변의 길이를 추정하는 가장 좋은 재료가 그것이다. 없으면(첫 시도) 이 메서드는
+     * 호출되지 않는다.
+     *
+     * <p>창을 모르면 {@code true} — 늘리는 쪽이 기존 동작이므로, 모르는 상태에서 동작을 바꾸지 않는다.
+     */
+    /**
+     * 재시도에서 추가로 검색할 질의 — 평가가 낸 반려 사유 한 문장.
+     *
+     * <p>원래 질문은 그대로 자기 축으로 검색되고, 이건 <b>별도 축</b>으로 들어가 RRF 로 융합된다.
+     * 원 질문을 바꾸지 않는 것이 중요하다 — 사유 문장이 엉뚱하면 그 축의 순위만 나빠질 뿐,
+     * 질문 축의 결과는 그대로 남는다.
+     *
+     * <p>{@code PromptInjectionGuard.wrap()} 을 쓰지 않는다: 이건 프롬프트가 아니라 임베딩할
+     * 검색어이고, 벡터 축은 원래 {@code state.question()} 도 감싸지 않고 그대로 임베딩한다.
+     */
+    private static Optional<String> reasonQuery(AgentState state) {
+        if (state.retrievalRetries() <= 0) return Optional.empty();
+        String reason = state.evalReason();
+        if (reason == null || reason.isBlank()) return Optional.empty();
+        return Optional.of(reason.strip());
+    }
+
+    private boolean hasContextHeadroomFor(AgentState state, int extraDocs) {
+        int window = contextWindows.tokensOrZero(llmRouter.findProviderName(TaskType.TEXT, state.routingMode()));
+        if (window <= 0) return true;
+
+        long docsCost = state.retrievedDocs().stream()
+                .mapToLong(d -> TokenEstimator.estimate(d.getText()))
+                .sum();
+        long perDoc = state.retrievedDocs().isEmpty()
+                ? 0
+                : docsCost / state.retrievedDocs().size();          // 직전 문서들의 평균 크기
+        long fixed = TokenEstimator.estimate(state.answer())
+                + TokenEstimator.estimate(state.question())
+                + EVAL_OVERHEAD_TOKENS;
+        long budget = new PromptBudget(window, AnswerService.MAX_EVAL_OUTPUT_TOKENS).inputBudget();
+        return budget - fixed - docsCost - perDoc * extraDocs > 0;
+    }
+
+    /**
+     * 검증 프롬프트에서 문서·답변·질문을 뺀 나머지(시스템 프롬프트 + 응답 스키마 + 라벨)의 몫.
+     *
+     * <p>측정이 아니라 <b>넉넉히 잡은 허용치</b>다. 정확히 재려면 모드별 시스템 프롬프트와
+     * {@code BeanOutputConverter} 의 스키마 문자열을 이 클래스로 끌고 와야 하는데, 그 둘은 문서
+     * 하나 크기에도 못 미치면서 계산만 두 곳으로 갈라 놓는다. 과대 추정은 "늘리지 않음"으로
+     * 떨어지므로 안전한 방향이다.
+     */
+    private static final int EVAL_OVERHEAD_TOKENS = 1_500;
 
     /**
      * Gate the multi-query expansion LLM call. Skips when disabled or when the

@@ -15,7 +15,8 @@ package com.example.ragagent.model;
  * <p>모드가 늘어날 때 분기가 흩어지지 않도록, 각 모드는 "무엇을 하는가"를 값이 아니라
  * <b>성질</b>로 노출한다({@link #allowsDirect()} / {@link #skipsVerification()} /
  * {@link #summaryOnly()} / {@link #retrievalBoost()} / {@link #allowsCuration()} /
- * {@link #usesCreativeTemperature()} / {@link #usesCreativeEval()} / {@link #allowsReuse()}).
+ * {@link #usesCreativeTemperature()} / {@link #usesCreativeEval()} / {@link #allowsReuse()} /
+ * {@link #operatorToggleable()}).
  * <b>호출부에 모드 값 비교를 두지 않는 것이 이 enum의 계약이다</b> — 그래야 다음 모드를
  * 추가할 때 고칠 곳이 이 파일 한 곳으로 모인다. 새 분기가 필요하면 값을 비교하지 말고
  * 여기에 성질을 하나 더 만들어라. 성질끼리 값이 우연히 같더라도(예: 지금 S에서
@@ -44,7 +45,7 @@ public enum ResponseMode {
      */
     S(0.15, 2_000,
       "prompt.answer.system.s", "prompt.direct.system.s", null,
-      0, false, true, false, false, false, false),
+      0, false, true, false, false, false, false, false),
 
     /**
      * 표준형 (구 M) — 문서에 충실하게, 구체적이고 자세하게. 기본값.
@@ -56,7 +57,7 @@ public enum ResponseMode {
      */
     N(0.70, 5_000,
       "prompt.answer.system.n", "prompt.direct.system.n", "prompt.answer.eval",
-      0, true, false, false, false, true, false),
+      0, true, false, false, false, true, false, false),
 
     /**
      * 응용형 — 검색된 문서를 <b>재료로</b> 예제 코드·설정 등을 생성한다 (PLAN §6.24 Phase 2).
@@ -88,7 +89,7 @@ public enum ResponseMode {
      */
     C(0.70, 5_000,
       "prompt.answer.system.c", null, "prompt.answer.eval.creative",
-      0, false, false, true, true, false, true);
+      0, false, false, true, true, false, true, true);
 
     /** 클라이언트가 아무것도/모르는 값을 보냈을 때 쓰는 모드. 옛 {@code "M"}·{@code "L"} 기록도 여기로 흡수된다. */
     public static final ResponseMode DEFAULT = N;
@@ -105,12 +106,13 @@ public enum ResponseMode {
     private final boolean creativeEval;
     private final boolean reusable;
     private final boolean generative;
+    private final boolean operatorToggleable;
 
     ResponseMode(double tokenRatio, int minChars,
                  String answerSystemPromptKey, String directSystemPromptKey, String evalPromptKey,
                  int retrievalBoost, boolean curatable, boolean summaryOnly,
                  boolean creativeTemperature, boolean creativeEval, boolean reusable,
-                 boolean generative) {
+                 boolean generative, boolean operatorToggleable) {
         this.tokenRatio = tokenRatio;
         this.minChars = minChars;
         this.answerSystemPromptKey = answerSystemPromptKey;
@@ -123,6 +125,7 @@ public enum ResponseMode {
         this.creativeEval = creativeEval;
         this.reusable = reusable;
         this.generative = generative;
+        this.operatorToggleable = operatorToggleable;
     }
 
     /** {@code app.llm.max-tokens} 중 이 모드가 쓸 비율. */
@@ -235,6 +238,29 @@ public enum ResponseMode {
 
     /** Direct 모드(검색 없음)에서 고를 수 있는가 — 검색 결과가 전제인 모드는 false. */
     public boolean allowsDirect() { return directSystemPromptKey != null; }
+
+    /**
+     * 운영자가 {@code /settings} 에서 이 모드를 <b>통째로 끌 수 있는가</b>
+     * ({@code app.llm.creative-mode-enabled}).
+     *
+     * <p>{@link #allowsDirect()} 가 "이 요청에서 고를 수 있는가"(요청 자체에서 파생되는 성질)라면
+     * 이쪽은 "이 배포에서 고를 수 있는가"다 — 판정에 설정값이 필요하므로 <b>여기서 답이 끝나지
+     * 않는다</b>. enum 은 "끌 수 있는 모드인가"까지만 알고, 실제로 꺼져 있는지는
+     * {@code SettingsService.effectiveResponseMode()} 가 합쳐서 결정한다. 그렇게 갈라 두어야
+     * 이 파일이 설정 계층을 알지 않아도 되고, 모드를 하나 더 붙일 때 고칠 곳은 여전히 여기다.
+     *
+     * <p>{@code true} 인 모드는 <b>없어도 앱이 성립해야 한다</b>: 꺼진 모드로 도착한 요청은
+     * {@link #DEFAULT} 로 강등되므로 {@code DEFAULT} 자신은 절대 {@code true} 일 수 없다
+     * (강등 대상이 자기 자신이 되어 스위치가 아무 일도 하지 않는다 —
+     * {@code ResponseModeOperatorToggleTest} 가 고정한다). 끄는 것은 "앞으로 고를 수 있는가"일
+     * 뿐이라, 이미 그 모드로 답한 과거 턴의 표기{@code [C]}·배지는 계속 그려진다.
+     *
+     * <p>C 만 {@code true} 인 이유: 문서 밖 내용을 생성하는 유일한 모드라 배포처에 따라 아예 열지
+     * 않는 편이 맞을 수 있다(모델이 지어낸 코드가 답변으로 나가는 것을 허용할지는 운영 정책이다).
+     * S/N 은 길이 축의 두 값이라 한쪽을 끄는 것은 기능을 끄는 것이 아니라 답변을 반쪽으로 만드는
+     * 일에 가깝다.
+     */
+    public boolean operatorToggleable() { return operatorToggleable; }
 
     /** 충분성/근거 검증(ANSWER의 eval 호출 + CRITIC 노드)을 통째로 건너뛰는가. */
     public boolean skipsVerification() { return evalPromptKey == null; }

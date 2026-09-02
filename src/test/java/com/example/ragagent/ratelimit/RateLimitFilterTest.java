@@ -51,12 +51,22 @@ class RateLimitFilterTest {
         assertThat(filter.policyFor(reqFor("/ui/chat"))).isEqualTo("chat");
         assertThat(filter.policyFor(reqFor("/api/v1/chat"))).isEqualTo("chat");
         assertThat(filter.policyFor(reqFor("/ui/chat/stream"))).isEqualTo("chat");
-        assertThat(filter.policyFor(reqFor("/ui/documents/sync"))).isEqualTo("sync");
-        assertThat(filter.policyFor(reqFor("/api/v1/documents/sync"))).isEqualTo("sync");
-        assertThat(filter.policyFor(reqFor("/ui/documents/upload"))).isEqualTo("upload");
-        assertThat(filter.policyFor(reqFor("/api/v1/documents"))).isEqualTo("upload");
+        assertThat(filter.policyFor(reqFor("POST", "/ui/documents/sync"))).isEqualTo("sync");
+        assertThat(filter.policyFor(reqFor("POST", "/api/v1/documents/sync"))).isEqualTo("sync");
+        assertThat(filter.policyFor(reqFor("POST", "/ui/documents/upload"))).isEqualTo("upload");
+        assertThat(filter.policyFor(reqFor("POST", "/api/v1/documents"))).isEqualTo("upload");
+        // 읽기는 같은 경로라도 업로드 버킷이 아니다
+        assertThat(filter.policyFor(reqFor("GET", "/api/v1/documents"))).isEqualTo("default");
         assertThat(filter.policyFor(reqFor("/api/v1/images/foo.png"))).isEqualTo("image");
         assertThat(filter.policyFor(reqFor("/actuator/health"))).isEqualTo("default");
+
+        // 업로드 버킷은 분당 10 이라, 업로드가 아닌 문서 화면 요청까지 여기서 토큰을 먹으면
+        // 파일 10개를 한 번에 올리는 정상 사용이 마지막 파일에서 429 로 죽는다.
+        assertThat(filter.policyFor(reqFor("GET", "/documents"))).isEqualTo("default");
+        assertThat(filter.policyFor(reqFor("GET", "/ui/documents/list"))).isEqualTo("default");
+        assertThat(filter.policyFor(reqFor("GET", "/ui/documents/doc_a/export"))).isEqualTo("default");
+        assertThat(filter.policyFor(reqFor("GET", "/ui/documents/doc_a/tags/edit"))).isEqualTo("default");
+        assertThat(filter.policyFor(reqFor("DELETE", "/ui/documents/doc_a"))).isEqualTo("default");
     }
 
     @Test
@@ -161,5 +171,9 @@ class RateLimitFilterTest {
 
     private MockHttpServletRequest reqFor(String path) {
         return new MockHttpServletRequest("GET", path);
+    }
+
+    private MockHttpServletRequest reqFor(String method, String path) {
+        return new MockHttpServletRequest(method, path);
     }
 }

@@ -439,6 +439,23 @@ const I18N = {
        [이미지: images/{id}/{file}] (DocumentIndexer.IMAGE_MARKER) 라서 marked 가 인식하지 못한다.
        /admin 청크 뷰와 지식 제안의 작성·검토 미리보기가 모두 같은 본문 형식을 렌더하므로,
        각 페이지가 따로 들고 있던 치환 로직을 여기 한 곳으로 모았다. */
+    /*
+     * 질문 버블 표기 — 앞이 검색 축(R RAG / D Direct), 뒤가 답변의 성격(S/N/C).
+     * MemoryRepository.Turn.responseModeLabel() 과 같은 규칙이며 그쪽 주석이 근거를 갖고 있다.
+     *
+     * 여기(base.html 전역)에 두는 이유: 이 규칙을 쓰는 클라이언트 렌더러가 셋이다 —
+     * 스트리밍(chat-stream.js) · 재사용 · HTMX 낙관적 버블(둘 다 chat.html). 파일이 갈라져 있어
+     * 각자 복사하면 세 버블이 서로 다른 표기를 달게 된다. 서버 쪽 한 곳과 합쳐 정의는 둘이고,
+     * 그건 이 앱이 SourceRef.staleBadge() 에서 이미 받아들인 비용이다(SSE 는 템플릿을 안 탄다).
+     *
+     * directMode 는 폼의 hidden 필드라 문자열 'true' 로 온다 — 불린과 문자열을 함께 받는다.
+     */
+    function bubbleModeLabel(responseMode, directMode) {
+        const mode = responseMode || 'N';
+        const direct = directMode === true || directMode === 'true';
+        return (direct ? 'D' : 'R') + mode;
+    }
+
     const CHUNK_IMAGE_MARKER = /\[이미지(?:\(([^)]*)\))?: ([^\]]+?)\]/g;
     /* /api/v1/images/** 가 inline(image/*)으로 내려주는 확장자. 그 외(SVG·EMF/WMF, 변환불가 마커)는
        강제 다운로드되므로 <img> 로 만들면 깨진 아이콘만 남는다 → 텍스트 placeholder 로 대체. */

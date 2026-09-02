@@ -107,6 +107,51 @@ class AdminControllerWebMvcTest {
                 .andExpect(content().string(containsString("대화 목록")));
     }
 
+    @Test
+    @DisplayName("GET /admin — 문서 레지스트리에 5/10/20/50 페이지 크기 선택과 이동 컨트롤이 렌더된다")
+    void adminPage_registryHasPageSizeControls() throws Exception {
+        when(adminService.vectorStoreView()).thenReturn(
+                new VectorStoreAdminView("chroma", true, -1, 0, 0, null, null,
+                        "/data/memory.db", null));
+        when(ragService.listDocuments(anyString())).thenReturn(List.of(
+                new com.example.ragagent.model.DocumentInfo(
+                        "doc1", "a.md", "latest", 3, "2026-08-31T10:00:00Z", "sha1",
+                        List.of(), List.of()),
+                new com.example.ragagent.model.DocumentInfo(
+                        "doc2", "b.md", "latest", 5, "2026-08-31T09:00:00Z", "sha2",
+                        List.of(), List.of())));
+
+        String html = mvc.perform(get("/admin").with(user(ADMIN)))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        // 페이징 스크립트가 행을 찾는 앵커 — 이 id 가 빠지면 예외 없이 페이징만 조용히 사라진다.
+        org.assertj.core.api.Assertions.assertThat(html).contains("id=\"registry-tbody\"");
+        org.assertj.core.api.Assertions.assertThat(html)
+                .contains("id=\"registry-page-size\"", "5개씩", "10개씩", "20개씩", "50개씩");
+        org.assertj.core.api.Assertions.assertThat(html)
+                .contains("id=\"registry-prev\"", "id=\"registry-next\"", "id=\"registry-range\"");
+        // 기본 선택은 마크업의 selected 가 아니라 initRegistryPaging() 이 정한다(저장된 값 복원).
+        org.assertj.core.api.Assertions.assertThat(html).contains("initRegistryPaging()");
+    }
+
+    @Test
+    @DisplayName("GET /admin — 문서가 없으면 페이지 크기 컨트롤도 렌더하지 않는다")
+    void adminPage_registryControlsAbsentWhenNoDocuments() throws Exception {
+        when(adminService.vectorStoreView()).thenReturn(
+                new VectorStoreAdminView("chroma", true, -1, 0, 0, null, null,
+                        "/data/memory.db", null));
+        // setUp() 의 listDocuments = 빈 목록 그대로
+
+        String html = mvc.perform(get("/admin").with(user(ADMIN)))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        org.assertj.core.api.Assertions.assertThat(html)
+                .contains("인덱싱된 문서가 없습니다")
+                .doesNotContain("id=\"registry-page-size\"");
+    }
+
     /** 다른 지연 로딩 패널과 같은 계약 — /admin 로드만으로 전 사용자 대화를 집계하지 않는다. */
     @Test
     @DisplayName("GET /admin — 대화 목록은 펼치기 전까지 조회하지 않는다")
@@ -544,7 +589,7 @@ class AdminControllerWebMvcTest {
     private static com.example.ragagent.service.RetrievalMetricsService.TurnMetrics metricTurn(
             long turnId, String mode, String userId, String threadId, String threadTitle) {
         var src = new com.example.ragagent.model.SourceRef(
-                "doc.md | 1.2", "미리보기", "c1", "d1", 3, 0.72, 0.18, "vec:2", 0.31, null);
+                "doc.md | 1.2", "미리보기", "c1", "d1", 3, 0.72, 0.18, "vec:2", 0.31, null, false);
         return new com.example.ragagent.service.RetrievalMetricsService.TurnMetrics(
                 turnId, "2026-08-27 05:22:00", "청크 분할 전략", mode, "local",
                 List.of(src), 0.72, 1, userId, threadId, threadTitle);
@@ -608,7 +653,7 @@ class AdminControllerWebMvcTest {
     void turnSources_rendersSharedFragment() throws Exception {
         when(retrievalMetricsService.sourcesForTurn(7L)).thenReturn(List.of(
                 new com.example.ragagent.model.SourceRef(
-                        "doc.md | 1.2", "미리보기", "c1", "d1", 3, 0.72, 0.18, "vec:2", 0.31, null)));
+                        "doc.md | 1.2", "미리보기", "c1", "d1", 3, 0.72, 0.18, "vec:2", 0.31, null, false)));
 
         mvc.perform(get("/admin/retrieval-metrics/turns/7/sources").with(user(ADMIN)))
                 .andExpect(status().isOk())

@@ -99,7 +99,7 @@ TEXT 1회에서 TEXT 2회(답변+평가) + 임베딩으로 늘어난다는 뜻�
 public enum RoutingMode {
     COST_FIRST,    // LOCAL → NORMAL → PREMIUM
     QUALITY_FIRST, // PREMIUM → NORMAL → LOCAL
-    PROGRESSIVE,   // COST_FIRST 먼저 → qualityScore < threshold 시 PREMIUM 재실행
+    PROGRESSIVE,   // COST_FIRST 먼저 → 검증 미충족 + 재시도 소진 시 PREMIUM 재실행
     LOCAL_ONLY     // LOCAL 전용 (미연결 시 LlmProviderExhaustedException)
 }
 ```
@@ -118,7 +118,6 @@ public enum RoutingMode {
 ```properties
 app.llm.default-routing-mode=${LLM_ROUTING_MODE:COST_FIRST}
 app.llm.circuit-breaker-minutes=4
-app.llm.progressive-threshold=0.6
 # §6.18 — sampling temperature + response cap (were dead/hardcoded before). All three temperatures
 # are hot-editable via /settings (apply on the next call, no restart): temperature is read per-call
 # by every interactive gated caller (ClassifierService/AnswerService/RerankerService) — still also
@@ -131,12 +130,27 @@ app.llm.progressive-threshold=0.6
 # by every ungated background/indexing caller (keyword extraction, MD correction, txt→md, vision
 # description/classification, thread-title generation, conversation summarization) — kept near 0
 # independently of temperature/direct-temperature since those are extraction/classification tasks,
-# not conversational ones. max-tokens stays view-only (restart to change) and applies to blocking
+# not conversational ones — hence its tight [0.0, 0.1] clamp, unlike the other temperatures.
+# creative-mode-enabled is the on/off switch for the C mode itself (default true): the temperature
+# says HOW C answers, this says WHETHER C is offered — it is the only mode that writes content the
+# documents do not contain. max-tokens is hot-editable too (§6.26 A6, 1000~32000) and applies to blocking
 # calls only — streaming chat answers are uncapped (bounded by app.sse-*-timeout-seconds).
 app.llm.temperature=${LLM_TEMPERATURE:0.0}
 app.llm.direct-temperature=${DIRECT_LLM_TEMPERATURE:0.1}
 app.llm.indexing-temperature=${LLM_INDEXING_TEMPERATURE:0.0}
 app.llm.creative-temperature=${CREATIVE_LLM_TEMPERATURE:0.7}
+app.llm.creative-mode-enabled=${CREATIVE_MODE_ENABLED:true}
+# 컨텍스트 초과로 프롬프트가 거절되면 재시도마다 덜어낼 문서 수 (§6.26-9, 기본 1, 범위 1~10).
+# 사전 예산이 이미 창에 맞춰 놓은 뒤라 여기까지 오는 초과는 대개 아슬아슬하므로 반씩이 아니라
+# 한두 개씩 줄인다. 재시도 상한 5회 × 이 값 = 도달 가능한 최대 축소폭.
+app.llm.shrink-step=${LLM_SHRINK_STEP:1}
+
+# 프로바이더별 상한/창 (둘 다 선택). max-tokens 미설정이면 전역 app.llm.max-tokens,
+# context-size 미설정이면 기동 시 서버에 물어보고(llama.cpp /props · LM Studio /api/v0/models)
+# 그래도 못 구하면 '모름'으로 둔다 — 두 서버가 노출하는 "모델 상한" 필드는 실제 로드된 크기와
+# 무관하므로 일부러 쓰지 않는다.
+# app.llm.providers[1].max-tokens=4000
+# app.llm.providers[1].context-size=8192
 app.llm.max-tokens=${LLM_MAX_TOKENS:10000}
 # 질의 경로 동시성 게이트 기본값(서버의 실제 --parallel 값에 맞춘다) + 대기 상한
 app.llm.default-provider-concurrency=${LLM_DEFAULT_PROVIDER_CONCURRENCY:3}
@@ -276,6 +290,9 @@ app.llm.providers[8].priority=5
 # ── 병렬 인덱싱 제어 ──────────────────────────────────────────────
 # 인덱싱 LLM 동시 호출 피크 ≈ FILES × LLM (파일끼리 단계가 겹칠 수 있고, 교정/구조화 세마포어는
 # 파일마다 별개로 생성됨). FILES=1이면 피크가 정확히 LLM 값으로 고정된다.
+# /settings 에서 넣을 수 있는 범위는 FILES 1~4, LLM 1~8 이다. 온도들과 달리 indexingSafe() 에는 상한
+# clamp 가 없어(<= 0 만 걸러낸다) 환경변수로 더 큰 값을 준 배포는 그대로 동작하되, 설정 화면에서
+# 그 값을 다시 넣을 수는 없다.
 app.indexing.max-concurrent-files=${INDEXING_MAX_FILES:1}
 app.indexing.max-concurrent-llm-calls=${INDEXING_MAX_LLM:3}
 # 키워드+맥락 추출 배치 크기(§10.8.2) — 청크 N개를 한 LLM 호출로 묶어 왕복을 ceil(청크수/N)로 절감.
@@ -296,13 +313,17 @@ app.indexing.keyword-batch-size=${INDEXING_KEYWORD_BATCH_SIZE:2}
 | 모든 NORMAL 차단 | PREMIUM fallback | PREMIUM 정상 | PREMIUM 재실행 | local 단독 |
 | 전체 소진 | `LlmProviderExhaustedException` | 동일 | 동일 | 동일 |
 
+> **재시도가 무엇을 다시 부르는지는 실패한 게이트에 달렸다** (§6.27). `sufficient=false` 는 RETRIEVAL 부터 다시 도므로 임베딩 + MultiQuery 확장 호출(`MICRO_TEXT`)이 재시도마다 한 번씩 더 나가고, `grounded=false` 는 ANSWER 로 바로 돌아가므로 `TEXT` 호출(답변 + 평가)만 늘고 검색 계열 호출은 늘지 않는다. 예전에는 둘 다 RETRIEVAL 로 갔다 — 즉 근거 이탈 재시도가 사실상 같은 문서 집합을 다시 받아오려고 확장 호출을 태우고 있었다. 아래 §6 표의 "게이트 적용" 열에서 재시도가 소비하는 슬롯 수를 셀 때 이 차이를 감안할 것.
+
 **PROGRESSIVE 흐름**:
 1. COST_FIRST로 Answer 실행
-2. `qualityScore` < `progressiveThreshold`(기본 0.6) AND 재검색 소진 시
+2. 검증이 `sufficient=false` 를 내고(`needsRetry`) 재시도까지 소진했을 때(`retryCount >= max-retry-count`)
 3. QUALITY_FIRST로 Answer 재실행 (동일 검색 결과 재사용)
 4. 응답 메타에 `🔝 고추론 재분석 → {providerName}` 배지 표시
 
-> 현재 `qualityScore`는 sufficient=true→1.0, false→0.0 이진값. 추후 스칼라 점수로 확장 가능.
+> **`qualityScore` 와 `app.llm.progressive-threshold` 는 존재하지 않는다** (2026-09-01 제거). 문서에만 있던 개념이고 코드에는 점수 계산이 없었다 — 프로퍼티는 `LlmRouter` 필드까지 실려 다녔지만 `getProgressiveThreshold()` 의 호출부가 하나도 없어, 0.0~1.0 어느 값으로 설정해도 동작이 같았다. 튜닝 손잡이처럼 보이는 죽은 설정이라 지웠다. 스칼라 점수를 도입한다면 그때 다시 넣되, **넣는 커밋에서 소비처까지 함께** 만들 것.
+>
+> **PROGRESSIVE 승격 조건** — 점수도 임계값도 없다. `AnswerService.checkSufficiencyAndMaybeUpgrade()` 의 조건 셋이 전부다: 라우팅 모드가 `PROGRESSIVE` 이고, 검증이 `sufficient=false` 를 냈고(`needsRetry`), 재시도를 이미 다 썼을 때(`retryCount >= max-retry-count`).
 
 ---
 
@@ -311,8 +332,36 @@ app.indexing.keyword-batch-size=${INDEXING_KEYWORD_BATCH_SIZE:2}
 - HTTP 429/402/503(과부하성 오류): `Retry-After` 헤더 파싱 → 해당 시간 차단. 헤더 없으면 **폴백 가능 여부**에 따라 분기:
   - 폴백 프로바이더가 있으면 `circuit-breaker-minutes`(기본값) 적용
   - 폴백이 전혀 없는 유일 프로바이더면 30초로 단축 차단(다중 분 단위 전면 다운 방지)
-- 그 외 4xx/5xx 및 기타 예외: 30초 차단 후 다음 프로바이더 시도.
+- 그 외 4xx/5xx 및 기타 예외(연결 거부·리셋 등): 차단 후 다음 프로바이더 시도. 여기도 **폴백 가능 여부로 갈린다**(`blockForFailure()`)
+  — 폴백이 있으면 30초, 없으면 **5초**다. 프로바이더가 하나뿐이면 차단은 우회가 아니라 **전면 중단**이고, 로컬 LLM 재시작은 보통 몇 초로
+  끝나므로 30초는 서버가 이미 올라온 뒤까지 남아 "재시작했는데도 계속 안 된다"가 된다. **차단을 없애지는 않는다** — 정말 죽어 있으면
+  모든 요청이 각자 연결 타임아웃을 무는 편이 더 나쁘다.
+- **차단하지 않는 실패가 넷 있다** — 넷 다 "프로바이더가 아픈 게 아니다"라는 같은 이유다:
+  - 클라이언트 측 타임아웃/인터럽트(`isTimeoutLike`) — 서버는 멀쩡하다. 예외를 그대로 던진다.
+  - 이미지 입력 미지원(`isVisionUnsupported`, mmproj 부재) — 그 프로바이더의 **영구적** 한계라
+    기억해 두고 이후 VISION/LIGHT_BOTH 를 건너뛴다. 텍스트 작업은 계속 그 프로바이더로 간다.
+  - **컨텍스트 윈도우 초과**(`isContextOverflow`) — **이 요청 하나의 크기** 문제라 기억할 것이
+    없다(다음 짧은 질문은 같은 프로바이더에서 통과해야 한다). 차단하지 않는 이유가 둘이다:
+    ① 결정적 오류라 30초를 기다려도 같은 요청은 똑같이 실패하고, ② 유일한 LOCAL 프로바이더를
+    막으면 그 사이 들어온 — 작아서 통과했을 — 요청까지 `All providers exhausted` 로 함께 죽는다.
+    **이 요청 자체는 여전히 실패한다**; 얻는 것은 뒤따르는 요청이 말려들지 않는 것뿐이고, 근본
+    해결은 프롬프트 크기 조정이다(`search-top-k` → `max-tokens` → 서버 `--ctx-size` 순, WARN 로그가
+    그 순서를 안내한다). 판정은 메시지 부분 일치이며 서버마다 문구가 달라
+    `CONTEXT_OVERFLOW_MARKERS` 에 모아 두었다 — LM Studio 의 `Context size has been exceeded.` 는
+    HTTP 400 **본문 안에** 실려 오고 Spring AI 가 `NonTransientAiException` 으로 감싸므로
+    `HttpStatusCodeException` catch 가 아니라 일반 catch 로 떨어진다. `too many tokens` 류는
+    일부러 제외했다 — 레이트리밋 문구(`Too many tokens per minute`)와 겹쳐, 진짜 429 를 여기로
+    잘못 읽으면 `Retry-After` 처리를 건너뛰게 된다.
+  - **서버가 요청을 끊음**(`isRequestTerminatedByServer`) — 재시작·모델 리로드 중에 진행 중이던 요청이 죽은 경우다
+    (실측: 로컬 LLM 재시작 시 `400 - {"error":"terminated"}`). `isTimeoutLike` 의 **거울상**이라고 보면 된다 — 끊은
+    주체가 클라이언트냐 서버냐만 다르고 "프로바이더는 멀쩡하다"는 결론은 같다. 차단이 특히 해로운 이유는 이 실패가
+    서버가 **내려가는 순간**에만 나오는데 차단은 **이미 올라온 뒤**까지 남기 때문이다 — 실제로 차단 1회에 그 30초 창 안의
+    재시도 3번이 전부 `All providers exhausted` 로 죽었다. 판정은 JSON 조각(`"error":"terminated"`)으로 하며 `terminated`
+    라는 단어만으로는 통과시키지 않는다(`connection terminated by peer` 는 진짜 네트워크 장애라 차단해야 한다).
 - 차단 만료는 다음 라우팅 시 자동 해제.
+- **차단으로 요청이 막히면 사용자에게 남은 초를 말한다** — 이 예외 메시지는 SSE `error` 이벤트로 채팅 버블에 그대로 찍히므로
+  `AI 서버가 일시적으로 응답하지 않아 20초 후 다시 시도할 수 있습니다.` 형태이고, 같은 값이 `Retry-After` 헤더로도 나간다.
+  **시도했다가 실패해 후보가 없어진 경우엔 시간을 붙이지 않는다** — 기다린다고 풀리는 것이 아니라 거짓말이 된다.
 - `/llm-usage` 페이지에서 차단 상태 + 남은 시간 카운트다운 확인 가능 (30초마다 자동 갱신).
 - **동시성 백프레셔(§6, 아래)는 Circuit Breaker와 별개**다 — 용량 초과는 프로바이더 장애가 아니므로 차단하지 않는다.
 - **"30초"의 근거**: `LlmRouter.SHORT_BLOCK_SECONDS`("30") 하드코딩 상수 하나를 **세 갈래**(폴백 없는 과부하 차단·기타 4xx/5xx·일반 예외)가 공유한다. 이 값은 폴백 없는 프로바이더 완화 로직을 구현하며 새로 정한 게 아니라, 그 이전부터 "기타 4xx/5xx·일반 예외" 차단에 쓰이던 기존 값을 그대로 재사용한 것 — `permit-wait-timeout-seconds`(기본 60초)와 비슷한 수준이라 재사용에 무리가 없었다. `app.llm.default-provider-concurrency`/`app.llm.permit-wait-timeout-seconds`와 달리 **프로퍼티로 외부화되어 있지 않다** — 값을 바꾸려면 코드 수정이 필요하다.
@@ -350,7 +399,7 @@ app.indexing.keyword-batch-size=${INDEXING_KEYWORD_BATCH_SIZE:2}
 | `AnswerService` (블로킹+스트리밍+PROGRESSIVE+평가) | `MarkdownCorrectionService` (MD 포맷 교정) |
 | `DirectAnswerService` | `VisionDescriptionService` |
 | `RerankerService` (opt-in) | `ImageTypeClassifier` |
-| `RetrievalService`의 MultiQuery 확장 모델(`ConcurrencyLimitingChatModel` 데코레이터 경유) | `TextToMarkdownService` (TXT 구조화) |
+| `RetrievalService`의 MultiQuery 확장 모델(`ConcurrencyLimitingChatModel` 데코레이터 경유) — 재검색 재시도에서만 다시 호출된다(근거 이탈 재시도는 RETRIEVAL 자체를 건너뛴다) | `TextToMarkdownService` (TXT 구조화) |
 | | `ConversationSummarizerService.precompute()`(fire-and-forget) |
 | | `ThreadMetaService.generateTitleAsync()`(fire-and-forget) |
 

@@ -11,6 +11,7 @@ import com.example.ragagent.security.UploadValidator;
 import com.example.ragagent.service.DocumentExportService;
 import com.example.ragagent.service.IndexingProgressService;
 import com.example.ragagent.service.RagService;
+import com.example.ragagent.service.StorageQuotaService;
 import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.TaskType;
 import org.slf4j.Logger;
@@ -20,6 +21,7 @@ import org.springframework.core.io.Resource;
 import org.springframework.http.CacheControl;
 import org.springframework.http.ContentDisposition;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Controller;
@@ -60,19 +62,23 @@ public class DocumentController {
     /** Only for the {@code includeCurated} union in {@link #listTags} — curated rows never reach
      *  {@code chunk_fts}, so their tags have to come straight from the table. */
     private final com.example.ragagent.repository.CuratedQaRepository curatedQaRepository;
+    /** §6.15 — deployment-wide storage cap, consulted before either upload path writes anything. */
+    private final StorageQuotaService storageQuotaService;
 
     public DocumentController(RagService ragService,
                                IndexingProgressService progressService,
                                AuditLogger auditLogger,
                                DocumentExportService exportService,
                                LlmRouter llmRouter,
-                               com.example.ragagent.repository.CuratedQaRepository curatedQaRepository) {
+                               com.example.ragagent.repository.CuratedQaRepository curatedQaRepository,
+                               StorageQuotaService storageQuotaService) {
         this.ragService = ragService;
         this.progressService = progressService;
         this.auditLogger = auditLogger;
         this.exportService = exportService;
         this.llmRouter = llmRouter;
         this.curatedQaRepository = curatedQaRepository;
+        this.storageQuotaService = storageQuotaService;
     }
 
     // ── Page ──────────────────────────────────────────────────────────
@@ -103,20 +109,26 @@ public class DocumentController {
         if (file.isEmpty()) {
             return ResponseEntity.badRequest().build();
         }
+        // §6.15 — before stageToTemp(), so a doomed upload never writes a byte anywhere.
+        // Propagates as 413 + ProblemDetail via GlobalExceptionHandler (RAG-UP-002).
+        storageQuotaService.checkCanAccept(file.getSize(), file.getOriginalFilename());
         String filename;
         Path tmp;
         final List<String> tagList;
         try {
             filename = UploadValidator.sanitizeFilename(file.getOriginalFilename());
             UploadValidator.checkExtension(filename);
+            // Tags are validated BEFORE staging: they don't depend on the file, and when this threw
+            // after stageToTemp() the staged copy (up to the 200MB multipart limit) leaked — the
+            // finally that deletes it lives in the block below, which this return never reaches.
+            tagList = TagUtils.parseCsv(tags);
             tmp = UploadValidator.stageToTemp(file, filename);
-            tagList = TagUtils.parseCsv(tags);   // 검증 실패 시 IllegalArgumentException → 400
         } catch (UnsupportedFileTypeException e) {
             log.warn("Rejected upload: {}", e.getMessage());
-            return ResponseEntity.unprocessableEntity().build();
+            return rejected(HttpStatus.UNPROCESSABLE_ENTITY, e.getMessage());
         } catch (IllegalArgumentException e) {
             log.warn("Rejected upload: {}", e.getMessage());
-            return ResponseEntity.badRequest().build();
+            return rejected(HttpStatus.BAD_REQUEST, e.getMessage());
         }
         final String userId = ctx.userId();
         Path dest;
@@ -127,7 +139,7 @@ public class DocumentController {
             dest = persistToDocumentsDir(tmp, filename, ragService.userDocumentsDir(userId));
         } catch (IllegalArgumentException e) {
             log.warn("Rejected upload: {}", e.getMessage());
-            return ResponseEntity.badRequest().build();
+            return rejected(HttpStatus.BAD_REQUEST, e.getMessage());
         } finally {
             try { Files.deleteIfExists(tmp); } catch (IOException ignored) {}
         }
@@ -159,6 +171,14 @@ public class DocumentController {
         progressService.registerWorker(taskId, worker);
 
         return ResponseEntity.accepted().body(Map.of("taskId", taskId));
+    }
+
+    /** Rejection body for the upload XHR — {@code message} carries the server's own reason, which
+     *  {@code documents.html} shows verbatim. Without it every cause (bad tag, unsupported
+     *  extension, magic-byte mismatch) collapsed into a generic "파일이 비어 있습니다"/"서버 오류". */
+    private static ResponseEntity<Map<String, String>> rejected(HttpStatus status, String message) {
+        return ResponseEntity.status(status)
+                .body(Map.of("message", message == null ? "" : message));
     }
 
     /** SSE stream for indexing progress. */
@@ -340,29 +360,20 @@ public class DocumentController {
 
         if (file.isEmpty()) return ResponseEntity.badRequest().build();
 
-        String filename;
-        Path staged;
-        final List<String> tagList;
-        try {
-            filename = UploadValidator.sanitizeFilename(file.getOriginalFilename());
-            UploadValidator.checkExtension(filename);
-            staged = UploadValidator.stageToTemp(file, filename);
-            tagList = TagUtils.parseCsv(tags);   // 검증 실패 시 → 400
-        } catch (UnsupportedFileTypeException e) {
-            log.warn("Rejected upload: {}", e.getMessage());
-            return ResponseEntity.unprocessableEntity().build();
-        } catch (IllegalArgumentException e) {
-            log.warn("Rejected upload: {}", e.getMessage());
-            return ResponseEntity.badRequest().build();
-        }
+        storageQuotaService.checkCanAccept(file.getSize(), file.getOriginalFilename());   // §6.15
+
+        // Same order as the HTMX path, for the same reason: tag validation can't leak a staged copy
+        // if nothing is staged yet. Both exceptions reach GlobalExceptionHandler as a ProblemDetail
+        // (422 RAG-UP-001 / 400) — a REST client gets the reason instead of an empty body.
+        String filename = UploadValidator.sanitizeFilename(file.getOriginalFilename());
+        UploadValidator.checkExtension(filename);
+        final List<String> tagList = TagUtils.parseCsv(tags);
+        Path staged = UploadValidator.stageToTemp(file, filename);
 
         String userId = ctx.userId();
         Path dest;
         try {
             dest = persistToDocumentsDir(staged, filename, ragService.userDocumentsDir(userId));
-        } catch (IllegalArgumentException e) {
-            log.warn("Rejected upload: {}", e.getMessage());
-            return ResponseEntity.badRequest().build();
         } finally {
             try { Files.deleteIfExists(staged); } catch (IOException ignored) {}
         }

@@ -1,6 +1,10 @@
 package com.example.ragagent.config;
 
 import com.example.ragagent.exception.LlmProviderExhaustedException;
+import com.example.ragagent.llm.ContextWindowProbe;
+import com.example.ragagent.llm.MaxTokensCappingChatModel;
+import com.example.ragagent.llm.ProviderContextWindows;
+import com.example.ragagent.llm.TokenEstimateCalibration;
 import com.example.ragagent.llm.*;
 import com.example.ragagent.repository.LlmUsageRepository;
 import org.slf4j.Logger;
@@ -29,7 +33,9 @@ public class LlmConfig {
     @Bean
     public LlmRouter llmRouter(AppProperties props, LlmUsageRepository usageRepo,
                                 CircuitBreaker circuitBreaker, ProviderToggle providerToggle,
-                                BackgroundLlmConcurrencyTracker backgroundConcurrencyTracker) {
+                                BackgroundLlmConcurrencyTracker backgroundConcurrencyTracker,
+                                ProviderContextWindows contextWindows,
+                                TokenEstimateCalibration tokenCalibration) {
         AppProperties.LlmConfig llmCfg = props.llmSafe();
                 int connectTimeoutSeconds = llmCfg.connectTimeoutSeconds();
                 int readTimeoutSeconds = llmCfg.readTimeoutSeconds();
@@ -37,7 +43,7 @@ public class LlmConfig {
         // G1: LOCAL providers target a local endpoint (e.g. llama-server) that needs no api-key.
         // Only cloud providers (NORMAL/PREMIUM) with a blank key are disabled.
         llmCfg.providers().stream()
-                .filter(cfg -> (cfg.apiKey() == null || cfg.apiKey().isBlank()) && !isLocalRole(cfg))
+                .filter(cfg -> (cfg.apiKey() == null || cfg.apiKey().isBlank()) && !cfg.isLocal())
                 .forEach(cfg -> log.warn(
                         "Provider [{}] disabled — api-key is empty (set the corresponding env var)", cfg.name()));
         // G2: ANY provider (LOCAL included) with no base-url configured is disabled. LOCAL providers
@@ -72,10 +78,8 @@ public class LlmConfig {
                     boolean providerStream = !Boolean.FALSE.equals(cfg.stream()); // default: true
                     // OpenAiApi.builder() appends /v1 internally, so strip it to avoid /v1/v1.
                     // resolvedUrl (with /v1) is kept for LlmProvider.baseUrl() and LoggingChatModel curl logs.
-                    String apiBase = resolvedUrl.endsWith("/v1/") ? resolvedUrl.substring(0, resolvedUrl.length() - 4)
-                                   : resolvedUrl.endsWith("/v1")  ? resolvedUrl.substring(0, resolvedUrl.length() - 3)
-                                   : resolvedUrl;
-                    if (isLocalRole(cfg) && verifyLocalModels) {
+                    String apiBase = cfg.apiBase();
+                    if (cfg.isLocal() && verifyLocalModels) {
                         verifyLocalModel(cfg.name(), apiBase, cfg.model(), connectTimeoutSeconds, readTimeoutSeconds);
                     }
                     OpenAiApi api = OpenAiApi.builder()
@@ -89,6 +93,29 @@ public class LlmConfig {
                     // ResourceAccessException which includes SocketTimeoutException). Without this,
                     // a single slow LLM call sends the same request up to 10 times.
                     // LlmRouter.executeWithTracking() handles retries at the router level instead.
+                    // 컨텍스트 창: 운영자 선언이 최우선, 없으면 서버에 물어본다(LOCAL 만 — 클라우드
+                    // 프로바이더는 이 엔드포인트가 없고, 컨텍스트가 넉넉해 문제가 되지도 않는다).
+                    // 못 구하면 기록하지 않는다 = "모른다". 0 이나 추측값을 넣지 않는 것이 중요하다.
+                    Integer declaredCtx = cfg.declaredContextSize();
+                    Integer effectiveCtx = declaredCtx;
+                    if (effectiveCtx != null) {
+                        contextWindows.record(cfg.name(), effectiveCtx,
+                                ProviderContextWindows.Source.CONFIGURED);
+                    } else if (cfg.isLocal()) {
+                        effectiveCtx = ContextWindowProbe.probe(apiBase, cfg.model(),
+                                connectTimeoutSeconds, readTimeoutSeconds).orElse(null);
+                        if (effectiveCtx != null) {
+                            contextWindows.record(cfg.name(), effectiveCtx,
+                                    ProviderContextWindows.Source.PROBED);
+                        }
+                    }
+
+                    // 프로바이더별 max-tokens (미설정/0 이하면 전역값) — concurrency 와 같은 폴백 규약.
+                    // 기동 시점의 값은 defaultOptions 에 굽고 경고를 내는 데만 쓰고, 실제 상한은 아래
+                    // 공급자가 호출마다 다시 계산한다 (§6.26 A6: app.llm.max-tokens 가 핫이고,
+                    // §6.26 A5: 창도 /settings 에서 다시 탐지될 수 있다).
+                    int effectiveMaxTokens = capMaxTokensToContext(
+                            cfg.name(), requestedMaxTokens(cfg, llmCfg.maxTokens()), effectiveCtx);
                     ChatModel rawModel = OpenAiChatModel.builder()
                             .openAiApi(api)
                             // §6.18 — was hardcoded temperature(0.0)/maxTokens(6000); now the effective
@@ -102,12 +129,20 @@ public class LlmConfig {
                             .defaultOptions(OpenAiChatOptions.builder()
                                     .model(cfg.model())
                                     .temperature(llmCfg.temperature())
-                                    .maxTokens(llmCfg.maxTokens())
+                                    .maxTokens(effectiveMaxTokens)
                                     .build())
                             .retryTemplate(RetryTemplate.builder().maxAttempts(1).build())
                             .build();
-                    ChatModel model = new LoggingChatModel(rawModel, cfg.name(),
-                            resolvedUrl, effectiveApiKey, cfg.model());
+                    // defaultOptions 만으로는 부족하다 — 블로킹 호출부가 매번 자기 maxTokens 를
+                    // 실어 보내 그 기본값을 덮어쓴다. 이 데코레이터가 프로바이더 선택 '이후'에
+                    // 상한으로 눌러 준다(MaxTokensCappingChatModel 클래스 주석 참고).
+                    // 계측 데코레이터는 프롬프트와 usage 를 동시에 보는 유일한 자리다 — 라우터는
+                    // 호출을 불투명한 클로저로 받고, 호출부는 서버가 센 토큰 수를 못 본다.
+                    ChatModel model = new LoggingChatModel(
+                            tokenCalibration.wrap(
+                                    new MaxTokensCappingChatModel(rawModel, cfg.name(),
+                                            () -> liveMaxTokens(cfg, props, contextWindows))),
+                            cfg.name(), resolvedUrl, effectiveApiKey, cfg.model());
                     return new LlmProvider(
                             cfg.name(),
                             TaskType.valueOf(typeStr),
@@ -132,8 +167,6 @@ public class LlmConfig {
             defaultMode = RoutingMode.COST_FIRST;
         }
 
-        double threshold = llmCfg.progressiveThreshold() > 0
-                ? llmCfg.progressiveThreshold() : 0.6;
 
         // Per-provider concurrency gate: falls back to defaultProviderConcurrency
         // when a provider config omits its own `concurrency`.
@@ -145,14 +178,17 @@ public class LlmConfig {
         }
 
         log.info("LLM providers registered: {}", providers.stream()
-                .map(p -> "%s(%s/%s/p%d/stream=%b/concurrency=%d) → %s [%s]".formatted(p.name(), p.role(), p.type(),
+                .map(p -> "%s(%s/%s/p%d/stream=%b/concurrency=%d/ctx=%s) → %s [%s]".formatted(p.name(), p.role(), p.type(),
                         p.priority(), p.stream(), providerConcurrency.getOrDefault(p.name(), llmCfg.defaultProviderConcurrency()),
+                        contextWindows.find(p.name())
+                                .map(w -> w.tokens() + "/" + w.source().name().toLowerCase())
+                                .orElse("?"),   // "?" = 선언도 탐지도 없음 → 입력 예산을 짤 근거가 없다
                         p.baseUrl(), p.model()))
                 .toList());
         log.info("LLM HTTP timeouts: connect={}s read={}s, permit-wait={}s", connectTimeoutSeconds, readTimeoutSeconds,
                 llmCfg.permitWaitTimeoutSeconds());
 
-        return new LlmRouter(providers, usageRepo, circuitBreaker, defaultMode, threshold, readTimeoutSeconds,
+        return new LlmRouter(providers, usageRepo, circuitBreaker, defaultMode, readTimeoutSeconds,
                 providerConcurrency, llmCfg.defaultProviderConcurrency(), llmCfg.permitWaitTimeoutSeconds(),
                 providerToggle, backgroundConcurrencyTracker);
     }
@@ -175,9 +211,58 @@ public class LlmConfig {
                 "No LLM provider available. Configure a LOCAL provider (LOCAL_LLM_URL) or set OPENAI_API_KEY / GEMINI_API_KEY.");
     }
 
-    /** G1: a provider whose role is LOCAL targets a local endpoint (e.g. llama-server) that needs no api-key. */
-    private static boolean isLocalRole(AppProperties.ProviderConfig cfg) {
-        return cfg.role() != null && "LOCAL".equalsIgnoreCase(cfg.role().trim());
+    /**
+     * 출력 예약이 컨텍스트 창을 통째로 먹어버리는 설정을 기동 시점에 잡아낸다.
+     *
+     * <p>OpenAI 호환 서버에서 {@code max_tokens} 는 <b>예약</b>이다 — 프롬프트가 아무리 짧아도
+     * {@code 프롬프트 + max_tokens} 가 창을 넘으면 거절당한다. 그래서 {@code max-tokens} 가 창보다
+     * 크거나 같으면 <b>어떤 요청도 성공할 수 없다</b>: 입력에 남는 자리가 0 이하다. 설정만 보고는
+     * 아무도 눈치채지 못하고, 증상은 매 질문마다 "Context size has been exceeded" 로만 나타난다.
+     *
+     * <p>그래서 창을 아는 경우에 한해 <b>창의 절반</b>으로 눌러 준다. 절반인 이유는 그 이상을 출력에
+     * 예약하면 남는 입력 자리가 출력보다 작아지는데, 이 앱은 RAG 라 입력(검색 문서 + 대화 이력)이
+     * 출력보다 큰 것이 정상이기 때문이다. 임의의 안전 마진이 아니라 "입력이 출력보다 작아지면 안
+     * 된다"는 경계값이다.
+     *
+     * <p>조용히 고치지 않고 WARN 을 남긴다 — 운영자가 적어 둔 숫자와 실제로 쓰이는 숫자가 다른
+     * 상태이므로, {@code SettingsService.warnOnDivergingOverrides()} 와 같은 이유로 알려야 한다.
+     * 창을 모르면({@code null}) 아무것도 하지 않는다: 모르는 값으로 남의 설정을 깎을 수는 없다.
+     */
+    // package-private static: 순수 계산이라 빈을 띄우지 않고 검사할 수 있어야 한다
+    // (SettingsService.formatModeBudgetForTest 와 같은 선례).
+    /**
+     * 이 프로바이더가 요청할 출력 상한 — 자기 값이 있으면 그것, 없으면 전역값
+     * ({@code concurrency} 와 같은 폴백 규약).
+     */
+    private static int requestedMaxTokens(AppProperties.ProviderConfig cfg, int globalMaxTokens) {
+        return (cfg.maxTokens() != null && cfg.maxTokens() > 0) ? cfg.maxTokens() : globalMaxTokens;
+    }
+
+    /**
+     * 이 프로바이더의 <b>지금</b> 유효한 출력 상한 — {@code MaxTokensCappingChatModel} 이 호출마다
+     * 부른다.
+     *
+     * <p>세 입력이 모두 런타임에 바뀔 수 있다: 전역 {@code app.llm.max-tokens} 는 핫 편집 대상이고
+     * (§6.26 A6), 컨텍스트 창은 {@code /settings} 의 재탐지로 갱신되며(§6.26 A5), 둘의 조합인
+     * {@link ProviderContextWindows#cappedMaxTokens} 결과도 따라 움직인다. 그래서 값이 아니라
+     * 계산을 넘긴다 — 프로바이더 자신의 {@code max-tokens} 선언만이 구조적 설정이라 재기동 대상이다.
+     */
+    private static int liveMaxTokens(AppProperties.ProviderConfig cfg, AppProperties props,
+                                     ProviderContextWindows contextWindows) {
+        int requested = requestedMaxTokens(cfg, props.llmSafe().maxTokens());
+        int window = contextWindows.tokensOrZero(cfg.name());
+        return ProviderContextWindows.cappedMaxTokens(requested, window > 0 ? window : null);
+    }
+
+    static int capMaxTokensToContext(String providerName, int requested, Integer contextTokens) {
+        int capped = ProviderContextWindows.cappedMaxTokens(requested, contextTokens);
+        if (capped == requested) return requested;
+        log.warn("""
+                [LLM CONFIG] provider=[{}] max-tokens({}) >= context-size({}) — 입력에 남는 자리가 없어 \
+                모든 요청이 컨텍스트 초과로 실패합니다. {} 로 낮춰 실행합니다.
+                  -> app.llm.providers[N].max-tokens 를 창보다 충분히 작게 두거나, 서버의 컨텍스트를 키우세요.""",
+                providerName, requested, contextTokens, capped);
+        return capped;
     }
 
     /**

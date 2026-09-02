@@ -105,18 +105,18 @@ public class TrackingEmbeddingModel implements EmbeddingModel {
         }
         if (fallbackWarned.compareAndSet(false, true)) {
             log.warn("[embedding usage] provider={} did not report token usage; approximating "
-                    + "input tokens as chars/4 for llm_usage tracking (this warning logs once)",
-                    providerName);
+                    + "input tokens with TokenEstimator (CJK ~1/char, else chars/4) for llm_usage "
+                    + "tracking (this warning logs once)", providerName);
         }
         return approximateTokens(request.getInstructions());
     }
 
+    /**
+     * {@link TokenEstimator} 에 위임한다 — 채팅 스트리밍 폴백과 <b>같은</b> 가정을 쓴다.
+     * 예전에는 여기와 {@code LlmRouter} 가 각자 {@code chars/4} 를 복제하고 있었고, 그 값은 영어
+     * 기준이라 한국어 문서를 임베딩할 때 입력 토큰이 실제보다 훨씬 적게 기록됐다.
+     */
     private static long approximateTokens(List<String> texts) {
-        if (texts == null || texts.isEmpty()) return 0;
-        long chars = 0;
-        for (String text : texts) {
-            if (text != null) chars += text.length();
-        }
-        return chars / 4;
+        return TokenEstimator.estimate(texts);
     }
 }

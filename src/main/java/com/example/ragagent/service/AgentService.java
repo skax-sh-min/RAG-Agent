@@ -106,7 +106,8 @@ public class AgentService {
             memoryService.saveRetrievalMetrics(turnId, result.sources());
             memoryService.saveVerification(turnId, new VerificationSnapshot(
                     result.grounded(), result.responseMode().generative(),
-                    result.evalReason(), result.envNote(), result.inventedSymbols()));
+                    result.evalReason(), result.envNote(), result.inventedSymbols(),
+                    result.budgetNote()));
             if (questionReuseService != null) {
                 questionReuseService.recordTurnSources(turnId, userId, request.threadId(),
                         result.retrievedDocs(), result.sources());
@@ -129,6 +130,7 @@ public class AgentService {
                 result.grounded(),
                 result.evalReason(),
                 result.envNote(),
+                result.budgetNote(),
                 result.responseMode().generative(),
                 result.inventedSymbols()
         );

@@ -1,5 +1,6 @@
 package com.example.ragagent.service;
 
+import com.example.ragagent.llm.ProviderContextWindows;
 import com.example.ragagent.agent.AgentState;
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.llm.LlmProvider;
@@ -69,16 +70,23 @@ class RetrievalServiceEscalationTest {
                 .thenReturn(List.of(List.of(new Document("d", Map.of()))));
 
         return new RetrievalService(stubLlmRouter(), mock(LlmUsageRepository.class), ragService, props,
-                Optional.empty(), Optional.empty(), stubMessageSource(), new ChatImageAnalysisSkipRegistry());
+                Optional.empty(), Optional.empty(), stubMessageSource(), new ChatImageAnalysisSkipRegistry(), new ProviderContextWindows());
     }
 
-    private static AgentState stateWithRetry(int retryCount) {
+    /**
+     * escalation 의 입력은 {@code retryCount} 가 아니라 <b>{@code retrievalRetries}</b> 다 —
+     * grounded 실패 재시도는 검색을 건너뛰고 ANSWER 로 바로 가므로, 검색을 하지도 않은 만큼
+     * escalation 이 앞서 나가면 안 된다(AgentGraph).
+     */
+    private static AgentState stateWithRetry(int retrievalRetries) {
         AgentState base = AgentState.of("질문", "latest", "t1", "", RoutingMode.COST_FIRST);
-        return base.toBuilder().retryCount(retryCount).build();
+        AgentState.Builder b = base.toBuilder().retryCount(retrievalRetries);
+        for (int i = 0; i < retrievalRetries; i++) b.incrementRetrievalRetry();
+        return b.build();
     }
 
     @Test
-    @DisplayName("retryCount=0 → defaultTopK(5) 그대로 사용")
+    @DisplayName("첫 시도 → defaultTopK(5) 그대로 사용")
     void firstAttempt_usesDefaultTopK() {
         RetrievalService svc = serviceWithEscalate(true);
         svc.execute(stateWithRetry(0));
@@ -86,26 +94,26 @@ class RetrievalServiceEscalationTest {
     }
 
     @Test
-    @DisplayName("retryCount=1 → topK×2 = 10")
-    void firstRetry_doublesTopK() {
+    @DisplayName("검색 재시도 1회 → topK×1.5 = 8 (예전 ×2 에서 낮췄다 — 교체가 자리를 비워 주므로)")
+    void firstRetry_growsByHalf() {
         RetrievalService svc = serviceWithEscalate(true);
         svc.execute(stateWithRetry(1));
-        verify(ragService).searchBatch(anyString(), any(), anyString(), eq(DEFAULT_TOP_K * 2));
+        verify(ragService).searchBatch(anyString(), any(), anyString(), eq(8));   // round(5 × 1.5)
     }
 
     @Test
-    @DisplayName("retryCount=2 → topK×3 = 15 (상한)")
-    void secondRetry_capsAtTriple() {
+    @DisplayName("검색 재시도 2회 → topK×2 = 10")
+    void secondRetry_growsAgain() {
         RetrievalService svc = serviceWithEscalate(true);
         svc.execute(stateWithRetry(2));
-        verify(ragService).searchBatch(anyString(), any(), anyString(), eq(DEFAULT_TOP_K * 3));
+        verify(ragService).searchBatch(anyString(), any(), anyString(), eq(10));
     }
 
     @Test
-    @DisplayName("retryCount=3 → 상한(×3)에서 고정")
+    @DisplayName("후보 풀 상한은 여전히 ×3 — 재시도가 아무리 늘어도 넘지 않는다")
     void highRetry_staysAtCap() {
         RetrievalService svc = serviceWithEscalate(true);
-        svc.execute(stateWithRetry(3));
+        svc.execute(stateWithRetry(9));
         verify(ragService).searchBatch(anyString(), any(), anyString(), eq(DEFAULT_TOP_K * 3));
     }
 
@@ -141,28 +149,41 @@ class RetrievalServiceEscalationTest {
                 .thenReturn(List.of(bigList));
 
         return new RetrievalService(stubLlmRouter(), mock(LlmUsageRepository.class), rs, props,
-                Optional.empty(), Optional.empty(), stubMessageSource(), new ChatImageAnalysisSkipRegistry());
+                Optional.empty(), Optional.empty(), stubMessageSource(), new ChatImageAnalysisSkipRegistry(), new ProviderContextWindows());
     }
 
     @Test
-    @DisplayName("retryCount=0 → 결과 문서 수는 defaultTopK(5) 그대로")
+    @DisplayName("첫 시도 → 결과 문서 수는 defaultTopK(5) 그대로")
     void firstAttempt_outputIsDefaultTopK() {
         AgentState result = serviceReturningManyDocs(true).execute(stateWithRetry(0));
         assertThat(result.retrievedDocs()).hasSize(DEFAULT_TOP_K);
     }
 
     @Test
-    @DisplayName("retryCount=1 → 결과 문서 수 topK+1 = 6")
+    @DisplayName("검색 재시도 1회 → 결과 문서 수 topK+1 = 6 (창을 모르면 예전대로 늘린다)")
     void firstRetry_outputAddsOneDoc() {
         AgentState result = serviceReturningManyDocs(true).execute(stateWithRetry(1));
         assertThat(result.retrievedDocs()).hasSize(DEFAULT_TOP_K + 1);
     }
 
     @Test
-    @DisplayName("retryCount=2 → 결과 문서 수 topK+2 = 7 (후보 풀처럼 배수로 커지지 않는다)")
+    @DisplayName("검색 재시도 2회 → 결과 문서 수 topK+2 = 7 (후보 풀처럼 배수로 커지지 않는다)")
     void secondRetry_outputAddsTwoDocs() {
         AgentState result = serviceReturningManyDocs(true).execute(stateWithRetry(2));
         assertThat(result.retrievedDocs()).hasSize(DEFAULT_TOP_K + 2);
+    }
+
+    @Test
+    @DisplayName("grounded 재시도(검색을 건너뛴 경우)는 escalation 을 앞당기지 않는다")
+    void retryWithoutRetrieval_doesNotEscalate() {
+        AgentState base = AgentState.of("질문", "latest", "t1", "", RoutingMode.COST_FIRST);
+        // retryCount 는 2인데 검색은 한 번도 다시 하지 않은 상태 — CRITIC 재시도만 두 번 돈 경우
+        AgentState state = base.toBuilder().retryCount(2).build();
+
+        RetrievalService svc = serviceWithEscalate(true);
+        svc.execute(state);
+
+        verify(ragService).searchBatch(anyString(), any(), anyString(), eq(DEFAULT_TOP_K));
     }
 
     @Test

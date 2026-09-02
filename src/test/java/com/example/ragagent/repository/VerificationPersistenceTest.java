@@ -42,7 +42,7 @@ class VerificationPersistenceTest {
         AppProperties props = mock(AppProperties.class);
         when(props.memorySafe()).thenReturn(new AppProperties.MemoryConfig(50));
         when(props.llmSafe()).thenReturn(new AppProperties.LlmConfig(
-                List.of(), 2, 10, 180, "COST_FIRST", 0.6, 3, 20, 0.0, 0.1, 0.0, 0.7, 6000, false));
+                List.of(), 2, 10, 180, "COST_FIRST", 3, 20, 0.0, 0.1, 0.0, 0.7, true, 6000, 1, false));
         repo = new SqliteMemoryRepository(jdbc, props);
         repo.init();
         service = new MemoryService(repo, props);
@@ -62,7 +62,7 @@ class VerificationPersistenceTest {
     void roundTrip() {
         long turnId = newTurn();
         service.saveVerification(turnId, new VerificationSnapshot(
-                true, true, null, "포트는 환경마다 다릅니다", List.of("parseDateEx", "--strict-mode")));
+                true, true, null, "포트는 환경마다 다릅니다", List.of("parseDateEx", "--strict-mode"), null));
 
         VerificationSnapshot back = service.getVerifications(List.of(turnId)).get(turnId);
 
@@ -80,7 +80,7 @@ class VerificationPersistenceTest {
     @DisplayName("담을 것이 없는 턴은 저장하지 않아 조회 결과에서 아예 빠진다 (= 배지 없음)")
     void emptySnapshotIsNotStored() {
         long turnId = newTurn();
-        service.saveVerification(turnId, new VerificationSnapshot(null, false, null, null, List.of()));
+        service.saveVerification(turnId, new VerificationSnapshot(null, false, null, null, List.of(), null));
 
         // 이 컬럼이 생기기 전의 모든 턴과 meta/Direct·S 턴이 이 상태다 — 예전 동작 그대로.
         assertThat(service.getVerifications(List.of(turnId))).isEmpty();
@@ -91,7 +91,7 @@ class VerificationPersistenceTest {
     void turnsWithoutVerificationAreAbsent() {
         long a = newTurn();
         long b = newTurn();
-        service.saveVerification(a, new VerificationSnapshot(false, false, "근거 부족", null, List.of()));
+        service.saveVerification(a, new VerificationSnapshot(false, false, "근거 부족", null, List.of(), null));
 
         Map<Long, VerificationSnapshot> found = service.getVerifications(List.of(a, b));
 
@@ -120,7 +120,7 @@ class VerificationPersistenceTest {
     void brokenJsonSkipsOnlyThatTurn() {
         long good = newTurn();
         long broken = newTurn();
-        service.saveVerification(good, new VerificationSnapshot(true, false, null, null, List.of()));
+        service.saveVerification(good, new VerificationSnapshot(true, false, null, null, List.of(), null));
         repo.saveVerification(broken, "{not json");
 
         Map<Long, VerificationSnapshot> found = service.getVerifications(List.of(good, broken));

@@ -11,7 +11,7 @@ class SourceRefStaleBadgeTest {
 
     private static SourceRef ref(Double answerShare, String stale) {
         return new SourceRef("doc.pptx | p.160", "preview", "c1", "d1", "160",
-                0.56, null, null, answerShare, stale);
+                0.56, null, null, answerShare, stale, false);
     }
 
     @Test

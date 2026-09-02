@@ -55,6 +55,28 @@ public class SettingsController {
     @PostMapping("/admin/settings/provider/toggle")
     public String toggleProvider(@RequestParam String name, @RequestParam boolean enabled, Model model) {
         model.addAttribute("providers", settingsService.setProviderEnabled(name, enabled));
+        model.addAttribute("probeResult", null);
+        return "fragments/settings-providers :: providers";
+    }
+
+    /**
+     * Ask every registered LOCAL provider for its context window again (§6.26 A5).
+     *
+     * <p>The startup probe is a snapshot: reload the model at a different size, or let LM Studio
+     * load it JIT after boot, and the app keeps answering from a stale — or absent — number, which
+     * silently mis-sizes every input budget from then on. This is the operator-triggered refresh.
+     * It is a button rather than a timer on purpose (see
+     * {@link SettingsService#reprobeContextWindows()}): a budget that moves on its own makes the
+     * same question return a different amount of evidence depending on when it was asked.
+     *
+     * <p>Returns the whole providers table so the 컨텍스트 column refreshes in place, with the
+     * per-provider outcome rendered above it — including the restart notice, since a re-probe can
+     * only fix the input budget and never the output reservation baked into the provider bean.
+     */
+    @PostMapping("/admin/settings/context-window/reprobe")
+    public String reprobeContextWindows(Model model) {
+        model.addAttribute("probeResult", settingsService.reprobeContextWindows());
+        model.addAttribute("providers", settingsService.providerRows());
         return "fragments/settings-providers :: providers";
     }
 }

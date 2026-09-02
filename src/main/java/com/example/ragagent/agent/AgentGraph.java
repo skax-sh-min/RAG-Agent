@@ -13,10 +13,15 @@ import org.springframework.stereotype.Component;
  *   START → CLASSIFIER
  *     ├─ (meta)  → DIRECT_ANSWER → FINALIZE → END
  *     └─ (other) → RETRIEVAL → ANSWER
- *                                ├─ (needs_retry) → RETRIEVAL (loop)
- *                                └─ (ok)          → CRITIC
- *                                                    ├─ (needs_retry) → RETRIEVAL
- *                                                    └─ (ok)          → FINALIZE → END
+ *                                ├─ (sufficient=false) → RETRIEVAL (재검색: escalation + 청크 교체)
+ *                                └─ (ok)               → CRITIC
+ *                                                        ├─ (grounded=false) → ANSWER (재검색 없이 재생성)
+ *                                                        └─ (ok)             → FINALIZE → END
+ *
+ * 두 재시도 게이트는 <b>다른 실패</b>라 대응이 다르다. {@code sufficient=false} 는 "질문에 답하지
+ * 못했다"이므로 재료를 바꿔야 하고, {@code grounded=false} 는 "문서 밖으로 나갔다"이므로 재료는
+ * 그대로 두고 답변만 다시 써야 한다 — 후자에서 재검색은 임베딩·확장 호출을 쓰고 사실상 같은
+ * 집합을 받아오는 낭비다. 예전에는 둘 다 RETRIEVAL 로 갔다.
  */
 @Component
 public class AgentGraph {
@@ -115,8 +120,11 @@ public class AgentGraph {
                     state = (listener == GraphListener.NOOP)
                             ? answerService.execute(state)
                             : answerService.executeStreaming(state, listener);
+                    // sufficient=false — "질문에 답하지 못했다". 근거가 모자라거나 잘못 검색된
+                    // 것이므로 검색을 다시 한다. retrievalRetries 가 함께 오르고, 그 값이
+                    // RetrievalService 의 escalation·교체 입력이 된다.
                     if (state.needsRetry() && state.retryCount() < maxRetryCount) {
-                        state = state.toBuilder().incrementRetry().build();
+                        state = state.toBuilder().incrementRetry().incrementRetrievalRetry().build();
                         log.info("[AgentGraph] retry #{} reason=ANSWER_INSUFFICIENT thread={} detail={}",
                                 state.retryCount(), state.threadId(), state.evalReason());
                         listener.onRetry("answer", state.retryCount(), state.evalReason());
@@ -132,12 +140,20 @@ public class AgentGraph {
                 case CRITIC -> {
                     listener.onNodeEnter("critic");
                     state = criticService.execute(state);
+                    // grounded=false — "문서에 없는 것을 말했다". 근거는 이미 손에 있고 답변이
+                    // 그 밖으로 나간 것이므로 RETRIEVAL 을 다시 도는 것은 임베딩 + MultiQuery 확장
+                    // 호출을 쓰고 사실상 같은 집합(+1)을 받아오는 낭비다. 답변만 다시 쓴다.
+                    //
+                    // 이 분기가 성립하려면 AnswerService 의 [직전 시도 메모] 가 반드시 있어야
+                    // 한다 — 프롬프트가 그대로면 온도 0에서 같은 답변이 그대로 다시 나온다.
+                    // retrievalRetries 는 올리지 않는다: 검색을 다시 하지 않았으므로 escalation 이
+                    // 한 칸 앞서 나가면 안 된다.
                     if (state.needsRetry() && state.retryCount() < maxRetryCount) {
                         state = state.toBuilder().incrementRetry().build();
-                        log.info("[AgentGraph] retry #{} reason=CRITIC_UNGROUNDED thread={} detail={}",
+                        log.info("[AgentGraph] retry #{} reason=CRITIC_UNGROUNDED thread={} detail={} (재검색 없이 답변만 재생성)",
                                 state.retryCount(), state.threadId(), state.evalReason());
                         listener.onRetry("critic", state.retryCount(), state.evalReason());
-                        yield Node.RETRIEVAL;
+                        yield Node.ANSWER;
                     }
                     yield Node.FINALIZE;
                 }

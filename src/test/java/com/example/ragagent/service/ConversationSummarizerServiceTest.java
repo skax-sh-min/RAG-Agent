@@ -73,12 +73,12 @@ class ConversationSummarizerServiceTest {
         AppProperties props = mock(AppProperties.class);
         when(props.summarySafe()).thenReturn(new AppProperties.SummaryConfig(3, 2_000, 2, 15));
         when(props.llmSafe()).thenReturn(new AppProperties.LlmConfig(
-                List.of(), 2, 10, 180, "COST_FIRST", 0.6, 3, 20, 0.0, 0.1, 0.0, 0.7, 6000, true));
+                List.of(), 2, 10, 180, "COST_FIRST", 3, 20, 0.0, 0.1, 0.0, 0.7, true, 6000, 1, true));
         service = new ConversationSummarizerService(memoryService, llmRouter, messageSource, props);
     }
 
     private static MemoryRepository.Turn turn(long id, String q, String a, String feedback) {
-        return new MemoryRepository.Turn(id, q, a, null, null, 0, 0, 0, "local", 1, feedback, "M", null);
+        return new MemoryRepository.Turn(id, q, a, null, null, 0, 0, 0, "local", 1, feedback, "M", null, false);
     }
 
     /**

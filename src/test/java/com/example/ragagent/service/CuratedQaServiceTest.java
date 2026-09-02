@@ -77,7 +77,7 @@ class CuratedQaServiceTest {
     }
 
     private static MemoryRepository.Turn turn(String question, String answer, String responseMode) {
-        return new MemoryRepository.Turn(TURN_ID, question, answer, null, null, 0, 0, 0, "local", 1, "LIKE", responseMode, null);
+        return new MemoryRepository.Turn(TURN_ID, question, answer, null, null, 0, 0, 0, "local", 1, "LIKE", responseMode, null, false);
     }
 
     private static CuratedQaRepository.CuratedQa curatedQa(long id, String status, String question, String answer) {

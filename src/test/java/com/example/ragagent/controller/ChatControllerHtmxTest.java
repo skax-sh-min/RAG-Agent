@@ -83,6 +83,18 @@ class ChatControllerHtmxTest {
     @MockitoBean ThreadContextResolver threadContextResolver;
     @MockitoBean ChatImageAnalysisSkipRegistry imageSkipRegistry;
 
+    /**
+     * 모킹된 {@code SettingsService} 는 boolean 에 false, 객체에 null 을 준다 — 그대로 두면 C 모드가
+     * 꺼진 배포처럼 굴고(버튼 미렌더) 응답 모드 정규화가 null 을 {@code .name()} 해 터진다. 실제 빈의
+     * 기본값(C 열림 · 요청한 모드가 곧 유효 모드)을 되돌려 준다. 끄는 쪽 동작은 개별 테스트가
+     * 이 스텁을 덮어써서 확인한다.
+     */
+    @org.junit.jupiter.api.BeforeEach
+    void openCreativeModeByDefault() {
+        when(settingsService.creativeModeEnabled()).thenReturn(true);
+        when(settingsService.effectiveResponseMode(any())).thenAnswer(inv -> inv.getArgument(0));
+    }
+
     private ChatResponse sampleResponse() {
         return new ChatResponse(
                 "## 요약\n핵심 답변",
@@ -91,7 +103,7 @@ class ChatControllerHtmxTest {
                 List.of(),
                 120, 80, 2, 0.42,
                 null, "gemini-flash", 1L,
-                true, null, null,    // 검증 통과 → 사유 없음, 환경 의존 값 안내도 없음
+                true, null, null, null,    // 검증 통과 → 사유·환경 안내·축소 안내 모두 없음
                 false, java.util.List.of()); // 생성 모드 아님 → 발명된 심볼도 없음
     }
 
@@ -123,6 +135,59 @@ class ChatControllerHtmxTest {
     }
 
     @Test
+    @DisplayName("GET / — 운영자가 C를 끄면 버튼이 아예 렌더되지 않고 S/N은 그대로 남는다")
+    void chatPage_omitsCreativeButton_whenOperatorDisabledIt() throws Exception {
+        when(settingsService.creativeModeEnabled()).thenReturn(false);
+        AppUserDetails principal = new AppUserDetails("id-1", "user@local", "", "User", "USER", true, false);
+
+        String html = mvc.perform(get("/").with(user(principal)))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        assertThat(html).doesNotContain("id=\"response-mode-c\"");
+        assertThat(html).contains("id=\"response-mode-s\"", "id=\"response-mode-n\"");
+        // 버튼이 없으면 화이트리스트에서도 빠져야 한다 — 남아 있으면 localStorage 의 'C' 가 되살아나
+        // 어느 라디오도 체크되지 않은 입력창이 만들어진다.
+        assertThat(html).contains("CREATIVE_MODE_ENABLED = false");
+    }
+
+    @Test
+    @DisplayName("POST /ui/chat — 운영자가 끈 모드는 진입점에서 강등된다 (저장되는 값까지 N)")
+    void postChat_downgradesOperatorDisabledMode() throws Exception {
+        when(agentService.chat(any(), any())).thenReturn(sampleResponse());
+        when(settingsService.effectiveResponseMode(com.example.ragagent.model.ResponseMode.C))
+                .thenReturn(com.example.ragagent.model.ResponseMode.N);
+
+        mvc.perform(post("/ui/chat")
+                        .param("question", "테스트 질문")
+                        .param("threadId", "t1")
+                        .param("version", "latest")
+                        .param("responseMode", "C")
+                        .with(csrf()))
+                .andExpect(status().isOk());
+
+        verify(agentService).chat(any(),
+                argThat(req -> req.responseMode() == com.example.ragagent.model.ResponseMode.N));
+    }
+
+    @Test
+    @DisplayName("POST /api/v1/chat — 화면을 거치지 않는 REST 요청도 같은 스위치를 지난다")
+    void chatApi_downgradesOperatorDisabledMode() throws Exception {
+        when(agentService.chat(any(), any())).thenReturn(sampleResponse());
+        when(settingsService.effectiveResponseMode(com.example.ragagent.model.ResponseMode.C))
+                .thenReturn(com.example.ragagent.model.ResponseMode.N);
+
+        mvc.perform(post("/api/v1/chat")
+                        .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                        .content("{\"question\":\"테스트\",\"thread_id\":\"t1\",\"response_mode\":\"C\"}")
+                        .with(csrf()))
+                .andExpect(status().isOk());
+
+        verify(agentService).chat(any(),
+                argThat(req -> req.responseMode() == com.example.ragagent.model.ResponseMode.N));
+    }
+
+    @Test
     @DisplayName("POST /ui/chat — 정상 응답 시 message-assistant fragment 반환")
     void postChat_returnsAssistantFragment() throws Exception {
         when(agentService.chat(any(), any())).thenReturn(sampleResponse());
@@ -147,6 +212,46 @@ class ChatControllerHtmxTest {
                         .with(csrf()))
                 .andExpect(status().isOk())
                 .andExpect(view().name("fragments/message-error :: message"));
+    }
+
+    @Test
+    @DisplayName("POST /ui/chat — 컨텍스트 초과는 '프로바이더 없음'이 아니라 프롬프트 크기 문제로 안내한다")
+    void postChat_contextOverflowGetsItsOwnMessage() throws Exception {
+        when(agentService.chat(any(), any())).thenThrow(
+                new com.example.ragagent.exception.LlmContextOverflowException(
+                        "lm", new RuntimeException("Context size has been exceeded.")));
+
+        String html = mvc.perform(post("/ui/chat")
+                        .param("question", "긴 질문")
+                        .param("threadId", "t1")
+                        .param("version", "latest")
+                        .with(csrf()))
+                .andExpect(status().isOk())
+                .andExpect(view().name("fragments/message-error :: message"))
+                .andReturn().getResponse().getContentAsString();
+
+        // 하위 타입 catch 가 소진 catch 보다 앞에 있어야만 이 문구가 나온다 — 순서가 바뀌면
+        // 조용히 예전 문구("모든 AI 프로바이더를 사용할 수 없는 상태")로 되돌아간다.
+        assertThat(html).contains("search-top-k");
+        assertThat(html).doesNotContain("프로바이더를 사용할 수 없는");
+    }
+
+    @Test
+    @DisplayName("POST /ui/chat — 진짜 소진은 종전 문구 그대로다 (구분이 한쪽만 바꿨는지 확인)")
+    void postChat_plainExhaustedKeepsItsOwnMessage() throws Exception {
+        when(agentService.chat(any(), any())).thenThrow(
+                new com.example.ragagent.exception.LlmProviderExhaustedException("all down"));
+
+        String html = mvc.perform(post("/ui/chat")
+                        .param("question", "질문")
+                        .param("threadId", "t1")
+                        .param("version", "latest")
+                        .with(csrf()))
+                .andExpect(status().isOk())
+                .andExpect(view().name("fragments/message-error :: message"))
+                .andReturn().getResponse().getContentAsString();
+
+        assertThat(html).doesNotContain("search-top-k");
     }
 
     @Test
@@ -281,8 +386,8 @@ class ChatControllerHtmxTest {
         when(threadMetaService.findById(any(), eq("thread-01"))).thenReturn(Optional.of(
                 new ThreadMeta("thread-01", "user", "제목", "latest", "now", "now", "COST_FIRST", "")));
         List<MemoryRepository.Turn> turns = List.of(
-                new MemoryRepository.Turn(1L, "q1", "a1", null, null, 0, 0, 0, "local", 1, "LIKE", "M", null),
-                new MemoryRepository.Turn(2L, "q2", "a2", null, null, 0, 0, 0, "local", 1, null, "M", null));
+                new MemoryRepository.Turn(1L, "q1", "a1", null, null, 0, 0, 0, "local", 1, "LIKE", "M", null, false),
+                new MemoryRepository.Turn(2L, "q2", "a2", null, null, 0, 0, 0, "local", 1, null, "M", null, false));
         when(memoryService.getTurns(any(), eq("thread-01"))).thenReturn(turns);
         when(curatedQaService.findFailedTurnIds(List.of(1L, 2L))).thenReturn(Set.of(1L));
 
@@ -329,8 +434,44 @@ class ChatControllerHtmxTest {
                 List.of(), List.of(),
                 120, 80, 2, 0.42,
                 null, "local", 1L,
-                true, null, "포트는 환경마다 다릅니다",
+                true, null, "포트는 환경마다 다릅니다", null,
                 true, List.of("parseDateEx"));
+    }
+
+    @Test
+    @DisplayName("축소 안내는 새로고침 전후가 같다 — 출처 목록은 줄지 않으므로 이 줄이 유일한 단서다")
+    void budgetNote_survivesPageReload() throws Exception {
+        AppUserDetails principal = new AppUserDetails("id-1", "user@local", "", "User", "USER", true, false);
+        String note = "컨텍스트 한도로 검색된 문서 10개 중 6개만 사용했습니다.";
+
+        // ① 방금 보낸 메시지 (HTMX 폴백 프래그먼트)
+        when(agentService.chat(any(), any())).thenReturn(new ChatResponse(
+                "## 요약\n답변", "manual", List.of(), List.of(),
+                120, 80, 2, 0.42, null, "local", 1L,
+                true, null, null, note,
+                false, List.of()));
+        String justSent = mvc.perform(post("/ui/chat")
+                        .param("question", "질문")
+                        .param("threadId", "thread-01")
+                        .param("version", "latest")
+                        .with(user(principal)).with(csrf()))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        // ② 새로고침 후 (chat.html 의 기록 루프 — 저장해 둔 스냅샷으로 되살린다)
+        when(threadMetaService.findById(any(), eq("thread-01"))).thenReturn(Optional.of(
+                new ThreadMeta("thread-01", "user", "제목", "latest", "now", "now", "COST_FIRST", "")));
+        when(memoryService.getTurns(any(), eq("thread-01"))).thenReturn(List.of(
+                new MemoryRepository.Turn(1L, "질문", "## 요약\n답변",
+                        null, null, 0, 0, 0, "local", 1, null, "N", null, false)));
+        when(memoryService.getVerifications(List.of(1L))).thenReturn(java.util.Map.of(
+                1L, new VerificationSnapshot(true, false, null, null, List.of(), note)));
+        String afterReload = mvc.perform(get("/chat/thread-01").with(user(principal)))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        assertThat(justSent).as("방금 보낸 응답에 축소 안내가 없다").contains(note);
+        assertThat(afterReload).as("새로고침 후 축소 안내가 사라졌다").contains(note);
     }
 
     @Test
@@ -355,10 +496,10 @@ class ChatControllerHtmxTest {
                 new ThreadMeta("thread-01", "user", "제목", "latest", "now", "now", "COST_FIRST", "")));
         when(memoryService.getTurns(any(), eq("thread-01"))).thenReturn(List.of(
                 new MemoryRepository.Turn(1L, "날짜 함수로 예제 만들어줘", "## 구현\n생성된 코드",
-                        null, null, 0, 0, 0, "local", 1, null, "C", null)));
+                        null, null, 0, 0, 0, "local", 1, null, "C", null, false)));
         when(memoryService.getVerifications(List.of(1L))).thenReturn(java.util.Map.of(
                 1L, new VerificationSnapshot(true, true, null, "포트는 환경마다 다릅니다",
-                        List.of("parseDateEx"))));
+                        List.of("parseDateEx"), null)));
         String afterReload = mvc.perform(get("/chat/thread-01").with(user(principal)))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
@@ -385,7 +526,7 @@ class ChatControllerHtmxTest {
         when(threadMetaService.findById(any(), eq("thread-01"))).thenReturn(Optional.of(
                 new ThreadMeta("thread-01", "user", "제목", "latest", "now", "now", "COST_FIRST", "")));
         when(memoryService.getTurns(any(), eq("thread-01"))).thenReturn(List.of(
-                new MemoryRepository.Turn(1L, "q", "a", null, null, 0, 0, 0, "local", 1, null, "N", null)));
+                new MemoryRepository.Turn(1L, "q", "a", null, null, 0, 0, 0, "local", 1, null, "N", null, false)));
         when(memoryService.getVerifications(List.of(1L))).thenReturn(java.util.Map.of());
 
         String html = mvc.perform(get("/chat/thread-01").with(user(principal)))
@@ -398,27 +539,33 @@ class ChatControllerHtmxTest {
     }
 
     @Test
-    @DisplayName("대화 기록의 질문 앞에 응답 모드가 '[S] 질문' 형태로 붙고, 구 M/L 은 N 으로 표기된다")
+    @DisplayName("대화 기록의 질문 앞에 '[RS] 질문' 두 글자 표기가 붙는다 — 앞이 검색 축, 뒤가 성격")
     void historyQuestionsCarryTheResponseModePrefix() throws Exception {
         AppUserDetails principal = new AppUserDetails("id-1", "user@local", "", "User", "USER", true, false);
         when(threadMetaService.findById(any(), eq("thread-01"))).thenReturn(Optional.of(
                 new ThreadMeta("thread-01", "user", "제목", "latest", "now", "now", "COST_FIRST", "")));
         when(memoryService.getTurns(any(), eq("thread-01"))).thenReturn(List.of(
-                new MemoryRepository.Turn(1L, "요약 질문", "a", null, null, 0, 0, 0, "local", 1, null, "S", null),
-                new MemoryRepository.Turn(2L, "응용 질문", "a", null, null, 0, 0, 0, "local", 1, null, "C", null),
-                new MemoryRepository.Turn(3L, "옛 기록 질문", "a", null, null, 0, 0, 0, "local", 1, null, "M", null),
-                new MemoryRepository.Turn(4L, "모드 없는 질문", "a", null, null, 0, 0, 0, "local", 1, null, null, null)));
+                new MemoryRepository.Turn(1L, "요약 질문", "a", null, null, 0, 0, 0, "local", 1, null, "S", null, false),
+                new MemoryRepository.Turn(2L, "응용 질문", "a", null, null, 0, 0, 0, "local", 1, null, "C", null, false),
+                new MemoryRepository.Turn(3L, "옛 기록 질문", "a", null, null, 0, 0, 0, "local", 1, null, "M", null, false),
+                new MemoryRepository.Turn(4L, "모드 없는 질문", "a", null, null, 0, 0, 0, "local", 1, null, null, null, false),
+                // Direct 로 물은 턴 — 예전 표기로는 RAG 와 구별할 수단이 화면 어디에도 없었다.
+                new MemoryRepository.Turn(5L, "직답 질문", "a", null, null, 0, 0, 0, "local", 1, null, "N", null, true),
+                new MemoryRepository.Turn(6L, "직답 요약 질문", "a", null, null, 0, 0, 0, "local", 1, null, "S", null, true)));
         when(memoryService.getVerifications(any())).thenReturn(java.util.Map.of());
 
         String html = mvc.perform(get("/chat/thread-01").with(user(principal)))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
 
-        assertThat(html).contains("[S] ", "[C] ");
+        assertThat(html).contains("[RS] ", "[RC] ", "[DN] ", "[DS] ");
         // 구 M/L 과 NULL 은 ResponseMode.parse 를 거쳐 N 으로 읽힌다 — 표기가 저장값이 아니라
         // '그 턴이 실제로 답한 방식'을 가리켜야 하므로 화면에도 N 으로 나와야 한다.
-        assertThat(html).as("구 M 기록이 그대로 노출되면 안 된다").doesNotContain("[M] ", "[L] ", "[null] ");
-        assertThat(html).contains("data-response-mode=\"N\"");
+        assertThat(html).as("구 M 기록이 그대로 노출되면 안 된다")
+                .doesNotContain("[M] ", "[L] ", "[null] ", "[RM] ", "[RL] ", "[Rnull] ");
+        // 한 글자 표기가 남아 있으면 검색 축을 잃은 것이다 — 렌더러가 넷이라 하나만 빠지기 쉽다.
+        assertThat(html).doesNotContain("[S] ", "[N] ", "[C] ");
+        assertThat(html).contains("data-response-mode=\"RN\"", "data-response-mode=\"DS\"");
 
         // 질문 원본에는 표기가 섞이지 않는다 — data-question 은 추천/재사용이 쓰는 값이라,
         // 여기에 대괄호가 끼면 그 소비자들에게 그대로 딸려간다.
@@ -432,8 +579,8 @@ class ChatControllerHtmxTest {
         when(threadMetaService.findById(any(), eq("thread-01"))).thenReturn(Optional.of(
                 new ThreadMeta("thread-01", "user", "제목", "latest", "now", "now", "COST_FIRST", "")));
         when(memoryService.getTurns(any(), eq("thread-01"))).thenReturn(List.of(
-                new MemoryRepository.Turn(1L, "q", "a", null, null, 0, 0, 0, "local", 1, null, "C", null),
-                new MemoryRepository.Turn(2L, "q2", "a2", null, null, 0, 0, 0, "local", 1, null, "N", null)));
+                new MemoryRepository.Turn(1L, "q", "a", null, null, 0, 0, 0, "local", 1, null, "C", null, false),
+                new MemoryRepository.Turn(2L, "q2", "a2", null, null, 0, 0, 0, "local", 1, null, "N", null, false)));
         when(memoryService.getVerifications(any())).thenReturn(java.util.Map.of());
 
         String html = mvc.perform(get("/chat/thread-01").with(user(principal)))

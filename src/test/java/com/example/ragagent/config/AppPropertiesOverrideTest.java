@@ -28,7 +28,7 @@ class AppPropertiesOverrideTest {
                 "./data", 2, 800, 100, 100, 7, 0.0, true, 5, false,
                 true, false, 3, null,
                 null, null, null, null, null, null, null, null, null, null, null, 2,
-                null, 1.0, 60, null, null, null, null, null, null, null, null, null, null, null, null, null, null);
+                null, 1.0, 60, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null);
     }
 
     /** Same as {@link #base()} but with a configured {@code IndexingConfig} (base() leaves it null). */
@@ -37,7 +37,7 @@ class AppPropertiesOverrideTest {
                 "./data", 2, 800, 100, 100, 7, 0.0, true, 5, false,
                 true, false, 3, null,
                 null, indexing, null, null, null, null, null, null, null, null, null, 2,
-                null, 1.0, 60, null, null, null, null, null, null, null, null, null, null, null, null, null, null);
+                null, 1.0, 60, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null);
     }
 
     /** Same as {@link #base()} but with a configured {@code LlmConfig} (base() leaves it null). */
@@ -46,7 +46,7 @@ class AppPropertiesOverrideTest {
                 "./data", 2, 800, 100, 100, 7, 0.0, true, 5, false,
                 true, false, 3, null,
                 llm, null, null, null, null, null, null, null, null, null, null, 2,
-                null, 1.0, 60, null, null, null, null, null, null, null, null, null, null, null, null, null, null);
+                null, 1.0, 60, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null);
     }
 
     private final Map<String, String> overrides = new HashMap<>();
@@ -233,16 +233,18 @@ class AppPropertiesOverrideTest {
     }
 
     @Test
-    @DisplayName("LLM — indexing-temperature 오버라이드가 llmSafe()에 반영되고 [0.0, 1.0]으로 clamp된다")
+    @DisplayName("LLM — indexing-temperature 오버라이드가 llmSafe()에 반영되고 [0.0, 0.1]로 clamp된다")
     void override_indexingTemperature() {
         bind();
         assertThat(base().llmSafe().indexingTemperature()).isEqualTo(0.0); // 기본값
 
-        overrides.put(SettingsKeys.LLM_INDEXING_TEMPERATURE, "0.2");
-        assertThat(base().llmSafe().indexingTemperature()).isEqualTo(0.2);
+        overrides.put(SettingsKeys.LLM_INDEXING_TEMPERATURE, "0.05");
+        assertThat(base().llmSafe().indexingTemperature()).isEqualTo(0.05);
 
-        overrides.put(SettingsKeys.LLM_INDEXING_TEMPERATURE, "1.5"); // > 1.0 → clamp
-        assertThat(base().llmSafe().indexingTemperature()).isEqualTo(1.0);
+        // 상한은 /settings 스펙(0.1)과 같아야 한다 — 한쪽만 넓으면 화면이 거부하는 값이 환경변수로는
+        // 그대로 적용된다. 예전 상한은 1.0 이었다.
+        overrides.put(SettingsKeys.LLM_INDEXING_TEMPERATURE, "0.5"); // > 0.1 → clamp
+        assertThat(base().llmSafe().indexingTemperature()).isEqualTo(0.1);
     }
 
     @Test
@@ -266,8 +268,8 @@ class AppPropertiesOverrideTest {
     @DisplayName("LLM — 일반/RAG temperature는 [0.0, 0.3]으로 clamp된다")
     void ragTemperature_isClampedToPointThree() {
         AppProperties p = withLlm(new AppProperties.LlmConfig(
-                java.util.List.of(), 2, 10, 180, "COST_FIRST", 0.6, 3, 20,
-                1.2, 0.1, 0.0, 0.7, 6000, true));
+                java.util.List.of(), 2, 10, 180, "COST_FIRST", 3, 20,
+                1.2, 0.1, 0.0, 0.7, true, 6000, 1, true));
 
         assertThat(p.llmSafe().temperature()).isEqualTo(0.3);
     }

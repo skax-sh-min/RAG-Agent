@@ -157,7 +157,7 @@
                         <div class="me-1">
                             <div class="bubble-user p-3">
                                 <div><span class="bubble-user-mode"
-                                           th:text="'[' + ${turn.responseModeLabel} + '] '">[N] </span><span
+                                           th:text="'[' + ${turn.responseModeLabel} + '] '">[RN] </span><span
                                         th:text="${turn.question}"></span></div>
                                 <small class="text-white bubble-user-time msg-time"
                                        th:if="${turn.askedAt != null}"
@@ -198,6 +198,10 @@
                                     <i class="bi bi-info-circle me-1"></i>환경에 따라 달라질 수 있는 값:
                                     <span th:text="${v.envNote}"></span>
                                 </div>
+                                <div th:if="${v != null and v.budgetNote != null}" class="small text-warning mt-2">
+                                    <i class="bi bi-scissors me-1"></i>
+                                    <span th:text="${v.budgetNote}"></span>
+                                </div>
                             </th:block>
 
                                <div th:if="${turnImageRefsByTurnId != null and turnImageRefsByTurnId[turn.id] != null and !#lists.isEmpty(turnImageRefsByTurnId[turn.id])}"
@@ -235,6 +239,10 @@
                                                SourceRef.staleBadge()가 전부 갖고 있다(삭제는 항상,
                                                수정은 응답 지분이 있는 출처만). 템플릿에 조건을 풀어
                                                쓰면 스트리밍/HTMX 경로와 규칙이 갈라진다. -->
+                                          <span th:if="${src.promptExcluded}"
+                                                class="badge ms-1 bg-secondary-subtle text-secondary-emphasis border border-secondary-subtle"
+                                                style="font-size:0.62rem; vertical-align:middle; cursor:help;"
+                                                th:title="'컨텍스트 한도로 이 출처는 답변 생성에 사용되지 않았습니다. 모델이 읽지 못한 문서이므로 답변이 이 내용을 반영하지 못했을 수 있습니다.'">미사용</span>
                                           <span th:if="${src.staleBadge != null}"
                                                 class="badge ms-1"
                                                 style="font-size:0.62rem; vertical-align:middle;"
@@ -415,10 +423,17 @@
                             <label class="btn btn-outline-secondary response-mode-btn" for="response-mode-n"
                                    data-bs-toggle="tooltip" th:title="#{chat.response.n}">N</label>
 
+                            <!-- C는 운영자가 /settings 에서 끌 수 있다(app.llm.creative-mode-enabled).
+                                 꺼진 배포에서는 비활성이 아니라 **아예 렌더하지 않는다** — 사용자가
+                                 영영 켤 수 없는 회색 버튼이 입력창에 상주할 이유가 없다. 아래 스크립트가
+                                 이 요소의 부재를 견디고, 서버도 같은 판정을 독립적으로 건다
+                                 (SettingsService.effectiveResponseMode). -->
+                            <th:block th:if="${creativeModeEnabled}">
                             <input type="radio" class="btn-check" name="response-mode-radio"
                                    id="response-mode-c" value="C" autocomplete="off"/>
                             <label class="btn btn-outline-secondary response-mode-btn" for="response-mode-c"
                                    data-bs-toggle="tooltip" th:title="#{chat.response.c}">C</label>
+                            </th:block>
                         </div>
                         <input type="hidden" id="form-response-mode" name="responseMode" value="N"/>
                     </div>
@@ -799,14 +814,19 @@
     /* 버튼으로 고를 수 있는 값. 여기 없는 값(옛 'M'/'L', 손으로 넣은 값)은 기본값으로 떨어진다 —
        화이트리스트에 버튼 없는 값을 넣으면 어느 라디오도 체크되지 않은 상태가 만들어진다.
        서버도 같은 규칙이다(ResponseMode.parse). */
-    const RESPONSE_MODES = ['S', 'N', 'C'];
+    /* 운영자가 C를 꺼 두면 버튼 자체가 렌더되지 않는다 — 화이트리스트에서도 빼야
+       localStorage 에 남은 'C' 선택이 기본값 N으로 흡수된다(안 그러면 어느 라디오도 체크되지
+       않은 화면이 만들어진다). 서버 판정은 이와 무관하게 따로 돈다. */
+    const CREATIVE_MODE_ENABLED = /*[[${creativeModeEnabled}]]*/ true;
+    const RESPONSE_MODES = CREATIVE_MODE_ENABLED ? ['S', 'N', 'C'] : ['S', 'N'];
     const RESPONSE_MODE_DEFAULT = 'N';
     const responseModeCRadio = document.getElementById('response-mode-c');
 
     function applyResponseMode(mode) {
         const requested = RESPONSE_MODES.includes(mode) ? mode : RESPONSE_MODE_DEFAULT;
-        /* 비활성 버튼을 고른 상태로 두면 어느 라디오도 체크되지 않은 화면이 만들어진다. */
-        const m = (requested === 'C' && responseModeCRadio.disabled) ? RESPONSE_MODE_DEFAULT : requested;
+        /* 비활성(또는 없는) 버튼을 고른 상태로 두면 어느 라디오도 체크되지 않은 화면이 만들어진다. */
+        const m = (requested === 'C' && (!responseModeCRadio || responseModeCRadio.disabled))
+                ? RESPONSE_MODE_DEFAULT : requested;
         responseModeRadios.forEach(r => { r.checked = (r.value === m); });
         responseModeInput.value = m;
     }
@@ -816,6 +836,7 @@
        열리면 어느 라디오도 체크되지 않은 상태가 되기 때문이다.
        이것은 편의일 뿐이고 실제 방어는 서버에 있다 — ChatForm/ChatRequest 가 같은 성질을 묻는다. */
     function updateResponseModeAvailability(isDirect) {
+        if (!responseModeCRadio) return;   /* 운영자가 C를 꺼 둔 배포 — 비활성화할 버튼이 없다 */
         responseModeCRadio.disabled = isDirect;
         if (isDirect && responseModeInput.value === 'C') {
             applyResponseMode(RESPONSE_MODE_DEFAULT);
@@ -963,8 +984,9 @@
         const userBubble = document.createElement('div');
         userBubble.className = 'd-flex justify-content-end mb-3 align-items-end';
         // 재사용 버블도 같은 표기를 단다. 저장된 그 턴의 모드가 아니라 '지금 폼에 선택된' 모드인데,
-        // 재사용은 방금 고른 설정으로 새 턴을 만드는 동작이라 그것이 맞다.
-        const reuseMode = responseModeInput.value || RESPONSE_MODE_DEFAULT;
+        // 재사용은 방금 고른 설정으로 새 턴을 만드는 동작이라 그것이 맞다. 검색 축도 마찬가지다.
+        const reuseMode = bubbleModeLabel(responseModeInput.value || RESPONSE_MODE_DEFAULT,
+                                          directModeInput.value);
         userBubble.dataset.responseMode = reuseMode;
         userBubble.innerHTML =
             `<div class="me-1">` +
@@ -1190,7 +1212,8 @@
             const timeStr = new Date().toLocaleTimeString('ko-KR', {hour: '2-digit', minute: '2-digit', hour12: false});
             const bubble = document.createElement('div');
             bubble.className = 'd-flex justify-content-end mb-3 align-items-end';
-            const optimisticMode = responseModeInput.value || RESPONSE_MODE_DEFAULT;
+            const optimisticMode = bubbleModeLabel(responseModeInput.value || RESPONSE_MODE_DEFAULT,
+                                                   directModeInput.value);
             bubble.dataset.responseMode = optimisticMode;
             bubble.innerHTML =
                 `<div class="me-1">` +
@@ -1500,7 +1523,7 @@
         return body ? body.textContent.trim() : '';
     }
 
-    /* 목록·풍선에 붙는 '[S] ' 접두. 버블의 표기 span 을 읽지 않고 data-response-mode 로 다시
+    /* 목록·풍선에 붙는 '[RN] ' 접두. 버블의 표기 span 을 읽지 않고 data-response-mode 로 다시
        만드는 이유는 qnavTextOf() 가 data-question(원본)을 우선하기 때문이다 — 원본에는 표기가
        없으므로 여기서 붙이지 않으면 버블에는 보이고 목록에는 안 보이는 상태가 된다.
        모드를 심지 않은 옛 경로가 남아 있어도 빈 문자열로 떨어져 질문만 나온다. */

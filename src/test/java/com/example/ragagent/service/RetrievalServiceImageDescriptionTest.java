@@ -1,5 +1,6 @@
 package com.example.ragagent.service;
 
+import com.example.ragagent.llm.ProviderContextWindows;
 import com.example.ragagent.agent.AgentState;
 import com.example.ragagent.llm.LlmProvider;
 import com.example.ragagent.llm.LlmRouter;
@@ -130,7 +131,7 @@ class RetrievalServiceImageDescriptionTest {
             when(messageSource.getMessage(anyString(), any(), any(Locale.class))).thenReturn("{query} {number}");
 
             svc = new RetrievalService(llmRouter, mock(LlmUsageRepository.class), rag, props,
-                    Optional.of(lazyVision), Optional.empty(), messageSource, new ChatImageAnalysisSkipRegistry());
+                    Optional.of(lazyVision), Optional.empty(), messageSource, new ChatImageAnalysisSkipRegistry(), new ProviderContextWindows());
         }
 
         private static Document docWithImage(String id, String imagePath, boolean withEmbeddedDesc) {

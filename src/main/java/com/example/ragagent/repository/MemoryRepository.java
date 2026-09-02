@@ -177,7 +177,8 @@ public interface MemoryRepository {
                 String askedAt, String answeredAt,
                 int inputTokens, int outputTokens,
                 int elapsedMs, String provider, int llmCalls,
-                String feedback, String responseMode, String selectedTags) {
+                String feedback, String responseMode, String selectedTags,
+                boolean directMode) {
 
         /**
          * 이 턴에 좋아요가 <b>실제로 무언가를 하는가</b> — 대화 기록 렌더러가 읽는 값이다.
@@ -197,14 +198,30 @@ public interface MemoryRepository {
         }
 
         /**
-         * 질문 앞에 붙일 응답 모드 표기(`S`/`N`/`C`) — 대화 기록 렌더러가 읽는다.
+         * 질문 앞에 붙일 표기 — <b>두 글자</b>다. 앞이 검색 축({@code R} RAG / {@code D} Direct),
+         * 뒤가 답변의 성격({@code S}/{@code N}/{@code C}).
+         *
+         * <p><b>왜 두 축을 다 적는가.</b> 예전에는 성격만 적어서(`[N]`) 같은 질문을 문서로 물었는지
+         * 모델 지식으로 물었는지가 화면 어디에도 없었다. 두 축은 직교하므로 — 사용자는 "N 대신
+         * Direct"를 고르는 것이 아니라 "Direct 이면서 N"을 고른다 — 한 글자로 뭉치면 그 사실이
+         * 표기에서 사라지고, 특히 {@code DS}와 {@code DN}은 프롬프트도 후처리도 다른 별개의 조합이다
+         * ({@code prompt.direct.system.s} 는 {@code ## 요약} 한 섹션 1,500자를 요구하고
+         * {@code SummaryOnlyGuard} 가 그것을 강제한다).
+         *
+         * <p>{@code C} 는 RAG 전용이라({@code allowsDirect()=false}) {@code RC} 의 {@code R} 은 정보를
+         * 나르지 않지만 그대로 둔다 — 두 글자들 사이에 혼자 {@code [C]} 가 있으면 렌더링 오류로 읽힌다.
          *
          * <p>저장된 원본 문자열을 그대로 쓰지 않는 이유는 컬럼이 nullable 이고 구 {@code "M"}/{@code "L"}
          * 값이 그대로 남아 있기 때문이다. {@link ResponseMode#parse}를 거치면 그 값들이 실제 동작과
          * 같은 모드(N)로 읽히므로, 화면에 뜨는 표기와 그 턴이 실제로 어떻게 답했는지가 어긋나지 않는다.
+         *
+         * <p><b>주의</b>: {@code direct_mode} 는 "무엇을 요청했나"이지 "검색이 실제로 돌았나"가 아니다.
+         * RAG 로 물어도 분류기가 {@code meta} 로 판정하면 검색을 건너뛰므로, 출처 없는 {@code R} 턴이
+         * 있을 수 있다. 그리고 컬럼이 생기기 전 턴은 전부 {@code R} 로 읽힌다({@code DEFAULT 0}) —
+         * 구분할 방법이 없고, RAG 가 기본이었으므로 안전한 쪽이다.
          */
         public String responseModeLabel() {
-            return ResponseMode.parse(responseMode).name();
+            return (directMode ? "D" : "R") + ResponseMode.parse(responseMode).name();
         }
 
         /**

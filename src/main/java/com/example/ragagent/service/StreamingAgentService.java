@@ -4,6 +4,7 @@ import com.example.ragagent.agent.AgentGraph;
 import com.example.ragagent.agent.AgentState;
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.exception.LlmBackpressureException;
+import com.example.ragagent.exception.LlmContextOverflowException;
 import com.example.ragagent.exception.LlmProviderExhaustedException;
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.model.ChatForm;
@@ -219,7 +220,8 @@ public class StreamingAgentService {
                 memoryService.saveRetrievalMetrics(turnId, result.sources());
                 memoryService.saveVerification(turnId, new VerificationSnapshot(
                         result.grounded(), result.responseMode().generative(),
-                        result.evalReason(), result.envNote(), result.inventedSymbols()));
+                        result.evalReason(), result.envNote(), result.inventedSymbols(),
+                        result.budgetNote()));
                 if (questionReuseService != null) {
                     questionReuseService.recordTurnSources(turnId, userId, form.threadId(),
                             result.retrievedDocs(), result.sources());
@@ -233,6 +235,14 @@ public class StreamingAgentService {
 
             threadMetaService.generateTitleAsync(userId, form.threadId(), form.version(), form.question());
 
+        } catch (LlmContextOverflowException e) {
+            // 하위 타입이라 반드시 소진 catch 보다 앞에 와야 한다(자바 규칙이자 이 구분의 전부다).
+            log.warn("LLM context window exceeded: {}", e.getMessage());
+            String msg = messageSource.getMessage("error.llm.context-overflow", null,
+                    "질문에 필요한 문서가 LLM이 한 번에 처리할 수 있는 크기를 넘었습니다.",
+                    LocaleContextHolder.getLocale());
+            trySendError(emitter, msg);
+            emitter.complete();
         } catch (LlmProviderExhaustedException e) {
             log.warn("LLM providers exhausted: {}", e.getMessage());
             String msg = messageSource.getMessage("error.llm.exhausted", null,
@@ -438,6 +448,8 @@ public class StreamingAgentService {
         // 경로·주소·포트·환경변수 값 안내 — 검증 통과 여부와 무관하게 실릴 수 있다(통과한 답변에도
         // "이 경로는 본인 환경 기준으로 바꿔야 한다"는 안내가 필요하다).
         m.put("envNote",           result.envNote());
+        // 축소 안내도 통과한 답변에 실린다(envNote 와 같은 규칙) — 판정이 아니라 안내다.
+        m.put("budgetNote",        result.budgetNote());
         // 통과 배지를 '검증됨'(초록)이 아니라 '생성'(파랑)으로 바꿔야 하는가 — 서버가 성질로
         // 계산해 내려준다(ResponseMode.generative()). 클라이언트가 모드 문자열을 비교하게 두면
         // 모드를 하나 더 붙일 때 JS 쪽 분기를 사람이 기억해서 찾아야 한다.
@@ -464,6 +476,14 @@ public class StreamingAgentService {
             if (s.chunkId() != null && s.answerShare() != null) shares.put(s.chunkId(), s.answerShare());
         }
         if (!shares.isEmpty()) m.put("attribution", shares);
+        // 컨텍스트 예산으로 프롬프트에서 빠진 출처 — 참여도와 같은 이유로 사후 갱신이다. 출처 배지는
+        // RETRIEVAL 직후에 그려지는데 축소는 ANSWER 에서 일어나므로, 그 시점에는 알 수 없는 값이다.
+        List<String> excluded = result.sources().stream()
+                .filter(SourceRef::promptExcluded)
+                .map(SourceRef::chunkId)
+                .filter(java.util.Objects::nonNull)
+                .toList();
+        if (!excluded.isEmpty()) m.put("promptExcluded", excluded);
         m.put("refreshThreadList", true);
         m.put("turnId",            turnId);
         return m;

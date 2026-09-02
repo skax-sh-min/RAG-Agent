@@ -52,6 +52,21 @@ public class CircuitBreaker {
         log.warn("Provider [{}] blocked for {}s until {}", providerName, duration.getSeconds(), until);
     }
 
+    /**
+     * 이 프로바이더가 풀릴 때까지 남은 초 — 차단돼 있지 않으면 {@code -1}.
+     *
+     * <p>{@link #isBlocked} 와 달리 <b>얼마나</b>를 답한다. 사용자에게 "잠시 후 다시" 대신 "20초 후
+     * 다시"라고 말할 수 있게 하려는 것이고, 1초 미만이 남았어도 0 이 아니라 1 을 돌려준다 — 0 은
+     * "지금 된다"로 읽히는데 아직 아니다.
+     */
+    public int secondsUntilUnblocked(String providerName) {
+        Instant until = blockedUntil.computeIfPresent(providerName,
+                (k, v) -> Instant.now().isAfter(v) ? null : v);
+        if (until == null) return -1;
+        long secs = Duration.between(Instant.now(), until).toSeconds();
+        return (int) Math.max(1, secs);
+    }
+
     /** Returns currently blocked providers after evicting expired entries. */
     public Map<String, Instant> getBlockedProviders() {
         Instant now = Instant.now();

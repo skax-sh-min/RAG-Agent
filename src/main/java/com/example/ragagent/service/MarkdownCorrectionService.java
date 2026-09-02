@@ -3,6 +3,9 @@ package com.example.ragagent.service;
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.exception.LlmProviderExhaustedException;
 import com.example.ragagent.llm.BackgroundUsage;
+import com.example.ragagent.llm.IndexingOutputCap;
+import com.example.ragagent.llm.PromptBudget;
+import com.example.ragagent.llm.ProviderContextWindows;
 import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.llm.TaskType;
@@ -44,7 +47,7 @@ import java.util.regex.Pattern;
  * <ul>
  *   <li><b>PPTX</b> ({@code groupByPage}) — {@link #splitByPages} bundles up to
  *       {@link #PPTX_MAX_BUNDLE_PAGES} self-contained {@code [페이지: N]} slides per call (up to
- *       {@link #maxSectionChars}); an oversized single slide is split on its shape-group blocks
+ *       {@link #maxSectionChars()}); an oversized single slide is split on its shape-group blocks
  *       ({@link #splitOversizedPage}). Slide boundaries are always clean, so no overlap is used.</li>
  *   <li><b>Everything else</b> — {@link #splitBySections} splits on {@code ## }/{@code ### }/
  *       {@code #### } chapter headings (fence-aware). Only boundaries flagged
@@ -71,6 +74,15 @@ public class MarkdownCorrectionService {
 
     private static final Logger log = LoggerFactory.getLogger(MarkdownCorrectionService.class);
     private static final int MIN_SECTION_CHARS = 500;
+
+    /**
+     * 교정 지시 프롬프트(본문 제외)의 대략적 토큰 수 — 섹션 예산 계산의 고정비.
+     * 실측 ~1,100 토큰(한글 기준)에 여유를 얹었다. 프롬프트를 크게 늘리면 이 값도 함께 올릴 것.
+     */
+    private static final int CORRECTION_PROMPT_TOKENS = 1_300;
+
+    /** 이미지 설명(2~3문장)이 {@code app.llm.max-tokens} 중 쓸 몫 — {@link IndexingOutputCap} 참고. */
+    private static final double IMAGE_DESCRIPTION_OUTPUT_RATIO = 0.05;
     private static final Pattern MD_IMAGE_LINK = Pattern.compile("!\\[([^\\]]*)]\\(([^)]+)\\)");
     private static final Pattern IMAGE_MARKER = Pattern.compile("\\[이미지:\\s*([^\\]]+)]");
     /** Whole-line variants of the above, used by the PPTX-only shape-group formatting passes
@@ -145,7 +157,7 @@ public class MarkdownCorrectionService {
      * code at the marker — never trusted to the model to omit — so no content is ever duplicated.
      */
     private static final int OVERLAP_LINES = 5;
-    /** Max PPTX slides bundled into one correction call, subject to {@link #maxSectionChars}. */
+    /** Max PPTX slides bundled into one correction call, subject to {@link #maxSectionChars()}. */
     private static final int PPTX_MAX_BUNDLE_PAGES = 4;
     /** Marker placed right BEFORE this section's real content, after a prepended previous-section
      *  overlap. The model reproduces it verbatim; {@link #cutOverlap} drops everything up to and
@@ -160,24 +172,72 @@ public class MarkdownCorrectionService {
 
     private final LlmRouter llmRouter;
     private final AppProperties props;
-    private final int maxSectionChars;
+    private final ProviderContextWindows contextWindows;
     private final String defaultCodeLanguage;
+
+    /**
+     * {@code app.llm.max-tokens} 에서 나온 섹션 크기 상한 — <b>창을 모를 때의 값</b>이다.
+     * 실제로 쓰는 값은 {@link #sectionCharBudget()} 이며, 창을 알면 거기서 더 줄어들 수 있다.
+     *
+     * <p><b>필드가 아니라 메서드인 이유</b>: {@code app.llm.max-tokens} 가 핫 편집 대상이 됐다
+     * (§6.26 A6). 생성자에서 한 번 계산해 두면 {@code /settings} 에서 값을 내려도 인덱싱만 예전
+     * 크기로 계속 잘라, 컨텍스트 압박을 줄이려고 내린 값이 정작 가장 큰 소비처에는 닿지 않는다.
+     */
+    private int maxSectionChars() {
+        return Math.max(MIN_SECTION_CHARS, (props.llmSafe().maxTokens() - MIN_SECTION_CHARS) / 2);
+    }
 
     // Single source of truth for "LLM max tokens" (app.llm.max-tokens / LLM_MAX_TOKENS, default
     // 6000) — used to read the separate, dead spring.ai.openai.chat.options.max-tokens property
     // (default 8000), which config'd nothing (Spring AI's autoconfigured ChatModel bean is skipped
     // since LlmConfig.primaryChatModel() already satisfies its @ConditionalOnMissingBean).
-    public MarkdownCorrectionService(LlmRouter llmRouter, AppProperties props) {
+    public MarkdownCorrectionService(LlmRouter llmRouter, AppProperties props,
+                                     ProviderContextWindows contextWindows) {
         this.llmRouter = llmRouter;
         this.props = props;
-        int llmMaxTokens = props.llmSafe().maxTokens();
-        this.maxSectionChars = Math.max(MIN_SECTION_CHARS, (llmMaxTokens - MIN_SECTION_CHARS) / 2);
+        this.contextWindows = contextWindows;
         this.defaultCodeLanguage = props.mdCorrectionDefaultCodeLanguageSafe();
     }
 
-    /** Indexing/background temperature (hot-editable), read fresh per call — see AppProperties.LlmConfig. */
-    private OpenAiChatOptions indexingOptions() {
-        return OpenAiChatOptions.builder().temperature(props.llmSafe().indexingTemperature()).build();
+    /**
+     * Indexing/background temperature (hot-editable), read fresh per call — see AppProperties.LlmConfig.
+     *
+     * <p><b>출력 상한을 함께 싣는다</b>({@link IndexingOutputCap}). 이걸 비워 두면 프로바이더 빈에
+     * 구워진 {@code app.llm.max-tokens} 전체가 출력으로 <b>예약</b>되는데, 서버는
+     * {@code 프롬프트 + max_tokens ≤ n_ctx} 를 검사하므로 그만큼 입력 자리가 사라진다. 창 20,480 ·
+     * {@code max-tokens=10000} 배포에서 MD 교정이 컨텍스트 초과로 실패한 것이 정확히 이 조합이었다 —
+     * 같은 프로퍼티가 {@link #maxSectionChars()} 까지 정하므로 입력과 예약이 함께 커진다.
+     */
+    /**
+     * 이번 교정 호출에 넣을 섹션의 글자 상한.
+     *
+     * <p>{@link #maxSectionChars()}(= {@code max-tokens} 파생)와 <b>프로바이더 창에서 나온 값</b> 중
+     * 작은 쪽이다. 두 값이 다른 것을 재는 탓에 어느 한쪽만으로는 부족하다 — 앞의 것은 "출력이
+     * 이만큼이면 입력은 이 정도"라는 어림이고, 뒤의 것은 "이 서버에 실제로 들어가는 양"이다.
+     * 창 20,480 · {@code max-tokens=10000} 배포에서 교정이 컨텍스트 초과로 실패한 것은 앞의 값만
+     * 보고 있었기 때문이다.
+     *
+     * <p><b>줄이기만 한다.</b> 창이 넉넉하면 계산상 더 큰 섹션도 들어가지만, 섹션을 키우면 교정
+     * 결과 자체가 달라진다(경계가 이동하고 한 호출이 보는 문맥이 바뀐다) — 초과를 막으러 온
+     * 변경이 멀쩡한 배포의 인덱싱 결과를 바꿀 이유는 없다.
+     *
+     * <p>창을 모르면 {@link #maxSectionChars()} 그대로다(예전 동작).
+     */
+    private int sectionCharBudget() {
+        int window = contextWindows.tokensOrZero(
+                llmRouter.findProviderName(TaskType.LIGHT_TEXT, RoutingMode.COST_FIRST));
+        int configured = maxSectionChars();
+        if (window <= 0) return configured;
+        int fromWindow = PromptBudget.rewriteInputChars(window, CORRECTION_PROMPT_TOKENS);
+        if (fromWindow <= 0) return configured;   // 창이 지시 프롬프트도 못 담는다 — 판단 불가
+        return Math.min(configured, Math.max(MIN_SECTION_CHARS, fromWindow));
+    }
+
+    private OpenAiChatOptions indexingOptions(int maxTokens) {
+        OpenAiChatOptions.Builder b = OpenAiChatOptions.builder()
+                .temperature(props.llmSafe().indexingTemperature());
+        if (maxTokens > 0) b.maxTokens(maxTokens);   // 0 = 프로바이더 기본값 유지
+        return b.build();
     }
 
     /**
@@ -245,7 +305,8 @@ public class MarkdownCorrectionService {
         // applies on the next indexing without a restart, exactly like DocumentIndexer's keyword
         // gate and LazyVisionService. Never cache this in a field.
         int maxConcurrent = Math.max(1, props.indexingSafe().maxConcurrentLlmCalls());
-        log.debug("[MD_CORRECT] 설정: maxConcurrent={}, maxSectionChars={}", maxConcurrent, maxSectionChars);
+        log.debug("[MD_CORRECT] 설정: maxConcurrent={}, maxSectionChars={} (설정 파생 {})",
+                maxConcurrent, sectionCharBudget(), maxSectionChars());
         long t0 = System.currentTimeMillis();
 
         String preprocessed = addImageDescriptions
@@ -420,7 +481,7 @@ public class MarkdownCorrectionService {
     }
 
     /**
-     * Bundles consecutive small sections up to {@link #maxSectionChars} into one correction call —
+     * Bundles consecutive small sections up to {@link #maxSectionChars()} into one correction call —
      * same pattern {@link #splitByPages} already uses to bundle PPTX slides. Without this, a
      * document with frequent short headings (a heading every few lines — common in DOCX/MD with
      * deep subsection structure) sent one tiny LLM call per heading instead of a handful of
@@ -438,7 +499,7 @@ public class MarkdownCorrectionService {
         List<String> merged = new ArrayList<>();
         StringBuilder bundle = new StringBuilder();
         for (String section : raw) {
-            if (!bundle.isEmpty() && bundle.length() + section.length() > maxSectionChars) {
+            if (!bundle.isEmpty() && bundle.length() + section.length() > sectionCharBudget()) {
                 merged.add(bundle.toString());
                 bundle.setLength(0);
             }
@@ -450,12 +511,12 @@ public class MarkdownCorrectionService {
 
     /**
      * PPTX-only split: bundle up to {@link #PPTX_MAX_BUNDLE_PAGES} consecutive {@code [페이지: N]}
-     * slides into one correction call, filling each bundle up to {@link #maxSectionChars} before
+     * slides into one correction call, filling each bundle up to {@link #maxSectionChars()} before
      * starting the next. Slides are self-contained (each {@code [페이지: N]} + heading(s) + body),
      * so every bundle boundary lands cleanly on a page marker and needs no overlap context — and
      * batching several small slides per call cuts the LLM round-trips a per-slide split would make.
      *
-     * <p>A single slide larger than {@link #maxSectionChars} can't be bundled; it's split on its
+     * <p>A single slide larger than {@link #maxSectionChars()} can't be bundled; it's split on its
      * own by {@link #splitOversizedPage} (at shape-group/diagram/chart block boundaries) and its
      * pieces are emitted un-bundled.
      */
@@ -468,14 +529,14 @@ public class MarkdownCorrectionService {
         StringBuilder bundle = new StringBuilder();
         int bundlePages = 0;
         for (String page : pages) {
-            if (page.length() > maxSectionChars) {
+            if (page.length() > sectionCharBudget()) {
                 if (bundle.length() > 0) { sections.add(bundle.toString()); bundle.setLength(0); bundlePages = 0; }
                 sections.addAll(splitOversizedPage(page));
                 continue;
             }
             if (bundle.length() > 0
                     && (bundlePages >= PPTX_MAX_BUNDLE_PAGES
-                        || bundle.length() + page.length() > maxSectionChars)) {
+                        || bundle.length() + page.length() > sectionCharBudget())) {
                 sections.add(bundle.toString());
                 bundle.setLength(0);
                 bundlePages = 0;
@@ -493,7 +554,7 @@ public class MarkdownCorrectionService {
      * {@code PptxToMarkdownConverter} as a self-contained {@code [label] … [/label]} block) so a
      * grouped-shape block stays whole in one correction call. The {@code [페이지: N]} marker and
      * heading(s) that precede the first block stay attached to the first piece. A single block still
-     * larger than {@link #maxSectionChars} falls back to the shared char-budget force-split.
+     * larger than {@link #maxSectionChars()} falls back to the shared char-budget force-split.
      */
     private List<String> splitOversizedPage(String page) {
         return splitByBoundary(page, line -> {
@@ -507,7 +568,7 @@ public class MarkdownCorrectionService {
      * {@link #splitOversizedPage}: never splits while inside a fenced code block (``` / ~~~),
      * regardless of what {@code isBoundaryLine} matches.
      *
-     * <p>When {@code enforceSize} is true and a section grows past {@link #maxSectionChars}, it is
+     * <p>When {@code enforceSize} is true and a section grows past {@link #maxSectionChars()}, it is
      * force-split so no single correction call is oversized. If the check trips while a fence is
      * still open, the fence is not cut — but it also isn't unconditionally kept in the current
      * (already-full) section. If the fence started at or after {@code MIN_SECTION_CHARS / 2} chars
@@ -540,7 +601,7 @@ public class MarkdownCorrectionService {
             current.append(line).append("\n");
             if (isFenceLine) inFence = !inFence;
 
-            if (enforceSize && current.length() > maxSectionChars) {
+            if (enforceSize && current.length() > sectionCharBudget()) {
                 if (!inFence) {
                     sections.add(current.toString());
                     current = new StringBuilder();
@@ -694,7 +755,10 @@ public class MarkdownCorrectionService {
         try {
             String result = llmRouter.executeWithTracking(
                     TaskType.LIGHT_TEXT, RoutingMode.COST_FIRST, BackgroundUsage.MDCORRECT_PREFIX,
-                    model -> model.call(new Prompt(prompt, indexingOptions())));
+                    model -> model.call(new Prompt(prompt, indexingOptions(
+                            // 재작성이라 출력은 이 섹션 크기에 묶인다 — 지시문은 입력일 뿐 출력이 아니다.
+                            IndexingOutputCap.forRewrite(tableExtraction.protectedText(),
+                                    props.llmSafe().maxTokens())))));
             log.debug("[MD_CORRECT] 섹션 교정 완료: {}자 → {}자", safeSection.length(), result.length());
 
             if (!tableExtraction.tables().isEmpty()) {
@@ -1076,8 +1140,10 @@ public class MarkdownCorrectionService {
                     .text("이 이미지를 한국어 2~3문장으로 간단히 설명하세요. "
                             + "여러 선택지나 후보 설명을 나열하지 말고, 하나의 완성된 설명 문장만 작성하세요.")
                     .media(media).build();
+            // 요청 자체가 "2~3문장"이라 출력 크기가 입력과 무관하게 정해져 있다.
+            int cap = IndexingOutputCap.forFixed(IMAGE_DESCRIPTION_OUTPUT_RATIO, props.llmSafe().maxTokens());
             String response = llmRouter.executeWithTracking(TaskType.VISION, RoutingMode.LOCAL_ONLY,
-                    BackgroundUsage.IMAGE_PREFIX, model -> model.call(new Prompt(userMessage, indexingOptions())));
+                    BackgroundUsage.IMAGE_PREFIX, model -> model.call(new Prompt(userMessage, indexingOptions(cap))));
             return response == null ? "" : response.trim();
         } catch (LlmProviderExhaustedException e) {
             return ""; // no LOCAL vision provider (pre-gated; defensive)

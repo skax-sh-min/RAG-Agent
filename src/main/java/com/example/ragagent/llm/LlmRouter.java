@@ -1,6 +1,7 @@
 package com.example.ragagent.llm;
 
 import com.example.ragagent.exception.LlmBackpressureException;
+import com.example.ragagent.exception.LlmContextOverflowException;
 import com.example.ragagent.exception.LlmProviderExhaustedException;
 import com.example.ragagent.repository.LlmUsageRepository;
 import org.slf4j.Logger;
@@ -21,14 +22,43 @@ public class LlmRouter {
 
     private static final Logger log = LoggerFactory.getLogger(LlmRouter.class);
 
-    /** Short fallback block (seconds) for transient/overload-type failures — see {@link #blockForOverload}. */
+    /**
+     * Short fallback block for transient/overload-type failures — see {@link #blockForOverload}.
+     *
+     * <p><b>{@code String} 인 것은 실수가 아니다.</b> 이 값은 {@code CircuitBreaker.block()} 의 두 번째
+     * 인자로 가는데, 그 자리는 HTTP {@code Retry-After} <b>헤더 값</b>이다 — 프로바이더가 헤더를 줬으면
+     * 그 문자열이 그대로 오고, 안 줬을 때 이 상수가 대신 들어간다. {@code parseRetryAfter()} 가 초 단위
+     * 숫자와 RFC 1123 날짜를 모두 받으므로 타입은 문자열이어야 한다. {@code int} 로 바꾸려면
+     * {@code block()} 의 시그니처부터 갈라야 하고, 그러면 "헤더가 있으면 그것, 없으면 이 값"이라는
+     * 한 줄짜리 규칙이 두 갈래로 늘어난다.
+     *
+     * <p>프로퍼티로 외부화되어 있지 않다 — 바꾸려면 코드를 고쳐야 한다. 세 갈래(폴백 없는 과부하 차단·
+     * 기타 4xx/5xx·일반 예외)가 이 하나를 공유하므로, 그중 하나만 다르게 하려면 상수를 분리해야 한다.
+     */
     private static final String SHORT_BLOCK_SECONDS = "30";
+
+    /**
+     * 폴백이 없는 프로바이더가 <b>연결 계열</b>로 실패했을 때의 차단 — 30초가 아니라 이만큼이다.
+     *
+     * <p><b>왜 그래도 차단은 하는가.</b> 서버가 정말 죽어 있으면 차단이 없을 때 모든 요청이 연결
+     * 타임아웃을 각자 물게 된다. 빠르게 실패시키는 것이 차단의 값이고 그건 프로바이더가 하나뿐일
+     * 때도 유효하다.
+     *
+     * <p><b>왜 30초는 긴가.</b> 프로바이더가 하나면 차단은 그 시간만큼 <b>전면 중단</b>이다. 로컬 LLM
+     * 재시작은 보통 몇 초로 끝나므로, 30초는 서버가 이미 올라온 뒤까지 남아 운영자에게
+     * "재시작했는데도 계속 안 된다"로 보인다 — 실측 사고가 정확히 그 모양이었다(차단 1회, 그 창 안의
+     * 재시도 3번이 전부 {@code "All providers exhausted"}). 5초면 스탬피드는 막으면서 회복은
+     * 사실상 즉시다.
+     *
+     * <p>폴백이 있으면 이 값을 쓰지 않는다 — 그때는 차단이 "다른 곳으로 보낸다"는 뜻이라 길어도
+     * 손해가 없고, 아픈 프로바이더를 성급히 다시 부르지 않는 편이 낫다.
+     */
+    private static final String NO_FALLBACK_BLOCK_SECONDS = "5";
 
     private final List<LlmProvider> providers; // priority 오름차순
     private final LlmUsageRepository usageRepo;
     private final CircuitBreaker circuitBreaker;
     private final RoutingMode defaultMode;
-    private final double progressiveThreshold;
     private final int readTimeoutSeconds;
 
     /**
@@ -79,46 +109,45 @@ public class LlmRouter {
     private final BackgroundLlmConcurrencyTracker backgroundConcurrencyTracker;
 
     public LlmRouter(List<LlmProvider> providers, LlmUsageRepository usageRepo,
-                     CircuitBreaker circuitBreaker, RoutingMode defaultMode,
-                     double progressiveThreshold) {
-        this(providers, usageRepo, circuitBreaker, defaultMode, progressiveThreshold, 180);
+                     CircuitBreaker circuitBreaker, RoutingMode defaultMode) {
+        this(providers, usageRepo, circuitBreaker, defaultMode, 180);
     }
 
     public LlmRouter(List<LlmProvider> providers, LlmUsageRepository usageRepo,
                      CircuitBreaker circuitBreaker, RoutingMode defaultMode,
-                     double progressiveThreshold, int readTimeoutSeconds) {
-        this(providers, usageRepo, circuitBreaker, defaultMode, progressiveThreshold, readTimeoutSeconds,
+                     int readTimeoutSeconds) {
+        this(providers, usageRepo, circuitBreaker, defaultMode, readTimeoutSeconds,
                 Map.of(), 3, 20);
     }
 
     public LlmRouter(List<LlmProvider> providers, LlmUsageRepository usageRepo,
                      CircuitBreaker circuitBreaker, RoutingMode defaultMode,
-                     double progressiveThreshold, int readTimeoutSeconds,
+                     int readTimeoutSeconds,
                      Map<String, Integer> providerConcurrency,
                      int defaultProviderConcurrency, int permitWaitTimeoutSeconds) {
         // Existing callers (incl. tests) get a fresh empty toggle → nothing disabled, zero behavior
         // change. Only LlmConfig injects the shared @Component so /settings toggles affect this router.
-        this(providers, usageRepo, circuitBreaker, defaultMode, progressiveThreshold, readTimeoutSeconds,
+        this(providers, usageRepo, circuitBreaker, defaultMode, readTimeoutSeconds,
                 providerConcurrency, defaultProviderConcurrency, permitWaitTimeoutSeconds, new ProviderToggle());
     }
 
     public LlmRouter(List<LlmProvider> providers, LlmUsageRepository usageRepo,
                      CircuitBreaker circuitBreaker, RoutingMode defaultMode,
-                     double progressiveThreshold, int readTimeoutSeconds,
+                     int readTimeoutSeconds,
                      Map<String, Integer> providerConcurrency,
                      int defaultProviderConcurrency, int permitWaitTimeoutSeconds,
                      ProviderToggle providerToggle) {
         // Existing callers (incl. tests) get a fresh, un-shared tracker — harmless, since nothing
         // else reads it unless the same instance is also wired into OperationsController (only
         // LlmConfig does that, via the overload below).
-        this(providers, usageRepo, circuitBreaker, defaultMode, progressiveThreshold, readTimeoutSeconds,
+        this(providers, usageRepo, circuitBreaker, defaultMode, readTimeoutSeconds,
                 providerConcurrency, defaultProviderConcurrency, permitWaitTimeoutSeconds, providerToggle,
                 new BackgroundLlmConcurrencyTracker());
     }
 
     public LlmRouter(List<LlmProvider> providers, LlmUsageRepository usageRepo,
                      CircuitBreaker circuitBreaker, RoutingMode defaultMode,
-                     double progressiveThreshold, int readTimeoutSeconds,
+                     int readTimeoutSeconds,
                      Map<String, Integer> providerConcurrency,
                      int defaultProviderConcurrency, int permitWaitTimeoutSeconds,
                      ProviderToggle providerToggle, BackgroundLlmConcurrencyTracker backgroundConcurrencyTracker) {
@@ -126,7 +155,6 @@ public class LlmRouter {
         this.usageRepo = usageRepo;
         this.circuitBreaker = circuitBreaker;
         this.defaultMode = defaultMode;
-        this.progressiveThreshold = progressiveThreshold;
         this.readTimeoutSeconds = readTimeoutSeconds;
         this.defaultProviderConcurrency = defaultProviderConcurrency > 0 ? defaultProviderConcurrency : 3;
         this.permitWaitTimeoutSeconds = permitWaitTimeoutSeconds > 0 ? permitWaitTimeoutSeconds : 20;
@@ -169,9 +197,10 @@ public class LlmRouter {
 
     /** 라우팅 모드에 맞는 첫 번째 사용 가능 LlmProvider 반환 (stream 플래그 포함). */
     public LlmProvider routeProvider(TaskType taskType, RoutingMode mode) {
+        // 스트리밍 답변이 지나는 자리다 — 여기서 나온 메시지도 채팅 버블에 그대로 찍히므로
+        // executeWithTracking 과 같은 문구·같은 남은 시간을 쓴다.
         LlmProvider p = findFirst(taskType, roleOrder(mode), Set.of())
-                .orElseThrow(() -> new LlmProviderExhaustedException(
-                        "No available provider for task=" + taskType + " mode=" + mode));
+                .orElseThrow(() -> exhausted(taskType, roleOrder(mode)));
         log.debug("[LLM route] provider={} task={} mode={} endpoint={}/chat/completions model={} stream={}",
                 p.name(), taskType, mode, p.baseUrl(), p.model(), p.stream());
         return p;
@@ -271,12 +300,20 @@ public class LlmRouter {
         }
     }
 
-    /** Rough token estimate (chars/4) for text whose real usage isn't available (streaming
-     *  answers, whose caller reads only content deltas, never a {@link ChatResponse}) — same
-     *  heuristic {@link #recordApproxUsage} records to the aggregate usage table, exposed so
-     *  streaming callers can also reflect it in their own per-turn {@code AgentState} totals. */
+    /**
+     * Rough token estimate for text whose real usage isn't available (streaming answers, whose
+     * caller reads only content deltas, never a {@link ChatResponse}) — the same heuristic
+     * {@link #recordApproxUsage} records to the aggregate usage table, exposed so streaming callers
+     * can also reflect it in their own per-turn {@code AgentState} totals.
+     *
+     * <p>Delegates to {@link TokenEstimator}, this app's single estimation assumption. It used to be
+     * a bare {@code chars/4} here, which is the English rule of thumb and undercounted Korean
+     * streaming usage by roughly 4x in {@code /llm-usage} — while {@code ResponseMode}'s budgets a
+     * few classes away assumed 1 token per Korean character. English-only text estimates exactly as
+     * before.
+     */
     public static long approxTokens(String text) {
-        return text == null ? 0 : text.length() / 4;
+        return TokenEstimator.estimate(text);
     }
 
     public boolean hasLocalProvider() {
@@ -392,7 +429,6 @@ public class LlmRouter {
     }
 
     public RoutingMode getDefaultMode() { return defaultMode; }
-    public double getProgressiveThreshold() { return progressiveThreshold; }
 
     // ── Private ────────────────────────────────────────────────────────────
 
@@ -452,6 +488,51 @@ public class LlmRouter {
         return best;
     }
 
+    /**
+     * 소진 예외를 <b>사용자가 읽을 수 있게</b> 만든다 — 언제 다시 되는지까지.
+     *
+     * <p>이 메시지는 SSE {@code error} 이벤트로 채팅 버블에 <b>그대로</b> 찍힌다
+     * ({@code chat-stream.js} 의 {@code onError}). 예전 문구 {@code "All providers exhausted for
+     * task=TEXT"} 는 두 가지를 틀리게 말했다 — 프로바이더가 하나뿐인 배포에서는 <b>하나가 한 번</b>
+     * 실패한 것이지 전부가 소진된 것이 아니고, 사용자가 할 수 있는 일이 무엇인지 아무 말도 하지
+     * 않았다. 실측 로그에서 30초 차단 하나에 재시도 3번이 전부 같은 문구로 죽은 것이 그 결과다.
+     *
+     * <p>남은 초는 <b>차단 때문일 때만</b> 붙는다. 이번 요청에서 시도했다가 실패해서 후보가 없는
+     * 경우({@code tried})는 기다린다고 풀리는 것이 아니므로 시간을 말하면 거짓이 된다.
+     * {@code Retry-After} 헤더도 {@code RagException.retryAfterSeconds()} 를 통해 같은 값에서 나간다.
+     */
+    private LlmProviderExhaustedException exhausted(TaskType taskType, List<ProviderRole> roleOrder) {
+        int wait = secondsUntilAnyUnblocks(taskType, roleOrder);
+        String detail = " (task=" + taskType + ")";
+        if (wait < 0) {
+            return new LlmProviderExhaustedException(
+                    "AI 서버에 연결하지 못했습니다. 잠시 후 다시 시도해 주세요." + detail);
+        }
+        return new LlmProviderExhaustedException(
+                "AI 서버가 일시적으로 응답하지 않아 " + wait + "초 후 다시 시도할 수 있습니다." + detail, wait);
+    }
+
+    /**
+     * 차단만 아니면 이 작업을 받을 수 있었을 프로바이더들 중 <b>가장 먼저</b> 풀리는 시각까지의 초.
+     * 차단된 후보가 하나도 없으면 {@code -1}.
+     *
+     * <p>{@code excluded}(이번 요청에서 이미 시도한 프로바이더)를 <b>빼지 않는다</b> — 방금 실패해서
+     * 차단된 그 프로바이더가 바로 사용자가 기다려야 할 대상이기 때문이다.
+     */
+    private int secondsUntilAnyUnblocks(TaskType taskType, List<ProviderRole> roleOrder) {
+        boolean imageTask = isImageTask(taskType);
+        return providers.stream()
+                .filter(p -> roleOrder.contains(p.role())
+                        && p.supports(taskType)
+                        && p.hasValidApiKey()
+                        && !providerToggle.isDisabled(p.name())
+                        && !(imageTask && visionUnsupportedProviders.contains(p.name())))
+                .mapToInt(p -> circuitBreaker.secondsUntilUnblocked(p.name()))
+                .filter(secs -> secs >= 0)
+                .min()
+                .orElse(-1);
+    }
+
     private int availablePermits(LlmProvider provider) {
         Semaphore gate = providerGates.get(provider.name());
         return gate != null ? gate.availablePermits() : defaultProviderConcurrency;
@@ -465,8 +546,7 @@ public class LlmRouter {
                                        Function<ChatModel, ChatResponse> call,
                                        Set<String> tried, boolean gated) {
         LlmProvider provider = findFirst(taskType, roleOrder, tried)
-                .orElseThrow(() -> new LlmProviderExhaustedException(
-                        "All providers exhausted for task=" + taskType));
+                .orElseThrow(() -> exhausted(taskType, roleOrder));
         tried.add(provider.name());
         try {
             return executeSingleTracked(provider, taskType, usageLabelPrefix, call, gated);
@@ -481,7 +561,9 @@ public class LlmRouter {
                         ? e.getResponseHeaders().getFirst("Retry-After") : null;
                 blockForOverload(provider, taskType, roleOrder, tried, retryAfter);
             } else {
-                circuitBreaker.block(provider.name(), SHORT_BLOCK_SECONDS);
+                // 5xx·4xx 도 같은 판단을 받는다 — 프로바이더가 하나뿐이면 차단은 우회가 아니라
+                // 전면 중단이고, 재시작 중 서버가 잠깐 5xx 를 뱉는 경우가 흔하다.
+                blockForFailure(provider, taskType, roleOrder, tried);
             }
             log.warn("Provider [{}] returned HTTP {}, trying next", provider.name(), status);
             return executeWithTracking(taskType, roleOrder, usageLabelPrefix, call, tried, gated);
@@ -492,7 +574,25 @@ public class LlmRouter {
                         + "NOT blocking circuit breaker", provider.name(), readTimeoutSeconds);
                 throw e;
             }
-            if (isVisionUnsupported(e)) {
+            boolean contextOverflow = isContextOverflow(e);
+            if (contextOverflow) {
+                // 이 요청의 프롬프트가 서버 컨텍스트를 넘은 것이지 프로바이더가 아픈 게 아니다.
+                // 30초를 기다려도 같은 요청은 똑같이 실패하고(결정적 오류), 그동안 들어온 -- 작아서
+                // 통과했을 -- 요청까지 "All providers exhausted" 로 함께 죽는다. mmproj 와 달리
+                // 기억해 두지도 않는다: 저건 모델의 영구적 성질이지만 이건 요청 하나의 크기 문제라,
+                // 다음 짧은 질문은 같은 프로바이더에서 멀쩡히 처리된다.
+                log.warn("Provider [{}] rejected the prompt: context window exceeded — NOT blocking "
+                        + "circuit breaker (waiting changes nothing; a smaller prompt fits). Lower "
+                        + "app.search-top-k (hot, via /settings) first, then app.llm.max-tokens "
+                        + "(restart required), or raise the LLM server's context size. "
+                        + "See OPERATOR_MANUAL §8.", provider.name());
+            } else if (isRequestTerminatedByServer(e)) {
+                // 서버가 내려가면서 이 요청을 끊었다. 차단하면 서버가 올라온 뒤까지 그 차단이 남아
+                // "재시작했는데도 계속 안 된다"가 된다 — isTimeoutLike 와 같은 이유로 통과시킨다.
+                log.warn("Provider [{}] terminated the in-flight request (restart/model reload?) — "
+                        + "NOT blocking circuit breaker; the server is usually back within seconds.",
+                        provider.name());
+            } else if (isVisionUnsupported(e)) {
                 // Model lacks mmproj / image-input support — a request-shape limitation, not a
                 // provider outage. Blocking here (like any other failure) would also stall
                 // unrelated TEXT/LIGHT_TEXT tasks sharing this provider name until the block
@@ -502,11 +602,23 @@ public class LlmRouter {
                 log.warn("Provider [{}] does not support image input (mmproj missing) — "
                         + "skipping image tasks for this provider, NOT blocking circuit breaker", provider.name());
             } else {
-                circuitBreaker.block(provider.name(), SHORT_BLOCK_SECONDS);
+                blockForFailure(provider, taskType, roleOrder, tried);
             }
             log.warn("Provider [{}] threw {}: {}, trying next",
                     provider.name(), e.getClass().getSimpleName(), e.getMessage());
-            return executeWithTracking(taskType, roleOrder, usageLabelPrefix, call, tried, gated);
+            try {
+                return executeWithTracking(taskType, roleOrder, usageLabelPrefix, call, tried, gated);
+            } catch (LlmProviderExhaustedException exhausted) {
+                // 여기까지 왔다는 건 남은 프로바이더가 없다는 뜻이다. 그런데 이 체인에서 컨텍스트
+                // 초과가 한 번이라도 있었다면 진짜 이유는 "프로바이더가 없다"가 아니라 "프롬프트가
+                // 컨텍스트를 넘었다"이고, 그것이 사용자·운영자가 실제로 고칠 수 있는 유일한 것이다.
+                // 안쪽 프레임이 이미 바꿔 던졌으면 그대로 흘려보낸다(가장 처음 넘친 프로바이더
+                // 이름을 잃지 않기 위해).
+                if (contextOverflow && !(exhausted instanceof LlmContextOverflowException)) {
+                    throw new LlmContextOverflowException(provider.name(), e);
+                }
+                throw exhausted;
+            }
         }
     }
 
@@ -521,6 +633,27 @@ public class LlmRouter {
      * {@code Retry-After} header is still honored even with no fallback (authoritative operator
      * guidance from the provider itself, not a default we're second-guessing).
      */
+    /**
+     * 오버로드가 아닌 일반 실패(연결 거부·리셋·5xx 등)의 차단.
+     *
+     * <p>{@link #blockForOverload} 와 <b>같은 판단</b>을 한다 — 넘겨줄 상대가 있으면 차단이 곧
+     * 우회이고, 없으면 차단은 전면 중단이다. 다른 점은 여기엔 존중해야 할 {@code Retry-After} 가
+     * 없다는 것뿐이라 분기가 폴백 유무 하나로 단순해진다.
+     *
+     * <p>이 분기가 없던 동안 로컬 LLM 하나짜리 배포는 재시작 한 번에 30초를 통째로 잃었다.
+     */
+    private void blockForFailure(LlmProvider provider, TaskType taskType,
+                                 List<ProviderRole> roleOrder, Set<String> tried) {
+        if (findFirst(taskType, roleOrder, tried).isPresent()) {
+            circuitBreaker.block(provider.name(), SHORT_BLOCK_SECONDS);
+            return;
+        }
+        log.warn("[NO-FALLBACK] provider={} is the only viable provider for task={} — "
+                + "blocking briefly ({}s) so a restart recovers immediately instead of after {}s",
+                provider.name(), taskType, NO_FALLBACK_BLOCK_SECONDS, SHORT_BLOCK_SECONDS);
+        circuitBreaker.block(provider.name(), NO_FALLBACK_BLOCK_SECONDS);
+    }
+
     private void blockForOverload(LlmProvider provider, TaskType taskType, List<ProviderRole> roleOrder,
                                   Set<String> tried, String retryAfterHeader) {
         boolean hasFallback = findFirst(taskType, roleOrder, tried).isPresent();
@@ -547,6 +680,100 @@ public class LlmRouter {
         }
         return false;
     }
+
+    /**
+     * 프롬프트가 서버의 컨텍스트 윈도우를 넘어 거절된 것인가.
+     *
+     * <p>{@link #isTimeoutLike}(클라이언트 측 중단) · {@link #isVisionUnsupported}(모델 성질)와 같은
+     * 갈래의 세 번째 판정이다 — <b>프로바이더 장애가 아니어서 차단하면 안 되는</b> 실패. 다만 앞의
+     * 둘과 성격이 하나 다르다: mmproj 부재는 그 프로바이더의 영구적 한계라 기억해 두고 이후 이미지
+     * 작업을 건너뛰지만, 컨텍스트 초과는 <b>이 요청 하나의 크기</b> 문제라 기억할 것이 없다. 다음
+     * 짧은 질문은 같은 프로바이더에서 그대로 처리돼야 한다.
+     *
+     * <p><b>공개인 이유</b>: 채팅 스트리밍 경로({@code AnswerService.streamDirect()})는 이 라우터를
+     * 거치지 않고 {@link org.springframework.ai.openai.api.OpenAiApi} 를 직접 호출하므로, 거기서
+     * 올라오는 예외는 {@code LlmContextOverflowException} 으로 바뀌지 않은 <b>날것</b>이다. 축소
+     * 재시도(§6.26-9)가 그 경로에서도 초과를 알아보려면 같은 판정이 필요한데, 마커 목록을 복사하면
+     * 서버 문구가 추가될 때 한쪽만 고쳐진다.
+     *
+     * <p>서버마다 문구가 달라 메시지로 판정한다. 실제로 관측된 것은 LM Studio 의
+     * {@code {"code":500,"message":"Context size has been exceeded."}} 인데, 이것이 HTTP 400 본문에
+     * 실려 오고 Spring AI 가 {@code NonTransientAiException} 으로 감싸므로 위 {@code catch
+     * (HttpStatusCodeException)} 가 아니라 일반 {@code catch} 로 떨어진다 — 그래서 여기서 걸러야 한다.
+     *
+     * <p><b>{@code "too many tokens"} 류는 일부러 넣지 않았다</b> — 레이트리밋 응답
+     * ("Too many tokens per minute")과 문구가 겹쳐, 진짜 429 를 컨텍스트 초과로 잘못 읽으면
+     * {@code blockForOverload()} 의 Retry-After 처리를 건너뛰게 된다.
+     */
+    public static boolean isContextOverflow(Throwable t) {
+        Throwable cur = t;
+        while (cur != null) {
+            String msg = cur.getMessage();
+            if (msg != null) {
+                String lowered = msg.toLowerCase();
+                for (String marker : CONTEXT_OVERFLOW_MARKERS) {
+                    if (lowered.contains(marker)) return true;
+                }
+            }
+            cur = cur.getCause();
+        }
+        return false;
+    }
+
+    /** 소문자 부분 일치. 서버별 문구 — LM Studio · OpenAI · llama.cpp · Anthropic 순. */
+    private static final List<String> CONTEXT_OVERFLOW_MARKERS = List.of(
+            "context size has been exceeded",
+            "context_length_exceeded",
+            "maximum context length",
+            "exceeds the available context",
+            "exceed context size",
+            "prompt is too long"
+    );
+
+    /**
+     * 서버가 <b>처리 중이던 요청을 끊었다</b> — 재시작·모델 리로드·수동 취소. 차단하면 안 되는
+     * 네 번째 실패 갈래다.
+     *
+     * <p><b>{@link #isTimeoutLike} 의 거울상</b>이라고 보면 된다. 그쪽은 클라이언트가 끊은 경우이고
+     * 이쪽은 서버가 끊은 경우인데, "프로바이더가 아픈 것이 아니다"라는 결론은 같다. 실제로 관측된
+     * 것은 로컬 LLM 을 재시작했을 때 진행 중이던 응답에 돌아온
+     * {@code 400 - {"error":"terminated"}} 이고, 서버는 그 몇 초 뒤 멀쩡히 살아난다.
+     *
+     * <p><b>차단이 왜 해로운가.</b> 이 실패는 서버가 <b>내려가는 순간</b>에만 나오는데, 30초 차단은
+     * 서버가 <b>이미 올라온 뒤</b>까지 이어진다. 그동안 들어온 요청은 프로바이더에 닿지도 못하고
+     * {@code "All providers exhausted"} 로 죽어, 운영자에게는 "재시작했는데도 계속 안 된다"로 보인다
+     * (실측: 차단 1회에 그 창 안의 재시도 3번이 전부 그렇게 실패했다). 게다가 그 메시지는 원인을
+     * 가린다 — 프로바이더가 고갈된 것이 아니라 하나가 한 번 끊긴 것이다.
+     *
+     * <p>{@link #isContextOverflow} 와 마찬가지로 <b>기억하지 않는다</b>: 서버 수명주기의 한순간이지
+     * 그 프로바이더의 성질이 아니다.
+     *
+     * <p>판정을 메시지로 하는 이유도 같다 — 이 응답 역시 HTTP 400 본문에 실려
+     * {@code NonTransientAiException} 으로 감싸여 오므로 {@code catch (HttpStatusCodeException)} 에
+     * 걸리지 않는다. 마커를 {@code "terminated"} 한 단어가 아니라 JSON 조각으로 둔 것은 그 단어가
+     * 다른 오류 문구에도 흔히 들어가기 때문이다(예: "connection terminated by peer" — 그건 진짜
+     * 네트워크 장애라 차단하는 편이 맞다).
+     */
+    static boolean isRequestTerminatedByServer(Throwable t) {
+        Throwable cur = t;
+        while (cur != null) {
+            String msg = cur.getMessage();
+            if (msg != null) {
+                String lowered = msg.toLowerCase();
+                for (String marker : REQUEST_TERMINATED_MARKERS) {
+                    if (lowered.contains(marker)) return true;
+                }
+            }
+            cur = cur.getCause();
+        }
+        return false;
+    }
+
+    /** 소문자 부분 일치. 서버가 진행 중인 요청을 끊었을 때의 응답 본문 조각. */
+    private static final List<String> REQUEST_TERMINATED_MARKERS = List.of(
+            "\"error\":\"terminated\"",
+            "\"error\": \"terminated\""
+    );
 
     private static boolean isVisionUnsupported(Throwable t) {
         Throwable cur = t;
