@@ -458,10 +458,10 @@ public class StreamingAgentService {
         // S·C에서는 눌러도 curated_qa 행조차 생기지 않는데, 피드백 값은 저장돼 버튼만 눌린
         // 채로 남는다 — 사용자는 기여했다고 믿는다. generative 와 같은 이유로 모드 문자열이
         // 아니라 성질을 내려보낸다.
-        m.put("curatable",         result.responseMode().allowsCuration());
+        m.put("proposable",         result.responseMode().allowsSubmission());
         // 스트리밍 클라이언트에는 메시지 번들이 없으므로 사유 문구까지 서버가 해석해 보낸다
         // (서버 템플릿 두 곳은 키를 직접 읽는다). 사유는 모드마다 다르다 — ResponseMode 참조.
-        String blockedKey = result.responseMode().curationBlockedMessageKey();
+        String blockedKey = result.responseMode().submissionBlockedMessageKey();
         if (blockedKey != null) {
             m.put("likeDisabledReason", messageSource.getMessage(blockedKey, null, result.locale()));
         }

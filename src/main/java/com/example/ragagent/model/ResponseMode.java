@@ -14,7 +14,7 @@ package com.example.ragagent.model;
  *
  * <p>모드가 늘어날 때 분기가 흩어지지 않도록, 각 모드는 "무엇을 하는가"를 값이 아니라
  * <b>성질</b>로 노출한다({@link #allowsDirect()} / {@link #skipsVerification()} /
- * {@link #summaryOnly()} / {@link #retrievalBoost()} / {@link #allowsCuration()} /
+ * {@link #summaryOnly()} / {@link #retrievalBoost()} / {@link #allowsSubmission()} /
  * {@link #usesCreativeTemperature()} / {@link #usesCreativeEval()} / {@link #allowsReuse()} /
  * {@link #operatorToggleable()}).
  * <b>호출부에 모드 값 비교를 두지 않는 것이 이 enum의 계약이다</b> — 그래야 다음 모드를
@@ -35,13 +35,17 @@ public enum ResponseMode {
     /**
      * 요약형 — 짧게, 요약 섹션 하나로. 검증(eval + CRITIC)을 건너뛴다.
      *
-     * <p><b>큐레이션 대상이 아니다</b>({@code curatable=false}). S 답변은 전체가 {@code "## 요약"}
-     * 한 섹션이라 큐레이션 임베딩 입력에서 구조 섹션을 걷어내면 <b>본문이 통째로 사라진다</b>
-     * ({@code CuratedTextUtils.stripStructuralSections} 는 요약·참고 섹션을 제거하도록 만들어졌고,
-     * N 답변에서는 {@code ## 상세 설명}이 남지만 S에는 남을 것이 없다). 그렇게 만들어진 벡터는
-     * 질문만 담고 답변 내용을 하나도 담지 못한다. 게다가 S는 애초에 축약된 답변이라 공유 지식으로
-     * 승격할 대상도 아니다 — 그래서 좋아요는 S 턴에서 아무 일도 하지 않는다(싫어요는 그대로
-     * 동작한다: 다음 대화 컨텍스트에서 제외).
+     * <p><b>지식 제안을 만들 수 없다</b>({@code proposable=false}) — S 하나만 남은 제외다.
+     *
+     * <p><b>사유가 §10.11 에서 바뀌었다.</b> 예전 근거는 "임베딩 입력에서 구조 섹션을 걷어내면
+     * S 에는 남을 것이 없다"({@code CuratedTextUtils.stripStructuralSections})였는데, 이제 좋아요가
+     * 답변을 그대로 임베딩하지 않고 <b>사람이 편집하고 관리자가 승인한 텍스트</b>를 등록하므로
+     * 그 전제 자체가 사라졌다. 실제 사유는 <b>S 가 의도적으로 축약된 답변</b>이라는 것이다:
+     * 1,000자 상한의 {@code ## 요약} 한 섹션이고, 프롬프트가 배경·이유·전제·예외를 <b>빼라고
+     * 지시</b>한다. 지금 짧게 보고 싶어서 고른 형식이지 오래 남길 지식의 원본이 아니다.
+     *
+     * <p>낡은 근거를 함께 고치지 않으면 나중에 코드를 읽는 사람이 "이 근거는 이제 틀렸다"며
+     * S 를 열게 된다 — 근거는 사라졌지만 결론은 그대로 유효하다.
      */
     S(0.15, 2_000,
       "prompt.answer.system.s", "prompt.direct.system.s", null,
@@ -78,9 +82,12 @@ public enum ResponseMode {
      * <p><b>④ 창의 온도</b>({@code app.llm.creative-temperature}). 일반/RAG 온도는 clamp 상한이 0.3이라
      * 창의 생성이 원천 봉쇄돼 있다.
      *
-     * <p><b>⑤ 큐레이션 제외.</b> 이 설계에서 가장 위험한 단일 지점 — C 답변이 {@code curated_qa}에
-     * 들어가면 가중 RRF 축으로 검색돼 <b>모델이 지어낸 코드가 다음 턴의 "문서"가 된다.</b> 세대를
-     * 거치며 환각이 정설로 굳는 되먹임이고, 되돌리려면 벡터를 찾아 지워야 한다.
+     * <p><b>⑤ 지식 제안 가능</b>({@code proposable=true}) — §6.24 에서 뒤집혔다. 원래 제외한 이유는
+     * C 답변이 {@code curated_qa}에 들어가면 가중 RRF 축으로 검색돼 <b>모델이 지어낸 코드가 다음
+     * 턴의 "문서"가 되고</b>, 세대를 거치며 환각이 정설로 굳는 되먹임이 생긴다는 것이었다. 그것이
+     * 치명적이었던 까닭은 <b>게이트가 없었기 때문</b>이다 — 좋아요 한 번이 3초 뒤 전체 검색 지식이
+     * 됐다. §10.11 이 그 경로를 없애 사람이 편집하고 관리자가 승인하게 만들었으므로, C 답변도 다른
+     * 제안과 같은 심사를 받는다. 되먹임을 막는 것은 모드 제외가 아니라 그 심사다.
      *
      * <p>{@link #retrievalBoost()}는 0으로 시작한다. 실사용 topK가 이미 10~12라 +4는 근거가 약하고,
      * 컨텍스트 압박이 실질적 위험이다(topK 12 + 출력 예약이면 이미 33,000~35,000토큰 — LM Studio류는
@@ -89,7 +96,7 @@ public enum ResponseMode {
      */
     C(0.70, 5_000,
       "prompt.answer.system.c", null, "prompt.answer.eval.creative",
-      0, false, false, true, true, false, true, true);
+      0, true, false, true, true, false, true, true);
 
     /** 클라이언트가 아무것도/모르는 값을 보냈을 때 쓰는 모드. 옛 {@code "M"}·{@code "L"} 기록도 여기로 흡수된다. */
     public static final ResponseMode DEFAULT = N;
@@ -100,7 +107,7 @@ public enum ResponseMode {
     private final String directSystemPromptKey;
     private final String evalPromptKey;
     private final int retrievalBoost;
-    private final boolean curatable;
+    private final boolean proposable;
     private final boolean summaryOnly;
     private final boolean creativeTemperature;
     private final boolean creativeEval;
@@ -110,7 +117,7 @@ public enum ResponseMode {
 
     ResponseMode(double tokenRatio, int minChars,
                  String answerSystemPromptKey, String directSystemPromptKey, String evalPromptKey,
-                 int retrievalBoost, boolean curatable, boolean summaryOnly,
+                 int retrievalBoost, boolean proposable, boolean summaryOnly,
                  boolean creativeTemperature, boolean creativeEval, boolean reusable,
                  boolean generative, boolean operatorToggleable) {
         this.tokenRatio = tokenRatio;
@@ -119,7 +126,7 @@ public enum ResponseMode {
         this.directSystemPromptKey = directSystemPromptKey;
         this.evalPromptKey = evalPromptKey;
         this.retrievalBoost = retrievalBoost;
-        this.curatable = curatable;
+        this.proposable = proposable;
         this.summaryOnly = summaryOnly;
         this.creativeTemperature = creativeTemperature;
         this.creativeEval = creativeEval;
@@ -177,29 +184,31 @@ public enum ResponseMode {
     public int retrievalBoost() { return retrievalBoost; }
 
     /**
-     * 이 모드의 답변을 좋아요 기반 큐레이션 지식(§10.10)으로 승격해도 되는가.
+     * 이 모드의 답변에 좋아요를 눌렀을 때 <b>지식 제안을 만들 수 있는가</b> (§10.11).
      *
-     * <p>{@code false}면 {@code CuratedQaService.onLike()}가 즉시 반환한다 — {@code curated_qa} 행도
-     * 만들지 않으므로 좋아요가 사실상 무동작이 된다(LIKE 피드백의 유일한 소비자가 큐레이션이다).
-     * 싫어요는 무관하게 계속 동작한다.
+     * <p>뜻이 §10.11 에서 바뀌었다. 예전에는 "좋아요가 이 답변을 검색 지식으로 직행시켜도 되는가"
+     * 였고, 그래서 이 판정 하나가 무검토 유입의 유일한 방어선이었다. 이제 유입은 사람이 편집하고
+     * 관리자가 승인하는 경로 하나뿐이므로, 이 값은 "좋아요가 그 경로를 열어 주는가"만 답한다.
+     *
+     * <p>{@code false}면 채팅의 좋아요 버튼이 비활성으로 뜨고 그 사유를
+     * {@link #submissionBlockedMessageKey()}가 나른다. 싫어요는 무관하게 계속 동작한다.
      */
-    public boolean allowsCuration() { return curatable; }
+    public boolean allowsSubmission() { return proposable; }
 
     /**
-     * {@link #allowsCuration()} 이 false 인 이유를 담은 메시지 키 — 좋아요 버튼의 비활성 툴팁이다.
-     * 큐레이션이 가능한 모드에서는 {@code null}.
+     * {@link #allowsSubmission()} 이 false 인 이유를 담은 메시지 키 — 좋아요 버튼의 비활성 툴팁이다.
+     * 제안을 만들 수 있는 모드에서는 {@code null}.
      *
-     * <p><b>사유가 모드마다 다르기 때문에</b> 불린 하나로는 부족하다. S는 위험해서가 아니라
-     * 임베딩 입력에서 구조 섹션을 걷어내면 <b>남는 것이 없어서</b>이고, C는 내용이 없어서가 아니라
-     * <b>모델 생성물이 다음 턴의 "문서"가 되는 것</b>을 막기 위해서다. 사용자에게 "안 됩니다"만
-     * 말하고 이유를 감추면 버그로 읽힌다.
+     * <p>지금은 S 하나뿐이라 불린과 값이 같지만 키를 그대로 둔다. 사용자에게 "안 됩니다"만 말하고
+     * 이유를 감추면 버그로 읽히고, 사유는 모드마다 다르다 — S 는 <b>의도적으로 축약된 답변</b>이라
+     * 오래 남길 지식의 원본이 아니어서다(위험해서가 아니다).
      *
      * <p>키를 여기서 들고 있는 것은 {@link #answerSystemPromptKey()}/{@link #evalPromptKey()} 와
      * 같은 규칙이다 — 렌더러가 셋(HTMX 폴백·기록 루프·스트리밍 JS)이라 각자 모드 문자열을 비교하게
      * 두면 모드를 하나 더 붙일 때 세 곳을 사람이 기억해서 찾아야 한다.
      */
-    public String curationBlockedMessageKey() {
-        return curatable ? null : "feedback.like.disabled." + name().toLowerCase();
+    public String submissionBlockedMessageKey() {
+        return proposable ? null : "feedback.like.disabled." + name().toLowerCase();
     }
 
     /**

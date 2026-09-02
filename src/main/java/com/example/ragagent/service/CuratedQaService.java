@@ -135,7 +135,7 @@ public class CuratedQaService {
      * itself. Its premise ("an L answer mirrors the indexed source almost verbatim, so re-embedding
      * duplicates an existing vector") did not hold: L answers measured the same length as M ones,
      * i.e. they were ordinary answers, and the branch was quietly discarding legitimate curated
-     * knowledge. A mode-driven skip returns in Step 3-a via {@code ResponseMode.allowsCuration()},
+     * knowledge. A mode-driven skip returns in Step 3-a via {@code ResponseMode.allowsSubmission()},
      * but for a real reason — keeping model-invented C-mode content out of the search corpus.
      */
     public void onLike(String userId, String threadId, long turnId) {
@@ -150,7 +150,7 @@ public class CuratedQaService {
         // 유일한 소비자가 큐레이션이므로 그 모드에서는 좋아요가 무동작이 된다(싫어요는 그대로
         // 다음 컨텍스트 제외로 동작). 사유는 ResponseMode 의 해당 모드 주석 참조.
         ResponseMode mode = ResponseMode.parse(turn.responseMode());
-        if (!mode.allowsCuration()) {
+        if (!mode.allowsSubmission()) {
             log.debug("[CURATED] onLike: {} 모드는 큐레이션 대상이 아니라 무시한다 turnId={}", mode, turnId);
             return;
         }

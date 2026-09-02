@@ -265,10 +265,10 @@ public class ChatController {
                     resp.inventedSymbols(), resp.budgetNote()));
             model.addAttribute("usedProvider", resp.usedProvider());
             // 좋아요가 이 모드에서 실제로 동작하는가 — 서버가 성질로 계산한다
-            // (SSE done 의 "curatable", 대화 기록의 Turn.curatable() 과 같은 값).
-            model.addAttribute("curatable", form.responseModeOrDefault().allowsCuration());
+            // (SSE done 의 "proposable", 대화 기록의 Turn.proposable() 과 같은 값).
+            model.addAttribute("proposable", form.responseModeOrDefault().allowsSubmission());
             model.addAttribute("curationBlockedKey",
-                    form.responseModeOrDefault().curationBlockedMessageKey());
+                    form.responseModeOrDefault().submissionBlockedMessageKey());
         } catch (LlmContextOverflowException e) {
             // 하위 타입이라 반드시 소진 catch 보다 앞에 와야 한다(자바 규칙이자 이 구분의 전부다).
             log.warn("LLM context window exceeded: {}", e.getMessage());
