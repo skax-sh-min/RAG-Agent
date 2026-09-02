@@ -386,8 +386,8 @@ class ChatControllerHtmxTest {
         when(threadMetaService.findById(any(), eq("thread-01"))).thenReturn(Optional.of(
                 new ThreadMeta("thread-01", "user", "제목", "latest", "now", "now", "COST_FIRST", "")));
         List<MemoryRepository.Turn> turns = List.of(
-                new MemoryRepository.Turn(1L, "q1", "a1", null, null, 0, 0, 0, "local", 1, "LIKE", "M", null),
-                new MemoryRepository.Turn(2L, "q2", "a2", null, null, 0, 0, 0, "local", 1, null, "M", null));
+                new MemoryRepository.Turn(1L, "q1", "a1", null, null, 0, 0, 0, "local", 1, "LIKE", "M", null, false),
+                new MemoryRepository.Turn(2L, "q2", "a2", null, null, 0, 0, 0, "local", 1, null, "M", null, false));
         when(memoryService.getTurns(any(), eq("thread-01"))).thenReturn(turns);
         when(curatedQaService.findFailedTurnIds(List.of(1L, 2L))).thenReturn(Set.of(1L));
 
@@ -463,7 +463,7 @@ class ChatControllerHtmxTest {
                 new ThreadMeta("thread-01", "user", "제목", "latest", "now", "now", "COST_FIRST", "")));
         when(memoryService.getTurns(any(), eq("thread-01"))).thenReturn(List.of(
                 new MemoryRepository.Turn(1L, "질문", "## 요약\n답변",
-                        null, null, 0, 0, 0, "local", 1, null, "N", null)));
+                        null, null, 0, 0, 0, "local", 1, null, "N", null, false)));
         when(memoryService.getVerifications(List.of(1L))).thenReturn(java.util.Map.of(
                 1L, new VerificationSnapshot(true, false, null, null, List.of(), note)));
         String afterReload = mvc.perform(get("/chat/thread-01").with(user(principal)))
@@ -496,7 +496,7 @@ class ChatControllerHtmxTest {
                 new ThreadMeta("thread-01", "user", "제목", "latest", "now", "now", "COST_FIRST", "")));
         when(memoryService.getTurns(any(), eq("thread-01"))).thenReturn(List.of(
                 new MemoryRepository.Turn(1L, "날짜 함수로 예제 만들어줘", "## 구현\n생성된 코드",
-                        null, null, 0, 0, 0, "local", 1, null, "C", null)));
+                        null, null, 0, 0, 0, "local", 1, null, "C", null, false)));
         when(memoryService.getVerifications(List.of(1L))).thenReturn(java.util.Map.of(
                 1L, new VerificationSnapshot(true, true, null, "포트는 환경마다 다릅니다",
                         List.of("parseDateEx"), null)));
@@ -526,7 +526,7 @@ class ChatControllerHtmxTest {
         when(threadMetaService.findById(any(), eq("thread-01"))).thenReturn(Optional.of(
                 new ThreadMeta("thread-01", "user", "제목", "latest", "now", "now", "COST_FIRST", "")));
         when(memoryService.getTurns(any(), eq("thread-01"))).thenReturn(List.of(
-                new MemoryRepository.Turn(1L, "q", "a", null, null, 0, 0, 0, "local", 1, null, "N", null)));
+                new MemoryRepository.Turn(1L, "q", "a", null, null, 0, 0, 0, "local", 1, null, "N", null, false)));
         when(memoryService.getVerifications(List.of(1L))).thenReturn(java.util.Map.of());
 
         String html = mvc.perform(get("/chat/thread-01").with(user(principal)))
@@ -539,27 +539,33 @@ class ChatControllerHtmxTest {
     }
 
     @Test
-    @DisplayName("대화 기록의 질문 앞에 응답 모드가 '[S] 질문' 형태로 붙고, 구 M/L 은 N 으로 표기된다")
+    @DisplayName("대화 기록의 질문 앞에 '[RS] 질문' 두 글자 표기가 붙는다 — 앞이 검색 축, 뒤가 성격")
     void historyQuestionsCarryTheResponseModePrefix() throws Exception {
         AppUserDetails principal = new AppUserDetails("id-1", "user@local", "", "User", "USER", true, false);
         when(threadMetaService.findById(any(), eq("thread-01"))).thenReturn(Optional.of(
                 new ThreadMeta("thread-01", "user", "제목", "latest", "now", "now", "COST_FIRST", "")));
         when(memoryService.getTurns(any(), eq("thread-01"))).thenReturn(List.of(
-                new MemoryRepository.Turn(1L, "요약 질문", "a", null, null, 0, 0, 0, "local", 1, null, "S", null),
-                new MemoryRepository.Turn(2L, "응용 질문", "a", null, null, 0, 0, 0, "local", 1, null, "C", null),
-                new MemoryRepository.Turn(3L, "옛 기록 질문", "a", null, null, 0, 0, 0, "local", 1, null, "M", null),
-                new MemoryRepository.Turn(4L, "모드 없는 질문", "a", null, null, 0, 0, 0, "local", 1, null, null, null)));
+                new MemoryRepository.Turn(1L, "요약 질문", "a", null, null, 0, 0, 0, "local", 1, null, "S", null, false),
+                new MemoryRepository.Turn(2L, "응용 질문", "a", null, null, 0, 0, 0, "local", 1, null, "C", null, false),
+                new MemoryRepository.Turn(3L, "옛 기록 질문", "a", null, null, 0, 0, 0, "local", 1, null, "M", null, false),
+                new MemoryRepository.Turn(4L, "모드 없는 질문", "a", null, null, 0, 0, 0, "local", 1, null, null, null, false),
+                // Direct 로 물은 턴 — 예전 표기로는 RAG 와 구별할 수단이 화면 어디에도 없었다.
+                new MemoryRepository.Turn(5L, "직답 질문", "a", null, null, 0, 0, 0, "local", 1, null, "N", null, true),
+                new MemoryRepository.Turn(6L, "직답 요약 질문", "a", null, null, 0, 0, 0, "local", 1, null, "S", null, true)));
         when(memoryService.getVerifications(any())).thenReturn(java.util.Map.of());
 
         String html = mvc.perform(get("/chat/thread-01").with(user(principal)))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
 
-        assertThat(html).contains("[S] ", "[C] ");
+        assertThat(html).contains("[RS] ", "[RC] ", "[DN] ", "[DS] ");
         // 구 M/L 과 NULL 은 ResponseMode.parse 를 거쳐 N 으로 읽힌다 — 표기가 저장값이 아니라
         // '그 턴이 실제로 답한 방식'을 가리켜야 하므로 화면에도 N 으로 나와야 한다.
-        assertThat(html).as("구 M 기록이 그대로 노출되면 안 된다").doesNotContain("[M] ", "[L] ", "[null] ");
-        assertThat(html).contains("data-response-mode=\"N\"");
+        assertThat(html).as("구 M 기록이 그대로 노출되면 안 된다")
+                .doesNotContain("[M] ", "[L] ", "[null] ", "[RM] ", "[RL] ", "[Rnull] ");
+        // 한 글자 표기가 남아 있으면 검색 축을 잃은 것이다 — 렌더러가 넷이라 하나만 빠지기 쉽다.
+        assertThat(html).doesNotContain("[S] ", "[N] ", "[C] ");
+        assertThat(html).contains("data-response-mode=\"RN\"", "data-response-mode=\"DS\"");
 
         // 질문 원본에는 표기가 섞이지 않는다 — data-question 은 추천/재사용이 쓰는 값이라,
         // 여기에 대괄호가 끼면 그 소비자들에게 그대로 딸려간다.
@@ -573,8 +579,8 @@ class ChatControllerHtmxTest {
         when(threadMetaService.findById(any(), eq("thread-01"))).thenReturn(Optional.of(
                 new ThreadMeta("thread-01", "user", "제목", "latest", "now", "now", "COST_FIRST", "")));
         when(memoryService.getTurns(any(), eq("thread-01"))).thenReturn(List.of(
-                new MemoryRepository.Turn(1L, "q", "a", null, null, 0, 0, 0, "local", 1, null, "C", null),
-                new MemoryRepository.Turn(2L, "q2", "a2", null, null, 0, 0, 0, "local", 1, null, "N", null)));
+                new MemoryRepository.Turn(1L, "q", "a", null, null, 0, 0, 0, "local", 1, null, "C", null, false),
+                new MemoryRepository.Turn(2L, "q2", "a2", null, null, 0, 0, 0, "local", 1, null, "N", null, false)));
         when(memoryService.getVerifications(any())).thenReturn(java.util.Map.of());
 
         String html = mvc.perform(get("/chat/thread-01").with(user(principal)))

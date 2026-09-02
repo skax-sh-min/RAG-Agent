@@ -59,7 +59,7 @@ class CuratedQaTagScopeTest {
 
     private static MemoryRepository.Turn turn(String selectedTags) {
         return new MemoryRepository.Turn(TURN_ID, "질문", "답변", null, null, 0, 0, 0,
-                "local", 1, "LIKE", "M", selectedTags);
+                "local", 1, "LIKE", "M", selectedTags, false);
     }
 
     private static CuratedQaRepository.CuratedQa curated(String tags) {

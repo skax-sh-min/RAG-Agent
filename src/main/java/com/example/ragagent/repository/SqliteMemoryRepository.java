@@ -38,7 +38,8 @@ public class SqliteMemoryRepository implements MemoryRepository {
             rs.getInt("llm_calls"),
             rs.getString("feedback"),
             rs.getString("response_mode"),
-            rs.getString("selected_tags"));
+            rs.getString("selected_tags"),
+            rs.getInt("direct_mode") != 0);
 
     public SqliteMemoryRepository(JdbcTemplate jdbc, AppProperties props) {
         this.jdbc = jdbc;
@@ -290,7 +291,8 @@ public class SqliteMemoryRepository implements MemoryRepository {
     public List<Turn> getTurns(String userId, String threadId) {
         return jdbc.query(
             "SELECT t.id, t.question, COALESCE(NULLIF(src.answer, ''), NULLIF(t.answer, ''), '" + DELETED_REFERENCE_TEXT + "') AS answer, t.asked_at, t.created_at, " +
-            "t.input_tokens, t.output_tokens, t.elapsed_ms, t.provider, t.llm_calls, t.feedback, t.response_mode, t.selected_tags " +
+            "t.input_tokens, t.output_tokens, t.elapsed_ms, t.provider, t.llm_calls, t.feedback, t.response_mode, t.selected_tags, " +
+            "COALESCE(t.direct_mode, 0) AS direct_mode " +
             "FROM conversation_turns t " +
             "LEFT JOIN conversation_turns src ON src.id = t.reused_from_turn_id AND src.user_id = t.user_id " +
             "WHERE t.user_id = ? AND t.thread_id = ? ORDER BY t.id ASC",
@@ -305,7 +307,8 @@ public class SqliteMemoryRepository implements MemoryRepository {
         // regardless of how long the conversation has grown.
         List<Turn> rows = jdbc.query(
             "SELECT t.id, t.question, COALESCE(NULLIF(src.answer, ''), NULLIF(t.answer, ''), '" + DELETED_REFERENCE_TEXT + "') AS answer, t.asked_at, t.created_at, " +
-            "t.input_tokens, t.output_tokens, t.elapsed_ms, t.provider, t.llm_calls, t.feedback, t.response_mode, t.selected_tags " +
+            "t.input_tokens, t.output_tokens, t.elapsed_ms, t.provider, t.llm_calls, t.feedback, t.response_mode, t.selected_tags, " +
+            "COALESCE(t.direct_mode, 0) AS direct_mode " +
             "FROM conversation_turns t " +
             "LEFT JOIN conversation_turns src ON src.id = t.reused_from_turn_id AND src.user_id = t.user_id " +
             "WHERE t.user_id = ? AND t.thread_id = ? ORDER BY t.id DESC LIMIT ?",
@@ -318,7 +321,8 @@ public class SqliteMemoryRepository implements MemoryRepository {
     public Optional<Turn> getTurn(String userId, String threadId, long turnId) {
         List<Turn> rows = jdbc.query(
             "SELECT t.id, t.question, COALESCE(NULLIF(src.answer, ''), NULLIF(t.answer, ''), '" + DELETED_REFERENCE_TEXT + "') AS answer, t.asked_at, t.created_at, " +
-            "t.input_tokens, t.output_tokens, t.elapsed_ms, t.provider, t.llm_calls, t.feedback, t.response_mode, t.selected_tags " +
+            "t.input_tokens, t.output_tokens, t.elapsed_ms, t.provider, t.llm_calls, t.feedback, t.response_mode, t.selected_tags, " +
+            "COALESCE(t.direct_mode, 0) AS direct_mode " +
             "FROM conversation_turns t " +
             "LEFT JOIN conversation_turns src ON src.id = t.reused_from_turn_id AND src.user_id = t.user_id " +
             "WHERE t.id = ? AND t.user_id = ? AND t.thread_id = ?",

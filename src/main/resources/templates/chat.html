@@ -157,7 +157,7 @@
                         <div class="me-1">
                             <div class="bubble-user p-3">
                                 <div><span class="bubble-user-mode"
-                                           th:text="'[' + ${turn.responseModeLabel} + '] '">[N] </span><span
+                                           th:text="'[' + ${turn.responseModeLabel} + '] '">[RN] </span><span
                                         th:text="${turn.question}"></span></div>
                                 <small class="text-white bubble-user-time msg-time"
                                        th:if="${turn.askedAt != null}"
@@ -984,8 +984,9 @@
         const userBubble = document.createElement('div');
         userBubble.className = 'd-flex justify-content-end mb-3 align-items-end';
         // 재사용 버블도 같은 표기를 단다. 저장된 그 턴의 모드가 아니라 '지금 폼에 선택된' 모드인데,
-        // 재사용은 방금 고른 설정으로 새 턴을 만드는 동작이라 그것이 맞다.
-        const reuseMode = responseModeInput.value || RESPONSE_MODE_DEFAULT;
+        // 재사용은 방금 고른 설정으로 새 턴을 만드는 동작이라 그것이 맞다. 검색 축도 마찬가지다.
+        const reuseMode = bubbleModeLabel(responseModeInput.value || RESPONSE_MODE_DEFAULT,
+                                          directModeInput.value);
         userBubble.dataset.responseMode = reuseMode;
         userBubble.innerHTML =
             `<div class="me-1">` +
@@ -1211,7 +1212,8 @@
             const timeStr = new Date().toLocaleTimeString('ko-KR', {hour: '2-digit', minute: '2-digit', hour12: false});
             const bubble = document.createElement('div');
             bubble.className = 'd-flex justify-content-end mb-3 align-items-end';
-            const optimisticMode = responseModeInput.value || RESPONSE_MODE_DEFAULT;
+            const optimisticMode = bubbleModeLabel(responseModeInput.value || RESPONSE_MODE_DEFAULT,
+                                                   directModeInput.value);
             bubble.dataset.responseMode = optimisticMode;
             bubble.innerHTML =
                 `<div class="me-1">` +
@@ -1521,7 +1523,7 @@
         return body ? body.textContent.trim() : '';
     }
 
-    /* 목록·풍선에 붙는 '[S] ' 접두. 버블의 표기 span 을 읽지 않고 data-response-mode 로 다시
+    /* 목록·풍선에 붙는 '[RN] ' 접두. 버블의 표기 span 을 읽지 않고 data-response-mode 로 다시
        만드는 이유는 qnavTextOf() 가 data-question(원본)을 우선하기 때문이다 — 원본에는 표기가
        없으므로 여기서 붙이지 않으면 버블에는 보이고 목록에는 안 보이는 상태가 된다.
        모드를 심지 않은 옛 경로가 남아 있어도 빈 문자열로 떨어져 질문만 나온다. */

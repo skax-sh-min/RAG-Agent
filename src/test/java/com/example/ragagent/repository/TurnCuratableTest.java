@@ -21,7 +21,7 @@ class TurnCuratableTest {
 
     private static MemoryRepository.Turn turn(String responseMode) {
         return new MemoryRepository.Turn(1L, "질문", "답변", "2026-08-25T00:00:00Z", null,
-                0, 0, 0, "local", 1, null, responseMode, null);
+                0, 0, 0, "local", 1, null, responseMode, null, false);
     }
 
     @Test
