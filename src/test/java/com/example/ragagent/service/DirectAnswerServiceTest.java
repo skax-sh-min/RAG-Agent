@@ -272,4 +272,69 @@ class DirectAnswerServiceTest {
             logbackLogger.setLevel(previousLevel);
         }
     }
+
+    // ── §10.13 Direct 경로의 예산 안전망 ────────────────────────────────────
+
+    /**
+     * 이 경로는 {@code fitToBudget()} 을 한 번도 부르지 않았다. 이력이 모드와 무관하게 5,000자로
+     * 고정이라 드러나지 않았을 뿐이고, §10.13 이 그 상한을 창에서 파생시키기 시작하면 프롬프트가
+     * 창을 넘길 수 있다 — 실제로 보내기 직전에 한 번 더 잰다.
+     */
+    private DirectAnswerService withWindow(int windowTokens) {
+        AppProperties props = mock(AppProperties.class);
+        when(props.llmSafe()).thenReturn(new AppProperties.LlmConfig(
+                List.of(), 2, 10, 180, "COST_FIRST", 3, 20, 0.0, 0.1, 0.0, 0.7, true, 6000, 1, true));
+        when(llmRouter.findProviderName(eq(TaskType.TEXT), any())).thenReturn("local");
+        var windows = new com.example.ragagent.llm.ProviderContextWindows();
+        if (windowTokens > 0) {
+            windows.record("local", windowTokens,
+                    com.example.ragagent.llm.ProviderContextWindows.Source.PROBED);
+        }
+        return new DirectAnswerService(llmRouter, messageSource, props, windows);
+    }
+
+    private static AgentState stateWithHistory(String history) {
+        return AgentState.of("질문", "v1", "t1", history, RoutingMode.COST_FIRST, true)
+                .toBuilder().responseMode(ResponseMode.N).build();
+    }
+
+    @Test
+    @DisplayName("§10.13 — 창에 안 맞는 이력은 보내기 전에 잘리고, 잘랐다는 사실을 사용자에게 말한다")
+    void execute_trimsHistoryToTheWindowAndSaysSo() {
+        // 8,192 − 4,200(N 블로킹 출력 예약) − 819(여유) − 질문 − 1,000 ≈ 2,170자
+        String history = ("Q: 오래된 질문\nA: 오래된 답변\n\n").repeat(200) + "Q: 최근 질문\nA: 최근 답변";
+        when(llmRouter.executeGatedWithUsage(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), any()))
+                .thenReturn(new LlmRouter.LlmResult("답변", 0, 0));
+
+        AgentState result = withWindow(8_192).execute(stateWithHistory(history));
+
+        assertThat(result.conversationHistory().length()).isLessThan(history.length());
+        assertThat(result.conversationHistory()).contains("최근 질문");   // 오래된 쪽부터 버린다
+        assertThat(result.budgetNote()).contains("이전 대화 일부를 제외했습니다");
+    }
+
+    @Test
+    @DisplayName("§10.13 — 창을 모르면 아무것도 하지 않는다 (추측으로 대화 맥락을 버리지 않는다)")
+    void execute_unknownWindow_leavesHistoryAlone() {
+        String history = ("Q: 질문\nA: 답변\n\n").repeat(500);
+        when(llmRouter.executeGatedWithUsage(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), any()))
+                .thenReturn(new LlmRouter.LlmResult("답변", 0, 0));
+
+        AgentState result = withWindow(0).execute(stateWithHistory(history));
+
+        assertThat(result.conversationHistory()).isEqualTo(history);
+        assertThat(result.budgetNote()).isNull();
+    }
+
+    @Test
+    @DisplayName("§10.13 — 예산 안에 들어가면 안내도 붙지 않는다")
+    void execute_withinBudget_saysNothing() {
+        when(llmRouter.executeGatedWithUsage(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), any()))
+                .thenReturn(new LlmRouter.LlmResult("답변", 0, 0));
+
+        AgentState result = withWindow(40_960).execute(stateWithHistory("Q: 질문\nA: 답변"));
+
+        assertThat(result.conversationHistory()).isEqualTo("Q: 질문\nA: 답변");
+        assertThat(result.budgetNote()).isNull();
+    }
 }

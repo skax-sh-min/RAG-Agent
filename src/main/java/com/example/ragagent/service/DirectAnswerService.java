@@ -53,6 +53,7 @@ public class DirectAnswerService {
     }
 
     public AgentState execute(AgentState state) {
+        state = withFittedHistory(state);
         String systemPrompt = resolveSystemPrompt(state);
         log.debug("[DirectAnswer] directMode={} routingMode={} historyLen={}", state.directMode(),
                 state.routingMode(), state.conversationHistory().length());
@@ -74,6 +75,7 @@ public class DirectAnswerService {
 
     /** Streaming variant — pushes tokens via listener.onToken() instead of blocking. */
     public AgentState executeStreaming(AgentState state, GraphListener listener) {
+        state = withFittedHistory(state);
         String systemPrompt = resolveSystemPrompt(state);
         log.debug("[DirectAnswer] streaming directMode={} routingMode={} historyLen={}", state.directMode(),
                 state.routingMode(), state.conversationHistory().length());
@@ -129,7 +131,7 @@ public class DirectAnswerService {
      * 스타일 지시문 층을 걷어냈다).
      */
     private String buildUserPrompt(AgentState state) {
-        String history = fitHistory(state);
+        String history = state.conversationHistory();
         String question = PromptInjectionGuard.wrap(state.question());
         if (!state.directMode()) {
             return history.isBlank()
@@ -159,21 +161,27 @@ public class DirectAnswerService {
      * 달라질 수 있지만 {@code AnswerService.buildAnswerPrompt()} 가 같은 근사를 쓰고 같은 이유로
      * 받아들인다(대체되는 것은 대개 창이 더 큰 다른 역할이라 "덜 잘랐어야 했는데 더 잘랐다" 쪽이다).
      */
-    private String fitHistory(AgentState state) {
+    private AgentState withFittedHistory(AgentState state) {
         String history = state.conversationHistory();
-        if (contextWindows == null || history == null || history.isBlank()) return history;
+        if (contextWindows == null || history == null || history.isBlank()) return state;
         int window = contextWindows.tokensOrZero(
                 llmRouter.findProviderName(TaskType.TEXT, state.routingMode()));
-        if (window <= 0) return history;
+        if (window <= 0) return state;
         int budget = HistoryPolicy.budgetChars(window,
                 AnswerService.outputReservation(state.responseMode(), true, props.llmSafe().maxTokens()),
                 0, TokenEstimator.estimate(state.question()), Integer.MAX_VALUE);
         String fitted = HistoryPolicy.trimToBudget(history, budget);
-        if (fitted.length() < history.length()) {
-            log.debug("[DirectAnswer] 이력 축소 {}→{}자 (창 {}토큰)",
-                    history.length(), fitted.length(), window);
-        }
-        return fitted;
+        if (fitted.length() >= history.length()) return state;
+
+        log.warn("[DirectAnswer] 컨텍스트 창 {}토큰에 맞춰 이력 축소 {}→{}자",
+                window, history.length(), fitted.length());
+        // 줄였으면 말한다 — 이 앱이 미사용 출처·envNote·RAG 축소에서 반복해 온 규칙이다.
+        // 문구는 RAG 경로의 축소 안내와 같은 자리(budgetNote)에 같은 말로 실린다: 세 렌더러가
+        // 이미 그 필드를 그리고 있으므로 새 표시 경로를 만들지 않는다.
+        return state.toBuilder()
+                .conversationHistory(fitted)
+                .budgetNote("컨텍스트 한도로 이전 대화 일부를 제외했습니다.")
+                .build();
     }
 
     /**
