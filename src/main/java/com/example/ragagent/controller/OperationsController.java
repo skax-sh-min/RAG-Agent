@@ -203,45 +203,6 @@ public class OperationsController {
         return ResponseEntity.noContent().build();
     }
 
-    /**
-     * §10.10 step ④ — owner-only inline edit of a turn's curated-Q&A entry (chat window "편집").
-     * Ownership check reuses the exact same {@code getFeedback(userId, threadId, turnId)} scoping
-     * as the feedback endpoint above — a thread only ever contains the current user's own turns,
-     * so no separate authorization mechanism is needed (see PLAN.md §10.10 "UI 분리"). Admin edits
-     * go through the separate {@code /admin/curated/{id}} endpoint (AdminController), which can
-     * reach any user's entry.
-     */
-    @PatchMapping("/ui/threads/{threadId}/turns/{turnId}/curated")
-    @ResponseBody
-    public ResponseEntity<Void> updateCuratedAnswer(ThreadContext ctx, @PathVariable String threadId,
-                                                     @PathVariable long turnId, @RequestParam String answer) {
-        String userId = ctx.userId();
-        if (memoryService.getFeedback(userId, threadId, turnId).isEmpty()) {
-            return ResponseEntity.notFound().build();
-        }
-        boolean updated = curatedQaService.updateAnswerForTurn(userId, threadId, turnId, answer);
-        if (!updated) {
-            return ResponseEntity.notFound().build();
-        }
-        auditLogger.log("curated.edit", threadId, Map.of("turnId", turnId, "by", "owner"));
-        return ResponseEntity.noContent().build();
-    }
-
-    /** Fetches the current curated answer text to populate the chat inline edit box. Same ownership
-     *  scoping as {@link #updateCuratedAnswer}. */
-    @GetMapping("/ui/threads/{threadId}/turns/{turnId}/curated")
-    @ResponseBody
-    public ResponseEntity<Map<String, String>> getCuratedAnswer(ThreadContext ctx, @PathVariable String threadId,
-                                                                  @PathVariable long turnId) {
-        String userId = ctx.userId();
-        if (memoryService.getFeedback(userId, threadId, turnId).isEmpty()) {
-            return ResponseEntity.notFound().build();
-        }
-        return curatedQaService.findActiveByTurn(turnId)
-                .map(row -> ResponseEntity.ok(Map.of("answer", row.answer())))
-                .orElseGet(() -> ResponseEntity.notFound().build());
-    }
-
     /** Hides one image from a chat turn (owner-scoped to userId + threadId). */
     @PatchMapping("/ui/threads/{threadId}/turns/{turnId}/images/exclude")
     @ResponseBody

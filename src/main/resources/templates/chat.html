@@ -277,10 +277,10 @@
                                             th:if="${turn.proposable}"
                                             th:classappend="${turn.feedback == 'LIKE'} ? 'btn-primary' : 'btn-outline-secondary'"
                                             th:attr="aria-label=#{feedback.like},title=#{feedback.like}">👍</button>
-                                    <!-- 좋아요가 아무 일도 하지 않는 모드(S·C). 이 수정 이전에 눌린
-                                         LIKE 기록이 남아 있어도 강조하지 않는다 — 그 좋아요는 실제로
-                                         curated_qa 행을 만든 적이 없으므로, 기여 중인 것처럼 칠하는
-                                         것이 바로 여기서 고치려는 거짓말이다. -->
+                                    <!-- 좋아요가 지식 제안을 열어 주지 않는 모드(S). 이전에 눌린 LIKE
+                                         기록이 남아 있어도 강조하지 않는다 — 그 좋아요는 아무것도 만든
+                                         적이 없으므로, 기여 중인 것처럼 칠하는 것이 여기서 고치려는
+                                         거짓말이다. -->
                                     <button type="button" class="btn btn-sm btn-outline-secondary feedback-btn opacity-50"
                                             th:unless="${turn.proposable}" disabled
                                             th:attr="aria-label=#{${turn.submissionBlockedMessageKey}},
@@ -288,21 +288,9 @@
                                     <button type="button" class="btn btn-sm feedback-btn" data-feedback="DISLIKE"
                                             th:classappend="${turn.feedback == 'DISLIKE'} ? 'btn-danger' : 'btn-outline-secondary'"
                                             th:attr="aria-label=#{feedback.dislike},title=#{feedback.dislike}">👎</button>
-                                    <!-- §10.10 — 좋아요한 답변만 편집 가능(본인 소유 turn, 채팅창은 항상 본인 스레드만 보여줌).
-                                         proposable 조건이 함께 걸린다: 이 수정 이전 S·C 턴에 남은 LIKE 기록은
-                                         curated_qa 행이 없으므로, 연필만 보고 누르면 편집할 대상이 없다. -->
-                                    <button type="button" class="btn btn-sm btn-outline-secondary curated-edit-btn"
-                                            th:style="${turn.feedback == 'LIKE' and turn.proposable} ? '' : 'display:none;'"
-                                            th:attr="aria-label=#{curated.edit},title=#{curated.edit}">
-                                        <i class="bi bi-pencil"></i>
-                                    </button>
-                                    <!-- §10.10 embedding-fallback — 좋아요한 답변의 큐레이션 임베딩이 (재시도 후에도)
-                                         실패한 경우의 표시. 백그라운드 스레드에서 몇 초 뒤 실패하므로 실시간으로는
-                                         알릴 수 없어 다음 페이지 로드 시 여기서 보여준다. -->
-                                    <span th:if="${curatedEmbedFailedTurnIds != null and curatedEmbedFailedTurnIds.contains(turn.id)}"
-                                          class="badge bg-warning text-dark"
-                                          th:text="#{curated.embed.failed}"
-                                          th:title="#{curated.embed.failed.hint}">임베딩 실패</span>
+                                    <!-- §10.11 — 채팅은 감상만 다룬다. 큐레이션 상태(연필·임베딩 실패
+                                         배지)는 여기 있지 않다: 등록·수정·철회가 전부 지식 제안 페이지에서
+                                         일어나므로, 두 화면이 같은 것을 서로 다르게 말할 자리를 없앴다. -->
                                 </div>
                                 <div class="text-muted"
                                      style="font-size:0.68rem;"
@@ -467,22 +455,6 @@
                     </div>
                 </form>
             </div>
-        </div>
-    </div>
-
-    <!-- ── §10.10 큐레이션 Q&A 편집 Offcanvas (본인 좋아요 답변) ──────────────── -->
-    <div class="offcanvas offcanvas-end" tabindex="-1" id="curatedEditOffcanvas" style="width:480px; max-width:100%;">
-        <div class="offcanvas-header border-bottom">
-            <h6 class="offcanvas-title"><i class="bi bi-pencil-square me-2"></i><span th:text="#{curated.edit.title}">큐레이션 답변 편집</span></h6>
-            <button type="button" class="btn-close" data-bs-dismiss="offcanvas"></button>
-        </div>
-        <div class="offcanvas-body d-flex flex-column gap-3" id="curatedEditOffcanvasBody">
-            <textarea id="curated-edit-chat-answer" class="form-control flex-grow-1"
-                      style="min-height:280px; font-size:0.9rem; resize:vertical;"></textarea>
-            <div class="form-text small" th:text="#{curated.edit.hint}">저장하면 검색 임베딩이 자동으로 다시 계산됩니다.</div>
-            <button class="btn btn-primary btn-sm" id="curated-edit-save-btn">
-                <i class="bi bi-save me-1"></i><span th:text="#{action.save}">저장</span>
-            </button>
         </div>
     </div>
 
@@ -1435,6 +1407,12 @@
             return;
         }
 
+        // §10.11 — 좋아요로 '바뀌는' 클릭에서만 지식 제안을 묻는다(해제 토글에는 묻지 않는다).
+        // '아니오'는 좋아요 자체를 취소한다 — 무엇도 저장하지 않고 그냥 돌아간다. 좋아요만 남기고
+        // 제안은 안 하는 중간 상태를 만들지 않는 것이 이 화면의 계약이다: 채팅은 감상만 다루고,
+        // 지식으로 만드는 일은 전부 제안 페이지에서 일어난다.
+        if (newValue === 'LIKE' && !confirm(I18N.proposeConfirm)) return;
+
         fetch(`/ui/threads/${tId}/turns/${turnId}/feedback`, {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/x-www-form-urlencoded', ...getCsrfHeaders() },
@@ -1449,47 +1427,12 @@
                 btn.classList.remove('btn-outline-secondary');
                 btn.classList.add(activeClass);
             }
-            // §10.10 — 편집 아이콘은 LIKE 상태일 때만 노출(승격 즉시 임베딩되므로 그 즉시부터 편집 가능).
-            const editBtn = container.querySelector('.curated-edit-btn');
-            if (editBtn) editBtn.style.display = (newValue === 'LIKE') ? '' : 'none';
-        }).catch(function () { showToast(I18N.requestFailed, 'danger'); });
-    });
-
-    /* ── §10.10 큐레이션 Q&A 인라인 편집 (본인 좋아요 답변) ─────────────────── */
-    let curatedEditTarget = null; // { threadId, turnId, container }
-
-    document.getElementById('chat-messages').addEventListener('click', function (e) {
-        const editBtn = e.target.closest('.curated-edit-btn');
-        if (!editBtn) return;
-        const container = editBtn.closest('.feedback-controls');
-        if (!container) return;
-        const threadId = container.dataset.threadId;
-        const turnId = container.dataset.turnId;
-        if (!threadId || !turnId) return;
-
-        fetch(`/ui/threads/${threadId}/turns/${turnId}/curated`)
-            .then(function (r) { if (!r.ok) throw new Error(); return r.json(); })
-            .then(function (data) {
-                curatedEditTarget = { threadId, turnId };
-                document.getElementById('curated-edit-chat-answer').value = data.answer || '';
-                new bootstrap.Offcanvas(document.getElementById('curatedEditOffcanvas')).show();
-            })
-            .catch(function () { showToast(I18N.requestFailed, 'danger'); });
-    });
-
-    document.getElementById('curated-edit-save-btn').addEventListener('click', function () {
-        if (!curatedEditTarget) return;
-        const { threadId, turnId } = curatedEditTarget;
-        const answer = document.getElementById('curated-edit-chat-answer').value;
-
-        fetch(`/ui/threads/${threadId}/turns/${turnId}/curated`, {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded', ...getCsrfHeaders() },
-            body: 'answer=' + encodeURIComponent(answer)
-        }).then(function (r) {
-            if (!r.ok) { showToast(I18N.requestFailed, 'danger'); return; }
-            showToast(I18N.curatedSaved, 'success');
-            bootstrap.Offcanvas.getInstance(document.getElementById('curatedEditOffcanvas')).hide();
+            // 좋아요가 기록된 뒤에 이동한다 — 제안 화면에서 뒤로 오면 버튼이 눌린 채로 있어야 한다.
+            // 본문은 서버가 그 턴에서 읽으므로 URL 로는 어느 턴인지만 넘긴다.
+            if (newValue === 'LIKE') {
+                location.href = '/curated/submissions?fromThread=' + encodeURIComponent(tId)
+                        + '&fromTurn=' + encodeURIComponent(turnId);
+            }
         }).catch(function () { showToast(I18N.requestFailed, 'danger'); });
     });
 

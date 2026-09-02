@@ -550,11 +550,11 @@
             if (data.turnId != null) {
                 const threadIdInput = document.querySelector('#chat-form input[name="threadId"]');
                 const tId = threadIdInput ? threadIdInput.value : '';
-                // 좋아요가 실제로 무언가를 하는 모드에서만 누를 수 있다. S·C는 눌러도 curated_qa
-                // 행조차 생기지 않는데 피드백 값은 저장돼, 예전에는 버튼만 눌린 채 남아 사용자가
-                // 기여했다고 믿게 됐다. 판정과 사유 문구 모두 서버가 내려준다(done.proposable /
-                // done.likeDisabledReason) — 여기서 모드 문자열을 비교하면 모드가 늘 때마다
-                // 이 파일을 사람이 기억해서 찾아야 한다. 싫어요는 모드와 무관하게 그대로 동작한다.
+                // 좋아요가 지식 제안을 열어 주는 모드에서만 누를 수 있다(§10.11). 막힌 모드에서
+                // 버튼을 살려 두면 눌린 채 남아 사용자는 기여했다고 믿게 된다. 판정과 사유 문구
+                // 모두 서버가 내려준다(done.proposable / done.likeDisabledReason) — 여기서 모드
+                // 문자열을 비교하면 모드가 늘 때마다 이 파일을 사람이 기억해서 찾아야 한다.
+                // 싫어요는 모드와 무관하게 그대로 동작한다.
                 const likeBtn = (data.proposable === false)
                     ? `<button type="button" class="btn btn-sm btn-outline-secondary feedback-btn opacity-50" disabled aria-label="${escHtml(data.likeDisabledReason || '')}" title="${escHtml(data.likeDisabledReason || '')}">👍</button>`
                     : `<button type="button" class="btn btn-sm btn-outline-secondary feedback-btn" data-feedback="LIKE" aria-label="좋아요" title="좋아요">👍</button>`;

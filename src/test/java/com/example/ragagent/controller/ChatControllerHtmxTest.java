@@ -380,27 +380,6 @@ class ChatControllerHtmxTest {
                 .run(any(), argThat(form -> form.responseModeOrDefault() == com.example.ragagent.model.ResponseMode.S), any());
     }
 
-    @Test
-    @DisplayName("GET /chat/{threadId} — 히스토리 turn id들로 curatedQaService.findFailedTurnIds를 호출해 모델에 노출")
-    void chat_existingThread_exposesCuratedEmbedFailedTurnIds() throws Exception {
-        when(threadMetaService.findById(any(), eq("thread-01"))).thenReturn(Optional.of(
-                new ThreadMeta("thread-01", "user", "제목", "latest", "now", "now", "COST_FIRST", "")));
-        List<MemoryRepository.Turn> turns = List.of(
-                new MemoryRepository.Turn(1L, "q1", "a1", null, null, 0, 0, 0, "local", 1, "LIKE", "M", null, false),
-                new MemoryRepository.Turn(2L, "q2", "a2", null, null, 0, 0, 0, "local", 1, null, "M", null, false));
-        when(memoryService.getTurns(any(), eq("thread-01"))).thenReturn(turns);
-        when(curatedQaService.findFailedTurnIds(List.of(1L, 2L))).thenReturn(Set.of(1L));
-
-        // base.html reads principal.displayName — needs a real AppUserDetails, not @WithMockUser's default.
-        AppUserDetails principal = new AppUserDetails("id-1", "user@local", "", "User", "USER", true, false);
-
-        mvc.perform(get("/chat/thread-01").with(user(principal)))
-                .andExpect(status().isOk())
-                .andExpect(model().attribute("curatedEmbedFailedTurnIds", Set.of(1L)));
-
-        verify(curatedQaService).findFailedTurnIds(List.of(1L, 2L));
-    }
-
     /**
      * 회귀 — 8자보다 짧은 thread id 로 채팅 페이지가 500 이 되던 사고.
      *
@@ -573,7 +552,7 @@ class ChatControllerHtmxTest {
     }
 
     @Test
-    @DisplayName("좋아요가 무동작인 모드(S·C)에서는 대화 기록의 👍가 비활성으로, 사유와 함께 그려진다")
+    @DisplayName("좋아요가 무동작인 모드(S)에서는 대화 기록의 👍가 비활성으로, 사유와 함께 그려진다")
     void likeButtonIsDisabledWithReason_whenModeIsNotProposable() throws Exception {
         AppUserDetails principal = new AppUserDetails("id-1", "user@local", "", "User", "USER", true, false);
         when(threadMetaService.findById(any(), eq("thread-01"))).thenReturn(Optional.of(
@@ -596,6 +575,31 @@ class ChatControllerHtmxTest {
         assertThat(html).contains("data-feedback=\"LIKE\"");
         // 싫어요는 모드와 무관하게 살아 있어야 한다 — 이 수정이 건드리는 것은 좋아요뿐이다.
         assertThat(html).contains("data-feedback=\"DISLIKE\"");
+    }
+
+    @Test
+    @DisplayName("§10.11 — 채팅에는 큐레이션 상태가 없다(연필·임베딩 실패 배지 제거), 대신 등록 확인 문구가 실린다")
+    void chatShowsNoCurationState_andCarriesTheProposeConfirm() throws Exception {
+        AppUserDetails principal = new AppUserDetails("id-1", "user@local", "", "User", "USER", true, false);
+        when(threadMetaService.findById(any(), eq("thread-01"))).thenReturn(Optional.of(
+                new ThreadMeta("thread-01", "user", "제목", "latest", "now", "now", "COST_FIRST", "")));
+        when(memoryService.getTurns(any(), eq("thread-01"))).thenReturn(List.of(
+                new MemoryRepository.Turn(1L, "q", "a", null, null, 0, 0, 0, "local", 1, "LIKE", "N", null, false)));
+        when(memoryService.getVerifications(any())).thenReturn(java.util.Map.of());
+
+        String html = mvc.perform(get("/chat/thread-01").with(user(principal)))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        // 등록·수정·철회는 전부 지식 제안 페이지에서 일어난다 — 좋아요한 턴에도 연필이 없다.
+        assertThat(html).doesNotContain("curated-edit-btn");
+        assertThat(html).doesNotContain("curatedEditOffcanvas");
+        // 좋아요 클릭이 먼저 묻는 문구가 I18N 으로 실렸는지. base.html 의 JS 인라이닝이 죽으면
+        // (th:inline 누락 등) 예외가 아니라 하드코딩된 영어 기본값이 조용히 그대로 남는다 —
+        // 그래서 "번역이 들어왔다"가 아니라 "기본값이 치환됐다"를 본다(CLAUDE.md 의 그 함정).
+        assertThat(html).contains("proposeConfirm:");
+        assertThat(html).doesNotContain("Submit this answer as a knowledge proposal?");
+        assertThat(html).doesNotContain("??confirm.propose");
     }
 
     @Test

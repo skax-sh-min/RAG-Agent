@@ -258,28 +258,13 @@ public class CuratedQaService {
     }
 
     /**
-     * §10.10 step ④ — looked up by the originating turn (all the chat UI knows — threadId/turnId,
-     * not the curated row's own id). The caller (controller) is responsible for the ownership
-     * check — {@code memoryService.getFeedback} already scopes by (userId, threadId), same as the
-     * existing feedback-toggle endpoint. Used by both the GET (populate the edit box) and PATCH
-     * (save) chat-inline-edit endpoints.
-     */
-    public Optional<CuratedQa> findActiveByTurn(long turnId) {
-        return repository.findBySourceTurnId(turnId).filter(r -> "active".equals(r.status()));
-    }
-
-    /** §10.10 step ④ — owner edit path (chat inline "편집"), see {@link #findActiveByTurn}. */
-    public boolean updateAnswerForTurn(String userId, String threadId, long turnId, String newAnswer) {
-        Optional<CuratedQa> rowOpt = findActiveByTurn(turnId);
-        if (rowOpt.isEmpty()) return false;
-        return updateAnswer(rowOpt.get().id(), newAnswer);
-    }
-
-    /**
-     * §10.10 step ④ — edit path shared by both the owner (via {@link #updateAnswerForTurn}) and
-     * the {@code /admin} curated tab (looked up directly by id there). Re-embeds on a background
-     * thread — no debounce and no like-state re-check here: unlike {@link #onLike}, an edit is an
+     * §10.10 step ④ — the {@code /admin} curated tab's edit path (looked up by curated id).
+     * Re-embeds on a background thread — no debounce and no like-state re-check: an edit is an
      * explicit save action, not a promotion that can race with an accidental unlike.
+     *
+     * <p>§10.11 removed the chat-side twin of this ({@code updateAnswerForTurn}, reached by a
+     * pencil next to 👍). Editing a curated entry now happens where it was proposed — the 지식 제안
+     * page — so the chat window never shows or changes curation state.
      */
     public boolean updateAnswer(long curatedId, String newAnswer) {
         if (newAnswer == null || newAnswer.isBlank()) return false;
@@ -400,19 +385,9 @@ public class CuratedQaService {
         return repository.findAllActive(offset, limit);
     }
 
-    /** §10.10 step ④ — direct id lookup for the admin edit panel (chat's owner-edit path looks
-     *  up by turn instead, see {@link #updateAnswerForTurn}). */
+    /** §10.10 step ④ — direct id lookup for the admin edit panel. */
     public Optional<CuratedQa> findById(long id) {
         return repository.findById(id);
-    }
-
-    /**
-     * §10.10 embedding-fallback — turn ids (among the given set) whose active curated row is
-     * currently stuck in {@code embed_status='failed'}. chat.html's turn-history render uses this
-     * to show a "임베딩 실패" badge next to the curated-edit pencil icon.
-     */
-    public Set<Long> findFailedTurnIds(List<Long> turnIds) {
-        return repository.findFailedTurnIds(turnIds);
     }
 
     /**

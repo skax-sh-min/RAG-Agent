@@ -45,7 +45,6 @@ import static org.mockito.Mockito.when;
  *  - embed 임베딩 실패 fallback: 전체 텍스트 실패 시 상세 섹션만으로 재시도 → 성공하면 markEmbedOk,
  *    둘 다 실패하거나 애초에 상세 섹션이 없으면(Direct 모드 등) markEmbedFailed
  *  - updateAnswer 재임베딩도 동일한 fallback/마킹 로직 공유
- *  - findFailedTurnIds — repository 위임
  */
 class CuratedQaServiceTest {
 
@@ -314,30 +313,6 @@ class CuratedQaServiceTest {
     // ── §10.10 step ④ — 편집/관리 ────────────────────────────────────────────
 
     @Test
-    @DisplayName("updateAnswerForTurn — 활성 엔트리가 있으면 answer를 갱신하고 재임베딩한다")
-    void updateAnswerForTurn_activeEntry_updatesAndReembeds() {
-        when(repository.findBySourceTurnId(TURN_ID)).thenReturn(Optional.of(curatedQa(1L, "active", "질문", "답변")));
-        when(repository.findById(1L)).thenReturn(Optional.of(curatedQa(1L, "active", "질문", "수정된 답변")));
-
-        boolean result = service.updateAnswerForTurn(UID, TID, TURN_ID, "수정된 답변");
-
-        assertThat(result).isTrue();
-        verify(repository, times(1)).updateAnswer(1L, "수정된 답변");
-        verify(vectorStore, timeout(2000)).add(eq("shared"), eq(CuratedQaService.CURATED_VERSION), any());
-    }
-
-    @Test
-    @DisplayName("updateAnswerForTurn — 엔트리가 없거나 비활성이면 false, 갱신하지 않는다")
-    void updateAnswerForTurn_noActiveEntry_returnsFalse() {
-        when(repository.findBySourceTurnId(TURN_ID)).thenReturn(Optional.empty());
-
-        boolean result = service.updateAnswerForTurn(UID, TID, TURN_ID, "수정된 답변");
-
-        assertThat(result).isFalse();
-        verify(repository, never()).updateAnswer(anyLong(), any());
-    }
-
-    @Test
     @DisplayName("updateAnswer — 빈 답변은 거부한다")
     void updateAnswer_blankAnswer_returnsFalse() {
         boolean result = service.updateAnswer(1L, "   ");
@@ -374,15 +349,13 @@ class CuratedQaServiceTest {
     }
 
     @Test
-    @DisplayName("listActive / findById / findActiveByTurn — repository로 위임한다")
+    @DisplayName("listActive / findById — repository로 위임한다")
     void readMethods_delegateToRepository() {
         when(repository.findAllActive(50)).thenReturn(List.of(curatedQa(1L, "active", "질문", "답변")));
         when(repository.findById(1L)).thenReturn(Optional.of(curatedQa(1L, "active", "질문", "답변")));
-        when(repository.findBySourceTurnId(TURN_ID)).thenReturn(Optional.of(curatedQa(1L, "active", "질문", "답변")));
 
         assertThat(service.listActive(50)).hasSize(1);
         assertThat(service.findById(1L)).isPresent();
-        assertThat(service.findActiveByTurn(TURN_ID)).isPresent();
     }
 
     @Test
@@ -391,14 +364,6 @@ class CuratedQaServiceTest {
         when(repository.findAllActive(20, 20)).thenReturn(List.of(curatedQa(2L, "active", "질문2", "답변2")));
 
         assertThat(service.listActive(20, 20)).hasSize(1);
-    }
-
-    @Test
-    @DisplayName("findActiveByTurn — 비활성 엔트리는 empty를 반환한다")
-    void findActiveByTurn_inactiveEntry_returnsEmpty() {
-        when(repository.findBySourceTurnId(TURN_ID)).thenReturn(Optional.of(curatedQa(1L, "inactive", "질문", "답변")));
-
-        assertThat(service.findActiveByTurn(TURN_ID)).isEmpty();
     }
 
     // ── §10.10 embedding-fallback (재시도 + embed_status 마킹) ─────────────────
@@ -499,14 +464,6 @@ class CuratedQaServiceTest {
 
         assertThat(result).isTrue();
         verify(repository, timeout(2000)).markEmbedFailed(1L);
-    }
-
-    @Test
-    @DisplayName("findFailedTurnIds — repository로 위임한다")
-    void findFailedTurnIds_delegatesToRepository() {
-        when(repository.findFailedTurnIds(List.of(1L, 2L))).thenReturn(Set.of(2L));
-
-        assertThat(service.findFailedTurnIds(List.of(1L, 2L))).containsExactly(2L);
     }
 
     /** 분할 파이프라인이 실제로 도는 최소 설정 — 기본 배포와 같은 1500/500 비율. */

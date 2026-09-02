@@ -369,18 +369,6 @@ public class CuratedQaRepository {
         jdbc.update("UPDATE curated_qa SET embed_status='ok', updated_at=? WHERE id=?", now(), id);
     }
 
-    /** Turn ids (among the given set) whose active curated row is currently stuck in
-     *  {@code embed_status='failed'} — chat.html's turn-history render uses this to show a badge
-     *  without threading a new column through {@code MemoryRepository.Turn}. */
-    public Set<Long> findFailedTurnIds(Collection<Long> turnIds) {
-        if (turnIds == null || turnIds.isEmpty()) return Set.of();
-        String placeholders = String.join(",", java.util.Collections.nCopies(turnIds.size(), "?"));
-        List<Long> rows = jdbc.queryForList(
-                "SELECT source_turn_id FROM curated_qa WHERE status='active' AND embed_status='failed' " +
-                "AND source_turn_id IN (" + placeholders + ")",
-                Long.class, turnIds.toArray());
-        return new HashSet<>(rows);
-    }
 
     /**
      * Distinct tags used by active curated rows (comma-joined column → flattened, lowercased).

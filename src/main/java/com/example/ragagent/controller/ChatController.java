@@ -9,7 +9,6 @@ import com.example.ragagent.model.*;
 import com.example.ragagent.service.AgentService;
 import com.example.ragagent.service.ChatImageAnalysisSkipRegistry;
 import com.example.ragagent.service.ConversationSummarizerService;
-import com.example.ragagent.service.CuratedQaService;
 import com.example.ragagent.service.MemoryService;
 import com.example.ragagent.service.QuestionReuseService;
 import com.example.ragagent.service.RetrievalMetricsService;
@@ -59,7 +58,6 @@ public class ChatController {
     private final ThreadMetaService threadMetaService;
     private final MemoryService memoryService;
     private final ConversationSummarizerService summarizerService;
-    private final CuratedQaService curatedQaService;
     private final AppProperties props;
     private final LlmRouter llmRouter;
     private final MessageSource messageSource;
@@ -74,7 +72,6 @@ public class ChatController {
                           ThreadMetaService threadMetaService,
                           MemoryService memoryService,
                           ConversationSummarizerService summarizerService,
-                          CuratedQaService curatedQaService,
                           AppProperties props,
                           LlmRouter llmRouter,
                           MessageSource messageSource,
@@ -87,7 +84,6 @@ public class ChatController {
         this.threadMetaService = threadMetaService;
         this.memoryService = memoryService;
         this.summarizerService = summarizerService;
-        this.curatedQaService = curatedQaService;
         this.props = props;
         this.llmRouter = llmRouter;
         this.messageSource = messageSource;
@@ -132,12 +128,6 @@ public class ChatController {
                             t -> t.id(),
                             t -> questionReuseService.sourceRefsForTurn(t.id())))));
                 }
-            // §10.10 embedding-fallback — badge for turns whose curated Q&A promotion never
-            // managed to embed (surfaced here since it can only be known after the fact; the
-            // background embed attempt runs seconds after the like, long past this page's
-            // original response).
-            model.addAttribute("curatedEmbedFailedTurnIds",
-                    curatedQaService.findFailedTurnIds(turns.stream().map(t -> t.id()).toList()));
         }
         return "chat";
     }
