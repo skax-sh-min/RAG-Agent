@@ -373,6 +373,44 @@ class LlmRouterTest {
     }
 
     @Test
+    @DisplayName("차단 때문에 소진되면 몇 초 뒤에 되는지 알려준다 — 이 문구가 그대로 채팅 버블에 찍힌다")
+    void exhaustedBecauseBlocked_tellsTheUserHowLongToWait() {
+        CircuitBreaker cb = new CircuitBreaker(2);
+        ChatModel cm = mock(ChatModel.class);
+        var p = new LlmProvider("lm", TaskType.TEXT, ProviderRole.LOCAL, 1, "k", null, null, true, cm, null);
+        var r = new LlmRouter(List.of(p), null, cb, RoutingMode.COST_FIRST, 180,
+                Map.of(), 3, 20, new ProviderToggle());
+        cb.block("lm", "30");
+
+        assertThatThrownBy(() -> r.executeWithTracking(TaskType.TEXT, RoutingMode.COST_FIRST,
+                m -> m.call(new Prompt("x"))))
+                .isInstanceOf(LlmProviderExhaustedException.class)
+                .hasMessageContaining("초 후 다시 시도")
+                .satisfies(e -> assertThat(((LlmProviderExhaustedException) e).retryAfterSeconds())
+                        .as("Retry-After 헤더도 같은 값에서 나간다")
+                        .isBetween(25, 30));
+    }
+
+    @Test
+    @DisplayName("차단이 아니라 시도했다가 실패한 경우엔 시간을 말하지 않는다 — 기다린다고 풀리지 않는다")
+    void exhaustedAfterTrying_doesNotPromiseATime() {
+        CircuitBreaker cb = new CircuitBreaker(2);
+        ChatModel cm = mock(ChatModel.class);
+        // 차단하지 않는 실패(서버가 요청을 끊음) — 후보가 없어진 이유가 tried 뿐이다.
+        when(cm.call(any(Prompt.class)))
+                .thenThrow(new RuntimeException("400 - {\"error\":\"terminated\"}"));
+        var p = new LlmProvider("lm", TaskType.TEXT, ProviderRole.LOCAL, 1, "k", null, null, true, cm, null);
+        var r = new LlmRouter(List.of(p), null, cb, RoutingMode.COST_FIRST, 180,
+                Map.of(), 3, 20, new ProviderToggle());
+
+        assertThatThrownBy(() -> r.executeWithTracking(TaskType.TEXT, RoutingMode.COST_FIRST,
+                m -> m.call(new Prompt("x"))))
+                .isInstanceOf(LlmProviderExhaustedException.class)
+                .hasMessageNotContaining("초 후 다시 시도")
+                .satisfies(e -> assertThat(((LlmProviderExhaustedException) e).retryAfterSeconds()).isEqualTo(-1));
+    }
+
+    @Test
     @DisplayName("서버가 요청을 끊으면(재시작·모델 리로드) 차단하지 않는다 — isTimeoutLike 의 거울상")
     void serverTerminatedRequest_doesNotBlockTheProvider() {
         // 실측: 로컬 LLM 을 재시작하면 진행 중이던 응답에 이 본문이 돌아온다. HTTP 400 본문이라

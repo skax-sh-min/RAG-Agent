@@ -197,9 +197,10 @@ public class LlmRouter {
 
     /** 라우팅 모드에 맞는 첫 번째 사용 가능 LlmProvider 반환 (stream 플래그 포함). */
     public LlmProvider routeProvider(TaskType taskType, RoutingMode mode) {
+        // 스트리밍 답변이 지나는 자리다 — 여기서 나온 메시지도 채팅 버블에 그대로 찍히므로
+        // executeWithTracking 과 같은 문구·같은 남은 시간을 쓴다.
         LlmProvider p = findFirst(taskType, roleOrder(mode), Set.of())
-                .orElseThrow(() -> new LlmProviderExhaustedException(
-                        "No available provider for task=" + taskType + " mode=" + mode));
+                .orElseThrow(() -> exhausted(taskType, roleOrder(mode)));
         log.debug("[LLM route] provider={} task={} mode={} endpoint={}/chat/completions model={} stream={}",
                 p.name(), taskType, mode, p.baseUrl(), p.model(), p.stream());
         return p;
@@ -487,6 +488,51 @@ public class LlmRouter {
         return best;
     }
 
+    /**
+     * 소진 예외를 <b>사용자가 읽을 수 있게</b> 만든다 — 언제 다시 되는지까지.
+     *
+     * <p>이 메시지는 SSE {@code error} 이벤트로 채팅 버블에 <b>그대로</b> 찍힌다
+     * ({@code chat-stream.js} 의 {@code onError}). 예전 문구 {@code "All providers exhausted for
+     * task=TEXT"} 는 두 가지를 틀리게 말했다 — 프로바이더가 하나뿐인 배포에서는 <b>하나가 한 번</b>
+     * 실패한 것이지 전부가 소진된 것이 아니고, 사용자가 할 수 있는 일이 무엇인지 아무 말도 하지
+     * 않았다. 실측 로그에서 30초 차단 하나에 재시도 3번이 전부 같은 문구로 죽은 것이 그 결과다.
+     *
+     * <p>남은 초는 <b>차단 때문일 때만</b> 붙는다. 이번 요청에서 시도했다가 실패해서 후보가 없는
+     * 경우({@code tried})는 기다린다고 풀리는 것이 아니므로 시간을 말하면 거짓이 된다.
+     * {@code Retry-After} 헤더도 {@code RagException.retryAfterSeconds()} 를 통해 같은 값에서 나간다.
+     */
+    private LlmProviderExhaustedException exhausted(TaskType taskType, List<ProviderRole> roleOrder) {
+        int wait = secondsUntilAnyUnblocks(taskType, roleOrder);
+        String detail = " (task=" + taskType + ")";
+        if (wait < 0) {
+            return new LlmProviderExhaustedException(
+                    "AI 서버에 연결하지 못했습니다. 잠시 후 다시 시도해 주세요." + detail);
+        }
+        return new LlmProviderExhaustedException(
+                "AI 서버가 일시적으로 응답하지 않아 " + wait + "초 후 다시 시도할 수 있습니다." + detail, wait);
+    }
+
+    /**
+     * 차단만 아니면 이 작업을 받을 수 있었을 프로바이더들 중 <b>가장 먼저</b> 풀리는 시각까지의 초.
+     * 차단된 후보가 하나도 없으면 {@code -1}.
+     *
+     * <p>{@code excluded}(이번 요청에서 이미 시도한 프로바이더)를 <b>빼지 않는다</b> — 방금 실패해서
+     * 차단된 그 프로바이더가 바로 사용자가 기다려야 할 대상이기 때문이다.
+     */
+    private int secondsUntilAnyUnblocks(TaskType taskType, List<ProviderRole> roleOrder) {
+        boolean imageTask = isImageTask(taskType);
+        return providers.stream()
+                .filter(p -> roleOrder.contains(p.role())
+                        && p.supports(taskType)
+                        && p.hasValidApiKey()
+                        && !providerToggle.isDisabled(p.name())
+                        && !(imageTask && visionUnsupportedProviders.contains(p.name())))
+                .mapToInt(p -> circuitBreaker.secondsUntilUnblocked(p.name()))
+                .filter(secs -> secs >= 0)
+                .min()
+                .orElse(-1);
+    }
+
     private int availablePermits(LlmProvider provider) {
         Semaphore gate = providerGates.get(provider.name());
         return gate != null ? gate.availablePermits() : defaultProviderConcurrency;
@@ -500,8 +546,7 @@ public class LlmRouter {
                                        Function<ChatModel, ChatResponse> call,
                                        Set<String> tried, boolean gated) {
         LlmProvider provider = findFirst(taskType, roleOrder, tried)
-                .orElseThrow(() -> new LlmProviderExhaustedException(
-                        "All providers exhausted for task=" + taskType));
+                .orElseThrow(() -> exhausted(taskType, roleOrder));
         tried.add(provider.name());
         try {
             return executeSingleTracked(provider, taskType, usageLabelPrefix, call, gated);

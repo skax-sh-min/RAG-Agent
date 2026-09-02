@@ -359,6 +359,9 @@ app.indexing.keyword-batch-size=${INDEXING_KEYWORD_BATCH_SIZE:2}
     재시도 3번이 전부 `All providers exhausted` 로 죽었다. 판정은 JSON 조각(`"error":"terminated"`)으로 하며 `terminated`
     라는 단어만으로는 통과시키지 않는다(`connection terminated by peer` 는 진짜 네트워크 장애라 차단해야 한다).
 - 차단 만료는 다음 라우팅 시 자동 해제.
+- **차단으로 요청이 막히면 사용자에게 남은 초를 말한다** — 이 예외 메시지는 SSE `error` 이벤트로 채팅 버블에 그대로 찍히므로
+  `AI 서버가 일시적으로 응답하지 않아 20초 후 다시 시도할 수 있습니다.` 형태이고, 같은 값이 `Retry-After` 헤더로도 나간다.
+  **시도했다가 실패해 후보가 없어진 경우엔 시간을 붙이지 않는다** — 기다린다고 풀리는 것이 아니라 거짓말이 된다.
 - `/llm-usage` 페이지에서 차단 상태 + 남은 시간 카운트다운 확인 가능 (30초마다 자동 갱신).
 - **동시성 백프레셔(§6, 아래)는 Circuit Breaker와 별개**다 — 용량 초과는 프로바이더 장애가 아니므로 차단하지 않는다.
 - **"30초"의 근거**: `LlmRouter.SHORT_BLOCK_SECONDS`("30") 하드코딩 상수 하나를 **세 갈래**(폴백 없는 과부하 차단·기타 4xx/5xx·일반 예외)가 공유한다. 이 값은 폴백 없는 프로바이더 완화 로직을 구현하며 새로 정한 게 아니라, 그 이전부터 "기타 4xx/5xx·일반 예외" 차단에 쓰이던 기존 값을 그대로 재사용한 것 — `permit-wait-timeout-seconds`(기본 60초)와 비슷한 수준이라 재사용에 무리가 없었다. `app.llm.default-provider-concurrency`/`app.llm.permit-wait-timeout-seconds`와 달리 **프로퍼티로 외부화되어 있지 않다** — 값을 바꾸려면 코드 수정이 필요하다.
