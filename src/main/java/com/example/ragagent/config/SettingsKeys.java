@@ -59,6 +59,7 @@ public final class SettingsKeys {
     public static final String LLM_INDEXING_TEMPERATURE       = "llm.indexing-temperature";
     public static final String LLM_CREATIVE_MODE_ENABLED      = "llm.creative-mode-enabled"; // §6.24 C(응용) 모드 자체의 on/off
     public static final String LLM_CREATIVE_TEMPERATURE       = "llm.creative-temperature"; // §6.24 C(응용) 모드
+    public static final String LLM_MAX_TOKENS                 = "llm.max-tokens"; // §6.26 A6 — 예전엔 조회 전용이었다
     public static final String LLM_SHRINK_STEP                = "llm.shrink-step"; // §6.26-9 컨텍스트 초과 재시도에서 한 번에 덜어낼 문서 수
 
     // ── UI (apply on next page render) ───────────────────────────────────────
@@ -91,6 +92,7 @@ public final class SettingsKeys {
             LLM_INDEXING_TEMPERATURE,
             LLM_CREATIVE_MODE_ENABLED,
             LLM_CREATIVE_TEMPERATURE,
+            LLM_MAX_TOKENS,
             LLM_SHRINK_STEP,
             UI_SOURCE_PREVIEW_ENABLED,
             UI_RETRIEVAL_METRICS_ENABLED

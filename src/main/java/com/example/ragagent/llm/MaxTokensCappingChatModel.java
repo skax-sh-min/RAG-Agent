@@ -1,5 +1,7 @@
 package com.example.ragagent.llm;
 
+import java.util.function.IntSupplier;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.model.ChatModel;
@@ -40,9 +42,16 @@ public class MaxTokensCappingChatModel implements ChatModel {
 
     private final ChatModel delegate;
     private final String providerName;
-    private final int ceiling;
+    private final IntSupplier ceiling;
 
-    public MaxTokensCappingChatModel(ChatModel delegate, String providerName, int ceiling) {
+    /**
+     * @param ceiling 이 프로바이더의 현재 상한을 <b>호출할 때마다</b> 계산하는 공급자. 값이 아니라
+     *                공급자인 이유는 {@code app.llm.max-tokens} 가 핫 편집 대상이고(§6.26 A6), 창
+     *                재탐지(§6.26 A5)로 상한의 근거인 컨텍스트 창 자체도 런타임에 바뀌기 때문이다 —
+     *                생성자에서 한 번 받으면 그 둘 다 재기동 전까지 반영되지 않는다.
+     *                {@code 0} 이하를 돌려주면 상한 없음(통과)이다.
+     */
+    public MaxTokensCappingChatModel(ChatModel delegate, String providerName, IntSupplier ceiling) {
         this.delegate = delegate;
         this.providerName = providerName;
         this.ceiling = ceiling;
@@ -64,22 +73,24 @@ public class MaxTokensCappingChatModel implements ChatModel {
     }
 
     private Prompt capped(Prompt prompt) {
-        if (ceiling <= 0 || prompt.getOptions() == null) return prompt;
+        if (prompt.getOptions() == null) return prompt;
+        int ceilingNow = ceiling.getAsInt();   // 매 호출 재조회 — 핫 편집과 창 재탐지가 여기로 들어온다
+        if (ceilingNow <= 0) return prompt;
         Integer requested = prompt.getOptions().getMaxTokens();
-        if (requested == null || requested <= ceiling) return prompt;
+        if (requested == null || requested <= ceilingNow) return prompt;
 
         // ChatOptions 는 읽기 전용 인터페이스라 값을 실어 바꿀 수 있는 것은 구현체뿐이다. 이 앱의
         // 호출부는 전부 OpenAiChatOptions 를 만들지만, 아닌 것이 오면 상한을 포기하고 통과시킨다 —
         // 상한을 못 걸었다는 이유로 멀쩡한 요청을 막을 일은 아니다(로그로만 남긴다).
         if (!(prompt.getOptions() instanceof OpenAiChatOptions openAi)) {
             log.debug("[MAX_TOKENS] provider=[{}] {} 옵션이라 상한 {}을 적용하지 못했다",
-                    providerName, prompt.getOptions().getClass().getSimpleName(), ceiling);
+                    providerName, prompt.getOptions().getClass().getSimpleName(), ceilingNow);
             return prompt;
         }
         // copy() 로 옵션만 갈아 끼운다 — 원본 Prompt 를 건드리면 호출부가 재사용할 때 값이 새어 나간다.
         OpenAiChatOptions lowered = openAi.copy();
-        lowered.setMaxTokens(ceiling);
-        log.debug("[MAX_TOKENS] provider=[{}] {} → {} (프로바이더별 상한)", providerName, requested, ceiling);
+        lowered.setMaxTokens(ceilingNow);
+        log.debug("[MAX_TOKENS] provider=[{}] {} → {} (프로바이더별 상한)", providerName, requested, ceilingNow);
         return new Prompt(prompt.getInstructions(), lowered);
     }
 }

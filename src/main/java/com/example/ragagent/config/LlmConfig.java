@@ -111,10 +111,11 @@ public class LlmConfig {
                     }
 
                     // 프로바이더별 max-tokens (미설정/0 이하면 전역값) — concurrency 와 같은 폴백 규약.
-                    int requestedMaxTokens = (cfg.maxTokens() != null && cfg.maxTokens() > 0)
-                            ? cfg.maxTokens() : llmCfg.maxTokens();
+                    // 기동 시점의 값은 defaultOptions 에 굽고 경고를 내는 데만 쓰고, 실제 상한은 아래
+                    // 공급자가 호출마다 다시 계산한다 (§6.26 A6: app.llm.max-tokens 가 핫이고,
+                    // §6.26 A5: 창도 /settings 에서 다시 탐지될 수 있다).
                     int effectiveMaxTokens = capMaxTokensToContext(
-                            cfg.name(), requestedMaxTokens, effectiveCtx);
+                            cfg.name(), requestedMaxTokens(cfg, llmCfg.maxTokens()), effectiveCtx);
                     ChatModel rawModel = OpenAiChatModel.builder()
                             .openAiApi(api)
                             // §6.18 — was hardcoded temperature(0.0)/maxTokens(6000); now the effective
@@ -139,7 +140,8 @@ public class LlmConfig {
                     // 호출을 불투명한 클로저로 받고, 호출부는 서버가 센 토큰 수를 못 본다.
                     ChatModel model = new LoggingChatModel(
                             tokenCalibration.wrap(
-                                    new MaxTokensCappingChatModel(rawModel, cfg.name(), effectiveMaxTokens)),
+                                    new MaxTokensCappingChatModel(rawModel, cfg.name(),
+                                            () -> liveMaxTokens(cfg, props, contextWindows))),
                             cfg.name(), resolvedUrl, effectiveApiKey, cfg.model());
                     return new LlmProvider(
                             cfg.name(),
@@ -228,6 +230,30 @@ public class LlmConfig {
      */
     // package-private static: 순수 계산이라 빈을 띄우지 않고 검사할 수 있어야 한다
     // (SettingsService.formatModeBudgetForTest 와 같은 선례).
+    /**
+     * 이 프로바이더가 요청할 출력 상한 — 자기 값이 있으면 그것, 없으면 전역값
+     * ({@code concurrency} 와 같은 폴백 규약).
+     */
+    private static int requestedMaxTokens(AppProperties.ProviderConfig cfg, int globalMaxTokens) {
+        return (cfg.maxTokens() != null && cfg.maxTokens() > 0) ? cfg.maxTokens() : globalMaxTokens;
+    }
+
+    /**
+     * 이 프로바이더의 <b>지금</b> 유효한 출력 상한 — {@code MaxTokensCappingChatModel} 이 호출마다
+     * 부른다.
+     *
+     * <p>세 입력이 모두 런타임에 바뀔 수 있다: 전역 {@code app.llm.max-tokens} 는 핫 편집 대상이고
+     * (§6.26 A6), 컨텍스트 창은 {@code /settings} 의 재탐지로 갱신되며(§6.26 A5), 둘의 조합인
+     * {@link ProviderContextWindows#cappedMaxTokens} 결과도 따라 움직인다. 그래서 값이 아니라
+     * 계산을 넘긴다 — 프로바이더 자신의 {@code max-tokens} 선언만이 구조적 설정이라 재기동 대상이다.
+     */
+    private static int liveMaxTokens(AppProperties.ProviderConfig cfg, AppProperties props,
+                                     ProviderContextWindows contextWindows) {
+        int requested = requestedMaxTokens(cfg, props.llmSafe().maxTokens());
+        int window = contextWindows.tokensOrZero(cfg.name());
+        return ProviderContextWindows.cappedMaxTokens(requested, window > 0 ? window : null);
+    }
+
     static int capMaxTokensToContext(String providerName, int requested, Integer contextTokens) {
         int capped = ProviderContextWindows.cappedMaxTokens(requested, contextTokens);
         if (capped == requested) return requested;

@@ -89,7 +89,9 @@ public class SettingsService implements AppProperties.OverrideSource {
             new Spec(SettingsKeys.LLM_INDEXING_TEMPERATURE,       Kind.DOUBLE, 0.0, 0.1,  0.05, "settings.item.indexing-temperature"),
             new Spec(SettingsKeys.LLM_CREATIVE_TEMPERATURE,       Kind.DOUBLE, 0.0, 1.0,  0.05, "settings.item.creative-temperature"),
             new Spec(SettingsKeys.LLM_CREATIVE_MODE_ENABLED,      Kind.BOOL,   0,   0,    0,    "settings.item.creative-mode-enabled"),
-            new Spec(SettingsKeys.LLM_SHRINK_STEP,                Kind.INT,    1,   10,   1,    "settings.item.shrink-step")
+            new Spec(SettingsKeys.LLM_SHRINK_STEP,                Kind.INT,    1,   10,   1,    "settings.item.shrink-step"),
+            new Spec(SettingsKeys.LLM_MAX_TOKENS,                 Kind.INT,
+                    AppProperties.MIN_MAX_TOKENS, AppProperties.MAX_MAX_TOKENS, 500, "settings.item.max-tokens")
     );
 
         // Insertion order = render order in the "UI" group. Apply on next page render.
@@ -360,11 +362,15 @@ public class SettingsService implements AppProperties.OverrideSource {
      * 의도를 덮어쓰면 운영자가 못 박은 값이 버튼 한 번에 사라진다. 그런 행은 결과 표에
      * {@link ReprobeOutcome#SKIPPED_DECLARED} 로 남겨 "안 물어봤다"는 사실 자체를 보여 준다.
      *
-     * <p><b>재탐지가 고치는 것은 입력 예산뿐이다.</b> 출력 예약({@code max-tokens})은 프로바이더 빈이
-     * 만들어질 때 {@link ProviderContextWindows#cappedMaxTokens} 로 굳어 {@code MaxTokensCappingChatModel}
-     * 안에 들어가 있으므로, 새 창에서 그 값이 달라져야 한다면 재기동 말고는 방법이 없다. 그 경우를
-     * 조용히 넘기면 "재탐지했으니 이제 괜찮겠지"라는 잘못된 안심이 남으므로 {@code restartNeeded} 로
-     * 함께 돌려준다.
+     * <p><b>출력 상한은 이제 따라온다</b>(§6.26 A6) — {@code MaxTokensCappingChatModel} 이 호출마다
+     * {@code LlmConfig.liveMaxTokens()} 를 불러 현재 창과 현재 {@code app.llm.max-tokens} 로 다시
+     * 계산하므로, 옵션을 싣는 호출부(이 앱의 모든 블로킹 호출)는 재탐지 직후부터 새 값을 쓴다.
+     *
+     * <p><b>딱 한 곳이 남는다.</b> 프로바이더 빈의 {@code defaultOptions} 는 기동 시점 값 그대로이고,
+     * 이건 <b>옵션을 실어 보내지 않는</b> 프레임워크 내부 호출자(예: MultiQuery 확장기)의 폴백이다.
+     * 그 경로는 캡 데코레이터가 손댈 옵션 자체가 없어 지나가므로, 창이 <b>줄어들어</b> 그 기동값이
+     * 새 창을 넘게 되면 그 호출만 컨텍스트 초과가 난다 — 그때만 {@code restartNeeded} 가 켜진다.
+     * 창이 넓어진 경우는 기동값이 작을 뿐 안전하므로 알리지 않는다(알림이 잦으면 아무도 안 읽는다).
      */
     public ReprobeResult reprobeContextWindows() {
         AppProperties.LlmConfig llm = props.llmSafe();
@@ -395,9 +401,8 @@ public class SettingsService implements AppProperties.OverrideSource {
                 int requested = (cfg.maxTokens() != null && cfg.maxTokens() > 0)
                         ? cfg.maxTokens() : llm.maxTokens();
                 int baked = ProviderContextWindows.cappedMaxTokens(requested, old > 0 ? old : null);
-                int now = ProviderContextWindows.cappedMaxTokens(requested, found);
-                if (baked != now) {
-                    restartReasons.add("%s: max-tokens %,d → %,d".formatted(cfg.name(), baked, now));
+                if (ProviderContextWindows.cappedMaxTokens(baked, found) != baked) {
+                    restartReasons.add("%s: defaultOptions %,d ≥ 창 %,d".formatted(cfg.name(), baked, found));
                 }
             }
         }
@@ -724,6 +729,7 @@ public class SettingsService implements AppProperties.OverrideSource {
             case SettingsKeys.LLM_INDEXING_TEMPERATURE        -> trimNum(props.llmSafe().indexingTemperature());
             case SettingsKeys.LLM_CREATIVE_MODE_ENABLED       -> Boolean.toString(creativeModeEnabled());
             case SettingsKeys.LLM_SHRINK_STEP                 -> Integer.toString(props.llmSafe().shrinkStep());
+            case SettingsKeys.LLM_MAX_TOKENS                  -> Integer.toString(props.llmSafe().maxTokens());
             case SettingsKeys.LLM_CREATIVE_TEMPERATURE        -> trimNum(props.llmSafe().creativeTemperature());
             case SettingsKeys.UI_SOURCE_PREVIEW_ENABLED       -> Boolean.toString(sourcePreviewEnabled());
             case SettingsKeys.UI_RETRIEVAL_METRICS_ENABLED    -> Boolean.toString(retrievalMetricsEnabled());

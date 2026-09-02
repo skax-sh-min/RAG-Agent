@@ -134,19 +134,35 @@ class SettingsContextWindowReprobeTest {
     }
 
     @Test
-    @DisplayName("창이 바뀌어 출력 예약이 달라져야 하면 재기동을 알린다 — 그 값은 빈에 구워져 있다")
-    void warnsWhenTheBakedOutputCapNoLongerMatches() throws IOException {
-        // 창 4,000 에서 기동 → max-tokens 6,000 이 창의 절반(2,000)으로 깎여 구워졌다.
-        // 이제 창이 40,960 이라 6,000 이 그대로 들어가지만, 그 숫자는 재기동해야 돌아온다.
-        String base = startServer(40_960);
+    @DisplayName("창이 좁아져 기동값이 그 창을 넘게 되면 재기동을 알린다 — defaultOptions 만 아직 옛 값이다")
+    void warnsWhenTheBakedDefaultNoLongerFitsTheWindow() throws IOException {
+        // 창 40,960 에서 기동 → max-tokens 6,000 이 깎이지 않고 그대로 defaultOptions 에 구워졌다.
+        // 이제 창이 4,096 이라 그 6,000 은 창을 넘는다. 옵션을 싣는 호출부는 캡이 호출마다 다시
+        // 계산되어 무사하지만(§6.26 A6), 옵션을 안 싣는 프레임워크 내부 호출은 그 기동값을 쓴다.
+        String base = startServer(4_096);
         ProviderContextWindows windows = new ProviderContextWindows();
-        windows.record("local", 4_000, ProviderContextWindows.Source.PROBED);
+        windows.record("local", 40_960, ProviderContextWindows.Source.PROBED);
 
         SettingsService.ReprobeResult result =
                 service(windows, provider("local", base, null, null)).reprobeContextWindows();
 
         assertThat(result.restartNeeded()).isTrue();
-        assertThat(result.restartDetail()).contains("local", "2,000", "6,000");
+        assertThat(result.restartDetail()).contains("local", "6,000", "4,096");
+    }
+
+    @Test
+    @DisplayName("창이 넓어진 경우는 알리지 않는다 — 기동값이 작을 뿐 안전하고, 잦은 알림은 안 읽힌다")
+    void aWiderWindowNeedsNoRestartNotice() throws IOException {
+        String base = startServer(40_960);
+        ProviderContextWindows windows = new ProviderContextWindows();
+        windows.record("local", 4_000, ProviderContextWindows.Source.PROBED);   // 상한이 2,000 으로 깎여 구워졌다
+
+        SettingsService.ReprobeResult result =
+                service(windows, provider("local", base, null, null)).reprobeContextWindows();
+
+        assertThat(result.rows()).singleElement()
+                .satisfies(r -> assertThat(r.outcome()).isEqualTo(SettingsService.ReprobeOutcome.UPDATED));
+        assertThat(result.restartNeeded()).isFalse();
     }
 
     @Test

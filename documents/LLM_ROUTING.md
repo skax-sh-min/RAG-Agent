@@ -133,7 +133,7 @@ app.llm.circuit-breaker-minutes=4
 # not conversational ones — hence its tight [0.0, 0.1] clamp, unlike the other temperatures.
 # creative-mode-enabled is the on/off switch for the C mode itself (default true): the temperature
 # says HOW C answers, this says WHETHER C is offered — it is the only mode that writes content the
-# documents do not contain. max-tokens stays view-only (restart to change) and applies to blocking
+# documents do not contain. max-tokens is hot-editable too (§6.26 A6, 1000~32000) and applies to blocking
 # calls only — streaming chat answers are uncapped (bounded by app.sse-*-timeout-seconds).
 app.llm.temperature=${LLM_TEMPERATURE:0.0}
 app.llm.direct-temperature=${DIRECT_LLM_TEMPERATURE:0.1}

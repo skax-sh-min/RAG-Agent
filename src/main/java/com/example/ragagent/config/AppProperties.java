@@ -815,6 +815,7 @@ public record AppProperties(
         Double creativeOverride = overrideDouble(SettingsKeys.LLM_CREATIVE_TEMPERATURE);
         Boolean creativeModeOverride = overrideBool(SettingsKeys.LLM_CREATIVE_MODE_ENABLED);
         Integer shrinkStepOverride = overrideInt(SettingsKeys.LLM_SHRINK_STEP);
+        Integer maxTokensOverride = overrideInt(SettingsKeys.LLM_MAX_TOKENS);
         if (llm == null) {
             double t = clamp(tempOverride != null ? tempOverride : 0.0, 0.0, 0.3);
             double dt = clamp(directOverride != null ? directOverride : 0.1, 0.0, 1.0);
@@ -822,8 +823,10 @@ public record AppProperties(
             double ct = clamp(creativeOverride != null ? creativeOverride : 0.7, 0.0, 1.0);
             boolean cm = creativeModeOverride == null || creativeModeOverride;
             int ss = clampInt(shrinkStepOverride != null ? shrinkStepOverride : DEFAULT_SHRINK_STEP, 1, 10);
+            int mt = clampInt(maxTokensOverride != null ? maxTokensOverride : DEFAULT_MAX_TOKENS,
+                    MIN_MAX_TOKENS, MAX_MAX_TOKENS);
             return new LlmConfig(List.of(), 2, 10, 180, "COST_FIRST", 3, 20, t, dt, it, ct, cm,
-                    DEFAULT_MAX_TOKENS, ss, true);
+                    mt, ss, true);
         }
         List<ProviderConfig> providers = llm.providers() != null ? llm.providers() : List.of();
         int minutes = llm.circuitBreakerMinutes() > 0 ? llm.circuitBreakerMinutes() : 2;
@@ -847,7 +850,12 @@ public record AppProperties(
         // 기본 ON — 이 스위치가 생기기 전에는 C 가 늘 열려 있었으므로, 미설정 시 동작이 바뀌면 안 된다.
         boolean creativeModeEnabled = creativeModeOverride != null ? creativeModeOverride
                 : (llm.creativeModeEnabled() == null || llm.creativeModeEnabled());
-        int maxTokens = (llm.maxTokens() != null && llm.maxTokens() > 0) ? llm.maxTokens() : DEFAULT_MAX_TOKENS;
+        // §6.26 A6 — 핫 편집 대상이 됐다. 모든 소비처가 매 호출 여기를 다시 읽으므로 재기동이
+        // 필요한 것은 프로바이더 빈의 defaultOptions 뿐이다(옵션을 안 싣는 프레임워크 내부
+        // 호출자용 폴백 — temperature 와 같은 예외).
+        int maxTokensBase = maxTokensOverride != null ? maxTokensOverride
+                : ((llm.maxTokens() != null && llm.maxTokens() > 0) ? llm.maxTokens() : DEFAULT_MAX_TOKENS);
+        int maxTokens = clampInt(maxTokensBase, MIN_MAX_TOKENS, MAX_MAX_TOKENS);
         // 0 이나 음수는 "줄이지 않는다" 가 되어 재시도가 같은 프롬프트를 반복하게 되므로 1 이 바닥이다.
         int shrinkStepBase = shrinkStepOverride != null ? shrinkStepOverride
                 : (llm.shrinkStep() != null ? llm.shrinkStep() : DEFAULT_SHRINK_STEP);
@@ -858,6 +866,16 @@ public record AppProperties(
                         indexingTemperature, creativeTemperature, creativeModeEnabled, maxTokens,
                         shrinkStep, verifyLocalModels);
     }
+
+    /**
+     * {@code app.llm.max-tokens} 의 허용 범위. 바닥이 0 이 아닌 이유는 이 값이 단순한 출력 상한이
+     * 아니기 때문이다 — 대화 이력 예산(×0.5)·MD 교정 섹션 크기·인덱싱 출력 예약이 전부 여기서
+     * 파생되므로, 0 에 가까운 값은 "짧게 답한다"가 아니라 이력도 근거도 없는 상태가 된다.
+     * 천장은 좁은 창을 가진 로컬 배포에서 예약만으로 컨텍스트를 다 먹는 설정을 막는다
+     * (창을 아는 프로바이더에는 {@code cappedMaxTokens} 가 그 위에 한 번 더 걸린다).
+     */
+    public static final int MIN_MAX_TOKENS = 1_000;
+    public static final int MAX_MAX_TOKENS = 32_000;
 
     /** 컨텍스트 초과 재시도에서 한 번에 덜어낼 문서 수의 기본값 — 1개씩(가장 보수적). */
     public static final int DEFAULT_SHRINK_STEP = 1;
