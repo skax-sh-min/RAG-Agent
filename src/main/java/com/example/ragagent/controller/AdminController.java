@@ -417,16 +417,26 @@ public class AdminController {
     @ResponseBody
     public ResponseEntity<?> submissionDetail(@PathVariable long id) {
         return submissionService.findById(id)
-                .<ResponseEntity<?>>map(s -> ResponseEntity.ok(Map.of(
-                        "id",     s.id(),
-                        "title",  s.title(),
-                        "body",   s.body(),
-                        "tags",   s.tags() == null ? "" : s.tags(),
-                        "author", s.authorUserId(),
-                        "status", s.displayStatus(),
-                        // 승인 시 몇 개 청크로 나뉘는지 미리 보여준다(승인 후에는 실제 생성된 개수).
-                        "chunkPreview", s.chunkCount() > 0
-                                ? s.chunkCount() : submissionService.previewChunkCount(s.body()))))
+                .<ResponseEntity<?>>map(s -> {
+                    Map<String, Object> body = new java.util.HashMap<>(Map.of(
+                            "id",     s.id(),
+                            "title",  s.title(),
+                            "body",   s.body(),
+                            "tags",   s.tags() == null ? "" : s.tags(),
+                            "author", s.authorUserId(),
+                            "status", s.displayStatus(),
+                            // 승인 시 몇 개 청크로 나뉘는지 미리 보여준다(승인 후에는 실제 생성된 개수).
+                            "chunkPreview", s.chunkCount() > 0
+                                    ? s.chunkCount() : submissionService.previewChunkCount(s.body())));
+                    // §10.11 — 좋아요 출신이면 원 대화와 두 글자 표기를 함께 싣는다. [DN] 은 문서를
+                    // 하나도 읽지 않은 답변이라는 뜻이고, 본문만 봐서는 절대 알 수 없다.
+                    submissionService.originOf(s).ifPresent(o -> {
+                        body.put("sourceThreadId", o.threadId());
+                        body.put("sourceTurnId", o.turnId());
+                        if (o.modeLabel() != null) body.put("modeLabel", o.modeLabel());
+                    });
+                    return ResponseEntity.ok(body);
+                })
                 .orElseGet(() -> ResponseEntity.notFound().build());
     }
 

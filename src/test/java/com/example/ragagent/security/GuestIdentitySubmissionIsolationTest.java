@@ -25,6 +25,7 @@ import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.atLeastOnce;
@@ -117,13 +118,13 @@ class GuestIdentitySubmissionIsolationTest {
     @BeforeEach
     void setUp() {
         when(service.chunkSizeForBody()).thenReturn(800);
-        when(service.listMine(anyString(), anyInt(), anyInt())).thenReturn(List.of());
+        when(service.listMine(anyString(), any(), anyInt(), anyInt())).thenReturn(List.of());
     }
 
     /** All userIds "내 제안" was scoped to, in call order. */
     private List<String> listedUserIds() {
         ArgumentCaptor<String> captor = ArgumentCaptor.forClass(String.class);
-        verify(service, atLeastOnce()).listMine(captor.capture(), anyInt(), anyInt());
+        verify(service, atLeastOnce()).listMine(captor.capture(), any(), anyInt(), anyInt());
         return captor.getAllValues();
     }
 
@@ -151,7 +152,7 @@ class GuestIdentitySubmissionIsolationTest {
                 .andExpect(status().isOk());
 
         assertThat(listedUserIds()).containsExactly("guest-abcdef123456");
-        verify(service).submit("guest-abcdef123456", "제목", "본문", java.util.List.of());
+        verify(service).submit("guest-abcdef123456", "제목", "본문", java.util.List.of(), null, null);
         verify(service).countUnreadForAuthor("guest-abcdef123456");
     }
 

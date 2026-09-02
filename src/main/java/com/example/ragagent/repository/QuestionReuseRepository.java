@@ -43,6 +43,19 @@ public class QuestionReuseRepository {
      */
     private static final String REUSABLE_MODE_PREDICATE = buildReusableModePredicate();
 
+    /**
+     * A Direct turn's answer may only be reused if its asker liked it. Direct answers are not
+     * grounded in any document, so a 좋아요 is the only evidence anyone found this one correct.
+     *
+     * <p><b>This is the second reader of {@code feedback='LIKE'}</b>, and §10.11 changed what
+     * writes it: the chat now asks "지식 제안으로 등록할까요?" on a like and records nothing when the
+     * answer is no. So "the answer was good, but I don't want it published" is no longer
+     * expressible, and such a Direct turn stays out of reuse. Accepted — reuse is an optimisation,
+     * and the alternative (a like that means two different things depending on a dialog) is worse.
+     */
+    private static final String DIRECT_NEEDS_LIKE_PREDICATE =
+            "AND (COALESCE(t.direct_mode, 0) = 0 OR t.feedback = 'LIKE') ";
+
     private static String buildReusableModePredicate() {
         String excluded = java.util.Arrays.stream(ResponseMode.values())
                 .filter(m -> !m.allowsReuse())
@@ -139,7 +152,7 @@ public class QuestionReuseRepository {
             "WHERE lower(t.question) LIKE lower(?) " +
             "AND (t.feedback IS NULL OR t.feedback <> 'DISLIKE') " +
             "AND " + REUSABLE_MODE_PREDICATE +
-            "AND (COALESCE(t.direct_mode, 0) = 0 OR t.feedback = 'LIKE') " +
+            DIRECT_NEEDS_LIKE_PREDICATE +
             (meOnly ? "AND t.user_id = ? " : "") +
             "ORDER BY t.id DESC LIMIT ?";
 
@@ -174,7 +187,7 @@ public class QuestionReuseRepository {
             "WHERE t.id = ? " +
             "AND (t.feedback IS NULL OR t.feedback <> 'DISLIKE') " +
             "AND " + REUSABLE_MODE_PREDICATE +
-            "AND (COALESCE(t.direct_mode, 0) = 0 OR t.feedback = 'LIKE') " +
+            DIRECT_NEEDS_LIKE_PREDICATE +
             (meOnly ? "AND t.user_id = ? " : "") +
             "LIMIT 1";
         List<CandidateTurn> rows = meOnly

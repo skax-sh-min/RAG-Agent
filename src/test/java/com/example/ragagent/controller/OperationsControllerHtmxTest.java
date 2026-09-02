@@ -80,7 +80,7 @@ class OperationsControllerHtmxTest {
     /**
      * §6.25 — 대화 삭제가 그 대화의 좋아요 큐레이션을 회수하지 않으면, 대화가 사라진 뒤에도
      * curated_qa 행과 벡터가 남아 계속 검색에 기여한다(turn 단위 {@code deleteTurn} 이 이미
-     * {@code onUnlike} 로 막고 있는 것과 같은 고아 문제). 세 호출의 <b>순서까지</b> 고정한다 —
+     * {@code onTurnDeleted} 로 막고 있는 것과 같은 고아 문제). 세 호출의 <b>순서까지</b> 고정한다 —
      * 회수가 기록 삭제보다 먼저다.
      */
     @Test
@@ -138,6 +138,52 @@ class OperationsControllerHtmxTest {
                         .param("feedback", "none") // 대소문자 무관
                         .with(csrf()))
                 .andExpect(status().isNoContent());
+    }
+
+    @Test
+    @DisplayName("§10.11 — 좋아요는 검색 지식을 만들지 않는다 (무검토 유입 경로가 사라졌다)")
+    void updateTurnFeedback_like_createsNoCuratedEntry() throws Exception {
+        when(memoryService.getFeedback(any(), any(), anyLong()))
+                .thenReturn(Optional.of(new MemoryRepository.FeedbackRow(null)));
+
+        mvc.perform(patch("/ui/threads/t1/turns/42/feedback")
+                        .param("feedback", "LIKE")
+                        .with(csrf()))
+                .andExpect(status().isNoContent());
+
+        // 이 엔드포인트가 curated_qa 를 만들던 것이 §10.11 이 막으려는 바로 그 구멍이다 —
+        // 문서를 하나도 안 본 Direct 답변이 좋아요 한 번에 전체 검색 지식이 됐다.
+        // 등록은 이제 관리자 승인에서만 일어나므로 여기서는 어떤 호출도 있어서는 안 된다.
+        org.mockito.Mockito.verifyNoInteractions(curatedQaService);
+    }
+
+    @Test
+    @DisplayName("§10.11 — 좋아요를 해제해도 등록된 지식은 그대로 남는다 (철회는 제안 페이지의 일)")
+    void updateTurnFeedback_unlike_doesNotRetract() throws Exception {
+        when(memoryService.getFeedback(any(), any(), anyLong()))
+                .thenReturn(Optional.of(new MemoryRepository.FeedbackRow("LIKE")));
+
+        mvc.perform(patch("/ui/threads/t1/turns/42/feedback")
+                        .param("feedback", "NONE")
+                        .with(csrf()))
+                .andExpect(status().isNoContent());
+
+        org.mockito.Mockito.verifyNoInteractions(curatedQaService);
+    }
+
+    @Test
+    @DisplayName("DELETE .../turns/{id} — 좋아요 여부와 무관하게 등록된 지식을 회수한다")
+    void deleteTurn_retractsRegardlessOfFeedback() throws Exception {
+        when(memoryService.getFeedback(any(), any(), anyLong()))
+                .thenReturn(Optional.of(new MemoryRepository.FeedbackRow(null)));
+        when(memoryService.deleteTurn(any(), any(), anyLong())).thenReturn(true);
+
+        mvc.perform(delete("/ui/threads/t1/turns/42").with(csrf()))
+                .andExpect(status().isNoContent());
+
+        // 예전에는 feedback='LIKE' 일 때만 회수했다. §10.11 이 엔트리의 존재를 피드백 값에서
+        // 떼어냈으므로, LIKE 를 확인하고 들어가면 나중에 마음이 바뀐 저자의 엔트리를 전부 놓친다.
+        verify(curatedQaService).onTurnDeleted(any(), eq("t1"), eq(42L));
     }
 
     @Test

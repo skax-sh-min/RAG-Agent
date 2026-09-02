@@ -5,6 +5,7 @@ import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.model.TagUtils;
 import com.example.ragagent.repository.CuratedSubmissionRepository;
 import com.example.ragagent.repository.CuratedSubmissionRepository.Submission;
+import com.example.ragagent.repository.MemoryRepository;
 import com.example.ragagent.security.PromptInjectionGuard;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -174,6 +175,30 @@ public class CuratedSubmissionService {
     public Optional<Submission> findLiveProposalForTurn(long turnId) {
         return repository.findLiveByTurn(turnId);
     }
+
+    /**
+     * §10.11 — what the admin review screen needs to know about a 좋아요 출신 제안: which
+     * conversation it came from, and under which 두 글자 표기 it was answered.
+     *
+     * <p>The label is the reviewer's cheapest signal. A {@code DN} proposal is an answer that
+     * <b>read no document at all</b>, and that is exactly the case §10.11 exists to put in front of
+     * a person: nothing about the text itself says so. It is looked up as the <b>author</b>, since
+     * turns are user-scoped and the reviewer is someone else.
+     *
+     * <p>Empty for a hand-written proposal. A chat-origin one whose turn has since been deleted
+     * still returns its origin with a {@code null} label — "we know where this came from, but it
+     * is gone" is different from "this was typed into the form", and the screen says so.
+     */
+    public Optional<TurnOrigin> originOf(Submission s) {
+        if (!s.fromChatTurn()) return Optional.empty();
+        String label = memoryService.getTurn(s.authorUserId(), s.sourceThreadId(), s.sourceTurnId())
+                .map(MemoryRepository.Turn::responseModeLabel)
+                .orElse(null);
+        return Optional.of(new TurnOrigin(s.sourceThreadId(), s.sourceTurnId(), label));
+    }
+
+    /** @param modeLabel {@code RN}/{@code DN}/… , or null when the originating turn is gone. */
+    public record TurnOrigin(String threadId, long turnId, String modeLabel) {}
 
     /** Cuts a chat question down to a title. Public so the chat-side prefill and the form agree. */
     public static String truncateTitle(String question) {

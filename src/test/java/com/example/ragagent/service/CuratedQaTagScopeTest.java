@@ -28,8 +28,11 @@ import static org.mockito.Mockito.when;
  *
  * <p>배경: {@code RetrievalService.filterByTags}는 벡터·키워드·큐레이션이 합쳐진 후보 풀 전체에
  * 걸리는데 큐레이션 항목은 태그 메타데이터가 아예 없었다 → 사용자가 태그 칩을 하나라도 켜면
- * 좋아요한 답변이 전부 탈락했다. 이제 (1) 좋아요 시 질문 당시 태그를 승계하고, (2) 태그를 모르는
+ * 좋아요한 답변이 전부 탈락했다. 이제 (1) 등록 시 제안의 태그를 그대로 싣고, (2) 태그를 모르는
  * 항목은 모든 스코프를 통과한다.
+ *
+ * <p>§10.11 이후 태그의 출처는 <b>제안</b>이다 — 프리필이 질문 당시 스코프를 폼에 채워 넣으므로
+ * 기본값은 예전과 같지만, 저자가 등록 전에 고칠 수 있고 관리자가 승인 시 다시 고칠 수 있다.
  */
 class CuratedQaTagScopeTest {
 
@@ -49,17 +52,10 @@ class CuratedQaTagScopeTest {
         memoryService = mock(MemoryService.class);
         threadMetaService = mock(ThreadMetaService.class);
         vectorStore = mock(VectorStoreFacade.class);
-        service = new CuratedQaService(repository, memoryService, threadMetaService, vectorStore, new com.example.ragagent.ingestion.ChunkSplitter(), splitProps(), 10L);
+        service = new CuratedQaService(repository, threadMetaService, vectorStore, new com.example.ragagent.ingestion.ChunkSplitter(), splitProps());
 
         when(threadMetaService.findById(UID, TID)).thenReturn(Optional.of(
                 new ThreadMeta(TID, UID, "제목", "v1", "2026-01-01", "2026-01-01", "COST_FIRST", "")));
-        when(memoryService.getFeedback(UID, TID, TURN_ID))
-                .thenReturn(Optional.of(new MemoryRepository.FeedbackRow("LIKE")));
-    }
-
-    private static MemoryRepository.Turn turn(String selectedTags) {
-        return new MemoryRepository.Turn(TURN_ID, "질문", "답변", null, null, 0, 0, 0,
-                "local", 1, "LIKE", "M", selectedTags, false);
     }
 
     private static CuratedQaRepository.CuratedQa curated(String tags) {
@@ -68,35 +64,32 @@ class CuratedQaTagScopeTest {
     }
 
     @Test
-    @DisplayName("onLike — 질문 당시 선택된 태그를 curated_qa에 승계한다")
-    void onLike_inheritsTurnTags() {
-        when(memoryService.getTurn(UID, TID, TURN_ID)).thenReturn(Optional.of(turn("설계,api")));
+    @DisplayName("승인 — 제안의 태그 스코프를 curated_qa 에 그대로 싣는다 (출처 turn/thread 와 함께)")
+    void approve_storesSubmissionTags() {
         when(repository.upsertActive(anyLong(), any(), any(), any(), any(), any(), any(), any())).thenReturn(1L);
 
-        service.onLike(UID, TID, TURN_ID);
+        service.createFromLikedTurn(7L, TURN_ID, UID, TID, "질문", "답변", "설계,api");
 
-        verify(repository).upsertActive(TURN_ID, UID, TID, "질문", "답변", "v1", "설계,api", null);
+        verify(repository).upsertActive(TURN_ID, UID, TID, "질문", "답변", "v1", "설계,api", 7L);
     }
 
     @Test
-    @DisplayName("onLike — 태그 없이(전체 검색) 물은 질문이면 태그도 비어 승계된다")
-    void onLike_noTagsStaysEmpty() {
-        when(memoryService.getTurn(UID, TID, TURN_ID)).thenReturn(Optional.of(turn("")));
+    @DisplayName("승인 — 태그 없이 낸 제안이면 태그도 비어 저장된다 (모든 스코프에서 검색된다)")
+    void approve_noTagsStaysEmpty() {
         when(repository.upsertActive(anyLong(), any(), any(), any(), any(), any(), any(), any())).thenReturn(1L);
 
-        service.onLike(UID, TID, TURN_ID);
+        service.createFromLikedTurn(7L, TURN_ID, UID, TID, "질문", "답변", "");
 
-        verify(repository).upsertActive(TURN_ID, UID, TID, "질문", "답변", "v1", "", null);
+        verify(repository).upsertActive(TURN_ID, UID, TID, "질문", "답변", "v1", "", 7L);
     }
 
     @Test
     @DisplayName("임베딩 문서 — 태그가 있으면 문서 청크와 같은 키(MetaKey.TAGS)로 실린다")
     void embeddedDocument_carriesTagsMetadata() {
-        when(memoryService.getTurn(UID, TID, TURN_ID)).thenReturn(Optional.of(turn("설계,api")));
         when(repository.upsertActive(anyLong(), any(), any(), any(), any(), any(), any(), any())).thenReturn(1L);
         when(repository.findById(1L)).thenReturn(Optional.of(curated("설계,api")));
 
-        service.onLike(UID, TID, TURN_ID);
+        service.createFromLikedTurn(7L, TURN_ID, UID, TID, "질문", "답변", "설계,api");
 
         assertThat(capturedDocument().getMetadata().get(MetaKey.TAGS)).isEqualTo("설계,api");
     }
@@ -104,11 +97,10 @@ class CuratedQaTagScopeTest {
     @Test
     @DisplayName("임베딩 문서 — 태그가 없으면 키 자체를 넣지 않는다 (스코프 미상 = 전체 통과)")
     void embeddedDocument_omitsTagsKeyWhenEmpty() {
-        when(memoryService.getTurn(UID, TID, TURN_ID)).thenReturn(Optional.of(turn(null)));
         when(repository.upsertActive(anyLong(), any(), any(), any(), any(), any(), any(), any())).thenReturn(1L);
         when(repository.findById(1L)).thenReturn(Optional.of(curated(null)));
 
-        service.onLike(UID, TID, TURN_ID);
+        service.createFromLikedTurn(7L, TURN_ID, UID, TID, "질문", "답변", null);
 
         assertThat(capturedDocument().getMetadata()).doesNotContainKey(MetaKey.TAGS);
     }

@@ -28,6 +28,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.containsString;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -241,6 +242,39 @@ class AdminControllerWebMvcTest {
                 .andExpect(content().string(containsString("검토 대기")));
 
         verify(submissionService).listForAdmin("pending", 0, 20);
+    }
+
+    @Test
+    @DisplayName("GET /admin/submissions/{id}/detail — 좋아요 출신이면 표기와 원 대화를 함께 싣는다")
+    void submissionDetail_carriesChatOrigin() throws Exception {
+        var row = new com.example.ragagent.repository.CuratedSubmissionRepository.Submission(
+                1L, "u1", "제안 제목", "제안 본문", "pending", null, null, null,
+                "2026-01-01", "2026-01-01", null, null, "인프라", 42L, "t1", 0, 0, 0, 0);
+        when(submissionService.findById(1L)).thenReturn(Optional.of(row));
+        when(submissionService.previewChunkCount(anyString())).thenReturn(1);
+        when(submissionService.originOf(row)).thenReturn(Optional.of(
+                new CuratedSubmissionService.TurnOrigin("t1", 42L, "DN")));
+
+        // [DN] = 문서를 하나도 읽지 않은 답변. 본문만 봐서는 알 수 없고, 반려 여부를 가르는 정보다.
+        mvc.perform(get("/admin/submissions/1/detail").with(user(ADMIN)))
+                .andExpect(status().isOk())
+                .andExpect(content().json("{\"modeLabel\":\"DN\",\"sourceThreadId\":\"t1\",\"sourceTurnId\":42}"));
+    }
+
+    @Test
+    @DisplayName("GET /admin/submissions/{id}/detail — 손으로 쓴 제안에는 출처가 실리지 않는다")
+    void submissionDetail_handWritten_hasNoOrigin() throws Exception {
+        var row = new com.example.ragagent.repository.CuratedSubmissionRepository.Submission(
+                2L, "u1", "제안 제목", "제안 본문", "pending", null, null, null,
+                "2026-01-01", "2026-01-01", null, null, null, null, null, 0, 0, 0, 0);
+        when(submissionService.findById(2L)).thenReturn(Optional.of(row));
+        when(submissionService.previewChunkCount(anyString())).thenReturn(1);
+        when(submissionService.originOf(row)).thenReturn(Optional.empty());
+
+        String json = mvc.perform(get("/admin/submissions/2/detail").with(user(ADMIN)))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        assertThat(json).doesNotContain("sourceTurnId").doesNotContain("modeLabel");
     }
 
     @Test

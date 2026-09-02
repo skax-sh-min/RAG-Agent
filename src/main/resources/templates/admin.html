@@ -1173,9 +1173,17 @@ function openSubmissionReview(id) {
         .then(data => {
             const pending = data.status === 'pending';
             const body = document.getElementById('submissionReviewOffcanvasBody');
+            // §10.11 — 좋아요 출신 제안의 출처. [DN] 은 그 답변이 문서를 하나도 읽지 않았다는 뜻이고,
+            // 본문만 봐서는 알 수 없다 — 반려 여부를 가르는 정보라 검토 화면 맨 위에 둔다.
+            // 표기가 없으면 원 대화가 삭제된 것이다(출처는 알지만 대조할 원문이 없다).
+            const origin = data.sourceTurnId == null ? '' : `
+                <span class="badge bg-secondary">${escHtml(data.modeLabel || '대화 삭제됨')}</span>
+                <a href="/chat/${encodeURIComponent(data.sourceThreadId)}" target="_blank"
+                   rel="noopener">원 대화 보기</a>`;
             body.innerHTML = `
-                <div class="small text-muted d-flex flex-wrap gap-2">
+                <div class="small text-muted d-flex flex-wrap gap-2 align-items-center">
                     <span>작성자: <span class="fw-semibold">${escHtml(data.author || '')}</span></span>
+                    ${origin}
                     <span class="ms-auto">${pending ? '승인 시' : '등록된'} 청크
                         <span class="fw-semibold">${data.chunkPreview}</span>개</span>
                 </div>

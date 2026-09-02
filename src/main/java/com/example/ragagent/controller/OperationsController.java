@@ -132,9 +132,15 @@ public class OperationsController {
     private static final Set<String> VALID_FEEDBACK = Set.of("LIKE", "DISLIKE", "NONE");
 
     /**
-     * DISLIKE is a hard-exclusion signal consumed by MemoryRepository.getHistory() —
-     * disliked turns drop out of future prompt context. LIKE promotes the turn into the
-     * curated-Q&A search axis via {@link CuratedQaService} (§10.10).
+     * DISLIKE is a hard-exclusion signal consumed by MemoryRepository.getHistory() — disliked
+     * turns drop out of future prompt context.
+     *
+     * <p>LIKE writes nothing but the feedback value (§10.11). It used to promote the turn straight
+     * into the curated-Q&A search axis, which made this endpoint an unreviewed door into the search
+     * corpus; the chat UI now offers to open a 지식 제안 instead, and an admin's approval is what
+     * creates the curated entry. Two things still read the stored LIKE: the 재사용 filter, which
+     * requires it before a Direct turn's answer may be reused
+     * ({@code QuestionReuseRepository}), and the chat UI's own button state.
      */
     @PatchMapping("/ui/threads/{threadId}/turns/{turnId}/feedback")
     @ResponseBody
@@ -153,15 +159,7 @@ public class OperationsController {
         String dbValue = "NONE".equals(normalized) ? null : normalized;
         memoryService.updateFeedback(userId, threadId, turnId, dbValue);
 
-        // §10.10 — promote/retract the curated-Q&A snapshot on a LIKE transition (either
-        // direction). previous/normalized are both already-uppercased VALID_FEEDBACK members.
         String previous = existing.get().feedback() == null ? "NONE" : existing.get().feedback();
-        if ("LIKE".equals(normalized) && !"LIKE".equals(previous)) {
-            curatedQaService.onLike(userId, threadId, turnId);
-        } else if (!"LIKE".equals(normalized) && "LIKE".equals(previous)) {
-            curatedQaService.onUnlike(userId, threadId, turnId);
-        }
-
         auditLogger.log("turn.feedback", threadId, Map.of(
                 "turnId", turnId,
                 "from", previous,
@@ -180,9 +178,11 @@ public class OperationsController {
      * endpoint above — {@code getFeedback(userId, threadId, turnId)} returns empty for any turn that
      * is not this user's, so a 404 covers both "missing" and "not yours".
      *
-     * <p>Because the feedback is never written on this path, a turn that was LIKE-promoted arrives
-     * here <em>still</em> liked — the retraction below is the only thing standing between it and an
-     * orphaned curated-Q&A row that would keep contributing to search after the turn is gone.
+     * <p>A curated entry created from this turn (via an approved 지식 제안) is retracted here — it
+     * is linked to the turn by a copy of the id rather than a foreign key, so it would otherwise
+     * keep feeding search from an exchange that no longer exists. The retraction is unconditional
+     * now: §10.11 decoupled the entry's existence from the turn's feedback value, so checking for
+     * LIKE first would miss every entry whose author later changed their mind about the message.
      */
     @DeleteMapping("/ui/threads/{threadId}/turns/{turnId}")
     @ResponseBody
@@ -193,9 +193,7 @@ public class OperationsController {
         if (existing.isEmpty()) {
             return ResponseEntity.notFound().build();
         }
-        if ("LIKE".equals(existing.get().feedback())) {
-            curatedQaService.onUnlike(userId, threadId, turnId);
-        }
+        curatedQaService.onTurnDeleted(userId, threadId, turnId);
         if (!memoryService.deleteTurn(userId, threadId, turnId)) {
             return ResponseEntity.notFound().build();
         }
