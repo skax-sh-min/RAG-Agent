@@ -390,16 +390,21 @@ public class AnswerService {
     // ── 컨텍스트 초과 후 축소 재시도 (§6.26-9) ───────────────────────────────
 
     /**
-     * 초과 한 번에 프롬프트를 <b>절반</b>으로 줄인다 — 하나씩이 아니라 절반씩이라 왕복이 log(n) 이다.
-     * 이 상수가 그 단계 수의 상한이라 최악의 왕복은 4회(0~3단계)이고, topK=10 이면 10→5→3→2 다.
+     * 재시도 횟수의 상한. 한 번에 덜어낼 문서 수는 {@code app.llm.shrink-step}(기본 1) 이므로 기본
+     * 설정에서 topK=10 이면 10→9→8→7→6→5 까지 간다.
      *
-     * <p><b>왜 이만큼이면 충분한가.</b> 사전 예산({@code fitToBudget})이 이미 창에 맞춰 줄여 놓았고,
-     * 여기까지 오는 것은 그 계산이 <b>빗나갔다</b>는 뜻이다. 빗나가는 폭은 {@code TokenEstimator} 의
-     * 추정 오차이고, {@code TokenEstimateCalibration} 이 정상으로 보는 범위가 0.75~1.35 다 — 5배를
-     * 줄이고도 안 들어간다면 그건 추정 오차가 아니라 설정 문제이고, 그때는 {@code RAG-LLM-003} 이
-     * 무엇을 고쳐야 하는지 이름을 대 주는 편이 낫다. 더 줄여 봐야 근거가 한 조각 남은 답변이 된다.
+     * <p><b>왜 절반씩이 아닌가.</b> 처음에는 이진 축소였다 — 왕복이 log(n) 이라는 이유였는데, 그
+     * 계산은 <b>왕복만</b> 세고 버려지는 근거는 세지 않는다. 사전 예산({@code fitToBudget})이 이미 창에
+     * 맞춰 줄여 놓은 뒤라 여기까지 오는 초과는 대개 <b>아슬아슬하다</b>({@code TokenEstimator} 추정
+     * 오차의 정상 범위가 0.75~1.35 다). 그런 초과에 문서를 반으로 자르면 한 개만 덜어내면 됐을 자리에서
+     * 다섯 개를 버린다 — 답변은 나가지만 근거의 절반이 없는 답변이다.
+     *
+     * <p>대신 왕복이 늘어나므로 상한이 필요하다. 이 값과 {@code shrink-step} 의 곱이 <b>도달 가능한
+     * 최대 축소폭</b>이고(기본값 조합에서 5개), 거기서도 안 들어가면 추정 오차가 아니라 설정 문제라
+     * {@code RAG-LLM-003} 이 무엇을 고쳐야 하는지 이름을 대 주는 편이 낫다. 초과는 생성 전에 거절되므로
+     * 실패한 시도의 왕복은 빠르다 — 느린 것은 마지막 성공한 호출 하나뿐이다.
      */
-    private static final int MAX_SHRINK_LEVELS = 3;
+    private static final int MAX_SHRINK_ATTEMPTS = 5;
 
     /** 성공한 시도의 결과와 <b>그때의 축소 단계</b>. 단계가 있어야 사용자 안내를 다시 세울 수 있다. */
     private record Shrunk<T>(T value, int level) {}
@@ -433,18 +438,19 @@ public class AnswerService {
     private <T> Shrunk<T> withShrinkRetry(AgentState state, String tag,
                                           BooleanSupplier canRetry, IntFunction<T> attempt) {
         int maxLevel = maxShrinkLevel(state);
+        int step = props.llmSafe().shrinkStep();
         for (int level = 0; ; level++) {
             try {
                 return new Shrunk<>(attempt.apply(level), level);
             } catch (RuntimeException e) {
                 if (level >= maxLevel || !isContextOverflow(e) || !canRetry.getAsBoolean()) throw e;
                 log.warn("[SHRINK] {} 컨텍스트 초과 — 프롬프트를 줄여 다시 시도한다. thread={} "
-                         + "단계 {}→{}, 문서 {}→{}개. 사전 예산은 토큰 추정 위에 서 있어 여기까지 오는 "
-                         + "일 자체는 정상이지만, 잦다면 app.search-top-k 를 낮추거나(핫, /settings) "
-                         + "프로바이더의 컨텍스트를 키우십시오.",
-                        tag, state.threadId(), level, level + 1,
-                        shrinkDocs(state.retrievedDocs(), level).size(),
-                        shrinkDocs(state.retrievedDocs(), level + 1).size());
+                         + "시도 {}/{}, 문서 {}→{}개(app.llm.shrink-step={}). 사전 예산은 토큰 추정 위에 "
+                         + "서 있어 여기까지 오는 일 자체는 정상이지만, 잦다면 app.search-top-k 를 "
+                         + "낮추거나(핫, /settings) 프로바이더의 컨텍스트를 키우십시오.",
+                        tag, state.threadId(), level + 1, maxLevel,
+                        shrinkDocs(state.retrievedDocs(), level, step).size(),
+                        shrinkDocs(state.retrievedDocs(), level + 1, step).size(), step);
             }
         }
     }
@@ -458,42 +464,48 @@ public class AnswerService {
     }
 
     /**
-     * 이 턴에서 의미 있게 줄일 수 있는 단계 수.
+     * 이 턴에서 의미 있게 줄일 수 있는 시도 횟수.
      *
-     * <p>문서가 1개뿐이면 반으로 나눠도 그대로라 <b>같은 요청을 반복</b>하게 된다 — 그때는 이력이
-     * 남아 있을 때만 한 단계를 준다. 상한을 두지 않으면 결정적으로 실패하는 요청에 왕복만 쓴다.
+     * <p>문서가 1개뿐이면 더 덜어낼 것이 없어 <b>같은 요청을 반복</b>하게 된다 — 그때는 이력이
+     * 남아 있을 때만 한 번을 준다. 상한을 두지 않으면 결정적으로 실패하는 요청에 왕복만 쓴다.
      */
-    private static int maxShrinkLevel(AgentState state) {
-        int byDocs = ceilLog2(state.retrievedDocs().size());
+    private int maxShrinkLevel(AgentState state) {
+        int byDocs = docShrinkSteps(state.retrievedDocs().size(), props.llmSafe().shrinkStep());
         String history = state.conversationHistory();
         boolean hasHistory = history != null && !history.isBlank();
-        return Math.min(MAX_SHRINK_LEVELS, hasHistory ? byDocs + 1 : byDocs);
+        return Math.min(MAX_SHRINK_ATTEMPTS, hasHistory ? byDocs + 1 : byDocs);
     }
 
-    /** 1 이 될 때까지 필요한 반감 횟수. {@code n <= 1} 이면 0 — 더 줄일 것이 없다. */
-    private static int ceilLog2(int n) {
-        return n <= 1 ? 0 : 32 - Integer.numberOfLeadingZeros(n - 1);
+    /** 문서가 1개만 남을 때까지 필요한 시도 횟수. {@code n <= 1} 이면 0 — 더 줄일 것이 없다. */
+    private static int docShrinkSteps(int n, int step) {
+        return n <= 1 ? 0 : (n - 1 + step - 1) / step;
     }
 
     /**
-     * 단계마다 문서 수를 반으로 — 뒤(최저 관련도)부터 버린다. {@code fitToBudget} 의 순서 규칙과 같다.
-     * <b>최상위 문서는 남는다</b>: 다 버리면 프롬프트가 "문서를 찾을 수 없습니다"가 되어, 초과를
+     * 시도마다 문서를 {@code step} 개씩 — 뒤(최저 관련도)부터 버린다. {@code fitToBudget} 의 순서
+     * 규칙과 같다.
+     *
+     * <p><b>최상위 문서는 남는다</b>: 다 버리면 프롬프트가 "문서를 찾을 수 없습니다"가 되어, 초과를
      * 피하려다 검색이 성공한 질문에 모른다고 답하게 된다.
      */
-    private static List<Document> shrinkDocs(List<Document> docs, int level) {
+    private static List<Document> shrinkDocs(List<Document> docs, int level, int step) {
         if (level <= 0 || docs.size() <= 1) return docs;
-        int keep = Math.max(1, (docs.size() + (1 << level) - 1) >> level);
+        int keep = Math.max(1, docs.size() - level * Math.max(1, step));
         return docs.subList(0, keep);
     }
 
     /**
      * 이력은 <b>문서를 다 줄인 뒤에야</b> 손댄다 — 이 앱이 축소에서 지키는 순서(문서 → 이력)를 재시도
-     * 에서도 그대로 따른다. 문서가 이미 1개면 1단계부터 이력이 반씩 줄고, topK 가 크면 상한(3단계)
-     * 안에서는 이력에 닿지 않는다. 그래도 되는 이유는 이력이 설정으로 이미 묶여 있고
-     * ({@code MemoryService} 가 {@code max-tokens}의 절반) 창을 밀어붙이는 쪽은 문서라서다.
+     * 에서도 그대로 따른다. 문서가 이미 1개면 첫 시도부터 이력이 반씩 줄고, topK 가 크면 상한
+     * ({@link #MAX_SHRINK_ATTEMPTS}) 안에서는 이력에 닿지 않는다. 그래도 되는 이유는 이력이 설정으로
+     * 이미 묶여 있고({@code MemoryService} 가 {@code max-tokens} 의 절반) 창을 밀어붙이는 쪽은
+     * 문서라서다.
+     *
+     * <p>이쪽만 여전히 <b>반씩</b>인 것은 이력에는 "몇 개"라는 단위가 없기 때문이다 — 턴 길이가
+     * 제각각이라 개수로 세면 어떤 대화에서는 아무것도 안 줄고 어떤 대화에서는 통째로 사라진다.
      */
-    private static String shrinkHistory(String history, int level, int docCount) {
-        int shift = level - ceilLog2(docCount);
+    private String shrinkHistory(String history, int level, int docCount) {
+        int shift = level - docShrinkSteps(docCount, props.llmSafe().shrinkStep());
         if (shift <= 0 || history == null || history.isBlank()) return history;
         return trimHistory(history, TokenEstimator.estimate(history) >> shift);
     }
@@ -879,7 +891,7 @@ public class AnswerService {
      */
     private EvalExcerpts evalExcerptsFor(AgentState state, String answer, String systemPrompt,
                                          String schema, int shrinkLevel) {
-        return buildEvalExcerpts(shrinkDocs(state.retrievedDocs(), shrinkLevel),
+        return buildEvalExcerpts(shrinkDocs(state.retrievedDocs(), shrinkLevel, props.llmSafe().shrinkStep()),
                 evalExcerptTokenBudget(state, systemPrompt, answer, schema),
                 state.retrievedDocs().size());
     }
@@ -1186,15 +1198,16 @@ public class AnswerService {
     }
 
     /**
-     * @param shrinkLevel 컨텍스트 초과 후 재시도 단계(§6.26-9). {@code 0} 이면 예전 동작 그대로이고,
-     *                    단계마다 문서 수가 절반이 된다. <b>예산 계산보다 먼저</b> 적용된다 —
+     * @param shrinkLevel 컨텍스트 초과 후 재시도 횟수(§6.26-9). {@code 0} 이면 예전 동작 그대로이고,
+     *                    한 번마다 문서가 {@code app.llm.shrink-step} 개씩 줄어든다.
+     *                    <b>예산 계산보다 먼저</b> 적용된다 —
      *                    창을 모르면 예산 단계가 통째로 no-op 이라, 축소를 그쪽에 얹으면 정작
      *                    자동 복구가 가장 필요한 "창 모름" 배포에서 아무 일도 일어나지 않는다.
      */
     private Fitted fitToBudget(AgentState state, String providerName, boolean streaming, int shrinkLevel) {
         List<Document> allDocs = state.retrievedDocs();
         String fullHistory = state.conversationHistory();
-        List<Document> docs = shrinkDocs(allDocs, shrinkLevel);
+        List<Document> docs = shrinkDocs(allDocs, shrinkLevel, props.llmSafe().shrinkStep());
         String history = shrinkHistory(fullHistory, shrinkLevel, allDocs.size());
         PromptBudget budget = budgetFor(state, providerName, streaming);
         if (budget == null) {

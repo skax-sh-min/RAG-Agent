@@ -42,7 +42,7 @@ class VerificationPersistenceTest {
         AppProperties props = mock(AppProperties.class);
         when(props.memorySafe()).thenReturn(new AppProperties.MemoryConfig(50));
         when(props.llmSafe()).thenReturn(new AppProperties.LlmConfig(
-                List.of(), 2, 10, 180, "COST_FIRST", 3, 20, 0.0, 0.1, 0.0, 0.7, true, 6000, false));
+                List.of(), 2, 10, 180, "COST_FIRST", 3, 20, 0.0, 0.1, 0.0, 0.7, true, 6000, 1, false));
         repo = new SqliteMemoryRepository(jdbc, props);
         repo.init();
         service = new MemoryService(repo, props);

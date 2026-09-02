@@ -70,7 +70,7 @@ class MarkdownCorrectionServiceTest {
         when(indexing.maxConcurrentLlmCalls()).thenReturn(2);
         when(props.indexingSafe()).thenReturn(indexing);
         when(props.llmSafe()).thenReturn(new AppProperties.LlmConfig(
-                java.util.List.of(), 2, 10, 180, "COST_FIRST", 3, 20, 0.0, 0.1, 0.0, 0.7, true, 8000, true));
+                java.util.List.of(), 2, 10, 180, "COST_FIRST", 3, 20, 0.0, 0.1, 0.0, 0.7, true, 8000, 1, true));
         service = new MarkdownCorrectionService(llmRouter, props, new ProviderContextWindows());
     }
 
@@ -1421,7 +1421,7 @@ class MarkdownCorrectionServiceTest {
         when(indexing.maxConcurrentLlmCalls()).thenReturn(2);
         when(props.indexingSafe()).thenReturn(indexing);
         when(props.llmSafe()).thenReturn(new AppProperties.LlmConfig(
-                java.util.List.of(), 2, 10, 180, "COST_FIRST", 3, 20, 0.0, 0.1, 0.0, 0.7, true, 8000, true));
+                java.util.List.of(), 2, 10, 180, "COST_FIRST", 3, 20, 0.0, 0.1, 0.0, 0.7, true, 8000, 1, true));
         return new MarkdownCorrectionService(llmRouter, props, windows);
     }
 }

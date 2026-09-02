@@ -43,7 +43,7 @@ class ImageTypeClassifierTest {
         llmRouter = mock(LlmRouter.class);
         AppProperties props = mock(AppProperties.class);
         when(props.llmSafe()).thenReturn(new AppProperties.LlmConfig(
-                List.of(), 2, 10, 180, "COST_FIRST", 3, 20, 0.0, 0.1, 0.0, 0.7, true, 6000, true));
+                List.of(), 2, 10, 180, "COST_FIRST", 3, 20, 0.0, 0.1, 0.0, 0.7, true, 6000, 1, true));
         classifier = new ImageTypeClassifier(llmRouter, props);
     }
 

@@ -140,6 +140,10 @@ app.llm.direct-temperature=${DIRECT_LLM_TEMPERATURE:0.1}
 app.llm.indexing-temperature=${LLM_INDEXING_TEMPERATURE:0.0}
 app.llm.creative-temperature=${CREATIVE_LLM_TEMPERATURE:0.7}
 app.llm.creative-mode-enabled=${CREATIVE_MODE_ENABLED:true}
+# 컨텍스트 초과로 프롬프트가 거절되면 재시도마다 덜어낼 문서 수 (§6.26-9, 기본 1, 범위 1~10).
+# 사전 예산이 이미 창에 맞춰 놓은 뒤라 여기까지 오는 초과는 대개 아슬아슬하므로 반씩이 아니라
+# 한두 개씩 줄인다. 재시도 상한 5회 × 이 값 = 도달 가능한 최대 축소폭.
+app.llm.shrink-step=${LLM_SHRINK_STEP:1}
 
 # 프로바이더별 상한/창 (둘 다 선택). max-tokens 미설정이면 전역 app.llm.max-tokens,
 # context-size 미설정이면 기동 시 서버에 물어보고(llama.cpp /props · LM Studio /api/v0/models)

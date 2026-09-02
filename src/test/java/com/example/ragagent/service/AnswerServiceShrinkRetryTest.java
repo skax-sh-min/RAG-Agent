@@ -49,16 +49,20 @@ class AnswerServiceShrinkRetryTest {
     @BeforeEach
     void setUp() {
         llmRouter = mock(LlmRouter.class);
-        AppProperties props = new AppProperties(
-                "./data", 2, 800, 100, 100, 7, 0.0, true, 0, false,
-                true, false, 3,
-                null, null, null, null, null, null, null, null, null, null, null, null, null, null,
-                null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null);
         contextWindows = new ProviderContextWindows();   // 창 모름 — 사전 축소가 아예 돌지 않는 배포
+        service = serviceWithShrinkStep(1);
+        when(llmRouter.findProviderName(any(), any())).thenReturn("lm");
+    }
+
+    /** {@code app.llm.shrink-step} 만 바꿔 끼운 서비스 — 나머지 설정은 동일. */
+    private AnswerService serviceWithShrinkStep(int step) {
+        AppProperties props = mock(AppProperties.class);
+        when(props.maxRetryCount()).thenReturn(2);
+        when(props.llmSafe()).thenReturn(new AppProperties.LlmConfig(
+                List.of(), 2, 10, 180, "COST_FIRST", 3, 20, 0.0, 0.1, 0.0, 0.7, true, 8000, step, true));
         MessageSource messageSource = mock(MessageSource.class);
         when(messageSource.getMessage(anyString(), any(), any(Locale.class))).thenReturn("prompt");
-        service = new AnswerService(llmRouter, props, messageSource, contextWindows);
-        when(llmRouter.findProviderName(any(), any())).thenReturn("lm");
+        return new AnswerService(llmRouter, props, messageSource, contextWindows);
     }
 
     private static Document koreanDoc(String marker, int chars) {
@@ -118,27 +122,39 @@ class AnswerServiceShrinkRetryTest {
     }
 
     @Test
-    @DisplayName("컨텍스트 초과 한 번 — 문서를 절반으로 줄여 다시 시도하고 답변을 낸다")
-    void oneOverflowHalvesTheDocumentsAndSucceeds() {
+    @DisplayName("컨텍스트 초과 한 번 — 기본값(1개)만 덜어내고 다시 시도한다")
+    void oneOverflowDropsOnlyOneDocument() {
         AtomicReference<String> prompt = stubAnswerFailingFirst(1);
 
         AgentState result = service.execute(stateWith(8));
 
         assertThat(result.answer()).isEqualTo("답변");
-        // 8 → 4. 앞쪽(관련도 높은 쪽)이 남는다.
-        assertThat(prompt.get()).contains("문서1-", "문서4-");
-        assertThat(prompt.get()).doesNotContain("문서5-", "문서8-");
+        // 8 → 7. 아슬아슬한 초과에 근거의 절반을 버리지 않는다.
+        assertThat(prompt.get()).contains("문서1-", "문서7-");
+        assertThat(prompt.get()).doesNotContain("문서8-");
     }
 
     @Test
-    @DisplayName("절반씩 줄인다 — 세 번 초과하면 8→4→2→1 로 내려간다(하나씩이 아니라)")
-    void shrinkIsBinaryNotOneByOne() {
+    @DisplayName("초과가 이어지면 그만큼씩 더 덜어낸다 — 세 번이면 8→5")
+    void repeatedOverflowsKeepStepping() {
         AtomicReference<String> prompt = stubAnswerFailingFirst(3);
 
         service.execute(stateWith(8));
 
-        assertThat(prompt.get()).contains("문서1-");
-        assertThat(prompt.get()).doesNotContain("문서2-");
+        assertThat(prompt.get()).contains("문서5-");
+        assertThat(prompt.get()).doesNotContain("문서6-");
+    }
+
+    @Test
+    @DisplayName("한 번에 덜어낼 개수는 설정이다 — shrink-step=3 이면 8→5")
+    void theStepIsConfigurable() {
+        service = serviceWithShrinkStep(3);
+        AtomicReference<String> prompt = stubAnswerFailingFirst(1);
+
+        service.execute(stateWith(8));
+
+        assertThat(prompt.get()).contains("문서5-");
+        assertThat(prompt.get()).doesNotContain("문서6-");
     }
 
     @Test
@@ -150,16 +166,21 @@ class AnswerServiceShrinkRetryTest {
 
         assertThat(result.budgetNote())
                 .as("0단계 기준으로 안내하면 화면과 모델이 본 것이 어긋난다")
-                .isEqualTo("컨텍스트 한도로 검색된 문서 8개 중 4개만 사용했습니다.");
+                .isEqualTo("컨텍스트 한도로 검색된 문서 8개 중 7개만 사용했습니다.");
     }
 
     @Test
     @DisplayName("상한을 넘으면 포기하고 RAG-LLM-003 을 그대로 올린다 — 결정적 실패에 왕복만 쓰지 않는다")
     void givesUpAfterTheShrinkLimit() {
-        stubAnswerFailingFirst(99);
+        AtomicInteger calls = new AtomicInteger();
+        when(llmRouter.executeGatedWithUsage(eq(TaskType.TEXT), any(), any())).thenAnswer(inv -> {
+            calls.incrementAndGet();
+            throw overflow();
+        });
 
         assertThatThrownBy(() -> service.execute(stateWith(8)))
                 .isInstanceOf(LlmContextOverflowException.class);
+        assertThat(calls.get()).as("첫 시도 + 재시도 5회").isEqualTo(6);
     }
 
     @Test

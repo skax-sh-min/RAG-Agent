@@ -58,7 +58,7 @@ class ResponseModeOperatorToggleTest {
 
     private static AppProperties propsWithLlm() {
         AppProperties.LlmConfig llm = new AppProperties.LlmConfig(
-                List.of(), 2, 10, 180, "COST_FIRST", 3, 20, 0.0, 0.1, 0.0, 0.7, null, 6000, false);
+                List.of(), 2, 10, 180, "COST_FIRST", 3, 20, 0.0, 0.1, 0.0, 0.7, null, 6000, 1, false);
         return new AppProperties(
                 "./data", 2, 800, 100, 100, 7, 0.0, true, 5, false,
                 true, false, 3, null,

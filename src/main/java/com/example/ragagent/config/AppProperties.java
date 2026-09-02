@@ -68,6 +68,7 @@ public record AppProperties(
             Double creativeTemperature,      // C(응용) 모드 answer temperature (app.llm.creative-temperature / CREATIVE_LLM_TEMPERATURE), default 0.7, clamp [0,1.0] — HOT-editable (§6.24). Separate from `temperature` because that one is clamped to [0,0.3]: a document-faithful answer must not wobble under sampling, which also makes creative generation impossible on it. Read fresh per call by AnswerService on BOTH the blocking and the streaming path — miss streamDirect() and only the chat UI stays cold
             Boolean creativeModeEnabled,     // C(응용) 모드를 채팅에서 고를 수 있는가 (app.llm.creative-mode-enabled / CREATIVE_MODE_ENABLED), default true — HOT-editable. 온도(creativeTemperature)가 "C를 어떻게 답하게 할까"라면 이쪽은 "C를 열어 둘까"다: 문서 밖 내용을 생성하는 유일한 모드라 배포처에 따라 아예 닫아 두는 것이 운영 정책일 수 있다. 끄면 채팅 입력창에서 C 버튼이 사라지고, 그래도 도착한 요청(REST·손으로 만든 폼)은 SettingsService.effectiveResponseMode() 가 N 으로 강등한다 — 과거 C 턴의 기록/배지는 그대로 남는다
             Integer maxTokens,               // LLM response cap (app.llm.max-tokens / LLM_MAX_TOKENS), default 6000, clamp >0 — VIEW-ONLY (baked at bean creation; streaming chat answers are uncapped by design, bounded by SSE timeouts)
+            Integer shrinkStep,              // 컨텍스트 초과 후 재시도할 때 한 번에 덜어낼 문서 수 (app.llm.shrink-step / LLM_SHRINK_STEP), 기본 1, clamp [1,10] — HOT-editable, AnswerService.withShrinkRetry() 가 매 호출 재조회. 절반씩 줄이던 것을 대체한다: 초과는 대개 아슬아슬하게 나므로 한두 개만 덜어내면 들어가는데, 반으로 자르면 그때마다 근거의 절반이 사라진다. 다만 재시도 횟수 상한(AnswerService.MAX_SHRINK_ATTEMPTS)은 그대로라, 이 값이 작을수록 도달 가능한 최대 축소폭도 작다
             Boolean verifyLocalModelsOnStartup // GET {base-url}/v1/models for every registered LOCAL-role provider at boot — fails startup (throws, Spring exits) if unreachable or the configured model isn't in the response. Default true (app.llm.verify-local-models-on-startup / LLM_VERIFY_LOCAL_MODELS_ON_STARTUP)
     ) {}
 
@@ -784,14 +785,16 @@ public record AppProperties(
         Double indexingOverride = overrideDouble(SettingsKeys.LLM_INDEXING_TEMPERATURE);
         Double creativeOverride = overrideDouble(SettingsKeys.LLM_CREATIVE_TEMPERATURE);
         Boolean creativeModeOverride = overrideBool(SettingsKeys.LLM_CREATIVE_MODE_ENABLED);
+        Integer shrinkStepOverride = overrideInt(SettingsKeys.LLM_SHRINK_STEP);
         if (llm == null) {
             double t = clamp(tempOverride != null ? tempOverride : 0.0, 0.0, 0.3);
             double dt = clamp(directOverride != null ? directOverride : 0.1, 0.0, 1.0);
             double it = clamp(indexingOverride != null ? indexingOverride : 0.0, 0.0, 0.1);
             double ct = clamp(creativeOverride != null ? creativeOverride : 0.7, 0.0, 1.0);
             boolean cm = creativeModeOverride == null || creativeModeOverride;
+            int ss = clampInt(shrinkStepOverride != null ? shrinkStepOverride : DEFAULT_SHRINK_STEP, 1, 10);
             return new LlmConfig(List.of(), 2, 10, 180, "COST_FIRST", 3, 20, t, dt, it, ct, cm,
-                    DEFAULT_MAX_TOKENS, true);
+                    DEFAULT_MAX_TOKENS, ss, true);
         }
         List<ProviderConfig> providers = llm.providers() != null ? llm.providers() : List.of();
         int minutes = llm.circuitBreakerMinutes() > 0 ? llm.circuitBreakerMinutes() : 2;
@@ -816,11 +819,22 @@ public record AppProperties(
         boolean creativeModeEnabled = creativeModeOverride != null ? creativeModeOverride
                 : (llm.creativeModeEnabled() == null || llm.creativeModeEnabled());
         int maxTokens = (llm.maxTokens() != null && llm.maxTokens() > 0) ? llm.maxTokens() : DEFAULT_MAX_TOKENS;
+        // 0 이나 음수는 "줄이지 않는다" 가 되어 재시도가 같은 프롬프트를 반복하게 되므로 1 이 바닥이다.
+        int shrinkStepBase = shrinkStepOverride != null ? shrinkStepOverride
+                : (llm.shrinkStep() != null ? llm.shrinkStep() : DEFAULT_SHRINK_STEP);
+        int shrinkStep = clampInt(shrinkStepBase, 1, 10);
         boolean verifyLocalModels = llm.verifyLocalModelsOnStartup() == null || llm.verifyLocalModelsOnStartup();
                 return new LlmConfig(providers, minutes, connectTimeout, readTimeout, mode,
                         defaultProviderConcurrency, permitWaitTimeoutSeconds, temperature, directTemperature,
                         indexingTemperature, creativeTemperature, creativeModeEnabled, maxTokens,
-                        verifyLocalModels);
+                        shrinkStep, verifyLocalModels);
+    }
+
+    /** 컨텍스트 초과 재시도에서 한 번에 덜어낼 문서 수의 기본값 — 1개씩(가장 보수적). */
+    public static final int DEFAULT_SHRINK_STEP = 1;
+
+    private static int clampInt(int v, int lo, int hi) {
+        return Math.max(lo, Math.min(hi, v));
     }
 
     private static double clamp(double v, double lo, double hi) {

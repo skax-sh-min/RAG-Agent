@@ -12,7 +12,7 @@
 | RAG-INDEX-001 | 500 | `DocumentIndexingException` | 인덱싱 실패 (SHA-256 연산, 청크 저장 등) |
 | RAG-VEC-001 | 503 | `VectorStoreException` | Vector Store 호출 실패 |
 | RAG-LLM-001 | 503 | `LlmProviderExhaustedException` | 모든 LLM 프로바이더 차단 또는 소진 |
-| RAG-LLM-003 | 500 | `LlmContextOverflowException` | 프롬프트가 LLM 컨텍스트 윈도우 초과 — `LlmProviderExhaustedException` 의 **하위 타입**이라 소진을 잡던 자리들이 그대로 잡는다(도달 경로가 같다). 503 이 아닌 이유는 결정적 실패여서 — 같은 요청을 다시 보내도 똑같이 실패하므로 고칠 것은 시간이 아니라 프롬프트 크기(`search-top-k`·`max-tokens`)나 서버 컨텍스트 설정이다. **여기까지 온 것은 축소 재시도(§6.26-9)도 실패했다는 뜻이다** — 답변·검증 호출은 초과 시 문서 수를 절반씩 3단계까지 줄여 다시 시도하므로(로그 `[SHRINK]`), 이 코드가 나갔다면 1/8 로 줄이고도 안 들어간 것이다 |
+| RAG-LLM-003 | 500 | `LlmContextOverflowException` | 프롬프트가 LLM 컨텍스트 윈도우 초과 — `LlmProviderExhaustedException` 의 **하위 타입**이라 소진을 잡던 자리들이 그대로 잡는다(도달 경로가 같다). 503 이 아닌 이유는 결정적 실패여서 — 같은 요청을 다시 보내도 똑같이 실패하므로 고칠 것은 시간이 아니라 프롬프트 크기(`search-top-k`·`max-tokens`)나 서버 컨텍스트 설정이다. **여기까지 온 것은 축소 재시도(§6.26-9)도 실패했다는 뜻이다** — 답변·검증 호출은 초과 시 문서를 `app.llm.shrink-step` 개(기본 1)씩 5회까지 덜어내며 다시 시도하므로(로그 `[SHRINK]`), 이 코드가 나갔다면 그 최대 축소폭(기본 5개)으로도 안 들어간 것이다 |
 | RAG-RATE-001 | 429 | (RateLimitFilter) | API 요청 빈도 제한 초과 — `Retry-After` 헤더(초)에 대기 시간 포함 |
 | RAG-INT-001 | 500 | (미분류 Exception) | 내부 알 수 없는 오류 |
 
