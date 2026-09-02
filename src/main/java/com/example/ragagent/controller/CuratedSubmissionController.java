@@ -1,6 +1,7 @@
 package com.example.ragagent.controller;
 
 import com.example.ragagent.exception.UnsupportedFileTypeException;
+import com.example.ragagent.repository.CuratedSubmissionRepository;
 import com.example.ragagent.security.CurrentUser;
 import com.example.ragagent.service.CuratedImageStore;
 import com.example.ragagent.service.CuratedSubmissionService;
@@ -14,6 +15,7 @@ import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 
 import java.io.IOException;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -52,12 +54,15 @@ public class CuratedSubmissionController {
      */
     @GetMapping
     public String page(@RequestParam(defaultValue = "0") int offset,
+                       @RequestParam(required = false) String status,
                        @RequestParam(required = false) String fromThread,
                        @RequestParam(required = false) Long fromTurn,
                        Model model) {
         String userId = currentUser.userId();
         service.markAllReadForAuthor(userId);
-        model.addAttribute("submissions", service.listMine(userId, offset, PAGE_SIZE));
+        String filter = (status == null || status.isBlank() || "all".equals(status)) ? null : status;
+        model.addAttribute("submissions", service.listMine(userId, filter, offset, PAGE_SIZE));
+        model.addAttribute("submissionStatus", status == null ? "all" : status);
         model.addAttribute("offset", offset);
         model.addAttribute("pageSize", PAGE_SIZE);
         model.addAttribute("chunkSize", service.chunkSizeForBody());
@@ -147,14 +152,63 @@ public class CuratedSubmissionController {
         }
     }
 
+    /**
+     * 철회 — §10.11 widened to approved submissions: an author can now take back knowledge they
+     * contributed, which also retracts it from search ({@code CuratedSubmissionService.withdraw}).
+     * Rejected and already-withdrawn rows still refuse.
+     */
     @PostMapping("/{id}/withdraw")
     public String withdraw(@PathVariable long id, RedirectAttributes flash) {
         if (service.withdraw(id, currentUser.userId())) {
-            flash.addFlashAttribute("submitSuccess", "제안을 철회했습니다.");
+            flash.addFlashAttribute("submitSuccess", "제안을 철회했습니다. 검색에서도 제외됩니다.");
         } else {
-            flash.addFlashAttribute("submitError", "이미 처리된 제안은 철회할 수 없습니다.");
+            flash.addFlashAttribute("submitError", "이미 반려·철회된 제안은 철회할 수 없습니다.");
         }
         return "redirect:/curated/submissions";
+    }
+
+    /**
+     * §10.11 저자 수정 — the author's own full text, for the edit offcanvas. Scoped to the caller,
+     * so this cannot be used to read someone else's draft.
+     */
+    @GetMapping("/{id}/detail")
+    @ResponseBody
+    public ResponseEntity<?> detail(@PathVariable long id) {
+        return service.findById(id)
+                .filter(s -> currentUser.userId().equals(s.authorUserId()))
+                .<ResponseEntity<?>>map(s -> ResponseEntity.ok(Map.<String, Object>of(
+                        "id",       s.id(),
+                        "title",    s.title(),
+                        "body",     s.body(),
+                        "tags",     s.tags() == null ? "" : s.tags(),
+                        "status",   s.displayStatus(),
+                        // 수정·철회가 가능한 상태인가. 반려·철회된 제안은 읽기 전용이다.
+                        "editable", s.isPending()
+                                || CuratedSubmissionRepository.STATUS_APPROVED.equals(s.status()))))
+                .orElseGet(() -> ResponseEntity.notFound().build());
+    }
+
+    /**
+     * §10.11 저자 수정 저장. Returns 409 when the submission is no longer editable (a reviewer got
+     * to it first, or it was already withdrawn) and 400 with the validation message otherwise —
+     * the offcanvas renders both inline, so unlike {@link #submit} this is a real API call.
+     */
+    @PostMapping("/{id}")
+    @ResponseBody
+    public ResponseEntity<Map<String, Object>> update(@PathVariable long id,
+                                                      @RequestBody Map<String, Object> body) {
+        String title = body.get("title") instanceof String s ? s : null;
+        String text  = body.get("body")  instanceof String s ? s : null;
+        List<String> tags = com.example.ragagent.model.TagUtils.parseTagList(
+                body.get("tags") instanceof String s ? s : null);
+        try {
+            boolean ok = service.updateByAuthor(id, currentUser.userId(), title, text, tags);
+            return ok ? ResponseEntity.ok(Map.<String, Object>of("status", "pending"))
+                      : ResponseEntity.status(409).body(Map.<String, Object>of(
+                            "message", "이미 처리된 제안은 수정할 수 없습니다."));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(Map.<String, Object>of("message", e.getMessage()));
+        }
     }
 
     /**

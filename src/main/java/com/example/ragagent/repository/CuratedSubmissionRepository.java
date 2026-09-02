@@ -224,8 +224,26 @@ public class CuratedSubmissionRepository {
 
     /** "내 제안" listing — every status, since the author needs to see rejections too. */
     public List<Submission> findByAuthor(String authorUserId, int offset, int limit) {
-        return jdbc.query(SELECT_BASE + " WHERE s.author_user_id = ? ORDER BY s.id DESC LIMIT ? OFFSET ?",
-                ROW_MAPPER, authorUserId, limit, offset);
+        return findByAuthor(authorUserId, null, offset, limit);
+    }
+
+    /**
+     * "내 제안" listing, optionally narrowed to one stored status ({@code null}/blank = every one).
+     *
+     * <p>Filters on the <b>stored</b> status, not {@link Submission#displayStatus()}: 회수됨 is
+     * derived from the curated rows at read time and has no rows of its own to select on. Picking
+     * 등록 완료 therefore also lists the entries an admin has since taken down, each showing its
+     * own derived badge — which is the honest answer to "what did I get approved?".
+     */
+    public List<Submission> findByAuthor(String authorUserId, String status, int offset, int limit) {
+        if (status == null || status.isBlank()) {
+            return jdbc.query(
+                    SELECT_BASE + " WHERE s.author_user_id = ? ORDER BY s.id DESC LIMIT ? OFFSET ?",
+                    ROW_MAPPER, authorUserId, limit, offset);
+        }
+        return jdbc.query(
+                SELECT_BASE + " WHERE s.author_user_id = ? AND s.status = ? ORDER BY s.id DESC LIMIT ? OFFSET ?",
+                ROW_MAPPER, authorUserId, status, limit, offset);
     }
 
     /** Drives the admin header badge. */
@@ -280,12 +298,46 @@ public class CuratedSubmissionRepository {
                 STATUS_REJECTED, reviewerUserId, reviewNote, now, now, id, STATUS_PENDING) > 0;
     }
 
-    /** pending → withdrawn, scoped to the author so one user can't withdraw another's submission. */
+    /**
+     * pending/approved → withdrawn, scoped to the author so one user can't withdraw another's
+     * submission.
+     *
+     * <p>§10.11 — <b>approved is included on purpose.</b> Withdrawal used to be pending-only, which
+     * meant an author had no way at all to take back knowledge they had contributed: once it was
+     * indexed, only an admin could remove it. Now that 좋아요 flows through this board, that gap
+     * would cover every promoted answer. The caller is responsible for retracting the curated rows
+     * when the previous status was approved — this method only moves the board row.
+     */
     public boolean markWithdrawn(long id, String authorUserId) {
         return jdbc.update(
                 "UPDATE curated_submission SET status = ?, updated_at = ? " +
-                "WHERE id = ? AND author_user_id = ? AND status = ?",
-                STATUS_WITHDRAWN, now(), id, authorUserId, STATUS_PENDING) > 0;
+                "WHERE id = ? AND author_user_id = ? AND status IN (?, ?)",
+                STATUS_WITHDRAWN, now(), id, authorUserId, STATUS_PENDING, STATUS_APPROVED) > 0;
+    }
+
+    /**
+     * §10.11 저자 수정 — the author rewrites their own proposal. Always lands in {@code pending}:
+     * an edit is new text that nobody has reviewed, whichever status it came from.
+     *
+     * <p><b>The curated rows are deliberately left alone</b> (정책 3). An approved proposal that is
+     * being edited keeps its knowledge in search until the admin approves the new text, which then
+     * replaces it — losing a whole entry for the days it takes to review a typo fix would be a
+     * worse trade than briefly serving the previous wording. No new column and no new status are
+     * needed for that: {@code displayStatus()} derives 회수됨 from "approved with no active rows",
+     * so "pending with active rows" simply reads as pending, and the list says the currently
+     * indexed version is still in use.
+     *
+     * <p>Reviewer fields are cleared so the next reviewer isn't shown a verdict on text that no
+     * longer exists. {@code curated_qa_id} is kept — it still points at what is live right now.
+     */
+    public boolean updateByAuthor(long id, String authorUserId, String title, String body, String tags) {
+        String now = now();
+        return jdbc.update(
+                "UPDATE curated_submission SET title = ?, body = ?, tags = ?, status = ?, " +
+                "reviewer_user_id = NULL, review_note = NULL, reviewed_at = NULL, updated_at = ? " +
+                "WHERE id = ? AND author_user_id = ? AND status IN (?, ?)",
+                title, body, tags, STATUS_PENDING, now,
+                id, authorUserId, STATUS_PENDING, STATUS_APPROVED) > 0;
     }
 
     /**

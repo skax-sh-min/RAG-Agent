@@ -162,9 +162,25 @@
 
     <!-- ── 내 제안 목록 ───────────────────────────────────────────────────── -->
     <div class="card">
-        <div class="card-header py-2 fw-semibold small d-flex align-items-center">
+        <div class="card-header py-2 fw-semibold small d-flex align-items-center gap-2">
             <span th:text="#{submission.list.header}">내 제안</span>
-            <span class="badge bg-secondary ms-2" th:text="${#lists.size(submissions)}">0</span>
+            <span class="badge bg-secondary" th:text="${#lists.size(submissions)}">0</span>
+            <!-- 상태 필터 — /admin 검토 패널과 같은 목록. 저장된 상태로 거른다: '회수됨'은
+                 등록본에서 파생되는 값이라 고를 수 있는 행이 없고, '등록 완료'를 고르면 그중
+                 회수된 것도 각자의 뱃지를 달고 함께 나온다. -->
+            <select class="form-select form-select-sm ms-auto" style="max-width:140px;"
+                    onchange="location.href='/curated/submissions?status=' + encodeURIComponent(this.value)">
+                <option value="all"       th:selected="${submissionStatus == 'all'}"
+                        th:text="#{submission.filter.all}">전체</option>
+                <option value="pending"   th:selected="${submissionStatus == 'pending'}"
+                        th:text="#{submission.status.pending}">검토 대기</option>
+                <option value="approved"  th:selected="${submissionStatus == 'approved'}"
+                        th:text="#{submission.status.approved}">등록 완료</option>
+                <option value="rejected"  th:selected="${submissionStatus == 'rejected'}"
+                        th:text="#{submission.status.rejected}">반려</option>
+                <option value="withdrawn" th:selected="${submissionStatus == 'withdrawn'}"
+                        th:text="#{submission.status.withdrawn}">철회함</option>
+            </select>
         </div>
 
         <div th:if="${#lists.isEmpty(submissions)}" class="card-body text-center text-muted small py-4"
@@ -186,6 +202,14 @@
                                   th:text="${t}"></span>
                             <span th:if="${s.chunkCount() > 0}" class="text-muted" style="font-size:0.68rem;"
                                   th:text="${s.chunkCount()} + '개 청크로 등록됨'"></span>
+                        </div>
+                        <!-- 정책 3 — 승인된 제안을 수정하면 검토 대기로 돌아가지만 등록본은 그대로
+                             검색에 남는다. 상태 배지만 보면 "내려간 건가?"로 읽히므로 여기서 말한다.
+                             파생 상태를 새로 만들지 않고 두 값의 조합으로 표기한다. -->
+                        <div th:if="${s.isPending() and s.curatedActive() > 0}"
+                             class="text-muted mt-1" style="font-size:0.68rem;"
+                             th:text="#{submission.pending.stillIndexed}">
+                            현재 등록본은 계속 사용 중입니다.
                         </div>
                         <!-- 반려 사유는 잘라내지 않고 전문을 노출한다 — 사용자가 받는 유일한 피드백. -->
                         <div th:if="${s.reviewNote() != null and s.displayStatus() == 'rejected'}"
@@ -217,14 +241,26 @@
                         </span>
                         <div class="text-muted mt-1" style="font-size:0.72rem;"
                              th:text="${s.createdAt()}"></div>
-                        <form th:if="${s.isPending()}" method="post" class="mt-1"
-                              th:action="@{'/curated/submissions/' + ${s.id()} + '/withdraw'}"
-                              onsubmit="return confirm('이 제안을 철회하시겠습니까?');">
-                            <input type="hidden" th:name="${_csrf != null ? _csrf.parameterName : '_csrf'}"
-                                   th:value="${_csrf != null ? _csrf.token : ''}"/>
-                            <button type="submit" class="btn btn-outline-secondary btn-sm py-0 px-2"
-                                    style="font-size:0.72rem;" th:text="#{submission.btn.withdraw}">철회</button>
-                        </form>
+                        <!-- 수정·철회는 검토 대기와 등록 완료에서만. 반려·철회된 제안은 읽기 전용이고,
+                             다시 내려면 새로 등록한다. -->
+                        <div th:if="${s.isPending() or s.status() == 'approved'}"
+                             class="d-flex gap-1 justify-content-end mt-1">
+                            <button type="button" class="btn btn-outline-secondary btn-sm py-0 px-2"
+                                    style="font-size:0.72rem;"
+                                    th:attr="data-submission-id=${s.id()}"
+                                    onclick="openSubmissionEdit(this.dataset.submissionId)"
+                                    th:text="#{submission.btn.edit}">수정</button>
+                            <form method="post"
+                                  th:action="@{'/curated/submissions/' + ${s.id()} + '/withdraw'}"
+                                  th:attr="onsubmit=|return confirm('${s.curatedActive() > 0
+                                        ? '철회하면 이 내용이 검색에서도 즉시 제외됩니다. 계속할까요?'
+                                        : '이 제안을 철회하시겠습니까?'}');|">
+                                <input type="hidden" th:name="${_csrf != null ? _csrf.parameterName : '_csrf'}"
+                                       th:value="${_csrf != null ? _csrf.token : ''}"/>
+                                <button type="submit" class="btn btn-outline-secondary btn-sm py-0 px-2"
+                                        style="font-size:0.72rem;" th:text="#{submission.btn.withdraw}">철회</button>
+                            </form>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -237,9 +273,24 @@
                th:href="@{/curated/submissions(offset=${offset - pageSize})}">‹ 이전</a>
             <a class="btn btn-sm btn-outline-secondary py-0 px-2"
                th:classappend="${#lists.size(submissions) < pageSize} ? ' disabled'"
-               th:href="@{/curated/submissions(offset=${offset + pageSize})}">다음 ›</a>
+               th:href="@{/curated/submissions(offset=${offset + pageSize}, status=${submissionStatus})}">다음 ›</a>
         </div>
     </div>
+
+<!-- §10.11 저자 수정 — /admin 검토 오프캔버스와 같은 컴포넌트를 사용자 쪽에 둔 것.
+     전문을 자르지 않고 보여주는 것이 요점이다: 목록의 한 줄 미리보기만으로는 자기가 무엇을
+     제안했는지 확인할 수 없고, 승인된 제안을 고치려면 원문 전체가 필요하다. -->
+<div class="offcanvas offcanvas-end" tabindex="-1" id="submissionEditOffcanvas"
+     style="width:640px; max-width:100%;">
+    <div class="offcanvas-header border-bottom">
+        <h6 class="offcanvas-title">
+            <i class="bi bi-pencil-square me-2"></i>
+            <span th:text="#{submission.edit.title}">제안 수정</span>
+        </h6>
+        <button type="button" class="btn-close" data-bs-dismiss="offcanvas"></button>
+    </div>
+    <div class="offcanvas-body d-flex flex-column gap-3" id="submissionEditBody"></div>
+</div>
 
 </section>
 
@@ -339,6 +390,81 @@
         box.dispatchEvent(new Event('input'));   // 글자수·예상 청크 수 갱신
     }
 })();
+
+/* §10.11 저자 수정 오프캔버스. /admin 의 검토 오프캔버스와 같은 모양이고 다른 것은 권한뿐이다 —
+   여기서는 자기 제안만 열리고(서버가 작성자 스코프로 거른다) 승인/거부 버튼이 없다.
+
+   저장하면 상태가 검토 대기로 돌아간다. 승인된 제안이었다면 그 등록본은 검색에 그대로 남고,
+   관리자가 새 본문을 승인할 때 교체된다(정책 3) — 오타 하나 고치는 동안 그 지식이 사라지지
+   않게 하려는 것이다. 안내 문구가 그 사실을 미리 말한다. */
+const SUBMISSION_MAX_TITLE = /*[[${maxTitleLength}]]*/ 200;
+
+function escHtml(s) {
+    return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+                           .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+
+function openSubmissionEdit(id) {
+    fetch('/curated/submissions/' + encodeURIComponent(id) + '/detail')
+        .then(r => { if (!r.ok) throw new Error(); return r.json(); })
+        .then(data => {
+            const box = document.getElementById('submissionEditBody');
+            const wasApproved = data.status === 'approved';
+            box.innerHTML = `
+                <div id="submission-edit-error" class="alert alert-danger py-2 small d-none"></div>
+                <div>
+                    <label class="form-label small fw-semibold">제목</label>
+                    <input id="submission-edit-title" type="text" class="form-control form-control-sm"
+                           maxlength="${SUBMISSION_MAX_TITLE}" value="${escHtml(data.title)}"/>
+                </div>
+                <div>
+                    <label class="form-label small fw-semibold">태그</label>
+                    <input id="submission-edit-tags" type="text" class="form-control form-control-sm"
+                           autocomplete="off" value="${escHtml(data.tags)}"
+                           placeholder="쉼표로 구분 · 비우면 모든 검색에 반영"/>
+                </div>
+                <div class="flex-grow-1 d-flex flex-column">
+                    <label class="form-label small fw-semibold">본문</label>
+                    <textarea id="submission-edit-body" class="form-control form-control-sm flex-grow-1"
+                              style="min-height:320px; font-size:0.82rem; resize:vertical;"
+                              >${escHtml(data.body)}</textarea>
+                    <div class="form-text small">
+                        저장하면 다시 검토 대기 상태가 됩니다.${wasApproved
+                            ? ' 검토가 끝날 때까지 현재 등록본이 검색에 계속 사용되고, 승인 시 교체됩니다.'
+                            : ''}
+                    </div>
+                </div>
+                <button class="btn btn-primary btn-sm" onclick="saveSubmissionEdit(${Number(id)})">
+                    <i class="bi bi-save me-1"></i>저장
+                </button>`;
+            bootstrap.Offcanvas.getOrCreateInstance(
+                document.getElementById('submissionEditOffcanvas')).show();
+        })
+        .catch(() => showToast('제안을 불러올 수 없습니다.', 'danger'));
+}
+
+function saveSubmissionEdit(id) {
+    const err = document.getElementById('submission-edit-error');
+    err.classList.add('d-none');
+    fetch('/curated/submissions/' + encodeURIComponent(id), {
+        method: 'POST',
+        headers: Object.assign({ 'Content-Type': 'application/json' }, getCsrfHeaders()),
+        body: JSON.stringify({
+            title: document.getElementById('submission-edit-title').value,
+            body:  document.getElementById('submission-edit-body').value,
+            tags:  document.getElementById('submission-edit-tags').value
+        })
+    })
+        .then(async r => {
+            const d = await r.json().catch(() => ({}));
+            if (!r.ok) throw new Error(d.message || '');
+            location.reload();
+        })
+        .catch(e => {
+            err.textContent = e.message || '저장에 실패했습니다.';
+            err.classList.remove('d-none');
+        });
+}
 
 /* 기존 태그 칩 — documents.html 업로드 태그와 동일한 동작(클릭하면 입력창에 추가).
    includeCurated=true 로 문서 태그와 큐레이션 태그의 합집합을 받는다. */

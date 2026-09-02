@@ -223,11 +223,22 @@ public class CuratedSubmissionService {
         // 등록 경로가 출처에 따라 갈린다 (§10.11 함정 ①). 좋아요 출신은 turn 단위로 식별되는
         // 행 하나이고(대화·턴 삭제 회수와 재승인이 전부 그 키를 탄다), 손으로 쓴 제안은 승인 시점에
         // 미리 나뉜 N개 행이다. 태그는 어느 쪽이든 모든 청크에 동일하게 부여한다(제안 하나 = 한 스코프).
-        List<Long> curatedIds = row.fromChatTurn()
-                ? List.of(curatedQaService.createFromLikedTurn(submissionId, row.sourceTurnId(),
-                        row.authorUserId(), row.sourceThreadId(), title, body, tagsCsv))
-                : curatedQaService.createFromSubmission(
-                        submissionId, row.authorUserId(), title, splitBody(body), tagsCsv);
+        List<Long> curatedIds;
+        if (row.fromChatTurn()) {
+            // 재승인이면 같은 행이 제자리에서 갱신되고 다시 임베딩된다 — 이것이 정책 3의 "교체"다.
+            // 여기서 먼저 회수하면 백그라운드 벡터 삭제가 방금 새로 쓴 벡터를 지울 수 있다(같은 id).
+            curatedIds = List.of(curatedQaService.createFromLikedTurn(submissionId, row.sourceTurnId(),
+                    row.authorUserId(), row.sourceThreadId(), title, body, tagsCsv));
+        } else {
+            // 손으로 쓴 제안은 승인마다 새 id 의 행이 생기므로, 남아 있던 이전 등록본을 먼저 내린다.
+            // 수정 중에도 검색에 남아 있던(정책 3) 그 행들이다 — 안 내리면 같은 제안이 두 벌로 검색된다.
+            if (row.curatedActive() > 0) {
+                int replaced = curatedQaService.forceRemoveBySubmission(submissionId);
+                log.info("[SUBMISSION] 재승인 — 이전 등록본 {}건을 교체한다 id={}", replaced, submissionId);
+            }
+            curatedIds = curatedQaService.createFromSubmission(
+                    submissionId, row.authorUserId(), title, splitBody(body), tagsCsv);
+        }
         long firstCuratedId = curatedIds.get(0);
 
         if (!repository.markApproved(submissionId, reviewerUserId, title, body, tagsCsv, firstCuratedId)) {
@@ -263,14 +274,65 @@ public class CuratedSubmissionService {
         return ok;
     }
 
-    /** Author-initiated withdrawal of a still-pending submission. */
+    /**
+     * Author-initiated withdrawal. §10.11 — this now covers an <b>approved</b> submission too, and
+     * that is the whole point: before, a user could take back a proposal only while nobody had
+     * looked at it, so contributed knowledge was irretrievable except through an admin. With 좋아요
+     * routed through this board that gap would cover every promoted answer.
+     *
+     * <p>The board row flips first, then the curated rows come down, then the images are released —
+     * both cleanups scan for live references and must not count this row as one.
+     */
     public boolean withdraw(long submissionId, String authorUserId) {
         Optional<Submission> rowOpt = repository.findById(submissionId);
+        boolean wasApproved = rowOpt.map(r -> CuratedSubmissionRepository.STATUS_APPROVED.equals(r.status()))
+                .orElse(false);
         boolean ok = repository.markWithdrawn(submissionId, authorUserId);
         if (ok) {
+            if (wasApproved) {
+                int removed = curatedQaService.forceRemoveBySubmission(submissionId);
+                auditLogger.log("curated.submission.withdraw", "submission:" + submissionId,
+                        Map.of("author", authorUserId, "retracted", removed));
+                log.info("[SUBMISSION] 저자 철회 id={} — 등록본 {}건 회수", submissionId, removed);
+            }
             rowOpt.ifPresent(row -> imageStore.releaseImages(row.body()));
         }
         return ok;
+    }
+
+    /**
+     * §10.11 저자 수정 — the author rewrites their own proposal; it goes back to 검토 대기 either
+     * way. An approved entry keeps serving search until the new text is approved (정책 3), so an
+     * edit costs nothing while it waits.
+     *
+     * <p>Same validation as {@link #submit} minus the pending cap — the row already exists, so
+     * editing it cannot add to the queue.
+     */
+    public boolean updateByAuthor(long submissionId, String authorUserId,
+                                  String title, String body, List<String> tags) {
+        String cleanTitle = PromptInjectionGuard.validate(title == null ? null : title.trim());
+        if (cleanTitle.length() > MAX_TITLE_LEN) {
+            throw new IllegalArgumentException(
+                    "제목이 너무 깁니다 (최대 " + MAX_TITLE_LEN + "자, 입력: " + cleanTitle.length() + "자)");
+        }
+        if (body == null || body.isBlank()) {
+            throw new IllegalArgumentException("본문을 입력해 주세요.");
+        }
+        String cleanBody = body.strip();
+        imageStore.validateImageCount(cleanBody);
+        String tagsCsv = TagUtils.toMetaValue(TagUtils.normalize(tags));
+
+        Optional<Submission> before = repository.findById(submissionId);
+        if (!repository.updateByAuthor(submissionId, authorUserId, cleanTitle, cleanBody, tagsCsv)) {
+            return false;
+        }
+        // 수정으로 본문에서 빠진 이미지를 정리한다 — releaseImages 는 살아 있는 다른 본문이
+        // 참조하는 파일은 남기므로, 새 본문에 그대로 남은 이미지는 지워지지 않는다.
+        before.ifPresent(row -> imageStore.releaseImages(row.body()));
+        auditLogger.log("curated.submission.update", "submission:" + submissionId,
+                Map.of("author", authorUserId, "chars", cleanBody.length(), "tags", tagsCsv));
+        log.info("[SUBMISSION] 저자 수정 id={} author={} — 검토 대기로 되돌림", submissionId, authorUserId);
+        return true;
     }
 
     public List<Submission> listForAdmin(String status, int offset, int limit) {
@@ -279,6 +341,10 @@ public class CuratedSubmissionService {
 
     public List<Submission> listMine(String authorUserId, int offset, int limit) {
         return repository.findByAuthor(authorUserId, offset, limit);
+    }
+
+    public List<Submission> listMine(String authorUserId, String status, int offset, int limit) {
+        return repository.findByAuthor(authorUserId, status, offset, limit);
     }
 
     public Optional<Submission> findById(long id) {

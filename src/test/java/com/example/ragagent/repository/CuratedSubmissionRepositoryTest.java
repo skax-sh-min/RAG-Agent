@@ -266,6 +266,75 @@ class CuratedSubmissionRepositoryTest {
         assertThat(repo.findById(id).orElseThrow().chunkCount()).isZero();
     }
 
+    // ── §10.11 저자 수정·철회 ────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("markWithdrawn — 등록 완료된 제안도 철회할 수 있다 (반려·철회된 것은 여전히 불가)")
+    void markWithdrawn_nowCoversApproved() {
+        long approved = repo.insert("u1", "제목", "본문", null);
+        long c1 = curatedRepo.insertManual(approved, "u1", "제목", "본문", null);
+        repo.markApproved(approved, "admin", "제목", "본문", null, c1);
+        assertThat(repo.markWithdrawn(approved, "u1")).isTrue();
+        assertThat(repo.findById(approved).orElseThrow().status()).isEqualTo("withdrawn");
+
+        long rejected = repo.insert("u1", "제목", "본문", null);
+        repo.markRejected(rejected, "admin", "사유");
+        assertThat(repo.markWithdrawn(rejected, "u1")).isFalse();
+
+        long other = repo.insert("u1", "제목", "본문", null);
+        assertThat(repo.markWithdrawn(other, "u2")).isFalse();   // 남의 제안은 못 내린다
+    }
+
+    @Test
+    @DisplayName("updateByAuthor — 승인된 제안을 고치면 검토 대기로 돌아가되 등록본 연결은 남는다")
+    void updateByAuthor_approvedGoesBackToPendingKeepingCuratedLink() {
+        long id = repo.insert("u1", "원래 제목", "원래 본문", "인프라");
+        long c1 = curatedRepo.insertManual(id, "u1", "원래 제목", "원래 본문", "인프라");
+        repo.markApproved(id, "admin", "원래 제목", "원래 본문", "인프라", c1);
+
+        assertThat(repo.updateByAuthor(id, "u1", "새 제목", "새 본문", "보안")).isTrue();
+
+        Submission row = repo.findById(id).orElseThrow();
+        assertThat(row.status()).isEqualTo("pending");
+        assertThat(row.title()).isEqualTo("새 제목");
+        assertThat(row.body()).isEqualTo("새 본문");
+        assertThat(row.tags()).isEqualTo("보안");
+        assertThat(row.reviewerUserId()).isNull();      // 사라진 텍스트에 대한 판정은 남기지 않는다
+        assertThat(row.reviewedAt()).isNull();
+        assertThat(row.curatedQaId()).isEqualTo(c1);    // 지금 검색에 쓰이는 등록본은 그대로다
+        assertThat(row.curatedActive()).isEqualTo(1);
+        // 검토 대기인데 등록본이 살아 있는 상태 — 목록이 "현재 등록본은 계속 사용 중"으로 읽는다.
+        assertThat(row.displayStatus()).isEqualTo("pending");
+    }
+
+    @Test
+    @DisplayName("updateByAuthor — 반려·철회된 제안이나 남의 제안은 고칠 수 없다")
+    void updateByAuthor_refusesTerminalStatesAndOtherAuthors() {
+        long rejected = repo.insert("u1", "제목", "본문", null);
+        repo.markRejected(rejected, "admin", "사유");
+        assertThat(repo.updateByAuthor(rejected, "u1", "새 제목", "새 본문", null)).isFalse();
+
+        long mine = repo.insert("u1", "제목", "본문", null);
+        assertThat(repo.updateByAuthor(mine, "u2", "새 제목", "새 본문", null)).isFalse();
+        assertThat(repo.findById(mine).orElseThrow().title()).isEqualTo("제목");
+    }
+
+    @Test
+    @DisplayName("findByAuthor — 저장된 상태로 거른다 (회수됨은 파생이라 등록 완료에 함께 나온다)")
+    void findByAuthor_filtersByStoredStatus() {
+        long pending  = repo.insert("u1", "대기", "본문", null);
+        long approved = repo.insert("u1", "승인", "본문", null);
+        long c1 = curatedRepo.insertManual(approved, "u1", "승인", "본문", null);
+        repo.markApproved(approved, "admin", "승인", "본문", null, c1);
+        curatedRepo.deactivateById(c1);                       // → displayStatus 는 revoked
+
+        assertThat(repo.findByAuthor("u1", "pending", 0, 20)).extracting(Submission::id)
+                .containsExactly(pending);
+        assertThat(repo.findByAuthor("u1", "approved", 0, 20)).extracting(Submission::displayStatus)
+                .containsExactly("revoked");
+        assertThat(repo.findByAuthor("u1", null, 0, 20)).hasSize(2);
+    }
+
     // ── §10.11 좋아요 출신 제안 ──────────────────────────────────────────────
 
     @Test

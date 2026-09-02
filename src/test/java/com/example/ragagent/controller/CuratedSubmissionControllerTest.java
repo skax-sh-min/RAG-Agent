@@ -65,7 +65,7 @@ class CuratedSubmissionControllerTest {
     void setUp() {
         when(currentUser.userId()).thenReturn(USER);
         when(service.chunkSizeForBody()).thenReturn(800);
-        when(service.listMine(anyString(), anyInt(), anyInt())).thenReturn(List.of());
+        when(service.listMine(anyString(), any(), anyInt(), anyInt())).thenReturn(List.of());
     }
 
     /** {@code curatedActive}/{@code curatedFailed} 로 전부/전무 상태를 만든다(총 청크 2개 기준). */
@@ -84,7 +84,7 @@ class CuratedSubmissionControllerTest {
                 .andExpect(content().string(containsString("800")));
 
         verify(service).markAllReadForAuthor(USER);
-        verify(service).listMine(USER, 0, 20);
+        verify(service).listMine(USER, null, 0, 20);
     }
 
     @Test
@@ -129,9 +129,73 @@ class CuratedSubmissionControllerTest {
     }
 
     @Test
+    @DisplayName("GET — 등록 완료 건에도 수정·철회 버튼이 붙는다 (§10.11 이전에는 검토 대기만 가능했다)")
+    void page_offersEditAndWithdrawOnApproved() throws Exception {
+        when(service.listMine(anyString(), any(), anyInt(), anyInt()))
+                .thenReturn(List.of(submission("approved", null, 2, 0)));
+
+        mvc.perform(get("/curated/submissions").with(user(PRINCIPAL)).param("lang", "ko"))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("openSubmissionEdit")))
+                .andExpect(content().string(containsString("/withdraw")))
+                // 등록본이 살아 있는 제안의 철회는 "검색에서도 빠진다"고 먼저 말한다.
+                .andExpect(content().string(containsString("검색에서도 즉시 제외")));
+    }
+
+    @Test
+    @DisplayName("GET ?status — 상태 필터를 서비스로 넘긴다 (all 은 필터 없음)")
+    void page_appliesStatusFilter() throws Exception {
+        mvc.perform(get("/curated/submissions").with(user(PRINCIPAL)).param("status", "approved"))
+                .andExpect(status().isOk());
+        verify(service).listMine(USER, "approved", 0, 20);
+
+        mvc.perform(get("/curated/submissions").with(user(PRINCIPAL)).param("status", "all"))
+                .andExpect(status().isOk());
+        verify(service).listMine(USER, null, 0, 20);
+    }
+
+    @Test
+    @DisplayName("GET /{id}/detail — 자기 제안만 열린다")
+    void detail_scopedToAuthor() throws Exception {
+        when(service.findById(1L)).thenReturn(java.util.Optional.of(submission("pending", null, 0, 0)));
+        mvc.perform(get("/curated/submissions/1/detail").with(user(PRINCIPAL)))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("제안 본문")));
+
+        when(currentUser.userId()).thenReturn("someone-else");
+        mvc.perform(get("/curated/submissions/1/detail").with(user(PRINCIPAL)))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
+    @DisplayName("POST /{id} — 저장은 200, 이미 처리된 제안은 409, 검증 실패는 400 + 메시지")
+    void update_reportsOutcomeInline() throws Exception {
+        when(service.updateByAuthor(anyLong(), anyString(), anyString(), anyString(), any()))
+                .thenReturn(true);
+        mvc.perform(post("/curated/submissions/1").with(csrf()).with(user(PRINCIPAL))
+                        .contentType("application/json")
+                        .content("{\"title\":\"제목\",\"body\":\"본문\",\"tags\":\"인프라\"}"))
+                .andExpect(status().isOk());
+        verify(service).updateByAuthor(1L, USER, "제목", "본문", List.of("인프라"));
+
+        when(service.updateByAuthor(anyLong(), anyString(), anyString(), anyString(), any()))
+                .thenReturn(false);
+        mvc.perform(post("/curated/submissions/1").with(csrf()).with(user(PRINCIPAL))
+                        .contentType("application/json").content("{\"title\":\"제목\",\"body\":\"본문\"}"))
+                .andExpect(status().isConflict());
+
+        when(service.updateByAuthor(anyLong(), anyString(), anyString(), anyString(), any()))
+                .thenThrow(new IllegalArgumentException("제목이 너무 깁니다"));
+        mvc.perform(post("/curated/submissions/1").with(csrf()).with(user(PRINCIPAL))
+                        .contentType("application/json").content("{\"title\":\"제목\",\"body\":\"본문\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(content().string(containsString("제목이 너무 깁니다")));
+    }
+
+    @Test
     @DisplayName("GET — 반려 건은 사유 전문과 반려 뱃지를 함께 렌더한다")
     void page_rendersRejectionReason() throws Exception {
-        when(service.listMine(anyString(), anyInt(), anyInt()))
+        when(service.listMine(anyString(), any(), anyInt(), anyInt()))
                 .thenReturn(List.of(submission("rejected", "출처가 불분명합니다", 0, 0)));
 
         mvc.perform(get("/curated/submissions").with(user(PRINCIPAL)).param("lang", "ko"))
@@ -143,7 +207,7 @@ class CuratedSubmissionControllerTest {
     @Test
     @DisplayName("GET — 승인 후 회수된 건은 '회수됨'으로 표시된다")
     void page_rendersRevokedStatus() throws Exception {
-        when(service.listMine(anyString(), anyInt(), anyInt()))
+        when(service.listMine(anyString(), any(), anyInt(), anyInt()))
                 .thenReturn(List.of(submission("approved", null, 0, 0)));
 
         mvc.perform(get("/curated/submissions").with(user(PRINCIPAL)).param("lang", "ko"))
@@ -154,7 +218,7 @@ class CuratedSubmissionControllerTest {
     @Test
     @DisplayName("GET — 임베딩 실패 건은 경고 안내가 붙는다")
     void page_rendersEmbedFailureHint() throws Exception {
-        when(service.listMine(anyString(), anyInt(), anyInt()))
+        when(service.listMine(anyString(), any(), anyInt(), anyInt()))
                 .thenReturn(List.of(submission("approved", null, 2, 1)));
 
         mvc.perform(get("/curated/submissions").with(user(PRINCIPAL)).param("lang", "ko"))
@@ -216,7 +280,7 @@ class CuratedSubmissionControllerTest {
 
         // 배지 폴링이 알림을 지워버리면 사용자가 목록을 보기도 전에 사라진다.
         verify(service, never()).markAllReadForAuthor(anyString());
-        verify(service, never()).listMine(anyString(), anyInt(), anyInt());
+        verify(service, never()).listMine(anyString(), any(), anyInt(), anyInt());
     }
 
     @Test
@@ -235,7 +299,7 @@ class CuratedSubmissionControllerTest {
         mvc.perform(get("/curated/submissions").with(user(PRINCIPAL)).param("lang", "ko").param("offset", "40"))
                 .andExpect(status().isOk());
 
-        verify(service).listMine(USER, 40, 20);
+        verify(service).listMine(USER, null, 40, 20);
         verify(service, never()).withdraw(anyLong(), anyString());
     }
 }
