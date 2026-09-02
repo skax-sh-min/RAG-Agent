@@ -1,6 +1,7 @@
 package com.example.ragagent.repository;
 
 import com.example.ragagent.config.AppProperties;
+import com.example.ragagent.service.HistoryPolicy;
 import jakarta.annotation.PostConstruct;
 import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -121,16 +122,24 @@ public class SqliteMemoryRepository implements MemoryRepository {
     }
 
     @Override
-    public String getHistory(String userId, String threadId, int maxChars) {
+    public String getHistory(String userId, String threadId, int maxChars, boolean askingDirect) {
         // fetch last fetchLimit turns newest-first, then reverse for chronological order.
         // DISLIKE-tagged turns are excluded from context (hard exclusion, §6.9).
+        //
+        // §10.13 — 답변은 그대로 싣지 않고 HistoryPolicy 를 거친다. 요약 경로의 [Recent] 블록이
+        // 쓰는 것과 같은 규칙이어야 한다: 안 그러면 같은 스레드가 요약 캐시 유무에 따라 다른
+        // 맥락을 보고, 캐시 TTL 이 지나는 순간 이력이 갑자기 달라진다.
+        // response_mode 는 그 규칙의 입력이다 — 이전 턴이 S 였으면 '## 요약' 이 답변 전부다.
         List<String> rows = jdbc.query(
-            "SELECT t.question AS question, COALESCE(NULLIF(src.answer, ''), NULLIF(t.answer, ''), '" + DELETED_REFERENCE_TEXT + "') AS answer " +
+            "SELECT t.question AS question, t.response_mode AS response_mode, " +
+            "COALESCE(NULLIF(src.answer, ''), NULLIF(t.answer, ''), '" + DELETED_REFERENCE_TEXT + "') AS answer " +
             "FROM conversation_turns t " +
             "LEFT JOIN conversation_turns src ON src.id = t.reused_from_turn_id AND src.user_id = t.user_id " +
             "WHERE t.user_id = ? AND t.thread_id = ? AND (t.feedback IS NULL OR t.feedback <> 'DISLIKE') " +
             "ORDER BY t.id DESC LIMIT ?",
-            (rs, n) -> "Q: %s\nA: %s".formatted(rs.getString("question"), rs.getString("answer")),
+            (rs, n) -> "Q: %s\nA: %s".formatted(rs.getString("question"),
+                    HistoryPolicy.renderAnswer(rs.getString("answer"),
+                            rs.getString("response_mode"), askingDirect)),
                 userId, threadId, fetchLimit);
 
         if (rows.isEmpty()) return "";

@@ -72,7 +72,7 @@ class AgentServiceTest {
     @Test
     @DisplayName("chat() 은 history+classifier 를 병렬 호출하고 결과를 AgentState 에 주입")
     void chat_parallelJoin_setsHistoryAndQuestionType() {
-        when(memoryService.getHistory(anyString(), eq("t1"))).thenReturn("이전 대화");
+        when(memoryService.getHistory(anyString(), eq("t1"), anyInt(), anyBoolean())).thenReturn("이전 대화");
         when(classifierService.classifyOnly(anyString(), any())).thenReturn("manual");
         when(agentGraph.run(any())).thenReturn(fullResult());
 
@@ -89,14 +89,14 @@ class AgentServiceTest {
         assertThat(initial.questionType()).isEqualTo("manual");
         assertThat(initial.routingMode()).isEqualTo(RoutingMode.COST_FIRST);
 
-        verify(memoryService, times(1)).getHistory(anyString(), eq("t1"));
+        verify(memoryService, times(1)).getHistory(anyString(), eq("t1"), anyInt(), eq(false));
         verify(classifierService, times(1)).classifyOnly(anyString(), any());
     }
 
     @Test
     @DisplayName("ChatResponse 매핑 — AgentState 모든 필드가 응답에 정확히 전이")
     void chat_mapsAgentStateToChatResponse() {
-        when(memoryService.getHistory(any(), any())).thenReturn("");
+        when(memoryService.getHistory(any(), any(), anyInt(), anyBoolean())).thenReturn("");
         when(classifierService.classifyOnly(any(), any())).thenReturn("manual");
         when(agentGraph.run(any())).thenReturn(fullResult());
 
@@ -118,7 +118,7 @@ class AgentServiceTest {
     void chat_progressiveUpgrade_exposesPremiumProvider() {
         AgentState upgradedResult = fullResult().toBuilder().premiumUpgraded("gemini-pro").build();
 
-        when(memoryService.getHistory(any(), any())).thenReturn("");
+        when(memoryService.getHistory(any(), any(), anyInt(), anyBoolean())).thenReturn("");
         when(classifierService.classifyOnly(any(), any())).thenReturn("manual");
         when(agentGraph.run(any())).thenReturn(upgradedResult);
 
@@ -130,7 +130,7 @@ class AgentServiceTest {
     @Test
     @DisplayName("memory 와 classifier 가 진짜 병렬 실행 (각각 200ms sleep 도 총 시간 ~200ms)")
     void chat_runsHistoryAndClassifyInParallel() {
-        when(memoryService.getHistory(any(), any())).thenAnswer(inv -> {
+        when(memoryService.getHistory(any(), any(), anyInt(), anyBoolean())).thenAnswer(inv -> {
             Thread.sleep(300);
             return "";
         });
@@ -153,7 +153,7 @@ class AgentServiceTest {
     @Test
     @DisplayName("classifyOnly 가 questionType=null 반환해도 OK (AgentGraph 의 CLASSIFIER 가 처리)")
     void chat_classifyReturnsNull_propagatesToGraph() {
-        when(memoryService.getHistory(any(), any())).thenReturn("");
+        when(memoryService.getHistory(any(), any(), anyInt(), anyBoolean())).thenReturn("");
         when(classifierService.classifyOnly(any(), any())).thenReturn(null);
         when(agentGraph.run(any())).thenReturn(fullResult());
 
@@ -167,7 +167,7 @@ class AgentServiceTest {
     @Test
     @DisplayName("chat() 호출마다 AgentGraph.run 정확히 1회")
     void chat_invokesGraphOnce() {
-        when(memoryService.getHistory(any(), any())).thenReturn("");
+        when(memoryService.getHistory(any(), any(), anyInt(), anyBoolean())).thenReturn("");
         when(classifierService.classifyOnly(any(), any())).thenReturn("manual");
         when(agentGraph.run(any())).thenReturn(fullResult());
 
@@ -186,7 +186,7 @@ class AgentServiceTest {
     @Test
     @DisplayName("§6.10 — summarizerService.buildContext() 가 값을 반환하면 그것을 history 로 사용 (getHistory 폴백 안 함)")
     void chat_usesPrecomputedSummaryContext_whenAvailable() {
-        when(summarizerService.buildContext(anyString(), eq("t1"))).thenReturn("[Conversation Summary]\n요약본");
+        when(summarizerService.buildContext(anyString(), eq("t1"), anyInt(), anyBoolean())).thenReturn("[Conversation Summary]\n요약본");
         when(classifierService.classifyOnly(any(), any())).thenReturn("manual");
         when(agentGraph.run(any())).thenReturn(fullResult());
 
@@ -195,14 +195,14 @@ class AgentServiceTest {
         ArgumentCaptor<AgentState> captor = ArgumentCaptor.forClass(AgentState.class);
         verify(agentGraph).run(captor.capture());
         assertThat(captor.getValue().conversationHistory()).isEqualTo("[Conversation Summary]\n요약본");
-        verify(memoryService, never()).getHistory(anyString(), anyString());
+        verify(memoryService, never()).getHistory(anyString(), anyString(), anyInt(), anyBoolean());
     }
 
     @Test
     @DisplayName("§6.10 — summarizerService.buildContext() 가 null 이면 memoryService.getHistory() 로 폴백")
     void chat_fallsBackToRawHistory_whenNoSummaryCached() {
-        when(summarizerService.buildContext(anyString(), eq("t1"))).thenReturn(null);
-        when(memoryService.getHistory(anyString(), eq("t1"))).thenReturn("원본 히스토리");
+        when(summarizerService.buildContext(anyString(), eq("t1"), anyInt(), anyBoolean())).thenReturn(null);
+        when(memoryService.getHistory(anyString(), eq("t1"), anyInt(), anyBoolean())).thenReturn("원본 히스토리");
         when(classifierService.classifyOnly(any(), any())).thenReturn("manual");
         when(agentGraph.run(any())).thenReturn(fullResult());
 
@@ -216,7 +216,7 @@ class AgentServiceTest {
     @Test
     @DisplayName("새 turn 저장 후 summarizerService.precomputeAfterTurn() 호출 (답변 완료 직후 요약 재생성 트리거)")
     void chat_precomputesSummary_afterNewTurnPersisted() {
-        when(memoryService.getHistory(any(), any())).thenReturn("");
+        when(memoryService.getHistory(any(), any(), anyInt(), anyBoolean())).thenReturn("");
         when(classifierService.classifyOnly(any(), any())).thenReturn("manual");
         when(agentGraph.run(any())).thenReturn(fullResult());
         when(memoryService.addTurn(any(), any(), any(), any(), any(),

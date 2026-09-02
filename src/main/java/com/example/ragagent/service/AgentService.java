@@ -3,6 +3,8 @@ package com.example.ragagent.service;
 import com.example.ragagent.agent.AgentGraph;
 import com.example.ragagent.agent.AgentState;
 import com.example.ragagent.context.ThreadContext;
+import com.example.ragagent.llm.RoutingMode;
+import com.example.ragagent.model.ResponseMode;
 import com.example.ragagent.model.ChatRequest;
 import com.example.ragagent.model.TagUtils;
 import com.example.ragagent.model.VerificationSnapshot;
@@ -62,13 +64,15 @@ public class AgentService {
                 request.directMode(), request.routingMode(), request.threadId(), ctx.locale().getLanguage());
         AgentState initial;
         if (request.directMode()) {
-            String history = resolveHistory(userId, request.threadId());
+            String history = resolveHistory(userId, request.threadId(), true,
+                    request.responseMode(), request.routingMode(), request.question());
             initial = AgentState.of(request.question(), request.version(), request.threadId(),
                     userId, history, request.routingMode(), true, ctx.locale());
         } else {
             try (var exec = Executors.newVirtualThreadPerTaskExecutor()) {
                 CompletableFuture<String> historyF = CompletableFuture.supplyAsync(
-                        () -> resolveHistory(userId, request.threadId()), exec);
+                        () -> resolveHistory(userId, request.threadId(), false,
+                                request.responseMode(), request.routingMode(), request.question()), exec);
                 CompletableFuture<String> typeF = CompletableFuture.supplyAsync(
                         () -> classifierService.classifyOnly(request.question(), ctx.locale()), exec);
                 initial = AgentState.of(
@@ -136,9 +140,18 @@ public class AgentService {
         );
     }
 
-    // §6.10: use the precomputed summary + recent turns when available, else full raw history.
-    private String resolveHistory(String userId, String threadId) {
-        String precomputed = summarizerService.buildContext(userId, threadId);
-        return precomputed != null ? precomputed : memoryService.getHistory(userId, threadId);
+    /**
+     * §6.10: use the precomputed summary + recent turns when available, else full raw history.
+     *
+     * <p>§10.13 — 예산과 "지금 묻는 턴이 Direct 인가"를 <b>두 경로에 같이</b> 넘긴다. 한쪽만 받으면
+     * 같은 스레드가 요약 캐시 유무에 따라 다른 맥락을 보고, 캐시 TTL 이 지나는 순간 이력이 갑자기
+     * 달라진다. {@code streaming=false} — 이 경로는 블로킹 호출이라 출력 예약이 그만큼 크다.
+     */
+    private String resolveHistory(String userId, String threadId, boolean askingDirect,
+                                  ResponseMode mode, RoutingMode routingMode, String question) {
+        int budget = memoryService.maxConversationChars(askingDirect, mode, routingMode, false, question);
+        String precomputed = summarizerService.buildContext(userId, threadId, budget, askingDirect);
+        return precomputed != null ? precomputed
+                : memoryService.getHistory(userId, threadId, budget, askingDirect);
     }
 }

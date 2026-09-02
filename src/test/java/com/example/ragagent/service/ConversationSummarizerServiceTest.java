@@ -583,4 +583,49 @@ class ConversationSummarizerServiceTest {
         }
         throw new AssertionError("condition not met within timeout");
     }
+
+    // ── §10.13 Direct 턴의 이력 ─────────────────────────────────────────────
+
+    /**
+     * 폴백 경로({@code DirectHistoryFallbackTest})와 <b>짝을 이루는</b> 검증. 두 경로가 같은
+     * {@link HistoryPolicy} 를 읽지 않으면 같은 스레드가 요약 캐시 유무에 따라 다른 맥락을 보고,
+     * 캐시 TTL 이 지나는 순간 이력이 갑자기 달라진다.
+     */
+    @Test
+    @DisplayName("§10.13 — [Recent] 렌더가 HistoryPolicy 와 문자 그대로 같다 (규칙을 복제하지 않는다)")
+    void recentBlockDelegatesToTheSharedPolicy() {
+        String ragAnswer = "## 요약\n한 줄 요약.\n\n## 상세 설명\n자세한 본문입니다.\n\n## 참고\n- [파일 | p.1]";
+        List<MemoryRepository.Turn> turns = List.of(turn(1, "질문", ragAnswer, null));
+        when(memoryService.getRecentTurns(UID, TID)).thenReturn(turns);
+        service.precompute(UID, TID, null, Locale.KOREAN);
+
+        for (boolean askingDirect : new boolean[]{true, false}) {
+            assertThat(service.buildContext(UID, TID, 100_000, askingDirect))
+                    .as("askingDirect=%s", askingDirect)
+                    .contains(HistoryPolicy.renderAnswer(ragAnswer, "N", askingDirect));
+        }
+    }
+
+    @Test
+    @DisplayName("§10.13 — Direct 로 물으면 DN 답변이 전문 그대로 남는다 (1,200자 캡이 걸리지 않는다)")
+    void askingDirect_keepsADirectAnswerWhole() {
+        String dn = "직접 답변 본문입니다.".repeat(120);
+        when(memoryService.getRecentTurns(UID, TID)).thenReturn(List.of(turn(1, "질문", dn, null)));
+        service.precompute(UID, TID, null, Locale.KOREAN);
+
+        assertThat(service.buildContext(UID, TID, 100_000, true)).contains(dn);
+        // RAG 로 물으면 지금까지의 캡 그대로 — 이 변경은 Direct 로 스코프된다.
+        assertThat(service.buildContext(UID, TID, 100_000, false)).doesNotContain(dn);
+    }
+
+    @Test
+    @DisplayName("§10.13 — 예산은 호출부가 정한다 (요약 경로와 폴백 경로가 같은 값을 받아야 한다)")
+    void buildContextHonorsTheCallerBudget() {
+        when(memoryService.getRecentTurns(UID, TID)).thenReturn(List.of(
+                turn(1, "첫 질문", "첫 답변", null), turn(2, "둘째 질문", "둘째 답변", null)));
+        service.precompute(UID, TID, null, Locale.KOREAN);
+
+        assertThat(service.buildContext(UID, TID, 40, true)).doesNotContain("첫 질문");
+        assertThat(service.buildContext(UID, TID, 100_000, true)).contains("첫 질문");
+    }
 }

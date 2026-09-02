@@ -1,6 +1,12 @@
 package com.example.ragagent.service;
 
 import com.example.ragagent.config.AppProperties;
+import com.example.ragagent.model.ResponseMode;
+import com.example.ragagent.llm.TokenEstimator;
+import com.example.ragagent.llm.TaskType;
+import com.example.ragagent.llm.RoutingMode;
+import com.example.ragagent.llm.ProviderContextWindows;
+import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.model.SourceRef;
 import com.example.ragagent.model.VerificationSnapshot;
 import com.example.ragagent.repository.MemoryRepository;
@@ -34,18 +40,38 @@ public class MemoryService {
 
     private final AppProperties props;
     private final MemoryRepository repository;
+    private final LlmRouter llmRouter;
+    private final ProviderContextWindows contextWindows;
 
     // Single source of truth for "LLM max tokens" (app.llm.max-tokens / LLM_MAX_TOKENS, default
     // 6000) — used to read the separate, dead spring.ai.openai.chat.options.max-tokens property
     // (default 8000), which config'd nothing (Spring AI's autoconfigured ChatModel bean is skipped
     // since LlmConfig.primaryChatModel() already satisfies its @ConditionalOnMissingBean).
-    public MemoryService(MemoryRepository repository, AppProperties props) {
+    @org.springframework.beans.factory.annotation.Autowired
+    public MemoryService(MemoryRepository repository, AppProperties props,
+                         LlmRouter llmRouter, ProviderContextWindows contextWindows) {
         this.props = props;
         this.repository = repository;
+        this.llmRouter = llmRouter;
+        this.contextWindows = contextWindows;
+    }
+
+    /** 이력 예산의 창 인지 부분을 쓰지 않는 호출부(테스트)를 위한 축약 — 예산은 고정값으로 떨어진다. */
+    public MemoryService(MemoryRepository repository, AppProperties props) {
+        this(repository, props, null, null);
     }
 
     public String getHistory(String userId, String threadId) {
         return repository.getHistory(userId, threadId, maxConversationChars());
+    }
+
+    /**
+     * §10.13 — 예산과 "지금 묻는 턴이 Direct 인가"를 호출부가 정해 주는 형태. 요약 경로
+     * ({@code ConversationSummarizerService.buildContext})와 <b>같은 두 값</b>을 받아야 두 경로가
+     * 캐시 유무에 따라 다른 맥락을 만들지 않는다.
+     */
+    public String getHistory(String userId, String threadId, int maxChars, boolean askingDirect) {
+        return repository.getHistory(userId, threadId, maxChars, askingDirect);
     }
 
     /**
@@ -66,6 +92,37 @@ public class MemoryService {
      */
     public int maxConversationChars() {
         return Math.max(1_000, props.llmSafe().maxTokens() / 2);
+    }
+
+    /**
+     * §10.13 — <b>이 턴의</b> 이력 예산. 규칙은 "Direct 라서"가 아니라 "문서 자리가 비어서"다:
+     * <pre>{@code   이력 상한 = 입력 예산 − 문서가 차지할 자리}</pre>
+     *
+     * <p>Direct 답변의 프롬프트에는 {@code [검색된 문서]} 블록이 <b>통째로 없다</b>. 기본 설정에서
+     * 그 자리는 {@code topK 10 × chunk-size 1,500} ≈ 15,000자인데, 이력 상한은 모드와 무관하게
+     * 5,000자로 고정이었다 — 창의 큰 부분이 놀고, 정작 이력만으로 답해야 하는 모드가 이력을 가장
+     * 적게 받았다.
+     *
+     * <p><b>RAG 턴에는 적용하지 않는다</b>(오늘의 고정값 그대로). 이력은 검색보다 <b>먼저</b>
+     * 로딩되므로 그 시점에 문서가 몇 개 올지 모르고, Direct 만 검색이 아예 돌지 않아 0 이 확정이다.
+     * RAG 쪽 불확실성은 검색이 끝난 뒤 도는 {@code AnswerService.fitToBudget()} 이 이미 담당한다.
+     *
+     * <p><b>{@code meta} 분류는 여기서 Direct 로 세지 않는다</b> — RAG 로 물어도 분류기가
+     * {@code meta} 로 판정하면 검색을 건너뛰지만, 그 판정은 이력 로딩과 <b>병렬로</b> 돌아 아직
+     * 나오지 않았다. 아는 것만 쓴다.
+     *
+     * @param streaming 이 턴이 스트리밍으로 답하는가 — 출력 예약이 달라진다
+     *                  ({@code AnswerService.outputReservation})
+     */
+    public int maxConversationChars(boolean askingDirect, ResponseMode mode,
+                                    RoutingMode routingMode, boolean streaming, String question) {
+        int fallback = maxConversationChars();
+        if (!askingDirect || llmRouter == null || contextWindows == null) return fallback;
+        int window = contextWindows.tokensOrZero(llmRouter.findProviderName(TaskType.TEXT, routingMode));
+        return HistoryPolicy.budgetChars(window,
+                AnswerService.outputReservation(mode, streaming, props.llmSafe().maxTokens()),
+                0,   // Direct — 검색이 돌지 않으므로 문서가 가져갈 자리가 없다
+                TokenEstimator.estimate(question), fallback);
     }
 
     /** Returns the generated turn id (conversation_turns.id). {@code selectedTags} is the

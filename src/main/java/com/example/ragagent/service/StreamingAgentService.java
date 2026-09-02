@@ -7,6 +7,7 @@ import com.example.ragagent.exception.LlmBackpressureException;
 import com.example.ragagent.exception.LlmContextOverflowException;
 import com.example.ragagent.exception.LlmProviderExhaustedException;
 import com.example.ragagent.llm.RoutingMode;
+import com.example.ragagent.model.ResponseMode;
 import com.example.ragagent.model.ChatForm;
 import com.example.ragagent.model.TagUtils;
 import com.example.ragagent.model.VerificationSnapshot;
@@ -182,14 +183,16 @@ public class StreamingAgentService {
 
             if (form.isDirectMode()) {
                 // directMode: classifier 생략, history만 로드
-                String history = resolveHistory(userId, form.threadId());
+                String history = resolveHistory(userId, form.threadId(), true,
+                        form.responseModeOrDefault(), rm, form.question());
                 initial = AgentState.of(form.question(), form.version(), form.threadId(),
                         userId, history, rm, true, locale);
             } else {
                 // 일반 RAG 모드: history 로드 + 분류 병렬 실행
                 try (var exec = Executors.newVirtualThreadPerTaskExecutor()) {
                     CompletableFuture<String> historyF = CompletableFuture.supplyAsync(
-                            () -> resolveHistory(userId, form.threadId()), exec);
+                            () -> resolveHistory(userId, form.threadId(), false,
+                                    form.responseModeOrDefault(), rm, form.question()), exec);
                     CompletableFuture<String> typeF = CompletableFuture.supplyAsync(
                             () -> classifierService.classifyOnly(form.question(), locale), exec);
 
@@ -489,10 +492,18 @@ public class StreamingAgentService {
         return m;
     }
 
-    // §6.10: use the precomputed summary + recent turns when available, else full raw history.
-    private String resolveHistory(String userId, String threadId) {
-        String precomputed = summarizerService.buildContext(userId, threadId);
-        return precomputed != null ? precomputed : memoryService.getHistory(userId, threadId);
+    /**
+     * §6.10: use the precomputed summary + recent turns when available, else full raw history.
+     *
+     * <p>§10.13 — {@code AgentService.resolveHistory} 와 같은 규칙이되 {@code streaming=true} 다:
+     * 스트리밍은 {@code maxTokens} 를 보내지 않으므로 출력 예약이 작고, 그만큼 이력에 줄 자리가 넓다.
+     */
+    private String resolveHistory(String userId, String threadId, boolean askingDirect,
+                                  ResponseMode mode, RoutingMode routingMode, String question) {
+        int budget = memoryService.maxConversationChars(askingDirect, mode, routingMode, true, question);
+        String precomputed = summarizerService.buildContext(userId, threadId, budget, askingDirect);
+        return precomputed != null ? precomputed
+                : memoryService.getHistory(userId, threadId, budget, askingDirect);
     }
 
     private static RoutingMode parseRoutingMode(String value) {

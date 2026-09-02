@@ -5,6 +5,8 @@ import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.llm.LlmCurlLogger;
 import com.example.ragagent.llm.LlmProvider;
 import com.example.ragagent.llm.LlmRouter;
+import com.example.ragagent.llm.TokenEstimator;
+import com.example.ragagent.llm.ProviderContextWindows;
 import com.example.ragagent.llm.TaskType;
 import com.example.ragagent.model.ResponseMode;
 import com.example.ragagent.security.PromptInjectionGuard;
@@ -34,11 +36,20 @@ public class DirectAnswerService {
     private final LlmRouter llmRouter;
     private final MessageSource messageSource;
     private final AppProperties props;
+    private final ProviderContextWindows contextWindows;
 
-    public DirectAnswerService(LlmRouter llmRouter, MessageSource messageSource, AppProperties props) {
+    @org.springframework.beans.factory.annotation.Autowired
+    public DirectAnswerService(LlmRouter llmRouter, MessageSource messageSource, AppProperties props,
+                               ProviderContextWindows contextWindows) {
         this.llmRouter = llmRouter;
         this.messageSource = messageSource;
         this.props = props;
+        this.contextWindows = contextWindows;
+    }
+
+    /** 창을 모르는 것과 같게 동작하는 축약 — 이력 절단이 no-op 이 된다. */
+    public DirectAnswerService(LlmRouter llmRouter, MessageSource messageSource, AppProperties props) {
+        this(llmRouter, messageSource, props, null);
     }
 
     public AgentState execute(AgentState state) {
@@ -118,7 +129,7 @@ public class DirectAnswerService {
      * 스타일 지시문 층을 걷어냈다).
      */
     private String buildUserPrompt(AgentState state) {
-        String history = state.conversationHistory();
+        String history = fitHistory(state);
         String question = PromptInjectionGuard.wrap(state.question());
         if (!state.directMode()) {
             return history.isBlank()
@@ -131,6 +142,38 @@ public class DirectAnswerService {
         }
         sb.append("[현재 질문]\n").append(question);
         return sb.toString();
+    }
+
+    /**
+     * §10.13 — 이 경로의 <b>안전망</b>. 예전에는 {@code fitToBudget()} 을 한 번도 부르지 않았고,
+     * 이력이 모드와 무관하게 5,000자로 고정이라 문제가 드러나지 않았을 뿐이다. 그 상한이 창에서
+     * 파생되기 시작하면(= 넓어지면) 프롬프트가 창을 넘길 수 있으므로, 실제로 보내기 직전에 한 번 더 잰다.
+     *
+     * <p><b>이력만 자른다.</b> 질문과 시스템 프롬프트는 자를 수 없는 것이고, Direct 에는 버릴 검색
+     * 문서가 없다 — 이 프롬프트에서 줄일 수 있는 것은 이력뿐이다.
+     *
+     * <p><b>창을 모르면 아무것도 하지 않는다</b> — 추측한 숫자로 대화 맥락을 버리지 않는다
+     * ({@code ProviderContextWindows} 가 "모름"을 값으로 표현하는 이유).
+     *
+     * <p>프로바이더는 {@code findProviderName()} 으로 <b>먼저 묻는다</b> — 실제 호출 사이에 답이
+     * 달라질 수 있지만 {@code AnswerService.buildAnswerPrompt()} 가 같은 근사를 쓰고 같은 이유로
+     * 받아들인다(대체되는 것은 대개 창이 더 큰 다른 역할이라 "덜 잘랐어야 했는데 더 잘랐다" 쪽이다).
+     */
+    private String fitHistory(AgentState state) {
+        String history = state.conversationHistory();
+        if (contextWindows == null || history == null || history.isBlank()) return history;
+        int window = contextWindows.tokensOrZero(
+                llmRouter.findProviderName(TaskType.TEXT, state.routingMode()));
+        if (window <= 0) return history;
+        int budget = HistoryPolicy.budgetChars(window,
+                AnswerService.outputReservation(state.responseMode(), true, props.llmSafe().maxTokens()),
+                0, TokenEstimator.estimate(state.question()), Integer.MAX_VALUE);
+        String fitted = HistoryPolicy.trimToBudget(history, budget);
+        if (fitted.length() < history.length()) {
+            log.debug("[DirectAnswer] 이력 축소 {}→{}자 (창 {}토큰)",
+                    history.length(), fitted.length(), window);
+        }
+        return fitted;
     }
 
     /**

@@ -1278,51 +1278,11 @@ public class AnswerService {
     }
 
     /**
-     * 오래된 쪽부터 버려 예산에 맞춘다 — 가능하면 <b>턴 경계</b>(빈 줄 + {@code "Q: "})에서.
-     *
-     * <p>이력은 {@code MemoryService} 의 폴백 경로에서 {@code "Q: …\nA: …"} 를 빈 줄로 이어 붙여
-     * 만들어지므로 그 경계가 존재한다. 다만 <b>항상 그 모양인 것은 아니다</b>: §6.10 요약 경로
-     * ({@code ConversationSummarizerService.buildContext()})는 요약문 + 최근 턴을 섞어 주고, 답변
-     * 본문 안에 빈 줄 다음 {@code "Q: "} 로 시작하는 줄이 있으면(FAQ 형식 답변) 경계가 더 잘게 잡힌다.
-     *
-     * <p>그래서 경계를 <b>찾지 못했을 때 전부 버리지 않는다</b>. 예전 구현은 분할 결과가 한 덩어리면
-     * 그 하나를 지우고 빈 문자열을 반환했다 — 요약 경로의 이력이 통째로 사라지는 것이 정확히 그
-     * 경우였고, 예산이 조금 모자랄 뿐인데 대화 맥락 전체를 잃었다. 이제는 줄 경계에서 앞을 잘라
-     * <b>가능한 만큼 남긴다</b>. 경계가 잘게 잡히는 쪽(FAQ 답변)은 필요보다 조금 더 버리는 것뿐이라
-     * 안전한 방향이다.
+     * 오래된 쪽부터 버려 예산에 맞춘다 — 규칙과 그 근거는 {@link HistoryPolicy#trimToBudget}.
+     * §10.13 에서 Direct 경로({@code DirectAnswerService})도 같은 절단을 쓰게 되면서 그쪽으로 옮겼다.
      */
     private static String trimHistory(String history, long budget) {
-        if (history == null || history.isBlank()) return "";
-        if (budget <= 0) return "";
-        if (TokenEstimator.estimate(history) <= budget) return history;
-
-        List<String> turns = new ArrayList<>(List.of(history.split("\n\n(?=Q: )")));
-        if (turns.size() > 1) {
-            while (turns.size() > 1) {
-                turns.removeFirst();   // 가장 오래된 턴
-                String candidate = String.join("\n\n", turns);
-                if (TokenEstimator.estimate(candidate) <= budget) return candidate;
-            }
-            // 마지막 한 턴만 남았는데도 넘친다 — 아래 줄 단위 절단으로 넘긴다.
-            history = turns.getFirst();
-        }
-        return trimLeadingLines(history, budget);
-    }
-
-    /**
-     * 턴 경계를 쓸 수 없을 때의 폴백 — 앞에서부터 <b>줄 단위</b>로 덜어낸다.
-     *
-     * <p>문자 인덱스로 자르지 않는 이유는 문장·코드가 반 토막 나면 남은 이력이 오히려 모델을
-     * 헷갈리게 하기 때문이다. 한 줄도 못 남기면 빈 문자열이다(그 한 줄조차 예산을 넘는 경우).
-     */
-    private static String trimLeadingLines(String text, long budget) {
-        List<String> lines = new ArrayList<>(List.of(text.split("\n")));
-        while (!lines.isEmpty()) {
-            lines.removeFirst();
-            String candidate = String.join("\n", lines);
-            if (TokenEstimator.estimate(candidate) <= budget) return candidate.strip();
-        }
-        return "";
+        return HistoryPolicy.trimToBudget(history, budget);
     }
 
     /** 절단 안내 — 코드 펜스 <b>바깥</b>의 평문이어야 한다({@link #truncate} 참조). */

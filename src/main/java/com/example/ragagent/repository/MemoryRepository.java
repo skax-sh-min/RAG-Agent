@@ -7,7 +7,22 @@ import java.util.Map;
 import java.util.Optional;
 
 public interface MemoryRepository {
-    String getHistory(String userId, String threadId, int maxChars);
+
+    /**
+     * 요약 캐시가 없을 때 쓰는 원본 이력.
+     *
+     * <p>{@code askingDirect} 는 <b>지금 묻는 턴</b>이 Direct 인가다 (§10.13) — 그 턴에는
+     * {@code [검색된 문서]} 블록이 없어 이력에 줄 자리가 넓고, 이전 턴의 답변도 다르게 렌더된다
+     * ({@code HistoryPolicy.renderAnswer}). 요약 경로
+     * ({@code ConversationSummarizerService.buildContext})가 같은 값을 같은 규칙으로 쓰므로,
+     * 두 경로가 캐시 유무에 따라 다른 맥락을 만들지 않는다.
+     */
+    String getHistory(String userId, String threadId, int maxChars, boolean askingDirect);
+
+    /** RAG 턴 기준 — §10.13 이전과 동작이 같다. */
+    default String getHistory(String userId, String threadId, int maxChars) {
+        return getHistory(userId, threadId, maxChars, false);
+    }
 
     /** Returns the generated turn id (conversation_turns.id). {@code responseMode}: the turn's
      *  S/N response mode ({@code ResponseMode.name()}), null-safe (nullable column). Legacy

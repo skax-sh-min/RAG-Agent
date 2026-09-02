@@ -54,17 +54,6 @@ public class ConversationSummarizerService {
      */
     private static final int UNSUMMARIZED_ANSWER_CAP = 300;
 
-    /**
-     * Per-answer cap for a Direct/meta answer kept verbatim in {@link #buildContext}'s
-     * {@code [Recent]} block — see {@link #renderRecentAnswer}. Deliberately far larger than
-     * {@link #UNSUMMARIZED_ANSWER_CAP}: that one packs many turns into a 2,000-char summary, this
-     * one holds the last couple of turns at full fidelity so a follow-up's pronouns
-     * ("그거", "위에서 두 번째") still have something to resolve against. Sized so that
-     * {@code app.summary.recent-raw-turns}=2 actually fits two turns inside the history budget
-     * (LLM_MAX_TOKENS/2, 3,000 chars by default) instead of the first one crowding out the second.
-     */
-    private static final int RECENT_DIRECT_ANSWER_CAP = 1_200;
-
     private final MemoryService memoryService;
     private final LlmRouter llmRouter;
     private final MessageSource messageSource;
@@ -266,34 +255,6 @@ public class ConversationSummarizerService {
         return new SummaryInput(sb.toString().strip(), fullyPreSummarized);
     }
 
-    /**
-     * How a turn's answer is rendered inside {@link #buildContext}'s verbatim {@code [Recent]}
-     * block. The two answer kinds are worth different amounts here:
-     *
-     * <ul>
-     *   <li><b>RAG answer</b> (has a {@code ## 요약} section) → the 요약 only. Its full text is a
-     *       restatement of document chunks that the <em>next</em> turn re-retrieves anyway — every
-     *       turn runs its own search — so feeding the whole thing back duplicates
-     *       {@code [검색된 문서]} at several thousand chars, and does it with the model's own
-     *       unverified prose rather than the source. A 2,700-char answer collapses to ~250.</li>
-     *   <li><b>Direct/meta answer</b> (no such section) → the answer, capped at
-     *       {@link #RECENT_DIRECT_ANSWER_CAP}. There is no retrieval behind it, so this text is the
-     *       only record of what was said; dropping it would lose the exchange entirely. Capping
-     *       bounds the cost without erasing it.</li>
-     * </ul>
-     *
-     * <p>The discriminator is "does the answer carry a {@code ## 요약} heading", not a persisted
-     * direct-mode flag ({@code conversation_turns} has none) — the same proxy
-     * {@link #buildSummaryInput} already relies on, and accurate because
-     * {@code prompt.answer.system.*} mandates that section while {@code prompt.direct.system.n} never
-     * asks for it. A RAG answer where the model ignored the format degrades to the capped branch,
-     * which is the safe direction.
-     */
-    private static String renderRecentAnswer(String answer) {
-        String ownSummary = CuratedTextUtils.extractSummarySection(answer);
-        return ownSummary.isBlank() ? capAnswer(answer, RECENT_DIRECT_ANSWER_CAP) : ownSummary;
-    }
-
     private static String capAnswer(String answer, int cap) {
         if (answer == null) return "";
         if (cap <= 0 || answer.length() <= cap) return answer;
@@ -318,6 +279,18 @@ public class ConversationSummarizerService {
      * larger context to the LLM than the fallback path.
      */
     public String buildContext(String userId, String threadId) {
+        return buildContext(userId, threadId, memoryService.maxConversationChars(), false);
+    }
+
+    /**
+     * §10.13 — 예산과 "지금 묻는 턴이 Direct 인가"를 호출부가 정해 주는 형태.
+     *
+     * <p>Direct 턴에는 {@code [검색된 문서]} 블록이 통째로 없으므로 그 자리를 이력에 돌려준다
+     * ({@code budgetChars}), 그리고 이전 턴의 답변도 다르게 렌더된다 —
+     * {@link HistoryPolicy#renderAnswer} 참고. 폴백 경로({@code MemoryRepository.getHistory})가
+     * 같은 두 값을 같은 규칙으로 쓴다.
+     */
+    public String buildContext(String userId, String threadId, int budgetChars, boolean askingDirect) {
         String summary = summaryCache.get(threadId);
         if (summary == null) return null;
 
@@ -329,7 +302,7 @@ public class ConversationSummarizerService {
         List<MemoryRepository.Turn> turns = dedupeTurns(memoryService.getRecentTurns(userId, threadId));
         if (turns.isEmpty()) return null;
 
-        int budget = memoryService.maxConversationChars();
+        int budget = budgetChars;
         // 빈 요약 = 요약할 이전 턴이 없음(precompute 참고). 헤더만 남기면 LLM 에게 빈 섹션을
         // 보여주는 꼴이라 통째로 생략한다.
         String summaryBlock = summary.isEmpty() ? "" : "[Conversation Summary]\n" + summary;
@@ -344,7 +317,8 @@ public class ConversationSummarizerService {
         StringBuilder recentSb = new StringBuilder();
         for (int i = recent.size() - 1; i >= 0; i--) {
             MemoryRepository.Turn t = recent.get(i);
-            String entry = "Q: " + t.question() + "\nA: " + renderRecentAnswer(t.answer()) + "\n\n";
+            String entry = "Q: " + t.question() + "\nA: "
+                    + HistoryPolicy.renderAnswer(t.answer(), t.responseMode(), askingDirect) + "\n\n";
             if (used + entry.length() > budget) break;
             recentSb.insert(0, entry);
             used += entry.length();
