@@ -112,8 +112,8 @@ class CuratedQaManualRowTest {
         repo.init();
         repo.init();   // 두 번째 호출은 origin 컬럼이 이미 있으므로 재생성하지 않는다
 
-        long first  = repo.upsertActive(9L, "u1", "t1", "질문", "답변", "v1", null);
-        long second = repo.upsertActive(9L, "u1", "t1", "질문 수정", "답변 수정", "v1", null);
+        long first  = repo.upsertActive(9L, "u1", "t1", "질문", "답변", "v1", null, null);
+        long second = repo.upsertActive(9L, "u1", "t1", "질문 수정", "답변 수정", "v1", null, null);
 
         // 같은 turn → 새 행이 아니라 기존 행 갱신 (부분 UNIQUE 인덱스가 살아 있다는 증거)
         assertThat(second).isEqualTo(first);

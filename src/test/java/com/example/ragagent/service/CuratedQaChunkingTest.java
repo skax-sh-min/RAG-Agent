@@ -70,7 +70,7 @@ class CuratedQaChunkingTest {
                 new ThreadMeta(TID, UID, "제목", "v1", "2026-01-01", "2026-01-01", "COST_FIRST", "")));
         when(memoryService.getFeedback(UID, TID, TURN_ID))
                 .thenReturn(Optional.of(new MemoryRepository.FeedbackRow("LIKE")));
-        when(repository.upsertActive(anyLong(), any(), any(), any(), any(), any(), any()))
+        when(repository.upsertActive(anyLong(), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(CURATED_ID);
     }
 
@@ -106,7 +106,7 @@ class CuratedQaChunkingTest {
         List<Document> docs = capturedDocs();
         assertThat(docs).hasSizeGreaterThan(1);
         // DB 스냅샷은 여전히 turn 당 한 행 — upsertActive 1회, insertManual 없음.
-        verify(repository).upsertActive(eq(TURN_ID), any(), any(), any(), any(), any(), any());
+        verify(repository).upsertActive(eq(TURN_ID), any(), any(), any(), any(), any(), any(), any());
         verify(repository, never()).insertManual(anyLong(), any(), any(), any(), any());
         // 나뉜 개수가 기록되어야 de-index 가 모든 벡터를 찾을 수 있다.
         verify(repository, timeout(2000)).updateChunkCount(CURATED_ID, docs.size());

@@ -50,8 +50,8 @@ class CuratedQaThreadScopeTest {
     @Test
     @DisplayName("findActiveByThread — 그 대화의 활성 좋아요 행만, 생성 순서로 돌려준다")
     void returnsOnlyActiveLikeRowsOfThatThread() {
-        long a = repo.upsertActive(1L, "u1", "t1", "질문 A", "답변 A", "v1", null);
-        long b = repo.upsertActive(2L, "u1", "t1", "질문 B", "답변 B", "v1", null);
+        long a = repo.upsertActive(1L, "u1", "t1", "질문 A", "답변 A", "v1", null, null);
+        long b = repo.upsertActive(2L, "u1", "t1", "질문 B", "답변 B", "v1", null, null);
 
         List<CuratedQaRepository.CuratedQa> rows = repo.findActiveByThread("u1", "t1");
 
@@ -61,9 +61,9 @@ class CuratedQaThreadScopeTest {
     @Test
     @DisplayName("findActiveByThread — 다른 대화·다른 사용자의 행은 제외한다")
     void excludesOtherThreadsAndOtherUsers() {
-        long mine = repo.upsertActive(1L, "u1", "t1", "내 질문", "내 답변", "v1", null);
-        repo.upsertActive(2L, "u1", "t2", "다른 대화", "답변", "v1", null);
-        repo.upsertActive(3L, "u2", "t1", "다른 사용자", "답변", "v1", null);
+        long mine = repo.upsertActive(1L, "u1", "t1", "내 질문", "내 답변", "v1", null, null);
+        repo.upsertActive(2L, "u1", "t2", "다른 대화", "답변", "v1", null, null);
+        repo.upsertActive(3L, "u2", "t1", "다른 사용자", "답변", "v1", null, null);
 
         assertThat(repo.findActiveByThread("u1", "t1"))
                 .extracting(CuratedQaRepository.CuratedQa::id)
@@ -73,8 +73,8 @@ class CuratedQaThreadScopeTest {
     @Test
     @DisplayName("findActiveByThread — 이미 비활성인 행은 제외한다(중복 회수 방지)")
     void excludesInactiveRows() {
-        long active = repo.upsertActive(1L, "u1", "t1", "살아있음", "답변", "v1", null);
-        long gone   = repo.upsertActive(2L, "u1", "t1", "이미 내려감", "답변", "v1", null);
+        long active = repo.upsertActive(1L, "u1", "t1", "살아있음", "답변", "v1", null, null);
+        long gone   = repo.upsertActive(2L, "u1", "t1", "이미 내려감", "답변", "v1", null, null);
         repo.deactivateById(gone);
 
         assertThat(repo.findActiveByThread("u1", "t1"))
@@ -86,7 +86,7 @@ class CuratedQaThreadScopeTest {
     @DisplayName("findActiveByThread — 제안(manual) 행은 source_thread_id가 비어 있어도 절대 포함되지 않는다")
     void neverIncludesManualSubmissionRows() {
         repo.insertManual(1L, "u1", "제안 제목", "제안 본문", null);
-        long liked = repo.upsertActive(1L, "u1", "t1", "질문", "답변", "v1", null);
+        long liked = repo.upsertActive(1L, "u1", "t1", "질문", "답변", "v1", null, null);
 
         // 대화 id 로도, 수동 행이 실제로 갖는 빈 문자열로도 잡히지 않아야 한다.
         assertThat(repo.findActiveByThread("u1", "t1"))

@@ -58,6 +58,8 @@ public class CuratedSubmissionRepository {
                    s.author_read_at, s.tags, s.source_turn_id, s.source_thread_id,
                    (SELECT COUNT(*) FROM curated_qa c
                      WHERE c.source_submission_id = s.id) AS curated_total,
+                   (SELECT COALESCE(SUM(c.chunk_count), 0) FROM curated_qa c
+                     WHERE c.source_submission_id = s.id) AS curated_chunks,
                    (SELECT COUNT(*) FROM curated_qa c
                      WHERE c.source_submission_id = s.id AND c.status = 'active') AS curated_active,
                    (SELECT COUNT(*) FROM curated_qa c
@@ -90,6 +92,7 @@ public class CuratedSubmissionRepository {
                 sourceTurnId,
                 rs.getString("source_thread_id"),
                 rs.getInt("curated_total"),
+                rs.getInt("curated_chunks"),
                 rs.getInt("curated_active"),
                 rs.getInt("curated_failed"));
     };
@@ -315,8 +318,12 @@ public class CuratedSubmissionRepository {
      *                       Prefer the counts below for status; this is a pointer, not the whole set.
      * @param sourceTurnId   originating chat turn for a 좋아요 출신 제안, null for a hand-written one
      * @param sourceThreadId that turn's conversation — only meaningful together with the turn id
-     * @param curatedTotal   curated rows created for this submission (chunks), 0 until approved
-     * @param curatedActive  how many of those are still contributing to search
+     * @param curatedTotal   curated rows created for this submission, 0 until approved — the
+     *                       전부/전무 unit, <b>not</b> the chunk count
+     * @param curatedChunks  vectors those rows hold. Equal to {@code curatedTotal} for a
+     *                       hand-written proposal (pre-split, one vector per row) but not for a
+     *                       좋아요 출신 one, which is one row split at embed time (§10.11 함정 ①)
+     * @param curatedActive  how many rows are still contributing to search
      * @param curatedFailed  how many active ones are stuck in {@code embed_status='failed'}
      */
     public record Submission(long id, String authorUserId, String title, String body,
@@ -324,7 +331,8 @@ public class CuratedSubmissionRepository {
                              Long curatedQaId, String createdAt, String updatedAt,
                              String reviewedAt, String authorReadAt, String tags,
                              Long sourceTurnId, String sourceThreadId,
-                             int curatedTotal, int curatedActive, int curatedFailed) {
+                             int curatedTotal, int curatedChunks,
+                             int curatedActive, int curatedFailed) {
 
         /**
          * The status to show. Everything is the stored value except an approved submission whose
@@ -349,9 +357,9 @@ public class CuratedSubmissionRepository {
             return STATUS_APPROVED.equals(displayStatus()) && curatedFailed > 0;
         }
 
-        /** How many chunks this submission was split into (0 until approved). */
+        /** How many search vectors this submission became (0 until approved). */
         public int chunkCount() {
-            return curatedTotal;
+            return curatedChunks;
         }
 
         public boolean isPending()  { return STATUS_PENDING.equals(status); }

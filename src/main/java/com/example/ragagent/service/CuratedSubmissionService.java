@@ -220,11 +220,14 @@ public class CuratedSubmissionService {
         // 나중에(분할 후) 주입하면 마커와 설명이 서로 다른 청크로 갈라질 수 있다.
         body = imageStore.describeImages(body);
 
-        // 본문을 문서와 같은 방식으로 분할해 N개 청크로 등록한다 — 길이 제한이 없어진 대신 각 청크가
-        // 임베딩 가능한 크기로 보장된다. 태그는 모든 청크에 동일하게 부여한다(제안 하나 = 한 스코프).
-        List<String> bodyChunks = splitBody(body);
-        List<Long> curatedIds = curatedQaService.createFromSubmission(
-                submissionId, row.authorUserId(), title, bodyChunks, tagsCsv);
+        // 등록 경로가 출처에 따라 갈린다 (§10.11 함정 ①). 좋아요 출신은 turn 단위로 식별되는
+        // 행 하나이고(대화·턴 삭제 회수와 재승인이 전부 그 키를 탄다), 손으로 쓴 제안은 승인 시점에
+        // 미리 나뉜 N개 행이다. 태그는 어느 쪽이든 모든 청크에 동일하게 부여한다(제안 하나 = 한 스코프).
+        List<Long> curatedIds = row.fromChatTurn()
+                ? List.of(curatedQaService.createFromLikedTurn(submissionId, row.sourceTurnId(),
+                        row.authorUserId(), row.sourceThreadId(), title, body, tagsCsv))
+                : curatedQaService.createFromSubmission(
+                        submissionId, row.authorUserId(), title, splitBody(body), tagsCsv);
         long firstCuratedId = curatedIds.get(0);
 
         if (!repository.markApproved(submissionId, reviewerUserId, title, body, tagsCsv, firstCuratedId)) {

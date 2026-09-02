@@ -184,18 +184,27 @@ public class CuratedQaRepository {
     }
 
     /**
-     * Upserts an active row keyed by {@code source_turn_id} — a re-like after unlike reactivates
-     * and refreshes the existing row instead of accumulating duplicate rows/vectors across
-     * like→unlike→like cycles (the vector store's {@code spring_doc_id} is derived from this row's
-     * id, so reusing the row keeps re-embedding idempotent). Returns the row id.
+     * Upserts an active row keyed by {@code source_turn_id} — approving the same turn twice (or
+     * re-approving an edited proposal) refreshes the existing row instead of accumulating duplicate
+     * rows/vectors, and the vector store's {@code spring_doc_id} is derived from this row's id, so
+     * reusing the row keeps re-embedding idempotent. Returns the row id.
+     *
+     * <p>{@code sourceSubmissionId} <b>must</b> be set for a 좋아요 출신 제안 (§10.11 함정 ②).
+     * A submission's whole state — chunk count, 등록 완료 vs 회수됨, embed-failure badge — is
+     * counted through that column alone, so a NULL there silently decouples the proposal from the
+     * knowledge it created: it reports 청크 0개 while being live, and keeps reporting 등록 완료
+     * after an admin takes that knowledge down. Nothing fails and nothing is logged. It is left
+     * NULL only for a row that no submission owns.
      */
     public long upsertActive(long turnId, String userId, String threadId,
-                             String question, String answer, String sourceDocVersion, String tags) {
+                             String question, String answer, String sourceDocVersion, String tags,
+                             Long sourceSubmissionId) {
         String now = now();
         int updated = jdbc.update(
                 "UPDATE curated_qa SET status='active', question=?, answer=?, " +
-                "source_doc_version=?, tags=?, updated_at=? WHERE source_turn_id=?",
-                question, answer, sourceDocVersion, tags, now, turnId);
+                "source_doc_version=?, tags=?, source_submission_id=?, updated_at=? " +
+                "WHERE source_turn_id=?",
+                question, answer, sourceDocVersion, tags, sourceSubmissionId, now, turnId);
         if (updated > 0) {
             return jdbc.queryForObject(
                     "SELECT id FROM curated_qa WHERE source_turn_id=?", Long.class, turnId);
@@ -205,8 +214,9 @@ public class CuratedQaRepository {
         jdbc.update(connection -> {
             PreparedStatement ps = connection.prepareStatement(
                     "INSERT INTO curated_qa (source_turn_id, source_user_id, source_thread_id, " +
-                    "question, answer, status, source_doc_version, created_at, updated_at, tags) " +
-                    "VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?, ?)",
+                    "question, answer, status, source_doc_version, created_at, updated_at, tags, " +
+                    "source_submission_id) " +
+                    "VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?)",
                     Statement.RETURN_GENERATED_KEYS);
             ps.setLong(1, turnId);
             ps.setString(2, userId);
@@ -217,6 +227,11 @@ public class CuratedQaRepository {
             ps.setString(7, now);
             ps.setString(8, now);
             ps.setString(9, tags);
+            if (sourceSubmissionId == null) {
+                ps.setNull(10, java.sql.Types.INTEGER);
+            } else {
+                ps.setLong(10, sourceSubmissionId);
+            }
             return ps;
         }, keyHolder);
         Number key = keyHolder.getKey();

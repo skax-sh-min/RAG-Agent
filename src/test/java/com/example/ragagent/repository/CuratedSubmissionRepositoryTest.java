@@ -265,4 +265,60 @@ class CuratedSubmissionRepositoryTest {
         long id = repo.insert("u1", "제목", "본문", null);
         assertThat(repo.findById(id).orElseThrow().chunkCount()).isZero();
     }
+
+    // ── §10.11 좋아요 출신 제안 ──────────────────────────────────────────────
+
+    @Test
+    @DisplayName("출처 턴 — 저장되고, 살아 있는(pending/approved) 제안만 중복으로 잡힌다")
+    void sourceTurn_storedAndFoundWhileLive() {
+        long id = repo.insert("u1", "제목", "본문", null, 42L, "t1");
+
+        Submission row = repo.findById(id).orElseThrow();
+        assertThat(row.sourceTurnId()).isEqualTo(42L);
+        assertThat(row.sourceThreadId()).isEqualTo("t1");
+        assertThat(row.fromChatTurn()).isTrue();
+        assertThat(repo.findLiveByTurn(42L)).map(Submission::id).contains(id);
+
+        // 반려·철회된 제안은 "이미 냈다"로 치지 않는다 — 다시 낼 수 있어야 하는 바로 그 상황이다.
+        repo.markRejected(id, "admin", "출처 불명");
+        assertThat(repo.findLiveByTurn(42L)).isEmpty();
+    }
+
+    /**
+     * §10.11 함정 ② — 제안의 상태는 {@code curated_qa.source_submission_id} 로만 세어진다.
+     * 좋아요 출신 승인이 그 연결을 빠뜨리면 아무것도 실패하지 않은 채 제안의 상태가 현실과
+     * 끊긴다: 청크 0개인 '등록 완료'로 뜨고, 관리자가 그 지식을 실제로 내려도 계속 그렇게 뜬다.
+     */
+    @Test
+    @DisplayName("함정 ② — source_submission_id 를 실어야 제안 상태가 실제 등록본을 따라간다")
+    void likeOriginApproval_needsSubmissionLinkToTrackReality() {
+        long linkedSub   = repo.insert("u1", "제목", "본문", null, 42L, "t1");
+        long unlinkedSub = repo.insert("u1", "제목", "본문", null, 43L, "t1");
+
+        long linked   = curatedRepo.upsertActive(42L, "u1", "t1", "제목", "본문", "v1", null, linkedSub);
+        long unlinked = curatedRepo.upsertActive(43L, "u1", "t1", "제목", "본문", "v1", null, null);
+        repo.markApproved(linkedSub,   "admin", "제목", "본문", null, linked);
+        repo.markApproved(unlinkedSub, "admin", "제목", "본문", null, unlinked);
+
+        // 연결이 있으면 등록본이 보인다. 없으면 승인 직후부터 "청크 0개"다.
+        assertThat(repo.findById(linkedSub).orElseThrow().chunkCount()).isEqualTo(1);
+        assertThat(repo.findById(unlinkedSub).orElseThrow().chunkCount()).isZero();
+
+        // 그 지식을 실제로 내렸을 때 — 연결이 있으면 회수됨으로 따라오고, 없으면 등록 완료로 남는다.
+        curatedRepo.deactivateById(linked);
+        curatedRepo.deactivateById(unlinked);
+        assertThat(repo.findById(linkedSub).orElseThrow().displayStatus()).isEqualTo("revoked");
+        assertThat(repo.findById(unlinkedSub).orElseThrow().displayStatus()).isEqualTo("approved");
+    }
+
+    @Test
+    @DisplayName("chunkCount — 좋아요 출신은 행 하나가 벡터 N개다 (행 수가 아니라 벡터 수를 센다)")
+    void chunkCount_countsVectorsNotRows() {
+        long id = repo.insert("u1", "제목", "본문", null, 42L, "t1");
+        long curatedId = curatedRepo.upsertActive(42L, "u1", "t1", "제목", "본문", "v1", null, id);
+        repo.markApproved(id, "admin", "제목", "본문", null, curatedId);
+        curatedRepo.updateChunkCount(curatedId, 3);
+
+        assertThat(repo.findById(id).orElseThrow().chunkCount()).isEqualTo(3);
+    }
 }

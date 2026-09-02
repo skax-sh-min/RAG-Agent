@@ -72,7 +72,7 @@ class CuratedSubmissionServiceTest {
 
     private static Submission submission(long id, String status) {
         return new Submission(id, AUTHOR, "원래 제목", "원래 본문", status, null, null,
-                null, "2026-01-01", "2026-01-01", null, null, null, null, null, 0, 0, 0);
+                null, "2026-01-01", "2026-01-01", null, null, null, null, null, 0, 0, 0, 0);
     }
 
     // ── 등록 검증 ────────────────────────────────────────────────────────────
@@ -251,7 +251,7 @@ class CuratedSubmissionServiceTest {
         when(curatedQaService.splitForEmbedding(longBody))
                 .thenReturn(List.of("조각1", "조각2", "조각3"));
         Submission row = new Submission(1L, AUTHOR, "제목", longBody, "pending", null, null,
-                null, "2026-01-01", "2026-01-01", null, null, "인프라", null, null, 0, 0, 0);
+                null, "2026-01-01", "2026-01-01", null, null, "인프라", null, null, 0, 0, 0, 0);
         when(repository.findById(1L)).thenReturn(Optional.of(row));
         when(curatedQaService.createFromSubmission(anyLong(), anyString(), anyString(), any(), any()))
                 .thenReturn(List.of(10L, 11L, 12L));
@@ -289,7 +289,7 @@ class CuratedSubmissionServiceTest {
     @DisplayName("approve — 관리자가 태그를 건드리지 않으면(null) 제안에 저장된 값을 유지한다")
     void approve_keepsSubmissionTagsWhenAdminDidNotTouchThem() {
         Submission row = new Submission(1L, AUTHOR, "제목", "본문", "pending", null, null,
-                null, "2026-01-01", "2026-01-01", null, null, "인프라", null, null, 0, 0, 0);
+                null, "2026-01-01", "2026-01-01", null, null, "인프라", null, null, 0, 0, 0, 0);
         when(repository.findById(1L)).thenReturn(Optional.of(row));
         when(curatedQaService.createFromSubmission(anyLong(), anyString(), anyString(), any(), any()))
                 .thenReturn(List.of(55L));

@@ -71,29 +71,29 @@ class CuratedQaTagScopeTest {
     @DisplayName("onLike — 질문 당시 선택된 태그를 curated_qa에 승계한다")
     void onLike_inheritsTurnTags() {
         when(memoryService.getTurn(UID, TID, TURN_ID)).thenReturn(Optional.of(turn("설계,api")));
-        when(repository.upsertActive(anyLong(), any(), any(), any(), any(), any(), any())).thenReturn(1L);
+        when(repository.upsertActive(anyLong(), any(), any(), any(), any(), any(), any(), any())).thenReturn(1L);
 
         service.onLike(UID, TID, TURN_ID);
 
-        verify(repository).upsertActive(TURN_ID, UID, TID, "질문", "답변", "v1", "설계,api");
+        verify(repository).upsertActive(TURN_ID, UID, TID, "질문", "답변", "v1", "설계,api", null);
     }
 
     @Test
     @DisplayName("onLike — 태그 없이(전체 검색) 물은 질문이면 태그도 비어 승계된다")
     void onLike_noTagsStaysEmpty() {
         when(memoryService.getTurn(UID, TID, TURN_ID)).thenReturn(Optional.of(turn("")));
-        when(repository.upsertActive(anyLong(), any(), any(), any(), any(), any(), any())).thenReturn(1L);
+        when(repository.upsertActive(anyLong(), any(), any(), any(), any(), any(), any(), any())).thenReturn(1L);
 
         service.onLike(UID, TID, TURN_ID);
 
-        verify(repository).upsertActive(TURN_ID, UID, TID, "질문", "답변", "v1", "");
+        verify(repository).upsertActive(TURN_ID, UID, TID, "질문", "답변", "v1", "", null);
     }
 
     @Test
     @DisplayName("임베딩 문서 — 태그가 있으면 문서 청크와 같은 키(MetaKey.TAGS)로 실린다")
     void embeddedDocument_carriesTagsMetadata() {
         when(memoryService.getTurn(UID, TID, TURN_ID)).thenReturn(Optional.of(turn("설계,api")));
-        when(repository.upsertActive(anyLong(), any(), any(), any(), any(), any(), any())).thenReturn(1L);
+        when(repository.upsertActive(anyLong(), any(), any(), any(), any(), any(), any(), any())).thenReturn(1L);
         when(repository.findById(1L)).thenReturn(Optional.of(curated("설계,api")));
 
         service.onLike(UID, TID, TURN_ID);
@@ -105,7 +105,7 @@ class CuratedQaTagScopeTest {
     @DisplayName("임베딩 문서 — 태그가 없으면 키 자체를 넣지 않는다 (스코프 미상 = 전체 통과)")
     void embeddedDocument_omitsTagsKeyWhenEmpty() {
         when(memoryService.getTurn(UID, TID, TURN_ID)).thenReturn(Optional.of(turn(null)));
-        when(repository.upsertActive(anyLong(), any(), any(), any(), any(), any(), any())).thenReturn(1L);
+        when(repository.upsertActive(anyLong(), any(), any(), any(), any(), any(), any(), any())).thenReturn(1L);
         when(repository.findById(1L)).thenReturn(Optional.of(curated(null)));
 
         service.onLike(UID, TID, TURN_ID);

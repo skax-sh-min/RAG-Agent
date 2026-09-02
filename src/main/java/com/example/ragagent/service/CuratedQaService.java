@@ -164,7 +164,7 @@ public class CuratedQaService {
         // 되고, 그 경우 buildDocument()가 태그 메타데이터를 아예 붙이지 않아 어떤 태그 스코프에서도
         // 걸러지지 않는다(RetrievalService.filterByTags의 큐레이션 면제).
         long curatedId = repository.upsertActive(turnId, userId, threadId,
-                turn.question(), turn.answer(), version, turn.selectedTags());
+                turn.question(), turn.answer(), version, turn.selectedTags(), null);
 
         Thread.ofVirtual().name("curated-embed-" + curatedId).start(() -> {
             try {
@@ -314,6 +314,35 @@ public class CuratedQaService {
                     embedActiveRow(curatedId, "submission"));
         }
         return List.copyOf(curatedIds);
+    }
+
+    /**
+     * §10.11 — admin approval of a <b>좋아요 출신</b> proposal. Same review, different storage shape
+     * from {@link #createFromSubmission}: <b>one row whose vectors are split at embed time</b>,
+     * not N pre-split rows.
+     *
+     * <p>That difference is not cosmetic (함정 ①). Three things about a promoted chat answer are
+     * keyed by the turn — {@code UNIQUE(source_turn_id)}, the conversation/turn delete retraction
+     * ({@link #onThreadDeleted}), and the row's identity across a re-approval — and pushing this
+     * through {@code insertManual} would write {@code source_turn_id = NULL}, killing all three at
+     * once and silently: nothing here fails, the retraction simply never finds the row again.
+     *
+     * <p>The text stored is the <b>reviewed</b> title/body, not the raw turn: the whole point of
+     * §10.11 is that a person edited it and an admin approved that edit. {@code source_doc_version}
+     * still comes from the thread so the entry knows which document version it was answered against.
+     *
+     * @return the curated row's id
+     */
+    public long createFromLikedTurn(long submissionId, long turnId, String userId, String threadId,
+                                    String title, String body, String tags) {
+        String version = threadMetaService.findById(userId, threadId)
+                .map(t -> t.version())
+                .orElse(null);
+        long curatedId = repository.upsertActive(turnId, userId, threadId, title, body, version,
+                tags, submissionId);
+        Thread.ofVirtual().name("curated-embed-" + curatedId).start(() ->
+                embedActiveRow(curatedId, "submission-like"));
+        return curatedId;
     }
 
     /**

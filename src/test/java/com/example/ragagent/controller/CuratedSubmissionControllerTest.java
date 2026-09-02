@@ -73,7 +73,7 @@ class CuratedSubmissionControllerTest {
                                          int curatedActive, int curatedFailed) {
         return new Submission(1L, USER, "제안 제목", "제안 본문", status, "admin", reviewNote,
                 7L, "2026-01-01", "2026-01-01", "2026-01-02", null, "인프라", null, null,
-                "approved".equals(status) ? 2 : 0, curatedActive, curatedFailed);
+                "approved".equals(status) ? 2 : 0, "approved".equals(status) ? 2 : 0, curatedActive, curatedFailed);
     }
 
     @Test

@@ -13,6 +13,7 @@ import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
@@ -135,5 +136,61 @@ class CuratedSubmissionFromTurnTest {
     void prefill_unknownTurn_isEmpty() {
         when(memoryService.getTurn(AUTHOR, THREAD, TURN)).thenReturn(Optional.empty());
         assertThat(service.prefillFromTurn(AUTHOR, THREAD, TURN)).isEmpty();
+    }
+
+    // ── 승인 분기 (§10.11 함정 ①) ────────────────────────────────────────────
+
+    private static CuratedSubmissionRepository.Submission submission(Long turnId, String threadId) {
+        return new CuratedSubmissionRepository.Submission(
+                7L, AUTHOR, "제안 제목", "제안 본문", "pending", null, null, null,
+                "2026-01-01", "2026-01-01", null, null, "인프라", turnId, threadId, 0, 0, 0, 0);
+    }
+
+    @Test
+    @DisplayName("approve — 좋아요 출신은 turn 단위 행 하나로 등록된다 (insertManual 경로가 아니다)")
+    void approve_likeOrigin_usesTurnKeyedRow() {
+        CuratedQaService curatedQa = mock(CuratedQaService.class);
+        service = serviceWith(curatedQa);
+        when(repository.findById(7L)).thenReturn(Optional.of(submission(TURN, THREAD)));
+        when(curatedQa.createFromLikedTurn(anyLong(), anyLong(), anyString(), anyString(),
+                anyString(), anyString(), any())).thenReturn(99L);
+        when(repository.markApproved(anyLong(), anyString(), anyString(), anyString(), any(), anyLong()))
+                .thenReturn(true);
+
+        assertThat(service.approve(7L, "admin", "검토된 제목", "검토된 본문", null)).contains(99L);
+
+        // 관리자가 승인한 텍스트가 들어가고, 출처 turn/thread 가 그대로 실린다 — 이 키가 없으면
+        // 대화·턴 삭제 회수와 재승인이 함께 죽는다.
+        verify(curatedQa).createFromLikedTurn(7L, TURN, AUTHOR, THREAD, "검토된 제목", "검토된 본문", "인프라");
+        verify(curatedQa, never()).createFromSubmission(anyLong(), anyString(), anyString(), any(), any());
+    }
+
+    @Test
+    @DisplayName("approve — 손으로 쓴 제안은 지금까지처럼 미리 나뉜 N개 행으로 등록된다")
+    void approve_handWritten_stillSplitsIntoRows() {
+        CuratedQaService curatedQa = mock(CuratedQaService.class);
+        service = serviceWith(curatedQa);
+        when(repository.findById(7L)).thenReturn(Optional.of(submission(null, null)));
+        when(curatedQa.splitForEmbedding(anyString())).thenReturn(List.of("조각1", "조각2"));
+        when(curatedQa.createFromSubmission(anyLong(), anyString(), anyString(), any(), any()))
+                .thenReturn(List.of(10L, 11L));
+        when(repository.markApproved(anyLong(), anyString(), anyString(), anyString(), any(), anyLong()))
+                .thenReturn(true);
+
+        assertThat(service.approve(7L, "admin", null, null, null)).contains(10L);
+
+        verify(curatedQa).createFromSubmission(7L, AUTHOR, "제안 제목", List.of("조각1", "조각2"), "인프라");
+        verify(curatedQa, never()).createFromLikedTurn(anyLong(), anyLong(), anyString(), anyString(),
+                anyString(), anyString(), any());
+    }
+
+    /** 승인 경로용 조립 — Vision 이 없는 배포에서 describeImages() 가 본문을 그대로 돌려주는 모양. */
+    private CuratedSubmissionService serviceWith(CuratedQaService curatedQa) {
+        AppProperties p = mock(AppProperties.class);
+        when(p.chunkSizeSafe()).thenReturn(1_500);
+        CuratedImageStore imageStore = mock(CuratedImageStore.class);
+        when(imageStore.describeImages(anyString())).thenAnswer(inv -> inv.getArgument(0));
+        return new CuratedSubmissionService(repository, curatedQa, imageStore, memoryService,
+                p, mock(AuditLogger.class));
     }
 }
