@@ -348,7 +348,7 @@
 </div><!-- /container -->
 
 <!-- ── Edit Offcanvas ──────────────────────────────────────────────────── -->
-<div class="offcanvas offcanvas-end" tabindex="-1" id="editOffcanvas" style="width:520px; max-width:100%;">
+<div class="offcanvas offcanvas-end" tabindex="-1" id="editOffcanvas" style="width:100%; max-width:100%;">
     <div class="offcanvas-header border-bottom">
         <h6 class="offcanvas-title d-flex align-items-center gap-2" style="min-width:0;">
             <span class="text-nowrap"><i class="bi bi-pencil-square me-2"></i>청크 편집</span>
@@ -408,7 +408,7 @@
     </div>
 </div>
 
-<div class="offcanvas offcanvas-end" tabindex="-1" id="curatedEditOffcanvas" style="width:520px; max-width:100%;">
+<div class="offcanvas offcanvas-end" tabindex="-1" id="curatedEditOffcanvas" style="width:100%; max-width:100%;">
     <div class="offcanvas-header border-bottom">
         <h6 class="offcanvas-title"><i class="bi bi-chat-heart me-2"></i>큐레이션 Q&A 편집</h6>
         <button type="button" class="btn-close" data-bs-dismiss="offcanvas"></button>
@@ -421,7 +421,7 @@
 <!-- ── 지식 제안 검토 Offcanvas ────────────────────────────────────────── -->
 <!-- 승인된 본문은 그대로 검색 컨텍스트가 되어 답변 프롬프트에 주입된다 — 따라서 본문은
      항상 잘라내지 않고 전체를 보여준다(일괄 승인·자동 승인 경로를 두지 않는 이유도 같다). -->
-<div class="offcanvas offcanvas-end" tabindex="-1" id="submissionReviewOffcanvas" style="max-width:100%;">
+<div class="offcanvas offcanvas-end" tabindex="-1" id="submissionReviewOffcanvas" style="width:100%; max-width:100%;">
     <div class="offcanvas-header border-bottom">
         <h6 class="offcanvas-title"><i class="bi bi-clipboard-check me-2"></i>지식 제안 검토</h6>
         <button type="button" class="btn-close" data-bs-dismiss="offcanvas"></button>
@@ -512,21 +512,25 @@ function loadChunksByDoc(btn) {
         .catch(() => { document.getElementById('chunk-spinner').style.display = 'none'; });
 }
 
-// 편집 오프캔버스 기본 폭(좁은 화면·모바일). 가용 뷰포트가 이 폭의 2배 이상일 때만
-// 좌측에 마크다운 미리보기 컬럼을 함께 띄우고 오프캔버스를 전체 폭으로 넓힌다.
+// 한 컬럼이 편집하기에 필요한 최소 폭. 폭 자체로 쓰이지 않고 **2컬럼 하한**을 재는 데만
+// 쓴다(이 값의 2배 이상이면 좌측에 미리보기 컬럼을 함께 띄운다).
 const EDIT_BASE_WIDTH = 520;
 const EDIT_FIELDS_WIDTH = 500;
 
-// 편집 오프캔버스(청크 편집·큐레이션 편집)의 폭을 정하고 2컬럼 여부를 돌려준다. 두 화면은
-// 같은 렌더러(renderChunkPreview)로 같은 형식의 마크다운을 편집하므로 폭 규칙도 한 벌이어야 한다.
-// 넓은 화면에선 뷰포트를 100% 채운다 — 우측 편집 컬럼은 EDIT_FIELDS_WIDTH 고정이므로 늘어난
-// 폭은 전부 좌측 미리보기 몫이고, 청크 원문에는 표·코드블록처럼 가로로 긴 요소가 흔해서
-// 미리보기가 넓을수록 줄바꿈 없이 읽힌다. 90%를 쓰지 않는 이유는 2컬럼 하한(EDIT_BASE_WIDTH*2)
-// 때문에 isWide 경계 부근(약 1040~1155px)에서 어차피 100%로 클램프돼, 창을 줄이는 동안 비율이
-// 90%에서 100%로 튀는 것처럼 보였기 때문 — 항상 100%면 그 불연속이 없다.
+// 편집 오프캔버스(청크 편집·큐레이션 편집·지식 제안 검토)의 폭을 정하고 2컬럼 여부를 돌려준다.
+// 셋은 같은 렌더러(renderChunkPreview)로 같은 형식의 마크다운을 편집하므로 폭 규칙도 한 벌이어야 한다.
+//
+// **폭은 언제나 뷰포트 전체다.** 화면 크기가 바꾸는 것은 폭이 아니라 컬럼 수뿐이다 —
+// 이렇게 두면 "이 패널은 항상 화면을 채운다"는 규칙 하나만 남고, 창을 줄이는 동안 폭이 튀는
+// 구간이 생기지 않는다(예전에는 1컬럼일 때 EDIT_BASE_WIDTH 로 고정돼, 800px 짜리 창에서
+// 520px 만 쓰고 오른쪽 280px 을 backdrop 으로 버렸다 — 정작 그 폭이 가장 아쉬운 구간이다).
+// 모바일에서는 정적 style 의 max-width:100% 와 같은 값이라 동작이 그대로다.
+//
+// 2컬럼에서 늘어난 폭은 전부 좌측 미리보기 몫이다(우측 편집 컬럼은 EDIT_FIELDS_WIDTH 고정).
+// 청크 원문에는 표·코드블록처럼 가로로 긴 요소가 흔해 미리보기가 넓을수록 줄바꿈 없이 읽힌다.
 function applyEditOffcanvasWidth(offcanvasEl) {
     const isWide = window.innerWidth >= EDIT_BASE_WIDTH * 2;
-    offcanvasEl.style.width = isWide ? '100%' : EDIT_BASE_WIDTH + 'px';
+    offcanvasEl.style.width = '100%';
     return isWide;
 }
 
