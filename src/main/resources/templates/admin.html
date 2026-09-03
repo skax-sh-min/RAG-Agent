@@ -233,7 +233,7 @@
         </div>
     </div><!-- /row -->
 
-    <!-- ── 청크 추가 게시판 — 사용자 제안 검토 (펼칠 때만 조회) ──────────────── -->
+    <!-- ── 지식 제안 게시판 — 사용자 제안 검토 (펼칠 때만 조회) ──────────────── -->
     <!-- 큐레이션 Q&A 카드보다 위: 이쪽은 관리자의 조치를 기다리는 대기열(검토 대기 배지가 붙는다)이고,
          아래 큐레이션 카드는 이미 반영된 것을 확인·회수하는 용도라 열어볼 일이 드물다. -->
     <details class="card mt-4" id="submission-card"
@@ -241,10 +241,10 @@
               hx-target="#submission-body" hx-swap="innerHTML">
         <summary class="card-header d-flex align-items-center py-2" style="cursor:pointer; list-style:none;">
             <i class="bi bi-journal-plus me-2"></i>
-            <span class="fw-semibold small">청크 추가 제안</span>
+            <span class="fw-semibold small">지식 제안 검토</span>
             <span id="submission-pending-pill" class="badge bg-danger ms-2 d-none">0</span>
             <span class="ms-auto small text-muted d-flex align-items-center gap-1">
-                사용자가 등록한 청크 — 임베딩 실행 또는 거부 — 펼치면 조회
+                사용자가 등록한 지식 제안 — 임베딩 실행 또는 거부 — 펼치면 조회
                 <i class="bi bi-chevron-down curated-qa-chevron"></i>
             </span>
         </summary>
@@ -418,12 +418,12 @@
     </div>
 </div>
 
-<!-- ── 청크 추가 제안 검토 Offcanvas ────────────────────────────────────── -->
+<!-- ── 지식 제안 검토 Offcanvas ────────────────────────────────────────── -->
 <!-- 승인된 본문은 그대로 검색 컨텍스트가 되어 답변 프롬프트에 주입된다 — 따라서 본문은
      항상 잘라내지 않고 전체를 보여준다(일괄 승인·자동 승인 경로를 두지 않는 이유도 같다). -->
 <div class="offcanvas offcanvas-end" tabindex="-1" id="submissionReviewOffcanvas" style="width:640px; max-width:100%;">
     <div class="offcanvas-header border-bottom">
-        <h6 class="offcanvas-title"><i class="bi bi-clipboard-check me-2"></i>청크 추가 제안 검토</h6>
+        <h6 class="offcanvas-title"><i class="bi bi-clipboard-check me-2"></i>지식 제안 검토</h6>
         <button type="button" class="btn-close" data-bs-dismiss="offcanvas"></button>
     </div>
     <div class="offcanvas-body d-flex flex-column gap-3" id="submissionReviewOffcanvasBody">
@@ -1124,7 +1124,7 @@ function deleteCuratedInline(id, btn) {
     .catch(() => showToast('삭제 중 오류', 'danger'));
 }
 
-// ── 청크 추가 제안 검토 ────────────────────────────────────────────────────
+// ── 지식 제안 검토 ────────────────────────────────────────────────────────
 // 페이지 레벨에 두는 이유는 위 loadCurated/loadChunks 와 동일 — 프래그먼트는 plain innerHTML 로
 // 갈아끼워지므로 프래그먼트에 넣은 <script> 는 실행되지 않는다.
 

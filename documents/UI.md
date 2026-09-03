@@ -28,7 +28,7 @@ src/main/resources/
 │   │                                      #   <img>로 치환해 marked→DOMPurify 렌더하는 전역 유틸(§3.5-bis)
 │   ├── chat.html                          # 채팅 페이지 (이전 turn 서버 렌더 포함)
 │   ├── documents.html                     # 문서 관리 페이지
-│   ├── admin.html                         # 벡터 스토어 관리 (청크 브라우저 + 청크 추가 제안 + 큐레이션 Q&A
+│   ├── admin.html                         # 벡터 스토어 관리 (청크 브라우저 + 지식 제안 검토 + 큐레이션 Q&A
 │   │                                      #   + 대화 목록 + 검색 진단 수치)
 │   ├── curated-submissions.html           # 지식 제안 게시판 (등록 폼 + 이미지 업로드 + "내 제안" 목록)
 │   ├── llm-usage.html                     # LLM 사용량 통계 페이지
@@ -42,7 +42,7 @@ src/main/resources/
 │       ├── doc-table-body.html            # 문서 목록 tbody (새로고침용)
 │       ├── admin-chunks.html              # 청크 테이블 (컬렉션/문서 필터 + 페이지네이션)
 │       ├── admin-curated.html             # 큐레이션 Q&A 패널 (펼칠 때 지연 로딩)
-│       ├── admin-submissions.html         # 청크 추가 제안 검토 패널 (지연 로딩, 상태 필터)
+│       ├── admin-submissions.html         # 지식 제안 검토 패널 (지연 로딩, 상태 필터)
 │       ├── admin-retrieval-metrics.html   # 검색 진단 수치 패널 (지연 로딩, 사용자/대화 필터)
 │       ├── admin-threads.html             # 대화 목록 패널 + 턴 드릴다운 (§6.25, 지연 로딩)
 │       ├── admin-source-table.html        # 출처별 진단 표 — 위 두 패널이 공유
@@ -117,7 +117,7 @@ REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — �
 
 > **네비게이션 바 상태 표시**(`layout/base.html`, 모든 페이지 공통 헤더): 우측 상단에 **API 상태**(`#api-status`)와 그 옆 **LLM 동시성**(`#llm-concurrency`, `LLM: {inUse}/{capacity}`) 두 지표가 나란히 표시된다. API 상태는 페이지 로드 시 `GET /api/v1/health`를 딱 1회만 확인하고 이후 재확인하지 않는 반면, LLM 동시성은 `setInterval`로 위 엔드포인트를 **~3초마다** 재조회해 값을 갱신한다 — 이 문서의 다른 폴링(HTMX `hx-trigger="every Ns"`)과 달리 재사용할 만한 3초 간격 폴링이 기존에 없어 `base.html` 자체의 순수 JS `fetch`+`setInterval`로 새로 구현했다. 응답이 `available:false`면 `.d-none`으로 엘리먼트 자체를 감춘다(값이 없는데 `0/0`처럼 표시되는 것을 방지) — `fetch` 실패 시에도 동일하게 숨김 처리된다.
 >
-> **헤더 알림 배지 2종**(`layout/base.html`, 청크 추가 게시판): 네비의 **지식 제안** 링크 옆에 작성자 본인의 미확인 처리 건수(`#my-submission-badge` ← `GET /curated/submissions/unread-count`), **관리자** 링크 옆에 검토 대기 건수(`#pending-submission-badge` ← `GET /admin/submissions/pending-count`)가 빨간 배지로 붙는다. 둘 다 **60초 폴링**이며(위 LLM 동시성 지표의 3초와 달리 게시글은 초 단위 신선도가 불필요) 0건이면 `.d-none`으로 감춘다. 관리자 배지는 `isAdmin`일 때만 렌더링되고, 폴링 스크립트는 **엘리먼트가 있을 때만** 시작하므로 비관리자 브라우저에서는 요청 자체가 나가지 않는다. 로그인 직후 첫 폴링이 바로 실행되므로 "관리자가 로그인하면 알림"이 함께 충족된다.
+> **헤더 알림 배지 2종**(`layout/base.html`, 지식 제안 게시판): 네비의 **지식 제안** 링크 옆에 작성자 본인의 미확인 처리 건수(`#my-submission-badge` ← `GET /curated/submissions/unread-count`), **관리자** 링크 옆에 검토 대기 건수(`#pending-submission-badge` ← `GET /admin/submissions/pending-count`)가 빨간 배지로 붙는다. 둘 다 **60초 폴링**이며(위 LLM 동시성 지표의 3초와 달리 게시글은 초 단위 신선도가 불필요) 0건이면 `.d-none`으로 감춘다. 관리자 배지는 `isAdmin`일 때만 렌더링되고, 폴링 스크립트는 **엘리먼트가 있을 때만** 시작하므로 비관리자 브라우저에서는 요청 자체가 나가지 않는다. 로그인 직후 첫 폴링이 바로 실행되므로 "관리자가 로그인하면 알림"이 함께 충족된다.
 >
 > **`inUse`가 채팅 요청만이 아니라 임베딩 활동·서킷브레이커 차단까지 반영한다**: `inUse`는 채팅 동시성 게이트 사용량 + `EmbeddingConcurrencyTracker`(인덱싱·검색 임베딩 in-flight 카운터, 채팅 게이트와 완전히 별개의 `EmbeddingModel` 데코레이터 체인이라 이게 없으면 임베딩 중에도 항상 0으로 보였다)를 합산하고, `capacity`를 넘지 않게 clamp된 값이다(임베딩 동시성은 `EMBED_MAX_CONCURRENT_BATCHES` 등 별도 한도라 합산 결과가 capacity를 초과할 수 있음). 서킷브레이커로 차단된 로컬 프로바이더는 `capacity`에는 그대로 남되 전체 용량이 `inUse`로 집계된다(제외되는 게 아니라 "완전 포화"로 표시됨). `inUse`가 `capacity`에 도달하면(즉 값이 같아지면) 헤더 스크립트가 숫자에 Bootstrap `text-danger`+`fw-bold`를 토글해 굵은 빨간 글씨로 강조한다.
 
@@ -160,7 +160,7 @@ REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — �
 | GET | `/admin/threads/{threadId}/delete-preview` | JSON | §6.25 — 삭제 확인 대화상자의 숫자(제목·소유자·턴 수·재사용됨·진단 수·큐레이션 수). 렌더된 행이 아니라 **클릭 시점**에 다시 읽는다 |
 | DELETE | `/admin/threads/{threadId}` | JSON `{deleted,turnCount,curatedRetracted}` / `404` | §6.25 — 대화 삭제. **thread id만 받는다**(소유자는 서버가 PK로 조회 — `userId`를 받으면 남의 대화를 지정하는 파라미터가 된다). 큐레이션 회수 → 기록 삭제 → `thread_meta` 순이며 `admin.thread.delete` 감사 기록. 벌크 삭제 없음 |
 | GET | `/admin/threads/turns/{turnId}/content` | JSON `{question,answer,askedAt,responseMode}` / `404` | §6.25 — 답변 원문 열람. **호출 자체가 `admin.thread.read` 감사 이벤트**를 남기며, 내용이 실제로 나갈 때만 기록한다(없는 턴은 404이고 열람이 아니다) |
-| GET | `/admin/submissions` | `fragments/admin-submissions :: panel` | 청크 추가 제안 검토 패널 지연 로딩. `status`(기본 `pending`, `all`=전체)·`offset`·`limit` 파라미터. 큐레이션 패널과 동일한 `<details>` + `toggle once` 패턴 |
+| GET | `/admin/submissions` | `fragments/admin-submissions :: panel` | 지식 제안 검토 패널 지연 로딩. `status`(기본 `pending`, `all`=전체)·`offset`·`limit` 파라미터. 큐레이션 패널과 동일한 `<details>` + `toggle once` 패턴 |
 | GET | `/admin/submissions/pending-count` | JSON `{"count":N}` | 검토 대기 건수 — 헤더 배지·카드 pill이 60초마다 폴링. **`/api/v1/**`이 아니라 `/admin/**` 아래**에 둔 이유는 아래 참고 |
 | GET | `/admin/submissions/{id}/detail` | JSON | 제안 전문(제목·본문·태그·작성자·상태·예상 청크 수) — 검토 오프캔버스 채우기용 |
 | POST | `/admin/submissions/{id}/approve` | `200 {"curatedId":N}` / `400` / `409` | 임베딩 실행. body의 `title`/`body`/`tags`는 관리자 수정본(생략 시 작성자 원문 유지). 이미 처리된 제안이면 409, 이미지 개수 상한 초과면 400(메시지 포함 — UI가 서버 문구를 그대로 토스트로 띄운다). **본문에 이미지가 있으면 이 요청이 이미지 수만큼의 Vision 호출을 동기로 기다린다**(설명이 임베딩되는 텍스트의 일부여야 해서 배경으로 미룰 수 없다) — 그동안 `임베딩 실행` 버튼은 잠기고 스피너로 바뀐다 |
@@ -188,9 +188,9 @@ REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — �
 > - **삭제**는 되돌릴 수 없고 남의 대화에까지 닿으므로, 확인 문구의 숫자를 렌더된 행이 아니라 **클릭 시점에 서버에서 다시 읽는다**(`delete-preview`). 대가가 있는 줄만 조건부로 붙는다 — 큐레이션 0건·재사용됨 0건이면 그 줄이 아예 없다(늘 "0건 회수"를 보여주면 정작 값이 있을 때의 경고가 묻힌다). 삭제 후에는 행 하나를 빼지 않고 목록 전체를 다시 그린다(요약·전체 개수·페이지 경계가 모두 움직인다).
 > - 표에 `min-width`가 걸려 있다 — 고정 폭 열 합계가 좁은 창의 테이블 폭을 다 먹으면 유연 열(제목)이 `max-width:0`(말줄임 관용구) 때문에 몇 px로 눌린다. 넘치는 만큼은 `.table-responsive`가 가로 스크롤로 흡수한다.
 
-> **카드 순서**: `/admin` 하단은 **청크 추가 제안 → 큐레이션 Q&A → 대화 목록 → 검색 진단 수치** 순이다. 뒤의 둘은 조치 대기열도, 반영 확인용도 아닌 분석·운영 뷰라 아래에 두고, 서로 드릴다운하는 짝이라 붙여 놓는다(대화 행 → 그 대화의 진단, 진단 행 → 그 대화). 앞쪽은 관리자의 조치를 기다리는 대기열(검토 대기 pill이 붙는다)이고, 뒤쪽은 이미 반영된 것을 확인·회수하는 용도라 열어볼 일이 드물어 최하단에 둔다.
+> **카드 순서**: `/admin` 하단은 **지식 제안 검토 → 큐레이션 Q&A → 대화 목록 → 검색 진단 수치** 순이다. 뒤의 둘은 조치 대기열도, 반영 확인용도 아닌 분석·운영 뷰라 아래에 두고, 서로 드릴다운하는 짝이라 붙여 놓는다(대화 행 → 그 대화의 진단, 진단 행 → 그 대화). 앞쪽은 관리자의 조치를 기다리는 대기열(검토 대기 pill이 붙는다)이고, 뒤쪽은 이미 반영된 것을 확인·회수하는 용도라 열어볼 일이 드물어 최하단에 둔다.
 
-> **청크 추가 제안 카드**(`/admin` 하단, 큐레이션 Q&A 카드 바로 위) — ⚠️ **화면 라벨이 두 이름으로 갈려 있다**: 이 관리자 카드는 `admin.html`이 "청크 추가 제안"으로, 같은 기능의 사용자 화면은 `nav.submissions`/`submission.title`이 "지식 제안"으로 부른다. 문서는 기능 이름을 **지식 제안**으로 통일하되 이 카드만 화면 그대로 적는다: 같은 `<details>` 지연 로딩 구조(`hx-trigger="toggle[this.open] once"` → `GET /admin/submissions`)이며, 카드 제목 옆에 검토 대기 건수 pill(`#submission-pending-pill`)이 붙는다(0건이면 `.d-none`). 기본 필터는 `pending` — 상태 드롭다운으로 등록 완료/반려/철회됨/전체 전환. 행의 아이콘을 누르면 검토 오프캔버스(`#submissionReviewOffcanvas`)가 열려 제목·태그·본문을 **전문 그대로** 보여주고 수정한 뒤 **임베딩 실행**/**거부**할 수 있다 — 승인된 본문이 곧 답변 프롬프트의 검색 컨텍스트가 되므로 본문을 잘라 보여주지 않고, 일괄·자동 승인 버튼도 없다([OPERATOR_MANUAL.md §7.6](OPERATOR_MANUAL.md#76-청크-추가-제안-검토-69) 참고). 본문 영역은 **원문/미리보기 탭**으로 전환되며 미리보기는 `marked` → `DOMPurify.sanitize()`를 거친다(사용자가 작성한 마크다운을 관리자 화면에서 렌더하므로 sanitize가 필수). 오프캔버스 상단에는 **승인 시 몇 개 청크로 나뉘는지**(승인 후에는 실제 생성 개수)가 표시된다 — 본문 길이 제한이 없어진 대신 `ChunkSplitter`가 분할하기 때문. 페이지 레벨 JS(`loadSubmissions()`/`openSubmissionReview()`/`approveSubmission()`/`rejectSubmission()`)는 큐레이션 패널과 같은 이유로 `admin.html`에 둔다.
+> **지식 제안 검토 카드**(`/admin` 하단, 큐레이션 Q&A 카드 바로 위) — 사용자 화면의 **지식 제안**(`nav.submissions`)과 같은 이름을 쓴다. 예전에는 이 카드만 "청크 추가 제안"이라 같은 기능이 화면마다 다른 이름으로 불렸다: 같은 `<details>` 지연 로딩 구조(`hx-trigger="toggle[this.open] once"` → `GET /admin/submissions`)이며, 카드 제목 옆에 검토 대기 건수 pill(`#submission-pending-pill`)이 붙는다(0건이면 `.d-none`). 기본 필터는 `pending` — 상태 드롭다운으로 등록 완료/반려/철회됨/전체 전환. 행의 아이콘을 누르면 검토 오프캔버스(`#submissionReviewOffcanvas`)가 열려 제목·태그·본문을 **전문 그대로** 보여주고 수정한 뒤 **임베딩 실행**/**거부**할 수 있다 — 승인된 본문이 곧 답변 프롬프트의 검색 컨텍스트가 되므로 본문을 잘라 보여주지 않고, 일괄·자동 승인 버튼도 없다([OPERATOR_MANUAL.md §7.6](OPERATOR_MANUAL.md#76-지식-제안-검토-69) 참고). 본문 영역은 **원문/미리보기 탭**으로 전환되며 미리보기는 `marked` → `DOMPurify.sanitize()`를 거친다(사용자가 작성한 마크다운을 관리자 화면에서 렌더하므로 sanitize가 필수). 오프캔버스 상단에는 **승인 시 몇 개 청크로 나뉘는지**(승인 후에는 실제 생성 개수)가 표시된다 — 본문 길이 제한이 없어진 대신 `ChunkSplitter`가 분할하기 때문. 페이지 레벨 JS(`loadSubmissions()`/`openSubmissionReview()`/`approveSubmission()`/`rejectSubmission()`)는 큐레이션 패널과 같은 이유로 `admin.html`에 둔다.
 >
 > **`pending-count`가 `/api/v1/**`이 아닌 이유**: 관리 전용 인증 모드(§6.17)에서 `/api/v1/**`은 CSRF 예외 + 게스트 개방이라 거기 두면 검토 대기 건수가 누구에게나 노출된다. `/admin/**` 아래 두면 `ROLE_ADMIN` 게이트를 그대로 상속한다.
 >
@@ -453,7 +453,7 @@ PROGRESSIVE 업그레이드 시 `🔝 고추론 재분석 → {premiumProvider}`
 
 ### 출처 Hover 미리보기
 
-**출처 라벨 형식**: `RetrievalService.formatSource()`가 청크 메타데이터의 `chapter_no`(H2~H6 헤딩 기반 계층 번호, 예: `1.5.3`)가 "0"이 아니면 `"파일명 | 1.5.3"`, 아니면(프롤로그·PPTX·비스캔 PDF — 이 세 경우는 chapter_no가 항상 "0") `page_or_slide`로 폴백해 `"파일명 | p.12"`로 표시한다 — 문서 버전은 라벨에 포함되지 않는다. **큐레이션 Q&A**(§10.10, 좋아요로 승격된 답변)가 출처로 포함된 경우엔 파일명·페이지가 없으므로 `"💬 큐레이션 Q&A"` 고정 라벨로 표시된다.
+**출처 라벨 형식**: `RetrievalService.formatSource()`가 청크 메타데이터의 `chapter_no`(H2~H6 헤딩 기반 계층 번호, 예: `1.5.3`)가 "0"이 아니면 `"파일명 | 1.5.3"`, 아니면(프롤로그·PPTX·비스캔 PDF — 이 세 경우는 chapter_no가 항상 "0") `page_or_slide`로 폴백해 `"파일명 | p.12"`로 표시한다 — 문서 버전은 라벨에 포함되지 않는다. **큐레이션 Q&A**(§10.10 · §10.11, 승인된 지식 제안)가 출처로 포함된 경우엔 파일명·페이지가 없으므로 `"💬 큐레이션 Q&A"` 고정 라벨로 표시된다.
 
 출처 목록 항목에 Bootstrap Popover (`hover focus` 트리거). `SourceRef.preview`에 청크 텍스트 앞 600자 포함.
 
@@ -592,7 +592,7 @@ done 이벤트    (답변 완료 후)   → attribution {chunkId: 0.0~1.0} → �
               → hx-target="#llm-cards-target" → 응답으로 받은 fragments/llm-usage-cards로 즉시 교체
               (카드만 즉시 반영; 차트·기간별 표는 별도 vanilla JS fetch라 다음 로드/새로고침에 반영)
 
-[청크 추가 제안 카드] <details id="submission-card"> 첫 펼침 → hx-trigger="toggle[this.open] once"
+[지식 제안 검토 카드] <details id="submission-card"> 첫 펼침 → hx-trigger="toggle[this.open] once"
               → GET /admin/submissions (기본 status=pending) → #submission-body 삽입
 [제안 검토/승인]  행 아이콘 → openSubmissionReview(id) → GET /admin/submissions/{id}/detail
               → 오프캔버스 렌더(원문/미리보기 탭 — 미리보기는 renderMarkdownWithImageMarkers()라

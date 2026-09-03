@@ -593,7 +593,7 @@ LLM_ROUTING_MODE=QUALITY_FIRST
 | `document.upload` / `.delete` / `.sync` / `.export` / `.tags_update` / `.display_name_update` | 문서 관리 |
 | `thread.delete` / `thread.routing-mode` | 사용자가 자기 대화를 삭제·라우팅 모드 변경 (삭제 시 회수된 큐레이션 수 포함) |
 | `turn.delete` / `turn.feedback` / `turn.image.exclude` / `turn.source.exclude` | 턴 단위 조작 |
-| `curated.edit` / `curated.submission.create` / `.approve` / `.reject` | 큐레이션·청크 추가 제안 |
+| `curated.edit` / `curated.submission.create` / `.approve` / `.reject` | 큐레이션·지식 제안 |
 | `settings.update` / `settings.reset` / `settings.provider.toggle` | `/settings` 변경 |
 | `llm-usage.delete-orphan` | orphan 사용 기록 삭제 |
 | **`admin.thread.delete`** | 관리자가 **다른 사용자의** 대화를 삭제 (소유자·턴 수·회수된 큐레이션 수, §7.9) |
@@ -1901,7 +1901,7 @@ DB 파일은 **최대 두 개**입니다. `SQLITE_VEC_DB_PATH`(=`app.vectorstore
 | `doc_registry` | 인덱싱된 문서 레지스트리(SHA-256 변경 감지, `chunk_overlap`) | `DocRegistry` |
 | `llm_usage` | 프로바이더별 일자별 토큰 사용량 | Flyway V1 |
 | `curated_qa` | 큐레이션 Q&A(좋아요 승격 + 승인된 지식 제안) | `CuratedQaRepository` |
-| `curated_submission` | 청크 추가 제안 게시판 | `CuratedSubmissionRepository` |
+| `curated_submission` | 지식 제안 게시판 | `CuratedSubmissionRepository` |
 | `settings_override` | `/settings` 핫 수정 오버라이드 | `SettingsOverrideRepository` |
 | `users`, `persistent_logins` | 계정·자동 로그인 토큰 | Flyway V2 / `SqliteUserDetailsService` |
 | `app_secret` | 게스트 식별 HMAC 키 등 서버 비밀값 | `AppSecretRepository` |
@@ -2092,7 +2092,7 @@ mvn test -Dtest=SearchQualityEvaluationTest -Dsearch-eval.enabled=true
 
 > ⚠️ **정책이 한 번 바뀌었습니다.** 최초 §10.10 정책은 반대였습니다 — "대화를 지워도 큐레이션은 유지"(개인 대화 정리가 공유 검색 품질을 조용히 떨어뜨리는 것을 막기 위함). §6.25에서 회수로 바뀐 이유는 (1) 대화가 사라진 뒤에도 그 답변이 검색 근거로 남는 쪽이 실제로는 더 혼란스러웠고, (2) **턴 단위 삭제는 처음부터 회수하고 있어**(싫어요 → 턴 삭제 시, 지금의 `onTurnDeleted`) 두 경로의 동작이 갈려 있었기 때문입니다. 이전 버전에서 대화를 지웠다면 그때 승격된 항목은 여전히 살아 있을 수 있으니, 정리하려면 §7.5의 큐레이션 카드에서 확인하세요.
 >
-> 승인된 **청크 추가 제안**(`origin='manual'`, §6.9)은 특정 대화에 속하지 않으므로 이 회수의 대상이 아닙니다 — 대화를 아무리 지워도 남습니다. 회수는 §7.5에서 강제 삭제하거나 제안 자체를 회수해야 합니다.
+> 승인된 **지식 제안**(`origin='manual'`, §6.9)은 특정 대화에 속하지 않으므로 이 회수의 대상이 아닙니다 — 대화를 아무리 지워도 남습니다. 회수는 §7.5에서 강제 삭제하거나 제안 자체를 회수해야 합니다.
 
 **편집 권한**:
 | 주체 | 방법 | 범위 |
@@ -2405,7 +2405,7 @@ mvn test -Dtest=SearchQualityEvaluationTest -Dsearch-eval.enabled=true
 
 `/admin` 페이지 **최하단**에 **큐레이션 Q&A** 카드가 있습니다 — 좋아요로 승격된 질문·답변 목록(질문·답변 미리보기·등록일)을 최신순으로 보여줍니다. 페이지당 20/50/100건 중 선택, 이전/다음으로 이동합니다.
 
-카드 순서는 **청크 추가 제안(§7.6) → 큐레이션 Q&A**입니다. 앞쪽은 관리자의 조치를 기다리는 대기열이고 이 카드는 이미 반영된 것을 확인·회수하는 용도라 열어볼 일이 드물어 맨 아래에 둡니다.
+카드 순서는 **지식 제안 검토(§7.6) → 큐레이션 Q&A**입니다. 앞쪽은 관리자의 조치를 기다리는 대기열이고 이 카드는 이미 반영된 것을 확인·회수하는 용도라 열어볼 일이 드물어 맨 아래에 둡니다.
 
 카드는 `<details>` 요소로 구현되어 기본적으로 접혀 있으며, 펼칠 때만(`GET /admin/curated`, HTMX `toggle[this.open] once` 트리거) 목록을 서버에서 조회합니다 — `AdminController.adminPage()`는 더 이상 `curatedQaService.listActive()`를 즉시 호출하지 않으므로, `/admin` 페이지를 열기만 해서는 이 DB 조회가 발생하지 않습니다. 카드를 한 번 펼치면 그 세션에서는 다시 접었다 펴도 재조회되지 않습니다(새로고침하면 다시 접힌 상태로 초기화).
 
@@ -2423,9 +2423,9 @@ mvn test -Dtest=SearchQualityEvaluationTest -Dsearch-eval.enabled=true
 
 ---
 
-### 7.6 청크 추가 제안 검토 (§6.9)
+### 7.6 지식 제안 검토 (§6.9)
 
-`/admin` 페이지 하단 **청크 추가 제안** 카드입니다. 큐레이션 Q&A 카드와 같은 `<details>` 지연 로딩 구조로, 펼칠 때만(`GET /admin/submissions`) 목록을 조회합니다. 카드 제목 옆에는 검토 대기 건수가 빨간 배지로 표시됩니다(대기 0건이면 감춰짐).
+`/admin` 페이지 하단 **지식 제안 검토** 카드입니다. 큐레이션 Q&A 카드와 같은 `<details>` 지연 로딩 구조로, 펼칠 때만(`GET /admin/submissions`) 목록을 조회합니다. 카드 제목 옆에는 검토 대기 건수가 빨간 배지로 표시됩니다(대기 0건이면 감춰짐).
 
 기본 필터는 **검토 대기**(`status=pending`) — 요청 그대로 "아직 등록되지 않은 제안"만 보여줍니다. 드롭다운에서 등록 완료/반려/철회됨/전체로 바꿀 수 있습니다.
 
@@ -2566,7 +2566,7 @@ A가 나머지의 약 2배입니다. 즉 **검색기여가 눈에 띄게 높다 
 **대화 삭제**
 
 - 삭제는 되돌릴 수 없고 **다른 사용자의 대화에까지 닿습니다.** 확인 대화상자의 숫자는 화면의 행이 아니라 **클릭 시점에 서버에서 다시 읽습니다** — 패널을 열어둔 지 오래됐을 수 있기 때문입니다.
-- 지워지는 것: `conversation_turns`·`turn_source_ref`·`turn_image_ref`·`thread_meta`, 그리고 **그 대화에서 좋아요로 승격된 큐레이션 Q&A 행과 벡터**. 마지막 항목이 없으면 대화가 사라진 뒤에도 그 답변이 검색 근거로 계속 쓰입니다(§6.7). 승인된 **청크 추가 제안**(`origin='manual'`)은 대화에 속하지 않으므로 영향받지 않습니다.
+- 지워지는 것: `conversation_turns`·`turn_source_ref`·`turn_image_ref`·`thread_meta`, 그리고 **그 대화에서 좋아요로 승격된 큐레이션 Q&A 행과 벡터**. 마지막 항목이 없으면 대화가 사라진 뒤에도 그 답변이 검색 근거로 계속 쓰입니다(§6.7). 승인된 **지식 제안**(`origin='manual'`)은 대화에 속하지 않으므로 영향받지 않습니다.
 - 그 대화의 **검색 진단 수치도 함께 사라집니다** — 튜닝의 관측 표본이 그만큼 줄어듭니다. 확인 문구에 함께 표시됩니다.
 - 감사 로그에 `admin.thread.delete`(소유자·턴 수·회수된 큐레이션 수)가 남습니다.
 - **일괄 삭제 기능은 없습니다**(의도적).
@@ -3213,8 +3213,8 @@ TRUST_FORWARDED_FOR=true   # 리버스 프록시(Caddy) 뒤라면 필수 — 아
 **동작 세부**:
 - 방문자 id는 `guest-<12자리 hex>` 형식입니다. IP 원문은 저장되지 않고, 서버가 최초 기동 시 생성해 `app_secret` 테이블에 보관하는 키로 HMAC 해싱됩니다(재기동해도 id가 바뀌지 않도록 영속화).
 - 쿠키 이름은 `rag_visitor`(HttpOnly, SameSite=Lax, 1년). HTTPS 접속이면 `Secure`도 붙습니다.
-- **문서는 여전히 공유**입니다(`DocRegistry.SHARED`). 개인화되는 것은 채팅 스레드·대화 이력·좋아요(큐레이션 Q&A) 소유권, 그리고 **청크 추가 게시판의 "내 제안" 목록·처리 알림**(§6.9)뿐입니다.
-- **§6.9 청크 추가 게시판을 쓴다면 이 설정이 사실상 필수**입니다 — `shared`에서는 모든 방문자가 한 사람으로 취급되어 서로의 제안과 처리 알림이 섞여 보입니다. `hybrid`에서는 실제 로그인한 관리자가 이 화면을 열어도 게스트 id로 덮어써지지 않으므로(`NoAuthAutoLoginFilter.hasRealLogin()`), 관리자 본인 제안이 게스트 목록에 섞이지 않습니다.
+- **문서는 여전히 공유**입니다(`DocRegistry.SHARED`). 개인화되는 것은 채팅 스레드·대화 이력·좋아요(큐레이션 Q&A) 소유권, 그리고 **지식 제안 게시판의 "내 제안" 목록·처리 알림**(§6.9)뿐입니다.
+- **§6.9 지식 제안 게시판을 쓴다면 이 설정이 사실상 필수**입니다 — `shared`에서는 모든 방문자가 한 사람으로 취급되어 서로의 제안과 처리 알림이 섞여 보입니다. `hybrid`에서는 실제 로그인한 관리자가 이 화면을 열어도 게스트 id로 덮어써지지 않으므로(`NoAuthAutoLoginFilter.hasRealLogin()`), 관리자 본인 제안이 게스트 목록에 섞이지 않습니다.
 - 오타 등 알 수 없는 값은 `shared`로 폴백합니다(설정 실수가 "반쪽만 분리된" 상태로 이어지지 않도록). 기동 로그의 `[GUEST_ID] 방문자 식별 전략: ...` 줄로 실제 적용값을 확인하세요.
 - **기존 대화는 보이지 않게 됩니다.** 이 설정을 켜기 전에 쌓인 스레드는 예전 공용 게스트 id(`00000000-…-0001`)에 묶여 있어 새 방문자 id로는 조회되지 않습니다(삭제되지는 않음). 되돌리려면 `shared`로 다시 바꾸면 그대로 다시 보입니다.
 
@@ -3283,12 +3283,12 @@ TRUST_FORWARDED_FOR=true   # 리버스 프록시(Caddy) 뒤라면 필수 — 아
 - [ ] 벡터 스토어 관리 페이지 ↺ 버튼으로 MD 재인덱싱 성공 확인
 - [ ] (운영 환경) `/admin` 경로에 대한 네트워크 접근 제한 적용 여부 확인
 
-**청크 추가 게시판 (§6.9, 사용하는 경우)**:
+**지식 제안 게시판 (§6.9, 사용하는 경우)**:
 - [ ] 기존 DB 업그레이드라면 **적용 전 `data/memory.db` 백업** + 첫 기동 로그의 `[CURATED] curated_qa 스키마 마이그레이션 완료` 확인
 - [ ] (게스트 배포) `AUTH_GUEST_IDENTITY`가 `shared`가 아닌지 확인 — 기동 로그 `[GUEST_ID] 방문자 식별 전략: ...` 줄로 실제 적용값 확인
 - [ ] `/curated/submissions`에서 제안 1건 등록 → 관리자 헤더 배지에 대기 건수 표시(최대 60초) 확인
 - [ ] 게스트로 `GET /admin/submissions/pending-count` 호출 → 로그인 리다이렉트(또는 403) 확인
-- [ ] `/admin` 청크 추가 제안 카드에서 **임베딩 실행** → 해당 내용으로 검색 시 답변 근거에 반영되는지 확인
+- [ ] `/admin` 지식 제안 검토 카드에서 **임베딩 실행** → 해당 내용으로 검색 시 답변 근거에 반영되는지 확인
 - [ ] 거부 처리 → 작성자 화면에 사유 전문 표시 + 헤더 배지 갱신 확인
 - [ ] `data/audit/audit.log`에 `curated.submission.approve`/`.reject` 기록 확인
 
