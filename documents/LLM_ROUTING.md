@@ -48,6 +48,7 @@
 │  AgentGraph 노드 → TaskType 기준:                                    │
 │    ClassifierService        → TEXT   (품질 민감 — 큰 모델 유지)      │
 │    RetrievalService (쿼리)  → MICRO_TEXT                             │
+│    QuestionCondenser (독립화) → MICRO_TEXT  (§10.12, 확장과 여집합)   │
 │    AnswerService            → TEXT   (답변 + 충분도·근거 통합 평가)  │
 │    CriticService            → —      (LLM 호출 없음, S는 스킵·C는 창의 기준) │
 │    DirectAnswerService      → TEXT   (사용자 노출 — 큰 모델 유지)    │
@@ -66,7 +67,7 @@
 
 ```java
 public enum TaskType {
-    MICRO_TEXT,   // 키워드+맥락·요약·제목·쿼리 확장 — 추론 불필요, 소형 모델로 오프로딩(§6.21 B안)
+    MICRO_TEXT,   // 키워드+맥락·요약·제목·쿼리 확장·질의 독립화 — 추론 불필요, 소형 모델로 오프로딩(§6.21 B안)
     LIGHT_TEXT,   // 경량 텍스트 전용 — 현재 실제 사용처는 문서 변환 백그라운드(MD 서식 교정·TXT 구조화)뿐
   TEXT,         // 답변 생성·통합 평가 + 분류·meta 직답 — 고추론 모델 선택 가능
     VISION,       // 이미지 설명 — 멀티모달 지원 필수
@@ -400,6 +401,7 @@ app.indexing.keyword-batch-size=${INDEXING_KEYWORD_BATCH_SIZE:2}
 | `DirectAnswerService` | `VisionDescriptionService` |
 | `RerankerService` (opt-in) | `ImageTypeClassifier` |
 | `RetrievalService`의 MultiQuery 확장 모델(`ConcurrencyLimitingChatModel` 데코레이터 경유) — 재검색 재시도에서만 다시 호출된다(근거 이탈 재시도는 RETRIEVAL 자체를 건너뛴다) | `TextToMarkdownService` (TXT 구조화) |
+| `QuestionCondenser` (§10.12 짧은 후속 질문 독립화 — `executeGatedWithUsage`). 그래프 **바깥**(초기 상태 조립)에서 돌지만 사용자가 기다리는 턴 안이라 게이트 대상이다. MultiQuery 확장과 **여집합**이라 한 턴에 이 계층 호출이 둘이 되지 않는다 | |
 | | `ConversationSummarizerService.precompute()`(fire-and-forget) |
 | | `ThreadMetaService.generateTitleAsync()`(fire-and-forget) |
 

@@ -116,7 +116,7 @@ Flow:
 | `ingestion/ChunkOverlapBackfill.java` | `ApplicationReadyEvent` — `doc_registry.chunk_overlap` 이 `NULL` 인 기존 문서를 채운다 [↗](documents/PITFALLS.md#ingestionchunkoverlapbackfilljava) |
 | `service/CuratedQaService.java` | §10.10 — 공유 큐레이션 Q&A 축(예약 네임스페이스 `"curated"`). §10.11 이후 여기에 쓰는 경로는 **관리자 승인 둘뿐**(`createFromSubmission`/`createFromLikedTurn`) — 좋아요는 아무것도 만들지 않는다 [↗](documents/PITFALLS.md#servicecuratedqaservicejava) |
 | `service/CuratedSubmissionService.java` | 지식 제안 게시판 — 사용자가 제안(직접 작성 또는 좋아요한 답변 프리필), 저자가 수정·철회, 관리자가 임베딩 실행/거부. **검색 코퍼스로 들어가는 유일한 문**(§10.11) [↗](documents/PITFALLS.md#servicecuratedsubmissionservicejava) |
-| `repository/CuratedSubmissionRepository.java` | 청크 추가 게시판 테이블·쿼리. 상태 전이는 전부 compare-and-set [↗](documents/PITFALLS.md#repositorycuratedsubmissionrepositoryjava) |
+| `repository/CuratedSubmissionRepository.java` | 지식 제안 게시판 테이블·쿼리. 상태 전이는 전부 compare-and-set [↗](documents/PITFALLS.md#repositorycuratedsubmissionrepositoryjava) |
 | `controller/CuratedSubmissionController.java` | 지식 제안 게시판(사용자) — `/curated/submissions` 페이지·제출·수정·철회·이미지 업로드. `?fromThread=&fromTurn=` 로 좋아요한 답변을 프리필(본문은 서버가 턴에서 읽는다) [↗](documents/PITFALLS.md#controllercuratedsubmissioncontrollerjava) |
 | `service/CuratedImageStore.java` | 지식 제안 본문 이미지 — upload, marker bookkeeping, approval-time Vision description, cleanup [↗](documents/PITFALLS.md#servicecuratedimagestorejava) |
 
@@ -181,11 +181,11 @@ docker-compose up chroma
 - `app.auth.management-only=true`(no-auth 모드에서만 유효) — 채팅·열람은 게스트 개방, `/admin/**` 과 문서 쓰기 라우트는 실제 로그인 요구. 게이트는 항상 `.hasRole("ADMIN")` 이지 `.authenticated()` 가 아니다 [↗](documents/PITFALLS.md#appauthmanagement-onlytrue)
 - `GlobalModelAdvice.authEnabled()` is computed per-request (not in constructor) to avoid NPE when `AppProperties` is mocked in `@WebMvcTest`
 - 벡터 백엔드는 `app.vectorstore.type=chroma|sqlite-vec`. Chroma 전용 빈은 전부 `@ConditionalOnProperty`. **vec/FTS 테이블을 만지는 컴포넌트는 `@Qualifier("vectorJdbcTemplate")` 를 주입해야 한다**. 백엔드 전환은 전체 재인덱싱이 필요하다 [↗](documents/PITFALLS.md#벡터-스토어-백엔드와-vecfts-datasource)
-- 청크 추가: `curated_qa.source_turn_id` 가 nullable 이 되면서 `idx_curated_qa_turn` 이 **부분 UNIQUE** 인덱스가 됐다. 따라서 **`deactivate(turnId)` 는 manual 행에 조용히 no-op** 이다 — 새 비활성화 경로는 `deactivateById()` 를 써야 한다 [↗](documents/PITFALLS.md#청크-추가)
+- 지식 제안: `curated_qa.source_turn_id` 가 nullable 이 되면서 `idx_curated_qa_turn` 이 **부분 UNIQUE** 인덱스가 됐다. 따라서 **`deactivate(turnId)` 는 manual 행에 조용히 no-op** 이다 — 새 비활성화 경로는 `deactivateById()` 를 써야 한다 [↗](documents/PITFALLS.md#청크-추가)
 - **검색 코퍼스로 들어가는 문은 하나다** (§10.11): 지식 제안의 관리자 승인. 좋아요는 그 폼을 열어 줄 뿐 아무것도 만들지 않는다 — `curated_qa` 에 쓰는 경로를 새로 만들면 그 불변식이 깨진다. 저장 모양은 출처마다 다르다: 손으로 쓴 제안은 승인 시 **미리 나뉜 N개 행**, 좋아요 출신은 **turn 을 키로 하는 행 하나 → 임베딩 시점에 벡터 N개**(`UNIQUE(source_turn_id)`·대화/턴 삭제 회수·재승인이 전부 그 키를 탄다) [↗](documents/PITFALLS.md#servicecuratedqaservicejava)
 - 승인 시 `source_submission_id` 를 반드시 실어야 한다 — 제안의 상태(청크 수·등록 완료/회수됨·임베딩 실패)가 **전부 그 컬럼으로만** 세어지므로, 빠지면 오류도 로그도 없이 제안이 현실과 끊긴다(청크 0개인 '등록 완료'로 뜨고, 관리자가 실제로 내려도 계속 그렇게 뜬다) [↗](documents/PITFALLS.md#servicecuratedqaservicejava)
 - **대화(스레드) 삭제도 큐레이션을 회수해야 한다** (§6.25): `curated_qa` 행은 turn/thread id의 **복사본**으로만 연결돼 있어(FK가 아니다 — 그래서 이 테이블이 대화 삭제를 견디도록 설계됐다) 대화를 지워도 행과 벡터가 남아 검색에 계속 기여한다 [↗](documents/PITFALLS.md#대화)
-- Header badges (청크 추가 알림) poll every **60 s** from `layout/base.html`, not 3 s like the LLM indicator [↗](documents/PITFALLS.md#header-badges)
+- Header badges (지식 제안 알림) poll every **60 s** from `layout/base.html`, not 3 s like the LLM indicator [↗](documents/PITFALLS.md#header-badges)
 - 정적 자산(`/css/**`, `/js/**`)은 **내용 해시 URL**로 나간다 (`spring.web.resources.chain.strategy.content.*`) [↗](documents/PITFALLS.md#정적-자산)
 - `WebConfig`'s `requestURI` interceptor skips `redirect:` views: `RedirectView` appends simple model attributes to the target URL, so without the guard every `return "redirect:/x"` became `/x?requestURI=%2Fold%2Fpath`. Only the rendered layout reads that attribute
 - § 청크 변경 표시/차단: 청크를 삭제·수정하는 **모든** 경로가 `QuestionReuseService`에 사유와 함께 통지해야 한다 [↗](documents/PITFALLS.md#-청크-변경-표시차단)

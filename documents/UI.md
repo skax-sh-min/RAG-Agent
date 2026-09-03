@@ -30,7 +30,7 @@ src/main/resources/
 │   ├── documents.html                     # 문서 관리 페이지
 │   ├── admin.html                         # 벡터 스토어 관리 (청크 브라우저 + 청크 추가 제안 + 큐레이션 Q&A
 │   │                                      #   + 대화 목록 + 검색 진단 수치)
-│   ├── curated-submissions.html           # 청크 추가 게시판 (등록 폼 + 이미지 업로드 + "내 제안" 목록)
+│   ├── curated-submissions.html           # 지식 제안 게시판 (등록 폼 + 이미지 업로드 + "내 제안" 목록)
 │   ├── llm-usage.html                     # LLM 사용량 통계 페이지
 │   ├── settings.html                      # LLM/RAG 설정 조회·핫 수정 페이지
 │   └── fragments/
@@ -190,7 +190,7 @@ REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — �
 
 > **카드 순서**: `/admin` 하단은 **청크 추가 제안 → 큐레이션 Q&A → 대화 목록 → 검색 진단 수치** 순이다. 뒤의 둘은 조치 대기열도, 반영 확인용도 아닌 분석·운영 뷰라 아래에 두고, 서로 드릴다운하는 짝이라 붙여 놓는다(대화 행 → 그 대화의 진단, 진단 행 → 그 대화). 앞쪽은 관리자의 조치를 기다리는 대기열(검토 대기 pill이 붙는다)이고, 뒤쪽은 이미 반영된 것을 확인·회수하는 용도라 열어볼 일이 드물어 최하단에 둔다.
 
-> **청크 추가 제안 카드**(`/admin` 하단, 큐레이션 Q&A 카드 바로 위): 같은 `<details>` 지연 로딩 구조(`hx-trigger="toggle[this.open] once"` → `GET /admin/submissions`)이며, 카드 제목 옆에 검토 대기 건수 pill(`#submission-pending-pill`)이 붙는다(0건이면 `.d-none`). 기본 필터는 `pending` — 상태 드롭다운으로 등록 완료/반려/철회됨/전체 전환. 행의 아이콘을 누르면 검토 오프캔버스(`#submissionReviewOffcanvas`)가 열려 제목·태그·본문을 **전문 그대로** 보여주고 수정한 뒤 **임베딩 실행**/**거부**할 수 있다 — 승인된 본문이 곧 답변 프롬프트의 검색 컨텍스트가 되므로 본문을 잘라 보여주지 않고, 일괄·자동 승인 버튼도 없다([OPERATOR_MANUAL.md §7.6](OPERATOR_MANUAL.md#76-청크-추가-제안-검토-69) 참고). 본문 영역은 **원문/미리보기 탭**으로 전환되며 미리보기는 `marked` → `DOMPurify.sanitize()`를 거친다(사용자가 작성한 마크다운을 관리자 화면에서 렌더하므로 sanitize가 필수). 오프캔버스 상단에는 **승인 시 몇 개 청크로 나뉘는지**(승인 후에는 실제 생성 개수)가 표시된다 — 본문 길이 제한이 없어진 대신 `ChunkSplitter`가 분할하기 때문. 페이지 레벨 JS(`loadSubmissions()`/`openSubmissionReview()`/`approveSubmission()`/`rejectSubmission()`)는 큐레이션 패널과 같은 이유로 `admin.html`에 둔다.
+> **청크 추가 제안 카드**(`/admin` 하단, 큐레이션 Q&A 카드 바로 위) — ⚠️ **화면 라벨이 두 이름으로 갈려 있다**: 이 관리자 카드는 `admin.html`이 "청크 추가 제안"으로, 같은 기능의 사용자 화면은 `nav.submissions`/`submission.title`이 "지식 제안"으로 부른다. 문서는 기능 이름을 **지식 제안**으로 통일하되 이 카드만 화면 그대로 적는다: 같은 `<details>` 지연 로딩 구조(`hx-trigger="toggle[this.open] once"` → `GET /admin/submissions`)이며, 카드 제목 옆에 검토 대기 건수 pill(`#submission-pending-pill`)이 붙는다(0건이면 `.d-none`). 기본 필터는 `pending` — 상태 드롭다운으로 등록 완료/반려/철회됨/전체 전환. 행의 아이콘을 누르면 검토 오프캔버스(`#submissionReviewOffcanvas`)가 열려 제목·태그·본문을 **전문 그대로** 보여주고 수정한 뒤 **임베딩 실행**/**거부**할 수 있다 — 승인된 본문이 곧 답변 프롬프트의 검색 컨텍스트가 되므로 본문을 잘라 보여주지 않고, 일괄·자동 승인 버튼도 없다([OPERATOR_MANUAL.md §7.6](OPERATOR_MANUAL.md#76-청크-추가-제안-검토-69) 참고). 본문 영역은 **원문/미리보기 탭**으로 전환되며 미리보기는 `marked` → `DOMPurify.sanitize()`를 거친다(사용자가 작성한 마크다운을 관리자 화면에서 렌더하므로 sanitize가 필수). 오프캔버스 상단에는 **승인 시 몇 개 청크로 나뉘는지**(승인 후에는 실제 생성 개수)가 표시된다 — 본문 길이 제한이 없어진 대신 `ChunkSplitter`가 분할하기 때문. 페이지 레벨 JS(`loadSubmissions()`/`openSubmissionReview()`/`approveSubmission()`/`rejectSubmission()`)는 큐레이션 패널과 같은 이유로 `admin.html`에 둔다.
 >
 > **`pending-count`가 `/api/v1/**`이 아닌 이유**: 관리 전용 인증 모드(§6.17)에서 `/api/v1/**`은 CSRF 예외 + 게스트 개방이라 거기 두면 검토 대기 건수가 누구에게나 노출된다. `/admin/**` 아래 두면 `ROLE_ADMIN` 게이트를 그대로 상속한다.
 >
@@ -349,7 +349,7 @@ REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — �
 .distinctTagsExcludingCommon()` — doc_id별 태그 집합의 교집합을 계산해 제외; 태그가 하나도 없는 문서가
 스코프에 있으면 교집합이 비어 아무것도 제외되지 않는다). 문서 업로드/편집 화면(`documents.html`)의 태그
 제안 입력은 이 필터를 타지 않는 `excludeCommon` 없는 기본 호출을 그대로 쓴다 — 태그를 붙이는 쪽은 흔한
-태그일수록 오히려 더 봐야 하기 때문이다. 청크 추가 게시판(§3.5-bis)은 여기에 더해
+태그일수록 오히려 더 봐야 하기 때문이다. 지식 제안 게시판(§3.5-bis)은 여기에 더해
 `includeCurated=true`를 붙여 **문서 태그 ∪ 큐레이션 태그**를 받는다(큐레이션 항목은 `chunk_fts`에
 색인되지 않아 기본 호출로는 잡히지 않는다).
 
@@ -554,7 +554,7 @@ done 이벤트    (답변 완료 후)   → attribution {chunkId: 0.0~1.0} → �
 - **`S`(간단히) 모드 답변은 좋아요 버튼이 비활성으로 렌더된다**(`ResponseMode.S.allowsSubmission() = false`) — 사유가 툴팁에 붙는다. 이전에 눌린 `LIKE` 기록이 남아 있어도 강조하지 않는다: 그 좋아요는 아무것도 만든 적이 없으므로 기여 중인 것처럼 칠하는 것이 여기서 고치려는 거짓말이다. 싫어요는 모드와 무관하게 동작한다.
 - 자기 제안의 수정·철회는 `/curated/submissions`에서 한다 — 목록의 각 항목에 수정·철회 버튼이 있고, 수정은 `/admin` 검토 오프캔버스와 같은 컴포넌트를 쓴다.
 - 관리자용 전체 큐레이션 Q&A 관리(모든 사용자 대상)는 `/admin` 페이지에 별도로 있다 — [§3.4](#34-벡터-스토어-관리-admincontroller) 및 [OPERATOR_MANUAL.md §7.5](OPERATOR_MANUAL.md#75-큐레이션-qa-관리-1010) 참고.
-- 동작 원리(디바운스, 재임베딩, 문서 재인덱싱/대화 삭제와의 관계)는 [OPERATOR_MANUAL.md §6.7](OPERATOR_MANUAL.md#67-큐레이션-qa-좋아요-기반-지식-승격-1010) 참고.
+- 동작 원리(디바운스, 재임베딩, 문서 재인덱싱/대화 삭제와의 관계)는 [OPERATOR_MANUAL.md §6.7](OPERATOR_MANUAL.md#67-큐레이션-qa-공유-지식-축-1010--1011) 참고.
 
 **큐레이션 태그 스코프**: 좋아요로 연 제안 폼에는 **그 질문이 검색된 태그 스코프**(입력 바의 태그 칩 선택값)가 미리 채워지고, 승인 시 그 값이 `curated_qa.tags`로 들어간다 — 그 태그로 좁혀 얻은 답변이므로 이후 같은 스코프 검색에서 살아남아야 하기 때문(저자와 관리자가 등록 전에 고칠 수 있다). `RetrievalService.filterByTags()`가 벡터·키워드·큐레이션이 합쳐진 후보 풀 **전체**에 걸리므로, 태그 메타데이터가 없던 이전에는 사용자가 태그 칩을 하나라도 켜는 순간 좋아요한 답변이 전부 결과에서 빠졌다. 태그 없이(= `All` 칩) 물은 질문은 스코프가 비어 승계되고, **스코프를 알 수 없는 큐레이션 항목은 어느 스코프에도 속하지 않는 대신 모든 스코프를 통과**한다(문서 청크는 엄격 AND 그대로 — 태그 없는 문서는 여전히 탈락). 사용자 제안(§3.5-bis)의 태그도 같은 컬럼·같은 판정을 쓴다.
 
