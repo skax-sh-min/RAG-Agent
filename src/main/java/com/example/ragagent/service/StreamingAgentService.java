@@ -67,6 +67,8 @@ public class StreamingAgentService {
     private final AppProperties props;
     private final ChatImageAnalysisSkipRegistry imageSkipRegistry;
     private final QuestionReuseService questionReuseService;
+    /** §10.12 — 짧은 후속 질문의 독립화. null 이면 이 단계 없이 원문으로 검색한다(테스트 편의). */
+    private final QuestionCondenser questionCondenser;
 
     /**
      * Clock backing the idle watchdog (below). Production passes {@code System::nanoTime}; tests
@@ -90,13 +92,15 @@ public class StreamingAgentService {
                                  ConversationSummarizerService summarizerService,
                                  AppProperties props,
                                  ChatImageAnalysisSkipRegistry imageSkipRegistry,
-                                 QuestionReuseService questionReuseService) {
+                                 QuestionReuseService questionReuseService,
+                                 QuestionCondenser questionCondenser) {
         this(agentGraph, memoryService, classifierService, threadMetaService, objectMapper,
                 messageSource, summarizerService, props, imageSkipRegistry, questionReuseService,
-                System::nanoTime);
+                questionCondenser, System::nanoTime);
     }
 
-    // Backward-compatible constructor for tests that don't care about question reuse.
+    // Backward-compatible constructor for tests that care about neither question reuse nor
+    // §10.12 condensing (both degrade to "not wired" — the turn simply searches the raw question).
     public StreamingAgentService(AgentGraph agentGraph,
                                  MemoryService memoryService,
                                  ClassifierService classifierService,
@@ -108,7 +112,7 @@ public class StreamingAgentService {
                                  ChatImageAnalysisSkipRegistry imageSkipRegistry,
                                  LongSupplier nanoTimeSource) {
         this(agentGraph, memoryService, classifierService, threadMetaService, objectMapper,
-                messageSource, summarizerService, props, imageSkipRegistry, null, nanoTimeSource);
+                messageSource, summarizerService, props, imageSkipRegistry, null, null, nanoTimeSource);
     }
 
     /** Test seam — see {@link #nanoTimeSource}. */
@@ -122,6 +126,7 @@ public class StreamingAgentService {
                           AppProperties props,
                           ChatImageAnalysisSkipRegistry imageSkipRegistry,
                           QuestionReuseService questionReuseService,
+                          QuestionCondenser questionCondenser,
                           LongSupplier nanoTimeSource) {
         this.agentGraph = agentGraph;
         this.memoryService = memoryService;
@@ -133,6 +138,7 @@ public class StreamingAgentService {
         this.props = props;
         this.imageSkipRegistry = imageSkipRegistry;
         this.questionReuseService = questionReuseService;
+        this.questionCondenser = questionCondenser;
         this.nanoTimeSource = nanoTimeSource;
     }
 
@@ -188,17 +194,30 @@ public class StreamingAgentService {
                 initial = AgentState.of(form.question(), form.version(), form.threadId(),
                         userId, history, rm, true, locale);
             } else {
-                // 일반 RAG 모드: history 로드 + 분류 병렬 실행
+                // 일반 RAG 모드: history 로드 + (독립화 →) 분류 병렬 실행
                 try (var exec = Executors.newVirtualThreadPerTaskExecutor()) {
                     CompletableFuture<String> historyF = CompletableFuture.supplyAsync(
                             () -> resolveHistory(userId, form.threadId(), false,
                                     form.responseModeOrDefault(), rm, form.question()), exec);
-                    CompletableFuture<String> typeF = CompletableFuture.supplyAsync(
-                            () -> classifierService.classifyOnly(form.question(), locale), exec);
+                    // §10.12 — 블로킹 경로(AgentService.chat)와 같은 규칙이다. 게이트가 닫혀 있으면
+                    // 이미 완료된 future 라 분류가 즉시 출발하고, 짧은 후속 질문에서만 분류가
+                    // 독립화를 기다린다.
+                    CompletableFuture<QuestionCondenser.Condensed> condensedF =
+                            condenseAsync(userId, form.threadId(), form.question(), locale, exec);
+                    CompletableFuture<String> typeF = condensedF.thenApplyAsync(
+                            c -> classifierService.classifyOnly(
+                                    c == null ? form.question() : c.searchQuestion(), locale), exec);
 
-                    initial = AgentState.of(form.question(), form.version(), form.threadId(),
-                                    userId, historyF.join(), rm, false, locale)
-                            .toBuilder().questionType(typeF.join()).build();
+                    QuestionCondenser.Condensed condensed = condensedF.join();
+                    AgentState.Builder builder =
+                            AgentState.of(form.question(), form.version(), form.threadId(),
+                                            userId, historyF.join(), rm, false, locale)
+                                    .toBuilder().questionType(typeF.join());
+                    if (condensed != null) {
+                        builder.searchQuestion(condensed.searchQuestion())
+                               .accumulateTokens(condensed.inputTokens(), condensed.outputTokens());
+                    }
+                    initial = builder.build();
                 }
             }
             // carry the selected search-scope tags + answer-length mode into the graph state.
@@ -224,7 +243,8 @@ public class StreamingAgentService {
                 memoryService.saveVerification(turnId, new VerificationSnapshot(
                         result.grounded(), result.responseMode().generative(),
                         result.evalReason(), result.envNote(), result.inventedSymbols(),
-                        result.budgetNote()));
+                        result.budgetNote(),
+                        result.wasCondensed() ? result.searchQuestion() : null));
                 if (questionReuseService != null) {
                     questionReuseService.recordTurnSources(turnId, userId, form.threadId(),
                             result.retrievedDocs(), result.sources());
@@ -453,6 +473,10 @@ public class StreamingAgentService {
         m.put("envNote",           result.envNote());
         // 축소 안내도 통과한 답변에 실린다(envNote 와 같은 규칙) — 판정이 아니라 안내다.
         m.put("budgetNote",        result.budgetNote());
+        // §10.12 — 검색에 실제로 쓰인 질의가 원문과 다르면 알린다. 잘못된 재작성은 화면에
+        // "엉뚱한 답변"으로만 보이므로, 이 값이 없으면 사용자가 원인을 짚을 수 없다. 진단값이라
+        // 클라이언트가 ui.retrieval-metrics-enabled 가 켜진 경우에만 그린다.
+        if (result.wasCondensed()) m.put("condensedQuestion", result.searchQuestion());
         // 통과 배지를 '검증됨'(초록)이 아니라 '생성'(파랑)으로 바꿔야 하는가 — 서버가 성질로
         // 계산해 내려준다(ResponseMode.generative()). 클라이언트가 모드 문자열을 비교하게 두면
         // 모드를 하나 더 붙일 때 JS 쪽 분기를 사람이 기억해서 찾아야 한다.
@@ -490,6 +514,20 @@ public class StreamingAgentService {
         m.put("refreshThreadList", true);
         m.put("turnId",            turnId);
         return m;
+    }
+
+    /**
+     * §10.12 — 게이트가 닫혀 있으면 <b>LLM 을 부르지 않고</b> 이미 완료된 future 를 돌려준다
+     * ({@code AgentService.condenseAsync} 와 같은 규칙). 값이 {@code null} 이면 재작성 없음이다.
+     */
+    private CompletableFuture<QuestionCondenser.Condensed> condenseAsync(
+            String userId, String threadId, String question, Locale locale,
+            java.util.concurrent.Executor exec) {
+        if (questionCondenser == null || !questionCondenser.gateOpen(question)) {
+            return CompletableFuture.completedFuture(null);
+        }
+        return CompletableFuture.supplyAsync(
+                () -> questionCondenser.condense(userId, threadId, question, locale).orElse(null), exec);
     }
 
     /**

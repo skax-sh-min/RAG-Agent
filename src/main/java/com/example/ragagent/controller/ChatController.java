@@ -252,7 +252,7 @@ public class ChatController {
             // 두 렌더러가 갈라지고, 갈라진 것은 화면에서 보이지 않는다.
             model.addAttribute("verification", new VerificationSnapshot(
                     resp.grounded(), resp.generative(), resp.evalReason(), resp.envNote(),
-                    resp.inventedSymbols(), resp.budgetNote()));
+                    resp.inventedSymbols(), resp.budgetNote(), resp.condensedQuestion()));
             model.addAttribute("usedProvider", resp.usedProvider());
             // 좋아요가 이 모드에서 실제로 동작하는가 — 서버가 성질로 계산한다
             // (SSE done 의 "proposable", 대화 기록의 Turn.proposable() 과 같은 값).

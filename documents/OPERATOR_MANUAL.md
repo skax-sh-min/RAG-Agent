@@ -1356,7 +1356,7 @@ app.llm.providers[1].stream=false
 
 | type | 처리 가능 태스크 | 권장 모델 유형 |
 |------|----------------|--------------|
-| `MICRO_TEXT` | 키워드+맥락·요약·제목·쿼리 확장만 (추론 불필요) | 500MB급 소형 모델 (§6.21) |
+| `MICRO_TEXT` | 키워드+맥락·요약·제목·쿼리 확장·질의 독립화만 (추론 불필요) | 500MB급 소형 모델 (§6.21) |
 | `LIGHT_TEXT` | MD 서식 교정·TXT 구조화 + `MICRO_TEXT` 잡무 | 텍스트 전용 소형~중형 모델 |
 | `LIGHT_BOTH` | `LIGHT_TEXT` 태스크 + Vision | 범용 로컬 LLM |
 | `TEXT` | 답변 생성·Rerank·분류·meta 직답 **+ `LIGHT_TEXT`·`MICRO_TEXT` 잡무 전부** | 텍스트 전용 대형 모델 |
@@ -1380,6 +1380,7 @@ app.llm.providers[1].stream=false
 |------|----------|------|
 | ClassifierService | `TEXT` | 질문 유형 분류 (품질 민감 — 답변과 같은 타입으로 묶어 큰 모델 유지) |
 | RetrievalService | `MICRO_TEXT` | 쿼리 생성 (MultiQueryExpander) — §6.21 작업2로 MICRO_TEXT 전환 |
+| QuestionCondenser | `MICRO_TEXT` | 짧은 후속 질문의 독립화 (§10.12) — 확장이 생략되는 길이 구간에서만 돌아 한 턴의 질의 전처리 호출은 여전히 최대 1회 |
 | AnswerService | `TEXT` | 답변 생성 + **충분도·근거 통합 평가**(별도 1콜) |
 | CriticService | — | **LLM 호출 없음** — AnswerService의 통합 평가가 낸 `grounded`를 읽어 재시도 여부만 결정 (`responseMode=S`이면 이 단계 스킵) |
 | DirectAnswerService | `TEXT` | meta 질문 직접 응답 (사용자 노출 — 답변과 같은 타입으로 묶어 큰 모델 유지) |
@@ -1984,9 +1985,10 @@ env-var/application.properties value ({설정값}); the override wins. Reset it 
 | 후보 배수(리랭크) | `app.search-candidate-multiplier` | 1 ~ 20 |
 | 태그 후보 배수 | `app.search-tag-candidate-multiplier` | 1 ~ 20 |
 | 멀티쿼리 최소 길이 | `app.search-multiquery-min-length` | 0 ~ 1000 |
+| ↳ **이 값은 경계다** — 길이가 이 값 **이상**이면 멀티쿼리 확장, **미만**이면 §10.12 질의 독립화(짧은 후속 질문 재작성)가 돈다. 둘은 여집합이라 한 턴의 질의 전처리 LLM 호출은 어느 쪽이든 최대 1회다. 0 으로 두면 확장만 돌고 독립화는 영영 돌지 않는다 | | |
 | 재시도 시 후보 확대 | `app.search-retry-escalate` | true/false |
 | topK (검색 상위 K) | `app.search-top-k` | 1 ~ 50 |
-| 멀티쿼리 확장 | `app.search-multiquery-enabled` | true/false |
+| 멀티쿼리 확장 (+ §10.12 질의 독립화) | `app.search-multiquery-enabled` | true/false |
 | 하이브리드 검색 | `app.search-hybrid-enabled` | true/false |
 | 큐레이션 Q&A 검색 반영 (§10.10) | `app.search-curated-qa-enabled` | true/false |
 | 큐레이션 Q&A 가중치 (§10.10) | `app.search-curated-qa-weight` | 0.0 ~ 10.0 |

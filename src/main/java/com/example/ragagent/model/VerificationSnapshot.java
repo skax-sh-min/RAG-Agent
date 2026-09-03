@@ -39,6 +39,12 @@ import java.util.List;
  *                        때 출처 10개가 아무 단서 없이 나열되고, 사용자는 모델이 그것을 전부 읽었다고
  *                        믿게 된다(축소는 프롬프트에만 걸리고 출처 목록은 줄지 않는다). 배지 규칙이
  *                        렌더러 셋에 흩어지지 않도록 이 레코드로 모으는 것과 같은 논리다
+ * @param condensedQuestion §10.12 — 짧은 후속 질문을 검색용으로 다시 쓴 문장. 재작성이 없었으면
+ *                        {@code null}. {@code budgetNote} 와 <b>정확히 같은 이유로</b> 여기 있다:
+ *                        검증 결과가 아니지만 새로고침 후에도 남아야 한다. 잘못된 재작성은 사용자에게
+ *                        "나쁜 검색어"가 아니라 <b>"엉뚱한 답변"</b> 으로만 보여, 이 줄이 없으면 원인을
+ *                        짚을 방법이 없다 — 질문 버블에는 원문이 그대로 떠 있기 때문이다. 화면에는
+ *                        {@code ui.retrieval-metrics-enabled} 가 켜진 경우에만 나온다(진단값)
  */
 public record VerificationSnapshot(
         Boolean grounded,
@@ -46,16 +52,29 @@ public record VerificationSnapshot(
         String evalReason,
         String envNote,
         List<String> inventedSymbols,
-        String budgetNote
+        String budgetNote,
+        String condensedQuestion
 ) {
     public VerificationSnapshot {
         inventedSymbols = inventedSymbols == null ? List.of() : List.copyOf(inventedSymbols);
     }
 
+    /** §10.12 이전 모양 — 재작성이 없는 호출부(테스트·과거 기록 재구성)가 그대로 쓴다
+     *  ({@code MemoryRepository.MetricsRow} 와 같은 편의 생성자 규약). */
+    public VerificationSnapshot(Boolean grounded, boolean generative, String evalReason,
+                                String envNote, List<String> inventedSymbols, String budgetNote) {
+        this(grounded, generative, evalReason, envNote, inventedSymbols, budgetNote, null);
+    }
+
     /** 저장할 값이 하나도 없는 턴 — 검증을 돌리지 않았고 안내도 없다. 그런 턴은 아예 저장하지 않는다. */
     public boolean isEmpty() {
         return grounded == null && evalReason == null && envNote == null
-                && inventedSymbols.isEmpty() && budgetNote == null;
+                && inventedSymbols.isEmpty() && budgetNote == null && condensedQuestion == null;
+    }
+
+    /** 검색어가 실제로 원문과 달랐는가 — 렌더러 셋이 이 값 하나로 줄을 띄운다. */
+    public boolean hasCondensedQuestion() {
+        return condensedQuestion != null && !condensedQuestion.isBlank();
     }
 
     /**

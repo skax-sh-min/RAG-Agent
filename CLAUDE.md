@@ -101,6 +101,7 @@ Flow:
 | `service/ChatImageAnalysisSkipRegistry.java` | `Map<threadId, AtomicBoolean>` — the "건너뛰기" (skip) signal for the chat SSE path, distinct from the full-turn abort (`ChatController.streamChat()`'s `SseEmitter.onError`/`onTimeout`/`onCompletion` → `worker.interrupt()`). Written by `POST /ui/chat/stream/skip-images`, polled by `RetrievalService` |
 | `service/ClassifierService.java` | `classifyOnly(String)` (no token accumulation) + `execute(AgentState)` |
 | `service/RetrievalService.java` | Batch MultiQuery search → RRF fusion [↗](documents/PITFALLS.md#serviceretrievalservicejava) |
+| `service/QuestionCondenser.java` | §10.12 — 맥락에 기댄 **짧은 후속 질문**을 자립적인 검색어로 다시 쓴다(condense). 게이트는 `shouldExpand()` 의 여집합이라 한 턴에 질의 전처리 LLM 호출은 여전히 최대 하나. 재료는 이전 **질문**들뿐이고 답변은 넣지 않는다 [↗](documents/PITFALLS.md#servicequestioncondenserjava) |
 | `service/RetrievalEviction.java` | § 재시도 개선 — 검증 실패 재시도에서 **어떤 청크를 밀어낼지** 정하는 순수 클래스(`AnswerAttribution`/`ChunkReassembler` 선례) [↗](documents/PITFALLS.md#serviceretrievalevictionjava) |
 | `service/RerankerService.java` | LLM reranking (opt-in, `@ConditionalOnProperty app.search-rerank-enabled`); one LLM call reorders the candidate pool by relevance then cuts to topK; `parseRanking()` parses a JSON index array with range/dup filtering; falls back to original RRF order on parse failure |
 | `service/RagService.java` | 3-phase `syncDirectory()`: detect → parallel index → delete; `enrichParallel()` with Semaphore |
@@ -171,6 +172,7 @@ docker-compose up chroma
 - Rate limiting: `RateLimitFilter` uses Bucket4j + Caffeine per-user token-bucket; `app.rate-limit.enabled` (default `true`)
 - Audit logging: `AuditLogger` writes to Logback AUDIT_FILE appender; `app.audit.enabled` (default `true`)
 - 검색 튜닝 프로퍼티는 전부 `app.search-*` 이고 `props.searchXxxSafe()` 로만 읽는다. `rerank-enabled` 만 핫이 아니다(구조적 빈) [↗](documents/PITFALLS.md#검색-튜닝-프로퍼티는-전부-appsearch--이고-propssearchxxxsafe)
+- §10.12 독립화된 질문은 **검색 축 셋 + 리랭커 + 분류기**가 쓰고(`AgentState.effectiveSearchQuestion()`), 답변 프롬프트의 `[현재 질문]` 은 **언제나 원문**(`state.question()`)이다 — 재작성이 빗나가도 검색만 틀리게 하는 격리다. 확장 게이트는 **원문 길이**로 재야 두 게이트가 여집합으로 남는다 [↗](documents/PITFALLS.md#servicequestioncondenserjava)
 - `RerankerService` is a `@ConditionalOnProperty` bean injected as `Optional<RerankerService>`; when `rerank-enabled=false` no bean exists and `RetrievalService` still works — never assume the Optional is present
 - `PromptInjectionGuard.wrap()` delimits the raw user question at every prompt-construction site (`AnswerService.buildAnswerPrompt()`/`evaluate()`, `ClassifierService`, `D [↗](documents/PITFALLS.md#promptinjectionguardwrap)
 - `app.auth.enabled=false` → CSRF disabled, `SessionCreationPolicy.STATELESS`, `NoAuthAutoLoginFilter` active [↗](documents/PITFALLS.md#appauthenabledfalse--csrf-disabled-sessioncreat)

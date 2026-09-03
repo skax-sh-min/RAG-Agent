@@ -202,6 +202,14 @@
                                     <i class="bi bi-scissors me-1"></i>
                                     <span th:text="${v.budgetNote}"></span>
                                 </div>
+                                <!-- §10.12 — 저장해 둔 검색어 재작성. 질문 버블에는 원문이 떠 있어
+                                     이 줄이 없으면 새로고침 후 원인을 짚을 방법이 없다. 진단값이라
+                                     기본 숨김(아래 RETRIEVAL_METRICS_ENABLED 가 벗긴다). -->
+                                <div th:if="${v != null and v.hasCondensedQuestion()}"
+                                     class="condensed-question small text-muted mt-2 d-none">
+                                    <i class="bi bi-search me-1"></i>검색에 사용된 질문:
+                                    <span th:text="${v.condensedQuestion}"></span>
+                                </div>
                             </th:block>
 
                                <div th:if="${turnImageRefsByTurnId != null and turnImageRefsByTurnId[turn.id] != null and !#lists.isEmpty(turnImageRefsByTurnId[turn.id])}"
@@ -538,7 +546,7 @@
     /* 서버가 렌더한 이전 turn들의 진단 수치 노출 — 이 페이지는 message-assistant 프래그먼트가
        아니라 자체 마크업으로 이전 turn을 그리므로(§복원 경로), 해제 처리도 여기서 한다. */
     if (RETRIEVAL_METRICS_ENABLED) {
-        document.querySelectorAll('.source-metrics.d-none').forEach(function (el) {
+        document.querySelectorAll('.source-metrics.d-none, .condensed-question.d-none').forEach(function (el) {
             el.classList.remove('d-none');
         });
     }

@@ -117,6 +117,10 @@ public class RetrievalService {
     public AgentState execute(AgentState state, GraphListener listener) {
         // normalized search-scope tags (empty → version-only behavior, unchanged).
         List<String> selectedTags = com.example.ragagent.model.TagUtils.parseTagList(state.selectedTags());
+        // §10.12 — 검색 축 셋(벡터·BM25/FTS·큐레이션)과 리랭커가 보는 질의. 짧은 후속 질문이
+        // 독립화됐으면 그 결과, 아니면 원문이다. 답변 프롬프트는 이 값을 쓰지 않는다
+        // (AgentState.effectiveSearchQuestion() 참고) — 재작성이 빗나가도 검색만 틀린다.
+        String searchQuestion = state.effectiveSearchQuestion();
         // Read hot-editable tuning fresh each call so /settings overrides apply live.
         boolean retryEscalate = props.searchRetryEscalateSafe();
         int candidateMultiplier = props.searchCandidateMultiplierSafe();
@@ -193,7 +197,7 @@ public class RetrievalService {
             try (var exec = Executors.newVirtualThreadPerTaskExecutor()) {
                 CompletableFuture<List<Document>> keywordF = CompletableFuture.supplyAsync(
                         () -> hybridEnabled
-                                ? ragService.keywordSearch(state.version(), state.question(), fetchK)
+                                ? ragService.keywordSearch(state.version(), searchQuestion, fetchK)
                                 : List.<Document>of(),
                         exec);
                 // §10.10 — curated-Q&A axis: single search against the original question (not
@@ -201,19 +205,23 @@ public class RetrievalService {
                 // the point), scoped to the reserved "curated" version namespace.
                 CompletableFuture<List<Document>> curatedF = CompletableFuture.supplyAsync(
                         () -> curatedQaEnabled
-                                ? ragService.search(state.userId(), state.question(), CuratedQaService.CURATED_VERSION, fetchK)
+                                ? ragService.search(state.userId(), searchQuestion, CuratedQaService.CURATED_VERSION, fetchK)
                                 : List.<Document>of(),
                         exec);
+                // 게이트는 **원문 길이**로 판단한다 — 독립화된 질의는 원문보다 길어지는 것이 정상이라
+                // 재작성 결과로 재면 확장까지 함께 돌아 한 턴에 질의 전처리 LLM 호출이 둘이 된다.
+                // 원문으로 재면 이 분기와 QuestionCondenser.gateOpen() 이 정확한 여집합이라 둘 중
+                // 하나만 돈다(§10.12 — "이미 건너뛰던 호출 자리를 쓴다").
                 if (shouldExpand(state.question())) {
                     CompletableFuture<List<Document>> originalF = CompletableFuture.supplyAsync(
-                            () -> ragService.search(state.userId(), state.question(), state.version(), fetchK),
+                            () -> ragService.search(state.userId(), searchQuestion, state.version(), fetchK),
                             exec);
                     // Wrap for the LLM-facing expansion prompt only (delimiter isolation, same as every
                     // other prompt-construction site) — the vector search axes above still embed the
-                    // raw state.question() untouched. includeOriginal(true) echoes back exactly the
+                    // raw searchQuestion untouched. includeOriginal(true) echoes back exactly the
                     // wrapped string as one "variant", so filter against that same wrapped string
                     // (not the raw question) to strip it before the variant-only batch search below.
-                    String expansionInput = PromptInjectionGuard.wrap(state.question());
+                    String expansionInput = PromptInjectionGuard.wrap(searchQuestion);
                     List<String> variantTexts = new ArrayList<>(
                             multiQueryExpander.expand(new Query(expansionInput)).stream()
                                     .map(Query::text)
@@ -230,7 +238,7 @@ public class RetrievalService {
                         ranked.addAll(ragService.searchBatch(state.userId(), variantTexts, state.version(), candidateK));
                     }
                 } else {
-                    ranked = ragService.searchBatch(state.userId(), List.of(state.question()), state.version(), candidateK);
+                    ranked = ragService.searchBatch(state.userId(), List.of(searchQuestion), state.version(), candidateK);
                 }
                 keywordHits = keywordF.join();
                 curatedHits = curatedF.join();
@@ -251,7 +259,7 @@ public class RetrievalService {
             candidates = RetrievalEviction.withoutExcluded(candidates, Set.copyOf(state.excludedDocIds()));
             // Rerank by LLM relevance, then cut to effectiveTopK (= topK on the first attempt).
             unique = (rerankEnabled && reranker.isPresent())
-                    ? reranker.get().rerank(state.question(), candidates, effectiveTopK)
+                    ? reranker.get().rerank(searchQuestion, candidates, effectiveTopK)
                     : candidates.subList(0, Math.min(effectiveTopK, candidates.size()));
         } catch (Exception e) {
             log.warn("Multi-query expansion failed, falling back to original question: {}", e.getMessage());
@@ -260,7 +268,7 @@ public class RetrievalService {
             // attempt happens to lose the expansion LLM call.
             int fallbackK = selectedTags.isEmpty() ? effectiveTopK
                     : Math.max(effectiveTopK, defaultTopK * tagCandidateMultiplier);
-            List<Document> fallback = ragService.search(state.userId(), state.question(), state.version(), fallbackK);
+            List<Document> fallback = ragService.search(state.userId(), searchQuestion, state.version(), fallbackK);
             fallback = filterByTags(fallback, selectedTags, effectiveTopK);
             unique = fallback.subList(0, Math.min(effectiveTopK, fallback.size()));
         }

@@ -481,7 +481,7 @@ CREATE TABLE IF NOT EXISTS llm_usage (
 
 소형 모델(`local-fast`, priority 0)을 등록하지 않은 배포는 단일 LOCAL(`local`, `type=BOTH`, priority 1)이 답변부터 잡무까지 전부 처리한다. 추론이 필요 없는 고빈도 잡무를 별도 소형 모델로 내리면 (1) 큰 모델이 답변 생성에 전념하고 (2) 두 모델이 **독립 Semaphore**(§6)를 써 슬롯 경합이 사라진다 → 대화 응답 지연 감소.
 
-**`TaskType.MICRO_TEXT`(§6.21 B안)**: 추론 불필요 잡무 전용 태스크 타입. `KeywordExtractor`·`ConversationSummarizerService`·`ThreadMetaService`·`RetrievalService`(MultiQuery 쿼리 확장, §6.21 작업2) 4개 백그라운드 호출부가 이 타입으로 라우팅된다.  
+**`TaskType.MICRO_TEXT`(§6.21 B안)**: 추론 불필요 잡무 전용 태스크 타입. `KeywordExtractor`·`ConversationSummarizerService`·`ThreadMetaService`·`RetrievalService`(MultiQuery 쿼리 확장, §6.21 작업2)·`QuestionCondenser`(짧은 후속 질문 독립화, §10.12) 5개 호출부가 이 타입으로 라우팅된다. **`QuestionCondenser` 만 대화형 경로다** — 나머지 넷과 달리 사용자가 기다리는 턴 안에서 돌고(그래서 `executeGated`), MultiQuery 확장과 **여집합**이라 한 턴에 이 계층 호출이 둘이 되지는 않는다.  
 **분류(`ClassifierService`)·meta 직답(`DirectAnswerService`)은 품질 민감이라 답변과 같은 `TEXT`로 두어 큰 모델이 처리**한다 — 이름만 보면 `LIGHT_TEXT`가 어울리지만, 실제 코드는 `TaskType.TEXT`를 쓴다. 그래야 `type=TEXT`/`BOTH`(답변용 큰 모델)만 후보가 되어, 소형 모델이 어떤 타입으로 등록되든 이 두 호출로 새어 들어갈 수 없다.  
 문서 변환 백그라운드(`MarkdownCorrectionService` MD 서식 교정·`TextToMarkdownService` TXT 구조화)는 `LIGHT_TEXT`를 쓴다 — 현재 이 타입의 유일한 사용처다.
 
@@ -489,7 +489,7 @@ CREATE TABLE IF NOT EXISTS llm_usage (
 
 | 태스크 (TaskType) | 담당 | 이유 |
 |---|---|---|
-| 키워드+맥락·요약·제목·MultiQuery 쿼리확장 (`MICRO_TEXT`) | **소형** | MICRO_TEXT eligible=[소형(p0), 큰(p1)] → 최저 priority=소형 |
+| 키워드+맥락·요약·제목·MultiQuery 쿼리확장·질의 독립화 (`MICRO_TEXT`) | **소형** | MICRO_TEXT eligible=[소형(p0), 큰(p1)] → 최저 priority=소형 |
 | 분류·meta 직답 (`TEXT`) | **큰 모델** | 답변과 같은 타입이라 `type=TEXT`/`BOTH`만 eligible |
 | 답변·Critic·Rerank (`TEXT`) | **큰 모델** | 소형은 `supports(TEXT)=false` |
 | MD 서식 교정·TXT 구조화 (`LIGHT_TEXT`) | **큰 모델** | 소형(MICRO_TEXT)은 `supports(LIGHT_TEXT)=false` → 큰 모델(`TEXT`/`BOTH`)만 eligible |

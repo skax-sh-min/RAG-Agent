@@ -104,7 +104,8 @@ class ChatControllerHtmxTest {
                 120, 80, 2, 0.42,
                 null, "gemini-flash", 1L,
                 true, null, null, null,    // 검증 통과 → 사유·환경 안내·축소 안내 모두 없음
-                false, java.util.List.of()); // 생성 모드 아님 → 발명된 심볼도 없음
+                false, java.util.List.of(), // 생성 모드 아님 → 발명된 심볼도 없음
+                null);                      // 짧은 후속 질문이 아니었다 → 검색어 재작성 없음
     }
 
     @Test
@@ -414,7 +415,7 @@ class ChatControllerHtmxTest {
                 120, 80, 2, 0.42,
                 null, "local", 1L,
                 true, null, "포트는 환경마다 다릅니다", null,
-                true, List.of("parseDateEx"));
+                true, List.of("parseDateEx"), null);
     }
 
     @Test
@@ -428,7 +429,7 @@ class ChatControllerHtmxTest {
                 "## 요약\n답변", "manual", List.of(), List.of(),
                 120, 80, 2, 0.42, null, "local", 1L,
                 true, null, null, note,
-                false, List.of()));
+                false, List.of(), null));
         String justSent = mvc.perform(post("/ui/chat")
                         .param("question", "질문")
                         .param("threadId", "thread-01")
@@ -451,6 +452,47 @@ class ChatControllerHtmxTest {
 
         assertThat(justSent).as("방금 보낸 응답에 축소 안내가 없다").contains(note);
         assertThat(afterReload).as("새로고침 후 축소 안내가 사라졌다").contains(note);
+    }
+
+    @Test
+    @DisplayName("검색어 재작성 안내는 새로고침 전후가 같다 — 질문 버블에는 원문이 그대로 남는다 (§10.12)")
+    void condensedQuestion_survivesPageReload() throws Exception {
+        AppUserDetails principal = new AppUserDetails("id-1", "user@local", "", "User", "USER", true, false);
+        String condensed = "SSE 타임아웃 설정은 어디에 있어?";
+
+        // ① 방금 보낸 메시지 (HTMX 폴백 프래그먼트)
+        when(agentService.chat(any(), any())).thenReturn(new ChatResponse(
+                "## 요약\n답변", "usage", List.of(), List.of(),
+                120, 80, 2, 0.42, null, "local", 1L,
+                true, null, null, null,
+                false, List.of(), condensed));
+        String justSent = mvc.perform(post("/ui/chat")
+                        .param("question", "그거 어디야?")
+                        .param("threadId", "thread-01")
+                        .param("version", "latest")
+                        .with(user(principal)).with(csrf()))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        // ② 새로고침 후 (chat.html 의 기록 루프 — 저장해 둔 스냅샷으로 되살린다)
+        when(threadMetaService.findById(any(), eq("thread-01"))).thenReturn(Optional.of(
+                new ThreadMeta("thread-01", "user", "제목", "latest", "now", "now", "COST_FIRST", "")));
+        when(memoryService.getTurns(any(), eq("thread-01"))).thenReturn(List.of(
+                new MemoryRepository.Turn(1L, "그거 어디야?", "## 요약\n답변",
+                        null, null, 0, 0, 0, "local", 1, null, "N", null, false)));
+        when(memoryService.getVerifications(List.of(1L))).thenReturn(java.util.Map.of(
+                1L, new VerificationSnapshot(true, false, null, null, List.of(), null, condensed)));
+        String afterReload = mvc.perform(get("/chat/thread-01").with(user(principal)))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        // 잘못된 재작성은 화면에 "나쁜 검색어"가 아니라 "엉뚱한 답변"으로만 보인다 — 이 줄이
+        // 사라지면 새로고침 뒤에는 원인을 짚을 방법이 아예 없다.
+        assertThat(justSent).as("방금 보낸 응답에 재작성된 검색어가 없다").contains(condensed);
+        assertThat(afterReload).as("새로고침 후 재작성된 검색어가 사라졌다").contains(condensed);
+        // 진단값이라 기본 숨김이고, ui.retrieval-metrics-enabled 가 켜졌을 때만 스크립트가 벗긴다.
+        assertThat(justSent).contains("condensed-question small text-muted mt-2 d-none");
+        assertThat(afterReload).contains("condensed-question small text-muted mt-2 d-none");
     }
 
     @Test

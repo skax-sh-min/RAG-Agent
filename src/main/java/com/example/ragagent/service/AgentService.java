@@ -37,24 +37,36 @@ public class AgentService {
         private final ClassifierService classifierService;
         private final ConversationSummarizerService summarizerService;
         private final QuestionReuseService questionReuseService;
+        /** §10.12 — 짧은 후속 질문의 독립화. null 이면 이 단계 없이 원문으로 검색한다(테스트 편의). */
+        private final QuestionCondenser questionCondenser;
 
         @Autowired
         public AgentService(AgentGraph agentGraph, MemoryService memoryService,
                                                 ClassifierService classifierService,
                                                 ConversationSummarizerService summarizerService,
-                                                QuestionReuseService questionReuseService) {
+                                                QuestionReuseService questionReuseService,
+                                                QuestionCondenser questionCondenser) {
                 this.agentGraph = agentGraph;
                 this.memoryService = memoryService;
                 this.classifierService = classifierService;
                 this.summarizerService = summarizerService;
                 this.questionReuseService = questionReuseService;
+                this.questionCondenser = questionCondenser;
         }
 
-        // Test/backward-compatible constructor.
+        // Test/backward-compatible constructors.
+        public AgentService(AgentGraph agentGraph, MemoryService memoryService,
+                                                ClassifierService classifierService,
+                                                ConversationSummarizerService summarizerService,
+                                                QuestionReuseService questionReuseService) {
+                this(agentGraph, memoryService, classifierService, summarizerService,
+                        questionReuseService, null);
+        }
+
         public AgentService(AgentGraph agentGraph, MemoryService memoryService,
                                                 ClassifierService classifierService,
                                                 ConversationSummarizerService summarizerService) {
-                this(agentGraph, memoryService, classifierService, summarizerService, null);
+                this(agentGraph, memoryService, classifierService, summarizerService, null, null);
         }
 
     public ChatResponse chat(ThreadContext ctx, ChatRequest request) {
@@ -73,9 +85,16 @@ public class AgentService {
                 CompletableFuture<String> historyF = CompletableFuture.supplyAsync(
                         () -> resolveHistory(userId, request.threadId(), false,
                                 request.responseMode(), request.routingMode(), request.question()), exec);
-                CompletableFuture<String> typeF = CompletableFuture.supplyAsync(
-                        () -> classifierService.classifyOnly(request.question(), ctx.locale()), exec);
-                initial = AgentState.of(
+                // §10.12 — 짧은 후속 질문이면 먼저 독립화하고, 분류는 그 결과를 본다. 게이트가
+                // 순수해서(길이만 본다) 긴 질문에서는 이 future 가 이미 완료된 채로 만들어지므로
+                // 분류가 즉시 출발한다 — 오늘의 병렬성이 그대로다.
+                CompletableFuture<QuestionCondenser.Condensed> condensedF =
+                        condenseAsync(userId, request.threadId(), request.question(), ctx.locale(), exec);
+                CompletableFuture<String> typeF = condensedF.thenApplyAsync(
+                        c -> classifierService.classifyOnly(
+                                c == null ? request.question() : c.searchQuestion(), ctx.locale()), exec);
+                QuestionCondenser.Condensed condensed = condensedF.join();
+                AgentState.Builder builder = AgentState.of(
                         request.question(),
                         request.version(),
                         request.threadId(),
@@ -83,7 +102,14 @@ public class AgentService {
                         historyF.join(),
                         request.routingMode(),
                         false, ctx.locale())
-                    .toBuilder().questionType(typeF.join()).build();
+                    .toBuilder().questionType(typeF.join());
+                if (condensed != null) {
+                    // 그래프 바깥에서 일어난 호출이라 여기서 실어 준다 — 안 실으면 사용자가 보는
+                    // LLM 호출 수·토큰이 실제보다 적게 나온다(classifyOnly 의 알려진 누락과 같은 함정).
+                    builder.searchQuestion(condensed.searchQuestion())
+                           .accumulateTokens(condensed.inputTokens(), condensed.outputTokens());
+                }
+                initial = builder.build();
             }
         }
         // carry the selected search-scope tags + answer-length mode into the graph state.
@@ -111,7 +137,8 @@ public class AgentService {
             memoryService.saveVerification(turnId, new VerificationSnapshot(
                     result.grounded(), result.responseMode().generative(),
                     result.evalReason(), result.envNote(), result.inventedSymbols(),
-                    result.budgetNote()));
+                    result.budgetNote(),
+                    result.wasCondensed() ? result.searchQuestion() : null));
             if (questionReuseService != null) {
                 questionReuseService.recordTurnSources(turnId, userId, request.threadId(),
                         result.retrievedDocs(), result.sources());
@@ -136,8 +163,23 @@ public class AgentService {
                 result.envNote(),
                 result.budgetNote(),
                 result.responseMode().generative(),
-                result.inventedSymbols()
+                result.inventedSymbols(),
+                result.wasCondensed() ? result.searchQuestion() : null
         );
+    }
+
+    /**
+     * §10.12 — 게이트가 닫혀 있으면 <b>LLM 을 부르지 않고</b> 이미 완료된 future 를 돌려준다.
+     * 값이 {@code null} 이면 "재작성 없음"이고, 그 경우 검색·분류는 원문을 쓴다.
+     */
+    private CompletableFuture<QuestionCondenser.Condensed> condenseAsync(
+            String userId, String threadId, String question,
+            java.util.Locale locale, java.util.concurrent.Executor exec) {
+        if (questionCondenser == null || !questionCondenser.gateOpen(question)) {
+            return CompletableFuture.completedFuture(null);
+        }
+        return CompletableFuture.supplyAsync(
+                () -> questionCondenser.condense(userId, threadId, question, locale).orElse(null), exec);
     }
 
     /**

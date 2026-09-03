@@ -629,6 +629,18 @@
                      +  `${escHtml(data.budgetNote)}</div>`;
             }
 
+            /* §10.12 검색어 재작성 — 질문 버블에는 원문이 그대로 남으므로, 검색이 다른 문장으로
+               돌았다는 사실을 말하지 않으면 잘못된 재작성이 "엉뚱한 답변"으로만 보인다. 진단값이라
+               ui.retrieval-metrics-enabled 가 켜진 경우에만 그린다(서버 렌더러 둘과 같은 규칙 —
+               그쪽은 항상 렌더하고 d-none 을 벗기지만, 여기서는 애초에 붙이지 않는다). */
+            const condenseVisible = typeof window.isRetrievalMetricsEnabled === 'function'
+                && window.isRetrievalMetricsEnabled();
+            if (data.condensedQuestion && condenseVisible) {
+                html += `<div class="small text-muted mt-1">`
+                     +  `<i class="bi bi-search me-1"></i>`
+                     +  `검색에 사용된 질문: ${escHtml(data.condensedQuestion)}</div>`;
+            }
+
             metaEl.innerHTML = html;
         }
 

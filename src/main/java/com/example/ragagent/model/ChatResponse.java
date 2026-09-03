@@ -46,7 +46,13 @@ public record ChatResponse(
          * 창의 검증이 "발췌에 없는데 문서에 있는 것처럼 쓰였다"고 지목한 이름들. 재시도를 걸지 않는
          * <b>경고 전용</b> 값이고(§6.24 Step 2-d), 창의 모드가 아닌 턴에서는 항상 비어 있다.
          */
-        @JsonProperty("invented_symbols") List<String> inventedSymbols
+        @JsonProperty("invented_symbols") List<String> inventedSymbols,
+        /**
+         * §10.12 — 짧은 후속 질문을 검색용으로 다시 쓴 문장. 재작성이 없었으면 null.
+         * <b>검색·분류만 이 값을 썼고 답변 프롬프트의 [현재 질문] 은 원문 그대로다.</b>
+         * 진단값이라 화면에는 {@code ui.retrieval-metrics-enabled} 가 켜진 경우에만 나온다.
+         */
+        @JsonProperty("condensed_question") String condensedQuestion
 ) {
     public ChatResponse {
         inventedSymbols = inventedSymbols == null ? List.of() : List.copyOf(inventedSymbols);
