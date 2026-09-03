@@ -410,13 +410,19 @@
                 <!-- 좁은 화면에서만 채워진다(넓은 화면은 두 패널이 이미 함께 보인다). -->
                 <span id="turn-answer-toggle" class="ms-auto"></span>
             </div>
+            <!-- 미리보기 6 : 원문 4. 읽으러 온 화면이므로 렌더된 쪽이 넓어야 하고, 원문은
+                 대조용이라 좁아도 된다. flex-grow 만 주면(둘 다 flex-grow-1) flex-basis 가
+                 auto 라 남는 공간만 반씩 나눠 갖고 **초기 폭은 내용 길이가 정한다** — 마크다운
+                 기호까지 들고 있는 원문 쪽이 더 길어서 오히려 원문이 넓어졌다. 그래서 basis 를
+                 0 으로 눕혀 비율이 실제로 폭을 정하게 한다.
+                 min-width:0 이 없으면 <pre> 의 긴 줄이 min-content 폭을 밀어올려 비율을 깬다. -->
             <div id="turn-answer-panes" class="d-flex gap-3 flex-grow-1" style="min-height:0;">
                 <div id="turn-answer-preview"
-                     class="border rounded p-2 md-content small flex-grow-1 overflow-auto"
-                     style="min-height:0;"></div>
+                     class="border rounded p-2 md-content small overflow-auto"
+                     style="flex:6 1 0; min-width:0; min-height:0;"></div>
                 <pre id="turn-content-answer"
-                     class="border rounded p-2 mb-0 small flex-grow-1 overflow-auto"
-                     style="white-space:pre-wrap; word-break:break-word; min-height:0;"></pre>
+                     class="border rounded p-2 mb-0 small overflow-auto"
+                     style="flex:4 1 0; min-width:0; min-height:0; white-space:pre-wrap; word-break:break-word;"></pre>
             </div>
         </div>
     </div>
