@@ -847,7 +847,6 @@
     });
 
     const versionInput  = document.getElementById('version-input');
-    const tagSelect     = document.getElementById('chat-tag-select');
 
     /* Sync version selector → hidden form field */
     versionInput.addEventListener('change', function () {
@@ -879,23 +878,26 @@
     const chatTagsInput   = document.getElementById('chat-tags-input');
     const chatAllLabel    = /*[[#{chat.tags.all}]]*/ 'All';
     const chatAllTooltip  = /*[[#{chat.tags.all.tooltip}]]*/ 'Search all documents';
+    const chatTagSingleHint = /*[[#{chat.tags.single.tooltip}]]*/ 'Pick one tag at a time';
 
+    /* 검색 스코프 태그는 **한 번에 하나만** 고른다.
+       태그 필터는 엄격 AND(TagUtils.matchesAnd — 청크가 선택한 태그를 전부 가져야 통과)이고
+       태그는 문서 단위 값이라, 두 개를 고르면 "두 태그를 모두 가진 문서"만 남는다. 태그가
+       문서군을 가르는 축으로 쓰이면 그 교집합은 대개 비어 결과가 0건이 되는데, 칩을 여러 개
+       누르는 동작은 "더 넓게 찾는다"로 읽히기 때문에 사용자는 왜 답이 사라졌는지 알 수 없었다.
+       서버 계약(쉼표로 이어진 목록)은 그대로다 — 좁히는 쪽은 화면이다. */
     function chatCurrentTags() {
         return (chatTagsInput.value || '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
     }
-    function chatToggleTag(tag) {
-        const tags = chatCurrentTags();
-        const i = tags.indexOf(tag);
-        if (i >= 0) tags.splice(i, 1); else tags.push(tag);
-        chatTagsInput.value = tags.join(', ');
-        chatSyncTagChips();
+    /** 지금 선택된 태그(없으면 null). 값이 여러 개인 옛 상태가 들어와도 첫 개만 본다. */
+    function chatSelectedTag() {
+        return chatCurrentTags()[0] || null;
     }
-    function chatAddTag(tag) {
+    /** 라디오처럼: 같은 칩을 다시 누르면 해제(= 전체 검색), 다른 칩을 누르면 교체. */
+    function chatToggleTag(tag) {
         const t = (tag || '').trim().toLowerCase();
         if (!t) return;
-        const tags = chatCurrentTags();
-        if (!tags.includes(t)) tags.push(t);
-        chatTagsInput.value = tags.join(', ');
+        chatTagsInput.value = (chatSelectedTag() === t) ? '' : t;
         chatSyncTagChips();
     }
     /* 'All' 칩: 태그 선택을 모두 비워 전체 문서를 검색한다(기존 "태그 미선택 = 전체 검색" 의미론
@@ -906,15 +908,15 @@
         chatSyncTagChips();
     }
     function chatSyncTagChips() {
-        const sel = chatCurrentTags();
+        const sel = chatSelectedTag();
         const allBtn = document.querySelector('#chat-tag-suggest-chips [data-tag-all]');
         if (allBtn) {
-            allBtn.classList.toggle('btn-primary', sel.length === 0);
-            allBtn.classList.toggle('btn-outline-secondary', sel.length > 0);
+            allBtn.classList.toggle('btn-primary', sel === null);
+            allBtn.classList.toggle('btn-outline-secondary', sel !== null);
         }
         document.querySelectorAll('#chat-tag-suggest-chips [data-tag]').forEach(el => {
-            el.classList.toggle('btn-primary', sel.includes(el.dataset.tag));
-            el.classList.toggle('btn-outline-secondary', !sel.includes(el.dataset.tag));
+            el.classList.toggle('btn-primary', el.dataset.tag === sel);
+            el.classList.toggle('btn-outline-secondary', el.dataset.tag !== sel);
         });
     }
     function loadChatTagSuggestions() {
@@ -929,37 +931,22 @@
                 if (!tags || tags.length === 0) {
                     wrap.classList.add('d-none');
                     chips.innerHTML = '';
-                    if (tagSelect) {
-                        tagSelect.innerHTML = '<option value="" selected>태그 선택...</option>';
-                    }
                     return;
                 }
                 const allChip = `<button type="button" class="btn btn-sm py-0 px-2"
                          style="font-size:0.72rem;" data-tag-all="true" title="${escHtml(chatAllTooltip)}">${escHtml(chatAllLabel)}</button>`;
                 chips.innerHTML = allChip + tags.map(t =>
                     `<button type="button" class="btn btn-sm btn-outline-secondary py-0 px-2"
-                             style="font-size:0.72rem;" data-tag="${escHtml(t)}">${escHtml(t)}</button>`).join('');
+                             style="font-size:0.72rem;" data-tag="${escHtml(t)}"
+                             title="${escHtml(chatTagSingleHint)}">${escHtml(t)}</button>`).join('');
                 chips.querySelector('[data-tag-all]').addEventListener('click', chatSelectAllTags);
                 chips.querySelectorAll('[data-tag]').forEach(btn =>
                     btn.addEventListener('click', () => chatToggleTag(btn.dataset.tag)));
-
-                if (tagSelect) {
-                    const opts = ['<option value="" selected>태그 선택...</option>']
-                        .concat(tags.map(t => `<option value="${escHtml(t)}">${escHtml(t)}</option>`));
-                    tagSelect.innerHTML = opts.join('');
-                }
 
                 wrap.classList.remove('d-none');
                 chatSyncTagChips();
             })
             .catch(() => {});
-    }
-    if (tagSelect) {
-        tagSelect.addEventListener('change', function () {
-            if (!this.value) return;
-            chatAddTag(this.value);
-            this.value = '';
-        });
     }
     loadVersionOptions();
     loadChatTagSuggestions();
