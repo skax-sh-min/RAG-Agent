@@ -72,6 +72,8 @@ class ConversationSummarizerServiceTest {
         when(llmRouter.hasMicroTextOffloadProvider()).thenReturn(true);
         AppProperties props = mock(AppProperties.class);
         when(props.summarySafe()).thenReturn(new AppProperties.SummaryConfig(3, 2_000, 2, 15));
+        // 프롬프트에 싣는 턴 수 상한의 출처 — 10턴 창이면 5턴(HistoryPolicy.promptTurnCap).
+        when(props.memorySafe()).thenReturn(new AppProperties.MemoryConfig(10));
         when(props.llmSafe()).thenReturn(new AppProperties.LlmConfig(
                 List.of(), 2, 10, 180, "COST_FIRST", 3, 20, 0.0, 0.1, 0.0, 0.7, true, 6000, 1, true));
         service = new ConversationSummarizerService(memoryService, llmRouter, messageSource, props);
@@ -602,7 +604,7 @@ class ConversationSummarizerServiceTest {
         for (boolean askingDirect : new boolean[]{true, false}) {
             assertThat(service.buildContext(UID, TID, 100_000, askingDirect))
                     .as("askingDirect=%s", askingDirect)
-                    .contains(HistoryPolicy.renderAnswer(ragAnswer, "N", askingDirect));
+                    .contains(HistoryPolicy.renderAnswer(ragAnswer, "N", askingDirect, false));
         }
     }
 
@@ -635,7 +637,7 @@ class ConversationSummarizerServiceTest {
      * 자리를 비워 놓고 아무도 쓰지 않는 상태다. Direct 에는 그 자리를 다툴 문서가 없다.
      */
     @Test
-    @DisplayName("§10.13 — Direct 턴의 [Recent] 는 recent-raw-turns 가 아니라 예산이 정한다")
+    @DisplayName("§10.13 — Direct 턴의 [Recent] 는 recent-raw-turns 가 아니라 예산·턴 상한이 정한다")
     void askingDirect_recentBlockIsBoundedByBudgetNotTurnCount() {
         List<MemoryRepository.Turn> eight = new java.util.ArrayList<>();
         for (int i = 1; i <= 8; i++) {
@@ -650,12 +652,16 @@ class ConversationSummarizerServiceTest {
         String direct = service.buildContext(UID, TID, 30_000, true);
         String rag = service.buildContext(UID, TID, 30_000, false);
 
-        // 여덟 턴이 전부 원문으로 들어간다 — 가장 오래된 턴까지.
-        assertThat(direct).contains("질문1", "질문8");
-        // 8턴 전부 = 답변 1,650자 × 8 + 질문 줄. 예전(요약 2,000 + 최근 2턴 ≈ 5,500)의 두 배 이상이다.
-        assertThat(direct.length()).isGreaterThan(13_000);
+        // Direct 는 recent-raw-turns(2)에 묶이지 않는다 — 예산이 허용하는 만큼 원문으로 들어간다.
+        // 다만 무한이 아니라 HistoryPolicy.promptTurnCap(= fetch-limit 10 의 절반 = 5)이 천장이다:
+        // 창이 넉넉해도 여덟 턴 전 이야기가 원문으로 들어오면 지금 질문의 맥락이 흐려진다.
+        assertThat(direct).contains("질문4", "질문5", "질문6", "질문7", "질문8")
+                .doesNotContain("질문1", "질문2", "질문3");
+        // 5턴 × 1,650자 — 예전(요약 2,000 + 최근 2턴 ≈ 5,500)보다 여전히 크게 넓다.
+        assertThat(direct.length()).isGreaterThan(8_000);
         // RAG 로 물으면 지금 그대로: 최근 2턴만 원문이고 나머지는 요약이 담당한다.
-        assertThat(rag.length()).isLessThan(direct.length() / 2);
+        assertThat(rag).contains("질문7", "질문8").doesNotContain("질문6");
+        assertThat(rag.length()).isLessThan(direct.length());
     }
 
     @Test

@@ -251,7 +251,7 @@ copy .env.example .env
 
 | 변수 | 기본값 | 권장 범위 | 설명 |
 |------|--------|----------|------|
-| `MEMORY_FETCH_LIMIT_TURNS` | `10` | 5 ~ 200 | 폴백 경로(`SqliteMemoryRepository.getHistory()`)와 요약 대상 조회(`getRecentTurns()`, §6.1)에서 공통으로 적용되는 최근 turn 상한 |
+| `MEMORY_FETCH_LIMIT_TURNS` | `10` | 5 ~ 200 | 폴백 경로(`SqliteMemoryRepository.getHistory()`)와 요약 대상 조회(`getRecentTurns()`, §6.1)에서 공통으로 적용되는 최근 turn 상한. **프롬프트에 원문으로 실리는 턴은 그 절반**(`HistoryPolicy.promptTurnCap()`, 기본 5턴) — 나머지는 요약이 담당합니다 |
 | `SUMMARY_MAX_CACHED_THREADS` | `3` | 1 ~ 10 | 요약 사전계산 결과를 유지하는 LRU 캐시 크기(동시 활성 thread 수). 초과 시 가장 오래 미사용된 thread부터 축출 |
 | `SUMMARY_MAX_SUMMARY_CHARS` | `2000` | 500 ~ 5000 | LLM이 생성한 요약 문자열의 상한 (초과 시 잘림) |
 | `SUMMARY_RECENT_RAW_TURNS` | `2` | 1 ~ 5 | 요약 뒤에 원문 그대로 덧붙일 최근 turn 수 — 이 turn들도 위 문자 예산 안에서 최신 우선으로 채워지며, 예산 초과분은 잘리지 않고 통째로 드롭됨 |
@@ -1807,7 +1807,8 @@ app.llm.providers[8].concurrency=4
 `MemoryService`는 **SQLite**(`DATA_DIR/memory.db`)에 대화 이력을 영속합니다.
 
 - WAL 모드로 읽기/쓰기 경합 최소화. SQLite pool size는 반드시 1 유지
-- 스레드별 최근 `MEMORY_FETCH_LIMIT_TURNS`(기본 10)턴 이내에서 `LLM_MAX_TOKENS × 0.5`까지 LLM 컨텍스트 주입
+- 스레드별 최근 `MEMORY_FETCH_LIMIT_TURNS`(기본 10)턴을 읽어오되, **프롬프트에 원문으로 들어가는 것은 그 절반**(기본 5턴)입니다 — 나머지는 요약이 담당합니다. 글자 상한은 별도로 `LLM_MAX_TOKENS × 0.5`(Direct 턴은 §10.13 의 예산 계산)입니다
+- **이전 턴이 Direct(RAG 끔)였으면 그 답변은 요약이 아니라 본문 그대로** 다음 턴의 이력에 들어갑니다. 그 턴에는 근거로 삼을 검색 문서가 없었으므로 답변의 산문이 그 대화의 유일한 기록이기 때문입니다. 대신 검증 프롬프트에는 이력이 들어가지 않으므로, 모델이 그 내용에 기대어 답하면 **미검증 배지**가 뜰 수 있습니다(문서에 근거가 없다는 판정이며, 재시도는 답변만 다시 씁니다)
 - `/chat/{threadId}` 재진입 시 모든 이전 turn을 시간순으로 불러와 메시지 버블 복원
 - `MemoryRepository` 인터페이스로 추상화 — Redis 등으로 교체 시 구현체만 추가
 

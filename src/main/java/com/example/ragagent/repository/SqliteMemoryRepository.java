@@ -130,8 +130,12 @@ public class SqliteMemoryRepository implements MemoryRepository {
         // 쓰는 것과 같은 규칙이어야 한다: 안 그러면 같은 스레드가 요약 캐시 유무에 따라 다른
         // 맥락을 보고, 캐시 TTL 이 지나는 순간 이력이 갑자기 달라진다.
         // response_mode 는 그 규칙의 입력이다 — 이전 턴이 S 였으면 '## 요약' 이 답변 전부다.
+        // 싣는 턴 수는 가져오는 창(fetchLimit)이 아니라 HistoryPolicy.promptTurnCap() 이 정한다 —
+        // 이 경로는 가져온 것을 그대로 싣기 때문에 LIMIT 이 곧 프롬프트에 들어가는 양이다.
+        // 요약 경로의 [Recent] 와 같은 상한을 쓴다(둘이 갈라지면 요약 캐시 유무에 따라 맥락이 달라진다).
         List<String> rows = jdbc.query(
             "SELECT t.question AS question, t.response_mode AS response_mode, " +
+            "COALESCE(t.direct_mode, 0) AS direct_mode, " +
             "COALESCE(NULLIF(src.answer, ''), NULLIF(t.answer, ''), '" + DELETED_REFERENCE_TEXT + "') AS answer " +
             "FROM conversation_turns t " +
             "LEFT JOIN conversation_turns src ON src.id = t.reused_from_turn_id AND src.user_id = t.user_id " +
@@ -139,8 +143,11 @@ public class SqliteMemoryRepository implements MemoryRepository {
             "ORDER BY t.id DESC LIMIT ?",
             (rs, n) -> "Q: %s\nA: %s".formatted(rs.getString("question"),
                     HistoryPolicy.renderAnswer(rs.getString("answer"),
-                            rs.getString("response_mode"), askingDirect)),
-                userId, threadId, fetchLimit);
+                            rs.getString("response_mode"), askingDirect,
+                            // 재사용 턴이면 답변은 원본(src)에서 오지만 모드는 이 턴의 것이다
+                            // (response_mode 도 같은 규칙) — 지금 이력에 실리는 것은 이 턴이다.
+                            rs.getInt("direct_mode") == 1)),
+                userId, threadId, HistoryPolicy.promptTurnCap(fetchLimit));
 
         if (rows.isEmpty()) return "";
 

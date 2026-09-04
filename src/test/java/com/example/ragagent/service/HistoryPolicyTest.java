@@ -81,7 +81,7 @@ class HistoryPolicyTest {
     @Test
     @DisplayName("RAG 로 물으면 이전 RAG 턴은 '## 요약'만 — 검색을 다시 하므로 전문은 중복이다")
     void askingRag_ragTurn_keepsOnlyTheSummary() {
-        String rendered = HistoryPolicy.renderAnswer(RAG_ANSWER, "N", false);
+        String rendered = HistoryPolicy.renderAnswer(RAG_ANSWER, "N", false, false);
 
         assertThat(rendered).isEqualTo("핵심 한 줄.");
     }
@@ -91,9 +91,34 @@ class HistoryPolicyTest {
     void askingRag_answerWithoutSummary_isCapped() {
         String long_ = "가".repeat(3_000);
 
-        String rendered = HistoryPolicy.renderAnswer(long_, "N", false);
+        String rendered = HistoryPolicy.renderAnswer(long_, "N", false, false);
 
         assertThat(rendered).hasSize(HistoryPolicy.RECENT_ANSWER_CAP + 1).endsWith("…");
+    }
+
+    @Test
+    @DisplayName("RAG 로 물어도 이전 턴이 Direct 였으면 전문이 남는다 — 그 턴에는 복제할 문서가 없었다")
+    void askingRag_previousDirectTurn_keepsTheBody() {
+        String rendered = HistoryPolicy.renderAnswer(RAG_ANSWER, "N", false, true);
+
+        assertThat(rendered).contains("상세 설명", "자세한 설명입니다.")
+                .doesNotContain("## 요약", "핵심 한 줄");
+    }
+
+    @Test
+    @DisplayName("RAG 로 물을 때 이전 Direct 턴의 긴 답변은 1,200자 캡에 걸리지 않는다")
+    void askingRag_previousDirectTurn_isNotCapped() {
+        String dn = "가".repeat(3_000);
+
+        assertThat(HistoryPolicy.renderAnswer(dn, "N", false, true)).isEqualTo(dn).doesNotEndWith("…");
+    }
+
+    @Test
+    @DisplayName("조건은 'DN 이면'이 아니라 'Direct 였으면' — DS 는 요약이 곧 답변 전부라 결과가 같다")
+    void askingRag_previousDirectSummaryOnlyTurn_isUnchanged() {
+        String ds = "## 요약\n짧게 정리한 내용.";
+
+        assertThat(HistoryPolicy.renderAnswer(ds, "S", false, true)).isEqualTo("짧게 정리한 내용.");
     }
 
     // ── 렌더: 지금 묻는 턴이 Direct ─────────────────────────────────────────
@@ -103,13 +128,13 @@ class HistoryPolicyTest {
     void askingDirect_summaryOnlyTurn_keepsTheSummary() {
         String s = "## 요약\n짧게 정리한 내용.";
 
-        assertThat(HistoryPolicy.renderAnswer(s, "S", true)).isEqualTo("짧게 정리한 내용.");
+        assertThat(HistoryPolicy.renderAnswer(s, "S", true, false)).isEqualTo("짧게 정리한 내용.");
     }
 
     @Test
     @DisplayName("Direct 로 물으면 이전 N 턴은 요약·참고를 뺀 본문 — 요약은 본문의 재진술이고 출처는 값이 없다")
     void askingDirect_normalTurn_keepsTheBody() {
-        String rendered = HistoryPolicy.renderAnswer(RAG_ANSWER, "N", true);
+        String rendered = HistoryPolicy.renderAnswer(RAG_ANSWER, "N", true, false);
 
         assertThat(rendered).contains("상세 설명", "자세한 설명입니다.")
                 .doesNotContain("## 요약", "핵심 한 줄", "## 참고", "파일.docx");
@@ -120,7 +145,7 @@ class HistoryPolicyTest {
     void askingDirect_directAnswer_isNotCapped() {
         String dn = "가".repeat(3_000);
 
-        String rendered = HistoryPolicy.renderAnswer(dn, "N", true);
+        String rendered = HistoryPolicy.renderAnswer(dn, "N", true, true);
 
         assertThat(rendered).isEqualTo(dn).doesNotEndWith("…");
     }
@@ -128,8 +153,8 @@ class HistoryPolicyTest {
     @Test
     @DisplayName("같은 이전 턴이 다음에 무엇을 묻느냐에 따라 다르게 렌더된다 — 자의적이지 않고 필요가 다르다")
     void sameTurnRendersDifferentlyDependingOnWhatIsAskedNext() {
-        String askingRag = HistoryPolicy.renderAnswer(RAG_ANSWER, "N", false);
-        String askingDirect = HistoryPolicy.renderAnswer(RAG_ANSWER, "N", true);
+        String askingRag = HistoryPolicy.renderAnswer(RAG_ANSWER, "N", false, false);
+        String askingDirect = HistoryPolicy.renderAnswer(RAG_ANSWER, "N", true, false);
 
         assertThat(askingRag).isNotEqualTo(askingDirect);
         assertThat(askingDirect.length()).isGreaterThan(askingRag.length());
@@ -148,7 +173,7 @@ class HistoryPolicyTest {
                 ## 검증되지 않은 부분
                 이 API 이름은 확인되지 않았습니다.""";
 
-        assertThat(HistoryPolicy.renderAnswer(c, "C", true))
+        assertThat(HistoryPolicy.renderAnswer(c, "C", true, false))
                 .contains("검증되지 않은 부분", "이 API 이름은 확인되지 않았습니다")
                 .doesNotContain("## 요약");
     }
@@ -157,7 +182,7 @@ class HistoryPolicyTest {
     @DisplayName("레거시·미지 모드 값은 N 으로 읽힌다 — 값을 못 읽었다고 본문을 버리지 않는다")
     void legacyModeValues_fallBackToNormal() {
         for (String legacy : new String[]{null, "", "  ", "M", "L", "몰라"}) {
-            assertThat(HistoryPolicy.renderAnswer(RAG_ANSWER, legacy, true))
+            assertThat(HistoryPolicy.renderAnswer(RAG_ANSWER, legacy, true, false))
                     .as("%s", legacy).contains("자세한 설명입니다.");
         }
     }
@@ -167,7 +192,7 @@ class HistoryPolicyTest {
     void strippingEverything_fallsBackToTheWholeAnswer() {
         String summaryAndRefsOnly = "## 요약\n한 줄.\n\n## 참고\n- [파일 | p.1]";
 
-        assertThat(HistoryPolicy.renderAnswer(summaryAndRefsOnly, "N", true)).isNotBlank();
+        assertThat(HistoryPolicy.renderAnswer(summaryAndRefsOnly, "N", true, false)).isNotBlank();
     }
 
     // ── 절단 ────────────────────────────────────────────────────────────────
@@ -194,5 +219,23 @@ class HistoryPolicyTest {
     @DisplayName("예산이 0 이하면 빈 문자열 — 반 토막 이력보다 없는 편이 낫다")
     void trimToBudget_noBudget_returnsEmpty() {
         assertThat(HistoryPolicy.trimToBudget("Q: 질문\nA: 답변", 0)).isEmpty();
+    }
+
+    // ── 프롬프트에 싣는 턴 수 상한 ──────────────────────────────────────────
+
+    @Test
+    @DisplayName("싣는 턴은 가져오는 창의 절반 — 기본 10턴이면 5턴")
+    void promptTurnCap_isHalfTheFetchWindow() {
+        assertThat(HistoryPolicy.promptTurnCap(10)).isEqualTo(5);
+        assertThat(HistoryPolicy.promptTurnCap(20)).isEqualTo(10);
+        assertThat(HistoryPolicy.promptTurnCap(7)).isEqualTo(3);   // 내림 — 창보다 커지지 않는다
+    }
+
+    @Test
+    @DisplayName("아무리 좁혀도 최소 1턴 — 직전 대화까지 잃으면 후속 질문이 성립하지 않는다")
+    void promptTurnCap_neverDropsBelowOne() {
+        assertThat(HistoryPolicy.promptTurnCap(1)).isEqualTo(1);
+        assertThat(HistoryPolicy.promptTurnCap(0)).isEqualTo(1);
+        assertThat(HistoryPolicy.promptTurnCap(-5)).isEqualTo(1);
     }
 }

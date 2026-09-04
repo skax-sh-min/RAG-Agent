@@ -43,6 +43,24 @@ public final class HistoryPolicy {
     public static final int RECENT_ANSWER_CAP = 1_200;
 
     /**
+     * <b>프롬프트에 실제로 실리는 턴 수 상한</b> — 가져오는 창({@code app.memory.fetch-limit-turns})의
+     * 절반. RAG·Direct 양쪽, 두 이력 경로 모두에 걸린다.
+     *
+     * <p>가져오는 창과 싣는 양을 분리하는 이유: 요약 경로는 <b>가져온 것 전부</b>를 요약 재료로 쓰고
+     * 그중 최근 몇 턴만 원문으로 싣는다. 상한을 가져오는 창 자체에 걸면 요약이 볼 수 있는 과거까지
+     * 함께 줄어들어, "오래된 것은 압축하고 최근 것은 원문으로"라는 구조가 무너진다. 절반이라는 값은
+     * 그 둘의 비율을 하나의 설정({@code MEMORY_FETCH_LIMIT_TURNS})으로 묶어 두기 위한 것이다 —
+     * 창을 넓히면 싣는 양도 함께 넓어지고, 둘이 따로 놀지 않는다.
+     *
+     * <p>이 상한은 <b>글자 예산과 독립</b>이다(§10.13 의 {@link #budgetChars}). 예산은 "창에
+     * 들어가는가"를, 이쪽은 "얼마나 오래된 이야기까지 원문으로 되살릴 것인가"를 정한다 — 창이
+     * 넉넉해도 열 턴 전 대화가 원문으로 들어오면 지금 질문의 맥락이 흐려진다.
+     */
+    public static int promptTurnCap(int fetchLimitTurns) {
+        return Math.max(1, fetchLimitTurns / 2);
+    }
+
+    /**
      * Direct 프롬프트에서 이력·질문 말고 고정으로 들어가는 것의 토큰 추정 — 시스템 프롬프트와
      * {@code [이전 대화]}/{@code [현재 질문]} 헤더, 인젝션 가드 래퍼.
      *
@@ -90,10 +108,24 @@ public final class HistoryPolicy {
      *
      * <table>
      *   <caption>이전 턴 → 지금 묻는 턴</caption>
-     *   <tr><td>무엇이든 → RAG</td><td>{@code ## 요약} 만(없으면 {@value #RECENT_ANSWER_CAP}자 캡)</td></tr>
+     *   <tr><td>RAG(RS·RN·RC) → RAG</td><td>{@code ## 요약} 만(없으면 {@value #RECENT_ANSWER_CAP}자 캡)</td></tr>
+     *   <tr><td><b>Direct(DS·DN) → RAG</b></td><td>Direct 로 물을 때와 같게 — 아래 두 줄</td></tr>
      *   <tr><td>S(RS·DS) → Direct</td><td>{@code ## 요약} — 그게 답변 전부다</td></tr>
      *   <tr><td>N·C(RN·RC·DN) → Direct</td><td>{@code ## 요약}·{@code ## 참고} 를 뺀 나머지</td></tr>
      * </table>
+     *
+     * <p><b>이전 턴이 Direct 였으면 지금 묻는 턴이 RAG 라도 줄이지 않는다.</b> 요약으로 줄이는
+     * 근거가 "RAG 턴은 검색을 다시 하므로 이전 답변 전문은 {@code [검색된 문서]} 의 복제"라는
+     * 것인데, Direct 턴에는 복제될 문서가 <b>애초에 없었다</b> — 그 답변의 산문이 그 턴에 대한
+     * 유일한 기록이고, 사용자가 Direct 를 고른 것 자체가 "문서 밖의 이야기를 하자"는 의도다.
+     * 줄이면 그 의도가 다음 턴에서 사라진다. 조건이 "DN 이면"이 아니라 "Direct 였으면"인 이유는
+     * DS 가 이미 {@code ## 요약} = 답변 전부라 같은 갈래로 떨어져도 결과가 같기 때문이고
+     * (C 는 Direct 와 배타), 그래야 값이 아니라 성질로 분기하는 이 클래스의 규칙이 유지된다.
+     *
+     * <p><b>대가</b>: 검증 프롬프트에는 이력이 들어가지 않으므로({@code AnswerService.buildEvalPrompt})
+     * 모델이 이력의 Direct 산문에 기대어 답하면 {@code grounded=false} 로 판정될 수 있다. 답변
+     * 시스템 프롬프트가 "[검색된 문서]에 포함된 내용만 근거로"라고 이미 못 박고 있고, 실패해도
+     * 재시도가 답변만 다시 쓰며(§6.27) 최종적으로는 미검증 배지로 정직하게 드러나므로 감수한다.
      *
      * <p><b>같은 이전 턴이 다음에 무엇을 묻느냐에 따라 다르게 렌더된다.</b> 자의적이지 않다 —
      * 이번 턴에 무엇이 함께 들어가야 하는지가 다르고, {@code fitToBudget()} 이 검색 문서를 턴마다
@@ -111,10 +143,11 @@ public final class HistoryPolicy {
      * @param responseMode 이전 턴의 저장된 모드 문자열. null/레거시 값은 {@link ResponseMode#parse}
      *                     가 N 으로 읽는다 — 값을 못 읽었다는 이유로 본문을 버리지 않는 방향이다
      */
-    public static String renderAnswer(String answer, String responseMode, boolean askingDirect) {
+    public static String renderAnswer(String answer, String responseMode, boolean askingDirect,
+                                      boolean previousTurnWasDirect) {
         if (answer == null) return "";
         String ownSummary = CuratedTextUtils.extractSummarySection(answer);
-        if (!askingDirect) {
+        if (!askingDirect && !previousTurnWasDirect) {
             // 지금까지의 규칙 그대로. RAG 턴은 검색을 다시 하므로 이전 답변 전문은 [검색된 문서] 를
             // 모델의 검증되지 않은 산문으로 한 번 더 복제하는 셈이 된다.
             return ownSummary.isBlank() ? cap(answer, RECENT_ANSWER_CAP) : ownSummary;
