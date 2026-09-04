@@ -124,7 +124,8 @@
                         </button>
                         <input type="file" id="submission-image-input" class="d-none"
                                accept="image/png,image/jpeg,image/gif,image/webp"/>
-                        <div class="btn-group btn-group-sm ms-auto" role="group">
+                        <!-- 넓은 화면에서는 두 패널이 나란히 보이므로 이 탭 자체가 숨는다. -->
+                        <div class="btn-group btn-group-sm ms-auto" role="group" id="body-view-tabs">
                             <input type="radio" class="btn-check" name="body-view" id="body-view-edit" checked/>
                             <label class="btn btn-outline-secondary py-0 px-2" for="body-view-edit"
                                    style="font-size:0.75rem;" th:text="#{submission.body.tab.write}">작성</label>
@@ -132,16 +133,23 @@
                             <label class="btn btn-outline-secondary py-0 px-2" for="body-view-preview"
                                    style="font-size:0.75rem;" th:text="#{submission.body.tab.preview}">미리보기</label>
                         </div>
+                        <!-- 2컬럼일 때만 채워진다(어느 쪽이 무엇인지 한눈에). -->
+                        <span id="body-panes-legend" class="ms-auto small text-muted d-none"></span>
                     </div>
-                    <textarea class="form-control form-control-sm" id="submission-body" name="body"
-                              rows="14" required style="font-size:0.85rem; resize:vertical;"
-                              th:text="${draftBody}"
-                              th:placeholder="#{submission.field.body.placeholder}"></textarea>
-                    <!-- 미리보기는 항상 DOMPurify 를 거친다 (관리자 검토 화면도 동일).
-                         이미지 마커도 여기서 실제 그림으로 렌더되므로, 마커가 본문 어디에 있는지가
-                         곧 이미지가 어디에 놓이는지다. -->
-                    <div id="submission-preview" class="form-control d-none markdown-body"
-                         style="min-height:340px; overflow:auto; font-size:0.88rem;"></div>
+                    <!-- 좁은 화면: 같은 자리를 탭으로 번갈아 쓴다(둘 중 하나만 보인다).
+                         넓은 화면: 스크립트가 d-flex 를 붙여 나란히 놓고, 미리보기를 왼쪽으로
+                         보낸다(order:-1) — /admin 의 편집 화면 넷과 같은 배치다. -->
+                    <div id="submission-body-panes" style="min-height:0;">
+                        <textarea class="form-control form-control-sm" id="submission-body" name="body"
+                                  rows="14" required style="font-size:0.85rem; resize:vertical;"
+                                  th:text="${draftBody}"
+                                  th:placeholder="#{submission.field.body.placeholder}"></textarea>
+                        <!-- 미리보기는 항상 DOMPurify 를 거친다 (관리자 검토 화면도 동일).
+                             이미지 마커도 여기서 실제 그림으로 렌더되므로, 마커가 본문 어디에 있는지가
+                             곧 이미지가 어디에 놓이는지다. -->
+                        <div id="submission-preview" class="form-control d-none markdown-body"
+                             style="min-height:340px; overflow:auto; font-size:0.88rem;"></div>
+                    </div>
                     <div class="d-flex justify-content-between form-text small">
                         <span th:text="#{submission.field.body.hint}">
                             마크다운을 쓸 수 있습니다. 길이 제한은 없으며 등록 시 자동으로 나뉩니다.
@@ -281,7 +289,7 @@
      전문을 자르지 않고 보여주는 것이 요점이다: 목록의 한 줄 미리보기만으로는 자기가 무엇을
      제안했는지 확인할 수 없고, 승인된 제안을 고치려면 원문 전체가 필요하다. -->
 <div class="offcanvas offcanvas-end" tabindex="-1" id="submissionEditOffcanvas"
-     style="width:640px; max-width:100%;">
+     style="width:100%; max-width:100%;">
     <div class="offcanvas-header border-bottom">
         <h6 class="offcanvas-title">
             <i class="bi bi-pencil-square me-2"></i>
@@ -315,26 +323,51 @@
     refresh();
 })();
 
-/* 작성/미리보기 전환 — renderMarkdownWithImageMarkers()(base.html)가 [이미지: ...] 마커를
-   <img> 로 바꾼 뒤 marked → DOMPurify 를 거친다. sanitize 는 필수: 같은 본문이 관리자 검토
-   화면에서도 렌더되므로 저장형 XSS 경로가 된다. */
+/* 작성/미리보기 — /admin 의 편집 화면 넷과 같은 규칙이다(base.html).
+   넓은 화면은 나란히, 좁은 화면은 같은 자리를 탭으로 번갈아. 렌더는 어느 쪽이든
+   renderMarkdownWithImageMarkers(→ marked → DOMPurify)를 거친다. sanitize 는 필수:
+   같은 본문이 관리자 검토 화면에서도 렌더되므로 저장형 XSS 경로가 된다. */
 (function () {
     const box     = document.getElementById('submission-body');
     const preview = document.getElementById('submission-preview');
+    const panes   = document.getElementById('submission-body-panes');
+    const tabs    = document.getElementById('body-view-tabs');
+    const legend  = document.getElementById('body-panes-legend');
     const tabEdit = document.getElementById('body-view-edit');
     const tabView = document.getElementById('body-view-preview');
-    if (!box || !preview || !tabEdit || !tabView) return;
+    if (!box || !preview || !panes || !tabEdit || !tabView) return;
 
-    function showPreview(on) {
-        if (on) {
-            renderMarkdownWithImageMarkers(preview, box.value);
-            preview.style.minHeight = box.offsetHeight + 'px';
+    if (isTwoColumnWidth()) {
+        // 나란히. 미리보기를 왼쪽으로 보내는 것은 order 로만 한다 — DOM 순서를 바꾸면
+        // 폼 필드 순서(탭 이동)까지 따라 바뀐다.
+        panes.classList.add('d-flex', 'gap-3');
+        preview.classList.remove('d-none');
+        preview.style.order = '-1';
+        // 절반씩. flex-basis 를 0 으로 눕히지 않으면 초기 폭을 내용 길이가 정해
+        // 빈 미리보기가 찌그러진다(대화 원문 화면에서 겪은 것과 같은 함정).
+        box.style.flex = '1 1 0';
+        preview.style.flex = '1 1 0';
+        box.style.minWidth = '0';
+        preview.style.minWidth = '0';
+        if (tabs) tabs.classList.add('d-none');
+        if (legend) {
+            legend.classList.remove('d-none');
+            legend.innerHTML = '<i class="bi bi-eye me-1"></i>왼쪽 미리보기 · 오른쪽 작성';
         }
-        box.classList.toggle('d-none', on);
-        preview.classList.toggle('d-none', !on);
+        bindLivePreview(box, preview);
+    } else {
+        // 좁은 화면 — 지금까지의 동작 그대로.
+        function showPreview(on) {
+            if (on) {
+                renderMarkdownWithImageMarkers(preview, box.value);
+                preview.style.minHeight = box.offsetHeight + 'px';
+            }
+            box.classList.toggle('d-none', on);
+            preview.classList.toggle('d-none', !on);
+        }
+        tabEdit.addEventListener('change', () => showPreview(false));
+        tabView.addEventListener('change', () => showPreview(true));
     }
-    tabEdit.addEventListener('change', () => showPreview(false));
-    tabView.addEventListener('change', () => showPreview(true));
 })();
 
 /* 본문 이미지 업로드 — 파일을 고르면 즉시 서버에 저장하고, 돌아온 [이미지: ...] 마커를
@@ -409,8 +442,12 @@ function openSubmissionEdit(id) {
         .then(r => { if (!r.ok) throw new Error(); return r.json(); })
         .then(data => {
             const box = document.getElementById('submissionEditBody');
+            const offcanvasEl = document.getElementById('submissionEditOffcanvas');
             const wasApproved = data.status === 'approved';
-            box.innerHTML = `
+            // /admin 의 편집 화면 넷과 같은 규칙 — 폭은 언제나 뷰포트 전체, 바뀌는 건 컬럼 수뿐.
+            offcanvasEl.style.width = '100%';
+            const isWide = isTwoColumnWidth();
+            const editFields = `
                 <div id="submission-edit-error" class="alert alert-danger py-2 small d-none"></div>
                 <div>
                     <label class="form-label small fw-semibold">제목</label>
@@ -424,10 +461,14 @@ function openSubmissionEdit(id) {
                            placeholder="쉼표로 구분 · 비우면 모든 검색에 반영"/>
                 </div>
                 <div class="flex-grow-1 d-flex flex-column">
-                    <label class="form-label small fw-semibold">본문</label>
+                    <div class="d-flex align-items-center mb-1">
+                        <label class="form-label small fw-semibold mb-0">본문</label>
+                        ${isWide ? '' : previewToggleBar('submission-edit', false, '작성')}
+                    </div>
                     <textarea id="submission-edit-body" class="form-control form-control-sm flex-grow-1"
                               style="min-height:320px; font-size:0.82rem; resize:vertical;"
                               >${escHtml(data.body)}</textarea>
+                    ${isWide ? '' : previewTogglePane('submission-edit', 320)}
                     <div class="form-text small">
                         저장하면 다시 검토 대기 상태가 됩니다.${wasApproved
                             ? ' 검토가 끝날 때까지 현재 등록본이 검색에 계속 사용되고, 승인 시 교체됩니다.'
@@ -437,8 +478,24 @@ function openSubmissionEdit(id) {
                 <button class="btn btn-primary btn-sm" onclick="saveSubmissionEdit(${Number(id)})">
                     <i class="bi bi-save me-1"></i>저장
                 </button>`;
-            bootstrap.Offcanvas.getOrCreateInstance(
-                document.getElementById('submissionEditOffcanvas')).show();
+
+            if (isWide) {
+                box.className = 'offcanvas-body d-flex flex-row gap-3';
+                box.innerHTML = `
+                    <div class="flex-grow-1 overflow-auto" style="min-width:0;">
+                        <div class="text-muted small fw-semibold mb-2"><i class="bi bi-eye me-1"></i>미리보기</div>
+                        <div class="md-content" id="submission-edit-preview-pane"></div>
+                    </div>
+                    <div class="d-flex flex-column gap-3 overflow-auto"
+                         style="width:500px; flex-shrink:0;">${editFields}</div>`;
+                bindLivePreview(document.getElementById('submission-edit-body'),
+                                document.getElementById('submission-edit-preview-pane'));
+            } else {
+                box.className = 'offcanvas-body d-flex flex-column gap-3';
+                box.innerHTML = editFields;
+                wirePreviewToggle('submission-edit', 'submission-edit-body');
+            }
+            bootstrap.Offcanvas.getOrCreateInstance(offcanvasEl).show();
         })
         .catch(() => showToast('제안을 불러올 수 없습니다.', 'danger'));
 }

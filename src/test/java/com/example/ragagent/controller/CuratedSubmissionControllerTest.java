@@ -18,6 +18,7 @@ import org.springframework.test.web.servlet.MockMvc;
 
 import java.util.List;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.containsString;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -74,6 +75,27 @@ class CuratedSubmissionControllerTest {
         return new Submission(1L, USER, "제안 제목", "제안 본문", status, "admin", reviewNote,
                 7L, "2026-01-01", "2026-01-01", "2026-01-02", null, "인프라", null, null,
                 "approved".equals(status) ? 2 : 0, "approved".equals(status) ? 2 : 0, curatedActive, curatedFailed);
+    }
+
+    @Test
+    @DisplayName("GET — 작성/미리보기 2컬럼 뼈대가 서버 마크업에 있다 (넓은 화면 분기의 전제)")
+    void page_carriesTwoColumnScaffolding() throws Exception {
+        String html = mvc.perform(get("/curated/submissions").with(user(PRINCIPAL)).param("lang", "ko"))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        // 넓은 화면에서 두 패널을 나란히 놓는 결정은 스크립트가 하지만, 그 대상이 되는 뼈대는
+        // 서버 마크업에 있어야 한다. 이 셋 중 하나라도 사라지면 스크립트는 조용히 아무것도
+        // 하지 않고 화면은 좁은 화면 모양 그대로 남는다 — 오류가 나지 않아 눈치채기 어렵다.
+        assertThat(html)
+                .as("2컬럼으로 묶일 컨테이너")
+                .contains("id=\"submission-body-panes\"");
+        assertThat(html)
+                .as("넓은 화면에서 숨겨야 할 탭 그룹")
+                .contains("id=\"body-view-tabs\"");
+        assertThat(html)
+                .as("나란히 놓일 미리보기 패널")
+                .contains("id=\"submission-preview\"");
     }
 
     @Test
