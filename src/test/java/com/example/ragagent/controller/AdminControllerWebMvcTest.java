@@ -37,6 +37,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -72,6 +73,7 @@ class AdminControllerWebMvcTest {
     @MockitoBean CuratedSubmissionService submissionService;
     @MockitoBean RetrievalMetricsService retrievalMetricsService;
     @MockitoBean com.example.ragagent.service.ThreadAdminService threadAdminService;
+    @MockitoBean com.example.ragagent.service.CuratedQuestionSuggester questionSuggester;
     @MockitoBean com.example.ragagent.audit.AuditLogger auditLogger;
     @MockitoBean CurrentUser currentUser;             // 승인/거부 시 reviewer id
     @MockitoBean AppProperties props;                 // SecurityConfig 의존
@@ -370,9 +372,9 @@ class AdminControllerWebMvcTest {
     }
 
     @Test
-    @DisplayName("POST /admin/curated/{id} — 갱신 성공 시 200")
+    @DisplayName("POST /admin/curated/{id} — 갱신 성공 시 200 (answer 만 보내는 기존 호출 모양)")
     void updateCurated_success_returnsOk() throws Exception {
-        when(curatedQaService.updateAnswer(anyLong(), anyString())).thenReturn(true);
+        when(curatedQaService.updateEntry(anyLong(), any(), anyString())).thenReturn(true);
 
         mvc.perform(post("/admin/curated/1").with(user(ADMIN)).with(csrf())
                         .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
@@ -381,14 +383,61 @@ class AdminControllerWebMvcTest {
     }
 
     @Test
+    @DisplayName("POST /admin/curated/{id} — 질문과 답변을 함께 보내면 둘 다 서비스로 넘어간다")
+    void updateCurated_passesQuestionAndAnswer() throws Exception {
+        when(curatedQaService.updateEntry(anyLong(), any(), any())).thenReturn(true);
+
+        mvc.perform(post("/admin/curated/1").with(user(ADMIN)).with(csrf())
+                        .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                        .content("{\"question\":\"VPN 접속이 안 될 때 확인할 설정은?\",\"answer\":\"본문\"}"))
+                .andExpect(status().isOk());
+
+        // 질문과 답변이 같은 검색 텍스트를 이루므로 한 번의 저장이 둘 다 실어야 한다 —
+        // 나눠 보내면 같은 항목을 두 번 임베딩하고 그 사이에 반쪽 상태가 남는다.
+        verify(curatedQaService).updateEntry(1L, "VPN 접속이 안 될 때 확인할 설정은?", "본문");
+    }
+
+    @Test
     @DisplayName("POST /admin/curated/{id} — 존재하지 않으면 404")
     void updateCurated_missing_returns404() throws Exception {
-        when(curatedQaService.updateAnswer(anyLong(), anyString())).thenReturn(false);
+        when(curatedQaService.updateEntry(anyLong(), any(), anyString())).thenReturn(false);
 
         mvc.perform(post("/admin/curated/99").with(user(ADMIN)).with(csrf())
                         .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
                         .content("{\"answer\":\"x\"}"))
                 .andExpect(status().isNotFound());
+    }
+
+    @Test
+    @DisplayName("POST /admin/curated/{id}/suggest-question — 제안을 돌려주되 저장하지는 않는다")
+    void suggestCuratedQuestion_returnsProposalWithoutSaving() throws Exception {
+        when(curatedQaService.findById(1L)).thenReturn(java.util.Optional.of(
+                new com.example.ragagent.repository.CuratedQaRepository.CuratedQa(
+                        1L, 7L, "u1", "t1", "그거 어떻게 해?", "VPN 프로파일에서 split tunneling 을 끄면 됩니다.",
+                        "active", "latest", "2026-01-01", "2026-01-01", "ok", "like", null, null, 1)));
+        when(questionSuggester.suggest(any(), any(), any()))
+                .thenReturn(java.util.Optional.of("VPN 접속이 안 될 때 확인할 설정은?"));
+
+        mvc.perform(post("/admin/curated/1/suggest-question").with(user(ADMIN)).with(csrf()))
+                .andExpect(status().isOk())
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("VPN 접속이 안 될 때")));
+
+        // 제안은 제안일 뿐이다 — 사람의 검토가 이 축의 유일한 관문이므로 자동 반영하지 않는다.
+        verify(curatedQaService, never()).updateEntry(anyLong(), any(), any());
+        verify(curatedQaService, never()).updateAnswer(anyLong(), any());
+    }
+
+    @Test
+    @DisplayName("POST /admin/curated/{id}/suggest-question — 제안할 것이 없으면 204")
+    void suggestCuratedQuestion_noProposal_returns204() throws Exception {
+        when(curatedQaService.findById(1L)).thenReturn(java.util.Optional.of(
+                new com.example.ragagent.repository.CuratedQaRepository.CuratedQa(
+                        1L, 7L, "u1", "t1", "이미 충분히 구체적인 질문", "본문",
+                        "active", "latest", "2026-01-01", "2026-01-01", "ok", "like", null, null, 1)));
+        when(questionSuggester.suggest(any(), any(), any())).thenReturn(java.util.Optional.empty());
+
+        mvc.perform(post("/admin/curated/1/suggest-question").with(user(ADMIN)).with(csrf()))
+                .andExpect(status().isNoContent());
     }
 
     @Test

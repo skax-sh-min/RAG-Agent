@@ -38,7 +38,7 @@ Flow:
 | `controller/DocumentController.java` | REST `/api/v1/documents`, `/api/v1/images`; HTMX async upload (202+taskId), SSE progress; magic-byte validation |
 | `controller/OperationsController.java` | REST `GET /api/v1/health`, `/api/v1/llm/usage`, `/api/v1/llm/concurrency` (header's `LLM: inUse/capacity` indicator, polled ~3s — `{"available":false}` when no LOCAL priority=1 provider exists); HTMX thread list, LLM usage cards; page routes |
 | `controller/AdminController.java` | `/admin`, `/admin/chunks`; document re-index endpoint (async, SSE-tracked) [↗](documents/PITFALLS.md#controlleradmincontrollerjava) |
-| `service/AdminService.java` | `/admin` chunk browse/edit/delete (chroma + sqlite-vec); `updateChunk()` = metadata/text only, embedding untouched; `reindexChunk()` = actually re-embeds (id-preserving upsert) + re-indexes FTS for one chunk, optional `regenerateKeywords` re-runs `KeywordExtractor` for that chunk only (one LLM call) |
+| `service/AdminService.java` | `/admin` chunk browse/edit/delete (chroma + sqlite-vec); `updateChunk()` = metadata/text only, embedding untouched (메타데이터 JSON 은 화면에서 **읽기 전용** — 편집이 조용히 무효가 되거나 재인덱싱과 만나 청크를 고아로 만든다 [↗](documents/PITFALLS.md#청크-편집의-메타데이터json-는-읽기-전용이다)); `reindexChunk()` = actually re-embeds (id-preserving upsert) + re-indexes FTS for one chunk, optional `regenerateKeywords` re-runs `KeywordExtractor` for that chunk only (one LLM call) |
 | `controller/SettingsController.java` | §6.13 — `GET /settings` (read view, guest-open, edit gated by `isAdmin`) [↗](documents/PITFALLS.md#controllersettingscontrollerjava) |
 | `service/SettingsService.java` | §6.13 설정 오버라이드 계층 + 프로바이더 표/토글. `LOCAL_ONLY` 에서는 LOCAL 역할만 노출 [↗](documents/PITFALLS.md#servicesettingsservicejava) |
 | `controller/OperationsController.java` (턴 삭제) | `DELETE /ui/threads/{threadId}/turns/{turnId}` [↗](documents/PITFALLS.md#controlleroperationscontrollerjava-턴-삭제) |
@@ -115,6 +115,7 @@ Flow:
 | `export/ExportFormat.java` | § 문서 내보내기 — `MD`/`TXT`/`DOCX` enum + content types; `parse()` rejects unknown/blank input (400 via `GlobalExceptionHandler`). No `PPTX` — rebuilding slides from reassembled prose needs slide-boundary/layout rules the chunk data doesn't carry |
 | `ingestion/ChunkOverlapBackfill.java` | `ApplicationReadyEvent` — `doc_registry.chunk_overlap` 이 `NULL` 인 기존 문서를 채운다 [↗](documents/PITFALLS.md#ingestionchunkoverlapbackfilljava) |
 | `service/CuratedQaService.java` | §10.10 — 공유 큐레이션 Q&A 축(예약 네임스페이스 `"curated"`). §10.11 이후 여기에 쓰는 경로는 **관리자 승인 둘뿐**(`createFromSubmission`/`createFromLikedTurn`) — 좋아요는 아무것도 만들지 않는다 [↗](documents/PITFALLS.md#servicecuratedqaservicejava) |
+| `service/CuratedQuestionSuggester.java` | 큐레이션 Q&A 의 **질문**을 본문에서 더 구체적으로 다시 쓰자고 **제안만** 한다(`/admin` 편집의 "본문으로 구체화"). 저장은 관리자가 [적용]→[저장] 둘을 눌러야 일어난다 [↗](documents/PITFALLS.md#servicecuratedquestionsuggesterjava) |
 | `service/CuratedSubmissionService.java` | 지식 제안 게시판 — 사용자가 제안(직접 작성 또는 좋아요한 답변 프리필), 저자가 수정·철회, 관리자가 임베딩 실행/거부. **검색 코퍼스로 들어가는 유일한 문**(§10.11) [↗](documents/PITFALLS.md#servicecuratedsubmissionservicejava) |
 | `repository/CuratedSubmissionRepository.java` | 지식 제안 게시판 테이블·쿼리. 상태 전이는 전부 compare-and-set [↗](documents/PITFALLS.md#repositorycuratedsubmissionrepositoryjava) |
 | `controller/CuratedSubmissionController.java` | 지식 제안 게시판(사용자) — `/curated/submissions` 페이지·제출·수정·철회·이미지 업로드. `?fromThread=&fromTurn=` 로 좋아요한 답변을 프리필(본문은 서버가 턴에서 읽는다) [↗](documents/PITFALLS.md#controllercuratedsubmissioncontrollerjava) |
@@ -173,6 +174,7 @@ docker-compose up chroma
 - Audit logging: `AuditLogger` writes to Logback AUDIT_FILE appender; `app.audit.enabled` (default `true`)
 - 검색 튜닝 프로퍼티는 전부 `app.search-*` 이고 `props.searchXxxSafe()` 로만 읽는다. `rerank-enabled` 만 핫이 아니다(구조적 빈) [↗](documents/PITFALLS.md#검색-튜닝-프로퍼티는-전부-appsearch--이고-propssearchxxxsafe)
 - §10.12 독립화된 질문은 **검색 축 셋 + 리랭커 + 분류기**가 쓰고(`AgentState.effectiveSearchQuestion()`), 답변 프롬프트의 `[현재 질문]` 은 **언제나 원문**(`state.question()`)이다 — 재작성이 빗나가도 검색만 틀리게 하는 격리다. 확장 게이트는 **원문 길이**로 재야 두 게이트가 여집합으로 남는다 [↗](documents/PITFALLS.md#servicequestioncondenserjava)
+- 큐레이션 Q&A 편집에는 `excerpt_keywords`/`chunk_context` 필드를 두지 않는다 — 이 축에서는 **읽히는 코드 경로가 없다**(FTS 미색인 + `SEARCH_TEXT` 오버라이드). 그 역할은 **질문**이 한다(검색 텍스트 = 질문 + 본문, 질문은 모든 청크에 반복 부여) [↗](documents/PITFALLS.md#servicecuratedquestionsuggesterjava)
 - `RerankerService` is a `@ConditionalOnProperty` bean injected as `Optional<RerankerService>`; when `rerank-enabled=false` no bean exists and `RetrievalService` still works — never assume the Optional is present
 - `PromptInjectionGuard.wrap()` delimits the raw user question at every prompt-construction site (`AnswerService.buildAnswerPrompt()`/`evaluate()`, `ClassifierService`, `D [↗](documents/PITFALLS.md#promptinjectionguardwrap)
 - `app.auth.enabled=false` → CSRF disabled, `SessionCreationPolicy.STATELESS`, `NoAuthAutoLoginFilter` active [↗](documents/PITFALLS.md#appauthenabledfalse--csrf-disabled-sessioncreat)

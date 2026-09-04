@@ -611,7 +611,9 @@ function chunkEditButtons() {
 
 // 편집 필드 4개의 현재 값. 열었을 때와 이동 직전 값을 비교해 "저장 안 함"을 감지한다.
 // (저장은 별도 버튼이고 이동은 화면을 통째로 갈아끼우므로, 경고가 없으면 편집이 조용히 사라진다.)
-const CHUNK_EDIT_FIELD_IDS = ['edit-meta', 'edit-context', 'edit-keywords', 'edit-text'];
+// 'edit-meta' 는 읽기 전용이 되면서 빠졌다 — 사용자가 바꿀 수 없는 값을 변경 감지에 두면
+// 영영 참이 되지 않을 뿐이고, 실수로 편집 필드가 아닌 것을 여기 넣으면 조용히 무시된다.
+const CHUNK_EDIT_FIELD_IDS = ['edit-context', 'edit-keywords', 'edit-text'];
 
 function chunkEditSnapshot() {
     return CHUNK_EDIT_FIELD_IDS.map(id => (document.getElementById(id) || {}).value || '');
@@ -666,11 +668,23 @@ function openChunkEdit(chunkId, collection) {
             // 두 가지 — (1) 바로 아래 "저장" 버튼과 붙어 있어야 편집→저장 동선이 짧고, (2) flex-grow-1을
             // 가진 유일한 필드라 남는 세로 공간을 전부 가져가므로 맨 아래에 두는 편이 자연스럽다.
             const editFields = `
-                <div>
-                    <label class="form-label small fw-semibold">메타데이터 (JSON)</label>
-                    <textarea id="edit-meta" class="form-control form-control-sm font-monospace"
-                              style="min-height:108px; font-size:0.78rem; resize:vertical;">${escHtml(metaJson)}</textarea>
-                </div>
+                <!-- 읽기 전용. 여기 있는 키는 전부 인덱싱 시점에 파생되는 값이고, 손으로 고칠
+                     의도가 있는 둘(키워드·요약)은 아래 전용 필드로 빠져 있다. 예전에는 편집이
+                     가능했는데 셋 중 하나로 끝났다 — ① version/doc_id 는 sqlite-vec 의 별도
+                     컬럼(과 Chroma 의 컬렉션)이 진짜 값이라 metadata 만 고치면 화면과 검색이
+                     어긋난 채 "저장되었습니다"가 뜨고, ② 그 상태로 바로 아래 '이 청크만
+                     재인덱싱'을 누르면 reindexChunk() 가 metadata 의 version 으로 벡터를 다시
+                     써서 청크가 다른 파티션으로 이사해 doc_registry 가 영영 못 찾는 고아가 되며,
+                     ③ tags 는 문서가 주인이라 다음 문서 태그 편집 한 번에 조용히 덮어써진다.
+                     조회 값은 남는다(태그 스코프·이미지 연결·청크 순서·편집 시각 추적). -->
+                <details class="border rounded px-2 py-1">
+                    <summary class="small text-muted" style="cursor:pointer;">
+                        메타데이터 (JSON) <span class="text-secondary">— 읽기 전용</span>
+                    </summary>
+                    <pre id="edit-meta-view" class="font-monospace mb-1 mt-2"
+                         style="font-size:0.78rem; max-height:220px; overflow:auto;
+                                white-space:pre-wrap; word-break:break-all;">${escHtml(metaJson)}</pre>
+                </details>
                 <div>
                     <label class="form-label small fw-semibold">요약 (맥락)
                         <i class="bi bi-info-circle text-secondary ms-1 small" style="cursor:help;"
@@ -736,7 +750,10 @@ function openChunkEdit(chunkId, collection) {
             }
             initTooltipsIn(body);
             // 스냅샷은 필드가 그려진 뒤에 떠야 한다(이동 시 변경 감지의 기준값).
-            currentChunkEdit = { chunkId, collection, snapshot: chunkEditSnapshot() };
+            // metadata 는 저장 시 그대로 되돌려 보낼 원본이다(saveChunkEdit 참고) — 키워드·요약은
+            // 전용 필드가 진짜 값이라 여기서 빼 두고, 저장할 때 그 필드 값으로 다시 채운다.
+            currentChunkEdit = { chunkId, collection, metadata: JSON.parse(metaJson),
+                                 snapshot: chunkEditSnapshot() };
             updateChunkNavState();
             // getOrCreateInstance — 이전/다음 이동은 "이미 열려 있는" 오프캔버스를 다시 여는
             // 경로라, new 로 매번 인스턴스를 만들면 _isShown 이 false 인 새 인스턴스가 backdrop 을
@@ -762,11 +779,12 @@ function initTooltipsIn(container) {
 
 function saveChunkEdit(chunkId, collection) {
     const text = document.getElementById('edit-text').value;
-    let metadata;
-    try { metadata = JSON.parse(document.getElementById('edit-meta').value); }
-    catch (e) { showToast('메타데이터 JSON 파싱 오류', 'danger'); return; }
-    // 키워드/요약 전용 필드가 진짜 값이다 — metaJsonExcludingInlineFields()가 JSON 박스에서
-    // 이 두 키를 애초에 빼 두므로, 여기서 병합해야 저장 시 사라지지 않는다.
+    // 파생 메타데이터는 열 때 읽은 값을 그대로 되돌려 보낸다 — 서버 updateChunk() 가 map 을
+    // 통째로 교체하므로 빠뜨리면 지워진다. 화면에서는 읽기 전용이라 여기 담긴 값은 언제나
+    // 방금 서버가 준 것 그대로다.
+    const metadata = Object.assign({}, currentChunkEdit && currentChunkEdit.metadata);
+    // 키워드/요약 전용 필드가 진짜 값이다 — 위 사본에서 이 두 키를 빼 두었으므로 여기서
+    // 병합해야 저장 시 사라지지 않는다.
     metadata['excerpt_keywords'] = document.getElementById('edit-keywords').value;
     metadata['chunk_context']    = joinChunkContext(
         document.getElementById('edit-context-breadcrumb').value,
@@ -814,18 +832,22 @@ function reindexChunkInline(chunkId, collection) {
     })
     .then(data => {
         if (!data) return;
-        document.getElementById('edit-meta').value = metaJsonExcludingInlineFields(data.metadata);
+        // 읽기 전용 조회 패널과, 저장 시 되돌려 보낼 원본을 함께 갱신한다.
+        const freshMetaJson = metaJsonExcludingInlineFields(data.metadata);
+        document.getElementById('edit-meta-view').textContent = freshMetaJson;
+        if (currentChunkEdit) currentChunkEdit.metadata = JSON.parse(freshMetaJson);
         document.getElementById('edit-keywords').value = data.metadata.excerpt_keywords || '';
         const contextParts = splitChunkContext(data.metadata.chunk_context);
         document.getElementById('edit-context-breadcrumb').value = contextParts.breadcrumb;
         document.getElementById('edit-context-breadcrumb-display').textContent =
             contextParts.breadcrumb || '(위치 정보 없음)';
         document.getElementById('edit-context').value = contextParts.summary;
-        // 서버가 덮어쓴 3개 필드만 스냅샷 기준값을 갱신한다 — 텍스트(마지막 항목)는 그대로 둬야
+        // 서버가 덮어쓴 2개 필드(요약·키워드)만 스냅샷 기준값을 갱신한다 — 텍스트(마지막 항목)는 그대로 둬야
         // 재인덱싱 전에 해 둔 저장 안 한 텍스트 편집이 이동 경고에서 계속 잡힌다.
         if (currentChunkEdit) {
             const fresh = chunkEditSnapshot();
-            currentChunkEdit.snapshot = fresh.slice(0, 3).concat(currentChunkEdit.snapshot.slice(3));
+            // 인덱스는 CHUNK_EDIT_FIELD_IDS 순서다: [요약, 키워드, 텍스트].
+            currentChunkEdit.snapshot = fresh.slice(0, 2).concat(currentChunkEdit.snapshot.slice(2));
         }
     })
     .catch(() => showToast('재인덱싱 중 오류 발생', 'danger'))
@@ -872,9 +894,26 @@ function openCuratedEdit(id) {
             const isWide = applyEditOffcanvasWidth(offcanvasEl);
 
             const editFields = `
+                <!-- 질문은 이 축의 검색 품질을 사실상 혼자 정한다 — defaultSearchText() 가
+                     질문 + 본문을 임베딩하고 질문은 모든 청크에 반복 부여되기 때문이다(문서 청크의
+                     chunk_context 가 하는 일을 여기서는 질문이 한다). 그래서 읽기 전용 표시에서
+                     편집 가능한 필드로 바꿨고, 본문을 근거로 더 구체적인 문장을 LLM 에게
+                     제안받는 버튼을 붙였다. 제안은 절대 자동 반영되지 않는다 — 아래 검토 상자에서
+                     관리자가 '적용'을 눌러야 입력란에 들어가고, 저장은 그다음이다. -->
                 <div>
-                    <label class="form-label small fw-semibold">질문</label>
-                    <div class="form-control form-control-sm text-muted" style="font-size:0.8rem;">${escHtml(data.question || '')}</div>
+                    <div class="d-flex align-items-center mb-1">
+                        <label class="form-label small fw-semibold mb-0">질문</label>
+                        <button type="button" class="btn btn-outline-secondary btn-sm py-0 px-2 ms-auto"
+                                id="curated-suggest-btn" style="font-size:0.72rem;"
+                                title="본문을 근거로 더 구체적인 질문을 제안받습니다. 검토 후 적용됩니다."
+                                onclick="suggestCuratedQuestion('${escAttr(id)}')">
+                            <i class="bi bi-magic me-1"></i>본문으로 구체화
+                        </button>
+                    </div>
+                    <input id="curated-edit-question" type="text" class="form-control form-control-sm"
+                           style="font-size:0.8rem;" value="${escHtml(data.question || '')}"/>
+                    <div class="form-text small">검색에서 이 항목을 찾을 때 쓰이는 문장입니다.</div>
+                    <div id="curated-suggest-box" class="border rounded p-2 mt-1 d-none small"></div>
                 </div>
                 <div class="flex-grow-1 d-flex flex-column">
                     <div class="d-flex align-items-center mb-1">
@@ -889,6 +928,8 @@ function openCuratedEdit(id) {
                 <button class="btn btn-primary btn-sm" onclick="saveCuratedEdit('${escAttr(id)}')">
                     <i class="bi bi-save me-1"></i>저장
                 </button>`;
+            // 제안 상자를 다시 그릴 때 쓰는 현재 질문 — 적용 전후 비교를 위해 보관한다.
+            currentCuratedQuestion = data.question || '';
 
             if (isWide) {
                 body.className = 'offcanvas-body d-flex flex-row gap-3';
@@ -911,16 +952,79 @@ function openCuratedEdit(id) {
         .catch(() => showToast('큐레이션 항목을 불러올 수 없습니다.', 'danger'));
 }
 
+/* 열려 있는 항목의 저장된 질문 — 제안 상자가 "현재 → 제안"을 나란히 보여주는 데 쓴다. */
+let currentCuratedQuestion = '';
+
+/* 본문을 근거로 더 구체적인 질문을 제안받는다. 서버는 제안만 하고 저장하지 않으며(§ AdminController),
+   여기서도 입력란을 건드리지 않는다 — 관리자가 '적용'을 눌러야 들어간다. 제안할 것이 없으면
+   서버가 204 를 주고(현재 질문이 이미 충분히 구체적이거나 모델이 답을 못 냈다) 그 사실을 말한다. */
+function suggestCuratedQuestion(id) {
+    const btn = document.getElementById('curated-suggest-btn');
+    const box = document.getElementById('curated-suggest-box');
+    if (!btn || !box) return;
+    const restore = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>제안 받는 중';
+    box.classList.add('d-none');
+
+    fetch('/admin/curated/' + encodeURIComponent(id) + '/suggest-question',
+          { method: 'POST', headers: { ...getCsrfHeaders() } })
+        .then(r => {
+            if (r.status === 204) return null;
+            if (!r.ok) throw new Error();
+            return r.json();
+        })
+        .then(data => {
+            if (!data || !data.question) {
+                showToast('제안할 것이 없습니다 — 현재 질문이 이미 구체적이거나 본문이 부족합니다.', 'info');
+                return;
+            }
+            const current = document.getElementById('curated-edit-question').value || currentCuratedQuestion;
+            box.classList.remove('d-none');
+            box.innerHTML =
+                  '<div class="text-muted mb-1"><i class="bi bi-magic me-1"></i>제안 — 적용해야 반영됩니다</div>'
+                + '<div class="text-decoration-line-through text-muted mb-1">' + escHtml(current) + '</div>'
+                + '<div class="fw-semibold mb-2">' + escHtml(data.question) + '</div>'
+                + '<div class="d-flex gap-2">'
+                + '  <button type="button" id="curated-suggest-apply"'
+                + '          class="btn btn-primary btn-sm py-0 px-2" style="font-size:0.72rem;">적용</button>'
+                + '  <button type="button" id="curated-suggest-cancel"'
+                + '          class="btn btn-outline-secondary btn-sm py-0 px-2" style="font-size:0.72rem;">취소</button>'
+                + '</div>';
+            box.dataset.suggested = data.question;
+            // 인라인 onclick 대신 리스너로 붙인다 — 제안 문장이 따옴표를 품을 수 있어서다.
+            document.getElementById('curated-suggest-apply')
+                    .addEventListener('click', applyCuratedQuestion);
+            document.getElementById('curated-suggest-cancel')
+                    .addEventListener('click', () => box.classList.add('d-none'));
+        })
+        .catch(() => showToast('질문 제안에 실패했습니다.', 'danger'))
+        .finally(() => { btn.disabled = false; btn.innerHTML = restore; });
+}
+
+/* 적용해도 저장은 아니다 — 입력란에 넣을 뿐이고, 관리자가 더 다듬은 뒤 '저장'을 눌러야
+   DB 와 임베딩에 반영된다(검토 단계를 둘로 나눈 것이 이 기능의 요점이다). */
+function applyCuratedQuestion() {
+    const box = document.getElementById('curated-suggest-box');
+    const input = document.getElementById('curated-edit-question');
+    if (!box || !input || !box.dataset.suggested) return;
+    input.value = box.dataset.suggested;
+    box.classList.add('d-none');
+    showToast('질문에 적용했습니다. 저장해야 검색에 반영됩니다.', 'info');
+}
+
 function saveCuratedEdit(id) {
     const answer = document.getElementById('curated-edit-answer').value;
+    const question = document.getElementById('curated-edit-question').value;
+    if (!question.trim()) { showToast('질문은 비울 수 없습니다.', 'warning'); return; }
     fetch('/admin/curated/' + encodeURIComponent(id), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...getCsrfHeaders() },
-        body: JSON.stringify({ answer })
+        body: JSON.stringify({ question, answer })
     })
     .then(r => {
         if (r.ok) {
-            showToast('큐레이션 답변이 저장되었습니다.', 'success');
+            showToast('큐레이션 항목이 저장되었습니다. 검색 임베딩이 다시 계산됩니다.', 'success');
             bootstrap.Offcanvas.getInstance(document.getElementById('curatedEditOffcanvas')).hide();
             const row = document.getElementById('curated-row-' + id);
             if (row) row.children[1].querySelector('div').textContent = answer;

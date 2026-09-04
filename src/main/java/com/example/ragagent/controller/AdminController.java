@@ -5,6 +5,7 @@ import com.example.ragagent.context.ThreadContext;
 import com.example.ragagent.model.IndexingProgressEvent;
 import com.example.ragagent.model.MetaKey;
 import com.example.ragagent.security.CurrentUser;
+import com.example.ragagent.service.CuratedQuestionSuggester;
 import com.example.ragagent.service.AdminService;
 import com.example.ragagent.service.CuratedQaService;
 import com.example.ragagent.service.CuratedSubmissionService;
@@ -14,6 +15,7 @@ import com.example.ragagent.service.RetrievalMetricsService;
 import com.example.ragagent.service.ThreadAdminService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.context.i18n.LocaleContextHolder;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
@@ -39,6 +41,7 @@ public class AdminController {
     private final CuratedSubmissionService submissionService;
     private final RetrievalMetricsService retrievalMetricsService;
     private final ThreadAdminService threadAdminService;
+    private final CuratedQuestionSuggester questionSuggester;
     private final AuditLogger auditLogger;
     private final CurrentUser currentUser;
 
@@ -46,7 +49,9 @@ public class AdminController {
                             IndexingProgressService progressService, CuratedQaService curatedQaService,
                             CuratedSubmissionService submissionService,
                             RetrievalMetricsService retrievalMetricsService,
-                            ThreadAdminService threadAdminService, AuditLogger auditLogger,
+                            ThreadAdminService threadAdminService,
+                            CuratedQuestionSuggester questionSuggester,
+                            AuditLogger auditLogger,
                             CurrentUser currentUser) {
         this.adminService = adminService;
         this.ragService   = ragService;
@@ -55,6 +60,7 @@ public class AdminController {
         this.submissionService = submissionService;
         this.retrievalMetricsService = retrievalMetricsService;
         this.threadAdminService = threadAdminService;
+        this.questionSuggester = questionSuggester;
         this.auditLogger = auditLogger;
         this.currentUser = currentUser;
     }
@@ -203,13 +209,36 @@ public class AdminController {
                 .orElseGet(() -> ResponseEntity.notFound().build());
     }
 
-    /** Update a curated entry's answer text (re-embeds) — admin can edit any user's entry. */
+    /** Update a curated entry's question and/or answer (re-embeds once) — admin can edit any
+     *  user's entry. {@code question} is optional: older clients send only {@code answer}. */
     @PostMapping("/admin/curated/{id}")
     @ResponseBody
     public ResponseEntity<Void> updateCurated(@PathVariable long id, @RequestBody Map<String, Object> body) {
-        String newAnswer = body.get("answer") instanceof String s ? s : null;
-        boolean updated = curatedQaService.updateAnswer(id, newAnswer);
+        String newAnswer   = body.get("answer")   instanceof String s ? s : null;
+        String newQuestion = body.get("question") instanceof String q ? q : null;
+        boolean updated = curatedQaService.updateEntry(id, newQuestion, newAnswer);
         return updated ? ResponseEntity.ok().build() : ResponseEntity.notFound().build();
+    }
+
+    /**
+     * 본문을 근거로 더 구체적인 질문을 <b>제안만</b> 한다 — 저장하지 않는다.
+     *
+     * <p>큐레이션 축의 검색 텍스트는 {@code 질문 + 본문}이고 질문은 모든 청크에 반복 부여되므로,
+     * 이 축이 어떤 질의에 걸리는지는 사실상 질문 한 줄이 정한다. 그래서 고칠 값이지만, 자동으로
+     * 갈아치우면 그 판단이 사람 몰래 일어난다 — 반영 여부는 화면에서 관리자가 정한다(§10.11 의
+     * "사람의 검토가 유일한 관문"과 같은 이유).
+     *
+     * @return {@code 200 {"question": "..."}} 또는 제안할 것이 없으면 {@code 204}
+     */
+    @PostMapping("/admin/curated/{id}/suggest-question")
+    @ResponseBody
+    public ResponseEntity<?> suggestCuratedQuestion(@PathVariable long id) {
+        return curatedQaService.findById(id)
+                .<ResponseEntity<?>>map(row -> questionSuggester
+                        .suggest(row.question(), row.answer(), LocaleContextHolder.getLocale())
+                        .<ResponseEntity<?>>map(q -> ResponseEntity.ok(Map.of("question", q)))
+                        .orElseGet(() -> ResponseEntity.noContent().build()))
+                .orElseGet(() -> ResponseEntity.notFound().build());
     }
 
     /** Force-remove a curated entry regardless of the original asker's own feedback state (moderation). */

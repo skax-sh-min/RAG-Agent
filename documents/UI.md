@@ -206,7 +206,14 @@ REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — �
 >
 > `fixClosingFences`/`normalizeCodeBlocks`(코드 블록 언어 보정)는 의도적으로 재인덱싱에 포함하지 않는다 — 저장된 MD를 운영자가 직접 편집한 뒤 재인덱싱하면 코드 블록 내부의 의도된 빈 줄을 지우거나(`normalizeCodeContent`는 함수/클래스 시작·여러 줄 주석 시작 직전이 아닌 빈 줄은 삭제) 펜스 짝이 어긋난 입력에서 여는 펜스의 언어 태그를 잘못 벗길 수 있어, 매 재인덱싱마다 부작용으로 감수하기보다 필요할 때만 문서를 재업로드하도록 남겨둔 것이다.
 >
-> **청크 편집 오프캔버스 — 넓은 화면 미리보기**(`admin.html`, `openChunkEdit()`/`renderChunkPreview()`): 오프캔버스를 여는 시점의 `window.innerWidth`가 기본 폭(520px)의 2배 이상이면 오프캔버스 폭을 최대 1300px까지 넓히고 `flex-row`로 좌(미리보기)·우(편집 입력) 2컬럼 배치한다. 좁으면 기존과 동일한 단일 컬럼(`flex-column`, 520px). 미리보기는 `chat-stream.js`가 이미 쓰는 marked.js → DOMPurify → hljs.js 파이프라인을 그대로 재사용하되, 앞단에서 `[이미지: images/{id}/{file}]` 마커를 `<img src="/api/v1/images/...">`로 치환한다(인라인 렌더링이 안 되는 확장자나 `[이미지(변환불가): ...]`는 텍스트 placeholder로 대체). 텍스트 입력창을 편집하면 200ms debounce로 왼쪽 미리보기가 다시 렌더링된다. 폭 판정은 오프캔버스를 여는 시점 1회뿐이라, 열어둔 채로 창 크기를 바꿔도 레이아웃은 즉시 바뀌지 않는다(닫았다 다시 열면 재판정). 새 API 호출은 없다 — 이미 받아온 `GET /admin/chunks/{chunkId}/detail` 응답을 그대로 클라이언트에서 렌더링한다.
+> **편집 화면의 미리보기·폭 규칙**(`layout/base.html` 공용): 같은 형식의 마크다운(표·코드펜스·`[이미지: ...]` 마커)을 다루는 화면이 여섯이다 — `/admin` 의 청크 편집·큐레이션 편집·지식 제안 검토·대화 원문, 그리고 지식 제안 작성·수정. 규칙 한 벌을 `base.html` 에 두고 전부가 읽는다(`MD_PREVIEW_2COL_MIN_WIDTH`=1040 · `isTwoColumnWidth()` · `previewToggleBar()`/`previewTogglePane()`/`wirePreviewToggle()` · `bindLivePreview()`, 렌더는 `renderMarkdownWithImageMarkers` → DOMPurify).
+>
+> - **폭은 언제나 뷰포트 전체다.** 화면 크기가 바꾸는 것은 폭이 아니라 **컬럼 수**뿐이다. 예전에는 1컬럼일 때 520px 로 고정돼 800px 짜리 창에서 오른쪽 280px 을 backdrop 으로 버렸다.
+> - **≥1040px**: 좌 미리보기 + 우 편집(200ms 디바운스 라이브). **<1040px**: 같은 자리를 `원문`/`미리보기` 탭으로 번갈아. 기본으로 열리는 쪽은 화면 성격이 정한다 — 편집·작성은 원문(작성)이, 읽기 전용 열람(대화 원문)은 미리보기가 먼저다. 그 기본값의 출처는 마크업의 `checked` 하나이고 `wirePreviewToggle()` 이 읽어 초기 상태를 맞춘다.
+> - **대화 원문**만 2컬럼에서 비율이 다르다(미리보기 6 : 원문 4, `flex-basis:0`). 읽으러 온 화면이라 렌더된 쪽이 넓어야 하고, `flex-grow` 만 주면 마크다운 기호까지 든 원문이 더 길어 오히려 원문이 넓어진다.
+> - **지식 제안 검토**는 우측 컬럼이 [스크롤되는 필드] + [고정된 액션 바]로 나뉜다 — 본문이 길 때 승인/거부가 스크롤 끝으로 밀리면 안 되기 때문이다(저장 버튼 하나뿐인 나머지 편집기에는 이 구분이 없다).
+>
+> **청크 편집의 메타데이터(JSON)는 읽기 전용이다** — 접힌 `<details>` 안에서 조회만 된다. 여기 있는 키는 전부 인덱싱 시점에 파생되는 값이고, 손으로 고칠 의도가 있는 둘(키워드·요약)은 전용 필드로 빠져 있다. 편집을 없앤 이유는 [PITFALLS](PITFALLS.md#청크-편집의-메타데이터json-는-읽기-전용이다) 참고 — 저장이 조용히 무효가 되거나, 바로 아래 '이 청크만 재인덱싱'과 짝지으면 청크가 고아가 된다.
 
 ### 3.5 설정 관리 (SettingsController)
 
@@ -609,9 +616,12 @@ done 이벤트    (답변 완료 후)   → attribution {chunkId: 0.0~1.0} → �
               (페이지 레벨 JS, htmx 아닌 plain fetch) → GET /admin/curated?offset=&limit=
               → #curated-qa-body.innerHTML 교체 (몇 번이든 재호출 가능, 위 최초-1회 제약과 무관)
 [큐레이션 편집]   ✏ 버튼 → openCuratedEdit(id) → GET /admin/curated/{id}/detail
-              → 넓은 화면이면 좌측 미리보기 + 우측 편집 컬럼(청크 편집과 같은 EDIT_BASE_WIDTH*2
-                기준·같은 renderChunkPreview), 좁으면 단일 컬럼
-              → 저장 → POST /admin/curated/{id} → 백그라운드 재임베딩
+              → 넓은 화면이면 좌측 미리보기 + 우측 편집 컬럼(공용 isTwoColumnWidth() 기준),
+                좁으면 단일 컬럼 + 원문/미리보기 탭
+              → [본문으로 구체화] → POST /admin/curated/{id}/suggest-question
+                → 200 이면 제안 상자(현재 취소선 + 제안) → [적용]이 입력란에 넣을 뿐,
+                  저장은 아니다 / 204 면 "제안할 것이 없습니다"
+              → 저장 → POST /admin/curated/{id} (question + answer) → 백그라운드 재임베딩 1회
 [큐레이션 삭제]   🗑 버튼 → deleteCuratedInline(id, btn) → DELETE /admin/curated/{id}
               → 성공 시 해당 <tr> 제거
 

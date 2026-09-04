@@ -203,9 +203,26 @@ public class CuratedQaService {
      * page — so the chat window never shows or changes curation state.
      */
     public boolean updateAnswer(long curatedId, String newAnswer) {
-        if (newAnswer == null || newAnswer.isBlank()) return false;
+        return updateEntry(curatedId, null, newAnswer);
+    }
+
+    /**
+     * 질문·답변을 함께 고치는 경로 — {@code /admin} 편집 화면의 저장 하나가 둘 다 보낼 수 있다.
+     *
+     * <p><b>재임베딩은 한 번만 돈다.</b> 질문과 답변이 같은 검색 텍스트를 이룬다
+     * ({@code defaultSearchText()} = 질문 + 본문, 질문은 모든 청크에 반복 부여) — 따로 저장하면
+     * 같은 항목을 두 번 임베딩하게 되고, 그 사이에 벡터가 질문만 바뀐 중간 상태로 남는다.
+     *
+     * <p>{@code null} 인 쪽은 건드리지 않는다. 둘 다 비어 있으면 아무것도 하지 않고 {@code false} —
+     * 빈 질문은 그 항목을 검색에서 사실상 지우는 것과 같고, 빈 답변은 근거가 사라지는 것이다.
+     */
+    public boolean updateEntry(long curatedId, String newQuestion, String newAnswer) {
+        boolean hasQuestion = newQuestion != null && !newQuestion.isBlank();
+        boolean hasAnswer   = newAnswer   != null && !newAnswer.isBlank();
+        if (!hasQuestion && !hasAnswer) return false;
         if (repository.findById(curatedId).isEmpty()) return false;
-        repository.updateAnswer(curatedId, newAnswer);
+        if (hasQuestion) repository.updateQuestion(curatedId, newQuestion.strip());
+        if (hasAnswer)   repository.updateAnswer(curatedId, newAnswer);
         Thread.ofVirtual().name("curated-reembed-" + curatedId).start(() ->
                 embedActiveRow(curatedId, "edit"));
         return true;

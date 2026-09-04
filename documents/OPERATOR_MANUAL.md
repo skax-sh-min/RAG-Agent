@@ -1380,6 +1380,7 @@ app.llm.providers[1].stream=false
 |------|----------|------|
 | ClassifierService | `TEXT` | 질문 유형 분류 (품질 민감 — 답변과 같은 타입으로 묶어 큰 모델 유지) |
 | RetrievalService | `MICRO_TEXT` | 쿼리 생성 (MultiQueryExpander) — §6.21 작업2로 MICRO_TEXT 전환 |
+| CuratedQuestionSuggester | `MICRO_TEXT` | 큐레이션 Q&A 질문 구체화 제안 — 관리자가 `/admin` 편집에서 버튼을 눌러야만 돕니다. 배경 호출이라 동시성 게이트를 타지 않고, 사용량은 `/llm-usage` 에 `question:` 범주로 잡힙니다 |
 | QuestionCondenser | `MICRO_TEXT` | 짧은 후속 질문의 독립화 (§10.12) — 확장이 생략되는 길이 구간에서만 돌아 한 턴의 질의 전처리 호출은 여전히 최대 1회 |
 | AnswerService | `TEXT` | 답변 생성 + **충분도·근거 통합 평가**(별도 1콜) |
 | CriticService | — | **LLM 호출 없음** — AnswerService의 통합 평가가 낸 `grounded`를 읽어 재시도 여부만 결정 (`responseMode=S`이면 이 단계 스킵) |

@@ -333,6 +333,18 @@ public class CuratedQaRepository {
         jdbc.update("UPDATE curated_qa SET answer=?, updated_at=? WHERE id=?", answer, now(), id);
     }
 
+    /**
+     * 질문 문장만 갱신한다. 답변과 나누어 두는 이유는 둘의 수정 이유가 다르기 때문이다 — 답변은
+     * 내용이 틀렸을 때, 질문은 <b>검색에 걸리지 않을 때</b> 고친다.
+     *
+     * <p>질문은 {@code CuratedQaService.defaultSearchText()} 의 앞부분이자 모든 청크에 반복
+     * 부여되는 값이라, 이 한 줄을 바꾸면 그 항목이 어떤 질의에 걸리는지가 통째로 달라진다 —
+     * 호출부는 반드시 재임베딩해야 한다(이 메서드는 저장만 한다).
+     */
+    public void updateQuestion(long id, String question) {
+        jdbc.update("UPDATE curated_qa SET question=?, updated_at=? WHERE id=?", question, now(), id);
+    }
+
     /** Same as {@link #findAllActive(int, int)} with {@code offset=0}. */
     public List<CuratedQa> findAllActive(int limit) {
         return findAllActive(0, limit);

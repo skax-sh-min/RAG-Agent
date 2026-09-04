@@ -25,9 +25,13 @@ public final class BackgroundUsage {
     // label. KEYWORD_PREFIX is kept below (no new rows) so isBackground() still recognizes
     // historical keyword: rows recorded before this switch.
     public static final String CONTEXT_PREFIX   = "context:";
+    // 큐레이션 Q&A 의 질문 구체화 제안(/admin 편집 화면의 버튼). 관리자가 눌러야만 도는 호출이라
+    // 빈도가 낮지만, 채팅 프로바이더 행에 섞이면 "답변 모델이 왜 이만큼 불렸지"가 설명되지 않는다.
+    public static final String QUESTION_PREFIX  = "question:";
 
     private static final Set<String> PREFIXES = Set.of(
-            SUMMARY_PREFIX, KEYWORD_PREFIX, MDCORRECT_PREFIX, TXT2MD_PREFIX, TITLE_PREFIX, IMAGE_PREFIX, CONTEXT_PREFIX);
+            SUMMARY_PREFIX, KEYWORD_PREFIX, MDCORRECT_PREFIX, TXT2MD_PREFIX, TITLE_PREFIX, IMAGE_PREFIX,
+            CONTEXT_PREFIX, QUESTION_PREFIX);
 
     /** True when {@code providerName} was recorded by one of the background call sites above. */
     public static boolean isBackground(String providerName) {

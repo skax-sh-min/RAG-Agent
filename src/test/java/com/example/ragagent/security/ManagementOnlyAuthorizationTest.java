@@ -133,6 +133,7 @@ class ManagementOnlyAuthorizationTest {
     @MockitoBean LlmRouter llmRouter;
     @MockitoBean AdminService adminService;
     @MockitoBean CuratedQaService curatedQaService;
+    @MockitoBean com.example.ragagent.service.CuratedQuestionSuggester questionSuggester;
     @MockitoBean CuratedSubmissionService submissionService;
     @MockitoBean RetrievalMetricsService retrievalMetricsService;
     @MockitoBean com.example.ragagent.service.ThreadAdminService threadAdminService;
