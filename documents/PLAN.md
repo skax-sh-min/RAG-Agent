@@ -882,6 +882,8 @@ Phase 7의 원래 17건 완료 **이후** 추가된 설계. 좋아요(👍)한 �
 
 ## 13. DB 스키마 변경 요약
 
+> ⚠️ **분리 배포에서 Flyway는 실데이터에 닿지 않는다** (2026-09-04 확인): `SQLITE_VEC_DB_PATH` 를 설정하면 운영 테이블까지 벡터 DB 파일에 만들어지는데(원인은 [PITFALLS](PITFALLS.md#벡터-스토어-백엔드와-vecfts-datasource) 의 `JdbcTemplate` 자동설정 백오프), Flyway 는 `@Primary` DataSource(`memory.db`)에만 적용되고 이력도 거기 남는다. 즉 **새 `V4__*.sql` 을 추가하면 빈 파일에만 적용되고 "성공"으로 보고된다.** 아래 지침(런타임 `ALTER` 패턴)은 이제 취향이 아니라 **그 배포에서 유일하게 동작하는 방법**이다.
+>
 > **신규 컬럼 추가 지침**: Flyway는 `V1__baseline`+`V2__users` 두 개만 존재하고, 그 이후 컬럼/인덱스(`user_id`, 피드백 컬럼 등)는 전부 **런타임 멱등 DDL**(`SqliteMemoryRepository`/`SqliteUserDetailsService`의 `CREATE TABLE IF NOT EXISTS` + `ALTER TABLE ADD COLUMN`)로 추가돼 왔다. **신규 컬럼은 새 Flyway 파일이 아니라 이 런타임 `ALTER TABLE ADD COLUMN` 패턴에 한 줄 추가**하는 것이 현재 코드와 정합적이다(멱등, 프리릴리즈 정책과도 부합). sqlite-vec 쪽 스키마(`vec_embeddings`/`vec_document_chunks`/`chunk_fts`)도 동일하게 Flyway가 아니라 `SqliteVecSchemaInitializer`의 동적 DDL(차원 파라미터화)로 관리된다.
 
 ---

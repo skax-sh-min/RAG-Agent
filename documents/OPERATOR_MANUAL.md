@@ -104,6 +104,7 @@ rag_java/
 │   ├── chroma/                 # ChromaDB 벡터 데이터 (로컬 실행 시)
 │   ├── audit/                  # 감사 로그 (audit.log + 롤링 압축본)
 │   └── memory.db               # 대화 이력 + LLM 사용량 + 인덱스 레지스트리 (SQLite WAL)
+│                               #   ※ SQLITE_VEC_DB_PATH 를 켜면 이 내용도 그 벡터 DB 파일로 간다 (§6.3.1)
 └── src/main/
     ├── java/com/example/ragagent/
     │   ├── agent/              # AgentGraph (상태 머신), AgentState (불변 레코드)
@@ -1227,9 +1228,8 @@ Compress-Archive -Path data -DestinationPath ("backup-before-tag-scope-" + $ts +
 #### 3) 수동 초기화 (기존 데이터 삭제)
 
 공통 삭제 대상:
-- `data/memory.db`
-- `data/memory.db-wal`
-- `data/memory.db-shm`
+- `data/memory.db` (+`-wal`/`-shm`)
+- **`SQLITE_VEC_DB_PATH` 를 설정했다면 그 파일도 함께** — 예: `data/vector.db`(+`-wal`/`-shm`). ⚠️ 그 배포에서는 **대화·계정·설정·레지스트리가 전부 그 파일에 있으므로**, `memory.db` 만 지우면 아무것도 초기화되지 않습니다([§6.3.1](#631-sqlite-파일별-테이블-구성))
 - `data/documents/`
 - `data/converted/`
 - `data/images/`
@@ -1241,6 +1241,7 @@ chroma 백엔드 추가 삭제 대상:
 ```bash
 # macOS / Linux
 rm -f data/memory.db data/memory.db-wal data/memory.db-shm
+rm -f data/vector.db data/vector.db-wal data/vector.db-shm   # SQLITE_VEC_DB_PATH 를 켠 경우
 rm -rf data/documents data/converted data/images data/chroma
 mkdir -p data/documents data/converted data/images data/chroma data/audit
 ```
@@ -1248,6 +1249,8 @@ mkdir -p data/documents data/converted data/images data/chroma data/audit
 ```powershell
 # Windows PowerShell
 Remove-Item data/memory.db,data/memory.db-wal,data/memory.db-shm -Force -ErrorAction SilentlyContinue
+# SQLITE_VEC_DB_PATH 를 켠 경우
+Remove-Item data/vector.db,data/vector.db-wal,data/vector.db-shm -Force -ErrorAction SilentlyContinue
 Remove-Item data/documents,data/converted,data/images,data/chroma -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force data/documents,data/converted,data/images,data/chroma,data/audit | Out-Null
 ```
@@ -1879,19 +1882,23 @@ curl -X POST http://localhost:8080/api/v1/chat \
 | 지식 제안 본문 이미지 | `DATA_DIR/images/submissions/` | 사용자가 업로드한 제안 본문 이미지(§6.9). 파일명은 내용 SHA-256 앞 16자 + 확장자라 같은 그림은 한 벌만 저장되고 **여러 제안이 공유**할 수 있습니다 — 그래서 삭제는 참조 세기 방식입니다(반려·철회 시 + 기동 시 24시간 지난 미참조 파일 스윕). 디렉터리 이름이 문자열 `submissions`이므로 16자리 hex인 `{imageId}`와 절대 충돌하지 않습니다 |
 | DOCX 변환 MD (원본) | `DATA_DIR/converted/{docId}.md` | DOCX 인덱싱 시 자동 생성; 문서 삭제 시 함께 삭제 |
 | DOCX 변환 MD (교정본) | `DATA_DIR/converted/{docId}_corrected.md` | LLM 포맷 교정 후 저장; 실제 인덱싱 소스; 수동 편집 후 벡터 스토어 관리 페이지에서 ↺ 재인덱싱 가능 |
-| 인덱스 레지스트리 | `DATA_DIR/memory.db` (SQLite `doc_registry` 테이블) | SHA-256 기반 변경 감지. 문서 저장소는 사용자별 격리 없이 공유됨(`DocRegistry.SHARED`) — `userId` 파라미터는 API 시그니처상 존재하나 실제로는 무시됨 |
+| 인덱스 레지스트리 | `doc_registry` 테이블 — `SQLITE_VEC_DB_PATH`를 **비웠으면** `DATA_DIR/memory.db`, **설정했으면 그 벡터 DB 파일**([§6.3.1](#631-sqlite-파일별-테이블-구성)) | SHA-256 기반 변경 감지. 문서 저장소는 사용자별 격리 없이 공유됨(`DocRegistry.SHARED`) — `userId` 파라미터는 API 시그니처상 존재하나 실제로는 무시됨 |
 | 벡터 임베딩 | chroma: Chroma 서버(로컬 `data/chroma/`, Docker Compose `chroma_data` 볼륨) / sqlite-vec: `DATA_DIR/memory.db`(기본) 또는 `app.vectorstore.sqlite-vec.db-path` 설정 시 별도 `vector.db` | 백엔드 전환 시 벡터 공유 안 됨(§3.1) |
-| 대화 이력 + LLM 사용량 | `DATA_DIR/memory.db` (SQLite) | WAL 모드; 메시지 메타데이터(토큰·시간·프로바이더) 포함. 파일별 테이블 구성은 아래 [§6.3.1](#631-sqlite-파일별-테이블-구성) |
+| 대화 이력 + LLM 사용량 | 인덱스 레지스트리와 **같은 파일** (위 행 참조 — `memory.db` 또는 벡터 DB 파일) | WAL 모드; 메시지 메타데이터(토큰·시간·프로바이더) 포함. 파일별 테이블 구성은 아래 [§6.3.1](#631-sqlite-파일별-테이블-구성) |
 | 감사 로그 | `DATA_DIR/audit/audit.log` | JSON Lines; 롤링 압축본 `audit.YYYY-MM-DD.N.log.gz` 포함 |
 
 > Docker Compose 사용 시 `./data` 디렉터리를 컨테이너에 바인드 마운트합니다.  
 > 데이터 백업 시 `data/` 디렉터리와 Chroma 볼륨을 함께 보존하세요.
+>
+> ⚠️ **DB 파일만 골라 백업하려면 [§6.3.1](#631-sqlite-파일별-테이블-구성)을 먼저 읽으세요.** `SQLITE_VEC_DB_PATH`를 설정한 배포에서는 대화·계정·설정까지 **전부 그 벡터 DB 파일에 있고 `memory.db`는 빈 껍데기**입니다 — 이름만 보고 `memory.db`를 복사하면 0행짜리 파일을 백업하게 됩니다.
 
 #### 6.3.1 SQLite 파일별 테이블 구성
 
-DB 파일은 **최대 두 개**입니다. `SQLITE_VEC_DB_PATH`(=`app.vectorstore.sqlite-vec.db-path`)를 **비워 두면 파일은 `memory.db` 하나뿐**이고, 값을 넣으면(예: `./data/vector.db`) 벡터·검색 색인 테이블만 그 파일로 분리됩니다. Chroma 백엔드에서는 벡터가 Chroma 서버에 있으므로 `vector.db`에는 FTS 색인만 남습니다.
+DB 파일은 **최대 두 개**입니다. `SQLITE_VEC_DB_PATH`(=`app.vectorstore.sqlite-vec.db-path`)를 **비워 두면 파일은 `memory.db` 하나뿐**이고, 값을 넣으면(예: `./data/vector.db`) 두 번째 파일이 생깁니다. Chroma 백엔드에서는 벡터가 Chroma 서버에 있으므로 그 파일에는 FTS 색인만 남습니다.
 
-**`memory.db`** — 대화·운영 데이터 전부 (`spring.datasource.url`, `@Primary` DataSource)
+> ⚠️ **분리를 켜면 벡터뿐 아니라 운영 테이블까지 그 파일로 갑니다** — 이름과 달리 `memory.db`에는 아무것도 쌓이지 않습니다. 이유는 아래 «어느 파일에 들어가는가»에 있습니다. 스위치를 켠 배포에서 **실데이터가 있는 파일은 벡터 DB 하나뿐**이라고 생각하는 편이 맞습니다.
+
+**운영 테이블** — 대화·계정·설정·레지스트리. 분리 **off**면 `memory.db`, **on**이면 벡터 DB 파일에 만들어집니다.
 
 | 테이블 | 내용 | 생성 주체 |
 |---|---|---|
@@ -1910,7 +1917,7 @@ DB 파일은 **최대 두 개**입니다. `SQLITE_VEC_DB_PATH`(=`app.vectorstore
 | `app_secret` | 게스트 식별 HMAC 키 등 서버 비밀값 | `AppSecretRepository` |
 | `flyway_schema_history` | 마이그레이션 이력 | Flyway |
 
-**`vector.db`** — 벡터·검색 색인 (분리 설정을 켰을 때만 별도 파일; 끄면 아래 테이블이 `memory.db` 안에 생깁니다)
+**벡터·검색 색인 테이블** — 분리 **on**이면 벡터 DB 파일, **off**면 위 운영 테이블과 같은 `memory.db`
 
 | 테이블 | 내용 | 생성 주체 |
 |---|---|---|
@@ -1920,11 +1927,15 @@ DB 파일은 **최대 두 개**입니다. `SQLITE_VEC_DB_PATH`(=`app.vectorstore
 
 > 위 두 표에 없는 이름이 파일 안에 보이면 대개 **SQLite가 자동 생성한 그림자 테이블**입니다 — `chunk_fts_data`/`_idx`/`_content`/`_docsize`/`_config`(FTS5), `vec_embeddings_*`(vec0), `sqlite_sequence`(AUTOINCREMENT). 직접 조회·수정하지 마세요.
 >
-> **어느 파일에 들어가는지는 코드가 주입받는 `JdbcTemplate`으로 결정됩니다** — `@Qualifier("vectorJdbcTemplate")`를 받는 컴포넌트(`SqliteVecSchemaInitializer`·`SqliteVecVerifier`·`SqliteVecVectorStoreProvider`·`KeywordSearchRepository`·`AdminService`)만 `vector.db`를 씁니다. 그 외는 전부 `memory.db`입니다. `QuestionReuseRepository`는 두 템플릿을 모두 주입받지만 **쓰기(`turn_source_ref`)는 `memory.db`**, 벡터 템플릿은 청크 원문을 읽을 때만 씁니다.
+> **어느 파일에 들어가는가 — 코드가 주입받는 `JdbcTemplate`이 정합니다.** 그런데 **분리를 켜면 그 템플릿이 하나뿐**입니다: `DataSourceConfig`가 `vectorJdbcTemplate` 빈을 직접 정의하는 순간 Spring Boot의 `JdbcTemplateAutoConfiguration`(`@ConditionalOnMissingBean(JdbcOperations.class)`)이 통째로 물러나, 컨텍스트에 `memory.db`용 `JdbcTemplate`이 아예 만들어지지 않습니다. 그래서 `@Qualifier` 없이 `JdbcTemplate`을 받는 저장소(`SqliteMemoryRepository`·`SqliteUserDetailsService`·`ThreadMetaRepository`·`CuratedQaRepository`·`CuratedSubmissionRepository`·`ChunkReportRepository`·`LlmUsageRepository`·`SettingsOverrideRepository`·`AppSecretRepository`·`DocRegistry`…)도 **전부 벡터 DB 파일에 씁니다**. `QuestionReuseRepository`는 두 템플릿을 모두 주입받지만, 분리가 켜져 있으면 `turn_source_ref` 쓰기도 결국 같은 파일로 갑니다. 분리가 **꺼져 있으면** 그 한 빈이 운영 DataSource를 감싸므로 전부 `memory.db`이고, 이 사실은 겉으로 드러나지 않습니다. (동작 고정: `DataSourceJdbcTemplateWiringTest`, `-Dsqlitevec.path` 필요)
 >
-> ⚠️ **두 파일은 트랜잭션이 분리돼 있습니다.** 인덱싱은 벡터 → FTS → 레지스트리(`memory.db`) 순서로 쓰며, 마지막 레지스트리 커밋이 "색인 완료"의 기준입니다. 백업할 때는 **두 파일을 같은 시점에 함께** 보존하세요(한쪽만 되돌리면 레지스트리와 벡터가 어긋납니다).
+> **그럼 `memory.db`는 지워도 되나?** 분리를 켠 배포에서 그 파일은 Flyway가 만든 **빈 테이블 + 마이그레이션 이력**뿐이라 데이터 손실 없이 지울 수 있지만, **얻는 것도 없습니다** — 앱은 기동할 때마다 `@Primary` DataSource로 그 파일을 다시 만들고 Flyway를 다시 적용합니다(빈 파일이므로 무해). 백업 대상에서 빼는 것은 괜찮고, 파일 자체를 없애려면 배선을 바꿔야 합니다.
 >
-> **스키마는 기동 시 자동 정비됩니다** — Flyway 마이그레이션(V1~V3) 이후의 컬럼은 각 리포지터리의 `@PostConstruct`에서 `ALTER TABLE`(이미 있으면 조용히 무시)로 추가됩니다. 따라서 **오래된 `memory.db`를 가져다 놓고 앱을 재기동하면 자동으로 최신 스키마가 됩니다**(기존 행은 보존, 새 컬럼은 `NULL`). 반대로 앱이 실행 중일 때 DB 파일을 교체하면 열려 있는 커넥션과 어긋나 손상될 수 있으니, 반드시 **앱을 내린 뒤** 교체하세요.
+> ⚠️ **Flyway는 실데이터에 닿지 않습니다.** Flyway는 `@Primary` DataSource(=`memory.db`)에 적용되고 이력(`flyway_schema_history`)도 거기 남는데, 분리를 켜면 실제 테이블은 벡터 DB 파일에 각 저장소의 런타임 DDL(`CREATE TABLE IF NOT EXISTS` + 방어적 `ALTER`)로 만들어집니다. 그래서 **새 `V4__*.sql`을 추가하면 빈 파일에만 적용되고 "성공"으로 보고됩니다.** 신규 컬럼은 Flyway가 아니라 런타임 `ALTER` 패턴으로 추가한다는 규약([PLAN §13](PLAN.md#13-db-스키마-변경-요약))을 지키는 한 문제가 되지 않습니다 — 그 규약을 어기지 마세요.
+>
+> ⚠️ **두 파일은 트랜잭션이 분리돼 있습니다.** 인덱싱은 벡터 → FTS → 레지스트리 순서로 쓰며 마지막 레지스트리 커밋이 "색인 완료"의 기준입니다. 두 파일을 쓰는 배포라면(분리 off·Chroma 조합 등) 백업 시 **같은 시점에 함께** 보존하세요(한쪽만 되돌리면 레지스트리와 벡터가 어긋납니다).
+>
+> **스키마는 기동 시 자동 정비됩니다** — 위 «생성 주체»에 Flyway로 적힌 테이블도 각 저장소가 런타임 `CREATE TABLE IF NOT EXISTS`를 함께 갖고 있고, Flyway 이후의 컬럼은 `@PostConstruct`의 `ALTER TABLE`(이미 있으면 조용히 무시)로 추가됩니다. Flyway가 닿지 않는 벡터 DB 파일에서도 같은 스키마가 만들어지는 것이 이 때문입니다. 따라서 **오래된 DB 파일을 가져다 놓고 앱을 재기동하면 자동으로 최신 스키마가 됩니다**(기존 행은 보존, 새 컬럼은 `NULL`). 반대로 앱이 실행 중일 때 DB 파일을 교체하면 열려 있는 커넥션과 어긋나 손상될 수 있으니, 반드시 **앱을 내린 뒤** 교체하세요.
 
 > **`doc_registry.chunk_overlap`**: 문서를 인덱싱(또는 ↺ 재인덱싱)한 시점에 실제로 적용된 `app.chunk-overlap` 값을 문서별로 함께 기록합니다 — §6.8 문서 내보내기가 이 값을 읽어 청크 재조립 시 overlap을 정확히 제거하는 데 씁니다. 이 컬럼이 추가되기 전에 인덱싱된 문서는 `NULL`로 남아 있다가, 기동 시 `ChunkOverlapBackfill`이 한 번 그 시점의 `app.chunk-overlap` 현재값으로 채웁니다(이미 값이 있는 행은 건드리지 않음 — 멱등). 운영자가 직접 조작할 일은 없는 내부 컬럼입니다.
 
@@ -2080,7 +2091,7 @@ mvn test -Dtest=SearchQualityEvaluationTest -Dsearch-eval.enabled=true
 > **2026-09-02 변경 (§10.11) — 좋아요가 더 이상 직접 등록하지 않습니다.** 예전에는 👍 를 누르면 그 자리에서 `curated_qa` 행이 만들어지고 3초 뒤 임베딩되어 전체 사용자의 검색에 들어갔습니다. 검색 코퍼스로 들어가는 문이 둘인데 한쪽만 관리자 승인을 요구하는 상태였고, 문서를 하나도 안 본 Direct 답변이 클릭 한 번에 공유 지식이 될 수 있었습니다. 지금은 👍 가 [§6.9 지식 제안](#69-지식-제안-게시판-사용자-제안--관리자-임베딩) 폼을 그 답변으로 채워 열어 줄 뿐이고, **등록은 관리자 승인에서만** 일어납니다. 검토 화면에는 그 답변의 `[RN]`/`[DN]` 표기와 원 대화 링크가 함께 뜹니다 — `D` 는 검색을 거치지 않은 답변이라는 뜻이므로 반려 판단의 재료입니다.
 
 **동작 원리**:
-- 관리자가 **임베딩 실행**을 누르면 `curated_qa` 테이블(`memory.db`)에 검토된 텍스트가 저장되고, 백그라운드 스레드가 곧바로 임베딩합니다(디바운스 없음 — 승인은 취소와 경합할 수 없는 명시적 동작입니다).
+- 관리자가 **임베딩 실행**을 누르면 `curated_qa` 테이블(운영 테이블 — 파일은 §6.3.1)에 검토된 텍스트가 저장되고, 백그라운드 스레드가 곧바로 임베딩합니다(디바운스 없음 — 승인은 취소와 경합할 수 없는 명시적 동작입니다).
 - **응답 모드가 `S`(간단히)였던 turn은 좋아요를 눌러도 제안을 만들 수 없습니다** — 버튼이 비활성으로 뜨고 사유가 툴팁에 붙습니다. S 는 **의도적으로 축약된 답변**이기 때문입니다: 1,000자 상한의 `## 요약` 한 섹션이고, 프롬프트가 배경·이유·전제·예외를 빼라고 지시합니다 — 지금 짧게 보려고 고른 형식이지 오래 남길 지식의 원본이 아닙니다. `C`(응용)는 §10.11 에서 **열렸습니다** — 예전에 막았던 이유(모델이 지어낸 코드가 다음 턴의 "문서"가 되는 되먹임)가 치명적이었던 것은 게이트가 없었기 때문이고, 사람이 편집하고 관리자가 승인하는 지금은 C 답변도 다른 제안과 같은 심사를 받습니다. 판정은 `ResponseMode.allowsSubmission()`이고 기준값은 `conversation_turns.response_mode`(turn 생성 시 저장)입니다. **싫어요는 모드와 무관하게 그대로 동작합니다**(다음 대화 컨텍스트에서 제외).<br>※ 옛 `L`(원문 최대) 모드의 임베딩 스킵은 §6.24에서 제거됐습니다. 응답 모드와 `LLM_MAX_TOKENS`의 관계는 [§3.2 `LLM_MAX_TOKENS`](#32-환경변수-전체-목록), 설계 전체는 [PIPELINE §3.1](PIPELINE.md)을 참고하세요.
 - 임베딩은 예약된 벡터 스토어 버전 네임스페이스 `"curated"`에 저장됩니다 — 실제 문서 버전과 완전히 분리되어 있어 **문서를 재인덱싱해도 큐레이션 지식은 사라지지 않습니다.**
 - 검색 시 이 축은 기존 벡터/키워드(BM25) 축과 함께 가중 RRF로 융합됩니다(§6.5 "큐레이션 Q&A 검색 반영/가중치" 참고) — 큐레이션 답변이 검색되면 **정답을 그대로 반환하는 것이 아니라 LLM이 참고할 근거로 주입**되므로, 현재 문서 내용과 다르면 LLM이 최신 문서를 우선하도록 설계되어 있습니다.
@@ -2153,12 +2164,12 @@ mvn test -Dtest=SearchQualityEvaluationTest -Dsearch-eval.enabled=true
 
 | 테이블 | 위치 | 역할 |
 |---|---|---|
-| `curated_submission` | `memory.db` | 게시글 자체 — 제목·본문·상태(`pending`/`approved`/`rejected`/`withdrawn`)·거부 사유·검토자·작성자 확인 시각·출처 턴(`source_turn_id`/`source_thread_id`, 좋아요 출신일 때만) |
-| `curated_qa` | `memory.db` | 승인된 제안의 실제 색인 항목(`origin` 으로 출처 구분 — 감사·통계용이며 검색 가중치는 하나입니다). 손으로 쓴 제안은 승인 시 **여러 행**(청크)이 되고, 좋아요 출신은 **turn 을 키로 하는 행 하나**가 임베딩 시점에 벡터 여러 개로 나뉩니다. 어느 쪽이든 `source_submission_id`로 묶입니다 |
+| `curated_submission` | 운영 DB(§6.3.1) | 게시글 자체 — 제목·본문·상태(`pending`/`approved`/`rejected`/`withdrawn`)·거부 사유·검토자·작성자 확인 시각·출처 턴(`source_turn_id`/`source_thread_id`, 좋아요 출신일 때만) |
+| `curated_qa` | 운영 DB(§6.3.1) | 승인된 제안의 실제 색인 항목(`origin` 으로 출처 구분 — 감사·통계용이며 검색 가중치는 하나입니다). 손으로 쓴 제안은 승인 시 **여러 행**(청크)이 되고, 좋아요 출신은 **turn 을 키로 하는 행 하나**가 임베딩 시점에 벡터 여러 개로 나뉩니다. 어느 쪽이든 `source_submission_id`로 묶입니다 |
 
 두 테이블을 분리한 이유: `curated_qa.status='active'`는 "지금 검색에 기여 중"이라는 뜻으로 검색·모더레이션 코드 전반이 이 의미에 의존하고 있어, 검토 대기 상태를 여기 섞으면 그 불변식이 깨집니다.
 
-> **첫 기동 시 자동 스키마 마이그레이션**: 사용자 제안은 대화 turn이 없으므로 `curated_qa.source_turn_id`가 nullable이어야 하는데, SQLite는 이를 `ALTER`로 바꿀 수 없습니다. 그래서 기존 DB에서 이 기능이 처음 올라올 때 `CuratedQaRepository`가 **테이블을 1회 재생성**합니다(단일 트랜잭션 — 중간 실패 시 롤백, 기존 행은 `origin='like'`로 그대로 보존). 로그의 `[CURATED] curated_qa 스키마 마이그레이션 완료` 줄로 확인할 수 있으며, 두 번째 기동부터는 실행되지 않습니다. 기존 좋아요 항목의 검색 반영은 영향받지 않지만, 큰 변경이므로 **적용 전 `data/memory.db` 백업을 권장**합니다(§6.3).
+> **첫 기동 시 자동 스키마 마이그레이션**: 사용자 제안은 대화 turn이 없으므로 `curated_qa.source_turn_id`가 nullable이어야 하는데, SQLite는 이를 `ALTER`로 바꿀 수 없습니다. 그래서 기존 DB에서 이 기능이 처음 올라올 때 `CuratedQaRepository`가 **테이블을 1회 재생성**합니다(단일 트랜잭션 — 중간 실패 시 롤백, 기존 행은 `origin='like'`로 그대로 보존). 로그의 `[CURATED] curated_qa 스키마 마이그레이션 완료` 줄로 확인할 수 있으며, 두 번째 기동부터는 실행되지 않습니다. 기존 좋아요 항목의 검색 반영은 영향받지 않지만, 큰 변경이므로 **적용 전 DB 파일 백업을 권장**합니다 — `data/memory.db`, 그리고 `SQLITE_VEC_DB_PATH` 를 켰다면 실데이터가 있는 그 벡터 DB 파일([§6.3.1](#631-sqlite-파일별-테이블-구성)).
 
 **입력 제한** (`CuratedSubmissionService` — 이미지 3종만 `CuratedImageStore`):
 
@@ -3312,7 +3323,7 @@ TRUST_FORWARDED_FOR=true   # 리버스 프록시(Caddy) 뒤라면 필수 — 아
 - [ ] (운영 환경) `/admin` 경로에 대한 네트워크 접근 제한 적용 여부 확인
 
 **지식 제안 게시판 (§6.9, 사용하는 경우)**:
-- [ ] 기존 DB 업그레이드라면 **적용 전 `data/memory.db` 백업** + 첫 기동 로그의 `[CURATED] curated_qa 스키마 마이그레이션 완료` 확인
+- [ ] 기존 DB 업그레이드라면 **적용 전 DB 파일 백업**(`data/memory.db` + 분리를 켰다면 벡터 DB 파일 — §6.3.1) + 첫 기동 로그의 `[CURATED] curated_qa 스키마 마이그레이션 완료` 확인
 - [ ] (게스트 배포) `AUTH_GUEST_IDENTITY`가 `shared`가 아닌지 확인 — 기동 로그 `[GUEST_ID] 방문자 식별 전략: ...` 줄로 실제 적용값 확인
 - [ ] `/curated/submissions`에서 제안 1건 등록 → 관리자 헤더 배지에 대기 건수 표시(최대 60초) 확인
 - [ ] 게스트로 `GET /admin/submissions/pending-count` 호출 → 로그인 리다이렉트(또는 403) 확인
@@ -3322,7 +3333,7 @@ TRUST_FORWARDED_FOR=true   # 리버스 프록시(Caddy) 뒤라면 필수 — 아
 
 **태그 기반 검색 적용 시 (프리릴리즈 정책)**:
 - [ ] 적용 전 백업 여부 결정 및 수행 (선택)
-- [ ] `data/memory.db`(+wal/shm), `data/documents`, `data/converted`, `data/images` 수동 초기화 완료
+- [ ] `data/memory.db`(+wal/shm) — 분리를 켰다면 벡터 DB 파일도 함께 —, `data/documents`, `data/converted`, `data/images` 수동 초기화 완료
 - [ ] (chroma) `data/chroma` 또는 `chroma_data` 볼륨 초기화 완료
 - [ ] 재기동 후 `/setup` 또는 로그인 경로 정상 확인
 - [ ] 문서 재업로드/동기화 후 태그 엄격 필터 동작 확인
