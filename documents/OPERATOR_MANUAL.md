@@ -403,7 +403,7 @@ app.embedding.max-concurrent-batches=4
 
 | 변수 | 기본값 | 설명 |
 |------|--------|------|
-| `LOGGING_LEVEL` | `INFO` | 앱 전체 로그 레벨을 일괄 설정합니다. `com.example.ragagent`(앱 코드), `org.springframework.ai.openai`(Spring AI 내부), `reactor.netty.http.client`(HTTP 와이어 로그) 세 로거가 이 값을 공유합니다.<br>• `INFO` — 인덱싱 시작/완료, 동기화 결과, 프로바이더 등록 이벤트만 출력 (운영 환경 기본값)<br>• `DEBUG` — 에이전트 흐름(Classifier→Retrieval→Answer→Critic), 프로바이더 라우팅 결정, LLM 요청 curl 재현 명령 출력. **프롬프트 원문·검색 문서·대화 이력이 포함**되므로 운영 환경에서는 사용 금지<br>• `TRACE` — HTTP body 바이트 전체 출력 (SSE 청크 포함, 매우 방대). 짧은 디버깅 후 즉시 해제 권장<br>재시작 없이 레벨을 바꾸려면 Actuator 사용 → [§8 런타임 레벨 변경](#8-문제-해결) 참조 |
+| `LOGGING_LEVEL` | `INFO` | 앱 전체 로그 레벨을 일괄 설정합니다. `com.example.ragagent`(앱 코드), `org.springframework.ai.openai`(Spring AI 내부), `reactor.netty.http.client`(HTTP 와이어 로그) 세 로거가 이 값을 공유합니다.<br>• `INFO` — 인덱싱 시작/완료, 동기화 결과, 프로바이더 등록 이벤트만 출력 (운영 환경 기본값)<br>• `DEBUG` — 에이전트 흐름(Classifier→Retrieval→Answer→Critic), 프로바이더 라우팅 결정, LLM 요청 curl 재현 명령 출력. 질문 1건마다 `[PROMPT]` 두 줄(**답변**·**검증**)이 구성 요소별 토큰·바이트로 찍혀 무엇이 창을 채웠는지 바로 보입니다 — 문서가 크면 `SEARCH_TOP_K`/`CHUNK_SIZE`, 이력이 크면 `SUMMARY_RECENT_RAW_TURNS`/`MEMORY_FETCH_LIMIT_TURNS` 를 조절합니다(검증 줄이 답변 줄보다 큰 것이 정상입니다 — 답변 전문과 응답 스키마가 더 얹히므로). **프롬프트 원문·검색 문서·대화 이력이 포함**되므로 운영 환경에서는 사용 금지<br>• `TRACE` — HTTP body 바이트 전체 출력 (SSE 청크 포함, 매우 방대). 짧은 디버깅 후 즉시 해제 권장<br>재시작 없이 레벨을 바꾸려면 Actuator 사용 → [§8 런타임 레벨 변경](#8-문제-해결) 참조 |
 | `SPRING_SECURITY_LOGGING_LEVEL` | `WARN` | Spring Security 로그 레벨 (`logging.level.org.springframework.security`). `DEBUG`로 변경하면 인증 필터·세션 생성·권한 결정 과정이 상세하게 출력됨. 인증 이슈 디버깅 시에만 임시 사용 권장 |
 
 #### 설정 예시

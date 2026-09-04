@@ -61,6 +61,24 @@ public final class HistoryPolicy {
     }
 
     /**
+     * 이력 문자열에 실제로 몇 턴이 들어 있는지 — <b>로그 표시 전용</b>이다.
+     *
+     * <p>두 경로 모두 한 턴을 {@code "Q: …\nA: …"} 로 쓰므로 줄 첫머리의 {@code "Q: "} 를 센다.
+     * {@link #trimToBudget} 이 쓰는 경계와 같은 모양이고, 그쪽 주석이 말하듯 <b>항상 정확하지는
+     * 않다</b> — 답변 본문 안에 빈 줄 다음 {@code "Q: "} 로 시작하는 줄이 있으면(FAQ 형식 답변)
+     * 더 세어진다. 프롬프트 크기 로그의 가독성을 위한 값이라 그 정도 오차는 감수하고, 어떤 판단에도
+     * 쓰지 않는다.
+     */
+    public static int countTurns(String history) {
+        if (history == null || history.isBlank()) return 0;
+        int count = 0;
+        for (String line : history.split("\n", -1)) {
+            if (line.startsWith("Q: ")) count++;
+        }
+        return count;
+    }
+
+    /**
      * Direct 프롬프트에서 이력·질문 말고 고정으로 들어가는 것의 토큰 추정 — 시스템 프롬프트와
      * {@code [이전 대화]}/{@code [현재 질문]} 헤더, 인젝션 가드 래퍼.
      *

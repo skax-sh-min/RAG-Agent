@@ -54,6 +54,7 @@ Flow:
 | `llm/IndexingOutputCap.java` | 인덱싱/백그라운드 호출의 **출력 예약**을 작업 크기에 맞춰 좁힌다 [↗](documents/PITFALLS.md#llmindexingoutputcapjava) |
 | `llm/PromptBudget.java` | 입력 토큰 예산 = `창 − 출력 예약 − 여유(창의 10%, 최소 256)` [↗](documents/PITFALLS.md#llmpromptbudgetjava) |
 | `llm/TokenEstimateCalibration.java` | `TokenEstimator` 의 추정을 **서버가 실제로 센 토큰 수**와 대조하는 관측 계층 [↗](documents/PITFALLS.md#llmtokenestimatecalibrationjava) |
+| `llm/PromptSizeLog.java` | 프롬프트를 **구성 요소별로** 재서 한 줄로 찍는 디버그 로그 포매터(순수 클래스). `AnswerService` 가 답변·검증 두 호출에 각각 `[PROMPT]` 한 줄씩 남긴다 — 토큰(추정)과 바이트(실제)를 함께 찍는 이유는 창을 넘겼을 때 필요한 답이 "합계"가 아니라 **무엇이 부풀렸는가**이기 때문. `log.isDebugEnabled()` 안에서만 돈다(`LOGGING_LEVEL=DEBUG`) |
 | `llm/TokenEstimator.java` | 실제 토큰 수를 알 수 없을 때 쓰는 **단 하나의** 추정 가정: `CJK 글자수 × 1 + 나머지 글자수 / 4` [↗](documents/PITFALLS.md#llmtokenestimatorjava) |
 | `llm/ProviderContextWindows.java` | 프로바이더별 컨텍스트 창(토큰)을 기록하는 이름-키 레지스트리(기동 시 1회 + `/settings` 의 재탐지 버튼, §6.26 A5) (`ProviderToggle` 선례 — `LlmProvider` 레코드는 40곳에서 생성되고, 이건 프로바이더를 식별하는 값이 아니라 그에 관해 관측된 값이라 레코드가 나를 이유가 없다). 출처는 `context-size` 선언 또는 `ContextWindowProbe` 탐지이며, **둘 다 없으면 항목 자체가 없다** — 0 이나 기본값이 아니라 "모름"을 값으로 표현해야 추측한 숫자로 입력 예산을 짜는 일이 없다 |
 | `service/SettingsService.reprobeContextWindows()` | §6.26 A5 — 기동 시 한 번 탐지한 창은 낡는다(서버를 다른 `-c` 로 재시작, LM Studio 의 JIT 로딩) [↗](documents/PITFALLS.md#servicesettingsservicereprobecontextwindows) |

@@ -11,6 +11,7 @@ import com.example.ragagent.llm.LlmCurlLogger;
 import com.example.ragagent.llm.LlmProvider;
 import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.PromptBudget;
+import com.example.ragagent.llm.PromptSizeLog;
 import com.example.ragagent.llm.ProviderContextWindows;
 import com.example.ragagent.llm.TokenEstimator;
 import com.example.ragagent.llm.RoutingMode;
@@ -312,7 +313,9 @@ public class AnswerService {
         // streaming has no ChatResponse to read real usage from — record an approximate
         // (chars/4) usage entry so /llm-usage isn't blind to the entire streaming chat path, and
         // reflect the same estimate in the per-turn total so the chat UI isn't stuck at 0/0.
-        String promptText = systemPrompt + buildAnswerPrompt(state, provider.name(), true, attempt.level());
+        // 크기 로그는 끈다 — 이 조립은 사용량 추정용이고 어디로도 나가지 않는다(위 스트리밍
+        // 호출에서 이미 같은 프롬프트가 한 줄 찍혔다).
+        String promptText = systemPrompt + buildAnswerPrompt(state, provider.name(), true, attempt.level(), false);
         llmRouter.recordApproxUsage(provider.name(), promptText, answer);
         int approxIn = (int) LlmRouter.approxTokens(promptText);
         int approxOut = (int) LlmRouter.approxTokens(answer);
@@ -651,6 +654,10 @@ public class AnswerService {
                         evalConverter.getFormat(), level);
                 used[0] = excerpts;
                 String evalPrompt = buildEvalPrompt(state, answer, excerpts.text(), evalConverter.getFormat());
+                if (log.isDebugEnabled()) {
+                    logPromptSize(evalPromptSize(state, "검증", systemPrompt, answer, excerpts,
+                            evalConverter.getFormat(), level));
+                }
                 return llmRouter.executeGatedWithUsage(TaskType.TEXT, state.routingMode(),
                         model -> model.call(buildPrompt(systemPrompt, evalPrompt, evalOptions())));
             }).value();
@@ -718,6 +725,10 @@ public class AnswerService {
                 used[0] = excerpts;
                 String evalPrompt = buildEvalPrompt(state, answer, excerpts.text(),
                         creativeEvalConverter.getFormat());
+                if (log.isDebugEnabled()) {
+                    logPromptSize(evalPromptSize(state, "검증(C)", systemPrompt, answer, excerpts,
+                            creativeEvalConverter.getFormat(), level));
+                }
                 return llmRouter.executeGatedWithUsage(TaskType.TEXT, state.routingMode(),
                         model -> model.call(buildPrompt(systemPrompt, evalPrompt, evalOptions())));
             }).value();
@@ -1106,6 +1117,16 @@ public class AnswerService {
     /** @param shrinkLevel 컨텍스트 초과 후 재시도 단계 — {@link #fitToBudget} 참조. */
     private String buildAnswerPrompt(AgentState state, String providerName, boolean streaming,
                                      int shrinkLevel) {
+        return buildAnswerPrompt(state, providerName, streaming, shrinkLevel, true);
+    }
+
+    /**
+     * @param logSize 이 조립이 <b>실제로 모델에 갈</b> 프롬프트인가. 스트리밍 경로는 답변이 끝난 뒤
+     *                사용량 추정을 위해 같은 프롬프트를 한 번 더 조립하는데(그 자리는 아무 데도 보내지
+     *                않는다), 거기서도 크기 로그를 찍으면 한 번의 호출이 두 줄로 보인다.
+     */
+    private String buildAnswerPrompt(AgentState state, String providerName, boolean streaming,
+                                     int shrinkLevel, boolean logSize) {
         StringBuilder sb = new StringBuilder();
 
         // 예산에 맞춰 미리 덜어낸다. 호출 후에 초과 오류를 받고 재시도하는 것보다 왕복이 0회 싸고,
@@ -1144,8 +1165,80 @@ public class AnswerService {
 
         appendRetryFeedback(sb, state);
 
-        sb.append("[질문]\n").append(PromptInjectionGuard.wrap(state.question()));
+        String question = PromptInjectionGuard.wrap(state.question());
+        sb.append("[질문]\n").append(question);
+
+        if (logSize && log.isDebugEnabled()) {
+            logPromptSize(answerPromptSize(state, providerName, streaming, fitted, docsContext, question));
+        }
         return sb.toString();
+    }
+
+    /**
+     * 답변 프롬프트가 무엇으로 얼마나 채워졌는지 — 구성 요소별 토큰·바이트.
+     *
+     * <p><b>합계 하나로는 아무것도 못 고친다.</b> 창을 넘겼을 때 실제로 필요한 질문은 "무엇이
+     * 부풀렸는가"이고, 그 답에 따라 손댈 설정이 다르다(문서 → {@code app.search-top-k}/
+     * {@code app.chunk-size}, 이력 → {@code app.summary.recent-raw-turns}/
+     * {@code app.memory.fetch-limit-turns}, 시스템 프롬프트 → 응답 모드). `[BUDGET]` 경고는 이미
+     * 줄인 뒤의 결과만 말하므로, 줄이지 않아도 되는 평상시에 무엇이 얼마를 차지하는지는 여기서만
+     * 보인다.
+     *
+     * <p>시스템 프롬프트를 여기서 다시 읽는 이유: {@code buildAnswerPrompt()} 는 사용자 메시지만
+     * 만들고 시스템 프롬프트는 호출부 6곳이 각자 붙인다. 그 6곳에 로그를 흩는 대신 조립이 한 번
+     * 일어나는 이 자리에서 같은 값을 다시 조회한다(MessageSource 조회 1회, 디버그일 때만).
+     */
+    private String answerPromptSize(AgentState state, String providerName, boolean streaming,
+                                    Fitted fitted, String docsContext, String question) {
+        PromptBudget budget = budgetFor(state, providerName, streaming);
+        PromptSizeLog size = PromptSizeLog.of("답변")
+                .add("시스템", answerSystemPrompt(state.locale(), state.responseMode()))
+                .add("이력", HistoryPolicy.countTurns(fitted.history()) + "턴", fitted.history())
+                .add("문서", fitted.docs().size() + "청크", docsContext)
+                .add("경고", String.join("\n", state.retrievalWarnings()))
+                .add("질문", question);
+        String tail = size.budgetTail(providerName,
+                budget == null ? 0 : budget.contextWindow(),
+                budget == null ? 0 : budget.inputBudget());
+        return size.render("%s | thread=%s mode=%s%s%s".formatted(tail, state.threadId(),
+                state.responseMode().name() + (state.directMode() ? "(Direct)" : ""),
+                state.retryCount() > 0 ? " retry=" + state.retryCount() : "",
+                fitted.note() != null ? " [축소됨]" : ""));
+    }
+
+    /**
+     * 검증 프롬프트의 구성 요소별 크기 — 답변 프롬프트와 <b>따로</b> 찍어야 한다.
+     *
+     * <p>모양이 다르기 때문이다: 검색 문서는 같지만 거기에 <b>답변 전문</b>과 응답 스키마가 더
+     * 얹히고 대화 이력은 빠진다({@link #buildEvalPrompt}). 이 앱에서 가장 큰 단일 요청이 답변이
+     * 아니라 이쪽인 이유가 그것이고(§6.26 산정표), 창을 넘겼을 때 어느 호출이 넘겼는지는 두 줄을
+     * 나란히 봐야 알 수 있다.
+     *
+     * <p>발췌가 답변보다 <b>적은</b> 문서를 보고 있으면({@code trimmed()}) 그 사실도 함께 찍는다 —
+     * 그 상태의 {@code grounded=false} 는 판정으로 삼지 않는다는 규칙(§ 검증 판정의 신뢰도)이
+     * 로그만 보고도 확인되어야 한다.
+     */
+    private String evalPromptSize(AgentState state, String kind, String systemPrompt, String answer,
+                                  EvalExcerpts excerpts, String schema, int level) {
+        String provider = likelyProvider(state);
+        int window = contextWindows.tokensOrZero(provider);
+        long inputBudget = window <= 0 ? 0 : new PromptBudget(window, MAX_EVAL_OUTPUT_TOKENS).inputBudget();
+        PromptSizeLog size = PromptSizeLog.of(kind)
+                .add("시스템", systemPrompt)
+                .add("질문", PromptInjectionGuard.wrap(state.question()))
+                .add("답변", answer)
+                .add("발췌", excerpts.included() + "/" + excerpts.total() + "청크", excerpts.text())
+                .add("스키마", schema);
+        return size.render("%s | thread=%s mode=%s%s%s".formatted(
+                size.budgetTail(provider, window, inputBudget), state.threadId(),
+                state.responseMode().name(),
+                level > 0 ? " 축소단계=" + level : "",
+                excerpts.trimmed() ? " [발췌 축소 — grounded=false 를 판정으로 쓰지 않음]" : ""));
+    }
+
+    /** 프롬프트 크기 로그의 단일 출구 — 태그를 한 곳에서 붙인다(검증 경로도 같은 태그를 쓴다). */
+    private void logPromptSize(String rendered) {
+        log.debug("[PROMPT] {}", rendered);
     }
 
     /**
