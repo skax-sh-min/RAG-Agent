@@ -304,18 +304,18 @@ public class AnswerService {
     private AgentState executeStreamingNormal(AgentState state, GraphListener listener) {
         String systemPrompt = answerSystemPrompt(state.locale(), state.responseMode());
         LlmProvider provider = llmRouter.routeProvider(TaskType.TEXT, state.routingMode());
-        Shrunk<String> attempt;
+        Shrunk<Streamed> attempt;
         try (var permit = llmRouter.acquirePermit(provider)) {
             attempt = streamAnswer(provider, state, systemPrompt, listener::onToken);
         }
         state = withBudgetNote(state, attempt.level());
-        String answer = truncate(enforceSummaryOnly(attempt.value(), state.responseMode()));
+        String answer = truncate(enforceSummaryOnly(attempt.value().answer(), state.responseMode()));
         // streaming has no ChatResponse to read real usage from — record an approximate
         // (chars/4) usage entry so /llm-usage isn't blind to the entire streaming chat path, and
         // reflect the same estimate in the per-turn total so the chat UI isn't stuck at 0/0.
-        // 크기 로그는 끈다 — 이 조립은 사용량 추정용이고 어디로도 나가지 않는다(위 스트리밍
-        // 호출에서 이미 같은 프롬프트가 한 줄 찍혔다).
-        String promptText = systemPrompt + buildAnswerPrompt(state, provider.name(), true, attempt.level(), false);
+        // 프롬프트는 **보낸 것을 그대로** 쓴다 — 다시 조립하면 fitToBudget 이 한 번 더 돌고, 그
+        // 재현이 실제로 나간 값과 어긋날 여지도 남는다(Streamed 참고).
+        String promptText = systemPrompt + attempt.value().userPrompt();
         llmRouter.recordApproxUsage(provider.name(), promptText, answer);
         int approxIn = (int) LlmRouter.approxTokens(promptText);
         int approxOut = (int) LlmRouter.approxTokens(answer);
@@ -353,14 +353,13 @@ public class AnswerService {
         int inputTokens, outputTokens;
         int shrinkLevel;
         if (listener != null) {
-            Shrunk<String> attempt;
+            Shrunk<Streamed> attempt;
             try (var permit = llmRouter.acquirePermit(premiumProvider)) {
                 attempt = streamAnswer(premiumProvider, state, systemPrompt, listener::onToken);
             }
-            premiumAnswer = attempt.value();
+            premiumAnswer = attempt.value().answer();
             shrinkLevel = attempt.level();
-            String promptText = systemPrompt
-                    + buildAnswerPrompt(state, premiumProvider.name(), true, shrinkLevel);
+            String promptText = systemPrompt + attempt.value().userPrompt();
             llmRouter.recordApproxUsage(premiumProvider.name(), promptText, premiumAnswer);
             inputTokens = (int) LlmRouter.approxTokens(promptText);
             outputTokens = (int) LlmRouter.approxTokens(premiumAnswer);
@@ -528,25 +527,46 @@ public class AnswerService {
      * 사용자가 보는 것이 중복 텍스트라 조건으로 못 박는다. 나간 것이 없으면 {@code full} 도 비어
      * 있어 되감을 것이 없다.
      */
-    private Shrunk<String> streamAnswer(LlmProvider provider, AgentState state,
-                                        String systemPrompt, Consumer<String> tokenSink) {
+    /**
+     * 스트리밍 한 번의 결과 — 답변과 <b>실제로 보낸</b> 사용자 프롬프트.
+     *
+     * <p>프롬프트를 함께 돌려주는 이유: 스트리밍에는 사용량을 읽을 {@code ChatResponse} 가 없어
+     * 호출부가 프롬프트 길이로 입력 토큰을 추정해야 하는데, 예전에는 그러려고 <b>같은 프롬프트를
+     * 한 번 더 조립했다</b>. 그 재조립은 {@code fitToBudget()} 까지 다시 돌리는 데다(문서 토큰
+     * 추정이 청크 수만큼 반복된다) 재현이지 사실이 아니다 — 실제로 보낸 것과 어긋날 여지를 남기느니
+     * 보낸 값을 그대로 들고 나오는 편이 싸고 정확하다.
+     */
+    private record Streamed(String answer, String userPrompt) {}
+
+    private Shrunk<Streamed> streamAnswer(LlmProvider provider, AgentState state,
+                                          String systemPrompt, Consumer<String> tokenSink) {
         StringBuilder full = new StringBuilder();
         boolean[] emitted = {false};
+        String[] sent = {""};
         Shrunk<Void> attempt = withShrinkRetry(state, "ANSWER-STREAM", () -> !emitted[0], level -> {
-            callOrStream(provider, state, systemPrompt, level,
+            // 조립은 여기서 한 번만 한다. 축소 재시도가 돌면 마지막 시도의 프롬프트가 남고,
+            // 그것이 실제로 나간 값이다. 호출 전에 담아 두므로 호출이 실패해도 값이 비지 않는다.
+            String userPrompt = buildAnswerPrompt(state, provider.name(), provider.stream(), level);
+            sent[0] = userPrompt;
+            callOrStream(provider, state, systemPrompt, userPrompt,
                     t -> { emitted[0] = true; tokenSink.accept(t); full.append(t); });
             return null;
         });
-        return new Shrunk<>(full.toString(), attempt.level());
+        return new Shrunk<>(new Streamed(full.toString(), sent[0]), attempt.level());
     }
 
+    /**
+     * @param userPrompt 이미 조립된 사용자 메시지 — {@link #streamAnswer} 가 만들어 넘긴다.
+     *                   여기서 다시 만들지 않는 이유는 그 조립이 <b>보낸 값</b>이어야 하기 때문이다
+     *                   ({@link Streamed} 참고). {@code provider.stream()} 갈래에 따라 예산 계산의
+     *                   {@code streaming} 플래그가 갈리므로, 호출부도 같은 조건으로 조립한다.
+     */
     private void callOrStream(LlmProvider provider, AgentState state, String systemPrompt,
-                              int shrinkLevel, Consumer<String> tokenSink) {
+                              String userPrompt, Consumer<String> tokenSink) {
         if (provider.stream()) {
             // Bypass OpenAiChatModel.internalStream() which buffers ALL chunks via buffer(int,int)
             // before emitting, defeating real-time token delivery to the browser.
-            streamDirect(provider, systemPrompt,
-                    buildAnswerPrompt(state, provider.name(), true, shrinkLevel), tokenSink,
+            streamDirect(provider, systemPrompt, userPrompt, tokenSink,
                     state.threadId(), state.routingMode(), answerTemperature(state.responseMode()));
         } else {
             // stream=false: still use streaming HTTP to stay compatible with local LLM servers
@@ -557,8 +577,9 @@ public class AnswerService {
             if (options != null) spec = spec.options(options);
             spec
                     .system(systemPrompt)
-                    // stream=false 경로는 answerOptions() 를 붙여 보내므로 예약이 실제로 걸린다.
-                    .user(buildAnswerPrompt(state, provider.name(), false, shrinkLevel))
+                    // stream=false 경로는 answerOptions() 를 붙여 보내므로 예약이 실제로 걸린다
+                    // (프롬프트도 그 전제로 조립돼 넘어온다 — streamAnswer 참고).
+                    .user(userPrompt)
                     .stream()
                     .content()
                     .doOnNext(buf::append)
@@ -1109,24 +1130,10 @@ public class AnswerService {
      *                     예산을 잡아 <b>업그레이드 답변이 필요 없이 적은 문서로 만들어졌다</b>.
      *                     그래서 이 메서드는 호출마다 예산을 다시 계산한다 — 중복 계산이 아니라
      *                     호출부마다 답이 달라야 하는 값이다.
+     * @param shrinkLevel  컨텍스트 초과 후 재시도 단계 — {@link #fitToBudget} 참조.
      */
-    private String buildAnswerPrompt(AgentState state, String providerName, boolean streaming) {
-        return buildAnswerPrompt(state, providerName, streaming, 0);
-    }
-
-    /** @param shrinkLevel 컨텍스트 초과 후 재시도 단계 — {@link #fitToBudget} 참조. */
     private String buildAnswerPrompt(AgentState state, String providerName, boolean streaming,
                                      int shrinkLevel) {
-        return buildAnswerPrompt(state, providerName, streaming, shrinkLevel, true);
-    }
-
-    /**
-     * @param logSize 이 조립이 <b>실제로 모델에 갈</b> 프롬프트인가. 스트리밍 경로는 답변이 끝난 뒤
-     *                사용량 추정을 위해 같은 프롬프트를 한 번 더 조립하는데(그 자리는 아무 데도 보내지
-     *                않는다), 거기서도 크기 로그를 찍으면 한 번의 호출이 두 줄로 보인다.
-     */
-    private String buildAnswerPrompt(AgentState state, String providerName, boolean streaming,
-                                     int shrinkLevel, boolean logSize) {
         StringBuilder sb = new StringBuilder();
 
         // 예산에 맞춰 미리 덜어낸다. 호출 후에 초과 오류를 받고 재시도하는 것보다 왕복이 0회 싸고,
@@ -1168,7 +1175,7 @@ public class AnswerService {
         String question = PromptInjectionGuard.wrap(state.question());
         sb.append("[질문]\n").append(question);
 
-        if (logSize && log.isDebugEnabled()) {
+        if (log.isDebugEnabled()) {
             logPromptSize(answerPromptSize(state, providerName, streaming, fitted, docsContext, question));
         }
         return sb.toString();
