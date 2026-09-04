@@ -203,6 +203,30 @@ class ChatControllerHtmxTest {
                 .andExpect(view().name("fragments/message-assistant :: message"));
     }
 
+    /**
+     * 출처 배지가 <b>원문 보기 모달을 열 수 있는 형태</b>로 렌더되는지. 모달을 여는 클릭 위임은
+     * {@code badge.dataset.chunkId} 가 없으면 그대로 빠져나가므로, 이 프래그먼트에만
+     * {@code data-chunk-id} 가 빠져 있던 동안 논스트리밍 폴백 경로에서는 출처를 눌러도 아무 일도
+     * 일어나지 않았다(§10.14 0단계). 제거·신고 버튼도 전부 그 모달 안에 있다.
+     */
+    @Test
+    @DisplayName("POST /ui/chat — 출처가 .source-item + data-chunk-id/turn-id 로 렌더된다 (렌더러 넷 통일)")
+    void postChat_sourcesCarryModalAttributes() throws Exception {
+        when(agentService.chat(any(), any())).thenReturn(sampleResponse());
+
+        String html = mvc.perform(post("/ui/chat")
+                        .param("question", "테스트 질문")
+                        .param("threadId", "t1")
+                        .param("version", "latest")
+                        .with(csrf()))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        assertThat(html).contains("source-item");
+        assertThat(html).contains("data-chunk-id=\"chunk-1\"");
+        assertThat(html).contains("data-turn-id=");
+    }
+
     @Test
     @DisplayName("POST /ui/chat — 빈 질문 → message-error fragment")
     void postChat_blankQuestion_returnsErrorFragment() throws Exception {

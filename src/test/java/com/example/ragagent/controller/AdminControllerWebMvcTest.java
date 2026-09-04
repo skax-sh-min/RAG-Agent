@@ -74,6 +74,7 @@ class AdminControllerWebMvcTest {
     @MockitoBean RetrievalMetricsService retrievalMetricsService;
     @MockitoBean com.example.ragagent.service.ThreadAdminService threadAdminService;
     @MockitoBean com.example.ragagent.service.CuratedQuestionSuggester questionSuggester;
+    @MockitoBean com.example.ragagent.service.ChunkReportService chunkReportService;
     @MockitoBean com.example.ragagent.audit.AuditLogger auditLogger;
     @MockitoBean CurrentUser currentUser;             // 승인/거부 시 reviewer id
     @MockitoBean AppProperties props;                 // SecurityConfig 의존
@@ -860,5 +861,97 @@ class AdminControllerWebMvcTest {
                 .andExpect(status().isNotFound());
 
         verifyNoInteractions(auditLogger);
+    }
+
+    // ── §10.14 청크 오류 신고 패널 ─────────────────────────────────────────
+
+    /** 목록의 단위가 신고가 아니라 청크라는 것이 이 화면의 규칙이다 — 건수는 배지로만 나온다. */
+    @Test
+    @DisplayName("GET /admin/chunk-reports — 청크 단위 행 + 신고 건수 배지를 렌더한다")
+    void chunkReportPanel_rendersGroupedRows() throws Exception {
+        when(chunkReportService.openGroups(0, 20)).thenReturn(List.of(
+                new com.example.ragagent.repository.ChunkReportRepository.Group(
+                        "chunk-1", "doc-1", "latest", "manual.pdf", 3,
+                        "2026-09-04 10:00:00", "2026-09-04 12:00:00")));
+
+        mvc.perform(get("/admin/chunk-reports").with(user(ADMIN)))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("manual.pdf")))
+                .andExpect(content().string(containsString("chunk-1")))
+                .andExpect(content().string(containsString(">3<")));
+    }
+
+    @Test
+    @DisplayName("GET /admin/chunk-reports/chunks/{id} — 코멘트 N개를 한 화면에 + 변경 여부 배지")
+    void chunkReportDetail_rendersEveryComment() throws Exception {
+        var r1 = new com.example.ragagent.repository.ChunkReportRepository.Report(
+                1L, "chunk-1", "doc-1", "latest", "manual.pdf", "u1", "t1", 7L,
+                "포트가 뭐야?", "WRONG", "8080이 아니라 9090입니다", "h1", "신고 당시 원문",
+                "open", null, null, "2026-09-04 10:00:00", null);
+        var r2 = new com.example.ragagent.repository.ChunkReportRepository.Report(
+                2L, "chunk-1", "doc-1", "latest", "manual.pdf", "u2", "t2", 8L,
+                null, "OUTDATED", "작년 기준입니다", "h1", "신고 당시 원문",
+                "open", null, null, "2026-09-04 11:00:00", null);
+        when(chunkReportService.chunkDetail("chunk-1")).thenReturn(Optional.of(
+                new com.example.ragagent.service.ChunkReportService.ChunkReportDetail(
+                        "chunk-1", "doc-1", "latest", "manual.pdf", false,
+                        List.of(new com.example.ragagent.service.ChunkReportService.ReportView(r1, false),
+                                new com.example.ragagent.service.ChunkReportService.ReportView(r2, false)),
+                        "지금 내용", "original",
+                        com.example.ragagent.service.ChunkReportService.CHANGE_UNCHANGED,
+                        List.of())));
+        when(adminService.collectionFor("latest")).thenReturn("manual_latest");
+
+        mvc.perform(get("/admin/chunk-reports/chunks/chunk-1").with(user(ADMIN)))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("8080이 아니라 9090입니다")))
+                .andExpect(content().string(containsString("작년 기준입니다")))
+                .andExpect(content().string(containsString("신고 이후 변경 없음")))
+                // 수정은 기존 청크 편집 경로로 보낸다 — 신고 패널은 자체 편집기를 갖지 않는다.
+                .andExpect(content().string(containsString("manual_latest")));
+    }
+
+    @Test
+    @DisplayName("GET /admin/chunk-reports/chunks/{id} — 그 사이 처리되었으면 빈 안내를 렌더한다")
+    void chunkReportDetail_alreadyHandled() throws Exception {
+        when(chunkReportService.chunkDetail("gone")).thenReturn(Optional.empty());
+
+        mvc.perform(get("/admin/chunk-reports/chunks/gone").with(user(ADMIN)))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("열린 신고가 없습니다")));
+    }
+
+    /** 배지 값은 신고 건수가 아니라 열린 신고를 가진 청크 수다(관리자가 할 일의 개수). */
+    @Test
+    @DisplayName("GET /admin/chunk-reports/open-count — 청크 수를 돌려준다")
+    void chunkReportOpenCount() throws Exception {
+        when(chunkReportService.openChunkCount()).thenReturn(2);
+
+        mvc.perform(get("/admin/chunk-reports/open-count").with(user(ADMIN)))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("\"count\":2")));
+    }
+
+    @Test
+    @DisplayName("POST .../resolve — 그 청크의 열린 신고를 한 번에 닫고 닫힌 건수를 돌려준다")
+    void resolveChunkReports() throws Exception {
+        // reviewer id 는 CurrentUser 에서 온다(이 테스트에서는 mock 기본값) — 검증 대상이 아니다.
+        when(chunkReportService.resolveChunk(eq("chunk-1"), any(), eq("수정 완료"))).thenReturn(3);
+
+        mvc.perform(post("/admin/chunk-reports/chunks/chunk-1/resolve").with(user(ADMIN)).with(csrf())
+                        .contentType("application/json")
+                        .content("{\"note\":\"수정 완료\"}"))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("\"closed\":3")));
+    }
+
+    @Test
+    @DisplayName("POST .../resolve — 이미 처리된 청크는 409")
+    void resolveAlreadyHandledIsConflict() throws Exception {
+        when(chunkReportService.resolveChunk(anyString(), anyString(), any())).thenReturn(0);
+
+        mvc.perform(post("/admin/chunk-reports/chunks/chunk-1/resolve").with(user(ADMIN)).with(csrf())
+                        .contentType("application/json").content("{}"))
+                .andExpect(status().isConflict());
     }
 }

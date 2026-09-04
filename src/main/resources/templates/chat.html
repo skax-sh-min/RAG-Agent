@@ -499,17 +499,88 @@
                          auto 여백은 남는 공간이 없어 무해하고, X를 헤더 패딩 안쪽으로 당기는
                          음수 여백은 그대로 살아 있다. -->
                     <div class="d-flex align-items-center gap-2 ms-auto">
+                        <!-- §10.14 내용 오류 신고 — 제거 버튼과 나란히 서지만 답하는 질문이 다르다:
+                             제거는 "이 답변과 상관없는 청크"(표시 전용), 신고는 "청크 내용이 틀렸다"
+                             (관리자 대기열). 그래서 참여도 게이트를 물려받지 않고 항상 노출된다 —
+                             답변을 실제로 떠받친 청크일수록 틀렸을 때 더 문제이기 때문이다. -->
+                        <button type="button" class="btn btn-sm btn-outline-warning"
+                                id="chunk-report-btn"
+                                th:text="#{chat.chunk.report}"
+                                th:attr="title=#{chat.chunk.report.hint}">내용 오류 신고</button>
                         <!-- 응답 참여도가 0%인 출처에만 노출된다(스크립트가 d-none을 토글). 답변에
                              쓰이지 않은 청크를 그 대화의 출처 목록에서 치우는 표시 전용 동작이라
                              닫기 버튼 옆(왼쪽)에 두고, 문서/검색에는 영향이 없다. -->
                         <button type="button" class="btn btn-sm btn-outline-danger d-none"
                                 id="chunk-exclude-btn"
-                                th:text="#{chat.chunk.exclude}">현재 대화에서 이 청크 제거</button>
+                                th:text="#{chat.chunk.exclude}"
+                                th:attr="title=#{chat.chunk.exclude.hint}">현재 대화에서 이 청크 제거</button>
                         <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
                     </div>
                 </div>
                 <div class="modal-body">
                     <div class="md-content" id="chunk-fulltext-modal-body"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- §10.14 청크 내용 오류 신고 — 원문 보기에서 열린다. 신고는 아무것도 바꾸지 않고 관리자
+         대기열에만 쌓이며, 실제 수정은 관리자가 확인한 뒤에 일어난다(그 문구를 화면에도 적는다). -->
+    <div class="modal fade" id="chunkReportModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header py-2">
+                    <h6 class="modal-title small fw-semibold mb-0"
+                        th:text="#{chat.chunk.report.title}">내용 오류 신고</h6>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="small text-muted mb-2" th:text="#{chat.chunk.report.desc}">
+                        관리자가 확인한 뒤 수정합니다. 신고 즉시 반영되지는 않습니다.</div>
+                    <div class="small fw-semibold text-truncate mb-3" id="chunk-report-label"></div>
+
+                    <div class="mb-3">
+                        <div class="form-check">
+                            <input class="form-check-input" type="radio" name="chunk-report-reason"
+                                   id="chunk-report-reason-wrong" value="WRONG" checked>
+                            <label class="form-check-label small" for="chunk-report-reason-wrong"
+                                   th:text="#{chunk.report.reason.wrong}">사실이 틀림</label>
+                        </div>
+                        <div class="form-check">
+                            <input class="form-check-input" type="radio" name="chunk-report-reason"
+                                   id="chunk-report-reason-outdated" value="OUTDATED">
+                            <label class="form-check-label small" for="chunk-report-reason-outdated"
+                                   th:text="#{chunk.report.reason.outdated}">오래됨 · 업데이트 필요</label>
+                        </div>
+                        <div class="form-check">
+                            <input class="form-check-input" type="radio" name="chunk-report-reason"
+                                   id="chunk-report-reason-broken" value="BROKEN">
+                            <label class="form-check-label small" for="chunk-report-reason-broken"
+                                   th:text="#{chunk.report.reason.broken}">깨진 텍스트 · 표 · 이미지</label>
+                        </div>
+                        <div class="form-check">
+                            <input class="form-check-input" type="radio" name="chunk-report-reason"
+                                   id="chunk-report-reason-other" value="OTHER">
+                            <label class="form-check-label small" for="chunk-report-reason-other"
+                                   th:text="#{chunk.report.reason.other}">기타</label>
+                        </div>
+                    </div>
+
+                    <label class="form-label small fw-semibold" for="chunk-report-comment"
+                           th:text="#{chat.chunk.report.comment}">무엇이 잘못됐나요?</label>
+                    <textarea class="form-control form-control-sm" id="chunk-report-comment"
+                              rows="3" maxlength="500"
+                              th:attr="placeholder=#{chat.chunk.report.comment.placeholder}"></textarea>
+                    <div class="form-text d-flex justify-content-between">
+                        <span th:text="#{chat.chunk.report.comment.hint}">틀린 부분과 맞는 내용을 적어 주세요.</span>
+                        <span><span id="chunk-report-count">0</span>/500</span>
+                    </div>
+                </div>
+                <div class="modal-footer py-2">
+                    <button type="button" class="btn btn-sm btn-secondary" data-bs-dismiss="modal"
+                            th:text="#{action.cancel}">취소</button>
+                    <button type="button" class="btn btn-sm btn-warning" id="chunk-report-submit"
+                            th:text="#{chat.chunk.report.submit}">신고하기</button>
                 </div>
             </div>
         </div>
@@ -572,6 +643,10 @@
     const chunkExcludeBtn = document.getElementById('chunk-exclude-btn');
     /* 모달이 지금 보여주는 출처가 어느 턴의 어느 청크인지 — 제거 버튼이 쓴다. */
     let activeChunkContext = null;
+    /* 신고 버튼이 쓰는 컨텍스트. activeChunkContext와 따로 두는 이유: 그쪽은 "제거 가능"
+       (참여도 0%)일 때만 채워지는데, 신고는 참여도와 무관하게 언제나 가능해야 한다.
+       재사용하면 답변에 기여한 청크일수록 신고가 안 되는 정확히 반대 게이트가 된다. */
+    let activeChunkView = null;
 
     /* 응답 참여도 0% 판정. AnswerAttribution은 답변에 기여하지 않은 청크에 0.0이 아니라 값을
        아예 넣지 않으므로(§ SourceRef.answerShare), "값 없음"이 곧 0%다. 참여도 계산 자체가
@@ -591,9 +666,11 @@
            이벤트로 turnId가 심어지기 전까지 turnId가 없어 자연히 숨겨진다. */
         const removable = !!(turnId && chunkId && hasNoAnswerShare(item));
         activeChunkContext = removable ? { turnId, chunkId, item } : null;
+        activeChunkView = { chunkId, turnId, label: label || '' };
         if (chunkExcludeBtn) chunkExcludeBtn.classList.toggle('d-none', !removable);
         chunkFullTextModalTitle.textContent = label || CHUNK_TITLE_DEFAULT;
         chunkFullTextModalBody.innerHTML = `<div class="text-muted small">${CHUNK_LOADING_TEXT}</div>`;
+        if (chunkReportBtn) chunkReportBtn.classList.remove('d-none');
         chunkFullTextModal.show();
         fetch('/api/v1/chunks/' + encodeURIComponent(chunkId))
             .then(res => res.ok ? res.json() : Promise.reject(res.status === 404 ? 'notfound' : 'error'))
@@ -601,6 +678,9 @@
             .catch(reason => {
                 const text = reason === 'notfound' ? CHUNK_NOTFOUND_TEXT : CHUNK_ERROR_TEXT;
                 chunkFullTextModalBody.innerHTML = `<div class="text-muted small">${text}</div>`;
+                /* 이미 사라진 청크는 신고해도 관리자가 할 일이 없다 — 대기열에 노이즈만 남는다.
+                   불러오기 자체가 실패한 경우도 같이 숨긴다(무엇을 신고하는지 본 적이 없다). */
+                if (chunkReportBtn) chunkReportBtn.classList.add('d-none');
             });
     }
 
@@ -644,6 +724,103 @@
             excludeActiveChunk().catch(() => {
                 if (typeof showToast === 'function') showToast(CHUNK_EXCLUDE_FAILED, 'warning');
             });
+        });
+    }
+
+    /* ── §10.14 청크 내용 오류 신고 ─────────────────────────────────────────
+       신고는 아무것도 바꾸지 않는다 — 관리자 대기열에 쌓일 뿐이고, 실제 수정은 관리자가
+       확인한 뒤 /admin 의 청크 편집으로 한다. 제거(표시 전용)와 답하는 질문이 다르므로
+       버튼도 컨텍스트도 따로다. */
+    const chunkReportModalEl = document.getElementById('chunkReportModal');
+    const chunkReportModal = chunkReportModalEl ? bootstrap.Modal.getOrCreateInstance(chunkReportModalEl) : null;
+    const chunkReportBtn    = document.getElementById('chunk-report-btn');
+    const chunkReportSubmit = document.getElementById('chunk-report-submit');
+    const chunkReportLabel  = document.getElementById('chunk-report-label');
+    const chunkReportComment = document.getElementById('chunk-report-comment');
+    const chunkReportCount  = document.getElementById('chunk-report-count');
+    const REPORT_DONE      = /*[[#{chat.chunk.report.done}]]*/ '신고를 접수했습니다. 관리자가 확인 후 처리합니다.';
+    const REPORT_DUPLICATE = /*[[#{chat.chunk.report.duplicate}]]*/ '이 대화에서 이미 신고한 청크입니다.';
+    const REPORT_FAILED    = /*[[#{chat.chunk.report.failed}]]*/ '신고 접수에 실패했습니다.';
+    /* 신고 대상은 모달을 여는 시점의 청크다 — 제출 중에 다른 출처를 눌러도 바뀌지 않도록
+       폼을 열 때 값을 복사해 둔다. */
+    let pendingReport = null;
+
+    if (chunkReportComment && chunkReportCount) {
+        chunkReportComment.addEventListener('input', function () {
+            chunkReportCount.textContent = String(this.value.length);
+        });
+    }
+
+    if (chunkReportBtn && chunkReportModal) {
+        chunkReportBtn.addEventListener('click', function () {
+            if (!activeChunkView || !activeChunkView.chunkId) return;
+            pendingReport = {
+                chunkId: activeChunkView.chunkId,
+                turnId: activeChunkView.turnId || '',
+                label: activeChunkView.label || ''
+            };
+            if (chunkReportLabel) chunkReportLabel.textContent = pendingReport.label;
+            if (chunkReportComment) chunkReportComment.value = '';
+            if (chunkReportCount) chunkReportCount.textContent = '0';
+            const firstReason = document.getElementById('chunk-report-reason-wrong');
+            if (firstReason) firstReason.checked = true;
+            /* 원문 모달을 먼저 닫고 그 다음에 연다 — 두 모달이 겹치면 배경(backdrop)이 하나 남아
+               신고 모달을 닫아도 화면이 잠긴 것처럼 보인다. */
+            if (chunkFullTextModal) {
+                chunkFullTextModalEl.addEventListener('hidden.bs.modal',
+                    () => chunkReportModal.show(), { once: true });
+                chunkFullTextModal.hide();
+            } else {
+                chunkReportModal.show();
+            }
+        });
+    }
+
+    async function submitChunkReport() {
+        if (!pendingReport) return;
+        const reason = document.querySelector('input[name="chunk-report-reason"]:checked');
+        const body = new URLSearchParams({
+            chunkId: pendingReport.chunkId,
+            threadId: chatForm.querySelector('input[name="threadId"]').value,
+            reason: reason ? reason.value : '',
+            comment: chunkReportComment ? chunkReportComment.value.trim() : ''
+        });
+        if (pendingReport.turnId) body.append('turnId', pendingReport.turnId);
+
+        const res = await fetch('/ui/chunk-reports', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded', ...getCsrfHeaders() },
+            body
+        });
+        if (res.ok) {
+            chunkReportModal.hide();
+            pendingReport = null;
+            if (typeof showToast === 'function') showToast(REPORT_DONE, 'success');
+            return;
+        }
+        /* 409 = 이미 신고함(오류가 아니다), 400 = 검증 실패(서버 문구를 그대로 보여준다). */
+        if (res.status === 409) {
+            chunkReportModal.hide();
+            pendingReport = null;
+            if (typeof showToast === 'function') showToast(REPORT_DUPLICATE, 'warning');
+            return;
+        }
+        let message = REPORT_FAILED;
+        try {
+            const problem = await res.json();
+            if (problem && problem.detail) message = problem.detail;
+        } catch (e) { /* 본문이 없거나 JSON이 아니면 기본 문구 */ }
+        if (typeof showToast === 'function') showToast(message, 'warning');
+    }
+
+    if (chunkReportSubmit) {
+        chunkReportSubmit.addEventListener('click', function () {
+            chunkReportSubmit.disabled = true;
+            submitChunkReport()
+                .catch(() => {
+                    if (typeof showToast === 'function') showToast(REPORT_FAILED, 'warning');
+                })
+                .finally(() => { chunkReportSubmit.disabled = false; });
         });
     }
 

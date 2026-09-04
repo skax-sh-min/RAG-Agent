@@ -96,6 +96,11 @@
                     <!-- 검토 대기 중인 사용자 제안 건수. isAdmin 일 때만 렌더링되고, 폴링 스크립트도
                          같은 조건으로만 내려간다(비관리자에게는 요청 자체가 나가지 않음). -->
                     <span id="pending-submission-badge" class="badge bg-danger ms-1 d-none">0</span>
+                    <!-- §10.14 — 열린 신고를 가진 **청크 수**(신고 건수가 아니다: 한 청크에 열 명이
+                         신고해도 관리자가 할 일은 하나다). 제안 배지와 색을 달리해 두 대기열을
+                         구분한다. -->
+                    <span id="chunk-report-badge" class="badge bg-warning text-dark ms-1 d-none"
+                          title="내용 오류가 신고된 청크">0</span>
                 </a>
             </li>
             <!-- 설정은 자주 열지 않으므로 맨 끝에 둔다. -->
@@ -432,6 +437,7 @@ const I18N = {
         pollBadge(document.getElementById('my-submission-badge'), '/curated/submissions/unread-count');
         // 관리자에게만 존재하는 엘리먼트 — 없으면 폴링도 시작되지 않는다.
         pollBadge(document.getElementById('pending-submission-badge'), '/admin/submissions/pending-count');
+        pollBadge(document.getElementById('chunk-report-badge'), '/admin/chunk-reports/open-count');
     })();
 
     /* ── 이미지 마커 렌더링 ────────────────────────────────────────────────────

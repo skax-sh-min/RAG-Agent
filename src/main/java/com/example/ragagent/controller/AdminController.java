@@ -7,6 +7,7 @@ import com.example.ragagent.model.MetaKey;
 import com.example.ragagent.security.CurrentUser;
 import com.example.ragagent.service.CuratedQuestionSuggester;
 import com.example.ragagent.service.AdminService;
+import com.example.ragagent.service.ChunkReportService;
 import com.example.ragagent.service.CuratedQaService;
 import com.example.ragagent.service.CuratedSubmissionService;
 import com.example.ragagent.service.IndexingProgressService;
@@ -42,6 +43,7 @@ public class AdminController {
     private final RetrievalMetricsService retrievalMetricsService;
     private final ThreadAdminService threadAdminService;
     private final CuratedQuestionSuggester questionSuggester;
+    private final ChunkReportService chunkReportService;
     private final AuditLogger auditLogger;
     private final CurrentUser currentUser;
 
@@ -51,6 +53,7 @@ public class AdminController {
                             RetrievalMetricsService retrievalMetricsService,
                             ThreadAdminService threadAdminService,
                             CuratedQuestionSuggester questionSuggester,
+                            ChunkReportService chunkReportService,
                             AuditLogger auditLogger,
                             CurrentUser currentUser) {
         this.adminService = adminService;
@@ -61,6 +64,7 @@ public class AdminController {
         this.retrievalMetricsService = retrievalMetricsService;
         this.threadAdminService = threadAdminService;
         this.questionSuggester = questionSuggester;
+        this.chunkReportService = chunkReportService;
         this.auditLogger = auditLogger;
         this.currentUser = currentUser;
     }
@@ -504,6 +508,80 @@ public class AdminController {
         String reason = body.get("reason") instanceof String s ? s : null;
         boolean ok = submissionService.reject(id, currentUser.userId(), reason);
         return ok ? ResponseEntity.ok().build() : ResponseEntity.status(409).build();
+    }
+
+    // ── §10.14 청크 오류 신고 ─────────────────────────────────────────────────
+
+    /**
+     * 신고 대기열 — 같은 lazy-load 패턴. <b>행의 단위는 신고가 아니라 청크</b>다: 한 청크에 여러
+     * 사람이 신고하는 것이 정상이고, 관리자가 하는 일은 그 청크를 고치는 하나이기 때문이다.
+     */
+    @GetMapping("/admin/chunk-reports")
+    public String chunkReportPanel(@RequestParam(defaultValue = "0")  int offset,
+                                   @RequestParam(defaultValue = "20") int limit,
+                                   Model model) {
+        model.addAttribute("groups", chunkReportService.openGroups(offset, limit));
+        model.addAttribute("offset", offset);
+        model.addAttribute("limit",  limit);
+        return "fragments/admin-chunk-reports :: panel";
+    }
+
+    /**
+     * 헤더 배지(60초 폴링) — {@link #pendingSubmissionCount} 와 같은 이유로 {@code /admin/**} 아래에
+     * 둔다. 값은 <b>열린 신고를 가진 청크 수</b>이지 신고 건수가 아니다(한 청크에 열 명이 신고해도
+     * 관리자가 할 일은 하나다).
+     */
+    @GetMapping("/admin/chunk-reports/open-count")
+    @ResponseBody
+    public Map<String, Integer> openChunkReportCount() {
+        return Map.of("count", chunkReportService.openChunkCount());
+    }
+
+    /**
+     * 한 청크에 달린 신고 <b>전부</b>를 한 화면에 — 사유·코멘트·당시 질문 + 신고 시점 원문 스냅샷 +
+     * 현재 내용 + 그 사이 청크가 바뀌었는지. 서버 렌더 프래그먼트인 이유는 사유 문구가 메시지
+     * 번들에 있어서다(채팅 신고 폼과 같은 키를 읽어야 문구가 갈라지지 않는다).
+     *
+     * <p>{@code collection} 은 기존 청크 편집 오프캔버스를 그대로 열기 위한 값이다
+     * ({@code openChunkEdit(chunkId, collection)}) — 신고 패널은 자체 편집기를 갖지 않는다.
+     */
+    @GetMapping("/admin/chunk-reports/chunks/{chunkId}")
+    public String chunkReportDetail(@PathVariable String chunkId, Model model) {
+        var detail = chunkReportService.chunkDetail(chunkId).orElse(null);
+        model.addAttribute("detail", detail);
+        model.addAttribute("collection",
+                detail == null ? null : adminService.collectionFor(detail.version()));
+        return "fragments/admin-chunk-reports :: detail";
+    }
+
+    /**
+     * 「처리 완료」 — 이 청크의 열린 신고를 전부 닫는다. 청크 자체는 건드리지 않는다: 실제 수정은
+     * 청크 편집({@link #updateChunk}/{@link #reindexChunk})의 일이고, 그래야 편집 시각 스탬프와
+     * 재사용 무효화가 한 경로에만 붙는다.
+     */
+    @PostMapping("/admin/chunk-reports/chunks/{chunkId}/resolve")
+    @ResponseBody
+    public ResponseEntity<Map<String, Object>> resolveChunkReports(
+            @PathVariable String chunkId, @RequestBody(required = false) Map<String, Object> body) {
+        String note = (body != null && body.get("note") instanceof String s) ? s : null;
+        int closed = chunkReportService.resolveChunk(chunkId, currentUser.userId(), note);
+        return closed > 0
+                ? ResponseEntity.ok(Map.of("closed", closed))
+                : ResponseEntity.status(409).body(Map.of(
+                        "status", "not_open", "message", "이미 처리된 신고입니다."));
+    }
+
+    /** 「반려」 — 사유 필수. */
+    @PostMapping("/admin/chunk-reports/chunks/{chunkId}/reject")
+    @ResponseBody
+    public ResponseEntity<Map<String, Object>> rejectChunkReports(
+            @PathVariable String chunkId, @RequestBody Map<String, Object> body) {
+        String reason = body.get("reason") instanceof String s ? s : null;
+        int closed = chunkReportService.rejectChunk(chunkId, currentUser.userId(), reason);
+        return closed > 0
+                ? ResponseEntity.ok(Map.of("closed", closed))
+                : ResponseEntity.status(409).body(Map.of(
+                        "status", "not_open", "message", "이미 처리된 신고입니다."));
     }
 
     /**

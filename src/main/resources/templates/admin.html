@@ -233,6 +233,29 @@
         </div>
     </div><!-- /row -->
 
+    <!-- ── §10.14 청크 오류 신고 — 사용자 신고 처리 (펼칠 때만 조회) ────────────── -->
+    <!-- 지식 제안보다 위: 둘 다 대기열이지만 이쪽은 **이미 검색에 쓰이고 있는** 청크가 틀렸다는
+         신고라 방치 비용이 더 크다(제안은 아직 코퍼스 밖에 있다). 바로 위 청크 패널에서 고치는
+         대상과 같은 것을 다루므로 자리도 붙어 있는 편이 낫다. -->
+    <details class="card mt-4" id="chunk-report-card"
+              hx-get="/admin/chunk-reports" hx-trigger="toggle[this.open] once"
+              hx-target="#chunk-report-body" hx-swap="innerHTML">
+        <summary class="card-header d-flex align-items-center py-2" style="cursor:pointer; list-style:none;">
+            <i class="bi bi-flag me-2"></i>
+            <span class="fw-semibold small">청크 오류 신고</span>
+            <span id="chunk-report-pill" class="badge bg-danger ms-2 d-none">0</span>
+            <span class="ms-auto small text-muted d-flex align-items-center gap-1">
+                사용자가 신고한 청크 — 내용 확인 후 수정·처리 — 펼치면 조회
+                <i class="bi bi-chevron-down curated-qa-chevron"></i>
+            </span>
+        </summary>
+        <div id="chunk-report-body">
+            <div class="card-body text-center text-muted py-4 small">
+                <span class="spinner-border spinner-border-sm me-2"></span>불러오는 중...
+            </div>
+        </div>
+    </details>
+
     <!-- ── 지식 제안 게시판 — 사용자 제안 검토 (펼칠 때만 조회) ──────────────── -->
     <!-- 큐레이션 Q&A 카드보다 위: 이쪽은 관리자의 조치를 기다리는 대기열(검토 대기 배지가 붙는다)이고,
          아래 큐레이션 카드는 이미 반영된 것을 확인·회수하는 용도라 열어볼 일이 드물다. -->
@@ -447,6 +470,19 @@
         <button type="button" class="btn-close" data-bs-dismiss="offcanvas"></button>
     </div>
     <div class="offcanvas-body d-flex flex-column gap-3" id="submissionReviewOffcanvasBody">
+        <div class="text-muted small text-center py-5">항목을 선택하세요.</div>
+    </div>
+</div>
+
+<!-- ── §10.14 청크 오류 신고 검토 Offcanvas ─────────────────────────────── -->
+<!-- 한 청크에 달린 신고 전부를 한 화면에서 읽는다. 본문은 서버 렌더 프래그먼트다(사유 문구가
+     채팅 신고 폼과 같은 메시지 키를 써야 갈라지지 않는다). -->
+<div class="offcanvas offcanvas-end" tabindex="-1" id="chunkReportOffcanvas" style="width:100%; max-width:100%;">
+    <div class="offcanvas-header border-bottom">
+        <h6 class="offcanvas-title"><i class="bi bi-flag me-2"></i>청크 오류 신고 검토</h6>
+        <button type="button" class="btn-close" data-bs-dismiss="offcanvas"></button>
+    </div>
+    <div class="offcanvas-body d-flex flex-column gap-3" id="chunkReportOffcanvasBody">
         <div class="text-muted small text-center py-5">항목을 선택하세요.</div>
     </div>
 </div>
@@ -1318,6 +1354,77 @@ function refreshSubmissionPendingPill() {
         .catch(() => pill.classList.add('d-none'));
 }
 refreshSubmissionPendingPill();
+
+/* ── §10.14 청크 오류 신고 ─────────────────────────────────────────────────
+   프래그먼트에는 <script>를 두지 않으므로(재조회 시 innerHTML 삽입) 동작은 전부 여기 있다.
+   조치의 단위가 청크인 것이 이 화면의 규칙이다 — 신고 N건이 아니라 청크 하나를 처리한다. */
+let chunkReportPage = { offset: 0, limit: 20 };
+
+function loadChunkReports(offset, limit) {
+    chunkReportPage = { offset: offset, limit: limit };
+    return fetch('/admin/chunk-reports?offset=' + offset + '&limit=' + limit,
+                 { headers: { 'HX-Request': 'true' } })
+        .then(r => r.text())
+        .then(html => {
+            document.getElementById('chunk-report-body').innerHTML = html;
+            refreshChunkReportPill();
+        });
+}
+
+/** 카드 헤더의 pill — 헤더 네비 배지와 같은 엔드포인트(열린 신고를 가진 **청크 수**). */
+function refreshChunkReportPill() {
+    const pill = document.getElementById('chunk-report-pill');
+    if (!pill) return;
+    fetch('/admin/chunk-reports/open-count')
+        .then(r => r.ok ? r.json() : Promise.reject())
+        .then(d => {
+            pill.textContent = d.count;
+            pill.classList.toggle('d-none', !d.count);
+        })
+        .catch(() => pill.classList.add('d-none'));
+}
+refreshChunkReportPill();
+
+function openChunkReportDetail(chunkId) {
+    fetch('/admin/chunk-reports/chunks/' + encodeURIComponent(chunkId),
+          { headers: { 'HX-Request': 'true' } })
+        .then(r => { if (!r.ok) throw new Error(); return r.text(); })
+        .then(html => {
+            const offcanvasEl = document.getElementById('chunkReportOffcanvas');
+            // 청크 편집과 같은 폭 규칙 — 신고 코멘트와 원문 두 벌을 나란히 읽는 화면이다.
+            applyEditOffcanvasWidth(offcanvasEl);
+            document.getElementById('chunkReportOffcanvasBody').innerHTML = html;
+            bootstrap.Offcanvas.getOrCreateInstance(offcanvasEl).show();
+        })
+        .catch(() => showToast('신고 내용을 불러오지 못했습니다.', 'danger'));
+}
+
+/**
+ * 처리 완료 / 반려 — 이 청크의 열린 신고를 한 번에 닫는다. 청크 자체는 건드리지 않는다
+ * (수정은 위의 openChunkEdit 경로가 한다).
+ */
+function closeChunkReports(chunkId, action) {
+    const noteEl = document.getElementById('chunk-report-note');
+    const note = noteEl ? noteEl.value.trim() : '';
+    if (action === 'reject' && !note) {
+        showToast('반려 사유를 입력하세요.', 'warning');
+        if (noteEl) noteEl.focus();
+        return;
+    }
+    fetch('/admin/chunk-reports/chunks/' + encodeURIComponent(chunkId) + '/' + action, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...getCsrfHeaders() },
+        body: JSON.stringify(action === 'reject' ? { reason: note } : { note: note })
+    })
+    .then(r => r.ok ? r.json() : Promise.reject(r))
+    .then(d => {
+        const oc = bootstrap.Offcanvas.getInstance(document.getElementById('chunkReportOffcanvas'));
+        if (oc) oc.hide();
+        showToast('신고 ' + d.closed + '건을 처리했습니다.', 'success');
+        loadChunkReports(chunkReportPage.offset, chunkReportPage.limit);
+    })
+    .catch(() => showToast('처리에 실패했습니다.', 'danger'));
+}
 
 function openSubmissionReview(id) {
     fetch('/admin/submissions/' + encodeURIComponent(id) + '/detail')

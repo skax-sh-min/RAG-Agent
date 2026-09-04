@@ -120,6 +120,9 @@ Flow:
 | `repository/CuratedSubmissionRepository.java` | 지식 제안 게시판 테이블·쿼리. 상태 전이는 전부 compare-and-set [↗](documents/PITFALLS.md#repositorycuratedsubmissionrepositoryjava) |
 | `controller/CuratedSubmissionController.java` | 지식 제안 게시판(사용자) — `/curated/submissions` 페이지·제출·수정·철회·이미지 업로드. `?fromThread=&fromTurn=` 로 좋아요한 답변을 프리필(본문은 서버가 턴에서 읽는다) [↗](documents/PITFALLS.md#controllercuratedsubmissioncontrollerjava) |
 | `service/CuratedImageStore.java` | 지식 제안 본문 이미지 — upload, marker bookkeeping, approval-time Vision description, cleanup [↗](documents/PITFALLS.md#servicecuratedimagestorejava) |
+| `repository/ChunkReportRepository.java` | §10.14 청크 오류 신고 대기열(`chunk_report` — 한정자 없는 `JdbcTemplate`, 즉 `curated_submission` 과 같은 파일) + 신고 시점 청크 위치·원문 조회(`@Qualifier("vectorJdbcTemplate")` — `QuestionReuseRepository` 처럼 두 `JdbcTemplate` 을 든다). 중복 방지 키는 (청크, 신고자, **대화**) [↗](documents/PITFALLS.md#servicechunkreportservicejava) |
+| `service/ChunkReportService.java` | §10.14 — 신고 접수(사유 4종 + 코멘트 필수, 문서·원문·해시·질문은 서버가 직접 스냅샷)와 **청크 단위** 관리자 조회·처리. 신고는 검색 코퍼스를 바꾸지 않는다 [↗](documents/PITFALLS.md#servicechunkreportservicejava) |
+| `controller/ChunkReportController.java` | `POST /ui/chunk-reports` — 사용자 신고 접수(게스트 개방·CSRF 필요, 중복은 409 로 구분). 관리자 조회·처리는 `AdminController` 의 `/admin/chunk-reports/**` [↗](documents/PITFALLS.md#servicechunkreportservicejava) |
 
 ## Conventions
 
@@ -191,6 +194,7 @@ docker-compose up chroma
 - 정적 자산(`/css/**`, `/js/**`)은 **내용 해시 URL**로 나간다 (`spring.web.resources.chain.strategy.content.*`) [↗](documents/PITFALLS.md#정적-자산)
 - `WebConfig`'s `requestURI` interceptor skips `redirect:` views: `RedirectView` appends simple model attributes to the target URL, so without the guard every `return "redirect:/x"` became `/x?requestURI=%2Fold%2Fpath`. Only the rendered layout reads that attribute
 - § 청크 변경 표시/차단: 청크를 삭제·수정하는 **모든** 경로가 `QuestionReuseService`에 사유와 함께 통지해야 한다 [↗](documents/PITFALLS.md#-청크-변경-표시차단)
+- 청크 오류 신고(§10.14)는 **대기열일 뿐이다** — 검색·재사용·벡터/FTS 어디에도 영향이 없고 반영은 관리자가 청크를 실제로 고칠 때 일어난다(자동 조치를 넣지 말 것). 중복 방지 키는 (청크, 신고자, **대화**)이고, 대기열·배지의 단위는 신고 건수가 아니라 **열린 신고를 가진 청크 수**다. 채팅의 "현재 대화에서 이 청크 제거"(청크는 맞지만 이 답변과 무관 · 표시 전용)와 성격이 다르며, 그쪽의 `activeChunkContext`(참여도 0%일 때만 채워진다)를 신고가 재사용해서는 안 된다 [↗](documents/PITFALLS.md#servicechunkreportservicejava)
 - 큐레이션 태그 스코프: `filterByTags()`는 벡터·키워드·큐레이션이 합쳐진 **병합 후보 풀 전체**에 걸리는데 `CuratedQaService.buildDocument()`가 `MetaKey.TAGS`를 안 실어서, 태그 칩을 하나라도 켜면 좋아요 답변·승인된 제안이 **전부 탈락**했다( [↗](documents/PITFALLS.md#큐레이션-태그-스코프)
 - 지식 제안 본문 이미지: `CuratedQaService.buildDocument()` sets `MetaKey.IMAGE_PATHS` from the markers **still present in that chunk's stored text**, computed after the split [↗](documents/PITFALLS.md#지식-제안-본문-이미지)
 - `RetrievalService.hasEmbeddedDescription()` must accept **both** injection forms [↗](documents/PITFALLS.md#retrievalservicehasembeddeddescription)
