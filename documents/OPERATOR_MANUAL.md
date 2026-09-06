@@ -3054,6 +3054,8 @@ srv send_error: ... error: input (706 tokens) is too large to process. increase 
 재시작 없이 `/actuator/loggers` 엔드포인트로 레벨을 변경합니다.  
 변경은 **JVM 프로세스 내에서만 유효**하며, 재시작 시 `application.properties` 값으로 초기화됩니다.
 
+> **접근 권한**: `/actuator/**`(`/actuator/health` 제외)는 **전체 인증 모드와 관리 전용 인증 모드에서 `ROLE_ADMIN`**입니다 — 레벨을 TRACE/DEBUG로 올리는 순간 프롬프트 전문(검색된 문서 원문 포함)이 로그 파일에 쌓이므로 인가 관점에서 관리 행위입니다. 그 두 모드에서는 아래 `curl` 예시가 그대로는 동작하지 않으며, 관리자로 로그인한 세션 쿠키를 함께 보내야 합니다 (`curl -b` / 브라우저). 평문 no-auth 모드(§9.4.1)에서는 예시 그대로 동작합니다.
+
 ```bash
 # 형식: POST /actuator/loggers/{logger-name}
 #   Body: {"configuredLevel": "TRACE"|"DEBUG"|"INFO"|"WARN"|"ERROR"|null}
@@ -3179,6 +3181,7 @@ LLM 응답이 20,000자를 초과하면 자동으로 잘리고 말줄임 메시�
 | 첫 접속 (admin DB 없음) | `/setup` 페이지로 리다이렉트 |
 | `/setup` | 관리자 이메일·비밀번호 입력 → DB에 `ROLE_ADMIN` 계정 생성 |
 | `/admin/**` 접근 | DB 첫 번째 `ROLE_ADMIN` 계정으로 자동 인증 |
+| `/actuator/**` | 인증 없이 열림 — 폐쇄망 단일 운영자 전제라 `/admin`이 자동 인증되는 것과 같은 선상입니다. **외부에 노출되는 배포라면 이 모드를 쓰지 말고 §9.4.2를 사용하세요** |
 | 그 외 모든 경로 | 고정 guest 계정 자동 인증 (userId = `00000000-0000-0000-0000-000000000001`, `ROLE_USER`) |
 | 로그아웃 버튼 | Navbar에서 숨겨짐 |
 
@@ -3217,6 +3220,7 @@ AUTH_MANAGEMENT_ONLY=true
 | `GET /documents`, `GET /ui/documents/list`, `GET /api/v1/documents` | 로그인 없이 조회 가능 |
 | 문서 관리 쓰기(업로드, 업로드취소, 삭제, 태그 수정·편집, **내보내기**) | **로그인 필요** — 비로그인 시 `/login` 리다이렉트, `ROLE_ADMIN` 아닌 로그인은 403. 내보내기는 읽기 동작이지만 문서 전체 내용을 한 번에 반출하는 벌크 기능이라 이 그룹에 포함(§6.8) |
 | `/admin/**` | **로그인 필요** — 게스트/첫 관리자 자동 주입 없음(평문 no-auth와의 핵심 차이) |
+| `/actuator/**` (`/actuator/health` 제외) | **`ROLE_ADMIN` 로그인 필요** — `POST /actuator/loggers/{name}`으로 TRACE를 켜면 `LlmCurlLogger`가 검색된 문서 본문이 실린 프롬프트 전문을 로그 파일에 남깁니다. 게스트에게 열린 배포이므로 로그 레벨 변경은 관리 행위로 묶습니다([런타임 레벨 변경](#런타임-레벨-변경-actuator) 참고 — 이 모드에서는 로그인 세션 없이 curl로 레벨을 바꿀 수 없습니다). `/actuator/health`는 모니터링용으로 계속 열려 있습니다 |
 | `/api/v1/documents/**` REST 엔드포인트 | **의도적으로 그대로 열어둠 + CSRF 예외** — `POST /api/v1/documents/sync` 등 curl 자동화([§6.2](#62-문서-버전-관리) 참조)가 그대로 인증 없이 동작 |
 | Web UI 게스트 화면 | 업로드 카드·삭제 버튼·Admin 내비가 숨겨짐(관리자로 로그인해야 노출) |
 | 로그아웃 버튼 | 관리자로 로그인했을 때만 노출 |

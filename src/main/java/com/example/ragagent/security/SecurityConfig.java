@@ -70,6 +70,12 @@ public class SecurityConfig {
                     .requestMatchers("/webjars/**", "/css/**", "/js/**", "/images/**", "/favicon.ico").permitAll()
                     .requestMatchers("/manifest.webmanifest", "/sw.js", "/offline.html", "/icons/**").permitAll()
                     .requestMatchers("/actuator/health", "/api/v1/health").permitAll()
+                    // 게스트에게 열린 배포다 — /actuator/loggers 를 그대로 두면 방문자 누구나
+                    // 로그 레벨을 TRACE 로 올려 프롬프트 전문(검색된 문서 본문 포함)을 로그 파일에
+                    // 쌓게 할 수 있다. 평문 no-auth 분기에는 이 규칙을 두지 않았다: 그쪽은
+                    // /admin 까지 관리자가 자동 주입되는 폐쇄망 단일 운영자 전제라,
+                    // 여기만 막는 것이 두 모드의 경계와 일치한다.
+                    .requestMatchers("/actuator/**").hasRole("ADMIN")
                     // Document-management write surface — gated. Method-scoped: a bare "/ui/documents/*"
                     // pattern would also match "/ui/documents/list" (a single path segment), so every
                     // entry here pins the HTTP method too, not just the path.
@@ -126,10 +132,20 @@ public class SecurityConfig {
                     .requestMatchers("/webjars/**", "/css/**", "/js/**", "/images/**", "/favicon.ico").permitAll()
                     .requestMatchers("/manifest.webmanifest", "/sw.js", "/offline.html", "/icons/**").permitAll()
                     .requestMatchers("/actuator/health", "/api/v1/health").permitAll()
-                    // §6.8 — destructive orphan-usage cleanup, admin only. Scoped narrowly (not
-                    // all of /admin/**) so existing /admin/** endpoints keep their current
-                    // "any authenticated user" behavior unchanged.
-                    .requestMatchers(HttpMethod.DELETE, "/admin/llm-usage/**").hasRole("ADMIN")
+                    // §6.19.2 — /admin/** 전체가 ROLE_ADMIN 이다. 예전엔 §6.8 의
+                    // DELETE /admin/llm-usage/** 하나만 게이트하고 나머지는 "로그인한 사용자 누구나"
+                    // 였는데, 그 사이 /admin 아래로 들어온 것들이 그 가정을 무너뜨렸다 —
+                    // /admin/threads 는 전 사용자의 대화 전문을 읽고 지우며,
+                    // /admin/settings/update 는 런타임 설정을, /admin/submissions/{id}/approve 는
+                    // 검색 코퍼스를 바꾼다(§10.11 의 "유일한 문"). /signup 이 permitAll 이므로
+                    // 게이트가 없으면 가입만 하면 관리자가 된다. 두 no-auth 계열 모드는 이
+                    // 분기를 타지 않는다 — 위의 두 분기가 각자 처리한다.
+                    .requestMatchers("/admin/**").hasRole("ADMIN")
+                    // 런타임 로그 레벨 변경(POST /actuator/loggers/{name})은 관리 행위다 —
+                    // TRACE 로 올리면 LlmCurlLogger 가 검색된 문서 본문이 실린 프롬프트 전문을
+                    // 로그 파일에 남긴다. /actuator/health 는 위에서 이미 permitAll 이라
+                    // 이 규칙에 걸리지 않는다.
+                    .requestMatchers("/actuator/**").hasRole("ADMIN")
                     .anyRequest().authenticated()
                 )
                 .formLogin(form -> form

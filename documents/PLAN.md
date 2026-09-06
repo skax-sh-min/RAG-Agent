@@ -53,7 +53,7 @@
 
 | 순위 | 항목 | 트리거 |
 |---|---|---|
-| 1 | **§6.19 보안 하드닝** — API CSRF/세션 혼용(6.19.1) · `/admin/**` ROLE_ADMIN 게이트(6.19.2) · **로그인 전용 rate-limit 버킷**(§6.1 참조 — 문서에만 있고 코드엔 없던 항목) ※ **6.19.3(XFF)은 §6.22와 함께 완료** | **auth 모드 여는 시점에 반드시 선행**(게이트) — no-auth엔 노출면 없음 |
+| 1 | **§6.19 보안 하드닝** — API CSRF/세션 혼용(6.19.1) · **로그인 전용 rate-limit 버킷**(§6.1 참조 — 문서에만 있고 코드엔 없던 항목) ※ **6.19.2(`/admin/**` + actuator ROLE_ADMIN 게이트)는 2026-09-06 완료, 6.19.3(XFF)은 §6.22와 함께 완료** | **auth 모드 여는 시점에 반드시 선행**(게이트) — no-auth엔 노출면 없음 |
 | 2 | **§6.20 사용자별 LLM 토큰 쿼터** | 실사용자가 여럿 생겨 사용량 격리가 필요해질 때 |
 | 3 | **§6.16.2 계정 잠금 상태 피드백** | auth 모드 로그인 UX — no-auth엔 로그인 자체가 없음 |
 | 4 | **Phase 4** (조건부) — §7.1 OAuth2 소셜 로그인 · §7.2 PostgreSQL 마이그레이션 · §7.3 관리자 페이지 확장 | §3 트리거 참조(가입 마찰·SQLite 한계 신호·다중 사용자 운영 관리 필요 시) |
@@ -321,10 +321,11 @@ no-auth 기본 배포에서 `/documents` 쓰기와 `/admin/**`이 로그인 없�
 - **개선안**: (A) API를 브라우저 세션이 아닌 **별도 인증(API 토큰/헤더)** 전용으로 못박고 CSRF 예외를 유지하거나, (B) 세션 인증을 계속 쓸 거면 `/api/v1/**`도 CSRF 토큰을 요구(현 HTMX/폼 경로 `/ui/**`는 이미 CSRF 적용). 최소 조치로 `POST /api/v1/documents`만이라도 CSRF 토큰 또는 커스텀 헤더 요구.
 - **완료 기준**: 인증 모드에서 크로스사이트 폼 제출로 인증 사용자의 업로드/삭제가 트리거되지 않음(테스트로 재현→차단 확인). no-auth 모드 회귀 0.
 
-**6.19.2 `/admin/**` 인가 공백 — 일반 인증 사용자도 관리 기능 접근**
+**6.19.2 `/admin/**` 인가 공백 — 일반 인증 사용자도 관리 기능 접근** ✅ **완료 2026-09-06**
 - **현재 코드**: 인증 모드에서 ROLE_ADMIN을 요구하는 경로는 **`DELETE /admin/llm-usage/**` 하나뿐**(`SecurityConfig` 주석이 "나머지 `/admin/**`는 any authenticated user 유지"를 명시). 따라서 `/admin`(청크 브라우징), `DELETE /admin/chunks/{id}`, `POST /admin/chunks/{id}`(편집), `POST /admin/documents/{docId}/reindex`를 **로그인한 일반 사용자 누구나** 호출해 벡터 청크를 조회·수정·삭제·재인덱싱할 수 있다.
 - **개선안**: `/admin/**` 전체를 `hasRole("ADMIN")`으로 게이트. no-auth 모드는 `NoAuthAutoLoginFilter`가 `/admin` 요청을 첫 ADMIN으로 자동 인증하므로 무영향. 단, `AdminController`/`AdminService` 테스트에 비관리자 403 케이스 추가 필요.
 - **완료 기준**: 인증 모드에서 비-ADMIN 사용자의 `/admin/**` 접근이 403. no-auth 모드 관리자 자동 인증 회귀 0.
+- **처리 결과**: `SecurityConfig` 전체 인증 분기에 `.requestMatchers("/admin/**").hasRole("ADMIN")` 추가(§6.8 의 `DELETE /admin/llm-usage/**` 전용 줄은 여기에 흡수돼 삭제). **착수 시점의 노출면은 위 목록보다 넓었다** — 그 사이 `/admin` 아래로 `GET /admin/threads`(전 사용자 대화 전문 열람·삭제), `POST /admin/settings/update|reset`(런타임 설정), `POST /admin/submissions/{id}/approve`(§10.11 검색 코퍼스로 들어가는 유일한 문)가 들어왔다. **같은 커밋에서 `/actuator/**`(health 제외)도 두 모드 모두 ROLE_ADMIN 으로 묶었다**: `POST /actuator/loggers/{name}` 은 인가 관점에서 관리 행위이며(TRACE 를 켜면 `LlmCurlLogger` 가 검색 문서 본문이 실린 프롬프트 전문을 로그 파일에 쓴다) management-only 모드에서는 게스트에게까지 열려 있었다. 검증은 `FullAuthAuthorizationTest`(신규) + `ManagementOnlyAuthorizationTest`(actuator 케이스 추가).
 
 **6.19.3 Rate limit — `X-Forwarded-For` 무검증 신뢰** ✅ **완료** (§6.22와 함께 선행 처리)
 - XFF 판정을 `ClientIpResolver`(신규) 한 곳으로 일원화하고 **최상위** `app.trust-forwarded-for`(기본 `false`) 옵트인일 때만 신뢰. 프로퍼티를 rate-limit 하위가 아니라 최상위에 둔 이유는 §6.22(방문자 식별)가 같은 판정을 쓰기 때문 — 두 소비자가 한 곳을 공유한다.

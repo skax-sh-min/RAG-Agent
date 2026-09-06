@@ -491,4 +491,28 @@ class ManagementOnlyAuthorizationTest {
         mvc.perform(get("/admin").session(session))
                 .andExpect(status().is3xxRedirection());
     }
+
+    // ── actuator: 게스트에게 열린 배포이므로 로그 레벨 변경은 ROLE_ADMIN ──────────
+
+    /**
+     * {@code /actuator/loggers} 가 열려 있으면 방문자 누구나 레벨을 TRACE 로 올릴 수 있고,
+     * 그 순간 {@code LlmCurlLogger} 가 검색된 문서 본문이 실린 프롬프트 전문을 로그 파일에
+     * 남긴다. 이 모드의 나머지 게이트와 같은 이유로 {@code hasRole("ADMIN")} 이다.
+     */
+    @Test
+    @DisplayName("게스트 POST /actuator/loggers/... — 403 (게스트는 ROLE_USER)")
+    void guest_loggersEndpoint_forbidden() throws Exception {
+        mvc.perform(post("/actuator/loggers/com.example.ragagent")
+                        .contentType("application/json").content("{\"configuredLevel\":\"TRACE\"}")
+                        .with(csrf()).with(user("someone").roles("USER")))
+                .andExpect(status().isForbidden());
+    }
+
+    /** 헬스는 모니터링용으로 열려 있어야 한다 — 이 슬라이스엔 핸들러가 없으므로 404. */
+    @Test
+    @DisplayName("익명 GET /actuator/health — 인가 통과(핸들러 없음 → 404)")
+    void anonymous_health_notGated() throws Exception {
+        mvc.perform(get("/actuator/health"))
+                .andExpect(status().isNotFound());
+    }
 }
