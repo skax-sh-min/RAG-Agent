@@ -161,6 +161,7 @@ docker-compose up chroma
 
 - `spring.autoconfigure.exclude` must keep the Chroma exclusion and all six OpenAI model exclusions (chat/embedding/audio-speech/audio-transcription/image/moderation) [↗](documents/PITFALLS.md#springautoconfigureexclude-must-keep-the-chroma-ex)
 - SQLite pool size must stay at 1
+- **SQLite 세션 PRAGMA(`journal_mode`/`busy_timeout`/`synchronous`)는 `DataSourceConfig.sqliteUrl()` 의 JDBC URL 파라미터로만 건다.** `connection-init-sql` 로 옮기면 **조용히 무효가 된다** — statement 하나만 실행되고(sqlite-vec 백엔드에서는 그 자리를 `load_extension()` 이 이미 쓴다), 세미콜론으로 이어 붙이면 드라이버가 **첫 문장만** 실행한다. 실제로 `spring.datasource.hikari.connection-init-sql` 에 있던 `busy_timeout=5000` 은 한 번도 적용된 적이 없었다(드라이버 기본값 3000 이 걸려 있었다). 게다가 `DataSourceConfig` 가 `HikariConfig` 를 직접 만들므로 `spring.datasource.hikari.*` 자체가 바인딩되지 않는다. `synchronous=NORMAL` 은 WAL 권장값이며 이 앱이 턴 하나에 연속 여러 번 쓰기 때문에 필요하다(전원 손실 시 마지막 트랜잭션을 잃을 수 있으나 DB 는 깨지지 않는다). `DataSourceConfigTest` 가 **진짜 커넥션을 열어 되물어본다** — 설정 문자열만 읽어서는 이 함정이 드러나지 않기 때문
 - All new LLM providers must go through `LlmRouter`, not direct `ChatClient` injection
 - `ProviderRole`: LOCAL / NORMAL / PREMIUM (orthogonal to `TaskType`)
 - `classifyOnly()` does not accumulate tokens into `AgentState` → `llmCallCount` under-reported by 1 (accepted trade-off)

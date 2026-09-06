@@ -125,6 +125,62 @@ class DataSourceConfigTest {
                 .hasMessageContaining("vec0 바이너리");
     }
 
+    // ── 세션 PRAGMA (URL 파라미터) ──────────────────────────────────
+
+    /**
+     * <b>이 테스트가 존재하는 이유</b>: 예전에는
+     * {@code spring.datasource.hikari.connection-init-sql=PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;}
+     * 로 "설정돼 있었다". 두 가지가 동시에 틀렸다 — DataSourceConfig 가 HikariConfig 를 직접 만들어
+     * 그 프로퍼티가 바인딩되지 않았고, 설령 바인딩됐어도 드라이버는 세미콜론으로 이어 붙인 문장 중
+     * <b>첫 것만</b> 실행한다. 그래서 "설정했다"와 "실제로 걸렸다"가 달랐고, 그 간극은 설정 문자열을
+     * 읽는 것만으로는 절대 드러나지 않는다. 그러니 여기서는 <b>진짜 커넥션을 열어 되물어본다</b>.
+     */
+    @Test
+    @DisplayName("sqliteUrl: 실제 커넥션에 PRAGMA 가 걸린다 — 설정한 값과 되물은 값이 같아야 한다")
+    void sqliteUrl_pragmasActuallyApplyOnARealConnection(@TempDir Path dir) throws Exception {
+        String url = DataSourceConfig.sqliteUrl(dir.resolve("pragma.db"));
+
+        try (java.sql.Connection c = java.sql.DriverManager.getConnection(url);
+             java.sql.Statement st = c.createStatement()) {
+            assertThat(pragma(st, "journal_mode")).isEqualToIgnoringCase("wal");
+            assertThat(pragma(st, "busy_timeout"))
+                    .as("드라이버 기본값 3000 이 아니라 우리가 지정한 값이어야 한다")
+                    .isEqualTo("5000");
+            assertThat(pragma(st, "synchronous"))
+                    .as("1 = NORMAL (WAL 권장). 기본값 FULL(2) 이면 커밋마다 fsync 한다")
+                    .isEqualTo("1");
+        }
+    }
+
+    @Test
+    @DisplayName("sqliteUrl: 풀이 커넥션을 다시 열어도 PRAGMA 가 유지된다")
+    void sqliteUrl_pragmasSurviveAReconnect(@TempDir Path dir) throws Exception {
+        String url = DataSourceConfig.sqliteUrl(dir.resolve("pragma.db"));
+        try (java.sql.Connection first = java.sql.DriverManager.getConnection(url)) { /* 열었다 닫는다 */ }
+
+        try (java.sql.Connection c = java.sql.DriverManager.getConnection(url);
+             java.sql.Statement st = c.createStatement()) {
+            assertThat(pragma(st, "busy_timeout")).isEqualTo("5000");
+            assertThat(pragma(st, "synchronous")).isEqualTo("1");
+        }
+    }
+
+    @Test
+    @DisplayName("sqliteUrl: 경로에 ?/& 가 있으면 거부 — 파라미터 경계가 깨져 엉뚱한 파일이 열린다")
+    void sqliteUrl_rejectsPathsThatWouldBreakTheQueryString() {
+        assertThatThrownBy(() -> DataSourceConfig.sqliteUrl(Path.of("/data/we?rd/memory.db")))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("?");
+        assertThatThrownBy(() -> DataSourceConfig.sqliteUrl(Path.of("/data/a&b/memory.db")))
+                .isInstanceOf(IllegalStateException.class);
+    }
+
+    private static String pragma(java.sql.Statement st, String name) throws Exception {
+        try (java.sql.ResultSet rs = st.executeQuery("PRAGMA " + name)) {
+            return rs.next() ? rs.getString(1) : null;
+        }
+    }
+
     // ── separate vector DB ─────────────────────────────────────────
 
     @Test
@@ -134,7 +190,7 @@ class DataSourceConfigTest {
         HikariConfig c = DataSourceConfig.buildVectorHikariConfig(
                 vectorDb, 1, "sqlite-vec", "/opt/sqlite-vec/vec0", "");
 
-        assertThat(c.getJdbcUrl()).isEqualTo("jdbc:sqlite:" + vectorDb);
+        assertThat(c.getJdbcUrl()).isEqualTo(DataSourceConfig.sqliteUrl(vectorDb));
         assertThat(c.getMaximumPoolSize()).isEqualTo(1);
         assertThat(c.getPoolName()).isEqualTo("vector-db");
         assertThat(c.getDataSourceProperties().getProperty("enable_load_extension")).isEqualTo("true");

@@ -54,6 +54,43 @@ public class DataSourceConfig {
     @Value("${app.vectorstore.sqlite-vec.db-path:}")
     private String sqliteVecDbPath;
 
+    /**
+     * 커넥션마다 걸려야 하는 SQLite 세션 PRAGMA.
+     *
+     * <p><b>{@code busy_timeout}</b> — 쓰기 락이 잡혀 있을 때 즉시 {@code SQLITE_BUSY} 로 실패하는
+     * 대신 이만큼 기다린다. pool=1 이라 앱 안에서는 경합이 드물지만, 같은 파일을 여는 다른
+     * 프로세스(운영자의 {@code sqlite3} 셸, 백업 도구)와는 여전히 부딪친다.
+     *
+     * <p><b>{@code synchronous=NORMAL}</b> — WAL 모드의 표준 권장값이다. 기본값 FULL 은 커밋마다
+     * fsync 를 하는데, 이 앱은 한 턴이 끝날 때 {@code addTurn} → 이미지 참조 → 검색 진단 →
+     * 검증 → 출처 스냅샷으로 <b>연속 여러 번</b> 쓰고 pool=1 이라 그동안 다른 요청이 커넥션을
+     * 잡지 못한다. NORMAL 은 전원이 끊기면 마지막 트랜잭션 몇 개를 잃을 수 있지만 <b>DB 가
+     * 깨지지는 않는다</b>(WAL 의 보장) — 잃는 것이 대화 한 턴의 꼬리라 이 앱에는 맞는 거래다.
+     *
+     * <p><b>왜 URL 파라미터인가.</b> {@code connectionInitSql} 은 statement 하나만 실행하고,
+     * sqlite-vec 백엔드에서는 그 자리를 {@code load_extension()} 이 이미 쓰고 있다. 세미콜론으로
+     * 이어 붙이는 것도 방법이 아니다 — <b>드라이버가 첫 문장만 실행한다</b>(그래서 예전
+     * {@code spring.datasource.hikari.connection-init-sql} 의 {@code busy_timeout=5000} 은 한 번도
+     * 적용된 적이 없고 드라이버 기본값 3000 이 걸려 있었다). xerial 드라이버는 URL 쿼리
+     * 파라미터로 PRAGMA 를 받으며, 그 값은 풀이 커넥션을 다시 열어도 유지된다.
+     */
+    private static final String SESSION_PRAGMAS = "journal_mode=WAL&busy_timeout=5000&synchronous=NORMAL";
+
+    /**
+     * 위 PRAGMA 를 얹은 SQLite JDBC URL. 경로에 {@code ?}/{@code &} 가 있으면 파라미터 경계가
+     * 깨져 <b>엉뚱한 파일</b>이 열리므로(조용한 실패다) 미리 막는다.
+     *
+     * <p>Package-private + static — 실제 커넥션 없이 단위 테스트한다.
+     */
+    static String sqliteUrl(Path dbPath) {
+        String path = dbPath.toString();
+        if (path.indexOf('?') >= 0 || path.indexOf('&') >= 0) {
+            throw new IllegalStateException(
+                    "SQLite 파일 경로에 '?' 또는 '&' 를 포함할 수 없습니다(JDBC URL 파라미터와 충돌): " + path);
+        }
+        return "jdbc:sqlite:" + path + "?" + SESSION_PRAGMAS;
+    }
+
     /** SpEL guard for the separate-vector-DB feature switch (sqlite-vec backend + non-blank db-path). */
     static final String SEPARATE_VECTOR_DB =
             "'${app.vectorstore.type:chroma}' == 'sqlite-vec' and '${app.vectorstore.sqlite-vec.db-path:}'.trim().length() > 0";
@@ -76,7 +113,7 @@ public class DataSourceConfig {
         Files.createDirectories(dir);
 
         HikariConfig config = new HikariConfig();
-        config.setJdbcUrl("jdbc:sqlite:" + dir.toAbsolutePath() + "/memory.db");
+        config.setJdbcUrl(sqliteUrl(dir.toAbsolutePath().resolve("memory.db")));
         config.setDriverClassName("org.sqlite.JDBC");
         config.setMaximumPoolSize(maxPoolSize);
         config.setPoolName("memory-db");
@@ -112,7 +149,7 @@ public class DataSourceConfig {
     static HikariConfig buildVectorHikariConfig(Path dbPath, int poolSize, String type,
                                                 String extensionPath, String entrypoint) {
         HikariConfig config = new HikariConfig();
-        config.setJdbcUrl("jdbc:sqlite:" + dbPath);
+        config.setJdbcUrl(sqliteUrl(dbPath));
         config.setDriverClassName("org.sqlite.JDBC");
         config.setMaximumPoolSize(poolSize);   // pool=1 replicated (SQLite serializes writes)
         config.setPoolName("vector-db");
