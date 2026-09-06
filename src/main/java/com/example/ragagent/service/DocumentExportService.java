@@ -39,9 +39,6 @@ public class DocumentExportService {
 
     private static final Logger log = LoggerFactory.getLogger(DocumentExportService.class);
 
-    /** Upper bound on chunks pulled for one export — matches AdminService's own fetch cap. */
-    private static final int MAX_CHUNKS = 10_000;
-
     private final AdminService adminService;
     private final MarkdownCorrectionService correctionService;
     private final DocRegistry docRegistry;
@@ -69,7 +66,9 @@ public class DocumentExportService {
      * @throws IllegalArgumentException when the document has no indexed chunks (nothing to export)
      */
     public Result export(String docId, String version, ExportFormat format, Options options) {
-        List<AdminService.ChunkRow> rows = adminService.getChunks(collectionOf(version), docId, 0, MAX_CHUNKS);
+        // 내보내기는 문서의 모든 청크 본문을 재조립한다 — 페이지 조회(getChunks)가 아니라
+        // 전체 조회다. 상한은 AdminService 의 CHUNK_FETCH_CAP 하나로 모인다.
+        List<AdminService.ChunkRow> rows = adminService.getAllChunks(collectionOf(version), docId);
         if (rows.isEmpty()) {
             throw new IllegalArgumentException("내보낼 청크가 없습니다: " + docId);
         }

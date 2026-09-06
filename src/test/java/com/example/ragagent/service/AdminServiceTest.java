@@ -31,6 +31,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -198,6 +199,129 @@ class AdminServiceTest {
 
         assertThat(page1).extracting(AdminService.ChunkRow::fullText).containsExactly("d1c0", "d1c1");
         assertThat(page2).extracting(AdminService.ChunkRow::fullText).containsExactly("d2c0", "d2c1");
+    }
+
+    @Test
+    @DisplayName("getChunks(chroma) — 1단계는 메타데이터만, 2단계는 이 페이지의 id 만 본문과 함께 읽는다")
+    @SuppressWarnings("unchecked")
+    void getChunks_chroma_readsBodiesOnlyForThePage() {
+        ChromaApi api = mock(ChromaApi.class);
+        List<String> ids  = List.of("zid", "aid", "mid", "bid");
+        List<String> docs = List.of("d1c1", "d2c0", "d1c0", "d2c1");
+        List<Map<String, String>> metas = List.of(
+                Map.of(MetaKey.DOC_ID, "doc1", MetaKey.CHUNK_INDEX, "1"),
+                Map.of(MetaKey.DOC_ID, "doc2", MetaKey.CHUNK_INDEX, "0"),
+                Map.of(MetaKey.DOC_ID, "doc1", MetaKey.CHUNK_INDEX, "0"),
+                Map.of(MetaKey.DOC_ID, "doc2", MetaKey.CHUNK_INDEX, "1"));
+        when(api.getEmbeddings(anyString(), anyString(), anyString(), any()))
+                .thenReturn(new ChromaApi.GetEmbeddingResponse(ids, List.of(), docs, metas));
+        AdminService svc = new AdminService(Optional.of(api), mock(JdbcTemplate.class), mock(AppProperties.class),
+                OM, mock(VectorStoreFacade.class), mock(KeywordSearchRepository.class), mock(KeywordExtractor.class));
+
+        svc.getChunks("col", null, 0, 2);
+
+        ArgumentCaptor<ChromaApi.GetEmbeddingsRequest> reqs =
+                ArgumentCaptor.forClass(ChromaApi.GetEmbeddingsRequest.class);
+        verify(api, times(2)).getEmbeddings(anyString(), anyString(), anyString(), reqs.capture());
+
+        ChromaApi.GetEmbeddingsRequest ordering = reqs.getAllValues().get(0);
+        assertThat(ordering.include())
+                .as("순서만 정하는 조회다 — 본문은 페이로드의 대부분이고 정렬 기준은 전부 메타데이터에 있다")
+                .doesNotContain(ChromaApi.QueryRequest.Include.DOCUMENTS);
+        assertThat(ordering.ids()).as("1단계는 매치 집합 전체를 봐야 한다").isNull();
+
+        ChromaApi.GetEmbeddingsRequest bodies = reqs.getAllValues().get(1);
+        assertThat(bodies.include()).contains(ChromaApi.QueryRequest.Include.DOCUMENTS);
+        assertThat(bodies.ids())
+                .as("본문은 이 페이지에 보이는 것만 — 정렬 결과 첫 2개(doc1의 chunk 0,1)")
+                .containsExactly("mid", "zid");
+    }
+
+    @Test
+    @DisplayName("getChunks(chroma) — 2단계 응답이 요청 순서와 다르게 와도 페이지 순서는 정렬 순서를 따른다")
+    @SuppressWarnings("unchecked")
+    void getChunks_chroma_keepsRequestedOrderWhenResponseIsShuffled() {
+        ChromaApi api = mock(ChromaApi.class);
+        List<Map<String, String>> metas = List.of(
+                Map.of(MetaKey.DOC_ID, "doc1", MetaKey.CHUNK_INDEX, "1"),
+                Map.of(MetaKey.DOC_ID, "doc1", MetaKey.CHUNK_INDEX, "0"));
+        when(api.getEmbeddings(anyString(), anyString(), anyString(), any()))
+                // 1단계(순서 결정) → 2단계(본문). 2단계 응답은 요청한 ids 순서와 반대로 온다.
+                .thenReturn(new ChromaApi.GetEmbeddingResponse(
+                        List.of("second", "first"), List.of(), List.of("c1", "c0"), metas))
+                .thenReturn(new ChromaApi.GetEmbeddingResponse(
+                        List.of("second", "first"), List.of(), List.of("c1", "c0"), metas));
+        AdminService svc = new AdminService(Optional.of(api), mock(JdbcTemplate.class), mock(AppProperties.class),
+                OM, mock(VectorStoreFacade.class), mock(KeywordSearchRepository.class), mock(KeywordExtractor.class));
+
+        assertThat(svc.getChunks("col", null, 0, 2))
+                .extracting(AdminService.ChunkRow::fullText)
+                .containsExactly("c0", "c1");
+    }
+
+    @Test
+    @DisplayName("getChunks(chroma) — 1·2단계 사이에 지워진 청크는 조용히 빠진다")
+    @SuppressWarnings("unchecked")
+    void getChunks_chroma_dropsChunksDeletedBetweenPhases() {
+        ChromaApi api = mock(ChromaApi.class);
+        when(api.getEmbeddings(anyString(), anyString(), anyString(), any()))
+                .thenReturn(new ChromaApi.GetEmbeddingResponse(
+                        List.of("a", "b"), List.of(), List.of("", ""),
+                        List.of(Map.of(MetaKey.DOC_ID, "d", MetaKey.CHUNK_INDEX, "0"),
+                                Map.of(MetaKey.DOC_ID, "d", MetaKey.CHUNK_INDEX, "1"))))
+                // 2단계에서는 b 가 이미 없다
+                .thenReturn(new ChromaApi.GetEmbeddingResponse(
+                        List.of("a"), List.of(), List.of("body-a"),
+                        List.of(Map.of(MetaKey.DOC_ID, "d", MetaKey.CHUNK_INDEX, "0"))));
+        AdminService svc = new AdminService(Optional.of(api), mock(JdbcTemplate.class), mock(AppProperties.class),
+                OM, mock(VectorStoreFacade.class), mock(KeywordSearchRepository.class), mock(KeywordExtractor.class));
+
+        assertThat(svc.getChunks("col", null, 0, 2))
+                .extracting(AdminService.ChunkRow::id)
+                .containsExactly("a");
+    }
+
+    @Test
+    @DisplayName("countChunks(chroma, docId) — 세는 데 본문을 끌어오지 않는다")
+    @SuppressWarnings("unchecked")
+    void countChunks_chroma_doesNotFetchBodies() {
+        ChromaApi api = mock(ChromaApi.class);
+        when(api.getEmbeddings(anyString(), anyString(), anyString(), any()))
+                .thenReturn(new ChromaApi.GetEmbeddingResponse(
+                        List.of("a", "b", "c"), List.of(), List.of("", "", ""),
+                        List.of(Map.of(), Map.of(), Map.of())));
+        AdminService svc = new AdminService(Optional.of(api), mock(JdbcTemplate.class), mock(AppProperties.class),
+                OM, mock(VectorStoreFacade.class), mock(KeywordSearchRepository.class), mock(KeywordExtractor.class));
+
+        assertThat(svc.countChunks("col", "doc1")).isEqualTo(3);
+
+        ArgumentCaptor<ChromaApi.GetEmbeddingsRequest> req =
+                ArgumentCaptor.forClass(ChromaApi.GetEmbeddingsRequest.class);
+        verify(api).getEmbeddings(anyString(), anyString(), anyString(), req.capture());
+        assertThat(req.getValue().include()).doesNotContain(ChromaApi.QueryRequest.Include.DOCUMENTS);
+    }
+
+    @Test
+    @DisplayName("getAllChunks(chroma) — 전체가 필요한 경로는 한 번에 본문까지 읽는다(왕복을 늘리지 않는다)")
+    @SuppressWarnings("unchecked")
+    void getAllChunks_chroma_singleRoundTripWithBodies() {
+        ChromaApi api = mock(ChromaApi.class);
+        when(api.getEmbeddings(anyString(), anyString(), anyString(), any()))
+                .thenReturn(new ChromaApi.GetEmbeddingResponse(
+                        List.of("b", "a"), List.of(), List.of("c1", "c0"),
+                        List.of(Map.of(MetaKey.DOC_ID, "d", MetaKey.CHUNK_INDEX, "1"),
+                                Map.of(MetaKey.DOC_ID, "d", MetaKey.CHUNK_INDEX, "0"))));
+        AdminService svc = new AdminService(Optional.of(api), mock(JdbcTemplate.class), mock(AppProperties.class),
+                OM, mock(VectorStoreFacade.class), mock(KeywordSearchRepository.class), mock(KeywordExtractor.class));
+
+        assertThat(svc.getAllChunks("col", "d"))
+                .extracting(AdminService.ChunkRow::fullText)
+                .containsExactly("c0", "c1");
+
+        ArgumentCaptor<ChromaApi.GetEmbeddingsRequest> req =
+                ArgumentCaptor.forClass(ChromaApi.GetEmbeddingsRequest.class);
+        verify(api).getEmbeddings(anyString(), anyString(), anyString(), req.capture());
+        assertThat(req.getValue().include()).contains(ChromaApi.QueryRequest.Include.DOCUMENTS);
     }
 
     @Test
