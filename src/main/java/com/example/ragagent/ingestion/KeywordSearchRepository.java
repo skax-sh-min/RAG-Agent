@@ -340,83 +340,20 @@ public class KeywordSearchRepository {
         }
     }
 
-    /**
-     * Distinct tags currently in use, derived from the {@code doc_tags} column (comma-joined,
-     * already normalized at index time). Optionally scoped to a version. Sorted, de-duplicated.
-     * No-op (empty) when FTS5 is unavailable.
-     */
-    public List<String> distinctTags(String version) {
-        if (!available) return List.of();
-        String base = "SELECT DISTINCT doc_tags FROM chunk_fts WHERE doc_tags IS NOT NULL AND doc_tags <> ''";
-        try {
-            List<String> rows = (version != null && !version.isBlank())
-                    ? jdbc.queryForList(base + " AND version = ?", String.class, version)
-                    : jdbc.queryForList(base, String.class);
-            java.util.TreeSet<String> tags = new java.util.TreeSet<>();
-            for (String row : rows) {
-                if (row == null) continue;
-                for (String t : row.split(",")) {
-                    String s = t.strip();
-                    if (!s.isEmpty()) tags.add(s);
-                }
-            }
-            return List.copyOf(tags);
-        } catch (Exception e) {
-            log.debug("[KEYWORD] distinctTags failed: {}", e.getMessage());
-            return List.of();
-        }
-    }
-
-    /**
-     * Same as {@link #distinctTags(String)}, but drops any tag present on <b>every</b> document
-     * in scope. Such a tag adds no filtering value as a suggestion chip (selecting it is
-     * equivalent to selecting nothing), and the set grows only more useless as more documents
-     * are tagged consistently. A document that itself carries no tags makes this intersection
-     * empty by definition (there is no tag it shares with the others).
-     */
-    public List<String> distinctTagsExcludingCommon(String version) {
-        if (!available) return List.of();
-        String sql = "SELECT DISTINCT doc_id, doc_tags FROM chunk_fts WHERE doc_id IS NOT NULL"
-                + (version != null && !version.isBlank() ? " AND version = ?" : "");
-        try {
-            Map<String, Set<String>> perDoc = new HashMap<>();
-            jdbc.query(sql, rs -> {
-                String docId = rs.getString("doc_id");
-                if (docId == null) return;
-                Set<String> tags = perDoc.computeIfAbsent(docId, __ -> new TreeSet<>());
-                String row = rs.getString("doc_tags");
-                if (row == null) return;
-                for (String t : row.split(",")) {
-                    String s = t.strip();
-                    if (!s.isEmpty()) tags.add(s);
-                }
-            }, (version != null && !version.isBlank()) ? new Object[]{version} : new Object[]{});
-
-            if (perDoc.isEmpty()) return List.of();
-
-            Set<String> common = null;
-            TreeSet<String> all = new TreeSet<>();
-            for (Set<String> tags : perDoc.values()) {
-                all.addAll(tags);
-                common = (common == null) ? new TreeSet<>(tags) : intersect(common, tags);
-            }
-            all.removeAll(common);
-            return List.copyOf(all);
-        } catch (Exception e) {
-            log.debug("[KEYWORD] distinctTagsExcludingCommon failed: {}", e.getMessage());
-            return List.of();
-        }
-    }
-
-    private static Set<String> intersect(Set<String> a, Set<String> b) {
-        Set<String> out = new TreeSet<>(a);
-        out.retainAll(b);
-        return out;
-    }
+    // distinctTags(version) / distinctTagsExcludingCommon(version) 은 DocRegistry 로 옮겼다.
+    // 둘 다 chunk_fts 를 통째로 훑는 쿼리였는데(UNINDEXED 컬럼 + DISTINCT), 세는 단위가 청크가
+    // 아니라 문서였으므로 애초에 문서 단위 테이블에 있어야 할 것들이었다.
 
     /**
      * Returns distinct tags per doc_id (comma-split from doc_tags), sorted and de-duplicated.
      * No-op (empty map) when FTS5 is unavailable or docIds is empty.
+     *
+     * <p><b>{@link DocTagsBackfill} 전용이다 — 새 호출자를 붙이지 말 것.</b> {@code doc_tags} 는
+     * FTS5 의 {@code UNINDEXED} 컬럼이라(FTS5 는 인덱스를 만들 수 없다) 이 {@code WHERE doc_id IN
+     * (...)} 은 <b>코퍼스 전체 스캔</b>이고, 스캔하는 행에는 청크 본문이 들어 있다. 예전에는
+     * {@code RagService.listDocuments()} 가 이걸 불러서 문서 목록·관리자 화면·{@code /admin/chunks}
+     * 페이지 넘김마다 코퍼스를 훑었다. 태그의 출처는 이제 {@code doc_registry.tags} 이고
+     * ({@link DocRegistry#tagsByDocIds}), 행 수가 문서 수인 인덱스된 테이블이다.
      */
     public Map<String, List<String>> tagsByDocIds(List<String> docIds) {
         if (!available || docIds == null || docIds.isEmpty()) return Map.of();

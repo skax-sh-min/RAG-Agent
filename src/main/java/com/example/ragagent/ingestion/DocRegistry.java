@@ -2,6 +2,7 @@ package com.example.ragagent.ingestion;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.example.ragagent.model.TagUtils;
 import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -53,6 +54,7 @@ public class DocRegistry {
                 "CREATE INDEX IF NOT EXISTS idx_doc_registry_sha_version ON doc_registry(sha256, version, user_id)");
         addChunkOverlapColumn();
         addDisplayNameColumn();
+        addTagsColumn();
         log.debug("[REGISTRY] SQLite 초기화 완료");
     }
 
@@ -102,6 +104,34 @@ public class DocRegistry {
         return updated;
     }
 
+    /**
+     * Defensive ALTER for the {@code tags} column — 문서의 검색 스코프 태그(CSV).
+     *
+     * <p><b>왜 여기인가.</b> 태그는 문서 단위 속성인데 그동안 <b>청크마다 복제된</b>
+     * {@code chunk_fts.doc_tags} 가 유일한 출처였다. {@code chunk_fts} 는 FTS5 가상 테이블이고
+     * 그 컬럼은 {@code UNINDEXED} 라 — FTS5 는 인덱스를 만들 수 없다 — {@code WHERE doc_id IN (...)}
+     * 이 <b>코퍼스 전체 스캔</b>이었다. 그런데 그 조회를 {@code RagService.listDocuments()} 가
+     * 부르고, 그건 문서 목록·관리자 화면·{@code /admin/chunks} 페이지 넘김마다 돈다. 즉 문서를
+     * 나열할 때마다 청크 수만 행(본문 포함)을 읽고 있었다. {@code doc_registry} 는 이미 문서 단위
+     * 일반 테이블이라 여기서는 문서 수만큼만 읽고 PK 인덱스도 탄다.
+     *
+     * <p>{@code chunk_fts.doc_tags} 는 <b>남는다</b> — 검색 결과에 태그를 동행시키는
+     * ({@code CHUNK_ROW_MAPPER} → {@code MetaKey.TAGS} → {@code filterByTags}) 비정규화 사본이다.
+     * 이 컬럼이 권위 있는 출처이고 그쪽은 검색 경로용 사본이라는 관계만 지키면 된다.
+     *
+     * <p>{@code NULL} 과 빈 문자열은 다르다: {@code NULL} = "아직 백필되지 않음"(옛 행),
+     * 빈 문자열 = "태그 없음"이다. {@code DocTagsBackfill} 이 그 구분으로 멱등성을 얻는다
+     * ({@code chunk_overlap} 과 같은 패턴).
+     */
+    private void addTagsColumn() {
+        try {
+            jdbc.execute("ALTER TABLE doc_registry ADD COLUMN tags TEXT");
+            log.info("[REGISTRY] doc_registry.tags 컬럼 추가");
+        } catch (DataAccessException e) {
+            log.debug("[REGISTRY] tags 컬럼이 이미 존재함");   // duplicate column name
+        }
+    }
+
     // ── CRUD ──────────────────────────────────────────────────────────────
 
     public void put(String docId, String userId, DocRegistryEntry entry) {
@@ -125,6 +155,83 @@ public class DocRegistry {
         return jdbc.update(
                 "UPDATE doc_registry SET display_name = ? WHERE doc_id = ? AND user_id = ?",
                 displayName, docId, userId);
+    }
+
+    /** Updates only the search-scope tags, leaving every other column untouched (same shape as
+     *  {@link #updateDisplayName}). {@code tagsCsv} 는 {@code TagUtils.toMetaValue()} 형식이며
+     *  빈 문자열은 "태그 없음"이다(NULL 과 다르다 — 위 {@link #addTagsColumn} 참조).
+     *  @return rows affected (0 = no such document) */
+    public int updateTags(String docId, String userId, String tagsCsv) {
+        return jdbc.update(
+                "UPDATE doc_registry SET tags = ? WHERE doc_id = ? AND user_id = ?",
+                tagsCsv == null ? "" : tagsCsv, docId, userId);
+    }
+
+    /**
+     * 문서별 태그 — {@code RagService.listDocuments()} 의 목록 조회용. 한 번의 질의로 끝내며
+     * 행 수는 <b>문서 수</b>다(예전 {@code chunk_fts} 경로는 청크 수만큼을 본문까지 읽었다).
+     * 태그가 없는 문서는 결과에 없으므로 호출자는 빈 목록으로 떨어지면 된다.
+     */
+    public Map<String, List<String>> tagsByDocIds(Collection<String> docIds) {
+        if (docIds == null || docIds.isEmpty()) return Map.of();
+        List<String> ids = new ArrayList<>(new LinkedHashSet<>(docIds));
+        String placeholders = ids.stream().map(id -> "?").collect(java.util.stream.Collectors.joining(","));
+        List<Object> params = new ArrayList<>(ids.size() + 1);
+        params.add(SHARED);
+        params.addAll(ids);
+        Map<String, List<String>> out = new HashMap<>();
+        for (Map<String, Object> row : jdbc.queryForList(
+                "SELECT doc_id, tags FROM doc_registry WHERE user_id = ? AND doc_id IN (" + placeholders + ")"
+                        + " AND tags IS NOT NULL AND tags <> ''", params.toArray())) {
+            List<String> tags = TagUtils.parseCsv(String.valueOf(row.get("tags")));
+            if (!tags.isEmpty()) out.put(String.valueOf(row.get("doc_id")), tags);
+        }
+        return out;
+    }
+
+    /** 사용 중인 태그 전체(정렬·중복 제거), 선택적으로 버전 스코프. 태그 제안 UI 용. */
+    public List<String> distinctTags(String version) {
+        return new ArrayList<>(collectTags(version).allTags());
+    }
+
+    /**
+     * {@link #distinctTags} 에서 <b>스코프 안 모든 문서가 공통으로 가진</b> 태그를 뺀 목록.
+     * 그런 태그는 칩으로 골라도 아무것도 걸러내지 못해 잡음이다(태그가 하나도 없는 문서가 하나라도
+     * 있으면 교집합이 비므로 아무것도 빠지지 않는다).
+     */
+    public List<String> distinctTagsExcludingCommon(String version) {
+        TagScan scan = collectTags(version);
+        TreeSet<String> all = new TreeSet<>(scan.allTags());
+        all.removeAll(scan.commonTags());
+        return List.copyOf(all);
+    }
+
+    /** {@code tags} 가 아직 채워지지 않은(NULL) 문서 id — {@code DocTagsBackfill} 전용. */
+    public List<String> docIdsWithoutTags() {
+        return jdbc.queryForList(
+                "SELECT doc_id FROM doc_registry WHERE user_id = ? AND tags IS NULL", String.class, SHARED);
+    }
+
+    private record TagScan(TreeSet<String> allTags, Set<String> commonTags) {}
+
+    /** 한 번의 스캔으로 전체 태그 집합과 모든 문서의 교집합을 함께 만든다. */
+    private TagScan collectTags(String version) {
+        boolean scoped = version != null && !version.isBlank();
+        String sql = "SELECT tags FROM doc_registry WHERE user_id = ?" + (scoped ? " AND version = ?" : "");
+        Object[] args = scoped ? new Object[]{SHARED, version} : new Object[]{SHARED};
+
+        TreeSet<String> all = new TreeSet<>();
+        Set<String> common = null;
+        for (String csv : jdbc.queryForList(sql, String.class, args)) {
+            Set<String> tags = new TreeSet<>(TagUtils.parseCsv(csv == null ? "" : csv));
+            all.addAll(tags);
+            if (common == null) {
+                common = new TreeSet<>(tags);
+            } else {
+                common.retainAll(tags);
+            }
+        }
+        return new TagScan(all, common == null ? Set.of() : common);
     }
 
     public Optional<DocRegistryEntry> findByDocId(String docId, String userId) {

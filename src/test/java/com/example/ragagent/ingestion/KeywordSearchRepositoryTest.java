@@ -63,49 +63,6 @@ class KeywordSearchRepositoryTest {
     }
 
     @Test
-    @DisplayName("distinctTags — doc_tags에서 정렬·중복 제거, 버전 스코프 적용")
-    void distinctTags_collectsAndScopes() {
-        repo.indexChunks(List.of(
-                taggedChunk("s1", "D1", "v1", 0, "내용 알파", "billing,policy"),
-                taggedChunk("s2", "D1", "v1", 1, "내용 베타", "policy"),
-                taggedChunk("s3", "D2", "v2", 0, "내용 감마", "onboarding")));
-
-        assertThat(repo.distinctTags(null)).containsExactly("billing", "onboarding", "policy");
-        assertThat(repo.distinctTags("v1")).containsExactly("billing", "policy");
-        assertThat(repo.distinctTags("v2")).containsExactly("onboarding");
-    }
-
-    @Test
-    @DisplayName("distinctTagsExcludingCommon — 모든 문서에 공통인 태그는 제외, 문서별 태그는 유지")
-    void distinctTagsExcludingCommon_dropsTagsSharedByEveryDocument() {
-        repo.indexChunks(List.of(
-                taggedChunk("s1", "D1", "v1", 0, "내용 알파", "common,billing"),
-                taggedChunk("s2", "D1", "v1", 1, "내용 베타", "common,billing"),
-                taggedChunk("s3", "D2", "v1", 0, "내용 감마", "common,policy")));
-
-        assertThat(repo.distinctTagsExcludingCommon("v1")).containsExactly("billing", "policy");
-    }
-
-    @Test
-    @DisplayName("distinctTagsExcludingCommon — 태그 없는 문서가 하나라도 있으면 교집합이 비어 아무것도 제외되지 않음")
-    void distinctTagsExcludingCommon_untaggedDocumentPreventsExclusion() {
-        repo.indexChunks(List.of(
-                taggedChunk("s1", "D1", "v1", 0, "내용 알파", "common"),
-                chunk("s2", "D2", "v1", 0, "내용 베타 (태그 없음)", "kw")));
-
-        assertThat(repo.distinctTagsExcludingCommon("v1")).containsExactly("common");
-    }
-
-    @Test
-    @DisplayName("distinctTagsExcludingCommon — 단일 문서뿐이면 그 문서의 모든 태그가 공통으로 취급되어 제외됨")
-    void distinctTagsExcludingCommon_singleDocumentExcludesAllItsTags() {
-        repo.indexChunks(List.of(
-                taggedChunk("s1", "D1", "v1", 0, "내용 알파", "billing,policy")));
-
-        assertThat(repo.distinctTagsExcludingCommon("v1")).isEmpty();
-    }
-
-    @Test
     @DisplayName("정확 용어로 검색 시 해당 청크 반환 (메타 포함)")
     void index_and_search_findsByContent() {
         repo.indexChunks(List.of(

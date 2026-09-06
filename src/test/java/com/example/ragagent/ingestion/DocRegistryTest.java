@@ -35,6 +35,110 @@ class DocRegistryTest {
     }
 
     @org.junit.jupiter.api.Nested
+    @DisplayName("검색 스코프 태그 — 문서 단위 저장소가 권위 있는 출처")
+    class Tags {
+
+        /** {@code SHARED} 로 넣어야 조회 메서드들(전부 SHARED 스코프)이 본다. */
+        private void putDoc(DocRegistry reg, String docId, String version) {
+            reg.put(docId, DocRegistry.SHARED, new DocRegistry.DocRegistryEntry(
+                    "sha-" + docId, version, "2026-01-01T00:00:00Z", 1, List.of("id1"), List.of()));
+        }
+
+        @Test
+        @DisplayName("기록한 태그가 문서별로 되돌아온다")
+        void tagsRoundTripPerDocument() {
+            DocRegistry reg = buildRegistry();
+            putDoc(reg, "doc_a", "v1");
+            putDoc(reg, "doc_b", "v1");
+            reg.updateTags("doc_a", DocRegistry.SHARED, "가이드,운영");
+            reg.updateTags("doc_b", DocRegistry.SHARED, "운영");
+
+            assertThat(reg.tagsByDocIds(List.of("doc_a", "doc_b")))
+                    .containsEntry("doc_a", List.of("가이드", "운영"))
+                    .containsEntry("doc_b", List.of("운영"));
+        }
+
+        @Test
+        @DisplayName("태그가 없는 문서는 맵에 없다 — 호출자가 빈 목록으로 떨어진다")
+        void documentsWithoutTagsAreAbsent() {
+            DocRegistry reg = buildRegistry();
+            putDoc(reg, "doc_a", "v1");
+            reg.updateTags("doc_a", DocRegistry.SHARED, "");
+
+            assertThat(reg.tagsByDocIds(List.of("doc_a"))).isEmpty();
+        }
+
+        @Test
+        @DisplayName("put() 의 UPSERT 는 태그를 건드리지 않는다 — 재인덱싱이 태그를 보존하는 근거")
+        void reindexingPreservesTags() {
+            DocRegistry reg = buildRegistry();
+            putDoc(reg, "doc_a", "v1");
+            reg.updateTags("doc_a", DocRegistry.SHARED, "가이드");
+
+            putDoc(reg, "doc_a", "v1");   // 재인덱싱이 같은 docId 를 다시 쓴다
+
+            assertThat(reg.tagsByDocIds(List.of("doc_a"))).containsEntry("doc_a", List.of("가이드"));
+        }
+
+        @Test
+        @DisplayName("distinctTags: 버전 스코프 · 정렬 · 중복 제거")
+        void distinctTagsAreScopedSortedAndDeduped() {
+            DocRegistry reg = buildRegistry();
+            putDoc(reg, "doc_a", "v1");
+            putDoc(reg, "doc_b", "v1");
+            putDoc(reg, "doc_c", "v2");
+            reg.updateTags("doc_a", DocRegistry.SHARED, "운영,가이드");
+            reg.updateTags("doc_b", DocRegistry.SHARED, "가이드");
+            reg.updateTags("doc_c", DocRegistry.SHARED, "다른버전");
+
+            assertThat(reg.distinctTags("v1")).containsExactly("가이드", "운영");
+            assertThat(reg.distinctTags(null)).containsExactly("가이드", "다른버전", "운영");
+        }
+
+        @Test
+        @DisplayName("distinctTagsExcludingCommon: 모든 문서가 가진 태그는 뺀다 (걸러내지 못하는 칩)")
+        void commonTagIsDropped() {
+            DocRegistry reg = buildRegistry();
+            putDoc(reg, "doc_a", "v1");
+            putDoc(reg, "doc_b", "v1");
+            reg.updateTags("doc_a", DocRegistry.SHARED, "공통,가이드");
+            reg.updateTags("doc_b", DocRegistry.SHARED, "공통,운영");
+
+            assertThat(reg.distinctTagsExcludingCommon("v1")).containsExactly("가이드", "운영");
+        }
+
+        @Test
+        @DisplayName("태그 없는 문서가 하나라도 있으면 교집합이 비어 아무것도 빠지지 않는다")
+        void anUntaggedDocumentEmptiesTheIntersection() {
+            DocRegistry reg = buildRegistry();
+            putDoc(reg, "doc_a", "v1");
+            putDoc(reg, "doc_b", "v1");
+            reg.updateTags("doc_a", DocRegistry.SHARED, "공통");
+            reg.updateTags("doc_b", DocRegistry.SHARED, "");
+
+            assertThat(reg.distinctTagsExcludingCommon("v1")).containsExactly("공통");
+        }
+
+        /**
+         * {@code NULL}(아직 백필 안 됨)과 빈 문자열(태그 없음)의 구분이 {@code DocTagsBackfill} 의
+         * 멱등성을 만든다 — 빈 문자열로 채우고 나면 다시 잡히지 않아야 한다.
+         */
+        @Test
+        @DisplayName("docIdsWithoutTags: NULL 인 행만 — 빈 문자열로 채운 행은 다시 잡히지 않는다")
+        void backfillTargetsOnlyNullTags() {
+            DocRegistry reg = buildRegistry();
+            putDoc(reg, "doc_a", "v1");
+            putDoc(reg, "doc_b", "v1");
+            assertThat(reg.docIdsWithoutTags()).containsExactlyInAnyOrder("doc_a", "doc_b");
+
+            reg.updateTags("doc_a", DocRegistry.SHARED, "가이드");
+            reg.updateTags("doc_b", DocRegistry.SHARED, "");     // 태그가 없던 문서
+
+            assertThat(reg.docIdsWithoutTags()).isEmpty();
+        }
+    }
+
+    @org.junit.jupiter.api.Nested
     @DisplayName("chunk_overlap 기록 (문서 내보내기 재조립용)")
     class ChunkOverlapColumn {
 
