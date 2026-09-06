@@ -552,10 +552,13 @@ const I18N = {
 
     /* marked → DOMPurify → hljs: chat-stream.js 의 renderMarkdown() 과 동일한 파이프라인.
        sanitize 는 선택이 아니다 — 여기 들어오는 본문은 사용자가 직접 쓴 마크다운이고, 같은 글이
-       관리자 검토 화면에서도 렌더되므로 저장형 XSS 경로가 된다. */
+       관리자 검토 화면에서도 렌더되므로 저장형 XSS 경로가 된다. 그래서 DOMPurify 가 없으면
+       marked 가 없을 때와 똑같이 평문으로 떨어진다 — 살균기 없이 렌더하느니 렌더하지 않는다. */
     function renderMarkdownWithImageMarkers(container, rawText) {
         const source = rawText || '';
-        if (typeof marked === 'undefined') { container.textContent = source; return; }
+        if (typeof marked === 'undefined' || typeof DOMPurify === 'undefined') {
+            container.textContent = source; return;
+        }
         const esc = s => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;')
                                         .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
         const withImages = source.replace(CHUNK_IMAGE_MARKER, function (_m, unconvertible, path) {
@@ -565,8 +568,7 @@ const I18N = {
             }
             return '<img src="/api/v1/' + esc(path) + '" loading="lazy" style="max-width:100%;">';
         });
-        const html = marked.parse(withImages);
-        container.innerHTML = typeof DOMPurify !== 'undefined' ? DOMPurify.sanitize(html) : html;
+        container.innerHTML = DOMPurify.sanitize(marked.parse(withImages));
         if (typeof hljs !== 'undefined') {
             container.querySelectorAll('pre code').forEach(block => hljs.highlightElement(block));
         }

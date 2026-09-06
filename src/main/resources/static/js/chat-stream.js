@@ -52,9 +52,15 @@
     function renderSourcePreviewHtml(raw) {
         const text = stripImagePreviewFromSourceMarkdown(raw);
         if (!text.trim()) return '<span class="text-muted small">미리보기 없음</span>';
-        if (typeof marked === 'undefined') return `<div class="md-content small">${escHtml(text)}</div>`;
-        const parsed = marked.parse(text);
-        const sanitized = typeof DOMPurify !== 'undefined' ? DOMPurify.sanitize(parsed) : parsed;
+        // 살균기가 없으면 마크다운 렌더를 아예 포기하고 평문으로 떨어진다 — 예전에는
+        // DOMPurify 가 없을 때 marked 의 출력을 그대로 innerHTML 에 넣었는데, 여기 들어오는
+        // 본문은 업로드된 문서와 LLM 출력(신뢰 경계 밖)이고 CSP 가 'unsafe-inline' 이라
+        // 마지막 방어선이 DOMPurify 하나다. marked 미로드는 이미 이렇게 처리하고 있었으니,
+        // 두 라이브러리를 같은 게이트에 두는 것이 원래의 대칭이다.
+        if (typeof marked === 'undefined' || typeof DOMPurify === 'undefined') {
+            return `<div class="md-content small">${escHtml(text)}</div>`;
+        }
+        const sanitized = DOMPurify.sanitize(marked.parse(text));
         const wrap = document.createElement('div');
         wrap.innerHTML = sanitized;
         wrap.querySelectorAll('img').forEach(img => img.remove());
@@ -465,9 +471,10 @@
     function renderMarkdown(el) {
         if (!el) return;
         const raw = el.textContent || '';
-        if (typeof marked !== 'undefined') {
-            const html = marked.parse(raw);
-            el.innerHTML = typeof DOMPurify !== 'undefined' ? DOMPurify.sanitize(html) : html;
+        // 살균기가 없으면 렌더하지 않는다(el 의 textContent 가 그대로 남는다) —
+        // renderSourcePreviewHtml() 의 게이트와 같은 규칙.
+        if (typeof marked !== 'undefined' && typeof DOMPurify !== 'undefined') {
+            el.innerHTML = DOMPurify.sanitize(marked.parse(raw));
             if (typeof hljs !== 'undefined') {
                 el.querySelectorAll('pre code').forEach(block => hljs.highlightElement(block));
             }

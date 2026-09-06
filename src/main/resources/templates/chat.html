@@ -1034,9 +1034,9 @@
 
     function renderMarkdownText(raw) {
         if (!raw) return '';
-        if (typeof marked === 'undefined') return escHtml(raw);
-        const html = marked.parse(raw);
-        return typeof DOMPurify !== 'undefined' ? DOMPurify.sanitize(html) : html;
+        // 살균기가 없으면 마크다운 렌더를 포기하고 평문으로 — chat-stream.js 의 렌더러와 같은 규칙.
+        if (typeof marked === 'undefined' || typeof DOMPurify === 'undefined') return escHtml(raw);
+        return DOMPurify.sanitize(marked.parse(raw));
     }
 
     function stripImagePreviewFromSourceMarkdown(raw) {
@@ -1051,9 +1051,10 @@
     function renderSourcePreviewHtml(raw) {
         const text = stripImagePreviewFromSourceMarkdown(raw);
         if (!text.trim()) return '<span class="text-muted small">미리보기 없음</span>';
-        if (typeof marked === 'undefined') return `<div class="md-content small">${escHtml(text)}</div>`;
-        const parsed = marked.parse(text);
-        const sanitized = typeof DOMPurify !== 'undefined' ? DOMPurify.sanitize(parsed) : parsed;
+        if (typeof marked === 'undefined' || typeof DOMPurify === 'undefined') {
+            return `<div class="md-content small">${escHtml(text)}</div>`;
+        }
+        const sanitized = DOMPurify.sanitize(marked.parse(text));
         const wrap = document.createElement('div');
         wrap.innerHTML = sanitized;
         wrap.querySelectorAll('img').forEach(img => img.remove());
@@ -1520,9 +1521,10 @@
     /* ── 서버 렌더 이전 turn 마크다운 처리 + syntax highlight + 초기 스크롤 ── */
     document.querySelectorAll('.md-content[data-md]').forEach(function (el) {
         const raw = el.dataset.md || '';
-        if (typeof marked === 'undefined') { el.textContent = raw; delete el.dataset.md; return; }
-        const html = marked.parse(raw);
-        el.innerHTML = typeof DOMPurify !== 'undefined' ? DOMPurify.sanitize(html) : html;
+        if (typeof marked === 'undefined' || typeof DOMPurify === 'undefined') {
+            el.textContent = raw; delete el.dataset.md; return;
+        }
+        el.innerHTML = DOMPurify.sanitize(marked.parse(raw));
         if (typeof hljs !== 'undefined') {
             el.querySelectorAll('pre code').forEach(block => hljs.highlightElement(block));
         }
