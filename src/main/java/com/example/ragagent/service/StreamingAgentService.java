@@ -51,6 +51,10 @@ public class StreamingAgentService {
 
     private static final Logger log = LoggerFactory.getLogger(StreamingAgentService.class);
 
+    // 단일 스레드로 충분하다 — 여기 얹히는 태스크는 둘 다 순수 계산이다. 하트비트는
+    // SseHeartbeat 가 실제 쓰기를 가상 스레드로 넘기고(스케줄러 스레드는 깨우기만 한다),
+    // 유휴 워치독은 나노시간 비교와 interrupt 뿐이라 I/O 가 없다. 이 성질이 깨지는 태스크를
+    // 여기에 새로 얹으면 느린 클라이언트 하나가 이 배포의 모든 대화를 밀리게 만든다.
     private final ScheduledExecutorService heartbeatScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
         Thread t = new Thread(r, "sse-heartbeat");
         t.setDaemon(true);
@@ -163,10 +167,9 @@ public class StreamingAgentService {
         // click from turn N harmless to turn N+1.
         imageSkipRegistry.begin(form.threadId());
 
-        ScheduledFuture<?> heartbeat = heartbeatScheduler.scheduleAtFixedRate(() -> {
-            try { emitter.send(SseEmitter.event().comment("heartbeat")); }
-            catch (Exception ignored) {}
-        }, 15, 15, TimeUnit.SECONDS);
+        ScheduledFuture<?> heartbeat = heartbeatScheduler.scheduleAtFixedRate(
+                new SseHeartbeat(() -> emitter.send(SseEmitter.event().comment("heartbeat"))),
+                15, 15, TimeUnit.SECONDS);
         // Idle watchdog: aborts only when the graph makes NO forward progress (no node
         // transition, token, or sources-ready event) for sseIdleTimeoutMs — a slow-but-actively-
         // generating local LLM response is never cut off. SseEmitter's own timeout
