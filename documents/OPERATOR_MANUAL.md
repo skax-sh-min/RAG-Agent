@@ -16,6 +16,7 @@ RAG Agent 시스템 배포·설정·운영 가이드입니다.
    - 4.1 [Docker Compose (권장)](#41-docker-compose-권장)
       - 4.1.1 [ChromaDB 백엔드](#411-chromadb-백엔드)
       - 4.1.2 [sqlite-vec 백엔드](#412-sqlite-vec-백엔드)
+      - 4.1.3 [메모리(JVM 힙) 설정](#413-메모리jvm-힙-설정)
    - 4.2 [로컬 실행](#42-로컬-실행)
       - 4.2.1 [ChromaDB 백엔드](#421-chromadb-백엔드)
       - 4.2.2 [sqlite-vec 백엔드](#422-sqlite-vec-백엔드)
@@ -679,6 +680,31 @@ docker compose down
 
 > sqlite-vec 모드에서는 `SQLITE_VEC_EXTENSION_PATH`에 **컨테이너 내부에서 접근 가능한 경로**를 지정해야 합니다.
 > Docker에서는 플랫폼에 맞는 vec0 바이너리를 볼륨으로 마운트하고 경로를 지정하세요.
+
+---
+
+#### 4.1.3 메모리(JVM 힙) 설정
+
+컨테이너 이미지는 `JAVA_OPTS="-XX:MaxRAMPercentage=70"`으로 뜹니다. JVM 기본값은 25%인데, 이 앱은 업로드 상한이 200MB이고 PDFBox/POI가 문서를 통째로 메모리에 올리며 마크다운 교정이 변환된 전문을 문자열로 다루기 때문에 그 기본값으로는 대형 문서 인덱싱에서 `OutOfMemoryError`가 납니다.
+
+**70%가 무엇의 70%인지**는 컨테이너에 메모리 한도가 걸렸는지에 달려 있습니다.
+
+| 상황 | 힙 상한 |
+|------|---------|
+| `mem_limit` 등으로 한도를 건 경우 | **그 한도**의 70% (예: `mem_limit: 4g` → 약 2.8GB) |
+| 한도가 없는 경우(기본 `docker-compose.yml`) | **호스트 전체 메모리**의 70% |
+
+호스트에서 LLM 서버(LM Studio·llama-server)를 함께 돌리는 배포라면 한도를 걸어 두는 편이 예측 가능합니다 — `docker-compose.yml`의 `app` 서비스 주석 참조.
+
+나머지 30%는 여유분이 아니라 **실제로 쓰이는 몫**입니다: OCR(tess4j)은 별도 프로세스가 아니라 JNA로 같은 프로세스에 붙는 네이티브 메모리이고, sqlite-vec 확장도 마찬가지이며, 여기에 reactor-netty의 direct buffer와 가상 스레드 스택이 더해집니다. LibreOffice를 추가한 이미지라면 `soffice`가 자식 프로세스로 같은 한도를 나눠 씁니다. 이 몫을 힙으로 끌어다 쓰면 **애플리케이션 로그에 아무것도 남기지 않고 컨테이너가 OOM kill됩니다.**
+
+**직접 지정하려면** `.env`에 `JAVA_OPTS`를 두세요(컨테이너 실행 시 준 값이 이미지 기본값을 이깁니다).
+
+```env
+JAVA_OPTS=-Xms512m -Xmx3g
+```
+
+> Docker를 쓰지 않는 실행 경로(`scripts/*_run_by_jar_*`, `mvn spring-boot:run`)에는 이 설정이 적용되지 않습니다 — 호스트 JVM의 기본값(물리 메모리의 25%)을 따르며, 필요하면 `java -Xmx3g -jar ...`로 직접 지정하세요.
 
 ---
 
@@ -2886,6 +2912,7 @@ docker-compose logs app
 | `.env` 환경변수 누락 | 필수 항목 모두 입력 확인 |
 | Chroma 미준비 | healthcheck 설정 확인; `docker-compose up chroma` 먼저 실행 |
 | 포트 충돌 | `docker-compose.yml`의 포트 매핑 변경 |
+| **메모리 부족(OOM kill)** | `docker inspect <container> --format '{{.State.OOMKilled}}'`가 `true`면 이것입니다. **앱 로그에는 아무것도 남지 않습니다** — 커널이 프로세스를 즉시 죽이기 때문에 `OutOfMemoryError` 스택조차 없습니다. 대형 문서 인덱싱 중에 반복된다면 `mem_limit`을 올리거나(없다면 호스트 여유 메모리 확인), `INDEXING_MAX_FILES`/`INDEXING_MAX_LLM`을 줄여 동시 처리량을 낮추세요. 힙만 좁히려면 `.env`의 `JAVA_OPTS`로 `-Xmx`를 직접 지정합니다([§4.1.3](#413-메모리jvm-힙-설정)) |
 
 ---
 

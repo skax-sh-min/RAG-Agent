@@ -72,6 +72,13 @@ services:
       # 경로로 덮어쓸 것.
       # - ./sqlite-vec/vec0.so:/opt/sqlite-vec/vec0.so:ro
     restart: unless-stopped
+    # 메모리 한도. 걸어 두면 JVM 힙 상한(Dockerfile 의 MaxRAMPercentage=70)이 **이 값**을 기준으로
+    # 잡히고, 걸지 않으면 호스트 전체 메모리의 70% 가 힙 상한이 된다 — 호스트에 다른 것이 함께
+    # 도는 배포라면 걸어 두는 편이 예측 가능하다.
+    #   mem_limit: 4g
+    # 대형 PDF/PPTX 인덱싱은 문서 하나가 수백 MB 를 요구할 수 있으니 2g 미만은 피할 것.
+    # 힙만 따로 고정하려면 한도 대신 .env 에 JAVA_OPTS="-Xms512m -Xmx3g" 를 둔다(env_file 로
+    # 전달되며 이미지의 ENV 를 이긴다).
     depends_on:
       chroma:
         condition: service_healthy
