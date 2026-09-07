@@ -56,7 +56,11 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  */
 @WebMvcTest(value = DocumentController.class, properties = "app.auth.enabled=true")
 @Import({com.example.ragagent.context.WebMvcConfig.class, com.example.ragagent.security.SecurityConfig.class})
-@WithMockUser
+// ROLE_ADMIN 인 이유: 문서 관리 쓰기는 모든 인증 모드에서 관리자 전용이다
+// (SecurityConfig.gateDocumentManagement). 이 클래스가 보는 것은 그 게이트를 통과한 뒤의
+// **컨트롤러 동작**(검증·상한·영구 저장)이므로, 게이트 자체는 여기서 재확인하지 않는다 —
+// 인가 경계는 FullAuthAuthorizationTest / ManagementOnlyAuthorizationTest 가 각 모드에서 고정한다.
+@WithMockUser(roles = "ADMIN")
 @ResourceLock("global-state")
 class DocumentControllerHtmxTest {
 
