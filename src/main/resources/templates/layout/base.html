@@ -473,12 +473,23 @@ const I18N = {
        admin.html 과 curated-submissions.html 은 layout:fragment="scripts" 로 이 블록 뒤에
        실려 그대로 참조한다. */
 
-    /* 2컬럼(미리보기 + 편집)이 들어가는 최소 뷰포트 폭. 한 컬럼이 편집하기에 필요한 폭(520)의
+    /* 2컬럼(미리보기 + 편집)이 들어가는 최소 폭. 한 컬럼이 편집하기에 필요한 폭(520)의
        2배 — 이 값 미만이면 어느 화면이든 한 컬럼 + 탭으로 떨어진다. */
     const MD_PREVIEW_2COL_MIN_WIDTH = 1040;
 
-    function isTwoColumnWidth() {
-        return window.innerWidth >= MD_PREVIEW_2COL_MIN_WIDTH;
+    /* 2컬럼에서 편집 컬럼이 갖는 고정폭. 늘어난 폭은 전부 미리보기 몫이다 — 편집 쪽은 소프트
+       랩이 되는 평문이라 이 폭이면 충분하지만, 미리보기의 표·코드블록은 폭이 모자라면 줄바꿈
+       되거나 가로 스크롤이 된다. /admin 편집 화면 넷과 지식 제안 작성·수정이 같은 값을 쓴다. */
+    const MD_PREVIEW_EDIT_COL_WIDTH = 500;
+
+    /* 재는 대상은 실제로 반으로 쪼개질 상자다 — 뷰포트가 아니다. 그 둘이 같은 것은 이
+       규칙을 쓰는 화면이 뷰포트만큼 넓을 때뿐이고(/admin 은 container-fluid, 편집 오프캔버스는
+       width:100%), 폭이 묶인 페이지 안에서 뷰포트를 재면 상자가 담지 못하는 2컬럼을 켜게 된다.
+       지식 제안 작성 폼이 실제로 그랬다 — 뷰포트 1040 을 통과하고서 900px 컨테이너 안에
+       414px 짜리 두 컬럼을 만들었고, 화면을 아무리 넓혀도 그 폭이 그대로였다(컨테이너가
+       먼저 멈추므로). 인자를 주지 않으면 예전처럼 뷰포트를 잰다 — 상자가 곧 뷰포트인 호출자들. */
+    function isTwoColumnWidth(boxEl) {
+        return (boxEl ? boxEl.clientWidth : window.innerWidth) >= MD_PREVIEW_2COL_MIN_WIDTH;
     }
 
     /* 라벨 줄 오른쪽에 붙는 원문/미리보기 라디오 그룹.

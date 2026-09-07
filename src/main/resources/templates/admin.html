@@ -570,7 +570,8 @@ function loadChunksByDoc(btn) {
 
 // 2컬럼 편집에서 우측 필드 컬럼의 고정 폭. 2컬럼 하한 자체는 base.html 의
 // MD_PREVIEW_2COL_MIN_WIDTH 에 있다(지식 제안 페이지와 공유).
-const EDIT_FIELDS_WIDTH = 500;
+// 값도 거기 있다 — 지식 제안 작성 폼이 같은 폭을 쓰므로, 숫자가 두 곳이면 한쪽만 바뀐다.
+const EDIT_FIELDS_WIDTH = MD_PREVIEW_EDIT_COL_WIDTH;
 
 // 편집 오프캔버스(청크 편집·큐레이션 편집·지식 제안 검토)의 폭을 정하고 2컬럼 여부를 돌려준다.
 // 셋은 같은 렌더러(renderChunkPreview)로 같은 형식의 마크다운을 편집하므로 폭 규칙도 한 벌이어야 한다.
