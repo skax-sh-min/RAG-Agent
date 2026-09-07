@@ -55,8 +55,15 @@ class RateLimitFilterTest {
         assertThat(filter.policyFor(reqFor("POST", "/api/v1/documents/sync"))).isEqualTo("sync");
         assertThat(filter.policyFor(reqFor("POST", "/ui/documents/upload"))).isEqualTo("upload");
         assertThat(filter.policyFor(reqFor("POST", "/api/v1/documents"))).isEqualTo("upload");
+        // 지식 제안 본문 이미지 — 문서는 아니지만 바이트를 받는 업로드이고, 인증 없이 부를 수 있는
+        // 유일한 바이너리 쓰기 경로다. default(분당 120)에 있으면 5MB × 120 을 게스트가 밀어 넣는다.
+        assertThat(filter.policyFor(reqFor("POST", "/curated/submissions/images"))).isEqualTo("upload");
         // 읽기는 같은 경로라도 업로드 버킷이 아니다
         assertThat(filter.policyFor(reqFor("GET", "/api/v1/documents"))).isEqualTo("default");
+        // 이미지 조회는 그대로 image 버킷 — 업로드 규칙이 조회를 삼키면 안 된다
+        assertThat(filter.policyFor(reqFor("GET", "/api/v1/images/doc-1/s1_img1.png"))).isEqualTo("image");
+        // 제안 게시판의 나머지 쓰기(글 등록·수정·철회)는 업로드가 아니다
+        assertThat(filter.policyFor(reqFor("POST", "/curated/submissions"))).isEqualTo("default");
         assertThat(filter.policyFor(reqFor("/api/v1/images/foo.png"))).isEqualTo("image");
         assertThat(filter.policyFor(reqFor("/actuator/health"))).isEqualTo("default");
 

@@ -82,14 +82,29 @@ public class RateLimitFilter extends OncePerRequestFilter {
         boolean write = isWrite(req.getMethod());
         if (path.contains("/chat")) return "chat";
         if (write && path.contains("/documents/sync")) return "sync";
-        if (write && isDocumentUpload(path)) return "upload";
+        if (write && isFileUpload(path)) return "upload";
         if (path.contains("/images/")) return "image";
         return "default";
     }
 
-    /** The two endpoints that actually accept a new document ({@code DocumentController}). */
-    private static boolean isDocumentUpload(String path) {
-        return path.endsWith("/ui/documents/upload") || path.endsWith("/api/v1/documents");
+    /**
+     * The endpoints that accept new bytes from a client.
+     *
+     * <p>{@code /curated/submissions/images} 는 문서가 아니지만 <b>업로드</b>다 — 이 버킷의 기준은
+     * "문서 경로인가"가 아니라 "새 파일을 받는가"이다. 게다가 그쪽은 인증 없이도 부를 수 있는
+     * 유일한 바이너리 쓰기 경로라({@code CuratedImageStore} 클래스 주석) 오히려 여기 있어야 한다.
+     * 예전에는 {@code default}(분당 120)에 떨어져서, 파일당 5MB × 120 = 분당 600MB 를 게스트가
+     * 밀어 넣을 수 있었다 — 저장 상한은 기본이 무제한이다. 분당 10 은 한 제안이 담을 수 있는
+     * 이미지 수({@code CuratedImageStore.MAX_IMAGES_PER_SUBMISSION})와 같은 값이라, 정상적인
+     * 작성 한 번은 그대로 지나간다.
+     *
+     * <p>경로 문자열에 {@code /images/}(뒤 슬래시)가 없으므로 아래 이미지 <b>조회</b> 버킷과 겹치지
+     * 않는다 — 그쪽은 GET 이라 {@code write} 검사에서도 이미 갈린다.
+     */
+    private static boolean isFileUpload(String path) {
+        return path.endsWith("/ui/documents/upload")
+                || path.endsWith("/api/v1/documents")
+                || path.endsWith("/curated/submissions/images");
     }
 
     private static boolean isWrite(String method) {

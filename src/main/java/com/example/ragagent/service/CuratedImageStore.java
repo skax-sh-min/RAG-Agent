@@ -9,6 +9,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -22,6 +23,7 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.concurrent.TimeUnit;
 import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.LinkedHashSet;
@@ -296,13 +298,19 @@ public class CuratedImageStore {
     }
 
     /**
-     * Startup sweep for images uploaded into a draft that was never submitted — the form uploads
+     * Sweep for images uploaded into a draft that was never submitted — the form uploads
      * eagerly (so the author can see the picture in 미리보기 before posting), so an abandoned draft
      * leaves bytes behind with no row anywhere to clean up from. Only files older than
      * {@link #ORPHAN_GRACE} are considered, so an image sitting in an open form is never pulled out
      * from under it.
+     *
+     * <p><b>기동 시 한 번 + 6시간마다.</b> 예전에는 기동 시에만 돌았는데, 이 배포는 몇 주씩 재기동
+     * 없이 도는 것이 정상이라 그동안 버려진 초안 이미지가 쌓이기만 했다 — 인증 없이 부를 수 있는
+     * 업로드 경로라 더욱 그렇다. 주기는 {@link #ORPHAN_GRACE}(24시간)보다 훨씬 짧아야 의미가 있고,
+     * 훑는 비용은 디렉터리 목록 한 번 + 참조 조회 두 번이라 무시할 만하다.
      */
     @EventListener(ApplicationReadyEvent.class)
+    @Scheduled(fixedDelay = 6, timeUnit = TimeUnit.HOURS)
     public void sweepOrphans() {
         Path dir = imageDir();
         if (!Files.isDirectory(dir)) return;

@@ -580,7 +580,7 @@ LLM_ROUTING_MODE=QUALITY_FIRST
 |------|----------|--------|------|
 | `app.rate-limit.enabled` | `RATE_LIMIT_ENABLED` | `true` | `false`로 설정하면 전체 비활성화 |
 | `app.rate-limit.chat-per-minute` | `RATE_LIMIT_CHAT_PER_MINUTE` | `60` | `/chat` 경로 — 분당 요청 수 |
-| `app.rate-limit.upload-per-minute` | `RATE_LIMIT_UPLOAD_PER_MINUTE` | `10` | 문서 **업로드 쓰기 요청**만 — `POST /ui/documents/upload`, `POST /api/v1/documents`. 문서 화면 조회·목록 갱신·내보내기·태그 편집은 `default` 버킷을 씁니다(예전에는 전부 이 버킷이라 다중 파일 업로드가 429로 죽었습니다) |
+| `app.rate-limit.upload-per-minute` | `RATE_LIMIT_UPLOAD_PER_MINUTE` | `10` | **새 파일을 받는 쓰기 요청** — `POST /ui/documents/upload`, `POST /api/v1/documents`, 그리고 지식 제안 본문 이미지 `POST /curated/submissions/images`. 마지막 것이 여기 있는 이유는 인증 없이 부를 수 있는 유일한 바이너리 쓰기 경로라서입니다(예전에는 `default`(분당 120)라 5MB × 120 = 분당 600MB를 게스트가 밀어 넣을 수 있었고, 저장 상한은 기본이 무제한입니다). 분당 10은 제안 하나에 담을 수 있는 이미지 수와 같은 값이라 정상적인 작성 한 번은 그대로 지나갑니다. 문서 화면 조회·목록 갱신·내보내기·태그 편집은 `default` 버킷을 씁니다(예전에는 전부 이 버킷이라 다중 파일 업로드가 429로 죽었습니다) |
 | `app.rate-limit.sync-per-minute` | `RATE_LIMIT_SYNC_PER_MINUTE` | `3` | `/documents/sync` 경로 — 분당 요청 수 |
 | `app.rate-limit.image-per-minute` | `RATE_LIMIT_IMAGE_PER_MINUTE` | `300` | `/images/` 경로 — 분당 요청 수 |
 | `app.rate-limit.default-per-minute` | `RATE_LIMIT_DEFAULT_PER_MINUTE` | `120` | 그 외 경로 기본값 |
