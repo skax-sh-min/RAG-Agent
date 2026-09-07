@@ -509,6 +509,11 @@ curl -X POST http://localhost:8080/api/v1/documents \
   -F "version=latest"
 ```
 
+> **관리 전용 인증 모드(`AUTH_MANAGEMENT_ONLY=true`)에서는 로그인 세션이 필요합니다.** 이 절과 아래
+> 3.3·3.4의 **쓰기** 호출(업로드·동기화·삭제)은 `ROLE_ADMIN` 게이트를 받아 무인증이면 403입니다.
+> 세션 쿠키를 한 번 받아 재사용하는 방법은 OPERATOR_MANUAL의 "관리 전용 인증 모드" 절을 참고하세요.
+> 조회 호출(`GET /api/v1/documents`, `POST /api/v1/chat` 등)은 로그인 없이 그대로 동작합니다.
+
 응답:
 ```json
 {

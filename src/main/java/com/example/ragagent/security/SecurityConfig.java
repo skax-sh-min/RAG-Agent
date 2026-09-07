@@ -90,6 +90,24 @@ public class SecurityConfig {
                     // in one request — a bulk-extraction capability guest chat/browsing doesn't
                     // provide — so it is gated with the management surface rather than left open.
                     .requestMatchers(HttpMethod.GET, "/ui/documents/*/export").hasRole("ADMIN")
+                    // 같은 쓰기를 하는 REST 짝. 이 셋이 열려 있는 동안에는 위 UI 게이트가
+                    // 장식이었다 — 이 모드를 켜는 이유가 "문서 관리는 로그인해야 한다"인데
+                    // `curl -X DELETE .../api/v1/documents/{id}` 한 줄이 그것을 그대로 우회했다.
+                    // 예전에는 curl 자동화를 위해 일부러 열어 뒀지만, 자동화는 /login 으로 세션
+                    // 쿠키를 받아 쓰면 그대로 동작한다(OPERATOR_MANUAL 참조) — 없어지는 것은
+                    // 기능이 아니라 '인증 없이도 된다'는 지름길뿐이다.
+                    //
+                    // 읽기는 건드리지 않는다: GET /api/v1/documents, /api/v1/chat, 태그·이미지
+                    // 조회는 "채팅·열람은 게스트 개방"이라는 이 모드의 나머지 절반이다.
+                    //
+                    // 이 경로들은 NoAuthAutoLoginFilter.isGatedManagementPath() 에 <b>일부러</b>
+                    // 넣지 않았다. 거기 넣으면 익명으로 남아 /login 으로 302 리다이렉트가 되는데,
+                    // API 호출자에게는 로그인 페이지 HTML 보다 403 이 맞는 응답이다. 게스트
+                    // principal 이 주입돼도 그것은 ROLE_USER 라 아래 hasRole("ADMIN") 이 막는다 —
+                    // 위 주석이 말하는 "두 목록이 어긋나도 안전하게 실패한다"가 바로 이 경우다.
+                    .requestMatchers(HttpMethod.POST, "/api/v1/documents").hasRole("ADMIN")
+                    .requestMatchers(HttpMethod.POST, "/api/v1/documents/sync").hasRole("ADMIN")
+                    .requestMatchers(HttpMethod.DELETE, "/api/v1/documents/*").hasRole("ADMIN")
                     // Deliberately .hasRole("ADMIN"), not .authenticated() — NoAuthAutoLoginFilter's
                     // GUEST_PRINCIPAL is a real (non-anonymous) authenticated principal with ROLE_USER,
                     // so .authenticated() would silently accept it if this matcher list and the

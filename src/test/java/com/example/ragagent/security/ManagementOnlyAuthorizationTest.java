@@ -61,9 +61,11 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * /login), ROLE_USER (i.e. NoAuthAutoLoginFilter's GUEST_PRINCIPAL, or any non-admin real login)
  * is denied with 403 even carrying a valid CSRF token, ROLE_ADMIN passes through, and the
  * open surface (read-only /documents, /ui/documents/list, /api/v1/documents) stays fully
- * reachable anonymously — including /api/v1/** mutating endpoints, which are deliberately
- * exempted from both the login gate and CSRF (preserves OPERATOR_MANUAL.md's documented curl
- * automation). NoAuthAutoLoginFilter is imported explicitly (@WebMvcTest doesn't auto-include
+ * reachable anonymously. {@code /api/v1/**} stays CSRF-exempt so scripted callers need no token,
+ * but its <b>write</b> endpoints (upload/sync/delete) now take the same ROLE_ADMIN gate the
+ * document-write UI does — they used to be open, which made that UI gate decorative in a mode
+ * whose whole purpose is "document management requires a login". NoAuthAutoLoginFilter is
+ * imported explicitly (@WebMvcTest doesn't auto-include
  * custom @Component filters) so guest auto-injection on non-gated paths is actually exercised —
  * without it, the "open surface" assertions below would trivially pass for the wrong reason
  * (no filter running at all) rather than proving the real guest path works.
@@ -421,13 +423,47 @@ class ManagementOnlyAuthorizationTest {
                 .andExpect(status().isForbidden());
     }
 
+    /**
+     * REST 쓰기도 UI 쓰기와 같은 게이트를 받는다. 이 셋이 열려 있는 동안에는 문서 관리 UI 게이트가
+     * 장식이었다 — 이 모드를 켜는 이유가 "문서 관리는 로그인해야 한다"인데 curl 한 줄이 그것을
+     * 우회했다. 응답이 302(로그인 페이지)가 아니라 403 인 것도 계약이다: 게스트 principal 은
+     * 주입되지만 ROLE_USER 라 hasRole("ADMIN") 에서 막히고, API 호출자에게는 그쪽이 맞는 응답이다.
+     */
     @Test
-    @DisplayName("익명 POST /api/v1/documents/sync — CSRF 없이도 200 (curl 자동화 보존, 확인된 범위 제외)")
-    void anonymousDocumentsSyncApi_worksWithoutCsrf() throws Exception {
+    @DisplayName("익명 POST /api/v1/documents/sync — 403 (REST 쓰기도 관리 게이트를 받는다)")
+    void anonymousDocumentsSyncApi_isForbidden() throws Exception {
+        mvc.perform(post("/api/v1/documents/sync").param("version", "latest"))
+                .andExpect(status().isForbidden());
+
+        org.mockito.Mockito.verify(ragService, org.mockito.Mockito.never()).syncDirectory(any(), any());
+    }
+
+    @Test
+    @DisplayName("익명 DELETE /api/v1/documents/{docId} — 403 (curl 한 줄로 문서를 지울 수 없다)")
+    void anonymousDocumentsDeleteApi_isForbidden() throws Exception {
+        mvc.perform(delete("/api/v1/documents/doc_abc").param("version", "latest"))
+                .andExpect(status().isForbidden());
+
+        org.mockito.Mockito.verify(ragService, org.mockito.Mockito.never())
+                .deleteDocument(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("ROLE_ADMIN POST /api/v1/documents/sync — 200 (로그인 세션이면 자동화가 그대로 동작)")
+    void adminDocumentsSyncApi_stillWorks() throws Exception {
         when(ragService.syncDirectory(any(), any())).thenReturn(new SyncResult(List.of(), List.of(), List.of()));
 
-        mvc.perform(post("/api/v1/documents/sync").param("version", "latest"))
+        mvc.perform(post("/api/v1/documents/sync").param("version", "latest")
+                        .with(user("admin").roles("ADMIN")))
                 .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("익명 GET /api/v1/documents — 200 (읽기는 게스트 개방 그대로)")
+    void anonymousDocumentsListApi_staysOpen() throws Exception {
+        when(ragService.listDocuments(any())).thenReturn(List.of());
+
+        mvc.perform(get("/api/v1/documents")).andExpect(status().isOk());
     }
 
     // ── 세션 왕복: IF_REQUIRED가 실제로 로그인 상태를 유지하는지 ─────────────────

@@ -3248,7 +3248,8 @@ AUTH_MANAGEMENT_ONLY=true
 | 문서 관리 쓰기(업로드, 업로드취소, 삭제, 태그 수정·편집, **내보내기**) | **로그인 필요** — 비로그인 시 `/login` 리다이렉트, `ROLE_ADMIN` 아닌 로그인은 403. 내보내기는 읽기 동작이지만 문서 전체 내용을 한 번에 반출하는 벌크 기능이라 이 그룹에 포함(§6.8) |
 | `/admin/**` | **로그인 필요** — 게스트/첫 관리자 자동 주입 없음(평문 no-auth와의 핵심 차이) |
 | `/actuator/**` (`/actuator/health` 제외) | **`ROLE_ADMIN` 로그인 필요** — `POST /actuator/loggers/{name}`으로 TRACE를 켜면 `LlmCurlLogger`가 검색된 문서 본문이 실린 프롬프트 전문을 로그 파일에 남깁니다. 게스트에게 열린 배포이므로 로그 레벨 변경은 관리 행위로 묶습니다([런타임 레벨 변경](#런타임-레벨-변경-actuator) 참고 — 이 모드에서는 로그인 세션 없이 curl로 레벨을 바꿀 수 없습니다). `/actuator/health`는 모니터링용으로 계속 열려 있습니다 |
-| `/api/v1/documents/**` REST 엔드포인트 | **의도적으로 그대로 열어둠 + CSRF 예외** — `POST /api/v1/documents/sync` 등 curl 자동화([§6.2](#62-문서-버전-관리) 참조)가 그대로 인증 없이 동작 |
+| `/api/v1/documents/**` REST **읽기**(`GET`) | 로그인 없이 조회 가능 + CSRF 예외 |
+| `/api/v1/documents/**` REST **쓰기**(`POST` 업로드·`/sync`, `DELETE`) | **`ROLE_ADMIN` 로그인 필요** (403). CSRF 예외는 유지되므로 토큰은 필요 없고 **세션 쿠키만** 있으면 됩니다. 예전에는 무인증으로 열려 있었는데, 그 상태에서는 바로 위의 문서 관리 UI 게이트가 장식이었습니다 — 이 모드를 켜는 이유가 "문서 관리는 로그인해야 한다"인데 `curl -X DELETE .../api/v1/documents/{docId}` 한 줄이 그것을 그대로 우회했기 때문입니다. curl 자동화는 아래 방법으로 세션을 얻어 그대로 동작합니다 |
 | Web UI 게스트 화면 | 업로드 카드·삭제 버튼·Admin 내비가 숨겨짐(관리자로 로그인해야 노출) |
 | 로그아웃 버튼 | 관리자로 로그인했을 때만 노출 |
 
@@ -3257,6 +3258,28 @@ AUTH_MANAGEMENT_ONLY=true
 2. `/login`에서 방금 만든 이메일·비밀번호로 로그인
 3. 로그인 세션이 유지되는 동안 `/documents`에서 업로드·삭제, `/admin`에서 청크 관리 가능
 4. 다른 탭/시크릿 창은 여전히 게스트 — 관리 기능은 로그인한 브라우저 세션에서만 보임
+
+**curl 자동화 (관리 전용 인증 모드)**: REST 쓰기가 `ROLE_ADMIN`을 요구하므로 세션 쿠키를 한 번 받아
+재사용합니다. `/login`은 폼 로그인이라 CSRF 토큰이 필요하고, `/api/v1/**`은 CSRF 예외라 이후 호출에는
+쿠키만 있으면 됩니다.
+
+```bash
+COOKIES=$(mktemp)
+
+# 1) CSRF 토큰 받기 (쿠키에 XSRF-TOKEN 이 실린다)
+curl -s -c "$COOKIES" http://localhost:8080/login > /dev/null
+TOKEN=$(awk '$6=="XSRF-TOKEN"{print $7}' "$COOKIES")
+
+# 2) 로그인 — 성공하면 같은 쿠키 파일에 JSESSIONID 가 들어온다
+curl -s -b "$COOKIES" -c "$COOKIES" -X POST http://localhost:8080/login \
+  -d "username=admin@example.com" -d "password=..." -d "_csrf=$TOKEN" > /dev/null
+
+# 3) 이후 REST 쓰기는 쿠키만으로 (CSRF 토큰 불필요)
+curl -s -b "$COOKIES" -X POST "http://localhost:8080/api/v1/documents/sync?version=latest"
+```
+
+> 읽기 전용 호출(`GET /api/v1/documents`, `POST /api/v1/chat`, `GET /api/v1/health` 등)은 예전처럼
+> 로그인 없이 그대로 동작합니다 — 위 절차는 **쓰기**에만 필요합니다.
 
 > **주의**: 이 모드는 "누가 관리할 수 있는가"만 잠급니다. 채팅 개인화가 필요하면 아래 §9.4.3을, 계정 기반의 진짜 격리가 필요하면 전체 인증 모드(`app.auth.enabled=true`)를 사용하세요.
 
@@ -3338,7 +3361,9 @@ TRUST_FORWARDED_FOR=true   # 리버스 프록시(Caddy) 뒤라면 필수 — 아
 - [ ] (평문 no-auth 모드) `/admin` 경로에 대한 네트워크 접근 제한 적용 여부 확인
 - [ ] (관리 전용 인증 모드) 게스트로 `/admin` 및 문서 업로드 시도 → `/login` 리다이렉트 확인, 게스트 화면에 업로드 카드 미노출 확인
 - [ ] (관리 전용 인증 모드) 관리자 로그인 후 `/admin`·문서 업로드/삭제 정상 동작 + 다른 페이지 이동 후에도 로그인 상태 유지 확인
-- [ ] (관리 전용 인증 모드) `curl -X POST ".../api/v1/documents/sync"` 무인증 호출 정상 동작 확인(curl 자동화 보존)
+- [ ] (관리 전용 인증 모드) `curl -X POST ".../api/v1/documents/sync"` 무인증 호출 → **403** 확인(REST 쓰기도 관리 게이트를 받는다)
+- [ ] (관리 전용 인증 모드) 로그인 세션 쿠키를 실은 같은 호출 → 200 확인(curl 자동화가 세션으로 계속 동작)
+- [ ] (관리 전용 인증 모드) 무인증 `curl ".../api/v1/documents"`(GET) → 200 확인(읽기는 게스트 개방 유지)
 
 **LLM 및 운영**:
 - [ ] `/llm-usage` — 프로바이더 카드 정상(초록) 확인
