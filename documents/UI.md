@@ -128,6 +128,7 @@ REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — �
 - 입력값이 2글자 이상이면 220ms 디바운스로 `/api/v1/questions/suggest`를 호출한다.
 - 추천 클릭 시 `/api/v1/questions/reuse`를 호출하며 `turnId`, `threadId`, `version`을 보낸다(서버는 shared 기준 처리).
 - 재사용 성공(`reused=true`)이면 페이지 새로고침 없이 사용자 버블 + 어시스턴트 버블을 즉시 렌더링하고 provider 배지에 `db-reuse`를 표시한다.
+- 서버는 턴을 저장하기 **전에** `threadMetaService.getOrCreate()`로 대화 행을 보장한다 — HTMX·SSE 경로와 같은 순서다. 예전에는 이 경로만 그것을 빠뜨려, 재사용 답변이 **새 대화의 첫 메시지**일 때 `thread_meta` 행이 없어 사이드바에 뜨지 않고 제목 생성도 건너뛰었으며, `/chat/{threadId}`를 다시 열면 `meta == null`이라 턴을 아예 싣지 않아 **대화가 사라진 것처럼** 보였다(일반 메시지를 한 번 보내야 나타났다).
 - 재사용 실패(`fallback=true`)면 토스트 안내 후 질문 입력창에 질문을 채워 일반 질의를 바로 전송한다.
 - Direct 모드 질문은 `feedback='LIKE'`인 항목만 추천/재사용 후보가 된다.
 - `Esc`, 전송(Enter), blur 시 추천 목록을 닫는다.
@@ -214,6 +215,8 @@ REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — �
 > - **지식 제안 검토**는 우측 컬럼이 [스크롤되는 필드] + [고정된 액션 바]로 나뉜다 — 본문이 길 때 승인/거부가 스크롤 끝으로 밀리면 안 되기 때문이다(저장 버튼 하나뿐인 나머지 편집기에는 이 구분이 없다).
 >
 > **청크 편집의 메타데이터(JSON)는 읽기 전용이다** — 접힌 `<details>` 안에서 조회만 된다. 여기 있는 키는 전부 인덱싱 시점에 파생되는 값이고, 손으로 고칠 의도가 있는 둘(키워드·요약)은 전용 필드로 빠져 있다. 편집을 없앤 이유는 [PITFALLS](PITFALLS.md#청크-편집의-메타데이터json-는-읽기-전용이다) 참고 — 저장이 조용히 무효가 되거나, 바로 아래 '이 청크만 재인덱싱'과 짝지으면 청크가 고아가 된다.
+>
+> **읽기 전용은 화면 규칙이 아니라 서버 규칙이다.** 화면은 저장 시 열 때 받은 맵을 그대로 되돌려 보내지만, `AdminService.updateChunk()` 는 그 맵에서 `excerpt_keywords`·`chunk_context`(= 위 전용 필드 둘)만 골라 **저장된 메타데이터 위에** 얹는다. 그래서 요청 본문에 임의의 키를 넣어도 저장되지 않고, 반대로 화면이 보내지 않는 키도 편집으로 사라지지 않는다.
 
 ### 3.5 설정 관리 (SettingsController)
 
@@ -635,7 +638,7 @@ done 이벤트    (답변 완료 후)   → attribution {chunkId: 0.0~1.0} → �
 
 | 데이터 | 저장 위치 | 생명주기 |
 |--------|----------|---------|
-| `threadId` (현재 선택) | HTTP 세션 (`HttpSession`) | 브라우저 세션 |
+| `threadId` (현재 선택) | HTTP 세션 (`HttpSession`) — **페이지 라우트만 만든다**(`ChatController` 의 `/`·`/chat/{id}`). `ThreadContextResolver` 는 `getSession(false)` 로 읽기만 하므로 REST 호출은 세션을 만들지 않는다(예전에는 쿠키 없는 스크립트 호출 하나마다 8시간짜리 세션이 남았다) | 브라우저 세션 |
 | 대화 이력 텍스트 | SQLite `conversation_turns` | 영속 |
 | 대화 제목·버전·라우팅 모드·태그 | SQLite `thread_meta` | 영속 |
 | turn별 응답 모드·검색 스코프 태그 | SQLite `conversation_turns` (`response_mode`, `selected_tags`) | 영속 — 좋아요 승격 시 재사용(§4) |
