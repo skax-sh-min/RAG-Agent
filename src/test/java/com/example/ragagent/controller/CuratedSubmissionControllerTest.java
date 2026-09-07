@@ -188,12 +188,14 @@ class CuratedSubmissionControllerTest {
     void page_prefillsFromChatTurn() throws Exception {
         when(service.prefillFromTurn(USER, "t1", 42L)).thenReturn(java.util.Optional.of(
                 new CuratedSubmissionService.TurnPrefill(42L, "t1", "원래 질문", "원래 답변 본문",
-                        "인프라", 0, "DN")));
+                        "답변 한 줄 요약", "인프라", 0, "DN")));
 
         mvc.perform(get("/curated/submissions").with(user(PRINCIPAL)).param("lang", "ko")
                         .param("fromThread", "t1").param("fromTurn", "42"))
                 .andExpect(status().isOk())
                 .andExpect(content().string(containsString("원래 답변 본문")))
+                // 요약은 본문이 아니라 요약 칸으로 간다 (§ 좋아요 프리필)
+                .andExpect(content().string(containsString("답변 한 줄 요약")))
                 .andExpect(content().string(containsString("[DN]")))
                 .andExpect(content().string(containsString("name=\"sourceTurnId\"")))
                 .andExpect(content().string(containsString("채팅 답변에서 가져왔습니다")));

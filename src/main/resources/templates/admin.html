@@ -619,12 +619,23 @@ function metaJsonExcludingInlineFields(metadata) {
 // should hand-edit (editing/deleting it just drifts it from the real filename/heading with nothing
 // to detect that). Split on the first newline so the edit UI shows the breadcrumb read-only and
 // only the LLM-written sentence is editable; join mirrors combineContext()'s exact format back.
-function splitChunkContext(combined) {
+//
+// 단, 이 형식은 <b>문서 청크에만</b> 해당한다. 큐레이션 청크(지식 제안 승인본)의 chunk_context 는
+// 작성자가 쓴 요약 그 자체이고 파일명·헤딩이라는 개념이 없다 — 빵부스러기가 없으므로 줄바꿈도
+// 없고, 그대로 첫 줄 규칙을 적용하면 요약 전체가 읽기 전용 위치 표시로 들어가 정작 편집란은
+// 비어 버린다(그리고 저장하면 그 요약이 사라진다). hasBreadcrumb=false 면 전부 요약으로 본다.
+function splitChunkContext(combined, hasBreadcrumb) {
     const text = combined || '';
+    if (hasBreadcrumb === false) return { breadcrumb: '', summary: text };
     const idx = text.indexOf('\n');
     return idx === -1
         ? { breadcrumb: text, summary: '' }
         : { breadcrumb: text.slice(0, idx), summary: text.slice(idx + 1) };
+}
+
+/** 이 청크가 파일 안의 위치(파일명 > 헤딩)를 갖는가 — 큐레이션 축에는 그 개념이 없다. */
+function chunkHasBreadcrumb(metadata) {
+    return (metadata || {}).doc_type !== 'curated_qa';
 }
 
 function joinChunkContext(breadcrumb, summary) {
@@ -698,8 +709,11 @@ function openChunkEdit(chunkId, collection) {
             idLabel.title = chunkId;
 
             const metaJson = metaJsonExcludingInlineFields(data.metadata);
-            const contextParts = splitChunkContext(data.metadata.chunk_context);
-            const breadcrumbText = contextParts.breadcrumb || '(위치 정보 없음)';
+            const hasBreadcrumb = chunkHasBreadcrumb(data.metadata);
+            const contextParts = splitChunkContext(data.metadata.chunk_context, hasBreadcrumb);
+            const breadcrumbText = hasBreadcrumb
+                ? (contextParts.breadcrumb || '(위치 정보 없음)')
+                : '(지식 제안 — 파일 위치 없음)';
             // 순서는 메타데이터 → 요약(맥락) → 키워드 → 텍스트 (Chunk ID는 편집 공간을 아끼려고
             // 오프캔버스 헤더의 "청크 편집" 옆으로 옮겼다 — 위에서 채운다). 텍스트가 마지막인 이유는
             // 두 가지 — (1) 바로 아래 "저장" 버튼과 붙어 있어야 편집→저장 동선이 짧고, (2) flex-grow-1을
@@ -874,10 +888,14 @@ function reindexChunkInline(chunkId, collection) {
         document.getElementById('edit-meta-view').textContent = freshMetaJson;
         if (currentChunkEdit) currentChunkEdit.metadata = JSON.parse(freshMetaJson);
         document.getElementById('edit-keywords').value = data.metadata.excerpt_keywords || '';
-        const contextParts = splitChunkContext(data.metadata.chunk_context);
+        // 같은 규칙을 쓴다 — 여기서만 빵부스러기를 가정하면 재생성 한 번이 요약을 읽기 전용
+        // 칸으로 옮겨 놓는다(그 상태로 저장하면 사라진다).
+        const freshHasBreadcrumb = chunkHasBreadcrumb(data.metadata);
+        const contextParts = splitChunkContext(data.metadata.chunk_context, freshHasBreadcrumb);
         document.getElementById('edit-context-breadcrumb').value = contextParts.breadcrumb;
-        document.getElementById('edit-context-breadcrumb-display').textContent =
-            contextParts.breadcrumb || '(위치 정보 없음)';
+        document.getElementById('edit-context-breadcrumb-display').textContent = freshHasBreadcrumb
+            ? (contextParts.breadcrumb || '(위치 정보 없음)')
+            : '(지식 제안 — 파일 위치 없음)';
         document.getElementById('edit-context').value = contextParts.summary;
         // 서버가 덮어쓴 2개 필드(요약·키워드)만 스냅샷 기준값을 갱신한다 — 텍스트(마지막 항목)는 그대로 둬야
         // 재인덱싱 전에 해 둔 저장 안 한 텍스트 편집이 이동 경고에서 계속 잡힌다.

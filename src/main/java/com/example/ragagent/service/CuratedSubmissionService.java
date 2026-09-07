@@ -2,6 +2,7 @@ package com.example.ragagent.service;
 
 import com.example.ragagent.audit.AuditLogger;
 import com.example.ragagent.config.AppProperties;
+import com.example.ragagent.ingestion.CuratedTextUtils;
 import com.example.ragagent.ingestion.KeywordExtractor;
 import com.example.ragagent.model.MetaKey;
 import com.example.ragagent.model.TagUtils;
@@ -103,6 +104,24 @@ public class CuratedSubmissionService {
 
     /** @param llmCalled false when both fields were already filled — the button made no LLM call. */
     public record Enrichment(String summary, String keywords, boolean llmCalled) {}
+
+    /**
+     * 등록 경로에서 쓰는 {@link #enrich} — <b>실패해도 등록을 막지 않는다</b>.
+     *
+     * <p>버튼은 사용자가 결과를 보려고 누른 것이라 실패가 오류로 보여야 맞지만, 여기서는 사용자가
+     * 요청한 일이 "제안 등록"이다. 요약·키워드는 그 제안의 부속값이므로, 추출이 실패했다고 등록
+     * 자체를 실패시키면 그 사용자는 자기가 부르지도 않은 기능 때문에 글을 잃는다. 비워 둔 채로
+     * 등록되고, 나중에 폼에서 버튼으로 채우거나 관리자가 채우면 된다.
+     */
+    private Enrichment enrichQuietly(String body, String summary, String keywords) {
+        try {
+            return enrich(body, summary, keywords);
+        } catch (Exception e) {
+            log.warn("[SUBMISSION] 등록 시 요약·키워드 자동 생성 실패 — 비워 둔 채 등록한다: {}", e.getMessage());
+            return new Enrichment(summary == null ? "" : summary.strip(),
+                    keywords == null ? "" : keywords.strip(), false);
+        }
+    }
 
     private static String clamp(String value, int max) {
         return value.length() <= max ? value : value.substring(0, max).strip();
@@ -206,8 +225,12 @@ public class CuratedSubmissionService {
                     "검토 대기 중인 제안이 이미 " + MAX_PENDING_PER_USER + "건입니다. 처리된 뒤 다시 등록해 주세요.");
         }
 
+        // 비어 있는 요약·키워드는 등록 시점에 채운다 — 버튼을 누르지 않고 그냥 등록한 제안도
+        // BM25 축에서 제 몫을 하도록. enrich() 가 '빈 칸만' 규칙을 그대로 들고 있으므로 사람이
+        // 쓴 값은 여기서도 덮이지 않고, 둘 다 차 있으면 LLM 호출 자체가 없다.
+        Enrichment filled = enrichQuietly(cleanBody, summary, keywords);
         long id = repository.insert(authorUserId, cleanTitle, cleanBody, tagsCsv,
-                sourceTurnId, sourceThreadId, cleanSummary(summary), cleanKeywords(keywords));
+                sourceTurnId, sourceThreadId, cleanSummary(filled.summary()), cleanKeywords(filled.keywords()));
         auditLogger.log("curated.submission.create", "submission:" + id,
                 Map.of("title", cleanTitle, "chars", cleanBody.length(), "tags", tagsCsv,
                         "sourceTurnId", sourceTurnId == null ? "" : String.valueOf(sourceTurnId)));
@@ -230,10 +253,23 @@ public class CuratedSubmissionService {
                 threadId,
                 // 질문은 2,000자까지 가능하고 제목은 200자다 — 자르지 않으면 폼이 예외로 죽는다.
                 truncateTitle(turn.question()),
-                turn.answer(),
+                // 답변의 '## 요약' 은 본문에서 떼어 요약 칸으로 옮긴다 — 두 곳에 같은 문장이
+                // 남으면 승인 시 그 문장이 BM25 검색 텍스트에 두 번 들어가고(요약은 앞에 붙고
+                // 본문은 그대로 색인된다) 화면에서도 같은 말이 두 번 보인다. 자를 자리와 꺼낼
+                // 자리를 같은 클래스가 정의하므로 두 조각이 어긋날 수 없다(CuratedTextUtils).
+                CuratedTextUtils.stripSummarySection(turn.answer()),
+                clampSummary(CuratedTextUtils.extractSummarySection(turn.answer())),
                 turn.selectedTags(),
+                // 이미지 개수는 원문 기준이다 — 요약 섹션에는 이미지 마커가 없지만, 세는 대상은
+                // 승인 시 Vision 을 부르게 될 '실제 등록될 본문'이라 자른 뒤의 값이 맞다.
                 CuratedImageStore.markerPaths(turn.answer()).size(),
                 turn.responseModeLabel()));
+    }
+
+    /** 요약 칸의 상한을 넘는 프리필은 잘라서 넣는다 — 폼이 열리자마자 검증 오류로 죽지 않도록. */
+    private static String clampSummary(String summary) {
+        if (summary == null || summary.isBlank()) return "";
+        return clamp(summary.strip(), MAX_SUMMARY_LEN);
     }
 
     /**
@@ -285,8 +321,9 @@ public class CuratedSubmissionService {
      *                   admin will review it under, shown here so the author knows a Direct answer
      *                   is being proposed as shared knowledge
      */
+    /** @param summary 답변의 {@code ## 요약} 섹션 — 본문({@code body})에서는 빠져 있다. 없으면 빈 문자열 */
     public record TurnPrefill(long turnId, String threadId, String title, String body,
-                              String tags, int imageCount, String modeLabel) {}
+                              String summary, String tags, int imageCount, String modeLabel) {}
 
     /**
      * Admin 임베딩 실행: copies the (possibly edited) text into a real curated row and flips the

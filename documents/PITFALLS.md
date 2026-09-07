@@ -226,6 +226,15 @@ on/off 스위치를 새로 만들지 않고 `app.search-multiquery-enabled` 를 
 
 **조회 값은 남는다** — `ChunkRow` 가 이미 내놓는 것은 `doc_id`·`filename`·`page_or_slide`·`chapter_no`·`keywords` 뿐이고, `tags`(태그 스코프 디버깅)·`image_paths`(이미지 연결)·`chunk_index`(내보내기 순서)·`edited_at`(손 탄 적 있는가)·`version`(위 어긋남 확인)은 여기서만 보인다. 그래서 지우지 않고 접힌 `<details>` 안 `<pre>` 로 남겼다. 화면은 저장 시 열 때 읽은 값을 그대로 되돌려 보내지만(`currentChunkEdit.metadata`), **서버는 그 맵을 저장하지 않는다** — `AdminService.updateChunk()` 가 `EDITABLE_CHUNK_META_KEYS`(`excerpt_keywords`·`chunk_context`, 즉 화면에 입력칸이 있는 둘)만 골라 **저장된 메타데이터 위에** 얹는다. 예전에는 클라이언트가 보낸 맵이 저장본을 통째로 대체했고, 그래서 두 가지가 동시에 열려 있었다: 요청 본문에 아무 키나 넣으면 그대로 청크 메타데이터가 됐고, 반대로 화면이 보내지 않는 키(로더가 붙이는 `section` 처럼 `MetaKey` 에 없는 것)는 편집 한 번에 사라졌다. 저장본에서 시작하면 둘 다 없어진다 — 허용 목록을 늘릴 때 물을 것도 "화면에서 편집 가능한가" 하나뿐이다. 같은 이유로 **Chroma 경로의 메타데이터 유실**도 함께 사라졌다: 예전에는 `newMeta == null` 이면 `Map.of()` 로 upsert 해 본문만 보내는 호출 하나가 그 청크의 `doc_id`·`filename`·태그를 전부 날렸다(그래서 `Include.METADATAS` 를 함께 읽는다). `edited_at` 스탬프도 이제 **편집이 일어나면 항상** 찍힌다 — 예전에는 메타데이터 맵이 실려 왔을 때만 찍혀서, 본문만 고친 편집이 재인덱싱 경고에 잡히지 않았다. 참고로 `sha256`·`collected_at`·`heading_page`·`owner_id`·`visibility` 는 인덱싱 때 쓰기만 하고 읽는 코드가 없으며 `tenant_id` 는 선언만 있다.
 
+### 큐레이션 청크에는 빵부스러기가 없다 (`/admin` 요약 칸)
+
+문서 청크의 `chunk_context` 는 `KeywordExtractor.combineContext()` 가 만든 `{파일명} > {헤딩}` 한 줄 + LLM 문장이고, `/admin` 편집 패널의 `splitChunkContext()` 는 **첫 줄을 읽기 전용 위치 표시로** 떼어 낸다 — 파일명·헤딩에서 결정적으로 파생되는 값이라 손으로 고칠 것이 아니기 때문이다.
+
+큐레이션 청크(지식 제안 승인본)의 `chunk_context` 는 **작성자가 쓴 요약 그 자체**다. 파일 위치라는 개념이 없으니 줄바꿈도 없고, 그 상태로 첫 줄 규칙을 적용하면 `indexOf('
+') === -1` 분기가 걸려 **요약 전체가 breadcrumb 으로** 간다 — 화면에는 요약이 회색 읽기 전용 글씨로 뜨고 편집란은 비어 있으며, 그대로 저장하면 `joinChunkContext('요약전체', '')` 가 요약을 그대로 되돌려 놓기는 하지만 사용자는 고칠 방법이 없다.
+
+`chunkHasBreadcrumb(metadata)`(= `doc_type !== 'curated_qa'`)가 두 규칙을 가른다. **호출자가 둘이라는 것이 함정이다** — 편집 패널을 열 때와 "키워드·요약 재생성" 응답을 받았을 때. 한쪽만 고치면 재생성 한 번이 요약을 다시 읽기 전용 칸으로 옮겨 놓는다.
+
 ### 검색 0건일 때는 LLM 을 부르지 않는다
 
 RAG 경로에서 검색이 아무것도 돌려주지 않았을 때, 예전에는 **문서가 없는 프롬프트로 답변을 받았다**. 그 답변은 정의상 근거가 없으므로 검증이 `sufficient=false` 를 내고, 그래프는 RETRIEVAL 로 되돌아가고, 검색은 같은 이유로 다시 비어서 돌아온다 — 답변·검증 두 호출을 `1 + maxRetryCount` 번(기본 3라운드, 6콜) 태우고 끝에 미검증 배지가 붙었다. **결과가 처음부터 정해져 있는 왕복**이다.

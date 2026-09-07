@@ -96,6 +96,7 @@ public class CuratedSubmissionController {
             model.addAttribute("draftTitle", p.title());
             model.addAttribute("draftBody", p.body());
             model.addAttribute("draftTags", p.tags());
+            model.addAttribute("draftSummary", p.summary());
             model.addAttribute("prefill", p);
         });
     }
