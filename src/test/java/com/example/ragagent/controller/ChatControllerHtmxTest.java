@@ -82,6 +82,8 @@ class ChatControllerHtmxTest {
     @MockitoBean ChatModel chatModel;
     @MockitoBean ThreadContextResolver threadContextResolver;
     @MockitoBean ChatImageAnalysisSkipRegistry imageSkipRegistry;
+    /** 컨트롤러는 ObjectProvider 로 받으므로 이 빈이 있어야 재사용 경로가 폴백이 아니라 실제로 돈다. */
+    @MockitoBean com.example.ragagent.service.QuestionReuseService questionReuseService;
 
     /**
      * 모킹된 {@code SettingsService} 는 boolean 에 false, 객체에 null 을 준다 — 그대로 두면 C 모드가
@@ -93,6 +95,10 @@ class ChatControllerHtmxTest {
     void openCreativeModeByDefault() {
         when(settingsService.creativeModeEnabled()).thenReturn(true);
         when(settingsService.effectiveResponseMode(any())).thenAnswer(inv -> inv.getArgument(0));
+        // /chat/{threadId} 는 턴마다 출처를 Collectors.toMap 으로 모은다 — 목의 기본값 null 은 거기서
+        // NPE 가 되므로, 실제 빈처럼 빈 목록을 돌려준다.
+        when(questionReuseService.sourceRefsForTurn(org.mockito.ArgumentMatchers.anyLong()))
+                .thenReturn(List.of());
     }
 
     private ChatResponse sampleResponse() {
@@ -666,6 +672,39 @@ class ChatControllerHtmxTest {
         assertThat(html).contains("proposeConfirm:");
         assertThat(html).doesNotContain("Submit this answer as a knowledge proposal?");
         assertThat(html).doesNotContain("??confirm.propose");
+    }
+
+    /**
+     * 재사용 턴이 새 대화의 첫 메시지일 때의 회귀. 예전에는 thread_meta 행 없이 턴만 저장해서 —
+     * HTMX/SSE 경로와 달리 getOrCreate 를 부르지 않았다 — 사이드바에 안 뜨고 새로고침하면
+     * 대화가 비어 보였다(일반 메시지를 한 번 보내야 나타났다).
+     */
+    @Test
+    @DisplayName("POST /api/v1/questions/reuse — 턴을 저장하기 전에 thread_meta 를 먼저 보장한다")
+    void reuse_createsThreadMetaBeforeSavingTurn() throws Exception {
+        when(questionReuseService.reuseLookup(any(), any(), eq(42L)))
+                .thenReturn(new com.example.ragagent.service.QuestionReuseService.ReuseLookup(
+                        true, null, 42L, "sqlite 연결 설정 방법", "## 요약\n답변", "t-old", List.of("c1")));
+        when(memoryService.addTurn(any(), any(), any(), any(), any(),
+                org.mockito.ArgumentMatchers.anyInt(), org.mockito.ArgumentMatchers.anyInt(),
+                org.mockito.ArgumentMatchers.anyInt(), any(), org.mockito.ArgumentMatchers.anyInt(),
+                any(), any(), any())).thenReturn(99L);
+
+        mvc.perform(post("/api/v1/questions/reuse")
+                        .param("turnId", "42")
+                        .param("threadId", "t-new")
+                        .param("version", "latest")
+                        .with(csrf()))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("\"reused\":true")));
+
+        org.mockito.InOrder inOrder = org.mockito.Mockito.inOrder(threadMetaService, memoryService);
+        inOrder.verify(threadMetaService).getOrCreate(any(), eq("t-new"), eq("latest"));
+        inOrder.verify(memoryService).addTurn(any(), eq("t-new"), eq("sqlite 연결 설정 방법"), eq(""), any(),
+                org.mockito.ArgumentMatchers.anyInt(), org.mockito.ArgumentMatchers.anyInt(),
+                org.mockito.ArgumentMatchers.anyInt(), eq("db-reuse"), org.mockito.ArgumentMatchers.anyInt(),
+                any(), any(), eq(42L));
+        verify(threadMetaService).generateTitleAsync(any(), eq("t-new"), eq("latest"), eq("sqlite 연결 설정 방법"));
     }
 
     @Test

@@ -371,6 +371,11 @@ public class ChatController {
                 "message", lookup.reason() == null ? "검증에 실패하여 일반 질의로 전환합니다." : lookup.reason()));
         }
 
+        // 재사용 턴이 그 대화의 첫 메시지일 수 있다 — HTMX/SSE 경로처럼 thread_meta 행을 먼저 보장한다.
+        // 없으면 사이드바 목록에 안 뜨고, /chat/{threadId} 를 다시 열면 meta 가 null 이라 턴을 싣지
+        // 않아 대화가 사라진 것처럼 보인다(일반 메시지를 한 번 보내야 비로소 나타났다). 제목 생성도
+        // 이 행이 있어야 돈다(generateTitleAsync 는 meta 가 없으면 그냥 돌아간다).
+        threadMetaService.getOrCreate(ctx.userId(), threadId, version);
         String askedAt = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
             .withZone(ZoneOffset.UTC).format(Instant.now());
         long savedTurnId = memoryService.addTurn(
