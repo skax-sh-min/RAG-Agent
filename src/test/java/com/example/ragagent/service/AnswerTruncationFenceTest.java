@@ -7,6 +7,8 @@ import com.example.ragagent.llm.ProviderContextWindows;
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.llm.TaskType;
 import com.example.ragagent.model.ResponseMode;
+
+import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -63,8 +65,12 @@ class AnswerTruncationFenceTest {
                 .thenReturn(new LlmRouter.LlmResult(raw, 0, 0),
                             new LlmRouter.LlmResult(EVAL_OK, 0, 0));
         when(llmRouter.findProviderName(any(), any())).thenReturn("local");
+        // 문서를 한 건 들려 보낸다 — 검색이 0건이면 AnswerService 가 LLM 을 부르지 않고 정형
+        // 응답으로 빠지므로(§ 검색 0건), 잘라내기 로직 자체에 닿지 못한다.
         AgentState state = AgentState.of("질문", "v1", "t1", "", RoutingMode.COST_FIRST)
-                .toBuilder().responseMode(ResponseMode.N).build();
+                .toBuilder().responseMode(ResponseMode.N)
+                .retrievedDocs(List.of(new org.springframework.ai.document.Document("문서 본문입니다.")))
+                .build();
         return service.execute(state).answer();
     }
 

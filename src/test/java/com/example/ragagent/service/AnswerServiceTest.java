@@ -436,8 +436,16 @@ class AnswerServiceTest {
         return count;
     }
 
+    /**
+     * 답변·검증 경로를 시험하는 기본 상태. <b>문서를 한 건 들고 있어야 한다</b> — 검색이 0건이면
+     * {@code AnswerService} 는 LLM 을 부르지 않고 정형 응답으로 빠지므로(§ 검색 0건 단락),
+     * 빈 상태로는 여기 대부분의 테스트가 시험하려는 경로에 아예 닿지 못한다.
+     * 문서 집합 자체가 관심사인 테스트는 그대로 {@code retrievedDocs(...)} 로 덮어쓴다.
+     */
     private AgentState newState(RoutingMode mode) {
-        return AgentState.of("질문", "v1", "t1", "", mode);
+        return AgentState.of("질문", "v1", "t1", "", mode).toBuilder()
+                .retrievedDocs(List.of(new Document("문서 본문입니다.")))
+                .build();
     }
 
     private static ChatResponse chatResponse(String text) {

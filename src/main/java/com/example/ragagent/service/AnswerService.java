@@ -217,11 +217,59 @@ public class AnswerService {
     }
 
     public AgentState execute(AgentState state) {
+        AgentState noDocs = answerWithoutDocuments(state, GraphListener.NOOP);
+        if (noDocs != null) return noDocs;
         return executeBlocking(withBudgetNote(state));
     }
 
     public AgentState executeStreaming(AgentState state, GraphListener listener) {
+        AgentState noDocs = answerWithoutDocuments(state, listener);
+        if (noDocs != null) return noDocs;
         return executeStreamingNormal(withBudgetNote(state), listener);
+    }
+
+    /**
+     * 검색이 아무것도 돌려주지 않았을 때의 답변 — <b>LLM 을 부르지 않는다</b>.
+     * 해당 없으면 {@code null} 을 돌려주고 평소 경로가 이어진다.
+     *
+     * <p><b>왜 부르지 않는가.</b> 문서가 없는 프롬프트로 답변을 받아 봐야 그 답변은 정의상
+     * 근거가 없다. 그래서 검증이 {@code sufficient=false} 를 내고, 그래프는 재검색으로 되돌아가고,
+     * 검색은 같은 이유로 다시 비어서 돌아온다 — 한 턴에 답변·검증 두 호출을
+     * {@code 1 + maxRetryCount} 번 태우고 끝에 미검증 배지가 붙는다. 결과가 정해져 있는 왕복이다.
+     * 게다가 그 사이 모델이 문서 없이 무언가를 지어낼 여지가 있는데, 이 앱에서 그것은 가장 비싼
+     * 오답이다(사용자는 문서에 근거한 답으로 읽는다).
+     *
+     * <p><b>왜 {@code S} 로 남기는가.</b> 실제로 만들어진 것이 {@code ## 요약} 한 줄짜리 답변이라
+     * 성격이 곧 S 다. 대화 버블의 두 글자 표기가 {@code RS} 가 되고(검색 축 R + 성격 S),
+     * {@code S.skipsVerification()} 이 참이라 그래프가 CRITIC 도 건너뛴다 — 판정할 재료가
+     * 애초에 없으므로 맞는 동작이다. 부수 효과로 {@code S.allowsSubmission()} 이 거짓이라
+     * 좋아요로 지식 제안을 열 수 없는데, 이 문장이 공유 지식이 될 이유는 없으니 그대로 둔다.
+     *
+     * <p><b>왜 {@code grounded=false} 인가.</b> 이 앱의 규칙은 "판정을 읽지 못하면 통과가 아니라
+     * 판정 없음"이고({@link #withoutVerdict}) 그때는 배지를 띄우지 않는다. 여기는 다르다 —
+     * 검증을 <b>하지 못한</b> 것이 아니라 <b>할 근거 자체가 없는</b> 답변이고, 배지가 없으면
+     * 화면에서 평범한 답변과 구분되지 않는다. 미검증 배지를 달고 사유를 툴팁으로 말한다
+     * ({@code VerificationSnapshot.verdictTitle()} 이 {@code evalReason} 을 보여준다).
+     */
+    private AgentState answerWithoutDocuments(AgentState state, GraphListener listener) {
+        if (!state.retrievedDocs().isEmpty()) return null;
+        String answer = messageSource.getMessage("chat.answer.no-documents", null, state.locale());
+        log.info("[ANSWER] 검색 결과 0건 — LLM 호출 없이 정형 응답 thread={} mode={}->S",
+                state.threadId(), state.responseMode());
+        // 스트리밍 클라이언트는 answer 노드 진입에서 단계 표시를 바꾸고 토큰으로 말풍선을 채운다.
+        // 두 이벤트를 그대로 보내면 전송 경로가 평소와 같아져 클라이언트에 분기가 필요 없다.
+        listener.onNodeEnter("answer");
+        listener.onToken(answer);
+        return state.toBuilder()
+                .answer(answer)
+                .responseMode(ResponseMode.S)
+                .needsRetry(false)
+                .grounded(false)
+                .evalReason(messageSource.getMessage("chat.answer.no-documents.reason", null, state.locale()))
+                .envNote(null)
+                .usedDocIndices(List.of())
+                .inventedSymbols(List.of())
+                .build();
     }
 
     /**
