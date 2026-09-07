@@ -6,12 +6,8 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -252,16 +248,26 @@ public class QuestionReuseRepository {
                 "active");
     };
 
+    /**
+     * 청크 위치·본문은 {@code chunk_fts_key}(id 로 찾는 유일한 길 — {@code KeywordSearchRepository}
+     * 클래스 주석)를 먼저 타고, FTS 행은 그 {@code fts_rowid} 로만 조인한다. 예전의
+     * {@code LEFT JOIN chunk_fts f ON f.spring_doc_id = r.chunk_id} 는 대화를 열 때 <b>턴마다</b>
+     * 코퍼스 전체를 훑었다.
+     *
+     * <p>{@code vec_document_chunks} 는 sqlite-vec 배포에만 있다 — Chroma 배포에서 그 테이블을
+     * 조인하면 "no such table" 로 대화 열기 자체가 실패하므로, 없을 때는 같은 컬럼 모양의 빈
+     * 파생 테이블을 대신 조인한다({@link #vecChunkJoin}).
+     */
     public List<SourcePreviewRow> findSourcePreviewRows(long turnId) {
-        return vectorJdbc.query("""
+        return vectorJdbc.query(("""
                 SELECT r.chunk_id,
                        r.doc_id,
                        r.status,
-                  COALESCE(NULLIF(TRIM(f.filename), ''), NULLIF(TRIM(json_extract(c.metadata, '$.filename')), '')) AS filename,
-                  COALESCE(NULLIF(TRIM(f.page), ''), NULLIF(TRIM(json_extract(c.metadata, '$.page_or_slide')), '')) AS page,
+                  COALESCE(NULLIF(TRIM(k.filename), ''), NULLIF(TRIM(json_extract(c.metadata, '$.filename')), '')) AS filename,
+                  COALESCE(NULLIF(TRIM(k.page), ''), NULLIF(TRIM(json_extract(c.metadata, '$.page_or_slide')), '')) AS page,
                       COALESCE(
                           NULLIF(NULLIF(NULLIF(TRIM(json_extract(c.metadata, '$.chapter_no')), ''), '0'), '0.0'),
-                          NULLIF(NULLIF(NULLIF(TRIM(f.chapter), ''), '0'), '0.0')
+                          NULLIF(NULLIF(NULLIF(TRIM(k.chapter), ''), '0'), '0.0')
                       ) AS chapter,
                   -- c.content (vec_document_chunks, sqlite-vec only) is the untouched stored chunk
                   -- text — the same thing the live/in-session preview shows via Document.getText().
@@ -270,17 +276,18 @@ public class QuestionReuseRepository {
                   -- both vector-store backends but NOT what a user was shown live. Preferring f over
                   -- c (as before) made the reload preview differ from the live one whenever c.content
                   -- existed (sqlite-vec mode); c must win, with f only as the Chroma-mode fallback
-                  -- (vec_document_chunks has no rows there).
+                  -- (vec_document_chunks does not exist there).
                   COALESCE(NULLIF(c.content, ''), f.content) AS content
                 FROM turn_source_ref r
                                 JOIN conversation_turns t ON t.id = r.turn_id AND t.user_id = r.user_id
-                LEFT JOIN chunk_fts f ON f.spring_doc_id = r.chunk_id
-                LEFT JOIN vec_document_chunks c ON c.spring_doc_id = r.chunk_id
+                LEFT JOIN chunk_fts_key k ON k.spring_doc_id = r.chunk_id
+                LEFT JOIN chunk_fts f ON f.rowid = k.fts_rowid
+                %s
                 -- status 필터가 없다: 무효화된 출처를 걸러내면 대화 기록에서 배지가 아니라 출처
                 -- 자체가 조용히 사라져(§2번 표시 요구) "원래 없었던 것"처럼 보인다.
                 -- hidden_at은 그 반대로 걸러낸다 — 사라지는 것이 사용자가 직접 요청한 결과다.
                 WHERE r.turn_id = ? AND r.hidden_at IS NULL
-                """,
+                """).formatted(vecChunkJoin("r.chunk_id")),
                 (rs, n) -> new SourcePreviewRow(
                         rs.getString("chunk_id"),
                         rs.getString("doc_id"),
@@ -326,20 +333,51 @@ public class QuestionReuseRepository {
      */
     public String findChunkFullText(String chunkId) {
         if (chunkId == null || chunkId.isBlank()) return null;
-        List<String> rows = vectorJdbc.query("""
-                SELECT content FROM (
-                    SELECT c.content AS content, 0 AS priority
-                    FROM vec_document_chunks c WHERE c.spring_doc_id = ?
-                    UNION ALL
-                    SELECT f.content AS content, 1 AS priority
-                    FROM chunk_fts f WHERE f.spring_doc_id = ?
-                )
-                ORDER BY priority
-                LIMIT 1
-                """,
-                (rs, n) -> rs.getString("content"),
-                chunkId, chunkId);
+        // FTS 행은 chunk_fts_key 의 rowid 로만 찾는다 — spring_doc_id 직접 조회는 전체 스캔이다.
+        String ftsArm = """
+                SELECT f.content AS content, 1 AS priority
+                FROM chunk_fts_key k JOIN chunk_fts f ON f.rowid = k.fts_rowid
+                WHERE k.spring_doc_id = ?
+                """;
+        String sql = hasVecChunkTable()
+                ? """
+                  SELECT content FROM (
+                      SELECT c.content AS content, 0 AS priority
+                      FROM vec_document_chunks c WHERE c.spring_doc_id = ?
+                      UNION ALL
+                  """ + ftsArm + ") ORDER BY priority LIMIT 1"
+                : "SELECT content FROM (" + ftsArm + ") LIMIT 1";
+        Object[] args = hasVecChunkTable() ? new Object[]{chunkId, chunkId} : new Object[]{chunkId};
+        List<String> rows = vectorJdbc.query(sql, (rs, n) -> rs.getString("content"), args);
         return rows.isEmpty() ? null : rows.get(0);
+    }
+
+    /**
+     * {@code vec_document_chunks} 조인 절 — 테이블이 있으면 실제 조인, 없으면(Chroma 배포) 같은
+     * 컬럼 이름을 가진 빈 파생 테이블을 대신 붙여 위쪽 SELECT 의 {@code c.*} 참조가 그대로 컴파일되게
+     * 한다({@code json_extract(NULL, ...)} 은 NULL 이다).
+     */
+    private String vecChunkJoin(String chunkIdColumn) {
+        return hasVecChunkTable()
+                ? "LEFT JOIN vec_document_chunks c ON c.spring_doc_id = " + chunkIdColumn
+                : "LEFT JOIN (SELECT NULL AS spring_doc_id, NULL AS content, NULL AS metadata) c ON 0";
+    }
+
+    /** 한 번 있으면 계속 있다(스키마는 기동 시 만들어진다). 없으면 매번 다시 본다 — 생성이
+     *  {@code ApplicationReadyEvent} 라 이 빈의 초기화보다 늦을 수 있다. */
+    private volatile boolean vecChunkTableSeen;
+
+    private boolean hasVecChunkTable() {
+        if (vecChunkTableSeen) return true;
+        try {
+            Integer n = vectorJdbc.queryForObject(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'vec_document_chunks'",
+                    Integer.class);
+            if (n != null && n > 0) vecChunkTableSeen = true;
+        } catch (Exception ignored) {
+            // treated as absent
+        }
+        return vecChunkTableSeen;
     }
 
     public Long findReusedFromTurnId(long turnId) {
@@ -362,21 +400,22 @@ public class QuestionReuseRepository {
     }
 
     /**
-     * Current chunk text snapshot from FTS index. If a chunk is deleted/replaced, it simply won't be present.
+     * Current chunk-text hash per chunk id. If a chunk is deleted/replaced, it simply won't be present.
+     *
+     * <p>Reads the hash {@code KeywordSearchRepository.indexChunks()} stored alongside the FTS row
+     * ({@code chunk_fts_key.content_hash} = {@code KeywordSearchRepository.contentHash(search text)})
+     * instead of re-reading and re-hashing {@code chunk_fts.content} — the same value, but a PK
+     * lookup rather than a full FTS scan on every turn save and every reuse validation.
      */
     public Map<String, String> currentChunkHashes(Set<String> chunkIds) {
         if (chunkIds == null || chunkIds.isEmpty()) return Map.of();
         List<String> ids = new ArrayList<>(chunkIds);
         String placeholders = ids.stream().map(v -> "?").collect(Collectors.joining(","));
-        List<Map<String, Object>> rows = vectorJdbc.queryForList(
-                "SELECT spring_doc_id, content FROM chunk_fts WHERE spring_doc_id IN (" + placeholders + ")",
-                ids.toArray());
         Map<String, String> out = new HashMap<>();
-        for (Map<String, Object> row : rows) {
-            String id = String.valueOf(row.getOrDefault("spring_doc_id", ""));
-            String content = String.valueOf(row.getOrDefault("content", ""));
-            out.put(id, sha256(content));
-        }
+        vectorJdbc.query(
+                "SELECT spring_doc_id, content_hash FROM chunk_fts_key WHERE spring_doc_id IN (" + placeholders + ")",
+                rs -> { out.put(rs.getString("spring_doc_id"), rs.getString("content_hash")); },
+                ids.toArray());
         return out;
     }
 
@@ -414,16 +453,6 @@ public class QuestionReuseRepository {
                 args.toArray());
     }
 
-
-    private static String sha256(String text) {
-        String src = text == null ? "" : text;
-        try {
-            MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            return HexFormat.of().formatHex(digest.digest(src.getBytes(StandardCharsets.UTF_8)));
-        } catch (NoSuchAlgorithmException e) {
-            throw new IllegalStateException("SHA-256 unavailable", e);
-        }
-    }
 
     /**
      * @param answerShare 이 청크가 답변에서 차지한 글자수 비율(§2단계 응답 참여도). {@code null}은

@@ -152,6 +152,96 @@ class KeywordSearchRepositoryTest {
         List<Document> hits = migrated.search("latest", "인덱싱", 10);
         assertThat(hits).extracting(Document::getId).containsExactly("s1");
         assertThat(migrated.tagsByDocIds(List.of("D1")).get("D1")).containsExactly("billing");
+        // 재구축이 rowid 를 옮기고 키 테이블이 그 rowid 로 채워졌는지 — 둘 중 하나라도 틀리면 id 조회가 빈다.
+        assertThat(keyJoinedContent(legacyJdbc, "s1")).isEqualTo("문서를 업로드하면 자동으로 인덱싱됩니다");
+    }
+
+    // ── chunk_fts_key — id 로 FTS 행을 찾는 유일한 길 ─────────────────────────────
+
+    private JdbcTemplate jdbc() {
+        DriverManagerDataSource ds = new DriverManagerDataSource();
+        ds.setDriverClassName("org.sqlite.JDBC");
+        ds.setUrl("jdbc:sqlite:" + tmp.resolve("fts.db"));
+        return new JdbcTemplate(ds);
+    }
+
+    /** FTS 본문을 키 테이블의 rowid 로만 찾는다 — 운영 조회(재사용·신고·원문 보기)가 쓰는 것과 같은 조인. */
+    private static String keyJoinedContent(JdbcTemplate jdbc, String springDocId) {
+        List<String> rows = jdbc.query(
+                "SELECT f.content FROM chunk_fts_key k JOIN chunk_fts f ON f.rowid = k.fts_rowid WHERE k.spring_doc_id = ?",
+                (rs, n) -> rs.getString(1), springDocId);
+        return rows.isEmpty() ? null : rows.get(0);
+    }
+
+    @Test
+    @DisplayName("indexChunks — chunk_fts_key 에 rowid·위치·본문 해시를 함께 적는다")
+    void indexChunks_writesKeyRowsPointingAtTheFtsRow() {
+        Document s1 = chunk("s1", "D1", "latest", 0, "결제 오류 코드 ERR4521 발생 시 재시도", "ERR4521");
+        Document s2 = chunk("s2", "D1", "latest", 1, "로그인 화면 사용법 안내", "로그인");
+        repo.indexChunks(List.of(s1, s2));
+
+        JdbcTemplate jdbc = jdbc();
+        assertThat(keyJoinedContent(jdbc, "s1")).isEqualTo(SearchTextBuilder.build(s1));
+        assertThat(keyJoinedContent(jdbc, "s2")).isEqualTo(SearchTextBuilder.build(s2));
+        Map<String, Object> key = jdbc.queryForMap(
+                "SELECT doc_id, version, filename, page, content_hash FROM chunk_fts_key WHERE spring_doc_id = 's1'");
+        assertThat(key).containsEntry("doc_id", "D1").containsEntry("version", "latest")
+                .containsEntry("filename", "manual.pdf").containsEntry("page", "1")
+                // turn_source_ref 가 비교하는 값 — FTS 에 저장된 검색 텍스트의 해시여야 한다.
+                .containsEntry("content_hash", KeywordSearchRepository.contentHash(SearchTextBuilder.build(s1)));
+    }
+
+    @Test
+    @DisplayName("deleteByDocId / deleteBySpringDocIds — 키 행도 함께 사라진다")
+    void deletes_removeKeyRowsToo() {
+        repo.indexChunks(List.of(
+                chunk("s1", "D1", "latest", 0, "하나", "kw"),
+                chunk("s2", "D1", "latest", 1, "둘", "kw"),
+                chunk("s3", "D2", "latest", 0, "셋", "kw")));
+        JdbcTemplate jdbc = jdbc();
+
+        repo.deleteBySpringDocIds(List.of("s2"));
+        repo.deleteByDocId("D2");
+
+        assertThat(jdbc.queryForList("SELECT spring_doc_id FROM chunk_fts_key ORDER BY spring_doc_id", String.class))
+                .containsExactly("s1");
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM chunk_fts", Integer.class)).isEqualTo(1);
+        assertThat(keyJoinedContent(jdbc, "s1")).isNotNull();
+    }
+
+    @Test
+    @DisplayName("init — 키 테이블이 없던 배포는 기존 FTS 행을 훑어 한 번에 채운다")
+    void init_backfillsKeyTableFromExistingFtsRows() {
+        Document s1 = chunk("s1", "D1", "latest", 0, "백필 대상 하나", "kw");
+        Document s2 = chunk("s2", "D2", "v2", 3, "백필 대상 둘", "kw");
+        repo.indexChunks(List.of(s1, s2));
+        JdbcTemplate jdbc = jdbc();
+        jdbc.execute("DROP TABLE chunk_fts_key");
+
+        KeywordSearchRepository restarted = new KeywordSearchRepository(jdbc);
+        restarted.init();
+
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM chunk_fts_key", Integer.class)).isEqualTo(2);
+        assertThat(keyJoinedContent(jdbc, "s2")).isEqualTo(SearchTextBuilder.build(s2));
+        assertThat(jdbc.queryForObject("SELECT content_hash FROM chunk_fts_key WHERE spring_doc_id = 's1'", String.class))
+                .isEqualTo(KeywordSearchRepository.contentHash(SearchTextBuilder.build(s1)));
+        assertThat(jdbc.queryForObject("SELECT version FROM chunk_fts_key WHERE spring_doc_id = 's2'", String.class))
+                .isEqualTo("v2");
+        // 삭제가 키를 타므로 백필된 키로도 실제 FTS 행이 지워져야 한다.
+        restarted.deleteByDocId("D1");
+        assertThat(restarted.search("latest", "백필", 10)).extracting(Document::getId).isEmpty();
+    }
+
+    @Test
+    @DisplayName("init — FTS 행이 사라진 키(중간에 끊긴 삭제)는 기동 시 정리한다")
+    void init_dropsKeysWhoseFtsRowIsGone() {
+        repo.indexChunks(List.of(chunk("s1", "D1", "latest", 0, "남는 것", "kw")));
+        JdbcTemplate jdbc = jdbc();
+        jdbc.update("INSERT INTO chunk_fts_key (spring_doc_id, fts_rowid, doc_id, content_hash) VALUES ('ghost', 999, 'D9', 'h')");
+
+        new KeywordSearchRepository(jdbc).init();
+
+        assertThat(jdbc.queryForList("SELECT spring_doc_id FROM chunk_fts_key", String.class)).containsExactly("s1");
     }
 
     @Test

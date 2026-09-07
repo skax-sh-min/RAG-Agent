@@ -297,8 +297,12 @@ public class ChunkReportRepository {
         return ftsRows.isEmpty() ? Optional.empty() : Optional.of(ftsRows.get(0));
     }
 
+    /** id 로는 {@code chunk_fts_key} 를 타고 FTS 행은 rowid 로 조인한다 — {@code spring_doc_id} 로
+     *  {@code chunk_fts} 를 직접 찾으면 코퍼스 전체 스캔이다({@code KeywordSearchRepository} 주석). */
     private List<ChunkLocation> ftsRows(String chunkId) {
-        return query("SELECT doc_id, version, filename, content FROM chunk_fts WHERE spring_doc_id = ? LIMIT 1",
+        return query("SELECT k.doc_id, k.version, k.filename, f.content "
+                        + "FROM chunk_fts_key k JOIN chunk_fts f ON f.rowid = k.fts_rowid "
+                        + "WHERE k.spring_doc_id = ? LIMIT 1",
                 (rs, n) -> new ChunkLocation(rs.getString("doc_id"), rs.getString("version"),
                         rs.getString("filename"), rs.getString("content"),
                         ChunkLocation.SOURCE_SEARCH_TEXT),
