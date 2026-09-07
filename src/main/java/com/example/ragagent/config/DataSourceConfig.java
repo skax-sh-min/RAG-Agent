@@ -83,12 +83,24 @@ public class DataSourceConfig {
      * <p>Package-private + static — 실제 커넥션 없이 단위 테스트한다.
      */
     static String sqliteUrl(Path dbPath) {
-        String path = dbPath.toString();
-        if (path.indexOf('?') >= 0 || path.indexOf('&') >= 0) {
+        return sqliteUrl(dbPath.toString());
+    }
+
+    /**
+     * 가드가 실제로 판정하는 자리. <b>{@link Path} 가 아니라 문자열을 받는 이유</b>:
+     * Windows 의 {@code Path} 는 {@code ?} 를 애초에 담지 못해
+     * {@code Path.of("/data/we?rd/memory.db")} 자체가 {@link java.nio.file.InvalidPathException}
+     * 으로 죽는다 — 이 가드에 닿기도 전에. 그래서 {@code Path} 로만 시험하면
+     * Windows 빌드에서는 {@code &} 쪽 절반만 검증되고, 정작 오류 메시지가 지목하는
+     * {@code ?} 는 한 번도 지나가지 않는다. 판정 대상은 URL 로 이어 붙일 <b>문자열</b>이므로
+     * 문자열을 받는 자리를 따로 두어 양쪽 문자를 OS 와 무관하게 시험한다.
+     */
+    static String sqliteUrl(String dbPath) {
+        if (dbPath.indexOf('?') >= 0 || dbPath.indexOf('&') >= 0) {
             throw new IllegalStateException(
-                    "SQLite 파일 경로에 '?' 또는 '&' 를 포함할 수 없습니다(JDBC URL 파라미터와 충돌): " + path);
+                    "SQLite 파일 경로에 '?' 또는 '&' 를 포함할 수 없습니다(JDBC URL 파라미터와 충돌): " + dbPath);
         }
-        return "jdbc:sqlite:" + path + "?" + SESSION_PRAGMAS;
+        return "jdbc:sqlite:" + dbPath + "?" + SESSION_PRAGMAS;
     }
 
     /** SpEL guard for the separate-vector-DB feature switch (sqlite-vec backend + non-blank db-path). */

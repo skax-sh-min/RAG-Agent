@@ -165,14 +165,30 @@ class DataSourceConfigTest {
         }
     }
 
+    /**
+     * <b>왜 {@code Path} 가 아니라 문자열로 거는가</b>: Windows 는 파일명에 {@code ?} 를 허용하지
+     * 않아 {@code Path.of("/data/we?rd/memory.db")} 가 {@link java.nio.file.InvalidPathException}
+     * 으로 먼저 죽는다 — 가드에 닿지도 못한다. 판정 대상은 URL 에 이어 붙일 문자열이므로
+     * 문자열로 걸어야 {@code ?}/{@code &} 양쪽이 OS 와 무관하게 검증된다.
+     */
     @Test
     @DisplayName("sqliteUrl: 경로에 ?/& 가 있으면 거부 — 파라미터 경계가 깨져 엉뚱한 파일이 열린다")
     void sqliteUrl_rejectsPathsThatWouldBreakTheQueryString() {
-        assertThatThrownBy(() -> DataSourceConfig.sqliteUrl(Path.of("/data/we?rd/memory.db")))
+        assertThatThrownBy(() -> DataSourceConfig.sqliteUrl("/data/we?rd/memory.db"))
                 .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("?");
+                .hasMessageContaining("/data/we?rd/memory.db");
+        assertThatThrownBy(() -> DataSourceConfig.sqliteUrl("/data/a&b/memory.db"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("/data/a&b/memory.db");
+    }
+
+    @Test
+    @DisplayName("sqliteUrl(Path): Path 입구도 같은 가드를 지난다")
+    void sqliteUrlPath_goesThroughTheSameGuard() {
+        // '&' 는 Windows/POSIX 양쪽에서 합법적인 파일명 문자라 Path 로 만들 수 있다 ('?' 는 Windows 에서 불가)
         assertThatThrownBy(() -> DataSourceConfig.sqliteUrl(Path.of("/data/a&b/memory.db")))
-                .isInstanceOf(IllegalStateException.class);
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("a&b");
     }
 
     private static String pragma(java.sql.Statement st, String name) throws Exception {
