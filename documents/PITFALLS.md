@@ -230,11 +230,21 @@ on/off 스위치를 새로 만들지 않고 `app.search-multiquery-enabled` 를 
 
 큐레이션 Q&A 의 **질문**을 본문에서 더 구체적으로 다시 쓰자고 제안한다(`/admin` 편집 화면의 "본문으로 구체화" 버튼).
 
-**왜 요약·키워드가 아니라 질문인가.** 큐레이션 편집에 문서 청크처럼 `excerpt_keywords`/`chunk_context` 필드를 붙이자는 안이 먼저 나왔는데, 둘 다 이 축에서는 **읽히는 코드 경로가 없다**: ① `excerpt_keywords` 의 검색 소비처는 `chunk_fts.keywords` 하나인데 `CuratedQaService` 는 `keywordRepo.indexChunks()` 를 부르지 않아 큐레이션 행은 FTS 에 아예 없다(있어도 BM25 는 문서 version 으로 필터하는데 큐레이션 version 은 예약값 `"curated"` 다) ② `chunk_context` 의 소비처는 `SearchTextBuilder.compute()` 하나인데, `CuratedQaService.buildDocument()` 가 `MetaKey.SEARCH_TEXT` 를 직접 실어 `build()` 가 즉시 반환한다. 넣었다면 저장은 되지만 검색은 꿈쩍도 하지 않는 — `app.llm.progressive-threshold` 와 같은 모양의 — 거짓 손잡이가 됐을 것이다.
+**왜 (그때는) 요약·키워드가 아니라 질문이었나.** 큐레이션 편집에 문서 청크처럼 `excerpt_keywords`/`chunk_context` 필드를 붙이자는 안이 먼저 나왔는데, 당시 둘 다 이 축에서는 **읽히는 코드 경로가 없었다**: ① `excerpt_keywords` 의 검색 소비처는 `chunk_fts.keywords` 하나인데 `CuratedQaService` 가 `keywordRepo.indexChunks()` 를 부르지 않아 큐레이션 행은 FTS 에 아예 없었다 ② `chunk_context` 의 소비처는 `SearchTextBuilder.compute()` 하나인데, `CuratedQaService.buildDocument()` 가 `MetaKey.SEARCH_TEXT` 를 직접 실어 `build()` 가 즉시 반환한다. 넣었다면 저장은 되지만 검색은 꿈쩍도 하지 않는 — `app.llm.progressive-threshold` 와 같은 모양의 — 거짓 손잡이가 됐을 것이다. **그 판단 자체는 지금도 맞다**: 아래의 뒤집기는 필드를 추가한 것이 아니라 **먼저 읽히게 만든** 것이다.
+
+**나중에 뒤집혔다 — 단, 읽는 경로를 함께 만들면서.** 승인된 지식 제안이 `/admin` 청크 화면에서 두 칸이 늘 비어 있는 것이 실사용에서 걸렸고, "화면을 채우자"로 끝냈다면 정확히 위에서 피한 거짓 손잡이가 됐을 것이다. 그래서 순서를 반대로 했다 — ① `embedActiveRow()` 가 벡터를 쓸 때 `keywordRepo.indexChunks()` 도 부르게 하고 ② **`RetrievalService.curatedAxis()` 가 그 행을 실제로 읽게** 한 다음 ③ 그제서야 지식 제안 폼에 요약·키워드 입력란과 "빈 칸 자동 생성" 버튼을 붙였다.
+
+②를 빼면 ①만으로는 **아무 일도 일어나지 않는다** — 실제로 그렇게 만들었다가 발견했다. `KeywordSearchRepository.search()` 는 `WHERE ... AND version = ?` 로 거르는데 일반 키워드 축은 **문서 version** 으로 부르고 큐레이션은 예약 네임스페이스 `"curated"` 에 있다. FTS 행은 잘 쌓이는데 그 질의로는 영원히 나오지 않는, 위에서 피하려던 것과 **똑같은 모양의** 거짓 손잡이가 될 뻔했다. 그래서 큐레이션 축이 같은 네임스페이스로 BM25 를 한 번 더 묻고, 그 결과를 **자기 축 안에서** 벡터 결과와 합친다(§10.11 "큐레이션은 축 하나다" — 키워드 축으로 흘려보내면 `rrf-keyword-weight` 와 `curated-qa-weight` 를 동시에 받아 이중 가산이 된다). 덤으로 하나 더 걸린다: `chunk_fts` 에는 `doc_type` 컬럼이 없어 FTS 에서 만든 Document 는 자기가 큐레이션인 줄 모르므로, 그대로 두면 `filterByTags` 의 큐레이션 면제가 걸리지 않아 **태그 칩을 하나라도 켜는 순간 탈락한다**(그 면제가 생긴 원인이 정확히 그 증상이다). `markCurated()` 가 `doc_type`/`source_type` 을 찍어 주는 이유다. 요약은 **FTS 검색 텍스트에만** 앞에 붙인다(`CuratedQaService.ftsDocument()`) — 벡터 입력은 `질문 + 본문` 그대로다. 요약은 본문을 다시 말한 것이라 의미 벡터에서는 희석이지만(그래서 `stripSummarySection()` 이 임베딩에서 걷어낸다) 어휘 매칭인 BM25 에서는 그 항목이 무엇에 관한 것인지를 말하는 **토큰의 반복**이고, 그것이 문서 청크에서 `chunk_context` 가 하는 일이다. 대가가 둘 있다: FTS 행은 이제 벡터의 **짝**이라 `deleteVectors`/`pruneStaleVectors` 가 같이 지워야 하고(안 지우면 내린 항목이 키워드 축에 남아 계속 근거로 붙는다), 큐레이션 항목이 **자기 축과 키워드 축 양쪽**에서 RRF 에 들어오므로 `app.search-curated-qa-weight` 와 `rrf-keyword-weight` 의 합이 예전보다 세다 — 큐레이션이 과하게 올라오면 먼저 볼 값이 그 둘이다.
 
 **그 자리를 이미 질문이 채우고 있다.** 검색 텍스트는 `질문 + 본문`이고 질문은 **모든 청크에 반복 부여**된다. 즉 문서 청크에서 `chunk_context` 가 하는 일(이 조각이 무엇에 관한 것인지를 임베딩 입력 앞에 붙이기)을 여기서는 질문이 한다 — 그래서 이 축의 검색 품질은 사실상 질문 한 줄에 달려 있는데, 그 값은 좋아요한 턴의 원 질문이거나 급히 적은 제목이라 `"그거 어떻게 해?"` 인 경우가 흔하다. **고칠 값은 질문이었다.**
 
 **제안만 하고 저장하지 않는다.** 서버는 문자열을 돌려줄 뿐이고(`POST /admin/curated/{id}/suggest-question`, 제안 없으면 204), 화면도 입력란을 건드리지 않는다 — 관리자가 [적용]을 눌러야 입력란에 들어가고, 그다음 [저장]을 눌러야 DB·임베딩에 반영된다. **검토 단계가 둘인 것이 요점**이다: 자동 반영하면 그 항목이 어떤 질의에 걸릴지가 사람 몰래 바뀌고, 큐레이션은 사람의 검토가 유일한 관문이라는 §10.11 의 전제와도 어긋난다. 배경 호출이라 동시성 게이트를 타지 않으며(`executeWithTracking`, `AdminService.reindexChunk` 의 키워드 재생성과 같은 성격) 사용량은 `BackgroundUsage.QUESTION_PREFIX` 로 따로 잡힌다. 질문·답변은 **한 번의 저장으로 함께** 반영된다(`CuratedQaService.updateEntry`) — 따로 저장하면 같은 항목을 두 번 임베딩하고 그 사이 벡터가 질문만 바뀐 중간 상태로 남는다.
+
+### `/admin` 청크 재인덱싱과 큐레이션 축
+
+`/admin/chunks` 는 `docId` 없이도 컬렉션 전체를 훑으므로 **큐레이션 청크도 그 표에 나온다**. 거기 달린 ↺ 재인덱싱 버튼은 오랫동안 그것들에도 눌렸는데, `AdminService.reindexChunk()` 는 `SearchTextBuilder.precompute()` 로 **문서 청크의 규칙**(`chunk_context` + 본문)에 따라 검색 텍스트를 다시 만든다. 이 축의 검색 텍스트는 `질문 + 본문`이고 **질문은 벡터 메타데이터에 실려 있지 않다**(`curated_qa.question` 컬럼에만 있다). 즉 한 번 누르면 그 청크만 조용히 질문을 잃고 — 질문은 모든 청크에 반복 부여되는, 이 축의 검색 품질을 사실상 혼자 정하는 값이다 — 질문형 질의와의 매칭이 무너졌다. 덤으로 `indexChunks()` 가 그 청크에만 FTS 행을 만들어 축 구성까지 어긋났다. 아무것도 실패하지 않고 로그도 남지 않는다.
+
+라우팅은 `AdminController` 가 한다(`ChunkRow.curatedRowId()` 가 `doc_id="curated:<id>"` 를 되읽어 `CuratedQaService.reembedRow()` 로 보낸다) — 두 서비스를 이미 들고 있는 곳이라 어느 쪽에도 새 의존이 생기지 않는다. `reindexChunk()` 자체도 `doc_type=curated_qa` 를 만나면 거부한다(마지막 방어선). **단위가 '청크 하나'가 아니라 '행 하나'인 것은 의도된 것이다** — 이 축에서 질문·본문·요약·키워드는 행이 통째로 갖는 값이라 한 청크만 다시 만들 수 있는 상태 자체가 없다. 같은 이유로 큐레이션 청크에는 "키워드·요약 재생성" 이 적용되지 않는다(그 자리는 지식 제안 페이지의 "빈 칸 자동 생성" 이다).
 
 ### `service/CuratedSubmissionService.java`
 

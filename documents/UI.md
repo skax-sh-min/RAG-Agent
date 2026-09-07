@@ -216,6 +216,8 @@ REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — �
 >
 > **청크 편집의 메타데이터(JSON)는 읽기 전용이다** — 접힌 `<details>` 안에서 조회만 된다. 여기 있는 키는 전부 인덱싱 시점에 파생되는 값이고, 손으로 고칠 의도가 있는 둘(키워드·요약)은 전용 필드로 빠져 있다. 편집을 없앤 이유는 [PITFALLS](PITFALLS.md#청크-편집의-메타데이터json-는-읽기-전용이다) 참고 — 저장이 조용히 무효가 되거나, 바로 아래 '이 청크만 재인덱싱'과 짝지으면 청크가 고아가 된다.
 >
+> **'이 청크만 재인덱싱'은 큐레이션 청크에서 다른 경로로 간다.** 이 표에는 승인된 지식 제안도 함께 나오는데(`docId` 없이 컬렉션 전체를 훑는다), 그 축의 검색 텍스트는 `제목 + 본문`이고 제목은 벡터 메타데이터에 없다 — 문서 청크용 경로로 보내면 그 청크만 조용히 제목을 잃는다. 서버가 `doc_type` 을 보고 `CuratedQaService.reembedRow()` 로 갈라 보내며, 단위는 청크가 아니라 **행 하나**다(OPERATOR_MANUAL §7.2-bis).
+>
 > **읽기 전용은 화면 규칙이 아니라 서버 규칙이다.** 화면은 저장 시 열 때 받은 맵을 그대로 되돌려 보내지만, `AdminService.updateChunk()` 는 그 맵에서 `excerpt_keywords`·`chunk_context`(= 위 전용 필드 둘)만 골라 **저장된 메타데이터 위에** 얹는다. 그래서 요청 본문에 임의의 키를 넣어도 저장되지 않고, 반대로 화면이 보내지 않는 키도 편집으로 사라지지 않는다.
 
 ### 3.5 설정 관리 (SettingsController)
@@ -272,18 +274,20 @@ REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — �
 | Method | Path | 반환 | 설명 |
 |--------|------|------|------|
 | GET | `/curated/submissions` | `curated-submissions.html` | 등록 폼 + "내 제안" 목록(`?status=` 로 상태 필터). **페이지를 여는 것 자체가 읽음 처리**(`markAllReadForAuthor`)라 헤더 배지가 사라진다. `?fromThread=&fromTurn=` 이 붙으면 그 턴의 답변으로 폼을 채운다 — **본문은 서버가 턴에서 읽는다**(3,000자 답변은 URL로 나를 수 없고, 클라이언트가 나르면 임의 텍스트를 "채팅 답변에서 온 것"으로 위장할 수 있다). 같은 턴에 살아 있는 제안이 이미 있으면 두 번째 초안을 열지 않고 그 항목을 가리킨다 |
-| POST | `/curated/submissions` | redirect + flash | 등록(`title`/`body`/`tags`, 좋아요 출신이면 `sourceThreadId`/`sourceTurnId`). HTMX가 아니라 **평범한 폼 POST + 플래시 리다이렉트** — HTML 폼이므로 검증 실패가 `GlobalExceptionHandler`의 JSON으로 나가면 안 된다. 실패 시 입력 초안(출처 턴 포함)을 되돌려준다. 출처 턴은 서버가 소유권을 다시 확인하므로 위조해도 손으로 쓴 제안이 될 뿐이다 |
+| POST | `/curated/submissions` | redirect + flash | 등록(`title`/`body`/`tags`/`summary`/`keywords`, 좋아요 출신이면 `sourceThreadId`/`sourceTurnId`). HTMX가 아니라 **평범한 폼 POST + 플래시 리다이렉트** — HTML 폼이므로 검증 실패가 `GlobalExceptionHandler`의 JSON으로 나가면 안 된다. 실패 시 입력 초안(출처 턴 포함)을 되돌려준다. 출처 턴은 서버가 소유권을 다시 확인하므로 위조해도 손으로 쓴 제안이 될 뿐이다 |
 | POST | `/curated/submissions/{id}/withdraw` | redirect + flash | 작성자 본인의 `pending`·`approved` 제안 철회. **등록 완료 건이면 검색에서도 함께 회수된다**(확인 문구가 그 사실을 먼저 말한다) — §10.11 이전에는 `pending`만 가능해 한 번 승인된 지식을 저자가 내릴 방법이 없었다 |
 | GET | `/curated/submissions/{id}/detail` | JSON | 저자 수정 오프캔버스가 읽는 전문. 작성자 스코프로 걸러지므로 남의 초안은 열리지 않는다 |
 | POST | `/curated/submissions/{id}` | `200` / `409` / `400` | 저자 수정 저장(JSON). 저장하면 어느 상태에서든 `pending`으로 돌아가지만 **등록본은 검색에 그대로 남는다**(정책 3) — 관리자가 새 본문을 승인할 때 교체된다. 409=이미 처리됨, 400=검증 실패(둘 다 오프캔버스가 인라인으로 렌더) |
+| POST | `/curated/submissions/enrich` | JSON `{"summary","keywords","llmCalled"}` / `400` | 요약·키워드 **빈 칸만** 자동 생성(본문 + 현재 두 값을 보낸다). 채워진 칸을 덮지 않는 판정은 **서버**가 한다 — 규칙의 출처를 하나로 두기 위해서다. 둘 다 차 있으면 LLM 을 부르지 않고 `llmCalled:false` 로 돌아온다. 본문이 비면 400 |
 | POST | `/curated/submissions/images` | JSON `{"path","marker"}` / `400` / `422` | 본문 이미지 업로드(multipart `file`). 위 등록 POST와 달리 **진짜 API 호출**(폼 JS의 `fetch`)이라 오류를 JSON으로 돌려주는 것이 맞다 — 크기/빈 파일은 `GlobalExceptionHandler` 경유 400, 확장자·매직바이트 불일치는 422 |
 | GET | `/curated/submissions/unread-count` | JSON `{"count":N}` | 헤더 배지 폴링(60초) — 처리됐지만 아직 확인하지 않은 내 제안 수. **읽음 처리는 하지 않는다**(폴링이 지우면 보기도 전에 사라짐) |
 
 **폼 구성**(`curated-submissions.html`):
 
 - **제목** — `curated_qa.question` 컬럼에 그대로 저장되어 임베딩 입력의 앞부분이 된다. 질문형 제목일수록 검색이 잘 걸린다.
-- **태그**(선택) — 자유 입력 + 아래 **기존 태그** 칩 클릭 추가. `documents.html` 업로드 태그와 동일한 패턴이며, 목록은 `GET /api/v1/tags?includeCurated=true`로 **문서 태그 ∪ 큐레이션 태그**를 받는다 — 큐레이션 항목은 `chunk_fts`에 색인되지 않아(벡터 축 전용) 합집합이 아니면 제안에서만 쓴 태그가 다음 사람에게 안 보이고 표기가 갈린다. 비워 두면 모든 태그 스코프에서 검색된다(§4 "큐레이션 태그 스코프" 참고).
+- **태그**(선택) — 자유 입력 + 아래 **기존 태그** 칩 클릭 추가. `documents.html` 업로드 태그와 동일한 패턴이며, 목록은 `GET /api/v1/tags?includeCurated=true`로 **문서 태그 ∪ 큐레이션 태그**를 받는다 — 합집합이 아니면 제안에서만 쓴 태그가 다음 사람에게 안 보이고 표기가 갈린다(큐레이션 태그의 출처는 `curated_qa.tags` 이지 FTS 가 아니다). 비워 두면 모든 태그 스코프에서 검색된다(§4 "큐레이션 태그 스코프" 참고).
 - **본문** — **길이 제한 없음**. 오른쪽 위 **작성/미리보기** 탭으로 전환하며, 미리보기는 `renderMarkdownWithImageMarkers()` → `marked` → `DOMPurify.sanitize()`(관리자 검토 화면과 동일 파이프라인). 입력창 아래에 글자 수와 **예상 청크 수**(`chunkSize`로 나눈 클라이언트 추정치 — 정확한 값은 소제목 위치에 따라 달라지므로 관리자 검토 화면이 서버 계산으로 보여준다)가 표시된다.
+- **요약 · 키워드**(선택) — 본문 아래 두 칸. 승인되면 각각 `chunk_context`/`excerpt_keywords` 로 실려 `/admin` 청크 화면의 같은 이름 칸에 보이고, **키워드는 `chunk_fts` 의 전용 컬럼으로 들어가 BM25 가 직접 읽는다**(요약은 그 축의 검색 텍스트 앞에만 붙는다 — 벡터 입력은 `제목 + 본문` 그대로). 화면을 채우려고 있는 칸이 아니라는 뜻이다. 라벨 옆 **빈 칸 자동 생성** 버튼이 본문에서 LLM 1회로 만들어 주고, **이미 쓴 칸은 덮지 않는다**(판정은 서버 — `CuratedSubmissionService.enrich()`). 작성 폼과 저자 수정 오프캔버스가 같은 `wireEnrichButton()` 을 쓴다 — 같은 두 칸을 편집하는 화면이 둘이라 규칙이 갈리면 한쪽만 고쳐진다.
 - **이미지 추가** — 본문 라벨 옆 버튼. 파일을 고르면 즉시 `POST /curated/submissions/images`로 올라가고, 응답의 `[이미지: images/submissions/{해시}.png]` 마커가 **textarea의 커서 위치**에 삽입된다(앞뒤 빈 줄 포함, 삽입 후 `input` 이벤트를 발생시켜 글자 수·예상 청크 수를 갱신). **마커의 위치가 곧 이미지의 위치**이므로 그 뒤의 이동·복사·삭제는 전부 평범한 텍스트 편집이고, 승인 시 본문이 청크로 나뉠 때 이미지가 자기가 설명하는 문단을 따라간다. png·jpg·gif·webp / 파일당 5MB / 본문당 10장. CSRF 토큰은 폼의 히든 인풋에서 읽어 `FormData`에 실으므로 세 인증 모드에서 분기가 필요 없다(no-auth에서는 값이 비어 생략).
 - **좋아요에서 열린 경우** — 폼 위에 출처 안내가 붙는다: 그 턴의 **두 글자 표기**(`[RN]`/`[DN]` — 관리자가 검토할 때 보는 것과 같은 값), 본문 이미지 개수/상한(`validateImageCount()`가 문서 이미지까지 세므로 이미지 많은 답변은 제출 단계에서 걸린다 — 미리 보여 준다), 원 대화 링크. 제목은 질문을 200자로 **자른** 값이다(질문은 2,000자까지 가능하다).
 - **내 제안 목록** — 상태 뱃지(검토 대기/등록 완료/반려/철회함/회수됨), 반려 사유 **전문**, 임베딩 실패 경고, 태그 뱃지, 등록된 **벡터 수**(행 수가 아니다 — 좋아요 출신은 행 하나가 벡터 N개다), 상태 필터, 그리고 검토 대기·등록 완료 건의 **수정·철회** 버튼. 상태는 전부/전무로 파생된다(청크가 하나라도 살아 있으면 등록 완료). `pending`인데 활성 등록본이 있으면 "현재 등록본은 계속 사용 중"이 함께 뜬다 — 수정 중에도 그 지식이 검색에 남아 있다는 뜻이고, 새 파생 상태를 만들지 않고 두 값의 조합으로 표기한다.

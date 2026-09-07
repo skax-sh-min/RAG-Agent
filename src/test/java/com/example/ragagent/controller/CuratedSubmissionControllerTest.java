@@ -73,7 +73,7 @@ class CuratedSubmissionControllerTest {
     private static Submission submission(String status, String reviewNote,
                                          int curatedActive, int curatedFailed) {
         return new Submission(1L, USER, "제안 제목", "제안 본문", status, "admin", reviewNote,
-                7L, "2026-01-01", "2026-01-01", "2026-01-02", null, "인프라", null, null,
+                7L, "2026-01-01", "2026-01-01", "2026-01-02", null, "인프라", null, null, null, null,
                 "approved".equals(status) ? 2 : 0, "approved".equals(status) ? 2 : 0, curatedActive, curatedFailed);
     }
 
@@ -96,6 +96,80 @@ class CuratedSubmissionControllerTest {
         assertThat(html)
                 .as("나란히 놓일 미리보기 패널")
                 .contains("id=\"submission-preview\"");
+    }
+
+    /**
+     * 요약·키워드 칸은 화면을 채우려고 있는 것이 아니다 — 승인되면 각각
+     * {@code MetaKey.CHUNK_CONTEXT}/{@code EXCERPT_KEYWORDS} 로 실려 BM25 축이 읽는다.
+     * 마크업이 사라지면 저자가 값을 넣을 방법이 없어지고, 그 축은 조용히 예전처럼 빈 채로 돈다.
+     */
+    @Test
+    @DisplayName("GET — 요약·키워드 입력란과 자동 생성 버튼이 폼에 있다")
+    void page_carriesEnrichmentFields() throws Exception {
+        String html = mvc.perform(get("/curated/submissions").with(user(PRINCIPAL)).param("lang", "ko"))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        assertThat(html).contains("id=\"submission-summary\"");
+        assertThat(html).contains("id=\"submission-keywords\"");
+        assertThat(html).contains("id=\"submission-enrich-btn\"");
+        assertThat(html)
+                .as("두 칸의 name 이 없으면 폼 POST 가 값을 싣지 않는다")
+                .contains("name=\"summary\"").contains("name=\"keywords\"");
+    }
+
+    @Test
+    @DisplayName("POST — 요약·키워드를 서비스로 그대로 넘긴다")
+    void submit_forwardsEnrichmentFields() throws Exception {
+        mvc.perform(post("/curated/submissions").with(csrf()).with(user(PRINCIPAL))
+                        .param("title", "제목").param("body", "본문")
+                        .param("summary", "한 줄 요약").param("keywords", "배포, 인프라"))
+                .andExpect(status().is3xxRedirection());
+
+        verify(service).submit(USER, "제목", "본문", List.of(), null, null, "한 줄 요약", "배포, 인프라");
+    }
+
+    /** 검증 실패에서 초안을 되돌릴 때 이 둘도 함께여야 한다 — 아니면 자동 생성을 다시 눌러야 한다. */
+    @Test
+    @DisplayName("POST — 검증 실패 시 요약·키워드 초안도 함께 되돌려준다")
+    void submit_returnsEnrichmentDraftOnFailure() throws Exception {
+        org.mockito.Mockito.doThrow(new IllegalArgumentException("본문을 입력해 주세요."))
+                .when(service).submit(anyString(), anyString(), anyString(), any(), any(), any(), any(), any());
+
+        mvc.perform(post("/curated/submissions").with(csrf()).with(user(PRINCIPAL))
+                        .param("title", "제목").param("body", "본문")
+                        .param("summary", "요약 초안").param("keywords", "키워드 초안"))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(flash().attribute("draftSummary", "요약 초안"))
+                .andExpect(flash().attribute("draftKeywords", "키워드 초안"));
+    }
+
+    @Test
+    @DisplayName("POST /enrich — 본문과 현재 값을 넘기고 결과를 그대로 돌려준다")
+    void enrich_returnsGeneratedFields() throws Exception {
+        when(service.enrich("본문", "", "")).thenReturn(
+                new CuratedSubmissionService.Enrichment("생성된 요약", "생성된 키워드", true));
+
+        mvc.perform(post("/curated/submissions/enrich").with(csrf()).with(user(PRINCIPAL))
+                        .contentType("application/json")
+                        .content("{\"body\":\"본문\",\"summary\":\"\",\"keywords\":\"\"}"))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("생성된 요약")))
+                .andExpect(content().string(containsString("생성된 키워드")));
+
+        verify(service).enrich("본문", "", "");
+    }
+
+    @Test
+    @DisplayName("POST /enrich — 본문이 없으면 400 + 메시지 (오프캔버스가 그대로 렌더한다)")
+    void enrich_blankBody_returns400() throws Exception {
+        when(service.enrich(any(), any(), any()))
+                .thenThrow(new IllegalArgumentException("본문을 먼저 입력해 주세요."));
+
+        mvc.perform(post("/curated/submissions/enrich").with(csrf()).with(user(PRINCIPAL))
+                        .contentType("application/json").content("{\"body\":\"  \"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(content().string(containsString("본문을 먼저 입력해 주세요.")));
     }
 
     @Test
@@ -147,7 +221,7 @@ class CuratedSubmissionControllerTest {
                         .param("sourceThreadId", "t1").param("sourceTurnId", "42"))
                 .andExpect(status().is3xxRedirection());
 
-        verify(service).submit(USER, "제목", "본문", List.of(), "t1", 42L);
+        verify(service).submit(USER, "제목", "본문", List.of(), "t1", 42L, null, null);
     }
 
     @Test
@@ -192,21 +266,21 @@ class CuratedSubmissionControllerTest {
     @Test
     @DisplayName("POST /{id} — 저장은 200, 이미 처리된 제안은 409, 검증 실패는 400 + 메시지")
     void update_reportsOutcomeInline() throws Exception {
-        when(service.updateByAuthor(anyLong(), anyString(), anyString(), anyString(), any()))
+        when(service.updateByAuthor(anyLong(), anyString(), anyString(), anyString(), any(), any(), any()))
                 .thenReturn(true);
         mvc.perform(post("/curated/submissions/1").with(csrf()).with(user(PRINCIPAL))
                         .contentType("application/json")
                         .content("{\"title\":\"제목\",\"body\":\"본문\",\"tags\":\"인프라\"}"))
                 .andExpect(status().isOk());
-        verify(service).updateByAuthor(1L, USER, "제목", "본문", List.of("인프라"));
+        verify(service).updateByAuthor(1L, USER, "제목", "본문", List.of("인프라"), null, null);
 
-        when(service.updateByAuthor(anyLong(), anyString(), anyString(), anyString(), any()))
+        when(service.updateByAuthor(anyLong(), anyString(), anyString(), anyString(), any(), any(), any()))
                 .thenReturn(false);
         mvc.perform(post("/curated/submissions/1").with(csrf()).with(user(PRINCIPAL))
                         .contentType("application/json").content("{\"title\":\"제목\",\"body\":\"본문\"}"))
                 .andExpect(status().isConflict());
 
-        when(service.updateByAuthor(anyLong(), anyString(), anyString(), anyString(), any()))
+        when(service.updateByAuthor(anyLong(), anyString(), anyString(), anyString(), any(), any(), any()))
                 .thenThrow(new IllegalArgumentException("제목이 너무 깁니다"));
         mvc.perform(post("/curated/submissions/1").with(csrf()).with(user(PRINCIPAL))
                         .contentType("application/json").content("{\"title\":\"제목\",\"body\":\"본문\"}"))
@@ -263,7 +337,7 @@ class CuratedSubmissionControllerTest {
     @Test
     @DisplayName("POST — 검증 실패 시 오류 메시지와 입력 초안을 되돌려준다 (JSON 오류가 아니라 플래시)")
     void submit_validationFailure_returnsDraft() throws Exception {
-        when(service.submit(anyString(), anyString(), anyString(), any(), any(), any()))
+        when(service.submit(anyString(), anyString(), anyString(), any(), any(), any(), any(), any()))
                 .thenThrow(new IllegalArgumentException("본문이 너무 깁니다 (최대 800자, 입력: 900자)"));
 
         mvc.perform(post("/curated/submissions").with(csrf()).with(user(PRINCIPAL))

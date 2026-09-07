@@ -64,11 +64,12 @@ class CuratedQaChunkingTest {
                 null, null, null, null, null, null, false, 0, null, 1));
 
         service = new CuratedQaService(repository, threadMetaService, vectorStore,
-                new ChunkSplitter(), props);
+                new ChunkSplitter(), props,
+                mock(com.example.ragagent.ingestion.KeywordSearchRepository.class));
 
         when(threadMetaService.findById(UID, TID)).thenReturn(Optional.of(
                 new ThreadMeta(TID, UID, "제목", "v1", "2026-01-01", "2026-01-01", "COST_FIRST", "")));
-        when(repository.upsertActive(anyLong(), any(), any(), any(), any(), any(), any(), any()))
+        when(repository.upsertActive(anyLong(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(CURATED_ID);
     }
 
@@ -82,8 +83,8 @@ class CuratedQaChunkingTest {
         when(repository.findById(CURATED_ID)).thenReturn(Optional.of(
                 new CuratedQaRepository.CuratedQa(CURATED_ID, TURN_ID, UID, TID, "질문", answer,
                         "active", "v1", "2026-01-01", "2026-01-01", "ok",
-                        CuratedQaRepository.ORIGIN_LIKE, 7L, null, existingChunkCount)));
-        service.createFromLikedTurn(7L, TURN_ID, UID, TID, "질문", answer, null);
+                        CuratedQaRepository.ORIGIN_LIKE, 7L, null, existingChunkCount, null, null)));
+        service.createFromLikedTurn(7L, TURN_ID, UID, TID, "질문", answer, null, null, null);
     }
 
     private List<Document> capturedDocs() {
@@ -102,8 +103,8 @@ class CuratedQaChunkingTest {
         List<Document> docs = capturedDocs();
         assertThat(docs).hasSizeGreaterThan(1);
         // DB 스냅샷은 여전히 turn 당 한 행 — upsertActive 1회, insertManual 없음.
-        verify(repository).upsertActive(eq(TURN_ID), any(), any(), any(), any(), any(), any(), any());
-        verify(repository, never()).insertManual(anyLong(), any(), any(), any(), any());
+        verify(repository).upsertActive(eq(TURN_ID), any(), any(), any(), any(), any(), any(), any(), any(), any());
+        verify(repository, never()).insertManual(anyLong(), any(), any(), any(), any(), any(), any());
         // 나뉜 개수가 기록되어야 de-index 가 모든 벡터를 찾을 수 있다.
         verify(repository, timeout(2000)).updateChunkCount(CURATED_ID, docs.size());
     }
@@ -175,7 +176,7 @@ class CuratedQaChunkingTest {
         when(repository.findBySourceTurnId(TURN_ID)).thenReturn(Optional.of(
                 new CuratedQaRepository.CuratedQa(CURATED_ID, TURN_ID, UID, TID, "질문", "답변",
                         "active", "v1", "2026-01-01", "2026-01-01", "ok",
-                        CuratedQaRepository.ORIGIN_LIKE, null, null, 3)));
+                        CuratedQaRepository.ORIGIN_LIKE, null, null, 3, null, null)));
 
         service.onTurnDeleted(UID, TID, TURN_ID);
 

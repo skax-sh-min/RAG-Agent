@@ -47,7 +47,7 @@ class CuratedQaRepositoryTest {
     @Test
     @DisplayName("upsertActive — 신규 turn → insert 후 active 상태로 조회된다")
     void upsertActive_insertsNewRow() {
-        long id = repo.upsertActive(1L, "u1", "t1", "질문", "답변", "latest", null, null);
+        long id = repo.upsertActive(1L, "u1", "t1", "질문", "답변", "latest", null, null, null, null);
 
         Optional<CuratedQaRepository.CuratedQa> row = repo.findById(id);
         assertThat(row).isPresent();
@@ -63,11 +63,11 @@ class CuratedQaRepositoryTest {
     @Test
     @DisplayName("upsertActive — 같은 turn 재호출 시 중복 insert 없이 재활성화·내용 갱신된다")
     void upsertActive_reactivatesExistingRowInsteadOfDuplicating() {
-        long firstId = repo.upsertActive(1L, "u1", "t1", "원래 질문", "원래 답변", "v1", null, null);
+        long firstId = repo.upsertActive(1L, "u1", "t1", "원래 질문", "원래 답변", "v1", null, null, null, null);
         repo.deactivate(1L);
         assertThat(repo.findById(firstId).orElseThrow().status()).isEqualTo("inactive");
 
-        long secondId = repo.upsertActive(1L, "u1", "t1", "수정된 질문", "수정된 답변", "v2", null, null);
+        long secondId = repo.upsertActive(1L, "u1", "t1", "수정된 질문", "수정된 답변", "v2", null, null, null, null);
 
         assertThat(secondId).isEqualTo(firstId); // same row reused, not a new one
         CuratedQaRepository.CuratedQa row = repo.findById(firstId).orElseThrow();
@@ -80,7 +80,7 @@ class CuratedQaRepositoryTest {
     @Test
     @DisplayName("deactivate — status=inactive로 전환하고 스냅샷은 그대로 보존한다")
     void deactivate_flipsStatusButKeepsSnapshot() {
-        repo.upsertActive(1L, "u1", "t1", "질문", "답변", "latest", null, null);
+        repo.upsertActive(1L, "u1", "t1", "질문", "답변", "latest", null, null, null, null);
 
         repo.deactivate(1L);
 
@@ -107,7 +107,7 @@ class CuratedQaRepositoryTest {
     @Test
     @DisplayName("§10.10 step④ — updateAnswer는 answer만 갱신하고 question/status는 보존한다")
     void updateAnswer_updatesAnswerOnlyKeepsRest() {
-        long id = repo.upsertActive(1L, "u1", "t1", "질문", "원래 답변", "latest", null, null);
+        long id = repo.upsertActive(1L, "u1", "t1", "질문", "원래 답변", "latest", null, null, null, null);
 
         repo.updateAnswer(id, "수정된 답변");
 
@@ -120,9 +120,9 @@ class CuratedQaRepositoryTest {
     @Test
     @DisplayName("§10.10 step④ — findAllActive는 active 항목만, 최신(id 역순)으로 반환한다")
     void findAllActive_returnsOnlyActiveNewestFirst() {
-        long older = repo.upsertActive(1L, "u1", "t1", "질문1", "답변1", "latest", null, null);
-        long newer = repo.upsertActive(2L, "u1", "t1", "질문2", "답변2", "latest", null, null);
-        long deactivated = repo.upsertActive(3L, "u1", "t1", "질문3", "답변3", "latest", null, null);
+        long older = repo.upsertActive(1L, "u1", "t1", "질문1", "답변1", "latest", null, null, null, null);
+        long newer = repo.upsertActive(2L, "u1", "t1", "질문2", "답변2", "latest", null, null, null, null);
+        long deactivated = repo.upsertActive(3L, "u1", "t1", "질문3", "답변3", "latest", null, null, null, null);
         repo.deactivate(3L);
 
         List<CuratedQaRepository.CuratedQa> active = repo.findAllActive(50);
@@ -135,9 +135,9 @@ class CuratedQaRepositoryTest {
     @Test
     @DisplayName("§10.10 step④ — findAllActive(offset, limit)로 페이지네이션한다")
     void findAllActive_paginated() {
-        long first  = repo.upsertActive(1L, "u1", "t1", "질문1", "답변1", "latest", null, null);
-        long second = repo.upsertActive(2L, "u1", "t1", "질문2", "답변2", "latest", null, null);
-        long third  = repo.upsertActive(3L, "u1", "t1", "질문3", "답변3", "latest", null, null);
+        long first  = repo.upsertActive(1L, "u1", "t1", "질문1", "답변1", "latest", null, null, null, null);
+        long second = repo.upsertActive(2L, "u1", "t1", "질문2", "답변2", "latest", null, null, null, null);
+        long third  = repo.upsertActive(3L, "u1", "t1", "질문3", "답변3", "latest", null, null, null, null);
 
         List<Long> page1 = repo.findAllActive(0, 2).stream().map(CuratedQaRepository.CuratedQa::id).toList();
         List<Long> page2 = repo.findAllActive(2, 2).stream().map(CuratedQaRepository.CuratedQa::id).toList();
@@ -149,7 +149,7 @@ class CuratedQaRepositoryTest {
     @Test
     @DisplayName("§10.10 embedding-fallback — 신규 행은 embed_status='ok'로 시작한다")
     void newRow_defaultsToEmbedStatusOk() {
-        long id = repo.upsertActive(1L, "u1", "t1", "질문", "답변", "latest", null, null);
+        long id = repo.upsertActive(1L, "u1", "t1", "질문", "답변", "latest", null, null, null, null);
 
         assertThat(repo.findById(id).orElseThrow().embedStatus()).isEqualTo("ok");
     }
@@ -157,7 +157,7 @@ class CuratedQaRepositoryTest {
     @Test
     @DisplayName("§10.10 embedding-fallback — markEmbedFailed/markEmbedOk가 embed_status를 전환한다")
     void markEmbedFailedAndOk_flipEmbedStatus() {
-        long id = repo.upsertActive(1L, "u1", "t1", "질문", "답변", "latest", null, null);
+        long id = repo.upsertActive(1L, "u1", "t1", "질문", "답변", "latest", null, null, null, null);
 
         repo.markEmbedFailed(id);
         assertThat(repo.findById(id).orElseThrow().embedStatus()).isEqualTo("failed");

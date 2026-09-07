@@ -67,6 +67,8 @@ public class CuratedSubmissionController {
         model.addAttribute("pageSize", PAGE_SIZE);
         model.addAttribute("chunkSize", service.chunkSizeForBody());
         model.addAttribute("maxTitleLength", CuratedSubmissionService.MAX_TITLE_LEN);
+        model.addAttribute("maxSummaryLength", CuratedSubmissionService.MAX_SUMMARY_LEN);
+        model.addAttribute("maxKeywordsLength", CuratedSubmissionService.MAX_KEYWORDS_LEN);
         model.addAttribute("maxTags", com.example.ragagent.model.TagUtils.MAX_TAGS);
         model.addAttribute("maxImages", CuratedImageStore.MAX_IMAGES_PER_SUBMISSION);
         if (fromThread != null && fromTurn != null) {
@@ -107,13 +109,15 @@ public class CuratedSubmissionController {
     public String submit(@RequestParam String title,
                          @RequestParam String body,
                          @RequestParam(required = false) String tags,
+                         @RequestParam(required = false) String summary,
+                         @RequestParam(required = false) String keywords,
                          @RequestParam(required = false) String sourceThreadId,
                          @RequestParam(required = false) Long sourceTurnId,
                          RedirectAttributes flash) {
         try {
             service.submit(currentUser.userId(), title, body,
                     com.example.ragagent.model.TagUtils.parseTagList(tags),
-                    sourceThreadId, sourceTurnId);
+                    sourceThreadId, sourceTurnId, summary, keywords);
             flash.addFlashAttribute("submitSuccess",
                     "제안이 등록되었습니다. 관리자가 검토 후 임베딩을 실행하면 검색에 반영됩니다.");
         } catch (IllegalArgumentException e) {
@@ -122,6 +126,8 @@ public class CuratedSubmissionController {
             flash.addFlashAttribute("draftTitle", title);
             flash.addFlashAttribute("draftBody", body);
             flash.addFlashAttribute("draftTags", tags);
+            flash.addFlashAttribute("draftSummary", summary);
+            flash.addFlashAttribute("draftKeywords", keywords);
             // 출처 턴도 함께 되돌린다 — 안 그러면 재제출에서 좋아요 출신이라는 사실이 조용히
             // 사라져 손으로 쓴 제안이 되고, 관리자는 [DN] 표기 없이 검토하게 된다.
             flash.addFlashAttribute("draftSourceThreadId", sourceThreadId);
@@ -181,6 +187,8 @@ public class CuratedSubmissionController {
                         "title",    s.title(),
                         "body",     s.body(),
                         "tags",     s.tags() == null ? "" : s.tags(),
+                        "summary",  s.summary()  == null ? "" : s.summary(),
+                        "keywords", s.keywords() == null ? "" : s.keywords(),
                         "status",   s.displayStatus(),
                         // 수정·철회가 가능한 상태인가. 반려·철회된 제안은 읽기 전용이다.
                         "editable", s.isPending()
@@ -201,11 +209,40 @@ public class CuratedSubmissionController {
         String text  = body.get("body")  instanceof String s ? s : null;
         List<String> tags = com.example.ragagent.model.TagUtils.parseTagList(
                 body.get("tags") instanceof String s ? s : null);
+        String summary  = body.get("summary")  instanceof String s ? s : null;
+        String keywords = body.get("keywords") instanceof String s ? s : null;
         try {
-            boolean ok = service.updateByAuthor(id, currentUser.userId(), title, text, tags);
+            boolean ok = service.updateByAuthor(id, currentUser.userId(), title, text, tags,
+                    summary, keywords);
             return ok ? ResponseEntity.ok(Map.<String, Object>of("status", "pending"))
                       : ResponseEntity.status(409).body(Map.<String, Object>of(
                             "message", "이미 처리된 제안은 수정할 수 없습니다."));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(Map.<String, Object>of("message", e.getMessage()));
+        }
+    }
+
+    /**
+     * "빈 칸 자동 생성" — 본문에서 요약·키워드를 LLM 한 번으로 만든다.
+     *
+     * <p>현재 입력값을 함께 받아 <b>비어 있는 칸만</b> 채운다. 판정을 서버에서 하는 이유는
+     * {@code CuratedSubmissionService.enrich} 에 적어 두었다. 게스트도 부를 수 있는 경로라
+     * 남용 대상이 되는데, 그 방어는 여기 있지 않다 — {@code RateLimitFilter} 의 {@code default}
+     * 버킷(분당 120)이 이 경로에도 걸리고, LLM 호출 자체는 {@code LlmRouter} 의 동시성 게이트를
+     * 지난다. 그래서 여기서는 본문이 비었는지만 보고 나머지는 공유 장치에 맡긴다.
+     */
+    @PostMapping("/enrich")
+    @ResponseBody
+    public ResponseEntity<Map<String, Object>> enrich(@RequestBody Map<String, Object> req) {
+        String body     = req.get("body")     instanceof String s ? s : null;
+        String summary  = req.get("summary")  instanceof String s ? s : null;
+        String keywords = req.get("keywords") instanceof String s ? s : null;
+        try {
+            CuratedSubmissionService.Enrichment out = service.enrich(body, summary, keywords);
+            return ResponseEntity.ok(Map.<String, Object>of(
+                    "summary",   out.summary(),
+                    "keywords",  out.keywords(),
+                    "llmCalled", out.llmCalled()));
         } catch (IllegalArgumentException e) {
             return ResponseEntity.badRequest().body(Map.<String, Object>of("message", e.getMessage()));
         }

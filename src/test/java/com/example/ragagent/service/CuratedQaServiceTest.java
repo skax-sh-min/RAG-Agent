@@ -64,7 +64,8 @@ class CuratedQaServiceTest {
         threadMetaService = mock(ThreadMetaService.class);
         vectorStore = mock(VectorStoreFacade.class);
         service = new CuratedQaService(repository, threadMetaService, vectorStore,
-                new com.example.ragagent.ingestion.ChunkSplitter(), splitProps());
+                new com.example.ragagent.ingestion.ChunkSplitter(), splitProps(),
+                mock(com.example.ragagent.ingestion.KeywordSearchRepository.class));
 
         when(threadMetaService.findById(UID, TID)).thenReturn(Optional.of(
                 new ThreadMeta(TID, UID, "제목", "v1", "2026-01-01", "2026-01-01", "COST_FIRST", "")));
@@ -78,18 +79,18 @@ class CuratedQaServiceTest {
      * 행이다. 각 테스트가 검증하려는 본문은 그쪽에 둔다.
      */
     private void approve() {
-        service.createFromLikedTurn(SUBMISSION_ID, TURN_ID, UID, TID, "질문", "본문", null);
+        service.createFromLikedTurn(SUBMISSION_ID, TURN_ID, UID, TID, "질문", "본문", null, null, null);
     }
 
     private static CuratedQaRepository.CuratedQa curatedQa(long id, String status, String question, String answer) {
         return new CuratedQaRepository.CuratedQa(id, TURN_ID, UID, TID, question, answer, status, "v1",
-                "2026-01-01", "2026-01-01", "ok", CuratedQaRepository.ORIGIN_LIKE, null, null, 1);
+                "2026-01-01", "2026-01-01", "ok", CuratedQaRepository.ORIGIN_LIKE, null, null, 1, null, null);
     }
 
     @Test
     @DisplayName("승인 — curated 네임스페이스로 임베딩한다 (저장 텍스트에서 '## 참고'는 빠진다)")
     void approve_embedsIntoCuratedNamespace() {
-        when(repository.upsertActive(anyLong(), any(), any(), any(), any(), any(), any(), any())).thenReturn(1L);
+        when(repository.upsertActive(anyLong(), any(), any(), any(), any(), any(), any(), any(), any(), any())).thenReturn(1L);
         when(repository.findById(1L)).thenReturn(Optional.of(
                 curatedQa(1L, "active", "질문", "답변\n\n## 참고\n- [파일.docx | p.1] (섹션)")));
 
@@ -113,7 +114,7 @@ class CuratedQaServiceTest {
     @DisplayName("승인 — 임베딩용 SEARCH_TEXT 는 '## 요약'도 제외한다")
     void approve_embedTextExcludesSummaryToo() {
         String fullAnswer = "## 요약\n핵심 한 줄 요약.\n\n## 상세 설명\n자세한 설명입니다.\n\n## 참고\n- [파일.docx | p.1]";
-        when(repository.upsertActive(anyLong(), any(), any(), any(), any(), any(), any(), any())).thenReturn(1L);
+        when(repository.upsertActive(anyLong(), any(), any(), any(), any(), any(), any(), any(), any(), any())).thenReturn(1L);
         when(repository.findById(1L)).thenReturn(Optional.of(curatedQa(1L, "active", "질문", fullAnswer)));
 
         approve();
@@ -171,7 +172,7 @@ class CuratedQaServiceTest {
     private static CuratedQaRepository.CuratedQa curatedRow(long id, long turnId, int chunkCount) {
         return new CuratedQaRepository.CuratedQa(id, turnId, UID, TID, "질문" + id, "답변" + id,
                 "active", "v1", "2026-01-01", "2026-01-01", "ok",
-                CuratedQaRepository.ORIGIN_LIKE, null, null, chunkCount);
+                CuratedQaRepository.ORIGIN_LIKE, null, null, chunkCount, null, null);
     }
 
     @Test
@@ -286,7 +287,7 @@ class CuratedQaServiceTest {
     @Test
     @DisplayName("embed — 전체 텍스트 임베딩이 바로 성공하면 재시도 없이 markEmbedOk")
     void embed_fullTextSucceeds_singleCallAndMarksOk() {
-        when(repository.upsertActive(anyLong(), any(), any(), any(), any(), any(), any(), any())).thenReturn(1L);
+        when(repository.upsertActive(anyLong(), any(), any(), any(), any(), any(), any(), any(), any(), any())).thenReturn(1L);
         when(repository.findById(1L)).thenReturn(Optional.of(curatedQa(1L, "active", "질문", RAG_FORMAT_ANSWER)));
 
         approve();
@@ -299,7 +300,7 @@ class CuratedQaServiceTest {
     @Test
     @DisplayName("embed — 전체 임베딩 실패 시 상세 섹션만으로 재시도해 성공하면 markEmbedOk")
     void embed_fullTextFails_retriesWithCoreSectionsAndSucceeds() {
-        when(repository.upsertActive(anyLong(), any(), any(), any(), any(), any(), any(), any())).thenReturn(1L);
+        when(repository.upsertActive(anyLong(), any(), any(), any(), any(), any(), any(), any(), any(), any())).thenReturn(1L);
         when(repository.findById(1L)).thenReturn(Optional.of(curatedQa(1L, "active", "질문", RAG_FORMAT_ANSWER)));
         doThrow(new RuntimeException("input too long")).doNothing()
                 .when(vectorStore).add(any(), any(), any());
@@ -319,7 +320,7 @@ class CuratedQaServiceTest {
     @Test
     @DisplayName("embed — 크기 사다리(2×/1.5×/1×)와 핵심 섹션 재시도까지 모두 실패하면 markEmbedFailed")
     void embed_bothAttemptsFail_marksFailed() {
-        when(repository.upsertActive(anyLong(), any(), any(), any(), any(), any(), any(), any())).thenReturn(1L);
+        when(repository.upsertActive(anyLong(), any(), any(), any(), any(), any(), any(), any(), any(), any())).thenReturn(1L);
         when(repository.findById(1L)).thenReturn(Optional.of(curatedQa(1L, "active", "질문", RAG_FORMAT_ANSWER)));
         doThrow(new RuntimeException("input too long")).when(vectorStore).add(any(), any(), any());
 
@@ -335,7 +336,7 @@ class CuratedQaServiceTest {
     @DisplayName("embed — '## 상세 설명'이 없으면(Direct 모드 등) 크기 사다리만 돌고 핵심 섹션 재시도는 생략")
     void embed_noCoreSectionFallback_failsWithoutRetry() {
         String directAnswer = "안녕하세요! 무엇을 도와드릴까요?";
-        when(repository.upsertActive(anyLong(), any(), any(), any(), any(), any(), any(), any())).thenReturn(1L);
+        when(repository.upsertActive(anyLong(), any(), any(), any(), any(), any(), any(), any(), any(), any())).thenReturn(1L);
         when(repository.findById(1L)).thenReturn(Optional.of(curatedQa(1L, "active", "질문", directAnswer)));
         doThrow(new RuntimeException("input too long")).when(vectorStore).add(any(), any(), any());
 
