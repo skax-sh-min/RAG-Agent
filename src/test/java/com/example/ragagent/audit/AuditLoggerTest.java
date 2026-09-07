@@ -7,6 +7,7 @@ import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import com.example.ragagent.LogbackTestSupport;
 import com.example.ragagent.config.AppProperties;
+import com.example.ragagent.security.ClientIpResolver;
 import com.example.ragagent.security.CurrentUser;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.AfterEach;
@@ -45,14 +46,17 @@ class AuditLoggerTest {
         currentUser = mock(CurrentUser.class);
         when(currentUser.userId()).thenReturn("user-test");
 
-        AppProperties props = new AppProperties(
+        logger = new AuditLogger(new ObjectMapper(), propsFor(true), currentUser, new ClientIpResolver(false));
+    }
+
+    /** 감사만 켜고 나머지는 기본값인 최소 설정 — 이 테스트가 보는 것은 audit 블록뿐이다. */
+    private static AppProperties propsFor(boolean auditEnabled) {
+        return new AppProperties(
             "./data", 2, 800, 100, 100, 7, 0.0, true, 0, false,
                 true, false, 3,
                 null, null, null, null, null, null, null,
-                new AppProperties.AuditConfig(true, "10MB", 7, "100MB"), null, null, null, null, null, null,
+                new AppProperties.AuditConfig(auditEnabled, "10MB", 7, "100MB"), null, null, null, null, null, null,
                 null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null);
-
-        logger = new AuditLogger(new ObjectMapper(), props, currentUser);
     }
 
     @AfterEach
@@ -96,13 +100,8 @@ class AuditLoggerTest {
     @Test
     @DisplayName("enabled=false → 아무것도 기록 안 함")
     void log_disabled_writesNothing() {
-        AppProperties disabledProps = new AppProperties(
-            "./data", 2, 800, 100, 100, 7, 0.0, true, 0, false,
-                true, false, 3,
-                null, null, null, null, null, null, null,
-                new AppProperties.AuditConfig(false, "10MB", 7, "100MB"), null, null, null, null, null, null,
-                null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null);
-        AuditLogger disabledLogger = new AuditLogger(new ObjectMapper(), disabledProps, currentUser);
+        AuditLogger disabledLogger = new AuditLogger(new ObjectMapper(), propsFor(false), currentUser,
+                new ClientIpResolver(false));
 
         disabledLogger.log("document.upload", "doc-3");
 
@@ -120,6 +119,57 @@ class AuditLoggerTest {
         assertThat(propsWithNull.auditSafe().enabled()).isTrue();
         assertThat(propsWithNull.auditSafe().maxHistoryDays()).isEqualTo(7);
         assertThat(propsWithNull.auditSafe().maxFileSize()).isEqualTo("10MB");
+    }
+
+    /**
+     * 감사 기록의 IP 는 {@link ClientIpResolver} 를 지나야 한다. 예전에는 여기서만
+     * {@code X-Forwarded-For} 를 무조건 신뢰해서, 프록시가 없는 배포(= {@code trust-forwarded-for}
+     * 가 {@code false} 인 정상 설정)에서 "누가 했는가"를 남기는 필드가 공격자 입력이었다.
+     */
+    @Test
+    @DisplayName("trust-forwarded-for=false — 위조된 X-Forwarded-For 대신 실제 remoteAddr 를 기록")
+    void log_ignoresForgedForwardedForByDefault() {
+        var req = new org.springframework.mock.web.MockHttpServletRequest("POST", "/ui/documents/upload");
+        req.addHeader("X-Forwarded-For", "203.0.113.9");
+        req.setRemoteAddr("10.0.0.7");
+        org.springframework.web.context.request.RequestContextHolder.setRequestAttributes(
+                new org.springframework.web.context.request.ServletRequestAttributes(req));
+        try {
+            logger.log("document.upload", "doc-9");
+        } finally {
+            org.springframework.web.context.request.RequestContextHolder.resetRequestAttributes();
+        }
+
+        String msg = listAppender.list.getFirst().getMessage();
+        assertThat(msg).contains("\"ip\":\"10.0.0.7\"");
+        assertThat(msg).doesNotContain("203.0.113.9");
+    }
+
+    @Test
+    @DisplayName("trust-forwarded-for=true — 프록시 뒤에서는 XFF 첫 번째 IP 를 기록")
+    void log_usesForwardedForWhenTrusted() {
+        AuditLogger trusting = new AuditLogger(new ObjectMapper(), propsFor(true), currentUser,
+                new ClientIpResolver(true));
+        var req = new org.springframework.mock.web.MockHttpServletRequest("POST", "/ui/documents/upload");
+        req.addHeader("X-Forwarded-For", "203.0.113.9, 10.0.0.1");
+        req.setRemoteAddr("10.0.0.1");
+        org.springframework.web.context.request.RequestContextHolder.setRequestAttributes(
+                new org.springframework.web.context.request.ServletRequestAttributes(req));
+        try {
+            trusting.log("document.upload", "doc-9");
+        } finally {
+            org.springframework.web.context.request.RequestContextHolder.resetRequestAttributes();
+        }
+
+        assertThat(listAppender.list.getFirst().getMessage()).contains("\"ip\":\"203.0.113.9\"");
+    }
+
+    @Test
+    @DisplayName("요청 스레드 밖(가상 스레드)에서는 ip 키가 아예 없다")
+    void log_outsideRequestThread_hasNoIpKey() {
+        logger.log("document.sync", null);
+
+        assertThat(listAppender.list.getFirst().getMessage()).doesNotContain("\"ip\"");
     }
 
     @Test
