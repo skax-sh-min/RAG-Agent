@@ -179,7 +179,15 @@ public class AdminController {
                                               @RequestParam String collection,
                                               @RequestBody(required = false) Map<String, Object> body) {
         boolean regenerateKeywords = body != null && Boolean.TRUE.equals(body.get("regenerateKeywords"));
-        boolean ok = adminService.reindexChunk(collection, chunkId, regenerateKeywords);
+        // 축마다 검색 텍스트를 만드는 규칙이 다르다. 큐레이션 청크를 문서 청크용 경로로 보내면
+        // 질문이 빠진 채 재임베딩된다(AdminService.reindexChunk 의 가드 주석 참고) — 그래서
+        // 여기서 갈라 각자의 규칙을 소유한 서비스로 보낸다. 두 서비스를 이미 들고 있는 것이
+        // 이 컨트롤러이므로 어느 쪽에도 새 의존을 만들지 않는다.
+        AdminService.ChunkRow row = adminService.getChunk(collection, chunkId);
+        if (row == null) return ResponseEntity.notFound().build();
+        boolean ok = row.curatedRowId().isPresent()
+                ? curatedQaService.reembedRow(row.curatedRowId().getAsLong(), "admin-reindex")
+                : adminService.reindexChunk(collection, chunkId, regenerateKeywords);
         return ok ? ResponseEntity.ok().build() : ResponseEntity.notFound().build();
     }
 

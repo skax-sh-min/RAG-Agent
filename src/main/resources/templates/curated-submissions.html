@@ -168,6 +168,41 @@
                     </div>
                 </div>
 
+                <!-- 요약·키워드 — 승인되면 MetaKey.CHUNK_CONTEXT / EXCERPT_KEYWORDS 로 실려
+                     /admin 청크 화면의 같은 이름 칸에 그대로 보인다. 키워드는 chunk_fts 의
+                     전용 컬럼으로 들어가 BM25 축이 실제로 읽고, 요약은 그 축의 검색 텍스트
+                     앞에 붙는다(CuratedQaService.ftsDocument). 즉 여기 쓰는 값이 검색에
+                     반영된다 — 화면을 채우려고 있는 칸이 아니다. -->
+                <div class="mb-3">
+                    <div class="d-flex align-items-center flex-wrap gap-2 mb-1">
+                        <label class="form-label small fw-semibold mb-0" for="submission-summary"
+                               th:text="#{submission.field.enrich}">요약 · 키워드</label>
+                        <!-- 이미 쓴 칸은 절대 덮지 않는다(판정은 서버) — 버튼 라벨이 그렇게 약속한다. -->
+                        <button type="button" class="btn btn-outline-secondary btn-sm py-0 px-2"
+                                id="submission-enrich-btn" style="font-size:0.75rem;"
+                                th:title="#{submission.enrich.hint}">
+                            <i class="bi bi-magic me-1"></i>
+                            <span th:text="#{submission.enrich.btn}">빈 칸 자동 생성</span>
+                        </button>
+                        <span id="submission-enrich-note" class="small text-muted"></span>
+                    </div>
+                    <textarea class="form-control form-control-sm mb-2" id="submission-summary"
+                              name="summary" rows="2" style="font-size:0.85rem; resize:vertical;"
+                              th:maxlength="${maxSummaryLength}"
+                              th:text="${draftSummary}"
+                              th:placeholder="#{submission.field.summary.placeholder}"></textarea>
+                    <div class="input-group input-group-sm">
+                        <span class="input-group-text"><i class="bi bi-key"></i></span>
+                        <input type="text" class="form-control" id="submission-keywords" name="keywords"
+                               autocomplete="off" th:maxlength="${maxKeywordsLength}"
+                               th:value="${draftKeywords}"
+                               th:placeholder="#{submission.field.keywords.placeholder}"/>
+                    </div>
+                    <div class="form-text small" th:text="#{submission.field.enrich.hint}">
+                        비워 두어도 등록됩니다. 채우면 키워드 검색에 함께 반영됩니다.
+                    </div>
+                </div>
+
                 <button type="submit" class="btn btn-primary btn-sm">
                     <i class="bi bi-send me-1"></i><span th:text="#{submission.btn.submit}">등록</span>
                 </button>
@@ -397,6 +432,53 @@
     }
 })();
 
+/* "빈 칸 자동 생성" — 본문에서 요약·키워드를 LLM 한 번으로 만든다.
+
+   작성 폼과 수정 오프캔버스가 같은 함수를 쓴다: 두 화면이 같은 두 칸을 편집하므로 규칙이
+   갈리면 한쪽만 고쳐진다(요약/키워드 필드를 도입한 이유 자체가 그 두 칸의 단일 출처다).
+   "비어 있는 칸만 채운다"는 판정은 여기서 하지 않는다 — 현재 값을 그대로 보내고 서버가
+   정한다. 그래야 규칙의 출처가 하나다(CuratedSubmissionService.enrich). */
+function wireEnrichButton(btnId, bodyId, summaryId, keywordsId, noteId) {
+    const btn = document.getElementById(btnId);
+    const body = document.getElementById(bodyId);
+    const summary = document.getElementById(summaryId);
+    const keywords = document.getElementById(keywordsId);
+    const note = noteId ? document.getElementById(noteId) : null;
+    if (!btn || !body || !summary || !keywords) return;
+
+    btn.addEventListener('click', () => {
+        const original = btn.innerHTML;
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>생성 중…';
+        if (note) note.textContent = '';
+        fetch('/curated/submissions/enrich', {
+            method: 'POST',
+            headers: Object.assign({ 'Content-Type': 'application/json' }, getCsrfHeaders()),
+            body: JSON.stringify({
+                body: body.value, summary: summary.value, keywords: keywords.value
+            })
+        })
+            .then(async r => {
+                let d = {};
+                try { d = await r.json(); } catch (e) { /* 비-JSON 오류 응답 */ }
+                if (!r.ok) throw new Error(d.message || '');
+                return d;
+            })
+            .then(d => {
+                summary.value = d.summary || summary.value;
+                keywords.value = d.keywords || keywords.value;
+                if (note) {
+                    note.textContent = d.llmCalled ? '' : '두 칸이 이미 채워져 있어 그대로 두었습니다.';
+                }
+            })
+            .catch(e => showToast(e.message || '자동 생성에 실패했습니다.', 'danger'))
+            .finally(() => { btn.disabled = false; btn.innerHTML = original; });
+    });
+}
+
+wireEnrichButton('submission-enrich-btn', 'submission-body',
+                 'submission-summary', 'submission-keywords', 'submission-enrich-note');
+
 /* 본문 이미지 업로드 — 파일을 고르면 즉시 서버에 저장하고, 돌아온 [이미지: ...] 마커를
    커서 위치에 끼워 넣는다. 위치를 마커로 표현하는 덕분에 이후 편집·잘라내기·붙여넣기가
    전부 평범한 텍스트 편집으로 처리되고, 승인 시 본문을 청크로 나눌 때도 이미지가 자기가
@@ -458,6 +540,10 @@
    관리자가 새 본문을 승인할 때 교체된다(정책 3) — 오타 하나 고치는 동안 그 지식이 사라지지
    않게 하려는 것이다. 안내 문구가 그 사실을 미리 말한다. */
 const SUBMISSION_MAX_TITLE = /*[[${maxTitleLength}]]*/ 200;
+// 요약·키워드의 상한 — 서버(CuratedSubmissionService.MAX_SUMMARY_LEN/MAX_KEYWORDS_LEN)가
+// 넘치면 자르므로 여기 maxlength 는 편의이지 규칙이 아니다. 값의 출처는 서버 하나다.
+const SUBMISSION_MAX_SUMMARY  = /*[[${maxSummaryLength}]]*/ 500;
+const SUBMISSION_MAX_KEYWORDS = /*[[${maxKeywordsLength}]]*/ 300;
 
 function escHtml(s) {
     return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
@@ -496,11 +582,30 @@ function openSubmissionEdit(id) {
                               style="min-height:320px; font-size:0.82rem; resize:vertical;"
                               >${escHtml(data.body)}</textarea>
                     ${isWide ? '' : previewTogglePane('submission-edit', 320)}
-                    <div class="form-text small">
+                    <div class="form-text small mb-2">
                         저장하면 다시 검토 대기 상태가 됩니다.${wasApproved
                             ? ' 검토가 끝날 때까지 현재 등록본이 검색에 계속 사용되고, 승인 시 교체됩니다.'
                             : ''}
                     </div>
+                    <!-- 작성 폼과 같은 두 칸 — 같은 엔드포인트, 같은 "빈 칸만" 규칙(wireEnrichButton). -->
+                    <div class="d-flex align-items-center flex-wrap gap-2 mb-1">
+                        <label class="form-label small fw-semibold mb-0">요약 · 키워드</label>
+                        <button type="button" class="btn btn-outline-secondary btn-sm py-0 px-2"
+                                id="submission-edit-enrich-btn" style="font-size:0.72rem;"
+                                title="비어 있는 칸만 본문에서 자동으로 채웁니다. 이미 쓴 내용은 그대로 둡니다.">
+                            <i class="bi bi-magic me-1"></i>빈 칸 자동 생성
+                        </button>
+                        <span id="submission-edit-enrich-note" class="small text-muted"></span>
+                    </div>
+                    <textarea id="submission-edit-summary" class="form-control form-control-sm mb-2"
+                              rows="2" maxlength="${SUBMISSION_MAX_SUMMARY}"
+                              style="font-size:0.82rem; resize:vertical;"
+                              placeholder="이 내용이 무엇에 관한 것인지 1~2문장"
+                              >${escHtml(data.summary || '')}</textarea>
+                    <input id="submission-edit-keywords" type="text" class="form-control form-control-sm"
+                           maxlength="${SUBMISSION_MAX_KEYWORDS}" autocomplete="off"
+                           placeholder="핵심 키워드 2~5개 · 쉼표로 구분"
+                           value="${escHtml(data.keywords || '')}"/>
                 </div>
                 <button class="btn btn-primary btn-sm" onclick="saveSubmissionEdit(${Number(id)})">
                     <i class="bi bi-save me-1"></i>저장
@@ -522,6 +627,10 @@ function openSubmissionEdit(id) {
                 box.innerHTML = editFields;
                 wirePreviewToggle('submission-edit', 'submission-edit-body');
             }
+            // 오프캔버스는 열 때마다 innerHTML 로 다시 그려지므로 배선도 매번 다시 한다.
+            wireEnrichButton('submission-edit-enrich-btn', 'submission-edit-body',
+                             'submission-edit-summary', 'submission-edit-keywords',
+                             'submission-edit-enrich-note');
             bootstrap.Offcanvas.getOrCreateInstance(offcanvasEl).show();
         })
         .catch(() => showToast('제안을 불러올 수 없습니다.', 'danger'));
@@ -534,9 +643,11 @@ function saveSubmissionEdit(id) {
         method: 'POST',
         headers: Object.assign({ 'Content-Type': 'application/json' }, getCsrfHeaders()),
         body: JSON.stringify({
-            title: document.getElementById('submission-edit-title').value,
-            body:  document.getElementById('submission-edit-body').value,
-            tags:  document.getElementById('submission-edit-tags').value
+            title:    document.getElementById('submission-edit-title').value,
+            body:     document.getElementById('submission-edit-body').value,
+            tags:     document.getElementById('submission-edit-tags').value,
+            summary:  document.getElementById('submission-edit-summary').value,
+            keywords: document.getElementById('submission-edit-keywords').value
         })
     })
         .then(async r => {

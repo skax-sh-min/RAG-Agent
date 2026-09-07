@@ -4,7 +4,9 @@ import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.ingestion.ChunkSplitter;
 import com.example.ragagent.ingestion.CuratedTextUtils;
 import com.example.ragagent.ingestion.DocRegistry;
+import com.example.ragagent.ingestion.KeywordSearchRepository;
 import com.example.ragagent.ingestion.MarkdownNoiseNormalizer;
+import com.example.ragagent.ingestion.SearchTextBuilder;
 import com.example.ragagent.ingestion.VectorStoreFacade;
 import com.example.ragagent.model.MetaKey;
 import com.example.ragagent.model.ResponseMode;
@@ -65,15 +67,26 @@ public class CuratedQaService {
     private final VectorStoreFacade vectorStore;
     private final ChunkSplitter chunkSplitter;
     private final AppProperties props;
+    /**
+     * 큐레이션 청크의 BM25(키워드) 축. 예전에는 이 축에 아예 없었다 — {@code indexChunks()} 를
+     * 부르는 곳이 {@code DocumentIndexer} 와 {@code AdminService.reindexChunk()} 뿐이라
+     * 큐레이션 청크는 {@code chunk_fts} 행 자체가 없었고, 그래서 {@code excerpt_keywords} 를
+     * 채워 봐야 읽는 코드가 없었다. 이제 벡터를 쓸 때마다 같은 문서로 FTS 도 함께 쓴다.
+     *
+     * <p>{@code Optional} 이 아니라 필수 의존이다 — {@code KeywordSearchRepository} 는 FTS5 를
+     * 못 쓰는 환경에서도 빈으로 존재하고 {@code indexChunks()} 가 스스로 no-op 이 된다.
+     */
+    private final KeywordSearchRepository keywordRepo;
 
     public CuratedQaService(CuratedQaRepository repository, ThreadMetaService threadMetaService,
                             VectorStoreFacade vectorStore, ChunkSplitter chunkSplitter,
-                            AppProperties props) {
+                            AppProperties props, KeywordSearchRepository keywordRepo) {
         this.repository = repository;
         this.threadMetaService = threadMetaService;
         this.vectorStore = vectorStore;
         this.chunkSplitter = chunkSplitter;
         this.props = props;
+        this.keywordRepo = keywordRepo;
     }
 
     /**
@@ -239,13 +252,17 @@ public class CuratedQaService {
      * chunk retrievable by a question-shaped query at all. Returns the new curated row id.
      */
     public List<Long> createFromSubmission(long submissionId, String authorUserId, String title,
-                                           List<String> bodyChunks, String tags) {
+                                           List<String> bodyChunks, String tags,
+                                           String summary, String keywords) {
         List<Long> curatedIds = new java.util.ArrayList<>(bodyChunks.size());
         for (String chunk : bodyChunks) {
             // 제목은 모든 청크에 반복 부여한다 — defaultSearchText()가 question+answer를 임베딩하므로
             // 2번째 청크부터 제목이 없으면 질문형 질의와의 매칭이 급격히 나빠진다(문서 인덱싱의
             // reinjectHeadingForSplitPieces와 같은 이유).
-            curatedIds.add(repository.insertManual(submissionId, authorUserId, title, chunk, tags));
+            // 요약·키워드는 제안 하나가 통째로 갖는 값이라 모든 청크에 같은 값이 붙는다 —
+            // 제목과 같은 이유다(청크마다 다시 만들면 승인 한 번에 LLM 을 N 번 부르게 된다).
+            curatedIds.add(repository.insertManual(submissionId, authorUserId, title, chunk, tags,
+                    summary, keywords));
         }
         for (long curatedId : curatedIds) {
             Thread.ofVirtual().name("curated-embed-" + curatedId).start(() ->
@@ -272,12 +289,13 @@ public class CuratedQaService {
      * @return the curated row's id
      */
     public long createFromLikedTurn(long submissionId, long turnId, String userId, String threadId,
-                                    String title, String body, String tags) {
+                                    String title, String body, String tags,
+                                    String summary, String keywords) {
         String version = threadMetaService.findById(userId, threadId)
                 .map(t -> t.version())
                 .orElse(null);
         long curatedId = repository.upsertActive(turnId, userId, threadId, title, body, version,
-                tags, submissionId);
+                tags, submissionId, summary, keywords);
         Thread.ofVirtual().name("curated-embed-" + curatedId).start(() ->
                 embedActiveRow(curatedId, "submission-like"));
         return curatedId;
@@ -351,13 +369,35 @@ public class CuratedQaService {
     private void embedActiveRow(long curatedId, String reason) {
         Optional<CuratedQa> rowOpt = repository.findById(curatedId);
         if (rowOpt.isEmpty() || !"active".equals(rowOpt.get().status())) return;
-        int chunks = tryEmbedWithFallback(rowOpt.get());
-        if (chunks > 0) {
+        CuratedQa row = rowOpt.get();
+        List<Document> written = tryEmbedWithFallback(row);
+        if (!written.isEmpty()) {
+            // BM25 축은 벡터가 실제로 쓰인 뒤에만 따라간다 — 임베딩이 실패한 항목을 키워드로만
+            // 검색되게 두면 출처는 붙는데 의미 매칭은 안 되는 절반짜리 항목이 생긴다.
+            indexFts(row, written);
             repository.markEmbedOk(curatedId);
-            log.info("[CURATED] embedded curatedId={} chunks={} reason={}", curatedId, chunks, reason);
+            log.info("[CURATED] embedded curatedId={} chunks={} reason={}", curatedId, written.size(), reason);
         } else {
             repository.markEmbedFailed(curatedId);
         }
+    }
+
+    /**
+     * 한 큐레이션 행을 규칙대로 다시 임베딩한다 — {@code /admin} 청크 화면의 재인덱싱이
+     * 큐레이션 청크를 만났을 때 부르는 자리({@code AdminController}).
+     *
+     * <p>그쪽의 {@code AdminService.reindexChunk()} 를 그대로 태우면 안 된다: 그건 문서 청크의
+     * 규칙({@code chunk_context} + 본문)으로 검색 텍스트를 다시 만드는데, 이 축의 검색 텍스트는
+     * <b>질문 + 본문</b>이고 질문은 벡터 메타데이터에 실려 있지 않다. 즉 그 경로를 지나면 그
+     * 청크만 조용히 질문을 잃는다.
+     *
+     * <p>단위가 '청크 하나'가 아니라 '행 하나'인 것은 의도된 것이다 — 이 축에서 질문·본문·요약·
+     * 키워드는 행이 통째로 갖는 값이라, 한 청크만 다시 만들 수 있는 상태 자체가 없다.
+     */
+    public boolean reembedRow(long curatedId, String reason) {
+        if (repository.findById(curatedId).isEmpty()) return false;
+        embedActiveRow(curatedId, reason);
+        return true;
     }
 
     /**
@@ -383,7 +423,7 @@ public class CuratedQaService {
      * answer) are removed <em>after</em> the new ones are written, never before — a failed re-embed
      * then leaves the old vectors searchable instead of silently dropping the entry from the index.
      */
-    private int tryEmbedWithFallback(CuratedQa row) {
+    private List<Document> tryEmbedWithFallback(CuratedQa row) {
         // 크기 사다리: 2× → 1.5× → 1×. 실패의 압도적 다수는 "입력이 너무 큼"이고, 그건 더 잘게
         // 자르는 것으로만 풀린다 — 그래서 재시도할 때마다 청크를 줄인다.
         List<Document> docs = List.of();
@@ -398,7 +438,7 @@ public class CuratedQaService {
                     log.info("[CURATED] embedded at {}× chunk-size ({} chunks) curatedId={}",
                             multiplier, docs.size(), row.id());
                 }
-                return docs.size();
+                return docs;
             } catch (Exception e) {
                 log.warn("[CURATED] embed failed at {}× chunk-size ({} chunks) curatedId={}: {}",
                         multiplier, docs.size(), row.id(), e.getMessage());
@@ -408,11 +448,11 @@ public class CuratedQaService {
         // 청크가 하나도 남지 않았다면(예: 답변이 사실상 인용 목록뿐) 분할 이전과 똑같이 답변 전체를
         // 한 벡터로 넣어 본다 — 여기서 실패로 처리하면 임베딩할 값이 없었을 뿐인 항목에 실패 배지가 붙는다.
         if (docs.isEmpty()) {
+            List<Document> whole = List.of(buildDocument(row, 0, row.answer(), defaultSearchText(row)));
             try {
-                vectorStore.add(DocRegistry.SHARED, CURATED_VERSION,
-                        List.of(buildDocument(row, 0, row.answer(), defaultSearchText(row))));
+                vectorStore.add(DocRegistry.SHARED, CURATED_VERSION, whole);
                 pruneStaleVectors(row, 1);
-                return 1;
+                return whole;
             } catch (Exception e) {
                 log.warn("[CURATED] whole-row embed failed curatedId={}: {}", row.id(), e.getMessage());
             }
@@ -422,18 +462,18 @@ public class CuratedQaService {
         if (core.isBlank()) {
             log.warn("[CURATED] no core-section fallback available curatedId={} (answer isn't in the RAG format)",
                     row.id());
-            return 0;
+            return List.of();
         }
         String fallbackSearchText = row.question() + "\n\n" + MarkdownNoiseNormalizer.normalize(core);
+        List<Document> fallback = List.of(buildDocument(row, 0, row.answer(), fallbackSearchText));
         try {
-            vectorStore.add(DocRegistry.SHARED, CURATED_VERSION,
-                    List.of(buildDocument(row, 0, row.answer(), fallbackSearchText)));
+            vectorStore.add(DocRegistry.SHARED, CURATED_VERSION, fallback);
             pruneStaleVectors(row, 1);
             log.info("[CURATED] embedded with core-sections fallback curatedId={}", row.id());
-            return 1;
+            return fallback;
         } catch (Exception e) {
             log.warn("[CURATED] core-sections fallback embed also failed curatedId={}: {}", row.id(), e.getMessage());
-            return 0;
+            return List.of();
         }
     }
 
@@ -498,6 +538,11 @@ public class CuratedQaService {
             } catch (Exception e) {
                 log.warn("[CURATED] stale vector cleanup failed curatedId={}: {}", row.id(), e.getMessage());
             }
+            try {
+                keywordRepo.deleteBySpringDocIds(stale);   // 같은 이유로 FTS 쪽 잔여 행도 함께
+            } catch (Exception e) {
+                log.warn("[CURATED] stale FTS cleanup failed curatedId={}: {}", row.id(), e.getMessage());
+            }
         }
         repository.updateChunkCount(row.id(), newCount);
     }
@@ -554,18 +599,70 @@ public class CuratedQaService {
         if (!imagePaths.isEmpty()) {
             meta.put(MetaKey.IMAGE_PATHS, String.join(",", new java.util.LinkedHashSet<>(imagePaths)));
         }
+        // 요약·키워드를 문서 청크와 같은 키로 싣는다 — /admin 청크 화면이 이 두 키만 보고
+        // '요약'·'키워드' 칸을 그리므로, 이 축만 다른 이름을 쓰면 그 화면에서 영원히 빈칸이다.
+        // 비어 있으면 키 자체를 넣지 않는다: 빈 문자열을 넣으면 FTS keywords 컬럼에 빈 토큰이
+        // 들어가고, /admin 에서 "값이 있는데 비어 있음"과 "값이 없음"을 구분할 수 없게 된다.
+        putIfPresent(meta, MetaKey.CHUNK_CONTEXT, row.summary());
+        putIfPresent(meta, MetaKey.EXCERPT_KEYWORDS, row.keywords());
         meta.put(MetaKey.SEARCH_TEXT, searchText); // transient override — stripped before persistence
 
         return new Document(springDocId(row.id(), chunkIndex), storedText, meta);
     }
 
+    private static void putIfPresent(Map<String, Object> meta, String key, String value) {
+        if (value != null && !value.isBlank()) meta.put(key, value.strip());
+    }
+
+    /**
+     * FTS 행에 실을 문서 — 벡터용 문서와 <b>검색 텍스트만</b> 다르다.
+     *
+     * <p>벡터 입력은 {@link #defaultSearchText}(질문 + 본문) 그대로 두고, FTS 입력에만 요약을
+     * 앞에 붙인다. 두 축이 같은 텍스트를 원하지 않기 때문이다 — 요약은 본문을 다시 말한 것이라
+     * 의미 벡터에서는 희석이고(그래서 {@code stripSummarySection} 이 임베딩에서 걷어낸다),
+     * 어휘 매칭인 BM25 에서는 그 항목이 무엇에 관한 것인지를 말하는 <b>토큰의 반복</b>이다 —
+     * 문서 청크에서 {@code chunk_context} 가 하는 일이 정확히 그것이고, 이 축에서는 그 자리를
+     * 요약이 맡는다.
+     */
+    private static Document ftsDocument(Document vectorDoc, String summary) {
+        if (summary == null || summary.isBlank()) return vectorDoc;
+        Map<String, Object> meta = new HashMap<>(vectorDoc.getMetadata());
+        meta.put(MetaKey.SEARCH_TEXT, summary.strip() + "\n\n" + SearchTextBuilder.build(vectorDoc));
+        return new Document(vectorDoc.getId(), vectorDoc.getText(), meta);
+    }
+
+    /**
+     * 방금 쓴 벡터와 같은 청크들을 BM25 축에도 쓴다. 먼저 지우고 넣는 것은
+     * {@code AdminService.reindexChunk()} 와 같은 이유다 — {@code indexChunks()} 는 INSERT 라
+     * 지우지 않으면 같은 {@code spring_doc_id} 의 행이 쌓인다.
+     *
+     * <p>실패해도 예외를 올리지 않는다: 벡터는 이미 성공적으로 쓰였고, 키워드 축이 빠진 항목은
+     * 검색 품질이 조금 낮을 뿐 여전히 검색된다. 여기서 던지면 그 반대가 된다(항목 전체가
+     * 임베딩 실패로 기록된다).
+     */
+    private void indexFts(CuratedQa row, List<Document> docs) {
+        try {
+            keywordRepo.deleteBySpringDocIds(docs.stream().map(Document::getId).toList());
+            keywordRepo.indexChunks(docs.stream().map(d -> ftsDocument(d, row.summary())).toList());
+        } catch (Exception e) {
+            log.warn("[CURATED] FTS index failed curatedId={}: {}", row.id(), e.getMessage());
+        }
+    }
+
     /** Removes every vector this row owns — {@code chunkCount} ids, not just the first. */
     private void deleteVectors(long curatedId, int chunkCount) {
+        List<String> ids = vectorIdsFor(curatedId, chunkCount);
         try {
-            vectorStore.deleteByDocIds(DocRegistry.SHARED, CURATED_VERSION,
-                    vectorIdsFor(curatedId, chunkCount));
+            vectorStore.deleteByDocIds(DocRegistry.SHARED, CURATED_VERSION, ids);
         } catch (Exception e) {
             log.warn("[CURATED] vector delete failed curatedId={}: {}", curatedId, e.getMessage());
+        }
+        // FTS 행은 벡터와 짝이다 — 여기서 안 지우면 검색 코퍼스에서 내린 항목이 키워드 축에는
+        // 남아, 지웠는데도 계속 답변 근거로 붙는다.
+        try {
+            keywordRepo.deleteBySpringDocIds(ids);
+        } catch (Exception e) {
+            log.warn("[CURATED] FTS delete failed curatedId={}: {}", curatedId, e.getMessage());
         }
     }
 

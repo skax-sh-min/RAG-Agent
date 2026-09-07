@@ -205,7 +205,7 @@ public class RetrievalService {
                 // the point), scoped to the reserved "curated" version namespace.
                 CompletableFuture<List<Document>> curatedF = CompletableFuture.supplyAsync(
                         () -> curatedQaEnabled
-                                ? ragService.search(state.userId(), searchQuestion, CuratedQaService.CURATED_VERSION, fetchK)
+                                ? curatedAxis(state.userId(), searchQuestion, fetchK, hybridEnabled)
                                 : List.<Document>of(),
                         exec);
                 // 게이트는 **원문 길이**로 판단한다 — 독립화된 질의는 원문보다 길어지는 것이 정상이라
@@ -465,6 +465,47 @@ public class RetrievalService {
         log.debug("[TAG] selectedTags={} candidateK={} postFilter={}/{}",
                 selectedTags, candidateK, filtered.size(), before);
         return filtered;
+    }
+
+    /**
+     * 큐레이션 축의 후보 = <b>벡터 ∪ BM25</b>, 합쳐서 축 하나로 돌려준다 (§10.11 "큐레이션은 축 하나다").
+     *
+     * <p><b>왜 키워드 검색을 여기서 도는가.</b> {@code KeywordSearchRepository.search()} 는
+     * {@code WHERE ... AND version = ?} 로 거르는데 위쪽 키워드 축은 <b>문서 version</b> 으로
+     * 부른다. 큐레이션 청크는 예약 네임스페이스 {@code "curated"} 에 색인되므로 그 질의로는
+     * 절대 나오지 않는다 — 즉 {@code CuratedQaService} 가 FTS 행을 쓰기 시작한 것만으로는
+     * {@code excerpt_keywords} 가 여전히 아무 데서도 읽히지 않는다. 이 축에서 같은 네임스페이스로
+     * 한 번 더 물어봐야 비로소 그 값이 검색에 참여한다.
+     *
+     * <p><b>키워드 전용 히트에는 메타데이터를 찍어 준다.</b> {@code chunk_fts} 에는
+     * {@code doc_type} 컬럼이 없어서 FTS 에서 만든 Document 는 자기가 큐레이션인 줄 모른다.
+     * 그대로 두면 {@link #filterByTags} 의 큐레이션 면제가 걸리지 않아 태그 칩을 하나라도 켜는
+     * 순간 탈락하고(면제가 생긴 원인이 바로 그 증상이다), 출처 라벨도 문서처럼 붙는다.
+     *
+     * <p><b>순서.</b> 벡터 히트가 앞이고 키워드 전용 히트가 뒤다 — 이 축은 질문 기반 매칭을
+     * 전제로 설계됐고, BM25 를 더한 목적은 <b>벡터가 놓친 정확한 단어</b>를 후보에 넣는 것이다.
+     * 그런 항목은 정의상 벡터 목록에 없으므로 중요한 것은 등장 여부이지 정확한 등수가 아니다.
+     */
+    private List<Document> curatedAxis(String userId, String question, int fetchK, boolean hybridEnabled) {
+        List<Document> vectorHits =
+                ragService.search(userId, question, CuratedQaService.CURATED_VERSION, fetchK);
+        if (!hybridEnabled) return vectorHits;
+
+        Map<String, Document> byId = new LinkedHashMap<>();
+        for (Document d : vectorHits) byId.put(d.getId(), d);
+        for (Document d : ragService.keywordSearch(
+                CuratedQaService.CURATED_VERSION, question, fetchK)) {
+            byId.computeIfAbsent(d.getId(), id -> markCurated(d));
+        }
+        return List.copyOf(byId.values());
+    }
+
+    /** FTS 에서 온 큐레이션 히트에 이 축임을 알리는 두 키를 찍는다 — {@link #curatedAxis} 참고. */
+    private static Document markCurated(Document ftsHit) {
+        Map<String, Object> meta = new HashMap<>(ftsHit.getMetadata());
+        meta.put(MetaKey.DOC_TYPE, "curated_qa");
+        meta.put(MetaKey.SOURCE_TYPE, "curated_qa");
+        return Document.builder().id(ftsHit.getId()).text(ftsHit.getText()).metadata(meta).build();
     }
 
     /** A curated-Q&A hit carrying no tags at all — see {@link #filterByTags}'s curated exemption. */

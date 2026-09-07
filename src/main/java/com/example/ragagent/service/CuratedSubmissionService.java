@@ -2,6 +2,8 @@ package com.example.ragagent.service;
 
 import com.example.ragagent.audit.AuditLogger;
 import com.example.ragagent.config.AppProperties;
+import com.example.ragagent.ingestion.KeywordExtractor;
+import com.example.ragagent.model.MetaKey;
 import com.example.ragagent.model.TagUtils;
 import com.example.ragagent.repository.CuratedSubmissionRepository;
 import com.example.ragagent.repository.CuratedSubmissionRepository.Submission;
@@ -9,8 +11,10 @@ import com.example.ragagent.repository.MemoryRepository;
 import com.example.ragagent.security.PromptInjectionGuard;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.ai.document.Document;
 import org.springframework.stereotype.Service;
 
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -34,25 +38,87 @@ public class CuratedSubmissionService {
     /** Anti-flood: a user can queue this many unreviewed submissions at once. */
     public static final int MAX_PENDING_PER_USER = 20;
 
+    /**
+     * 요약은 문서 청크의 {@code chunk_context} 와 같은 자리에 실린다 — 1~2문장이라는 그 형식이
+     * 곧 상한의 근거다. 넘치면 BM25 입력에서 본문보다 요약이 더 무거워진다.
+     */
+    public static final int MAX_SUMMARY_LEN = 500;
+
+    /** 키워드는 쉼표로 구분된 2~5개를 기대한다({@code KeywordExtractor} 프롬프트와 같은 형식). */
+    public static final int MAX_KEYWORDS_LEN = 300;
+
     private final CuratedSubmissionRepository repository;
     private final CuratedQaService curatedQaService;
     private final CuratedImageStore imageStore;
     private final MemoryService memoryService;
     private final AppProperties props;
     private final AuditLogger auditLogger;
+    /**
+     * "빈 칸 자동 생성" 버튼이 쓰는 LLM 한 번. 인덱싱이 쓰는 것과 <b>같은</b> 추출기다 —
+     * 요약·키워드가 결국 문서 청크와 같은 메타데이터 키에 실리므로, 두 축이 다른 프롬프트로
+     * 만든 값을 같은 칸에 넣으면 형식이 서서히 갈린다(쉼표 구분 여부, 문장 수).
+     */
+    private final KeywordExtractor keywordExtractor;
 
     public CuratedSubmissionService(CuratedSubmissionRepository repository,
                                     CuratedQaService curatedQaService,
                                     CuratedImageStore imageStore,
                                     MemoryService memoryService,
                                     AppProperties props,
-                                    AuditLogger auditLogger) {
+                                    AuditLogger auditLogger,
+                                    KeywordExtractor keywordExtractor) {
         this.repository = repository;
         this.curatedQaService = curatedQaService;
         this.imageStore = imageStore;
         this.memoryService = memoryService;
         this.props = props;
         this.auditLogger = auditLogger;
+        this.keywordExtractor = keywordExtractor;
+    }
+
+    /**
+     * 본문에서 요약·키워드를 LLM 한 번으로 만든다 — 제안 폼의 "빈 칸 자동 생성" 버튼.
+     *
+     * <p><b>이미 채워진 칸은 덮지 않는다.</b> 판정은 서버가 한다: 사람이 쓴 문장을 버튼 한 번이
+     * 조용히 갈아엎는 일이 없어야 하고, 그 규칙이 클라이언트에만 있으면 다른 호출자가 생기는
+     * 순간 사라진다. 둘 다 이미 있으면 LLM 을 부르지 않고 그대로 돌려준다(호출 0회).
+     *
+     * <p>{@code KeywordExtractor} 는 실패해도 예외를 던지지 않고 TF 폴백으로 떨어지므로, 이
+     * 메서드도 항상 무언가를 돌려준다 — 버튼이 오류로 끝나는 경우는 사실상 없다.
+     */
+    public Enrichment enrich(String body, String currentSummary, String currentKeywords) {
+        String summary  = currentSummary  == null ? "" : currentSummary.strip();
+        String keywords = currentKeywords == null ? "" : currentKeywords.strip();
+        if (!summary.isEmpty() && !keywords.isEmpty()) return new Enrichment(summary, keywords, false);
+        if (body == null || body.isBlank()) {
+            throw new IllegalArgumentException("본문을 먼저 입력해 주세요.");
+        }
+        Document enriched = keywordExtractor.enrichSingle(new Document(body.strip(), new HashMap<>()));
+        Object ctx = enriched.getMetadata().get(MetaKey.CHUNK_CONTEXT);
+        Object kw  = enriched.getMetadata().get(MetaKey.EXCERPT_KEYWORDS);
+        if (summary.isEmpty() && ctx != null)  summary  = clamp(ctx.toString().strip(), MAX_SUMMARY_LEN);
+        if (keywords.isEmpty() && kw != null)  keywords = clamp(kw.toString().strip(), MAX_KEYWORDS_LEN);
+        return new Enrichment(summary, keywords, true);
+    }
+
+    /** @param llmCalled false when both fields were already filled — the button made no LLM call. */
+    public record Enrichment(String summary, String keywords, boolean llmCalled) {}
+
+    private static String clamp(String value, int max) {
+        return value.length() <= max ? value : value.substring(0, max).strip();
+    }
+
+    /**
+     * 요약·키워드의 공통 정리 — 저장 경로 셋(신규·수정·승인)이 같은 규칙을 지나야 한다.
+     * 길이를 넘기면 거절이 아니라 자른다: 이 둘은 사용자가 직접 쓸 수도 있지만 자동 생성으로
+     * 채워지는 쪽이 보통이고, 모델이 조금 길게 답했다는 이유로 제안 등록 전체를 실패시킬 일이 아니다.
+     */
+    private static String cleanSummary(String v) {
+        return v == null || v.isBlank() ? null : clamp(PromptInjectionGuard.validate(v.strip()), MAX_SUMMARY_LEN);
+    }
+
+    private static String cleanKeywords(String v) {
+        return v == null || v.isBlank() ? null : clamp(PromptInjectionGuard.validate(v.strip()), MAX_KEYWORDS_LEN);
     }
 
     /**
@@ -94,7 +160,7 @@ public class CuratedSubmissionService {
      * per-user pending cap still are.
      */
     public long submit(String authorUserId, String title, String body, List<String> tags) {
-        return submit(authorUserId, title, body, tags, null, null);
+        return submit(authorUserId, title, body, tags, null, null, null, null);
     }
 
     /**
@@ -110,15 +176,17 @@ public class CuratedSubmissionService {
      * {@link #findLiveProposalForTurn} instead — one live proposal per turn.
      */
     public long submit(String authorUserId, String title, String body, List<String> tags,
-                       String sourceThreadId, Long sourceTurnId) {
+                       String sourceThreadId, Long sourceTurnId,
+                       String summary, String keywords) {
         boolean fromTurn = sourceTurnId != null && sourceThreadId != null
                 && memoryService.getTurn(authorUserId, sourceThreadId, sourceTurnId).isPresent();
         return submitInternal(authorUserId, title, body, tags,
-                fromTurn ? sourceTurnId : null, fromTurn ? sourceThreadId : null);
+                fromTurn ? sourceTurnId : null, fromTurn ? sourceThreadId : null, summary, keywords);
     }
 
     private long submitInternal(String authorUserId, String title, String body, List<String> tags,
-                                Long sourceTurnId, String sourceThreadId) {
+                                Long sourceTurnId, String sourceThreadId,
+                                String summary, String keywords) {
         String cleanTitle = PromptInjectionGuard.validate(title == null ? null : title.trim());
         if (cleanTitle.length() > MAX_TITLE_LEN) {
             throw new IllegalArgumentException(
@@ -139,7 +207,7 @@ public class CuratedSubmissionService {
         }
 
         long id = repository.insert(authorUserId, cleanTitle, cleanBody, tagsCsv,
-                sourceTurnId, sourceThreadId);
+                sourceTurnId, sourceThreadId, cleanSummary(summary), cleanKeywords(keywords));
         auditLogger.log("curated.submission.create", "submission:" + id,
                 Map.of("title", cleanTitle, "chars", cleanBody.length(), "tags", tagsCsv,
                         "sourceTurnId", sourceTurnId == null ? "" : String.valueOf(sourceTurnId)));
@@ -239,6 +307,11 @@ public class CuratedSubmissionService {
         String body  = (editedBody  == null || editedBody.isBlank())  ? row.body()  : editedBody.strip();
         String tagsCsv = (editedTags == null) ? row.tags() : TagUtils.toMetaValue(TagUtils.normalize(editedTags));
         imageStore.validateImageCount(body);
+        // 승인 화면은 이 둘을 편집하지 않으므로 제안에 저장된 값을 그대로 싣는다. 여기서
+        // 자동 생성으로 채우지는 않는다 — 승인 한 번이 청크 수만큼 LLM 을 부르게 되고,
+        // 무엇이 코퍼스에 들어가는지는 사람이 보고 정한다는 §10.11 의 규칙에도 어긋난다.
+        String summary  = row.summary();
+        String keywords = row.keywords();
 
         // 본문 이미지에 Vision 설명을 주입한 뒤 자른다. 순서가 중요하다 — 설명은 임베딩되는 텍스트의
         // 일부여야 이미지 내용이 검색에 걸리고, 임베딩은 지금 이 승인 시점에 딱 한 번 일어난다.
@@ -253,7 +326,7 @@ public class CuratedSubmissionService {
             // 재승인이면 같은 행이 제자리에서 갱신되고 다시 임베딩된다 — 이것이 정책 3의 "교체"다.
             // 여기서 먼저 회수하면 백그라운드 벡터 삭제가 방금 새로 쓴 벡터를 지울 수 있다(같은 id).
             curatedIds = List.of(curatedQaService.createFromLikedTurn(submissionId, row.sourceTurnId(),
-                    row.authorUserId(), row.sourceThreadId(), title, body, tagsCsv));
+                    row.authorUserId(), row.sourceThreadId(), title, body, tagsCsv, summary, keywords));
         } else {
             // 손으로 쓴 제안은 승인마다 새 id 의 행이 생기므로, 남아 있던 이전 등록본을 먼저 내린다.
             // 수정 중에도 검색에 남아 있던(정책 3) 그 행들이다 — 안 내리면 같은 제안이 두 벌로 검색된다.
@@ -262,11 +335,12 @@ public class CuratedSubmissionService {
                 log.info("[SUBMISSION] 재승인 — 이전 등록본 {}건을 교체한다 id={}", replaced, submissionId);
             }
             curatedIds = curatedQaService.createFromSubmission(
-                    submissionId, row.authorUserId(), title, splitBody(body), tagsCsv);
+                    submissionId, row.authorUserId(), title, splitBody(body), tagsCsv, summary, keywords);
         }
         long firstCuratedId = curatedIds.get(0);
 
-        if (!repository.markApproved(submissionId, reviewerUserId, title, body, tagsCsv, firstCuratedId)) {
+        if (!repository.markApproved(submissionId, reviewerUserId, title, body, tagsCsv, firstCuratedId,
+                summary, keywords)) {
             // Lost the CAS — another request approved it first. Undo every chunk we just created
             // (전부/전무: a half-rolled-back submission would show as partially registered).
             curatedQaService.forceRemoveBySubmission(submissionId);
@@ -334,7 +408,8 @@ public class CuratedSubmissionService {
      * editing it cannot add to the queue.
      */
     public boolean updateByAuthor(long submissionId, String authorUserId,
-                                  String title, String body, List<String> tags) {
+                                  String title, String body, List<String> tags,
+                                  String summary, String keywords) {
         String cleanTitle = PromptInjectionGuard.validate(title == null ? null : title.trim());
         if (cleanTitle.length() > MAX_TITLE_LEN) {
             throw new IllegalArgumentException(
@@ -348,7 +423,8 @@ public class CuratedSubmissionService {
         String tagsCsv = TagUtils.toMetaValue(TagUtils.normalize(tags));
 
         Optional<Submission> before = repository.findById(submissionId);
-        if (!repository.updateByAuthor(submissionId, authorUserId, cleanTitle, cleanBody, tagsCsv)) {
+        if (!repository.updateByAuthor(submissionId, authorUserId, cleanTitle, cleanBody, tagsCsv,
+                cleanSummary(summary), cleanKeywords(keywords))) {
             return false;
         }
         // 수정으로 본문에서 빠진 이미지를 정리한다 — releaseImages 는 살아 있는 다른 본문이

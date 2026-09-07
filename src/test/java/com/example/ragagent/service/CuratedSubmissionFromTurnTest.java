@@ -47,7 +47,8 @@ class CuratedSubmissionFromTurnTest {
         AppProperties props = mock(AppProperties.class);
         when(props.chunkSizeSafe()).thenReturn(1_500);
         service = new CuratedSubmissionService(repository, mock(CuratedQaService.class),
-                mock(CuratedImageStore.class), memoryService, props, mock(AuditLogger.class));
+                mock(CuratedImageStore.class), memoryService, props, mock(AuditLogger.class),
+                mock(com.example.ragagent.ingestion.KeywordExtractor.class));
     }
 
     private static MemoryRepository.Turn turn(String question, String answer, boolean directMode) {
@@ -61,9 +62,9 @@ class CuratedSubmissionFromTurnTest {
         when(memoryService.getTurn(AUTHOR, THREAD, TURN))
                 .thenReturn(Optional.of(turn("질문", "답변", false)));
 
-        service.submit(AUTHOR, "제목", "본문", List.of("인프라"), THREAD, TURN);
+        service.submit(AUTHOR, "제목", "본문", List.of("인프라"), THREAD, TURN, null, null);
 
-        verify(repository).insert(AUTHOR, "제목", "본문", "인프라", TURN, THREAD);
+        verify(repository).insert(AUTHOR, "제목", "본문", "인프라", TURN, THREAD, null, null);
     }
 
     @Test
@@ -71,9 +72,9 @@ class CuratedSubmissionFromTurnTest {
     void submit_withForeignTurn_storesAsHandWritten() {
         when(memoryService.getTurn(AUTHOR, THREAD, TURN)).thenReturn(Optional.empty());
 
-        service.submit(AUTHOR, "제목", "본문", List.of(), THREAD, TURN);
+        service.submit(AUTHOR, "제목", "본문", List.of(), THREAD, TURN, null, null);
 
-        verify(repository).insert(eq(AUTHOR), eq("제목"), eq("본문"), any(), isNull(), isNull());
+        verify(repository).insert(eq(AUTHOR), eq("제목"), eq("본문"), any(), isNull(), isNull(), any(), any());
     }
 
     @Test
@@ -84,9 +85,9 @@ class CuratedSubmissionFromTurnTest {
         when(repository.countPendingByAuthor(AUTHOR))
                 .thenReturn(CuratedSubmissionService.MAX_PENDING_PER_USER + 5);
 
-        service.submit(AUTHOR, "제목", "본문", List.of(), THREAD, TURN);
+        service.submit(AUTHOR, "제목", "본문", List.of(), THREAD, TURN, null, null);
 
-        verify(repository).insert(AUTHOR, "제목", "본문", "", TURN, THREAD);
+        verify(repository).insert(AUTHOR, "제목", "본문", "", TURN, THREAD, null, null);
         verify(repository, never()).countPendingByAuthor(anyString());
     }
 
@@ -143,7 +144,7 @@ class CuratedSubmissionFromTurnTest {
     private static CuratedSubmissionRepository.Submission submission(Long turnId, String threadId) {
         return new CuratedSubmissionRepository.Submission(
                 7L, AUTHOR, "제안 제목", "제안 본문", "pending", null, null, null,
-                "2026-01-01", "2026-01-01", null, null, "인프라", turnId, threadId, 0, 0, 0, 0);
+                "2026-01-01", "2026-01-01", null, null, "인프라", turnId, threadId, null, null, 0, 0, 0, 0);
     }
 
     @Test
@@ -153,16 +154,16 @@ class CuratedSubmissionFromTurnTest {
         service = serviceWith(curatedQa);
         when(repository.findById(7L)).thenReturn(Optional.of(submission(TURN, THREAD)));
         when(curatedQa.createFromLikedTurn(anyLong(), anyLong(), anyString(), anyString(),
-                anyString(), anyString(), any())).thenReturn(99L);
-        when(repository.markApproved(anyLong(), anyString(), anyString(), anyString(), any(), anyLong()))
+                anyString(), anyString(), any(), any(), any())).thenReturn(99L);
+        when(repository.markApproved(anyLong(), anyString(), anyString(), anyString(), any(), anyLong(), any(), any()))
                 .thenReturn(true);
 
         assertThat(service.approve(7L, "admin", "검토된 제목", "검토된 본문", null)).contains(99L);
 
         // 관리자가 승인한 텍스트가 들어가고, 출처 turn/thread 가 그대로 실린다 — 이 키가 없으면
         // 대화·턴 삭제 회수와 재승인이 함께 죽는다.
-        verify(curatedQa).createFromLikedTurn(7L, TURN, AUTHOR, THREAD, "검토된 제목", "검토된 본문", "인프라");
-        verify(curatedQa, never()).createFromSubmission(anyLong(), anyString(), anyString(), any(), any());
+        verify(curatedQa).createFromLikedTurn(7L, TURN, AUTHOR, THREAD, "검토된 제목", "검토된 본문", "인프라", null, null);
+        verify(curatedQa, never()).createFromSubmission(anyLong(), anyString(), anyString(), any(), any(), any(), any());
     }
 
     @Test
@@ -172,16 +173,16 @@ class CuratedSubmissionFromTurnTest {
         service = serviceWith(curatedQa);
         when(repository.findById(7L)).thenReturn(Optional.of(submission(null, null)));
         when(curatedQa.splitForEmbedding(anyString())).thenReturn(List.of("조각1", "조각2"));
-        when(curatedQa.createFromSubmission(anyLong(), anyString(), anyString(), any(), any()))
+        when(curatedQa.createFromSubmission(anyLong(), anyString(), anyString(), any(), any(), any(), any()))
                 .thenReturn(List.of(10L, 11L));
-        when(repository.markApproved(anyLong(), anyString(), anyString(), anyString(), any(), anyLong()))
+        when(repository.markApproved(anyLong(), anyString(), anyString(), anyString(), any(), anyLong(), any(), any()))
                 .thenReturn(true);
 
         assertThat(service.approve(7L, "admin", null, null, null)).contains(10L);
 
-        verify(curatedQa).createFromSubmission(7L, AUTHOR, "제안 제목", List.of("조각1", "조각2"), "인프라");
+        verify(curatedQa).createFromSubmission(7L, AUTHOR, "제안 제목", List.of("조각1", "조각2"), "인프라", null, null);
         verify(curatedQa, never()).createFromLikedTurn(anyLong(), anyLong(), anyString(), anyString(),
-                anyString(), anyString(), any());
+                anyString(), anyString(), any(), any(), any());
     }
 
     /** 승인 경로용 조립 — Vision 이 없는 배포에서 describeImages() 가 본문을 그대로 돌려주는 모양. */
@@ -191,6 +192,6 @@ class CuratedSubmissionFromTurnTest {
         CuratedImageStore imageStore = mock(CuratedImageStore.class);
         when(imageStore.describeImages(anyString())).thenAnswer(inv -> inv.getArgument(0));
         return new CuratedSubmissionService(repository, curatedQa, imageStore, memoryService,
-                p, mock(AuditLogger.class));
+                p, mock(AuditLogger.class), mock(com.example.ragagent.ingestion.KeywordExtractor.class));
     }
 }

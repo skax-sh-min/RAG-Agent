@@ -56,6 +56,7 @@ public class CuratedSubmissionRepository {
             SELECT s.id, s.author_user_id, s.title, s.body, s.status, s.reviewer_user_id,
                    s.review_note, s.curated_qa_id, s.created_at, s.updated_at, s.reviewed_at,
                    s.author_read_at, s.tags, s.source_turn_id, s.source_thread_id,
+                   s.summary, s.keywords,
                    (SELECT COUNT(*) FROM curated_qa c
                      WHERE c.source_submission_id = s.id) AS curated_total,
                    (SELECT COALESCE(SUM(c.chunk_count), 0) FROM curated_qa c
@@ -91,6 +92,8 @@ public class CuratedSubmissionRepository {
                 rs.getString("tags"),
                 sourceTurnId,
                 rs.getString("source_thread_id"),
+                rs.getString("summary"),
+                rs.getString("keywords"),
                 rs.getInt("curated_total"),
                 rs.getInt("curated_chunks"),
                 rs.getInt("curated_active"),
@@ -119,7 +122,9 @@ public class CuratedSubmissionRepository {
                     author_read_at    TEXT,
                     tags              TEXT,
                     source_turn_id    INTEGER,
-                    source_thread_id  TEXT
+                    source_thread_id  TEXT,
+                    summary           TEXT,
+                    keywords          TEXT
                 )
                 """);
         // `tags` shipped after the initial table — plain ADD COLUMN (nullable TEXT).
@@ -136,6 +141,15 @@ public class CuratedSubmissionRepository {
         if (subCols.stream().noneMatch(c -> "source_thread_id".equals(c.get("name")))) {
             jdbc.execute("ALTER TABLE curated_submission ADD COLUMN source_thread_id TEXT");
         }
+        // 요약·키워드 — 저자가 폼에서 직접 쓰거나 "빈 칸 자동 생성"으로 채우는 값. 승인 시
+        // curated_qa 로 복사되어 MetaKey.CHUNK_CONTEXT/EXCERPT_KEYWORDS 가 된다. 같은 방어적
+        // ADD COLUMN 이며 둘 다 nullable 이다(이 컬럼이 생기기 전 제안은 전부 NULL).
+        if (subCols.stream().noneMatch(c -> "summary".equals(c.get("name")))) {
+            jdbc.execute("ALTER TABLE curated_submission ADD COLUMN summary TEXT");
+        }
+        if (subCols.stream().noneMatch(c -> "keywords".equals(c.get("name")))) {
+            jdbc.execute("ALTER TABLE curated_submission ADD COLUMN keywords TEXT");
+        }
         // 부분 인덱스 — 중복 제안 방지(findLiveByTurn)가 매 좋아요마다 이걸 탄다. UNIQUE 는 쓰지
         // 않는다: 반려·철회된 제안이 같은 턴에 남으므로 한 턴에 여러 행이 정상이다.
         jdbc.execute("CREATE INDEX IF NOT EXISTS idx_curated_sub_turn " +
@@ -151,7 +165,7 @@ public class CuratedSubmissionRepository {
     /** Hand-written proposal — no originating chat turn. See {@link #insert(String, String,
      *  String, String, Long, String)}. */
     public long insert(String authorUserId, String title, String body, String tags) {
-        return insert(authorUserId, title, body, tags, null, null);
+        return insert(authorUserId, title, body, tags, null, null, null, null);
     }
 
     /**
@@ -164,14 +178,16 @@ public class CuratedSubmissionRepository {
      * proposed twice.
      */
     public long insert(String authorUserId, String title, String body, String tags,
-                       Long sourceTurnId, String sourceThreadId) {
+                       Long sourceTurnId, String sourceThreadId,
+                       String summary, String keywords) {
         String now = now();
         KeyHolder keyHolder = new GeneratedKeyHolder();
         jdbc.update(connection -> {
             PreparedStatement ps = connection.prepareStatement(
                     "INSERT INTO curated_submission (author_user_id, title, body, status, " +
-                    "created_at, updated_at, tags, source_turn_id, source_thread_id) " +
-                    "VALUES (?, ?, ?, '" + STATUS_PENDING + "', ?, ?, ?, ?, ?)",
+                    "created_at, updated_at, tags, source_turn_id, source_thread_id, " +
+                    "summary, keywords) " +
+                    "VALUES (?, ?, ?, '" + STATUS_PENDING + "', ?, ?, ?, ?, ?, ?, ?)",
                     Statement.RETURN_GENERATED_KEYS);
             ps.setString(1, authorUserId);
             ps.setString(2, title);
@@ -185,6 +201,8 @@ public class CuratedSubmissionRepository {
                 ps.setLong(7, sourceTurnId);
             }
             ps.setString(8, sourceThreadId);
+            ps.setString(9, summary);
+            ps.setString(10, keywords);
             return ps;
         }, keyHolder);
         Number key = keyHolder.getKey();
@@ -279,13 +297,15 @@ public class CuratedSubmissionRepository {
      * gets {@code false} back and its already-created curated row is rolled back by the caller).
      */
     public boolean markApproved(long id, String reviewerUserId, String title, String body,
-                                String tags, long firstCuratedQaId) {
+                                String tags, long firstCuratedQaId, String summary, String keywords) {
         String now = now();
         return jdbc.update(
                 "UPDATE curated_submission SET status = ?, reviewer_user_id = ?, title = ?, body = ?, " +
-                "tags = ?, curated_qa_id = ?, reviewed_at = ?, updated_at = ?, author_read_at = NULL " +
+                "tags = ?, summary = ?, keywords = ?, curated_qa_id = ?, reviewed_at = ?, " +
+                "updated_at = ?, author_read_at = NULL " +
                 "WHERE id = ? AND status = ?",
-                STATUS_APPROVED, reviewerUserId, title, body, tags, firstCuratedQaId, now, now,
+                STATUS_APPROVED, reviewerUserId, title, body, tags, summary, keywords,
+                firstCuratedQaId, now, now,
                 id, STATUS_PENDING) > 0;
     }
 
@@ -330,13 +350,15 @@ public class CuratedSubmissionRepository {
      * <p>Reviewer fields are cleared so the next reviewer isn't shown a verdict on text that no
      * longer exists. {@code curated_qa_id} is kept — it still points at what is live right now.
      */
-    public boolean updateByAuthor(long id, String authorUserId, String title, String body, String tags) {
+    public boolean updateByAuthor(long id, String authorUserId, String title, String body, String tags,
+                                  String summary, String keywords) {
         String now = now();
         return jdbc.update(
-                "UPDATE curated_submission SET title = ?, body = ?, tags = ?, status = ?, " +
+                "UPDATE curated_submission SET title = ?, body = ?, tags = ?, summary = ?, keywords = ?, " +
+                "status = ?, " +
                 "reviewer_user_id = NULL, review_note = NULL, reviewed_at = NULL, updated_at = ? " +
                 "WHERE id = ? AND author_user_id = ? AND status IN (?, ?)",
-                title, body, tags, STATUS_PENDING, now,
+                title, body, tags, summary, keywords, STATUS_PENDING, now,
                 id, authorUserId, STATUS_PENDING, STATUS_APPROVED) > 0;
     }
 
@@ -383,6 +405,7 @@ public class CuratedSubmissionRepository {
                              Long curatedQaId, String createdAt, String updatedAt,
                              String reviewedAt, String authorReadAt, String tags,
                              Long sourceTurnId, String sourceThreadId,
+                             String summary, String keywords,
                              int curatedTotal, int curatedChunks,
                              int curatedActive, int curatedFailed) {
 

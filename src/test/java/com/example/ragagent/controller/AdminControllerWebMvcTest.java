@@ -8,6 +8,7 @@ import com.example.ragagent.context.ThreadContextResolver;
 import com.example.ragagent.model.VectorStoreAdminView;
 import com.example.ragagent.security.AppUserDetails;
 import com.example.ragagent.security.CurrentUser;
+import com.example.ragagent.model.MetaKey;
 import com.example.ragagent.service.AdminService;
 import com.example.ragagent.service.AdminService.CollectionsResult;
 import com.example.ragagent.service.CuratedQaService;
@@ -220,7 +221,7 @@ class AdminControllerWebMvcTest {
         when(curatedQaService.listActive(anyInt(), anyInt())).thenReturn(List.of(
                 new com.example.ragagent.repository.CuratedQaRepository.CuratedQa(
                         1L, 42L, "u1", "t1", "질문입니다", "답변입니다", "active", "latest",
-                        "2026-01-01T00:00:00", "2026-01-01T00:00:00", "ok", "like", null, null, 1)));
+                        "2026-01-01T00:00:00", "2026-01-01T00:00:00", "ok", "like", null, null, 1, null, null)));
 
         mvc.perform(get("/admin/curated").with(user(ADMIN)))
                 .andExpect(status().isOk())
@@ -236,7 +237,7 @@ class AdminControllerWebMvcTest {
         when(submissionService.listForAdmin(anyString(), anyInt(), anyInt())).thenReturn(List.of(
                 new com.example.ragagent.repository.CuratedSubmissionRepository.Submission(
                         1L, "u1", "제안 제목", "제안 본문", "pending", null, null, null,
-                        "2026-01-01", "2026-01-01", null, null, "인프라", null, null, 0, 0, 0, 0)));
+                        "2026-01-01", "2026-01-01", null, null, "인프라", null, null, null, null, 0, 0, 0, 0)));
 
         mvc.perform(get("/admin/submissions").with(user(ADMIN)))
                 .andExpect(status().isOk())
@@ -252,7 +253,7 @@ class AdminControllerWebMvcTest {
     void submissionDetail_carriesChatOrigin() throws Exception {
         var row = new com.example.ragagent.repository.CuratedSubmissionRepository.Submission(
                 1L, "u1", "제안 제목", "제안 본문", "pending", null, null, null,
-                "2026-01-01", "2026-01-01", null, null, "인프라", 42L, "t1", 0, 0, 0, 0);
+                "2026-01-01", "2026-01-01", null, null, "인프라", 42L, "t1", null, null, 0, 0, 0, 0);
         when(submissionService.findById(1L)).thenReturn(Optional.of(row));
         when(submissionService.previewChunkCount(anyString())).thenReturn(1);
         when(submissionService.originOf(row)).thenReturn(Optional.of(
@@ -269,7 +270,7 @@ class AdminControllerWebMvcTest {
     void submissionDetail_handWritten_hasNoOrigin() throws Exception {
         var row = new com.example.ragagent.repository.CuratedSubmissionRepository.Submission(
                 2L, "u1", "제안 제목", "제안 본문", "pending", null, null, null,
-                "2026-01-01", "2026-01-01", null, null, null, null, null, 0, 0, 0, 0);
+                "2026-01-01", "2026-01-01", null, null, null, null, null, null, null, 0, 0, 0, 0);
         when(submissionService.findById(2L)).thenReturn(Optional.of(row));
         when(submissionService.previewChunkCount(anyString())).thenReturn(1);
         when(submissionService.originOf(row)).thenReturn(Optional.empty());
@@ -356,7 +357,7 @@ class AdminControllerWebMvcTest {
         when(curatedQaService.findById(1L)).thenReturn(Optional.of(
                 new com.example.ragagent.repository.CuratedQaRepository.CuratedQa(
                         1L, 42L, "u1", "t1", "질문", "답변", "active", "latest",
-                        "2026-01-01T00:00:00", "2026-01-01T00:00:00", "ok", "like", null, null, 1)));
+                        "2026-01-01T00:00:00", "2026-01-01T00:00:00", "ok", "like", null, null, 1, null, null)));
 
         mvc.perform(get("/admin/curated/1/detail").with(user(ADMIN)))
                 .andExpect(status().isOk())
@@ -415,7 +416,7 @@ class AdminControllerWebMvcTest {
         when(curatedQaService.findById(1L)).thenReturn(java.util.Optional.of(
                 new com.example.ragagent.repository.CuratedQaRepository.CuratedQa(
                         1L, 7L, "u1", "t1", "그거 어떻게 해?", "VPN 프로파일에서 split tunneling 을 끄면 됩니다.",
-                        "active", "latest", "2026-01-01", "2026-01-01", "ok", "like", null, null, 1)));
+                        "active", "latest", "2026-01-01", "2026-01-01", "ok", "like", null, null, 1, null, null)));
         when(questionSuggester.suggest(any(), any(), any()))
                 .thenReturn(java.util.Optional.of("VPN 접속이 안 될 때 확인할 설정은?"));
 
@@ -434,7 +435,7 @@ class AdminControllerWebMvcTest {
         when(curatedQaService.findById(1L)).thenReturn(java.util.Optional.of(
                 new com.example.ragagent.repository.CuratedQaRepository.CuratedQa(
                         1L, 7L, "u1", "t1", "이미 충분히 구체적인 질문", "본문",
-                        "active", "latest", "2026-01-01", "2026-01-01", "ok", "like", null, null, 1)));
+                        "active", "latest", "2026-01-01", "2026-01-01", "ok", "like", null, null, 1, null, null)));
         when(questionSuggester.suggest(any(), any(), any())).thenReturn(java.util.Optional.empty());
 
         mvc.perform(post("/admin/curated/1/suggest-question").with(user(ADMIN)).with(csrf()))
@@ -461,9 +462,23 @@ class AdminControllerWebMvcTest {
 
     // ── 청크 재인덱싱 (재임베딩 + FTS 재색인) ──────────────────────────────────
 
+    /** 문서 청크 한 줄 — 재인덱싱은 이제 어느 축인지 보고 갈라지므로 조회부터 스텁해야 한다. */
+    private static AdminService.ChunkRow documentChunk() {
+        return new AdminService.ChunkRow("c1", "본문 미리보기", "본문 전체",
+                java.util.Map.of(MetaKey.DOC_ID, "doc-1", MetaKey.FILENAME, "manual.md"));
+    }
+
+    /** 큐레이션 청크 한 줄 — {@code doc_id} 가 {@code curated:<id>} 이고 {@code doc_type} 이 표식이다. */
+    private static AdminService.ChunkRow curatedChunk() {
+        return new AdminService.ChunkRow("curated-7", "제안 미리보기", "제안 본문",
+                java.util.Map.of(MetaKey.DOC_ID, "curated:7", MetaKey.DOC_TYPE, "curated_qa",
+                        MetaKey.FILENAME, "curated_qa"));
+    }
+
     @Test
     @DisplayName("POST /admin/chunks/{id}/reindex — 본문 없이 호출해도 regenerateKeywords=false로 처리(200)")
     void reindexChunk_noBody_defaultsToKeepKeywords() throws Exception {
+        when(adminService.getChunk(anyString(), anyString())).thenReturn(documentChunk());
         when(adminService.reindexChunk(anyString(), anyString(), org.mockito.ArgumentMatchers.eq(false)))
                 .thenReturn(true);
 
@@ -475,6 +490,7 @@ class AdminControllerWebMvcTest {
     @Test
     @DisplayName("POST /admin/chunks/{id}/reindex — regenerateKeywords=true가 서비스로 그대로 전달됨")
     void reindexChunk_regenerateKeywordsTrue_passedThrough() throws Exception {
+        when(adminService.getChunk(anyString(), anyString())).thenReturn(documentChunk());
         when(adminService.reindexChunk(anyString(), anyString(), org.mockito.ArgumentMatchers.eq(true)))
                 .thenReturn(true);
 
@@ -483,6 +499,27 @@ class AdminControllerWebMvcTest {
                         .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
                         .content("{\"regenerateKeywords\":true}"))
                 .andExpect(status().isOk());
+    }
+
+    /**
+     * 큐레이션 청크의 재인덱싱은 문서 청크 경로로 가면 안 된다 — 그 경로는
+     * {@code chunk_context + 본문}으로 검색 텍스트를 다시 만드는데, 이 축의 검색 텍스트는
+     * <b>질문 + 본문</b>이고 질문은 벡터 메타데이터에 없다. 그대로 태우면 그 청크만 조용히
+     * 질문을 잃고 질문형 질의와의 매칭이 무너진다.
+     */
+    @Test
+    @DisplayName("POST /admin/chunks/{id}/reindex — 큐레이션 청크는 CuratedQaService 로 간다(문서 경로 미사용)")
+    void reindexChunk_curatedChunk_goesThroughCuratedService() throws Exception {
+        when(adminService.getChunk(anyString(), anyString())).thenReturn(curatedChunk());
+        when(curatedQaService.reembedRow(org.mockito.ArgumentMatchers.eq(7L), anyString())).thenReturn(true);
+
+        mvc.perform(post("/admin/chunks/curated-7/reindex").with(user(ADMIN)).with(csrf())
+                        .param("collection", "curated"))
+                .andExpect(status().isOk());
+
+        org.mockito.Mockito.verify(curatedQaService).reembedRow(org.mockito.ArgumentMatchers.eq(7L), anyString());
+        org.mockito.Mockito.verify(adminService, org.mockito.Mockito.never())
+                .reindexChunk(anyString(), anyString(), org.mockito.ArgumentMatchers.anyBoolean());
     }
 
     @Test

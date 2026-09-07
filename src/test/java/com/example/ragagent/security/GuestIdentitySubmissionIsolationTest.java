@@ -152,7 +152,7 @@ class GuestIdentitySubmissionIsolationTest {
                 .andExpect(status().isOk());
 
         assertThat(listedUserIds()).containsExactly("guest-abcdef123456");
-        verify(service).submit("guest-abcdef123456", "제목", "본문", java.util.List.of(), null, null);
+        verify(service).submit("guest-abcdef123456", "제목", "본문", java.util.List.of(), null, null, null, null);
         verify(service).countUnreadForAuthor("guest-abcdef123456");
     }
 

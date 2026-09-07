@@ -52,7 +52,9 @@ class CuratedQaTagScopeTest {
         memoryService = mock(MemoryService.class);
         threadMetaService = mock(ThreadMetaService.class);
         vectorStore = mock(VectorStoreFacade.class);
-        service = new CuratedQaService(repository, threadMetaService, vectorStore, new com.example.ragagent.ingestion.ChunkSplitter(), splitProps());
+        service = new CuratedQaService(repository, threadMetaService, vectorStore,
+                new com.example.ragagent.ingestion.ChunkSplitter(), splitProps(),
+                mock(com.example.ragagent.ingestion.KeywordSearchRepository.class));
 
         when(threadMetaService.findById(UID, TID)).thenReturn(Optional.of(
                 new ThreadMeta(TID, UID, "제목", "v1", "2026-01-01", "2026-01-01", "COST_FIRST", "")));
@@ -60,36 +62,36 @@ class CuratedQaTagScopeTest {
 
     private static CuratedQaRepository.CuratedQa curated(String tags) {
         return new CuratedQaRepository.CuratedQa(1L, TURN_ID, UID, TID, "질문", "답변", "active", "v1",
-                "2026-01-01", "2026-01-01", "ok", CuratedQaRepository.ORIGIN_LIKE, null, tags, 1);
+                "2026-01-01", "2026-01-01", "ok", CuratedQaRepository.ORIGIN_LIKE, null, tags, 1, null, null);
     }
 
     @Test
     @DisplayName("승인 — 제안의 태그 스코프를 curated_qa 에 그대로 싣는다 (출처 turn/thread 와 함께)")
     void approve_storesSubmissionTags() {
-        when(repository.upsertActive(anyLong(), any(), any(), any(), any(), any(), any(), any())).thenReturn(1L);
+        when(repository.upsertActive(anyLong(), any(), any(), any(), any(), any(), any(), any(), any(), any())).thenReturn(1L);
 
-        service.createFromLikedTurn(7L, TURN_ID, UID, TID, "질문", "답변", "설계,api");
+        service.createFromLikedTurn(7L, TURN_ID, UID, TID, "질문", "답변", "설계,api", null, null);
 
-        verify(repository).upsertActive(TURN_ID, UID, TID, "질문", "답변", "v1", "설계,api", 7L);
+        verify(repository).upsertActive(TURN_ID, UID, TID, "질문", "답변", "v1", "설계,api", 7L, null, null);
     }
 
     @Test
     @DisplayName("승인 — 태그 없이 낸 제안이면 태그도 비어 저장된다 (모든 스코프에서 검색된다)")
     void approve_noTagsStaysEmpty() {
-        when(repository.upsertActive(anyLong(), any(), any(), any(), any(), any(), any(), any())).thenReturn(1L);
+        when(repository.upsertActive(anyLong(), any(), any(), any(), any(), any(), any(), any(), any(), any())).thenReturn(1L);
 
-        service.createFromLikedTurn(7L, TURN_ID, UID, TID, "질문", "답변", "");
+        service.createFromLikedTurn(7L, TURN_ID, UID, TID, "질문", "답변", "", null, null);
 
-        verify(repository).upsertActive(TURN_ID, UID, TID, "질문", "답변", "v1", "", 7L);
+        verify(repository).upsertActive(TURN_ID, UID, TID, "질문", "답변", "v1", "", 7L, null, null);
     }
 
     @Test
     @DisplayName("임베딩 문서 — 태그가 있으면 문서 청크와 같은 키(MetaKey.TAGS)로 실린다")
     void embeddedDocument_carriesTagsMetadata() {
-        when(repository.upsertActive(anyLong(), any(), any(), any(), any(), any(), any(), any())).thenReturn(1L);
+        when(repository.upsertActive(anyLong(), any(), any(), any(), any(), any(), any(), any(), any(), any())).thenReturn(1L);
         when(repository.findById(1L)).thenReturn(Optional.of(curated("설계,api")));
 
-        service.createFromLikedTurn(7L, TURN_ID, UID, TID, "질문", "답변", "설계,api");
+        service.createFromLikedTurn(7L, TURN_ID, UID, TID, "질문", "답변", "설계,api", null, null);
 
         assertThat(capturedDocument().getMetadata().get(MetaKey.TAGS)).isEqualTo("설계,api");
     }
@@ -97,10 +99,10 @@ class CuratedQaTagScopeTest {
     @Test
     @DisplayName("임베딩 문서 — 태그가 없으면 키 자체를 넣지 않는다 (스코프 미상 = 전체 통과)")
     void embeddedDocument_omitsTagsKeyWhenEmpty() {
-        when(repository.upsertActive(anyLong(), any(), any(), any(), any(), any(), any(), any())).thenReturn(1L);
+        when(repository.upsertActive(anyLong(), any(), any(), any(), any(), any(), any(), any(), any(), any())).thenReturn(1L);
         when(repository.findById(1L)).thenReturn(Optional.of(curated(null)));
 
-        service.createFromLikedTurn(7L, TURN_ID, UID, TID, "질문", "답변", null);
+        service.createFromLikedTurn(7L, TURN_ID, UID, TID, "질문", "답변", null, null, null);
 
         assertThat(capturedDocument().getMetadata()).doesNotContainKey(MetaKey.TAGS);
     }

@@ -115,6 +115,29 @@ public class AdminService {
         }
         public String keywords()  { return metadata.getOrDefault(MetaKey.EXCERPT_KEYWORDS, ""); }
         public int chunkSize()    { return fullText == null ? 0 : fullText.length(); }
+
+        /**
+         * 큐레이션 축(§10.10)의 청크인가. 이 축은 검색 텍스트를 만드는 규칙이 다르므로
+         * ({@code 질문 + 본문}, 질문은 벡터 메타데이터에 없다) 문서 청크용 재인덱싱을
+         * 그대로 태우면 안 된다 — {@link AdminService#reindexChunk} 참고.
+         */
+        public boolean isCurated() {
+            return "curated_qa".equals(metadata.get(MetaKey.DOC_TYPE));
+        }
+
+        /**
+         * 이 청크가 속한 {@code curated_qa} 행의 id. {@code doc_id} 가 {@code curated:<id>} 라
+         * 거기서 되읽는다 — 큐레이션 청크가 아니거나 형식이 다르면 비어 있다.
+         */
+        public java.util.OptionalLong curatedRowId() {
+            String docId = docId();
+            if (!isCurated() || !docId.startsWith("curated:")) return java.util.OptionalLong.empty();
+            try {
+                return java.util.OptionalLong.of(Long.parseLong(docId.substring("curated:".length())));
+            } catch (NumberFormatException e) {
+                return java.util.OptionalLong.empty();
+            }
+        }
     }
 
     /** Unparseable/missing chunk_index (legacy pre-§ chunks) sorts last within its document. */
@@ -622,6 +645,15 @@ public class AdminService {
         ChunkRow row = getChunk(collectionName, chunkId);
         if (row == null) {
             log.warn("reindexChunk — chunk not found id={}", chunkId);
+            return false;
+        }
+        // 큐레이션 청크는 여기로 들어오면 안 된다. 아래 SearchTextBuilder.precompute() 는 문서
+        // 청크의 규칙(chunk_context + 본문)으로 검색 텍스트를 다시 만드는데, 그 축의 검색
+        // 텍스트는 질문 + 본문이고 질문은 벡터 메타데이터에 실려 있지 않다 — 그대로 태우면 그
+        // 청크만 조용히 질문을 잃고, 질문형 질의와의 매칭이 급격히 나빠진다. 라우팅은
+        // AdminController 가 하고(→ CuratedQaService.reembedRow), 여기서는 마지막 방어선이다.
+        if (row.isCurated()) {
+            log.warn("reindexChunk — 큐레이션 청크는 이 경로로 재인덱싱하지 않는다 id={} (CuratedQaService.reembedRow)", chunkId);
             return false;
         }
         String previousHash = questionReuseService == null ? "" : questionReuseService.currentChunkHash(chunkId);

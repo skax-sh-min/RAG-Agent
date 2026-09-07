@@ -50,12 +50,13 @@ class CuratedSubmissionAuthorControlTest {
         AppProperties props = mock(AppProperties.class);
         when(props.chunkSizeSafe()).thenReturn(1_500);
         service = new CuratedSubmissionService(repository, curatedQaService, imageStore,
-                mock(MemoryService.class), props, mock(AuditLogger.class));
+                mock(MemoryService.class), props, mock(AuditLogger.class),
+                mock(com.example.ragagent.ingestion.KeywordExtractor.class));
     }
 
     private static Submission row(String status, int curatedActive) {
         return new Submission(7L, AUTHOR, "제목", "본문", status, null, null, null,
-                "2026-01-01", "2026-01-01", null, null, "인프라", null, null,
+                "2026-01-01", "2026-01-01", null, null, "인프라", null, null, null, null,
                 curatedActive, curatedActive, curatedActive, 0);
     }
 
@@ -102,11 +103,11 @@ class CuratedSubmissionAuthorControlTest {
     @DisplayName("수정 — 저장하면 검토 대기로 돌아가되 등록본은 건드리지 않는다 (정책 3)")
     void update_doesNotRetractWhileAwaitingReview() {
         when(repository.findById(7L)).thenReturn(Optional.of(row("approved", 2)));
-        when(repository.updateByAuthor(7L, AUTHOR, "새 제목", "새 본문", "인프라")).thenReturn(true);
+        when(repository.updateByAuthor(7L, AUTHOR, "새 제목", "새 본문", "인프라", null, null)).thenReturn(true);
 
-        assertThat(service.updateByAuthor(7L, AUTHOR, "새 제목", "새 본문", List.of("인프라"))).isTrue();
+        assertThat(service.updateByAuthor(7L, AUTHOR, "새 제목", "새 본문", List.of("인프라"), null, null)).isTrue();
 
-        verify(repository).updateByAuthor(7L, AUTHOR, "새 제목", "새 본문", "인프라");
+        verify(repository).updateByAuthor(7L, AUTHOR, "새 제목", "새 본문", "인프라", null, null);
         verify(curatedQaService, never()).forceRemoveBySubmission(anyLong());
         // 본문에서 빠진 이미지는 정리하되, 아직 참조되는 파일은 releaseImages 가 알아서 남긴다.
         verify(imageStore).releaseImages("본문");
@@ -116,10 +117,10 @@ class CuratedSubmissionAuthorControlTest {
     @DisplayName("수정 — CAS 가 막으면(검토자가 먼저 처리) 이미지도 건드리지 않는다")
     void update_lostCas_touchesNothing() {
         when(repository.findById(7L)).thenReturn(Optional.of(row("pending", 0)));
-        when(repository.updateByAuthor(anyLong(), anyString(), anyString(), anyString(), any()))
+        when(repository.updateByAuthor(anyLong(), anyString(), anyString(), anyString(), any(), any(), any()))
                 .thenReturn(false);
 
-        assertThat(service.updateByAuthor(7L, AUTHOR, "새 제목", "새 본문", List.of())).isFalse();
+        assertThat(service.updateByAuthor(7L, AUTHOR, "새 제목", "새 본문", List.of(), null, null)).isFalse();
 
         verify(imageStore, never()).releaseImages(anyString());
     }
@@ -127,25 +128,25 @@ class CuratedSubmissionAuthorControlTest {
     @Test
     @DisplayName("수정 — 등록과 같은 검증을 받는다 (제목 길이·빈 본문·이미지 개수)")
     void update_appliesSameValidationAsSubmit() {
-        assertThatThrownBy(() -> service.updateByAuthor(7L, AUTHOR, "가".repeat(300), "본문", List.of()))
+        assertThatThrownBy(() -> service.updateByAuthor(7L, AUTHOR, "가".repeat(300), "본문", List.of(), null, null))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("제목이 너무 깁니다");
 
-        assertThatThrownBy(() -> service.updateByAuthor(7L, AUTHOR, "제목", "   ", List.of()))
+        assertThatThrownBy(() -> service.updateByAuthor(7L, AUTHOR, "제목", "   ", List.of(), null, null))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("본문을 입력해 주세요");
 
-        verify(repository, never()).updateByAuthor(anyLong(), anyString(), anyString(), anyString(), any());
+        verify(repository, never()).updateByAuthor(anyLong(), anyString(), anyString(), anyString(), any(), any(), any());
     }
 
     @Test
     @DisplayName("수정 — pending 상한은 적용하지 않는다 (이미 있는 행이라 큐를 늘리지 않는다)")
     void update_doesNotConsultPendingCap() {
         when(repository.findById(7L)).thenReturn(Optional.of(row("pending", 0)));
-        when(repository.updateByAuthor(anyLong(), anyString(), anyString(), anyString(), any()))
+        when(repository.updateByAuthor(anyLong(), anyString(), anyString(), anyString(), any(), any(), any()))
                 .thenReturn(true);
 
-        service.updateByAuthor(7L, AUTHOR, "제목", "본문", List.of());
+        service.updateByAuthor(7L, AUTHOR, "제목", "본문", List.of(), null, null);
 
         verify(repository, never()).countPendingByAuthor(anyString());
     }
@@ -157,31 +158,31 @@ class CuratedSubmissionAuthorControlTest {
     void reapprove_handWritten_replacesPreviousRows() {
         when(repository.findById(7L)).thenReturn(Optional.of(row("pending", 2)));
         when(curatedQaService.splitForEmbedding(anyString())).thenReturn(List.of("조각1"));
-        when(curatedQaService.createFromSubmission(anyLong(), anyString(), anyString(), any(), any()))
+        when(curatedQaService.createFromSubmission(anyLong(), anyString(), anyString(), any(), any(), any(), any()))
                 .thenReturn(List.of(20L));
-        when(repository.markApproved(anyLong(), anyString(), anyString(), anyString(), any(), anyLong()))
+        when(repository.markApproved(anyLong(), anyString(), anyString(), anyString(), any(), anyLong(), any(), any()))
                 .thenReturn(true);
 
         service.approve(7L, "admin", null, null, null);
 
         verify(curatedQaService).forceRemoveBySubmission(7L);
-        verify(curatedQaService).createFromSubmission(anyLong(), anyString(), anyString(), any(), any());
+        verify(curatedQaService).createFromSubmission(anyLong(), anyString(), anyString(), any(), any(), any(), any());
     }
 
     @Test
     @DisplayName("재승인 — 좋아요 출신은 먼저 내리지 않는다 (같은 id 라 백그라운드 삭제가 새 벡터를 지운다)")
     void reapprove_likeOrigin_replacesInPlace() {
         Submission liked = new Submission(7L, AUTHOR, "제목", "본문", "pending", null, null, null,
-                "2026-01-01", "2026-01-01", null, null, "인프라", 42L, "t1", 1, 1, 1, 0);
+                "2026-01-01", "2026-01-01", null, null, "인프라", 42L, "t1", null, null, 1, 1, 1, 0);
         when(repository.findById(7L)).thenReturn(Optional.of(liked));
         when(curatedQaService.createFromLikedTurn(anyLong(), anyLong(), anyString(), anyString(),
-                anyString(), anyString(), any())).thenReturn(30L);
-        when(repository.markApproved(anyLong(), anyString(), anyString(), anyString(), any(), anyLong()))
+                anyString(), anyString(), any(), any(), any())).thenReturn(30L);
+        when(repository.markApproved(anyLong(), anyString(), anyString(), anyString(), any(), anyLong(), any(), any()))
                 .thenReturn(true);
 
         service.approve(7L, "admin", null, null, null);
 
         verify(curatedQaService, never()).forceRemoveBySubmission(anyLong());
-        verify(curatedQaService).createFromLikedTurn(7L, 42L, AUTHOR, "t1", "제목", "본문", "인프라");
+        verify(curatedQaService).createFromLikedTurn(7L, 42L, AUTHOR, "t1", "제목", "본문", "인프라", null, null);
     }
 }
