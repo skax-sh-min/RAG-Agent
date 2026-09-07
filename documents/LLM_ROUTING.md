@@ -365,9 +365,11 @@ app.indexing.keyword-batch-size=${INDEXING_KEYWORD_BATCH_SIZE:2}
   **시도했다가 실패해 후보가 없어진 경우엔 시간을 붙이지 않는다** — 기다린다고 풀리는 것이 아니라 거짓말이 된다.
 - `/llm-usage` 페이지에서 차단 상태 + 남은 시간 카운트다운 확인 가능 (30초마다 자동 갱신).
 - **동시성 백프레셔(§6, 아래)는 Circuit Breaker와 별개**다 — 용량 초과는 프로바이더 장애가 아니므로 차단하지 않는다.
-- **"30초"의 근거**: `LlmRouter.SHORT_BLOCK_SECONDS`("30") 하드코딩 상수 하나를 **세 갈래**(폴백 없는 과부하 차단·기타 4xx/5xx·일반 예외)가 공유한다. 이 값은 폴백 없는 프로바이더 완화 로직을 구현하며 새로 정한 게 아니라, 그 이전부터 "기타 4xx/5xx·일반 예외" 차단에 쓰이던 기존 값을 그대로 재사용한 것 — `permit-wait-timeout-seconds`(기본 60초)와 비슷한 수준이라 재사용에 무리가 없었다. `app.llm.default-provider-concurrency`/`app.llm.permit-wait-timeout-seconds`와 달리 **프로퍼티로 외부화되어 있지 않다** — 값을 바꾸려면 코드 수정이 필요하다.
-  - 더 짧게(예: 10~20초) 바꾸면 일시적 장애에서 더 빨리 회복되지만, 실제 서버 복구가 그보다 오래 걸리는 상황이면 재시도가 더 잦아져(연결·요청·로그 비용만 반복) 실질적인 다운타임 단축 효과 없이 노이즈만 늘 수 있다.
-  - 세 갈래가 상수 하나를 공유하므로, 폴백 없는 과부하 차단만 다르게(예: 10초) 가져가고 싶다면 상수를 분리해야 한다.
+- **차단 길이 상수는 둘이다** — 둘 다 `LlmRouter` 하드코딩이며, `app.llm.default-provider-concurrency`/`app.llm.permit-wait-timeout-seconds`와 달리 **프로퍼티로 외부화되어 있지 않다**(값을 바꾸려면 코드 수정).
+  - `SHORT_BLOCK_SECONDS`("30") — **폴백이 있는** 일반 실패(`blockForFailure`)와, **폴백도 `Retry-After`도 없는** 과부하(`blockForOverload`)가 쓴다. `permit-wait-timeout-seconds`(기본 60초)와 비슷한 수준이라 재사용에 무리가 없던 기존 값이다.
+  - `NO_FALLBACK_BLOCK_SECONDS`("5") — **폴백이 없는** 일반 실패. 프로바이더가 하나뿐이면 차단은 우회가 아니라 전면 중단이고 로컬 LLM 재시작은 보통 몇 초로 끝나므로, 30초는 서버가 이미 올라온 뒤까지 남아 "재시작했는데도 계속 안 된다"가 된다(위 항목 참고).
+  - 두 값이 갈리는 축은 **길이가 아니라 "넘겨줄 상대가 있는가"**다. 폴백이 있으면 차단은 곧 우회이므로 길어도 손해가 없고, 없으면 차단이 곧 다운타임이라 짧아야 한다. 30초를 더 짧게(10~20초) 바꾸는 것은 그 축과 무관한 튜닝이며, 실제 서버 복구가 그보다 오래 걸리면 재시도만 잦아져(연결·요청·로그 비용 반복) 다운타임은 안 줄고 노이즈만 는다.
+  - `SHORT_BLOCK_SECONDS`는 아직 두 갈래가 공유하므로, 그중 하나만 다르게 가져가려면 상수를 한 번 더 분리해야 한다.
 
 ---
 
@@ -455,6 +457,8 @@ CREATE TABLE IF NOT EXISTS llm_usage (
     PRIMARY KEY (provider_name, usage_date)
 );
 ```
+
+> 실제 테이블에는 방어적 `ALTER TABLE`로 추가된 `user_id TEXT NOT NULL DEFAULT 'anonymous'` 컬럼이 하나 더 있다. **읽거나 쓰는 코드가 없어 모든 행이 기본값 그대로**이며(§6.5 사용자별 쿼터를 대비해 넣었으나, 권장 설계는 `conversation_turns.user_id`에서 집계하는 쪽이라 그대로 죽은 채 남을 수 있다), 그래서 위 DDL에서 뺐다 — 집계 쿼리는 이 컬럼을 보지 않는다.
 
 모니터링: `GET /api/v1/llm/usage` (일간·주간·월간), `GET /api/v1/llm/usage/history?days=N` (Chart.js용)
 

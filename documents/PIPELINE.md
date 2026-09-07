@@ -417,6 +417,10 @@ PROGRESSIVE 모드 AND sufficient=false AND retryCount >= max
   │    문서 전체 임베딩을 힙에 모았다가 한 번에 삽입하지 않음 — 피크 메모리가 서브배치 크기로
   │    고정) — 서브배치별 벡터+청크 배치 삽입 2개는 여전히 하나의 트랜잭션으로 커밋(§10.8.3))
   │    + FTS 인덱스(chunk_fts)에도 동일 맥락+정규화 텍스트 반영 (Contextual BM25 시너지)
+  │      — 같은 트랜잭션으로 동반 테이블 chunk_fts_key(spring_doc_id PK → fts_rowid + 위치 컬럼
+  │        + 본문 해시)도 함께 쓴다. FTS5는 MATCH·rowid 외에는 인덱스를 못 쓰므로, 청크 id로
+  │        FTS 행을 찾는 조회(출처 미리보기·재사용 해시·원문 보기·신고 스냅샷·삭제·태그 갱신)는
+  │        전부 이 키를 먼저 타고 rowid로 조인한다 — 직접 WHERE는 코퍼스 전체 스캔이다
   │
   └─ 레지스트리 저장 (SQLite doc_registry 테이블 — memory.db 공유; 위 체크포인트에서 남긴
        partial row를 실제 chunk수/spring_doc_ids로 덮어씀)
@@ -664,6 +668,11 @@ PROGRESSIVE 모드 AND sufficient=false AND retryCount >= max
       롤백되어 vec_embeddings만 커밋되고 매칭되는 vec_document_chunks가 없는 상태가 생기지
       않음(트랜잭션 범위는 문서 전체가 아니라 서브배치 단위)
   + FTS 인덱스(chunk_fts)에도 doc_tags/keywords + content(11의 파생 텍스트, Contextual BM25 시너지) 반영
+    - chunk_fts_key: spring_doc_id(PK), fts_rowid, doc_id/version/filename/page/chapter,
+      content_hash(= sha256(11의 파생 텍스트)) — chunk_fts와 같은 트랜잭션으로 삽입되며
+      rowid는 MAX(rowid)+1..n으로 직접 할당(pool=1이라 트랜잭션 안에서 안전)
+    - 이 키가 없던 배포는 기동 시 KeywordSearchRepository.init()이 rowid 범위 스캔으로 채운다
+      (INSERT OR IGNORE, 500행 페이지). FTS 행이 사라진 키는 반대로 정리한다
 
 13) 레지스트리 저장 (최종)
   doc_registry에 docId/version/chunk수/spring_doc_ids 기록 — 6-bis)에서 남긴 partial row를

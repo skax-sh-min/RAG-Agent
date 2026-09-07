@@ -62,7 +62,9 @@ Per-visitor `userId` for no-auth mode (`app.auth.guest-identity` = `shared`/`ip`
 
 ### `security/ClientIpResolver.java`
 
-PLAN §6.19.3 — the single place deciding "this request's client IP" for both `RateLimitFilter` and `GuestIdentityResolver`. `X-Forwarded-For` is honored only when `app.trust-forwarded-for=true` (default false): the header is client-supplied on a direct-exposure deployment, so trusting it would let an attacker rotate it to refill their own rate-limit bucket or — once identity derives from IP — impersonate another visitor. Behind a proxy the flag must be ON or every visitor collapses into the proxy's own address
+PLAN §6.19.3 — the single place deciding "this request's client IP" for `RateLimitFilter`, `GuestIdentityResolver` **and `AuditLogger`**. `X-Forwarded-For` is honored only when `app.trust-forwarded-for=true` (default false): the header is client-supplied on a direct-exposure deployment, so trusting it would let an attacker rotate it to refill their own rate-limit bucket or — once identity derives from IP — impersonate another visitor. Behind a proxy the flag must be ON or every visitor collapses into the proxy's own address
+
+**세 번째 소비자가 뒤늦게 합류했다.** `AuditLogger.extractIp()` 는 이 클래스가 생긴 뒤로도 한동안 `X-Forwarded-For` 를 **무조건** 신뢰했다 — 같은 요청 안에서 레이트리밋과 게스트 식별은 실제 remote address 를 쓰는데 감사 로그만 헤더를 믿는 상태였고, 하필 "누가 무엇을 했는가"를 남기는 것이 목적인 필드가 셋 중 가장 위조하기 쉬웠다. 판정을 한 곳에 모아 두는 것만으로는 부족하고 **새 소비자가 그것을 실제로 부르는지**를 봐야 한다는 사례다. 요청 스레드 밖(가상 스레드)에서는 여전히 `null` 이고, 그 경우 `ip` 키 자체가 이벤트에 들어가지 않는다
 
 ### `llm/IndexingOutputCap.java`
 
@@ -253,6 +255,17 @@ on/off 스위치를 새로 만들지 않고 `app.search-multiquery-enabled` 를 
 ---
 
 ## 규약·제약의 배경
+
+### `/api/**` 에 CORS 매핑을 두지 않는다
+
+`WebConfig` 에 `addCorsMappings` 가 **없는 것이 규칙**이다. 예전에는 `/api/**` 이 `allowedOrigins("*")` 였는데, 인증 없는 두 모드에서 그 접두사는 `permitAll` + CSRF 예외라 크로스 오리진 허용이 곧 "방문자가 연 아무 페이지나 그 브라우저를 통해 코퍼스를 읽는다"가 됐다 — `POST /api/v1/chat` 으로 검색 답변을, `GET /api/v1/documents`·`/api/v1/chunks/{id}` 로 문서·청크 본문을 읽고 **응답까지 그대로 가져갈** 수 있었고, 와일드카드가 프리플라이트를 통과시켜 `DELETE /api/v1/documents/{id}` 도 닿았다. 폐쇄망이라도 내부 위키·CI 화면 하나의 XSS 면 충분하다.
+
+이 앱의 API 소비자는 전부 같은 오리진이고(채팅·문서·설정 화면의 fetch), **curl 등 스크립트는 브라우저가 아니라 CORS 를 보지 않으므로** 자동화에는 애초에 영향이 없었다 — 즉 그 매핑은 아무에게도 필요하지 않으면서 노출면만 만들고 있었다. 되살릴 일이 생기면 `allowedOrigins("*")` 가 아니라 **구체적인 오리진 목록**으로 넣을 것. `SecurityHeadersTest` 가 크로스 오리진 GET 과 프리플라이트 양쪽에서 `Access-Control-Allow-Origin` 이 없음을 고정한다.
+
+### 로그·세션에 들어가는 클라이언트 입력은 모양을 검사한다
+
+- **`X-Trace-Id`** (`TraceIdFilter`): 영숫자와 `_-`, 64자 이하일 때만 받고 아니면 새로 발급한다. 이 값은 콘솔 패턴의 `[%X{traceId}]` 자리에 들어가 **모든 로그 줄**에 찍히므로, 줄바꿈 하나면 가짜 로그 줄이 되고(위조된 ERROR 줄 주입) 수 KB 짜리 값은 매 줄에 반복돼 로그 파일을 부풀린다. 채팅과 지식 제안이 게스트 개방이라 누구나 보낼 수 있는 헤더다. **거부가 아니라 재발급**인 것도 규칙이다 — 추적 id 가 이상하다고 요청을 실패시킬 이유는 없다. UUID 는 하이픈째로 통과하므로 기존 상관관계 id 연동은 그대로 동작한다.
+- **세션은 페이지 라우트만 만든다** (`ThreadContextResolver`): `getSession(false)` 로 읽기만 한다. 이 리졸버는 `ThreadContext` 를 받는 **모든** 핸들러에 걸리고 거기엔 REST 엔드포인트가 포함되므로, 예전 `getSession()` 은 쿠키를 들고 오지 않는 스크립트 호출 하나하나가 8시간짜리(`server.servlet.session.timeout`) 세션 객체를 남기게 했다 — no-auth 모드는 `STATELESS` 로 선언돼 있는데도 앱이 그 뒤에서 세션을 쌓았다. 여기서 만드는 `threadId` 는 **아무 컨트롤러도 읽지 않는다**(전부 폼/본문의 `threadId` 를 쓴다). 화면 경로의 세션은 `ChatController` 가 `HttpSession` 파라미터로 따로 만든다.
 
 ### spring.autoconfigure.exclude must keep the Chroma ex
 
