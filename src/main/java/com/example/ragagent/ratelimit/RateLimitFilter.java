@@ -3,6 +3,7 @@ package com.example.ragagent.ratelimit;
 import com.example.ragagent.config.AppProperties;
 import com.example.ragagent.security.ClientIpResolver;
 import com.example.ragagent.security.CurrentUser;
+import com.example.ragagent.security.GuestIdentityResolver;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import io.github.bucket4j.Bandwidth;
@@ -121,10 +122,30 @@ public class RateLimitFilter extends OncePerRequestFilter {
         };
     }
 
+    /**
+     * 이 요청이 어느 버킷을 쓰는가.
+     *
+     * <p><b>공유 게스트는 사용자로 세지 않는다.</b> no-auth 모드의 기본 전략({@code
+     * app.auth.guest-identity=shared})에서는 모든 방문자가 {@link GuestIdentityResolver#SHARED_ID}
+     * 하나를 principal 로 받고, 그것은 {@code CurrentUser.isAuthenticated()} 에 <b>참</b>이다 —
+     * 그래서 예전에는 배포 전체가 버킷 하나를 나눠 썼고, 방문자 한 명이 분당 한도를 소진하면
+     * 나머지 전원이 429 를 받았다(레이트리밋은 남용을 막는 장치인데 그 자체가 서비스 거부의
+     * 지렛대가 됐다). 그 id 일 때는 IP 로 떨어뜨려 방문자별로 센다.
+     *
+     * <p>{@code ip}/{@code cookie}/{@code hybrid} 전략은 이미 방문자별 id 를 주므로 이 분기에
+     * 걸리지 않고, 실제 로그인 사용자도 마찬가지다(계정 id 는 랜덤 UUID 라 이 상수와 겹칠 수 없다).
+     */
     String clientKey(HttpServletRequest req) {
-        if (currentUser.isAuthenticated()) return "user:" + currentUser.userId();
+        if (currentUser.isAuthenticated() && !isSharedGuest(currentUser.userId())) {
+            return "user:" + currentUser.userId();
+        }
         // PLAN §6.19.3 — X-Forwarded-For is only honored when the operator opts in, otherwise an
         // attacker could vary the header per request and refill their own bucket indefinitely.
         return "ip:" + clientIpResolver.resolve(req);
+    }
+
+    /** 전 방문자가 공유하는 게스트 principal 인가 — 그렇다면 "사용자 하나"로 셀 수 없다. */
+    private static boolean isSharedGuest(String userId) {
+        return GuestIdentityResolver.SHARED_ID.equals(userId);
     }
 }

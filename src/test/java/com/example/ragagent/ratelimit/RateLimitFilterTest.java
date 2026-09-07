@@ -134,6 +134,61 @@ class RateLimitFilterTest {
         verify(chain2, never()).doFilter(any(), any());
     }
 
+    /**
+     * no-auth 기본 전략({@code guest-identity=shared})에서는 모든 방문자가 같은 게스트 principal 을
+     * 받고 그것이 {@code isAuthenticated()==true} 다. 이걸 사용자 하나로 세면 배포 전체가 버킷을
+     * 공유해, 방문자 한 명이 한도를 쓰면 나머지 전원이 429 를 받는다 — 남용을 막는 장치가 그 자체로
+     * 서비스 거부의 지렛대가 된다.
+     */
+    @Test
+    @DisplayName("공유 게스트(shared)는 사용자로 세지 않고 IP로 버킷을 가른다")
+    void sharedGuest_isKeyedByIpNotUser() {
+        when(currentUser.isAuthenticated()).thenReturn(true);
+        when(currentUser.userId())
+                .thenReturn(com.example.ragagent.security.GuestIdentityResolver.SHARED_ID);
+
+        MockHttpServletRequest a = reqFor("/api/v1/chat");
+        a.setRemoteAddr("10.0.0.1");
+        MockHttpServletRequest b = reqFor("/api/v1/chat");
+        b.setRemoteAddr("10.0.0.2");
+
+        assertThat(filter.clientKey(a)).isEqualTo("ip:10.0.0.1");
+        assertThat(filter.clientKey(b)).isEqualTo("ip:10.0.0.2");
+    }
+
+    @Test
+    @DisplayName("방문자별 게스트 id(hybrid/ip/cookie)는 그대로 사용자 키를 쓴다")
+    void perVisitorGuest_keepsUserKey() {
+        when(currentUser.isAuthenticated()).thenReturn(true);
+        when(currentUser.userId()).thenReturn("guest-a1b2c3d4e5f6");
+
+        MockHttpServletRequest req = reqFor("/api/v1/chat");
+        req.setRemoteAddr("10.0.0.1");
+
+        assertThat(filter.clientKey(req)).isEqualTo("user:guest-a1b2c3d4e5f6");
+    }
+
+    @Test
+    @DisplayName("공유 게스트 배포에서 한 방문자가 한도를 써도 다른 방문자는 막히지 않는다")
+    void sharedGuest_oneVisitorCannotBlockEveryoneElse() throws Exception {
+        when(currentUser.isAuthenticated()).thenReturn(true);
+        when(currentUser.userId())
+                .thenReturn(com.example.ragagent.security.GuestIdentityResolver.SHARED_ID);
+        int limit = 2;
+        when(appProperties.rateLimitSafe()).thenReturn(cfg(true, limit, 10, 2, 300, 120));
+
+        for (int i = 0; i < limit; i++) {
+            filter.doFilterInternal(chatRequest("10.9.9.1"), new MockHttpServletResponse(), mock(FilterChain.class));
+        }
+        MockHttpServletResponse blocked = new MockHttpServletResponse();
+        filter.doFilterInternal(chatRequest("10.9.9.1"), blocked, mock(FilterChain.class));
+        assertThat(blocked.getStatus()).as("한도를 쓴 방문자 본인은 막힌다").isEqualTo(429);
+
+        MockHttpServletResponse other = new MockHttpServletResponse();
+        filter.doFilterInternal(chatRequest("10.9.9.2"), other, mock(FilterChain.class));
+        assertThat(other.getStatus()).as("다른 방문자는 영향받지 않아야 한다").isEqualTo(200);
+    }
+
     @Test
     @DisplayName("PLAN §6.19.3 — 기본값(trust-forwarded-for=false)에서는 XFF를 무시하고 remoteAddr 사용")
     void x_forwarded_for_ignored_by_default() {
