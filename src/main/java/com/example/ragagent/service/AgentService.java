@@ -130,7 +130,11 @@ public class AgentService {
             turnId = memoryService.addTurn(userId, request.threadId(), request.question(), result.answer(),
                     askedAt, result.totalInputTokens(), result.totalOutputTokens(),
                     (int) elapsedMs, result.usedProvider(), result.llmCallCount(),
-                    request.responseMode().name(), TagUtils.toMetaValue(request.selectedTags()),
+                    // 요청이 아니라 <b>결과</b>의 모드를 저장한다 — 그래프가 모드를 바꾸는 경우가
+                    // 있고(검색 0건 → S, AnswerService.answerWithoutDocuments), 저장된 값이 버블의
+                    // 두 글자 표기와 좋아요 가능 여부를 정한다. 바로 아래 saveVerification 이 이미
+                    // result.responseMode() 를 읽고 있어 둘이 갈리면 안 된다.
+                    result.responseMode().name(), TagUtils.toMetaValue(request.selectedTags()),
                     request.directMode());
                         memoryService.saveTurnImageRefs(turnId, userId, request.threadId(), result.imageRefs());
             memoryService.saveRetrievalMetrics(turnId, result.sources());

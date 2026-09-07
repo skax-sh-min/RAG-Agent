@@ -239,7 +239,8 @@ public class StreamingAgentService {
                 turnId = memoryService.addTurn(userId, form.threadId(), form.question(), result.answer(),
                         askedAt, result.totalInputTokens(), result.totalOutputTokens(),
                         (int) elapsedMs, result.usedProvider(), result.llmCallCount(),
-                    form.responseModeOrDefault().name(), TagUtils.toMetaValue(form.selectedTags()),
+                    // 폼이 아니라 결과의 모드 (AgentService 와 같은 이유 — 검색 0건이면 S 로 바뀐다).
+                    result.responseMode().name(), TagUtils.toMetaValue(form.selectedTags()),
                     form.isDirectMode());
                 memoryService.saveTurnImageRefs(turnId, userId, form.threadId(), result.imageRefs());
                 memoryService.saveRetrievalMetrics(turnId, result.sources());
