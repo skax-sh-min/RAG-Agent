@@ -30,7 +30,9 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -174,6 +176,60 @@ class FullAuthAuthorizationTest {
     @DisplayName("익명 GET /actuator/health — 인가 통과(핸들러 없음 → 404)")
     void anonymous_health_notGated() throws Exception {
         mvc.perform(get("/actuator/health"))
+                .andExpect(status().isNotFound());
+    }
+
+    // ── 문서 관리: management-only 와 같은 게이트 ────────────────────────────────
+
+    /**
+     * 이 모드에만 문서 게이트가 없어서, {@code /signup} 이 permitAll 인 배포에서는 <b>가입만 하면</b>
+     * 문서를 올리고 지우고 통째로 내보낼 수 있었다 — {@code /admin/**} 에 대해 §6.19.2 가 지적한
+     * 것과 같은 구멍이 문서 쪽에 남아 있었다. 게이트는 두 모드가 같은 목록
+     * ({@code SecurityConfig.gateDocumentManagement})을 쓴다.
+     */
+    @Test
+    @DisplayName("ROLE_USER 문서 쓰기(UI) — 업로드·삭제·태그·내보내기 전부 403")
+    void user_documentWriteUi_isForbidden() throws Exception {
+        mvc.perform(post("/ui/documents/upload").with(csrf()).with(user("u").roles("USER")))
+                .andExpect(status().isForbidden());
+        mvc.perform(delete("/ui/documents/doc_a").with(csrf()).with(user("u").roles("USER")))
+                .andExpect(status().isForbidden());
+        mvc.perform(patch("/ui/documents/doc_a/tags").with(csrf()).with(user("u").roles("USER")))
+                .andExpect(status().isForbidden());
+        mvc.perform(get("/ui/documents/doc_a/export").with(user("u").roles("USER")))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    @DisplayName("ROLE_USER 문서 쓰기(REST) — CSRF 예외 경로여도 403")
+    void user_documentWriteRest_isForbidden() throws Exception {
+        mvc.perform(post("/api/v1/documents").with(user("u").roles("USER")))
+                .andExpect(status().isForbidden());
+        mvc.perform(post("/api/v1/documents/sync").with(user("u").roles("USER")))
+                .andExpect(status().isForbidden());
+        mvc.perform(delete("/api/v1/documents/doc_a").with(user("u").roles("USER")))
+                .andExpect(status().isForbidden());
+    }
+
+    /** 읽기까지 막으면 일반 사용자가 채팅의 출처조차 못 보게 된다 — 게이트는 쓰기에만 건다. */
+    @Test
+    @DisplayName("ROLE_USER 문서 읽기 — 인가 통과(핸들러 없음 → 404)")
+    void user_documentReads_stayOpen() throws Exception {
+        mvc.perform(get("/ui/documents/list").with(user("u").roles("USER")))
+                .andExpect(status().isNotFound());
+        mvc.perform(get("/api/v1/documents").with(user("u").roles("USER")))
+                .andExpect(status().isNotFound());
+    }
+
+    /**
+     * {@code /setup} 이 이 모드에서 막히면 관리자를 만들 방법이 없어져(그 페이지가
+     * {@code createAdminUser} 를 부르는 유일한 곳이고 {@code /signup} 은 ROLE_USER 만 만든다)
+     * 위의 ROLE_ADMIN 게이트들이 전부 아무도 통과 못 하는 문이 된다.
+     */
+    @Test
+    @DisplayName("익명 GET /setup — 인가 통과(핸들러 없음 → 404). 최초 관리자 부트스트랩이 막히면 안 된다")
+    void anonymous_setup_isReachable() throws Exception {
+        mvc.perform(get("/setup"))
                 .andExpect(status().isNotFound());
     }
 }

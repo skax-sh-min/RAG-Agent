@@ -37,7 +37,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  *
  * Covers:
  *  - GET /login 기본 응답
- *  - GET /setup 접근 제어 (auth 모드 / admin 유무)
+ *  - GET /setup 접근 제어 (admin 유무 — 모드와 무관하게 열리는 최초 부트스트랩)
  *  - POST /signup 입력 검증 (이메일·비밀번호·중복)
  *  - 회귀: 가입 후 기존 세션 무효화
  *  - 회귀: 73자 비밀번호 거부
@@ -170,10 +170,29 @@ class AuthControllerTest {
 
     // ── GET /setup ──────────────────────────────────────────────────────────
 
+    /**
+     * 전체 인증 모드에서도 열린다. 여기가 {@code createAdminUser} 를 부르는 유일한 곳이고
+     * {@code /signup} 은 {@code ROLE_USER} 만 만들기 때문에, 막아 두면 그 모드에는 관리자를 만들
+     * 방법이 없어져 {@code /admin/**} 과 문서 관리가 <b>아무도</b> 통과 못 하는 문이 된다.
+     * 가드는 모드가 아니라 "관리자가 이미 있는가" 하나뿐이다(바로 아래 테스트).
+     */
     @Test
     @WithMockUser
-    @DisplayName("GET /setup — auth.enabled=true 시 redirect:/")
-    void setupPage_authEnabled_redirectsToRoot() throws Exception {
+    @DisplayName("GET /setup — auth.enabled=true + admin 없을 때도 setup 페이지 반환 (최초 부트스트랩)")
+    void setupPage_authEnabledWithoutAdmin_returnsSetupView() throws Exception {
+        when(userDetailsService.findFirstAdmin()).thenReturn(Optional.empty());
+
+        mvc.perform(get("/setup"))
+                .andExpect(status().isOk())
+                .andExpect(view().name("auth/setup"));
+    }
+
+    @Test
+    @WithMockUser
+    @DisplayName("GET /setup — auth.enabled=true + admin 존재 시 redirect:/ (스스로 닫히는 문)")
+    void setupPage_authEnabledWithAdmin_redirectsToRoot() throws Exception {
+        when(userDetailsService.findFirstAdmin()).thenReturn(Optional.of(testUser()));
+
         mvc.perform(get("/setup"))
                 .andExpect(status().is3xxRedirection())
                 .andExpect(redirectedToRoot());

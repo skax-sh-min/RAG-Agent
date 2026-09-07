@@ -9,6 +9,7 @@ import org.springframework.http.HttpMethod;
 import org.springframework.lang.Nullable;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
+import org.springframework.security.config.annotation.web.configurers.AuthorizeHttpRequestsConfigurer;
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -65,7 +66,7 @@ public class SecurityConfig {
                     .sessionFixation().migrateSession()
                     .maximumSessions(3)
                 )
-                .authorizeHttpRequests(auth -> auth
+                .authorizeHttpRequests(auth -> { auth
                     .requestMatchers("/login", "/error").permitAll()
                     .requestMatchers("/webjars/**", "/css/**", "/js/**", "/images/**", "/favicon.ico").permitAll()
                     .requestMatchers("/manifest.webmanifest", "/sw.js", "/offline.html", "/icons/**").permitAll()
@@ -76,47 +77,16 @@ public class SecurityConfig {
                     // /admin 까지 관리자가 자동 주입되는 폐쇄망 단일 운영자 전제라,
                     // 여기만 막는 것이 두 모드의 경계와 일치한다.
                     .requestMatchers("/actuator/**").hasRole("ADMIN")
-                    // Document-management write surface — gated. Method-scoped: a bare "/ui/documents/*"
-                    // pattern would also match "/ui/documents/list" (a single path segment), so every
-                    // entry here pins the HTTP method too, not just the path.
-                    .requestMatchers(HttpMethod.POST, "/ui/documents/upload").hasRole("ADMIN")
-                    .requestMatchers(HttpMethod.POST, "/ui/documents/progress/*/cancel").hasRole("ADMIN")
-                    .requestMatchers(HttpMethod.DELETE, "/ui/documents/*").hasRole("ADMIN")
-                    .requestMatchers(HttpMethod.PATCH, "/ui/documents/*/tags").hasRole("ADMIN")
-                    .requestMatchers(HttpMethod.GET, "/ui/documents/*/tags/edit").hasRole("ADMIN")
-                    .requestMatchers(HttpMethod.PATCH, "/ui/documents/*/display-name").hasRole("ADMIN")
-                    .requestMatchers(HttpMethod.GET, "/ui/documents/*/display-name/edit").hasRole("ADMIN")
-                    // Export is a read, but it hands back the document's full reconstructed content
-                    // in one request — a bulk-extraction capability guest chat/browsing doesn't
-                    // provide — so it is gated with the management surface rather than left open.
-                    .requestMatchers(HttpMethod.GET, "/ui/documents/*/export").hasRole("ADMIN")
-                    // 같은 쓰기를 하는 REST 짝. 이 셋이 열려 있는 동안에는 위 UI 게이트가
-                    // 장식이었다 — 이 모드를 켜는 이유가 "문서 관리는 로그인해야 한다"인데
-                    // `curl -X DELETE .../api/v1/documents/{id}` 한 줄이 그것을 그대로 우회했다.
-                    // 예전에는 curl 자동화를 위해 일부러 열어 뒀지만, 자동화는 /login 으로 세션
-                    // 쿠키를 받아 쓰면 그대로 동작한다(OPERATOR_MANUAL 참조) — 없어지는 것은
-                    // 기능이 아니라 '인증 없이도 된다'는 지름길뿐이다.
-                    //
-                    // 읽기는 건드리지 않는다: GET /api/v1/documents, /api/v1/chat, 태그·이미지
-                    // 조회는 "채팅·열람은 게스트 개방"이라는 이 모드의 나머지 절반이다.
-                    //
-                    // 이 경로들은 NoAuthAutoLoginFilter.isGatedManagementPath() 에 <b>일부러</b>
-                    // 넣지 않았다. 거기 넣으면 익명으로 남아 /login 으로 302 리다이렉트가 되는데,
-                    // API 호출자에게는 로그인 페이지 HTML 보다 403 이 맞는 응답이다. 게스트
-                    // principal 이 주입돼도 그것은 ROLE_USER 라 아래 hasRole("ADMIN") 이 막는다 —
-                    // 위 주석이 말하는 "두 목록이 어긋나도 안전하게 실패한다"가 바로 이 경우다.
-                    .requestMatchers(HttpMethod.POST, "/api/v1/documents").hasRole("ADMIN")
-                    .requestMatchers(HttpMethod.POST, "/api/v1/documents/sync").hasRole("ADMIN")
-                    .requestMatchers(HttpMethod.DELETE, "/api/v1/documents/*").hasRole("ADMIN")
                     // Deliberately .hasRole("ADMIN"), not .authenticated() — NoAuthAutoLoginFilter's
                     // GUEST_PRINCIPAL is a real (non-anonymous) authenticated principal with ROLE_USER,
                     // so .authenticated() would silently accept it if this matcher list and the
                     // filter's own gated-path list (isGatedManagementPath()) ever drift apart. hasRole
                     // fails safe in that scenario instead of silently granting access.
-                    .requestMatchers("/admin/**").hasRole("ADMIN")
-                    .anyRequest().permitAll()          // /setup, /signup, /documents, /ui/documents/list,
-                                                        // tags/view, /api/v1/**, chat — all guest-open
-                )
+                    .requestMatchers("/admin/**").hasRole("ADMIN");
+                    gateDocumentManagement(auth);
+                    auth.anyRequest().permitAll();     // /setup, /signup, /documents, /ui/documents/list,
+                                                       // tags/view, 나머지 /api/v1/**, chat — all guest-open
+                })
                 .formLogin(form -> form
                     .loginPage("/login")
                     .loginProcessingUrl("/login")
@@ -145,8 +115,13 @@ public class SecurityConfig {
             // Normal auth mode
             http
                 .csrf(csrf -> csrf.ignoringRequestMatchers("/api/v1/**"))
-                .authorizeHttpRequests(auth -> auth
-                    .requestMatchers("/login", "/signup", "/error").permitAll()
+                .authorizeHttpRequests(auth -> { auth
+                    // /setup 은 이 모드에서도 열려 있어야 한다 — 관리자를 만드는 유일한 경로이고
+                    // (AuthController.createAdminUser 를 부르는 곳이 거기뿐이다), /signup 은
+                    // ROLE_USER 만 만든다. 이게 없으면 아래 ROLE_ADMIN 게이트들이 <b>아무도</b>
+                    // 통과할 수 없는 문이 된다. 페이지 자체가 "관리자가 이미 있으면 리다이렉트"로
+                    // 스스로를 닫으므로 최초 1회만 열린다(평문 no-auth 모드와 같은 부트스트랩).
+                    .requestMatchers("/login", "/signup", "/setup", "/error").permitAll()
                     .requestMatchers("/webjars/**", "/css/**", "/js/**", "/images/**", "/favicon.ico").permitAll()
                     .requestMatchers("/manifest.webmanifest", "/sw.js", "/offline.html", "/icons/**").permitAll()
                     .requestMatchers("/actuator/health", "/api/v1/health").permitAll()
@@ -163,9 +138,14 @@ public class SecurityConfig {
                     // TRACE 로 올리면 LlmCurlLogger 가 검색된 문서 본문이 실린 프롬프트 전문을
                     // 로그 파일에 남긴다. /actuator/health 는 위에서 이미 permitAll 이라
                     // 이 규칙에 걸리지 않는다.
-                    .requestMatchers("/actuator/**").hasRole("ADMIN")
-                    .anyRequest().authenticated()
-                )
+                    .requestMatchers("/actuator/**").hasRole("ADMIN");
+                    // 문서 관리는 management-only 모드와 <b>같은</b> 게이트를 받는다. 예전에는 이
+                    // 분기에만 그 규칙이 없어서, /signup 이 permitAll 인 배포에서 <b>가입만 하면</b>
+                    // 문서를 올리고 지우고 통째로 내보낼 수 있었다 — 바로 위 주석이 /admin/** 에
+                    // 대해 지적한 것과 같은 구멍이 문서 쪽에 남아 있었던 셈이다.
+                    gateDocumentManagement(auth);
+                    auth.anyRequest().authenticated();
+                })
                 .formLogin(form -> form
                     .loginPage("/login")
                     .loginProcessingUrl("/login")
@@ -189,6 +169,48 @@ public class SecurityConfig {
         }
 
         return http.build();
+    }
+
+    /**
+     * 문서 관리 표면 — <b>인증이 있는 두 모드가 같은 목록을 쓴다</b>(management-only, full-auth).
+     *
+     * <p>한 곳에 있는 이유는 예전에 갈라져 있었기 때문이다: management-only 에만 이 규칙이 있고
+     * full-auth 는 {@code .authenticated()} 로 끝나서, {@code /signup} 이 permitAll 인 그 모드에서는
+     * <b>가입만 하면</b> 문서를 올리고 지우고 내보낼 수 있었다.
+     *
+     * <p><b>메서드까지 못 박는다.</b> 경로만 보는 {@code "/ui/documents/*"} 는 한 세그먼트짜리
+     * {@code "/ui/documents/list"}(게스트·일반 사용자에게 열려 있어야 하는 목록 갱신)까지 삼킨다.
+     *
+     * <p>{@code export} 는 읽기지만 여기 있다 — 문서 전문을 요청 하나로 복원해 돌려주는 벌크 반출이라,
+     * 열람(한 번에 청크 몇 개)과 성격이 다르다.
+     *
+     * <p><b>{@code /api/v1/documents} 쓰기도 같은 게이트를 받는다.</b> 예전에는 curl 자동화를 위해
+     * 열어 뒀는데, 그러면 바로 위 UI 게이트가 장식이 된다 —
+     * {@code curl -X DELETE .../api/v1/documents/{id}} 한 줄이 그대로 우회했다. 자동화는 {@code /login}
+     * 으로 세션 쿠키를 받아 쓰면 그대로 동작하므로(OPERATOR_MANUAL), 없어지는 것은 기능이 아니라
+     * '인증 없이도 된다'는 지름길뿐이다. 읽기({@code GET /api/v1/documents}, {@code /api/v1/chat},
+     * 태그·이미지 조회)는 건드리지 않는다.
+     *
+     * <p>이 REST 경로들은 {@code NoAuthAutoLoginFilter.isGatedManagementPath()} 에 <b>일부러</b>
+     * 넣지 않았다. 거기 넣으면 익명으로 남아 {@code /login} 으로 302 가 되는데, API 호출자에게는
+     * 로그인 페이지 HTML 보다 403 이 맞는 응답이다. 게스트 principal 이 주입돼도 그것은
+     * {@code ROLE_USER} 라 {@code hasRole("ADMIN")} 이 막는다 — 두 목록이 어긋나도 안전하게
+     * 실패한다는 것이 바로 이 경우다.
+     */
+    private static void gateDocumentManagement(
+            AuthorizeHttpRequestsConfigurer<HttpSecurity>.AuthorizationManagerRequestMatcherRegistry auth) {
+        auth
+            .requestMatchers(HttpMethod.POST, "/ui/documents/upload").hasRole("ADMIN")
+            .requestMatchers(HttpMethod.POST, "/ui/documents/progress/*/cancel").hasRole("ADMIN")
+            .requestMatchers(HttpMethod.DELETE, "/ui/documents/*").hasRole("ADMIN")
+            .requestMatchers(HttpMethod.PATCH, "/ui/documents/*/tags").hasRole("ADMIN")
+            .requestMatchers(HttpMethod.GET, "/ui/documents/*/tags/edit").hasRole("ADMIN")
+            .requestMatchers(HttpMethod.PATCH, "/ui/documents/*/display-name").hasRole("ADMIN")
+            .requestMatchers(HttpMethod.GET, "/ui/documents/*/display-name/edit").hasRole("ADMIN")
+            .requestMatchers(HttpMethod.GET, "/ui/documents/*/export").hasRole("ADMIN")
+            .requestMatchers(HttpMethod.POST, "/api/v1/documents").hasRole("ADMIN")
+            .requestMatchers(HttpMethod.POST, "/api/v1/documents/sync").hasRole("ADMIN")
+            .requestMatchers(HttpMethod.DELETE, "/api/v1/documents/*").hasRole("ADMIN");
     }
 
     @Bean
