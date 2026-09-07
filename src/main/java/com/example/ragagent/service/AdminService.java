@@ -519,21 +519,28 @@ public class AdminService {
     }
 
     /**
-     * Metadata-only update: fetches the existing embedding and re-upserts
-     * with new text/metadata while preserving the original vector.
+     * 청크 하나의 본문/메타데이터 편집. 저장된 벡터는 그대로 둔다(재임베딩은 {@link #reindexChunk}).
      *
-     * <p>Stamps {@link MetaKey#EDITED_AT} so a later document-level {@code ↺ 재인덱싱} — which
-     * rebuilds every chunk from the saved MD file and therefore discards this edit — can warn
-     * first ({@link #countEditedChunks}). The stamp is written only when {@code newMeta} is
-     * non-null, i.e. from the {@code /admin} edit panel, which always sends both fields; a
-     * text-only call would have no metadata map to put it in.
+     * <p>{@link MetaKey#EDITED_AT} 를 찍는다 — 나중에 문서 단위 {@code ↺ 재인덱싱} 은 저장된 MD 에서
+     * 모든 청크를 다시 만들어 이 편집을 버리므로, 그 전에 경고할 근거가 필요하다
+     * ({@link #countEditedChunks}). 스탬프는 <b>편집이 일어나면 항상</b> 찍힌다. 예전에는
+     * 클라이언트가 메타데이터 맵을 보냈을 때만 찍혀서, 본문만 고친 편집은 재인덱싱 경고에
+     * 잡히지 않았다.
+     *
+     * <p><b>{@code clientMeta} 는 그대로 저장되지 않는다.</b> 화면에서 실제로 편집할 수 있는 것은
+     * {@link #EDITABLE_CHUNK_META_KEYS} 둘뿐이고 메타데이터 JSON 은 읽기 전용이므로, 그 둘만 골라
+     * <b>저장된 메타데이터 위에</b> 얹는다. 예전에는 클라이언트가 보낸 맵이 통째로 저장본을
+     * 대체했다 — 그러면 (a) 요청 본문에 아무 키나 넣어 청크 메타데이터를 만들어 낼 수 있고,
+     * (b) 화면이 보내지 않은 키(예: 로더가 붙이는 {@code section} 처럼 {@code MetaKey} 에 없는 것)가
+     * 조용히 사라진다. 저장본에서 시작하면 두 문제가 함께 없어지고, 허용 목록을 늘릴 때
+     * "화면에서 편집 가능한가"라는 한 가지 기준만 보면 된다.
+     *
+     * <p><b>Chroma 경로의 메타데이터 유실도 함께 고친다.</b> 예전에는 {@code newMeta == null} 이면
+     * {@code Map.of()} 로 upsert 해 그 청크의 메타데이터를 전부 날렸다 — 본문만 보내는 호출
+     * 하나로 {@code doc_id}·{@code filename}·태그가 사라지는 잠재 버그였다.
      */
     public void updateChunk(String collectionName, String chunkId,
-                            String newText, Map<String, String> newMeta) {
-        if (newMeta != null) {
-            newMeta = new HashMap<>(newMeta);
-            newMeta.put(MetaKey.EDITED_AT, Instant.now().toString());
-        }
+                            String newText, Map<String, String> clientMeta) {
         if (isSqliteVec()) {
             // Metadata/text only — the stored vector (vec_embeddings) is intentionally preserved
             // (same caveat as the Chroma path: editing text does not re-embed).
@@ -541,20 +548,20 @@ public class AdminService {
                 jdbc.update("UPDATE vec_document_chunks SET content = ? WHERE spring_doc_id = ?",
                         newText, chunkId);
             }
-            if (newMeta != null) {
-                jdbc.update("UPDATE vec_document_chunks SET metadata = ? WHERE spring_doc_id = ?",
-                        toJson(newMeta), chunkId);
-            }
+            jdbc.update("UPDATE vec_document_chunks SET metadata = ? WHERE spring_doc_id = ?",
+                    toJson(mergeEditableMeta(storedMetaSqliteVec(chunkId), clientMeta)), chunkId);
             if (newText != null && questionReuseService != null) {
                 questionReuseService.invalidateChunk(chunkId);
             }
             return;
         }
         if (chromaApi == null) { log.warn("updateChunk ignored — no ChromaApi"); return; }
-        // Fetch existing embedding to avoid re-embedding
+        // Fetch existing embedding to avoid re-embedding. METADATAS is fetched too: the stored
+        // metadata is what the edit is merged onto (see this method's javadoc) — without it the
+        // upsert below would replace it with whatever the client sent, or with nothing at all.
         GetEmbeddingsRequest req = new GetEmbeddingsRequest(
                 List.of(chunkId), null, 1, 0,
-                List.of(Include.EMBEDDINGS, Include.DOCUMENTS));
+                List.of(Include.EMBEDDINGS, Include.DOCUMENTS, Include.METADATAS));
         GetEmbeddingResponse existing;
         String collectionId = resolveId(collectionName);
         try {
@@ -573,7 +580,10 @@ public class AdminService {
                         && !existing.documents().isEmpty()
                         ? existing.documents().get(0) : "");
 
-        Map<String, Object> metaObj = newMeta == null ? Map.of() : new HashMap<>(newMeta);
+        List<Map<String, String>> storedMetas = existing == null ? null : existing.metadata();
+        Map<String, String> storedMeta = (storedMetas != null && !storedMetas.isEmpty()
+                && storedMetas.get(0) != null) ? storedMetas.get(0) : Map.of();
+        Map<String, Object> metaObj = new HashMap<>(mergeEditableMeta(storedMeta, clientMeta));
 
         try {
             chromaApi.upsertEmbeddings(TENANT, DATABASE, collectionName,
@@ -707,6 +717,49 @@ public class AdminService {
         } catch (Exception e) {
             log.error("sqlite-vec getChunk failed id={}: {}", chunkId, e.getMessage());
             return null;
+        }
+    }
+
+    /**
+     * {@code /admin} 청크 편집 화면이 실제로 바꿀 수 있는 메타데이터 키.
+     *
+     * <p>나머지는 화면에서 읽기 전용이고({@code admin.html} 의 메타데이터 JSON), 그래서 서버도
+     * 그렇게 다룬다 — 목록에 없는 키는 요청에 실려 와도 무시된다. 새 키를 여기 넣기 전에 물을
+     * 것은 하나다: <b>화면에서 편집할 수 있는가.</b>
+     */
+    static final Set<String> EDITABLE_CHUNK_META_KEYS =
+            Set.of(MetaKey.EXCERPT_KEYWORDS, MetaKey.CHUNK_CONTEXT);
+
+    /**
+     * 저장된 메타데이터에 편집 가능한 키만 얹고 편집 시각을 찍는다.
+     *
+     * <p>호출자가 넘긴 맵은 건드리지 않는다(불변 맵일 수 있고, 남의 맵을 고쳐 놓아서도 안 된다).
+     * {@code clientMeta} 가 {@code null} 이면 저장본 + 스탬프만 남는다 — 본문만 고친 편집이다.
+     */
+    static Map<String, String> mergeEditableMeta(Map<String, String> storedMeta,
+                                                 Map<String, String> clientMeta) {
+        Map<String, String> merged = new LinkedHashMap<>(storedMeta == null ? Map.of() : storedMeta);
+        if (clientMeta != null) {
+            for (String key : EDITABLE_CHUNK_META_KEYS) {
+                String value = clientMeta.get(key);
+                if (value != null) merged.put(key, value);
+            }
+        }
+        merged.put(MetaKey.EDITED_AT, Instant.now().toString());
+        return merged;
+    }
+
+    /** sqlite-vec 백엔드에 저장된 이 청크의 메타데이터. 없거나 읽지 못하면 빈 맵. */
+    private Map<String, String> storedMetaSqliteVec(String chunkId) {
+        try {
+            List<String> rows = jdbc.query(
+                    "SELECT metadata FROM vec_document_chunks WHERE spring_doc_id = ?",
+                    (rs, n) -> rs.getString(1), chunkId);
+            return (rows == null || rows.isEmpty()) ? Map.of() : parseMeta(rows.get(0));
+        } catch (Exception e) {
+            log.warn("updateChunk: 기존 메타데이터 조회 실패 id={} — 편집분만 저장한다: {}",
+                    chunkId, e.getMessage());
+            return Map.of();
         }
     }
 

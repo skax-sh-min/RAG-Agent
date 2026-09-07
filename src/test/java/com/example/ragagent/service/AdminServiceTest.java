@@ -25,6 +25,7 @@ import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
+import org.mockito.ArgumentMatchers;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -124,6 +125,66 @@ class AdminServiceTest {
         verify(jdbc).update(eq("UPDATE vec_document_chunks SET metadata = ? WHERE spring_doc_id = ?"),
                 json.capture(), eq("c1"));
         assertThat(json.getValue()).contains(MetaKey.EDITED_AT);
+    }
+
+    /**
+     * 화면의 메타데이터 JSON 은 읽기 전용이고 편집 가능한 것은 키워드·맥락 둘뿐이다. 예전에는
+     * 클라이언트가 보낸 맵이 저장본을 통째로 대체해서, (a) 요청에 아무 키나 실어 청크 메타데이터를
+     * 만들어 낼 수 있었고 (b) 화면이 보내지 않는 키(로더가 붙이는 {@code section} 등)가 편집 한 번에
+     * 사라졌다.
+     */
+    @Test
+    @DisplayName("mergeEditableMeta: 편집 가능한 두 키만 반영하고 나머지 저장본은 그대로 둔다")
+    void mergeEditableMeta_takesOnlyEditableKeys() {
+        Map<String, String> stored = new java.util.LinkedHashMap<>();
+        stored.put(MetaKey.DOC_ID, "doc1");
+        stored.put(MetaKey.FILENAME, "manual.pdf");
+        stored.put("section", "3");                      // MetaKey 에 없는 레거시 키
+        stored.put(MetaKey.EXCERPT_KEYWORDS, "이전 키워드");
+
+        Map<String, String> merged = AdminService.mergeEditableMeta(stored, Map.of(
+                MetaKey.EXCERPT_KEYWORDS, "새 키워드",
+                MetaKey.CHUNK_CONTEXT, "새 맥락",
+                MetaKey.DOC_ID, "위조된-doc",            // 편집 불가 — 무시돼야 한다
+                "injected_key", "임의 값"));             // 클라이언트가 지어낸 키 — 무시돼야 한다
+
+        assertThat(merged).containsEntry(MetaKey.EXCERPT_KEYWORDS, "새 키워드")
+                .containsEntry(MetaKey.CHUNK_CONTEXT, "새 맥락")
+                .containsEntry(MetaKey.DOC_ID, "doc1")
+                .containsEntry(MetaKey.FILENAME, "manual.pdf")
+                .containsEntry("section", "3")
+                .containsKey(MetaKey.EDITED_AT)
+                .doesNotContainKey("injected_key");
+    }
+
+    @Test
+    @DisplayName("mergeEditableMeta: 본문만 고친 편집(clientMeta=null)도 저장본을 지키고 스탬프를 찍는다")
+    void mergeEditableMeta_nullClientMetaPreservesStored() {
+        Map<String, String> merged = AdminService.mergeEditableMeta(
+                Map.of(MetaKey.DOC_ID, "doc1", MetaKey.TAGS, "billing"), null);
+
+        assertThat(merged).containsEntry(MetaKey.DOC_ID, "doc1")
+                .containsEntry(MetaKey.TAGS, "billing")
+                .containsKey(MetaKey.EDITED_AT);
+    }
+
+    @Test
+    @DisplayName("updateChunk(sqlite-vec): 저장된 메타데이터를 읽어 그 위에 편집분을 얹는다")
+    void updateChunk_mergesOntoStoredMetadata() {
+        JdbcTemplate jdbc = mock(JdbcTemplate.class);
+        AppProperties props = mock(AppProperties.class);
+        when(props.vectorStoreSafe()).thenReturn(new VectorStoreConfig("sqlite-vec"));
+        when(jdbc.query(eq("SELECT metadata FROM vec_document_chunks WHERE spring_doc_id = ?"),
+                ArgumentMatchers.<org.springframework.jdbc.core.RowMapper<String>>any(), eq("c1")))
+                .thenReturn(List.of("{\"doc_id\":\"doc1\",\"section\":\"3\"}"));
+
+        AdminService svc = new AdminService(Optional.empty(), jdbc, props, OM, mock(VectorStoreFacade.class), mock(KeywordSearchRepository.class), mock(KeywordExtractor.class));
+        svc.updateChunk("latest", "c1", "new text", Map.of(MetaKey.EXCERPT_KEYWORDS, "kw"));
+
+        ArgumentCaptor<String> json = ArgumentCaptor.forClass(String.class);
+        verify(jdbc).update(eq("UPDATE vec_document_chunks SET metadata = ? WHERE spring_doc_id = ?"),
+                json.capture(), eq("c1"));
+        assertThat(json.getValue()).contains("doc1").contains("section").contains("kw");
     }
 
     /** 호출자가 넘긴 맵은 불변(Map.of)일 수 있고, 남의 맵을 고쳐 놓아서도 안 된다. */
