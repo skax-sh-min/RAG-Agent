@@ -64,6 +64,9 @@ services:
       # host.docker.internal 을 쓸 것 (Linux 는 extra_hosts 또는 network_mode: host 필요).
       #   예) LOCAL_LLM_URL=http://host.docker.internal:1234/v1
     volumes:
+      # 컨테이너는 UID 10001(app)로 돈다 — Dockerfile 의 USER 지시 참고. Linux 호스트에서
+      # 예전(root 실행) 이미지로 만든 data/ 가 있으면 한 번만:  sudo chown -R 10001:10001 ./data
+      # (안 하면 컨테이너가 그 사실을 로그로 알려주고 종료한다. Docker Desktop 은 해당 없음.)
       - ./data:/app/data
       # sqlite-vec 모드: 컨테이너 아키텍처(linux)용 vec0 로더블 바이너리를 마운트하고
       # SQLITE_VEC_EXTENSION_PATH=/opt/sqlite-vec/vec0 로 지정 (운영자 제공 — OPERATOR_MANUAL 참조)

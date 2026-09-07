@@ -16,6 +16,25 @@ COPY --from=builder /app/target/*.jar app.jar
 RUN mkdir -p /app/data/documents /app/data/images
 EXPOSE 8080
 
+# 비-root 실행. 이 프로세스는 문서를 파싱하고(PDFBox/POI), OCR 을 JNA 로 같은 프로세스에 붙이며,
+# sqlite-vec 를 쓰면 네이티브 확장까지 로드한다 — 전부 신뢰 경계 밖의 파일을 입력으로 받는
+# 코드다. 그중 하나에서 코드 실행이 일어났을 때 컨테이너 안에서 root 인지 아닌지가 그 다음에
+# 무엇을 할 수 있는지를 가른다.
+#
+# **UID 를 10001 로 못 박는 이유**: `./data` 는 bind mount 라 파일 소유권이 호스트 것을 그대로
+# 따른다. 이미지가 UID 를 매번 다르게 잡으면 업그레이드마다 쓰기 권한이 깨진다.
+#
+# ⚠ **기존 배포에서 한 번만 필요한 작업**: 예전 이미지는 root 로 돌았으므로 `./data` 안의 파일이
+# root 소유다. 아래 명령을 호스트에서 한 번 실행해야 이 컨테이너가 쓸 수 있다.
+#     sudo chown -R 10001:10001 ./data
+# 하지 않으면 아래 ENTRYPOINT 의 검사가 그 사실을 그대로 알려주고 종료한다(권한 오류가 애플리케이션
+# 스택트레이스로 나오는 것보다 낫다). Docker Desktop(Windows/macOS)의 bind mount 는 소유권을
+# 강제하지 않으므로 그쪽에서는 해당 없다.
+RUN addgroup -g 10001 app \
+ && adduser -D -u 10001 -G app app \
+ && chown -R app:app /app
+USER app
+
 # 힙 상한. JVM 기본값(MaxRAMPercentage=25)은 이 앱에 너무 좁다 — 업로드 상한이 200MB 이고
 # (spring.servlet.multipart.max-file-size), PDFBox/POI 는 문서를 통째로 메모리에 올리며,
 # MarkdownCorrectionService 는 변환된 마크다운 전문을 문자열로 다룬다. 문서 하나가 수백 MB 를
@@ -39,4 +58,8 @@ ENV JAVA_OPTS="-XX:MaxRAMPercentage=70"
 # exec form 은 환경변수를 확장하지 않아 JAVA_OPTS 가 그대로 문자열로 넘어간다. sh -c 로
 # 확장하되 exec 로 넘겨 java 가 PID 1 을 물려받게 한다 — 그래야 docker stop 의 SIGTERM 이
 # 셸이 아니라 JVM 에 닿아 graceful shutdown 이 돈다.
-ENTRYPOINT ["sh", "-c", "exec java $JAVA_OPTS -jar app.jar"]
+#
+# 앞의 쓰기 권한 검사는 위 USER 전환의 짝이다 — 이것이 없으면 root 소유로 남은 `./data` 가
+# "SQLite 파일을 못 만든다"는 스택트레이스로만 드러나, 원인이 권한이라는 것도 고치는 방법도
+# 로그 어디에도 없다.
+ENTRYPOINT ["sh", "-c", "if [ ! -w /app/data ]; then echo \"[FATAL] /app/data 에 쓸 수 없습니다. 이 컨테이너는 UID 10001(app)로 실행되는데 마운트된 데이터 디렉터리가 다른 사용자 소유입니다(예전 이미지는 root 로 돌았습니다). 호스트에서 한 번 실행하세요:  sudo chown -R 10001:10001 ./data\" >&2; exit 1; fi; exec java $JAVA_OPTS -jar app.jar"]
