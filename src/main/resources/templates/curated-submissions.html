@@ -11,7 +11,11 @@
 <!-- 지식 제안 게시판 (사용자) — 등록 폼 + 내가 낸 제안의 처리 결과.
      이 페이지를 여는 것 자체가 "확인"으로 처리되어(컨트롤러의 markAllReadForAuthor)
      헤더의 처리 알림 배지가 사라진다. -->
-<section layout:fragment="content" class="container py-4" style="max-width: 900px;">
+<!-- 폭: documents.html 과 같은 규칙(container-fluid + 1500 상한). 900px 로 묶여 있던 동안
+     본문 작성/미리보기 2컬럼이 화면을 아무리 넓혀도 패널당 414px 였다 — 컨테이너가 먼저
+     멈추기 때문. 상한을 아예 없애지 않는 이유는 넓어지는 쪽이 표가 아니라 산문(미리보기)
+     이라서다: 1500 에서 미리보기가 약 930px(한글 66자/줄)로, 읽기 좋은 구간의 위쪽이다. -->
+<section layout:fragment="content" class="container-fluid py-4" style="max-width: 1500px;">
 
     <h5 class="fw-semibold mb-1">
         <i class="bi bi-journal-plus me-2"></i>
@@ -147,7 +151,10 @@
                         <!-- 미리보기는 항상 DOMPurify 를 거친다 (관리자 검토 화면도 동일).
                              이미지 마커도 여기서 실제 그림으로 렌더되므로, 마커가 본문 어디에 있는지가
                              곧 이미지가 어디에 놓이는지다. -->
-                        <div id="submission-preview" class="form-control d-none markdown-body"
+                        <!-- md-content 는 앱의 마크다운 렌더 스타일(표 테두리·코드블록 배경·헤딩
+                             크기)이다. 여기만 정의된 적 없는 markdown-body 를 달고 있어서, 이
+                             화면의 미리보기만 표에 테두리가 없고 코드블록에 배경이 없었다. -->
+                        <div id="submission-preview" class="form-control d-none md-content"
                              style="min-height:340px; overflow:auto; font-size:0.88rem;"></div>
                     </div>
                     <div class="d-flex justify-content-between form-text small">
@@ -328,6 +335,12 @@
    renderMarkdownWithImageMarkers(→ marked → DOMPurify)를 거친다. sanitize 는 필수:
    같은 본문이 관리자 검토 화면에서도 렌더되므로 저장형 XSS 경로가 된다. */
 (function () {
+    /* 2컬럼일 때 두 패널이 함께 갖는 높이. 바닥값은 예전 미리보기의 min-height 와 같고, 그
+       위로는 화면 높이를 따라간다 — 세로로 큰 모니터에서 300px 편집기를 쓰던 것이 이 폼의
+       두 번째 답답함이었다. 오프캔버스 쪽 편집 화면들에는 이 상수가 필요 없다: 그쪽은 패널
+       높이가 이미 정해져 있어 flex-grow-1 이 알아서 채운다. */
+    const MD_PREVIEW_PANE_HEIGHT = 'max(340px, 60vh)';
+
     const box     = document.getElementById('submission-body');
     const preview = document.getElementById('submission-preview');
     const panes   = document.getElementById('submission-body-panes');
@@ -337,18 +350,32 @@
     const tabView = document.getElementById('body-view-preview');
     if (!box || !preview || !panes || !tabEdit || !tabView) return;
 
-    if (isTwoColumnWidth()) {
+    // 재는 것은 뷰포트가 아니라 panes 자신이다 — 이 폼은 페이지 폭 안에 있어서 둘이 다르다
+    // (layout/base.html 의 isTwoColumnWidth 주석 참고).
+    if (isTwoColumnWidth(panes)) {
         // 나란히. 미리보기를 왼쪽으로 보내는 것은 order 로만 한다 — DOM 순서를 바꾸면
         // 폼 필드 순서(탭 이동)까지 따라 바뀐다.
         panes.classList.add('d-flex', 'gap-3');
         preview.classList.remove('d-none');
         preview.style.order = '-1';
-        // 절반씩. flex-basis 를 0 으로 눕히지 않으면 초기 폭을 내용 길이가 정해
-        // 빈 미리보기가 찌그러진다(대화 원문 화면에서 겪은 것과 같은 함정).
-        box.style.flex = '1 1 0';
+        // 늘어난 폭은 전부 미리보기 몫이다 — /admin 편집 화면 넷·수정 오프캔버스와 같은 규칙.
+        // flex-basis 를 0 으로 눕히지 않으면 초기 폭을 내용 길이가 정해 빈 미리보기가
+        // 찌그러진다(대화 원문 화면에서 겪은 것과 같은 함정).
+        box.style.flex = '0 0 ' + MD_PREVIEW_EDIT_COL_WIDTH + 'px';
         preview.style.flex = '1 1 0';
         box.style.minWidth = '0';
         preview.style.minWidth = '0';
+        // 높이는 두 패널이 한 짝으로 갖는다. 예전에는 rows="14"(≈300px)와 min-height:340px 이라는
+        // 서로 다른 고정값이라 나란히 놓았을 때 아래가 어긋났고, 세로로 큰 화면에서도 300px
+        // 편집기가 그대로였다. 리사이즈 핸들도 행이 쥔다 — 패널마다 핸들이 있으면 끌 때마다
+        // 다시 어긋나고, 행보다 크게 끌면 넘쳐 나간다.
+        panes.style.height = MD_PREVIEW_PANE_HEIGHT;
+        panes.style.overflow = 'hidden';      // resize 는 overflow 가 visible 이 아니어야 동작한다
+        panes.style.resize = 'vertical';
+        box.style.height = '100%';
+        box.style.resize = 'none';
+        preview.style.height = '100%';
+        preview.style.minHeight = '0';        // 행을 짧게 끌었을 때 인라인 340px 이 넘치지 않도록
         if (tabs) tabs.classList.add('d-none');
         if (legend) {
             legend.classList.remove('d-none');
@@ -487,7 +514,7 @@ function openSubmissionEdit(id) {
                         <div class="md-content" id="submission-edit-preview-pane"></div>
                     </div>
                     <div class="d-flex flex-column gap-3 overflow-auto"
-                         style="width:500px; flex-shrink:0;">${editFields}</div>`;
+                         style="width:${MD_PREVIEW_EDIT_COL_WIDTH}px; flex-shrink:0;">${editFields}</div>`;
                 bindLivePreview(document.getElementById('submission-edit-body'),
                                 document.getElementById('submission-edit-preview-pane'));
             } else {
