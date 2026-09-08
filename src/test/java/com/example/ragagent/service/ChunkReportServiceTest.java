@@ -173,6 +173,82 @@ class ChunkReportServiceTest {
                 .isEqualTo(ChunkReportService.CHANGE_UNKNOWN);
     }
 
+    /**
+     * 비교의 기준은 <b>가장 최근</b> 신고의 스냅샷이다. 예전에는 화면이 신고 목록을 뒤에서부터
+     * 인덱싱해 꺼냈다. 스냅샷을 고르는 일과 그것으로 차이를 내는 일이 같은 규칙을 써야 하므로
+     * 서버가 한 번만 고르고, 화면은 그 값을 받아 쓴다.
+     */
+    @Test
+    @DisplayName("가장 최근 신고의 스냅샷을 기준으로 차이를 낸다")
+    void diffUsesTheNewestSnapshot() {
+        Report older = new Report(1L, CHUNK, "doc-1", "latest", "manual.pdf", USER, THREAD, 7L,
+                null, "WRONG", "틀렸습니다", "hash-1", "포트는 7070입니다",
+                ChunkReportRepository.STATUS_OPEN, null, null, "2026-09-01 10:00:00", null);
+        Report newer = new Report(2L, CHUNK, "doc-1", "latest", "manual.pdf", "u2", "t2", 8L,
+                null, "OUTDATED", "낡았습니다", "hash-2", "포트는 8080입니다",
+                ChunkReportRepository.STATUS_OPEN, null, null, "2026-09-04 10:00:00", null);
+        when(repository.findOpenByChunk(CHUNK)).thenReturn(List.of(older, newer));
+        when(repository.findClosedByChunk(eq(CHUNK), anyInt())).thenReturn(List.of());
+        when(repository.findChunkLocation(CHUNK)).thenReturn(Optional.of(
+                new ChunkLocation("doc-1", "latest", "manual.pdf", "포트는 9090입니다",
+                        ChunkLocation.SOURCE_ORIGINAL)));
+        when(questionReuseService.currentChunkHash(CHUNK)).thenReturn("hash-3");
+
+        var detail = service.chunkDetail(CHUNK).orElseThrow();
+
+        assertThat(detail.newestSnapshot()).isEqualTo("포트는 8080입니다");
+        assertThat(detail.diff()).isNotNull();
+        assertThat(detail.diff().identical()).isFalse();
+        assertThat(detail.diff().lines()).anySatisfy(l ->
+                assertThat(l.spans()).anyMatch(sp -> sp.changed() && sp.text().equals("8080")));
+    }
+
+    /**
+     * 스냅샷이 없으면 <b>비교하지 않는다</b>. 빈 문자열로 바꿔 비교하면 "청크가 통째로 새로 쓰였다"로
+     * 그려져, 관리자가 없던 사건을 읽는다.
+     */
+    @Test
+    @DisplayName("스냅샷이나 현재 내용이 없으면 비교 자체를 하지 않는다")
+    void noComparisonWithoutBothSides() {
+        Report noSnapshot = new Report(1L, CHUNK, "doc-1", "latest", "manual.pdf", USER, THREAD, 7L,
+                null, "WRONG", "틀렸습니다", "hash-1", null,
+                ChunkReportRepository.STATUS_OPEN, null, null, "2026-09-04 10:00:00", null);
+        when(repository.findOpenByChunk(CHUNK)).thenReturn(List.of(noSnapshot));
+        when(repository.findClosedByChunk(eq(CHUNK), anyInt())).thenReturn(List.of());
+        when(repository.findChunkLocation(CHUNK)).thenReturn(Optional.of(
+                new ChunkLocation("doc-1", "latest", null, "지금 내용", ChunkLocation.SOURCE_ORIGINAL)));
+        when(questionReuseService.currentChunkHash(CHUNK)).thenReturn("hash-1");
+        assertThat(service.chunkDetail(CHUNK).orElseThrow().diff()).isNull();
+
+        // 반대쪽 — 청크가 사라진 경우.
+        when(repository.findOpenByChunk(CHUNK)).thenReturn(List.of(report(1L, "hash-old")));
+        when(repository.findChunkLocation(CHUNK)).thenReturn(Optional.empty());
+        when(questionReuseService.currentChunkHash(CHUNK)).thenReturn("");
+        assertThat(service.chunkDetail(CHUNK).orElseThrow().diff()).isNull();
+    }
+
+    /**
+     * 판정은 {@code chunk_fts} 의 <b>파생 검색 텍스트</b> 해시로 내므로 요약·키워드만 고쳐도
+     * "수정됨"이 되는데, 화면에 보이는 본문은 그대로다 — 배지와 비교가 서로 다른 말을 하는 것처럼
+     * 보이는 자리라 그 조합을 값으로 집어낸다.
+     */
+    @Test
+    @DisplayName("해시는 '수정됨'인데 본문은 같은 경우를 따로 짚어 준다")
+    void flagsHashChangedButTextIdentical() {
+        when(repository.findOpenByChunk(CHUNK)).thenReturn(List.of(report(1L, "hash-old")));
+        when(repository.findClosedByChunk(eq(CHUNK), anyInt())).thenReturn(List.of());
+        when(repository.findChunkLocation(CHUNK)).thenReturn(Optional.of(
+                new ChunkLocation("doc-1", "latest", null, "신고 당시 원문",
+                        ChunkLocation.SOURCE_ORIGINAL)));
+        when(questionReuseService.currentChunkHash(CHUNK)).thenReturn("hash-new");
+
+        var detail = service.chunkDetail(CHUNK).orElseThrow();
+
+        assertThat(detail.changeStatus()).isEqualTo(ChunkReportService.CHANGE_MODIFIED);
+        assertThat(detail.diff().identical()).isTrue();
+        assertThat(detail.modifiedButTextIdentical()).isTrue();
+    }
+
     @Test
     @DisplayName("열린 신고가 없으면 상세도 없다")
     void noDetailWithoutOpenReports() {

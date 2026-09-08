@@ -990,7 +990,8 @@ class AdminControllerWebMvcTest {
                         "chunk-1", "doc-1", "latest", "manual.pdf", false,
                         List.of(new com.example.ragagent.service.ChunkReportService.ReportView(r1, false),
                                 new com.example.ragagent.service.ChunkReportService.ReportView(r2, false)),
-                        "지금 내용", "original",
+                        "신고 당시 원문", "지금 내용", "original",
+                        com.example.ragagent.service.ChunkDiff.compare("신고 당시 원문", "지금 내용"),
                         com.example.ragagent.service.ChunkReportService.CHANGE_UNCHANGED,
                         List.of())));
         when(adminService.collectionFor("latest")).thenReturn("manual_latest");
@@ -1002,6 +1003,37 @@ class AdminControllerWebMvcTest {
                 .andExpect(content().string(containsString("신고 이후 변경 없음")))
                 // 수정은 기존 청크 편집 경로로 보낸다 — 신고 패널은 자체 편집기를 갖지 않는다.
                 .andExpect(content().string(containsString("manual_latest")));
+    }
+
+    /**
+     * 신고 검토의 핵심 질문이 "그대로인가, 아니라면 어디가 달라졌나"라 두 뷰가 <b>같은 응답에</b>
+     * 실려야 한다(토글은 보이기만 바꾼다). 편집 버튼이 신고 전용 진입점을 부르는 것도 함께 본다 —
+     * openChunkEdit() 을 직접 부르면 편집 패널이 신고 패널 뒤에서 열려 아무 일도 없어 보인다.
+     */
+    @Test
+    @DisplayName("GET /admin/chunk-reports/chunks/{id} — 차이 보기와 나란히 보기를 함께 내려준다")
+    void chunkReportDetail_rendersTheDiff() throws Exception {
+        var r = new com.example.ragagent.repository.ChunkReportRepository.Report(
+                1L, "chunk-9", "doc-1", "latest", "manual.pdf", "u1", "t1", 7L,
+                null, "WRONG", "포트가 틀렸습니다", "h1", "기본 포트는 8080입니다",
+                "open", null, null, "2026-09-04 10:00:00", null);
+        when(chunkReportService.chunkDetail("chunk-9")).thenReturn(Optional.of(
+                new com.example.ragagent.service.ChunkReportService.ChunkReportDetail(
+                        "chunk-9", "doc-1", "latest", "manual.pdf", false,
+                        List.of(new com.example.ragagent.service.ChunkReportService.ReportView(r, true)),
+                        "기본 포트는 8080입니다", "기본 포트는 9090입니다", "original",
+                        com.example.ragagent.service.ChunkDiff.compare(
+                                "기본 포트는 8080입니다", "기본 포트는 9090입니다"),
+                        com.example.ragagent.service.ChunkReportService.CHANGE_MODIFIED,
+                        List.of())));
+        when(adminService.collectionFor("latest")).thenReturn("manual_latest");
+
+        mvc.perform(get("/admin/chunk-reports/chunks/chunk-9").with(user(ADMIN)))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("chunk-report-diff")))
+                .andExpect(content().string(containsString("chunk-report-side")))
+                .andExpect(content().string(containsString("chunk-diff-ch")))
+                .andExpect(content().string(containsString("openChunkEditFromReport")));
     }
 
     @Test

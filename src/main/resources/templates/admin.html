@@ -358,6 +358,30 @@
             padding-right: 1rem;
         }
 
+        /* §10.14 신고 검토 — "신고 시점 원문 ↔ 현재 내용" 차이 보기.
+           줄 안의 강조(.chunk-diff-ch)는 그 줄의 성격(추가/삭제)에 따라 색이 갈린다.
+           .chunk-diff-line 이 flex 인 것은 정렬 때문만이 아니다 — 공백만 있는 익명 flex 아이템은
+           렌더되지 않으므로, pre-wrap 인 본문 칸 옆의 템플릿 들여쓰기가 화면에 새지 않는다. */
+        .chunk-diff {
+            font-family: var(--bs-font-monospace);
+            font-size: 0.75rem;
+            line-height: 1.5;
+            max-height: 420px;
+            overflow: auto;
+            background-color: var(--code-bg);
+        }
+        .chunk-diff-line { display: flex; align-items: flex-start; padding: 0 0.25rem; }
+        .chunk-diff-no {
+            flex: 0 0 2.6em; text-align: right; padding-right: 0.5em;
+            color: var(--fg-muted); user-select: none;
+        }
+        .chunk-diff-sign { flex: 0 0 1em; text-align: center; user-select: none; }
+        .chunk-diff-text { flex: 1 1 auto; min-width: 0; white-space: pre-wrap; word-break: break-word; }
+        .chunk-diff-add { background-color: var(--diff-add-bg); }
+        .chunk-diff-del { background-color: var(--diff-del-bg); }
+        .chunk-diff-add .chunk-diff-ch { background-color: var(--diff-add-hl); border-radius: 2px; }
+        .chunk-diff-del .chunk-diff-ch { background-color: var(--diff-del-hl); border-radius: 2px; }
+
         /* 설명형 툴팁 — 기본 200px 폭에서는 두 문장짜리 안내가 세로로 길게 찢어진다.
            CSS 변수는 Bootstrap 5.3+ 경로, .tooltip-inner 규칙은 그 이전 버전용 폴백. */
         .tooltip-wide { --bs-tooltip-max-width: 320px; }
@@ -812,7 +836,12 @@ function openChunkEdit(chunkId, collection) {
             // 한 겹 더 깔고 그 겹이 닫아도 남는다.
             bootstrap.Offcanvas.getOrCreateInstance(offcanvasEl).show();
         })
-        .catch(() => showToast('청크 정보를 불러올 수 없습니다.', 'danger'));
+        .catch(() => {
+            // 패널이 열리지 않았으니 hidden 이벤트도 오지 않는다 — 플래그를 남기면 다음에
+            // 목록에서 연 편집을 닫을 때 엉뚱하게 신고 검토가 열린다.
+            returnToChunkReport = null;
+            showToast('청크 정보를 불러올 수 없습니다.', 'danger');
+        });
 }
 
 /**
@@ -1431,6 +1460,20 @@ function refreshChunkReportPill() {
 }
 refreshChunkReportPill();
 
+/**
+ * 편집 패널을 신고 검토에서 열었다면 그 청크 id. 닫힐 때 신고 검토로 되돌아가는 데 쓴다 —
+ * 청크를 고친 다음에 관리자가 하는 일이 「처리 완료」이고 그 버튼은 신고 패널에만 있다.
+ */
+let returnToChunkReport = null;
+
+// 옵셔널 체이닝 — 이 스크립트 블록은 페이지 전체의 동작을 담고 있어서, 여기서 던지면 아래
+// 함수들이 정의되기 전에 평가가 멈춘다(오프캔버스를 옮기거나 조건부로 렌더하게 되는 날의 보험).
+document.getElementById('editOffcanvas')?.addEventListener('hidden.bs.offcanvas', () => {
+    const chunkId = returnToChunkReport;
+    returnToChunkReport = null;
+    if (chunkId) openChunkReportDetail(chunkId);
+});
+
 function openChunkReportDetail(chunkId) {
     fetch('/admin/chunk-reports/chunks/' + encodeURIComponent(chunkId),
           { headers: { 'HX-Request': 'true' } })
@@ -1446,9 +1489,46 @@ function openChunkReportDetail(chunkId) {
 }
 
 /**
+ * 신고 검토 패널에서 청크 편집으로 넘어간다.
+ *
+ * <p><b>두 오프캔버스는 겹쳐 열 수 없다.</b> 편집(editOffcanvas)과 신고 검토
+ * (chunkReportOffcanvas)는 둘 다 offcanvas-end · width:100% · z-index 1045 라 같은 사각형을
+ * 차지하고, 신고 패널이 DOM 에서 뒤에 선언돼 있어 편집 패널을 통째로 덮는다. 예전에는 여기서
+ * openChunkEdit() 을 바로 불렀고 — 편집 패널은 실제로 열렸다, 신고 패널 뒤에서. 화면에서는
+ * 버튼을 눌러도 아무 일도 일어나지 않는 것처럼 보였고, backdrop 도 두 겹 쌓였다.
+ *
+ * <p>닫힘 애니메이션이 끝난 뒤에 여는 이유: Bootstrap 은 hide() 가 <b>끝날 때</b> 스크롤바 보정과
+ * backdrop 을 되돌리므로, 겹쳐서 부르면 그 정리가 방금 연 패널에 적용된다.
+ */
+function openChunkEditFromReport(chunkId, collection) {
+    const reportEl = document.getElementById('chunkReportOffcanvas');
+    const oc = reportEl ? bootstrap.Offcanvas.getInstance(reportEl) : null;
+    returnToChunkReport = chunkId;
+    if (!oc) { openChunkEdit(chunkId, collection); return; }
+    reportEl.addEventListener('hidden.bs.offcanvas',
+        () => openChunkEdit(chunkId, collection), { once: true });
+    oc.hide();
+}
+
+/**
  * 처리 완료 / 반려 — 이 청크의 열린 신고를 한 번에 닫는다. 청크 자체는 건드리지 않는다
  * (수정은 위의 openChunkEdit 경로가 한다).
  */
+/**
+ * 신고 검토의 "차이 / 나란히" 토글. 두 뷰 모두 서버가 이미 그려서 보냈으므로 여기서는 보이기만
+ * 바꾼다(다시 받아오지 않는다). 차이 계산 자체는 서버(ChunkDiff)의 몫이다 — 이 프로젝트에는 JS
+ * 테스트 하네스가 없어서, 규칙이 있는 것은 테스트를 붙일 수 있는 쪽에 둔다.
+ */
+function showChunkReportCompare(mode) {
+    const diff = document.getElementById('chunk-report-diff');
+    const side = document.getElementById('chunk-report-side');
+    if (!diff || !side) return;
+    diff.classList.toggle('d-none', mode !== 'diff');
+    side.classList.toggle('d-none', mode === 'diff');
+    document.getElementById('chunk-report-compare-diff-btn').classList.toggle('active', mode === 'diff');
+    document.getElementById('chunk-report-compare-side-btn').classList.toggle('active', mode !== 'diff');
+}
+
 function closeChunkReports(chunkId, action) {
     const noteEl = document.getElementById('chunk-report-note');
     const note = noteEl ? noteEl.value.trim() : '';
