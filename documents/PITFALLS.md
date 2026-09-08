@@ -250,6 +250,8 @@ on/off 스위치를 새로 만들지 않고 `app.search-multiquery-enabled` 를 
 
 ### 큐레이션 청크에는 빵부스러기가 없다 (`/admin` 요약 칸)
 
+> **이 규칙은 이제 서버에 있다** — `/admin/chunks/{id}/detail` 이 `contextBreadcrumb`·`contextSummary`·`enrichmentEditable` 을 갈라서 준다(`AdminService.ChunkRow`). 아래는 그 규칙이 무엇이고 왜 갈리는지의 기록이다. 화면에 두었던 동안 소비하는 자리가 둘이라(편집 패널을 열 때, 키워드·요약 재생성 뒤 다시 읽을 때) 한쪽만 고쳐지는 일이 실제로 있었고, JS 테스트 하네스가 없어 그 규칙에 테스트를 붙일 수도 없었다. 되돌려 붙이는 `joinChunkContext()` 만 화면에 남는다 — `doc_type` 에 따라 갈리지 않는 두 줄이다.
+
 문서 청크의 `chunk_context` 는 `KeywordExtractor.combineContext()` 가 만든 `{파일명} > {헤딩}` 한 줄 + LLM 문장이고, `/admin` 편집 패널의 `splitChunkContext()` 는 **첫 줄을 읽기 전용 위치 표시로** 떼어 낸다 — 파일명·헤딩에서 결정적으로 파생되는 값이라 손으로 고칠 것이 아니기 때문이다.
 
 큐레이션 청크(지식 제안 승인본)의 `chunk_context` 는 **작성자가 쓴 요약 그 자체**다. 파일 위치라는 개념이 없으니 줄바꿈도 없고, 그 상태로 첫 줄 규칙을 적용하면 `indexOf('

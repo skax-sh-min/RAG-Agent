@@ -139,7 +139,13 @@ public class AdminController {
         return ResponseEntity.ok(Map.of(
                 "id",       row.id(),
                 "text",     row.fullText(),
-                "metadata", row.metadata()
+                "metadata", row.metadata(),
+                // chunk_context 를 화면이 다시 나누지 않도록 서버가 갈라서 준다 — 그 규칙은
+                // doc_type 에 따라 갈리고 소비하는 자리가 둘이라, 화면에 두면 한쪽만 고쳐진다
+                // (AdminService.ChunkRow.contextBreadcrumb 주석 참고).
+                "contextBreadcrumb", row.contextBreadcrumb(),
+                "contextSummary",    row.contextSummary(),
+                "enrichmentEditable", row.hasBreadcrumb()
         ));
     }
 

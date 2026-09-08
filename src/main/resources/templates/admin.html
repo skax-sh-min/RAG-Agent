@@ -613,31 +613,16 @@ function metaJsonExcludingInlineFields(metadata) {
     return JSON.stringify(copy, null, 2);
 }
 
-// chunk_context (MetaKey.CHUNK_CONTEXT) is always stored as
-// KeywordExtractor.combineContext()'s "{filename} > {heading}\n{LLM 1-2문장}" — the first line is a
-// structural breadcrumb deterministically derived from filename/heading, not something an operator
-// should hand-edit (editing/deleting it just drifts it from the real filename/heading with nothing
-// to detect that). Split on the first newline so the edit UI shows the breadcrumb read-only and
-// only the LLM-written sentence is editable; join mirrors combineContext()'s exact format back.
+// chunk_context (MetaKey.CHUNK_CONTEXT) 를 위치 표시와 요약으로 <b>나누는 것은 서버가 한다</b>
+// (/detail 이 contextBreadcrumb·contextSummary·enrichmentEditable 을 함께 준다,
+// AdminService.ChunkRow). 규칙이 doc_type 에 따라 갈리는 데다 여기서 소비하는 자리가 둘이라
+// — 편집 패널을 열 때와, 키워드·요약 재생성 뒤 다시 읽을 때 — 화면에 두면 한쪽만 고쳐지고
+// 그 차이가 화면에서는 보이지 않는다(재생성 한 번이 요약을 읽기 전용 칸으로 옮겨 놓고, 그
+// 상태로 저장하면 요약이 사라진다). 게다가 이 프로젝트에는 JS 테스트 하네스가 없어 그 규칙에
+// 테스트를 붙일 수가 없었다.
 //
-// 단, 이 형식은 <b>문서 청크에만</b> 해당한다. 큐레이션 청크(지식 제안 승인본)의 chunk_context 는
-// 작성자가 쓴 요약 그 자체이고 파일명·헤딩이라는 개념이 없다 — 빵부스러기가 없으므로 줄바꿈도
-// 없고, 그대로 첫 줄 규칙을 적용하면 요약 전체가 읽기 전용 위치 표시로 들어가 정작 편집란은
-// 비어 버린다(그리고 저장하면 그 요약이 사라진다). hasBreadcrumb=false 면 전부 요약으로 본다.
-function splitChunkContext(combined, hasBreadcrumb) {
-    const text = combined || '';
-    if (hasBreadcrumb === false) return { breadcrumb: '', summary: text };
-    const idx = text.indexOf('\n');
-    return idx === -1
-        ? { breadcrumb: text, summary: '' }
-        : { breadcrumb: text.slice(0, idx), summary: text.slice(idx + 1) };
-}
-
-/** 이 청크가 파일 안의 위치(파일명 > 헤딩)를 갖는가 — 큐레이션 축에는 그 개념이 없다. */
-function chunkHasBreadcrumb(metadata) {
-    return (metadata || {}).doc_type !== 'curated_qa';
-}
-
+// 되돌리는 쪽만 여기 남는다 — combineContext() 의 형식 그대로 다시 붙이는 두 줄이고,
+// doc_type 에 따라 갈리지 않는다(위치 표시가 비면 요약만 남는다).
 function joinChunkContext(breadcrumb, summary) {
     const b = (breadcrumb || '').trim();
     const s = (summary || '').trim();
@@ -709,10 +694,11 @@ function openChunkEdit(chunkId, collection) {
             idLabel.title = chunkId;
 
             const metaJson = metaJsonExcludingInlineFields(data.metadata);
-            const hasBreadcrumb = chunkHasBreadcrumb(data.metadata);
+            const hasBreadcrumb = data.enrichmentEditable !== false;
             // 요약·키워드의 단일 출처가 curated_qa 인 청크 — 판정 근거는 breadcrumb 과 같다.
             const enrichmentLocked = !hasBreadcrumb;
-            const contextParts = splitChunkContext(data.metadata.chunk_context, hasBreadcrumb);
+            const contextParts = { breadcrumb: data.contextBreadcrumb || '',
+                                   summary:    data.contextSummary    || '' };
             const breadcrumbText = hasBreadcrumb
                 ? (contextParts.breadcrumb || '(위치 정보 없음)')
                 : '(지식 제안 — 파일 위치 없음)';
@@ -903,15 +889,13 @@ function reindexChunkInline(chunkId, collection) {
         document.getElementById('edit-meta-view').textContent = freshMetaJson;
         if (currentChunkEdit) currentChunkEdit.metadata = JSON.parse(freshMetaJson);
         document.getElementById('edit-keywords').value = data.metadata.excerpt_keywords || '';
-        // 같은 규칙을 쓴다 — 여기서만 빵부스러기를 가정하면 재생성 한 번이 요약을 읽기 전용
-        // 칸으로 옮겨 놓는다(그 상태로 저장하면 사라진다).
-        const freshHasBreadcrumb = chunkHasBreadcrumb(data.metadata);
-        const contextParts = splitChunkContext(data.metadata.chunk_context, freshHasBreadcrumb);
-        document.getElementById('edit-context-breadcrumb').value = contextParts.breadcrumb;
+        // 서버가 나눠 준 값을 그대로 쓴다 — 위와 같은 응답 형식이라 두 자리가 갈릴 수 없다.
+        const freshHasBreadcrumb = data.enrichmentEditable !== false;
+        document.getElementById('edit-context-breadcrumb').value = data.contextBreadcrumb || '';
         document.getElementById('edit-context-breadcrumb-display').textContent = freshHasBreadcrumb
-            ? (contextParts.breadcrumb || '(위치 정보 없음)')
+            ? (data.contextBreadcrumb || '(위치 정보 없음)')
             : '(지식 제안 — 파일 위치 없음)';
-        document.getElementById('edit-context').value = contextParts.summary;
+        document.getElementById('edit-context').value = data.contextSummary || '';
         // 서버가 덮어쓴 2개 필드(요약·키워드)만 스냅샷 기준값을 갱신한다 — 텍스트(마지막 항목)는 그대로 둬야
         // 재인덱싱 전에 해 둔 저장 안 한 텍스트 편집이 이동 경고에서 계속 잡힌다.
         if (currentChunkEdit) {

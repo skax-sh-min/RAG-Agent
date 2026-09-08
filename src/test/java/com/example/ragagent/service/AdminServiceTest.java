@@ -133,6 +133,66 @@ class AdminServiceTest {
      * 만들어 낼 수 있었고 (b) 화면이 보내지 않는 키(로더가 붙이는 {@code section} 등)가 편집 한 번에
      * 사라졌다.
      */
+    // ── chunk_context 를 위치 표시 / 요약으로 나누는 규칙 ─────────────────────
+    //
+    // 이 규칙은 화면(admin.html)에 있었다. 소비하는 자리가 둘인데다(편집 패널을 열 때, 키워드·
+    // 요약 재생성 뒤 다시 읽을 때) 이 프로젝트에는 JS 테스트 하네스가 없어 테스트를 붙일 수가
+    // 없었다 — 실제로 한쪽만 고쳐서 재생성 한 번이 요약을 읽기 전용 칸으로 옮겨 놓는 일이 있었다.
+
+    private static AdminService.ChunkRow chunk(Map<String, String> meta) {
+        return new AdminService.ChunkRow("c1", "미리보기", "본문", meta);
+    }
+
+    @Test
+    @DisplayName("문서 청크: 첫 줄이 위치 표시, 나머지가 편집 가능한 요약")
+    void chunkContext_documentChunk_splitsAtTheFirstNewline() {
+        AdminService.ChunkRow row = chunk(Map.of(
+                MetaKey.DOC_ID, "doc1",
+                MetaKey.CHUNK_CONTEXT, "manual.md > 3.2 배포\n배포 절차를 설명하는 청크다."));
+
+        assertThat(row.hasBreadcrumb()).isTrue();
+        assertThat(row.contextBreadcrumb()).isEqualTo("manual.md > 3.2 배포");
+        assertThat(row.contextSummary()).isEqualTo("배포 절차를 설명하는 청크다.");
+    }
+
+    /**
+     * 큐레이션 청크의 값은 작성자가 쓴 요약 그 자체다 — 파일 위치라는 개념이 없어 줄바꿈도 없다.
+     * 문서 규칙을 그대로 적용하면 요약 <b>전체</b>가 읽기 전용 칸으로 들어가고 편집란이 빈다.
+     */
+    @Test
+    @DisplayName("큐레이션 청크: 위치 표시가 없고 값 전체가 요약이다")
+    void chunkContext_curatedChunk_isAllSummary() {
+        AdminService.ChunkRow row = chunk(Map.of(
+                MetaKey.DOC_ID, "curated:7",
+                MetaKey.DOC_TYPE, "curated_qa",
+                MetaKey.CHUNK_CONTEXT, "배포는 ArgoCD 가 자동 반영한다."));
+
+        assertThat(row.hasBreadcrumb()).isFalse();
+        assertThat(row.contextBreadcrumb()).isEmpty();
+        assertThat(row.contextSummary()).isEqualTo("배포는 ArgoCD 가 자동 반영한다.");
+    }
+
+    /** LLM 문장 없이 구조적 맥락만 있는 청크(추출 실패 폴백) — 편집란이 비는 것이 맞다. */
+    @Test
+    @DisplayName("문서 청크에 줄바꿈이 없으면 전부 위치 표시다 (요약은 빈 문자열)")
+    void chunkContext_documentChunkWithoutSentence_isAllBreadcrumb() {
+        AdminService.ChunkRow row = chunk(Map.of(
+                MetaKey.DOC_ID, "doc1",
+                MetaKey.CHUNK_CONTEXT, "manual.md > 3.2 배포"));
+
+        assertThat(row.contextBreadcrumb()).isEqualTo("manual.md > 3.2 배포");
+        assertThat(row.contextSummary()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("chunk_context 가 아예 없으면 둘 다 빈 문자열")
+    void chunkContext_absent_isEmptyOnBothSides() {
+        AdminService.ChunkRow row = chunk(Map.of(MetaKey.DOC_ID, "doc1"));
+
+        assertThat(row.contextBreadcrumb()).isEmpty();
+        assertThat(row.contextSummary()).isEmpty();
+    }
+
     @Test
     @DisplayName("mergeEditableMeta: 편집 가능한 두 키만 반영하고 나머지 저장본은 그대로 둔다")
     void mergeEditableMeta_takesOnlyEditableKeys() {
