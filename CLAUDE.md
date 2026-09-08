@@ -129,6 +129,7 @@ Flow:
 | `service/CuratedImageStore.java` | 지식 제안 본문 이미지 — upload, marker bookkeeping, approval-time Vision description, cleanup [↗](documents/PITFALLS.md#servicecuratedimagestorejava) |
 | `repository/ChunkReportRepository.java` | §10.14 청크 오류 신고 대기열(`chunk_report` — 한정자 없는 `JdbcTemplate`, 즉 `curated_submission` 과 같은 파일) + 신고 시점 청크 위치·원문 조회(`@Qualifier("vectorJdbcTemplate")` — `QuestionReuseRepository` 처럼 두 `JdbcTemplate` 을 든다). 중복 방지 키는 (청크, 신고자, **대화**) [↗](documents/PITFALLS.md#servicechunkreportservicejava) |
 | `service/ChunkReportService.java` | §10.14 — 신고 접수(사유 4종 + 코멘트 필수, 문서·원문·해시·질문은 서버가 직접 스냅샷)와 **청크 단위** 관리자 조회·처리. 신고는 검색 코퍼스를 바꾸지 않는다 [↗](documents/PITFALLS.md#servicechunkreportservicejava) |
+| `service/ChunkDiff.java` | §10.14 신고 검토의 "신고 시점 원문 ↔ 현재 내용" 비교 — 줄 단위 LCS + 바뀐 줄 안의 **낱말 단위** 비교(순수 클래스). 글자 단위가 아닌 이유는 최소 편집이 사람이 읽고 싶은 답이 아니어서다(`8080`→`9090` 이 8·8 / 9·9 로 흩뿌려진다), 숫자를 글자에서 떼는 이유는 `8080입니다` 가 한국어에서 한 낱말이라서다. 서버에 두는 이유는 JS 테스트 하네스가 없어서 (`AdminService.ChunkRow` 의 `chunk_context` 분해 선례) [↗](documents/PITFALLS.md#servicechunkreportservicejava) |
 | `controller/ChunkReportController.java` | `POST /ui/chunk-reports` — 사용자 신고 접수(게스트 개방·CSRF 필요, 중복은 409 로 구분). 관리자 조회·처리는 `AdminController` 의 `/admin/chunk-reports/**` [↗](documents/PITFALLS.md#servicechunkreportservicejava) |
 
 ## Conventions

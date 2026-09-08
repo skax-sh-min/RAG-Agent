@@ -117,7 +117,7 @@
             <button type="button" class="btn btn-sm btn-outline-primary"
                     th:unless="${detail.curated()}"
                     th:attr="data-chunk-id=${detail.chunkId()},data-collection=${collection}"
-                    onclick="openChunkEdit(this.dataset.chunkId, this.dataset.collection)">
+                    onclick="openChunkEditFromReport(this.dataset.chunkId, this.dataset.collection)">
                 <i class="bi bi-pencil me-1"></i>청크 편집 열기
             </button>
             <span th:if="${detail.curated()}" class="small text-muted align-self-center">
@@ -158,30 +158,92 @@
         </div>
     </div>
 
-    <!-- 신고 시점 원문 vs 현재 내용 -->
-    <div class="row g-2">
-        <div class="col-12 col-lg-6">
-            <div class="small fw-semibold mb-1">신고 시점 원문
-                <span class="text-muted fw-normal" style="font-size:0.72rem;">(가장 최근 신고 기준)</span>
+    <!-- 신고 시점 원문 ↔ 현재 내용.
+         기본은 **차이 보기**다. 관리자가 여기서 답해야 하는 질문은 "그대로인가, 아니라면 어디가
+         달라졌나" 둘인데, 두 벌을 나란히 놓고 사람이 대조하는 것으로는 그 답이 안 나온다 —
+         청크 하나가 한국어 문단 몇 개고, 오타 하나 고친 것과 문단이 통째로 바뀐 것이 눈으로는
+         똑같이 "긴 글 두 개"로 보인다. 차이 계산은 서버가 한다(ChunkDiff). -->
+    <div>
+        <div class="d-flex align-items-center flex-wrap gap-2 mb-1">
+            <span class="small fw-semibold">신고 시점 원문 ↔ 현재 내용</span>
+
+            <span th:if="${detail.diff() != null and detail.diff().identical()}"
+                  class="badge bg-success-subtle text-success-emphasis border border-success-subtle">
+                <i class="bi bi-check2 me-1"></i>동일 — 신고된 그대로입니다
+            </span>
+            <span th:if="${detail.diff() != null and !detail.diff().identical() and !detail.diff().tooLarge()}"
+                  class="badge bg-warning-subtle text-warning-emphasis border border-warning-subtle"
+                  th:text="'+' + ${detail.diff().addedLines()} + ' / -' + ${detail.diff().removedLines()} + ' 줄'">
+            </span>
+
+            <!-- 해시는 "바뀌었다"는데 본문은 같은 경우. 배지와 아래 비교가 서로 다른 말을 하는
+                 것처럼 보이는 자리라, 왜 그런지를 화면이 직접 말한다. -->
+            <span th:if="${detail.modifiedButTextIdentical()}"
+                  class="text-muted" style="font-size:0.72rem;">
+                — 본문은 같습니다. 요약·키워드처럼 검색 텍스트에만 들어가는 부분이 바뀌었습니다.
+            </span>
+
+            <div class="btn-group btn-group-sm ms-auto flex-shrink-0"
+                 th:if="${detail.diff() != null and !detail.diff().tooLarge()}"
+                 role="group" aria-label="비교 방식">
+                <button type="button" class="btn btn-outline-secondary py-0 px-2 active"
+                        style="font-size:0.72rem;" id="chunk-report-compare-diff-btn"
+                        onclick="showChunkReportCompare('diff')">차이</button>
+                <button type="button" class="btn btn-outline-secondary py-0 px-2"
+                        style="font-size:0.72rem;" id="chunk-report-compare-side-btn"
+                        onclick="showChunkReportCompare('side')">나란히</button>
             </div>
-            <pre class="border rounded p-2 mb-0" style="font-size:0.75rem; max-height:260px; overflow:auto;
-                        white-space:pre-wrap; word-break:break-word;"
-                 th:text="${detail.reports()[#lists.size(detail.reports()) - 1].report().chunkSnapshot()}
-                          ?: '(스냅샷 없음)'"></pre>
         </div>
-        <div class="col-12 col-lg-6">
-            <div class="small fw-semibold mb-1">현재 내용
-                <!-- 백엔드에 따라 원문이 아니라 파생 검색 텍스트일 수 있다(§10.1). 스냅샷과 나란히
-                     놓는 화면이라 어느 쪽인지 밝히지 않으면 "고쳐진 것"과 "원래 다른 텍스트"가
-                     구별되지 않는다. -->
-                <span class="text-muted fw-normal" style="font-size:0.72rem;"
-                      th:if="${detail.currentContentSource() == 'search-text'}"
-                      title="이 배포에서는 청크 원문을 읽을 수 없어 검색용 파생 텍스트(맥락 헤더 + 정규화 본문)를 보여줍니다.">
-                    (검색용 파생 텍스트)</span>
+
+        <!-- 비교할 수 없는 경우는 이유를 밝힌다 — "차이 없음"으로 보이면 안 된다. -->
+        <div th:if="${detail.diff() == null}" class="alert alert-secondary py-1 px-2 small mb-2">
+            <i class="bi bi-info-circle me-1"></i>
+            <span th:if="${detail.newestSnapshot() == null}">신고 시점 원문이 남아 있지 않아 비교할 수 없습니다.</span>
+            <span th:if="${detail.newestSnapshot() != null and detail.currentContent() == null}">
+                청크가 더 이상 없어 비교할 수 없습니다 — 삭제되었거나 재인덱싱되었습니다.</span>
+        </div>
+        <div th:if="${detail.diff() != null and detail.diff().tooLarge()}"
+             class="alert alert-secondary py-1 px-2 small mb-2">
+            <i class="bi bi-info-circle me-1"></i>내용이 너무 커서 줄 단위 비교를 생략했습니다 — 아래에서 직접 확인하세요.
+        </div>
+
+        <!-- 차이 보기 -->
+        <div id="chunk-report-diff" th:if="${detail.diff() != null and !detail.diff().tooLarge()}">
+            <div class="chunk-diff border rounded">
+                <div th:each="l : ${detail.diff().lines()}" class="chunk-diff-line"
+                     th:classappend="${l.added()} ? 'chunk-diff-add' : (${l.removed()} ? 'chunk-diff-del' : '')"><span class="chunk-diff-no" th:text="${l.oldNo()} ?: ''"></span><span class="chunk-diff-no" th:text="${l.newNo()} ?: ''"></span><span class="chunk-diff-sign" th:text="${l.added()} ? '+' : (${l.removed()} ? '-' : '')"></span><span class="chunk-diff-text" th:if="${#lists.isEmpty(l.spans())}" th:text="${l.text()}"></span><span class="chunk-diff-text" th:unless="${#lists.isEmpty(l.spans())}"><span th:each="s : ${l.spans()}" th:text="${s.text()}" th:classappend="${s.changed()} ? 'chunk-diff-ch'"></span></span></div>
             </div>
-            <pre class="border rounded p-2 mb-0" style="font-size:0.75rem; max-height:260px; overflow:auto;
-                        white-space:pre-wrap; word-break:break-word;"
-                 th:text="${detail.currentContent()} ?: '(청크를 찾을 수 없습니다 — 삭제되었거나 재인덱싱되었습니다)'"></pre>
+            <div class="text-muted mt-1" style="font-size:0.7rem;"
+                 th:if="${detail.currentContentSource() == 'search-text'}">
+                ※ 이 배포에서는 청크 원문을 읽을 수 없어 양쪽 모두 검색용 파생 텍스트(맥락 헤더 + 정규화 본문)입니다.
+            </div>
+        </div>
+
+        <!-- 나란히 보기 — 원문 두 벌을 그대로 읽어야 할 때. -->
+        <div class="row g-2" id="chunk-report-side"
+             th:classappend="${detail.diff() != null and !detail.diff().tooLarge()} ? 'd-none'">
+            <div class="col-12 col-lg-6">
+                <div class="small fw-semibold mb-1">신고 시점 원문
+                    <span class="text-muted fw-normal" style="font-size:0.72rem;">(가장 최근 신고 기준)</span>
+                </div>
+                <pre class="border rounded p-2 mb-0" style="font-size:0.75rem; max-height:260px; overflow:auto;
+                            white-space:pre-wrap; word-break:break-word;"
+                     th:text="${detail.newestSnapshot()} ?: '(스냅샷 없음)'"></pre>
+            </div>
+            <div class="col-12 col-lg-6">
+                <div class="small fw-semibold mb-1">현재 내용
+                    <!-- 백엔드에 따라 원문이 아니라 파생 검색 텍스트일 수 있다(§10.1). 스냅샷과 나란히
+                         놓는 화면이라 어느 쪽인지 밝히지 않으면 "고쳐진 것"과 "원래 다른 텍스트"가
+                         구별되지 않는다. -->
+                    <span class="text-muted fw-normal" style="font-size:0.72rem;"
+                          th:if="${detail.currentContentSource() == 'search-text'}"
+                          title="이 배포에서는 청크 원문을 읽을 수 없어 검색용 파생 텍스트(맥락 헤더 + 정규화 본문)를 보여줍니다.">
+                        (검색용 파생 텍스트)</span>
+                </div>
+                <pre class="border rounded p-2 mb-0" style="font-size:0.75rem; max-height:260px; overflow:auto;
+                            white-space:pre-wrap; word-break:break-word;"
+                     th:text="${detail.currentContent()} ?: '(청크를 찾을 수 없습니다 — 삭제되었거나 재인덱싱되었습니다)'"></pre>
+            </div>
         </div>
     </div>
 

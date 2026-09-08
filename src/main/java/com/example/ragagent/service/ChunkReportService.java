@@ -61,10 +61,29 @@ public class ChunkReportService {
     public record ReportResult(boolean created, long id) {}
 
     /** 관리자 상세 — 한 청크에 달린 신고 전부 + 그 청크의 현재 상태. */
+    /**
+     * @param newestSnapshot 가장 최근 신고가 붙잡은 원문. 비교의 기준이고, 화면이 신고 목록을
+     *                       뒤에서부터 인덱싱해 꺼내지 않도록 여기서 골라 준다
+     * @param diff           {@code newestSnapshot} 대 {@code currentContent}. 한쪽이라도 없으면
+     *                       {@code null} — "비교할 것이 없다"와 "차이가 없다"는 다른 말이다
+     */
     public record ChunkReportDetail(String chunkId, String docId, String version, String filename,
                                     boolean curated, List<ReportView> reports,
+                                    String newestSnapshot,
                                     String currentContent, String currentContentSource,
-                                    String changeStatus, List<Report> history) {}
+                                    ChunkDiff.Result diff,
+                                    String changeStatus, List<Report> history) {
+
+        /**
+         * 해시는 "바뀌었다"는데 눈에 보이는 텍스트는 같은 경우. 판정({@link #changeStatus})은
+         * {@code chunk_fts} 의 <b>파생 검색 텍스트</b> 해시로 내는데, 그 텍스트에는 맥락 헤더
+         * (§10.1)가 섞여 있어 요약·키워드만 고쳐도 해시가 달라진다 — 그러면 배지는 "수정됨",
+         * 아래 비교는 "동일"이라 화면이 스스로 모순돼 보인다. 그 자리를 화면이 짚어 준다.
+         */
+        public boolean modifiedButTextIdentical() {
+            return CHANGE_MODIFIED.equals(changeStatus) && diff != null && diff.identical();
+        }
+    }
 
     /**
      * 신고 1건 + <b>그 신고 이후</b> 청크가 바뀌었는지. 신고마다 따로 계산하는 이유는 오래된 신고와
@@ -187,6 +206,8 @@ public class ChunkReportService {
         // 한다. 살아 있는 청크에서는 두 값이 같다.
         String version = firstNonBlank(newest.version(), location.map(ChunkLocation::version).orElse(null));
 
+        String currentContent = location.map(ChunkLocation::content).orElse(null);
+
         return Optional.of(new ChunkReportDetail(
                 chunkId,
                 firstNonBlank(newest.docId(), location.map(ChunkLocation::docId).orElse(null)),
@@ -194,10 +215,14 @@ public class ChunkReportService {
                 firstNonBlank(newest.filename(), location.map(ChunkLocation::filename).orElse(null)),
                 CuratedQaService.CURATED_VERSION.equals(version),
                 views,
-                location.map(ChunkLocation::content).orElse(null),
+                newest.chunkSnapshot(),
+                currentContent,
                 // 지금 보여주는 텍스트가 원문인지 FTS 파생 검색 텍스트인지(§10.1). 스냅샷과 나란히
                 // 놓는 화면이라, 둘이 다른 이유가 "고쳐져서"인지 "원래 다른 텍스트라서"인지 밝혀야 한다.
                 location.map(ChunkLocation::source).orElse(null),
+                // 스냅샷과 현재 내용은 같은 조회 경로(findChunkLocation)에서 나오므로 한 배포 안에서는
+                // 늘 같은 종류의 텍스트다(둘 다 원문이거나 둘 다 파생 검색 텍스트) — 비교가 성립한다.
+                ChunkDiff.compare(newest.chunkSnapshot(), currentContent),
                 changeStatus,
                 repository.findClosedByChunk(chunkId, 5)));
     }
