@@ -49,6 +49,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.model;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.view;
 
@@ -480,6 +481,42 @@ class AdminControllerWebMvcTest {
     }
 
     // ── 청크 재인덱싱 (재임베딩 + FTS 재색인) ──────────────────────────────────
+
+    /**
+     * 편집 화면이 {@code chunk_context} 를 다시 나누지 않도록 서버가 갈라서 준다. 이 세 필드가
+     * 빠지면 화면은 조용히 빈 문자열로 떨어지고 — 편집란이 빈 채로 열려 — 그대로 저장하면
+     * 요약이 사라진다. 오류는 어디에도 나지 않는다.
+     */
+    @Test
+    @DisplayName("GET /admin/chunks/{id}/detail — chunk_context 를 위치 표시/요약으로 갈라서 준다")
+    void chunkDetail_splitsTheContextForTheEditor() throws Exception {
+        when(adminService.getChunk(anyString(), anyString())).thenReturn(
+                new AdminService.ChunkRow("c1", "미리보기", "본문", java.util.Map.of(
+                        MetaKey.DOC_ID, "doc1",
+                        MetaKey.CHUNK_CONTEXT, "manual.md > 3.2 배포\n배포 절차를 설명한다.")));
+
+        mvc.perform(get("/admin/chunks/c1/detail").with(user(ADMIN)).param("collection", "manual_latest"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.contextBreadcrumb").value("manual.md > 3.2 배포"))
+                .andExpect(jsonPath("$.contextSummary").value("배포 절차를 설명한다."))
+                .andExpect(jsonPath("$.enrichmentEditable").value(true));
+    }
+
+    @Test
+    @DisplayName("GET /admin/chunks/{id}/detail — 큐레이션 청크는 값 전체가 요약이고 편집 불가로 표시된다")
+    void chunkDetail_curatedChunkIsAllSummaryAndLocked() throws Exception {
+        when(adminService.getChunk(anyString(), anyString())).thenReturn(
+                new AdminService.ChunkRow("curated-7", "미리보기", "본문", java.util.Map.of(
+                        MetaKey.DOC_ID, "curated:7",
+                        MetaKey.DOC_TYPE, "curated_qa",
+                        MetaKey.CHUNK_CONTEXT, "배포는 ArgoCD 가 자동 반영한다.")));
+
+        mvc.perform(get("/admin/chunks/curated-7/detail").with(user(ADMIN)).param("collection", "curated"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.contextBreadcrumb").value(""))
+                .andExpect(jsonPath("$.contextSummary").value("배포는 ArgoCD 가 자동 반영한다."))
+                .andExpect(jsonPath("$.enrichmentEditable").value(false));
+    }
 
     /** 문서 청크 한 줄 — 재인덱싱은 이제 어느 축인지 보고 갈라지므로 조회부터 스텁해야 한다. */
     private static AdminService.ChunkRow documentChunk() {

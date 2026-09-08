@@ -126,6 +126,37 @@ public class AdminService {
         }
 
         /**
+         * 이 청크의 {@code chunk_context} 가 <b>파일 안의 위치</b>로 시작하는가.
+         *
+         * <p>문서 청크의 값은 {@code KeywordExtractor.combineContext()} 가 만든
+         * {@code "{파일명} > {헤딩}\n{LLM 1~2문장}"} 이고, 첫 줄은 파일명·헤딩에서 결정적으로
+         * 파생되는 값이라 손으로 고칠 것이 아니다. 큐레이션 청크에는 그 개념 자체가 없다 —
+         * 값 전체가 작성자가 쓴 요약이다.
+         */
+        public boolean hasBreadcrumb() { return !isCurated(); }
+
+        /**
+         * 읽기 전용 위치 표시. 큐레이션 청크와 위치를 모르는 청크에서는 빈 문자열이다.
+         *
+         * <p>이 규칙이 <b>서버에 있는 이유</b>: 화면에 두면 소비하는 자리가 둘이고(편집 패널을
+         * 열 때, 키워드·요약 재생성 뒤 다시 읽을 때) 한쪽만 고치면 재생성 한 번이 요약을 읽기
+         * 전용 칸으로 옮겨 놓는다 — 그리고 그 상태로 저장하면 요약이 사라진다. 실제로 그랬다.
+         * 게다가 이 프로젝트에는 JS 테스트 하네스가 없어 그 규칙에 테스트를 붙일 수가 없었다.
+         */
+        public String contextBreadcrumb() { return splitContext()[0]; }
+
+        /** 편집 가능한 요약. 위치 표시를 뗀 나머지이며, 큐레이션 청크에서는 값 전체다. */
+        public String contextSummary() { return splitContext()[1]; }
+
+        private String[] splitContext() {
+            String combined = metadata.getOrDefault(MetaKey.CHUNK_CONTEXT, "");
+            if (!hasBreadcrumb()) return new String[]{"", combined};
+            int nl = combined.indexOf('\n');
+            return nl < 0 ? new String[]{combined, ""}
+                          : new String[]{combined.substring(0, nl), combined.substring(nl + 1)};
+        }
+
+        /**
          * 이 청크가 속한 {@code curated_qa} 행의 id. {@code doc_id} 가 {@code curated:<id>} 라
          * 거기서 되읽는다 — 큐레이션 청크가 아니거나 형식이 다르면 비어 있다.
          */
