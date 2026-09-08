@@ -275,22 +275,29 @@ public class CuratedSubmissionService {
      * blank write form rather than an error, since a stale link is not worth a failure page.
      */
     public Optional<TurnPrefill> prefillFromTurn(String userId, String threadId, long turnId) {
-        return memoryService.getTurn(userId, threadId, turnId).map(turn -> new TurnPrefill(
-                turnId,
-                threadId,
-                // 질문은 2,000자까지 가능하고 제목은 200자다 — 자르지 않으면 폼이 예외로 죽는다.
-                truncateTitle(turn.question()),
-                // 답변의 '## 요약' 은 본문에서 떼어 요약 칸으로 옮긴다 — 두 곳에 같은 문장이
-                // 남으면 승인 시 그 문장이 BM25 검색 텍스트에 두 번 들어가고(요약은 앞에 붙고
-                // 본문은 그대로 색인된다) 화면에서도 같은 말이 두 번 보인다. 자를 자리와 꺼낼
-                // 자리를 같은 클래스가 정의하므로 두 조각이 어긋날 수 없다(CuratedTextUtils).
-                CuratedTextUtils.stripSummarySection(turn.answer()),
-                clampSummary(CuratedTextUtils.extractSummarySection(turn.answer())),
-                turn.selectedTags(),
-                // 이미지 개수는 원문 기준이다 — 요약 섹션에는 이미지 마커가 없지만, 세는 대상은
-                // 승인 시 Vision 을 부르게 될 '실제 등록될 본문'이라 자른 뒤의 값이 맞다.
-                CuratedImageStore.markerPaths(turn.answer()).size(),
-                turn.responseModeLabel()));
+        return memoryService.getTurn(userId, threadId, turnId).map(turn -> {
+            String answer = turn.answer();
+            // 답변의 '## 요약' 은 본문에서 떼어 요약 칸으로 옮긴다 — 두 곳에 같은 문장이 남으면
+            // 승인 시 그 문장이 BM25 검색 텍스트에 두 번 들어가고(요약은 앞에 붙고 본문은 그대로
+            // 색인된다) 화면에서도 같은 말이 두 번 보인다. 자를 자리와 꺼낼 자리를 같은 클래스가
+            // 정의하므로 두 조각이 어긋날 수 없다(CuratedTextUtils).
+            //
+            // 한 번 계산해 셋이 같은 값을 본다 — 특히 이미지 개수가 그렇다. 세는 대상은 화면이
+            // 보여 줄, 그리고 승인 시 Vision 을 부르게 될 '실제 등록될 본문'이므로 자른 뒤의
+            // body 여야 한다(원문을 세면 요약 섹션에 마커가 있을 때 제출 단계의
+            // validateImageCount(cleanBody) 보다 큰 수를 미리 보여 준다).
+            String body = CuratedTextUtils.stripSummarySection(answer);
+            return new TurnPrefill(
+                    turnId,
+                    threadId,
+                    // 질문은 2,000자까지 가능하고 제목은 200자다 — 자르지 않으면 폼이 예외로 죽는다.
+                    truncateTitle(turn.question()),
+                    body,
+                    clampSummary(CuratedTextUtils.extractSummarySection(answer)),
+                    turn.selectedTags(),
+                    CuratedImageStore.markerPaths(body).size(),
+                    turn.responseModeLabel());
+        });
     }
 
     /** 요약 칸의 상한을 넘는 프리필은 잘라서 넣는다 — 폼이 열리자마자 검증 오류로 죽지 않도록. */

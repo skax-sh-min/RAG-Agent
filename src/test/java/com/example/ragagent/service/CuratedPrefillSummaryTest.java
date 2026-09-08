@@ -99,6 +99,33 @@ class CuratedPrefillSummaryTest {
                 .contains("## 상세 설명");
     }
 
+    /**
+     * 화면이 보여 주는 개수는 <b>실제 등록될 본문</b> 기준이어야 한다 — 제출 단계의
+     * {@code validateImageCount(cleanBody)} 가 세는 것도, 승인 시 Vision 을 부르게 될 것도 그쪽이다.
+     * 원문을 세면 요약 섹션에 마커가 있을 때 상한을 넘었다고 미리 겁을 준다.
+     */
+    @Test
+    @DisplayName("프리필 — 이미지 개수는 요약을 뗀 본문 기준이다 (원문 기준이 아니다)")
+    void prefill_imageCountFollowsTheStrippedBody() {
+        turnReturns("""
+                ## 요약
+                배포 흐름 개요다.
+
+                [이미지: images/submissions/aaaa.png]
+
+                ## 상세 설명
+                본문 설명.
+
+                [이미지: images/submissions/bbbb.png]""");
+
+        CuratedSubmissionService.TurnPrefill p =
+                service.prefillFromTurn("u1", "t1", 42L).orElseThrow();
+
+        assertThat(p.imageCount())
+                .as("요약 안의 마커는 본문에서 함께 빠졌으므로 세면 안 된다")
+                .isEqualTo(1);
+    }
+
     /** Direct·meta 답변에는 고정 형식이 없어 요약 헤딩이 아예 없다 — 본문을 건드리면 안 된다. */
     @Test
     @DisplayName("프리필 — 요약 섹션이 없는 답변(Direct/meta)은 본문 그대로, 요약은 빈 문자열")

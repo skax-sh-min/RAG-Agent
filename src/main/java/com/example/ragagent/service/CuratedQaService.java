@@ -386,9 +386,9 @@ public class CuratedQaService {
      * the owner/admin edit path and the submission-approval path. No like-state re-check (unlike
      * {@link #embed}): both callers are explicit save/approve actions that can't race an unlike.
      */
-    private void embedActiveRow(long curatedId, String reason) {
+    private boolean embedActiveRow(long curatedId, String reason) {
         Optional<CuratedQa> rowOpt = repository.findById(curatedId);
-        if (rowOpt.isEmpty() || !"active".equals(rowOpt.get().status())) return;
+        if (rowOpt.isEmpty() || !"active".equals(rowOpt.get().status())) return false;
         CuratedQa row = rowOpt.get();
         List<Document> written = tryEmbedWithFallback(row);
         if (!written.isEmpty()) {
@@ -397,9 +397,10 @@ public class CuratedQaService {
             indexFts(row, written);
             repository.markEmbedOk(curatedId);
             log.info("[CURATED] embedded curatedId={} chunks={} reason={}", curatedId, written.size(), reason);
-        } else {
-            repository.markEmbedFailed(curatedId);
+            return true;
         }
+        repository.markEmbedFailed(curatedId);
+        return false;
     }
 
     /**
@@ -413,11 +414,14 @@ public class CuratedQaService {
      *
      * <p>단위가 '청크 하나'가 아니라 '행 하나'인 것은 의도된 것이다 — 이 축에서 질문·본문·요약·
      * 키워드는 행이 통째로 갖는 값이라, 한 청크만 다시 만들 수 있는 상태 자체가 없다.
+     *
+     * @return 실제로 벡터를 다시 쓴 경우에만 {@code true}. 행이 없거나 {@code active} 가 아니거나
+     *         임베딩이 실패하면 {@code false} 다 — 예전에는 행만 존재하면 {@code true} 였고,
+     *         그래서 비활성 행에 재인덱싱을 누르면 아무 일도 없이 성공 토스트가 떴다.
+     *         문서 청크의 {@code AdminService.reindexChunk()} 와 같은 계약이다(호출자가 404 로 옮긴다).
      */
     public boolean reembedRow(long curatedId, String reason) {
-        if (repository.findById(curatedId).isEmpty()) return false;
-        embedActiveRow(curatedId, reason);
-        return true;
+        return embedActiveRow(curatedId, reason);
     }
 
     /**

@@ -215,6 +215,53 @@ class CuratedEnrichmentTest {
         verify(keywordRepo, timeout(2000)).deleteBySpringDocIds(List.of("curated-1"));
     }
 
+    // ── 재임베딩 결과 보고 ────────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("reembedRow — 실제로 다시 쓴 경우에만 true")
+    void reembedRow_reportsWhatActuallyHappened() {
+        when(repository.findById(1L)).thenReturn(Optional.of(curated("요약", "키워드")));
+
+        assertThat(service.reembedRow(1L, "test")).isTrue();
+    }
+
+    /**
+     * 예전에는 행만 존재하면 {@code true} 였다 — 비활성 행의 청크에 재인덱싱을 누르면 아무 일도
+     * 없이 성공 토스트가 떴다. 호출자({@code AdminController})가 이 값을 404 로 옮기므로
+     * 거짓말이 그대로 화면이 된다.
+     */
+    @Test
+    @DisplayName("reembedRow — 비활성 행이면 false (아무것도 다시 쓰지 않았다)")
+    void reembedRow_inactiveRow_isNotASuccess() {
+        CuratedQaRepository.CuratedQa inactive = new CuratedQaRepository.CuratedQa(
+                1L, TURN_ID, UID, TID, "질문", "본문", "inactive", "v1",
+                "2026-01-01", "2026-01-01", "ok",
+                CuratedQaRepository.ORIGIN_LIKE, null, null, 1, "요약", "키워드");
+        when(repository.findById(1L)).thenReturn(Optional.of(inactive));
+
+        assertThat(service.reembedRow(1L, "test")).isFalse();
+        verify(vectorStore, never()).add(any(), any(), anyList());
+    }
+
+    @Test
+    @DisplayName("reembedRow — 행이 없으면 false")
+    void reembedRow_missingRow_isFalse() {
+        when(repository.findById(9L)).thenReturn(Optional.empty());
+
+        assertThat(service.reembedRow(9L, "test")).isFalse();
+    }
+
+    /** 임베딩 실패도 성공이 아니다 — 문서 청크의 reindexChunk() 와 같은 계약(호출자가 404 로 옮긴다). */
+    @Test
+    @DisplayName("reembedRow — 임베딩이 실패하면 false")
+    void reembedRow_failedEmbedding_isFalse() {
+        when(repository.findById(1L)).thenReturn(Optional.of(curated("요약", "키워드")));
+        org.mockito.Mockito.doThrow(new RuntimeException("embed down"))
+                .when(vectorStore).add(any(), any(), anyList());
+
+        assertThat(service.reembedRow(1L, "test")).isFalse();
+    }
+
     // ── 단일 출처: curated_qa 컬럼 ────────────────────────────────────────────
 
     /**
