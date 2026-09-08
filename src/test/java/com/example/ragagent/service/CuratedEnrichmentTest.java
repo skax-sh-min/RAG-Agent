@@ -27,6 +27,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.timeout;
@@ -212,6 +213,41 @@ class CuratedEnrichmentTest {
 
         // 벡터/FTS 삭제는 가상 스레드에서 돈다(forceRemove) — timeout 없이 검증하면 부하가 큰
         // 전체 실행에서만 지는 경주가 된다.
+        verify(keywordRepo, timeout(2000)).deleteBySpringDocIds(List.of("curated-1"));
+    }
+
+    // ── 회수: 벡터와 FTS 는 짝이다 ────────────────────────────────────────────
+
+    /**
+     * <b>대화 삭제로 회수할 때도</b> FTS 행이 함께 사라져야 한다. 예전에는 이 경로만
+     * {@code vectorStore.deleteByDocIds()} 를 직접 불러 FTS 를 빠뜨렸고, 그러면 지운 항목이
+     * {@code RetrievalService.curatedAxis()} 의 BM25 질의에 계속 잡힌다 — 게다가
+     * {@code markCurated()} 가 출처 라벨까지 붙여 줘서 멀쩡한 큐레이션 항목처럼 인용된다.
+     * 덤으로 {@code chunk_fts_key} 의 해시가 살아 있어 재사용 검증까지 통과한다.
+     */
+    @Test
+    @DisplayName("대화 삭제 회수 — 벡터와 FTS 행이 함께 사라진다")
+    void threadDeletion_removesBothAxes() {
+        CuratedQaRepository.CuratedQa row = new CuratedQaRepository.CuratedQa(
+                1L, TURN_ID, UID, TID, "질문", "본문", "active", "v1",
+                "2026-01-01", "2026-01-01", "ok",
+                CuratedQaRepository.ORIGIN_LIKE, null, null, 2, "요약", "키워드");
+        when(repository.findActiveByThread(UID, TID)).thenReturn(List.of(row));
+
+        assertThat(service.onThreadDeleted(UID, TID)).isEqualTo(1);
+
+        List<String> ids = List.of("curated-1", "curated-1-1");   // chunkCount=2
+        verify(vectorStore, timeout(2000)).deleteByDocIds(any(), any(), eq(ids));
+        verify(keywordRepo, timeout(2000)).deleteBySpringDocIds(ids);
+    }
+
+    @Test
+    @DisplayName("턴 삭제 회수 — 같은 짝으로 사라진다")
+    void turnDeletion_removesBothAxes() {
+        when(repository.findBySourceTurnId(TURN_ID)).thenReturn(Optional.of(curated("요약", "키워드")));
+
+        service.onTurnDeleted(UID, TID, TURN_ID);
+
         verify(keywordRepo, timeout(2000)).deleteBySpringDocIds(List.of("curated-1"));
     }
 

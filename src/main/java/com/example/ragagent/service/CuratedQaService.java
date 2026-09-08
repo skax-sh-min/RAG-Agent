@@ -194,13 +194,11 @@ public class CuratedQaService {
             repository.deactivateById(row.id());
             vectorIds.addAll(vectorIdsFor(row.id(), row.chunkCount()));
         }
-        Thread.ofVirtual().name("curated-deindex-thread-" + threadId).start(() -> {
-            try {
-                vectorStore.deleteByDocIds(DocRegistry.SHARED, CURATED_VERSION, vectorIds);
-            } catch (Exception e) {
-                log.warn("[CURATED] 대화 삭제 후 벡터 삭제 실패 threadId={}: {}", threadId, e.getMessage());
-            }
-        });
+        // 한 스레드의 벡터를 한 번에 지우는 것은 그대로 두되, 지우는 문은 deindex() 하나다 —
+        // 여기서 vectorStore 를 직접 부르던 동안 FTS 행이 남아, 대화를 지워도 그 항목이 BM25
+        // 축에서 계속 근거로 붙었다.
+        Thread.ofVirtual().name("curated-deindex-thread-" + threadId)
+                .start(() -> deindex(vectorIds, "threadId=" + threadId));
         log.info("[CURATED] 대화 {} 삭제 — 큐레이션 {}건 회수(벡터 {}개)",
                 threadId, rows.size(), vectorIds.size());
         return rows.size();
@@ -557,16 +555,7 @@ public class CuratedQaService {
         if (oldCount > newCount) {
             List<String> stale = new java.util.ArrayList<>(oldCount - newCount);
             for (int i = newCount; i < oldCount; i++) stale.add(springDocId(row.id(), i));
-            try {
-                vectorStore.deleteByDocIds(DocRegistry.SHARED, CURATED_VERSION, stale);
-            } catch (Exception e) {
-                log.warn("[CURATED] stale vector cleanup failed curatedId={}: {}", row.id(), e.getMessage());
-            }
-            try {
-                keywordRepo.deleteBySpringDocIds(stale);   // 같은 이유로 FTS 쪽 잔여 행도 함께
-            } catch (Exception e) {
-                log.warn("[CURATED] stale FTS cleanup failed curatedId={}: {}", row.id(), e.getMessage());
-            }
+            deindex(stale, "stale curatedId=" + row.id());
         }
         repository.updateChunkCount(row.id(), newCount);
     }
@@ -675,18 +664,37 @@ public class CuratedQaService {
 
     /** Removes every vector this row owns — {@code chunkCount} ids, not just the first. */
     private void deleteVectors(long curatedId, int chunkCount) {
-        List<String> ids = vectorIdsFor(curatedId, chunkCount);
+        deindex(vectorIdsFor(curatedId, chunkCount), "curatedId=" + curatedId);
+    }
+
+    /**
+     * 이 축에서 무언가를 내리는 <b>단 하나의</b> 자리 — 벡터와 FTS 행을 함께 지운다.
+     *
+     * <p><b>둘은 짝이다.</b> 한쪽만 지우면 검색 코퍼스에서 내린 항목이 다른 축에는 남아 계속
+     * 답변 근거로 붙는다. 특히 FTS 쪽이 남으면 {@code RetrievalService.curatedAxis()} 의 BM25
+     * 질의가 그대로 집어 오고, {@code markCurated()} 가 출처 라벨까지 붙여 준다 — 내린 지식이
+     * 멀쩡한 큐레이션 항목처럼 계속 인용된다. 덤으로 {@code chunk_fts_key} 의 해시가 살아 있어
+     * {@code QuestionReuseService.validateTurn()} 의 "청크가 그대로인가" 검사까지 통과해,
+     * 그 항목에 근거한 답변이 재사용되기까지 한다.
+     *
+     * <p>그래서 <b>id 목록을 받는 이 메서드 하나</b>만 둔다. 대화 삭제({@link #onThreadDeleted})는
+     * 한 스레드의 모든 행을 한 번에 지우느라 자기 목록을 따로 모으는데, 예전에는 그 자리에서
+     * {@code vectorStore.deleteByDocIds()} 를 직접 불러 <b>FTS 를 빠뜨렸다</b>. 짝을 기억에
+     * 맡기는 대신 지우는 문을 하나로 만든 이유다.
+     *
+     * @param what 로그용 식별 문구(어느 행인지 / 어느 대화인지)
+     */
+    private void deindex(List<String> ids, String what) {
+        if (ids == null || ids.isEmpty()) return;
         try {
             vectorStore.deleteByDocIds(DocRegistry.SHARED, CURATED_VERSION, ids);
         } catch (Exception e) {
-            log.warn("[CURATED] vector delete failed curatedId={}: {}", curatedId, e.getMessage());
+            log.warn("[CURATED] vector delete failed {}: {}", what, e.getMessage());
         }
-        // FTS 행은 벡터와 짝이다 — 여기서 안 지우면 검색 코퍼스에서 내린 항목이 키워드 축에는
-        // 남아, 지웠는데도 계속 답변 근거로 붙는다.
         try {
             keywordRepo.deleteBySpringDocIds(ids);
         } catch (Exception e) {
-            log.warn("[CURATED] FTS delete failed curatedId={}: {}", curatedId, e.getMessage());
+            log.warn("[CURATED] FTS delete failed {}: {}", what, e.getMessage());
         }
     }
 
