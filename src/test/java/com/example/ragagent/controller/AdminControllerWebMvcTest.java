@@ -376,7 +376,7 @@ class AdminControllerWebMvcTest {
     @Test
     @DisplayName("POST /admin/curated/{id} — 갱신 성공 시 200 (answer 만 보내는 기존 호출 모양)")
     void updateCurated_success_returnsOk() throws Exception {
-        when(curatedQaService.updateEntry(anyLong(), any(), anyString())).thenReturn(true);
+        when(curatedQaService.updateEntry(anyLong(), any(), anyString(), any(), any())).thenReturn(true);
 
         mvc.perform(post("/admin/curated/1").with(user(ADMIN)).with(csrf())
                         .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
@@ -387,7 +387,7 @@ class AdminControllerWebMvcTest {
     @Test
     @DisplayName("POST /admin/curated/{id} — 질문과 답변을 함께 보내면 둘 다 서비스로 넘어간다")
     void updateCurated_passesQuestionAndAnswer() throws Exception {
-        when(curatedQaService.updateEntry(anyLong(), any(), any())).thenReturn(true);
+        when(curatedQaService.updateEntry(anyLong(), any(), any(), any(), any())).thenReturn(true);
 
         mvc.perform(post("/admin/curated/1").with(user(ADMIN)).with(csrf())
                         .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
@@ -396,13 +396,32 @@ class AdminControllerWebMvcTest {
 
         // 질문과 답변이 같은 검색 텍스트를 이루므로 한 번의 저장이 둘 다 실어야 한다 —
         // 나눠 보내면 같은 항목을 두 번 임베딩하고 그 사이에 반쪽 상태가 남는다.
-        verify(curatedQaService).updateEntry(1L, "VPN 접속이 안 될 때 확인할 설정은?", "본문");
+        verify(curatedQaService).updateEntry(1L, "VPN 접속이 안 될 때 확인할 설정은?", "본문", null, null);
+    }
+
+    /**
+     * 요약·키워드의 단일 출처가 이 엔드포인트다 — 청크 편집 화면의 같은 이름 칸은 재임베딩마다
+     * 이 값으로 다시 쓰이는 사본이라 그쪽에서 고치면 조용히 되돌아간다
+     * ({@code AdminService.mergeEditableMeta} 가 서버에서도 막는다).
+     */
+    @Test
+    @DisplayName("POST /admin/curated/{id} — 요약·키워드도 같은 저장으로 넘어간다 (단일 출처)")
+    void updateCurated_passesEnrichmentFields() throws Exception {
+        when(curatedQaService.updateEntry(anyLong(), any(), any(), any(), any())).thenReturn(true);
+
+        mvc.perform(post("/admin/curated/1").with(user(ADMIN)).with(csrf())
+                        .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                        .content("{\"question\":\"질문\",\"answer\":\"본문\","
+                               + "\"summary\":\"한 줄 요약\",\"keywords\":\"배포, 인프라\"}"))
+                .andExpect(status().isOk());
+
+        verify(curatedQaService).updateEntry(1L, "질문", "본문", "한 줄 요약", "배포, 인프라");
     }
 
     @Test
     @DisplayName("POST /admin/curated/{id} — 존재하지 않으면 404")
     void updateCurated_missing_returns404() throws Exception {
-        when(curatedQaService.updateEntry(anyLong(), any(), anyString())).thenReturn(false);
+        when(curatedQaService.updateEntry(anyLong(), any(), anyString(), any(), any())).thenReturn(false);
 
         mvc.perform(post("/admin/curated/99").with(user(ADMIN)).with(csrf())
                         .contentType(org.springframework.http.MediaType.APPLICATION_JSON)

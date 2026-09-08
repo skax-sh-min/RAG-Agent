@@ -710,6 +710,8 @@ function openChunkEdit(chunkId, collection) {
 
             const metaJson = metaJsonExcludingInlineFields(data.metadata);
             const hasBreadcrumb = chunkHasBreadcrumb(data.metadata);
+            // 요약·키워드의 단일 출처가 curated_qa 인 청크 — 판정 근거는 breadcrumb 과 같다.
+            const enrichmentLocked = !hasBreadcrumb;
             const contextParts = splitChunkContext(data.metadata.chunk_context, hasBreadcrumb);
             const breadcrumbText = hasBreadcrumb
                 ? (contextParts.breadcrumb || '(위치 정보 없음)')
@@ -736,23 +738,36 @@ function openChunkEdit(chunkId, collection) {
                          style="font-size:0.78rem; max-height:220px; overflow:auto;
                                 white-space:pre-wrap; word-break:break-all;">${escHtml(metaJson)}</pre>
                 </details>
+                <!-- 큐레이션 청크에서는 이 둘이 읽기 전용이다. 단일 출처가 curated_qa 컬럼이고
+                     여기 값은 재임베딩마다 거기서 다시 쓰이는 사본이라, 편집을 받아 주면 "저장
+                     되었습니다" 뒤에 다음 재임베딩이 조용히 되돌린다. 서버도 같은 규칙을 든다
+                     (AdminService.mergeEditableMeta) — 화면만 잠그면 규칙이 아니라 장식이다. -->
                 <div>
                     <label class="form-label small fw-semibold">요약 (맥락)
                         <i class="bi bi-info-circle text-secondary ms-1 small" style="cursor:help;"
                            data-bs-toggle="tooltip" data-bs-custom-class="tooltip-wide"
                            title="아래 위치 정보 뒤에 이어붙어 임베딩·키워드 검색(FTS) 입력이 됩니다(청크 원문 자체는 바뀌지 않습니다). 저장 후 아래 &quot;이 청크만 재인덱싱&quot;을 눌러야 검색에 실제로 반영됩니다."></i>
+                        ${enrichmentLocked ? '<span class="badge bg-light text-dark border ms-1" style="font-size:0.65rem;">읽기 전용</span>' : ''}
                     </label>
                     <div id="edit-context-breadcrumb-display" class="text-muted small font-monospace mb-1"
                          style="word-break:break-all;">${escHtml(breadcrumbText)}</div>
                     <input type="hidden" id="edit-context-breadcrumb" value="${escAttr(contextParts.breadcrumb)}"/>
-                    <textarea id="edit-context" class="form-control form-control-sm"
+                    <textarea id="edit-context" class="form-control form-control-sm" ${enrichmentLocked ? 'readonly' : ''}
                               style="min-height:56px; font-size:0.8rem; resize:vertical;">${escHtml(contextParts.summary)}</textarea>
                 </div>
                 <div>
-                    <label class="form-label small fw-semibold">키워드</label>
+                    <label class="form-label small fw-semibold">키워드
+                        ${enrichmentLocked ? '<span class="badge bg-light text-dark border ms-1" style="font-size:0.65rem;">읽기 전용</span>' : ''}
+                    </label>
                     <input id="edit-keywords" type="text" class="form-control form-control-sm"
+                           ${enrichmentLocked ? 'readonly' : ''}
                            value="${escHtml(data.metadata.excerpt_keywords || '')}" placeholder="쉼표로 구분"/>
                 </div>
+                ${enrichmentLocked ? `
+                <div class="alert alert-secondary py-1 px-2 mb-0 small">
+                    <i class="bi bi-info-circle me-1"></i>지식 제안에서 온 청크입니다 — 요약·키워드는
+                    아래 <b>큐레이션 Q&amp;A</b> 카드에서 고칩니다. 여기서 고치면 다음 재임베딩에 되돌아갑니다.
+                </div>` : ''}
                 <div class="flex-grow-1 d-flex flex-column">
                     <div class="d-flex align-items-center mb-1">
                         <label class="form-label small fw-semibold mb-0">텍스트</label>
@@ -970,6 +985,30 @@ function openCuratedEdit(id) {
                     <div class="form-text small">검색에서 이 항목을 찾을 때 쓰이는 문장입니다.</div>
                     <div id="curated-suggest-box" class="border rounded p-2 mt-1 d-none small"></div>
                 </div>
+                <!-- 요약·키워드는 여기가 단일 출처다 — 청크 화면의 같은 이름 칸은 재임베딩마다
+                     이 값으로 다시 쓰이는 사본이라 그쪽에서는 읽기 전용이다. 저장 한 번이
+                     질문·답변과 함께 재임베딩까지 돌린다(updateEntry). -->
+                <div>
+                    <label class="form-label small fw-semibold">요약
+                        <i class="bi bi-info-circle text-secondary ms-1 small" style="cursor:help;"
+                           data-bs-toggle="tooltip" data-bs-custom-class="tooltip-wide"
+                           title="키워드 검색(BM25) 입력 앞에 붙습니다. 의미 벡터 입력은 질문 + 본문 그대로입니다."></i>
+                    </label>
+                    <textarea id="curated-edit-summary" class="form-control form-control-sm"
+                              rows="2" style="font-size:0.82rem; resize:vertical;"
+                              placeholder="이 내용이 무엇에 관한 것인지 1~2문장"
+                              >${escHtml(data.summary || '')}</textarea>
+                </div>
+                <div>
+                    <label class="form-label small fw-semibold">키워드
+                        <i class="bi bi-info-circle text-secondary ms-1 small" style="cursor:help;"
+                           data-bs-toggle="tooltip" data-bs-custom-class="tooltip-wide"
+                           title="chunk_fts 의 keywords 컬럼으로 들어가 BM25 가 직접 읽습니다."></i>
+                    </label>
+                    <input id="curated-edit-keywords" type="text" class="form-control form-control-sm"
+                           autocomplete="off" placeholder="쉼표로 구분"
+                           value="${escHtml(data.keywords || '')}"/>
+                </div>
                 <div class="flex-grow-1 d-flex flex-column">
                     <div class="d-flex align-items-center mb-1">
                         <label class="form-label small fw-semibold mb-0">답변</label>
@@ -1071,11 +1110,15 @@ function applyCuratedQuestion() {
 function saveCuratedEdit(id) {
     const answer = document.getElementById('curated-edit-answer').value;
     const question = document.getElementById('curated-edit-question').value;
+    // 빈 문자열도 그대로 보낸다 — 서버에서 null 은 "안 보냄", ''는 "비우기"라 관리자가 지운
+    // 요약이 저장되려면 값이 실려야 한다.
+    const summary = document.getElementById('curated-edit-summary').value;
+    const keywords = document.getElementById('curated-edit-keywords').value;
     if (!question.trim()) { showToast('질문은 비울 수 없습니다.', 'warning'); return; }
     fetch('/admin/curated/' + encodeURIComponent(id), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...getCsrfHeaders() },
-        body: JSON.stringify({ question, answer })
+        body: JSON.stringify({ question, answer, summary, keywords })
     })
     .then(r => {
         if (r.ok) {

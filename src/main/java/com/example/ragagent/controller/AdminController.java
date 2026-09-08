@@ -217,18 +217,31 @@ public class AdminController {
                 .<ResponseEntity<?>>map(row -> ResponseEntity.ok(Map.of(
                         "id",       row.id(),
                         "question", row.question(),
-                        "answer",   row.answer())))
+                        "answer",   row.answer(),
+                        // 요약·키워드의 단일 출처는 이 컬럼들이다 — 청크 화면의 같은 이름 칸은
+                        // 재임베딩마다 여기서 다시 쓰이는 사본이라 거기서는 읽기 전용이다.
+                        "summary",  row.summary()  == null ? "" : row.summary(),
+                        "keywords", row.keywords() == null ? "" : row.keywords())))
                 .orElseGet(() -> ResponseEntity.notFound().build());
     }
 
-    /** Update a curated entry's question and/or answer (re-embeds once) — admin can edit any
-     *  user's entry. {@code question} is optional: older clients send only {@code answer}. */
+    /**
+     * Update a curated entry's question / answer / summary / keywords — <b>one save, one re-embed</b>.
+     * Admin can edit any user's entry. Every field is optional: older clients send only
+     * {@code answer}, and {@code null} means "not sent" while an empty string means "clear it".
+     *
+     * <p>요약·키워드가 여기 있는 이유는 이곳이 그 둘의 <b>단일 출처</b>이기 때문이다. 청크 화면의
+     * 같은 이름 칸은 재임베딩마다 다시 쓰이는 사본이라 그쪽에서는 읽기 전용이다
+     * ({@code AdminService.mergeEditableMeta}).
+     */
     @PostMapping("/admin/curated/{id}")
     @ResponseBody
     public ResponseEntity<Void> updateCurated(@PathVariable long id, @RequestBody Map<String, Object> body) {
         String newAnswer   = body.get("answer")   instanceof String s ? s : null;
         String newQuestion = body.get("question") instanceof String q ? q : null;
-        boolean updated = curatedQaService.updateEntry(id, newQuestion, newAnswer);
+        String newSummary  = body.get("summary")  instanceof String s ? s : null;
+        String newKeywords = body.get("keywords") instanceof String s ? s : null;
+        boolean updated = curatedQaService.updateEntry(id, newQuestion, newAnswer, newSummary, newKeywords);
         return updated ? ResponseEntity.ok().build() : ResponseEntity.notFound().build();
     }
 

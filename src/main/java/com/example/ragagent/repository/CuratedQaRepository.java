@@ -361,6 +361,23 @@ public class CuratedQaRepository {
      * 부여되는 값이라, 이 한 줄을 바꾸면 그 항목이 어떤 질의에 걸리는지가 통째로 달라진다 —
      * 호출부는 반드시 재임베딩해야 한다(이 메서드는 저장만 한다).
      */
+    /**
+     * 요약·키워드 갱신 — {@code null} 인 쪽은 건드리지 않고, 빈 문자열은 "비우기"로 저장한다
+     * (그 구분이 필요해서 {@code Optional} 이 아니라 nullable 을 받는다: 화면이 한 칸만 보낼 수도
+     * 있고, 관리자가 일부러 지운 것과 안 보낸 것은 다른 일이다).
+     */
+    public void updateEnrichment(long id, String summary, String keywords) {
+        if (summary == null && keywords == null) return;
+        StringBuilder sql = new StringBuilder("UPDATE curated_qa SET updated_at=?");
+        List<Object> args = new java.util.ArrayList<>();
+        args.add(now());
+        if (summary != null)  { sql.append(", summary=?");  args.add(summary.isBlank() ? null : summary.strip()); }
+        if (keywords != null) { sql.append(", keywords=?"); args.add(keywords.isBlank() ? null : keywords.strip()); }
+        sql.append(" WHERE id=?");
+        args.add(id);
+        jdbc.update(sql.toString(), args.toArray());
+    }
+
     public void updateQuestion(long id, String question) {
         jdbc.update("UPDATE curated_qa SET question=?, updated_at=? WHERE id=?", question, now(), id);
     }

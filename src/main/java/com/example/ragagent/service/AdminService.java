@@ -767,11 +767,22 @@ public class AdminService {
      *
      * <p>호출자가 넘긴 맵은 건드리지 않는다(불변 맵일 수 있고, 남의 맵을 고쳐 놓아서도 안 된다).
      * {@code clientMeta} 가 {@code null} 이면 저장본 + 스탬프만 남는다 — 본문만 고친 편집이다.
+     *
+     * <p><b>큐레이션 청크에서는 그 둘도 편집 대상이 아니다.</b> 이 축에서 요약·키워드의 단일
+     * 출처는 {@code curated_qa.summary}/{@code .keywords} 컬럼이고, 벡터 메타데이터의 값은
+     * 재임베딩마다 거기서 다시 쓰이는 <b>사본</b>이다({@code CuratedQaService.buildDocument}).
+     * 받아 주면 화면은 "저장되었습니다"라고 말하는데 다음 재임베딩이 조용히 옛 값으로 되돌린다 —
+     * 오류도 로그도 없이. 고치는 자리는 {@code /admin} 큐레이션 패널 하나이며
+     * ({@code CuratedQaService.updateEntry}), 거기 저장은 재임베딩까지 함께 돈다.
+     *
+     * <p>화면도 그 두 칸을 잠그지만 규칙의 자리는 여기다 — 이 클래스가 이미 그렇게 하고 있다
+     * (허용 목록 자체가 화면 규칙이 아니라 서버 규칙이다).
      */
     static Map<String, String> mergeEditableMeta(Map<String, String> storedMeta,
                                                  Map<String, String> clientMeta) {
         Map<String, String> merged = new LinkedHashMap<>(storedMeta == null ? Map.of() : storedMeta);
-        if (clientMeta != null) {
+        boolean curated = "curated_qa".equals(merged.get(MetaKey.DOC_TYPE));
+        if (clientMeta != null && !curated) {
             for (String key : EDITABLE_CHUNK_META_KEYS) {
                 String value = clientMeta.get(key);
                 if (value != null) merged.put(key, value);

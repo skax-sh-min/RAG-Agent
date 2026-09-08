@@ -216,7 +216,7 @@ public class CuratedQaService {
      * page — so the chat window never shows or changes curation state.
      */
     public boolean updateAnswer(long curatedId, String newAnswer) {
-        return updateEntry(curatedId, null, newAnswer);
+        return updateEntry(curatedId, null, newAnswer, null, null);
     }
 
     /**
@@ -230,12 +230,32 @@ public class CuratedQaService {
      * 빈 질문은 그 항목을 검색에서 사실상 지우는 것과 같고, 빈 답변은 근거가 사라지는 것이다.
      */
     public boolean updateEntry(long curatedId, String newQuestion, String newAnswer) {
-        boolean hasQuestion = newQuestion != null && !newQuestion.isBlank();
-        boolean hasAnswer   = newAnswer   != null && !newAnswer.isBlank();
-        if (!hasQuestion && !hasAnswer) return false;
+        return updateEntry(curatedId, newQuestion, newAnswer, null, null);
+    }
+
+    /**
+     * 위와 같되 <b>요약·키워드까지 한 번의 저장으로</b> 반영한다.
+     *
+     * <p>이 둘의 단일 출처는 {@code curated_qa} 컬럼이다 — 벡터 메타데이터의
+     * {@code chunk_context}/{@code excerpt_keywords} 는 재임베딩 때마다 여기서 다시 쓰이는
+     * <b>사본</b>이다. 그래서 {@code /admin} 청크 화면에서 그 두 키를 고쳐 봐야 다음 재임베딩에
+     * 조용히 되돌아간다(그쪽이 큐레이션 청크에서 두 칸을 읽기 전용으로 막는 이유이자, 고칠
+     * 자리를 여기 하나로 모은 이유다).
+     *
+     * <p>{@code null} 은 "안 보냄", 빈 문자열은 "비우기"다. 넷 중 무엇이 왔든 재임베딩은
+     * <b>한 번만</b> 돈다 — 같은 항목을 두 번 임베딩하면 그 사이 벡터가 반만 갱신된 중간
+     * 상태로 남는다.
+     */
+    public boolean updateEntry(long curatedId, String newQuestion, String newAnswer,
+                               String newSummary, String newKeywords) {
+        boolean hasQuestion   = newQuestion != null && !newQuestion.isBlank();
+        boolean hasAnswer     = newAnswer   != null && !newAnswer.isBlank();
+        boolean hasEnrichment = newSummary != null || newKeywords != null;
+        if (!hasQuestion && !hasAnswer && !hasEnrichment) return false;
         if (repository.findById(curatedId).isEmpty()) return false;
-        if (hasQuestion) repository.updateQuestion(curatedId, newQuestion.strip());
-        if (hasAnswer)   repository.updateAnswer(curatedId, newAnswer);
+        if (hasQuestion)   repository.updateQuestion(curatedId, newQuestion.strip());
+        if (hasAnswer)     repository.updateAnswer(curatedId, newAnswer);
+        if (hasEnrichment) repository.updateEnrichment(curatedId, newSummary, newKeywords);
         Thread.ofVirtual().name("curated-reembed-" + curatedId).start(() ->
                 embedActiveRow(curatedId, "edit"));
         return true;
