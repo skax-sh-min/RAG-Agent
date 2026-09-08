@@ -10,7 +10,6 @@ import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.model.ResponseMode;
 import com.example.ragagent.model.ChatForm;
 import com.example.ragagent.model.TagUtils;
-import com.example.ragagent.model.VerificationSnapshot;
 import com.example.ragagent.model.SourceRef;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.MessageSource;
@@ -71,6 +70,8 @@ public class StreamingAgentService {
     private final AppProperties props;
     private final ChatImageAnalysisSkipRegistry imageSkipRegistry;
     private final QuestionReuseService questionReuseService;
+    /** 턴 저장 절차 — 블로킹·스트리밍 두 진입점이 공유한다(TurnPersistence). */
+    private final TurnPersistence turnPersistence;
     /** §10.12 — 짧은 후속 질문의 독립화. null 이면 이 단계 없이 원문으로 검색한다(테스트 편의). */
     private final QuestionCondenser questionCondenser;
 
@@ -142,6 +143,9 @@ public class StreamingAgentService {
         this.props = props;
         this.imageSkipRegistry = imageSkipRegistry;
         this.questionReuseService = questionReuseService;
+        // 블로킹 경로(AgentService)와 공유하는 턴 저장 절차. 이미 가진 셋 위의 절차라
+        // 빈으로 만들지 않는다 — 그러면 이 클래스의 하위호환 생성자 전부가 함께 흔들린다.
+        this.turnPersistence = new TurnPersistence(memoryService, summarizerService, questionReuseService);
         this.questionCondenser = questionCondenser;
         this.nanoTimeSource = nanoTimeSource;
     }
@@ -234,27 +238,9 @@ public class StreamingAgentService {
 
             long elapsedMs = (System.nanoTime() - startNs) / 1_000_000;
 
-            Long turnId = null;
-            if (result.answer() != null && !result.answer().isBlank()) {
-                turnId = memoryService.addTurn(userId, form.threadId(), form.question(), result.answer(),
-                        askedAt, result.totalInputTokens(), result.totalOutputTokens(),
-                        (int) elapsedMs, result.usedProvider(), result.llmCallCount(),
-                    // 폼이 아니라 결과의 모드 (AgentService 와 같은 이유 — 검색 0건이면 S 로 바뀐다).
-                    result.responseMode().name(), TagUtils.toMetaValue(form.selectedTags()),
-                    form.isDirectMode());
-                memoryService.saveTurnImageRefs(turnId, userId, form.threadId(), result.imageRefs());
-                memoryService.saveRetrievalMetrics(turnId, result.sources());
-                memoryService.saveVerification(turnId, new VerificationSnapshot(
-                        result.grounded(), result.responseMode().generative(),
-                        result.evalReason(), result.envNote(), result.inventedSymbols(),
-                        result.budgetNote(),
-                        result.wasCondensed() ? result.searchQuestion() : null));
-                if (questionReuseService != null) {
-                    questionReuseService.recordTurnSources(turnId, userId, form.threadId(),
-                            result.retrievedDocs(), result.sources());
-                }
-                summarizerService.precomputeAfterTurn(userId, form.threadId(), turnId, locale);
-            }
+            Long turnId = turnPersistence.save(new TurnPersistence.Turn(
+                    userId, form.threadId(), form.question(), form.selectedTags(),
+                    form.isDirectMode(), locale, askedAt, elapsedMs), result);
 
             sendEvent(emitter, "done",
                     buildDonePayload(result, elapsedMs, turnId, listener.getAccumulatedAnswer()));
