@@ -15,6 +15,7 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.ai.document.Document;
 
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -25,6 +26,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.timeout;
@@ -49,6 +51,8 @@ class CuratedEnrichmentTest {
     private static final String UID = "u1";
     private static final String TID = "t1";
     private static final long TURN_ID = 42L;
+
+    private static final int CHUNK_SIZE = 1_500;
 
     private CuratedQaRepository repository;
     private VectorStoreFacade vectorStore;
@@ -258,9 +262,31 @@ class CuratedEnrichmentTest {
     // ── "빈 칸 자동 생성" ─────────────────────────────────────────────────────
 
     private CuratedSubmissionService submissionService(KeywordExtractor extractor) {
+        return submissionService(extractor, splittingCuratedQaService());
+    }
+
+    private CuratedSubmissionService submissionService(KeywordExtractor extractor, CuratedQaService curatedQa) {
         return new CuratedSubmissionService(mock(CuratedSubmissionRepository.class),
-                mock(CuratedQaService.class), mock(CuratedImageStore.class),
+                curatedQa, mock(CuratedImageStore.class),
                 mock(MemoryService.class), props(), mock(AuditLogger.class), extractor);
+    }
+
+    /**
+     * {@code splitForEmbedding} 을 실제로 나누게 스텁한다. 맨 mock 은 <b>빈 목록</b>을 돌려주므로
+     * 그대로 두면 {@code enrichmentInput()} 의 폴백(단순 자르기)만 시험하게 되고, 정작 고친
+     * 주 경로(첫 청크)는 한 번도 지나지 않는다.
+     */
+    private static CuratedQaService splittingCuratedQaService() {
+        CuratedQaService curatedQa = mock(CuratedQaService.class);
+        when(curatedQa.splitForEmbedding(anyString())).thenAnswer(inv -> {
+            String text = inv.getArgument(0);
+            List<String> out = new ArrayList<>();
+            for (int i = 0; i < text.length(); i += CHUNK_SIZE) {
+                out.add(text.substring(i, Math.min(text.length(), i + CHUNK_SIZE)));
+            }
+            return out;
+        });
+        return curatedQa;
     }
 
     private static KeywordExtractor extractorReturning(String summary, String keywords) {
@@ -303,6 +329,58 @@ class CuratedEnrichmentTest {
 
         assertThat(out.llmCalled()).isFalse();
         verify(extractor, never()).enrichSingle(any());
+    }
+
+    /**
+     * {@code enrichSingle} 의 계약은 "이미 인덱싱된 <b>청크</b> 하나"이고, 인덱싱 경로가 안전한
+     * 이유가 그것이다 — 입력에는 상한이 없고({@code IndexingOutputCap} 은 출력만 제한한다)
+     * 호출자가 언제나 잘린 조각을 넘긴다. 제안 본문은 길이 제한이 없고 이 경로는 게스트가
+     * 부를 수 있으므로, 여기서 그 계약을 지키지 않으면 본문 하나가 그대로 프롬프트가 된다.
+     */
+    @Test
+    @DisplayName("자동 생성 — 긴 본문은 첫 청크만 LLM 에 넘긴다 (본문 전체가 아니다)")
+    void enrich_sendsOnlyTheFirstChunkOfALongBody() {
+        KeywordExtractor extractor = extractorReturning("요약", "키워드");
+        String longBody = "이것은 배포 절차를 설명하는 문단입니다. ".repeat(4_000);   // 약 88,000자
+
+        submissionService(extractor).enrich(longBody, "", "");
+
+        ArgumentCaptor<Document> sent = ArgumentCaptor.forClass(Document.class);
+        verify(extractor).enrichSingle(sent.capture());
+        assertThat(sent.getValue().getText())
+                .as("프롬프트에 실리는 조각은 인덱싱의 한 청크와 같은 크기여야 한다")
+                .hasSize(CHUNK_SIZE)
+                .isEqualTo(longBody.substring(0, CHUNK_SIZE));
+    }
+
+    /**
+     * 분할기가 아무것도 내지 못하는 본문(사실상 잡음뿐)에서도 상한은 지켜야 한다 — 이 폴백이
+     * 없으면 그 경우에만 본문 전체가 그대로 프롬프트로 간다.
+     */
+    @Test
+    @DisplayName("자동 생성 — 분할기가 빈 목록을 내도 상한만큼만 넘긴다")
+    void enrich_fallsBackToATruncatedBodyWhenSplittingYieldsNothing() {
+        KeywordExtractor extractor = extractorReturning("요약", "키워드");
+        CuratedQaService noSplit = mock(CuratedQaService.class);   // splitForEmbedding -> 빈 목록
+        String longBody = "가".repeat(50_000);
+
+        submissionService(extractor, noSplit).enrich(longBody, "", "");
+
+        ArgumentCaptor<Document> sent = ArgumentCaptor.forClass(Document.class);
+        verify(extractor).enrichSingle(sent.capture());
+        assertThat(sent.getValue().getText()).hasSize(CHUNK_SIZE);
+    }
+
+    @Test
+    @DisplayName("자동 생성 — 짧은 본문은 그대로 넘어간다 (자르기가 평소 동작을 바꾸지 않는다)")
+    void enrich_shortBodyIsSentWhole() {
+        KeywordExtractor extractor = extractorReturning("요약", "키워드");
+
+        submissionService(extractor).enrich("배포는 ArgoCD 로 한다.", "", "");
+
+        ArgumentCaptor<Document> sent = ArgumentCaptor.forClass(Document.class);
+        verify(extractor).enrichSingle(sent.capture());
+        assertThat(sent.getValue().getText()).isEqualTo("배포는 ArgoCD 로 한다.");
     }
 
     @Test

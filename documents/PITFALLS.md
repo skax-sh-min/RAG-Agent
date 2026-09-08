@@ -226,6 +226,18 @@ on/off 스위치를 새로 만들지 않고 `app.search-multiquery-enabled` 를 
 
 **조회 값은 남는다** — `ChunkRow` 가 이미 내놓는 것은 `doc_id`·`filename`·`page_or_slide`·`chapter_no`·`keywords` 뿐이고, `tags`(태그 스코프 디버깅)·`image_paths`(이미지 연결)·`chunk_index`(내보내기 순서)·`edited_at`(손 탄 적 있는가)·`version`(위 어긋남 확인)은 여기서만 보인다. 그래서 지우지 않고 접힌 `<details>` 안 `<pre>` 로 남겼다. 화면은 저장 시 열 때 읽은 값을 그대로 되돌려 보내지만(`currentChunkEdit.metadata`), **서버는 그 맵을 저장하지 않는다** — `AdminService.updateChunk()` 가 `EDITABLE_CHUNK_META_KEYS`(`excerpt_keywords`·`chunk_context`, 즉 화면에 입력칸이 있는 둘)만 골라 **저장된 메타데이터 위에** 얹는다. 예전에는 클라이언트가 보낸 맵이 저장본을 통째로 대체했고, 그래서 두 가지가 동시에 열려 있었다: 요청 본문에 아무 키나 넣으면 그대로 청크 메타데이터가 됐고, 반대로 화면이 보내지 않는 키(로더가 붙이는 `section` 처럼 `MetaKey` 에 없는 것)는 편집 한 번에 사라졌다. 저장본에서 시작하면 둘 다 없어진다 — 허용 목록을 늘릴 때 물을 것도 "화면에서 편집 가능한가" 하나뿐이다. 같은 이유로 **Chroma 경로의 메타데이터 유실**도 함께 사라졌다: 예전에는 `newMeta == null` 이면 `Map.of()` 로 upsert 해 본문만 보내는 호출 하나가 그 청크의 `doc_id`·`filename`·태그를 전부 날렸다(그래서 `Include.METADATAS` 를 함께 읽는다). `edited_at` 스탬프도 이제 **편집이 일어나면 항상** 찍힌다 — 예전에는 메타데이터 맵이 실려 왔을 때만 찍혀서, 본문만 고친 편집이 재인덱싱 경고에 잡히지 않았다. 참고로 `sha256`·`collected_at`·`heading_page`·`owner_id`·`visibility` 는 인덱싱 때 쓰기만 하고 읽는 코드가 없으며 `tenant_id` 는 선언만 있다.
 
+### `KeywordExtractor.enrichSingle()` 은 청크를 받는다 — 본문을 넘기면 상한이 없다
+
+이 메서드의 계약은 "이미 인덱싱된 **청크** 하나"이고, 인덱싱 경로가 안전한 이유가 정확히 그것이다: 호출자가 언제나 `chunk-size`(기본 1,500자)로 잘린 조각을 넘긴다. **입력에는 상한이 없다** — `IndexingOutputCap` 은 이름 그대로 *출력*만 제한한다.
+
+지식 제안의 "빈 칸 자동 생성"이 그 계약을 깼다. 제안 본문은 **길이 제한이 없고**(§6.9 — 승인 시 분할로 흡수하므로 일부러 두지 않았다) 이 경로는 게스트가 부를 수 있다(`POST /curated/submissions/enrich`, 그리고 키워드를 비운 모든 등록). 200KB 본문 하나가 그대로 200KB 프롬프트가 되어 컨텍스트 초과이거나 수십 초짜리 호출이었다.
+
+`CuratedSubmissionService.enrichmentInput()` 이 **첫 청크만** 넘긴다. 단순 자르기가 아니라 `splitBody()` — 승인 시 본문을 나눌 같은 기계라 표·코드 블록 경계가 보존된다(문자 수로 자르면 반쪽 표가 프롬프트에 들어가고, 그 조각으로 만든 요약은 본문이 아니라 잘린 자국을 설명한다). 분할기가 빈 목록을 내는 본문(사실상 잡음뿐)에는 폴백으로 `chunk-size` 만큼 자른다.
+
+**창 기반 예산(`PromptBudget.rewriteInputChars`)을 겹치지 않는다.** 인덱싱 경로도 그러지 않기 때문이다 — 이 상한의 목적은 새 예산 층을 만드는 것이 아니라 **깨진 계약을 되돌리는 것**이고, 이 호출을 인덱싱의 한 청크와 정확히 같은 크기로 만드는 것이 그 정의다. (MD 교정·구조화의 "두 값 중 작은 쪽"은 성격이 다르다 — 그쪽은 조각 크기 자체가 설정값이라 창과 충돌할 수 있다.)
+
+**테스트에서 걸리는 것 하나**: `splitBody()` 는 `CuratedQaService.splitForEmbedding()` 에 위임하는데, 맨 mock 은 **빈 목록**을 돌려준다. 스텁하지 않으면 폴백 경로만 시험하게 되고 정작 주 경로는 한 번도 지나지 않는다.
+
 ### 큐레이션의 요약·키워드는 `curated_qa` 컬럼이 단일 출처다
 
 벡터 메타데이터의 `chunk_context`/`excerpt_keywords` 는 **사본**이다 — `CuratedQaService.buildDocument()` 가 재임베딩할 때마다 `curated_qa.summary`/`.keywords` 에서 다시 쓴다. 그래서 `/admin` **청크** 화면에서 그 둘을 고치면 화면은 "저장되었습니다"라고 말하는데 다음 재임베딩(제안 재승인, 큐레이션 패널 저장)이 조용히 옛 값으로 되돌린다. 오류도 로그도 없다.
