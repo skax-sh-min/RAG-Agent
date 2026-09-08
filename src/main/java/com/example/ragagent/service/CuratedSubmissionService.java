@@ -94,12 +94,39 @@ public class CuratedSubmissionService {
         if (body == null || body.isBlank()) {
             throw new IllegalArgumentException("본문을 먼저 입력해 주세요.");
         }
-        Document enriched = keywordExtractor.enrichSingle(new Document(body.strip(), new HashMap<>()));
+        Document enriched = keywordExtractor.enrichSingle(new Document(enrichmentInput(body), new HashMap<>()));
         Object ctx = enriched.getMetadata().get(MetaKey.CHUNK_CONTEXT);
         Object kw  = enriched.getMetadata().get(MetaKey.EXCERPT_KEYWORDS);
         if (summary.isEmpty() && ctx != null)  summary  = clamp(ctx.toString().strip(), MAX_SUMMARY_LEN);
         if (keywords.isEmpty() && kw != null)  keywords = clamp(kw.toString().strip(), MAX_KEYWORDS_LEN);
         return new Enrichment(summary, keywords, true);
+    }
+
+    /**
+     * {@link KeywordExtractor#enrichSingle} 에 넘길 조각 — <b>본문 전체가 아니라 첫 청크</b>다.
+     *
+     * <p>그 메서드의 계약은 "이미 인덱싱된 <b>청크</b> 하나"이고, 인덱싱 경로가 안전한 이유가
+     * 정확히 그것이다: 호출자가 언제나 {@code chunk-size}(기본 1,500자)로 잘린 조각을 넘긴다.
+     * 입력에는 상한이 없다 — {@code IndexingOutputCap} 은 <b>출력</b>만 제한한다. 반면 지식 제안의
+     * 본문은 <b>길이 제한이 없고</b>(§6.9 — 승인 시 분할로 흡수하므로 일부러 두지 않았다) 이 경로는
+     * 게스트가 부를 수 있다({@code POST /curated/submissions/enrich}, 그리고 키워드를 비운 모든 등록).
+     * 그대로 넘기면 200KB 본문 하나가 200KB 프롬프트가 되어 컨텍스트 초과이거나 수십 초짜리 호출이다.
+     *
+     * <p><b>왜 단순 자르기가 아니라 첫 청크인가.</b> 승인 시 본문을 나눌 {@link #splitBody} 와
+     * 같은 기계를 쓰므로 표·코드 블록 경계가 보존된다 — 문자 수로 자르면 반쪽 표가 프롬프트에
+     * 들어가고, 그 조각으로 만든 요약은 본문이 아니라 잘린 자국을 설명하게 된다.
+     *
+     * <p>여기서 창 기반 예산({@code PromptBudget.rewriteInputChars})까지 겹치지 않는 이유는,
+     * 인덱싱 경로도 그러지 않기 때문이다. 이 상한의 목적은 새 예산 층을 만드는 것이 아니라
+     * <b>깨진 계약을 되돌리는 것</b>이다 — 이 호출을 인덱싱의 한 청크와 정확히 같은 크기로 만든다.
+     */
+    private String enrichmentInput(String body) {
+        String trimmed = body.strip();
+        List<String> chunks = splitBody(trimmed);
+        if (!chunks.isEmpty()) return chunks.get(0);
+        // 분할기가 아무것도 내지 못하는 본문(사실상 잡음뿐)도 상한은 지켜야 한다.
+        int cap = Math.max(1, chunkSizeForBody());
+        return trimmed.length() <= cap ? trimmed : trimmed.substring(0, cap);
     }
 
     /** @param llmCalled false when both fields were already filled — the button made no LLM call. */
