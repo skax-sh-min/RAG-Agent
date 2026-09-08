@@ -157,6 +157,43 @@ class AdminServiceTest {
                 .doesNotContainKey("injected_key");
     }
 
+    /**
+     * 큐레이션 청크에서 이 둘의 단일 출처는 {@code curated_qa.summary}/{@code .keywords} 컬럼이고,
+     * 벡터 메타데이터의 값은 재임베딩마다 거기서 다시 쓰이는 <b>사본</b>이다
+     * ({@code CuratedQaService.buildDocument}). 편집을 받아 주면 화면은 "저장되었습니다"라고 하는데
+     * 다음 재임베딩이 조용히 옛 값으로 되돌린다 — 오류도 로그도 없다. 고치는 자리는 큐레이션
+     * 패널 하나이며, 그쪽 저장은 재임베딩까지 함께 돈다.
+     */
+    @Test
+    @DisplayName("mergeEditableMeta: 큐레이션 청크에서는 요약·키워드 편집을 받지 않는다 (되돌아갈 값이라서)")
+    void mergeEditableMeta_curatedChunkIgnoresEnrichmentEdits() {
+        Map<String, String> stored = new java.util.LinkedHashMap<>();
+        stored.put(MetaKey.DOC_ID, "curated:7");
+        stored.put(MetaKey.DOC_TYPE, "curated_qa");
+        stored.put(MetaKey.EXCERPT_KEYWORDS, "저장된 키워드");
+        stored.put(MetaKey.CHUNK_CONTEXT, "저장된 요약");
+
+        Map<String, String> merged = AdminService.mergeEditableMeta(stored, Map.of(
+                MetaKey.EXCERPT_KEYWORDS, "화면에서 고친 키워드",
+                MetaKey.CHUNK_CONTEXT, "화면에서 고친 요약"));
+
+        assertThat(merged).containsEntry(MetaKey.EXCERPT_KEYWORDS, "저장된 키워드")
+                .containsEntry(MetaKey.CHUNK_CONTEXT, "저장된 요약")
+                .as("본문 편집 추적은 그대로 — 텍스트는 여전히 고칠 수 있다")
+                .containsKey(MetaKey.EDITED_AT);
+    }
+
+    /** 문서 청크는 영향이 없어야 한다 — 가드는 doc_type 하나로만 걸린다. */
+    @Test
+    @DisplayName("mergeEditableMeta: doc_type 이 없는 평범한 문서 청크는 예전 그대로 편집된다")
+    void mergeEditableMeta_documentChunkStillEditable() {
+        Map<String, String> merged = AdminService.mergeEditableMeta(
+                new java.util.LinkedHashMap<>(Map.of(MetaKey.DOC_ID, "doc1")),
+                Map.of(MetaKey.CHUNK_CONTEXT, "새 맥락"));
+
+        assertThat(merged).containsEntry(MetaKey.CHUNK_CONTEXT, "새 맥락");
+    }
+
     @Test
     @DisplayName("mergeEditableMeta: 본문만 고친 편집(clientMeta=null)도 저장본을 지키고 스탬프를 찍는다")
     void mergeEditableMeta_nullClientMetaPreservesStored() {

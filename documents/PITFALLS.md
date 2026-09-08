@@ -226,6 +226,16 @@ on/off 스위치를 새로 만들지 않고 `app.search-multiquery-enabled` 를 
 
 **조회 값은 남는다** — `ChunkRow` 가 이미 내놓는 것은 `doc_id`·`filename`·`page_or_slide`·`chapter_no`·`keywords` 뿐이고, `tags`(태그 스코프 디버깅)·`image_paths`(이미지 연결)·`chunk_index`(내보내기 순서)·`edited_at`(손 탄 적 있는가)·`version`(위 어긋남 확인)은 여기서만 보인다. 그래서 지우지 않고 접힌 `<details>` 안 `<pre>` 로 남겼다. 화면은 저장 시 열 때 읽은 값을 그대로 되돌려 보내지만(`currentChunkEdit.metadata`), **서버는 그 맵을 저장하지 않는다** — `AdminService.updateChunk()` 가 `EDITABLE_CHUNK_META_KEYS`(`excerpt_keywords`·`chunk_context`, 즉 화면에 입력칸이 있는 둘)만 골라 **저장된 메타데이터 위에** 얹는다. 예전에는 클라이언트가 보낸 맵이 저장본을 통째로 대체했고, 그래서 두 가지가 동시에 열려 있었다: 요청 본문에 아무 키나 넣으면 그대로 청크 메타데이터가 됐고, 반대로 화면이 보내지 않는 키(로더가 붙이는 `section` 처럼 `MetaKey` 에 없는 것)는 편집 한 번에 사라졌다. 저장본에서 시작하면 둘 다 없어진다 — 허용 목록을 늘릴 때 물을 것도 "화면에서 편집 가능한가" 하나뿐이다. 같은 이유로 **Chroma 경로의 메타데이터 유실**도 함께 사라졌다: 예전에는 `newMeta == null` 이면 `Map.of()` 로 upsert 해 본문만 보내는 호출 하나가 그 청크의 `doc_id`·`filename`·태그를 전부 날렸다(그래서 `Include.METADATAS` 를 함께 읽는다). `edited_at` 스탬프도 이제 **편집이 일어나면 항상** 찍힌다 — 예전에는 메타데이터 맵이 실려 왔을 때만 찍혀서, 본문만 고친 편집이 재인덱싱 경고에 잡히지 않았다. 참고로 `sha256`·`collected_at`·`heading_page`·`owner_id`·`visibility` 는 인덱싱 때 쓰기만 하고 읽는 코드가 없으며 `tenant_id` 는 선언만 있다.
 
+### 큐레이션의 요약·키워드는 `curated_qa` 컬럼이 단일 출처다
+
+벡터 메타데이터의 `chunk_context`/`excerpt_keywords` 는 **사본**이다 — `CuratedQaService.buildDocument()` 가 재임베딩할 때마다 `curated_qa.summary`/`.keywords` 에서 다시 쓴다. 그래서 `/admin` **청크** 화면에서 그 둘을 고치면 화면은 "저장되었습니다"라고 말하는데 다음 재임베딩(제안 재승인, 큐레이션 패널 저장)이 조용히 옛 값으로 되돌린다. 오류도 로그도 없다.
+
+고치는 자리는 **`/admin` 큐레이션 Q&A 패널 하나**다(`CuratedQaService.updateEntry(id, q, a, summary, keywords)`) — 거기 저장은 네 값을 한 번에 반영하고 재임베딩까지 **한 번만** 돈다(따로 저장하면 같은 항목을 두 번 임베딩하고 그 사이 벡터가 반만 갱신된 중간 상태로 남는다).
+
+막는 자리는 **`AdminService.mergeEditableMeta()`** 다. 저장된 메타데이터의 `doc_type` 이 `curated_qa` 면 `EDITABLE_CHUNK_META_KEYS` 를 아예 적용하지 않는다 — 순수 함수 하나라 sqlite-vec 와 Chroma 두 경로가 함께 막히고, 화면(읽기 전용 배지 + 안내)만 잠갔을 때 남는 REST 직접 호출 구멍도 없다. 이 클래스의 허용 목록 자체가 이미 "화면 규칙이 아니라 서버 규칙"이라는 같은 이유로 서버에 있다.
+
+**아직 같은 모양으로 남아 있는 것: 청크 본문.** 큐레이션 청크의 텍스트도 `curated_qa.answer` 를 나눈 사본이라, 청크 화면에서 고치면 재임베딩에 되돌아간다. 이건 이 필드들이 생기기 전부터 그랬고(즉 새 버그가 아니고), 고치는 방향도 같다 — 큐레이션 패널의 **답변**을 고칠 것. 청크 화면에서 텍스트 편집까지 막을지는 기능 제거라 별도 판단이 필요하다.
+
 ### 큐레이션 청크에는 빵부스러기가 없다 (`/admin` 요약 칸)
 
 문서 청크의 `chunk_context` 는 `KeywordExtractor.combineContext()` 가 만든 `{파일명} > {헤딩}` 한 줄 + LLM 문장이고, `/admin` 편집 패널의 `splitChunkContext()` 는 **첫 줄을 읽기 전용 위치 표시로** 떼어 낸다 — 파일명·헤딩에서 결정적으로 파생되는 값이라 손으로 고칠 것이 아니기 때문이다.

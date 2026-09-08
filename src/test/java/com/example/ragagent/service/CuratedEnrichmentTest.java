@@ -211,6 +211,50 @@ class CuratedEnrichmentTest {
         verify(keywordRepo, timeout(2000)).deleteBySpringDocIds(List.of("curated-1"));
     }
 
+    // ── 단일 출처: curated_qa 컬럼 ────────────────────────────────────────────
+
+    /**
+     * 이 둘을 고치는 자리는 큐레이션 패널 하나다. 청크 화면의 같은 이름 칸은 재임베딩마다
+     * 여기서 다시 쓰이는 사본이라 그쪽에서는 읽기 전용이다
+     * ({@code AdminService.mergeEditableMeta}).
+     */
+    @Test
+    @DisplayName("updateEntry — 요약·키워드를 컬럼에 쓰고 재임베딩은 한 번만 돈다")
+    void updateEntry_writesEnrichmentAndReembedsOnce() {
+        when(repository.findById(1L)).thenReturn(Optional.of(curated("옛 요약", "옛 키워드")));
+
+        assertThat(service.updateEntry(1L, "새 질문", "새 답변", "새 요약", "새 키워드")).isTrue();
+
+        verify(repository).updateEnrichment(1L, "새 요약", "새 키워드");
+        verify(repository).updateQuestion(1L, "새 질문");
+        verify(repository).updateAnswer(1L, "새 답변");
+        // 같은 항목을 두 번 임베딩하면 그 사이 벡터가 반만 갱신된 중간 상태로 남는다
+        verify(vectorStore, timeout(2000)).add(any(), any(), anyList());
+    }
+
+    @Test
+    @DisplayName("updateEntry — 요약만 보내도 저장되고 재임베딩된다 (질문·답변은 그대로)")
+    void updateEntry_enrichmentOnly_isEnoughToSave() {
+        when(repository.findById(1L)).thenReturn(Optional.of(curated("옛 요약", "옛 키워드")));
+
+        assertThat(service.updateEntry(1L, null, null, "새 요약", null)).isTrue();
+
+        verify(repository).updateEnrichment(1L, "새 요약", null);
+        verify(repository, never()).updateQuestion(anyLong(), any());
+        verify(repository, never()).updateAnswer(anyLong(), any());
+    }
+
+    /** 3-arg 오버로드는 예전 호출자(질문·답변만 보내는 화면)의 계약이다 — 두 칸을 건드리면 안 된다. */
+    @Test
+    @DisplayName("updateEntry(3-arg) — 요약·키워드는 손대지 않는다")
+    void updateEntry_legacyOverload_leavesEnrichmentAlone() {
+        when(repository.findById(1L)).thenReturn(Optional.of(curated("옛 요약", "옛 키워드")));
+
+        service.updateEntry(1L, "새 질문", "새 답변");
+
+        verify(repository, never()).updateEnrichment(anyLong(), any(), any());
+    }
+
     // ── "빈 칸 자동 생성" ─────────────────────────────────────────────────────
 
     private CuratedSubmissionService submissionService(KeywordExtractor extractor) {
