@@ -6,8 +6,6 @@ import com.example.ragagent.context.ThreadContext;
 import com.example.ragagent.llm.RoutingMode;
 import com.example.ragagent.model.ResponseMode;
 import com.example.ragagent.model.ChatRequest;
-import com.example.ragagent.model.TagUtils;
-import com.example.ragagent.model.VerificationSnapshot;
 import com.example.ragagent.model.ChatResponse;
 import com.example.ragagent.security.PromptInjectionGuard;
 import org.slf4j.Logger;
@@ -37,6 +35,8 @@ public class AgentService {
         private final ClassifierService classifierService;
         private final ConversationSummarizerService summarizerService;
         private final QuestionReuseService questionReuseService;
+        /** 턴 저장 절차 — 블로킹·스트리밍 두 진입점이 공유한다(TurnPersistence). */
+        private final TurnPersistence turnPersistence;
         /** §10.12 — 짧은 후속 질문의 독립화. null 이면 이 단계 없이 원문으로 검색한다(테스트 편의). */
         private final QuestionCondenser questionCondenser;
 
@@ -52,6 +52,9 @@ public class AgentService {
                 this.summarizerService = summarizerService;
                 this.questionReuseService = questionReuseService;
                 this.questionCondenser = questionCondenser;
+                // 스트리밍 경로와 공유하는 턴 저장 절차. 새 협력자를 들이는 것이 아니라 이미
+                // 가진 셋 위의 절차라 빈으로 만들지 않는다(TurnPersistence 클래스 주석 참고).
+                this.turnPersistence = new TurnPersistence(memoryService, summarizerService, questionReuseService);
         }
 
         // Test/backward-compatible constructors.
@@ -125,30 +128,9 @@ public class AgentService {
         long elapsedMs = (System.nanoTime() - startNano) / 1_000_000;
         double elapsedSeconds = elapsedMs / 1000.0;
 
-        Long turnId = null;
-        if (result.answer() != null && !result.answer().isBlank()) {
-            turnId = memoryService.addTurn(userId, request.threadId(), request.question(), result.answer(),
-                    askedAt, result.totalInputTokens(), result.totalOutputTokens(),
-                    (int) elapsedMs, result.usedProvider(), result.llmCallCount(),
-                    // 요청이 아니라 <b>결과</b>의 모드를 저장한다 — 그래프가 모드를 바꾸는 경우가
-                    // 있고(검색 0건 → S, AnswerService.answerWithoutDocuments), 저장된 값이 버블의
-                    // 두 글자 표기와 좋아요 가능 여부를 정한다. 바로 아래 saveVerification 이 이미
-                    // result.responseMode() 를 읽고 있어 둘이 갈리면 안 된다.
-                    result.responseMode().name(), TagUtils.toMetaValue(request.selectedTags()),
-                    request.directMode());
-                        memoryService.saveTurnImageRefs(turnId, userId, request.threadId(), result.imageRefs());
-            memoryService.saveRetrievalMetrics(turnId, result.sources());
-            memoryService.saveVerification(turnId, new VerificationSnapshot(
-                    result.grounded(), result.responseMode().generative(),
-                    result.evalReason(), result.envNote(), result.inventedSymbols(),
-                    result.budgetNote(),
-                    result.wasCondensed() ? result.searchQuestion() : null));
-            if (questionReuseService != null) {
-                questionReuseService.recordTurnSources(turnId, userId, request.threadId(),
-                        result.retrievedDocs(), result.sources());
-            }
-            summarizerService.precomputeAfterTurn(userId, request.threadId(), turnId, ctx.locale());
-        }
+        Long turnId = turnPersistence.save(new TurnPersistence.Turn(
+                userId, request.threadId(), request.question(), request.selectedTags(),
+                request.directMode(), ctx.locale(), askedAt, elapsedMs), result);
 
         return new ChatResponse(
                 result.answer(),
