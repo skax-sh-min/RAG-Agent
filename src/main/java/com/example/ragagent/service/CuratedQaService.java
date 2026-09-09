@@ -585,7 +585,7 @@ public class CuratedQaService {
      */
     private Document buildDocument(CuratedQa row, int chunkIndex, String storedText, String searchText) {
         Map<String, Object> meta = new HashMap<>();
-        meta.put(MetaKey.DOC_ID, "curated:" + row.id());
+        meta.put(MetaKey.DOC_ID, curatedDocId(row.id()));
         meta.put(MetaKey.FILENAME, "curated_qa");
         meta.put(MetaKey.VERSION, CURATED_VERSION);
         meta.put(MetaKey.DOC_TYPE, "curated_qa");
@@ -661,6 +661,28 @@ public class CuratedQaService {
             log.warn("[CURATED] FTS index failed curatedId={}: {}", row.id(), e.getMessage());
         }
     }
+
+    /**
+     * 이 축의 {@code doc_id} 형식 — {@code curated:{행 번호}}. 쓰는 곳과 읽는 곳이 갈리면
+     * 접두사 하나 바꾸는 것이 조용한 사고가 되므로 형식은 여기 한 쌍에만 둔다
+     * ({@code CuratedImageStore.markerPaths()} 와 같은 이유로 static 이다 — 읽는 쪽이
+     * 이 서비스에 의존할 필요가 없다).
+     */
+    public static String curatedDocId(long rowId) {
+        return DOC_ID_PREFIX + rowId;
+    }
+
+    /** {@link #curatedDocId} 의 역방향. 형식이 아니면 빈 값 — 추측해서 숫자를 만들지 않는다. */
+    public static java.util.OptionalLong rowIdOf(String docId) {
+        if (docId == null || !docId.startsWith(DOC_ID_PREFIX)) return java.util.OptionalLong.empty();
+        try {
+            return java.util.OptionalLong.of(Long.parseLong(docId.substring(DOC_ID_PREFIX.length())));
+        } catch (NumberFormatException e) {
+            return java.util.OptionalLong.empty();
+        }
+    }
+
+    private static final String DOC_ID_PREFIX = "curated:";
 
     /** Removes every vector this row owns — {@code chunkCount} ids, not just the first. */
     private void deleteVectors(long curatedId, int chunkCount) {

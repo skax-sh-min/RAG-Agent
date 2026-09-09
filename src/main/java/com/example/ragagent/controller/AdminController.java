@@ -72,13 +72,46 @@ public class AdminController {
     // ── Page ─────────────────────────────────────────────────────────────────
 
     @GetMapping("/admin")
-    public String adminPage(ThreadContext ctx, Model model) {
+    public String adminPage(ThreadContext ctx,
+                            @RequestParam(required = false) String chunk,
+                            Model model) {
         var result = adminService.listCollections();
         model.addAttribute("collections",     result.items());
         model.addAttribute("chromaAvailable", result.available());
         model.addAttribute("vectorStore",     adminService.vectorStoreView());
         model.addAttribute("documents",       ragService.listDocuments(ctx.userId()));
+        if (chunk != null && !chunk.isBlank()) openChunkOnLoad(chunk.strip(), model);
         return "admin";
+    }
+
+    /**
+     * 채팅의 「청크 수정」(관리자에게만 보이는 §10.14 신고 버튼)이 새 탭으로 보낸 청크를 열
+     * 준비를 한다. <b>분기가 서버에 있는 이유</b>는 채팅이 청크 id 말고는 아무것도 모르기
+     * 때문이다 — 어느 컬렉션인지도, 큐레이션 축인지도 여기서만 알 수 있다.
+     *
+     * <p><b>큐레이션 청크는 청크 편집기로 보내지 않는다.</b> 거기서는 요약·키워드가 읽기 전용이고
+     * (단일 출처가 {@code curated_qa} 컬럼이다), 본문은 입력이 되지만 「이 청크만 재인덱싱」이
+     * {@link #reindexChunk} 를 거쳐 {@code reembedRow()} 로 가면서 그 편집을 <b>그 자리에서
+     * 되돌린다</b>. 고칠 수 있는 자리는 큐레이션 Q&amp;A 패널 하나다.
+     *
+     * <p>못 찾으면 페이지는 평소대로 열리고 화면이 그렇게 말한다 — 조용히 아무 일도 없는 것이
+     * 가장 나쁘다(FTS 미가용 배포이거나 이미 지워진 청크일 수 있다).
+     */
+    private void openChunkOnLoad(String chunkId, Model model) {
+        var location = chunkReportService.locate(chunkId);
+        if (location.isEmpty()) {
+            model.addAttribute("openChunkMissing", chunkId);
+            return;
+        }
+        String version = location.get().version();
+        if (CuratedQaService.CURATED_VERSION.equals(version)) {
+            var rowId = CuratedQaService.rowIdOf(location.get().docId());
+            if (rowId.isPresent()) model.addAttribute("openCuratedId", rowId.getAsLong());
+            else model.addAttribute("openChunkMissing", chunkId);
+            return;
+        }
+        model.addAttribute("openChunkId", chunkId);
+        model.addAttribute("openChunkCollection", adminService.collectionFor(version));
     }
 
     // ── HTMX fragments ───────────────────────────────────────────────────────

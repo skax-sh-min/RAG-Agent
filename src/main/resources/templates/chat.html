@@ -503,10 +503,15 @@
                              제거는 "이 답변과 상관없는 청크"(표시 전용), 신고는 "청크 내용이 틀렸다"
                              (관리자 대기열). 그래서 참여도 게이트를 물려받지 않고 항상 노출된다 —
                              답변을 실제로 떠받친 청크일수록 틀렸을 때 더 문제이기 때문이다. -->
+                        <!-- 관리자에게는 문구도 동작도 바뀐다: 신고 대기열에 자기 자신을 향한 항목을
+                             쌓을 이유가 없으므로 바로 고치러 간다. **문구를 함께 바꾸는 것이 핵심** —
+                             '신고'라고 적힌 버튼이 편집기를 여는 것은 버튼이 거짓말을 하는 것이다.
+                             표시 분기일 뿐 게이트가 아니다(실제 방어는 SecurityConfig 의
+                             /admin/** → hasRole("ADMIN") 이고, 위조해도 403 이다). -->
                         <button type="button" class="btn btn-sm btn-outline-warning"
                                 id="chunk-report-btn"
-                                th:text="#{chat.chunk.report}"
-                                th:attr="title=#{chat.chunk.report.hint}">내용 오류 신고</button>
+                                th:text="${isAdmin} ? #{chat.chunk.edit} : #{chat.chunk.report}"
+                                th:attr="title=${isAdmin} ? #{chat.chunk.edit.hint} : #{chat.chunk.report.hint}">내용 오류 신고</button>
                         <!-- 응답 참여도가 0%인 출처에만 노출된다(스크립트가 d-none을 토글). 답변에
                              쓰이지 않은 청크를 그 대화의 출처 목록에서 치우는 표시 전용 동작이라
                              닫기 버튼 옆(왼쪽)에 두고, 문서/검색에는 영향이 없다. -->
@@ -607,6 +612,9 @@
     let suggestTimer      = null;
     let suggestSeq        = 0;
     const SOURCE_PREVIEW_ENABLED = /*[[${sourcePreviewEnabled}]]*/ true;
+    /* 관리자면 위 버튼이 신고 대신 '청크 수정'이다 — 문구는 서버가 이미 바꿔 렌더했고, 여기서는
+       동작만 가른다. 표시 분기일 뿐 권한 게이트가 아니다(/admin/** 은 서버가 막는다). */
+    const IS_ADMIN = /*[[${isAdmin}]]*/ false;
     window.isSourcePreviewEnabled = function () {
         return !!SOURCE_PREVIEW_ENABLED;
     };
@@ -754,6 +762,15 @@
     if (chunkReportBtn && chunkReportModal) {
         chunkReportBtn.addEventListener('click', function () {
             if (!activeChunkView || !activeChunkView.chunkId) return;
+            /* 관리자: 신고 폼 대신 벡터 스토어 관리로 간다. **새 탭인 이유** — 청크 편집기는 독립
+               페이지가 아니라 /admin 안의 오프캔버스라 같은 탭에서 열면 하던 대화를 떠나게 된다.
+               어느 화면으로 보낼지(문서 청크 편집기 / 큐레이션 Q&A 패널)는 **서버가 정한다** —
+               채팅은 청크 id 말고는 아무것도 모른다(AdminController.openChunkOnLoad). */
+            if (IS_ADMIN) {
+                window.open('/admin?chunk=' + encodeURIComponent(activeChunkView.chunkId),
+                            '_blank', 'noopener');
+                return;
+            }
             pendingReport = {
                 chunkId: activeChunkView.chunkId,
                 turnId: activeChunkView.turnId || '',

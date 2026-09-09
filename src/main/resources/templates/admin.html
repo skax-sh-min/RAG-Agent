@@ -518,6 +518,17 @@
 // Active vector store backend — sqlite-vec uses the version string as the "collection"
 // identifier (vec0 partition key); chroma uses the "manual_<version>" collection name.
 const IS_SQLITE_VEC = /*[[${vectorStore.isSqliteVec()}]]*/ false;
+
+// 채팅의 「청크 수정」 딥링크(/admin?chunk=…)가 무엇을 열지 — 서버가 이미 정해서 내려보냈다
+// (AdminController.openChunkOnLoad). **이 값들이 여기 있는 이유**: 아래 큰 <script> 는
+// th:inline="javascript" 가 없어서 `/*[[${x}]]*/ 기본값` 이 값을 주석 안에 써 넣고 기본값을
+// 그대로 남긴다 — 문법 오류가 아니라서 딥링크가 조용히 아무 일도 안 하게 된다.
+// 실행은 아래 블록에서 한다(openChunkEdit/openCuratedEdit 이 거기 정의돼 있다).
+const OPEN_CHUNK_ID           = /*[[${openChunkId}]]*/ null;
+const OPEN_CHUNK_COLLECTION   = /*[[${openChunkCollection}]]*/ null;
+const OPEN_CURATED_ID         = /*[[${openCuratedId}]]*/ null;
+const OPEN_CHUNK_MISSING      = /*[[${openChunkMissing}]]*/ null;
+const OPEN_CHUNK_NOTFOUND_MSG = /*[[#{chat.chunk.edit.notfound}]]*/ '이 청크를 찾을 수 없습니다.';
 </script>
 <script>
 // DB 파일 경로 hover 팝오버 (Vector Store 상태 카드) — 관례는 message-assistant.html의 출처 팝오버와 동일
@@ -1995,6 +2006,23 @@ function escHtml(s) {
                            .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
 function escAttr(s) { return String(s || '').replace(/'/g, "\\'"); }
+
+/* ── 채팅의 「청크 수정」이 보낸 청크를 바로 연다 (/admin?chunk=…) ───────────────────
+   어느 화면을 열지는 서버가 이미 정해서 내려보냈다(AdminController.openChunkOnLoad) —
+   컬렉션이 무엇인지도, 큐레이션 축인지도 채팅은 알 수 없기 때문이다. 여기서는 셋 중
+   하나를 그대로 실행한다. 큐레이션 청크가 청크 편집기로 오지 않는 이유는 그쪽에서
+   요약·키워드가 읽기 전용이고, 본문을 고쳐도 「이 청크만 재인덱싱」이 curated_qa 에서
+   다시 써서 그 편집을 되돌리기 때문이다. */
+if (OPEN_CHUNK_ID && OPEN_CHUNK_COLLECTION) {
+    openChunkEdit(OPEN_CHUNK_ID, OPEN_CHUNK_COLLECTION);
+} else if (OPEN_CURATED_ID) {
+    // 큐레이션 카드는 <details> 라 닫혀 있으면 패널이 화면 밖에서 열린 것처럼 보인다.
+    const curatedCard = document.getElementById('curated-qa-card');
+    if (curatedCard) curatedCard.open = true;
+    openCuratedEdit(OPEN_CURATED_ID);
+} else if (OPEN_CHUNK_MISSING) {
+    showToast(OPEN_CHUNK_NOTFOUND_MSG, 'warning');
+}
 </script>
 </th:block>
 
