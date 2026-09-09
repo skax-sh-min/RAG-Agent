@@ -399,6 +399,24 @@ public class KeywordSearchRepository {
      * {@code doc_id} (reindex-in-place), where a {@code doc_id}-based delete would also wipe the
      * rows just inserted. No-op when FTS5 is unavailable.
      */
+    /**
+     * 한 버전(네임스페이스)이 FTS 에 들고 있는 {@code spring_doc_id} 전부.
+     *
+     * <p>{@code chunk_fts_key} 만 읽는다 — 평범한 테이블이라 코퍼스 스캔이 아니다({@code chunk_fts}
+     * 를 {@code version} 으로 직접 거는 것은 UNINDEXED 컬럼 스캔이다). 유령 행 청소가 "지금 FTS 에
+     * 무엇이 있는가"를 알기 위해 쓴다.
+     */
+    public List<String> springDocIdsForVersion(String version) {
+        if (!isAvailable() || version == null || version.isBlank()) return List.of();
+        try {
+            return jdbc.queryForList(
+                    "SELECT spring_doc_id FROM chunk_fts_key WHERE version = ?", String.class, version);
+        } catch (Exception e) {
+            log.debug("[KEYWORD] springDocIdsForVersion failed: {}", e.getMessage());
+            return List.of();
+        }
+    }
+
     public void deleteBySpringDocIds(List<String> springDocIds) {
         if (!available || springDocIds == null || springDocIds.isEmpty()) return;
         try {

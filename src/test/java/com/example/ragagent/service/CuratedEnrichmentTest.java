@@ -216,6 +216,73 @@ class CuratedEnrichmentTest {
         verify(keywordRepo, timeout(2000)).deleteBySpringDocIds(List.of("curated-1"));
     }
 
+    // ── 기동 시 유령 FTS 행 청소 ──────────────────────────────────────────────
+
+    /**
+     * 실제로 관찰된 사고: 철회된 지식 제안의 청크가 채팅 답변에 계속 인용됐다. DB 를 보니
+     * {@code curated_qa} 2번은 {@code inactive} 이고 벡터도 없는데 {@code chunk_fts_key} 에는
+     * {@code curated-2} 가 남아 있었다 — 큐레이션 BM25 절반이 그것을 집어 오고
+     * {@code markCurated()} 가 출처 라벨까지 붙여, <b>내려간 지식이 멀쩡한 항목처럼 보였다</b>.
+     *
+     * <p>회수 경로는 지금 전부 {@code deindex()} 를 지나지만, 그 안에서 벡터 삭제와 FTS 삭제가
+     * <b>각자의 try/catch</b> 를 갖기 때문에(한쪽이 실패해도 나머지는 진행한다) 이 상태는 설계상
+     * 여전히 도달 가능하다. 그래서 코드를 고치는 것만으로는 부족하고 청소가 따로 필요하다.
+     */
+    @Test
+    @DisplayName("기동 시 — 활성 행이 없는 FTS 행만 지운다")
+    void startupSweep_removesRowsNoActiveEntryOwns() {
+        when(keywordRepo.springDocIdsForVersion(CuratedQaService.CURATED_VERSION))
+                .thenReturn(List.of("curated-1", "curated-2", "curated-2-1", "curated-7"));
+        when(repository.activeIds()).thenReturn(java.util.Set.of(1L, 7L));
+
+        service.sweepOrphanFtsRows();
+
+        ArgumentCaptor<List<String>> captor = ArgumentCaptor.forClass(List.class);
+        verify(keywordRepo).deleteBySpringDocIds(captor.capture());
+        assertThat(captor.getValue())
+                .as("2번은 활성이 아니다 — 그 행이 소유한 청크 전부가 대상이다")
+                .containsExactly("curated-2", "curated-2-1");
+    }
+
+    /**
+     * 판정은 <b>행 단위</b>다 — {@code chunk_count} 를 보지 않는다. 그 컬럼이 낡아 있으면 id 집합을
+     * 비교하는 방식은 살아 있는 청크의 키워드 축을 지운다(개수 드리프트는 pruneStaleVectors 의 일).
+     */
+    @Test
+    @DisplayName("기동 시 — 활성 행의 청크는 몇 개든 건드리지 않는다")
+    void startupSweep_neverTouchesAnActiveRowsChunks() {
+        when(keywordRepo.springDocIdsForVersion(CuratedQaService.CURATED_VERSION))
+                .thenReturn(List.of("curated-1", "curated-1-1", "curated-1-2"));
+        when(repository.activeIds()).thenReturn(java.util.Set.of(1L));
+
+        service.sweepOrphanFtsRows();
+
+        verify(keywordRepo, never()).deleteBySpringDocIds(anyList());
+    }
+
+    @Test
+    @DisplayName("기동 시 — FTS 가 비어 있으면(또는 못 쓰면) 아무것도 하지 않는다")
+    void startupSweep_isANoOpWithoutFts() {
+        when(keywordRepo.springDocIdsForVersion(CuratedQaService.CURATED_VERSION)).thenReturn(List.of());
+
+        service.sweepOrphanFtsRows();
+
+        verify(repository, never()).activeIds();
+        verify(keywordRepo, never()).deleteBySpringDocIds(anyList());
+    }
+
+    /** 청소가 기동을 막지 않는다 — 최악의 결과는 유령이 하루 더 남는 것이다. */
+    @Test
+    @DisplayName("기동 시 — 조회가 실패해도 예외를 올리지 않는다")
+    void startupSweep_survivesAFailure() {
+        when(keywordRepo.springDocIdsForVersion(CuratedQaService.CURATED_VERSION))
+                .thenThrow(new RuntimeException("no such table"));
+
+        service.sweepOrphanFtsRows();   // 던지지 않는다
+
+        verify(keywordRepo, never()).deleteBySpringDocIds(anyList());
+    }
+
     // ── 회수: 벡터와 FTS 는 짝이다 ────────────────────────────────────────────
 
     /**

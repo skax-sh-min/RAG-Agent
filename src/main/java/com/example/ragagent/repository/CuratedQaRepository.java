@@ -382,6 +382,15 @@ public class CuratedQaRepository {
         jdbc.update("UPDATE curated_qa SET question=?, updated_at=? WHERE id=?", question, now(), id);
     }
 
+    /**
+     * 활성 행의 id 전부. 유령 FTS 행 청소가 "지금 이 축의 주인이 누구인가"를 알기 위해 쓴다 —
+     * 행 전체를 읽을 이유가 없어 id 만 가져온다.
+     */
+    public java.util.Set<Long> activeIds() {
+        return new java.util.HashSet<>(jdbc.queryForList(
+                "SELECT id FROM curated_qa WHERE status = 'active'", Long.class));
+    }
+
     /** Same as {@link #findAllActive(int, int)} with {@code offset=0}. */
     public List<CuratedQa> findAllActive(int limit) {
         return findAllActive(0, limit);

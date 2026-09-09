@@ -289,6 +289,8 @@ RAG 경로에서 검색이 아무것도 돌려주지 않았을 때, 예전에는
 
 **왜 `grounded=false` 이고 `null` 이 아닌가.** 이 앱의 규칙은 "판정을 읽지 못하면 통과가 아니라 **판정 없음**"이고(`withoutVerdict()`), 판정 없음은 **배지를 아예 띄우지 않는다**(`VerificationSnapshot.verdictLabel()`). 여기는 다르다 — 검증을 *하지 못한* 것이 아니라 *할 근거 자체가 없는* 답변이고, 배지가 없으면 화면에서 평범한 답변과 구분되지 않는다. 그래서 미검증 배지를 달고 사유를 툴팁에 싣는다(`verdictTitle()` 이 `evalReason` 을 보여준다).
 
+**회수는 문이 하나이지만, 그 문 뒤에서 반쪽만 지워질 수 있다 — 그래서 기동 시 청소가 따로 있다** (`CuratedQaService.sweepOrphanFtsRows`). `deindex()` 안에서 벡터 삭제와 FTS 삭제는 **각자의 try/catch** 를 갖는다(한쪽이 실패해도 나머지는 진행한다 — 회수를 통째로 포기하는 것보다 낫다). 그래서 "벡터는 지워졌는데 `chunk_fts` 는 남은" 상태가 **설계상 도달 가능**하고, 실제로 관찰됐다: 철회된 지식 제안(`curated_qa` 2번, `inactive`, 벡터 없음)의 `chunk_fts_key` 행이 남아 채팅 답변에 계속 인용됐다. 큐레이션 BM25 절반이 그것을 집어 오고 `markCurated()` 가 출처 라벨까지 붙여 주기 때문에 **내려간 지식이 멀쩡한 항목처럼 보인다**. 청소의 **판정은 행 단위**다(`chunk_count` 를 보지 않는다): 활성 행이 하나라도 소유한 id 는 건드리지 않고 **활성 행이 아예 없는 행 번호**의 것만 지운다 — 개수 컬럼이 낡아 있으면 id 집합 비교가 살아 있는 청크의 키워드 축을 지우기 때문이다(개수 드리프트는 `pruneStaleVectors` 의 일이다). FTS 를 못 쓰는 빌드에서는 목록이 비어 no-op 이고, 실패해도 기동을 막지 않는다.
+
 **회수는 문이 하나다** (`CuratedQaService.deindex(ids, what)`). 벡터와 FTS 행은 짝이라 한쪽만 지우면 내린 항목이 다른 축에 남는데, 특히 FTS 쪽이 남으면 `RetrievalService.curatedAxis()` 의 BM25 질의가 그대로 집어 오고 `markCurated()` 가 출처 라벨까지 붙여 준다 — **내린 지식이 멀쩡한 큐레이션 항목처럼 계속 인용된다**. 덤으로 `chunk_fts_key` 의 해시가 살아 있어 `QuestionReuseService.validateTurn()` 의 "청크가 그대로인가" 검사까지 통과해 그 항목에 근거한 답변이 재사용된다.
 
 실제로 한 번 빠뜨렸다: 회수 경로 넷 중 셋(`onTurnDeleted`·`forceRemove`·`forceRemoveBySubmission`)은 `deleteVectors()` 를 지났는데 **대화 삭제(`onThreadDeleted`)만** 한 스레드의 벡터를 한 번에 지우느라 자기 id 목록을 모아 `vectorStore.deleteByDocIds()` 를 직접 불렀다. 배치는 그대로 두되 지우는 문을 `deindex()` 하나로 만든 이유다 — 짝을 기억에 맡기지 않는다.

@@ -16,6 +16,8 @@ import com.example.ragagent.repository.MemoryRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.document.Document;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
 
 import java.util.HashMap;
@@ -683,6 +685,62 @@ public class CuratedQaService {
     }
 
     private static final String DOC_ID_PREFIX = "curated:";
+
+    /**
+     * 기동 시 <b>유령 FTS 행</b>을 쓸어낸다 — 이 축에서 내려간 항목인데 {@code chunk_fts} 행만
+     * 남아 있는 경우.
+     *
+     * <p><b>왜 필요한가.</b> 벡터와 FTS 삭제는 {@link #deindex} 안에서 <b>각자의 try/catch</b> 를
+     * 갖는다(한쪽이 실패해도 나머지는 진행한다 — 그 편이 회수를 통째로 포기하는 것보다 낫다).
+     * 그래서 "벡터는 지워졌는데 FTS 는 남은" 상태가 설계상 도달 가능하고, 실제로 그렇게 남은 행이
+     * 관찰됐다: 철회된 지식 제안의 청크가 채팅 답변에 계속 인용됐다. {@code RetrievalService}
+     * 의 큐레이션 BM25 절반이 그 행을 그대로 집어 오고 {@code markCurated()} 가 출처 라벨까지
+     * 붙여 주기 때문에, <b>내려간 지식이 멀쩡한 항목처럼 보인다</b>.
+     *
+     * <p><b>판정은 행 단위다</b>({@code chunk_count} 를 보지 않는다). 활성 행이 하나라도 소유한
+     * id 는 건드리지 않고, <b>활성 행이 아예 없는</b> 행 번호의 것만 지운다 — {@code chunk_count}
+     * 가 낡아 있으면 id 집합 비교는 살아 있는 청크의 키워드 축을 지울 수 있는데, 그 위험을 지지
+     * 않기 위해서다(개수 드리프트는 {@code pruneStaleVectors} 의 일이다).
+     *
+     * <p>FTS 를 못 쓰는 빌드에서는 목록이 비어 no-op 이고, 실패해도 기동을 막지 않는다.
+     */
+    @EventListener(ApplicationReadyEvent.class)
+    public void sweepOrphanFtsRows() {
+        try {
+            List<String> inFts = keywordRepo.springDocIdsForVersion(CURATED_VERSION);
+            if (inFts.isEmpty()) return;
+
+            Set<Long> active = repository.activeIds();
+            List<String> orphans = inFts.stream()
+                    .filter(id -> {
+                        java.util.OptionalLong row = rowIdOfSpringDocId(id);
+                        return row.isEmpty() || !active.contains(row.getAsLong());
+                    })
+                    .toList();
+            if (orphans.isEmpty()) return;
+
+            keywordRepo.deleteBySpringDocIds(orphans);
+            log.warn("[CURATED] 유령 FTS 행 {}건 제거 — 내려간 항목이 키워드 축에 남아 답변 근거로 "
+                     + "붙고 있었다: {}", orphans.size(), orphans);
+        } catch (Exception e) {
+            log.warn("[CURATED] 유령 FTS 행 청소 실패 (무시하고 계속): {}", e.getMessage());
+        }
+    }
+
+    /**
+     * {@link #springDocId} 의 역방향 — {@code curated-2} · {@code curated-2-1} → {@code 2}.
+     * 형식이 아니면 빈 값이고, 그런 행은 이 축의 것이 아니므로 유령으로 본다.
+     */
+    private static java.util.OptionalLong rowIdOfSpringDocId(String springDocId) {
+        if (springDocId == null || !springDocId.startsWith("curated-")) return java.util.OptionalLong.empty();
+        String rest = springDocId.substring("curated-".length());
+        int dash = rest.indexOf('-');
+        try {
+            return java.util.OptionalLong.of(Long.parseLong(dash < 0 ? rest : rest.substring(0, dash)));
+        } catch (NumberFormatException e) {
+            return java.util.OptionalLong.empty();
+        }
+    }
 
     /** Removes every vector this row owns — {@code chunkCount} ids, not just the first. */
     private void deleteVectors(long curatedId, int chunkCount) {
