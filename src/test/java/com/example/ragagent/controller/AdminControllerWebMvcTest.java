@@ -974,6 +974,30 @@ class AdminControllerWebMvcTest {
                 .andExpect(content().string(containsString(">3<")));
     }
 
+    /**
+     * 값이 비어 있는 큐레이션 항목은 대개 <b>이 필드가 생기기 전에 승인된 옛 항목</b>이다 —
+     * 그런데 관리자 패널에는 「빈 칸 자동 생성」이 없어서 그걸 채울 방법이 손입력뿐이었다.
+     * 헬퍼를 {@code layout/base.html} 로 옮겨 지식 제안 폼과 한 벌을 쓰게 했고, 그래서 이
+     * 페이지에서 그 함수가 <b>닿는지</b>까지 확인한다(예전에는 curated-submissions.html 안에
+     * 있어서 이 페이지에서는 존재하지도 않았다).
+     */
+    @Test
+    @DisplayName("GET /admin — 큐레이션 편집 패널이 공유 「빈 칸 자동 생성」 버튼을 쓴다")
+    void adminPage_curatedPanelUsesTheSharedEnrichButton() throws Exception {
+        stubVectorStoreView();
+
+        String html = mvc.perform(get("/admin").with(user(ADMIN)))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        org.assertj.core.api.Assertions.assertThat(html)
+                .as("헬퍼가 레이아웃에 있어야 이 페이지에서 부를 수 있다")
+                .contains("function wireEnrichButton");
+        org.assertj.core.api.Assertions.assertThat(html)
+                .contains("curated-edit-enrich-btn")
+                .contains("wireEnrichButton('curated-edit-enrich-btn'");
+    }
+
     // ── 채팅의 「청크 수정」 딥링크 (/admin?chunk=…) ──────────────────────────
     //
     // 어느 화면을 열지는 **서버가** 정한다 — 채팅은 청크 id 말고는 아무것도 모른다(컬렉션이
