@@ -1010,6 +1010,54 @@ class AnswerServiceTest {
         assertThat(result.totalInputTokens()).isEqualTo(1000);
     }
 
+    /**
+     * 실제로 관찰된 사고(2026-09-09): 모델이 {@code usedDocs} 에 정수 대신 [Dn] 라벨과 조각 제목을
+     * 그대로 넣어 {@code [1, D1, 도형 그룹, D2, …]} 를 냈다. 따옴표 없는 맨 토큰은 JSON 값이 아니라
+     * 파서가 <b>문서 전체</b>를 버렸고, 바로 위에 멀쩡히 들어 있던 {@code sufficient}/{@code grounded}
+     * 까지 함께 사라졌다 — 아무것도 게이팅하지 않는 advisory 필드가 게이팅하는 두 필드를 죽인 것이다.
+     * 이제는 그 배열만 비우고 다시 읽어 판정을 살린다.
+     */
+    @Test
+    @DisplayName("BLOCKING N — usedDocs 가 깨져도 판정은 살아남는다 (advisory 가 판정을 데려가지 않는다)")
+    void blocking_malformedUsedDocsKeepsTheVerdict() {
+        String brokenJson = """
+                {
+                  "envNote": "",
+                  "grounded": true,
+                  "reason": "",
+                  "sufficient": true,
+                  "usedDocs": [1, D1, 도형 그룹, D2, D5]
+                }""";
+        when(llmRouter.executeGatedWithUsage(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), any()))
+                .thenReturn(new LlmRouter.LlmResult("답변", 100, 40),
+                            new LlmRouter.LlmResult(brokenJson, 900, 60));
+        when(llmRouter.findProviderName(any(), any())).thenReturn("local");
+
+        AgentState result = service.execute(newState(RoutingMode.COST_FIRST));
+
+        assertThat(result.grounded()).as("모델이 낸 판정은 멀쩡했다 — 살아 있어야 한다").isTrue();
+        assertThat(result.needsRetry()).as("sufficient=true 도 함께 살아난다").isFalse();
+        assertThat(result.usedDocIndices()).as("깨진 advisory 만 버린다").isEmpty();
+        assertThat(result.totalInputTokens()).isEqualTo(1000);
+    }
+
+    @Test
+    @DisplayName("BLOCKING N — 살릴 수 없는 JSON 은 여전히 판정 없음이지만, 쓴 토큰은 집계한다")
+    void blocking_unsalvageableJsonStillCountsTheTokens() {
+        when(llmRouter.executeGatedWithUsage(eq(TaskType.TEXT), eq(RoutingMode.COST_FIRST), any()))
+                .thenReturn(new LlmRouter.LlmResult("답변", 100, 40),
+                            new LlmRouter.LlmResult("{ this is not json", 900, 60));
+        when(llmRouter.findProviderName(any(), any())).thenReturn("local");
+
+        AgentState result = service.execute(newState(RoutingMode.COST_FIRST));
+
+        assertThat(result.grounded()).as("읽지 못한 판정을 통과로 위조하지 않는다").isNull();
+        assertThat(result.needsRetry()).isFalse();
+        // 예전에는 이 경로만 원본 state 를 돌려줘 검증 호출의 토큰이 집계에서 통째로 빠졌다
+        // (바로 위 빈 응답 경로는 집계하고 있었다 — 같은 사고를 두 갈래가 다르게 취급했다).
+        assertThat(result.totalInputTokens()).isEqualTo(1000);
+    }
+
     @Test
     @DisplayName("BLOCKING N — 검증이 빈 응답이면 역시 판정 없음이다 (창의 경로와 같은 규칙)")
     void blocking_standardMode_emptyVerdictIsNotAPass() {

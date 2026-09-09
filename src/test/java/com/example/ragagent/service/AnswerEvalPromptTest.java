@@ -86,6 +86,19 @@ class AnswerEvalPromptTest {
         assertThat(evalPrompt(Locale.ENGLISH)).contains("usedDocs").contains("[D1]");
     }
 
+    /**
+     * 서버가 깨진 {@code usedDocs} 를 버리고 판정을 살리도록 고쳤지만
+     * ({@code AnswerService.convertEvalOutput}), 애초에 덜 틀리게 하는 것도 프롬프트의 몫이다 —
+     * 지시문에도 발췌에도 {@code [D1]} 토큰이 널려 있어 작은 모델이 그것을 그대로 복사하기 쉽다.
+     * 규칙이 프롬프트에만 있어 코드로는 아무도 눈치채지 못하므로 여기서 고정한다.
+     */
+    @Test
+    @DisplayName("usedDocs 는 정수만 허용된다는 것과 라벨 형태 금지를 프롬프트가 명시한다 (한/영)")
+    void realBundle_forbidsTheLabelFormInUsedDocs() {
+        assertThat(evalPrompt(Locale.KOREAN)).contains("정수만").contains("D3");
+        assertThat(evalPrompt(Locale.ENGLISH)).contains("integers only").contains("D3");
+    }
+
     @Test
     @DisplayName("usedDocs 가 판정에 영향을 주지 않는 advisory 임을 프롬프트가 명시한다")
     void realBundle_marksUsedDocsAdvisory() {
