@@ -161,13 +161,9 @@ public class AdminService {
          * 거기서 되읽는다 — 큐레이션 청크가 아니거나 형식이 다르면 비어 있다.
          */
         public java.util.OptionalLong curatedRowId() {
-            String docId = docId();
-            if (!isCurated() || !docId.startsWith("curated:")) return java.util.OptionalLong.empty();
-            try {
-                return java.util.OptionalLong.of(Long.parseLong(docId.substring("curated:".length())));
-            } catch (NumberFormatException e) {
-                return java.util.OptionalLong.empty();
-            }
+            // 형식은 CuratedQaService 가 소유한다 — 쓰는 쪽과 읽는 쪽이 접두사를 따로 들고 있으면
+            // 그것을 바꾸는 날 한쪽만 고쳐진다.
+            return isCurated() ? CuratedQaService.rowIdOf(docId()) : java.util.OptionalLong.empty();
         }
     }
 
