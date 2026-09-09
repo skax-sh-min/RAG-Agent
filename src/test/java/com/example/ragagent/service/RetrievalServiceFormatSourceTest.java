@@ -74,13 +74,42 @@ class RetrievalServiceFormatSourceTest {
         assertThat(RetrievalService.formatSource(doc(Map.of()), Map.of())).isEqualTo("unknown | p.?");
     }
 
+    /**
+     * 문서 쪽 {@code | p.12} · {@code | ch 3} 과 같은 자리다. 라벨만 있던 동안에는 출처 목록에
+     * 같은 문구가 여러 줄 뜨면 어느 항목인지 구분할 수 없었다. 숫자는 {@code /admin} 의 청크 id
+     * ({@code curated-1})와 그대로 맞는다.
+     */
     @Test
-    @DisplayName("§10.10 — 큐레이션 Q&A(doc_type=curated_qa)는 파일명/페이지 대신 고정 라벨을 쓴다")
-    void curatedQaUsesFixedLabelInsteadOfPlaceholderFilename() {
+    @DisplayName("§10.10 — 큐레이션 Q&A 는 파일명/페이지 대신 행 번호를 위치 표시로 쓴다")
+    void curatedQaUsesRowNumberAsItsLocator() {
         Document d = doc(Map.of(
                 MetaKey.DOC_TYPE, "curated_qa",
                 MetaKey.FILENAME, "curated_qa",
+                MetaKey.DOC_ID, "curated:1",
+                MetaKey.CHUNK_INDEX, 0,
                 MetaKey.PAGE_OR_SLIDE, 1));
+
+        assertThat(RetrievalService.formatSource(d, Map.of())).isEqualTo("💬 큐레이션 Q&A | #1");
+    }
+
+    @Test
+    @DisplayName("한 행이 여러 청크로 나뉘면 청크 번호가 뒤에 붙는다 (curated-1-1 → #1-1)")
+    void curatedQaAppendsTheChunkNumberForLaterChunks() {
+        Document d = doc(Map.of(
+                MetaKey.DOC_TYPE, "curated_qa",
+                MetaKey.DOC_ID, "curated:1",
+                MetaKey.CHUNK_INDEX, "1"));   // 키워드 축은 SQL 에서 와 문자열이다
+
+        assertThat(RetrievalService.formatSource(d, Map.of())).isEqualTo("💬 큐레이션 Q&A | #1-1");
+    }
+
+    /** 행 번호를 못 구하면 예전처럼 라벨만 — 없는 번호를 지어내지 않는다. */
+    @Test
+    @DisplayName("doc_id 가 없으면 라벨만 쓴다")
+    void curatedQaWithoutDocIdKeepsThePlainLabel() {
+        Document d = doc(Map.of(
+                MetaKey.DOC_TYPE, "curated_qa",
+                MetaKey.FILENAME, "curated_qa"));
 
         assertThat(RetrievalService.formatSource(d, Map.of())).isEqualTo("💬 큐레이션 Q&A");
     }
