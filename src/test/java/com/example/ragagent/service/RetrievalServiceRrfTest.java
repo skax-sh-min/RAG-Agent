@@ -1,6 +1,7 @@
 package com.example.ragagent.service;
 
 import org.junit.jupiter.api.DisplayName;
+import com.example.ragagent.model.MetaKey;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.document.Document;
 
@@ -314,5 +315,83 @@ class RetrievalServiceRrfTest {
         double b = r.metrics().get(RetrievalService.docKey(doc("b"))).rrfScore();
         assertThat(a).isGreaterThan(b);
         assertThat(a).isEqualTo(1.0 / 61);
+    }
+
+    // ── 큐레이션 축의 두 절반 ────────────────────────────────────────────────
+
+    /** {@code chunkIndex} 를 받는 이유: docKey 가 {@code doc_id:chunk_index} 라, 같은 행의 서로
+     *  다른 청크를 만들려면 그 값이 갈려야 한다({@code curated-1} 0 · {@code curated-1-1} 1). */
+    private static Document curated(String id, String docId, int chunkIndex, Double score) {
+        Document.Builder b = Document.builder().id(id).text("본문 " + id)
+                .metadata(java.util.Map.of(MetaKey.DOC_TYPE, "curated_qa",
+                                           MetaKey.DOC_ID, docId,
+                                           MetaKey.CHUNK_INDEX, chunkIndex));
+        if (score != null) b.score(score);
+        return b.build();
+    }
+
+    /**
+     * 큐레이션의 키워드 절반은 <b>{@code bm25}</b> 로 표시된다. 라벨을 재사용해도 뜻이 갈리지
+     * 않는 이유는 {@code KeywordSearchRepository.search()} 가 version 으로 걸러, 큐레이션 청크가
+     * 문서 BM25 축에 오는 일이 구조적으로 없기 때문이다.
+     *
+     * <p>두 절반을 이어붙여 한 축으로 넘기던 동안에는 키워드 1위가 병합 리스트 2위가 되어
+     * {@code curated:2} 로 표시됐다 — 어느 쪽 순위도 아닌 숫자였다.
+     */
+    @Test
+    @DisplayName("큐레이션 키워드 절반은 bm25 로, 벡터 절반은 curated 로 표시된다")
+    void curatedHalvesAreLabelledSeparately() {
+        Document byVector = curated("curated-1-1", "curated:1", 1, 0.71);
+        Document byKeyword = curated("curated-1", "curated:1", 0, null);
+
+        RetrievalService.RrfResult r = RetrievalService.mergeRrfScored(
+                java.util.List.of(), java.util.List.of(),
+                java.util.List.of(byVector), java.util.List.of(byKeyword),
+                10, 60, 0.5, 1.0);
+
+        var metrics = r.metrics();
+        assertThat(metrics.get(RetrievalService.docKey(byVector)).axisRanks()).isEqualTo("curated:1");
+        assertThat(metrics.get(RetrievalService.docKey(byKeyword)).axisRanks()).isEqualTo("bm25:1");
+    }
+
+    /**
+     * 벡터 절반은 진짜 코사인을 나른다 — 예전에는 축 전체를 "유사도 없음" 으로 넘겨
+     * {@code vectorSimilarity} 가 늘 비었고 화면이 {@code d.getScore()} 폴백에 기대 있었다.
+     * 키워드 절반은 여전히 null 이며 <b>그것이 정직한 값</b>이다(코사인이 존재하지 않는다).
+     */
+    @Test
+    @DisplayName("큐레이션 벡터 절반의 유사도는 기록되고, 키워드 절반은 null 로 남는다")
+    void curatedVectorHalfCarriesSimilarity() {
+        Document byVector = curated("curated-2", "curated:2", 0, 0.44);
+        Document byKeyword = curated("curated-3", "curated:3", 0, null);
+
+        var metrics = RetrievalService.mergeRrfScored(
+                java.util.List.of(), java.util.List.of(),
+                java.util.List.of(byVector), java.util.List.of(byKeyword),
+                10, 60, 0.5, 1.0).metrics();
+
+        assertThat(metrics.get(RetrievalService.docKey(byVector)).vectorSimilarity()).isEqualTo(0.44);
+        assertThat(metrics.get(RetrievalService.docKey(byKeyword)).vectorSimilarity()).isNull();
+    }
+
+    /**
+     * 두 절반은 서로소다({@code curatedAxis()} 가 벡터가 가져온 id 를 키워드 쪽에서 뺀다) — 그래서
+     * 축으로 나눠도 한 청크가 가중치를 두 번 받지 않는다. 여기서는 그 전제가 깨졌을 때 무슨 일이
+     * 일어나는지가 아니라, 나눈 뒤에도 <b>점수가 사실상 그대로</b>임을 고정한다: rrf-k=60 에서
+     * 순위 2→1 은 1.6% 차이라 순서를 바꾸지 않는다.
+     */
+    @Test
+    @DisplayName("축을 나눠도 점수는 사실상 그대로다 (k=60 에서 순위 2→1 은 1.6%)")
+    void splittingTheAxisBarelyMovesTheScore() {
+        Document byKeyword = curated("curated-1", "curated:1", 0, null);
+
+        double split = RetrievalService.mergeRrfScored(
+                java.util.List.of(), java.util.List.of(),
+                java.util.List.of(), java.util.List.of(byKeyword),
+                10, 60, 0.5, 1.0).metrics().get(RetrievalService.docKey(byKeyword)).rrfScore();
+
+        assertThat(split).isEqualTo(1.0 / (1 + 60));
+        // 예전 병합 방식(벡터 히트 뒤에 이어붙임)이었다면 같은 청크가 2위였다.
+        assertThat(split / (1.0 / (2 + 60))).isBetween(1.01, 1.02);
     }
 }

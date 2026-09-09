@@ -193,7 +193,7 @@ public class RetrievalService {
             int fetchK = candidateK;
             List<List<Document>> ranked;
             List<Document> keywordHits;
-            List<Document> curatedHits;
+            CuratedHits curatedHits;
             try (var exec = Executors.newVirtualThreadPerTaskExecutor()) {
                 CompletableFuture<List<Document>> keywordF = CompletableFuture.supplyAsync(
                         () -> hybridEnabled
@@ -203,10 +203,10 @@ public class RetrievalService {
                 // §10.10 — curated-Q&A axis: single search against the original question (not
                 // multi-query variants — the curated pool is small and question-driven matching is
                 // the point), scoped to the reserved "curated" version namespace.
-                CompletableFuture<List<Document>> curatedF = CompletableFuture.supplyAsync(
+                CompletableFuture<CuratedHits> curatedF = CompletableFuture.supplyAsync(
                         () -> curatedQaEnabled
                                 ? curatedAxis(state.userId(), searchQuestion, fetchK, hybridEnabled)
-                                : List.<Document>of(),
+                                : CuratedHits.EMPTY,
                         exec);
                 // 게이트는 **원문 길이**로 판단한다 — 독립화된 질의는 원문보다 길어지는 것이 정상이라
                 // 재작성 결과로 재면 확장까지 함께 돌아 한 턴에 질의 전처리 LLM 호출이 둘이 된다.
@@ -247,7 +247,8 @@ public class RetrievalService {
             // 으로 갈라 각자 가중치를 줬는데, 그 구분의 근거는 "앱이 만든 미편집·무검토 출력" 대
             // "사람이 쓴 텍스트"였다. 이제 모든 유입이 사람 편집 + 관리자 승인을 거치므로 그 차이가
             // 사라졌다. CURATED_ORIGIN 자체는 감사·통계용으로 계속 실리며, 검색 분기에서만 빠졌다.
-            RrfResult fused = mergeRrfScored(ranked, keywordHits, curatedHits,
+            RrfResult fused = mergeRrfScored(ranked, keywordHits,
+                    curatedHits.vector(), curatedHits.keyword(),
                     candidateK, rrfK, rrfKeywordWeight, curatedQaWeight);
             fusedMetrics = fused.metrics();
             List<Document> candidates = fused.docs();
@@ -486,18 +487,31 @@ public class RetrievalService {
      * 전제로 설계됐고, BM25 를 더한 목적은 <b>벡터가 놓친 정확한 단어</b>를 후보에 넣는 것이다.
      * 그런 항목은 정의상 벡터 목록에 없으므로 중요한 것은 등장 여부이지 정확한 등수가 아니다.
      */
-    private List<Document> curatedAxis(String userId, String question, int fetchK, boolean hybridEnabled) {
+    /**
+     * 큐레이션 축의 두 절반. <b>합쳐서 하나로 돌려주지 않는다</b> — 두 리스트의 순위는 서로 비교
+     * 불가능한 값(코사인 순 vs BM25 순)이라, 이어붙여 그 위치를 하나의 순위로 쓰면 키워드 검색
+     * 1위가 병합 리스트에서 2위가 되어 화면에도 RRF 에도 어느 쪽 순위도 아닌 숫자가 남는다.
+     *
+     * <p>{@code keyword} 는 {@code vector} 가 가져오지 못한 id 만 담는다 — 그래서 두 리스트는
+     * 서로소이고, 각각 축으로 융합해도 한 청크가 가중치를 두 번 받지 않는다.
+     */
+    record CuratedHits(List<Document> vector, List<Document> keyword) {
+        static final CuratedHits EMPTY = new CuratedHits(List.of(), List.of());
+    }
+
+    private CuratedHits curatedAxis(String userId, String question, int fetchK, boolean hybridEnabled) {
         List<Document> vectorHits =
                 ragService.search(userId, question, CuratedQaService.CURATED_VERSION, fetchK);
-        if (!hybridEnabled) return vectorHits;
+        if (!hybridEnabled) return new CuratedHits(vectorHits, List.of());
 
-        Map<String, Document> byId = new LinkedHashMap<>();
-        for (Document d : vectorHits) byId.put(d.getId(), d);
+        Set<String> seen = new HashSet<>();
+        for (Document d : vectorHits) seen.add(d.getId());
+        List<Document> keywordOnly = new ArrayList<>();
         for (Document d : ragService.keywordSearch(
                 CuratedQaService.CURATED_VERSION, question, fetchK)) {
-            byId.computeIfAbsent(d.getId(), id -> markCurated(d));
+            if (seen.add(d.getId())) keywordOnly.add(markCurated(d));
         }
-        return List.copyOf(byId.values());
+        return new CuratedHits(vectorHits, List.copyOf(keywordOnly));
     }
 
     /** FTS 에서 온 큐레이션 히트에 이 축임을 알리는 두 키를 찍는다 — {@link #curatedAxis} 참고. */
@@ -582,14 +596,16 @@ public class RetrievalService {
     static List<Document> mergeRrf(List<List<Document>> vectorRanked, List<Document> keywordRanked,
                                     List<Document> curatedRanked, int topK, int k,
                                     double keywordWeight, double curatedWeight) {
-        return mergeRrfScored(vectorRanked, keywordRanked, curatedRanked,
+        return mergeRrfScored(vectorRanked, keywordRanked, curatedRanked, List.of(),
                 topK, k, keywordWeight, curatedWeight).docs();
     }
 
     /**
      * Per-chunk retrieval diagnostics produced as a by-product of fusion. {@code vectorSimilarity}
-     * is the best cosine across the vector axes and is null for a chunk that only ever appeared on
-     * the BM25/curated axes (those carry rank, not distance).
+     * is the best cosine across the vector axes — the document one and the curated axis's vector
+     * half — and is null for a chunk that only ever appeared on a BM25 axis (those carry rank, not
+     * distance). A curated chunk found only by keyword therefore has no similarity <b>and that is
+     * the honest value</b>: there is no cosine to report, and the rendered {@code bm25:N} says why.
      */
     record RrfMetrics(double rrfScore, Double vectorSimilarity, String axisRanks) {}
 
@@ -611,6 +627,20 @@ public class RetrievalService {
     static RrfResult mergeRrfScored(List<List<Document>> vectorRanked, List<Document> keywordRanked,
                                      List<Document> curatedRanked, int topK, int k,
                                      double keywordWeight, double curatedWeight) {
+        return mergeRrfScored(vectorRanked, keywordRanked, curatedRanked, List.of(),
+                topK, k, keywordWeight, curatedWeight);
+    }
+
+    /**
+     * @param curatedKeywordRanked 큐레이션 축의 <b>키워드 절반</b>({@link CuratedHits#keyword()}).
+     *                             {@code curatedRanked} 와 서로소이며 같은 {@code curatedWeight} 를
+     *                             쓰고, 진단에는 {@code bm25} 로 표시된다. 하이브리드가 꺼져 있으면
+     *                             비어 있고, 그때는 위 오버로드와 결과가 같다.
+     */
+    static RrfResult mergeRrfScored(List<List<Document>> vectorRanked, List<Document> keywordRanked,
+                                     List<Document> curatedRanked, List<Document> curatedKeywordRanked,
+                                     int topK, int k,
+                                     double keywordWeight, double curatedWeight) {
         Map<String, Double> scores = new LinkedHashMap<>();
         Map<String, Document> byKey = new LinkedHashMap<>();
         Map<String, Double> bestSimilarity = new LinkedHashMap<>();
@@ -623,7 +653,19 @@ public class RetrievalService {
             addRrfAxis(keywordRanked, keywordWeight, k, AXIS_KEYWORD, false, scores, byKey, bestSimilarity, ranksByKey);
         }
         if (curatedRanked != null && !curatedRanked.isEmpty()) {
-            addRrfAxis(curatedRanked, curatedWeight, k, AXIS_CURATED, false, scores, byKey, bestSimilarity, ranksByKey);
+            // 이 절반은 진짜 벡터 검색이라 코사인을 나른다 — 예전에는 축 전체를 "유사도 없음" 으로
+            // 넘겨 RrfMetrics.vectorSimilarity 가 늘 비었고, 화면이 d.getScore() 폴백(융합이 없는
+            // 경로용이라고 적혀 있는 그것)에 기대 있었다.
+            addRrfAxis(curatedRanked, curatedWeight, k, AXIS_CURATED, true, scores, byKey, bestSimilarity, ranksByKey);
+        }
+        // 큐레이션의 키워드 절반. 라벨을 AXIS_KEYWORD 로 <b>재사용</b>하는 것은 충돌이 없기
+        // 때문이다 — KeywordSearchRepository.search() 가 version 으로 거르므로 큐레이션 청크는
+        // 문서 BM25 축에, 문서 청크는 이쪽에 절대 오지 못한다. 청크 하나 기준으로 "bm25" 는 언제나
+        // 한 가지 뜻이다. 가중치는 벡터 절반과 같은 curatedWeight 를 쓴다: 다르게 주는 것은 "키워드
+        // 로만 찾힌 큐레이션 항목을 덜 믿겠다"는 정책 결정이라 표시 수정에 딸려 갈 일이 아니다.
+        if (curatedKeywordRanked != null && !curatedKeywordRanked.isEmpty()) {
+            addRrfAxis(curatedKeywordRanked, curatedWeight, k, AXIS_KEYWORD, false,
+                    scores, byKey, bestSimilarity, ranksByKey);
         }
         List<Map.Entry<String, Double>> ordered = scores.entrySet().stream()
                 .sorted(Map.Entry.<String, Double>comparingByValue().reversed())
@@ -698,6 +740,27 @@ public class RetrievalService {
         return filename + "|" + page + "|" + preview;
     }
 
+    /**
+     * 큐레이션 출처의 위치 표시 — 문서 쪽 {@code | p.12} · {@code | ch 3} 과 같은 자리다. 예전에는
+     * 이 축만 라벨뿐이라 출처 목록에 같은 문구가 여러 줄 뜨면 어느 항목인지 구분할 수 없었다.
+     *
+     * <p>값은 {@code doc_id}({@code curated:1})의 행 번호이고, 한 행이 여러 청크로 나뉜 경우에만
+     * 청크 번호가 뒤에 붙는다 — 즉 {@code #1} · {@code #1-1} 로, {@code /admin} 에 보이는 청크 id
+     * ({@code curated-1} · {@code curated-1-1})의 숫자와 그대로 맞는다. id 문자열을 파싱하지 않고
+     * 메타데이터에서 만드는 이유는 표시가 id 명명 규칙에 묶이지 않게 하기 위해서다.
+     *
+     * @return 위치 문구, 또는 행 번호를 알 수 없으면 {@code null}(라벨만 쓴다)
+     */
+    private static String curatedLocator(Map<String, Object> meta) {
+        String docId = meta.get(MetaKey.DOC_ID) == null ? "" : meta.get(MetaKey.DOC_ID).toString();
+        int colon = docId.lastIndexOf(':');
+        String row = colon >= 0 ? docId.substring(colon + 1).trim() : "";
+        if (row.isEmpty()) return null;
+        Object idx = meta.get(MetaKey.CHUNK_INDEX);
+        String chunk = idx == null ? "0" : normalizeIndex(idx);
+        return "0".equals(chunk) ? row : row + "-" + chunk;
+    }
+
     /** Normalizes a chunk index from any source (Integer/Double/String) to a canonical int string. */
     private static String normalizeIndex(Object idx) {
         if (idx instanceof Number n) return Integer.toString(n.intValue());
@@ -723,7 +786,8 @@ public class RetrievalService {
     static String formatSource(Document doc, Map<String, String> displayNames) {
         Map<String, Object> meta = doc.getMetadata();
         if ("curated_qa".equals(meta.get(MetaKey.DOC_TYPE))) {
-            return "💬 큐레이션 Q&A";
+            String at = curatedLocator(meta);
+            return at == null ? "💬 큐레이션 Q&A" : "💬 큐레이션 Q&A | #" + at;
         }
         String realFilename = String.valueOf(meta.getOrDefault(MetaKey.FILENAME, "unknown"));
         String docId = String.valueOf(meta.getOrDefault(MetaKey.DOC_ID, ""));
