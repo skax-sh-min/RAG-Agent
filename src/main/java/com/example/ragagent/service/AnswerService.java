@@ -38,6 +38,8 @@ import java.util.Locale;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.function.IntFunction;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 /**
@@ -155,6 +157,13 @@ public class AnswerService {
     private final AppProperties props;
     private final ProviderContextWindows contextWindows;
     private final int maxRetryCount;
+    /**
+     * {@code "usedDocs": [ … ]} 한 덩어리. 중첩 대괄호를 허용하지 않아 배열 끝에서 반드시 멈춘다 —
+     * 값이 정수 목록이라 중첩이 나올 자리가 없고, 그 덕에 뒤따르는 필드를 삼킬 수 없다.
+     */
+    private static final Pattern USED_DOCS_ARRAY =
+            Pattern.compile("(\"usedDocs\"\\s*:\\s*)\\[[^\\[\\]]*\\]");
+
     private final BeanOutputConverter<EvalOutput> evalConverter =
             new BeanOutputConverter<>(EvalOutput.class);
     private final BeanOutputConverter<CreativeEvalOutput> creativeEvalConverter =
@@ -715,6 +724,8 @@ public class AnswerService {
             return evaluateCreative(state, answer, locale);
         }
         boolean docsPresent = !state.retrievedDocs().isEmpty();
+        // 호출이 끝난 뒤 판정을 못 읽어도 토큰은 이미 썼다 — catch 에서 집계하려면 try 밖에 있어야 한다.
+        LlmRouter.LlmResult[] spent = new LlmRouter.LlmResult[1];
         try {
             String systemPrompt = messageSource.getMessage(state.responseMode().evalPromptKey(), null, locale);
             EvalExcerpts[] used = new EvalExcerpts[1];
@@ -730,13 +741,13 @@ public class AnswerService {
                 return llmRouter.executeGatedWithUsage(TaskType.TEXT, state.routingMode(),
                         model -> model.call(buildPrompt(systemPrompt, evalPrompt, evalOptions())));
             }).value();
+            spent[0] = result;
             EvalExcerpts excerpts = used[0];
             if (isEmptyVerdict(result)) {
                 logEmptyVerdict("EVAL", state, result);
-                return withoutVerdict(state.toBuilder()
-                        .accumulateTokens(result.inputTokens(), result.outputTokens()).build());
+                return withoutVerdict(withTokensOf(state, result));
             }
-            EvalOutput out = evalConverter.convert(result.text());
+            EvalOutput out = convertEvalOutput(result.text());
             boolean grounded = !docsPresent || out.grounded();
             // 근거 판정만 비운다 — sufficient("요청에 답했는가")는 발췌 완전성에 거의 의존하지 않고,
             // 그것까지 버리면 정당한 재시도·PROGRESSIVE 업그레이드 신호가 함께 사라진다.
@@ -764,8 +775,50 @@ public class AnswerService {
         } catch (Exception e) {
             log.warn("[EVAL] 검증 응답을 읽지 못했다 — 판정 없음으로 기록한다(재시도 없음, 배지 없음): {}",
                     e.getMessage());
-            return withoutVerdict(state);
+            return withoutVerdict(withTokensOf(state, spent[0]));
         }
+    }
+
+    /**
+     * 검증 JSON 을 읽되, <b>advisory 필드 하나가 판정을 데려가지 못하게</b> 한 번 더 시도한다.
+     *
+     * <p>실제로 관찰된 사고: 모델이 {@code "usedDocs": [1, D1, 도형 그룹, D2, …]} 를 냈다. 따옴표
+     * 없는 맨 토큰은 JSON 값이 아니라 파서가 <b>문서 전체</b>를 실패로 처리하고, 바로 위에 멀쩡히
+     * 들어 있던 {@code sufficient}/{@code grounded} 까지 함께 사라졌다 — 아무것도 게이팅하지 않는
+     * 필드가 게이팅하는 두 필드를 죽인 셈이다({@code usedDocs} 는 코드 주석도 프롬프트도 advisory
+     * 라고 못 박은 값이다).
+     *
+     * <p><b>타입을 바꾸는 것으로는 못 고친다</b> — {@code List<String>} 이어도 맨 토큰은 JSON 문법
+     * 자체가 아니라서 파서가 먼저 죽는다. 그래서 <b>텍스트에서 그 배열만 비우고</b> 다시 읽는다.
+     * 중첩 대괄호를 허용하지 않으므로({@code [^\[\]]*}) 배열 끝을 넘어가 다른 필드를 삼킬 수 없고,
+     * 모양이 안 맞으면 원래 예외를 그대로 다시 던져 예전처럼 "판정 없음"으로 간다.
+     *
+     * <p>C(응용) 경로의 {@code inventedSymbols} 도 같은 성격의 advisory 지만 {@code List<String>}
+     * 이라 모델이 따옴표를 붙이는 것이 자연스럽고, 아직 같은 사고가 관찰되지 않았다 — 관찰되면 같은
+     * 방식으로 필드 이름만 바꿔 붙이면 된다.
+     */
+    private EvalOutput convertEvalOutput(String text) {
+        try {
+            return evalConverter.convert(text);
+        } catch (Exception malformed) {
+            Matcher m = USED_DOCS_ARRAY.matcher(text);
+            if (!m.find()) throw malformed;
+            EvalOutput salvaged = evalConverter.convert(m.replaceFirst("$1[]"));
+            log.warn("[EVAL] usedDocs 가 깨져 그 값만 버리고 판정을 살렸다 — 모델이 [Dn] 라벨을 "
+                     + "정수 대신 넣었을 가능성이 높다(응답 참여도는 어휘 매칭으로 degrade): {}",
+                    malformed.getMessage());
+            return salvaged;
+        }
+    }
+
+    /**
+     * 판정을 못 읽었어도 <b>토큰은 이미 썼다</b>. 예전에는 빈 응답 경로만 집계하고 파싱 실패 경로는
+     * 원본 state 를 그대로 돌려줘, 같은 사고인데 한쪽만 {@code llm_usage} 와 턴 기록이 어긋났다.
+     */
+    private static AgentState withTokensOf(AgentState state, LlmRouter.LlmResult result) {
+        return result == null ? state : state.toBuilder()
+                .accumulateTokens(result.inputTokens(), result.outputTokens())
+                .build();
     }
 
     /**
@@ -784,6 +837,8 @@ public class AnswerService {
      * 답변에 통과 배지를 달아 줘서도 안 된다.
      */
     private AgentState evaluateCreative(AgentState state, String answer, Locale locale) {
+        // evaluate() 와 같은 이유로 try 밖에 둔다 — 판정을 못 읽어도 토큰은 집계돼야 한다.
+        LlmRouter.LlmResult[] spent = new LlmRouter.LlmResult[1];
         boolean docsPresent = !state.retrievedDocs().isEmpty();
         try {
             String systemPrompt = messageSource.getMessage(state.responseMode().evalPromptKey(), null, locale);
@@ -801,11 +856,11 @@ public class AnswerService {
                 return llmRouter.executeGatedWithUsage(TaskType.TEXT, state.routingMode(),
                         model -> model.call(buildPrompt(systemPrompt, evalPrompt, evalOptions())));
             }).value();
+            spent[0] = result;
             EvalExcerpts excerpts = used[0];
             if (isEmptyVerdict(result)) {
                 logEmptyVerdict("EVAL-C", state, result);
-                return withoutVerdict(state.toBuilder()
-                        .accumulateTokens(result.inputTokens(), result.outputTokens()).build());
+                return withoutVerdict(withTokensOf(state, result));
             }
             CreativeEvalOutput out = creativeEvalConverter.convert(result.text());
             boolean apiGrounded = !docsPresent || out.apiGrounded();
@@ -841,7 +896,7 @@ public class AnswerService {
         } catch (Exception e) {
             log.warn("[EVAL-C] 창의 검증 응답을 읽지 못했다 — 판정 없음으로 기록한다"
                      + "(재시도 없음, 배지 없음): {}", e.getMessage());
-            return withoutVerdict(state);
+            return withoutVerdict(withTokensOf(state, spent[0]));
         }
     }
 
