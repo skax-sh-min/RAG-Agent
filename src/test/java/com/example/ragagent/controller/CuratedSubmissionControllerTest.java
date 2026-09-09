@@ -113,6 +113,9 @@ class CuratedSubmissionControllerTest {
         assertThat(html).contains("id=\"submission-summary\"");
         assertThat(html).contains("id=\"submission-keywords\"");
         assertThat(html).contains("id=\"submission-enrich-btn\"");
+        // 헬퍼는 layout/base.html 로 옮겨졌다(/admin 의 큐레이션 편집 패널이 같은 버튼을 쓴다) —
+        // 레이아웃에 있으므로 이 페이지에서도 그대로 닿아야 한다.
+        assertThat(html).contains("function wireEnrichButton");
         assertThat(html)
                 .as("두 칸의 name 이 없으면 폼 POST 가 값을 싣지 않는다")
                 .contains("name=\"summary\"").contains("name=\"keywords\"");

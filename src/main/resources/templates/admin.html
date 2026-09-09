@@ -1012,12 +1012,24 @@ function openCuratedEdit(id) {
                 <!-- 요약·키워드는 여기가 단일 출처다 — 청크 화면의 같은 이름 칸은 재임베딩마다
                      이 값으로 다시 쓰이는 사본이라 그쪽에서는 읽기 전용이다. 저장 한 번이
                      질문·답변과 함께 재임베딩까지 돌린다(updateEntry). -->
+                <!-- 「빈 칸 자동 생성」 — 지식 제안 폼과 같은 버튼, 같은 엔드포인트, 같은 "빈 칸만"
+                     규칙(base.html 의 wireEnrichButton). 관리자 쪽에 이게 없던 동안에는 두 칸이 비어
+                     있는 옛 항목(이 필드가 생기기 전에 승인된 것)을 손으로 치는 수밖에 없었다 —
+                     정작 비어 있는 것이 그 항목들이다. -->
                 <div>
-                    <label class="form-label small fw-semibold">요약
-                        <i class="bi bi-info-circle text-secondary ms-1 small" style="cursor:help;"
-                           data-bs-toggle="tooltip" data-bs-custom-class="tooltip-wide"
-                           title="키워드 검색(BM25) 입력 앞에 붙습니다. 의미 벡터 입력은 질문 + 본문 그대로입니다."></i>
-                    </label>
+                    <div class="d-flex align-items-center mb-1">
+                        <label class="form-label small fw-semibold mb-0">요약
+                            <i class="bi bi-info-circle text-secondary ms-1 small" style="cursor:help;"
+                               data-bs-toggle="tooltip" data-bs-custom-class="tooltip-wide"
+                               title="키워드 검색(BM25) 입력 앞에 붙습니다. 의미 벡터 입력은 질문 + 본문 그대로입니다."></i>
+                        </label>
+                        <button type="button" class="btn btn-outline-secondary btn-sm py-0 px-2 ms-auto"
+                                id="curated-edit-enrich-btn" style="font-size:0.72rem;"
+                                title="답변 본문에서 요약·키워드를 만듭니다. 이미 채워진 칸은 건드리지 않습니다.">
+                            <i class="bi bi-magic me-1"></i>빈 칸 자동 생성
+                        </button>
+                    </div>
+                    <div id="curated-edit-enrich-note" class="form-text small text-muted"></div>
                     <textarea id="curated-edit-summary" class="form-control form-control-sm"
                               rows="2" style="font-size:0.82rem; resize:vertical;"
                               placeholder="이 내용이 무엇에 관한 것인지 1~2문장"
@@ -1065,7 +1077,16 @@ function openCuratedEdit(id) {
                 body.innerHTML = editFields;
                 wirePreviewToggle('curated-answer', 'curated-edit-answer');
             }
-            new bootstrap.Offcanvas(offcanvasEl).show();
+            // 본문이 통째로 새로 그려진 뒤에 배선한다 — 버튼도 매번 새 엘리먼트라 리스너가
+            // 쌓이지 않는다. 재료는 '답변' 칸이다: 이 축에서 요약·키워드가 설명해야 하는 것이
+            // 답변 본문이고, 지식 제안 폼이 본문 칸을 넘기는 것과 같다.
+            wireEnrichButton('curated-edit-enrich-btn', 'curated-edit-answer',
+                             'curated-edit-summary', 'curated-edit-keywords',
+                             'curated-edit-enrich-note');
+            initTooltipsIn(body);
+            // getOrCreateInstance — openChunkEdit 과 같은 이유다. new 로 매번 만들면 _isShown 이
+            // false 인 새 인스턴스가 backdrop 을 한 겹 더 깔고, 그 겹은 닫아도 남는다.
+            bootstrap.Offcanvas.getOrCreateInstance(offcanvasEl).show();
         })
         .catch(() => showToast('큐레이션 항목을 불러올 수 없습니다.', 'danger'));
 }

@@ -432,49 +432,8 @@
     }
 })();
 
-/* "빈 칸 자동 생성" — 본문에서 요약·키워드를 LLM 한 번으로 만든다.
-
-   작성 폼과 수정 오프캔버스가 같은 함수를 쓴다: 두 화면이 같은 두 칸을 편집하므로 규칙이
-   갈리면 한쪽만 고쳐진다(요약/키워드 필드를 도입한 이유 자체가 그 두 칸의 단일 출처다).
-   "비어 있는 칸만 채운다"는 판정은 여기서 하지 않는다 — 현재 값을 그대로 보내고 서버가
-   정한다. 그래야 규칙의 출처가 하나다(CuratedSubmissionService.enrich). */
-function wireEnrichButton(btnId, bodyId, summaryId, keywordsId, noteId) {
-    const btn = document.getElementById(btnId);
-    const body = document.getElementById(bodyId);
-    const summary = document.getElementById(summaryId);
-    const keywords = document.getElementById(keywordsId);
-    const note = noteId ? document.getElementById(noteId) : null;
-    if (!btn || !body || !summary || !keywords) return;
-
-    btn.addEventListener('click', () => {
-        const original = btn.innerHTML;
-        btn.disabled = true;
-        btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>생성 중…';
-        if (note) note.textContent = '';
-        fetch('/curated/submissions/enrich', {
-            method: 'POST',
-            headers: Object.assign({ 'Content-Type': 'application/json' }, getCsrfHeaders()),
-            body: JSON.stringify({
-                body: body.value, summary: summary.value, keywords: keywords.value
-            })
-        })
-            .then(async r => {
-                let d = {};
-                try { d = await r.json(); } catch (e) { /* 비-JSON 오류 응답 */ }
-                if (!r.ok) throw new Error(d.message || '');
-                return d;
-            })
-            .then(d => {
-                summary.value = d.summary || summary.value;
-                keywords.value = d.keywords || keywords.value;
-                if (note) {
-                    note.textContent = d.llmCalled ? '' : '두 칸이 이미 채워져 있어 그대로 두었습니다.';
-                }
-            })
-            .catch(e => showToast(e.message || '자동 생성에 실패했습니다.', 'danger'))
-            .finally(() => { btn.disabled = false; btn.innerHTML = original; });
-    });
-}
+/* wireEnrichButton() 은 layout/base.html 에 있다 — /admin 의 큐레이션 Q&A 편집 패널이
+   같은 두 칸을 편집하면서 같은 버튼을 쓰기 때문이다(세 번째 화면이 생겨도 규칙은 한 벌). */
 
 wireEnrichButton('submission-enrich-btn', 'submission-body',
                  'submission-summary', 'submission-keywords', 'submission-enrich-note');

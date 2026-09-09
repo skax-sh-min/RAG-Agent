@@ -459,6 +459,11 @@ RAG 경로에서 검색이 아무것도 돌려주지 않았을 때, 예전에는
 - **비교할 수 없는 것과 차이가 없는 것은 다르다.** `ChunkDiff.compare()` 는 한쪽이라도 `null` 이면 `null` 을 돌려준다 — 없는 스냅샷을 빈 문자열로 바꿔 비교하면 "청크가 통째로 새로 쓰였다"로 그려져 관리자가 없던 사건을 읽는다. 상한(`MAX_LINE_MATRIX_CELLS`)을 넘을 때도 `tooLarge` 로 말하고 나란히 보기로 떨어진다. 비교 대상의 크기는 문서에서 오므로 상한 자체가 필요하다(LCS 는 O(n×m)).
 - **관리자 화면의 "현재 내용"은 백엔드마다 다른 텍스트다.** sqlite-vec 는 `vec_document_chunks.content`(원문), 그 테이블이 없는 배포는 `chunk_fts.content` 인데 후자는 원문이 아니라 **파생 검색 텍스트**(§10.1: 맥락 헤더 + 정규화 본문)다 — 스냅샷과 나란히 놓는 화면이라 어느 쪽인지 라벨로 밝히지 않으면 "고쳐져서 다른 것"과 "원래 다른 텍스트"가 구별되지 않는다(`ChunkLocation.source`). `vec_document_chunks` 는 sqlite-vec 배포에만 존재하므로 조회 전에 테이블 존재를 확인한다(없는 테이블을 참조하면 쿼리 자체가 예외다).
 
+### 큐레이션 요약·키워드의 단일 출처와 그 사본
+
+- **`curated_qa.summary`/`.keywords` 가 단일 출처이고, 벡터 메타데이터의 `chunk_context`/`excerpt_keywords` 는 재임베딩마다 거기서 다시 쓰이는 사본이다.** 실제로 어긋난 행을 봤다: `/admin` 청크 편집기에는 값이 보이는데 큐레이션 Q&A 패널은 비어 있었고, DB 를 열어 보니 컬럼은 NULL 인데 `vec_document_chunks.metadata` 에는 값이 있었다. `chunk_context` 첫 줄이 `curated_qa`(파일명 자리)인 것이 출처를 말해 준다 — **`KeywordExtractor` 가 문서 청크 형식으로 쓴 값**이고, `/admin` 재인덱싱이 큐레이션 청크를 문서 경로로 보내던 시절의 산물이다(지금은 `AdminController` 가 `reembedRow()` 로 라우팅한다). 그런 행은 **다음 재임베딩 한 번에 그 값을 잃는다**(`buildDocument()` 가 `summary=null` 로 메타데이터를 다시 쓴다) — 화면에 보이는 값이 다음 재인덱싱까지만 사는 상태다. 고치는 방법은 큐레이션 패널에 넣고 저장하는 것 하나뿐이다(`updateEntry` 가 DB 기록 + 재임베딩을 함께 돈다)
+- **「빈 칸 자동 생성」은 세 화면이 한 함수를 쓴다** (`layout/base.html` 의 `wireEnrichButton`, 엔드포인트 `POST /curated/submissions/enrich`): 지식 제안 작성 폼 · 그 수정 오프캔버스 · `/admin` 큐레이션 Q&A 편집 패널. 예전에는 함수가 `curated-submissions.html` 안에 있어서 **관리자 패널에는 버튼 자체가 없었다** — 정작 두 칸이 비어 있는 것은 그 필드가 생기기 전에 승인된 옛 항목들인데, 그것을 채울 도구가 관리자 쪽에 없던 셈이다. 관리자용 엔드포인트를 따로 만들지 않은 이유는 저장이 없는 순수 텍스트 변환이어서다("빈 칸만 채운다"는 판정도 서버가 하므로 규칙의 출처가 하나로 남는다). `AdminControllerWebMvcTest` 가 `/admin` 의 렌더된 HTML 에서 `function wireEnrichButton` 과 호출부를 함께 확인한다 — 헬퍼가 레이아웃 밖으로 나가면 버튼이 조용히 죽는다
+
 ### 채팅 → `/admin` 「청크 수정」 딥링크
 
 - **분기는 서버가 한다** (`AdminController.openChunkOnLoad`, `GET /admin?chunk={chunkId}`). 채팅은 청크 id 말고는 아무것도 모른다 — 어느 컬렉션인지도(`collectionFor(version)` 이 필요하다), 큐레이션 축인지도. 그래서 화면은 `/admin?chunk=…` 로 보내기만 하고 어느 패널을 열지는 컨트롤러가 모델 속성(`openChunkId`+`openChunkCollection` / `openCuratedId` / `openChunkMissing`)으로 지정한다. 위치는 `ChunkReportService.locate()` → `findChunkLocation()` 으로 구하는데 **벡터 스토어를 건드리지 않는다**(version 과 docId 만 있으면 되므로 `getChunk()` 를 부를 필요가 없다)
