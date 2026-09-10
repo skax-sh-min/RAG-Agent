@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
@@ -51,7 +52,10 @@ public final class ContextWindowProbe {
     /**
      * @param apiBase {@code /v1} 를 <b>포함하지 않는</b> 서버 루트(예: {@code http://localhost:1234}).
      *                {@code /props} 와 {@code /api/v0/models} 둘 다 {@code /v1} 바깥에 있다.
-     * @param model   설정된 모델 id — LM Studio 응답에서 해당 항목을 고르는 데 쓴다.
+     * @param model   모델 id — LM Studio 응답에서 해당 항목을 고르는 데 쓴다. G3 가 해석한 서버 id 가
+     *                오는 것이 보통이지만, {@code /settings} 재탐지는 <b>설정값</b>을 그대로 넘기므로
+     *                설정값이 id 의 일부인 경우도 같은 규칙({@link ModelNameResolver})으로 받는다 —
+     *                아니면 부분 이름으로 기동한 배포에서 재탐지 버튼만 조용히 실패한다.
      */
     public static Optional<Integer> probe(String apiBase, String model,
                                           int connectTimeoutSeconds, int readTimeoutSeconds) {
@@ -81,8 +85,22 @@ public final class ContextWindowProbe {
                                                             int connectTimeout, int readTimeout) {
         JsonNode body = getJson(root + "/api/v0/models", connectTimeout, readTimeout);
         if (body == null) return Optional.empty();
-        for (JsonNode entry : body.path("data")) {
-            if (model != null && !model.isBlank() && !model.equals(entry.path("id").asText(null))) continue;
+        JsonNode entries = body.path("data");
+        // 어느 항목을 볼지 먼저 정한다 — 부분 이름이 여러 항목에 걸리면 고르지 않고 "모름"이다
+        // (G3 가 모호함을 기동 실패로 다루는 것과 같은 이유: 엉뚱한 모델의 창을 예산에 쓰면 안 된다).
+        String target = null;
+        if (model != null && !model.isBlank()) {
+            List<String> ids = new ArrayList<>();
+            for (JsonNode entry : entries) {
+                String id = entry.path("id").asText(null);
+                if (id != null) ids.add(id);
+            }
+            ModelNameResolver.Resolution match = ModelNameResolver.resolve(model, ids);
+            if (!match.found()) return Optional.empty();
+            target = match.resolved();
+        }
+        for (JsonNode entry : entries) {
+            if (target != null && !target.equals(entry.path("id").asText(null))) continue;
             JsonNode instances = entry.path("loaded_instances");
             if (!instances.isArray()) continue;
             for (JsonNode instance : instances) {

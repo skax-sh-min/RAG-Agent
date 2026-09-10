@@ -59,6 +59,7 @@ Flow:
 | `llm/ProviderContextWindows.java` | 프로바이더별 컨텍스트 창(토큰)을 기록하는 이름-키 레지스트리(기동 시 1회 + `/settings` 의 재탐지 버튼, §6.26 A5) (`ProviderToggle` 선례 — `LlmProvider` 레코드는 40곳에서 생성되고, 이건 프로바이더를 식별하는 값이 아니라 그에 관해 관측된 값이라 레코드가 나를 이유가 없다). 출처는 `context-size` 선언 또는 `ContextWindowProbe` 탐지이며, **둘 다 없으면 항목 자체가 없다** — 0 이나 기본값이 아니라 "모름"을 값으로 표현해야 추측한 숫자로 입력 예산을 짜는 일이 없다 |
 | `service/SettingsService.reprobeContextWindows()` | §6.26 A5 — 기동 시 한 번 탐지한 창은 낡는다(서버를 다른 `-c` 로 재시작, LM Studio 의 JIT 로딩) [↗](documents/PITFALLS.md#servicesettingsservicereprobecontextwindows) |
 | `llm/ContextWindowProbe.java` | 로컬 서버에 실제 컨텍스트 창을 물어본다. **OpenAI 호환 `/v1/models` 에는 컨텍스트 필드가 없어** 서버별 경로를 쓴다 [↗](documents/PITFALLS.md#llmcontextwindowprobejava) |
+| `llm/ModelNameResolver.java` | G3(`LlmConfig.verifyLocalModel()`)의 모델명 규칙 — 정확 일치 → 설정값을 포함하는 서버 id 가 **하나뿐**이면 그 id → 그 외 기동 실패. 해석된 id 는 `LlmProvider.model()` 까지 실린다(스트리밍 요청 본문·LM Studio 프로브가 그 값을 쓴다). `ContextWindowProbe` 와 공유하는 순수 클래스 [↗](documents/PITFALLS.md#llmmodelnameresolverjava-g3-의-모델명-해석) |
 | `llm/MaxTokensCappingChatModel.java` | 프로바이더별 `max-tokens` 상한을 호출자 옵션 위에 씌우는 데코레이터 [↗](documents/PITFALLS.md#llmmaxtokenscappingchatmodeljava) |
 | `llm/LlmRouter.java` | Provider selection by TaskType × RoutingMode [↗](documents/PITFALLS.md#llmllmrouterjava) |
 | `llm/EmbeddingConcurrencyTracker.java` | Plain `AtomicInteger` in-flight counter for genuine outbound embedding calls (never negative, `get()` floors at 0) [↗](documents/PITFALLS.md#llmembeddingconcurrencytrackerjava) |

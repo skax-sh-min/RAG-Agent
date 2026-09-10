@@ -5,6 +5,8 @@ import com.example.ragagent.llm.CircuitBreaker;
 import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.ProviderContextWindows;
 import com.example.ragagent.llm.ProviderToggle;
+import com.example.ragagent.llm.RoutingMode;
+import com.example.ragagent.llm.TaskType;
 import com.example.ragagent.llm.TokenEstimateCalibration;
 import com.example.ragagent.repository.LlmUsageRepository;
 import com.sun.net.httpserver.HttpServer;
@@ -78,6 +80,48 @@ class LlmConfigVerificationTest {
         LlmRouter router = new LlmConfig().llmRouter(props, USAGE, new CircuitBreaker(2), new ProviderToggle(), new BackgroundLlmConcurrencyTracker(), new ProviderContextWindows(), new TokenEstimateCalibration());
 
         assertThat(router.hasLocalProvider()).isTrue();
+    }
+
+    @Test
+    @DisplayName("G3: configured name is part of exactly one server id — registers, and the provider carries the server's id")
+    void partialModelName_resolvesToServerId() throws IOException {
+        // LM Studio reports `google/gemma-4-e4b`; the operator wrote just `gemma-4-e4b`.
+        String baseUrl = startModelsServer(
+                "{\"object\":\"list\",\"data\":[{\"id\":\"google/gemma-4-e4b\"},{\"id\":\"qwen3-8b\"}]}", 200);
+        AppProperties props = propsWith(localProvider(baseUrl, "gemma-4-e4b"), true);
+
+        LlmRouter router = new LlmConfig().llmRouter(props, USAGE, new CircuitBreaker(2), new ProviderToggle(), new BackgroundLlmConcurrencyTracker(), new ProviderContextWindows(), new TokenEstimateCalibration());
+
+        // The streaming paths put provider.model() straight into the request body, so this is the
+        // value that must be the server's — not the shorthand from the env var.
+        assertThat(router.routeProvider(TaskType.TEXT, RoutingMode.COST_FIRST).model())
+                .isEqualTo("google/gemma-4-e4b");
+    }
+
+    @Test
+    @DisplayName("G3: configured name is part of several server ids — startup fails and names them")
+    void ambiguousModelName_failsStartup() throws IOException {
+        String baseUrl = startModelsServer(
+                "{\"object\":\"list\",\"data\":[{\"id\":\"google/gemma-4-e4b\"},{\"id\":\"google/gemma-4-e2b\"}]}", 200);
+        AppProperties props = propsWith(localProvider(baseUrl, "gemma-4"), true);
+
+        assertThatThrownBy(() -> new LlmConfig().llmRouter(props, USAGE, new CircuitBreaker(2), new ProviderToggle(), new BackgroundLlmConcurrencyTracker(), new ProviderContextWindows(), new TokenEstimateCalibration()))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("ambiguous")
+                .hasMessageContaining("google/gemma-4-e4b")
+                .hasMessageContaining("google/gemma-4-e2b");
+    }
+
+    @Test
+    @DisplayName("G3: an exact id keeps working even when another id contains it — no regression for precise names")
+    void exactModelName_isNotAmbiguous() throws IOException {
+        String baseUrl = startModelsServer(
+                "{\"object\":\"list\",\"data\":[{\"id\":\"gemma-4-e4b-it\"},{\"id\":\"gemma-4-e4b\"}]}", 200);
+        AppProperties props = propsWith(localProvider(baseUrl, "gemma-4-e4b"), true);
+
+        LlmRouter router = new LlmConfig().llmRouter(props, USAGE, new CircuitBreaker(2), new ProviderToggle(), new BackgroundLlmConcurrencyTracker(), new ProviderContextWindows(), new TokenEstimateCalibration());
+
+        assertThat(router.routeProvider(TaskType.TEXT, RoutingMode.COST_FIRST).model()).isEqualTo("gemma-4-e4b");
     }
 
     @Test

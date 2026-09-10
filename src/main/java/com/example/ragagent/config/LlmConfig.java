@@ -63,6 +63,9 @@ public class LlmConfig {
         // a confusing runtime chat failure much later. Fails startup entirely on mismatch/unreachable
         // (Spring Boot exits non-zero) — see AppProperties.LlmConfig.verifyLocalModelsOnStartup(),
         // default true. Cloud (NORMAL/PREMIUM) providers are not checked here.
+        // The check is also a *name resolution*: a configured name that is only part of one server id
+        // (`gemma-4-e4b` vs LM Studio's `google/gemma-4-e4b`) passes, and the server's id is what the
+        // provider is built with from here on (ModelNameResolver has the rule).
         boolean verifyLocalModels = llmCfg.verifyLocalModelsOnStartup() == null || llmCfg.verifyLocalModelsOnStartup();
 
         List<LlmProvider> providers = llmCfg.providers().stream()
@@ -79,9 +82,14 @@ public class LlmConfig {
                     // OpenAiApi.builder() appends /v1 internally, so strip it to avoid /v1/v1.
                     // resolvedUrl (with /v1) is kept for LlmProvider.baseUrl() and LoggingChatModel curl logs.
                     String apiBase = cfg.apiBase();
-                    if (cfg.isLocal() && verifyLocalModels) {
-                        verifyLocalModel(cfg.name(), apiBase, cfg.model(), connectTimeoutSeconds, readTimeoutSeconds);
-                    }
+                    // 여기서부터 cfg.model() 대신 이 값을 쓴다 — 컨텍스트 탐지·defaultOptions·curl 로그·
+                    // LlmProvider 네 자리 전부. 스트리밍 경로(AnswerService/DirectAnswerService)는
+                    // provider.model() 을 요청 본문에 그대로 싣고 LM Studio 프로브는 id 를 정확히
+                    // 비교하므로, 한 자리라도 설정값이 남으면 그 경로만 "없는 모델"을 부른다.
+                    // 검증을 껐으면 서버에 물어본 적이 없으니 설정값 그대로다.
+                    String effectiveModel = (cfg.isLocal() && verifyLocalModels)
+                            ? verifyLocalModel(cfg.name(), apiBase, cfg.model(), connectTimeoutSeconds, readTimeoutSeconds)
+                            : cfg.model();
                     OpenAiApi api = OpenAiApi.builder()
                             .baseUrl(apiBase)
                             .apiKey(effectiveApiKey)
@@ -102,7 +110,7 @@ public class LlmConfig {
                         contextWindows.record(cfg.name(), effectiveCtx,
                                 ProviderContextWindows.Source.CONFIGURED);
                     } else if (cfg.isLocal()) {
-                        effectiveCtx = ContextWindowProbe.probe(apiBase, cfg.model(),
+                        effectiveCtx = ContextWindowProbe.probe(apiBase, effectiveModel,
                                 connectTimeoutSeconds, readTimeoutSeconds).orElse(null);
                         if (effectiveCtx != null) {
                             contextWindows.record(cfg.name(), effectiveCtx,
@@ -127,7 +135,7 @@ public class LlmConfig {
                             // live effective temperature per call instead, so /settings changes apply
                             // without a restart for those. maxTokens stays view-only (restart to change).
                             .defaultOptions(OpenAiChatOptions.builder()
-                                    .model(cfg.model())
+                                    .model(effectiveModel)
                                     .temperature(llmCfg.temperature())
                                     .maxTokens(effectiveMaxTokens)
                                     .build())
@@ -142,7 +150,7 @@ public class LlmConfig {
                             tokenCalibration.wrap(
                                     new MaxTokensCappingChatModel(rawModel, cfg.name(),
                                             () -> liveMaxTokens(cfg, props, contextWindows))),
-                            cfg.name(), resolvedUrl, effectiveApiKey, cfg.model());
+                            cfg.name(), resolvedUrl, effectiveApiKey, effectiveModel);
                     return new LlmProvider(
                             cfg.name(),
                             TaskType.valueOf(typeStr),
@@ -150,7 +158,7 @@ public class LlmConfig {
                             cfg.priority(),
                             effectiveApiKey,
                             resolvedUrl,
-                            cfg.model(),
+                            effectiveModel,
                             providerStream,
                             model,
                             api);
@@ -272,9 +280,14 @@ public class LlmConfig {
      * Boot startup (see caller for rationale). Reuses the same connect/read timeouts as the chat
      * calls; a slow-to-boot local server should raise {@code LLM_CONNECT_TIMEOUT_SECONDS} rather than
      * disable this check.
+     *
+     * @return the model id to build the provider with — the configured name when it matches exactly,
+     *         otherwise the one server id that contains it ({@link ModelNameResolver}). A name that
+     *         is part of several ids is a startup failure like a missing one: picking one silently
+     *         would defeat the check's purpose.
      */
-    private void verifyLocalModel(String providerName, String apiBase, String model,
-                                  int connectTimeoutSeconds, int readTimeoutSeconds) {
+    private String verifyLocalModel(String providerName, String apiBase, String model,
+                                    int connectTimeoutSeconds, int readTimeoutSeconds) {
         List<String> availableModels;
         try {
             ModelsResponse response = HttpClientTimeouts.restClientBuilder(connectTimeoutSeconds, readTimeoutSeconds)
@@ -298,18 +311,37 @@ public class LlmConfig {
                     "Local LLM provider [%s] is unreachable at %s/v1/models — is the server running and is the URL correct? (%s: %s)"
                             .formatted(providerName, apiBase, e.getClass().getSimpleName(), e.getMessage()), e);
         }
-        if (!availableModels.contains(model)) {
+        ModelNameResolver.Resolution match = ModelNameResolver.resolve(model, availableModels);
+        if (match.ambiguous()) {
+            log.error("""
+                    [LLM STARTUP CHECK FAILED] provider=[{}] configured model '{}' is part of more than one model at {}/v1/models
+                      -> Models it matches: {}
+                      -> Fix {} to the full id of the intended model (an exact id always wins over a partial one).""",
+                    providerName, model, apiBase, match.candidates(), modelEnvVarHint(providerName));
+            throw new IllegalStateException(
+                    "Local LLM provider [%s]: configured model '%s' is ambiguous at %s/v1/models — it is part of %s. Use the full model id."
+                            .formatted(providerName, model, apiBase, match.candidates()));
+        }
+        if (!match.found()) {
             log.error("""
                     [LLM STARTUP CHECK FAILED] provider=[{}] configured model '{}' was not found at {}/v1/models
                       -> Models actually available there: {}
-                      -> Fix {} to one of the models above, or load the intended model on that server.""",
+                      -> Fix {} to one of the models above (or a part of one that no other model shares), or load the intended model on that server.""",
                     providerName, model, apiBase, availableModels, modelEnvVarHint(providerName));
             throw new IllegalStateException(
                     "Local LLM provider [%s]: configured model '%s' was not found at %s/v1/models. Available models: %s"
                             .formatted(providerName, model, apiBase, availableModels));
         }
-        log.info("Local LLM provider [{}] verified — model '{}' confirmed available at {}/v1/models",
-                providerName, model, apiBase);
+        if (match.renamed()) {
+            // Not a WARN: a partial name is a supported shorthand, not a misconfiguration. But the
+            // operator must be able to see from the log which id the requests actually carry.
+            log.info("Local LLM provider [{}] verified — configured model '{}' is part of server model '{}' at {}/v1/models; using the server's id",
+                    providerName, model, match.resolved(), apiBase);
+        } else {
+            log.info("Local LLM provider [{}] verified — model '{}' confirmed available at {}/v1/models",
+                    providerName, model, apiBase);
+        }
+        return match.resolved();
     }
 
     /**

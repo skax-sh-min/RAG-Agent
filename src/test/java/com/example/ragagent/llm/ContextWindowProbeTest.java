@@ -88,6 +88,33 @@ class ContextWindowProbeTest {
     }
 
     @Test
+    @DisplayName("LM Studio — 설정값이 id 의 일부여도 같은 항목을 고른다 (/settings 재탐지는 설정값을 그대로 넘긴다)")
+    void lmStudioAcceptsAPartialModelName() throws IOException {
+        String base = startServer(Map.of(
+                "/api/v0/models", """
+                        {"data":[
+                          {"id":"qwen3-8b","loaded_instances":[{"config":{"context_length":4096}}]},
+                          {"id":"google/gemma-4-e4b",
+                           "loaded_instances":[{"instance_id":"g:1","config":{"context_length":16384}}]}
+                        ]}"""));
+
+        assertThat(probe(base, "gemma-4-e4b")).contains(16384);
+    }
+
+    @Test
+    @DisplayName("LM Studio — 부분 이름이 여러 항목에 걸리면 고르지 않는다 — 엉뚱한 모델의 창을 예산에 쓰면 안 된다")
+    void lmStudioDoesNotGuessBetweenSeveralMatches() throws IOException {
+        String base = startServer(Map.of(
+                "/api/v0/models", """
+                        {"data":[
+                          {"id":"google/gemma-4-e4b","loaded_instances":[{"config":{"context_length":16384}}]},
+                          {"id":"google/gemma-4-e2b","loaded_instances":[{"config":{"context_length":8192}}]}
+                        ]}"""));
+
+        assertThat(probe(base, "gemma-4")).isEmpty();
+    }
+
+    @Test
     @DisplayName("LM Studio — 로드된 인스턴스가 없으면 최상위 max_context_length(모델 상한)로 대신하지 않는다")
     void neverFallsBackToModelMaximum() throws IOException {
         String base = startServer(Map.of(
