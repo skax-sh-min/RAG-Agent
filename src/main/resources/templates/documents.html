@@ -88,6 +88,13 @@
                                th:text="#{doc.upload.heading_number.option}"
                                th:title="#{doc.upload.heading_number.tooltip}">소제목 숫자 생성</label>
                     </div>
+                    <!-- .md 전용 — 선택 파일에 .md 가 없으면 비활성(syncSkipLlmCheckbox) -->
+                    <div class="form-check form-check-inline mb-0">
+                        <input class="form-check-input" type="checkbox" id="skip-llm-correction-checkbox" disabled/>
+                        <label class="form-check-label small" for="skip-llm-correction-checkbox"
+                               th:text="#{doc.upload.skip_llm.option}"
+                               th:title="#{doc.upload.skip_llm.tooltip}">LLM 교정 건너뛰기 (MD)</label>
+                    </div>
                     <button id="upload-btn" class="btn btn-sm btn-primary" disabled>
                         <i class="bi bi-upload me-1"></i>
                         <span th:text="#{doc.btn.upload}">Upload &amp; Index</span>
@@ -224,7 +231,13 @@
         chunks:       /*[[#{toast.upload.chunks}]]*/ 'chunks',
         exportPreparing: /*[[#{doc.export.preparing}]]*/ 'Exporting...',
         exportSubmit:    /*[[#{doc.export.submit}]]*/ 'Export',
-        exportFailed:    /*[[#{doc.export.failed}]]*/ 'Export failed.'
+        exportFailed:    /*[[#{doc.export.failed}]]*/ 'Export failed.',
+        fenceTitle:      /*[[#{doc.upload.fence.title}]]*/ 'Please check before indexing: {name}',
+        fenceFound:      /*[[#{doc.upload.fence.found}]]*/ '[MD file] {count} code-block (```) problem(s) found.',
+        fenceMore:       /*[[#{doc.upload.fence.more}]]*/ '... and {count} more',
+        fenceNote:       /*[[#{doc.upload.fence.note}]]*/ 'LLM correction is skipped, so these are not rewritten.',
+        fenceChoice:     /*[[#{doc.upload.fence.choice}]]*/ '[OK] index anyway   /   [Cancel] stop and fix the file',
+        fenceCancelled:  /*[[#{doc.upload.fence.cancelled}]]*/ 'cancelled (code-block problems)'
     };
 </script>
 <script>
@@ -258,6 +271,7 @@
 
         renderFileList();
         syncHeadingNumbersCheckbox();
+        syncSkipLlmCheckbox();
         warnIfPptxMixed();
         document.getElementById('upload-btn').disabled = false;
     }
@@ -268,6 +282,25 @@
 
     function isPptx(file) {
         return extOf(file.name) === 'pptx';
+    }
+
+    function isMarkdown(file) {
+        return extOf(file.name) === 'md';
+    }
+
+    /**
+     * 'LLM 교정 건너뛰기' 는 .md 에만 적용된다(DocumentIndexer 의 .md 분기만 이 값을 읽는다 —
+     * 변환기 출력(DOCX/PPTX/PDF/TXT)은 LLM 교정이 있어야 쓸 만한 마크다운이 된다). 선택 파일에
+     * .md 가 하나도 없으면 체크해도 아무 효과가 없으므로 비활성으로 두고 값도 내린다. 기본은
+     * 해제 — 사용자가 매번 명시적으로 켠다(LLM 교정을 건너뛰면 코드 블록 문제를 모델이 고쳐 주지
+     * 않으므로, 켰을 때는 업로드 전에 사전 점검 대화상자가 뜬다).
+     */
+    function syncSkipLlmCheckbox() {
+        const box = document.getElementById('skip-llm-correction-checkbox');
+        if (!box) return;
+        const hasMd = selectedFiles.some(isMarkdown);
+        box.disabled = !hasMd;
+        if (!hasMd) box.checked = false;
     }
 
     /**
@@ -393,15 +426,19 @@
         // 남은 파일 구성이 바뀌었으므로 재계산 — 마지막 PPTX를 지우면 다시 체크되고,
         // 혼합 상태가 해소되면 경고도 더 이상 뜨지 않는다.
         syncHeadingNumbersCheckbox();
+        syncSkipLlmCheckbox();
         warnIfPptxMixed();
     }
 
     document.getElementById('upload-btn').addEventListener('click', () => {
         const version = (document.getElementById('version-input').value || '').trim() || 'latest';
         const tags = (document.getElementById('tags-input').value || '').trim();
-        const addImageDescriptions = document.getElementById('add-image-desc-checkbox').checked;
-        const addHeadingNumbers = document.getElementById('add-heading-numbers-checkbox').checked;
-        uploadFiles([...selectedFiles], version, tags, addImageDescriptions, addHeadingNumbers);
+        const options = {
+            addImageDescriptions: document.getElementById('add-image-desc-checkbox').checked,
+            addHeadingNumbers:    document.getElementById('add-heading-numbers-checkbox').checked,
+            skipLlmCorrection:    document.getElementById('skip-llm-correction-checkbox').checked
+        };
+        uploadFiles([...selectedFiles], version, tags, options);
     });
 
     /* ── 문서 내보내기 (§ 문서 내보내기) ──────────────────────────────────────
@@ -475,6 +512,31 @@
         return plain ? plain[1] : null;
     }
 
+    /** 409 가 사전 점검 응답(status=preflight_warnings)인지 — 다른 409 는 일반 오류로 흘려보낸다. */
+    function isFencePreflight(responseText) {
+        try {
+            return JSON.parse(responseText).status === 'preflight_warnings';
+        } catch (_) {
+            return false;
+        }
+    }
+
+    /** 코드 펜스 문제 목록을 확인 대화상자용 텍스트로 — admin.html 의 formatFenceProblems 와 같은
+     *  모양(최대 10건). 메시지는 서버가 준 한국어/영어 문장을 그대로 쓴다. */
+    const FENCE_PROBLEMS_SHOWN = 10;
+
+    function formatFencePreflight(filename, problems) {
+        const shown = problems.slice(0, FENCE_PROBLEMS_SHOWN)
+            .map(p => '  · ' + p.line + ': ' + p.message).join('\n');
+        const rest = problems.length > FENCE_PROBLEMS_SHOWN
+            ? '\n' + PAGE_I18N.fenceMore.replace('{count}', problems.length - FENCE_PROBLEMS_SHOWN) : '';
+        return PAGE_I18N.fenceTitle.replace('{name}', filename) + '\n\n'
+            + PAGE_I18N.fenceFound.replace('{count}', problems.length) + '\n'
+            + shown + rest + '\n\n'
+            + PAGE_I18N.fenceNote + '\n\n'
+            + PAGE_I18N.fenceChoice;
+    }
+
     /** 서버가 준 거부 사유. 컨트롤러가 직접 만든 {message} 와 GlobalExceptionHandler 의
      *  ProblemDetail {detail} 두 형태를 모두 받는다(지식 제안 게시판의 `d.message || d.detail`
      *  과 같은 규약). XHR 은 응답을 문자열로 주므로 fetch 용 extractError() 와 달리 동기
@@ -500,7 +562,8 @@
     }
 
     /* ── Upload orchestration ────────────────────────────────────────────── */
-    async function uploadFiles(files, version, tags, addImageDescriptions, addHeadingNumbers) {
+    /** options = {addImageDescriptions, addHeadingNumbers, skipLlmCorrection} — one set for the whole batch. */
+    async function uploadFiles(files, version, tags, options) {
         const btn = document.getElementById('upload-btn');
         btn.disabled = true;
 
@@ -515,8 +578,7 @@
         for (let i = 0; i < total; i++) {
             setFileStatus(i, 'uploading');
             try {
-                const result = await uploadWithProgress(files[i], version, tags,
-                    addImageDescriptions, addHeadingNumbers,
+                const result = await uploadWithProgress(files[i], version, tags, options,
                     pct => {                                    // XHR upload progress
                         setUploadBar(i, pct);
                         if (pct === 100) setFileStatus(i, 'queued');
@@ -532,7 +594,7 @@
                 setFileActionButton(i, null);
                 if (err.cancelled) {
                     setFileStatus(i, 'cancelled');
-                    showToast(`${escHtml(files[i].name)} ${I18N.cancelled}`, 'warning');
+                    showToast(`${escHtml(files[i].name)} ${escHtml(err.message || I18N.cancelled)}`, 'warning');
                 } else if (err.unknown) {
                     // Not a failure — the server just no longer has a record of this task's
                     // outcome (e.g. reconnect landed after a very long disconnect). Refresh the
@@ -587,15 +649,17 @@
      * onCancelReady(fn) hands the caller a cancel closure as soon as one is available — it
      * aborts the XHR before a taskId exists, or calls the server cancel endpoint after.
      */
-    function uploadWithProgress(file, version, tags, addImageDescriptions, addHeadingNumbers, onUploadPct, onStage, onCancelReady) {
+    function uploadWithProgress(file, version, tags, options, onUploadPct, onStage, onCancelReady) {
         return new Promise((resolve, reject) => {
             const xhr  = new XMLHttpRequest();
             const form = new FormData();
             form.append('file', file);
             form.append('version', version);
             if (tags) form.append('tags', tags);   // 검색 스코프 태그
-            form.append('addImageDescriptions', addImageDescriptions ? 'true' : 'false');
-            form.append('addHeadingNumbers', addHeadingNumbers ? 'true' : 'false');
+            form.append('addImageDescriptions', options.addImageDescriptions ? 'true' : 'false');
+            form.append('addHeadingNumbers', options.addHeadingNumbers ? 'true' : 'false');
+            form.append('skipLlmCorrection', options.skipLlmCorrection ? 'true' : 'false');
+            if (options.force) form.append('force', 'true');
 
             let sse = null;
             let currentTaskId = null;
@@ -622,6 +686,18 @@
                     currentTaskId = taskId;
                     storePendingTask(taskId, file.name);
                     sse = subscribeIndexingProgress(taskId, onStage, resolve, reject);
+                } else if (xhr.status === 409 && isFencePreflight(xhr.responseText)) {
+                    // 사전 점검(LLM 교정 건너뛰기 + 코드 블록 문제) — 서버는 아무것도 저장하지 않았다.
+                    // /admin 재인덱싱과 같은 규약: 목록을 보여 주고 [확인]이면 force=true 로 다시 보낸다.
+                    const body = JSON.parse(xhr.responseText);
+                    if (confirm(formatFencePreflight(file.name, body.problems || []))) {
+                        uploadWithProgress(file, version, tags, {...options, force: true},
+                            onUploadPct, onStage, onCancelReady).then(resolve, reject);
+                    } else {
+                        const err = new Error(PAGE_I18N.fenceCancelled);
+                        err.cancelled = true;
+                        reject(err);
+                    }
                 } else if (xhr.status === 503) {
                     reject(new Error(I18N.chromaUnavailable));
                 } else {

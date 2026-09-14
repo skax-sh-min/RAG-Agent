@@ -520,6 +520,30 @@ LLM_ROUTING_MODE=QUALITY_FIRST
 > PPTX)는 재인덱싱해도 새로 번호가 붙지 않습니다. 자세한 내용은 [§7.3 주의사항](#73-주의사항)과
 > [PIPELINE.md §6.3](PIPELINE.md#63-docx--md--임베딩-db-저장-상세-이미지-포함) 참고.
 
+#### LLM 교정 건너뛰기 (`skipLlmCorrection`, MD 전용)
+
+업로드 화면의 "LLM 교정 건너뛰기 (MD)" 체크박스(요청 파라미터 `skipLlmCorrection=true`, REST
+`POST /api/v1/documents` 도 동일). **`.md` 파일에만 적용**되며 다른 형식에서는 무시됩니다 — DOCX/PPTX/PDF/TXT
+의 마크다운은 변환기가 만든 것이라 LLM 교정을 거쳐야 쓸 만해지지만, `.md` 는 사람이 쓴 문서라 모델이
+문장을 손대는 것을 원치 않는 경우가 있기 때문입니다. 화면에서는 선택된 파일에 `.md` 가 없으면 체크박스가
+비활성화됩니다(`syncSkipLlmCheckbox()`).
+
+켜면 **LLM 섹션 재작성만** 건너뜁니다. 결정적 정리 패스는 그대로 돕니다 — 닫는 펜스 언어 태그 제거·미닫힘
+펜스 치유(`fixClosingFences`), 코드 블록 언어 태그 추론(`normalizeCodeBlocks`), "소제목 숫자 생성"이 켜져
+있으면 번호 매기기, 빈 줄/마커 정리(`postProcessMarkdown`). "이미지 설명 추가"는 자기 체크박스를 그대로
+따릅니다(Vision 호출은 이 옵션과 별개). 교정본은 평소처럼 `converted/{docId}_corrected.md` 에 저장됩니다.
+
+> **코드 블록 문제는 인덱싱 전에 알려 줍니다** — `/admin` 재인덱싱의 사전 점검과 같은 규약. LLM 교정은
+> 작성자가 잘못 쓴 펜스를 문맥을 보고 고쳐 주는 유일한 패스라, 이를 건너뛰면 그 결함이 결정적 패스로
+> 그대로 넘어갑니다. 그래서 `.md` + 이 옵션이면 서버가 임시 저장본에서 `findFenceProblems()` 를 먼저 돌리고,
+> 문제가 하나라도 있으면 **아무것도 저장하지 않은 채** `409` 로 목록(`status=preflight_warnings`, 줄 번호 +
+> 종류 `tagged_closer`/`unclosed`/`mid_line` + 설명)을 돌려줍니다. 화면은 이를 확인 대화상자로 보여 주고
+> [확인]이면 `force=true` 로 다시 보냅니다(REST 도 같은 파라미터). 진행하면 `unclosed`·`tagged_closer` 는
+> `fixClosingFences` 가 늘 하던 대로 치유되고, `mid_line` 은 그대로 남으며 그 파일에는 언어 태그가 붙지
+> 않습니다(`normalizeCodeBlocks` 가 펜스 짝을 확정할 수 없어 전체를 건너뜀). 진행한 사실은
+> `[INDEX] {파일} — 코드 펜스 문제 N건을 안고 진행합니다` 경고 로그로 남습니다. 409 시점에는 파일이 디스크에
+> 없으므로 다음 디렉터리 동기화가 그 파일을 기본 옵션으로 몰래 인덱싱하는 일도 없습니다.
+
 #### LLM 응답 파라미터
 
 > **temperature와 최대 출력 토큰**은 각각 `LLM_TEMPERATURE`, `LLM_MAX_TOKENS` 환경변수로 설정할 수 있습니다(§6.18로 실제 적용되도록 수정됨). **`LLM_MAX_TOKENS`도 §6.26 A6 이후 핫 수정 대상입니다**(범위 1,000~32,000) — 단순한 출력 상한이 아니라 대화 이력 예산(×0.5)·MD 교정 섹션 크기·인덱싱 출력 예약·컨텍스트 입력 예산이 전부 여기서 파생되므로, 컨텍스트 압박을 조정할 때 가장 크게 듣는 손잡이입니다. LLM temperature는 네 가지 모두 `/settings`에서 핫 수정 가능합니다 — 일반/RAG temperature(`LLM_TEMPERATURE`, 기본 0.0, 범위 **0.0~0.3**), Direct(잡담) 전용 `DIRECT_LLM_TEMPERATURE`(기본 0.1, 범위 **0.0~1.0**), 인덱싱/백그라운드 전용 `LLM_INDEXING_TEMPERATURE`(기본 0.0, 범위 **0.0~0.1**), 응답 모드 C(응용) 전용 `CREATIVE_LLM_TEMPERATURE`(기본 0.7, 범위 **0.0~1.0**). → [§3.2 LLM 응답 파라미터](#32-환경변수-전체-목록) 참조
