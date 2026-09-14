@@ -522,7 +522,7 @@ LLM_ROUTING_MODE=QUALITY_FIRST
 
 #### LLM 교정 건너뛰기 (`skipLlmCorrection`, MD 전용)
 
-업로드 화면의 "LLM 교정 건너뛰기 (MD)" 체크박스(요청 파라미터 `skipLlmCorrection=true`, REST
+업로드 화면의 "LLM 교정 건너뛰기" 체크박스(요청 파라미터 `skipLlmCorrection=true`, REST
 `POST /api/v1/documents` 도 동일). **`.md` 파일에만 적용**되며 다른 형식에서는 무시됩니다 — DOCX/PPTX/PDF/TXT
 의 마크다운은 변환기가 만든 것이라 LLM 교정을 거쳐야 쓸 만해지지만, `.md` 는 사람이 쓴 문서라 모델이
 문장을 손대는 것을 원치 않는 경우가 있기 때문입니다. 화면에서는 선택된 파일에 `.md` 가 없으면 체크박스가
@@ -1963,8 +1963,8 @@ curl -X POST http://localhost:8080/api/v1/chat \
 | 삭제된 문서 원본 | `DATA_DIR/documents/backup/` | 문서 삭제 시 원본이 여기로 이동(즉시 삭제 아님). 저장 상한 집계에서 **제외**되며 보존 정책 3규칙으로 정리됨 — §"업로드 크기 제한" 참조. `syncDirectory()` 의 비재귀 스캔 아래라 새 파일로 재검출되지 않음 |
 | 추출된 이미지 | `DATA_DIR/images/{imageId}/` | `imageId`는 문서 SHA-256 앞 16자(문서명이 아닌 내용 기반 키) — 문서 삭제 시 함께 삭제되나, 내용이 동일한 다른 문서가 남아 있으면 보존 |
 | 지식 제안 본문 이미지 | `DATA_DIR/images/submissions/` | 사용자가 업로드한 제안 본문 이미지(§6.9). 파일명은 내용 SHA-256 앞 16자 + 확장자라 같은 그림은 한 벌만 저장되고 **여러 제안이 공유**할 수 있습니다 — 그래서 삭제는 참조 세기 방식입니다(반려·철회 시 + 기동 시 24시간 지난 미참조 파일 스윕). 디렉터리 이름이 문자열 `submissions`이므로 16자리 hex인 `{imageId}`와 절대 충돌하지 않습니다 |
-| DOCX 변환 MD (원본) | `DATA_DIR/converted/{docId}.md` | DOCX 인덱싱 시 자동 생성; 문서 삭제 시 함께 삭제 |
-| DOCX 변환 MD (교정본) | `DATA_DIR/converted/{docId}_corrected.md` | LLM 포맷 교정 후 저장; 실제 인덱싱 소스; 수동 편집 후 벡터 스토어 관리 페이지에서 ↺ 재인덱싱 가능 |
+| 변환 MD (원본) | `DATA_DIR/converted/{docId}.md` | DOCX·TXT·PPTX·PDF(비스캔)·MD 인덱싱 시 자동 생성(MD는 업로드한 파일 그대로, 스캔 PDF는 없음); 문서 삭제 시 함께 삭제 |
+| 변환 MD (교정본) | `DATA_DIR/converted/{docId}_corrected.md` | LLM 포맷 교정 후 저장("LLM 교정 건너뛰기"로 올린 MD도 결정적 정리 결과가 여기 저장됨); 실제 인덱싱 소스; 수동 편집 후 벡터 스토어 관리 페이지에서 ↺ 재인덱싱 가능 |
 | 인덱스 레지스트리 | `doc_registry` 테이블 — `SQLITE_VEC_DB_PATH`를 **비웠으면** `DATA_DIR/memory.db`, **설정했으면 그 벡터 DB 파일**([§6.3.1](#631-sqlite-파일별-테이블-구성)) | SHA-256 기반 변경 감지. 문서 저장소는 사용자별 격리 없이 공유됨(`DocRegistry.SHARED`) — `userId` 파라미터는 API 시그니처상 존재하나 실제로는 무시됨 |
 | 벡터 임베딩 | chroma: Chroma 서버(로컬 `data/chroma/`, Docker Compose `chroma_data` 볼륨) / sqlite-vec: `DATA_DIR/memory.db`(기본) 또는 `app.vectorstore.sqlite-vec.db-path` 설정 시 별도 `vector.db` | 백엔드 전환 시 벡터 공유 안 됨(§3.1) |
 | 대화 이력 + LLM 사용량 | 인덱스 레지스트리와 **같은 파일** (위 행 참조 — `memory.db` 또는 벡터 DB 파일) | WAL 모드; 메시지 메타데이터(토큰·시간·프로바이더) 포함. 파일별 테이블 구성은 아래 [§6.3.1](#631-sqlite-파일별-테이블-구성) |
@@ -2498,7 +2498,7 @@ mvn test -Dtest=SearchQualityEvaluationTest -Dsearch-eval.enabled=true
 | 청크 재인덱싱 | 편집 패널의 **이 청크만 재인덱싱** 버튼(`AdminService.reindexChunk()`) — 저장된 텍스트 기준으로 그 청크만 재임베딩 + FTS 재색인(id 보존, upsert). "키워드 재생성" 체크 시 `KeywordExtractor`를 그 청크에만 다시 실행(LLM 1회) |
 | 청크 삭제 | 개별 청크 즉시 제거. sqlite-vec는 `vec_document_chunks`+`vec_embeddings` 두 테이블 동기 삭제 |
 | 문서 레지스트리 | 인덱싱된 전체 문서 목록 + 문서별 청크 바로 조회 (백엔드 무관, SQLite `doc_registry` 기반) |
-| MD 재인덱싱 (↺ 버튼) | `{docId}_corrected.md`(없으면 `{docId}.md`)를 읽어 청크 재생성·재인덱싱 — DOCX·TXT·PPTX·PDF(스캔 아님) 지원, 원본 재업로드 불필요 (스캔 PDF는 MD 파일이 없어 미지원) |
+| MD 재인덱싱 (↺ 버튼) | `{docId}_corrected.md`(없으면 `{docId}.md`)를 읽어 청크 재생성·재인덱싱 — DOCX·TXT·PPTX·PDF(스캔 아님)·MD 지원, 원본 재업로드 불필요 (스캔 PDF는 MD 파일이 없어 미지원). 시작 전 사전 점검(코드 펜스 결함·편집된 청크)에 걸리면 확인 대화상자로 묻고 나서 진행 — §7.2 |
 
 > **청크 정렬**: 두 백엔드 모두 `doc_id` → `chunk_index`(인덱싱 시 각 청크에 부여되는 0-based 문서 내 위치, `MetaKey.CHUNK_INDEX`) 순으로 정렬됩니다 — 청크 id가 아니라 문서 원본 내용 순서 그대로 표시됩니다. sqlite-vec는 `ORDER BY doc_id, CAST(json_extract(metadata, '$.chunk_index') AS INTEGER), spring_doc_id`로 DB에서 직접 정렬합니다. Chroma의 `get()` API는 서버 측 ORDER BY를 지원하지 않으므로, 매치되는 청크 전체를 최대 `AdminService.CHUNK_FETCH_CAP`(10,000건)까지 가져온 뒤 애플리케이션(Java)에서 정렬·페이지네이션합니다 — 컬렉션(또는 docId 필터 결과)이 이 상한을 넘으면 뒤쪽 청크는 조회되지 않습니다.
 
@@ -2508,11 +2508,15 @@ mvn test -Dtest=SearchQualityEvaluationTest -Dsearch-eval.enabled=true
 
 1. `data/converted/{docId}_corrected.md` 파일을 텍스트 에디터로 직접 수정
 2. 벡터 스토어 관리 페이지 문서 레지스트리에서 해당 문서의 ↺ 버튼 클릭
+2-bis. **사전 점검**(`force=false`, 읽기 전용 — 아무것도 바꾸지 않고 LLM/임베딩 호출도 없음): 서버가 두 가지를 먼저 확인하고, 하나라도 걸리면 작업을 시작하지 않은 채 `409 {status:"preflight_warnings", editedChunks, problems:[{line,kind,message}]}` 로 되돌립니다. 화면은 이를 하나의 확인 대화상자로 보여 주고([확인] → `force=true` 로 재요청 / [취소] → 중지) —
+   - **코드 펜스 결함**(`MarkdownCorrectionService.findFenceProblems()`): 닫는 펜스에 언어 태그(`tagged_closer`) · 문서 끝까지 안 닫힘(`unclosed`, 여는 줄 번호로 보고) · 줄 중간 ```(`mid_line`). 재인덱싱은 아래 3단계에서 `fixClosingFences`/`normalizeCodeBlocks` 를 **돌리지 않으므로**(§7.3) 결함이 그대로 청크에 박힙니다 — 그래서 미리 보여 주고 고칠 기회를 줍니다. 진행하면 `[REINDEX] {파일} — 코드 펜스 문제 N건을 안고 진행합니다` 경고 로그가 남습니다.
+   - **손으로 편집한 청크 수**(`MetaKey.EDITED_AT` 가 찍힌 청크, `AdminService.countEditedChunks()`): 재인덱싱은 MD 파일로 청크를 다시 만들기 때문에 §7.1 청크 편집(텍스트·키워드·요약)은 전부 사라집니다. 편집 시각은 편집이 일어나면 항상 찍히므로 본문만 고친 청크도 셉니다.
+   두 결과를 한 응답에 함께 실어 한 번만 묻습니다 — 연달아 두 번 물으면 "확인 두 번 누르기"가 습관이 돼 경고가 무의미해지기 때문입니다.
 3. 결정적(비-LLM) MD 정리 — 존재하지 않는 이미지 마커 제거 → 소제목 번호 재검증 → 마크다운 후처리 (§7.3 참고, 변경 있으면 MD 파일에도 반영)
 4. 정리된 MD 기준으로 청크 분할 → 키워드 추출(LLM) → 활성 백엔드에 재등록
 5. 신규 청크 저장이 끝난 뒤에야 기존 벡터 청크 삭제 — 활성 백엔드(chroma 또는 sqlite-vec) (MD 파일·이미지 보존, 저장 실패 시 기존 데이터 보존)
 
-> **API 직접 호출**: `POST /admin/documents/{docId}/reindex`
+> **API 직접 호출**: `POST /admin/documents/{docId}/reindex[?force=true]` — `force` 없이 부르면 위 사전 점검이 그대로 적용돼 409 가 올 수 있습니다.
 
 ### 7.2-bis 청크 단위 재인덱싱 (`POST /admin/chunks/{chunkId}/reindex`)
 
@@ -2529,7 +2533,7 @@ mvn test -Dtest=SearchQualityEvaluationTest -Dsearch-eval.enabled=true
 ### 7.3 주의사항
 
 - **임베딩 미갱신 (청크 편집만)**: 청크 텍스트를 편집 패널의 "저장" 버튼으로만 수정하면 벡터 임베딩과 FTS 키워드 인덱스가 재계산되지 않습니다. 검색에도 반영하려면 위 §7.2-bis "이 청크만 재인덱싱" 버튼을 사용하거나, 문서 전체를 갱신하려면 MD 파일 수정 후 ↺ 재인덱싱을 사용하세요.
-- **MD 재인덱싱 대상**: DOCX·TXT·PPTX·PDF(스캔 아님) 업로드 시 생성된 `_corrected.md` 파일이 없으면 `{docId}.md` 원본으로 fallback됩니다. 스캔 PDF처럼 MD 파일 자체가 없는 문서는 재인덱싱 불가 (에러 메시지 표시).
+- **MD 재인덱싱 대상**: DOCX·TXT·PPTX·PDF(스캔 아님)·MD 업로드 시 생성된 `_corrected.md` 파일이 없으면 `{docId}.md` 원본으로 fallback됩니다. 스캔 PDF처럼 MD 파일 자체가 없는 문서는 재인덱싱 불가 (에러 메시지 표시).
 - **소제목 번호 재검증**: 재인덱싱 시 저장된 MD에 이미 번호 매겨진 헤딩이 있으면 현재 헤딩 구조 기준으로 다시 계산해 파일에도 반영합니다(PPTX 제외 — [§3.3 소제목 숫자 생성](#33-applicationproperties-전용-설정) 참고). 번호가 원래 없던 문서에는 새로 번호를 붙이지 않습니다.
 - **마크다운 후처리 재적용**: 재인덱싱 시 결정적(비-LLM) 정리도 다시 적용됩니다 — `[DOCUMENT]` 마커·내용 없는 `-` 줄 제거, 코드 블록·표 앞뒤 빈 줄 보장, 연속 빈 줄을 1개로 축소(모든 형식 대상, PPTX 포함). 코드펜스 언어 보정(`fixClosingFences`/`normalizeCodeBlocks`)은 재인덱싱에 **포함되지 않습니다** — MD를 직접 편집한 뒤 재인덱싱하면 코드 블록 안의 의도된 빈 줄이 지워지거나 펜스 태그가 잘못 벗겨질 위험이 있어, 매번 감수하지 않고 필요할 때(재업로드)만 적용되도록 남겨둔 설계입니다. 상세는 [PIPELINE.md §6.4](PIPELINE.md#64-문서-타입별-처리-상세) 참고.
 - **청크 단독 삭제 vs. 문서 삭제**: 청크를 개별 삭제해도 SQLite `doc_registry` 테이블의 레지스트리 항목은 남습니다. 문서 전체 제거는 Documents 페이지 또는 `DELETE /api/v1/documents/{docId}`를 사용하세요.

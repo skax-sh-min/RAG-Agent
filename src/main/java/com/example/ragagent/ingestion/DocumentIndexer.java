@@ -142,10 +142,11 @@ public class DocumentIndexer {
         log.debug("[INDEX] docId={}, imageId={}, type={}, sha256={}", docId, imageId, docType, sha256);
 
         // Preserve tags on operator re-index / directory sync (those paths carry no tag input):
-        // the request has no tags, but they live in the FTS index under the prior docId
-        // (staleDocId when content changed, else this docId). Read BEFORE the delete below
-        // wipes those rows. Interactive single upload keeps its explicit tags — an empty list
-        // there means the user intentionally cleared them, so we do not auto-restore.
+        // the request has no tags, but they live in doc_registry.tags under the prior docId
+        // (staleDocId when content changed, else this docId). Read BEFORE the stale row is
+        // removed at the end of this method (deleteArtifacts). Interactive single upload keeps
+        // its explicit tags — an empty list there means the user intentionally cleared them, so
+        // we do not auto-restore.
         String priorDocId = req.staleDocId() != null ? req.staleDocId() : docId;
         List<String> effectiveTags = req.tags();
         if (effectiveTags.isEmpty() && req.parallelGate() != null) {
@@ -440,7 +441,7 @@ public class DocumentIndexer {
         Path mdPath = resolveMdPath(docId);
         if (mdPath == null) {
             throw new IllegalStateException(
-                    "MD 파일이 없습니다 (DOCX/TXT/PPTX/PDF 문서만 MD 재인덱싱 지원): " + docId);
+                    "MD 파일이 없습니다 (스캔 PDF처럼 MD로 변환되지 않은 문서는 재인덱싱할 수 없습니다): " + docId);
         }
 
         log.info("[REINDEX] 시작: docId={}, src={}", docId, mdPath.getFileName());
@@ -481,7 +482,7 @@ public class DocumentIndexer {
         log.debug("[REINDEX] 청크 분할: {}섹션 → {}청크 (granular={})", rawDocs.size(), chunks.size(), granular);
         onProgress.accept(IndexingProgressEvent.of("chunking", 0, chunks.size(), filename,
                 chunks.size() + "개 청크로 분할 완료"));
-        // Keep tags across re-index (same docId): read from FTS before the old rows are removed.
+        // Keep tags across re-index (same docId): read from doc_registry.tags (the authoritative source).
         List<String> preservedTags = restoreTags(docId);
         List<Document> tagged  = tagMetadata(chunks, docId, filename, version, docType, sha256, DocRegistry.SHARED, preservedTags);
 
