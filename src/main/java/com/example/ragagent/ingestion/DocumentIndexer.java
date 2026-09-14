@@ -206,8 +206,17 @@ public class DocumentIndexer {
             String rawMd = Files.readString(req.path());
             Files.createDirectories(rawMdPath.getParent());
             Files.writeString(rawMdPath, rawMd);
+            if (req.skipLlmCorrection()) {
+                // The LLM pass is the only thing that would rewrite a fence the author got wrong, so
+                // without it the defects go straight to the deterministic passes. The operator has
+                // already been shown them by the upload pre-flight (DocumentController, same contract
+                // as reindexFromMd's checkFenceHealth) and chose to proceed — this log is the record.
+                warnFenceProblems("[INDEX]", req.filename(), MarkdownCorrectionService.findFenceProblems(rawMd));
+                req.onProgress().accept(IndexingProgressEvent.of("correcting", 0, 0, req.filename(),
+                        "LLM 교정 건너뜀 — 서식 정리만 적용"));
+            }
             String sourceMd = correctionService.correct(rawMd, docId, correctedMdPath,
-                    req.addImageDescriptions(), req.addHeadingNumbers(), false,
+                    req.addImageDescriptions(), req.addHeadingNumbers(), false, req.skipLlmCorrection(),
                     (done, total) -> req.onProgress().accept(
                             IndexingProgressEvent.of("correcting", done, total, req.filename(),
                                     done + "/" + total + " 섹션 교정 중")),
@@ -381,6 +390,34 @@ public class DocumentIndexer {
         }
     }
 
+    /**
+     * Read-only pre-flight for a {@code .md} upload that skips the LLM correction pass
+     * ({@link IndexRequest#skipLlmCorrection()}) — the upload-time twin of {@link #checkFenceHealth(String)}.
+     * Reports the fence defects in the file at {@code mdFile} so the operator can fix the source or
+     * proceed before anything is persisted; a file that cannot be read yields an empty list (that is
+     * an upload error, not a fence problem). Nothing is modified and no LLM call is made.
+     */
+    public List<MarkdownCorrectionService.FenceProblem> checkFenceHealth(Path mdFile) {
+        try {
+            return MarkdownCorrectionService.findFenceProblems(Files.readString(mdFile));
+        } catch (IOException e) {
+            log.warn("[INDEX] 펜스 사전 점검용 MD 읽기 실패: {}, {}", mdFile.getFileName(), e.getMessage());
+            return List.of();
+        }
+    }
+
+    /** Fence defects are only logged, never repaired, on the two paths that take a hand-authored MD
+     *  as-is (re-index, and a {@code .md} upload with the LLM pass skipped) — the operator already
+     *  saw them in the pre-flight and chose to proceed; this line is the record of what they
+     *  proceeded with. */
+    private static void warnFenceProblems(String tag, String filename,
+                                          List<MarkdownCorrectionService.FenceProblem> fenceProblems) {
+        if (fenceProblems.isEmpty()) return;
+        log.warn("{} {} — 코드 펜스 문제 {}건을 안고 진행합니다: {}", tag, filename, fenceProblems.size(),
+                String.join(", ", fenceProblems.stream()
+                        .map(p -> p.line() + "행(" + p.kind() + ")").toList()));
+    }
+
     /** The MD file {@link #reindexFromMd} would read — corrected one first, raw fallback — or
      *  {@code null} when neither exists (scanned PDF/image documents never produce one). */
     private Path resolveMdPath(String docId) {
@@ -421,13 +458,7 @@ public class DocumentIndexer {
         // re-run the rewriting passes (see postProcessIfNeeded). The operator has already been asked
         // to proceed or stop by the pre-flight check (checkFenceHealth); this log is the record of
         // what they proceeded with.
-        List<MarkdownCorrectionService.FenceProblem> fenceProblems =
-                MarkdownCorrectionService.findFenceProblems(md);
-        if (!fenceProblems.isEmpty()) {
-            log.warn("[REINDEX] {} — 코드 펜스 문제 {}건을 안고 진행합니다: {}", filename, fenceProblems.size(),
-                    String.join(", ", fenceProblems.stream()
-                            .map(p -> p.line() + "행(" + p.kind() + ")").toList()));
-        }
+        warnFenceProblems("[REINDEX]", filename, MarkdownCorrectionService.findFenceProblems(md));
         md = removeMissingImageMarkers(md, mdPath, filename);
         md = reapplyHeadingNumbersIfNeeded(md, mdPath, filename);
         md = postProcessIfNeeded(md, mdPath, filename);

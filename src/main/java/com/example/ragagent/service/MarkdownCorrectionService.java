@@ -299,6 +299,33 @@ public class MarkdownCorrectionService {
                           boolean groupByPage,
                           BiConsumer<Integer, Integer> onSectionDone,
                           BiConsumer<Integer, Integer> onImageDescribed) {
+        return correct(rawMd, docId, correctedOutputPath, addImageDescriptions, addHeadingNumbers,
+                groupByPage, false, onSectionDone, onImageDescribed);
+    }
+
+    /**
+     * Same as the 8-arg overload plus {@code skipLlmCorrection}: {@code true} skips <b>only</b> the
+     * LLM section-by-section rewrite ({@link #correctSection}) — every deterministic pass still
+     * runs ({@link #fixClosingFences}, {@link #normalizeCodeBlocks}, heading numbering when asked,
+     * {@link #postProcessMarkdown}), and the image-description pre-pass stays governed by its own
+     * {@code addImageDescriptions} flag. The result is still written to {@code correctedOutputPath}.
+     *
+     * <p>Meant for a hand-authored {@code .md} upload whose author does not want the model touching
+     * their text. The LLM pass is also what normally wraps unfenced code and repairs odd fences, so
+     * a fence defect in the source is carried into the deterministic passes as-is — the operator is
+     * shown {@link #findFenceProblems} <em>before</em> this runs ({@code DocumentController}'s
+     * upload pre-flight, the same contract the re-index pre-flight has) and decides to fix the file
+     * or proceed. Proceeding heals {@code unclosed}/{@code tagged_closer} the way
+     * {@link #fixClosingFences} always does; a {@code mid_line} fence stays, and
+     * {@link #normalizeCodeBlocks} then declines to tag any block in the document.
+     */
+    public String correct(String rawMd, String docId, Path correctedOutputPath,
+                          boolean addImageDescriptions,
+                          boolean addHeadingNumbers,
+                          boolean groupByPage,
+                          boolean skipLlmCorrection,
+                          BiConsumer<Integer, Integer> onSectionDone,
+                          BiConsumer<Integer, Integer> onImageDescribed) {
         if (rawMd == null || rawMd.isBlank()) return rawMd;
         log.info("[MD_CORRECT] 시작: docId={}, chars={}", docId, rawMd.length());
         // Hot-editable (indexing family) — read fresh per correction run so a /settings override
@@ -313,6 +340,59 @@ public class MarkdownCorrectionService {
                 ? augmentImageDescriptionsWithLocalVision(rawMd, correctedOutputPath, onImageDescribed)
                 : rawMd;
 
+        String result;
+        if (skipLlmCorrection) {
+            // No split, no join: the document reaches the deterministic passes exactly as authored
+            // (re-joining sections with "\n\n" would already be a rewrite the user asked us not to make).
+            log.info("[MD_CORRECT] LLM 교정 건너뜀(사용자 옵션): docId={} — 결정적 정리 패스만 적용", docId);
+            result = preprocessed;
+        } else {
+            List<String> corrected = correctSectionsWithLlm(preprocessed, docId, groupByPage,
+                    onSectionDone, maxConcurrent);
+            if (corrected == null) return rawMd;   // LLM 사용 불가 — 원본 유지 (예전 동작 그대로)
+            result = String.join("\n\n", corrected);
+        }
+        // FIX: a ```lang-tagged CLOSING fence → bare ``` — must run BEFORE normalizeCodeBlocks so its
+        // fence regex sees well-formed pairs.
+        result = fixClosingFences(result);
+        // inferLanguage=true unconditionally: a code block's language tag has nothing to do with the
+        // "소제목 숫자 생성" checkbox, but used to ride along on it (inference only ran inside the
+        // addHeadingNumbers-gated second pass). That left every PPTX — which always forces
+        // addHeadingNumbers=false (see DocumentIndexer's .pptx branch) — and every DOCX/TXT/MD
+        // uploaded with the box unchecked with untagged fences.
+        result = normalizeCodeBlocks(result, true);
+        if (addHeadingNumbers) {
+            // Heading numbering only — code blocks are already normalized + tagged above, and this
+            // pass is fence-aware (skips fence interiors), so there is nothing left for it to polish.
+            result = addHierarchicalHeadingNumbers(result);
+        }
+        // FIX: deterministic final cleanup — blank lines around code blocks/tables, drop leftover
+        // [DOCUMENT] markers and content-less '-' lines (all fence-aware). Runs last. groupByPage is
+        // true only for PPTX (see class javadoc), so it doubles as the isPptx flag here.
+        result = postProcessMarkdown(result, groupByPage);
+        log.info("[MD_CORRECT] 완료: docId={}, {}ms", docId, System.currentTimeMillis() - t0);
+
+        if (correctedOutputPath != null) {
+            try {
+                Files.createDirectories(correctedOutputPath.getParent());
+                Files.writeString(correctedOutputPath, result);
+                log.debug("[MD_CORRECT] 저장: {}", correctedOutputPath);
+            } catch (IOException e) {
+                log.warn("[MD_CORRECT] 파일 저장 실패 {}: {}", correctedOutputPath, e.getMessage());
+            }
+        }
+        return result;
+    }
+
+    /**
+     * The LLM part of {@link #correct}: split into sections, rewrite each in parallel (bounded by
+     * {@code maxConcurrent}), and return them in document order. Returns {@code null} when the
+     * provider is exhausted ({@link LlmProviderExhaustedException}) — the caller then keeps the
+     * raw input untouched.
+     */
+    private List<String> correctSectionsWithLlm(String preprocessed, String docId, boolean groupByPage,
+                                                BiConsumer<Integer, Integer> onSectionDone,
+                                                int maxConcurrent) {
         List<String> sections = groupByPage ? splitByPages(preprocessed) : splitBySections(preprocessed);
         log.debug("[MD_CORRECT] 섹션 {}개 분할 완료 (groupByPage={})", sections.size(), groupByPage);
         int total = sections.size();
@@ -360,42 +440,11 @@ public class MarkdownCorrectionService {
         } catch (CompletionException ce) {
             if (ce.getCause() instanceof LlmProviderExhaustedException) {
                 log.info("[MD_CORRECT] LLM 사용 불가, 원본 유지: docId={}", docId);
-                return rawMd;
+                return null;
             }
             throw ce;
         }
-
-        String result = String.join("\n\n", corrected);
-        // FIX: a ```lang-tagged CLOSING fence → bare ``` — must run BEFORE normalizeCodeBlocks so its
-        // fence regex sees well-formed pairs.
-        result = fixClosingFences(result);
-        // inferLanguage=true unconditionally: a code block's language tag has nothing to do with the
-        // "소제목 숫자 생성" checkbox, but used to ride along on it (inference only ran inside the
-        // addHeadingNumbers-gated second pass). That left every PPTX — which always forces
-        // addHeadingNumbers=false (see DocumentIndexer's .pptx branch) — and every DOCX/TXT/MD
-        // uploaded with the box unchecked with untagged fences.
-        result = normalizeCodeBlocks(result, true);
-        if (addHeadingNumbers) {
-            // Heading numbering only — code blocks are already normalized + tagged above, and this
-            // pass is fence-aware (skips fence interiors), so there is nothing left for it to polish.
-            result = addHierarchicalHeadingNumbers(result);
-        }
-        // FIX: deterministic final cleanup — blank lines around code blocks/tables, drop leftover
-        // [DOCUMENT] markers and content-less '-' lines (all fence-aware). Runs last. groupByPage is
-        // true only for PPTX (see class javadoc), so it doubles as the isPptx flag here.
-        result = postProcessMarkdown(result, groupByPage);
-        log.info("[MD_CORRECT] 완료: docId={}, {}ms", docId, System.currentTimeMillis() - t0);
-
-        if (correctedOutputPath != null) {
-            try {
-                Files.createDirectories(correctedOutputPath.getParent());
-                Files.writeString(correctedOutputPath, result);
-                log.debug("[MD_CORRECT] 저장: {}", correctedOutputPath);
-            } catch (IOException e) {
-                log.warn("[MD_CORRECT] 파일 저장 실패 {}: {}", correctedOutputPath, e.getMessage());
-            }
-        }
-        return result;
+        return corrected;
     }
 
     /**

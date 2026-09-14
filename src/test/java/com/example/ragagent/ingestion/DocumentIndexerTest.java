@@ -114,6 +114,9 @@ class DocumentIndexerTest {
         correctionService = mock(MarkdownCorrectionService.class);
         when(correctionService.correct(any(), any(), any(), anyBoolean(), anyBoolean(), anyBoolean(), any(), any()))
                 .thenAnswer(inv -> inv.getArgument(0));
+        // The .md branch calls the 9-arg overload (skipLlmCorrection) — same pass-through.
+        when(correctionService.correct(any(), any(), any(), anyBoolean(), anyBoolean(), anyBoolean(), anyBoolean(), any(), any()))
+                .thenAnswer(inv -> inv.getArgument(0));
         // reapplyHeadingNumbers delegates to a real instance (no LLM call in that method, so a
         // never-invoked LlmRouter mock is fine) — it's a no-op unless the MD already has a
         // numbered heading, so this is safe as the shared default for every test while still
@@ -656,6 +659,48 @@ class DocumentIndexerTest {
                 file, "memo.txt", "v1", "anonymous", List.of(), e -> {}));
         assertThat(second.docId()).isEqualTo(first.docId());
         assertThat(second.tags()).isEmpty();
+    }
+
+    @Test
+    @DisplayName(".md 업로드 — skipLlmCorrection 은 correct() 의 skip 플래그로 그대로 전달된다(기본 false)")
+    void index_md_forwardsSkipLlmCorrectionFlag() throws IOException {
+        Path md = tmpDir.resolve("notes.md");
+        Files.writeString(md, "# 제목\n\n본문입니다.\n");
+
+        indexer.index(IndexRequest.single(md, "notes.md", "v1", "anonymous", List.of(), false, true, true, e -> {}));
+        verify(correctionService).correct(any(), any(), any(), eq(false), eq(true), eq(false), eq(true), any(), any());
+
+        indexer.index(IndexRequest.single(md, "notes.md", "v2", "anonymous", List.of(), false, true, e -> {}));
+        verify(correctionService).correct(any(), any(), any(), eq(false), eq(true), eq(false), eq(false), any(), any());
+    }
+
+    @Test
+    @DisplayName("skipLlmCorrection 은 .md 에만 적용된다 — TXT 는 플래그가 켜져도 LLM 교정 경로(8-arg)를 탄다")
+    void index_txt_ignoresSkipLlmCorrection() throws IOException {
+        Path txt = tmpDir.resolve("plain.txt");
+        Files.writeString(txt, "평문 내용입니다.");
+
+        indexer.index(IndexRequest.single(txt, "plain.txt", "v1", "anonymous", List.of(), false, false, true, e -> {}));
+
+        verify(correctionService).correct(any(), any(), any(), anyBoolean(), anyBoolean(), anyBoolean(), any(), any());
+        verify(correctionService, never())
+                .correct(any(), any(), any(), anyBoolean(), anyBoolean(), anyBoolean(), anyBoolean(), any(), any());
+    }
+
+    @Test
+    @DisplayName("checkFenceHealth(Path) — 업로드 사전 점검: 파일의 펜스 문제를 줄 번호와 함께 보고하고 아무것도 고치지 않는다")
+    void checkFenceHealth_path_reportsProblemsWithoutTouchingFile() throws IOException {
+        Path md = tmpDir.resolve("broken.md");
+        String content = "# 제목\n\n```java\nint x = 1;\n```java\n\n본문\n";
+        Files.writeString(md, content);
+
+        List<MarkdownCorrectionService.FenceProblem> problems = indexer.checkFenceHealth(md);
+
+        assertThat(problems).extracting(MarkdownCorrectionService.FenceProblem::kind)
+                .containsExactly("tagged_closer");
+        assertThat(problems.get(0).line()).isEqualTo(5);
+        assertThat(Files.readString(md)).isEqualTo(content);
+        assertThat(indexer.checkFenceHealth(tmpDir.resolve("missing.md"))).isEmpty();
     }
 
     @Test

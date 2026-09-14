@@ -95,11 +95,29 @@ public class RagService {
                                       boolean addImageDescriptions,
                                       boolean addHeadingNumbers,
                                       Consumer<IndexingProgressEvent> onProgress) throws IOException {
+        return indexDocument(userId, filePath, filename, version, tags,
+                addImageDescriptions, addHeadingNumbers, false, onProgress);
+    }
+
+    /** index with the option to skip the LLM rewrite in MD correction ({@code .md} uploads only —
+     *  see {@link IndexRequest#single(Path, String, String, String, List, boolean, boolean, boolean, Consumer)}). */
+    public DocumentInfo indexDocument(String userId, Path filePath, String filename, String version,
+                                      List<String> tags,
+                                      boolean addImageDescriptions,
+                                      boolean addHeadingNumbers,
+                                      boolean skipLlmCorrection,
+                                      Consumer<IndexingProgressEvent> onProgress) throws IOException {
         DocumentInfo info = indexer.index(IndexRequest.single(
                 filePath, filename, version, userId, tags,
-                addImageDescriptions, addHeadingNumbers, onProgress));
+                addImageDescriptions, addHeadingNumbers, skipLlmCorrection, onProgress));
         docRegistry.save();
         return info;
+    }
+
+    /** Read-only code-fence pre-flight for a {@code .md} upload that skips the LLM correction pass —
+     *  see {@link DocumentIndexer#checkFenceHealth(Path)}. */
+    public List<MarkdownCorrectionService.FenceProblem> checkUploadFenceHealth(Path mdFile) {
+        return indexer.checkFenceHealth(mdFile);
     }
 
     public SyncResult syncDirectory(String userId, String version) throws IOException {

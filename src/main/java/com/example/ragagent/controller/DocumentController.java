@@ -96,16 +96,25 @@ public class DocumentController {
     /**
      * Accepts the file synchronously (transfer + magic-byte check), then starts indexing
      * asynchronously on a virtual thread. Returns {taskId} immediately (HTTP 202).
+     *
+     * <p>{@code skipLlmCorrection=true} (a {@code .md} file only — ignored for every other type)
+     * takes the author's markdown without the LLM rewrite. Since that rewrite is what normally
+     * repairs a broken code fence, a read-only pre-flight runs first ({@link #fencePreflight}) and,
+     * unless {@code force=true}, a {@code 409} listing the defects comes back <em>before anything is
+     * persisted</em> — the same contract as the re-index pre-flight in {@code AdminController}. The
+     * client shows the list and re-sends with {@code force=true} if the operator chooses to proceed.
      */
     @PostMapping("/ui/documents/upload")
     @ResponseBody
-    public ResponseEntity<Map<String, String>> uploadDocument(
+    public ResponseEntity<?> uploadDocument(
             ThreadContext ctx,
             @RequestParam MultipartFile file,
             @RequestParam(defaultValue = "latest") String version,
             @RequestParam(required = false) String tags,
             @RequestParam(name = "addImageDescriptions", defaultValue = "false") boolean addImageDescriptions,
-            @RequestParam(name = "addHeadingNumbers", defaultValue = "false") boolean addHeadingNumbers) throws IOException {
+            @RequestParam(name = "addHeadingNumbers", defaultValue = "false") boolean addHeadingNumbers,
+            @RequestParam(name = "skipLlmCorrection", defaultValue = "false") boolean skipLlmCorrection,
+            @RequestParam(name = "force", defaultValue = "false") boolean force) throws IOException {
         if (file.isEmpty()) {
             return ResponseEntity.badRequest().build();
         }
@@ -131,6 +140,16 @@ public class DocumentController {
             return rejected(HttpStatus.BAD_REQUEST, e.getMessage());
         }
         final String userId = ctx.userId();
+        // On the staged copy, BEFORE persisting: a 409 here must leave nothing on disk, or the
+        // next directory sync would index the file the operator just declined (with defaults).
+        final boolean skipLlm = skipLlmCorrection && isMarkdown(filename);
+        if (skipLlm && !force) {
+            var problems = fencePreflight(tmp, filename);
+            if (problems != null) {
+                try { Files.deleteIfExists(tmp); } catch (IOException ignored) {}
+                return ResponseEntity.status(HttpStatus.CONFLICT).body(problems);
+            }
+        }
         Path dest;
         try {
             // Persist into documentsDir (not just the temp stage) — directory sync treats any
@@ -152,13 +171,14 @@ public class DocumentController {
         Thread worker = Thread.ofVirtual().name("idx-upload-" + taskId).start(() -> {
             try {
                 DocumentInfo info = ragService.indexDocument(userId, docPath, fname, ver, tagList,
-                    addImageDescriptions, addHeadingNumbers,
+                    addImageDescriptions, addHeadingNumbers, skipLlm,
                         event -> progressService.publish(taskId, event));
                 progressService.publish(taskId, IndexingProgressEvent.done(info));
                 auditLogger.log("document.upload", info.docId(),
                     Map.of("filename", fname, "version", ver, "chunks", info.chunks(),
                         "addImageDescriptions", addImageDescriptions,
-                        "addHeadingNumbers", addHeadingNumbers));
+                        "addHeadingNumbers", addHeadingNumbers,
+                        "skipLlmCorrection", skipLlm));
             } catch (IndexingCancelledException e) {
                 // progressService.cancel() already published the terminal 'cancelled' event.
                 log.info("[UPLOAD] cancelled by user: taskId={} file={}", taskId, fname);
@@ -171,6 +191,29 @@ public class DocumentController {
         progressService.registerWorker(taskId, worker);
 
         return ResponseEntity.accepted().body(Map.of("taskId", taskId));
+    }
+
+    private static boolean isMarkdown(String filename) {
+        return filename.toLowerCase().endsWith(".md");
+    }
+
+    /**
+     * Read-only fence pre-flight for a {@code .md} upload with {@code skipLlmCorrection=true}: the
+     * {@code 409} body when the staged file has code-fence defects, {@code null} when it is clean.
+     * Same shape as the re-index pre-flight body ({@code status=preflight_warnings} + {@code problems}
+     * with {@code line}/{@code kind}/{@code message}) so both clients render it the same way. The
+     * defects are listed, never repaired here — the operator fixes the file or re-sends with
+     * {@code force=true}, and {@code DocumentIndexer} then logs what they proceeded with.
+     */
+    private Map<String, Object> fencePreflight(Path stagedFile, String filename) {
+        var problems = ragService.checkUploadFenceHealth(stagedFile);
+        if (problems.isEmpty()) return null;
+        log.info("[UPLOAD] 사전 확인 요청: file={}, 펜스 문제={}건 (LLM 교정 건너뜀)", filename, problems.size());
+        return Map.of(
+                "status", "preflight_warnings",
+                "filename", filename,
+                "problems", problems.stream().map(p -> Map.of(
+                        "line", p.line(), "kind", p.kind(), "message", p.message())).toList());
     }
 
     /** Rejection body for the upload XHR — {@code message} carries the server's own reason, which
@@ -348,15 +391,20 @@ public class DocumentController {
 
     // ── REST API ──────────────────────────────────────────────────────
 
+    /** Same contract as the HTMX upload for {@code skipLlmCorrection}/{@code force} — a {@code .md}
+     *  with fence defects gets a {@code 409} pre-flight body instead of a {@link DocumentInfo}
+     *  unless {@code force=true}. */
     @PostMapping("/api/v1/documents")
     @ResponseBody
-    public ResponseEntity<DocumentInfo> uploadDocumentApi(
+    public ResponseEntity<?> uploadDocumentApi(
             ThreadContext ctx,
             @RequestParam("file") MultipartFile file,
             @RequestParam(value = "version", defaultValue = "latest") String version,
             @RequestParam(value = "tags", required = false) String tags,
             @RequestParam(name = "addImageDescriptions", defaultValue = "false") boolean addImageDescriptions,
-            @RequestParam(name = "addHeadingNumbers", defaultValue = "false") boolean addHeadingNumbers) throws IOException {
+            @RequestParam(name = "addHeadingNumbers", defaultValue = "false") boolean addHeadingNumbers,
+            @RequestParam(name = "skipLlmCorrection", defaultValue = "false") boolean skipLlmCorrection,
+            @RequestParam(name = "force", defaultValue = "false") boolean force) throws IOException {
 
         if (file.isEmpty()) return ResponseEntity.badRequest().build();
 
@@ -371,6 +419,14 @@ public class DocumentController {
         Path staged = UploadValidator.stageToTemp(file, filename);
 
         String userId = ctx.userId();
+        boolean skipLlm = skipLlmCorrection && isMarkdown(filename);
+        if (skipLlm && !force) {
+            var problems = fencePreflight(staged, filename);
+            if (problems != null) {
+                try { Files.deleteIfExists(staged); } catch (IOException ignored) {}
+                return ResponseEntity.status(HttpStatus.CONFLICT).body(problems);
+            }
+        }
         Path dest;
         try {
             dest = persistToDocumentsDir(staged, filename, ragService.userDocumentsDir(userId));
@@ -379,11 +435,12 @@ public class DocumentController {
         }
         DocumentInfo info = ragService.indexDocument(userId, dest,
                 dest.getFileName().toString(), version, tagList,
-                addImageDescriptions, addHeadingNumbers, e -> {});
+                addImageDescriptions, addHeadingNumbers, skipLlm, e -> {});
         auditLogger.log("document.upload", info.docId(),
                 Map.of("filename", filename, "version", version, "chunks", info.chunks(),
                 "addImageDescriptions", addImageDescriptions,
-                "addHeadingNumbers", addHeadingNumbers));
+                "addHeadingNumbers", addHeadingNumbers,
+                "skipLlmCorrection", skipLlm));
         return ResponseEntity.ok(info);
     }
 
