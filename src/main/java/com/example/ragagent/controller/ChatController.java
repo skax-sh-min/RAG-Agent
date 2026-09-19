@@ -333,17 +333,24 @@ public class ChatController {
                 settingsService.effectiveResponseMode(request.responseMode()));
     }
 
+    /**
+     * 입력 중 추천 목록. {@code threadId} 는 화면이 폼의 hidden 값을 그대로 보낸다 — 세션의
+     * {@code ThreadContext.threadId()} 가 아니다(그 값은 어떤 컨트롤러도 읽지 않는다, CLAUDE.md).
+     * 이 값으로 항목의 {@code origin} 이 갈리고(현재 대화 = 이동, 나머지 = 재사용), 비워 보내면
+     * 전부 재사용 항목으로만 나온다.
+     */
     @GetMapping("/api/v1/questions/suggest")
     @ResponseBody
     public List<QuestionReuseService.Suggestion> suggestQuestions(
             ThreadContext ctx,
             @RequestParam(name = "q", defaultValue = "") String q,
             @RequestParam(name = "scope", defaultValue = "shared") String scope,
+            @RequestParam(name = "threadId", required = false) String threadId,
             @RequestParam(name = "limit", defaultValue = "12") int limit) {
         if (questionReuseService == null || q == null || q.strip().length() < 2) return List.of();
         // 이전 질문 제안은 최대 12개 (요청이 더 크게 와도 서버에서 자른다)
         int bounded = Math.max(1, Math.min(limit, MAX_QUESTION_SUGGESTIONS));
-        return questionReuseService.suggest(ctx.userId(), QuestionReuseService.Scope.SHARED, q, bounded);
+        return questionReuseService.suggest(ctx.userId(), threadId, QuestionReuseService.Scope.SHARED, q, bounded);
     }
 
     @PostMapping("/api/v1/questions/reuse")

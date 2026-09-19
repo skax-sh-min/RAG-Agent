@@ -8,6 +8,7 @@ import org.junit.jupiter.api.Test;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -93,7 +94,7 @@ class QuestionReuseServiceTest {
         QuestionReuseRepository repo = mock(QuestionReuseRepository.class);
         QuestionReuseService service = new QuestionReuseService(repo, mock(DocRegistry.class));
 
-        when(repo.findSuggestionCandidates(anyString(), anyBoolean(), anyString(), anyInt()))
+        when(repo.findSuggestionCandidates(anyString(), anyBoolean(), anyString(), any(), anyInt()))
                 .thenReturn(List.of(
                         new QuestionReuseRepository.CandidateTurn(12L, "u1", "t1", "Spring Boot 설정 방법", "a1", "2026-08-05 10:00:00"),
                         new QuestionReuseRepository.CandidateTurn(11L, "u1", "t2", "spring   boot   설정 방법", "a2", "2026-08-05 09:00:00"),
@@ -107,7 +108,7 @@ class QuestionReuseServiceTest {
                 .thenReturn(java.util.Map.of("c1", "h1"));
 
         List<QuestionReuseService.Suggestion> suggestions =
-                service.suggest("u1", QuestionReuseService.Scope.SHARED, "spring", 10);
+                service.suggest("u1", null, QuestionReuseService.Scope.SHARED, "spring", 10);
 
         assertThat(suggestions).hasSize(2);
         assertThat(suggestions.get(0).question()).isEqualTo("Spring Boot 설정 방법");
@@ -122,7 +123,7 @@ class QuestionReuseServiceTest {
 
         String longQuestion = "Spring Boot에서 보안 설정을 운영 환경에서 단계별로 점검하는 상세 절차를 알려주세요";
 
-        when(repo.findSuggestionCandidates(anyString(), anyBoolean(), anyString(), anyInt()))
+        when(repo.findSuggestionCandidates(anyString(), anyBoolean(), anyString(), any(), anyInt()))
                 .thenReturn(List.of(
                         new QuestionReuseRepository.CandidateTurn(20L, "u1", "t1", longQuestion, "a1", "2026-08-05 10:00:00"),
                         new QuestionReuseRepository.CandidateTurn(19L, "u1", "t2", "로그인 오류 401 원인", "a2", "2026-08-05 09:00:00")
@@ -135,7 +136,7 @@ class QuestionReuseServiceTest {
                 .thenReturn(java.util.Map.of("c1", "h1"));
 
         List<QuestionReuseService.Suggestion> suggestions =
-                service.suggest("u1", QuestionReuseService.Scope.SHARED, "로그인", 10);
+                service.suggest("u1", null, QuestionReuseService.Scope.SHARED, "로그인", 10);
 
         assertThat(suggestions).hasSize(1);
         assertThat(suggestions.get(0).question()).isEqualTo("로그인 오류 401 원인");
@@ -147,7 +148,7 @@ class QuestionReuseServiceTest {
         QuestionReuseRepository repo = mock(QuestionReuseRepository.class);
         QuestionReuseService service = new QuestionReuseService(repo, mock(DocRegistry.class));
 
-        when(repo.findSuggestionCandidates(anyString(), anyBoolean(), anyString(), anyInt()))
+        when(repo.findSuggestionCandidates(anyString(), anyBoolean(), anyString(), any(), anyInt()))
                 .thenReturn(List.of(
                         new QuestionReuseRepository.CandidateTurn(30L, "u1", "t1", "캐시 설정 방법", "원본 답변", "2026-08-06 10:00:00")
                 ));
@@ -159,7 +160,7 @@ class QuestionReuseServiceTest {
                 .thenReturn(java.util.Map.of("c1", "h1"));
 
         List<QuestionReuseService.Suggestion> suggestions =
-                service.suggest("admin", QuestionReuseService.Scope.SHARED, "캐시", 8);
+                service.suggest("admin", null, QuestionReuseService.Scope.SHARED, "캐시", 8);
 
         assertThat(suggestions).hasSize(1);
         assertThat(suggestions.get(0).question()).isEqualTo("캐시 설정 방법");
@@ -261,4 +262,82 @@ class QuestionReuseServiceTest {
                 assertThat(refs.get(0).label()).isEqualTo("참조 원문 삭제됨");
                 assertThat(refs.get(0).preview()).contains("원본 대화가 삭제되어 출처 미리보기를 표시할 수 없습니다");
         }
+
+    @Test
+    @DisplayName("origin — 현재 대화 / 내 대화 / 다른 사용자로 갈린다")
+    void originOf_distinguishesThreadMineOthers() {
+        var mine    = new QuestionReuseRepository.CandidateTurn(1L, "u1", "t-other", "q", "a", "2026-09-19");
+        var here    = new QuestionReuseRepository.CandidateTurn(2L, "u1", "t-here",  "q", "a", "2026-09-19");
+        var someone = new QuestionReuseRepository.CandidateTurn(3L, "u2", "t-x",     "q", "a", "2026-09-19");
+
+        assertThat(QuestionReuseService.originOf(here,    "u1", "t-here")).isEqualTo(QuestionReuseService.Origin.THREAD);
+        assertThat(QuestionReuseService.originOf(mine,    "u1", "t-here")).isEqualTo(QuestionReuseService.Origin.MINE);
+        assertThat(QuestionReuseService.originOf(someone, "u1", "t-here")).isEqualTo(QuestionReuseService.Origin.OTHERS);
+        // 대화 id 없이 부르면(REST) 현재 대화는 없다 — 같은 대화의 턴도 "내 대화"다.
+        assertThat(QuestionReuseService.originOf(here,    "u1", null)).isEqualTo(QuestionReuseService.Origin.MINE);
+        assertThat(QuestionReuseService.originOf(here,    "u1", " ")).isEqualTo(QuestionReuseService.Origin.MINE);
+    }
+
+    @Test
+    @DisplayName("origin — 공유 게스트 id 로는 내 것/남의 것을 가를 수 없어 '다른 대화'로 접힌다 (현재 대화는 여전히 가려낸다)")
+    void originOf_sharedGuestCannotTellMineFromOthers() {
+        String shared = com.example.ragagent.security.GuestIdentityResolver.SHARED_ID;
+        var here      = new QuestionReuseRepository.CandidateTurn(1L, shared, "t-here",  "q", "a", "2026-09-19");
+        var elsewhere = new QuestionReuseRepository.CandidateTurn(2L, shared, "t-other", "q", "a", "2026-09-19");
+
+        assertThat(QuestionReuseService.originOf(here,      shared, "t-here")).isEqualTo(QuestionReuseService.Origin.THREAD);
+        // 같은 id 라고 "내 대화"로 표시하면 남이 물은 질문까지 전부 내 것으로 뜬다.
+        assertThat(QuestionReuseService.originOf(elsewhere, shared, "t-here")).isEqualTo(QuestionReuseService.Origin.ELSEWHERE);
+    }
+
+    @Test
+    @DisplayName("현재 대화의 항목은 재사용 검증을 거치지 않고, 나머지는 여전히 거친다")
+    void suggest_currentThreadItemsSkipReuseValidation() {
+        QuestionReuseRepository repo = mock(QuestionReuseRepository.class);
+        QuestionReuseService service = new QuestionReuseService(repo, mock(DocRegistry.class));
+
+        when(repo.findSuggestionCandidates(anyString(), anyBoolean(), anyString(), any(), anyInt()))
+                .thenReturn(List.of(
+                        // 현재 대화 — 출처 행이 하나도 없다(Direct 턴). 재사용이라면 탈락할 자리.
+                        new QuestionReuseRepository.CandidateTurn(40L, "u1", "t-here",  "포트 설정 방법", "a1", "2026-09-19 10:00:00"),
+                        // 다른 대화 — 마찬가지로 출처가 없으므로 재사용 검증에서 탈락해야 한다.
+                        new QuestionReuseRepository.CandidateTurn(39L, "u1", "t-other", "포트 변경 방법", "a2", "2026-09-19 09:00:00")
+                ));
+        when(repo.findAllSourceRefs(anyLong())).thenReturn(List.of());
+
+        List<QuestionReuseService.Suggestion> suggestions =
+                service.suggest("u1", "t-here", QuestionReuseService.Scope.SHARED, "포트", 10);
+
+        assertThat(suggestions).hasSize(1);
+        assertThat(suggestions.get(0).turnId()).isEqualTo(40L);
+        assertThat(suggestions.get(0).origin()).isEqualTo(QuestionReuseService.Origin.THREAD);
+        // 현재 대화 항목에 대해서는 출처 조회 자체가 없다 — 검증을 건너뛴다는 뜻.
+        org.mockito.Mockito.verify(repo, org.mockito.Mockito.never()).findAllSourceRefs(40L);
+        org.mockito.Mockito.verify(repo).findAllSourceRefs(39L);
+    }
+
+    @Test
+    @DisplayName("같은 질문이 현재 대화와 다른 대화에 다 있으면 이동 항목(현재 대화)이 남는다")
+    void suggest_dedupKeepsTheCurrentThreadItem() {
+        QuestionReuseRepository repo = mock(QuestionReuseRepository.class);
+        QuestionReuseService service = new QuestionReuseService(repo, mock(DocRegistry.class));
+
+        // 리포지토리는 현재 대화를 먼저 준다(ORDER BY) — 서비스의 중복 제거는 그 순서를 믿는다.
+        when(repo.findSuggestionCandidates(anyString(), anyBoolean(), anyString(), any(), anyInt()))
+                .thenReturn(List.of(
+                        new QuestionReuseRepository.CandidateTurn(50L, "u1", "t-here",  "캐시 설정 방법", "a1", "2026-09-19 09:00:00"),
+                        new QuestionReuseRepository.CandidateTurn(51L, "u2", "t-x",     "캐시  설정 방법", "a2", "2026-09-19 10:00:00")
+                ));
+        when(repo.findAllSourceRefs(anyLong()))
+                .thenReturn(List.of(new QuestionReuseRepository.SourceSnapshot("c1", "d1", "h1")));
+        when(repo.currentChunkHashes(java.util.Set.of("c1")))
+                .thenReturn(java.util.Map.of("c1", "h1"));
+
+        List<QuestionReuseService.Suggestion> suggestions =
+                service.suggest("u1", "t-here", QuestionReuseService.Scope.SHARED, "캐시", 10);
+
+        assertThat(suggestions).hasSize(1);
+        assertThat(suggestions.get(0).turnId()).isEqualTo(50L);
+        assertThat(suggestions.get(0).origin()).isEqualTo(QuestionReuseService.Origin.THREAD);
+    }
 }

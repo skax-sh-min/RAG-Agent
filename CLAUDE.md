@@ -82,7 +82,7 @@ Flow:
 | `service/IndexingProgressService.java` | SSE emitter registry for async upload/sync progress; event buffer prevents race condition; terminal stages: `done`, `error`, `sync_done` |
 | `model/MetaKey.java` | Vector store metadata key constants — always use these, never raw strings |
 | `model/SourceRef.java` | 출처 1건. 검색 진단 수치·응답 참여도·청크 변경 상태를 함께 나르며 전부 nullable(`null` = 측정 안 됨) [↗](documents/PITFALLS.md#modelsourcerefjava) |
-| `service/QuestionReuseService.java` | § 질문 재사용 — 과거 턴의 답변을 LLM 호출 없이 재사용(`/api/v1/questions/reuse`)하고, 그 답변이 아직 유효한지 판정한다 [↗](documents/PITFALLS.md#servicequestionreuseservicejava) |
+| `service/QuestionReuseService.java` | § 질문 재사용 — 과거 턴의 답변을 LLM 호출 없이 재사용(`/api/v1/questions/reuse`)하고, 그 답변이 아직 유효한지 판정한다. 추천 목록(`suggest()`)은 항목마다 `Origin`(`thread`/`mine`/`others`/`elsewhere`)을 붙이며 **`thread`(지금 열린 대화의 턴)는 재사용 검증도, 리포지토리의 재사용 술어도 타지 않는다** — 화면이 그 항목을 재사용 대신 그 질문 위치로의 이동에 쓰기 때문. 공유 게스트 id(`GuestIdentityResolver.SHARED_ID`)로는 내/남을 못 가르므로 `elsewhere` [↗](documents/PITFALLS.md#servicequestionreuseservicejava) |
 | `repository/QuestionReuseRepository.java` | `turn_source_ref` 테이블(런타임 멱등 DDL + 방어적 `ALTER TABLE`로 `answer_share`/`invalidated_at` 추가) [↗](documents/PITFALLS.md#repositoryquestionreuserepositoryjava) |
 | `security/FileTypeDetector.java` | Magic-byte validation for uploads (PDF, DOCX/PPTX, TXT/MD) |
 | `service/DocumentBackupCleaner.java` | §6.15 — `data/documents/backup/` 보존 정책 (최신본 유지 → 보존일 → 용량, 순서대로) [↗](documents/PITFALLS.md#servicedocumentbackupcleanerjava) |

@@ -5,6 +5,8 @@ import com.example.ragagent.ingestion.DocRegistry;
 import com.example.ragagent.model.MetaKey;
 import com.example.ragagent.model.SourceRef;
 import com.example.ragagent.repository.QuestionReuseRepository;
+import com.example.ragagent.security.GuestIdentityResolver;
+import com.fasterxml.jackson.annotation.JsonValue;
 import org.springframework.ai.document.Document;
 import org.springframework.stereotype.Service;
 
@@ -131,29 +133,65 @@ public class QuestionReuseService {
         }
     }
 
-    public List<Suggestion> suggest(String userId, Scope scope, String q, int limit) {
+    /**
+     * 입력 중인 질문에 대한 추천 목록.
+     *
+     * <p>항목마다 {@link Origin}(어디서 온 질문인가)을 함께 돌려준다. <b>현재 대화의 항목은
+     * 재사용 검증({@link #validateTurn})을 거치지 않는다</b> — 그 항목의 클릭은 답변 재사용이
+     * 아니라 그 질문이 있는 자리로의 이동이라, 근거 청크가 그 뒤 바뀌었든 말든 그 자리는
+     * 거기 있다. 같은 이유로 리포지토리도 그 행에는 재사용 술어를 걸지 않는다
+     * ({@link QuestionReuseRepository#findSuggestionCandidates}).
+     *
+     * <p>중복 제거는 후보 순서(현재 대화 → 내 대화 → 그 외 → 최신순)대로 첫 항목을 남기므로,
+     * 같은 질문이 이 대화와 남의 대화에 다 있으면 <em>이동</em> 항목이 남는다.
+     *
+     * @param threadId 지금 열려 있는 대화. {@code null}/공백이면 어떤 항목도 현재 대화로 분류되지
+     *                 않는다(REST 호출)
+     */
+    public List<Suggestion> suggest(String userId, String threadId, Scope scope, String q, int limit) {
         String query = q == null ? "" : q.strip();
         if (query.length() < 2) return List.of();
 
         int fetch = Math.max(limit * 4, 20);
         boolean meOnly = scope == Scope.ME;
         List<QuestionReuseRepository.CandidateTurn> candidates =
-                repository.findSuggestionCandidates(query, meOnly, userId, fetch);
+                repository.findSuggestionCandidates(query, meOnly, userId, threadId, fetch);
 
         List<Suggestion> out = new ArrayList<>();
         Set<String> seenQuestions = new LinkedHashSet<>();
         for (QuestionReuseRepository.CandidateTurn c : candidates) {
             if (isTooLongForSuggestion(c.question())) continue;
             if (isDirectiveOnlyQuestion(c.question())) continue;
-            ValidationResult valid = validateTurn(c.turnId());
-            if (!valid.reusable()) continue;
+            Origin origin = originOf(c, userId, threadId);
+            if (origin != Origin.THREAD) {
+                ValidationResult valid = validateTurn(c.turnId());
+                if (!valid.reusable()) continue;
+            }
             String key = normalizeQuestionKey(c.question());
             if (!seenQuestions.add(key)) continue;
             out.add(new Suggestion(c.turnId(), c.question(), summarize(c.answer()),
-                    scope == Scope.ME ? "me" : "shared"));
+                    scope == Scope.ME ? "me" : "shared", origin));
             if (out.size() >= limit) break;
         }
         return out;
+    }
+
+    /**
+     * 후보 턴이 지금 사용자·대화 기준으로 어디서 온 것인가.
+     *
+     * <p>사용자 비교는 <b>구별이 가능할 때만</b> 한다. no-auth 의 기본 전략({@code guest-identity=shared})
+     * 에서는 모든 방문자가 {@link GuestIdentityResolver#SHARED_ID} 하나를 쓰므로 "내 것"과
+     * "남의 것"이 같은 id 다 — 그대로 비교하면 남이 물은 질문까지 전부 "내 질문"으로 뜬다.
+     * 그래서 그 경우는 {@link Origin#ELSEWHERE}(다른 대화, 누구 것인지는 모름)로 접는다.
+     * 현재 대화 판정은 그 안에서도 성립한다 — 대화 id 는 방문자마다 새로 만들어지기 때문.
+     */
+    static Origin originOf(QuestionReuseRepository.CandidateTurn c, String userId, String threadId) {
+        boolean sameUser = userId != null && userId.equals(c.userId());
+        boolean sameThread = threadId != null && !threadId.isBlank() && threadId.equals(c.threadId());
+        if (sameUser && sameThread) return Origin.THREAD;
+        boolean userDistinguishable = userId != null && !GuestIdentityResolver.SHARED_ID.equals(userId);
+        if (!userDistinguishable) return Origin.ELSEWHERE;
+        return sameUser ? Origin.MINE : Origin.OTHERS;
     }
 
     public ReuseLookup reuseLookup(String userId, Scope scope, long turnId) {
@@ -354,7 +392,31 @@ public class QuestionReuseService {
         }
     }
 
-    public record Suggestion(long turnId, String question, String answerPreview, String scope) {}
+    /**
+     * 추천 항목이 어디서 온 질문인가. JSON 으로는 소문자 코드({@code thread}/{@code mine}/
+     * {@code others}/{@code elsewhere})로 나가고, 화면은 이 값으로 배지와 클릭 동작을 가른다 —
+     * {@code thread} 만 이동이고 나머지는 재사용이다.
+     */
+    public enum Origin {
+        /** 지금 열려 있는 대화에서 이미 물었던 질문 — 클릭은 그 자리로 이동. */
+        THREAD("thread"),
+        /** 내 다른 대화의 질문. */
+        MINE("mine"),
+        /** 다른 사용자의 질문. */
+        OTHERS("others"),
+        /** 다른 대화의 질문인데 누구 것인지 구별할 수 없다(공유 게스트 id). */
+        ELSEWHERE("elsewhere");
+
+        private final String code;
+
+        Origin(String code) { this.code = code; }
+
+        @JsonValue
+        public String code() { return code; }
+    }
+
+    public record Suggestion(long turnId, String question, String answerPreview, String scope,
+                             Origin origin) {}
 
     public record ReuseLookup(boolean reusable, String reason, Long sourceTurnId,
                               String question, String answer, String sourceThreadId,
