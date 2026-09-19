@@ -19,6 +19,17 @@ public class QuestionReuseRepository {
     private static final String DELETED_REFERENCE_TEXT = "참조 원문 삭제됨";
 
     /**
+     * 재사용 턴의 답변을 원본에서 가져오는 조인 — 추천 후보와 재사용 조회가 공유한다.
+     * <b>사용자 조건 없이</b> id 로만 조인한다: 이유는 {@code SqliteMemoryRepository.REUSE_SOURCE_JOIN}
+     * 과 같다(원본이 다른 사용자의 턴인 것이 shared 추천의 정상 경로이고, 예전의
+     * {@code src.user_id = t.user_id} 는 그 경우 답변을 "참조 원문 삭제됨" 으로 만들었다). 여기서는
+     * 더 나빴다 — 그런 턴이 다시 추천에 올라 재사용되면 {@code /reuse} 가 그 문구를 <em>답변으로</em>
+     * 내줬다.
+     */
+    private static final String REUSE_SOURCE_JOIN =
+            "LEFT JOIN conversation_turns src ON src.id = t.reused_from_turn_id ";
+
+    /**
      * 재사용 후보에서 제외할 응답 모드를 거르는 WHERE 술어 (§6.24 Step 3-b).
      *
      * <p>예전에는 {@code COALESCE(NULLIF(TRIM(t.response_mode), ''), 'M') <> 'S'} 라는 리터럴이
@@ -161,7 +172,7 @@ public class QuestionReuseRepository {
         String currentThread = threadId == null ? "" : threadId;
         String sql = "SELECT t.id, t.user_id, t.thread_id, t.question, " + resolvedAnswerExpr + ", t.created_at " +
             "FROM conversation_turns t " +
-            "LEFT JOIN conversation_turns src ON src.id = t.reused_from_turn_id AND src.user_id = t.user_id " +
+            REUSE_SOURCE_JOIN +
             "WHERE lower(t.question) LIKE lower(?) " +
             "AND ( (t.thread_id = ? AND t.user_id = ?) " +
             "   OR ( (t.feedback IS NULL OR t.feedback <> 'DISLIKE') " +
@@ -198,7 +209,7 @@ public class QuestionReuseRepository {
                 DELETED_REFERENCE_TEXT + "') AS answer";
         String sql = "SELECT t.id, t.user_id, t.thread_id, t.question, " + resolvedAnswerExpr + ", t.created_at " +
             "FROM conversation_turns t " +
-            "LEFT JOIN conversation_turns src ON src.id = t.reused_from_turn_id AND src.user_id = t.user_id " +
+            REUSE_SOURCE_JOIN +
             "WHERE t.id = ? " +
             "AND (t.feedback IS NULL OR t.feedback <> 'DISLIKE') " +
             "AND " + REUSABLE_MODE_PREDICATE +

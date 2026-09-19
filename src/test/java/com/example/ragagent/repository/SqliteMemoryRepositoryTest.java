@@ -178,6 +178,41 @@ class SqliteMemoryRepositoryTest {
     }
 
     @Test
+    @DisplayName("원본이 다른 사용자의 턴이어도 재사용 턴의 답변은 원본에서 복원된다 (shared 추천의 정상 경로)")
+    void dbReuseTurnResolvesAnswerAcrossUsers() {
+        // 추천 범위는 항상 shared 라 원본이 남의 턴인 것이 기본 경로다. 예전 조인의
+        // `src.user_id = t.user_id` 는 바로 이 경우를 비게 만들어 "참조 원문 삭제됨" 으로 떨어뜨렸다 —
+        // 같은 게스트 id 를 쓰는 기본 전략에서만 드러나지 않던 버그.
+        long sourceId = repo.addTurn("other-user", "t-other", "원본 질문", "원본 답변", null, 0, 0, 0, "local-a", 1, "N", null);
+        long reusedId = repo.addTurn(UID, "t1", "재사용 질문", "", null, 0, 0, 0, "db-reuse", 0, "N", null, sourceId);
+
+        var turns = repo.getTurns(UID, "t1");
+        assertThat(turns).hasSize(1);
+        assertThat(turns.get(0).id()).isEqualTo(reusedId);
+        assertThat(turns.get(0).answer()).isEqualTo("원본 답변");
+        assertThat(repo.getRecentTurns(UID, "t1")).singleElement()
+                .extracting(MemoryRepository.Turn::answer).isEqualTo("원본 답변");
+        assertThat(repo.getTurn(UID, "t1", reusedId)).map(MemoryRepository.Turn::answer).contains("원본 답변");
+        assertThat(repo.getHistory(UID, "t1", 10_000)).contains("A: 원본 답변");
+
+        // 격리는 바깥 행에 걸린다 — 원본 사용자 쪽에서 남의 재사용 턴이 보이지는 않는다.
+        assertThat(repo.getTurns("other-user", "t1")).isEmpty();
+        assertThat(repo.getTurn("other-user", "t1", reusedId)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("원본 턴이 실제로 지워지면 재사용 턴의 답변은 '참조 원문 삭제됨' 폴백이다")
+    void dbReuseTurnFallsBackWhenSourceReallyDeleted() {
+        long sourceId = repo.addTurn("other-user", "t-other", "원본 질문", "원본 답변", null, 0, 0, 0, "local-a", 1, "N", null);
+        long reusedId = repo.addTurn(UID, "t1", "재사용 질문", "", null, 0, 0, 0, "db-reuse", 0, "N", null, sourceId);
+
+        assertThat(repo.deleteTurn("other-user", "t-other", sourceId)).isTrue();
+
+        assertThat(repo.getTurn(UID, "t1", reusedId)).map(MemoryRepository.Turn::answer).contains("참조 원문 삭제됨");
+        assertThat(repo.getHistory(UID, "t1", 10_000)).contains("A: 참조 원문 삭제됨");
+    }
+
+    @Test
     @DisplayName("DISLIKE 로 표시된 turn 은 getHistory 컨텍스트에서 제외된다")
     void dislikedTurnExcludedFromHistory() {
         long keep = repo.addTurn(UID, "t1", "keep-question", "keep-answer", null, 0, 0, 0, null, 0, "M", null);
