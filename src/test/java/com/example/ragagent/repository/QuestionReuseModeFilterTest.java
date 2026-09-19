@@ -177,4 +177,30 @@ class QuestionReuseModeFilterTest {
         // 대화 id 가 다른 사용자의 것과 겹쳐도 사용자가 다르면 현재 대화가 아니다.
         assertThat(suggestionIdsInOrder("u2", "t-here")).containsExactly(13L, 10L, 14L, 12L, 11L);
     }
+
+    @Test
+    @DisplayName("원본이 다른 사용자의 턴인 재사용 턴도 추천·재사용 조회에서 원본 답변을 그대로 낸다")
+    void reuseTurnWhoseSourceBelongsToAnotherUser_resolvesTheSourceAnswer() {
+        jdbc.update("INSERT INTO conversation_turns "
+                    + "(id, user_id, thread_id, question, answer, created_at, feedback, response_mode, direct_mode) "
+                    + "VALUES (1, 'u2', 't-src', 'sqlite 연결 설정 방법', '원본 답변', '2026-08-24', NULL, 'N', 0)");
+        // u1 이 u2 의 턴을 재사용했다 — 답변은 비워 두고 참조만 남는 저장 모양.
+        jdbc.update("INSERT INTO conversation_turns "
+                    + "(id, user_id, thread_id, question, answer, created_at, feedback, response_mode, direct_mode, reused_from_turn_id) "
+                    + "VALUES (2, 'u1', 't-reuse', 'sqlite 연결 설정 방법', '', '2026-08-25', NULL, 'N', 0, 1)");
+
+        // 예전 조인(`src.user_id = t.user_id`)이었다면 두 조회 모두 "참조 원문 삭제됨" 을 답변으로 냈다 —
+        // 재사용의 재사용에서는 그 문구가 그대로 사용자에게 답변으로 나갔다.
+        QuestionReuseRepository.CandidateTurn forReuse = repo.findTurnForReuse(2L, false, "u1");
+        assertThat(forReuse).isNotNull();
+        assertThat(forReuse.answer()).isEqualTo("원본 답변");
+
+        assertThat(repo.findSuggestionCandidates("sqlite", false, "u1", null, 50))
+                .extracting(QuestionReuseRepository.CandidateTurn::answer)
+                .containsOnly("원본 답변");
+
+        // 원본이 실제로 지워지면 폴백은 그대로다.
+        jdbc.update("DELETE FROM conversation_turns WHERE id = 1");
+        assertThat(repo.findTurnForReuse(2L, false, "u1").answer()).isEqualTo("참조 원문 삭제됨");
+    }
 }

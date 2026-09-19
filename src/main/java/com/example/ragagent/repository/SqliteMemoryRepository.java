@@ -23,6 +23,27 @@ public class SqliteMemoryRepository implements MemoryRepository {
 
     private final JdbcTemplate jdbc;
     private static final String DELETED_REFERENCE_TEXT = "참조 원문 삭제됨";
+
+    /**
+     * 재사용 턴({@code reused_from_turn_id})의 답변을 원본 턴에서 가져오는 조인 — 답변을 읽는
+     * 네 조회({@code getHistory}/{@code getTurns}/{@code getRecentTurns}/{@code getTurn})가 공유한다.
+     *
+     * <p><b>사용자 조건이 없다 — 일부러다.</b> 예전에는 {@code AND src.user_id = t.user_id} 가
+     * 붙어 있었는데, 추천 범위는 항상 shared 라 원본이 <em>다른 사용자</em>의 턴인 것이 정상
+     * 경로다. 그 조건은 바로 그 경우 조인을 비게 만들어, 원본이 멀쩡히 있는데도 답변이
+     * {@code "참조 원문 삭제됨"} 으로 떨어졌다 — 화면에는 재사용 직후 정상으로 보이고(응답 본문은
+     * {@code /reuse} 가 직접 실어 준다) 대화를 다시 열 때만 사라지며, 이력·지식 제안 프리필·
+     * 재사용의 재사용까지 같은 조인을 타서 전부 그 문구를 받았다. 모든 방문자가 한 게스트 id 를
+     * 쓰는 기본 전략({@code guest-identity=shared})에서는 두 id 가 늘 같아 드러나지 않았고,
+     * §6.22 방문자별 id·full-auth 에서만 재현됐다.
+     *
+     * <p>격리는 바깥 행 {@code t} 의 {@code WHERE t.user_id = ?} 가 맡는다. {@code src} 에는
+     * {@code t.reused_from_turn_id} 로만 닿고, 그 id 는 {@code /reuse} 가 shared 범위에서 이미 그
+     * 사용자에게 내준 것이라 여기서 다시 거를 것이 없다. 원본이 실제로 지워진 경우의 폴백
+     * ({@link #DELETED_REFERENCE_TEXT})은 LEFT JOIN 이 그대로 보장한다.
+     */
+    private static final String REUSE_SOURCE_JOIN =
+            "LEFT JOIN conversation_turns src ON src.id = t.reused_from_turn_id ";
     // fetch at most this many recent turns before applying char truncation (§6.11: app.memory.*)
     private final int fetchLimit;
 
@@ -138,7 +159,7 @@ public class SqliteMemoryRepository implements MemoryRepository {
             "COALESCE(t.direct_mode, 0) AS direct_mode, " +
             "COALESCE(NULLIF(src.answer, ''), NULLIF(t.answer, ''), '" + DELETED_REFERENCE_TEXT + "') AS answer " +
             "FROM conversation_turns t " +
-            "LEFT JOIN conversation_turns src ON src.id = t.reused_from_turn_id AND src.user_id = t.user_id " +
+            REUSE_SOURCE_JOIN +
             "WHERE t.user_id = ? AND t.thread_id = ? AND (t.feedback IS NULL OR t.feedback <> 'DISLIKE') " +
             "ORDER BY t.id DESC LIMIT ?",
             (rs, n) -> "Q: %s\nA: %s".formatted(rs.getString("question"),
@@ -310,7 +331,7 @@ public class SqliteMemoryRepository implements MemoryRepository {
             "t.input_tokens, t.output_tokens, t.elapsed_ms, t.provider, t.llm_calls, t.feedback, t.response_mode, t.selected_tags, " +
             "COALESCE(t.direct_mode, 0) AS direct_mode " +
             "FROM conversation_turns t " +
-            "LEFT JOIN conversation_turns src ON src.id = t.reused_from_turn_id AND src.user_id = t.user_id " +
+            REUSE_SOURCE_JOIN +
             "WHERE t.user_id = ? AND t.thread_id = ? ORDER BY t.id ASC",
                 TURN_ROW_MAPPER,
                 userId, threadId);
@@ -326,7 +347,7 @@ public class SqliteMemoryRepository implements MemoryRepository {
             "t.input_tokens, t.output_tokens, t.elapsed_ms, t.provider, t.llm_calls, t.feedback, t.response_mode, t.selected_tags, " +
             "COALESCE(t.direct_mode, 0) AS direct_mode " +
             "FROM conversation_turns t " +
-            "LEFT JOIN conversation_turns src ON src.id = t.reused_from_turn_id AND src.user_id = t.user_id " +
+            REUSE_SOURCE_JOIN +
             "WHERE t.user_id = ? AND t.thread_id = ? ORDER BY t.id DESC LIMIT ?",
                 TURN_ROW_MAPPER,
                 userId, threadId, fetchLimit);
@@ -340,7 +361,7 @@ public class SqliteMemoryRepository implements MemoryRepository {
             "t.input_tokens, t.output_tokens, t.elapsed_ms, t.provider, t.llm_calls, t.feedback, t.response_mode, t.selected_tags, " +
             "COALESCE(t.direct_mode, 0) AS direct_mode " +
             "FROM conversation_turns t " +
-            "LEFT JOIN conversation_turns src ON src.id = t.reused_from_turn_id AND src.user_id = t.user_id " +
+            REUSE_SOURCE_JOIN +
             "WHERE t.id = ? AND t.user_id = ? AND t.thread_id = ?",
                 TURN_ROW_MAPPER,
                 turnId, userId, threadId);
