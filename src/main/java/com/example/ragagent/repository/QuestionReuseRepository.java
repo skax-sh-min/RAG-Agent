@@ -139,30 +139,49 @@ public class QuestionReuseRepository {
                 """, toTurnId, userId, threadId, fromTurnId);
     }
 
-    public List<CandidateTurn> findSuggestionCandidates(String q, boolean meOnly, String userId, int limit) {
+    /**
+     * 입력 중인 질문에 대한 추천 후보.
+     *
+     * <p><b>현재 대화({@code threadId})의 턴은 재사용 술어를 타지 않는다.</b> 그 항목의 클릭은
+     * 답변 재사용이 아니라 "이 대화에서 이미 물었던 자리로 이동"이라, 싫어요·응답 모드·Direct
+     * 좋아요 같은 <em>재사용</em> 자격 조건과 무관하다 — 같은 대화에 같은 답변을 한 번 더 붙이는
+     * 것보다 그 자리를 보여주는 편이 항상 낫고, 그 조건으로 걸러 버리면 "방금 여기서 물었는데
+     * 왜 목록에 없지"가 된다. 실제 재사용 조회({@link #findTurnForReuse})는 술어를 그대로 두므로,
+     * 클라이언트가 현재 대화의 턴 id 로 재사용을 부르더라도 엄격한 쪽이 이긴다.
+     *
+     * <p>정렬은 <b>현재 대화 → 내 다른 대화 → 그 외</b>, 그 안에서 최신순이다. 앞 두 키가 필요한
+     * 이유는 표시만이 아니다 — 후보는 {@code LIMIT} 창 하나로 잘리므로, 최신순만으로는 공유
+     * 코퍼스에서 같은 질문이 많이 오갔을 때 <em>이 대화</em>의 그 질문이 창 밖으로 밀려 이동
+     * 대상 자체가 사라진다. {@code threadId} 가 없으면(REST 호출) 첫 키는 아무 행도 고르지 않는다.
+     */
+    public List<CandidateTurn> findSuggestionCandidates(String q, boolean meOnly, String userId,
+                                                        String threadId, int limit) {
         String resolvedAnswerExpr = "COALESCE(NULLIF(src.answer, ''), NULLIF(t.answer, ''), '" +
                 DELETED_REFERENCE_TEXT + "') AS answer";
+        String currentThread = threadId == null ? "" : threadId;
         String sql = "SELECT t.id, t.user_id, t.thread_id, t.question, " + resolvedAnswerExpr + ", t.created_at " +
             "FROM conversation_turns t " +
             "LEFT JOIN conversation_turns src ON src.id = t.reused_from_turn_id AND src.user_id = t.user_id " +
             "WHERE lower(t.question) LIKE lower(?) " +
-            "AND (t.feedback IS NULL OR t.feedback <> 'DISLIKE') " +
-            "AND " + REUSABLE_MODE_PREDICATE +
-            DIRECT_NEEDS_LIKE_PREDICATE +
+            "AND ( (t.thread_id = ? AND t.user_id = ?) " +
+            "   OR ( (t.feedback IS NULL OR t.feedback <> 'DISLIKE') " +
+            "        AND " + REUSABLE_MODE_PREDICATE +
+            DIRECT_NEEDS_LIKE_PREDICATE + ") ) " +
             (meOnly ? "AND t.user_id = ? " : "") +
-            "ORDER BY t.id DESC LIMIT ?";
+            "ORDER BY CASE WHEN t.thread_id = ? AND t.user_id = ? THEN 0 ELSE 1 END, " +
+            "         CASE WHEN t.user_id = ? THEN 0 ELSE 1 END, " +
+            "         t.id DESC " +
+            "LIMIT ?";
 
-        if (meOnly) {
-            return jdbc.query(sql,
-                    (rs, n) -> new CandidateTurn(
-                            rs.getLong("id"),
-                            rs.getString("user_id"),
-                            rs.getString("thread_id"),
-                            rs.getString("question"),
-                            rs.getString("answer"),
-                            rs.getString("created_at")),
-                    "%" + q + "%", userId, Math.max(1, limit));
-        }
+        List<Object> args = new ArrayList<>();
+        args.add("%" + q + "%");
+        args.add(currentThread);
+        args.add(userId);
+        if (meOnly) args.add(userId);
+        args.add(currentThread);
+        args.add(userId);
+        args.add(userId);
+        args.add(Math.max(1, limit));
         return jdbc.query(sql,
                 (rs, n) -> new CandidateTurn(
                         rs.getLong("id"),
@@ -171,7 +190,7 @@ public class QuestionReuseRepository {
                         rs.getString("question"),
                         rs.getString("answer"),
                         rs.getString("created_at")),
-                "%" + q + "%", Math.max(1, limit));
+                args.toArray());
     }
 
     public CandidateTurn findTurnForReuse(long turnId, boolean meOnly, String userId) {

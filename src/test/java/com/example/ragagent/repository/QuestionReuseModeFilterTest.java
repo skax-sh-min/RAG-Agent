@@ -65,7 +65,7 @@ class QuestionReuseModeFilterTest {
     }
 
     private List<Long> suggestionIds() {
-        return repo.findSuggestionCandidates("sqlite", false, "u1", 50).stream()
+        return repo.findSuggestionCandidates("sqlite", false, "u1", null, 50).stream()
                 .map(QuestionReuseRepository.CandidateTurn::turnId)
                 .sorted()
                 .toList();
@@ -132,5 +132,49 @@ class QuestionReuseModeFilterTest {
 
         // 모드를 하나 더 추가하면서 allowsReuse()=false 로 두면 이 단언이 자동으로 그것까지 덮는다.
         assertThat(suggestionIds()).containsExactly(allowedId);
+    }
+
+    /** 같은 질문 텍스트로 사용자·대화·모드·피드백을 지정해 넣는다. */
+    private void insertTurn(long id, String userId, String threadId, String responseMode, String feedback) {
+        jdbc.update("INSERT INTO conversation_turns "
+                    + "(id, user_id, thread_id, question, answer, created_at, feedback, response_mode, direct_mode) "
+                    + "VALUES (?, ?, ?, 'sqlite 연결 설정 방법', '답변 본문', '2026-08-24', ?, ?, 0)",
+                id, userId, threadId, feedback, responseMode);
+    }
+
+    private List<Long> suggestionIdsInOrder(String userId, String threadId) {
+        return repo.findSuggestionCandidates("sqlite", false, userId, threadId, 50).stream()
+                .map(QuestionReuseRepository.CandidateTurn::turnId)
+                .toList();
+    }
+
+    @Test
+    @DisplayName("현재 대화의 턴은 재사용 술어(S/C·싫어요)를 타지 않는다 — 이동 대상이지 재사용 후보가 아니다")
+    void currentThreadTurns_bypassReusePredicates() {
+        insertTurn(1L, "u1", "t-here",  ResponseMode.S.name(), null);       // 현재 대화, S
+        insertTurn(2L, "u1", "t-here",  ResponseMode.N.name(), "DISLIKE");  // 현재 대화, 싫어요
+        insertTurn(3L, "u1", "t-other", ResponseMode.S.name(), null);       // 다른 대화, S → 제외
+        insertTurn(4L, "u1", "t-other", ResponseMode.N.name(), "DISLIKE");  // 다른 대화, 싫어요 → 제외
+        insertTurn(5L, "u1", "t-other", ResponseMode.N.name(), null);       // 다른 대화, 정상
+
+        assertThat(suggestionIdsInOrder("u1", "t-here")).containsExactly(2L, 1L, 5L);
+        // 실제 재사용 조회는 여전히 엄격하다 — 현재 대화의 S 턴 id 로 불러도 나오지 않는다.
+        assertThat(repo.findTurnForReuse(1L, false, "u1")).isNull();
+        // 대화 id 없이(REST) 부르면 그 면제는 없다.
+        assertThat(suggestionIdsInOrder("u1", null)).containsExactly(5L);
+    }
+
+    @Test
+    @DisplayName("정렬 — 현재 대화 → 내 다른 대화 → 그 외, 그 안에서 최신순")
+    void ordering_currentThreadThenMineThenOthers() {
+        insertTurn(10L, "u2", "t-x",     ResponseMode.N.name(), null);  // 남
+        insertTurn(11L, "u1", "t-here",  ResponseMode.N.name(), null);  // 현재 대화 (오래됨)
+        insertTurn(12L, "u1", "t-other", ResponseMode.N.name(), null);  // 내 다른 대화
+        insertTurn(13L, "u2", "t-y",     ResponseMode.N.name(), null);  // 남 (최신)
+        insertTurn(14L, "u1", "t-here",  ResponseMode.N.name(), null);  // 현재 대화 (최신)
+
+        assertThat(suggestionIdsInOrder("u1", "t-here")).containsExactly(14L, 11L, 12L, 13L, 10L);
+        // 대화 id 가 다른 사용자의 것과 겹쳐도 사용자가 다르면 현재 대화가 아니다.
+        assertThat(suggestionIdsInOrder("u2", "t-here")).containsExactly(13L, 10L, 14L, 12L, 11L);
     }
 }

@@ -151,9 +151,12 @@
                          질문이 목록에서 빠진다. -->
                     <!-- data-response-mode: 질문 내비게이션이 같은 표기를 다시 만들 수 있도록 심는다.
                          data-question 은 질문 '원본'만 담는다 — 표기를 그 안에 섞으면 추천/재사용처럼
-                         질문 텍스트를 그대로 쓰는 소비자에게 대괄호가 함께 딸려간다. -->
+                         질문 텍스트를 그대로 쓰는 소비자에게 대괄호가 함께 딸려간다.
+                         data-turn-id: 질문 추천 목록의 "현재 대화" 항목이 이 버블로 이동할 때 찾는
+                         키(jumpToThreadQuestion). 스트리밍 경로는 chat-stream.js 가 done 이벤트에서,
+                         재사용 경로는 appendReusedTurn() 이 같은 값을 심는다. -->
                     <div class="d-flex justify-content-end mb-3 align-items-end user-turn"
-                         th:attr="data-question=${turn.question},data-response-mode=${turn.responseModeLabel}">
+                         th:attr="data-question=${turn.question},data-response-mode=${turn.responseModeLabel},data-turn-id=${turn.id}">
                         <div class="me-1">
                             <div class="bubble-user p-3">
                                 <div><span class="bubble-user-mode"
@@ -1144,7 +1147,11 @@
     function appendReusedTurn(question, answer, turnId, provider, sources) {
         const t = new Date().toLocaleTimeString('ko-KR', {hour: '2-digit', minute: '2-digit', hour12: false});
         const userBubble = document.createElement('div');
-        userBubble.className = 'd-flex justify-content-end mb-3 align-items-end';
+        // .user-turn + data-question + data-turn-id: 서버 렌더·스트리밍 경로와 같은 표식. 이게 없으면
+        // 이 질문은 새로고침 전까지 질문 내비게이션에도, 추천 목록의 "현재 대화" 이동 대상에도 없다.
+        userBubble.className = 'd-flex justify-content-end mb-3 align-items-end user-turn';
+        userBubble.dataset.question = question;
+        if (turnId) userBubble.dataset.turnId = String(turnId);
         // 재사용 버블도 같은 표기를 단다. 저장된 그 턴의 모드가 아니라 '지금 폼에 선택된' 모드인데,
         // 재사용은 방금 고른 설정으로 새 턴을 만드는 동작이라 그것이 맞다. 검색 축도 마찬가지다.
         const reuseMode = bubbleModeLabel(responseModeInput.value || RESPONSE_MODE_DEFAULT,
@@ -1226,19 +1233,78 @@
         }
     }
 
+    /* ── 질문 추천 목록 ────────────────────────────────────────────────
+       항목마다 서버가 origin 을 붙여 준다 — thread(현재 대화) / mine(내 대화) / others(다른 사용자) /
+       elsewhere(다른 대화, 사용자 구분 불가). 배지는 그 값을 그대로 보여주고, 클릭 동작도 그 값으로
+       갈린다: thread 는 답변을 다시 붙이는 대신 이 대화에서 그 질문이 있는 자리로 스크롤하고(같은
+       대화에 같은 답변을 한 번 더 붙일 이유가 없다), 나머지는 기존대로 재사용(/api/v1/questions/reuse)이다.
+       origin 이 없는 응답(구 서버)은 재사용 항목으로 취급한다. */
+    const SUGGEST_I18N = {
+        thread:    /*[[#{chat.suggest.origin.thread}]]*/ 'This conversation',
+        mine:      /*[[#{chat.suggest.origin.mine}]]*/ 'My conversation',
+        others:    /*[[#{chat.suggest.origin.others}]]*/ 'Other user',
+        elsewhere: /*[[#{chat.suggest.origin.elsewhere}]]*/ 'Other conversation',
+        jumpHint:  /*[[#{chat.question.jump}]]*/ 'Click to jump to this question',
+        reuseHint: /*[[#{chat.suggest.reuse.hint}]]*/ 'Click to reuse the saved answer',
+        notFound:  /*[[#{chat.suggest.thread.notfound}]]*/ 'Could not find that question in this conversation.'
+    };
+    const SUGGEST_BADGE_CLASS = { thread: 'bg-primary', mine: 'bg-success', others: 'bg-secondary', elsewhere: 'bg-secondary' };
+    let suggestItems = [];   // 마지막으로 그린 항목 — 버튼은 data-idx 로 이 배열을 가리킨다
+
+    /* 현재 대화에서 그 질문의 버블을 찾는다. 1순위는 턴 id(서버 렌더·스트리밍 done·재사용 버블이
+       심는다), 2순위는 질문 원문 — 턴 id 가 안 심긴 버블(HTMX 폴백 경로)을 위한 것이고, 같은
+       질문이 여러 번이면 가장 최근 것을 고른다. */
+    function findThreadQuestionTurn(turnId, question) {
+        const turns = qnavTurns();
+        const wanted = String(turnId || '');
+        if (wanted) {
+            const byId = turns.find(el => String(el.dataset.turnId || '') === wanted);
+            if (byId) return byId;
+        }
+        let last = null;
+        turns.forEach(el => { if ((el.dataset.question || '') === (question || '')) last = el; });
+        return last;
+    }
+
+    function jumpToThreadQuestion(turnId, question) {
+        hideQuestionSuggestions();
+        const el = findThreadQuestionTurn(turnId, question);
+        if (!el) {
+            if (typeof showToast === 'function') showToast(SUGGEST_I18N.notFound, 'warning');
+            return;
+        }
+        qnavJumpTo(el);
+        // 입력 중이던 텍스트는 그대로 둔다 — 이동은 "이미 물었던 자리를 보여주는" 동작이지 전송이
+        // 아니라서, 보고 나서 계속 쓰거나 지우는 것은 사용자 몫이다.
+        questionInput.focus({ preventScroll: true });
+    }
+
     function renderSuggestions(items) {
         if (!Array.isArray(items) || items.length === 0) {
             hideQuestionSuggestions();
             return;
         }
-        suggestBox.innerHTML = items.map(it =>
-            `<button type="button" class="list-group-item list-group-item-action" data-turn-id="${it.turnId}">` +
-                `<div class="small fw-semibold text-start">${escHtml(it.question || '')}</div>` +
-            `</button>`
-        ).join('');
+        suggestItems = items;
+        suggestBox.innerHTML = items.map((it, idx) => {
+            const origin = SUGGEST_BADGE_CLASS[it.origin] ? it.origin : 'elsewhere';
+            const isThread = origin === 'thread';
+            return `<button type="button" class="list-group-item list-group-item-action d-flex align-items-center gap-2 py-2"` +
+                        ` data-idx="${idx}" data-origin="${escHtml(origin)}"` +
+                        ` title="${escHtml(isThread ? SUGGEST_I18N.jumpHint : SUGGEST_I18N.reuseHint)}">` +
+                `<span class="badge ${SUGGEST_BADGE_CLASS[origin]} flex-shrink-0" style="font-size:0.65rem;">` +
+                    (isThread ? '<i class="bi bi-arrow-up-short"></i>' : '') + escHtml(SUGGEST_I18N[origin]) +
+                `</span>` +
+                `<span class="small fw-semibold text-start flex-grow-1">${escHtml(it.question || '')}</span>` +
+            `</button>`;
+        }).join('');
         suggestBox.classList.remove('d-none');
-        suggestBox.querySelectorAll('[data-turn-id]').forEach(btn => {
-            btn.addEventListener('click', () => onSelectSuggestion(btn.getAttribute('data-turn-id')));
+        suggestBox.querySelectorAll('[data-idx]').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const it = suggestItems[Number(btn.dataset.idx)];
+                if (!it) return;
+                if (it.origin === 'thread') jumpToThreadQuestion(it.turnId, it.question);
+                else onSelectSuggestion(it.turnId);
+            });
         });
     }
 
@@ -1250,7 +1316,9 @@
         }
         const seq = ++suggestSeq;
         const scope = 'shared';
-        const params = new URLSearchParams({ q, scope, limit: '12' });
+        // threadId: 서버가 이 값으로 "현재 대화" 항목을 가른다 — 폼의 hidden 값이 곧 지금 열린 대화다.
+        const threadId = chatForm.querySelector('input[name="threadId"]').value || '';
+        const params = new URLSearchParams({ q, scope, threadId, limit: '12' });
         try {
             const res = await fetch('/api/v1/questions/suggest?' + params.toString(), {
                 headers: getCsrfHeaders()
