@@ -377,8 +377,33 @@ public class LlmRouter {
                         && !providerToggle.isDisabled(p.name()));
     }
 
-    /** {@code inUse}/{@code capacity} snapshot for {@link #localTier1Concurrency()}. */
-    public record ConcurrencySnapshot(int inUse, int capacity) {}
+    /**
+     * {@code inUse}/{@code capacity} snapshot for {@link #localTier1Concurrency()}.
+     *
+     * @param blockedSeconds the longest remaining circuit-breaker block among the tier's providers,
+     *                       {@code 0} when none is blocked. The header indicator shows this instead of
+     *                       {@code inUse/capacity} — a blocked lone LOCAL provider already counts as
+     *                       fully in use (see {@link #localTier1Concurrency()}), but "3/3" reads as
+     *                       "busy", not "the server just failed and we are waiting 4s", and those
+     *                       call for different operator reactions.
+     */
+    public record ConcurrencySnapshot(int inUse, int capacity, int blockedSeconds) {
+        public ConcurrencySnapshot(int inUse, int capacity) {
+            this(inUse, capacity, 0);
+        }
+    }
+
+    /**
+     * The "main" LOCAL tier — {@code role=LOCAL, priority=1}, minus runtime-disabled providers.
+     * Shared by {@link #localTier1Concurrency()} (header indicator) and the ping endpoint
+     * ({@code LlmPing}) so both agree on which providers "the local LLM" means.
+     */
+    public List<LlmProvider> localTier1Providers() {
+        return providers.stream()
+                .filter(p -> p.role() == LOCAL && p.priority() == 1)
+                .filter(p -> !providerToggle.isDisabled(p.name()))
+                .toList();
+    }
 
     /**
      * In-flight vs. capacity for the "main" LOCAL tier — {@code role=LOCAL, priority=1}, the
@@ -398,27 +423,27 @@ public class LlmRouter {
      * the whole indicator vanish instead of showing e.g. a fully-saturated {@code 3/3}.)
      */
     public Optional<ConcurrencySnapshot> localTier1Concurrency() {
-        List<LlmProvider> matches = providers.stream()
-                .filter(p -> p.role() == LOCAL && p.priority() == 1)
-                .filter(p -> !providerToggle.isDisabled(p.name()))
-                .toList();
+        List<LlmProvider> matches = localTier1Providers();
         if (matches.isEmpty()) {
             return Optional.empty();
         }
         int capacity = 0;
         int inUse = 0;
+        int blockedSeconds = 0;
         for (LlmProvider p : matches) {
             int cap = providerCapacity.getOrDefault(p.name(), defaultProviderConcurrency);
             capacity += cap;
-            if (circuitBreaker.isBlocked(p.name())) {
+            int blocked = circuitBreaker.secondsUntilUnblocked(p.name());
+            if (blocked > 0) {
                 inUse += cap;
+                blockedSeconds = Math.max(blockedSeconds, blocked);
             } else {
                 Semaphore gate = providerGates.get(p.name());
                 int free = gate != null ? gate.availablePermits() : cap;
                 inUse += Math.max(0, cap - free);
             }
         }
-        return Optional.of(new ConcurrencySnapshot(inUse, capacity));
+        return Optional.of(new ConcurrencySnapshot(inUse, capacity, blockedSeconds));
     }
 
     /** Returns the name of the first available provider for the given routing, or "unknown". */

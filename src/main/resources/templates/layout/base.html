@@ -245,6 +245,8 @@ const I18N = {
     cancelBtnLabel:  /*[[#{doc.btn.cancel}]]*/ 'Cancel',
     llmStatusNormal:     /*[[#{llm.status.normal}]]*/ 'Normal',
     llmStatusBlocked:    /*[[#{llm.status.blocked}]]*/ 'Blocked',
+    llmTooltip:          /*[[#{nav.llm.tooltip}]]*/ 'Local LLM concurrency only (external API providers not included)',
+    llmBlockedTooltip:   /*[[#{nav.llm.tooltip.blocked}]]*/ 'Local LLM failed to respond - retrying in {0}s. Check GET /api/v1/llm/ping',
     llmTableTotal:       /*[[#{llm.table.total}]]*/ 'Total',
     llmNoProviders:      /*[[#{llm.no.providers}]]*/ 'No providers configured.'
 };
@@ -389,19 +391,36 @@ const I18N = {
        Hidden whenever no such provider is available (never shown as a stale/meaningless 0/0).
        inUse already folds in embedding activity + fully-counts circuit-broken providers and is
        clamped to capacity server-side (OperationsController.getLlmConcurrency), so inUse ===
-       capacity here reliably means "fully saturated" — styled bold red as a busy/backpressure cue. */
+       capacity here reliably means "fully saturated" — styled bold red as a busy/backpressure cue.
+       blockedSeconds > 0 means the circuit breaker is holding the provider after a failure: shown
+       as "차단 중 4s" instead of "3/3", because "busy" and "the server just failed, waiting to
+       retry" call for different reactions (the tooltip then points at GET /api/v1/llm/ping). */
     (function () {
         const wrap  = document.getElementById('llm-concurrency');
         const value = document.getElementById('llm-concurrency-value');
+        let tooltipText = null;
+        function setTooltip(text) {
+            if (text === tooltipText) return;
+            tooltipText = text;
+            const tip = bootstrap.Tooltip.getInstance(wrap);
+            if (tip) tip.setContent({ '.tooltip-inner': text });
+        }
         function refreshLlmConcurrency() {
             fetch('/api/v1/llm/concurrency')
                 .then(r => r.ok ? r.json() : Promise.reject())
                 .then(d => {
                     if (d.available) {
-                        value.textContent = d.inUse + '/' + d.capacity;
-                        const saturated = d.inUse >= d.capacity;
-                        value.classList.toggle('text-danger', saturated);
-                        value.classList.toggle('fw-bold', saturated);
+                        const blockedSeconds = d.blockedSeconds || 0;
+                        const blocked = blockedSeconds > 0;
+                        value.textContent = blocked
+                            ? I18N.llmStatusBlocked + ' ' + blockedSeconds + 's'
+                            : d.inUse + '/' + d.capacity;
+                        const alert = blocked || d.inUse >= d.capacity;
+                        value.classList.toggle('text-danger', alert);
+                        value.classList.toggle('fw-bold', alert);
+                        setTooltip(blocked
+                            ? I18N.llmBlockedTooltip.replace('{0}', blockedSeconds)
+                            : I18N.llmTooltip);
                         wrap.classList.remove('d-none');
                     } else {
                         wrap.classList.add('d-none');

@@ -7,6 +7,8 @@ import com.example.ragagent.llm.BackgroundLlmConcurrencyTracker;
 import com.example.ragagent.llm.BackgroundUsage;
 import com.example.ragagent.llm.CircuitBreaker;
 import com.example.ragagent.llm.EmbeddingConcurrencyTracker;
+import com.example.ragagent.llm.LlmPing;
+import com.example.ragagent.llm.LlmProvider;
 import com.example.ragagent.llm.LlmRouter;
 import com.example.ragagent.llm.TrackingEmbeddingModel;
 import com.example.ragagent.model.LlmProviderReport;
@@ -19,6 +21,8 @@ import com.example.ragagent.service.ThreadMetaService;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.*;
@@ -26,6 +30,7 @@ import org.springframework.web.bind.annotation.*;
 import java.time.Instant;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -301,9 +306,64 @@ public class OperationsController {
                     return Map.of(
                             "available", true,
                             "inUse", inUse,
-                            "capacity", s.capacity());
+                            "capacity", s.capacity(),
+                            "blockedSeconds", s.blockedSeconds());
                 })
                 .orElseGet(() -> Map.of("available", false));
+    }
+
+    /** 연결·목록·상태 조회의 타임아웃(초). 헤더 표시기 폴링과 같은 리듬으로 불려도 쌓이지 않게 짧다. */
+    private static final int PING_CONNECT_TIMEOUT_SECONDS = 3;
+    private static final int PING_READ_TIMEOUT_SECONDS = 5;
+    /** {@code deep=true} 의 1토큰 완성 읽기 타임아웃 기본·상한(초). */
+    private static final int PING_INFERENCE_TIMEOUT_DEFAULT_SECONDS = 15;
+    private static final int PING_INFERENCE_TIMEOUT_MAX_SECONDS = 60;
+
+    /**
+     * "로컬 LLM 이 살아 있는가" — {@link LlmPing} 이 세 단계(닿는가 / 모델이 로드됐는가 / 실제로
+     * 추론이 되는가)를 따로 답한다. 대상은 헤더 표시기와 같은 {@code role=LOCAL, priority=1} 프로바이더
+     * 전부이며, 없으면 {@code {"available": false}}.
+     *
+     * <p>{@code deep=true} 는 {@code max_tokens=1} 완성 한 번을 실제로 보낸다 — 이번 GPU 소실 같은
+     * "서버는 살아 있는데 엔진이 죽은" 경우를 잡는 유일한 검사다. 관리자 전용으로 두지 않는 이유:
+     * 채팅이 게스트에게 열려 있는 배포에서는 누구나 이미 전체 답변 생성을 시킬 수 있어, 1토큰 요청을
+     * 그보다 엄격하게 막아도 얻는 것이 없다(속도 제한은 {@code default} 버킷이 그대로 건다).
+     *
+     * <p>모니터링 스크립트가 {@code curl -f} 로 쓸 수 있게 <b>하나라도 실패하면 503</b>, 전부 통과하면
+     * 200 이다 — 본문은 두 경우 모두 같은 모양이다.
+     */
+    @GetMapping("/api/v1/llm/ping")
+    @ResponseBody
+    public ResponseEntity<Map<String, Object>> pingLlm(
+            @RequestParam(name = "deep", defaultValue = "false") boolean deep,
+            @RequestParam(name = "timeoutSeconds", defaultValue = "" + PING_INFERENCE_TIMEOUT_DEFAULT_SECONDS)
+            int timeoutSeconds) {
+        List<LlmProvider> targets = llmRouter.localTier1Providers();
+        if (targets.isEmpty()) {
+            return ResponseEntity.ok(Map.of("available", false));
+        }
+        int inferenceTimeout = Math.max(1, Math.min(timeoutSeconds, PING_INFERENCE_TIMEOUT_MAX_SECONDS));
+        List<LlmPing.Result> results = targets.stream()
+                .map(p -> LlmPing.probe(p, deep,
+                        PING_CONNECT_TIMEOUT_SECONDS, PING_READ_TIMEOUT_SECONDS, inferenceTimeout,
+                        Math.max(0, circuitBreaker.secondsUntilUnblocked(p.name())),
+                        isAdminRequest()))
+                .toList();
+        boolean ok = results.stream().allMatch(LlmPing.Result::ok);
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("available", true);
+        body.put("ok", ok);
+        body.put("deep", deep);
+        body.put("checkedAt", Instant.now().toString());
+        body.put("providers", results);
+        return ResponseEntity.status(ok ? HttpStatus.OK : HttpStatus.SERVICE_UNAVAILABLE).body(body);
+    }
+
+    /** base-url 은 내부 호스트라 관리자 응답에만 싣는다 — 판정 자체는 누구에게나 같다. */
+    private static boolean isAdminRequest() {
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        return auth != null && auth.isAuthenticated()
+                && auth.getAuthorities().stream().anyMatch(a -> "ROLE_ADMIN".equals(a.getAuthority()));
     }
 
     /** Provider-level daily / weekly / monthly summary + Circuit Breaker state, plus one embedding row (§6.6) and orphan rows (§6.8). */
