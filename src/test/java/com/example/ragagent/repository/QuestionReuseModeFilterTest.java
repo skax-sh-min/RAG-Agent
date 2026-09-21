@@ -205,16 +205,16 @@ class QuestionReuseModeFilterTest {
     }
 
     /**
-     * 후보가 스스로 재사용 턴이면 답변 텍스트와 같은 행(원본)에서 모드·Direct·태그도 가져온다.
-     * 원본 값을 복사해 저장하기 전에 만들어진 재사용 행은 자리표시자('M', 0, '')를 들고 있는데,
-     * 그 행을 다시 재사용하면 이 COALESCE 가 원본의 값을 되돌려 준다 — 백필 없이.
+     * 후보가 스스로 재사용 턴이면 답변 텍스트와 같은 행(원본)에서 모드·태그도 가져온다. 원본 값을
+     * 복사해 저장하기 전에 만들어진 재사용 행은 자리표시자('M', 0, '')를 들고 있는데, 그 행을 다시
+     * 재사용하면 이 COALESCE 가 원본의 값을 되돌려 준다 — 백필 없이.
      */
     @Test
-    @DisplayName("재사용 턴을 다시 재사용할 때 답변의 모양(모드·Direct·태그)은 원본 행에서 온다")
+    @DisplayName("재사용 턴을 다시 재사용할 때 답변의 모양(모드·태그)은 원본 행에서 온다")
     void reuseOfAReuseTurn_takesTheAnswerShapeFromTheSource() {
         jdbc.update("INSERT INTO conversation_turns "
                     + "(id, user_id, thread_id, question, answer, created_at, feedback, response_mode, direct_mode, selected_tags) "
-                    + "VALUES (1, 'u2', 't-src', 'sqlite 연결 설정 방법', '원본 답변', '2026-08-24', 'LIKE', 'N', 1, 'policy,billing')");
+                    + "VALUES (1, 'u2', 't-src', 'sqlite 연결 설정 방법', '원본 답변', '2026-08-24', NULL, 'N', 0, 'policy,billing')");
         // 자리표시자를 저장하던 시절의 재사용 행.
         jdbc.update("INSERT INTO conversation_turns "
                     + "(id, user_id, thread_id, question, answer, created_at, feedback, response_mode, direct_mode, reused_from_turn_id, selected_tags) "
@@ -223,18 +223,55 @@ class QuestionReuseModeFilterTest {
         QuestionReuseRepository.CandidateTurn viaReuse = repo.findTurnForReuse(2L, false, "u1");
         assertThat(viaReuse).isNotNull();
         assertThat(viaReuse.responseMode()).isEqualTo("N");
-        assertThat(viaReuse.directMode()).isTrue();
+        assertThat(viaReuse.directMode()).isFalse();
         assertThat(viaReuse.selectedTags()).isEqualTo("policy,billing");
 
         // 원본이 아닌 보통 턴은 자기 행 그대로다.
         QuestionReuseRepository.CandidateTurn plain = repo.findTurnForReuse(1L, false, "u2");
         assertThat(plain.responseMode()).isEqualTo("N");
-        assertThat(plain.directMode()).isTrue();
         assertThat(plain.selectedTags()).isEqualTo("policy,billing");
 
         // 추천 목록도 같은 열을 싣는다.
         assertThat(repo.findSuggestionCandidates("sqlite", false, "u1", null, 50))
                 .extracting(QuestionReuseRepository.CandidateTurn::selectedTags)
                 .containsOnly("policy,billing");
+    }
+
+    /**
+     * Direct 답변은 근거 청크가 없어 validateTurn() 이 언제나 거부한다 — 후보에 올려 봐야 헛클릭이고,
+     * §10.11 이후 좋아요는 지식 제안을 여는 신호이지 재사용 자격이 아니다. 판정은 답변과 같은 행
+     * (재사용 턴이면 원본)에서 하므로, 자리표시자(direct 0)를 든 옛 재사용 행도 원본이 Direct 면 빠진다.
+     * 현재 대화의 턴은 이동 대상이라 예외 그대로다.
+     */
+    @Test
+    @DisplayName("Direct 턴은 좋아요가 있어도 추천·재사용 후보가 아니다 — 재사용 턴은 원본의 Direct 여부로 판정")
+    void directTurns_areNeverReuseCandidates_evenWhenLiked() {
+        jdbc.update("INSERT INTO conversation_turns "
+                    + "(id, user_id, thread_id, question, answer, created_at, feedback, response_mode, direct_mode) "
+                    + "VALUES (1, 'u1', 't-a', 'sqlite 연결 설정 방법', 'Direct 답변', '2026-08-24', 'LIKE', 'N', 1)");
+        jdbc.update("INSERT INTO conversation_turns "
+                    + "(id, user_id, thread_id, question, answer, created_at, feedback, response_mode, direct_mode) "
+                    + "VALUES (2, 'u1', 't-b', 'sqlite 연결 설정 방법', 'Direct 답변', '2026-08-24', NULL, 'N', 1)");
+        // 옛 재사용 행: 자기 행은 direct 0 이지만 원본(1)이 Direct 다.
+        jdbc.update("INSERT INTO conversation_turns "
+                    + "(id, user_id, thread_id, question, answer, created_at, feedback, response_mode, direct_mode, reused_from_turn_id) "
+                    + "VALUES (3, 'u1', 't-c', 'sqlite 연결 설정 방법', '', '2026-08-25', NULL, 'M', 0, 1)");
+        // 대조군: 보통 RAG 턴.
+        jdbc.update("INSERT INTO conversation_turns "
+                    + "(id, user_id, thread_id, question, answer, created_at, feedback, response_mode, direct_mode) "
+                    + "VALUES (4, 'u1', 't-d', 'sqlite 연결 설정 방법', 'RAG 답변', '2026-08-24', NULL, 'N', 0)");
+
+        assertThat(repo.findSuggestionCandidates("sqlite", false, "u1", null, 50))
+                .extracting(QuestionReuseRepository.CandidateTurn::turnId)
+                .containsExactly(4L);
+        assertThat(repo.findTurnForReuse(1L, false, "u1")).isNull();
+        assertThat(repo.findTurnForReuse(2L, false, "u1")).isNull();
+        assertThat(repo.findTurnForReuse(3L, false, "u1")).isNull();
+        assertThat(repo.findTurnForReuse(4L, false, "u1")).isNotNull();
+
+        // 현재 대화의 Direct 턴은 여전히 목록에 오른다 — 재사용이 아니라 그 자리로의 이동이므로.
+        assertThat(repo.findSuggestionCandidates("sqlite", false, "u1", "t-a", 50))
+                .extracting(QuestionReuseRepository.CandidateTurn::turnId)
+                .containsExactly(1L, 4L);
     }
 }
