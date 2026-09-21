@@ -375,4 +375,111 @@ class QuestionReuseServiceTest {
         assertThat(suggestions.get(0).turnId()).isEqualTo(50L);
         assertThat(suggestions.get(0).origin()).isEqualTo(QuestionReuseService.Origin.THREAD);
     }
+
+    // ── 부정 캐시 — 검증에 떨어진 턴은 TTL 동안 다시 확인하지 않는다 ─────────────────────────
+
+    /** 다른 대화의 후보 하나: 출처 c1 이 스냅샷 h1 에서 바뀌었다(통지 없이 — 해시 대조에서만 드러나는 실패). */
+    private static QuestionReuseRepository stubChangedChunkCandidate(long turnId) {
+        QuestionReuseRepository repo = mock(QuestionReuseRepository.class);
+        when(repo.findSuggestionCandidates(anyString(), anyBoolean(), anyString(), any(), anyInt()))
+                .thenReturn(List.of(new QuestionReuseRepository.CandidateTurn(
+                        turnId, "u2", "t-other", "sqlite 연결 설정 방법", "a1", "2026-09-19 10:00:00")));
+        when(repo.findAllSourceRefs(turnId))
+                .thenReturn(List.of(new QuestionReuseRepository.SourceSnapshot("c1", "d1", "h1")));
+        when(repo.currentChunkHashes(java.util.Set.of("c1")))
+                .thenReturn(java.util.Map.of("c1", "CHANGED"));
+        return repo;
+    }
+
+    @Test
+    @DisplayName("검증에 떨어진 후보는 다음 추천에서 검증 없이 건너뛴다 — 키 입력마다 같은 행을 다시 확인하지 않는다")
+    void suggest_rememberedFailure_isSkippedWithoutRevalidation() {
+        QuestionReuseRepository repo = stubChangedChunkCandidate(60L);
+        QuestionReuseService service = new QuestionReuseService(repo, mock(DocRegistry.class));
+
+        assertThat(service.suggest("u1", "t-here", QuestionReuseService.Scope.SHARED, "sqlite", 10)).isEmpty();
+        assertThat(service.isRecentlyInvalid(60L)).isTrue();
+
+        // 두 번째·세 번째 입력 — 결과는 같고, 출처 조회는 처음 한 번뿐이다.
+        assertThat(service.suggest("u1", "t-here", QuestionReuseService.Scope.SHARED, "sqlite 연", 10)).isEmpty();
+        assertThat(service.suggest("u1", "t-here", QuestionReuseService.Scope.SHARED, "sqlite 연결", 10)).isEmpty();
+        org.mockito.Mockito.verify(repo, org.mockito.Mockito.times(1)).findAllSourceRefs(60L);
+        org.mockito.Mockito.verify(repo, org.mockito.Mockito.times(1)).currentChunkHashes(java.util.Set.of("c1"));
+    }
+
+    /**
+     * 영구 표시가 아니라 TTL 인 이유 — "부재"는 되돌아올 수 있다(큐레이션 청크 id 는 결정적이라
+     * 비활성화 → 재승인이면 같은 해시가 돌아온다). TTL 이 지나면 다시 확인하고, 되살아났으면 다시 뜬다.
+     */
+    @Test
+    @DisplayName("부정 캐시는 TTL 뒤 만료된다 — 청크가 되돌아왔으면 그 뒤 추천에 다시 오른다")
+    void suggest_negativeCacheExpires_andARestoredChunkComesBack() {
+        java.util.concurrent.atomic.AtomicLong nanos = new java.util.concurrent.atomic.AtomicLong();
+        QuestionReuseRepository repo = stubChangedChunkCandidate(61L);
+        QuestionReuseService service = new QuestionReuseService(repo, mock(DocRegistry.class), nanos::get);
+
+        assertThat(service.suggest("u1", "t-here", QuestionReuseService.Scope.SHARED, "sqlite", 10)).isEmpty();
+
+        // 청크가 원래 내용으로 돌아왔다 — TTL 안에서는 캐시가 그걸 아직 모른다.
+        when(repo.currentChunkHashes(java.util.Set.of("c1"))).thenReturn(java.util.Map.of("c1", "h1"));
+        nanos.addAndGet(QuestionReuseService.INVALID_TURN_TTL.minusSeconds(1).toNanos());
+        assertThat(service.suggest("u1", "t-here", QuestionReuseService.Scope.SHARED, "sqlite", 10)).isEmpty();
+        org.mockito.Mockito.verify(repo, org.mockito.Mockito.times(1)).findAllSourceRefs(61L);
+
+        // TTL 을 넘기면 다시 확인한다 — 이제 통과하므로 추천에 오른다.
+        nanos.addAndGet(java.time.Duration.ofSeconds(2).toNanos());
+        List<QuestionReuseService.Suggestion> back =
+                service.suggest("u1", "t-here", QuestionReuseService.Scope.SHARED, "sqlite", 10);
+        assertThat(back).extracting(QuestionReuseService.Suggestion::turnId).containsExactly(61L);
+        assertThat(service.isRecentlyInvalid(61L)).isFalse();
+        org.mockito.Mockito.verify(repo, org.mockito.Mockito.times(2)).findAllSourceRefs(61L);
+    }
+
+    @Test
+    @DisplayName("재사용 조회는 캐시를 읽지 않고 늘 새로 판정한다 — 실패는 캐시를 채우고 성공은 지운다")
+    void reuseLookup_neverReadsTheCache_fillsOnFailure_clearsOnSuccess() {
+        QuestionReuseRepository repo = mock(QuestionReuseRepository.class);
+        QuestionReuseService service = new QuestionReuseService(repo, mock(DocRegistry.class));
+        when(repo.findTurnForReuse(62L, false, "u1")).thenReturn(new QuestionReuseRepository.CandidateTurn(
+                62L, "u2", "t-other", "sqlite 연결 설정 방법", "a1", "2026-09-19 10:00:00"));
+        when(repo.findAllSourceRefs(62L))
+                .thenReturn(List.of(new QuestionReuseRepository.SourceSnapshot("c1", "d1", "h1")));
+        when(repo.findSourceRefs(62L))
+                .thenReturn(List.of(new QuestionReuseRepository.SourceSnapshot("c1", "d1", "h1")));
+        when(repo.currentChunkHashes(java.util.Set.of("c1"))).thenReturn(java.util.Map.of("c1", "CHANGED"));
+
+        // 클릭 → 실패: 사유는 그대로 전달되고 캐시에 남는다.
+        QuestionReuseService.ReuseLookup failed = service.reuseLookup("u1", QuestionReuseService.Scope.SHARED, 62L);
+        assertThat(failed.reusable()).isFalse();
+        assertThat(failed.reason()).contains("청크 내용이 변경");
+        assertThat(service.isRecentlyInvalid(62L)).isTrue();
+
+        // 청크가 되돌아온 직후의 클릭 — 캐시가 아니라 저장소를 본다(최종 관문). 성공은 캐시를 지운다.
+        when(repo.currentChunkHashes(java.util.Set.of("c1"))).thenReturn(java.util.Map.of("c1", "h1"));
+        QuestionReuseService.ReuseLookup ok = service.reuseLookup("u1", QuestionReuseService.Scope.SHARED, 62L);
+        assertThat(ok.reusable()).isTrue();
+        assertThat(service.isRecentlyInvalid(62L)).isFalse();
+        org.mockito.Mockito.verify(repo, org.mockito.Mockito.times(2)).findAllSourceRefs(62L);
+    }
+
+    @Test
+    @DisplayName("현재 대화의 항목은 캐시에 있어도 뜬다 — 검증을 안 하므로 캐시도 보지 않는다")
+    void suggest_currentThreadItems_ignoreTheNegativeCache() {
+        QuestionReuseRepository repo = mock(QuestionReuseRepository.class);
+        QuestionReuseService service = new QuestionReuseService(repo, mock(DocRegistry.class));
+        QuestionReuseRepository.CandidateTurn here = new QuestionReuseRepository.CandidateTurn(
+                63L, "u1", "t-here", "sqlite 연결 설정 방법", "a1", "2026-09-19 10:00:00");
+        when(repo.findTurnForReuse(63L, false, "u1")).thenReturn(here);
+        when(repo.findAllSourceRefs(63L)).thenReturn(List.of());   // 출처 없음 → 재사용 불가
+        when(repo.findSuggestionCandidates(anyString(), anyBoolean(), anyString(), any(), anyInt()))
+                .thenReturn(List.of(here));
+
+        assertThat(service.reuseLookup("u1", QuestionReuseService.Scope.SHARED, 63L).reusable()).isFalse();
+        assertThat(service.isRecentlyInvalid(63L)).isTrue();
+
+        List<QuestionReuseService.Suggestion> suggestions =
+                service.suggest("u1", "t-here", QuestionReuseService.Scope.SHARED, "sqlite", 10);
+        assertThat(suggestions).extracting(QuestionReuseService.Suggestion::turnId).containsExactly(63L);
+        assertThat(suggestions.get(0).origin()).isEqualTo(QuestionReuseService.Origin.THREAD);
+    }
 }

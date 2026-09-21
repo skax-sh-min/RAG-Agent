@@ -98,6 +98,31 @@ public class QuestionReuseRepository {
     private static final String NOT_DIRECT_PREDICATE =
             "AND COALESCE(src.direct_mode, t.direct_mode, 0) = 0 ";
 
+    /**
+     * 활성 출처가 하나도 없는 턴을 추천 후보에서 미리 뺀다 — <b>추천 쿼리 전용</b>.
+     *
+     * <p>{@code QuestionReuseService.validateTurn()} 이 보는 사실 가운데 이 테이블에 이미 있는 것은
+     * 둘이다: 출처 행이 아예 없다(검색을 돌리지 않은 턴, 기능 이전 턴), 그리고 통지 경로가
+     * {@code status} 를 이미 {@code deleted}/{@code modified} 로 찍어 둔 행(문서 삭제·재인덱싱, 청크
+     * 삭제·편집). 둘 다 영구적이고 저장된 사실인데, 예전에는 SQL 이 그 행을 후보로 내고 서비스가
+     * 키 입력마다 행당 쿼리 둘로 다시 확인해 버렸다. 비용보다 나쁜 것은 <b>창</b>이다 — 후보는
+     * {@code LIMIT} 하나로 잘리므로, 실패할 게 정해진 행이 창을 채우면 그 뒤의 유효한 질문은
+     * 목록에 오르지 못한다.
+     *
+     * <p>{@code validateTurn()} 보다 절대 엄격하지 않다: 활성 행이 하나도 없으면 검증 범위가 참여
+     * 청크든 NULL 폴백이든 첫 루프에서 반드시 실패한다. 반대는 성립하지 않는다(활성 행 옆에 낡은
+     * 참여 행이 있는 턴은 여기를 통과하고 서비스에서 떨어진다) — 해시 대조는 다른 파일
+     * ({@code chunk_fts_key}, vectorJdbc)이라 SQL 로 내릴 수 없고, 그쪽 실패는 서비스의 부정 캐시가
+     * 맡는다. 레거시 {@code 'inactive'} 행은 {@code = 'active'} 비교라 자동으로 "없음" 쪽이다.
+     *
+     * <p>{@link #findTurnForReuse} 에는 걸지 않는다 — 그 조회는 행 하나이고 뒤에 {@code validateTurn()}
+     * 이 어차피 돌며, 그 판정의 <b>사유</b>("출처 청크가 없어…"/"삭제 또는 재인덱싱되어…")가 폴백
+     * 토스트로 사용자에게 나간다. 여기서 먼저 걸러 버리면 그 자리가 "선택한 항목을 찾을 수 없거나
+     * 접근 권한이 없습니다" 로 뭉개진다. 현재 대화 항목(이동 대상)도 예외 그대로다.
+     */
+    private static final String HAS_ACTIVE_SOURCE_PREDICATE =
+            "AND EXISTS (SELECT 1 FROM turn_source_ref r WHERE r.turn_id = t.id AND r.status = 'active') ";
+
     private static String buildReusableModePredicate() {
         String excluded = java.util.Arrays.stream(ResponseMode.values())
                 .filter(m -> !m.allowsReuse())
@@ -190,7 +215,7 @@ public class QuestionReuseRepository {
      *
      * <p><b>현재 대화({@code threadId})의 턴은 재사용 술어를 타지 않는다.</b> 그 항목의 클릭은
      * 답변 재사용이 아니라 "이 대화에서 이미 물었던 자리로 이동"이라, 싫어요·응답 모드·Direct
-     * 제외 같은 <em>재사용</em> 자격 조건과 무관하다 — 같은 대화에 같은 답변을 한 번 더 붙이는
+     * 제외·활성 출처 유무 같은 <em>재사용</em> 자격 조건과 무관하다 — 같은 대화에 같은 답변을 한 번 더 붙이는
      * 것보다 그 자리를 보여주는 편이 항상 낫고, 그 조건으로 걸러 버리면 "방금 여기서 물었는데
      * 왜 목록에 없지"가 된다. 실제 재사용 조회({@link #findTurnForReuse})는 술어를 그대로 두므로,
      * 클라이언트가 현재 대화의 턴 id 로 재사용을 부르더라도 엄격한 쪽이 이긴다.
@@ -213,7 +238,8 @@ public class QuestionReuseRepository {
             "AND ( (t.thread_id = ? AND t.user_id = ?) " +
             "   OR ( (t.feedback IS NULL OR t.feedback <> 'DISLIKE') " +
             "        AND " + REUSABLE_MODE_PREDICATE +
-            NOT_DIRECT_PREDICATE + ") ) " +
+            NOT_DIRECT_PREDICATE +
+            HAS_ACTIVE_SOURCE_PREDICATE + ") ) " +
             (meOnly ? "AND t.user_id = ? " : "") +
             "ORDER BY CASE WHEN t.thread_id = ? AND t.user_id = ? THEN 0 ELSE 1 END, " +
             "         CASE WHEN t.user_id = ? THEN 0 ELSE 1 END, " +

@@ -2391,7 +2391,7 @@ mvn test -Dtest=SearchQualityEvaluationTest -Dsearch-eval.enabled=true
 
 #### 동작 요약
 
-- 추천 조회: `GET /api/v1/questions/suggest?q=...&limit=...` (서버는 항상 shared 기준 처리)
+- 추천 조회: `GET /api/v1/questions/suggest?q=...&limit=...` (서버는 항상 shared 기준 처리, `limit` 은 서버에서 1~20 으로 보정 — 채팅 화면은 20 을 보낸다)
 - 재사용 시도: `POST /api/v1/questions/reuse`
 - 재사용 성공: 기존 답변을 새 turn으로 저장(`provider=db-reuse`, `reused_from_turn_id` 참조 저장). `response_mode`·`direct_mode`·`selected_tags` 는 **원본 턴의 값을 복사**한다(원본이 다시 재사용 턴이면 그 원본의 값) — 두 글자 표기·좋아요 프리필의 태그 스코프·다음 턴의 이력 렌더가 그 컬럼을 읽기 때문이다. 이전 판이 저장하던 자리표시자(`'M'`·0·빈 태그)를 든 옛 재사용 행은 조회 시 COALESCE 로 원본의 값을 내므로 백필이 필요 없다
 - 재사용 실패: `fallback=true`와 사유를 반환, 클라이언트가 일반 질의 파이프라인으로 즉시 전환
@@ -2400,6 +2400,8 @@ mvn test -Dtest=SearchQualityEvaluationTest -Dsearch-eval.enabled=true
 
 - `direct_mode=1`(Direct) 턴은 좋아요 여부와 무관하게 추천/재사용 후보에서 제외 — 검색을 돌리지 않아 `turn_source_ref`가 0건이고, 아래 유효성 검증이 언제나 거부하므로 후보에 올려 봐야 헛클릭이다. 판정은 원본 행 기준(`COALESCE(src.direct_mode, t.direct_mode, 0)`)이라 옛 재사용 턴도 원본이 Direct면 제외된다. 좋아요는 지식 제안(§6.9)을 여는 신호이며 재사용 자격이 아니다
 - 질문 정규화(공백/대소문자) 기반 중복 제거
+- **활성 출처(`turn_source_ref.status='active'`)가 하나도 없는 턴은 추천 SQL 이 미리 제외** — 검색을 돌리지 않은 턴(meta·검색 0건·기능 이전 기록)과 문서 삭제·재인덱싱·청크 삭제로 출처 전부가 무효화된 턴. 아래 유효성 검증이 반드시 거부하는 행이라 후보 창(`limit×4`)만 차지했다. 재사용 조회(`/reuse`)에는 걸지 않아 클릭 시 사유가 그대로 나온다
+- **검증에 떨어진 후보는 10분 부정 캐시**로 다음 입력에서 검증 없이 건너뛴다(통지 없이 바뀐 청크 — 큐레이션 편집·비활성화 — 는 해시 대조에서만 드러나므로). 영구 표시가 아니라 TTL 인 이유는 큐레이션 재승인이나 벡터 DB 복구처럼 청크가 되돌아오는 경우가 있어서다 — 그때 최악은 그 답변이 최대 10분 추천에 안 뜨는 것이며, 클릭(`/reuse`)은 캐시를 보지 않고 항상 새로 판정한다
 - **응답 모드가 `S`(간단히) 또는 `C`(응용)였던 turn은 후보에서 제외**됩니다. `C`는 "문서에서 찾아 달라"가 아니라 "만들어 달라"는 요청이라, 저장된 코드를 그대로 돌려주면 사용자가 요청한 바로 그 일을 하지 않는 셈이 됩니다(근거 청크가 그대로여도 마찬가지). 판정은 `ResponseMode.allowsReuse()`이고 기준값은 `conversation_turns.response_mode`입니다 — 값이 비어 있거나 옛 `M`/`L`이거나 알 수 없는 값이면 `N`으로 간주되어 **후보에 남습니다**
 
 #### API 오류/폴백 응답 요약
