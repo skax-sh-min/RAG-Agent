@@ -483,4 +483,5 @@ User question
 | `POST` | `/api/v1/questions/reuse` | Reuse a suggested question's stored answer; revalidates source chunks, else signals fallback |
 | `GET` | `/api/v1/llm/usage` | Per-provider token usage + Circuit Breaker status |
 | `GET` | `/api/v1/llm/usage/history` | Daily token history (`?days=7\|30\|90`) |
-| `GET` | `/api/v1/llm/concurrency` | Live LOCAL-tier concurrency for the header indicator (`{"available","inUse","capacity"}`) |
+| `GET` | `/api/v1/llm/concurrency` | Live LOCAL-tier concurrency for the header indicator (`{"available","inUse","capacity","blockedSeconds"}`) |
+| `GET` | `/api/v1/llm/ping` | Is the local LLM alive? Three answers per LOCAL tier-1 provider — reachable (`/models`), model loaded (LM Studio `state` / llama.cpp `/health`), and with `?deep=true` an actual 1-token completion. 200 when every check passed, 503 otherwise (`curl -f` friendly) |

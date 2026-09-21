@@ -853,16 +853,31 @@ class LlmRouterTest {
         var before = r.localTier1Concurrency().orElseThrow();
         assertThat(before.capacity()).isEqualTo(7);
         assertThat(before.inUse()).isEqualTo(0);
+        assertThat(before.blockedSeconds()).isEqualTo(0);
 
         breaker.block("local", null);
         var afterBlock = r.localTier1Concurrency().orElseThrow();
         assertThat(afterBlock.capacity()).isEqualTo(7); // 차단돼도 capacity 합계에는 그대로 남는다
         assertThat(afterBlock.inUse()).isEqualTo(3); // local의 capacity(3) 전체가 "사용 중"으로 집계됨
+        // 헤더 표시기가 "3/7"이 아니라 "차단 중 Ns"를 보여줄 수 있게 남은 초를 함께 낸다(breaker 기본 2분 → 1..120).
+        assertThat(afterBlock.blockedSeconds()).isBetween(1, 120);
 
         breaker.block("local-2", null);
         var bothBlocked = r.localTier1Concurrency().orElseThrow();
         assertThat(bothBlocked.capacity()).isEqualTo(7);
         assertThat(bothBlocked.inUse()).isEqualTo(7); // 전부 차단 → 완전 포화로 표시(사라지지 않음)
+        assertThat(bothBlocked.blockedSeconds()).isBetween(1, 120);
+    }
+
+    @Test
+    @DisplayName("localTier1Providers — 헤더 표시기와 핑이 같은 프로바이더 집합을 본다 (LOCAL priority=1, 비활성 제외)")
+    void localTier1Providers_sameSetAsTheIndicator() {
+        var local = p("local", ProviderRole.LOCAL, TaskType.BOTH, 1);
+        var fast = p("local-fast", ProviderRole.LOCAL, TaskType.MICRO_TEXT, 0);
+        var cloud = p("openai", ProviderRole.NORMAL, TaskType.BOTH, 1);
+        var r = new LlmRouter(List.of(local, fast, cloud), null, breaker, RoutingMode.COST_FIRST);
+
+        assertThat(r.localTier1Providers()).extracting(LlmProvider::name).containsExactly("local");
     }
 
     @Test

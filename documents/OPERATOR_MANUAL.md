@@ -1882,6 +1882,7 @@ app.llm.providers[8].concurrency=4
 - **임베딩 활동도 함께 반영됩니다**: 인덱싱·검색 임베딩 호출은 이 채팅 동시성 게이트를 전혀 거치지 않는 별도 `EmbeddingModel` 데코레이터 체인이라, 별도 in-flight 카운터(`EmbeddingConcurrencyTracker`)를 채팅 사용량에 합산합니다 — 그래서 임베딩만 바쁠 때도 지표가 0에 머무르지 않습니다. 합산값은 용량을 넘지 않게 잘립니다(임베딩 동시성은 `EMBED_MAX_CONCURRENT_BATCHES` 등 별도 한도라 합이 용량을 초과할 수 있기 때문).
 - **서킷브레이커로 차단된 프로바이더는 용량에는 남고 그 전체가 "사용중"으로 집계됩니다** — 제외돼서 지표 자체가 사라지는 대신, 로컬 프로바이더가 하나뿐인 배포에서 그게 차단되면 예컨대 `3/3`(완전 포화)으로 표시됩니다.
 - 로컬 티어 프로바이더가 하나도 등록/활성화돼 있지 않으면 지표 자체가 숨겨집니다.
+- **서킷 브레이커가 막고 있는 동안은 `LLM: 차단 중 4s`** 로 바뀝니다(`blockedSeconds`). 예전엔 이 상태가 `3/3`(완전 포화)으로만 보여 "바쁘다"와 "방금 실패해서 재시도를 기다린다"를 가를 수 없었습니다. 툴팁이 `GET /api/v1/llm/ping` 을 가리킵니다 — 아래 "로컬 LLM 생사 확인".
 
 ---
 
@@ -2774,9 +2775,26 @@ curl http://localhost:8001/api/v2/heartbeat   # v1 경로는 1.x 서버에서 40
 # 임베딩 서버 확인
 curl ${EMBED_BASE_URL:-$LOCAL_LLM_URL}/models -H "Authorization: Bearer ${EMBED_API_KEY:-$LOCAL_LLM_KEY}"
 
-# LOCAL 프로바이더 확인
-curl $LOCAL_LLM_URL/models -H "Authorization: Bearer $LOCAL_LLM_KEY"
+# LOCAL 프로바이더 확인 — 앱이 실제로 쓰는 base-url·모델 id 로, 세 단계를 따로 답한다 (아래 "로컬 LLM 생사 확인")
+curl -f http://localhost:8080/api/v1/llm/ping?deep=true
 ```
+
+#### 로컬 LLM 생사 확인 — `GET /api/v1/llm/ping`
+
+"살아 있는가"의 답은 셋으로 갈립니다. 2026-09-21 의 GPU 소실(`decode() failed: vk::Queue::submit: ErrorDeviceLost`)에서 LM Studio 의 HTTP 서버는 끝까지 살아 있었고(500 과 빈 본문을 *돌려줬습니다*), 모델도 "로드됨"이었으며, 죽은 것은 추론 엔진뿐이었습니다 — `/v1/models` 로는 그 상태를 구분할 수 없습니다.
+
+| 필드 | 무엇을 물었나 | 실패하면 |
+|---|---|---|
+| `reachable` / `latencyMs` | `GET {baseUrl}/models` 가 2xx JSON 을 주는가 | 프로세스가 없거나 포트·URL 이 다르다 — `error` 에 `Connection refused` 등 |
+| `modelListed` | 설정된 모델 id 가 목록에 있는가(G3 와 같은 `ModelNameResolver` 규칙) | 모델명 오탈자, 다른 모델을 띄움. JIT 로딩이 켜진 LM Studio 는 다운로드된 모델을 전부 내므로 이것만으로 "로드됨"은 아님 |
+| `modelState` | LM Studio `GET /api/v0/models` 의 `state`(`loaded`/`not-loaded`), llama.cpp 면 `GET /health` 의 `status`, 둘 다 없으면 `unknown` | `not-loaded` 면 LM Studio 에서 모델을 Load |
+| `inference` (`?deep=true`) | `max_tokens=1` 채팅 완성 한 번 — 위 둘을 통과하고도 여기서 실패하면 **엔진이 죽은 것** | `error` 에 서버가 준 사유(`HTTP 500 ... ErrorDeviceLost`, `application/octet-stream` 파싱 실패 등). 모델 Eject → Load 또는 서버 재시작 |
+| `circuitBlockedSeconds` | 앱의 서킷 브레이커가 이 프로바이더를 막고 있는 남은 초 | 핑은 브레이커를 **우회**하므로 차단 중에도 실제 상태를 알 수 있고, 핑 결과가 차단을 풀거나 만들지도 않습니다 |
+
+- 전부 통과면 **200**, 하나라도 실패면 **503** — 모니터링 스크립트는 `curl -f` 로 씁니다. 로컬 티어(`role=LOCAL, priority=1`) 프로바이더가 없으면 `{"available": false}`(200).
+- `deep=true` 는 실제 추론 1토큰이라 비용이 있지만 관리자 전용은 아닙니다 — 채팅이 게스트에게 열린 배포에서는 누구나 이미 전체 답변 생성을 시킬 수 있어 그보다 엄격히 막을 이유가 없습니다(속도 제한은 `default` 버킷 그대로). `timeoutSeconds`(기본 15, 최대 60)는 완성 호출의 읽기 타임아웃 — JIT 로딩 서버가 첫 요청에서 모델을 올리느라 넘길 수 있고, 그것도 "지금은 못 한다"는 참인 답입니다.
+- `baseUrl` 은 내부 호스트라 `ROLE_ADMIN` 응답에만 실립니다.
+- 헤더의 `LLM: 차단 중 4s` 표시(§5.7)와 짝입니다 — 표시기는 "앱이 지금 기다리는 중"을, 핑은 "서버가 실제로 어떤 상태인가"를 답합니다.
 
 | 원인 | 조치 |
 |------|------|
@@ -2784,7 +2802,7 @@ curl $LOCAL_LLM_URL/models -H "Authorization: Bearer $LOCAL_LLM_KEY"
 | API 키 만료/권한 없음 | 키 재발급 후 재시작 |
 | LOCAL LLM 서버 미실행 | LM Studio / Ollama 실행 확인 |
 | 로컬 LLM 없이 실행 | `LOCAL_LLM_URL`(및 `LOCAL_LLM_URL_2`·`LOCAL_FAST_LLM_URL`)을 **비워** LOCAL 을 등록 자체에서 빼고(G2 — 키를 비우는 것으로는 비활성화되지 않는다, G1) NORMAL/PREMIUM 등록 |
-| 모든 프로바이더 소진 | `/llm-usage`에서 차단 상태 확인; 차단은 시간이 지나면 자동 해제됩니다(폴백 있음 30초 또는 `circuit-breaker-minutes`, **폴백 없는 유일 프로바이더는 5초**). **이 메시지는 원인이 아니라 결과입니다** — LOCAL 프로바이더가 하나뿐인 배포에서는 그 하나가 한 번 실패하기만 해도 이 문구가 나옵니다. 진짜 원인은 바로 앞 로그 줄(`Provider [x] threw ...`)에 있습니다 |
+| 모든 프로바이더 소진 | `GET /api/v1/llm/ping?deep=true` 로 서버 상태부터(위 표); `/llm-usage`에서 차단 상태 확인; 차단은 시간이 지나면 자동 해제됩니다(폴백 있음 30초 또는 `circuit-breaker-minutes`, **폴백 없는 유일 프로바이더는 5초**). **이 메시지는 원인이 아니라 결과입니다** — LOCAL 프로바이더가 하나뿐인 배포에서는 그 하나가 한 번 실패하기만 해도 이 문구가 나옵니다. 진짜 원인은 바로 앞 로그 줄(`Provider [x] threw ...`)에 있습니다 |
 
 ---
 
@@ -2927,11 +2945,13 @@ docker compose logs app | grep -E "판정 없음으로 기록한다" | tail -20
 
 사용자 화면에도 **언제부터 다시 되는지**가 표시됩니다 — `AI 서버가 일시적으로 응답하지 않아 20초 후 다시 시도할 수 있습니다. (task=TEXT)`. 차단이 원인일 때만 초가 붙고, 시도했다가 실패해 후보가 없어진 경우엔 `잠시 후 다시 시도해 주세요.` 로 나갑니다(기다린다고 풀리는 것이 아니므로). REST 호출에는 같은 값이 `Retry-After` 헤더로 나갑니다.
 
-**여전히 이 증상이 보인다면** 로그에서 실제 예외를 확인하세요:
+**여전히 이 증상이 보인다면** 먼저 서버가 실제로 어떤 상태인지 묻고(`curl -f http://localhost:8080/api/v1/llm/ping?deep=true` — "LLM 호출 오류 (500)" 의 표), 로그에서 실제 예외를 확인하세요:
 
 ```bash
-grep -E "threw |blocked for |NO-FALLBACK" logs/rag-agent.log | tail -30
+grep -E "threw |blocked for |NO-FALLBACK|LLM_PING" logs/rag-agent.log | tail -30
 ```
+
+> **"4초 후 다시 시도" 가 거짓이 되는 경우** — 유일 프로바이더는 실패해도 5초만 차단하므로(위) 사용자 문구의 초는 그 잔여 시간입니다. GPU 소실처럼 서버 프로세스는 살았는데 엔진이 죽은 경우에는 5초가 지나도 같은 실패가 반복됩니다. 이때 `ping?deep=true` 가 `reachable=true, modelState=loaded, inference.ok=false` 를 내면 앱이 아니라 LLM 서버를 고칠 차례입니다(모델 Eject → Load, 런타임 Vulkan → CUDA, 컨텍스트·GPU 오프로드 축소, 드라이버).
 
 `Provider [x] threw ...` 줄이 진짜 원인입니다. `blocked for 30s`가 보이면 폴백이 있는 구성이라는 뜻이고, `blocked for 5s`면 유일 프로바이더 경로입니다.
 

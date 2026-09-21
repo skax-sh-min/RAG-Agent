@@ -515,6 +515,13 @@ curl http://localhost:8080/api/v1/health
 # {"status":"ok","service":"rag-agent","timestamp":"..."}
 ```
 
+앱 프로세스가 아니라 **로컬 LLM 서버**가 살아 있는지는 별도 엔드포인트로 확인합니다 — 닿는가 / 모델이 로드됐는가 / (`deep=true`) 실제로 한 토큰을 만들 수 있는가를 따로 답하고, 전부 통과하면 200, 하나라도 실패하면 503 입니다.
+
+```bash
+curl -f "http://localhost:8080/api/v1/llm/ping?deep=true"
+# {"available":true,"ok":true,"deep":true,"checkedAt":"...","providers":[{"name":"local","model":"gemma-4-e2b","reachable":true,"latencyMs":12,"modelListed":true,"modelState":"loaded","circuitBlockedSeconds":0,"inference":{"ok":true,"latencyMs":830,"error":null},"error":null,"ok":true}]}
+```
+
 ---
 
 ### 3.2 문서 업로드 및 인덱싱

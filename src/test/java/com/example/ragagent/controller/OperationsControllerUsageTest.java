@@ -28,6 +28,13 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import com.example.ragagent.llm.LlmProvider;
+import com.example.ragagent.llm.ProviderRole;
+import com.example.ragagent.llm.TaskType;
+import com.sun.net.httpserver.HttpServer;
+import java.io.OutputStream;
+import java.net.InetSocketAddress;
+import java.nio.charset.StandardCharsets;
 
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.not;
@@ -122,7 +129,19 @@ class OperationsControllerUsageTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.available").value(true))
                 .andExpect(jsonPath("$.inUse").value(2))
-                .andExpect(jsonPath("$.capacity").value(6));
+                .andExpect(jsonPath("$.capacity").value(6))
+                .andExpect(jsonPath("$.blockedSeconds").value(0));
+    }
+
+    @Test
+    @DisplayName("GET /api/v1/llm/concurrency — 서킷 브레이커 차단 잔여 초를 함께 낸다 (헤더 표시기의 '차단 중 4s')")
+    void concurrency_carriesBlockedSeconds() throws Exception {
+        when(llmRouter.localTier1Concurrency())
+                .thenReturn(Optional.of(new LlmRouter.ConcurrencySnapshot(3, 3, 4)));
+
+        mvc.perform(get("/api/v1/llm/concurrency"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.blockedSeconds").value(4));
     }
 
     @Test
@@ -395,5 +414,92 @@ class OperationsControllerUsageTest {
                 .andExpect(status().isForbidden());
 
         verify(usageRepo, never()).deleteByProvider(any());
+    }
+
+    // ── GET /api/v1/llm/ping ─────────────────────────────────────────────────────────────
+
+    private HttpServer llmServer;
+
+    @org.junit.jupiter.api.AfterEach
+    void stopLlmServer() {
+        if (llmServer != null) llmServer.stop(0);
+    }
+
+    /** LM Studio 흉내 — /v1/models·/api/v0/models 는 정상, 완성은 인자로 준 상태·본문. */
+    private LlmProvider fakeLocalProvider(int completionStatus, String completionBody) throws Exception {
+        llmServer = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        Map<String, String> routes = Map.of(
+                "/v1/models", "{\"data\":[{\"id\":\"gemma-4-e2b\"}]}",
+                "/api/v0/models", "{\"data\":[{\"id\":\"gemma-4-e2b\",\"state\":\"loaded\"}]}",
+                "/v1/chat/completions", completionBody);
+        llmServer.createContext("/", exchange -> {
+            String path = exchange.getRequestURI().getPath();
+            String body = routes.getOrDefault(path, "{\"error\":\"Unexpected endpoint\"}");
+            int status = !routes.containsKey(path) ? 404 : path.endsWith("/chat/completions") ? completionStatus : 200;
+            byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            exchange.sendResponseHeaders(status, bytes.length);
+            try (OutputStream os = exchange.getResponseBody()) { os.write(bytes); }
+        });
+        llmServer.start();
+        String base = "http://127.0.0.1:" + llmServer.getAddress().getPort() + "/v1";
+        return new LlmProvider("local", TaskType.BOTH, ProviderRole.LOCAL, 1, "", base, "gemma-4-e2b", true, chatModel, null);
+    }
+
+    @Test
+    @DisplayName("GET /api/v1/llm/ping — LOCAL priority=1 프로바이더가 없으면 available=false")
+    void ping_unavailable() throws Exception {
+        when(llmRouter.localTier1Providers()).thenReturn(List.of());
+
+        mvc.perform(get("/api/v1/llm/ping"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.available").value(false));
+    }
+
+    @Test
+    @DisplayName("GET /api/v1/llm/ping — 정상 서버: 200, 닿음·로드됨, deep 이 아니면 추론은 묻지 않는다; base-url 은 관리자에게만")
+    void ping_healthy_shallow() throws Exception {
+        LlmProvider p = fakeLocalProvider(200, "{\"choices\":[{\"message\":{\"content\":\"pong\"}}]}");
+        when(llmRouter.localTier1Providers()).thenReturn(List.of(p));
+        when(circuitBreaker.secondsUntilUnblocked("local")).thenReturn(-1);
+
+        mvc.perform(get("/api/v1/llm/ping"))    // class-level @WithMockUser = ROLE_USER
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.available").value(true))
+                .andExpect(jsonPath("$.ok").value(true))
+                .andExpect(jsonPath("$.deep").value(false))
+                .andExpect(jsonPath("$.providers[0].name").value("local"))
+                .andExpect(jsonPath("$.providers[0].reachable").value(true))
+                .andExpect(jsonPath("$.providers[0].modelListed").value(true))
+                .andExpect(jsonPath("$.providers[0].modelState").value("loaded"))
+                .andExpect(jsonPath("$.providers[0].circuitBlockedSeconds").value(0))
+                .andExpect(jsonPath("$.providers[0].inference").doesNotExist())
+                .andExpect(jsonPath("$.providers[0].baseUrl").doesNotExist());
+
+        mvc.perform(get("/api/v1/llm/ping")
+                        .with(org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user("admin").roles("ADMIN")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.providers[0].baseUrl").value(p.baseUrl()));
+    }
+
+    /** 그날의 사고 — 서버·모델은 멀쩡해 보이는데 decode 만 500. deep 만 잡고, 스크립트용으로 503 을 낸다. */
+    @Test
+    @DisplayName("GET /api/v1/llm/ping?deep=true — 엔진만 죽은 서버는 503 + inference.ok=false + 서버가 준 사유")
+    void ping_deep_deadEngine() throws Exception {
+        LlmProvider p = fakeLocalProvider(500,
+                "{\"error\":{\"code\":500,\"message\":\"decode() failed: vk::Queue::submit: ErrorDeviceLost\"}}");
+        when(llmRouter.localTier1Providers()).thenReturn(List.of(p));
+        when(circuitBreaker.secondsUntilUnblocked("local")).thenReturn(4);
+
+        mvc.perform(get("/api/v1/llm/ping").param("deep", "true"))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.ok").value(false))
+                .andExpect(jsonPath("$.deep").value(true))
+                .andExpect(jsonPath("$.providers[0].reachable").value(true))
+                .andExpect(jsonPath("$.providers[0].modelState").value("loaded"))
+                .andExpect(jsonPath("$.providers[0].circuitBlockedSeconds").value(4))
+                .andExpect(jsonPath("$.providers[0].inference.ok").value(false))
+                .andExpect(jsonPath("$.providers[0].inference.error").value(
+                        org.hamcrest.Matchers.containsString("ErrorDeviceLost")));
     }
 }
