@@ -1,7 +1,7 @@
 # RAG-Agent 온라인 확장 개발 계획
 
 > Java 개발자 관점 · Spring Boot 3.5 + Spring AI 1.1 + Java 21 · 작성일 2026-05-11  
-> **개발 기준 문서**: 이 파일(documents/PLAN.md)이 마스터. `documents/refactoring/18-extension-roadmap.md`는 각 항목의 기술 레퍼런스.
+> **개발 기준 문서**: 이 파일(documents/PLAN.md)이 마스터. 살아 있는 동작 명세는 코드와 [CLAUDE.md](../CLAUDE.md), 결정 근거·실패 기록은 [PITFALLS.md](PITFALLS.md).
 
 ---
 
@@ -71,13 +71,13 @@
 1. [요약 (Executive Summary)](#1-요약-executive-summary)
 2. [현재 구조 분석](#2-현재-구조-분석)
 3. [핵심 기술 의사결정](#3-핵심-기술-의사결정)
-4. [Phase 1 — 보안 기반 구축](#4-phase-1--보안-기반-구축-2주)
-5. [Phase 2 — 모바일 UI](#5-phase-2--모바일-ui-개선-12주)
-6. [Phase 3 — 운영 견고화](#6-phase-3--운영-견고화-1주)
-7. [Phase 4 — 확장 (조건부)](#7-phase-4--확장-조건부)
-8. [Phase 5 — Vector Store 선택적 연동](#8-phase-5--vector-store-선택적-연동)
-9. [Phase 6 — 폐쇄망 / 노-도커 실행 지원](#9-phase-6--폐쇄망air-gapped--노-도커-실행-지원)
-10. [Phase 7 — 검색 품질·성능 고도화](#10-phase-7--검색-품질성능-고도화)
+4. [Phase 1 — 보안 기반 구축](#4-phase-1--보안-기반-구축--완료)
+5. [Phase 2 — 모바일 UI](#5-phase-2--모바일-ui-개선--완료)
+6. [Phase 3 — 운영 견고화](#6-phase-3--운영-견고화--일부-완료)
+7. [Phase 4 — 확장 (조건부)](#7-phase-4--확장-조건부--미착수)
+8. [Phase 5 — Vector Store 선택적 연동](#8-phase-5--vector-store-선택적-연동--완료--확장-계획)
+9. [Phase 6 — 폐쇄망 / 노-도커 실행 지원](#9-phase-6--폐쇄망air-gapped--노-도커-실행-지원--g1g5-완료-sqlite-vec-라이브-부팅은-운영-인수)
+10. [Phase 7 — 검색 품질·성능 고도화](#10-phase-7--검색-품질성능-고도화--완료)
 11. [리스크 및 이슈](#11-리스크-및-이슈)
 12. [의존성 변경 사항](#12-의존성-변경-사항-pomxml)
 13. [DB 스키마 변경](#13-db-스키마-변경-요약)
@@ -99,7 +99,7 @@
 | Phase 4 — 확장 | OAuth2, PostgreSQL 마이그레이션 | 조건부 | 🔵 미착수 |
 | Phase 5 — Vector Store 선택 | sqlite-vec / ChromaDB 런타임 선택 | 중요 | ✅ 완료 (Step 5.1~5.10) |
 | Phase 6 — 폐쇄망 / 노-도커 | sqlite-vec 단독·로컬 LLM·CDN 0 (키리스 LOCAL, 차원 외부화) | 중요 | 🟢 G1~G5 완료 |
-| Phase 7 — 검색 품질·성능 고도화 | 가중 RRF·쿼리 임베딩 캐시(7-A) · Contextual Retrieval(7-B) · 한국어 FTS(7-C) · 성능/메모리 최적화 제안(7-E) | 중요 | 🟡 7-A·7-B·7-C 완료, 7-E 제안 검토중 |
+| Phase 7 — 검색 품질·성능 고도화 | 가중 RRF·쿼리 임베딩 캐시(7-A) · Contextual Retrieval(7-B) · 한국어 FTS(7-C) · 정확도 마무리·속도·메모리(7-E) · 큐레이션 Q&A·지식 제안·질의 독립화·청크 신고(§10.10~10.14) | 중요 | ✅ 완료 (7-D 만 범위 제외, §10.5) |
 
 ---
 
@@ -209,7 +209,7 @@ SQLite `audit_log` 테이블 대신 Logback `SizeAndTimeBasedRollingPolicy`로 �
 - `data/audit/audit.log` — NDJSON 포맷 (jq 분석 가능)
 - 일별 로테이션 + 10MB 분할, gzip 압축, 7일 자동 삭제, 100MB 전체 상한
 - `application.properties`로 모든 파라미터 조정 가능, `app.audit.enabled=false`로 즉시 비활성
-- 이벤트 8개 기록: upload×2, delete×2, sync×2, routing-mode, thread-delete
+- 완료 당시 이벤트 8개(upload×2, delete×2, sync×2, routing-mode, thread-delete)로 시작해 이후 기능마다 늘었다 — 현재 목록의 단일 출처는 OPERATOR_MANUAL §3.3 「감사 로그」 표
 
 ### 6.5 LLM 사용량 — 임베딩 사용량 분리 ✅ 완료
 
@@ -225,7 +225,7 @@ SQLite `audit_log` 테이블 대신 Logback `SizeAndTimeBasedRollingPolicy`로 �
 
 ### 6.8 Chat 응답 피드백(좋아요/싫어요) 기반 컨텍스트 제외 ✅ 완료
 
-Assistant 응답에 👍/👎 토글 추가(`conversation_turns.feedback`, `PATCH /ui/threads/{threadId}/turns/{turnId}/feedback`). `DISLIKE` turn은 `getHistory()`에서 하드 제외되어 다음 컨텍스트에서 빠진다(`LIKE`는 저장만, 아직 미소비).
+Assistant 응답에 👍/👎 토글 추가(`conversation_turns.feedback`, `PATCH /ui/threads/{threadId}/turns/{turnId}/feedback`). `DISLIKE` turn은 `getHistory()`에서 하드 제외되어 다음 컨텍스트에서 빠진다. `LIKE`는 완료 당시 저장만 했고, 이후 §10.10~10.11 에서 지식 제안 폼을 여는 신호와 Direct 턴의 재사용 자격(§6.23)으로 소비된다.
 
 ### 6.9 입력 시작 시 로컬 요약 선계산 + 중복 제거 컨텍스트 압축 ✅ 완료
 
@@ -308,7 +308,7 @@ no-auth 기본 배포에서 `/documents` 쓰기와 `/admin/**`이 로그인 없�
 
 ### 6.18 Direct 메시지 전용 LLM Temperature 분리 ✅ 완료
 
-라우터 경로가 Spring AI 오토컨피규레이션을 우회해 `LLM_TEMPERATURE` 등 기존 환경변수가 **전부 죽은 설정**이던 문제 — 하드코딩 4곳을 제거하고 `app.llm.temperature`(일반/RAG)·`app.llm.direct-temperature`(Direct 전용)·`app.llm.max-tokens`로 전환. direct-temperature만 매 호출 재조회해 핫 수정(블로킹은 `Prompt`, 스트리밍은 `ChatCompletionRequest`에 주입). 이후 §6.13 확장으로 세 temperature가 모두 핫이 됐고 max-tokens만 조회 전용으로 남았다(현행 clamp·소비처는 CLAUDE.md §6.13 항목 참조).
+라우터 경로가 Spring AI 오토컨피규레이션을 우회해 `LLM_TEMPERATURE` 등 기존 환경변수가 **전부 죽은 설정**이던 문제 — 하드코딩 4곳을 제거하고 `app.llm.temperature`(일반/RAG)·`app.llm.direct-temperature`(Direct 전용)·`app.llm.max-tokens`로 전환. direct-temperature만 매 호출 재조회해 핫 수정(블로킹은 `Prompt`, 스트리밍은 `ChatCompletionRequest`에 주입). 이후 §6.13 확장으로 세 temperature가 모두 핫이 됐고(§6.24 에서 creative-temperature 가 넷째로 추가), max-tokens 는 §6.26 A6 에서 마지막으로 핫 편집 대상이 됐다(현행 clamp·소비처는 CLAUDE.md §6.13 항목 참조).
 
 **동작 변경(주의)**: `MemoryService`·`MarkdownCorrectionService`가 읽던 죽은 `spring.ai.openai.chat.options.max-tokens`(기본 8000)를 `props.llmSafe().maxTokens()`(6000)로 통일하면서 **대화 히스토리 예산 6000→4500자, MD 교정 섹션 크기 3750→2750자**로 기본값이 줄었다. 과거 분량을 유지하려면 `LLM_MAX_TOKENS`를 올려야 한다.
 

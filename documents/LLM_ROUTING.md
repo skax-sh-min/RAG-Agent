@@ -55,6 +55,7 @@
 │    VisionDescriptionService → VISION                                 │
 │    ImageTypeClassifier      → LIGHT_BOTH  (멀티모달: LIGHT_BOTH/BOTH) │
 │    KeywordExtractor (키워드+맥락) → MICRO_TEXT                                  │
+│    CuratedQuestionSuggester → MICRO_TEXT  (/admin 큐레이션 편집의 "본문으로 구체화", 배경 호출) │
 │    RerankerService (opt-in) → TEXT        (SEARCH_RERANK_ENABLED=true일 때만) │
 └──────────────────────────────────────────────────────────────────────┘
 ```
@@ -406,6 +407,8 @@ app.indexing.keyword-batch-size=${INDEXING_KEYWORD_BATCH_SIZE:2}
 | `QuestionCondenser` (§10.12 짧은 후속 질문 독립화 — `executeGatedWithUsage`). 그래프 **바깥**(초기 상태 조립)에서 돌지만 사용자가 기다리는 턴 안이라 게이트 대상이다. MultiQuery 확장과 **여집합**이라 한 턴에 이 계층 호출이 둘이 되지 않는다 | |
 | | `ConversationSummarizerService.precompute()`(fire-and-forget) |
 | | `ThreadMetaService.generateTitleAsync()`(fire-and-forget) |
+| | `CuratedQuestionSuggester.suggest()` (`/admin` 큐레이션 편집의 "본문으로 구체화" — 관리자가 버튼을 눌러야만 도는 `MICRO_TEXT` 1콜, 사용량은 `question:` 라벨) |
+| | `CuratedSubmissionService.enrich()` → `KeywordExtractor.enrichSingle()` (지식 제안 폼의 "빈 칸 자동 생성" + 등록 시 자동 채움 — 게스트도 부를 수 있지만 `executeWithTracking()` 경로라 이 게이트는 타지 않는다, 아래 §6 참고) |
 
 인덱싱 경로는 이미 자체 세마포어(`app.indexing.max-concurrent-llm-calls`)로 동시성을 제어하고 있고, 마감시한 있는 동기 HTTP 호출자가 없으므로 이중 게이팅을 피하기 위해 의도적으로 제외했다 — `LlmRouter.executeWithTracking()`(게이트 미적용, 기존 동작 그대로)을 그대로 사용한다.
 
@@ -437,7 +440,7 @@ findFirst(role, priority 오름차순 순회)
 - **총 동시 처리량 = 등록 대수 × per-provider concurrency** (예: LOCAL 2대 × concurrency 3 = 6).
 - 임베딩 프로바이더도 이제 로드밸런싱된다(§6.21 E1) — `EmbeddingModel` 체인이라 라우팅 지점은 LLM 경로와 다르지만, `LoadBalancingEmbeddingModel`이 다중 임베딩 엔드포인트(`app.embedding.additional-base-urls`)를 least-in-flight로 분산한다. 인덱싱 시 병렬 서브배치(§6.21 E2, `app.embedding.max-concurrent-batches`)와 결합하면 단일 대용량 문서도 여러 엔드포인트를 동시에 채운다. 설정은 OPERATOR_MANUAL §3.2 "임베딩 병렬화" 참고.
 - **큐레이션 Q&A 임베딩(§10.10 · §10.11)**은 이 표의 LLM 채팅 게이트(위 표)와 무관하다 — `VectorStoreFacade.add()`를 통해 인덱싱과 동일한 임베딩 파이프라인(uncached, §10.9.4)을 타므로 여기 §6의 임베딩 로드밸런싱·병렬 서브배치 대상에 자연히 포함된다. **§10.11 이후 이 호출은 관리자가 제안을 승인할 때만 발생한다** — 좋아요는 아무것도 임베딩하지 않으므로 채팅 경로에는 임베딩 비용이 없다(예전에는 3초 디바운스 후 배경 스레드에서 실행됐다). 긴 본문은 임베딩 시점에 여러 청크로 나뉘므로 **승인 1회가 청크 수만큼의 임베딩 호출을 만든다** — 모두 위 임베딩 로드밸런싱 대상이다. 별도의 라우팅/동시성 설정은 필요 없다.
-  - **지식 제안의 요약·키워드 자동 생성**은 위 임베딩과 무관한 **채팅 LLM 호출 1회**다(`CuratedSubmissionService.enrich()` → `KeywordExtractor.enrichSingle()`, `MICRO_TEXT`/`COST_FIRST`). 인덱싱이 쓰는 것과 **같은** 추출기라 사용량도 `context:` 범주로 함께 잡히고 TF 폴백도 같다. 작성자가 폼의 버튼을 눌러야만 돌고, **비어 있는 칸이 없으면 호출 자체가 없다**(서버 판정). 프롬프트에 실리는 것은 본문 전체가 아니라 **첫 청크**다 — `enrichSingle()` 의 계약이 청크 하나이고 입력 상한은 그 계약에만 있기 때문이다(제안 본문은 길이 제한이 없다). 배경 호출이라 §6 동시성 게이트(`executeGated`)를 타지 않는다 — 게스트도 부를 수 있는 경로지만 `RateLimitFilter` 의 `default` 버킷과 `LlmRouter` 의 프로바이더 단위 제한이 그대로 걸린다.
+  - **지식 제안의 요약·키워드 자동 생성**은 위 임베딩과 무관한 **채팅 LLM 호출 1회**다(`CuratedSubmissionService.enrich()` → `KeywordExtractor.enrichSingle()`, `MICRO_TEXT`/`COST_FIRST`). 인덱싱이 쓰는 것과 **같은** 추출기라 사용량도 `context:` 범주로 함께 잡히고 TF 폴백도 같다. 작성자가 폼의 버튼을 눌러야만 돌고, **비어 있는 칸이 없으면 호출 자체가 없다**(서버 판정). 프롬프트에 실리는 것은 본문 전체가 아니라 **첫 청크**다 — `enrichSingle()` 의 계약이 청크 하나이고 입력 상한은 그 계약에만 있기 때문이다(제안 본문은 길이 제한이 없다). 배경 호출이라 §6 동시성 게이트(`executeGated`)를 타지 않는다(`executeWithTracking`) — 게스트도 부를 수 있는 경로지만 `RateLimitFilter` 의 `default` 버킷(분당 120)이 호출 빈도를 막고, 프로바이더 순회·서킷브레이커는 다른 배경 호출과 같이 적용된다.
   - **지식 제안 게시판(사용자 제안 → 관리자 승인, OPERATOR_MANUAL §6.9)**도 승인 시점에 같은 경로(`CuratedQaService.createFromSubmission()` → `VectorStoreFacade.add()`)를 그대로 탄다. 차이는 두 가지다: (1) 디바운스가 없다 — 좋아요와 달리 관리자의 명시적 1회 동작이라 취소와 경합할 여지가 없기 때문. (2) 본문이 길면 `ChunkSplitter`로 나뉘므로 승인 1회가 **청크 수만큼의 임베딩 호출**을 만든다(청크마다 배경 가상 스레드 1개). 각 호출은 위 임베딩 로드밸런싱을 그대로 타고, 승인 요청 자체는 행 생성 직후 즉시 응답한다 — 그래서 응답 시점에는 임베딩 성공 여부를 알 수 없고, 실패는 `curated_qa.embed_status='failed'`로 남아 관리 화면 배지로 드러난다(하나라도 실패하면 표시).
     - **유일한 LLM 호출은 본문 이미지의 Vision 설명 생성이다.** 텍스트만 있는 제안은 등록·승인 어느 쪽도 LLM을 부르지 않는다(키워드 추출도 요약도 돌지 않는다). 본문에 `[이미지: ...]` 마커가 있으면 `approve()`가 **분할 전에** `CuratedImageStore.describeImages()` → `LazyVisionService`로 이미지당 1회 `TaskType.VISION` 호출을 낸다 — 설명이 임베딩되는 텍스트의 일부여야 그림 내용이 검색에 걸리기 때문. 라우팅은 §1 매트릭스의 VISION 규칙(`type=VISION` → `LIGHT_BOTH` → `BOTH`)을 그대로 따르고, **인덱싱 계열이므로 위 표대로 §6 동시성 게이트는 타지 않는다**(`executeWithTracking()`) — 채팅 슬롯을 잠식하지 않지만 로컬 LLM 서버 자원은 공유한다. 동시성은 `LazyVisionService` 자체의 `app.indexing.max-concurrent-llm-calls` 세마포어가 제한하며, 결과는 `image_descriptions` 캐시에 남아 질의 시점에 재분석되지 않는다.
     - 임베딩과 달리 이 Vision 호출은 **승인 요청 안에서 동기로 끝난다**(배경으로 미루면 마커와 설명이 서로 다른 청크로 갈라진다). 그래서 이미지가 있는 제안은 승인 응답 자체가 느리다 — 장수 상한은 `CuratedImageStore.MAX_IMAGES_PER_SUBMISSION`(기본 10, 프로퍼티 아님). `IMAGE_DESCRIPTION_ENABLED=false`면 `LazyVisionService` 빈이 없어 이 단계가 통째로 생략된다(이미지는 표시만 되고 검색 기여 없음).
@@ -488,7 +491,7 @@ CREATE TABLE IF NOT EXISTS llm_usage (
 
 소형 모델(`local-fast`, priority 0)을 등록하지 않은 배포는 단일 LOCAL(`local`, `type=BOTH`, priority 1)이 답변부터 잡무까지 전부 처리한다. 추론이 필요 없는 고빈도 잡무를 별도 소형 모델로 내리면 (1) 큰 모델이 답변 생성에 전념하고 (2) 두 모델이 **독립 Semaphore**(§6)를 써 슬롯 경합이 사라진다 → 대화 응답 지연 감소.
 
-**`TaskType.MICRO_TEXT`(§6.21 B안)**: 추론 불필요 잡무 전용 태스크 타입. `KeywordExtractor`·`ConversationSummarizerService`·`ThreadMetaService`·`RetrievalService`(MultiQuery 쿼리 확장, §6.21 작업2)·`QuestionCondenser`(짧은 후속 질문 독립화, §10.12) 5개 호출부가 이 타입으로 라우팅된다. **`QuestionCondenser` 만 대화형 경로다** — 나머지 넷과 달리 사용자가 기다리는 턴 안에서 돌고(그래서 `executeGated`), MultiQuery 확장과 **여집합**이라 한 턴에 이 계층 호출이 둘이 되지는 않는다.  
+**`TaskType.MICRO_TEXT`(§6.21 B안)**: 추론 불필요 잡무 전용 태스크 타입. `KeywordExtractor`·`ConversationSummarizerService`·`ThreadMetaService`·`RetrievalService`(MultiQuery 쿼리 확장, §6.21 작업2)·`QuestionCondenser`(짧은 후속 질문 독립화, §10.12)·`CuratedQuestionSuggester`(`/admin` 큐레이션 편집의 질문 구체화 제안) 6개 호출부가 이 타입으로 라우팅된다(`CuratedSubmissionService.enrich()` 는 `KeywordExtractor` 를 재사용하므로 별도 호출부로 세지 않는다). **`QuestionCondenser` 만 대화형 경로다** — 나머지와 달리 사용자가 기다리는 턴 안에서 돌고(그래서 `executeGated`), MultiQuery 확장과 **여집합**이라 한 턴에 이 계층 호출이 둘이 되지는 않는다.  
 **분류(`ClassifierService`)·meta 직답(`DirectAnswerService`)은 품질 민감이라 답변과 같은 `TEXT`로 두어 큰 모델이 처리**한다 — 이름만 보면 `LIGHT_TEXT`가 어울리지만, 실제 코드는 `TaskType.TEXT`를 쓴다. 그래야 `type=TEXT`/`BOTH`(답변용 큰 모델)만 후보가 되어, 소형 모델이 어떤 타입으로 등록되든 이 두 호출로 새어 들어갈 수 없다.  
 문서 변환 백그라운드(`MarkdownCorrectionService` MD 서식 교정·`TextToMarkdownService` TXT 구조화)는 `LIGHT_TEXT`를 쓴다 — 현재 이 타입의 유일한 사용처다.
 

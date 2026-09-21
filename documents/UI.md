@@ -9,12 +9,12 @@
 | 레이어 | 기술 | 설명 |
 |--------|------|------|
 | 템플릿 | Thymeleaf + Layout Dialect | `layout/base.html` 공통 레이아웃 |
-| CSS | Bootstrap 5 (WebJars 5.3.3) | CDN 없이 번들 |
-| 아이콘 | Bootstrap Icons (WebJars 1.11.3) | |
-| 동적 갱신 | HTMX 2.0.4 | JS 없이 서버 fragment 교체 |
-| 마크다운 | marked.js 9.1.4 + DOMPurify 3.1.6 | XSS sanitize 후 렌더 |
-| 코드 하이라이트 | highlight.js 11.11.1 | `sanitize → hljs.highlightElement()` |
-| 차트 | Chart.js 4.4.3 | LLM 사용량 일별 히스토리 stacked bar |
+| CSS | Bootstrap 5 (WebJars 5.3.8) | CDN 없이 번들 — 정확한 버전은 `pom.xml`의 webjars 의존성이 진실 |
+| 아이콘 | Bootstrap Icons (WebJars 1.13.1) | |
+| 동적 갱신 | HTMX 2.0.10 (WebJars) | JS 없이 서버 fragment 교체 |
+| 마크다운 | marked.js 9.1.4 + DOMPurify 3.4.7 (WebJars) | XSS sanitize 후 렌더 — **둘 다 있을 때만** 렌더하고 아니면 평문(CLAUDE.md 규약) |
+| 코드 하이라이트 | highlight.js 11.11.1 | 스크립트는 `static/js/vendor/highlight.min.js` 로컬 번들, CSS 테마만 WebJar — `sanitize → hljs.highlightElement()` |
+| 차트 | Chart.js 4.5.1 (WebJars) | LLM 사용량 일별 히스토리 stacked bar |
 
 ---
 
@@ -28,7 +28,7 @@ src/main/resources/
 │   │                                      #   <img>로 치환해 marked→DOMPurify 렌더하는 전역 유틸(§3.5-bis)
 │   ├── chat.html                          # 채팅 페이지 (이전 turn 서버 렌더 포함)
 │   ├── documents.html                     # 문서 관리 페이지
-│   ├── admin.html                         # 벡터 스토어 관리 (청크 브라우저 + 지식 제안 검토 + 큐레이션 Q&A
+│   ├── admin.html                         # 벡터 스토어 관리 (청크 브라우저 + 지식 제안 검토 + 청크 오류 신고 + 큐레이션 Q&A
 │   │                                      #   + 대화 목록 + 검색 진단 수치)
 │   ├── curated-submissions.html           # 지식 제안 게시판 (등록 폼 + 이미지 업로드 + "내 제안" 목록)
 │   ├── llm-usage.html                     # LLM 사용량 통계 페이지
@@ -43,6 +43,7 @@ src/main/resources/
 │       ├── admin-chunks.html              # 청크 테이블 (컬렉션/문서 필터 + 페이지네이션)
 │       ├── admin-curated.html             # 큐레이션 Q&A 패널 (펼칠 때 지연 로딩)
 │       ├── admin-submissions.html         # 지식 제안 검토 패널 (지연 로딩, 상태 필터)
+│       ├── admin-chunk-reports.html       # 청크 오류 신고 대기열(panel) + 청크별 신고 상세·차이 보기(detail) (§10.14, 지연 로딩)
 │       ├── admin-retrieval-metrics.html   # 검색 진단 수치 패널 (지연 로딩, 사용자/대화 필터)
 │       ├── admin-threads.html             # 대화 목록 패널 + 턴 드릴다운 (§6.25, 지연 로딩)
 │       ├── admin-source-table.html        # 출처별 진단 표 — 위 두 패널이 공유
@@ -76,10 +77,16 @@ src/main/resources/
 | GET | `/api/v1/questions/suggest` | JSON 배열 | 질문 입력 중 추천 목록 조회 (`q`, `limit`, `threadId`; 서버는 항상 shared 기준 처리). 항목마다 `origin`(`thread`/`mine`/`others`/`elsewhere`)이 붙는다 — `threadId`와 같은 대화의 턴이 `thread`이고, 화면은 그 항목만 재사용 대신 **그 질문 위치로 이동**한다 |
 | POST | `/api/v1/questions/reuse` | JSON | 추천 항목 재사용 시도. 반환 직전 출처 청크 유효성 재검증 후 성공 시 `reused=true`, 실패 시 `fallback=true`로 일반 질의 전환 신호 반환 |
 | POST | `/ui/chat/new` | redirect `/chat/{newId}` | 새 대화 생성 |
+| POST | `/ui/chat/summary/precompute` | `202` | 입력창에 첫 글자를 칠 때 발화 — 이전 대화 요약 선계산(콜드스타트 안전망, OPERATOR_MANUAL §6.1) |
+| GET | `/api/v1/chunks/{chunkId}` | JSON `{"content"}` / `404` | 출처 배지 클릭 → "원문 보기" 팝업이 부르는 청크 전문(잘리지 않음, 이미지 마커 포함). 관리자 게이트 없음 — 문서·큐레이션은 공유 저장소 |
+| POST | `/ui/chunk-reports` | `200 {"status":"created","id"}` / `409 {"status":"duplicate"}` / `400` | 출처 원문 팝업의 **내용 오류 신고**(§10.14) — `chunkId`·`reason`(4종)·`comment`(필수)·`threadId`·`turnId`. 게스트 개방(CSRF 필요). 중복 키는 (청크, 신고자, 대화). 관리자에게는 이 버튼 대신 **청크 수정**이 보이고 `/admin` 편집 화면을 새 탭으로 연다(신고 기록 없음). 관리자 처리는 §3.4 |
 | PATCH | `/ui/threads/{threadId}/title` | `fragments/thread-item` | 대화 제목 수정 |
 | PATCH | `/ui/threads/{threadId}/routing-mode` | `204` | 대화별 라우팅 모드 저장 |
 | DELETE | `/ui/threads/{threadId}` | `200` | 대화 삭제 |
+| PATCH | `/ui/threads/{threadId}/turns/{turnId}/feedback` | `204` / `404` | 👍/👎 토글(`feedback=LIKE\|DISLIKE\|NONE`) — §4 좋아요 피드백 |
 | DELETE | `/ui/threads/{threadId}/turns/{turnId}` | `204` | 턴 하나(질문+답변) 삭제 — 싫어요 직후 확인 대화상자에서만 호출된다(§ 피드백). 소유권은 피드백 엔드포인트와 같은 `getFeedback(userId, threadId, turnId)` 스코핑이라 남의 턴·없는 턴 모두 `404` |
+| PATCH | `/ui/threads/{threadId}/turns/{turnId}/images/exclude` | `204` | 썸네일 확대 모달의 **대화에서 제외** — 그 턴의 그 이미지만 숨김(`turn_image_ref.status`, 파일·색인은 그대로) |
+| PATCH | `/ui/threads/{threadId}/turns/{turnId}/sources/exclude` | `204` | 출처 원문 팝업의 **현재 대화에서 이 청크 제거** — 표시 전용(`turn_source_ref` 숨김). 재사용 검증은 계속 그 청크를 본다 |
 | GET | `/ui/threads` | `fragments/thread-list` | 대화 목록 새로고침 |
 
 ### 3.2 문서 관리 (DocumentController)
@@ -90,11 +97,16 @@ src/main/resources/
 | POST | `/ui/documents/upload` | 202 `{"taskId":"..."}` / 409 `{"status":"preflight_warnings","filename","problems":[…]}` | 파일 업로드 수신 → 비동기 인덱싱 시작. 폼 필드 `version`·`tags`·`addImageDescriptions`·`addHeadingNumbers`·`skipLlmCorrection`(`.md` 전용)·`force`. `.md` + `skipLlmCorrection=true` + `force` 없음이면 코드 펜스 사전 점검에 걸릴 때 **아무것도 저장하지 않고** 409(아래 "LLM 교정 건너뛰기" 참고) |
 | GET | `/ui/documents/progress/{taskId}` | `text/event-stream` (SSE) | 인덱싱 진행 이벤트 (`stage`, `done`, `error`) |
 | GET | `/ui/documents/progress/{taskId}/status` | JSON (`IndexingProgressEvent`) | 1회성 상태 조회 — SSE를 새로 열지 않고도 마지막 상태(`buffers`에 있으면 그 이벤트, 워커만 등록돼 있으면 `running`, 둘 다 없으면 `unknown`)를 즉시 확인 |
+| POST | `/ui/documents/progress/{taskId}/cancel` | `204` | 진행 중인 업로드/인덱싱 취소(워커 `interrupt()`, §6.16.1) — 관리자 게이트 |
 | DELETE | `/ui/documents/{docId}` | `200` | 문서 삭제 |
 | GET | `/ui/documents/{docId}/export` | 바이너리(MD/TXT/DOCX, MD+이미지는 ZIP) | 현재 색인된 청크로 문서를 재구성해 다운로드(§ 문서 내보내기, [OPERATOR_MANUAL.md §6.8](OPERATOR_MANUAL.md#68-문서-내보내기) 참고) — 관리자 전용 |
+| GET / PATCH | `/ui/documents/{docId}/tags/edit`·`/tags/view`·`/tags` | 프래그먼트 | 문서 태그 인라인 편집(편집 폼 / 보기 / 저장 — `doc_registry.tags`·벡터 메타·`chunk_fts.doc_tags` 세 곳을 함께 갱신). 편집·저장은 관리자 게이트, 보기는 게스트 개방 |
+| GET / PATCH | `/ui/documents/{docId}/display-name/edit`·`/display-name/view`·`/display-name` | 프래그먼트 | 표시 이름(별칭) 인라인 편집 — 파일명은 그대로 두고 화면 라벨만 바꾼다(`DocumentInfo.displayLabel()`) |
 | GET | `/ui/documents/list` | `fragments/doc-table-body` | 문서 목록 새로고침 |
+| GET | `/api/v1/tags` | JSON 배열 | 태그 목록 — `?version`, `?excludeCommon=true`(채팅 칩: 스코프 내 모든 문서에 공통인 태그 제외), `?includeCurated=true`(지식 제안 폼: 큐레이션 태그 합집합) — §4 |
+| GET | `/api/v1/versions` | JSON 배열 | 색인된 문서 버전 목록 — 채팅 사이드바의 version 셀렉터가 채운다 |
 
-> **관리 전용 인증 모드**(`app.auth.management-only=true`, §6.17 B안)에서는 `POST /ui/documents/upload`, `POST /ui/documents/progress/*/cancel`, `DELETE /ui/documents/{docId}`, `PATCH /ui/documents/{id}/tags`, `GET /ui/documents/{id}/tags/edit`, `GET /ui/documents/{id}/export`가 `hasRole("ADMIN")`로 게이트된다 — 비로그인은 `/login` 리다이렉트, 관리자 아닌 로그인은 403. `GET /documents`·`GET /ui/documents/list`·태그 조회는 게스트에게 그대로 열려 있다. 자세한 내용은 [OPERATOR_MANUAL.md §9.4.2](OPERATOR_MANUAL.md#942-관리-전용-인증-management-only) 참고. 내보내기는 읽기 동작이지만 문서 전체를 한 번에 반출하는 벌크 기능이라 이 그룹에 포함됐다.
+> **관리 전용 인증 모드**(`app.auth.management-only=true`, §6.17 B안)에서는 `POST /ui/documents/upload`, `POST /ui/documents/progress/*/cancel`, `DELETE /ui/documents/{docId}`, `PATCH /ui/documents/{id}/tags`, `GET /ui/documents/{id}/tags/edit`, `PATCH /ui/documents/{id}/display-name`, `GET /ui/documents/{id}/display-name/edit`, `GET /ui/documents/{id}/export`, 그리고 REST 쓰기 3종(`POST /api/v1/documents`, `POST /api/v1/documents/sync`, `DELETE /api/v1/documents/{id}`)이 `hasRole("ADMIN")`로 게이트된다(`SecurityConfig.gateDocumentManagement()` — 전체 인증 모드도 같은 목록) — 비로그인은 `/login` 리다이렉트, 관리자 아닌 로그인은 403. `GET /documents`·`GET /ui/documents/list`·태그 조회는 게스트에게 그대로 열려 있다. 자세한 내용은 [OPERATOR_MANUAL.md §9.4.2](OPERATOR_MANUAL.md#942-관리-전용-인증-management-only) 참고. 내보내기는 읽기 동작이지만 문서 전체를 한 번에 반출하는 벌크 기능이라 이 그룹에 포함됐다.
 >
 > **인덱싱 진행 스테이지**(`stage` 값): `loading` → `structuring`(TXT만) → `describing_images`(Vision 이미지 분석, "이미지 설명 추가" 체크 시만 — "이미지 분석 중 (N/M)") → `correcting`(DOCX/TXT/MD/PPTX/PDF[비스캔]) → `chunking` → `enriching` → `storing` → `done`/`error`/`cancelled`. 각 이벤트는 `stage`와 함께 `done`/`total`/`filename`/`message`를 실어 나르며, `documents.html`의 `stageHtml`/`STAGE_LABELS`가 단계별 진행률 바와 오류 로그 라벨을 렌더링한다. 상세는 [PIPELINE.md §6.3](PIPELINE.md#63-docx--md--임베딩-db-저장-상세-이미지-포함) 참고.
 >
@@ -151,12 +163,15 @@ REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — �
 | GET | `/admin` | `admin.html` | Vector Store 상태 카드 + 컬렉션/버전 목록 + 문서 레지스트리 |
 | GET | `/admin/chunks` | `fragments/admin-chunks :: table` | 컬렉션(또는 버전)·docId별 청크 페이지네이션 |
 | GET | `/admin/chunks/{chunkId}/detail` | JSON | 청크 텍스트·메타데이터 (편집 패널) |
-| POST | `/admin/chunks/{chunkId}` | `200` | 청크 텍스트·메타데이터 수정 (벡터 보존) |
+| POST | `/admin/chunks/{chunkId}` | `200` | 청크 텍스트·메타데이터 수정 (벡터 보존) — 메타데이터는 `excerpt_keywords`·`chunk_context` 두 키만 저장본 위에 병합(`AdminService.mergeEditableMeta()`), 큐레이션 청크는 그 둘도 거부 |
+| POST | `/admin/chunks/{chunkId}/reindex` | `200` / `404` | **이 청크만 재인덱싱** — body `{"regenerateKeywords": true\|false}`. id 보존 upsert + FTS 재색인; 큐레이션 청크는 서버가 `doc_type`으로 갈라 `CuratedQaService.reembedRow()`(행 단위)로 보낸다(OPERATOR_MANUAL §7.2-bis) |
 | DELETE | `/admin/chunks/{chunkId}` | `200` | 청크 삭제 (sqlite-vec는 두 테이블 동기 삭제) |
+| POST | `/admin/registry/reconcile-chunks` | JSON `{"checked","fixed"}` | 문서 레지스트리의 청크 수를 벡터 스토어 실측으로 다시 세어 맞춘다(문서 레지스트리 카드의 **청크 수 재계산** 버튼, 완료 후 `location.reload()`) |
 | POST | `/admin/documents/{docId}/reindex[?force=true]` | 202 `{"taskId":"..."}` / 409 `{"status":"preflight_warnings","docId","editedChunks","problems":[{line,kind,message}]}` | 저장된 MD로 재인덱싱 (DOCX/TXT/MD/PPTX/PDF 전용, 스캔 PDF 제외 — 스캔 PDF는 MD 변환 없이 OCR로 바로 인덱싱되어 재사용할 MD 파일이 없다). 진행률은 업로드와 **같은** `GET /ui/documents/progress/{taskId}` SSE를 그대로 쓴다(위 §3.2 재접속 처리도 동일 적용) — `admin.html`의 `subscribeReindexProgress()`는 연결 오류 시 즉시 포기하지 않고 최대 5회까지 재시도하며, `unknown` 종결 이벤트를 받으면 "새로고침하여 확인" 경고로 표시한다 |
 | GET | `/admin/curated` | `fragments/admin-curated :: panel` | §10.10 — 큐레이션 Q&A 패널 지연 로딩 프래그먼트. `offset`(기본 0)·`limit`(기본 20, 20/50/100) 쿼리 파라미터로 페이지네이션. `/admin` 페이지 자체는 이 데이터를 조회하지 않고, 카드를 처음 펼칠 때만(`<details>` `toggle` 이벤트) HTMX로 호출되며, 이후 페이지 이동·페이지당 건수 변경은 `loadCurated()`(페이지 레벨 JS, plain fetch)가 같은 엔드포인트를 다시 호출함 |
-| GET | `/admin/curated/{id}/detail` | JSON | §10.10 — 큐레이션 Q&A 항목의 질문·답변 조회 (편집 패널) |
-| POST | `/admin/curated/{id}` | `200` | §10.10 — 큐레이션 Q&A 답변 수정 → 재임베딩. 좋아요를 누른 사용자와 무관하게 관리자가 어떤 항목이든 편집 가능 |
+| GET | `/admin/curated/{id}/detail` | JSON | §10.10 — 큐레이션 Q&A 항목의 질문·답변·요약·키워드 조회 (편집 패널) |
+| POST | `/admin/curated/{id}` | `200` / `404` | §10.10 — 큐레이션 Q&A 수정 → 재임베딩 1회. body `{"question","answer","summary","keywords"}` 전부 선택(보낸 값만 반영, `CuratedQaService.updateEntry()`). 저자와 무관하게 관리자가 어떤 항목이든 편집 가능 |
+| POST | `/admin/curated/{id}/suggest-question` | `200 {"question"}` / `204` | 편집 패널의 **본문으로 구체화** — 본문에서 더 구체적인 질문을 `MICRO_TEXT` 1콜로 **제안만** 한다(`CuratedQuestionSuggester`). 저장은 [적용]→[저장]을 눌러야 일어난다 |
 | DELETE | `/admin/curated/{id}` | `200` | §10.10 — 큐레이션 Q&A 강제 삭제(비활성화+de-index). 좋아요 주체의 동의 없이도 관리자가 제거 가능(모더레이션). 사용자 제안에서 온 행이면 **같은 제안의 모든 청크가 함께** 내려간다(전부/전무) |
 | GET | `/admin/retrieval-metrics` | `fragments/admin-retrieval-metrics :: panel` | 3단계 — 턴별 검색 진단 수치 패널 지연 로딩(`offset`/`limit`, 기본 20). **읽기 전용**이며 사용자 스코프가 아니다(배포 전체의 검색 동작을 보는 운영자 뷰, `/admin/**`의 ROLE_ADMIN 게이트 상속). §6.25로 `userId`·`threadId` 필터가 추가됐다 — 둘은 **배타**라 `threadId`가 오면 서버가 `userId`를 떨군다(한 대화는 소유자가 한 명이므로 둘을 함께 들면 원인이 화면에 없는 빈 목록이 나온다) |
 | GET | `/admin/retrieval-metrics/turns/{turnId}/sources` | `fragments/admin-source-table :: standalone` | §6.25 — 한 턴의 출처별 진단 표. 대화 목록 패널의 드릴다운이 지연 로딩하며, 진단 패널의 **상세**와 같은 프래그먼트를 쓴다 |
@@ -170,6 +185,11 @@ REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — �
 | GET | `/admin/submissions/{id}/detail` | JSON | 제안 전문(제목·본문·태그·작성자·상태·예상 청크 수) — 검토 오프캔버스 채우기용 |
 | POST | `/admin/submissions/{id}/approve` | `200 {"curatedId":N}` / `400` / `409` | 임베딩 실행. body의 `title`/`body`/`tags`는 관리자 수정본(생략 시 작성자 원문 유지). 이미 처리된 제안이면 409, 이미지 개수 상한 초과면 400(메시지 포함 — UI가 서버 문구를 그대로 토스트로 띄운다). **본문에 이미지가 있으면 이 요청이 이미지 수만큼의 Vision 호출을 동기로 기다린다**(설명이 임베딩되는 텍스트의 일부여야 해서 배경으로 미룰 수 없다) — 그동안 `임베딩 실행` 버튼은 잠기고 스피너로 바뀐다 |
 | POST | `/admin/submissions/{id}/reject` | `200` / `409` | 거부 — body의 `reason` 필수(작성자에게 전문 노출) |
+| GET | `/admin/chunk-reports` | `fragments/admin-chunk-reports :: panel` | §10.14 — 청크 오류 신고 대기열 지연 로딩(`offset`/`limit`). **행 단위는 신고가 아니라 청크**(배지 숫자 = 그 청크에 모인 신고 수) |
+| GET | `/admin/chunk-reports/open-count` | JSON `{"count":N}` | 헤더 배지·카드 pill 60초 폴링 — **열린 신고를 가진 청크 수** |
+| GET | `/admin/chunk-reports/chunks/{chunkId}` | `fragments/admin-chunk-reports :: detail` | 그 청크의 신고 전부 + 신고 시점 원문 스냅샷 ↔ 현재 내용(줄·낱말 단위 차이, `ChunkDiff`) + 수정/삭제 여부. 편집기는 없고 **청크 편집 열기**가 기존 오프캔버스를 연다 |
+| POST | `/admin/chunk-reports/chunks/{chunkId}/resolve` | `200 {"closed":N}` / `409`(열린 신고 없음) | 「처리 완료」 — 그 청크의 열린 신고를 전부 닫는다(청크 자체는 건드리지 않음). 감사 `chunk.report.resolve` |
+| POST | `/admin/chunk-reports/chunks/{chunkId}/reject` | `200 {"closed":N}` / `409` | 「반려」 — body `{"reason"}` 필수. 감사 `chunk.report.reject` |
 
 > 상태 카드는 `AdminService.vectorStoreView()` → `VectorStoreAdminView`. 백엔드별 표시 차이는 [OPERATOR_MANUAL.md §7.4](OPERATOR_MANUAL.md) 참고.
 >
@@ -193,7 +213,7 @@ REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — �
 > - **삭제**는 되돌릴 수 없고 남의 대화에까지 닿으므로, 확인 문구의 숫자를 렌더된 행이 아니라 **클릭 시점에 서버에서 다시 읽는다**(`delete-preview`). 대가가 있는 줄만 조건부로 붙는다 — 큐레이션 0건·재사용됨 0건이면 그 줄이 아예 없다(늘 "0건 회수"를 보여주면 정작 값이 있을 때의 경고가 묻힌다). 삭제 후에는 행 하나를 빼지 않고 목록 전체를 다시 그린다(요약·전체 개수·페이지 경계가 모두 움직인다).
 > - 표에 `min-width`가 걸려 있다 — 고정 폭 열 합계가 좁은 창의 테이블 폭을 다 먹으면 유연 열(제목)이 `max-width:0`(말줄임 관용구) 때문에 몇 px로 눌린다. 넘치는 만큼은 `.table-responsive`가 가로 스크롤로 흡수한다.
 
-> **카드 순서**: `/admin` 하단은 **지식 제안 검토 → 큐레이션 Q&A → 대화 목록 → 검색 진단 수치** 순이다. 뒤의 둘은 조치 대기열도, 반영 확인용도 아닌 분석·운영 뷰라 아래에 두고, 서로 드릴다운하는 짝이라 붙여 놓는다(대화 행 → 그 대화의 진단, 진단 행 → 그 대화). 앞쪽은 관리자의 조치를 기다리는 대기열(검토 대기 pill이 붙는다)이고, 뒤쪽은 이미 반영된 것을 확인·회수하는 용도라 열어볼 일이 드물어 최하단에 둔다.
+> **카드 순서**: `/admin` 하단은 **청크 오류 신고 → 지식 제안 검토 → 큐레이션 Q&A → 대화 목록 → 검색 진단 수치** 순이다. 앞의 둘은 관리자의 조치를 기다리는 대기열(열린 건수 pill 이 붙는다)이다. 뒤의 둘은 조치 대기열도, 반영 확인용도 아닌 분석·운영 뷰라 아래에 두고, 서로 드릴다운하는 짝이라 붙여 놓는다(대화 행 → 그 대화의 진단, 진단 행 → 그 대화). 앞쪽은 관리자의 조치를 기다리는 대기열(검토 대기 pill이 붙는다)이고, 뒤쪽은 이미 반영된 것을 확인·회수하는 용도라 열어볼 일이 드물어 최하단에 둔다.
 
 > **지식 제안 검토 카드**(`/admin` 하단, 큐레이션 Q&A 카드 바로 위) — 사용자 화면의 **지식 제안**(`nav.submissions`)과 같은 이름을 쓴다. 예전에는 이 카드만 "청크 추가 제안"이라 같은 기능이 화면마다 다른 이름으로 불렸다: 같은 `<details>` 지연 로딩 구조(`hx-trigger="toggle[this.open] once"` → `GET /admin/submissions`)이며, 카드 제목 옆에 검토 대기 건수 pill(`#submission-pending-pill`)이 붙는다(0건이면 `.d-none`). 기본 필터는 `pending` — 상태 드롭다운으로 등록 완료/반려/철회됨/전체 전환. 행의 아이콘을 누르면 검토 오프캔버스(`#submissionReviewOffcanvas`)가 열려 제목·태그·본문을 **전문 그대로** 보여주고 수정한 뒤 **임베딩 실행**/**거부**할 수 있다 — 승인된 본문이 곧 답변 프롬프트의 검색 컨텍스트가 되므로 본문을 잘라 보여주지 않고, 일괄·자동 승인 버튼도 없다([OPERATOR_MANUAL.md §7.6](OPERATOR_MANUAL.md#76-지식-제안-검토-69) 참고). 본문 영역은 **원문/미리보기 탭**으로 전환되며 미리보기는 `marked` → `DOMPurify.sanitize()`를 거친다(사용자가 작성한 마크다운을 관리자 화면에서 렌더하므로 sanitize가 필수). 오프캔버스 상단에는 **승인 시 몇 개 청크로 나뉘는지**(승인 후에는 실제 생성 개수)가 표시된다 — 본문 길이 제한이 없어진 대신 `ChunkSplitter`가 분할하기 때문. 페이지 레벨 JS(`loadSubmissions()`/`openSubmissionReview()`/`approveSubmission()`/`rejectSubmission()`)는 큐레이션 패널과 같은 이유로 `admin.html`에 둔다.
 >
@@ -249,6 +269,7 @@ REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — �
 | POST | `/admin/settings/update` | `fragments/settings-item :: item` | 핫 수정 가능 항목 하나에 오버라이드 저장(`key`, `value`) — 재기동 없이 다음 검색부터 반영, 감사 로그 기록 |
 | POST | `/admin/settings/reset` | `fragments/settings-item :: item` | 오버라이드 삭제 → 프로퍼티 기본값으로 복귀, 감사 로그 기록 |
 | POST | `/admin/settings/provider/toggle` | `fragments/settings-providers :: providers` | LLM 프로바이더 활성/비활성 토글(`name`, `enabled`) — `ProviderToggle`(메모리 전용, `settings_override`와 무관)이라 **재기동 시 초기화**됨. 이름이 같은 프로바이더는 함께 토글되고, 마지막 활성 프로바이더는 비활성화 거부(400). 감사 로그 기록 |
+| POST | `/admin/settings/context-window/reprobe` | `fragments/settings-providers :: providers` | §6.26 A5 — 등록된 LOCAL 프로바이더의 컨텍스트 창을 지금 다시 탐지해 프로바이더 표 전체를 되돌린다(프로바이더별 결과 배지 포함). 감사 `settings.context-window.reprobe` |
 
 - 핫 수정 가능 항목만 `key`를 받아 수정할 수 있다:
   - **검색 튜닝**(다음 검색부터 반영) — 유사도 임계값·RRF 가중치/k·후보 배수·태그 후보 배수·멀티쿼리 최소 길이·재시도 시 후보 확대·topK·멀티쿼리 확장·하이브리드 검색·**큐레이션 Q&A 사용 여부·큐레이션 가중치**
@@ -602,8 +623,8 @@ done 이벤트    (답변 완료 후)   → attribution {chunkId: 0.0~1.0} → �
               → message-assistant fragment 반환
               → HX-Trigger: "refreshThreadList" (사이드바 자동 갱신)
 
-[제목 수정]  더블클릭 → 인라인 input → 포커스 아웃/Enter
-              → hx-patch="/ui/threads/{id}/title" → fragments/thread-item
+[제목 수정]  대화 상단 헤더의 Edit(연필) 버튼(startTitleEdit) → 제목이 인라인 input 으로 바뀜 → 포커스 아웃/Enter
+              → PATCH /ui/threads/{id}/title → fragments/thread-item (사이드바 항목 교체)
 
 [대화 목록]  항목 클릭 → GET /chat/{threadId} → 전체 페이지 전환
 
@@ -640,7 +661,7 @@ done 이벤트    (답변 완료 후)   → attribution {chunkId: 0.0~1.0} → �
               → [본문으로 구체화] → POST /admin/curated/{id}/suggest-question
                 → 200 이면 제안 상자(현재 취소선 + 제안) → [적용]이 입력란에 넣을 뿐,
                   저장은 아니다 / 204 면 "제안할 것이 없습니다"
-              → 저장 → POST /admin/curated/{id} (question + answer) → 백그라운드 재임베딩 1회
+              → 저장 → POST /admin/curated/{id} (question + answer + summary + keywords) → 백그라운드 재임베딩 1회
 [큐레이션 삭제]   🗑 버튼 → deleteCuratedInline(id, btn) → DELETE /admin/curated/{id}
               → 성공 시 해당 <tr> 제거
 
