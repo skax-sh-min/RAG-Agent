@@ -77,17 +77,26 @@ public class QuestionReuseRepository {
     private static final String REUSABLE_MODE_PREDICATE = buildReusableModePredicate();
 
     /**
-     * A Direct turn's answer may only be reused if its asker liked it. Direct answers are not
-     * grounded in any document, so a 좋아요 is the only evidence anyone found this one correct.
+     * Direct 답변은 추천·재사용 후보가 아니다. 재사용의 유효성 판정({@code QuestionReuseService.validateTurn})은
+     * 그 답변이 근거로 삼은 청크가 지금도 같은 내용인지를 대조하는 것인데, Direct 턴은 검색을 돌리지
+     * 않아 {@code turn_source_ref} 가 0건이라 대조할 것이 없다 — 판정은 언제나 "출처 청크가 없어
+     * 재사용할 수 없습니다" 다.
      *
-     * <p><b>This is the second reader of {@code feedback='LIKE'}</b>, and §10.11 changed what
-     * writes it: the chat now asks "지식 제안으로 등록할까요?" on a like and records nothing when the
-     * answer is no. So "the answer was good, but I don't want it published" is no longer
-     * expressible, and such a Direct turn stays out of reuse. Accepted — reuse is an optimisation,
-     * and the alternative (a like that means two different things depending on a dialog) is worse.
+     * <p>예전에는 {@code (direct_mode = 0 OR feedback = 'LIKE')} 로 <b>좋아요한</b> Direct 턴을 후보에
+     * 올렸다 — 문서 근거가 없으니 좋아요를 "누군가 맞다고 본 증거"로 삼자는 뜻이었다. 그런데 그
+     * 조건은 후보 목록만 통과시킬 뿐 위 판정을 바꾸지 않아, 사용자에게는 "재사용할 수 있는
+     * 답변"으로 떴다가 누르면 경고 토스트와 함께 일반 질의로 떨어지는 헛클릭이었다. 게다가 §10.11
+     * 이후 좋아요는 <b>지식 제안 폼을 여는 신호</b>이지 재사용 자격이 아니다 — 근거 없는 답변을
+     * 공유 지식으로 만드는 문은 관리자 승인 하나뿐이고, 재사용 경로가 그 옆에 두 번째 문을 내면
+     * 안 된다. 그래서 좋아요 여부와 무관하게 뺀다.
+     *
+     * <p>판정 기준은 {@code t} 가 아니라 <b>답변 텍스트와 같은 행</b>이다({@link #ANSWER_SHAPE_COLUMNS} 와
+     * 같은 COALESCE): 후보가 재사용 턴이면 Direct 여부도 원본이 정한다. 원본 값을 복사하기 전에
+     * 저장된 재사용 행은 {@code direct_mode=0} 을 들고 있어, {@code t} 만 보면 그 행이 다시 후보에
+     * 올라 같은 헛클릭이 된다.
      */
-    private static final String DIRECT_NEEDS_LIKE_PREDICATE =
-            "AND (COALESCE(t.direct_mode, 0) = 0 OR t.feedback = 'LIKE') ";
+    private static final String NOT_DIRECT_PREDICATE =
+            "AND COALESCE(src.direct_mode, t.direct_mode, 0) = 0 ";
 
     private static String buildReusableModePredicate() {
         String excluded = java.util.Arrays.stream(ResponseMode.values())
@@ -181,7 +190,7 @@ public class QuestionReuseRepository {
      *
      * <p><b>현재 대화({@code threadId})의 턴은 재사용 술어를 타지 않는다.</b> 그 항목의 클릭은
      * 답변 재사용이 아니라 "이 대화에서 이미 물었던 자리로 이동"이라, 싫어요·응답 모드·Direct
-     * 좋아요 같은 <em>재사용</em> 자격 조건과 무관하다 — 같은 대화에 같은 답변을 한 번 더 붙이는
+     * 제외 같은 <em>재사용</em> 자격 조건과 무관하다 — 같은 대화에 같은 답변을 한 번 더 붙이는
      * 것보다 그 자리를 보여주는 편이 항상 낫고, 그 조건으로 걸러 버리면 "방금 여기서 물었는데
      * 왜 목록에 없지"가 된다. 실제 재사용 조회({@link #findTurnForReuse})는 술어를 그대로 두므로,
      * 클라이언트가 현재 대화의 턴 id 로 재사용을 부르더라도 엄격한 쪽이 이긴다.
@@ -204,7 +213,7 @@ public class QuestionReuseRepository {
             "AND ( (t.thread_id = ? AND t.user_id = ?) " +
             "   OR ( (t.feedback IS NULL OR t.feedback <> 'DISLIKE') " +
             "        AND " + REUSABLE_MODE_PREDICATE +
-            DIRECT_NEEDS_LIKE_PREDICATE + ") ) " +
+            NOT_DIRECT_PREDICATE + ") ) " +
             (meOnly ? "AND t.user_id = ? " : "") +
             "ORDER BY CASE WHEN t.thread_id = ? AND t.user_id = ? THEN 0 ELSE 1 END, " +
             "         CASE WHEN t.user_id = ? THEN 0 ELSE 1 END, " +
@@ -233,7 +242,7 @@ public class QuestionReuseRepository {
             "WHERE t.id = ? " +
             "AND (t.feedback IS NULL OR t.feedback <> 'DISLIKE') " +
             "AND " + REUSABLE_MODE_PREDICATE +
-            DIRECT_NEEDS_LIKE_PREDICATE +
+            NOT_DIRECT_PREDICATE +
             (meOnly ? "AND t.user_id = ? " : "") +
             "LIMIT 1";
         List<CandidateTurn> rows = meOnly

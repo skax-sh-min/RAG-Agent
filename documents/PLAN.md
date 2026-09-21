@@ -225,7 +225,7 @@ SQLite `audit_log` 테이블 대신 Logback `SizeAndTimeBasedRollingPolicy`로 �
 
 ### 6.8 Chat 응답 피드백(좋아요/싫어요) 기반 컨텍스트 제외 ✅ 완료
 
-Assistant 응답에 👍/👎 토글 추가(`conversation_turns.feedback`, `PATCH /ui/threads/{threadId}/turns/{turnId}/feedback`). `DISLIKE` turn은 `getHistory()`에서 하드 제외되어 다음 컨텍스트에서 빠진다. `LIKE`는 완료 당시 저장만 했고, 이후 §10.10~10.11 에서 지식 제안 폼을 여는 신호와 Direct 턴의 재사용 자격(§6.23)으로 소비된다.
+Assistant 응답에 👍/👎 토글 추가(`conversation_turns.feedback`, `PATCH /ui/threads/{threadId}/turns/{turnId}/feedback`). `DISLIKE` turn은 `getHistory()`에서 하드 제외되어 다음 컨텍스트에서 빠진다. `LIKE`는 완료 당시 저장만 했고, 이후 §10.10~10.11 에서 지식 제안 폼을 여는 신호로 소비된다(한때 Direct 턴의 재사용 자격으로도 읽었으나 근거 청크가 없어 검증을 통과한 적이 없는 규칙이라 2026-09-21 제거 — PITFALLS `QuestionReuseRepository.java`).
 
 ### 6.9 입력 시작 시 로컬 요약 선계산 + 중복 제거 컨텍스트 압축 ✅ 완료
 
