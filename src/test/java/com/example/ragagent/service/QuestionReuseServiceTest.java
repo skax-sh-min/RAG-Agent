@@ -189,6 +189,40 @@ class QuestionReuseServiceTest {
         assertThat(lookup.answer()).isEqualTo("원본 turn 답변");
     }
 
+    /**
+     * 재사용 판정은 답변 텍스트만이 아니라 그 답변이 만들어진 모양(응답 모드·Direct 여부·태그
+     * 스코프)도 원본에서 그대로 실어야 한다 — 컨트롤러가 새 턴을 저장할 때 복사하는 값이라,
+     * 여기서 떨어지면 저장은 조용히 자리표시자로 돌아간다.
+     */
+    @Test
+    @DisplayName("재사용 조회는 원본 답변의 모양(모드·Direct·태그)을 함께 싣는다")
+    void reuseLookup_carriesTheSourceTurnsAnswerShape() {
+        QuestionReuseRepository repo = mock(QuestionReuseRepository.class);
+        QuestionReuseService service = new QuestionReuseService(repo, mock(DocRegistry.class));
+
+        when(repo.findTurnForReuse(56L, false, "admin"))
+                .thenReturn(new QuestionReuseRepository.CandidateTurn(
+                        56L, "u1", "t9", "VPN 접속 방법", "답변", "2026-08-06 10:00:00",
+                        "N", true, "policy,billing"));
+        when(repo.findSourceRefs(56L))
+                .thenReturn(List.of(new QuestionReuseRepository.SourceSnapshot("c1", "d1", "h1")));
+        when(repo.findAllSourceRefs(56L))
+                .thenReturn(List.of(new QuestionReuseRepository.SourceSnapshot("c1", "d1", "h1")));
+        when(repo.currentChunkHashes(java.util.Set.of("c1")))
+                .thenReturn(java.util.Map.of("c1", "h1"));
+
+        QuestionReuseService.ReuseLookup lookup =
+                service.reuseLookup("admin", QuestionReuseService.Scope.SHARED, 56L);
+
+        assertThat(lookup.reusable()).isTrue();
+        assertThat(lookup.responseMode()).isEqualTo("N");
+        assertThat(lookup.directMode()).isTrue();
+        assertThat(lookup.selectedTags()).isEqualTo("policy,billing");
+
+        // 재사용 불가 결과는 모양을 모른다 — 컨트롤러가 그 값을 저장할 일도 없다.
+        assertThat(QuestionReuseService.ReuseLookup.notReusable("x", "q").selectedTags()).isEmpty();
+    }
+
         @Test
         @DisplayName("이전 대화 출처 라벨은 챕터/페이지 규칙을 동일하게 따른다")
         void sourceRefsForTurn_formatsLabelWithChapterRule() {

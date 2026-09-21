@@ -684,11 +684,12 @@ class ChatControllerHtmxTest {
     void reuse_createsThreadMetaBeforeSavingTurn() throws Exception {
         when(questionReuseService.reuseLookup(any(), any(), eq(42L)))
                 .thenReturn(new com.example.ragagent.service.QuestionReuseService.ReuseLookup(
-                        true, null, 42L, "sqlite 연결 설정 방법", "## 요약\n답변", "t-old", List.of("c1")));
+                        true, null, 42L, "sqlite 연결 설정 방법", "## 요약\n답변", "t-old", List.of("c1"),
+                        "N", false, ""));
         when(memoryService.addTurn(any(), any(), any(), any(), any(),
                 org.mockito.ArgumentMatchers.anyInt(), org.mockito.ArgumentMatchers.anyInt(),
                 org.mockito.ArgumentMatchers.anyInt(), any(), org.mockito.ArgumentMatchers.anyInt(),
-                any(), any(), any())).thenReturn(99L);
+                any(), any(), org.mockito.ArgumentMatchers.anyBoolean(), any())).thenReturn(99L);
 
         mvc.perform(post("/api/v1/questions/reuse")
                         .param("turnId", "42")
@@ -703,8 +704,66 @@ class ChatControllerHtmxTest {
         inOrder.verify(memoryService).addTurn(any(), eq("t-new"), eq("sqlite 연결 설정 방법"), eq(""), any(),
                 org.mockito.ArgumentMatchers.anyInt(), org.mockito.ArgumentMatchers.anyInt(),
                 org.mockito.ArgumentMatchers.anyInt(), eq("db-reuse"), org.mockito.ArgumentMatchers.anyInt(),
-                any(), any(), eq(42L));
+                any(), any(), org.mockito.ArgumentMatchers.anyBoolean(), eq(42L));
         verify(threadMetaService).generateTitleAsync(any(), eq("t-new"), eq("latest"), eq("sqlite 연결 설정 방법"));
+    }
+
+    /**
+     * 재사용 턴의 모양은 원본 답변의 모양이다. 예전에는 자리표시자('M', direct 0, 태그 없음)를
+     * 저장해서 — 좋아요한 Direct 답변을 재사용하면 새로고침 뒤 [RN] 으로 찍혀 출처가 없는 이유가
+     * 화면 어디에도 없었고, 그 턴의 좋아요→지식 제안 프리필은 태그 스코프를 잃었다. 응답에도 같은
+     * 값이 실려야 화면이 폼 값 대신 그것으로 그린다(새로고침 전후 표기 일치).
+     */
+    @Test
+    @DisplayName("POST /api/v1/questions/reuse — 원본 턴의 응답 모드·Direct 여부·태그 스코프를 복사해 저장하고 응답에도 싣는다")
+    void reuse_copiesTheSourceTurnsAnswerShape() throws Exception {
+        when(questionReuseService.reuseLookup(any(), any(), eq(7L)))
+                .thenReturn(new com.example.ragagent.service.QuestionReuseService.ReuseLookup(
+                        true, null, 7L, "VPN 접속 방법", "학습 지식으로 쓴 답변", "t-old", List.of(),
+                        "N", true, "policy,billing"));
+        when(memoryService.addTurn(any(), any(), any(), any(), any(),
+                org.mockito.ArgumentMatchers.anyInt(), org.mockito.ArgumentMatchers.anyInt(),
+                org.mockito.ArgumentMatchers.anyInt(), any(), org.mockito.ArgumentMatchers.anyInt(),
+                any(), any(), org.mockito.ArgumentMatchers.anyBoolean(), any())).thenReturn(100L);
+
+        mvc.perform(post("/api/v1/questions/reuse")
+                        .param("turnId", "7")
+                        .param("threadId", "t-new")
+                        .with(csrf()))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("\"responseMode\":\"N\"")))
+                .andExpect(content().string(containsString("\"directMode\":true")));
+
+        verify(memoryService).addTurn(any(), eq("t-new"), eq("VPN 접속 방법"), eq(""), any(),
+                org.mockito.ArgumentMatchers.anyInt(), org.mockito.ArgumentMatchers.anyInt(),
+                org.mockito.ArgumentMatchers.anyInt(), eq("db-reuse"), org.mockito.ArgumentMatchers.anyInt(),
+                eq("N"), eq("policy,billing"), eq(true), eq(7L));
+    }
+
+    /** 원본이 구 'M'/'L'·NULL 모드라도 저장은 화면이 읽는 이름(N)으로 — 저장 문자열을 그대로 복사하면 자리표시자가 다시 산다. */
+    @Test
+    @DisplayName("POST /api/v1/questions/reuse — 원본의 옛 모드 값은 ResponseMode.parse() 를 거쳐 N 으로 저장된다")
+    void reuse_normalizesLegacyModeThroughParse() throws Exception {
+        when(questionReuseService.reuseLookup(any(), any(), eq(8L)))
+                .thenReturn(new com.example.ragagent.service.QuestionReuseService.ReuseLookup(
+                        true, null, 8L, "질문", "답변", "t-old", List.of(), "M", false, ""));
+        when(memoryService.addTurn(any(), any(), any(), any(), any(),
+                org.mockito.ArgumentMatchers.anyInt(), org.mockito.ArgumentMatchers.anyInt(),
+                org.mockito.ArgumentMatchers.anyInt(), any(), org.mockito.ArgumentMatchers.anyInt(),
+                any(), any(), org.mockito.ArgumentMatchers.anyBoolean(), any())).thenReturn(101L);
+
+        mvc.perform(post("/api/v1/questions/reuse")
+                        .param("turnId", "8")
+                        .param("threadId", "t-new")
+                        .with(csrf()))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("\"responseMode\":\"N\"")))
+                .andExpect(content().string(containsString("\"directMode\":false")));
+
+        verify(memoryService).addTurn(any(), eq("t-new"), eq("질문"), eq(""), any(),
+                org.mockito.ArgumentMatchers.anyInt(), org.mockito.ArgumentMatchers.anyInt(),
+                org.mockito.ArgumentMatchers.anyInt(), eq("db-reuse"), org.mockito.ArgumentMatchers.anyInt(),
+                eq("N"), eq(""), eq(false), eq(8L));
     }
 
     @Test

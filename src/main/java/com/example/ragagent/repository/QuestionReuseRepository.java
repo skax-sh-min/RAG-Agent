@@ -4,6 +4,7 @@ import com.example.ragagent.model.ResponseMode;
 import jakarta.annotation.PostConstruct;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Repository;
 
 import java.util.ArrayList;
@@ -28,6 +29,31 @@ public class QuestionReuseRepository {
      */
     private static final String REUSE_SOURCE_JOIN =
             "LEFT JOIN conversation_turns src ON src.id = t.reused_from_turn_id ";
+
+    /**
+     * 후보 답변이 <b>어떻게 만들어졌는가</b> — 응답 모드·검색 축(Direct 여부)·태그 스코프. 답변
+     * 텍스트를 {@code src} 에서 가져오는 것과 같은 이유로 셋도 {@code src} 를 먼저 본다: 후보가
+     * 스스로 재사용 턴이면 그 답변을 실제로 만든 행은 원본이고, 세 값이 답변과 다른 행에서 오면
+     * "이 답변이 왜 이런 모양인가"를 설명하지 못한다. 원본이 없으면 자기 행이다.
+     *
+     * <p>재사용 턴이 원본 값을 복사해 저장하기 전에 만들어진 행은 자리표시자({@code 'M'}·0·빈
+     * 태그)를 들고 있다 — 이 COALESCE 가 그 행들에도 원본의 값을 되돌려 주므로 백필이 필요 없다.
+     */
+    private static final String ANSWER_SHAPE_COLUMNS =
+            "COALESCE(NULLIF(src.response_mode, ''), t.response_mode) AS response_mode, " +
+            "COALESCE(src.direct_mode, t.direct_mode, 0) AS direct_mode, " +
+            "COALESCE(src.selected_tags, t.selected_tags, '') AS selected_tags";
+
+    private static final RowMapper<CandidateTurn> CANDIDATE_MAPPER = (rs, n) -> new CandidateTurn(
+            rs.getLong("id"),
+            rs.getString("user_id"),
+            rs.getString("thread_id"),
+            rs.getString("question"),
+            rs.getString("answer"),
+            rs.getString("created_at"),
+            rs.getString("response_mode"),
+            rs.getInt("direct_mode") != 0,
+            rs.getString("selected_tags"));
 
     /**
      * 재사용 후보에서 제외할 응답 모드를 거르는 WHERE 술어 (§6.24 Step 3-b).
@@ -170,7 +196,8 @@ public class QuestionReuseRepository {
         String resolvedAnswerExpr = "COALESCE(NULLIF(src.answer, ''), NULLIF(t.answer, ''), '" +
                 DELETED_REFERENCE_TEXT + "') AS answer";
         String currentThread = threadId == null ? "" : threadId;
-        String sql = "SELECT t.id, t.user_id, t.thread_id, t.question, " + resolvedAnswerExpr + ", t.created_at " +
+        String sql = "SELECT t.id, t.user_id, t.thread_id, t.question, " + resolvedAnswerExpr + ", t.created_at, " +
+            ANSWER_SHAPE_COLUMNS + " " +
             "FROM conversation_turns t " +
             REUSE_SOURCE_JOIN +
             "WHERE lower(t.question) LIKE lower(?) " +
@@ -193,21 +220,14 @@ public class QuestionReuseRepository {
         args.add(userId);
         args.add(userId);
         args.add(Math.max(1, limit));
-        return jdbc.query(sql,
-                (rs, n) -> new CandidateTurn(
-                        rs.getLong("id"),
-                        rs.getString("user_id"),
-                        rs.getString("thread_id"),
-                        rs.getString("question"),
-                        rs.getString("answer"),
-                        rs.getString("created_at")),
-                args.toArray());
+        return jdbc.query(sql, CANDIDATE_MAPPER, args.toArray());
     }
 
     public CandidateTurn findTurnForReuse(long turnId, boolean meOnly, String userId) {
         String resolvedAnswerExpr = "COALESCE(NULLIF(src.answer, ''), NULLIF(t.answer, ''), '" +
                 DELETED_REFERENCE_TEXT + "') AS answer";
-        String sql = "SELECT t.id, t.user_id, t.thread_id, t.question, " + resolvedAnswerExpr + ", t.created_at " +
+        String sql = "SELECT t.id, t.user_id, t.thread_id, t.question, " + resolvedAnswerExpr + ", t.created_at, " +
+            ANSWER_SHAPE_COLUMNS + " " +
             "FROM conversation_turns t " +
             REUSE_SOURCE_JOIN +
             "WHERE t.id = ? " +
@@ -217,24 +237,8 @@ public class QuestionReuseRepository {
             (meOnly ? "AND t.user_id = ? " : "") +
             "LIMIT 1";
         List<CandidateTurn> rows = meOnly
-                ? jdbc.query(sql,
-                    (rs, n) -> new CandidateTurn(
-                            rs.getLong("id"),
-                            rs.getString("user_id"),
-                            rs.getString("thread_id"),
-                            rs.getString("question"),
-                            rs.getString("answer"),
-                            rs.getString("created_at")),
-                    turnId, userId)
-                : jdbc.query(sql,
-                    (rs, n) -> new CandidateTurn(
-                            rs.getLong("id"),
-                            rs.getString("user_id"),
-                            rs.getString("thread_id"),
-                            rs.getString("question"),
-                            rs.getString("answer"),
-                            rs.getString("created_at")),
-                    turnId);
+                ? jdbc.query(sql, CANDIDATE_MAPPER, turnId, userId)
+                : jdbc.query(sql, CANDIDATE_MAPPER, turnId);
         return rows.isEmpty() ? null : rows.get(0);
     }
 
@@ -521,6 +525,19 @@ public class QuestionReuseRepository {
         }
     }
 
+    /**
+     * 추천·재사용 후보 한 건. 뒤의 셋({@code responseMode}·{@code directMode}·{@code selectedTags})은
+     * 그 답변이 만들어진 모양이다({@link #ANSWER_SHAPE_COLUMNS}) — 재사용 턴을 저장할 때 원본에서
+     * 그대로 복사해, 재사용한 답변의 두 글자 표기·이력 렌더·좋아요 프리필의 태그 스코프가 원본과
+     * 같아지게 한다.
+     */
     public record CandidateTurn(long turnId, String userId, String threadId,
-                                String question, String answer, String createdAt) {}
+                                String question, String answer, String createdAt,
+                                String responseMode, boolean directMode, String selectedTags) {
+        /** 답변 모양을 모르는 후보 — 옛 행과 같은 기본값(모드 미상 → N, RAG, 태그 없음). 테스트 편의용. */
+        public CandidateTurn(long turnId, String userId, String threadId,
+                             String question, String answer, String createdAt) {
+            this(turnId, userId, threadId, question, answer, createdAt, null, false, "");
+        }
+    }
 }

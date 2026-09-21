@@ -2393,7 +2393,7 @@ mvn test -Dtest=SearchQualityEvaluationTest -Dsearch-eval.enabled=true
 
 - 추천 조회: `GET /api/v1/questions/suggest?q=...&limit=...` (서버는 항상 shared 기준 처리)
 - 재사용 시도: `POST /api/v1/questions/reuse`
-- 재사용 성공: 기존 답변을 새 turn으로 저장(`provider=db-reuse`, `reused_from_turn_id` 참조 저장)
+- 재사용 성공: 기존 답변을 새 turn으로 저장(`provider=db-reuse`, `reused_from_turn_id` 참조 저장). `response_mode`·`direct_mode`·`selected_tags` 는 **원본 턴의 값을 복사**한다(원본이 다시 재사용 턴이면 그 원본의 값) — 두 글자 표기·좋아요 프리필의 태그 스코프·다음 턴의 이력 렌더가 그 컬럼을 읽기 때문이다. 이전 판이 저장하던 자리표시자(`'M'`·0·빈 태그)를 든 옛 재사용 행은 조회 시 COALESCE 로 원본의 값을 내므로 백필이 필요 없다
 - 재사용 실패: `fallback=true`와 사유를 반환, 클라이언트가 일반 질의 파이프라인으로 즉시 전환
 
 추천 결과 품질을 위해 다음 필터를 함께 적용합니다.
