@@ -194,6 +194,9 @@ public class QuestionReuseService {
      * 없이 건너뛴다({@code recentlyInvalidTurns}) — 같은 행을 키 입력마다 다시 확인하지 않기
      * 위해서다.
      *
+     * <p>질문 매칭은 입력 문장 통째가 아니라 {@link QuestionKeywords#extract} 가 뽑은 내용어
+     * 전부의 부분 일치다 — 어순·조사·의문 표현이 달라도 같은 질문을 찾는다.
+     *
      * @param threadId 지금 열려 있는 대화. {@code null}/공백이면 어떤 항목도 현재 대화로 분류되지
      *                 않는다(REST 호출)
      */
@@ -201,10 +204,15 @@ public class QuestionReuseService {
         String query = q == null ? "" : q.strip();
         if (query.length() < 2) return List.of();
 
+        // 의문·기능어와 조사·어미를 걷어낸 내용어로 맞춘다. 아무것도 안 남으면(예: "이거 왜 안 돼요")
+        // 입력 전체를 키워드 하나로 — 예전의 통째 부분 일치라 어떤 입력도 이전보다 나빠지지 않는다.
+        List<String> keywords = QuestionKeywords.extract(query);
+        if (keywords.isEmpty()) keywords = List.of(query);
+
         int fetch = Math.max(limit * 4, 20);
         boolean meOnly = scope == Scope.ME;
         List<QuestionReuseRepository.CandidateTurn> candidates =
-                repository.findSuggestionCandidates(query, meOnly, userId, threadId, fetch);
+                repository.findSuggestionCandidates(keywords, meOnly, userId, threadId, fetch);
 
         List<Suggestion> out = new ArrayList<>();
         Set<String> seenQuestions = new LinkedHashSet<>();

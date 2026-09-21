@@ -79,7 +79,7 @@ class QuestionReuseModeFilterTest {
     }
 
     private List<Long> suggestionIds() {
-        return repo.findSuggestionCandidates("sqlite", false, "u1", null, 50).stream()
+        return repo.findSuggestionCandidates(List.of("sqlite"), false, "u1", null, 50).stream()
                 .map(QuestionReuseRepository.CandidateTurn::turnId)
                 .sorted()
                 .toList();
@@ -158,7 +158,7 @@ class QuestionReuseModeFilterTest {
     }
 
     private List<Long> suggestionIdsInOrder(String userId, String threadId) {
-        return repo.findSuggestionCandidates("sqlite", false, userId, threadId, 50).stream()
+        return repo.findSuggestionCandidates(List.of("sqlite"), false, userId, threadId, 50).stream()
                 .map(QuestionReuseRepository.CandidateTurn::turnId)
                 .toList();
     }
@@ -212,7 +212,7 @@ class QuestionReuseModeFilterTest {
         assertThat(forReuse).isNotNull();
         assertThat(forReuse.answer()).isEqualTo("원본 답변");
 
-        assertThat(repo.findSuggestionCandidates("sqlite", false, "u1", null, 50))
+        assertThat(repo.findSuggestionCandidates(List.of("sqlite"), false, "u1", null, 50))
                 .extracting(QuestionReuseRepository.CandidateTurn::answer)
                 .containsOnly("원본 답변");
 
@@ -251,7 +251,7 @@ class QuestionReuseModeFilterTest {
         assertThat(plain.selectedTags()).isEqualTo("policy,billing");
 
         // 추천 목록도 같은 열을 싣는다.
-        assertThat(repo.findSuggestionCandidates("sqlite", false, "u1", null, 50))
+        assertThat(repo.findSuggestionCandidates(List.of("sqlite"), false, "u1", null, 50))
                 .extracting(QuestionReuseRepository.CandidateTurn::selectedTags)
                 .containsOnly("policy,billing");
     }
@@ -285,7 +285,7 @@ class QuestionReuseModeFilterTest {
         activeSource(3L, "u1", "t-c");
         activeSource(4L, "u1", "t-d");
 
-        assertThat(repo.findSuggestionCandidates("sqlite", false, "u1", null, 50))
+        assertThat(repo.findSuggestionCandidates(List.of("sqlite"), false, "u1", null, 50))
                 .extracting(QuestionReuseRepository.CandidateTurn::turnId)
                 .containsExactly(4L);
         assertThat(repo.findTurnForReuse(1L, false, "u1")).isNull();
@@ -294,7 +294,7 @@ class QuestionReuseModeFilterTest {
         assertThat(repo.findTurnForReuse(4L, false, "u1")).isNotNull();
 
         // 현재 대화의 Direct 턴은 여전히 목록에 오른다 — 재사용이 아니라 그 자리로의 이동이므로.
-        assertThat(repo.findSuggestionCandidates("sqlite", false, "u1", "t-a", 50))
+        assertThat(repo.findSuggestionCandidates(List.of("sqlite"), false, "u1", "t-a", 50))
                 .extracting(QuestionReuseRepository.CandidateTurn::turnId)
                 .containsExactly(1L, 4L);
     }
@@ -338,5 +338,43 @@ class QuestionReuseModeFilterTest {
 
         // 현재 대화의 턴은 이동 대상이라 출처가 없어도 오른다.
         assertThat(suggestionIdsInOrder("u1", "t-a")).containsExactly(1L, 3L);
+    }
+
+    /** 질문 텍스트만 다른 턴 — 키워드 매칭용. */
+    private void insertQuestion(long id, String question) {
+        jdbc.update("INSERT INTO conversation_turns "
+                    + "(id, user_id, thread_id, question, answer, created_at, feedback, response_mode, direct_mode) "
+                    + "VALUES (?, 'u1', 't1', ?, '답변 본문', '2026-08-24', NULL, 'N', 0)", id, question);
+        activeSource(id, "u1", "t1");
+    }
+
+    private List<Long> idsFor(List<String> keywords) {
+        return repo.findSuggestionCandidates(keywords, false, "u1", null, 50).stream()
+                .map(QuestionReuseRepository.CandidateTurn::turnId)
+                .sorted()
+                .toList();
+    }
+
+    /**
+     * 키워드는 전부(AND) 각각 부분 일치다 — 어순과 무관하고 대소문자를 가리지 않는다. {@code _}·{@code %} 는
+     * 문자 그대로 대조한다: 이스케이프가 없으면 {@code max_tokens} 의 {@code _} 가 한 글자 와일드카드라
+     * {@code maxxtokens} 도 맞는다.
+     */
+    @Test
+    @DisplayName("키워드는 전부 각각 부분 일치(AND) — 어순·대소문자 무관, _ 와 % 는 문자 그대로")
+    void keywords_matchIndependentlyAndAll() {
+        insertQuestion(1L, "sqlite 연결 설정 방법");
+        insertQuestion(2L, "SQLite 백업 방법");
+        insertQuestion(3L, "MySQL 연결 설정");
+        insertQuestion(4L, "max_tokens 값 설정");
+        insertQuestion(5L, "maxxtokens 값 설정");
+
+        assertThat(idsFor(List.of("sqlite", "연결"))).containsExactly(1L);
+        assertThat(idsFor(List.of("연결", "sqlite"))).containsExactly(1L);          // 어순 무관
+        assertThat(idsFor(List.of("SQLITE"))).containsExactly(1L, 2L);              // 대소문자 무관
+        assertThat(idsFor(List.of("연결", "설정"))).containsExactly(1L, 3L);
+        assertThat(idsFor(List.of("max_tokens"))).containsExactly(4L);              // _ 는 와일드카드가 아니다
+        assertThat(idsFor(List.of("100%"))).isEmpty();                              // % 도
+        assertThat(idsFor(List.of())).isEmpty();
     }
 }

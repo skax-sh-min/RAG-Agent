@@ -224,17 +224,29 @@ public class QuestionReuseRepository {
      * 이유는 표시만이 아니다 — 후보는 {@code LIMIT} 창 하나로 잘리므로, 최신순만으로는 공유
      * 코퍼스에서 같은 질문이 많이 오갔을 때 <em>이 대화</em>의 그 질문이 창 밖으로 밀려 이동
      * 대상 자체가 사라진다. {@code threadId} 가 없으면(REST 호출) 첫 키는 아무 행도 고르지 않는다.
+     *
+     * <p>질문 매칭은 {@code keywords} <b>전부</b>(AND)를 각각 대소문자 무시 부분 일치로 건다 —
+     * 키워드는 {@code QuestionKeywords.extract()} 가 뽑고, 아무것도 안 남으면 서비스가 입력 전체를
+     * 키워드 하나로 넘긴다(예전의 통째 부분 일치와 같다). {@code %}·{@code _} 는 {@code ESCAPE} 로
+     * 문자 그대로 대조한다 — {@code max_tokens} 의 {@code _} 가 한 글자 와일드카드로 풀리면
+     * {@code maxxtokens} 도 맞는다.
+     *
+     * @param keywords 비어 있으면 빈 목록을 돌려준다(아무 행도 맞히지 않는 술어 대신)
      */
-    public List<CandidateTurn> findSuggestionCandidates(String q, boolean meOnly, String userId,
+    public List<CandidateTurn> findSuggestionCandidates(List<String> keywords, boolean meOnly, String userId,
                                                         String threadId, int limit) {
+        if (keywords == null || keywords.isEmpty()) return List.of();
         String resolvedAnswerExpr = "COALESCE(NULLIF(src.answer, ''), NULLIF(t.answer, ''), '" +
                 DELETED_REFERENCE_TEXT + "') AS answer";
         String currentThread = threadId == null ? "" : threadId;
+        String questionMatch = keywords.stream()
+                .map(k -> "lower(t.question) LIKE lower(?) ESCAPE '\\' ")
+                .collect(Collectors.joining("AND "));
         String sql = "SELECT t.id, t.user_id, t.thread_id, t.question, " + resolvedAnswerExpr + ", t.created_at, " +
             ANSWER_SHAPE_COLUMNS + " " +
             "FROM conversation_turns t " +
             REUSE_SOURCE_JOIN +
-            "WHERE lower(t.question) LIKE lower(?) " +
+            "WHERE " + questionMatch +
             "AND ( (t.thread_id = ? AND t.user_id = ?) " +
             "   OR ( (t.feedback IS NULL OR t.feedback <> 'DISLIKE') " +
             "        AND " + REUSABLE_MODE_PREDICATE +
@@ -247,7 +259,7 @@ public class QuestionReuseRepository {
             "LIMIT ?";
 
         List<Object> args = new ArrayList<>();
-        args.add("%" + q + "%");
+        for (String k : keywords) args.add("%" + escapeLike(k) + "%");
         args.add(currentThread);
         args.add(userId);
         if (meOnly) args.add(userId);
@@ -256,6 +268,11 @@ public class QuestionReuseRepository {
         args.add(userId);
         args.add(Math.max(1, limit));
         return jdbc.query(sql, CANDIDATE_MAPPER, args.toArray());
+    }
+
+    /** {@code LIKE ... ESCAPE '\'} 용 — 백슬래시·{@code %}·{@code _} 를 문자 그대로. */
+    static String escapeLike(String s) {
+        return s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_");
     }
 
     public CandidateTurn findTurnForReuse(long turnId, boolean meOnly, String userId) {
