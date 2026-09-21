@@ -284,6 +284,10 @@
     font-size: 0.85rem;
     overflow-x: auto;
 }
+/* 코드 블록 안의 code 는 pre 크기를 그대로 쓴다(≈13.6px). 아래 .md-content code 의 0.875em 이 pre 의
+   0.85rem 위에 한 번 더 곱해져 블록 코드가 11.9px 까지 줄던 이중 축소를 막는다 — 본문(16px)보다 4px
+   작아 읽기 어려웠다. 인라인 `code` 는 본문 대비 0.875em(14px) 그대로. */
+.md-content pre code   { font-size: inherit; }
 .md-content code       { font-size: 0.875em; }
 .md-content ul,
 .md-content ol         { padding-left: 1.25rem; margin-bottom: 0.5rem; }
@@ -335,7 +339,7 @@
     .popover .md-content table,
     .popover .md-content th,
     .popover .md-content td { font-size: 11px; }
-    /* .md-content pre 도 동일 원인(rem). code는 pre 기준 em이라 pre만 고정하면 같이 줄어든다. */
+    /* .md-content pre 도 동일 원인(rem). pre code 는 inherit 라 pre 만 고정하면 같은 11px 로 따라온다. */
     .popover .md-content pre { font-size: 11px; }
 }
 
