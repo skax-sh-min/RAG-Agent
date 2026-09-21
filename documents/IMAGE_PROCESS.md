@@ -111,11 +111,10 @@ data/
         ├── p1_img1.png              ← PDF: p{페이지}_img{순번, 1-based}
         ├── p1_img2.jpeg
         ├── s3_img1.png              ← PPTX: s{슬라이드}_img{순번, 1-based}
-        ├── d0_img1.png              ← DOCX: d{문단 인덱스}_img{순번, 1-based}
-        └── md_img1.png              ← MD: md_img{순번, 1-based} (로컬 경로 복사)
+        └── d0_img1.png              ← DOCX: d{문단 인덱스}_img{순번, 1-based}
 ```
 
-파일명 규칙: `{prefix}{pageOrSlideOrParaIdx}_img{순번}.{ext}` (순번은 슬라이드/페이지/문단마다 1부터 시작)
+파일명 규칙: `{prefix}{pageOrSlideOrParaIdx}_img{순번}.{ext}` (순번은 슬라이드/페이지/문단마다 1부터 시작). **MD 업로드는 이미지 파일을 추출·복사하지 않는다** — 본문의 `[이미지: …]` 마커만 `image_paths` 로 승격되고 표준 `![alt](path)` 링크는 텍스트로 남는다(§4.4).
 
 > **`imageId`**: `DocumentIndexer.imageId()`가 `sha256.substring(0, 16)`으로 계산하는, 문서 내용 자체에서 파생된 짧은 키입니다. `docId`(원본 파일명 + 해시 8자리)를 그대로 디렉터리명으로 쓰면 이미지 1장마다 그 문자열 전체가 `[이미지: ...]` 마커와 `image_paths` 메타데이터에 반복 저장되어, 파일명이 긴 문서(특히 긴 한글 파일명)에 이미지가 많으면 청크 크기·DB 용량에 영향을 주기 때문에 분리했습니다.
 >
@@ -286,7 +285,7 @@ for (int i = 0; i < pics.size(); i++) {
 
 **제약**: DOCX는 이미지와 단락의 정확한 위치 매핑이 어려움. `getAllPictures()`는 문서 전체 이미지를 반환하므로 섹션 단위 매핑은 `XWPFRun.getEmbeddedPictures()`로 보완 필요.
 
-**사진 위 주석 도형 병합** (`app.docx-image.merge-annotated-shapes`, 기본 `true`): 화면 캡처 위에 강조 원/화살표를 그려 markup을 남기는 패턴은 DOCX에도 흔합니다. PPTX의 동명 기능(§4.2)과 달리 POI의 WordprocessingML 모델에는 도형 좌표 API(`XWPFPicture`에 위치 정보 없음)도 렌더러(`DrawFactory` 상당물)도 없어 진짜 기하학적 겹침 판정이 불가능하므로, **같은 문단에 사진과 레거시 VML 도형(`v:rect`/`v:oval`/`v:roundrect`/`v:line`)이 함께 있으면 겹친 주석으로 간주**하는 근사 방식을 사용합니다(`DocxAnnotationShapeMerger`).
+**사진 위 주석 도형 병합** (`app.docx-image.merge-annotated-shapes`, 기본 `false` — 좌표 근사 방식이라 실험적 기능으로 두었다, OPERATOR_MANUAL §3.2 "DOCX 이미지 추출 튜닝"): 화면 캡처 위에 강조 원/화살표를 그려 markup을 남기는 패턴은 DOCX에도 흔합니다. PPTX의 동명 기능(§4.2)과 달리 POI의 WordprocessingML 모델에는 도형 좌표 API(`XWPFPicture`에 위치 정보 없음)도 렌더러(`DrawFactory` 상당물)도 없어 진짜 기하학적 겹침 판정이 불가능하므로, **같은 문단에 사진과 레거시 VML 도형(`v:rect`/`v:oval`/`v:roundrect`/`v:line`)이 함께 있으면 겹친 주석으로 간주**하는 근사 방식을 사용합니다(`DocxAnnotationShapeMerger`).
 도형의 `style` 속성(`left`/`top`/`width`/`height`, pt) 또는 `from`/`to`(line)를 파싱해 사진 위에 Java2D로 직접 그려 하나의 합성 PNG로 저장합니다 — 도형 위치를 해석할 수 없거나, 사진이 EMF/WMF인데 PNG 변환이 안 되거나, 합성 캔버스가 비정상적으로 크면 조용히 원본 사진만 추출하는 폴백으로 동작합니다. 한 문단에 사진이 여러 장이면 첫 사진에만 합성을 시도하고 나머지는 원본 그대로 추출합니다.
 
 **최신 Word "도형 삽입"(DrawingML `wps:wsp`)은 POI에 타입 바인딩이 없어 미지원** — Word가 하위 호환용으로 남긴 레거시 VML 형태만 인식합니다.
@@ -295,52 +294,15 @@ for (int i = 0; i < pics.size(); i++) {
 
 ### 4.4 MD
 
-**이미지 유형**: `![alt](path)` 로컬 파일 참조, `![alt](https://...)` URL 참조
+**이미지 유형**: `![alt](path)` 로컬 파일 참조, `![alt](https://...)` URL 참조, 그리고 이 앱의 파이프라인이 쓰는 `[이미지: images/…]` 마커.
 
-**처리 방법**:
+**실제 동작 (구현 기준)** — MD 업로드는 **이미지 파일을 추출·복사하지 않는다.** `DocumentIndexer`의 `.md` 분기는 파일을 `converted/{docId}.md`에 그대로 저장한 뒤 `MarkdownCorrectionService.correct()` → `DocumentLoaderService.loadFromMarkdown()`으로 넘기며, 그 로더가 인식하는 이미지 표기는 `[이미지: …]`/`[이미지(변환불가): …]` 마커뿐이다(→ `image_paths` 메타데이터). 따라서:
 
-```java
-// MarkdownImageExtractor.java — loadText() 전처리 단계
-private static final Pattern IMG_TAG = Pattern.compile("!\\[([^\\]]*)]\\(([^)]+)\\)");
+- `[이미지: images/{imageId}/{file}]` 마커 — 다른 문서가 추출해 둔 파일이나 지식 제안 이미지(`images/submissions/…`)를 가리키면 `image_paths`로 승격돼 Lazy Vision·썸네일이 그대로 동작한다. 업로드 화면의 "이미지 설명 추가"를 켜면 §5의 동기 L2가 이 마커에도 적용된다(`MarkdownCorrectionService.prewarmImageDescriptions()`).
+- `![alt](path)` / `![alt](https://…)` — **변환되지 않고 텍스트로 남는다.** 파일 복사·Vision 호출·alt 치환 어느 것도 일어나지 않는다. 설계 초안에 있던 "로컬 경로 복사 + `md_img{n}` 저장 + Vision 설명 치환"(`MarkdownImageExtractor`)은 **구현되지 않았다**.
+- `DocumentLoaderService.preprocessMarkdown()`(`![alt](url)`→alt, `![alt](local)`→`[이미지: alt]`, `[text](file.pdf)`→text 치환)은 코드에 남아 있지만 **`load()`→`loadText()` 경로에서만 불리고, 인덱서는 `.md`/`.txt`를 그 경로로 보내지 않는다**(`.md`는 `loadFromMarkdown()`, `.txt`는 `TextToMarkdownService` → `loadFromMarkdown()`; `load()`를 타는 것은 스캔 PDF뿐). 즉 현재 인덱싱 경로에서는 죽은 코드다.
 
-String preprocess(String content, Path mdFilePath, String docId, Path imagesDir) {
-    Matcher m = IMG_TAG.matcher(content);
-    StringBuffer sb = new StringBuffer();
-    int imgIdx = 0;
-    while (m.find()) {
-        String alt  = m.group(1);
-        String href = m.group(2);
-        String replacement;
-
-        if (href.startsWith("http://") || href.startsWith("https://")) {
-            // URL 이미지: alt 텍스트만 유지 (L1)
-            replacement = alt.isBlank() ? "" : "[이미지: " + alt + "]";
-        } else {
-            // 로컬 경로: 파일 복사 후 처리 (L2 또는 L1)
-            Path imgPath = mdFilePath.getParent().resolve(href).normalize();
-            if (Files.exists(imgPath)) {
-                String ext = getExtension(href);
-                String filename = "md_img" + imgIdx++ + "." + ext;
-                Files.copy(imgPath, imagesDir.resolve(filename), REPLACE_EXISTING);
-                // L2: Vision 설명 생성
-                String desc = visionService.describe(imgPath);
-                replacement = "[이미지: " + (alt.isBlank() ? desc : alt + " — " + desc) + "]";
-            } else {
-                replacement = alt.isBlank() ? "" : "[이미지: " + alt + "]";
-            }
-        }
-        m.appendReplacement(sb, Matcher.quoteReplacement(replacement));
-    }
-    m.appendTail(sb);
-    return sb.toString();
-}
-```
-
-**링크 정제** (PDF 등 파일 링크):
-```java
-// [텍스트](doc.pdf) → 텍스트 (링크 자체는 별도 인덱싱으로 처리)
-content = content.replaceAll("\\[([^\\]]+)]\\([^)]*\\)", "$1");
-```
+MD 문서의 그림을 검색에 반영하고 싶다면 이미지를 지식 제안 게시판(§ OPERATOR_MANUAL 6.9)에 올려 받은 `[이미지: images/submissions/…]` 마커를 본문에 쓰거나, DOCX/PPTX로 올리는 편이 확실하다.
 
 ---
 
@@ -406,14 +368,14 @@ content = content.replaceAll("\\[([^\\]]+)]\\([^)]*\\)", "$1");
 
 인덱싱 시 이미지가 많으면 LLM 호출이 급증. 두 가지 완화 전략:
 
-1. **임계값 필터**: 이미지 크기 < 5KB → 아이콘으로 간주 → L0 무시
-2. **비동기 후처리**: 인덱싱 시 이미지만 저장 (동기), Vision 설명은 백그라운드 처리 후 메타데이터 업데이트 (비동기)
+1. **임계값 필터**: PDF는 `PdfImageExtractor.MIN_IMAGE_BYTES`(1,000 — 가로×세로×3 근사)와 `MAX_IMAGE_PIXELS`(5천만, 디코딩 전 판정) 사이만 추출하고, PPTX는 `app.pptx-image.min-shape-dimension-pt`(30pt) 미만 도형을 아이콘으로 보고 제외한다(§4.1·§4.2). 별도의 KB 단위 프로퍼티는 없다
+2. **지연 후처리**: 인덱싱 시 이미지만 저장하고, Vision 설명은 검색 시점에 필요한 이미지만 생성해 캐시한다(12절 Lazy Vision). 인덱싱 시점에 설명을 임베딩에 넣고 싶을 때만 업로드 화면의 "이미지 설명 추가" 체크박스(5절)를 켠다
 
 ---
 
 ## 6. OCR 처리 (L3)
 
-> **구현 완료** — `service/OcrService.java`, `pom.xml` tess4j:5.11.0 추가.
+> **구현 완료** — `service/OcrService.java`, `pom.xml` tess4j(현재 5.19.0 — 정확한 버전은 pom.xml) 추가.
 
 스캔 PDF 또는 텍스트 위주 스크린샷에 적용.
 
@@ -423,7 +385,7 @@ content = content.replaceAll("\\[([^\\]]+)]\\([^)]*\\)", "$1");
 <dependency>
     <groupId>net.sourceforge.tess4j</groupId>
     <artifactId>tess4j</artifactId>
-    <version>5.11.0</version>
+    <version>5.19.0</version>
 </dependency>
 ```
 
@@ -450,9 +412,9 @@ public class OcrService {
 > **주의**: `Tesseract` 인스턴스는 thread-safe하지 않으므로 호출마다 new 생성. `tessdataPath`가 blank면 `TESSDATA_PREFIX` 환경변수 또는 시스템 기본 경로를 사용.
 
 **스캔 PDF 처리 연동** (`DocumentLoaderService.loadPdf()`):
-1. `PagePdfDocumentReader`로 텍스트 추출 → 페이지의 50% 이상이 50자 미만이면 "스캔 PDF" 판정
+1. `PagePdfDocumentReader`로 텍스트 추출 → 50자 미만인 페이지가 과반(50% 초과)이면 "스캔 PDF" 판정
 2. `ocrService != null`이면 `ocrWithPdfRenderer()` 호출
-3. `PDFRenderer.renderImageWithDPI(page, 300, ImageType.RGB)` → `BufferedImage` → `OcrService.extractText()`
+3. `PDFRenderer.renderImageWithDPI(page, dpi, ImageType.RGB)` → `BufferedImage` → `OcrService.extractText()` — `dpi`는 300을 목표로 하되 페이지 크기에 맞춰 낮춘다(`DocumentLoaderService.ocrRenderDpi()`, 한 장 상한 `MAX_OCR_RENDER_PIXELS` 4천만 픽셀 — A2까지는 300 DPI 그대로, 300 고정이면 A0 한 장이 약 560MB)
 4. 추출된 텍스트로 새 `Document` 생성, `source_type=ocr` 태깅
 
 ---
@@ -746,7 +708,7 @@ app.image-description.docx-wmf-convert=true   # LibreOffice 설치 필요
 | 항목 | 구현 파일 | 상태 |
 |------|-----------|------|
 | VisionDescriptionService | `service/VisionDescriptionService.java` | ✅ |
-| MD 이미지 정제 (L1) | `DocumentLoaderService.preprocessMarkdown()` | ✅ |
+| MD 이미지 정제 (L1) | `DocumentLoaderService.preprocessMarkdown()` | ⚠ 코드는 있으나 인덱싱 경로(`loadFromMarkdown()`)에서는 불리지 않음 — §4.4 |
 | 이미지 추출 저장 | `ImageExtractorService`, `PdfImageExtractor`, `PptxImageExtractor`, `DocxToMarkdownConverter` | ✅ |
 | AgentState·ChatResponse 확장 | `AgentState.imageRefs`, `ChatResponse.imageRefs`, `RetrievalService`, `AgentService` | ✅ |
 | 이미지 서빙 엔드포인트 | `DocumentController GET /api/v1/images/{docId}/{filename}` (값은 imageId, §3.3) | ✅ |
@@ -764,7 +726,7 @@ app.image-description.docx-wmf-convert=true   # LibreOffice 설치 필요
 
 ## 11. 제약 및 주의사항
 
-- **Vision LLM 라우팅**: L2 사용 시 `LlmRouter.route(TaskType.VISION)` 호출 → gemma4(LIGHT_BOTH)가 priority=0으로 기본 처리. gemma4 미지원 모델로 교체하는 경우 `app.llm.providers[1].type=LIGHT_TEXT`(로컬 LLM 1)로 변경하면 VISION 태스크는 gemini-1(BOTH)로 자동 라우팅됨
+- **Vision LLM 라우팅**: L2 사용 시 `LlmRouter.route(TaskType.VISION)` 호출 → 기본 설정에서는 `local`(`providers[1]`, `type=BOTH`, priority 1)이 받는다(`local-2`가 있으면 둘이 로드밸런싱). 이미지를 못 읽는 모델로 바꾸는 경우 `LOCAL_LLM_TYPE=TEXT`로 두면 VISION 후보에서 빠지는데, 출하되는 클라우드 프로바이더는 전부 `type=TEXT`라 **VISION을 받는 프로바이더가 0개**가 되어 설명이 `[이미지 설명 불가: …]`로 떨어진다 — 이때는 `type=VISION` 전용 모델(`local-vision` 예시)을 따로 등록해야 한다. 텍스트 전용 모델이라도 `BOTH`로 두면 Vision 호출 1회 실패 뒤 `isVisionUnsupported`가 기억해 이후 이미지 작업만 건너뛴다(LLM_ROUTING.md §5)
 - **인덱싱 시간 증가**: L2 적용 시 이미지가 많은 문서는 청크당 1회 + 이미지당 1회 LLM 호출 발생 — 12절 Lazy Vision으로 대폭 완화 가능
 - **Path Traversal 방어**: `/api/v1/images/{docId}/{filename}` 엔드포인트에서 `..`, `/` 포함 입력 차단 필수 (7.1절 코드 포함)
 - **이미지 저장 용량**: `data/images/` 하위 파일은 문서 삭제 시 반드시 함께 정리 (8절 참조). 이 디렉터리는 배포 저장 상한(`UPLOAD_MAX_TOTAL_SIZE`)의 **집계 대상**이다 — 슬라이드·스캔 PDF에서는 추출 이미지가 업로드 원본보다 크기 쉬우므로, 상한을 잡을 때는 원본 크기가 아니라 이쪽이 실질 기준이 된다(OPERATOR_MANUAL "업로드 크기 제한")
@@ -819,12 +781,13 @@ app.image-description.docx-wmf-convert=true   # LibreOffice 설치 필요
 ### 12.3 캐시 스키마 (SQLite — 기존 memory.db 공유)
 
 ```sql
-CREATE TABLE IF NOT EXISTS image_descriptions (
-    image_path     TEXT PRIMARY KEY,    -- "{imageId}/{filename}" (§3.3)
-    description    TEXT NOT NULL,
-    image_type     TEXT,                -- 13절: diagram | screenshot | photo | chart | other
-    created_at     TEXT NOT NULL,
-    provider       TEXT NOT NULL        -- 사용된 LLM provider 이름 (모니터링용)
+CREATE TABLE image_descriptions (                 -- V1__baseline.sql
+    image_path  TEXT PRIMARY KEY,    -- "images/{imageId}/{filename}" 상대 경로 (§3.3)
+    description TEXT NOT NULL,
+    image_type  TEXT,                -- 13절: diagram | screenshot | photo | chart | other
+    provider    TEXT,                -- 사용된 LLM provider 이름 (모니터링용)
+    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    user_id     TEXT NOT NULL DEFAULT 'anonymous'   -- 읽는 코드 없음(Phase 1 잔재)
 );
 ```
 
@@ -1014,12 +977,12 @@ Apache Batik (SVG·메타파일 변환 라이브러리)을 활용하여 WMF/EMF 
 <dependency>
     <groupId>org.apache.xmlgraphics</groupId>
     <artifactId>batik-transcoder</artifactId>
-    <version>1.17</version>
+    <version>1.19</version>
 </dependency>
 <dependency>
     <groupId>org.apache.xmlgraphics</groupId>
     <artifactId>batik-codec</artifactId>
-    <version>1.17</version>
+    <version>1.19</version>
 </dependency>
 ```
 

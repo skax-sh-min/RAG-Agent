@@ -290,7 +290,7 @@ AI 모델이 한 번에 읽을 수 있는 분량에는 한계가 있습니다. �
 |------|------|
 | 새 대화 시작 | 사이드바 **New Chat** 버튼 |
 | 이전 대화 재개 | 사이드바에서 스레드 클릭 → 이전 메시지 버블 복원 |
-| 대화 제목 변경 | 스레드 옆 연필 아이콘 클릭 → 인라인 편집 |
+| 대화 제목 변경 | 대화 상단 헤더의 **Edit**(연필) 버튼 → 제목이 입력창으로 바뀜 → Enter 또는 포커스 아웃으로 저장 |
 | 대화 삭제 | 스레드 옆 휴지통 아이콘 (되돌릴 수 없음 — 아래 참고) |
 
 > **대화를 삭제하면 그 대화에서 👍를 눌러 공유 지식이 된 답변도 함께 회수됩니다** — 이후 검색 결과에 더 이상 반영되지 않습니다. 답변은 남기고 대화만 정리하고 싶다면, 그 답변을 [지식 제안](#26-지식-제안-청크-직접-추가)에 다시 등록해 두세요(승인되면 대화와 무관하게 유지됩니다).
@@ -299,7 +299,6 @@ AI 모델이 한 번에 읽을 수 있는 분량에는 한계가 있습니다. �
 > 각 모드의 동작 방식은 [OPERATOR_MANUAL.md §5.3](OPERATOR_MANUAL.md)을 참고하세요.  
 > 이 드롭다운이 아예 보이지 않는다면 운영자가 이 서비스를 로컬 LLM 전용으로 구성한 것입니다(어떤 모드를 골라도 결과가 같아 선택지 자체를 제공하지 않음) — 정상 동작입니다.
 
-> **메시지 복원 제한**: 이전 turn의 토큰 수·출처 메타데이터는 DB에 저장되지 않으므로 새 turn에서만 표시됩니다.
 
 ---
 
@@ -492,8 +491,8 @@ AI 모델이 한 번에 읽을 수 있는 분량에는 한계가 있습니다. �
 
 | 상태 | 의미 |
 |------|------|
-| **검토 대기** | 아직 관리자가 확인하지 않음 — 이 상태에서만 **철회**할 수 있습니다 |
-| **등록 완료** | 검색에 반영됨 (관리자가 내용을 다듬었다면 다듬어진 내용이 표시됨). 몇 개 청크로 나뉘어 등록됐는지 함께 표시됩니다 |
+| **검토 대기** | 아직 관리자가 확인하지 않음 — **수정**·**철회** 가능 |
+| **등록 완료** | 검색에 반영됨 (관리자가 내용을 다듬었다면 다듬어진 내용이 표시됨). 몇 개 벡터로 나뉘어 등록됐는지 함께 표시됩니다. 이 상태에서도 **수정**(다시 검토 대기로 가되 기존 등록본은 재승인 전까지 검색에 남음)·**철회**(등록본까지 검색에서 회수, 확인 문구가 먼저 알려줍니다)가 가능합니다 |
 | **반려** | 등록되지 않음 — 관리자가 입력한 **거부 사유가 전문 그대로** 함께 표시됩니다 |
 | **철회함** | 본인이 취소한 제안 |
 | **회수됨** | 등록됐다가 이후 관리자가 검색에서 제거함. 청크가 여러 개였다면 **전부 함께** 회수됩니다(일부만 남는 상태는 없습니다) |
@@ -538,10 +537,12 @@ curl -X POST http://localhost:8080/api/v1/documents \
 {
   "doc_id": "manual.pdf_a1b2c3d4",
   "filename": "manual.pdf",
+  "display_name": null,
   "version": "latest",
   "chunks": 42,
   "indexed_at": "2025-04-22T10:00:00Z",
   "sha256": "a1b2c3d4...",
+  "tags": [],
   "errors": []
 }
 ```
@@ -603,7 +604,9 @@ curl -X POST http://localhost:8080/api/v1/chat \
 | `question` | ✅ | — | 사용자 질문 (최대 2,000자) |
 | `version` | — | `latest` | 검색할 문서 버전 |
 | `thread_id` | — | `default` | 멀티턴 대화 식별자 |
-| `response_mode` | — | `N` | 답변 성격 — `S`(간단히) / `N`(자세히). 알 수 없는 값(옛 `M`·`L` 포함)은 `N`으로 처리 (§2.2 참고) |
+| `routing_mode` | — | 서버 기본값(`LLM_ROUTING_MODE`) | `COST_FIRST` / `QUALITY_FIRST` / `PROGRESSIVE` / `LOCAL_ONLY` |
+| `direct_mode` | — | `false` | `true`면 문서 검색 없이 직접 답변(Direct). 이때 `response_mode=C`는 `N`으로 강등 |
+| `response_mode` | — | `N` | 답변 성격 — `S`(간단히) / `N`(자세히) / `C`(응용, 관리자가 `CREATIVE_MODE_ENABLED=false`로 닫았으면 `N`으로 강등). 알 수 없는 값(옛 `M`·`L` 포함)은 `N`으로 처리 (§2.2 참고) |
 | `selected_tags` | — | `[]` | 검색 스코프 태그 배열. 지정한 태그를 **모두** 가진 문서만 검색 |
 
 **응답**:
@@ -651,22 +654,28 @@ curl http://localhost:8080/api/v1/llm/usage
 ```json
 [
   {
-    "provider": "local",
-    "type": "LIGHT_BOTH",
-    "model": "gemma-4-27b-it",
+    "name": "local",
+    "type": "BOTH",
+    "role": "LOCAL",
+    "model": "google/gemma-4-e4b",
     "daily":   { "inputTokens": 1200, "outputTokens": 340, "callCount": 5 },
     "weekly":  { "inputTokens": 8400, "outputTokens": 2100, "callCount": 32 },
     "monthly": { "inputTokens": 32000, "outputTokens": 8500, "callCount": 120 },
-    "blockedUntil": null
+    "blockedUntil": null,
+    "configured": true,
+    "deletable": false
   },
   {
-    "provider": "embed:text-embedding-nomic-embed-text-v1.5",
+    "name": "embed:text-embedding-nomic-embed-text-v1.5",
     "type": "EMBEDDING",
+    "role": null,
     "model": "text-embedding-nomic-embed-text-v1.5",
     "daily":   { "inputTokens": 340, "outputTokens": 0, "callCount": 12 },
     "weekly":  { "inputTokens": 2100, "outputTokens": 0, "callCount": 58 },
     "monthly": { "inputTokens": 8500, "outputTokens": 0, "callCount": 210 },
-    "blockedUntil": null
+    "blockedUntil": null,
+    "configured": true,
+    "deletable": false
   }
 ]
 ```
@@ -800,18 +809,18 @@ MD 재인덱싱 (/admin ↺ 버튼)
 >
 > **DOCX 포맷 교정**: DOCX → Markdown 변환 직후 LLM이 섹션별로 잘린 문장·소제목 불일치·오타를 교정합니다. 원본(`{docId}.md`)과 교정본(`{docId}_corrected.md`) 모두 `data/converted/`에 저장됩니다.
 >
-> **키워드+맥락 추출**: LLM을 호출해 핵심 키워드 5개(`excerpt_keywords`)와 이 청크가 속한 맥락(`chunk_context` — 문서명·섹션 제목 + 짧은 설명, 검색 전용이며 화면에는 표시되지 않음)을 함께 생성합니다. 기본적으로 청크 여러 개(4개)를 한 번의 LLM 호출로 묶어 처리해 인덱싱 왕복 횟수를 줄입니다(운영자 설정, [PIPELINE.md §6.2](PIPELINE.md#62-단일-파일-인덱싱)).  
+> **키워드+맥락 추출**: LLM을 호출해 핵심 키워드 2~5개(`excerpt_keywords`)와 이 청크가 속한 맥락(`chunk_context` — 문서명·섹션 제목 + 짧은 설명, 검색 전용이며 화면에는 표시되지 않음)을 함께 생성합니다. 기본적으로 청크 여러 개(2개, `INDEXING_KEYWORD_BATCH_SIZE`)를 한 번의 LLM 호출로 묶어 처리해 인덱싱 왕복 횟수를 줄입니다(운영자 설정, [PIPELINE.md §6.2](PIPELINE.md#62-단일-파일-인덱싱)).  
 > 검색 품질(recall)이 높아지는 대신 인덱싱 시간이 늘어납니다.
 
 ### 4.1 형식별 청크 분할 전략
 
 | 형식 | 로드 단위 | 분할 전략 | 이미지 처리 |
 |------|----------|----------|------------|
-| `.md` | 파일 그대로 → LLM 포맷 교정("LLM 교정 건너뛰기" 체크 시 생략) 후 `#` / `##` / `###` 헤더 단위 섹션 | 챕터(헤딩) 단위 — 짧은 챕터는 인접 챕터와 병합, 초과 시 슬라이딩 윈도우 (아래 주석) | URL 이미지 → alt 텍스트 유지, 로컬 이미지 → `[이미지: path]` 마커 |
+| `.md` | 파일 그대로 → LLM 포맷 교정("LLM 교정 건너뛰기" 체크 시 생략) 후 `#` / `##` / `###` 헤더 단위 섹션 | 챕터(헤딩) 단위 — 짧은 챕터는 인접 챕터와 병합, 초과 시 슬라이딩 윈도우 (아래 주석) | 이미지 파일을 추출·복사하지 않음. `[이미지: images/…]` 마커만 이미지로 인식(썸네일·설명 대상)되고 `![alt](path)` 링크는 텍스트로 남음 |
 | `.docx` | Word Heading 기준 섹션 → LLM 포맷 교정 후 MD 헤더 단위 재분할 | 챕터(헤딩) 단위 — 짧은 챕터는 인접 챕터와 병합, 초과 시 슬라이딩 윈도우 (아래 주석) | 인라인 이미지 추출 + EMF/WMF → PNG 변환 (설정 시) |
 | `.pptx` | 슬라이드별 `[페이지: N]` 마커(제목이 있으면 `##` 헤딩 추가, 없으면 마커만) → LLM 포맷 교정 후 슬라이드 단위 재분할(1슬라이드=1섹션) | 섹션(슬라이드)이 `CHUNK_SIZE` 초과 시만 슬라이딩 윈도우 — 단, **서로 다른 슬라이드끼리는 병합되지 않음**("청크 1개=슬라이드 1개=정확한 인용" 유지) | 슬라이드 이미지 추출 + 본문에 `[이미지: ...]` 인라인(DOCX와 동일 — `addImageDescriptions` 적용됨) |
 | `.pdf`(스캔 아님) | 페이지별 `[페이지: N]` 마커(합성 헤딩 없음) → LLM 포맷 교정 후 페이지 단위 재분할(1페이지=1섹션) | 섹션(페이지)이 `CHUNK_SIZE` 초과 시만 슬라이딩 윈도우 — 단, **서로 다른 페이지끼리는 병합되지 않음** | 임베드 이미지 추출 + 본문에 `[이미지: ...]` 인라인(DOCX와 동일 — `addImageDescriptions` 적용됨) |
-| `.pdf`(스캔) | 페이지 1장 = 문서 1개 (텍스트 50% 이상 없으면 Tesseract OCR) | 슬라이딩 윈도우 (`CHUNK_SIZE` / `CHUNK_OVERLAP`, 섹션 병합 없음) | 임베드 이미지 추출; OCR 처리 (설정 시) |
+| `.pdf`(스캔) | 페이지 1장 = 문서 1개 (50자 미만인 페이지가 과반이면 Tesseract OCR) | 슬라이딩 윈도우 (`CHUNK_SIZE` / `CHUNK_OVERLAP`, 섹션 병합 없음) | 임베드 이미지 추출; OCR 처리 (설정 시) |
 | `.txt` | 전체 파일 = 문서 1개 → LLM 구조화 후 MD 헤더 단위 분할 | 챕터(헤딩) 단위 — 짧은 챕터는 인접 챕터와 병합, 초과 시 슬라이딩 윈도우 (아래 주석) | — |
 
 > **슬라이딩 윈도우**: 청크 경계가 텍스트 중간이면 가장 가까운 줄바꿈(`\n`)으로 경계를 조정합니다.  
@@ -834,10 +843,10 @@ MD 재인덱싱 (/admin ↺ 버튼)
 | `page_or_slide` | PDF, PPTX | 페이지/슬라이드 번호 (PPTX·PDF[스캔 아님]은 `[페이지: N]` 마커 단위로 정확히 귀속됨) |
 | `section`, `heading` | MD, DOCX, PPTX, PDF(스캔 아님) | 섹션 번호·헤더 텍스트 — PPTX는 슬라이드 제목(제목이 없는 슬라이드는 빈 값), PDF(스캔 아님)는 합성 헤딩을 만들지 않으므로 빈 값 |
 | `chapter_no` | 전체 | 계층적 챕터 번호(H2~H6 헤딩마다 레벨별로 증가, 예: `1`·`1.1`·`1.5.3`) — 출처(Sources) 라벨에 표시됨(§3.6 참고) 및 `/admin` 청크 테이블의 챕터 열에도 표시됨(§2.5 참고). 헤딩 이전 구간과 헤딩이 없는 문서는 `0`(두 화면 모두 빈 칸/페이지 번호로 대체). **PPTX·PDF(스캔 아님)는 항상 `0`**(PPTX 슬라이드 제목은 챕터 구조가 아니고, 비스캔 PDF는 헤딩 자체가 없으므로) |
-| `excerpt_keywords` | 전체 | LLM이 추출한 핵심 키워드 5개 |
+| `excerpt_keywords` | 전체 | LLM이 추출한 핵심 키워드 2~5개 (쉼표 구분) |
 | `chunk_context` | 전체 | 검색(임베딩+키워드) 전용 맥락 헤더 — "{파일명} > {heading}" + LLM 1~2문장. 화면 표시·저장 텍스트에는 포함되지 않음 (Contextual Retrieval) |
 
-버전별로 격리 저장됩니다 — chroma는 `manual_{version}` 컬렉션 분리(예: `manual_latest`, `manual_1_0`), sqlite-vec는 `version` 파티션 키를 사용합니다.
+버전별로 격리 저장됩니다 — chroma는 버전마다 컬렉션을 분리(`u_shared_{version}`, 예: `u_shared_latest`), sqlite-vec는 `version` 파티션 키를 사용합니다.
 
 ---
 
