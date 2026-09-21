@@ -7,9 +7,14 @@ import com.example.ragagent.model.SourceRef;
 import com.example.ragagent.repository.QuestionReuseRepository;
 import com.example.ragagent.security.GuestIdentityResolver;
 import com.fasterxml.jackson.annotation.JsonValue;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
+import com.github.benmanes.caffeine.cache.Ticker;
 import org.springframework.ai.document.Document;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -34,12 +39,52 @@ public class QuestionReuseService {
             "(?:\\d|[A-Za-z]{3,}|\\.[A-Za-z]{2,4}|[/#:_-]|오류코드|에러코드|클래스|메서드|함수|설정|포트|버전|로그|파일|문서|테이블|컬럼|endpoint|api)",
             Pattern.CASE_INSENSITIVE);
 
+    /**
+     * 검증에 떨어진 턴의 부정 캐시 — {@code turnId} 만 기억한다.
+     *
+     * <p>{@link #suggest} 는 키 입력마다(클라이언트 디바운스 220ms) 후보 최대 {@code limit×4} 행에
+     * {@link #validateTurn} 을 돌리는데, 그 판정은 행당 쿼리 둘({@code findAllSourceRefs} +
+     * {@code currentChunkHashes})이고 결과는 거의 언제나 영구다 — 출처가 없는 턴에 출처가 생기지
+     * 않고, 바뀐 청크의 해시가 스냅샷과 다시 같아지는 일은 없다. 저장된 사실(출처 0건, 통지로
+     * 찍힌 {@code status})은 SQL 이 먼저 거르고({@code QuestionReuseRepository.HAS_ACTIVE_SOURCE_PREDICATE}),
+     * 해시 대조에서만 드러나는 실패(통지 없이 바뀐 청크 — 큐레이션 편집·비활성화)가 여기 남는다.
+     *
+     * <p>영구 표시(write-back)가 아니라 TTL 캐시인 이유: "부재"는 되돌아올 수 있다. 큐레이션 청크
+     * id 는 결정적({@code curated-{id}[-n]})이라 비활성화 → 재승인이면 같은 id 로 같은 해시가
+     * 돌아오고, 벡터 DB 파일 교체·복구도 마찬가지다. 그걸 {@code status=deleted} 로 굳히면 되돌아온
+     * 뒤에도 영영 재사용되지 않는다. 영구 표시는 지금처럼 통지 경로의 몫이고, 이 캐시는 그 사이의
+     * 반복 확인만 줄인다 — 캐시가 낡아서 생기는 최악은 "되살아난 답변이 TTL 동안 추천에 안 뜬다" 다.
+     *
+     * <p>{@link #reuseLookup} 은 이 캐시를 <b>읽지 않는다</b>(클릭은 최종 관문이라 늘 신선하게
+     * 판정한다) — 실패하면 채우고, 성공하면 지운다. 통지 이벤트로 비울 필요는 없다: 통지는 무효
+     * 쪽으로만 움직인다. 현재 대화 항목은 검증 자체를 안 하므로 캐시도 보지 않는다.
+     */
+    static final Duration INVALID_TURN_TTL = Duration.ofMinutes(10);
+    private static final int INVALID_TURN_CACHE_MAX = 10_000;
+
     private final QuestionReuseRepository repository;
     private final DocRegistry docRegistry;
+    private final Cache<Long, Boolean> recentlyInvalidTurns;
 
+    @Autowired
     public QuestionReuseService(QuestionReuseRepository repository, DocRegistry docRegistry) {
+        this(repository, docRegistry, Ticker.systemTicker());
+    }
+
+    /** 테스트용 — 부정 캐시의 시계를 바꿔 TTL 만료를 재현한다. */
+    QuestionReuseService(QuestionReuseRepository repository, DocRegistry docRegistry, Ticker ticker) {
         this.repository = repository;
         this.docRegistry = docRegistry;
+        this.recentlyInvalidTurns = Caffeine.newBuilder()
+                .expireAfterWrite(INVALID_TURN_TTL)
+                .maximumSize(INVALID_TURN_CACHE_MAX)
+                .ticker(ticker)
+                .build();
+    }
+
+    /** 최근 검증에 떨어져 다음 추천에서 검증 없이 건너뛰는 턴인가 (테스트 관찰용). */
+    boolean isRecentlyInvalid(long turnId) {
+        return recentlyInvalidTurns.getIfPresent(turnId) != null;
     }
 
     public void recordTurnSources(long turnId, String userId, String threadId, List<Document> retrievedDocs) {
@@ -145,6 +190,10 @@ public class QuestionReuseService {
      * <p>중복 제거는 후보 순서(현재 대화 → 내 대화 → 그 외 → 최신순)대로 첫 항목을 남기므로,
      * 같은 질문이 이 대화와 남의 대화에 다 있으면 <em>이동</em> 항목이 남는다.
      *
+     * <p>검증에 떨어진 후보는 {@link #INVALID_TURN_TTL} 동안 기억해 두고 다음 호출에서는 검증
+     * 없이 건너뛴다({@code recentlyInvalidTurns}) — 같은 행을 키 입력마다 다시 확인하지 않기
+     * 위해서다.
+     *
      * @param threadId 지금 열려 있는 대화. {@code null}/공백이면 어떤 항목도 현재 대화로 분류되지
      *                 않는다(REST 호출)
      */
@@ -164,8 +213,12 @@ public class QuestionReuseService {
             if (isDirectiveOnlyQuestion(c.question())) continue;
             Origin origin = originOf(c, userId, threadId);
             if (origin != Origin.THREAD) {
+                if (isRecentlyInvalid(c.turnId())) continue;
                 ValidationResult valid = validateTurn(c.turnId());
-                if (!valid.reusable()) continue;
+                if (!valid.reusable()) {
+                    recentlyInvalidTurns.put(c.turnId(), Boolean.TRUE);
+                    continue;
+                }
             }
             String key = normalizeQuestionKey(c.question());
             if (!seenQuestions.add(key)) continue;
@@ -202,8 +255,10 @@ public class QuestionReuseService {
         }
         ValidationResult valid = validateTurn(turn.turnId());
         if (!valid.reusable()) {
+            recentlyInvalidTurns.put(turn.turnId(), Boolean.TRUE);
             return ReuseLookup.notReusable(valid.reason(), turn.question());
         }
+        recentlyInvalidTurns.invalidate(turn.turnId());
         List<String> chunkIds = repository.findSourceRefs(turn.turnId()).stream()
             .map(QuestionReuseRepository.SourceSnapshot::chunkId)
             .filter(v -> v != null && !v.isBlank())

@@ -139,7 +139,7 @@ REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — �
 
 `chat.html` 입력 영역에 `#question-suggest-box`가 표시되며 추천 범위는 항상 shared로 동작한다.
 
-- 입력값이 2글자 이상이면 220ms 디바운스로 `/api/v1/questions/suggest`를 호출한다. 폼의 hidden `threadId`를 함께 보내고, 서버는 그 값으로 항목의 **출처**(`origin`)를 가른다.
+- 입력값이 2글자 이상이면 220ms 디바운스로 `/api/v1/questions/suggest`를 호출한다(`limit=20`, 목록 상자는 220px에서 스크롤). 폼의 hidden `threadId`를 함께 보내고, 서버는 그 값으로 항목의 **출처**(`origin`)를 가른다.
 - 항목 앞에 출처 배지가 붙는다 — **현재 대화**(`thread`, 파랑·↑) / **내 대화**(`mine`, 초록) / **다른 사용자**(`others`, 회색) / **다른 대화**(`elsewhere`, 회색). 마지막 것은 `guest-identity=shared`처럼 모든 방문자가 한 id를 쓰는 배포용이다 — 그 id로는 내 것과 남의 것이 같아서, 그대로 "내 대화"로 표시하면 남이 물은 질문까지 전부 내 것으로 뜬다(`QuestionReuseService.originOf()`). 목록 순서는 현재 대화 → 내 대화 → 그 외, 그 안에서 최신순(SQL `ORDER BY`)이고, 같은 질문이 여럿이면 그 순서의 첫 항목만 남는다.
 - **현재 대화 항목의 클릭은 재사용이 아니라 이동이다** — 같은 대화에 같은 답변을 한 번 더 붙일 이유가 없으므로, `jumpToThreadQuestion()`이 그 질문 버블(`.user-turn[data-turn-id]`, 없으면 `data-question` 원문 일치 중 마지막)로 질문 내비게이션과 같은 `qnavJumpTo()`로 스크롤·강조하고 입력 텍스트는 그대로 둔다. 서버 쪽도 이 항목에는 재사용 자격 조건(싫어요·S/C 모드·Direct 좋아요·출처 청크 검증)을 걸지 않는다 — 이동 대상은 그 조건과 무관하다. 그래서 `data-turn-id`가 세 렌더 경로 모두에 심긴다: 서버 렌더(`turn.id`), 스트리밍(`chat-stream.js`가 `done`의 `turnId`를 `#user-turn-{bubbleId}`에 스탬프), 재사용 버블(`appendReusedTurn()` — 이 경로는 예전엔 `.user-turn` 표식 자체가 없어 새로고침 전까지 질문 내비게이션에도 안 잡혔다).
 - 나머지 항목의 클릭은 `/api/v1/questions/reuse`를 호출하며 `turnId`, `threadId`, `version`을 보낸다(서버는 shared 기준 처리).
@@ -147,6 +147,7 @@ REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — �
 - 서버는 턴을 저장하기 **전에** `threadMetaService.getOrCreate()`로 대화 행을 보장한다 — HTMX·SSE 경로와 같은 순서다. 예전에는 이 경로만 그것을 빠뜨려, 재사용 답변이 **새 대화의 첫 메시지**일 때 `thread_meta` 행이 없어 사이드바에 뜨지 않고 제목 생성도 건너뛰었으며, `/chat/{threadId}`를 다시 열면 `meta == null`이라 턴을 아예 싣지 않아 **대화가 사라진 것처럼** 보였다(일반 메시지를 한 번 보내야 나타났다).
 - 재사용 실패(`fallback=true`)면 토스트 안내 후 질문 입력창에 질문을 채워 일반 질의를 바로 전송한다.
 - Direct 모드로 답한 턴은 좋아요 여부와 무관하게 추천/재사용 후보에서 빠진다 — 근거 청크가 없어 재사용 검증(`validateTurn()`)이 성립하지 않고, 좋아요는 지식 제안을 여는 신호이지 재사용 자격이 아니다. 판정은 원본 행 기준이라 옛 재사용 턴도 원본이 Direct면 빠진다. 현재 대화의 Direct 턴은 이동 대상으로 여전히 뜬다.
+- 활성 출처가 하나도 없는 턴(검색을 돌리지 않았거나 출처 전부가 무효화된 턴)은 추천 SQL이 미리 빼고, 검증에 떨어진 후보는 서버가 10분간 기억해 다음 입력에서 검증 없이 건너뛴다 — 재사용 클릭(`/reuse`)은 그 캐시를 보지 않고 늘 새로 판정한다.
 - `Esc`, 전송(Enter), blur 시 추천 목록을 닫는다.
 
 ### 3.4 벡터 스토어 관리 (AdminController)
