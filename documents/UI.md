@@ -139,7 +139,7 @@ REST API: `GET /api/v1/llm/usage`, `GET /api/v1/llm/usage/history?days=N` — �
 
 `chat.html` 입력 영역에 `#question-suggest-box`가 표시되며 추천 범위는 항상 shared로 동작한다.
 
-- 입력값이 2글자 이상이면 220ms 디바운스로 `/api/v1/questions/suggest`를 호출한다(`limit=20`, 목록 상자는 220px에서 스크롤). 폼의 hidden `threadId`를 함께 보내고, 서버는 그 값으로 항목의 **출처**(`origin`)를 가른다.
+- 입력값이 2글자 이상이면 220ms 디바운스로 `/api/v1/questions/suggest`를 호출한다(`limit=20`, 목록 상자는 220px에서 스크롤). 매칭은 서버가 한다 — `QuestionKeywords`가 의문·기능어·조사·어미를 뺀 내용어(최대 6개)를 뽑고 그 전부가 든 질문을 찾는다(어순·대소문자 무관); 내용어가 없으면 입력 전체 부분 일치로 폴백. 폼의 hidden `threadId`를 함께 보내고, 서버는 그 값으로 항목의 **출처**(`origin`)를 가른다.
 - 항목 앞에 출처 배지가 붙는다 — **현재 대화**(`thread`, 파랑·↑) / **내 대화**(`mine`, 초록) / **다른 사용자**(`others`, 회색) / **다른 대화**(`elsewhere`, 회색). 마지막 것은 `guest-identity=shared`처럼 모든 방문자가 한 id를 쓰는 배포용이다 — 그 id로는 내 것과 남의 것이 같아서, 그대로 "내 대화"로 표시하면 남이 물은 질문까지 전부 내 것으로 뜬다(`QuestionReuseService.originOf()`). 목록 순서는 현재 대화 → 내 대화 → 그 외, 그 안에서 최신순(SQL `ORDER BY`)이고, 같은 질문이 여럿이면 그 순서의 첫 항목만 남는다.
 - **현재 대화 항목의 클릭은 재사용이 아니라 이동이다** — 같은 대화에 같은 답변을 한 번 더 붙일 이유가 없으므로, `jumpToThreadQuestion()`이 그 질문 버블(`.user-turn[data-turn-id]`, 없으면 `data-question` 원문 일치 중 마지막)로 질문 내비게이션과 같은 `qnavJumpTo()`로 스크롤·강조하고 입력 텍스트는 그대로 둔다. 서버 쪽도 이 항목에는 재사용 자격 조건(싫어요·S/C 모드·Direct 좋아요·출처 청크 검증)을 걸지 않는다 — 이동 대상은 그 조건과 무관하다. 그래서 `data-turn-id`가 세 렌더 경로 모두에 심긴다: 서버 렌더(`turn.id`), 스트리밍(`chat-stream.js`가 `done`의 `turnId`를 `#user-turn-{bubbleId}`에 스탬프), 재사용 버블(`appendReusedTurn()` — 이 경로는 예전엔 `.user-turn` 표식 자체가 없어 새로고침 전까지 질문 내비게이션에도 안 잡혔다).
 - 나머지 항목의 클릭은 `/api/v1/questions/reuse`를 호출하며 `turnId`, `threadId`, `version`을 보낸다(서버는 shared 기준 처리).

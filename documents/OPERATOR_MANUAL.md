@@ -2391,7 +2391,7 @@ mvn test -Dtest=SearchQualityEvaluationTest -Dsearch-eval.enabled=true
 
 #### 동작 요약
 
-- 추천 조회: `GET /api/v1/questions/suggest?q=...&limit=...` (서버는 항상 shared 기준 처리, `limit` 은 서버에서 1~20 으로 보정 — 채팅 화면은 20 을 보낸다)
+- 추천 조회: `GET /api/v1/questions/suggest?q=...&limit=...` (서버는 항상 shared 기준 처리, `limit` 은 서버에서 1~20 으로 보정 — 채팅 화면은 20 을 보낸다). `q` 는 통째로 대조하지 않는다 — `QuestionKeywords` 가 의문·기능어(어떻게·왜·알려줘…)·조사(은/는/이/가/에서…)·어미(하나요/인가요…)를 걷어낸 **내용어(최대 6개)** 를 뽑고, 그 전부가 들어 있는 저장 질문을 찾는다(대소문자·어순 무관, `_`·`%` 는 문자 그대로). 예: `sqlite 연결은 어떻게 설정하나요?` → `sqlite`·`연결`·`설정`. 내용어가 하나도 안 남으면(`이거 왜 안 돼요`) 예전처럼 입력 전체 부분 일치
 - 재사용 시도: `POST /api/v1/questions/reuse`
 - 재사용 성공: 기존 답변을 새 turn으로 저장(`provider=db-reuse`, `reused_from_turn_id` 참조 저장). `response_mode`·`direct_mode`·`selected_tags` 는 **원본 턴의 값을 복사**한다(원본이 다시 재사용 턴이면 그 원본의 값) — 두 글자 표기·좋아요 프리필의 태그 스코프·다음 턴의 이력 렌더가 그 컬럼을 읽기 때문이다. 이전 판이 저장하던 자리표시자(`'M'`·0·빈 태그)를 든 옛 재사용 행은 조회 시 COALESCE 로 원본의 값을 내므로 백필이 필요 없다
 - 재사용 실패: `fallback=true`와 사유를 반환, 클라이언트가 일반 질의 파이프라인으로 즉시 전환
@@ -2450,6 +2450,7 @@ mvn test -Dtest=SearchQualityEvaluationTest -Dsearch-eval.enabled=true
 #### 추천 품질 필터
 
 - 지시어 위주 질문(예: "이거", "그거")은 추천에서 제외
+- 입력 쪽 의문·기능어·조사·어미 제거 목록은 `QuestionKeywords` 의 상수 하나다(형태소 분석기 없음). 절단은 항상 접두사만 남기므로 규칙이 과해도 후보가 **줄지는 않고** 정밀도만 내려간다; 한 글자 조사는 2음절 어간이 남을 때만 벗겨 `경로·결과·추가·정의` 같은 2음절 내용어를 지킨다
 - 단, 오류코드/파일명/경로/API명 등 구체 신호가 있으면 제외하지 않음
 
 ---
