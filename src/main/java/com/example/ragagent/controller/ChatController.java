@@ -385,14 +385,24 @@ public class ChatController {
         threadMetaService.getOrCreate(ctx.userId(), threadId, version);
         String askedAt = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
             .withZone(ZoneOffset.UTC).format(Instant.now());
+        // 재사용 턴은 원본 답변을 그대로 싣는 턴이라, 그 답변이 어떻게 만들어졌는지 — 응답 모드·
+        // 검색 축(Direct 여부)·태그 스코프 — 도 원본에서 복사한다. 다른 채팅 경로가 요청 값이 아니라
+        // result.responseMode() 를 저장하는 것과 같은 규칙이다: 저장된 값이 두 글자 표기·좋아요
+        // 프리필·다음 턴의 이력 렌더를 정한다. 예전에는 자리표시자('M', direct 0, 태그 없음)를 썼고,
+        // 그래서 좋아요한 Direct 답변을 재사용한 턴이 새로고침 뒤 [RN] 으로 찍혀 출처가 없는 이유가
+        // 화면 어디에도 없었다. parse() 를 거치는 이유는 원본이 구 'M'/'L'·NULL 일 수 있어서다 —
+        // 화면이 그 값들을 N 으로 읽으므로 저장도 같은 이름으로 한다.
+        String responseMode = ResponseMode.parse(lookup.responseMode()).name();
         long savedTurnId = memoryService.addTurn(
             ctx.userId(), threadId,
             lookup.question(), "",
             askedAt, 0, 0, 0,
-            "db-reuse", 0, "M", "", lookup.sourceTurnId());
+            "db-reuse", 0, responseMode, lookup.selectedTags(), lookup.directMode(), lookup.sourceTurnId());
         questionReuseService.cloneTurnSources(lookup.sourceTurnId(), savedTurnId, ctx.userId(), threadId);
         threadMetaService.generateTitleAsync(ctx.userId(), threadId, version, lookup.question());
 
+        // responseMode/directMode 를 함께 내려 화면이 같은 두 글자 표기를 달게 한다 — 폼에 선택된
+        // 모드로 그리면 새로고침(서버 렌더)과 어긋난다.
         return ResponseEntity.ok(Map.of(
             "reused", true,
             "turnId", savedTurnId,
@@ -401,7 +411,9 @@ public class ChatController {
             "sources", questionReuseService.sourceRefsForTurn(lookup.sourceTurnId()),
             "sourceChunkIds", lookup.sourceChunkIds(),
             "sourceTurnId", lookup.sourceTurnId(),
-            "provider", "db-reuse"));
+            "provider", "db-reuse",
+            "responseMode", responseMode,
+            "directMode", lookup.directMode()));
     }
 
     /**
